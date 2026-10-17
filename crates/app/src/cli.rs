@@ -76,16 +76,6 @@ enum Command {
         #[command(subcommand)]
         command: NodeCommand,
     },
-    /// Export 管理（`export.create|list|revoke`）。
-    Export {
-        #[command(subcommand)]
-        command: ExportCommand,
-    },
-    /// Import 管理（`import.add|list|remove`）。
-    Import {
-        #[command(subcommand)]
-        command: ImportCommand,
-    },
     /// 组合 `daemon.status` 与 CLI 侧本地检查；Daemon 离线时在 CLI 进程内完成（**不新增方法**）。
     Doctor,
     /// stdin/stdout ↔ 本地通道 channel `0x02` 的字节泵（不进管理信封）。
@@ -186,66 +176,6 @@ struct NodeRevoke {
     node_id: String,
 }
 
-#[derive(Debug, Subcommand)]
-enum ExportCommand {
-    /// 建立 Export（`export.create`）；参数以 `--file` 传一份 JSON。
-    Create(ExportCreate),
-    /// 列出 Export（含已撤销项）。
-    List,
-    /// 撤销 Export（`export.revoke`）。
-    Revoke(ExportRevoke),
-}
-
-#[derive(Debug, Args)]
-struct ExportCreate {
-    /// 与 `export.create` 的 `params` 同形的 JSON 对象。
-    #[arg(long, value_name = "PATH")]
-    file: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct ExportRevoke {
-    /// 目标 Export id。
-    #[arg(long, value_name = "ID")]
-    export_id: String,
-}
-
-#[derive(Debug, Subcommand)]
-enum ImportCommand {
-    /// 登记 Import（`import.add`；依赖当前 Node Link 连接上的 catalog 快照）。
-    Add(ImportAdd),
-    /// 列出 Import。
-    List,
-    /// 移除 Import（`import.remove`）。
-    Remove(ImportRemove),
-}
-
-#[derive(Debug, Args)]
-struct ImportAdd {
-    /// Import 标识（`^[A-Za-z0-9._-]{1,128}$`）。
-    #[arg(long, value_name = "ID")]
-    import_id: String,
-    /// Owner 的 `wss://` 端点。
-    #[arg(long, value_name = "URL")]
-    owner_endpoint: String,
-    /// Owner 节点 id（UUID；必须是已配对且 `kind = "owner"` 的节点）。
-    #[arg(long, value_name = "UUID")]
-    owner_node_id: String,
-    /// 请求的 Export id（逗号分隔，可重复）。
-    #[arg(long = "export-id", value_delimiter = ',', value_name = "ID")]
-    export_ids: Vec<String>,
-    /// 请求的 grant（逗号分隔，可重复）。
-    #[arg(long = "grant", value_delimiter = ',', value_name = "GRANT")]
-    grants: Vec<String>,
-}
-
-#[derive(Debug, Args)]
-struct ImportRemove {
-    /// 目标 Import id。
-    #[arg(long, value_name = "ID")]
-    import_id: String,
-}
-
 /// 解析参数并运行。返回值即进程退出码。
 pub fn run() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -297,30 +227,6 @@ fn dispatch(cli: Cli) -> Result<(), Failure> {
             NodeCommand::Revoke(args) => {
                 call_once(&mut context, Method::NodeRevoke, node_revoke_params(&args))
             }
-        },
-        Command::Export { command } => match command {
-            ExportCommand::Create(args) => call_once(
-                &mut context,
-                Method::ExportCreate,
-                export_create_params(&args)?,
-            ),
-            ExportCommand::List => call_once(&mut context, Method::ExportList, JsonObject::new()),
-            ExportCommand::Revoke(args) => call_once(
-                &mut context,
-                Method::ExportRevoke,
-                export_revoke_params(&args),
-            ),
-        },
-        Command::Import { command } => match command {
-            ImportCommand::Add(args) => {
-                call_once(&mut context, Method::ImportAdd, import_add_params(&args))
-            }
-            ImportCommand::List => call_once(&mut context, Method::ImportList, JsonObject::new()),
-            ImportCommand::Remove(args) => call_once(
-                &mut context,
-                Method::ImportRemove,
-                import_remove_params(&args),
-            ),
         },
         Command::Doctor => doctor(&mut context),
         Command::AcpStdio => acp_stdio(&context),
@@ -444,11 +350,6 @@ impl Context {
 // 参数 → `params`（kebab-case flags → camelCase wire 字段的唯一翻译点）
 // ---------------------------------------------------------------------------------------------
 
-/// `export create --file`：文件即 `params`（嵌套结构由方法侧校验）。
-fn export_create_params(args: &ExportCreate) -> Result<JsonObject, Failure> {
-    input::read_params_file(&args.file, &[])
-}
-
 fn device_revoke_params(args: &DeviceRevoke) -> JsonObject {
     let mut params = JsonObject::new();
     params.insert("deviceId".to_owned(), Value::from(args.device_id.as_str()));
@@ -458,34 +359,6 @@ fn device_revoke_params(args: &DeviceRevoke) -> JsonObject {
 fn node_revoke_params(args: &NodeRevoke) -> JsonObject {
     let mut params = JsonObject::new();
     params.insert("nodeId".to_owned(), Value::from(args.node_id.as_str()));
-    params
-}
-
-fn export_revoke_params(args: &ExportRevoke) -> JsonObject {
-    let mut params = JsonObject::new();
-    params.insert("exportId".to_owned(), Value::from(args.export_id.as_str()));
-    params
-}
-
-fn import_add_params(args: &ImportAdd) -> JsonObject {
-    let mut params = JsonObject::new();
-    params.insert("importId".to_owned(), Value::from(args.import_id.as_str()));
-    params.insert(
-        "ownerEndpoint".to_owned(),
-        Value::from(args.owner_endpoint.as_str()),
-    );
-    params.insert(
-        "ownerNodeId".to_owned(),
-        Value::from(args.owner_node_id.as_str()),
-    );
-    params.insert("exportIds".to_owned(), strings(&args.export_ids));
-    params.insert("grants".to_owned(), strings(&args.grants));
-    params
-}
-
-fn import_remove_params(args: &ImportRemove) -> JsonObject {
-    let mut params = JsonObject::new();
-    params.insert("importId".to_owned(), Value::from(args.import_id.as_str()));
     params
 }
 
@@ -845,13 +718,11 @@ mod tests {
     use clap::CommandFactory as _;
 
     /// §5.8 映射表第一列的子命令与第二列的分组（唯一权威：`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）。
-    const DOCUMENTED: [(&str, &[&str]); 6] = [
+    const DOCUMENTED: [(&str, &[&str]); 4] = [
         ("daemon", &["start", "stop", "status"]),
         ("agent", &["list"]),
         ("device", &["pair", "list", "revoke"]),
         ("node", &["pair", "list", "revoke"]),
-        ("export", &["create", "list", "revoke"]),
-        ("import", &["add", "list", "remove"]),
     ];
 
     /// 子命令集合与 §5.8 逐条一致：不多不少（`doctor`/`acp-stdio` 是顶层叶子），且没有 `session create`
@@ -995,34 +866,6 @@ mod tests {
                 node_id: "N".to_owned()
             })),
             serde_json::json!({ "nodeId": "N" })
-        );
-        assert_eq!(
-            Value::Object(export_revoke_params(&ExportRevoke {
-                export_id: "E".to_owned()
-            })),
-            serde_json::json!({ "exportId": "E" })
-        );
-        assert_eq!(
-            Value::Object(import_remove_params(&ImportRemove {
-                import_id: "I".to_owned()
-            })),
-            serde_json::json!({ "importId": "I" })
-        );
-        assert_eq!(
-            Value::Object(import_add_params(&ImportAdd {
-                import_id: "I".to_owned(),
-                owner_endpoint: "wss://owner.example.invalid".to_owned(),
-                owner_node_id: "00000000-0000-4000-8000-000000000001".to_owned(),
-                export_ids: vec!["E".to_owned()],
-                grants: vec!["grant.session.read".to_owned()],
-            })),
-            serde_json::json!({
-                "importId": "I",
-                "ownerEndpoint": "wss://owner.example.invalid",
-                "ownerNodeId": "00000000-0000-4000-8000-000000000001",
-                "exportIds": ["E"],
-                "grants": ["grant.session.read"],
-            })
         );
 
         // 凭据值**没有**命令行入口：没有 `--values`/`--value`/`--file` 这类 flag。

@@ -215,8 +215,6 @@ fn daemon_stop_waits_for_the_lock_and_the_process_exit() {
 fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
     let daemon = Daemon::configure("cli-offline", "");
     let root = daemon.root();
-    let empty = write_file(root, "empty.json", "{}");
-    let empty = empty.display().to_string();
 
     let cases: Vec<Vec<String>> = vec![
         vec!["device".into(), "list".into()],
@@ -232,36 +230,6 @@ fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
             "revoke".into(),
             "--node-id".into(),
             "2ae1c07c-0000-4000-8000-000000000001".into(),
-        ],
-        vec![
-            "export".into(),
-            "create".into(),
-            "--file".into(),
-            empty.clone(),
-        ],
-        vec!["export".into(), "list".into()],
-        vec![
-            "export".into(),
-            "revoke".into(),
-            "--export-id".into(),
-            "e".into(),
-        ],
-        vec![
-            "import".into(),
-            "add".into(),
-            "--import-id".into(),
-            "i".into(),
-            "--owner-endpoint".into(),
-            "wss://o.example.invalid".into(),
-            "--owner-node-id".into(),
-            "2ae1c07c-0000-4000-8000-000000000001".into(),
-        ],
-        vec!["import".into(), "list".into()],
-        vec![
-            "import".into(),
-            "remove".into(),
-            "--import-id".into(),
-            "i".into(),
         ],
     ];
     for args in cases {
@@ -313,97 +281,19 @@ fn management_commands_use_the_local_channel_and_report_method_failures() {
         run.stderr
     );
 
-    // export.revoke 的 `local.not_found` 走同一条出口。
-    let run = run_cli(
-        "export-not-found",
-        Some(daemon.config_path()),
-        &["export", "revoke", "--export-id", "missing-export"],
-        Stdin::Null,
-    );
-    assert_failure_contract(&run, "local.not_found", &[&data_dir]);
 
     daemon.stop();
 }
 
 /// R67：`--file` 的两种错误码映射（`local.invalid_params` / `local.conflict`），`agent configure` 的文件
 /// 不得含凭据值。
-#[test]
-fn file_inputs_map_validation_errors_like_the_method_side() {
-    let mut daemon = Daemon::configure("cli-files", "[agent]\ncodex-local = \"acp-remote\"\n");
-    daemon.start();
-    let config = daemon.config_path().to_path_buf();
-    let root = daemon.root().to_path_buf();
-
-    // export.create：先直接记录目录（A 之后目录只能由成功的会话创建写入），再验证三种映射。
-    let directory_id = support::seed_directory_blocking(&daemon.data_dir(), &root);
-    let export = write_file(
-        &root,
-        "export.json",
-        &format!(
-            r#"{{"exportId":"exp-1","displayName":"Export One","agentIds":["codex-local"],
-"workspaceDirectories":[{{"directoryId":"{directory_id}"}}],"defaultWorkspaceDirectory":"{directory_id}",
-"templates":[{{"templateId":"tpl-1","displayName":"Tpl","workspaceDirectory":"{directory_id}","params":[]}}],
-"defaultTemplateId":"tpl-1","scopes":["grant.session.read"],"cachePolicy":"no-content-cache"}}"#
-        ),
-    );
-    let run = run_cli(
-        "export-ok",
-        Some(&config),
-        &["export", "create", "--file", &export.display().to_string()],
-        Stdin::Null,
-    );
-    run.assert_success();
-    assert!(run.stdout.contains("exp-1"), "{}", run.stdout);
-
-    let run = run_cli(
-        "export-conflict",
-        Some(&config),
-        &["export", "create", "--file", &export.display().to_string()],
-        Stdin::Null,
-    );
-    assert_failure_contract(&run, "local.conflict", &[]);
-
-    let incomplete = write_file(&root, "export-incomplete.json", r#"{"exportId":"exp-2"}"#);
-    let run = run_cli(
-        "export-invalid",
-        Some(&config),
-        &[
-            "export",
-            "create",
-            "--file",
-            &incomplete.display().to_string(),
-        ],
-        Stdin::Null,
-    );
-    assert_failure_contract(&run, "local.invalid_params", &[]);
-
-    // 列表命令走本地通道并展示 result（Import 为空即为空数组）。
-    let run = run_cli(
-        "export-list",
-        Some(&config),
-        &["export", "list"],
-        Stdin::Null,
-    );
-    run.assert_success();
-    assert!(run.stdout.contains("exp-1"), "{}", run.stdout);
-    let run = run_cli(
-        "import-list",
-        Some(&config),
-        &["import", "list"],
-        Stdin::Null,
-    );
-    run.assert_success();
-    assert!(run.stdout.contains("imports"), "{}", run.stdout);
-
-    daemon.stop();
-}
 
 /// R70/R71：`doctor` 离线时在 CLI 进程内完成（不连接、不建锁、不打开数据库），在线时组合 `daemon.status`。
 #[test]
 fn doctor_completes_offline_and_combines_status_when_running() {
     let daemon = Daemon::configure("cli-doctor", "");
-    // 数据目录连都不存在：离线结论仍然要给出，且不得创建任何东西。
     create_owner_only_dir(daemon.data_dir());
+    // 数据目录连都不存在：离线结论仍然要给出，且不得创建任何东西。
     let before = dir_entries(daemon.data_dir());
     let run = run_cli(
         "doctor-offline",
