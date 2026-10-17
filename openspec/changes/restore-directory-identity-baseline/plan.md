@@ -15,7 +15,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | WP1 | 前端整体迁移到当前目录身份：协议镜像、解码边界、领域/页面模型、路由 `/dir/[directoryId]`、创建载荷、feature 广告、全部单测 | none | wp-coder | `clients/app/src/protocol/`, `clients/app/src/sync-client/`, `clients/app/src/domain/`, `clients/app/src/features/`, `clients/app/src/components/`, `clients/app/app/dir/`, `clients/app/src/routing.test.ts`, `clients/app/src/composition.test.ts`, `clients/app/src/layers.test.ts` | patch + 迁移后的前端与单测 | PV2 |
 | WP2 | e2e 夹具与 R15/R16/路由断言改为 `{ directoryId, path }`、`{ directoryId }` 与 `/dir/<directoryId>`；保留原有信息集合与可达性断言 | code:WP1 | wp-coder | `clients/app/e2e/` | patch + e2e 夹具与断言 | PV2, PV3 |
-| WP3 | 文档现行口径 + Rust 机械格式化：`FRONTEND_DESIGN` 的目录搜索/路由，README/缺口清单（如仍有旧口径）；`cargo fmt` 只改格式 | none | wp-coder | `docs/FRONTEND_DESIGN.md`, `README.md`, `prototypes/IMPLEMENTATION-GAPS.md`, `crates/**/*.rs`（仅格式） | patch + 文档与格式修复 | PV1 |
+| WP3 | 文档现行口径 + Rust 格式与基线死代码清理：`FRONTEND_DESIGN`/`SYNC_PROTOCOL` 的目录身份，README/缺口清单；`cargo fmt` + clippy 死代码清理 + `sync_workspace_catalog` 去掉 `include_path` | none | wp-coder | `docs/FRONTEND_DESIGN.md`, `docs/SYNC_PROTOCOL.md`, `README.md`, `prototypes/IMPLEMENTATION-GAPS.md`, `crates/**`（仅格式与死代码清理） | patch + 文档与 Rust 基线修复 | PV1 |
 
 ## Merge Order
 

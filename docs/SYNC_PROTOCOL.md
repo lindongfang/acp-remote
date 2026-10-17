@@ -1187,8 +1187,8 @@ SessionSummary {
 }
 
 ModeRef { modeId: string, displayName: string }
-WorkspaceRef { alias: string, displayName: string }
-WorkspaceCatalogEntry { alias: string, displayName: string, path?: string }
+WorkspaceRef { directoryId: string }
+WorkspaceCatalogEntry { directoryId: string, path: string }
 AgentCatalogEntry { agentId: string, displayName: string, default: boolean }
 
 ModeState { currentModeId: string | null, availableModes: ModeRef[], version: decimal string }
@@ -1207,7 +1207,7 @@ PublicError { code: string, message: string, retryable: boolean, details: object
 
 `SessionConfigOptionView` 是 ACP `SessionConfigOption` 的公开投影，按原样保留 `id`、`name`、`description`、`category` 和 `type`；`category` 为 `model` 或 `model_config` 的条目就是模型选择项，`currentValue` 是当前选中的 `value`（`type: "boolean"` 时为 boolean）。模型和模式都不再有独立的 Sync 专用类型。
 
-`workspace` 是 feature `core.local-catalog.v1` 门控下的**可选**字段，刻意不在 `SessionSummary` 的必填集合中：该 schema 是 `additionalProperties: false`，未协商该 feature 的客户端收到 `null`（而不是键缺席）会把整条摘要判为非法。因此键在场时的三态含义是——缺席＝未协商、`null`＝未分组、`WorkspaceRef`＝归属该目录。`WorkspaceRef` 是第 9.4 节 `workspaces` 资源的**引用形**（两个键），资源条目的形状是 `WorkspaceCatalogEntry`；同一个值对象不得在两处定义出不同形态。
+`workspace` 是 feature `core.local-catalog.v1` 门控下的**可选**字段，刻意不在 `SessionSummary` 的必填集合中：该 schema 是 `additionalProperties: false`，未协商该 feature 的客户端收到 `null`（而不是键缺席）会把整条摘要判为非法。因此键在场时的三态含义是——缺席＝未协商、`null`＝未分组、`WorkspaceRef`＝归属该目录。`WorkspaceRef` 是第 9.4 节 `workspaces` 资源的**引用形**（只有目录标识一个键），资源条目的形状是 `WorkspaceCatalogEntry`（目录标识与路径始终成对）；客户端按 `directoryId` 在同一份快照内查表，`path` 逐字取自条目、不由客户端拼接或反推。
 
 
 

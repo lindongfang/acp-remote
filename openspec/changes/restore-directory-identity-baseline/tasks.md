@@ -24,10 +24,11 @@
 
 ## 3. WP3 文档与 Rust 格式
 
-- [ ] 3.1 `docs/FRONTEND_DESIGN.md`：目录搜索改为“展示名 + 会话标题”，删除别名匹配；路由写作 `/dir/<directoryId>`；如仍写 `displayName`/`alias` 的现行前端口径一并改为路径派生。完成判据：`npm run check:docs` 通过，现行段落无旧词汇。
+- [ ] 3.1 `docs/FRONTEND_DESIGN.md` / `docs/SYNC_PROTOCOL.md`：目录搜索改为“展示名 + 会话标题”，删除别名匹配；路由写作 `/dir/<directoryId>`；`WorkspaceRef`/`WorkspaceCatalogEntry` 改为 `{ directoryId }` / `{ directoryId, path }`；如仍写 `displayName`/`alias` 的现行口径一并改为路径派生。完成判据：`npm run check:docs` 通过，现行段落无旧词汇。
 - [ ] 3.2 `README.md` / `prototypes/IMPLEMENTATION-GAPS.md`：如仍有目录别名/旧路由的前端现状描述，改为 `directoryId` + 路径派生展示名。完成判据：`grep` 不到前端现行口径的 `workspaceAlias`/`displayName`（历史设计文档除外）。
 - [ ] 3.3 在隔离工作区运行 `cargo fmt`，只提交格式差异。完成判据：`cargo fmt --check` 通过；diff 中无逻辑/注释语义变化。
-- [ ] 3.4 核对 `openspec/changes/restore-directory-identity-baseline/` 的 artifacts 与最终实现一致。完成判据：`npx openspec validate restore-directory-identity-baseline --strict` 通过。
+- [ ] 3.4 清理基线恢复后遗留的未用代码/导入，并使 `UseCases::sync_workspace_catalog` 去掉已撤销的 `include_path` 参数（更新 server 调用点与 core 测试）。完成判据：`cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过，`sync_workspace_catalog` 无 `include_path` 残留。
+- [ ] 3.5 核对 `openspec/changes/restore-directory-identity-baseline/` 的 artifacts 与最终实现一致。完成判据：`npx openspec validate restore-directory-identity-baseline --strict` 通过。
 
 ## 4. 合入与验证
 

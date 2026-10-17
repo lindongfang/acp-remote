@@ -25,7 +25,7 @@
 - 创建会话的目录引用改为 `directoryId` 或 `workspacePath`；`createIfMissing` 与 `directoryId` 互斥。已记录目录的选择器、浏览回退与提交载荷同步。
 - 客户端 feature 广告移除 `core.workspace-path.v1`；`core.workspace-browse.v1`、`core.session-create.v1`、`core.local-catalog.v1` 不变。`feature-declarations.test.ts` 增加“该 feature 已撤销”的负向断言。
 - e2e 夹具与 R15/R16/路由用例改用 `{ directoryId, path }` 与会话 `{ directoryId }`；期望的展示名改为路径尾段派生值。
-- `cargo fmt` 修复既有 Rust 格式差异；不改变任何 Rust 行为。
+- `cargo fmt` 修复既有 Rust 格式差异；同时清理基线恢复后遗留的未用代码/导入，并让 `UseCases::sync_workspace_catalog` 去掉已撤销的 `include_path` 参数（`path` 已始终下发）。不改变任何 Rust 业务语义。
 - 修改 `pwa-web-client` 的搜索要求：去掉别名匹配，明确目录标识不参与搜索。
 - 同步 `docs/FRONTEND_DESIGN.md` 中仍写“别名/旧路由”的现行口径（如存在）。
 

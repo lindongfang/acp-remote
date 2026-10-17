@@ -59,9 +59,9 @@
 
 `WORKSPACES_WITH_PATHS` 改为 `{ directoryId, path }`；会话夹具的 `workspace` 改为 `{ directoryId }`；路由夹具改为 `/dir/<directoryId>`。期望的展示名由路径尾段派生（例如 `D:\secret\vault\repo-x` → `repo-x`），同名路径用更多段消歧。R15/R16 的断言按新展示名与新路由更新，但保留原有的信息集合与可达性断言。
 
-### D7：Rust 格式只做机械修复
+### D7：Rust 只做格式与死代码清理
 
-在隔离工作区运行 `cargo fmt`，只提交格式差异；不修改逻辑、不重排模块、不改测试语义。完成后 `cargo fmt --check` 必须通过。
+在隔离工作区运行 `cargo fmt`，只提交格式差异；同时清理基线恢复后遗留的未用导入/函数/测试辅助，并让 `UseCases::sync_workspace_catalog` 去掉已撤销的 `include_path` 参数（`path` 已始终下发）。不修改业务逻辑、不重排模块、不改测试语义。完成后 `cargo fmt --check` 与 workspace clippy 必须通过。
 
 ## Risks / Trade-offs
 
