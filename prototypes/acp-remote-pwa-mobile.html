@@ -329,26 +329,24 @@
     margin-top:12px;line-height:1.6}
 
   /* ---------- 配对 ---------- */
-  .pairbody{flex:1;overflow:auto;padding:16px 16px calc(18px + var(--sab))}
+  .pairbody{flex:1;overflow:auto;padding:24px 18px calc(24px + var(--sab));display:flex;flex-direction:column;
+    justify-content:center;text-align:center}
   .pair h1{font-size:21px;line-height:1.3;margin:0 0 8px}
   .pair h2{font-size:15px;margin:0 0 10px}
-  .lede{margin:0 0 16px;color:var(--ink-2)}
-  .sasgrid{display:flex;gap:7px;margin:0 0 16px}
-  .sasgrid span{flex:1;aspect-ratio:1/1;display:grid;place-items:center;font-family:var(--mono);
-    font-size:24px;font-weight:600;background:var(--panel-2);border:1px solid var(--line);border-radius:10px}
+  .lede{margin:0 auto 14px;color:var(--ink-2);max-width:30ch}
+  .pairring{position:relative;width:94px;height:94px;margin:0 auto 20px}
+  .pairring::before{content:"";position:absolute;inset:0;border-radius:50%;border:3px solid var(--line);
+    border-top-color:var(--accent);animation:spin 1s linear infinite}
+  .ringcount{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:19px;color:var(--ink);letter-spacing:.03em;line-height:1.1}
+  .paircard{border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--panel);margin:18px auto 0;
+    max-width:340px;text-align:left}
   .kvbox{border:1px solid var(--line);border-radius:10px;padding:12px;margin:0 0 18px;background:var(--panel)}
   .glyph{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:22px;
-    background:var(--warn-soft);color:var(--warn);margin:0 0 18px}
+    background:var(--warn-soft);color:var(--warn);margin:0 auto 18px}
   .glyph.danger{background:var(--danger-soft);color:var(--danger)}
   .olsteps{margin:0;padding-left:20px;font-size:13.5px;color:var(--ink-2)}
   .olsteps li{margin:3px 0}
-  .scopelist{list-style:none;margin:0;padding:0}
-  .scopelist li{display:flex;gap:10px;font-size:13.5px;margin:5px 0;align-items:flex-start}
-  .tick{width:17px;height:17px;border-radius:5px;border:1.5px solid var(--line);flex:none;margin-top:3px;
-    display:grid;place-items:center;font-size:11px}
-  .tick.on{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
-  .countdown{display:flex;align-items:center;gap:12px;margin:12px 0 4px}
-  .cdtime{font-family:var(--mono);font-size:20px}
   .hint{font-size:12.5px;color:var(--ink-3);line-height:1.6}
   .field{margin-bottom:14px}
   .field>label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
@@ -477,8 +475,19 @@
       <button data-go="#/dirs">目录</button>
       <button data-go="#/chat/s1">对话</button>
       <button data-go="#/chat/s2">待授权</button>
-      <button data-go="#/pair/S4">配对</button>
+      <button data-go="#/pair/S0">配对</button>
     </div>
+    <label>配对页状态<select id="pairSel">
+      <option value="S0">S0 配对中（转圈 + 5 分钟倒计时）</option>
+      <option value="S1">S1 审批通过 → 自动进入目录</option>
+      <option value="S2">S2 审批未通过</option>
+      <option value="S3">S3 配对地址已过期</option>
+      <option value="S4">S4 地址已被使用</option>
+      <option value="S5">S5 无法识别地址</option>
+      <option value="S6">S6 地址属于另一台电脑</option>
+      <option value="S7">S7 需要 HTTPS</option>
+      <option value="S8">S8 配对请求失败</option>
+    </select></label>
     <label>连接状态<select id="connSel">
       <option value="online">在线</option>
       <option value="syncing">在线 · 正在追平</option>
@@ -514,22 +523,21 @@
   var $ = function(id){ return document.getElementById(id); };
   var NOW = new Date("2026-09-18T14:33:00").getTime();
   var HOSTNAME = "acp-pc";
-  var PAIR_TTL = 300;
-  var PAIR = { origin:"https://pc.example.ts.net", sas:"481502",
-    fingerprint:"3f2a9c41e8b7d5a3c9061ff4be28a7d5e93c1046ab2f8d7c6e5a4b3c2d1e0f99" };
+  var PAIR_TTL = 300;   /* 配对地址的固定有效期：5 分钟 */
+  /* 配对页没有 SAS / 权限清单；保留地址、主机 ID 与 5 分钟倒计时。 */
   var SCOPES = [
     { label:"查看会话与历史", on:true }, { label:"发送消息与排队", on:true },
     { label:"响应授权请求", on:true }, { label:"切换模型与模式", on:true }
   ];
   var HOSTINFO = { deviceName:"我的手机", deviceId:"2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
     clientKind:"浏览器 PWA（手机）", hostId:"bdb2ec20-f98c-4d87-b789-e540d527ef87",
-    address:"https://pc.example.ts.net", fingerprint:PAIR.fingerprint, lastSync:"14:33:02" };
+    address:"https://pc.example.ts.net", fingerprint:"3f2a9c41e8b7d5a3c9061ff4be28a7d5e93c1046ab2f8d7c6e5a4b3c2d1e0f99", lastSync:"14:33:02" };
   var CONN = {
     online:       { tone:"ok",   badge:"在线", chip:null, strip:null },
     syncing:      { tone:"ok",   badge:"在线", chip:null, strip:["正在补齐离线期间的事件…", ""] },
     reconnecting: { tone:"warn", badge:"重连中", chip:"正在重连", strip:["连接断开，正在重连。下面是最后已知内容。", "warn"] },
     offline:      { tone:"warn", badge:"离线", chip:"离线", strip:["已离线。下面是 2 分钟前同步到的内容。", "warn"] },
-    identity:     { chip:"密钥已变化", block:["这台电脑的身份密钥已变化","网页不会自动接受新的密钥。请先在电脑上确认：是换了电脑，还是连接被人拦截过。","回电脑终端确认","#/pair/S4"] }
+    identity:     { chip:"密钥已变化", block:["这台电脑的身份密钥已变化","网页不会自动接受新的密钥。请先在电脑上确认：是换了电脑，还是连接被人拦截过。","回电脑终端确认","#/pair/S0"] }
   };
   var DIRS = [
     { id:"work-api", name:"api",     path:"D:\\work\\api" },
@@ -639,7 +647,7 @@
     conn:"online", chatScenario:"running", ctx:"mid", degradeDemo:true,
     session:"s1", tab:"chat", filter:"all", query:"", selFile:"src/auth/session.ts",
     open:{}, keys:[], permSet:{}, modelSel:{}, modeSel:{}, openPick:null,
-    pair:"S4", pairLeft:PAIR_TTL, clearArmed:false, creating:null, newAgent:"codex", newErr:null, seq:0,
+    pair:"S0", pairLeft:PAIR_TTL, pairTimer:null, pairNavTimer:null, clearArmed:false, creating:null, newAgent:"codex", newErr:null, seq:0,
     newDir:"", mkdirCase:"ok", dirPickOpen:false,
     browsePath:"", pickKind:"existing", newFolderOpen:false, newFolderName:"",
     jumpTo:null, page:1, navStack:[],
@@ -1257,39 +1265,62 @@ function viewChat(id){
   return chatPane(s);
 }
 
+/* 入口是浏览器地址栏里的配对 URL：打开即开始配对，页面没有输入框、顶部返回入口、步骤条与右侧说明。
+   进入后就是居中的「配对中」（转圈 + 5 分钟倒计时）；通过进入目录，未通过/失败只显示原因。 */
+function pairHostCard(){
+  return '<div class="kvbox"><div class="kvrow"><span class="k">地址</span><span class="v">'+
+    esc(HOSTINFO.address)+'</span></div>'+
+    '<div class="kvrow"><span class="k">主机 ID</span><span class="v">'+esc(HOSTINFO.hostId)+'</span></div></div>';
+}
+function pairLoading(title, lede, note, withCountdown){
+  var center = withCountdown
+    ? '<span class="ringcount"><span id="pairCount">5:00</span></span>'
+    : '';
+  return '<div class="pairring" role="status" aria-label="配对中">'+center+'</div>'+
+    '<h1>'+title+'</h1><p class="lede">'+lede+'</p><p class="hint">'+note+'</p>';
+}
+function pairFail(title, lede, warn){
+  return '<div class="glyph danger">⚠</div><h1>'+title+'</h1><p class="lede">'+lede+'</p>'+
+    (warn?'<div class="notice warn"><span>⚠</span><span>'+warn+'</span></div>':'');
+}
 function viewPair(){
-  var p = A.pair, h = appbar('配对', HOSTNAME + ' · 安全连接', '', false), b = "";
-  if(p==="S4"){
-    b = '<h1>请核对电脑上的这 6 位数字</h1><p class="lede">两边一致再继续。不一致请立刻停止并重新扫码——' +
-      '这通常意味着链接被转发给了别人。</p>' +
-      '<div class="sasgrid" role="img" aria-label="验证码">'+PAIR.sas.split("").map(function(d){
-        return '<span>'+d+'</span>'; }).join("")+'</div>' +
-      '<p class="hint" style="color:var(--danger);font-weight:600">不一致就不要继续。</p>' +
-      '<div class="countdown"><span class="cdtime">'+(Math.floor(A.pairLeft/60))+':'+
-      String(A.pairLeft%60).padStart(2,"0")+'</span><span class="hint">后失效</span></div>' +
-      '<p class="hint" style="margin-top:14px"><span class="spin"></span> 正在等待电脑确认…</p>';
-  } else if(p==="S9"){
-    b = '<div style="text-align:center;padding:20px 0"><div class="glyph" style="margin:0 auto 16px;' +
-      'background:var(--ok-soft);color:var(--ok)">✓</div>' +
-      '<h1 style="font-size:20px">已连接到 '+HOSTNAME+'</h1></div>' +
-      '<div class="kvbox"><div class="kvrow"><span class="k">设备</span><span class="v" style="font-family:var(--sans)">' +
-      '我的手机 · 浏览器 PWA</span></div>' +
-      '<div class="kvrow"><span class="k">主机</span><span class="v">'+esc(PAIR.origin)+'</span></div>' +
-      '<div class="kvrow"><span class="k">指纹</span><span class="v">'+esc(PAIR.fingerprint.slice(0,32))+'…</span></div></div>' +
-      '<div class="notice warn"><span>⚠</span><span>身份密钥保存在本浏览器。清除数据或更换域名会永久删除它，之后必须重新配对。</span></div>' +
-      '<button class="btn block primary" data-go="#/dirs">进入目录</button>';
+  var p = A.pair, h = appbar('配对', '', '', false), b = "";
+  if(p==="S0"){
+    b = pairLoading('配对中',
+      '正在等待这台电脑确认这次配对请求。通过后会自动进入目录，不需要再操作本页。',
+      '正在等待电脑确认…', true)+
+      '<div class="paircard">'+pairHostCard()+
+      '<p class="hint" style="margin:10px 0 0">每 2 秒自动查询一次；重复查询是安全的，不会产生第二条配对记录。</p></div>';
+  } else if(p==="S1"){
+    b = pairLoading('已通过审批，正在进入目录', '配对已完成，正在建立同步连接并载入目录…',
+      '正在连接这台电脑…', false)+
+      '<p class="hint mono" style="margin-top:16px">本机设备 ID：'+esc(HOSTINFO.deviceId)+'</p>';
+  } else if(p==="S2"){
+    b = '<div class="glyph danger">✕</div><h1>审批未通过</h1>'+
+      '<p class="lede">电脑端没有批准这次配对请求。本页没有获得任何访问能力，也没有留下可用的主机记录。</p>'+
+      '<div class="notice warn"><span>⚠</span><span>如需继续，请在电脑上重新发起配对，再用新的地址打开本页。</span></div>';
+  } else if(p==="S3"){
+    b = pairFail('配对地址已过期', '这次配对地址已经超过有效期（5 分钟），或者被电脑端作废。',
+      '请在电脑上重新发起配对，再用新的地址打开本页。');
+  } else if(p==="S4"){
+    b = pairFail('这个配对地址已经被使用', '每个配对地址只能成功使用一次。再次打开不会建立第二条连接。',
+      '请在电脑上重新生成一个配对地址。');
+  } else if(p==="S5"){
+    b = pairFail('无法识别这个地址', '地址里的配对信息不完整或已被破坏，本页没有发出任何请求。',
+      '常见原因：链接在复制时被截断，或者二维码识别不完整。');
+  } else if(p==="S6"){
+    b = pairFail('这个地址属于另一台电脑', '这个配对地址来自另一个来源，而一个浏览器身份只绑定一个地址，不能跨来源迁移。',
+      '请确认扫码对象：打开这台电脑自己的配对地址。');
+  } else if(p==="S7"){
+    b = pairFail('需要 HTTPS 才能配对', '当前页面不是安全上下文（https 或 loopback），浏览器不提供配对所需的加密能力。',
+      '请改用 https 打开本页后再配对；不能在这里降级成不安全的连接。');
+  } else if(p==="S8"){
+    b = pairFail('配对请求未能完成', '没能把配对请求送到这台电脑（网络或本地存储不可用）。本页已经结束这次配对，可以安全地重新开始。',
+      '重新打开配对地址只会重新走一次流程，不会产生第二条配对记录。');
   } else {
-    b = '<div class="glyph danger">⚠</div><h1>这台电脑的身份密钥已变化</h1>' +
-      '<p class="lede">网页不会自动接受新的密钥。请先在电脑上确认：是换了电脑，还是连接被人拦截过。</p>' +
-      '<div class="kvbox"><div class="kvrow"><span class="k">已记录</span><span class="v">'+esc(PAIR.fingerprint.slice(0,28))+'…</span></div>' +
-      '<div class="kvrow"><span class="k">本次出示</span><span class="v">7d41c0b95e2f…（不同）</span></div></div>' +
-      '<button class="btn block" data-go="#/dirs">回目录</button>';
+    b = '<h1>配对未完成</h1><p class="lede">这是一个占位状态。</p>';
   }
-  return h + '<div class="pairbody pair">'+b+
-    '<hr style="border:0;border-top:1px solid var(--line-2);margin:26px 0 18px" />' +
-    '<h2>这台设备申请了这些权限</h2><ul class="scopelist">'+
-    SCOPES.map(function(s){ return '<li><span class="tick on">✓</span><span>'+esc(s.label)+'</span></li>'; }).join("")+
-    '</ul><p class="hint" style="margin-top:10px">由电脑端发起时申请，本页只读。</p></div>';
+  return h + '<div class="pairbody pair">'+b+'</div>';
 }
 
 /* ============ sheet（底部全屏层） ============ */
@@ -1499,7 +1530,28 @@ function jumpToUser(){
 /* ============ 路由 ============ */
 function render(){
   var h = location.hash || "#/dirs";
-  if(h.indexOf("#/pair")===0)      $("frame").innerHTML = viewPair();
+  if(A.pairTimer){ clearInterval(A.pairTimer); A.pairTimer = null; }
+  if(A.pairNavTimer){ clearTimeout(A.pairNavTimer); A.pairNavTimer = null; }
+  if(h.indexOf("#/pair")===0){
+    A.pair = h.split("/")[2] || "S0";
+    $("frame").innerHTML = viewPair();
+    if(A.pair==="S0"){
+      var paintCount = function(){
+        var el = $("pairCount");
+        if(el) el.textContent = Math.floor(A.pairLeft/60)+":"+String(A.pairLeft%60).padStart(2,"0");
+      };
+      paintCount();
+      A.pairTimer = setInterval(function(){
+        A.pairLeft = Math.max(0, A.pairLeft-1);
+        paintCount();
+        if(A.pairLeft === 0) location.hash = "#/pair/S3";
+      }, 1000);
+    }
+    /* 审批通过后自动进入目录，不再要求用户点一次。 */
+    if(A.pair==="S1") A.pairNavTimer = setTimeout(function(){
+      if(A.pair==="S1") location.hash = "#/dirs";
+    }, 1600);
+  }
   else if(h.indexOf("#/sessions")===0) $("frame").innerHTML = viewSessions();
   else if(h.indexOf("#/chat/")===0)   { A.tab = A.tab || "chat"; $("frame").innerHTML = viewChat(h.slice(7)); }
   else if(h.indexOf("#/dir/")===0)    $("frame").innerHTML = viewDirDetail(h.slice(6));
@@ -1600,10 +1652,10 @@ function handleAct(a){
   if(a==="mode"){ pickMode(); return; }
   if(a==="model"){ pickModel(); return; }
   if(a==="ctx"){ openSheet("host"); return; }
-  if(a==="repair"){ closeSheet(); location.hash="#/pair/S4"; return; }
+  if(a==="repair"){ closeSheet(); location.hash="#/pair/S0"; return; }
   if(a==="clear"){ A.clearArmed=true; paintSheet(); return; }
   if(a==="clear-no"){ A.clearArmed=false; paintSheet(); return; }
-  if(a==="clear-yes"){ A.clearArmed=false; closeSheet(); location.hash="#/pair/S4";
+  if(a==="clear-yes"){ A.clearArmed=false; closeSheet(); location.hash="#/pair/S0";
     toast("本机数据已清除；下次使用需要重新配对"); return; }
   if(a==="create"){
     if(A.creating) return;
@@ -1809,7 +1861,10 @@ document.addEventListener("keydown", function(e){ if(e.key==="Escape"){
   if(A.dirPickOpen){ closeDirPicker(); return; }   /* 弹窗开着时先关弹窗，不关底下的新建弹层 */
   closeSheet(); } });
 $("consoleHead").onclick = function(){ $("console").classList.toggle("collapsed"); };
-$("navRow").onclick = function(e){ var b = e.target.closest("[data-go]"); if(b) location.hash = b.dataset.go; };
+$("navRow").onclick = function(e){ var b = e.target.closest("[data-go]"); if(!b) return;
+  if(b.dataset.go === "#/pair") A.pairLeft = PAIR_TTL;
+  location.hash = b.dataset.go; };
+$("pairSel").onchange = function(){ A.pairLeft = PAIR_TTL; location.hash = "#/pair/"+this.value; };
 $("connSel").onchange = function(){ A.conn = this.value; A.clearArmed = false; render(); };
 $("scenSel").onchange = function(){ A.chatScenario = this.value; render(); };
 $("ctxSel").onchange  = function(){ A.ctx = this.value; render(); };

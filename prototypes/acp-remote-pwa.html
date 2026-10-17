@@ -161,10 +161,8 @@
   .dname{font-weight:600;font-size:15px;letter-spacing:-.01em}
   .dpath{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;
     white-space:nowrap;flex:0 1 auto;min-width:0}
-  /* 详情页的路径：与新建弹层的「路径」同一套（淡标签 + 等宽值），不再是没头没尾的一行大字 */
-  /* 页面头部（返回 + 标题 + 路径）与下面的月份分段条之间要有间距，否则「路径」那行会贴着「全部」 */
-  .pagehead{margin-bottom:14px}
-  .pagehead .dirinfo{margin:8px 0 0}
+  /* 详情页页头与对话页左栏同构：次级「目录」按钮 / 目录名 / 路径三行 */
+  .pagehead{margin-bottom:16px}
   .drow .dpath{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     font-family:var(--mono);font-size:13.5px;font-weight:500;color:var(--ink)}
   .dbody{display:block;margin-left:30px;border-left:2px solid var(--line-2)}
@@ -187,11 +185,6 @@
   .notice{border-radius:10px;padding:12px 14px;font-size:13px;display:flex;gap:10px;align-items:flex-start}
   .notice.warn{background:var(--warn-soft);color:var(--warn)}
   .notice.info{background:var(--accent-soft);color:var(--accent-ink)}
-  .backlink{display:inline-block;font-size:13px;color:var(--accent);cursor:pointer;text-decoration:none}
-  .backlink:hover{text-decoration:underline}
-  .pagetitle{display:flex;align-items:center;gap:10px;margin:10px 0 0;font-size:21px;font-weight:600;letter-spacing:-.01em}
-  .pagetitle .chip-count{font-size:12px;font-weight:400}
-  /* 详情页底栏：左边新建、右边翻页（可输入页码） */
   .pager{display:flex;align-items:center;gap:10px}
   .pageinput{width:40px;text-align:center;padding:4px 6px;border-radius:7px;border:1px solid var(--line);
     background:var(--panel-2);color:var(--ink);font:inherit;font-size:12.5px;outline:0}
@@ -212,9 +205,18 @@
   .col.right{border-left:1px solid var(--line);background:var(--panel-2)}
   .colhead{flex:none;padding:13px 16px;border-bottom:1px solid var(--line-2);background:var(--panel);position:sticky;top:0;z-index:12}
   .col.right .colhead{background:var(--panel-2)}
-  .dirctx{display:flex;align-items:flex-start;gap:8px}
-  .dirctx .nm{font-weight:600;font-size:15px}
-  .dirctx .pt{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--ink);word-break:break-all;margin-top:2px}
+  .dirback{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;margin:0 0 10px;
+    border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink-2);
+    font-family:inherit;font-size:12.5px;font-weight:500;cursor:pointer}
+  .dirback:hover{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-ink)}
+  .dirback .chev{font-size:13px;line-height:1}
+  .dirline,.pathrow{display:flex;align-items:baseline;gap:8px;min-width:0}
+  .dirline .nm{margin:0;font-weight:600;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap}
+  .pagehead .dirline .nm{font-size:21px;letter-spacing:-.01em}
+  .pathrow{margin-top:3px}
+  .pathrow .pt{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--ink);
+    word-break:break-all;min-width:0}
   .searchbox{margin-top:10px;display:flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid var(--line);
     border-radius:8px;padding:5px 10px}
   .searchbox input{flex:1;border:0;outline:0;background:transparent;font:inherit;font-size:13px;color:var(--ink)}
@@ -442,47 +444,24 @@
   .diff .hd{background:var(--panel-2);color:var(--ink-3);font-size:11px;padding:4px 10px}
 
   /* ============ 配对页 ============ */
-  .pair{flex:1;overflow:auto}
-  .pairgrid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,.9fr);max-width:1320px;margin:0 auto;
-    min-height:100%}
-  .pstage{padding:40px 48px 32px}
-  .paside{padding:40px 40px 32px 28px;border-left:1px solid var(--line);background:var(--panel-2)}
+  .pair{flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:48px 24px}
+  .pairgrid{width:100%;max-width:560px}
+  .pstage{text-align:center}
   .pair h1{font-size:26px;line-height:1.3;margin:0 0 10px;letter-spacing:-.01em}
   .pair h2{font-size:15px;margin:0 0 12px}
-  .lede{margin:0 0 28px;color:var(--ink-2);max-width:56ch}
-  .stepper{display:flex;align-items:center;gap:10px;margin:0 0 28px;flex-wrap:wrap}
-  .step{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-3)}
-  .step .b{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center;
-    font-size:11px;color:var(--ink-3);background:var(--panel)}
-  .step.done{color:var(--ok)} .step.done .b{border-color:var(--ok);background:var(--ok-soft);color:var(--ok)}
-  .step.active{color:var(--ink);font-weight:600}
-  .step.active .b{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-ink)}
-  .step-line{width:28px;height:1px;background:var(--line)}
-  .sasblock{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:28px 32px;
-    box-shadow:var(--shadow);max-width:640px}
-  .sas{display:flex;gap:12px;margin:0 0 18px}
-  .sas span{width:64px;height:82px;display:grid;place-items:center;font-family:var(--mono);font-size:40px;
-    font-weight:600;background:var(--panel-2);border:1px solid var(--line);border-radius:12px}
-  .countdown{display:flex;align-items:center;gap:14px;margin-top:24px}
-  .ring{width:46px;height:46px;flex:none}
-  .ring circle{fill:none;stroke-width:4} .ring .bg{stroke:var(--line)}
-  .ring .fg{stroke:var(--accent);stroke-linecap:round;transform:rotate(-90deg);transform-origin:50% 50%;
-    transition:stroke-dashoffset .4s linear}
-  .ring.low .fg{stroke:var(--warn)} .ring.crit .fg{stroke:var(--danger)}
-  .cd-label{font-size:13px;color:var(--ink-2)} .cd-time{font-family:var(--mono);font-size:20px}
-  .pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-right:8px;
-    animation:pulse 1.6s ease-in-out infinite}
-  @keyframes pulse{0%,100%{opacity:.25;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
-  .scopelist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
-  .scopelist li{display:flex;gap:10px;align-items:flex-start;font-size:13px}
-  .tick{width:16px;height:16px;border-radius:4px;flex:none;margin-top:3px;display:grid;place-items:center;
-    font-size:11px;border:1.5px solid var(--line);color:var(--ink-3)}
-  .tick.on{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+  .lede{margin:0 auto 26px;color:var(--ink-2);max-width:46ch}
+  .pairring{position:relative;width:104px;height:104px;margin:0 auto 24px}
+  .pairring::before{content:"";position:absolute;inset:0;border-radius:50%;border:3px solid var(--line);
+    border-top-color:var(--accent);animation:spin 1s linear infinite}
+  .ringcount{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:21px;color:var(--ink);letter-spacing:.03em;line-height:1.1}
+  .paircard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 24px;
+    box-shadow:var(--shadow);margin:26px auto 0;max-width:460px;text-align:left}
   .olsteps{margin:0;padding-left:20px;font-size:13px;color:var(--ink-2);display:flex;flex-direction:column;gap:6px}
   hr.sep{border:0;border-top:1px solid var(--line-2);margin:18px 0}
-  .block{max-width:620px}
+  .block{max-width:480px;margin:0 auto}
   .block .glyph{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:22px;
-    background:var(--warn-soft);color:var(--warn);margin:0 0 20px}
+    background:var(--warn-soft);color:var(--warn);margin:0 auto 20px}
   .block.danger .glyph{background:var(--danger-soft);color:var(--danger)}
   .kvbox{display:grid;grid-template-columns:120px 1fr;gap:8px 16px;font-size:13px;margin:20px 0;padding:16px;
     background:var(--panel);border:1px solid var(--line);border-radius:10px}
@@ -622,19 +601,20 @@
   <hr class="sep">
   <h2>四条路由</h2>
   <ol class="olsteps">
-    <li><code>#/pair</code> 配对页（10 个状态）</li>
+    <li><code>#/pair</code> 配对页（9 个状态）</li>
     <li><code>#/dirs</code> 目录页（目录为主角）</li>
     <li><code>#/dir/work-api</code> 目录详情（按月分档）</li>
     <li><code>#/chat/s1</code> 对话页（三栏）</li>
   </ol>
   <hr class="sep">
-  <h2>两个不同的“密钥”</h2>
+  <h2>配对是怎么进行的</h2>
   <dl>
-    <dt>配对密钥</dt><dd>二维码/链接带来的 32 字节随机数，最多 5 分钟、只能用一次。</dd>
-    <dt>6 位数字</dt><dd>两台设备各自计算，内容包含双方公钥；人工核对一致才算完成。</dd>
+    <dt>配对地址</dt><dd>电脑上「添加设备」出示的一次性地址，含只能用一次的配对密钥。</dd>
+    <dt>打开即配对</dt><dd>在浏览器里打开这个地址就开始配对；本页不需要输入任何东西。</dd>
+    <dt>电脑审批</dt><dd>请求必须由电脑上的人确认；等待期间本页只轮询状态，不能自己批准。</dd>
   </dl>
   <hr class="sep">
-  <p class="hint">网页端永远不能自己批准自己 —— 确认只发生在电脑终端里。</p>
+  <p class="hint">审批通过后自动进入目录；审批未通过会停在本页并说明原因，不会留下可用的主机记录。</p>
 </aside>
 
 <section class="console" id="console">
@@ -671,24 +651,15 @@
     </div>
     <label>配对页状态
       <select id="pairSel">
-        <option value="S4">S4 等待电脑确认（主态）</option>
-        <option value="S7">S7 建立连接中</option>
-        <option value="S9">S9 已连接 · 总结卡</option>
-        <option value="S0">S0 无效落地页</option>
-        <option value="S2a">S2a origin 不一致</option>
-        <option value="S2b">S2b 非 HTTPS</option>
-        <option value="S2c">S2c 已过期</option>
-        <option value="S2d">S2d 链接无法解析</option>
-        <option value="S3a">S3a 校验未通过 401</option>
-        <option value="S3b">S3b 已被认领 409</option>
-        <option value="S3c">S3c 已失效 410</option>
-        <option value="S3d">S3d 网络中断</option>
-        <option value="S3e">S3e 限流 429</option>
-        <option value="S5">S5 电脑拒绝</option>
-        <option value="S6">S6 配对失效</option>
-        <option value="S8a">S8a 认证超时</option>
-        <option value="S8b">S8b 主机密钥变化</option>
-        <option value="S10">S10 这台设备已配对</option>
+        <option value="S0">S0 配对中（转圈 + 5 分钟倒计时）</option>
+        <option value="S1">S1 审批通过 → 自动进入目录</option>
+        <option value="S2">S2 审批未通过</option>
+        <option value="S3">S3 配对地址已过期</option>
+        <option value="S4">S4 地址已被使用</option>
+        <option value="S5">S5 无法识别地址</option>
+        <option value="S6">S6 地址属于另一台电脑</option>
+        <option value="S7">S7 需要 HTTPS</option>
+        <option value="S8">S8 配对请求失败</option>
       </select>
     </label>
     <label>连接状态
@@ -798,13 +769,9 @@
 
   /* ==================== 数据（唯一来源） ==================== */
   var NOW = new Date("2026-09-18T14:33:00").getTime();
-  var HOST = "acp-pc";
-  var PAIR_TTL = 300;
-  var PAIR = {
-    pairingId:"2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
-    hostFingerprint:"3f2a9c41e8b7d5a3c9061ff4be28a7d5e93c1046ab2f8d7c6e5a4b3c2d1e0f99",
-    origin:"https://pc.example.ts.net", sas:"481502"
-  };
+  var PAIR_TTL = 300;   /* 配对地址的固定有效期：5 分钟，过期即进入失败页 */
+  /* 配对页不再有 SAS / 权限清单（实现见 clients/app/src/features/pairing-model.ts）。
+     页面只需要两样公开信息：主机地址与主机 ID；凭据、指纹都不在这里输入或展示。 */
   var SCOPES = [
     { id:"session.list",      label:"查看会话与历史", on:true },
     { id:"session.prompt",     label:"发送消息与排队", on:true },
@@ -1007,12 +974,12 @@
     identity:     { chip:"密钥已变化", block:["这台电脑的身份密钥已变化","网页不会自动接受新的密钥。请先在电脑上确认：是换了电脑，还是这条连接被人拦截过。确认之前不要继续。","回电脑终端确认","#/pair/S0"] },
     incompatible: { chip:"版本不兼容", block:["网页端与这台电脑版本不兼容","当前网页版本与 Daemon 的协议版本没有交集，需要刷新页面或升级其中一端。","刷新页面",null] },
     replaced:     { chip:"已在别处接管", block:["已在另一个标签页连接","同一台设备同时只保留一条连接。接管后，本页面会重新建立连接，另一个标签页会停止重连。","接管连接",null] },
-    unpaired:     { chip:"未配对", block:["这台浏览器还没有配对","先与电脑完成一次配对，才能看到这台电脑上的会话。","去配对","#/pair/S4"] }
+    unpaired:     { chip:"未配对", block:["这台浏览器还没有配对","先与电脑完成一次配对，才能看到这台电脑上的会话。","去配对","#/pair/S0"] }
   };
   var A = {
     route:"#/dirs", conn:"online", clearArmed:false,
     iconStyle:"solid", iconSem:"target",
-    pair:"S4", pairLeft:PAIR_TTL, pairPoll:6, pairTimer:null,
+    pair:"S0", pairLeft:PAIR_TTL, pairTimer:null, pairNavTimer:null,
     scene:"normal", offline:false, dev:false, hl:true,
     filter:"all", query:"", page:1,
     chatScenario:"running", ctx:"mid", permSet:{},
@@ -1707,10 +1674,11 @@
       ? '<div class="blank"><h2>这个目录还没有会话</h2><p>在这里或电脑上新建一个会话，它会出现在这里。</p></div>'
       : pageRows.map(function(s){ return dirRow(s,{full:true}); }).join("");
     return '<div class="scroll"><div class="wrap">' +
-      '<div class="pagehead"><a class="backlink" data-go="#/dirs">‹ 目录</a>' +
-        '<h1 class="pagetitle">'+esc(dir.name)+'<span class="chip-count">'+all.length+' 个会话</span></h1>' +
-        (dir.path?'<div class="dirinfo"><div class="drow"><span class="dk">路径</span>' +
-          '<span class="dpath" data-full="'+esc(dir.path)+'" data-keep="1"></span></div></div>':'') +
+      '<div class="pagehead">' +
+        '<button class="dirback" data-go="#/dirs"><span class="chev" aria-hidden="true">‹</span>目录</button>' +
+        '<div class="dirline"><h1 class="nm">'+esc(dir.name)+'</h1>' +
+          '<span class="chip-count">'+all.length+' 个会话</span></div>' +
+        (dir.path?'<div class="pathrow"><span class="dk">路径</span><span class="pt dpath" data-full="'+esc(dir.path)+'" data-keep="1"></span></div>':'') +
       '</div>' +
       (A.offline?'<div class="notice warn" style="margin:14px 0"><span>⚠</span><span>连接已断开，下面是 2 分钟前同步到的内容。</span></div>':'') +
       body +
@@ -1762,9 +1730,10 @@
     var rest = SESSIONS.filter(function(x){ return x.dir===s.dir; }).length - list.length;
 
     var left = '<aside class="col left">' +
-      '<div class="colhead"><div class="dirctx"><div style="flex:1"><span class="nm">'+esc(dir?dir.name:"")+'</span>' +
-        (dir&&dir.path?'<div class="pt">'+esc(dir.path)+'</div>':'') + '</div>' +
-        '<button class="linkbtn" data-go="#/dir/'+s.dir+'">全部 ›</button></div>' +
+      '<div class="colhead">' +
+        '<button class="dirback" data-go="#/dirs"><span class="chev" aria-hidden="true">‹</span>目录</button>' +
+        '<div class="dirline"><span class="nm">'+esc(dir?dir.name:"")+'</span></div>' +
+        (dir&&dir.path?'<div class="pathrow"><span class="dk">路径</span><span class="pt">'+esc(dir.path)+'</span></div>':'') +
         '<div class="searchbox"><span>🔍</span><input placeholder="在本目录内搜索" /></div></div>' +
       '<div style="flex:1">'+list.map(function(x){
         return '<div class="srow'+(x.id===s.id?" on":"")+'" data-session="'+x.id+'">' +
@@ -1827,168 +1796,72 @@
   }
 
   /* ==================== 视图：配对页 ==================== */
-  function countdownHTML(){
-    var mmss=Math.floor(A.pairLeft/60), ss=A.pairLeft%60;
-    var frac=A.pairLeft/PAIR_TTL, C=2*Math.PI*20;
-    var cls=A.pairLeft<=30?"crit":(A.pairLeft<=60?"low":"");
-    return '<div class="countdown"><svg class="ring '+cls+'" viewBox="0 0 46 46" aria-hidden="true">' +
-      '<circle class="bg" cx="23" cy="23" r="20"></circle><circle class="fg" cx="23" cy="23" r="20" stroke-dasharray="'+
-      C.toFixed(1)+'" stroke-dashoffset="'+(C*(1-frac)).toFixed(1)+'"></circle></svg>' +
-      '<div><div class="cd-label">二维码失效倒计时</div><div class="cd-time">'+(mmss)+':'+String(ss).padStart(2,"0")+'</div></div></div>';
+  /* 入口是浏览器地址栏里的配对 URL：打开即开始配对（实现里由 `startPairingFromAddress` 读地址片段触发）。
+     页面没有输入框、顶部返回入口、步骤条与右侧说明——就是一个居中的状态页：配对中（转圈 + 5 分钟倒计时，
+     等电脑审批）→ 通过则自动进入目录；未通过/失败只显示原因，不提供进入目录的入口。 */
+  function pairHost(){
+    return '<dl class="kvbox"><dt>地址</dt><dd>'+esc(HOSTINFO.address)+'</dd>'+
+      '<dt>主机 ID</dt><dd>'+esc(HOSTINFO.hostId)+'</dd></dl>';
   }
-  function scopesAside(){
-    return '<h2>这台设备申请了这些权限</h2><ul class="scopelist">'+
-      SCOPES.map(function(s){ return '<li><span class="tick '+(s.on?"on":"")+'">'+(s.on?"✓":"")+'</span><span>'+
-        esc(s.label)+'<br><span class="dim mono" style="font-size:11px">'+esc(s.id)+'</span></span></li>'; }).join("")+'</ul>'+
-      '<p class="hint">由电脑端发起时申请，本页只读，无法在此修改。</p><hr class="sep">'+
-      '<h2>接下来会发生什么</h2><ol class="olsteps"><li>你在电脑终端核对数字后输入 y 批准</li>'+
-      '<li>两台设备做一次加密握手</li><li>连接建立，代码只留在你自己的电脑上</li></olistspan></ol>'+
-      '<hr class="sep"><div class="notice warn"><span>⚠</span><span>两边数字不一致时，可能有人把这个链接转发给了他自己的电脑。</span></div>';
+  function pairLoading(title, lede, note, withCountdown){
+    var center = withCountdown
+      ? '<span class="ringcount"><span id="pairCount">5:00</span></span>'
+      : '';
+    return '<div class="pairring" role="status" aria-label="配对中">'+center+'</div>'+
+      '<h1>'+title+'</h1><p class="lede">'+lede+'</p>'+
+      '<p class="hint">'+note+'</p>';
   }
-  var PAIR_BLOCKS = {
-    S2b:{ tone:"", g:"⚠", t:"需要 HTTPS 才能配对",
-      l:"当前页面不是安全上下文，浏览器不提供这里必需的加密能力。",
-      kv:[["当前页面","http://pc.example.ts.net"],["应该使用","https://pc.example.ts.net"]],
-      a:["复制正确地址","返回"],
-      aside:["开发模式例外","显式开发模式允许明文连接，但只在 loopback、使用独立的短期凭据，并且顶部会一直挂着开发模式横幅。这种环境不能作为安全验收结果。"] },
-    S2c:{ tone:"", g:"⏱", t:"配对已失效",
-      l:"二维码有效期是 5 分钟，从电脑生成的那一刻开始计时。请回到电脑终端重新生成。",
-      a:["回到终端重新生成"],
-      aside:["有效期能延长吗","不能。有效期是固定的协议上限，配置只能收窄，不能延长。"] },
-    S2d:{ tone:"", g:"⚠", t:"无法读取这个配对链接",
-      l:"链接里的配对信息不完整或已被破坏。请不要重试，直接回电脑终端重新生成一个。",
-      a:["返回"],
-      aside:["常见原因","链接在复制或转发过程中被截断；或者二维码识别不完整。"] },
-    S3a:{ tone:"danger", g:"✕", t:"配对校验未通过",
-      l:"这次配对可能已经被使用，或链接里的信息与电脑上的记录不匹配。",
-      a:["回到终端重新生成"],
-      aside:["为什么没有说明具体原因","校验失败时返回的信息刻意保持一致，避免变成一个可以探测的接口。"] },
-    S3b:{ tone:"", g:"👥", t:"已经有另一台设备在配对了",
-      l:"一次配对只能被认领一次。如果这不是你，请回到电脑终端取消并重新生成。",
-      a:["回到终端"],
-      aside:["可以同时配对几台设备","可以，但每台设备要各自执行一次命令、各自有一个二维码。"] },
-    S3c:{ tone:"", g:"⏱", t:"这次配对已经不能使用",
-      l:"它已过期，或者已经被成功使用过一次。",
-      a:["回到终端重新生成"],
-      aside:["二维码只能用一次","第一次成功连接后，这个二维码就永久作废了，重复扫描不会建立第二条连接。"] },
-    S3d:{ tone:"", g:"⚡", t:"连接中断",
-      l:"没能把配对请求送到电脑。已经自动重试 2 次，仍然失败。",
-      a:["重试","回到终端"],
-      aside:["重试是安全的","相同内容的认领请求重复提交只会返回同一结果，不会产生第二条配对记录。"] },
-    S3e:{ tone:"", g:"⏳", t:"尝试过于频繁",
-      l:"为了防止有人猜密钥，这次配对在短时间内只能尝试有限次数。已经用完 3 / 5 次机会。",
-      a:["30 秒后自动重试"],
-      aside:["如果我没有输错","说明可能有人在尝试猜这次配对的密钥。回到终端取消并重新生成是最快的处理方式。"] },
-    S5:{ tone:"danger", g:"✕", t:"电脑拒绝了这个请求",
-      l:"你可以在电脑终端上看到原因。没有获得批准，这台设备不会留下任何授权。",
-      a:["回到终端"],
-      aside:["拒绝了也没关系","拒绝不会创建任何信任记录，也不会留下可用的授权。"] },
-    S6:{ tone:"", g:"⏱", t:"配对已失效",
-      l:"二维码有效期 5 分钟，已经超时。回电脑终端重新生成即可。",
-      a:["回到终端重新生成"],
-      aside:["下次快一点","生成二维码后尽快扫码；连接一旦建立，正常使用期间不再需要重复配对。"] },
-    S8a:{ tone:"", g:"⏱", t:"连接超时",
-      l:"电脑没有在 15 秒内完成握手。这台浏览器还没有获得任何权限。",
-      a:["重试连接"],
-      aside:["可以安全重试","重试会重新走一次完整握手，不会产生重复的授权。"] },
-    S10:{ kind:"summary", t:"这台设备已经配对过了",
-      l:"同一个浏览器 + 同一个地址只对应一台设备身份，不会因为再次打开链接而重新生成。",
-      rows:[["设备","我的台式机 · 浏览器 PWA"],["设备编号","2ae1c07c-9242-46e9-a9d2-4ec58c130f49"],
-            ["主机",PAIR.origin]],
-      a:["进入会话列表","重新配对"],
-      aside:["重新配对会发生什么","电脑上会多出一条设备记录，两条都有效。旧的那条需要在电脑终端上手动撤销。"] }
-  };
+  function pairFail(title, lede, warn){
+    return '<div class="block danger"><div class="glyph">⚠</div><h1>'+title+'</h1>'+
+      '<p class="lede">'+lede+'</p>'+
+      (warn ? '<div class="notice warn"><span>⚠</span><span>'+warn+'</span></div>' : '')+
+      '</div>';
+  }
   function viewPair(){
-    var p = A.pair, stage="", aside="";
-    if(p==="S4"){
-      stage = '<div class="stepper"><div class="step done"><span class="b">✓</span>已认领这台电脑</div><div class="step-line"></div>' +
-        '<div class="step"><span class="b">2</span>电脑已批准</div><div class="step-line"></div>' +
-        '<div class="step"><span class="b">3</span>建立安全连接</div></div>' +
-        '<h1>请核对电脑终端上的这 6 位数字</h1>' +
-        '<p class="lede">两边一致再继续。如果不一致，请立刻停止并重新扫码——这通常意味着这条链接被转发给了别人。</p>' +
-        '<div class="sasblock"><p style="margin:0 0 18px;font-size:14px;color:var(--ink-2)">这台设备算出的验证码</p>' +
-        '<div class="sas" role="img" aria-label="验证码 '+PAIR.sas.split("").join(" ")+'">' +
-        PAIR.sas.split("").map(function(d){ return '<span>'+d+'</span>'; }).join("")+'</div>' +
-        '<p style="margin:0 0 4px;font-size:13px;color:var(--ink-2)">电脑终端上会显示同一组数字。' +
-        '<strong style="color:var(--danger)">不一致就不要继续。</strong></p>'+countdownHTML()+
-        '<hr class="sep"><p style="margin:0;font-size:13px"><span class="pulse"></span>正在等待电脑确认…' +
-        '<span class="dim"> · 每 3 秒自动查询（第 '+A.pairPoll+' 次）</span></p></div>' +
-        '<div style="margin-top:28px"><button class="btn" data-pair="S0">取消本次配对</button></div>';
-      aside = scopesAside();
+    var p = A.pair, stage="";
+    if(p==="S0"){
+      stage = pairLoading("配对中",
+        "正在等待这台电脑确认这次配对请求。通过后会自动进入目录，不需要再操作本页。",
+        "正在等待电脑确认…", true) +
+        '<div class="paircard">' + pairHost() +
+        '<p class="hint" style="margin:10px 0 0">每 2 秒自动查询一次；重复查询是安全的，不会产生第二条配对记录。</p></div>';
+    } else if(p==="S1"){
+      stage = pairLoading("已通过审批，正在进入目录",
+        "配对已完成，正在建立同步连接并载入目录…", "正在连接这台电脑…", false) +
+        '<p class="hint mono" style="margin-top:16px">本机设备 ID：' + esc(HOSTINFO.deviceId) + '</p>';
+    } else if(p==="S2"){
+      stage = '<div class="block danger"><div class="glyph">✕</div><h1>审批未通过</h1>' +
+        '<p class="lede">电脑端没有批准这次配对请求。本页没有获得任何访问能力，也没有留下可用的主机记录。</p>' +
+        '<div class="notice warn"><span>⚠</span><span>如需继续，请在电脑上重新发起配对，再用新的地址打开本页。</span></div></div>';
+    } else if(p==="S3"){
+      stage = pairFail("配对地址已过期", "这次配对地址已经超过有效期（5 分钟），或者被电脑端作废。",
+        "请在电脑上重新发起配对，再用新的地址打开本页。");
+    } else if(p==="S4"){
+      stage = pairFail("这个配对地址已经被使用", "每个配对地址只能成功使用一次。再次打开不会建立第二条连接。",
+        "请在电脑上重新生成一个配对地址。");
+    } else if(p==="S5"){
+      stage = pairFail("无法识别这个地址", "地址里的配对信息不完整或已被破坏，本页没有发出任何请求。",
+        "常见原因：链接在复制时被截断，或者二维码识别不完整。");
+    } else if(p==="S6"){
+      stage = pairFail("这个地址属于另一台电脑", "这个配对地址来自另一个来源，而一个浏览器身份只绑定一个地址，不能跨来源迁移。",
+        "请确认扫码对象：打开这台电脑自己的配对地址。");
     } else if(p==="S7"){
-      stage = '<div class="stepper"><div class="step done"><span class="b">✓</span>已认领这台电脑</div><div class="step-line"></div>' +
-        '<div class="step done"><span class="b">✓</span>电脑已批准</div><div class="step-line"></div>' +
-        '<div class="step active"><span class="b">3</span>建立安全连接</div></div>' +
-        '<h1>已批准，正在建立连接</h1><p class="lede">批准不等于已经连上，还要完成一次双向身份校验。</p>' +
-        '<div class="sasblock"><p style="margin:0 0 10px;font-size:13px;color:var(--ink-2)">① 校验主机身份…</p>' +
-        '<p style="margin:0 0 10px;font-size:13px;color:var(--ink-2)">② 校验设备身份…</p>' +
-        '<p style="margin:0;font-size:13px;color:var(--ink-2)">③ 载入事件位置，准备同步…</p></div>';
-      aside = '<h2>正在连接到</h2><dl class="kvbox"><dt>地址</dt><dd>'+PAIR.origin+'</dd>' +
-        '<dt>主机指纹</dt><dd>'+PAIR.hostFingerprint.slice(0,16)+'…</dd></dl>' +
-        '<p class="hint">这一步最多等待 15 秒，超时会明确失败而不是一直转圈。</p>';
-    } else if(p==="S9"){
-      stage = '<div class="summary"><div class="okb">✓</div><h1>已连接到 '+HOST+'</h1>' +
-        '<dl class="grid"><dt>设备</dt><dd>我的台式机 · 浏览器 PWA</dd>' +
-        '<dt>获得权限</dt><dd><div class="tags">'+SCOPES.filter(function(s){return s.on;}).map(function(s){
-          return '<span class="tag">'+esc(s.label)+'</span>'; }).join("")+'</div></dd>' +
-        '<dt>主机地址</dt><dd class="mono" style="font-size:12.5px">'+PAIR.origin+'</dd>' +
-        '<dt>主机指纹</dt><dd class="mono" style="font-size:12px;word-break:break-all">'+PAIR.hostFingerprint+'</dd></dl>' +
-        '<div class="notice warn"><span>⚠</span><span>这台设备的身份密钥保存在本浏览器里。清除浏览器数据、更换浏览器或更换域名，' +
-        '都会永久删除它，之后必须重新配对。</span></div>' +
-        '<div style="margin-top:26px;text-align:center"><button class="btn primary" data-pair="GODIRS" ' +
-        'style="padding:12px 26px;font-size:15px;font-weight:600">进入会话列表</button></div></div>';
-      aside = '<h2>接下来</h2><p class="hint">你会看到这台电脑上已有的会话。本版网页端不提供创建会话的入口，' +
-        '请在电脑上用 Zed 或命令行创建后再回来查看。</p>';
-    } else if(p==="S2a"){
-      stage = '<div class="block"><div class="glyph">⚠</div><h1>这个配对链接属于另一个地址</h1>' +
-        '<p class="lede">一个浏览器身份只绑定一个地址，不能在地址之间迁移。</p>' +
-        '<dl class="kvbox"><dt>当前页面</dt><dd>https://pc.example.ts.net</dd><dt>链接指向</dt><dd>https://office-pc.ts.net</dd></dl>' +
-        '<div style="margin-top:28px"><button class="btn" data-pair="S0">返回</button></div></div>';
-      aside = '<h2>为什么这么严格</h2><p class="hint">如果地址可以随意更换，同一把设备密钥就能在多个地址之间被使用，' +
-        '一旦某处泄露，影响面就无法收敛。</p>';
-    } else if(p==="S8b"){
-      stage = '<div class="block danger"><div class="glyph">⚠</div><h1>这台电脑的身份密钥已变化</h1>' +
-        '<p class="lede">浏览器不会自动接受新的密钥。请先在电脑上确认：是换了电脑，还是这条连接被人拦截过。确认之前不要继续。</p>' +
-        '<dl class="kvbox"><dt>已记录的指纹</dt><dd>'+PAIR.hostFingerprint.slice(0,32)+'…</dd>' +
-        '<dt>本次出示的指纹</dt><dd>7d41c0b95e2f…（不同）</dd></dl>' +
-        '<div style="margin-top:28px"><button class="btn primary" data-pair="S0">回到电脑终端确认</button></div></div>';
-      aside = '<h2>为什么必须停在这里</h2><p class="hint">如果密钥可以被无声接受，攻击者只要让流量经过自己，' +
-        '就能获得这台设备的全部权限。这里唯一正确的做法是停下来问人。</p>';
-    } else if(p==="S0"){
-      stage = '<h1>这个页面需要一个配对链接</h1><p class="lede">请在电脑终端执行 <code>acp-remote device pair</code>，' +
-        '然后用本浏览器打开它打印的链接，或用手机扫描它显示的二维码。</p>' +
-        '<div class="notice info">直接访问这个地址不会创建任何连接，也不会授予任何权限。</div>';
-      aside = '<h2>为什么不能直接登录</h2><p class="hint">浏览器本身没有身份。第一次打开这个页面时，它会生成一对密钥并把公钥交给电脑。</p>';
+      stage = pairFail("需要 HTTPS 才能配对", "当前页面不是安全上下文（https 或 loopback），浏览器不提供配对所需的加密能力。",
+        "请改用 https 打开本页后再配对；不能在这里降级成不安全的连接。");
+    } else if(p==="S8"){
+      stage = pairFail("配对请求未能完成", "没能把配对请求送到这台电脑（网络或本地存储不可用）。本页已经结束这次配对，可以安全地重新开始。",
+        "重新打开配对地址只会重新走一次流程，不会产生第二条配对记录。");
     } else {
-      var b = PAIR_BLOCKS[p];
-      if(b){
-        if(b.kind === "summary"){
-          stage = '<div class="summary"><div class="okb">✓</div><h1>'+esc(b.t)+'</h1>' +
-            '<p class="lede" style="text-align:center">'+esc(b.l)+'</p>' +
-            '<dl class="grid">'+b.rows.map(function(r){ return '<dt>'+esc(r[0])+'</dt><dd>'+esc(r[1])+'</dd>'; }).join("")+'</dl>' +
-            '<div style="margin-top:22px;text-align:center;display:flex;gap:10px;justify-content:center">' +
-            b.a.map(function(x,i){ return '<button class="btn'+(i===0?" primary":"")+'" data-pair="'+
-              (i===0?"GODIRS":"S4")+'">'+esc(x)+'</button>'; }).join("")+'</div></div>';
-        } else {
-          stage = '<div class="block'+(b.tone?" "+b.tone:"")+'"><div class="glyph">'+b.g+'</div>' +
-            '<h1>'+esc(b.t)+'</h1><p class="lede">'+esc(b.l)+'</p>' +
-            (b.kv?'<dl class="kvbox">'+b.kv.map(function(r){ return '<dt>'+esc(r[0])+'</dt><dd>'+esc(r[1])+'</dd>'; }).join("")+'</dl>':'') +
-            '<div style="margin-top:28px;display:flex;gap:10px">'+b.a.map(function(x,i){
-              return '<button class="btn'+(i===0?" primary":"")+'" data-pair="'+(i===0?"S0":"S4")+'">'+esc(x)+'</button>'; }).join("")+'</div></div>';
-        }
-        aside = '<h2>'+esc(b.aside[0])+'</h2><p class="hint">'+esc(b.aside[1])+'</p>';
-      } else {
-        stage = '<h1>配对未完成</h1><p class="lede">这是一个占位状态。</p>' +
-          '<button class="btn" data-pair="S4">回到等待确认</button>';
-        aside = '<h2>说明</h2><p class="hint">完整状态列表见右侧控制台。</p>';
-      }
+      stage = '<h1>配对未完成</h1><p class="lede">这是一个占位状态。</p>';
     }
-    return '<div class="pair"><div class="pairgrid"><div class="pstage">'+stage+'</div>' +
-      '<div class="paside">'+aside+'</div></div></div>';
+    return '<div class="pair"><div class="pairgrid"><div class="pstage">'+stage+'</div></div></div>';
   }
 
   /* ==================== 路由 ==================== */
-  function stopPairTimer(){ if(A.pairTimer){ clearInterval(A.pairTimer); A.pairTimer=null; } }
+  function stopPairTimer(){
+    if(A.pairTimer){ clearInterval(A.pairTimer); A.pairTimer=null; }
+    if(A.pairNavTimer){ clearTimeout(A.pairNavTimer); A.pairNavTimer=null; }
+  }
   function render(){
     stopPairTimer();
     var h = location.hash || "#/dirs";
@@ -2006,25 +1879,28 @@
 
     var app = $("app");
     if(h.indexOf("#/pair")===0){
-      var st = h.split("/")[2] || "S4";
+      var st = h.split("/")[2] || "S0";
       A.pair = st;
-      app.innerHTML = '<header class="top"><div class="logo"><span class="mark"></span>ACP Remote</div>' +
-        '<div class="hostchip"><span style="width:7px;height:7px;border-radius:50%;background:var(--ink-3)"></span>' +
-        '<span>'+HOST+'</span></div><div class="spacer"></div>' +
-        '<span class="badge ok">● 安全连接</span><button class="iconbtn" id="helpBtn2">ⓘ</button></header>' +
-        viewPair();
-      if(A.pair==="S4"){
+      /* 这一页没有顶部导航：配对发生在连接之前，失败时也不提供进入目录的入口。 */
+      app.innerHTML = viewPair();
+      /* 配对状态最多持续 5 分钟：倒计时结束即进入「地址已过期」。 */
+      if(A.pair==="S0"){
+        var paintCount = function(){
+          var el = $("pairCount");
+          if(el) el.textContent = Math.floor(A.pairLeft/60)+":"+String(A.pairLeft%60).padStart(2,"0");
+        };
+        paintCount();
         A.pairTimer = setInterval(function(){
-          A.pairLeft--; A.pairPoll++;
-          if(A.pairLeft<=0){ A.pairLeft=0; location.hash="#/pair/S6"; return; }
-          var cd=document.querySelector(".cd-time"), ring=document.querySelector(".ring .fg"),
-              pulse=document.querySelector(".pulse"), pl=pulse&&pulse.parentNode;
-          if(cd) cd.textContent = Math.floor(A.pairLeft/60)+":"+String(A.pairLeft%60).padStart(2,"0");
-          if(ring){ var frac=A.pairLeft/PAIR_TTL, C=2*Math.PI*20;
-            ring.setAttribute("stroke-dashoffset",(C*(1-frac)).toFixed(1));
-            ring.parentNode.setAttribute("class","ring "+(A.pairLeft<=30?"crit":(A.pairLeft<=60?"low":""))); }
-          if(pl) pl.innerHTML='<span class="pulse"></span>正在等待电脑确认…<span class="dim"> · 每 3 秒自动查询（第 '+A.pairPoll+' 次）</span>';
+          A.pairLeft = Math.max(0, A.pairLeft-1);
+          paintCount();
+          if(A.pairLeft === 0) location.hash = "#/pair/S3";
         }, 1000);
+      }
+      /* 审批通过后不要求用户再点一次：短暂展示「正在进入目录」，然后进入目录页。 */
+      if(A.pair==="S1"){
+        A.pairNavTimer = setTimeout(function(){
+          if(A.pair==="S1") location.hash = "#/dirs";
+        }, 1600);
       }
     }
     else if(h.indexOf("#/dir/")===0) app.innerHTML = viewDirDetail(h.slice(6));
@@ -2396,7 +2272,9 @@
   $("dpOk").onclick=function(){ A.pickKind="existing"; applyDirPicker(A.browsePath); };
   /* ==================== 控制台 ==================== */
   $("consoleHead").onclick=function(){ $("console").classList.toggle("collapsed"); };
-  $("navRow").onclick=function(ev){ var b=ev.target.closest("[data-go]"); if(b) location.hash=b.dataset.go; };
+  $("navRow").onclick=function(ev){ var b=ev.target.closest("[data-go]"); if(!b) return;
+    if(b.dataset.go==="#/pair") A.pairLeft=PAIR_TTL;
+    location.hash=b.dataset.go; };
   $("pairSel").onchange=function(){ A.pairLeft=PAIR_TTL; location.hash="#/pair/"+this.value; };
   $("sceneSel").onchange=function(){ A.scene=this.value; A.query=""; A.filter="all"; render(); };
   $("connSel").onchange=function(){ A.conn=this.value; A.clearArmed=false; render(); };
@@ -2417,7 +2295,7 @@
   $("cbDeg").onchange=function(){ A.degradeDemo=this.checked; render(); };
   $("cbHl").onchange=function(){ A.hl=this.checked; render(); };
   $("cbDev").onchange=function(){ A.dev=this.checked; render(); };
-  $("btnPairFlow").onclick=function(){ A.pair="S4"; A.pairLeft=PAIR_TTL; A.pairPoll=0; location.hash="#/pair/S4"; };
+  $("btnPairFlow").onclick=function(){ A.pairLeft=PAIR_TTL; A.pair="S0"; location.hash="#/pair/S0"; };
   $("scrim").onclick=function(){ $("drawer").classList.remove("open"); $("scrim").classList.remove("open"); };
   $("dxScrim").onclick=closeDx;
   $("dxClose").onclick=closeDx;
