@@ -17,7 +17,7 @@
 
 | 层 | 状态 | 证据 |
 |---|---|---|
-| 合同（目录字段 / Sync `session.create` / Agent 目录 / 快照范围 / **目录路径下发 / 目录浏览 / 结构化差异行**） | **已落地** | `openspec/specs/` 的 `sync-workspace-catalog`、`sync-session-create`、`sync-snapshot-scope`、`sync-event-projection`、`core-derived-events`、`workspace-resolution`，以及变更 `sync-path-browse-and-diff-delivery` 的增量规格（其中的 `sync-workspace-browse` 是本变更新增的能力，尚未并入 `openspec/specs/`）；`compatibility/commands/v1/commands.json`（14 条命令，13 条走 sync 传输，含 `workspace.browse` 且归 `grant.observe`）；`compatibility/features/v1/features.json`（新增 `core.workspace-path.v1`/`core.workspace-browse.v1`/`core.file-diff.v1`）；`schemas/sync/v1/**` 与 `fixtures/sync/v1/**` |
+| 合同（目录字段 / Sync `session.create` / Agent 目录 / 快照范围 / **目录路径下发 / 目录浏览 / 结构化差异行**） | **已落地** | `openspec/specs/` 的 `sync-workspace-catalog`、`sync-session-create`、`sync-snapshot-scope`、`sync-event-projection`、`core-derived-events`、`workspace-resolution`，以及变更 `sync-path-browse-and-diff-delivery` 的增量规格（其中的 `sync-workspace-browse` 是本变更新增的能力，尚未并入 `openspec/specs/`）；`compatibility/commands/v1/commands.json`（14 条命令，13 条走 sync 传输，含 `workspace.browse` 且归 `grant.observe`）；`compatibility/features/v1/features.json`（含 `core.workspace-browse.v1`/`core.file-diff.v1`；目录条目的 `path` 始终随快照下发，`core.workspace-path.v1` 已不在机器登记表里）；`schemas/sync/v1/**` 与 `fixtures/sync/v1/**` |
 | 前端工程与逻辑层（配对状态机、连接 12 态、快照/重放、事件去重、命令幂等、目录模型、创建链路、对话读取与翻页、降级卡片与诊断、主机面板、imported 不落盘） | **已落地** | `clients/app/src/**`，含单测与浏览器 E2E（`clients/app/e2e/page/checks/`） |
 | 前端**视觉与交互层** | **已落地** | 共享外壳（`src/components/shell/`，装在 `app/_layout.tsx`；`/pair` 与 `/node-link/pair` 按原型隐藏全局顶栏、改呈现自己的头部）+ 目录页、目录详情、对话页、`hosts` 与配对路由 + 创建与文件夹弹层（`CreateSessionSheet.tsx`、`DirectoryPicker.tsx`）；`src/components/` 下**已没有**不带 `StyleSheet` 的组件（含 `ContextUsageBar`、`DiagnosticsDrawer`、`DegradedEventCard`、`PairingPanel` 四个原裸标记组件） |
 | `server::sync` | **已落地**（认证、订阅与投递、快照、配对 HTTP 与业务命令面，含 `workspace.browse`、路径下发与 `diffLines` 投影）；**残留见 §3.1** | `crates/server/src/sync/**`（`conn`/`subscribe`/`snapshot`/`event`/`command`/`pairing`/`router`） |
@@ -105,8 +105,8 @@ think / tool / perm 三类，上下文用量是**输入区的胶囊 + 弹层**�
 - 卡片头改为原型的槽位（折叠箭头、目录图标、展示名、同名时的路径尾段、`N 个` 计数胶囊、运行中/待处理徽标、
   弹性空白、`⊕ 新建`、`查看全部 ›`）；卡体改为**缩进树**，会话行改为五字段（状态圆点、标题、空标题斜体
   「未命名会话」、状态词、Agent、相对时间）。
-- **别名不再出现在界面上**：别名只作路由与命令引用的内部标识；两个目录展示名相同时以**服务端下发的路径尾段**
-  消歧，展示名唯一时不呈现任何路径片段。
+- **目录标识不再出现在界面上**：`directoryId` 只作路由与命令引用的内部标识；展示名由服务端下发的 `path` 尾段派生，
+  两个尾段相同时以**更多路径段**消歧，尾段唯一时不呈现任何额外路径片段。目录页搜索只匹配展示名与会话标题。
 - 「这台设备没有创建会话的权限」提示条与 `A.canCreate` 门控**已删除**：设备方向没有授权维度，入口不按权限门控
   （`docs/FRONTEND_DESIGN.md` §2.2/§9）；反回潮断言见 `r15-directory-list.test.ts`、`r16-create-session.test.ts`。
 - **详情页页头与对话页左栏同构**（次级「目录」按钮返回目录页 / 目录名 + 会话数 / 路径），实现
@@ -225,11 +225,11 @@ Daemon 在**根路径**同源托管 PWA 产物：入口文档、单页应用回�
 
 | 项 | 原型的做法 | 实现的做法 | 依据 |
 |---|---|---|---|
-| 目录路径 | 详情页与对话页左栏显示完整路径，目录页显示尾段 | **与原型同向**：路径随快照 `workspaces` 条目下发（feature `core.workspace-path.v1`），详情页与左栏呈现它；但只呈现**服务端下发的值**，客户端不得拼接、规范化或反查，也不呈现别名 | `docs/SYNC_PROTOCOL.md` §9.4/§11.5、`docs/SECURITY_DESIGN.md` §12.3、`docs/FRONTEND_DESIGN.md` §4.1。上一版此行的「原型的完整路径是待决策项」已由 `sync-path-browse-and-diff-delivery` **结项** |
+| 目录路径 | 详情页与对话页左栏显示完整路径，目录页显示尾段 | **与原型同向**：快照 `workspaces` 条目始终下发 `directoryId` 与 `path`，详情页与左栏呈现路径；但只呈现**服务端下发的值**，客户端不得拼接、规范化或反查；目录标识不呈现为界面文本 | `docs/SYNC_PROTOCOL.md` §9.4/§11.5、`docs/SECURITY_DESIGN.md` §12.3、`docs/FRONTEND_DESIGN.md` §4.1。上一版此行的「原型的完整路径是待决策项」已由 `sync-path-browse-and-diff-delivery` **结项** |
 | 未登记目录下新建的会话 | 原型画了一个 `unsorted` 目录项 | 不造这个分组：未指定目录的会话不计入任何目录项 | `docs/FRONTEND_DESIGN.md` §4.1（目录项只来自服务端下发的目录） |
 | 创建入口的权限门控 | 原型有「这台设备没有创建会话的权限，需要电脑端授予」的降级态与 `A.canCreate` 开关 | 入口**不按权限门控**；页面不出现该文案 | `docs/FRONTEND_DESIGN.md` §2.2/§9（设备方向没有授权维度） |
 | 远程（imported）会话 | 原型不涉及 | 事件 `origin` 与 `origin.online_changed` 已落地；但**明细**（`turns`/`pending_interactions`/`capabilities` 与 imported 明细）本期回 `capability.unsupported_by_broker` | `docs/SYNC_PROTOCOL.md` §9.4、`docs/FRONTEND_DESIGN.md` §4.2/§6 |
-| 会话创建入口 | 原型 README 旧文案写「本版不提供创建会话入口」 | 已实现受限创建入口（目录引用取已登记别名或浏览选定的层，二者之一） | `docs/FRONTEND_DESIGN.md` §2.2 已改为受限入口，旧文案过时 |
+| 会话创建入口 | 原型 README 旧文案写「本版不提供创建会话入口」 | 已实现受限创建入口（目录引用取已登记目录标识 `directoryId` 或浏览选定的层，二者之一） | `docs/FRONTEND_DESIGN.md` §2.2 已改为受限入口，旧文案过时 |
 | 队列策略 | 原型用单按钮屏蔽了「运行中排队发送」 | 同样未暴露 | 两边一致，非缺口 |
 
 ---
