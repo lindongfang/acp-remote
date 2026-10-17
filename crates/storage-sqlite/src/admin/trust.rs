@@ -34,9 +34,7 @@ use acp_core::ports::{
     PairingWrite, RevokeReason, TrustRecordRef, TrustStore,
 };
 
-use crate::admin::{
-    decode_strings, encode_strings, enforce_capacity_gate, insert_audit_rows, insert_expiry_audit,
-};
+use crate::admin::{enforce_capacity_gate, insert_audit_rows, insert_expiry_audit};
 use crate::error::StorageError;
 use crate::session_store::{Db, SqliteStore, blob, decode, decode_opt, opt_text, text};
 

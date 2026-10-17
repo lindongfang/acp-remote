@@ -28,7 +28,6 @@ use crate::client::{ClientError, ClientOutcome, LocalAdminClient, outcome_of};
 use crate::config::{ConfigError, Loaded, config_path_from_env, load_for_cli};
 use crate::lock::{self, LockState};
 
-pub(crate) mod input;
 pub(crate) mod pairing;
 
 /// `daemon stop` 之后等待 Daemon 释放单实例锁的上限（关闭序列含排空与 `wal_checkpoint`）。
@@ -360,16 +359,6 @@ fn stop_params(args: &DaemonStop) -> JsonObject {
         },
     );
     params
-}
-
-/// 字符串数组 → JSON 数组（保序）。
-pub(crate) fn strings(items: &[String]) -> Value {
-    Value::Array(
-        items
-            .iter()
-            .map(|item| Value::from(item.as_str()))
-            .collect(),
-    )
 }
 
 // ---------------------------------------------------------------------------------------------

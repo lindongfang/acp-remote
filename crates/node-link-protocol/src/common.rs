@@ -8,7 +8,6 @@
 //!
 //! 校验只发生在反序列化：构造出来的值必然满足对应 schema，后续层不需要重复校验。
 
-use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 

@@ -65,13 +65,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use acp_core::model::{
-    Actor, AgentId, AgentRef, AuditAction, AuditOutcome, ClientCommand, CommandKind,
-    CommandPayload as CorePayload, CommandReceipt, CommandRecord, CommandStatus as CoreStatus,
-    ConfigOptionId, ConfigValue as CoreConfigValue, CreateSessionRequest, DirectoryId,
+    Actor, AgentId, AgentRef, ClientCommand, CommandKind, CommandPayload as CorePayload,
+    CommandReceipt, CommandRecord, CommandStatus as CoreStatus, ConfigOptionId,
+    ConfigValue as CoreConfigValue, CreateSessionRequest, DirectoryId,
     ElicitationAction as CoreElicitationAction, ElicitationValues, EntityRef, InteractionId,
-    ModeId, NodeId, NodeState, PortError, PromptContentBlock, ReadInclude,
-    RequestId as CoreRequestId, ResourceOrigin, SessionId, TemplateSelection,
-    Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
+    ModeId, NodeId, PortError, PromptContentBlock, ReadInclude, RequestId as CoreRequestId,
+    ResourceOrigin, SessionId, Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
 };
 use acp_core::ports::{PreparedSessionCreate, SessionCreateAdmission, SessionQuery};
 use acp_core::use_cases::{NodeLinkCatalogView, UseCases};
@@ -81,7 +80,7 @@ use node_link_protocol::command::{
     CommandAccepted, CommandName, CommandPayload as WirePayload, CommandRejected,
     CommandResultPayload, CommandStatus as WireStatusBody, CommandSubmit, CommandTerminal,
     ConfigValue as WireConfigValue, ElicitationAction as WireElicitationAction,
-    IncludeResource as WireInclude, SessionCreate, Terminal, TerminalStatus,
+    IncludeResource as WireInclude, Terminal, TerminalStatus,
 };
 use node_link_protocol::common::{
     Nullable, PublicError, RawObject, RemoteSessionRef, SessionCreateResult, SessionMeta,
@@ -90,7 +89,6 @@ use node_link_protocol::common::{
 use node_link_protocol::envelope::{Envelope, MessageType};
 use node_link_protocol::error::ErrorCode;
 use serde::de::DeserializeOwned;
-use serde::de::IgnoredAny;
 use sha2::{Digest as _, Sha256};
 use tracing::{debug, info, warn};
 
@@ -98,8 +96,8 @@ use crate::command_log::{self, Cause, Subject, TerminalClass};
 use crate::node_link::conn::{
     ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close,
 };
+use crate::node_link::link_error;
 use crate::node_link::resource::ResourceRoute;
-use crate::node_link::{catalog, link_error};
 use crate::transport::net::{RateLimit, Shutdown, SlidingWindowLimiter};
 
 /// 单连接命令速率（§2.5：120 次/分钟，固定常量、不可配置）。
@@ -1271,23 +1269,6 @@ impl CommandRoute {
     // 响应装配
     // -----------------------------------------------------------------------------------------
 
-    /// 越权留痕（R69/R82/R83）：适配层的交集比 core 的 Owner 侧判定更严，被它拒的命令不会到达 broker，
-    /// 因此这条 `authorization.denied` 只能在这里写；审计写失败不改判定（也不改响应）。
-    async fn audit_denied(&self, node: &NodeId) {
-        if let Err(error) = self
-            .core
-            .record_node_link_auth(node, AuditAction::AuthorizationDenied, AuditOutcome::Denied)
-            .await
-        {
-            warn!(
-                event = "node_link.denial_audit_failed",
-                access_node_id = node.as_str(),
-                error = ?error,
-                "the denied command could not be audited"
-            );
-        }
-    }
-
     /// schema 级拒绝（连接保持可用）。
     fn reject_schema(
         &self,
@@ -2320,11 +2301,6 @@ fn port_error_code(error: &PortError) -> String {
 /// `details.field`（`nodelink.command.unsupported_field` 的必需登记字段）。
 fn field_details(field: &str) -> RawObject {
     details_object(&serde_json::json!({ "field": field }))
-}
-
-/// `details.parameter`（`nodelink.export.not_granted` 的可选登记字段）。
-fn parameter_details(parameter: &str) -> RawObject {
-    details_object(&serde_json::json!({ "parameter": parameter }))
 }
 
 /// `details.retryAfterMs`（`nodelink.resource.rate_limited` 的登记字段）。

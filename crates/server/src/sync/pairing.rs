@@ -983,15 +983,6 @@ impl PairingIdWindow {
             remaining: self.limit - recorded - 1,
         }
     }
-
-    /// 当前跟踪的键数（单测用）。
-    #[cfg(test)]
-    fn tracked_keys(&self) -> usize {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len()
-    }
 }
 
 /// 请求体解码（§7.4：JSON 或字段 schema 无效 → 400）。

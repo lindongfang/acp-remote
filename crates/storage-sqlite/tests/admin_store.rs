@@ -35,24 +35,23 @@ use std::path::Path;
 use sqlx::SqlitePool;
 
 use acp_core::model::{
-    Actor, AgentId, AgentProfile, AuditAction, AuditOutcome, ConflictKind, DeviceId, DeviceRecord,
-    DeviceState, Digest, DirectoryId, DirectoryRecord, EntityRef, EventId, EventType, Fingerprint,
-    NodeId, NodeKind, NodeRecord, NodeState, Nonce, OriginEpoch, PairingId, PairingPeer,
-    PairingRecord, PairingSettlement, PairingState, PairingTarget, PeerIdentity, PeerPublicKey,
-    PortError, Sequence, SessionId, Timestamp, UnavailableKind,
+    Actor, AuditAction, AuditOutcome, ConflictKind, DeviceId, DeviceRecord, DeviceState, Digest,
+    DirectoryId, EntityRef, Fingerprint, NodeId, NodeKind, NodeRecord, NodeState, Nonce, PairingId,
+    PairingPeer, PairingRecord, PairingSettlement, PairingState, PairingTarget, PeerIdentity,
+    PeerPublicKey, PortError, Timestamp, UnavailableKind,
 };
 use acp_core::ports::{
-    DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ImportedSessionRecord,
-    LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimWrite,
-    PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit, RemoteDeliveryStore,
-    RevokeReason, SessionStore, TrustRecordRef, TrustStore, WriteContext,
+    DeviceRevocation, DeviceWrite, ExpiryWrite, LocalConfigStore, NodeConnectedWrite,
+    NodeRevocation, NodeWrite, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
+    PairingWrite, PendingAudit, RevokeReason, SessionStore, TrustRecordRef, TrustStore,
+    WriteContext,
 };
 use storage_sqlite::error::StorageError;
 use storage_sqlite::migrate::StorageConfig;
 use storage_sqlite::session_store::SqliteStore;
 use support::{
-    column_names, digest_text, measured_storage_bytes, raw_pool, raw_write_pool, scalar_i64,
-    table_snapshot, temp_dir,
+    digest_text, measured_storage_bytes, raw_pool, raw_write_pool, scalar_i64, table_snapshot,
+    temp_dir,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -62,16 +61,7 @@ use support::{
 const DEVICE: &str = "11111111-1111-4111-8111-111111111111";
 const OTHER_DEVICE: &str = "22222222-2222-4222-8222-222222222222";
 const NODE: &str = "33333333-3333-4333-8333-333333333333";
-const OWNER_NODE: &str = "44444444-4444-4444-8444-444444444444";
 const PAIRING: &str = "55555555-5555-4555-8555-555555555555";
-const REMOTE_SESSION: &str = "66666666-6666-4666-8666-666666666666";
-const ORIGIN_EPOCH: &str = "77777777-7777-4777-8777-777777777777";
-
-const EXPORT: &str = "export-one";
-const IMPORT: &str = "import-one";
-const OTHER_IMPORT: &str = "import-two";
-const SECOND_EXPORT: &str = "export-two";
-const SECOND_SESSION: &str = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
 
 /// P-256 基点 G 的 SEC1 未压缩编码：曲线上的确定点，构造不需要随机源。
 const PUBKEY_HEX: &str = concat!(
@@ -160,10 +150,6 @@ fn remote_device_id() -> DeviceId {
 
 fn node_id() -> NodeId {
     NodeId::new(NODE).expect("node id")
-}
-
-fn owner_node_id() -> NodeId {
-    NodeId::new(OWNER_NODE).expect("owner node id")
 }
 
 fn pairing_id() -> PairingId {
@@ -302,24 +288,6 @@ fn node_pairing() -> PairingRecord {
         PairingTarget::Node,
         PairingState::Created,
         None,
-        digest(PAIRING_SECRET),
-        NODE_ENDPOINT,
-        at(0),
-        at(30),
-        None,
-        None,
-        None,
-    )
-    .expect("pairing record")
-}
-
-/// 与 [`node_pairing`] 同形但可指定 `pairingId` 与对端展示名（一个用例里要跑多条节点配对时用）。
-fn node_pairing_with_id(pairing: PairingId, display_name: &str) -> PairingRecord {
-    PairingRecord::try_new(
-        pairing,
-        PairingTarget::Node,
-        PairingState::Created,
-        Some(display_name.to_owned()),
         digest(PAIRING_SECRET),
         NODE_ENDPOINT,
         at(0),
@@ -541,33 +509,6 @@ async fn approve_node(store: &SqliteStore, peer: &NodeId, minute: u32) -> TrustR
         })
         .await
         .expect("approve node pairing")
-}
-
-/// 登记 + 认领一条节点配对（`exportIds` 的两个用例都以它为前置）。
-async fn create_and_claim_node_pairing(store: &SqliteStore, peer: &NodeId, record: PairingRecord) {
-    let pairing = record.id().clone();
-    store
-        .create_pairing(PairingWrite {
-            record,
-            context: context(0, Vec::new()),
-        })
-        .await
-        .expect("create node pairing");
-    let mut claim = node_claim(peer);
-    claim.claim = acp_core::model::PairingClaim::try_new(
-        pairing,
-        PairingPeer::try_new(
-            PeerIdentity::Node(peer.clone()),
-            "office access",
-            peer_public_key(),
-            NODE_ENDPOINT,
-            nonce("node-client-nonce"),
-        )
-        .expect("pairing peer"),
-    )
-    .expect("claim");
-    claim.context = context(1, Vec::new());
-    store.claim_pairing(claim).await.expect("claim");
 }
 
 /// `(node, access)` 行的认证时间（读面断言用；行必须存在）。

@@ -8,9 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use acp_core::model::Digest;
-use acp_core::model::{
-    AgentId, AgentProfile, ConfigValue, DirectoryId, DirectoryRecord, ResolvedWorkspace, Timestamp,
-};
+use acp_core::model::{AgentId, AgentProfile, ConfigValue, ResolvedWorkspace, Timestamp};
 use acp_core::ports::{Clock, EventSink, IdGenerator, NodeEventSink};
 
 use agent_host::LaunchSpec;
@@ -424,7 +422,7 @@ pub fn profile_with(agent: &str, command: &str, args: &[&str]) -> AgentProfile {
 #[must_use]
 pub fn workspace() -> ResolvedWorkspace {
     ResolvedWorkspace::try_new(
-        acp_core::model::derive_directory_id(&std::env::temp_dir().to_string_lossy().into_owned()),
+        acp_core::model::derive_directory_id(&std::env::temp_dir().to_string_lossy()),
         std::env::temp_dir().to_string_lossy().into_owned(),
     )
     .expect("workspace")

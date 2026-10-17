@@ -14,11 +14,11 @@
 //!   类型与结构校验，语义拒绝由 core 的构造器返回 `InvalidRequest`，再由 [`map_port_error`] 收敛成
 //!   `local.invalid_params`，避免出现第二份词表。
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use acp_core::model::{
-    AgentId, AuditAction, ConflictKind, DeviceId, NodeId, PairingId, PairingRecord, PairingState,
-    PortError, Timestamp,
+    AuditAction, ConflictKind, DeviceId, NodeId, PairingId, PairingRecord, PairingState, PortError,
+    Timestamp,
 };
 use identity_auth::PairingError;
 use serde_json::Value;
@@ -26,9 +26,6 @@ use serde_json::Value;
 use crate::local_admin::daemon::MAX_STOP_GRACE_MS;
 use crate::local_admin::envelope::JsonObject;
 use crate::local_admin::error::{AdminError, LocalErrorCode};
-
-/// `displayName` 的长度上界（§5.2/§5.5 的 `≤128`）。
-const MAX_DISPLAY_NAME_CHARS: usize = 128;
 
 /// `device.pair.reject`/`node.pair.reject` 的 `reason` 长度上界：与 `core::model` 的
 /// `PairingSettlement::rejected` 是同一边界（§5.3/§5.4 只登记 `reason: string | null`，长度由核心
@@ -80,15 +77,6 @@ fn optional_string(params: &JsonObject, key: &str) -> Result<Option<String>, Adm
     }
 }
 
-fn object<'a>(params: &'a JsonObject, key: &str) -> Result<&'a JsonObject, AdminError> {
-    match value(params, key)? {
-        Value::Object(map) => Ok(map),
-        _ => Err(invalid_params(format!(
-            "parameter `{key}` must be an object"
-        ))),
-    }
-}
-
 fn array<'a>(params: &'a JsonObject, key: &str) -> Result<&'a Vec<Value>, AdminError> {
     match value(params, key)? {
         Value::Array(items) => Ok(items),
@@ -107,56 +95,6 @@ fn strings(params: &JsonObject, key: &str) -> Result<Vec<String>, AdminError> {
                 .ok_or_else(|| invalid_params(format!("every item of `{key}` must be a string")))
         })
         .collect()
-}
-
-/// 布尔字段。
-fn boolean(params: &JsonObject, key: &str) -> Result<bool, AdminError> {
-    value(params, key)?
-        .as_bool()
-        .ok_or_else(|| invalid_params(format!("parameter `{key}` must be a boolean")))
-}
-
-/// `displayName` 形态：1..=128 个字符（Unicode code point，与 JSON Schema 的 `maxLength` 同口径）。
-fn display_name(params: &JsonObject, key: &str) -> Result<String, AdminError> {
-    let text = string(params, key)?;
-    let count = text.chars().count();
-    if count == 0 || count > MAX_DISPLAY_NAME_CHARS {
-        return Err(invalid_params(format!(
-            "parameter `{key}` must be 1..={MAX_DISPLAY_NAME_CHARS} characters"
-        )));
-    }
-    Ok(text)
-}
-
-/// `^[A-Za-z0-9._-]{1,max}$`（`providerId` 与 `values` 的字段名；core 未导出这两个谓词）。
-fn is_spec_name(text: &str, max: usize) -> bool {
-    let bytes = text.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= max
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
-fn spec_name(params: &JsonObject, key: &str, max: usize) -> Result<String, AdminError> {
-    let text = string(params, key)?;
-    if !is_spec_name(&text, max) {
-        return Err(invalid_params(format!(
-            "parameter `{key}` must match ^[A-Za-z0-9._-]{{1,{max}}}$"
-        )));
-    }
-    Ok(text)
-}
-
-/// `^[A-Za-z0-9._-]{1,max}$` 形态判定（供嵌套字段复用）。
-fn require_spec_name(text: &str, max: usize, what: &str) -> Result<(), AdminError> {
-    if is_spec_name(text, max) {
-        Ok(())
-    } else {
-        Err(invalid_params(format!(
-            "{what} must match ^[A-Za-z0-9._-]{{1,{max}}}$"
-        )))
-    }
 }
 
 /// §1.1 的时间戳文本（UTC、毫秒、`Z`）。

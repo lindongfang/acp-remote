@@ -1082,7 +1082,6 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
             .contains(&"scopes_json".to_owned()),
         "合成的旧形状必须真的带 scopes_json 列"
     );
-    let devices_before = device_rows(&pool).await;
     let mut ddl_before = Vec::new();
     for table in TABLES {
         ddl_before.push((*table, table_ddl(&pool, table).await));

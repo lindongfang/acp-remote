@@ -33,12 +33,6 @@ use support::owner::{OwnerNode, ResumeBehavior};
 
 /// 本文件扮演的 Access Node（`grant.remote-work` 那一档）。
 const ACCESS_WORK: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
-/// 只持 `grant.observe` 的 Access Node（R30/R31）。
-const ACCESS_OBSERVE: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f50";
-/// 不存在的会话 id（R31/R34 的「不可区分」对照）。
-const SESSION_ABSENT: &str = "9ae1c07c-9242-46e9-a9d2-4ec58c130f4a";
-const EXPORT_VISIBLE: &str = "export.visible";
-const WORKSPACE_ALIAS: &str = "project.one";
 const AGENT: &str = "codex";
 const FULL_GRANTS: [&str; 3] = ["grant.observe", "grant.interact", "grant.remote-work"];
 

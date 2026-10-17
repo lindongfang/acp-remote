@@ -19,7 +19,6 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::str::FromStr as _;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 

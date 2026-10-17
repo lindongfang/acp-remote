@@ -27,8 +27,8 @@ use std::time::Duration;
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
-    Actor, AgentProfile, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, CommittedEvent,
-    DeviceId, EndpointEvent, EntityRef, NodeId, PortError, ServerEpoch, Timestamp, UnavailableKind,
+    Actor, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, CommittedEvent, DeviceId,
+    EndpointEvent, EntityRef, NodeId, PortError, ServerEpoch, Timestamp,
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, EventPublisher, IdGenerator,
@@ -37,7 +37,7 @@ use acp_core::ports::{
 use acp_core::ports::{RemoteDeliveryStore, TrustStore};
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use agent_host::{AgentHost, HostConfig, NodeEvents};
-use identity_auth::{Authority, EntropySource, IdentityKeystore, PeerPublicKey, SecretPurpose};
+use identity_auth::{Authority, EntropySource, IdentityKeystore, PeerPublicKey};
 use identity_keystore::{EphemeralKeystore, FileKeystore, OsEntropy};
 use server::local_admin::ConnectionCloser;
 use server::node_link::CommandRoute;
@@ -53,7 +53,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::clock::SystemClock;
-use crate::config::{Config, ConfigError, KeystoreChoice};
+use crate::config::{Config, KeystoreChoice};
 use crate::identity::{IdentityUnavailable, NodeIdentity};
 
 /// keystore 根目录（`<data_dir>/keystore`）。
@@ -878,11 +878,7 @@ pub fn forked_publisher_with_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_core::model::{AgentId, EventId, EventType, Sequence, SessionId};
-    use server::local_admin::{
-        AdminOutcome, DaemonControl, DaemonStatus, LocalAdminDeps, LocalAdminHandler,
-        LocalAdminRouter, NoConnections, PairingSessions, decode_request,
-    };
+    use acp_core::model::{EventId, EventType, Sequence, SessionId};
 
     /// 固定的 canonical 时间戳（扇出分叉不读它，只为满足记录形状）。
     fn timestamp(text: &str) -> Timestamp {
@@ -1005,23 +1001,6 @@ mod tests {
         Config::from_toml(&text).expect("开发模式配置")
     }
 
-    /// 仅供测试的最小 `DaemonControl` 实现（本模块的用例不经 `daemon.*`）。
-    struct TestDaemonControl;
-
-    #[async_trait::async_trait]
-    impl DaemonControl for TestDaemonControl {
-        async fn status(&self) -> DaemonStatus {
-            unreachable!("本模块的用例不经 daemon.status")
-        }
-
-        async fn stop(
-            &self,
-            _grace_ms: Option<u64>,
-        ) -> Result<(), server::local_admin::AdminError> {
-            unreachable!("本模块的用例不经 daemon.stop")
-        }
-    }
-
     /// keystore 选择：平台不支持时默认失败关闭；显式开发模式开关才转向进程内身份。
     #[test]
     fn keystore_selection_fails_closed_outside_dev_mode() {
@@ -1056,8 +1035,8 @@ mod tests {
         assert!(build_keystore(&forced, entropy).is_ok());
     }
 
-    /// 凭据解析：写入用的条目命名（`provider.configure`）与解析侧标签**同规则**，且字段缺失或条目
-    /// 被删除时失败关闭。
+    /// 关闭顺序：仍有其它句柄时 `close()` 必须失败关闭，全部释放后才关闭连接池。
+    #[tokio::test]
     async fn a_shared_store_handle_blocks_the_checkpoint() {
         let dir = TempDir::new("shared");
         let composition =

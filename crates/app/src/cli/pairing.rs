@@ -18,7 +18,7 @@ use acp_core::ports::Clock as _;
 use serde_json::Value;
 use server::local_admin::{JsonObject, LocalErrorCode, Method};
 
-use crate::cli::{Context, Failure, client_failure, print_result, strings, success};
+use crate::cli::{Context, Failure, client_failure, print_result, success};
 use crate::client::{LocalAdminClient, call_once, outcome_of};
 
 /// 轮询间隔（CLI 侧策略，Daemon 侧没有轮询）。
@@ -341,7 +341,6 @@ pub(crate) fn run(
         &mut OneshotCalls(endpoint.as_str()),
         target,
         &claimed.pairing_id,
-        &claimed.claim,
         answer,
     ))?;
     print_result(&result);
@@ -392,7 +391,6 @@ async fn settle_claim<M: PairCalls + Send>(
     calls: &mut M,
     target: PairTarget,
     pairing_id: &str,
-    claim: &Claim,
     answer: Answer,
 ) -> Result<JsonObject, Failure> {
     if answer == Answer::Rejected {
@@ -554,25 +552,4 @@ fn text_field(result: &JsonObject, key: &str) -> Result<String, Failure> {
                 format!("配对方法的响应缺少字符串字段 `{key}`"),
             )
         })
-}
-
-/// 取字符串数组字段。
-fn text_array_field(result: &JsonObject, key: &str) -> Result<Vec<String>, Failure> {
-    let items = result.get(key).and_then(Value::as_array).ok_or_else(|| {
-        Failure::local(
-            LocalErrorCode::Internal,
-            format!("配对方法的响应缺少数组字段 `{key}`"),
-        )
-    })?;
-    items
-        .iter()
-        .map(|item| {
-            item.as_str().map(str::to_owned).ok_or_else(|| {
-                Failure::local(
-                    LocalErrorCode::Internal,
-                    format!("`{key}` 的每一项都必须是字符串"),
-                )
-            })
-        })
-        .collect()
 }

@@ -232,26 +232,6 @@ impl CommandRoute {
         }
     }
 
-    /// 测试专用：换掉限流额度、窗口与连续超限阈值（§14 的三个数值在生产路径上只有固定常量一个
-    /// 来源；120 次/分钟的真实等待在用例里不可接受）。
-    #[cfg(test)]
-    pub(crate) fn with_test_rate_limit(
-        mut self,
-        limit: u32,
-        window: std::time::Duration,
-        consecutive: u32,
-    ) -> Self {
-        self.rate = CommandRateLimiter::new(limit, window);
-        self.consecutive_limit = consecutive;
-        self
-    }
-
-    /// 当前被登记状态的连接数（观测口：状态必须随连接结束回收）。
-    #[cfg(test)]
-    pub(crate) fn tracked(&self) -> usize {
-        lock(&self.states).len()
-    }
-
     /// 命令限流（§14：单设备业务命令 120/分钟，按 `deviceId` 与命令族分别统计）。
     ///
     /// 返回 `true` 表示本次命令**已被拒绝并已回复**，调用方不得继续处理。单次超限只回可重试的
@@ -1469,21 +1449,6 @@ impl CommandRoute {
 
     fn forget_connection(&self, connection_id: &str) {
         lock(&self.states).remove(connection_id);
-    }
-
-    /// 测试专用：跑一轮终态观察（`dispatch` 的循环体，免去用例自己起定时器）。
-    #[cfg(test)]
-    pub(crate) async fn poll_terminal_for_test(&self) {
-        self.poll_pending().await;
-    }
-
-    /// 测试专用：当前登记的终态观察项数量（断言「断开后不留观察项」）。
-    #[cfg(test)]
-    pub(crate) fn watchers_for_test(&self) -> usize {
-        lock(&self.states)
-            .values()
-            .map(|state| state.watching.len())
-            .sum()
     }
 
     /// 本机装配失败（时间戳/错误体构造不出来）：这是接线缺陷，按 `internal.unavailable` 显式失败，

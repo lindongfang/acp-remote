@@ -52,7 +52,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::node_link::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome};
-use crate::node_link::{catalog, link_error};
+use crate::node_link::link_error;
 use crate::transport::net::Shutdown;
 
 /// 扇出链路自己的有界队列容量（每连接队列之外的第二道；满了只丢这一条并记日志，broker 绝不被阻塞）。

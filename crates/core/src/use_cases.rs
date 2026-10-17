@@ -653,11 +653,6 @@ impl UseCases {
 
     /// Sync 快照 .directories()` 资源的投影（`SYNC_PROTOCOL.md` §9.4；spec `sync-workspace-catalog`）。
     ///
-    /// `include_path` 是**调用方**对 feature `core.workspace-path.v1` 的协商结果——core 不读 feature
-    /// 表、也不缓存它（与 [`UseCases::sync_visible_sessions`] 的 `include_imported` 同一模式）。为假时
-    /// 每个条目的 `path` 都是 `None`：对端看到的对象因此仍是「只有 `alias` 与 `displayName` 两个键」的
-    /// 封闭形状，已协商 `core.local-catalog.v1` 的旧客户端不会因为多一个键拒绝整条快照。
-    ///
     /// 路径的取值是**已登记目录**的规范化结果剥掉平台 verbatim 前缀后的形式（`design.md` D2），只出现在
     /// 这些条目上——会话摘要的 `workspace` 引用不带它，客户端按别名在同一份快照内查表。这里只投影，不
     /// 判定可见性：设备方向没有可见性过滤（`pairing-model`），本入口与本机 `workspace.list` 走同一份
@@ -665,7 +660,6 @@ impl UseCases {
     pub async fn sync_workspace_catalog(
         &self,
         actor: &Actor,
-        include_path: bool,
     ) -> Result<Vec<WorkspaceCatalogEntry>, PortError> {
         self.require_local(actor)?;
         let records = self.config.directories().await?;
@@ -5030,10 +5024,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&*root);
     }
 
-    /// 目录资源投影：协商 `core.workspace-path.v1` 时每条带规范化路径（`strip_verbatim` 之后的形式），
-    /// 未协商时该键**缺席**（`None`，不是空串）——对端因此仍看到只有两个键的封闭对象。
+    /// 目录资源投影：每条都带规范化路径（`strip_verbatim` 之后的形式），路径是 schema 必填键。
     #[test]
-    fn the_workspace_catalog_carries_paths_only_when_negotiated() {
+    fn the_workspace_catalog_carries_paths() {
         let fixture = fixture();
         let alias = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias");
         fixture.world.directories().lock().expect("lock").push(
@@ -5046,12 +5039,8 @@ mod tests {
             .expect("workspace record"),
         );
 
-        let with_path = block_on(
-            fixture
-                .use_cases
-                .sync_workspace_catalog(&Actor::LocalCli, true),
-        )
-        .expect("catalog");
+        let with_path =
+            block_on(fixture.use_cases.sync_workspace_catalog(&Actor::LocalCli)).expect("catalog");
         assert_eq!(with_path.len(), 1);
         assert_eq!(with_path[0].directory_id(), &alias);
         let path = with_path[0].path();
@@ -5063,15 +5052,6 @@ mod tests {
             !path.starts_with(r"\\?\"),
             "下发形式必须剥掉 verbatim 前缀：{path}"
         );
-
-        let without_path = block_on(
-            fixture
-                .use_cases
-                .sync_workspace_catalog(&Actor::LocalCli, false),
-        )
-        .expect("catalog");
-        assert_eq!(without_path.len(), 1);
-        assert_eq!(without_path[0].directory_id(), &alias);
     }
 
     /// 测试用的节点角色行（`NodeRecord` 的构造不变式：`revoked_at` 与状态成对、owner 必须有 endpoint）。
@@ -5631,9 +5611,6 @@ mod tests {
         );
     }
 
-    /// WP5（任务 2.13）：catalog 投影源只读持久事实：信任行、全部 Export 与**审计水位**（`catalogRevision`
-    /// 的来源，不是 `store.head()`）；未知节点是空视图而不是错误；零写入。
-    #[test]
     /// catalog 投影源只读持久事实：信任行与**审计水位**（`catalogRevision` 的来源，不是
     /// `store.head()`）；未知节点是空视图而不是错误；零写入。已配对节点看到本机全部资源，不存在
     /// Export/授权集合过滤。
@@ -5832,6 +5809,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn node_link_auth_audit_is_narrow() {
         let fixture = fixture();
         let node = NodeId::new(&uuid_text(111)).expect("node");
@@ -5900,10 +5878,6 @@ mod tests {
         assert_eq!(denied[before].via_node(), Some(&node));
     }
 
-    /// WP6（任务 2.17）：Owner 侧 `Actor::Node` 的**无会话命令**（`session.list`/`command.status`/
-    /// `session.create`）必须有可判定的授权路径——原先 `node_allowed` 在 `session = None` 时恒拒，
-    /// 这些命令在 Owner 侧永远不可用（§6 第 5 条的裁决）。
-    #[test]
     /// 已认证节点不需要任何 grant/Export 记录即可执行本节点命令（配对即完全信任）。
     #[test]
     fn node_commands_need_no_grant_or_export_record() {
@@ -5940,6 +5914,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn pairing_channel_accepts_only_the_bound_claimant() {
         let fixture = fixture();
         let pairing = PairingId::new(&uuid_text(61)).expect("pairing");

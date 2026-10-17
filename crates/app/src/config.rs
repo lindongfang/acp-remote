@@ -876,6 +876,11 @@ impl RawLogging {
     }
 }
 
+/// CLI 的配置加载入口：CLI 只调用组合根提供的加载器，不自行解析 TOML 或复制校验规则。
+pub(crate) fn load_for_cli(path: Option<&std::path::Path>) -> Result<Loaded, ConfigError> {
+    Config::load(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1266,9 +1271,4 @@ allow_plaintext = true
         assert_eq!(config.keystore, KeystoreChoice::Ephemeral);
         assert!(!config.fail_closed_on_missing_keystore);
     }
-}
-
-/// CLI 的配置加载入口：CLI 只调用组合根提供的加载器，不自行解析 TOML 或复制校验规则。
-pub(crate) fn load_for_cli(path: Option<&std::path::Path>) -> Result<Loaded, ConfigError> {
-    Config::load(path)
 }

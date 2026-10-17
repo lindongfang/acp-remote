@@ -212,7 +212,7 @@ fn project(view: &NodeLinkCatalogView) -> Result<CatalogSnapshot, ProjectionFaul
     let sessions = view
         .sessions
         .iter()
-        .map(|summary| project_session(summary))
+        .map(project_session)
         .collect::<Result<Vec<_>, ProjectionFault>>()?;
     Ok(CatalogSnapshot {
         revision,

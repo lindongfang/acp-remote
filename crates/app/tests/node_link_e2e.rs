@@ -21,19 +21,11 @@ mod support;
 
 use serde_json::{Value, json};
 use server::local_admin::Method;
-use support::nodelink::{AccessKey, NodeLinkClient, PairingTicket};
+use support::nodelink::{AccessKey, NodeLinkClient};
 use support::owner::OwnerNode;
 
 /// 本用例扮演的 Access Node 标识。
 const ACCESS_NODE: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
-/// 可见的 Export（`scopes` 与节点 grants 有交集，且是本次确认点名的唯一一条）。
-/// 不可见的 Export（`scopes` 与节点 grants 不相交）。
-/// 可见性被清单收窄的 Export：`scopes` 与节点 grants **相交**，但本次确认没有点名它
-/// （`design.md` D1 的条件③）。
-/// 注册的 workspace alias（`session.create` 只能带别名，不能带路径）。
-/// Agent selector。
-const AGENT: &str = "codex";
-/// 本地确认授予的 grants（也是 Export 的 `scopes` 取值域）。
 
 /// TLS `direct` 轮次：自签证书 + rustls，走完同一批配对/握手步骤（配对 HTTP 也在 TLS 之上）。
 #[test]
@@ -174,20 +166,6 @@ impl Drop for TestCertificate {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.directory);
     }
-}
-
-/// `link.ping` 往返：证明连接在拒绝/失败之后仍然处于合法状态。
-async fn ping(client: &mut NodeLinkClient, seed: u8) {
-    let nonce = support::nodelink::nonce_text_16(seed);
-    client.step("link.ping");
-    client.send("link.ping", json!({ "nonce": nonce })).await;
-    let pong = client.expect("link.pong").await;
-    assert_eq!(pong["body"]["nonce"], json!(nonce));
-}
-
-/// `remoteSessionRef.sessionId` → `SessionId`。
-fn session_key(session_id: &str) -> acp_core::model::SessionId {
-    acp_core::model::SessionId::new(session_id).expect("sessionId 是规范 uuid 文本")
 }
 
 // ---------------------------------------------------------------------------------------------

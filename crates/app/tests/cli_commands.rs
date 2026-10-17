@@ -6,18 +6,9 @@
 
 mod support;
 
-use std::path::Path;
-
 use app::lock::{LockRecord, LockState, lock_path, probe, read_record, record_path};
 use serde_json::{Value, json};
 use support::{CliRun, Daemon, Stdin, create_owner_only_dir, dir_entries, run_cli};
-
-/// 一份与 `agent.configure`/`export.create` 同形的 JSON 文件（写入用例自己的临时目录）。
-fn write_file(root: &Path, name: &str, content: &str) -> std::path::PathBuf {
-    let path = root.join(name);
-    std::fs::write(&path, content).expect("写文件");
-    path
-}
 
 /// 失败时 stderr 必须是**恰好一行**含 `code` 的 JSON，且 stdout 只有人类可读说明（R62/R63）。
 fn assert_failure_contract(run: &CliRun, code: &str, forbidden: &[&str]) {
@@ -214,7 +205,6 @@ fn daemon_stop_waits_for_the_lock_and_the_process_exit() {
 #[test]
 fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
     let daemon = Daemon::configure("cli-offline", "");
-    let root = daemon.root();
 
     let cases: Vec<Vec<String>> = vec![
         vec!["device".into(), "list".into()],
@@ -283,9 +273,6 @@ fn management_commands_use_the_local_channel_and_report_method_failures() {
 
     daemon.stop();
 }
-
-/// R67：`--file` 的两种错误码映射（`local.invalid_params` / `local.conflict`），`agent configure` 的文件
-/// 不得含凭据值。
 
 /// R70/R71：`doctor` 离线时在 CLI 进程内完成（不连接、不建锁、不打开数据库），在线时组合 `daemon.status`。
 #[test]

@@ -18,14 +18,12 @@
 use std::sync::Arc;
 
 use acp_core::model::{
-    Actor, AgentProfile, DirectoryRecord, Fingerprint, NodeKind, PairingId, PairingRecord,
-    PairingState, PairingTarget, PeerIdentity, Timestamp,
+    Actor, Fingerprint, NodeKind, PairingId, PairingRecord, PairingState, PairingTarget,
+    PeerIdentity, Timestamp,
 };
 use acp_core::ports::{AuditQuery, AuditStore, Clock, TrustRecordRef};
 use acp_core::use_cases::UseCases;
-use identity_auth::{
-    IdentityKeystore, KeystoreError, PairingDecision, PairingSpec, SecretBytes, SecretPurpose,
-};
+use identity_auth::{IdentityKeystore, PairingDecision, PairingSpec};
 use serde_json::Value;
 
 use crate::local_admin::audit;
@@ -36,7 +34,7 @@ use crate::local_admin::handler::LocalAdminHandler;
 use crate::local_admin::method::Method;
 use crate::local_admin::pairing::{self, PairingSessions};
 use crate::local_admin::params;
-use crate::local_admin::view::{self, object, string_array, text, timestamp};
+use crate::local_admin::view::{self, object, text, timestamp};
 
 /// [`LocalAdminRouter`] 的组合根注入口。
 pub struct LocalAdminDeps {
@@ -763,14 +761,6 @@ fn optional_text(value: Option<&str>) -> Value {
     }
 }
 
-/// `string[] | null`。
-fn text_array_or_null<'a>(items: Option<impl IntoIterator<Item = &'a str>>) -> Value {
-    match items {
-        Some(items) => Value::Array(items.into_iter().map(text).collect()),
-        None => Value::Null,
-    }
-}
-
 /// 撤销/确认后的读回失败：持久化状态与方法的返回值形状不一致，属内部错误。
 fn not_readable(operation: &str, what: &str) -> AdminError {
     AdminError::new(
@@ -789,46 +779,4 @@ fn not_revocable(operation: &str, what: &str, id: &str) -> AdminError {
         LocalErrorCode::NotFound,
         format!("{operation}: {what} `{id}` does not exist or is already revoked"),
     )
-}
-
-/// Provider 凭据的 keystore 条目引用（§5.2 的 `keystore_ref`）：
-/// `<providerDigest>@v<version>`，其中 `providerDigest` 是 `providerId` 的 SHA-256 前 16 个 hex 字符。
-///
-/// 为什么用摘要而不是 `providerId` 本身：keystore 的标签上限是 128 字节，而 `providerId` 与字段名
-/// 各自可达 64 字符，`<providerId>.<field>` 的拼接会越界；摘要把标识收敛为定宽。
-/// 每个字段的条目标签是 [`provider_secret_label`]，组合根用 `ProviderRef.keystore_ref` 加字段名即可定位。
-fn provider_keystore_ref(provider_id: &str, version: u64) -> String {
-    format!("{}@v{version}", sha256_hex_prefix(provider_id))
-}
-
-/// 某个字段的 keystore 标签：`<keystore_ref>.<fieldName>`。
-fn provider_secret_label(keystore_ref: &str, field: &str) -> String {
-    format!("{keystore_ref}.{field}")
-}
-
-/// `text` 的 SHA-256 前 16 个 hex 字符（小写）。
-fn sha256_hex_prefix(text: &str) -> String {
-    use sha2::Digest as _;
-    let digest = sha2::Sha256::digest(text.as_bytes());
-    let mut hex = String::with_capacity(64);
-    for byte in digest {
-        hex.push_str(&format!("{byte:02x}"));
-    }
-    hex.truncate(16);
-    hex
-}
-
-/// keystore 失败 → `local.*`：不可用即 `local.unavailable`（正式模式不得降级为明文存储，§5.2）；
-/// 其余（条目非法、用途不符等）是实现缺陷，收敛成 `local.internal`，错误消息不转述内层文本。
-fn map_keystore_error(error: KeystoreError) -> AdminError {
-    match error {
-        KeystoreError::Unavailable => AdminError::new(
-            LocalErrorCode::Unavailable,
-            "provider.configure: platform keystore is not available",
-        ),
-        _ => AdminError::new(
-            LocalErrorCode::Internal,
-            "provider.configure: platform keystore rejected the credential entry",
-        ),
-    }
 }

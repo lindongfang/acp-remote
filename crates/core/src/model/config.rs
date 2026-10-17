@@ -6,28 +6,8 @@
 use std::path::Path;
 
 use super::error::InvalidValue;
-use super::ids::{AgentId, DirectoryId, derive_directory_id, is_spec_id, require_bounded};
+use super::ids::{AgentId, DirectoryId, derive_directory_id, require_bounded};
 use super::scalars::Timestamp;
-
-/// 环境变量名：`^[A-Za-z_][A-Za-z0-9_]{0,127}$`。
-fn is_env_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
-        _ => return false,
-    }
-    name.len() <= 128 && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-/// daemon 自己的环境变量前缀；profile 的绑定不得占用（§11.6）。
-fn is_reserved_env_name(name: &str) -> bool {
-    name.to_ascii_uppercase().starts_with("ACP_REMOTE_")
-}
-
-/// Provider 标识：`^[A-Za-z0-9._-]{1,64}$`（`LOCAL_ADMIN_PROTOCOL.md` §5.2）。
-fn is_provider_id(text: &str) -> bool {
-    text.len() <= 64 && is_spec_id(text)
-}
 
 pub(crate) fn no_nul(text: &str) -> bool {
     !text.contains('\0')

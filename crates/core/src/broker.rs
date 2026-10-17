@@ -4650,7 +4650,6 @@ pub(crate) mod test_support {
         pub(crate) modes: Mutex<Option<ModeState>>,
         /// 适配器 `prompt` 返回的接受结果里的 turn 标识（测试可改写，默认全零占位值）。
         pub(crate) accepted_turn: Mutex<Option<TurnId>>,
-        pub(crate) profiles: Mutex<Vec<AgentProfile>>,
         pub(crate) workspaces: Mutex<Vec<DirectoryRecord>>,
         /// 管理写集实际携带的审计动作（断言「审计随写集提交」而不是事后补写）。
         pub(crate) write_audits: Mutex<Vec<AuditAction>>,
@@ -6923,8 +6922,7 @@ mod tests {
     use super::*;
     use crate::model::{
         AcpRaw, AgentId, AgentRef, AgentSessionId, DeviceId, EventId, InteractionKind,
-        InteractionOption, ModeState, NodeId, NodeKind, PairingId, PendingInteraction,
-        ResourceOrigin,
+        InteractionOption, ModeState, NodeId, PairingId, PendingInteraction, ResourceOrigin,
     };
 
     /// 一个已认证的设备主体（§10.1 的「按诱发命令的执行者分类」断言与授权回归都用它）。

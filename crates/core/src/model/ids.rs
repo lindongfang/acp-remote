@@ -77,11 +77,6 @@ pub(crate) fn is_uuid(text: &str) -> bool {
     })
 }
 
-/// `^[A-Za-z0-9._-]{1,128}$`（spec id 的通用形状）
-pub(crate) fn is_spec_id(text: &str) -> bool {
-    charset_ok(text, 1, 128, ascii_alnum, spec_rest)
-}
-
 /// `^[a-z0-9][a-z0-9._-]{0,63}$`
 pub(crate) fn is_workspace_alias(text: &str) -> bool {
     charset_ok(text, 1, 64, lower_alnum, lower_spec_rest)
@@ -106,14 +101,6 @@ pub(crate) fn is_scope_name(text: &str) -> bool {
         |byte| byte.is_ascii_lowercase(),
         lower_spec_rest,
     )
-}
-
-/// `^grant\.[a-z][a-z0-9._-]{0,63}$`
-pub(crate) fn is_grant_name(text: &str) -> bool {
-    match text.strip_prefix("grant.") {
-        Some(rest) => charset_ok(rest, 1, 64, lower_alnum, lower_spec_rest),
-        None => false,
-    }
 }
 
 /// `^[a-z][a-z0-9._-]{0,127}$`（`PublicError.code` 与 wire 错误码同族）

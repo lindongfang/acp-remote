@@ -145,11 +145,9 @@ pub async fn plan(
         // （它们同时保护着本机管理读面），设备无权直接读；对端可见性由上面两把闸决定，因此这里**只能**
         // 以本机身份代读——放宽 `require_local` 会连带打开一批本机管理面（`design.md` D2 的否决理由）。
         //
-        // `workspaces` 的投影（含 `path` 键的门控）在 core 的 `sync_workspace_catalog` 里：已登记目录的
-        // 规范化路径只在协商了 `core.workspace-path.v1` 时出现（`include_path` 就是本连接的那个协商
-        // 结果），未协商时该键**缺席**——条目是 `additionalProperties: false` 的封闭对象，只协商
-        // `core.local-catalog.v1` 的旧客户端因此仍收到与本变更前逐字节相同的两个键。
-        let catalog = core.sync_workspace_catalog(&Actor::LocalCli, true).await?;
+        // `workspaces` 的投影在 core 的 `sync_workspace_catalog` 里：已登记目录的规范化路径随每个
+        // 条目**总是**下发（`path` 是 schema 必填键），不再有 feature 门控。
+        let catalog = core.sync_workspace_catalog(&Actor::LocalCli).await?;
         let items = catalog
             .iter()
             .map(wire_workspace)
@@ -249,11 +247,6 @@ pub fn digest(frames: &[sha2::digest::Output<Sha256>]) -> Option<Base64Url<32>> 
 /// `core.local-catalog.v1` 的门控（目录资源 `workspaces`/`agents`）。
 pub const LOCAL_CATALOG_FEATURE: &str = "core.local-catalog.v1";
 
-/// `core.workspace-path.v1` 的门控（快照 `workspaces` 条目的可选键 `path`）。
-///
-/// 未协商时该键**缺席**（不是 `null`、不是空串）：条目是 `additionalProperties: false` 的封闭对象，
-/// 只协商 `core.local-catalog.v1` 的旧客户端多收到一个键就会拒收整条消息（§9.4）。
-
 /// `resource.remote-origin.v1` 的门控（已导入会话与其来源信息）。
 pub const REMOTE_ORIGIN_FEATURE: &str = "resource.remote-origin.v1";
 
@@ -352,11 +345,9 @@ fn wire_session(summary: &CoreSessionSummary, catalog: bool) -> Option<WireSessi
 
 /// core 的目录资源投影 → wire `workspaceCatalogEntry`（快照 `workspaces` 资源的元素）。
 ///
-/// 只映射 core 给出的三个取值：`alias`/`displayName` 是 `WorkspaceRef` 的两键，`path` 是可选键——**键的
-/// 三态由 core 的 `sync_workspace_catalog(actor, include_path)` 决定**（`None` = 本连接未协商
-/// `core.workspace-path.v1`，键缺席；`Some` = 已登记目录的规范化路径，`canonicalize` 结果剥掉平台
-/// verbatim 前缀），本层不重算协商结果、也不做第二套取值规范化。这些条目是本节点规范化路径唯一的
-/// **快照侧**可见面（§9.4/§12.3）；会话摘要的目录引用仍是 `workspaceRef` 的两个键。
+/// 只映射 core 给出的两个取值：`directoryId` 与必填的规范化 `path`（`canonicalize` 结果剥掉平台
+/// verbatim 前缀），本层不重算路径、也不做第二套取值规范化。这些条目是本节点规范化路径唯一的
+/// **快照侧**可见面（§9.4/§12.3）；会话摘要的目录引用仍是 `workspaceRef` 的 `directoryId`。
 fn wire_workspace(entry: &CoreWorkspaceCatalogEntry) -> Option<WireWorkspaceCatalogEntry> {
     Some(WireWorkspaceCatalogEntry {
         directory_id: NonEmptyText::<32>::parse(entry.directory_id().as_str()).ok()?,

@@ -96,8 +96,6 @@ fn device_claim(
 }
 
 #[test]
-#[test]
-#[test]
 fn pairing_window_can_only_shrink() {
     // R3 / 场景「有效期只能收窄」。
     let keystore = FakeKeystore::new();
@@ -267,7 +265,6 @@ fn pending_record(record: &acp_core::model::PairingRecord) -> acp_core::model::P
 }
 
 #[test]
-#[test]
 fn approve_requires_pending_state() {
     // R10/R16：批准要求 `pending_confirmation`；批准结果不携带任何授权集合。
     let created = create_device_pairing();
@@ -309,6 +306,7 @@ fn approve_requires_pending_state() {
     assert_eq!(claimed.display_name, "Test Phone");
 }
 
+#[test]
 fn reject_produces_no_trust() {
     // R11 / 场景「拒绝不产生信任」。
     let created = create_device_pairing();
