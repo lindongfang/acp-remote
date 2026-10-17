@@ -59,35 +59,11 @@ impl Paired {
     async fn up_to_approval(
         label: &str,
         access_node: &str,
-        grants: &[&str],
+        _grants: &[&str],
         workspace_root: &std::path::Path,
     ) -> Self {
         let owner = OwnerNode::start(label).await;
         let directory_id = support::seed_directory(&owner.data_dir(), workspace_root).await;
-        owner
-            .admin(
-                Method::ExportCreate,
-                json!({
-                    "exportId": EXPORT_VISIBLE,
-                    "displayName": "Export visible",
-                    "agentIds": [AGENT],
-                    "workspaceDirectories": [{ "directoryId": directory_id }],
-                    "defaultWorkspaceDirectory": directory_id,
-                    "templates": [
-                        {
-                            "templateId": "tpl.default",
-                            "displayName": "Default",
-                            "workspaceDirectory": directory_id,
-                            "params": [],
-                        },
-                    ],
-                    "defaultTemplateId": "tpl.default",
-                    "scopes": FULL_GRANTS,
-                    "cachePolicy": "no-content-cache",
-                }),
-            )
-            .await;
-
         let access = AccessKey::new(access_node);
         let begin = owner
             .admin(
@@ -95,8 +71,6 @@ impl Paired {
                 json!({
                     "mode": "owner",
                     "pairingUrl": null,
-                    "displayName": "Owner Node",
-                    "requestedGrants": grants,
                 }),
             )
             .await;
@@ -120,11 +94,7 @@ impl Paired {
         owner
             .admin(
                 Method::NodePairConfirm,
-                json!({
-                    "pairingId": pairing_id,
-                    "grants": grants,
-                    "exportIds": [EXPORT_VISIBLE],
-                }),
+                json!({ "pairingId": pairing_id }),
             )
             .await;
 
@@ -191,7 +161,6 @@ fn session_create_body(request_id: &str, directory_id: &str) -> Value {
         "expectedVersion": null,
         "payload": {
             "agentId": AGENT,
-            "exportId": EXPORT_VISIBLE,
             "directoryId": directory_id,
         },
     })
@@ -487,7 +456,6 @@ fn a_repeated_resume_request_id_replays_the_first_result_once() {
                     "expectedVersion": null,
                     "payload": {
                         "agentId": AGENT,
-                        "exportId": EXPORT_VISIBLE,
                         "directoryId": directory_id,
                     },
                 }),
@@ -511,187 +479,6 @@ fn a_repeated_resume_request_id_replays_the_first_result_once() {
 
 /// R31（补充 `Actor::Node` 的「先于本机读取」证据）。
 ///
-/// 只持 `grant.observe` 的 Access 提交 `session.resume` 时：
-///
-/// 1. 回 `command.rejected`（`nodelink.export.not_granted`）；
-/// 2. `load_recovery` 计数为 0 ⇒ **授权先于本机读取**；
-/// 3. 对「存在但**不覆盖**该节点授权的会话」与「不存在的会话」得到**完全相同**的响应——判别力来自
-///    目标会话的持久化目录**已被删除**：若实现先读会话行再做目录复校验，错误码会是
-///    `nodelink.internal.unavailable` 而不是 `export.not_granted`。
-#[test]
-fn an_unauthorized_resume_is_rejected_before_any_local_read() {
-    support::block_on(async {
-        let workspace = workspace_dir("resume-unauthorized");
-        // 先用有权限的节点建出会话并落持久化恢复数据。
-        let paired =
-            Paired::up_to_approval("resume-denied", ACCESS_WORK, &FULL_GRANTS, &workspace).await;
-        let (owner, access, ticket, directory_id) = paired.into_parts();
-        let mut worker = connect(&owner, &access, &ticket).await;
-        let (session, _attachment) = create_session(&mut worker, &directory_id).await;
-
-        // 让目标会话的持久化目录消失：任何「先读后校验」的实现都会因此回 unavailable。
-        std::fs::remove_dir_all(&workspace).expect("删除持久化目录");
-
-        // 再配一个只持 `grant.observe` 的 Access 节点。
-        let observer = AccessKey::new(ACCESS_OBSERVE);
-        let begin = owner
-            .admin(
-                Method::NodePairBegin,
-                json!({
-                    "mode": "owner",
-                    "pairingUrl": null,
-                    "displayName": "Owner Node",
-                    "requestedGrants": ["grant.observe"],
-                }),
-            )
-            .await;
-        let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
-        let ticket = support::nodelink::ticket_from_url(
-            begin["pairingUrl"].as_str().expect("pairingUrl"),
-            &pairing_id,
-        );
-        let client_nonce = support::nodelink::nonce_text(0x61);
-        let claim = support::nodelink::claim_request(&ticket, &observer, &client_nonce);
-        let reply = support::nodelink::post_json(
-            owner.addr,
-            server::node_link::CLAIM_PATH,
-            &serde_json::to_vec(&claim).expect("claim 可序列化"),
-        )
-        .await;
-        assert_eq!(reply.status, 201);
-        let body = reply.json();
-        support::nodelink::verify_owner_proof(&ticket, &body, &observer, &client_nonce);
-        owner
-            .admin(
-                Method::NodePairConfirm,
-                json!({
-                    "pairingId": pairing_id,
-                    "grants": ["grant.observe"],
-                    "exportIds": [EXPORT_VISIBLE],
-                }),
-            )
-            .await;
-        let status = support::nodelink::status_request(
-            &ticket,
-            &observer,
-            body["pairingRequestId"].as_str().expect("pairingRequestId"),
-            &support::nodelink::nonce_text(0x62),
-        );
-        let reply = support::nodelink::post_json(
-            owner.addr,
-            server::node_link::STATUS_PATH,
-            &serde_json::to_vec(&status).expect("status 可序列化"),
-        )
-        .await;
-        assert_eq!(reply.json()["status"], json!("approved"));
-
-        let mut client = NodeLinkClient::connect_plain(owner.addr).await;
-        support::nodelink::handshake(
-            &mut client,
-            &observer,
-            &ticket,
-            &support::nodelink::nonce_text(0x61),
-        )
-        .await;
-
-        let attachment = attach(&mut client, &session).await;
-
-        // 观察点自检（不是假设）：`recovery_reads` 必须真的在计数，否则下面「授权先于本机读取」的
-        // 「计数不变」断言是**恒真**的。（该计数器曾因 `Arc` 建了两个实例而恒为 0，TP2 tester-A2 修正。）
-        let session_key =
-            acp_core::model::SessionId::new(session["sessionId"].as_str().expect("sessionId"))
-                .expect("session id");
-        let probe_before = owner.recovery_reads();
-        assert!(
-            owner
-                .sessions
-                .load_recovery(&session_key)
-                .await
-                .expect("读回")
-                .is_some(),
-            "R31 的前提：目标会话确有持久化恢复数据"
-        );
-        assert!(
-            owner.recovery_reads() > probe_before,
-            "load_recovery 的计数器必须真的递增，否则「授权先于本机读取」是恒真断言"
-        );
-
-        let reads_before = owner.recovery_reads();
-        let resume_calls_before = owner.resume_probe.calls();
-
-        client.step("observe resume (existing)");
-        client
-            .send(
-                "command.submit",
-                session_resume_body(
-                    &support::nodelink::uuid_text(),
-                    &session,
-                    &attachment,
-                    json!({}),
-                ),
-            )
-            .await;
-        let denied = client.expect("command.rejected").await;
-        assert_eq!(denied["body"]["command"], json!("session.resume"));
-        assert_eq!(
-            denied["body"]["error"]["code"],
-            json!("nodelink.export.not_granted"),
-            "越权恢复必须回 not_granted（目录已被删：若是先读后校验，这里会是 internal.unavailable）"
-        );
-        assert_eq!(
-            owner.recovery_reads(),
-            reads_before,
-            "授权必须先于本机读取（load_recovery 是读会话行的唯一入口）"
-        );
-        assert_eq!(
-            owner.resume_probe.calls(),
-            resume_calls_before,
-            "越权恢复不得触碰后端"
-        );
-
-        // 响应不因会话是否存在而不同：换一个不存在的会话 id，得到**同形**的拒绝。
-        let mut absent = session.clone();
-        absent["sessionId"] = json!(SESSION_ABSENT);
-        client.step("observe resume (absent)");
-        client
-            .send(
-                "command.submit",
-                session_resume_body(
-                    &support::nodelink::uuid_text(),
-                    &absent,
-                    &attachment,
-                    json!({}),
-                ),
-            )
-            .await;
-        let absent_denied = client.expect("command.rejected").await;
-        assert_eq!(
-            absent_denied["body"]["error"]["code"], denied["body"]["error"]["code"],
-            "存在与不存在不得产生可区分的响应"
-        );
-        // 「不存在」侧的额外防泄露断言：`details` 两条路径**实测同为 `{}`（空对象，非 `null`）**——
-        // 两条都走 `command.rs::deny` 的 `CommandFault::NotGranted(None)` 分支（`RawObject::empty()`）。
-        // 所以这是**结构性防泄露守卫**（若将来某条路径回 `NotGranted(Some(parameter))`，本断言会失败），
-        // 而不是当前的判别点；真正的判别力在上一条 `code` 断言与「目录已被删除」这个前提上。
-        // 口径来源：实测。
-        assert_eq!(
-            absent_denied["body"]["error"]["details"], denied["body"]["error"]["details"],
-            "错误详情也不得泄露目标会话的存在性"
-        );
-        assert_eq!(
-            owner.recovery_reads(),
-            reads_before,
-            "不存在会话的越权恢复同样不得读会话行"
-        );
-
-        owner.stop().await;
-    });
-}
-
-/// R37 口径：能力未宣告的终态必须是 **`failed`** + `nodelink.command.unsupported`
-/// （`uncertain` 只属崩溃窗口 R32），且不创建新会话、不报告成功。
-///
-/// 同时用另一种失败（Agent 明确拒绝恢复）证明**两类失败不是同一个漏斗**：错误码不同。
 #[test]
 fn an_unsupported_agent_fails_the_resume_terminal_without_creating_a_session() {
     support::block_on(async {

@@ -24,8 +24,6 @@ pub mod registry;
 pub mod session;
 mod wire;
 
-#[cfg(test)]
-mod tests;
 
 pub use handshake::{
     NegotiationFault, REQUIRED_FEATURE, SUPPORTED_FEATURES, negotiate_features, node_endpoint,

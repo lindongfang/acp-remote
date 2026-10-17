@@ -152,18 +152,6 @@ struct NodePair {
     /// `--mode access` 时用户提供的 Owner 配对 URL（`--mode owner` 必须省略）。
     #[arg(long, value_name = "URL")]
     pairing_url: Option<String>,
-    /// 本节点在对端界面上的展示名（≤128 字符）。
-    #[arg(long, value_name = "NAME")]
-    display_name: Option<String>,
-    /// 本机允许授予的 grant 上限（逗号分隔，可重复）。
-    #[arg(long = "grant", value_delimiter = ',', value_name = "GRANT")]
-    grant: Vec<String>,
-    /// 该 Access 节点可见的 Export 清单（可重复；一次都不给 = 空清单，该节点看不到任何 Export）。
-    ///
-    /// 清单只收窄可见性：它不绕过 Export 的 `scopes` 与该节点 grants 的交集，也不影响 Node Link 的
-    /// 握手与连接（空清单的节点仍能配对、握手，只是 catalog 为空）。
-    #[arg(long = "export-id", value_name = "ID")]
-    export_id: Vec<String>,
     /// 非交互场景必须给出：64 位小写 hex 指纹，与 `node.pair.status` 的返回值逐字匹配。
     #[arg(long, value_name = "HEX")]
     fingerprint: Option<String>,
@@ -775,9 +763,8 @@ mod tests {
         assert!(Cli::try_parse_from(["acp-remote", "daemon"]).is_err());
     }
 
-    /// 配对参数面（§5.3/§5.4/§5.8）：设备方向只接受 `--fingerprint`/`--expires-in-ms`，节点方向保留
-    /// `--mode`/`--pairing-url`/`--display-name`/`--grant`/`--export-id`；被删掉的授权词汇与短验证码开关
-    /// 必须**报用法错误**（clap 拒绝未知参数，不得静默忽略）。
+    /// 配对参数面（§5.3/§5.4/§5.8）：设备方向只接受 `--fingerprint`/`--expires-in-ms`，节点方向只接受
+    /// `--mode`/`--pairing-url`/`--fingerprint`；授权词汇、Export 清单与展示名参数都必须**报用法错误**。
     #[test]
     fn the_pair_flags_reject_the_removed_vocabulary() {
         for rejected in [
@@ -787,6 +774,9 @@ mod tests {
             vec!["acp-remote", "node", "pair", "--sas", "481502"],
             vec!["acp-remote", "node", "pair", "--request", "session.read"],
             vec!["acp-remote", "node", "pair", "--pack", "pack.read"],
+            vec!["acp-remote", "node", "pair", "--grant", "grant.observe"],
+            vec!["acp-remote", "node", "pair", "--export-id", "export-1"],
+            vec!["acp-remote", "node", "pair", "--display-name", "N"],
         ] {
             assert!(
                 Cli::try_parse_from(rejected.clone()).is_err(),
@@ -806,19 +796,7 @@ mod tests {
                 "--expires-in-ms",
                 "60000",
             ],
-            vec![
-                "acp-remote",
-                "node",
-                "pair",
-                "--mode",
-                "owner",
-                "--display-name",
-                "N",
-                "--grant",
-                "grant.session.read",
-                "--export-id",
-                "export-1",
-            ],
+            vec!["acp-remote", "node", "pair", "--mode", "owner"],
             vec!["acp-remote", "node", "pair", "--fingerprint", "ab12"],
         ] {
             assert!(

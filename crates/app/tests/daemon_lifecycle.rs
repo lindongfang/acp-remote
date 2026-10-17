@@ -116,8 +116,6 @@ fn a_fresh_start_takes_the_lock_creates_the_endpoint_and_imports_the_seeds() {
     // `local_configuration_survives_a_restart_and_seeds_are_not_reimported` 判定）。
     assert_eq!(status["counts"]["devices"], json!(0));
     assert_eq!(status["counts"]["nodes"], json!(0));
-    assert_eq!(status["counts"]["exports"], json!(0));
-    assert_eq!(status["counts"]["imports"], json!(0));
     assert_eq!(
         status["agents"],
         json!([{ "agentId": "codex", "available": true }])
@@ -245,51 +243,17 @@ fn local_configuration_survives_a_restart_and_seeds_are_not_reimported() {
     assert!(second.stop().success());
 }
 
-/// R8/R9：`daemon.status.counts` 与持久记录一致（用 `export.list`/`device.list`/`import.list` 交叉验证）。
+/// R8/R9：`daemon.status.counts` 与持久记录一致（用 `device.list` 交叉验证）。
 #[test]
 fn status_counts_follow_persisted_records() {
     let mut daemon = Daemon::configure("counts", &seed_profile("codex", true));
     daemon.start();
 
-    let workspace_root = daemon.root().join("workspace");
-    std::fs::create_dir_all(&workspace_root).expect("工作区目录");
-    let directory_id = support::seed_directory_blocking(&daemon.data_dir(), &workspace_root);
-    daemon.ok(
-        Method::ExportCreate,
-        params_of(json!({
-            "exportId": "export-1",
-            "displayName": "Export One",
-            "agentIds": ["codex"],
-            "workspaceDirectories": [{ "directoryId": directory_id }],
-            "defaultWorkspaceDirectory": directory_id,
-            "templates": [{
-                "templateId": "template-1",
-                "displayName": "Template One",
-                "workspaceDirectory": directory_id,
-                "params": [],
-            }],
-            "defaultTemplateId": "template-1",
-            "scopes": ["grant.session.read"],
-            "cachePolicy": "no-content-cache",
-        })),
-    );
-
     let status = daemon.ok_value(Method::DaemonStatus, params());
-    let exports = daemon.ok_value(Method::ExportList, params());
     let devices = daemon.ok_value(Method::DeviceList, params());
-    let imports = daemon.ok_value(Method::ImportList, params());
-    assert_eq!(
-        status["counts"]["exports"].as_u64().expect("exports"),
-        exports["exports"].as_array().expect("exports 数组").len() as u64
-    );
-    assert_eq!(status["counts"]["exports"], json!(1));
     assert_eq!(
         status["counts"]["devices"].as_u64().expect("devices"),
         devices["devices"].as_array().expect("devices 数组").len() as u64
-    );
-    assert_eq!(
-        status["counts"]["imports"].as_u64().expect("imports"),
-        imports["imports"].as_array().expect("imports 数组").len() as u64
     );
     assert_eq!(status["counts"]["nodes"], json!(0));
 

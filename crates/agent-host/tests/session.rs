@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use acp_core::model::{
-    AgentId, AgentProfile, AgentRef, AgentSessionId, CreateSessionRequest, ExportId,
+    AgentId, AgentProfile, AgentRef, AgentSessionId, CreateSessionRequest,
     InteractionResolution, NodeId, OriginEpoch, OwnedSessionRef, PermissionDecision,
     PermissionDecisionKind, PortError, PromptContentBlock, RemoteSessionRef, ResourceOrigin,
     ResumeSessionRequest, SessionId, SessionReference, UnavailableKind,
@@ -638,7 +638,6 @@ async fn session_mapping_covers_create_open_and_unknown_references() {
     // imported（Remote）会话不归本 crate。
     let remote = SessionReference::Remote(RemoteSessionRef {
         owner_node_id: NodeId::new("44444444-4444-4444-8444-444444444444").expect("node"),
-        export_id: ExportId::new("export-1").expect("export"),
         session_id: session_id(SESSION),
     });
     let imported = outcome_error(host.open(remote, collector.sink()).await);

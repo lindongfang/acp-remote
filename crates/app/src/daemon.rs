@@ -495,8 +495,6 @@ impl AppDaemonControl {
         DaemonCounts {
             devices: count(self.core.devices(&actor).await, "devices"),
             nodes: count(self.core.nodes(&actor).await, "nodes"),
-            exports: count(self.core.exports(&actor).await, "exports"),
-            imports: count(self.core.imports(&actor).await, "imports"),
         }
     }
 
@@ -1572,6 +1570,7 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         pairing: Arc::new(PairingSessions::new(
             Arc::clone(composition.authority()),
             composition.config().public_origin.clone(),
+            composition.config().node_name.clone(),
             // `node.revoke`/`export.revoke` 持久提交后的通知缝：真实实现（推送 + 4410 关闭），
             // 不再是「只记日志」的桩（`design.md` D7）。`device.revoke` 关的是 Sync 的连接注册表。
             Arc::new(net_ingress.connection_closer()),

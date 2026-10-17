@@ -385,6 +385,9 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         vec!["node", "pair", "--sas", "481502"],
         vec!["node", "pair", "--request", "session.read"],
         vec!["node", "pair", "--pack", "pack.read"],
+        vec!["node", "pair", "--grant", "grant.observe"],
+        vec!["node", "pair", "--export-id", "export-1"],
+        vec!["node", "pair", "--display-name", "Node"],
     ] {
         let run = run_cli(
             "pair-removed-flags",
@@ -461,8 +464,6 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
             "access",
             "--pairing-url",
             "https://owner.example.invalid/#s=x",
-            "--display-name",
-            "Node",
             "--fingerprint",
             &fingerprint,
         ],

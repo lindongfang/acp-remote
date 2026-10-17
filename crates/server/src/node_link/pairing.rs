@@ -33,10 +33,10 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use identity_auth::{
     Authority, CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection,
     ClaimedPairing, NodeEndpoint, NodeLinkPairingOwnerProof, NodeLinkPairingStatus, P1363Signature,
-    PairingProof, PairingRequestMaterial, RequestedCapabilities,
+    PairingProof, PairingRequestMaterial,
 };
 use node_link_protocol::common::{
-    Base64Url, GrantList, GrantName, NodeName, Nullable, ProtocolVersionV1, RawObject, Timestamp,
+    Base64Url, NodeName, Nullable, ProtocolVersionV1, RawObject, Timestamp,
     Uuid,
 };
 use node_link_protocol::error::{Body as ErrorBody, ErrorCode};
@@ -217,12 +217,6 @@ impl PairingHttp {
             host_binding: input.endpoint.clone(),
             public_key: input.public_key.clone(),
             client_nonce: input.client_nonce.clone(),
-            // claim 请求不带请求集合（§13.2 的字段表里没有 scopes/grants）：认领方请求的就是登记值本身，
-            // 因此两侧都用配对行登记的集合——幂等比对与「不得超出登记值」的判定因此同源。
-            requested: RequestedCapabilities {
-                scopes: record.requested_scopes().clone(),
-                grants: record.requested_grants().clone(),
-            },
             proof: input.proof,
         };
         let existing = view.peer.as_ref().map(|peer| claimed_pairing(record, peer));
@@ -460,17 +454,10 @@ impl PairingHttp {
         let (node_block, owner_block) = if status == PairingStatus::Approved {
             let node = node?;
             let owner_public_key = self.authority.node_public_key().await.ok()?;
-            let grants = node
-                .grants()
-                .iter()
-                .map(GrantName::from_str)
-                .collect::<Result<Vec<_>, _>>()
-                .ok()?;
             (
                 Some(NodeBlock {
                     access_node_id: Uuid::parse(node.node_id().as_str()).ok()?,
                     name: NodeName::parse(node.display_name()).ok()?,
-                    scopes: GrantList::new(grants).ok()?,
                 }),
                 Some(OwnerBlock {
                     owner_node_id: Uuid::parse(self.authority.local_node().as_str()).ok()?,
@@ -627,10 +614,6 @@ fn claimed_pairing(record: &PairingRecord, peer: &PairingPeer) -> ClaimedPairing
         public_key: peer.public_key().clone(),
         host_binding: peer.host_binding().to_owned(),
         client_nonce: peer.client_nonce().clone(),
-        requested: RequestedCapabilities {
-            scopes: record.requested_scopes().clone(),
-            grants: record.requested_grants().clone(),
-        },
     }
 }
 

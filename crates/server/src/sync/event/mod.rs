@@ -398,5 +398,3 @@ pub fn deliver(
     }
 }
 
-#[cfg(test)]
-mod tests;

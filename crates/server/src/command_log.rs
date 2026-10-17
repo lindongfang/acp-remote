@@ -226,7 +226,6 @@ impl Cause {
                 | UnavailableKind::IoError
                 | UnavailableKind::RemoteUnavailable
                 | UnavailableKind::OwnerOffline
-                | UnavailableKind::ExportRevoked
                 | UnavailableKind::KeystoreUnavailable => Self::Unavailable,
             },
             PortError::Corrupt(_) => Self::Corrupt,

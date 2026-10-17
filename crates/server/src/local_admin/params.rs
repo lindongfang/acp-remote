@@ -17,11 +17,10 @@
 use std::path::{Component, Path, PathBuf};
 
 use acp_core::model::{
-    AgentId, AuditAction, CachePolicy, ConflictKind, DeviceId, ExportId, ExportRecord,
-    ExportTemplate, GrantSet, ImportId, NodeId, PairingId, PairingRecord, PairingState, PortError,
-    TemplateId, Timestamp, DirectoryId, WorkspaceDirectoryEntry,
+    AgentId, AuditAction, ConflictKind, DeviceId, NodeId, PairingId, PairingRecord, PairingState,
+    PortError, Timestamp,
 };
-use identity_auth::{PairingError, authorization};
+use identity_auth::PairingError;
 use serde_json::Value;
 
 use crate::local_admin::daemon::MAX_STOP_GRACE_MS;
@@ -210,149 +209,6 @@ pub fn daemon_stop(params: &JsonObject) -> Result<Option<u64>, AdminError> {
 
 // ---------------------------------------------------------------------------------------------
 // workspace.select / agent.configure / provider.configure（§5.2）
-pub fn export_create(
-    params: &JsonObject,
-    created_at: Timestamp,
-) -> Result<ExportRecord, AdminError> {
-    reject_unknown_fields(
-        params,
-        &[
-            "exportId",
-            "displayName",
-            "agentIds",
-            "workspaceDirectories",
-            "defaultWorkspaceDirectory",
-            "templates",
-            "defaultTemplateId",
-            "scopes",
-            "cachePolicy",
-        ],
-    )?;
-
-    let export_id_text = string(params, "exportId")?;
-    let export_id = ExportId::new(&export_id_text)
-        .map_err(|error| from_invalid("parameter `exportId`", error))?;
-    let display = display_name(params, "displayName")?;
-
-    let agent_ids_raw = strings(params, "agentIds")?;
-    if agent_ids_raw.len() != 1 {
-        return Err(invalid_params(
-            "parameter `agentIds` must contain exactly one agent in this slice",
-        ));
-    }
-    let agent_ids = agent_ids_raw
-        .iter()
-        .map(|text| AgentId::new(text).map_err(|error| from_invalid("parameter `agentIds`", error)))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let aliases_raw = array(params, "workspaceDirectories")?;
-    if aliases_raw.len() != 1 {
-        return Err(invalid_params(
-            "parameter `workspaceDirectories` must contain exactly one entry in this slice",
-        ));
-    }
-    let mut workspace_directories = Vec::with_capacity(aliases_raw.len());
-    for (index, entry) in aliases_raw.iter().enumerate() {
-        let entry = entry.as_object().ok_or_else(|| {
-            invalid_params(format!("`workspaceDirectories[{index}]` must be an object"))
-        })?;
-        reject_unknown_fields(entry, &["directoryId"])?;
-        let alias_text = string(entry, "directoryId")?;
-        let alias = DirectoryId::new(&alias_text)
-            .map_err(|error| from_invalid(&format!("`workspaceDirectories[{index}].alias`"), error))?;
-        workspace_directories.push(
-            WorkspaceDirectoryEntry::try_new(alias)
-                .map_err(|error| from_invalid("`workspaceDirectories`", error))?,
-        );
-    }
-
-    let default_alias_text = string(params, "defaultWorkspaceDirectory")?;
-    let default_workspace_directory = DirectoryId::new(&default_alias_text)
-        .map_err(|error| from_invalid("parameter `defaultWorkspaceDirectory`", error))?;
-
-    let templates_raw = array(params, "templates")?;
-    if templates_raw.len() != 1 {
-        return Err(invalid_params(
-            "parameter `templates` must contain exactly one template in this slice",
-        ));
-    }
-    let mut templates = Vec::with_capacity(templates_raw.len());
-    for (index, entry) in templates_raw.iter().enumerate() {
-        let entry = entry
-            .as_object()
-            .ok_or_else(|| invalid_params(format!("`templates[{index}]` must be an object")))?;
-        reject_unknown_fields(
-            entry,
-            &["templateId", "displayName", "workspaceDirectory", "params"],
-        )?;
-        let template_id_text = string(entry, "templateId")?;
-        let template_id = TemplateId::new(&template_id_text)
-            .map_err(|error| from_invalid(&format!("`templates[{index}].templateId`"), error))?;
-        let workspace_directory_text = string(entry, "workspaceDirectory")?;
-        let workspace_directory = DirectoryId::new(&workspace_directory_text).map_err(|error| {
-            from_invalid(&format!("`templates[{index}].workspaceDirectory`"), error)
-        })?;
-        // §5.5：首切片的 template 不得声明参数（有参 template 属 `post_mvp`，不能静默忽略）。
-        if !array(entry, "params")?.is_empty() {
-            return Err(invalid_params(format!(
-                "`templates[{index}].params` must be empty in this slice"
-            )));
-        }
-        templates.push(
-            ExportTemplate::try_new(
-                template_id,
-                &display_name(entry, "displayName")?,
-                workspace_directory,
-                Vec::new(),
-            )
-            .map_err(|error| from_invalid(&format!("`templates[{index}]`"), error))?,
-        );
-    }
-
-    let default_template_text = string(params, "defaultTemplateId")?;
-    let default_template_id = TemplateId::new(&default_template_text)
-        .map_err(|error| from_invalid("parameter `defaultTemplateId`", error))?;
-
-    let scopes = GrantSet::try_from_iter(strings(params, "scopes")?)
-        .map_err(|error| from_invalid("parameter `scopes`", error))?;
-
-    let cache_policy_text = string(params, "cachePolicy")?;
-    if cache_policy_text != CachePolicy::NoContentCache.as_str() {
-        return Err(invalid_params(
-            "parameter `cachePolicy` must be `no-content-cache` in v1",
-        ));
-    }
-
-    ExportRecord::try_new(
-        export_id,
-        &display,
-        agent_ids,
-        workspace_directories,
-        default_workspace_directory,
-        templates,
-        default_template_id,
-        scopes,
-        CachePolicy::NoContentCache,
-        created_at,
-        None,
-    )
-    .map_err(|error| from_invalid("export request", error))
-}
-
-/// `export.revoke`（§5.5）：`{ exportId }`。
-pub fn export_revoke(params: &JsonObject) -> Result<ExportId, AdminError> {
-    reject_unknown_fields(params, &["exportId"])?;
-    let text = string(params, "exportId")?;
-    ExportId::new(&text).map_err(|error| from_invalid("parameter `exportId`", error))
-}
-
-/// `import.remove`（§5.5）：`{ importId }`。
-pub fn import_remove(params: &JsonObject) -> Result<ImportId, AdminError> {
-    reject_unknown_fields(params, &["importId"])?;
-    let text = string(params, "importId")?;
-    ImportId::new(&text).map_err(|error| from_invalid("parameter `importId`", error))
-}
-
 // ---------------------------------------------------------------------------------------------
 // audit.export（§5.6）
 // ---------------------------------------------------------------------------------------------
@@ -449,7 +305,7 @@ pub struct DevicePairBegin {
 ///
 /// 设备配对**不提交任何授权词汇**（`pairing-model` 删除设备权限层）：配对不授予授权，因此
 /// `requestedPacks`/`requestedScopes` 之类的键不再是本方法的输入，出现即 `local.invalid_params`
-/// （`params` 是 closed object）。授权展开只剩跨节点的导出授权（`node.pair.*` 的 `requestedGrants`）。
+/// （`params` 是 closed object）。节点配对同样不携带授权集合。
 pub fn device_pair_begin(params: &JsonObject) -> Result<DevicePairBegin, AdminError> {
     reject_unknown_fields(params, &["expiresInMs"])?;
     Ok(DevicePairBegin {
@@ -461,12 +317,7 @@ pub fn device_pair_begin(params: &JsonObject) -> Result<DevicePairBegin, AdminEr
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodePairBegin {
     /// `mode = "owner"`：本节点创建一次性配对并返回二维码 URL。
-    Owner {
-        /// 本节点向对端宣告的展示名（`nodeName`）。
-        display_name: String,
-        /// 本机允许授予的 `grant.*` 上限（`node.pair.confirm` 的最终集合必须落在它之内）。
-        grants: GrantSet,
-    },
+    Owner,
     /// `mode = "access"`：本切片不支持（路由层回 `local.unsupported`，不发任何出站请求）。
     Access,
 }
@@ -476,14 +327,8 @@ pub enum NodePairBegin {
 /// `mode = "access"` 时**不继续解析**其余字段：本切片不实现该模式，把「不支持」报成「参数非法」
 /// 会误导调用方（§5.4 的 `mode = "access"` 分支与 `node.rotate-key.begin` 同类）。
 ///
-/// `requestedGrants` 在两个模式下都是**本机登记的授权上限**：`owner` 模式下对端尚未认领，本机必须先
-/// 登记一个上限，`node.pair.confirm` 的最终 grants 才能通过「不得超出请求集合」的校验（§5.4 的确认
-/// 场景要求确认后记录带初始 `grant.*`）。
 pub fn node_pair_begin(params: &JsonObject) -> Result<NodePairBegin, AdminError> {
-    reject_unknown_fields(
-        params,
-        &["mode", "pairingUrl", "displayName", "requestedGrants"],
-    )?;
+    reject_unknown_fields(params, &["mode", "pairingUrl"])?;
     let mode = string(params, "mode")?;
     match mode.as_str() {
         "access" => Ok(NodePairBegin::Access),
@@ -493,19 +338,7 @@ pub fn node_pair_begin(params: &JsonObject) -> Result<NodePairBegin, AdminError>
                     "node.pair.begin: `pairingUrl` must be null when `mode` is `owner`",
                 ));
             }
-            let display_name = display_name(params, "displayName")?;
-            let requested = GrantSet::try_from_iter(strings(params, "requestedGrants")?)
-                .map_err(|error| from_invalid("parameter `requestedGrants`", error))?;
-            let expanded = authorization::expand_node_request(
-                &requested.iter().map(str::to_owned).collect::<Vec<_>>(),
-            )
-            .map_err(|_| {
-                invalid_params("node.pair.begin: `requestedGrants` must name known grants")
-            })?;
-            Ok(NodePairBegin::Owner {
-                display_name,
-                grants: expanded.grants,
-            })
+            Ok(NodePairBegin::Owner)
         }
         _ => Err(invalid_params(
             "parameter `mode` must be `owner` or `access`",
@@ -523,7 +356,7 @@ pub struct DevicePairConfirm {
 /// `device.pair.confirm`（§5.3）：只接受 `{ pairingId }`。
 ///
 /// 设备配对不授予授权，因此确认**不接受**任何授权集合参数（`scopes` 之类出现即
-/// `local.invalid_params`）；节点配对的 `grants`/`exportIds` 不受影响（`node.pair.confirm`）。
+/// `local.invalid_params`）；节点确认同样不接受任何授权集合。
 pub fn device_pair_confirm(params: &JsonObject) -> Result<DevicePairConfirm, AdminError> {
     reject_unknown_fields(params, &["pairingId"])?;
     let pairing_id = pairing_id_field(params)?;
@@ -535,35 +368,13 @@ pub fn device_pair_confirm(params: &JsonObject) -> Result<DevicePairConfirm, Adm
 pub struct NodePairConfirm {
     /// 配对目标。
     pub pairing_id: PairingId,
-    /// 用户确认的最终 `grant.*` 集合（不是请求值）。
-    pub grants: GrantSet,
-    /// 用户确认的可见 Export 清单（`exportIds`）：**必填**，可为空数组（空清单 = 该节点看不到任何
-    /// Export）；已去重、字典序（与落盘、`node.list` 回显同一份顺序）。条目是否存在/未撤销/与本次
-    /// grants 相交由存储层的落定事务校验（`design.md` D4）。
-    pub export_ids: Vec<ExportId>,
 }
 
-/// `node.pair.confirm`（§5.4）：`{ pairingId, grants, exportIds }`；节点配对不带 scopes（未知字段即拒绝）。
-/// `exportIds` 是**必需**字段：缺失或不是字符串数组一律 `local.invalid_params`（§5.4 的「必填」由守护
-/// 进程运行期强制；`envelope.schema.json` 只把 `params` 建模为通用对象，不表达逐方法形状）。
+/// `node.pair.confirm`（§5.4）：只接受 `{ pairingId }`；任何授权集合字段都按未知字段拒绝。
 pub fn node_pair_confirm(params: &JsonObject) -> Result<NodePairConfirm, AdminError> {
-    reject_unknown_fields(params, &["pairingId", "grants", "exportIds"])?;
+    reject_unknown_fields(params, &["pairingId"])?;
     let pairing_id = pairing_id_field(params)?;
-    let grants = GrantSet::try_from_iter(strings(params, "grants")?)
-        .map_err(|error| from_invalid("parameter `grants`", error))?;
-    let mut export_ids = strings(params, "exportIds")?
-        .into_iter()
-        .map(|id| ExportId::new(&id).map_err(|error| from_invalid("parameter `exportIds`", error)))
-        .collect::<Result<Vec<ExportId>, AdminError>>()?;
-    // 与 `NodeRecord` 的构造归一化同口径（集合语义）：重复项去掉、按字典序排序，因此本次 `result`
-    // 回显的清单与 `node.list` 的落盘值逐项一致。
-    export_ids.sort();
-    export_ids.dedup();
-    Ok(NodePairConfirm {
-        pairing_id,
-        grants,
-        export_ids,
-    })
+    Ok(NodePairConfirm { pairing_id })
 }
 
 /// `device.pair.reject` / `node.pair.reject` 的已校验参数（§5.3/§5.4）。
@@ -650,24 +461,6 @@ fn expired(operation: &str) -> AdminError {
         LocalErrorCode::Expired,
         format!("{operation}: pairing has expired or was rejected"),
     )
-}
-
-/// 用户确认的最终集合不得超出请求集合（§5.3/§5.4）：越界是**参数非法**（不是状态冲突），
-/// 与 `local.invalid_params` 的「越界」定义一致（§6）。
-pub fn require_confirm_subset<'a>(
-    operation: &str,
-    field: &str,
-    granted: impl Iterator<Item = &'a str>,
-    requested: impl Iterator<Item = &'a str>,
-) -> Result<(), AdminError> {
-    let requested: Vec<&str> = requested.collect();
-    if granted.into_iter().all(|name| requested.contains(&name)) {
-        Ok(())
-    } else {
-        Err(invalid_params(format!(
-            "{operation}: `{field}` must not exceed the requested set"
-        )))
-    }
 }
 
 /// `expiresInMs`（§5.3）：`null` = 用满 5 分钟；非空时 `1..=PAIRING_WINDOW_MS`（只能收窄）。
@@ -786,359 +579,3 @@ pub fn map_pairing_error(operation: &str, error: PairingError) -> AdminError {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use serde_json::json;
-
-    use super::*;
-    use crate::local_admin::test_support::TempDir;
-
-    const TS: &str = "2026-09-18T09:12:03.412Z";
-
-    fn params(value: serde_json::Value) -> JsonObject {
-        match value {
-            Value::Object(map) => map,
-            other => panic!("测试参数必须是 object：{other}"),
-        }
-    }
-
-    fn temp_directory() -> TempDir {
-        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        TempDir::new(&format!(
-            "acpr-wp3b1-params-{}-{sequence}",
-            std::process::id()
-        ))
-    }
-
-    fn code_of(error: AdminError) -> LocalErrorCode {
-        error.code()
-    }
-
-    // ---------------------------------------------------------------- daemon.*
-
-    #[test]
-    fn daemon_status_rejects_any_parameter() {
-        assert!(daemon_status(&JsonObject::new()).is_ok());
-        assert_eq!(
-            code_of(daemon_status(&params(json!({"graceMs": 1}))).expect_err("未知字段")),
-            LocalErrorCode::InvalidParams
-        );
-    }
-
-    #[test]
-    fn daemon_stop_checks_the_grace_bounds() {
-        assert_eq!(
-            daemon_stop(&params(json!({"graceMs": null}))).unwrap(),
-            None
-        );
-        assert_eq!(
-            daemon_stop(&params(json!({"graceMs": 0}))).unwrap(),
-            Some(0)
-        );
-        assert_eq!(
-            daemon_stop(&params(json!({"graceMs": 60_000}))).unwrap(),
-            Some(60_000)
-        );
-        for rejected in [
-            json!({"graceMs": 60_001}),
-            json!({"graceMs": -1}),
-            json!({"graceMs": 1.5}),
-            json!({"graceMs": "100"}),
-            json!({}),
-        ] {
-            assert_eq!(
-                code_of(daemon_stop(&params(rejected.clone())).expect_err(&rejected.to_string())),
-                LocalErrorCode::InvalidParams,
-                "{rejected}"
-            );
-        }
-    }
-    fn valid_export_params() -> serde_json::Value {
-        json!({
-            "exportId": "export-1",
-            "displayName": "Export One",
-            "agentIds": ["codex"],
-            "workspaceDirectories": [{ "directoryId": "0123456789abcdef0123456789abcdef" }],
-            "defaultWorkspaceDirectory": "0123456789abcdef0123456789abcdef",
-            "templates": [{
-                "templateId": "template-1",
-                "displayName": "Template One",
-                "workspaceDirectory": "0123456789abcdef0123456789abcdef",
-                "params": [],
-            }],
-            "defaultTemplateId": "template-1",
-            "scopes": ["grant.session.read"],
-            "cachePolicy": "no-content-cache",
-        })
-    }
-
-    fn created_at() -> Timestamp {
-        Timestamp::new(TS).expect("timestamp")
-    }
-
-    #[test]
-    fn export_create_accepts_the_documented_shape() {
-        let record =
-            export_create(&params(valid_export_params()), created_at()).expect("合法参数必须通过");
-        assert_eq!(record.export_id().as_str(), "export-1");
-        assert_eq!(record.agent_ids().len(), 1);
-        assert_eq!(record.workspace_directories().len(), 1);
-        assert_eq!(record.templates().len(), 1);
-        assert!(record.templates()[0].params().is_empty());
-        assert_eq!(record.scopes().len(), 1);
-        assert!(!record.is_revoked());
-        assert_eq!(record.created_at().as_str(), TS);
-    }
-
-    #[test]
-    fn export_create_enforces_the_single_slice_rules() {
-        let mut two_agents = valid_export_params();
-        two_agents["agentIds"] = json!(["codex", "omp"]);
-        let mut no_agent = valid_export_params();
-        no_agent["agentIds"] = json!([]);
-        let mut two_aliases = valid_export_params();
-        two_aliases["workspaceDirectories"] = json!([
-            { "alias": "project", "displayName": "Project" },
-            { "alias": "other", "displayName": "Other" },
-        ]);
-        let mut two_templates = valid_export_params();
-        two_templates["templates"] = json!([
-            { "templateId": "t1", "displayName": "T1", "workspaceDirectory": "project", "params": [] },
-            { "templateId": "t2", "displayName": "T2", "workspaceDirectory": "project", "params": [] },
-        ]);
-        let mut with_params = valid_export_params();
-        with_params["templates"][0]["params"] = json!([
-            { "name": "task", "type": "string", "required": true, "pattern": null, "enum": null },
-        ]);
-        let mut bad_cache_policy = valid_export_params();
-        bad_cache_policy["cachePolicy"] = json!("content-cache");
-        let mut unknown_alias = valid_export_params();
-        unknown_alias["defaultWorkspaceDirectory"] = json!("other");
-        let mut unknown_template = valid_export_params();
-        unknown_template["defaultTemplateId"] = json!("other");
-        let mut template_alias_mismatch = valid_export_params();
-        template_alias_mismatch["templates"][0]["workspaceDirectory"] = json!("other");
-        let mut bad_scope = valid_export_params();
-        bad_scope["scopes"] = json!(["session.read"]);
-        let mut unknown_field = valid_export_params();
-        unknown_field["extra"] = json!(1);
-        let mut missing_field = valid_export_params();
-        missing_field
-            .as_object_mut()
-            .expect("object")
-            .remove("scopes");
-
-        for (label, rejected) in [
-            ("agentIds 恰好 1 项", two_agents),
-            ("agentIds 非空", no_agent),
-            ("workspaceDirectories 恰好 1 项", two_aliases),
-            ("templates 恰好 1 项", two_templates),
-            ("params 必须为空", with_params),
-            ("cachePolicy 固定值", bad_cache_policy),
-            ("defaultWorkspaceDirectory 一致性", unknown_alias),
-            ("defaultTemplateId 一致性", unknown_template),
-            (
-                "template 的 alias 必须在 aliases 内",
-                template_alias_mismatch,
-            ),
-            ("scopes 必须是 grant.*", bad_scope),
-            ("未知字段", unknown_field),
-            ("缺字段", missing_field),
-        ] {
-            assert_eq!(
-                code_of(
-                    export_create(&params(rejected.clone()), created_at())
-                        .expect_err(&format!("{label}: {rejected}"))
-                ),
-                LocalErrorCode::InvalidParams,
-                "{label}"
-            );
-        }
-    }
-
-    #[test]
-    fn export_revoke_and_import_remove_validate_the_id_shape() {
-        assert_eq!(
-            export_revoke(&params(json!({"exportId": "export-1"})))
-                .expect("合法")
-                .as_str(),
-            "export-1"
-        );
-        assert_eq!(
-            import_remove(&params(json!({"importId": "import-1"})))
-                .expect("合法")
-                .as_str(),
-            "import-1"
-        );
-        for rejected in [json!({}), json!({"exportId": ""}), json!({"exportId": 1})] {
-            assert_eq!(
-                code_of(export_revoke(&params(rejected.clone())).expect_err("必须被拒")),
-                LocalErrorCode::InvalidParams,
-                "{rejected}"
-            );
-        }
-        for rejected in [
-            json!({}),
-            json!({"importId": "bad id"}),
-            json!({"importId": null}),
-        ] {
-            assert_eq!(
-                code_of(import_remove(&params(rejected.clone())).expect_err("必须被拒")),
-                LocalErrorCode::InvalidParams,
-                "{rejected}"
-            );
-        }
-    }
-
-    // ---------------------------------------------------------------- audit.export
-
-    #[test]
-    fn audit_export_parses_filters_and_rejects_bad_shapes() {
-        // `outputPath` 的绝对路径判定是平台语义（`Path::is_absolute`）：测试值按平台给出。
-        #[cfg(windows)]
-        fn abs_output(ext: &str) -> String {
-            format!("D:\\audit\\export.{ext}")
-        }
-        #[cfg(not(windows))]
-        fn abs_output(ext: &str) -> String {
-            format!("/tmp/acpr-audit-export.{ext}")
-        }
-
-        let parsed = audit_export(&params(json!({
-            "outputPath": abs_output("jsonl"),
-            "format": "jsonl",
-            "since": TS,
-            "until": null,
-            "categories": ["device.revoked", "provider.configured", "device.revoked"],
-        })))
-        .expect("合法参数必须通过");
-        assert_eq!(parsed.format, AuditFormat::Jsonl);
-        assert_eq!(parsed.since.expect("since").as_str(), TS);
-        assert_eq!(parsed.until, None);
-        assert_eq!(
-            parsed.categories,
-            vec![AuditAction::DeviceRevoked, AuditAction::ProviderConfigured],
-            "类别去重且保序"
-        );
-
-        let empty_categories = audit_export(&params(json!({
-            "outputPath": abs_output("csv"),
-            "format": "csv",
-            "since": null,
-            "until": null,
-            "categories": [],
-        })))
-        .expect("空类别数组合法");
-        assert!(empty_categories.categories.is_empty());
-
-        for rejected in [
-            json!({ "outputPath": "relative/path.jsonl", "format": "jsonl", "since": null, "until": null, "categories": [] }),
-            json!({ "outputPath": "D:\\a.jsonl", "format": "yaml", "since": null, "until": null, "categories": [] }),
-            json!({ "outputPath": "D:\\a.jsonl", "format": "jsonl", "since": "2026-09-18", "until": null, "categories": [] }),
-            json!({ "outputPath": "D:\\a.jsonl", "format": "jsonl", "since": null, "until": null, "categories": ["nope"] }),
-            json!({ "outputPath": "D:\\a.jsonl", "format": "jsonl", "since": null, "until": null }),
-            json!({ "outputPath": "D:\\a.jsonl", "format": "jsonl", "since": null, "until": null, "categories": [], "extra": 1 }),
-        ] {
-            assert_eq!(
-                code_of(audit_export(&params(rejected.clone())).expect_err(&rejected.to_string())),
-                LocalErrorCode::InvalidParams,
-                "{rejected}"
-            );
-        }
-        assert_eq!(AuditFormat::parse("jsonl"), Some(AuditFormat::Jsonl));
-        assert_eq!(AuditFormat::parse("csv"), Some(AuditFormat::Csv));
-        assert_eq!(AuditFormat::parse("yaml"), None);
-    }
-
-    // ---------------------------------------------------------------- PortError 映射
-
-    #[test]
-    fn port_errors_map_to_the_documented_local_codes() {
-        let cases: Vec<(&str, PortError, LocalErrorCode)> = vec![
-            (
-                "not_found",
-                PortError::NotFound(acp_core::model::EntityRef::Export(
-                    ExportId::new("export-1").expect("export id"),
-                )),
-                LocalErrorCode::NotFound,
-            ),
-            (
-                "conflict",
-                PortError::Conflict(ConflictKind::AlreadyExists),
-                LocalErrorCode::Conflict,
-            ),
-            (
-                "expired",
-                PortError::Conflict(ConflictKind::Expired),
-                LocalErrorCode::Expired,
-            ),
-            (
-                "unavailable",
-                PortError::Unavailable(acp_core::model::UnavailableKind::KeystoreUnavailable),
-                LocalErrorCode::Unavailable,
-            ),
-            (
-                "invalid_request",
-                PortError::InvalidRequest("authorization.scope_denied"),
-                LocalErrorCode::InvalidParams,
-            ),
-            (
-                "corrupt",
-                PortError::Corrupt("owned_workspace row is malformed"),
-                LocalErrorCode::Internal,
-            ),
-            (
-                "backend",
-                PortError::Backend(Box::new(std::io::Error::other(
-                    "SELECT * FROM owned_workspace failed at D:\\secret\\db.sqlite",
-                ))),
-                LocalErrorCode::Internal,
-            ),
-        ];
-        for (label, error, expected) in cases {
-            let mapped = map_port_error("export.create", error);
-            assert_eq!(mapped.code(), expected, "{label}");
-            assert!(mapped.message().starts_with("export.create: "), "{label}");
-            assert!(mapped.message().len() <= 512, "{label}");
-        }
-
-        for kind in ConflictKind::ALL {
-            let expected = if kind == ConflictKind::Expired {
-                LocalErrorCode::Expired
-            } else {
-                LocalErrorCode::Conflict
-            };
-            assert_eq!(
-                map_port_error("export.list", PortError::Conflict(kind)).code(),
-                expected,
-                "{kind}"
-            );
-        }
-        for kind in acp_core::model::UnavailableKind::ALL {
-            assert_eq!(
-                map_port_error("export.list", PortError::Unavailable(kind)).code(),
-                LocalErrorCode::Unavailable,
-                "{kind}"
-            );
-        }
-
-        // 适配器文本（SQL 与完整路径）不得被转述到消息里。
-        let leaky = map_port_error(
-            "export.list",
-            PortError::Backend(Box::new(std::io::Error::other(
-                "SELECT * FROM owned_export; D:\\secret\\db.sqlite",
-            ))),
-        );
-        assert!(!leaky.message().contains("SQL"), "{}", leaky.message());
-        assert!(!leaky.message().contains("SELECT"), "{}", leaky.message());
-        assert!(
-            !leaky.message().contains("db.sqlite"),
-            "{}",
-            leaky.message()
-        );
-    }
-}

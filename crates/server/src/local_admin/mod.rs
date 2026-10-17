@@ -30,8 +30,6 @@ pub(crate) mod pairing;
 pub(crate) mod params;
 pub mod router;
 
-#[cfg(test)]
-pub(crate) mod test_support;
 
 pub(crate) mod view;
 

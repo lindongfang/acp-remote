@@ -185,6 +185,8 @@ pub struct NodeLinkCatalogView {
     pub agents: Vec<AgentDescriptor>,
     /// 本机全部目录（已记录；路径不进 catalog）。
     pub directories: Vec<DirectoryRecord>,
+    /// 本机全部会话摘要（catalog 的 sessions 投影）。
+    pub sessions: Vec<SessionSummary>,
 }
 
 /// Node Link 会话视图（`NODE_LINK_PROTOCOL.md` §12.4 的快照元数据）。
@@ -1411,12 +1413,21 @@ impl UseCases {
         let node = self.trust.node(access_node, NodeKind::Access).await?;
         let directories = self.config.directories().await?;
         let agents = self.catalog.agents().await?;
+        let sessions = self
+            .store
+            .list(SessionQuery {
+                only: None,
+                states: Vec::new(),
+                limit: None,
+            })
+            .await?;
         let revision = self.audit.watermark().await?;
         Ok(NodeLinkCatalogView {
             revision,
             node,
             agents,
             directories,
+            sessions,
         })
     }
 

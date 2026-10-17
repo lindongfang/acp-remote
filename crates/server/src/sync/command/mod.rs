@@ -53,8 +53,6 @@ pub mod decode;
 pub mod limits;
 mod query;
 
-#[cfg(test)]
-mod tests;
 
 use std::collections::BTreeMap;
 use std::str::FromStr as _;

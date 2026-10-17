@@ -40,10 +40,6 @@ pub struct DaemonCounts {
     pub devices: u64,
     /// 已登记节点角色行数。
     pub nodes: u64,
-    /// Export 记录数（含已撤销）。
-    pub exports: u64,
-    /// Import 记录数。
-    pub imports: u64,
 }
 
 /// `daemon.status` 的 `agents[]` 条目（§5.2）。
@@ -222,8 +218,6 @@ impl DaemonCounts {
         object(vec![
             ("devices", Value::from(self.devices)),
             ("nodes", Value::from(self.nodes)),
-            ("exports", Value::from(self.exports)),
-            ("imports", Value::from(self.imports)),
         ])
     }
 }
@@ -266,8 +260,6 @@ mod tests {
             counts: DaemonCounts {
                 devices: 2,
                 nodes: 1,
-                exports: 3,
-                imports: 0,
             },
             agents: vec![DaemonAgent {
                 agent_id: AgentId::new("codex").expect("agent id"),

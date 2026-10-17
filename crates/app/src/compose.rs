@@ -28,7 +28,7 @@ use std::time::Duration;
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
     Actor, AgentProfile, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, CommittedEvent,
-    DeviceId, EndpointEvent, EntityRef, ExportId, NodeId, PortError, ServerEpoch,
+    DeviceId, EndpointEvent, EntityRef, NodeId, PortError, ServerEpoch,
     Timestamp, UnavailableKind,
 };
 use acp_core::ports::{
@@ -36,7 +36,7 @@ use acp_core::ports::{
     IdGenerator, LocalConfigStore, NodeEventSink, RetentionPolicy, SessionBackendFactory,
     SessionStore,
 };
-use acp_core::ports::{ExportStore, RemoteDeliveryStore, TrustStore};
+use acp_core::ports::{RemoteDeliveryStore, TrustStore};
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use agent_host::{AgentHost, HostConfig, NodeEvents};
 use identity_auth::{Authority, EntropySource, IdentityKeystore, PeerPublicKey, SecretPurpose};
@@ -208,7 +208,6 @@ impl Composition {
         // `Arc<dyn …>`），不在字段位置依赖隐式强制转换。
         let session_store: Arc<dyn SessionStore> = store.clone();
         let deliveries: Arc<dyn RemoteDeliveryStore> = store.clone();
-        let export_store: Arc<dyn ExportStore> = store.clone();
         let trust_store: Arc<dyn TrustStore> = store.clone();
         let audit_store: Arc<dyn AuditStore> = store.clone();
         let local_config: Arc<dyn LocalConfigStore> = store.clone();
@@ -242,7 +241,6 @@ impl Composition {
                 store: Arc::clone(&session_store),
                 deliveries: Arc::clone(&deliveries),
                 backends,
-                exports: Arc::clone(&export_store),
                 trust: Arc::clone(&trust_store),
                 publisher,
                 clock: Arc::clone(&clock),
@@ -261,7 +259,6 @@ impl Composition {
             store: session_store,
             deliveries,
             trust: trust_store,
-            exports: export_store,
             audit: audit_store,
             config: local_config,
             attachments,
@@ -760,16 +757,6 @@ impl ConnectionCloser for NodeLinkCloser {
         );
     }
 
-    async fn export_revoked(&self, export: &ExportId) {
-        let notified = self.command.export_revoked(export).await;
-        tracing::info!(
-            event = "daemon.export_revoked_notification",
-            target_kind = "export",
-            target_id = %export.as_str(),
-            notified_connections = u64::try_from(notified).unwrap_or(u64::MAX),
-            "撤销已提交：已向持有该 Export 的活跃连接推送 export.revoked"
-        );
-    }
 }
 
 /// `OwnerReachability`：Sync 面的 Owner 可达性（`sync_visible_sessions` 与快照里 `origin.online` 的输入）。

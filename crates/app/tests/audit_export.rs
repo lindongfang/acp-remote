@@ -33,29 +33,8 @@ fn audit_export_writes_the_real_file_and_reports_matching_count_and_digest() {
     let mut daemon = Daemon::configure("audit-export", &seed_profile());
     daemon.start();
 
-    // 产生 export.created 审计行。
-    let workspace_root = daemon.root().join("workspace");
-    std::fs::create_dir_all(&workspace_root).expect("工作区目录");
-    let directory_id = support::seed_directory_blocking(&daemon.data_dir(), &workspace_root);
-    daemon.ok(
-        Method::ExportCreate,
-        params_of(json!({
-            "exportId": "export-1",
-            "displayName": "Export One",
-            "agentIds": ["codex"],
-            "workspaceDirectories": [{ "directoryId": directory_id }],
-            "defaultWorkspaceDirectory": directory_id,
-            "templates": [{
-                "templateId": "template-1",
-                "displayName": "Template One",
-                "workspaceDirectory": directory_id,
-                "params": [],
-            }],
-            "defaultTemplateId": "template-1",
-            "scopes": ["grant.session.read"],
-            "cachePolicy": "no-content-cache",
-        })),
-    );
+    // 产生 pairing.created 审计行。
+    daemon.ok(Method::DevicePairBegin, params_of(json!({ "expiresInMs": null })));
 
     let output_path = daemon.root().join("audit-export.jsonl");
     let result = daemon.ok_value(
@@ -115,7 +94,7 @@ fn audit_export_writes_the_real_file_and_reports_matching_count_and_digest() {
         assert!(record["targetId"].is_string(), "{line}");
     }
     assert!(
-        actions.contains(&"export.created".to_owned()),
+        actions.contains(&"pairing.created".to_owned()),
         "{actions:?}"
     );
     assert!(
@@ -154,12 +133,12 @@ fn audit_export_writes_the_real_file_and_reports_matching_count_and_digest() {
             "format": "csv",
             "since": null,
             "until": null,
-            "categories": ["export.created"],
+            "categories": ["pairing.created"],
         })),
     );
     assert_eq!(filtered["recordCount"], json!(1));
     let csv = std::fs::read_to_string(&filtered_path).expect("CSV 导出存在");
-    assert!(csv.contains("export.created"), "{csv}");
+    assert!(csv.contains("pairing.created"), "{csv}");
 
     assert!(daemon.stop().success());
 }

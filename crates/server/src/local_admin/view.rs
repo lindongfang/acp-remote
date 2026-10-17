@@ -5,8 +5,7 @@
 //! `result` 的字段集合与 §5.2–§5.5 的表格逐项对应，未知字段不会被凭空造出来。
 
 use acp_core::model::{
-    AgentProfile, DeviceRecord, ExportId, ExportRecord, ImportRecord, NodeRecord, TemplateParam,
-    TemplateParamValue, Timestamp, DirectoryRecord,
+    AgentProfile, DeviceRecord, NodeRecord, Timestamp, DirectoryRecord,
 };
 use serde_json::Value;
 
@@ -67,103 +66,6 @@ pub(crate) fn provider(provider_id: &str, kind: &str, configured_fields: &[Strin
     ])
 }
 
-/// `export.create`／`export.list` 的 `ExportView`（§5.5）。
-pub(crate) fn export(record: &ExportRecord) -> JsonObject {
-    object(vec![
-        ("exportId", text(record.export_id().as_str())),
-
-        (
-            "agentIds",
-            Value::Array(
-                record
-                    .agent_ids()
-                    .iter()
-                    .map(|id| text(id.as_str()))
-                    .collect(),
-            ),
-        ),
-        (
-            "workspaceAliases",
-            Value::Array(
-                record
-                    .workspace_directories()
-                    .iter()
-                    .map(|entry| {
-                        Value::Object(object(vec![
-                            ("alias", text(entry.directory_id().as_str())),
-                            
-                        ]))
-                    })
-                    .collect(),
-            ),
-        ),
-        (
-            "defaultDirectoryId",
-            text(record.default_workspace_directory().as_str()),
-        ),
-        (
-            "templates",
-            Value::Array(
-                record
-                    .templates()
-                    .iter()
-                    .map(|template| {
-                        Value::Object(object(vec![
-                            ("templateId", text(template.template_id().as_str())),
-                            ("displayName", text(template.display_name())),
-                            ("workspaceAlias", text(template.workspace_directory().as_str())),
-                            (
-                                "params",
-                                Value::Array(
-                                    template
-                                        .params()
-                                        .iter()
-                                        .map(|param| Value::Object(template_param(param)))
-                                        .collect(),
-                                ),
-                            ),
-                        ]))
-                    })
-                    .collect(),
-            ),
-        ),
-        (
-            "defaultTemplateId",
-            text(record.default_template_id().as_str()),
-        ),
-        ("scopes", string_array(record.scopes().iter())),
-        ("cachePolicy", text(record.cache_policy().as_str())),
-        ("createdAt", timestamp(record.created_at())),
-        (
-            "revokedAt",
-            match record.revoked_at() {
-                Some(at) => timestamp(at),
-                None => Value::Null,
-            },
-        ),
-    ])
-}
-
-/// `import.list` 的 `ImportRecord`（§5.5，与 `CONFIG_REFERENCE.md` §9 的 `[[imports]]` 同名同义）。
-pub(crate) fn import(record: &ImportRecord) -> JsonObject {
-    object(vec![
-        ("importId", text(record.import_id().as_str())),
-        ("ownerEndpoint", text(record.owner_endpoint())),
-        ("ownerNodeId", text(record.owner_node_id().as_str())),
-        (
-            "exportIds",
-            Value::Array(
-                record
-                    .export_ids()
-                    .iter()
-                    .map(|id| text(id.as_str()))
-                    .collect(),
-            ),
-        ),
-        ("grants", string_array(record.grants().iter())),
-    ])
-}
-
 /// `device.list` 的 `DeviceRecord`（§5.3）：含 `pending` 与 `revoked` 记录，**不含授权集合**
 /// （设备权限层已删除：配对不授予授权，设备记录也不保存授权集合）。
 pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
@@ -191,12 +93,6 @@ pub(crate) fn node(record: &NodeRecord) -> JsonObject {
             "nodePublicKeyFingerprint",
             text(record.node_public_key_fingerprint().as_str()),
         ),
-        ("grants", string_array(record.grants().iter())),
-        // §5.4 的 exportIds：该节点可见的 Export 清单（空清单如实输出 []，不隐藏，与运维视角一致）。
-        (
-            "exportIds",
-            string_array(record.export_ids().iter().map(ExportId::as_str)),
-        ),
         ("state", text(record.state().as_str())),
         (
             "ownerEndpoint",
@@ -220,35 +116,4 @@ pub(crate) fn optional_timestamp(value: Option<&Timestamp>) -> Value {
         Some(at) => timestamp(at),
         None => Value::Null,
     }
-}
-
-fn template_param(param: &TemplateParam) -> JsonObject {
-    object(vec![
-        ("name", text(param.name().as_str())),
-        ("type", text(param.ty().as_str())),
-        ("required", Value::Bool(param.required())),
-        (
-            "pattern",
-            match param.pattern() {
-                Some(pattern) => text(pattern),
-                None => Value::Null,
-            },
-        ),
-        (
-            "enum",
-            match param.enum_values() {
-                Some(values) => Value::Array(
-                    values
-                        .iter()
-                        .map(|value| match value {
-                            TemplateParamValue::String(text) => Value::String(text.clone()),
-                            TemplateParamValue::Boolean(flag) => Value::Bool(*flag),
-                            TemplateParamValue::Integer(number) => Value::from(*number),
-                        })
-                        .collect(),
-                ),
-                None => Value::Null,
-            },
-        ),
-    ])
 }

@@ -14,7 +14,7 @@
 //!   `delivery = mvp` 的五条（本切片实现），逐条常量在此登记并有契约测试比对。
 
 use acp_core::model::{
-    GrantSet, NodeId, NodeKind, NodeRecord, NodeState, PairingRecord, PeerIdentity,
+    NodeId, NodeKind, NodeRecord, NodeState, PairingRecord, PeerIdentity,
 };
 use acp_core::use_cases::NodeLinkHandshakeView;
 use identity_auth::{ConnectionBinding, CredentialStatus, FeatureList, NodeEndpoint, PeerTrust};
@@ -25,12 +25,11 @@ use node_link_protocol::handshake::NodeHello;
 ///
 /// `node-link.node-rotation.v1` 是 `post_mvp`（只登记 ID 与消息名），**不**选中：选中它等于虚报支持
 /// （`AGENTS.md` §4 的能力协商真实性）。
-pub const SUPPORTED_FEATURES: [&str; 5] = [
+pub const SUPPORTED_FEATURES: [&str; 4] = [
     "node-link.core.v1",
     "node-link.raw-acp.v1",
     "node-link.command-status.v1",
     "node-link.session-create.v1",
-    "node-link.export-revoke.v1",
 ];
 
 /// 每次握手都必须选中的 feature（registry 的 `required: true`，§11.3）。
@@ -121,19 +120,13 @@ pub fn transcript_features(selected: &[String]) -> FeatureList {
 /// 当次持久事实 → `PeerTrust`（`IDENTITY_AND_AUTH_CONTRACT.md` §5.1 的握手输入）。
 ///
 /// 凭据状态按信任行的三态映射：`paired` → `Active`；`revoked` → `Revoked`；`pending` 与「无信任行」
-/// 都按 `Unknown` 处理（批准事务只写 `paired`，`pending` 行尚未建立信任）。`grant.*` 取自信任行，
-/// 是 WP6 授权交集的输入之一。
+/// 都按 `Unknown` 处理（批准事务只写 `paired`，`pending` 行尚未建立信任）。
 pub fn peer_trust(view: &NodeLinkHandshakeView, node: &NodeId) -> PeerTrust {
     let credential = match view.node.as_ref().map(NodeRecord::state) {
         Some(NodeState::Paired) => CredentialStatus::Active,
         Some(NodeState::Revoked) => CredentialStatus::Revoked,
         Some(NodeState::Pending) | None => CredentialStatus::Unknown,
     };
-    let grants = view
-        .node
-        .as_ref()
-        .map(|row| row.grants().clone())
-        .unwrap_or_else(GrantSet::empty);
     PeerTrust {
         peer: PeerIdentity::Node(node.clone()),
         public_key: view.public_key.clone(),
@@ -144,7 +137,6 @@ pub fn peer_trust(view: &NodeLinkHandshakeView, node: &NodeId) -> PeerTrust {
             .as_ref()
             .map(|pairing| pairing.host_binding().to_owned()),
         node_kind: view.node.as_ref().map(NodeRecord::kind),
-        grants,
     }
 }
 
@@ -212,7 +204,7 @@ fn origin_authority(origin: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_core::model::{PairingId, PairingTarget, ScopeSet};
+    use acp_core::model::{PairingId, PairingTarget};
     use node_link_protocol::common::{Base64Url, NodeKind as WireNodeKind, Uuid};
 
     fn hello(supported: &[&str], required: &[&str]) -> NodeHello {
@@ -310,13 +302,13 @@ mod tests {
 
         // 必需 feature 未选中：给出排序去重的未满足集合。
         let fault = negotiate_features(&hello(
-            &["node-link.core.v1", "node-link.export-revoke.v1"],
             &["node-link.session-create.v1", "node-link.core.v1"],
+            &["node-link.node-rotation.v1"],
         ))
         .expect_err("必需 feature 未满足必须拒绝");
         assert_eq!(
             fault,
-            NegotiationFault::FeaturesMissing(vec!["node-link.session-create.v1".to_owned()])
+            NegotiationFault::FeaturesMissing(vec!["node-link.node-rotation.v1".to_owned()])
         );
 
         // 对端连 `core` 都不声明（Owner 的必需 feature）同样拒绝。
@@ -379,8 +371,6 @@ mod tests {
             PairingTarget::Node,
             acp_core::model::PairingState::Approved,
             Some("Access".to_owned()),
-            ScopeSet::empty(),
-            GrantSet::empty(),
             acp_core::model::Digest::new(&"A".repeat(43)).expect("digest"),
             "wss://owner.example.ts.net/node-link/v1",
             ts("2026-09-26T00:00:00.000Z"),
@@ -422,8 +412,6 @@ mod tests {
                 PairingTarget::Node,
                 acp_core::model::PairingState::Consumed,
                 Some("Access".to_owned()),
-                ScopeSet::empty(),
-                GrantSet::empty(),
                 acp_core::model::Digest::new(&"A".repeat(43)).expect("digest"),
                 "wss://owner.example.ts.net/node-link/v1",
                 ts("2026-09-26T00:00:00.000Z"),
@@ -442,8 +430,6 @@ mod tests {
                 "Access",
                 NodeKind::Access,
                 acp_core::model::Fingerprint::new(&"b".repeat(64)).expect("fingerprint"),
-                GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
-                Vec::new(),
                 NodeState::Paired,
                 None,
                 ts("2026-09-26T00:00:00.000Z"),
@@ -455,10 +441,6 @@ mod tests {
         let trust = peer_trust(&view, &node);
         assert_eq!(trust.credential, CredentialStatus::Active);
         assert_eq!(trust.node_kind, Some(NodeKind::Access));
-        assert_eq!(
-            trust.grants.iter().collect::<Vec<&str>>(),
-            vec!["grant.observe"]
-        );
     }
 
     fn ts(text: &str) -> acp_core::model::Timestamp {

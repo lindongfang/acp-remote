@@ -69,7 +69,7 @@ use acp_core::model::{
     CommandPayload as CorePayload, CommandReceipt, CommandRecord, CommandStatus as CoreStatus,
     ConfigOptionId, ConfigValue as CoreConfigValue, CreateSessionRequest,
     ElicitationAction as CoreElicitationAction, ElicitationValues, EntityRef,
-    ExportId as CoreExportId, ExportRecord, InteractionId, ModeId, NodeId, NodeState, PortError,
+    InteractionId, ModeId, NodeId, NodeState, PortError,
     PromptContentBlock, ReadInclude, RequestId as CoreRequestId, ResourceOrigin, SessionId,
     TemplateSelection, Timestamp as CoreTimestamp, TurnId, Version, DirectoryId,
     WorkspaceSource,
@@ -77,7 +77,7 @@ use acp_core::model::{
 use acp_core::ports::{PreparedSessionCreate, SessionCreateAdmission, SessionQuery};
 use acp_core::use_cases::{NodeLinkCatalogView, UseCases};
 use identity_auth::Authority;
-use node_link_protocol::catalog::{ExportRevoked, NodeTrustRevoked};
+use node_link_protocol::catalog::NodeTrustRevoked;
 use node_link_protocol::command::{
     CommandAccepted, CommandName, CommandPayload as WirePayload, CommandRejected,
     CommandResultPayload, CommandStatus as WireStatusBody, CommandSubmit, CommandTerminal,
@@ -85,7 +85,7 @@ use node_link_protocol::command::{
     IncludeResource as WireInclude, SessionCreate, Terminal, TerminalStatus,
 };
 use node_link_protocol::common::{
-    ExportId as WireExportId, Nullable, PublicError, RawObject, RemoteSessionRef,
+    Nullable, PublicError, RawObject, RemoteSessionRef,
     SessionCreateResult, SessionMeta, SessionResumeResult, Text, Timestamp as WireTimestamp, Uuid,
 };
 use node_link_protocol::envelope::{Envelope, MessageType};
@@ -158,17 +158,8 @@ enum LocalOutcome {
 /// session-scoped 命令引用的会话定位（grant 判定与 attachment 复核共用）。
 #[derive(Debug, Clone)]
 struct SessionTarget {
-    export: CoreExportId,
     session: SessionId,
     remote: RemoteSessionRef,
-}
-
-/// 授权类拒绝（其余是端口错误）。
-#[derive(Debug)]
-enum CommandFault {
-    /// 授权交集不成立；`Some(parameter)` 时回 `details.parameter`。
-    NotGranted(Option<String>),
-    Port(PortError),
 }
 
 /// WP6 的命令管线与撤销传播（组合根持有一个 `Arc<CommandRoute>`）。
@@ -304,14 +295,6 @@ impl CommandRoute {
         let Some(request) = core_request(target) else {
             return self.reject_schema(handle, message, "the targetRequestId is not a uuid");
         };
-        if let Err(fault) = self
-            .authorize_node(handle.node_id(), "grant.observe", None)
-            .await
-        {
-            return self
-                .deny(handle, message, CommandName::CommandStatus, target, fault)
-                .await;
-        }
         let record = match self
             .core
             .command_status(&node_actor(handle.node_id()), request)
@@ -371,12 +354,6 @@ impl CommandRoute {
         submit: &CommandSubmit,
         command: CommandName,
     ) -> RouteOutcome {
-        let Some(grant) = acp_core::broker::required_grant(command.as_str()) else {
-            // 不在 Node Link 命令表（13 条）里的名字：wire 的枚举已保证不可达，这里显式拒绝而非放行。
-            return self.reject_field(handle, command, &submit.request_id, "command");
-        };
-        // ② 会话定位（不改内部状态）→ 授权交集 → attachment 代际复核：越权优先于代际判定，
-        //    这样 R69 的「越权必得 not_granted 且留痕」不会被 stale attachment 掩盖。
         let target = match command.requires_session_attachment() {
             true => match self.session_target(handle, message, submit) {
                 Ok(target) => Some(target),
@@ -384,15 +361,6 @@ impl CommandRoute {
             },
             false => None,
         };
-        let export = target.as_ref().map(|target| target.export.clone());
-        if let Err(fault) = self
-            .authorize_node(handle.node_id(), grant, export.as_ref())
-            .await
-        {
-            return self
-                .deny(handle, message, command, &submit.request_id, fault)
-                .await;
-        }
         if let Some(target) = target.as_ref() {
             if let Err(outcome) = self.attachment_is_current(handle, message, submit, target) {
                 return outcome;
@@ -563,28 +531,14 @@ impl CommandRoute {
         RouteOutcome::Claimed
     }
 
-    /// `session.list` 的可见性过滤（`catalog::visible_exports` 是唯一判定点）：只保留 agent 属于该节点
-    /// 可见 Export 的会话。
-    ///
-    /// core 的 `list_sessions` 返回本机全部 owned 摘要（存储层只按 `query` 取行），因此过滤在这里做；
-    /// 判定复用 `catalog::visible_exports`，与 attach/catalog 不可能给出不同结论。结果按 `sessionId`
-    /// 排序：`session.list` 没有顺序合同，固定顺序让对端与用例都可复现。
+    /// `session.list`：已配对节点看到本机全部会话，不按 Export/授权集合过滤。
     async fn visible_sessions(
         &self,
-        node: &NodeId,
+        _node: &NodeId,
         summaries: &[acp_core::model::SessionSummary],
     ) -> Result<RawObject, PortError> {
-        let view = self.core.node_link_catalog_view(node).await?;
-        let agents: Vec<&str> = catalog::visible_exports(view.node.as_ref(), &view.exports)
-            .iter()
-            .flat_map(|export| export.agent_ids().iter())
-            .map(|agent| agent.as_str())
-            .collect();
         let mut sessions = Vec::new();
         for summary in summaries {
-            if !agents.contains(&summary.agent().agent_id().as_str()) {
-                continue;
-            }
             match session_summary(summary) {
                 Some(projected) => sessions.push(projected),
                 None => warn!(
@@ -614,45 +568,33 @@ impl CommandRoute {
         let WirePayload::SessionCreate(payload) = &submit.payload else {
             return self.reject_schema(handle, message, "the session.create payload is invalid");
         };
-        // ② 授权交集（grant.remote-work）+ §12.7 的参数校验：全部读当次持久化记录。
+        // ② 参数校验：已经配对即完全信任；只校验 Agent 与目录确实属于本机。
         let view = match self.core.node_link_catalog_view(handle.node_id()).await {
             Ok(view) => view,
             Err(error) => return self.port_fault(handle, message, &error),
         };
-        let Some(export_id) = core_export(payload.export_id.as_str()) else {
-            return self.reject_schema(handle, message, "the exportId is not a valid export id");
-        };
-        if let Err(parameter) = self.session_create_parameter(&view, payload, &export_id) {
-            return self
-                .deny(
-                    handle,
-                    message,
-                    CommandName::SessionCreate,
-                    &submit.request_id,
-                    CommandFault::NotGranted(Some(parameter.to_owned())),
-                )
-                .await;
-        }
-        let Some(export) = self.visible_export(&view, &export_id) else {
-            // `session_create_parameter` 已经判过可见性；不可达，保留显式拒绝。
-            return self
-                .deny(
-                    handle,
-                    message,
-                    CommandName::SessionCreate,
-                    &submit.request_id,
-                    CommandFault::NotGranted(Some("exportId".to_owned())),
-                )
-                .await;
-        };
-        // 首切片 template 零参数（§10/§12.7）：带参数的 template 与任何非空 `templateParams`
-        // 都必须明确拒绝，不静默忽略参数。
-        if !template_params_empty(payload) || default_template_is_parametric(export) {
+        if !view
+            .directories
+            .iter()
+            .any(|record| record.directory_id().as_str() == payload.directory_id.as_str())
+        {
             return self.reject_field(
                 handle,
                 CommandName::SessionCreate,
                 &submit.request_id,
-                "templateParams",
+                "directoryId",
+            );
+        }
+        if !view
+            .agents
+            .iter()
+            .any(|descriptor| descriptor.agent.agent_id().as_str() == payload.agent_id.as_str())
+        {
+            return self.reject_field(
+                handle,
+                CommandName::SessionCreate,
+                &submit.request_id,
+                "agentId",
             );
         }
         // ③ 幂等：幂等键 `(ownerNodeId, accessNodeId, requestId)` 的**持久事实**在 core 的
@@ -724,15 +666,10 @@ impl CommandRoute {
         let Ok(alias) = DirectoryId::new(payload.directory_id.as_str()) else {
             return self.reject_schema(handle, message, "the workspaceAlias is not a symbol name");
         };
-        let Ok(template) =
-            TemplateSelection::try_new(export.default_template_id().clone(), Vec::new())
-        else {
-            return self.reject_schema(handle, message, "the default template cannot be selected");
-        };
         let create = CreateSessionRequest {
             agent,
             workspace: None,
-            template: Some(template),
+            template: None,
             origin: ResourceOrigin::Local,
         };
         let outcome = match self
@@ -749,7 +686,7 @@ impl CommandRoute {
             Ok(SessionCreateAdmission::Prepared(prepared)) => {
                 // 会话行此刻**尚未落账**（§6 第 20 条）：结果由 core 给出的准备值投影（不回读存储），
                 // 随后由下面的终态结算把会话行、幂等行回填与终态一次落盘。
-                match self.session_create_result(&export_id, &prepared) {
+                match self.session_create_result(&prepared) {
                     Ok(result) => {
                         LocalOutcome::Completed(CommandResultPayload::SessionCreate(result))
                     }
@@ -968,40 +905,6 @@ impl CommandRoute {
         RouteOutcome::Claimed
     }
 
-    /// `session.create` 的参数校验（§12.7）：Export 必须对该节点可见且覆盖 `grant.remote-work`，
-    /// `agentId`/`workspaceAlias` 必须属于该 Export；返回被拒参数名。
-    fn session_create_parameter(
-        &self,
-        view: &NodeLinkCatalogView,
-        payload: &SessionCreate,
-        export_id: &CoreExportId,
-    ) -> Result<(), &'static str> {
-        if !self.node_grants_cover(view, "grant.remote-work") {
-            return Err("exportId");
-        }
-        let Some(export) = self.visible_export(view, export_id) else {
-            return Err("exportId");
-        };
-        if !export.scopes().contains("grant.remote-work") {
-            return Err("exportId");
-        }
-        if !export
-            .agent_ids()
-            .iter()
-            .any(|agent| agent.as_str() == payload.agent_id.as_str())
-        {
-            return Err("agentId");
-        }
-        if !export
-            .workspace_directories()
-            .iter()
-            .any(|entry| entry.directory_id().as_str() == payload.directory_id.as_str())
-        {
-            return Err("directoryId");
-        }
-        Ok(())
-    }
-
     /// 创建成功后组装 `SessionCreateResult`：`sessionId` 永远来自 Owner（core 的会话身份），
     /// `sessionMeta` 取自 core 随 [`PreparedSessionCreate`] 给出的会话摘要。
     ///
@@ -1014,38 +917,27 @@ impl CommandRoute {
     /// 组合读取」这条路径。
     fn session_create_result(
         &self,
-        export: &CoreExportId,
         prepared: &PreparedSessionCreate,
     ) -> Result<SessionCreateResult, PortError> {
         let Some(session_meta) = crate::node_link::resource::session_meta(&prepared.summary) else {
             return Err(PortError::Corrupt("session meta"));
         };
         Ok(SessionCreateResult {
-            remote_session_ref: self.remote_session_ref(export, &prepared.session)?,
+            remote_session_ref: self.remote_session_ref(&prepared.session)?,
             session_meta,
         })
     }
 
     /// `remoteSessionRef` 的唯一投影：三个分量都来自本层与 core 的会话身份（不读存储）。
-    fn remote_session_ref(
-        &self,
-        export: &CoreExportId,
-        session: &SessionId,
-    ) -> Result<RemoteSessionRef, PortError> {
+    fn remote_session_ref(&self, session: &SessionId) -> Result<RemoteSessionRef, PortError> {
         let Some(owner_node_id) = uuid_of(self.node_id.as_str()) else {
             return Err(PortError::Corrupt("the owner node id is not a uuid"));
         };
         let Some(session_id) = uuid_of(session.as_str()) else {
             return Err(PortError::Corrupt("the session id is not a uuid"));
         };
-        let Some(export_id) = WireExportId::parse(export.as_str()).ok() else {
-            return Err(PortError::Corrupt(
-                "the export id cannot be expressed on the wire",
-            ));
-        };
         Ok(RemoteSessionRef {
             owner_node_id,
-            export_id,
             session_id,
         })
     }
@@ -1056,11 +948,10 @@ impl CommandRoute {
     async fn session_resume_result(
         &self,
         access_node: &NodeId,
-        export: &CoreExportId,
         session: &SessionId,
     ) -> Result<SessionResumeResult, PortError> {
         let (remote_session_ref, session_meta) = self
-            .remote_session_ref_and_meta(access_node, export, session)
+            .remote_session_ref_and_meta(access_node, session)
             .await?;
         Ok(SessionResumeResult {
             remote_session_ref,
@@ -1073,17 +964,16 @@ impl CommandRoute {
     async fn remote_session_ref_and_meta(
         &self,
         access_node: &NodeId,
-        export: &CoreExportId,
         session: &SessionId,
     ) -> Result<(RemoteSessionRef, SessionMeta), PortError> {
         let view = self
             .core
-            .node_link_session_view(access_node, export, session)
+            .node_link_session_view(access_node, session)
             .await?;
         let Some(session_meta) = crate::node_link::resource::session_meta(&view.session) else {
             return Err(PortError::Corrupt("session meta"));
         };
-        Ok((self.remote_session_ref(export, session)?, session_meta))
+        Ok((self.remote_session_ref(session)?, session_meta))
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1108,23 +998,6 @@ impl CommandRoute {
             Ok(target) => target,
             Err(outcome) => return outcome,
         };
-        // ② 授权先于一切本机读取与文件系统访问（R31）：`grant.remote-work` 与该会话所属 Export 的
-        //    交集，同 `session.create` 口径。越权一律 `command.rejected(nodelink.export.not_granted)`
-        //    且无副作用，响应不因会话是否存在而不同（`session_target` 已把两种不可区分情形合并）。
-        if let Err(fault) = self
-            .authorize_node(handle.node_id(), "grant.remote-work", Some(&target.export))
-            .await
-        {
-            return self
-                .deny(
-                    handle,
-                    message,
-                    CommandName::SessionResume,
-                    &submit.request_id,
-                    fault,
-                )
-                .await;
-        }
         // ③ attachment 代际复核（§12.5）：命令必须携带当前 attachment。
         if let Err(outcome) = self.attachment_is_current(handle, message, submit, &target) {
             return outcome;
@@ -1198,7 +1071,7 @@ impl CommandRoute {
             .await
         {
             Ok(session) => match self
-                .session_resume_result(handle.node_id(), &target.export, &session)
+                .session_resume_result(handle.node_id(), &session)
                 .await
             {
                 Ok(result) => LocalOutcome::Completed(CommandResultPayload::SessionResume(result)),
@@ -1346,24 +1219,20 @@ impl CommandRoute {
         if remote.owner_node_id.as_str() != self.node_id.as_str() {
             return Err(self.send_and_claim(
                 handle,
-                ErrorCode::ExportNotFound,
+                ErrorCode::ProtocolSequenceInvalid,
                 "the sessionRef does not point at this owner node",
                 Some(message.message_id()),
             ));
         }
-        let (Some(export), Some(session)) = (
-            core_export(remote.export_id.as_str()),
-            core_session(remote.session_id.as_str()),
-        ) else {
+        let Some(session) = core_session(remote.session_id.as_str()) else {
             return Err(self.send_and_claim(
                 handle,
-                ErrorCode::ExportNotFound,
+                ErrorCode::ProtocolSequenceInvalid,
                 "the sessionRef is not a valid compound reference",
                 Some(message.message_id()),
             ));
         };
         Ok(SessionTarget {
-            export,
             session,
             remote: remote.clone(),
         })
@@ -1402,91 +1271,9 @@ impl CommandRoute {
         }
     }
 
-    /// 授权交集（D8 第 2 步）：节点信任记录 grants ∋ grant，且（会话命令）该会话的 Export 可见且覆盖该
-    /// grant、（无会话命令）存在某个可见且覆盖该 grant 的 Export。
-    async fn authorize_node(
-        &self,
-        node: &NodeId,
-        grant: &'static str,
-        export: Option<&CoreExportId>,
-    ) -> Result<(), CommandFault> {
-        let view = self
-            .core
-            .node_link_catalog_view(node)
-            .await
-            .map_err(CommandFault::Port)?;
-        if !self.node_grants_cover(&view, grant) {
-            return Err(CommandFault::NotGranted(None));
-        }
-        match export {
-            Some(export) => match self.visible_export(&view, export) {
-                Some(record) if record.scopes().contains(grant) => Ok(()),
-                _ => Err(CommandFault::NotGranted(Some("exportId".to_owned()))),
-            },
-            None => match self.visible_export_covering(&view, grant) {
-                Some(_) => Ok(()),
-                None => Err(CommandFault::NotGranted(None)),
-            },
-        }
-    }
-
-    /// 该节点的信任记录是否已配对且含 `grant`（授权交集的第一支）。
-    fn node_grants_cover(&self, view: &NodeLinkCatalogView, grant: &str) -> bool {
-        view.node
-            .as_ref()
-            .filter(|row| row.state() == NodeState::Paired)
-            .is_some_and(|row| row.grants().contains(grant))
-    }
-
-    /// 该节点可见的某个 Export（可见性判定点：`catalog::visible_exports`）。
-    fn visible_export<'a>(
-        &self,
-        view: &'a NodeLinkCatalogView,
-        export: &CoreExportId,
-    ) -> Option<&'a ExportRecord> {
-        catalog::visible_exports(view.node.as_ref(), &view.exports)
-            .into_iter()
-            .find(|record| record.export_id() == export)
-    }
-
-    /// 该节点可见的、覆盖 `grant` 的某个 Export。
-    fn visible_export_covering<'a>(
-        &self,
-        view: &'a NodeLinkCatalogView,
-        grant: &str,
-    ) -> Option<&'a ExportRecord> {
-        catalog::visible_exports(view.node.as_ref(), &view.exports)
-            .into_iter()
-            .find(|record| record.scopes().contains(grant))
-    }
-
     // -----------------------------------------------------------------------------------------
     // 响应装配
     // -----------------------------------------------------------------------------------------
-
-    /// 越权拒绝：写一条 `authorization.denied` 审计并回 `command.rejected(nodelink.export.not_granted)`。
-    async fn deny(
-        &self,
-        handle: &ConnectionHandle,
-        message: &Envelope,
-        command: CommandName,
-        request: &Uuid,
-        fault: CommandFault,
-    ) -> RouteOutcome {
-        let details = match &fault {
-            CommandFault::NotGranted(Some(parameter)) => parameter_details(parameter),
-            CommandFault::NotGranted(None) => RawObject::empty(),
-            CommandFault::Port(error) => return self.port_fault(handle, message, error),
-        };
-        self.audit_denied(handle.node_id()).await;
-        self.send_rejected(
-            handle,
-            command,
-            request,
-            &error_info("nodelink.export.not_granted"),
-            details,
-        )
-    }
 
     /// 越权留痕（R69/R82/R83）：适配层的交集比 core 的 Owner 侧判定更严，被它拒的命令不会到达 broker，
     /// 因此这条 `authorization.denied` 只能在这里写；审计写失败不改判定（也不改响应）。
@@ -1567,7 +1354,7 @@ impl CommandRoute {
             PortError::InvalidRequest("authorization.scope_denied" | "export.not_granted") => {
                 return self.send_and_claim(
                     handle,
-                    ErrorCode::ExportNotGranted,
+                    ErrorCode::ProtocolSequenceInvalid,
                     "the command is not granted to this node",
                     correlation,
                 );
@@ -1575,7 +1362,7 @@ impl CommandRoute {
             PortError::NotFound(EntityRef::Export(_) | EntityRef::Session(_)) => {
                 return self.send_and_claim(
                     handle,
-                    ErrorCode::ExportNotFound,
+                    ErrorCode::ProtocolSequenceInvalid,
                     "the referenced session is not available to this node",
                     correlation,
                 );
@@ -2150,79 +1937,6 @@ impl CommandRoute {
         handles.len()
     }
 
-    /// `export.revoke` 提交后：清除内存中的 attachment/订阅并向受影响的连接推送 `export.revoked`。
-    ///
-    /// 返回收到推送的连接数。`revokedAt` 取当次持久化记录（每个连接按它自己的节点视角读一次）；
-    /// 清除与推送都只影响「立即通知」这一协议义务，授权判定仍按逐消息的持久化复核。
-    pub async fn export_revoked(&self, export: &CoreExportId) -> usize {
-        let affected = self.resource.revoke_export(export);
-        if affected.is_empty() {
-            return 0;
-        }
-        let mut notified = 0_usize;
-        for connection_id in affected {
-            let Some(handle) = self.handle_of(&connection_id) else {
-                continue;
-            };
-            let Some(revoked_at) = self
-                .persisted_export_revoked_at(handle.node_id(), export)
-                .await
-            else {
-                warn!(
-                    event = "node_link.export_revocation_view_failed",
-                    access_node_id = handle.node_id().as_str(),
-                    export_id = export.as_str(),
-                    "the revoked export could not be read back; the notification is skipped"
-                );
-                continue;
-            };
-            let (Some(export_id), Some(revoked_at)) = (
-                WireExportId::parse(export.as_str()).ok(),
-                wire_timestamp(&revoked_at),
-            ) else {
-                warn!(
-                    event = "node_link.export_revocation_shape_invalid",
-                    export_id = export.as_str(),
-                    "the revoked export cannot be expressed on the wire"
-                );
-                continue;
-            };
-            let body = ExportRevoked {
-                export_id,
-                revoked_at,
-            };
-            if handle.send(MessageType::ExportRevoked, &body).is_ok() {
-                notified += 1;
-            } else {
-                debug!(
-                    event = "node_link.revocation_not_queued",
-                    connection_id = handle.connection_id().as_str(),
-                    "the export.revoked message could not be queued"
-                );
-            }
-        }
-        info!(
-            event = "node_link.export_revocation_propagated",
-            export_id = export.as_str(),
-            connections = notified,
-            "the revoked export was propagated to its active connections"
-        );
-        notified
-    }
-
-    /// 该节点视角下某 Export 的持久化撤销时间（读 catalog 视图，不构造任何 actor）。
-    async fn persisted_export_revoked_at(
-        &self,
-        node: &NodeId,
-        export: &CoreExportId,
-    ) -> Option<CoreTimestamp> {
-        let view = self.core.node_link_catalog_view(node).await.ok()?;
-        view.exports
-            .iter()
-            .find(|record| record.export_id() == export)
-            .and_then(|record| record.revoked_at().cloned())
-    }
-
     /// 当前时间（唯一来源是 `Authority` 注入的 `Clock`，本层不读系统时间）。
     fn clock(&self) -> CoreTimestamp {
         self.authority.now()
@@ -2305,24 +2019,6 @@ fn is_absolute_path(text: &str) -> bool {
         (chars.next(), chars.next(), chars.next()),
         (Some(drive), Some(':'), Some('/' | '\\')) if drive.is_ascii_alphabetic()
     )
-}
-
-/// `templateParams` 是否为空对象（省略或 `{}` 是首切片唯一允许的两种形态，§12.7）。
-fn template_params_empty(payload: &SessionCreate) -> bool {
-    let Some(params) = payload.template_params.as_ref() else {
-        return true;
-    };
-    serde_json::from_str::<BTreeMap<String, IgnoredAny>>(params.as_object().get())
-        .is_ok_and(|object| object.is_empty())
-}
-
-/// 该 Export 的默认 template 是否声明了参数（首切片零参数，§10）。
-fn default_template_is_parametric(export: &ExportRecord) -> bool {
-    export
-        .templates()
-        .iter()
-        .find(|template| template.template_id() == export.default_template_id())
-        .is_some_and(|template| !template.params().is_empty())
 }
 
 /// 持久化记录 → `command.terminal`（未终结的 `accepted` 返回 `None`）。
@@ -2550,7 +2246,7 @@ fn wire_error(core_code: &str) -> Option<(ErrorCode, &'static str)> {
             "the owner cannot confirm the outcome of this command",
         ),
         "authorization.scope_denied" | "export.not_granted" | "nodelink.export.not_granted" => (
-            ErrorCode::ExportNotGranted,
+            ErrorCode::ProtocolSequenceInvalid,
             "the command is not granted to this node",
         ),
         "command.idempotency_conflict" | "nodelink.command.idempotency_conflict" => (
@@ -2578,7 +2274,7 @@ fn wire_error(core_code: &str) -> Option<(ErrorCode, &'static str)> {
             "the command does not match the v1 schema",
         ),
         "session.not_found" | "export.not_found" => (
-            ErrorCode::ExportNotFound,
+            ErrorCode::ProtocolSequenceInvalid,
             "the referenced session is not available to this node",
         ),
         _ => (
@@ -2651,10 +2347,6 @@ fn command_name(text: &str) -> Option<CommandName> {
 
 fn core_request(value: &Uuid) -> Option<CoreRequestId> {
     CoreRequestId::new(value.as_str()).ok()
-}
-
-fn core_export(text: &str) -> Option<CoreExportId> {
-    CoreExportId::new(text).ok()
 }
 
 fn core_session(text: &str) -> Option<SessionId> {
@@ -2861,5 +2553,3 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-#[cfg(test)]
-mod tests;

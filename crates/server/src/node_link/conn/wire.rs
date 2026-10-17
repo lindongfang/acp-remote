@@ -46,8 +46,7 @@ use node_link_protocol::error::{Body, ErrorCode};
 pub(crate) const MAX_SEQUENCE: u64 = i64::MAX as u64;
 
 /// post_mvp 消息族（`NODE_LINK_PROTOCOL.md` §12.1）：v1 首切片显式拒绝，绝不静默忽略。
-const POST_MVP: [MessageType; 5] = [
-    MessageType::CatalogChanged,
+const POST_MVP: [MessageType; 4] = [
     MessageType::ResourceDetach,
     MessageType::NodeRotateKeyRequest,
     MessageType::NodeRotateKeyResult,

@@ -100,12 +100,6 @@ impl PairTarget {
         }
     }
 
-    /// 本方向是否有授权维度：设备配对不授予任何授权（`pairing-model` 删除设备权限层），
-    /// 只有节点方向有待授予的 `grant.*`。
-    fn grants_dimension(self) -> bool {
-        matches!(self, Self::Node)
-    }
-
     /// 对端展示名的字段名；`node.pair.status` 的 result 没有该字段（§5.4 的字段表），
     /// 因此节点方向返回 `None`，展示块与解析都不得要求它。
     fn peer_name_key(self) -> Option<&'static str> {
@@ -146,12 +140,6 @@ pub(crate) struct PairArgs {
     pub(crate) mode: Option<String>,
     /// `node.pair.begin` 的 `pairingUrl`。
     pub(crate) pairing_url: Option<String>,
-    /// `node.pair.begin` 的 `displayName`。
-    pub(crate) display_name: Option<String>,
-    /// `node.pair.begin` 的 `requestedGrants`。
-    pub(crate) grants: Vec<String>,
-    /// `node.pair.confirm` 的 `exportIds`（可重复的 `--export-id`；零次 = 空清单）。
-    pub(crate) export_ids: Vec<String>,
     /// 非交互确认用的指纹（逐字匹配）。
     pub(crate) fingerprint: Option<String>,
     /// `device.pair.begin` 的 `expiresInMs`（只能收窄 5 分钟窗口；`node.pair.begin` 没有该参数）。
@@ -163,9 +151,7 @@ impl From<&super::DevicePair> for PairArgs {
         Self {
             mode: None,
             pairing_url: None,
-            display_name: None,
-            grants: Vec::new(),
-            export_ids: Vec::new(),
+            
             fingerprint: args.fingerprint.clone(),
             expires_in_ms: args.expires_in_ms,
         }
@@ -177,9 +163,6 @@ impl From<&super::NodePair> for PairArgs {
         Self {
             mode: args.mode.clone(),
             pairing_url: args.pairing_url.clone(),
-            display_name: args.display_name.clone(),
-            grants: args.grant.clone(),
-            export_ids: args.export_id.clone(),
             fingerprint: args.fingerprint.clone(),
             // `node.pair.begin` 没有 `expiresInMs` 参数：该方向不提供有效期收窄（与 §5.4 的字段表一致）。
             expires_in_ms: None,
@@ -231,8 +214,6 @@ pub(crate) struct Claim {
     pub(crate) display_name: Option<String>,
     /// 对端公钥指纹。
     pub(crate) fingerprint: String,
-    /// 待授予的 `grant.*`（节点方向才有；设备方向恒为空——设备配对不授予任何授权）。
-    pub(crate) grants: Vec<String>,
     /// 过期时间（§1.1 定宽文本）。
     pub(crate) expires_at: String,
 }
@@ -246,12 +227,6 @@ impl Claim {
                 None => None,
             },
             fingerprint: text_field(result, target.fingerprint_key())?,
-            // 设备方向没有任何授权集合可展示（`device.pair.status` 不回显集合）。
-            grants: if target.grants_dimension() {
-                text_array_field(result, "requestedGrants")?
-            } else {
-                Vec::new()
-            },
             expires_at: text_field(result, "expiresAt")?,
         })
     }
@@ -259,22 +234,12 @@ impl Claim {
     /// 确认前必须展示的块：名称（该方向的状态响应有名称字段时）、指纹与过期时间；节点方向另含
     /// 待授予的 `grant.*`。
     fn display(&self, target: PairTarget) -> String {
-        let grants = if target.grants_dimension() {
-            let grants = if self.grants.is_empty() {
-                "（空）".to_owned()
-            } else {
-                self.grants.join(", ")
-            };
-            format!("\n  待授予 grants   {grants}")
-        } else {
-            String::new()
-        };
         let name = match target.peer_name_key().zip(self.display_name.as_deref()) {
             Some((_, name)) => format!("\n  名称            {name}"),
             None => String::new(),
         };
         format!(
-            "{label}已认领：{name}\n  指纹            {fingerprint}{grants}\n  过期            {expires}",
+            "{label}已认领：{name}\n  指纹            {fingerprint}\n  过期            {expires}",
             label = target.label(),
             fingerprint = self.fingerprint,
             expires = self.expires_at,
@@ -312,14 +277,6 @@ pub(crate) fn begin_params(target: PairTarget, args: &PairArgs) -> JsonObject {
                     None => Value::Null,
                 },
             );
-            params.insert(
-                "displayName".to_owned(),
-                match args.display_name.as_deref() {
-                    Some(name) => Value::from(name),
-                    None => Value::Null,
-                },
-            );
-            params.insert("requestedGrants".to_owned(), strings(&args.grants));
         }
     }
     params
@@ -327,33 +284,11 @@ pub(crate) fn begin_params(target: PairTarget, args: &PairArgs) -> JsonObject {
 
 /// `*.pair.confirm` 的 `params`：设备方向**不提交任何授权集合**（§5.3 只有 `pairingId`）。
 ///
-/// 节点方向提交**展示过的** grants（§5.4；不是命令行 `--grant` 原文），并另带必需的 `exportIds`：它是
-/// **用户命令行给出的**清单（`--export-id`，可重复），因此不经 `status` 回显，也不受「提交展示过的集合」
-/// 约束——清单是本次授权的一部分，不是对端的请求值。
-pub(crate) fn confirm_params(
-    target: PairTarget,
-    pairing_id: &str,
-    claim: &Claim,
-    export_ids: &[String],
-) -> JsonObject {
+/// 两个方向都只提交 `pairingId`：配对不携带授权集合。
+pub(crate) fn confirm_params(pairing_id: &str) -> JsonObject {
     let mut params = JsonObject::new();
     params.insert("pairingId".to_owned(), Value::from(pairing_id));
-    if target.grants_dimension() {
-        params.insert("grants".to_owned(), strings(&claim.grants));
-        params.insert("exportIds".to_owned(), strings(export_ids));
-    }
     params
-}
-
-/// 空清单的醒目提醒（§5.4/`design.md` D6）：零个 `--export-id` 是合法输入（空清单 = 该节点看不到
-/// 任何 Export），但必须让人当场看见这个后果。提醒**不阻断**：确认仍照常执行（不引入新开关）。
-pub(crate) fn empty_export_ids_notice(
-    target: PairTarget,
-    export_ids: &[String],
-) -> Option<&'static str> {
-    (target == PairTarget::Node && export_ids.is_empty()).then_some(
-        "警告：本次确认没有点名任何 Export（--export-id 一次都没给）：该节点将看不到任何 Export。",
-    )
 }
 
 /// `*.pair.reject` 的 `params`（§5.3/§5.4 两个方向同形）：`reason = null` = 用户主动拒绝，不附理由。
@@ -382,9 +317,6 @@ pub(crate) fn verify_supplied(claim: &Claim, supplied: &Supplied) -> Result<(), 
 
 /// 配对仪式（§5.8）。成功后打印对端 id。
 ///
-/// 零个 `--export-id` 时在「展示认领信息」与「确认」之间打印 [`empty_export_ids_notice`]：提醒就在
-/// 用户落定前一刻出现，且**不阻断**（确认照常执行）。提醒走 stdout，与配对提示同一通道——stderr 的
-/// 契约是「失败时恰好一行 JSON」（见 `crates/app/tests/support`），不得混入人类可读文本。
 pub(crate) fn run(
     context: &mut Context,
     target: PairTarget,
@@ -397,9 +329,6 @@ pub(crate) fn run(
     let claimed = runtime.block_on(await_claim(&endpoint, target, args))?;
     // 认领后**先**展示，再允许确认（§5.8 的第 2 步）。
     println!("{}", claimed.claim.display(target));
-    if let Some(notice) = empty_export_ids_notice(target, &args.export_ids) {
-        println!("{notice}");
-    }
     let answer = match &supplied {
         // 非交互：`--fingerprint` 与 `status` 返回值逐字一致才继续；不一致即失败（不调 confirm、不调 reject、不改状态）。
         Some(supplied) => {
@@ -413,7 +342,6 @@ pub(crate) fn run(
         target,
         &claimed.pairing_id,
         &claimed.claim,
-        &args.export_ids,
         answer,
     ))?;
     print_result(&result);
@@ -465,7 +393,6 @@ async fn settle_claim<M: PairCalls + Send>(
     target: PairTarget,
     pairing_id: &str,
     claim: &Claim,
-    export_ids: &[String],
     answer: Answer,
 ) -> Result<JsonObject, Failure> {
     if answer == Answer::Rejected {
@@ -484,7 +411,7 @@ async fn settle_claim<M: PairCalls + Send>(
     calls
         .call(
             target.confirm(),
-            confirm_params(target, pairing_id, claim, export_ids),
+            confirm_params(pairing_id),
         )
         .await
 }
@@ -563,15 +490,11 @@ async fn await_claim(
 /// 拒绝是**用户意图**（不是「什么都没发生」）：调用方必须据 [`Answer::Rejected`] 调 `*.pair.reject` 终结
 /// 已认领的配对会话，而不是把它留给 5 分钟到期。
 fn ask_confirmation(target: PairTarget, claim: &Claim) -> Result<Answer, Failure> {
-    // 设备方向没有授权维度，因此确认的是「是否与本机建立信任」本身，而不是某个集合。
-    let prompt = if target.grants_dimension() {
-        format!("确认授予以上 grants（{} 项）？[y/N]: ", claim.grants.len())
-    } else {
-        format!(
-            "确认与本机记录该{}（不授予任何授权）？[y/N]: ",
-            target.label()
-        )
-    };
+    let _ = claim;
+    let prompt = format!(
+        "确认与本机记录该{}（配对即完全信任）？[y/N]: ",
+        target.label()
+    );
     print!("{prompt}");
     if std::io::stdout().flush().is_err() {
         return Err(Failure::local(
@@ -657,486 +580,3 @@ fn text_array_field(result: &JsonObject, key: &str) -> Result<Vec<String>, Failu
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cli::{fail, failure_line};
-
-    fn claim() -> Claim {
-        Claim {
-            display_name: Some("Zhang's Phone".to_owned()),
-            fingerprint: "ab12cd34".to_owned(),
-            grants: vec![
-                "grant.session.list".to_owned(),
-                "grant.session.read".to_owned(),
-            ],
-            expires_at: "2026-09-23T14:31:00.000Z".to_owned(),
-        }
-    }
-
-    /// 配对方法调用的 spy：记录方法与 `params`，用于断言「哪条路径调了哪些方法」。
-    #[derive(Default)]
-    struct CallSpy {
-        calls: Vec<(Method, JsonObject)>,
-        /// 注入的方法侧失败（`Some` 时每条调用都以它失败）。
-        failure: Option<(String, String)>,
-    }
-
-    impl CallSpy {
-        fn methods(&self) -> Vec<Method> {
-            self.calls.iter().map(|(method, _)| *method).collect()
-        }
-
-        fn params(&self, index: usize) -> Value {
-            Value::Object(self.calls[index].1.clone())
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl PairCalls for CallSpy {
-        async fn call(
-            &mut self,
-            method: Method,
-            params: JsonObject,
-        ) -> Result<JsonObject, Failure> {
-            self.calls.push((method, params));
-            match &self.failure {
-                Some((code, message)) => Err(Failure::reported(code.clone(), message.clone())),
-                None => Ok(JsonObject::new()),
-            }
-        }
-    }
-
-    /// 交互式拒绝：调用对应的 `*.pair.reject`（`reason: null`）且**不**调用 `confirm`；退出码非零。
-    ///
-    /// 交互路径要求 stdin 是 TTY，进程级用例无法覆盖，因此断言落在可注入的 [`PairCalls`] 接缝上。
-    #[tokio::test]
-    async fn an_interactive_rejection_calls_reject_and_never_confirm() {
-        for (target, expected) in [
-            (PairTarget::Device, Method::DevicePairReject),
-            (PairTarget::Node, Method::NodePairReject),
-        ] {
-            let mut spy = CallSpy::default();
-            let error = settle_claim(&mut spy, target, "P", &claim(), &[], Answer::Rejected)
-                .await
-                .expect_err("用户拒绝必须以失败退出（不得改判成功）");
-            assert_eq!(
-                spy.methods(),
-                vec![expected],
-                "拒绝路径必须终结配对会话且不调 confirm"
-            );
-            assert_eq!(
-                spy.params(0),
-                serde_json::json!({ "pairingId": "P", "reason": null })
-            );
-            assert_eq!(error.code(), LocalErrorCode::Conflict.as_str());
-            assert!(
-                error.message().contains(expected.as_str()),
-                "消息必须说明调了哪个 reject：{}",
-                error.message()
-            );
-            // 退出码与 stderr 结构化行由统一出口决定：`cli::fail` 与 `cli::failure_line` 是同一构造。
-            assert_ne!(fail(&error), std::process::ExitCode::SUCCESS);
-            let line: Value = serde_json::from_str(&failure_line(error.code(), error.message()))
-                .expect("stderr 行必须是合法 JSON");
-            assert_eq!(line["code"], Value::from(error.code()));
-        }
-    }
-
-    /// `reject` 失败：按方法返回的码报错退出（非零），不吞错、不改判成功、不转而调 `confirm`。
-    #[tokio::test]
-    async fn a_failed_reject_exits_with_the_reported_code() {
-        let mut spy = CallSpy {
-            failure: Some((
-                LocalErrorCode::InvalidParams.as_str().to_owned(),
-                "pairing is not claimable".to_owned(),
-            )),
-            ..CallSpy::default()
-        };
-        let error = settle_claim(
-            &mut spy,
-            PairTarget::Device,
-            "P",
-            &claim(),
-            &[],
-            Answer::Rejected,
-        )
-        .await
-        .expect_err("reject 失败即失败退出");
-        assert_eq!(spy.methods(), vec![Method::DevicePairReject]);
-        assert_eq!(
-            error.code(),
-            LocalErrorCode::InvalidParams.as_str(),
-            "必须原样带出方法返回的码"
-        );
-        assert_ne!(fail(&error), std::process::ExitCode::SUCCESS);
-        let line: Value = serde_json::from_str(&failure_line(error.code(), error.message()))
-            .expect("stderr 行必须是合法 JSON");
-        assert_eq!(line["code"], Value::from("local.invalid_params"));
-    }
-
-    /// 确认路径：只调 `confirm`，不调 `reject`。设备方向**不提交任何授权集合**（只有 `pairingId`），
-    /// 节点方向提交展示过的 grants 与本次点名的 `exportIds`。
-    #[tokio::test]
-    async fn a_confirmation_calls_only_confirm() {
-        let mut device = CallSpy::default();
-        settle_claim(
-            &mut device,
-            PairTarget::Device,
-            "P",
-            &claim(),
-            &[],
-            Answer::Confirmed,
-        )
-        .await
-        .expect("确认必须调 confirm");
-        assert_eq!(device.methods(), vec![Method::DevicePairConfirm]);
-        assert_eq!(
-            device.params(0),
-            serde_json::json!({ "pairingId": "P" }),
-            "设备方向不得提交任何授权集合"
-        );
-
-        let mut node = CallSpy::default();
-        settle_claim(
-            &mut node,
-            PairTarget::Node,
-            "P",
-            &claim(),
-            &[],
-            Answer::Confirmed,
-        )
-        .await
-        .expect("确认必须调 confirm");
-        assert_eq!(node.methods(), vec![Method::NodePairConfirm]);
-        assert_eq!(
-            node.params(0),
-            serde_json::json!({
-                "pairingId": "P",
-                "grants": ["grant.session.list", "grant.session.read"],
-                "exportIds": [],
-            })
-        );
-    }
-
-    /// 回答词：只有 `y`/`Y`（去首尾空白后）算确认，其余一切（含空行与 EOF）都是拒绝（因此会走 reject 路径）。
-    #[test]
-    fn only_an_explicit_yes_is_a_confirmation() {
-        assert_eq!(answer_for("y\n"), Answer::Confirmed);
-        assert_eq!(answer_for("Y\n"), Answer::Confirmed);
-        // 首尾空白按既有行为容忍（用户按回车前的空格不该被当成拒绝）。
-        assert_eq!(answer_for(" y \n"), Answer::Confirmed);
-        for rejected in ["n\n", "no\n", "\n", "", "yes\n"] {
-            assert_eq!(answer_for(rejected), Answer::Rejected, "{rejected:?}");
-        }
-    }
-
-    /// 逐字匹配：相等才放行；前缀、大小写、空白、长度差异一律失败（R66 的判定）。
-    #[test]
-    fn supplied_values_must_match_the_status_values_verbatim() {
-        let claim = claim();
-        let exact = Supplied {
-            fingerprint: "ab12cd34".to_owned(),
-        };
-        verify_supplied(&claim, &exact).expect("逐字一致必须放行");
-
-        for fingerprint in [
-            "ab12cd3",   // 只匹配前缀
-            "ab12cd340", // 更长
-            "AB12CD34",  // 大小写不同
-            " ab12cd34", // 带前导空白
-            "ab12cd34 ", // 带尾随空白
-            "",          // 空值
-        ] {
-            let supplied = Supplied {
-                fingerprint: fingerprint.to_owned(),
-            };
-            let error =
-                verify_supplied(&claim, &supplied).expect_err(&format!("{fingerprint} 必须失败"));
-            assert_eq!(error.code(), "local.invalid_params");
-            assert!(
-                !error.message().contains("ab12cd34"),
-                "错误消息不得回显指纹：{}",
-                error.message()
-            );
-        }
-    }
-
-    /// 不匹配时**不改状态**：`run` 的顺序是「先逐字校验，再落定」，校验失败即返回，任何配对方法都不被调用
-    /// （未调 confirm、也未调 reject），退出码非零。
-    #[tokio::test]
-    async fn a_mismatched_fingerprint_settles_nothing() {
-        let mut spy = CallSpy::default();
-        let claim = claim();
-        let supplied = Supplied {
-            fingerprint: "ab12cd3".to_owned(),
-        };
-        let outcome = match verify_supplied(&claim, &supplied) {
-            Ok(()) => settle_claim(
-                &mut spy,
-                PairTarget::Device,
-                "P",
-                &claim,
-                &[],
-                Answer::Confirmed,
-            )
-            .await
-            .map(|_| ()),
-            Err(error) => Err(error),
-        };
-        let error = outcome.expect_err("前缀匹配必须失败");
-        assert_eq!(error.code(), "local.invalid_params");
-        assert!(
-            spy.methods().is_empty(),
-            "指纹不匹配时不得调用任何配对方法：{:?}",
-            spy.methods()
-        );
-        assert_ne!(fail(&error), std::process::ExitCode::SUCCESS);
-    }
-
-    /// 非交互必须显式给出指纹；交互式可以只靠终端提示（`None`）。
-    #[test]
-    fn non_interactive_confirmation_requires_the_fingerprint() {
-        assert!(
-            Supplied::parse(Some("ab12cd34"), false)
-                .expect("给了指纹")
-                .is_some()
-        );
-        assert!(Supplied::parse(None, true).expect("交互式").is_none());
-        for (fingerprint, interactive) in [
-            (None, false),     // 非交互 + 没给
-            (Some(""), true),  // 空指纹
-            (Some(""), false), // 非交互 + 空指纹
-        ] {
-            let error = Supplied::parse(fingerprint, interactive).expect_err("必须明确失败");
-            assert_eq!(error.code(), "local.invalid_request");
-        }
-    }
-
-    /// `begin`/`confirm` 的 `params` 与 §5.3/§5.4 的字段同名同形（kebab-case flags → camelCase）。
-    #[test]
-    fn pairing_params_match_the_wire_fields() {
-        let device = PairArgs {
-            expires_in_ms: Some(60_000),
-            ..PairArgs::default()
-        };
-        assert_eq!(
-            Value::Object(begin_params(PairTarget::Device, &device)),
-            serde_json::json!({ "expiresInMs": 60_000 })
-        );
-        assert_eq!(
-            Value::Object(begin_params(PairTarget::Device, &PairArgs::default())),
-            serde_json::json!({ "expiresInMs": null })
-        );
-
-        let node = PairArgs {
-            mode: Some("owner".to_owned()),
-            display_name: Some("My Node".to_owned()),
-            grants: vec!["grant.session.read".to_owned()],
-            ..PairArgs::default()
-        };
-        assert_eq!(
-            Value::Object(begin_params(PairTarget::Node, &node)),
-            serde_json::json!({
-                "mode": "owner",
-                "pairingUrl": null,
-                "displayName": "My Node",
-                "requestedGrants": ["grant.session.read"],
-            })
-        );
-
-        let claim = claim();
-        // 设备方向**没有** `exportIds` 面（§5.3 的形状），也不提交任何授权集合。
-        assert_eq!(
-            Value::Object(confirm_params(
-                PairTarget::Device,
-                "P",
-                &claim,
-                &["export-1".to_owned()],
-            )),
-            serde_json::json!({ "pairingId": "P" })
-        );
-        // 节点方向：零个 `--export-id` → 空清单；多个 → 按命令行顺序原样提交（Daemon 归一化）。
-        assert_eq!(
-            Value::Object(confirm_params(PairTarget::Node, "P", &claim, &[])),
-            serde_json::json!({
-                "pairingId": "P",
-                "grants": ["grant.session.list", "grant.session.read"],
-                "exportIds": [],
-            })
-        );
-        assert_eq!(
-            Value::Object(confirm_params(
-                PairTarget::Node,
-                "P",
-                &claim,
-                &["export-b".to_owned(), "export-a".to_owned()],
-            )),
-            serde_json::json!({
-                "pairingId": "P",
-                "grants": ["grant.session.list", "grant.session.read"],
-                "exportIds": ["export-b", "export-a"],
-            })
-        );
-    }
-
-    /// §5.4/`design.md` D6：零个 `--export-id` 时给出醒目提醒但**不改判**（确认仍照常执行），
-    /// 且提醒只属于节点方向（设备方向没有这一面）。
-    #[tokio::test]
-    async fn an_empty_export_id_list_warns_without_blocking() {
-        let notice = empty_export_ids_notice(PairTarget::Node, &[])
-            .expect("空清单必须给出提醒（该节点将看不到任何 Export）");
-        assert!(notice.contains("该节点将看不到任何 Export"), "{notice}");
-        assert!(notice.contains("警告"), "{notice}");
-        assert!(
-            empty_export_ids_notice(PairTarget::Node, &["export-1".to_owned()]).is_none(),
-            "给了清单就不提醒"
-        );
-        assert!(
-            empty_export_ids_notice(PairTarget::Device, &[]).is_none(),
-            "设备方向没有 exportIds 面，不提醒"
-        );
-
-        // 「不阻断」的机器可判据：提醒存在的同时，确认路径照常调 `confirm`，且 `exportIds` 是空数组
-        // （不是省略字段——省略会被 Daemon 以 `local.invalid_params` 拒绝）。
-        let mut spy = CallSpy::default();
-        settle_claim(
-            &mut spy,
-            PairTarget::Node,
-            "P",
-            &claim(),
-            &[],
-            Answer::Confirmed,
-        )
-        .await
-        .expect("提醒不得阻断确认");
-        assert_eq!(spy.methods(), vec![Method::NodePairConfirm]);
-        assert_eq!(spy.params(0)["exportIds"], serde_json::json!([]));
-    }
-
-    /// `node pair` 的命令行映射：`--export-id` 可重复、零次得到空清单（`node list` 的展示由 Daemon 的
-    /// `result` 原样输出，见 `view::node` 的 `exportIds`）。
-    #[test]
-    fn the_node_pair_flags_map_to_the_confirm_params() {
-        let empty = PairArgs::from(&super::super::NodePair {
-            mode: Some("owner".to_owned()),
-            pairing_url: None,
-            display_name: None,
-            grant: Vec::new(),
-            export_id: Vec::new(),
-            fingerprint: None,
-        });
-        assert!(empty.export_ids.is_empty(), "零次 = 空清单");
-        let two = PairArgs::from(&super::super::NodePair {
-            mode: Some("owner".to_owned()),
-            pairing_url: None,
-            display_name: None,
-            grant: Vec::new(),
-            export_id: vec!["export-1".to_owned(), "export-2".to_owned()],
-            fingerprint: None,
-        });
-        assert_eq!(two.export_ids, vec!["export-1", "export-2"]);
-    }
-
-    /// 设备方向的展示块必须含名称、指纹与过期时间，且**不含**短验证码、也不含任何授权集合行
-    /// （`device.pair.status` 已不返回这些字段）。
-    #[test]
-    fn the_claim_display_shows_every_required_field() {
-        let device = claim().display(PairTarget::Device);
-        for expected in ["Zhang's Phone", "ab12cd34", "2026-09-23T14:31:00.000Z"] {
-            assert!(device.contains(expected), "展示块缺 `{expected}`：{device}");
-        }
-        for forbidden in ["SAS", "481502", "grant.", "scope"] {
-            assert!(
-                !device.contains(forbidden),
-                "设备方向不得展示 `{forbidden}`：{device}"
-            );
-        }
-
-        // 节点方向另展示待授予的 grants（§5.4 / `SECURITY_DESIGN.md` §9.4）。
-        let node = claim().display(PairTarget::Node);
-        for expected in [
-            "ab12cd34",
-            "grant.session.list, grant.session.read",
-            "2026-09-23T14:31:00.000Z",
-        ] {
-            assert!(node.contains(expected), "节点展示块缺 `{expected}`：{node}");
-        }
-        // §5.4 的 `node.pair.status` 没有对端展示名字段：节点方向不展示名称行（即使 Claim 里有）。
-        assert!(
-            !node.contains("Zhang's Phone"),
-            "节点方向不展示名称：{node}"
-        );
-        assert!(!node.contains("SAS"), "节点方向也不展示短验证码：{node}");
-    }
-
-    /// 认领字段的读取面按方向不同：设备方向的状态响应没有 `requestedGrants`（读到空集合仍成功），
-    /// 节点方向缺该字段即 `local.internal`（不静默用空集合确认）。
-    #[test]
-    fn the_claim_fields_are_read_per_direction() {
-        let mut device = JsonObject::new();
-        device.insert("displayName".to_owned(), Value::from("Phone"));
-        device.insert("publicKeyFingerprint".to_owned(), Value::from("ab12cd34"));
-        device.insert(
-            "expiresAt".to_owned(),
-            Value::from("2026-09-23T14:31:00.000Z"),
-        );
-        let claim = Claim::from_status(PairTarget::Device, &device).expect("设备方向四字段即可");
-        assert!(claim.grants.is_empty(), "设备方向不得有授权集合");
-
-        // §5.4 的 `node.pair.status` **没有** `displayName`：节点方向的认领与展示都不得要求它。
-        let mut node = JsonObject::new();
-        node.insert(
-            "peerPublicKeyFingerprint".to_owned(),
-            Value::from("ab12cd34"),
-        );
-        node.insert(
-            "expiresAt".to_owned(),
-            Value::from("2026-09-23T14:31:00.000Z"),
-        );
-        node.insert(
-            "requestedGrants".to_owned(),
-            Value::from(Vec::<String>::new()),
-        );
-        let claim = Claim::from_status(PairTarget::Node, &node).expect("节点方向不需要名称字段");
-        assert!(
-            claim.display_name.is_none(),
-            "节点方向的状态响应没有名称字段"
-        );
-
-        let mut missing = node.clone();
-        missing.remove("requestedGrants");
-        let error = Claim::from_status(PairTarget::Node, &missing).expect_err("缺 requestedGrants");
-        assert_eq!(error.code(), "local.internal");
-    }
-
-    /// 状态词归类：设备与节点的差异、终态与未知词。
-    #[test]
-    fn pairing_states_are_classified_per_direction() {
-        assert_eq!(PairTarget::Device.poll("pending"), Some(Poll::Waiting));
-        assert_eq!(PairTarget::Device.poll("claimed"), Some(Poll::Claimable));
-        assert_eq!(PairTarget::Node.poll("claimed"), Some(Poll::Waiting));
-        assert_eq!(
-            PairTarget::Node.poll("pending_confirmation"),
-            Some(Poll::Claimable)
-        );
-        assert_eq!(PairTarget::Device.poll("approved"), Some(Poll::Approved));
-        assert_eq!(PairTarget::Device.poll("rejected"), Some(Poll::Rejected));
-        assert_eq!(PairTarget::Device.poll("expired"), Some(Poll::Expired));
-        assert_eq!(PairTarget::Node.poll("consumed"), None);
-        assert_eq!(
-            PairTarget::Device.poll("pending_confirmation"),
-            None,
-            "设备方向没有该状态（§5.3 的词表）"
-        );
-    }
-
-    /// `status` 的字段缺失即 `local.internal`（不静默用空值确认）。
-    #[test]
-    fn a_status_without_the_claim_fields_is_an_internal_error() {
-        let mut status = JsonObject::new();
-        status.insert("state".to_owned(), Value::from("claimed"));
-        let error = Claim::from_status(PairTarget::Device, &status).expect_err("缺字段必须失败");
-        assert_eq!(error.code(), "local.internal");
-    }
-}

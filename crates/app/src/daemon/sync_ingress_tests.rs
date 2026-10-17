@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use acp_core::model::{
-    Actor, DeviceId, GrantSet, NodeId, Nonce, PairingId, PeerIdentity, PeerPublicKey, ScopeSet,
+    Actor, DeviceId, NodeId, Nonce, PairingId, PeerIdentity, PeerPublicKey,
 };
 use acp_core::ports::{AuditQuery, TrustRecordRef};
 use acp_core::use_cases::UseCases;
@@ -30,7 +30,7 @@ use crate::compose::forked_publisher_with_sync;
 use identity_auth::{
     Authority, CanonicalOrigin, ChallengeId, ClaimFields, ClaimKindFields, ClaimOutcome,
     ClientKind, FeatureList, P1363Signature, PairingDecision, PairingProof, PairingSpec,
-    RequestedCapabilities, SyncDeviceProof, SyncPairingProof, timestamp_from_unix_seconds,
+    SyncDeviceProof, SyncPairingProof, timestamp_from_unix_seconds,
 };
 use p256::ecdsa::signature::Signer as _;
 use serde_json::{Value, json};
@@ -191,6 +191,7 @@ impl Harness {
             pairing: Arc::new(PairingSessions::new(
                 Arc::clone(composition.authority()),
                 composition.config().public_origin.clone(),
+                composition.config().node_name.clone(),
                 closer,
             )),
         }));
@@ -663,9 +664,6 @@ async fn approve_device(
             &PairingSpec::Device {
                 canonical_origin: origin.clone(),
             },
-            // 设备配对不申请任何授权词汇（`pairing-model` 删除设备权限层）：两侧集合都必须为空，
-            // 否则 `RequestedCapabilities::matches_target(Device)` 以 `CapabilityKindMismatch` 拒绝。
-            &RequestedCapabilities::empty(),
             Some("Test Phone"),
             &authority.now(),
             &expires_at,
@@ -685,7 +683,6 @@ async fn approve_device(
         host_binding: origin.as_str().to_owned(),
         public_key: public.clone(),
         client_nonce: client_nonce.clone(),
-        requested: RequestedCapabilities::empty(),
         proof: PairingProof::try_from_bytes(&[0u8; 32]).expect("32 字节占位 proof"),
     };
     fields.proof = SyncPairingProof {
@@ -728,10 +725,7 @@ async fn approve_device(
     let settlement = authority
         .settle(
             &record,
-            &PairingDecision::Approve {
-                granted_scopes: ScopeSet::empty(),
-                granted_grants: GrantSet::empty(),
-            },
+            &PairingDecision::Approve,
             &authority.now(),
         )
         .expect("批准配对");

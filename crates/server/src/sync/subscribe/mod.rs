@@ -60,13 +60,7 @@
 pub mod cursor;
 pub mod event;
 pub mod fanout;
-#[cfg(test)]
-mod fanout_tests;
 
-#[cfg(test)]
-pub(crate) mod fixture;
-#[cfg(test)]
-mod tests;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

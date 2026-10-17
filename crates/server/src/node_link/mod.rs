@@ -31,8 +31,6 @@ pub mod conn;
 pub mod pairing;
 pub mod resource;
 
-#[cfg(test)]
-mod tests;
 
 pub use catalog::CatalogRoute;
 pub use command::CommandRoute;

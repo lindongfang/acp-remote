@@ -658,12 +658,10 @@ pub(super) fn wire_session(
             ResourceOrigin::Local => OriginBlock::Local,
             ResourceOrigin::Remote {
                 owner_node_id,
-                export_id,
                 origin_epoch,
                 online,
             } => OriginBlock::Remote {
                 owner_node_id: Uuid::parse(owner_node_id.as_str()).ok()?,
-                export_id: NonEmptyText::<256>::parse(export_id.as_str()).ok()?,
                 origin_epoch: Uuid::parse(origin_epoch.as_str()).ok()?,
                 online: *online,
             },
