@@ -457,6 +457,39 @@
     font-family:var(--mono);font-size:21px;color:var(--ink);letter-spacing:.03em;line-height:1.1}
   .paircard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 24px;
     box-shadow:var(--shadow);margin:26px auto 0;max-width:460px;text-align:left}
+  /* 8 位配对码：逐位输入，四位一组留一处间隔，粘贴整段时自动分配到各格 */
+  .codewrap{max-width:460px;margin:24px auto 0}
+  .codes{display:flex;justify-content:center;gap:8px;margin:0 0 12px}
+  .codes input{width:46px;height:56px;box-sizing:border-box;padding:0;text-align:center;border-radius:11px;
+    border:1px solid var(--line);background:var(--panel);color:var(--ink);font:600 24px/1 var(--mono);
+    outline:0;transition:border-color .12s,box-shadow .12s}
+  .codes input:nth-child(5){margin-left:12px}
+  .codes input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .paira{display:flex;justify-content:center;margin-top:18px}
+  .paira .btn{padding:10px 24px;font-size:14px}
+  /* 配对码输入的主体卡片：来源胶囊、标题、静态有效期提示、输入格、主按钮与隐私说明 */
+  .pairpanel{width:100%;max-width:514px;box-sizing:border-box;margin:0 auto;padding:26px 26px 20px;
+    background:var(--panel);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);text-align:center}
+  .pairpanel h1{font-size:24px;margin:0 0 4px}
+  .pairorigin{display:inline-flex;align-items:center;gap:8px;max-width:100%;margin:0 0 18px;padding:6px 12px;
+    border-radius:999px;background:var(--panel-2);border:1px solid var(--line-2);font-size:12px;color:var(--ink-2)}
+  .pairorigin .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+  .pairorigin .host{font-family:var(--mono);font-size:11.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap}
+  .pairorigin .tls{flex:none;font-size:9.5px;font-weight:700;letter-spacing:.05em;color:var(--ok);
+    background:var(--ok-soft);border-radius:4px;padding:2px 5px}
+  .pairhint{margin:0 auto 18px;max-width:40ch;font-size:12px;line-height:1.6;color:var(--ink-3)}
+  .pairpanel .codewrap{margin-top:0}
+  .pairpanel .paira{margin-top:20px}
+  .pairpanel .paira .btn{width:100%;padding:12px 24px;font-size:14px;border-radius:11px}
+  @media (max-width:600px){
+    .pair{padding:32px 16px}
+    .pairpanel{padding:20px 16px 16px}
+    .pairorigin .host{max-width:190px}
+    .codes{gap:6px}
+    .codes input{width:40px;height:52px;font-size:21px}
+    .codes input:nth-child(5){margin-left:8px}
+  }
   .olsteps{margin:0;padding-left:20px;font-size:13px;color:var(--ink-2);display:flex;flex-direction:column;gap:6px}
   hr.sep{border:0;border-top:1px solid var(--line-2);margin:18px 0}
   .block{max-width:480px;margin:0 auto}
@@ -601,7 +634,7 @@
   <hr class="sep">
   <h2>四条路由</h2>
   <ol class="olsteps">
-    <li><code>#/pair</code> 配对页（9 个状态）</li>
+    <li><code>#/pair</code> 配对页（13 个状态：配对码入口 + 二维码入口）</li>
     <li><code>#/dirs</code> 目录页（目录为主角）</li>
     <li><code>#/dir/work-api</code> 目录详情（按月分档）</li>
     <li><code>#/chat/s1</code> 对话页（三栏）</li>
@@ -609,9 +642,9 @@
   <hr class="sep">
   <h2>配对是怎么进行的</h2>
   <dl>
-    <dt>配对地址</dt><dd>电脑上「添加设备」出示的一次性地址，含只能用一次的配对密钥。</dd>
-    <dt>打开即配对</dt><dd>在浏览器里打开这个地址就开始配对；本页不需要输入任何东西。</dd>
-    <dt>电脑审批</dt><dd>请求必须由电脑上的人确认；等待期间本页只轮询状态，不能自己批准。</dd>
+    <dt>配对地址</dt><dd>电脑上「添加设备」出示的一次性地址，含只能用一次的配对密钥；移动端扫码用。</dd>
+    <dt>8 位配对码</dt><dd>电脑同时打印的 8 位 Crockford 配对码（显示为 <code>XXXX-XXXX</code>），5 分钟内有效。网页端打开 <code>/pair</code> 后输入它；lookup 成功后页面会显示服务端剩余时间。</dd>
+    <dt>电脑审批</dt><dd>配对码用于取回配对信息；认领后终端仍会展示名称与指纹，等用户输入 <code>y</code>。本页只轮询状态，不能自己批准。</dd>
   </dl>
   <hr class="sep">
   <p class="hint">审批通过后自动进入目录；审批未通过会停在本页并说明原因，不会留下可用的主机记录。</p>
@@ -651,17 +684,28 @@
     </div>
     <label>配对页状态
       <select id="pairSel">
-        <option value="S0">S0 配对中（转圈 + 5 分钟倒计时）</option>
-        <option value="S1">S1 审批通过 → 自动进入目录</option>
-        <option value="S2">S2 审批未通过</option>
-        <option value="S3">S3 配对地址已过期</option>
-        <option value="S4">S4 地址已被使用</option>
-        <option value="S5">S5 无法识别地址</option>
-        <option value="S6">S6 地址属于另一台电脑</option>
-        <option value="S7">S7 需要 HTTPS</option>
-        <option value="S8">S8 配对请求失败</option>
+        <optgroup label="网页入口（/pair 无 fragment）">
+          <option value="S0">S0 输入 8 位配对码</option>
+          <option value="S1">S1 正在核对配对码（lookup）</option>
+          <option value="S2">S2 正在认领（claim）</option>
+          <option value="S6">S6 配对码不对或已过期</option>
+        </optgroup>
+        <optgroup label="共用：认领后">
+          <option value="S3">S3 配对中（转圈 + 5 分钟倒计时）</option>
+          <option value="S4">S4 审批通过 → 自动进入目录</option>
+          <option value="S5">S5 审批未通过</option>
+        </optgroup>
+        <optgroup label="二维码入口（/pair 带 #data=）">
+          <option value="S7">S7 配对地址已过期</option>
+          <option value="S8">S8 地址已被使用</option>
+          <option value="S9">S9 无法识别地址</option>
+          <option value="S10">S10 地址属于另一台电脑</option>
+          <option value="S11">S11 需要 HTTPS</option>
+          <option value="S12">S12 配对请求失败</option>
+        </optgroup>
       </select>
     </label>
+    <p class="hint" style="margin:-4px 0 2px">评审用：任意格式合法的 8 位码都会进入下一阶段；<code>0000-0000</code> 演示「配对码不对或已过期」。</p>
     <label>连接状态
       <select id="connSel">
         <option value="online">在线</option>
@@ -979,7 +1023,7 @@
   var A = {
     route:"#/dirs", conn:"online", clearArmed:false,
     iconStyle:"solid", iconSem:"target",
-    pair:"S0", pairLeft:PAIR_TTL, pairTimer:null, pairNavTimer:null,
+    pair:"S0", pairLeft:PAIR_TTL, pairDeadline:0, pairTimer:null, pairNavTimer:null, pairCode:"", pairPrev:null, pairVia:"code",
     scene:"normal", offline:false, dev:false, hl:true,
     filter:"all", query:"", page:1,
     chatScenario:"running", ctx:"mid", permSet:{},
@@ -1796,11 +1840,14 @@
   }
 
   /* ==================== 视图：配对页 ==================== */
-  /* 入口是浏览器地址栏里的配对 URL：打开即开始配对（实现里由 `startPairingFromAddress` 读地址片段触发）。
-     页面没有输入框、顶部返回入口、步骤条与右侧说明——就是一个居中的状态页：配对中（转圈 + 5 分钟倒计时，
-     等电脑审批）→ 通过则自动进入目录；未通过/失败只显示原因，不提供进入目录的入口。 */
+  /* 配对页有两种入口：
+     - `/pair` 没有 fragment：先输入电脑终端打印的 8 位 Crockford 配对码（显示 XXXX-XXXX），
+       经同源 lookup 取回配对绑定与 secret，再复用既有 claim / status 流程；
+     - `/pair` 带 `#data=` fragment：保留二维码入口，打开即认领并等待审批。
+     两种入口都是单目的状态页：不绘制页头、返回、步骤条或右侧说明；失败只显示固定原因，
+     不提供页内重试按钮，恢复路径是「在电脑上重新发起配对」。 */
   function pairHost(){
-    return '<dl class="kvbox"><dt>地址</dt><dd>'+esc(HOSTINFO.address)+'</dd>'+
+    return '<dl class="kvbox"><dt>配对地址</dt><dd>'+esc(HOSTINFO.address)+'</dd>'+
       '<dt>主机 ID</dt><dd>'+esc(HOSTINFO.hostId)+'</dd></dl>';
   }
   function pairLoading(title, lede, note, withCountdown){
@@ -1817,44 +1864,166 @@
       (warn ? '<div class="notice warn"><span>⚠</span><span>'+warn+'</span></div>' : '')+
       '</div>';
   }
+  /* 配对码是 8 位 Crockford base32：输入时统一大写，I/L 归一化为 1、O 归一化为 0，
+     其余不在 0-9A-HJKMNP-TV-Z 里的字符直接丢弃。 */
+  var CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  function pairCodeChar(ch){
+    ch = String(ch).toUpperCase();
+    if(ch === "I" || ch === "L") return "1";
+    if(ch === "O") return "0";
+    return CROCKFORD.indexOf(ch) >= 0 ? ch : "";
+  }
+  function pairCodeNorm(s){
+    s = String(s).toUpperCase().replace(/-/g, "");
+    var out = "";
+    for(var i=0;i<s.length;i++){
+      var c = pairCodeChar(s.charAt(i));
+      if(c) out += c;
+    }
+    return out;
+  }
+  /* lookup 成功后才开始计时：输入页不知道配对真实的 expiresAt，不显示本地倒计时。
+     「配对中」的剩余时间用绝对截止时间计算，lookup/claim 的耗时不会被忽略。 */
+  function resetPairClock(){
+    A.pairDeadline = Date.now() + PAIR_TTL*1000;
+    A.pairLeft = PAIR_TTL;
+  }
+  function pairRemaining(){
+    if(!A.pairDeadline) return A.pairLeft;
+    return Math.max(0, Math.ceil((A.pairDeadline - Date.now())/1000));
+  }
+  function paintPairCount(){
+    A.pairLeft = pairRemaining();
+    var el = $("pairCount");
+    if(el) el.textContent = Math.floor(A.pairLeft/60)+":"+String(A.pairLeft%60).padStart(2,"0");
+  }
+  function pairCodeEntry(){
+    var cells = "";
+    for(var i=0;i<8;i++){
+      cells += '<input type="text" inputmode="text" autocapitalize="characters" spellcheck="false" '+
+        'maxlength="1" autocomplete="off" aria-label="配对码第 '+(i+1)+' 位" '+
+        'value="'+esc(A.pairCode.charAt(i)||"")+'" />';
+    }
+    return '<div class="pairpanel">'+
+      '<div class="pairorigin"><span class="dot"></span><span class="host">'+esc(HOSTINFO.address)+'</span>'+
+        '<span class="tls">HTTPS</span></div>'+
+      '<h1>输入配对码</h1>'+
+      '<p class="pairhint">配对码 5 分钟内有效。</p>'+
+      '<div class="codewrap"><div class="codes" id="pairCode">'+cells+'</div>'+
+      '<div class="paira"><button class="btn primary" id="pairSubmit" disabled>继续配对</button></div></div>'+
+      '</div>';
+  }
   function viewPair(){
     var p = A.pair, stage="";
     if(p==="S0"){
+      stage = pairCodeEntry();
+    } else if(p==="S1"){
+      stage = pairLoading("正在核对配对码",
+        "正在用这个配对码取回这台电脑的配对信息。配对码只在本页内存中使用，不会写进地址栏、Cookie 或本地存储。",
+        "正在 lookup…", false);
+    } else if(p==="S2"){
+      stage = pairLoading("正在认领",
+        "已取回配对信息，正在提交认领。认领之后仍需要在电脑终端确认。",
+        "正在联系这台电脑…", false) +
+        '<div class="paircard">' + pairHost() + '</div>';
+    } else if(p==="S3"){
       stage = pairLoading("配对中",
-        "正在等待这台电脑确认这次配对请求。通过后会自动进入目录，不需要再操作本页。",
+        "已提交配对请求，正在等待这台电脑确认。通过后会自动进入目录，不需要再操作本页。",
         "正在等待电脑确认…", true) +
         '<div class="paircard">' + pairHost() +
         '<p class="hint" style="margin:10px 0 0">每 2 秒自动查询一次；重复查询是安全的，不会产生第二条配对记录。</p></div>';
-    } else if(p==="S1"){
+    } else if(p==="S4"){
       stage = pairLoading("已通过审批，正在进入目录",
         "配对已完成，正在建立同步连接并载入目录…", "正在连接这台电脑…", false) +
         '<p class="hint mono" style="margin-top:16px">本机设备 ID：' + esc(HOSTINFO.deviceId) + '</p>';
-    } else if(p==="S2"){
+    } else if(p==="S5"){
       stage = '<div class="block danger"><div class="glyph">✕</div><h1>审批未通过</h1>' +
         '<p class="lede">电脑端没有批准这次配对请求。本页没有获得任何访问能力，也没有留下可用的主机记录。</p>' +
-        '<div class="notice warn"><span>⚠</span><span>如需继续，请在电脑上重新发起配对，再用新的地址打开本页。</span></div></div>';
-    } else if(p==="S3"){
+        '<div class="notice warn"><span>⚠</span><span>如需继续，请在电脑上重新发起配对：二维码入口用新的地址，网页入口用新生成的配对码。</span></div></div>';
+    } else if(p==="S6"){
+      stage = pairFail("配对码不对或已过期",
+        "这个配对码不存在、已经过期、已经被认领，或者刚才的 lookup 响应没有送达。页面不会据此透露配对是否存在。",
+        "请重新生成配对码。");
+    } else if(p==="S7"){
       stage = pairFail("配对地址已过期", "这次配对地址已经超过有效期（5 分钟），或者被电脑端作废。",
         "请在电脑上重新发起配对，再用新的地址打开本页。");
-    } else if(p==="S4"){
+    } else if(p==="S8"){
       stage = pairFail("这个配对地址已经被使用", "每个配对地址只能成功使用一次。再次打开不会建立第二条连接。",
         "请在电脑上重新生成一个配对地址。");
-    } else if(p==="S5"){
+    } else if(p==="S9"){
       stage = pairFail("无法识别这个地址", "地址里的配对信息不完整或已被破坏，本页没有发出任何请求。",
         "常见原因：链接在复制时被截断，或者二维码识别不完整。");
-    } else if(p==="S6"){
+    } else if(p==="S10"){
       stage = pairFail("这个地址属于另一台电脑", "这个配对地址来自另一个来源，而一个浏览器身份只绑定一个地址，不能跨来源迁移。",
         "请确认扫码对象：打开这台电脑自己的配对地址。");
-    } else if(p==="S7"){
+    } else if(p==="S11"){
       stage = pairFail("需要 HTTPS 才能配对", "当前页面不是安全上下文（https 或 loopback），浏览器不提供配对所需的加密能力。",
         "请改用 https 打开本页后再配对；不能在这里降级成不安全的连接。");
-    } else if(p==="S8"){
+    } else if(p==="S12"){
       stage = pairFail("配对请求未能完成", "没能把配对请求送到这台电脑（网络或本地存储不可用）。本页已经结束这次配对，可以安全地重新开始。",
         "重新打开配对地址只会重新走一次流程，不会产生第二条配对记录。");
     } else {
       stage = '<h1>配对未完成</h1><p class="lede">这是一个占位状态。</p>';
     }
     return '<div class="pair"><div class="pairgrid"><div class="pstage">'+stage+'</div></div></div>';
+  }
+
+  /* 8 位配对码：逐格输入、自动跳到下一格、退格回上一格；粘贴 XXXX-XXXX 或 8 位连续字符时自动分配。 */
+  function bindPairCode(){
+    var box = $("pairCode"); if(!box) return;
+    var inputs = Array.prototype.slice.call(box.querySelectorAll("input"));
+    var submit = $("pairSubmit");
+    function sync(){
+      A.pairCode = inputs.map(function(x){ return x.value; }).join("");
+      if(submit) submit.disabled = A.pairCode.length !== 8;
+    }
+    function fill(start, text){
+      var code = pairCodeNorm(text);
+      for(var k=0;k<code.length && start+k<8;k++) inputs[start+k].value = code.charAt(k);
+      var next = Math.min(start + code.length, 7);
+      inputs[next].focus();
+      if(start + code.length >= 8) inputs[7].focus();
+      sync();
+    }
+    function go(){
+      if(A.pairCode.length !== 8) return;
+      var code = A.pairCode;
+      A.pairCode = "";
+      if(!window.isSecureContext){ location.hash = "#/pair/S11"; return; }
+      /* 原型约定：0000-0000 用来演示「配对码不对或已过期」，其余合法配对码进入 lookup。
+         lookup 成功后才开始计时；输入态不显示本地倒计时。 */
+      A.pairVia = "code";
+      A.pairDeadline = 0;
+      location.hash = (code === "00000000") ? "#/pair/S6" : "#/pair/S1";
+    }
+    inputs.forEach(function(inp, i){
+      inp.addEventListener("input", function(){
+        var raw = this.value.replace(/[^0-9A-Za-z-]/g, "");
+        var v = pairCodeNorm(raw);
+        this.value = v.charAt(v.length - 1) || "";
+        if(v.length > 1) fill(i, v);
+        else if(this.value && i < 7) inputs[i+1].focus();
+        sync();
+      });
+      inp.addEventListener("keydown", function(e){
+        if(e.key === "Backspace" && !this.value && i > 0){
+          e.preventDefault(); inputs[i-1].value = ""; inputs[i-1].focus(); sync(); return;
+        }
+        if(e.key === "ArrowLeft" && i > 0){ e.preventDefault(); inputs[i-1].focus(); return; }
+        if(e.key === "ArrowRight" && i < 7){ e.preventDefault(); inputs[i+1].focus(); return; }
+        if(e.key === "Enter"){ e.preventDefault(); go(); }
+      });
+      inp.addEventListener("paste", function(e){
+        e.preventDefault();
+        var text = (e.clipboardData || window.clipboardData).getData("text") || "";
+        fill(i, text);
+      });
+      inp.addEventListener("focus", function(){ this.select(); });
+    });
+    if(submit) submit.addEventListener("click", go);
+    var first = inputs[A.pairCode.length] || inputs[0];
+    if(first) first.focus();
+    sync();
   }
 
   /* ==================== 路由 ==================== */
@@ -1881,31 +2050,47 @@
     if(h.indexOf("#/pair")===0){
       var st = h.split("/")[2] || "S0";
       A.pair = st;
+      /* 输入态不持有倒计时：页面在 lookup 前不知道配对的真实 expiresAt。
+         每次新进入 S0 只清空输入；倒计时在进入 lookup 后才开始。 */
+      if(A.pair==="S0" && A.pairPrev!=="S0"){ A.pairCode = ""; A.pairDeadline = 0; }
+      /* lookup 或控制台直接跳到认领后状态时，从此刻开始计时（模拟服务端返回 expiresAt）。 */
+      if((A.pair==="S1"||A.pair==="S2"||A.pair==="S3") && !A.pairDeadline) resetPairClock();
+      A.pairPrev = A.pair;
       /* 这一页没有顶部导航：配对发生在连接之前，失败时也不提供进入目录的入口。 */
       app.innerHTML = viewPair();
-      /* 配对状态最多持续 5 分钟：倒计时结束即进入「地址已过期」。 */
-      if(A.pair==="S0"){
-        var paintCount = function(){
-          var el = $("pairCount");
-          if(el) el.textContent = Math.floor(A.pairLeft/60)+":"+String(A.pairLeft%60).padStart(2,"0");
-        };
-        paintCount();
+      if(A.pair==="S0") bindPairCode();
+      /* 配对码入口：lookup 与 claim 各展示一小段进行中状态，随后进入等待审批。 */
+      if(A.pair==="S1"){
+        A.pairNavTimer = setTimeout(function(){
+          if(A.pair==="S1") location.hash = "#/pair/S2";
+        }, 900);
+      }
+      if(A.pair==="S2"){
+        A.pairNavTimer = setTimeout(function(){
+          if(A.pair==="S2") location.hash = "#/pair/S3";
+        }, 900);
+      }
+      /* 配对状态最多持续 5 分钟：剩余时间从 lookup 起算，lookup/claim 不重新计时。
+         配对码入口过期走「配对码不对或已过期」，二维码入口仍走「地址已过期」。 */
+      if(A.pair==="S3"){
+        paintPairCount();
         A.pairTimer = setInterval(function(){
           A.pairLeft = Math.max(0, A.pairLeft-1);
-          paintCount();
-          if(A.pairLeft === 0) location.hash = "#/pair/S3";
+          paintPairCount();
+          if(A.pairLeft === 0) location.hash = A.pairVia==="code" ? "#/pair/S6" : "#/pair/S7";
         }, 1000);
       }
       /* 审批通过后不要求用户再点一次：短暂展示「正在进入目录」，然后进入目录页。 */
-      if(A.pair==="S1"){
+      if(A.pair==="S4"){
         A.pairNavTimer = setTimeout(function(){
-          if(A.pair==="S1") location.hash = "#/dirs";
+          if(A.pair==="S4") location.hash = "#/dirs";
         }, 1600);
       }
     }
     else if(h.indexOf("#/dir/")===0) app.innerHTML = viewDirDetail(h.slice(6));
     else if(h.indexOf("#/chat/")===0){ A.session = h.slice(7); app.innerHTML = viewChat(); }
     else { A.route="#/dirs"; app.innerHTML = viewDirs(); }
+    if(h.indexOf("#/pair")!==0){ A.pairPrev = null; A.pairCode = ""; A.pairDeadline = 0; }
 
     bindView();
     requestAnimationFrame(function(){ fitPaths(); updateJump(); });
@@ -2273,9 +2458,14 @@
   /* ==================== 控制台 ==================== */
   $("consoleHead").onclick=function(){ $("console").classList.toggle("collapsed"); };
   $("navRow").onclick=function(ev){ var b=ev.target.closest("[data-go]"); if(!b) return;
-    if(b.dataset.go==="#/pair") A.pairLeft=PAIR_TTL;
+    if(b.dataset.go==="#/pair"){ A.pairDeadline=0; A.pairVia="code"; A.pairCode=""; A.pairPrev=null; }
     location.hash=b.dataset.go; };
-  $("pairSel").onchange=function(){ A.pairLeft=PAIR_TTL; location.hash="#/pair/"+this.value; };
+  $("pairSel").onchange=function(){
+    var s=this.value;
+    A.pairDeadline=0; A.pairPrev=null; A.pairCode="";
+    A.pairVia = (s==="S0"||s==="S1"||s==="S2"||s==="S6") ? "code" : "fragment";
+    location.hash="#/pair/"+s;
+  };
   $("sceneSel").onchange=function(){ A.scene=this.value; A.query=""; A.filter="all"; render(); };
   $("connSel").onchange=function(){ A.conn=this.value; A.clearArmed=false; render(); };
   $("themeSel").value = storedTheme();
@@ -2295,7 +2485,7 @@
   $("cbDeg").onchange=function(){ A.degradeDemo=this.checked; render(); };
   $("cbHl").onchange=function(){ A.hl=this.checked; render(); };
   $("cbDev").onchange=function(){ A.dev=this.checked; render(); };
-  $("btnPairFlow").onclick=function(){ A.pairLeft=PAIR_TTL; A.pair="S0"; location.hash="#/pair/S0"; };
+  $("btnPairFlow").onclick=function(){ A.pairDeadline=0; A.pairVia="code"; A.pairCode=""; A.pairPrev=null; A.pair="S0"; location.hash="#/pair/S0"; render(); };
   $("scrim").onclick=function(){ $("drawer").classList.remove("open"); $("scrim").classList.remove("open"); };
   $("dxScrim").onclick=closeDx;
   $("dxClose").onclick=closeDx;
@@ -2310,7 +2500,7 @@
     if(!act) return;
     var a=act.dataset.hostact;
     if(a==="retry"){ A.conn="syncing"; render(); renderHost(); toast("正在重新连接…"); }
-    else if(a==="repair"){ closeHost(); location.hash="#/pair/S0"; }
+    else if(a==="repair"){ closeHost(); A.pairCode=""; A.pairPrev=null; A.pairDeadline=0; A.pairVia="code"; location.hash="#/pair/S0"; render(); }
     else if(a==="clear"){ A.clearArmed=true; renderHost(); }
     else if(a==="clear-no"){ A.clearArmed=false; renderHost(); }
     else if(a==="clear-yes"){ A.clearArmed=false; A.conn="unpaired"; render(); renderHost();

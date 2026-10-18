@@ -348,6 +348,21 @@ impl TrustStore for SqliteStore {
         Ok(row.as_ref().map(pairing_from_row).transpose()?)
     }
 
+    /// 全部配对行（维护路径的只读列表）：按 `created_at`、`pairing_id` 升序，结果确定。
+    ///
+    /// 与单读同一套 `PAIRING_COLUMNS` 与构造器校验：列形状损坏仍按 `Corrupt` 失败关闭，不跳过坏行。
+    async fn pairings(&self) -> Result<Vec<PairingRecord>, PortError> {
+        let sql = format!(
+            "SELECT {PAIRING_COLUMNS} FROM owned_pairing ORDER BY created_at ASC, pairing_id ASC"
+        );
+        let rows = sqlx::query(&sql).fetch_all(&self.pools().read).await.db()?;
+        let records = rows
+            .iter()
+            .map(pairing_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(records)
+    }
+
     async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
         let sql =
             format!("SELECT {PAIRING_PEER_COLUMNS} FROM owned_pairing_peer WHERE pairing_id = ?1");
@@ -837,8 +852,11 @@ impl TrustStore for SqliteStore {
         }
     }
 
-    /// §11.6 第 6 条：只终结「未确认且 `expires_at <= at`」的行，为每条被终结的配对补写
-    /// `pairing.expired`；已批准信任不受影响。
+    /// §11.6 第 6 条：只终结「未确认」的配对，为每条被终结的配对补写 `pairing.expired`；已批准信任不受影响。
+    ///
+    /// 两种输入形态（[`ExpiryWrite::only`]）：`None` 按时间扫描（`expires_at <= at`，既有语义）；
+    /// `Some(ids)` 只处理列出的标识、**不**判 `expires_at`（重启终结用），但同样只更新
+    /// `created`/`claimed`/`pending_confirmation` 三态，绝不改写已批准/已终结的记录。
     async fn expire_pairings(&self, write: ExpiryWrite) -> Result<u64, PortError> {
         self.writable()?;
         let mut tx = self
@@ -847,32 +865,59 @@ impl TrustStore for SqliteStore {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .db()?;
-        let expired: Vec<String> = sqlx::query_scalar(
-            "SELECT pairing_id FROM owned_pairing WHERE state IN ('created','claimed',\
-             'pending_confirmation') AND expires_at <= ?1 ORDER BY pairing_id ASC",
-        )
-        .bind(write.context.at.as_str())
-        .fetch_all(&mut *tx)
-        .await
-        .db()?;
+        let by_id = write.only.is_some();
+        let expired: Vec<String> = match &write.only {
+            Some(ids) => {
+                if ids.is_empty() {
+                    tx.commit().await.db()?;
+                    return Ok(0);
+                }
+                ids.iter().map(|id| id.as_str().to_owned()).collect()
+            }
+            None => sqlx::query_scalar(
+                "SELECT pairing_id FROM owned_pairing WHERE state IN ('created','claimed',\
+                 'pending_confirmation') AND expires_at <= ?1 ORDER BY pairing_id ASC",
+            )
+            .bind(write.context.at.as_str())
+            .fetch_all(&mut *tx)
+            .await
+            .db()?,
+        };
         let mut terminated = 0_u64;
         for pairing_id in &expired {
             // `claimed_at` 必须一并落值：`owned_pairing` 的 `(state = 'created') = (claimed_at IS NULL)`
             // CHECK（§7.3）不接受「非 created 但 claimed_at 为空」的行。对从未被认领的配对，扫描时刻
             // 就是它离开 `created` 的时刻，因此如实写扫描时刻，而不是把它留在 `created` 让后续认领
             // 凭 `expires_at` 判定（那会让「已过期」不再是一个可见终态）。
-            let updated = sqlx::query(
-                "UPDATE owned_pairing SET state = 'expired', terminal_at = ?2, \
-                 claimed_at = COALESCE(claimed_at, ?2) \
-                 WHERE pairing_id = ?1 AND state IN ('created','claimed','pending_confirmation') AND \
-                 expires_at <= ?2",
-            )
-            .bind(pairing_id)
-            .bind(write.context.at.as_str())
-            .execute(&mut *tx)
-            .await
-            .db()?
-            .rows_affected();
+            //
+            // 两种形态共用同一条 UPDATE 的「只动未确认状态」守卫；按标识终结不再要求已到期（重启后的
+            // 未确认配对已无法继续验密，必须立即终结）。
+            let updated = if by_id {
+                sqlx::query(
+                    "UPDATE owned_pairing SET state = 'expired', terminal_at = ?2, \
+                     claimed_at = COALESCE(claimed_at, ?2) \
+                     WHERE pairing_id = ?1 AND state IN ('created','claimed','pending_confirmation')",
+                )
+                .bind(pairing_id)
+                .bind(write.context.at.as_str())
+                .execute(&mut *tx)
+                .await
+                .db()?
+                .rows_affected()
+            } else {
+                sqlx::query(
+                    "UPDATE owned_pairing SET state = 'expired', terminal_at = ?2, \
+                     claimed_at = COALESCE(claimed_at, ?2) \
+                     WHERE pairing_id = ?1 AND state IN ('created','claimed','pending_confirmation') AND \
+                     expires_at <= ?2",
+                )
+                .bind(pairing_id)
+                .bind(write.context.at.as_str())
+                .execute(&mut *tx)
+                .await
+                .db()?
+                .rows_affected()
+            };
             if updated == 0 {
                 continue;
             }

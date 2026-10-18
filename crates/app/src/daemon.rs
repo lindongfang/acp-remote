@@ -60,7 +60,8 @@ use server::sync::conn::{
     WS_SUBPROTOCOL as SYNC_WS_SUBPROTOCOL, WsEndpoint as SyncWsEndpoint,
 };
 use server::sync::pairing::{
-    CLAIM_PATH as SYNC_CLAIM_PATH, PairingHttp as SyncPairingHttp, STATUS_PATH as SYNC_STATUS_PATH,
+    CLAIM_PATH as SYNC_CLAIM_PATH, LOOKUP_PATH as SYNC_LOOKUP_PATH, PairingHttp as SyncPairingHttp,
+    STATUS_PATH as SYNC_STATUS_PATH,
 };
 use server::sync::router::SyncRoutes;
 use server::sync::subscribe::fanout::SyncPublisher;
@@ -705,6 +706,7 @@ fn spawn_maintenance(
     let cancel = Arc::new(Notify::new());
     let task_cancel = Arc::clone(&cancel);
     let core = Arc::clone(composition.use_cases());
+    let authority = Arc::clone(composition.authority());
     let policy = composition.retention_policy();
     let clock = Arc::clone(composition.clock());
     let attachments = composition.attachments();
@@ -721,6 +723,7 @@ fn spawn_maintenance(
             }
             maintenance_tick(
                 &core,
+                &authority,
                 &policy,
                 &clock,
                 attachments.as_ref(),
@@ -736,6 +739,7 @@ fn spawn_maintenance(
 /// 一轮清理：`prune` + `expire_pairings` + `sweep_orphans`（三者各自失败只记日志，不中断后续）。
 async fn maintenance_tick(
     core: &Arc<acp_core::use_cases::UseCases>,
+    authority: &Arc<Authority>,
     policy: &acp_core::ports::RetentionPolicy,
     clock: &Arc<dyn acp_core::ports::Clock>,
     attachments: &SqliteStore,
@@ -755,7 +759,8 @@ async fn maintenance_tick(
             error = crate::compose::port_error_token(&error)
         ),
     }
-    let expired_pairings = match core.expire_pairings(&actor).await {
+    let at = clock.now();
+    let expired_pairings = match expire_due_pairings(core, authority, &at).await {
         Ok(count) => count,
         Err(error) => {
             tracing::warn!(
@@ -763,7 +768,19 @@ async fn maintenance_tick(
                 step = "expire_pairings",
                 error = crate::compose::port_error_token(&error)
             );
-            0
+            // 列表读取失败时退回存储层的时间扫描：内存 secret 留到下一轮，但持久记录不会因此停在
+            // `created`（过期时间一到仍可被终结）。
+            match core.expire_pairings(&actor).await {
+                Ok(count) => count,
+                Err(fallback) => {
+                    tracing::warn!(
+                        event = "daemon.maintenance_failed",
+                        step = "expire_pairings_fallback",
+                        error = crate::compose::port_error_token(&fallback)
+                    );
+                    0
+                }
+            }
         }
     };
     let swept_orphans = match attachments
@@ -789,6 +806,59 @@ async fn maintenance_tick(
         still_over_limit,
         "周期清理完成"
     );
+}
+
+/// 进程启动时的配对内存态恢复（`IDENTITY_AND_AUTH_CONTRACT.md` §4.3、`identity-pairing` 的
+/// 「配对码与 secret 的生命周期」）。
+///
+/// 顺序固定为：`Authority::reset_memory`（丢弃上一个进程留下的 secret 与配对码映射——它们不能从持久化
+/// 摘要重建）→ 读全部配对记录 → `Authority::unrecoverable_after_restart`（`created`/`pending_confirmation`
+/// 已无法继续验密）→ 用同一写集把这些行终结为 `expired`。已批准的信任记录不在未确认集合里，不受影响。
+///
+/// 返回被终结的配对数。失败时调用方只记日志、不阻止启动：这些配对本来就不能被认领（内存 secret 已清空），
+/// 到期后仍会被周期维护终结。
+///
+/// 公开是为了让集成测试用**真实**的 core/Authority 调同一个入口（`app::daemon` 的其他接线点同样公开给
+/// 受控路径集成测试）；它不是管理协议的一部分。
+pub async fn recover_pairings_after_restart(
+    core: &Arc<UseCases>,
+    authority: &Arc<Authority>,
+) -> Result<u64, PortError> {
+    let (secrets, challenges) = authority.reset_memory();
+    tracing::info!(
+        event = "daemon.pairing_memory_reset",
+        secrets,
+        challenges,
+        "已清空上一个进程的配对 secret 与挑战缓存"
+    );
+    let actor = Actor::LocalCli;
+    let records = core.pairings(&actor).await?;
+    let unrecoverable = authority.unrecoverable_after_restart(&records);
+    let terminated = core.expire_pairings_by_id(&actor, &unrecoverable).await?;
+    if terminated > 0 {
+        tracing::warn!(
+            event = "daemon.pairings_terminated_on_restart",
+            pairings = terminated,
+            "重启后已无法继续验密的未确认配对已被终结"
+        );
+    }
+    Ok(terminated)
+}
+
+/// 周期维护的配对一步：读全部记录 → `Authority::due_pairings`（同时清除内存 secret 与配对码映射）→
+/// 按返回的标识把持久记录终结为 `expired`。
+///
+/// 只终结 `due_pairings` 判定的记录；它已经排除了终态记录与仍有效的配对，已批准但已到期的记录只清内存
+/// secret、不改写持久状态（存储层只更新未确认的行）。返回被终结的配对数。
+pub async fn expire_due_pairings(
+    core: &Arc<UseCases>,
+    authority: &Arc<Authority>,
+    at: &Timestamp,
+) -> Result<u64, PortError> {
+    let actor = Actor::LocalCli;
+    let records = core.pairings(&actor).await?;
+    let due = authority.due_pairings(&records, at);
+    core.expire_pairings_by_id(&actor, &due).await
 }
 
 /// 合并窗口的驱动面（§6 第 10 条）。
@@ -1110,15 +1180,21 @@ impl SyncIngress {
 ///
 /// 配对端点的四个安全响应头经 `SyncPairingHttp::default_response_headers` **同时**声明给接入层
 /// （`register_post` 的每路径默认响应头）：否则接入层在调用处理器前产生的 413/Host 400 不带这些头。
+/// 三个配对 path 都注册在这里：claim、status 与网页入口的 lookup（`/sync/v1/pairing/lookup`）。
+///
+/// `public_origin` 是 `daemon.public_origin`：lookup 用它做**前置**来源校验（跨源请求不得消耗配对码），
+/// 并与配对登记的 `host_binding` 再核对一次。`None` = 未配置：lookup 一律统一失败（网页入口不可用）。
 ///
 /// `owner` 是 Owner 可达性（`sync.subscribe`/快照的运行时输入）：`server::sync` 不得调用平级的
 /// `server::node_link`，因此这条事实只能由组合根注入（见 [`NodeLinkReachability`]）。
+#[allow(clippy::too_many_arguments)] // 接线参数各自是独立持有者，收进结构体只会把装配顺序藏起来
 pub fn register_sync_paths(
     listener: &mut NetListener,
     core: &Arc<UseCases>,
     authority: &Arc<Authority>,
     broker: &Arc<Broker>,
     config: &SyncConfig,
+    public_origin: Option<String>,
     owner: Arc<dyn OwnerReachability>,
     event_queue: Option<tokio::sync::mpsc::Receiver<CommittedEvent>>,
 ) -> Result<SyncIngress, NetworkError> {
@@ -1175,6 +1251,7 @@ pub fn register_sync_paths(
     let pairing = Arc::new(SyncPairingHttp::new(
         Arc::clone(core),
         Arc::clone(authority),
+        public_origin,
     ));
     let default_headers = pairing.default_response_headers();
     listener
@@ -1182,6 +1259,9 @@ pub fn register_sync_paths(
         .map_err(NetworkError::Route)?;
     listener
         .register_post(SYNC_STATUS_PATH, pairing.status_handler(), default_headers)
+        .map_err(NetworkError::Route)?;
+    listener
+        .register_post(SYNC_LOOKUP_PATH, pairing.lookup_handler(), default_headers)
         .map_err(NetworkError::Route)?;
     Ok(SyncIngress {
         registry,
@@ -1249,6 +1329,7 @@ impl NetIngress {
             &authority,
             composition.broker(),
             &sync_config(composition.config()),
+            composition.config().public_origin.clone(),
             Arc::new(NodeLinkReachability::new(Arc::clone(ingress.registry()))),
             sync_events,
         )?;

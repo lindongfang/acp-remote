@@ -19,8 +19,9 @@
 //!   认证后交接的 feature 转发给两者（组合根注册的就是它）；
 //! - [`snapshot`]：[`snapshot::plan`] 组装三类清单资源与分块，[`snapshot::send`] 下发并计算
 //!   `snapshotDigest`（§9.4）；
-//! - [`pairing`]：两条配对 HTTP 端点（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`）的
-//!   判定、四个安全响应头与按来源/`pairingId` 的固定限流（§7.1–§7.4、§14）。
+//! - [`pairing`]：三条配对 HTTP 端点（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`、
+//!   `POST /sync/v1/pairing/lookup`）的判定、四个安全响应头、按来源/`pairingId` 的固定限流与配对码的一次性
+//!   消耗（§7.1–§7.5、§14）。
 //!
 //! 本模块**只**声明已经存在的子模块，不由占位符预支。
 //!

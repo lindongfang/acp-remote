@@ -8,6 +8,8 @@
     { "$ref": "#/$defs/claimResponse" },
     { "$ref": "#/$defs/statusRequest" },
     { "$ref": "#/$defs/statusResponse" },
+    { "$ref": "#/$defs/lookupRequest" },
+    { "$ref": "#/$defs/lookupResponse" },
     { "$ref": "#/$defs/httpError" }
   ],
   "$defs": {
@@ -113,6 +115,34 @@
           }
         }
       ]
+    },
+    "lookupRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "pairingCode"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "pairingCode": {
+          "type": "string",
+          "description": "8 位 Crockford base32（40 bit），大小写不敏感；允许在 4+4 之间带一个 `-`。服务端先把 `I`/`L` 归一化为 `1`、`O` 归一化为 `0` 再比较；`U` 不在 Crockford 字母表内。",
+          "pattern": "^[0-9A-HIJ-KLM-NOP-TV-Za-hij-klm-nop-tv-z]{4}-?[0-9A-HIJ-KLM-NOP-TV-Za-hij-klm-nop-tv-z]{4}$"
+        }
+      }
+    },
+    "lookupResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "pairingId", "hostId", "hostPublicKey", "canonicalOrigin", "pairingSecret", "expiresAt"],
+      "description": "lookup 成功只返回取回绑定所需的材料；不推进配对状态，成功即消耗配对码。",
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "pairingId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "hostPublicKey": { "$ref": "common.schema.json#/$defs/base64url65" },
+        "canonicalOrigin": { "$ref": "#/$defs/canonicalOrigin" },
+        "pairingSecret": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+      }
     },
     "httpError": {
       "type": "object",

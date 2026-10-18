@@ -1,4 +1,4 @@
-//! 进程内状态：配对 secret、每配对失败计数、挑战缓存。
+//! 进程内状态：配对 secret、配对码反查、每配对失败计数、挑战缓存。
 //!
 //! 三条不变量（`design.md` D3）：
 //!
@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use acp_core::model::{Nonce, PairingId, PeerIdentity, Timestamp};
 
+use crate::pairing_code::PairingCode;
 use crate::transcript::FeatureList;
 use crate::types::at_or_after;
 use crate::types::{
@@ -35,13 +36,15 @@ pub(crate) struct ChallengeRecord {
     pub expires_at: Timestamp,
 }
 
-/// 一次配对的内存材料：secret 与其配套的本机 nonce / 请求标识。
+/// 一次配对的内存材料：secret 与其配套的本机 nonce / 请求标识 / 网页入口配对码。
 ///
-/// 三者同生同灭（同一把锁、同一张表）：重启后一起丢失，这就是「重启后未确认配对全部终结」的
-/// 物理依据，不需要额外的持久化字段。
+/// 四者同生同灭（同一把锁、同一张表）：重启后一起丢失，这就是「重启后未确认配对全部终结」的
+/// 物理依据，不需要额外的持久化字段。配对码不能从 digest 重建，因此必须与 secret 一起驻留。
 #[derive(Debug, Clone)]
 pub(crate) struct PairingMaterial {
     pub secret: PairingSecret,
+    /// 由 [`PairingMaterial::secret`] 域分离派生的网页入口配对码（design D2）。
+    pub code: PairingCode,
     pub server_nonce: Nonce,
     pub pairing_request_id: PairingRequestId,
     /// 是否已被批准（「内存态只允许比已提交状态更严格」，见 design D3）。
@@ -56,6 +59,10 @@ pub(crate) struct PairingMaterial {
 #[derive(Debug, Default)]
 pub(crate) struct State {
     secrets: BTreeMap<String, PairingMaterial>,
+    /// 网页入口的配对码反查表（`code -> pairing`）。只登记仍持有 secret 的活跃配对；任何清除
+    /// secret 的路径必须同步移除对应条目（见 `clear_secret`/`take_approved_secret`/
+    /// `clear_all_secrets`），否则码会比 secret 活得更久。
+    codes: BTreeMap<PairingCode, PairingId>,
     failures: BTreeMap<String, u32>,
     invalidated: BTreeSet<String>,
     challenges: BTreeMap<String, ChallengeRecord>,
@@ -63,8 +70,39 @@ pub(crate) struct State {
 
 impl State {
     /// 登记一个配对的内存材料（创建配对时）。
+    ///
+    /// 同一配对标识被重新登记时，旧材料的码一并移除（否则旧码会指向新的 secret）。
     pub fn put_secret(&mut self, pairing: &PairingId, material: PairingMaterial) {
-        self.secrets.insert(pairing.as_str().to_owned(), material);
+        let code = material.code.clone();
+        if let Some(previous) = self.secrets.insert(pairing.as_str().to_owned(), material) {
+            self.codes.remove(&previous.code);
+        }
+        self.codes.insert(code, pairing.clone());
+    }
+
+    /// 该码是否已被某个仍持有 secret 的配对占用（创建时的碰撞去重）。
+    pub fn code_in_use(&self, code: &PairingCode) -> bool {
+        self.codes
+            .keys()
+            .fold(false, |seen, stored| seen | stored.matches(code))
+    }
+
+    /// 取出并**原子消耗**一个配对码，返回配对标识与该配对的 secret（design D3）。
+    ///
+    /// - 比较是常数时间的，且在**全部**活跃码上执行（不因首个命中提前返回）；
+    /// - 命中即从反查表移除；同一码的第二次查找返回 `None`，与不存在的码不可区分；
+    /// - 若反查表与 secret 表不一致（不变量被破坏），码同样被移除并返回 `None`——失败关闭。
+    pub fn take_code(&mut self, code: &PairingCode) -> Option<(PairingId, PairingSecret)> {
+        let mut matched = None;
+        for stored in self.codes.keys() {
+            if stored.matches(code) {
+                matched = Some(stored.clone());
+            }
+        }
+        let stored = matched?;
+        let pairing = self.codes.remove(&stored)?;
+        let secret = self.secrets.get(pairing.as_str()).map(|m| m.secret)?;
+        Some((pairing, secret))
     }
 
     /// 取配对 secret。
@@ -91,25 +129,40 @@ impl State {
 
     /// 取出「已批准且仍持有 secret」的配对（首次认证成功消费一次）：返回 `true` 时才清除。
     pub fn take_approved_secret(&mut self, pairing: &PairingId) -> bool {
-        let approved = self
+        if !self
             .secrets
             .get(pairing.as_str())
-            .is_some_and(|material| material.approved);
-        if approved {
-            self.secrets.remove(pairing.as_str());
+            .is_some_and(|material| material.approved)
+        {
+            return false;
         }
-        approved
+        match self.secrets.remove(pairing.as_str()) {
+            Some(material) => {
+                self.codes.remove(&material.code);
+                true
+            }
+            None => false,
+        }
     }
 
     /// 清除配对 secret（批准后首次认证成功、拒绝、过期与重启终结都走这里）。
+    ///
+    /// 配对码与 secret 同生同灭：这里必须同时移除反查表中的码。
     pub fn clear_secret(&mut self, pairing: &PairingId) -> bool {
-        self.secrets.remove(pairing.as_str()).is_some()
+        match self.secrets.remove(pairing.as_str()) {
+            Some(material) => {
+                self.codes.remove(&material.code);
+                true
+            }
+            None => false,
+        }
     }
 
-    /// 清空全部 secret（启动恢复用；返回被清理的条数）。
+    /// 清空全部 secret 与配对码（启动恢复用；返回被清理的 secret 条数）。
     pub fn clear_all_secrets(&mut self) -> usize {
         let count = self.secrets.len();
         self.secrets.clear();
+        self.codes.clear();
         count
     }
 

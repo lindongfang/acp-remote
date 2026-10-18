@@ -329,6 +329,52 @@
       "valid": true
     },
     {
+      "fixture": "valid/pairing-lookup-request.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/pairing-lookup-response.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/pairing-lookup-request-missing-code.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/pairing-lookup-request-short-code.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "invalid/pairing-lookup-request-invalid-character.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "invalid/pairing-lookup-request-unknown-field.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/pairing-lookup-response-missing-secret.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/pairing-lookup-error-unknown-code.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
       "fixture": "invalid/sequence-is-number.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,

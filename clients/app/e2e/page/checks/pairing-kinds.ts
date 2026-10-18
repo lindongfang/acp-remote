@@ -3,9 +3,10 @@
  *
  * 跑的是**真实页面**：`app/node-link/pair.tsx` / `app/pair.tsx` → 共用的配对页主体 →
  * 真实 `ClientStore` → 生产组合根（片段读取与清除、结构校验、环境前置条件、类型校验）。
- * 起点一律是「二维码地址的片段挂到 `location.hash` 上再挂载页面」——地址片段是唯一入口，
- * 页面没有输入框与提交按钮。被替身顶掉的只有配对 HTTPS 面（`fetch`）：e2e 环境里
- * `https://` 来源不可达，因此它同时兼作「发过哪些请求」的账本。
+ * 起点一律是「二维码地址的片段挂到 `location.hash` 上再挂载页面」——本文件验的是**二维码**
+ * 入口的类型区分；`/pair` 无片段时的配对码输入由 `pairing-first-run.ts` 的 PW-2/PW-6 覆盖。
+ * 被替身顶掉的只有配对 HTTPS 面（`fetch`）：e2e 环境里 `https://` 来源不可达，因此它同时
+ * 兼作「发过哪些请求」的账本。
  *
  * ## 这几条覆盖什么
  *
@@ -112,7 +113,7 @@ function phaseOf(container: HTMLElement): string | null {
 /**
  * 打开配对地址：把二维码地址的 `#…` 部分挂到 `location.hash` 上，再挂载页面。
  *
- * 地址片段是唯一入口（design D1），与扫码打开同一条路径（组合根读片段并立即清除）。
+ * 二维码路径的入口是地址片段（design D1），与扫码打开同一条路径（组合根读片段并立即清除）。
  */
 function openPairingAddress(text: string): void {
   globalThis.location.hash = text.slice(text.indexOf("#"));

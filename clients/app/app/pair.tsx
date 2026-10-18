@@ -12,14 +12,15 @@
  *
  * 配对是 HTTPS 面（`schemas/sync/v1/pairing.schema.json`）：传输端口由组合根用 `fetch`
  * 实现，本页只呈现状态机产出的模型。设备私钥由 `src/platform/` 生成且不可导出，
- * MCP 配置与 Agent 凭据一律在电脑上配置——因此本页没有**凭据**输入项，也没有输入框：
- * 地址片段是**唯一**入口（design D1）。
+ * MCP 配置与 Agent 凭据一律在电脑上配置——因此本页没有**凭据**输入项。入口有两种：
+ * 地址片段（移动端二维码）与无片段时的 8 位配对码（桌面网页，design D1/D6）。
  *
  * ## 页面不解析、不读地址栏
  *
- * 结构校验、claim、轮询、落盘、到期定时与「已配对后触发连接」都在 `ClientStore` 与组合根里
- * （`store.startPairingFromAddress`）：本页不碰 `fetch`、不读地址栏、不写任何存储
- * （`AGENTS.md` §6：平台能力只由更外层装配）。
+ * 结构校验、lookup、claim、轮询、落盘、到期定时与「已配对后触发连接」都在 `ClientStore` 与
+ * 组合根里（`store.startPairingFromAddress` / `store.submitPairingCode`）：本页不碰 `fetch`、
+ * 不读地址栏、不写任何存储（`AGENTS.md` §6：平台能力只由更外层装配）。配对码只经由
+ * `PairingPanel` 的内存状态交给 store，不进入 URL 或任何存储。
  *
  * ## 页面不绘制外壳
  *
@@ -67,9 +68,9 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
   const state = useClientState();
   const router = useRouter();
 
-  // 二维码地址直接打开这一页时，片段里带着配对内容：读一次（并立即清除片段）即进入与本页
-  // 对应的流程。依赖只有 `store` 与 `kind`：组合根异步装配完成后才可用，而片段只读一次
-  // （读完已被清除），`kind` 是这一份主体的常量参数。
+  // 进页时走一次入口：二维码地址的片段里有配对内容，读取（并立即清除片段）后进入与本页
+  // 对应的流程；`/pair` 没有片段时进入配对码输入（S0）。依赖只有 `store` 与 `kind`：
+  // 组合根异步装配完成后才可用，而片段只读一次（读完已被清除），`kind` 是常量参数。
   useEffect(() => {
     void store?.startPairingFromAddress(kind);
   }, [store, kind]);
@@ -96,7 +97,12 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
 
   return (
     <View role="main" style={STYLES.page}>
-      <PairingPanel model={page} />
+      <PairingPanel
+        model={page}
+        onSubmitCode={(code) => {
+          void store.submitPairingCode(code);
+        }}
+      />
     </View>
   );
 }

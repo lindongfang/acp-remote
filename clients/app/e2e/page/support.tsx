@@ -5,10 +5,10 @@
  *
  * 真实配对**在运行时可达**（本登记此前写作「不可达」，已按当前事实改写）：
  *
- * - 配对页只从**地址片段**取内容（`/pair#data=…` 或 `/node-link/pair#data=…`）：
- *   `app/pair.tsx` → `src/components/PairingPanel.tsx` 的固定状态页，页面挂载后由
- *   `ClientStore.startPairingFromAddress` 读取并立即清除片段，随后自动认领——页面没有输入框、
- *   粘贴框、提交按钮或页内返回；
+ * - 配对页有两种入口：移动端二维码从**地址片段**取内容（`/pair#data=…` 或
+ *   `/node-link/pair#data=…`），`ClientStore.startPairingFromAddress` 读取并立即清除片段后
+ *   自动认领；桌面网页在 `/pair` 无片段时显示 8 位配对码输入（S0），提交后经同源 lookup
+ *   回到同一套 claim/轮询。页面没有页内返回；
  * - 认领与轮询由 `ClientStore.startPairingFromAddress` 驱动，
  *   网络面是 `src/composition.ts` 的 `HttpPairingTransport`（`POST /sync/v1/pairing/claim`
  *   与 `/sync/v1/pairing/status`）——两者都有生产调用方；

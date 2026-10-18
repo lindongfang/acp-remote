@@ -300,7 +300,7 @@ ClientCommand / CommandAccepted / CommandRejected
 Pairing DTO
 ProtocolVersion / Feature negotiation
 Heartbeat（control.ping / control.pong）
-Connection error lifecycle（error body 与 35 个错误码，认证前后两种信封形状）
+Connection error lifecycle（error body 与 36 个错误码，认证前后两种信封形状）
 ```
 
 信封的 `body` 在传输层保持原文承载（`RawValue`），家族 body 由调用方显式解析——这条同时适用于已实现的家族与后续增量，`AGENTS.md` §4 的保真要求不允许中间经通用 DTO 往返。

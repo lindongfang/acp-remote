@@ -9,10 +9,11 @@
  * IndexedDB（`paired-host/<origin>`）→ 装配连接并触发连接 → 真实握手进入 `online` →
  * 1.6 秒后 `router.replace("/")` 自动进入目录页。
  *
- * 页面**没有**输入框、粘贴框、提交按钮：地址片段是唯一入口（design D1），因此起点一律是
- * 「先把片段挂到 `location.hash`，再挂载页面」。被替身顶掉的只有**传输**两头：配对 HTTPS 面
- * （`fetch`，e2e 环境里 `https://` 来源不可达）与 socket（假主机）。配对状态机、结构校验、
- * 落盘、连接装配、握手验签、快照管线全部是生产代码。
+ * 页面有**两种**入口（design D1）：移动端二维码把载荷放在 `location.hash` 里打开；桌面网页在
+ * `/pair` 无 fragment 时显示 8 位配对码输入（S0）。两条入口之后共用同一套 lookup/claim/轮询/
+ * 落盘链路。被替身顶掉的只有**传输**两头：配对 HTTPS 面（`fetch`，e2e 环境里 `https://`
+ * 来源不可达）与 socket（假主机）。配对状态机、结构校验、落盘、连接装配、握手验签、
+ * 快照管线全部是生产代码。
  *
  * ## 判别力：每条断言在实现被回退时都会红
  *
@@ -21,9 +22,9 @@
  *   倒计时、已批准阶段的设备标识、落盘摘要、自动落点 `/`、出站 URL 路径。认领响应由
  *   **二维码里那把**钥匙签（`signPairingClaimHostProof`），因此「验签用错了钥匙/没验」这条
  *   在此**不**会红——那是 PW-3 的位置。
- * - **PW-2** 没有载荷时**不发请求**：把「读不到片段」实现成继续认领 → `recordingFetch` 出现请求；
- *   把无载荷页实现成输入框 → `[data-pairing-input]` 存在；把无载荷当成载荷错误 → 锚点不是
- *   `no_payload`。
+ * - **PW-2 / PW-2b** 两种入口的无载荷行为：`/pair` 无片段必须显示 S0（8 格、origin、HTTPS、
+ *   静态提示、无数字倒计时）且一个请求都不发；`/node-link/pair` 无片段仍是无载荷页、不得出现
+ *   配对码输入。把 S0 实现成直接认领或显示倒计时、把 node-link 入口也接上配对码，都会红。
  * - **PW-3** / **PW-4** 用假主机**故意**产出被篡改的响应（真 Daemon 无法诚实地产出这种响应，
  *   这正是它们存在的理由）：认领响应换一把钥匙签、已批准响应换一个公钥。两条都断言
  *   **明确失败**（阶段 + 错误码 + 固定标题）、不落盘、不建连接，并断言**停止轮询**——
@@ -31,11 +32,22 @@
  * - **PW-5** 倒计时归零：`expiresAt` 只比一个轮询周期多一点，假主机永远回「等待确认」。页面必须
  *   先呈现 pending、再由**绝对截止时间**推进到 `expired`（不是固定 300 秒），并且此后不再发出
  *   状态查询。把到期定时器删掉、或以「页面打开时刻 + 5 分钟」计时，这条都会红。
+ * - **PW-6 / PW-7 / PW-8** 配对码入口：合法码必须走同源 lookup → 既有 claim/轮询 → 落盘，
+ *   且码不进入 URL/Cookie/两种 Web Storage；格式不符必须在发请求**之前**失败；lookup 失败
+ *   必须呈现固定文案、不回显后端 message/码、不重试、不落盘。把 lookup 成功后的流程复制成
+ *   第二套、把码写进持久面、或把失败原因直接渲染出来，都会在这些断言上红。
+ * - **PW-9** 配对码入口（lookup 之后）的倒计时归零：与 PW-5 同一条绝对截止时间路径，但入口
+ *   是配对码，因此必须呈现 S6「配对码不对或已过期」（不是二维码入口的 S7「配对地址已过期」），
+ *   并停止轮询、不落盘。把过期呈现写死成二维码口径，这条会红。
+ * - **PW-10** 编辑一个**已经填过**的格：输入被 RN-web 报告成「原字符 + 新字符」的多字符变更
+ *   时，只能从这一格开始覆盖，其余格（尤其前面已输入的位）必须保留。把多字符分支写成从格 0
+ *   重建，这条会红。
  */
 
 import {
   AGENTS,
   DIRS_ROUTE,
+  NODE_LINK_PAIR_ROUTE,
   PAIR_ROUTE,
   WORKSPACES_WITH_PATHS,
   sessionsForBothDirectories,
@@ -49,22 +61,26 @@ import { currentPath } from "../router-stub";
 import {
   CANONICAL_ORIGIN,
   HOST_ID,
+  click,
   domText,
+  expectAbsent,
   expectEqual,
   expectThat,
   mountScenario,
   query,
+  queryAll,
   seedDeviceIdentity,
   waitFor,
 } from "../support";
 import type { Check, ScenarioOptions } from "../support";
+import { typeIntoInput } from "./r15-directory";
 import type { FetchLike, PairingHttpResponse } from "../../../src/composition";
 
 /**
  * 配对页的锚点选择器。
  *
  * 每次现查而不是缓存元素：容器里的节点会随阶段整棵替换。选择器只写一处，免得各调用点各写
- * 一份、慢慢走样。输入框时代的 `[data-pairing-input]` / 提交按钮已删除，这里也不再引用。
+ * 一份、慢慢走样。配对码入口的 8 个单字符格与提交按钮在这里集中登记。
  */
 const PAIRING_SELECTOR = {
   root: '[data-route="pair"]',
@@ -74,7 +90,19 @@ const PAIRING_SELECTOR = {
   host: '[data-pairing-host="true"]',
   hostAddress: "[data-host-address]",
   deviceId: "[data-pairing-device-id]",
+  codeEntry: '[data-pairing-code-entry="true"]',
+  codeCell: "[data-pairing-code-cell]",
+  codeSubmit: '[data-action="submit-pairing-code"]',
+  codeOrigin: "[data-pairing-code-origin-value]",
+  codeHint: '[data-pairing-code-hint="true"]',
+  secure: "[data-pairing-secure]",
 } as const;
+
+/** 配对码入口的固定静态提示（lookup 之前不显示数字倒计时）。 */
+const CODE_HINT = "配对码 5 分钟内有效。";
+
+/** 一次配对码入口的固定码（服务端把它当作一次性凭据）。 */
+const PAIRING_CODE = "ABCD-EFGH";
 
 /** 一次配对会话的固定标识（固定值才能逐字断言它进了请求正文）。 */
 const PAIRING_ID = "2bc8b944-2a4f-46a7-8c31-b2c40923f60a";
@@ -106,6 +134,42 @@ function phaseOf(container: HTMLElement): string | null {
 async function storedPairedHost(): Promise<string | null> {
   const hit = await openPlatform().localCache.get(`${PAIRED_HOST_KEY_PREFIX}${CANONICAL_ORIGIN}`, Date.now());
   return hit !== null && hit.entry.kind === "local" ? hit.entry.summary : null;
+}
+
+/**
+ * 浏览器里所有可能意外承载配对码的**公开**持久面：地址、Cookie、localStorage、sessionStorage。
+ * 配对码只允许活在组件内存与一次 lookup 请求体里。
+ */
+function browserPersistedText(): string {
+  const entries = (storage: Storage): string[] => {
+    const pairs: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key !== null) pairs.push(`${key}=${storage.getItem(key) ?? ""}`);
+    }
+    return pairs;
+  };
+  return [
+    globalThis.location.href,
+    globalThis.location.hash,
+    document.cookie,
+    ...entries(globalThis.localStorage),
+    ...entries(globalThis.sessionStorage),
+  ].join("|");
+}
+
+/**
+ * 在 8 格里的第一格输入/粘贴整段码，并等到 React 把归一化后的字符分配进各格。
+ *
+ * 只等第一格变成单个字符：完整码与不完整码都能用同一个等待条件，而不是要求 8 格全满。
+ */
+async function enterPairingCode(container: HTMLElement, text: string): Promise<void> {
+  typeIntoInput(container, '[data-pairing-code-cell="0"]', text, "配对码第一格");
+  const firstCharacter = text.trim().toUpperCase().charAt(0).replace("I", "1").replace("L", "1").replace("O", "0");
+  await waitFor(() => {
+    const first = query(container, '[data-pairing-code-cell="0"]') as HTMLInputElement | null;
+    return first !== null && first.value === firstCharacter;
+  }, `配对码被分配到输入格（输入 ${JSON.stringify(text)}）`);
 }
 
 /**
@@ -175,6 +239,10 @@ function pairingHttpFake(input: {
   readonly approvedHostPublicKey?: string;
   /** 状态永远停在「等待本机确认」（PW-5 的过期用例）。 */
   readonly alwaysPending?: boolean;
+  /** lookup 一律失败（PW-7 的固定失败文案用例）。 */
+  readonly lookupFails?: boolean;
+  /** lookup 返回的到期时间相对现在（缺省 10 分钟）。 */
+  readonly lookupExpiresInMs?: number;
 }): PairingHttpFake {
   const requests: { url: string; body: Record<string, unknown> }[] = [];
   let statusPolls = 0;
@@ -183,11 +251,32 @@ function pairingHttpFake(input: {
     status,
     json: () => Promise.resolve(value),
   });
+  const failed = (status: number): PairingHttpResponse => ({
+    ok: false,
+    status,
+    json: () => Promise.resolve({ code: "pairing.code_invalid", message: "服务端不区分原因", retryable: false, details: {} }),
+  });
   const fetchImpl: FetchLike = async (url, init) => {
     // 正文由本替身对侧的**生产**客户端发出（`HttpPairingTransport` 的 `JSON.stringify`），
     // 因此这里按记录读它的键值、用不着再断言形状；读到什么由下面的请求留痕与断言把关。
     const body = JSON.parse(init.body) as Record<string, unknown>;
     requests.push({ url, body });
+    if (url.endsWith("/pairing/lookup")) {
+      if (input.lookupFails === true) return failed(401);
+      // §7.5：成功只返回取回绑定所需的材料，之后与二维码入口共用 claim/status。
+      return json(
+        {
+          protocolVersion: 1,
+          pairingId: PAIRING_ID,
+          hostId: HOST_ID,
+          hostPublicKey: input.qrHostPublicKey,
+          canonicalOrigin: CANONICAL_ORIGIN,
+          pairingSecret: PAIRING_SECRET,
+          expiresAt: new Date(Date.now() + (input.lookupExpiresInMs ?? 600_000)).toISOString(),
+        },
+        200,
+      );
+    }
     if (url.endsWith("/pairing/claim")) {
       return json(
         {
@@ -305,7 +394,7 @@ const checks: readonly Check[] = [
         );
         expectEqual(mounted.host?.socketUrls.length ?? -1, 0, "未配对时不得建立任何连接");
 
-        // ① 地址片段是唯一入口：页面挂载后自动读取并认领，没有任何输入/提交动作。
+        // ① 二维码路径的入口是地址片段：页面挂载后自动读取并认领，没有输入/提交动作。
         await waitFor(() => http.requests.length > 0, "打开配对地址后自动发出认领请求");
         const claim = http.requests[0];
         expectEqual(claim?.url ?? null, `${CANONICAL_ORIGIN}/sync/v1/pairing/claim`, "认领请求的端点");
@@ -325,6 +414,12 @@ const checks: readonly Check[] = [
         );
         // §7.1：片段读完即清——秘密不得留在地址历史里。
         expectEqual(globalThis.location.hash, "", "配对地址的片段读取后被清除");
+        // 二维码路径不经过 lookup（本次改动只新增入口，不改既有路径）。
+        expectEqual(
+          http.requests.filter((request) => request.url.endsWith("/pairing/lookup")).length,
+          0,
+          "二维码入口不得发出 lookup 请求",
+        );
 
         // ② 状态轮询：先「等待本机确认」，再「已批准」——两个阶段都必须由真实轮询推出来。
         await waitFor(
@@ -428,7 +523,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "PW-2 没有配对内容时不发请求：idle、固定无载荷页、没有输入框、没有已配对记录",
+    name: "PW-2 /pair 无片段显示配对码输入（S0）：8 格、origin、HTTPS、静态提示、无数字倒计时、不发请求",
     async run() {
       const http = recordingFetch();
       // 直接访问 `/pair`（或刷新后片段已清）：地址里没有任何配对内容。
@@ -439,34 +534,90 @@ const checks: readonly Check[] = [
           () => query(mounted.container, PAIRING_SELECTOR.entry) !== null,
           "配对页渲染出来（data-pairing-entry 锚点）",
         );
-        await waitFor(() => phaseOf(mounted.container) === "idle", "没有片段时进入 idle");
+        await waitFor(
+          () => phaseOf(mounted.container) === "awaiting_code",
+          "没有片段时进入配对码输入（S0）",
+        );
+
+        // 8 个单字符格 + 固定的公开事实（canonical origin / HTTPS）。
+        expectEqual(
+          queryAll(mounted.container, PAIRING_SELECTOR.codeCell).length,
+          8,
+          "配对码输入必须有 8 个单字符格",
+        );
+        expectEqual(
+          query(mounted.container, PAIRING_SELECTOR.codeOrigin)?.getAttribute(
+            "data-pairing-code-origin-value",
+          ) ?? null,
+          CANONICAL_ORIGIN,
+          "配对码输入显示的 canonical origin",
+        );
+        expectEqual(
+          query(mounted.container, PAIRING_SELECTOR.secure)?.getAttribute("data-pairing-secure") ?? null,
+          "true",
+          "安全上下文必须显示 HTTPS 标识",
+        );
+        expectThat(
+          domText(query(mounted.container, PAIRING_SELECTOR.secure) ?? mounted.container).includes(
+            "HTTPS",
+          ),
+          "配对码输入必须显示 HTTPS 标识文本",
+        );
+        expectThat(
+          query(mounted.container, PAIRING_SELECTOR.codeSubmit) !== null,
+          "配对码输入必须提供提交按钮",
+        );
+
+        // S0 只有静态提示，没有数字倒计时（lookup 之前没有服务端 expiresAt）。
+        expectEqual(
+          domText(query(mounted.container, PAIRING_SELECTOR.codeHint) ?? mounted.container),
+          CODE_HINT,
+          "配对码输入必须显示静态提示「配对码 5 分钟内有效。」",
+        );
+        expectEqual(
+          query(mounted.container, PAIRING_SELECTOR.countdown),
+          null,
+          "配对码输入态不得显示数字倒计时",
+        );
+
+        // 没有提交就不发任何请求，也没有已配对记录/连接。
+        expectEqual(http.urls.length, 0, "配对码输入态一个配对请求都不发");
+        expectEqual(await storedPairedHost(), null, "未提交时不得写入已配对主机记录");
+        expectEqual(mounted.host?.socketUrls.length ?? -1, 0, "未提交时不得建立连接");
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "PW-2b /node-link/pair 无片段：仍是无载荷页，不提供配对码输入、不发请求",
+    async run() {
+      const http = recordingFetch();
+      globalThis.location.hash = "";
+      const mounted = await mountScenario(
+        baseScenario({ seedPaired: false, fetch: http.fetch, route: NODE_LINK_PAIR_ROUTE }),
+      );
+      try {
+        await waitFor(
+          () => phaseOf(mounted.container) === "idle",
+          "node-link 入口没有片段时进入 idle",
+        );
         expectThat(
           query(mounted.container, '[data-pairing-failure="no_payload"]') !== null,
-          "无载荷必须呈现专门的失败类别（no_payload）",
+          "node-link 无载荷必须呈现 no_payload",
         );
-        const root = query(mounted.container, PAIRING_SELECTOR.root);
-        expectThat(root !== null, "配对页根节点必须存在");
         expectThat(
-          domText(root).includes("这个地址里没有配对信息"),
-          "无载荷页必须给出固定标题「这个地址里没有配对信息」",
-        );
-
-        // 页面不再是入口：输入框与提交按钮都已删除（有它们就说明第二套入口回来了）。
-        expectEqual(
-          query(mounted.container, "[data-pairing-input]"),
-          null,
-          "配对页不得再提供输入框",
+          domText(query(mounted.container, PAIRING_SELECTOR.root) ?? mounted.container).includes(
+            "这个地址里没有节点配对信息",
+          ),
+          "node-link 无载荷页必须给出节点专用文案",
         );
         expectEqual(
-          query(mounted.container, '[data-action="submit-pairing-qr"]'),
+          query(mounted.container, PAIRING_SELECTOR.codeEntry),
           null,
-          "配对页不得再提供提交按钮",
+          "node-link 入口不得显示配对码输入",
         );
-
-        // 没有可读内容时不发起任何配对请求，也不写入任何已配对记录。
-        expectEqual(http.urls.length, 0, "没有载荷时一个配对请求都不发");
-        expectEqual(await storedPairedHost(), null, "没有载荷时不得写入已配对主机记录");
-        expectEqual(mounted.host?.socketUrls.length ?? -1, 0, "没有载荷时不得建立连接");
+        expectEqual(http.urls.length, 0, "node-link 无载荷时一个请求都不发");
       } finally {
         await mounted.unmount();
       }
@@ -494,7 +645,7 @@ const checks: readonly Check[] = [
         baseScenario({ seedPaired: false, identity, fetch: http.fetch }),
       );
       try {
-        // 片段是唯一入口：不需要任何输入/点击，页面自己发出认领。
+        // 二维码路径的入口是片段：不需要任何输入/点击，页面自己发出认领。
         await waitFor(() => http.requests.length > 0, "打开配对地址后自动发出认领请求");
 
         // ① 明确失败：阶段进 `failed`，且错误码是**验签失败**那一支。形状不符（`protocol.schema_invalid`）
@@ -662,6 +813,391 @@ const checks: readonly Check[] = [
         );
         expectEqual(await storedPairedHost(), null, "过期时不得写入任何已配对主机记录");
         expectEqual(mounted.host?.socketUrls.length ?? -1, 0, "过期时不得建立连接");
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "PW-6 配对码入口：输入合法码 → lookup → 同一套 claim/轮询 → 落盘进目录；码不进 URL/存储",
+    async run() {
+      const device = await seedDeviceIdentity();
+      const identity: FakeHostIdentity = await createFakeHostIdentity(HOST_ID);
+      const http = pairingHttpFake({
+        qrHostPublicKey: identity.publicKeyBase64Url,
+        claimSigner: identity,
+        // 90 秒而不是固定的 5:00：倒计时必须来自 lookup 响应的 `expiresAt`。
+        lookupExpiresInMs: 90_000,
+      });
+      globalThis.location.hash = "";
+      const mounted = await mountScenario(
+        baseScenario({
+          seedPaired: false,
+          identity,
+          fetch: http.fetch,
+          extraRoutes: [DIRS_ROUTE],
+        }),
+      );
+      try {
+        await waitFor(
+          () => phaseOf(mounted.container) === "awaiting_code",
+          "配对码输入态渲染出来",
+        );
+        // S0：没有数字倒计时，只有静态提示。
+        expectEqual(
+          query(mounted.container, PAIRING_SELECTOR.countdown),
+          null,
+          "配对码输入态不得显示数字倒计时",
+        );
+
+        await enterPairingCode(mounted.container, "abcd-efgh");
+        click(query(mounted.container, PAIRING_SELECTOR.codeSubmit), "配对码提交按钮");
+
+        // ① lookup：码只走 body，且大小写/分隔符已归一化。
+        await waitFor(() => http.requests.length > 0, "提交后发出 lookup 请求");
+        const lookup = http.requests[0];
+        expectEqual(lookup?.url ?? null, `${CANONICAL_ORIGIN}/sync/v1/pairing/lookup`, "lookup 的端点");
+        expectEqual(lookup?.body["pairingCode"] ?? null, PAIRING_CODE, "lookup 正文里的归一化配对码");
+        expectEqual(lookup?.body["protocolVersion"] ?? null, 1, "lookup 正文的协议版本");
+        expectThat(
+          (lookup?.url ?? "").includes(PAIRING_CODE) === false,
+          "配对码不得进入 URL",
+        );
+
+        // ② 复用既有 claim 链路：第二条请求是 claim，而不是第二套流程。
+        await waitFor(
+          () => http.requests.some((request) => request.url.endsWith("/pairing/claim")),
+          "lookup 成功后进入既有 claim",
+          PAIRING_WAIT_MS,
+        );
+        const claim = http.requests.find((request) => request.url.endsWith("/pairing/claim"));
+        expectEqual(claim?.body["pairingId"] ?? null, PAIRING_ID, "claim 正文的配对标识（来自 lookup）");
+        expectEqual(claim?.body["hostId"] ?? null, HOST_ID, "claim 正文的主机标识（来自 lookup）");
+
+        // ③ 等待确认：倒计时从 lookup 返回的 `expiresAt` 启动（这是第一次出现数字倒计时）。
+        await waitFor(
+          () => phaseOf(mounted.container) === "pending_confirmation",
+          "状态查询进入等待确认",
+          PAIRING_WAIT_MS,
+        );
+        const countdown = query(mounted.container, PAIRING_SELECTOR.countdown);
+        expectThat(countdown !== null, "lookup 之后必须按服务端 expiresAt 显示倒计时");
+        const countdownText = countdown.textContent ?? "";
+        expectThat(
+          COUNTDOWN_PATTERN.test(countdownText),
+          `倒计时文本必须是 m:ss（实际 ${JSON.stringify(countdownText)}）`,
+        );
+        // 反例：按「页面打开起 5:00」计时 → 这里会是 5:00。
+        expectThat(
+          countdownText !== "5:00" && (countdownText.startsWith("1:") || countdownText === "2:00"),
+          `倒计时必须来自 lookup 响应的 expiresAt（90 秒），实际 ${JSON.stringify(countdownText)}`,
+        );
+
+        // ④ 码不进入任何公开持久面。
+        expectAbsent(browserPersistedText(), PAIRING_CODE, "配对码不得进入 URL/Cookie/localStorage/sessionStorage");
+
+        // ⑤ 已批准 → 落盘 → 自动进目录 → 连接在线。
+        await waitFor(
+          () => phaseOf(mounted.container) === "approved",
+          "状态查询进入已批准",
+          PAIRING_WAIT_MS,
+        );
+        expectEqual(
+          query(mounted.container, PAIRING_SELECTOR.deviceId)?.getAttribute("data-pairing-device-id") ?? null,
+          device.deviceId,
+          "已批准阶段呈现的设备标识",
+        );
+        const summary = await storedPairedHost();
+        expectThat(summary !== null, "已批准后必须写入 paired-host 记录");
+        expectEqual(
+          (JSON.parse(summary) as Record<string, unknown>)["publicKeyBase64Url"] ?? null,
+          identity.publicKeyBase64Url,
+          "落盘记录的主机公钥（来自 lookup 与已批准响应）",
+        );
+        expectAbsent(summary, PAIRING_CODE, "配对码不得写入已配对记录");
+        await waitFor(
+          () => currentPath() === "/",
+          "已批准后自动进入目录页",
+          PAIRING_WAIT_MS,
+        );
+        await waitFor(
+          () => mounted.composition?.store.state.connection.state === "online",
+          "配对后进入在线",
+          PAIRING_WAIT_MS,
+        );
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "PW-7 配对码格式不符：在发请求前明确失败，固定文案、无页内重试、不落盘",
+    async run() {
+      const http = recordingFetch();
+      globalThis.location.hash = "";
+      const mounted = await mountScenario(baseScenario({ seedPaired: false, fetch: http.fetch }));
+      try {
+        await waitFor(
+          () => phaseOf(mounted.container) === "awaiting_code",
+          "配对码输入态渲染出来",
+        );
+        // 7 位连续码：格式不合法，但能被输入框接住（带 `-` 的不完整码不是合法粘贴形态）。
+        await enterPairingCode(mounted.container, "ABCDEFG");
+        click(query(mounted.container, PAIRING_SELECTOR.codeSubmit), "配对码提交按钮");
+
+        await waitFor(
+          () => phaseOf(mounted.container) === "failed",
+          "格式不符时明确失败",
+        );
+        expectEqual(
+          query(mounted.container, '[data-pairing-failure="code_invalid"]') !== null,
+          true,
+          "格式不符必须落在 code_invalid 固定呈现",
+        );
+        const root = query(mounted.container, PAIRING_SELECTOR.root);
+        expectThat(root !== null, "失败页根节点必须存在");
+        expectThat(
+          domText(root).includes("配对码不对或已过期，请重新生成配对码"),
+          "必须呈现固定文案「配对码不对或已过期，请重新生成配对码」",
+        );
+        // 格式不符在**发请求前**失败；失败页没有页内重试，也不保留输入态。
+        expectEqual(http.urls.length, 0, "格式不符不得发出任何请求");
+        expectEqual(
+          query(mounted.container, PAIRING_SELECTOR.codeSubmit),
+          null,
+          "失败页不得提供页内重试按钮",
+        );
+        expectEqual(
+          query(mounted.container, PAIRING_SELECTOR.codeEntry),
+          null,
+          "失败页不得保留配对码输入",
+        );
+        expectEqual(await storedPairedHost(), null, "失败时不得写入已配对记录");
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "PW-8 配对码 lookup 失败：固定文案「配对码不对或已过期，请重新生成配对码」，不推断、不重试、不落盘",
+    async run() {
+      const identity: FakeHostIdentity = await createFakeHostIdentity(HOST_ID);
+      const http = pairingHttpFake({
+        qrHostPublicKey: identity.publicKeyBase64Url,
+        claimSigner: identity,
+        lookupFails: true,
+      });
+      globalThis.location.hash = "";
+      const mounted = await mountScenario(
+        baseScenario({ seedPaired: false, identity, fetch: http.fetch }),
+      );
+      try {
+        await waitFor(
+          () => phaseOf(mounted.container) === "awaiting_code",
+          "配对码输入态渲染出来",
+        );
+        await enterPairingCode(mounted.container, PAIRING_CODE);
+        click(query(mounted.container, PAIRING_SELECTOR.codeSubmit), "配对码提交按钮");
+
+        await waitFor(
+          () => phaseOf(mounted.container) === "failed",
+          "lookup 失败后进入明确失败",
+          PAIRING_WAIT_MS,
+        );
+        expectThat(
+          query(mounted.container, '[data-pairing-failure="code_invalid"]') !== null,
+          "lookup 失败必须落在 code_invalid 固定呈现",
+        );
+        expectThat(
+          query(mounted.container, '[data-pairing-error="pairing.code_invalid"]') !== null,
+          "失败态必须带 pairing.code_invalid",
+        );
+        const root = query(mounted.container, PAIRING_SELECTOR.root);
+        expectThat(root !== null, "失败页根节点必须存在");
+        const panelText = domText(root);
+        expectThat(
+          panelText.includes("配对码不对或已过期，请重新生成配对码"),
+          "必须呈现固定文案「配对码不对或已过期，请重新生成配对码」",
+        );
+        // 不回显后端 message、不显示配对是否存在，也不回显用户输入的码。
+        expectAbsent(panelText, "服务端不区分原因", "失败页不得回显后端 message");
+        expectAbsent(panelText, PAIRING_CODE, "失败页不得回显配对码");
+        expectEqual(
+          query(mounted.container, PAIRING_SELECTOR.codeSubmit),
+          null,
+          "失败页不得提供页内重试按钮",
+        );
+        // 只有 lookup 一条请求：不 claim、不轮询。
+        expectEqual(http.requests.length, 1, "lookup 失败后不得再发其它配对请求");
+        expectEqual(
+          http.requests[0]?.url ?? null,
+          `${CANONICAL_ORIGIN}/sync/v1/pairing/lookup`,
+          "唯一请求是 lookup",
+        );
+        expectEqual(await storedPairedHost(), null, "lookup 失败不得写入已配对记录");
+        expectEqual(mounted.host?.socketUrls.length ?? -1, 0, "lookup 失败不得建立连接");
+        expectAbsent(browserPersistedText(), PAIRING_CODE, "失败后配对码仍不得进入公开持久面");
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "PW-8b lookup 响应已过期（服务端 expiresAt 优先）：不 claim、不显示本地估算、固定失败呈现",
+    async run() {
+      const identity: FakeHostIdentity = await createFakeHostIdentity(HOST_ID);
+      const http = pairingHttpFake({
+        qrHostPublicKey: identity.publicKeyBase64Url,
+        claimSigner: identity,
+        // lookup 成功但 `expiresAt` 已经过去：页面不得按「现在 + 5 分钟」继续 claim。
+        lookupExpiresInMs: -1_000,
+      });
+      globalThis.location.hash = "";
+      const mounted = await mountScenario(
+        baseScenario({ seedPaired: false, identity, fetch: http.fetch }),
+      );
+      try {
+        await waitFor(
+          () => phaseOf(mounted.container) === "awaiting_code",
+          "配对码输入态渲染出来",
+        );
+        await enterPairingCode(mounted.container, PAIRING_CODE);
+        click(query(mounted.container, PAIRING_SELECTOR.codeSubmit), "配对码提交按钮");
+
+        await waitFor(
+          () => phaseOf(mounted.container) === "failed",
+          "lookup 返回已过期后进入固定失败呈现",
+          PAIRING_WAIT_MS,
+        );
+        expectThat(
+          query(mounted.container, '[data-pairing-failure="code_invalid"]') !== null,
+          "已过期必须落在 code_invalid 固定呈现",
+        );
+        expectThat(
+          domText(query(mounted.container, PAIRING_SELECTOR.root) ?? mounted.container).includes(
+            "配对码不对或已过期，请重新生成配对码",
+          ),
+          "必须呈现固定文案「配对码不对或已过期，请重新生成配对码」",
+        );
+        // 服务端 expiresAt 优先：不显示倒计时、不发 claim/status。
+        expectEqual(
+          query(mounted.container, PAIRING_SELECTOR.countdown),
+          null,
+          "已过期时不得显示数字倒计时",
+        );
+        expectEqual(http.requests.length, 1, "lookup 已过期后不得再发其它配对请求");
+        expectEqual(await storedPairedHost(), null, "lookup 已过期不得写入已配对记录");
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "PW-9 配对码入口倒计时归零：呈现 S6「配对码不对或已过期」，不是 S7「配对地址已过期」",
+    async run() {
+      // 与 PW-5 同一条绝对截止时间路径，但入口是配对码：lookup 返回的 `expiresAt` 只比一个
+      // 轮询周期多一点，假主机永远回「等待确认」，因此归零只能由页面的到期定时器推进。
+      const expiryWindowMs = 3_500;
+      const identity: FakeHostIdentity = await createFakeHostIdentity(HOST_ID);
+      const http = pairingHttpFake({
+        qrHostPublicKey: identity.publicKeyBase64Url,
+        claimSigner: identity,
+        alwaysPending: true,
+        lookupExpiresInMs: expiryWindowMs,
+      });
+      globalThis.location.hash = "";
+      const mounted = await mountScenario(
+        baseScenario({ seedPaired: false, identity, fetch: http.fetch }),
+      );
+      try {
+        await waitFor(
+          () => phaseOf(mounted.container) === "awaiting_code",
+          "配对码输入态渲染出来",
+        );
+        await enterPairingCode(mounted.container, PAIRING_CODE);
+        click(query(mounted.container, PAIRING_SELECTOR.codeSubmit), "配对码提交按钮");
+
+        // 先到等待确认：倒计时从 lookup 响应的 `expiresAt` 启动（不是页面打开时刻）。
+        await waitFor(
+          () => phaseOf(mounted.container) === "pending_confirmation",
+          "lookup 之后进入等待确认",
+          PAIRING_WAIT_MS,
+        );
+
+        // 归零 → 配对码入口的固定失败呈现（S6）。反例：仍按二维码口径收口 → 阶段是 `expired`，
+        // 标题是「配对地址已过期」，下面三条断言都会红。
+        await waitFor(
+          () => phaseOf(mounted.container) === "failed",
+          "倒计时归零后进入配对码固定失败呈现",
+          10_000,
+        );
+        expectThat(
+          query(mounted.container, '[data-pairing-failure="code_invalid"]') !== null,
+          "归零必须落在 code_invalid 固定呈现",
+        );
+        const root = query(mounted.container, PAIRING_SELECTOR.root);
+        expectThat(root !== null, "失败页根节点必须存在");
+        const text = domText(root);
+        expectThat(
+          text.includes("配对码不对或已过期，请重新生成配对码"),
+          "必须呈现 S6 固定文案「配对码不对或已过期，请重新生成配对码」",
+        );
+        expectThat(
+          text.includes("配对地址已过期") === false,
+          "配对码入口不得呈现二维码入口的「配对地址已过期」",
+        );
+        // 归零即停止轮询：等过一个轮询周期，status 请求数不再增加。
+        const pollsAtExpiry = http.requests.filter((request) =>
+          request.url.endsWith("/pairing/status"),
+        ).length;
+        const { promise: pollWindow, resolve: windowElapsed } = Promise.withResolvers<void>();
+        setTimeout(windowElapsed, PAIRING_POLL_INTERVAL_MS + 500);
+        await pollWindow;
+        expectEqual(
+          http.requests.filter((request) => request.url.endsWith("/pairing/status")).length,
+          pollsAtExpiry,
+          "归零后不得再发出状态查询",
+        );
+        expectEqual(await storedPairedHost(), null, "归零时不得写入任何已配对主机记录");
+        expectEqual(mounted.host?.socketUrls.length ?? -1, 0, "归零时不得建立连接");
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "PW-10 编辑已填的格：多字符变更从被编辑的格开始覆盖，前面已输入的位保留",
+    async run() {
+      // 不需要任何配对请求：这里只验输入格的变更语义，进入 S0 即可。
+      const http = recordingFetch();
+      globalThis.location.hash = "";
+      const mounted = await mountScenario(baseScenario({ seedPaired: false, fetch: http.fetch }));
+      try {
+        await waitFor(
+          () => phaseOf(mounted.container) === "awaiting_code",
+          "配对码输入态渲染出来",
+        );
+        // 先填满 8 格：A B C D E F G H。
+        await enterPairingCode(mounted.container, PAIRING_CODE);
+
+        // 模拟「没有选中就直接输入第 4 格」时 RN-web 交给 `onChangeText` 的值：
+        // 原字符 `D` + 新字符 `X`。正确的实现从第 4 格开始写成 `D`、`X`，前面三位不动；
+        // 从格 0 重建的实现会把整码变成 `DX` 并清空其余格。
+        typeIntoInput(
+          mounted.container,
+          '[data-pairing-code-cell="3"]',
+          "DX",
+          "配对码第 4 格（多字符变更）",
+        );
+        await waitFor(
+          () =>
+            queryAll(mounted.container, PAIRING_SELECTOR.codeCell)
+              .map((node) => (node as HTMLInputElement).value)
+              .join("") === "ABCDXFGH",
+          "多字符变更只覆盖被编辑的格及其后的一格，其余位保留",
+        );
+        // 一个请求都不发：这一步只验输入格本身。
+        expectEqual(http.urls.length, 0, "编辑输入格不得发出配对请求");
       } finally {
         await mounted.unmount();
       }

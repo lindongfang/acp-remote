@@ -1,7 +1,8 @@
 # ACP Remote Sync Protocol
 
-> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的配对 HTTP、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。  
+> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、lookup、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的配对 HTTP、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。
 > 协议版本：1  
+> 修订记录（2026-10-18，`pairing-code-web-entry`）：配对新增第二个入口——`POST /sync/v1/pairing/lookup` 用 8 位 Crockford 配对码一次性换回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`，之后与二维码入口共用同一套状态机、claim/status 与 transcript。§7.1 写清两个入口的关系；新增 §7.5 的 lookup wire 行为（成功即消耗、统一 `401 pairing.code_invalid`、与 claim 各自 10 次/分钟、同一组安全响应头与 `no-store`）；§7.4 的状态表补 lookup；§12.2 增加 `pairing.code_invalid`。schema、fixture 与错误词表同步；claim/status 的 wire 与 transcript 未变。
 > 修订记录（2026-10-16，`pairing-model`）：**删除两套短验证码**——§6.1/§6.3 删去 `acp-remote/pairing-sas/v1` domain 与 `pairing SAS` 字段集合；§7.2 改为两条设备侧密码学校验（用配对载荷里固定的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节相同），不再派生或展示 SAS；§7.3 的 `approved` 响应不再返回授权集合；§17 的固定向量判据去掉 SAS 重算。**删除设备权限层**——§7.0 的确认不再分配授权；§8.4 的 `auth.authenticated` 不再携带设备 scope 集合；§9.2/§9.3/§9.4 不再按设备授权过滤事件、会话与目录资源；§11.1/§11.3/§11.4/§11.5 改为「已认证即执行前提」，并把 `session.create` 的 Sync 面载荷放开为「`directoryId` 或客户端提交的绝对目录 `workspacePath`，二者取一」（Node Link 面仍只允许别名、且请求不得携带任意 Owner 路径）；§12.1 的示例错误码换掉设备 scope 拒绝；§14 的「命令族」改为服务端自持的 v1 常量（不再取自 `commands.json` 的 `packs`）；§15 的逐命令 scope 授权改为认证状态与幂等校验。**保留**：设备认证与每连接 challenge-response、撤销传播与速率上限、配对确认必须由本机用户完成、跨节点 `grant.*`/Export `scopes`/Import grants。  
 > 修订记录（2026-10-16，`session-create-settle-order`，无 wire 变更）：`session.create` 的落账时序改为**三笔**（受理只落幂等记录 → 执行 → 会话行 + 标识回填 + 终态在**同一次提交**，失败零会话行）——§11.2 的「结果语义固定如下」补上资源行与终态同事务、以及崩溃窗口只有受理记录（**没有**会话行）的形状，命令处理顺序块的注记同步；§11.5 的 `session.create` 行与正文改写为「先受理再执行」并给出**两面一致**的终态判据（可证明 Agent 侧未产生会话 ⇒ `failed`、复用既有码 `internal.unavailable`；说不清 ⇒ `uncertain`），`引用失败与解析失败的分类` 不变（引用/解析失败仍是接受前的拒绝、零副作用）。错误码、feature、schema 与 fixture 均未变。  
 > 修订记录（2026-09-18）：新增 §3.3 ACPR-CJ1 规范 JSON（`payloadDigest` 前像）；§4.1 明确认证前省略 `connectionId`/`connectionSequence`；§4.2 明确未知命令名返回 `command.unsupported`；§11.5 的 `command` 枚举只含 `transport` 含 `sync` 的命令；§14 把限流与若干上限固定为 v1 常量；§17 改为列出全部五个检查脚本与覆盖门禁；§12.2 新增 `details` 登记表并为 `protocol.feature_required`/`state.version_conflict`/`resource.rate_limited` 登记机器可读字段（兼容新增）；§10.2 新增 `turn.delta_compacted` 与 `agent.message.delta` 的可选 `block`，并写明 `deltaIndex` 的分配规则、收尾事件的生成与压缩后的重放语义（对齐 `CORE_PORTS_AND_STORAGE.md` §6 第 14/15 条）；§11.5 与 §10.2 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
@@ -369,6 +370,8 @@ approved
 
 ### 7.1 二维码内容
 
+配对有两个入口，共用 §7.0 的同一套状态机与 §7.2/§7.3 的 claim/status：二维码入口把下面的载荷放在 URL fragment 里，主机公钥由带外载荷固定；网页入口在 `/pair` 没有 fragment 时要求输入 8 位配对码，经 §7.5 的 lookup 取回同一组 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`，之后的状态转换、transcript 与本机确认仪式完全相同。配对码只用于一次性取回 secret，不是 HMAC 密钥，也不构成新的授权维度；`/node-link/pair` 不提供配对码。
+
 Daemon 创建一次性 pairing，二维码承载 HTTPS URL，秘密部分必须位于 fragment：
 
 ```text
@@ -496,16 +499,17 @@ consumed
 
 | HTTP 状态 | 使用场景 |
 |---:|---|
-| 200 | 状态查询成功，包括业务状态 `pending_confirmation/approved/rejected/expired/consumed` |
+| 200 | 状态查询成功，包括业务状态 `pending_confirmation/approved/rejected/expired/consumed`；lookup 成功 |
 | 201 | claim 首次成功并创建 pairing request |
-| 400 | JSON 或字段 schema 无效 |
-| 401 | HMAC proof 无效；响应不得泄露具体校验差异 |
+| 400 | JSON 或字段 schema 无效。**lookup 例外**：其请求体形状错误（坏 JSON、缺字段、未知字段）与配对码格式错误一律收敛为 401 `pairing.code_invalid`（§7.5、design D4）；lookup 的 `Content-Type` 不是 `application/json` 仍是 400 `protocol.schema_invalid` |
+| 401 | HMAC proof 无效；lookup 的任何失败——配对码格式/body 形状错误、不存在、已过期、已消耗、已认领、来源或登记绑定不一致——统一为 `pairing.code_invalid`；响应不得泄露具体校验差异 |
 | 403 | Origin/Host 不允许 |
-| 404 | pairing ID 不存在 |
+| 404 | pairing ID 不存在；lookup 不使用该状态（统一 401） |
+| 405 | 端点未声明的方法（接入层在处理器之前拒绝；响应仍带该路径注册的默认安全头） |
 | 409 | 已被 claim、状态转换冲突或 device ID 冲突 |
 | 410 | 仅 claim 端点使用：pairing 已过期或已 consumed |
-| 413 | 请求体超过限制 |
-| 429 | 配对尝试被限流 |
+| 413 | 请求体超过限制（配对 HTTP 的 claim/status/lookup 同受 16 KiB 上限约束） |
+| 429 | 配对尝试被限流（claim 与 lookup 各按来源，status 按配对） |
 
 错误 body 使用与第 12 节一致的 `code/message/retryable/correlationId/details` 结构。网络响应丢失后，客户端可以使用相同 claim 内容重试；如果服务端已接受同一 device/client nonce，应返回原 pairing request，而不是创建第二条记录。不同 claim 内容则返回 `409 pairing.already_claimed`。
 
@@ -516,6 +520,48 @@ consumed
 - **证明失败 5 次使配对失效只在内存**（`crates/identity-auth/src/state.rs`）：失效没有持久记录，DB 行保持 `created` 直到过期扫描改写成 `expired`。已判定可接受：HTTP 面不伪造 `Actor::LocalCli`，而重启会一并清空 secret、只会更严；持久落账等「本机终态写面」提供不需伪造主体的结算入口后接上（`tasks.md` WP5 任务 5.8）。
 - **本地确认入口仍在本机管理通道**：`device.pair.begin/status/confirm/reject` 经 `server::local_admin` 完成（§7.0 的「本地 CLI、loopback UI 或其他已授权电脑入口」），未提供未认证的远程确认路径。
 - 配对有效期的时间戳口径按整秒截断（`transcript::unix_seconds`），与参数校验层的毫秒窗口存在已登记的亚秒取值差异（`tasks.md` WP5 任务 5.7）；`expiresInMs` 的语义本文不做放宽。
+
+### 7.5 配对码 lookup
+
+网页入口没有 fragment 时，用 8 位配对码换取配对绑定与 `pairingSecret`：
+
+```http
+POST /sync/v1/pairing/lookup
+Content-Type: application/json
+```
+
+```json
+{
+  "protocolVersion": 1,
+  "pairingCode": "ABCD-EFGH"
+}
+```
+
+请求体只含这两个键；多余键、缺字段与错误类型同样进入统一失败面（`401 pairing.code_invalid`，不是 400——见 §7.4）。
+
+`pairingCode` 是 8 位 Crockford base32（40 bit，字母表为 `0123456789ABCDEFGHJKMNPQRSTVWXYZ`），大小写不敏感，允许在 4+4 之间带一个 `-`。服务端先归一化再比较：去掉一个 `-`、转大写、`I`/`L` 映射为 `1`、`O` 映射为 `0`；`U` 不在字母表内。配对码由 `pairingSecret` 域分离派生，只是取回凭据，不是 HMAC 密钥。
+
+成功 200：
+
+```json
+{
+  "protocolVersion": 1,
+  "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+  "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+  "hostPublicKey": "<base64url-65-bytes>",
+  "canonicalOrigin": "https://work-pc.example.ts.net",
+  "pairingSecret": "<base64url-32-bytes>",
+  "expiresAt": "2026-09-17T12:15:00.000Z"
+}
+```
+
+- 成功响应与同一配对的二维码载荷给出逐字节相同的 `pairingId`、`hostId`、`hostPublicKey`、`canonicalOrigin`、`pairingSecret` 与 `expiresAt`；不返回任何授权集合。
+- lookup MUST NOT 推进配对状态、MUST NOT 创建信任。成功后配对仍可被 claim 一次，claim 的校验与 transcript 与二维码入口完全相同。
+- **成功即消耗配对码**：一次成功 lookup 原子地移除该码，同一码的第二次 lookup 必须统一失败，即使第一次响应在网络上丢失。页面因此按固定失败文案结束，恢复路径是重新创建配对；本版没有 lookup 幂等键。
+- 所有失败——格式不符、不存在、已过期、已被认领、已被使用、已被消耗、来源/Host 与登记绑定不一致——都返回同一个 `401` 与同一个错误码 `pairing.code_invalid`。响应形状、message 与耗时不得区分这些情况，也不得回显配对码。
+- 网页入口没有带外主机公钥，因此把成功响应的 `hostPublicKey` 作为本次配对的绑定公钥：claim 的 `hostProof` 用它验证，`approved` 状态响应里的公钥必须与它逐字节相同（§7.2/§7.3 的设备侧校验不因入口而放宽）。若该 canonical origin 已有不同公钥的已配对记录，客户端必须失败关闭，不得覆盖。
+- 限流与 claim **各自独立**：lookup 与 claim 都按来源真实连接地址 10 次/分钟，互不占用额度；status 仍按配对标 60 次/分钟。lookup 失败不指向某一配对，不增加该配对的证明失败计数。
+- lookup 与 §7.1 描述的 pairing HTTP 响应使用同一组规则：只接受同源 `application/json`，请求体上限 16 KiB，响应带四个安全响应头与 `no-store`。`pairingCode` 与 `pairingSecret` 不得进入日志、URL query、Cookie 或任何明文持久化字段。
 
 ## 8. WSS 认证
 
@@ -1516,6 +1562,7 @@ authorization.scope_denied
 pairing.already_claimed
 pairing.expired
 pairing.consumed
+pairing.code_invalid
 sync.cursor_invalid
 command.unsupported
 command.not_found

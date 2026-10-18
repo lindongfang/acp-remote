@@ -1,25 +1,28 @@
 //! Pairing v1：`fixtures/sync/v1/manifest.json` 的配对夹具 + 合同级边界。
 //!
 //! 配对是 HTTPS 载荷而不是 WSS 消息，因此不走 `envelope_fixtures` 的信封路径；本文件是它自己的驱动与
-//! 判据。每条夹具都声明它对应 `pairing.schema.json` 的哪个 `$defs`——新增夹具必须在此登记，否则失败。
+//! 判据。每条合法夹具都声明它对应 `pairing.schema.json` 的哪个 `$defs`、每条非法夹具都声明被哪个
+//! DTO 拒绝——新增夹具必须在此登记，否则失败。
 
 mod support;
 
 use std::collections::BTreeSet;
 
 use sync_protocol::pairing::{
-    CanonicalOrigin, ClaimRequest, ClaimResponse, HttpError, PairingStatus, QrPayload,
-    StatusRequest, StatusResponse,
+    CanonicalOrigin, ClaimRequest, ClaimResponse, HttpError, LookupRequest, LookupResponse,
+    PairingCode, PairingStatus, QrPayload, StatusRequest, StatusResponse,
 };
 
 const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 const PAIRING_SCHEMA_SUFFIX: &str = "schemas/sync/v1/pairing.schema.json";
 
-/// 配对夹具数（`pairing.schema.json` 的六个 `$defs` 中，`httpError` 与连接级 `error` body 同形状，
-/// 由 `error_body_uses_the_registered_error_codes` 覆盖，因此没有独立夹具）。
-const EXPECTED_PAIRING_CASES: usize = 5;
-const EXPECTED_COVERED_DEFS: usize = 5;
+/// 配对夹具数：`pairing.schema.json` 的 `$defs` 中，`httpError` 与连接级 `error` body 同形状，
+/// 由 `error_body_uses_the_registered_error_codes` 覆盖，因此没有独立夹具；`canonicalOrigin` 是
+/// 被引用的取值域而不是顶层 payload。lookup 的两个 DTO 各有正例与负例。
+const EXPECTED_VALID_PAIRING_CASES: usize = 7;
+const EXPECTED_INVALID_PAIRING_CASES: usize = 6;
+const EXPECTED_COVERED_DEFS: usize = 7;
 
 fn is_pairing(schema: &str) -> bool {
     schema.ends_with(PAIRING_SCHEMA_SUFFIX)
@@ -64,33 +67,79 @@ fn parse_registered(fixture: &str, text: &str) -> Result<&'static str, String> {
             parsed(serde_json::from_str::<StatusResponse>(text).map(|_| ()))
                 .map(|()| "statusResponse")
         }
+        "valid/pairing-lookup-request.json" => {
+            parsed(serde_json::from_str::<LookupRequest>(text).map(|_| ()))
+                .map(|()| "lookupRequest")
+        }
+        "valid/pairing-lookup-response.json" => {
+            parsed(serde_json::from_str::<LookupResponse>(text).map(|_| ()))
+                .map(|()| "lookupResponse")
+        }
         other => panic!("{other}：新增的配对夹具必须在本表登记它对应的 $defs"),
+    }
+}
+
+/// 非法夹具 → 它们必须被哪个 Rust 形状拒绝（DTO 与 schema 逐条对齐，负例不能只是 JSON 语法错）。
+fn rejects_registered(fixture: &str, text: &str) -> bool {
+    match fixture {
+        "invalid/pairing-lookup-request-missing-code.json"
+        | "invalid/pairing-lookup-request-short-code.json"
+        | "invalid/pairing-lookup-request-invalid-character.json"
+        | "invalid/pairing-lookup-request-unknown-field.json" => {
+            serde_json::from_str::<LookupRequest>(text).is_err()
+        }
+        "invalid/pairing-lookup-response-missing-secret.json" => {
+            serde_json::from_str::<LookupResponse>(text).is_err()
+        }
+        "invalid/pairing-lookup-error-unknown-code.json" => {
+            serde_json::from_str::<HttpError>(text).is_err()
+        }
+        other => panic!("{other}：新增的配对负例必须在本表登记它被哪个 DTO 拒绝"),
     }
 }
 
 #[test]
 fn every_pairing_fixture_parses_as_its_declared_shape() {
-    let mut cases = 0;
+    let mut valid_cases = 0;
+    let mut invalid_cases = 0;
     let mut covered: BTreeSet<&'static str> = BTreeSet::new();
 
     for case in support::manifest_cases(MANIFEST) {
         if !is_pairing(&case.schema) {
             continue;
         }
-        assert!(case.valid, "{}：配对夹具目前只有正向样例", case.fixture);
         let text = support::read_text(&support::repo_path(&format!(
             "{FIXTURE_ROOT}{}",
             case.fixture
         )));
-        let def = parse_registered(&case.fixture, &text)
-            .unwrap_or_else(|error| panic!("{}：解析失败：{error}", case.fixture));
-        covered.insert(def);
-        cases += 1;
+        if case.valid {
+            let def = parse_registered(&case.fixture, &text)
+                .unwrap_or_else(|error| panic!("{}：解析失败：{error}", case.fixture));
+            covered.insert(def);
+            valid_cases += 1;
+        } else {
+            assert!(
+                rejects_registered(&case.fixture, &text),
+                "{}：非法夹具被对应的 DTO 接受",
+                case.fixture
+            );
+            invalid_cases += 1;
+        }
     }
 
-    assert_eq!(cases, EXPECTED_PAIRING_CASES, "配对夹具数变化");
+    assert_eq!(
+        valid_cases, EXPECTED_VALID_PAIRING_CASES,
+        "合法配对夹具数变化"
+    );
+    assert_eq!(
+        invalid_cases, EXPECTED_INVALID_PAIRING_CASES,
+        "非法配对夹具数变化"
+    );
     assert_eq!(covered.len(), EXPECTED_COVERED_DEFS, "覆盖的 $defs 数变化");
-    println!("sync pairing: {cases} 条夹具解析成功，覆盖 {EXPECTED_COVERED_DEFS} 个 $defs");
+    println!(
+        "sync pairing: {valid_cases} 条合法夹具解析成功，{invalid_cases} 条非法夹具被拒，\
+覆盖 {EXPECTED_COVERED_DEFS} 个 $defs"
+    );
 }
 
 #[test]
@@ -253,10 +302,133 @@ fn http_error_reuses_the_registered_error_codes() {
         "未登记的错误码必须被拒（与 WSS error body 共用同一枚举）"
     );
 
+    let lookup_failure = ok.replace("pairing.expired", "pairing.code_invalid");
+    assert!(
+        serde_json::from_str::<HttpError>(&lookup_failure).is_ok(),
+        "lookup 的统一失败码 pairing.code_invalid 必须已登记"
+    );
+
     let missing_key =
         "{\"code\":\"pairing.expired\",\"message\":\"x\",\"retryable\":false,\"details\":{}}";
     assert!(
         serde_json::from_str::<HttpError>(missing_key).is_err(),
         "correlationId 是 required（可 null）：键缺失必须被拒"
     );
+}
+
+#[test]
+fn lookup_request_round_trips_and_enforces_the_code_shape() {
+    let fixture = fixture_value("valid/pairing-lookup-request.json");
+    let parsed: LookupRequest =
+        serde_json::from_value(fixture.clone()).expect("lookup 请求夹具必须可解析");
+    assert_eq!(parsed.pairing_code.as_str(), "ABCD-EFGH");
+    assert_eq!(
+        serde_json::to_value(&parsed).expect("必须可序列化"),
+        fixture,
+        "LookupRequest 的序列化形状必须与夹具逐字一致"
+    );
+
+    for accepted in [
+        "ABCD-EFGH",
+        "abcdefgh",
+        "ABC1EFG0",
+        "ABCD-EFGI",
+        "ABCD-EFGL",
+        "ABCD-EFGO",
+    ] {
+        assert!(
+            PairingCode::parse(accepted).is_ok(),
+            "配对码 {accepted:?} 属于 wire 允许的字符集（大小写不敏感，允许一个分隔符）"
+        );
+    }
+
+    for rejected in [
+        "",
+        "ABCD-EFG",
+        "ABCD-EFGHI",
+        "ABCD-EFGU",
+        "ABCD--EFG",
+        "ABCDE-FGH",
+        "ABC-EFGH",
+        "ABCD EFGH",
+        "ABCD_EFGH",
+        "ABCD-EFGH\n",
+    ] {
+        assert!(
+            PairingCode::parse(rejected).is_err(),
+            "配对码 {rejected:?} 必须被拒（8 位、可带一个 4+4 分隔符、不含 U）"
+        );
+    }
+
+    let mut wrong_version = fixture.clone();
+    wrong_version["protocolVersion"] = serde_json::json!(2);
+    assert!(
+        serde_json::from_value::<LookupRequest>(wrong_version).is_err(),
+        "protocolVersion 只接受常量 1"
+    );
+
+    let mut unknown_field = fixture.clone();
+    unknown_field["hostId"] = serde_json::json!("bdb2ec20-f98c-4d87-b789-e540d527ef87");
+    assert!(
+        serde_json::from_value::<LookupRequest>(unknown_field).is_err(),
+        "lookup 请求是关闭形状：未知字段必须被拒"
+    );
+}
+
+#[test]
+fn lookup_response_round_trips_through_the_wire_shape() {
+    let fixture = fixture_value("valid/pairing-lookup-response.json");
+    let parsed: LookupResponse =
+        serde_json::from_value(fixture.clone()).expect("lookup 响应夹具必须可解析");
+    assert_eq!(
+        serde_json::to_value(&parsed).expect("必须可序列化"),
+        fixture,
+        "LookupResponse 的序列化形状必须与夹具逐字一致（wire 字段名是 camelCase）"
+    );
+
+    let mut short_key = fixture.clone();
+    short_key["hostPublicKey"] = fixture["pairingSecret"].clone();
+    assert!(
+        serde_json::from_value::<LookupResponse>(short_key).is_err(),
+        "hostPublicKey 必须是 65 字节：32 字节的 pairingSecret 不能顶替"
+    );
+
+    let mut long_secret = fixture.clone();
+    long_secret["pairingSecret"] = fixture["hostPublicKey"].clone();
+    assert!(
+        serde_json::from_value::<LookupResponse>(long_secret).is_err(),
+        "pairingSecret 必须是 32 字节"
+    );
+
+    let mut plain_http = fixture.clone();
+    plain_http["canonicalOrigin"] = serde_json::json!("http://pc.example.test");
+    assert!(
+        serde_json::from_value::<LookupResponse>(plain_http).is_err(),
+        "canonicalOrigin 必须是 https origin"
+    );
+
+    let mut unknown_field = fixture.clone();
+    unknown_field["scopes"] = serde_json::json!(["session.read"]);
+    assert!(
+        serde_json::from_value::<LookupResponse>(unknown_field).is_err(),
+        "lookup 响应不得携带授权集合或任何未登记字段"
+    );
+}
+
+/// 两个入口必须指向同一套绑定材料：lookup 响应与同一配对的二维码载荷逐字段相同。
+///
+/// 这条钉住 spec 的「主机公钥与二维码载荷一致」：任何一侧换了字段来源都会在这里失败。
+#[test]
+fn lookup_response_matches_the_qr_payload_binding() {
+    let qr: QrPayload = serde_json::from_value(qr_payload()).expect("二维码夹具必须可解析");
+    let lookup: LookupResponse =
+        serde_json::from_value(fixture_value("valid/pairing-lookup-response.json"))
+            .expect("lookup 响应夹具必须可解析");
+
+    assert_eq!(lookup.pairing_id, qr.pairing_id);
+    assert_eq!(lookup.host_id, qr.host_id);
+    assert_eq!(lookup.host_public_key, qr.host_public_key);
+    assert_eq!(lookup.canonical_origin, qr.canonical_origin);
+    assert_eq!(lookup.pairing_secret, qr.pairing_secret);
+    assert_eq!(lookup.expires_at, qr.expires_at);
 }

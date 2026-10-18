@@ -47,7 +47,7 @@
 
 - 已有并直接复用：`Actor`、`DeviceRecord`、`NodeRecord`、`NodeKind`、`PairingRecord`、`PairingState`、`PairingTarget`（纯 token 枚举，不带载荷）、`PairingPeer`、`PairingClaim`、`PairingSettlement`、`PeerIdentity`、`ScopeSet`、`GrantSet`、`Fingerprint`、`Nonce`、`Digest`、`Timestamp`、`AuditAction`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）。`identity-auth` 把其中出现在端口与公开 API 里的类型**如实转出**（`pub use acp_core::model::{…}`），使端口实现方（`identity-keystore`）无需依赖 `core`（§5 依赖矩阵不允许该边）。
 - 已在 `core::model` 落地：`PeerPublicKey`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）与写集相关 DTO（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3）。节点角色直接复用已有的 `NodeKind`，**不要**新增 `NodeRole`。
-- 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`Completion`（收尾入口的返回值：事实 + 时间 + 需要推进为 `consumed` 的配对）、`IdentityFact`、`Authenticated`、`CredentialStatus`、`HandshakeFailure`/`HandshakeFailureClass`、`PairingSpec`（配对目标 + 本机绑定：设备为 canonical origin、节点为 endpoint 与角色）、`PairingDecision`、`PairingDraft`、`PairingRequestId`、`ClaimFields`、`ClaimKindFields`、`ClaimOutcome`、`ClaimRejection`/`ClaimFailureClass`、`ClaimedPairing`、`RequestedCapabilities`、`PairingStatusView`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`ChallengeId`、`P1363Signature`（64 字节 P1363）、`PeerTrust`（调用方读到的当次持久事实快照）、`EntropySource`/`EntropyError`（熵源端口）。
+- 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`Completion`（收尾入口的返回值：事实 + 时间 + 需要推进为 `consumed` 的配对）、`IdentityFact`、`Authenticated`、`CredentialStatus`、`HandshakeFailure`/`HandshakeFailureClass`、`PairingSpec`（配对目标 + 本机绑定：设备为 canonical origin、节点为 endpoint 与角色）、`PairingDecision`、`PairingDraft`、`PairingRequestId`、`ClaimFields`、`ClaimKindFields`、`ClaimOutcome`、`ClaimRejection`/`ClaimFailureClass`、`ClaimedPairing`、`RequestedCapabilities`、`PairingStatusView`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`PairingCode`（含 `InvalidPairingCode`）、`PairingCodeLookup`、`ChallengeId`、`P1363Signature`（64 字节 P1363）、`PeerTrust`（调用方读到的当次持久事实快照）、`EntropySource`/`EntropyError`（熵源端口）。
 - 只存在于 `identity-auth`、且与其它 crate 有**同名类型**的（务必按下表指认，不要串用）：`FeatureList`（本 crate 自己实现的连接特性列表；与 `acpr-wire::FeatureList` **不是同一个类型**，依赖矩阵也禁止 `identity-auth` 依赖 `acpr-wire`——§5.1 签名块里的 `FeatureList` 指的就是本 crate 的这一个）、`ClientKind`（与 `sync_protocol::auth::ClientKind` 同名不同物）、`PairingProof`（配对期 HMAC 证明的载荷形状）。
 - 只存在于 `identity-auth` 的**授权词表镜像**：`authorization::{GRANTS, LOCAL_CAPABILITIES}`；唯一机器来源仍是 `compatibility/commands/v1/commands.json`（§6.1），镜像由常驻测试逐项断言。设备方向没有词汇表（设备权限层已删除）：这里不存在设备授权包或配对预设。
 - **由 `identity-auth` 定义、由 `identity-keystore` 实现**的 keystore 端口边界：`KeyPurpose`、`SecretPurpose`、`KeyHandle`、`SecretBytes`、`P1363Signature`、`EntropySource`/`EntropyError`（§7）。定义方是 `identity-auth`——端口 trait 与这些类型都在 `crates/identity-auth/src/port.rs`；`identity-keystore` 只 `use` 端口，不自己定义同名类型（§5 依赖矩阵不允许它依赖 `core`）。
@@ -197,7 +197,10 @@ impl ClaimedPairing {
 - secret 只在创建方（或 claim 方）内存中存在；落库的只有 SHA-256 digest（`owned_pairing.secret_digest`）。
 - `[决定]`（2026-09-26）与 secret **同生同灭**的两个非秘密值：server nonce 与 pairing request id（claim 响应与 Owner 证明的 transcript 字段）。它们不是凭据（wire 上会原样发给对端），因此可经 `Authority::pairing_request_material` 读取；secret 被清除时它们一起消失（同上一次 `None`）。入口登记见 §5.1。
 - 最迟在 `expires_at` 清除；`approved` 配对在首次 WSS 认证成功时提前清除；`rejected` 可为可靠轮询保留到原过期时间，但**不得超过**该时间。
-- 二维码 fragment 与完整配对载荷读取后立即清除，不得进入日志或 analytics（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §14.1）。
+- `[决定]`（2026-10-18，`pairing-code-web-entry`）与 secret **同生同灭**的还有网页入口配对码：`PairingCode` 由 `derive_pairing_code(&PairingSecret)` 域分离派生（HMAC-SHA256、domain tag `acp-remote/pairing-code/v1`、取前 40 bit、8 位 Crockford base32），创建配对时随 `PairingDraft.code` 交给调用方（`device.pair.begin` 用它返回 `pairingCode`）。码只存在于 `identity-auth` 的内存查找表与一次性管理响应中，MUST NOT 新增 SQLite 字段、MUST NOT 从持久化摘要重建。`Authority` 在创建时把 `code -> PairingId` 放进与 secret 同一生命周期的映射；创建时若码与另一个仍持有 secret 的活跃配对碰撞，重新生成 secret/码直到唯一，不向用户报错。
+- 配对码查找 SHALL 只覆盖内存中仍持有 secret 的 active pairing。`Authority::consume_pairing_code(&PairingCode) -> Option<PairingCodeLookup>` 成功即**原子地**返回 `PairingCodeLookup { pairing, secret }` 并移除该码；`None` 是内存查找失败的唯一形状（码不存在或已被清除）。adapter MUST 把 `None` 与它自己的配对状态/过期/来源绑定检查失败**一起**收敛为同一个 `401`，不区分不存在、已过期、已认领、已使用、已消耗或来源不符。查找使用常数时间比较；它**不推进**配对状态，secret 仍可被 claim 一次。
+- 码映射随 §4.3 的 secret 清理路径一起移除：`due_pairings`/`unrecoverable_after_restart` 的过期清理、启动时的 `reset_memory`、`approved` 配对首次认证成功、`rejected` 到达原过期时间，MUST 同时清除 secret 与码；重启后不得凭 digest 恢复码或 secret。绕过 `Authority` 的持久化清理不算完成。
+- 二维码 fragment 与完整配对载荷读取后立即清除，不得进入日志或 analytics（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §14.1）。配对码同样 MUST NOT 进入日志、URL query、Cookie 或任何明文持久化字段；`PairingCode` 的 `Debug` 必须脱敏且**不实现 `Display`**，避免经格式化误入日志。
 - Daemon 重启不能凭 digest 恢复 secret：启动时终结「未确认且无法继续验密」的配对，客户端重新发起；已批准的信任记录保留，正常重连不要求重新配对（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.3）。
 
 ### 4.4 为什么没有短验证码（SAS）
@@ -206,9 +209,11 @@ impl ClaimedPairing {
 
 理由（详细威胁模型见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 的对应小节）：本协议的信任锚是「配对载荷**带外**携带主机公钥与一次性配对秘密 + claim 阶段以配对秘密计算的 HMAC」，教科书里 SAS 所防的公钥替换已由这条锚承担；而对本流程剩下的两种现实威胁——配对载荷在带外被**整条替换**、配对秘密**泄露**——SAS 完全无效（前者真主机从未被认领、其终端上没有可对照的数字；后者持有者能算出同一个数字）。设备侧对主机的验证由两条密码学要求承担：用配对载荷里的公钥验证 claim 响应中的主机证明，以及已批准响应里的主机公钥必须与载荷逐字节一致（见 `pwa-web-client`；`authority` 侧的两个入口见 §5.1）。HMAC 与签名比较一律 constant-time。
 
+`[决定]`（2026-10-18，`pairing-code-web-entry`）网页入口的 8 位配对码**不是**短验证码（SAS），不得按 SAS 叙述：它不是供人眼比对两端的校验值，不出现在确认界面，不是 HMAC 密钥，也不改变「不派生、不展示短验证码」的结论。它只是从 pairing secret 域分离派生的一次性**取回凭据**：持有它的人可以经同源 lookup 取回该配对的绑定与 256 bit secret，成功即消耗，第二次统一失败。二维码入口的主机公钥锚与两条设备侧校验原样保留；网页入口没有带外载荷，其主机公钥来自 TLS + canonical origin 限定的 lookup 响应（TOFU），完整边界见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1 与 [ADR-0010](./adr/0010-web-pairing-code-entry.md)。
+
 ### 4.5 失败计数
 
-`[决定]` 单个配对的 proof 失败计数归 `identity-auth`（第 5 次失败后使该 pairing 失效，[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14）；按 IP/连接的认证尝试限流归 `server::transport`。失败一律返回 `401`，响应不得泄露具体校验差异，也不得暴露设备或配对是否存在。失效的**落库**（`ClaimRejection::TooManyFailures` 的说明要求调用方提交一次拒绝落定）需要本机主体，配对 HTTP 面不伪造本机主体，因此那里只做内存失效并从 `failure_count` 把同一事实投影到 status 的终态 `rejected`（§5.1 的登记）；落库修正随「配对通道的本机终态写面」另议。
+`[决定]` 单个配对的 proof 失败计数归 `identity-auth`（第 5 次失败后使该 pairing 失效，[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14）；按 IP/连接的认证尝试限流归 `server::transport`。失败一律返回 `401`，响应不得泄露具体校验差异，也不得暴露设备或配对是否存在。失效的**落库**（`ClaimRejection::TooManyFailures` 的说明要求调用方提交一次拒绝落定）需要本机主体，配对 HTTP 面不伪造本机主体，因此那里只做内存失效并从 `failure_count` 把同一事实投影到 status 的终态 `rejected`（§5.1 的登记）；落库修正随「配对通道的本机终态写面」另议。配对码 lookup 的失败**不指向某一配对**，因此不增加任何配对的 proof 失败计数；lookup 与 claim 的按来源限流由 `server::sync::pairing` 使用各自独立的有界桶（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.5）。
 
 ## 5. 握手契约
 
@@ -330,6 +335,13 @@ pub struct PeerTrust {
   HMAC（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.3）；`input.host_id` 必须等于本节点，secret 缺失与
   HMAC 不匹配分别是 `SecretUnavailable`/`Proof(Hmac)`，**adapter 必须把两者收敛为同一个对端可见的 401**
   （§4.5：不泄露校验差异）。
+- `[决定]`（2026-10-18，`pairing-code-web-entry`）配对码的公开入口在此登记（它们不属于三个握手入口，不接收 `PeerTrust`、不接触 IO、不写持久材料）：
+  `PairingCode`（8 位 Crockford 值对象；`parse(&str) -> Result<Self, InvalidPairingCode>` 先做归一化——大小写不敏感、`I`/`L` 映射为 `1`、`O` 映射为 `0`、允许一个 `-`；`as_str()` 返回规范 8 位大写文本（无分隔符；终端与页面按 `XXXX-XXXX` 展示）。`Debug` 脱敏且**不实现 `Display`**）、
+  `derive_pairing_code(&PairingSecret) -> Result<PairingCode, ProofError>`（domain tag `acp-remote/pairing-code/v1` 的 HMAC-SHA256，取前 5 字节；只作一次性取回凭据，不是 claim/status 的 HMAC 密钥）、
+  `PairingCodeLookup { pairing: PairingId, secret: PairingSecret }`（成功查找的返回值；secret 是完整 256 bit，不缩短、不派生第二把）、
+  `Authority::consume_pairing_code(&PairingCode) -> Option<PairingCodeLookup>`（成功即**原子地**消耗该码；`None` 是内存查找失败的唯一形状，adapter 必须把它与配对状态/过期/来源绑定检查失败一起收敛为同一个 401，不区分不存在、已过期、已认领、已使用、已消耗或来源不符；不推进配对状态）、
+  `PairingDraft.code: PairingCode`（创建配对时随 draft 给出，`device.pair.begin` 用 `draft.code.as_str()` 返回 `pairingCode`；不进入持久写集）。
+  配对码查找表与 secret 同生同灭（§4.3），创建时的码碰撞按 §4.3 重新生成 secret/码直到唯一。
 - `[决定]`（2026-10-13）上列诊断入口的两处**生产**用途由 `server::sync::pairing` 落地并在本节登记（其余
   用途不变，仍只供回归测试与本地诊断）：`has_secret` 用于 status 端点的 secret 生命周期分支（本机已不
   持有其 secret 时终态配对回 200、非终态回 401，见 §13.3 的同款口径）；`failure_count` 用于把「第 5 次

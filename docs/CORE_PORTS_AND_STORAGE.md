@@ -6,7 +6,7 @@
 > 版本：0.4（2026-09-18，L1 收尾：补齐四条会阻塞「一个真实 turn」的缺口——§6 第 14 条 `agent.message.completed` 的生成、第 15 条 delta 压缩与 `turn.delta_compacted` 收据、第 16 条启动恢复 `RecoverUnsettled`、第 17 条 `session.mode.list` 的候选来源；新增 `SessionEndpoint::modes()`、`SessionStore::unsettled_commands`、`OwnedCommit.compacted`、`MessageId`/`ModeState`，并给 §9 加判据 18–21）
 > 版本：0.5（2026-09-18：§5.4 的 `EventSink` 更正为包装结构，与 §5.1 的 `[决定]` 和 `ports.rs` 一致；新增 `scripts/check-contract-drift.mjs`，把 §7/§5 与实现的漂移变成 `npm run check` 的第八个门禁）
 > 日期：2026-09-18
-> 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.1/§4.7/§5/§6/§7/§8/§10、[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §5/§10、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §3/§9/§10/§11/§14、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §6/§7/§12/§15、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §13/§14/§15、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §4/§5/§6、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5
+> 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.1/§4.7/§5/§6/§7/§8/§10、[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §5/§10、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §3/§9/§10/§11/§14、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §6/§7/§12/§15、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §13/§14/§15、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §4/§5、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5
 > 作用：冻结 `core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` 的 v2 表结构、保留/清理与 migration。**本文件是这些内容的唯一权威来源**；`MODULE_ARCHITECTURE.md` §4.1/§4.7 只保留职责边界。
 > 标记约定：`[决定]` = 本合同新定且不改变既有协议语义；`[待确认]` = 触及协议或产品语义，需用户确认；`[open]` = 明确留到实现阶段。
 > 修订（2026-09-23）：§11.5–§11.9 的形状已并入 §3.5/§3.6/§3.7/§5.1/§5.3/§7.2/§7.3/§7.4，§11 改为「形状已并入」索引（只留设计理由）；`scripts/check-contract-drift.mjs` 对新增端口签名与 DDL 逐条断言。`storage-sqlite` 的管理 store 落盘实现已落地（`crates/storage-sqlite/src/admin/`，写集一事务提交、失败关闭与容量纳入）。**Daemon/CLI 接线与 `server`/`app` 的入站适配器已随切片 4 `daemon-cli-and-local-admin` 落地**（`server` 的本地管理与 `app` 组合根/CLI，见 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.9/§4.10；`identity-auth`/`identity-keystore` 两个身份 crate 已于 2026-09-24 落地，见 §4.8/§4.12）；仍未实现的是 `server::sync`/`server::acp_facade` 与 `node-link-client`（`server::transport::net` 与 `server::node_link` 的 Owner 侧入站面已随切片 5 `node-link-owner` 落地，见 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.9）。在远程与网络适配器落地前，不能把合同检查或存储测试通过解释为配对、撤销或本地配置已经端到端可用。
@@ -229,6 +229,7 @@ pub enum UnavailableKind {
 
 | `RemoteCatalogQueries` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 读取方法与 `NODE_LINK_PROTOCOL.md` §12.3 catalog 投影 | 同上、`server::node_link` |
 | `PairingChannel` | `claim_pairing(actor, PairingClaim) -> PairingClaimOutcome`、`pairing(actor, PairingId) -> Option<PairingRecord>`、`pairing_channel_view(actor, PairingId) -> Option<PairingChannelView>`、`consume_pairing(actor, PairingId) -> PairingRecord` | `server::node_link`（及未来 `server::sync`）；前两项另由 `server::local_admin` 以 `Actor::LocalCli` 调用 |
+| `PairingMaintenance` | `pairings(actor) -> Vec<PairingRecord>`、`expire_pairings(actor) -> u64`、`expire_pairings_by_id(actor, &[PairingId]) -> u64` | `app::daemon`（启动恢复与周期维护，`Actor::LocalCli`；`pairings` 只读、`expire_pairings_by_id` 只终结未确认标识） |
 | `NodeLinkHandshake` | `node_link_handshake_view(accessNodeId) -> NodeLinkHandshakeView`、`record_node_link_auth(accessNodeId, AuditAction, AuditOutcome) -> ()`、`record_node_connected(accessNodeId) -> ()` | `server::node_link`（及未来 `server::sync` 的同形入口） |
 | `SyncDeviceHandshake` | `sync_device_handshake_view(deviceId) -> SyncDeviceHandshakeView`、`record_device_connected(deviceId) -> ()`、`record_device_auth_failure(deviceId) -> ()` | `server::sync` |
 | `SyncSnapshotQueries` | `sync_visible_sessions(actor, SyncSessionQuery, owner_reachable) -> Vec<SessionSummary>`、`sync_workspace_catalog(actor) -> Vec<WorkspaceCatalogEntry>`（快照的 `workspaces` 资源：每条都带目录标识与规范化路径；`core.workspace-path.v1` 已撤销，没有协商参数） | `server::sync`（快照的 `sessions`/`workspaces` 资源） |
@@ -529,6 +530,58 @@ pub trait RemoteDeliveryStore: Send + Sync {
 ### 5.3 信任、Export、审计与附件
 
 实现状态：SQLite 已实现附件端口、§7 的 v2 表结构与三个管理 store 的**落盘实现**（管理写集的一事务提交、失败关闭与容量纳入，见 `crates/storage-sqlite/src/admin/` 与 §9 判据 23–29）；core 侧同时保留测试替身。下面列出的签名与 §5.1/§5.2 一样是**冻结形状**，由 `scripts/check-contract-drift.mjs` 与 `crates/core/src/ports.rs` 逐条绑定。
+
+`TrustStore` 的读面新增一条只读列表（`pairing-code-web-entry` 的 WP3，2026-10-18）：`pairings()` 返回全部 `PairingRecord`，只服务 daemon 的过期/重启维护（`Authority::due_pairings`/`unrecoverable_after_restart` 需要完整快照）。它不返回 secret、不做业务写、不新增表或列（摘要仍是唯一的持久形态）；业务读面继续走 `pairing`/`pairing_for`。配套的 `ExpiryWrite` 增加 `only: Option<Vec<PairingId>>`：`None` 保持原有「未确认且已到期」的时间扫描，`Some(ids)` 只终结列出的未确认标识（重启后已无法验密的配对早于 `expires_at` 也必须终结）；两种形态都不改写已批准/已终结的行，DDL 不变。
+
+```rust
+pub trait TrustStore: Send + Sync {
+    async fn device(&self, id: &DeviceId) -> Result<Option<DeviceRecord>, PortError>;
+
+    async fn devices(&self) -> Result<Vec<DeviceRecord>, PortError>;
+
+    async fn node(&self, id: &NodeId, kind: NodeKind) -> Result<Option<NodeRecord>, PortError>;
+
+    async fn nodes(&self) -> Result<Vec<NodeRecord>, PortError>;
+
+    async fn nodes_for(&self, id: &NodeId) -> Result<Vec<NodeRecord>, PortError>;
+
+    async fn peer_key(&self, peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError>;
+
+    async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError>;
+
+    async fn pairings(&self) -> Result<Vec<PairingRecord>, PortError>;
+
+    async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError>;
+
+    async fn pairing_for(&self, peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError>;
+
+    async fn put_device(&self, write: DeviceWrite) -> Result<(), PortError>;
+
+    async fn put_node(&self, write: NodeWrite) -> Result<(), PortError>;
+
+    async fn revoke_device(&self, write: DeviceRevocation) -> Result<(), PortError>;
+
+    async fn revoke_node(&self, write: NodeRevocation) -> Result<(), PortError>;
+
+    async fn create_pairing(&self, write: PairingWrite) -> Result<(), PortError>;
+
+    async fn claim_pairing(
+        &self,
+        write: PairingClaimWrite,
+    ) -> Result<PairingClaimOutcome, PortError>;
+
+    async fn settle_pairing(
+        &self,
+        write: PairingSettlementWrite,
+    ) -> Result<TrustRecordRef, PortError>;
+
+    async fn expire_pairings(&self, write: ExpiryWrite) -> Result<u64, PortError>;
+
+    async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError>;
+
+    async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError>;
+}
+```
 
 ```rust
 pub trait LocalConfigStore: Send + Sync {
@@ -1069,15 +1122,13 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 | `storage.attachment_dir` | `<data_dir>/attachments` | 附件字节目录（`[决定]` 新增键，权限同数据库目录） |
 | `storage.attachment_max_file_bytes` | 20 MiB | 单附件上限，超出显式拒绝 |
 | `storage.attachment_max_total_bytes` | 1 GiB | 附件总量，超出按 `last_used_at` LRU 清理 |
-| `terminal.max_output_per_command_bytes` | 1048576 | 单命令终端上限 |
-| `terminal.keep_head_bytes` / `terminal.keep_tail_bytes` | 131072 / 917504 | 截断时保留的头/尾（必须带截断标识） |
 | `storage.audit_retention_days` | 365 | 审计保留期（已确认）；到期后按 `at` 清理 `owned_audit`/`imported_audit`。容量压力下审计排在清理顺序**最后**（先清 delta → 正文/状态事件 → 已压缩批次 → 附件，再考虑审计），超限时宁可拒绝新写入也不静默丢证据 |
 
 `[决定]` 清理顺序：① 过期 delta → ② 过期正文/结构化/状态事件 → ②′ **终态交互行**（`owned_interaction.state <> 'pending'`）→ ③ 该会话最旧的已压缩 delta 批次 → ④ 附件 LRU → ⑤ 到期的审计（`storage.audit_retention_days`，365 天；`owned_audit` 与 `imported_audit` 都要清）→ ⑥ 仍超限则拒绝新写入（`PortError::Unavailable(StorageFull)`），不静默丢弃、不继续广播。TTL 清理（①②⑤、以及 ②′）由 `prune` 驱动；容量清理（②′③④）只在超限时触发。
 
 `[决定]`（2026-09-23）**清理任务的驱动者与周期**（此前只写了“由 `prune` 驱动”，没写谁调、多久调一次，等于默认永不执行）：
 
-1. 组合根在取得单实例锁、migration 完成**之后**、开始监听**之前**先执行一次初清理：`SessionStore::prune` + `RemoteDeliveryStore::prune`，加上 `TrustStore::expire_pairings`（§11.6）与 `AttachmentStore::sweep_orphans(启动时刻, 1000)`（§6 第 18 条）。
+1. 组合根在取得单实例锁、migration 完成**之后**、开始监听**之前**先执行一次初清理：`SessionStore::prune` + `RemoteDeliveryStore::prune`，加上配对内存态的重启恢复（`Authority::reset_memory` → `UseCases::pairings` → `Authority::unrecoverable_after_restart` → `UseCases::expire_pairings_by_id`，见 §11.6 第 6 条）、`TrustStore::expire_pairings`（§11.6）与 `AttachmentStore::sweep_orphans(启动时刻, 1000)`（§6 第 18 条）。
 2. 启动之后按**固定 60 s**周期重复同一批调用（固定 v1 常量，不给配置键：这是保证保留策略真的生效，不是可调业务参数）。
 3. 周期任务与写入共用同一个写连接（§7.1 的单写连接），必须**分批并让出**：单次 `prune` 到上限即返回，不得抦住写事务阻塞会话提交；一轮超时或出错只记结构化日志，不中断 daemon。
 4. 关闭顺序（以 `SECURITY_DESIGN.md` §12.1 为准）：**停接入层**（不再接受新连接，并排空**其余**在途连接，最坏仍受宽限上限约束；发出该 `daemon.stop` 的那条连接不计入——服务端在写回响应后自行结束它）→ **取消周期任务与信号监听**（必须先于停止 Agent）→ 停 Agent 进程 → 最后做一次 `wal_checkpoint(TRUNCATE)` 并清理 endpoint/释放单实例锁。周期任务的取消位置是为了让它们在存储关闭前停止写入，不是「先于接入层」。
@@ -1276,7 +1327,7 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 3. `claim_pairing`：并发只有一个成功（唯一 peer 行 + 条件更新）；过期/已终态 → `Conflict(Expired/Consumed)`；本机绑定不一致 → `Conflict(IdentityMismatch)`（§11.2 第 1 条）；插入 `owned_pairing_peer` 与状态推进、`pairing.claimed` 审计同一事务。
 4. `settle_pairing`：拒绝或过期**不创建**信任；`Approved` 时创建信任行、把 peer 公钥转入 `owned_peer_key`、更新配对为 `approved`，并按目标族写「信任建立」审计——**设备批准写 `pairing.approved`、节点批准写 `node.paired`**，两族拒绝都写 `pairing.rejected`（`SECURITY_DESIGN.md` §14.2 的最小集合；与 `device.revoked`/`node.trust_revoked` 同款对称）；任一步失败全回滚，绝不出现「返回成功但没有持久信任」。设备配对写下设备行（`active`）；节点配对写下 `owned_node` 的 `access` 行（§11.2 第 2 条的角色推导）；两条路径都要求指纹与既有绑定/角色行一致（同一对端不得换绑公钥，第 1 条），并**允许复活已撤销的身份**：这是 §11.2 第 2 条指定的唯一恢复入口，撤销审计不因复活消失（`revoked_at`/`revoke_reason` 随 `active`/`paired` 清空，历史留在 `device.revoked`/`node.trust_revoked` 审计行里）。节点配对批准时，`granted_export_ids` 必须在**同一事务内**校验（与 `granted_grants ⊆ requested_grants` 同址）：每个 id 必须能在 `owned_export` 里查到且未撤销（否则 `NotFound(EntityRef::Export)`，适配层映射 `local.not_found`），其 `scopes` 必须与本次 `granted_grants` 有交集（否则 `InvalidRequest`，适配层映射 `local.invalid_params`）；空集合合法，此时不查任何 Export 行。任一条失败即整事务回滚：不创建信任行、不推进配对状态、不写审计。清单只能**收窄** Owner 侧的命令授权与 catalog 可见性（`NODE_LINK_PROTOCOL.md` §8.2），不得因清单放宽任何权限。批准仍沿用既有的 `node.paired` 审计动作，**不新增** `node.export_ids_changed` 之类的动作（没有配对后修改入口，就没有「授权变更」这种事件）。
 5. `revoke_device`/`revoke_node`：单事务写撤销时间、状态与审计；**提交后**才由组合根关闭适用连接并对管理调用作答（§11.2 第 3 条）。连接清理失败不回滚已提交的撤销。
-6. `expire_pairings`：只终结「未确认且 `expires_at <= at`」的行，写 `pairing.expired`；已批准信任不受影响。
+6. `expire_pairings`：只终结**未确认**（`created`/`claimed`/`pending_confirmation`）的行，写 `pairing.expired`，已批准信任不受影响。`ExpiryWrite.only = None` 是原有时间扫描（`expires_at <= at`）；`Some(ids)` 只处理列出的标识且不判到期（重启后已无法验密的未确认配对必须立即终结），重复提交与不在列表中的行都是零写入。周期维护的顺序是 `UseCases::pairings` → `Authority::due_pairings`（同时清除内存 secret 与配对码映射）→ `expire_pairings_by_id`；列表读取失败时退回时间扫描。
 7. `put_export`/`revoke_export`/`add_import`/`remove_import`：审计取值分别用 `export.created`/`export.revoked`/`import.added`/`import.removed`（§7.3 与 §7.4 的 `action` CHECK），与状态同事务（§11.2 第 4/5 条）。
 8. `consume_pairing`（design D12）：`actor` 必须与 `owned_pairing_peer` 的对端**同类同 id**（不一致 → `Conflict(IdentityMismatch)`），且写集里的主体与每一条 `context.audit` 的归因必须一致（分歧 → `InvalidRequest`，接线错误失败关闭）；只有 `approved` 能推进到 `consumed`（条件更新 `AND state = 'approved'`，`terminal_at` 取本次 `at`，`node.authenticated`/`device.authenticated` 与状态同事务），并在同一事务推进对端节点行的 `last_connected_at`（第 9 条；`actor` 为 `Actor::Node` 时该行是配对批准写下的那个 `access` 行，`Actor::Device` 的配对没有节点行）；已是 `consumed` 且对端一致时幂等成功（**不**覆盖首次 `terminal_at`、**不**重复写审计，也不重复推进 `last_connected_at`——那是同一次消费的重复提交）；其余状态具名拒绍（`expired` → `Expired`、`rejected` → `Consumed`、未批准 → `InvalidRequest`），配对行或对端行缺失分别是 `NotFound`/`Corrupt`。该写集不设容量门：它只推进一个状态、不新增管理行，而且是认证收尾的安全动作（与 `revoke_*`/`expire_pairings` 同类）。
 9. `record_node_connected`（`NodeConnectedWrite`，认证成功的收尾写集；新增于 2026-09-26 的 `node-link-owner` 修复轮次）：重复认证（没有待消费配对）把 `(node, kind)` 行的 `last_connected_at` 推进到 `context.at`，并把 `context.audit`（该对端的 `node.authenticated` 成功行）在**同一事务**提交；值只前进不倒退（与 `upsert_node` 的三分支 `CASE` 同口径，§5.3 约束），行不存在 → `NotFound(EntityRef::Node)`。首次认证的同一职责在 `consume_pairing` 的写集里（第 8 条）：两条路径都不得省——`lastConnectedAt` 的语义是「最近一次认证成功时间」，只在首次认证写会让它对后续连接说谎。不设容量门（只更新一个时间列、不新增管理行）；`context.audit` 必须非空（认证成功是安全动作，§11.6 的写集约束）。

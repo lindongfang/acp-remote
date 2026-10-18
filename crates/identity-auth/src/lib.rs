@@ -10,13 +10,15 @@
 //!   的 `DOMAINS`，编解码来自叶子 crate `acpr-transcript`；本 crate 不复制常量、不手拼字节。
 //!
 //! 模块划分：`types`（值对象与事实）、`transcript`（10 个 domain 的输入与编解码/验签/HMAC 入口）、
-//! `pairing`（配对状态机）、`handshake`（逐连接挑战-证明）、
-//! `port`（keystore 与熵源端口）、`state`（内存态：配对 secret、挑战缓存、失败计数）。
+//! `pairing`（配对状态机）、`pairing_code`（网页入口配对码的派生与编解码）、
+//! `handshake`（逐连接挑战-证明）、
+//! `port`（keystore 与熵源端口）、`state`（内存态：配对 secret、配对码反查、挑战缓存、失败计数）。
 
 mod authority;
 pub mod error;
 pub mod handshake;
 pub mod pairing;
+pub mod pairing_code;
 pub mod port;
 mod state;
 pub mod transcript;
@@ -36,6 +38,7 @@ pub use error::{
     AuthorizationError, HandshakeError, IdentityError, PairingError, ProofError, TranscriptError,
 };
 pub use handshake::{ChallengeIssue, ChallengeRequest, ProofSubmission};
+pub use pairing_code::{InvalidPairingCode, PairingCode, PairingCodeLookup, derive_pairing_code};
 pub use port::{
     EntropyError, EntropySource, IdentityKeystore, KeyHandle, KeyPurpose, KeystoreError,
     SecretBytes, SecretPurpose,

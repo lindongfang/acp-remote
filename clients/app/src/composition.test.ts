@@ -516,7 +516,7 @@ describe("组合根：重连由状态机结论驱动，且退避有界", () => {
   });
 });
 
-describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请求", () => {
+describe("组合根：配对 HTTPS 面按 §7.2/§7.3/§7.5 的路径与形状发请求", () => {
   const QR = {
     pairingProtocol: "acp-remote-pairing-v1",
     hostId: HOST_ID,
@@ -618,6 +618,118 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
       context.composition.pairing.readQrPayload(JSON.stringify({ ...nodeLink, pairingProtocol: "acp-remote-other-v1" })),
     ).toThrow(/协议/);
     context.composition.dispose();
+  });
+
+  it("lookup 发往 /sync/v1/pairing/lookup：body 只带配对码，成功返回与二维码同形的载荷", async () => {
+    const context = setup({
+      fetch: async (_url, init): Promise<PairingHttpResponse> => {
+        // 该替身只应答 lookup；走到 claim 说明调用方没有在 lookup 处停下。
+        if (init.body.includes("pairingCode")) return lookupResponseFor();
+        return claimResponseFor(init);
+      },
+    });
+
+    const result = await context.composition.pairing.lookup({
+      canonicalOrigin: ORIGIN,
+      pairingCode: "ABCD-EFGH",
+    });
+
+    expect(result).toEqual({
+      kind: "ok",
+      qr: {
+        pairingProtocol: "acp-remote-pairing-v1",
+        pairingId: "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+        hostId: HOST_ID,
+        hostPublicKey: QR_HOST_PUBLIC_KEY,
+        canonicalOrigin: ORIGIN,
+        pairingSecret: PAIRING_SECRET,
+        expiresAt: expect.any(String) as string,
+      },
+    });
+    expect(context.fetches).toHaveLength(1);
+    expect(context.fetches[0]?.url).toBe(`${ORIGIN}/sync/v1/pairing/lookup`);
+    expect(context.fetches[0]?.method).toBe("POST");
+    expect(JSON.parse(context.fetches[0]?.body ?? "{}")).toEqual({
+      protocolVersion: 1,
+      pairingCode: "ABCD-EFGH",
+    });
+    // 码只走 body，不进 URL。
+    expect(context.fetches[0]?.url).not.toContain("ABCD-EFGH");
+    context.composition.dispose();
+  });
+
+  it("lookup 的失败形态统一为 error：HTTP 非 200、正文形状/长度不符、来源不同", async () => {
+    const cases: readonly { readonly name: string; readonly respond: () => PairingHttpResponse }[] = [
+      {
+        name: "HTTP 401（码无效）",
+        respond: () => ({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ code: "pairing.code_invalid", message: "invalid" }),
+        }),
+      },
+      {
+        name: "正文不是对象",
+        respond: () => ({ ok: true, status: 200, json: () => Promise.resolve("oops") }),
+      },
+      {
+        name: "缺 pairingSecret",
+        respond: () => lookupResponseFor({ pairingSecret: undefined }),
+      },
+      {
+        // UUID 形状（§7.1 `$defs.uuid`）与 schema 同口径：非空但形状不符同样判失败。
+        name: "pairingId 不是 UUID",
+        respond: () => lookupResponseFor({ pairingId: "pairing-1" }),
+      },
+      {
+        name: "hostId 不是 UUID",
+        respond: () => lookupResponseFor({ hostId: "host" }),
+      },
+      {
+        name: "pairingId 是大写 UUID（schema 只允许小写）",
+        respond: () =>
+          lookupResponseFor({ pairingId: "2BC8B944-2A4F-46A7-8C31-B2C40923F60A" }),
+      },
+      {
+        name: "秘密长度不符",
+        respond: () => lookupResponseFor({ pairingSecret: "AQID" }),
+      },
+      {
+        name: "公钥长度不符",
+        respond: () => lookupResponseFor({ hostPublicKey: "AQID" }),
+      },
+      {
+        name: "协议版本不符",
+        respond: () => lookupResponseFor({ protocolVersion: 2 }),
+      },
+      {
+        name: "过期时间不是时间戳",
+        respond: () => lookupResponseFor({ expiresAt: "不是时间" }),
+      },
+      {
+        name: "来源与请求来源不同",
+        respond: () => lookupResponseFor({ canonicalOrigin: "https://other.example.ts.net" }),
+      },
+      {
+        name: "JSON 读取抛出",
+        respond: () => ({
+          ok: true,
+          status: 200,
+          json: () => Promise.reject(new Error("bad json")),
+        }),
+      },
+    ];
+
+    for (const scenario of cases) {
+      const context = setup({ fetch: async () => scenario.respond() });
+      const result = await context.composition.pairing.lookup({
+        canonicalOrigin: ORIGIN,
+        pairingCode: "ABCD-EFGH",
+      });
+      // 反例：任一失败被当成成功，页面会拿半份材料进入 claim → 断言变红。
+      expect(result, scenario.name).toEqual({ kind: "error" });
+      context.composition.dispose();
+    }
   });
 
   it("claim 发往 /sync/v1/pairing/claim，body 含 pairingId/deviceId/clientNonce/proof", async () => {
@@ -786,6 +898,86 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
     fresh.composition.dispose();
   });
 
+  it("HTTP 200 的 expired 正文：transport 只合成 pairing.failed，页面仍按入口分流（QR → S7 / 配对码 → S6）", async () => {
+    // §7.3：`expired` 也是 HTTP 200，`toPublicError` 因此只能按状态推导出 `pairing.failed`。
+    // 这条用例把**真实** `HttpPairingTransport.poll` 的结果接到真实状态机上：若模型照
+    // `error.code` 分类，二维码入口会从 S7 退回「配对请求未能完成」（S12），配对码入口
+    // 也会落到 S12 而不是 S6。
+    const SERVER_MESSAGE = "这次配对二维码已过期。";
+    const expiredStatus = (): PairingHttpResponse => ({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ status: "expired", message: SERVER_MESSAGE }),
+    });
+
+    // 二维码入口 → S7「配对地址已过期」。
+    {
+      const context = setup({
+        fetch: async (_url, init): Promise<PairingHttpResponse> => {
+          if (JSON.parse(init.body)["pairingRequestId"] === undefined) return claimResponseFor(init);
+          return expiredStatus();
+        },
+      });
+      await context.composition.start();
+
+      // 先直接问一次传输层：`status: "expired"` 与 `error.code: "pairing.failed"` 同时成立，
+      // 这正是模型不能照码分类的原因。
+      const qr = readFixtureQr(context.composition.pairing);
+      await context.composition.pairing.claim({ qr, canonicalOrigin: ORIGIN });
+      const raw = await context.composition.pairing.poll({ qr, requestNonce: "AAECAwQFBgcICQoLDA0ODw" });
+      expect(raw).toMatchObject({ kind: "terminal", status: "expired" });
+      if (raw.kind !== "terminal") throw new Error("状态轮询应当返回终态");
+      expect(raw.error.code).toBe("pairing.failed");
+
+      await enterPairingFromAddress(context, pairingUrl());
+      await advanceUntil(
+        context,
+        () => context.composition.store.pairingPage().phase === "expired",
+        "服务端过期（二维码入口）",
+      );
+
+      const page = context.composition.store.pairingPage();
+      expect(page.entry).toBe("qr");
+      expect(page.presentation.kind).toBe("failure");
+      expect(page.presentation.title).toBe("配对地址已过期");
+      // 过期由**服务端**宣布，不是本地倒计时：页面原因文本就是响应正文里那句。
+      expect(page.error?.code).toBe("pairing.expired");
+      expect(page.error?.message).toBe(SERVER_MESSAGE);
+      expect(context.sockets.sockets).toHaveLength(0);
+      context.composition.dispose();
+    }
+
+    // 配对码入口 → S6「配对码不对或已过期，请重新生成配对码」。
+    {
+      const context = setup({
+        fetch: async (url, init): Promise<PairingHttpResponse> => {
+          if (url.endsWith("/pairing/lookup")) return lookupResponseFor();
+          if (JSON.parse(init.body)["pairingRequestId"] === undefined) return claimResponseFor(init);
+          return expiredStatus();
+        },
+      });
+      await context.composition.start();
+
+      await context.composition.store.startPairingFromAddress("sync");
+      await context.composition.store.submitPairingCode("ABCD-EFGH");
+      await advanceUntil(
+        context,
+        () => context.composition.store.pairingPage().phase === "failed",
+        "服务端过期（配对码入口）",
+      );
+
+      const page = context.composition.store.pairingPage();
+      expect(page.entry).toBe("code");
+      expect(page.failure).toBe("code_invalid");
+      expect(page.error?.code).toBe("pairing.code_invalid");
+      expect(page.presentation.title).toBe("配对码不对或已过期，请重新生成配对码");
+      // 配对码入口只呈现固定文案（design D6）：服务端的原因文本不进入页面。
+      expect(page.presentation.lede).not.toContain(SERVER_MESSAGE);
+      expect(context.sockets.sockets).toHaveLength(0);
+      context.composition.dispose();
+    }
+  });
+
   it("已批准缺主机材料 / 标识不符 / 公钥与载荷不一致：可区分的失败，而不是「已批准」", async () => {
     const approvedWith = (host: Record<string, unknown>): Record<string, unknown> => ({
       status: "approved",
@@ -903,6 +1095,25 @@ function pairingUrl(overrides: Record<string, unknown> = {}): string {
 
 /** 一次成功配对里那个一次性秘密（断言它不出现在任何旁路里的字面量）。 */
 const PAIRING_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+
+/** 一次**合法**的 lookup 响应（§7.5）：与二维码载荷同形。 */
+function lookupResponseFor(overrides: Record<string, unknown> = {}): PairingHttpResponse {
+  return {
+    ok: true,
+    status: 200,
+    json: () =>
+      Promise.resolve({
+        protocolVersion: 1,
+        pairingId: "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+        hostId: HOST_ID,
+        hostPublicKey: QR_HOST_PUBLIC_KEY,
+        canonicalOrigin: ORIGIN,
+        pairingSecret: PAIRING_SECRET,
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        ...overrides,
+      }),
+  };
+}
 
 /**
  * 反复让出事件循环，直到条件成立。
@@ -1066,6 +1277,108 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
     context.composition.dispose();
   });
 
+  it("配对码入口：lookup → 同一套 claim/轮询 → 落盘并触发连接", async () => {
+    let statusPolls = 0;
+    const context = setup({
+      fetch: async (url, init): Promise<PairingHttpResponse> => {
+        if (url.endsWith("/pairing/lookup")) return lookupResponseFor();
+        if (JSON.parse(init.body)["pairingRequestId"] === undefined) {
+          return claimResponseFor(init);
+        }
+        statusPolls += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(
+              statusPolls === 1
+                ? { status: "pending_confirmation" }
+                : {
+                    status: "approved",
+                    device: { deviceId: DEVICE_ID },
+                    host: { hostId: HOST_ID, hostPublicKey: QR_HOST_PUBLIC_KEY },
+                  },
+            ),
+        };
+      },
+    });
+    await context.composition.start();
+
+    await context.composition.store.startPairingFromAddress("sync");
+    expect(context.composition.store.pairingPage().phase).toBe("awaiting_code");
+
+    await context.composition.store.submitPairingCode("abcd-efgh");
+
+    // 第一条请求是 lookup（码在 body 里），第二条才是既有 claim 链路。
+    expect(context.fetches[0]?.url).toBe(`${ORIGIN}/sync/v1/pairing/lookup`);
+    expect(JSON.parse(context.fetches[0]?.body ?? "{}")).toEqual({
+      protocolVersion: 1,
+      pairingCode: "ABCD-EFGH",
+    });
+    expect(context.fetches[1]?.url).toBe(`${ORIGIN}/sync/v1/pairing/claim`);
+
+    // lookup 返回的 `expiresAt` 立即成为页面的绝对截止时间（不是本地 +5 分钟）。
+    const claiming = context.composition.store.pairingPage();
+    expect(claiming.phase).toBe("claiming");
+    expect(claiming.presentation.countdown).toBe(true);
+    expect(typeof claiming.expiresAtMs).toBe("number");
+
+    await advanceUntil(
+      context,
+      () => context.composition.store.pairingPage().phase === "pending_confirmation",
+      "等待本机确认",
+    );
+    await advanceUntil(
+      context,
+      () => context.composition.store.pairingPage().phase === "approved",
+      "已批准",
+    );
+
+    expect([...context.cache.entries.keys()]).toEqual([`paired-host/${ORIGIN}`]);
+    const entry = context.cache.entries.get(`paired-host/${ORIGIN}`);
+    expect(entry?.kind === "local" ? entry.summary : null).toBe(
+      JSON.stringify({ hostId: HOST_ID, publicKeyBase64Url: QR_HOST_PUBLIC_KEY }),
+    );
+    expect(context.sockets.sockets).toHaveLength(1);
+    // 码不进公开状态，也不进任何持久面。
+    expect(JSON.stringify(context.composition.store.state)).not.toContain("ABCD-EFGH");
+    expect(JSON.stringify([...context.cache.entries])).not.toContain("ABCD-EFGH");
+    context.composition.dispose();
+  });
+
+  it("配对码入口的主机身份边界：同源已有不同公钥时失败关闭，不 claim、不覆盖记录", async () => {
+    const context = setup({
+      fetch: async (_url, init): Promise<PairingHttpResponse> => {
+        if (init.body.includes("pairingCode")) return lookupResponseFor();
+        return claimResponseFor(init);
+      },
+    });
+    // 同一 canonical origin 已登记另一把公钥（与 lookup 将返回的不同）。
+    await context.composition.rememberPairedHost({
+      hostId: HOST_ID,
+      publicKeyBase64Url: MISMATCHED_HOST_PUBLIC_KEY,
+      canonicalOrigin: ORIGIN,
+    });
+    const before = context.cache.entries.get(`paired-host/${ORIGIN}`);
+
+    // 不需要 `start()`：身份边界只读已配对记录，与连接装配无关。
+    await context.composition.store.startPairingFromAddress("sync");
+    await context.composition.store.submitPairingCode("ABCD-EFGH");
+
+    const page = context.composition.store.pairingPage();
+    expect(page.phase).toBe("failed");
+    // 主机身份变化是独立失败类别（不是来源不符）：文案必须说清「这台电脑的身份变了」。
+    expect(page.failure).toBe("host_identity_changed");
+    expect(page.error?.code).toBe("auth.host_mismatch");
+    expect(page.presentation.title).toBe("这台电脑的主机身份已变化");
+    // 只有 lookup 一条请求：身份边界在 claim 之前就失败关闭。
+    expect(context.fetches).toHaveLength(1);
+    expect(context.fetches[0]?.url).toBe(`${ORIGIN}/sync/v1/pairing/lookup`);
+    // 既有记录没有被 lookup 返回的公钥覆盖。
+    expect(context.cache.entries.get(`paired-host/${ORIGIN}`)).toEqual(before);
+    context.composition.dispose();
+  });
+
   it("非法内容明确失败且不发任何请求（不尽力解析）", async () => {
     const context = setup({ fetch: successfulPairingFetch() });
     await context.composition.start();
@@ -1110,16 +1423,33 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
     context.composition.dispose();
   });
 
-  it("直接打开 /pair（无片段）：呈现无载荷，且一个配对请求都不发", async () => {
+  it("直接打开 /pair（无片段）：进入配对码输入（S0），且一个配对请求都不发", async () => {
     const context = setup({ fetch: successfulPairingFetch() });
     await context.composition.start();
 
     await context.composition.store.startPairingFromAddress("sync");
 
     const page = context.composition.store.pairingPage();
+    expect(page.phase).toBe("awaiting_code");
+    expect(page.presentation.kind).toBe("code_entry");
+    expect(page.origin).toBe(ORIGIN);
+    expect(page.secureContext).toBe(true);
+    expect(page.presentation.note).toBe("配对码 5 分钟内有效。");
+    expect(page.presentation.countdown).toBe(false);
+    expect(context.fetches).toHaveLength(0);
+    context.composition.dispose();
+  });
+
+  it("直接打开 /node-link/pair（无片段）：仍是无载荷页，不提供配对码", async () => {
+    const context = setup({ fetch: successfulPairingFetch() });
+    await context.composition.start();
+
+    await context.composition.store.startPairingFromAddress("node-link");
+
+    const page = context.composition.store.pairingPage();
     expect(page.phase).toBe("idle");
     expect(page.failure).toBe("no_payload");
-    expect(page.presentation.title).toBe("这个地址里没有配对信息");
+    expect(page.presentation.title).toBe("这个地址里没有节点配对信息");
     expect(context.fetches).toHaveLength(0);
     context.composition.dispose();
   });

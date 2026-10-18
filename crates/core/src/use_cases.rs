@@ -919,6 +919,16 @@ impl UseCases {
         self.trust.device(id).await
     }
 
+    /// **全部**配对行的只读列表（本机维护路径：过期扫描与重启终结）。
+    ///
+    /// 与 [`UseCases::pairing`] 同一授权面（只接受 `Actor::LocalCli`），但按遍历用途返回全部行；不含任何
+    /// secret（secret 只在 `identity-auth` 内存里），零写入、零审计。调用方据此把快照喂给
+    /// `Authority::due_pairings`/`unrecoverable_after_restart`，再按返回的标识提交终结写集。
+    pub async fn pairings(&self, actor: &Actor) -> Result<Vec<PairingRecord>, PortError> {
+        self.require_local(actor)?;
+        self.trust.pairings().await
+    }
+
     /// 写入设备记录（`device.add` 与身份层共用）：状态与审计同一事务（§11.2 第 6 条）。
     ///
     /// **不写任何授权相关审计**：设备记录不再有授权集合（`pairing-model` 删除设备权限层），因此
@@ -1633,6 +1643,34 @@ impl UseCases {
                     at,
                     audit: Vec::new(),
                 },
+                only: None,
+            })
+            .await
+    }
+
+    /// 按标识终结配对（过期扫描与重启终结的唯一落库入口）。
+    ///
+    /// 输入是 `Authority::due_pairings`/`unrecoverable_after_restart` 已经决定终结的标识：本入口**不**再判
+    /// `expires_at`（重启终结发生在过期之前），但存储层仍只更新**未确认**的行，因此 `approved`/`consumed`/
+    /// `rejected`/`expired` 的记录不会被改写。空列表是零写入。`pairing.expired` 与时间扫描同源（存储层按
+    /// 配对写入）。
+    pub async fn expire_pairings_by_id(
+        &self,
+        actor: &Actor,
+        pairings: &[PairingId],
+    ) -> Result<u64, PortError> {
+        self.require_local(actor)?;
+        if pairings.is_empty() {
+            return Ok(0);
+        }
+        let at = self.clock.now();
+        self.trust
+            .expire_pairings(ExpiryWrite {
+                context: WriteContext {
+                    at,
+                    audit: Vec::new(),
+                },
+                only: Some(pairings.to_vec()),
             })
             .await
     }
@@ -2386,6 +2424,10 @@ mod tests {
 
         async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
             self.inner.pairing(id).await
+        }
+
+        async fn pairings(&self) -> Result<Vec<PairingRecord>, PortError> {
+            self.inner.pairings().await
         }
 
         async fn pairing_peer(
