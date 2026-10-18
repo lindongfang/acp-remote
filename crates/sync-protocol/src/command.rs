@@ -5,7 +5,7 @@
 //! [`crate::envelope`] 承载；本模块只承载 `body`，与 `auth`/`control`/`error` 三个家族一致。
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它
-//! `transport` 含 `sync` 的 13 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
+//! `transport` 含 `sync` 的 14 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
 //! 按 `command.unsupported` 拒绝）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
@@ -47,7 +47,7 @@ pub type RequestId = Uuid;
 
 /// `commandName`（`command.schema.json#/$defs/commandName`）。
 ///
-/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 13 条命令，顺序
+/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 14 条命令，顺序
 /// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.resume` 的结果）。
 ///
 /// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧是
@@ -70,6 +70,8 @@ pub enum CommandName {
     SessionConfigList,
     /// `workspace.browse`
     WorkspaceBrowse,
+    /// `workspace.mkdir`
+    WorkspaceMkdir,
     /// `session.prompt`
     SessionPrompt,
     /// `session.cancel`
@@ -88,12 +90,13 @@ pub enum CommandName {
 
 impl CommandName {
     /// 与 `compatibility/commands/v1/commands.json` 的 sync 子集逐条相等，顺序一致。
-    pub const ALL: [CommandName; 13] = [
+    pub const ALL: [CommandName; 14] = [
         CommandName::SessionList,
         CommandName::SessionRead,
         CommandName::CommandStatus,
         CommandName::SessionModeList,
         CommandName::SessionConfigList,
+        CommandName::WorkspaceMkdir,
         CommandName::WorkspaceBrowse,
         CommandName::SessionPrompt,
         CommandName::SessionCancel,
@@ -129,6 +132,7 @@ impl CommandName {
                 | CommandName::CommandStatus
                 | CommandName::SessionCreate
                 | CommandName::WorkspaceBrowse
+                | CommandName::WorkspaceMkdir
         )
     }
 
@@ -148,6 +152,7 @@ impl CommandName {
             CommandName::SessionModeList => "session.mode.list",
             CommandName::SessionConfigList => "session.config.list",
             CommandName::WorkspaceBrowse => "workspace.browse",
+            CommandName::WorkspaceMkdir => "workspace.mkdir",
             CommandName::SessionPrompt => "session.prompt",
             CommandName::SessionCancel => "session.cancel",
             CommandName::ElicitationRespond => "elicitation.respond",
@@ -273,6 +278,40 @@ pub struct SessionList {}
 /// `workspaceBrowse` 判定父路径与条目路径的长度域（`command.schema.json#/$defs/workspaceBrowsePath`，
 /// 与 `workspacePath` 同为 1..=4096）。
 pub type WorkspaceBrowsePath = NonEmptyText<4096>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceMkdir {
+    pub parent_path: WorkspaceBrowsePath,
+    #[serde(deserialize_with = "deserialize_directory_name")]
+    pub name: NonEmptyText<255>,
+}
+
+fn deserialize_directory_name<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<NonEmptyText<255>, D::Error> {
+    let name = NonEmptyText::<255>::deserialize(deserializer)?;
+    let text = name.as_str();
+    if text == "." || text == ".." || text.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0')) {
+        return Err(D::Error::custom("directory name must be one component"));
+    }
+    Ok(name)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceMkdirResult {
+    #[serde(deserialize_with = "deserialize_created")]
+    pub created: bool,
+}
+
+fn deserialize_created<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    if bool::deserialize(deserializer)? {
+        Ok(true)
+    } else {
+        Err(D::Error::custom("created must be true"))
+    }
+}
 
 /// `workspaceBrowse`（`command.schema.json#/$defs/workspaceBrowse`）的 `payload`：只含一个父路径键，
 /// 取值是绝对路径或 `null`（`null` = 该节点的根列表）。形状校验（相对路径、含 `..`）与可达性判定
@@ -841,6 +880,7 @@ pub enum CommandPayload {
     SessionCreate(SessionCreate),
     /// `workspace.browse` 的 payload。
     WorkspaceBrowse(WorkspaceBrowse),
+    WorkspaceMkdir(WorkspaceMkdir),
     /// `session.read` 的 payload。
     SessionRead(SessionRead),
     /// `session.prompt` 的 payload。
@@ -879,6 +919,7 @@ impl CommandPayload {
                 "{ agentId, directoryId | workspacePath（恰好一个） }（sessionCreate 的 payload）",
             )
             .map(CommandPayload::SessionCreate),
+            CommandName::WorkspaceMkdir => parse_payload(payload, "{ parentPath, name }").map(CommandPayload::WorkspaceMkdir),
             CommandName::WorkspaceBrowse => parse_payload(
                 payload,
                 "{ path: 绝对路径 | null }（workspaceBrowse 的 payload）",
@@ -1189,6 +1230,7 @@ pub enum CommandResultPayload {
     SessionList(SessionListResult),
     /// `workspace.browse` 的完成结果。
     WorkspaceBrowse(WorkspaceBrowseResult),
+    WorkspaceMkdir(WorkspaceMkdirResult),
     /// `session.create` 的完成结果。
     SessionCreate(Box<SessionCreateResult>),
     /// `session.read` 的完成结果。
@@ -1231,6 +1273,10 @@ impl CommandResultPayload {
                     .map(|value| {
                         Nullable::value(CommandResultPayload::SessionCreate(Box::new(value)))
                     });
+                }
+                CommandName::WorkspaceMkdir => {
+                    return parse_result::<WorkspaceMkdirResult>(result, "workspaceMkdirResult")
+                        .map(|value| Nullable::value(CommandResultPayload::WorkspaceMkdir(value)));
                 }
                 CommandName::WorkspaceBrowse => {
                     return parse_result::<WorkspaceBrowseResult>(
@@ -1489,7 +1535,7 @@ mod tests {
 
     #[test]
     fn command_name_covers_the_sync_subset_and_round_trips() {
-        assert_eq!(CommandName::ALL.len(), 13, "sync 子集是 13 条命令");
+        assert_eq!(CommandName::ALL.len(), 14, "sync 子集是 14 条命令");
         assert!(
             CommandName::ALL
                 .iter()

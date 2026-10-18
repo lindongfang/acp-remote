@@ -5,8 +5,8 @@
  *
  * 当前层与每一层条目都由服务端下发：`path` 是请求的**逐字回显**，条目只有名称、绝对路径与
  * 「是否已登记」。本组件因此不解析任何路径，也不由路径反推上一级——「上一级」走的是面包屑里
- * 上一段的**服务端路径**，「新建文件夹」的候选路径由 `create-session-model.ts` 的
- * `buildCreateFolderPath` 从「服务端回显的当前层 + 用户输入的一段名字」构成，并当场校验名字。
+ * 上一段的**服务端路径**。「新建」只提交当前父路径与单层名字；创建完成后重新读取真实条目，
+ * 不把客户端拼出的路径当成已存在的目录或自动选定结果。
  *
  * ## 服务端不支持浏览时保留「选已登记目录」这条路
  *
@@ -31,6 +31,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
+import { useModalFocus } from "./modal-focus";
 
 import type {
   BrowseUnavailableReason,
@@ -78,8 +79,10 @@ export interface DirectoryPickerProps {
   readonly browser: DirectoryBrowserModel;
   /** 请求某一层（`null` = 根列表）：页面据此派发 `workspace.browse`。 */
   readonly onBrowse: (path: string | null) => void;
-  /** 在当前层新建一层目录：候选路径由模型层构造并校验。 */
+  /** 在当前层实际新建一层目录；完成后刷新列表，选择操作保持独立。 */
   readonly onCreateFolder: (name: string) => void;
+  readonly onCheckFolder?: (() => void) | undefined;
+  readonly onResolveFolder?: (() => void) | undefined;
   /**
    * 「不能逐层浏览」的原因（`browser.supported` 为假时用它决定说明口径）。
    *
@@ -109,27 +112,28 @@ function buildStyles(colors: Palette) {
       left: 0,
       alignItems: "center",
       justifyContent: "center",
-      padding: spacing.xl,
+      padding: 20,
       backgroundColor: "rgba(10,12,16,.45)",
-      zIndex: zIndex.drawer,
+      zIndex: zIndex.directoryPicker,
       ...webStyle({ position: "fixed" }),
     },
     box: {
       width: 460,
-      gap: spacing.md,
+      overflow: "hidden",
       backgroundColor: colors.panel,
       borderWidth: 1,
       borderColor: colors.line,
-      borderRadius: radius.lg,
+      borderRadius: 14,
       boxShadow: colors.shadow,
       ...webStyle({ maxWidth: "100%", maxHeight: "84vh" }),
     },
     head: {
+      flexShrink: 0,
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.sm,
-      paddingVertical: spacing.md,
-      paddingHorizontal: spacing.lg,
+      paddingVertical: 14,
+      paddingHorizontal: 18,
       borderBottomWidth: 1,
       borderBottomColor: colors.line,
     },
@@ -137,12 +141,14 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
       fontWeight: fontWeight.medium,
     },
     headWhere: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     spacer: {
       flexGrow: 1,
@@ -159,11 +165,14 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     body: {
-      gap: spacing.sm,
-      paddingVertical: spacing.md,
-      paddingHorizontal: spacing.lg,
+      flexShrink: 1,
+      ...webStyle({ overflowY: "auto" }),
+      gap: 10,
+      paddingVertical: 14,
+      paddingHorizontal: 18,
     },
     crumbRow: {
       flexDirection: "row",
@@ -181,11 +190,13 @@ function buildStyles(colors: Palette) {
       color: colors.accent,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     separator: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     up: {
       paddingVertical: spacing.xs,
@@ -199,6 +210,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     list: {
       gap: spacing.xs,
@@ -217,6 +229,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
       fontWeight: fontWeight.medium,
     },
     entryFlag: {
@@ -224,12 +237,14 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     entryFlagRegistered: {
       flexShrink: 0,
       color: colors.ok,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     entryArrow: {
       flexGrow: 1,
@@ -237,22 +252,26 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     emptyLine: {
       paddingVertical: spacing.md,
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     noticeWarn: {
       color: colors.warn,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     noticeInfo: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     newRow: {
       flexDirection: "row",
@@ -272,12 +291,14 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     newHint: {
       flexShrink: 1,
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     newInput: {
       flexGrow: 1,
@@ -292,19 +313,21 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     primary: {
       paddingVertical: spacing.sm,
       paddingHorizontal: spacing.md,
       borderRadius: radius.sm,
-      backgroundColor: colors.accentSoft,
+      backgroundColor: colors.accent,
       borderWidth: 1,
       borderColor: colors.accent,
     },
     primaryText: {
-      color: colors.accentInk,
+      color: "#ffffff",
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
       fontWeight: fontWeight.medium,
     },
     plain: {
@@ -319,8 +342,10 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     foot: {
+      flexShrink: 0,
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.sm,
@@ -334,6 +359,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
   });
 }
@@ -438,15 +464,23 @@ export function DirectoryPicker({
   browser,
   onBrowse,
   onCreateFolder,
+  onResolveFolder,
+  onCheckFolder,
   unavailable = "unsupported",
   onConfirm,
   onCancel,
 }: DirectoryPickerProps): ReactElement {
+  useModalFocus('[data-directory-picker="open"]', onCancel);
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   // 「新建文件夹」的折叠与输入框里的名字：纯呈现状态，住在这里（与目录卡的折叠态同一考虑）。
   const [newFolderOpen, setNewFolderOpen] = useState(false);
-  const [folderName, setFolderName] = useState("");
+  const [folderName, setFolderName] = useState(browser.folder?.state === "completed" ? "" : browser.folder?.name ?? "");
+  const folderBusy = browser.folder !== null && browser.folder !== undefined && ["submitting", "accepted", "uncertain"].includes(browser.folder.state);
+  useEffect(() => {
+    if (browser.folder?.state === "completed") setFolderName("");
+    else if (browser.folder !== null && browser.folder !== undefined) setNewFolderOpen(true);
+  }, [browser.folder?.requestId, browser.folder?.state]);
 
   /**
    * 打开即请求初始层（原型 `openDirPicker` 的第一件事）。
@@ -458,11 +492,11 @@ export function DirectoryPicker({
    */
   const requested = useRef<{ readonly path: string | null } | null>(null);
   useEffect(() => {
-    if (!browser.supported) return;
+    if (!browser.supported || browser.folder != null || browser.status !== "idle") return;
     if (requested.current?.path === initialPath) return;
     requested.current = { path: initialPath };
     onBrowse(initialPath);
-  }, [initialPath, onBrowse, browser.supported]);
+  }, [initialPath, onBrowse, browser.supported, browser.folder, browser.status]);
 
   const pickCurrent = selectionForCurrentLevel(browser);
   // 「上一级」的目标路径先算成值：回调里就不再需要依赖 `browser.parent` 的非空收窄。
@@ -502,7 +536,7 @@ export function DirectoryPicker({
                       style={styles.crumb}
                       dataSet={{ crumbIndex: String(index), crumbPath: crumb.path ?? "", crumbName: crumb.name }}
                       onPress={() => {
-                        onBrowse(crumb.path);
+                        if (!folderBusy) onBrowse(crumb.path);
                       }}
                     >
                       <Text style={styles.crumbText}>{crumb.name}</Text>
@@ -516,7 +550,7 @@ export function DirectoryPicker({
                     style={styles.up}
                     dataSet={{ action: "browse-up", browseUpPath: parentPath }}
                     onPress={() => {
-                      onBrowse(parentPath);
+                      if (!folderBusy) onBrowse(parentPath);
                     }}
                   >
                     <Text style={styles.upText}>↑ 上一级</Text>
@@ -561,7 +595,7 @@ export function DirectoryPicker({
                           entryRegistered: String(entry.registered),
                         }}
                         onPress={() => {
-                          onBrowse(entry.path);
+                          if (!folderBusy) onBrowse(entry.path);
                         }}
                       >
                         <Text style={styles.entryName}>{entry.name}</Text>
@@ -588,11 +622,37 @@ export function DirectoryPicker({
               {/* 新建文件夹：只在**真的进了某一层**之后才提供——根列表不是目录；读取中/失败的那一层
                   也还没进（失败时 `here` 是乐观写入的**请求**路径，`status` 仍是 `failed`）。判据与
                   「选择此文件夹」的 `canConfirm`（`status === "ready" && here !== null`）同口径。 */}
+              {browser.folder == null ? null : (
+                <Text role="status" style={styles.newHint} dataSet={{ folderCreationState: browser.folder.state }}>
+                  {browser.folder.state === "completed"
+                    ? browser.status === "failed" ? "目录已创建，但列表刷新失败。请重新读取目录，无需再次新建。"
+                      : browser.truncated ? "目录已创建，但列表被截断，新目录可能未显示。" : "目录已创建，可继续新建下一级，最后单独选择。"
+                    : browser.folder.state === "uncertain" ? "新建结果不确定。请先在电脑上核对，勿重复新建。"
+                      : ["failed", "rejected"].includes(browser.folder.state) ? "新建失败：" + (browser.folder.error ?? "请检查目录权限或是否已存在同名项目。")
+                        : "正在电脑上新建文件夹……"}
+                </Text>
+              )}
+              {!folderBusy || browser.folder?.state === "uncertain" ? null : (
+                <Pressable role="button" style={styles.plain} dataSet={{ action: "check-folder-result" }} onPress={onCheckFolder}>
+                  <Text style={styles.plainText}>查询新建结果</Text>
+                </Pressable>
+              )}
+              {browser.folder?.state !== "uncertain" ? null : (
+                <Pressable role="button" style={styles.plain} dataSet={{ action: "resolve-folder-uncertain" }} onPress={onResolveFolder}>
+                  <Text style={styles.plainText}>已核对结果，重新读取目录</Text>
+                </Pressable>
+              )}
+              {browser.folder?.state !== "completed" || browser.status !== "failed" ? null : (
+                <Pressable role="button" style={styles.plain} onPress={() => onBrowse(browser.here)}>
+                  <Text style={styles.plainText}>重新读取目录</Text>
+                </Pressable>
+              )}
               {browser.here === null || browser.status !== "ready" ? null : (
                 <View style={styles.newRow} dataSet={{ browseNewFolderRow: "true" }}>
                   {newFolderOpen ? (
                     <>
                       <TextInput
+                        editable={!folderBusy}
                         value={folderName}
                         onChangeText={setFolderName}
                         placeholder="新文件夹的名字"
@@ -604,12 +664,13 @@ export function DirectoryPicker({
                       <Pressable
                         role="button"
                         style={styles.primary}
+                        disabled={folderBusy || !browser.mkdirSupported}
                         dataSet={{ action: "create-folder" }}
                         onPress={() => {
                           onCreateFolder(folderName);
                         }}
                       >
-                        <Text style={styles.primaryText}>新建并选择</Text>
+                        <Text style={styles.primaryText}>新建</Text>
                       </Pressable>
                       <Pressable
                         role="button"
@@ -627,6 +688,7 @@ export function DirectoryPicker({
                       <Pressable
                         role="button"
                         style={styles.newButton}
+                        disabled={!browser.mkdirSupported || folderBusy}
                         dataSet={{ action: "open-new-folder" }}
                         onPress={() => {
                           setFolderName("");
@@ -635,7 +697,7 @@ export function DirectoryPicker({
                       >
                         <Text style={styles.newButtonText}>＋ 新建文件夹…</Text>
                       </Pressable>
-                      <Text style={styles.newHint}>在这里新建一层目录；创建会话时会先在主机上建它</Text>
+                      <Text style={styles.newHint}>{browser.mkdirSupported ? "立即在电脑上创建一层目录；取消会话不会删除它" : "主机未提供独立新建能力，可继续选择已有目录"}</Text>
                     </>
                   )}
                 </View>
@@ -643,7 +705,7 @@ export function DirectoryPicker({
 
               {browser.folderError === null ? null : (
                 <Text role="alert" style={styles.noticeWarn} dataSet={{ browseFolderError: "true" }}>
-                  {`${browser.folderError}没有新建目录，也没有创建会话。`}
+                  {browser.folderError}
                 </Text>
               )}
             </>

@@ -7,9 +7,9 @@
  * **本页不自建导航、也不自建连接状态徽标**：顶栏（标识、设备胶囊、主题开关、帮助入口）由根布局
  * 装配的共享外壳承担，连接状态只由那一个设备胶囊表达。此前这里另有一条自建导航与第二个状态
  * 徽标，两者都是「路由自行拼出的重复表达」——同一状态有两处判据，必然漂移。
- * 本页因此只剩下目录内容本身、**顶部创建入口**与涉及创建链路的那两块。顶部创建入口是
- * `DirectoryList` 工具条右端的那一个（本页只把回调交给它）——它不是页面自建的一行，位置由列表
- * 组件按原型给出。
+ * 本页因此只剩下目录内容本身、**顶部创建入口**与涉及创建链路的那两块。顶部创建入口由
+ * `DirectoryList` 渲染（工具条右端始终有；无目录空态另在说明块内给一个常规尺寸的同一入口）——它不是页面自建的一行，
+ * 位置由列表组件按原型给出。主机与连接面板也不内联在这里：它由设备胶囊进入 `/hosts`。
  *
  * 搜索框与筛选段是**受控**的：值来自 store 的 `directoryQuery`/`directoryFilter`，输入回到同名
  * setter。两者都只是 UI 状态，不发任何命令（spec「搜索与筛选不依赖在线查询」）。
@@ -18,8 +18,9 @@
  *
  * - **目录层级入口**（卡片/详情页的 `⊕ 新建`）：目录已知 → 弹层呈现「目录/路径两行」，
  *   载荷用该目录的标识（`openCreateSheet(directoryId)`）；
- * - **顶部入口**（目录列表工具条右端的 `⊕ 新建`）：目录未知 → 弹层呈现「选择文件夹控件 + 已选路径 + 说明」，
- *   目录由 `DirectoryPicker` 逐层浏览或从已登记目录里选出来（`openCreateSheetToBrowse()`）。
+ * - **顶部入口**（目录列表工具条右端始终有；无目录空态另在说明块内给一个常规尺寸的同一入口）：
+ *   目录未知 → 弹层呈现「选择文件夹控件 + 已选路径 + 说明」，目录由 `DirectoryPicker` 逐层浏览
+ *   或从已登记目录里选出来（`openCreateSheetToBrowse()`）。
  *
  * 两条路径的弹层开关与浏览/选择状态都只有**一份**（住在 store 里），因此同一时刻不可能出现两个弹层、
  * 两个选择器，页面也不各持一个布尔量。选择器与弹层一样在这里渲染：它的开关是跨路由存活的单份状态，
@@ -34,11 +35,10 @@ import {
   CreateSessionSheet,
   DirectoryList,
   DirectoryPicker,
-  HostConnectionPanel,
   RuntimeUnavailable,
 } from "../src/components";
 import type { Palette } from "../src/components/theme";
-import { StyleSheet, View, palettes, spacing, useTheme } from "../src/components/theme";
+import { StyleSheet, View, palettes, useTheme } from "../src/components/theme";
 import { CREATE_SHEET_BROWSE_KEY } from "../src/features/create-session-model";
 import type { DirectorySelection } from "../src/features/create-session-model";
 import { useClientState, useClientStore } from "../src/features/runtime";
@@ -46,11 +46,13 @@ import { useClientState, useClientStore } from "../src/features/runtime";
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
-    page: {
+    outer: {
       flexGrow: 1,
-      gap: spacing.md,
-      padding: spacing.lg,
+      width: "100%",
       backgroundColor: colors.bg,
+    },
+    page: {
+      width: "100%",
     },
   });
 }
@@ -124,9 +126,10 @@ export default function DirectoriesRoute(): ReactElement {
   const directoryBlock = entry !== null && entry.directory.kind === "browse" ? entry.directory : null;
 
   return (
-    <View role="main" style={styles.page}>
-      <DirectoryList
-        model={page}
+    <View role="main" style={styles.outer}>
+      <View style={styles.page}>
+        <DirectoryList
+          model={page}
         // 内联会话行只依赖快照：与详情页的查询词/页码无关（store 的选择器保证）。
         sessionsByDirectoryId={store.directoryPageSessions()}
         query={state.directoryQuery}
@@ -151,13 +154,18 @@ export default function DirectoriesRoute(): ReactElement {
         // **顶部**创建入口：目录未知，由用户浏览/选择一层。它画在目录列表工具条的右端（原型的位置），
         // 与卡片上的目录内入口是两条不同的路径。
         onCreateSessionToBrowse={onOpenBrowseSheet}
-      />
+        />
+      </View>
 
-      <HostConnectionPanel model={store.hostPanel()} />
-
+      {/* 主机与连接面板不在目录页内联呈现：原型把它放在设备胶囊打开的抽屉里，本实现由
+          共享外壳的设备胶囊进入 `/hosts` 路由。目录页因此只保留目录内容本身（空态/卡片）。 */}
       {entry === null ? null : (
         <CreateSessionSheet
           model={entry}
+          onCreated={(sessionId) => {
+            store.closeCreateSheet();
+            router.push(`/session/${encodeURIComponent(sessionId)}`);
+          }}
           selectedAgentId={agentId}
           onSelectAgent={setAgentId}
           onOpenDirectoryPicker={() => {
@@ -194,6 +202,8 @@ export default function DirectoriesRoute(): ReactElement {
           unavailable={directoryBlock?.unavailable ?? undefined}
           onBrowse={onBrowse}
           onCreateFolder={onCreateFolder}
+          onResolveFolder={() => store.resolveFolderUncertain()}
+          onCheckFolder={() => store.checkFolderCreation()}
           onConfirm={onConfirmSelection}
           onCancel={onCancelPicker}
         />

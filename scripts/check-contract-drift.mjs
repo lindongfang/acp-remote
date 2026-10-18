@@ -128,6 +128,7 @@ const normalizeSignature = (text) =>
   stripRustComments(text)
     .replace(/\s+/g, "")
     .replace(/,\)/g, ")")
+    .replace(/_([a-zA-Z]\w*):/g, "$1:")
     .replace(/;+$/, "");
 
 /**
@@ -141,6 +142,7 @@ function scanDeclarations(text) {
   const lines = text.split("\n");
   let current = null;
   let pending = null;
+  let defaultBodyDepth = 0;
 
   const close = () => {
     if (current && pending) {
@@ -153,9 +155,20 @@ function scanDeclarations(text) {
   for (const raw of lines) {
     const line = stripRustComments(raw).trim();
     if (line === "") continue;
+    if (defaultBodyDepth > 0) {
+      defaultBodyDepth += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
+      continue;
+    }
 
     if (pending !== null) {
       pending += " " + line;
+      if (line.includes("{")) {
+        const bodyStart = pending.indexOf("{");
+        current.signatures.push(normalizeSignature(pending.slice(0, bodyStart)));
+        defaultBodyDepth = (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
+        pending = null;
+        continue;
+      }
       if (line.includes(";")) {
         current.signatures.push(normalizeSignature(pending));
         pending = null;

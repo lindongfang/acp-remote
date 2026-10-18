@@ -30,7 +30,6 @@
 import type {
   CommandBody,
   CommandResultMessage,
-  CommandResultValue,
   ConfigOptionView,
   ElicitationResolutionAction,
   ElicitationRespondPayload,
@@ -46,6 +45,7 @@ import type {
   SnapshotItemPendingInteractions,
   Uuid,
 } from "../protocol";
+import { isCommandStatusRecord } from "../sync-client/wire";
 import type { ReadCursor, StagedResources, SyncClientEvent } from "../sync-client";
 import {
   AgentConnectionOverlayStore,
@@ -296,6 +296,7 @@ export interface ClientState {
   readonly createSheetBrowses: boolean;
   /** 目录浏览选择器（`workspace.browse`）的状态：单份、跨路由存活。 */
   readonly directoryBrowse: DirectoryBrowseState;
+  readonly folderRequest: { readonly requestId: Uuid; readonly parentPath: string; readonly name: string; readonly refreshed: boolean; readonly entered?: boolean } | null;
   readonly diagnosticsEventId: string | null;
   /** 目录页查询词；与详情页的页码是两个独立状态（两页各有自己的 UI 状态）。 */
   readonly directoryQuery: string;
@@ -353,6 +354,7 @@ export function initialClientState(): ClientState {
     createSheetDirectoryId: null,
     createSheetBrowses: false,
     directoryBrowse: initialDirectoryBrowseState(),
+    folderRequest: null,
     diagnosticsEventId: null,
     directoryQuery: "",
     directoryFilter: "all",
@@ -445,7 +447,7 @@ export function withOriginOnline(
 }
 
 /** `CommandResultValue` → 可展开成键值对象的结果；非对象结果（如 `modeList`）取 `null`。 */
-function toResultRecord(value: CommandResultValue): Readonly<Record<string, unknown>> | null {
+function toResultRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Readonly<Record<string, unknown>>;
 }
@@ -508,9 +510,7 @@ export type CommandOutcome =
 export type CreateOutcome = CommandOutcome;
 
 /** 「新建文件夹」的结果：成功给出候选路径（它随后成为选定结果），失败给出原因且**没有**改选定。 */
-export type CreateFolderOutcome =
-  | { readonly ok: true; readonly path: string }
-  | { readonly ok: false; readonly reason: string };
+export type CreateFolderOutcome = CommandOutcome;
 
 /** 未建立已认证连接时的统一拒绝理由（命令信封需要 `connectionId`）。 */
 const NOT_CONNECTED: CommandOutcome = { ok: false, reason: "尚未建立已认证连接，无法提交命令" };
@@ -692,6 +692,22 @@ export class ClientStore {
     const next = this.#reduce(event);
     if (next === this.#state) return;
     this.#commit(next);
+    const folder = this.#state.folderRequest;
+    if (folder !== null && !folder.refreshed && this.#lastCommandOf(folder.requestId)?.state === "completed") {
+      this.#commit({ ...this.#state, folderRequest: { ...folder, refreshed: true } });
+      this.browseDirectory(folder.parentPath);
+    }
+    const current = this.#state.folderRequest;
+    const browse = this.#state.directoryBrowse;
+    if (current !== null && current.refreshed && !current.entered &&
+      this.#lastCommandOf(current.requestId)?.state === "completed" &&
+      browse.here === current.parentPath && browse.loaded && browse.pendingRequestId === null && browse.error === null) {
+      const child = browse.entries.find((entry) => entry.name === current.name);
+      if (child !== undefined) {
+        this.#commit({ ...this.#state, folderRequest: { ...current, entered: true } });
+        this.browseDirectory(child.path);
+      }
+    }
   }
 
   #reduce(event: SyncClientEvent): ClientState {
@@ -748,6 +764,30 @@ export class ClientStore {
       const structured = new Map(next.structured);
       structured.set(record.eventId, record);
       next = { ...next, structured };
+    }
+
+    // 独立 mkdir 的终态来自持久化全局事件，accepted 不是完成。
+    const folder = next.folderRequest;
+    const view = event.body.payload.view;
+    const folderRecord = folder === null ? undefined : next.commands.get(folder.requestId);
+    if (folderRecord?.command === "workspace.mkdir" && folderRecord.sessionId === null &&
+      next.deviceId !== null && event.body.origin.kind === "device" && event.body.origin.deviceId === next.deviceId &&
+      event.body.sessionId === null && event.body.remoteOrigin === null &&
+      (view["command"] === undefined || view["command"] === "workspace.mkdir") &&
+      view["requestId"] === folder?.requestId &&
+      ["command.completed", "command.failed", "command.uncertain"].includes(event.body.eventType)) {
+      const status = event.body.eventType === "command.completed" ? "completed"
+        : event.body.eventType === "command.failed" ? "failed" : "uncertain";
+      const commands = new Map(next.commands);
+      commands.set(folderRecord.requestId, applyCommandResult(folderRecord, {
+        requestId: folderRecord.requestId, status, acceptedAt: folderRecord.acceptedAt,
+        terminalEventId: event.body.eventId, terminalAt: event.body.createdAt,
+        result: toResultRecord(view["result"]),
+        error: status === "failed" ? view["error"] as PublicError : null,
+      }));
+      next = { ...next, commands,
+        uncertainRequestIds: status === "uncertain" && !next.uncertainRequestIds.includes(folderRecord.requestId)
+          ? [...next.uncertainRequestIds, folderRecord.requestId] : next.uncertainRequestIds };
     }
 
     // 2) 会话摘要（`session.created`/`session.updated`）。
@@ -859,6 +899,22 @@ export class ClientStore {
     commands.set(updated.requestId, updated);
 
     let next: ClientState = { ...this.#state, commands };
+    const folder = next.folderRequest;
+    const statusRecord = result.body.result;
+    if (result.body.command === "command.status" && result.body.status === "completed" &&
+      isCommandStatusRecord(statusRecord) && folder?.requestId === statusRecord.targetRequestId) {
+      const original = commands.get(folder.requestId);
+      if (original !== undefined) {
+        commands.set(folder.requestId, applyCommandResult(original, {
+          requestId: folder.requestId, status: statusRecord.state, acceptedAt: statusRecord.acceptedAt,
+          terminalEventId: statusRecord.terminalEventId, terminalAt: statusRecord.terminalAt,
+          result: statusRecord.result, error: statusRecord.error,
+        }));
+        if (statusRecord.state === "uncertain" && !next.uncertainRequestIds.includes(folder.requestId)) {
+          next = { ...next, uncertainRequestIds: [...next.uncertainRequestIds, folder.requestId] };
+        }
+      }
+    }
     if (updated.state === "uncertain" && !next.uncertainRequestIds.includes(updated.requestId)) {
       // 结果不确定**只**在服务端确认后登记，且没有任何自动清除路径（R16 场景 4）。
       next = { ...next, uncertainRequestIds: [...next.uncertainRequestIds, updated.requestId] };
@@ -1363,7 +1419,7 @@ export class ClientStore {
       ...this.#state,
       createSheetDirectoryId: directoryId,
       createSheetBrowses: false,
-      directoryBrowse: initialDirectoryBrowseState(),
+      directoryBrowse: this.#state.folderRequest === null ? initialDirectoryBrowseState() : { ...this.#state.directoryBrowse, open: false, selection: null },
     });
   }
 
@@ -1378,18 +1434,25 @@ export class ClientStore {
       ...this.#state,
       createSheetDirectoryId: null,
       createSheetBrowses: true,
-      directoryBrowse: initialDirectoryBrowseState(),
+      directoryBrowse: this.#state.folderRequest === null ? initialDirectoryBrowseState() : { ...this.#state.directoryBrowse, open: false, selection: null },
     });
   }
 
   /** 关闭创建弹层（连带关闭并复位它的目录选择器：选定只在一次弹层会话里有效）。 */
   closeCreateSheet(): void {
     if (this.#state.createSheetDirectoryId === null && !this.#state.createSheetBrowses) return;
+    const directoryId = this.#state.createSheetDirectoryId;
+    const createRequestIds = new Map(this.#state.createRequestIds);
+    // 只解除已成功创建的弹层关联；命令记录继续保留，未完成和不确定结果不被清除。
+    if (this.createEntry(directoryId).submission.kind === "created") {
+      createRequestIds.delete(directoryId ?? CREATE_SHEET_BROWSE_KEY);
+    }
     this.#commit({
       ...this.#state,
+      createRequestIds,
       createSheetDirectoryId: null,
       createSheetBrowses: false,
-      directoryBrowse: initialDirectoryBrowseState(),
+      directoryBrowse: this.#state.folderRequest === null ? initialDirectoryBrowseState() : { ...this.#state.directoryBrowse, open: false, selection: null },
     });
   }
 
@@ -1471,42 +1534,35 @@ export class ClientStore {
     return NOT_CONNECTED;
   }
 
-  /**
-   * 在当前层新建一层目录，并把它作为选定结果。
-   *
-   * 候选路径由 {@link buildCreateFolderPath} 就地构造（父层来自服务端回显、名字来自用户输入），
-   * 名字不合规时**不**构造也不提交，只把原因留在 `folderError` 上（参数类拒绝）。
-   * 新建的目录此刻在主机上还不存在，因此选定带 `willCreate`，提交时会带上 `createIfMissing`。
-   */
+  /** 独立创建一层目录；只有主机完成后才重新读取真实列表。 */
   createFolderInBrowse(name: string): CreateFolderOutcome {
-    const here = this.#state.directoryBrowse.here;
-    if (here === null) {
-      return { ok: false, reason: "根列表不是一个目录，先在它下面选一个目录再新建文件夹。" };
+    if (!this.#state.selectedFeatures.includes("core.workspace-mkdir.v1")) {
+      return { ok: false, reason: "主机未提供独立新建文件夹能力，仍可选择已有目录。" };
     }
-    const built = buildCreateFolderPath({ parent: here, name });
+    const browse = this.#state.directoryBrowse;
+    if (browse.here === null || !browse.loaded || browse.pendingRequestId !== null || browse.error !== null) {
+      return { ok: false, reason: "请先读取一个可用目录。" };
+    }
+    const previous = this.#state.folderRequest;
+    const prior = previous === null ? null : this.#lastCommandOf(previous.requestId);
+    if (prior !== null && ["submitting", "accepted", "uncertain"].includes(prior.state)) {
+      return { ok: false, reason: "上次新建尚未确认，请先确认结果，不要重复创建。" };
+    }
+    const built = buildCreateFolderPath({ parent: browse.here, name });
     if (!built.ok) {
-      this.#commit({
-        ...this.#state,
-        directoryBrowse: { ...this.#state.directoryBrowse, folderError: built.reason },
-      });
+      this.#commit({ ...this.#state, directoryBrowse: { ...browse, folderError: built.reason } });
       return { ok: false, reason: built.reason };
     }
-    this.#commit({
-      ...this.#state,
-      directoryBrowse: {
-        ...this.#state.directoryBrowse,
-        open: false,
-        folderError: null,
-        selection: {
-          kind: "path",
-          path: built.path,
-          name: built.name,
-          registered: false,
-          willCreate: true,
-        },
-      },
+    const parentPath = browse.here;
+    const requestId = this.#dispatchIntent({
+      sessionId: null,
+      build: (id) => ({ requestId: id, command: "workspace.mkdir", payload: { parentPath, name: built.name } }),
+      patch: (id) => ({
+        folderRequest: { requestId: id, parentPath, name: built.name, refreshed: false },
+        directoryBrowse: { ...browse, folderError: null },
+      }),
     });
-    return { ok: true, path: built.path };
+    return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
   }
 
   /** 确认选定并关掉选择器（选定内容逐字来自服务端下发或用户输入的新层名字）。 */
@@ -1522,7 +1578,31 @@ export class ClientStore {
     return buildDirectoryBrowserModel({
       supported: this.#state.selectedFeatures.includes(WORKSPACE_BROWSE_FEATURE),
       browse: this.#state.directoryBrowse,
+      mkdirSupported: this.#state.selectedFeatures.includes("core.workspace-mkdir.v1"),
+      folder: this.#state.folderRequest === null ? null : {
+        ...this.#state.folderRequest,
+        state: this.#lastCommandOf(this.#state.folderRequest.requestId)?.state ?? "submitting",
+        error: this.#lastCommandOf(this.#state.folderRequest.requestId)?.error?.message ?? null,
+      },
     });
+  }
+
+  /** 查询原命令，不重复执行文件系统操作。 */
+  checkFolderCreation(): void {
+    const folder = this.#state.folderRequest;
+    if (folder === null) return;
+    this.#dispatchIntent({ sessionId: null,
+      build: (requestId) => ({ requestId, command: "command.status", payload: { targetRequestId: folder.requestId } }),
+    });
+  }
+
+  /** 用户核对主机后显式解除 uncertain 阻挡；只刷新，不重发 mkdir。 */
+  resolveFolderUncertain(): void {
+    const folder = this.#state.folderRequest;
+    if (folder === null || this.#lastCommandOf(folder.requestId)?.state !== "uncertain") return;
+    this.dismissUncertain(folder.requestId);
+    this.#commit({ ...this.#state, folderRequest: null });
+    this.browseDirectory(folder.parentPath);
   }
 
   /** 本机已记录的目录（快照 `workspaces`）：不支持浏览时的回退选择。 */

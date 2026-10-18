@@ -23,19 +23,20 @@
  * `role="list"`/`role="listitem"` 补回；所有 `data-*` 属性名与取值原样经 `dataSet` 进 DOM。
  */
 
+import { useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import type { TextProps } from "react-native";
 
 import type { CreateSessionEntryModel, CreateSubmissionModel } from "../features/create-session-model";
 import {
   BROWSE_UNAVAILABLE_NOTICES,
-  CREATE_DIRECTORY_HINT,
   CREATE_FAILURE_NOTES,
   createDirectoryNoticeText,
   createFailureKind,
   isSubmissionAvailable,
 } from "../features/create-session-model";
 import { UNKNOWN_CONNECTION_LABEL } from "../domain";
+import { useModalFocus } from "./modal-focus";
 import type { Palette } from "./theme";
 import {
   Pressable,
@@ -49,6 +50,8 @@ import {
   radius,
   spacing,
   useTheme,
+  webStyle,
+  zIndex,
 } from "./theme";
 
 /**
@@ -64,6 +67,8 @@ export interface CreateSessionSubmit {
 }
 
 export interface CreateSessionSheetProps {
+  /** 仅在服务端确认创建成功后调用；由页面负责关闭弹层并导航。 */
+  readonly onCreated?: (sessionId: string) => void;
   readonly model: CreateSessionEntryModel;
   /** 当前选中的 Agent 标识；`null` 表示尚未选择（此时不允许提交）。 */
   readonly selectedAgentId: string | null;
@@ -96,50 +101,101 @@ const TITLE_PROPS = { role: "heading", "aria-level": 2 } as unknown as TextProps
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
+    overlay: {
+      ...webStyle({ position: "fixed" }),
+      top: 0, right: 0, bottom: 0, left: 0,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 20,
+      backgroundColor: "rgba(10,12,16,.45)",
+      zIndex: zIndex.modal,
+    },
     sheet: {
-      gap: spacing.md,
+      width: 540,
+      ...webStyle({ maxWidth: "100%", maxHeight: "88vh", overflowY: "auto" }),
       backgroundColor: colors.panel,
       borderWidth: 1,
       borderColor: colors.line,
-      borderRadius: radius.md,
-      padding: spacing.lg,
+      borderRadius: 14,
       boxShadow: colors.shadow,
     },
     head: {
+      paddingVertical: 15,
+      paddingHorizontal: 20,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.line,
+      flexShrink: 0,
       flexDirection: "row",
       flexWrap: "wrap",
       alignItems: "center",
-      gap: spacing.sm,
+      gap: 10,
+    },
+    body: {
+      paddingVertical: 18,
+      paddingHorizontal: 20,
+      gap: 14,
+    },
+    foot: {
+      flexDirection: "row",
+      justifyContent: "flex-end",
+      gap: 10,
+      paddingVertical: 13,
+      paddingHorizontal: 20,
+      borderTopWidth: 1,
+      borderTopColor: colors.line,
+      flexShrink: 0,
+    },
+    cancel: {
+      paddingVertical: 8,
+      paddingHorizontal: 16,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: 9,
+      backgroundColor: colors.panel,
+    },
+    cancelText: {
+      fontFamily: fontFamily.sans,
+      fontSize: 14,
+      lineHeight: 22.4,
+      color: colors.ink,
     },
     title: {
       flexGrow: 1,
       flexShrink: 1,
       color: colors.ink,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.lg,
+      fontSize: fontSize.md,
+      lineHeight: 22.4,
       fontWeight: "600",
     },
     close: {
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.md,
+      width: 30,
+      height: 30,
+      alignItems: "center",
+      justifyContent: "center",
       borderRadius: radius.sm,
       backgroundColor: colors.panel2,
       borderWidth: 1,
-      borderColor: colors.line2,
+      borderColor: colors.line,
     },
     closeText: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     note: {
-      color: colors.ink2,
+      backgroundColor: colors.warnSoft,
+      padding: 12,
+      borderRadius: 9,
+      color: colors.warn,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     // 目录块：目录 / 路径 两行（标签淡、值醒目；路径用等宽字体）。
     dirBlock: {
-      gap: spacing.xs,
+      gap: 7,
     },
     dirRow: {
       flexDirection: "row",
@@ -152,20 +208,25 @@ function buildStyles(colors: Palette) {
       minWidth: 34,
       color: colors.ink3,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
+      fontSize: 12,
+      lineHeight: 19.2,
     },
     dirValue: {
       flexShrink: 1,
+      minWidth: 0,
       color: colors.ink,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.md,
+      fontSize: 15,
+      lineHeight: 24,
       fontWeight: "600",
     },
     dirPath: {
       flexShrink: 1,
+      minWidth: 0,
       color: colors.ink,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
       // 原型 `.dv.mono` 的等宽「值」行是 500（`fontWeight.value`）——静态路径值的档位，不写数字字面量。
       fontWeight: fontWeight.value,
     },
@@ -179,7 +240,7 @@ function buildStyles(colors: Palette) {
     },
     pickerButton: {
       flexShrink: 0,
-      paddingVertical: spacing.xs,
+      paddingVertical: 6,
       paddingHorizontal: spacing.md,
       borderRadius: radius.sm,
       backgroundColor: colors.panel2,
@@ -190,30 +251,35 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     pickerPlaceholder: {
       flexShrink: 1,
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
     },
     hint: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
+      fontSize: 12,
+      lineHeight: 18.6,
     },
     noticeInfo: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     noticeWarn: {
       color: colors.warn,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     options: {
-      gap: spacing.xs,
+      gap: 8,
     },
     optionRow: {
       flexDirection: "row",
@@ -222,14 +288,14 @@ function buildStyles(colors: Palette) {
       flexGrow: 1,
       flexDirection: "row",
       flexWrap: "wrap",
-      alignItems: "baseline",
-      gap: spacing.sm,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
-      borderRadius: radius.sm,
+      alignItems: "flex-start",
+      gap: 10,
+      paddingVertical: 11,
+      paddingHorizontal: 13,
+      borderRadius: 10,
       borderWidth: 1,
       borderColor: colors.line,
-      backgroundColor: colors.panel2,
+      backgroundColor: colors.panel,
     },
     optionButtonSelected: {
       flexGrow: 1,
@@ -244,15 +310,30 @@ function buildStyles(colors: Palette) {
       borderColor: colors.accent,
       backgroundColor: colors.accentSoft,
     },
+    radio: {
+      width: 15, height: 15, borderRadius: 8,
+      borderWidth: 1.5, borderColor: colors.line,
+      marginTop: 3, alignItems: "center", justifyContent: "center",
+      flexShrink: 0,
+    },
+    radioSelected: { borderColor: colors.accent },
+    radioDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent },
+    optionContent: { flex: 1, minWidth: 0, gap: 2 },
+    optionHeading: { flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", gap: 8 },
+    fieldLabel: { fontFamily: fontFamily.sans, fontSize: 13, fontWeight: "600", color: colors.ink, marginBottom: 7 },
+    info: { backgroundColor: colors.accentSoft, borderRadius: 9, padding: 12, gap: 6 },
     optionName: {
+      fontWeight: "600",
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
     },
     optionId: {
       color: colors.ink3,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     optionDefault: {
       paddingHorizontal: spacing.xs,
@@ -261,16 +342,19 @@ function buildStyles(colors: Palette) {
       color: colors.accentInk,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     optionConnection: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     submission: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     failure: {
       gap: spacing.xs,
@@ -287,12 +371,14 @@ function buildStyles(colors: Palette) {
       color: colors.warn,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
       fontWeight: "600",
     },
     uncertainBody: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     dismiss: {
       alignSelf: "flex-start",
@@ -307,20 +393,22 @@ function buildStyles(colors: Palette) {
       color: colors.warn,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     submit: {
       alignSelf: "flex-start",
       paddingVertical: spacing.sm,
       paddingHorizontal: spacing.lg,
       borderRadius: radius.sm,
-      backgroundColor: colors.accentSoft,
+      backgroundColor: colors.accent,
       borderWidth: 1,
       borderColor: colors.accent,
     },
     submitText: {
-      color: colors.accentInk,
+      color: "#ffffff",
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
       fontWeight: "600",
     },
   });
@@ -406,15 +494,26 @@ function Submission({
 /** 新建会话弹层。 */
 export function CreateSessionSheet({
   model,
-  selectedAgentId,
+  selectedAgentId: requestedAgentId,
   onSelectAgent,
   onSubmit,
   onOpenDirectoryPicker,
   onDismissUncertain,
   onClose,
+  onCreated,
 }: CreateSessionSheetProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const selectedAgentId = requestedAgentId ?? model.agents.find((agent) => agent.isDefault)?.id ?? null;
+  const [directoryRequired, setDirectoryRequired] = useState(false);
+  const createdSessionId = model.submission.kind === "created" ? model.submission.sessionId : null;
+  useModalFocus('[data-create-modal="open"]', onClose);
+  const navigatedSessionId = useRef<string | null>(null);
+  useEffect(() => {
+    if (createdSessionId === null || onCreated === undefined || navigatedSessionId.current === createdSessionId) return;
+    navigatedSessionId.current = createdSessionId;
+    onCreated(createdSessionId);
+  }, [createdSessionId, onCreated]);
 
   // 顶部入口的选定结果：目录引用由它给出（已记录目录用 `directoryId`，选定的路径用 `workspacePath`）。
   // 目录块先取成局部常量：下面按 `kind` 分支时 narrowing 只依赖这一个不可变绑定。
@@ -428,38 +527,41 @@ export function CreateSessionSheet({
     selection === null ? null : selection.kind === "registered" ? selection.displayName : selection.name;
   const selectedPath = selection === null ? null : selection.path;
 
-  // 入口**没有**权限判断：只有「还没选 Agent」「目录还没定下来」与「正在提交/已接受」会让按钮不可点。
+  // 缺少目录通过点击后的行内校验反馈；不派发创建请求。
   const directorySelected = directory.kind === "known" || selection !== null;
-  const disabled = selectedAgentId === null || !directorySelected || !isSubmissionAvailable(model.submission);
+  const disabled = selectedAgentId === null || !isSubmissionAvailable(model.submission);
+  useEffect(() => {
+    if (directorySelected) setDirectoryRequired(false);
+  }, [directorySelected]);
 
   return (
+    <View role="dialog" aria-modal={true} aria-label={"新建会话"} style={styles.overlay} dataSet={{ createModal: "open" }}>
     <View style={styles.sheet} dataSet={{ createSheet: model.sheetKey }}>
       <View style={styles.head}>
         <Text {...TITLE_PROPS} style={styles.title} dataSet={{ createSheetTitle: "true" }}>
           新建会话
         </Text>
         <Pressable role="button" style={styles.close} dataSet={{ action: "close-create-sheet" }} onPress={onClose}>
-          <Text style={styles.closeText}>关闭</Text>
+          <Text style={styles.closeText}>✕</Text>
         </Pressable>
       </View>
 
+      <View style={styles.body}>
       {/* 副作用说明**始终**呈现：入口恒可用，因此这句说明不再与任何权限态成对出现。 */}
-      <Text style={styles.note} dataSet={{ createNote: "true" }}>
-        {model.effectNote}
-      </Text>
+
 
       {directory.kind === "known" ? (
         // 形态一：目录已知（从目录卡片/详情页进来）。目录与路径各一行，都是服务端下发的原文。
         <View style={styles.dirBlock} dataSet={{ createDirectoryBlock: "known" }}>
           <View style={styles.dirRow}>
             <Text style={styles.dirKey}>目录</Text>
-            <Text style={styles.dirValue} dataSet={{ createDirectoryName: directory.displayName }}>
+            <Text numberOfLines={1} style={styles.dirValue} dataSet={{ createDirectoryName: directory.displayName }}>
               {directory.displayName}
             </Text>
           </View>
           <View style={styles.dirRow}>
             <Text style={styles.dirKey}>路径</Text>
-            <Text style={styles.dirPath} dataSet={{ createDirectoryPath: directory.path }}>
+            <Text numberOfLines={1} style={styles.dirPath} dataSet={{ createDirectoryPath: directory.path }}>
               {directory.path}
             </Text>
           </View>
@@ -487,22 +589,22 @@ export function CreateSessionSheet({
                 </Pressable>
               )}
               <Text
-                style={selectedName === null ? styles.pickerPlaceholder : styles.dirValue}
-                dataSet={{ createSelectedName: selectedName ?? "" }}
+                numberOfLines={1}
+                style={[selectedName === null ? styles.pickerPlaceholder : styles.dirValue,
+                  directoryRequired && !directorySelected ? { color: theme.colors.danger } : null]}
+                role={directoryRequired && !directorySelected ? "alert" : undefined}
+                dataSet={{ createSelectedName: selectedName ?? "", directoryRequired: String(directoryRequired && !directorySelected) }}
               >
-                {selectedName ?? "未选择任何文件"}
+                {selectedName ?? "未选择目录"}
               </Text>
             </View>
           </View>
           <View style={styles.dirRow}>
             <Text style={styles.dirKey}>路径</Text>
-            <Text style={styles.dirPath} dataSet={{ createDirectoryPath: selectedPath ?? "" }}>
+            <Text numberOfLines={1} style={styles.dirPath} dataSet={{ createDirectoryPath: selectedPath ?? "" }}>
               {selectedPath ?? "—"}
             </Text>
           </View>
-          <Text style={styles.hint} dataSet={{ createDirectoryHint: "true" }}>
-            {CREATE_DIRECTORY_HINT}
-          </Text>
           {directory.unavailable === null ? null : (
             // spec 场景「服务端不支持浏览」：明确说明该能力不可用，并保留已登记目录这条路。
             // 锚点带上**原因**：未认证的起点（还没连上）不能把「还不知道服务端支持什么」写成
@@ -516,20 +618,23 @@ export function CreateSessionSheet({
             </Text>
           )}
           {/* 分支提示：还没选定 / 会先新建 / 存在但未登记 / 已登记（四类，见模型层）。 */}
-          <Text
+          {directory.notice.kind === "unregistered" || directory.notice.kind === "unselected" ? null : <Text
             style={directory.notice.kind === "registered" ? styles.noticeInfo : styles.noticeWarn}
             dataSet={{ createDirectoryNotice: directory.notice.kind }}
           >
             {createDirectoryNoticeText(directory.notice)}
-          </Text>
+          </Text>}
         </View>
       )}
 
+      <View>
+      <Text style={styles.fieldLabel}>选择 Agent</Text>
       <View role="list" style={styles.options} dataSet={{ agentOptions: "true" }}>
         {model.agents.map((agent) => (
           <View key={agent.id} role="listitem" style={styles.optionRow}>
             <Pressable
               role="button"
+              aria-pressed={agent.id === selectedAgentId}
               style={agent.id === selectedAgentId ? styles.optionButtonSelected : styles.optionButton}
               dataSet={{
                 action: "select-agent",
@@ -541,6 +646,11 @@ export function CreateSessionSheet({
               }}
             >
               {/* 同名 Agent 以标识区分：展示名之外必须能看到 id。 */}
+              <View style={[styles.radio, agent.id === selectedAgentId ? styles.radioSelected : null]}>
+                {agent.id === selectedAgentId ? <View style={styles.radioDot} /> : null}
+              </View>
+              <View style={styles.optionContent}>
+              <View style={styles.optionHeading}>
               <Text style={styles.optionName} dataSet={{ agentDisplayName: agent.displayName }}>
                 {agent.displayName}
               </Text>
@@ -552,15 +662,29 @@ export function CreateSessionSheet({
                   默认
                 </Text>
               ) : null}
+              </View>
               <Text style={styles.optionConnection} dataSet={{ agentConnection: agent.connection }}>
                 {agent.connection === "unknown" ? UNKNOWN_CONNECTION_LABEL : agent.connection}
               </Text>
+              </View>
             </Pressable>
           </View>
         ))}
       </View>
+      {model.agents.length === 0 ? (
+        <Text style={styles.noticeInfo}>这台电脑还没有配置 Agent，请先在电脑上完成配置。</Text>
+      ) : null}
 
+      </View>
+      <Text style={styles.note} dataSet={{ createNote: "true" }}>
+        {model.effectNote}
+      </Text>
       <Submission submission={model.submission} onDismissUncertain={onDismissUncertain} />
+      </View>
+      <View style={styles.foot}>
+        <Pressable role="button" style={styles.cancel} onPress={onClose} dataSet={{ action: "cancel-create-sheet" }}>
+          <Text style={styles.cancelText}>取消</Text>
+        </Pressable>
 
       <Pressable
         role="button"
@@ -568,11 +692,17 @@ export function CreateSessionSheet({
         style={styles.submit}
         dataSet={{ action: "submit-create" }}
         onPress={() => {
-          if (selectedAgentId !== null) onSubmit({ agentId: selectedAgentId, directoryPath, createIfMissing });
+          if (!directorySelected) {
+            setDirectoryRequired(true);
+            return;
+          }
+          if (!disabled && selectedAgentId !== null) onSubmit({ agentId: selectedAgentId, directoryPath, createIfMissing });
         }}
       >
         <Text style={styles.submitText}>创建会话</Text>
       </Pressable>
+      </View>
+    </View>
     </View>
   );
 }

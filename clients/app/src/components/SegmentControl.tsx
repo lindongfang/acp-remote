@@ -13,7 +13,7 @@
 import type { ReactElement } from "react";
 
 import type { Palette } from "./theme";
-import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, useTheme } from "./theme";
 
 export interface SegmentControlProps<T extends string = string> {
   readonly label: string;
@@ -27,32 +27,40 @@ function buildStyles(colors: Palette) {
   return StyleSheet.create({
     group: {
       flexDirection: "row",
-      flexWrap: "wrap",
-      alignSelf: "flex-start",
+      flexWrap: "nowrap",
+      overflow: "hidden",
+      flexShrink: 0,
+      alignSelf: "center",
       borderWidth: 1,
       borderColor: colors.line,
-      borderRadius: radius.sm,
+      borderRadius: 9,
       backgroundColor: colors.panel,
     },
     option: {
-      paddingVertical: 6,
-      paddingHorizontal: spacing.md,
+      paddingVertical: 7,
+      paddingHorizontal: 14,
       backgroundColor: "transparent",
     },
     optionOn: {
-      paddingVertical: 6,
-      paddingHorizontal: spacing.md,
+      paddingVertical: 7,
+      paddingHorizontal: 14,
       backgroundColor: colors.accentSoft,
+    },
+    divider: {
+      borderLeftWidth: 1,
+      borderLeftColor: colors.line,
     },
     label: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     labelOn: {
       color: colors.accentInk,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
       fontWeight: "600",
     },
   });
@@ -79,14 +87,14 @@ export function SegmentControl<T extends string = string>({
   return (
     // `radiogroup`/`radio` 是分段控件对应的 ARIA 形状：互斥、当前项由 `aria-checked` 表达。
     <View role="radiogroup" accessibilityLabel={label} style={styles.group} dataSet={{ segment: label }}>
-      {options.map((option) => {
+      {options.map((option, index) => {
         const selected = option.value === value;
         return (
           <Pressable
             key={option.value}
             role="radio"
             accessibilityState={{ checked: selected }}
-            style={selected ? styles.optionOn : styles.option}
+            style={[selected ? styles.optionOn : styles.option, index > 0 ? styles.divider : null]}
             dataSet={{ segmentOption: option.value, segmentSelected: String(selected) }}
             onPress={() => {
               onChange(option.value);

@@ -80,6 +80,8 @@ use sync_protocol::common::{
 };
 use sync_protocol::envelope::{Envelope, MessageType, encode_body};
 use sync_protocol::error::{Body, ErrorCode};
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
 use crate::command_log::{self, Cause, Subject, TerminalClass};
@@ -97,6 +99,8 @@ use self::query::Rejection;
 ///
 /// 未协商时服务端 MUST NOT 静默接受（回 `protocol.feature_required` 并给出缺的那个）。
 pub const SESSION_CREATE_FEATURE: &str = "core.session-create.v1";
+/// 独立建目录的可选能力；旧连接不得触发文件系统写操作。
+pub const WORKSPACE_MKDIR_FEATURE: &str = "core.workspace-mkdir.v1";
 
 /// 单条命令结果的**信封**开销上界（字节）。
 ///
@@ -152,6 +156,9 @@ pub const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// 一条终态观察的最长生存时间。超龄即放弃该观察项（记录仍在，对端可凭 `command.status` 重查）。
 pub const WATCH_MAX_AGE: Duration = Duration::from_secs(600);
 
+const MKDIR_QUEUE_CAPACITY: usize = 32;
+const MKDIR_EXECUTION_LIMIT: usize = 4;
+
 /// core 的 `CommandStatus`（token enum，`as_str`）+ Sync wire 的 `CommandState`。
 ///
 /// 两个词表取值相同但类型不同源，因此显式映射：**不**依赖字符串相等（拼写漂移会在编译期沉默）。
@@ -199,6 +206,8 @@ pub struct CommandRoute {
     states: Mutex<BTreeMap<String, ConnectionState>>,
     /// 新的终态观察登记时唤醒 [`Self::dispatch`]，避免只有 250ms 轮询才发现它。
     wake: tokio::sync::Notify,
+    mkdir_queue: mpsc::Sender<acp_core::ports::WorkspaceMkdirExecution>,
+    mkdir_receiver: Mutex<Option<mpsc::Receiver<acp_core::ports::WorkspaceMkdirExecution>>>,
 }
 
 impl std::fmt::Debug for CommandRoute {
@@ -219,6 +228,7 @@ impl CommandRoute {
         registry: Arc<ConnectionRegistry>,
         owner: Arc<dyn OwnerReachability>,
     ) -> Self {
+        let (mkdir_queue, mkdir_receiver) = mpsc::channel(MKDIR_QUEUE_CAPACITY);
         Self {
             core,
             broker,
@@ -229,6 +239,8 @@ impl CommandRoute {
             consecutive_limit: limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS,
             states: Mutex::new(BTreeMap::new()),
             wake: tokio::sync::Notify::new(),
+            mkdir_queue,
+            mkdir_receiver: Mutex::new(Some(mkdir_receiver)),
         }
     }
 
@@ -700,6 +712,9 @@ impl CommandRoute {
         if command.command == CommandName::SessionCreate {
             return self.on_session_create(handle, &actor, command).await;
         }
+        if command.command == CommandName::WorkspaceMkdir {
+            return self.on_workspace_mkdir(handle, &actor, command).await;
+        }
         let Some(payload) = core_payload(&command.payload).ok() else {
             self.deny(
                 handle,
@@ -787,6 +802,100 @@ impl CommandRoute {
                 self.encoding_fault(handle);
             }
         }
+        RouteOutcome::Claimed
+    }
+
+    /// 无会话的目录 mutation：持久接受后执行，并只回复持久记录里的终态。
+    async fn on_workspace_mkdir(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        command: Command,
+    ) -> RouteOutcome {
+        if !self.features(handle).contains(WORKSPACE_MKDIR_FEATURE) {
+            let Some(error) = public_error(
+                ErrorCode::ProtocolFeatureRequired,
+                "the client did not negotiate the workspace-mkdir feature",
+                details_object(&serde_json::json!({ "features": [WORKSPACE_MKDIR_FEATURE] })),
+            ) else {
+                return self.encoding_fault(handle);
+            };
+            self.send_rejected(handle, &command, error);
+            return RouteOutcome::Claimed;
+        }
+        let CommandPayload::WorkspaceMkdir(payload) = &command.payload else {
+            self.deny(
+                handle,
+                &command,
+                "the payload does not match the command",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let Some(fingerprint) = payload_fingerprint(&command.payload) else {
+            return self.encoding_fault(handle);
+        };
+        let Some(request_id) = core_request_id(&command.request_id) else {
+            return self.encoding_fault(handle);
+        };
+        // Reserve bounded execution capacity before durable acceptance. A full or stopped
+        // executor rejects without filesystem writes or a stranded acceptance record.
+        let permit = match self.mkdir_queue.try_reserve() {
+            Ok(permit) => permit,
+            Err(_) => {
+                self.deny(
+                    handle,
+                    &command,
+                    "directory creation capacity is unavailable",
+                    ErrorCode::ResourceBackpressure,
+                );
+                return RouteOutcome::Claimed;
+            }
+        };
+        let execution = match self
+            .core
+            .admit_workspace_mkdir(
+                actor,
+                &request_id,
+                &fingerprint,
+                payload.parent_path.as_str(),
+                payload.name.as_str(),
+            )
+            .await
+        {
+            Ok(acp_core::ports::WorkspaceMkdirAdmission::Accepted(execution)) => execution,
+            Ok(acp_core::ports::WorkspaceMkdirAdmission::InFlight) => {
+                let accepted_at = self
+                    .broker
+                    .command_status(actor, &request_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|record| record.accepted_at().cloned());
+                self.send_accepted(handle, &command, None, accepted_at.as_ref());
+                self.watch_terminal(handle, &command, actor);
+                return RouteOutcome::Claimed;
+            }
+            Ok(acp_core::ports::WorkspaceMkdirAdmission::Settled(record)) => {
+                self.send_record_terminal(handle, &command.request_id, command.command, &record);
+                return RouteOutcome::Claimed;
+            }
+            Err(error) => {
+                self.reply_after_create_failure(handle, actor, &command, &request_id, &error)
+                    .await;
+                return RouteOutcome::Claimed;
+            }
+        };
+        let accepted_at = self
+            .broker
+            .command_status(actor, &request_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|record| record.accepted_at().cloned());
+        self.send_accepted(handle, &command, None, accepted_at.as_ref());
+        self.watch_terminal(handle, &command, actor);
+        permit.send(execution);
         RouteOutcome::Claimed
     }
 
@@ -1243,6 +1352,17 @@ impl CommandRoute {
         // 记录里的 `result` 原文 → wire 结果：`session.create` 的 `completed` 有具名形状，其余按
         // 开放对象承载（§11.5 的表：只有查询命令与 `session.create` 规定具名结果）。
         let result = match record.result() {
+            Some(result) if name == CommandName::WorkspaceMkdir => {
+                match serde_json::from_str::<sync_protocol::command::WorkspaceMkdirResult>(
+                    result.as_str(),
+                ) {
+                    Ok(value) => Nullable::value(CommandResultPayload::WorkspaceMkdir(value)),
+                    Err(_) => {
+                        self.encoding_fault(handle);
+                        return;
+                    }
+                }
+            }
             Some(result) if name == CommandName::SessionCreate => {
                 match serde_json::from_str::<SessionCreateResult>(result.as_str()) {
                     Ok(value) => {
@@ -1334,16 +1454,34 @@ impl CommandRoute {
     /// 由组合根 spawn，`Shutdown` 触发即返回（**不**留下 detached task）。观察项的取消路径有三条：
     /// 连接离开注册表、命令到达终态、超过 [`WATCH_MAX_AGE`]。
     pub async fn dispatch(self: Arc<Self>, shutdown: Shutdown) {
+        let Some(mut receiver) = lock(&self.mkdir_receiver).take() else {
+            warn!(
+                event = "sync.command_dispatch_duplicate",
+                "the command executor already has an owner"
+            );
+            return;
+        };
+        let mut executions = JoinSet::new();
         loop {
             let tick = tokio::time::sleep(TERMINAL_POLL_INTERVAL);
             tokio::select! {
                 biased;
                 () = shutdown.clone().wait() => {
-                    debug!(
-                        event = "sync.command_dispatch_shutdown",
-                        "the command terminal watcher stops"
-                    );
+                    // Queued and interrupted accepted commands remain durable for uncertain
+                    // recovery. No execution survives its dispatcher or daemon shutdown.
+                    receiver.close();
+                    while receiver.try_recv().is_ok() {}
+                    executions.abort_all();
+                    while executions.join_next().await.is_some() {}
+                    debug!(event = "sync.command_dispatch_shutdown", "the command executor and terminal watcher stop");
                     return;
+                }
+                Some(_) = executions.join_next(), if !executions.is_empty() => {}
+                Some(execution) = receiver.recv(), if executions.len() < MKDIR_EXECUTION_LIMIT => {
+                    let core = self.core.clone();
+                    executions.spawn(async move {
+                        let _outcome = core.execute_workspace_mkdir(execution).await;
+                    });
                 }
                 () = self.wake.notified() => {}
                 () = tick => {}
@@ -1670,6 +1808,9 @@ fn core_payload(payload: &CommandPayload) -> Result<CorePayload, &'static str> {
         // 载荷映射）：保留臂只为让判定穷尽，不伪造一个 core 载荷。
         CommandPayload::WorkspaceBrowse(_) => {
             return Err("workspace.browse does not use CommandPayload");
+        }
+        CommandPayload::WorkspaceMkdir(_) => {
+            return Err("workspace.mkdir uses its independent admission and execution use cases");
         }
         CommandPayload::SessionRead(read) => {
             if read

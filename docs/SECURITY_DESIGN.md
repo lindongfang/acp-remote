@@ -325,6 +325,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `command.status` | query | mvp |
 | `session.mode.list` | query | conditional_mvp |
 | `session.config.list` | query | conditional_mvp |
+| `workspace.mkdir` | mutation | mvp |
 | `workspace.browse` | query | mvp |
 | `session.prompt` | mutation | mvp |
 | `session.cancel` | mutation | mvp |
@@ -658,3 +659,7 @@ manual pairing/revoke smoke test
 本地管理通道已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定（stdio + 平台本地 IPC，不实现 loopback HTTP 管理面）。
 
 这些选择不阻塞领域模型和 Sync DTO 开发，但相关平台 adapter 或正式发布在选择落定前不能声称安全完成。
+
+## 独立目录创建（ADR-0010）
+
+独立建目录沿用已认证设备能力面，不新增设备授权维度；仅 Sync 协商 core.workspace-mkdir.v1 后可执行，不开放 Node Link 任意路径。终态、错误与审计不泄漏路径或名字；崩溃窗口不自动重做。安全决定见 [ADR-0010](adr/0010-immediate-workspace-directory-creation.md)，事务权威见 CORE_PORTS_AND_STORAGE §5.6。

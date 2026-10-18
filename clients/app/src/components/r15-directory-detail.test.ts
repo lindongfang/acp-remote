@@ -146,7 +146,7 @@ describe("R15 目录详情：两种「空」互不冒充", () => {
     const html = renderDetail(store.directoryDetail("work-api"));
 
     expect(html).toContain('data-directory-sessions="empty"');
-    expect(html).toContain("这个目录里还没有会话");
+    expect(html).toContain("这个目录还没有会话");
     // 反例：把「还没有会话」当成目录标识失效，下面两条会各自变红。
     expect(html).not.toContain("可能已被删除");
     expect(html).not.toContain("data-directory-detail-state");
@@ -162,7 +162,7 @@ describe("R15 目录详情：两种「空」互不冒充", () => {
     expect(html).toContain('data-directory-sessions="list"');
     expect(rowIdsOf(html)).toHaveLength(2);
     // 反例：把「详情页有查询词/月份档」的旧第三支留下时，这里会出现空态标记或那句文案。
-    expect(html).not.toContain("这个目录里还没有会话");
+    expect(html).not.toContain("这个目录还没有会话");
     expect(html).not.toContain("没有符合条件的会话");
     expect(html).not.toContain("data-directory-detail-state");
   });
@@ -176,7 +176,7 @@ describe("R15 目录详情：两种「空」互不冒充", () => {
     // 提示里**不得**出现目录标识（它只作机器锚点）：反例是把文案写回「目录「not-there」不在…」。
     expect(textContentOf(html)).not.toContain("not-there");
     expect(textContentOf(html)).toContain("这个目录不在最近一次同步的目录列表里");
-    expect(html).not.toContain("这个目录里还没有会话");
+    expect(html).not.toContain("这个目录还没有会话");
     expect(html).not.toContain("data-directory-sessions");
     // 失效标识下也要有离开本页的入口：自建导航删掉后，返回按钮只在这里（见组件内的页头）。
     expect(html).toContain('data-action="back-to-dirs"');

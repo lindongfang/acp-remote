@@ -273,7 +273,7 @@ export function createDirectoryNoticeText(notice: CreateDirectoryNotice): string
 
 /** 目录块的说明（顶部入口形态下始终呈现）。 */
 export const CREATE_DIRECTORY_HINT =
-  "点「选择文件夹」浏览主机上的目录并选中一层；也可以在里面新建文件夹——新建出来的目录，创建会话时会先在主机上建它。";
+  "点「选择文件夹」浏览主机上的目录；也可以先逐层新建目录，最后单独选择。取消会话不会删除已建目录。";
 
 /** 「新建文件夹」的名字规则；违反即**参数类**拒绝（不构造候选路径、不提交）。 */
 export const CREATE_FOLDER_NAME_RULE = "文件夹名字不能为空，也不能含 \\、/ 或 :。";
@@ -367,21 +367,26 @@ export function initialDirectoryBrowseState(): DirectoryBrowseState {
 }
 
 /**
- * 打开选择器时的状态：回到根列表，丢掉上一层的条目与错误，保留已确认的选定。
+ * 重开选择器保留当前位置、已读条目和命令状态，避免丢失尚待确认的创建结果。
  *
  * 保留选定是刻意的：用户按 Esc/取消再打开时要能从原处继续；选定本身的清除只发生在
  * 关掉整个创建弹层（或换一个目录入口）时。
  */
 export function openedDirectoryBrowseState(state: DirectoryBrowseState): DirectoryBrowseState {
-  return {
-    ...initialDirectoryBrowseState(),
-    open: true,
-    selection: state.selection,
-  };
+  return { ...state, open: true };
 }
 
 /** 目录浏览的视图模型（`DirectoryPicker` 只吃它）。 */
+export interface FolderCreationModel {
+  readonly requestId: Uuid;
+  readonly parentPath: string;
+  readonly name: string;
+  readonly state: string;
+  readonly error: string | null;
+}
 export interface DirectoryBrowserModel {
+  readonly mkdirSupported?: boolean;
+  readonly folder?: FolderCreationModel | null;
   /** 服务端是否协商了 `core.workspace-browse.v1`；为假时入口说明不可用并回退到已登记目录。 */
   readonly supported: boolean;
   readonly status: "unsupported" | "idle" | "loading" | "ready" | "failed";
@@ -400,10 +405,15 @@ export interface DirectoryBrowserModel {
   readonly canConfirm: boolean;
 }
 
+/** UI 目录名按中文界面习惯排列，忽略大小写，数字按数值排序；不改变 wire 结果顺序。 */
+const DIRECTORY_NAME_ORDER = new Intl.Collator("zh-CN", { sensitivity: "accent", numeric: true });
+
 /** 把原始状态投影成选择器视图模型；`supported` 来自服务端协商的 feature。 */
 export function buildDirectoryBrowserModel(input: {
   readonly supported: boolean;
   readonly browse: DirectoryBrowseState;
+  readonly mkdirSupported?: boolean;
+  readonly folder?: FolderCreationModel | null;
 }): DirectoryBrowserModel {
   const { browse } = input;
   const status: DirectoryBrowserModel["status"] = !input.supported
@@ -419,12 +429,17 @@ export function buildDirectoryBrowserModel(input: {
   const current = crumbs[crumbs.length - 1] ?? ROOT_CRUMB;
   return {
     supported: input.supported,
+    mkdirSupported: input.mkdirSupported ?? false,
+    folder: input.folder ?? null,
     status,
     here: browse.here,
     crumbs,
     current,
     parent: crumbs.length > 1 ? (crumbs[crumbs.length - 2] ?? null) : null,
-    entries: browse.entries,
+    entries: [...browse.entries].sort((left, right) =>
+      DIRECTORY_NAME_ORDER.compare(left.name, right.name)
+      || (left.path < right.path ? -1 : left.path > right.path ? 1 : 0),
+    ),
     truncated: browse.truncated,
     error: browse.error,
     folderError: browse.folderError,
@@ -499,7 +514,7 @@ export function buildCreateFolderPath(input: {
   readonly name: string;
 }): CreateFolderPathResult {
   const name = input.name.trim();
-  if (name.length === 0) return { ok: false, reason: CREATE_FOLDER_NAME_RULE };
+  if (name.length === 0 || name === "." || name === ".." || name.includes("\0") || [...name].length > 255) return { ok: false, reason: CREATE_FOLDER_NAME_RULE };
   if (name.includes("\\") || name.includes("/") || name.includes(":")) {
     return { ok: false, reason: CREATE_FOLDER_NAME_RULE };
   }

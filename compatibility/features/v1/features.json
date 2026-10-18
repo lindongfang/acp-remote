@@ -67,6 +67,12 @@
           "required": false
         },
         {
+          "id": "core.workspace-mkdir.v1",
+          "description": "Sync 独立创建当前父目录下的一层目录 workspace.mkdir",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
           "id": "core.file-diff.v1",
           "description": "`file.changed` 事件视图携带结构化差异行（§10.3 的 `diffLines` 与 `diffUnavailable`；只在协商时出现该键）",
           "delivery": "mvp",

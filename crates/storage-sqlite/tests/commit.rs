@@ -1743,3 +1743,197 @@ async fn session_create_crash_window_is_visible_to_startup_recovery() {
     assert_eq!(unsettled[0].session(), Some(&session));
     reopened.close().await;
 }
+
+fn mkdir_acceptance(actor: Actor, text: &str, seed: &str) -> OwnedCommit {
+    let mut commit = create_session("unused");
+    commit.state = None;
+    commit.origin_epoch = None;
+    commit.idempotency = Some(IdempotencyRecord {
+        actor,
+        request: request(text),
+        command: "workspace.mkdir".to_owned(),
+        kind: CommandKind::Mutation,
+        session: None,
+        expected_version: None,
+        request_fingerprint: fingerprint(seed),
+        accepted_at: at(0),
+    });
+    commit
+}
+
+fn mkdir_terminal(text: &str, uncertain: bool) -> OwnedCommit {
+    let mut commit = create_session("unused");
+    commit.state = None;
+    commit.origin_epoch = None;
+    let status = if uncertain {
+        CommandStatus::Uncertain
+    } else {
+        CommandStatus::Completed
+    };
+    let result = if uncertain {
+        None
+    } else {
+        Some(CommandResult::from_json_text(r#"{"created":true}"#).expect("result"))
+    };
+    let error = if uncertain {
+        Some(
+            PublicError::coded(
+                "command.uncertain",
+                "Directory result could not be confirmed",
+                false,
+            )
+            .expect("error"),
+        )
+    } else {
+        None
+    };
+    commit.command_terminal = Some(
+        CommandTerminalRecord::try_new(status, Some(at(1)), None, result, error).expect("terminal"),
+    );
+    let mut terminal_event = event(
+        EventKind::Structured,
+        if uncertain {
+            "command.uncertain"
+        } else {
+            "command.completed"
+        },
+        &format!(r#"{{"requestId":"{text}"}}"#),
+        Some(request(text)),
+    );
+    terminal_event.origin = EventOrigin::Device;
+    commit.events.push(terminal_event);
+    commit
+}
+
+#[tokio::test]
+async fn workspace_mkdir_acceptance_is_atomic_idempotent_and_has_no_session_rows() {
+    let dir = temp_dir("mkdir-acceptance");
+    let store = store(&dir).await;
+    let first = mkdir_acceptance(actor(), REQUEST, "same");
+    let second = first.clone();
+    let (a, b) = tokio::join!(store.commit(first), store.commit(second));
+    let a = a.expect("first");
+    let b = b.expect("second");
+    assert_ne!(
+        a.replayed.is_some(),
+        b.replayed.is_some(),
+        "exactly one executor"
+    );
+    assert!(matches!(
+        store
+            .commit(mkdir_acceptance(actor(), REQUEST, "different"))
+            .await,
+        Err(PortError::Conflict(ConflictKind::IdempotencyConflict))
+    ));
+    store
+        .commit_workspace_mkdir_terminal(&actor(), mkdir_terminal(REQUEST, false))
+        .await
+        .expect("terminal");
+    let record = store
+        .find_request(&request(REQUEST), &actor())
+        .await
+        .expect("read")
+        .expect("record");
+    assert_eq!(record.status(), CommandStatus::Completed);
+    assert_eq!(
+        record.result().map(CommandResult::as_str),
+        Some(r#"{"created":true}"#)
+    );
+    assert!(record.session().is_none());
+    let replay = store
+        .commit_workspace_mkdir_terminal(&actor(), mkdir_terminal(REQUEST, false))
+        .await
+        .expect("terminal replay");
+    assert!(replay.appended.is_empty());
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    for table in ["owned_session", "owned_directory"] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(count, 0);
+    }
+    let events: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM owned_event WHERE session_id IS NULL")
+            .fetch_one(&pool)
+            .await
+            .expect("global events");
+    assert_eq!(events, 1);
+}
+
+#[tokio::test]
+async fn workspace_mkdir_same_request_across_actors_settles_and_recovers_after_reopen() {
+    let dir = temp_dir("mkdir-scoped-terminal");
+    let first_actor = actor();
+    let second_actor = Actor::Device {
+        device: acp_core::model::DeviceId::new("66666666-6666-4666-8666-666666666666")
+            .expect("device"),
+    };
+    {
+        let store = store(&dir).await;
+        for text in [REQUEST, REQUEST_OTHER] {
+            for actor in [&first_actor, &second_actor] {
+                store
+                    .commit(mkdir_acceptance(actor.clone(), text, "same"))
+                    .await
+                    .expect("accept");
+            }
+        }
+        for actor in [&first_actor, &second_actor] {
+            store
+                .commit_workspace_mkdir_terminal(actor, mkdir_terminal(REQUEST, false))
+                .await
+                .expect("independent completion");
+        }
+    }
+    let reopened = store(&dir).await;
+    let unsettled = reopened
+        .unsettled_commands(ReplayLimit::new(32))
+        .await
+        .expect("unsettled");
+    assert_eq!(unsettled.len(), 2);
+    for record in unsettled {
+        reopened
+            .commit_workspace_mkdir_terminal(record.actor(), mkdir_terminal(REQUEST_OTHER, true))
+            .await
+            .expect("scoped recovery");
+    }
+    for actor in [&first_actor, &second_actor] {
+        assert_eq!(
+            reopened
+                .find_request(&request(REQUEST), actor)
+                .await
+                .expect("read")
+                .expect("command")
+                .status(),
+            CommandStatus::Completed
+        );
+        assert_eq!(
+            reopened
+                .find_request(&request(REQUEST_OTHER), actor)
+                .await
+                .expect("read")
+                .expect("command")
+                .status(),
+            CommandStatus::Uncertain
+        );
+    }
+    let view = reopened.read_view().await.expect("view");
+    let replay = view
+        .sync_replay(None, ReplayLimit::new(32))
+        .await
+        .expect("identity-preserving replay");
+    assert_eq!(replay.events.len(), 4);
+    for event in &replay.events {
+        let request = event.causation.as_ref().expect("causation");
+        let actor = Actor::Device {
+            device: event.origin_device_id.clone().expect("device origin"),
+        };
+        let command = reopened
+            .find_request(request, &actor)
+            .await
+            .expect("command lookup")
+            .expect("command");
+        assert_eq!(command.terminal_event(), Some(&event.event.id));
+    }
+}

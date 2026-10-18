@@ -136,7 +136,7 @@ function uniqueSuffixOf(
   return null;
 }
 
-/** 空态：本机没有任何目录，或目录存在但都没有会话。 */
+/** 空态：还没有可用的目录，或目录存在但都没有会话。 */
 export type DirectoryEmptyState = "no_directories" | "directories_without_sessions";
 
 /** 目录列表的整体状态：可直接渲染，两种空态可区分。 */

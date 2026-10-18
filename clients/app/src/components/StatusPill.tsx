@@ -4,7 +4,7 @@
  * 消费 `src/domain/` 的 `SessionStateView`，**不**接收任何协议字段。
  *
  * 迁移到 RNW 原语（`design.md` D1）：`Text` + `StyleSheet`，配色取自主题 token。
- * `data-session-state` 与 `LABEL_BY_STATE` 词表都**不变**——前者是 e2e 的机器证据，
+ * `data-session-state` 与 `SESSION_STATE_LABEL` 词表都**不变**——前者是 e2e 的机器证据，
  * 后者是对外契约。
  */
 
@@ -15,8 +15,13 @@ import type { SessionStateView } from "../domain/session-summary";
 import type { ColorToken, Palette } from "./theme";
 import { StyleSheet, Text, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
 
-/** 状态 → 展示文案的静态词表。 */
-const LABEL_BY_STATE: Record<SessionStateView, string> = {
+/**
+ * 状态 → 展示文案的静态词表。
+ *
+ * 导出给目录页的会话行使用：那里按原型呈现**纯文字**状态词（`.stword`），不能为了复用
+ * 一份文案就再抄一张表；胶囊与本行共用同一份词表，新增状态时两处都不会漂移。
+ */
+export const SESSION_STATE_LABEL: Record<SessionStateView, string> = {
   idle: "空闲",
   queued: "排队中",
   running: "运行中",
@@ -30,7 +35,7 @@ const LABEL_BY_STATE: Record<SessionStateView, string> = {
  * 状态 → 胶囊配色（前景 token / 背景 token）。
  *
  * 键取自同一个 `SessionStateView` 联合，因此新增状态时这里会编译不过——配色不会与
- * `LABEL_BY_STATE` 词表漂移。映射的是**呈现**（哪种状态用哪种底色），不改变状态语义，
+ * `SESSION_STATE_LABEL` 词表漂移。映射的是**呈现**（哪种状态用哪种底色），不改变状态语义，
  * 也不参与任何判定。
  */
 const TONE_BY_STATE: Record<SessionStateView, { readonly fg: ColorToken; readonly bg: ColorToken }> = {
@@ -98,7 +103,7 @@ export interface StatusPillProps {
 /**
  * 渲染一个状态徽标。
  *
- * 文案仍是 `LABEL_BY_STATE` 的那七个词，`data-session-state` 仍是**状态标识**（不是文案）：
+ * 文案仍是 `SESSION_STATE_LABEL` 的那七个词，`data-session-state` 仍是**状态标识**（不是文案）：
  * 两处都不能被这块胶囊的样式改动碰到。
  */
 export function StatusPill({ state }: StatusPillProps): ReactElement {
@@ -107,7 +112,7 @@ export function StatusPill({ state }: StatusPillProps): ReactElement {
 
   return (
     <Text style={[styles.pill, styles[STYLE_KEY_BY_STATE[state]]]} dataSet={{ sessionState: state }}>
-      {LABEL_BY_STATE[state]}
+      {SESSION_STATE_LABEL[state]}
     </Text>
   );
 }

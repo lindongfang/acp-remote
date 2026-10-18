@@ -1590,7 +1590,7 @@ function newSessionSheet(){
       '</span></span></div>' +
       '<div class="drow"><span class="dk">路径</span><span class="dv mono">'+esc(path||"—")+'</span></div>' +
       '<div class="hint">点「选择文件夹」浏览这台电脑上的目录并选中一层；也可以在里面新建文件夹——' +
-      '新建出来的目录，创建会话时会先在电脑上建它。</div>' +
+      '点击新建立即创建目录；取消会话不会删除它。</div>' +
     '</div>' +
     '<div id="shDirNotice">'+dirBranchNotice(path)+'</div>';
   }
@@ -1936,7 +1936,7 @@ window.addEventListener("popstate", function(){
 
 /* ============ 「选择文件夹」弹窗（顶部入口用） ============ */
 /* 浏览远端节点上的目录来选：面包屑 + 这一层的子目录 + 上一级；也可以在当前位置新建文件夹
-   （新建的文件夹在创建会话时才真的建，所以走「会先新建」那一支）。 */
+   （先在当前位置新建，再进入子目录继续新建，最后单独选择）。 */
 function openDirPicker(){
   A.dirPickOpen = true; A.pickKind = "existing"; A.newFolderOpen = false; A.newFolderName = "";
   A.browsePath = (isAbsPath(A.newDir) && isBrowsable(A.newDir)) ? normPath(A.newDir) : "";
@@ -1965,10 +1965,10 @@ function paintDirPicker(){
   /* 新建文件夹：只有进了某个盘之后才能建 */
   $("dpNewRow").innerHTML = atComputer ? '' : (A.newFolderOpen
     ? '<div class="dpnew"><input id="dpNewName" type="text" value="'+esc(A.newFolderName)+'" placeholder="新文件夹的名字" />' +
-      '<button class="btn sm primary" id="dpNewOk">新建并选择</button>' +
+      '<button class="btn sm primary" id="dpNewOk">新建</button>' +
       '<button class="btn sm" id="dpNewCancel">取消</button></div>'
     : '<button class="diropt other" data-newfolder><span class="dn">＋ 新建文件夹…</span>' +
-      '<span class="da">在这里新建一个文件夹；创建会话时会先在电脑上建它</span></button>');
+      '<span class="da">立即在电脑上新建一层目录；取消会话不会删除它</span></button>');
   $("dpCur").textContent = atComputer ? "此电脑（先选一个盘）" : ("当前位置：" + here);
   $("dpOk").disabled = atComputer;   /* 此电脑本身不是一个目录，不能选 */
   bindDirPicker();
@@ -2004,8 +2004,10 @@ function bindDirPicker(){
 function createFolderAndPick(){
   var name = (A.newFolderName||"").trim();
   if(!name || /[\\\/:]/.test(name)){ toast("文件夹名字不能为空，也不能含 \\ / :"); return; }
-  A.pickKind = "create";
-  applyDirPicker(joinPath(A.browsePath, name));
+  var created = joinPath(A.browsePath, name);
+    if(NODE_PATHS.some(function(p){ return p.toLowerCase()===created.toLowerCase(); })){ toast("同名目录已存在"); return; }
+    NODE_PATHS.push(created); A.newFolderName=""; A.newFolderOpen=false; A.browsePath=created;
+    paintDirPicker(); toast("目录已创建并进入，可继续新建下一级");
 }
 function applyDirPicker(path){
   var p = normPath(path);

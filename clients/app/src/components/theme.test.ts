@@ -104,7 +104,7 @@ describe("尺度 token（断点 / 字重 / 层级 / 动效）", () => {
   it("每类尺度各有自己的键清单，且键集合与取值都是确定的", () => {
     expect(Object.keys(breakpoints)).toEqual(["wide"]);
     expect(Object.keys(fontWeight).sort()).toEqual(["bold", "medium", "regular", "value"]);
-    expect(Object.keys(zIndex).sort()).toEqual(["drawer", "scrim", "toast", "topBar"]);
+    expect(Object.keys(zIndex).sort()).toEqual(["directoryPicker", "drawer", "modal", "scrim", "toast", "topBar"]);
     expect(Object.keys(motion).sort()).toEqual(["base", "drawer", "fast", "pulse"]);
 
     // 取值本身：断点为正数、层级按原型递增、动效时长为正、字重是原型用到的那三档。

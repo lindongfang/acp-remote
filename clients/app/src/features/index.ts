@@ -105,6 +105,7 @@ export {
   buildDirectoryPageModel,
   buildSessionRowsByDirectoryId,
   correctPageNumber,
+  filterSessionsForDirectory,
   formatRelativeTime,
 } from "./directory-model";
 

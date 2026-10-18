@@ -34,13 +34,14 @@ use crate::model::{
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
-    DeliveryIndexEntry, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryListing,
-    ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, ImportedSessionQuery,
+    DeliveryIndexEntry, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryCreator,
+    DirectoryListing, ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, ImportedSessionQuery,
     ImportedSessionRecord, LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite,
     PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
     PairingWrite, PendingAudit, PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
     RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionQuery, SessionStore, StoreHealth,
-    SyncReplaySlice, TrustRecordRef, TrustStore, WriteContext,
+    SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceMkdirAdmission, WorkspaceMkdirExecution,
+    WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -249,6 +250,7 @@ pub struct UseCases {
     /// 适配器的测试装配），加一个必填字段会让它们全部编译失败；而目录浏览是本机文件系统事实，
     /// 默认实现不依赖任何外部 crate（§2 的依赖 allow-list 不变），因此默认可用、按需替换。
     browser: Arc<dyn DirectoryBrowser>,
+    creator: Arc<dyn DirectoryCreator>,
 }
 
 /// [`UseCases`] 的依赖。
@@ -279,6 +281,7 @@ impl UseCases {
             clock: deps.clock,
             ids: deps.ids,
             browser: Arc::new(SystemDirectories),
+            creator: Arc::new(SystemDirectories),
         }
     }
 
@@ -288,6 +291,103 @@ impl UseCases {
     /// [`UseCases::new`] 的「一次装配」语义一致（`&mut self` 的 setter 在 `Arc` 之后就用不了了）。
     pub fn with_directory_browser(self, browser: Arc<dyn DirectoryBrowser>) -> Self {
         Self { browser, ..self }
+    }
+
+    /// Replace directory creation for platform adapters or deterministic tests.
+    pub fn with_directory_creator(self, creator: Arc<dyn DirectoryCreator>) -> Self {
+        Self { creator, ..self }
+    }
+
+    /// Persist acceptance before touching the filesystem. Only the first caller receives a ticket.
+    pub async fn admit_workspace_mkdir(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        fingerprint: &Digest,
+        parent_path: &str,
+        name: &str,
+    ) -> Result<WorkspaceMkdirAdmission, PortError> {
+        self.authorize_workspace_mkdir(actor, request).await?;
+        mkdir_target(parent_path, name)?;
+        match self
+            .broker
+            .admit_workspace_mkdir(actor, request, fingerprint)
+            .await?
+        {
+            Some(record) if record.status() == CommandStatus::Accepted => {
+                Ok(WorkspaceMkdirAdmission::InFlight)
+            }
+            Some(record) => Ok(WorkspaceMkdirAdmission::Settled(Box::new(record))),
+            None => Ok(WorkspaceMkdirAdmission::Accepted(WorkspaceMkdirExecution {
+                actor: actor.clone(),
+                request: request.clone(),
+                parent: parent_path.to_owned(),
+                name: name.to_owned(),
+            })),
+        }
+    }
+
+    /// Consume the one-time ticket and persist its terminal event before publication.
+    pub async fn execute_workspace_mkdir(
+        &self,
+        execution: WorkspaceMkdirExecution,
+    ) -> Result<(), PortError> {
+        let WorkspaceMkdirExecution {
+            actor,
+            request,
+            parent,
+            name,
+        } = execution;
+        let operation = match self.authorize_workspace_mkdir(&actor, &request).await {
+            Ok(()) => self.creator.create_directory(&parent, &name).await,
+            Err(error) => Err(error),
+        };
+        // No adapter-provided error text may leak a host path into the global command log.
+        let failure = operation
+            .err()
+            .map(|error| {
+                let code = if matches!(error, PortError::InvalidRequest(_)) {
+                    "protocol.schema_invalid"
+                } else {
+                    "internal.unavailable"
+                };
+                PublicError::coded(
+                    code,
+                    "Directory could not be created",
+                    code == "internal.unavailable",
+                )
+                .map_err(PortError::from)
+            })
+            .transpose()?;
+        self.broker
+            .settle_workspace_mkdir(&actor, &request, failure)
+            .await
+    }
+
+    async fn authorize_workspace_mkdir(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+    ) -> Result<(), PortError> {
+        self.broker
+            .authorize(actor, "workspace.mkdir", None, request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        match actor {
+            Actor::Device { device } => {
+                let active = self
+                    .trust
+                    .device(device)
+                    .await?
+                    .is_some_and(|record| record.state() == crate::model::DeviceState::Active);
+                if !active {
+                    return Err(PortError::InvalidRequest("authorization.scope_denied"));
+                }
+            }
+            Actor::LocalCli => {}
+            _ => return Err(PortError::InvalidRequest("authorization.scope_denied")),
+        }
+        Ok(())
     }
 
     // ---------------------------------------------------------------------------------------
@@ -2094,6 +2194,77 @@ fn browse_parent(path: &str) -> Result<String, PortError> {
     Ok(delivered_path(text))
 }
 
+/// Pure shape validation: no reads, canonicalization or directory creation here.
+fn mkdir_target(parent: &str, name: &str) -> Result<std::path::PathBuf, PortError> {
+    let invalid = || PortError::InvalidRequest("invalid directory creation input");
+    if parent.chars().count() > 4096
+        || parent.contains('\0')
+        || name.is_empty()
+        || name.chars().count() > 255
+        || matches!(name, "." | "..")
+        || name.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0'))
+    {
+        return Err(invalid());
+    }
+    let parent = shape_checked_client_path(parent)?;
+    if cfg!(windows) {
+        let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+        let reserved = matches!(
+            stem.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        ) || stem
+            .strip_prefix("COM")
+            .or_else(|| stem.strip_prefix("LPT"))
+            .is_some_and(|tail| {
+                matches!(
+                    tail,
+                    "1" | "2"
+                        | "3"
+                        | "4"
+                        | "5"
+                        | "6"
+                        | "7"
+                        | "8"
+                        | "9"
+                        | "\u{b9}"
+                        | "\u{b2}"
+                        | "\u{b3}"
+                )
+            });
+        if reserved
+            || name.ends_with(['.', ' '])
+            || name
+                .chars()
+                .any(|c| c < ' ' || matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
+        {
+            return Err(invalid());
+        }
+    }
+    let target = parent.join(name);
+    if target
+        .to_str()
+        .is_none_or(|path| path.chars().count() > 4096)
+    {
+        return Err(invalid());
+    }
+    Ok(target)
+}
+
+#[async_trait::async_trait]
+impl DirectoryCreator for SystemDirectories {
+    async fn create_directory(&self, parent: &str, name: &str) -> Result<(), PortError> {
+        mkdir_target(parent, name)?;
+        let io = || PortError::Unavailable(UnavailableKind::IoError);
+        let parent = std::fs::canonicalize(parent).map_err(|_| io())?;
+        if !parent.is_dir() {
+            return Err(io());
+        }
+        let canonical = parent.to_str().ok_or_else(io)?;
+        let target = mkdir_target(canonical, name)?;
+        std::fs::create_dir(target).map_err(|_| io())
+    }
+}
+
 /// 浏览结果的有序、有界投影（纯函数，便于单独断言顺序与截断口径）。
 ///
 /// `requested_parent` 是**请求父路径原文**的逐字回显（`None` = 根列表），原样写进结果的 `path`：规范化
@@ -2139,9 +2310,10 @@ fn project_browse(
 /// 随 core 提供的本机文件系统目录浏览实现（[`DirectoryBrowser`] 的默认实现）。
 ///
 /// 它是**默认值**而不是唯一实现：组合根可以用 [`UseCases::with_directory_browser`] 换掉（另一份实现或
-/// 测试替身）。三处约束与端口文档逐条对应：
+/// 测试替身）。以下约束以端口与默认实现文档为准：
 ///
 /// - 只列**目录**（[`std::fs::DirEntry::file_type`] 判定，不跟随符号链接；文件与其它类型一律跳过）；
+/// - Windows 跳过带隐藏或系统属性的子目录；这是浏览可见性规则，不改变创建目录的授权与校验；
 /// - 只读（不创建、不删除、不写任何缓存）；
 /// - 不可读的一层与不存在的一层对调用方是同一类事实（`Unavailable(IoError)`），不回退到父层。
 ///
@@ -2184,6 +2356,16 @@ impl DirectoryBrowser for SystemDirectories {
             let file_type = entry.file_type().map_err(|_| io())?;
             if !file_type.is_dir() {
                 continue;
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+
+                const HIDDEN_OR_SYSTEM: u32 = 0x0000_0002 | 0x0000_0004;
+                let attributes = entry.metadata().map_err(|_| io())?.file_attributes();
+                if attributes & HIDDEN_OR_SYSTEM != 0 {
+                    continue;
+                }
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             let path = entry.path().to_string_lossy().into_owned();
@@ -4871,6 +5053,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&*root);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn workspace_browse_omits_hidden_and_system_directories_by_attributes() {
+        use std::os::windows::fs::MetadataExt;
+
+        let fixture = fixture();
+        let root = temp_dir(&format!("acpr-browse-attributes-{}", std::process::id()));
+        for name in [
+            "visible",
+            "hidden",
+            "system",
+            "both",
+            ".project",
+            "$RECYCLE.BIN",
+        ] {
+            std::fs::create_dir(root.join(name)).expect("test directory");
+        }
+        for (name, flags, mask) in [
+            ("hidden", vec!["+H"], 0x2),
+            ("system", vec!["+S"], 0x4),
+            ("both", vec!["+H", "+S"], 0x6),
+        ] {
+            let result = std::process::Command::new("attrib.exe")
+                .args(flags)
+                .arg(root.join(name))
+                .output()
+                .expect("set test directory attributes");
+            assert!(result.status.success(), "attrib must succeed");
+            assert_eq!(
+                std::fs::metadata(root.join(name))
+                    .expect("metadata")
+                    .file_attributes()
+                    & mask,
+                mask,
+                "test attributes must actually be set"
+            );
+        }
+        let result = block_on(
+            fixture
+                .use_cases
+                .workspace_browse(&Actor::LocalCli, Some(root.to_str().expect("path"))),
+        )
+        .expect("browse");
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["$RECYCLE.BIN", ".project", "visible"],
+            "visibility follows Windows attributes, not a name blacklist or dot prefix"
+        );
+        assert!(!result.truncated);
+    }
+
     /// 条目按名称以确定的顺序排列（端口给出的顺序不影响结果），并标记「是否已登记」。
     #[test]
     fn workspace_browse_sorts_entries_and_marks_registered_directories() {
@@ -6335,6 +6572,324 @@ mod tests {
         assert!(
             fixture.world.write_audits.lock().expect("lock").is_empty(),
             "没有任何一条被拒路径可以产生写集审计"
+        );
+    }
+    fn mkdir_admit(
+        fixture: &Fixture,
+        n: u64,
+        parent: &std::path::Path,
+        name: &str,
+    ) -> WorkspaceMkdirExecution {
+        let request = RequestId::new(&uuid_text(n)).expect("request");
+        match block_on(fixture.use_cases.admit_workspace_mkdir(
+            &Actor::LocalCli,
+            &request,
+            &digest('A'),
+            parent.to_str().expect("path"),
+            name,
+        ))
+        .expect("admit")
+        {
+            WorkspaceMkdirAdmission::Accepted(execution) => execution,
+            other => panic!("expected first acceptance: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mkdir_creates_three_levels_without_sessions_or_workspace_registration() {
+        let fixture = fixture();
+        let root = temp_dir(&format!("acpr-mkdir-levels-{}", std::process::id()));
+        let mut parent = root.to_path_buf();
+        let before = lock(&fixture.world.state).sessions.len();
+        for (n, name) in [(810, "project"), (811, "src"), (812, "api")] {
+            let execution = mkdir_admit(&fixture, n, &parent, name);
+            assert!(
+                !parent.join(name).exists(),
+                "acceptance is not filesystem execution"
+            );
+            block_on(fixture.use_cases.execute_workspace_mkdir(execution)).expect("execute");
+            parent.push(name);
+            assert!(parent.is_dir());
+            let record = fixture
+                .world
+                .command(&RequestId::new(&uuid_text(n)).expect("request"))
+                .expect("command");
+            assert_eq!(record.status(), CommandStatus::Completed);
+            assert_eq!(
+                record.result().map(crate::model::CommandResult::as_str),
+                Some(r#"{"created":true}"#)
+            );
+            assert!(record.session().is_none());
+        }
+        assert_eq!(lock(&fixture.world.state).sessions.len(), before);
+        assert!(lock(fixture.world.directories()).is_empty());
+        assert!(fixture.world.published_after_commit());
+        let state = lock(&fixture.world.state);
+        for event in &state.events {
+            assert!(event.session.is_none());
+            assert!(
+                !state.event_payloads[event.id.as_str()]
+                    .view
+                    .as_str()
+                    .contains("project")
+            );
+            assert!(
+                !state.event_payloads[event.id.as_str()]
+                    .view
+                    .as_str()
+                    .contains(root.to_str().expect("path"))
+            );
+        }
+    }
+
+    #[test]
+    fn mkdir_replay_conflict_and_crash_recovery_never_repeat_creation() {
+        let fixture = fixture();
+        let root = temp_dir(&format!("acpr-mkdir-replay-{}", std::process::id()));
+        let request = RequestId::new(&uuid_text(813)).expect("request");
+        let execution = mkdir_admit(&fixture, 813, &root, "created");
+        assert!(matches!(
+            block_on(fixture.use_cases.admit_workspace_mkdir(
+                &Actor::LocalCli,
+                &request,
+                &digest('A'),
+                root.to_str().expect("path"),
+                "created",
+            ))
+            .expect("replay"),
+            WorkspaceMkdirAdmission::InFlight
+        ));
+        assert!(matches!(
+            block_on(fixture.use_cases.admit_workspace_mkdir(
+                &Actor::LocalCli,
+                &request,
+                &digest('B'),
+                root.to_str().expect("path"),
+                "different",
+            )),
+            Err(PortError::Conflict(ConflictKind::IdempotencyConflict))
+        ));
+        drop(execution); // process stops after durable acceptance
+        block_on(
+            fixture
+                .use_cases
+                .recover_unsettled(&Actor::LocalCli, ReplayLimit::new(32)),
+        )
+        .expect("recover");
+        assert!(!root.join("created").exists());
+        assert_eq!(
+            fixture.world.command(&request).expect("command").status(),
+            CommandStatus::Uncertain
+        );
+        assert!(matches!(
+            block_on(fixture.use_cases.admit_workspace_mkdir(
+                &Actor::LocalCli,
+                &request,
+                &digest('A'),
+                root.to_str().expect("path"),
+                "created",
+            ))
+            .expect("replay"),
+            WorkspaceMkdirAdmission::Settled(_)
+        ));
+    }
+
+    #[test]
+    fn mkdir_store_failures_never_report_uncommitted_success() {
+        let fixture = fixture();
+        let root = temp_dir(&format!("acpr-mkdir-store-failure-{}", std::process::id()));
+        fixture.world.fail_next_commit();
+        let request = RequestId::new(&uuid_text(814)).expect("request");
+        assert!(
+            block_on(fixture.use_cases.admit_workspace_mkdir(
+                &Actor::LocalCli,
+                &request,
+                &digest('A'),
+                root.to_str().expect("path"),
+                "not-created",
+            ))
+            .is_err()
+        );
+        assert!(!root.join("not-created").exists());
+        let execution = mkdir_admit(&fixture, 815, &root, "survives");
+        fixture.world.fail_next_commit();
+        assert!(block_on(fixture.use_cases.execute_workspace_mkdir(execution)).is_err());
+        assert!(root.join("survives").is_dir());
+        assert_eq!(fixture.world.publish_count(), 0);
+        let request = RequestId::new(&uuid_text(815)).expect("request");
+        assert_eq!(
+            fixture.world.command(&request).expect("command").status(),
+            CommandStatus::Accepted
+        );
+        block_on(
+            fixture
+                .use_cases
+                .recover_unsettled(&Actor::LocalCli, ReplayLimit::new(32)),
+        )
+        .expect("recover");
+        assert_eq!(
+            fixture.world.command(&request).expect("command").status(),
+            CommandStatus::Uncertain
+        );
+        assert!(root.join("survives").is_dir());
+    }
+
+    #[test]
+    fn mkdir_invalid_inputs_are_rejected_before_admission_or_io() {
+        let fixture = fixture();
+        let root = temp_dir(&format!("acpr-mkdir-invalid-{}", std::process::id()));
+        for name in ["", ".", "..", "a/b", "a\\b", "C:folder", "nul\0byte"] {
+            let before = fixture.world.commit_count();
+            assert!(
+                block_on(fixture.use_cases.admit_workspace_mkdir(
+                    &Actor::LocalCli,
+                    &RequestId::new(&uuid_text(816)).expect("request"),
+                    &digest('A'),
+                    root.to_str().expect("path"),
+                    name,
+                ))
+                .is_err()
+            );
+            assert_eq!(fixture.world.commit_count(), before);
+        }
+        assert!(
+            block_on(
+                SystemDirectories
+                    .create_directory(root.join("missing").to_str().expect("path"), "child")
+            )
+            .is_err()
+        );
+        assert!(!root.join("missing").exists());
+        std::fs::write(root.join("file"), b"keep").expect("file");
+        assert!(
+            block_on(SystemDirectories.create_directory(root.to_str().expect("path"), "file"))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(root.join("file")).expect("original"), b"keep");
+        std::fs::create_dir(root.join("existing")).expect("dir");
+        assert!(
+            block_on(SystemDirectories.create_directory(root.to_str().expect("path"), "existing"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn mkdir_same_request_across_devices_completes_and_recovers_independently() {
+        let (fixture, trust) = fixture_with_device_trust();
+        let root = temp_dir(&format!("acpr-mkdir-actors-{}", std::process::id()));
+        let devices = [
+            DeviceId::new(&uuid_text(820)).expect("device"),
+            DeviceId::new(&uuid_text(821)).expect("device"),
+        ];
+        for device in &devices {
+            lock(&trust.devices).push(device_record(device, DeviceState::Active, None, None));
+        }
+        for (request_n, execute) in [(822, true), (823, false)] {
+            let request = RequestId::new(&uuid_text(request_n)).expect("request");
+            let mut tickets = Vec::new();
+            for (n, device) in devices.iter().enumerate() {
+                let actor = Actor::Device {
+                    device: device.clone(),
+                };
+                let name = format!("folder-{request_n}-{n}");
+                match block_on(fixture.use_cases.admit_workspace_mkdir(
+                    &actor,
+                    &request,
+                    &digest('A'),
+                    root.to_str().expect("path"),
+                    &name,
+                ))
+                .expect("admit")
+                {
+                    WorkspaceMkdirAdmission::Accepted(ticket) => tickets.push(ticket),
+                    other => panic!("expected accepted: {other:?}"),
+                }
+            }
+            for ticket in tickets {
+                if execute {
+                    block_on(fixture.use_cases.execute_workspace_mkdir(ticket)).expect("execute");
+                }
+            }
+            if !execute {
+                block_on(
+                    fixture
+                        .use_cases
+                        .recover_unsettled(&Actor::LocalCli, ReplayLimit::new(32)),
+                )
+                .expect("recover");
+            }
+            for device in &devices {
+                let record = block_on(fixture.use_cases.store.find_request(
+                    &request,
+                    &Actor::Device {
+                        device: device.clone(),
+                    },
+                ))
+                .expect("read")
+                .expect("record");
+                assert_eq!(
+                    record.status(),
+                    if execute {
+                        CommandStatus::Completed
+                    } else {
+                        CommandStatus::Uncertain
+                    }
+                );
+            }
+        }
+        let view = block_on(fixture.use_cases.store.read_view()).expect("view");
+        let replay = block_on(view.sync_replay(None, ReplayLimit::new(32)))
+            .expect("replay with exact device identity");
+        assert_eq!(replay.events.len(), 4);
+        for event in &replay.events {
+            let actor = Actor::Device {
+                device: event.origin_device_id.clone().expect("device"),
+            };
+            let record = block_on(
+                fixture
+                    .use_cases
+                    .store
+                    .find_request(event.causation.as_ref().expect("causation"), &actor),
+            )
+            .expect("read")
+            .expect("record");
+            assert_eq!(record.terminal_event(), Some(&event.event.id));
+        }
+    }
+
+    #[test]
+    fn mkdir_revocation_between_acceptance_and_execution_prevents_io() {
+        let (fixture, trust) = fixture_with_device_trust();
+        let root = temp_dir(&format!("acpr-mkdir-revoked-{}", std::process::id()));
+        let device = DeviceId::new(&uuid_text(824)).expect("device");
+        lock(&trust.devices).push(device_record(&device, DeviceState::Active, None, None));
+        let actor = Actor::Device {
+            device: device.clone(),
+        };
+        let request = RequestId::new(&uuid_text(825)).expect("request");
+        let ticket = match block_on(fixture.use_cases.admit_workspace_mkdir(
+            &actor,
+            &request,
+            &digest('A'),
+            root.to_str().expect("path"),
+            "blocked",
+        ))
+        .expect("admit")
+        {
+            WorkspaceMkdirAdmission::Accepted(ticket) => ticket,
+            other => panic!("expected acceptance: {other:?}"),
+        };
+        lock(&trust.devices)[0] = device_record(
+            &device,
+            DeviceState::Revoked,
+            None,
+            Some(crate::broker::test_support::ts(31)),
+        );
+        block_on(fixture.use_cases.execute_workspace_mkdir(ticket)).expect("settle revoked");
+        assert!(!root.join("blocked").exists());
+        assert_eq!(
+            fixture.world.command(&request).expect("record").status(),
+            CommandStatus::Failed
         );
     }
 }

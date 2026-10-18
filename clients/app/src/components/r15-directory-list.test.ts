@@ -41,7 +41,12 @@ import { DirectoryList } from "./DirectoryList";
 import { UNTITLED_SESSION_LABEL } from "../domain";
 import type { SessionStateView } from "../domain/session-summary";
 import { DIRECTORY_EMPTY_COPY, buildDirectoryPageModel } from "../features/directory-model";
-import type { DirectoryDetailModel, DirectoryPageModel, SessionRowModel } from "../features/directory-model";
+import type {
+  DirectoryDetailModel,
+  DirectoryFilter,
+  DirectoryPageModel,
+  SessionRowModel,
+} from "../features/directory-model";
 import { WORKSPACES, WORKSPACES_WITH_PATHS, resources, session, storeWith } from "../features/testing/fixtures";
 import type { WorkspaceCatalogEntry } from "../protocol";
 
@@ -63,6 +68,7 @@ function renderDirectoryList(
   options: {
     readonly sessionsByDirectoryId?: ReadonlyMap<string, readonly SessionRowModel[]>;
     readonly query?: string;
+    readonly filter?: DirectoryFilter;
     /** 顶部创建入口（工具条右端）的回调；**缺省不传** = 该入口不呈现（既有调用点的样子）。 */
     readonly onCreateSessionToBrowse?: () => void;
   } = {},
@@ -73,7 +79,7 @@ function renderDirectoryList(
       onOpenDirectory: () => undefined,
       query: options.query ?? "",
       onQueryChange: () => undefined,
-      filter: "all",
+      filter: options.filter ?? "all",
       onFilterChange: () => undefined,
       onOpenSession: () => undefined,
       onCreateSession: () => undefined,
@@ -270,7 +276,7 @@ describe("R15 断连时目录仍可渲染", () => {
 
     expect(model.kind === "loading" ? null : model.contentOrigin).toBe("last_sync");
     expect(html).toContain('data-content-origin="last_sync"');
-    expect(html).toContain("内容来自上次同步");
+    expect(html).not.toContain("内容来自上次同步");
     // 反例：断连时不渲染目录项，这里会是空列表，断言变红。
     expect(html).toContain('data-directory-id="work-api"');
   });
@@ -322,7 +328,7 @@ describe("R15 两种空态可区分", () => {
     const html = renderDirectoryList(
       buildDirectoryPageModel({ resources: null, connection: "online", lastSyncedAtMs: null }),
     );
-    // 反例：若无快照时渲染「本机没有任何目录」，这里会出现 data-empty-state，断言变红。
+    // 反例：若无快照时渲染「还没有可用的目录」，这里会出现 data-empty-state，断言变红。
     expect(html).toContain('data-directory-state="loading"');
     expect(html).not.toContain("data-empty-state");
   });
@@ -443,25 +449,27 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     expect(renderSingleSessionRow("idle", "有标题的会话")).toContain("有标题的会话");
   });
 
-  it("内联行只来自快照：不受目录页自身的查询/筛选影响，且搜索/筛选不发任何命令", () => {
+  it("内联行按目录页的查询/筛选过滤；数据源本身不变，且不发任何命令", () => {
     const { store, gateway } = storeWith({
       resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
     });
     const before = [...(store.directoryPageSessions().get("work-api") ?? [])].map((row) => row.id);
 
-    // 目录页的查询/筛选都是 store 的 UI 状态，改它们**只在**目录页模型上生效。
-    // 查询词命中两个目录的展示名 `api`，再叠加 running 就只剩 work-api。
+    // 目录页的查询/筛选是 store 的 UI 状态：选择器本身仍给出该目录的全部行，
+    // 可见性由展示层按原型 `passFilter` + `passQuery` 判定。
     store.setDirectoryQuery("api");
     store.setDirectoryFilter("running");
-
-    // 反例：若内联行也过一遍目录页的查询/筛选（或借道别的选择器），这里会被滤掉。
     expect([...(store.directoryPageSessions().get("work-api") ?? [])].map((row) => row.id)).toEqual(before);
 
-    // 对照：目录页**模型**确实吃到了那两个 UI 状态——否则上一条断言可能只是「什么都没发生」。
-    const page = store.directoryPage();
-    expect(page.kind === "ready" ? page.directories.map((directory) => directory.directoryId) : []).toEqual([
-      "work-api",
-    ]);
+    // 查询 "api" 命中两个目录的展示名，running 只留下 work-api 的 running 会话：
+    // 同一张卡片里 waiting_permission / idle 的行必须被隐藏。
+    const html = renderDirectoryList(store.directoryPage(), {
+      sessionsByDirectoryId: store.directoryPageSessions(),
+      query: "api",
+      filter: "running",
+    });
+    expect(html).toContain('data-session-id="aaaaaaaa-0000-4000-8000-000000000001"');
+    expect(html).not.toContain('data-session-id="aaaaaaaa-0000-4000-8000-000000000002"');
 
     // spec「搜索与筛选不依赖在线查询」：这两个 UI 状态不派发任何命令。
     expect(gateway.dispatches).toHaveLength(0);
@@ -513,6 +521,8 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     // 超过上限时必须有进入详情页的入口，否则「更早的会话」无处可看；这里断言的是**查看全部**
     // 这一个取值（`open-directory` 归展示名入口，两者必须可区分）。
     expect(html).toContain('data-action="open-directory-all"');
+    // 原型 `.footline`：卡体底部再给一次同样的入口，使用独立动作取值以免两处被数成一个控件。
+    expect(html).toContain('data-action="open-directory-all-footer"');
   });
 
   it("对照：0 会话的目录项不呈现「查看全部」，但仍有展示名入口（与会话数无关）", () => {
@@ -575,7 +585,7 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     expect(withClock).toContain('data-content-origin="last_sync"');
     // 精确值经属性进 DOM；展示文本是 **UTC 固定切片**，因此可以逐字断言（不随机器时区漂移）。
     expect(withClock).toContain('data-synced-at="1700000000000"');
-    expect(withClock).toContain("已同步 2023-11-14 22:13 UTC");
+    expect(withClock).not.toContain("已同步");
 
     // 从未成功替换过快照：`lastSyncedAtMs` 为 null → 不得出现任何同步时间。
     const never = buildDirectoryPageModel({
@@ -622,9 +632,10 @@ describe("R15 目录页工具条右端的顶部创建入口", () => {
     const empty = renderDirectoryList(emptyModel, { onCreateSessionToBrowse: () => undefined });
     expect(empty).toContain('data-empty-state="no_directories"');
     expect(empty).toContain('data-action="create-session-browse"');
-    // 空态下仍然没有可搜索/可筛选的内容：搜索框与筛选段不因为这个入口而出现。
-    expect(empty).not.toContain('data-directory-search="true"');
-    expect(empty).not.toContain('data-segment="筛选"');
+    // 工具条在所有状态都保留搜索、筛选与右上角创建入口；空态块里另有常规尺寸的同一入口。
+    expect(empty).toContain('data-directory-search="true"');
+    expect(empty).toContain('data-segment="筛选"');
+    expect(empty).toContain('data-directory-toolbar="true"');
 
     // 从未同步过：还没拿到快照，但入口照旧在（它是页面上的创建路径）。
     const loading = renderDirectoryList(
@@ -685,7 +696,7 @@ describe("R15 目录详情：链接失效与「目录存在但无会话」是两
     const html = renderDirectoryDetail(store.directoryDetail("work-api"));
 
     expect(html).toContain('data-directory-sessions="empty"');
-    expect(html).toContain("这个目录里还没有会话");
+    expect(html).toContain("这个目录还没有会话");
     // 反例：若详情模型把「有目录但无会话」当成目录标识失效，这里渲染的是告警，断言变红。
     expect(html).not.toContain('data-directory-detail-state="unknown_directory"');
     expect(html).not.toContain("可能已被删除");

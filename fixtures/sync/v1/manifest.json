@@ -996,6 +996,80 @@
       "schemaPointer": "#/$defs/file.changed",
       "valid": false,
       "expectedKeyword": "minItems"
+    },
+    {
+      "fixture": "valid/command-workspace-mkdir.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-workspace-mkdir-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-workspace-mkdir-accepted.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-workspace-mkdir-unknown-key.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/command-workspace-mkdir-missing-parent.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/command-workspace-mkdir-empty-name.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "minLength"
+    },
+    {
+      "fixture": "invalid/command-workspace-mkdir-nested-name.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "invalid/command-workspace-mkdir-parent-name.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "invalid/command-workspace-mkdir-colon-name.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "invalid/command-workspace-mkdir-nul-name.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "invalid/command-result-workspace-mkdir-false.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "const"
+    },
+    {
+      "fixture": "invalid/command-result-workspace-mkdir-path.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "valid/command-result-workspace-mkdir-feature-required.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
     }
   ],
   "deviceQrVectors": [

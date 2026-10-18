@@ -57,16 +57,19 @@ pub enum CommandFamily {
     Approve,
     /// `session.create`。
     CreateSession,
+    /// 主机文件系统的一层目录创建。
+    CreateDirectory,
 }
 
 impl CommandFamily {
     /// 全部族（`of` 的取值域；每个族都必须至少覆盖一条命令，否则用例会红）。
-    pub const ALL: [CommandFamily; 5] = [
+    pub const ALL: [CommandFamily; 6] = [
         CommandFamily::Observe,
         CommandFamily::Interact,
         CommandFamily::ConfigureSession,
         CommandFamily::Approve,
         CommandFamily::CreateSession,
+        CommandFamily::CreateDirectory,
     ];
 
     /// 该命令所属的族（`CommandName` 是闭合词表，因此每条命令**恰好**落进一个族：`match` 的穷尽性
@@ -87,6 +90,7 @@ impl CommandFamily {
             }
             CommandName::PermissionResolve => CommandFamily::Approve,
             CommandName::SessionCreate => CommandFamily::CreateSession,
+            CommandName::WorkspaceMkdir => CommandFamily::CreateDirectory,
         }
     }
 
@@ -98,6 +102,7 @@ impl CommandFamily {
             CommandFamily::ConfigureSession => "configure-session",
             CommandFamily::Approve => "approve",
             CommandFamily::CreateSession => "create-session",
+            CommandFamily::CreateDirectory => "create-directory",
         }
     }
 }

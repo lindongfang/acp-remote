@@ -1,6 +1,6 @@
 # ADR-0009：把「已登记目录路径」与「节点目录浏览」纳入已认证设备能力面
 
-- 状态：Accepted
+- 状态：Accepted（独立建目录限制部分由 [ADR-0010](0010-immediate-workspace-directory-creation.md) 取代；其他决定保持有效）
 - 日期：2026-10-17
 - 影响范围：信任边界与数据分类（`SECURITY_DESIGN.md` §3/§8/§10.2/§10.3/§12.3/§19）、产品边界与同步策略（`INITIAL_DESIGN.md` §2/§3.3/§8）、Sync wire（`SYNC_PROTOCOL.md` §5.2/§9/§11.5/§14）、feature 词表（`compatibility/features/v1/features.json`）、命令词表（`compatibility/commands/v1/commands.json`）、`schemas/sync/v1/`
 

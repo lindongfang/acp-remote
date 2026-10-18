@@ -6,7 +6,7 @@
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它 `transport`
 //! 含 `node_link` 的 13 条命令的镜像（顺序与该 registry 一致，即两个面共有的 12 条之后多出只经
-//! Node Link 接受的 `session.resume`；Sync 面共接受 13 条，比本镜像多出只走 Sync 的 `workspace.browse`；
+//! Node Link 接受的 `session.resume`；Sync 面共接受 14 条，比本镜像多出只走 Sync 的 `workspace.browse` / `workspace.mkdir`；
 //! `session.create` 两个面同名，但 payload 不同——本面是 `{ agentId, directoryId }`，Sync 面是
 //! `{ agentId, directoryId 或 workspacePath（恰好一个） }`，见 `docs/SYNC_PROTOCOL.md` §11.5）。
 //!

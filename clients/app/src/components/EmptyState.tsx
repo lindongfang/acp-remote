@@ -1,7 +1,7 @@
 /**
  * 空态展示（共享展示原语）。
  *
- * `pwa-web-client` 的「两种空态可区分」要求「目录存在但无会话」与「本机没有任何目录」
+ * `pwa-web-client` 的「两种空态可区分」要求「目录存在但无会话」与「还没有可用的目录」
  * 在文案与操作指引上不同。本组件承载这个**区分**，文案由调用方（目录页）给出，
  * 因此两种空态无法被合并成一句话。
  *
@@ -9,11 +9,11 @@
  * 主题（`useTheme()` 选浅/深两套调色板）；`data-empty-state` 原样经 `dataSet` 进 DOM。
  */
 
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import type { TextProps } from "react-native";
 
 import type { Palette } from "./theme";
-import { StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import { StyleSheet, Text, View, fontFamily, fontSize, palettes, spacing, useTheme } from "./theme";
 
 export interface EmptyStateProps {
   /** 空态的种类标识；与 `src/domain/` 的 `DirectoryEmptyState` 对齐。 */
@@ -22,6 +22,11 @@ export interface EmptyStateProps {
   readonly title: string;
   /** 操作指引；两种空态必须给出不同内容。 */
   readonly guidance: string;
+  /**
+   * 空态块内的操作入口（原型 `nodirs` 把 `⊕ 新建` 画在说明块里）。
+   * 缺省不渲染；需要入口的调用方把它作为子节点传进来。
+   */
+  readonly action?: ReactNode;
 }
 
 /**
@@ -51,15 +56,23 @@ function buildStyles(colors: Palette) {
       borderWidth: 1,
       borderStyle: "dashed",
       borderColor: colors.line,
-      borderRadius: radius.md,
-      paddingVertical: spacing.xl,
+      borderRadius: 14,
+      // 原型 `.blank{padding:56px 24px}`。
+      paddingVertical: 56,
       paddingHorizontal: spacing.xl,
       gap: spacing.sm,
+    },
+    welcome: {
+      paddingVertical: 80,
+    },
+    action: {
+      marginTop: spacing.lg,
     },
     title: {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.lg,
+      lineHeight: 27.2,
       fontWeight: "600",
       textAlign: "center",
     },
@@ -67,6 +80,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
       textAlign: "center",
     },
   });
@@ -75,19 +89,20 @@ function buildStyles(colors: Palette) {
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
 /** 渲染一个空态。 */
-export function EmptyState({ kind, title, guidance }: EmptyStateProps): ReactElement {
+export function EmptyState({ kind, title, guidance, action }: EmptyStateProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
   return (
-    <View style={styles.root} dataSet={{ emptyState: kind }}>
+    <View style={[styles.root, kind === "no_directories" ? styles.welcome : null]} dataSet={{ emptyState: kind }}>
       <Text {...TITLE_PROPS} style={styles.title} dataSet={{ emptyStateTitle: "true" }}>
         {title}
       </Text>
       {/* 指引单独成段：两种空态的指引必须不同，合并成一句即违反 R15。 */}
-      <Text {...GUIDANCE_PROPS} style={styles.guidance} dataSet={{ emptyStateGuidance: "true" }}>
+      {guidance === "" ? null : <Text {...GUIDANCE_PROPS} style={styles.guidance} dataSet={{ emptyStateGuidance: "true" }}>
         {guidance}
-      </Text>
+      </Text>}
+      {action == null ? null : <View style={styles.action}>{action}</View>}
     </View>
   );
 }

@@ -70,12 +70,16 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
 /**
  * 等到**真实页面**渲染出来。
  *
- * 等的是主机面板（`data-route="hosts"`，只有 `HostConnectionPanel` 会发）：store 为 `null` 时页面
- * 呈现的是占位 `RuntimeUnavailable`，它不发这个属性，因此等到它就等价于「组合根装配完成、真实路由
- * 组件已渲染」——与 CR-1 同一条防呆口径（用 `[data-route="dirs"]` 等待会在首帧占位时就成立）。
+ * 等的是目录页的加载态文案（`data-directory-state="loading"`，只有真实 `DirectoryList` 会发）：
+ * store 为 `null` 时页面呈现的是占位 `RuntimeUnavailable`，它不发这个属性，因此等到它就等价于
+ * 「组合根装配完成、真实路由组件已渲染」——与 CR-1 同一条防呆口径（用 `[data-route="dirs"]`
+ * 等待会在首帧占位时就成立）。
  */
 async function waitForRenderedPage(container: HTMLElement): Promise<void> {
-  await waitFor(() => query(container, '[data-route="hosts"]') !== null, "真实页面渲染出主机面板");
+  await waitFor(
+    () => query(container, '[data-directory-state="loading"]') !== null,
+    "真实页面渲染出目录页",
+  );
 }
 
 /** 某个锚点的计算样式；锚点缺席即判红（本检查的断言全挂在它上面）。 */
@@ -157,18 +161,21 @@ const checks: readonly Check[] = [
         expectEqual(page.display, "flex", "目录页 View 的计算 display（RNW 的 View 默认样式）");
         expectEqual(page.flexDirection, "column", "目录页 View 的计算 flex-direction（RNW 的 View 默认样式）");
 
-        // 主机面板 View：RNW 的默认样式之外，它自己还声明了 `padding: spacing.lg`
-        // （`HostConnectionPanel` 的 `styles.panel`）。这一条证明的**不是**「RNW 的默认值还在」，而是
-        // **应用的原子类**也落在同一张表里：RNW 把数值型长度补成 `16px` 写进类规则，表被拦下时那里的
-        // 计算值是 `0px`。
+        // 目录页工具条：RNW 的默认样式之外，它自己还声明了 `paddingVertical: spacing.md`
+        // 与一条下边框。这一条证明的**不是**「RNW 的默认值还在」，而是**应用的原子类**也落在
+        // 同一张表里：RNW 把数值型长度补成 `12px` 写进类规则，表被拦下时那里的计算值是 `0px`。
         //
-        // 期望值取自 `spacing.lg` 这个 token 而不是字面量 `16px`：本断言要证伪的是「表失效」，而表失效的
+        // 期望值取自 `spacing.md` 这个 token 而不是字面量 `12px`：本断言要证伪的是「表失效」，而表失效的
         // 失败形态是**浏览器默认值**（0px），不是另一个 token 取值；写死字面量只会在合法改 token 时
         // 制造一条与样式机制无关的红。
-        const panel = computedStyleOf(mounted.container, '[data-route="hosts"]', "主机面板 View");
-        expectEqual(panel.display, "flex", "主机面板 View 的计算 display（RNW 的 View 默认样式）");
-        expectEqual(panel.paddingTop, `${spacing.lg}px`, "主机面板的计算 padding-top（应用声明的 token 值）");
-        expectEqual(panel.paddingLeft, `${spacing.lg}px`, "主机面板的计算 padding-left（应用声明的 token 值）");
+        const toolbar = computedStyleOf(mounted.container, '[data-directory-toolbar="true"]', "目录页工具条");
+        expectEqual(toolbar.display, "flex", "目录页工具条的计算 display（RNW 的 View 默认样式）");
+        expectEqual(
+          toolbar.paddingTop,
+          `${spacing.md}px`,
+          "目录页工具条的计算 padding-top（应用声明的 token 值）",
+        );
+        expectEqual(toolbar.borderBottomWidth, "1px", "目录页工具条的下边框（应用声明的样式）");
       } finally {
         await mounted.unmount();
       }

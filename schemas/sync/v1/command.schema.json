@@ -3,11 +3,17 @@
   "$id": "https://acp-remote.dev/schemas/sync/v1/command.schema.json",
   "title": "ACP Remote Sync v1 Commands",
   "oneOf": [
-    { "$ref": "#/$defs/command" },
-    { "$ref": "#/$defs/commandResult" }
+    {
+      "$ref": "#/$defs/command"
+    },
+    {
+      "$ref": "#/$defs/commandResult"
+    }
   ],
   "$defs": {
-    "requestId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "requestId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
     "commandName": {
       "description": "唯一来源是 compatibility/commands/v1/commands.json；本枚举只含 transport 含 sync 的命令。session.resume 只经 Node Link 接受，不在本枚举里。",
       "enum": [
@@ -16,6 +22,7 @@
         "command.status",
         "session.mode.list",
         "session.config.list",
+        "workspace.mkdir",
         "workspace.browse",
         "session.prompt",
         "session.cancel",
@@ -29,28 +36,74 @@
     "command": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
+      "required": [
+        "protocolVersion",
+        "type",
+        "messageId",
+        "connectionId",
+        "connectionSequence",
+        "body"
+      ],
       "properties": {
-        "protocolVersion": { "const": 1 },
-        "type": { "const": "command" },
-        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "protocolVersion": {
+          "const": 1
+        },
+        "type": {
+          "const": "command"
+        },
+        "messageId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionSequence": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        },
         "body": {
           "oneOf": [
-            { "$ref": "#/$defs/sessionList" },
-            { "$ref": "#/$defs/sessionCreate" },
-            { "$ref": "#/$defs/workspaceBrowse" },
-            { "$ref": "#/$defs/sessionRead" },
-            { "$ref": "#/$defs/sessionPrompt" },
-            { "$ref": "#/$defs/sessionCancel" },
-            { "$ref": "#/$defs/configList" },
-            { "$ref": "#/$defs/configSet" },
-            { "$ref": "#/$defs/modeList" },
-            { "$ref": "#/$defs/modeSet" },
-            { "$ref": "#/$defs/permissionResolve" },
-            { "$ref": "#/$defs/elicitationRespond" },
-            { "$ref": "#/$defs/commandStatus" }
+            {
+              "$ref": "#/$defs/sessionList"
+            },
+            {
+              "$ref": "#/$defs/sessionCreate"
+            },
+            {
+              "$ref": "#/$defs/workspaceBrowse"
+            },
+            {
+              "$ref": "#/$defs/sessionRead"
+            },
+            {
+              "$ref": "#/$defs/sessionPrompt"
+            },
+            {
+              "$ref": "#/$defs/sessionCancel"
+            },
+            {
+              "$ref": "#/$defs/configList"
+            },
+            {
+              "$ref": "#/$defs/configSet"
+            },
+            {
+              "$ref": "#/$defs/modeList"
+            },
+            {
+              "$ref": "#/$defs/modeSet"
+            },
+            {
+              "$ref": "#/$defs/permissionResolve"
+            },
+            {
+              "$ref": "#/$defs/elicitationRespond"
+            },
+            {
+              "$ref": "#/$defs/commandStatus"
+            },
+            {
+              "$ref": "#/$defs/workspaceMkdir"
+            }
           ]
         }
       }
@@ -58,11 +111,22 @@
     "sessionList": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.list" },
-        "payload": { "type": "object", "additionalProperties": false }
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.list"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false
+        }
       }
     },
     "workspaceBrowsePath": {
@@ -74,28 +138,59 @@
     "workspaceBrowseEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "path", "registered"],
+      "required": [
+        "name",
+        "path",
+        "registered"
+      ],
       "properties": {
-        "name": { "type": "string", "minLength": 1, "maxLength": 256, "description": "该子目录的名称（不含路径分隔符）。" },
-        "path": { "$ref": "#/$defs/workspaceBrowsePath" },
-        "registered": { "type": "boolean", "description": "该子目录是否已是本机已登记的 workspace（只反映登记状态，不产生任何登记副作用）。" }
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "该子目录的名称（不含路径分隔符）。"
+        },
+        "path": {
+          "$ref": "#/$defs/workspaceBrowsePath"
+        },
+        "registered": {
+          "type": "boolean",
+          "description": "该子目录是否已是本机已登记的 workspace（只反映登记状态，不产生任何登记副作用）。"
+        }
       }
     },
     "workspaceBrowse": {
       "description": "Sync 面的 `workspace.browse`：请求一个父路径（`null` = 该节点的根列表），同步返回该层的**直接**子目录。请求只含父路径一个字段；形状校验（相对路径、含 `..`）与可达性判定由本机的用例分类，不在 schema 里判定。结果不下发文件条目、文件内容、字节大小、时间戳或权限。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "workspace.browse" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "workspace.browse"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["path"],
+          "required": [
+            "path"
+          ],
           "properties": {
             "path": {
-              "oneOf": [{ "$ref": "#/$defs/workspaceBrowsePath" }, { "type": "null" }]
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/workspaceBrowsePath"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           }
         }
@@ -104,22 +199,63 @@
     "sessionCreate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "payload"
+      ],
       "description": "Sync 面的 session.create：body 顶层不得携带 sessionId（会话尚不存在）。payload 必须给出 agentId，并且 directoryId 与 workspacePath **恰好出现一个**——两个都给或都不给都按 protocol.schema_invalid 拒绝。可选键 createIfMissing 是显式的「目录不存在则先创建」开关，它与 directoryId **互斥**（已记录的目录必然已存在），两者同时出现时同样按 protocol.schema_invalid 拒绝，且不查询目录表、不触碰文件系统。出现 cwd、templateParams、MCP 配置或凭据字段时同样按 protocol.schema_invalid 拒绝，不得创建会话或部分应用参数。",
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.create" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.create"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["agentId"],
-          "oneOf": [{ "required": ["directoryId"] }, { "required": ["workspacePath"] }],
-          "not": { "required": ["directoryId", "createIfMissing"] },
+          "required": [
+            "agentId"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "directoryId"
+              ]
+            },
+            {
+              "required": [
+                "workspacePath"
+              ]
+            }
+          ],
+          "not": {
+            "required": [
+              "directoryId",
+              "createIfMissing"
+            ]
+          },
           "properties": {
-            "directoryId": { "$ref": "common.schema.json#/$defs/directoryId" },
-            "workspacePath": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "客户端提供的**绝对**路径（浏览器拿不到宿主路径，因此这一来源就是一次文本输入）。本机校验它存在、是目录，并以 `canonicalize` 的结果为权威值；形状校验（相对路径、含 `..`）与解析失败由本机的用例分类，不在 schema 里判定。客户端自己提出的路径不算「泄漏宿主路径」。" },
-            "createIfMissing": { "type": "boolean", "description": "显式的「目录不存在则先创建」开关：为真且目标目录不存在时，本机先创建它（连同缺失的父层）再启动 Agent。缺席即假（行为与引入本键之前完全一致：目录不存在即失败）。它与 directoryId 互斥；按它创建出的目录与成功的会话在同一次提交里记录，会话因此获得目录归属。" },
-            "agentId": { "type": "string", "minLength": 1, "maxLength": 128, "description": "本机已配置的 Agent profile 标识。" }
+            "directoryId": {
+              "$ref": "common.schema.json#/$defs/directoryId"
+            },
+            "workspacePath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "description": "客户端提供的**绝对**路径（浏览器拿不到宿主路径，因此这一来源就是一次文本输入）。本机校验它存在、是目录，并以 `canonicalize` 的结果为权威值；形状校验（相对路径、含 `..`）与解析失败由本机的用例分类，不在 schema 里判定。客户端自己提出的路径不算「泄漏宿主路径」。"
+            },
+            "createIfMissing": {
+              "type": "boolean",
+              "description": "显式的「目录不存在则先创建」开关：为真且目标目录不存在时，本机先创建它（连同缺失的父层）再启动 Agent。缺席即假（行为与引入本键之前完全一致：目录不存在即失败）。它与 directoryId 互斥；按它创建出的目录与成功的会话在同一次提交里记录，会话因此获得目录归属。"
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "description": "本机已配置的 Agent profile 标识。"
+            }
           }
         }
       }
@@ -128,10 +264,17 @@
       "description": "session.read 的分页游标：由消息创建时间与消息标识复合构成（design D2）。两个键都必需——只给其中一项是单字段游标，按 protocol.schema_invalid 拒绝，服务端 MUST NOT 猜测或补全缺失的排序分量。排序 MUST NOT 依赖 messageId 的数值或字典序（docs/SYNC_PROTOCOL.md §3.3、§11.5）：服务端按 createdAt 升序返回一页，并在同一 createdAt 内以稳定可重复的次序排列 messageId 作为 tie-breaker，使相邻两页不重不漏。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["createdAt", "messageId"],
+      "required": [
+        "createdAt",
+        "messageId"
+      ],
       "properties": {
-        "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
-        "messageId": { "$ref": "common.schema.json#/$defs/uuid" }
+        "createdAt": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "messageId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        }
       }
     },
     "sessionReadLimit": {
@@ -147,24 +290,52 @@
       "description": "Sync 面的 session.read：include 里的 history、游标 before/beforeHistory 与 limit 只在本传输面生效（design D3、D11）。Node Link 面的同名命令载荷不含这些键，其行为与本变更前一致（docs/NODE_LINK_PROTOCOL.md §12.7）。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.read" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.read"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["include"],
+          "required": [
+            "include"
+          ],
           "properties": {
             "include": {
               "type": "array",
               "uniqueItems": true,
-              "items": { "enum": ["messages", "turns", "pending_interactions", "config_options", "capabilities", "history"] }
+              "items": {
+                "enum": [
+                  "messages",
+                  "turns",
+                  "pending_interactions",
+                  "config_options",
+                  "capabilities",
+                  "history"
+                ]
+              }
             },
-            "before": { "$ref": "#/$defs/sessionReadBefore" },
-            "beforeHistory": { "$ref": "#/$defs/sessionReadBeforeHistory" },
-            "limit": { "$ref": "#/$defs/sessionReadLimit" }
+            "before": {
+              "$ref": "#/$defs/sessionReadBefore"
+            },
+            "beforeHistory": {
+              "$ref": "#/$defs/sessionReadBeforeHistory"
+            },
+            "limit": {
+              "$ref": "#/$defs/sessionReadLimit"
+            }
           }
         }
       }
@@ -172,21 +343,36 @@
     "sessionPrompt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.prompt" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.prompt"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["content"],
+          "required": [
+            "content"
+          ],
           "properties": {
             "content": {
               "type": "array",
               "minItems": 1,
               "maxItems": 64,
-              "items": { "$ref": "common.schema.json#/$defs/promptContentBlock" }
+              "items": {
+                "$ref": "common.schema.json#/$defs/promptContentBlock"
+              }
             }
           }
         }
@@ -195,46 +381,103 @@
     "sessionCancel": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.cancel" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.cancel"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["turnId"],
-          "properties": { "turnId": { "$ref": "common.schema.json#/$defs/uuid" } }
+          "required": [
+            "turnId"
+          ],
+          "properties": {
+            "turnId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            }
+          }
         }
       }
     },
     "configList": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.config.list" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "payload": { "type": "object", "additionalProperties": false }
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.config.list"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false
+        }
       }
     },
     "configSet": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "expectedVersion", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "expectedVersion",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.config.set" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "expectedVersion": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.config.set"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "expectedVersion": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["configId", "value"],
+          "required": [
+            "configId",
+            "value"
+          ],
           "properties": {
-            "configId": { "type": "string", "minLength": 1, "maxLength": 256 },
-            "value": { "type": ["string", "boolean"] }
+            "configId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "value": {
+              "type": [
+                "string",
+                "boolean"
+              ]
+            }
           }
         }
       }
@@ -242,46 +485,102 @@
     "modeList": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.mode.list" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "payload": { "type": "object", "additionalProperties": false }
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.mode.list"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false
+        }
       }
     },
     "modeSet": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "expectedVersion", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "expectedVersion",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.mode.set" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "expectedVersion": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.mode.set"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "expectedVersion": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["modeId"],
-          "properties": { "modeId": { "type": "string", "minLength": 1, "maxLength": 256 } }
+          "required": [
+            "modeId"
+          ],
+          "properties": {
+            "modeId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
         }
       }
     },
     "permissionResolve": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "permission.resolve" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "permission.resolve"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["interactionId", "optionId"],
+          "required": [
+            "interactionId",
+            "optionId"
+          ],
           "properties": {
-            "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
-            "optionId": { "type": "string", "minLength": 1, "maxLength": 128 }
+            "interactionId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "optionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
           }
         }
       }
@@ -289,41 +588,85 @@
     "elicitationRespond": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "elicitation.respond" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "elicitation.respond"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
         "payload": {
           "oneOf": [
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["interactionId", "action", "values"],
+              "required": [
+                "interactionId",
+                "action",
+                "values"
+              ],
               "properties": {
-                "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
-                "action": { "const": "submit" },
-                "values": { "type": ["object", "null"] }
+                "interactionId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "action": {
+                  "const": "submit"
+                },
+                "values": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                }
               }
             },
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["interactionId", "action", "values"],
+              "required": [
+                "interactionId",
+                "action",
+                "values"
+              ],
               "properties": {
-                "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
-                "action": { "const": "decline" },
-                "values": { "type": "null" }
+                "interactionId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "action": {
+                  "const": "decline"
+                },
+                "values": {
+                  "type": "null"
+                }
               }
             },
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["interactionId", "action", "values"],
+              "required": [
+                "interactionId",
+                "action",
+                "values"
+              ],
               "properties": {
-                "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
-                "action": { "const": "cancel" },
-                "values": { "type": "null" }
+                "interactionId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "action": {
+                  "const": "cancel"
+                },
+                "values": {
+                  "type": "null"
+                }
               }
             }
           ]
@@ -333,26 +676,44 @@
     "commandStatus": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "command.status" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "command.status"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["targetRequestId"],
-          "properties": { "targetRequestId": { "$ref": "#/$defs/requestId" } }
+          "required": [
+            "targetRequestId"
+          ],
+          "properties": {
+            "targetRequestId": {
+              "$ref": "#/$defs/requestId"
+            }
+          }
         }
       }
     },
     "sessionListResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sessions"],
+      "required": [
+        "sessions"
+      ],
       "properties": {
         "sessions": {
           "type": "array",
-          "items": { "$ref": "common.schema.json#/$defs/sessionSummary" }
+          "items": {
+            "$ref": "common.schema.json#/$defs/sessionSummary"
+          }
         }
       }
     },
@@ -360,243 +721,673 @@
       "description": "session.read 的完成结果。resources 的每个键都可缺席；hasEarlier 是必填布尔值，指示本次返回的这一页消息之前是否仍有更早内容，客户端据此决定是否继续用最早一条的 (createdAt, messageId) 构造 before 翻页；historyHasEarlier 是可选布尔值，只描述 resources.history 这一页之前是否仍有更早条目，客户端据此用最早一条的 sessionSequence 构造 beforeHistory 翻页。两者各自分页，互不影响（docs/SYNC_PROTOCOL.md §11.5）。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["sessionId", "resources", "hasEarlier"],
+      "required": [
+        "sessionId",
+        "resources",
+        "hasEarlier"
+      ],
       "properties": {
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
         "resources": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "messages": {
               "type": "array",
-              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.messages" }
+              "items": {
+                "$ref": "sync.schema.json#/$defs/snapshotItem.messages"
+              }
             },
             "turns": {
               "type": "array",
-              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.turns" }
+              "items": {
+                "$ref": "sync.schema.json#/$defs/snapshotItem.turns"
+              }
             },
             "pending_interactions": {
               "type": "array",
-              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.pending_interactions" }
+              "items": {
+                "$ref": "sync.schema.json#/$defs/snapshotItem.pending_interactions"
+              }
             },
             "config_options": {
               "type": "array",
-              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.config_options" }
+              "items": {
+                "$ref": "sync.schema.json#/$defs/snapshotItem.config_options"
+              }
             },
             "capabilities": {
               "type": "array",
-              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.capabilities" }
+              "items": {
+                "$ref": "sync.schema.json#/$defs/snapshotItem.capabilities"
+              }
             },
             "history": {
               "type": "array",
-              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.history" }
+              "items": {
+                "$ref": "sync.schema.json#/$defs/snapshotItem.history"
+              }
             }
           }
         },
-        "hasEarlier": { "type": "boolean" },
-        "historyHasEarlier": { "type": "boolean" }
+        "hasEarlier": {
+          "type": "boolean"
+        },
+        "historyHasEarlier": {
+          "type": "boolean"
+        }
       }
     },
     "configListResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["configOptions", "version"],
+      "required": [
+        "configOptions",
+        "version"
+      ],
       "properties": {
         "configOptions": {
           "type": "array",
-          "items": { "$ref": "common.schema.json#/$defs/configOptionView" }
+          "items": {
+            "$ref": "common.schema.json#/$defs/configOptionView"
+          }
         },
-        "version": { "$ref": "common.schema.json#/$defs/decimalString" }
+        "version": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        }
       }
     },
-    "modeListResult": { "$ref": "common.schema.json#/$defs/modeState" },
+    "modeListResult": {
+      "$ref": "common.schema.json#/$defs/modeState"
+    },
     "sessionCreateResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sessionId", "session"],
+      "required": [
+        "sessionId",
+        "session"
+      ],
       "description": "session.create 的 completed 结果：新会话标识 + 其 SessionSummary。",
       "properties": {
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "session": { "$ref": "common.schema.json#/$defs/sessionSummary" }
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "session": {
+          "$ref": "common.schema.json#/$defs/sessionSummary"
+        }
       }
     },
     "workspaceBrowseResult": {
       "description": "`workspace.browse` 的 completed 结果：回显请求的父路径（`null` = 根列表）、该层的直接子目录与截断标记。`entries` 只含子目录，MUST NOT 含文件条目与任何文件内容、大小、时间戳或权限；条目按名称以确定顺序排列。单层条目数上限是固定 v1 常量（`docs/SYNC_PROTOCOL.md` §14，128），超过上限时只返回上限内的条目并把 `truncated` 置真——不得静默丢弃、不得整次失败。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "entries", "truncated"],
+      "required": [
+        "path",
+        "entries",
+        "truncated"
+      ],
       "properties": {
         "path": {
-          "oneOf": [{ "$ref": "#/$defs/workspaceBrowsePath" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/workspaceBrowsePath"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "entries": {
           "type": "array",
           "maxItems": 128,
-          "items": { "$ref": "#/$defs/workspaceBrowseEntry" }
+          "items": {
+            "$ref": "#/$defs/workspaceBrowseEntry"
+          }
         },
-        "truncated": { "type": "boolean" }
+        "truncated": {
+          "type": "boolean"
+        }
       }
     },
     "commandStatusRecord": {
       "type": "object",
-      "required": ["targetRequestId", "state", "acceptedAt", "terminalAt", "terminalEventId", "result", "error"],
+      "required": [
+        "targetRequestId",
+        "state",
+        "acceptedAt",
+        "terminalAt",
+        "terminalEventId",
+        "result",
+        "error"
+      ],
       "properties": {
-        "targetRequestId": { "$ref": "#/$defs/requestId" },
-        "state": { "enum": ["accepted", "completed", "failed", "uncertain", "rejected"] },
+        "targetRequestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "state": {
+          "enum": [
+            "accepted",
+            "completed",
+            "failed",
+            "uncertain",
+            "rejected"
+          ]
+        },
         "acceptedAt": {
-          "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "terminalAt": {
-          "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "terminalEventId": {
-          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
-        "result": { "type": ["object", "null"] },
+        "result": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "error": {
-          "oneOf": [{ "$ref": "common.schema.json#/$defs/publicError" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/publicError"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
     "commandResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
+      "required": [
+        "protocolVersion",
+        "type",
+        "messageId",
+        "connectionId",
+        "connectionSequence",
+        "body"
+      ],
       "properties": {
-        "protocolVersion": { "const": 1 },
-        "type": { "const": "command.result" },
-        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "protocolVersion": {
+          "const": 1
+        },
+        "type": {
+          "const": "command.result"
+        },
+        "messageId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionSequence": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        },
         "body": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["requestId", "command", "status", "acceptedAt", "terminalEventId", "result", "error"],
+          "required": [
+            "requestId",
+            "command",
+            "status",
+            "acceptedAt",
+            "terminalEventId",
+            "result",
+            "error"
+          ],
           "properties": {
-            "requestId": { "$ref": "#/$defs/requestId" },
-            "command": { "$ref": "#/$defs/commandName" },
-            "status": { "enum": ["accepted", "completed", "failed", "rejected", "uncertain"] },
+            "requestId": {
+              "$ref": "#/$defs/requestId"
+            },
+            "command": {
+              "$ref": "#/$defs/commandName"
+            },
+            "status": {
+              "enum": [
+                "accepted",
+                "completed",
+                "failed",
+                "rejected",
+                "uncertain"
+              ]
+            },
             "acceptedAt": {
-              "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/timestamp"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "terminalEventId": {
-              "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
-            "result": { "type": ["object", "null"] },
+            "result": {
+              "type": [
+                "object",
+                "null"
+              ]
+            },
             "error": {
-              "oneOf": [{ "$ref": "common.schema.json#/$defs/publicError" }, { "type": "null" }]
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/publicError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "allOf": [
             {
               "if": {
-                "properties": { "command": { "const": "session.list" }, "status": { "const": "completed" } },
-                "required": ["command", "status"]
-              },
-              "then": { "properties": { "result": { "$ref": "#/$defs/sessionListResult" } } }
-            },
-            {
-              "if": {
-                "properties": { "command": { "const": "workspace.browse" }, "status": { "const": "completed" } },
-                "required": ["command", "status"]
-              },
-              "then": { "properties": { "result": { "$ref": "#/$defs/workspaceBrowseResult" } } }
-            },
-            {
-              "if": {
-                "properties": { "command": { "const": "session.create" }, "status": { "const": "completed" } },
-                "required": ["command", "status"]
-              },
-              "then": { "properties": { "result": { "$ref": "#/$defs/sessionCreateResult" } } }
-            },
-            {
-              "if": {
-                "properties": { "command": { "const": "session.read" }, "status": { "const": "completed" } },
-                "required": ["command", "status"]
-              },
-              "then": { "properties": { "result": { "$ref": "#/$defs/sessionReadResult" } } }
-            },
-            {
-              "if": {
-                "properties": { "command": { "const": "session.config.list" }, "status": { "const": "completed" } },
-                "required": ["command", "status"]
-              },
-              "then": { "properties": { "result": { "$ref": "#/$defs/configListResult" } } }
-            },
-            {
-              "if": {
-                "properties": { "command": { "const": "session.mode.list" }, "status": { "const": "completed" } },
-                "required": ["command", "status"]
-              },
-              "then": { "properties": { "result": { "$ref": "#/$defs/modeListResult" } } }
-            },
-            {
-              "if": {
-                "properties": { "command": { "const": "command.status" }, "status": { "const": "completed" } },
-                "required": ["command", "status"]
-              },
-              "then": { "properties": { "result": { "$ref": "#/$defs/commandStatusRecord" } } }
-            },
-            {
-              "if": {
                 "properties": {
-                  "command": { "enum": ["session.list", "session.read", "command.status", "session.mode.list", "session.config.list", "workspace.browse"] },
-                  "status": { "const": "completed" }
+                  "command": {
+                    "const": "session.list"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
                 },
-                "required": ["command", "status"]
-              },
-              "then": { "properties": { "terminalEventId": { "type": "null" } } }
-            },
-            {
-              "if": {
-                "properties": {
-                  "command": { "enum": ["session.prompt", "session.cancel", "elicitation.respond", "session.mode.set", "session.config.set", "permission.resolve", "session.create"] },
-                  "status": { "const": "completed" }
-                },
-                "required": ["command", "status"]
-              },
-              "then": { "properties": { "terminalEventId": { "$ref": "common.schema.json#/$defs/uuid" } } }
-            },
-            {
-              "if": {
-                "properties": { "status": { "const": "accepted" } },
-                "required": ["status"]
+                "required": [
+                  "command",
+                  "status"
+                ]
               },
               "then": {
                 "properties": {
-                  "acceptedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
-                  "terminalEventId": { "type": "null" },
-                  "error": { "type": "null" }
+                  "result": {
+                    "$ref": "#/$defs/sessionListResult"
+                  }
                 }
               }
             },
             {
               "if": {
-                "properties": { "status": { "enum": ["failed", "uncertain"] } },
-                "required": ["status"]
+                "properties": {
+                  "command": {
+                    "const": "workspace.browse"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
               },
               "then": {
                 "properties": {
-                  "acceptedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
-                  "terminalEventId": { "$ref": "common.schema.json#/$defs/uuid" }
+                  "result": {
+                    "$ref": "#/$defs/workspaceBrowseResult"
+                  }
                 }
               }
             },
             {
               "if": {
-                "properties": { "status": { "const": "rejected" } },
-                "required": ["status"]
+                "properties": {
+                  "command": {
+                    "const": "session.create"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
               },
               "then": {
                 "properties": {
-                  "acceptedAt": { "type": "null" },
-                  "terminalEventId": { "type": "null" },
-                  "result": { "type": "null" },
-                  "error": { "$ref": "common.schema.json#/$defs/publicError" }
+                  "result": {
+                    "$ref": "#/$defs/sessionCreateResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "const": "session.read"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/sessionReadResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "const": "session.config.list"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/configListResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "const": "session.mode.list"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/modeListResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "const": "command.status"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/commandStatusRecord"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "enum": [
+                      "session.list",
+                      "session.read",
+                      "command.status",
+                      "session.mode.list",
+                      "session.config.list",
+                      "workspace.browse"
+                    ]
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "terminalEventId": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "enum": [
+                      "session.prompt",
+                      "session.cancel",
+                      "elicitation.respond",
+                      "session.mode.set",
+                      "session.config.set",
+                      "permission.resolve",
+                      "session.create"
+                    ]
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "terminalEventId": {
+                    "$ref": "common.schema.json#/$defs/uuid"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "accepted"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "acceptedAt": {
+                    "$ref": "common.schema.json#/$defs/timestamp"
+                  },
+                  "terminalEventId": {
+                    "type": "null"
+                  },
+                  "error": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "failed",
+                      "uncertain"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "acceptedAt": {
+                    "$ref": "common.schema.json#/$defs/timestamp"
+                  },
+                  "terminalEventId": {
+                    "$ref": "common.schema.json#/$defs/uuid"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "rejected"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "acceptedAt": {
+                    "type": "null"
+                  },
+                  "terminalEventId": {
+                    "type": "null"
+                  },
+                  "result": {
+                    "type": "null"
+                  },
+                  "error": {
+                    "$ref": "common.schema.json#/$defs/publicError"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "const": "workspace.mkdir"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/workspaceMkdirResult"
+                  }
                 }
               }
             }
           ]
+        }
+      }
+    },
+    "workspaceMkdir": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "command",
+        "payload"
+      ],
+      "properties": {
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "workspace.mkdir"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "parentPath",
+            "name"
+          ],
+          "properties": {
+            "parentPath": {
+              "$ref": "#/$defs/workspaceBrowsePath"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^(?!\\.{1,2}$)[^/\\\\:\\u0000]+$"
+            }
+          }
+        }
+      }
+    },
+    "workspaceMkdirResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "created"
+      ],
+      "properties": {
+        "created": {
+          "const": true
         }
       }
     }

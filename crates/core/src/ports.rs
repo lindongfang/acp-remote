@@ -603,6 +603,18 @@ pub struct HistoryPage {
 pub trait SessionStore: Send + Sync {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError>;
 
+    /// Actor-scoped terminal commit for workspace.mkdir only. Same atomicity as commit,
+    /// but locates the unsessioned command by the full (actor, requestId) key.
+    async fn commit_workspace_mkdir_terminal(
+        &self,
+        _actor: &Actor,
+        _commit: OwnedCommit,
+    ) -> Result<CommitOutcome, PortError> {
+        Err(PortError::InvalidRequest(
+            "workspace.mkdir terminal commits are unsupported",
+        ))
+    }
+
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError>;
 
     /// 会话列表。返回的每个 [`SessionSummary`] 的 `workspace` **必须**取自该会话行持久化的
@@ -1325,4 +1337,33 @@ pub struct DirectoryListing {
     /// 该子目录的绝对路径（实现侧的规范化结果；下发给客户端的形式还要经 `strip_verbatim`，见
     /// §11.9 与 `design.md` D2）。
     pub path: String,
+}
+
+/// Independent directory creation command boundary.
+#[async_trait]
+pub trait DirectoryCreator: Send + Sync {
+    async fn create_directory(&self, parent: &str, name: &str) -> Result<(), PortError>;
+}
+
+/// Independent directory creation command boundary.
+#[derive(Debug)]
+pub enum WorkspaceMkdirAdmission {
+    Accepted(WorkspaceMkdirExecution),
+    InFlight,
+    Settled(Box<CommandRecord>),
+}
+
+/// One-time execution ticket; Debug omits host paths and names.
+pub struct WorkspaceMkdirExecution {
+    pub(crate) actor: Actor,
+    pub(crate) request: RequestId,
+    pub(crate) parent: String,
+    pub(crate) name: String,
+}
+
+impl std::fmt::Debug for WorkspaceMkdirExecution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceMkdirExecution")
+            .finish_non_exhaustive()
+    }
 }

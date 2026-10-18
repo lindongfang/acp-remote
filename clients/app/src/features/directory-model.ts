@@ -226,8 +226,8 @@ export const DIRECTORY_EMPTY_COPY: Readonly<
   Record<"no_directories" | "directories_without_sessions", { readonly title: string; readonly guidance: string }>
 > = {
   no_directories: {
-    title: "本机没有任何目录",
-    guidance: "目录在电脑上登记后才出现在这里。请先在电脑上添加工作区目录，再回到本页面。",
+    title: "从第一个会话开始",
+    guidance: "创建会话后，这里会按目录整理你的工作。",
   },
   directories_without_sessions: {
     title: "目录已登记，但还没有会话",
@@ -358,6 +358,38 @@ function matchesFilter(filter: DirectoryFilter, directory: DirectoryView): boole
 }
 
 /**
+ * 目录页卡片内**可见**的会话行（原型 `viewDirs()` 的 `passFilter` + `passQuery`）。
+ *
+ * 目录层面已经由 {@link buildDirectoryPageModel} 决定哪些目录留下；这里决定该目录下哪些行
+ * 显示：状态筛选只保留对应状态的行；查询词命中展示名时保留全部（按筛选后）的行，只命中
+ * 部分会话标题时只保留这些行。目录标识不参与匹配。
+ *
+ * 行仍由 `buildSessionRowsByDirectoryId` 给出（倒序、字段口径与详情页同源），本函数只做
+ * 可见性判断，不重排、不合成行。
+ */
+export function filterSessionsForDirectory(input: {
+  readonly rows: readonly SessionRowModel[];
+  readonly displayName: string;
+  readonly query: string;
+  readonly filter: DirectoryFilter;
+}): readonly SessionRowModel[] {
+  const needle = input.query.trim().toLowerCase();
+  const nameMatches = needle.length === 0 || input.displayName.toLowerCase().includes(needle);
+  return input.rows.filter((row) => {
+    if (input.filter === "running" && row.state !== "running" && row.state !== "queued") return false;
+    if (
+      input.filter === "pending" &&
+      row.state !== "waiting_input" &&
+      row.state !== "waiting_permission"
+    ) {
+      return false;
+    }
+    if (nameMatches) return true;
+    return row.title.toLowerCase().includes(needle);
+  });
+}
+
+/**
  * 目录页模型。
  *
  * @param resources 上一次成功替换的快照资源；`null` 表示从未同步过。
@@ -379,24 +411,31 @@ export function buildDirectoryPageModel(input: {
   // 同名判定与展示名都按**整份快照**算（不是按筛选后的子集）：它们都是数据的性质，
   // 不因为用户敲了一个查询词就变——否则消歧段会时有时无。
   const names = directoryNamesOf(input.resources.workspaces);
+  const query = input.query ?? "";
+  const filter = input.filter ?? "all";
   if (list.kind === "empty") {
+    const directories = list.empty === "directories_without_sessions"
+      ? input.resources.workspaces
+          .map((workspace) => zeroRow(workspace, names))
+          .filter((directory) =>
+            filter === "all" && directory.displayName.toLowerCase().includes(query.trim().toLowerCase()),
+          )
+      : [];
+    if (list.empty === "directories_without_sessions" && directories.length === 0) {
+      return { kind: "no_match", contentOrigin, lastSyncedAtMs: input.lastSyncedAtMs };
+    }
     return {
       kind: "empty",
       empty: list.empty,
       // 空态也列出已登记的目录：`directories_without_sessions` 的指引写着「在下面选一个目录」，
       // 那一支必须真有目录项（每一项都是零汇总行），否则指引指向不存在的入口；
       // `no_directories` 时确实是空数组。本支的 kind/empty 取值与判定条件都不因此改变。
-      directories:
-        list.empty === "directories_without_sessions"
-          ? input.resources.workspaces.map((workspace) => zeroRow(workspace, names))
-          : [],
+      directories,
       contentOrigin,
       lastSyncedAtMs: input.lastSyncedAtMs,
     };
   }
 
-  const query = input.query ?? "";
-  const filter = input.filter ?? "all";
   const titles = titlesByDirectoryId(input.resources.sessions);
   const directories = list.directories.filter(
     (directory) => matchesQuery(query, directory, titles) && matchesFilter(filter, directory),

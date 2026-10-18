@@ -1,5 +1,7 @@
 # ACP Remote 初始设计文档
 
+> 目录选择器补充（2026-10-18）：Windows 默认浏览不展示隐藏或系统属性目录；PWA 按名称忽略大小写、数字自然升序显示收到的目录。这些规则仅影响浏览与显示，不新增创建路径授权限制。实现边界见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.1。
+
 > 状态：编码前原始设计（Draft）  
 > 版本：0.5  
 > 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「workspace 实际路径不离开 Owner Node」收窄为带前提的边界——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显（§2/§8）。本机自己的设备新增两项受限能力：`session.create` 可带一个「目录不存在则先创建」开关，`workspace.browse` 提供只读的逐层目录浏览（feature 门控、不登记、不产生审计动作）。口径以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2/§12.3 与 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md) 为权威。
@@ -743,3 +745,7 @@ Windows 是当前 Daemon/CLI、节点配对、进程树管理和首个 Node Link
 - OWASP WebSocket Security：<https://cheatsheetseries.owasp.org/cheatsheets/WebSocket_Security_Cheat_Sheet.html>
 - npm package.json：<https://docs.npmjs.com/files/package.json/>
 - Cargo Targets：<https://doc.rust-lang.org/cargo/reference/cargo-targets.html>
+
+## 独立目录创建（ADR-0010）
+
+文件夹选择器支持立即在主机创建一层目录，用户可逐层新建后单独选择；取消会话不删除已建目录。产品行为与兼容取舍见 [ADR-0010](adr/0010-immediate-workspace-directory-creation.md)，wire 权威见 SYNC_PROTOCOL §11.5。

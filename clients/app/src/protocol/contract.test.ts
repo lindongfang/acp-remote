@@ -72,7 +72,7 @@ const HISTORY_KEY_MIRROR: Record<keyof SnapshotItemHistory, true> = {
 type UnionKeys<T> = T extends unknown ? keyof T : never;
 
 /**
- * `CommandName` 词表的编译期镜像（13 条 Sync 面命令）。
+ * `CommandName` 词表的编译期镜像（14 条 Sync 面命令）。
  *
  * 与 `INCLUDE_MIRROR` 同理：多一个或少一个取值都会让本文件编译失败，运行期那句比对的是
  * 「TS 联合 ↔ `command.schema.json` 的 `commandName` enum」这一对。新增/删除命令时既要在
@@ -85,6 +85,7 @@ const COMMAND_NAME_MIRROR: Record<CommandName, true> = {
   "session.mode.list": true,
   "session.config.list": true,
   "workspace.browse": true,
+  "workspace.mkdir": true,
   "session.prompt": true,
   "session.cancel": true,
   "elicitation.respond": true,
@@ -617,7 +618,7 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect(unavailable.properties.reason.enum).toEqual(["size_limit"]);
   });
 
-  it("commandName 词表与镜像逐项相等，body.oneOf 覆盖全部 13 条 Sync 命令", () => {
+  it("commandName 词表与镜像逐项相等，body.oneOf 覆盖全部 14 条 Sync 命令", () => {
     const schema = readSchema("command.schema.json");
     const defsMap = defs(schema);
     const commandName = defsMap["commandName"] as { enum: string[] };
