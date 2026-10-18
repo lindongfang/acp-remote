@@ -46,4 +46,4 @@
 - [x] 6.1 按 `plan.md` 的 Merge Order 串行 `git apply --check` → `git apply`（WP1→WP2→WP3→WP4→WP5），每次合入后重跑该包 Verify。
 - [x] 6.2 主检出执行 `npm run verify`、`cd clients/app && npm run check`、`npm run check:openspec`，全绿。
 - [x] 6.3 每个工作包由独立 `reviewer` spawn 检视并闭环；changes-requested 走新 spawn 修复，最多 3 轮。
-- [ ] 6.4 按 `docs/WORKFLOW.md` §6.2 开分支、推远端、`gh pr create --fill`、等六个必需检查全绿后 `gh pr merge --squash`。
+- [x] 6.4 按 `docs/WORKFLOW.md` §6.2 开分支、推远端、`gh pr create --fill`、等六个必需检查全绿后 `gh pr merge --squash`。
