@@ -42,7 +42,8 @@ import { useEffect } from "react";
 import type { ReactElement } from "react";
 
 import { PairingPanel, PairingThemeToggle, RuntimeUnavailable } from "../src/components";
-import { StyleSheet, View, spacing } from "../src/components/theme";
+import type { Palette } from "../src/components/theme";
+import { StyleSheet, View, palettes, spacing, useTheme, useWindowDimensions } from "../src/components/theme";
 import type { PairingKind } from "../src/features/pairing-model";
 import { useClientState, useClientStore } from "../src/features/runtime";
 
@@ -52,17 +53,31 @@ const APPROVED_REDIRECT_MS = 1_600;
 /**
  * 页面骨架：只有一块居中的舞台。
  *
- * 配色由共享外壳与 `PairingPanel` 承担，本页不设背景色；右上角的 `PairingThemeToggle` 复用
- * 共享主题偏好，不恢复全局顶栏或页头（design D5）。
+ * **必须自己画背景色**：共享外壳根节点虽然设了 `colors.bg`，但它上面的 React Navigation
+ * 容器默认带 `#f2f2f2` 底色，会把外壳的背景盖住（目录页、详情页与对话页各自画了背景，
+ * 所以只有配对页会露出浅灰）。这里与其余路由保持同一形态：浅/深各建一份样式表。
+ *
+ * 右上角的 `PairingThemeToggle` 复用共享主题偏好，不恢复全局顶栏或页头（design D5）。
  */
-const STYLES = StyleSheet.create({
-  page: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: spacing.lg,
-  },
-});
+function buildStyles(colors: Palette) {
+  return StyleSheet.create({
+    page: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.bg,
+      // 原型 `.pair`：桌面 48×24，窄屏 32×16（`@media (max-width:600px)`）。
+      paddingVertical: 48,
+      paddingHorizontal: spacing.xl,
+    },
+    pageCompact: {
+      paddingVertical: 32,
+      paddingHorizontal: spacing.lg,
+    },
+  });
+}
+
+const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
 /**
  * 配对入口的页面主体，两类入口**共用**（design D4：复用同一组件、以类型参数区分，不复制一套 UI）。
@@ -75,6 +90,9 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
   const store = useClientStore();
   const state = useClientState();
   const router = useRouter();
+  const theme = useTheme();
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const { width } = useWindowDimensions();
 
   // 进页时走一次入口：二维码地址的片段里有配对内容，读取（并立即清除片段）后进入与本页
   // 对应的流程；`/pair` 没有片段时进入配对码输入（S0）。依赖只有 `store` 与 `kind`：
@@ -100,7 +118,7 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
   }, [approvedSync, router]);
 
   return (
-    <View role="main" style={STYLES.page}>
+    <View role="main" style={[styles.page, width < 600 ? styles.pageCompact : null]}>
       <PairingThemeToggle />
       {store === null || state === null || page === null ? (
         <RuntimeUnavailable route="pair" />

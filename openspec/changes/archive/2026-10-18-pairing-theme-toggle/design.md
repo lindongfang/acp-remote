@@ -30,8 +30,12 @@
 
 ### D2：浮在页面右上角，不占布局
 
-- `webStyle({ position: "fixed", top: 12, right: 12 })`，`zIndex` 取共享外壳顶栏层。
-- 36×36、`radius.sm`、`border` + `panel` 背景；太阳/月亮用与 `ShellView` 相同的图形（圆形 + 咬缺），颜色取调色板 `ink2`。
+- `webStyle({ position: "fixed", top: 18, right: 18 })`（600px 以下 `12px`），`zIndex` 取共享外壳顶栏层。
+- 36×36、圆角 10、`border` + `panel` 背景 + `shadow`，逐项取原型 `.pairtheme`
+  （`prototypes/acp-remote-pwa.html:485-495`）；太阳/月亮沿用与 `ShellView` 相同的图形（圆形 + 咬缺）。
+- 图标颜色取原型 `.pairtheme[data-ic="orange"]` 的亮橙（白天 `#d9480f` / 黑夜 `#ffa94d`）。这是原型里
+  唯一不来自 CSS 变量（也就是不来自 `palettes`）的主题色，因此只在 `PairingThemeToggle` 里按深浅色各给一次，
+  不新增调色板 token。
 - 按钮 `aria-label` 与共享外壳一致：“当前：白天，点击切换” / “当前：黑夜，点击切换”。
 - `data-action="toggle-theme"`、`data-pairing-theme-toggle="true"`，供 e2e 与组件测试定位。
 

@@ -19,7 +19,7 @@
  */
 
 import { usePathname, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 
 import type { ClientState } from "../../features/client-store";
@@ -27,7 +27,7 @@ import { useClientState } from "../../features/runtime";
 import type { ThemePreference } from "../theme";
 import { THEME_PREFERENCE_LABELS, themePreferenceStore, useTheme, useThemePreference } from "../theme";
 import { useReducedMotion } from "./reduced-motion";
-import { buildShellModel } from "./shell-model";
+import { buildShellModel, isPairingPath } from "./shell-model";
 import { ShellView } from "./ShellView";
 import { toastStore, useToastMessage } from "./toast";
 
@@ -49,6 +49,13 @@ export function Shell({ children }: ShellProps): ReactElement {
   const toastMessage = useToastMessage();
   const router = useRouter();
   const [helpOpen, setHelpOpen] = useState(false);
+
+  // 等组合根读完本地记录再判断；保留设备与节点两种配对入口，避免循环跳转。
+  useEffect(() => {
+    if (state !== null && state.host === null && !isPairingPath(pathname)) {
+      router.replace("/pair");
+    }
+  }, [state?.host, state === null, pathname, router]);
 
   const model = buildShellModel({
     pathname,
