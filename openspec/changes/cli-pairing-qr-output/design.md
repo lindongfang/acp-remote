@@ -46,9 +46,9 @@
 ### D4：依赖与渲染
 
 - 在 `crates/app/Cargo.toml` 增加 `qrcode = { version = "0.14", default-features = false }`：纯 Rust、MIT/Apache-2.0、无原生依赖；只用于终端。
-- 用 `qrcode::QrCode::new(pairing_url.as_bytes())` 生成矩阵，`render::unicode::Dense1x2` 渲染（半块字符，约 1 字符宽/模块、2 模块高）。
+- 用 `QrCode::with_error_correction_level(pairing_url.as_bytes(), EcLevel::L)` 生成矩阵（L 级在完整 URL 上选到更小的版本），再用 **Braille 2×4** 渲染：每 2×4 个模块压成一个 `U+2800..U+28FF` 字符，模块仍是方形（约 4×4 px），宽高各减半，并保留 4 模块 quiet zone。
 - 生成失败时返回 `local.internal` 的 CLI 失败，错误消息不回显 URL/配对码；配对本身仍可在有效期内被网页端使用，用户可重跑 `device pair`。二维码容量远大于该 URL，正常不会失败。
-- 终端不支持 Unicode 半块字符时仍会显示块字符或替代字形；这是终端能力问题，不改变协议。
+- 终端不支持 Braille 字符时可能显示替代字形；这是终端能力问题，不改变协议。
 
 ### D5：测试
 

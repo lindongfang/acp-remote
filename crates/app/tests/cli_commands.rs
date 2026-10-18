@@ -451,9 +451,22 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         "begin 必须打印入口提示：{}",
         run.stdout
     );
+    let qr_lines: Vec<&str> = run
+        .stdout
+        .lines()
+        .filter(|line| {
+            line.chars()
+                .any(|character| ('\u{2800}'..='\u{28ff}').contains(&character))
+        })
+        .collect();
     assert!(
-        run.stdout.contains('█') || run.stdout.contains('▀') || run.stdout.contains('▄'),
+        !qr_lines.is_empty(),
         "begin 必须在终端渲染二维码：{}",
+        run.stdout
+    );
+    assert!(
+        qr_lines.iter().all(|line| line.chars().count() < 60),
+        "二维码应保持紧凑（Braille 2×4）：{}",
         run.stdout
     );
     // 网页入口的配对码：`XXXX-XXXX`，与裸地址一起只出现在终端。
