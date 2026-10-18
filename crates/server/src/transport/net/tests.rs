@@ -223,7 +223,8 @@ async fn recorded_origins(
 /// 同时仍然真实走过「宽限内排空/超时强制取消」两条路径。
 fn loopback_config() -> NetConfig {
     NetConfig {
-        listen: "127.0.0.1:0".to_owned(),
+        port: 0,
+        bind: Some("127.0.0.1".parse().expect("ip")),
         drain_grace: Duration::from_millis(200),
         ..NetConfig::default()
     }
@@ -371,9 +372,8 @@ async fn local_addrs_reports_the_real_bound_address() {
 async fn default_config_binds_only_loopback() {
     // 默认配置只落在 loopback（`CONFIG_REFERENCE.md` §1 的默认值断言在 `config` 模块）。
     let config = NetConfig::default();
-    assert_eq!(config.listen, "127.0.0.1:8765");
-    let bound: SocketAddr = config.listen.parse().expect("默认值可解析");
-    assert!(bound.ip().is_loopback());
+    assert_eq!(config.port, 8765);
+    assert_eq!(config.bind, None);
 }
 
 #[tokio::test]
@@ -384,7 +384,8 @@ async fn bind_fails_closed_when_the_address_is_taken() {
         .expect("占位 listener");
     let addr = occupied.local_addr().expect("地址");
     let error = NetListener::bind(NetConfig {
-        listen: addr.to_string(),
+        port: addr.port(),
+        bind: Some(addr.ip()),
         ..NetConfig::default()
     })
     .await
@@ -396,40 +397,30 @@ async fn bind_fails_closed_when_the_address_is_taken() {
 }
 
 #[tokio::test]
-async fn non_loopback_listen_warns_without_failing() {
-    // 非 loopback 是显式配置的后果，只告警不拒绝；`proxy` 模式再加一条明文面告警（D10）。
-    let listener = NetListener::bind(NetConfig {
-        listen: "0.0.0.0:0".to_owned(),
+async fn proxy_non_loopback_bind_fails_closed() {
+    // `proxy` 模式下 Daemon 不说 TLS：非 loopback 绑定会把明文面暴露到本机之外，必须拒绝。
+    let error = NetListener::bind(NetConfig {
+        port: 0,
+        bind: Some("0.0.0.0".parse().expect("ip")),
         ..NetConfig::default()
     })
     .await
-    .expect("非 loopback 可以绑定");
-    assert!(!listener.local_addrs()[0].ip().is_loopback());
-    assert!(
-        listener
-            .warnings()
-            .iter()
-            .any(|warning| matches!(warning, ListenerWarning::NonLoopbackListen { .. }))
-    );
-    assert!(
-        listener
-            .warnings()
-            .iter()
-            .any(|warning| matches!(warning, ListenerWarning::PlaintextBeyondLoopback { .. }))
-    );
+    .expect_err("proxy 模式下非 loopback 必须拒绝");
+    assert!(matches!(error, NetError::ProxyNonLoopback { .. }));
 }
 
 #[tokio::test]
-async fn plaintext_proxy_non_loopback_warns() {
-    // 非 loopback 明文只可能在显式 proxy 形态下成立，且必须告警。
-    let listener = NetListener::bind(NetConfig {
-        listen: "0.0.0.0:0".to_owned(),
-        tls: TlsMode::Proxy,
+async fn plaintext_dev_non_loopback_is_rejected() {
+    // 明文开发模式只允许 loopback（`SECURITY_DESIGN.md` §7.3）。
+    let error = NetListener::bind(NetConfig {
+        port: 0,
+        bind: Some("0.0.0.0".parse().expect("ip")),
+        allow_plaintext_dev: true,
         ..NetConfig::default()
     })
     .await
-    .expect("proxy 模式下非 loopback 可以启动");
-    assert_eq!(listener.warnings().len(), 2);
+    .expect_err("明文开发模式不得用于非 loopback");
+    assert!(matches!(error, NetError::PlaintextDevNonLoopback { .. }));
 }
 
 #[tokio::test]

@@ -49,7 +49,7 @@ Node Link 不等于：
 
 Node Link 不依赖 TLS 提供的节点身份：TLS 只保护传输，节点身份由 §9 的 transcript 证明。TLS 终止点必须位于对应节点的可信边界内。
 
-`[决定]` 本端点与 Sync 的 `/sync/v1`、两者的配对 HTTP 路径（§13.1）**共用同一个 listener**（`CONFIG_REFERENCE.md` §1 的 `daemon.listen`），按 path 路由，不需要单独配置端口。因为对端是另一台机器，`daemon.listen` 只监听 loopback 时本端点只在同机测试下可用；对外暴露必须显式监听非 loopback 地址或经同机可信反代，具体形态见 `CONFIG_REFERENCE.md` §1 的三形态表。
+`[决定]` 本端点与 Sync 的 `/sync/v1`、两者的配对 HTTP 路径（§13.1）**共用同一个 listener**（`CONFIG_REFERENCE.md` §1 的 `daemon.port`/`daemon.bind`），按 path 路由，不需要单独配置端口。因为对端是另一台机器，只绑定 loopback 时本端点只在同机测试下可用；对外暴露必须显式绑定非 loopback 地址（`direct` TLS）或经同机可信反代（`proxy` 模式只允许 loopback），具体形态见 `CONFIG_REFERENCE.md` §1 的三形态表。
 
 ### 2.2 消息信封
 

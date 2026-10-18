@@ -9,7 +9,7 @@
 //! 3. 首次种子导入（`seed_state`/`mark_seeded` 单事务）；
 //! 4. 启动恢复（`recover_unsettled`，§6 第 16 条：在取锁与开始监听**之前**）；
 //! 5. 单实例锁 + `instanceId`（`fs4`，见 `crate::lock`）；
-//! 6. 构建 Node Link 与 Sync 接入面、注册静态面并绑定 `daemon.listen`（TLS `direct` 的 PEM 在绑定前加载，
+//! 6. 构建 Node Link 与 Sync 接入面、注册静态面并绑定 `daemon.port`/`daemon.bind`（TLS `direct` 的 PEM 在绑定前加载，
 //!    任一失败都拒绝启动：`design.md` D10/D11；静态面的注册在协议端点之后，**发布构建**携带占位入口
 //!    同样拒绝启动：`sync-ui-hosting` 的 D1/D2）；
 //! 7. 本地管理 endpoint（`LocalEndpoint::bind`，`runtime_dir = None` 表示按 §2.1 读 `XDG_RUNTIME_DIR`）；
@@ -74,7 +74,7 @@ use server::transport::local::{
 // 「错误变体」在读代码时不会互相顶替（变体携带的就是这个类型）。
 use server::transport::net::{
     EmbeddedUi, MissingFrontendBuild as MissingFrontendBuildError, NetConfig, NetError,
-    NetListener, RouteError, Shutdown, check_release_build,
+    NetListener, RouteError, Shutdown, TlsMode, check_release_build,
 };
 use tokio::sync::{Notify, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
@@ -118,14 +118,14 @@ const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 /// 且不属于协议族」的请求的单页回退落点，因此这里只有这一个字面量。
 const STATIC_UI_PATH: &str = "/";
 
-/// 网络接入面（`daemon.listen`/`daemon.tls.*`）的启动失败：绑定、TLS 配置或路由注册。
+/// 网络接入面（`daemon.port`/`daemon.bind`/`daemon.tls.*`）的启动失败：绑定、TLS 配置或路由注册。
 ///
 /// 三者都是失败关闭：任何一项失败都不得降级为「无网络接入」继续运行（`specs/node-link-listener` 的
 /// R1/R3/R14）。
 #[derive(Debug, thiserror::Error)]
 pub enum NetworkError {
     /// `NetListener::bind` 失败（地址非法、端口被占用、TLS 配置不可用、明文开发模式与监听地址冲突）。
-    #[error("绑定 `daemon.listen` 失败")]
+    #[error("绑定 `daemon.port`/`daemon.bind` 失败")]
     Listener(#[source] NetError),
     /// 路由注册失败（path 重复或形态非法）：属配置/装配错误，不得静默跳过该端点。
     #[error("注册接入面路由失败")]
@@ -142,11 +142,11 @@ impl NetworkError {
     /// 不含完整敏感路径的简短说明（TLS 文件路径不进日志，`SECURITY_DESIGN.md` §14.1）。
     fn message(&self) -> String {
         match self {
-            Self::Listener(NetError::InvalidListen { .. }) => {
-                "`daemon.listen` is not a valid `ip:port` literal".to_owned()
+            Self::Listener(NetError::ProxyNonLoopback { .. }) => {
+                "`proxy` mode only permits a loopback `daemon.bind`".to_owned()
             }
             Self::Listener(NetError::PlaintextDevNonLoopback { .. }) => {
-                "`dev_mode.allow_plaintext` only applies to a loopback `daemon.listen`".to_owned()
+                "`dev_mode.allow_plaintext` only applies to a loopback `daemon.bind`".to_owned()
             }
             Self::Listener(NetError::InvalidPublicOrigin { .. }) => {
                 "`daemon.public_origin` is not a valid `http(s)://host[:port]`".to_owned()
@@ -177,7 +177,8 @@ impl NetworkError {
                 "the TLS configuration cannot be built".to_owned()
             }
             Self::Listener(NetError::Bind { .. }) => {
-                "`daemon.listen` cannot be bound (address in use or not permitted)".to_owned()
+                "`daemon.bind`/`daemon.port` cannot be bound (address in use or not permitted)"
+                    .to_owned()
             }
             Self::Listener(NetError::Serve { .. }) => {
                 "the listener failed while serving".to_owned()
@@ -736,7 +737,35 @@ fn spawn_maintenance(
     });
 }
 
-/// 一轮清理：`prune` + `expire_pairings` + `sweep_orphans`（三者各自失败只记日志，不中断后续）。
+/// 会话空闲回收：`sessions.idle_timeout_ms` 非零时按 `agent-host` 的固定粒度扫描（规则本身由配置
+/// 决定）。与其它周期任务共享取消路径，关闭序列里先停它再停 Agent。
+fn spawn_agent_idle_sweep(
+    tasks: &mut OwnedTasks,
+    composition: &Composition,
+    shutdown: Arc<ShutdownSignal>,
+) {
+    let Some(idle_timeout) = composition.config().sessions.idle_timeout else {
+        return;
+    };
+    let cancel = Arc::new(Notify::new());
+    let task_cancel = Arc::clone(&cancel);
+    let host = Arc::clone(composition.host());
+    tasks.spawn("agent_idle_sweep", cancel, async move {
+        let mut ticker = tokio::time::interval(agent_host::limits::IDLE_SWEEP_INTERVAL);
+        loop {
+            tokio::select! {
+                _ = task_cancel.notified() => break,
+                _ = ticker.tick() => {}
+            }
+            if shutdown.is_requested() {
+                break;
+            }
+            host.sweep_idle(idle_timeout).await;
+        }
+    });
+}
+
+/// 一轮清理：`prune` + 配对内存/持久过期 + `sweep_orphans`（各自失败只记日志，不中断后续）。
 async fn maintenance_tick(
     core: &Arc<acp_core::use_cases::UseCases>,
     authority: &Arc<Authority>,
@@ -1006,7 +1035,8 @@ fn spawn_merge_window<M: MergeWindow + 'static>(
 /// 本函数是该接线的唯一落点。
 pub fn net_config(config: &Config) -> NetConfig {
     NetConfig {
-        listen: config.listen.clone(),
+        port: config.port,
+        bind: config.bind,
         public_origin: config.public_origin.clone(),
         allowed_hosts: config.allowed_hosts.clone(),
         trusted_proxies: config.trusted_proxies.clone(),
@@ -1293,7 +1323,7 @@ pub struct NetIngress {
 }
 
 impl NetIngress {
-    /// 装配并启动网络接入面：绑定 `daemon.listen`（含 TLS 加载）→ 注册 Node Link 与 Sync 的全部 path
+    /// 装配并启动网络接入面：绑定 `daemon.port`/`daemon.bind`（含 TLS 加载）→ 注册 Node Link 与 Sync 的全部 path
     /// → spawn 三个任务。
     ///
     /// 绑定或注册失败时返回 `Err`：调用方必须拒绝启动（**不**降级为「无网络接入」），且此时还没有任何
@@ -1553,11 +1583,23 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
             "开发模式已启用：这不是安全部署形态（dev_mode.enabled = true）"
         );
     }
+    let bind_is_non_loopback = config
+        .bind
+        .map_or(!matches!(&config.tls, TlsMode::Proxy), |ip| {
+            !ip.is_loopback()
+        });
     if config.public_origin.is_none() {
-        tracing::warn!(
-            event = "daemon.public_origin_missing",
-            "未配置 `daemon.public_origin`：配对方法在任何副作用之前以 local.unavailable 失败关闭"
-        );
+        if bind_is_non_loopback {
+            tracing::warn!(
+                event = "daemon.public_origin_missing",
+                "绑定非 loopback 但未配置 `daemon.public_origin`：已有设备仍可认证，新配对与 Node Link 将以 local.unavailable 失败关闭"
+            );
+        } else {
+            tracing::debug!(
+                event = "daemon.public_origin_missing",
+                "未配置 `daemon.public_origin`：仅 loopback 访问不需要它；配对方法会在使用前明确失败"
+            );
+        }
     }
     let flush_interval = Duration::from_millis(config.flush_interval_ms);
     // 事件扇出的分叉在装配 broker 之前建立：发布端口注入 `Composition`，队列交给网络接入面的分发循环
@@ -1596,6 +1638,20 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         Err(LockError::Held) => return Err(DaemonError::AlreadyRunning),
         Err(error) => return Err(DaemonError::Lock(error)),
     };
+
+    // 配对内存态的重启语义（§4.3、`CORE_PORTS_AND_STORAGE.md` §11.6 第 1 条）：取锁成功**之后**、
+    // 开始监听之前先清空 secret/配对码，再终结已无法继续验密的未确认配对——否则第二个进程会在启动
+    // 竞争里把活着的 daemon 的已认领配对清掉。失败只记日志、不阻止启动：这些配对本来就不能被认领，
+    // 到期后仍会被周期维护终结。
+    if let Err(error) =
+        recover_pairings_after_restart(composition.use_cases(), composition.authority()).await
+    {
+        tracing::warn!(
+            event = "daemon.pairing_recovery_failed",
+            error = crate::compose::port_error_token(&error),
+            "重启后的配对终结未能提交：这些配对将在到期时被周期维护清理"
+        );
+    }
 
     // Node Link 接入面：恢复、种子导入与启动恢复都已完成，而本地通道尚未开放（`design.md` D11）。
     // 绑定失败（地址非法、端口被占用、TLS `direct` 的 PEM 不可用、明文开发模式与非 loopback 冲突）
@@ -1663,6 +1719,7 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
 
     let mut tasks = OwnedTasks::new();
     spawn_maintenance(&mut tasks, &composition, Arc::clone(&shutdown));
+    spawn_agent_idle_sweep(&mut tasks, &composition, Arc::clone(&shutdown));
     // 合并窗口：按 `storage.flush_interval_ms` 驱动 broker（`Broker` 与 `UseCases` 内是同一实例）。
     let merge_window = Arc::new(BrokerMergeWindow::new(
         Arc::clone(composition.use_cases()),

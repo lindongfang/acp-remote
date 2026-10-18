@@ -1,4 +1,4 @@
-//! 接入面的配置形状：`daemon.listen`/`daemon.public_origin`/`daemon.allowed_hosts`/
+//! 接入面的配置形状：`daemon.port`/`daemon.bind`/`daemon.public_origin`/`daemon.allowed_hosts`/
 //! `daemon.trusted_proxies`/`daemon.tls.*`/`dev_mode.allow_plaintext` 在传输层的表示
 //! （`docs/CONFIG_REFERENCE.md` §1/§10）。
 //!
@@ -6,11 +6,12 @@
 //! （key 名与默认值的权威是 `CONFIG_REFERENCE.md`，这里不复制一份配置文档）。
 
 use std::fmt;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::transport::net::{
-    DEFAULT_DRAIN_GRACE_MS, DEFAULT_LISTEN, DEFAULT_MAX_BODY_BYTES, DEFAULT_MAX_MESSAGE_BYTES,
+    DEFAULT_DRAIN_GRACE_MS, DEFAULT_MAX_BODY_BYTES, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_PORT,
 };
 
 /// `daemon.tls` 的两种模式（`CONFIG_REFERENCE.md` §1）。
@@ -43,11 +44,13 @@ impl fmt::Debug for TlsMode {
 /// 共享 listener 的配置（`design.md` D2/D9/D10）。
 #[derive(Debug, Clone)]
 pub struct NetConfig {
-    /// `daemon.listen`：`IP:端口` 字面量（默认 [`DEFAULT_LISTEN`]）。
+    /// `daemon.port`：本机接受连接的端口（默认 [`DEFAULT_PORT`]）。
     ///
-    /// 只接受 `std::net::SocketAddr` 可解析的字面量：不做主机名解析，避免「一个名字解析出多个地址」
-    /// 让「绑定一个 listener」的语义变得不确定。
-    pub listen: String,
+    /// `0` 表示由内核分配临时端口；是否允许由组合根按部署模式判定（`CONFIG_REFERENCE.md` §1）。
+    pub port: u16,
+    /// `daemon.bind`：显式绑定地址；`None` = 按 TLS 模式取默认（`proxy` → `127.0.0.1`，
+    /// `direct` → `0.0.0.0` 并尽力补 `[::]`）。
+    pub bind: Option<IpAddr>,
     /// `daemon.public_origin`（`scheme://host[:port]`）；`None` = 未配置。
     pub public_origin: Option<String>,
     /// `daemon.allowed_hosts`：反向代理场景下的 Host 白名单；空表示按 `public_origin` 推导。
@@ -69,7 +72,8 @@ pub struct NetConfig {
 impl Default for NetConfig {
     fn default() -> Self {
         Self {
-            listen: DEFAULT_LISTEN.to_owned(),
+            port: DEFAULT_PORT,
+            bind: None,
             public_origin: None,
             allowed_hosts: Vec::new(),
             trusted_proxies: Vec::new(),
@@ -89,8 +93,9 @@ mod tests {
     #[test]
     fn default_matches_config_reference() {
         let config = NetConfig::default();
-        // `CONFIG_REFERENCE.md` §1 的默认值：loopback:8765、proxy 模式、无 public_origin/allowed_hosts。
-        assert_eq!(config.listen, "127.0.0.1:8765");
+        // `CONFIG_REFERENCE.md` §1 的默认值：port 8765、proxy 模式、无显式 bind/public_origin/allowed_hosts。
+        assert_eq!(config.port, 8765);
+        assert_eq!(config.bind, None);
         assert_eq!(config.public_origin, None);
         assert!(config.allowed_hosts.is_empty());
         assert!(config.trusted_proxies.is_empty());

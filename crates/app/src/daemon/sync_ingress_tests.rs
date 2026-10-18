@@ -156,7 +156,7 @@ impl Harness {
         create_owner_only_dir(&data_dir);
         let config = Config::from_toml(&format!(
             "[daemon]\ndata_dir = {dir:?}\npublic_origin = \"https://{HOST}\"\n\
-             listen = \"127.0.0.1:0\"\nshutdown_grace_ms = 1000\n\
+             port = 0\nbind = \"127.0.0.1\"\nshutdown_grace_ms = 1000\n\
              [identity]\nkeystore = \"ephemeral\"\n\
              [dev_mode]\nenabled = true\nallow_plaintext = true\n",
             dir = data_dir.display()

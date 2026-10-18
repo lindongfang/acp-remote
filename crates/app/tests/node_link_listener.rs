@@ -148,16 +148,16 @@ fn an_occupied_listen_address_refuses_startup() {
     drop(free);
 }
 
-/// R3：非法监听地址拒绝启动（错误必须说明是 `ip:port` 字面量问题）。
+/// R3：非法绑定地址拒绝启动（`daemon.bind` 只接受 IP 字面量）。
 #[test]
-fn an_invalid_listen_literal_refuses_startup() {
-    let daemon = Daemon::configure_with_listen("listen-invalid", "example.ts.net:8765", "", "");
+fn an_invalid_bind_literal_refuses_startup() {
+    let daemon = Daemon::configure_with_bind("listen-invalid", "example.ts.net", 8765, "", "");
     let (status, _stdout, stderr) = run_start_once(daemon.config_path());
     assert!(!status.success(), "非法地址必须拒绝启动：{stderr}");
-    assert_eq!(failure_code(&stderr), "local.unavailable", "{stderr}");
+    assert_eq!(failure_code(&stderr), "local.invalid_params", "{stderr}");
     assert!(
-        stderr.contains("not a valid `ip:port` literal"),
-        "错误必须指出 `daemon.listen` 不是合法字面量：{stderr}"
+        stderr.contains("daemon.bind"),
+        "错误必须指出 `daemon.bind` 必须是 IP 字面量：{stderr}"
     );
 }
 
@@ -257,53 +257,25 @@ fn direct_tls_terminates_tls_and_refuses_plaintext() {
     assert!(daemon.stop().success());
 }
 
-/// R15：`dev_mode.allow_plaintext` 只对 loopback 生效——非 loopback 监听 + 该开关即拒绝启动。
+/// R15/R4：`proxy` 模式下 Daemon 不说 TLS，非 loopback 绑定会在配置解析阶段失败关闭
+/// （明文面不得超出 loopback；不再只告警）。
 #[test]
-fn plaintext_dev_mode_is_refused_off_loopback() {
-    let daemon = Daemon::configure_with_dev_mode(
-        "plaintext-off-loopback",
-        "0.0.0.0:0",
-        "allow_plaintext = true\n",
-        "",
-    );
+fn off_loopback_bind_is_refused_in_proxy_mode() {
+    let daemon = Daemon::configure_with_listen("proxy-off-loopback", "0.0.0.0:0", "", "");
     let (status, _stdout, stderr) = run_start_once(daemon.config_path());
-    assert!(!status.success(), "非 loopback 明文必须拒绝启动：{stderr}");
-    assert_eq!(failure_code(&stderr), "local.unavailable", "{stderr}");
     assert!(
-        stderr.contains("only applies to a loopback"),
-        "错误必须指出明文开发模式只允许 loopback：{stderr}"
+        !status.success(),
+        "proxy 模式非 loopback 必须拒绝启动：{stderr}"
     );
-}
-
-/// R4：`proxy` 模式监听非 loopback 是显式配置，启动成功但必须给出告警（明文面暴露在本机之外）。
-#[test]
-fn proxy_mode_off_loopback_starts_with_a_warning() {
-    let mut daemon = Daemon::configure_with_listen("proxy-off-loopback", "0.0.0.0:0", "", "");
-    daemon.start();
-    let status = daemon.ok_value(server::local_admin::Method::DaemonStatus, support::params());
-    let listen = status["listen"].as_array().expect("listen 是数组");
-    assert_eq!(listen.len(), 1, "{listen:?}");
-    let addr: SocketAddr = listen[0].as_str().expect("文本").parse().expect("ip:port");
-    assert!(addr.ip().is_unspecified(), "0.0.0.0 的绑定结果：{addr}");
-
-    let warnings = daemon.log_events("daemon.listener_warning");
-    let text = serde_json::to_string(&warnings).expect("告警可序列化");
+    assert_eq!(failure_code(&stderr), "local.invalid_params", "{stderr}");
     assert!(
-        text.contains("非 loopback"),
-        "启动输出必须包含「监听非 loopback 地址」的告警：{text}"
+        stderr.contains("proxy"),
+        "错误必须指出 proxy 模式只允许 loopback：{stderr}"
     );
     assert!(
-        text.contains("proxy 模式"),
-        "proxy 模式 + 非 loopback 必须追加明文面告警：{text}"
+        daemon.log_events("net.listener_bound").is_empty(),
+        "配置失败不得留下绑定日志"
     );
-    // 底层接入层也各有一条结构化告警（可由运维直接过滤）。
-    assert!(!daemon.log_events("net.listen_non_loopback").is_empty());
-    assert!(
-        !daemon
-            .log_events("net.plaintext_beyond_loopback")
-            .is_empty()
-    );
-    assert!(daemon.stop().success());
 }
 
 /// D11 的 unwired 收敛：四个键 + `dev_mode.allow_plaintext` 不再出现在「已知但未接线」里。
@@ -311,17 +283,17 @@ fn proxy_mode_off_loopback_starts_with_a_warning() {
 /// **必须在 debug 级下跑**：`daemon.config_unwired` 是 debug 事件（`app::daemon`），info 级下这份清单
 /// 恒空，断言就退化成恒真。因此本用例在 `logging.level = "debug"` 下运行，并用**阳性对照**
 /// 证明这条通道在这个运行配置与读取路径上真的可观察：同一构造器、同一级别，只多一个确实未接线的键
-/// （`daemon.instance_lock = "ipc"`）。
+/// （`node_link.heartbeat_interval_ms`；`daemon.instance_lock = "ipc"` 已改为失败关闭）。
 #[test]
 fn the_wired_listener_keys_are_no_longer_reported_as_unwired() {
     // 阳性对照：`daemon.config_unwired` 必须能在同一配置形状下被读到。
     let mut control = Daemon::configure_with_dev_mode_and_log_level(
         "unwired-control",
         "127.0.0.1:0",
-        "instance_lock = \"ipc\"\n",
+        "",
         "allow_plaintext = true\n",
         "debug",
-        "",
+        "[node_link]\nheartbeat_interval_ms = 30000\n",
     );
     control.start();
     let control_keys: Vec<String> = control
@@ -332,7 +304,7 @@ fn the_wired_listener_keys_are_no_longer_reported_as_unwired() {
     assert!(
         control_keys
             .iter()
-            .any(|key| key == "daemon.instance_lock(ipc)"),
+            .any(|key| key == "node_link.heartbeat_interval_ms"),
         "阳性对照失败：debug 级下必须看得到未接线清单的明细，实际 {control_keys:?}"
     );
     assert!(control.stop().success());
@@ -353,7 +325,8 @@ fn the_wired_listener_keys_are_no_longer_reported_as_unwired() {
         .filter_map(|event| event["key"].as_str().map(str::to_owned))
         .collect();
     for key in [
-        "daemon.listen",
+        "daemon.port",
+        "daemon.bind",
         "daemon.allowed_hosts",
         "daemon.trusted_proxies",
         "daemon.tls.mode",

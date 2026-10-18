@@ -28,6 +28,7 @@ use crate::client::{ClientError, ClientOutcome, LocalAdminClient, outcome_of};
 use crate::config::{ConfigError, Loaded, config_path_from_env, load_for_cli};
 use crate::lock::{self, LockState};
 
+pub(crate) mod origin;
 pub(crate) mod pairing;
 
 /// `daemon stop` 之后等待 Daemon 释放单实例锁的上限（关闭序列含排空与 `wal_checkpoint`）。
@@ -75,10 +76,21 @@ enum Command {
         #[command(subcommand)]
         command: NodeCommand,
     },
+    /// 配置辅助（只读；不写配置文件）。
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// 组合 `daemon.status` 与 CLI 侧本地检查；Daemon 离线时在 CLI 进程内完成（**不新增方法**）。
     Doctor,
     /// stdin/stdout ↔ 本地通道 channel `0x02` 的字节泵（不进管理信封）。
     AcpStdio,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// 检测本机地址并打印 `daemon.public_origin` 建议值（不写文件）。
+    Origin,
 }
 
 #[derive(Debug, Subcommand)]
@@ -215,6 +227,10 @@ fn dispatch(cli: Cli) -> Result<(), Failure> {
                 call_once(&mut context, Method::NodeRevoke, node_revoke_params(&args))
             }
         },
+        Command::Config {
+            command: ConfigCommand::Origin,
+        } => origin::run(&context)
+            .map_err(|message| Failure::local(LocalErrorCode::Internal, message)),
         Command::Doctor => doctor(&mut context),
         Command::AcpStdio => acp_stdio(&context),
     }
@@ -695,11 +711,12 @@ mod tests {
     use clap::CommandFactory as _;
 
     /// §5.8 映射表第一列的子命令与第二列的分组（唯一权威：`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）。
-    const DOCUMENTED: [(&str, &[&str]); 4] = [
+    const DOCUMENTED: [(&str, &[&str]); 5] = [
         ("daemon", &["start", "stop", "status"]),
         ("agent", &["list"]),
         ("device", &["pair", "list", "revoke"]),
         ("node", &["pair", "list", "revoke"]),
+        ("config", &["origin"]),
     ];
 
     /// 子命令集合与 §5.8 逐条一致：不多不少（`doctor`/`acp-stdio` 是顶层叶子），且没有 `session create`
@@ -715,7 +732,6 @@ mod tests {
         expected.push("doctor");
         expected.push("acp-stdio");
         assert_eq!(names, expected);
-
         for (name, nested) in DOCUMENTED {
             let group = command
                 .get_subcommands()
@@ -787,6 +803,8 @@ mod tests {
             ],
             vec!["acp-remote", "node", "pair", "--mode", "owner"],
             vec!["acp-remote", "node", "pair", "--fingerprint", "ab12"],
+            vec!["acp-remote", "config", "origin"],
+            vec!["acp-remote", "--config", "x", "config", "origin"],
         ] {
             assert!(
                 Cli::try_parse_from(accepted.clone()).is_ok(),

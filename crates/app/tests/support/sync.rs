@@ -1311,7 +1311,7 @@ impl HostNode {
         create_owner_only_dir(&data_dir);
         let config_text = format!(
             "[daemon]\ndata_dir = \"{}\"\npublic_origin = \"https://{host_name}\"\n\
-             listen = \"127.0.0.1:0\"\n\
+             port = 0\nbind = \"127.0.0.1\"\n\
              [identity]\nkeystore = \"ephemeral\"\n\
              [dev_mode]\nenabled = true\nallow_plaintext = true\n\
              [agent]\ndefault = \"codex\"\ncodex = [\"{}\"]\n",

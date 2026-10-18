@@ -4,7 +4,7 @@
 //!
 //! - [`transport::local`]：平台本地 IPC 的 endpoint 创建与访问控制、帧编解码、channel 用途绑定、
 //!   未完成请求上限，以及 `0x02` 连接在 facade 缺席期的失败方式；
-//! - [`transport::net`]：`daemon.listen` 的共享 HTTP/WSS listener、path 路由、Host/代理头边界、
+//! - [`transport::net`]：`daemon.port`/`daemon.bind` 的共享 HTTP/WSS listener、path 路由、Host/代理头边界、
 //!   TLS `proxy`/`direct` 两种模式与连接级上限（`node-link-owner` 变更的 WP2）；
 //! - [`local_admin`]：管理信封（channel `0x01`）的值对象与编解码、`local.*` 错误码、方法分发表，
 //!   以及方法路由（本地配置族、`daemon.*`、Export/Import、`audit.export`）；

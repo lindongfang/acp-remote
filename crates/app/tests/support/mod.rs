@@ -11,7 +11,7 @@
 //!   runner 没有平台 keystore，而本切片要求 fail-closed，只有显式开发模式才允许进程内 keystore
 //!   （`CONFIG_REFERENCE.md` §8/§10）。测试因此**不**覆盖平台 keystore 路径（见交接说明）。
 //!
-//! 网络接入面接线后，基础配置一律写 `listen = "127.0.0.1:0"`（内核分配端口）：默认的固定端口 8765
+//! 网络接入面接线后，基础配置一律写 `port = 0` + `bind = "127.0.0.1"`（内核分配端口）：默认的固定端口 8765
 //! 会让并行用例（以及同一台机器上的其他实例）互相抢端口（plan 的「Runtime Resources」规则）。
 //! 需要特定监听地址的用例用 `Daemon::configure_with_listen`。
 
@@ -139,8 +139,12 @@ pub struct Daemon {
 
 /// 基础配置里各段可覆盖内容的来源（`build` 的唯一入参形状）。
 struct ConfigParts<'a> {
-    /// `daemon.listen`（`None` = `127.0.0.1:0`）。
+    /// 测试辅助的 `ip:port` 简写（`None` = `127.0.0.1:0`）。
     listen: Option<&'a str>,
+    /// 直接覆盖 `daemon.bind`（用于非法值/非 loopback 用例）。
+    bind: Option<&'a str>,
+    /// 直接覆盖 `daemon.port`（与 `bind` 搭配）。
+    port: Option<u16>,
     /// 追加到 `[daemon]` 段落里的键。
     daemon: &'a str,
     /// 追加到 `[dev_mode]` 段落里的键。
@@ -159,6 +163,8 @@ impl Daemon {
             label,
             ConfigParts {
                 listen: None,
+                bind: None,
+                port: None,
                 daemon: "",
                 dev_mode: "",
                 logging_level: None,
@@ -174,6 +180,8 @@ impl Daemon {
             label,
             ConfigParts {
                 listen: None,
+                bind: None,
+                port: None,
                 daemon: daemon_extra,
                 dev_mode: "",
                 logging_level: None,
@@ -182,9 +190,9 @@ impl Daemon {
         )
     }
 
-    /// 同上，但显式给出 `daemon.listen`（共享 listener 接线后的绑定/失败关闭用例）。
+    /// 同上，但显式给出 `ip:port`（共享 listener 接线后的绑定/失败关闭用例）。
     ///
-    /// 基础配置默认写 `listen = "127.0.0.1:0"`（内核分配端口）：并行用例与同一台机器上的其他实例
+    /// 基础配置默认写 `port = 0` + `bind = "127.0.0.1"`（内核分配端口）：并行用例与同一台机器上的其他实例
     /// 不会因为默认的固定端口 8765 互相抢端口（plan 的「Runtime Resources」规则）。
     pub fn configure_with_listen(
         label: &str,
@@ -197,6 +205,31 @@ impl Daemon {
             label,
             ConfigParts {
                 listen: Some(listen),
+                bind: None,
+                port: None,
+                daemon: daemon_extra,
+                dev_mode: "",
+                logging_level: None,
+                extra,
+            },
+        )
+    }
+
+    /// 直接覆盖 `daemon.bind`/`daemon.port`（非法绑定值与非 loopback 用例）。
+    pub fn configure_with_bind(
+        label: &str,
+        bind: &str,
+        port: u16,
+        daemon_extra: &str,
+        extra: &str,
+    ) -> Self {
+        Self::build(
+            TempRoot::new(label),
+            label,
+            ConfigParts {
+                listen: None,
+                bind: Some(bind),
+                port: Some(port),
                 daemon: daemon_extra,
                 dev_mode: "",
                 logging_level: None,
@@ -220,6 +253,8 @@ impl Daemon {
             label,
             ConfigParts {
                 listen: Some(listen),
+                bind: None,
+                port: None,
                 daemon: "",
                 dev_mode: dev_mode_extra,
                 logging_level: None,
@@ -231,7 +266,7 @@ impl Daemon {
     /// 同上，但可同时覆盖 `[daemon]`、`[dev_mode]` 与 `[logging] level`。
     ///
     /// `daemon.config_unwired` 是 debug 级事件（`app::daemon`），因此「哪些键已接线」的用例必须在
-    /// debug 级下跑，并用一条确实未接线的键（例如 `daemon.instance_lock = "ipc"`）做阳性对照；
+    /// debug 级下跑，并用一条确实未接线的键（例如 `node_link.heartbeat_interval_ms`）做阳性对照；
     /// 这三个覆盖项必须能同时给出，否则对照与断言会跑在两份不同的配置上。
     pub fn configure_with_dev_mode_and_log_level(
         label: &str,
@@ -246,6 +281,8 @@ impl Daemon {
             label,
             ConfigParts {
                 listen: Some(listen),
+                bind: None,
+                port: None,
                 daemon: daemon_extra,
                 dev_mode: dev_mode_extra,
                 logging_level: Some(logging_level),
@@ -261,6 +298,8 @@ impl Daemon {
             label,
             ConfigParts {
                 listen: None,
+                bind: None,
+                port: None,
                 daemon: "",
                 dev_mode: "",
                 logging_level: None,
@@ -277,6 +316,16 @@ impl Daemon {
 
     fn build(root: TempRoot, label: &str, parts: ConfigParts<'_>) -> Self {
         let data_dir = root.path().join("data");
+        // 测试辅助仍以 `ip:port` 描述绑定（`127.0.0.1:0`），写进配置时拆成新键。
+        let listen: std::net::SocketAddr = parts
+            .listen
+            .unwrap_or("127.0.0.1:0")
+            .parse()
+            .expect("测试 listen 必须是 ip:port");
+        let port = parts.port.unwrap_or_else(|| listen.port());
+        let bind = parts
+            .bind
+            .map_or_else(|| listen.ip().to_string(), str::to_owned);
         #[cfg(unix)]
         let runtime_dir = root.path().join("runtime");
         #[cfg(unix)]
@@ -299,7 +348,8 @@ impl Daemon {
             r#"[daemon]
 data_dir = "{data_dir}"
 public_origin = "https://acpr-test.example.invalid"
-listen = "{listen}"
+port = {port}
+bind = "{bind}"
 {daemon_extra}
 
 [identity]
@@ -318,7 +368,8 @@ file = "{log}"
 {extra}
 "#,
             data_dir = data_dir.display().to_string().replace('\\', "/"),
-            listen = parts.listen.unwrap_or("127.0.0.1:0"),
+            port = port,
+            bind = bind,
             daemon_extra = parts.daemon,
             dev_mode_extra = parts.dev_mode,
             logging_level = parts.logging_level.unwrap_or("info"),

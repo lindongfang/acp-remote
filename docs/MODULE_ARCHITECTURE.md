@@ -156,6 +156,7 @@ crates/
   - `nix` 增量开启 `socket`/`user`：Unix 侧用 `SO_PEERCRED` 取对端 uid 与当前进程 `getuid` 比对（§2.2）；不需要 `net`——`sockopt::PeerCredentials` 与 `getsockopt` 都不在 `net` 门后（已核 `nix 0.30.1` 的 feature 表与 `sys::socket` 的门控）。两者只影响 Unix 构建，Windows 构建里 `nix` 不参与编译（§4.5）。
   - 新增 `clap 4.6`（`derive`，CLI 子命令解析）与 `toml 1.1`（`app` 读 `CONFIG_REFERENCE.md` 的配置文件）。本切片只读配置、不回写，因此不引入 `toml_edit`。两者均 `MIT OR Apache-2.0`、显式声明 `rust-version = 1.85`（等于本仓库 MSRV，不抬高）。
   - 新增 `rpassword 7.5`（实际 `7.5.4`）：CLI 在交互终端无回显读取敏感输入（配对 secret 等）；不把凭据值放进命令行或普通文件。**Apache-2.0 单许可**，只被 `app` 使用，不进入 `core` 闭包。
+  - 新增 `if-addrs 0.14`（实际 `0.14.0`）：`acp-remote config origin` 只读枚举本机网卡地址。**许可证** `MIT OR BSD-3-Clause`；只被 `app` 使用，启动路径不调用；不解析主机名、不发起网络请求。Tailscale 名字仍通过用户显式调用 `tailscale status --json` 获得，核心不依赖 Tailscale。
   - 单实例锁（`Cargo.toml` 的 `fs4`、`daemon-cli-and-local-admin` 变更的 design.md 决策 4）用 OS advisory 文件锁：选 `fs4 1.1`，按 `docs/SECURITY_DESIGN.md` §20 的四个判据核验——**语义**：unix `flock(LOCK_EX)`、Windows `LockFileEx(LOCKFILE_EXCLUSIVE_LOCK)`，公开 API 只有独占锁与 `try_lock`/`TryLockError`（safe API，unsafe 收敛在 crate 内部）；**许可证** `MIT OR Apache-2.0`（在 `deny.toml` allow 列表内）；**MSRV** 显式声明 `1.75.0`（≤ 1.85）；**维护状态** 1.1.0 发布于 2026-04-28，Windows 侧要求 `windows-sys ^0.61`（与本仓库 lock 里已有的 `0.61.2` 同族，不新增版本族）。落选候选 `fd-lock 4.0.4` 的三条硬伤：未声明 `rust-version`（MSRV 不可核）、最近发版 2025-03-10、API 是读写双分支（`RwLock::read` 走 `LOCK_SH`，与「单实例锁必须互斥」的语义不匹配，且 Windows 侧只锁 1 字节）。
   - 调用点约束：固定工具链的 `std::fs::File` 自带 `lock`/`try_lock`（1.89 稳定），与 `fs4::FileExt` 同名且方法解析优先级更高；本仓库 MSRV 是 1.85，因此必须写全限定调用（`fs4::FileExt::try_lock(&file)`）或显式 `use fs4::FileExt;` 并避免落入 std 的同名方法——用了 std 的版本就等于把 MSRV 抬到 1.89（需单独决定）。
   - `vendor/windows-local-ipc`（`daemon-cli-and-local-admin` 变更的 design.md 决策 3）以**仓库内 path 依赖**登记：写在根 `Cargo.toml` 的 `workspace.exclude`，因而不是 workspace 成员、不继承 `unsafe_code = "forbid"`（它必须写 `unsafe`）、不发布；`server` 是它唯一的依赖方，§5 矩阵因此把它登记为「列」。`deny.toml` 的 `[sources]` 注记说明 path 来源为什么不经 registry/git 判定，以及它的许可证与 wildcard 判定由哪几条承担。
@@ -439,6 +440,8 @@ workspace select
 
 device pair|list|revoke
 node pair|list|revoke
+
+config origin
 
 acp-stdio
 doctor

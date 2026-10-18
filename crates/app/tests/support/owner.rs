@@ -118,7 +118,7 @@ impl OwnerNode {
         let data_dir = root.join("data");
         super::create_owner_only_dir(&data_dir);
         let config_text = format!(
-            "[daemon]\ndata_dir = \"{}\"\npublic_origin = \"https://{}\"\nlisten = \"127.0.0.1:0\"\n[agent]\ndefault = \"codex\"\ncodex = [\"{}\", \"acp\"]\n{daemon_extra}",
+            "[daemon]\ndata_dir = \"{}\"\npublic_origin = \"https://{}\"\nport = 0\nbind = \"127.0.0.1\"\n[dev_mode]\nenabled = true\n[agent]\ndefault = \"codex\"\ncodex = [\"{}\", \"acp\"]\n{daemon_extra}",
             data_dir.display().to_string().replace('\\', "/"),
             nodelink::PUBLIC_HOST,
             env!("CARGO_BIN_EXE_acp-remote").replace('\\', "/"),

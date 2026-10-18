@@ -1,0 +1,121 @@
+# ACP Remote Daemon 配置模板
+#
+# 用法：复制为平台默认路径下的 config.toml，按需取消注释。
+#   Windows: %APPDATA%\acp-remote\config.toml
+#   Linux:   $XDG_CONFIG_HOME/acp-remote/config.toml（或 ~/.config/acp-remote/config.toml）
+# 也可以用 `acp-remote --config <path> ...` 或环境变量 ACP_REMOTE_CONFIG 指定路径。
+#
+# 优先级：命令行参数 > 配置文件 > 内置默认值。
+# 未知键会让启动失败；`imports` / `exports` 不属于启动配置，出现即失败。
+# 逐键的权威说明见 docs/CONFIG_REFERENCE.md。
+
+[daemon]
+# SQLite、附件、日志与锁文件的根目录；必须是绝对路径。
+# 缺省为平台用户配置目录下的 acp-remote/。
+# data_dir = "D:/Data/acp-remote"
+
+# 共享 HTTP/WSS listener 的绑定端口（Sync、Node Link、配对 HTTP 与前端静态资源共用）。
+port = 8765
+
+# 显式绑定地址：单个 IP 字面量。
+# 缺省：tls.mode = "proxy" 时绑定 127.0.0.1；direct 时绑定 0.0.0.0 并尽力补 [::]。
+# 注意：proxy 模式只允许 loopback；需要远程直连请用 direct TLS。
+# bind = "0.0.0.0"
+
+# 对外身份：别人访问本机时使用的权威地址。
+# 可写 host[:port]（自动补 https://，省略端口按 443），也可写完整 https://...。
+# 需要远程配对/Node Link 时必须配置；只在本机使用时可以留空。
+# public_origin = "work-pc.example.ts.net"
+
+# 反向代理场景下允许的 Host 白名单（可多个）；为空时按 public_origin 推导。
+# allowed_hosts = ["work-pc.example.ts.net", "acp.example.com"]
+
+# 允许终止 TLS 的同机代理地址；非空时才采信 Forwarded / X-Forwarded-*。
+# trusted_proxies = ["127.0.0.1"]
+
+# 单实例锁：目前只支持 "file"。
+instance_lock = "file"
+
+# 关闭时等待接入层停止、Agent 退出与存储刷新的上限（毫秒，0..=60000）。
+shutdown_grace_ms = 10000
+
+[daemon.local_admin]
+# 本地管理通道 endpoint：目前只支持 "auto"（Windows Named Pipe / Unix socket）。
+endpoint = "auto"
+
+[daemon.tls]
+# proxy：TLS 由同机可信反代终止（默认，只允许绑定 loopback）。
+# direct：Daemon 自己终止 TLS，需要下面两个 PEM 路径。
+mode = "proxy"
+# cert_path = "D:/Data/cert/work-pc.example.ts.net.crt"
+# key_path = "D:/Data/cert/work-pc.example.ts.net.key"
+
+[sync]
+# 以下三个限额只能往默认值以下调；写大了会被忽略并回落到默认值。
+max_message_bytes = 1048576
+max_prompt_bytes = 262144
+max_replay_events_per_batch = 500
+
+[sessions]
+# queue：同一会话忙时排队；reject_busy：直接返回 session.busy。
+queue_policy = "queue"
+max_queued_turns = 16
+# 0 = 不因空闲关闭会话。
+idle_timeout_ms = 0
+
+[storage]
+transcript_retention_days = 90
+sync_event_retention_days = 7
+max_total_size_bytes = 2147483648
+max_session_size_bytes = 104857600
+persist_deltas = false
+flush_interval_ms = 250
+attachment_max_file_bytes = 20971520
+attachment_max_total_bytes = 1073741824
+# 附件目录；缺省为 <data_dir>/attachments，显式值必须是绝对路径。
+# attachment_dir = "D:/Data/acp-remote/attachments"
+audit_retention_days = 365
+
+[node]
+# 本机节点展示名（1..=128 字符）。
+# name = "家里的台式机"
+
+[agent]
+# Agent id 即键名；值是命令字符串或完整 argv 数组。
+# 没有 [agent] 条目时，Daemon 不提供任何本地 Agent。
+# default = "omp"
+# omp = ["C:/tools/omp.exe", "acp"]
+# codex = "C:/tools/codex-acp.exe"
+
+[identity]
+# platform：Windows DPAPI（当前用户 scope）；ephemeral 仅允许显式开发模式。
+keystore = "platform"
+fail_closed_on_missing_keystore = true
+
+[dev_mode]
+# 发布构建默认关闭；启用后启动输出与 UI 会持续显示非安全状态。
+enabled = false
+allow_plaintext = false
+ephemeral_identity = false
+
+[logging]
+level = "info"
+format = "text"
+# 缺省输出到 stderr；写文件时权限要求与 data_dir 相同。
+# file = "D:/Data/acp-remote/log/daemon.log"
+
+# ---------------------------------------------------------------------------
+# 暂不生效的段：node_link
+#
+# 这些键目前只被解析、不参与运行（启动日志会以 debug 级
+# `daemon.config_unwired` 逐键提示）。保留在模板里是为了让后续接线时
+# 键名与默认值有唯一出处；现在写它们不会改变行为。
+# ---------------------------------------------------------------------------
+# [node_link]
+# max_message_bytes = 1048576
+# catalog_snapshot_batch_size = 500
+# resource_snapshot_batch_size = 500
+# max_in_flight_commands = 32
+# max_pending_queue_bytes = 8388608
+# max_pending_queue_messages = 2000
+# heartbeat_interval_ms = 30000

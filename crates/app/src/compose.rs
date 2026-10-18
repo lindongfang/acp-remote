@@ -226,9 +226,12 @@ impl Composition {
         ));
         let host = Arc::new(AgentHost::new(
             Arc::new(config.agents.clone()),
-            // 本切片不接 `sessions.idle_timeout_ms`（「已知但未接线」）与客户端能力宣告
-            // （`HostConfig::default()` = `ClientCapabilities::none()`：没有可作答的上游客户端，不虚报能力）。
-            HostConfig::default(),
+            // 空闲回收复用 `sessions.idle_timeout_ms`（`CONFIG_REFERENCE.md` §4）；客户端能力宣告保持
+            // `HostConfig::default()`（`ClientCapabilities::none()`：没有可作答的上游客户端，不虚报能力）。
+            HostConfig {
+                idle_timeout: config.sessions.idle_timeout,
+                ..HostConfig::default()
+            },
             Arc::clone(&ids),
             Arc::clone(&clock),
         ));
@@ -247,9 +250,10 @@ impl Composition {
             },
             BrokerConfig {
                 persist_deltas: config.storage.persist_deltas,
-                // `sessions.queue_policy`/`sessions.max_queued_turns` 属未接线段落：取 v1 默认
+                // `sessions.*`（`CONFIG_REFERENCE.md` §4）：排队策略与上限由配置决定，默认同 v1
                 // （`queue` / 16，与 `SYNC_PROTOCOL.md` §11.6 的二选一一致）。
-                ..BrokerConfig::default()
+                queue_policy: config.sessions.queue_policy,
+                max_queued_turns: config.sessions.max_queued_turns,
             },
         ));
         let use_cases = Arc::new(UseCases::new(UseCaseDeps {
