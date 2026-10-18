@@ -434,11 +434,29 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
     );
     assert_failure_only(&run, "local.expired", &[]);
     assert!(
-        run.stdout.contains("https://"),
-        "begin 必须打印 pairingUrl：{}",
+        run.stdout
+            .lines()
+            .any(|line| line.starts_with("网页端：https://")),
+        "begin 必须打印网页端裸地址：{}",
         run.stdout
     );
-    // 网页入口的配对码与 URL 并存：`XXXX-XXXX`，与 URL 一起只出现在终端。
+    assert!(
+        !run.stdout.contains("#data="),
+        "完整 fragment 不得作为文本打印：{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("（移动端请扫码；网页端打开 /pair 后输入配对码）"),
+        "begin 必须打印入口提示：{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains('█') || run.stdout.contains('▀') || run.stdout.contains('▄'),
+        "begin 必须在终端渲染二维码：{}",
+        run.stdout
+    );
+    // 网页入口的配对码：`XXXX-XXXX`，与裸地址一起只出现在终端。
     let code_line = run
         .stdout
         .lines()

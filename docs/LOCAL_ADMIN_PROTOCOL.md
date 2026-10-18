@@ -415,7 +415,7 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 
 **配对流程（安全仪式）**：`SECURITY_DESIGN.md` §9.4 要求确认界面显示名称、指纹与过期时间；`SYNC_PROTOCOL.md` §7.0 要求确认只能经本地入口。因此 `device pair` / `node pair` 的 CLI 流程固定为：
 
-1. `begin`：拿到 `pairingId`、`pairingUrl` 与 `pairingCode`；`device pair` 同时打印完整 URL（供二维码/移动端使用）与 `XXXX-XXXX` 形式的配对码（供网页 `/pair` 输入），两种形式都不得写入 shell 历史或文件；`node pair` 只有 URL；
+1. `begin`：拿到 `pairingId`、`pairingUrl` 与 `pairingCode`；`device pair` 打印网页端裸地址（`https://<origin>/pair`，无 fragment）、`XXXX-XXXX` 形式的配对码，以及一个编码完整 `pairingUrl` 的终端二维码（供移动端扫码）；完整 fragment 只由二维码承载，不作为文本打印，所有形式都不得写入 shell 历史或文件。`node pair` 仍只打印 URL；
 2. 轮询 `status`：未认领时继续等（有效期 5 分钟，到期报 `local.expired`）；认领后**必须**展示名称、指纹与过期时间；
 两个方向都不提交任何授权集合。配对码被网页成功 lookup 消耗后，CLI 仍按 `pairingId` 继续轮询并等待 `y/N`，确认仪式不变。
 
@@ -423,9 +423,12 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 
 ```text
 $ acp-remote device pair
-https://home.example.invalid/pair#…（含 pairing secret，只在本终端展示）
+网页端：https://home.example.invalid/pair
 配对码：ABCD-EFGH
-（移动端请扫码/打开上面的完整地址；网页端打开 /pair 后输入配对码）
+
+<二维码：编码完整 pairingUrl（含 pairing secret），供移动端扫码>
+
+（移动端请扫码；网页端打开 /pair 后输入配对码）
 正在等待设备认领…（有效期至 2026-09-23T14:31:00.000Z，Ctrl-C 取消）
 
 设备已认领：

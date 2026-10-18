@@ -16,6 +16,8 @@ use std::io::{IsTerminal as _, Write as _};
 use std::time::{Duration, Instant};
 
 use acp_core::ports::Clock as _;
+use qrcode::QrCode;
+use qrcode::render::unicode;
 use serde_json::Value;
 use server::local_admin::{JsonObject, LocalErrorCode, Method};
 
@@ -431,13 +433,17 @@ async fn await_claim(
     let pairing_id = text_field(&begin, "pairingId")?;
     // `pairingUrl` 只经终端展示（含配对 secret 的 fragment），不落日志/文件/错误消息。
     let pairing_url = text_field(&begin, "pairingUrl")?;
-    println!("{pairing_url}");
     if target == PairTarget::Device {
-        // 网页入口的 8 位配对码：`XXXX-XXXX` 只是展示形态，服务端归一化后比较。它同样只在终端出现，
-        // 不写日志/文件/错误消息。节点配对没有网页入口，不读取该字段。
+        // 网页端用裸 `/pair` + 8 位配对码；完整 fragment 只由二维码承载，供移动端扫码。
+        println!("网页端：{}", bare_pairing_url(&pairing_url));
         let pairing_code = text_field(&begin, "pairingCode")?;
         println!("配对码：{}", readable_pairing_code(&pairing_code)?);
-        println!("（移动端请扫码/打开上面的完整地址；网页端打开 /pair 后输入配对码）");
+        println!();
+        println!("{}", terminal_qr(&pairing_url)?);
+        println!();
+        println!("（移动端请扫码；网页端打开 /pair 后输入配对码）");
+    } else {
+        println!("{pairing_url}");
     }
     let expires_at = text_field(&begin, "expiresAt")?;
     println!(
@@ -546,6 +552,25 @@ fn expired(target: PairTarget) -> Failure {
         LocalErrorCode::Expired,
         format!("{label}配对已过期或已被拒绝", label = target.label()),
     )
+}
+
+/// 网页端入口：`pairingUrl` 去掉 `#data=…` fragment 后的裸地址。
+fn bare_pairing_url(pairing_url: &str) -> &str {
+    pairing_url
+        .split_once('#')
+        .map(|(base, _)| base)
+        .unwrap_or(pairing_url)
+}
+
+/// 把完整 `pairingUrl` 渲染成终端二维码；二维码是移动端入口，矩阵不把 URL 作为文本输出。
+fn terminal_qr(pairing_url: &str) -> Result<String, Failure> {
+    let code = QrCode::new(pairing_url.as_bytes()).map_err(|_| {
+        Failure::local(
+            LocalErrorCode::Internal,
+            "无法生成终端二维码；请重试 device pair",
+        )
+    })?;
+    Ok(code.render::<unicode::Dense1x2>().build())
 }
 
 /// 把服务端返回的规范配对码（8 位大写、无分隔符）展示为 `XXXX-XXXX`。
