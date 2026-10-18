@@ -8,7 +8,7 @@
 
 - 在 `/pair` 与 `/node-link/pair` 页面增加一个浮动的明暗切换按钮（桌面/窄屏都在右上角），不绘制页头、不恢复全局顶栏。
 - 按钮复用共享的 `themePreferenceStore` / `useTheme` / `useThemePreference`：点击在白天/黑夜之间切换并持久化，MUST NOT 建立第二份主题状态。
-- 页面调色板继续完全来自 `useTheme()` 的当前主题；按钮自身也用同一套调色板。
+- 页面调色板继续完全来自 `useTheme()` 的当前主题；按钮外观（背景/边框/阴影）用同一套调色板，图标颜色按原型固定为亮橙（不新增调色板 token）。
 - 更新 `pwa-web-client` 规格、`docs/FRONTEND_DESIGN.md` 与 `prototypes/README.md` 中“实现不提供页内主题切换”的过时说明。
 - 增加组件测试与浏览器 e2e：按钮存在、点击后标签/主题变化、偏好持久化。
 

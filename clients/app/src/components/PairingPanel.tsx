@@ -44,9 +44,9 @@ import {
   fontSize,
   fontWeight,
   palettes,
-  radius,
   spacing,
   useTheme,
+  useWindowDimensions,
 } from "./theme";
 
 /** 运行时取 `react-native-web` 的动画实现，类型取 `react-native` 的公开声明。 */
@@ -146,9 +146,16 @@ function buildStyles(colors: Palette) {
     title: {
       color: colors.ink,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xl,
+      // 原型 `.pairpanel h1`：配对码卡片内的标题是 24px；页级标题另由 `pageTitle` 覆盖为 26px。
+      fontSize: 24,
+      lineHeight: 31.2,
       fontWeight: fontWeight.medium,
       textAlign: "center",
+    },
+    // 原型 `.pair h1`：配对页的进行中/信息/失败标题是 26px；配对码卡片内是 24px（见 `codeTitle`）。
+    pageTitle: {
+      fontSize: 26,
+      lineHeight: 33.8,
     },
     lede: {
       maxWidth: 560,
@@ -167,13 +174,17 @@ function buildStyles(colors: Palette) {
     card: {
       alignSelf: "center",
       width: "100%",
-      maxWidth: 420,
+      maxWidth: 460,
       gap: spacing.xs,
-      padding: spacing.md,
+      paddingVertical: 20,
+      paddingHorizontal: 24,
       borderWidth: 1,
       borderColor: colors.line,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
+      borderRadius: 16,
+      backgroundColor: colors.panel,
+      boxShadow: colors.shadow,
+      // 原型 `.paircard` 是左对齐的信息卡，即便外层舞台居中。
+      alignItems: "stretch",
     },
     cardRow: {
       flexDirection: "row",
@@ -200,23 +211,32 @@ function buildStyles(colors: Palette) {
       textAlign: "center",
     },
     glyph: {
-      fontSize: 40,
+      // 原型 `.block .glyph`：44×44 的圆角方块，携带语义底色。
+      width: 44,
+      height: 44,
+      borderRadius: 12,
+      backgroundColor: colors.warnSoft,
+      color: colors.warn,
+      fontSize: 22,
       lineHeight: 44,
       textAlign: "center",
     },
     glyphDanger: {
+      backgroundColor: colors.dangerSoft,
       color: colors.danger,
     },
     glyphWarning: {
+      backgroundColor: colors.warnSoft,
       color: colors.warn,
     },
     warning: {
       flexDirection: "row",
-      alignItems: "baseline",
+      alignItems: "flex-start",
       maxWidth: 560,
       gap: spacing.sm,
-      padding: spacing.md,
-      borderRadius: radius.sm,
+      paddingVertical: spacing.md,
+      paddingHorizontal: 14,
+      borderRadius: 10,
       backgroundColor: colors.warnSoft,
     },
     warningMark: {
@@ -226,65 +246,148 @@ function buildStyles(colors: Palette) {
     },
     warningText: {
       flexShrink: 1,
-      color: colors.ink2,
+      color: colors.warn,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
-    codeOriginCard: {
+    // 原型 `.pairpanel`：配对码输入是一整块卡片，而不是散落在页面背景上的控件。
+    codePanel: {
       alignSelf: "center",
       width: "100%",
-      maxWidth: 420,
+      maxWidth: 514,
       alignItems: "center",
-      gap: spacing.xs,
-      padding: spacing.md,
+      paddingTop: 26,
+      paddingHorizontal: 26,
+      paddingBottom: 20,
       borderWidth: 1,
       borderColor: colors.line,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
+      borderRadius: 20,
+      backgroundColor: colors.panel,
+      boxShadow: colors.shadow,
     },
-    secureBadge: {
-      color: colors.ok,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-      fontWeight: fontWeight.medium,
-    },
-    insecureBadge: {
-      color: colors.warn,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-      fontWeight: fontWeight.medium,
-    },
-    codeCells: {
+    // 原型 `.pairorigin`：来源胶囊（圆点 + 主机地址 + TLS 徽标）。
+    originPill: {
       flexDirection: "row",
-      justifyContent: "center",
-      gap: spacing.xs,
-    },
-    codeCell: {
-      width: 32,
-      height: 46,
-      padding: 0,
+      alignItems: "center",
+      gap: spacing.sm,
+      maxWidth: "100%",
+      marginBottom: 18,
+      paddingVertical: 6,
+      paddingHorizontal: 12,
       borderWidth: 1,
       borderColor: colors.line2,
-      borderRadius: radius.sm,
+      borderRadius: 999,
+      backgroundColor: colors.panel2,
+    },
+    originDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 3.5,
+      backgroundColor: colors.ok,
+      flexShrink: 0,
+    },
+    originHost: {
+      flexShrink: 1,
+      color: colors.ink2,
+      fontFamily: fontFamily.mono,
+      // 原型 `.pairorigin .host`：11.5px；RN 的数值字号允许小数。
+      fontSize: 11.5,
+      lineHeight: 19.2,
+    },
+    secureBadge: {
+      flexShrink: 0,
+      color: colors.ok,
+      fontFamily: fontFamily.sans,
+      fontSize: 9.5,
+      fontWeight: fontWeight.bold,
+      letterSpacing: 0.5,
+      backgroundColor: colors.okSoft,
+      borderRadius: 4,
+      paddingVertical: 2,
+      paddingHorizontal: 5,
+    },
+    insecureBadge: {
+      flexShrink: 0,
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: 9.5,
+      fontWeight: fontWeight.bold,
+      letterSpacing: 0.5,
+      backgroundColor: colors.warnSoft,
+      borderRadius: 4,
+      paddingVertical: 2,
+      paddingHorizontal: 5,
+    },
+    // 原型 `.pairpanel h1{margin:0 0 4px}`：只在配对码卡片内需要这 4px。
+    codeTitle: {
+      marginBottom: 4,
+    },
+    // 原型 `.pairhint`：12px、ink-3，标题与输入格之间。
+    codeHint: {
+      maxWidth: 320,
+      marginBottom: 18,
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: 12,
+      lineHeight: 19.2,
+      textAlign: "center",
+    },
+    codeCells: {
+      width: "100%",
+      flexDirection: "row",
+      justifyContent: "center",
+      gap: spacing.sm,
+      marginBottom: spacing.md,
+    },
+    codeCell: {
+      // 原型 `.codes input`：46×56、圆角 11、line 边框、panel 底色、600 24px 等宽。
+      width: 46,
+      height: 56,
+      padding: 0,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: 11,
       backgroundColor: colors.panel,
       color: colors.ink,
       fontFamily: fontFamily.mono,
-      fontSize: fontSize.xl,
-      fontWeight: fontWeight.value,
+      fontSize: 24,
+      fontWeight: fontWeight.medium,
       textAlign: "center",
     },
+    // 窄屏（原型 `@media (max-width:600px)`）：格宽 40、高 52、字号 21、间距 6。
+    codeCellCompact: {
+      width: 40,
+      height: 52,
+      fontSize: 21,
+      flexShrink: 1,
+      minWidth: 0,
+    },
+    // 四位一组的分隔：原型 `.codes input:nth-child(5){margin-left:12px}`。
+    codeCellFifth: {
+      marginLeft: spacing.md,
+    },
+    codeCellFifthCompact: {
+      marginLeft: spacing.sm,
+    },
     primary: {
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
+      // 原型 `.pairpanel .paira .btn`：整宽、12×24、圆角 11、实心 accent。
+      width: "100%",
+      // `.codes` 的 12px + `.paira` 的 20px 在 flex 里不会合并：补 8px 得到原型的 20px 间隔。
+      marginTop: 8,
+      paddingVertical: 12,
+      paddingHorizontal: spacing.xl,
       borderWidth: 1,
       borderColor: colors.accent,
-      borderRadius: radius.sm,
-      backgroundColor: colors.accentSoft,
+      borderRadius: 11,
+      backgroundColor: colors.accent,
+      alignItems: "center",
     },
     primaryText: {
-      color: colors.accentInk,
+      // 原型 `.btn.primary` 写死 `#fff`：实心 accent 上的文字不随主题翻转。
+      color: "#ffffff",
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
+      fontSize: fontSize.md,
+      lineHeight: 22.4,
       fontWeight: fontWeight.medium,
     },
   });
@@ -306,6 +409,9 @@ function formatRemaining(expiresAtMs: number | null, nowMs: number): string | nu
 export function PairingPanel({ model, onSubmitCode }: PairingPanelProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const { width } = useWindowDimensions();
+  // 原型在 600px 以下收缩配对码格（窄屏 8 格一行不换行）。
+  const compact = width < 600;
   const { presentation } = model;
 
   // 配对码只活在这个组件的内存里：不写入模型、URL、Cookie 或任何存储。离开输入态
@@ -401,16 +507,17 @@ export function PairingPanel({ model, onSubmitCode }: PairingPanelProps): ReactE
   const stage = (): ReactElement => {
     if (presentation.kind === "code_entry") {
       const origin = model.origin ?? "未知来源";
+      // 原型 `.pairpanel`：来源胶囊 → 标题 → 静态提示 → 8 格 → 整宽主按钮。
       return (
-        <>
-          <Text role="heading" style={styles.title}>
-            {presentation.title}
-          </Text>
-          <Text style={styles.lede}>{presentation.lede}</Text>
+        <View style={styles.codePanel} dataSet={{ pairingCodePanel: "true" }}>
           {/* S0 的公开事实：将配对的 canonical origin 与安全上下文（HTTPS）。 */}
-          <View style={styles.codeOriginCard} dataSet={{ pairingCodeOrigin: origin }}>
-            <Text style={styles.cardKey}>将与此电脑配对</Text>
-            <Text style={styles.cardValue} dataSet={{ pairingCodeOriginValue: origin }}>
+          <View style={styles.originPill} dataSet={{ pairingCodeOrigin: origin }}>
+            <View style={styles.originDot} />
+            <Text
+              style={styles.originHost}
+              numberOfLines={1}
+              dataSet={{ pairingCodeOriginValue: origin }}
+            >
               {origin}
             </Text>
             {model.secureContext ? (
@@ -423,6 +530,15 @@ export function PairingPanel({ model, onSubmitCode }: PairingPanelProps): ReactE
               </Text>
             )}
           </View>
+          <Text role="heading" style={[styles.title, styles.codeTitle]}>
+            {presentation.title}
+          </Text>
+          {/* 静态有效期提示：lookup 之前不显示数字倒计时（design D6）。 */}
+          {presentation.note === null ? null : (
+            <Text style={styles.codeHint} dataSet={{ pairingCodeHint: "true" }}>
+              {presentation.note}
+            </Text>
+          )}
           {/* 8 个单字符格：码只在组件内存里，提交后立即随阶段切换清空。 */}
           <View style={styles.codeCells} dataSet={{ pairingCodeEntry: "true" }}>
             {codeCells.map((cell, index) => (
@@ -439,7 +555,11 @@ export function PairingPanel({ model, onSubmitCode }: PairingPanelProps): ReactE
                 // 聚焦即选中已有字符：直接输入一位会替换该格，而不是在其后追加成两位。
                 selectTextOnFocus={true}
                 accessibilityLabel={`配对码第 ${index + 1} 位`}
-                style={styles.codeCell}
+                style={[
+                  styles.codeCell,
+                  compact ? styles.codeCellCompact : null,
+                  index === 4 ? (compact ? styles.codeCellFifthCompact : styles.codeCellFifth) : null,
+                ]}
                 dataSet={{ pairingCodeCell: String(index) }}
                 ref={(node) => {
                   codeCellRefs.current[index] = node;
@@ -447,12 +567,6 @@ export function PairingPanel({ model, onSubmitCode }: PairingPanelProps): ReactE
               />
             ))}
           </View>
-          {/* 静态有效期提示：lookup 之前不显示数字倒计时（design D6）。 */}
-          {presentation.note === null ? null : (
-            <Text style={styles.note} dataSet={{ pairingCodeHint: "true" }}>
-              {presentation.note}
-            </Text>
-          )}
           <Pressable
             role="button"
             style={styles.primary}
@@ -463,7 +577,7 @@ export function PairingPanel({ model, onSubmitCode }: PairingPanelProps): ReactE
           >
             <Text style={styles.primaryText}>继续配对</Text>
           </Pressable>
-        </>
+        </View>
       );
     }
 
@@ -484,7 +598,7 @@ export function PairingPanel({ model, onSubmitCode }: PairingPanelProps): ReactE
               </Text>
             ) : null}
           </View>
-          <Text role="heading" style={styles.title}>
+          <Text role="heading" style={[styles.title, styles.pageTitle]}>
             {presentation.title}
           </Text>
           <Text style={styles.lede}>{presentation.lede}</Text>
@@ -502,7 +616,7 @@ export function PairingPanel({ model, onSubmitCode }: PairingPanelProps): ReactE
     if (presentation.kind === "info") {
       return (
         <>
-          <Text role="heading" style={styles.title}>
+          <Text role="heading" style={[styles.title, styles.pageTitle]}>
             {presentation.title}
           </Text>
           <Text style={styles.lede}>{presentation.lede}</Text>
@@ -522,7 +636,7 @@ export function PairingPanel({ model, onSubmitCode }: PairingPanelProps): ReactE
         >
           {danger ? "✕" : "⚠"}
         </Text>
-        <Text role="heading" style={styles.title}>
+        <Text role="heading" style={[styles.title, styles.pageTitle]}>
           {presentation.title}
         </Text>
         <Text style={styles.lede}>{presentation.lede}</Text>

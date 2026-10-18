@@ -14,8 +14,9 @@
  *
  * ## 位置
  *
- * 固定浮在页面右上角（12px），不参与配对状态的居中布局；窄屏同样适用。颜色全部来自当前
- * 调色板，不写死明暗两套颜色。
+ * 固定浮在页面右上角（桌面 18px、窄屏 12px），不参与配对状态的居中布局。位置、圆角、阴影与
+ * 图标的亮橙色都取自桌面原型 `.pairtheme`（`prototypes/acp-remote-pwa.html:485-495`）；橙色是原型
+ * 里唯一不来自调色板变量的主题色（白天 `#d9480f`、黑夜 `#ffa94d`），因此在本文件按深浅色各给一次。
  */
 
 import type { ReactElement } from "react";
@@ -26,16 +27,20 @@ import {
   StyleSheet,
   View,
   palettes,
-  radius,
   themePreferenceStore,
   useTheme,
   useThemePreference,
+  useWindowDimensions,
   webStyle,
   zIndex,
 } from "./theme";
 
+/** 原型 `.pairtheme[data-ic="orange"]`：图标颜色按主题固定为亮橙。 */
+const THEME_ICON_COLORS = { light: "#d9480f", dark: "#ffa94d" } as const;
+
 /** 按调色板建样式表：浅/深各建一次，渲染路径上不再新建样式对象。 */
-function buildStyles(colors: Palette) {
+function buildStyles(colors: Palette, dark: boolean) {
+  const iconColor = dark ? THEME_ICON_COLORS.dark : THEME_ICON_COLORS.light;
   return StyleSheet.create({
     button: {
       width: 36,
@@ -44,17 +49,21 @@ function buildStyles(colors: Palette) {
       justifyContent: "center",
       borderWidth: 1,
       borderColor: colors.line,
-      borderRadius: radius.sm,
+      borderRadius: 10,
       backgroundColor: colors.panel,
-      ...webStyle({ position: "fixed", top: 12, right: 12 }),
+      boxShadow: colors.shadow,
+      ...webStyle({ position: "fixed", top: 18, right: 18 }),
       zIndex: zIndex.topBar,
+    },
+    buttonCompact: {
+      ...webStyle({ top: 12, right: 12 }),
     },
     // 与共享外壳一致：太阳/月亮用图形画，不依赖字体里有没有那个字形。
     sun: {
       width: 10,
       height: 10,
       borderRadius: 5,
-      backgroundColor: colors.ink2,
+      backgroundColor: iconColor,
     },
     moon: {
       width: 14,
@@ -65,7 +74,7 @@ function buildStyles(colors: Palette) {
       width: 13,
       height: 13,
       borderRadius: 7,
-      backgroundColor: colors.ink2,
+      backgroundColor: iconColor,
     },
     moonBite: {
       position: "absolute",
@@ -79,18 +88,19 @@ function buildStyles(colors: Palette) {
   });
 }
 
-const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
+const STYLES = { light: buildStyles(palettes.light, false), dark: buildStyles(palettes.dark, true) };
 
 /** 配对页右上角的明暗切换；与共享外壳共用 `themePreferenceStore`。 */
 export function PairingThemeToggle(): ReactElement {
   const theme = useTheme();
   const preference = useThemePreference();
+  const { width } = useWindowDimensions();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
   return (
     <Pressable
       role="button"
-      style={styles.button}
+      style={[styles.button, width < 600 ? styles.buttonCompact : null]}
       aria-label={theme.dark ? "当前：黑夜，点击切换" : "当前：白天，点击切换"}
       dataSet={{
         action: "toggle-theme",
