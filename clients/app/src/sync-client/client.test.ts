@@ -14,6 +14,7 @@ import { SyncClient } from "./client";
 import { DECLARED_SUBPROTOCOLS } from "./connection";
 import type { SyncClientEvent } from "./connection";
 import type { CommandMessage, Cursor, Uuid } from "../protocol";
+import type { DigestPort } from "./ports";
 import {
   FakeClock,
   FakeHostIdentity,
@@ -69,7 +70,7 @@ interface ClientHarness {
  * @param input.resumeCursor 模拟「上次持久化的确认游标」。
  * @param input.omitNowMs 不注入 `nowMs`，用来断言门面只保留**一套**时间来源（MINOR-3）。
  */
-function buildClient(input: { readonly resumeCursor?: Cursor | null; readonly omitNowMs?: boolean } = {}): ClientHarness {
+function buildClient(input: { readonly resumeCursor?: Cursor | null; readonly omitNowMs?: boolean; readonly digest?: DigestPort } = {}): ClientHarness {
   const sockets = new FakeSocketFactory();
   const events: SyncClientEvent[] = [];
   const clock = new FakeClock(input.omitNowMs === true ? 1_700_000_000_000 : 0);
@@ -80,7 +81,7 @@ function buildClient(input: { readonly resumeCursor?: Cursor | null; readonly om
     host: new FakeHostIdentity(),
     random: new FakeRandom(),
     transcript: new FakeTranscript(),
-    digest: fakeDigest(),
+    digest: input.digest ?? fakeDigest(),
     openSocket: sockets.open,
     subprotocols: DECLARED_SUBPROTOCOLS,
     resumeCursor: input.resumeCursor ?? null,
@@ -94,12 +95,12 @@ function buildClient(input: { readonly resumeCursor?: Cursor | null; readonly om
 }
 
 /** 交付一份单 chunk 的合法快照并等待它进入仓库。 */
-async function deliverCompleteSnapshot(context: ClientHarness, snapshotId: Uuid): Promise<void> {
+async function deliverCompleteSnapshot(context: ClientHarness, snapshotId: Uuid, cursor?: Cursor): Promise<void> {
   const socket = context.sockets.latest;
-  socket.deliver(makeSnapshotBegin({ snapshotId, chunkCount: 1 }));
+  socket.deliver(makeSnapshotBegin({ snapshotId, chunkCount: 1, ...(cursor === undefined ? {} : { cursor }) }));
   const chunk = makeSnapshotChunk({ snapshotId, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM });
   socket.deliver(chunk.rawText);
-  socket.deliver(makeSnapshotEnd({ snapshotId, chunkCount: 1, digest: expectedSnapshotDigest([chunk.rawText]) }));
+  socket.deliver(makeSnapshotEnd({ snapshotId, chunkCount: 1, digest: expectedSnapshotDigest([chunk.rawText]), ...(cursor === undefined ? {} : { cursor }) }));
   await waitUntil(() => context.client.snapshots.current?.snapshotId === snapshotId, "快照进入仓库");
 }
 
@@ -512,6 +513,114 @@ describe("CRITICAL-3：客户端方向出站序号", () => {
       expect(message?.["connectionId"]).toBeUndefined();
     }
     void context;
+  });
+});
+
+function deliverCaughtUp(context: ClientHarness, sequence = "10"): void {
+  context.sockets.latest.deliver({
+    protocolVersion: 1, type: "sync.caught_up",
+    messageId: "cccccccc-1111-4111-8111-000000000001", connectionId: CONNECTION_ID, connectionSequence: "1",
+    body: { cursor: { serverEpoch: SERVER_EPOCH, globalSequence: sequence } },
+  });
+}
+
+describe("创建新目录后的快照刷新", () => {
+  it.each(["disconnect", "overflow"] as const)("校验期间 %s 丢弃暂存与迟到快照，不提前 ACK 后续事件", async (mode) => {
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const base = fakeDigest();
+    const context = buildClient({ digest: { async sha256(bytes) { await gate; return base.sha256(bytes); } } });
+    await authenticate(context);
+    context.client.refreshSnapshot();
+    const socket = context.sockets.latest;
+    const chunk = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM });
+    socket.deliver(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
+    socket.deliver(chunk.rawText);
+    socket.deliver(makeSnapshotEnd({ snapshotId: SNAPSHOT_ID, chunkCount: 1, digest: expectedSnapshotDigest([chunk.rawText]) }));
+    const event = makeEvent({ globalSequence: "11", eventId: "aaaaaaaa-0000-4000-8000-000000000011" });
+    if (mode === "overflow") {
+      for (let index = 0; index < 257; index += 1) socket.deliver(event);
+      expect(socket.closedWith?.reason).toBe("snapshot_validation_backlog");
+    } else {
+      socket.deliver(event);
+      context.client.disconnect();
+    }
+    expect(socket.types()).not.toContain("sync.ack");
+    release();
+    await waitUntil(() => base.calls.length >= 2, "异步校验完成");
+    expect(context.client.snapshots.current).toBeNull();
+    expect(context.events.some((item) => item.kind === "event" || item.kind === "snapshot_verified")).toBe(false);
+  });
+
+  it("caught_up 先于异步摘要校验时，验证完成仍会追取第二次刷新", async () => {
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const base = fakeDigest();
+    const context = buildClient({ digest: { async sha256(bytes) { await gate; return base.sha256(bytes); } } });
+    await authenticate(context);
+    context.client.refreshSnapshot();
+    context.client.refreshSnapshot();
+    const socket = context.sockets.latest;
+    const chunk = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM });
+    socket.deliver(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
+    socket.deliver(chunk.rawText);
+    socket.deliver(makeSnapshotEnd({ snapshotId: SNAPSHOT_ID, chunkCount: 1, digest: expectedSnapshotDigest([chunk.rawText]) }));
+    socket.deliver(makeEvent({ globalSequence: "11", eventId: "aaaaaaaa-0000-4000-8000-000000000011" }));
+    deliverCaughtUp(context, "11");
+    expect(socket.types().filter((type) => type === "sync.subscribe")).toHaveLength(2);
+    release();
+    await waitUntil(() => socket.types().filter((type) => type === "sync.subscribe").length === 3, "校验后补发刷新");
+    expect(context.events.findIndex((event) => event.kind === "snapshot_verified")).toBeLessThan(
+      context.events.findIndex((event) => event.kind === "event"),
+    );
+    await deliverCompleteSnapshot(context, NEXT_SNAPSHOT_ID, { serverEpoch: SERVER_EPOCH, globalSequence: "11" });
+    deliverCaughtUp(context, "11");
+    expect(socket.types().filter((type) => type === "sync.subscribe")).toHaveLength(3);
+  });
+
+  it("同连接无游标订阅，旧清单保留到快照验证成功，不重新认证", async () => {
+    const context = buildClient({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "10" } });
+    await authenticate(context);
+    await deliverCompleteSnapshot(context, SNAPSHOT_ID);
+    const old = context.client.snapshots.current;
+    context.client.refreshSnapshot();
+    expect(context.sockets.sockets).toHaveLength(1);
+    expect(context.sockets.latest.last("sync.subscribe")?.["body"]).toEqual({ cursor: null, scope: "machine" });
+    expect(context.client.snapshots.current).toBe(old);
+    expect(context.sockets.latest.types().filter((type) => type === "auth.client_hello")).toHaveLength(1);
+    await deliverCompleteSnapshot(context, NEXT_SNAPSHOT_ID);
+    expect(context.client.snapshots.current?.snapshotId).toBe(NEXT_SNAPSHOT_ID);
+  });
+
+  it("在途刷新合并请求，并在第一份完成后追取期间新建的目录，不循环刷新", async () => {
+    const context = buildClient();
+    await authenticate(context);
+    const socket = context.sockets.latest;
+    context.client.refreshSnapshot();
+    context.client.refreshSnapshot();
+    context.client.refreshSnapshot();
+    expect(socket.types().filter((type) => type === "sync.subscribe")).toHaveLength(2);
+    await deliverCompleteSnapshot(context, SNAPSHOT_ID);
+    deliverCaughtUp(context);
+    expect(socket.types().filter((type) => type === "sync.subscribe")).toHaveLength(3);
+    await deliverCompleteSnapshot(context, NEXT_SNAPSHOT_ID);
+    deliverCaughtUp(context);
+    expect(socket.types().filter((type) => type === "sync.subscribe")).toHaveLength(3);
+  });
+
+  it("刷新时断线后保留意图，重连追平后重新请求完整快照", async () => {
+    const context = buildClient({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "10" } });
+    await authenticate(context);
+    context.client.refreshSnapshot();
+    context.sockets.latest.serverClose(4500);
+    await authenticate(context);
+    const socket = context.sockets.latest;
+    expect(socket.last("sync.subscribe")?.["body"]).toEqual({ cursor: { serverEpoch: SERVER_EPOCH, globalSequence: "10" }, scope: "machine" });
+    deliverCaughtUp(context);
+    expect(socket.last("sync.subscribe")?.["body"]).toEqual({ cursor: null, scope: "machine" });
+    await deliverCompleteSnapshot(context, NEXT_SNAPSHOT_ID);
+    deliverCaughtUp(context);
+    expect(socket.types().filter((type) => type === "sync.subscribe")).toHaveLength(2);
   });
 });
 

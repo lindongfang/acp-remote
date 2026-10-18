@@ -107,6 +107,11 @@ export class SyncClient {
   readonly #snapshots = new SnapshotRepository();
   readonly #dispatch = new Map<Uuid, DispatchRecord>();
   #connection: SyncConnection | null = null;
+  #snapshotRefreshNeeded = false;
+  #snapshotRefreshInFlight = false;
+  #snapshotRefreshAgain = false;
+  #snapshotRefreshVerified = false;
+  #snapshotRefreshCaughtUp = false;
   /** 跨连接复用的去重账本；服务端 epoch 变化时丢弃（必须重建快照）。 */
   #ledger: EventLedger | null = null;
   /** 阻断后停止自动重连；`src/state/` 显式解除前不再接受 `connect()`。 */
@@ -208,6 +213,23 @@ export class SyncClient {
   disconnect(): void {
     this.#connection?.close();
     this.#connection = null;
+    this.#snapshotRefreshInFlight = false;
+  }
+
+  /** 同连接刷新资源清单；合并在途请求，断线后保留刷新意图。 */
+  refreshSnapshot(): void {
+    this.#snapshotRefreshNeeded = true;
+    if (this.#snapshotRefreshInFlight) this.#snapshotRefreshAgain = true;
+    this.#flushSnapshotRefresh();
+  }
+
+  #flushSnapshotRefresh(): void {
+    if (!this.#snapshotRefreshNeeded || this.#snapshotRefreshInFlight || this.connectionId === null) return;
+    this.#snapshotRefreshInFlight = true;
+    this.#snapshotRefreshAgain = false;
+    this.#snapshotRefreshVerified = false;
+    this.#snapshotRefreshCaughtUp = false;
+    this.#connection?.refreshSnapshot();
   }
 
   /** 解除阻断（用户在主机侧确认身份或重新配对后由状态层调用）。 */
@@ -319,6 +341,7 @@ export class SyncClient {
       if (this.#isAdoptableBarrier(event.snapshot.cursor)) {
         this.#snapshots.replace(event.snapshot, this.#now());
         this.#ackedCursor = event.snapshot.cursor;
+        if (this.#snapshotRefreshInFlight) this.#snapshotRefreshVerified = true;
       }
     }
     if (event.kind === "event") {
@@ -327,7 +350,9 @@ export class SyncClient {
     }
     if (event.kind === "online") {
       this.#ackedCursor = event.cursor;
+      if (this.#snapshotRefreshInFlight) this.#snapshotRefreshCaughtUp = true;
     }
+    if (event.kind === "closed" || event.kind === "blocked") this.#snapshotRefreshInFlight = false;
     if (event.kind === "blocked") {
       // 阻断后停止自动重连：状态机不再调用 `connect()`，本层也拒绝。
       this.#blocked = event.cause;
@@ -339,5 +364,12 @@ export class SyncClient {
       }
     }
     this.#options.onEvent(event);
+    // 哈希校验与 caught_up 的到达可能先后互换；两者都完成才允许下一轮刷新。
+    if (this.#snapshotRefreshInFlight && this.#snapshotRefreshVerified && this.#snapshotRefreshCaughtUp) {
+      this.#snapshotRefreshNeeded = this.#snapshotRefreshAgain;
+      this.#snapshotRefreshAgain = false;
+      this.#snapshotRefreshInFlight = false;
+    }
+    if (event.kind === "online" || event.kind === "snapshot_verified") this.#flushSnapshotRefresh();
   }
 }

@@ -365,6 +365,9 @@ export class SyncConnection {
    */
   #ledger: EventLedger | null = null;
   readonly #staging: SnapshotStaging;
+  #validatingSnapshot = false;
+  #snapshotBacklog: string[] = [];
+  #snapshotBacklogChars = 0;
   /** 已被确认处理的游标；ACK 只能前进（§9.5）。 */
   #acked: Cursor | null;
   #closed = false;
@@ -445,6 +448,7 @@ export class SyncConnection {
   /** 主动关闭（用户断开）。 */
   close(code: number = CLOSE.normal, reason = "client_closed"): void {
     this.#closed = true;
+    this.#clearSnapshotBacklog();
     this.#cancelGapResubscribe();
     this.#socket.close(code, reason);
   }
@@ -452,6 +456,12 @@ export class SyncConnection {
   /** 丢弃未完成的暂存快照；`reason` 记录「为什么这次快照没提交」（§9.4）。 */
   discardStaging(reason: SnapshotDiscardReason = "reset_required"): void {
     this.#staging.discard(reason);
+  }
+
+  /** 无游标重新订阅，由服务端按现有 reset → snapshot 流程刷新清单。 */
+  refreshSnapshot(): void {
+    if (this.#closed || this.#authenticated === null) return;
+    this.#sendSubscribe(null);
   }
   /** 读取并缓存设备身份材料；本连接只读一次（读一次即可覆盖整个握手）。 */
   async #loadIdentityMaterial(): Promise<DeviceIdentityMaterial | null> {
@@ -619,7 +629,7 @@ export class SyncConnection {
    * 认证后首次订阅与「序号缺口后的恢复」走**同一条**路径：两者都要从 `#acked` 重新订阅，
    * 区别只在于游标是否为空。缺口恢复必须真的重发，否则事件流会静默停摆（R14「连续恢复」）。
    */
-  #sendSubscribe(): void {
+  #sendSubscribe(cursor: Cursor | null = this.#acked): void {
     this.#send({
       protocolVersion: PROTOCOL_VERSION,
       type: "sync.subscribe",
@@ -627,13 +637,26 @@ export class SyncConnection {
       connectionId: this.#requireConnectionId(),
       // 客户端方向自己的计数器（§4.1），不抄服务端信封里的序号。
       connectionSequence: this.#nextOutboundSequence(),
-      body: { cursor: this.#acked, scope: "machine" },
+      body: { cursor, scope: "machine" },
     });
   }
 
   // ── 入站分派 ──────────────────────────────────────────────────────────────
 
   #onMessage(text: string): void {
+    if (this.#closed) return;
+    if (this.#validatingSnapshot) {
+      // 异步摘要校验期间仍按 wire 到达顺序处理后续帧。队列最多 256 帧、4M UTF-16
+      // 字符（约 8 MiB），超限关闭后从持久游标恢复，不能无限缓存或先 ACK 后丢弃。
+      if (this.#snapshotBacklog.length >= 256 || this.#snapshotBacklogChars + text.length > 4 * 1024 * 1024) {
+        this.close(CLOSE.serverUnavailable, "snapshot_validation_backlog");
+        this.#onEvent({ kind: "closed", code: CLOSE.serverUnavailable, retryable: true, detail: "snapshot_validation_backlog" });
+        return;
+      }
+      this.#snapshotBacklog.push(text);
+      this.#snapshotBacklogChars += text.length;
+      return;
+    }
     const message = decodeOrReject(text, this.#onEvent);
     if (message === null) return;
     switch (message.type) {
@@ -653,7 +676,14 @@ export class SyncConnection {
         void this.#onSnapshotChunk(text, message as SyncSnapshotChunk);
         return;
       case "sync.snapshot_end":
-        void this.#onSnapshotEnd(message as SyncSnapshotEnd);
+        this.#validatingSnapshot = true;
+        void this.#onSnapshotEnd(message as SyncSnapshotEnd).then(
+          () => this.#drainSnapshotBacklog(),
+          () => {
+            this.close(CLOSE.serverUnavailable, "snapshot_validation_failed");
+            this.#onEvent({ kind: "closed", code: CLOSE.serverUnavailable, retryable: true, detail: "snapshot_validation_failed" });
+          },
+        );
         return;
       case "sync.caught_up":
         this.#onCaughtUp(message);
@@ -685,6 +715,22 @@ export class SyncConnection {
         return;
       default:
         this.#onEvent({ kind: "rejected", reason: "unexpected_type", detail: message.type });
+    }
+  }
+
+  #clearSnapshotBacklog(): void {
+    this.#snapshotBacklog = [];
+    this.#snapshotBacklogChars = 0;
+  }
+
+  #drainSnapshotBacklog(): void {
+    this.#validatingSnapshot = false;
+    if (this.#closed) { this.#clearSnapshotBacklog(); return; }
+    while (!this.#validatingSnapshot && !this.#closed && this.#snapshotBacklog.length > 0) {
+      const text = this.#snapshotBacklog.shift();
+      if (text === undefined) break;
+      this.#snapshotBacklogChars -= text.length;
+      this.#onMessage(text);
     }
   }
 
@@ -855,6 +901,7 @@ export class SyncConnection {
   async #onSnapshotEnd(message: SyncSnapshotEnd): Promise<void> {
     try {
       const verified = await this.#staging.complete(message);
+      if (this.#closed) return;
       // 快照 cursor 之后的事件会补发，随后 `sync.caught_up`（§9.4）。
       // 快照 cursor 同样是屏障：快照涵盖的序号之前的内容都已落进已完成状态，账本水位必须一并
       // 推进，否则恢复游标与水位分叉（与 #onCaughtUp 同理）。跨 epoch 或序号非法的快照游标
@@ -922,6 +969,7 @@ export class SyncConnection {
     // socket 已由服务端关闭：认证状态随之失效（§8.4），消费方据此不再拿 `connectionId`。
     // 之前只置位客户端主动 `close()` 的路径，服务端关闭这条会留下一个「仍在线」的连接对象。
     this.#closed = true;
+    this.#clearSnapshotBacklog();
     // 连接已结束：撤销待触发的重订阅，恢复交给重连（那里有全局退避）。
     this.#cancelGapResubscribe();
     this.discardStaging("connection_closed");

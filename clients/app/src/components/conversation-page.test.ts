@@ -196,7 +196,7 @@ describe("对话页正文：整页锚点", () => {
     // 路由在 `store === null` 时走的就是这个组件（组合根尚未装配 ≠ 本机没有数据）。
     const unavailable = renderToStaticMarkup(createElement(RuntimeUnavailable, { route: "session" }));
     expect(unavailable).toContain('data-runtime="unavailable"');
-    expect(unavailable).toContain("同步运行时未装配");
+    expect(unavailable).toContain("客户端初始化失败");
   });
 });
 

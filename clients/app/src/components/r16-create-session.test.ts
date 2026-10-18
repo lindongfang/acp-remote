@@ -23,6 +23,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import type { CommandResultMessage } from "../protocol";
 
 import { CreateSessionSheet } from "./CreateSessionSheet";
 import { DirectoryPicker } from "./DirectoryPicker";
@@ -49,7 +50,7 @@ import {
   initialDirectoryBrowseState,
 } from "../features/create-session-model";
 import type { RecordingGateway } from "../features/testing/fixtures";
-import { WORKSPACES_WITH_PATHS, onlineStore, resources, storeWith } from "../features/testing/fixtures";
+import { WORKSPACES_WITH_PATHS, onlineStore, resources, session, storeWith } from "../features/testing/fixtures";
 
 const DIRECTORY_ID = "work-api";
 const AGENTS = [
@@ -64,11 +65,16 @@ const REGISTERED: readonly RegisteredDirectoryModel[] = [
 ];
 
 /** 渲染创建弹层。 */
-function renderSheet(model: CreateSessionEntryModel, selectedAgentId: string | null = null): string {
+function renderSheet(
+  model: CreateSessionEntryModel,
+  selectedAgentId: string | null = null,
+  submitIssue: string | null = null,
+): string {
   return renderToStaticMarkup(
     createElement(CreateSessionSheet, {
       model,
       selectedAgentId,
+      submitIssue,
       onSelectAgent: () => undefined,
       onSubmit: () => undefined,
       onDismissUncertain: () => undefined,
@@ -827,6 +833,56 @@ function answerBrowseWithRaw(store: ClientStore, requestId: string, result: Reco
 }
 
 describe("R16 创建中与终态分别呈现", () => {
+  it("新目录创建完成后刷新权威快照，返回与重载后都有目录及会话，重投不重复刷新", () => {
+    const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
+    const summary = session({ id: "5d73cd10-a465-43cd-b3f1-704e2d49e99e", directoryId: "new-dir", title: "新目录会话" });
+    const result: CommandResultMessage = {
+      protocolVersion: 1, type: "command.result",
+      messageId: "bbbbbbbb-1111-4111-8111-000000000001",
+      connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637", connectionSequence: "1",
+      body: { requestId: "bbbbbbbb-1111-4111-8111-000000000002", command: "session.create",
+        status: "completed", acceptedAt: "2026-10-01T00:00:01.000Z", terminalEventId: null,
+        result: { sessionId: summary.sessionId, session: summary }, error: null },
+    };
+    store.apply({ kind: "command_result", result: { ...result, body: { ...result.body, status: "accepted", result: null } } });
+    expect(gateway.snapshotRefreshes).toBe(0);
+    const oldDirectories = store.state.resources?.workspaces;
+    store.apply({ kind: "command_result", result });
+    expect(gateway.snapshotRefreshes).toBe(1);
+    expect(store.state.resources?.workspaces).toBe(oldDirectories);
+    expect(store.conversationPage(summary.sessionId)?.header.title).toBe("新目录会话");
+    store.apply({ kind: "command_result", result });
+    expect(gateway.snapshotRefreshes).toBe(1);
+
+    const refreshed = resources({ sessions: [summary], workspaces: [
+      ...WORKSPACES_WITH_PATHS, { directoryId: "new-dir", path: "D:\\actual\\new-dir" },
+    ] });
+    store.apply({ kind: "snapshot_verified", snapshot: {
+      snapshotId: "8194de43-e213-423d-acf4-2e3549304566",
+      cursor: { serverEpoch: "00384a03-bc90-4095-b65d-82fb8cc47e13", globalSequence: "11" },
+      resources: refreshed, chunkCount: 2, receivedChunks: 2, snapshotDigest: "verified",
+    } });
+    expect(store.directoryPage().kind).toBe("ready");
+    const detail = store.directoryDetail("new-dir");
+    expect(detail.kind === "ready" && detail.directory.path).toBe("D:\\actual\\new-dir");
+    expect(store.directoryPageSessions().get("new-dir")?.[0]?.id).toBe(summary.sessionId);
+    const reloaded = storeWith({ resources: refreshed }).store;
+    expect(reloaded.directoryPageSessions().get("new-dir")?.[0]?.id).toBe(summary.sessionId);
+    expect(gateway.dispatches).toHaveLength(0);
+  });
+
+  it.each(["failed", "uncertain"] as const)("%s 的新目录结果不触发目录刷新", (status) => {
+    const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
+    store.apply({ kind: "command_result", result: {
+      protocolVersion: 1, type: "command.result", messageId: "bbbbbbbb-1111-4111-8111-000000000001",
+      connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637", connectionSequence: "1",
+      body: { requestId: "bbbbbbbb-1111-4111-8111-000000000002", command: "session.create", status,
+        acceptedAt: "2026-10-01T00:00:01.000Z", terminalEventId: null, result: null, error: null },
+    } });
+    expect(gateway.snapshotRefreshes).toBe(0);
+    expect(store.state.resources?.workspaces).toEqual(resources({}).workspaces);
+  });
+
   it("提交后呈现「创建中」且不接受重复提交", () => {
     const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
     store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "claude" });
@@ -848,8 +904,8 @@ describe("R16 创建中与终态分别呈现", () => {
     expect(gateway.dispatches).toHaveLength(1);
   });
 
-  it("completed 终态进入已创建并带新会话标识", () => {
-    const { store } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
+  it("completed 终态进入已创建，返回目录后立即显示新会话，无需刷新或额外事件", () => {
+    const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
     const outcome = store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "claude" });
     if (!outcome.ok) throw new Error("提交应当成功");
 
@@ -867,15 +923,27 @@ describe("R16 创建中与终态分别呈现", () => {
           status: "completed",
           acceptedAt: "2026-10-01T00:00:01.000Z",
           terminalEventId: null,
-          result: { sessionId: "5d73cd10-a465-43cd-b3f1-704e2d49e99e" },
+          result: {
+            sessionId: "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            session: session({ id: "5d73cd10-a465-43cd-b3f1-704e2d49e99e", title: "刚创建的会话" }),
+          },
           error: null,
         },
       },
     });
 
     const model = store.createEntry(DIRECTORY_ID);
+    expect(gateway.snapshotRefreshes).toBe(0);
     expect(model.submission).toEqual({ kind: "created", sessionId: "5d73cd10-a465-43cd-b3f1-704e2d49e99e" });
     expect(renderSheet(model, "claude")).toContain('data-create-submission="created"');
+    expect(store.conversationPage("5d73cd10-a465-43cd-b3f1-704e2d49e99e")?.header.title).toBe("刚创建的会话");
+    expect(store.directoryPageSessions().get(DIRECTORY_ID)?.some(
+      (row) => row.id === "5d73cd10-a465-43cd-b3f1-704e2d49e99e" && row.title === "刚创建的会话",
+    )).toBe(true);
+    const detail = store.directoryDetail(DIRECTORY_ID);
+    expect(detail.kind === "ready" && detail.sessions.some(
+      (row) => row.id === "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    )).toBe(true);
     store.openCreateSheet(DIRECTORY_ID);
     store.closeCreateSheet();
     store.openCreateSheet(DIRECTORY_ID);
@@ -915,6 +983,17 @@ describe("R16 创建中与终态分别呈现", () => {
     expect(html).toContain('data-failure-retryable="false"');
     expect(html).toContain('data-failure-kind="other"');
     expect(html).toContain("Agent 缺少凭据");
+  });
+
+  it("本地闸门拒绝提交时呈现原因，而不是静默无反应", () => {
+    const { store } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
+    const html = renderSheet(
+      store.createEntry(DIRECTORY_ID),
+      "claude",
+      "尚未建立已认证连接，无法提交命令",
+    );
+    expect(html).toContain('data-create-submit-issue="true"');
+    expect(html).toContain("尚未建立已认证连接，无法提交命令");
   });
 });
 
@@ -1018,7 +1097,8 @@ describe("R16 浏览状态本身没有路径拼接", () => {
     expect(state.open).toBe(false);
     expect(state.loaded).toBe(false);
   });
-});  it("不同设备相同 requestId 不会误终结本机目录创建", () => {
+});
+  it("不同设备相同 requestId 不会误终结本机目录创建", () => {
     const { store, gateway } = onlineStore({
       resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
       features: [WORKSPACE_BROWSE_FEATURE, "core.workspace-mkdir.v1"],
