@@ -63,6 +63,7 @@ declare module "react-native" {
 export const View: typeof ReactNative.View = ReactNativeWeb.View;
 export const Text: typeof ReactNative.Text = ReactNativeWeb.Text;
 export const Pressable: typeof ReactNative.Pressable = ReactNativeWeb.Pressable;
+export const ScrollView: typeof ReactNative.ScrollView = ReactNativeWeb.ScrollView;
 export const TextInput: typeof ReactNative.TextInput = ReactNativeWeb.TextInput;
 export const StyleSheet: typeof ReactNative.StyleSheet = ReactNativeWeb.StyleSheet;
 export const useWindowDimensions: typeof ReactNative.useWindowDimensions =

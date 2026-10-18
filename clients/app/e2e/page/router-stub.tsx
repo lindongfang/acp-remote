@@ -98,8 +98,19 @@ export function navigate(path: string): void {
   emit();
 }
 
+/** 替换当前历史条目（与真实 expo-router 的 `replace` 同义）；未注册则忽略。 */
+export function replaceRoute(path: string): void {
+  const next = registry.get(path);
+  if (next === undefined) return;
+  current = next;
+  if (history.length === 0) history.push(path);
+  else history[history.length - 1] = path;
+  emit();
+}
+
 /** 返回上一条路径；栈空时不动（真实实现会离开应用，本用例用不到）。 */
 export function goBack(): void {
+  if (history.length <= 1) return;
   history.pop();
   const previous = history[history.length - 1];
   const entry = previous === undefined ? null : (registry.get(previous) ?? null);
@@ -126,8 +137,9 @@ export function useRouter(): {
   push: (path: string) => void;
   back: () => void;
   replace: (path: string) => void;
+  canGoBack: () => boolean;
 } {
-  return { push: navigate, back: goBack, replace: navigate };
+  return { push: navigate, back: goBack, replace: replaceRoute, canGoBack: () => history.length > 1 };
 }
 
 /** `useLocalSearchParams()`：取当前路由参数。 */

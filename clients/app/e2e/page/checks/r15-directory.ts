@@ -43,6 +43,7 @@ import {
   WORKSPACES_WITH_PATHS,
   seriesSessionId,
   sessionSeries,
+  sessionSummary,
   sessionsForBothDirectories,
 } from "../fixtures";
 // 深度与同目录其它 check 一致（`checks/` → `e2e/page` → `e2e` → `src`）：`../../src/*`
@@ -804,6 +805,116 @@ const checks: readonly Check[] = [
           "创建弹层必须说明会在电脑上启动一个 Agent 进程",
         );
       });
+    },
+  },
+  {
+    name: "R15-24 目录页按最近会话时间排序并按每页 5 个分页；翻页与搜索复位",
+    async run() {
+      const workspaces: readonly WorkspaceCatalogEntry[] = Array.from({ length: 7 }, (_, index) => ({
+        directoryId: String(index + 1).padStart(32, "0"),
+        path: `/tmp/list-${String(index)}`,
+      }));
+      const sessions = workspaces.map((workspace, index) =>
+        sessionSummary({
+          id: seriesSessionId("dddddddd", index),
+          directoryId: workspace.directoryId,
+          state: "idle",
+          title: `目录 ${String(index)} 的会话`,
+          updatedAt: `2026-10-${String(20 - index).padStart(2, "0")}T00:00:00.000Z`,
+        }),
+      );
+      await withScenario(baseScenario({ workspaces, sessions }), async (container) => {
+        await waitForDirectoryList(container);
+        const ids = (): readonly string[] =>
+          queryAll(container, "[data-directory-id]").map((node) => node.getAttribute("data-directory-id") ?? "");
+        expectEqual(ids(), workspaces.slice(0, 5).map((workspace) => workspace.directoryId), "第 1 页的目录顺序");
+        expectEqual(
+          query(container, "[data-directory-list-pager]")?.getAttribute("data-directory-list-page") ?? null,
+          "1",
+          "第 1 页页码",
+        );
+        expectEqual(
+          query(container, "[data-directory-list-pager]")?.getAttribute("data-directory-list-page-count") ?? null,
+          "2",
+          "总页数",
+        );
+        expectEqual(
+          query(container, "[data-directory-list-page-input]")?.getAttribute("data-directory-list-page-value") ?? null,
+          "1",
+          "页码输入框回填值",
+        );
+        expectThat(
+          query(container, '[data-action="page-prev"]')?.hasAttribute("disabled") === true,
+          "第 1 页的「上一页」必须禁用",
+        );
+        expectThat(
+          query(container, '[data-action="page-next"]')?.hasAttribute("disabled") === false,
+          "第 1 页的「下一页」必须可用",
+        );
+
+        click(query(container, '[data-action="page-next"]'), "目录页「下一页」");
+        await waitFor(
+          () => query(container, "[data-directory-list-pager]")?.getAttribute("data-directory-list-page") === "2",
+          "翻到目录页第 2 页",
+        );
+        expectEqual(ids(), workspaces.slice(5).map((workspace) => workspace.directoryId), "第 2 页的目录");
+        expectThat(
+          query(container, '[data-action="page-prev"]')?.hasAttribute("disabled") === false,
+          "第 2 页的「上一页」必须可用",
+        );
+        expectThat(
+          query(container, '[data-action="page-next"]')?.hasAttribute("disabled") === true,
+          "第 2 页的「下一页」必须禁用",
+        );
+
+        // 搜索词变化回到第 1 页，且只剩命中的目录。
+        typeIntoInput(container, "[data-directory-search]", "list-0", "目录搜索框");
+        await waitFor(
+          () => query(container, "[data-directory-list-pager]")?.getAttribute("data-directory-list-page") === "1",
+          "搜索后回到第 1 页",
+        );
+        expectEqual(ids(), [workspaces[0]?.directoryId ?? ""], "搜索后只剩命中的目录");
+      });
+    },
+  },
+  {
+    name: "R15-27 目录块超过可视高度时目录页在自己的滚动区上下滑动",
+    async run() {
+      const workspaces: readonly WorkspaceCatalogEntry[] = Array.from({ length: 7 }, (_, index) => ({
+        directoryId: String(index + 1).padStart(32, "0"),
+        path: `/tmp/scroll-${String(index)}`,
+      }));
+      const sessions = workspaces.flatMap((workspace, index) =>
+        sessionSeries({
+          directoryId: workspace.directoryId,
+          idPrefix: String(index + 1).padStart(8, "0"),
+          titles: Array.from({ length: 5 }, (_, row) => `会话 ${String(index)}-${String(row)}`),
+          at: Array.from(
+            { length: 5 },
+            (_, row) => `2026-10-${String(20 - (index * 5 + row)).padStart(2, "0")}T00:00:00.000Z`,
+          ),
+        }),
+      );
+      const mounted = await mountScenario(baseScenario({ workspaces, sessions }));
+      // 外壳不在替身里：给容器一个明确的视口高度，模拟真实布局链上的 `flex:1;min-height:0`。
+      mounted.container.style.height = "600px";
+      mounted.container.style.display = "flex";
+      mounted.container.style.flexDirection = "column";
+      mounted.container.style.minHeight = "0";
+      try {
+        await waitForDirectoryList(mounted.container);
+        const scroller = query(mounted.container, '[data-directory-scroller="true"]') as HTMLElement | null;
+        expectThat(scroller !== null, "目录页必须有滚动容器");
+        if (scroller === null) return;
+        expectThat(
+          scroller.scrollHeight > scroller.clientHeight,
+          `目录块应超过可视高度（scrollHeight=${String(scroller.scrollHeight)}, clientHeight=${String(scroller.clientHeight)}）`,
+        );
+        scroller.scrollTop = 180;
+        expectThat(scroller.scrollTop > 0, "目录页滚动容器必须真的能滚");
+      } finally {
+        await mounted.unmount();
+      }
     },
   },
 ];

@@ -48,11 +48,16 @@ function buildStyles(colors: Palette) {
   return StyleSheet.create({
     outer: {
       flexGrow: 1,
+      flexShrink: 1,
+      minHeight: 0,
       width: "100%",
       backgroundColor: colors.bg,
     },
     page: {
       width: "100%",
+      flexGrow: 1,
+      flexShrink: 1,
+      minHeight: 0,
     },
   });
 }
@@ -66,6 +71,9 @@ export default function DirectoriesRoute(): ReactElement {
   const theme = useTheme();
   // 选中的 Agent 是页面局部状态（不跨路由存活，与弹层的开关无关）。
   const [agentId, setAgentId] = useState<string | null>(null);
+  // 本地闸门拒绝提交的原因（未连接/Agent 不在目录/目录引用缺失）。这类拒绝不产生命令记录，
+  // 必须由页面带回弹层，否则点击按钮看起来毫无反应。
+  const [createIssue, setCreateIssue] = useState<string | null>(null);
 
   // 创建弹层的开关是**单份** store 状态、跨路由存活（详情页与目录页共用它）。正因如此，
   // 进入本页时先复位一次：否则会把别的路由上打开的弹层带回目录页。store 起初可能为 null
@@ -140,6 +148,9 @@ export default function DirectoriesRoute(): ReactElement {
         onFilterChange={(filter) => {
           store.setDirectoryFilter(filter);
         }}
+        onPageChange={(requested) => {
+          store.setDirectoryListPage(requested);
+        }}
         onOpenSession={(sessionId) => {
           router.push(`/session/${encodeURIComponent(sessionId)}`);
         }}
@@ -149,6 +160,7 @@ export default function DirectoriesRoute(): ReactElement {
         // 目录卡片的创建入口与详情页是同一条链路（同一个弹层模型、同一条提交命令）。
         // 入口恒可用：设备不再有创建会话的权限维度，页面因此无条件给出回调。
         onCreateSession={(directoryId: string) => {
+          setCreateIssue(null);
           store.openCreateSheet(directoryId);
         }}
         // **顶部**创建入口：目录未知，由用户浏览/选择一层。它画在目录列表工具条的右端（原型的位置），
@@ -167,7 +179,11 @@ export default function DirectoriesRoute(): ReactElement {
             router.push(`/session/${encodeURIComponent(sessionId)}`);
           }}
           selectedAgentId={agentId}
-          onSelectAgent={setAgentId}
+          submitIssue={createIssue}
+          onSelectAgent={(next) => {
+            setCreateIssue(null);
+            setAgentId(next);
+          }}
           onOpenDirectoryPicker={() => {
             store.openDirectoryPicker();
           }}
@@ -178,13 +194,19 @@ export default function DirectoriesRoute(): ReactElement {
               directoryPath,
               createIfMissing,
             });
-            if (!outcome.ok) setAgentId(null);
+            if (!outcome.ok) {
+              setCreateIssue(outcome.reason);
+              setAgentId(null);
+            } else {
+              setCreateIssue(null);
+            }
           }}
           onDismissUncertain={() => {
             const requestId = sheetKey === null ? undefined : state.createRequestIds.get(sheetKey);
             if (requestId !== undefined) store.dismissUncertain(requestId);
           }}
           onClose={() => {
+            setCreateIssue(null);
             store.closeCreateSheet();
           }}
         />

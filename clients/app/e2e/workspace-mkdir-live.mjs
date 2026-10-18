@@ -47,6 +47,11 @@ try {
   if (existsSync(process.env.MKDIR_TEST_AGENT_CWD + '.spawn')) throw new Error('directory creation or cancellation started an Agent');
   const final = await call('Runtime.evaluate', { expression: '(' + createSession.toString() + ')(' + JSON.stringify(config) + ')', awaitPromise: true, returnByValue: true });
   if (final.exceptionDetails) throw new Error(final.exceptionDetails.exception?.description ?? final.exceptionDetails.text);
+  const sessionId = final.result.value;
+  await call('Runtime.evaluate', { expression: 'window.__directorySyncBeforeReload = true' });
+  await call('Page.reload', {});
+  const restored = await call('Runtime.evaluate', { expression: '(' + verifyRestoredDirectory.toString() + ')(' + JSON.stringify(sessionId) + ')', awaitPromise: true, returnByValue: true });
+  if (restored.exceptionDetails) throw new Error(restored.exceptionDetails.exception?.description ?? restored.exceptionDetails.text);
   console.log('real browser → TLS Daemon → disk: passed');
 } finally { socket?.close(); browser.kill(); }
 
@@ -111,4 +116,21 @@ async function createSession(config) {
   (await wait(() => q('[data-action="select-agent"]'))).click();
   (await wait(() => { const button = q('[data-action="submit-create"]'); return button?.getAttribute('aria-disabled') !== 'true' && button; })).click();
   await wait(() => location.pathname.includes('/session/'));
+  const sessionId = location.pathname.split('/').pop();
+  history.back();
+  await wait(() => location.pathname === '/');
+  const row = await wait(() => q('[data-route="dirs"] [data-session-id="' + sessionId + '"]'));
+  const directory = row.closest('[data-directory-id]');
+  if (!directory?.querySelector('[data-directory-display-name="api"]')) throw new Error('new directory/session missing after returning');
+  return sessionId;
+}
+
+async function verifyRestoredDirectory(sessionId) {
+  const until = Date.now() + 15000;
+  while (Date.now() < until) {
+    const row = document.querySelector('[data-route="dirs"] [data-session-id="' + sessionId + '"]');
+    if (!window.__directorySyncBeforeReload && row?.closest('[data-directory-id]')?.querySelector('[data-directory-display-name="api"]')) return true;
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
+  throw new Error('new directory/session missing after page reload');
 }

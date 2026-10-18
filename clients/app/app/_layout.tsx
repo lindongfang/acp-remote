@@ -32,35 +32,39 @@ import { useTheme } from "../src/components/theme";
 import { createComposition } from "../src/composition";
 import type { Composition } from "../src/composition";
 import { ClientStoreProvider } from "../src/features/runtime";
+import { RuntimeLoading, RuntimeUnavailable } from "../src/components/RuntimeUnavailable";
 
 /** 进程内唯一的组合根：一次装配，多个路由共享同一个 store。 */
 const composition: Composition = createComposition();
 
 export default function RootLayout(): ReactElement {
   const theme = useTheme();
-  const [runtime, setRuntime] = useState<Composition | null>(null);
+  const [startup, setStartup] = useState<"loading" | "ready" | "failed">("loading");
 
   useEffect(() => {
     let cancelled = false;
-    // `start()` 失败（IndexedDB 不可用、非安全上下文）时保持 `runtime === null`：
-    // 页面据此呈现运行时不可用，而不是把一条没有身份的空 store 当成正常状态。
-    void composition.start().catch(() => undefined).then(() => {
-      if (!cancelled) setRuntime(composition);
-    });
+    void composition.start().then(
+      () => { if (!cancelled) setStartup("ready"); },
+      () => { if (!cancelled) setStartup("failed"); },
+    );
     return () => {
       cancelled = true;
       composition.dispose();
     };
   }, []);
 
+  // 读取本地身份期间不挂载业务路由，避免把正常等待显示成错误或未配对。
+  if (startup === "loading") return <RuntimeLoading />;
+  if (startup === "failed") return <RuntimeUnavailable route="startup" />;
+
   return (
-    <ClientStoreProvider store={runtime?.store ?? null}>
+    <ClientStoreProvider store={composition.store}>
       {/* 共享外壳（design D1）：一份外壳装在这里，「开发模式横幅 → 顶栏 → 路由内容 →
           抽屉/遮罩/提示」的装配顺序只有这一处；路由不各自拼导航。 */}
       <Shell>
         {/*
           路由容器必须跟随主题底色：`Stack` 的屏幕容器默认是白底，页面自身的宽度上限
-          （目录页/详情页的 1180 居中）会在两侧露出这道白边。把屏幕容器设成当前调色板的
+          （目录页/详情页的 1228 外框 = 1180 内容 + 24px 内边距）会在两侧露出这道白边。把屏幕容器设成当前调色板的
           `bg` 后，宽屏留白是主题色而不是白色；浅色下仍是浅底。
         */}
         <Stack

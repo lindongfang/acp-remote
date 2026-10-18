@@ -22,12 +22,10 @@
  * ## 四类分支提示
  *
  * 原型的 `dirBranchNotice` 有四个分支（形状非法 / 主机不可用 / 目录还不存在 / 目录已存在但未登记）。
- * 本客户端能在**提交前**知道的只有三类（不存在的目录：会先新建；存在但未登记：会话归属不到任何目录项；
+ * 本客户端能在**提交前**知道的只有三类（不存在的目录：会先新建；存在但未登记：创建会话成功后登记；
  * 已登记），加上「还没选定」。
  *
- * 「归属不到任何目录项」是本客户端真实呈现的后果：本客户端**没有**「未分组」这个分组
- * （`src/domain/directory.ts`：未指定目录的会话不计入任何目录项，也不凭空造一个），原型里那个
- * `unsorted` 目录条目不属本变更，因此提示文案 MUST NOT 承诺它存在。
+ * 新目录随成功的会话由服务端登记，客户端刷新快照取得目录条目，不凭用户输入构造路径或目录标识。
  *
  * 形状非法与「主机不可用」两类都无法在提交前得知——前者只可能来自客户端构造候选路径时的名字校验
  * （{@link CREATE_FOLDER_NAME_RULE}），后者只有服务端给出 `internal.unavailable` 之后才谈得上
@@ -263,9 +261,9 @@ export function createDirectoryNoticeText(notice: CreateDirectoryNotice): string
     case "unselected":
       return "还没有选定目录：点「选择文件夹」浏览主机上的目录并选中一层；服务端不支持浏览时从已登记的目录里选一个。";
     case "will_create":
-      return `${notice.path} 在主机上还不存在。创建会话时会先在主机上建这个目录，再在它下面启动 Agent；新建出来的目录不登记到目录列表，因此这个会话不会出现在任何目录项下。`;
+      return `${notice.path} 在主机上还不存在。创建会话时会先在主机上建这个目录，再在它下面启动 Agent；会话创建成功后，目录和会话会显示在目录页。`;
     case "unregistered":
-      return `将使用主机上的 ${notice.path}。它不在已登记目录里，因此这个会话不会出现在任何目录项下。`;
+      return `将使用主机上的 ${notice.path}。会话创建成功后，目录和会话会显示在目录页。`;
     case "registered":
       return "这个目录已是本机登记的目录（不会重复登记）。";
   }
@@ -586,7 +584,7 @@ export const CREATE_FAILURE_NOTES: Readonly<Record<CreateFailureKind, string>> =
   parameter:
     "服务端按参数类错误（protocol.schema_invalid）拒绝了这次提交：目录必须是绝对路径，且不能包含「..」。没有创建会话，也没有触碰主机上的文件系统。",
   unavailable:
-    "服务端无法在这个目录创建会话：父层可能不存在，或没有写入权限。没有新建目录，也没有创建会话，也不会留下半成品。",
+    "服务端没能建立会话。常见原因是工作目录不可用（父层不存在或没有写入权限），或配置的 Agent 进程无法启动。没有创建会话，也不会留下半成品。",
   other: "",
 };
 

@@ -102,7 +102,7 @@ describe("设备胶囊", () => {
     expect(words("incompatible")).toEqual({ tone: "danger", word: "版本不兼容" });
     expect(words("replaced")).toEqual({ tone: "danger", word: "已在别处接管" });
     expect(words("reconnecting")).toEqual({ tone: "warn", word: "正在重连" });
-    expect(words("disconnected")).toEqual({ tone: "warn", word: "离线" });
+    expect(words("disconnected")).toEqual({ tone: "danger", word: "离线" });
     expect(words("unpaired")).toEqual({ tone: "danger", word: "未配对" });
   });
 

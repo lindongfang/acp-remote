@@ -524,7 +524,7 @@ storage.integrity_failed
 ## 15. 资源滥用与失败安全
 
 - 在分配大对象前应用 Sync Protocol 的认证前、单消息和数组/深度限制。
-- 按 IP、device、command 和 pairing ID 限流；限流状态有界且会过期。
+- 按 IP、device、command 和 pairing ID 限流；限流状态有界且会过期。Sync 新连接认证按来源 IP 固定为 100 次/分钟，详见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14；配对接口与 Node Link 独立计数。
 - 每连接发送队列、每 session command queue、Agent 输出、数据库和附件都有独立上限。
 - 慢客户端断开重放，不能向 Broker 传播无界背压。
 - 磁盘写入失败时，不广播对应事件；命令返回明确失败或 `uncertain`。

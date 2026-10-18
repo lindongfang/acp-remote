@@ -141,7 +141,7 @@ const DETAIL_SESSIONS = [
 ];
 
 describe("R15 目录详情：两种「空」互不冒充", () => {
-  it("目录存在但没有任何会话：呈现「还没有会话」，不呈现「链接失效」，也不呈现翻页", () => {
+  it("目录存在但没有任何会话：呈现「还没有会话」，不呈现「链接失效」，翻页固定渲染但禁用", () => {
     const { store } = storeWith({ resources: resources({ sessions: [], workspaces: WORKSPACES }) });
     const html = renderDetail(store.directoryDetail("work-api"));
 
@@ -150,9 +150,11 @@ describe("R15 目录详情：两种「空」互不冒充", () => {
     // 反例：把「还没有会话」当成目录标识失效，下面两条会各自变红。
     expect(html).not.toContain("可能已被删除");
     expect(html).not.toContain("data-directory-detail-state");
-    // 一条会话都没有时总页数是 1：翻页控件（含页码输入）不得呈现。
-    expect(html).not.toContain("data-directory-detail-pager");
-    expect(html).not.toContain("data-directory-detail-page-input");
+    // 一条会话都没有时总页数是 1：翻页固定渲染，两个按钮禁用。
+    expect(html).toContain('data-directory-detail-pager="true"');
+    expect(html).toContain('data-directory-page-count="1"');
+    expect(isDisabled(tagContaining(html, 'data-action="page-prev"'))).toBe(true);
+    expect(isDisabled(tagContaining(html, 'data-action="page-next"'))).toBe(true);
   });
 
   it("目录里有会话：既不呈现空态也不呈现链接失效（详情页没有「被筛掉」的第三种空）", () => {
@@ -277,17 +279,19 @@ describe("R15 目录详情：平铺 + 每页 10 条 + 翻页", () => {
     expect(isDisabled(tagContaining(html, 'data-action="page-prev"'))).toBe(false);
   });
 
-  it("只有一页时（含空目录）不呈现上/下一页与页码输入", () => {
+  it("只有一页时翻页控件仍然渲染，上一页/下一页均为禁用", () => {
     const { store } = storeWith({ resources: resources({ sessions: manySessions(9), workspaces: WORKSPACES }) });
     const html = renderDetail(store.directoryDetail("work-api"));
 
     expect(rowIdsOf(html)).toHaveLength(9);
     expect(html).toContain('data-directory-session-count="9"');
-    // 反例：「只有一页也画一组禁用的翻页」在这里会红。
-    expect(html).not.toContain("data-directory-detail-pager");
-    expect(html).not.toContain('data-action="page-prev"');
-    expect(html).not.toContain('data-action="page-next"');
-    expect(html).not.toContain("data-directory-detail-page-input");
+    expect(html).toContain('data-directory-detail-pager="true"');
+    expect(html).toContain('data-directory-page="1"');
+    expect(html).toContain('data-directory-page-count="1"');
+    expect(html).toContain('data-directory-detail-page-value="1"');
+    expect(isDisabled(tagContaining(html, 'data-action="page-prev"'))).toBe(true);
+    expect(isDisabled(tagContaining(html, 'data-action="page-next"'))).toBe(true);
+    expect(textContentOf(html)).toContain("/ 1 页");
   });
 
   it("页码输入框回填的是**纠正后**的值：非数字回落当前页、越界夹到边界", () => {
@@ -339,14 +343,19 @@ describe("R15 目录详情：断连时标注上次同步时刻", () => {
 
     const html = renderDetail(model, { lastSyncedAtMs: 1_700_000_000_000 });
     expect(html).toContain('data-content-origin="last_sync"');
+    expect(html).toContain('data-origin-notice="last_sync"');
+    expect(html).toContain("内容来自上次同步，当前未连接");
     expect(html).toContain("已同步 2023-11-14 22:13 UTC");
     expect(html).toContain('data-synced-at="1700000000000"');
   });
 
-  it("对照：在线（本次同步）时不呈现同步时刻", () => {
+  it("对照：在线（本次同步）时不呈现同步时刻，也不呈现来源提示条", () => {
     const html = renderDetail(offlineModel("online"), { lastSyncedAtMs: 1_700_000_000_000 });
 
     expect(html).toContain('data-content-origin="live"');
+    // 原型在线时页头之后直接是会话列表；「内容来自本次同步」不是可见文案。
+    expect(html).not.toContain("内容来自本次同步");
+    expect(html).not.toContain('data-origin-notice');
     expect(html).not.toContain("已同步");
     expect(html).not.toContain("data-synced-at");
   });
@@ -380,7 +389,7 @@ describe("R15 目录详情：按设备宽度自适应，且信息集合相同", 
     expect(narrow).not.toBe(wide);
   });
 
-  it("窄屏下会话行、会话数芯片、创建入口、副作用说明与翻页都还在", () => {
+  it("窄屏下会话行、会话数芯片、创建入口与翻页都还在", () => {
     const { store } = storeWith({
       resources: resources({ sessions: manySessions(25), workspaces: WORKSPACES_WITH_PATHS }),
     });
@@ -390,21 +399,21 @@ describe("R15 目录详情：按设备宽度自适应，且信息集合相同", 
     expect(narrow).toContain("data-session-id");
     expect(narrow).toContain('data-directory-session-count="25"');
     expect(narrow).toContain('data-action="open-create-sheet"');
-    expect(narrow).toContain("将在你的电脑上启动一个 Agent 进程");
+    expect(narrow).not.toContain("将在你的电脑上启动一个 Agent 进程");
     // 反例：窄屏把翻页藏起来（MUST NOT 因宽度不足改变判定结果）时这里的锚点会消失。
     expect(narrow).toContain('data-directory-detail-pager="true"');
     expect(narrow).toContain("data-directory-detail-page-input");
   });
 });
 
-describe("R15 目录详情：创建入口的副作用说明", () => {
-  it("入口恒可用，旁边给出「将在你的电脑上启动一个 Agent 进程」，且不出现任何权限说明", () => {
+describe("R15 目录详情：创建入口", () => {
+  it("入口恒可用，且不再附带副作用说明或权限提示", () => {
     const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
     const html = renderDetail(store.directoryDetail("work-api"));
 
     const entry = tagContaining(html, 'data-action="open-create-sheet"');
-    expect(html).toContain('data-create-side-effect="true"');
-    expect(html).toContain("将在你的电脑上启动一个 Agent 进程");
+    expect(html).not.toContain('data-create-side-effect="true"');
+    expect(html).not.toContain("将在你的电脑上启动一个 Agent 进程");
     // 反例：入口若因权限不可用，这里会带 `disabled=""` → 断言变红。
     expect(isDisabled(entry)).toBe(false);
     // 反例：权限门控若残留，这里会出现 `create-entry-unavailable` 或那句「需要电脑端授予」。

@@ -49,6 +49,8 @@
  *   它与卡头上的「⊕ 新建」是两个可区分的控件：前者目录未知、后者目录已定
  *   （`onCreateSession(directoryId)`）。
  * - **折叠**：每个目录项**各自**的局部状态，翻转一个目录标识不影响其它目录项。
+ * - **排序与分页**：feature 层按「该目录最近一次会话时间」倒序排好并每页切 5 个；组件只在列表底部
+ *   渲染固定翻页控件（`onPageChange` 缺省时不渲染）。页码纠正与草稿状态由共享 `Pager` 负责。
  * - **同步时间**：`lastSyncedAtMs` 非 `null` 才画；从未成功替换过快照时为 `null`，
  *   此时绝不编造时刻（spec「从未成功同步」MUST NOT）。
  *
@@ -65,11 +67,13 @@ import {
 } from "../features/directory-model";
 import { DirectoryCard } from "./DirectoryCard";
 import { EmptyState } from "./EmptyState";
+import { Pager } from "./Pager";
 import { SegmentControl } from "./SegmentControl";
 import { SessionRow } from "./SessionRow";
 import type { Palette } from "./theme";
 import {
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -127,6 +131,8 @@ export interface DirectoryListProps {
   readonly onFilterChange?: (filter: DirectoryFilter) => void;
   /** 打开某个会话（页面负责导航）；缺省时会话行只是展示。 */
   readonly onOpenSession?: (sessionId: string) => void;
+  /** 页码提交（输入框原文，回车/失焦时调用）；缺省不呈现翻页控件。 */
+  readonly onPageChange?: ((requested: string) => void) | undefined;
 }
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
@@ -134,13 +140,35 @@ function buildStyles(colors: Palette) {
   return StyleSheet.create({
     page: {
       width: "100%",
+      flexGrow: 1,
+      flexShrink: 1,
+      minHeight: 0,
+    },
+    // 工具条固定，目录块在自己的滚动区里上下滑动（原型 `.scroll{flex:1;overflow:auto}`）。
+    scroller: {
+      flexGrow: 1,
+      flexShrink: 1,
+      minHeight: 0,
+    },
+    scrollBody: {
+      flexGrow: 1,
+      width: "100%",
     },
     content: {
       width: "100%",
-      maxWidth: 1180,
+      // 原型 `.wrap` 的 max-width 1180 是内容宽度（Chrome 下该页实际按 content-box 计算），
+      // 加上两侧 24px 内边距后外框是 1228；RNW 按 border-box 计算，因此这里写 1228。
+      maxWidth: 1228,
       alignSelf: "center",
       padding: spacing.xl,
       gap: spacing.md,
+    },
+    pagerRow: {
+      flexDirection: "row",
+      justifyContent: "flex-end",
+      paddingTop: spacing.md,
+      borderTopWidth: 1,
+      borderTopColor: colors.line,
     },
     // 原型 `.toolbar`：一条横贯内容区的工具条，底部与列表分隔。
     toolbar: {
@@ -312,6 +340,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
     filter = "all",
     onFilterChange,
     onOpenSession,
+    onPageChange,
   } = props;
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -480,6 +509,26 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
 
   const isEmpty = model.kind === "empty";
   const isNoDirectories = isEmpty && model.empty === "no_directories";
+  // 目录页分页：每页 5 个目录（feature 层切片），翻页控件固定在列表底部。
+  // 没有任何目录（no_directories）时没有可翻的内容，不画翻页。
+  const pageInfo = model.kind === "ready" || model.kind === "empty" ? model : null;
+  const pager =
+    onPageChange === undefined || pageInfo === null || pageInfo.total === 0 ? null : (
+      <View style={styles.pagerRow} dataSet={{ directoryPagerRow: "true" }}>
+        <Pager
+          page={pageInfo.page}
+          pageCount={pageInfo.pageCount}
+          onPageChange={onPageChange}
+          data={{
+            pager: "directoryListPager",
+            page: "directoryListPage",
+            pageCount: "directoryListPageCount",
+            input: "directoryListPageInput",
+            inputValue: "directoryListPageValue",
+          }}
+        />
+      </View>
+    );
   // 工具条在**所有**状态都保留搜索、筛选与右上角创建入口：空态下它们同样可用，
   // 用户不必先滚到空态块里的按钮才能开始创建。空态块里另有一个常规尺寸的同一入口。
   const toolbarCreate = createEntry;
@@ -520,7 +569,12 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
         </View>
       )}
 
-      <View style={styles.content} dataSet={{ directoryContent: "true", contentOrigin: model.contentOrigin, ...(model.lastSyncedAtMs === null ? {} : { syncedAt: String(model.lastSyncedAtMs) }) }}>
+      <ScrollView
+        style={styles.scroller}
+        contentContainerStyle={styles.scrollBody}
+        dataSet={{ directoryScroller: "true" }}
+      >
+        <View style={styles.content} dataSet={{ directoryContent: "true", contentOrigin: model.contentOrigin, ...(model.lastSyncedAtMs === null ? {} : { syncedAt: String(model.lastSyncedAtMs) }) }}>
 
         {model.kind === "empty" ? (
           <>
@@ -545,7 +599,9 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
         ) : (
           directoryCardList(model.directories)
         )}
-      </View>
+        {pager}
+        </View>
+      </ScrollView>
     </View>
   );
 }

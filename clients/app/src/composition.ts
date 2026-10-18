@@ -1045,6 +1045,9 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
   };
 
   const syncGateway: SyncGateway = {
+    refreshSnapshot(): void {
+      sync?.refreshSnapshot();
+    },
     get current() {
       return sync?.snapshots.current ?? null;
     },

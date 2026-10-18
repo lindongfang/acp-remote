@@ -181,8 +181,9 @@ function themeBtnHtml(){
    右边是「新建」（底色/文案参考桌面端主按钮）与主题。原来那个 ⋯ 已被设备标识取代。 */
 function dirsAppbar(){
   var c = CONN[A.conn] || CONN.online;
-  var tone = c.tone==="warn" ? " warn" : (c.tone ? "" : " danger");
-  var dot = c.tone==="warn" ? "var(--warn)" : (c.tone ? "var(--ok)" : "var(--danger)");
+  var tv = c.tone || "danger";
+  var tone = tv==="warn" ? " warn" : (tv==="danger" ? " danger" : "");
+  var dot = tv==="warn" ? "var(--warn)" : (tv==="danger" ? "var(--danger)" : "var(--ok)");
   return '<div class="appbar">' +
     '<button class="devchip'+tone+'" data-act="host" aria-label="'+esc(HOSTNAME)+'（点此打开主机与连接）">' +
       '<span class="dot" style="background:'+dot+'"></span>' +
@@ -195,6 +196,15 @@ function dirsAppbar(){
     '<button class="ab-new" data-act="newdir">⊕ 新建</button>' +
     themeBtnHtml() + '</div>';
 }
+function dirPagerHtml(pages){
+  /* 固定渲染：只有一页时两个按钮禁用。 */
+  return '<div class="pagerbar" style="margin:10px 0 4px">' +
+    '<button class="btn" data-dirpage="-1"'+(A.dirPage>1?"":" disabled")+'>‹ 上一页</button>' +
+    '<span class="pinfo">第 <input id="dirPageInput" class="pageinput" type="text" inputmode="numeric" value="'+A.dirPage+
+      '" aria-label="页码（回车跳转）" title="输入页码后回车跳转" /> / '+pages+' 页</span>' +
+    '<button class="btn" data-dirpage="1"'+(A.dirPage<pages?"":" disabled")+'>下一页 ›</button>' +
+  '</div>';
+}
 function viewDirs(){
   var h = dirsAppbar();
   var body = '<div class="scroll">';
@@ -205,13 +215,31 @@ function viewDirs(){
       (s.title||"未命名会话").toLowerCase().indexOf(q)>=0; });
     return d.name.toLowerCase().indexOf(q)>=0 || any;
   });
-  if(!matched.length){ body += '<div class="blank"><h2>没有匹配的结果</h2><p>换个关键词。</p></div>'; }
   var nameCount = {};
   DIRS.forEach(function(d){ nameCount[d.name] = (nameCount[d.name]||0) + 1; });
+  /* 每张卡片先收齐数据，再按最近一次会话时间倒序；没有会话的目录排最后。 */
+  var cards = [];
   matched.forEach(function(dir){
     var all = SESSIONS.filter(function(s){ return s.dir===dir.id; });
     var rows = all.filter(passFilter);
-    if(!rows.length && q) return;
+    if(!rows.length && (q || A.filter!=="all")) return;
+    var latest = null;
+    all.forEach(function(s){ if(latest===null || s.at>latest) latest = s.at; });
+    cards.push({ dir:dir, all:all, rows:rows, latest:latest });
+  });
+  cards.sort(function(a,b){
+    if(a.latest===b.latest) return 0;
+    if(a.latest===null) return 1;
+    if(b.latest===null) return -1;
+    return a.latest<b.latest ? 1 : -1;
+  });
+  var pages = Math.max(1, Math.ceil(cards.length / 5));
+  if(A.dirPage > pages) A.dirPage = pages;
+  if(A.dirPage < 1) A.dirPage = 1;
+  var pageCards = cards.slice((A.dirPage-1)*5, A.dirPage*5);
+  if(!cards.length){ body += '<div class="blank"><h2>没有匹配的结果</h2><p>换个关键词。</p></div>'; }
+  pageCards.forEach(function(card){
+    var dir = card.dir, all = card.all, rows = card.rows;
     var active0 = all.filter(function(s){ return s.state==="running"||s.state==="queued"; }).length;
     var collapsed = !!A.open["d-"+dir.id];
     body += '<div class="card'+(collapsed?" collapsed":"")+'"><div class="dhead">' +
@@ -228,6 +256,7 @@ function viewDirs(){
         '<button class="linkbtn add" data-new="'+dir.id+'">⊕ 新建</button>' +
       '</div></div></div>';
   });
+  if(cards.length) body += dirPagerHtml(pages);
   body += '</div>';
   return h + '<div style="flex:1;display:flex;flex-direction:column;min-height:0">' +
     '<div style="padding:8px 12px 0"><div class="search"><span>🔍</span>' +
@@ -260,7 +289,7 @@ function goToPage(n){
 var PAGE_SIZE = 10;
 /* 翻页区不重复总数——顶栏目录名旁边已经显示了 */
 function pagerHtml(pages){
-  if(pages <= 1) return '';
+  /* 固定渲染：只有一页时两个按钮禁用，页码显示 1 / 1 */
   return '<div class="pagerbar">' +
     '<button class="btn" data-pagedir="-1"'+(A.page>1?"":" disabled")+'>‹ 上一页</button>' +
     '<span class="pinfo">第 <input id="pageInput" class="pageinput" type="text" inputmode="numeric" value="'+A.page+
@@ -288,8 +317,7 @@ function viewDirDetail(id){
     body += pageRows.map(function(s){ return srow(s); }).join("");
     body += pagerHtml(pages);
   }
-  body += '<div style="padding:6px 0 20px"><button class="btn block primary" data-new="'+dir.id+'">⊕ 新建</button>' +
-    '<p class="hint" style="text-align:center;margin-top:8px">将在你的电脑上启动一个 Agent 进程</p></div>';
+  body += '<div style="padding:6px 0 20px"><button class="btn block primary" data-new="'+dir.id+'">⊕ 新建</button></div>';
   body += '</div>';
   return h + body;
 }
@@ -350,7 +378,7 @@ function chatPane(s){
   var head = appbar(esc(s.title||"未命名会话") + '<span class="chip">'+esc(s.agent)+'</span>',
     '',
     '');
-  var strip = c.strip ? '<div class="connstrip'+(c.strip[1]?" warn":"")+'"><span class="spin"></span>'+
+  var strip = c.strip ? '<div class="connstrip'+(c.strip[1]?" "+c.strip[1]:"")+'"><span class="spin"></span>'+
     esc(c.strip[0])+'</div>' : '';
   var body = '<div class="scroll" id="stream">'+streamHTML(s)+
     '<div style="height:8px"></div></div>';
@@ -695,7 +723,7 @@ function newSessionSheet(){
       '</span></span></div>' +
       '<div class="drow"><span class="dk">路径</span><span class="dv mono">'+esc(path||"—")+'</span></div>' +
       '<div class="hint">点「选择文件夹」浏览这台电脑上的目录并选中一层；也可以在里面新建文件夹——' +
-      '新建出来的目录，创建会话时会先在电脑上建它。</div>' +
+      '点击新建立即创建目录；取消会话不会删除它。</div>' +
     '</div>' +
     '<div id="shDirNotice">'+dirBranchNotice(path)+'</div>';
   }
@@ -863,16 +891,20 @@ function bind(){
     if(tb){ A.tab = tb.dataset.tab; render(); return; }
     var mt = t.closest("[data-pagedir]");
     if(mt){ if(mt.disabled) return; goToPage(A.page + (+mt.dataset.pagedir)); return; }
+    var mdp = t.closest("[data-dirpage]");
+    if(mdp){ if(mdp.disabled) return;
+      A.dirPage = Math.min(A.dirPageCount || 1, Math.max(1, A.dirPage + (+mdp.dataset.dirpage)));
+      render(); var dsc = f.querySelector(".scroll"); if(dsc) dsc.scrollTop = 0; return; }
     var ss = t.closest("[data-session]");
     if(ss){ A.session = ss.dataset.session; A.tab = "chat"; location.hash = "#/chat/"+ss.dataset.session; return; }
     var ft = t.closest("[data-f]");
-    if(ft){ A.filter = ft.dataset.f; render(); return; }
+    if(ft){ A.filter = ft.dataset.f; A.dirPage = 1; render(); return; }
     var tg = t.closest("[data-toggle]");
     if(tg){ A.open[tg.dataset.toggle] = !A.open[tg.dataset.toggle]; render(); return; }
   });
   }
   var q = f.querySelector("[data-q]");
-  if(q) q.addEventListener("input", function(){ A.query = this.value; render();
+  if(q) q.addEventListener("input", function(){ A.query = this.value; A.dirPage = 1; render();
     var el = $("frame").querySelector("[data-q]"); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
   var ta = f.querySelector("#ta");
   if(ta) ta.addEventListener("keydown", function(e){
@@ -892,6 +924,19 @@ function bind(){
     };
     pi.onkeydown=function(e){ if(e.key==="Enter"){ e.preventDefault(); commitPage.call(this); } };
     pi.onchange=commitPage;
+  }
+  /* 目录页翻页：与详情页同一套纠正规则。 */
+  var dpi = f.querySelector("#dirPageInput");
+  if(dpi){
+    var commitDirPage = function(){
+      var n = parseInt(this.value, 10);
+      if(isNaN(n)){ this.value = A.dirPage; return; }
+      var p = Math.min(A.dirPageCount || 1, Math.max(1, n));
+      this.value = p; A.dirPage = p; render();
+      var dsc = f.querySelector(".scroll"); if(dsc) dsc.scrollTop = 0;
+    };
+    dpi.onkeydown=function(e){ if(e.key==="Enter"){ e.preventDefault(); commitDirPage.call(this); } };
+    dpi.onchange=commitDirPage;
   }
   var stEl = f.querySelector("#stream");
   if(stEl){ stEl.addEventListener("scroll", updateJump); }
@@ -1041,7 +1086,7 @@ window.addEventListener("popstate", function(){
 
 /* ============ 「选择文件夹」弹窗（顶部入口用） ============ */
 /* 浏览远端节点上的目录来选：面包屑 + 这一层的子目录 + 上一级；也可以在当前位置新建文件夹
-   （新建的文件夹在创建会话时才真的建，所以走「会先新建」那一支）。 */
+   （先在当前位置新建，再进入子目录继续新建，最后单独选择）。 */
 function openDirPicker(){
   A.dirPickOpen = true; A.pickKind = "existing"; A.newFolderOpen = false; A.newFolderName = "";
   A.browsePath = (isAbsPath(A.newDir) && isBrowsable(A.newDir)) ? normPath(A.newDir) : "";
@@ -1070,10 +1115,10 @@ function paintDirPicker(){
   /* 新建文件夹：只有进了某个盘之后才能建 */
   $("dpNewRow").innerHTML = atComputer ? '' : (A.newFolderOpen
     ? '<div class="dpnew"><input id="dpNewName" type="text" value="'+esc(A.newFolderName)+'" placeholder="新文件夹的名字" />' +
-      '<button class="btn sm primary" id="dpNewOk">新建并选择</button>' +
+      '<button class="btn sm primary" id="dpNewOk">新建</button>' +
       '<button class="btn sm" id="dpNewCancel">取消</button></div>'
     : '<button class="diropt other" data-newfolder><span class="dn">＋ 新建文件夹…</span>' +
-      '<span class="da">在这里新建一个文件夹；创建会话时会先在电脑上建它</span></button>');
+      '<span class="da">立即在电脑上新建一层目录；取消会话不会删除它</span></button>');
   $("dpCur").textContent = atComputer ? "此电脑（先选一个盘）" : ("当前位置：" + here);
   $("dpOk").disabled = atComputer;   /* 此电脑本身不是一个目录，不能选 */
   bindDirPicker();
@@ -1109,8 +1154,10 @@ function bindDirPicker(){
 function createFolderAndPick(){
   var name = (A.newFolderName||"").trim();
   if(!name || /[\\\/:]/.test(name)){ toast("文件夹名字不能为空，也不能含 \\ / :"); return; }
-  A.pickKind = "create";
-  applyDirPicker(joinPath(A.browsePath, name));
+  var created = joinPath(A.browsePath, name);
+  if(NODE_PATHS.some(function(p){ return p.toLowerCase()===created.toLowerCase(); })){ toast("同名目录已存在"); return; }
+  NODE_PATHS.push(created); A.newFolderName=""; A.newFolderOpen=false; A.browsePath=created;
+  paintDirPicker(); toast("目录已创建并进入，可继续新建下一级");
 }
 function applyDirPicker(path){
   var p = normPath(path);
@@ -1155,7 +1202,7 @@ function trackRoute(h){
   if(st.length >= 2 && st[st.length-2] === h){ st.pop(); return; }   /* 这是回退 */
   if(st[st.length-1] !== h) st.push(h);
 }
-window.addEventListener("hashchange", function(){ trackRoute(location.hash || "#/dirs"); A.query=""; A.filter="all"; A.page=1; render(); });
+window.addEventListener("hashchange", function(){ trackRoute(location.hash || "#/dirs"); A.query=""; A.filter="all"; A.page=1; A.dirPage=1; render(); });
 
 if(!location.hash) location.hash = "#/dirs";
 A.navStack = [location.hash || "#/dirs"];   /* 起点：当前这一页就是栈底 */

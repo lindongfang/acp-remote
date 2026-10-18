@@ -64,3 +64,5 @@ export type { SegmentControlProps } from "./SegmentControl";
 export { SegmentControl } from "./SegmentControl";
 export type { SessionRowProps } from "./SessionRow";
 export { SessionRow } from "./SessionRow";
+export type { PagerDataKeys, PagerProps } from "./Pager";
+export { Pager } from "./Pager";

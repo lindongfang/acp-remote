@@ -46,10 +46,28 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
     },
+    loading: {
+      flex: 1,
+      backgroundColor: colors.bg,
+      padding: spacing.lg,
+      justifyContent: "center",
+      alignItems: "center",
+    },
   });
 }
 
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
+
+/** 初始化期间使用普通状态提示，不将正常的本地读取呈现为错误。 */
+export function RuntimeLoading(): ReactElement {
+  const theme = useTheme();
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
+  return (
+    <View role="status" style={styles.loading} dataSet={{ runtime: "loading" }}>
+      <Text style={styles.body}>正在加载…</Text>
+    </View>
+  );
+}
 
 /** 运行时未装配提示。 */
 export function RuntimeUnavailable({ route }: RuntimeUnavailableProps): ReactElement {
@@ -60,12 +78,10 @@ export function RuntimeUnavailable({ route }: RuntimeUnavailableProps): ReactEle
     <View role="alert" style={styles.root} dataSet={{ route, runtime: "unavailable" }}>
       {/* `role="heading"` 不带层级：RNW 据此渲染 `<h1>`（原实现就是 `<h1>`）。 */}
       <Text role="heading" style={styles.title}>
-        同步运行时未装配
+        客户端初始化失败
       </Text>
       <Text style={styles.body}>
-        本页面需要组合根注入平台端口（设备身份、本地缓存、生命周期）与同步客户端后才能连接电脑。
-        在装配完成前，这里不会显示任何目录、会话或 Agent 数据——以免把「尚未连接」显示成
-        「还没有可用的目录」。
+        无法准备连接所需的本地数据。请确认使用 HTTPS 访问，并允许浏览器存储，然后刷新重试。
       </Text>
     </View>
   );

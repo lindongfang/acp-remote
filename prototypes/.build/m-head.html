@@ -146,6 +146,7 @@
   .connstrip{flex:none;display:flex;align-items:center;gap:9px;padding:6px 13px;background:var(--accent-soft);
     color:var(--accent-ink);font-size:12.5px;border-bottom:1px solid var(--line)}
   .connstrip.warn{background:var(--warn-soft);color:var(--warn)}
+  .connstrip.danger{background:var(--danger-soft);color:var(--danger)}
   .spin{width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;
     display:inline-block;animation:spin .7s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -566,7 +567,7 @@
     online:       { tone:"ok",   badge:"在线", chip:null, strip:null },
     syncing:      { tone:"ok",   badge:"在线", chip:null, strip:["正在补齐离线期间的事件…", ""] },
     reconnecting: { tone:"warn", badge:"重连中", chip:"正在重连", strip:["连接断开，正在重连。下面是最后已知内容。", "warn"] },
-    offline:      { tone:"warn", badge:"离线", chip:"离线", strip:["已离线。下面是 2 分钟前同步到的内容。", "warn"] },
+    offline:      { tone:"danger", badge:"离线", chip:"离线", strip:["已离线。下面是 2 分钟前同步到的内容。", "danger"] },
     identity:     { chip:"密钥已变化", block:["这台电脑的身份密钥已变化","网页不会自动接受新的密钥。请先在电脑上确认：是换了电脑，还是连接被人拦截过。","回电脑终端确认","#/pair/S0"] }
   };
   var DIRS = [
@@ -680,6 +681,6 @@
     pair:"S0", pairLeft:PAIR_TTL, pairDeadline:0, pairCode:"", pairPrev:null, pairVia:"code", pairTimer:null, pairNavTimer:null, clearArmed:false, creating:null, newAgent:"codex", newErr:null, seq:0,
     newDir:"", mkdirCase:"ok", dirPickOpen:false,
     browsePath:"", pickKind:"existing", newFolderOpen:false, newFolderName:"",
-    jumpTo:null, page:1, navStack:[],
+    jumpTo:null, page:1, dirPage:1, navStack:[],
     agents:[{id:"codex",state:"running",desc:"当前 turn"}]
   };

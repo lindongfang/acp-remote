@@ -176,8 +176,8 @@ function buildStyles(colors: Palette) {
       lineHeight: 20,
     },
     offline: {
-      color: colors.warn,
-      backgroundColor: colors.warnSoft,
+      color: colors.danger,
+      backgroundColor: colors.dangerSoft,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
       lineHeight: 17.6,

@@ -23,7 +23,7 @@
  * - 「清空重输」：把输入框清空后重新敲 `1`，断言清空期间它真的是空的（每键都提交的实现会立刻
  *   把纠正值写回），回车后落到第 1 页而不是被残留数字拼成 `21` 再夹到最后一页。
  * - 「失焦也提交」：敲 `99` 后不失焦整段不动，派发 `focusout` 后越界值夹到边界。
- * - 「只有一页不呈现翻页」：断言翻页区与页码输入的锚点**都缺席**，而不是「渲染成禁用」。
+ * - 「只有一页」：翻页区与页码输入**仍然在场**，上一页与下一页均为禁用态（页码 1 / 1）。
  * - 「翻页后回到页首」：把挂载容器变成真的可滚动区，断言翻页前滚动位置确实 > 0（否则用例假绿），
  *   翻页后归零。
  * - 「窄视口」：先断言两档的布局方向真的换了（`flex-direction` 由 `row` 变 `column`），
@@ -258,7 +258,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-6 目录存在但没有会话：详情页必须呈现「还没有会话」，不得说成「链接失效」，也不呈现翻页",
+    name: "R15-6 目录存在但没有会话：详情页必须呈现「还没有会话」，不得说成「链接失效」，翻页固定渲染但禁用",
     async run() {
       await withScenario(baseScenario({ sessions: [], route: dirRoute(DIRECTORY_ID_ALPHA) }), async (container) => {
         // 同 R15-5：等待条件不能是 `[data-route="dir-detail"]`（占位也发它），
@@ -272,14 +272,15 @@ const checks: readonly Check[] = [
           query(container, '[data-directory-detail-state="unknown_directory"]') === null,
           "目录存在时不得呈现「链接失效」",
         );
-        // 一条会话都没有时总页数是 1：翻页区与页码输入都不得出现。
+        // 一条会话都没有时总页数是 1：翻页区固定呈现，两个按钮禁用。
+        expectEqual(pagerFactsOf(container), ["1", "1", "1"], "空目录 页码/总页数/输入框回填值");
         expectThat(
-          query(container, "[data-directory-detail-pager]") === null,
-          "只有一页时不得呈现翻页区",
+          query(container, '[data-action="page-prev"]')?.hasAttribute("disabled") === true,
+          "空目录时「上一页」必须禁用",
         );
         expectThat(
-          query(container, "[data-directory-detail-page-input]") === null,
-          "只有一页时不得呈现页码输入",
+          query(container, '[data-action="page-next"]')?.hasAttribute("disabled") === true,
+          "空目录时「下一页」必须禁用",
         );
       });
     },
@@ -469,25 +470,21 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-15 只有一页时不呈现翻页；目录页的查询词与筛选也不进入详情页",
+    name: "R15-15 只有一页时翻页固定呈现且禁用；目录页的查询词与筛选也不进入详情页",
     async run() {
-      // 3 条会话：一页即可放下 → 上/下一页与页码输入都不得呈现。
+      // 3 条会话：一页即可放下 → 翻页仍渲染，但上/下一页都禁用。
       await withScenario(baseScenario({ sessions: alphaSeries(3) }), async (container) => {
         await waitForDirectoryDetail(container);
         expectEqual(rowIdsOf(container).length, 3, "一页放得下时全部会话都在");
         expectEqual(chipOf(container), "3", "会话数芯片");
-        expectThat(query(container, "[data-directory-detail-pager]") === null, "只有一页时不得呈现翻页区");
+        expectEqual(pagerFactsOf(container), ["1", "1", "1"], "单页 页码/总页数/输入框回填值");
         expectThat(
-          query(container, '[data-action="page-prev"]') === null,
-          "只有一页时不得呈现「上一页」",
+          query(container, '[data-action="page-prev"]')?.hasAttribute("disabled") === true,
+          "只有一页时「上一页」必须禁用",
         );
         expectThat(
-          query(container, '[data-action="page-next"]') === null,
-          "只有一页时不得呈现「下一页」",
-        );
-        expectThat(
-          query(container, "[data-directory-detail-page-input]") === null,
-          "只有一页时不得呈现页码输入",
+          query(container, '[data-action="page-next"]')?.hasAttribute("disabled") === true,
+          "只有一页时「下一页」必须禁用",
         );
         // 详情页没有目录内搜索、也没有月份分段控件（两个需求都已从规格里移除）。
         expectThat(
@@ -572,7 +569,7 @@ const checks: readonly Check[] = [
       expectEqual(narrow.rowIds, wide.rowIds, "两档呈现的是同一页的同一批会话");
       expectEqual(narrow.chip, "25", "窄档仍然呈现会话数芯片");
       expectThat(narrow.hasCreateEntry, "窄档仍然呈现创建会话的入口");
-      expectThat(narrow.hasCreateSideEffect, "窄档仍然呈现创建会话的副作用说明");
+      expectThat(!narrow.hasCreateSideEffect, "详情页不再呈现创建会话的副作用说明");
       expectThat(narrow.hasPager, "窄档仍然呈现翻页（MUST NOT 因宽度不足改变判定结果）");
       expectEqual(narrow.pagerFacts, ["1", "3", "1"], "窄档的 页码/总页数/输入框回填值");
     },
@@ -588,6 +585,11 @@ const checks: readonly Check[] = [
           "在线时来源标注必须是「本次同步」",
         );
         expectThat(
+          query(mounted.container, '[data-origin-notice="last_sync"]') === null,
+          "在线时不得呈现断连提示条",
+        );
+        expectAbsent(domText(mounted.container), "内容来自本次同步", "在线时不得呈现来源提示行");
+        expectThat(
           query(mounted.container, "[data-synced-at]") === null,
           "内容来自本次同步时不得标注「已同步 …」时刻",
         );
@@ -596,6 +598,14 @@ const checks: readonly Check[] = [
         await waitFor(
           () => query(mounted.container, '[data-content-origin="last_sync"]') !== null,
           "断连后详情页标注 last_sync",
+        );
+        await waitFor(
+          () => query(mounted.container, '[data-origin-notice="last_sync"]') !== null,
+          "断连后详情页呈现来源提示条",
+        );
+        expectThat(
+          domText(mounted.container).includes("内容来自上次同步"),
+          "断连提示条要说明内容来自上次同步",
         );
         await waitFor(
           () => query(mounted.container, "[data-synced-at]") !== null,
@@ -928,9 +938,10 @@ const checks: readonly Check[] = [
             "beta 的详情页",
           );
           expectEqual(chipOf(container), "1", "beta 只有一条会话");
+          expectEqual(pagerFactsOf(container), ["1", "1", "1"], "beta 单页也固定呈现翻页");
           expectThat(
-            query(container, "[data-directory-detail-pager]") === null,
-            "beta 只有一页，不呈现翻页",
+            query(container, '[data-action="page-next"]')?.hasAttribute("disabled") === true,
+            "beta 只有一页时「下一页」禁用",
           );
 
           click(query(container, '[data-action="back-to-dirs"]'), "返回目录");
@@ -955,6 +966,27 @@ const checks: readonly Check[] = [
           expectThat(
             rowIdsOf(container).join(",") !== secondPage.join(","),
             "前置：第 1 页与第 2 页必须是不同的会话集合",
+          );
+        },
+      );
+    },
+  },
+  {
+    name: "R15-26 直接打开详情页：没有应用内历史时「返回目录」仍导航到目录页",
+    async run() {
+      await withScenario(
+        baseScenario({ route: dirRoute(DIRECTORY_ID_ALPHA), extraRoutes: [DIRS_ROUTE] }),
+        async (container) => {
+          await waitForDirectoryDetail(container);
+          click(query(container, '[data-action="back-to-dirs"]'), "返回目录");
+          await waitFor(
+            () => query(container, '[data-route="dirs"]') !== null,
+            "直接打开详情页时返回目录应落到目录页",
+          );
+          expectEqual(
+            queryAll(container, '[data-route="dir-detail"]').length,
+            0,
+            "返回后不得仍停留在详情页",
           );
         },
       );

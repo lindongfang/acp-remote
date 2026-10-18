@@ -51,8 +51,8 @@ pub const WS_SUBPROTOCOL: &str = "acp-remote.sync.v1.json";
 /// 整个认证（`auth.client_hello` → `auth.authenticated`）的上限（§14：15 秒，固定常量、不可配置）。
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// 单 IP 新认证尝试的固定限流（§14：10 次/分钟，不可配置）。
-pub const AUTH_ATTEMPTS_PER_MINUTE: u32 = 10;
+/// 单 IP 新认证尝试的固定限流（§14：100 次/分钟，不可配置）。
+pub const AUTH_ATTEMPTS_PER_MINUTE: u32 = 100;
 
 /// 认证限流的窗口（§14 的固定 1 分钟）。
 pub const AUTH_WINDOW: Duration = Duration::from_secs(60);

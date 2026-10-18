@@ -11,7 +11,8 @@
  * 本页曾经自己拼一条导航（返回按钮 + 连接状态徽标）。现在顶栏与连接状态只由**共享外壳**
  * 表达（`design.md` D1：一份外壳只有一处判据，装在 `app/_layout.tsx` 里），本页因此不再
  * 渲染 `ConnectionBadge`，也不再有自己的返回按钮——返回入口在页头的详情组件里
- * （`data-action="back-to-dirs"`），导航仍由本页的 `router.back()` 执行。
+ * （`data-action="back-to-dirs"`），导航仍由本页执行：有应用内历史时 `router.back()`，
+ * 直接打开详情 URL 时 `router.replace("/")` 回到目录页。
  *
  * ## 为什么页码存在仓库里，以及「首帧就该是第一页」是怎么做到的
  *
@@ -64,8 +65,10 @@ function buildStyles(colors: Palette) {
     },
     page: {
       width: "100%",
-      // 原型 `.wrap`：内容区最大 1180、居中，四周 24px。
-      maxWidth: 1180,
+      // 原型 `.wrap` 在 Chrome 下按 content-box 计算（`*{box-sizing:border-box}` 那条规则实际被
+      // 丢弃）：max-width 1180 是**内容宽度**，再加两侧 24px 内边距，外框总宽 1228。RNW 的
+      // maxWidth 按 border-box 计算，这里因此写 1228，渲染出的内容宽度才与原型同为 1180。
+      maxWidth: 1228,
       alignSelf: "center",
       gap: spacing.lg,
       padding: spacing.xl,
@@ -83,6 +86,9 @@ export default function DirectoryDetailRoute(): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const [agentId, setAgentId] = useState<string | null>(null);
+  // 本地闸门拒绝提交的原因（未连接/Agent 不在目录/目录引用缺失）。这类拒绝不产生命令记录，
+  // 必须由页面带回弹层，否则点击按钮看起来毫无反应。
+  const [createIssue, setCreateIssue] = useState<string | null>(null);
 
   /**
    * 进入本页时复位页码：页码是**单份** store 状态，「进入某个目录时从第一页开始」这条约定
@@ -145,7 +151,10 @@ export default function DirectoryDetailRoute(): ReactElement {
           model={store.directoryDetail(directoryId)}
         lastSyncedAtMs={state.lastSyncedAtMs}
         onBack={() => {
-          router.back();
+          // 从目录页进来时 back() 保留来源页状态；直接用 URL 打开详情页（没有应用内历史）
+          // 时 back() 什么也不做，因此明确回到目录页。
+          if (router.canGoBack()) router.back();
+          else router.replace("/");
         }}
         onPageChange={(requested) => {
           store.setDirectoryDetailPage(directoryId, requested);
@@ -154,6 +163,7 @@ export default function DirectoryDetailRoute(): ReactElement {
           router.push(`/session/${encodeURIComponent(sessionId)}`);
         }}
         onCreateSession={() => {
+          setCreateIssue(null);
           store.openCreateSheet(directoryId);
         }}
         />
@@ -167,7 +177,11 @@ export default function DirectoryDetailRoute(): ReactElement {
             router.push(`/session/${encodeURIComponent(sessionId)}`);
           }}
           selectedAgentId={agentId}
-          onSelectAgent={setAgentId}
+          submitIssue={createIssue}
+          onSelectAgent={(next) => {
+            setCreateIssue(null);
+            setAgentId(next);
+          }}
           onSubmit={({ agentId: selected, directoryPath, createIfMissing }) => {
             const outcome = store.submitCreateSession({
               directoryId,
@@ -175,7 +189,12 @@ export default function DirectoryDetailRoute(): ReactElement {
               directoryPath,
               createIfMissing,
             });
-            if (!outcome.ok) setAgentId(null);
+            if (!outcome.ok) {
+              setCreateIssue(outcome.reason);
+              setAgentId(null);
+            } else {
+              setCreateIssue(null);
+            }
           }}
           onOpenDirectoryPicker={() => {
             store.openDirectoryPicker();
@@ -185,6 +204,7 @@ export default function DirectoryDetailRoute(): ReactElement {
             if (requestId !== undefined) store.dismissUncertain(requestId);
           }}
           onClose={() => {
+            setCreateIssue(null);
             store.closeCreateSheet();
           }}
         />

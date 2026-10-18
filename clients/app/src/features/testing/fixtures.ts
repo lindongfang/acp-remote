@@ -154,6 +154,7 @@ export function resources(input: {
 /** 记账式同步网关。 */
 export interface RecordingGateway extends SyncGateway {
   readonly dispatches: CommandMessage[];
+  snapshotRefreshes: number;
 }
 
 export function recordingGateway(input: {
@@ -172,6 +173,8 @@ export function recordingGateway(input: {
         };
   return {
     dispatches,
+    snapshotRefreshes: 0,
+    refreshSnapshot() { this.snapshotRefreshes += 1; },
     current,
     // 认证结果（`deviceId` / serverEpoch / 限额）由 `onlineStore` 自己发一条 `authenticated` 事件
     // 交付；wire 上没有授权集合，因此这里没有任何 scope 可给，也不编造一份。

@@ -303,6 +303,7 @@ function storeWithPairing(pairing: PairingWiring | undefined): ClientStore {
   return new ClientStore({
     sync: {
       current: null,
+      refreshSnapshot: () => undefined,
       authenticatedInfo: null,
       dispatch: () => undefined,
     },

@@ -20,10 +20,12 @@
 import type { CommandMessage } from "../protocol";
 import type { AuthenticatedInfo, CompletedSnapshot, EventDedupKey } from "../sync-client";
 
-/** 快照仓库的只读面：断连时目录页与主机面板的唯一数据来源（R15/R19）。 */
+/** 快照读取与刷新面：断连时保留已验证清单，刷新复用同步协议。 */
 export interface SnapshotGateway {
   /** 最后一次**验证通过并完成替换**的快照；从未成功同步过为 `null`。 */
   readonly current: CompletedSnapshot | null;
+  /** 资源清单缺项时请求完整快照；复用当前连接，不重新认证。 */
+  refreshSnapshot(): void;
 }
 
 /** 命令派发面。 */
