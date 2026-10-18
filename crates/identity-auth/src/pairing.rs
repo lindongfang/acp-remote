@@ -19,8 +19,8 @@ use crate::transcript::{
 use crate::types::{
     CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection, ClaimedPairing,
     Completion, IdentityFact, PAIRING_MAX_FAILURES, PAIRING_MAX_SECONDS, PairingDecision,
-    PairingDraft, PairingProof, PairingRequestId, PairingRequestMaterial, PairingSecret,
-    PairingSpec, PairingStatusView, at_or_after, is_unconfirmed,
+    PairingDraft, PairingProof, PairingQrLookup, PairingRequestId, PairingRequestMaterial,
+    PairingSecret, PairingSpec, PairingStatusView, QrToken, at_or_after, is_unconfirmed,
 };
 
 impl Authority {
@@ -32,6 +32,9 @@ impl Authority {
     /// 派生出的配对码必须在**仍持有 secret 的活跃配对**中唯一（design D2）：碰撞时重新生成
     /// secret（从而得到新码），用户侧不报错。唯一性检查与登记在同一把锁内完成，避免两个并发
     /// 创建同时通过检查；40 bit 空间下重试的期望次数是 1，只有熵源退化才会反复碰撞。
+    ///
+    /// 设备配对还会独立生成 32 字节扫码取回凭据（design D3）：与 secret 各抽取一次，绝不复用；
+    /// 同样在锁内做唯一性检查，碰撞时重新生成。节点配对不生成、不登记该凭据。
     pub fn begin_pairing(
         &self,
         pairing_id: &PairingId,
@@ -50,7 +53,7 @@ impl Authority {
             .map_err(|_| PairingError::EntropyUnavailable)?;
         let pairing_request_id = PairingRequestId::generate(self.entropy())
             .map_err(|_| PairingError::EntropyUnavailable)?;
-        let (secret, code, record) = loop {
+        let (secret, code, qr_token, record) = loop {
             let secret = PairingSecret::generate(self.entropy())
                 .map_err(|_| PairingError::EntropyUnavailable)?;
             let code = crate::pairing_code::derive_pairing_code(&secret)?;
@@ -72,6 +75,19 @@ impl Authority {
                 // 碰撞：丢弃本次 secret 与草稿，重新生成；不向用户报错。
                 continue;
             }
+            let qr_token = match target {
+                PairingTarget::Device => {
+                    let mut token = QrToken::generate(self.entropy())
+                        .map_err(|_| PairingError::EntropyUnavailable)?;
+                    while state.qr_token_in_use(&token) {
+                        // 凭据必须绑定唯一设备配对：碰撞时重新生成，绝不复用。
+                        token = QrToken::generate(self.entropy())
+                            .map_err(|_| PairingError::EntropyUnavailable)?;
+                    }
+                    Some(token)
+                }
+                PairingTarget::Node => None,
+            };
             state.put_secret(
                 pairing_id,
                 PairingMaterial {
@@ -79,12 +95,13 @@ impl Authority {
                     code: code.clone(),
                     server_nonce: server_nonce.clone(),
                     pairing_request_id: pairing_request_id.clone(),
+                    qr_token,
                     // 新建的配对本就未批准；批准由 `Authority::mark_pairing_approved` 在持久化提交
                     // 成功之后置位（见 `settle` 的说明），`settle` 本身不置位。
                     approved: false,
                 },
             );
-            break (secret, code, record);
+            break (secret, code, qr_token, record);
         };
         Ok(PairingDraft {
             record,
@@ -92,6 +109,7 @@ impl Authority {
             code,
             server_nonce,
             pairing_request_id,
+            qr_token,
         })
     }
 
@@ -239,7 +257,12 @@ impl Authority {
                 ) {
                     return Err(PairingError::WrongState);
                 }
-                PairingSettlement::rejected(reason.as_deref()).map_err(PairingError::from)
+                let settlement =
+                    PairingSettlement::rejected(reason.as_deref()).map_err(PairingError::from)?;
+                // 拒绝即关闭扫码取回资格（design D3）；secret 仍按合同 §4.3 保留到原过期时间，
+                // 供状态轮询使用，但「保留 secret」绝不重新开放取回。
+                self.state().close_qr_retrieval(pairing.id());
+                Ok(settlement)
             }
         }
     }
@@ -384,6 +407,68 @@ impl Authority {
             return Err(PairingError::SecretUnavailable);
         };
         input.verify(&secret, proof).map_err(PairingError::from)
+    }
+
+    /// 按扫码取回凭据查找配对材料（**不消耗**凭据、不推进状态）。
+    ///
+    /// 这是 `docs/IDENTITY_AND_AUTH_CONTRACT.md` §5.1 登记的入口：返回值只覆盖本进程内存里仍持有
+    /// secret 且凭据仍然绑定的配对。adapter 仍必须确认该配对为 `created`、未过期、未被拒绝/失效，
+    /// 且来源/Host 与登记绑定一致；任何一项不满足都收敛为同一个 `401 pairing.qr_invalid`。
+    /// 需要把权威状态检查也放进身份层的调用方可用
+    /// [`Authority::retrieve_qr_material`]（它要求调用方传入已读到的持久记录）。
+    pub fn lookup_pairing_by_qr_token(&self, token: &QrToken) -> Option<PairingQrLookup> {
+        let (pairing, secret) = self.state().qr_material(token)?;
+        Some(PairingQrLookup { pairing, secret })
+    }
+
+    /// 扫码取回：只有 `created`、未过期、未被内存标记失效且持久记录仍对应这份材料的设备配对
+    /// 才返回同一份资料（design D3/D5）。
+    ///
+    /// 依赖方向：本方法**不读存储**，`record` 由调用方（服务端）从持久化读取后传入；调用方必须
+    /// 先完成来源/Host/身份绑定校验，再调用这里。判定顺序为：凭据反查 → 记录标识一致 →
+    /// `created` → 未失效 → 未过期 → 记录摘要与内存 secret 一致。
+    ///
+    /// 副作用：**无**。不消耗凭据、不消耗网页码、不推进状态、不改写 `expires_at`；重复调用返回
+    /// 相同配对标识与 secret。认领成功后由调用方调用 [`Authority::close_qr_retrieval`] 关闭入口；
+    /// 即使尚未关闭，已认领的记录状态也不再满足 `created`，取回同样失败。所有失败统一返回 `None`
+    /// （adapter 必须收敛为同一个对端可见失败）。
+    pub fn retrieve_qr_material(
+        &self,
+        record: &PairingRecord,
+        token: &QrToken,
+    ) -> Option<PairingQrLookup> {
+        if record.target() != PairingTarget::Device {
+            return None;
+        }
+        let now = self.now();
+        let state = self.state();
+        let (pairing, secret) = state.qr_material(token)?;
+        if &pairing != record.id() {
+            return None;
+        }
+        if record.state() != PairingState::Created {
+            return None;
+        }
+        if state.is_invalidated(&pairing) {
+            return None;
+        }
+        if at_or_after(&now, record.expires_at()) {
+            return None;
+        }
+        // 材料替换后旧凭据不能返回新 secret：记录摘要必须仍与内存 secret 一致。
+        if record.secret_digest() != &secret.digest().ok()? {
+            return None;
+        }
+        Some(PairingQrLookup { pairing, secret })
+    }
+
+    /// 关闭扫码取回资格（认领提交成功后由调用方调用）：移除反查条目，**保留** pairing secret。
+    ///
+    /// 返回 `false` 表示该配对已没有可取回的凭据（从未创建过设备凭据、已被清理或已经关闭）；
+    /// 调用方不应把它当作失败——关闭是幂等的。为幂等 claim/status 保留的 secret 不会因此重新
+    /// 开放取回。
+    pub fn close_qr_retrieval(&self, pairing: &PairingId) -> bool {
+        self.state().close_qr_retrieval(pairing)
     }
 
     /// 用网页入口的配对码**一次性**取回绑定与 secret（design D3/D4）。

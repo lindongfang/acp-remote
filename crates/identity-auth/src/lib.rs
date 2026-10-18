@@ -12,7 +12,8 @@
 //! 模块划分：`types`（值对象与事实）、`transcript`（10 个 domain 的输入与编解码/验签/HMAC 入口）、
 //! `pairing`（配对状态机）、`pairing_code`（网页入口配对码的派生与编解码）、
 //! `handshake`（逐连接挑战-证明）、
-//! `port`（keystore 与熵源端口）、`state`（内存态：配对 secret、配对码反查、挑战缓存、失败计数）。
+//! `port`（keystore 与熵源端口）、`state`（内存态：配对 secret、配对码与扫码凭据反查、挑战缓存、
+//! 失败计数）。
 
 mod authority;
 pub mod error;
@@ -55,6 +56,6 @@ pub use types::{
     Completion, ConnectionBinding, ConnectionKind, CredentialStatus, HandshakeFailure,
     HandshakeFailureClass, IdentityFact, NodeEndpoint, P1363Signature, PAIRING_MAX_FAILURES,
     PAIRING_MAX_SECONDS, PROTOCOL_VERSION, PairingDecision, PairingDraft, PairingProof,
-    PairingRequestId, PairingRequestMaterial, PairingSecret, PairingSpec, PairingStatusView,
-    PeerTrust,
+    PairingQrLookup, PairingRequestId, PairingRequestMaterial, PairingSecret, PairingSpec,
+    PairingStatusView, PeerTrust, QrToken,
 };

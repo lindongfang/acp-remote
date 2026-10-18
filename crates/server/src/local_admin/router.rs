@@ -170,13 +170,16 @@ impl LocalAdminRouter {
                 &expires_at,
             )
             .map_err(|error| params::map_pairing_error(OPERATION, error))?;
-        let pairing_url = self.deps.pairing.device_pairing_url(
-            OPERATION,
-            &pairing_id,
-            &draft.secret,
-            &expires_at,
-            &host_public_key,
-        )?;
+        let qr_token = draft.qr_token.as_ref().ok_or_else(|| {
+            AdminError::new(
+                LocalErrorCode::Internal,
+                format!("{OPERATION}: the device pairing has no qr token"),
+            )
+        })?;
+        let pairing_url =
+            self.deps
+                .pairing
+                .device_pairing_url(OPERATION, qr_token, &host_public_key)?;
         // 提交失败时内存里会留下一个没有持久行的 secret：它无法被认领（认领判定依赖库里的配对行），
         // 并由过期扫描清除（`Authority::due_pairings`）。
         self.deps

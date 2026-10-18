@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "format": {
+    "version": 2,
+    "payloadBytes": 65,
+    "payloadAsciiLength": 87,
+    "fragmentPrefix": "q2=",
+    "legacyFragmentPrefix": "data="
+  },
+  "canonical": {
+    "canonicalOrigin": "https://faraday.tail74842e.ts.net:8765",
+    "qrToken": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "hostPublicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+    "hostKeyFingerprint": "USpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+    "payload": "AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+    "pairingUrl": "https://faraday.tail74842e.ts.net:8765/pair#q2=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w"
+  },
+  "budget": {
+    "testOrigin": "https://faraday.tail74842e.ts.net:8765",
+    "testPairingUrlLength": 134,
+    "maxTestPairingUrlLength": 150,
+    "maxMatrixColumns": 58,
+    "maxMatrixRows": 29
+  },
+  "invalidPayloads": [
+    {
+      "name": "unknown-version",
+      "payload": "AwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+      "expectedError": "unsupported_version"
+    },
+    {
+      "name": "sixty-four-bytes",
+      "payload": "AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcww",
+      "expectedError": "wrong_length"
+    },
+    {
+      "name": "sixty-six-bytes",
+      "payload": "AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3wA",
+      "expectedError": "wrong_length"
+    },
+    {
+      "name": "non-canonical-trailing-bits",
+      "payload": "AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3x",
+      "expectedError": "non_canonical_base64url"
+    },
+    {
+      "name": "padded-base64url",
+      "payload": "AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w=",
+      "expectedError": "non_canonical_base64url"
+    },
+    {
+      "name": "empty-payload",
+      "payload": "",
+      "expectedError": "non_canonical_base64url"
+    }
+  ],
+  "invalidUrls": [
+    {
+      "name": "legacy-device-data",
+      "url": "https://pc.example.test/pair#data=eyJwYWlyaW5nUHJvdG9jb2wiOiJhY3AtcmVtb3RlLXBhaXJpbmctdjEiLCJob3N0SWQiOiJiZGIyZWMyMC1mOThjLTRkODctYjc4OS1lNTQwZDUyN2VmODcifQ",
+      "expectedError": "legacy_data_format"
+    },
+    {
+      "name": "node-link-data",
+      "url": "https://pc.example.test/node-link/pair#data=eyJwYWlyaW5nUHJvdG9jb2wiOiJhY3AtcmVtb3RlLW5vZGUtbGluay12MSJ9",
+      "expectedError": "legacy_data_format"
+    },
+    {
+      "name": "plain-http",
+      "url": "http://faraday.tail74842e.ts.net:8765/pair#q2=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+      "expectedError": "malformed_pairing_url"
+    },
+    {
+      "name": "userinfo",
+      "url": "https://user@faraday.tail74842e.ts.net:8765/pair#q2=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+      "expectedError": "malformed_pairing_url"
+    },
+    {
+      "name": "query",
+      "url": "https://faraday.tail74842e.ts.net:8765/pair?x=1#q2=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+      "expectedError": "malformed_pairing_url"
+    },
+    {
+      "name": "wrong-path",
+      "url": "https://faraday.tail74842e.ts.net:8765/pairing#q2=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+      "expectedError": "malformed_pairing_url"
+    },
+    {
+      "name": "missing-fragment",
+      "url": "https://faraday.tail74842e.ts.net:8765/pair",
+      "expectedError": "malformed_pairing_url"
+    },
+    {
+      "name": "unknown-fragment-key",
+      "url": "https://faraday.tail74842e.ts.net:8765/pair#datax=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+      "expectedError": "malformed_pairing_url"
+    },
+    {
+      "name": "duplicate-fragment",
+      "url": "https://faraday.tail74842e.ts.net:8765/pair#q2=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w&q2=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+      "expectedError": "non_canonical_base64url"
+    },
+    {
+      "name": "unknown-version-in-url",
+      "url": "https://faraday.tail74842e.ts.net:8765/pair#q2=AwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+      "expectedError": "unsupported_version"
+    }
+  ],
+  "hostPublicKeys": [
+    {
+      "name": "canonical",
+      "hostPublicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+      "hostKeyFingerprint": "USpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w"
+    },
+    {
+      "name": "non-uncompressed-prefix",
+      "hostPublicKey": "A1Jtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+      "expectedError": "host_public_key_invalid"
+    },
+    {
+      "name": "wrong-length",
+      "hostPublicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4Q",
+      "expectedError": "host_public_key_invalid"
+    },
+    {
+      "name": "fingerprint-mismatch",
+      "hostPublicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+      "hostKeyFingerprint": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "expectedError": "fingerprint_mismatch"
+    }
+  ]
+}

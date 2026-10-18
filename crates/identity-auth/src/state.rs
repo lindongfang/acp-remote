@@ -1,4 +1,4 @@
-//! 进程内状态：配对 secret、配对码反查、每配对失败计数、挑战缓存。
+//! 进程内状态：配对 secret、配对码与扫码凭据反查、每配对失败计数、挑战缓存。
 //!
 //! 三条不变量（`design.md` D3）：
 //!
@@ -16,7 +16,7 @@ use crate::pairing_code::PairingCode;
 use crate::transcript::FeatureList;
 use crate::types::at_or_after;
 use crate::types::{
-    ChallengeId, ConnectionBinding, ConnectionKind, PairingRequestId, PairingSecret,
+    ChallengeId, ConnectionBinding, ConnectionKind, PairingRequestId, PairingSecret, QrToken,
 };
 
 /// 挑战缓存的硬上限（远超真实并发连接数；超出时淘汰最早过期的条目）。
@@ -47,6 +47,9 @@ pub(crate) struct PairingMaterial {
     pub code: PairingCode,
     pub server_nonce: Nonce,
     pub pairing_request_id: PairingRequestId,
+    /// 设备配对的扫码取回凭据（design D3）：节点配对为 `None`。与 secret 同生同灭；任何清除
+    /// 路径必须同时移除 `State::qr_tokens` 中的反查条目。
+    pub qr_token: Option<QrToken>,
     /// 是否已被批准（「内存态只允许比已提交状态更严格」，见 design D3）。
     ///
     /// 为什么需要它：`complete` 只拿到配对标识，若用「内存里还有 secret」代理
@@ -63,6 +66,11 @@ pub(crate) struct State {
     /// secret 的路径必须同步移除对应条目（见 `clear_secret`/`take_approved_secret`/
     /// `clear_all_secrets`），否则码会比 secret 活得更久。
     codes: BTreeMap<PairingCode, PairingId>,
+    /// 扫码取回凭据反查表（`qrToken -> pairing`）。与 `secrets` 同生同灭：任何清除 secret 的路径
+    /// 必须同步移除条目；认领成功后只移除本表，secret 仍为幂等 claim/status 保留。
+    ///
+    /// 键是 `QrToken` 而不是原始字节：`Debug` 脱敏，调试打印整张表也不会泄露凭据。
+    qr_tokens: BTreeMap<QrToken, PairingId>,
     failures: BTreeMap<String, u32>,
     invalidated: BTreeSet<String>,
     challenges: BTreeMap<String, ChallengeRecord>,
@@ -71,13 +79,62 @@ pub(crate) struct State {
 impl State {
     /// 登记一个配对的内存材料（创建配对时）。
     ///
-    /// 同一配对标识被重新登记时，旧材料的码一并移除（否则旧码会指向新的 secret）。
+    /// 同一配对标识被重新登记时，旧材料的码与扫码凭据一并移除（否则旧入口会指向新的 secret），
+    /// 再登记新材料的反查条目。
     pub fn put_secret(&mut self, pairing: &PairingId, material: PairingMaterial) {
         let code = material.code.clone();
+        let qr_token = material.qr_token;
         if let Some(previous) = self.secrets.insert(pairing.as_str().to_owned(), material) {
             self.codes.remove(&previous.code);
+            if let Some(previous_token) = previous.qr_token {
+                self.qr_tokens.remove(&previous_token);
+            }
         }
         self.codes.insert(code, pairing.clone());
+        if let Some(token) = qr_token {
+            self.qr_tokens.insert(token, pairing.clone());
+        }
+    }
+
+    /// 该扫码凭据是否已被某个仍持有材料的配对占用（创建时的碰撞去重）。
+    pub fn qr_token_in_use(&self, token: &QrToken) -> bool {
+        self.qr_tokens.contains_key(token)
+    }
+
+    /// 按扫码凭据反查配对（只读；不消耗、不推进状态）。
+    ///
+    /// 索引只登记仍持有 secret 的配对；若索引与材料不一致（不变量被破坏），返回 `None` 而不是
+    /// 继续交付材料（失败关闭）。
+    pub fn qr_lookup(&self, token: &QrToken) -> Option<PairingId> {
+        let pairing = self.qr_tokens.get(token)?;
+        let material = self.secrets.get(pairing.as_str())?;
+        if material.qr_token.as_ref() != Some(token) {
+            return None;
+        }
+        Some(pairing.clone())
+    }
+
+    /// 按扫码凭据取得配对标识与完整 secret（只读；重复调用返回相同内容）。
+    pub fn qr_material(&self, token: &QrToken) -> Option<(PairingId, PairingSecret)> {
+        let pairing = self.qr_lookup(token)?;
+        let secret = self.secrets.get(pairing.as_str())?.secret;
+        Some((pairing, secret))
+    }
+
+    /// 关闭该配对的扫码取回资格（认领成功后调用）：只移除反查条目，**保留 secret**，
+    /// 使幂等 claim/status 仍可继续。返回是否确实移除了一条。
+    pub fn close_qr_retrieval(&mut self, pairing: &PairingId) -> bool {
+        let token = match self.secrets.get_mut(pairing.as_str()) {
+            Some(material) => material.qr_token.take(),
+            None => None,
+        };
+        match token {
+            Some(token) => {
+                self.qr_tokens.remove(&token);
+                true
+            }
+            None => false,
+        }
     }
 
     /// 该码是否已被某个仍持有 secret 的配对占用（创建时的碰撞去重）。
@@ -139,6 +196,9 @@ impl State {
         match self.secrets.remove(pairing.as_str()) {
             Some(material) => {
                 self.codes.remove(&material.code);
+                if let Some(token) = material.qr_token {
+                    self.qr_tokens.remove(&token);
+                }
                 true
             }
             None => false,
@@ -147,22 +207,26 @@ impl State {
 
     /// 清除配对 secret（批准后首次认证成功、拒绝、过期与重启终结都走这里）。
     ///
-    /// 配对码与 secret 同生同灭：这里必须同时移除反查表中的码。
+    /// 配对码与扫码凭据都跟 secret 同生同灭：这里必须同时移除两张反查表。
     pub fn clear_secret(&mut self, pairing: &PairingId) -> bool {
         match self.secrets.remove(pairing.as_str()) {
             Some(material) => {
                 self.codes.remove(&material.code);
+                if let Some(token) = material.qr_token {
+                    self.qr_tokens.remove(&token);
+                }
                 true
             }
             None => false,
         }
     }
 
-    /// 清空全部 secret 与配对码（启动恢复用；返回被清理的 secret 条数）。
+    /// 清空全部 secret、配对码与扫码凭据（启动恢复用；返回被清理的 secret 条数）。
     pub fn clear_all_secrets(&mut self) -> usize {
         let count = self.secrets.len();
         self.secrets.clear();
         self.codes.clear();
+        self.qr_tokens.clear();
         count
     }
 
@@ -185,8 +249,12 @@ impl State {
     }
 
     /// 标记配对在内存中失效（第 5 次失败后），并返回是否刚刚完成失效转换。
+    ///
+    /// 失效后即使 secret 仍保留到原过期时间（状态轮询需要），扫码取回资格也必须立刻关闭。
     pub fn invalidate(&mut self, pairing: &PairingId) -> bool {
-        self.invalidated.insert(pairing.as_str().to_owned())
+        let newly = self.invalidated.insert(pairing.as_str().to_owned());
+        self.close_qr_retrieval(pairing);
+        newly
     }
 
     /// 是否已被内存标记失效。

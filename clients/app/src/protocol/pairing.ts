@@ -1,8 +1,9 @@
 /**
  * `schemas/sync/v1/pairing.schema.json` 的严格 TypeScript 镜像：HTTPS 配对请求/响应。
  *
- * 配对**不**经 WSS；二维码载荷里的 `canonicalOrigin` 决定设备身份绑定的来源，
- * 来源变化必须重新配对（`pwa-web-client` 的「来源变化后不再自动信任」）。
+ * 配对**不**经 WSS；设备配对的 `canonicalOrigin` 来自配对码 lookup 或扫码取回响应，
+ * 它决定设备身份绑定的来源，来源变化必须重新配对（`pwa-web-client` 的「来源变化后不再自动信任」）。
+ * 设备短二维码本身的 `q2` 载荷不是 JSON，编解码在 `./device-qr`。
  */
 
 import type {
@@ -16,17 +17,6 @@ import type {
 
 /** `$defs.canonicalOrigin`：`^https://[^/?#]+$`，无路径、无查询、无片段。 */
 export type CanonicalOrigin = string;
-
-/** `$defs.qrPayload`：扫码前由主机出示的配对凭据。 */
-export interface PairingQrPayload {
-  readonly pairingProtocol: "acp-remote-pairing-v1";
-  readonly hostId: Uuid;
-  readonly hostPublicKey: Base64Url65;
-  readonly canonicalOrigin: CanonicalOrigin;
-  readonly pairingId: Uuid;
-  readonly pairingSecret: Base64Url32;
-  readonly expiresAt: Timestamp;
-}
 
 /**
  * `$defs.lookupRequest`：配对码入口用 8 位码一次性取回配对绑定与秘密（§7.5）。
@@ -54,6 +44,24 @@ export interface PairingLookupResponse {
   readonly pairingSecret: Base64Url32;
   readonly expiresAt: Timestamp;
 }
+
+/**
+ * `$defs.qrLookupRequest`：新设备短二维码的扫码取回请求（§7.6）。
+ *
+ * `qrToken` 是设备创建时独立生成的 32 字节取回凭据，既不是配对码也不是配对秘密；它同样以
+ * 无填充 base64url 传输。来源不在请求体里，而由 HTTP `Origin` 与配对登记绑定比较。
+ */
+export interface PairingQrLookupRequest {
+  readonly protocolVersion: 1;
+  readonly qrToken: Base64Url32;
+}
+
+/**
+ * `$defs.qrLookupResponse`：扫码取回成功返回与配对码 lookup 同形的七字段绑定。
+ *
+ * 取回不推进配对状态、不消耗网页配对码、不创建信任；重复取回返回同一组材料。
+ */
+export type PairingQrLookupResponse = PairingLookupResponse;
 
 /** `$defs.claimRequest`：设备首次声明配对，`proof` 由设备私钥签名。 */
 export interface PairingClaimRequest {
@@ -146,9 +154,10 @@ export interface PairingHttpError {
 
 /** `pairing.schema.json` 的顶层 `oneOf`。 */
 export type PairingMessage =
-  | PairingQrPayload
   | PairingLookupRequest
   | PairingLookupResponse
+  | PairingQrLookupRequest
+  | PairingQrLookupResponse
   | PairingClaimRequest
   | PairingClaimResponse
   | PairingStatusRequest

@@ -24,6 +24,7 @@
         { "code": "pairing.expired", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "pairing.consumed", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "pairing.code_invalid", "retryable": false, "details": null, "delivery": "mvp" },
+        { "code": "pairing.qr_invalid", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "sync.cursor_invalid", "retryable": true, "details": { "type": "object", "required": ["reason"], "additionalProperties": true, "properties": { "reason": { "enum": ["malformed", "epoch_mismatch", "beyond_head", "cursor_expired"] } } }, "delivery": "mvp" },
         { "code": "command.unsupported", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "command.not_found", "retryable": false, "details": null, "delivery": "mvp" },

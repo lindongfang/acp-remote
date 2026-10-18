@@ -87,6 +87,15 @@ const FIXTURES: &[Fixture] = &[
         expectation: Expectation::ResponseDecodes,
     },
     Fixture {
+        path: "valid/response-device-pair-begin.json",
+        content: include_str!(
+            "../../../fixtures/local-admin/v1/valid/response-device-pair-begin.json"
+        ),
+        valid: true,
+        keyword: None,
+        expectation: Expectation::ResponseDecodes,
+    },
+    Fixture {
         path: "valid/error-response.json",
         content: include_str!("../../../fixtures/local-admin/v1/valid/error-response.json"),
         valid: true,

@@ -791,13 +791,12 @@ async fn the_sync_endpoint_upgrades_only_with_the_sync_subprotocol() {
     harness.stop().await;
 }
 
-/// 两条配对 POST 进入 Sync 的逻辑（不是 404），且每个响应都带 §7.1 的四个安全头。
+/// 四条配对 POST 进入 Sync 的逻辑（不是 404），且每个响应都带 §7.1 的四个安全头。
 ///
-/// 探针：`/sync/v1/pairing/claim` 与 `/sync/v1/pairing/status` 在**未注册**时都会得到 404
-/// （`transport::net` 的 fallback），因此「400 + `protocol.invalid_json`」就是「进了 Sync 处理器」
-/// 的判据。
+/// 探针：这些 path 在**未注册**时都会得到 404（`transport::net` 的 fallback），因此「400/401 + 协议错误码」
+/// 就是「进了 Sync 处理器」的判据。
 #[tokio::test]
-async fn both_pairing_paths_reach_the_sync_handlers_with_the_security_headers() {
+async fn all_pairing_paths_reach_the_sync_handlers_with_the_security_headers() {
     let harness = Harness::start("pairing-paths").await;
 
     let claim = post(
@@ -830,10 +829,60 @@ async fn both_pairing_paths_reach_the_sync_handlers_with_the_security_headers() 
     );
     status.assert_security_headers();
 
+    // 两条取回入口：可解析 JSON 的形状错误统一收敛为各自的 401（同样证明不是 404）；
+    // 坏 JSON 不是凭据失败，仍是 §7.4 的 400。
+    let lookup = post(
+        harness.addr,
+        server::sync::pairing::LOOKUP_PATH,
+        Some("application/json"),
+        b"{not json",
+    )
+    .await;
+    assert_eq!(lookup.status, 401, "lookup 的统一失败必须是 401");
+    assert!(
+        lookup.body.contains("pairing.code_invalid"),
+        "lookup 必须由 Sync 处理器判定（而不是 404/405），实际 body：{}",
+        lookup.body
+    );
+    lookup.assert_security_headers();
+
+    let qr_lookup = post(
+        harness.addr,
+        server::sync::pairing::QR_LOOKUP_PATH,
+        Some("application/json"),
+        b"{not json",
+    )
+    .await;
+    assert_eq!(
+        qr_lookup.status, 400,
+        "qr-lookup 的 JSON 语法错误必须是 400（§7.4）"
+    );
+    assert!(
+        qr_lookup.body.contains("protocol.schema_invalid"),
+        "qr-lookup 的坏 JSON 必须是 protocol.schema_invalid，实际 body：{}",
+        qr_lookup.body
+    );
+    qr_lookup.assert_security_headers();
+
     // 非 `application/json` 的请求也被 Sync 处理器拒绝（同样是「已进入 Sync 逻辑」的证据）。
-    let wrong_content_type = post(
+    let claim_wrong_content_type = post(
         harness.addr,
         server::sync::pairing::CLAIM_PATH,
+        Some("text/plain"),
+        b"{}",
+    )
+    .await;
+    assert_eq!(claim_wrong_content_type.status, 400);
+    assert!(
+        claim_wrong_content_type
+            .body
+            .contains("protocol.schema_invalid")
+    );
+    claim_wrong_content_type.assert_security_headers();
+
+    let wrong_content_type = post(
+        harness.addr,
+        server::sync::pairing::QR_LOOKUP_PATH,
         Some("text/plain"),
         b"{}",
     )
@@ -867,6 +916,17 @@ async fn the_pairing_body_limit_is_sixteen_kibibytes() {
     );
     // 413 是接入层在调用处理器**之前**产生的响应：四个安全头必须由 `register_post` 的每路径默认头补齐。
     response.assert_security_headers();
+
+    // 新入口走同一上限与同一组默认响应头。
+    let qr_lookup = post(
+        harness.addr,
+        server::sync::pairing::QR_LOOKUP_PATH,
+        Some("application/json"),
+        &body,
+    )
+    .await;
+    assert_eq!(qr_lookup.status, 413);
+    qr_lookup.assert_security_headers();
 
     harness.stop().await;
 }

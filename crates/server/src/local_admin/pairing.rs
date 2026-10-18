@@ -14,18 +14,20 @@
 //!   绝不回落到 localhost、也不伪造 URL；
 //! - **无出站调用**：本类型不做任何网络 IO（`node.pair.begin` 的 `mode = "access"` 因此回
 //!   `local.unsupported`，不构造 HTTP 调用）；
-//! - **`pairingUrl` 只在方法返回值里出现**：它含 pairing secret 的 fragment，绝不进日志、错误消息或
-//!   `Debug`（`SECURITY_DESIGN.md` §14.1）。本文件的所有 `Debug` 输出都不含 URL 与 secret。
+//! - **`pairingUrl` 只在方法返回值里出现**：设备方向含扫码取回凭据的 `#q2=` fragment（配对秘密、
+//!   配对标识与过期时间都**不在**地址里）；节点方向仍是含完整资料的 `#data=`。两者都绝不进日志、
+//!   错误消息或 `Debug`（`SECURITY_DESIGN.md` §14.1）。本文件的所有 `Debug` 输出都不含 URL 与 secret。
 
 use std::sync::Arc;
 
 use acp_core::model::{
-    DeviceId, NodeId, PairingId, PairingPeer, PairingRecord, PairingState, PeerPublicKey, Timestamp,
+    DeviceId, Fingerprint, NodeId, PairingId, PairingPeer, PairingRecord, PairingState,
+    PeerPublicKey, Timestamp,
 };
 use base64::Engine as _;
 use identity_auth::{
     Authority, CanonicalOrigin, ClaimedPairing, IdentityError, KeystoreError, NodeEndpoint,
-    PairingSecret,
+    PairingSecret, QrToken,
 };
 
 use crate::local_admin::error::{AdminError, LocalErrorCode};
@@ -152,31 +154,28 @@ impl PairingSessions {
             .map_err(|error| map_identity_error(operation, error))
     }
 
-    /// `device.pair.begin` 的二维码 URL：`https://<origin>/pair#data=<base64url-json>`
-    /// （`SYNC_PROTOCOL.md` §7.1；payload 形状由 `sync-protocol` 的 `QrPayload` 拥有）。
+    /// `device.pair.begin` 的二维码 URL：`https://<origin>/pair#q2=<payload>`
+    /// （`SYNC_PROTOCOL.md` §7.1；payload 形状由 `sync-protocol` 的 `DeviceQrPayload` 拥有）。
     ///
-    /// `host_public_key` 由调用方先取好：keystore 不可用时必须在**任何写入之前**失败，而不是先写
-    /// 内存 secret 再发现公钥取不到。
+    /// payload 只是版本、本次配对独立的扫码取回凭据与主机公钥的完整 SHA-256 指纹：配对秘密、
+    /// 配对标识与过期时间都**不在**地址里，设备扫码后经 `qr-lookup` 取回同一份绑定。`qr_token`
+    /// 由状态机在设备配对创建时生成，`host_public_key` 由调用方先取好（keystore 不可用时必须在
+    /// **任何写入之前**失败，而不是先写内存 secret 再发现公钥取不到）。
     pub fn device_pairing_url(
         &self,
         operation: &str,
-        pairing: &PairingId,
-        secret: &PairingSecret,
-        expires_at: &Timestamp,
+        qr_token: &QrToken,
         host_public_key: &PeerPublicKey,
     ) -> Result<String, AdminError> {
         let origin = self.canonical_origin(operation)?;
-        let payload = sync_protocol::pairing::QrPayload {
-            pairing_protocol: sync_protocol::pairing::PairingProtocolV1,
-            host_id: wire_uuid(operation, self.authority.local_node().as_str())?,
-            host_public_key: wire_base64url_65(operation, host_public_key.as_bytes())?,
-            canonical_origin: sync_protocol::pairing::CanonicalOrigin::parse(origin.as_str())
-                .map_err(|_| cannot_assemble(operation))?,
-            pairing_id: wire_uuid(operation, pairing.as_str())?,
-            pairing_secret: wire_base64url_32(operation, secret.as_bytes())?,
-            expires_at: wire_timestamp(operation, expires_at)?,
-        };
-        pairing_url(operation, origin.as_str(), "/pair", &payload)
+        let wire_origin = sync_protocol::pairing::CanonicalOrigin::parse(origin.as_str())
+            .map_err(|_| cannot_assemble(operation))?;
+        let fingerprint = fingerprint_bytes(operation, &host_public_key.fingerprint())?;
+        let payload = sync_protocol::device_qr::DeviceQrPayload::from_parts(
+            *qr_token.as_bytes(),
+            fingerprint,
+        );
+        Ok(payload.pairing_url(&wire_origin))
     }
 
     /// `node.pair.begin` 的二维码 URL：`https://<origin>/node-link/pair#data=<base64url-json>`
@@ -359,6 +358,33 @@ fn wire_base64url_65(
     .map_err(|_| cannot_assemble(operation))
 }
 
+/// 64 字符小写 hex 指纹 → 32 字节原始摘要（设备短二维码的 `hostKeyFingerprint` 形态）。
+///
+/// 指纹的**唯一派生入口**仍是 core 的 `PeerPublicKey::fingerprint`（SHA-256 的规范 SEC1 公钥）；
+/// 这里只做形状固定的十六进制解码，不重新计算摘要，也不接受任何别的指纹来源。
+fn fingerprint_bytes(operation: &str, fingerprint: &Fingerprint) -> Result<[u8; 32], AdminError> {
+    let text = fingerprint.as_str().as_bytes();
+    if text.len() != 64 {
+        return Err(cannot_assemble(operation));
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        let high = hex_value(text[index * 2]).ok_or_else(|| cannot_assemble(operation))?;
+        let low = hex_value(text[index * 2 + 1]).ok_or_else(|| cannot_assemble(operation))?;
+        *byte = (high << 4) | low;
+    }
+    Ok(bytes)
+}
+
+/// 小写十六进制数字的取值；其它字符返回 `None`（`Fingerprint` 已保证是小写 hex）。
+fn hex_value(character: u8) -> Option<u8> {
+    match character {
+        b'0'..=b'9' => Some(character - b'0'),
+        b'a'..=b'f' => Some(character - b'a' + 10),
+        _ => None,
+    }
+}
+
 /// `https://<origin><path>#data=<base64url(json)>`：payload 由协议 crate 的类型序列化，secret 只在
 /// URL 的 fragment 里（§7.1/§13.1），不进日志——返回值由路由直接放进 `result`。
 fn pairing_url<T: serde::Serialize>(
@@ -523,6 +549,7 @@ mod tests {
 
     use acp_core::ports::Clock;
     use identity_auth::{EntropyError, EntropySource, KeyHandle, KeyPurpose, SecretBytes};
+    use sha2::Digest as _;
 
     /// 与生产组合根无关的最小熵源：确定性字节序列（只为可判定，不作密码学用途）。
     struct DeterministicEntropy {
@@ -614,6 +641,10 @@ mod tests {
         "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
     );
 
+    fn qr_token() -> QrToken {
+        QrToken::try_from_bytes(&[9u8; 32]).expect("32 字节扫码取回凭据")
+    }
+
     fn public_key() -> PeerPublicKey {
         let bytes: Vec<u8> = TEST_PUBLIC_KEY_HEX
             .as_bytes()
@@ -656,38 +687,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn device_url_round_trips_through_the_sync_qr_payload() {
+    async fn device_url_round_trips_through_the_short_qr_payload() {
         let sessions = sessions(Some("https://work-pc.example.ts.net"));
-        let (id, secret, expires_at) = pairing();
+        let (id, secret, _expires_at) = pairing();
         let url = sessions
-            .device_pairing_url(
-                "device.pair.begin",
-                &id,
-                &secret,
-                &expires_at,
-                &public_key(),
-            )
+            .device_pairing_url("device.pair.begin", &qr_token(), &public_key())
             .expect("可组装");
-        let data = url
-            .strip_prefix("https://work-pc.example.ts.net/pair#data=")
+        let parsed = sync_protocol::device_qr::decode_pairing_url(&url)
             .expect("URL 形状与 SYNC_PROTOCOL §7.1 一致");
-        let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(data)
-            .expect("fragment 是无填充 base64url");
-        let payload: sync_protocol::pairing::QrPayload =
-            serde_json::from_slice(&json).expect("sync 侧可反序列化");
         assert_eq!(
-            payload.host_id.as_str(),
-            "bdb2ec20-f98c-4d87-b789-e540d527ef87"
-        );
-        assert_eq!(payload.pairing_id.as_str(), id.as_str());
-        assert_eq!(payload.pairing_secret.as_bytes(), secret.as_bytes());
-        assert_eq!(payload.expires_at.as_str(), expires_at.as_str());
-        assert_eq!(
-            payload.canonical_origin.as_str(),
+            parsed.canonical_origin().as_str(),
             "https://work-pc.example.ts.net"
         );
-        assert_eq!(payload.host_public_key.as_bytes(), public_key().as_bytes());
+        assert_eq!(parsed.payload().qr_token(), qr_token().as_bytes());
+        let expected: [u8; 32] = sha2::Sha256::digest(public_key().as_bytes()).into();
+        assert_eq!(
+            parsed.payload().host_key_fingerprint(),
+            &expected,
+            "指纹是规范 65 字节公钥的完整 SHA-256"
+        );
+        assert_eq!(
+            url.len(),
+            "https://work-pc.example.ts.net/pair#q2=".len()
+                + sync_protocol::device_qr::DEVICE_QR_PAYLOAD_ASCII_LENGTH
+        );
+        assert!(!url.contains("#data="), "不再生成旧设备完整资料格式");
+        assert!(
+            !url.contains(id.as_str())
+                && !url.contains(&{
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret.as_bytes())
+                }),
+            "短地址不含配对标识与配对秘密"
+        );
         assert!(
             !format!("{sessions:?}").contains("work-pc"),
             "Debug 不打印 origin"

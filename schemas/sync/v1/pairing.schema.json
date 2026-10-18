@@ -3,13 +3,13 @@
   "$id": "https://acp-remote.dev/schemas/sync/v1/pairing.schema.json",
   "title": "ACP Remote Pairing v1 HTTP Payloads",
   "oneOf": [
-    { "$ref": "#/$defs/qrPayload" },
     { "$ref": "#/$defs/claimRequest" },
     { "$ref": "#/$defs/claimResponse" },
     { "$ref": "#/$defs/statusRequest" },
     { "$ref": "#/$defs/statusResponse" },
     { "$ref": "#/$defs/lookupRequest" },
     { "$ref": "#/$defs/lookupResponse" },
+    { "$ref": "#/$defs/qrLookupRequest" },
     { "$ref": "#/$defs/httpError" }
   ],
   "$defs": {
@@ -18,20 +18,6 @@
       "format": "uri",
       "pattern": "^https://[^/?#]+$",
       "maxLength": 2048
-    },
-    "qrPayload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["pairingProtocol", "hostId", "hostPublicKey", "canonicalOrigin", "pairingId", "pairingSecret", "expiresAt"],
-      "properties": {
-        "pairingProtocol": { "const": "acp-remote-pairing-v1" },
-        "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "hostPublicKey": { "$ref": "common.schema.json#/$defs/base64url65" },
-        "canonicalOrigin": { "$ref": "#/$defs/canonicalOrigin" },
-        "pairingId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "pairingSecret": { "$ref": "common.schema.json#/$defs/base64url32" },
-        "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
-      }
     },
     "claimRequest": {
       "type": "object",
@@ -143,6 +129,20 @@
         "pairingSecret": { "$ref": "common.schema.json#/$defs/base64url32" },
         "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
       }
+    },
+    "qrLookupRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "qrToken"],
+      "description": "扫码取回凭据换回配对绑定。qrToken 是设备创建时独立生成的 32 字节凭据，与配对码、配对秘密互不相同；请求不携带 canonical origin 字段，来源由 HTTP Origin 头与配对登记绑定比较。",
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "qrToken": { "$ref": "common.schema.json#/$defs/base64url32" }
+      }
+    },
+    "qrLookupResponse": {
+      "description": "扫码取回成功返回与配对码 lookup 同形的七个字段；不推进配对状态、不消耗配对码、不创建信任。因为形状与 lookupResponse 逐字节相同，它只在 $defs 里保留命名，不重复进入顶层 oneOf（否则同一响应会同时匹配两个分支）。",
+      "$ref": "#/$defs/lookupResponse"
     },
     "httpError": {
       "type": "object",

@@ -72,7 +72,8 @@ import type {
   PairingWiring,
 } from "./features/pairing-model";
 import { PairingQrInvalidError } from "./features/pairing-model";
-import type { ErrorCode, NodeLinkQrPayload, PairingQrPayload, PublicError } from "./protocol";
+import type { ErrorCode, NodeLinkQrPayload, PairingLookupResponse, PublicError } from "./protocol";
+import { DEVICE_QR_FRAGMENT_PREFIX } from "./protocol";
 import { openPlatform } from "./platform";
 import type { LifecycleEvent, PlatformPorts } from "./platform";
 import {
@@ -134,9 +135,10 @@ const NODE_LINK_PAIRING_PROTOCOL = "acp-remote-nodelink-v1";
 const NODE_LINK_ENDPOINT_PATTERN = /^wss:\/\/[^/?#]+\/node-link\/v1$/;
 
 /**
- * 二维码地址里承载载荷的片段标记（协议 §7.1：`https://<origin>/pair#data=<base64url-json>`）。
+ * 二维码地址里承载载荷的片段标记（节点协议 §13.1：`https://<origin>/node-link/pair#data=<base64url-json>`）。
  *
  * 秘密**必须**在 fragment 而不是 query：query 会进服务器日志、Referer 与浏览器历史。
+ * 新设备短二维码的 `q2=` 标记来自 `src/protocol/device-qr.ts`（浏览器只清除它，不解析）。
  */
 const QR_DATA_MARKER = "data=";
 
@@ -380,7 +382,7 @@ async function importHostPublicKey(publicKeyBase64Url: string): Promise<CryptoKe
  */
 async function verifyClaimHostProof(input: {
   readonly body: PairingStatusBody;
-  readonly qr: PairingQrPayload;
+  readonly qr: PairingLookupResponse;
   readonly canonicalOrigin: string;
   readonly deviceId: string;
   readonly devicePublicKeyBase64Url: string;
@@ -526,8 +528,8 @@ function toPublicError(body: unknown, status: number, fallbackMessage: string): 
  *
  * 1. 只接受同源 `application/json`（§7.1）：URL 由 `canonicalOrigin` 拼出，body 是 JSON，
  *    不使用 Cookie、Basic Auth 或 URL query 承载凭据。
- * 2. `proof` 是 `HMAC-SHA256(pairingSecret, transcript)`（§7.2/§7.3），key 只从二维码读，
- *    每次轮询换新 `requestNonce`（schema 要求）。
+ * 2. `proof` 是 `HMAC-SHA256(pairingSecret, transcript)`（§7.2/§7.3），key 只从配对码 lookup
+ *    的成功响应读，每次轮询换新 `requestNonce`（schema 要求）。
  * 3. 业务状态只由 body 的 `status` 表达，`expired`/`consumed` 同样是 HTTP 200（§7.3）——
  *    因此这里**不**用 `ok` 判定业务结果。
  */
@@ -558,21 +560,24 @@ class HttpPairingTransport implements PairingTransport {
   }
 
   /**
-   * 二维码内容 → 载荷 + 它的**类型**（design D3 的读取口）。
+   * 二维码/片段内容 → 它的**类型**（design D3 的读取口）。
    *
-   * ## 接受三种**容器**形态，两类**载荷**各自一套字段校验
+   * ## 只有 node-link 载荷会被解析
    *
-   * 用户能拿到的文本有三种：二维码里的完整地址（`https://<origin>/pair#data=<base64url-json>`，
-   * §7.1）、地址里的片段本身（页面自己读片段时给的就是它）、以及裸 base64url 载荷。
-   * 容器的宽松**不**等于载荷的宽松：无论从哪一种容器取出 JSON 文本，字段校验都逐项照旧
-   * （协议版本、字段齐全、来源/端点形状、字段长度、过期时间），不符即抛 `PairingQrInvalidError`，
-   * **绝不**尽力解析（补缺失字段、放过版本不符、把乱码当文本）。
+   * 用户能拿到的文本有三种：节点二维码里的完整地址
+   * （`https://<origin>/node-link/pair#data=<base64url-json>`）、地址里的片段本身、以及裸
+   * base64url 载荷。容器的宽松**不**等于载荷的宽松：无论从哪一种容器取出 JSON 文本，
+   * node-link 字段校验都逐项照旧（字段齐全、端点形状、字段长度、过期时间），不符即抛
+   * `PairingQrInvalidError`，**绝不**尽力解析。
+   *
+   * 设备（sync）协议常量只用于**分类**：返回 `{ kind: "sync" }`，不读取任何设备字段。
+   * 浏览器已不再消费设备资料（design D6），分类结果只用来让 node-link 入口说清
+   * 「这不是本入口的配对地址」。
    *
    * ## 类型在这里只被**标注**，不被判定
    *
-   * 同一份 node-link 内容在 sync 入口是「明确失败」、在 node-link 入口是「已读到的内容」，
-   * 那是入口的判定（design D2/D3）：入口把这里标出的 `kind` 与路由声明的类型对上，
-   * 因此判定不依赖任何对载荷形状的猜测，也不在这里替入口做取舍。
+   * 入口把这里标出的 `kind` 与路由声明的类型对上，因此判定不依赖任何对载荷形状的猜测，
+   * 也不在这里替入口做取舍。
    */
   readQrPayload(text: string): PairingQrRead {
     const payload = parseJsonObject(qrPayloadJsonOf(text));
@@ -583,9 +588,9 @@ class HttpPairingTransport implements PairingTransport {
     if (typeof protocol !== "string" || protocol.length === 0) {
       throw new PairingQrInvalidError("protocol.schema_invalid", "二维码缺少字段 pairingProtocol");
     }
-    if (protocol === SYNC_PAIRING_PROTOCOL) {
-      return { kind: "sync", qr: readSyncQrPayload(payload, this.#now()) };
-    }
+    // 设备载荷只分类、不解析：任何字段缺失、长度不符或已过期都不构成浏览器侧的成功/失败判定，
+    // 浏览器对它只有「App 专用」这一条路径（`q2=` 甚至不会走到这里）。
+    if (protocol === SYNC_PAIRING_PROTOCOL) return { kind: "sync" };
     if (protocol === NODE_LINK_PAIRING_PROTOCOL) {
       return { kind: "node-link", qr: readNodeLinkQrPayload(payload, this.#now()) };
     }
@@ -618,7 +623,7 @@ class HttpPairingTransport implements PairingTransport {
 
   /** `POST /sync/v1/pairing/claim`（§7.2）。 */
   async claim(input: {
-    readonly qr: PairingQrPayload;
+    readonly qr: PairingLookupResponse;
     readonly canonicalOrigin: string;
   }): Promise<PublicError | null> {
     // `ensureIdentity` 是幂等的：已绑定同一来源时返回既有身份，来源不同则抛 `origin_mismatch`
@@ -678,7 +683,7 @@ class HttpPairingTransport implements PairingTransport {
 
   /** `POST /sync/v1/pairing/status`（§7.3）。业务状态只由 body 表达，HTTP 永远 200。 */
   async poll(input: {
-    readonly qr: PairingQrPayload;
+    readonly qr: PairingLookupResponse;
     readonly requestNonce: string;
   }): Promise<PairingPollResult> {
     const identity = await this.#device.loadIdentity();
@@ -799,46 +804,11 @@ function encodeUnixSeconds(timestamp: string): ByteArray {
 // ── 二维码内容与地址片段 ────────────────────────────────────────────────────
 
 /**
- * sync 配对二维码载荷（`SYNC_PROTOCOL.md` §7.1 / `schemas/sync/v1/pairing.schema.json` 的
- * `$defs.qrPayload`）的字段校验。
- *
- * 容器已经解开（`qrPayloadJsonOf`），这里只管**载荷**：字段齐全、来源形状、两条 base64url 字段的
- * 长度（32 / 65 字节）、过期时间——逐项照旧，不尽力解析。协议常量由调用方（`readQrPayload`）
- * 判过，这里因此不再重复判一次。
- */
-function readSyncQrPayload(payload: Record<string, unknown>, now: number): PairingQrPayload {
-  const qr = payload as unknown as PairingQrPayload;
-  for (const key of ["hostId", "hostPublicKey", "canonicalOrigin", "pairingId", "pairingSecret", "expiresAt"] as const) {
-    if (typeof qr[key] !== "string" || qr[key].length === 0) {
-      throw new PairingQrInvalidError("protocol.schema_invalid", `二维码缺少字段 ${key}`);
-    }
-  }
-  if (!CANONICAL_ORIGIN_PATTERN.test(qr.canonicalOrigin)) {
-    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码来源形状非法");
-  }
-  // §7.1 要求校验字段长度：两条 base64url 字段必须与 wire 形状同长（32 / 65 字节）。
-  if (!isBase64UrlLength(qr.pairingSecret, QR_SECRET_BYTES)) {
-    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 pairingSecret 长度不符");
-  }
-  if (!isBase64UrlLength(qr.hostPublicKey, QR_HOST_PUBLIC_KEY_BYTES)) {
-    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 hostPublicKey 长度不符");
-  }
-  const expiresAt = Date.parse(qr.expiresAt);
-  if (Number.isNaN(expiresAt)) {
-    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码过期时间不是时间戳");
-  }
-  if (expiresAt <= now) {
-    throw new PairingQrInvalidError("pairing.expired", "二维码已过期");
-  }
-  return qr;
-}
-
-/**
  * node-link 配对二维码载荷（`NODE_LINK_PROTOCOL.md` §13.1 / `schemas/node-link/v1/pairing.schema.json`
  * 的 `$defs.qrPayload`）的字段校验。
  *
- * 与 sync 侧**同一口径**（同一组失败形态与消息结构，见 `readSyncQrPayload`）：字段齐全、
- * 端点形状、两条 base64url 字段的长度（32 / 65 字节）、过期时间逐项照旧，不尽力解析。
+ * 容器已经解开（`qrPayloadJsonOf`），这里只管**载荷**：字段齐全、端点形状、两条 base64url 字段的
+ * 长度（32 / 65 字节）、过期时间逐项照旧，不尽力解析。
  * 这里**不**判定「入口是否接受它」——入口按声明的类型决定（design D2/D3）。
  */
 function readNodeLinkQrPayload(payload: Record<string, unknown>, now: number): NodeLinkQrPayload {
@@ -909,7 +879,7 @@ function decodeQrPayloadBase64Url(data: string): string {
  * `pairingId`/`hostId` 与 schema 的 `$defs.uuid` 同口径校验形状，而不只是非空——它们随后会
  * 进入 transcript 与 claim 正文，形状不符在这里就该失败。
  */
-function readLookupResponse(body: unknown, requestedOrigin: string): PairingQrPayload | null {
+function readLookupResponse(body: unknown, requestedOrigin: string): PairingLookupResponse | null {
   if (typeof body !== "object" || body === null) return null;
   const source = body as Record<string, unknown>;
   if (source["protocolVersion"] !== PAIRING_PROTOCOL_VERSION) return null;
@@ -936,7 +906,7 @@ function readLookupResponse(body: unknown, requestedOrigin: string): PairingQrPa
   if (!isBase64UrlLength(hostPublicKey, QR_HOST_PUBLIC_KEY_BYTES)) return null;
   if (Number.isNaN(Date.parse(expiresAt))) return null;
   return {
-    pairingProtocol: SYNC_PAIRING_PROTOCOL,
+    protocolVersion: PAIRING_PROTOCOL_VERSION,
     hostId,
     hostPublicKey,
     canonicalOrigin,
@@ -957,17 +927,20 @@ function isBase64UrlLength(value: string, bytes: number): boolean {
 }
 
 /**
- * 读取地址片段里的配对内容，并**立即**清除该片段（§7.1：读取后立即 `history.replaceState`）。
+ * 读取地址片段并**立即**清除它（design D6：敏感内容位于 fragment，读取后立即
+ * `history.replaceState`，先于任何 UI 呈现、持久化或请求）。
  *
- * 只把 `data=` 形态的片段当作配对内容：其余片段既不被解析、也不被清除——清除别人的片段
- * 可能破坏它承载的语义。返回值含秘密，因此调用方**只**把它交给 `readQrPayload`，
- * 不得落到日志或状态里。没有地址栏（非浏览器环境）或没有配对片段时返回 `null`。
+ * 只把设备 `q2=` 与 `data=` 片段当作配对内容：其余片段既不被解析、也不被清除——清除别人的
+ * 片段可能破坏它承载的语义。`q2=` 只交给调用方判断「App 专用」，浏览器不解析其载荷；
+ * `data=` 只用于 node-link 读取口径。没有地址栏（非浏览器环境）或没有配对片段时返回 `null`。
  */
 function takePairingFragment(): string | null {
   if (typeof globalThis.location === "undefined") return null;
   const hash = globalThis.location.hash;
   const fragment = hash.startsWith("#") ? hash.slice(1) : hash;
-  if (!fragment.startsWith(QR_DATA_MARKER)) return null;
+  const recognized =
+    fragment.startsWith(DEVICE_QR_FRAGMENT_PREFIX) || fragment.startsWith(QR_DATA_MARKER);
+  if (!recognized) return null;
   if (typeof globalThis.history !== "undefined") {
     // `replaceState` 不触发导航，因此页面不会被带离当前路由；片段之外的路径与查询原样保留。
     globalThis.history.replaceState(
@@ -1096,21 +1069,10 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     schedule: (delayMs, task) => clock.schedule(delayMs, task),
     // 每次轮询换新的 nonce（§7.3）：随机源只由组合根持有（CSPRNG 端口）。
     nextRequestNonce: () => encodeBase64Url(random.bytes(32)),
-    // 环境事实（design D2）：缺省读浏览器全局，入口据此校验安全上下文与来源一致。
+    // 环境事实（design D2）：缺省读浏览器全局，配对码入口据此校验安全上下文与请求来源。
     isSecureContext: secureContext,
     currentOrigin,
-    // 配对码入口的首次信任（design D5）：同源已有不同的已配对公钥时失败关闭，绝不覆盖。
-    // 二维码入口不调用它——那条路径的公钥仍来自 fragment 的带外载荷。
-    async checkCodeEntryHost(input): Promise<PublicError | null> {
-      const record = await pairedHost.loadPairedHost(input.canonicalOrigin);
-      if (record === null || record.publicKeyBase64Url === input.hostPublicKey) return null;
-      return {
-        code: "auth.host_mismatch",
-        message: "同一来源已登记过另一把主机公钥：本次配对不会覆盖既有记录，请在电脑上重新发起配对。",
-        retryable: false,
-        details: {},
-      };
-    },
+
   };
 
   const store = new ClientStore({

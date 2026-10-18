@@ -170,6 +170,11 @@ function qrFragment(payload: Record<string, string>): string {
   return `#${QR_DATA_MARKER}${encodeBase64Url(new TextEncoder().encode(json))}`;
 }
 
+/** 新设备短二维码的片段（共享向量 canonical）：浏览器只清除它，不解析。 */
+function deviceQrFragment(): string {
+  return "#q2=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w";
+}
+
 /**
  * 一份**完整可读**的 node-link 配对片段（`NODE_LINK_PROTOCOL.md` §13.1）：字段齐全、
  * 端点形状与两条 base64url 字段的长度（65 / 32 字节）合规、未过期。
@@ -340,8 +345,9 @@ describe("3.3 配对二维码地址：片段被读出、被清除，清除后仍
       await composition.store.startPairingFromAddress("sync");
 
       const page = composition.store.pairingPage();
-      expect(page.phase).toBe("failed");
-      expect(page.error?.code).toBe("protocol.schema_invalid");
+      // 旧设备 `data=` 仍被**先**读出并清除，但不再解析或认领：页面明确提示格式已停用。
+      expect(page.phase).toBe("legacy_device_qr_unsupported");
+      expect(page.presentation.title).toBe("设备二维码旧格式已停用");
       expect(addressBar.replaced).toEqual(["/pair"]);
       expect(addressBar.pushed).toEqual([]);
       // 清除后地址栏里的地址仍落在配对页：`replaceState` 只改地址，不触发导航。
@@ -382,6 +388,29 @@ describe("3.3 配对二维码地址：片段被读出、被清除，清除后仍
       expect(addressBar.pushed).toEqual([]);
       expect(addressBar.address()).toBe("/pair#/hosts");
       expect(routeKeyOf(addressBar.address())).toBe("/pair");
+    } finally {
+      addressBar.restore();
+      composition.dispose();
+    }
+  });
+
+  it("新设备短二维码片段：先清除，再显示固定 App 指引，不解析也不发请求", async () => {
+    const addressBar = stubAddressBar("/pair", "", deviceQrFragment());
+    const composition = compositionWithoutNetwork();
+    try {
+      await composition.store.startPairingFromAddress("sync");
+
+      const page = composition.store.pairingPage();
+      expect(page.phase).toBe("device_qr_app_only");
+      expect(page.presentation.kind).toBe("info");
+      expect(page.presentation.title).toBe("请在 ACP Remote App 内扫码");
+      expect(page.presentation.lede).toContain("请在 ACP Remote App 内扫码，或返回网页使用配对码");
+      // 片段（含扫码取回凭据）先被清除，且清除后仍落在配对页。
+      expect(addressBar.replaced).toEqual(["/pair"]);
+      expect(addressBar.pushed).toEqual([]);
+      expect(routeKeyOf(addressBar.address())).toBe("/pair");
+      // 页面模型不持有凭据，也没有任何请求（compositionWithoutNetwork 的 fetch 会抛错）。
+      expect(JSON.stringify(composition.store.state)).not.toContain("AgABAgME");
     } finally {
       addressBar.restore();
       composition.dispose();

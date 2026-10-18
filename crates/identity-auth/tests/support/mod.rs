@@ -201,6 +201,7 @@ impl Clock for FakeClock {
 pub struct SequenceEntropy {
     calls: Mutex<u64>,
     fail: Mutex<bool>,
+    sizes: Mutex<Vec<usize>>,
 }
 
 impl SequenceEntropy {
@@ -213,6 +214,11 @@ impl SequenceEntropy {
     pub fn fail_next(&self) {
         *self.fail.lock().expect("熵源锁") = true;
     }
+
+    /// 已成功的 `fill` 请求字节数（按调用顺序）：用于断言某次操作抽取了哪些材料、抽取几次。
+    pub fn fill_sizes(&self) -> Vec<usize> {
+        self.sizes.lock().expect("熵源锁").clone()
+    }
 }
 
 impl EntropySource for SequenceEntropy {
@@ -220,6 +226,7 @@ impl EntropySource for SequenceEntropy {
         if *self.fail.lock().expect("熵源锁") {
             return Err(EntropyError::Unavailable);
         }
+        self.sizes.lock().expect("熵源锁").push(out.len());
         // 测试用确定性熵源：以「第几次调用」为种子做可复现的字节流展开。
         //
         // 为什么不是简单递增字节计数器：单字节轨道的周期是 256，而一次 `hello` 恰好消耗

@@ -278,6 +278,50 @@ impl fmt::Debug for PairingSecret {
     }
 }
 
+/// 扫码取回凭据（32 字节，`specs/identity-pairing`「扫码取回凭据独立于配对秘密」）。
+///
+/// 与 [`PairingSecret`] **独立**生成、用途不同：它只用于二维码地址与 `qr-lookup` 的反查，
+/// 不能作为 claim/status 的 proof 密钥，也不是配对码或其截断值。明文只在内存：跟随本次配对的
+/// 材料一起驻留，重启、拒绝、失效、过期、材料替换与认领后即不可取回。
+///
+/// 安全边界：`Debug` 脱敏，**不实现** `Display`，也不提供 hex/字符串化入口——凭据唯一离开本类型的
+/// 方式是 [`QrToken::as_bytes`]（由服务端按协议编码进二维码）。反查表直接以本类型为键，因此
+/// 即使调试打印整个索引也只会得到 `QrToken(<redacted>)`。
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct QrToken([u8; 32]);
+
+impl QrToken {
+    /// 长度。
+    pub const LEN: usize = 32;
+
+    /// 从注入的熵源生成（与配对 secret 使用同一密码学随机源，但独立抽取一次）。
+    pub fn generate(entropy: &dyn EntropySource) -> Result<Self, EntropyError> {
+        let mut bytes = [0u8; 32];
+        entropy.fill(&mut bytes)?;
+        Ok(Self(bytes))
+    }
+
+    /// 从 32 字节构造（从二维码/请求载荷读入时使用）。
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, TranscriptError> {
+        let bytes: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| TranscriptError::Base64Url("qr token"))?;
+        Ok(Self(bytes))
+    }
+
+    /// 原始字节（**只在内存**：服务端组装 `#q2=` 地址与反查）。
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for QrToken {
+    /// 凭据可以取回配对材料：不进入日志/诊断输出。
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("QrToken(<redacted>)")
+    }
+}
+
 /// `clientKind`（`docs/SYNC_PROTOCOL.md` §6.3 的 4 个取值）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClientKind {
@@ -385,6 +429,23 @@ pub struct PairingDraft {
     pub server_nonce: Nonce,
     /// 本机为该配对生成的请求标识（claim 响应与状态查询共用）。
     pub pairing_request_id: PairingRequestId,
+    /// 设备配对的扫码取回凭据（只在内存；节点配对为 `None`）。
+    ///
+    /// 服务端只用它把 `#q2=` 地址交给用户；**不得**放进 [`PairingDraft::record`]，也不得持久化。
+    pub qr_token: Option<QrToken>,
+}
+
+/// 一次成功的扫码取回：配对标识与该配对的完整 secret。
+///
+/// 与 [`PairingCodeLookup`](crate::PairingCodeLookup) 同形，但**不消耗**任何凭据：重复取回返回
+/// 相同内容；其余绑定字段（`hostId`/`hostPublicKey`/`canonicalOrigin`/`expiresAt`）来自调用方已读到的
+/// 配对记录，不需要由该入口返回。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingQrLookup {
+    /// 凭据所属的配对。
+    pub pairing: PairingId,
+    /// 该配对的完整 256 bit secret（此后 claim/status 的 transcript 不变）。
+    pub secret: PairingSecret,
 }
 
 /// 配对通道可读的**非秘密**请求材料：claim 响应与 Owner 证明需要的 server nonce 与请求标识。

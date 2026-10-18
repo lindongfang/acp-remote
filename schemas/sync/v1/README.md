@@ -5,7 +5,7 @@
 入口：
 
 - `message.schema.json`：所有 WSS message 的联合入口。
-- `pairing.schema.json`：HTTPS pairing request/response。
+- `pairing.schema.json`：HTTPS pairing request/response（含 `qrLookupRequest`/`qrLookupResponse`；设备短二维码 `q2` 布局不是 JSON，由 `fixtures/sync/v1/device-qr/vectors.json` 与 Rust/TypeScript 编解码测试固定）。
 - `common.schema.json`：共享值对象。
 - `auth.schema.json`：WSS 认证消息。
 - `sync.schema.json`：订阅、快照和 ACK。

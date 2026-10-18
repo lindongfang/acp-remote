@@ -30,7 +30,7 @@
  * 预置写的是**真实**平台端口（`openPlatform()` 的真实 IndexedDB）里的同一份记录，
  * 读取它的也是**真实**的 `createComposition().start()`：被跳过的只有配对页与 HTTPS 轮询面，
  * 其后的握手、验签、快照、命令全部走生产代码。需要「未配对」起点的用例用
- * `ScenarioOptions.seedPaired: false`（`pairing-first-run.ts` 的 PW-1…PW-5 与
+ * `ScenarioOptions.seedPaired: false`（`pairing-first-run.ts` 的 PW-1/PW-1b 与 PW-2…PW-11，以及
  * `pairing-kinds.ts` 的 NL-1…NL-3 就是）。
  */
 

@@ -634,8 +634,69 @@ function scanRemovedVocabulary() {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// 设备二维码资产切换（`device-pairing-qr-reference`）：旧设备 `#data=` 完整资料退出，`device.pair.begin`
+// 的 `pairingUrl` 改为 `…/pair#q2=<87 chars>`。删除旧 fixture 本身不会让任何既有判据变红，因此这里把
+// 「旧资产不得回潮」与「新 pairingUrl 形状」写成判据；节点资产不在此范围（node-link fixture 仍用
+// `#data=` 且必须保持不变）。
+// ---------------------------------------------------------------------------------------------
+
+const legacyDeviceFixture = join(root, "fixtures", "sync", "v1", "valid", "pairing-qr-payload.json");
+const localAdminDevicePairBegin = join(
+  root,
+  "fixtures",
+  "local-admin",
+  "v1",
+  "valid",
+  "response-device-pair-begin.json",
+);
+const devicePairingUrlShape = /^https:\/\/[^/?#@]+\/pair#q2=[A-Za-z0-9_-]{87}$/;
+
+function checkDeviceQrAssets() {
+  if (existsSync(legacyDeviceFixture)) {
+    errors.push(
+      "设备二维码资产回潮：fixtures/sync/v1/valid/pairing-qr-payload.json 是已退出的旧设备完整资料格式",
+    );
+  }
+
+  for (const path of walkJson(join(root, "fixtures", "local-admin"))) {
+    const document = readJson(path);
+    if (!document) continue;
+    for (const [keyPath, text] of vocabulary(document)) {
+      if (text.includes("#data=")) {
+        errors.push(
+          `${relative(root, path)} 的 ${keyPath}: 本地管理设备配对资产不得再包含旧设备 #data= 地址`,
+        );
+      }
+    }
+  }
+
+  const begin = readJson(localAdminDevicePairBegin);
+  if (!begin) {
+    errors.push(
+      "设备配对资产缺失：fixtures/local-admin/v1/valid/response-device-pair-begin.json 必须给出新 q2 pairingUrl 示例",
+    );
+    return;
+  }
+  const result = begin.result;
+  const keys = result && typeof result === "object" ? Object.keys(result).sort() : [];
+  const expectedKeys = ["expiresAt", "pairingCode", "pairingId", "pairingUrl"];
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+    errors.push(
+      `本地管理 device.pair.begin fixture 必须保持四个返回键 ${expectedKeys.join(",")}，实际 ${keys.join(",")}`,
+    );
+  }
+  const pairingUrl = result?.pairingUrl;
+  if (typeof pairingUrl !== "string" || !devicePairingUrlShape.test(pairingUrl)) {
+    errors.push(
+      "本地管理 device.pair.begin fixture 的 pairingUrl 必须是 https://<origin>/pair#q2=<87 chars>",
+    );
+  }
+}
+
 loadTranscriptRegistry();
 scanRemovedVocabulary();
+checkDeviceQrAssets();
 await checkRoots();
 
 async function checkRoots() {

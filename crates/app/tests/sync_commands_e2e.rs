@@ -112,7 +112,7 @@ async fn pair_and_approve(host: &HostNode, device: &Device) -> Value {
         .await;
     let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
     let pairing_url = begin["pairingUrl"].as_str().expect("pairingUrl");
-    let (ticket, secret) = qr_payload(pairing_url);
+    let (ticket, secret) = retrieve(host, pairing_url).await;
 
     let claim = json!({
         "protocolVersion": 1,
@@ -199,24 +199,62 @@ async fn connect_authenticated(host: &HostNode, device: &Device) -> SyncClient {
     client
 }
 
-fn qr_payload(url: &str) -> (Value, [u8; 32]) {
-    let fragment = url.split('#').nth(1).expect("二维码 URL 带 fragment");
-    let (key, value) = fragment.split_once('=').expect("fragment 是 data=…");
-    assert_eq!(key, "data", "二维码 fragment 的键必须是 data");
-    let bytes = base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, value)
-        .expect("payload 是无填充 base64url");
-    let payload: Value = serde_json::from_slice(&bytes).expect("payload 是 JSON object");
-    let secret_text = payload["pairingSecret"].as_str().expect("pairingSecret");
+/// 新设备短二维码地址 → `(qrToken, hostKeyFingerprint, canonicalOrigin)`（测试侧独立解码）。
+fn decode_device_qr(url: &str) -> ([u8; 32], [u8; 32], &str) {
+    let (base, fragment) = url.split_once('#').expect("设备二维码地址带 fragment");
+    assert!(!base.contains('?'), "短地址不得带 query：{url}");
+    let origin = base.strip_suffix("/pair").expect("短地址路径必须是 /pair");
+    assert!(
+        origin.starts_with("https://"),
+        "外层地址必须是 HTTPS：{url}"
+    );
+    let payload = fragment
+        .strip_prefix("q2=")
+        .expect("设备二维码 fragment 只接受 q2=");
+    assert!(
+        !payload.contains('#') && payload.len() == 87,
+        "q2 payload 是 87 个 ASCII 字符：{url}"
+    );
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, payload)
+        .expect("q2 payload 是无填充 base64url");
+    assert_eq!(bytes.len(), 65, "q2 payload 解出 65 字节");
+    assert_eq!(bytes[0], 2, "q2 版本必须是 2");
+    let mut token = [0_u8; 32];
+    let mut fingerprint = [0_u8; 32];
+    token.copy_from_slice(&bytes[1..33]);
+    fingerprint.copy_from_slice(&bytes[33..]);
+    (token, fingerprint, origin)
+}
+
+/// 扫码取回（真实 `qr-lookup` 端点）：新短地址 → `(七字段响应, secret)`。
+async fn retrieve(host: &HostNode, pairing_url: &str) -> (Value, [u8; 32]) {
+    let (token, fingerprint, origin) = decode_device_qr(pairing_url);
+    assert_eq!(origin, host.origin());
+    use sha2::{Digest as _, Sha256};
+    let expected: [u8; 32] = Sha256::digest(host.public_key().await.as_bytes()).into();
+    assert_eq!(fingerprint, expected, "二维码固定的是完整主机公钥指纹");
+    let replied = post_json(
+        host,
+        server::sync::pairing::QR_LOOKUP_PATH,
+        &json!({
+            "protocolVersion": 1,
+            "qrToken": support::sync::base64url(&token),
+        }),
+    )
+    .await;
+    assert_eq!(replied.status, 200, "扫码取回必须成功：{}", replied.body);
     let secret = base64::Engine::decode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        secret_text,
+        replied.body["pairingSecret"]
+            .as_str()
+            .expect("pairingSecret"),
     )
     .expect("secret 是无填充 base64url");
     let secret: [u8; 32] = secret
         .as_slice()
         .try_into()
         .expect("pairing secret 是 32 字节");
-    (payload, secret)
+    (replied.body, secret)
 }
 
 fn public_key_base64url(device: &Device) -> String {

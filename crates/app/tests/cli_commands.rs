@@ -446,8 +446,39 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         run.stdout
     );
     assert!(
+        !run.stdout.contains("#q2="),
+        "短地址的完整 fragment 不得作为文本打印：{}",
         run.stdout
-            .contains("（移动端请扫码；网页端打开 /pair 后输入配对码）"),
+    );
+    assert!(
+        run.stdout.lines().any(|line| line == "二维码："),
+        "二维码图案前必须有「二维码：」标签：{}",
+        run.stdout
+    );
+    assert!(
+        !run.stdout.contains("仅供原生 App 内扫码") && !run.stdout.contains("扫码前请将终端调整为"),
+        "不再输出二维码使用说明与终端尺寸提示：{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.lines().any(|line| {
+            line.strip_prefix("配对码：").is_some_and(|code| {
+                code.len() == 9
+                    && code.as_bytes()[4] == b'-'
+                    && code
+                        .chars()
+                        .filter(|character| *character != '-')
+                        .all(|character| {
+                            character.is_ascii_uppercase() || character.is_ascii_digit()
+                        })
+            })
+        }),
+        "begin 必须以 XXXX-XXXX 形态打印配对码：{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("（网页端打开 /pair 后输入配对码；原生 App 扫码后按提示确认）"),
         "begin 必须打印入口提示：{}",
         run.stdout
     );
@@ -456,7 +487,7 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         .lines()
         .filter(|line| {
             line.chars()
-                .any(|character| ('\u{2800}'..='\u{28ff}').contains(&character))
+                .any(|character| matches!(character, '█' | '▀' | '▄'))
         })
         .collect();
     assert!(
@@ -465,8 +496,10 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         run.stdout
     );
     assert!(
-        qr_lines.iter().all(|line| line.chars().count() < 60),
-        "二维码应保持紧凑（Braille 2×4）：{}",
+        qr_lines
+            .iter()
+            .all(|line| line.starts_with("\x1b[0;30;107m") && line.ends_with("\x1b[0m")),
+        "二维码必须固定黑字白底且每行复位：{}",
         run.stdout
     );
     // 网页入口的配对码：`XXXX-XXXX`，与裸地址一起只出现在终端。

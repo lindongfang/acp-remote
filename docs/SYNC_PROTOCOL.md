@@ -1,7 +1,8 @@
 # ACP Remote Sync Protocol
 
-> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、lookup、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的配对 HTTP、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。
+> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（设备短二维码 `q2` 编解码、claim、status、lookup、qr-lookup、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的既有配对 HTTP（§7.6 `qr-lookup` 待 WP2–WP4）、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。
 > 协议版本：1  
+> 修订记录（2026-10-18，`device-pairing-qr-reference`）：**设备二维码完全替换**为 `https://<canonical-origin>/pair#q2=<payload>`——payload 是 `base64url-no-pad(0x02 || 32 字节扫码取回凭据 || 32 字节主机公钥指纹)`，共 65 字节 / 87 个 ASCII 字符；旧设备 `#data=` 完整资料格式**退出且不降级**，节点二维码与 `/node-link/pair` 不变。新增 §7.6 `POST /sync/v1/pairing/qr-lookup`（请求 `{protocolVersion:1, qrToken}`，成功返回与配对码 lookup 同形的七字段，统一 `401 pairing.qr_invalid`，独立 10 次/分钟限流，16 KiB 上限）。PWA 只保留配对码入口：打开 `q2=` 或旧 `data=` 片段只在清除片段后显示固定指引/不支持文案，不发任何配对请求（行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md)）。本轮先交付协议类型、机器合同、共享固定向量与本文；服务端取回路由、身份内存材料与 PWA/原生消费方为**计划/待实现**（WP2–WP4），原生 App 真机扫码仍是后续交付。机器资产同步：`pairing.schema.json` 增加 qr-lookup 请求/成功/失败形状、`pairing.qr_invalid` 登记到唯一错误词表、删除旧 `qrPayload`，新增 `fixtures/sync/v1/device-qr/vectors.json`（Rust/TypeScript 共享）。
 > 修订记录（2026-10-18，`pairing-code-web-entry`）：配对新增第二个入口——`POST /sync/v1/pairing/lookup` 用 8 位 Crockford 配对码一次性换回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`，之后与二维码入口共用同一套状态机、claim/status 与 transcript。§7.1 写清两个入口的关系；新增 §7.5 的 lookup wire 行为（成功即消耗、统一 `401 pairing.code_invalid`、与 claim 各自 10 次/分钟、同一组安全响应头与 `no-store`）；§7.4 的状态表补 lookup；§12.2 增加 `pairing.code_invalid`。schema、fixture 与错误词表同步；claim/status 的 wire 与 transcript 未变。
 > 修订记录（2026-10-16，`pairing-model`）：**删除两套短验证码**——§6.1/§6.3 删去 `acp-remote/pairing-sas/v1` domain 与 `pairing SAS` 字段集合；§7.2 改为两条设备侧密码学校验（用配对载荷里固定的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节相同），不再派生或展示 SAS；§7.3 的 `approved` 响应不再返回授权集合；§17 的固定向量判据去掉 SAS 重算。**删除设备权限层**——§7.0 的确认不再分配授权；§8.4 的 `auth.authenticated` 不再携带设备 scope 集合；§9.2/§9.3/§9.4 不再按设备授权过滤事件、会话与目录资源；§11.1/§11.3/§11.4/§11.5 改为「已认证即执行前提」，并把 `session.create` 的 Sync 面载荷放开为「`directoryId` 或客户端提交的绝对目录 `workspacePath`，二者取一」（Node Link 面仍只允许别名、且请求不得携带任意 Owner 路径）；§12.1 的示例错误码换掉设备 scope 拒绝；§14 的「命令族」改为服务端自持的 v1 常量（不再取自 `commands.json` 的 `packs`）；§15 的逐命令 scope 授权改为认证状态与幂等校验。**保留**：设备认证与每连接 challenge-response、撤销传播与速率上限、配对确认必须由本机用户完成、跨节点 `grant.*`/Export `scopes`/Import grants。  
 > 修订记录（2026-10-16，`session-create-settle-order`，无 wire 变更）：`session.create` 的落账时序改为**三笔**（受理只落幂等记录 → 执行 → 会话行 + 标识回填 + 终态在**同一次提交**，失败零会话行）——§11.2 的「结果语义固定如下」补上资源行与终态同事务、以及崩溃窗口只有受理记录（**没有**会话行）的形状，命令处理顺序块的注记同步；§11.5 的 `session.create` 行与正文改写为「先受理再执行」并给出**两面一致**的终态判据（可证明 Agent 侧未产生会话 ⇒ `failed`、复用既有码 `internal.unavailable`；说不清 ⇒ `uncertain`），`引用失败与解析失败的分类` 不变（引用/解析失败仍是接受前的拒绝、零副作用）。错误码、feature、schema 与 fixture 均未变。  
@@ -364,37 +365,41 @@ approved
 - 电脑端确认必须通过本地 CLI、loopback UI 或其他已授权电脑入口完成，不提供给未认证的远程 PWA。
 - 电脑确认时**不授予任何授权**：设备方向没有授权维度（设备权限层已删除），配对确认页也没有权限栏。PWA 不能在 claim 中申请、扩大或以任何方式影响授权；claim 载荷出现任何授权集合字段 MUST 被拒绝。
 - `approved` 后创建设备记录，但 pairing 在该设备首次 WSS 认证成功前保持可查询。
-- 首次 WSS 认证成功后原子转为 `consumed`；此后二维码不能再次创建设备。
+- 首次 WSS 认证成功后原子转为 `consumed`；此后任何二维码或扫码取回都不能再次创建设备。
 - 过期判断以 Daemon 时钟为权威。PWA 的本地时间检查只用于提前提示，不能延长有效期。
 - `pairingSecret` 最迟在 `expiresAt` 清除；`approved` pairing 在首次 WSS 认证成功时提前清除。拒绝状态为支持可靠轮询可以保留 secret 到原过期时间，但不得超过该时间。
+- 扫码取回凭据（`qrToken`）与 `pairingSecret` 分别独立随机生成，只存内存；创建、旧材料替换、内存重置、过期、证明失败失效、拒绝、成功认领与首次认证都必须关闭取回资格。为状态轮询保留 secret **不会**恢复取回资格；重启后不得从持久化摘要恢复凭据。
 
-### 7.1 二维码内容
+### 7.1 设备二维码与入口
 
-配对有两个入口，共用 §7.0 的同一套状态机与 §7.2/§7.3 的 claim/status：二维码入口把下面的载荷放在 URL fragment 里，主机公钥由带外载荷固定；网页入口在 `/pair` 没有 fragment 时要求输入 8 位配对码，经 §7.5 的 lookup 取回同一组 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`，之后的状态转换、transcript 与本机确认仪式完全相同。配对码只用于一次性取回 secret，不是 HMAC 密钥，也不构成新的授权维度；`/node-link/pair` 不提供配对码。
+设备配对有两个入口，共用 §7.0 的同一套状态机与 §7.2/§7.3 的 claim/status：
 
-Daemon 创建一次性 pairing，二维码承载 HTTPS URL，秘密部分必须位于 fragment：
+- **原生 App 扫码（后续交付）**：设备二维码携带协议版本、32 字节扫码取回凭据与 32 字节主机公钥指纹；App 先把 canonical origin 固定在二维码的外层地址上，经 §7.6 的 `qr-lookup` 取回完整配对资料、先核对主机公钥指纹，再走 claim/status。本轮只交付协议类型、机器合同与共享向量，**原生 App 本体、相机、深链与 keystore 不在本切片**。
+- **PWA / 桌面浏览器**：`/pair` 无片段时只显示 8 位配对码输入，经 §7.5 的 lookup 取回同一组 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`。PWA **不使用**设备二维码取回接口：打开 `q2=` 片段时只清除片段并显示固定 App 指引，一个配对请求都不发。
+
+配对码与扫码取回凭据都只用于取回 secret，不是 HMAC 密钥，也不构成新的授权维度。`/node-link/pair` 不提供配对码；节点二维码的格式与行为完全不变（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §13.1）。
+
+#### 7.1.1 新设备短二维码格式
 
 ```text
-https://work-pc.example.ts.net/pair#data=<base64url-json>
+https://<canonical-origin>/pair#q2=<payload>
 ```
 
-解码后的 JSON：
+`<payload>` 是**无填充 base64url** 编码的 65 字节数据，编码后恰好 87 个 ASCII 字符：
 
-```json
-{
-  "pairingProtocol": "acp-remote-pairing-v1",
-  "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-  "hostPublicKey": "<base64url-65-bytes>",
-  "canonicalOrigin": "https://work-pc.example.ts.net",
-  "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
-  "pairingSecret": "<base64url-32-bytes>",
-  "expiresAt": "2026-09-17T12:15:00.000Z"
-}
+```text
+[ 0x02 ][ qrToken (32 bytes) ][ hostKeyFingerprint (32 bytes) ]
 ```
 
-`expiresAt` 是毫秒精度 UTC RFC 3339 字符串，不是 Unix 秒数；PWA 必须验证当前 origin、secure context、过期时间和字段长度，读取后立即用 `history.replaceState` 清除 fragment。fragment、secret 和完整 QR payload 不得进入日志或 analytics。
+- `0x02` 是唯一接受的格式版本；其它版本一律拒绝。
+- `qrToken` 是设备创建时由密码学随机源**独立生成**的 32 字节扫码取回凭据；它不是配对码、不是配对秘密，也不是它们的截断或派生值。
+- `hostKeyFingerprint` 是主机公钥的**完整** SHA-256 原始 32 字节摘要，不是 hex：`SHA-256(规范 65 字节未压缩 SEC1 P-256 公钥)`。公钥必须先通过既有的长度与曲线合法性检查，再匹配这把摘要。指纹只绑定主机公钥，不单独认证返回的其它字段；匹配之后仍必须验证 `hostProof`、批准响应的同一 `hostId`/公钥以及每次 WSS challenge-response。
+- 外层地址必须是 HTTPS、无 userinfo、无 query、路径恰为 `/pair`，且 fragment 只含一个 `q2=` 键。其它路径、重复片段键或额外文本一律按格式不支持处理。
+- **旧设备 `#data=` 完整 JSON 载荷已退出**：不生成、不解析、不降级；收到即明确报告格式不支持且不发请求。节点二维码仍使用自己的 `/node-link/pair#data=…`，不得与设备格式互相回退。
+- 尺寸预算：固定测试地址 `https://faraday.tail74842e.ts.net:8765/pair` 长 43 字节，加 `#q2=` 4 字节与 payload 87 字节，总长 **134** 字节（该测试地址承诺不超过 150 字节）。相同 L 级纠错、四模块白边下，实心半块字符矩阵不超过 **58 列 × 29 行**。具体编码器矩阵由生成端测试断言；本契约不承诺任意长主机名都落在 150 字节内。
+- 设备二维码与扫码取回凭据、完整配对资料 MUST NOT 进入日志、文件、数据库、Cookie、URL query 或可导出状态；客户端读到 `qrToken` 后应尽快清除并在取回成功后丢弃。
 
-实现状态（`openspec/changes/archive/2026-10-16-pairing-origin-secure-context`，截至本修订）：本条要求的 PWA 侧校验**已在前端落地**。配对入口是唯一入口 `clients/app/src/features/client-store.ts` 的 `#beginPairing`：它读完载荷之后、发任何请求之前依次校验安全上下文、来源一致与载荷类型（类型校验保持在最后，因为它需要已读出的载荷）。环境事实（是否安全上下文、当前来源）经组合根 `CompositionInputs` 注入，默认实现读浏览器全局 `isSecureContext` 与 `location.origin`；来源比较复用 §3.2 的 canonical origin 口径（浏览器 `URL.origin`），与身份绑定检查同一条口径。失败码取自 §12.2 的封闭词表：来源不符复用既有的 `auth.origin_mismatch`，非安全上下文用新增的 `auth.insecure_context`；两条都明确失败，且一个 claim/status 请求都不发。
+实现状态（截至本修订）：`sync-protocol` 已提供 `device_qr` 的严格编解码与 Rust/TypeScript 共享固定向量（`fixtures/sync/v1/device-qr/vectors.json`），机器 schema 已删除旧 `qrPayload`。**服务端 `qr-lookup` 路由、`identity-auth` 的内存凭据登记，以及 PWA/原生消费方仍是计划/待实现**（WP2–WP4）；在它们落地前，旧设备 `#data=` 的前端路径仍存在于当前工作区，不得把本节当作已交付的运行行为。
 
 所有 pairing HTTP 响应必须包含：
 
@@ -499,17 +504,17 @@ consumed
 
 | HTTP 状态 | 使用场景 |
 |---:|---|
-| 200 | 状态查询成功，包括业务状态 `pending_confirmation/approved/rejected/expired/consumed`；lookup 成功 |
+| 200 | 状态查询成功，包括业务状态 `pending_confirmation/approved/rejected/expired/consumed`；lookup 与 qr-lookup 成功 |
 | 201 | claim 首次成功并创建 pairing request |
-| 400 | JSON 或字段 schema 无效。**lookup 例外**：其请求体形状错误（坏 JSON、缺字段、未知字段）与配对码格式错误一律收敛为 401 `pairing.code_invalid`（§7.5、design D4）；lookup 的 `Content-Type` 不是 `application/json` 仍是 400 `protocol.schema_invalid` |
-| 401 | HMAC proof 无效；lookup 的任何失败——配对码格式/body 形状错误、不存在、已过期、已消耗、已认领、来源或登记绑定不一致——统一为 `pairing.code_invalid`；响应不得泄露具体校验差异 |
-| 403 | Origin/Host 不允许 |
-| 404 | pairing ID 不存在；lookup 不使用该状态（统一 401） |
+| 400 | JSON 或字段 schema 无效。**lookup / qr-lookup 例外**：可解析 JSON 的缺字段、未知字段、错误类型与凭据格式错误收敛为 401（lookup `pairing.code_invalid`、qr-lookup `pairing.qr_invalid`，§7.5/§7.6、design D4）；两者的坏 JSON 以及 `Content-Type` 不是 `application/json` 仍是 400 `protocol.schema_invalid` |
+| 401 | HMAC proof 无效；lookup 的任何失败——配对码格式/body 形状错误、不存在、已过期、已消耗、已认领、来源或登记绑定不一致——统一为 `pairing.code_invalid`；qr-lookup 的任何失败——凭据格式/body 形状错误、不存在、已过期、已认领、已拒绝、已失效、来源或登记绑定不一致——统一为 `pairing.qr_invalid`；响应不得泄露具体校验差异 |
+| 403 | Origin/Host 不允许（claim/status 等既有端点；qr-lookup 的来源不符统一走 401 `pairing.qr_invalid`） |
+| 404 | pairing ID 不存在；lookup 与 qr-lookup 不使用该状态（统一 401） |
 | 405 | 端点未声明的方法（接入层在处理器之前拒绝；响应仍带该路径注册的默认安全头） |
 | 409 | 已被 claim、状态转换冲突或 device ID 冲突 |
 | 410 | 仅 claim 端点使用：pairing 已过期或已 consumed |
-| 413 | 请求体超过限制（配对 HTTP 的 claim/status/lookup 同受 16 KiB 上限约束） |
-| 429 | 配对尝试被限流（claim 与 lookup 各按来源，status 按配对） |
+| 413 | 请求体超过限制（配对 HTTP 的 claim/status/lookup/qr-lookup 同受 16 KiB 上限约束） |
+| 429 | 配对尝试被限流（claim、lookup 与 qr-lookup 各自按来源独立计数，status 按配对） |
 
 错误 body 使用与第 12 节一致的 `code/message/retryable/correlationId/details` 结构。网络响应丢失后，客户端可以使用相同 claim 内容重试；如果服务端已接受同一 device/client nonce，应返回原 pairing request，而不是创建第二条记录。不同 claim 内容则返回 `409 pairing.already_claimed`。
 
@@ -555,13 +560,61 @@ Content-Type: application/json
 }
 ```
 
-- 成功响应与同一配对的二维码载荷给出逐字节相同的 `pairingId`、`hostId`、`hostPublicKey`、`canonicalOrigin`、`pairingSecret` 与 `expiresAt`；不返回任何授权集合。
-- lookup MUST NOT 推进配对状态、MUST NOT 创建信任。成功后配对仍可被 claim 一次，claim 的校验与 transcript 与二维码入口完全相同。
+- 成功响应与同一配对的 §7.6 扫码取回响应给出逐字节相同的 `pairingId`、`hostId`、`hostPublicKey`、`canonicalOrigin`、`pairingSecret` 与 `expiresAt`；不返回任何授权集合。
+- lookup MUST NOT 推进配对状态、MUST NOT 创建信任。成功后配对仍可被 claim 一次，claim 的校验与 transcript 与扫码取回入口完全相同。
 - **成功即消耗配对码**：一次成功 lookup 原子地移除该码，同一码的第二次 lookup 必须统一失败，即使第一次响应在网络上丢失。页面因此按固定失败文案结束，恢复路径是重新创建配对；本版没有 lookup 幂等键。
 - 所有失败——格式不符、不存在、已过期、已被认领、已被使用、已被消耗、来源/Host 与登记绑定不一致——都返回同一个 `401` 与同一个错误码 `pairing.code_invalid`。响应形状、message 与耗时不得区分这些情况，也不得回显配对码。
-- 网页入口没有带外主机公钥，因此把成功响应的 `hostPublicKey` 作为本次配对的绑定公钥：claim 的 `hostProof` 用它验证，`approved` 状态响应里的公钥必须与它逐字节相同（§7.2/§7.3 的设备侧校验不因入口而放宽）。若该 canonical origin 已有不同公钥的已配对记录，客户端必须失败关闭，不得覆盖。
+- 网页入口没有带外主机公钥，因此把成功响应的 `hostPublicKey` 作为本次配对的绑定公钥：claim 的 `hostProof` 用它验证，`approved` 状态响应里的公钥必须与它逐字节相同（§7.2/§7.3 的设备侧校验不因入口而放宽）。用户点击「继续配对」明确发起重新配对后，允许在本机批准且上述校验通过时替换同源旧公钥；进页、等待确认或失败时不得覆盖旧记录。
 - 限流与 claim **各自独立**：lookup 与 claim 都按来源真实连接地址 10 次/分钟，互不占用额度；status 仍按配对标 60 次/分钟。lookup 失败不指向某一配对，不增加该配对的证明失败计数。
 - lookup 与 §7.1 描述的 pairing HTTP 响应使用同一组规则：只接受同源 `application/json`，请求体上限 16 KiB，响应带四个安全响应头与 `no-store`。`pairingCode` 与 `pairingSecret` 不得进入日志、URL query、Cookie 或任何明文持久化字段。
+
+### 7.6 扫码资料取回（qr-lookup）
+
+原生扫码消费方在核对二维码外层 canonical origin 后，用 fragment 里的扫码取回凭据换取完整配对资料：
+
+```http
+POST /sync/v1/pairing/qr-lookup
+Content-Type: application/json
+Origin: https://work-pc.example.ts.net
+```
+
+```json
+{
+  "protocolVersion": 1,
+  "qrToken": "<base64url-32-bytes>"
+}
+```
+
+请求体只含这两个键；`qrToken` 必须恰是 32 字节的无填充 base64url（43 个字符）。`Origin` 是必需输入，必须与该配对登记时的 canonical origin 逐字相同；`Host` 由接入层按既有 Host 策略先拒绝不合法值（沿用既有 400/403 边界，不进入端点处理）。请求体上限 16 KiB。
+
+成功 200：
+
+```json
+{
+  "protocolVersion": 1,
+  "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+  "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+  "hostPublicKey": "<base64url-65-bytes>",
+  "canonicalOrigin": "https://work-pc.example.ts.net",
+  "pairingSecret": "<base64url-32-bytes>",
+  "expiresAt": "2026-09-18T09:14:33.000Z"
+}
+```
+
+- 成功响应与配对码 lookup **同形**、同源：同一配对的 `pairingId`、`hostId`、`hostPublicKey`、`canonicalOrigin`、`pairingSecret`、`expiresAt` 必须逐字节相同；不返回任何授权集合。
+- 取回 MUST NOT 推进配对状态、MUST NOT 消耗网页配对码、MUST NOT 创建配对请求或信任，也不延长有效期。只在该配对仍为 `created`、未过期、未被本机拒绝/失效、且来源与身份绑定一致时成功。
+- 同一 `qrToken` 在有效且未认领期间可以**重复**取回同一组资料（响应丢失后可重试）。任一入口的首次成功认领关闭后续取回；为状态轮询保留 secret 不恢复取回资格。客户端在成功认领后复用已取得的资料做幂等重试，不重新取回。
+- 所有端点内失败——可解析 JSON 的未知键/类型错误、凭据编码/长度、凭据不存在、已过期、已认领、已拒绝、已失效、来源或登记绑定不一致——统一返回同一个 `401` 与 `pairing.qr_invalid`。响应形状、message 与耗时不得区分这些情况，也不得回显凭据或材料。非 JSON、请求体超限、方法错误、接入层 Host 拒绝与限流仍使用既有 HTTP 边界（400/405/413/403/429）。
+- 限流：qr-lookup 按真实连接来源地址 **10 次/分钟**，与配对码 lookup、claim 各自独立计数，互不占用额度。qr-lookup 的失败不指向某一配对，不增加该配对的证明失败计数。429 必须带 `Retry-After`。
+- 与其它 pairing HTTP 响应相同：四个安全响应头（`Cache-Control: no-store`、`Pragma: no-cache`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`）必须出现在处理器与接入层预处理响应上；不得记录请求/响应正文。
+
+原生消费方合同：
+
+- 固定二维码外层地址的 canonical origin；取回资料的 `canonicalOrigin` MUST 与目标一致。所有 HTTPS 请求与 WSS 连接使用同一目标 Origin，HTTP 重定向直接失败，不按响应改写目标或 public key。
+- 先校验 `hostPublicKey` 是规范 65 字节未压缩 SEC1 P-256 公钥，并完整匹配二维码里的 32 字节 SHA-256 指纹，再接受其余绑定；指纹不符、换来源或换公钥一律停止，不发送 claim、不建立信任、不自动改用配对码或旧二维码。
+- 指纹匹配后仍必须验 `hostProof`、校验批准响应同一 `hostId`/公钥、完成本机确认，并对每次 WSS 连接执行完整 challenge-response。
+- 暂时网络故障、超时与 502/503/504 最多尝试 3 次、总墙钟预算 30 秒（退避 500 ms/1000 ms，单请求最长 8 秒）；429 按 `Retry-After`，超出预算停止；取得 `expiresAt` 后同时受其约束，任何重试不续期。格式、来源、指纹、认证失败立即停止。初始常量可在原生交付前调整，但本轮合同测试使用这些上界。
+- 本轮状态：端点、身份内存材料、限流与 PWA/原生消费方为计划/待实现（WP2–WP4）；协议层解码、指纹向量与错误词表已在 WP1 冻结。
 
 ## 8. WSS 认证
 
@@ -1563,6 +1616,7 @@ pairing.already_claimed
 pairing.expired
 pairing.consumed
 pairing.code_invalid
+pairing.qr_invalid
 sync.cursor_invalid
 command.unsupported
 command.not_found
@@ -1737,7 +1791,8 @@ fixtures/sync/v1/
 ├─ valid/          应通过 schema 的认证、同步、事件、命令、错误和配对样例
 ├─ invalid/        必须失败并声明 expectedKeyword 的反向样例
 ├─ transcripts/    transcript、HMAC 和签名固定向量（第 6.3 节全部 domain）
-└─ manifest.json   schema、view $defs、fixture 与预期结果映射
+├─ device-qr/      新设备短二维码的 Rust/TypeScript 共享向量（§7.1.1，含旧 #data= 拒绝样例）
+└─ manifest.json   schema、view $defs、fixture、deviceQrVectors 与预期结果映射
 ```
 
 合同检查由 `npm run check` 统一执行（完整清单见 `README.md` 的「合同检查」，判据与 crate 依赖方向门禁见 `AGENTS.md` §9/§10）；与 Sync 资产直接相关的脚本是：
@@ -1754,6 +1809,8 @@ node scripts/check-acp-compatibility.mjs
 - `check-contract-assets.mjs` 负责静态引用完整性与需要真正计算的绑定：`$ref` 目标存在、`$id` 在每个 asset root 内唯一、`rawJson` 的 `byteLength`/`sha256` 与文本本身一致、事件的 `payloadDigest` 与 `payload` 的 ACPR-CJ1 sha256 一致、transcript 固定向量的 SHA-256/HMAC/P1363 重算通过。transcript 向量还必须**由 `codec`/`domain`/`input` 经 `compatibility/transcripts/v1/transcripts.json` 的字段表重新编码**并与 `expected.transcriptBase64url` 逐字节一致，因此 tag 顺序、宽度或字段集合写错会让检查失败；`transcripts/invalid/` 下的负向量则断言解码器以声明的错误拒绝畸形输入。
 - `check-command-catalog.mjs` 断言命令名在 `compatibility/commands/v1/commands.json`、`schemas/sync/v1/command.schema.json`（`transport` 含 `sync` 的子集）、`schemas/node-link/v1/command.schema.json`（`transport` 含 `node_link` 的子集）、本文 §11.5 与 `SECURITY_DESIGN.md` §10.2 之间一致。
 - `check-error-registry.mjs` 断言 `compatibility/errors/v1/errors.json` 与两个协议的 `$defs.errorCode` enum、以及本文 §12.2 与 `NODE_LINK_PROTOCOL.md` §14.1 的列表一致，并拒绝任何第二处内联定义的公开错误码。
+
+- `manifest.deviceQrVectors` 登记的 `device-qr/vectors.json` 由 Rust `device_qr_vectors.rs` 与 TypeScript `device-qr.test.ts` **消费同一文件**：规范 65 字节布局、旧 `#data=`、未知版本、错误长度、非规范 base64url、主机公钥 SHA-256 指纹、134 字节地址与 58×29 矩阵预算都在两侧各断言一次。`valid/`/`invalid/` 中不得再出现旧设备完整资料样例；节点资产保持在 `fixtures/node-link/v1/`。
 
 Rust 实现必须在自己的 wire DTO（`crates/sync-protocol`）上形成独立判定：用同一份 `manifest.json` 驱动——valid 夹具必须解析成功并往返一致，invalid 夹具必须在声明的层被拒绝——`type` 常量、错误码与视图登记表另有漂移门禁与 schema/registry 逐条比对。这里不要求再引入通用 Draft 2020-12 校验器：ajv 的职责是判 schema 自洽与夹具本身合法，DTO 的职责是判实现忠实于 schema；若将来需要 Rust 侧独立复算 schema 本身，可以另加一层，但它不能替代 DTO 层。
 
@@ -1776,6 +1833,7 @@ Rust 实现必须在自己的 wire DTO（`crates/sync-protocol`）上形成独�
 15. Android Chrome、iOS Safari、桌面 Chrome/Edge 与 Rust 服务端互操作。
 16. 第 10.3 节列出的 11 个 ACP `session/update` 判别子逐条映射到对应 Sync event type；未映射判别子降级为未知事件并保留 `acp.rawJson`。
 17. imported 会话的正文不进入 Access snapshot 与客户端持久化缓存，`session.read` 在线回源 Owner；Owner 离线时返回 `resource.remote_unavailable`、置 `origin.online = false` 并广播一次 `session.origin.online_changed`。
+18. 设备短二维码的 65 字节布局、旧 `#data=`/版本/长度/非规范编码拒绝、主机公钥 SHA-256 指纹与 134 字节/58×29 预算由 Rust 与 TypeScript 消费同一固定向量断言；qr-lookup 的重复取回、统一 `pairing.qr_invalid` 与独立限流另由服务端/身份测试覆盖。
 
 ## 18. 第一阶段暂缓项
 

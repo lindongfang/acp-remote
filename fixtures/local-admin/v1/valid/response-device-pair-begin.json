@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "id": "0b6a3f5e-2f2e-4d1b-8c8b-1d7a9a4c5e21",
+  "ok": true,
+  "result": {
+    "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+    "pairingUrl": "https://faraday.tail74842e.ts.net:8765/pair#q2=AgABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fUSpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w",
+    "pairingCode": "ABCDEFGH",
+    "expiresAt": "2026-09-18T09:14:33.000Z"
+  }
+}

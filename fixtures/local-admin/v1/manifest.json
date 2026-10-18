@@ -27,6 +27,11 @@
       "valid": true
     },
     {
+      "fixture": "valid/response-device-pair-begin.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/error-response.json",
       "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
       "valid": true

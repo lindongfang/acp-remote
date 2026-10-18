@@ -430,17 +430,21 @@ async fn await_claim(
         .map_err(client_failure)?;
     let begin = call(&mut client, target.begin(), begin_params(target, args)).await?;
     let pairing_id = text_field(&begin, "pairingId")?;
-    // `pairingUrl` 只经终端展示（含配对 secret 的 fragment），不落日志/文件/错误消息。
+    // `pairingUrl` 只经终端展示；设备方向 `#q2=` fragment 是扫码取回凭据（配对秘密不在地址里），
+    // 节点方向 `#data=` 仍含完整资料。两者都不落日志/文件/错误消息。
     let pairing_url = text_field(&begin, "pairingUrl")?;
     if target == PairTarget::Device {
-        // 网页端用裸 `/pair` + 8 位配对码；完整 fragment 只由二维码承载，供移动端扫码。
+        // 网页端用裸 `/pair` + 8 位配对码；完整 fragment 只由二维码承载，供原生 App 扫码，
+        // 不作为文本输出（stderr/stdout/文件都不出现完整 URL）。
         println!("网页端：{}", bare_pairing_url(&pairing_url));
         let pairing_code = text_field(&begin, "pairingCode")?;
         println!("配对码：{}", readable_pairing_code(&pairing_code)?);
         println!();
-        println!("{}", terminal_qr(&pairing_url)?);
+        println!("二维码：");
+        let qr = terminal_qr(&pairing_url)?;
+        println!("{qr}");
         println!();
-        println!("（移动端请扫码；网页端打开 /pair 后输入配对码）");
+        println!("（网页端打开 /pair 后输入配对码；原生 App 扫码后按提示确认）");
     } else {
         println!("{pairing_url}");
     }
@@ -553,7 +557,7 @@ fn expired(target: PairTarget) -> Failure {
     )
 }
 
-/// 网页端入口：`pairingUrl` 去掉 `#data=…` fragment 后的裸地址。
+/// 网页端入口：`pairingUrl` 去掉 fragment（`#q2=…`）后的裸地址。
 fn bare_pairing_url(pairing_url: &str) -> &str {
     pairing_url
         .split_once('#')
@@ -571,52 +575,36 @@ fn terminal_qr(pairing_url: &str) -> Result<String, Failure> {
                 "无法生成终端二维码；请重试 device pair",
             )
         })?;
-    Ok(braille_qr(&code))
+    Ok(block_qr(&code))
 }
 
-/// 2×4 个模块压成一个 Braille 字符：模块仍是方形（约 4×4 px），宽高各减半。
-/// 4 模块 quiet zone 保留；L 级 + 半尺寸只用于终端近距离扫码。
-fn braille_qr(code: &QrCode) -> String {
-    const QUIET: isize = 4;
-    let width = code.width() as isize;
+/// 每个字符绘制上下两个模块，固定黑字白底，四周保留至少四模块白边。
+fn block_qr(code: &QrCode) -> String {
+    let width = code.width();
+    let canvas = (width + 8).div_ceil(2) * 2;
     let colors = code.to_colors();
-    let padded = width + QUIET * 2;
-    let cols = (padded + 1) / 2;
-    let rows = (padded + 3) / 4;
-    let dark = |x: isize, y: isize| -> bool {
-        let px = x - QUIET;
-        let py = y - QUIET;
-        px >= 0
-            && py >= 0
-            && px < width
-            && py < width
-            && colors[(py * width + px) as usize] == Color::Dark
+    let dark = |x: usize, y: usize| {
+        x >= 4
+            && y >= 4
+            && x < width + 4
+            && y < width + 4
+            && colors[(y - 4) * width + x - 4] == Color::Dark
     };
     let mut out = String::new();
-    for row in 0..rows {
-        if row > 0 {
+    for y in (0..canvas).step_by(2) {
+        if y > 0 {
             out.push('\n');
         }
-        for col in 0..cols {
-            let x = col * 2;
-            let y = row * 4;
-            let mut bits = 0_u32;
-            for (bit, dx, dy) in [
-                (0x01_u32, 0_isize, 0_isize),
-                (0x02, 0, 1),
-                (0x04, 0, 2),
-                (0x08, 1, 0),
-                (0x10, 1, 1),
-                (0x20, 1, 2),
-                (0x40, 0, 3),
-                (0x80, 1, 3),
-            ] {
-                if dark(x + dx, y + dy) {
-                    bits |= bit;
-                }
-            }
-            out.push(char::from_u32(0x2800 + bits).unwrap_or(' '));
+        out.push_str("\x1b[0;30;107m");
+        for x in 0..canvas {
+            out.push(match (dark(x, y), dark(x, y + 1)) {
+                (true, true) => '█',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (false, false) => ' ',
+            });
         }
+        out.push_str("\x1b[0m");
     }
     out
 }
@@ -678,5 +666,91 @@ mod tests {
             "错误消息不得回显配对码：{}",
             failure.message()
         );
+    }
+
+    /// 固定测试前缀下的新短地址：134 字节，L 级矩阵含四模块白边不超过 58 列 × 29 行
+    /// （`specs/cli-commands`「配对三步流程与终端输出」、`SYNC_PROTOCOL.md` §7.1 的长度预算）。
+    #[test]
+    fn short_qr_fits_the_documented_full_size_budget() {
+        use base64::Engine as _;
+        let mut payload = Vec::with_capacity(65);
+        payload.push(2_u8);
+        payload.extend_from_slice(&[7_u8; 32]);
+        payload.extend_from_slice(&[9_u8; 32]);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        assert_eq!(payload.len(), 87, "65 字节载荷编码为 87 个 ASCII 字符");
+        let url = format!("https://faraday.tail74842e.ts.net:8765/pair#q2={payload}");
+        assert_eq!(url.len(), 134, "固定前缀 + q2 + 87 字符的短地址长度");
+        assert!(url.len() <= 150, "测试地址承诺的总长度上界");
+        assert!(!url.contains("#data="), "不得回退到旧设备完整资料格式");
+
+        let rendered = terminal_qr(&url).expect("终端二维码");
+        let lines: Vec<Vec<char>> = rendered
+            .lines()
+            .map(|line| {
+                line.strip_prefix("\x1b[0;30;107m")
+                    .expect("黑字白底")
+                    .strip_suffix("\x1b[0m")
+                    .expect("每行复位")
+                    .chars()
+                    .collect()
+            })
+            .collect();
+        let columns = lines.first().expect("至少一行").len();
+        assert!(
+            lines.len() <= 29,
+            "矩阵含白边不得超过 29 行，实际 {}",
+            lines.len()
+        );
+        assert!(columns <= 58, "矩阵含白边不得超过 58 列，实际 {columns}");
+        assert!(
+            lines.iter().all(|line| line.len() == columns),
+            "每一行的列数必须一致"
+        );
+    }
+
+    #[test]
+    fn terminal_qr_preserves_modules_and_white_quiet_zone() {
+        use base64::Engine as _;
+        let mut payload = Vec::with_capacity(65);
+        payload.push(2_u8);
+        payload.extend_from_slice(&[3_u8; 32]);
+        payload.extend_from_slice(&[5_u8; 32]);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        let url = format!("https://faraday.tail74842e.ts.net:8765/pair#q2={payload}");
+        let code =
+            QrCode::with_error_correction_level(url.as_bytes(), EcLevel::L).expect("参考矩阵");
+        let rendered = terminal_qr(&url).expect("终端二维码");
+        let lines: Vec<Vec<char>> = rendered
+            .lines()
+            .map(|line| {
+                line.strip_prefix("\x1b[0;30;107m")
+                    .expect("黑字白底")
+                    .strip_suffix("\x1b[0m")
+                    .expect("每行复位")
+                    .chars()
+                    .collect()
+            })
+            .collect();
+        let canvas = lines[0].len();
+        assert_eq!(canvas, lines.len() * 2);
+        assert!(lines.iter().all(|line| line.len() == canvas));
+        for y in 0..canvas {
+            for x in 0..canvas {
+                let actual = match lines[y / 2][x] {
+                    '█' => true,
+                    '▀' => y % 2 == 0,
+                    '▄' => y % 2 == 1,
+                    ' ' => false,
+                    other => panic!("非半块字符：{other}"),
+                };
+                let expected = x >= 4
+                    && y >= 4
+                    && x < code.width() + 4
+                    && y < code.width() + 4
+                    && code[(x - 4, y - 4)] == Color::Dark;
+                assert_eq!(actual, expected, "模块 ({x}, {y}) 必须保真，含四周白边");
+            }
+        }
     }
 }

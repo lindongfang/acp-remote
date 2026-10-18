@@ -1,8 +1,9 @@
 # ACP Remote 初始设计文档
 
 > 状态：编码前原始设计（Draft）  
-> 版本：0.4  
+> 版本：0.5  
 > 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「workspace 实际路径不离开 Owner Node」收窄为带前提的边界——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显（§2/§8）。本机自己的设备新增两项受限能力：`session.create` 可带一个「目录不存在则先创建」开关，`workspace.browse` 提供只读的逐层目录浏览（feature 门控、不登记、不产生审计动作）。口径以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2/§12.3 与 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md) 为权威。
+> 修订记录（2026-10-18，`device-pairing-qr-reference`）：§11.2 的设备二维码改为短引用格式 `#q2=`（版本 + 32 字节扫码取回凭据 + 32 字节主机公钥指纹），完整资料经同源 `qr-lookup` 取回；PWA 只使用配对码，旧设备 `#data=` 退出；原生 App 扫码仍为后续交付。字段与拒绝规则以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.6 为唯一权威。
 > 修订记录（2026-10-16，`pairing-model`）：删除两套配对短验证码（§11.2/§11.7 的展示与派生规则改为两条设备侧密码学校验：用二维码里固定的主机公钥验证认领响应的 `hostProof`，已批准响应的主机公钥必须与二维码逐字节相同）；删除设备权限层（§1/§3.4/§8/§9/§11.4/§17 的「按 Actor 的 scope 授权」「设备记录保存命令 scope」「设备是否拥有该命令 scope」改为「通过设备认证即可执行，设备方向没有授权维度」，§11.4 的设备记录示例去掉 `scopes` 并改名）；`session.create` 在 Sync 面允许客户端提交绝对目录（§8）。跨节点 `grant.*`/Export `scopes`/Import grants 与设备认证、撤销、速率上限不变。
 > 修订记录（2026-09-18）：配对有效期改为固定 5 分钟；PWA 首版明确不展示会话创建入口；移除与 Sync/Node Link 已冻结取值冲突的旧叙述。  
 > 日期：2026-09-18
@@ -396,33 +397,26 @@ hostPrivateKey       ECDSA P-256，不可写入普通存储
 hostPublicKey        P-256 public key
 ```
 
-`acp-remote device pair` 创建一次性二维码：
+`acp-remote device pair` 创建一次性**短引用**二维码：
 
-```json
-{
-  "pairingProtocol": "acp-remote-pairing-v1",
-  "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-  "hostPublicKey": "<base64url-65-bytes>",
-  "canonicalOrigin": "https://work-pc.example.ts.net",
-  "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
-  "pairingSecret": "<base64url-32-bytes>",
-  "expiresAt": "2026-09-17T12:15:00.000Z"
-}
+```text
+https://work-pc.example.ts.net/pair#q2=<payload>
+payload = base64url-no-pad(0x02 || 32 字节扫码取回凭据 || 32 字节主机公钥指纹)
 ```
 
-`expiresAt` 是毫秒精度 UTC RFC 3339 时间戳字符串；二维码字段名、类型与约束以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1 为唯一权威来源。
+设备二维码不再内嵌完整配对资料；原生 App 扫码后经同源 `POST /sync/v1/pairing/qr-lookup` 取回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`。网页/桌面/手机 PWA 只输入 8 位配对码，不消费设备二维码。旧设备 `#data=` 完整资料格式明确停用，节点二维码不受影响。字段布局、拒绝规则、端点与限额以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.6 为唯一权威来源；本轮只交付协议合同与共享向量，原生 App 与 `qr-lookup` 服务端仍待后续工作包实现。
 
 规则：
 
-- `pairingSecret` 使用 CSPRNG 生成。
+- `pairingSecret` 与扫码取回凭据分别使用 CSPRNG 独立生成；两者不是彼此的派生值。
 - 配对请求只允许成功一次。
 - 二维码固定 5 分钟过期（与 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14 的固定 v1 常量一致，不作为配置项）。
 - 新配对使旧的未完成配对失效。
-- 客户端扫码后生成自己的长期设备密钥。
+- 客户端（PWA 输码或后续原生 App 扫码）认领后生成自己的长期设备密钥。
 - 服务节点本地入口显示设备名称与指纹，并要求用户确认（节点方向另显示待授予的 `grant.*`）。
-- 配对不派生也不显示短验证码：设备侧对「此后长期使用的主机公钥」的信任由两条密码学校验确立——用二维码里**固定的**主机公钥验证认领响应的 `hostProof`，且已批准响应里的主机公钥必须与二维码**逐字节相同**（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1）。
+- 配对不派生也不显示短验证码：设备侧对「此后长期使用的主机公钥」的信任由两条密码学校验确立——原生 App 用扫码取回且**完整匹配二维码 32 字节指纹**的主机公钥验证认领响应的 `hostProof`，且已批准响应里的主机公钥必须与该绑定公钥**逐字节相同**；PWA 的绑定公钥来自同源配对码 lookup（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1）。
 - `pairingSecret` 只作为短期配对状态凭据：设备首次 WSS 认证成功时立即清除，未完成、拒绝或未连接的 pairing 最迟在原过期时间清除；不得延长或转成长期 bearer token。
-- PWA 使用 `pairingSecret` 对规范 transcript 计算 HMAC-SHA256 proof（认领与状态两条 domain）；不派生、不展示短验证码。
+- PWA 与后续原生 App 使用 `pairingSecret` 对规范 transcript 计算 HMAC-SHA256 proof（认领与状态两条 domain）；不派生、不展示短验证码。设备二维码里的扫码取回凭据只用于取回资料，不参与 proof。
 - 所有签名/HMAC transcript 使用固定字段顺序的长度前缀二进制编码，不直接签名普通 JSON。
 
 ### 11.3 后续连接

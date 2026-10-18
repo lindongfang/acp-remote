@@ -315,6 +315,11 @@ for (const assetRoot of assetRoots) {
   for (const vector of manifest.transcriptVectors ?? []) {
     listedFixtures.add(resolve(assetRoot.fixtureRoot, vector));
   }
+  // `deviceQrVectors` 不是 JSON Schema 样例：它们由 Rust/TypeScript 的共享编解码测试消费，
+  // 但仍必须在 manifest 登记，否则「fixture 目录不允许存在未登记文件」会失败。
+  for (const vector of manifest.deviceQrVectors ?? []) {
+    listedFixtures.add(resolve(assetRoot.fixtureRoot, vector));
+  }
   for (const fixturePath of listJson(assetRoot.fixtureRoot)) {
     if (fixturePath === manifestPath) continue;
     if (!listedFixtures.has(fixturePath)) {

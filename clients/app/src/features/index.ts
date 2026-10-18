@@ -165,7 +165,6 @@ export { CONNECTION_STATE_LABELS, UNKNOWN_STATE_NOTE, buildHostPanelModel } from
 
 // ── 配对 ────────────────────────────────────────────────────────────────────
 export type {
-  PairingEntry,
   PairingFailureKind,
   PairingKind,
   PairingLookupOutcome,
@@ -180,6 +179,8 @@ export {
   PAIRING_ERROR_HINTS,
   applyAwaitingCode,
   applyClaiming,
+  applyDeviceQrAppGuide,
+  applyLegacyDeviceQrUnsupported,
   applyLookingUp,
   applyNoPayload,
   applyPollResult,

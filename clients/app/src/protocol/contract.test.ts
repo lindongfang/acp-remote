@@ -826,7 +826,10 @@ describe("F1：protocol barrel 不得把 Node 内置模块带进 web bundle", ()
   }
 
   it("barrel 的运行期重导出只含不依赖 node:* 的模块（含传递闭包）", () => {
-    expect(runtimeReexportTargets(readFileSync(barrelPath, "utf8"))).toEqual(["./event"]);
+    expect(runtimeReexportTargets(readFileSync(barrelPath, "utf8"))).toEqual([
+      "./event",
+      "./device-qr",
+    ]);
     expect(nodeBuiltinsReachableFromBarrel()).toEqual([]);
   });
 

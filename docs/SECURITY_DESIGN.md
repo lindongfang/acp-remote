@@ -3,6 +3,7 @@
 > 状态：编码前安全基线（Draft）  
 > 版本：0.6
 > 日期：2026-10-17  
+> 修订记录（2026-10-18，`device-pairing-qr-reference`）：设备二维码改为短引用格式——fragment 只带版本、32 字节扫码取回凭据与 32 字节主机公钥指纹，完整资料经同源 `POST /sync/v1/pairing/qr-lookup` 取回；取回统一失败 `pairing.qr_invalid`、独立 10 次/分钟限流、16 KiB 上限，凭据只存内存且认领/拒绝/失效/过期/重启后不可用。§5.1 增补移动端「先匹配完整 SHA-256 指纹，再验证 `hostProof`」的信任链说明；威胁模型与其它边界未变。字段与端点以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.6 为唯一权威。
 > 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「本机规范化路径永不出网」改写为**带前提的新边界**——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览 `workspace.browse` 的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显；日志、审计记录与错误 `details` 仍不含任何路径（§14.1 **未变**）。§3 把已记录目录的规范化路径纳入 `operational-metadata` 并写明例外共有两处（目录资源条目与只读浏览结果）；§8 补一句远程提交目录与目录浏览能力的边界；§10.2 新增只读查询命令 `workspace.browse`（feature `core.workspace-browse.v1` 门控、不登记、不产生审计动作）并改写 Sync 面目录校验的路径口径；§10.3 删去与 §10.2 自相矛盾的「规范化路径永不出网」表述、改为新口径；§12.3 把路径口径改为「只下发给协商该能力的设备、且只含已登记目录，另加只读浏览返回的那一层条目」；§19 登记残余风险。决策理由与被否决备选见 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)。威胁模型与信任边界**变**：在新前提下路径的可见面扩大（残余风险见 §19 与 ADR-0009）。  
 > 修订记录（2026-10-17，`directory-auto-registration`）：目录改由**成功的会话创建自动记录**（`directoryId = sha256(canonical_path)[..16]`），删除人工登记 `workspace.select` 与目录别名/展示名；目录的规范化路径**始终**随快照 `workspaces` 条目下发给已认证设备（撤销 `core.workspace-path.v1` 门控），会话摘要只带 `{ directoryId }`。路径的两处可见面（目录资源与只读浏览结果）与其余输出的禁路径口径不变。
 > 修订记录（2026-10-16，`pairing-model`）：配对只保留两条密码学校验（用配对载荷里的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节一致），**短验证码（SAS）两套全部删除**——§5 新增 §5.1 说明「为什么本协议不需要短验证码」，§9.3 的 pairing secret 用途、§9.4 的确认页展示项与 §18.1 的测试项随之收窄；**设备权限层删除**——§2.1/§2.2、§3 的 `security-metadata` 行、§4.2 的设备条目、§5 的威胁控制、§7.1/§7.2、§8、§9.4、§9.5、§10.1、§10.2 与 §12.3 改为「通过设备认证即可执行业务命令，设备不再有授权维度」，§10.2 的表格去掉「所属 pack」列、`pack.*`/`preset.*` 两类词汇删除；**保留**设备认证与每连接 challenge-response、配对确认只能由本机用户完成、撤销立即关闭连接、速率与各项上限、跨节点 `grant.*`/Export `scopes`/Import grants。威胁模型与信任边界没有放宽——删 SAS 的前提是 §5.1 写明的两条密码学要求已由 `pwa-web-client` 承担。  
@@ -133,12 +134,12 @@
 
 ### 5.1 `[决定]` 为什么本协议不需要短验证码（SAS）
 
-**决策句**：ACP Remote 的配对与认证**不派生、不在 wire 上返回、不展示也不校验短验证码**。信任锚是「配对载荷**带外**携带主机公钥与一次性配对秘密 + 认领阶段以配对秘密计算的 HMAC」——教科书里 SAS 所防的公钥替换已经由这条锚承担；而对本流程里剩下的两种现实威胁（配对载荷在带外被整条替换、配对秘密泄露），SAS **完全无效**。设备侧的主机信任因此由两条密码学要求确立，不需要人眼比对。
+**决策句**：ACP Remote 的配对与认证**不派生、不在 wire 上返回、不展示也不校验短验证码**。信任锚是「配对载荷**带外**携带主机公钥指纹（设备二维码；节点二维码携带节点公钥）与一次性配对秘密 + 认领阶段以配对秘密计算的 HMAC」——教科书里 SAS 所防的公钥替换已经由这条锚承担；而对本流程里剩下的两种现实威胁（配对载荷在带外被整条替换、配对秘密泄露），SAS **完全无效**。设备侧的主机信任因此由两条密码学要求确立，不需要人眼比对。
 
 理由：
 
-- SAS 在教科书里的职责是「公钥经不可信通道交换时被替换」的带外校验。本协议的二维码/URL **带外**携带 `hostId` 与主机公钥，且认领与状态请求都必须用一次性配对秘密算出正确的 HMAC 才会被受理（`SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2），因此攻击者即使能改写通道，也无法在不掌握配对秘密的前提下让设备接受另一把主机公钥。这条锚的强度不依赖人眼比数字。
-- SAS 能核对的只是「载荷里那把公钥」，**不是**「设备最终落盘的那把」。设备此后长期使用的主机公钥必须靠两条设备侧校验确立：用配对载荷里的主机公钥验证认领响应的 `hostProof`，以及已批准响应里的主机公钥与载荷**逐字节相同**（状态响应不含任何主机签名，只能靠比对）。两条都失败关闭、都不需要人参与，要求见能力规格 `pwa-web-client`。
+- SAS 在教科书里的职责是「公钥经不可信通道交换时被替换」的带外校验。本协议的设备二维码 **带外**携带主机公钥的完整 SHA-256 指纹（节点二维码仍带外携带节点公钥），且认领与状态请求都必须用一次性配对秘密算出正确的 HMAC 才会被受理（`SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2），因此攻击者即使能改写通道，也无法在不掌握配对秘密的前提下让设备接受另一把主机公钥。这条锚的强度不依赖人眼比数字。
+- SAS 能核对的只是「载荷里那把公钥」，**不是**「设备最终落盘的那把」。设备此后长期使用的主机公钥必须靠两条设备侧校验确立：先用§5.1 的指纹规则把扫码取回的公钥固定下来，再用它验证认领响应的 `hostProof`，以及已批准响应里的主机公钥与该绑定公钥**逐字节相同**（状态响应不含任何主机签名，只能靠比对）。两条都失败关闭、都不需要人参与，要求见能力规格 `pwa-web-client`。
 - 对剩下的两种现实威胁，SAS 无效：① 配对载荷在带外被**整条替换**——真主机那次配对从未被认领，真主机终端上根本没有可比对的数字，用户比的是攻击者主机算出的数字；② 配对秘密泄露——持有者能算出同一个数字。
 - 删除 SAS 不降低任何已承诺的安全属性：它剩下的作用只是「不依赖代码正确性的人眼检查点」，属纵深而非安全依据；保留它反而会让「已经比对过」的错觉掩盖第 2 条那个真正的缺口。
 
@@ -146,8 +147,9 @@
 
 `[决定]`（2026-10-18，`pairing-code-web-entry`）**网页入口的信任边界是 canonical origin + TLS 的首次信任（TOFU）；移动端仍是带外锚。**两者的区别必须按下列口径理解，不得把网页入口描述为与二维码入口同强度：
 
-- 二维码/移动端入口的主机公钥仍来自 URL fragment 的**带外**载荷：claim 响应的 `hostProof` 用这把公钥验证，已批准响应携带的公钥必须与它逐字节相同（`SYNC_PROTOCOL.md` §7.2/§7.3 原样）。移动端只使用二维码，不提供输码入口，本节不改变它的一分强度。
-- 网页 `/pair` 无 fragment 时输入 8 位配对码，经同源 `POST /sync/v1/pairing/lookup` 取回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`。主机公钥此时来自 TLS 保护、由 canonical origin 限定的 lookup 响应，客户端把它作为**本次配对**的绑定：用它验证 `hostProof`，并要求已批准响应逐字节相同；同一 canonical origin 已存在不同公钥的已配对记录时**失败关闭**（主机身份变化），不静默覆盖。允许任意 canonical origin（含 LAN/Tailscale）——网页 JS 本就由这个 origin 提供；origin 被攻破时，fragment 里的公钥也无法阻止恶意 JS 跳过校验。网页入口因此只丢失「同源代理把请求错路由到另一台 daemon」这一部署异常的检测，剩余可观察面是终端仍停在等待认领；配对码输入页显示当前 canonical origin 与 HTTPS 标识，让用户能发现打开的是另一台机器。
+- `[决定]`（2026-10-18，`device-pairing-qr-reference`）二维码/原生移动端入口的带外锚变成**主机公钥指纹**：fragment 只携带 `0x02`、32 字节扫码取回凭据与主机公钥的完整 SHA-256 摘要；App 先固定外层 canonical origin，经同源 `qr-lookup` 取回完整资料，要求返回的 `canonicalOrigin` 与目标一致、`hostPublicKey` 是规范 65 字节未压缩 P-256 公钥且 SHA-256 与二维码指纹逐字节相同，**之后**才接受其余绑定。claim 响应仍用这把公钥验证 `hostProof`，已批准响应携带的公钥必须与它逐字节相同（`SYNC_PROTOCOL.md` §7.2/§7.3 原样）。指纹只绑定公钥，不单独认证其它字段；请求与 WSS 仍受可信 HTTPS、Host/Origin 与有效期约束，不能把本方案描述为不依赖 TLS 或页面代码。
+- qr-lookup 的所有失败（凭据不存在/已过期/已认领/已拒绝/已失效、格式错误、来源或绑定不符）统一为 `401 pairing.qr_invalid`，不泄露差异；它不消耗配对码、不推进状态、不增加配对证明失败计数。限流与配对码 lookup、claim 各自独立（按真实连接来源 10 次/分钟）。移动端只使用二维码，不提供输码入口，本节不改变它的一分强度。
+- 网页 `/pair` 无 fragment 时输入 8 位配对码，经同源 `POST /sync/v1/pairing/lookup` 取回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`。主机公钥此时来自 TLS 保护、由 canonical origin 限定的 lookup 响应，客户端把它作为**本次配对**的绑定：用它验证 `hostProof`，并要求已批准响应逐字节相同；已有配对记录时，用户点击「继续配对」即明确发起重新配对；仅在本机批准且主机证明与本次绑定公钥校验通过后替换旧记录，进页、等待确认或失败均保留旧记录。允许任意 canonical origin（含 LAN/Tailscale）——网页 JS 本就由这个 origin 提供；origin 被攻破时，任何带外指纹也无法阻止恶意 JS 跳过校验。网页入口因此只丢失「同源代理把请求错路由到另一台 daemon」这一部署异常的检测，剩余可观察面是终端仍停在等待认领；配对码输入页显示当前 canonical origin 与 HTTPS 标识，让用户能发现打开的是另一台机器。
 - 配对码由 pairing secret 做域分离派生（HMAC-SHA256，domain tag `acp-remote/pairing-code/v1`，取前 40 bit 编码为 8 位 Crockford base32），只作为**一次性取回凭据**：不是 claim/status 的 HMAC 密钥，不替代或缩短 256 bit 的 pairing secret，不新增持久字段。40 bit 可接受的前提是**独立限流**——lookup 与 claim 各按来源 10 次/分钟、互不占用额度，lookup 失败不增加任何配对的证明失败计数，也不区分「配对不存在」与「已过期/已消耗」。5 分钟有效期把单个来源在整个配对生命周期内的尝试压到约 50 次（命中概率约 `50/2^40`），且码只负责取回已存在配对的 secret，不承担认证；离线攻击面仍是完整 secret 的 256 bit。
 - lookup 成功**原子地消耗**配对码；迟到的第二次请求，或第一次响应在网络上丢失，都只能得到统一的 `401 pairing.code_invalid`。这是单次语义的显式代价：恢复路径是重新执行 `device pair`，页面不做自动重试，只呈现固定文案「配对码不对或已过期，请重新生成配对码」。本版不引入 lookup 幂等键。
 - `pairingCode` 与 `pairingSecret` MUST NOT 进入日志、URL query、Cookie、localStorage/sessionStorage、地址历史或任何明文持久化字段，MUST NOT 落盘。配对码只存在于三处：页面内存、`identity-auth` 的进程内查找表（`State.codes`）、以及 `device.pair.begin` 的一次性管理响应；secret 只存在于三处：`identity-auth` 内存、lookup 响应体、页面私有会话状态（`ClientStore` 的私有字段）。三处都不写盘、不进日志、不随可导出状态外泄（与 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §4.3、[ADR-0010](./adr/0010-web-pairing-code-entry.md) 一致）。处理路径不得记录请求/响应体，错误消息不得回显配对码；`PairingCode` 的 `Debug` 必须脱敏且不提供 `Display`。
@@ -230,6 +232,7 @@ Provider/MCP 配置、原始 workspace 路径的**登记**、Node/Device 管理�
 | Node identity key | Sync `hostProof`（wire 字段名 `hostId`/`hostPublicKey`/`hostProof`）与 Node Link `nodeProof`、稳定节点身份和节点配对 | 长期；丢失后所有设备/节点重新配对 |
 | Device identity key | Device proof | 每安装/origin 独立；撤销或数据清理后失效 |
 | pairing secret | 首次 claim 与状态查询（配对认领 HMAC、状态 HMAC） | 单次、短期，最迟到原 expiresAt |
+| 扫码取回凭据（`qrToken`） | 设备二维码取回尚未认领的配对资料（`qr-lookup`）；不参与 proof | 单次配对、内存、最迟到原 expiresAt；认领/拒绝/失效/重启后不可用 |
 | TLS session key | 当前连接机密性/完整性 | 单连接临时，由 TLS 产生 |
 
 Node/Device identity key 不用于业务内容加密，TLS key 不作为长期身份。
@@ -484,7 +487,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 默认禁止：
 
 - 完整 prompt、回复、ACP `rawJson`、终端、diff 和文件内容。
-- Node/Device private key、pairing secret、pairing code、HMAC、签名输入、Provider token。
+- Node/Device private key、pairing secret、pairing code、扫码取回凭据（`qrToken`）、HMAC、签名输入、Provider token。
 - 完整敏感路径、URL fragment、Authorization/Cookie 和 QR payload。
 
 ### 14.2 审计事件

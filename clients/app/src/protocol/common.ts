@@ -60,6 +60,7 @@ export type ErrorCode =
   | "pairing.expired"
   | "pairing.consumed"
   | "pairing.code_invalid"
+  | "pairing.qr_invalid"
   | "sync.cursor_invalid"
   | "command.unsupported"
   | "command.not_found"

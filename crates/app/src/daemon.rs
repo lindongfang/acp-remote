@@ -61,7 +61,7 @@ use server::sync::conn::{
 };
 use server::sync::pairing::{
     CLAIM_PATH as SYNC_CLAIM_PATH, LOOKUP_PATH as SYNC_LOOKUP_PATH, PairingHttp as SyncPairingHttp,
-    STATUS_PATH as SYNC_STATUS_PATH,
+    QR_LOOKUP_PATH as SYNC_QR_LOOKUP_PATH, STATUS_PATH as SYNC_STATUS_PATH,
 };
 use server::sync::router::SyncRoutes;
 use server::sync::subscribe::fanout::SyncPublisher;
@@ -1210,10 +1210,12 @@ impl SyncIngress {
 ///
 /// 配对端点的四个安全响应头经 `SyncPairingHttp::default_response_headers` **同时**声明给接入层
 /// （`register_post` 的每路径默认响应头）：否则接入层在调用处理器前产生的 413/Host 400 不带这些头。
-/// 三个配对 path 都注册在这里：claim、status 与网页入口的 lookup（`/sync/v1/pairing/lookup`）。
+/// 四个配对 path 都注册在这里：claim、status、网页入口的 lookup（`/sync/v1/pairing/lookup`）与
+/// 原生 App 扫码入口的 qr-lookup（`/sync/v1/pairing/qr-lookup`）。
 ///
-/// `public_origin` 是 `daemon.public_origin`：lookup 用它做**前置**来源校验（跨源请求不得消耗配对码），
-/// 并与配对登记的 `host_binding` 再核对一次。`None` = 未配置：lookup 一律统一失败（网页入口不可用）。
+/// `public_origin` 是 `daemon.public_origin`：lookup 与 qr-lookup 用它做**前置**来源校验（跨源请求不得
+/// 消耗配对码或探测扫码凭据），并与配对登记的 `host_binding` 再核对一次。`None` = 未配置：两条入口
+/// 一律统一失败。
 ///
 /// `owner` 是 Owner 可达性（`sync.subscribe`/快照的运行时输入）：`server::sync` 不得调用平级的
 /// `server::node_link`，因此这条事实只能由组合根注入（见 [`NodeLinkReachability`]）。
@@ -1292,6 +1294,13 @@ pub fn register_sync_paths(
         .map_err(NetworkError::Route)?;
     listener
         .register_post(SYNC_LOOKUP_PATH, pairing.lookup_handler(), default_headers)
+        .map_err(NetworkError::Route)?;
+    listener
+        .register_post(
+            SYNC_QR_LOOKUP_PATH,
+            pairing.qr_lookup_handler(),
+            default_headers,
+        )
         .map_err(NetworkError::Route)?;
     Ok(SyncIngress {
         registry,

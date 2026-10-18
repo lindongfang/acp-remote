@@ -309,7 +309,17 @@
       "valid": true
     },
     {
-      "fixture": "valid/pairing-qr-payload.json",
+      "fixture": "valid/pairing-qr-lookup-request.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/pairing-qr-lookup-response.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/pairing-qr-lookup-error.json",
       "schema": "../../../schemas/sync/v1/pairing.schema.json",
       "valid": true
     },
@@ -373,6 +383,24 @@
       "schema": "../../../schemas/sync/v1/pairing.schema.json",
       "valid": false,
       "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/pairing-qr-lookup-request-short-token.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": false,
+      "expectedKeyword": "minLength"
+    },
+    {
+      "fixture": "invalid/pairing-qr-lookup-request-unknown-field.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/pairing-qr-lookup-response-missing-secret.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
     },
     {
       "fixture": "invalid/sequence-is-number.json",
@@ -969,6 +997,9 @@
       "valid": false,
       "expectedKeyword": "minItems"
     }
+  ],
+  "deviceQrVectors": [
+    "device-qr/vectors.json"
   ],
   "transcriptVectors": [
     "transcripts/host-challenge.json",

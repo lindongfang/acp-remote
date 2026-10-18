@@ -1,7 +1,7 @@
 //! Sync 配对 HTTP 端点（`docs/SYNC_PROTOCOL.md` §7.1–§7.4，`design.md` D6）。
 //!
-//! 三个端点（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`、
-//! `POST /sync/v1/pairing/lookup`）与 Node Link 的配对端点
+//! 四个端点（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`、
+//! `POST /sync/v1/pairing/lookup`、`POST /sync/v1/pairing/qr-lookup`）与 Node Link 的配对端点
 //! （[`crate::node_link::pairing`]）**结构同形、类型各自定义**：`design.md` D6 要求不复用 wire DTO，
 //! 因为两侧的 domain（`acp-remote/pairing-proof/v1` ↔ `node-link-pairing-proof/v1`）与载荷形状不同。
 //! 因此这里的模块文档与那份逐条对应，但每个 DTO、每个校验入口都取自 `sync-protocol`/`identity-auth`。
@@ -50,11 +50,12 @@
 //! ## 限流（§14）
 //!
 //! claim 按**来源真实连接地址** 10 次/分钟（键 = `PeerInfo::client_ip`，复用
-//! `transport::net::ratelimit::SlidingWindowLimiter`），lookup 另有一个**同形但独立**的 10 次/分钟额度（同一
-//! 来源、各自计数，lookup 的成功或失败都不占用 claim 的额度），status 按 **pairingId** 60 次/分钟（键不是
-//! 地址，因此用 [`PairingIdWindow`]：`SlidingWindowLimiter` 的键固定为 `IpAddr`，无法承载配对标识；两者的
-//! 窗口语义、键集上限与失败关闭口径相同）。转发头不参与计数：`client_ip` 只在 `daemon.trusted_proxies`
-//! 内的对端提供的转发头**被采信**时才是头部取值，否则就是 TCP 对端地址（`transport::net::proxy`）。
+//! `transport::net::ratelimit::SlidingWindowLimiter`），lookup 与扫码资料取回（qr-lookup）各有**同形但
+//! 独立**的 10 次/分钟额度（同一来源、各自计数；任一条入口的成功或失败都不占用其它入口或 claim 的额度），
+//! status 按 **pairingId** 60 次/分钟（键不是地址，因此用 [`PairingIdWindow`]：`SlidingWindowLimiter` 的
+//! 键固定为 `IpAddr`，无法承载配对标识；两者的窗口语义、键集上限与失败关闭口径相同）。转发头不参与计数：
+//! `client_ip` 只在 `daemon.trusted_proxies` 内的对端提供的转发头**被采信**时才是头部取值，否则就是
+//! TCP 对端地址（`transport::net::proxy`）。
 //!
 //! ## 错误映射（§7.4；`code` 一律取自 §12.2 的封闭词表）
 //!
@@ -63,6 +64,7 @@
 //! | 400 | JSON 语法错误 / 字段 schema 无效 / 非 `application/json` | `protocol.invalid_json`、`protocol.schema_invalid` |
 //! | 401 | proof 无效、失败计数达上限、载荷与配对目标族不符 | `auth.proof_invalid` |
 //! | 401 | lookup 的任何失败（码格式/不存在/已消耗/已过期/已认领/来源不符） | `pairing.code_invalid` |
+//! | 401 | qr-lookup 的端点内失败（可解析 JSON 的请求形状/凭据/状态/过期/失效/来源或身份绑定不符） | `pairing.qr_invalid` |
 //! | 403 | 来源与登记绑定不一致 | `auth.origin_mismatch` |
 //! | 403 | claim 声明的 `hostId` 不是本节点 | `auth.host_mismatch` |
 //! | 404 | pairing 不存在 | `pairing.expired`（v1 没有「配对不存在」专用码，见 [`not_found_pairing`]） |
@@ -97,7 +99,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use identity_auth::{
     Authority, CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection,
     ClaimedPairing, ClientKind, P1363Signature, PAIRING_MAX_FAILURES, PairingError, PairingProof,
-    PairingRequestMaterial, SyncPairingHostProof, SyncPairingStatus,
+    PairingRequestMaterial, PairingSecret, QrToken, SyncPairingHostProof, SyncPairingStatus,
 };
 use sync_protocol::common::{
     Base64Url, NonEmptyText, Nullable, ProtocolVersionV1, RawObject, Timestamp, Uuid,
@@ -105,7 +107,7 @@ use sync_protocol::common::{
 use sync_protocol::error::{Body as ErrorBody, ErrorCode};
 use sync_protocol::pairing::{
     ClaimRequest, ClaimResponse, DeviceBlock, HostBlock, LookupRequest, LookupResponse,
-    PairingStatus, PendingConfirmation, StatusRequest, StatusResponse,
+    PairingStatus, PendingConfirmation, QrLookupRequest, StatusRequest, StatusResponse,
 };
 
 use crate::transport::net::origin::request_origin;
@@ -123,11 +125,17 @@ pub const STATUS_PATH: &str = "/sync/v1/pairing/status";
 /// `POST /sync/v1/pairing/lookup`（§7.5；网页入口的一次性配对码）。
 pub const LOOKUP_PATH: &str = "/sync/v1/pairing/lookup";
 
+/// `POST /sync/v1/pairing/qr-lookup`（§7.6；原生 App 扫码后的配对资料取回）。
+pub const QR_LOOKUP_PATH: &str = "/sync/v1/pairing/qr-lookup";
+
 /// claim 的固定限流（§14：10 次/分钟/来源地址，不可配置）。
 const CLAIM_LIMIT_PER_MINUTE: u32 = 10;
 
 /// lookup 的固定限流（§14：10 次/分钟/来源地址，与 claim **各自独立**）。
 const LOOKUP_LIMIT_PER_MINUTE: u32 = 10;
+
+/// 扫码资料取回的固定限流（§14：10 次/分钟/来源地址，与 lookup/claim **各自独立**）。
+const QR_LOOKUP_LIMIT_PER_MINUTE: u32 = 10;
 
 /// status 的固定限流（§14：60 次/分钟/`pairingId`，不可配置）。
 const STATUS_LIMIT_PER_MINUTE: u32 = 60;
@@ -150,6 +158,9 @@ const HOST_MISMATCH_MESSAGE: &str = "the request host identity does not match th
 /// lookup 的统一失败文本（§7.5：码不存在、已消耗、已过期、已认领、来源不符都是同一形状，不泄露存在性）。
 const CODE_INVALID_MESSAGE: &str = "the pairing code is not valid";
 
+/// 扫码资料取回的统一失败文本（§7.6：格式/凭据/状态/过期/来源绑定失败都是同一形状，不泄露存在性）。
+const QR_INVALID_MESSAGE: &str = "the pairing qr token is not valid";
+
 /// 四个安全响应头（§7.1）：所有配对 HTTP 响应（成功与失败）都必须携带。
 ///
 /// 同一份常量被两条路径消费：处理器内的 [`secure`]（处理器自己带）与 `NetListener::register_post` 的
@@ -162,7 +173,7 @@ const SECURITY_HEADERS: [(&str, &str); 4] = [
     ("x-content-type-options", "nosniff"),
 ];
 
-/// 配对 HTTP 的共享状态（组合根装配一次，注册到三个 path）。
+/// 配对 HTTP 的共享状态（组合根装配一次，注册到四个 path）。
 ///
 /// 不持有端口快照、不在请求路径上读配置文件：本面判定所需的一切都是「已提交的持久事实」（经 core 的用例面
 /// 读）与「本机身份」（`Authority` 的只读入口）；唯一来自配置的是 `daemon.public_origin`（lookup 的前置
@@ -179,6 +190,8 @@ pub struct PairingHttp {
     claim_limit: SlidingWindowLimiter,
     /// lookup 限流：与 claim **各自独立**的额度（同一来源 10 次/分钟）。
     lookup_limit: SlidingWindowLimiter,
+    /// 扫码资料取回限流：与 claim/lookup **各自独立**的额度（同一来源 10 次/分钟）。
+    qr_limit: SlidingWindowLimiter,
     /// status 限流：键是 `pairingId`（§14 的另一条固定限流）。
     status_limit: PairingIdWindow,
     /// status 的「网络重试返回原响应」缓存（§7.3）。
@@ -199,6 +212,7 @@ impl PairingHttp {
             public_origin,
             claim_limit: SlidingWindowLimiter::new(CLAIM_LIMIT_PER_MINUTE, LIMIT_WINDOW),
             lookup_limit: SlidingWindowLimiter::new(LOOKUP_LIMIT_PER_MINUTE, LIMIT_WINDOW),
+            qr_limit: SlidingWindowLimiter::new(QR_LOOKUP_LIMIT_PER_MINUTE, LIMIT_WINDOW),
             status_limit: PairingIdWindow::new(STATUS_LIMIT_PER_MINUTE, LIMIT_WINDOW),
             status_replays: Mutex::new(StatusReplays::default()),
         }
@@ -225,10 +239,17 @@ impl PairingHttp {
         })
     }
 
-    /// 三个配对 path 的每路径默认响应头（§7.1：**所有**配对 HTTP 响应都带这四个头）。
+    /// 扫码资料取回端点的处理器（组合根注册到 [`QR_LOOKUP_PATH`]）。
+    pub fn qr_lookup_handler(self: &Arc<Self>) -> Arc<dyn HttpHandler> {
+        Arc::new(QrLookupEndpoint {
+            pairing: self.clone(),
+        })
+    }
+
+    /// 四个配对 path 的每路径默认响应头（§7.1：**所有**配对 HTTP 响应都带这四个头）。
     ///
-    /// 组合根注册 [`Self::claim_handler`]/[`Self::status_handler`]/[`Self::lookup_handler`] 时**必须**把它
-    /// 作为 `default_headers` 传给 `NetListener::register_post`。
+    /// 组合根注册 [`Self::claim_handler`]/[`Self::status_handler`]/[`Self::lookup_handler`]/
+    /// [`Self::qr_lookup_handler`] 时**必须**把它作为 `default_headers` 传给 `NetListener::register_post`。
     pub fn default_response_headers(&self) -> &'static [(&'static str, &'static str)] {
         &SECURITY_HEADERS
     }
@@ -412,6 +433,10 @@ impl PairingHttp {
                 return refuse(status, code, message);
             }
         };
+        // ⑫ 认领已生效（含幂等 Repeat）：关闭扫码取回入口。`close_qr_retrieval` 幂等且只移除反查条目，
+        //    保留 secret 供幂等 claim/status 继续使用；它与本方法的成功路径同步执行，因此**认领之后
+        //    开始**的 qr-lookup 一定找不到凭据。已经在认领前获准的在途响应不受影响（design D5）。
+        self.authority.close_qr_retrieval(&pairing);
         self.claim_response(record, &claimed).await
     }
 
@@ -645,7 +670,10 @@ impl PairingHttp {
             return code_invalid();
         }
         // ⑦ 组装 200。字段全部来自已核对的事实；装配失败只可能是实现缺陷。
-        let Some(body) = self.lookup_response(&record, &lookup).await else {
+        let Some(body) = self
+            .lookup_response(&record, &lookup.pairing, &lookup.secret)
+            .await
+        else {
             return internal_unavailable();
         };
         match serde_json::to_vec(&body) {
@@ -657,7 +685,88 @@ impl PairingHttp {
         }
     }
 
-    /// lookup 的**前置**来源校验：`Origin` 头必须存在、可归一化，并与本机 canonical origin 逐字相等。
+    /// `POST /sync/v1/pairing/qr-lookup`（§7.6 / design D4/D5）：用扫码取回凭据重复取回同一份配对资料。
+    ///
+    /// 顺序（每一步都在任何响应材料之前失败关闭）：
+    ///
+    /// ① 本端点**独立**的每来源限流（与 lookup/claim 互不占用额度）；
+    /// ② 只接受同源 `application/json`（非 JSON 沿用既有的 400，不新增 415）；
+    /// ③ 先判 JSON 语法：坏 JSON（含空体与截断）是 400 `protocol.schema_invalid`（§7.4）；随后可解析
+    ///    JSON 的未知键、字段类型、编码或长度错误都与「凭据不存在」同形（401）；
+    /// ④ `Origin` 必须存在、可归一化并与本机 canonical origin 逐字相等（缺失/不符同形 401）；
+    /// ⑤ 有界凭据反查 → 只读该配对自身的权威记录（claimant 绑定该配对，零写入）；
+    /// ⑥ `Authority::retrieve_qr_material` 复核权威状态（`created`、未过期、未失效、记录摘要仍与
+    ///    内存 secret 一致）与身份绑定，成功才交付；
+    /// ⑦ 成功响应与配对码 lookup 同形；不消耗凭据、不消耗网页配对码、不推进状态、不创建信任。
+    async fn qr_lookup(&self, request: HttpRequest) -> HttpResponse {
+        // ① 限流：超限的请求不进入状态机，也不触碰任何配对材料。
+        if let RateLimit::Denied { retry_after } = self.qr_limit.check(request.peer.client_ip) {
+            return rate_limited(retry_after);
+        }
+        // ② 与 claim/status/lookup 同一规则：只接受同源 `application/json`。
+        if !is_json_content_type(&request.headers) {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::ProtocolSchemaInvalid,
+                "content type must be application/json",
+            );
+        }
+        // ③ 语法错误不属于「凭据形状错误」：坏 JSON 仍是 400 `protocol.schema_invalid`（§7.4）。
+        //    只有可解析 JSON 的形状/编码错误才收敛为统一 401，避免把「不是 JSON」伪装成凭据失败。
+        if serde_json::from_slice::<serde_json::Value>(&request.body).is_err() {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::ProtocolSchemaInvalid,
+                "request body must be valid JSON",
+            );
+        }
+        let Ok(qr_request) = decode_qr_lookup(&request.body) else {
+            return qr_invalid();
+        };
+        let Ok(token) = QrToken::try_from_bytes(qr_request.qr_token.as_bytes()) else {
+            return qr_invalid();
+        };
+        // ④ 来源校验先于任何查找：跨源请求不得探测凭据是否存在（错误与「不存在」同形）。
+        let Some(origin) = self.lookup_origin(&request.headers) else {
+            return qr_invalid();
+        };
+        // ⑤ 有界反查：只覆盖本进程内存里仍持有 secret 且凭据仍绑定的配对。
+        let Some(found) = self.authority.lookup_pairing_by_qr_token(&token) else {
+            return qr_invalid();
+        };
+        let actor = Actor::PairingClaimant {
+            pairing: found.pairing.clone(),
+        };
+        let record = match self.core.pairing_channel_view(&actor, &found.pairing).await {
+            Ok(Some(view)) => view.record,
+            Ok(None) => return qr_invalid(),
+            Err(error) => return self.port_error("qr-lookup", &found.pairing, error),
+        };
+        // ⑥ 来源与持久绑定必须一致；状态/过期/失效/材料摘要由身份层复核（唯一实现）。
+        if record.host_binding() != origin.as_str() {
+            return qr_invalid();
+        }
+        let Some(retrieved) = self.authority.retrieve_qr_material(&record, &token) else {
+            return qr_invalid();
+        };
+        // ⑦ 与配对码 lookup 完全同形的七字段；装配失败只可能是实现缺陷。
+        let Some(body) = self
+            .lookup_response(&record, &retrieved.pairing, &retrieved.secret)
+            .await
+        else {
+            return internal_unavailable();
+        };
+        match serde_json::to_vec(&body) {
+            Ok(bytes) => secure(HttpResponse::json(StatusCode::OK, Bytes::from(bytes))),
+            Err(error) => {
+                tracing::error!(error = %error, "the qr lookup response cannot be encoded");
+                internal_unavailable()
+            }
+        }
+    }
+
+    /// 配对码 lookup 与扫码资料取回的**前置**来源校验：`Origin` 头必须存在、可归一化，并与本机
+    /// canonical origin 逐字相等。
     ///
     /// 返回归一化后的来源文本（用于与持久记录的 `host_binding` 再核对一次）。`Host` 边界由接入层
     /// （`HostPolicy`）在调用处理器之前判定，本方法只判来源；两者不可互相替代（§3.2）。
@@ -672,23 +781,26 @@ impl PairingHttp {
         Some(canonical.as_str().to_owned())
     }
 
-    /// 组装 `lookupResponse`（§7.5）：主机身份材料、规范化来源、完整 pairing secret 与过期时间。
+    /// 组装 `lookupResponse`（§7.5/§7.6）：主机身份材料、规范化来源、完整 pairing secret 与过期时间。
+    ///
+    /// 两条入口（配对码 lookup 与扫码资料取回）交付同一份绑定，因此共用这一处装配：`pairing`/`secret`
+    /// 必须来自刚刚通过各自校验的那份材料。
     async fn lookup_response(
         &self,
         record: &PairingRecord,
-        lookup: &identity_auth::PairingCodeLookup,
+        pairing: &PairingId,
+        secret: &PairingSecret,
     ) -> Option<LookupResponse> {
         let host_public_key = self.authority.node_public_key().await.ok()?;
         Some(LookupResponse {
             protocol_version: ProtocolVersionV1::new(1).ok()?,
-            pairing_id: Uuid::parse(lookup.pairing.as_str()).ok()?,
+            pairing_id: Uuid::parse(pairing.as_str()).ok()?,
             host_id: Uuid::parse(self.authority.local_node().as_str()).ok()?,
             host_public_key: Base64Url::<65>::parse(&encode_base64url(host_public_key.as_bytes()))
                 .ok()?,
             canonical_origin: sync_protocol::pairing::CanonicalOrigin::parse(record.host_binding())
                 .ok()?,
-            pairing_secret: Base64Url::<32>::parse(&encode_base64url(lookup.secret.as_bytes()))
-                .ok()?,
+            pairing_secret: Base64Url::<32>::parse(&encode_base64url(secret.as_bytes())).ok()?,
             expires_at: Timestamp::parse(record.expires_at().as_str()).ok()?,
         })
     }
@@ -887,6 +999,18 @@ impl HttpHandler for LookupEndpoint {
     }
 }
 
+/// 扫码资料取回端点的 [`HttpHandler`]（薄包装：把请求交给 [`PairingHttp`]）。
+struct QrLookupEndpoint {
+    pairing: Arc<PairingHttp>,
+}
+
+#[async_trait::async_trait]
+impl HttpHandler for QrLookupEndpoint {
+    async fn handle(&self, request: HttpRequest) -> HttpResponse {
+        self.pairing.qr_lookup(request).await
+    }
+}
+
 /// wire 的 claim 请求 → 内部值对象。
 ///
 /// wire 类型已经校验过形状；这里的失败只可能是「形状合法但取值不可用」（例如公钥不在 P-256 上），一律按
@@ -1032,6 +1156,18 @@ fn code_invalid() -> HttpResponse {
         StatusCode::UNAUTHORIZED,
         ErrorCode::PairingCodeInvalid,
         CODE_INVALID_MESSAGE,
+    )
+}
+
+/// 扫码资料取回的统一失败（§7.6）：请求形状、凭据不存在/已清理、已过期、已拒绝、已认领、
+/// 已失效、来源或身份绑定不符全部收敛到这里。
+///
+/// 与 [`code_invalid`] 一样不带 `details`：不同原因必须逐字节同形，响应不回显任何材料。
+fn qr_invalid() -> HttpResponse {
+    refuse(
+        StatusCode::UNAUTHORIZED,
+        ErrorCode::PairingQrInvalid,
+        QR_INVALID_MESSAGE,
     )
 }
 
@@ -1187,6 +1323,13 @@ fn decode_lookup(body: &[u8]) -> Result<LookupRequest, ()> {
     serde_json::from_slice::<LookupRequest>(body).map_err(|_| ())
 }
 
+/// 扫码资料取回请求体的解码（§7.6）：未知键、字段类型、编码与长度错误全部按统一失败处理。
+///
+/// 语法错误由调用方在此之前单独判为 400（§7.4），因此这里只需回答「形状是否可接受」。
+fn decode_qr_lookup(body: &[u8]) -> Result<QrLookupRequest, ()> {
+    serde_json::from_slice::<QrLookupRequest>(body).map_err(|_| ())
+}
+
 /// `Content-Type` 是否为 `application/json`（允许 `; charset=…` 之类的参数，§7.1）。
 fn is_json_content_type(headers: &HeaderMap) -> bool {
     headers
@@ -1221,13 +1364,27 @@ fn rate_limited(retry_after: Duration) -> HttpResponse {
         retry_after.as_millis().min(u128::from(u32::MAX))
     ))
     .ok();
-    error_response(
+    let response = error_response(
         StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::ResourceRateLimited,
         "pairing attempt is rate limited",
         &correlation,
         details,
-    )
+    );
+    // §14：429 必须带可用的 `Retry-After`（整数秒，向上取整且至少 1）。`details.retryAfterMs`
+    // 继续给出毫秒精度；两者同源，不各自计算窗口。
+    let seconds = retry_after
+        .as_millis()
+        .div_ceil(1_000)
+        .max(1)
+        .min(u128::from(u32::MAX));
+    match HeaderValue::from_str(&seconds.to_string()) {
+        Ok(value) => response.with_header(HeaderName::from_static("retry-after"), value),
+        Err(error) => {
+            tracing::error!(error = %error, "the retry-after header cannot be encoded");
+            response
+        }
+    }
 }
 
 /// 内部不可用（500）：只用于实现缺陷或依赖不可用，不泄露任何内部细节。

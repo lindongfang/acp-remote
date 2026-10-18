@@ -1,9 +1,10 @@
 /**
  * 配对页（路由 `/pair`，`data-route="pair"`）。
  *
- * ## 路由走正常路径，片段只承载配对内容（design D4）
+ * ## 路由走正常路径，片段只承载二维码内容（design D4）
  *
- * 配对二维码是 `<origin>/pair#data=<base64url-json>`：秘密**必须**在片段里
+ * 设备二维码是 `<origin>/pair#q2=<base64url>`、节点二维码是
+ * `<origin>/node-link/pair#data=<base64url-json>`：内容**必须**在片段里
  * （`SYNC_PROTOCOL.md` §7.1），而 Expo Router 的路由匹配只看 `pathname`（片段与查询都不进
  * 路径），因此两者不争用同一个位置。本页因此不把片段当路由：原型把路由写在片段里
  * （`prototypes/README.md`），照抄那套口径的注释与这里的实际行为矛盾，已改为正常路径。
@@ -12,15 +13,21 @@
  *
  * 配对是 HTTPS 面（`schemas/sync/v1/pairing.schema.json`）：传输端口由组合根用 `fetch`
  * 实现，本页只呈现状态机产出的模型。设备私钥由 `src/platform/` 生成且不可导出，
- * MCP 配置与 Agent 凭据一律在电脑上配置——因此本页没有**凭据**输入项。入口有两种：
- * 地址片段（移动端二维码）与无片段时的 8 位配对码（桌面网页，design D1/D6）。
+ * MCP 配置与 Agent 凭据一律在电脑上配置——因此本页没有**凭据**输入项。
+ *
+ * ## 浏览器只使用配对码，设备二维码交给 App
+ *
+ * 桌面与手机共用同一条路径：裸 `/pair` 显示 8 位配对码输入。误扫新设备短二维码（`#q2=`）
+ * 时，组合根先清除片段，页面只显示固定 App 指引；旧设备 `#data=` 同样先清除，再明确提示
+ * 已停用。两条路径都不解析设备资料、不发任何配对请求（design D6）。`/node-link/pair`
+ * 的节点资料读取与只读展示不受影响。
  *
  * ## 页面不解析、不读地址栏
  *
- * 结构校验、lookup、claim、轮询、落盘、到期定时与「已配对后触发连接」都在 `ClientStore` 与
- * 组合根里（`store.startPairingFromAddress` / `store.submitPairingCode`）：本页不碰 `fetch`、
- * 不读地址栏、不写任何存储（`AGENTS.md` §6：平台能力只由更外层装配）。配对码只经由
- * `PairingPanel` 的内存状态交给 store，不进入 URL 或任何存储。
+ * 结构校验、node-link 读取、lookup、claim、轮询、落盘、到期定时与「已配对后触发连接」都在
+ * `ClientStore` 与组合根里（`store.startPairingFromAddress` / `store.submitPairingCode`）：
+ * 本页不碰 `fetch`、不读地址栏、不写任何存储（`AGENTS.md` §6：平台能力只由更外层装配）。
+ * 配对码只经由 `PairingPanel` 的内存状态交给 store，不进入 URL 或任何存储。
  *
  * ## 页面不绘制外壳
  *

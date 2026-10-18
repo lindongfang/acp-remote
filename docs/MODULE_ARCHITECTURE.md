@@ -298,10 +298,10 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 Handshake envelope（信封 + 连接生命周期：认证前后连接字段规则、Phase 校验）
 Subscribe / Snapshot / Event / Ack
 ClientCommand / CommandAccepted / CommandRejected
-Pairing DTO
+Pairing DTO（设备短二维码 q2 编解码、claim/status、配对码 lookup、扫码取回 qr-lookup）
 ProtocolVersion / Feature negotiation
 Heartbeat（control.ping / control.pong）
-Connection error lifecycle（error body 与 36 个错误码，认证前后两种信封形状）
+Connection error lifecycle（error body 与 37 个错误码，认证前后两种信封形状）
 ```
 
 信封的 `body` 在传输层保持原文承载（`RawValue`），家族 body 由调用方显式解析——这条同时适用于已实现的家族与后续增量，`AGENTS.md` §4 的保真要求不允许中间经通用 DTO 往返。
@@ -683,7 +683,7 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 |---|---|
 | core | 状态转换、值对象、每会话串行、幂等、事务提交、owned/imported 分流和 fake ports |
 | acp-protocol | 官方 fixture、未知字段往返保真、扩展 payload、版本兼容 |
-| sync-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算、恶意输入；v1 信封（body 字节保真、认证阶段连接字段规则、未知 `type`/字段拒绝）；全部 18 个消息类型与 33 个事件视图的字段级边界、fixture 覆盖与类型化 body 往返；33 个视图夹具按 `viewDef` 投影到同一 event 类型；配对 HTTPS 载荷（二维码/claim/status 的常量与宽度、`canonicalOrigin` 的 origin 形状、approved 与 device/host 的对应关系）；三个漂移门禁（`type` 常量与 schema union 同源抽取、错误码与 registry 的 `(code, retryable)` 逐条相等、`views::VIEW_TYPES` 与 `event-views.schema.json` 的 `$defs` 逐条相等） |
+| sync-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算、恶意输入；v1 信封（body 字节保真、认证阶段连接字段规则、未知 `type`/字段拒绝）；全部 18 个消息类型与 33 个事件视图的字段级边界、fixture 覆盖与类型化 body 往返；33 个视图夹具按 `viewDef` 投影到同一 event 类型；配对 HTTPS 载荷（设备短二维码 q2 的 65 字节布局/旧 `#data=` 拒绝/共享向量、claim/status、配对码 lookup 与 qr-lookup 的常量与宽度、`canonicalOrigin` 的 origin 形状、approved 与 device/host 的对应关系）；三个漂移门禁（`type` 常量与 schema union 同源抽取、错误码与 registry 的 `(code, retryable)` 逐条相等、`views::VIEW_TYPES` 与 `event-views.schema.json` 的 `$defs` 逐条相等） |
 | node-link-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算；v1 信封与全部 29 个消息类型（连接字段规则、body 字节保真、类型化 body 往返、非法 body 分层拒绝）；配对 HTTPS 载荷；grant 词表与 `commands.json`、错误码与 registry、`MessageType` 与 schema union 三个漂移门禁 |
 | acpr-transcript | 长度前缀编解码往返、字段乱序/重复/缺字段拒绝、magic 与 `codecVersion` 校验；表驱动层的字段数量、tag 成员与定长宽度校验 |
 | acpr-wire | 值对象取值域（uuid/decimalString/timestamp/featureList/rawAcp 的正反用例）、`Nullable` 的「缺键报错 / null / 值」三态、`ExtraFields` 的未知字段值保真（含超出 u64 的整数字面量）、base64url 规范无填充口径 |

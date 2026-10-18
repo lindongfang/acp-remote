@@ -1,7 +1,7 @@
 //! Pairing v1 的 HTTPS payload（`schemas/sync/v1/pairing.schema.json`，`docs/SYNC_PROTOCOL.md` §7）。
 //!
-//! 这里只做 wire 形状与取值域校验：二维码载荷、claim/status 请求与响应、配对码 lookup 的请求与响应、
-//! HTTP 错误体。签名与 HMAC 的密码学验证属于 `identity-auth`；「一个设备身份只绑定一个 canonical
+//! 这里只做 wire 形状与取值域校验：claim/status 请求与响应、配对码 lookup 与扫码取回（qr-lookup）的
+//! 请求与响应、HTTP 错误体；新设备短二维码自身的 `q2` 载荷与地址编解码在 [`crate::device_qr`]。签名与 HMAC 的密码学验证属于 `identity-auth`；「一个设备身份只绑定一个 canonical
 //! origin」属于安全状态机，本模块只保证 `canonicalOrigin` 是合法的 origin 字面量、且不含路径、查询
 //! 或片段。配对码的派生、归一化与单次消耗属于 `identity-auth`/服务端，本模块只校验它的 wire 字符集与
 //! 长度（8 位 Crockford base32，可带一个 `-`）。
@@ -64,33 +64,6 @@ impl<'de> Deserialize<'de> for CanonicalOrigin {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
         Self::parse(&text).map_err(DeError::custom)
-    }
-}
-
-/// `pairingProtocol`：v1 只有 `acp-remote-pairing-v1` 一个取值。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PairingProtocolV1;
-
-impl PairingProtocolV1 {
-    pub const VALUE: &'static str = "acp-remote-pairing-v1";
-}
-
-impl Serialize for PairingProtocolV1 {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(Self::VALUE)
-    }
-}
-
-impl<'de> Deserialize<'de> for PairingProtocolV1 {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        if text != Self::VALUE {
-            return Err(DeError::custom(ValueError::Enumerated {
-                field: "pairingProtocol",
-                value: text,
-            }));
-        }
-        Ok(Self)
     }
 }
 
@@ -187,26 +160,6 @@ impl<'de> Deserialize<'de> for PairingStatus {
         let text = String::deserialize(deserializer)?;
         PairingStatus::from_str(&text).map_err(DeError::custom)
     }
-}
-
-/// `pairing.schema.json#/$defs/qrPayload`：二维码里编码的配对邀请。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct QrPayload {
-    #[serde(rename = "pairingProtocol")]
-    pub pairing_protocol: PairingProtocolV1,
-    #[serde(rename = "hostId")]
-    pub host_id: Uuid,
-    #[serde(rename = "hostPublicKey")]
-    pub host_public_key: Base64Url<65>,
-    #[serde(rename = "canonicalOrigin")]
-    pub canonical_origin: CanonicalOrigin,
-    #[serde(rename = "pairingId")]
-    pub pairing_id: Uuid,
-    #[serde(rename = "pairingSecret")]
-    pub pairing_secret: Base64Url<32>,
-    #[serde(rename = "expiresAt")]
-    pub expires_at: Timestamp,
 }
 
 /// `pairing.schema.json#/$defs/claimRequest`。
@@ -444,3 +397,22 @@ pub struct LookupResponse {
     #[serde(rename = "expiresAt")]
     pub expires_at: Timestamp,
 }
+
+/// `pairing.schema.json#/$defs/qrLookupRequest`：`POST /sync/v1/pairing/qr-lookup` 的请求体。
+///
+/// `qrToken` 是设备创建时独立生成的 32 字节扫码取回凭据（不是配对码、不是配对秘密）；
+/// 请求不携带 Origin 字段——来源由 HTTP `Origin` 头与配对登记的 canonical origin 比较。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QrLookupRequest {
+    #[serde(rename = "protocolVersion")]
+    pub protocol_version: ProtocolVersionV1,
+    #[serde(rename = "qrToken")]
+    pub qr_token: Base64Url<32>,
+}
+
+/// `pairing.schema.json#/$defs/qrLookupResponse`：扫码取回成功时的配对绑定。
+///
+/// 与配对码 lookup 的成功响应同形（七个字段），因为两者交付的是同一份配对资料；取回本身不推进
+/// 状态、不消耗网页配对码、不创建信任。
+pub type QrLookupResponse = LookupResponse;

@@ -323,16 +323,19 @@ impl EntropySource for ScriptedEntropy {
 fn colliding_code_regenerates_the_secret_until_unique() {
     let first_secret = vec![0x11u8; 32];
     let second_secret = vec![0x22u8; 32];
-    // `begin_pairing` 的熵序：server nonce(32) → request id(16) → secret(32)；第二次创建的第一个
-    // secret 与第一次相同（派生码必然碰撞），必须被丢弃并重新生成。
+    // `begin_pairing` 的熵序：server nonce(32) → request id(16) → secret(32) → 设备扫码凭据(32)；
+    // 第二次创建的第一个 secret 与第一次相同（派生码必然碰撞），必须被丢弃并重新生成，
+    // 因此碰撞那次不抽取扫码凭据（凭据在码去重之后生成）。
     let entropy = ScriptedEntropy::new(vec![
         vec![0x01u8; 32],
         vec![0x02u8; 16],
         first_secret.clone(),
+        vec![0x05u8; 32],
         vec![0x03u8; 32],
         vec![0x04u8; 16],
         first_secret,
         second_secret.clone(),
+        vec![0x06u8; 32],
     ]);
     let clock: Arc<dyn Clock> = FakeClock::new();
     let state_machine = Authority::new(

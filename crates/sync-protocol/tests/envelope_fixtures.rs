@@ -40,7 +40,9 @@ const EXPECTED_ENVELOPE_REJECTED: usize = 2;
 const EXPECTED_BODY_REJECTED: usize = 33;
 /// 非 WSS 的 HTTPS 载荷（配对）用例数；它们由 `tests/pairing_fixtures.rs` 覆盖。
 /// 变更 `pairing-code-web-entry`（WP1）新增 lookup 的 2 条正例与 6 条负例，故由 5 变为 13。
-const EXPECTED_SKIPPED_PAIRING: usize = 13;
+/// 变更 `device-pairing-qr-reference`（WP1）新增 qr-lookup 的 3 条正例与 3 条负例、并移除旧
+/// 设备二维码格式的正例 `valid/pairing-qr-payload.json`，故由 13 变为 18。
+const EXPECTED_SKIPPED_PAIRING: usize = 18;
 /// 只针对某个 **子模式**（`schemaPointer`）的载荷用例：它们不是一条完整的 WSS 消息，因此不经过
 /// 信封层。三类来源：acp 上游的片段（`fixtures/acp/v1/...`）、事件视图封闭 enum 与可选字段的
 /// 负例（`event-views.schema.json#/$defs/*`）、以及 `sync.cursor_invalid.details.reason` 的词表

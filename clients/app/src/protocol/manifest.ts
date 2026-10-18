@@ -125,6 +125,11 @@ export type FixtureCase = ValidFixtureCase | InvalidFixtureCase;
 export interface FixtureManifest {
   readonly schemaVersion: typeof MANIFEST_SCHEMA_VERSION;
   readonly cases: readonly FixtureCase[];
+  /**
+   * 设备短二维码的共享固定向量（相对 `fixtures/sync/v1/`）。它们不是 JSON Schema 样例，
+   * 由 Rust 与 TypeScript 的编解码测试共同消费；缺省表示没有登记。
+   */
+  readonly deviceQrVectors?: readonly string[];
 }
 
 /** 解析后的 fixture case：把相对路径都解析成仓库根的绝对路径。 */
@@ -163,6 +168,15 @@ function assertManifest(value: unknown, path: string): asserts value is FixtureM
   }
   if (!Array.isArray(record["cases"])) {
     throw new Error(`manifest.cases 不是数组：${path}`);
+  }
+  const deviceQrVectors = record["deviceQrVectors"];
+  if (deviceQrVectors !== undefined) {
+    if (
+      !Array.isArray(deviceQrVectors) ||
+      deviceQrVectors.some((entry) => typeof entry !== "string" || entry.length === 0)
+    ) {
+      throw new Error(`manifest.deviceQrVectors 必须是非空字符串数组：${path}`);
+    }
   }
   for (const [index, entry] of record["cases"].entries()) {
     if (typeof entry !== "object" || entry === null) {

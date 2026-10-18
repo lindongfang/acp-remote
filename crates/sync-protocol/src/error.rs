@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{Nullable, RawObject, Text, Uuid, ValueError};
 
-/// Sync v1 的错误码（36 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
+/// Sync v1 的错误码（37 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// `protocol.invalid_json`
@@ -52,6 +52,8 @@ pub enum ErrorCode {
     PairingConsumed,
     /// `pairing.code_invalid`
     PairingCodeInvalid,
+    /// `pairing.qr_invalid`
+    PairingQrInvalid,
     /// `sync.cursor_invalid`
     SyncCursorInvalid,
     /// `command.unsupported`
@@ -90,7 +92,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// 与 `compatibility/errors/v1/errors.json` 的 sync 列表逐条相等。
-    pub const ALL: [ErrorCode; 36] = [
+    pub const ALL: [ErrorCode; 37] = [
         ErrorCode::ProtocolInvalidJson,
         ErrorCode::ProtocolSchemaInvalid,
         ErrorCode::ProtocolMessageTooLarge,
@@ -110,6 +112,7 @@ impl ErrorCode {
         ErrorCode::PairingExpired,
         ErrorCode::PairingConsumed,
         ErrorCode::PairingCodeInvalid,
+        ErrorCode::PairingQrInvalid,
         ErrorCode::SyncCursorInvalid,
         ErrorCode::CommandUnsupported,
         ErrorCode::CommandNotFound,
@@ -167,6 +170,7 @@ impl ErrorCode {
             ErrorCode::PairingExpired => "pairing.expired",
             ErrorCode::PairingConsumed => "pairing.consumed",
             ErrorCode::PairingCodeInvalid => "pairing.code_invalid",
+            ErrorCode::PairingQrInvalid => "pairing.qr_invalid",
             ErrorCode::SyncCursorInvalid => "sync.cursor_invalid",
             ErrorCode::CommandUnsupported => "command.unsupported",
             ErrorCode::CommandNotFound => "command.not_found",

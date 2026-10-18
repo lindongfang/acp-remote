@@ -1,6 +1,7 @@
 # ACP Remote 身份与认证合同（`identity-auth`）
 
 > 状态：已定型并已落地（v1）。`identity-auth` 与 `identity-keystore` 两个 crate 均已实现（见 `README.md` 的 crate 表与 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.8/§4.12）；本文的入口签名、类型归属与端口形状与实现逐条对应。本合同**没有**合同漂移门禁（`scripts/check-contract-drift.mjs` 只覆盖 `CORE_PORTS_AND_STORAGE.md` §5/§7），因此靠「文档与实现同一变更内改动 + 独立 reviewer 核对 + 常驻测试」维持一致。
+> 版本：0.6（2026-10-18，`device-pairing-qr-reference` WP1，计划/待实现）：§4.3 增加 `QrToken` 扫码取回凭据的内存生命周期与资格规则，§5.1 登记 `Authority::lookup_pairing_by_qr_token`/`PairingQrLookup`/`PairingDraft.qr_token`。编码、服务端路由与状态机实现随 WP2 落地；本版本只冻结合同，不声称已实现）
 > 版本：0.5（2026-10-16：随 `pairing-model` 删除两套短验证码（SAS）与设备权限层。§4.4 改写为「为什么没有短验证码」；§4.1/§5.1/§6.1 与 §2 的类型清单、依赖矩阵按实现同步：`Sas`、`Authority::pairing_sas`、两个 SAS transcript 域、`expand_device_request`/`expand_pack`/`expand_preset` 与 `PACKS`/`PRESETS` 镜像、`PeerTrust.scopes`、`IdentityFact::Device.scopes`、`PairingStatusView.sas` 全部消失；设备配对的请求集合必须为空）
 > 版本：0.4（2026-09-25：随 `daemon-cli-and-local-admin` 切片 4 在 §7 第 7 条写入本节点 `nodeId` 的派生式与「不存在独立本地 `nodeId` 持久记录」的裁定，并登记「密钥轮换即换 `nodeId`」的代价与 §6.3 的对应关系）
 > 版本：0.3（2026-09-24：随 `identity-auth-and-keystore` 的独立 review 把定型块**对齐实现**。0.2 的「目标形状」里 §4.1 写的是入口直接返回 `PairingWrite`/`PairingClaimWrite`/`PairingSettlementWrite`，实现改为「入口返回领域值、调用方组装写集」（理由与代价见 §4.1 的定型说明）；同时补 `PeerTrust.host_binding`/`node_kind` 与三个握手入口签名、把 §2 清单里不存在的类型名（`HandshakeCompletion`/`ClaimVerification`/`SettlementRequest`）换成实现名，并把 `PairingTarget` 归回「已有并直接复用」）
@@ -200,7 +201,11 @@ impl ClaimedPairing {
 - `[决定]`（2026-10-18，`pairing-code-web-entry`）与 secret **同生同灭**的还有网页入口配对码：`PairingCode` 由 `derive_pairing_code(&PairingSecret)` 域分离派生（HMAC-SHA256、domain tag `acp-remote/pairing-code/v1`、取前 40 bit、8 位 Crockford base32），创建配对时随 `PairingDraft.code` 交给调用方（`device.pair.begin` 用它返回 `pairingCode`）。码只存在于 `identity-auth` 的内存查找表与一次性管理响应中，MUST NOT 新增 SQLite 字段、MUST NOT 从持久化摘要重建。`Authority` 在创建时把 `code -> PairingId` 放进与 secret 同一生命周期的映射；创建时若码与另一个仍持有 secret 的活跃配对碰撞，重新生成 secret/码直到唯一，不向用户报错。
 - 配对码查找 SHALL 只覆盖内存中仍持有 secret 的 active pairing。`Authority::consume_pairing_code(&PairingCode) -> Option<PairingCodeLookup>` 成功即**原子地**返回 `PairingCodeLookup { pairing, secret }` 并移除该码；`None` 是内存查找失败的唯一形状（码不存在或已被清除）。adapter MUST 把 `None` 与它自己的配对状态/过期/来源绑定检查失败**一起**收敛为同一个 `401`，不区分不存在、已过期、已认领、已使用、已消耗或来源不符。查找使用常数时间比较；它**不推进**配对状态，secret 仍可被 claim 一次。
 - 码映射随 §4.3 的 secret 清理路径一起移除：`due_pairings`/`unrecoverable_after_restart` 的过期清理、启动时的 `reset_memory`、`approved` 配对首次认证成功、`rejected` 到达原过期时间，MUST 同时清除 secret 与码；重启后不得凭 digest 恢复码或 secret。绕过 `Authority` 的持久化清理不算完成。
-- 二维码 fragment 与完整配对载荷读取后立即清除，不得进入日志或 analytics（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §14.1）。配对码同样 MUST NOT 进入日志、URL query、Cookie 或任何明文持久化字段；`PairingCode` 的 `Debug` 必须脱敏且**不实现 `Display`**，避免经格式化误入日志。
+- `[决定]`（2026-10-18，`device-pairing-qr-reference`）新增**扫码取回凭据** `QrToken`：设备配对创建时由密码学随机源独立生成 32 字节，与 `PairingSecret`、`PairingCode` 分别随机。`QrToken` 的 `Debug` 必须脱敏且**不实现 `Display`**；只存在于 `identity-auth` 的进程内反查表（`qrToken -> PairingId`）与一次性管理响应的 `pairingUrl` fragment 中，MUST NOT 新增 SQLite 字段、MUST NOT 从持久化摘要重建。创建时若凭据与另一个仍持有 secret 的活跃配对碰撞，重新生成直到唯一；一份凭据只绑定一个配对，不得跨配对共享。
+- 取回资格 SHALL 由**内存凭据存在 + 权威持久状态**共同决定：`Authority::lookup_pairing_by_qr_token(&QrToken) -> Option<PairingQrLookup>` 返回 `PairingQrLookup { pairing, secret }` 时**不消耗**凭据、不推进状态；adapter 仍必须确认该配对为 `created`、未过期、未被本机拒绝/失效，且来源/Host 与登记绑定一致。任何一项不满足都收敛为同一个 `401 pairing.qr_invalid`，不泄露具体差异。服务端做**最终交付判定**时优先使用 `Authority::retrieve_qr_material(&PairingRecord, &QrToken)`：身份层在凭据反查之外一并完成设备目标、记录标识、`created`、未失效、未过期与摘要一致性检查（无副作用，失败统一 `None`），调用方只需先做来源/Host 绑定校验并把从存储读到的记录传入；入口登记见 §5.1。节点配对不生成扫码凭据。
+- 凭据随 §4.3 的 secret 清理路径一起移除：创建替换旧材料、`reset_memory`、过期清理、证明失败失效、拒绝、成功认领与首次认证成功时都必须删除反查项。成功认领这一项的入口是 `Authority::close_qr_retrieval(&PairingId)`：认领**提交成功后**由调用方调用，只移除反查条目、**保留** secret（见 §5.1）。`rejected` 为可靠状态轮询保留 secret **不恢复**取回资格；重启后旧凭据不可用。认领成功后即使保留 secret 做幂等重试，索引也不得重新开放。
+- 取回成功必须能对应认领生效前的一次权威读取：认领提交后**开始**的取回不可成功；已在认领前获准的在途响应无法撤回。该先后由身份层与存储边界保证，不能用「进程内还有 secret」替代持久状态检查；权威状态检查由 `Authority::retrieve_qr_material` 承担（§5.1），关闭后的索引不因幂等重试重新开放。
+- 二维码 fragment 与扫码取回凭据读取后立即清除，不得进入日志或 analytics（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §14.1）。配对码同样 MUST NOT 进入日志、URL query、Cookie 或任何明文持久化字段；`PairingCode` 的 `Debug` 必须脱敏且**不实现 `Display`**，避免经格式化误入日志。
 - Daemon 重启不能凭 digest 恢复 secret：启动时终结「未确认且无法继续验密」的配对，客户端重新发起；已批准的信任记录保留，正常重连不要求重新配对（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.3）。
 
 ### 4.4 为什么没有短验证码（SAS）
@@ -342,6 +347,14 @@ pub struct PeerTrust {
   `Authority::consume_pairing_code(&PairingCode) -> Option<PairingCodeLookup>`（成功即**原子地**消耗该码；`None` 是内存查找失败的唯一形状，adapter 必须把它与配对状态/过期/来源绑定检查失败一起收敛为同一个 401，不区分不存在、已过期、已认领、已使用、已消耗或来源不符；不推进配对状态）、
   `PairingDraft.code: PairingCode`（创建配对时随 draft 给出，`device.pair.begin` 用 `draft.code.as_str()` 返回 `pairingCode`；不进入持久写集）。
   配对码查找表与 secret 同生同灭（§4.3），创建时的码碰撞按 §4.3 重新生成 secret/码直到唯一。
+- `[决定]`（2026-10-18，`device-pairing-qr-reference`，身份层入口随 WP2 已实现）扫码取回凭据的入口与配对码并列登记：
+  `QrToken`（32 字节随机值；`Debug` 脱敏、无 `Display`）、
+  `PairingQrLookup { pairing: PairingId, secret: PairingSecret }`（取回成功返回的完整材料）、
+  `Authority::lookup_pairing_by_qr_token(&QrToken) -> Option<PairingQrLookup>`（**不消耗**凭据；`None` 与配对状态/来源绑定检查失败一起收敛为 `401 pairing.qr_invalid`）、
+  `PairingDraft.qr_token: Option<QrToken>`（创建配对时随 draft 给出；`device.pair.begin` 用 `Some` 值生成短 `pairingUrl`。**设备配对为 `Some`，节点配对为 `None`**；只随 draft 交给调用方，不进入持久写集）、
+  `Authority::retrieve_qr_material(&PairingRecord, &QrToken) -> Option<PairingQrLookup>`（**服务端做最终交付判定时优先用它**：调用方先完成来源/Host 与身份绑定校验，并把从存储读到的记录传入；只有目标为设备、记录标识与凭据绑定的配对一致、状态为 `created`、未被内存标记失效、未过期，且记录摘要仍与内存 secret 一致时才返回材料。**无副作用**：不消耗凭据、不消耗网页码、不推进状态、不改写 `expires_at`；重复调用返回同一份材料。任一条件不满足统一返回 `None`，adapter 必须把 `None` 与自己那侧的绑定检查失败一起收敛为同一个 `401 pairing.qr_invalid`）、
+  `Authority::close_qr_retrieval(&PairingId) -> bool`（**认领提交成功后**由调用方关闭：只移除反查条目、**保留** pairing secret，使幂等 claim/status 仍可继续；返回 `false` 表示已没有可取回的凭据（从未创建、已清理或已关闭），关闭是幂等的，调用方不得把它当作失败；关闭后同一入口不会重新开放）。
+  扫码凭据与配对秘密分别生成、同生同灭；节点配对不产生该入口（§4.3）。
 - `[决定]`（2026-10-13）上列诊断入口的两处**生产**用途由 `server::sync::pairing` 落地并在本节登记（其余
   用途不变，仍只供回归测试与本地诊断）：`has_secret` 用于 status 端点的 secret 生命周期分支（本机已不
   持有其 secret 时终态配对回 200、非终态回 401，见 §13.3 的同款口径）；`failure_count` 用于把「第 5 次

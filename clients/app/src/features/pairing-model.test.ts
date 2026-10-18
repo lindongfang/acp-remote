@@ -4,23 +4,22 @@
  * ## 覆盖什么、不覆盖什么
  *
  * 覆盖：`PairingPageModel` 的固定呈现与失败分类、`ClientStore` 在**注入替身接线**下的
- * 完整行为——二维码路径从地址片段进入、配对码入口经 lookup 进入同一套流程、无载荷不发请求、
- * 结构校验不过时明确失败、
- * 到期定时器停止轮询并进入过期页、已批准时用响应的主机材料写已配对记录、载荷（含
- * `pairingSecret`）不进公开状态。
+ * 完整行为——配对码入口经 lookup 进入 claim/轮询、误扫设备二维码只显示固定指引且不发请求、
+ * 旧设备 `data=` 明确停用、node-link 只读展示、到期定时器停止轮询并进入固定失败、
+ * 已批准时用响应的主机材料写已配对记录、载荷（含 `pairingSecret`）不进公开状态。
  *
  * **不覆盖**：真实的 `fetch`、真实的地址栏（`location`/`history.replaceState`）、真实的本地缓存。
  * 那些属于 `src/composition.ts` 的装配面，由 `src/composition.test.ts` 用同一个仓库跑真装配来验。
  *
  * ## 判别力来源
  *
- * - 主机公钥取自**已批准响应**：二维码里的那份与响应里的那份刻意不同，抄错来源会让
+ * - 主机公钥取自**已批准响应**：lookup 里的那份与响应里的那份刻意不同，抄错来源会让
  *   「记录三字段」这条断言变红。
- * - 「不尽力解析」：`readQrPayload` 抛错时断言 claim / poll / 定时器三处计数都还是 0。
- * - 「两类入口互不混淆」：类型不一致时同样断言三类计数为 0，且固定文案说清是哪一类。
+ * - 「误扫不发请求」：`q2=` / `data=` 两种片段都断言 lookup / claim / poll / 定时器计数为 0，
+ *   且页面模型里没有载荷内容。
+ * - 「类型互不混淆」：node-link 入口读到设备载荷时断言三类计数为 0，且固定文案说清是哪一类。
  * - 「到期即停」：让按 `expiresAt` 安排的定时器触发，断言轮询与到期定时器都被取消、没有任何
- *   记录落盘；过期呈现按入口分流——二维码入口落到 `expired`「配对地址已过期」，配对码入口
- *   落到 S6「配对码不对或已过期，请重新生成配对码」。
+ *   记录落盘，且呈现固定为「配对码不对或已过期，请重新生成配对码」。
  * - 「环境前置条件」：注入非安全上下文 / 跨来源两条环境事实，断言各自落到**可区分**的
  *   固定呈现，且文案与错误对象都不含一次性配对秘密。
  */
@@ -60,7 +59,7 @@ import {
   publicErrorForTransportFailure,
 } from "./pairing-model";
 import type { PairedHostRecord } from "../sync-client";
-import type { NodeLinkQrPayload, PairingQrPayload, PublicError } from "../protocol";
+import type { NodeLinkQrPayload, PairingLookupResponse, PublicError } from "../protocol";
 
 const ORIGIN = "https://work-pc.example.ts.net";
 const HOST_ID = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
@@ -78,8 +77,9 @@ const APPROVED_HOST_PUBLIC_KEY = "BAYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBg
 /** 用例时钟：二维码在这个时刻之后到期（倒计时仍有余量）。 */
 const NOW_MS = Date.parse("2026-10-17T23:00:00.000Z");
 
-const QR: PairingQrPayload = {
-  pairingProtocol: "acp-remote-pairing-v1",
+/** 一次配对码 lookup 的成功响应（`PairingLookupResponse`）：与 claim/轮询使用的绑定同形。 */
+const QR: PairingLookupResponse = {
+  protocolVersion: 1,
   hostId: HOST_ID,
   hostPublicKey: QR_HOST_PUBLIC_KEY,
   canonicalOrigin: ORIGIN,
@@ -89,7 +89,7 @@ const QR: PairingQrPayload = {
 };
 
 /** 一个很快就会到期的 sync 载荷：用来驱动仓库的到期定时器。 */
-const SOON_EXPIRING_QR: PairingQrPayload = {
+const SOON_EXPIRING_QR: PairingLookupResponse = {
   ...QR,
   expiresAt: new Date(NOW_MS + 60_000).toISOString(),
 };
@@ -149,7 +149,7 @@ interface ScheduledTask {
 
 /** 配对接线替身：每一次调用都记账，并按脚本返回 claim / poll 的结果。 */
 class RecordingPairingWiring implements PairingWiring {
-  readonly claims: PairingQrPayload[] = [];
+  readonly claims: PairingLookupResponse[] = [];
   readonly polls: { readonly pairingId: string; readonly nonce: string }[] = [];
   readonly written: PairedHostRecord[] = [];
   readonly onPairedRecords: PairedHostRecord[] = [];
@@ -158,21 +158,18 @@ class RecordingPairingWiring implements PairingWiring {
   readonly scheduled: ScheduledTask[] = [];
   /** 每次 `schedule` 的时长（含到期与轮询）。 */
   readonly delays: number[] = [];
-  /** 地址片段里待读取的内容；读一次即清空（真实实现是读取后立即清除）。 */
+  /** 地址片段里待读取的原始内容（含 `q2=` / `data=` 标记）；读一次即清空（真实实现是读取后立即清除）。 */
   fragment: string | null = null;
   /** 交给 `readQrPayload` 的原文：证明片段内容真的被读到了。 */
   readText: string | null = null;
-  /** `readQrPayload` 的返回值（缺省是 sync 的 `QR`）：用来验「载荷类型与入口声明的类型不一致」。 */
+  /** `readQrPayload` 的返回值（缺省是设备载荷的分类结果）：用来验「载荷类型与入口声明的类型不一致」。 */
   readResult: PairingQrRead | null = null;
   readError: unknown = null;
   /** 配对码 lookup 的请求留痕与脚本化结果。 */
   readonly lookups: { readonly canonicalOrigin: string; readonly pairingCode: string }[] = [];
-  lookupQr: PairingQrPayload | null = null;
+  lookupQr: PairingLookupResponse | null = null;
   lookupResult: PairingLookupOutcome | null = null;
   lookupThrows: unknown = null;
-  /** `checkCodeEntryHost` 的输入与返回（design D5）。 */
-  readonly codeEntryHosts: { readonly canonicalOrigin: string; readonly hostPublicKey: string }[] = [];
-  codeEntryHostError: PublicError | null = null;
   claimError: PublicError | null = null;
   /** `claim` **挂起**：一个受控的 deferred，让到期定时器有机会先跑完（`claim` 在途时到期）。 */
   claimGate: Promise<unknown> | null = null;
@@ -190,21 +187,21 @@ class RecordingPairingWiring implements PairingWiring {
     readQrPayload: (text: string): PairingQrRead => {
       this.readText = text;
       if (this.readError !== null) throw this.readError;
-      return this.readResult ?? { kind: "sync", qr: QR };
+      return this.readResult ?? { kind: "sync" };
     },
     lookup: async (input: { readonly canonicalOrigin: string; readonly pairingCode: string }) => {
       this.lookups.push({ canonicalOrigin: input.canonicalOrigin, pairingCode: input.pairingCode });
       if (this.lookupThrows !== null) throw this.lookupThrows;
       return this.lookupResult ?? { kind: "ok", qr: this.lookupQr ?? QR };
     },
-    claim: async (input: { readonly qr: PairingQrPayload; readonly canonicalOrigin: string }) => {
+    claim: async (input: { readonly qr: PairingLookupResponse; readonly canonicalOrigin: string }) => {
       this.order.push("claim");
       this.claims.push(input.qr);
       if (this.claimGate !== null) await this.claimGate;
       if (this.claimThrows !== null) throw this.claimThrows;
       return this.claimError;
     },
-    poll: async (input: { readonly qr: PairingQrPayload; readonly requestNonce: string }) => {
+    poll: async (input: { readonly qr: PairingLookupResponse; readonly requestNonce: string }) => {
       this.order.push("poll");
       this.polls.push({ pairingId: input.qr.pairingId, nonce: input.requestNonce });
       if (this.pollThrows !== null) throw this.pollThrows;
@@ -267,14 +264,6 @@ class RecordingPairingWiring implements PairingWiring {
     return this.origin;
   }
 
-  async checkCodeEntryHost(input: {
-    readonly canonicalOrigin: string;
-    readonly hostPublicKey: string;
-  }): Promise<PublicError | null> {
-    this.codeEntryHosts.push(input);
-    return this.codeEntryHostError;
-  }
-
   /** 是否有已安排的轮询（`PAIRING_POLL_INTERVAL_MS` 那一条）。 */
   get hasScheduledPoll(): boolean {
     return this.scheduled.some((entry) => entry.delayMs === PAIRING_POLL_INTERVAL_MS);
@@ -324,7 +313,7 @@ function storeWithPairing(pairing: PairingWiring | undefined): ClientStore {
   });
 }
 
-/** 让仓库从「地址片段」进入配对流程：这是页面唯一的入口。 */
+/** 让仓库从「地址片段」进入配对流程：本仓库只把它用于 node-link 入口。 */
 async function enterFromAddress(
   store: ClientStore,
   wiring: RecordingPairingWiring,
@@ -334,18 +323,26 @@ async function enterFromAddress(
   await store.startPairingFromAddress(kind);
 }
 
-describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () => {
-  it("合法地址：claim → 轮询 → 已配对；记录三字段，写入绝对截止时间", async () => {
+/** 浏览器唯一的配对入口：裸 `/pair` → 提交 8 位码 → lookup → claim。 */
+async function enterByCode(store: ClientStore, code = "ABCD-EFGH"): Promise<void> {
+  await store.startPairingFromAddress("sync");
+  await store.submitPairingCode(code);
+}
+
+describe("配对码链路：lookup → 认领 → 轮询 → 已配对", () => {
+  it("合法配对码：claim → 轮询 → 已配对；记录三字段，写入绝对截止时间", async () => {
     const wiring = new RecordingPairingWiring();
     wiring.results = [{ kind: "pending_confirmation" }, APPROVED];
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
     const claiming = store.pairingPage();
     expect(claiming.phase).toBe("claiming");
     expect(claiming.presentation.kind).toBe("progress");
     expect(claiming.presentation.countdown).toBe(true);
     expect(claiming.expiresAtMs).toBe(Date.parse(QR.expiresAt));
+    // 码只发往同源 lookup，且只发一次。
+    expect(wiring.lookups).toEqual([{ canonicalOrigin: ORIGIN, pairingCode: "ABCD-EFGH" }]);
     // 还没批准：状态机不动（仍是未配对），也就不该拿去连接。
     expect(store.state.connection.state).toBe("unpaired");
     // 到期回调 + 轮询按约定节奏安排：给一个窗口，而不是立刻打服务端。
@@ -366,8 +363,8 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     await wiring.runScheduledPoll();
 
     // 记录三字段：主机标识、主机公钥（取自**已批准响应**）、规范化来源。
-    // 反例：抄二维码里的公钥（`QR.hostPublicKey` 与下面那条断言里的 `APPROVED_HOST_PUBLIC_KEY`
-    // 刻意不同）、或只写 `deviceId` 的旧口径 → 这条断言变红。
+    // 反例：抄 lookup 里的公钥（`QR.hostPublicKey` 与下面那条断言里的
+    // `APPROVED_HOST_PUBLIC_KEY` 刻意不同）、或只写 `deviceId` 的旧口径 → 这条断言变红。
     expect(wiring.written).toEqual([
       { hostId: HOST_ID, publicKeyBase64Url: APPROVED_HOST_PUBLIC_KEY, canonicalOrigin: ORIGIN },
     ]);
@@ -390,21 +387,23 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     expect(wiring.scheduled).toHaveLength(0);
   });
 
-  it("到期定时器触发：停止轮询、进入过期页、不落盘任何记录", async () => {
+  it("到期定时器触发：停止轮询、固定 S6、不落盘任何记录", async () => {
     const wiring = new RecordingPairingWiring();
-    wiring.readResult = { kind: "sync", qr: SOON_EXPIRING_QR };
+    wiring.lookupQr = SOON_EXPIRING_QR;
     wiring.results = [{ kind: "pending_confirmation" }];
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
     expect(wiring.hasScheduledPoll).toBe(true);
 
     await wiring.runExpiry();
 
     const page = store.pairingPage();
-    expect(page.phase).toBe("expired");
-    expect(page.error?.code).toBe("pairing.expired");
-    expect(page.presentation.title).toBe("配对地址已过期");
+    // 配对码入口只有一种过期呈现：固定 S6，不显示服务端细节。
+    expect(page.phase).toBe("failed");
+    expect(page.failure).toBe("code_invalid");
+    expect(page.error?.code).toBe("pairing.code_invalid");
+    expect(page.presentation.title).toBe("配对码不对或已过期，请重新生成配对码");
     // 反例：到期只改页面状态却没取消轮询 → 这里会留下一条 poll 定时器。
     expect(wiring.hasScheduledPoll).toBe(false);
     expect(wiring.scheduled).toHaveLength(0);
@@ -412,9 +411,9 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     expect(store.state.connection.state).toBe("unpaired");
   });
 
-  it("claim 在途时到期：迟到的 claim 失败不覆盖 expired，也不落盘、不建立连接", async () => {
+  it("claim 在途时到期：迟到的 claim 失败不覆盖固定的 S6，也不落盘、不建立连接", async () => {
     const wiring = new RecordingPairingWiring();
-    wiring.readResult = { kind: "sync", qr: SOON_EXPIRING_QR };
+    wiring.lookupQr = SOON_EXPIRING_QR;
     // claim 挂起：先不返回，让到期定时器先收口，再让这次 claim 失败。
     let rejectClaim!: (reason: unknown) => void;
     wiring.claimGate = new Promise<unknown>((_resolve, reject) => {
@@ -422,25 +421,25 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     });
     const store = storeWithPairing(wiring);
 
-    const entering = enterFromAddress(store, wiring);
+    const entering = enterByCode(store);
     await wiring.flush();
     expect(store.pairingPage().phase).toBe("claiming");
     expect(wiring.claims).toHaveLength(1);
 
-    // 到期定时器先跑：会话结束、页面落到 expired。
+    // 到期定时器先跑：会话结束、页面落到固定的「配对码不对或已过期」。
     await wiring.runExpiry();
-    expect(store.pairingPage().phase).toBe("expired");
+    expect(store.pairingPage().phase).toBe("failed");
 
-    // 迟到的 claim 失败（通用传输失败的码）不得把页面从 expired 改回 failed。
+    // 迟到的 claim 失败（通用传输失败的码）不得把页面从 S6 改回「请求未能完成」。
     rejectClaim(new Error("Failed to fetch"));
     await entering;
 
     const page = store.pairingPage();
-    expect(page.phase).toBe("expired");
-    expect(page.error?.code).toBe("pairing.expired");
-    expect(page.presentation.title).toBe("配对地址已过期");
-    // 反例：没有会话空值保护 → 页面会被覆盖成 `failed` / `request_failed`，上面三条断言变红。
-    expect(page.failure).toBeNull();
+    expect(page.phase).toBe("failed");
+    expect(page.failure).toBe("code_invalid");
+    expect(page.error?.code).toBe("pairing.code_invalid");
+    expect(page.presentation.title).toBe("配对码不对或已过期，请重新生成配对码");
+    // 反例：没有会话空值保护 → 页面会被覆盖成 `request_failed`，上面三条断言变红。
     expect(wiring.written).toHaveLength(0);
     expect(wiring.onPairedRecords).toHaveLength(0);
     expect(store.state.connection.state).toBe("unpaired");
@@ -463,7 +462,7 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     ];
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
     await wiring.runScheduledPoll();
 
     const page = store.pairingPage();
@@ -479,16 +478,17 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     expect(wiring.scheduled).toHaveLength(0);
   });
 
-  it("claim 被拒为已过期：落到 expired 呈现，不再轮询、也不写记录", async () => {
+  it("claim 被拒为已过期：落到固定 S6 呈现，不再轮询、也不写记录", async () => {
     const wiring = new RecordingPairingWiring();
-    wiring.claimError = { code: "pairing.expired", message: "这次配对二维码已过期。", retryable: false, details: {} };
+    wiring.claimError = { code: "pairing.expired", message: "这次配对已过期。", retryable: false, details: {} };
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
 
     const page = store.pairingPage();
-    expect(page.phase).toBe("expired");
-    expect(page.presentation.title).toBe("配对地址已过期");
+    expect(page.phase).toBe("failed");
+    expect(page.failure).toBe("code_invalid");
+    expect(page.presentation.title).toBe("配对码不对或已过期，请重新生成配对码");
     expect(wiring.scheduled).toHaveLength(0);
     expect(wiring.written).toHaveLength(0);
   });
@@ -503,7 +503,7 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     };
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
 
     const page = store.pairingPage();
     expect(page.phase).toBe("consumed");
@@ -516,7 +516,7 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     wiring.claimThrows = new OriginMismatchError();
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
 
     const page = store.pairingPage();
     expect(page.phase).toBe("failed");
@@ -535,7 +535,7 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     wiring.pollThrows = new Error("Failed to fetch");
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
     await wiring.runScheduledPoll();
 
     const page = store.pairingPage();
@@ -554,7 +554,7 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     wiring.writeError = new Error("QuotaExceededError");
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
     await wiring.runScheduledPoll();
 
     const page = store.pairingPage();
@@ -571,7 +571,7 @@ describe("配对链路：地址片段 → 认领 → 轮询 → 已配对", () =
     wiring.onPairedError = new Error("Failed to fetch");
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
     await wiring.runScheduledPoll();
 
     expect(wiring.written).toEqual([
@@ -631,23 +631,6 @@ describe("配对链路：入口与固定呈现", () => {
     expect(wiring.claims).toHaveLength(0);
   });
 
-  it("片段只读一次：会话进行中再次进入不覆盖状态", async () => {
-    const wiring = new RecordingPairingWiring();
-    wiring.results = [{ kind: "pending_confirmation" }];
-    const store = storeWithPairing(wiring);
-
-    await enterFromAddress(store, wiring);
-    expect(wiring.readText).toBe("data=fixture");
-    expect(store.pairingPage().phase).toBe("claiming");
-
-    await store.startPairingFromAddress("sync");
-
-    expect(store.pairingPage().phase).toBe("claiming");
-    expect(wiring.claims).toHaveLength(1);
-    // 第二次没有再去读片段（否则会拿到空片段并误切到无载荷）。
-    expect(wiring.readText).toBe("data=fixture");
-  });
-
   it("未装配配对链路：明确失败，而不是静默无操作", async () => {
     const store = storeWithPairing(undefined);
 
@@ -660,50 +643,99 @@ describe("配对链路：入口与固定呈现", () => {
     expect(page.error?.message).toContain("配对链路未装配");
   });
 
-  it("非法内容明确失败且不发任何请求（三种失败形态各自分类）", async () => {
-    const cases = [
-      {
-        name: "JSON 非法",
-        error: new PairingQrInvalidError("protocol.invalid_json", "二维码内容不是 JSON 对象"),
-        code: "protocol.invalid_json",
-        failure: "unrecognized",
-      },
-      {
-        name: "协议版本不符",
-        error: new PairingQrInvalidError("protocol.schema_invalid", "二维码协议版本不匹配"),
-        code: "protocol.schema_invalid",
-        failure: "unrecognized",
-      },
-      {
-        name: "打开时已过期",
-        error: new PairingQrInvalidError("pairing.expired", "二维码已过期"),
-        code: "pairing.expired",
-        failure: null,
-      },
-    ] as const;
+  it("误扫新设备短二维码：清除后只显示固定 App 指引，不读载荷、不发请求", async () => {
+    const wiring = new RecordingPairingWiring();
+    wiring.fragment = "q2=fixture-payload";
+    const store = storeWithPairing(wiring);
 
-    for (const scenario of cases) {
-      const wiring = new RecordingPairingWiring();
-      wiring.readError = scenario.error;
-      const store = storeWithPairing(wiring);
+    await store.startPairingFromAddress("sync");
 
-      await enterFromAddress(store, wiring);
+    const page = store.pairingPage();
+    expect(page.phase).toBe("device_qr_app_only");
+    expect(page.presentation.kind).toBe("info");
+    expect(page.presentation.title).toBe("请在 ACP Remote App 内扫码");
+    expect(page.presentation.lede).toContain("请在 ACP Remote App 内扫码，或返回网页使用配对码");
+    // 不读载荷：组合根只做了清除与类型前缀判断。
+    expect(wiring.readText).toBeNull();
+    expect(wiring.lookups).toHaveLength(0);
+    expect(wiring.claims).toHaveLength(0);
+    expect(wiring.polls).toHaveLength(0);
+    expect(wiring.scheduled).toHaveLength(0);
+    // 片段内容不进公开状态。
+    expect(JSON.stringify(store.state)).not.toContain("fixture-payload");
+  });
 
-      const page = store.pairingPage();
-      if (scenario.code === "pairing.expired") {
-        expect(page.phase, scenario.name).toBe("expired");
-        expect(page.presentation.title, scenario.name).toBe("配对地址已过期");
-      } else {
-        expect(page.phase, scenario.name).toBe("failed");
-        expect(page.failure, scenario.name).toBe(scenario.failure);
-        expect(page.presentation.title, scenario.name).toBe("无法识别这个地址");
-      }
-      expect(page.error?.code, scenario.name).toBe(scenario.code);
-      // 反例：尽力解析（补字段、放过版本）会走到 claim → 这三处的计数会不是 0。
-      expect(wiring.claims, scenario.name).toHaveLength(0);
-      expect(wiring.polls, scenario.name).toHaveLength(0);
-      expect(wiring.scheduled, scenario.name).toHaveLength(0);
-    }
+  it("node-link 入口误扫设备 q2：同样只显示固定 App 指引，不发请求", async () => {
+    const wiring = new RecordingPairingWiring();
+    wiring.fragment = "q2=fixture-payload";
+    const store = storeWithPairing(wiring);
+
+    await store.startPairingFromAddress("node-link");
+
+    const page = store.pairingPage();
+    expect(page.phase).toBe("device_qr_app_only");
+    expect(page.kind).toBe("node-link");
+    expect(wiring.readText).toBeNull();
+    expect(wiring.lookups).toHaveLength(0);
+    expect(wiring.claims).toHaveLength(0);
+    expect(wiring.polls).toHaveLength(0);
+    expect(wiring.scheduled).toHaveLength(0);
+  });
+
+  it("旧设备 data=：清除后提示已停用；不解析设备字段、不发请求", async () => {
+    const wiring = new RecordingPairingWiring();
+    wiring.readResult = { kind: "sync" };
+    wiring.fragment = `data=${QR_SECRET}`;
+    const store = storeWithPairing(wiring);
+
+    await store.startPairingFromAddress("sync");
+
+    const page = store.pairingPage();
+    expect(page.phase).toBe("legacy_device_qr_unsupported");
+    expect(page.presentation.title).toBe("设备二维码旧格式已停用");
+    expect(page.error?.code).toBe("protocol.schema_invalid");
+    // 只做类型分类，不解析字段；没有 claim / poll / 定时器。
+    expect(wiring.readText).toBe(`data=${QR_SECRET}`);
+    expect(wiring.claims).toHaveLength(0);
+    expect(wiring.polls).toHaveLength(0);
+    expect(wiring.scheduled).toHaveLength(0);
+    // 片段里的秘密（这里借用 QR_SECRET 作为载荷文本）不进页面或公开状态。
+    expect(JSON.stringify(page)).not.toContain(QR_SECRET);
+    expect(JSON.stringify(store.state)).not.toContain(QR_SECRET);
+  });
+
+  it("旧设备 data= 分类失败：仍按「已停用」处理，不发请求", async () => {
+    const wiring = new RecordingPairingWiring();
+    wiring.readError = new PairingQrInvalidError("protocol.invalid_json", "二维码内容不是 JSON 对象");
+    wiring.fragment = "data=not-json";
+    const store = storeWithPairing(wiring);
+
+    await store.startPairingFromAddress("sync");
+
+    const page = store.pairingPage();
+    expect(page.phase).toBe("legacy_device_qr_unsupported");
+    expect(wiring.claims).toHaveLength(0);
+    expect(wiring.polls).toHaveLength(0);
+    expect(wiring.scheduled).toHaveLength(0);
+  });
+
+  it("/pair 的 data= 是 node-link 载荷：专用入口不匹配文案，不发请求", async () => {
+    const wiring = new RecordingPairingWiring();
+    wiring.readResult = { kind: "node-link", qr: NODE_LINK_QR };
+    wiring.fragment = "data=fixture";
+    const store = storeWithPairing(wiring);
+
+    await store.startPairingFromAddress("sync");
+
+    const page = store.pairingPage();
+    expect(page.phase).toBe("failed");
+    expect(page.failure).toBe("kind_mismatch");
+    expect(page.presentation.title).toBe("这不是本入口的配对地址");
+    expect(page.presentation.lede).toContain("node-link");
+    expect(wiring.claims).toHaveLength(0);
+    expect(wiring.polls).toHaveLength(0);
+    expect(wiring.scheduled).toHaveLength(0);
+    expect(JSON.stringify(store.state)).not.toContain(QR_SECRET);
   });
 
   it("任意异常文本不透传：失败文案不含不可控内容（可能带着载荷片段）", () => {
@@ -711,7 +743,7 @@ describe("配对链路：入口与固定呈现", () => {
     expect(error.code).toBe("protocol.schema_invalid");
     expect(error.message).not.toContain(QR_SECRET);
     expect(error.details).toEqual({});
-    // 过期码原样保留，由 `applyPairingFailure` 落到 expired。
+    // 过期码原样保留，由 `applyPairingFailure` 落到固定的 S6 呈现。
     const expired = publicErrorForQrInput(new PairingQrInvalidError("pairing.expired", "二维码已过期"));
     expect(expired.code).toBe("pairing.expired");
   });
@@ -772,10 +804,6 @@ describe("配对码入口：S0 → lookup → 同一套 claim/轮询（design D6
     expect(claiming.expiresAtMs).toBe(Date.parse(QR.expiresAt));
     expect(claiming.host).toEqual({ address: ORIGIN, hostId: HOST_ID });
     expect(wiring.claims).toEqual([QR]);
-    // 首次信任检查拿到的就是 lookup 返回的公钥（design D5）。
-    expect(wiring.codeEntryHosts).toEqual([
-      { canonicalOrigin: ORIGIN, hostPublicKey: QR.hostPublicKey },
-    ]);
     expect(wiring.delays[0]).toBe(Math.max(0, Date.parse(QR.expiresAt) - NOW_MS));
 
     await wiring.runScheduledPoll();
@@ -856,33 +884,9 @@ describe("配对码入口：S0 → lookup → 同一套 claim/轮询（design D6
     expect(wiring.scheduled).toHaveLength(0);
   });
 
-  it("同源已有不同主机公钥：失败关闭，不 claim、不覆盖记录（design D5）", async () => {
+  it("配对码入口倒计时归零：固定呈现「配对码不对或已过期」（S6）", async () => {
     const wiring = new RecordingPairingWiring();
-    wiring.codeEntryHostError = {
-      code: "auth.host_mismatch",
-      message: "同一来源已登记过另一把主机公钥",
-      retryable: false,
-      details: {},
-    };
-    const store = storeWithPairing(wiring);
-    await store.startPairingFromAddress("sync");
-
-    await store.submitPairingCode("ABCD-EFGH");
-
-    const page = store.pairingPage();
-    expect(page.phase).toBe("failed");
-    // 主机身份变化是独立失败类别：来源没变，不得复用「这个地址属于另一台电脑」的口径。
-    expect(page.failure).toBe("host_identity_changed");
-    expect(page.error?.code).toBe("auth.host_mismatch");
-    expect(page.presentation.title).toBe("这台电脑的主机身份已变化");
-    expect(page.presentation.title).not.toBe("这个地址属于另一台电脑");
-    expect(wiring.claims).toHaveLength(0);
-    expect(wiring.written).toHaveLength(0);
-  });
-
-  it("配对码入口倒计时归零：固定呈现「配对码不对或已过期」，不是「配对地址已过期」（S6）", async () => {
-    const wiring = new RecordingPairingWiring();
-    // lookup 返回一个很快到期的绑定：到期只能由页面按绝对时间推进（与二维码入口同一条定时器）。
+    // lookup 返回一个很快到期的绑定：到期只能由页面按绝对时间推进。
     wiring.lookupQr = SOON_EXPIRING_QR;
     wiring.results = [{ kind: "pending_confirmation" }];
     const store = storeWithPairing(wiring);
@@ -896,7 +900,7 @@ describe("配对码入口：S0 → lookup → 同一套 claim/轮询（design D6
     await wiring.runExpiry();
 
     const page = store.pairingPage();
-    // 反例：仍走 `applyPairingFailure` 的二维码分支 → 阶段是 `expired`、标题「配对地址已过期」。
+    // 反例：若过期仍保留「配对地址已过期」的分流 → 标题与阶段都会变红。
     expect(page.phase).toBe("failed");
     expect(page.failure).toBe("code_invalid");
     expect(page.presentation.title).toBe("配对码不对或已过期，请重新生成配对码");
@@ -982,9 +986,9 @@ describe("两类配对入口互不混淆（design D2/D3）", () => {
       foreign: "node-link",
     },
     {
-      name: "node-link 入口收到 sync 载荷",
+      name: "node-link 入口收到设备载荷",
       entry: "node-link",
-      read: { kind: "sync", qr: QR },
+      read: { kind: "sync" },
       foreign: "设备（sync）",
     },
   ];
@@ -1021,6 +1025,8 @@ describe("两类配对入口互不混淆（design D2/D3）", () => {
 
     const page = store.pairingPage();
     expect(page.phase).toBe("node_link_scanned");
+    // 入口类型来自路由声明：成功路径同样写着 node-link（不能留在默认的 sync）。
+    expect(page.kind).toBe("node-link");
     // 呈现是 info，不是失败也不是停在 reading。
     expect(page.presentation.kind).toBe("info");
     expect(page.presentation.title).toBe("已读到 node-link 配对内容");
@@ -1034,6 +1040,60 @@ describe("两类配对入口互不混淆（design D2/D3）", () => {
     expect(wiring.polls).toHaveLength(0);
     expect(wiring.scheduled).toHaveLength(0);
     expect(JSON.stringify(store.state)).not.toContain(QR_SECRET);
+  });
+
+  /**
+   * 打开一条**已过期**的 node-link `#data=`：组合根在读取时抛 `pairing.expired`，入口收口。
+   *
+   * 这个页面没有配对码输入（也没有配对码可重新生成）， поэтому不能落到 S6 的
+   * 「配对码不对或已过期」+「生成新的配对码后再输入」：那是一条在本页无法执行的恢复路径，
+   * 并且会把真实的 `pairing.expired` 诊断码改写成 `pairing.code_invalid`。
+   */
+  it("node-link 地址已过期：节点专用的过期呈现，不发请求、不出现配对码指引", async () => {
+    const wiring = new RecordingPairingWiring();
+    // 组合根对过期 node-link 载荷抛出的正是这个错误（`composition.ts` 的 `readNodeLinkQrPayload`）。
+    wiring.readError = new PairingQrInvalidError("pairing.expired", "二维码已过期");
+    const store = storeWithPairing(wiring);
+
+    await enterFromAddress(store, wiring, "node-link");
+
+    const page = store.pairingPage();
+    expect(page.phase).toBe("expired");
+    expect(page.kind).toBe("node-link");
+    // 过期是入口给出的结论，不是「本侧失败」。
+    expect(page.failure).toBeNull();
+    expect(page.presentation.kind).toBe("failure");
+    expect(page.presentation.title).toBe("配对地址已过期");
+    expect(page.presentation.warning).toBe("请在电脑上重新发起配对，并用新的节点地址打开本页。");
+    // 反例：若过期仍按配对码口径收口 → 标题变成「配对码不对或已过期」、阶段变成 `failed`。
+    expect(page.presentation.title).not.toBe("配对码不对或已过期，请重新生成配对码");
+    expect(`${page.presentation.lede}${page.presentation.warning}`).not.toContain("配对码");
+    // 诊断码保留真实原因，不被改写成 `pairing.code_invalid`。
+    expect(page.error?.code).toBe("pairing.expired");
+    // 一个配对请求都不发，也不安排任何定时任务。
+    expect(wiring.lookups).toHaveLength(0);
+    expect(wiring.claims).toHaveLength(0);
+    expect(wiring.polls).toHaveLength(0);
+    expect(wiring.scheduled).toHaveLength(0);
+  });
+
+  it("同一过期错误在配对码链路（sync）仍落到 S6", () => {
+    const expired: PublicError = {
+      code: "pairing.expired",
+      message: "这次配对已过期。",
+      retryable: false,
+      details: {},
+    };
+    for (const current of [
+      initialPairingPageModel("sync"),
+      applyAwaitingCode(initialPairingPageModel("sync"), "sync", ORIGIN, true),
+    ]) {
+      const next = applyPairingFailure(current, expired);
+      expect(next.phase).toBe("failed");
+      expect(next.failure).toBe("code_invalid");
+      expect(next.presentation.title).toBe("配对码不对或已过期，请重新生成配对码");
+      expect(next.error?.code).toBe("pairing.code_invalid");
+    }
   });
 
   /**
@@ -1084,11 +1144,11 @@ describe("两类配对入口互不混淆（design D2/D3）", () => {
 describe("配对入口的环境前置条件（design D1–D5）", () => {
   it("来源不符：可区分的固定失败 + claim/status 计数为 0", async () => {
     const wiring = new RecordingPairingWiring();
-    wiring.origin = "https://other-host.example.ts.net";
+    wiring.lookupQr = { ...QR, canonicalOrigin: "https://other-host.example.ts.net" };
     wiring.results = [{ kind: "pending_confirmation" }];
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
 
     const page = store.pairingPage();
     expect(page.phase).toBe("failed");
@@ -1106,10 +1166,11 @@ describe("配对入口的环境前置条件（design D1–D5）", () => {
   it("来源比较走同一归一化口径：默认端口与尾部斜杠不产生误判", async () => {
     const wiring = new RecordingPairingWiring();
     wiring.origin = "https://work-pc.example.ts.net:443/";
+    wiring.lookupQr = { ...QR, canonicalOrigin: "https://work-pc.example.ts.net:443/" };
     wiring.results = [{ kind: "pending_confirmation" }];
     const store = storeWithPairing(wiring);
 
-    await enterFromAddress(store, wiring);
+    await enterByCode(store);
 
     expect(store.pairingPage().phase).toBe("claiming");
     expect(wiring.claims).toHaveLength(1);
@@ -1120,8 +1181,9 @@ describe("配对入口的环境前置条件（design D1–D5）", () => {
     wiring.secure = false;
     wiring.results = [{ kind: "pending_confirmation" }];
     const store = storeWithPairing(wiring);
+    await store.startPairingFromAddress("sync");
 
-    await enterFromAddress(store, wiring);
+    await store.submitPairingCode("ABCD-EFGH");
 
     const page = store.pairingPage();
     expect(page.phase).toBe("failed");
@@ -1129,32 +1191,32 @@ describe("配对入口的环境前置条件（design D1–D5）", () => {
     expect(page.presentation.title).toBe("需要 HTTPS 才能配对");
     expect(page.error?.code).toBe("auth.insecure_context");
     expect(page.error?.retryable).toBe(false);
+    expect(wiring.lookups).toHaveLength(0);
     expect(wiring.claims).toHaveLength(0);
     expect(wiring.polls).toHaveLength(0);
     expect(wiring.scheduled).toHaveLength(0);
   });
 
-  it("顺序（design D1）：安全上下文 → 来源一致 → 载荷类型", async () => {
+  it("顺序（design D1）：安全上下文 → 载荷类型", async () => {
     // 非安全上下文 + 类型不符：报安全上下文（环境根本不满足，比「内容对不上」更根本）。
     const insecure = new RecordingPairingWiring();
     insecure.secure = false;
     insecure.readResult = { kind: "node-link", qr: NODE_LINK_QR };
     const insecureStore = storeWithPairing(insecure);
-    await enterFromAddress(insecureStore, insecure);
+    await enterFromAddress(insecureStore, insecure, "node-link");
     expect(insecureStore.pairingPage().failure).toBe("insecure_context");
 
-    // 来源不符 + 类型不符（sync 载荷喂给 node-link 入口）：报来源不符（来源一致先于类型校验）。
+    // 设备载荷喂给 node-link 入口：安全上下文满足后按类型失败。
     const mismatched = new RecordingPairingWiring();
-    mismatched.origin = "https://other-host.example.ts.net";
     const mismatchStore = storeWithPairing(mismatched);
     await enterFromAddress(mismatchStore, mismatched, "node-link");
-    expect(mismatchStore.pairingPage().failure).toBe("origin_mismatch");
+    expect(mismatchStore.pairingPage().failure).toBe("kind_mismatch");
   });
 
   it("秘密不透传：失败文案与错误对象都不含配对秘密", async () => {
     const leakPaths: readonly ((wiring: RecordingPairingWiring) => void)[] = [
       (wiring) => {
-        wiring.origin = "https://other-host.example.ts.net";
+        wiring.lookupQr = { ...QR, canonicalOrigin: "https://other-host.example.ts.net" };
       },
       (wiring) => {
         wiring.secure = false;
@@ -1164,10 +1226,20 @@ describe("配对入口的环境前置条件（design D1–D5）", () => {
       const wiring = new RecordingPairingWiring();
       configure(wiring);
       const store = storeWithPairing(wiring);
-      await enterFromAddress(store, wiring);
+      await enterByCode(store);
       const page = store.pairingPage();
       expect(page.error).not.toBeNull();
       expect(JSON.stringify(page)).not.toContain(QR_SECRET);
+      expect(JSON.stringify(store.state)).not.toContain(QR_SECRET);
+    }
+
+    // 片段路径同样不透传：q2 与旧 data= 的载荷都不进页面或公开状态。
+    for (const fragment of [`q2=${QR_SECRET}`, `data=${QR_SECRET}`]) {
+      const wiring = new RecordingPairingWiring();
+      wiring.fragment = fragment;
+      const store = storeWithPairing(wiring);
+      await store.startPairingFromAddress("sync");
+      expect(JSON.stringify(store.pairingPage())).not.toContain(QR_SECRET);
       expect(JSON.stringify(store.state)).not.toContain(QR_SECRET);
     }
 
@@ -1308,13 +1380,14 @@ describe("配对页固定呈现（纯函数）", () => {
       expect(scenario.model.presentation.warning, scenario.name).not.toBeNull();
     }
 
-    // 终态三类的标题与色调（被拒绝用 danger，其余 warning），由 `applyPollResult` 给出。
+    // 终态：被拒绝用 danger；过期统一落到固定的 S6；已被使用保留自己的固定呈现。
     const terminal = (status: "rejected" | "expired" | "consumed"): PairingPageModel =>
       applyPollResult(idle, { kind: "terminal", status, error: errorOf("pairing.expired") });
     expect(terminal("rejected").presentation.title).toBe("审批未通过");
     expect(terminal("rejected").presentation.tone).toBe("danger");
-    expect(terminal("expired").presentation.title).toBe("配对地址已过期");
-    expect(terminal("expired").presentation.tone).toBe("warning");
+    expect(terminal("expired").phase).toBe("failed");
+    expect(terminal("expired").failure).toBe("code_invalid");
+    expect(terminal("expired").presentation.title).toBe("配对码不对或已过期，请重新生成配对码");
     expect(terminal("consumed").presentation.title).toBe("这个配对地址已经被使用");
     for (const status of ["rejected", "expired", "consumed"] as const) {
       expect(terminal(status).presentation.lede).not.toContain(QR_SECRET);
@@ -1340,17 +1413,19 @@ describe("配对页固定呈现（纯函数）", () => {
       applyPairingFailure(idle, error("protocol.schema_invalid"), "kind_mismatch").failure,
     ).toBe("kind_mismatch");
 
-    // `pairing.expired` / `pairing.consumed` / `pairing.already_claimed` 走终态，不是 failed。
-    expect(applyPairingFailure(idle, error("pairing.expired")).phase).toBe("expired");
+    // `pairing.consumed` / `pairing.already_claimed` 走终态；`pairing.expired` 在配对码链路落到 S6
+    // （node-link 入口的过期呈现另有一条用例，见「两类配对入口互不混淆」）。
+    expect(applyPairingFailure(idle, error("pairing.expired")).phase).toBe("failed");
+    expect(applyPairingFailure(idle, error("pairing.expired")).failure).toBe("code_invalid");
     expect(applyPairingFailure(idle, error("pairing.consumed")).phase).toBe("consumed");
     expect(applyPairingFailure(idle, error("pairing.already_claimed")).phase).toBe("consumed");
   });
 
-  it("服务端过期按入口分流：二维码入口 S7「配对地址已过期」，配对码入口 S6", () => {
+  it("服务端过期统一到 S6：不把合成的 pairing.failed 呈现成「请求未能完成」", () => {
     const error: PublicError = {
       // §7.3：`expired` 也是 HTTP 200，HTTPS 传输层因此只能把码合成为 `pairing.failed`。
       // 用真实的合成码而不是 `pairing.expired`，这条用例才有判别力：按 `error.code` 分类的
-      // 实现会落到「配对请求未能完成」（S12），而不是 S7 / S6。
+      // 实现会落到「配对请求未能完成」（S12），而不是 S6。
       code: "pairing.failed" as PublicError["code"],
       message: "服务端说过期",
       retryable: false,
@@ -1358,15 +1433,6 @@ describe("配对页固定呈现（纯函数）", () => {
     };
     const terminalExpired: PairingPollResult = { kind: "terminal", status: "expired", error };
 
-    // 二维码入口（缺省 entry = "qr"）：保持既有的地址过期呈现。
-    const qr = applyPollResult(initialPairingPageModel(), terminalExpired);
-    expect(qr.phase).toBe("expired");
-    expect(qr.presentation.title).toBe("配对地址已过期");
-    // 交给入口分流的错误已改写为过期码；原因文本仍是传输层给的那句。
-    expect(qr.error?.code).toBe("pairing.expired");
-    expect(qr.error?.message).toBe("服务端说过期");
-
-    // 配对码入口：同一条终态映射落到 S6，而不是二维码入口的 S7。
     const code = applyPollResult(
       applyLookingUp(applyAwaitingCode(initialPairingPageModel(), "sync", ORIGIN, true)),
       terminalExpired,
@@ -1375,6 +1441,8 @@ describe("配对页固定呈现（纯函数）", () => {
     expect(code.failure).toBe("code_invalid");
     expect(code.presentation.title).toBe("配对码不对或已过期，请重新生成配对码");
     expect(code.error?.code).toBe("pairing.code_invalid");
+    // 服务端原因文本不进入固定文案。
+    expect(code.presentation.lede).not.toContain("服务端说过期");
   });
 
   it("node-link 只呈现对端信息（info），没有倒计时", () => {
@@ -1403,7 +1471,7 @@ describe("配对页固定呈现（纯函数）", () => {
     const mismatch = publicErrorForTransportFailure(new OriginMismatchError());
     expect(mismatch.code).toBe("auth.origin_mismatch");
     expect(mismatch.retryable).toBe(false);
-    expect(mismatch.message).toContain("另一个地址");
+    expect(mismatch.message).toContain("另一个来源");
     expect(mismatch.message).not.toContain("已绑定的规范化来源");
     expect(mismatch.details).toEqual({});
 

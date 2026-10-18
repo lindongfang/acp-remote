@@ -31,6 +31,24 @@ export type * from "./node-link";
 
 // 纯计算 + 编译期常量：无 Node 依赖，浏览器与 `src/domain/` 都可安全消费。
 export { projectView, isKnownEventType, KNOWN_EVENT_TYPES, KNOWN_EVENT_TYPE_COUNT } from "./event";
+export {
+  DEVICE_QR_VERSION,
+  DEVICE_QR_PAYLOAD_BYTES,
+  DEVICE_QR_PAYLOAD_ASCII_LENGTH,
+  DEVICE_QR_FRAGMENT_PREFIX,
+  LEGACY_DEVICE_QR_FRAGMENT_PREFIX,
+  DEVICE_QR_TEST_ORIGIN,
+  DEVICE_QR_TEST_URL_LENGTH,
+  DEVICE_QR_MAX_TEST_URL_LENGTH,
+  DEVICE_QR_MATRIX_MAX_COLUMNS,
+  DEVICE_QR_MATRIX_MAX_ROWS,
+  DeviceQrError,
+  encodeDeviceQrPayload,
+  decodeDeviceQrPayload,
+  buildDevicePairingUrl,
+  parseDevicePairingUrl,
+} from "./device-qr";
+export type { DeviceQrErrorCode, DeviceQrPayload, DevicePairingUrl } from "./device-qr";
 export type { FixtureCase, FixtureManifest, ResolvedFixtureCase } from "./manifest";
 
 import type { AuthMessage } from "./auth";

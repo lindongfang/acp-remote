@@ -1,6 +1,7 @@
 # ACP Remote 本地管理通道
 
 > 状态：编码前契约；切片 4（`daemon-cli-and-local-admin`）的**本地通道部分已落地**（`server::transport::local` + `server::local_admin` + `app`），`server::acp_facade` 待切片 6——实现期差异只允许出现在 §3.1 末尾的实现状态注记里，不改本契约的任何语义  
+> 版本：1.6（2026-10-18，`device-pairing-qr-reference` WP1：`device.pair.begin.result.pairingUrl` 改为新设备短二维码 `https://<canonical-origin>/pair#q2=<87 chars>`，四个返回键不变；不再生成旧设备 `#data=` 完整资料地址。§5.3 的字段含义、§5.8 的终端输出与示例同步。该行为在服务端/CLI 落地前按“计划/待实现”理解；节点 `node.pair.*` 完全不变）  
 > 版本：1.5（2026-10-15，`sync-ui-hosting` WP4：`daemon.status` 的 `result` 增加 `uiBuildVersion`（`string | null`，`null` = 版本缺失），取自本次二进制嵌入并托管的前端资源；按 §8 属**兼容变更**（新增 `result` 字段），方法集与 §6 的本地错误码集合**不变**）  
 > 版本：1.4（2026-09-27，v1 内合同修订，未实现未发布：`node.pair.confirm` 的 `params` 增加**必填** `exportIds`（可为空数组）、`result` 回显它，`NodeRecord`（因而 `node.list`）增加 `exportIds`；按 §8 属不兼容变更，因 v1 未发布、CLI 与 Daemon 同版本发布，按 v1 内合同修订处理，先例为 `node.challenge.catalogRevision`；并同步「改清单 = 重新配对（落定后关闭活动连接，收窄自下一次握手生效）」）  
 > 版本：1.3（2026-09-25：方法名允许段内连字符；`node.rotate-key.begin` 进入 v1 方法词表，修正 §5.7 与机器词表的不一致）  
@@ -253,10 +254,11 @@ revokedAt           timestamp | null
 #### `device.pair.begin`
 
 - `params`：`{ expiresInMs: integer | null }`——设备配对不申请任何授权词汇，本方法**只**接受这一个键；出现 `requestedScopes`/`requestedPacks` 之类的键即 `local.invalid_params`（`params` 是 closed object）。
-- `result`：`{ pairingId, pairingUrl, pairingCode, expiresAt }`；不返回任何授权集合。
+- `result`：`{ pairingId, pairingUrl, pairingCode, expiresAt }`；不返回任何授权集合，四个键固定不变。
+- `pairingUrl` 是**新设备短二维码地址**：`https://<canonical-origin>/pair#q2=<payload>`，payload 为 `0x02 || 32 字节扫码取回凭据 || 32 字节主机公钥指纹` 的无填充 base64url（87 字符）。它不再包含旧设备完整资料 JSON，也不再暴露 `pairingSecret`/`hostPublicKey` 的完整内容；字段布局与拒绝规则以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1.1 为唯一权威。`pairingUrl` 只经本次管理响应返回，不得进入日志、后续状态查询或文件。
 - 配对有效期固定 5 分钟（`SYNC_PROTOCOL.md` §7、§14）；`expiresInMs` 只能收窄，不能延长。
 - `pairingCode` 是网页 `/pair` 输入用的 8 位 Crockford 配对码（wire 值为规范 8 位大写文本，无分隔符；终端与页面按 `XXXX-XXXX` 展示），由该配对的 pairing secret 域分离派生（40 bit），只用于经 `POST /sync/v1/pairing/lookup` 一次性取回该配对的 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`。它不是 HMAC 密钥，不替代 `pairingUrl`，MUST NOT 被持久化或写入日志；成功 lookup 一次后被消耗，但配对本身仍可按 `pairingId` 被 claim 一次，`device.pair.status`/`confirm` 不因码被消耗而改变。
-- `pairingUrl`、`pairingCode` 只经本通道返回；fragment、`pairingSecret`、`pairingCode` 与完整 QR payload 不得进入日志或 analytics（`SECURITY_DESIGN.md` §14.1）。
+- `pairingUrl`、`pairingCode` 只经本通道返回；fragment、`pairingSecret`、`pairingCode`、扫码取回凭据（`qrToken`）与完整 QR payload 不得进入日志或 analytics（`SECURITY_DESIGN.md` §14.1）。
 
 #### `device.pair.status`
 
@@ -415,7 +417,7 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 
 **配对流程（安全仪式）**：`SECURITY_DESIGN.md` §9.4 要求确认界面显示名称、指纹与过期时间；`SYNC_PROTOCOL.md` §7.0 要求确认只能经本地入口。因此 `device pair` / `node pair` 的 CLI 流程固定为：
 
-1. `begin`：拿到 `pairingId`、`pairingUrl` 与 `pairingCode`；`device pair` 打印网页端裸地址（`https://<origin>/pair`，无 fragment）、`XXXX-XXXX` 形式的配对码，以及一个编码完整 `pairingUrl` 的终端二维码（供移动端扫码）；完整 fragment 只由二维码承载，不作为文本打印，所有形式都不得写入 shell 历史或文件。`node pair` 仍只打印 URL；
+1. `begin`：拿到 `pairingId`、`pairingUrl` 与 `pairingCode`；`device pair` 打印网页端裸地址（`https://<origin>/pair`，无 fragment）、`XXXX-XXXX` 形式的配对码，以及一个编码完整新 `pairingUrl`（`…/pair#q2=…`）的实心黑白终端二维码，并在图案前打印 `二维码：` 标签。PWA 只用配对码；`q2` 片段只由二维码承载，不作为文本打印，所有形式都不得写入 shell 历史或文件。`node pair` 仍只打印原节点 URL；
 2. 轮询 `status`：未认领时继续等（有效期 5 分钟，到期报 `local.expired`）；认领后**必须**展示名称、指纹与过期时间；
 两个方向都不提交任何授权集合。配对码被网页成功 lookup 消耗后，CLI 仍按 `pairingId` 继续轮询并等待 `y/N`，确认仪式不变。
 
@@ -426,9 +428,9 @@ $ acp-remote device pair
 网页端：https://home.example.invalid/pair
 配对码：ABCD-EFGH
 
-<二维码：编码完整 pairingUrl（含 pairing secret），供移动端扫码>
+<二维码：编码完整短 pairingUrl（#q2= 引用，含扫码取回凭据）>
 
-（移动端请扫码；网页端打开 /pair 后输入配对码）
+（网页端打开 /pair 后输入配对码；原生 App 尚未交付，二维码暂不可用于现有产品扫码配对）
 正在等待设备认领…（有效期至 2026-09-23T14:31:00.000Z，Ctrl-C 取消）
 
 设备已认领：

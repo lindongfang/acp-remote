@@ -10,19 +10,19 @@ use std::collections::BTreeSet;
 
 use sync_protocol::pairing::{
     CanonicalOrigin, ClaimRequest, ClaimResponse, HttpError, LookupRequest, LookupResponse,
-    PairingCode, PairingStatus, QrPayload, StatusRequest, StatusResponse,
+    PairingCode, PairingStatus, QrLookupRequest, QrLookupResponse, StatusRequest, StatusResponse,
 };
 
 const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 const PAIRING_SCHEMA_SUFFIX: &str = "schemas/sync/v1/pairing.schema.json";
 
-/// 配对夹具数：`pairing.schema.json` 的 `$defs` 中，`httpError` 与连接级 `error` body 同形状，
-/// 由 `error_body_uses_the_registered_error_codes` 覆盖，因此没有独立夹具；`canonicalOrigin` 是
-/// 被引用的取值域而不是顶层 payload。lookup 的两个 DTO 各有正例与负例。
-const EXPECTED_VALID_PAIRING_CASES: usize = 7;
-const EXPECTED_INVALID_PAIRING_CASES: usize = 6;
-const EXPECTED_COVERED_DEFS: usize = 7;
+/// 配对夹具数：`pairing.schema.json` 的 `$defs` 中，`canonicalOrigin` 是被引用的取值域而不是
+/// 顶层 payload。lookup 与 qr-lookup 的 DTO 各有正例与负例，`httpError` 由统一的
+/// `401 pairing.qr_invalid` 失败夹具覆盖。
+const EXPECTED_VALID_PAIRING_CASES: usize = 9;
+const EXPECTED_INVALID_PAIRING_CASES: usize = 9;
+const EXPECTED_COVERED_DEFS: usize = 9;
 
 fn is_pairing(schema: &str) -> bool {
     schema.ends_with(PAIRING_SCHEMA_SUFFIX)
@@ -31,10 +31,6 @@ fn is_pairing(schema: &str) -> bool {
 fn fixture_value(relative: &str) -> serde_json::Value {
     let text = support::read_text(&support::repo_path(&format!("{FIXTURE_ROOT}{relative}")));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("{relative}：不是合法 JSON：{error}"))
-}
-
-fn qr_payload() -> serde_json::Value {
-    fixture_value("valid/pairing-qr-payload.json")
 }
 
 fn claim_response() -> serde_json::Value {
@@ -49,8 +45,16 @@ fn approved_status_response() -> serde_json::Value {
 fn parse_registered(fixture: &str, text: &str) -> Result<&'static str, String> {
     let parsed = |result: Result<(), serde_json::Error>| result.map_err(|error| error.to_string());
     match fixture {
-        "valid/pairing-qr-payload.json" => {
-            parsed(serde_json::from_str::<QrPayload>(text).map(|_| ())).map(|()| "qrPayload")
+        "valid/pairing-qr-lookup-request.json" => {
+            parsed(serde_json::from_str::<QrLookupRequest>(text).map(|_| ()))
+                .map(|()| "qrLookupRequest")
+        }
+        "valid/pairing-qr-lookup-response.json" => {
+            parsed(serde_json::from_str::<QrLookupResponse>(text).map(|_| ()))
+                .map(|()| "qrLookupResponse")
+        }
+        "valid/pairing-qr-lookup-error.json" => {
+            parsed(serde_json::from_str::<HttpError>(text).map(|_| ())).map(|()| "httpError")
         }
         "valid/pairing-claim-request.json" => {
             parsed(serde_json::from_str::<ClaimRequest>(text).map(|_| ())).map(|()| "claimRequest")
@@ -93,6 +97,13 @@ fn rejects_registered(fixture: &str, text: &str) -> bool {
         }
         "invalid/pairing-lookup-error-unknown-code.json" => {
             serde_json::from_str::<HttpError>(text).is_err()
+        }
+        "invalid/pairing-qr-lookup-request-short-token.json"
+        | "invalid/pairing-qr-lookup-request-unknown-field.json" => {
+            serde_json::from_str::<QrLookupRequest>(text).is_err()
+        }
+        "invalid/pairing-qr-lookup-response-missing-secret.json" => {
+            serde_json::from_str::<QrLookupResponse>(text).is_err()
         }
         other => panic!("{other}：新增的配对负例必须在本表登记它被哪个 DTO 拒绝"),
     }
@@ -176,30 +187,53 @@ fn canonical_origin_requires_a_bare_https_authority() {
 }
 
 #[test]
-fn qr_payload_constants_and_widths_are_enforced() {
-    let mut payload = qr_payload();
-    assert!(serde_json::from_value::<QrPayload>(payload.clone()).is_ok());
-
-    payload["pairingProtocol"] = serde_json::json!("acp-remote-pairing-v2");
-    assert!(
-        serde_json::from_value::<QrPayload>(payload.clone()).is_err(),
-        "pairingProtocol 只接受 const 取值"
+fn qr_lookup_request_round_trips_and_rejects_unknown_keys() {
+    let fixture = fixture_value("valid/pairing-qr-lookup-request.json");
+    let parsed: QrLookupRequest =
+        serde_json::from_value(fixture.clone()).expect("qr-lookup 请求夹具必须可解析");
+    assert_eq!(
+        parsed.qr_token.as_bytes().len(),
+        32,
+        "qrToken 必须是 32 字节扫码取回凭据"
+    );
+    assert_eq!(
+        serde_json::to_value(&parsed).expect("必须可序列化"),
+        fixture,
+        "QrLookupRequest 的序列化形状必须与夹具逐字一致"
     );
 
-    // hostPublicKey 是 65 字节的 SEC1 公钥：32 字节的 nonce 不能顶替。
-    let mut payload = qr_payload();
-    payload["hostPublicKey"] = serde_json::json!("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8");
+    let mut wrong_version = fixture.clone();
+    wrong_version["protocolVersion"] = serde_json::json!(2);
     assert!(
-        serde_json::from_value::<QrPayload>(payload).is_err(),
-        "hostPublicKey 必须是 65 字节"
+        serde_json::from_value::<QrLookupRequest>(wrong_version).is_err(),
+        "protocolVersion 只接受常量 1"
     );
 
-    let mut payload = qr_payload();
-    payload["futureField"] = serde_json::json!(1);
+    let mut short_token = fixture.clone();
+    short_token["qrToken"] = serde_json::json!("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh");
     assert!(
-        serde_json::from_value::<QrPayload>(payload).is_err(),
-        "配对载荷是关闭形状：未知字段必须被拒"
+        serde_json::from_value::<QrLookupRequest>(short_token).is_err(),
+        "qrToken 必须是 32 字节（43 个 base64url 字符）"
     );
+
+    let mut unknown_field = fixture;
+    unknown_field["pairingCode"] = serde_json::json!("ABCD-EFGH");
+    assert!(
+        serde_json::from_value::<QrLookupRequest>(unknown_field).is_err(),
+        "qr-lookup 请求是关闭形状：旧入口的 pairingCode 也必须被拒"
+    );
+}
+
+#[test]
+fn qr_lookup_response_has_the_same_binding_as_code_lookup() {
+    let qr: QrLookupResponse =
+        serde_json::from_value(fixture_value("valid/pairing-qr-lookup-response.json"))
+            .expect("qr-lookup 响应夹具必须可解析");
+    let code: LookupResponse =
+        serde_json::from_value(fixture_value("valid/pairing-lookup-response.json"))
+            .expect("lookup 响应夹具必须可解析");
+
+    assert_eq!(qr, code, "两个入口交付同一份七字段配对资料");
 }
 
 #[test]
@@ -306,6 +340,12 @@ fn http_error_reuses_the_registered_error_codes() {
     assert!(
         serde_json::from_str::<HttpError>(&lookup_failure).is_ok(),
         "lookup 的统一失败码 pairing.code_invalid 必须已登记"
+    );
+
+    let qr_lookup_failure = ok.replace("pairing.expired", "pairing.qr_invalid");
+    assert!(
+        serde_json::from_str::<HttpError>(&qr_lookup_failure).is_ok(),
+        "qr-lookup 的统一失败码 pairing.qr_invalid 必须已登记"
     );
 
     let missing_key =
@@ -415,20 +455,25 @@ fn lookup_response_round_trips_through_the_wire_shape() {
     );
 }
 
-/// 两个入口必须指向同一套绑定材料：lookup 响应与同一配对的二维码载荷逐字段相同。
-///
-/// 这条钉住 spec 的「主机公钥与二维码载荷一致」：任何一侧换了字段来源都会在这里失败。
+/// 旧设备完整资料载荷没有 DTO：`pairing.schema.json` 不再声明 `qrPayload`，这里用负例钉住
+/// 「旧格式 JSON 不能按任何配对 HTTPS 载荷被接受」。
 #[test]
-fn lookup_response_matches_the_qr_payload_binding() {
-    let qr: QrPayload = serde_json::from_value(qr_payload()).expect("二维码夹具必须可解析");
-    let lookup: LookupResponse =
-        serde_json::from_value(fixture_value("valid/pairing-lookup-response.json"))
-            .expect("lookup 响应夹具必须可解析");
-
-    assert_eq!(lookup.pairing_id, qr.pairing_id);
-    assert_eq!(lookup.host_id, qr.host_id);
-    assert_eq!(lookup.host_public_key, qr.host_public_key);
-    assert_eq!(lookup.canonical_origin, qr.canonical_origin);
-    assert_eq!(lookup.pairing_secret, qr.pairing_secret);
-    assert_eq!(lookup.expires_at, qr.expires_at);
+fn legacy_full_qr_payload_is_not_a_pairing_payload() {
+    let legacy = serde_json::json!({
+        "pairingProtocol": "acp-remote-pairing-v1",
+        "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+        "hostPublicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+        "canonicalOrigin": "https://pc.example.test",
+        "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+        "pairingSecret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "expiresAt": "2026-09-18T09:14:33.000Z"
+    });
+    assert!(
+        serde_json::from_value::<QrLookupRequest>(legacy.clone()).is_err(),
+        "旧完整资料不能被解释成 qr-lookup 请求"
+    );
+    assert!(
+        serde_json::from_value::<LookupResponse>(legacy).is_err(),
+        "旧完整资料不能被解释成 lookup 响应"
+    );
 }
