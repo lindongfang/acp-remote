@@ -184,7 +184,7 @@ Browser + same-origin WebSocket /sync/v1
 
 优先使用相对 URL 和同源 WebSocket，避免额外的 CORS、endpoint 注入和版本漂移。同源 WebSocket 的**路径以 wire 权威为准**（`SYNC_PROTOCOL.md` §3.1 冻结为同源 `/sync/v1`；本节的图示按该口径书写）。前端构建版本必须与 Daemon 可检查地关联，协议握手仍需独立执行版本与 feature negotiation。
 
-托管与协议端点的**解析优先级**：已注册的协议 path（`/sync/v1`、`/node-link/v1` 及两者的配对端点）先命中；只有**未命中任何协议端点**的请求才由静态面接住。协议族**保留前缀**之下的未注册子路径仍按协议面语义返回 404，不被静态面接管（静态端点与 `daemon.listen` 的关系见 `CONFIG_REFERENCE.md` §1）。
+托管与协议端点的**解析优先级**：已注册的协议 path（`/sync/v1`、`/node-link/v1` 及两者的配对端点）先命中；只有**未命中任何协议端点**的请求才由静态面接住。协议族**保留前缀**之下的未注册子路径仍按协议面语义返回 404，不被静态面接管（静态端点与 `daemon.port`/`daemon.bind` 的关系见 `CONFIG_REFERENCE.md` §1）。
 
 PWA 不需要独立云服务器。`[决定]`（2026-10-15，`sync-ui-hosting`）静态资源**嵌入 Rust 二进制**，随二进制同包发布；不采用「作为 npm 平台包中的只读资源旁路安装」。理由：
 

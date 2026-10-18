@@ -7,22 +7,27 @@
 
 ### Requirement: 共享 listener 绑定与失败关闭
 
-Daemon 启动时 SHALL 在恢复管理记录之后、开放业务接入之前绑定 `daemon.listen`（默认 `127.0.0.1:8765`）上的共享 HTTP/WSS listener，Node Link 的 WSS 端点与配对 HTTP 端点共用该 listener 并按 path 路由。绑定失败（端口占用、地址非法、权限不足）时 Daemon MUST 拒绝启动并给出明确错误，不得降级为无网络接入运行，也不得只绑定部分端点。监听地址为非 loopback（如 `0.0.0.0`/`[::]`）时 MUST 是显式配置且在启动输出中给出告警。`daemon.status` 的 `listen` 字段 SHALL 返回实际绑定的监听地址清单。
+Daemon 启动时 SHALL 在恢复管理记录之后、开放业务接入之前绑定 `daemon.port`（默认 `8765`）与 `daemon.bind` 决定的共享 HTTP/WSS listener，Node Link 的 WSS 端点与配对 HTTP 端点共用该 listener 并按 path 路由。`daemon.bind` 缺省时，`proxy` 模式绑定 `127.0.0.1`，`direct` 模式绑定 `0.0.0.0` 并尽力补绑 `[::]`；显式 `daemon.bind` 只绑定该地址。绑定失败（端口占用、地址非法、权限不足）时 Daemon MUST 拒绝启动并给出明确错误，不得降级为无网络接入运行，也不得只绑定部分端点。`proxy` 模式 MUST 拒绝非 loopback 的 `daemon.bind`（明文面不得超出 loopback）。非 loopback 监听 MUST 在启动输出中给出告警。`daemon.status` 的 `listen` 字段 SHALL 返回实际绑定的监听地址清单。
 
 #### Scenario: 默认 loopback 启动
 
-- **WHEN** 配置未显式设置 `daemon.listen`，Daemon 启动成功
+- **WHEN** `proxy` 模式且配置未显式设置 `daemon.bind`，Daemon 启动成功
 - **THEN** listener 绑定在 `127.0.0.1:8765`，`daemon.status` 的 `listen` 返回该地址，配对与 Node Link 端点在该地址上可达
+
+#### Scenario: direct 模式默认绑定所有接口
+
+- **WHEN** `daemon.tls.mode = "direct"` 且配置未显式设置 `daemon.bind`
+- **THEN** Daemon 绑定 `0.0.0.0:8765` 并尽力补绑 `[::]:8765`，启动输出包含非 loopback 告警
 
 #### Scenario: 绑定失败即拒绝启动
 
-- **WHEN** `daemon.listen` 配置的地址已被其他进程占用
+- **WHEN** `daemon.port` 与 `daemon.bind` 组合出的地址已被其他进程占用
 - **THEN** Daemon 拒绝启动并以明确错误退出，本地管理通道与业务接入均不开放，不残留半初始化的监听
 
-#### Scenario: 非 loopback 监听告警
+#### Scenario: proxy 模式拒绝非 loopback 绑定
 
-- **WHEN** 用户显式配置 `daemon.listen = "0.0.0.0:8765"` 并启动 Daemon
-- **THEN** Daemon 正常启动，且启动输出中包含「监听非 loopback 地址」的告警；未显式配置时 Daemon 不得自行绑定非 loopback 地址
+- **WHEN** `daemon.tls.mode = "proxy"` 且 `daemon.bind` 是非 loopback 地址
+- **THEN** Daemon 在配置解析阶段拒绝启动，并说明 proxy 模式只允许 loopback
 
 ### Requirement: 按 path 的服务清单
 

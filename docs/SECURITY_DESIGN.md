@@ -115,7 +115,7 @@
 |---|---|
 | 未配对设备连接 | WSS + Device challenge-response（认证即业务命令的执行前提） |
 | 未配对/已撤销节点连接 | WSS + Node challenge-response + revocation |
-| Tailnet/LAN 内横向访问 | 应用身份独立于网络身份；Daemon 默认 loopback |
+| Tailnet/LAN 内横向访问 | 应用身份独立于网络身份；`proxy` 模式默认 loopback，`direct` 模式全接口监听告警 |
 | Node 冒充或 endpoint 替换 | QR 固定 Node public key；每次连接验证 Node proof |
 | 二维码转发/截获 | 短期单次 secret、配对载荷带外携带主机公钥、认领 HMAC、Host proof、本机确认（§5.1） |
 | 握手和命令重放 | fresh nonce、connection ID/sequence、`requestId` 幂等 |
@@ -173,13 +173,13 @@ Local clients -> Access Node -> Node Link/WSS -> Owner Node -> AgentHost -> ACP 
 
 ### 7.1 正式 Profile
 
-- Daemon 默认只监听 `127.0.0.1`/`::1` 或 OS 本地 IPC。
+- Daemon 在 `proxy` 模式默认只监听 `127.0.0.1`/`::1`；`direct` 模式默认监听 `0.0.0.0` 并尽力补绑 `[::]`，必须在启动输出中告警。`proxy` 模式禁止非 loopback 绑定（明文面不得超出 loopback）。
 - 正式远程入口只能是 `https://`/`wss://`。
 - TLS 必须在 Daemon 或同机可信 Provider 终止。
 - 配置必须声明 canonical public origin、允许的 Host 和可信代理地址。
 - 除明确配置的同机代理外，不信任 `Forwarded`、`X-Forwarded-*` 或供应商身份 Header。
 - 不根据源 IP、`.ts.net` 后缀、Tailnet 用户或客户端证书自动增加授权；已认证节点即为执行前提。
-- 不能默认无认证监听 `0.0.0.0` 或 `[::]`。
+- 不能默认以**明文**形态监听 `0.0.0.0` 或 `[::]`；全接口监听必须由 `direct` TLS 承担，并在启动输出中告警。
 
 ### 7.2 反向代理
 

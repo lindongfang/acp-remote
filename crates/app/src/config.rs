@@ -4,8 +4,9 @@
 //!
 //! - **只读**：本模块不回写配置文件（因此 workspace 不引入 `toml_edit`），管理状态的权威是 SQLite。
 //! - **不新增配置键**：键名、类型与默认值逐条来自 `CONFIG_REFERENCE.md`；本切片消费
-//!   `daemon.*`/`storage.*`/`agents.*`（种子）/`identity.*`/`logging.*`/`dev_mode.*`/`sync.*`，其余段落
-//!   解析后保留为「已知但未接线」并在启动日志里注明（`app::daemon` 记 debug 级），既不报错也不生效。
+//!   `daemon.*`/`storage.*`/`sessions.*`/`[agent]`/`identity.*`/`logging.*`/`dev_mode.*`/`sync.*`，
+//!   仅 `node_link.*` 解析后保留为「已知但未接线」并在启动日志里注明（`app::daemon` 记 debug 级），
+//!   既不报错也不生效。终端输出上限不是配置键（`CONFIG_REFERENCE.md` §6）。
 //! - **明确 schema**：未知键一律拒绝（`SECURITY_DESIGN.md` §12.1）；启动配置里出现 `imports`/`exports`
 //!   必须明确拒绝并指向本地管理命令（`CONFIG_REFERENCE.md` 的「配置与管理状态的权威」）。
 //! - **失败关闭**：解析或校验失败即拒绝启动，不「猜一个默认值继续跑」。
@@ -13,15 +14,19 @@
 //! 配置来源与优先级（`CONFIG_REFERENCE.md`）：命令行参数 > 配置文件 > 内置默认值；环境变量只用于
 //! 替换配置文件路径（`ACP_REMOTE_CONFIG`），不承载业务配置。
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use acp_core::broker::QueuePolicy;
 use acp_core::model::{AgentId, AgentProfile};
+use identity_auth::CanonicalOrigin;
 use serde::Deserialize;
 use server::sync::conn::SyncConfig;
 use server::sync::conn::limits::{
     DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_MAX_PROMPT_BYTES, DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH,
 };
-use server::transport::net::{DEFAULT_LISTEN, TlsMode};
+use server::transport::net::{DEFAULT_PORT, TlsMode};
 use storage_sqlite::migrate::StorageConfig as SqliteStorageConfig;
 
 /// `daemon.data_dir` 未配置时的目录名（平台用户配置目录下的 `acp-remote/`）。
@@ -116,6 +121,27 @@ pub enum LogFormat {
     Json,
 }
 
+/// `sessions.*`（`CONFIG_REFERENCE.md` §4）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionsConfig {
+    /// 同一会话已有 active turn 时新 prompt 的处理策略。
+    pub queue_policy: QueuePolicy,
+    /// `queue` 策略下的排队上限。
+    pub max_queued_turns: u32,
+    /// 会话空闲回收；`None` 表示不因空闲关闭会话（`0` 与未配置同义）。
+    pub idle_timeout: Option<Duration>,
+}
+
+impl Default for SessionsConfig {
+    fn default() -> Self {
+        Self {
+            queue_policy: QueuePolicy::Queue,
+            max_queued_turns: 16,
+            idle_timeout: None,
+        }
+    }
+}
+
 /// `[agent]` 表的解析结果：键即 `agentId`，值是非空命令字符串或完整 argv 数组；可选 `default`。
 fn parse_agents(
     raw: Option<std::collections::BTreeMap<String, toml::Value>>,
@@ -204,11 +230,10 @@ pub struct Config {
     pub public_origin: Option<String>,
     /// `daemon.shutdown_grace_ms`（网络 listener 的排空宽限也取它，见 `NetConfig::drain_grace`）。
     pub shutdown_grace_ms: u64,
-    /// `daemon.listen`：共享 HTTP/WSS listener 地址字面量（默认 `127.0.0.1:8765`）。
-    ///
-    /// 只做「取到文本」这一层：是否为合法的 `IP:端口` 由 `NetListener::bind` 判定并在非法时拒绝启动
-    /// （与端口占用、权限不足同一条失败关闭路径，见 `daemon.listen` 的启动序列）。
-    pub listen: String,
+    /// `daemon.port`：共享 HTTP/WSS listener 的端口（默认 `8765`）。
+    pub port: u16,
+    /// `daemon.bind`：显式绑定地址；`None` = 按 TLS 模式取默认。
+    pub bind: Option<IpAddr>,
     /// `daemon.allowed_hosts`：反向代理场景下的 `Host` 白名单；空表示按 `public_origin` 推导。
     pub allowed_hosts: Vec<String>,
     /// `daemon.trusted_proxies`：允许采信 `Forwarded`/`X-Forwarded-*` 的对端地址。
@@ -235,6 +260,8 @@ pub struct Config {
     pub dev_mode: DevMode,
     /// `sync.*` 三个可下调的 Sync 限额（`CONFIG_REFERENCE.md` §2；取值已按「只下调」收敛）。
     pub sync: SyncConfig,
+    /// `sessions.*`（`CONFIG_REFERENCE.md` §4）。
+    pub sessions: SessionsConfig,
     /// 「已知但未接线」的键。
     pub unwired: Vec<String>,
 }
@@ -318,17 +345,41 @@ impl Config {
                 detail: "`daemon.shutdown_grace_ms` 必须是 0..=60000 的整数".to_owned(),
             });
         }
-        let public_origin = daemon.public_origin.clone();
-        // 网络接入面的四个键（`daemon.listen`/`allowed_hosts`/`trusted_proxies`/`tls.*`）在本切片接线：
-        // 取值与校验原样交给 `server::transport::net`（键名、默认值与失败关闭判据的权威是
-        // `CONFIG_REFERENCE.md` §1 与该模块），本模块只负责「从 TOML 取到值」。
-        let listen = daemon
-            .listen
-            .clone()
-            .unwrap_or_else(|| DEFAULT_LISTEN.to_owned());
+        if daemon.listen.is_some() {
+            return Err(ConfigError::Invalid {
+                detail: "`daemon.listen` 已拆分：请改用 `daemon.port` 与可选的 `daemon.bind`（例如 port = 8765, bind = \"0.0.0.0\"）"
+                    .to_owned(),
+            });
+        }
+        let port = daemon.port.unwrap_or(DEFAULT_PORT);
+        let bind = match daemon.bind.as_deref() {
+            None => None,
+            Some(text) => {
+                Some(
+                    text.trim()
+                        .parse::<IpAddr>()
+                        .map_err(|_| ConfigError::Invalid {
+                            detail: "`daemon.bind` 必须是 IP 字面量（不支持主机名）".to_owned(),
+                        })?,
+                )
+            }
+        };
         let allowed_hosts = daemon.allowed_hosts.clone().unwrap_or_default();
         let trusted_proxies = daemon.trusted_proxies.clone().unwrap_or_default();
         let tls = resolve_tls(daemon.tls.as_ref())?;
+        // `proxy` 模式下 Daemon 不说 TLS：非 loopback 绑定会把明文面暴露到本机之外。
+        if matches!(&tls, TlsMode::Proxy) {
+            if let Some(ip) = bind {
+                if !ip.is_loopback() {
+                    return Err(ConfigError::Invalid {
+                        detail: format!(
+                            "`proxy` 模式只允许 loopback 的 `daemon.bind`（收到 `{ip}`）；远程入口请用 `direct` TLS 或同机反代"
+                        ),
+                    });
+                }
+            }
+        }
+        let raw_public_origin = daemon.public_origin.clone();
 
         let storage_section = raw.storage.unwrap_or_default();
         let storage = storage_section.to_storage_config(&data_dir)?;
@@ -343,19 +394,15 @@ impl Config {
         }
 
         let mut unwired = Vec::new();
-        // `daemon.instance_lock = "ipc"`：本切片的单实例锁恒为 OS advisory 文件锁（`fs4`），两者互斥
-        // 语义相同，因此按「已知但未接线」处理并在启动日志里显式说明，不静默换实现。
+        // 单实例锁只有 OS advisory 文件锁一种实现（`fs4`）。`ipc` 曾作为取值被接受但不生效，
+        // 那会让用户以为换了实现；现在直接失败关闭（与 `daemon.local_admin.endpoint` 同一策略）。
         if let Some(instance_lock) = daemon.instance_lock.as_deref() {
-            match instance_lock {
-                "file" => {}
-                "ipc" => unwired.push("daemon.instance_lock(ipc)".to_owned()),
-                other => {
-                    return Err(ConfigError::Invalid {
-                        detail: format!(
-                            "`daemon.instance_lock` 只能是 `file` 或 `ipc`（收到 `{other}`）"
-                        ),
-                    });
-                }
+            if instance_lock != "file" {
+                return Err(ConfigError::Invalid {
+                    detail: format!(
+                        "`daemon.instance_lock` 只能取 `file`（收到 `{instance_lock}`）"
+                    ),
+                });
             }
         }
         for key in raw
@@ -365,20 +412,7 @@ impl Config {
         {
             unwired.push(key.to_owned());
         }
-        for key in raw
-            .sessions
-            .as_ref()
-            .map_or_else(Vec::new, RawSessions::present_keys)
-        {
-            unwired.push(key.to_owned());
-        }
-        for key in raw
-            .terminal
-            .as_ref()
-            .map_or_else(Vec::new, RawTerminal::present_keys)
-        {
-            unwired.push(key.to_owned());
-        }
+        let sessions = RawSessions::into_config(raw.sessions.unwrap_or_default())?;
         let node_name = raw.node.and_then(|node| node.name);
         if let Some(name) = &node_name {
             if name.is_empty() || name.chars().count() > 128 {
@@ -430,6 +464,25 @@ impl Config {
             .logging
             .map_or_else(|| Ok(LoggingConfig::default()), RawLogging::into_config)?;
 
+        let public_origin = normalize_public_origin(raw_public_origin.as_deref(), &dev_mode)?;
+        // `port = 0` 只用于开发模式下的本机临时端口（测试与本地调试）。
+        let effective_loopback = bind.map_or(matches!(&tls, TlsMode::Proxy), |ip| ip.is_loopback());
+        if port == 0 && !(dev_mode.enabled && effective_loopback) {
+            return Err(ConfigError::Invalid {
+                detail:
+                    "`daemon.port = 0` 只允许在 `dev_mode.enabled = true` 且绑定 loopback 时使用"
+                        .to_owned(),
+            });
+        }
+        // 非 loopback 且没有任何 Host 判定来源时，远程请求一律被接入层拒绝：这是坏配置。
+        let non_loopback = bind.map_or(!matches!(&tls, TlsMode::Proxy), |ip| !ip.is_loopback());
+        if non_loopback && public_origin.is_none() && allowed_hosts.is_empty() {
+            return Err(ConfigError::Invalid {
+                detail: "绑定非 loopback 时必须配置 `daemon.public_origin` 或 `daemon.allowed_hosts`（否则远程 Host 一律被拒）"
+                    .to_owned(),
+            });
+        }
+
         // `sync.*` 三个键**已接线**（`CONFIG_REFERENCE.md` §2）：它们只允许把 §14 的默认值往**下**调，
         // 因此高于默认值的取值在这里就收敛成默认值——写得更大不会放宽对端可见的 `limits`，也不像
         // 「未接线」那样被静默忽略。取值随 `SyncConfig` 一路进 `server::sync::conn`（组合根
@@ -449,7 +502,8 @@ impl Config {
             data_dir,
             public_origin,
             shutdown_grace_ms,
-            listen,
+            port,
+            bind,
             allowed_hosts,
             trusted_proxies,
             tls,
@@ -462,6 +516,7 @@ impl Config {
             logging,
             dev_mode,
             sync,
+            sessions,
             unwired,
         })
     }
@@ -568,7 +623,6 @@ struct RawConfig {
     node_link: Option<RawNodeLink>,
     sessions: Option<RawSessions>,
     storage: Option<RawStorage>,
-    terminal: Option<RawTerminal>,
     node: Option<RawNode>,
     agent: Option<std::collections::BTreeMap<String, toml::Value>>,
     identity: Option<RawIdentity>,
@@ -584,6 +638,9 @@ struct RawConfig {
 #[serde(deny_unknown_fields)]
 struct RawDaemon {
     data_dir: Option<String>,
+    port: Option<u16>,
+    bind: Option<String>,
+    /// 旧键：只用于给出迁移错误，不参与解析。
     listen: Option<String>,
     public_origin: Option<String>,
     allowed_hosts: Option<Vec<String>>,
@@ -643,6 +700,86 @@ fn resolve_tls(raw: Option<&RawTls>) -> Result<TlsMode, ConfigError> {
             detail: format!("`daemon.tls.mode` 只能是 `proxy` 或 `direct`（收到 `{other}`）"),
         }),
     }
+}
+
+/// 把 `daemon.public_origin` 归一化为 canonical origin（`CONFIG_REFERENCE.md` §1）。
+///
+/// 输入是 `host[:port]` 或完整 `http(s)://host[:port]`；裸值补 `https://`。`http://` 只允许在
+/// 开发明文模式；其它 scheme、路径、查询、片段与用户信息都失败关闭。
+fn normalize_public_origin(
+    raw: Option<&str>,
+    dev_mode: &DevMode,
+) -> Result<Option<String>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(ConfigError::Invalid {
+            detail: "`daemon.public_origin` 不能为空".to_owned(),
+        });
+    }
+    let (scheme, authority) = if let Some(rest) = raw.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = raw.strip_prefix("http://") {
+        if !(dev_mode.enabled && dev_mode.allow_plaintext) {
+            return Err(ConfigError::Invalid {
+                detail: "`daemon.public_origin` 必须是 https://（只有开发明文模式允许 http://）"
+                    .to_owned(),
+            });
+        }
+        ("http", rest)
+    } else if raw.contains("://") {
+        return Err(ConfigError::Invalid {
+            detail: "`daemon.public_origin` 只支持 http(s):// 或 host[:port]".to_owned(),
+        });
+    } else {
+        ("https", raw)
+    };
+    validate_origin_authority(authority)?;
+    let normalized = format!("{scheme}://{authority}");
+    if scheme == "https" {
+        CanonicalOrigin::parse(&normalized).map_err(|_| ConfigError::Invalid {
+            detail: "`daemon.public_origin` 不是合法的 canonical origin".to_owned(),
+        })?;
+    }
+    Ok(Some(normalized))
+}
+
+/// 校验 origin 的 authority：允许域名、IPv4、方括号 IPv6，可带 `:port`。
+fn validate_origin_authority(authority: &str) -> Result<(), ConfigError> {
+    let invalid = || ConfigError::Invalid {
+        detail: "`daemon.public_origin` 只能是 host[:port]（不含路径、查询、片段或用户信息）"
+            .to_owned(),
+    };
+    if authority.is_empty()
+        || authority.contains(['/', '?', '#', '@'])
+        || authority
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err(invalid());
+    }
+    let port = if let Some(rest) = authority.strip_prefix('[') {
+        let (inner, tail) = rest.split_once(']').ok_or_else(invalid)?;
+        inner.parse::<std::net::Ipv6Addr>().map_err(|_| invalid())?;
+        tail.strip_prefix(':')
+    } else {
+        let (host, port) = match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        };
+        if host.is_empty() {
+            return Err(invalid());
+        }
+        port
+    };
+    if let Some(port) = port {
+        if matches!(port.parse::<u16>(), Ok(0) | Err(_)) {
+            return Err(invalid());
+        }
+    }
+    Ok(())
 }
 
 /// `[sync]` 段：三个**可下调**的 Sync 限额（`CONFIG_REFERENCE.md` §2）。
@@ -715,18 +852,35 @@ struct RawSessions {
 }
 
 impl RawSessions {
-    fn present_keys(&self) -> Vec<&'static str> {
-        let mut keys = Vec::new();
-        if self.queue_policy.is_some() {
-            keys.push("sessions.queue_policy");
-        }
-        if self.max_queued_turns.is_some() {
-            keys.push("sessions.max_queued_turns");
-        }
-        if self.idle_timeout_ms.is_some() {
-            keys.push("sessions.idle_timeout_ms");
-        }
-        keys
+    /// 三个键都已接线（`CONFIG_REFERENCE.md` §4）：非法取值在解析期失败关闭，不把矛盾配置带进启动。
+    fn into_config(self) -> Result<SessionsConfig, ConfigError> {
+        let queue_policy = match self.queue_policy.as_deref() {
+            None | Some("queue") => QueuePolicy::Queue,
+            Some("reject_busy") => QueuePolicy::RejectBusy,
+            Some(other) => {
+                return Err(ConfigError::Invalid {
+                    detail: format!(
+                        "`sessions.queue_policy` 只能是 `queue` 或 `reject_busy`（收到 `{other}`）"
+                    ),
+                });
+            }
+        };
+        let max_queued_turns = match self.max_queued_turns {
+            None => 16,
+            Some(value) => u32::try_from(value).map_err(|_| ConfigError::Invalid {
+                detail: "`sessions.max_queued_turns` 必须是 0..=4294967295 的整数".to_owned(),
+            })?,
+        };
+        // `0` 与未配置同义：不因空闲关闭会话（`agent-host::HostConfig` 的既有口径）。
+        let idle_timeout = self
+            .idle_timeout_ms
+            .filter(|value| *value > 0)
+            .map(Duration::from_millis);
+        Ok(SessionsConfig {
+            queue_policy,
+            max_queued_turns,
+            idle_timeout,
+        })
     }
 }
 
@@ -786,30 +940,6 @@ impl RawStorage {
         // `CONFIG_REFERENCE.md` §10 没有「放宽存储权限」这类开关。
         config.strict_permissions = true;
         Ok(config)
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawTerminal {
-    max_output_per_command_bytes: Option<u64>,
-    keep_head_bytes: Option<u64>,
-    keep_tail_bytes: Option<u64>,
-}
-
-impl RawTerminal {
-    fn present_keys(&self) -> Vec<&'static str> {
-        let mut keys = Vec::new();
-        if self.max_output_per_command_bytes.is_some() {
-            keys.push("terminal.max_output_per_command_bytes");
-        }
-        if self.keep_head_bytes.is_some() {
-            keys.push("terminal.keep_head_bytes");
-        }
-        if self.keep_tail_bytes.is_some() {
-            keys.push("terminal.keep_tail_bytes");
-        }
-        keys
     }
 }
 
@@ -913,9 +1043,10 @@ mod tests {
         );
         assert!(config.storage.strict_permissions);
         assert!(config.public_origin.is_none());
-        // 网络接入面的四个键在本切片接线：默认值来自 `CONFIG_REFERENCE.md` §1（与
-        // `transport::net` 的内置默认值同源，不在这里另写一份字面量）。
-        assert_eq!(config.listen, DEFAULT_LISTEN);
+        // 网络接入面的键：默认值来自 `CONFIG_REFERENCE.md` §1（与 `transport::net` 的内置默认值同源，
+        // 不在这里另写一份字面量）。
+        assert_eq!(config.port, DEFAULT_PORT);
+        assert_eq!(config.bind, None);
         assert!(config.allowed_hosts.is_empty());
         assert!(config.trusted_proxies.is_empty());
         assert!(matches!(config.tls, TlsMode::Proxy));
@@ -934,6 +1065,10 @@ mod tests {
             config.sync.max_replay_events_per_batch,
             DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH
         );
+        assert_eq!(config.sessions, SessionsConfig::default());
+        assert_eq!(config.sessions.queue_policy, QueuePolicy::Queue);
+        assert_eq!(config.sessions.max_queued_turns, 16);
+        assert!(config.sessions.idle_timeout.is_none());
         assert!(config.unwired.is_empty(), "{:?}", config.unwired);
     }
 
@@ -980,6 +1115,11 @@ ephemeral_identity = true
 [node]
 name = "work-pc"
 
+[sessions]
+queue_policy = "reject_busy"
+max_queued_turns = 4
+idle_timeout_ms = 1500
+
 [agent]
 default = "codex"
 codex = ["codex-acp", "--acp"]
@@ -1007,6 +1147,12 @@ codex = ["codex-acp", "--acp"]
         assert_eq!(config.logging.format, LogFormat::Json);
         assert!(config.dev_mode.enabled && config.dev_mode.ephemeral_identity);
         assert_eq!(config.node_name.as_deref(), Some("work-pc"));
+        assert_eq!(config.sessions.queue_policy, QueuePolicy::RejectBusy);
+        assert_eq!(config.sessions.max_queued_turns, 4);
+        assert_eq!(
+            config.sessions.idle_timeout,
+            Some(Duration::from_millis(1500))
+        );
         assert_eq!(config.agents.len(), 1);
         let agent = &config.agents[0];
         assert_eq!(agent.id().as_str(), "codex");
@@ -1017,38 +1163,27 @@ codex = ["codex-acp", "--acp"]
     }
 
     #[test]
-    fn unwired_sections_are_accepted_and_reported() {
+    fn only_node_link_keys_remain_unwired() {
         let config = parse(
             r#"
-[daemon]
-instance_lock = "ipc"
-
 [node_link]
 heartbeat_interval_ms = 30000
 
 [sessions]
 idle_timeout_ms = 1000
-
-[terminal]
-keep_head_bytes = 1024
 "#,
         )
         .expect("未接线段落必须被接受");
-        for key in [
-            "daemon.instance_lock(ipc)",
-            "node_link.heartbeat_interval_ms",
-            "sessions.idle_timeout_ms",
-            "terminal.keep_head_bytes",
-        ] {
-            assert!(
-                config.unwired.iter().any(|key_name| key_name == key),
-                "缺少 `{key}`：{:?}",
-                config.unwired
-            );
-        }
+        assert_eq!(config.unwired, vec!["node_link.heartbeat_interval_ms"]);
+        // `sessions.*` 已接线：写下的值必须真的进入配置，而不是「被接受但不生效」。
+        assert_eq!(
+            config.sessions.idle_timeout,
+            Some(Duration::from_millis(1000))
+        );
         // 本切片接线后的键不得再出现在「已知但未接线」清单里（否则启动日志会谎报）。
         for key in [
-            "daemon.listen",
+            "daemon.port",
+            "daemon.bind",
             "daemon.allowed_hosts",
             "daemon.trusted_proxies",
             "daemon.tls.mode",
@@ -1058,6 +1193,9 @@ keep_head_bytes = 1024
             "sync.max_message_bytes",
             "sync.max_prompt_bytes",
             "sync.max_replay_events_per_batch",
+            "sessions.queue_policy",
+            "sessions.max_queued_turns",
+            "sessions.idle_timeout_ms",
         ] {
             assert!(
                 !config.unwired.iter().any(|key_name| key_name == key),
@@ -1127,7 +1265,8 @@ max_replay_events_per_batch = 5000
         let config = parse(
             r#"
 [daemon]
-listen = "0.0.0.0:8765"
+port = 8765
+bind = "0.0.0.0"
 allowed_hosts = ["example.ts.net", "proxy.internal"]
 trusted_proxies = ["127.0.0.1:443"]
 
@@ -1142,7 +1281,8 @@ allow_plaintext = true
 "#,
         )
         .expect("四个键必须被接受并接线");
-        assert_eq!(config.listen, "0.0.0.0:8765");
+        assert_eq!(config.port, 8765);
+        assert_eq!(config.bind, Some("0.0.0.0".parse().expect("ip")));
         assert_eq!(
             config.allowed_hosts,
             vec!["example.ts.net", "proxy.internal"]
@@ -1159,6 +1299,131 @@ allow_plaintext = true
             }
             other => panic!("`mode = \"direct\"` 必须解析为 direct，实际 {other:?}"),
         }
+    }
+
+    /// 仓库根的 `config.example.toml` 必须能被真实配置解析器接受，且取值等于内置默认值。
+    ///
+    /// 这条用例把“模板漂移”变成编译/测试失败：新增键、改默认值或写错 TOML 都会在这里暴露。
+    #[test]
+    fn the_example_template_parses_and_matches_defaults() {
+        let config = parse(include_str!("../../../config.example.toml"))
+            .expect("config.example.toml 必须可解析");
+        assert_eq!(config.port, DEFAULT_PORT);
+        assert_eq!(config.bind, None);
+        assert_eq!(config.public_origin, None);
+        assert!(config.allowed_hosts.is_empty());
+        assert!(config.trusted_proxies.is_empty());
+        assert_eq!(config.sessions, SessionsConfig::default());
+        assert_eq!(config.sync, SyncConfig::default());
+        assert_eq!(config.storage.transcript_retention_days, 90);
+        assert_eq!(config.storage.sync_event_retention_days, 7);
+        assert_eq!(config.storage.audit_retention_days, 365);
+        assert_eq!(config.keystore, KeystoreChoice::Platform);
+        assert!(config.fail_closed_on_missing_keystore);
+        assert!(!config.dev_mode.enabled);
+        assert_eq!(config.logging, LoggingConfig::default());
+        assert!(config.agents.is_empty());
+        assert!(config.node_name.is_none());
+        assert!(
+            config.unwired.is_empty(),
+            "模板里被注释的 node_link 不应进入未接线清单：{:?}",
+            config.unwired
+        );
+    }
+
+    /// `daemon.public_origin` 只写 host[:port] 或完整 URL，内部归一化为 canonical origin。
+    #[test]
+    fn public_origin_accepts_host_or_full_url() {
+        for (input, expected) in [
+            ("work-pc.tail.ts.net", "https://work-pc.tail.ts.net"),
+            (
+                "work-pc.tail.ts.net:8443",
+                "https://work-pc.tail.ts.net:8443",
+            ),
+            ("https://work-pc.tail.ts.net", "https://work-pc.tail.ts.net"),
+            ("[::1]:8765", "https://[::1]:8765"),
+            ("100.101.102.103", "https://100.101.102.103"),
+        ] {
+            let config = parse(&format!("[daemon]\npublic_origin = \"{input}\"\n"))
+                .expect("合法 origin 必须被接受");
+            assert_eq!(config.public_origin.as_deref(), Some(expected));
+        }
+        for invalid in [
+            "work-pc.tail.ts.net/path",
+            "https://host/path",
+            "host:0",
+            "ftp://host",
+            "https://user@host",
+            "https://:443",
+            "host:",
+        ] {
+            assert!(
+                parse(&format!("[daemon]\npublic_origin = \"{invalid}\"\n")).is_err(),
+                "必须拒绝：{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn http_public_origin_requires_dev_plaintext() {
+        assert!(
+            parse("[daemon]\npublic_origin = \"http://host\"\n").is_err(),
+            "非开发模式不得使用 http origin"
+        );
+        let config = parse(
+            "[daemon]\npublic_origin = \"http://host\"\n[dev_mode]\nenabled = true\nallow_plaintext = true\n",
+        )
+        .expect("开发明文模式允许 http origin");
+        assert_eq!(config.public_origin.as_deref(), Some("http://host"));
+    }
+
+    #[test]
+    fn listen_is_rejected_with_migration_hint() {
+        let error = parse("[daemon]\nlisten = \"127.0.0.1:8765\"\n").expect_err("旧键必须被拒绝");
+        let message = error.to_string();
+        assert!(message.contains("daemon.listen"), "{message}");
+        assert!(message.contains("daemon.port"), "{message}");
+    }
+
+    #[test]
+    fn proxy_mode_rejects_non_loopback_bind() {
+        assert!(
+            parse("[daemon]\nbind = \"0.0.0.0\"\n").is_err(),
+            "proxy 模式不得绑定非 loopback"
+        );
+        assert!(parse("[daemon]\nbind = \"127.0.0.1\"\n").is_ok());
+        assert!(parse("[daemon]\nbind = \"::1\"\n").is_ok());
+    }
+
+    #[test]
+    fn zero_port_requires_dev_mode_and_loopback() {
+        assert!(parse("[daemon]\nport = 0\n").is_err());
+        assert!(
+            parse("[daemon]\nport = 0\nbind = \"0.0.0.0\"\n[dev_mode]\nenabled = true\n").is_err(),
+            "非 loopback 即使开发模式也不得用临时端口"
+        );
+        assert!(
+            parse("[daemon]\nport = 0\nbind = \"127.0.0.1\"\n[dev_mode]\nenabled = true\n").is_ok()
+        );
+    }
+
+    #[test]
+    fn non_loopback_bind_requires_a_host_source() {
+        let direct = "[daemon.tls]\nmode = \"direct\"\ncert_path = \"/tmp/c.pem\"\nkey_path = \"/tmp/k.pem\"\n";
+        let error = parse(&format!("[daemon]\nbind = \"0.0.0.0\"\n{direct}"))
+            .expect_err("非 loopback 必须有 Host 判定来源");
+        assert!(
+            error.to_string().contains("daemon.public_origin"),
+            "{error}"
+        );
+        for accepted in [
+            format!("[daemon]\nbind = \"0.0.0.0\"\npublic_origin = \"host.ts.net\"\n{direct}"),
+            format!("[daemon]\nbind = \"0.0.0.0\"\nallowed_hosts = [\"host.ts.net\"]\n{direct}"),
+        ] {
+            assert!(parse(&accepted).is_ok(), "必须接受：{accepted}");
+        }
+        // `direct` 的默认绑定就是非 loopback：同样必须给出 Host 来源。
+        assert!(parse(direct).is_err());
     }
 
     /// `daemon.tls.*` 的矛盾/不完整形态在解析期失败关闭（不把矛盾配置带进启动序列）。
@@ -1237,7 +1502,11 @@ allow_plaintext = true
             "[daemon]\ndata_dir = \"relative/path\"\n",
             "[daemon]\nshutdown_grace_ms = 60001\n",
             "[daemon]\ninstance_lock = \"mutex\"\n",
+            "[daemon]\ninstance_lock = \"ipc\"\n",
             "[daemon.local_admin]\nendpoint = \"\\\\\\\\.\\\\pipe\\\\acpr\"\n",
+            "[terminal]\nkeep_head_bytes = 1024\n",
+            "[sessions]\nqueue_policy = \"drop\"\n",
+            "[sessions]\nmax_queued_turns = 4294967296\n",
             "[storage]\nattachment_dir = \"relative\"\n",
             "[storage]\nflush_interval_ms = 0\n",
             "[identity]\nkeystore = \"dpapi\"\n",

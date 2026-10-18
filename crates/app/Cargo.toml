@@ -44,6 +44,8 @@ tokio = { workspace = true, features = ["io-std"] }
 fs4.workspace = true
 # CLI 解析与 `docs/CONFIG_REFERENCE.md` 的配置文件解析（只读，不回写）。
 clap.workspace = true
+# `config origin` 的只读网卡枚举（见根 `Cargo.toml` 的选型说明）；启动路径不调用。
+if-addrs.workspace = true
 toml.workspace = true
 # `provider configure` 的无回显凭据读取（只做「关回显读一行」；凭据值不经命令行参数/文件/stdout）。
 rpassword.workspace = true

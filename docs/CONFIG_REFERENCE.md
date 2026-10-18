@@ -1,8 +1,10 @@
 # ACP Remote 配置参考
 
 > 状态：编码前基线
-> 版本：0.12
-> 日期：2026-10-16
+> 版本：0.14
+> 日期：2026-10-18
+> 修订记录（2026-10-18，0.14）：§1 的 `daemon.listen` 拆分为 `daemon.port` 与可选的 `daemon.bind`（单个 IP）；默认绑定随 TLS 模式分叉（`proxy` → loopback，`direct` → `0.0.0.0` + 尽力 `[::]`），`proxy` 模式禁止非 loopback 绑定；`daemon.public_origin` 接受 `host[:port]` 并归一化为 `https://...`，按“绑定非 loopback 且无 Host 判定来源”失败关闭；新增只读命令 `acp-remote config origin`。旧键 `daemon.listen` 会被明确拒绝。`terminal.*` 已在 0.13 删除；`sessions.*` 已接线；`node_link.*` 仍只解析不生效。
+> 修订记录（2026-10-18，0.13）：删除 `terminal.*` 配置段（§6）——仓库内没有任何消费者，终端输出截断上限不是可配置项；写 `[terminal]` 现在会按未知键启动失败。`daemon.instance_lock = "ipc"` 从「解析但不生效」改为**启动失败**，只接受 `file`。§4 的 `sessions.*` 三个键**已接线**（`queue_policy`/`max_queued_turns` 进 broker，`idle_timeout_ms` 进 `agent-host` 的空闲回收）。§3 的 `node_link.*` 仍是「只解析不生效」，留待后续统一处理。其余键名、类型与默认值未变。
 > 修订记录（2026-10-16，0.12，`pairing-model`）：§9 的 Import 说明去掉「本地客户端能做什么由设备 scope 决定」这一口径（设备权限层已删除：已认证设备即可执行本节点命令，设备方向没有授权维度），远程侧仍由 Import 的 `grants` 与 Owner 的 Export 决定。**配置键名、类型与默认值均未变**（仍以本节为唯一权威）；限流与协议上限仍是固定 v1 常量。
 > 修订记录（2026-09-18）：补充 `daemon.tls.*`、`daemon.local_admin.endpoint`、`logging.*` 与 Owner 侧 `[[exports]]`（原先只有 Access 侧 `[[imports]]`）；明确限流与协议上限是固定 v1 常量而非配置键。
 > 修订记录（2026-09-18，0.3）：`[[exports]].grants` 更名为 `scopes`，与 Node Link Export 模型及本地通道 `ExportView` 同名同义（Access 侧 `[[imports]].grants` 是另一概念，不变）。
@@ -25,11 +27,13 @@
 
 启动配置来源与优先级（高者覆盖低者）：命令行参数 > 配置文件 > 内置默认值。环境变量只用于替换配置文件路径（`ACP_REMOTE_CONFIG`），不承载业务配置，避免把凭据写进进程环境。此优先级不适用于下面的 Daemon 管理状态。
 
+仓库根目录的 [`config.example.toml`](../config.example.toml) 是逐键模板：默认值全部可运行，`node_link.*` 明确标注为“暂不生效”。`crates/app/src/config.rs` 的单元测试会解析这份文件并断言默认值，模板与解析器不会静默漂移。
+
 ### 配置与管理状态的权威（2026-09-23）
 
 | 数据 | 唯一持久化权威 | 写入与生效时机 |
 |---|---|---|
-| daemon / sync / node_link / sessions / storage / terminal / identity / dev_mode / logging 启动参数 | 用户配置文件，经 CLI 参数覆盖 | 启动时读取并校验；v1 不提供文件监听或通用热重载，修改后重启生效 |
+| daemon / sync / node_link / sessions / storage / identity / dev_mode / logging 启动参数 | 用户配置文件，经 CLI 参数覆盖 | 启动时读取并校验；v1 不提供文件监听或通用热重载，修改后重启生效 |
 | Agent profile | 用户配置文件 `[agent]` | 每次启动读取并校验；改配置后重启生效 |
 | 目录标识 → 本机路径 | SQLite 管理记录 | 由成功的会话创建自动记录；已有会话不迁移目录 |
 | 设备/节点信任 | SQLite 管理记录 | 本地管理操作提交后生效；撤销按安全协议立即阻断相应访问 |
@@ -46,27 +50,31 @@
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `daemon.data_dir` | path | 平台用户配置目录下的 `acp-remote/` | SQLite、附件、日志的根目录；权限要求见 `SECURITY_DESIGN.md` §13.2 |
-| `daemon.listen` | string | `"127.0.0.1:8765"` | HTTP/WSS listener 地址；**Sync、Node Link 与两者的配对 HTTP 共用同一个 listener，按 path 路由**（`/sync/v1`、`/node-link/v1`、`/sync/v1/pairing/*`、`/node-link/v1/pairing/*`），并在**根路径 `/`** 上以同一个 listener **同源托管前端静态资源**（PWA 入口文档与构建产物，见 `FRONTEND_DESIGN.md` §4.3）。**与协议 path 的优先级**：已注册的协议 path 先命中（axum 精确路由，静态面只是 router 的 fallback），静态面只接住**未命中任何协议端点**的请求；协议族**保留前缀**之下的未注册子路径仍按协议面语义 404，**不被静态面接管**（保留前缀由已注册协议 path 的**前两段**派生、按段匹配，因此 `/sync/v1extra` 不属于 `/sync/v1`）。默认只监听 loopback；监听 `0.0.0.0`/`[::]` 必须显式配置并在启动输出中告警 |
-| `daemon.public_origin` | string\\|null | `null` | canonical public origin（`scheme://host[:port]`）；配置了远程入口就必须给出，用于 Origin/Host 校验与配对二维码 |
-| `daemon.allowed_hosts` | string[] | `[]` | 反向代理场景下允许的 `Host` 白名单；为空时只接受与 `public_origin` 一致的 Host。**`public_origin` 与 `allowed_hosts` 两者都为空**（默认配置：只监听 loopback）时只接受 loopback 形态的 `Host`（`127.0.0.0/8`、`[::1]`、`localhost`，忽略端口）——这是 `SECURITY_DESIGN.md` §7.2「限制 Host，拒绝任意 Host 转发和 DNS rebinding」在默认配置下的补全，判定与用例在 `crates/server/src/transport/net/host.rs` |
+| `daemon.port` | integer | `8765` | 共享 HTTP/WSS listener 的**绑定端口**；**Sync、Node Link 与两者的配对 HTTP 共用同一个 listener，按 path 路由**（`/sync/v1`、`/node-link/v1`、`/sync/v1/pairing/*`、`/node-link/v1/pairing/*`），并在**根路径 `/`** 上以同一个 listener **同源托管前端静态资源**（PWA 入口文档与构建产物，见 `FRONTEND_DESIGN.md` §4.3）。**与协议 path 的优先级**：已注册的协议 path 先命中（axum 精确路由，静态面只是 router 的 fallback），静态面只接住**未命中任何协议端点**的请求；协议族**保留前缀**之下的未注册子路径仍按协议面语义 404，**不被静态面接管**（保留前缀由已注册协议 path 的**前两段**派生、按段匹配，因此 `/sync/v1extra` 不属于 `/sync/v1`）。`0` 表示临时端口，**只允许** `dev_mode.enabled = true` 且绑定 loopback（测试与本地调试） |
+| `daemon.bind` | string\\|null | `null` | 显式绑定地址（**单个 IP 字面量**，不是白名单）；`null` 时按 TLS 模式取默认：`proxy` → `127.0.0.1`，`direct` → `0.0.0.0` 并尽力补绑 `[::]`。显式值只绑定该地址（`bind = "::"` 表示只监听 IPv6）。**`proxy` 模式只允许 loopback**：非 loopback 绑定在配置解析阶段失败关闭（明文面不得超出 loopback） |
+| `daemon.public_origin` | string\\|null | `null` | 对外身份（canonical public origin）。可写 `host[:port]` 或完整 `https://host[:port]`；裸值自动补 `https://`，省略端口按 443。用于 Origin/Host 校验、配对 URL 与设备身份绑定。**按需失败**：绑定非 loopback 且它与 `allowed_hosts` 都为空时启动失败；只有 `allowed_hosts` 时启动告警，配对/Node Link 在使用点报错并提示配置它 |
+| `daemon.allowed_hosts` | string[] | `[]` | 反向代理场景下允许的 `Host` 白名单；为空时只接受与 `public_origin` 一致的 Host。**`public_origin` 与 `allowed_hosts` 两者都为空**且只监听 loopback 时只接受 loopback 形态的 `Host`（`127.0.0.0/8`、`[::1]`、`localhost`，忽略端口）——这是 `SECURITY_DESIGN.md` §7.2「限制 Host，拒绝任意 Host 转发和 DNS rebinding」在默认配置下的补全，判定与用例在 `crates/server/src/transport/net/host.rs` |
 | `daemon.trusted_proxies` | string[] | `[]` | 允许终止 TLS 的同机代理地址；非空时才考虑 `Forwarded`/`X-Forwarded-*` |
-| `daemon.instance_lock` | enum | `"file"` | 单实例锁实现：`file`\\|`ipc`；见 `SECURITY_DESIGN.md` §12.1。**当前切片只接线 `file`**（`fs4` 的 OS advisory 文件锁；两种取值的互斥语义相同），显式写 `ipc` 会被解析但在启动时以 `daemon.config_unwired`（debug 级）注明「已解析但不生效」，不静默换实现 |
+| `daemon.instance_lock` | enum | `"file"` | 单实例锁实现，**只接受 `file`**（`fs4` 的 OS advisory 文件锁）；其它取值（含旧版文档里的 `ipc`）在配置解析阶段即以 `ConfigError` 失败关闭，不静默换实现。见 `SECURITY_DESIGN.md` §12.1 |
 | `daemon.shutdown_grace_ms` | integer | `10000` | 关闭时等待接入层停止、Agent 退出与存储刷新的上限 |
 | `daemon.local_admin.endpoint` | string | `"auto"` | 本地管理通道 endpoint；`auto` 使用平台默认位置（Windows Named Pipe / Unix socket，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.1）。显式值只用于测试或路径冲突排查，不改变“只允许同一 OS 用户”的授权模型。**当前切片只接受 `auto`**：显式值在配置解析阶段即以 `ConfigError` 失败关闭（`crates/app/src/config.rs`），待 `server::transport::local` 提供显式路径入口后再放开 |
 | `daemon.tls.mode` | enum | `"proxy"` | `proxy` = TLS 由同机可信反向代理终止（配合 `daemon.trusted_proxies` 与 `daemon.public_origin`）；`direct` = Daemon 自己终止 TLS，此时 `cert_path`/`key_path` 必需 |
 | `daemon.tls.cert_path` | path\|null | `null` | PEM 证书链；`mode = "direct"` 时必需，文件权限按 `SECURITY_DESIGN.md` §13.2 检查 |
 | `daemon.tls.key_path` | path\|null | `null` | PEM 私钥；`mode = "direct"` 时必需，不得写入日志、错误信息或崩溃报告 |
 
-三种部署形态下这三个键的填法（Node Link 的对端是**另一台机器**，因此它必须真的可达；`daemon.listen` 只监听 loopback 时 Node Link 只在同机测试下可用）：
+三种部署形态下绑定与对外身份的填法（Node Link 的对端是**另一台机器**，因此它必须真的可达；只绑定 loopback 时 Node Link 只在同机测试下可用）：
 
-| 形态 | `daemon.listen` | TLS | `public_origin` | 额外要求 |
+| 形态 | `daemon.port` / `daemon.bind` | TLS | `public_origin` | 额外要求 |
 |---|---|---|---|---|
-| 同机反代（默认 `tls.mode = "proxy"`） | `127.0.0.1:8765` | 由反代终止 | `https://<对外 host>` 必填 | 反代必须**透传 WebSocket upgrade**，且不得只转发页面路径而与 `/sync/v1`、`/node-link/v1` 脱节；反代地址列入 `daemon.trusted_proxies` |
-| Daemon 自己终止 TLS（`tls.mode = "direct"`） | 可为 `0.0.0.0:8765`（必须显式+启动告警） | `cert_path`/`key_path` 必需 | 必须与证书 host 一致 | 证书轮换不改变 Node identity（`SECURITY_DESIGN.md` §9.5） |
-| 局域网 / Tailscale / WireGuard 直连 | 非 loopback 地址（同上告警） | 仍需 `direct` + 自备证书（如 `tailscale cert`） | 同上 | 不存在「明文 wss」；`dev_mode.allow_plaintext` 只允许 loopback（§10） |
+| 同机反代（默认 `tls.mode = "proxy"`） | `8765` / 默认 `127.0.0.1` | 由反代终止 | `https://<对外 host>` 或 `<对外 host>` 必填 | 反代必须**透传 WebSocket upgrade**，且不得只转发页面路径而与 `/sync/v1`、`/node-link/v1` 脱节；反代地址列入 `daemon.trusted_proxies` |
+| Daemon 自己终止 TLS（`tls.mode = "direct"`） | `8765` / 默认 `0.0.0.0` + `[::]`（启动告警） | `cert_path`/`key_path` 必需 | 必须与证书 host 一致；direct 模式端口不是 443 时写 `host:port` | 证书轮换不改变 Node identity（`SECURITY_DESIGN.md` §9.5） |
+| 局域网 / Tailscale / WireGuard 直连 | 同上（或显式某个非 loopback IP） | 仍需 `direct` + 自备证书（如 `tailscale cert`） | 同上 | 不存在「明文 wss」；`dev_mode.allow_plaintext` 只允许 loopback（§10） |
 
+- `daemon.port` 是**绑定端口**；`public_origin` 里的端口是**对外端口**。反代模式下两者通常不同（8765 vs 443），不要互相推导。
+- `public_origin` 的输入是 `host[:port]`（如 `work-pc.tail.ts.net`、`100.101.102.103:8765`），也可以继续写完整 `https://...`；`http://` 只允许开发明文模式，且**只用于本机 Host 判定**——配对与设备身份仍要求 `https://`（身份侧 canonical origin 只接受该前缀）。IPv6 用方括号（`[fd7a:...]:8765`）。
 - `public_origin` 是 Origin/Host 校验、PWA canonical origin 与配对 URL/endpoint 的**权威 host**；Node Link 不依赖 Origin（对端不是浏览器），但仍受 `Host`/`daemon.allowed_hosts` 与 `SECURITY_DESIGN.md` §7.1 的 TLS 边界约束。
-- `public_origin` 的取值口径是 canonical origin（`https://<authority>`），与身份侧 `CanonicalOrigin::parse`（`crates/identity-auth/src/types.rs`，只认 `https://` 前缀）一致。**实现现状（已知偏差）**：`server::transport::net` 的 `HostPolicy` 只要求它能解析成 `http`/`https` 的 origin（`crates/server/src/transport/net/host.rs`），因此 `http://` 字面量能过 Host 边界、却会在配对 URL 派生处失败关闭；本交付版本未收紧这一点，收紧时两处必须同时改。
+- `public_origin` 归一化后的取值口径仍是 canonical origin（`https://<authority>`），与身份侧 `CanonicalOrigin::parse`（`crates/identity-auth/src/types.rs`，只认 `https://` 前缀）一致。**实现现状（已知偏差）**：`server::transport::net` 的 `HostPolicy` 只要求它能解析成 `http`/`https` 的 origin（`crates/server/src/transport/net/host.rs`），因此 `http://` 字面量能过 Host 边界、却会在配对 URL 派生处失败关闭；本交付版本未收紧这一点，收紧时两处必须同时改。
+- **旧键迁移**：`daemon.listen` 已拆分并会在配置解析阶段被明确拒绝；请改用 `daemon.port` 与可选的 `daemon.bind`。`acp-remote config origin` 可检测本机地址并打印建议值（只读，不写配置文件）。
 
 ## 2. `sync`
 只列出运行时可调项，具体默认值与上限语义以 `SYNC_PROTOCOL.md` §14 为准：
@@ -110,6 +118,8 @@
 | `sessions.max_queued_turns` | integer | `16` | `queue` 策略下的排队上限，超出返回 `session.busy` |
 | `sessions.idle_timeout_ms` | integer | `0` | `0` 表示不因空闲关闭会话；非零时仅影响 Daemon 侧资源，不影响事件与游标 |
 
+三个键**已接线**：`queue_policy`/`max_queued_turns` 由组合根注入 broker 的 `BrokerConfig`（`crates/app/src/compose.rs`），`idle_timeout_ms` 注入 `agent-host` 的空闲回收并启动扫描任务（`crates/app/src/daemon.rs` 的 `agent_idle_sweep`）。非法取值（未知策略、超过 `u32` 的排队上限）在配置解析阶段失败关闭。
+
 ## 5. `storage`
 
 | 键 | 默认值 | 说明 |
@@ -131,13 +141,9 @@
 
 SQLite 在 WAL 模式下把最近的写入放在主库文件旁边的 `-wal` 与 `-shm` 文件里，因此**只拷贝 `acp-remote.sqlite3` 而不带这两个文件，可能得到陈旧甚至损坏的副本**。备份时要么同时拷贝这三个文件，要么先做一次 checkpoint（Daemon 正常关闭时会执行 `wal_checkpoint(TRUNCATE)`，见 `CORE_PORTS_AND_STORAGE.md` §7.1）。附件目录（`storage.attachment_dir`）与数据库是同一份数据的两个部分，必须一起备份。
 
-## 6. `terminal`
+## 6. 终端输出上限（不是配置键）
 
-| 键 | 默认值 | 说明 |
-|---|---:|---|
-| `terminal.max_output_per_command_bytes` | `1048576` | 单条命令终端输出上限（1 MiB） |
-| `terminal.keep_head_bytes` | `131072` | 截断时保留的头部（128 KiB） |
-| `terminal.keep_tail_bytes` | `917504` | 截断时保留的尾部（896 KiB），必须带截断标识 |
+v1 不提供终端输出截断的实现（ACP 终端类方法仍是 `post_mvp`，见 `ACP_COMPATIBILITY_MATRIX.md`），因此**不存在 `terminal.*` 配置段**；配置里写 `[terminal]` 会按未知键让 `daemon start` 失败关闭。未来实现时若需要按部署调整，必须先在本文件登记键名、类型、默认值与失败关闭规则。
 
 ## 7. `[agent]`（Agent 声明）
 

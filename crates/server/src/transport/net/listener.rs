@@ -13,7 +13,7 @@
 
 use std::fmt;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::task::Context;
@@ -39,6 +39,7 @@ use crate::transport::net::NetConfig;
 use crate::transport::net::ProxyPolicy;
 use crate::transport::net::Shutdown;
 use crate::transport::net::TlsFile;
+use crate::transport::net::TlsMode;
 use crate::transport::net::route::NetState;
 use crate::transport::net::route::RouteError;
 use crate::transport::net::route::RouteTable;
@@ -73,14 +74,11 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// listener 绑定/服务失败。所有变体都要求调用方**拒绝启动或拒绝继续**，不得降级。
 #[derive(Debug, thiserror::Error)]
 pub enum NetError {
-    /// `daemon.listen` 不是合法的 `IP:端口` 字面量。
-    #[error("`daemon.listen` 不是合法的 IP:端口 字面量：`{value}`")]
-    InvalidListen {
-        /// 配置值。
-        value: String,
-        /// 解析错误。
-        #[source]
-        source: std::net::AddrParseError,
+    /// `daemon.bind` 是非 loopback 地址，但 TLS 由反代终止：明文面不得超出 loopback。
+    #[error("`proxy` 模式只允许绑定 loopback，不能绑定 {addr}")]
+    ProxyNonLoopback {
+        /// 监听地址。
+        addr: SocketAddr,
     },
     /// `dev_mode.allow_plaintext` 与监听地址冲突（明文开发模式只允许 loopback）。
     #[error("`dev_mode.allow_plaintext` 只对 loopback 生效，不能与监听地址 {addr} 组合")]
@@ -174,6 +172,13 @@ pub enum ListenerWarning {
         /// 实际监听地址。
         addr: SocketAddr,
     },
+    /// `direct` 模式自动补绑的 IPv6 通配地址未能绑定（平台双栈已覆盖或该族不可用）。
+    Ipv6BindSkipped {
+        /// 未能绑定的地址。
+        addr: SocketAddr,
+        /// 错误类别（不含路径或敏感内容）。
+        kind: io::ErrorKind,
+    },
     /// 平台无法核验证书/私钥文件权限（不失败关闭，但也**不是**已核验）。
     PermissionsUnverifiable {
         /// 文件角色。
@@ -194,6 +199,10 @@ impl fmt::Display for ListenerWarning {
                 f,
                 "proxy 模式下监听非 loopback 地址 {addr}：接入面是明文，必须由同机可信反代终止 TLS"
             ),
+            Self::Ipv6BindSkipped { addr, kind } => write!(
+                f,
+                "未能绑定 IPv6 地址 {addr}（{kind:?}）：按平台双栈已覆盖继续；若该错误来自另一个进程占用端口，则本进程没有 IPv6 监听"
+            ),
             Self::PermissionsUnverifiable { role, path } => write!(
                 f,
                 "本平台无法核验 TLS {}文件权限（{}）：未核验，而不是已通过",
@@ -204,14 +213,14 @@ impl fmt::Display for ListenerWarning {
     }
 }
 
-/// 共享 HTTP/WSS listener（`daemon.listen`）。
+/// 共享 HTTP/WSS listener（`daemon.port` + `daemon.bind`）。
 pub struct NetListener {
     config: NetConfig,
-    local_addr: SocketAddr,
+    local_addrs: Vec<SocketAddr>,
     host_policy: HostPolicy,
     proxy_policy: ProxyPolicy,
     tls: Option<Arc<ServerConfig>>,
-    tcp: TcpListener,
+    tcps: Vec<TcpListener>,
     routes: RouteTable,
     warnings: Vec<ListenerWarning>,
     /// 单次 TLS 握手的超时（生产固定为 [`TLS_HANDSHAKE_TIMEOUT`]；测试可注入更短的值）。
@@ -223,30 +232,63 @@ pub struct NetListener {
 impl fmt::Debug for NetListener {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NetListener")
-            .field("local_addr", &self.local_addr)
+            .field("local_addrs", &self.local_addrs)
             .field("tls_terminated", &self.tls.is_some())
             .field("warnings", &self.warnings)
             .finish_non_exhaustive()
     }
 }
 
+/// 解析本次启动要绑定的地址。
+///
+/// 返回 `(addrs, ipv6_auto)`：`ipv6_auto = true` 表示 IPv6 通配地址是 `direct` 模式的默认补全，
+/// 它的 `EADDRINUSE` 可按「平台双栈已覆盖」处理。
+fn bind_targets(config: &NetConfig) -> Result<(Vec<SocketAddr>, bool), NetError> {
+    if let Some(ip) = config.bind {
+        validate_bind(config, ip)?;
+        return Ok((vec![SocketAddr::new(ip, config.port)], false));
+    }
+    match &config.tls {
+        TlsMode::Proxy => Ok((
+            vec![SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                config.port,
+            )],
+            false,
+        )),
+        TlsMode::Direct { .. } => Ok((
+            vec![
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), config.port),
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), config.port),
+            ],
+            true,
+        )),
+    }
+}
+
+/// 绑定地址与部署模式的组合校验（与 `app::config` 的启动校验同口径，这里是传输层的兜底）。
+fn validate_bind(config: &NetConfig, ip: IpAddr) -> Result<(), NetError> {
+    let addr = SocketAddr::new(ip, config.port);
+    if config.allow_plaintext_dev && !ip.is_loopback() {
+        return Err(NetError::PlaintextDevNonLoopback { addr });
+    }
+    if matches!(&config.tls, TlsMode::Proxy) && !ip.is_loopback() {
+        return Err(NetError::ProxyNonLoopback { addr });
+    }
+    Ok(())
+}
+
+/// 自动补绑 IPv6 时哪些错误可以降级为告警。
+fn is_ipv6_skip(source: &io::Error) -> bool {
+    matches!(
+        source.kind(),
+        io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable | io::ErrorKind::Unsupported
+    )
+}
+
 impl NetListener {
-    /// 校验配置、加载 TLS、绑定 `daemon.listen`。
+    /// 校验配置、加载 TLS、绑定本次启动的全部地址。
     pub async fn bind(config: NetConfig) -> Result<Self, NetError> {
-        let addr: SocketAddr =
-            config
-                .listen
-                .trim()
-                .parse()
-                .map_err(|source| NetError::InvalidListen {
-                    value: config.listen.clone(),
-                    source,
-                })?;
-        // `SECURITY_DESIGN.md` §7.3/§10：明文开发模式只允许 loopback；非 loopback 时失败关闭，
-        // 而不是「按 loopback 语义静默生效」。
-        if config.allow_plaintext_dev && !addr.ip().is_loopback() {
-            return Err(NetError::PlaintextDevNonLoopback { addr });
-        }
         for (name, value) in [
             ("max_message_bytes", config.max_message_bytes),
             ("max_body_bytes", config.max_body_bytes),
@@ -260,41 +302,69 @@ impl NetListener {
         let mut warnings = Vec::new();
         let tls = load_server_config(&config.tls, &mut warnings)?;
         // TLS 配置就绪后才绑定：TLS 失败时端口不会被短暂占用。
-        let tcp = TcpListener::bind(addr)
-            .await
-            .map_err(|source| NetError::Bind { addr, source })?;
-        let local_addr = tcp
-            .local_addr()
-            .map_err(|source| NetError::Bind { addr, source })?;
-        if !local_addr.ip().is_loopback() {
-            warnings.push(ListenerWarning::NonLoopbackListen { addr: local_addr });
-            tracing::warn!(
-                event = "net.listen_non_loopback",
-                address = %local_addr,
-                "监听非 loopback 地址"
-            );
-            if tls.is_none() {
-                warnings.push(ListenerWarning::PlaintextBeyondLoopback { addr: local_addr });
-                tracing::warn!(
-                    event = "net.plaintext_beyond_loopback",
-                    address = %local_addr,
-                    "proxy 模式监听非 loopback 地址：明文面必须由同机可信反代终止 TLS"
-                );
+        let (targets, ipv6_auto) = bind_targets(&config)?;
+        let mut tcps = Vec::with_capacity(targets.len());
+        let mut local_addrs = Vec::with_capacity(targets.len());
+        // `port = 0` 时第一个 socket 由内核分配端口；双栈补绑必须复用同一个端口。
+        let mut port = config.port;
+        for (index, target) in targets.iter().enumerate() {
+            let addr = SocketAddr::new(target.ip(), port);
+            match TcpListener::bind(addr).await {
+                Ok(tcp) => {
+                    let local = tcp
+                        .local_addr()
+                        .map_err(|source| NetError::Bind { addr, source })?;
+                    if port == 0 {
+                        port = local.port();
+                    }
+                    if !local.ip().is_loopback() {
+                        warnings.push(ListenerWarning::NonLoopbackListen { addr: local });
+                        tracing::warn!(
+                            event = "net.listen_non_loopback",
+                            address = %local,
+                            "监听非 loopback 地址"
+                        );
+                        if tls.is_none() {
+                            warnings.push(ListenerWarning::PlaintextBeyondLoopback { addr: local });
+                            tracing::warn!(
+                                event = "net.plaintext_beyond_loopback",
+                                address = %local,
+                                "proxy 模式监听非 loopback 地址：明文面必须由同机可信反代终止 TLS"
+                            );
+                        }
+                    }
+                    local_addrs.push(local);
+                    tcps.push(tcp);
+                }
+                // `direct` 的默认 IPv6 通配地址是尽力补绑：平台双栈已覆盖或该族不可用时继续。
+                Err(source) if ipv6_auto && index == 1 && is_ipv6_skip(&source) => {
+                    warnings.push(ListenerWarning::Ipv6BindSkipped {
+                        addr,
+                        kind: source.kind(),
+                    });
+                    tracing::warn!(
+                        event = "net.ipv6_bind_skipped",
+                        address = %addr,
+                        error = %source,
+                        "未能绑定 IPv6 通配地址：按平台双栈已覆盖继续"
+                    );
+                }
+                Err(source) => return Err(NetError::Bind { addr, source }),
             }
         }
         tracing::info!(
             event = "net.listener_bound",
-            address = %local_addr,
+            addresses = ?local_addrs,
             tls = tls.is_some(),
             "接入层已绑定"
         );
         Ok(Self {
             config,
-            local_addr,
+            local_addrs,
             host_policy,
             proxy_policy,
             tls,
-            tcp,
+            tcps,
             routes: RouteTable::default(),
             warnings,
             handshake_timeout: TLS_HANDSHAKE_TIMEOUT,
@@ -312,7 +382,7 @@ impl NetListener {
 
     /// 实际绑定的监听地址清单（`daemon.status.listen` 的来源）。
     pub fn local_addrs(&self) -> Vec<SocketAddr> {
-        vec![self.local_addr]
+        self.local_addrs.clone()
     }
 
     /// 启动期告警（非 loopback 监听、proxy 明文面、权限不可核验）。
@@ -389,7 +459,7 @@ impl NetListener {
         let app = router.into_make_service_with_connect_info::<SocketAddr>();
         let (ready_tx, ready_rx) = mpsc::channel(HANDSHAKE_READY_CAPACITY);
         let acceptor = NetAcceptor {
-            tcp: self.tcp,
+            tcps: self.tcps,
             tls: self.tls.map(TlsAcceptor::from),
             handshakes: JoinSet::new(),
             permits: Arc::new(Semaphore::new(TLS_HANDSHAKE_POOL_SIZE)),
@@ -532,7 +602,8 @@ impl AsyncWrite for NetStream {
 /// 连接结束；`JoinSet` 随之中止全部在途握手——不遗留 detached task。尚未握完的连接也没进过 `axum` 的
 /// 连接表，因此不影响 HTTP 侧的排空。
 struct NetAcceptor {
-    tcp: TcpListener,
+    /// 本次启动绑定的全部 socket（`proxy` 一个；`direct` 默认 IPv4 + 尽力 IPv6）。
+    tcps: Vec<TcpListener>,
     tls: Option<TlsAcceptor>,
     /// 在途握手任务的持有者；丢弃即中止。
     handshakes: JoinSet<()>,
@@ -603,7 +674,11 @@ impl Listener for NetAcceptor {
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
-            tokio::select! {
+            // `TcpListener::accept` 是取消安全的；每次迭代重建这组 future，由第一个就绪的 socket 返回。
+            let accepts: Vec<_> = self.tcps.iter().map(|tcp| Box::pin(tcp.accept())).collect();
+            // 结果先落到局部变量，让 `select_all` 持有的 socket 借用在这里结束；下面的
+            // `start_connection` 需要 `&mut self`。
+            let accepted = tokio::select! {
                 // 已完成的握手（与 accept 的先后无关，握手结果先到就先服务）。
                 ready = self.ready_rx.recv() => {
                     // `None`（全部发送端已丢弃）在本结构里不可达：`ready_tx` 由 [`NetAcceptor`]
@@ -613,23 +688,28 @@ impl Listener for NetAcceptor {
                     if let Some(connection) = ready {
                         return connection;
                     }
+                    continue;
                 }
-                accepted = self.tcp.accept() => match accepted {
-                    Ok((stream, addr)) => {
-                        if let Some(connection) = self.start_connection(stream, addr).await {
-                            return connection;
-                        }
-                    }
-                    Err(error) => handle_accept_error(&error).await,
-                },
                 // 及时收割已结束的握手任务，避免 `JoinSet` 无界增长。
-                Some(_) = self.handshakes.join_next(), if !self.handshakes.is_empty() => {}
+                Some(_) = self.handshakes.join_next(), if !self.handshakes.is_empty() => continue,
+                (accepted, _index, _rest) = futures_util::future::select_all(accepts) => accepted,
+            };
+            match accepted {
+                Ok((stream, addr)) => {
+                    if let Some(connection) = self.start_connection(stream, addr).await {
+                        return connection;
+                    }
+                }
+                Err(error) => handle_accept_error(&error).await,
             }
         }
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.tcp.local_addr()
+        self.tcps
+            .first()
+            .ok_or_else(|| io::Error::other("no listener"))?
+            .local_addr()
     }
 }
 
@@ -653,32 +733,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn invalid_listen_value_fails_closed() {
-        let error = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime")
-            .block_on(NetListener::bind(NetConfig {
-                listen: "not-an-address".to_owned(),
-                ..NetConfig::default()
-            }))
-            .expect_err("非法监听地址必须失败关闭");
-        assert!(matches!(error, NetError::InvalidListen { .. }));
-        assert!(error.to_string().contains("not-an-address"));
+    fn default_bind_follows_the_tls_mode() {
+        let proxy = NetConfig {
+            port: 8765,
+            ..NetConfig::default()
+        };
+        let (addrs, auto) = bind_targets(&proxy).expect("proxy 默认可用");
+        assert_eq!(addrs, vec!["127.0.0.1:8765".parse().expect("addr")]);
+        assert!(!auto);
+
+        let direct = NetConfig {
+            tls: TlsMode::Direct {
+                cert_path: PathBuf::from("cert.pem"),
+                key_path: PathBuf::from("key.pem"),
+            },
+            ..NetConfig::default()
+        };
+        let (addrs, auto) = bind_targets(&direct).expect("direct 默认可用");
+        assert_eq!(
+            addrs,
+            vec![
+                "0.0.0.0:8765".parse().expect("addr"),
+                "[::]:8765".parse().expect("addr"),
+            ]
+        );
+        assert!(auto);
     }
 
     #[test]
-    fn plaintext_dev_flag_rejects_non_loopback_listen() {
-        let error = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime")
-            .block_on(NetListener::bind(NetConfig {
-                listen: "0.0.0.0:0".to_owned(),
-                allow_plaintext_dev: true,
-                ..NetConfig::default()
-            }))
-            .expect_err("明文开发模式不得用于非 loopback");
+    fn proxy_rejects_non_loopback_bind() {
+        let config = NetConfig {
+            bind: Some("0.0.0.0".parse().expect("ip")),
+            ..NetConfig::default()
+        };
+        assert!(matches!(
+            bind_targets(&config),
+            Err(NetError::ProxyNonLoopback { .. })
+        ));
+    }
+
+    #[test]
+    fn plaintext_dev_flag_rejects_non_loopback_bind() {
+        let config = NetConfig {
+            bind: Some("0.0.0.0".parse().expect("ip")),
+            allow_plaintext_dev: true,
+            ..NetConfig::default()
+        };
+        let error = bind_targets(&config).expect_err("明文开发模式不得用于非 loopback");
         assert!(matches!(error, NetError::PlaintextDevNonLoopback { .. }));
     }
 
@@ -711,6 +812,11 @@ mod tests {
             addr: "0.0.0.0:8765".parse().expect("合法地址"),
         };
         assert!(warning.to_string().contains("明文"));
+        let warning = ListenerWarning::Ipv6BindSkipped {
+            addr: "[::]:8765".parse().expect("合法地址"),
+            kind: io::ErrorKind::AddrInUse,
+        };
+        assert!(warning.to_string().contains("IPv6"));
         let warning = ListenerWarning::PermissionsUnverifiable {
             role: TlsFile::PrivateKey,
             path: PathBuf::from("key.pem"),

@@ -3,7 +3,7 @@
 //!
 //! 模块组成：
 //!
-//! - [`config`]：`NetConfig` 与 `TlsMode`（`daemon.listen`/`daemon.tls.*`/`daemon.allowed_hosts`/
+//! - [`config`]：`NetConfig` 与 `TlsMode`（`daemon.port`/`daemon.bind`/`daemon.tls.*`/`daemon.allowed_hosts`/
 //!   `daemon.trusted_proxies`/`dev_mode.allow_plaintext` 的传输层形状）；
 //! - [`listener`]：绑定、失败关闭、非 loopback 告警、`serve` 与带上限的连接排空（`direct` 模式的
 //!   TLS 握手在接入选层的有界并发池里完成，不占 accept 关键路径）；
@@ -75,10 +75,11 @@ pub use tls::TlsFile;
 pub use ui::{EmbeddedUi, MissingFrontendBuild, check_release_build};
 pub use ws::{WsConnection, WsError, WsHandler, WsMessage};
 
-/// `daemon.listen` 的内置默认值（`CONFIG_REFERENCE.md` §1）。
+/// `daemon.port` 的内置默认值（`CONFIG_REFERENCE.md` §1）。
 ///
-/// 默认只监听 loopback；非 loopback 必须显式配置并在启动输出中告警（`[ListenerWarning::NonLoopbackListen]`）。
-pub const DEFAULT_LISTEN: &str = "127.0.0.1:8765";
+/// 绑定地址由 `daemon.bind` 或 TLS 模式决定；非 loopback 必须显式配置并在启动输出中告警
+/// （[`ListenerWarning::NonLoopbackListen`]）。
+pub const DEFAULT_PORT: u16 = 8765;
 
 /// 单条 WebSocket message 的默认上限（`NODE_LINK_PROTOCOL.md` §2.5：1 MiB）。
 ///
