@@ -56,6 +56,10 @@ import { createFakeHostIdentity, signPairingClaimHostProof, tamperPublicKeyLastB
 import type { FakeHostIdentity } from "../fake-host";
 import { encodeBase64Url } from "../../../src/sync-client";
 import { PAIRING_POLL_INTERVAL_MS } from "../../../src/features/pairing-model";
+import {
+  THEME_PREFERENCE_STORAGE_KEY,
+  themePreferenceStore,
+} from "../../../src/components/theme";
 import { openPlatform } from "../../../src/platform";
 import { currentPath } from "../router-stub";
 import {
@@ -590,7 +594,45 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "PW-2b /node-link/pair 无片段：仍是无载荷页，不提供配对码输入、不发请求",
+    name: "PW-11 配对页明暗切换：按钮存在、点击翻转标签与共享偏好、不发请求",
+    async run() {
+      const http = recordingFetch();
+      globalThis.location.hash = "";
+      themePreferenceStore.set("light");
+      const mounted = await mountScenario(baseScenario({ seedPaired: false, fetch: http.fetch }));
+      try {
+        await waitFor(
+          () => query(mounted.container, '[data-pairing-theme-toggle="true"]') !== null,
+          "配对页渲染主题按钮",
+        );
+        const button = query(mounted.container, '[data-pairing-theme-toggle="true"]');
+        expectEqual(
+          button?.getAttribute("aria-label") ?? null,
+          "当前：白天，点击切换",
+          "浅色下按钮的动作标签",
+        );
+        click(button, "配对页主题按钮");
+        await waitFor(
+          () =>
+            query(mounted.container, '[data-pairing-theme-toggle="true"]')?.getAttribute(
+              "aria-label",
+            ) === "当前：黑夜，点击切换",
+          "点击后主题标签翻转为黑夜",
+        );
+        expectEqual(
+          globalThis.localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY),
+          "dark",
+          "主题切换写入共享偏好",
+        );
+        expectEqual(http.urls.length, 0, "主题切换不发任何配对请求");
+      } finally {
+        await mounted.unmount();
+        themePreferenceStore.set("system");
+      }
+    },
+  },
+  {
+    name: "PW-2b /node-link/pair 无片段：仍是无载荷页、不提供配对码输入、不发请求",
     async run() {
       const http = recordingFetch();
       globalThis.location.hash = "";

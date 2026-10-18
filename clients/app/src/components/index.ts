@@ -50,6 +50,7 @@ export type { HostConnectionPanelProps } from "./HostConnectionPanel";
 export { HostConnectionPanel } from "./HostConnectionPanel";
 export type { PairingPanelProps } from "./PairingPanel";
 export { PairingPanel } from "./PairingPanel";
+export { PairingThemeToggle } from "./PairingThemeToggle";
 export type { RuntimeUnavailableProps } from "./RuntimeUnavailable";
 export { RuntimeUnavailable } from "./RuntimeUnavailable";
 
