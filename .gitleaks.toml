@@ -104,3 +104,26 @@ description = "已记录的假阳性：docs/NODE_LINK_PROTOCOL.md 协议示例�
 regexTarget = "line"
 regexes = ['''"accessNodeId": "[0-9a-f-]{36}"''']
 paths = ['''docs/NODE_LINK_PROTOCOL\.md''']
+
+# `device-pairing-qr-reference` 新增的公开固定测试向量（2026-10-18 补登）。
+#
+# 这些值是跨 Rust/TypeScript 的共享向量：qrToken 解码后是 00 01 02 … 的合成计数序列，指纹是
+# 公开测试公钥的 SHA-256 摘要；它们不是任何真实凭据，也没有对应的服务端秘密。默认规则集的
+# `generic-api-key` 按高熵字符串误判。只豁免「确切的值 + 确切的文件」，不放行目录、不放宽全局规则。
+[[allowlists]]
+description = "公开固定测试向量：设备扫码取回凭据 qrToken（base64url 解码为 00 01 … 1F 的 32 字节计数序列）。不是凭据；fixtures/sync/v1/valid 与 invalid 请求、clients/app 单测共用同一向量。由主 Agent 于 2026-10-18 核对"
+regexTarget = "line"
+regexes = ['''"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"''']
+paths = ['''fixtures/sync/v1/valid/pairing-qr-lookup-request\.json''', '''fixtures/sync/v1/invalid/pairing-qr-lookup-request-unknown-field\.json''', '''clients/app/src/features/native-qr-consumer\.test\.ts''']
+
+[[allowlists]]
+description = "公开固定测试向量：设备扫码取回凭据的 31 字节负例（长度错误的合成计数序列）。不是凭据；只用于断言请求被拒绝。由主 Agent 于 2026-10-18 核对"
+regexTarget = "line"
+regexes = ['''"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHy"''']
+paths = ['''fixtures/sync/v1/invalid/pairing-qr-lookup-request-short-token\.json''']
+
+[[allowlists]]
+description = "公开固定测试向量：测试公钥的 SHA-256 指纹（32 字节摘要，不是私钥或 token）。该公钥与指纹是共享向量的一部分，用于验证二维码指纹匹配。由主 Agent 于 2026-10-18 核对"
+regexTarget = "line"
+regexes = ['''"USpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w"''']
+paths = ['''fixtures/sync/v1/device-qr/vectors\.json''', '''clients/app/src/features/native-qr-consumer\.test\.ts''']

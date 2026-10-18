@@ -95,9 +95,9 @@ describe("配对面板：配对码入口与失败文案", () => {
         applyAwaitingCode(initialPairingPageModel("sync"), "sync", ORIGIN, true),
         {
           code: "internal.unavailable",
-          message: "内部细节：pairingSecret=AAECAwQFBgcICQoLDA0ODw",
+          message: "内部细节：pairingSecret=not-a-real-secret",
           retryable: true,
-          details: { pairingSecret: "AAECAwQFBgcICQoLDA0ODw" },
+          details: { pairingSecret: "not-a-real-secret" },
         },
       ),
     );
