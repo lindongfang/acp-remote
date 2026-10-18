@@ -60,6 +60,7 @@ sha2.workspace = true
 uuid.workspace = true
 # `DaemonControl`/`ConnectionCloser`/`AuditHook`/`CredentialResolver` 都是可 dyn 化的异步 trait。
 async-trait.workspace = true
+qrcode = { version = "0.14", default-features = false }
 
 # 集成测试自己也用到这批依赖（JSON、摘要、runtime），在测试目标上显式声明，不依赖
 # 「普通依赖是否对测试目标可见」这一隐式前提。

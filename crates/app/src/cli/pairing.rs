@@ -16,6 +16,7 @@ use std::io::{IsTerminal as _, Write as _};
 use std::time::{Duration, Instant};
 
 use acp_core::ports::Clock as _;
+use qrcode::{Color, EcLevel, QrCode};
 use serde_json::Value;
 use server::local_admin::{JsonObject, LocalErrorCode, Method};
 
@@ -431,13 +432,17 @@ async fn await_claim(
     let pairing_id = text_field(&begin, "pairingId")?;
     // `pairingUrl` 只经终端展示（含配对 secret 的 fragment），不落日志/文件/错误消息。
     let pairing_url = text_field(&begin, "pairingUrl")?;
-    println!("{pairing_url}");
     if target == PairTarget::Device {
-        // 网页入口的 8 位配对码：`XXXX-XXXX` 只是展示形态，服务端归一化后比较。它同样只在终端出现，
-        // 不写日志/文件/错误消息。节点配对没有网页入口，不读取该字段。
+        // 网页端用裸 `/pair` + 8 位配对码；完整 fragment 只由二维码承载，供移动端扫码。
+        println!("网页端：{}", bare_pairing_url(&pairing_url));
         let pairing_code = text_field(&begin, "pairingCode")?;
         println!("配对码：{}", readable_pairing_code(&pairing_code)?);
-        println!("（移动端请扫码/打开上面的完整地址；网页端打开 /pair 后输入配对码）");
+        println!();
+        println!("{}", terminal_qr(&pairing_url)?);
+        println!();
+        println!("（移动端请扫码；网页端打开 /pair 后输入配对码）");
+    } else {
+        println!("{pairing_url}");
     }
     let expires_at = text_field(&begin, "expiresAt")?;
     println!(
@@ -546,6 +551,74 @@ fn expired(target: PairTarget) -> Failure {
         LocalErrorCode::Expired,
         format!("{label}配对已过期或已被拒绝", label = target.label()),
     )
+}
+
+/// 网页端入口：`pairingUrl` 去掉 `#data=…` fragment 后的裸地址。
+fn bare_pairing_url(pairing_url: &str) -> &str {
+    pairing_url
+        .split_once('#')
+        .map(|(base, _)| base)
+        .unwrap_or(pairing_url)
+}
+
+/// 把完整 `pairingUrl` 渲染成终端二维码；二维码是移动端入口，矩阵不把 URL 作为文本输出。
+fn terminal_qr(pairing_url: &str) -> Result<String, Failure> {
+    // L 级纠错在完整 URL 上选到更小的版本；终端二维码只用于近距离扫码，不需要海报级冗余。
+    let code =
+        QrCode::with_error_correction_level(pairing_url.as_bytes(), EcLevel::L).map_err(|_| {
+            Failure::local(
+                LocalErrorCode::Internal,
+                "无法生成终端二维码；请重试 device pair",
+            )
+        })?;
+    Ok(braille_qr(&code))
+}
+
+/// 2×4 个模块压成一个 Braille 字符：模块仍是方形（约 4×4 px），宽高各减半。
+/// 4 模块 quiet zone 保留；L 级 + 半尺寸只用于终端近距离扫码。
+fn braille_qr(code: &QrCode) -> String {
+    const QUIET: isize = 4;
+    let width = code.width() as isize;
+    let colors = code.to_colors();
+    let padded = width + QUIET * 2;
+    let cols = (padded + 1) / 2;
+    let rows = (padded + 3) / 4;
+    let dark = |x: isize, y: isize| -> bool {
+        let px = x - QUIET;
+        let py = y - QUIET;
+        px >= 0
+            && py >= 0
+            && px < width
+            && py < width
+            && colors[(py * width + px) as usize] == Color::Dark
+    };
+    let mut out = String::new();
+    for row in 0..rows {
+        if row > 0 {
+            out.push('\n');
+        }
+        for col in 0..cols {
+            let x = col * 2;
+            let y = row * 4;
+            let mut bits = 0_u32;
+            for (bit, dx, dy) in [
+                (0x01_u32, 0_isize, 0_isize),
+                (0x02, 0, 1),
+                (0x04, 0, 2),
+                (0x08, 1, 0),
+                (0x10, 1, 1),
+                (0x20, 1, 2),
+                (0x40, 0, 3),
+                (0x80, 1, 3),
+            ] {
+                if dark(x + dx, y + dy) {
+                    bits |= bit;
+                }
+            }
+            out.push(char::from_u32(0x2800 + bits).unwrap_or(' '));
+        }
+    }
+    out
 }
 
 /// 把服务端返回的规范配对码（8 位大写、无分隔符）展示为 `XXXX-XXXX`。
