@@ -1409,6 +1409,7 @@ impl HostNode {
             &Arc::clone(&authority),
             &Arc::clone(&broker),
             &app::daemon::sync_config(&config),
+            config.public_origin.clone(),
             Arc::new(UnreachableOwners),
             sync_events,
         )
@@ -1558,6 +1559,11 @@ impl HostNode {
     /// 脚本化后端的行为脚本（失败注入、窗口期事件注入、后端调用计数）。
     pub fn script(&self) -> &Arc<ScriptedScript> {
         &self.script
+    }
+
+    /// 真实身份状态机（配对码/secret 的内存态观测口：`has_secret`、`consume_pairing_code`）。
+    pub fn authority(&self) -> &Arc<Authority> {
+        &self.authority
     }
 
     /// 真实存储（用例对持久化事实做独立只读复核）。

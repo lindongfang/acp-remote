@@ -59,6 +59,7 @@ export type ErrorCode =
   | "pairing.already_claimed"
   | "pairing.expired"
   | "pairing.consumed"
+  | "pairing.code_invalid"
   | "sync.cursor_invalid"
   | "command.unsupported"
   | "command.not_found"

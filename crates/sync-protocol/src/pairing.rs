@@ -1,8 +1,10 @@
 //! Pairing v1 的 HTTPS payload（`schemas/sync/v1/pairing.schema.json`，`docs/SYNC_PROTOCOL.md` §7）。
 //!
-//! 这里只做 wire 形状与取值域校验：二维码载荷、claim/status 请求与响应、HTTP 错误体。签名与 HMAC 的
-//! 密码学验证属于 `identity-auth`；「一个设备身份只绑定一个 canonical origin」属于安全状态机，本模块
-//! 只保证 `canonicalOrigin` 是合法的 origin 字面量、且不含路径、查询或片段。
+//! 这里只做 wire 形状与取值域校验：二维码载荷、claim/status 请求与响应、配对码 lookup 的请求与响应、
+//! HTTP 错误体。签名与 HMAC 的密码学验证属于 `identity-auth`；「一个设备身份只绑定一个 canonical
+//! origin」属于安全状态机，本模块只保证 `canonicalOrigin` 是合法的 origin 字面量、且不含路径、查询
+//! 或片段。配对码的派生、归一化与单次消耗属于 `identity-auth`/服务端，本模块只校验它的 wire 字符集与
+//! 长度（8 位 Crockford base32，可带一个 `-`）。
 
 use std::fmt;
 use std::str::FromStr;
@@ -353,4 +355,92 @@ impl<'de> Deserialize<'de> for StatusResponse {
         let raw = RawStatusResponse::deserialize(deserializer)?;
         Self::try_from(raw).map_err(DeError::custom)
     }
+}
+
+/// `lookupRequest.pairingCode`：8 位 Crockford base32（40 bit），可带一个 `-` 分隔符。
+///
+/// wire 上大小写不敏感，且允许 Crockford 的易混字符 `I`/`L`/`O`（服务端归一化为 `1`/`1`/`0`）；
+/// `U` 不在 Crockford 字母表内。这里只校验字符集与长度，保留原始写法——归一化与「成功即消耗」
+/// 属于服务端，DTO 不替它做决定。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PairingCode(String);
+
+impl PairingCode {
+    /// 去掉分隔符后的有效位数。
+    pub const LENGTH: usize = 8;
+
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        let compact: Vec<char> = text.chars().filter(|character| *character != '-').collect();
+        let hyphens = text.chars().count() - compact.len();
+        let well_formed = compact.len() == Self::LENGTH
+            && hyphens <= 1
+            && (hyphens == 0 || text.chars().nth(4) == Some('-'))
+            && compact
+                .iter()
+                .all(|character| is_crockford_base32(*character));
+        if !well_formed {
+            // 不回显输入：配对码是取回 secret 的凭据，错误文本可能进入日志。
+            return Err(ValueError::Shape {
+                field: "pairingCode",
+                expected: "8 位 Crockford base32（大小写不敏感，可带一个 4+4 的 `-` 分隔符，不含 U）",
+            });
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    /// 原始 wire 写法（未归一化）。
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Crockford base32 字母表（大小写不敏感）加上会被归一化的 `I`/`L`/`O`；`U` 被排除。
+fn is_crockford_base32(character: char) -> bool {
+    let uppercase = character.to_ascii_uppercase();
+    uppercase.is_ascii_digit() || (uppercase.is_ascii_uppercase() && uppercase != 'U')
+}
+
+impl Serialize for PairingCode {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for PairingCode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(DeError::custom)
+    }
+}
+
+/// `pairing.schema.json#/$defs/lookupRequest`：`POST /sync/v1/pairing/lookup` 的请求体。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LookupRequest {
+    #[serde(rename = "protocolVersion")]
+    pub protocol_version: ProtocolVersionV1,
+    #[serde(rename = "pairingCode")]
+    pub pairing_code: PairingCode,
+}
+
+/// `pairing.schema.json#/$defs/lookupResponse`：lookup 成功返回的配对绑定与 secret。
+///
+/// 响应不含任何授权集合；`pairingSecret` 是完整 256 bit，后续 claim/status 与二维码入口完全一致。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LookupResponse {
+    #[serde(rename = "protocolVersion")]
+    pub protocol_version: ProtocolVersionV1,
+    #[serde(rename = "pairingId")]
+    pub pairing_id: Uuid,
+    #[serde(rename = "hostId")]
+    pub host_id: Uuid,
+    #[serde(rename = "hostPublicKey")]
+    pub host_public_key: Base64Url<65>,
+    #[serde(rename = "canonicalOrigin")]
+    pub canonical_origin: CanonicalOrigin,
+    #[serde(rename = "pairingSecret")]
+    pub pairing_secret: Base64Url<32>,
+    #[serde(rename = "expiresAt")]
+    pub expires_at: Timestamp,
 }

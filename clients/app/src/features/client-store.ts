@@ -152,20 +152,32 @@ import {
 } from "./directory-model";
 import type { HostIdentityModel, HostPanelModel } from "./host-panel-model";
 import { buildHostPanelModel } from "./host-panel-model";
-import type { PairingKind, PairingPageModel, PairingPollResult, PairingQrRead, PairingWiring } from "./pairing-model";
+import type {
+  PairingEntry,
+  PairingKind,
+  PairingLookupOutcome,
+  PairingPageModel,
+  PairingPollResult,
+  PairingQrRead,
+  PairingWiring,
+} from "./pairing-model";
 import {
   PAIRING_ERROR_HINTS,
   PAIRING_POLL_INTERVAL_MS,
+  applyAwaitingCode,
   applyClaiming,
+  applyLookingUp,
   applyNoPayload,
   applyPairingCloseoutFailure,
   applyPairingFailure,
   applyPollResult,
   applyScannedNodeLink,
   canonicalOriginOf,
+  codeInvalidFailure,
   initialPairingPageModel,
   insecureContextFailure,
   kindMismatchFailure,
+  normalizePairingCode,
   originMismatchFailure,
   pairedHostRecordFor,
   pairedHostWriteFailure,
@@ -612,6 +624,9 @@ export interface ClientStoreOptions {
  * **不进 `ClientState`**：二维码载荷含 `pairingSecret`，而 `ClientState` 是可导出、可快照的
  * 公开状态（诊断与导出配置都会读它）。载荷只活在仓库的私有字段里，并在已批准或终态时立即
  * 丢掉（§7.3：成功或终态后清除二维码 payload 与内存中的 secret）。
+ *
+ * 二维码路径的 `qr` 直接来自 fragment；配对码路径的 `qr` 由 lookup 响应拼成（与二维码载荷
+ * 同形），两条路径因此共享同一个会话字段与同一套 claim/轮询。
  */
 interface PairingSession {
   readonly qr: PairingQrPayload;
@@ -1602,14 +1617,17 @@ export class ClientStore {
   }
 
   /**
-   * 配对页的**唯一**入口（页面进页时调用一次）：地址片段里有配对内容就读取并**立即清除**该片段，
-   * 然后进入与 `kind` 对应的流程；没有内容时呈现「这个地址里没有配对信息」。
+   * 配对页的入口（页面进页时调用一次）：地址片段里有配对内容就读取并**立即清除**该片段，
+   * 然后进入与 `kind` 对应的流程。
+   *
+   * - `sync` 且没有片段：进入配对码输入（原型 S0），不发任何请求；
+   * - `node-link` 且没有片段：仍是「这个地址里没有配对信息」（该入口不提供配对码）。
    *
    * `kind` 是**路由**声明的期望类型（design D2）：载荷与它不一致时明确失败，绝不交给另一类流程。
    * 片段读取与清除都在组合根（地址栏是平台能力，`AGENTS.md` §6），本方法只消费它的结果。
    *
    * 会话进行中再次进入本方法（例如开发模式下 effect 重跑）时不覆盖当前状态：片段此时已被清除，
-   * 若按「无载荷」重写，会把正在等待确认的页面误切回 `idle`。
+   * 若按「无载荷」重写，会把正在等待确认的页面误切回输入态。
    */
   async startPairingFromAddress(kind: PairingKind): Promise<void> {
     const wiring = this.#pairing;
@@ -1625,13 +1643,143 @@ export class ClientStore {
       });
       return;
     }
-    if (this.#pairingSession !== null) return;
+    if (this.#pairingSession !== null || this.#state.pairing.phase === "looking_up") return;
     const text = wiring.takeQrTextFromFragment();
     if (text === null) {
-      this.#commit({ ...this.#state, pairing: applyNoPayload(this.#state.pairing, kind) });
+      if (kind === "node-link") {
+        this.#commit({ ...this.#state, pairing: applyNoPayload(this.#state.pairing, kind) });
+        return;
+      }
+      const origin = canonicalOriginOf(wiring.currentOrigin()) ?? wiring.currentOrigin();
+      this.#commit({
+        ...this.#state,
+        pairing: applyAwaitingCode(this.#state.pairing, kind, origin, wiring.isSecureContext()),
+      });
       return;
     }
     await this.#beginPairing(text, kind);
+  }
+
+  /**
+   * 配对码入口的提交（原型 S0 → S1 → S2）：先做**本地**格式与安全上下文校验，再调用同源
+   * lookup；成功后把响应拼成与二维码载荷同形的 `qr`，交给**同一条** claim/轮询/落盘链路。
+   *
+   * 失败面是固定的（design D6）：格式不符、lookup 的 HTTP/结构/网络失败、lookup 返回已过期，
+   * 都落到「配对码不对或已过期，请重新生成配对码」。不区分后端原因、不回显 `message`、
+   * 不自动重试，也不把码写进任何状态或存储。
+   */
+  async submitPairingCode(raw: string): Promise<void> {
+    const wiring = this.#pairing;
+    if (wiring === null) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, {
+          code: "internal.unavailable",
+          message: "配对链路未装配：本页面拿不到配对传输。",
+          retryable: true,
+          details: {},
+        }),
+      });
+      return;
+    }
+    // 只有输入态可以提交：lookup 在途（S1）与任何后续阶段都不接受第二份输入。
+    if (this.#state.pairing.phase !== "awaiting_code" || this.#pairingSession !== null) return;
+
+    // 安全上下文（design D6）：非安全上下文不发送 lookup；失败文案沿用 S11 的固定呈现。
+    if (!wiring.isSecureContext()) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, insecureContextFailure(), "insecure_context"),
+      });
+      return;
+    }
+
+    const code = normalizePairingCode(raw);
+    if (code === null) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, codeInvalidFailure()),
+      });
+      return;
+    }
+
+    const origin = canonicalOriginOf(wiring.currentOrigin());
+    if (origin === null) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, originMismatchFailure(), "origin_mismatch"),
+      });
+      return;
+    }
+
+    this.#commit({ ...this.#state, pairing: applyLookingUp(this.#state.pairing) });
+
+    // 响应丢失（抛出）与业务失败都收敛成 `null`：成功 lookup 已消耗码，重试没有意义。
+    let lookup: PairingLookupOutcome | null = null;
+    try {
+      lookup = await wiring.transport.lookup({ canonicalOrigin: origin, pairingCode: code });
+    } catch {
+      lookup = null;
+    }
+    // 输入提交后页面不再接受另一份码；这里仍按阶段收口，避免迟到的结果覆盖别的流程。
+    // 显式拓宽类型：`#commit` 之后 TS 的旧窄化不会自动失效。
+    const phase: string = this.#state.pairing.phase;
+    if (phase !== "looking_up") return;
+    if (lookup === null || lookup.kind !== "ok") {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, codeInvalidFailure()),
+      });
+      return;
+    }
+
+    const qr = lookup.qr;
+    // lookup 是**同源**请求：响应里的来源必须仍是本页来源，否则就是另一台主机（design D5）。
+    if (canonicalOriginOf(qr.canonicalOrigin) !== origin) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, originMismatchFailure(), "origin_mismatch"),
+      });
+      return;
+    }
+    // 服务端时间优先：lookup 成功但码在响应到达时已过期 → 不 claim、不显示本地估算。
+    const expiresAtMs = Date.parse(qr.expiresAt);
+    if (Number.isNaN(expiresAtMs) || expiresAtMs <= this.#now()) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, codeInvalidFailure()),
+      });
+      return;
+    }
+
+    // `expiresAtMs` 只用于这里的到期判定；会话内的绝对截止时间由 `applyClaiming` 与到期
+    // 定时器从同一个 `qr.expiresAt` 复算，不另存第二份时间。
+
+    // 网页入口的主机身份边界（design D5）：同源已有不同的已配对公钥时失败关闭，不覆盖记录。
+    try {
+      const hostError = await wiring.checkCodeEntryHost({
+        canonicalOrigin: origin,
+        hostPublicKey: qr.hostPublicKey,
+      });
+      if (hostError !== null) {
+        this.#commit({
+          ...this.#state,
+          // 主机身份变化（design D5）是独立失败类别：来源没变，不能复用「这个地址属于
+          // 另一台电脑」的来源不符文案。
+          pairing: applyPairingFailure(this.#state.pairing, hostError, "host_identity_changed"),
+        });
+        return;
+      }
+    } catch (error) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, publicErrorForTransportFailure(error)),
+      });
+      return;
+    }
+    if ((this.#state.pairing.phase as string) !== "looking_up") return;
+
+    await this.#startPairingSession(qr, "code");
   }
 
   /**
@@ -1710,11 +1858,22 @@ export class ClientStore {
       return;
     }
 
-    const qr = read.qr;
-    // 载荷从这一刻起由私有字段持有；`applyClaiming` 一次写入**公开**的对端信息与绝对截止时间。
+    await this.#startPairingSession(read.qr, "qr");
+  }
+
+  /**
+   * 两种入口（fragment / 配对码 lookup）**共用**的会话起点：claim → 首次轮询。没有第二套实现。
+   *
+   * 载荷从这一刻起由私有字段持有；`applyClaiming` 一次写入**公开**的对端信息、绝对截止时间
+   * 与入口种类（`entry`）。入口种类随模型走完整条链路：到期定时器与服务端 `pairing.expired`
+   * 都据此选过期呈现（配对码入口 S6、二维码入口 S7）。
+   */
+  async #startPairingSession(qr: PairingQrPayload, entry: PairingEntry): Promise<void> {
+    const wiring = this.#pairing;
+    if (wiring === null) return;
     const session: PairingSession = { qr, cancel: null, expiryCancel: null };
     this.#pairingSession = session;
-    this.#commit({ ...this.#state, pairing: applyClaiming(this.#state.pairing, qr) });
+    this.#commit({ ...this.#state, pairing: applyClaiming(this.#state.pairing, qr, entry) });
 
     // 到期定时器（design D3）：用载荷里的绝对 `expiresAt` 安排一次回调，归零即停止轮询并进入
     // 过期页。服务端仍是过期判定的权威；这里只保证页面不会在本地过期之后继续查询。
@@ -1752,10 +1911,11 @@ export class ClientStore {
   }
 
   /**
-   * 到期回调：会话仍是同一次配对时结束它并落到 `expired`。
+   * 到期回调：会话仍是同一次配对时结束它，并落到按**入口**分流的过期呈现。
    *
    * 状态迁移与秘密生命周期都属于仓库，页面只负责显示倒计时；因此即使页面标签被挂起、
-   * 每秒刷新没有跑，这里也会按绝对时间把状态推进过去。
+   * 每秒刷新没有跑，这里也会按绝对时间把状态推进过去。呈现由 `applyPairingFailure` 决定：
+   * 二维码入口是「配对地址已过期」（S7），配对码入口是固定的「配对码不对或已过期」（S6）。
    */
   #expirePairing(qr: PairingQrPayload): void {
     const session = this.#pairingSession;

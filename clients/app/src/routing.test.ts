@@ -375,7 +375,9 @@ describe("3.3 配对二维码地址：片段被读出、被清除，清除后仍
       await composition.store.startPairingFromAddress("sync");
 
       // 片段不归配对所有：既不进配对流程，也不被清除（别人的片段可能承载别的语义）。
-      expect(composition.store.pairingPage().phase).toBe("idle");
+      // sync 入口没有配对片段时进入配对码输入（S0），而不是把别人的片段当载荷。
+      expect(composition.store.pairingPage().phase).toBe("awaiting_code");
+      expect(composition.store.pairingPage().origin).toBe(ORIGIN);
       expect(addressBar.replaced).toEqual([]);
       expect(addressBar.pushed).toEqual([]);
       expect(addressBar.address()).toBe("/pair#/hosts");

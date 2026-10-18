@@ -65,6 +65,7 @@ import type {
 import { ClientStore } from "./features/client-store";
 import type { ConnectionIdentity, IdentifierSource, SyncGateway } from "./features/ports";
 import type {
+  PairingLookupOutcome,
   PairingPollResult,
   PairingQrRead,
   PairingTransport,
@@ -111,6 +112,14 @@ const DOMAIN = {
 
 /** `$defs.canonicalOrigin`：`^https://[^/?#]+$`。 */
 const CANONICAL_ORIGIN_PATTERN = /^https:\/\/[^/?#]+$/;
+
+/**
+ * `$defs.uuid`：`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`。
+ *
+ * 与 schema 逐字相同（小写、固定宽度、无花括号）：lookup 响应的 `pairingId`/`hostId` 之后会
+ * 进入 transcript 的 `uuid16` 编码，形状不符必须在响应解析处就判为失败，而不是拖到 claim 才炸。
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** 两类二维码载荷的 `pairingProtocol` 常量（`schemas/sync/v1/pairing.schema.json`、`schemas/node-link/v1/pairing.schema.json`）。 */
 const SYNC_PAIRING_PROTOCOL = "acp-remote-pairing-v1";
@@ -583,6 +592,30 @@ class HttpPairingTransport implements PairingTransport {
     throw new PairingQrInvalidError("protocol.schema_invalid", "二维码协议版本不匹配");
   }
 
+  /**
+   * `POST /sync/v1/pairing/lookup`（§7.5）：用 8 位配对码一次性换回绑定与秘密。
+   *
+   * 所有失败收敛成 `{ kind: "error" }`：HTTP 非 200、正文不是 JSON、字段缺失/长度不符、
+   * 响应里的 `canonicalOrigin` 与请求来源不同，都不把任何正文内容带出去（design D4）。
+   */
+  async lookup(input: {
+    readonly canonicalOrigin: string;
+    readonly pairingCode: string;
+  }): Promise<PairingLookupOutcome> {
+    const response = await this.#fetch(`${input.canonicalOrigin}/sync/v1/pairing/lookup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        protocolVersion: PAIRING_PROTOCOL_VERSION,
+        pairingCode: input.pairingCode,
+      }),
+    }).catch(() => null);
+    if (response === null || !response.ok) return { kind: "error" };
+    const body: unknown = await response.json().catch(() => null);
+    const qr = readLookupResponse(body, input.canonicalOrigin);
+    return qr === null ? { kind: "error" } : { kind: "ok", qr };
+  }
+
   /** `POST /sync/v1/pairing/claim`（§7.2）。 */
   async claim(input: {
     readonly qr: PairingQrPayload;
@@ -868,6 +901,51 @@ function decodeQrPayloadBase64Url(data: string): string {
   }
 }
 
+/**
+ * lookup 响应正文 → 与二维码载荷同形的 `qr`；任何一项不符返回 `null`。
+ *
+ * 响应里的 `canonicalOrigin` 必须与**请求**来源相同：lookup 是同源请求，返回另一来源就意味着
+ * 这不是本页要配对的电脑（design D5 的首次信任边界）。字段长度按 §7.1 的 32 / 65 字节校验；
+ * `pairingId`/`hostId` 与 schema 的 `$defs.uuid` 同口径校验形状，而不只是非空——它们随后会
+ * 进入 transcript 与 claim 正文，形状不符在这里就该失败。
+ */
+function readLookupResponse(body: unknown, requestedOrigin: string): PairingQrPayload | null {
+  if (typeof body !== "object" || body === null) return null;
+  const source = body as Record<string, unknown>;
+  if (source["protocolVersion"] !== PAIRING_PROTOCOL_VERSION) return null;
+  const pairingId = source["pairingId"];
+  const hostId = source["hostId"];
+  const hostPublicKey = source["hostPublicKey"];
+  const canonicalOrigin = source["canonicalOrigin"];
+  const pairingSecret = source["pairingSecret"];
+  const expiresAt = source["expiresAt"];
+  if (
+    typeof pairingId !== "string" ||
+    typeof hostId !== "string" ||
+    typeof hostPublicKey !== "string" ||
+    typeof canonicalOrigin !== "string" ||
+    typeof pairingSecret !== "string" ||
+    typeof expiresAt !== "string"
+  ) {
+    return null;
+  }
+  if (!UUID_PATTERN.test(pairingId) || !UUID_PATTERN.test(hostId)) return null;
+  if (!CANONICAL_ORIGIN_PATTERN.test(canonicalOrigin)) return null;
+  if (canonicalOrigin !== requestedOrigin) return null;
+  if (!isBase64UrlLength(pairingSecret, QR_SECRET_BYTES)) return null;
+  if (!isBase64UrlLength(hostPublicKey, QR_HOST_PUBLIC_KEY_BYTES)) return null;
+  if (Number.isNaN(Date.parse(expiresAt))) return null;
+  return {
+    pairingProtocol: SYNC_PAIRING_PROTOCOL,
+    hostId,
+    hostPublicKey,
+    canonicalOrigin,
+    pairingId,
+    pairingSecret,
+    expiresAt,
+  };
+}
+
 /** 文本是否恰好是 `bytes` 字节的 base64url（§7.1：PWA 必须校验字段长度）。 */
 function isBase64UrlLength(value: string, bytes: number): boolean {
   try {
@@ -943,7 +1021,7 @@ export interface CompositionPorts {
 export interface Composition {
   /** 客户端状态仓库（`app/_layout.tsx` 注入 `ClientStoreProvider`）。 */
   readonly store: ClientStore;
-  /** 配对 HTTPS 传输（`pairing.qr` 的读取、claim 与状态轮询）。 */
+  /** 配对 HTTPS 传输（二维码读取、配对码 lookup、claim 与状态轮询）。 */
   readonly pairing: PairingTransport;
   /** 已配对主机记录的写入口：配对批准后登记 Host 公钥，`start()` 与验签都读它。 */
   rememberPairedHost(record: PairedHostRecord): Promise<void>;
@@ -1021,6 +1099,18 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     // 环境事实（design D2）：缺省读浏览器全局，入口据此校验安全上下文与来源一致。
     isSecureContext: secureContext,
     currentOrigin,
+    // 配对码入口的首次信任（design D5）：同源已有不同的已配对公钥时失败关闭，绝不覆盖。
+    // 二维码入口不调用它——那条路径的公钥仍来自 fragment 的带外载荷。
+    async checkCodeEntryHost(input): Promise<PublicError | null> {
+      const record = await pairedHost.loadPairedHost(input.canonicalOrigin);
+      if (record === null || record.publicKeyBase64Url === input.hostPublicKey) return null;
+      return {
+        code: "auth.host_mismatch",
+        message: "同一来源已登记过另一把主机公钥：本次配对不会覆盖既有记录，请在电脑上重新发起配对。",
+        retryable: false,
+        details: {},
+      };
+    },
   };
 
   const store = new ClientStore({

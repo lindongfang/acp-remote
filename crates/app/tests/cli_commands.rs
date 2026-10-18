@@ -438,6 +438,22 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         "begin 必须打印 pairingUrl：{}",
         run.stdout
     );
+    // 网页入口的配对码与 URL 并存：`XXXX-XXXX`，与 URL 一起只出现在终端。
+    let code_line = run
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("配对码："))
+        .unwrap_or_else(|| panic!("begin 必须打印配对码：{}", run.stdout));
+    let code = code_line.trim_start_matches("配对码：");
+    assert!(
+        code.len() == 9
+            && code.chars().nth(4) == Some('-')
+            && code
+                .chars()
+                .enumerate()
+                .all(|(index, character)| index == 4 || character.is_ascii_alphanumeric()),
+        "配对码必须以 XXXX-XXXX 展示：{code_line}"
+    );
 
     // `node pair --mode access` 在本切片由方法侧回 `local.unsupported`（CLI 原样带出，不自行编造错误码）。
     let run = run_cli(

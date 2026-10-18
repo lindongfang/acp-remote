@@ -7,11 +7,12 @@
  * 本模块因此只做**状态机与视图模型**，`PairingTransport` 端口由组合根用 `fetch` 实现；
  * feature 层自己不发起任何网络请求（`AGENTS.md` §6：平台能力只由组合根装配）。
  *
- * ## 页面不得提供凭据输入
+ * ## 页面不得提供设备凭据输入
  *
  * 设备私钥由 `src/platform/secure-storage.web.ts` 生成并**不可导出**，浏览器端只出示公钥；
- * MCP 配置与 Agent 凭据一律在电脑上配置。因此本模型里没有凭据输入项，
- * `PairingPageModel` 的字段中也不存在任何可以承载秘密的槽位。
+ * MCP 配置与 Agent 凭据一律在电脑上配置。配对码入口只接受一个一次性配对码，它由组件内存
+ * 持有并交给 `submitPairingCode`，用完即弃；`PairingPageModel` 的字段中因此仍然不存在任何
+ * 可以承载秘密的槽位。
  *
  * ## 四种非成功终态必须可区分
  *
@@ -42,13 +43,18 @@ import type { PairedHostRecord } from "../sync-client";
  * - `reading`：页面刚挂载、还没读地址片段。它与「没有载荷」刻意分开，避免首帧把
  *   「还没读地址」误呈现成失败（design D2）。
  * - `idle`：读完了、地址里没有配对内容（`no_payload`）。
+ * - `awaiting_code`：`/pair` 没有地址片段，等待用户输入 8 位配对码（原型 S0）。
+ * - `looking_up`：配对码已提交，正在用同源 lookup 取回绑定与秘密（原型 S1）。
  * - `approved` 之后进入已配对（连接状态机由 `pair_succeeded` 接手）。
  *
- * 地址片段是唯一入口（design D1）：输入框时代的「等待粘贴」阶段已删除。
+ * 地址片段与配对码是两种**载荷获取方式**（design D1），之后共用同一套状态机；
+ * `node-link` 入口没有配对码，无片段时仍是 `idle`。
  */
 export type PairingPhase =
   | "reading"
   | "idle"
+  | "awaiting_code"
+  | "looking_up"
   | "claiming"
   | "pending_confirmation"
   | "approved"
@@ -70,8 +76,18 @@ export type PairingFailureKind =
   | "unrecognized"
   | "kind_mismatch"
   | "origin_mismatch"
+  /**
+   * 配对码入口的首次信任边界（design D5）：同一 canonical origin 已登记**另一把**主机公钥。
+   * 与上面的 `origin_mismatch` 分开：来源没变，变的是这台电脑的身份。
+   */
+  | "host_identity_changed"
   | "insecure_context"
-  | "request_failed";
+  | "request_failed"
+  /**
+   * 配对码入口的任何失败（design D6）：格式不符、lookup 失败或响应丢失、码已被消耗，
+   * 以及会话在等待确认期间按 `expiresAt` 过期（含服务端返回 `pairing.expired`）。
+   */
+  | "code_invalid";
 
 /**
  * 配对页的固定呈现（design D2/D6）：组件只渲染这一份内容，不再按 `phase` 自行分支文案。
@@ -80,8 +96,8 @@ export type PairingFailureKind =
  * 进入页面的通道；`error.code` 仍留在模型上，供诊断与 `data-pairing-error` 锚点使用。
  */
 export interface PairingPresentation {
-  /** `progress` 居中转圈；`failure` 失败页；`info` 只呈现对端信息。 */
-  readonly kind: "progress" | "failure" | "info";
+  /** `progress` 居中转圈；`code_entry` 配对码输入；`failure` 失败页；`info` 只呈现对端信息。 */
+  readonly kind: "progress" | "code_entry" | "failure" | "info";
   readonly title: string;
   readonly lede: string;
   /** 标题下方的补充说明；没有时为 `null`。 */
@@ -95,6 +111,16 @@ export interface PairingPresentation {
 
 /** 两类配对入口（design D2）：由**路由**声明，入口据此校验载荷类型，而不是从载荷形状去猜。 */
 export type PairingKind = "sync" | "node-link";
+
+/**
+ * 这一次配对从哪个**入口**取得载荷（design D1/D6）：`qr` = 地址片段里的二维码载荷，
+ * `code` = `/pair` 无片段时的 8 位配对码（lookup 成功后与二维码共用同一条 claim/轮询链路）。
+ *
+ * 过期呈现按它分流：二维码入口的倒计时归零与服务端 `pairing.expired` 都呈现
+ * 「配对地址已过期」（S7，恢复路径是重新打开配对地址）；配对码入口则一律呈现固定文案
+ * 「配对码不对或已过期，请重新生成配对码」（S6，恢复路径是重新生成配对码）。
+ */
+export type PairingEntry = "qr" | "code";
 
 /**
  * 二维码内容读出的结果：载荷 + 它的类型。
@@ -111,12 +137,27 @@ export interface PairingPageModel {
   readonly phase: PairingPhase;
   /** 本页路由声明的配对类型；决定「没有载荷」等文案的类别名。 */
   readonly kind: PairingKind;
+  /**
+   * 这次配对从哪个入口取得载荷（见 {@link PairingEntry}）；决定过期时呈现 S7 还是 S6。
+   *
+   * 在进入 claim 时与载荷一起写入，之后整条 claim/轮询链路保持不变。
+   */
+  readonly entry: PairingEntry;
   /** 读到的对端信息；`null` 表示还没有可呈现的对端。 */
   readonly host: { readonly address: string; readonly hostId: string | null } | null;
   /** 已批准时的本机设备标识（wire 上的 `deviceId`）。 */
   readonly deviceId: string | null;
-  /** 配对载荷的绝对截止时间（毫秒）；node-link 与无载荷为 `null`。 */
+  /** 配对载荷的绝对截止时间（毫秒）；配对码输入态、node-link 与无载荷为 `null`。 */
   readonly expiresAtMs: number | null;
+  /**
+   * 本页的 canonical origin（配对码输入态显示「将与此电脑配对」）。
+   *
+   * 只有配对码入口与无载荷重写会写入它；fragment 入口在读取前保持 `null`。它只是**公开**的
+   * 来源字符串，配对码本身永远不会进入模型（码只活在组件内存与私有字段里）。
+   */
+  readonly origin: string | null;
+  /** 本页是否处于安全上下文；配对码输入态据此显示 HTTPS 标识。 */
+  readonly secureContext: boolean;
   /** 本客户端这一侧的失败类别；非失败阶段为 `null`。 */
   readonly failure: PairingFailureKind | null;
   /** 失败/被拒时的结构化原因（只供诊断与锚点，不直接渲染 `message`）。 */
@@ -146,6 +187,17 @@ export type PairingPollResult =
     }
   | { readonly kind: "error"; readonly error: PublicError };
 
+/**
+ * 一次配对码 lookup 的结果。
+ *
+ * 成功时返回与二维码载荷**同形**的 `qr`：之后的状态机、claim/status 与 transcript 因此
+ * 只有一套实现（design D6）。失败不带任何后端正文——页面只呈现固定文案，不据此推断
+ * 配对是否存在（design D4）。
+ */
+export type PairingLookupOutcome =
+  | { readonly kind: "ok"; readonly qr: PairingQrPayload }
+  | { readonly kind: "error" };
+
 /** 配对传输端口：由组合根用 HTTPS 实现（`fetch`），feature 层不接触网络 API。 */
 export interface PairingTransport {
   /**
@@ -159,6 +211,17 @@ export interface PairingTransport {
    * 明确失败、在 node-link 入口是已读到的内容，那是入口的判定（design D2/D3）。
    */
   readQrPayload(text: string): PairingQrRead;
+  /**
+   * `POST /sync/v1/pairing/lookup`（§7.5）：用 8 位配对码一次性取回绑定与秘密。
+   *
+   * 只对同源 `canonicalOrigin` 发请求；任何失败（HTTP 非 200、正文形状不符、字段长度不符、
+   * 响应里的来源与请求来源不同、网络丢失）都收敛成 `kind: "error"`，不携带正文。
+   * 成功即消耗配对码，调用方不得重试或缓存响应。
+   */
+  lookup(input: {
+    readonly canonicalOrigin: string;
+    readonly pairingCode: string;
+  }): Promise<PairingLookupOutcome>;
   /**
    * 提交 claim（设备首次声明配对，`proof` 由设备私钥签名）。
    *
@@ -220,16 +283,31 @@ export interface PairingWiring {
    * 因此这类一次性环境事实不走平台端口。
    */
   isSecureContext(): boolean;
-  /**
-   * 环境事实：本页实际来源（§3.2 的 canonical origin；生产实现取 `location.origin`）。
+  /** 环境事实：本页实际来源（§3.2 的 canonical origin；生产实现取 `location.origin`）。
    *
    * 与 {@link isSecureContext} 同一注入面：入口据此校验二维码声明的 `canonicalOrigin`。
    */
   currentOrigin(): string;
+  /**
+   * 配对码入口的主机身份边界（design D5）：同一 canonical origin 已有**不同**主机公钥的
+   * 已配对记录时返回错误，调用方据此失败关闭，绝不静默覆盖既有记录。
+   *
+   * 二维码入口不调用它：那条路径的公钥来自 fragment 的带外载荷，校验强度不变。
+   */
+  checkCodeEntryHost(input: {
+    readonly canonicalOrigin: string;
+    readonly hostPublicKey: string;
+  }): Promise<PublicError | null>;
 }
 
 /** 状态轮询的节奏：§7.3 的状态查询可安全重复，两秒足以让「电脑上确认」后只剩一个窗口的延迟。 */
 export const PAIRING_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * Crockford base32 字母表（design D2）：不含 `I`/`L`/`O`/`U`，40 bit 恰好 8 个字符。
+ * 输入归一化把 `I`/`L → 1`、`O → 0`；映射后仍在表外的字符（如 `U`）判为格式不符。
+ */
+const PAIRING_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /**
  * 二维码内容校验失败。
@@ -289,6 +367,13 @@ const FAILURE_COPY: Readonly<
     lede: "这个配对地址来自另一个来源，而一个浏览器身份只绑定一个地址，不能跨来源迁移。",
     warning: "请确认扫码对象：打开这台电脑自己的配对地址。",
   },
+  // 配对码入口的首次信任（design D5）：来源没变，但这台电脑出示的主机公钥与已登记的不同。
+  // 与 `origin_mismatch` 分开，才能让用户分清「开错了地址」与「这台电脑的身份变了」。
+  host_identity_changed: {
+    title: "这台电脑的主机身份已变化",
+    lede: "这个地址此前已登记过另一把主机公钥：本页不会覆盖既有记录，也没有继续这次配对。",
+    warning: "请在电脑上重新发起配对；如果这台电脑确实更换过身份，请先确认新身份可信。",
+  },
   insecure_context: {
     title: "需要 HTTPS 才能配对",
     lede: "当前页面不是安全上下文（https 或 loopback），浏览器不提供配对所需的加密能力。",
@@ -299,6 +384,13 @@ const FAILURE_COPY: Readonly<
     lede:
       "没能把配对请求送到这台电脑（网络或本地存储不可用）。本页已经结束这次配对，可以安全地重新开始。",
     warning: "重新打开配对地址只会重新走一次流程，不会产生第二条配对记录。",
+  },
+  // 配对码入口的唯一失败文案（design D6）：不区分「不存在 / 过期 / 已被认领 / 已被消耗 /
+  // 来源不符 / 响应丢失」，也不透露这次配对是否存在。页面不提供页内重试。
+  code_invalid: {
+    title: "配对码不对或已过期，请重新生成配对码",
+    lede: "本页没有获得任何访问能力，也没有留下可用的主机记录。",
+    warning: "请在电脑上重新发起配对，生成新的配对码后再输入。",
   },
 };
 
@@ -326,6 +418,28 @@ function presentationFor(
         note: null,
         warning: null,
         tone: "neutral",
+        countdown: false,
+      };
+    case "awaiting_code":
+      return {
+        kind: "code_entry",
+        title: "输入配对码",
+        lede: "在电脑上运行配对命令，输入终端里显示的 8 位配对码。",
+        // 固定静态提示：lookup 之前页面不知道真实 `expiresAt`，因此**不**显示数字倒计时。
+        note: "配对码 5 分钟内有效。",
+        warning: null,
+        tone: "neutral",
+        countdown: false,
+      };
+    case "looking_up":
+      return {
+        kind: "progress",
+        title: "配对中",
+        lede: "正在用配对码取回这台电脑的配对信息，请稍候。",
+        note: null,
+        warning: null,
+        tone: "neutral",
+        // lookup 成功之前没有服务端 `expiresAt`，因此倒计时尚未开始。
         countdown: false,
       };
     case "claiming":
@@ -453,9 +567,13 @@ function modelFor(phase: PairingPhase, overrides: Partial<PairingPageModel>): Pa
   return {
     phase,
     kind,
+    // 缺省是地址片段入口：`awaiting_code` / `applyClaiming` 会写明各自的入口。
+    entry: overrides.entry ?? "qr",
     host: overrides.host ?? null,
     deviceId: overrides.deviceId ?? null,
     expiresAtMs: overrides.expiresAtMs ?? null,
+    origin: overrides.origin ?? null,
+    secureContext: overrides.secureContext ?? false,
     failure,
     error,
     presentation: presentationFor(phase, kind, failure, error),
@@ -466,11 +584,17 @@ function modelFor(phase: PairingPhase, overrides: Partial<PairingPageModel>): Pa
  * 读到 sync 载荷、claim 即将发出：一次写入对端信息与截止时间。
  *
  * 截止时间取载荷里的绝对 `expiresAt`（不是「现在 + 5 分钟」）：页面可以在二维码生成一段时间后
- * 才被打开，倒计时必须反映真实剩余时间（design D3）。
+ * 才被打开，倒计时必须反映真实剩余时间（design D3）。`entry` 由调用方按载荷来源给出（fragment
+ * 或配对码 lookup），过期呈现据此分流（S7 / S6），不靠阶段历史去猜。
  */
-export function applyClaiming(current: PairingPageModel, qr: PairingQrPayload): PairingPageModel {
+export function applyClaiming(
+  current: PairingPageModel,
+  qr: PairingQrPayload,
+  entry: PairingEntry,
+): PairingPageModel {
   return modelFor("claiming", {
     ...current,
+    entry,
     host: { address: qr.canonicalOrigin, hostId: qr.hostId },
     expiresAtMs: Date.parse(qr.expiresAt),
     failure: null,
@@ -479,17 +603,93 @@ export function applyClaiming(current: PairingPageModel, qr: PairingQrPayload): 
 }
 
 /**
- * 地址里没有配对内容（直接访问 `/pair`，或刷新后片段已被清除）。
+ * `/pair` 没有地址片段：进入配对码输入（原型 S0）。
  *
- * 这不是「非法输入」：页面明确呈现「没有配对信息」并指引用户用电脑重新生成的地址打开，
- * 不发任何请求，也不保留上一轮的对端信息。
+ * 只呈现**公开**事实（canonical origin 与安全上下文）；配对码不在模型里。`expiresAtMs`
+ * 保持 `null`：页面在 lookup 之前没有服务端有效期，因此不显示数字倒计时（design D6）。
+ */
+export function applyAwaitingCode(
+  current: PairingPageModel,
+  kind: PairingKind,
+  origin: string,
+  secureContext: boolean,
+): PairingPageModel {
+  return modelFor("awaiting_code", {
+    ...current,
+    kind,
+    entry: "code",
+    host: null,
+    deviceId: null,
+    expiresAtMs: null,
+    origin,
+    secureContext,
+    failure: null,
+    error: null,
+  });
+}
+
+/** 配对码已提交：同源 lookup 在途（原型 S1）；仍没有服务端 `expiresAt`。 */
+export function applyLookingUp(current: PairingPageModel): PairingPageModel {
+  return modelFor("looking_up", {
+    ...current,
+    expiresAtMs: null,
+    failure: null,
+    error: null,
+  });
+}
+
+/**
+ * 配对码格式（design D6）：大小写不敏感、`I`/`L → 1`、`O → 0`，接受 `XXXX-XXXX`
+ * 或连续 8 位；其余一律判为不合法，调用方据此**在发请求前**失败。
+ *
+ * 返回带单个 `-` 的 canonical 形式（schema 的 `lookupRequest.pairingCode` 允许它），
+ * 不合法返回 `null`。Crockford 字母表不含 `I`/`L`/`O`/`U`：映射后仍出现 `U` 即拒绝。
+ */
+export function normalizePairingCode(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  let compact = trimmed.toUpperCase();
+  if (compact.length === 9 && compact.charAt(4) === "-") {
+    compact = `${compact.slice(0, 4)}${compact.slice(5)}`;
+  } else if (compact.includes("-")) {
+    return null;
+  }
+  if (compact.length !== 8) return null;
+  const normalized = compact.replaceAll("I", "1").replaceAll("L", "1").replaceAll("O", "0");
+  for (const character of normalized) {
+    if (!PAIRING_CODE_ALPHABET.includes(character)) return null;
+  }
+  return `${normalized.slice(0, 4)}-${normalized.slice(4)}`;
+}
+
+/**
+ * 配对码入口的固定失败（design D6）：lookup 的任何失败、格式不符、lookup 后的已过期，
+ * 都落到这**一个**错误与固定文案，不区分后端原因，也不回显 `message`。
+ */
+export function codeInvalidFailure(): PublicError {
+  return {
+    code: "pairing.code_invalid",
+    message: "配对码不对或已过期，请重新生成配对码。",
+    retryable: false,
+    details: {},
+  };
+}
+
+/**
+ * 地址里没有配对内容：`/node-link/pair` 无片段时仍是这一呈现（它不提供配对码输入）。
+ * sync 入口无片段改走 {@link applyAwaitingCode}；本函数仍保留给 node-link 与直接调用方。
+ * 明确呈现「没有配对信息」并指引用户用电脑重新生成的地址打开，不发任何请求，也不保留
+ * 上一轮的对端信息。
  */
 export function applyNoPayload(_current: PairingPageModel, kind: PairingKind): PairingPageModel {
   return modelFor("idle", {
     kind,
+    entry: "qr",
     host: null,
     deviceId: null,
     expiresAtMs: null,
+    origin: null,
+    secureContext: false,
     failure: "no_payload",
     error: null,
   });
@@ -627,6 +827,7 @@ export function originMismatchFailure(): PublicError {
 
 /** 错误码 → 本侧失败类别（显式 reason 缺省时的分类，design D6）。 */
 function failureKindFor(code: ErrorCode): PairingFailureKind {
+  if (code === "pairing.code_invalid") return "code_invalid";
   if (code === "auth.origin_mismatch" || code === "auth.host_mismatch") return "origin_mismatch";
   if (code === "auth.insecure_context") return "insecure_context";
   if (code.startsWith("protocol.")) return "unrecognized";
@@ -636,10 +837,15 @@ function failureKindFor(code: ErrorCode): PairingFailureKind {
 /**
  * 明确失败：结构校验不过、claim/poll 被拒、已配对记录写不进去，都落到失败阶段并带上原因。
  *
- * 先按错误码决定阶段：`pairing.expired` → `expired`；`pairing.consumed` /
+ * 先按错误码决定阶段：`pairing.expired` → `expired`（配对码入口除外，见下）；`pairing.consumed` /
  * `pairing.already_claimed` → `consumed`；其余 → `failed`。失败类别优先取调用点显式
  * 传入的 `reason`（类型不匹配、环境前置条件都在调用点就知道是哪一类），否则按错误码分类。
  * 这样 `kind_mismatch` 不会被混成 `unrecognized`（design D6）。
+ *
+ * **过期按入口分流**：配对码入口的会话（`entry === "code"`）没有可重新打开的地址，
+ * 本地倒计时归零与服务端 `pairing.expired` 都落到「配对码不对或已过期」的固定呈现（S6）；
+ * 二维码入口保持「配对地址已过期」（S7）。两条入口因此共用同一个到期与轮询收口，
+ * 不需要各自复制一份。
  */
 export function applyPairingFailure(
   current: PairingPageModel,
@@ -647,6 +853,13 @@ export function applyPairingFailure(
   reason?: PairingFailureKind,
 ): PairingPageModel {
   if (error.code === "pairing.expired") {
+    if (current.entry === "code") {
+      return modelFor("failed", {
+        ...current,
+        failure: "code_invalid",
+        error: codeInvalidFailure(),
+      });
+    }
     return modelFor("expired", { ...current, failure: null, error });
   }
   if (error.code === "pairing.consumed" || error.code === "pairing.already_claimed") {
@@ -773,6 +986,16 @@ export function applyPollResult(current: PairingPageModel, result: PairingPollRe
         error: null,
       });
     case "terminal":
+      // 服务端宣布的过期与本地倒计时归零同一口径：交回 `applyPairingFailure` 按入口分流
+      // （配对码入口 → S6；二维码入口 → S7）。其余终态各有自己的固定呈现。
+      //
+      // 过期的**事实**是 `status`，不是 `error.code`：§7.3 规定 `expired` 也是 HTTP 200，
+      // 组合根按 HTTP 状态推导错误码时只能合成 `pairing.failed`。若照码分类，配对码入口会
+      // 落到「配对请求未能完成」（S12）而不是 S6，二维码入口也会从 S7 退回 S12。因此在
+      // 交给入口分流的错误里把码改写为 `pairing.expired`，只改写分类字段，保留原因文本。
+      if (result.status === "expired") {
+        return applyPairingFailure(current, { ...result.error, code: "pairing.expired" });
+      }
       return modelFor(result.status, { ...current, failure: null, error: result.error });
     case "error":
       // 与 claim 相同的分类：`pairing.expired`/`consumed` 走终态，其余按错误码归到本侧失败。
@@ -785,6 +1008,7 @@ export const PAIRING_ERROR_HINTS: Readonly<Partial<Record<ErrorCode, string>>> =
   "pairing.expired": "二维码已过期：请在电脑上重新生成。",
   "pairing.consumed": "二维码已被使用：请在电脑上重新生成。",
   "pairing.already_claimed": "这台电脑已经登记过本设备，可直接尝试连接。",
+  "pairing.code_invalid": "配对码不对或已过期，请重新生成配对码。",
   "auth.origin_mismatch": "这个二维码来自另一个地址：身份不得跨来源迁移，请确认扫码对象。",
   "auth.insecure_context":
     "当前页面不在安全上下文（https 或 loopback）中：配对与设备密钥都要求安全上下文，请改用 https 打开本页后再配对。",

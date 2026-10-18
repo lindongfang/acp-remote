@@ -6373,6 +6373,11 @@ pub(crate) mod test_support {
                 .cloned())
         }
 
+        /// 与真实存储同口径：返回全部配对行的快照（顺序无关，维护路径只按标识判定）。
+        async fn pairings(&self) -> Result<Vec<PairingRecord>, PortError> {
+            Ok(lock(&self.world.pairings).clone())
+        }
+
         async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
             Ok(lock(&self.world.peers)
                 .iter()

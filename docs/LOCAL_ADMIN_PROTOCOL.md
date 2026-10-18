@@ -253,9 +253,10 @@ revokedAt           timestamp | null
 #### `device.pair.begin`
 
 - `params`：`{ expiresInMs: integer | null }`——设备配对不申请任何授权词汇，本方法**只**接受这一个键；出现 `requestedScopes`/`requestedPacks` 之类的键即 `local.invalid_params`（`params` 是 closed object）。
-- `result`：`{ pairingId, pairingUrl, expiresAt }`；不返回任何授权集合。
+- `result`：`{ pairingId, pairingUrl, pairingCode, expiresAt }`；不返回任何授权集合。
 - 配对有效期固定 5 分钟（`SYNC_PROTOCOL.md` §7、§14）；`expiresInMs` 只能收窄，不能延长。
-- `pairingUrl` 只经本通道返回；fragment、`pairingSecret` 与完整 QR payload 不得进入日志或 analytics（`SECURITY_DESIGN.md` §14.1）。
+- `pairingCode` 是网页 `/pair` 输入用的 8 位 Crockford 配对码（wire 值为规范 8 位大写文本，无分隔符；终端与页面按 `XXXX-XXXX` 展示），由该配对的 pairing secret 域分离派生（40 bit），只用于经 `POST /sync/v1/pairing/lookup` 一次性取回该配对的 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`。它不是 HMAC 密钥，不替代 `pairingUrl`，MUST NOT 被持久化或写入日志；成功 lookup 一次后被消耗，但配对本身仍可按 `pairingId` 被 claim 一次，`device.pair.status`/`confirm` 不因码被消耗而改变。
+- `pairingUrl`、`pairingCode` 只经本通道返回；fragment、`pairingSecret`、`pairingCode` 与完整 QR payload 不得进入日志或 analytics（`SECURITY_DESIGN.md` §14.1）。
 
 #### `device.pair.status`
 
@@ -271,7 +272,7 @@ expiresAt            timestamp
 ```
 
 - claim 之前只返回 `state` 与 `expiresAt`，其余字段为 `null`。
-- 不返回短验证码，也不返回任何授权集合（设备配对不授予授权；理由见 `SECURITY_DESIGN.md` §5.1）。
+- 不返回短验证码，不返回 `pairingCode`（它只在 `device.pair.begin` 的结果中出现一次），也不返回任何授权集合（设备配对不授予授权；理由见 `SECURITY_DESIGN.md` §5.1）。
 
 #### `device.pair.confirm`
 
@@ -413,15 +414,17 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 
 **配对流程（安全仪式）**：`SECURITY_DESIGN.md` §9.4 要求确认界面显示名称、指纹与过期时间；`SYNC_PROTOCOL.md` §7.0 要求确认只能经本地入口。因此 `device pair` / `node pair` 的 CLI 流程固定为：
 
-1. `begin`：拿到 `pairingId` 与 `pairingUrl`，打印 URL 与二维码（如终端支持）；
+1. `begin`：拿到 `pairingId`、`pairingUrl` 与 `pairingCode`；`device pair` 同时打印完整 URL（供二维码/移动端使用）与 `XXXX-XXXX` 形式的配对码（供网页 `/pair` 输入），两种形式都不得写入 shell 历史或文件；`node pair` 只有 URL；
 2. 轮询 `status`：未认领时继续等（有效期 5 分钟，到期报 `local.expired`）；认领后**必须**展示名称、指纹与过期时间；
-两个方向都不提交任何授权集合。
+两个方向都不提交任何授权集合。配对码被网页成功 lookup 消耗后，CLI 仍按 `pairingId` 继续轮询并等待 `y/N`，确认仪式不变。
 
 示例（交互式设备配对）：
 
 ```text
 $ acp-remote device pair
-https://home.example.invalid/sync/v1/pairing#…（含 pairing secret，只在本终端展示）
+https://home.example.invalid/pair#…（含 pairing secret，只在本终端展示）
+配对码：ABCD-EFGH
+（移动端请扫码/打开上面的完整地址；网页端打开 /pair 后输入配对码）
 正在等待设备认领…（有效期至 2026-09-23T14:31:00.000Z，Ctrl-C 取消）
 
 设备已认领：
@@ -452,7 +455,7 @@ $ acp-remote node pair --mode owner
 $ acp-remote device pair --fingerprint ab12…（64 位 hex）
 ```
 
-`--fingerprint` 必须与 `status` 返回值逐字匹配才调 `confirm`（不 trim、不折叠大小写、不允许前缀匹配）；不匹配时以非零退出且不修改任何状态。短验证码与设备方向的授权词汇都没有参数：`--sas`/`--request`/`--pack` 不是本 CLI 的开关（出现即用法错误，不得被静默忽略；理由见 `SECURITY_DESIGN.md` §5.1）。`node pair` 的方向差异：`--mode owner` 在本机生成二维码并**在本机确认**；`--mode access` 拿用户给的 pairing URL 执行 claim，**等待对端（Owner）本机确认**，本机没有 `confirm` 调用。`pairingUrl` 与其中的 secret 只允许在内存与终端展示中存在，不得写入 shell 历史、日志或文件（`SECURITY_DESIGN.md` §14.1）。
+`--fingerprint` 必须与 `status` 返回值逐字匹配才调 `confirm`（不 trim、不折叠大小写、不允许前缀匹配）；不匹配时以非零退出且不修改任何状态。短验证码与设备方向的授权词汇都没有参数：`--sas`/`--request`/`--pack` 不是本 CLI 的开关（出现即用法错误，不得被静默忽略；理由见 `SECURITY_DESIGN.md` §5.1）。配对码是 `device pair` 的输出，不是输入参数：CLI 不提供 `--pairing-code`，也不把用户输入的配对码回传管理面。`node pair` 的方向差异：`--mode owner` 在本机生成二维码并**在本机确认**；`--mode access` 拿用户给的 pairing URL 执行 claim，**等待对端（Owner）本机确认**，本机没有 `confirm` 调用。`pairingUrl`、其中的 secret 与 `pairingCode` 只允许在内存与终端展示中存在，不得写入 shell 历史、日志或文件（`SECURITY_DESIGN.md` §14.1）。
 
 **退出码与错误输出**：成功 `0`；失败非零。失败时 stdout 只输出人类可读的简短说明，机器可读信息以一行结构化 JSON 输出到 **stderr**（至少含 `code`，取值来自 §6 或 `compatibility/errors/v1/errors.json`）。CLI **不得**把 `error.message` 当稳定契约解析，也不得在输出中回显 secret 或完整路径（§4 第 6 条）。
 

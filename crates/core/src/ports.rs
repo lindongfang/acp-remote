@@ -1014,10 +1014,18 @@ pub struct PairingSettlementWrite {
     pub context: WriteContext,
 }
 
-/// 过期扫描（§11.6）：只终结未确认且已过期的配对，返回终结行数。
+/// 过期扫描（§11.6）：只终结**未确认**（`created`/`claimed`/`pending_confirmation`）的配对，返回终结行数。
+///
+/// `only = None` 是时间扫描：只终结 `expires_at <= context.at` 的行（既有语义）。`only = Some(ids)` 是
+/// **按标识终结**：只处理列出的行，且**不**再判 `expires_at`——它服务两个调用方：过期扫描已经从
+/// `Authority::due_pairings` 得到「哪些配对的 secret 已被清除」，以及进程重启时
+/// `Authority::unrecoverable_after_restart` 给出的「已无法继续验密、必须立即终结」的未确认配对。两种
+/// 形态都不触碰 `approved`/`consumed`/`rejected`/`expired` 的行。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpiryWrite {
     pub context: WriteContext,
+    /// `None` = 按时间扫描；`Some(ids)` = 只终结这些标识（空列表是零写入）。
+    pub only: Option<Vec<PairingId>>,
 }
 
 /// 消费一个已批准的配对（§11.6 第 8 条）。
@@ -1075,6 +1083,13 @@ pub trait TrustStore: Send + Sync {
     async fn peer_key(&self, peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError>;
 
     async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError>;
+
+    /// **全部**配对行（本机维护路径的只读列表）。
+    ///
+    /// 只服务「过期 / 重启终结」这类需要遍历的维护入口：不含 secret、只读、零写入；顺序按
+    /// `created_at`、`pairing_id` 升序（定宽文本，字典序即时间序），因此同一快照的读取结果确定。
+    /// 业务读面仍走 [`TrustStore::pairing`]/[`TrustStore::pairing_for`]（按标识或对端精确取值）。
+    async fn pairings(&self) -> Result<Vec<PairingRecord>, PortError>;
 
     /// 已认领的对端行（确认事务从它读回公钥，§11.5）。
     async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError>;

@@ -66,7 +66,7 @@
 
 | 分类 | 资产示例 | 最低保护要求 |
 |---|---|---|
-| `secret` | Node/Device 私钥、Provider token、pairing secret、TLS private key | 不同步、不记录；平台安全存储或明确失败关闭 |
+| `secret` | Node/Device 私钥、Provider token、pairing secret、网页入口 pairing code（可一次性取回 secret）、TLS private key | 不同步、不记录；平台安全存储或明确失败关闭 |
 | `sensitive-content` | prompt、回复、终端、diff、文件内容、ACP `rawJson`、附件 | 仅授权设备可读；受保留期、配额和渲染隔离约束 |
 | `security-metadata` | node/device public key、节点信任记录、撤销时间、Node fingerprint、审计结果 | 完整性优先；只向有权主体暴露必要字段 |
 | `operational-metadata` | session title、Agent/model、时间、错误码、sequence、**已记录目录的规范化路径**（随目录资源下发，见 §12.3） | 仍可能泄露项目活动；按授权过滤和日志最小化 |
@@ -143,6 +143,14 @@
 - 删除 SAS 不降低任何已承诺的安全属性：它剩下的作用只是「不依赖代码正确性的人眼检查点」，属纵深而非安全依据；保留它反而会让「已经比对过」的错觉掩盖第 2 条那个真正的缺口。
 
 **明确保留**的仪式与边界（不因本条放宽）：配对确认仍必须由**本机用户**在电脑上完成（发起配对 + 按一次 y）；设备认证仍是每连接 challenge-response；设备撤销仍立即关闭活动连接；速率与各项上限不变。删除 SAS 的实施范围（两套 transcript domain 与固定向量、配对状态字段、本地管理方法字段、CLI 参数与展示项）见 `SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §9.2/§9.4 与 `LOCAL_ADMIN_PROTOCOL.md`。
+
+`[决定]`（2026-10-18，`pairing-code-web-entry`）**网页入口的信任边界是 canonical origin + TLS 的首次信任（TOFU）；移动端仍是带外锚。**两者的区别必须按下列口径理解，不得把网页入口描述为与二维码入口同强度：
+
+- 二维码/移动端入口的主机公钥仍来自 URL fragment 的**带外**载荷：claim 响应的 `hostProof` 用这把公钥验证，已批准响应携带的公钥必须与它逐字节相同（`SYNC_PROTOCOL.md` §7.2/§7.3 原样）。移动端只使用二维码，不提供输码入口，本节不改变它的一分强度。
+- 网页 `/pair` 无 fragment 时输入 8 位配对码，经同源 `POST /sync/v1/pairing/lookup` 取回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`。主机公钥此时来自 TLS 保护、由 canonical origin 限定的 lookup 响应，客户端把它作为**本次配对**的绑定：用它验证 `hostProof`，并要求已批准响应逐字节相同；同一 canonical origin 已存在不同公钥的已配对记录时**失败关闭**（主机身份变化），不静默覆盖。允许任意 canonical origin（含 LAN/Tailscale）——网页 JS 本就由这个 origin 提供；origin 被攻破时，fragment 里的公钥也无法阻止恶意 JS 跳过校验。网页入口因此只丢失「同源代理把请求错路由到另一台 daemon」这一部署异常的检测，剩余可观察面是终端仍停在等待认领；配对码输入页显示当前 canonical origin 与 HTTPS 标识，让用户能发现打开的是另一台机器。
+- 配对码由 pairing secret 做域分离派生（HMAC-SHA256，domain tag `acp-remote/pairing-code/v1`，取前 40 bit 编码为 8 位 Crockford base32），只作为**一次性取回凭据**：不是 claim/status 的 HMAC 密钥，不替代或缩短 256 bit 的 pairing secret，不新增持久字段。40 bit 可接受的前提是**独立限流**——lookup 与 claim 各按来源 10 次/分钟、互不占用额度，lookup 失败不增加任何配对的证明失败计数，也不区分「配对不存在」与「已过期/已消耗」。5 分钟有效期把单个来源在整个配对生命周期内的尝试压到约 50 次（命中概率约 `50/2^40`），且码只负责取回已存在配对的 secret，不承担认证；离线攻击面仍是完整 secret 的 256 bit。
+- lookup 成功**原子地消耗**配对码；迟到的第二次请求，或第一次响应在网络上丢失，都只能得到统一的 `401 pairing.code_invalid`。这是单次语义的显式代价：恢复路径是重新执行 `device pair`，页面不做自动重试，只呈现固定文案「配对码不对或已过期，请重新生成配对码」。本版不引入 lookup 幂等键。
+- `pairingCode` 与 `pairingSecret` MUST NOT 进入日志、URL query、Cookie、localStorage/sessionStorage、地址历史或任何明文持久化字段，MUST NOT 落盘。配对码只存在于三处：页面内存、`identity-auth` 的进程内查找表（`State.codes`）、以及 `device.pair.begin` 的一次性管理响应；secret 只存在于三处：`identity-auth` 内存、lookup 响应体、页面私有会话状态（`ClientStore` 的私有字段）。三处都不写盘、不进日志、不随可导出状态外泄（与 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §4.3、[ADR-0010](./adr/0010-web-pairing-code-entry.md) 一致）。处理路径不得记录请求/响应体，错误消息不得回显配对码；`PairingCode` 的 `Debug` 必须脱敏且不提供 `Display`。
 
 ## 6. 信任边界与数据流
 
@@ -476,7 +484,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 默认禁止：
 
 - 完整 prompt、回复、ACP `rawJson`、终端、diff 和文件内容。
-- Node/Device private key、pairing secret、HMAC、签名输入、Provider token。
+- Node/Device private key、pairing secret、pairing code、HMAC、签名输入、Provider token。
 - 完整敏感路径、URL fragment、Authorization/Cookie 和 QR payload。
 
 ### 14.2 审计事件

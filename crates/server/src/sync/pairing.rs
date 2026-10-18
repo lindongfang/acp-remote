@@ -1,6 +1,7 @@
 //! Sync 配对 HTTP 端点（`docs/SYNC_PROTOCOL.md` §7.1–§7.4，`design.md` D6）。
 //!
-//! 两个端点（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`）与 Node Link 的配对端点
+//! 三个端点（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`、
+//! `POST /sync/v1/pairing/lookup`）与 Node Link 的配对端点
 //! （[`crate::node_link::pairing`]）**结构同形、类型各自定义**：`design.md` D6 要求不复用 wire DTO，
 //! 因为两侧的 domain（`acp-remote/pairing-proof/v1` ↔ `node-link-pairing-proof/v1`）与载荷形状不同。
 //! 因此这里的模块文档与那份逐条对应，但每个 DTO、每个校验入口都取自 `sync-protocol`/`identity-auth`。
@@ -49,8 +50,9 @@
 //! ## 限流（§14）
 //!
 //! claim 按**来源真实连接地址** 10 次/分钟（键 = `PeerInfo::client_ip`，复用
-//! `transport::net::ratelimit::SlidingWindowLimiter`），status 按 **pairingId** 60 次/分钟（键不是地址，
-//! 因此用 [`PairingIdWindow`]：`SlidingWindowLimiter` 的键固定为 `IpAddr`，无法承载配对标识；两者的
+//! `transport::net::ratelimit::SlidingWindowLimiter`），lookup 另有一个**同形但独立**的 10 次/分钟额度（同一
+//! 来源、各自计数，lookup 的成功或失败都不占用 claim 的额度），status 按 **pairingId** 60 次/分钟（键不是
+//! 地址，因此用 [`PairingIdWindow`]：`SlidingWindowLimiter` 的键固定为 `IpAddr`，无法承载配对标识；两者的
 //! 窗口语义、键集上限与失败关闭口径相同）。转发头不参与计数：`client_ip` 只在 `daemon.trusted_proxies`
 //! 内的对端提供的转发头**被采信**时才是头部取值，否则就是 TCP 对端地址（`transport::net::proxy`）。
 //!
@@ -60,6 +62,7 @@
 //! |---|---|---|
 //! | 400 | JSON 语法错误 / 字段 schema 无效 / 非 `application/json` | `protocol.invalid_json`、`protocol.schema_invalid` |
 //! | 401 | proof 无效、失败计数达上限、载荷与配对目标族不符 | `auth.proof_invalid` |
+//! | 401 | lookup 的任何失败（码格式/不存在/已消耗/已过期/已认领/来源不符） | `pairing.code_invalid` |
 //! | 403 | 来源与登记绑定不一致 | `auth.origin_mismatch` |
 //! | 403 | claim 声明的 `hostId` 不是本节点 | `auth.host_mismatch` |
 //! | 404 | pairing 不存在 | `pairing.expired`（v1 没有「配对不存在」专用码，见 [`not_found_pairing`]） |
@@ -101,8 +104,8 @@ use sync_protocol::common::{
 };
 use sync_protocol::error::{Body as ErrorBody, ErrorCode};
 use sync_protocol::pairing::{
-    ClaimRequest, ClaimResponse, DeviceBlock, HostBlock, PairingStatus, PendingConfirmation,
-    StatusRequest, StatusResponse,
+    ClaimRequest, ClaimResponse, DeviceBlock, HostBlock, LookupRequest, LookupResponse,
+    PairingStatus, PendingConfirmation, StatusRequest, StatusResponse,
 };
 
 use crate::transport::net::origin::request_origin;
@@ -117,8 +120,14 @@ pub const CLAIM_PATH: &str = "/sync/v1/pairing/claim";
 /// `POST /sync/v1/pairing/status`（§7.3）。
 pub const STATUS_PATH: &str = "/sync/v1/pairing/status";
 
+/// `POST /sync/v1/pairing/lookup`（§7.5；网页入口的一次性配对码）。
+pub const LOOKUP_PATH: &str = "/sync/v1/pairing/lookup";
+
 /// claim 的固定限流（§14：10 次/分钟/来源地址，不可配置）。
 const CLAIM_LIMIT_PER_MINUTE: u32 = 10;
+
+/// lookup 的固定限流（§14：10 次/分钟/来源地址，与 claim **各自独立**）。
+const LOOKUP_LIMIT_PER_MINUTE: u32 = 10;
 
 /// status 的固定限流（§14：60 次/分钟/`pairingId`，不可配置）。
 const STATUS_LIMIT_PER_MINUTE: u32 = 60;
@@ -138,6 +147,9 @@ const ORIGIN_MISMATCH_MESSAGE: &str = "the request origin does not match the pai
 /// 403 的消息（claim 声明的 `hostId` 不是本节点）。
 const HOST_MISMATCH_MESSAGE: &str = "the request host identity does not match this host";
 
+/// lookup 的统一失败文本（§7.5：码不存在、已消耗、已过期、已认领、来源不符都是同一形状，不泄露存在性）。
+const CODE_INVALID_MESSAGE: &str = "the pairing code is not valid";
+
 /// 四个安全响应头（§7.1）：所有配对 HTTP 响应（成功与失败）都必须携带。
 ///
 /// 同一份常量被两条路径消费：处理器内的 [`secure`]（处理器自己带）与 `NetListener::register_post` 的
@@ -150,15 +162,23 @@ const SECURITY_HEADERS: [(&str, &str); 4] = [
     ("x-content-type-options", "nosniff"),
 ];
 
-/// 配对 HTTP 的共享状态（组合根装配一次，注册到两个 path）。
+/// 配对 HTTP 的共享状态（组合根装配一次，注册到三个 path）。
 ///
-/// 不读配置文件、不持有端口快照：本面判定所需的一切都是「已提交的持久事实」（经 core 的用例面读）与
-/// 「本机身份」（`Authority` 的只读入口）；`Host` 边界由接入层按 `NetConfig` 判完。
+/// 不持有端口快照、不在请求路径上读配置文件：本面判定所需的一切都是「已提交的持久事实」（经 core 的用例面
+/// 读）与「本机身份」（`Authority` 的只读入口）；唯一来自配置的是 `daemon.public_origin`（lookup 的前置
+/// 来源校验与绑定核对），由组合根在装配时注入。`Host` 边界由接入层按 `NetConfig` 判完。
 pub struct PairingHttp {
     core: Arc<UseCases>,
     authority: Arc<Authority>,
+    /// 本机 canonical origin（`daemon.public_origin`；与配对登记的绑定同源）。
+    ///
+    /// 只用于 lookup 的**前置**来源校验：来源不一致的请求必须在进入配对码查找之前失败（否则跨源请求可以
+    /// 烧掉别人的码）。`None` = 未配置 canonical origin：网页入口不可能存在配对，lookup 一律失败。
+    public_origin: Option<String>,
     /// claim 限流：键是 `PeerInfo::client_ip`（对端真实连接地址；不可信来源的转发头不生效）。
     claim_limit: SlidingWindowLimiter,
+    /// lookup 限流：与 claim **各自独立**的额度（同一来源 10 次/分钟）。
+    lookup_limit: SlidingWindowLimiter,
     /// status 限流：键是 `pairingId`（§14 的另一条固定限流）。
     status_limit: PairingIdWindow,
     /// status 的「网络重试返回原响应」缓存（§7.3）。
@@ -166,12 +186,19 @@ pub struct PairingHttp {
 }
 
 impl PairingHttp {
-    /// 装配。`core` 是用例面，`authority` 是身份状态机（两者都由组合根持有）。
-    pub fn new(core: Arc<UseCases>, authority: Arc<Authority>) -> Self {
+    /// 装配。`core` 是用例面，`authority` 是身份状态机（两者都由组合根持有）；`public_origin` 是
+    /// `daemon.public_origin`（lookup 的前置来源校验与响应字段装配都用它）。
+    pub fn new(
+        core: Arc<UseCases>,
+        authority: Arc<Authority>,
+        public_origin: Option<String>,
+    ) -> Self {
         Self {
             core,
             authority,
+            public_origin,
             claim_limit: SlidingWindowLimiter::new(CLAIM_LIMIT_PER_MINUTE, LIMIT_WINDOW),
+            lookup_limit: SlidingWindowLimiter::new(LOOKUP_LIMIT_PER_MINUTE, LIMIT_WINDOW),
             status_limit: PairingIdWindow::new(STATUS_LIMIT_PER_MINUTE, LIMIT_WINDOW),
             status_replays: Mutex::new(StatusReplays::default()),
         }
@@ -191,10 +218,17 @@ impl PairingHttp {
         })
     }
 
-    /// 两个配对 path 的每路径默认响应头（§7.1：**所有**配对 HTTP 响应都带这四个头）。
+    /// lookup 端点的处理器（组合根注册到 [`LOOKUP_PATH`]）。
+    pub fn lookup_handler(self: &Arc<Self>) -> Arc<dyn HttpHandler> {
+        Arc::new(LookupEndpoint {
+            pairing: self.clone(),
+        })
+    }
+
+    /// 三个配对 path 的每路径默认响应头（§7.1：**所有**配对 HTTP 响应都带这四个头）。
     ///
-    /// 组合根注册 [`Self::claim_handler`]/[`Self::status_handler`] 时**必须**把它作为 `default_headers`
-    /// 传给 `NetListener::register_post`。
+    /// 组合根注册 [`Self::claim_handler`]/[`Self::status_handler`]/[`Self::lookup_handler`] 时**必须**把它
+    /// 作为 `default_headers` 传给 `NetListener::register_post`。
     pub fn default_response_headers(&self) -> &'static [(&'static str, &'static str)] {
         &SECURITY_HEADERS
     }
@@ -547,6 +581,118 @@ impl PairingHttp {
         secure(HttpResponse::json(StatusCode::OK, bytes))
     }
 
+    /// `POST /sync/v1/pairing/lookup`（§7.5 / design D4）：用一次性配对码取回配对绑定与 secret。
+    ///
+    /// 顺序（每一步都在任何响应材料之前失败关闭）：
+    ///
+    /// ① 限流（与 claim **各自独立**的每来源额度）；
+    /// ② 只接受同源 `application/json`；
+    /// ③ 前置来源校验：`Origin` 必须等于本机 canonical origin（`daemon.public_origin`）。这一条**先于**
+    ///    配对码查找：跨源请求不得消耗别人的码；
+    /// ④ 解码 + 归一化配对码：任何形状错误都与「不存在」同形（401），不返回 400；
+    /// ⑤ `Authority::consume_pairing_code`（成功即原子消耗；`None` 是所有失败的唯一形状）；
+    /// ⑥ 读持久记录：必须仍是 `created`、未过期、绑定与该来源一致（lookup **不**推进配对状态）；
+    /// ⑦ 组装响应：`hostId`/`hostPublicKey` 取本机身份，`pairingSecret` 是完整 256 bit。
+    async fn lookup(&self, request: HttpRequest) -> HttpResponse {
+        // ① 限流：超限的请求不进入状态机，也不消耗配对码。
+        if let RateLimit::Denied { retry_after } = self.lookup_limit.check(request.peer.client_ip) {
+            return rate_limited(retry_after);
+        }
+        // ② 同源 `application/json`（与 claim/status 同一规则）。
+        if !is_json_content_type(&request.headers) {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::ProtocolSchemaInvalid,
+                "content type must be application/json",
+            );
+        }
+        // ③ 前置来源校验：必须在查找之前完成（否则跨源请求可以烧掉一个有效码）。
+        let Some(origin) = self.lookup_origin(&request.headers) else {
+            return code_invalid();
+        };
+        // ④ 解码与归一化：`LookupRequest` 的 wire 形状错误、缺字段、未知字段与配对码字符集错误都收敛为
+        //    同一个失败——serde 无法区分「码格式错」与其它 schema 错误，所以这里不做二级分类（§7.5）。
+        let Ok(lookup_request) = decode_lookup(&request.body) else {
+            return code_invalid();
+        };
+        let Ok(code) = identity_auth::PairingCode::parse(lookup_request.pairing_code.as_str())
+        else {
+            return code_invalid();
+        };
+        // ⑤ 成功即消耗（原子）；`None` 与「不存在的码」不可区分。
+        let Some(lookup) = self.authority.consume_pairing_code(&code) else {
+            return code_invalid();
+        };
+        // ⑥ 该码所属配对必须仍可认领：`created`、未过期、绑定与本次来源一致。lookup 不推进状态。
+        let actor = Actor::PairingClaimant {
+            pairing: lookup.pairing.clone(),
+        };
+        let record = match self
+            .core
+            .pairing_channel_view(&actor, &lookup.pairing)
+            .await
+        {
+            Ok(Some(view)) => view.record,
+            Ok(None) => return code_invalid(),
+            Err(error) => {
+                return self.port_error("lookup", &lookup.pairing, error);
+            }
+        };
+        if record.state() != PairingState::Created
+            || self.authority.now().as_str() >= record.expires_at().as_str()
+            || record.host_binding() != origin.as_str()
+        {
+            return code_invalid();
+        }
+        // ⑦ 组装 200。字段全部来自已核对的事实；装配失败只可能是实现缺陷。
+        let Some(body) = self.lookup_response(&record, &lookup).await else {
+            return internal_unavailable();
+        };
+        match serde_json::to_vec(&body) {
+            Ok(bytes) => secure(HttpResponse::json(StatusCode::OK, Bytes::from(bytes))),
+            Err(error) => {
+                tracing::error!(error = %error, "the lookup response cannot be encoded");
+                internal_unavailable()
+            }
+        }
+    }
+
+    /// lookup 的**前置**来源校验：`Origin` 头必须存在、可归一化，并与本机 canonical origin 逐字相等。
+    ///
+    /// 返回归一化后的来源文本（用于与持久记录的 `host_binding` 再核对一次）。`Host` 边界由接入层
+    /// （`HostPolicy`）在调用处理器之前判定，本方法只判来源；两者不可互相替代（§3.2）。
+    fn lookup_origin(&self, headers: &HeaderMap) -> Option<String> {
+        let configured = self.public_origin.as_deref()?;
+        // 配置值必须本身是 canonical origin；不是则网页入口不可用（失败关闭，不回落到 localhost）。
+        let canonical = CanonicalOrigin::parse(configured).ok()?;
+        let known = request_origin(headers).ok()?.as_str()?.to_owned();
+        if known != canonical.as_str() {
+            return None;
+        }
+        Some(canonical.as_str().to_owned())
+    }
+
+    /// 组装 `lookupResponse`（§7.5）：主机身份材料、规范化来源、完整 pairing secret 与过期时间。
+    async fn lookup_response(
+        &self,
+        record: &PairingRecord,
+        lookup: &identity_auth::PairingCodeLookup,
+    ) -> Option<LookupResponse> {
+        let host_public_key = self.authority.node_public_key().await.ok()?;
+        Some(LookupResponse {
+            protocol_version: ProtocolVersionV1::new(1).ok()?,
+            pairing_id: Uuid::parse(lookup.pairing.as_str()).ok()?,
+            host_id: Uuid::parse(self.authority.local_node().as_str()).ok()?,
+            host_public_key: Base64Url::<65>::parse(&encode_base64url(host_public_key.as_bytes()))
+                .ok()?,
+            canonical_origin: sync_protocol::pairing::CanonicalOrigin::parse(record.host_binding())
+                .ok()?,
+            pairing_secret: Base64Url::<32>::parse(&encode_base64url(lookup.secret.as_bytes()))
+                .ok()?,
+            expires_at: Timestamp::parse(record.expires_at().as_str()).ok()?,
+        })
+    }
+
     /// 校验 `acp-remote/pairing-status/v1` 的 HMAC（§7.3）：密钥是本机内存里该配对的 secret。
     ///
     /// `SecretUnavailable`（secret 已清除）与 `Proof(Hmac)`（HMAC 不匹配）是具名失败，但调用方把它们
@@ -729,6 +875,18 @@ impl HttpHandler for StatusEndpoint {
     }
 }
 
+/// lookup 端点的 [`HttpHandler`]（薄包装：把请求交给 [`PairingHttp`]）。
+struct LookupEndpoint {
+    pairing: Arc<PairingHttp>,
+}
+
+#[async_trait::async_trait]
+impl HttpHandler for LookupEndpoint {
+    async fn handle(&self, request: HttpRequest) -> HttpResponse {
+        self.pairing.lookup(request).await
+    }
+}
+
 /// wire 的 claim 请求 → 内部值对象。
 ///
 /// wire 类型已经校验过形状；这里的失败只可能是「形状合法但取值不可用」（例如公钥不在 P-256 上），一律按
@@ -863,6 +1021,17 @@ fn proof_invalid() -> HttpResponse {
         StatusCode::UNAUTHORIZED,
         ErrorCode::AuthProofInvalid,
         PROOF_INVALID_MESSAGE,
+    )
+}
+
+/// lookup 的统一失败（§7.5）：码格式错误、不存在、已消耗、已过期、已认领、来源不符全部收敛到这里。
+///
+/// 不加任何 `details`：不同原因的响应必须逐字节同形。消息是固定短文本，不回显码。
+fn code_invalid() -> HttpResponse {
+    refuse(
+        StatusCode::UNAUTHORIZED,
+        ErrorCode::PairingCodeInvalid,
+        CODE_INVALID_MESSAGE,
     )
 }
 
@@ -1010,6 +1179,12 @@ fn decode_status(body: &[u8]) -> Result<StatusRequest, ErrorCode> {
             ErrorCode::ProtocolSchemaInvalid
         }
     })
+}
+
+/// lookup 请求体的解码。**任何**失败都按统一失败处理（§7.5）：serde 无法区分「码形状错误」与其它
+/// schema 错误，因此这里既不做两级错误分类，也不把错误码交给调用方。
+fn decode_lookup(body: &[u8]) -> Result<LookupRequest, ()> {
+    serde_json::from_slice::<LookupRequest>(body).map_err(|_| ())
 }
 
 /// `Content-Type` 是否为 `application/json`（允许 `; charset=…` 之类的参数，§7.1）。

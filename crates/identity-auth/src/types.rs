@@ -15,6 +15,7 @@ use acp_core::model::{
 };
 
 use crate::error::TranscriptError;
+use crate::pairing_code::PairingCode;
 use crate::port::{EntropyError, EntropySource};
 
 /// transcript 协议版本（v1）。
@@ -377,6 +378,9 @@ pub struct PairingDraft {
     pub record: PairingRecord,
     /// pairing secret 明文（只在内存；落库只有 [`PairingDraft::record`] 的 digest）。
     pub secret: PairingSecret,
+    /// 网页入口的配对码：由 [`PairingDraft::secret`] 域分离派生，只用于一次性取回绑定与 secret，
+    /// **不落库**、不参与 claim/status 的 HMAC（[`derive_pairing_code`](crate::derive_pairing_code)）。
+    pub code: PairingCode,
     /// 本机在配对期内使用的 server nonce（claim 响应与 Owner 证明的字段 `serverNonce`）。
     pub server_nonce: Nonce,
     /// 本机为该配对生成的请求标识（claim 响应与状态查询共用）。

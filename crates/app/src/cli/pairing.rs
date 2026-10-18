@@ -3,7 +3,8 @@
 //!
 //! 流程固定为三步：`*.pair.begin` → `*.pair.status`（CLI 轮询）→ `*.pair.confirm`。
 //!
-//! - `begin` 拿到的 `pairingUrl` **只**打印到终端（内存 → 终端），不写日志、不写文件、不进错误消息；
+//! - `begin` 拿到的 `pairingUrl` 与（设备方向的）`pairingCode` **只**打印到终端（内存 → 终端），不写日志、
+//!   不写文件、不进错误消息；`pairingUrl` 供扫码，`pairingCode` 供网页 `/pair` 输入；
 //! - 轮询由 CLI 负责（间隔 [`POLL_INTERVAL`]），有效期以 `status`/`begin` 返回的 `expiresAt` 为准
 //!   （§1.1 的定宽文本，字典序即时间序，因此本地不需要日期库），到期以 `local.expired` 结束；
 //! - 认领后**必须**先展示名称、指纹与过期时间（节点方向另含待授予的 `grants`），再允许确认；设备方向
@@ -431,6 +432,13 @@ async fn await_claim(
     // `pairingUrl` 只经终端展示（含配对 secret 的 fragment），不落日志/文件/错误消息。
     let pairing_url = text_field(&begin, "pairingUrl")?;
     println!("{pairing_url}");
+    if target == PairTarget::Device {
+        // 网页入口的 8 位配对码：`XXXX-XXXX` 只是展示形态，服务端归一化后比较。它同样只在终端出现，
+        // 不写日志/文件/错误消息。节点配对没有网页入口，不读取该字段。
+        let pairing_code = text_field(&begin, "pairingCode")?;
+        println!("配对码：{}", readable_pairing_code(&pairing_code)?);
+        println!("（移动端请扫码/打开上面的完整地址；网页端打开 /pair 后输入配对码）");
+    }
     let expires_at = text_field(&begin, "expiresAt")?;
     println!(
         "正在等待{label}认领…（有效期至 {expires_at}，Ctrl-C 取消）",
@@ -540,6 +548,21 @@ fn expired(target: PairTarget) -> Failure {
     )
 }
 
+/// 把服务端返回的规范配对码（8 位大写、无分隔符）展示为 `XXXX-XXXX`。
+///
+/// 复用 `identity-auth` 的归一化解析器而不是在这里切片：非法形状按协议违规失败（消息不回显码），
+/// 规范形态由同一个实现决定，CLI 不另造一套编解码。
+fn readable_pairing_code(code: &str) -> Result<String, Failure> {
+    let code = identity_auth::PairingCode::parse(code).map_err(|_| {
+        Failure::local(
+            LocalErrorCode::Internal,
+            "配对方法的响应包含非法配对码（未输出该值）",
+        )
+    })?;
+    let text = code.as_str();
+    Ok(format!("{}-{}", &text[..4], &text[4..]))
+}
+
 /// 取必需字符串字段；缺失或类型不符即 `local.internal`（协议违规，而不是用户输入问题）。
 fn text_field(result: &JsonObject, key: &str) -> Result<String, Failure> {
     result
@@ -552,4 +575,35 @@ fn text_field(result: &JsonObject, key: &str) -> Result<String, Failure> {
                 format!("配对方法的响应缺少字符串字段 `{key}`"),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 规范码与用户输入形态都展示为 `XXXX-XXXX`；解析失败时不回显原值。
+    #[test]
+    fn pairing_code_is_printed_in_readable_groups() {
+        assert_eq!(
+            readable_pairing_code("ABCD1234").expect("规范形态"),
+            "ABCD-1234"
+        );
+        // 输入归一化（小写、易混字符、分隔符）由 `PairingCode::parse` 统一完成。
+        assert_eq!(
+            readable_pairing_code("abcd-1234").expect("大小写与分隔符"),
+            "ABCD-1234"
+        );
+        assert_eq!(
+            readable_pairing_code("OIL1-2345").expect("Crockford 归一化"),
+            "0111-2345"
+        );
+
+        let failure = readable_pairing_code("not-a-code").expect_err("非法形状必须失败");
+        assert_eq!(failure.code(), "local.internal");
+        assert!(
+            !failure.message().contains("not-a-code"),
+            "错误消息不得回显配对码：{}",
+            failure.message()
+        );
+    }
 }

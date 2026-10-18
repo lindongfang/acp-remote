@@ -62,6 +62,8 @@ const DEVICE: &str = "11111111-1111-4111-8111-111111111111";
 const OTHER_DEVICE: &str = "22222222-2222-4222-8222-222222222222";
 const NODE: &str = "33333333-3333-4333-8333-333333333333";
 const PAIRING: &str = "55555555-5555-4555-8555-555555555555";
+/// 第二个配对（按标识终结用例：与 `PAIRING` 同时存在）。
+const OTHER_PAIRING: &str = "66666666-6666-4666-8666-666666666666";
 
 /// P-256 基点 G 的 SEC1 未压缩编码：曲线上的确定点，构造不需要随机源。
 const PUBKEY_HEX: &str = concat!(
@@ -1511,6 +1513,7 @@ async fn consume_pairing_refuses_unapproved_terminal_and_missing_rows() {
         store
             .expire_pairings(ExpiryWrite {
                 context: context(5, Vec::new()),
+                only: None,
             })
             .await
             .expect("expire sweep"),
@@ -2134,6 +2137,7 @@ async fn expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep() {
                 // `UseCases::expire_pairings` 传空的 `context.audit`：`pairing.expired` 由存储层
                 // 按配对写入，actor 只从这里的首条取。
                 context: context(6, Vec::new()),
+                only: None,
             })
             .await
             .expect("expiry sweep"),
@@ -2167,6 +2171,124 @@ async fn expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep() {
     );
     let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
     reopened.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(audit_rows(&pool, AuditAction::PairingExpired).await, 1);
+    pool.close().await;
+}
+
+/// 按标识终结：只动列出的**未确认**配对，且不要求已到期（重启终结的形态）；已批准记录不受影响。
+#[tokio::test]
+async fn expire_pairings_by_id_terminates_only_the_listed_unconfirmed_rows() {
+    let dir = temp_dir("admin-pairing-expiry-by-id");
+    let store = open(&dir).await;
+    // 已批准的配对（不在到期时刻）：按标识终结也不得改写它。
+    approve_device(&store, &device_id(), 2).await;
+    // 未确认的第二个配对：有效期到 t30，但重启后已无法验密，因此在 t2 就被终结。
+    let pending = PairingId::new(OTHER_PAIRING).expect("pairing id");
+    store
+        .create_pairing(PairingWrite {
+            record: PairingRecord::try_new(
+                pending.clone(),
+                PairingTarget::Device,
+                PairingState::Created,
+                None,
+                digest(PAIRING_SECRET),
+                HOST_BINDING,
+                at(0),
+                at(30),
+                None,
+                None,
+                None,
+            )
+            .expect("pairing record"),
+            context: context(0, Vec::new()),
+        })
+        .await
+        .expect("create pairing");
+    let peer = PairingPeer::try_new(
+        PeerIdentity::Device(remote_device_id()),
+        "late phone",
+        peer_public_key(),
+        HOST_BINDING,
+        nonce("by-id-nonce"),
+    )
+    .expect("pairing peer");
+    store
+        .claim_pairing(PairingClaimWrite {
+            claim: acp_core::model::PairingClaim::try_new(pending.clone(), peer).expect("claim"),
+            context: context(
+                1,
+                vec![audit(
+                    AuditAction::PairingClaimed,
+                    EntityRef::Pairing(pending.clone()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("claim");
+
+    // 空列表：零写入、不产生审计。
+    assert_eq!(
+        store
+            .expire_pairings(ExpiryWrite {
+                context: context(2, Vec::new()),
+                only: Some(Vec::new()),
+            })
+            .await
+            .expect("empty by-id sweep"),
+        0
+    );
+    // 列出未确认的 pending 与已批准的 PAIRING：只有前者被终结。
+    assert_eq!(
+        store
+            .expire_pairings(ExpiryWrite {
+                context: context(2, Vec::new()),
+                only: Some(vec![pending.clone(), pairing_id()]),
+            })
+            .await
+            .expect("by-id sweep"),
+        1
+    );
+    let terminated = store
+        .pairing(&pending)
+        .await
+        .expect("pairing")
+        .expect("pairing row");
+    assert_eq!(terminated.state(), PairingState::Expired);
+    assert_eq!(terminated.terminal_at(), Some(&at(2)));
+    assert!(terminated.claimed_at().is_some(), "已认领的时间必须保留");
+    assert_eq!(
+        store
+            .pairing(&pairing_id())
+            .await
+            .expect("pairing")
+            .expect("pairing row")
+            .state(),
+        PairingState::Approved,
+        "按标识终结不得改写已批准记录"
+    );
+    let all = store.pairings().await.expect("pairings");
+    assert_eq!(all.len(), 2);
+    assert!(
+        all.windows(2)
+            .all(|pair| pair[0].created_at() <= pair[1].created_at())
+    );
+
+    // 重复提交同一标识是幂等的：状态已终态，不再终结、不再写审计。
+    assert_eq!(
+        store
+            .expire_pairings(ExpiryWrite {
+                context: context(3, Vec::new()),
+                only: Some(vec![pending.clone()]),
+            })
+            .await
+            .expect("repeat by-id sweep"),
+        0
+    );
+
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
     let pool = raw_pool(&path).await;
     assert_eq!(audit_rows(&pool, AuditAction::PairingExpired).await, 1);
     pool.close().await;

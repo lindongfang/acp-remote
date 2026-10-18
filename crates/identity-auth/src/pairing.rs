@@ -11,6 +11,7 @@ use acp_core::model::{
 
 use crate::authority::Authority;
 use crate::error::PairingError;
+use crate::pairing_code::{PairingCode, PairingCodeLookup};
 use crate::state::PairingMaterial;
 use crate::transcript::{
     NodeLinkPairingProof, NodeLinkPairingStatus, SyncPairingProof, SyncPairingStatus,
@@ -18,15 +19,19 @@ use crate::transcript::{
 use crate::types::{
     CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection, ClaimedPairing,
     Completion, IdentityFact, PAIRING_MAX_FAILURES, PAIRING_MAX_SECONDS, PairingDecision,
-    PairingDraft, PairingProof, PairingRequestId, PairingRequestMaterial, PairingSpec,
-    PairingStatusView, at_or_after, is_unconfirmed,
+    PairingDraft, PairingProof, PairingRequestId, PairingRequestMaterial, PairingSecret,
+    PairingSpec, PairingStatusView, at_or_after, is_unconfirmed,
 };
 
 impl Authority {
-    /// 创建一个配对：登记绑定、有效期与内存 secret；返回待落库的记录草稿。
+    /// 创建一个配对：登记绑定、有效期、内存 secret 与网页入口配对码；返回待落库的记录草稿。
     ///
     /// `expires_at` 由调用方按「不超过 5 分钟」算出后传入，本方法只复核上界（收窄可以、延长不行）。
     /// 设备与节点配对都不携带任何授权集合。
+    ///
+    /// 派生出的配对码必须在**仍持有 secret 的活跃配对**中唯一（design D2）：碰撞时重新生成
+    /// secret（从而得到新码），用户侧不报错。唯一性检查与登记在同一把锁内完成，避免两个并发
+    /// 创建同时通过检查；40 bit 空间下重试的期望次数是 1，只有熵源退化才会反复碰撞。
     pub fn begin_pairing(
         &self,
         pairing_id: &PairingId,
@@ -41,39 +46,50 @@ impl Authority {
         if expires <= created || expires - created > PAIRING_MAX_SECONDS {
             return Err(PairingError::InvalidWindow);
         }
-        let secret = crate::types::PairingSecret::generate(self.entropy())
-            .map_err(|_| PairingError::EntropyUnavailable)?;
         let server_nonce = crate::handshake::random_nonce_for(self.entropy())
             .map_err(|_| PairingError::EntropyUnavailable)?;
         let pairing_request_id = PairingRequestId::generate(self.entropy())
             .map_err(|_| PairingError::EntropyUnavailable)?;
-        let record = PairingRecord::try_new(
-            pairing_id.clone(),
-            target,
-            PairingState::Created,
-            display_name.map(str::to_owned),
-            secret.digest()?,
-            spec.host_binding(),
-            created_at.clone(),
-            expires_at.clone(),
-            None,
-            None,
-            None,
-        )?;
-        self.state().put_secret(
-            pairing_id,
-            PairingMaterial {
-                secret,
-                server_nonce: server_nonce.clone(),
-                pairing_request_id: pairing_request_id.clone(),
-                // 新建的配对本就未批准；批准由 `Authority::mark_pairing_approved` 在持久化提交
-                // 成功之后置位（见 `settle` 的说明），`settle` 本身不置位。
-                approved: false,
-            },
-        );
+        let (secret, code, record) = loop {
+            let secret = PairingSecret::generate(self.entropy())
+                .map_err(|_| PairingError::EntropyUnavailable)?;
+            let code = crate::pairing_code::derive_pairing_code(&secret)?;
+            let record = PairingRecord::try_new(
+                pairing_id.clone(),
+                target,
+                PairingState::Created,
+                display_name.map(str::to_owned),
+                secret.digest()?,
+                spec.host_binding(),
+                created_at.clone(),
+                expires_at.clone(),
+                None,
+                None,
+                None,
+            )?;
+            let mut state = self.state();
+            if state.code_in_use(&code) {
+                // 碰撞：丢弃本次 secret 与草稿，重新生成；不向用户报错。
+                continue;
+            }
+            state.put_secret(
+                pairing_id,
+                PairingMaterial {
+                    secret,
+                    code: code.clone(),
+                    server_nonce: server_nonce.clone(),
+                    pairing_request_id: pairing_request_id.clone(),
+                    // 新建的配对本就未批准；批准由 `Authority::mark_pairing_approved` 在持久化提交
+                    // 成功之后置位（见 `settle` 的说明），`settle` 本身不置位。
+                    approved: false,
+                },
+            );
+            break (secret, code, record);
+        };
         Ok(PairingDraft {
             record,
             secret,
+            code,
             server_nonce,
             pairing_request_id,
         })
@@ -230,6 +246,7 @@ impl Authority {
 
     /// 过期扫描。**任何**到达 `expires_at` 的记录都在这里被清除内存 secret——这是 secret 的硬上界，
     /// 与记录是否已终结无关（`rejected`/`expired` 记录也在此清除，否则它们会一直驻留到进程退出）。
+    /// 配对码反查表与 secret 同步清理（`clear_secret`）：过期后该码与不存在的码一样查不到任何配对。
     ///
     /// 返回值只包含**未终结**的配对：它们需要调用方按 `core::ports` 的写集（§11.6）提交终态写集
     /// （`expire_pairings`）。已批准但已过期的记录也在此列：它的落库终态（`approved_at` 是否保留）
@@ -252,7 +269,7 @@ impl Authority {
     /// 进程重启后已无法继续验密的配对（`created`/`pending_confirmation`）：**全部**必须终结。
     ///
     /// 依据合同 §4.3：secret 只在内存，重启不能凭 digest 恢复；已批准的信任记录不受影响
-    /// （它们不在未确认集合里）。
+    /// （它们不在未确认集合里）。配对码反查表与 secret 同步清理，不能从持久化摘要重建。
     pub fn unrecoverable_after_restart(&self, pairings: &[PairingRecord]) -> Vec<PairingId> {
         pairings
             .iter()
@@ -367,6 +384,21 @@ impl Authority {
             return Err(PairingError::SecretUnavailable);
         };
         input.verify(&secret, proof).map_err(PairingError::from)
+    }
+
+    /// 用网页入口的配对码**一次性**取回绑定与 secret（design D3/D4）。
+    ///
+    /// 只覆盖本进程内存里仍持有 secret 的配对：重启、过期扫描、拒绝后的原过期时间、已批准配对
+    /// 的首次认证成功都会让码与 secret 一起消失。查找使用常数时间比较；**成功即消耗**——同一码的
+    /// 第二次查找返回 `None`，与不存在的码不可区分（`None` 是所有失败的唯一形状，adapter 必须把它
+    /// 收敛为同一个 `401 pairing.code_invalid`）。查找不推进配对状态，返回的 secret 之后仍按原有
+    /// claim/status transcript 使用。
+    ///
+    /// 这是本 crate **唯一**按码返回 secret 的入口，只服务面向前端的 lookup 端点；不需要 secret 的
+    /// 调用方不要走这里。
+    pub fn consume_pairing_code(&self, code: &PairingCode) -> Option<PairingCodeLookup> {
+        let (pairing, secret) = self.state().take_code(code)?;
+        Some(PairingCodeLookup { pairing, secret })
     }
 
     /// 内存中是否仍持有该配对的 secret（测试与诊断用；不暴露内容）。

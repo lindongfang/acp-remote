@@ -163,7 +163,8 @@ const checks: readonly Check[] = [
           expectEqual(query(container, '[data-shell-top-bar="visible"]'), null, "配对页的全局顶栏锚点");
           expectEqual(query(container, "[data-device-capsule]"), null, "配对页的设备胶囊");
 
-          // (b) 配对页不再绘制任何自己的外壳：没有页头、没有返回入口、没有输入框。
+          // (b) 配对页不再绘制任何自己的外壳：没有页头、没有返回入口。无片段时它显示
+          // 配对码输入（S0），因此输入格是**应当存在**的内容，而不是页内导航/凭据输入。
           // 这些锚点不是「换一页才消失」的——下面换到根路径后仍要断言它们始终不存在。
           expectEqual(
             query(container, '[data-route-header="pair"]'),
@@ -175,7 +176,10 @@ const checks: readonly Check[] = [
             null,
             "配对页不得提供页内返回入口",
           );
-          expectEqual(query(container, "[data-pairing-input]"), null, "配对页不得提供输入框");
+          expectThat(
+            query(container, '[data-pairing-code-entry="true"]') !== null,
+            "无片段的配对页必须显示配对码输入（S0）",
+          );
 
           // 差分：换到根路径，全局顶栏必须出现——这才证明「顶栏缺席」是配对路径的外壳例外，
           // 而不是整个外壳都没渲染。

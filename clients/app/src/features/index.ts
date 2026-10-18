@@ -165,8 +165,10 @@ export { CONNECTION_STATE_LABELS, UNKNOWN_STATE_NOTE, buildHostPanelModel } from
 
 // ── 配对 ────────────────────────────────────────────────────────────────────
 export type {
+  PairingEntry,
   PairingFailureKind,
   PairingKind,
+  PairingLookupOutcome,
   PairingPageModel,
   PairingPhase,
   PairingPollResult,
@@ -176,13 +178,17 @@ export type {
 } from "./pairing-model";
 export {
   PAIRING_ERROR_HINTS,
+  applyAwaitingCode,
   applyClaiming,
+  applyLookingUp,
   applyNoPayload,
   applyPollResult,
   applyScannedNodeLink,
   canonicalOriginOf,
+  codeInvalidFailure,
   initialPairingPageModel,
   insecureContextFailure,
   kindMismatchFailure,
+  normalizePairingCode,
   originMismatchFailure,
 } from "./pairing-model";

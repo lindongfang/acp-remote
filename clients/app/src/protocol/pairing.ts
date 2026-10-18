@@ -28,6 +28,33 @@ export interface PairingQrPayload {
   readonly expiresAt: Timestamp;
 }
 
+/**
+ * `$defs.lookupRequest`：配对码入口用 8 位码一次性取回配对绑定与秘密（§7.5）。
+ *
+ * `pairingCode` 是 Crockford base32（40 bit），大小写不敏感；服务端先做归一化
+ * （`I`/`L → 1`、`O → 0`）再比较。它是**取回** secret 的凭据，不是 HMAC 密钥。
+ */
+export interface PairingLookupRequest {
+  readonly protocolVersion: 1;
+  readonly pairingCode: string;
+}
+
+/**
+ * `$defs.lookupResponse`：lookup 成功返回的绑定材料（§7.5）。
+ *
+ * 不推进配对状态；成功即消耗配对码。之后的 claim/status/transcript 与二维码入口完全相同，
+ * 因此 `hostPublicKey` 就是本次配对的固定主机公钥（网页入口的首次信任，design D5）。
+ */
+export interface PairingLookupResponse {
+  readonly protocolVersion: 1;
+  readonly pairingId: Uuid;
+  readonly hostId: Uuid;
+  readonly hostPublicKey: Base64Url65;
+  readonly canonicalOrigin: CanonicalOrigin;
+  readonly pairingSecret: Base64Url32;
+  readonly expiresAt: Timestamp;
+}
+
 /** `$defs.claimRequest`：设备首次声明配对，`proof` 由设备私钥签名。 */
 export interface PairingClaimRequest {
   readonly protocolVersion: 1;
@@ -120,6 +147,8 @@ export interface PairingHttpError {
 /** `pairing.schema.json` 的顶层 `oneOf`。 */
 export type PairingMessage =
   | PairingQrPayload
+  | PairingLookupRequest
+  | PairingLookupResponse
   | PairingClaimRequest
   | PairingClaimResponse
   | PairingStatusRequest

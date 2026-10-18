@@ -187,6 +187,8 @@ impl LocalAdminRouter {
         Ok(object(vec![
             ("pairingId", text(pairing_id.as_str())),
             ("pairingUrl", text(pairing_url)),
+            // 网页入口的一次性配对码（`as_str()` 是规范 8 位大写形态，不落库、不进日志）。
+            ("pairingCode", text(draft.code.as_str())),
             ("expiresAt", timestamp(&expires_at)),
         ]))
     }
@@ -646,23 +648,26 @@ impl LocalAdminRouter {
         target: PairingTarget,
     ) -> Result<identity_auth::PairingStatusView, AdminError> {
         let record = self.require_pairing(operation, pairing_id, target).await?;
-        let peer = if record.claimed_at().is_some() {
-            Some(
-                self.deps
-                    .core
-                    .pairing_peer(&Actor::LocalCli, pairing_id)
-                    .await
-                    .map_err(|error| params::map_port_error(operation, error))?
-                    .ok_or_else(|| {
-                        AdminError::new(
-                            LocalErrorCode::Internal,
-                            format!("{operation}: claimed pairing has no peer row"),
-                        )
-                    })?,
-            )
-        } else {
-            None
-        };
+        // 过期终结会把未认领的 `created` 行也写上 `claimed_at`（§7.3 的 CHECK 要求非
+        // `created` 状态必须有该值），此时并不存在 peer 行；终态 `expired` 不需要 peer 详情。
+        let peer =
+            if record.claimed_at().is_some() && !matches!(record.state(), PairingState::Expired) {
+                Some(
+                    self.deps
+                        .core
+                        .pairing_peer(&Actor::LocalCli, pairing_id)
+                        .await
+                        .map_err(|error| params::map_port_error(operation, error))?
+                        .ok_or_else(|| {
+                            AdminError::new(
+                                LocalErrorCode::Internal,
+                                format!("{operation}: claimed pairing has no peer row"),
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
         let claimed = peer
             .as_ref()
             .map(|peer| pairing::claimed_pairing(&record, peer));
