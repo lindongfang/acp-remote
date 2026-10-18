@@ -35,7 +35,19 @@
 import type { ReactElement, ReactNode } from "react";
 
 import type { Palette } from "./theme";
-import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  fontFamily,
+  fontSize,
+  fontWeight,
+  palettes,
+  radius,
+  spacing,
+  useTheme,
+} from "./theme";
 
 export interface DirectoryCardProps {
   readonly displayName: string;
@@ -69,28 +81,33 @@ function buildStyles(colors: Palette) {
       borderWidth: 1,
       borderColor: colors.line,
       borderRadius: radius.md,
-      padding: spacing.md,
-      gap: spacing.sm,
+      overflow: "hidden",
       boxShadow: colors.shadow,
     },
+    // 原型 `.dhead`：卡片头自成一栏（`panel-2` 底 + 下边框），不再跟卡片共用一层内边距。
     head: {
       flexDirection: "row",
       flexWrap: "wrap",
       alignItems: "center",
-      gap: spacing.sm,
+      gap: spacing.md,
+      paddingVertical: 15,
+      paddingHorizontal: 18,
+      backgroundColor: colors.panel2,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.line,
     },
+    // 原型 `.caret`：只是一个 14px 的箭头，没有底色块（折叠态由字形切换表达）。
     caret: {
-      minWidth: 24,
-      minHeight: 24,
+      width: 14,
+      flexShrink: 0,
       alignItems: "center",
       justifyContent: "center",
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
     },
     caretGlyph: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
     },
     // 目录图标：原型 `.dicon` 是「accent-soft 底 + accent-ink 字」的小方块。
     icon: {
@@ -105,6 +122,7 @@ function buildStyles(colors: Palette) {
       color: colors.accentInk,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     nameButton: {
       // 展示名从 `Text` 变成可点元素后，截断仍要生效：与 `SessionRow` 的 `main` 同一手法。
@@ -115,7 +133,10 @@ function buildStyles(colors: Palette) {
       flexShrink: 1,
       color: colors.ink,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.lg,
+      // 原型 `.dname`：15px（比正文大一档，但小于详情页标题）。
+      fontSize: 15,
+      lineHeight: 24,
+      letterSpacing: -0.15,
       fontWeight: "600",
     },
     // 同名消歧尾段：等宽小字、弱化，紧跟在展示名之后（原型 `.dpath`）。
@@ -123,14 +144,15 @@ function buildStyles(colors: Palette) {
       flexShrink: 1,
       color: colors.ink3,
       fontFamily: fontFamily.mono,
-      fontSize: fontSize.sm,
+      fontSize: 11.5,
+      lineHeight: 18.4,
     },
     countChip: {
       flexDirection: "row",
       alignItems: "baseline",
       gap: spacing.xs,
       paddingVertical: 2,
-      paddingHorizontal: spacing.sm,
+      paddingHorizontal: 9,
       borderWidth: 1,
       borderColor: colors.line,
       borderRadius: radius.lg,
@@ -139,70 +161,74 @@ function buildStyles(colors: Palette) {
     countChipText: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
+      fontSize: 12,
+      lineHeight: 19.2,
     },
     badgeOk: {
       flexDirection: "row",
       alignItems: "baseline",
-      gap: spacing.xs,
-      paddingVertical: 2,
-      paddingHorizontal: spacing.sm,
+      gap: 6,
+      paddingVertical: spacing.xs,
+      paddingHorizontal: 10,
       borderRadius: radius.lg,
       backgroundColor: colors.okSoft,
     },
     badgeWarn: {
       flexDirection: "row",
       alignItems: "baseline",
-      gap: spacing.xs,
-      paddingVertical: 2,
-      paddingHorizontal: spacing.sm,
+      gap: 6,
+      paddingVertical: spacing.xs,
+      paddingHorizontal: 10,
       borderRadius: radius.lg,
       backgroundColor: colors.warnSoft,
     },
     badgeOkText: {
       color: colors.ok,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
+      fontSize: 12,
+      lineHeight: 19.2,
     },
     badgeWarnText: {
       color: colors.warn,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
+      fontSize: 12,
+      lineHeight: 19.2,
     },
     // 弹性空白：把创建与「查看全部」两个入口推到卡片头右侧（原型 `.spacer`）。
     spacer: {
       flexGrow: 1,
     },
+    // 原型 `.linkbtn.add`：淡主色底 + 主色字 + 半粗，是卡片头里唯一有底色的入口。
     create: {
-      paddingVertical: 4,
-      paddingHorizontal: spacing.sm,
-      borderRadius: radius.sm,
-      borderWidth: 1,
-      borderColor: colors.line2,
-      backgroundColor: colors.panel2,
-    },
-    createText: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
-    openAll: {
-      paddingVertical: 4,
-      paddingHorizontal: spacing.sm,
+      paddingVertical: 5,
+      paddingHorizontal: 11,
       borderRadius: radius.sm,
       backgroundColor: colors.accentSoft,
     },
-    openAllText: {
+    createText: {
       color: colors.accentInk,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
+      fontWeight: fontWeight.medium,
+    },
+    // 原型 `.linkbtn.more`：透明底、弱化文字；与「⊕ 新建」不抢同一个视觉层级。
+    openAll: {
+      paddingVertical: spacing.xs,
+      paddingHorizontal: 6,
+      borderRadius: radius.sm,
+    },
+    openAllText: {
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     // 卡体：缩进 + 左边线（原型 `.dbody{margin-left:30px;border-left:2px solid var(--line-2)}`）。
     body: {
       marginLeft: 30,
       borderLeftWidth: 2,
       borderLeftColor: colors.line2,
-      gap: spacing.xs,
     },
   });
 }

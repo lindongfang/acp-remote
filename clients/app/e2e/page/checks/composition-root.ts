@@ -21,7 +21,7 @@
  * 证明验签不是被绕过的橡皮图章。
  */
 
-import { AGENTS, DIRS_ROUTE, WORKSPACES_WITH_PATHS, sessionsForBothDirectories } from "../fixtures";
+import { AGENTS, DIRS_ROUTE, HOSTS_ROUTE, WORKSPACES_WITH_PATHS, sessionsForBothDirectories } from "../fixtures";
 import { SYNC_WS_PATH, openWebSocket } from "../../../src/sync-client";
 import {
   CANONICAL_ORIGIN,
@@ -31,6 +31,7 @@ import {
   mountRootLayout,
   mountScenario,
   mountRoute,
+  navigate,
   query,
   queryAll,
   waitFor,
@@ -95,18 +96,17 @@ const checks: readonly Check[] = [
           query(mounted.container, '[data-runtime="unavailable"]') === null,
           "组合根装配完成后页面必须离开 RuntimeUnavailable",
         );
-        // 主机面板出现「已配对」，证明 start() 读到了预置的 paired-host/<origin> 记录。
+        // start() 读到了预置的 paired-host/<origin> 记录：主机面板已不在目录页内联呈现，
+        // 因此这里读外壳设备胶囊的标签（它由同一份 host 记录派生，主机端口是 `127.0.0.1:1`）。
         await waitFor(
-          () => query(mounted.container, '[data-host-identity="paired"]') !== null,
+          () =>
+            query(mounted.container, "[data-capsule-device]")?.textContent ===
+            new URL(CANONICAL_ORIGIN).host,
           "组合根读到预置的已配对主机记录",
         );
-        expectEqual(
-          query(mounted.container, "[data-host-address]")?.getAttribute("data-host-address") ?? null,
-          CANONICAL_ORIGIN,
-          "主机面板显示的规范化来源",
-        );
         expectThat(
-          query(mounted.container, '[data-connection-state="unpaired"]') === null,
+          query(mounted.container, "[data-capsule-state]")?.getAttribute("data-capsule-state") !==
+            "unpaired",
           "状态机不得停在 unpaired",
         );
       } finally {
@@ -168,7 +168,9 @@ const checks: readonly Check[] = [
   {
     name: "CR-3 负向对照：伪造的 hostProof 必须让连接进入阻断态，且客户端拒绝签设备证明",
     async run() {
-      const mounted = await mountScenario(baseScenario({ tamperHostProof: true }));
+      const mounted = await mountScenario(
+        baseScenario({ tamperHostProof: true, extraRoutes: [HOSTS_ROUTE] }),
+      );
       try {
         await waitFor(
           () => mounted.composition?.store.state.connection.state === "identity_changed",
@@ -176,23 +178,25 @@ const checks: readonly Check[] = [
         );
         // 验签失败发生在签设备证明**之前**：客户端不会把挑战传给一条身份不明的连接。
         expectEqual(mounted.host?.deviceProofs.length ?? -1, 0, "验签失败后不得签出设备证明");
-        expectThat(
-          query(mounted.container, '[data-blocking-detail="host_identity_changed"]') !== null,
-          "页面必须呈现阻断原因",
-        );
         // 阻断不是崩溃：目录页仍然渲染（此刻是「尚未收到第一份快照」）。
         //
         // 等待条件必须用**只有真实页面才发**的属性：`[data-route="dirs"]` 同时被占位
         // `RuntimeUnavailable` 命中，用它等待可能在首帧占位时就成立。这里用
-        // `[data-connection-state]`（`HostConnectionPanel` 的面板头发，占位不发）。
+        // `[data-directory-state="loading"]`（真实目录页的加载态文案，占位不发）。
         await waitFor(
-          () => query(mounted.container, "[data-connection-state]") !== null,
+          () => query(mounted.container, '[data-directory-state="loading"]') !== null,
           "阻断态下真实页面渲染",
         );
         expectThat(query(mounted.container, '[data-route="dirs"]') !== null, "阻断态下页面仍应渲染目录页");
         expectThat(
           query(mounted.container, '[data-directory-state="loading"]') !== null,
           "阻断态下目录页应是「等待快照」而不是伪造空数据",
+        );
+        // 阻断原因在 `/hosts` 的主机面板；`mountScenario` 不挂共享外壳，因此这里不能断言胶囊。
+        navigate(HOSTS_ROUTE.path);
+        await waitFor(
+          () => query(mounted.container, '[data-blocking-detail="host_identity_changed"]') !== null,
+          "主机面板必须呈现阻断原因",
         );
       } finally {
         await mounted.unmount();
@@ -209,28 +213,26 @@ const checks: readonly Check[] = [
           "记录非法时状态机停在 unpaired",
         );
         // 状态机断言看的是 store，可能先于 React 首帧满足；DOM 断言前先等真实页面渲染。
-        // 等待条件用 `[data-connection-state]`（`HostConnectionPanel` 的面板头）而不是
+        // 等待条件用 `[data-directory-state="loading"]`（真实目录页的加载态文案）而不是
         // `[data-route="dirs"]`：后者同时被占位 `RuntimeUnavailable` 命中，
         // 等待会在首帧占位时就成立，后续断言便与 `start()` 的 resolve 形成竞态。
         await waitFor(
-          () => query(mounted.container, "[data-connection-state]") !== null,
+          () => query(mounted.container, '[data-directory-state="loading"]') !== null,
           "未配对时真实页面渲染",
         );
         // 验签绝不被跳过：连接连发都没发，设备证明自然也没有。
         expectEqual(mounted.host?.sent.length ?? -1, 0, "记录非法时不得发出任何 wire 帧");
-        // 「未配对」不得被呈现成「本机没有任何目录」——那会诱导用户去删配置。
+        // 「未配对」不得被呈现成「还没有可用的目录」——那会诱导用户去删配置。
         expectThat(
           query(mounted.container, '[data-empty-state="no_directories"]') === null,
-          "未配对时不得呈现「本机没有任何目录」",
+          "未配对时不得呈现「还没有可用的目录」",
         );
         expectThat(
           query(mounted.container, '[data-directory-state="loading"]') !== null,
           "未配对时目录页应是「尚未收到第一份快照」",
         );
-        expectThat(
-          query(mounted.container, '[data-host-identity="unpaired"]') !== null,
-          "主机面板应明确呈现「尚未配对」",
-        );
+        // 主机面板不在目录页内联呈现；「尚未配对」由 `/hosts` 路由的面板与外壳胶囊表达，
+        // 这里的职责是确保目录页不把未配对伪造成空目录。
       } finally {
         await mounted.unmount();
       }

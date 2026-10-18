@@ -135,17 +135,29 @@ function buildStyles(colors: Palette) {
       flexDirection: "column",
       alignItems: "flex-start",
       gap: spacing.xs,
+      // 原型 `.pagehead{margin-bottom:16px}`：页头与下面的列表之间留出一档。
+      marginBottom: spacing.lg,
     },
+    // 原型 `.dirback`：次级按钮（描边 + 面板底），不是一行正文链接。
     back: {
+      marginBottom: 10,
       alignSelf: "flex-start",
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.sm,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      paddingVertical: 5,
+      paddingHorizontal: 11,
+      borderWidth: 1,
+      borderColor: colors.line,
       borderRadius: radius.sm,
+      backgroundColor: colors.panel,
     },
     backText: {
-      color: colors.accent,
+      color: colors.ink2,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
+      fontSize: 12.5,
+      lineHeight: 20,
+      fontWeight: fontWeight.value,
     },
     titleRow: {
       flexDirection: "row",
@@ -156,19 +168,23 @@ function buildStyles(colors: Palette) {
     title: {
       color: colors.ink,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xl,
+      // 原型 `.pagehead .dirline .nm`：21px（比卡片展示名大一档）。
+      fontSize: 21,
+      lineHeight: 33.6,
       fontWeight: "600",
+      letterSpacing: -0.21,
     },
     chip: {
       paddingVertical: 2,
-      paddingHorizontal: spacing.sm,
+      paddingHorizontal: 9,
       borderWidth: 1,
       borderColor: colors.line,
       borderRadius: radius.lg,
       backgroundColor: colors.panel,
       color: colors.ink2,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
+      fontSize: 12,
+      lineHeight: 19.2,
     },
     pathRow: {
       flexDirection: "row",
@@ -176,11 +192,13 @@ function buildStyles(colors: Palette) {
       alignItems: "baseline",
       gap: spacing.sm,
       minWidth: 0,
+      marginTop: 3,
     },
     pathLabel: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
+      fontSize: 12,
+      lineHeight: 19.2,
     },
     pathValue: {
       flexShrink: 1,
@@ -188,6 +206,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
       // 等宽值行取 500（原型 `.drow .dpath` 的 `font-weight:500`，见 `theme.ts` 的 `fontWeight.value`）。
       fontWeight: fontWeight.value,
     },
@@ -201,24 +220,26 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     syncedAt: {
       color: colors.ink3,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
+    // 原型详情页的会话行直接铺在页面上，外面不再套一层带边框的卡片。
     list: {
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.md,
-      backgroundColor: colors.panel,
-      overflow: "hidden",
-      boxShadow: colors.shadow,
+      flexDirection: "column",
     },
+    // 原型 `.blank`：虚线边框、居中、块内留白更大。
     emptyBox: {
-      gap: spacing.xs,
-      padding: spacing.lg,
+      alignItems: "center",
+      gap: spacing.sm,
+      paddingVertical: 56,
+      paddingHorizontal: spacing.xl,
       borderWidth: 1,
+      borderStyle: "dashed",
       borderColor: colors.line,
       borderRadius: radius.md,
       backgroundColor: colors.panel,
@@ -227,12 +248,16 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.lg,
+      lineHeight: 27.2,
       fontWeight: "600",
+      textAlign: "center",
     },
     emptyGuidance: {
-      color: colors.ink2,
+      color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
+      textAlign: "center",
     },
     footbarWide: {
       flexDirection: "row",
@@ -240,7 +265,8 @@ function buildStyles(colors: Palette) {
       alignItems: "center",
       justifyContent: "space-between",
       gap: spacing.md,
-      paddingTop: spacing.md,
+      marginTop: spacing.xl,
+      paddingTop: spacing.lg,
       borderTopWidth: 1,
       borderTopColor: colors.line,
     },
@@ -248,7 +274,8 @@ function buildStyles(colors: Palette) {
       flexDirection: "column",
       alignItems: "stretch",
       gap: spacing.sm,
-      paddingTop: spacing.md,
+      marginTop: spacing.xl,
+      paddingTop: spacing.lg,
       borderTopWidth: 1,
       borderTopColor: colors.line,
     },
@@ -265,15 +292,18 @@ function buildStyles(colors: Palette) {
       backgroundColor: colors.accent,
     },
     createText: {
-      color: colors.accentInk,
+      // 原型 `.btn.primary` 的白字；主题里没有 white token，与 `PairingPanel` 同一取值。
+      color: "#ffffff",
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
       fontWeight: "600",
     },
     hint: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
     },
     pager: {
       flexDirection: "row",
@@ -296,6 +326,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     pagerButtonTextDisabled: {
       color: colors.ink3,
@@ -310,6 +341,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     pageInput: {
       width: 40,
@@ -323,6 +355,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
       textAlign: "center",
     },
     alert: {
@@ -330,6 +363,7 @@ function buildStyles(colors: Palette) {
       backgroundColor: colors.dangerSoft,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
       padding: spacing.md,
       borderRadius: radius.md,
     },
@@ -337,6 +371,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
     },
   });
 }
@@ -487,9 +522,9 @@ export function DirectoryDetail({
       ) : (
         <View style={styles.emptyBox}>
           <Text style={styles.emptyTitle} dataSet={{ directorySessions: "empty" }}>
-            这个目录里还没有会话。
+            这个目录还没有会话
           </Text>
-          <Text style={styles.emptyGuidance}>用下面的入口在这个目录里创建一个会话。</Text>
+          <Text style={styles.emptyGuidance}>在这里或电脑上新建一个会话，它会出现在这里。</Text>
         </View>
       )}
 

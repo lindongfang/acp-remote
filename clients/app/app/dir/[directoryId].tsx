@@ -56,11 +56,19 @@ import { useClientState, useClientStore } from "../../src/features/runtime";
 /** 页面级布局：与详情组件内的样式表同构（浅/深各建一次）。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
-    root: {
+    // 外层铺满路由屏幕并铺主题底色：内容区自己的 1180 上限两侧不露路由容器默认白底。
+    outer: {
       flex: 1,
-      gap: spacing.md,
-      padding: spacing.lg,
+      width: "100%",
       backgroundColor: colors.bg,
+    },
+    page: {
+      width: "100%",
+      // 原型 `.wrap`：内容区最大 1180、居中，四周 24px。
+      maxWidth: 1180,
+      alignSelf: "center",
+      gap: spacing.lg,
+      padding: spacing.xl,
     },
   });
 }
@@ -131,9 +139,10 @@ export default function DirectoryDetailRoute(): ReactElement {
   const sheetOpen = state.createSheetDirectoryId === directoryId;
 
   return (
-    <View role="main" style={styles.root}>
-      <DirectoryDetail
-        model={store.directoryDetail(directoryId)}
+    <View role="main" style={styles.outer}>
+      <View style={styles.page}>
+        <DirectoryDetail
+          model={store.directoryDetail(directoryId)}
         lastSyncedAtMs={state.lastSyncedAtMs}
         onBack={() => {
           router.back();
@@ -147,11 +156,16 @@ export default function DirectoryDetailRoute(): ReactElement {
         onCreateSession={() => {
           store.openCreateSheet(directoryId);
         }}
-      />
+        />
+      </View>
 
       {sheetOpen ? (
         <CreateSessionSheet
           model={entry}
+          onCreated={(sessionId) => {
+            store.closeCreateSheet();
+            router.push(`/session/${encodeURIComponent(sessionId)}`);
+          }}
           selectedAgentId={agentId}
           onSelectAgent={setAgentId}
           onSubmit={({ agentId: selected, directoryPath, createIfMissing }) => {
@@ -188,6 +202,8 @@ export default function DirectoryDetailRoute(): ReactElement {
           unavailable={entry.directory.kind === "browse" ? (entry.directory.unavailable ?? undefined) : undefined}
           onBrowse={onBrowse}
           onCreateFolder={onCreateFolder}
+          onResolveFolder={() => store.resolveFolderUncertain()}
+          onCheckFolder={() => store.checkFolderCreation()}
           onConfirm={onConfirmSelection}
           onCancel={onCancelPicker}
         />

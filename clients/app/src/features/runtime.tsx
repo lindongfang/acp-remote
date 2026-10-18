@@ -11,7 +11,7 @@
  *
  * `null` 表示**组合根尚未装配**（平台端口没有接线，见交付报告的缺口登记），不是「未连接」。
  * 页面据此渲染一个显式的说明，而不是伪造一份空数据让用户以为「这台电脑上一个目录都没有」——
- * 后者会与 R15 的「本机没有任何目录」空态混淆。
+ * 后者会与 R15 的「还没有可用的目录」空态混淆。
  */
 
 import { createContext, useCallback, useContext, useSyncExternalStore } from "react";

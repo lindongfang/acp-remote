@@ -7,6 +7,9 @@
  *   路径尾段、计数胶囊、运行中/待处理徽标、弹性空白、`⊕ 新建`、`查看全部 ›`）。
  * - **卡体是缩进树**：本组件只把内联会话行（`SessionRow`）或那一行「这个目录还没有会话」
  *   交给卡片的 `children`，缩进与左边线由卡片负责。
+ * - **目录卡片始终单列堆叠**（原型 `.stack`），不随窗口宽度改成并排。
+ * - **卡体底部入口**：可见行超过内联上限时，卡体底部再渲染一个「查看全部 ›」
+ *   （`data-action="open-directory-all-footer"`），与卡片头那个入口动作相同、取值不同。
  *
  * ## 路径与目录标识
  *
@@ -31,17 +34,20 @@
  * - **搜索框**：受控（`query` + `onQueryChange`），判定在 feature 层（`buildDirectoryPageModel`），
  *   组件只把值画出来、把输入上抛；缺省不呈现（没有消费者的输入框是坏的）。
  * - **筛选段**：`SegmentControl`，取值 `all`/`running`/`pending`，同样受控。
- * - **内联会话行**：`sessionsByDirectoryId` 由页面从 store 取（只依赖快照，与详情页的查询词/月份无关），
- *   每个目录项只列前 `MAX_INLINE_SESSIONS` 条（原型 `MAX_ROWS = 5`）。
- * - **进入详情页的两条路径**（与卡片头一一对应）：**展示名**（`data-action="open-directory"`，
- *   与会话数无关）与**「查看全部 ›」**（`data-action="open-directory-all"`，只有该目录有会话时
- *   才给出）。两者都走 `onOpenDirectory`，动作取值可区分是为了让消费方能分别断言。
+ * - **内联会话行**：`sessionsByDirectoryId` 由页面从 store 取（数据源只依赖快照），随后按
+ *   **当前查询/筛选**过滤（`filterSessionsForDirectory`，与原型 `passFilter` + `passQuery` 同口径），
+ *   每个目录项只列过滤后的前 `MAX_INLINE_SESSIONS` 条（原型 `MAX_ROWS = 5`）。展示名命中查询词时
+ *   保留全部（按筛选后的）行；只命中部分标题时只保留命中的行。
+ * - **进入详情页的三条路径**：**展示名**（`data-action="open-directory"`，与会话数无关）、
+ *   卡片头的**「查看全部 ›」**（`data-action="open-directory-all"`）与卡体底部的同名入口
+ *   （`data-action="open-directory-all-footer"`，仅超过内联上限时出现）。三者都走
+ *   `onOpenDirectory`，动作取值可区分是为了让消费方能分别断言。
  * - **目录内创建**：`onCreateSession(directoryId)`（**必填**）；每个目录项恒呈现「⊕ 新建」——
  *   设备不再有创建会话的权限维度，因此组件不做也不接受任何权限判定或说明。
- * - **工具条右端的顶部创建入口**：`onCreateSessionToBrowse()`（**可选**，缺省不呈现），画在搜索框与
- *   筛选段右边（原型工具条的位置就是那里）。它与卡头上的「⊕ 新建」是两个可区分的控件：前者目录未知、
- *   后者目录已定（`onCreateSession(directoryId)`）。它**不**受「空态/加载中不呈现搜索框与筛选段」的约束——
- *   一个目录都没记录或还在等第一份快照时，它恰恰是目录页上唯一的创建路径。
+ * - **顶部创建入口**：`onCreateSessionToBrowse()`（**可选**，缺省不呈现）。它始终画在工具条右端
+ *   （搜索框与筛选段右边）；「一个目录都没有」的空态另在说明块里给一个常规尺寸的同一入口。
+ *   它与卡头上的「⊕ 新建」是两个可区分的控件：前者目录未知、后者目录已定
+ *   （`onCreateSession(directoryId)`）。
  * - **折叠**：每个目录项**各自**的局部状态，翻转一个目录标识不影响其它目录项。
  * - **同步时间**：`lastSyncedAtMs` 非 `null` 才画；从未成功替换过快照时为 `null`，
  *   此时绝不编造时刻（spec「从未成功同步」MUST NOT）。
@@ -53,7 +59,10 @@ import { useState } from "react";
 import type { ReactElement } from "react";
 
 import type { DirectoryFilter, DirectoryPageModel, DirectoryRowModel, SessionRowModel } from "../features/directory-model";
-import { CONTENT_ORIGIN_LABELS, DIRECTORY_EMPTY_COPY } from "../features/directory-model";
+import {
+  DIRECTORY_EMPTY_COPY,
+  filterSessionsForDirectory,
+} from "../features/directory-model";
 import { DirectoryCard } from "./DirectoryCard";
 import { EmptyState } from "./EmptyState";
 import { SegmentControl } from "./SegmentControl";
@@ -65,7 +74,6 @@ import {
   Text,
   TextInput,
   View,
-  breakpoints,
   fontFamily,
   fontSize,
   fontWeight,
@@ -73,19 +81,10 @@ import {
   radius,
   spacing,
   useTheme,
-  useWindowDimensions,
 } from "./theme";
 
 /** 内联会话行的展示上限（原型 `MAX_ROWS = 5`）。 */
 const MAX_INLINE_SESSIONS = 5;
-
-/**
- * 宽屏断点（design D7）：可用宽度不小于它时目录卡片并排，否则单列。
- *
- * 取值来自 `theme.ts` 的 `breakpoints.wide`（D7/D10 要求这个数只在一处出现），
- * 本组件不再自己写一次字面量。
- */
-const WIDE_BREAKPOINT = breakpoints.wide;
 
 /** 筛选段的取值与文案（spec：全部 / 运行中 / 待处理）。 */
 const FILTER_OPTIONS = [
@@ -108,9 +107,9 @@ export interface DirectoryListProps {
   /**
    * **顶部**创建入口（目录未知：「⊕ 新建」）：页面据此打开「逐层浏览并选定一层」那条链路。
    *
-   * 可选：缺省不呈现该入口（本组件的其它消费方不带这条路径）。它画在工具条**右端**（原型的
-   * 工具条就是这个位置），与每张卡头上的「⊕ 新建」是两个可区分的控件——后者的目录已经定了
-   * （`onCreateSession(directoryId)`），前者的目录还没定。
+   * 可选：缺省不呈现该入口（本组件的其它消费方不带这条路径）。它画在工具条**右端**；
+   * 「一个目录都没有」的空态另在说明块里给一个常规尺寸的同一入口。它与每张卡头上的「⊕ 新建」
+   * 是两个可区分的控件——后者的目录已经定了（`onCreateSession(directoryId)`），前者的目录还没定。
    */
   readonly onCreateSessionToBrowse?: (() => void) | undefined;
   /**
@@ -134,82 +133,133 @@ export interface DirectoryListProps {
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
     page: {
+      width: "100%",
+    },
+    content: {
+      width: "100%",
+      maxWidth: 1180,
+      alignSelf: "center",
+      padding: spacing.xl,
       gap: spacing.md,
     },
-    origin: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "baseline",
-      gap: spacing.sm,
-    },
-    originText: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
-    syncedAt: {
-      color: colors.ink3,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
-    },
+    // 原型 `.toolbar`：一条横贯内容区的工具条，底部与列表分隔。
     toolbar: {
       flexDirection: "row",
       flexWrap: "wrap",
       alignItems: "center",
-      gap: spacing.sm,
+      gap: spacing.lg,
+      paddingVertical: spacing.md,
+      paddingHorizontal: spacing.xl,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.line,
     },
-    // 顶部创建入口：贴近工具条右端（原型那里是 `spacer` + `⊕ 新建`）。搜索框的 `flexGrow` 先吃掉
-    // 余量，`marginLeft: auto` 管的是窄屏换行后这一行只剩入口时它仍贴右端。
+    // 顶部创建入口：原型 `.btn.sm.primary`（实心主色底、白字）。它在工具条里由 `toolbarSpacer`
+    // 推到右端；同一个元素画在空态块里时（原型 `nodirs`）不需要那个空白，靠空态块自行居中。
     createEntry: {
-      marginLeft: "auto",
+      borderWidth: 1,
+      borderColor: colors.accent,
+      flexShrink: 0,
+      paddingVertical: 5,
+      paddingHorizontal: 11,
+      borderRadius: 9,
+      backgroundColor: colors.accent,
+    },
+    createEntryText: {
+      // 原型的 `.btn.primary` 用纯白：主题里没有 white token，与 `PairingPanel` 同一取值。
+      color: "#ffffff",
+      fontFamily: fontFamily.sans,
+      fontSize: 12.5,
+      lineHeight: 20,
+      fontWeight: "400",
+    },
+    // 空态块里的创建入口用原型 `btn primary` 的常规尺寸（不是工具条里的 `btn sm`）。
+    createEntryLarge: {
+      borderWidth: 1,
+      borderColor: colors.accent,
       paddingVertical: spacing.sm,
       paddingHorizontal: spacing.lg,
       borderRadius: radius.sm,
-      backgroundColor: colors.accentSoft,
-      borderWidth: 1,
-      borderColor: colors.accent,
+      backgroundColor: colors.accent,
     },
-    createEntryText: {
-      color: colors.accentInk,
+    createEntryTextLarge: {
+      color: "#ffffff",
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
       fontWeight: fontWeight.medium,
     },
-    search: {
+    // 原型工具条里的 `<span class="spacer">`：把创建入口推到最右端。
+    toolbarSpacer: {
+      flexGrow: 1,
+    },
+    // 原型 `.search`：图标 + 输入框同在一个带边框的容器里，最大宽度 420。
+    searchWrap: {
       flexGrow: 1,
       flexShrink: 1,
       minWidth: 200,
-      paddingVertical: 8,
+      maxWidth: 420,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      paddingVertical: 7,
       paddingHorizontal: spacing.md,
       borderWidth: 1,
       borderColor: colors.line,
       borderRadius: radius.sm,
       backgroundColor: colors.panel,
+    },
+    searchIcon: {
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.md,
+      lineHeight: 22.4,
+    },
+    searchInput: {
+      flexGrow: 1,
+      flexShrink: 1,
+      minWidth: 0,
+      padding: 0,
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
+      backgroundColor: "transparent",
     },
-    // 窄屏单列；宽屏并排（同一份子节点，只有方向与换行不同——信息集合不因宽度变化）。
+    // 目录卡片始终单列堆叠（原型 `.stack`），不随宽度改成并排。
     list: {
       flexDirection: "column",
-      gap: spacing.md,
-    },
-    listWide: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "stretch",
-      gap: spacing.md,
+      gap: 18,
     },
     sessions: {
       flexDirection: "column",
     },
     // 卡体里的「这个目录还没有会话」一行：与卡片同一处缩进（缩进本身在卡片的卡体上）。
     emptyLine: {
-      paddingVertical: spacing.md,
-      paddingHorizontal: spacing.lg,
+      paddingVertical: 14,
+      paddingHorizontal: 18,
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
+    },
+    // 卡体底部的「查看全部 ›」（原型 `.footline`）：与卡片头那个入口同一动作，单独可定位。
+    footline: {
+      paddingVertical: 10,
+      paddingHorizontal: 18,
+      borderTopWidth: 1,
+      borderTopColor: colors.line2,
+    },
+    footLink: {
+      alignSelf: "flex-start",
+      paddingVertical: spacing.xs,
+      paddingHorizontal: 6,
+      borderRadius: radius.sm,
+    },
+    footLinkText: {
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     // 空态与「没有匹配的结果」都是原型 `.blank` 那一块：虚线边框、居中。
     blank: {
@@ -219,7 +269,8 @@ function buildStyles(colors: Palette) {
       borderStyle: "dashed",
       borderColor: colors.line,
       borderRadius: radius.md,
-      paddingVertical: spacing.xl,
+      // 原型 `.blank{padding:56px 24px}`：与 `EmptyState` 的空态块同一体量。
+      paddingVertical: 56,
       paddingHorizontal: spacing.xl,
       gap: spacing.sm,
     },
@@ -227,18 +278,21 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.lg,
+      lineHeight: 27.2,
       fontWeight: "600",
     },
     blankText: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
       textAlign: "center",
     },
     loading: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
     },
   });
 }
@@ -261,8 +315,6 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
   } = props;
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const { width } = useWindowDimensions();
-  const wide = width >= WIDE_BREAKPOINT;
   /**
    * 折叠是**视图内部**的临时状态：它不需要跨页存活（查询与筛选需要，因此那两个值住在
    * store 里），也不改变任何数据判定——所以留在这里，而不是又开一个 store 字段。
@@ -270,11 +322,10 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
   const [collapsedDirectoryIds, setCollapsedDirectoryIds] = useState<readonly string[]>([]);
 
   /**
-   * 工具条右端的**顶部创建入口**（页面给了回调才画）。
+   * **顶部创建入口**（页面给了回调才画）。
    *
-   * 它的出现**不**跟搜索框/筛选段走：那两者受「有没有可搜索/可筛选的内容」约束，而入口通向的是
-   * 「逐层浏览主机目录」这条路——还没拿到快照、一个目录都没记录时它反而是页面上唯一的创建路径
-   * （原型同样把 `⊕ 新建` 画在主工具栏里，与列表是否为空无关）。
+   * 它通向「逐层浏览主机目录」这条路：`nodirs` 时画在空态块里，其余分支画在工具条右端；
+   * 加载中与「目录存在但无会话」时仍然出现——那时它是页面上唯一的创建路径。
    */
   const createEntry =
     onCreateSessionToBrowse === undefined ? null : (
@@ -287,6 +338,18 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
         <Text style={styles.createEntryText}>⊕ 新建</Text>
       </Pressable>
     );
+  // 原型 `nodirs` 的 `newDirButton("btn primary")`：常规尺寸，画在空态说明块里。
+  const createEntryLarge =
+    onCreateSessionToBrowse === undefined ? null : (
+      <Pressable
+        role="button"
+        style={styles.createEntryLarge}
+        dataSet={{ action: "create-session-browse" }}
+        onPress={onCreateSessionToBrowse}
+      >
+        <Text style={styles.createEntryTextLarge}>⊕ 新建会话</Text>
+      </Pressable>
+    );
 
   if (model.kind === "loading") {
     return (
@@ -294,6 +357,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
         {/* 还没有内容可搜索/可筛选，因此只有那一行工具条与它的入口（见 `createEntry`）。 */}
         {createEntry === null ? null : (
           <View style={styles.toolbar} dataSet={{ directoryToolbar: "true" }}>
+            <View style={styles.toolbarSpacer} />
             {createEntry}
           </View>
         )}
@@ -304,17 +368,6 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
     );
   }
 
-  /**
-   * 上次同步时刻的展示形式：按 **UTC 值固定位置切片**（`YYYY-MM-DD HH:MM UTC`）。
-   *
-   * 刻意不用 `Date` 的本地时区格式化、也不画「N 分钟前」：前者会在 Windows 开发机与 Linux CI
-   * 之间漂移，后者需要一个时钟，而 `renderToStaticMarkup` 与浏览器断言都不该依赖运行时刻——
-   * 同一份视图模型必须在任何机器上渲染出同一段文本。精确值另经 `data-synced-at` 原样进 DOM。
-   */
-  const syncedAtClock =
-    model.lastSyncedAtMs === null
-      ? null
-      : `${new Date(model.lastSyncedAtMs).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
   /**
    * 一项目录卡片。`ready` 与「目录存在但无会话」的 `empty` 共用这一份渲染：两种分支下卡片的
@@ -326,7 +379,15 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
    */
   const renderDirectoryCard = (directory: DirectoryRowModel): ReactElement => {
     const collapsed = collapsedDirectoryIds.includes(directory.directoryId);
-    const inline = (sessionsByDirectoryId?.get(directory.directoryId) ?? []).slice(0, MAX_INLINE_SESSIONS);
+    const allRows = sessionsByDirectoryId?.get(directory.directoryId) ?? [];
+    const visibleRows = filterSessionsForDirectory({
+      rows: allRows,
+      displayName: directory.displayName,
+      query,
+      filter,
+    });
+    const inline = visibleRows.slice(0, MAX_INLINE_SESSIONS);
+    const hasMore = visibleRows.length > MAX_INLINE_SESSIONS;
     return (
       <DirectoryCard
         key={directory.directoryId}
@@ -362,25 +423,46 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
         }}
       >
         {inline.length > 0 ? (
-          <View role="list" style={styles.sessions}>
-            {inline.map((row) =>
-              // `exactOptionalPropertyTypes`：`onOpenSession` 缺省时不能显式传 `undefined`。
-              onOpenSession === undefined ? (
-                <SessionRow key={row.id} session={row} />
-              ) : (
-                <SessionRow
-                  key={row.id}
-                  session={row}
-                  onOpen={() => {
-                    onOpenSession(row.id);
+          <>
+            <View role="list" style={styles.sessions}>
+              {inline.map((row) =>
+                // `exactOptionalPropertyTypes`：`onOpenSession` 缺省时不能显式传 `undefined`。
+                onOpenSession === undefined ? (
+                  <SessionRow key={row.id} session={row} />
+                ) : (
+                  <SessionRow
+                    key={row.id}
+                    session={row}
+                    onOpen={() => {
+                      onOpenSession(row.id);
+                    }}
+                  />
+                ),
+              )}
+            </View>
+            {/* 超过内联上限时，卡体底部再给一次入口（原型 `.footline`）。动作与卡片头那个
+                「查看全部」相同，但用独立取值，避免消费方把两处入口数成同一个控件。 */}
+            {hasMore ? (
+              <View style={styles.footline}>
+                <Pressable
+                  role="button"
+                  style={styles.footLink}
+                  dataSet={{ action: "open-directory-all-footer" }}
+                  onPress={() => {
+                    onOpenDirectory(directory.directoryId);
                   }}
-                />
-              ),
-            )}
-          </View>
-        ) : directory.counts.total === 0 ? (
+                >
+                  <Text style={styles.footLinkText}>查看全部 ›</Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </>
+        ) : allRows.length === 0 ? (
           <Text style={styles.emptyLine}>这个目录还没有会话</Text>
-        ) : null}
+        ) : (
+          // 有会话、但都被当前查询/筛选挡住（原型 `emptyline`「没有符合条件的会话」）。
+          <Text style={styles.emptyLine}>没有符合条件的会话</Text>
+        )}
       </DirectoryCard>
     );
   };
@@ -391,47 +473,41 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
    * （`data-directory-list="directories"`），消费方不必按分支换选择器。
    */
   const directoryCardList = (directories: readonly DirectoryRowModel[]): ReactElement => (
-    <View
-      role="list"
-      style={wide ? styles.listWide : styles.list}
-      dataSet={{ directoryList: "directories" }}
-    >
+    <View role="list" style={styles.list} dataSet={{ directoryList: "directories" }}>
       {directories.map(renderDirectoryCard)}
     </View>
   );
 
+  const isEmpty = model.kind === "empty";
+  const isNoDirectories = isEmpty && model.empty === "no_directories";
+  // 工具条在**所有**状态都保留搜索、筛选与右上角创建入口：空态下它们同样可用，
+  // 用户不必先滚到空态块里的按钮才能开始创建。空态块里另有一个常规尺寸的同一入口。
+  const toolbarCreate = createEntry;
+  const searchField =
+    onQueryChange === undefined ? null : (
+      <View style={styles.searchWrap} dataSet={{ directorySearchWrap: "true" }}>
+        <Text style={styles.searchIcon}>🔍</Text>
+        <TextInput
+          value={query}
+          onChangeText={onQueryChange}
+          placeholder="搜索目录或会话"
+          placeholderTextColor={theme.colors.ink3}
+          accessibilityLabel="搜索目录"
+          style={styles.searchInput}
+          // `data-directory-search` 是 e2e 定位输入框的锚点；当前值另存一份，便于断言
+          // 「返回目录页时查询词仍在」（受控控件的 value 在 DOM 里只有属性值可读）。
+          dataSet={{ directorySearch: "true", directorySearchValue: query }}
+        />
+      </View>
+    );
+
   return (
     <View style={styles.page} dataSet={{ route: "dirs" }}>
       {/* 内容来源：断连时必须看得出这些内容来自上次同步。 */}
-      <View style={styles.origin} dataSet={{ contentOrigin: model.contentOrigin }}>
-        <Text style={styles.originText}>{CONTENT_ORIGIN_LABELS[model.contentOrigin]}</Text>
-        {model.lastSyncedAtMs === null || syncedAtClock === null ? null : (
-          // 从未成功替换过快照时 `lastSyncedAtMs` 为 `null`：那时**不**画时间（spec MUST NOT）。
-          <Text style={styles.syncedAt} dataSet={{ syncedAt: String(model.lastSyncedAtMs) }}>
-            {`已同步 ${syncedAtClock}`}
-          </Text>
-        )}
-      </View>
-
-      {/* 空态下没有可搜索/可筛选的内容，因此不呈现搜索框与筛选段；「搜索无结果」时**必须**呈现，
-          否则用户没有把关键词或筛选改回去的入口。顶部创建入口不跟这条约束走（见上面 `createEntry`），
-          它一个目录都没记录时更该在，所以只要它在，工具条这一行就画出来。 */}
-      {model.kind === "empty" && createEntry === null ? null : (
+      {searchField === null && onFilterChange === undefined && toolbarCreate === null ? null : (
         <View style={styles.toolbar} dataSet={{ directoryToolbar: "true" }}>
-          {model.kind === "empty" || onQueryChange === undefined ? null : (
-            <TextInput
-              value={query}
-              onChangeText={onQueryChange}
-              placeholder="搜索目录或会话"
-              placeholderTextColor={theme.colors.ink3}
-              accessibilityLabel="搜索目录"
-              style={styles.search}
-              // `data-directory-search` 是 e2e 定位输入框的锚点；当前值另存一份，便于断言
-              // 「返回目录页时查询词仍在」（受控控件的 value 在 DOM 里只有属性值可读）。
-              dataSet={{ directorySearch: "true", directorySearchValue: query }}
-            />
-          )}
-          {model.kind === "empty" || onFilterChange === undefined ? null : (
+          {searchField}
+          {onFilterChange === undefined ? null : (
             <SegmentControl
               label="筛选"
               value={filter}
@@ -439,32 +515,37 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
               onChange={onFilterChange}
             />
           )}
-          {createEntry}
+          {toolbarCreate === null ? null : <View style={styles.toolbarSpacer} />}
+          {toolbarCreate}
         </View>
       )}
 
-      {model.kind === "empty" ? (
-        <>
-          {/* 空态标记与文案保持既有取值（`data-empty-state` 仍只在这一支出现）；
-              其下**照常**列出已登记的目录项：指引写着「在下面选一个目录进入详情页」，
-              列表就必须真的存在。`no_directories` 时 `directories` 是空数组，
-              因此不呈现列表，也就没有任何目录项。 */}
-          <EmptyState
-            kind={model.empty}
-            title={DIRECTORY_EMPTY_COPY[model.empty].title}
-            guidance={DIRECTORY_EMPTY_COPY[model.empty].guidance}
-          />
-          {model.directories.length === 0 ? null : directoryCardList(model.directories)}
-        </>
-      ) : model.kind === "no_match" ? (
-        // 数据在、只是被查询/筛选挡住：与两种 `data-empty-state` 是**互不冒充**的第三种呈现。
-        <View style={styles.blank} dataSet={{ directoryNoMatch: "true" }}>
-          <Text style={styles.blankTitle}>没有匹配的结果</Text>
-          <Text style={styles.blankText}>换个关键词，或把筛选切回「全部」。</Text>
-        </View>
-      ) : (
-        directoryCardList(model.directories)
-      )}
+      <View style={styles.content} dataSet={{ directoryContent: "true", contentOrigin: model.contentOrigin, ...(model.lastSyncedAtMs === null ? {} : { syncedAt: String(model.lastSyncedAtMs) }) }}>
+
+        {model.kind === "empty" ? (
+          <>
+            {/* `data-empty-state` 仍只在这一支出现；其下**照常**列出已登记的目录项：
+                指引写着「在下面选一个目录进入详情页」，列表就必须真的存在。`no_directories`
+                时 `directories` 是空数组，因此不呈现列表，也就没有任何目录项；创建入口按原型
+                画在空态块内。 */}
+            <EmptyState
+              kind={model.empty}
+              title={DIRECTORY_EMPTY_COPY[model.empty].title}
+              guidance={DIRECTORY_EMPTY_COPY[model.empty].guidance}
+              action={isNoDirectories ? createEntryLarge : null}
+            />
+            {model.directories.length === 0 ? null : directoryCardList(model.directories)}
+          </>
+        ) : model.kind === "no_match" ? (
+          // 数据在、只是被查询/筛选挡住：与两种 `data-empty-state` 是**互不冒充**的第三种呈现。
+          <View style={styles.blank} dataSet={{ directoryNoMatch: "true" }}>
+            <Text style={styles.blankTitle}>没有匹配的结果</Text>
+            <Text style={styles.blankText}>换个关键词，或把筛选切回「全部」。</Text>
+          </View>
+        ) : (
+          directoryCardList(model.directories)
+        )}
+      </View>
     </View>
   );
 }

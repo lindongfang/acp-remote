@@ -262,6 +262,7 @@ export const SUPPORTED_FEATURES = [
   "core.session-history.v1",
   "core.snapshot.v1",
   "core.workspace-browse.v1",
+  "core.workspace-mkdir.v1",
   "resource.remote-origin.v1",
 ] as const;
 

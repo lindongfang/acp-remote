@@ -1098,18 +1098,20 @@ struct CommandClient {
     sequence: u64,
     /// 本次协商出的 feature 集合（门控的输入）。
     selected: Vec<String>,
+    last_message_id: String,
 }
 
 impl CommandClient {
     /// 发一条 `command` 帧并交回服务端的**下一条**消息（`command.result` 或 `error`）。
     async fn command(&mut self, request_id: &str, command: &str, payload: Value) -> Value {
         self.sequence += 1;
+        self.last_message_id = uuid_text();
         self.client
             .send_text(
                 &json!({
                     "protocolVersion": 1,
                     "type": "command",
-                    "messageId": uuid_text(),
+                    "messageId": self.last_message_id,
                     "connectionId": self.connection_id,
                     "connectionSequence": self.sequence.to_string(),
                     "body": {
@@ -1134,6 +1136,15 @@ async fn command_client(
     origin: &CanonicalOrigin,
     device: &DeviceId,
 ) -> CommandClient {
+    command_client_with_features(harness, origin, device, SUPPORTED_FEATURES.to_vec()).await
+}
+
+async fn command_client_with_features(
+    harness: &Harness,
+    origin: &CanonicalOrigin,
+    device: &DeviceId,
+    features: Vec<&str>,
+) -> CommandClient {
     let signing = p256::ecdsa::SigningKey::from_slice(&DEVICE_SCALAR).expect("测试标量合法");
     let public =
         PeerPublicKey::try_from_bytes(signing.verifying_key().to_sec1_point(false).as_bytes())
@@ -1147,8 +1158,7 @@ async fn command_client(
         &harness.origin(),
     )
     .await;
-    let challenge =
-        hello_and_challenge(&mut client, &node_id, device, SUPPORTED_FEATURES.to_vec()).await;
+    let challenge = hello_and_challenge(&mut client, &node_id, device, features).await;
     let selected = selected_feature_ids(&challenge);
     let authenticated = prove(
         &mut client,
@@ -1169,6 +1179,7 @@ async fn command_client(
         client,
         sequence: 0,
         selected,
+        last_message_id: String::new(),
     }
 }
 
@@ -1183,6 +1194,178 @@ async fn table_rows(core: &UseCases) -> (usize, usize) {
         .await
         .expect("审计表可读");
     (directories.len(), audit.len())
+}
+
+/// 独立 mkdir 的受理与终态必须分开，且成功结果不泄漏目录路径。
+async fn mkdir_completed(
+    client: &mut CommandClient,
+    request: &str,
+    parent: &Path,
+    name: &str,
+) -> Value {
+    let accepted = client
+        .command(
+            request,
+            "workspace.mkdir",
+            json!({
+                "parentPath": parent.to_str().expect("test path"), "name": name,
+            }),
+        )
+        .await;
+    assert_eq!(accepted["body"]["status"], json!("accepted"), "{accepted}");
+    let completed = client.client.next_message().await;
+    assert_eq!(
+        completed["body"]["status"],
+        json!("completed"),
+        "{completed}"
+    );
+    assert_eq!(completed["body"]["result"], json!({"created": true}));
+    assert!(completed["body"]["terminalEventId"].is_string());
+    assert!(
+        !completed
+            .to_string()
+            .contains(parent.to_str().expect("test path"))
+    );
+    completed
+}
+
+#[tokio::test]
+async fn workspace_mkdir_creates_real_levels_without_a_session_and_replays_once() {
+    let harness = Harness::start("mkdir-levels").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("origin");
+    let device = DeviceId::new(&uuid_text()).expect("device");
+    let mut client = command_client(&harness, &origin, &device).await;
+    assert!(
+        client
+            .selected
+            .contains(&"core.workspace-mkdir.v1".to_owned())
+    );
+    let tree = TempDir::new("mkdir-tree");
+    std::fs::create_dir(&tree.0).expect("create test parent");
+    let before = table_rows(&harness.core).await;
+    let first_request = uuid_text();
+    let first = mkdir_completed(&mut client, &first_request, &tree.0, "project").await;
+    let project = tree.0.join("project");
+    assert!(project.is_dir(), "成功终态意味着主机目录已存在");
+    let replay = client
+        .command(
+            &first_request,
+            "workspace.mkdir",
+            json!({
+                "parentPath": tree.0.to_str().expect("test path"), "name": "project",
+            }),
+        )
+        .await;
+    assert_eq!(replay["body"]["status"], json!("completed"), "{replay}");
+    assert_eq!(
+        replay["body"]["terminalEventId"],
+        first["body"]["terminalEventId"]
+    );
+    let conflict = client
+        .command(
+            &first_request,
+            "workspace.mkdir",
+            json!({
+                "parentPath": tree.0.to_str().expect("test path"), "name": "different",
+            }),
+        )
+        .await;
+    assert_eq!(
+        conflict["body"]["error"]["code"],
+        json!("command.idempotency_conflict")
+    );
+    assert!(!tree.0.join("different").exists());
+    mkdir_completed(&mut client, &uuid_text(), &project, "src").await;
+    mkdir_completed(&mut client, &uuid_text(), &project.join("src"), "api").await;
+    assert!(project.join("src").join("api").is_dir());
+    let listing = client
+        .command(
+            &uuid_text(),
+            "workspace.browse",
+            json!({
+                "path": project.join("src").to_str().expect("test path"),
+            }),
+        )
+        .await;
+    assert_eq!(
+        listing["body"]["result"]["entries"][0]["name"],
+        json!("api")
+    );
+    assert_eq!(
+        table_rows(&harness.core).await.0,
+        before.0,
+        "mkdir 不登记 workspace"
+    );
+    let database = harness._temp.0.join("data").join("acp-remote.sqlite3");
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", database.display()))
+        .await
+        .expect("db");
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM owned_session")
+        .fetch_one(&pool)
+        .await
+        .expect("sessions");
+    assert_eq!(sessions, 0, "独立建目录不会创建会话或启动 Agent");
+    pool.close().await;
+    // 关闭连接和创建界面不回滚目录。
+    drop(client);
+    assert!(project.join("src").join("api").is_dir());
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn workspace_mkdir_requires_its_feature_and_rejects_invalid_names_without_io() {
+    let harness = Harness::start("mkdir-gates").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("origin");
+    let device = DeviceId::new(&uuid_text()).expect("device");
+    let features = SUPPORTED_FEATURES
+        .iter()
+        .copied()
+        .filter(|id| *id != "core.workspace-mkdir.v1")
+        .collect();
+    let mut old = command_client_with_features(&harness, &origin, &device, features).await;
+    let tree = TempDir::new("mkdir-gates-tree");
+    std::fs::create_dir(&tree.0).expect("create test parent");
+    let rejected = old
+        .command(
+            &uuid_text(),
+            "workspace.mkdir",
+            json!({
+                "parentPath": tree.0.to_str().expect("path"), "name": "blocked",
+            }),
+        )
+        .await;
+    assert_eq!(
+        rejected["body"]["error"]["code"],
+        json!("protocol.feature_required")
+    );
+    assert!(!tree.0.join("blocked").exists());
+    drop(old);
+    let second = DeviceId::new(&uuid_text()).expect("device");
+    let mut client = command_client(&harness, &origin, &second).await;
+    for name in ["..", ".", "bad/name", "bad\\name", "bad:name"] {
+        let rejected = client
+            .command(
+                &uuid_text(),
+                "workspace.mkdir",
+                json!({
+                    "parentPath": tree.0.to_str().expect("path"), "name": name,
+                }),
+            )
+            .await;
+        assert_eq!(rejected["type"], json!("error"), "{rejected}");
+        assert_eq!(rejected["body"]["code"], json!("protocol.schema_invalid"));
+        assert_eq!(
+            rejected["body"]["correlationId"],
+            json!(client.last_message_id)
+        );
+        assert!(
+            !rejected
+                .to_string()
+                .contains(tree.0.to_str().expect("path"))
+        );
+    }
+    assert_eq!(std::fs::read_dir(&tree.0).expect("list").count(), 0);
+    harness.stop().await;
 }
 
 /// 测试夹具：直接写一条目录记录（A 之后目录只能由成功的会话创建写入）。

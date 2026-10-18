@@ -17,8 +17,9 @@
  *
  * - **圆点**：所有状态都画，颜色按状态取主题 token（原型 `.dot.<state>`）。它同时带
  *   `data-session-state`（状态标识，不是文案）——那是 e2e 的机器证据。
- * - **状态词**：只有「等待输入 / 等待授权」两档追加，复用 `StatusPill` 的**唯一一份**词表与
- *   配色，于是用户不必进入会话就知道在等什么（原型的 `stword` 也只在这两档非空）。
+ * - **状态词**：只有「等待输入 / 等待授权」两档追加，词表复用 `StatusPill` 的**唯一一份**
+ *   `SESSION_STATE_LABEL`，但按原型 `.stword` 渲染成纯文字（不是带底色的胶囊），于是用户
+ *   不必进入会话就知道在等什么。
  *
  * 组件是纯函数：所有交互通过回调上抛，导航由页面负责。
  */
@@ -28,9 +29,21 @@ import type { ViewStyle } from "react-native";
 
 import type { SessionStateView } from "../domain/session-summary";
 import type { SessionRowModel } from "../features/directory-model";
-import { StatusPill } from "./StatusPill";
+import { SESSION_STATE_LABEL } from "./StatusPill";
 import type { ColorToken, Palette } from "./theme";
-import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  fontFamily,
+  fontSize,
+  fontWeight,
+  palettes,
+  radius,
+  spacing,
+  useTheme,
+} from "./theme";
 
 /**
  * 状态圆点需要的、**解释「在等什么」**的两档：只有它们追加状态词。
@@ -98,13 +111,15 @@ function buildStyles(colors: Palette) {
    */
   const dot = (state: SessionStateView): ViewStyle => ({ backgroundColor: colors[DOT_TOKEN_BY_STATE[state]] });
   return StyleSheet.create({
+    // 原型 `.row`：单行五字段，行高由 9px 上下内边距给出。
     row: {
       flexDirection: "row",
+      // 原型桌面是单行；窄屏空间不足时允许换行，避免固定宽度的状态词/时间挤出容器。
       flexWrap: "wrap",
       alignItems: "center",
-      gap: spacing.sm,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
+      gap: spacing.md,
+      paddingVertical: 9,
+      paddingHorizontal: 18,
       borderBottomWidth: 1,
       borderBottomColor: colors.line2,
     },
@@ -115,7 +130,7 @@ function buildStyles(colors: Palette) {
       flexDirection: "row",
       flexWrap: "wrap",
       alignItems: "center",
-      gap: spacing.sm,
+      gap: spacing.md,
     },
     dot: {
       width: 8,
@@ -132,31 +147,53 @@ function buildStyles(colors: Palette) {
     // 已关闭的会话圆点更淡（原型 `.dot.closed{opacity:.55}`）。
     dotClosed: { ...dot("closed"), opacity: 0.55 },
     title: {
+      flexGrow: 1,
       flexShrink: 1,
+      minWidth: 0,
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
+    },
+    // 原型 `.stword`：纯文字（不是胶囊），固定 70px 右对齐、警告色、半粗。
+    stateWord: {
+      flexShrink: 0,
+      width: 70,
+      textAlign: "right",
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: 11.5,
+      lineHeight: 18.4,
+      fontWeight: fontWeight.medium,
     },
     agent: {
-      flexShrink: 1,
+      flexShrink: 0,
+      width: 64,
+      textAlign: "right",
       color: colors.ink3,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
+      fontSize: 12.5,
+      lineHeight: 20,
     },
     offline: {
       color: colors.warn,
       backgroundColor: colors.warnSoft,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
       paddingVertical: 2,
       paddingHorizontal: spacing.xs,
       borderRadius: radius.sm,
     },
+    // 原型 `.when`：固定 96px 右对齐。
     time: {
-      marginLeft: "auto",
+      flexShrink: 0,
+      width: 96,
+      textAlign: "right",
       color: colors.ink3,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
+      fontFamily: fontFamily.sans,
+      fontSize: 12.5,
+      lineHeight: 20,
     },
   });
 }
@@ -196,8 +233,13 @@ export function SessionRow({ session, onOpen }: SessionRowProps): ReactElement {
         <Text style={styles.title} dataSet={{ sessionTitle: "true" }} numberOfLines={1}>
           {session.title}
         </Text>
-        {/* 状态词只补「在等什么」：词表与配色都来自 `StatusPill`，不在这里另抄一份。 */}
-        {NEEDS_STATE_WORD[session.state] === true ? <StatusPill state={session.state} /> : null}
+        {/* 状态词只补「在等什么」：词表来自 `StatusPill` 的同一份，但这里按原型画成纯文字
+            （`.stword`），不是带底色的胶囊。 */}
+        {NEEDS_STATE_WORD[session.state] === true ? (
+          <Text style={styles.stateWord} dataSet={{ sessionState: session.state }}>
+            {SESSION_STATE_LABEL[session.state]}
+          </Text>
+        ) : null}
         <Text style={styles.agent} dataSet={{ sessionAgent: "true" }} numberOfLines={1}>
           {session.agentName}
         </Text>

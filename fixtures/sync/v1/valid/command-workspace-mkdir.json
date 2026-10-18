@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "b4d7e209-58c1-4a3f-9d62-7e0b1c5a8f34",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "103",
+  "body": {
+    "requestId": "0a6f3c85-91d2-4e77-b5c8-3f4a2d9e6b10",
+    "command": "workspace.mkdir",
+    "payload": {
+      "parentPath": "D:\\work",
+      "name": "new-folder"
+    }
+  }
+}

@@ -917,3 +917,5 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 12. Zed `session/new` 的必填绝对 `cwd` 不作为拒绝理由；直接向 Node Link `session.create.payload` 注入未知 `workspaceDirectory` 或 `cwd` 等原始路径字段时，Owner 以 `nodelink.command.unsupported_field` 拒绝且不创建会话（§12.7、[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）。
 13. 旧 attachment 的延迟 frame 在重连后被拒绝（`nodelink.resource.attach_generation_stale`），不能命中新 generation 的 SessionEndpoint。
 14. 六个 transcript domain 的固定向量在 Rust 与 WebCrypto 两侧产生逐字节一致的 transcript、签名与 HMAC（§9.5）。
+
+`core.workspace-mkdir.v1` 是 Sync 专属 feature，不属于本节 §11.3 的 Node Link feature 表；Node Link 不协商它，也不接受 `workspace.mkdir`，不得以此传入任意 Owner 路径。

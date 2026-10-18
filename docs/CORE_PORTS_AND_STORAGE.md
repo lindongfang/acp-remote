@@ -146,6 +146,8 @@ pub enum UnavailableKind {
 | `PendingInteraction` | `{ id, kind, session, created_at, options: Vec<InteractionOption> }`；`options` 在**存储读视图**里恒为空——真值只存在于 `request_event` 指向的事件 payload（§5.2、§6 第 13 条） | `NODE_LINK_PROTOCOL.md` §12.4 |
 | `PendingInteractionWrite` | `{ interaction: PendingInteraction, turn: Option<TurnId> }`——新建 pending 交互行的写入形状。**不携带 `request_event`**：`owned_event.event_id` 由存储层在提交事务内分配（§3.1），装配方无法预知；`owned_interaction.request_event` 是 `INTEGER REFERENCES owned_event(global_sequence)`（§7.3），由存储层按「同一提交 + 事件 payload 的 `interactionId` 等于 `interaction.id()`」配对后写入该事件的 `global_sequence`，配不到即整事务 `InvalidRequest` | 本合同（§5.2、§6 第 13 条） |
 
+`workspace.mkdir` 是无会话变更命令：受理和终态复用 `CommandRecord`，不构造 session/workspace 行。独立创建目录端口与一次性执行凭证见 §5.6；终态必须使用 §5.2 的主体绑定提交入口，避免不同主体使用相同 requestId 时发生歧义。
+
 ### 3.4 事件
 
 | 类型 | 形状 / 不变量 | 出处 |
@@ -434,6 +436,8 @@ pub struct HistoryPage {
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError>;
+    /// 仅 workspace.mkdir 的无会话终态；默认实现拒绝。按主体与 requestId 精确定位受理行。
+    async fn commit_workspace_mkdir_terminal(&self, actor: &Actor, commit: OwnedCommit) -> Result<CommitOutcome, PortError>;
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError>;
     /// 会话列表。每个 `SessionSummary.workspace` **必须**取自该会话行持久化的
     /// `owned_session.workspace_alias`（§3.1 的 `WorkspaceRef`）：展示名按别名关联目录记录，取不到时回退为
@@ -521,6 +525,7 @@ pub trait RemoteDeliveryStore: Send + Sync {
   - **来源的取值只有一处**：`origin.kind` 取 `owned_event.origin_kind`，**五个**取值（`agent`/`device`/`daemon`/`local_cli`/`node`）原样往返（§7.3 的 CHECK 与 wire 词表同集，`node` 由 1.7 的前置补入）；词表外取值是**列值损坏**（实现返回 `Corrupt`），不得静默降级或挑近义取值。MUST NOT 用「这条事件有没有 `session_id`」推断来源（与 §5.2 关于 `PendingEvent.origin` 的条款同口径）。
   - **两个身份字段都不是第三处事实来源**：`origin.deviceId`/`origin.nodeId` 只能由 `owned_event.causation`（= 诱发该事件的命令 `requestId`）回查 `owned_command` 的 `actor_id` 得到，且**仅**在同类 `origin_kind`（`device`/`node`）时可能出现；前者要求 `actor_kind = 'device'`，后者要求 `actor_kind = 'node'` 并取复合键 `"{ownerNodeId}/{accessNodeId}"` 里的主 principal `ownerNodeId`（§6 第 6 条的幂等键；§10.1 的 `nodeId` 要的是产生该事件的另一个节点）。回查与事件读 MUST 在同一次只读事务内完成，且 MUST NOT 逐条事件各查一次（一条批量 `IN (…)` 查询覆写两类 actor），device 事件只认设备行、node 事件只认节点行，两类身份因此不可互换。
   - **identity 类事件得不出唯一身份 ⇒ 整批读失败关闭（`Corrupt`），MUST NOT 以 `None` 交差**：`origin.kind = device` 的语义要求是「事件来自已认证 Sync 设备经命令产生 ⇒ 带非空 `deviceId`」（§10.1 的 kind 表），`kind = node` 则被 schema 与 DTO 的配对规则强制要求非空 `nodeId`；而 schema 侧的 `{kind:"device", deviceId:null}` 又**合法**（frozen v1 形状只有 `{kind, deviceId}` 两个键，§16.2 不允许借扩展收紧必填性）——于是**发送方** MUST NOT 产生那种帧，读面也就不得把它登记成合法取值：给 `None` 等于把「投递层无法组装合法帧」伪装成一条合法数据，逼它静默违反 §10.1。四类得不出唯一取值的情形（前三类是**升级前写入的历史行**，正是变更 4.8 要求显式处置的对象）：**① `causation` 为空**——1.7 之前 agent-host 产出的每条 `EndpointEvent` 都不带 `causation`（适配器唯一的生产构造点固定 `None`）、broker 又原样落盘，设备驱动事件因此**全部**落在这一类，这是主流历史形态；**② 对应命令行不在本机**——`owned_event` 与 `owned_command` 的写入本来就允许「事件在本节点、命令由别处发起」（跨节点重放同一 requestId），保留期清理/不在本机历史窗口同样导致回查不到；**③ 命令行的 `actor_kind` 与本事件的 `origin.kind` 不符**——同一 requestId 上先由本机 CLI（或另一节点）发起、后被设备重发（`owned_command` 的唯一键是 `(actor_kind, actor_id, request_id)`，跨 actor 复用同一 requestId 在 DDL 上合法），或 1.7 之前 `event_origin` 按 actor 瞬时状态分类留下的错配行；**④ 同一 requestId 在同一 actor 类别下命中多行**（跨设备/跨节点复用，唯一键允许）。MUST NOT 从旁路（会话归属、actor 瞬时状态……）推断 id：编造 id 比失败关闭更糟——它把归属判错给另一台设备并让调用方无法察觉。
+  - **`workspace.mkdir` 终态的精确关联**：该命令允许不同设备使用相同 requestId；终态事件优先通过 `owned_command.terminal_event_id = owned_event.event_id` 精确关联命令主体，不使用仅含类别与 requestId 的歧义匹配。关联仍在同一次只读事务内批量完成，不新增表列；其它既有事件继续遵守上述回查与歧义失败规则。
   - **列值损坏一律 `Corrupt`**：词表外的 `origin_kind`、`actor_kind = 'device'` 行上不是 canonical UUID 的 `actor_id`、`actor_kind = 'node'` 行上不是 `node/access-node` 复合键的 `actor_id`，都与 `find_request`/`command_record_from_row` 对同一列的既有口径一致（同列、同为 fail-closed），**不**降级成「没有身份 id」（那会把列值损坏藏起来）。这几条在生产上不可达（DDL 与写入侧都钉死了形状），属读取侧纵深防御。
   - **窗口**：严格在 `after` 之后（`None` = 从头）、按 `global_sequence` 升序、最多 `limit` 条；已压缩的 delta 不出现（与 `replay` 同口径，§6 第 15 条）。`after.server_epoch` 与当前 epoch 是否一致、以及四类 `sync.cursor_invalid` 原因与 `sync.reset_required`（§9.2）**不在本方法的判定范围内**：那是投递层的判定，本方法只按 `global_sequence > after` 取行、并给出这条快照的 head（`sync.caught_up` 的屏障游标）。
   - **授权与投影**：用例入口 `UseCases::sync_replay(actor, after, limit)` 先按 `session.list` 走 `Broker::authorize`（设备主体恒通过、节点按 `grant.observe`），授权先于读取；它也不在 `require_local` 之外另设守卫（入口自带「为什么在 `require_local` 之外」的理由注释，与 `sync_visible_sessions` 同源）。core 不投影，owned 事件的字段由条目承载（`MODULE_ARCHITECTURE.md` §8），`remoteOrigin` 按 §9.6 恒为 `null`（本读面只返回 owned 事件，imported 的跳数由投递层的 imported 路径另行投影）；投递层不再按授权过滤事件。
@@ -640,6 +645,8 @@ pub trait IdGenerator: Send + Sync {
 
 `[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery` 变更 WP2）目录浏览是 `workspace.browse` 的**只读、逐层**目录列举端口（spec `sync-workspace-browse`；§11.9）：类型上只有「名称 + 绝对路径」两个事实，因此**没有**承载文件条目、文件内容、大小、时间戳或权限位的字段——不给可能性比运行时过滤更可靠。顺序不作要求（确定顺序由用例层按名称施加），不可读/不存在/不是目录对调用方是同一类事实（`Unavailable(IoError)`），不用于区分「这一层不存在」与「这一层不可读」。端口是 dyn 化的异步 trait，由组合根注入；core 侧随 crate 提供一个本机文件系统实现作为默认值（组合根可用 `UseCases::with_directory_browser` 换掉）。
 
+默认本机实现 `SystemDirectories` 在 Windows 上不列出带 `FILE_ATTRIBUTE_HIDDEN` 或 `FILE_ATTRIBUTE_SYSTEM` 的子目录，过滤发生在投影与条目上限截断之前。按属性判断，不按目录名黑名单或点前缀判断；其它平台的列举行为不变。属性只在实现内部读取，不加入端口值对象或 wire 字段。该规则仅控制目录浏览列表，不新增 `session.create` 的禁止路径规则；创建仍按既有授权、路径形状、规范化与文件系统访问结果判定。
+
 ```rust
 /// 目录浏览端口（§5.5/§11.9）：`workspace.browse` 的只读、逐层目录列举。
 ///
@@ -662,6 +669,22 @@ pub struct DirectoryListing {
     pub name: String,
     /// 该子目录的绝对路径（实现侧的规范化结果）。
     pub path: String,
+}
+```
+
+
+### 5.6 独立创建目录
+
+`DirectoryCreator::create_directory(&self, parent: &str, name: &str) -> Result<(), PortError>` 只创建既有父目录下的一层目录；`DirectoryBrowser` 保持只读。`SystemDirectories` 默认实现此端口，`UseCases::with_directory_creator` 允许注入。不得新增 core 普通依赖。
+
+`UseCases::admit_workspace_mkdir(&self, actor: &Actor, request: &RequestId, fingerprint: &Digest, parent_path: &str, name: &str) -> Result<WorkspaceMkdirAdmission, PortError>` 返回 `Accepted(WorkspaceMkdirExecution)`、`InFlight` 或 `Settled(Box<CommandRecord>)`。执行凭证字段私有且不可 Clone，绑定受理时的主体、请求、父路径和名字；`execute_workspace_mkdir(&self, execution: WorkspaceMkdirExecution) -> Result<(), PortError>` 消耗此凭证，防止未受理或重复执行。
+
+复用 SessionStore 的 OwnedCommit(session=None)，先持久接受，再执行 DirectoryCreator，再同一事务提交终态与无会话全局事件；不得伪造 owned_session/owned_workspace 行。成功结果固定 `{ created: true }`，事件、错误、审计不含路径/名字。重放按稳定 (actor, requestId) 返回原状态，内容指纹冲突拒绝；未终结受理由既有 unsettled_commands 恢复为 uncertain，禁止重做。终态提交使用 `SessionStore::commit_workspace_mkdir_terminal(actor, commit)`，只给本命令的结算与启动恢复使用，按 `(actor, requestId)` 精确定位。该入口默认返回 `InvalidRequest`（unsupported），只接受 `session=None`、有 `command_terminal` 且无 idempotency/state/turn/interactions/compaction/origin_epoch 的提交；按终态事件 causation 获取 requestId，再按完整主体键查行并校验命令为 `workspace.mkdir`、session 为空，更新时同样限定主体。SQLite 内部 `commit_owned` 仅在此路径传入 `terminal_actor`，旧 `commit` 路径行为保持不变。无需新增表或迁移。
+
+```rust
+#[async_trait]
+pub trait DirectoryCreator: Send + Sync {
+    async fn create_directory(&self, parent: &str, name: &str) -> Result<(), PortError>;
 }
 ```
 

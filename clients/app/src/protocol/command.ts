@@ -41,6 +41,7 @@ export type CommandName =
   | "session.mode.list"
   | "session.config.list"
   | "workspace.browse"
+  | "workspace.mkdir"
   | "session.prompt"
   | "session.cancel"
   | "elicitation.respond"
@@ -91,6 +92,15 @@ export interface WorkspaceBrowseEntry {
  * （缺席按 `protocol.schema_invalid` 拒收）。受 feature `core.workspace-browse.v1` 门控，未协商
  * 时服务端在触碰文件系统之前回 `protocol.feature_required`。
  */
+export interface WorkspaceMkdirCommand extends CommandEnvelope {
+  readonly body: {
+    readonly requestId: Uuid;
+    readonly command: "workspace.mkdir";
+    readonly payload: { readonly parentPath: WorkspaceBrowsePath; readonly name: string };
+  };
+}
+export interface WorkspaceMkdirResult { readonly created: true; }
+
 export interface WorkspaceBrowseCommand extends CommandEnvelope {
   readonly body: {
     readonly requestId: Uuid;
@@ -304,6 +314,7 @@ export interface CommandStatusCommand extends CommandEnvelope {
 export type CommandBody =
   | SessionListCommand["body"]
   | SessionCreateCommand["body"]
+  | WorkspaceMkdirCommand["body"]
   | WorkspaceBrowseCommand["body"]
   | SessionReadCommand["body"]
   | SessionPromptCommand["body"]
@@ -428,6 +439,7 @@ export type CommandResultValue =
   | SessionListResult
   | SessionReadResult
   | SessionCreateResult
+  | WorkspaceMkdirResult
   | WorkspaceBrowseResult
   | ConfigListResult
   | ModeListResult

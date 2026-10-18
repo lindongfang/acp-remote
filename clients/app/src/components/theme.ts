@@ -237,12 +237,14 @@ export const fontWeight: Readonly<
   bold: 700,
 };
 
-/** 层级：原型 `header.top` 30 / `.scrim` 35 / `.drawer` 40 / `.toast` 60。 */
-export const zIndex: Readonly<Record<"topBar" | "scrim" | "drawer" | "toast", number>> = {
+/** 层级：原型顶栏 30 / 抽屉遮罩 35 / 抽屉 40 / 提示 60 / 创建弹窗 70 / 目录选择器 76。 */
+export const zIndex: Readonly<Record<"topBar" | "scrim" | "drawer" | "toast" | "modal" | "directoryPicker", number>> = {
   topBar: 30,
   scrim: 35,
   drawer: 40,
   toast: 60,
+  modal: 70,
+  directoryPicker: 76,
 };
 
 /**

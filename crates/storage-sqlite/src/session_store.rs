@@ -663,9 +663,10 @@ fn node_id_from_composite_key(composite: &str) -> Result<NodeId, PortError> {
 /// [`command_origins`]。
 fn sync_event_from_row(
     row: &SqliteRow,
-    origins: &HashMap<(String, RequestId), Option<String>>,
+    origins: &CommandOrigins,
 ) -> Result<SyncEventRecord, PortError> {
     let origin_kind = origin_kind_from_row(row)?;
+    let event_id: EventId = decode(&text(row, "event_id")?, "owned_event.event_id")?;
     let causation: Option<RequestId> =
         decode_opt(opt_text(row, "causation")?, "owned_event.causation")?;
     // §10.1：`deviceId`/`nodeId` 只在对应 `origin.kind` 上出现；其余来源即便带同一个 causation 也
@@ -674,7 +675,7 @@ fn sync_event_from_row(
     // 条出路（见 [`identity_origin_for`]）。
     let origin_device_id = match origin_kind {
         EventOrigin::Device => {
-            identity_origin_for(origins, "device", causation.as_ref(), "device")?
+            identity_origin_for(origins, "device", causation.as_ref(), &event_id, "device")?
                 .map(|actor_id| {
                     DeviceId::new(&actor_id).map_err(|_| {
                         PortError::Corrupt("owned_command.actor_id is not a device id")
@@ -687,10 +688,12 @@ fn sync_event_from_row(
         }
     };
     let origin_node_id = match origin_kind {
-        EventOrigin::Node => identity_origin_for(origins, "node", causation.as_ref(), "node")?
-            .as_deref()
-            .map(node_id_from_composite_key)
-            .transpose()?,
+        EventOrigin::Node => {
+            identity_origin_for(origins, "node", causation.as_ref(), &event_id, "node")?
+                .as_deref()
+                .map(node_id_from_composite_key)
+                .transpose()?
+        }
         EventOrigin::Agent | EventOrigin::Daemon | EventOrigin::LocalCli | EventOrigin::Device => {
             None
         }
@@ -715,10 +718,16 @@ fn sync_event_from_row(
 /// 同一 `requestId` 在同一 actor 类别下命中**多行**时值置 `None`：`owned_command` 的唯一键是
 /// `(actor_kind, actor_id, request_id)`（§7.3），跨设备/跨节点复用同一 requestId 在 DDL 上合法，此时
 /// 没有唯一答案。
+#[derive(Default)]
+struct CommandOrigins {
+    requests: HashMap<(String, RequestId), Option<String>>,
+    mkdir_terminals: HashMap<(String, EventId), String>,
+}
+
 async fn command_origins(
     ex: &mut SqliteConnection,
     rows: &[SqliteRow],
-) -> Result<HashMap<(String, RequestId), Option<String>>, PortError> {
+) -> Result<CommandOrigins, PortError> {
     let mut wanted: Vec<String> = Vec::new();
     for row in rows {
         if !matches!(
@@ -733,15 +742,14 @@ async fn command_origins(
             wanted.push(request);
         }
     }
-    let mut origins: HashMap<(String, RequestId), Option<String>> =
-        HashMap::with_capacity(wanted.len());
+    let mut origins = CommandOrigins::default();
     if wanted.is_empty() {
         return Ok(origins);
     }
     let actor_kinds = placeholders(2);
     let requests = placeholders(wanted.len());
     let sql = format!(
-        "SELECT actor_kind, actor_id, request_id FROM owned_command \
+        "SELECT actor_kind, actor_id, request_id, command, terminal_event_id FROM owned_command \
          WHERE actor_kind IN ({actor_kinds}) AND request_id IN ({requests})"
     );
     let mut statement = sqlx::query(&sql).bind("device").bind("node");
@@ -753,7 +761,16 @@ async fn command_origins(
         let kind = text(row, "actor_kind")?;
         let request: RequestId = decode(&text(row, "request_id")?, "owned_command.request_id")?;
         let actor_id = text(row, "actor_id")?;
-        match origins.entry((kind, request)) {
+        // mkdir terminals have a durable, exact link even when request ids collide across devices.
+        if text(row, "command")? == "workspace.mkdir" {
+            if let Some(event_id) = opt_text(row, "terminal_event_id")? {
+                let event_id: EventId = decode(&event_id, "owned_command.terminal_event_id")?;
+                origins
+                    .mkdir_terminals
+                    .insert((kind.clone(), event_id), actor_id.clone());
+            }
+        }
+        match origins.requests.entry((kind, request)) {
             Entry::Vacant(slot) => {
                 slot.insert(Some(actor_id));
             }
@@ -783,16 +800,27 @@ async fn command_origins(
 /// 这些情形一律不得从旁路（会话归属、actor 瞬时状态……）推断一个 id：编造 id 比失败关闭更糟——它会把
 /// 归属判错给另一台设备/另一个节点，而调用方无法察觉。
 fn identity_origin_for(
-    origins: &HashMap<(String, RequestId), Option<String>>,
+    origins: &CommandOrigins,
     actor_kind: &str,
     causation: Option<&RequestId>,
+    event_id: &EventId,
     kind: &str,
 ) -> Result<Option<String>, PortError> {
+    if let Some(actor_id) = origins
+        .mkdir_terminals
+        .get(&(actor_kind.to_owned(), event_id.clone()))
+    {
+        return Ok(Some(actor_id.clone()));
+    }
     let reason = match kind {
         "device" => "device event cannot be attributed to a unique device command",
         _ => "node event cannot be attributed to a unique node command",
     };
-    match causation.map(|request| origins.get(&(actor_kind.to_owned(), request.clone()))) {
+    match causation.map(|request| {
+        origins
+            .requests
+            .get(&(actor_kind.to_owned(), request.clone()))
+    }) {
         // `causation` 为空、或该 key 没有行（命令行不在本机/不是本类别 actor）⇒ 无法归因。
         None | Some(None) => Err(PortError::Corrupt(reason)),
         // 有条目但值为 `None` = 同一 requestId 在同一 actor 类别下命中多行（`command_origins`）⇒
@@ -1097,7 +1125,11 @@ fn verify_idempotent(
 }
 
 impl SqliteStore {
-    async fn commit_owned(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+    async fn commit_owned(
+        &self,
+        commit: OwnedCommit,
+        terminal_actor: Option<&Actor>,
+    ) -> Result<CommitOutcome, PortError> {
         // §6 第 13 条：创建 pending 交互行（`interactions`）与解析既有行（`state.interaction`）
         // 是互斥的两条路径，同一提交里同时出现即拒绝。
         let resolving = matches!(
@@ -1132,6 +1164,21 @@ impl SqliteStore {
                     "a compaction commit requires a session id",
                 ));
             }
+        }
+
+        if terminal_actor.is_some()
+            && (commit.session.is_some()
+                || commit.idempotency.is_some()
+                || commit.command_terminal.is_none()
+                || commit.state.is_some()
+                || !commit.turns.is_empty()
+                || !commit.interactions.is_empty()
+                || !commit.compacted.is_empty()
+                || commit.origin_epoch.is_some())
+        {
+            return Err(PortError::InvalidRequest(
+                "invalid workspace.mkdir terminal commit",
+            ));
         }
 
         let window = self.window();
@@ -1196,7 +1243,25 @@ impl SqliteStore {
                 } else {
                     match session.as_ref() {
                         Some(session) => locate_session_command(&mut tx, session, &request).await?,
-                        None => locate_unsessioned_command(&mut tx, &request).await?,
+                        None => match terminal_actor {
+                            Some(actor) => {
+                                let (kind, id) = actor_key(actor);
+                                let row =
+                                    load_command_row(&mut tx, kind.as_str(), &id, request.as_str())
+                                        .await?;
+                                if let Some(row) = row.as_ref() {
+                                    if text(row, "command")? != "workspace.mkdir"
+                                        || opt_text(row, "session_id")?.is_some()
+                                    {
+                                        return Err(PortError::InvalidRequest(
+                                            "workspace.mkdir terminal targets another command",
+                                        ));
+                                    }
+                                }
+                                row
+                            }
+                            None => locate_unsessioned_command(&mut tx, &request).await?,
+                        },
                     }
                 };
                 let Some(row) = located else {
@@ -1649,7 +1714,15 @@ impl SqliteStore {
             // §6 第 20 条：条件更新按 `(session_id IS ?, request_id, status = 'accepted')` 定位——
             // `session_id` 为 `None` 时命中的是「尚无会话」的受理行（`session.create` 的失败终态与
             // 启动恢复；`SettleCreate` 的目标行在上面已经回填过会话标识）。
-            apply_terminal(&mut tx, session_id.as_ref(), request, terminal, event).await?;
+            apply_terminal(
+                &mut tx,
+                session_id.as_ref(),
+                request,
+                terminal,
+                event,
+                terminal_actor,
+            )
+            .await?;
         }
 
         // ---- §7.5 ⑥：容量超限时先按 ①②③ 清理，仍超限则拒绝本次写入（事务回滚，不发布事件）。
@@ -2024,8 +2097,10 @@ async fn apply_terminal(
     request: &RequestId,
     terminal: &acp_core::model::CommandTerminalRecord,
     terminal_event: &EventId,
+    terminal_actor: Option<&Actor>,
 ) -> Result<(), PortError> {
     let (error_code, error_message, error_details, retryable) = error_columns(terminal.error());
+    let scoped_actor = terminal_actor.map(actor_key);
     // `session_id IS ?9`：`IS` 与 `=` 的唯一区别就是 NULL 参与比较时的取值（`NULL IS NULL` 为真），
     // 因此同一个条件能同时表达「按会话定位」与「按尚无会话定位」，不必写两条语句。
     let affected = sqlx::query(
@@ -2036,7 +2111,8 @@ async fn apply_terminal(
          error_message = COALESCE(?6, error_message), \
          error_details_json = COALESCE(?7, error_details_json), \
          retryable = COALESCE(?8, retryable) \
-         WHERE session_id IS ?9 AND request_id = ?10 AND status = 'accepted'",
+         WHERE session_id IS ?9 AND request_id = ?10 AND status = 'accepted' \
+         AND (?11 IS NULL OR (actor_kind = ?11 AND actor_id = ?12))",
     )
     .bind(terminal.status().as_str())
     .bind(terminal.terminal_at().map(Timestamp::as_str))
@@ -2048,6 +2124,8 @@ async fn apply_terminal(
     .bind(retryable)
     .bind(session.map(SessionId::as_str))
     .bind(request.as_str())
+    .bind(scoped_actor.as_ref().map(|(kind, _)| kind.as_str()))
+    .bind(scoped_actor.as_ref().map(|(_, id)| id.as_str()))
     .execute(&mut **tx)
     .await
     .db()?
@@ -2374,7 +2452,16 @@ async fn sweep_attachments(
 impl SessionStore for SqliteStore {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
         self.writable()?;
-        self.commit_owned(commit).await
+        self.commit_owned(commit, None).await
+    }
+
+    async fn commit_workspace_mkdir_terminal(
+        &self,
+        actor: &Actor,
+        commit: OwnedCommit,
+    ) -> Result<CommitOutcome, PortError> {
+        self.writable()?;
+        self.commit_owned(commit, Some(actor)).await
     }
 
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {

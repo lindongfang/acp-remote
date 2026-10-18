@@ -186,6 +186,16 @@ function answerBrowse(
   });
 }
 
+function answerMkdir(store: ClientStore, requestId: string, status: "accepted" | "completed" | "failed" | "uncertain"): void {
+  store.apply({ kind: "command_result", result: {
+    protocolVersion: 1, type: "command.result", messageId: "bbbbbbbb-1111-4111-8111-0000000000aa",
+    connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637", connectionSequence: "1",
+    body: { requestId, command: "workspace.mkdir", status, acceptedAt: "2026-10-01T00:00:01.000Z",
+      terminalEventId: null, result: status === "completed" ? { created: true } : null,
+      error: status === "failed" ? { code: "internal.unavailable", message: "新建失败", retryable: false, details: {} } : null },
+  }});
+}
+
 /** 走一次真实的浏览往返（派发请求 → 注入服务端应答）。 */
 function browseTo(
   store: ClientStore,
@@ -294,7 +304,7 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
   it("实际派发的命令：三条路径的载荷键集恰好是规范允许的三类", () => {
     const { store, gateway } = onlineStore({
       resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
-      features: [WORKSPACE_BROWSE_FEATURE],
+      features: [WORKSPACE_BROWSE_FEATURE, "core.workspace-mkdir.v1"],
     });
 
     // 1) 目录已知（卡片/详情页入口）：目录标识引用。
@@ -322,20 +332,10 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
     ).toBe(true);
     expect(Object.keys(createPayloadAt(gateway, 1)).sort()).toEqual(["agentId", "workspacePath"]);
 
-    // 3) 顶部入口在当前层新建一层：路径引用 + `createIfMissing`。
-    const created = store.createFolderInBrowse("new-api");
-    expect(created).toEqual({ ok: true, path: "D:\\work\\new-api" });
-    expect(
-      store.submitCreateSession({
-        directoryId: null,
-        agentId: "claude",
-        directoryPath: "D:\\work\\new-api",
-        createIfMissing: true,
-      }).ok,
-    ).toBe(true);
-    expect(Object.keys(createPayloadAt(gateway, 2)).sort()).toEqual(["agentId", "createIfMissing", "workspacePath"]);
-    expect(createPayloadAt(gateway, 2)["workspacePath"]).toBe("D:\\work\\new-api");
-    expect(createPayloadAt(gateway, 2)["createIfMissing"]).toBe(true);
+    // 独立新建不选择，不提交第二个会话。
+    expect(store.createFolderInBrowse("new-api").ok).toBe(true);
+    expect(store.state.directoryBrowse.selection?.kind).toBe("path");
+    expect(gateway.dispatches.filter((frame) => frame.body.command === "session.create")).toHaveLength(2);
 
     // 反例：任何一条载荷里出现凭据类字段名，这里会出现它们，断言变红。
     for (const command of gateway.dispatches) {
@@ -345,6 +345,15 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
 });
 
 describe("R16 候选只来自本机已配置的 Agent", () => {
+  it("未手动选择时选中默认 Agent，手动选择后保留用户选择", () => {
+    const automatic = renderSheet(entryModel(), null);
+    const defaultTag = automatic.match(/<[^>]*data-agent-id="claude"[^>]*>/)?.[0];
+    expect(defaultTag).toContain('data-selected="true"');
+    expect(openingTagWithAction(automatic, "submit-create")).not.toContain('aria-disabled="true"');
+    const manual = renderSheet(entryModel(), "codex");
+    expect(manual.match(/<[^>]*data-agent-id="codex"[^>]*>/)?.[0]).toContain('data-selected="true"');
+    expect(manual.match(/<[^>]*data-agent-id="claude"[^>]*>/)?.[0]).toContain('data-selected="false"');
+  });
   it("弹层只列出快照里的 Agent，且目录不由用户手工输入", () => {
     const html = renderSheet(entryModel());
     expect(html).toContain('data-agent-id="claude"');
@@ -431,9 +440,8 @@ describe("R16 不能逐层浏览时按原因说明，并保留已登记目录这
     expect(openingTagWithAction(html, "open-directory-picker")).toContain('data-picker-supported="false"');
     // 反例：把「选择文件夹」画成一个点了必然失败的控件时，这里会看到 supported=true。
     expect(html.match(/<input/g) ?? []).toHaveLength(0);
-    // 还没选定：提示说明下一步，且分支提示就是「unselected」。
-    expect(html).toContain('data-create-directory-notice="unselected"');
-    expect(html).toContain(createDirectoryNoticeText({ kind: "unselected" }));
+    expect(html).not.toContain('data-create-directory-notice="unselected"');
+    expect(openingTagWithAction(html, "submit-create")).not.toContain('aria-disabled="true"');
   });
 
   it("还没连上时说的是「还没连上」，不是「服务端没有提供该能力」", () => {
@@ -550,7 +558,7 @@ describe("R16 浏览：已登记目录被标注、逐层选定与新建一层目
   function browsingStore(): { readonly store: ClientStore; readonly gateway: RecordingGateway } {
     const fixture = onlineStore({
       resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
-      features: [WORKSPACE_BROWSE_FEATURE],
+      features: [WORKSPACE_BROWSE_FEATURE, "core.workspace-mkdir.v1"],
     });
     fixture.store.openCreateSheetToBrowse();
     fixture.store.openDirectoryPicker();
@@ -567,7 +575,7 @@ describe("R16 浏览：已登记目录被标注、逐层选定与新建一层目
     expect(root.here).toBeNull();
     expect(root.current.name).toBe("此电脑");
     expect(root.canConfirm).toBe(false);
-    expect(root.entries.map((entry) => entry.name)).toEqual(["D:", "C:"]);
+    expect(root.entries.map((entry) => entry.name)).toEqual(["C:", "D:"]);
     expect(renderPicker({ supported: true, browse: store.state.directoryBrowse, initialPath: null })).toContain(
       "此电脑（先选一个盘）",
     );
@@ -625,27 +633,104 @@ describe("R16 浏览：已登记目录被标注、逐层选定与新建一层目
     const html = renderSheet(browseEntry(store), "claude");
     expect(html).toContain('data-create-selected-name="work"');
     expect(html).toContain('data-create-directory-path="D:\\work"');
-    expect(html).toContain('data-create-directory-notice="unregistered"');
-    expect(html).toContain(createDirectoryNoticeText({ kind: "unregistered", path: "D:\\work" }));
+    expect(html).not.toContain('data-create-directory-notice="unregistered"');
+    expect(html).not.toContain('data-create-directory-hint');
+    expect(html).not.toContain("它不在已登记目录里");
   });
 
-  it("新建一层目录：候选路径由父层回显 + 用户输入构成，选定带 willCreate 且说明会先建", () => {
+  it("独立新建等完成后刷新真实父层，保持选择器并支持三级创建", () => {
     const { store, gateway } = browsingStore();
-    browseTo(store, gateway, "D:\\", [{ name: "work", path: "D:\\work", registered: false }]);
-    browseTo(store, gateway, "D:\\work", []);
-
-    expect(store.createFolderInBrowse("  new-api  ")).toEqual({ ok: true, path: "D:\\work\\new-api" });
-    const html = renderSheet(browseEntry(store), "claude");
-    expect(html).toContain('data-create-selected-name="new-api"');
-    expect(html).toContain('data-create-directory-path="D:\\work\\new-api"');
-    expect(html).toContain('data-create-directory-notice="will_create"');
-    expect(html).toContain(createDirectoryNoticeText({ kind: "will_create", path: "D:\\work\\new-api" }));
+    let parent = "/home/dev";
+    browseTo(store, gateway, parent, []);
+    for (const name of ["project", "src", "api"]) {
+      const sentBefore = gateway.dispatches.length;
+      const outcome = store.createFolderInBrowse(name);
+      if (!outcome.ok) throw new Error(outcome.reason);
+      expect(store.createFolderInBrowse(name).ok).toBe(false);
+      expect(gateway.dispatches).toHaveLength(sentBefore + 1);
+      expect(store.state.directoryBrowse.selection).toBeNull();
+      expect(store.state.directoryBrowse.open).toBe(true);
+      expect(store.directoryBrowser().entries).toEqual([]);
+      const frame = gateway.dispatches.at(-1);
+      expect(frame?.body).toEqual({ requestId: outcome.requestId, command: "workspace.mkdir", payload: { parentPath: parent, name } });
+      for (const status of ["accepted", "completed"] as const) {
+        store.apply({ kind: "command_result", result: {
+          protocolVersion: 1, type: "command.result", messageId: "bbbbbbbb-1111-4111-8111-0000000000aa",
+          connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637", connectionSequence: "1",
+          body: { requestId: outcome.requestId, command: "workspace.mkdir", status,
+            acceptedAt: "2026-10-01T00:00:01.000Z", terminalEventId: null,
+            result: status === "completed" ? { created: true } : null, error: null },
+        }});
+        expect(store.state.directoryBrowse.selection).toBeNull();
+      }
+      const refresh = store.state.directoryBrowse.pendingRequestId;
+      if (refresh === null) throw new Error("完成后必须刷新父层");
+      const child = parent + "/" + name;
+      answerBrowse(store, refresh, { path: parent, entries: [{ name, path: child, registered: false }], truncated: false });
+      const enter = store.state.directoryBrowse.pendingRequestId;
+      if (enter === null) throw new Error("新建后必须自动进入目录");
+      expect(gateway.dispatches.at(-1)?.body.payload).toEqual({ path: child });
+      answerBrowse(store, enter, { path: child, entries: [], truncated: false });
+      expect(store.directoryBrowser().here).toBe(child);
+      expect(store.state.directoryBrowse.open).toBe(true);
+      expect(store.state.directoryBrowse.selection).toBeNull();
+      parent = child;
+    }
+    store.selectBrowsedDirectory({ kind: "path", path: parent, name: "api", registered: false, willCreate: false });
+    expect(store.state.directoryBrowse.selection).toMatchObject({ path: "/home/dev/project/src/api", willCreate: false });
+    expect(gateway.dispatches.filter((frame) => frame.body.command === "session.create")).toHaveLength(0);
   });
 
-  it("POSIX 父层按它自己的分隔符拼接（不做规范化）", () => {
+  it("旧主机只禁用新建，仍可浏览选择已有目录", () => {
+    const { store, gateway } = onlineStore({ features: [WORKSPACE_BROWSE_FEATURE] });
+    browseTo(store, gateway, "/home/dev", []);
+    const count = gateway.dispatches.length;
+    expect(store.createFolderInBrowse("api").ok).toBe(false);
+    expect(gateway.dispatches).toHaveLength(count);
+    expect(store.directoryBrowser().canConfirm).toBe(true);
+    expect(store.directoryBrowser().mkdirSupported).toBe(false);
+  });
+
+  it("关闭整个弹层不丢失在途或不确定请求，显式核对后只刷新不重发", () => {
+    const { store, gateway } = onlineStore({
+      resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
+      features: [WORKSPACE_BROWSE_FEATURE, "core.workspace-mkdir.v1"],
+    });
+    store.openCreateSheetToBrowse();
+    store.openDirectoryPicker();
+    browseTo(store, gateway, "/home/dev", []);
+    const outcome = store.createFolderInBrowse("api");
+    if (!outcome.ok) throw new Error(outcome.reason);
+    store.closeCreateSheet(); store.openCreateSheetToBrowse(); store.openDirectoryPicker();
+    expect(store.directoryBrowser().folder?.requestId).toBe(outcome.requestId);
+    expect(store.createFolderInBrowse("api").ok).toBe(false);
+    answerMkdir(store, outcome.requestId, "uncertain");
+    store.closeDirectoryPicker(); store.openDirectoryPicker();
+    expect(store.directoryBrowser().folder?.state).toBe("uncertain");
+    expect(store.directoryBrowser().folder?.name).toBe("api");
+    expect(store.createFolderInBrowse("api").ok).toBe(false);
+    store.resolveFolderUncertain();
+    expect(gateway.dispatches.filter((frame) => frame.body.command === "workspace.mkdir")).toHaveLength(1);
+    expect(gateway.dispatches.at(-1)?.body.command).toBe("workspace.browse");
+    expect(store.state.directoryBrowse.selection).toBeNull();
+  });
+
+  it("失败保留输入和父层；成功后刷新失败不会重新 mkdir", () => {
     const { store, gateway } = browsingStore();
     browseTo(store, gateway, "/home/dev", []);
-    expect(store.createFolderInBrowse("api")).toEqual({ ok: true, path: "/home/dev/api" });
+    const failed = store.createFolderInBrowse("api");
+    if (!failed.ok) throw new Error(failed.reason);
+    answerMkdir(store, failed.requestId, "failed");
+    expect(store.directoryBrowser().here).toBe("/home/dev");
+    expect(store.directoryBrowser().folder).toMatchObject({ state: "failed", name: "api" });
+    const retry = store.createFolderInBrowse("other");
+    if (!retry.ok) throw new Error(retry.reason);
+    answerMkdir(store, retry.requestId, "completed");
+    expect(store.directoryBrowser().folder?.state).toBe("completed");
+    expect(store.directoryBrowser().entries).toEqual([]);
+    expect(gateway.dispatches.filter((frame) => frame.body.command === "workspace.mkdir")).toHaveLength(2);
+    store.closeCreateSheet();
+    expect(gateway.dispatches.filter((frame) => frame.body.command === "session.create")).toHaveLength(0);
   });
 
   it("名字非法：明确拒绝，既不构造候选路径也不改选定", () => {
@@ -791,6 +876,12 @@ describe("R16 创建中与终态分别呈现", () => {
     const model = store.createEntry(DIRECTORY_ID);
     expect(model.submission).toEqual({ kind: "created", sessionId: "5d73cd10-a465-43cd-b3f1-704e2d49e99e" });
     expect(renderSheet(model, "claude")).toContain('data-create-submission="created"');
+    store.openCreateSheet(DIRECTORY_ID);
+    store.closeCreateSheet();
+    store.openCreateSheet(DIRECTORY_ID);
+    expect(store.createEntry(DIRECTORY_ID).submission.kind).toBe("idle");
+    // 再次打开新建入口不能复用上次成功结果、重新跳回旧会话。
+    expect(store.state.commands.get(outcome.requestId)?.state).toBe("completed");
   });
 
   it("失败终态按参数类与服务端不可用类分开说明", () => {
@@ -891,6 +982,34 @@ describe("R16 结果不确定显眼且不被自动消解", () => {
 });
 
 describe("R16 浏览状态本身没有路径拼接", () => {
+  it("目录名升序忽略大小写，数字自然排序，且不修改原始条目与路径", () => {
+    const entries = ["zeta", "Project10", "beta", "project2", "Alpha", "application"]
+      .map((name) => ({ name, path: `D:\\${name}`, registered: false }));
+    const original = entries.map((entry) => entry.name);
+    const model = buildDirectoryBrowserModel({
+      supported: true,
+      browse: { ...initialDirectoryBrowseState(), loaded: true, entries },
+    });
+    expect(model.entries.map((entry) => entry.name)).toEqual([
+      "Alpha", "application", "beta", "project2", "Project10", "zeta",
+    ]);
+    expect(entries.map((entry) => entry.name)).toEqual(original);
+    expect(model.entries.every((entry) => entries.includes(entry))).toBe(true);
+  });
+
+  it("忽略大小写后同名时按原始路径稳定定序", () => {
+    const entries = [
+      { name: "api", path: "D:\\z\\api", registered: false },
+      { name: "API", path: "D:\\a\\API", registered: true },
+    ];
+    const result = (items: typeof entries) => buildDirectoryBrowserModel({
+      supported: true,
+      browse: { ...initialDirectoryBrowseState(), loaded: true, entries: items },
+    }).entries;
+    expect(result(entries)).toEqual(result([...entries].reverse()));
+    expect(result(entries)[0]?.path).toBe("D:\\a\\API");
+  });
+
   it("初始状态只有「此电脑」那一段，且没有任何条目", () => {
     const state = initialDirectoryBrowseState();
     expect(state.crumbs).toEqual([{ name: "此电脑", path: null, registered: false }]);
@@ -899,4 +1018,37 @@ describe("R16 浏览状态本身没有路径拼接", () => {
     expect(state.open).toBe(false);
     expect(state.loaded).toBe(false);
   });
-});
+});  it("不同设备相同 requestId 不会误终结本机目录创建", () => {
+    const { store, gateway } = onlineStore({
+      resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
+      features: [WORKSPACE_BROWSE_FEATURE, "core.workspace-mkdir.v1"],
+    });
+    store.openCreateSheetToBrowse();
+    store.openDirectoryPicker();
+    browseTo(store, gateway, "/home/dev", []);
+    const outcome = store.createFolderInBrowse("api");
+    if (!outcome.ok) throw new Error(outcome.reason);
+    const deviceId = store.state.deviceId;
+    if (deviceId === null) throw new Error("测试设备身份缺失");
+    const count = gateway.dispatches.length;
+    const emit = (origin: { kind: "device" | "daemon"; deviceId: string | null }, index: number, command?: string): void => {
+      store.apply({ kind: "event", event: {
+        protocolVersion: 1, type: "event", messageId: "11111111-1111-4111-8111-000000000009",
+        connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637", connectionSequence: String(index),
+        body: { globalSequence: String(20 + index), sessionSequence: null,
+          eventId: "dddddddd-0000-4000-8000-00000000000" + String(index), sessionId: null,
+          eventType: "command.completed", causationRequestId: outcome.requestId, origin, remoteOrigin: null,
+          createdAt: "2026-10-01T00:10:00.000Z",
+          payload: { view: { requestId: outcome.requestId, result: { created: true }, ...(command === undefined ? {} : { command }) } },
+        },
+      }});
+    };
+    emit({ kind: "device", deviceId: "aaaaaaaa-1111-4111-8111-000000000099" }, 1);
+    emit({ kind: "daemon", deviceId: null }, 2);
+    emit({ kind: "device", deviceId }, 3, "session.create");
+    expect(store.directoryBrowser().folder?.state).toBe("submitting");
+    expect(gateway.dispatches).toHaveLength(count);
+    emit({ kind: "device", deviceId }, 4);
+    expect(store.directoryBrowser().folder?.state).toBe("completed");
+    expect(gateway.dispatches.at(-1)?.body.command).toBe("workspace.browse");
+  });

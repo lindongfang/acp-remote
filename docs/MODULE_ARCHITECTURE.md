@@ -254,11 +254,12 @@ AttachmentStore          内容寻址附件字节与 LRU 清理
 EventPublisher           发布已经提交的事件或远程交付
 EventSink                后端事件通道；调用顺序即提交顺序
 ReadView                 一致性读视图，`sync.snapshot_*` 的 barrier
+DirectoryCreator         既有父目录下创建一层目录，独立于只读浏览（权威签名见 CORE_PORTS_AND_STORAGE §5.6）
 DirectoryBrowser         只读的逐层目录列举（`workspace.browse` 的根列表与一层子目录，只返回名称与绝对路径）
 Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交事务内分配）
 ```
 
-签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。
+签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。独立 `workspace.mkdir` 由 core 拥有持久受理、一次性执行凭证、创建和无会话终态顺序；具体端口与事务见该文档 §5.2/§5.6，server 不执行文件系统写入。
 
 管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。Daemon/CLI 接线与 `server` 的**本地**入站适配器（`server::local_admin`）已随切片 4 落地（`identity-auth`/`identity-keystore` 见 §4.8/§4.12，`app` 见 §4.10），因此这些管理能力已可经本地通道端到端使用（两处按合同的例外：`import.add` 需要 Owner 的 catalog 快照，而提供该快照的 Access 侧 `node-link-client` 属切片 6，因此它恒返回 `local.unavailable`；`node pair --mode access` 返回 `local.unsupported`）；仍未实现的是 `server::sync`/`server::acp_facade` 与 `node-link-client`（`server::transport::net` 与 `server::node_link` 的 Owner 侧入站面已随切片 5 落地，Access 侧出站属切片 6，见 §4.9）。业务决定仍由 core 用例拥有。
 
@@ -272,6 +273,7 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 - **路径**：本机规范化路径只在客户端协商了 feature `core.workspace-path.v1` 时随 Sync 快照的 `workspaces` 条目下发，且只覆盖**已登记**目录；取值是 `canonicalize` 的结果**剥掉平台 verbatim 前缀**后的形式（复用 `core` 的 `strip_verbatim`，与发往 Agent 的 `cwd` 同一条规则），客户端回传该形式时 core 重新规范化并以其为权威值。会话摘要的目录引用仍只有 `{alias, displayName}` 两个键；**客户端自己提交的目录不得被回显**，日志、审计、错误 `details`、事件载荷也一律不含路径。投影入口是 `UseCases::sync_workspace_catalog(actor, include_path)`，`include_path` 是**调用方**的协商结果（core 不读 feature 表）。
 - **目录浏览**：`workspace.browse` 是只读查询，core 侧的实现是 `UseCases::workspace_browse(actor, Option<&str>)` + 出站端口 `DirectoryBrowser`（逐层列举、只返回直接子目录的名称与绝对路径，不含文件、大小、时间戳与权限；条目的 `path` 取规范化结果剥掉平台 verbatim 前缀的下发形式，结果的 `path` 则**逐字回显本次请求的父路径**——那是「客户端自己提交的路径不得被回显」的唯一例外，见 `SYNC_PROTOCOL.md` §11.5；顺序由 core 按名称施加、单层上限 128 并置截断标记；不登记、不缓存、不产生审计动作）。feature `core.workspace-browse.v1` 的门控与未认证拒绝都在**适配层**、且在触碰文件系统之前。
+  - 默认本机实现的 Windows 隐藏/系统目录过滤规则以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5 为准；这是浏览可见性规则，不改变创建授权。
 - **建目录开关**：`session.create` 的目录来源为 `WorkspaceSource::PathWithCreate` 时，core 在启动后端**之前**创建目录（连同缺失的父层）并把 `canonicalize` 的结果作为权威值；开关与目录标识在**类型上**互斥（目录标识指向的目录必然已存在），被创建的目录与成功的会话在同一次提交里登记，且不在任何后续失败时被删除或回滚。
 
 `[决定]`（2026-10-17，`directory-auto-registration`）上述路径门控与别名引用已被**撤销**：目录改由成功的会话创建自动登记，快照 `workspaces` 条目始终为 `{ directoryId, path }`，会话摘要的 `workspace` 只有 `{ directoryId }`，`core.workspace-path.v1` 不再存在；`UseCases::sync_workspace_catalog(actor)` 没有协商参数。`session.create` 的目录来源是 `directoryId` 或 `workspacePath`（`createIfMissing` 只与后者相容）。适配层仍不读 feature 表；`workspace.browse` 与 `file.changed` 差异行两道 feature 门控不变。
@@ -357,6 +359,8 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 ### 4.7 `storage-sqlite`
 
 唯一职责：实现持久化端口。
+
+`workspace.mkdir` 的无会话终态通过专用主体绑定入口按 `(actor, requestId)` 定位，避免跨主体同 requestId 的歧义；旧 `commit` 路径保持不变，不新增 DDL 或迁移。端口签名与无会话事务权威见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.2/§5.6。
 
 包含 schema、migration、`SessionStore`、`RemoteDeliveryStore`、TrustStore 持久部分、事务、容量清理、快照和 TTL。Owned content tables 与 imported delivery-index tables 必须物理或类型隔离，防止 Access 路径误写正文。
 

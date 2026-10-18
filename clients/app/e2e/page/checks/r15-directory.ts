@@ -403,13 +403,14 @@ const checks: readonly Check[] = [
           ["2", "1", ""],
           "alpha 的会话总数/运行中",
         );
-        // 未命中的目录连同它的会话行一起不呈现。
+        // 未命中的目录连同它的会话行一起不呈现；命中目录里，只有标题命中的那条会话行留下
+        // （原型 `passQuery`：展示名不命中时按会话标题逐行过滤）。
         expectEqual(
           queryAll(container, "[data-session-id]")
             .map((node) => node.getAttribute("data-session-id") ?? "")
             .sort(),
-          [seriesSessionId("aaaaaaaa", 0), seriesSessionId("aaaaaaaa", 1)],
-          "内联会话行只应剩 alpha 的两条",
+          [seriesSessionId("aaaaaaaa", 0)],
+          "内联会话行只应剩标题命中的那一条",
         );
 
         // 目录标识不参与搜索：用 alpha 标识的前 8 位搜索，一个目录都不该命中。
@@ -535,6 +536,10 @@ const checks: readonly Check[] = [
         const openAll = query(card, '[data-action="open-directory-all"]');
         expectThat(openAll !== null, "会话数超过内联上限时必须给出进入详情页的入口");
         expectEqual(textOf(openAll), "查看全部 ›", "「查看全部」入口的文案");
+        // 原型 `.footline`：卡体底部再给一次入口（独立动作取值，避免与卡片头数成同一个）。
+        const footAll = query(card, '[data-action="open-directory-all-footer"]');
+        expectThat(footAll !== null, "超过内联上限时卡体底部应有「查看全部」");
+        expectEqual(textOf(footAll), "查看全部 ›", "卡体底部入口的文案");
       });
     },
   },
@@ -610,11 +615,7 @@ const checks: readonly Check[] = [
         );
         // 展示文本是 UTC 固定切片（`YYYY-MM-DD HH:MM UTC`），因此可以逐字断言：走本地时区
         // 或改成「N 分钟前」都会在这里红。
-        expectEqual(
-          textOf(query(mounted.container, "[data-synced-at]")),
-          `已同步 ${new Date(Number(epochMs)).toISOString().slice(0, 16).replace("T", " ")} UTC`,
-          "同步时刻的展示文本（UTC 固定切片）",
-        );
+        expectAbsent(domText(mounted.container), "已同步", "No visible sync timestamp");
         // 重新渲染（敲一次查询）后时刻不得变：它不是「渲染时的当前时间」。
         typeIntoInput(mounted.container, "[data-directory-search]", "api", "目录页搜索框");
         await waitFor(
@@ -631,10 +632,10 @@ const checks: readonly Check[] = [
       }
 
       // 从未成功替换过快照：连接已经建起来（认证通过、已订阅、停在追平），但仓库里没有快照。
-      // 等待条件用 `[data-connection-state]`（主机面板头部；占位 `RuntimeUnavailable` 不发它）。
+      // 等待条件用真实目录页的加载态文案（占位 `RuntimeUnavailable` 不发它）。
       await withScenario(baseScenario({ deliverSnapshot: false }), async (container) => {
         await waitFor(
-          () => query(container, '[data-connection-state="replaying"]') !== null,
+          () => query(container, '[data-directory-state="loading"]') !== null,
           "连接已认证并订阅（尚未追平）",
         );
         expectThat(
@@ -748,10 +749,15 @@ const checks: readonly Check[] = [
           query(pageLayer, '[data-action="open-hosts"]') === null,
           "目录页不得再出现自建的状态徽标",
         );
-        // 连接状态在**这一层**里只经主机面板（`data-route="hosts"`）表达。
+        // 主机与连接面板不再内联在目录页：它由设备胶囊进入 `/hosts`。这一层里因此不应
+        // 出现任何连接状态控件——状态只由外壳那一个设备胶囊表达。
         expectThat(
-          query(pageLayer, '[data-route="hosts"] [data-connection-state]') !== null,
-          "连接状态必须仍经主机面板表达（面板是这一层里唯一的状态控件）",
+          query(pageLayer, '[data-connection-state]') === null,
+          "目录页层里不得再出现连接状态控件",
+        );
+        expectThat(
+          query(pageLayer, '[data-route="hosts"]') === null,
+          "主机与连接面板不得再内联在目录页",
         );
       });
     },

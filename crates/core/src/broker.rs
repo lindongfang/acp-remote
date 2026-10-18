@@ -1578,6 +1578,114 @@ impl Broker {
         self.outcome_version(&receipt, before, &command).await
     }
 
+    /// Persist the independent directory command before its filesystem side effect.
+    pub(crate) async fn admit_workspace_mkdir(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        fingerprint: &Digest,
+    ) -> Result<Option<CommandRecord>, PortError> {
+        let at = self.now();
+        let outcome = self
+            .commit_owned(OwnedCommit {
+                session: None,
+                at: at.clone(),
+                expected_version: None,
+                state: None,
+                turns: Vec::new(),
+                events: Vec::new(),
+                interactions: Vec::new(),
+                compacted: Vec::new(),
+                idempotency: Some(IdempotencyRecord {
+                    actor: actor.clone(),
+                    request: request.clone(),
+                    command: "workspace.mkdir".to_owned(),
+                    kind: CommandKind::Mutation,
+                    session: None,
+                    expected_version: None,
+                    request_fingerprint: fingerprint.clone(),
+                    accepted_at: at,
+                }),
+                command_terminal: None,
+                origin_epoch: None,
+            })
+            .await?;
+        Ok(outcome.replayed.map(|replay| replay.record))
+    }
+
+    /// Persist the terminal and global event together before publication.
+    pub(crate) async fn settle_workspace_mkdir(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        failure: Option<PublicError>,
+    ) -> Result<(), PortError> {
+        let record = self
+            .deps
+            .store
+            .find_request(request, actor)
+            .await?
+            .ok_or_else(|| {
+                PortError::NotFound(EntityRef::Command {
+                    session: None,
+                    request: request.clone(),
+                })
+            })?;
+        if record.command() != "workspace.mkdir" || record.session().is_some() {
+            return Err(PortError::InvalidRequest(
+                "workspace.mkdir settlement requires its unsessioned command",
+            ));
+        }
+        if record.status().is_terminal() {
+            return Ok(());
+        }
+        let at = self.now();
+        let status = if failure.is_some() {
+            CommandStatus::Failed
+        } else {
+            CommandStatus::Completed
+        };
+        let result = if failure.is_none() {
+            Some(CommandResult::from_json_text(r#"{"created":true}"#)?)
+        } else {
+            None
+        };
+        let terminal =
+            CommandTerminalRecord::try_new(status, Some(at.clone()), None, result, failure)?;
+        let mut event = create_terminal_event(actor, request, status, terminal.error())?;
+        if status == CommandStatus::Completed {
+            event.payload = EventPayload::new(
+                view(format!(
+                    r#"{{"requestId":"{}","result":{{"created":true}}}}"#,
+                    request.as_str()
+                ))?,
+                None,
+            );
+        }
+        let outcome = self
+            .deps
+            .store
+            .commit_workspace_mkdir_terminal(
+                actor,
+                OwnedCommit {
+                    session: None,
+                    at,
+                    expected_version: None,
+                    state: None,
+                    turns: Vec::new(),
+                    events: vec![event],
+                    interactions: Vec::new(),
+                    compacted: Vec::new(),
+                    idempotency: None,
+                    command_terminal: Some(terminal),
+                    origin_epoch: None,
+                },
+            )
+            .await?;
+        self.publish(&outcome.appended);
+        Ok(())
+    }
+
     /// `session.create`（Node Link 命令，§12.7；Sync §11.5）。三笔时序：**受理 → 执行 → 落账**。
     ///
     /// - **受理**：只落该命令的幂等记录（`session_id` 为 `NULL`、无会话行），此后本机**查不到**这个会话；
@@ -3102,7 +3210,11 @@ impl Broker {
     ) -> Result<(), PortError> {
         let at = self.now();
         let request = record.request().clone();
-        let reason = "进程恢复后无法确认命令是否已到达 Agent";
+        let reason = if record.command() == "workspace.mkdir" {
+            "Unable to confirm whether the directory was created after restart"
+        } else {
+            "进程恢复后无法确认命令是否已到达 Agent"
+        };
         let error =
             PublicError::coded("command.uncertain", reason, false).map_err(PortError::from)?;
         let mut events: Vec<PendingEvent> = Vec::new();
@@ -3201,7 +3313,14 @@ impl Broker {
             command_terminal: Some(terminal),
             origin_epoch: None,
         };
-        let outcome = self.commit_owned(commit).await?;
+        let outcome = if record.command() == "workspace.mkdir" {
+            self.deps
+                .store
+                .commit_workspace_mkdir_terminal(record.actor(), commit)
+                .await?
+        } else {
+            self.commit_owned(commit).await?
+        };
         // §6 第 16 条：广播必须在 commit 之后。
         self.publish(&outcome.appended);
         Ok(())
@@ -4776,7 +4895,18 @@ pub(crate) mod test_support {
             &self,
             causation: Option<&RequestId>,
             kind: ActorKind,
+            event_id: Option<&EventId>,
         ) -> Option<String> {
+            if let Some(event_id) = event_id {
+                for record in self.commands.values() {
+                    if record.command() == "workspace.mkdir"
+                        && record.actor().kind() == kind
+                        && record.terminal_event() == Some(event_id)
+                    {
+                        return Some(record.actor().id_text());
+                    }
+                }
+            }
             let causation = causation?;
             let mut found: Option<String> = None;
             for record in self.commands.values() {
@@ -5208,10 +5338,92 @@ pub(crate) mod test_support {
     }
 
     impl FakeStore {
+        async fn commit_scoped(
+            &self,
+            commit: OwnedCommit,
+            terminal_actor: Option<&Actor>,
+        ) -> Result<CommitOutcome, PortError> {
+            let index = self.world.commits.fetch_add(1, Ordering::SeqCst) + 1;
+            let version_drifts = {
+                let mut state = lock(&self.world.state);
+                if state.fail_at == Some(index) {
+                    state.fail_at = None;
+                    return Err(PortError::Unavailable(UnavailableKind::IoError));
+                }
+                if state.version_drift_at == Some(index) {
+                    state.version_drift_at = None;
+                    true
+                } else {
+                    false
+                }
+            };
+            // §5.2：幂等命中 → 不追加事件、不改状态，返回首次结果；五项指纹任一不同 → 冲突。
+            if let Some(record) = commit.idempotency.as_ref() {
+                let state = lock(&self.world.state);
+                let key = command_key(&record.actor, &record.request);
+                if let Some(existing) = state.commands.get(&key).cloned() {
+                    // §6 第 20 条：`record.session = None` 表示「装配期不知道目标会话」（`session.create`
+                    // 的 id 由存储层分配），不参与比对；其余四项恒比。
+                    let same = existing.command() == record.command
+                        && existing.kind() == record.kind
+                        && record
+                            .session
+                            .as_ref()
+                            .is_none_or(|session| existing.session() == Some(session))
+                        && existing.expected_version() == record.expected_version
+                        && existing.request_fingerprint() == &record.request_fingerprint;
+                    if !same {
+                        return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
+                    }
+                    let session_id = existing.session().cloned();
+                    let version = session_id
+                        .as_ref()
+                        .and_then(|session| state.sessions.get(session.as_str()))
+                        .map(|session| session.version())
+                        .unwrap_or_else(|| Version::from(0));
+                    let origin_epoch = session_id
+                        .as_ref()
+                        .and_then(|session| state.epochs.get(session.as_str()).cloned());
+                    return Ok(CommitOutcome {
+                        session_id,
+                        origin_epoch,
+                        version,
+                        appended: Vec::new(),
+                        replayed: Some(IdempotentReplay { record: existing }),
+                    });
+                }
+            }
+            let (created, appended) = self.apply(&commit, terminal_actor)?;
+            let state = lock(&self.world.state);
+            let mut version = commit
+                .session
+                .as_ref()
+                .and_then(|session| state.sessions.get(session.as_str()))
+                .map(|session| session.version())
+                .unwrap_or_else(|| Version::from(0));
+            // 脚本化的版本漂移：只改**返回值**，不改已写下的会话行（模拟「存储层规则与 core 推导不同」）。
+            if version_drifts {
+                version = Version::new(version.get() + 1);
+            }
+            let origin_epoch = commit
+                .session
+                .as_ref()
+                .and_then(|session| state.epochs.get(session.as_str()).cloned())
+                .or_else(|| commit.origin_epoch.clone());
+            Ok(CommitOutcome {
+                session_id: created.or_else(|| commit.session.clone()),
+                origin_epoch,
+                version,
+                appended,
+                replayed: None,
+            })
+        }
+
         /// `OwnedCommit` 的 §5.2 语义：幂等 → 会话/交互 → turn → 事件 → 终态/接受行。
         fn apply(
             &self,
             commit: &OwnedCommit,
+            terminal_actor: Option<&Actor>,
         ) -> Result<(Option<SessionId>, Vec<CommittedEvent>), PortError> {
             let mut state = lock(&self.world.state);
             let at = commit.at.clone();
@@ -5587,7 +5799,11 @@ pub(crate) mod test_support {
                     commit.session.as_ref()
                 };
                 let mut matched = state.commands.iter().filter(|(_, record)| {
-                    record.request() == &request && record.session() == expected
+                    record.request() == &request
+                        && record.session() == expected
+                        && terminal_actor.is_none_or(|actor| {
+                            record.actor() == actor && record.command() == "workspace.mkdir"
+                        })
                 });
                 let key = matched.next().map(|(key, _)| key.clone());
                 if matched.next().is_some() {
@@ -5671,80 +5887,14 @@ pub(crate) mod test_support {
     #[async_trait]
     impl SessionStore for FakeStore {
         async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
-            let index = self.world.commits.fetch_add(1, Ordering::SeqCst) + 1;
-            let version_drifts = {
-                let mut state = lock(&self.world.state);
-                if state.fail_at == Some(index) {
-                    state.fail_at = None;
-                    return Err(PortError::Unavailable(UnavailableKind::IoError));
-                }
-                if state.version_drift_at == Some(index) {
-                    state.version_drift_at = None;
-                    true
-                } else {
-                    false
-                }
-            };
-            // §5.2：幂等命中 → 不追加事件、不改状态，返回首次结果；五项指纹任一不同 → 冲突。
-            if let Some(record) = commit.idempotency.as_ref() {
-                let state = lock(&self.world.state);
-                let key = command_key(&record.actor, &record.request);
-                if let Some(existing) = state.commands.get(&key).cloned() {
-                    // §6 第 20 条：`record.session = None` 表示「装配期不知道目标会话」（`session.create`
-                    // 的 id 由存储层分配），不参与比对；其余四项恒比。
-                    let same = existing.command() == record.command
-                        && existing.kind() == record.kind
-                        && record
-                            .session
-                            .as_ref()
-                            .is_none_or(|session| existing.session() == Some(session))
-                        && existing.expected_version() == record.expected_version
-                        && existing.request_fingerprint() == &record.request_fingerprint;
-                    if !same {
-                        return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
-                    }
-                    let session_id = existing.session().cloned();
-                    let version = session_id
-                        .as_ref()
-                        .and_then(|session| state.sessions.get(session.as_str()))
-                        .map(|session| session.version())
-                        .unwrap_or_else(|| Version::from(0));
-                    let origin_epoch = session_id
-                        .as_ref()
-                        .and_then(|session| state.epochs.get(session.as_str()).cloned());
-                    return Ok(CommitOutcome {
-                        session_id,
-                        origin_epoch,
-                        version,
-                        appended: Vec::new(),
-                        replayed: Some(IdempotentReplay { record: existing }),
-                    });
-                }
-            }
-            let (created, appended) = self.apply(&commit)?;
-            let state = lock(&self.world.state);
-            let mut version = commit
-                .session
-                .as_ref()
-                .and_then(|session| state.sessions.get(session.as_str()))
-                .map(|session| session.version())
-                .unwrap_or_else(|| Version::from(0));
-            // 脚本化的版本漂移：只改**返回值**，不改已写下的会话行（模拟「存储层规则与 core 推导不同」）。
-            if version_drifts {
-                version = Version::new(version.get() + 1);
-            }
-            let origin_epoch = commit
-                .session
-                .as_ref()
-                .and_then(|session| state.epochs.get(session.as_str()).cloned())
-                .or_else(|| commit.origin_epoch.clone());
-            Ok(CommitOutcome {
-                session_id: created.or_else(|| commit.session.clone()),
-                origin_epoch,
-                version,
-                appended,
-                replayed: None,
-            })
+            self.commit_scoped(commit, None).await
+        }
+        async fn commit_workspace_mkdir_terminal(
+            &self,
+            actor: &Actor,
+            commit: OwnedCommit,
+        ) -> Result<CommitOutcome, PortError> {
+            self.commit_scoped(commit, Some(actor)).await
         }
 
         async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {
@@ -6068,7 +6218,11 @@ pub(crate) mod test_support {
                     EventOrigin::Device => Some(
                         DeviceId::new(
                             &state
-                                .identity_origin(causation.as_ref(), ActorKind::Device)
+                                .identity_origin(
+                                    causation.as_ref(),
+                                    ActorKind::Device,
+                                    Some(&event.id),
+                                )
                                 .ok_or(PortError::Corrupt(
                                     "device event cannot be attributed to a unique device command",
                                 ))?,
@@ -6082,7 +6236,7 @@ pub(crate) mod test_support {
                 let origin_node_id = match origin_kind {
                     EventOrigin::Node => Some(
                         state
-                            .identity_origin(causation.as_ref(), ActorKind::Node)
+                            .identity_origin(causation.as_ref(), ActorKind::Node, Some(&event.id))
                             .ok_or(PortError::Corrupt(
                                 "node event cannot be attributed to a unique node command",
                             ))?

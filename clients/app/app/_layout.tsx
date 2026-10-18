@@ -28,6 +28,7 @@ import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 
 import { Shell } from "../src/components/shell/Shell";
+import { useTheme } from "../src/components/theme";
 import { createComposition } from "../src/composition";
 import type { Composition } from "../src/composition";
 import { ClientStoreProvider } from "../src/features/runtime";
@@ -36,6 +37,7 @@ import { ClientStoreProvider } from "../src/features/runtime";
 const composition: Composition = createComposition();
 
 export default function RootLayout(): ReactElement {
+  const theme = useTheme();
   const [runtime, setRuntime] = useState<Composition | null>(null);
 
   useEffect(() => {
@@ -56,7 +58,17 @@ export default function RootLayout(): ReactElement {
       {/* 共享外壳（design D1）：一份外壳装在这里，「开发模式横幅 → 顶栏 → 路由内容 →
           抽屉/遮罩/提示」的装配顺序只有这一处；路由不各自拼导航。 */}
       <Shell>
-        <Stack screenOptions={{ headerShown: false }} />
+        {/*
+          路由容器必须跟随主题底色：`Stack` 的屏幕容器默认是白底，页面自身的宽度上限
+          （目录页/详情页的 1180 居中）会在两侧露出这道白边。把屏幕容器设成当前调色板的
+          `bg` 后，宽屏留白是主题色而不是白色；浅色下仍是浅底。
+        */}
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: theme.colors.bg },
+          }}
+        />
       </Shell>
     </ClientStoreProvider>
   );

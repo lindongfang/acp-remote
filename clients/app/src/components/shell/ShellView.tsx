@@ -58,6 +58,8 @@ function buildStyles(colors: Palette) {
       flexShrink: 1,
       minHeight: 0,
       flexDirection: "column",
+      // 路由容器之外的底色也跟随主题：宽屏页面自身的最大宽度两侧不会露出浏览器的白底。
+      backgroundColor: colors.bg,
     },
     devBanner: {
       flexDirection: "row",
@@ -72,13 +74,15 @@ function buildStyles(colors: Palette) {
       color: colors.warn,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
       textAlign: "center",
     },
     topBar: {
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.md,
-      minHeight: 56,
+      height: 56,
+      flexShrink: 0,
       paddingHorizontal: spacing.xl,
       backgroundColor: colors.panel,
       borderBottomWidth: 1,
@@ -86,6 +90,7 @@ function buildStyles(colors: Palette) {
       zIndex: zIndex.topBar,
     },
     logo: {
+      flexShrink: 0,
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.sm,
@@ -108,6 +113,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      lineHeight: 22.4,
       fontWeight: fontWeight.medium,
     },
     spacer: {
@@ -116,6 +122,8 @@ function buildStyles(colors: Palette) {
       flexBasis: 0,
     },
     capsule: {
+      minWidth: 0,
+      flexShrink: 1,
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.sm,
@@ -135,6 +143,7 @@ function buildStyles(colors: Palette) {
     dot: {
       width: 7,
       height: 7,
+      flexShrink: 0,
       borderRadius: 4,
     },
     dotOk: {
@@ -147,12 +156,15 @@ function buildStyles(colors: Palette) {
       backgroundColor: colors.danger,
     },
     capsuleLabel: {
+      flexShrink: 1,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
+      fontSize: fontSize.md,
+      lineHeight: 22.4,
     },
     capsuleShortWord: {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
       opacity: 0.9,
     },
     // 折角：原型用一段内联 SVG（文字字形的高低不对）。这里用两条边框旋转 45° 画出同一个形状，
@@ -179,12 +191,14 @@ function buildStyles(colors: Palette) {
       backgroundColor: colors.warnSoft,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
       paddingVertical: spacing.xs,
       paddingHorizontal: spacing.sm + 2,
       borderRadius: radius.lg,
       overflow: "hidden",
     },
     iconButton: {
+      flexShrink: 0,
       width: 30,
       height: 30,
       alignItems: "center",
@@ -198,15 +212,10 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     // 主题开关的图标：太阳/月亮都用图形画（不依赖字体里有没有那个字形）。原型控制台里可选的
     // 「图标样式 / 图标含义」不属产品行为，这里固定为「点击后是什么」的含义。
-    iconSun: {
-      width: 9,
-      height: 9,
-      borderRadius: 5,
-      backgroundColor: colors.ink2,
-    },
     iconMoon: {
       width: 14,
       height: 14,
@@ -270,6 +279,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.lg,
+      lineHeight: 27.2,
       fontWeight: fontWeight.medium,
     },
     drawerSection: {
@@ -280,12 +290,14 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+      lineHeight: 17.6,
       fontWeight: fontWeight.medium,
     },
     drawerNote: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     drawerWarnNote: {
       color: colors.warn,
@@ -311,6 +323,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     themeChoiceTextOn: {
       color: colors.accentInk,
@@ -334,6 +347,7 @@ function buildStyles(colors: Palette) {
       color: colors.bg,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
   });
 }
@@ -402,7 +416,7 @@ export function ShellView(props: ShellViewProps): ReactElement {
             onPress={props.onOpenHosts}
           >
             <View style={[styles.dot, dotStyle]} />
-            <Text style={[styles.capsuleLabel, toneTextStyle]} dataSet={{ capsuleDevice: "true" }}>
+            <Text numberOfLines={1} style={[styles.capsuleLabel, toneTextStyle]} dataSet={{ capsuleDevice: "true" }}>
               {props.model.capsule.deviceLabel}
             </Text>
             {props.model.capsule.shortWord === null ? null : (
@@ -429,7 +443,7 @@ export function ShellView(props: ShellViewProps): ReactElement {
             onPress={props.onToggleTheme}
           >
             {props.themeDark ? (
-              <View style={styles.iconSun} />
+              <Text style={styles.iconGlyph}>{"☀️"}</Text>
             ) : (
               <View style={styles.iconMoon}>
                 <View style={styles.iconMoonBody} />

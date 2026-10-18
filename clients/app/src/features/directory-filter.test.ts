@@ -28,6 +28,8 @@ import {
   DIRECTORY_DETAIL_PAGE_SIZE,
   buildDirectoryDetailModel,
   buildDirectoryPageModel,
+  buildSessionRowsByDirectoryId,
+  filterSessionsForDirectory,
 } from "./directory-model";
 import { ACTIVITY_SESSIONS, CROSS_MONTH_SESSIONS, WORKSPACES, resources, session, storeWith } from "./testing/fixtures";
 
@@ -246,10 +248,26 @@ describe("目录页 no_match 分支", () => {
       kind: "empty",
       empty: "no_directories",
     });
-    expect(page({ sessions: [], workspaces: WORKSPACES, query: "任意" })).toMatchObject({
-      kind: "empty",
-      empty: "directories_without_sessions",
-    });
+    expect(page({ sessions: [], workspaces: WORKSPACES, query: "任意" })).toMatchObject({ kind: "no_match" });
+  });
+
+  it("没有会话时仍按目录展示名搜索，忽略大小写和首尾空格", () => {
+    const result = page({ sessions: [], workspaces: DIRS, query: " 界面工程 " });
+    expect(result).toMatchObject({ kind: "empty", empty: "directories_without_sessions" });
+    if (result.kind !== "empty") throw new Error("应保留命中的空目录");
+    expect(result.directories.map((directory) => directory.directoryId)).toEqual(["web-ui"]);
+    expect(page({ sessions: [], workspaces: DIRS, query: "web-ui" }).kind).toBe("no_match");
+  });
+
+  it("没有会话时，运行中和待处理不保留任何目录；全部仍显示所有目录", () => {
+    for (const filter of ["running", "pending"] as const) {
+      expect(page({ sessions: [], workspaces: DIRS, filter }).kind).toBe("no_match");
+      expect(page({ sessions: [], workspaces: DIRS, filter, query: "界面工程" }).kind).toBe("no_match");
+    }
+    const all = page({ sessions: [], workspaces: DIRS, query: "  " });
+    expect(all.kind).toBe("empty");
+    if (all.kind !== "empty") throw new Error("应保留全部空目录");
+    expect(all.directories).toHaveLength(3);
   });
 });
 
@@ -354,5 +372,70 @@ describe("进入目录时复位详情页视图状态（行为对齐原型）", (
     expect(model.page).toBe(1);
     expect(model.total).toBe(2);
     expect(model.shown).toBe(2);
+  });
+});
+
+describe("目录页卡内会话行：搜索与筛选只影响可见行", () => {
+  const rowsOf = (directoryId: string) =>
+    buildSessionRowsByDirectoryId({
+      resources: resources({ sessions: DIR_SESSIONS, workspaces: DIRS }),
+      ownerLabelOf: () => "工作站",
+      nowMs: 1_700_000_000_000,
+    }).get(directoryId) ?? [];
+
+  it("状态筛选只保留对应状态，目录汇总数字不由它改变", () => {
+    const rows = rowsOf("core-eu");
+    // core-eu 有一条 running、一条 queued：两档都属于「运行中」的可见行。
+    expect(
+      filterSessionsForDirectory({
+        rows,
+        displayName: "欧洲核心",
+        query: "",
+        filter: "running",
+      }).map((row) => row.id),
+    ).toEqual(expect.arrayContaining([
+      "cccccccc-0000-4000-8000-000000000001",
+      "cccccccc-0000-4000-8000-000000000002",
+    ]));
+    // 没有等待中的会话：「待处理」筛选下这一目录的可见行为空（卡片本身由目录模型决定去留）。
+    expect(
+      filterSessionsForDirectory({
+        rows,
+        displayName: "欧洲核心",
+        query: "",
+        filter: "pending",
+      }),
+    ).toHaveLength(0);
+  });
+
+  it("查询命中展示名时保留（筛选后的）全部行；只命中标题时只留命中的行", () => {
+    const rows = rowsOf("core-eu");
+    expect(
+      filterSessionsForDirectory({
+        rows,
+        displayName: "欧洲核心",
+        query: "欧洲",
+        filter: "all",
+      }),
+    ).toHaveLength(rows.length);
+    expect(
+      filterSessionsForDirectory({
+        rows,
+        displayName: "欧洲核心",
+        query: "排队",
+        filter: "all",
+      }).map((row) => row.title),
+    ).toEqual(["排队中"]);
+  });
+
+  it("目录标识不参与行匹配", () => {
+    expect(
+      filterSessionsForDirectory({
+        rows: rowsOf("core-eu"),
+        displayName: "欧洲核心",
+        query: "core-eu",
+        filter: "all",
+      }),
+    ).toHaveLength(0);
   });
 });

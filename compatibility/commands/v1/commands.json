@@ -7,6 +7,7 @@
     { "name": "command.status", "kind": "query", "scope": "command.status", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "session.mode.list", "kind": "query", "scope": "session.mode.list", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
     { "name": "session.config.list", "kind": "query", "scope": "session.config.list", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
+    { "name": "workspace.mkdir", "kind": "mutation", "scope": "workspace.mkdir", "transport": ["sync"], "delivery": "mvp" },
     { "name": "workspace.browse", "kind": "query", "scope": "workspace.browse", "transport": ["sync"], "delivery": "mvp" },
     { "name": "session.prompt", "kind": "mutation", "scope": "session.prompt", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "session.cancel", "kind": "mutation", "scope": "session.cancel", "transport": ["sync", "node_link"], "delivery": "mvp" },

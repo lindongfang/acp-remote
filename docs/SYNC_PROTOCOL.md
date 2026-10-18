@@ -197,6 +197,7 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.session-history.v1` | Sync 面按会话读取结构化历史条目：§11.5 的 `include` 取值 `history`、`beforeHistory` 序号游标与结果里的 `history`/`historyHasEarlier`，条目类型集合见 §10.2、明细资源口径见 §9.4 | mvp | 否 |
 | `core.event-origin.v1` | 事件帧 `origin` 的身份字段 `nodeId` 与产生者类型 `node`（§10.1） | mvp | 否 |
 | `core.workspace-browse.v1` | Sync 面逐层浏览节点目录的查询命令 `workspace.browse`（§11.5 的请求/结果形状与失败分类、§14 的单层条目上限） | mvp | 否 |
+| `core.workspace-mkdir.v1` | Sync 独立创建当前父目录下的一层目录 `workspace.mkdir`（§11.5） | mvp | 否 |
 | `core.file-diff.v1` | `file.changed` 视图携带结构化差异行 `diffLines` 与不可用标记 `diffUnavailable`（§10.3）：未协商时该键缺席 | mvp | 否 |
 
 - 本表的十一个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
@@ -1025,7 +1026,7 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
 - 快照（§9.4）：`sessions` chunk 恒发一个（空会话也发空数组），`workspaces`/`agents` 受 `core.local-catalog.v1` 门控（未协商不下发、不以空数组占位），`chunkCount` 与实际块数一致且取值 `1..=3`；六类会话明细资源不进快照；`snapshotDigest` 按每个 chunk 的**原始 UTF-8 文本字节**分别求 SHA-256、按 `chunkIndex` 顺序连接后再求一次 SHA-256，结果取无填充 base64url。
 - ACK（§9.5）：只前进，回退被忽略并记诊断；超过本连接已发送最高游标时回 `sync.cursor_invalid`；ACK 不推进事件库 head，服务端保存的设备 ACK 最大值不决定新连接的恢复位置。
 
-**已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的六条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 13 条 Sync 命令（含 7 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）均已接线：命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
+**已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的六条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 14 条 Sync 命令（含 8 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）均已接线：命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
 
 **仍未落地**（与本小节相邻）：imported 事件的回源投递见 §9.6 末条的计划标注；`session.read` 的三类明细资源与 imported 明细的降级见 §9.4 的说明。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
 
@@ -1429,6 +1430,7 @@ command.status
 session.mode.list
 session.config.list
 workspace.browse
+workspace.mkdir
 session.prompt
 session.cancel
 elicitation.respond
@@ -1497,6 +1499,7 @@ local.audit.export
 | `command.status` | query | 禁止 | `{ targetRequestId }` | `completed CommandStatusRecord` |
 | `session.mode.list` | query | 必须 | `{}` | `completed ModeState { currentModeId, availableModes: ModeRef[], version }` |
 | `session.config.list` | query | 必须 | `{}` | `completed { configOptions: SessionConfigOptionView[], version }` |
+| `workspace.mkdir` | mutation | 禁止 | `{ parentPath, name }`；父路径 1..4096 字符，单组件名字 1..255 字符 | `accepted` 后由持久终态报告 `completed { created: true }`；结果不含路径；受 `core.workspace-mkdir.v1` 门控 |
 | `workspace.browse` | query | 禁止 | `{ path: 绝对路径或 null }`——只含一个父路径字段：绝对路径（1..=4096 字符）请求该层，`null` 请求该节点的根列表（该键必须存在，不可缺席） | `completed { path, entries: WorkspaceBrowseEntry[], truncated }`；`entries` 只含该层的**直接子目录**（`{ name, path, registered }`），不含文件条目、文件内容、大小、时间戳或权限；条目按名称以确定顺序（Unicode 码点升序）排列，超过 §14 的单层条目上限时只返回上限内条目并置 `truncated: true`（不静默丢弃、不整次失败）；受 feature `core.workspace-browse.v1` 门控，未协商时在触碰文件系统之前返回 `protocol.feature_required`；只读：不产生任何登记、会话或审计副作用 |
 | `session.prompt` | mutation | 必须 | `{ content: PromptContentBlock[] }` | `accepted { turnId }`，随后 turn/domain event 和 command terminal event |
 | `session.cancel` | mutation | 必须 | `{ turnId }` | 取消请求生效后 `command.completed`；目标已经终态则幂等完成 |
@@ -1518,6 +1521,7 @@ local.audit.export
 - **请求只含一个父路径字段**：`{ path }`，取值是绝对路径或 `null`（`null` 表示请求该节点的根列表，例如各盘符或根挂载点）。该键必须存在，不可缺席；`null` 只表示根列表，不表示「服务端替我挑一个」。
 - **结果只含一层**：`{ path, entries, truncated }`，`path` 逐字回显请求的父路径，`entries` 是这一层的**直接子目录**，每项 `{ name, path, registered }`（名称、绝对路径、是否已是本机已登记的 workspace）。结果 MUST NOT 含文件条目，也 MUST NOT 含任何文件内容、字节大小、修改时间或权限位；MUST NOT 回退到父层或根列表来「凑」一个结果。
 - **顺序确定**：条目按名称以 Unicode 码点升序排列，同一层在两次调用中给出相同顺序（不依赖平台的本地化排序，也不依赖文件系统枚举顺序）。
+- **默认本机浏览可见性**：Windows 的隐藏或系统属性子目录不进入结果（在单层上限截断之前过滤）；这不是创建授权或禁止路径规则。实现与属性读取边界见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5。客户端可以对收到的条目施加界面排序，不改写结果数据；PWA 的显示排序以 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.1 为准。
 - **形状校验与失败分类**：不是绝对路径、或含父目录引用（`..`）时以参数类错误拒绝，且 **MUST NOT 触碰文件系统**；形状合法但该层不存在、不可读或不是目录时以服务端不可用类错误（`internal.unavailable`）拒绝。两类都不返回任何条目。**在触碰文件系统之前**先检查 feature 协商：未协商 `core.workspace-browse.v1` 的连接提交该命令时返回 `protocol.feature_required`，不得读取任何目录，也不得返回空列表冒充成功。
 - **只读、无副作用**：不写任何登记、缓存或会话状态，不改变本机 workspace 登记表，也不为被查看的目录补出任何后续权限或别名；一次浏览完成不产生审计记录，审计动作词表不因此扩张（design D6）。经它选定但未登记的目录创建的会话，其目录归属仍是「未分组」。
 - **条目上限**：单层条目数上限是固定 v1 常量（§14）；超过上限时只返回上限内的条目并把 `truncated` 置真——不得静默丢弃，也不得因超限而整次失败。结果本身超过单条消息上限时按本节末的既有规则返回 `resource.result_too_large`，不得截断后伪装成完整结果。
@@ -1848,3 +1852,9 @@ Rust 实现必须在自己的 wire DTO（`crates/sync-protocol`）上形成独�
 - PWA 跨 Origin 身份迁移。
 
 采用 JSON 不代表 Rust 内部使用无边界 `serde_json::Value`。控制信封和已知消息必须使用明确 DTO；只有 ACP 扩展容器及明确开放的 extension 字段可以保留任意 JSON 值。
+
+### 独立创建目录（workspace.mkdir）
+
+`workspace.mkdir` 仅 Sync 接受，未协商 `core.workspace-mkdir.v1` 时在任何文件系统访问前返回 `protocol.feature_required`。body 禁止 sessionId 与 expectedVersion。payload 只允许 parentPath 与 name；拒绝名字 `.`、`..`、斜线、反斜线、冒号和 NUL。父路径必须为绝对路径且不含父引用，目标路径不超过 4096 字符；先规范化既有父目录，再创建一层，不补建父层、不覆盖同名目录或文件。
+
+稳定 requestId 对相同内容返回原状态，不同内容报 `command.idempotency_conflict`。持久受理先于目录写入，成功/失败终态与全局 command 事件先持久后投递。启动恢复对未终结受理置 `uncertain`，不得自动再次创建。completed 结果严格为 `{ created: true }`，不得附路径或名字。目录创建不登记 workspace、不建立会话、不启动 Agent。成功后客户端重新浏览父层，从服务端真实条目取路径；列表刷新失败或截断须与创建结果分开显示。

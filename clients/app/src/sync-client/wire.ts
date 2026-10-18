@@ -126,6 +126,7 @@ const COMMAND_NAMES: Record<string, true> = {
   "session.mode.list": true,
   "session.config.list": true,
   "workspace.browse": true,
+  "workspace.mkdir": true,
   "session.prompt": true,
   "session.cancel": true,
   "elicitation.respond": true,
