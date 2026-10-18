@@ -115,7 +115,7 @@ describe("目录详情分页：每页条数、总页数与切片", () => {
     expect(new Set(seen).size).toBe(25);
   });
 
-  it("只有一页时总页数为 1（组件据此不呈现翻页）", () => {
+  it("只有一页时总页数为 1（组件固定渲染翻页，但两个按钮禁用）", () => {
     const model = ready(detail({ sessions: manySessions(3) }));
 
     expect(model.pageCount).toBe(1);

@@ -118,6 +118,18 @@ export interface SessionRowModel {
   readonly updatedAtLabel: string;
 }
 
+/** 目录页的目录条数与分页信息（与详情页的会话分页分开：每页 5 个目录）。 */
+export interface DirectoryPageInfo {
+  /** 生效（纠正后）的页码。 */
+  readonly page: number;
+  /** 总页数（`ceil(total / pageSize)`，至少 1）。 */
+  readonly pageCount: number;
+  /** 每页目录数（{@link DIRECTORY_LIST_PAGE_SIZE}）。 */
+  readonly pageSize: number;
+  /** 过滤后、分页前的目录总数。 */
+  readonly total: number;
+}
+
 /** 目录页模型。 */
 export type DirectoryPageModel =
   | { readonly kind: "loading" }
@@ -127,7 +139,7 @@ export type DirectoryPageModel =
       readonly contentOrigin: DirectoryContentOrigin;
       /** 快照替换时刻（epoch 毫秒）；从未同步过为 `null`。 */
       readonly lastSyncedAtMs: number | null;
-    }
+    } & DirectoryPageInfo
   | {
       readonly kind: "empty";
       readonly empty: "no_directories" | "directories_without_sessions";
@@ -141,7 +153,7 @@ export type DirectoryPageModel =
       readonly directories: readonly DirectoryRowModel[];
       readonly contentOrigin: DirectoryContentOrigin;
       readonly lastSyncedAtMs: number | null;
-    }
+    } & DirectoryPageInfo
   | {
       /**
        * 有快照、目录列表非空，但当前查询或筛选没有任何命中。
@@ -159,6 +171,9 @@ export type DirectoryPageModel =
  * 目录详情页每页的会话条数（规格「每页固定条数」的唯一出处，与原型 `PAGE_SIZE` 一致）。
  */
 export const DIRECTORY_DETAIL_PAGE_SIZE = 10;
+
+/** 目录页每页的目录条数（目录页分页的唯一定义处）。 */
+export const DIRECTORY_LIST_PAGE_SIZE = 5;
 
 /**
  * 页码输入 → 合法页码（纯函数，D4 的纠正规则与原型 `commitPage` 同口径）。
@@ -390,19 +405,46 @@ export function filterSessionsForDirectory(input: {
 }
 
 /**
- * 目录页模型。
- *
- * @param resources 上一次成功替换的快照资源；`null` 表示从未同步过。
- * @param lastSyncedAtMs 快照替换时刻；`null` 表示没有可标注的时间。
- * @param query 查询词（缺省 `""`）；只匹配展示名与名下会话标题，trim + 大小写不敏感。
- * @param filter 状态筛选（缺省 `"all"`）；只决定哪些目录项留下，不动各项汇总数字。
+ * 目录页排序：最近一次会话时间新的在前；没有会话的目录排在最后（同分保持快照顺序）。
  */
+function orderDirectoriesByLatestActivity(
+  rows: readonly DirectoryRowModel[],
+): readonly DirectoryRowModel[] {
+  return [...rows].sort((left, right) => {
+    if (left.latestActivityAt === right.latestActivityAt) return 0;
+    if (left.latestActivityAt === null) return 1;
+    if (right.latestActivityAt === null) return -1;
+    // `updatedAt` 是固定形状的 UTC ISO 串，字典序即时间序。
+    return left.latestActivityAt < right.latestActivityAt ? 1 : -1;
+  });
+}
+
+/** 把排序后的目录切成当前页；页码纠正与详情页共用同一份 `correctPageNumber`。 */
+function paginateDirectoryRows(
+  rows: readonly DirectoryRowModel[],
+  pageInput: string | undefined,
+): DirectoryPageInfo & { readonly directories: readonly DirectoryRowModel[] } {
+  const total = rows.length;
+  const pageCount = Math.max(1, Math.ceil(total / DIRECTORY_LIST_PAGE_SIZE));
+  const page = correctPageNumber({ requested: pageInput ?? "", pageCount, fallback: 1 });
+  return {
+    directories: rows.slice((page - 1) * DIRECTORY_LIST_PAGE_SIZE, page * DIRECTORY_LIST_PAGE_SIZE),
+    page,
+    pageCount,
+    pageSize: DIRECTORY_LIST_PAGE_SIZE,
+    total,
+  };
+}
+
+/** 目录页模型。 */
 export function buildDirectoryPageModel(input: {
   readonly resources: StagedResources | null;
   readonly connection: ConnectionStateName;
   readonly lastSyncedAtMs: number | null;
   readonly query?: string;
   readonly filter?: DirectoryFilter;
+  /** 页码输入框里的原文（提交时已纠正）；缺省第一页。 */
+  readonly pageInput?: string;
 }): DirectoryPageModel {
   if (input.resources === null) return { kind: "loading" };
 
@@ -430,15 +472,18 @@ export function buildDirectoryPageModel(input: {
       // 空态也列出已登记的目录：`directories_without_sessions` 的指引写着「在下面选一个目录」，
       // 那一支必须真有目录项（每一项都是零汇总行），否则指引指向不存在的入口；
       // `no_directories` 时确实是空数组。本支的 kind/empty 取值与判定条件都不因此改变。
-      directories,
+      ...paginateDirectoryRows(directories, input.pageInput),
       contentOrigin,
       lastSyncedAtMs: input.lastSyncedAtMs,
     };
   }
 
   const titles = titlesByDirectoryId(input.resources.sessions);
-  const directories = list.directories.filter(
-    (directory) => matchesQuery(query, directory, titles) && matchesFilter(filter, directory),
+  const latestActivity = latestActivityByDirectoryId(input.resources.sessions);
+  const directories = orderDirectoriesByLatestActivity(
+    list.directories
+      .filter((directory) => matchesQuery(query, directory, titles) && matchesFilter(filter, directory))
+      .map((directory) => toRow(directory, latestActivity.get(directory.id) ?? null)),
   );
 
   // 目录列表非空，且缺省查询/筛选下命中的就是全部目录，因此这一支只在显式提供了非空查询
@@ -447,10 +492,9 @@ export function buildDirectoryPageModel(input: {
     return { kind: "no_match", contentOrigin, lastSyncedAtMs: input.lastSyncedAtMs };
   }
 
-  const latestActivity = latestActivityByDirectoryId(input.resources.sessions);
   return {
     kind: "ready",
-    directories: directories.map((directory) => toRow(directory, latestActivity.get(directory.id) ?? null)),
+    ...paginateDirectoryRows(directories, input.pageInput),
     contentOrigin,
     lastSyncedAtMs: input.lastSyncedAtMs,
   };

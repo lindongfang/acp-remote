@@ -71,6 +71,8 @@ function renderDirectoryList(
     readonly filter?: DirectoryFilter;
     /** 顶部创建入口（工具条右端）的回调；**缺省不传** = 该入口不呈现（既有调用点的样子）。 */
     readonly onCreateSessionToBrowse?: () => void;
+    /** 翻页回调；缺省不传 = 不呈现翻页控件。 */
+    readonly onPageChange?: (requested: string) => void;
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -83,6 +85,7 @@ function renderDirectoryList(
       onFilterChange: () => undefined,
       onOpenSession: () => undefined,
       onCreateSession: () => undefined,
+      ...(options.onPageChange === undefined ? {} : { onPageChange: options.onPageChange }),
       // `exactOptionalPropertyTypes`：缺省时不能显式传 `undefined`。
       ...(options.onCreateSessionToBrowse === undefined
         ? {}
@@ -710,3 +713,71 @@ describe("R15 目录详情：链接失效与「目录存在但无会话」是两
     expect(html).not.toContain('data-directory-sessions="empty"');
   });
 });
+
+describe("R15 目录页：每页 5 个目录与翻页控件", () => {
+  function sevenDirectories(): {
+    readonly workspaces: readonly WorkspaceCatalogEntry[];
+    readonly sessions: ReturnType<typeof session>[];
+  } {
+    const workspaces = Array.from({ length: 7 }, (_, index) => ({
+      directoryId: `list-${String(index)}`,
+      path: `/tmp/list-${String(index)}`,
+    }));
+    const sessions = Array.from({ length: 7 }, (_, index) =>
+      session({
+        id: `cccccccc-0000-4000-8000-00000000000${String(index)}`,
+        state: "idle",
+        directoryId: `list-${String(index)}`,
+        updatedAt: `2026-10-${String(20 - index).padStart(2, "0")}T00:00:00.000Z`,
+      }),
+    );
+    return { workspaces, sessions };
+  }
+
+  it("第 1 页只渲染最近活跃的 5 个目录，翻页控件给出 1 / 2", () => {
+    const { workspaces, sessions } = sevenDirectories();
+    const { store } = storeWith({ resources: resources({ sessions, workspaces }) });
+    const html = renderDirectoryList(store.directoryPage(), { onPageChange: () => undefined });
+
+    expect(cardSegments(html)).toHaveLength(5);
+    expect(cardSegments(html).map((card) => /data-directory-id="([^"]+)"/.exec(card)?.[1])).toEqual([
+      "list-0", "list-1", "list-2", "list-3", "list-4",
+    ]);
+    expect(html).toContain('data-directory-list-pager="true"');
+    expect(html).toContain('data-directory-list-page="1"');
+    expect(html).toContain('data-directory-list-page-count="2"');
+    expect(html).toContain('data-directory-list-page-value="1"');
+    expect(pagerButtonTag(html, 'page-prev')).toContain("disabled");
+    expect(pagerButtonTag(html, 'page-next')).not.toContain("disabled");
+  });
+
+  it("第 2 页渲染剩下的 2 个目录；上一页可用、下一页禁用", () => {
+    const { workspaces, sessions } = sevenDirectories();
+    const { store } = storeWith({ resources: resources({ sessions, workspaces }) });
+    store.setDirectoryListPage("2");
+    const html = renderDirectoryList(store.directoryPage(), { onPageChange: () => undefined });
+
+    expect(cardSegments(html)).toHaveLength(2);
+    expect(cardSegments(html).map((card) => /data-directory-id="([^"]+)"/.exec(card)?.[1])).toEqual([
+      "list-5", "list-6",
+    ]);
+    expect(html).toContain('data-directory-list-page="2"');
+    expect(html).toContain('data-directory-list-page-value="2"');
+    expect(pagerButtonTag(html, 'page-prev')).not.toContain("disabled");
+    expect(pagerButtonTag(html, 'page-next')).toContain("disabled");
+  });
+
+  it("调用方没有给翻页回调时不渲染翻页控件", () => {
+    const { workspaces, sessions } = sevenDirectories();
+    const { store } = storeWith({ resources: resources({ sessions, workspaces }) });
+    const html = renderDirectoryList(store.directoryPage());
+
+    expect(html).not.toContain("data-directory-list-pager");
+  });
+});
+
+/** 取带某个 `data-action` 的按钮开始标签（只用于翻页按钮的禁用态断言）。 */
+function pagerButtonTag(html: string, action: string): string {
+  const matched = new RegExp(`<button[^>]*data-action="${action}"[^>]*>`).exec(html);
+  return matched?.[0] ?? "";
+}

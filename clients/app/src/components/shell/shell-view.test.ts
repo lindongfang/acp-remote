@@ -131,6 +131,19 @@ describe("设备胶囊：三档色与异常短词", () => {
     expect(html).toContain("已被移除");
   });
 
+  it("离线态按阻断档呈现红色，并给出「离线」短词", () => {
+    const html = renderShell({
+      model: buildShellModel({
+        pathname: "/",
+        connectionState: "disconnected",
+        hostAddress: null,
+        secureContext: true,
+      }),
+    });
+    expect(html).toContain('data-capsule-tone="danger"');
+    expect(html).toContain("离线");
+  });
+
   it("需要注意档呈现自己的短词", () => {
     const html = renderShell({
       model: buildShellModel({

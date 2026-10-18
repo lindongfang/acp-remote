@@ -302,6 +302,13 @@ export interface ClientState {
   readonly directoryQuery: string;
   readonly directoryFilter: DirectoryFilter;
   /**
+   * 目录页页码输入框里的值（已纠正）；缺省首页。
+   *
+   * 与详情页的页码是两个独立状态：查询词 / 筛选变化时回到第一页，避免「筛完只剩两页，
+   * 却还停在第 4 页」的悬空状态。
+   */
+  readonly directoryListPage: string;
+  /**
    * 详情页页码输入框里的值（**合法值**：提交时已按 `correctPageNumber` 纠正）。
    *
    * 单份 UI 状态：跨路由存活、只影响渲染。存的是字符串而不是数字，因为它是输入框的回填值，
@@ -358,6 +365,7 @@ export function initialClientState(): ClientState {
     diagnosticsEventId: null,
     directoryQuery: "",
     directoryFilter: "all",
+    directoryListPage: "",
     directoryDetailPage: "",
     directoryDetailDirectoryId: null,
     conversationSecondaryView: DEFAULT_CONVERSATION_SECONDARY_VIEW,
@@ -657,6 +665,7 @@ export class ClientStore {
   readonly #overlayStore = new AgentConnectionOverlayStore();
   readonly #pendingReads = new Map<Uuid, PendingRead>();
   readonly #listeners = new Set<Listener>();
+  readonly #directoryRefreshRequests = new Set<Uuid>();
   #pairingSession: PairingSession | null = null;
   #state: ClientState = initialClientState();
 
@@ -692,6 +701,18 @@ export class ClientStore {
     const next = this.#reduce(event);
     if (next === this.#state) return;
     this.#commit(next);
+    // 创建完成只带目录引用，路径必须从服务端快照取得，不能按用户输入伪造目录条目。
+    if (event.kind === "command_result" && event.result.body.command === "session.create" &&
+      event.result.body.status === "completed" && !this.#directoryRefreshRequests.has(event.result.body.requestId)) {
+      const value = toResultRecord(event.result.body.result);
+      const summary = value?.["session"] as SessionSummary | undefined;
+      const directoryId = summary?.workspace?.directoryId;
+      if (directoryId !== undefined && summary?.sessionId === value?.["sessionId"] &&
+        !next.resources?.workspaces.some((workspace) => workspace.directoryId === directoryId)) {
+        this.#directoryRefreshRequests.add(event.result.body.requestId);
+        this.#sync.refreshSnapshot();
+      }
+    }
     const folder = this.#state.folderRequest;
     if (folder !== null && !folder.refreshed && this.#lastCommandOf(folder.requestId)?.state === "completed") {
       this.#commit({ ...this.#state, folderRequest: { ...folder, refreshed: true } });
@@ -899,6 +920,17 @@ export class ClientStore {
     commands.set(updated.requestId, updated);
 
     let next: ClientState = { ...this.#state, commands };
+    // 创建完成回复自带权威摘要；无需等待另一个 session.created 才让列表可见。
+    // 只补缺失项：重投的创建结果不能覆盖之后的实时更新。
+    if (result.body.command === "session.create" && result.body.status === "completed") {
+      const value = toResultRecord(result.body.result);
+      const summary = value?.["session"] as SessionSummary | undefined;
+      if (summary !== undefined && summary !== null &&
+        typeof summary.sessionId === "string" && summary.sessionId === value?.["sessionId"] &&
+        !next.resources?.sessions.some((item) => item.sessionId === summary.sessionId)) {
+        next = { ...next, resources: withSessionSummary(next.resources, summary) };
+      }
+    }
     const folder = next.folderRequest;
     const statusRecord = result.body.result;
     if (result.body.command === "command.status" && result.body.status === "completed" &&
@@ -1108,6 +1140,7 @@ export class ClientStore {
       lastSyncedAtMs: this.#state.lastSyncedAtMs,
       query: this.#state.directoryQuery,
       filter: this.#state.directoryFilter,
+      pageInput: this.#state.directoryListPage,
     });
   }
 
@@ -1633,12 +1666,27 @@ export class ClientStore {
    * 因此进入详情页不得清空它，返回时它仍在。
    */
   setDirectoryQuery(query: string): void {
-    this.#commit({ ...this.#state, directoryQuery: query });
+    this.#commit({ ...this.#state, directoryQuery: query, directoryListPage: "" });
   }
 
-  /** 更新目录页状态筛选。 */
+  /** 更新目录页状态筛选；筛选改变后同样回到第一页。 */
   setDirectoryFilter(filter: DirectoryFilter): void {
-    this.#commit({ ...this.#state, directoryFilter: filter });
+    this.#commit({ ...this.#state, directoryFilter: filter, directoryListPage: "" });
+  }
+
+  /**
+   * 提交目录页页码输入（回车/失焦时调用）。
+   *
+   * 与详情页同一套纠正规则：非法输入回落到当前生效页，越界值夹到 `[1, pageCount]`。
+   */
+  setDirectoryListPage(requested: string): void {
+    const model = this.directoryPage();
+    const current = model.kind === "ready" || model.kind === "empty" ? model.page : 1;
+    const pageCount = model.kind === "ready" || model.kind === "empty" ? model.pageCount : 1;
+    this.#commit({
+      ...this.#state,
+      directoryListPage: String(correctPageNumber({ requested, pageCount, fallback: current })),
+    });
   }
 
   /**

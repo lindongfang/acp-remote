@@ -82,6 +82,13 @@ export interface CreateSessionSheetProps {
   readonly onOpenDirectoryPicker?: (() => void) | undefined;
   readonly onDismissUncertain: () => void;
   readonly onClose: () => void;
+  /**
+   * 提交在**本地闸门**就被拒绝的原因（未连接、所选 Agent 不在目录里、目录引用缺失）。
+   *
+   * 这类拒绝没有命令记录，因此不能靠 `model.submission` 呈现——页码只负责把原因带进来，
+   * 组件把它画成与命令失败同款的红块，避免用户点了按钮却看不到任何反应。
+   */
+  readonly submitIssue?: string | null;
 }
 
 /**
@@ -358,6 +365,23 @@ function buildStyles(colors: Palette) {
     },
     failure: {
       gap: spacing.xs,
+      padding: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.danger,
+      borderRadius: radius.sm,
+      backgroundColor: colors.dangerSoft,
+    },
+    failureText: {
+      color: colors.danger,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+      lineHeight: 20.8,
+    },
+    failureNote: {
+      color: colors.danger,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+      lineHeight: 20.8,
     },
     uncertain: {
       gap: spacing.sm,
@@ -479,8 +503,8 @@ function Submission({
           failureKind: kind,
         }}
       >
-        <Text style={styles.submission}>{submission.error.message}</Text>
-        {extra.length === 0 ? null : <Text style={styles.noticeWarn}>{extra}</Text>}
+        <Text style={styles.failureText}>{submission.error.message}</Text>
+        {extra.length === 0 ? null : <Text style={styles.failureNote}>{extra}</Text>}
       </View>
     );
   }
@@ -501,6 +525,7 @@ export function CreateSessionSheet({
   onDismissUncertain,
   onClose,
   onCreated,
+  submitIssue = null,
 }: CreateSessionSheetProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -679,6 +704,11 @@ export function CreateSessionSheet({
       <Text style={styles.note} dataSet={{ createNote: "true" }}>
         {model.effectNote}
       </Text>
+      {submitIssue === null ? null : (
+        <View role="alert" style={styles.failure} dataSet={{ createSubmitIssue: "true" }}>
+          <Text style={styles.failureText}>{submitIssue}</Text>
+        </View>
+      )}
       <Submission submission={model.submission} onDismissUncertain={onDismissUncertain} />
       </View>
       <View style={styles.foot}>

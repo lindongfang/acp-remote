@@ -59,6 +59,9 @@ export default function SessionRoute(): ReactElement {
   const sessionId = typeof id === "string" ? id : null;
   // 创建弹层里选中的 Agent 是页面局部状态（不跨路由存活，与弹层的开关无关）。
   const [agentId, setAgentId] = useState<string | null>(null);
+  // 本地闸门拒绝提交的原因（未连接/Agent 不在目录/目录引用缺失）。这类拒绝不产生命令记录，
+  // 必须由页面带回弹层，否则点击按钮看起来毫无反应。
+  const [createIssue, setCreateIssue] = useState<string | null>(null);
   // 「哪一处改动的 ACP 原文是展开的」是**页面级视图状态**：它不改变任何数据判定、也不需要
   // 跨页存活，因此留在这里（次级视图那一个是跨路由的 UI 偏好，因此住在仓库里）。
   const [openChangeDiagnostics, setOpenChangeDiagnostics] = useState<string | null>(null);
@@ -169,6 +172,7 @@ export default function SessionRoute(): ReactElement {
           store.loadMoreSidebarSessions();
         }}
         onCreateSession={(directoryId) => {
+          setCreateIssue(null);
           store.openCreateSheet(directoryId);
         }}
         // 会话头的 Agent 胶囊沿用主机面板的同一份连接事件覆盖层（覆盖层缺席即「状态未知」）。
@@ -220,17 +224,27 @@ export default function SessionRoute(): ReactElement {
         <CreateSessionSheet
           model={store.createEntry(sheetDirectoryId)}
           selectedAgentId={agentId}
-          onSelectAgent={setAgentId}
+          submitIssue={createIssue}
+          onSelectAgent={(next) => {
+            setCreateIssue(null);
+            setAgentId(next);
+          }}
           onSubmit={(input) => {
             // 目录标识由本页给出（页面用的那个目录上下文），载荷里的其余键原样上抛。
             const outcome = store.submitCreateSession({ ...input, directoryId: sheetDirectoryId });
-            if (!outcome.ok) setAgentId(null);
+            if (!outcome.ok) {
+              setCreateIssue(outcome.reason);
+              setAgentId(null);
+            } else {
+              setCreateIssue(null);
+            }
           }}
           onDismissUncertain={() => {
             const requestId = state.createRequestIds.get(sheetDirectoryId);
             if (requestId !== undefined) store.dismissUncertain(requestId);
           }}
           onClose={() => {
+            setCreateIssue(null);
             store.closeCreateSheet();
           }}
         />

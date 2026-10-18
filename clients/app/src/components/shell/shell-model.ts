@@ -40,7 +40,8 @@ const TONE_BY_STATE: Readonly<Record<ConnectionStateName, CapsuleTone>> = {
   authenticating: "ok",
   replaying: "ok",
   pairing: "warn",
-  disconnected: "warn",
+  // 离线没有任何可用连接：与阻断态同档呈现红色；「正在重连」仍在尝试，保持需要注意的黄色。
+  disconnected: "danger",
   reconnecting: "warn",
   unpaired: "danger",
   revoked: "danger",

@@ -3,8 +3,14 @@
  *
  * 详情页呈现「这个目录里的会话」（按时间倒序平铺、每页固定条数）与「在这个目录里新建会话」
  * 的入口（设备不再有创建权限维度，入口恒可用）。页面头部是「返回 + 标题 + 会话数芯片 +
- * 路径」（原型 `viewDirDetail` 的 `.pagehead`），底栏左侧是「⊕ 新建」与副作用提示、右侧是
+ * 路径」（原型 `viewDirDetail` 的 `.pagehead`），底栏左侧是「⊕ 新建」、右侧是
  * 翻页（`design.md` D4）。
+ *
+ * ## 来源标注只在断连时出现
+ *
+ * 在线（`contentOrigin === "live"`）时页头之后直接是会话列表，原型没有来源行；断连时按原型的
+ * `notice.danger` 条给出「内容来自上次同步」与该次同步时刻（`pwa-web-client` 的断连标注要求）。
+ * `data-content-origin` 始终留在根节点上，可见文案只在 `last_sync` 时出现。
  *
  * ## 两种「空」互不冒充
  *
@@ -25,11 +31,12 @@
  *
  * ## 页码只在这两种时机提交（原型 `commitPage`）
  *
- * 输入框是**草稿 + 提交**两段式：`onChangeText` 只把原文写进本地草稿（`pageDraft`），回车
- * （`onSubmitEditing`）与失焦（`onBlur`）才上抛给页面（原型把 `commitPage` 挂在 `onkeydown`
- * 与 `onchange` 上，`accessibilityLabel` 也写着「回车跳转」）。于是「输入过程中列表不重画、
- * 输入框能被清空重输」与「提交后非法页码就地纠正」同时成立——若每个 `input` 事件都上抛，
- * 纠正值会被立刻写回 DOM，输入框就再也清不空（第 5 页退格得 `""` → 被纠正回 `5`）。
+ * 输入框是**草稿 + 提交**两段式，草稿状态在共享的 `Pager` 组件里：`onChangeText` 只把原文
+ * 写进本地草稿，回车（`onSubmitEditing`）与失焦（`onBlur`）才上抛给页面（原型把
+ * `commitPage` 挂在 `onkeydown` 与 `onchange` 上，`accessibilityLabel` 也写着「回车跳转」）。
+ * 于是「输入过程中列表不重画、输入框能被清空重输」与「提交后非法页码就地纠正」同时成立——
+ * 若每个 `input` 事件都上抛，纠正值会被立刻写回 DOM，输入框就再也清不空（第 5 页退格得
+ * `""` → 被纠正回 `5`）。
  *
  * 草稿与模型的关系只有一条：`null` = 跟随模型，非 `null` = 用户正在编辑的原文。写入草稿的
  * 只有 `onChangeText`，清空它的只有提交——于是模型在提交之后的任何纠正（回落当前页、夹到
@@ -51,17 +58,17 @@
  */
 
 import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import type { DirectoryDetailModel } from "../features/directory-model";
 import { CONTENT_ORIGIN_LABELS } from "../features/directory-model";
+import { Pager } from "./Pager";
 import { SessionRow } from "./SessionRow";
 import type { Palette } from "./theme";
 import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
   breakpoints,
   fontFamily,
@@ -134,9 +141,10 @@ function buildStyles(colors: Palette) {
     head: {
       flexDirection: "column",
       alignItems: "flex-start",
-      gap: spacing.xs,
-      // 原型 `.pagehead{margin-bottom:16px}`：页头与下面的列表之间留出一档。
-      marginBottom: spacing.lg,
+      // 原型 `.pagehead` 的三行之间没有额外 gap：返回按钮自己的 10px 下边距 + 路径行的 3px
+      // 上边距就是全部间距。这里不再叠 `gap`，页头高度才与原型同为 99.4px。
+      // 外层 `root` 的 12px gap 与这里的 4px 相加，正好是原型 `.pagehead{margin-bottom:16px}`。
+      marginBottom: spacing.xs,
     },
     // 原型 `.dirback`：次级按钮（描边 + 面板底），不是一行正文链接。
     back: {
@@ -210,20 +218,34 @@ function buildStyles(colors: Palette) {
       // 等宽值行取 500（原型 `.drow .dpath` 的 `font-weight:500`，见 `theme.ts` 的 `fontWeight.value`）。
       fontWeight: fontWeight.value,
     },
-    originRow: {
+    originNotice: {
       flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "baseline",
-      gap: spacing.sm,
+      alignItems: "flex-start",
+      gap: 10,
+      paddingVertical: 12,
+      paddingHorizontal: 14,
+      borderRadius: radius.md,
+      backgroundColor: colors.dangerSoft,
     },
-    origin: {
-      color: colors.ink2,
+    originNoticeGlyph: {
+      color: colors.danger,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.md,
+      lineHeight: 20.8,
+    },
+    originNoticeBody: {
+      flexShrink: 1,
+      minWidth: 0,
+      gap: 2,
+    },
+    originNoticeText: {
+      color: colors.danger,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
       lineHeight: 20.8,
     },
     syncedAt: {
-      color: colors.ink3,
+      color: colors.danger,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
       lineHeight: 17.6,
@@ -265,8 +287,11 @@ function buildStyles(colors: Palette) {
       alignItems: "center",
       justifyContent: "space-between",
       gap: spacing.md,
-      marginTop: spacing.xl,
+      // 原型 `.footbar{padding:16px 0 8px;margin-top:22px}`：外层 root 的 12px gap 加上这里的
+      // 10px 等于 22px；底部再留 8px。
+      marginTop: 10,
       paddingTop: spacing.lg,
+      paddingBottom: spacing.sm,
       borderTopWidth: 1,
       borderTopColor: colors.line,
     },
@@ -274,8 +299,9 @@ function buildStyles(colors: Palette) {
       flexDirection: "column",
       alignItems: "stretch",
       gap: spacing.sm,
-      marginTop: spacing.xl,
+      marginTop: 10,
       paddingTop: spacing.lg,
+      paddingBottom: spacing.sm,
       borderTopWidth: 1,
       borderTopColor: colors.line,
     },
@@ -298,65 +324,6 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.md,
       lineHeight: 22.4,
       fontWeight: "600",
-    },
-    hint: {
-      color: colors.ink3,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-      lineHeight: 17.6,
-    },
-    pager: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "center",
-      gap: spacing.sm,
-    },
-    pagerButton: {
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.sm,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel,
-    },
-    pagerButtonDisabled: {
-      opacity: 0.55,
-    },
-    pagerButtonText: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      lineHeight: 20.8,
-    },
-    pagerButtonTextDisabled: {
-      color: colors.ink3,
-    },
-    pagerInfo: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "center",
-      gap: spacing.xs,
-    },
-    pagerInfoText: {
-      color: colors.ink3,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      lineHeight: 20.8,
-    },
-    pageInput: {
-      width: 40,
-      minHeight: 28,
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.xs,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
-      color: colors.ink,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      lineHeight: 20.8,
-      textAlign: "center",
     },
     alert: {
       color: colors.danger,
@@ -397,9 +364,6 @@ export function DirectoryDetail({
 
   const page = model.kind === "ready" ? model.page : null;
   const lastPage = useRef<number | null>(null);
-  // 页码草稿：`null` = 跟随模型（显示生效页码），非 `null` = 用户正在输入的原文。
-  // 它是本页唯一的本地状态，且**不**参与渲染判定：列表切片只由 `model` 决定。
-  const [pageDraft, setPageDraft] = useState<string | null>(null);
 
   useEffect(() => {
     // 只在**真的换了页**时回页首：初次渲染（含从加载态进入）不动滚动位置。
@@ -452,22 +416,6 @@ export function DirectoryDetail({
   const directory = model.directory;
   const syncedAtMs = model.contentOrigin === "last_sync" ? lastSyncedAtMs : null;
 
-  /**
-   * 提交页码：回车与失焦都走这里。
-   *
-   * 先清草稿再上抛——清草稿等于「把编辑权交回模型」，输入框随即显示模型给出的生效页码；
-   * 页面把 `requested` 纠正后写进 store，模型一变就是最终的纠正结果。
-   *
-   * 没有草稿（`null`）时不上抛：那说明这一轮没有编辑（典型的是回车提交后 RNW 紧接着触发的
-   * 那次失焦），写一次仓库只会白白通知一轮。
-   */
-  const commitPage = (): void => {
-    const requested = pageDraft;
-    setPageDraft(null);
-    if (requested === null) return;
-    onPageChange(requested);
-  };
-
   // 页头：返回 / 标题 + 会话数芯片 / 路径。目录标识不呈现（它只是路由与命令引用的内部标识）。
   const head = (
     <View style={styles.head}>
@@ -491,20 +439,32 @@ export function DirectoryDetail({
   );
 
   return (
-    <View style={styles.root} dataSet={{ route: "dir-detail", directoryId: directory.directoryId }}>
+    <View
+      style={styles.root}
+      dataSet={{ route: "dir-detail", directoryId: directory.directoryId, contentOrigin: model.contentOrigin }}
+    >
       {head}
 
-      <View style={styles.originRow}>
-        <Text style={styles.origin} dataSet={{ contentOrigin: model.contentOrigin }}>
-          {CONTENT_ORIGIN_LABELS[model.contentOrigin]}
-        </Text>
-        {/* 从未成功同步过（`lastSyncedAtMs` 为 null）时不呈现任何同步时间。 */}
-        {syncedAtMs === null ? null : (
-          <Text style={styles.syncedAt} dataSet={{ syncedAt: String(syncedAtMs) }}>
-            {`已同步 ${formatSyncedAt(syncedAtMs)}`}
+      {/* 原型只在断连时给提示条；在线（`live`）时页面直接从页头进入会话列表。
+          `data-content-origin` 仍留在根节点上，供客户端与 e2e 读取来源判定。 */}
+      {model.contentOrigin === "last_sync" ? (
+        <View style={styles.originNotice} dataSet={{ originNotice: "last_sync" }}>
+          <Text style={styles.originNoticeGlyph} aria-hidden={true}>
+            ⚠
           </Text>
-        )}
-      </View>
+          <View style={styles.originNoticeBody}>
+            <Text style={styles.originNoticeText}>
+              {CONTENT_ORIGIN_LABELS.last_sync}
+            </Text>
+            {/* 从未成功同步过（`lastSyncedAtMs` 为 null）时不呈现任何同步时间。 */}
+            {syncedAtMs === null ? null : (
+              <Text style={styles.syncedAt} dataSet={{ syncedAt: String(syncedAtMs) }}>
+                {`已同步 ${formatSyncedAt(syncedAtMs)}`}
+              </Text>
+            )}
+          </View>
+        </View>
+      ) : null}
 
       {model.sessions.length > 0 ? (
         // 列表语义用 role 补回：容器的 `list` 渲染成 `<ul>`、`SessionRow` 的 `listitem` 渲染成 `<li>`。
@@ -538,75 +498,19 @@ export function DirectoryDetail({
           >
             <Text style={styles.createText}>⊕ 新建</Text>
           </Pressable>
-          {/* 副作用提示：入口恒可用（设备不再有创建权限维度），所以说明也始终在。 */}
-          <Text style={styles.hint} dataSet={{ createSideEffect: "true" }}>
-            将在你的电脑上启动一个 Agent 进程
-          </Text>
         </View>
-        {/* 只有一页时不呈现翻页控件（规格：`pageCount === 1` 即无上/下一页与页码输入）。 */}
-        {model.pageCount > 1 ? (
-          <View
-            style={styles.pager}
-            dataSet={{
-              directoryDetailPager: "true",
-              directoryPage: String(model.page),
-              directoryPageCount: String(model.pageCount),
-            }}
-          >
-            <Pressable
-              role="button"
-              style={model.page > 1 ? styles.pagerButton : [styles.pagerButton, styles.pagerButtonDisabled]}
-              disabled={model.page <= 1}
-              dataSet={{ action: "page-prev" }}
-              onPress={() => {
-                onPageChange(String(model.page - 1));
-              }}
-            >
-              <Text style={model.page > 1 ? styles.pagerButtonText : [styles.pagerButtonText, styles.pagerButtonTextDisabled]}>
-                ‹ 上一页
-              </Text>
-            </Pressable>
-            <View style={styles.pagerInfo}>
-              <Text style={styles.pagerInfoText}>第</Text>
-              <TextInput
-                style={styles.pageInput}
-                value={pageDraft ?? String(model.page)}
-                accessibilityLabel="页码（回车跳转）"
-                // 输入只改草稿：输入期间不写仓库，所以列表不重画；纠正发生在提交之后。
-                onChangeText={(text) => {
-                  setPageDraft(text);
-                }}
-                onSubmitEditing={commitPage}
-                onBlur={commitPage}
-                dataSet={{ directoryDetailPageInput: "true", directoryDetailPageValue: String(model.page) }}
-              />
-              <Text style={styles.pagerInfoText}>{`/ ${String(model.pageCount)} 页`}</Text>
-            </View>
-            <Pressable
-              role="button"
-              style={
-                model.page < model.pageCount
-                  ? styles.pagerButton
-                  : [styles.pagerButton, styles.pagerButtonDisabled]
-              }
-              disabled={model.page >= model.pageCount}
-              dataSet={{ action: "page-next" }}
-              onPress={() => {
-                onPageChange(String(model.page + 1));
-              }}
-            >
-              <Text
-                style={
-                  model.page < model.pageCount
-                    ? styles.pagerButtonText
-                    : [styles.pagerButtonText, styles.pagerButtonTextDisabled]
-                }
-              >
-                下一页 ›
-              </Text>
-            </Pressable>
-          </View>
-        ) : null}
+        <Pager
+          page={model.page}
+          pageCount={model.pageCount}
+          onPageChange={onPageChange}
+          data={{
+            pager: "directoryDetailPager",
+            page: "directoryPage",
+            pageCount: "directoryPageCount",
+            input: "directoryDetailPageInput",
+            inputValue: "directoryDetailPageValue",
+          }}
+        />
       </View>
     </View>
   );

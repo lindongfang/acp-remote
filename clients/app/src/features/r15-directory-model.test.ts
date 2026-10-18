@@ -45,8 +45,10 @@ function session(input: {
   readonly id: string;
   readonly state: SessionSummary["state"];
   readonly directoryId?: string | null;
+  readonly updatedAt?: string;
 }): SessionSummary {
   const directoryId = input.directoryId === undefined ? "work-api" : input.directoryId;
+  const at = input.updatedAt ?? "2026-10-01T00:00:00.000Z";
   return {
     sessionId: input.id,
     title: `会话 ${input.id.slice(-4)}`,
@@ -55,8 +57,8 @@ function session(input: {
     origin: { kind: "local" },
     currentMode: null,
     version: "1",
-    createdAt: "2026-10-01T00:00:00.000Z",
-    updatedAt: "2026-10-01T00:00:00.000Z",
+    createdAt: at,
+    updatedAt: at,
     workspace: directoryId === null ? null : { directoryId },
   };
 }
@@ -93,6 +95,7 @@ function recordingGateway(resources: StagedResources): RecordingGateway {
   return {
     dispatches,
     current: snapshotOf(resources),
+    refreshSnapshot: () => undefined,
     authenticatedInfo: null,
     dispatch(command: CommandMessage) {
       dispatches.push(command);
@@ -407,5 +410,111 @@ describe("R15 查询与筛选是纯 UI 状态", () => {
     // 反例：若任一 setter 顺手派发 `session.list` 之类，或改动了连接状态机，这里会红。
     expect(gateway.dispatches).toEqual([]);
     expect(store.state.connection).toBe(connection);
+  });
+});
+
+describe("R15 目录页：按最近会话时间排序 + 每页 5 个目录", () => {
+  /** 7 个目录、每个一条会话；`dir-0` 最新，`dir-6` 最旧。 */
+  function sevenDirectories(): {
+    readonly workspaces: readonly WorkspaceCatalogEntry[];
+    readonly sessions: readonly SessionSummary[];
+  } {
+    const workspaces = Array.from({ length: 7 }, (_, index) => ({
+      directoryId: `dir-${String(index)}`,
+      path: `/tmp/dir-${String(index)}`,
+    }));
+    const sessions = Array.from({ length: 7 }, (_, index) =>
+      session({
+        id: `dddddddd-0000-4000-8000-00000000000${String(index)}`,
+        state: "idle",
+        directoryId: `dir-${String(index)}`,
+        updatedAt: `2026-10-${String(20 - index).padStart(2, "0")}T00:00:00.000Z`,
+      }),
+    );
+    return { workspaces, sessions };
+  }
+
+  it("最近会话时间新的目录在前；第 1 页 5 个，第 2 页是剩下的 2 个", () => {
+    const { workspaces, sessions } = sevenDirectories();
+    const model = buildDirectoryPageModel({
+      resources: { sessions, workspaces, agents: [] },
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+    expect(model.kind).toBe("ready");
+    if (model.kind !== "ready") return;
+
+    expect(model.total).toBe(7);
+    expect(model.page).toBe(1);
+    expect(model.pageCount).toBe(2);
+    expect(model.pageSize).toBe(5);
+    expect(model.directories.map((row) => row.directoryId)).toEqual([
+      "dir-0", "dir-1", "dir-2", "dir-3", "dir-4",
+    ]);
+
+    const second = buildDirectoryPageModel({
+      resources: { sessions, workspaces, agents: [] },
+      connection: "online",
+      lastSyncedAtMs: null,
+      pageInput: "2",
+    });
+    expect(second.kind).toBe("ready");
+    if (second.kind !== "ready") return;
+    expect(second.directories.map((row) => row.directoryId)).toEqual(["dir-5", "dir-6"]);
+  });
+
+  it("没有会话的目录排在最后；页码越界夹到最后一页", () => {
+    const { workspaces, sessions } = sevenDirectories();
+    const withEmpty = [
+      ...workspaces,
+      { directoryId: "dir-empty", path: "/tmp/dir-empty" },
+    ] as const satisfies readonly WorkspaceCatalogEntry[];
+    const model = buildDirectoryPageModel({
+      resources: { sessions, workspaces: withEmpty, agents: [] },
+      connection: "online",
+      lastSyncedAtMs: null,
+      pageInput: "99",
+    });
+    expect(model.kind).toBe("ready");
+    if (model.kind !== "ready") return;
+    expect(model.page).toBe(2);
+    expect(model.directories.map((row) => row.directoryId)).toEqual(["dir-5", "dir-6", "dir-empty"]);
+  });
+
+  it("目录存在但都没有会话：零汇总目录同样每页 5 个", () => {
+    const workspaces = Array.from({ length: 7 }, (_, index) => ({
+      directoryId: `empty-${String(index)}`,
+      path: `/tmp/empty-${String(index)}`,
+    }));
+    const model = buildDirectoryPageModel({
+      resources: { sessions: [], workspaces, agents: [] },
+      connection: "online",
+      lastSyncedAtMs: null,
+      pageInput: "2",
+    });
+    expect(model.kind).toBe("empty");
+    if (model.kind !== "empty") return;
+    expect(model.total).toBe(7);
+    expect(model.pageCount).toBe(2);
+    expect(model.page).toBe(2);
+    expect(model.directories.map((row) => row.directoryId)).toEqual(["empty-5", "empty-6"]);
+  });
+
+  it("查询或筛选变化时回到第一页；页码 setter 对非法输入回落当前页", () => {
+    const { workspaces, sessions } = sevenDirectories();
+    const { store } = storeWith({ sessions, workspaces, agents: [] });
+
+    store.setDirectoryListPage("2");
+    expect(store.directoryPage()).toMatchObject({ kind: "ready", page: 2 });
+
+    store.setDirectoryListPage("abc");
+    expect(store.directoryPage()).toMatchObject({ kind: "ready", page: 2 });
+
+    store.setDirectoryQuery("dir");
+    expect(store.directoryPage()).toMatchObject({ kind: "ready", page: 1 });
+
+    store.setDirectoryListPage("2");
+    store.setDirectoryFilter("all");
+    expect(store.directoryPage()).toMatchObject({ kind: "ready", page: 1 });
   });
 });
