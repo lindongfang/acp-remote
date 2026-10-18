@@ -127,3 +127,14 @@ description = "公开固定测试向量：测试公钥的 SHA-256 指纹（32 �
 regexTarget = "line"
 regexes = ['''"USpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w"''']
 paths = ['''fixtures/sync/v1/device-qr/vectors\.json''', '''clients/app/src/features/native-qr-consumer\.test\.ts''']
+
+# `device-pairing-qr-reference` 历史 diff 中的假 pairingSecret。
+#
+# `pairing-panel-render.test.ts` 首次加入时用 00 01 … 的 16 字节合成序列验证「敏感文本不进 DOM」，
+# 随后已改为低熵占位值；但 gitleaks 的推送范围扫描会重放引入该字面量的旧 diff。这里只豁免
+# 「确切值 + 确切文件」，不放行目录、不放宽全局规则。
+[[allowlists]]
+description = "已记录的假阳性：pairing-panel-render.test.ts 早期版本的假 pairingSecret 字面量（base64url 解码为 00 01 … 0F 的 16 字节合成序列），不是凭据；当前文件已改用低熵占位值。由主 Agent 于 2026-10-18 核对"
+regexTarget = "line"
+regexes = ['''"AAECAwQFBgcICQoLDA0ODw"''']
+paths = ['''clients/app/src/components/pairing-panel-render\.test\.ts''']
