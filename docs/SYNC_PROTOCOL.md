@@ -1727,7 +1727,7 @@ v1 默认上限：
 | `requiredFeatures` 项数 | 64 |
 | 单个 feature ID | 64 ASCII bytes |
 | 单 IP pending authentication | 5 connections |
-| 单 IP 新认证尝试 | 10/分钟 |
+| 单 IP 新认证尝试 | 100/分钟 |
 | 单节点并发 WSS 连接 | 256 |
 | 单设备业务命令速率 | 120/分钟（按 `deviceId` 与命令族分别统计，命令族见下方说明） |
 | 单个内嵌 diff / document | 256 KiB |

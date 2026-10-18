@@ -10,7 +10,7 @@
 //! 阶段划分（`auth.client_hello → auth.server_challenge → auth.client_proof → auth.authenticated`）：
 //!
 //! 1. **准入**：认证前先过三道路径无关的闸——单节点并发 WSS 连接上限 256（§14，最靠外的一道：它
-//!    限制节点总量，不管来源）、单 IP 认证尝试 10 次/分钟（§14，键是接入层给出的真实 `client_ip`）与
+//!    限制节点总量，不管来源）、单 IP 认证尝试 100 次/分钟（§14，键是接入层给出的真实 `client_ip`）与
 //!    单 IP 在途握手配额（半开连接不占满接入层的握手池）；后两者的配额凭证只覆盖握手阶段，认证完成即
 //!    释放，而并发连接凭证覆盖整条会话；
 //! 2. **握手**：只允许 `auth.client_hello`/`auth.client_proof`（+ 双向的 `error`），其余消息以 4401
@@ -185,7 +185,7 @@ pub struct SyncConn {
     config: SyncConfig,
     registry: Arc<ConnectionRegistry>,
     route: Option<Arc<dyn MessageRoute>>,
-    /// 单 IP 的新认证尝试限流（§14：10 次/分钟，键是 `PeerInfo::client_ip`）。
+    /// 单 IP 的新认证尝试限流（§14：100 次/分钟，键是 `PeerInfo::client_ip`）。
     auth_limit: SlidingWindowLimiter,
     /// 单 IP 的在途握手配额。
     handshakes: HandshakeSlots,
@@ -359,7 +359,7 @@ impl Session {
     async fn serve(&mut self) {
         let client_ip = self.peer.client_ip;
         // ⓪ 单节点并发 WSS 连接上限（§14：256）。它排在两张按来源的闸门之前：节点级资源比来源级配额
-        // 更靠外，而这条拒绝与「认证尝试」无关（连接根本没进认证，不该消耗那 10 次/分钟的额度）。
+        // 更靠外，而这条拒绝与「认证尝试」无关（连接根本没进认证，不该消耗那 100 次/分钟的额度）。
         // 超限一律显式拒绝：不排队、不静默丢弃、不挤掉既有连接。
         let Some(_connection_slot) = self.conn.connections.acquire() else {
             warn!(
@@ -377,7 +377,7 @@ impl Session {
             .await;
             return;
         };
-        // ① 认证尝试限流（§14：10 次/分钟/IP，键是接入层给出的真实对端地址）。
+        // ① 认证尝试限流（§14：100 次/分钟/IP，键是接入层给出的真实对端地址）。
         if let RateLimit::Denied { retry_after } = self.conn.auth_limit.check(client_ip) {
             warn!(
                 event = "sync.auth_rate_limited",
