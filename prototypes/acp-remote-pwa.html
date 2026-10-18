@@ -482,6 +482,17 @@
   .pairpanel .codewrap{margin-top:0}
   .pairpanel .paira{margin-top:20px}
   .pairpanel .paira .btn{width:100%;padding:12px 24px;font-size:14px;border-radius:11px}
+  /* 配对页不绘制顶栏，主题开关单独浮在右上角。图标、尺寸与颜色口径跟顶栏按钮一致：
+     实心 SVG、含义=点击后的效果、亮橙色由 data-ic + CSS 按主题给出。 */
+  .pairtheme{position:fixed;top:18px;right:18px;z-index:40;width:36px;height:36px;border-radius:10px;
+    display:grid;place-items:center;border:1px solid var(--line);background:var(--panel);
+    box-shadow:var(--shadow);cursor:pointer;color:var(--ink-2)}
+  .pairtheme:hover{border-color:var(--accent);color:var(--accent-ink)}
+  .pairtheme svg{width:17px;height:17px;display:block}
+  .pairtheme[data-ic="orange"]{color:#d9480f}
+  .pairtheme[data-ic="orange"]:hover{color:#d9480f}
+  :root[data-theme="dark"] .pairtheme[data-ic="orange"]{color:#ffa94d}
+  @media (max-width:600px){.pairtheme{top:12px;right:12px}}
   @media (max-width:600px){
     .pair{padding:32px 16px}
     .pairpanel{padding:20px 16px 16px}
@@ -977,10 +988,14 @@
     return showSun ? sunSVG(st) : moonSVG(st);
   }
   function paintThemeBtn(){
-    var b = $("themeBtn"); if(!b) return;
-    b.innerHTML = themeGlyph();
-    paintIconColor(b);
-    b.title = (effTheme() === "dark" ? "当前：黑夜" : "当前：白天") + "，点击切换";
+    /* 顶栏按钮与配对页的浮动按钮是同一个开关的两个位置，图标/标题必须一起更新，
+       否则控制台下拉切换主题时只有顶栏那个被刷新。 */
+    ["themeBtn", "pairThemeBtn"].forEach(function(id){
+      var b = $(id); if(!b) return;
+      b.innerHTML = themeGlyph();
+      paintIconColor(b);
+      b.title = (effTheme() === "dark" ? "当前：黑夜" : "当前：白天") + "，点击切换";
+    });
   }
   function applyTheme(mode){
     var eff = mode;
@@ -1965,7 +1980,9 @@
     } else {
       stage = '<h1>配对未完成</h1><p class="lede">这是一个占位状态。</p>';
     }
-    return '<div class="pair"><div class="pairgrid"><div class="pstage">'+stage+'</div></div></div>';
+    return '<button class="pairtheme" id="pairThemeBtn" data-ic="orange" title="切换白天 / 黑夜" '+
+        'aria-label="切换白天或黑夜模式">'+themeGlyph()+'</button>'+
+      '<div class="pair"><div class="pairgrid"><div class="pstage">'+stage+'</div></div></div>';
   }
 
   /* 8 位配对码：逐格输入、自动跳到下一格、退格回上一格；粘贴 XXXX-XXXX 或 8 位连续字符时自动分配。 */
@@ -2058,6 +2075,10 @@
       A.pairPrev = A.pair;
       /* 这一页没有顶部导航：配对发生在连接之前，失败时也不提供进入目录的入口。 */
       app.innerHTML = viewPair();
+      /* 配对页没有顶栏，主题开关是页内那个浮动按钮；它和顶栏按钮、控制台下拉都走 applyTheme。 */
+      if($("pairThemeBtn")) $("pairThemeBtn").onclick = function(){
+        applyTheme(effTheme() === "dark" ? "light" : "dark");
+      };
       if(A.pair==="S0") bindPairCode();
       /* 配对码入口：lookup 与 claim 各展示一小段进行中状态，随后进入等待审批。 */
       if(A.pair==="S1"){

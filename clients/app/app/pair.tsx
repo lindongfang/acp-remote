@@ -34,7 +34,7 @@ import { useRouter } from "expo-router";
 import { useEffect } from "react";
 import type { ReactElement } from "react";
 
-import { PairingPanel, RuntimeUnavailable } from "../src/components";
+import { PairingPanel, PairingThemeToggle, RuntimeUnavailable } from "../src/components";
 import { StyleSheet, View, spacing } from "../src/components/theme";
 import type { PairingKind } from "../src/features/pairing-model";
 import { useClientState, useClientStore } from "../src/features/runtime";
@@ -45,7 +45,8 @@ const APPROVED_REDIRECT_MS = 1_600;
 /**
  * 页面骨架：只有一块居中的舞台。
  *
- * 配色由共享外壳与 `PairingPanel` 承担，本页不设背景色，也不提供主题切换（design D5）。
+ * 配色由共享外壳与 `PairingPanel` 承担，本页不设背景色；右上角的 `PairingThemeToggle` 复用
+ * 共享主题偏好，不恢复全局顶栏或页头（design D5）。
  */
 const STYLES = StyleSheet.create({
   page: {
@@ -91,18 +92,19 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
     };
   }, [approvedSync, router]);
 
-  if (store === null || state === null || page === null) {
-    return <RuntimeUnavailable route="pair" />;
-  }
-
   return (
     <View role="main" style={STYLES.page}>
-      <PairingPanel
-        model={page}
-        onSubmitCode={(code) => {
-          void store.submitPairingCode(code);
-        }}
-      />
+      <PairingThemeToggle />
+      {store === null || state === null || page === null ? (
+        <RuntimeUnavailable route="pair" />
+      ) : (
+        <PairingPanel
+          model={page}
+          onSubmitCode={(code) => {
+            void store.submitPairingCode(code);
+          }}
+        />
+      )}
     </View>
   );
 }
