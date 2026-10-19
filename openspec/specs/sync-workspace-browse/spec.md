@@ -94,12 +94,12 @@
 #### Scenario: 浏览不登记
 
 - **WHEN** 一台设备浏览了若干层目录
-- **THEN** 本机 workspace 登记表不因这些调用发生任何变化
+- **THEN** 本机目录登记表不因这些调用发生任何变化
 
 #### Scenario: 浏览不产生审计记录
 
-- **WHEN** 一次 `workspace.browse` 完成
-- **THEN** 系统不写入审计记录，现有审计动作词表不因本能力扩张
+- **WHEN** 一次 workspace.browse 完成
+- **THEN** 系统不写入审计记录
 
 #### Scenario: 新目录随成功会话登记
 
