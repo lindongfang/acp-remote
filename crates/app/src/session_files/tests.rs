@@ -188,6 +188,10 @@ fn commit(dir: &Path, message: &str) {
 
 fn init_repo(dir: &Path) {
     git_ok(dir, &["init", "-q", "-b", "main", "."]);
+    // 合并需要提交身份，而 CI 没有全局 `user.*`；把身份写进仓库本地配置，
+    // 让测试不依赖宿主机 Git 配置。
+    git_ok(dir, &["config", "user.email", "test@example.invalid"]);
+    git_ok(dir, &["config", "user.name", "Test"]);
 }
 
 // ---------------------------------------------------------------------------
