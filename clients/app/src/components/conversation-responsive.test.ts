@@ -4,14 +4,16 @@
  *
  * ## 判别力从哪来
  *
- * - **同一交互状态下，窄屏与宽屏渲染出完全相同的 `data-*` 集合**（键与取值都比）：窄屏只是把
- *   两侧栏目降为**可切换**的次级视图——三栏内容始终都在 DOM 里，形态差别落在样式上（两条渲染的
- *   字符串不相等即证明宽度真的换过一档，否则「集合相同」在宽度被忽略时也会绿）。四个次级视图取值
- *   逐个比一遍。
- * - **切换取值不增删信息**：同一宽度下，四个取值渲染出的 `data-*` 集合彼此相同——取值只决定
+ * - **同一交互状态下，窄屏与宽屏渲染出完全相同的页面内容 `data-*` 集合**（键与取值都比；切换控件
+ *   自身的选项除外——窄屏没有「全部」）：窄屏只是把两侧栏目降为**可切换**的次级视图——三栏内容
+ *   始终都在 DOM 里，形态差别落在样式上（两条渲染的字符串不相等即证明宽度真的换过一档，否则
+ *   「集合相同」在宽度被忽略时也会绿）。窄屏的三个取值逐个比一遍。
+ * - **切换取值不增删信息**：同一宽度下，窄屏三个取值渲染出的 `data-*` 集合彼此相同——取值只决定
  *   **藏哪一栏**（`display: none`），不决定「渲染不渲染」。
+ * - **窄屏没有「全部」**：三栏纵向堆叠会均分高度、把时间线挤成 0 高，因此请求 `all` 归一为
+ *   `timeline`，切换控件也只列三档；宽屏仍保留「全部」（三栏并列是宽屏的缺省形态）。
  * - **缺省取值在宽屏等同于「全部」**：`DEFAULT_CONVERSATION_SECONDARY_VIEW` 是窄屏的默认形态，
- *   而 spec 说宽屏**呈现三栏**；这条规则由 `effectiveSecondaryView` 单独钉住（三条规则各一条断言）。
+ *   而 spec 说宽屏**呈现三栏**；这条规则由 `effectiveSecondaryView` 单独钉住。
  * - **未接线切换控件时不降级**：没有 `onSecondaryViewChange` 时三栏都呈现，而不是默认藏两栏又
  *   没有切换入口。
  * - **跳转入口只在「有用户输入且一条都看不见」时呈现**：判定是纯函数（{@link classifyUserInputs} /
@@ -52,6 +54,12 @@ import { ConversationStream } from "./index";
 const WIDE_WIDTH = 1024;
 /** 窄屏那一档的注入宽度。 */
 const NARROW_WIDTH = 375;
+
+/**
+ * 窄屏可选的次级视图：**没有「全部」**。窄屏三栏纵向堆叠，均分会把时间线挤成 0 高；
+ * 「全部」只属于宽屏的三栏并列形态（`effectiveSecondaryView` 把窄屏的 `all` 归一为 `timeline`）。
+ */
+const NARROW_SECONDARY_VIEWS = CONVERSATION_SECONDARY_VIEWS.filter((view) => view !== "all");
 
 /** 一个内容齐全的仓库：消息、结构化卡片、改动、授权、设置、降级各一份。 */
 function storeOf(): StoreFixture {
@@ -168,16 +176,48 @@ function tagContaining(html: string, marker: string): string {
 }
 
 describe("对话页宽窄两形态：信息集合相同", () => {
-  it("同一交互状态下，窄屏与宽屏的 data-* 集合完全相同（差异只在样式），四个取值逐个比", () => {
-    for (const view of CONVERSATION_SECONDARY_VIEWS) {
+  it("同一交互状态下，窄屏与宽屏的页面内容 data-* 集合完全相同（差异只在样式），窄屏的三个取值逐个比", () => {
+    for (const view of NARROW_SECONDARY_VIEWS) {
       const fixture = storeOf();
       fill(fixture);
       const narrow = renderAt(fixture.store, NARROW_WIDTH, view);
       const wide = renderAt(fixture.store, WIDE_WIDTH, view);
 
-      expect(dataAttributes(narrow), `次级视图 ${view}`).toEqual(dataAttributes(wide));
+      // 排除切换控件自身的选项/选中态：窄屏没有「全部」，两档的选项清单本来就不同（那是控件
+      // 形态，不是页面承载的信息）。
+      expect(
+        dataAttributes(narrow).filter((attribute) => !attribute.startsWith("data-segment") && !attribute.startsWith("data-column-resizer")),
+        `次级视图 ${view}`,
+      ).toEqual(dataAttributes(wide).filter((attribute) => !attribute.startsWith("data-segment") && !attribute.startsWith("data-column-resizer")));
       // 判别力：宽度真的换过一档（否则上面那条在宽度被忽略时也会绿）。
       expect(narrow, `次级视图 ${view}`).not.toBe(wide);
+    }
+  });
+
+  it("窄屏没有「全部」这一档：请求 all 与请求 timeline 渲染完全一致", () => {
+    const fixture = storeOf();
+    fill(fixture);
+    const requestedAll = renderAt(fixture.store, NARROW_WIDTH, "all");
+    const requestedTimeline = renderAt(fixture.store, NARROW_WIDTH, "timeline");
+
+    // 归一发生在生效取值上：单栏吃高度，不再把三栏均分（时间线因此不会被挤成 0 高）。
+    expect(requestedAll).toBe(requestedTimeline);
+    expect(requestedAll).not.toContain('data-segment-option="all"');
+    expect(tagContaining(requestedAll, 'data-segment-option="timeline"')).toContain(
+      'data-segment-selected="true"',
+    );
+  });
+
+  it("宽屏直接呈现三栏，不增加顶部筛选项", () => {
+    const fixture = storeOf();
+    fill(fixture);
+    const wide = renderAt(fixture.store, WIDE_WIDTH, "all");
+
+    expect(wide).not.toContain('data-segment="conversation-secondary-view"');
+    for (const view of NARROW_SECONDARY_VIEWS) {
+      const rendered = renderAt(fixture.store, WIDE_WIDTH, view);
+      expect(rendered).not.toContain('data-segment="conversation-secondary-view"');
+      expect(effectiveSecondaryView({ requested: view, switchable: true, wide: true })).toBe("all");
     }
   });
 
@@ -185,7 +225,7 @@ describe("对话页宽窄两形态：信息集合相同", () => {
     const fixture = storeOf();
     fill(fixture);
     const wide = renderAt(fixture.store, WIDE_WIDTH, "all");
-    const narrow = renderAt(fixture.store, NARROW_WIDTH, "all");
+    const narrow = renderAt(fixture.store, NARROW_WIDTH, "timeline");
 
     for (const html of [wide, narrow]) {
       expect(html).toContain('data-conversation-column="sessions"');
@@ -199,10 +239,37 @@ describe("对话页宽窄两形态：信息集合相同", () => {
     }
   });
 
-  it("切换次级视图只改样式：四个取值下三栏锚点一个不少，且 data-* 集合彼此相同", () => {
+  it("两档下三栏各有自己的滚动容器，输入区都在中栏里；切换控件在三栏之外", () => {
     const fixture = storeOf();
     fill(fixture);
-    const rendered = CONVERSATION_SECONDARY_VIEWS.map((view) => ({
+    for (const [width, view] of [
+      [NARROW_WIDTH, "timeline"],
+      [WIDE_WIDTH, "all"],
+    ] as const) {
+      const html = renderAt(fixture.store, width, view);
+      expect(html, `宽度 ${width}`).toContain('data-conversation-scroll="sessions"');
+      expect(html, `宽度 ${width}`).toContain('data-conversation-scroll="timeline"');
+      expect(html, `宽度 ${width}`).toContain('data-conversation-scroll="files"');
+
+      const timeline = html.slice(
+        html.indexOf('data-conversation-column="timeline"'),
+        html.indexOf('data-conversation-column="files"'),
+      );
+      expect(timeline, `宽度 ${width}`).toContain('data-composer="in_progress"');
+      expect(timeline, `宽度 ${width}`).toContain('data-conversation-scroll="timeline"');
+      expect(timeline, `宽度 ${width}`).toContain('data-timeline="entries"');
+
+      // 切换控件位于正文容器之前（三栏之外）；三栏被藏起来时它仍在。
+      expect(html.indexOf('data-segment="conversation-secondary-view"')).toBeLessThan(
+        html.indexOf('data-conversation-body="true"'),
+      );
+    }
+  });
+
+  it("窄屏切换次级视图只改样式：三个取值下三栏锚点一个不少，且 data-* 集合彼此相同", () => {
+    const fixture = storeOf();
+    fill(fixture);
+    const rendered = NARROW_SECONDARY_VIEWS.map((view) => ({
       view,
       html: renderAt(fixture.store, NARROW_WIDTH, view),
     }));
@@ -220,31 +287,32 @@ describe("对话页宽窄两形态：信息集合相同", () => {
       expect(dataAttributes(html), `次级视图 ${view} 与 ${rendered[0]?.view ?? "?"} 的信息集合`).toEqual(baseline);
     }
     // 取值本身确实变了：选中的那一档随取值走（否则「集合相同」在取值被忽略时也会绿）。
-    expect(tagContaining(rendered[2]?.html ?? "", 'data-segment-option="sessions"')).toContain('data-segment-selected="true"');
-    expect(tagContaining(rendered[2]?.html ?? "", 'data-segment-option="timeline"')).toContain('data-segment-selected="false"');
+    expect(tagContaining(rendered[1]?.html ?? "", 'data-segment-option="sessions"')).toContain('data-segment-selected="true"');
+    expect(tagContaining(rendered[1]?.html ?? "", 'data-segment-option="timeline"')).toContain('data-segment-selected="false"');
   });
 
-  it("窄屏缺省选「对话」：三栏锚点仍在，且切换控件就在旁边（四个选项都在）", () => {
+  it("窄屏缺省选「对话」：三栏锚点仍在，切换控件只给三档（没有「全部」）", () => {
     const fixture = storeOf();
     const wideFixture = storeOf();
     fill(fixture);
     const html = renderAt(fixture.store, NARROW_WIDTH);
 
     expect(html).toContain('data-segment="conversation-secondary-view"');
-    for (const view of CONVERSATION_SECONDARY_VIEWS) {
+    for (const view of NARROW_SECONDARY_VIEWS) {
       expect(html, `选项 ${view}`).toContain(`data-segment-option="${view}"`);
     }
+    // 窄屏不提供「全部」：否则三栏纵向均分会把时间线挤成 0 高。
+    expect(html).not.toContain('data-segment-option="all"');
+    expect(html.match(/data-segment-option="/g) ?? []).toHaveLength(NARROW_SECONDARY_VIEWS.length);
     expect(tagContaining(html, 'data-segment-option="timeline"')).toContain('data-segment-selected="true"');
     // 反例：窄屏把变更文件从 DOM 里删掉 → 下面三条会红（那是「静默丢弃信息」）。
     expect(html).toContain('data-conversation-column="files"');
     expect(html).toContain('data-change-path="src/a.ts"');
     expect(html).toContain(`data-sidebar-session="${ONLINE_SESSION_ID}"`);
-    // 宽度不改变选项集合：同一模型在宽屏下也是这四项（宽屏缺省即三栏，因此选中的是「全部」）。
+    // 宽屏保留「全部」（三栏并列是宽屏的缺省形态），因此选中的是「全部」。
     fill(wideFixture);
     const wide = renderAt(wideFixture.store, WIDE_WIDTH);
-    expect(wide).toContain('data-segment-option="files"');
-    expect(wide).toContain('data-segment-option="sessions"');
-    expect(tagContaining(wide, 'data-segment-option="all"')).toContain('data-segment-selected="true"');
+    expect(wide).not.toContain('data-segment="conversation-secondary-view"');
   });
 
   it("切到「变更文件」只改样式：三栏的锚点都在，选中项随交互状态走", () => {
@@ -289,7 +357,7 @@ describe("对话页宽窄两形态：信息集合相同", () => {
   });
 });
 
-describe("生效的次级视图：三条规则", () => {
+describe("生效的次级视图：四条规则", () => {
   it("没有切换控件时三栏都呈现", () => {
     expect(effectiveSecondaryView({ requested: "timeline", switchable: false, wide: true })).toBe("all");
     expect(effectiveSecondaryView({ requested: null, switchable: false, wide: false })).toBe("all");
@@ -301,13 +369,23 @@ describe("生效的次级视图：三条规则", () => {
     // 反例：把缺省取值原样当成宽屏的取值 → 上面两条会得到 `timeline`（只剩一栏）。
   });
 
-  it("窄屏 + 缺省取值 = 对话本体；用户显式选过别的取值后两档都照办", () => {
-    expect(effectiveSecondaryView({ requested: null, switchable: true, wide: false })).toBe(DEFAULT_CONVERSATION_SECONDARY_VIEW);
-    expect(effectiveSecondaryView({ requested: DEFAULT_CONVERSATION_SECONDARY_VIEW, switchable: true, wide: false })).toBe("timeline");
-    for (const view of ["all", "sessions", "files"] as const) {
+  it("窄屏 + 缺省取值 = 对话本体；会话 / 变更文件两档照办", () => {
+    expect(effectiveSecondaryView({ requested: null, switchable: true, wide: false })).toBe(
+      DEFAULT_CONVERSATION_SECONDARY_VIEW,
+    );
+    expect(
+      effectiveSecondaryView({ requested: DEFAULT_CONVERSATION_SECONDARY_VIEW, switchable: true, wide: false }),
+    ).toBe("timeline");
+    for (const view of ["sessions", "files"] as const) {
       expect(effectiveSecondaryView({ requested: view, switchable: true, wide: false })).toBe(view);
-      expect(effectiveSecondaryView({ requested: view, switchable: true, wide: true })).toBe(view);
+      expect(effectiveSecondaryView({ requested: view, switchable: true, wide: true })).toBe("all");
     }
+  });
+
+  it("窄屏不提供「全部」：请求 all 归一为 timeline；宽屏的 all 仍是三栏", () => {
+    expect(effectiveSecondaryView({ requested: "all", switchable: true, wide: false })).toBe("timeline");
+    expect(effectiveSecondaryView({ requested: "all", switchable: true, wide: true })).toBe("all");
+    // 反例：窄屏照原样返回 all → 三栏纵向均分，时间线被挤成 0 高（第一条会红）。
   });
 });
 

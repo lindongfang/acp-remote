@@ -2,7 +2,7 @@
 //!
 //! 两层判定，顺序固定：
 //!
-//! 1. **命令名**：先看原始 body 的 `command` 字段。取值不在 Sync v1 的 13 条枚举里（含只经 Node Link
+//! 1. **命令名**：先看原始 body 的 `command` 字段。取值不在 Sync v1 的 18 条枚举里（含只经 Node Link
 //!    接受的 `session.resume`）即 [`Fault::Unsupported`] → `command.unsupported`。这一步刻意发生在
 //!    `Command` 解码**之前**：`CommandName` 的 `Deserialize` 会把 `session.resume` 报成形状错误，而协议
 //!    要求的是 `command.unsupported`（§11.5 该行），且**不得在本机执行任何操作**——本模块在这一步之下

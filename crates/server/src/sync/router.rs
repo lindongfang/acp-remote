@@ -60,4 +60,10 @@ impl MessageRoute for SyncRoutes {
             part.on_authenticated(session, features);
         }
     }
+
+    async fn on_closed(&self, session: &ConnectionHandle) {
+        for part in &self.parts {
+            part.on_closed(session).await;
+        }
+    }
 }

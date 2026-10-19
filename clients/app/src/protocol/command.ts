@@ -29,10 +29,21 @@ import type {
   SnapshotItemPendingInteractions,
   SnapshotItemTurns,
 } from "./sync";
+import type {
+  SessionFilesListCommand,
+  SessionFilesListResult,
+  SessionFilesReadCommand,
+  SessionFilesReadResult,
+  SessionGitDiffCommand,
+  SessionGitDiffResult,
+  SessionGitStatusCommand,
+  SessionGitStatusResult,
+} from "./session-files";
 
 /**
- * `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（当前 13 条，与
+ * `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（当前 18 条，与
  * `compatibility/commands/v1/commands.json` 里 `transport` 含 `sync` 的条目一一对应）。
+ * 四条 `session.files.*` / `session.git.*` 的严格形状与解码见 `./session-files`。
  */
 export type CommandName =
   | "session.list"
@@ -48,7 +59,11 @@ export type CommandName =
   | "session.mode.set"
   | "session.config.set"
   | "permission.resolve"
-  | "session.create";
+  | "session.create"
+  | "session.files.list"
+  | "session.files.read"
+  | "session.git.status"
+  | "session.git.diff";
 
 /** 命令消息的公共信封（`$defs.command` 的固有字段）。 */
 export interface CommandEnvelope {
@@ -325,7 +340,11 @@ export type CommandBody =
   | ModeSetCommand["body"]
   | PermissionResolveCommand["body"]
   | ElicitationRespondCommand["body"]
-  | CommandStatusCommand["body"];
+  | CommandStatusCommand["body"]
+  | SessionFilesListCommand["body"]
+  | SessionFilesReadCommand["body"]
+  | SessionGitStatusCommand["body"]
+  | SessionGitDiffCommand["body"];
 
 /** `$defs.command`：`body` 由上面的判别联合（按 `command` 字段）表达。 */
 export type CommandMessage = CommandEnvelope & { readonly body: CommandBody };
@@ -444,6 +463,10 @@ export type CommandResultValue =
   | ConfigListResult
   | ModeListResult
   | CommandStatusRecord
+  | SessionFilesListResult
+  | SessionFilesReadResult
+  | SessionGitStatusResult
+  | SessionGitDiffResult
   | Record<string, unknown>;
 
 /** `$defs.commandResult`：`command.result` 消息。 */

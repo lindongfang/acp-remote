@@ -78,7 +78,7 @@ describe("D8 明细现取与复合游标翻页", () => {
     // 反例：首屏就带游标，这里会出现 before，断言变红。
     // include 里多了两样：配置项（模型/模式的可选项）与待处理交互（读回的待处理项要能呈现为
     // 不可操作并说明原因）；结构化历史只在协商到 feature 时才带，本用例的仓库没协商。
-    expect(body.payload).toEqual({ include: ["messages", "config_options", "pending_interactions"] });
+    expect(body.payload).toEqual({ include: ["messages", "config_options"] });
     expect(Object.keys(body.payload).sort()).toEqual(["include"]);
   });
 

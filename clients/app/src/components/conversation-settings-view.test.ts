@@ -97,6 +97,15 @@ function configChanged(version: string): { readonly kind: "event"; readonly even
 }
 
 describe("模型与模式分节：四态各就各位", () => {
+  it("弹层里说明取值来源与生效时机（模型、模式各一处）", () => {
+    const html = render({ model: { ...UNAVAILABLE_SECTION }, mode: { ...UNAVAILABLE_SECTION } });
+
+    expect(html.match(/data-settings-source-note="model"/g) ?? []).toHaveLength(1);
+    expect(html.match(/data-settings-source-note="mode"/g) ?? []).toHaveLength(1);
+    expect(html).toContain("模型（由 Agent 提供，下一轮生效）");
+    expect(html).toContain("模式（由 Agent 提供，下一轮生效）");
+  });
+
   it("未提供：呈现「未提供」，且没有任何可点选项", () => {
     const html = render({ model: { ...UNAVAILABLE_SECTION }, mode: { ...UNAVAILABLE_SECTION } });
 
@@ -147,6 +156,7 @@ describe("模型与模式分节：四态各就各位", () => {
 
     expect(html).toContain('data-settings-state="switching"');
     expect(html).toContain("下一轮生效");
+    expect(html).toContain("已提交切换，等待服务端确认");
     // 反例：本地乐观改值 → 这里会变成「聪明」。
     expect(html).toContain('data-settings-current-name="快"');
     expect(tagContaining(html, 'data-model-choice="smart"')).toContain('data-choice-selectable="false"');

@@ -162,7 +162,7 @@ async function bundlePage() {
  */
 const STATIC_HEADERS = {
   "content-security-policy":
-    "default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
   "cache-control": "no-store",
   pragma: "no-cache",
   "referrer-policy": "no-referrer",

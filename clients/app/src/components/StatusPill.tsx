@@ -42,10 +42,27 @@ const TONE_BY_STATE: Record<SessionStateView, { readonly fg: ColorToken; readonl
   idle: { fg: "ink2", bg: "panel2" },
   queued: { fg: "accentInk", bg: "accentSoft" },
   running: { fg: "ok", bg: "okSoft" },
-  waiting_input: { fg: "think", bg: "thinkSoft" },
+  // 等你回复与待授权同属「在等我们处理」：两档都用警告色（原型 `.state.waiting` 的口径），
+  // 此前 `waiting_input` 用的思考紫会把「等你」说得比「待授权」更轻。
+  waiting_input: { fg: "warn", bg: "warnSoft" },
   waiting_permission: { fg: "warn", bg: "warnSoft" },
   failed: { fg: "danger", bg: "dangerSoft" },
   closed: { fg: "ink3", bg: "panel2" },
+};
+
+/**
+ * 状态字形：补一个图形标记，让徽标不靠颜色与文字才能区分（原型的状态圆点/字形同一口径）。
+ *
+ * 键集合同样由 `SessionStateView` 保证完整：新增状态时这里会编译不过，不会漏一个字形。
+ */
+const GLYPH_BY_STATE: Record<SessionStateView, string> = {
+  idle: "○",
+  queued: "●",
+  running: "●",
+  waiting_input: "⏸",
+  waiting_permission: "⏸",
+  failed: "✕",
+  closed: "○",
 };
 
 /** 每个状态在样式表里的键（显式列出，避免用字符串现拼样式名）。 */
@@ -77,7 +94,8 @@ function buildStyles(colors: Palette) {
   });
   return StyleSheet.create({
     pill: {
-      alignSelf: "flex-start",
+      // 单行会话头里与标题/Agent 名同轴对齐（唯一消费方是会话头）。
+      alignSelf: "center",
       paddingVertical: 2,
       paddingHorizontal: spacing.sm,
       borderRadius: radius.lg,
@@ -104,15 +122,25 @@ export interface StatusPillProps {
  * 渲染一个状态徽标。
  *
  * 文案仍是 `SESSION_STATE_LABEL` 的那七个词，`data-session-state` 仍是**状态标识**（不是文案）：
- * 两处都不能被这块胶囊的样式改动碰到。
+ * 两处都不能被这块胶囊的样式改动碰到。字形（`● / ⏸ / ✕ / ○`）只是文案前缀，另以
+ * `data-session-state-glyph` 进 DOM；色调以 `data-session-state-tone`（底色 token）留作机器证据。
  */
 export function StatusPill({ state }: StatusPillProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
+  const glyph = GLYPH_BY_STATE[state];
   return (
-    <Text style={[styles.pill, styles[STYLE_KEY_BY_STATE[state]]]} dataSet={{ sessionState: state }}>
-      {SESSION_STATE_LABEL[state]}
+    <Text
+      style={[styles.pill, styles[STYLE_KEY_BY_STATE[state]]]}
+      dataSet={{
+        sessionState: state,
+        sessionStateGlyph: glyph,
+        // 配色的机器证据：`waiting_input` 与 `waiting_permission` 都是 `warnSoft`。
+        sessionStateTone: TONE_BY_STATE[state].bg,
+      }}
+    >
+      {`${glyph} ${SESSION_STATE_LABEL[state]}`}
     </Text>
   );
 }

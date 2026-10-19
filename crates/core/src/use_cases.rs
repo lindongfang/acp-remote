@@ -22,15 +22,17 @@ use crate::model::{
     Actor, AgentDescriptor, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
     AuditAction, AuditOutcome, AuditRecord, CapabilitySet, ClientCommand, CommandKind,
     CommandReceipt, CommandRecord, CommandResult, CommandStatus, ConfigOption, ConfigOptionId,
-    ConfigValue, ConflictKind, CreateSessionRequest, DeviceId, DeviceRecord, Digest, DirectoryId,
-    DirectoryRecord, ElicitationAction, ElicitationValues, EntityRef, EventId, EventPayload,
-    EventType, GlobalCursor, InteractionId, InteractionResolution, LocalCursor, ModeId, ModeState,
-    NodeId, NodeKind, NodeRecord, NodeState, OriginCursor, OriginEpoch, OwnedSessionRef,
-    PairingClaim, PairingId, PairingRecord, PairingSettlement, PairingState, PairingTarget,
-    PeerIdentity, PeerPublicKey, PendingInteraction, PortError, PublicError, RemoteSessionRef,
-    RequestId, Resolution, ResolvedWorkspace, ResourceOrigin, Sequence, SessionId,
-    SessionReference, SessionSummary, Timestamp, UnavailableKind, Version, WorkspaceCatalogEntry,
-    WorkspaceRef, WorkspaceSource,
+    ConfigValue, ConflictKind, ContentVersion, CreateSessionRequest, DeviceId, DeviceRecord,
+    Digest, DirectoryId, DirectoryRecord, ElicitationAction, ElicitationValues, EntityRef, EventId,
+    EventPayload, EventType, FileReadPurpose, GitDiff, GitStatusPage, GlobalCursor, InteractionId,
+    InteractionResolution, LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, NodeState,
+    OriginCursor, OriginEpoch, OwnedSessionRef, PairingClaim, PairingId, PairingRecord,
+    PairingSettlement, PairingState, PairingTarget, PeerIdentity, PeerPublicKey,
+    PendingInteraction, PortError, PublicError, RemoteSessionRef, RequestId, Resolution,
+    ResolvedWorkspace, ResourceOrigin, Sequence, SessionFileChunk, SessionFilePage,
+    SessionFilePath, SessionId, SessionListPath, SessionPageToken, SessionReference,
+    SessionSummary, Timestamp, UnavailableKind, Version, WorkspaceCatalogEntry, WorkspaceRef,
+    WorkspaceSource,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
@@ -39,9 +41,9 @@ use crate::ports::{
     ImportedSessionRecord, LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite,
     PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
     PairingWrite, PendingAudit, PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
-    RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionQuery, SessionStore, StoreHealth,
-    SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceMkdirAdmission, WorkspaceMkdirExecution,
-    WriteContext,
+    RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionFiles, SessionQuery,
+    SessionStore, StoreHealth, SyncReplaySlice, TrustRecordRef, TrustStore,
+    WorkspaceMkdirAdmission, WorkspaceMkdirExecution, WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -251,6 +253,10 @@ pub struct UseCases {
     /// 默认实现不依赖任何外部 crate（§2 的依赖 allow-list 不变），因此默认可用、按需替换。
     browser: Arc<dyn DirectoryBrowser>,
     creator: Arc<dyn DirectoryCreator>,
+    /// 会话文件与 Git 的只读端口（`session.files.*` / `session.git.*`）。core 没有文件系统/Git 默认
+    /// 实现，因此默认是失败关闭的 [`crate::ports::UnavailableSessionFiles`]；组合根用
+    /// [`UseCases::with_session_files`] 注入 `app::session_files` 的原生实现。
+    files: Arc<dyn SessionFiles>,
 }
 
 /// [`UseCases`] 的依赖。
@@ -282,6 +288,7 @@ impl UseCases {
             ids: deps.ids,
             browser: Arc::new(SystemDirectories),
             creator: Arc::new(SystemDirectories),
+            files: Arc::new(crate::ports::UnavailableSessionFiles),
         }
     }
 
@@ -296,6 +303,13 @@ impl UseCases {
     /// Replace directory creation for platform adapters or deterministic tests.
     pub fn with_directory_creator(self, creator: Arc<dyn DirectoryCreator>) -> Self {
         Self { creator, ..self }
+    }
+
+    /// 注入会话文件/Git 的只读原生实现（组合根装配 `app::session_files`，测试注入记录调用的替身）。
+    ///
+    /// 与 [`UseCases::with_directory_browser`] 同款：消耗 `self` 并返回它，保证装配只发生一次。
+    pub fn with_session_files(self, files: Arc<dyn SessionFiles>) -> Self {
+        Self { files, ..self }
     }
 
     /// Persist acceptance before touching the filesystem. Only the first caller receives a ticket.
@@ -749,6 +763,189 @@ impl UseCases {
             .map(|record| delivered_path(record.canonical_path()))
             .collect();
         Ok(project_browse(echo, listings, &registered))
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // 会话文件与 Git 只读查询（`SYNC_PROTOCOL.md` §11.5；design D1/D2/D3）
+    // ---------------------------------------------------------------------------------------
+
+    /// `session.files.list`：列出当前会话工作目录内一层的文件项。
+    ///
+    /// 执行顺序就是合同顺序，任何一步失败都不会继续往后走：
+    ///
+    /// 1. **授权**（命令名 `session.files.list`，`Broker::authorize`）；
+    /// 2. **会话来源**：owned 会话才继续；imported 在**任何文件端口调用之前**返回
+    ///    `capability.unsupported_by_broker`，不访问 Access 本机文件系统；
+    /// 3. **根**：`SessionStore::load_recovery` 的 `workspace_cwd` 是唯一来源；会话行缺失 →
+    ///    `session.not_found`，恢复列为空或根不可用 → `internal.unavailable`，绝不按别名反查或回退；
+    /// 4. **纯形状校验**：`path`（空串 = 根）与 `after` 在此拒绝，判定发生在端口调用之前；
+    /// 5. **端口调用**，并把条目数上限作为 core 的失败关闭检查。
+    ///
+    /// 查询不写命令终态、不产生事件、不改变持久状态。`after` 只是翻页位置，不授予任何读取权限。
+    pub async fn list_session_files(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        path: &str,
+        hide_ignored: bool,
+        after: Option<&str>,
+    ) -> Result<SessionFilePage, PortError> {
+        let root = self
+            .session_files_root(actor, session, "session.files.list")
+            .await?;
+        let path = SessionListPath::parse(path)?;
+        let after = parse_page_token(after)?;
+        let page = self
+            .files
+            .list(&root, path.file(), hide_ignored, after.as_ref())
+            .await?;
+        if page.entries().len() > crate::model::SESSION_FILE_PAGE_LIMIT {
+            return Err(PortError::Corrupt(
+                "session file page exceeds the v1 entry limit",
+            ));
+        }
+        if page.path() != &path {
+            return Err(PortError::Corrupt(
+                "session file page does not echo the requested path",
+            ));
+        }
+        Ok(page)
+    }
+
+    /// `session.files.read`：读取当前会话工作目录内的一个字节块。
+    ///
+    /// `version` 缺席时先建立连接绑定的内容快照，再从该快照读 `offset`；带 `version` 时直接向同一
+    /// 版本续读（适配器必须拒绝已变化/已过期的版本，不得拼接两个版本）。用途（预览/下载）与块大小
+    /// 由端口按固定 v1 预算执行，core 只做形状与来源判定。
+    pub async fn read_session_file(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        path: &str,
+        purpose: FileReadPurpose,
+        offset: u64,
+        version: Option<&str>,
+    ) -> Result<SessionFileChunk, PortError> {
+        let root = self
+            .session_files_root(actor, session, "session.files.read")
+            .await?;
+        let path = SessionFilePath::parse(path)?;
+        let version = version.map(ContentVersion::parse).transpose()?;
+        let version = match version {
+            Some(version) => version,
+            None => self
+                .files
+                .open_content(&root, &path, purpose)
+                .await?
+                .version()
+                .clone(),
+        };
+        let chunk = self.files.read_content(&version, offset).await?;
+        if chunk.path() != &path || chunk.version() != &version {
+            return Err(PortError::Corrupt(
+                "session file chunk does not match the requested path or version",
+            ));
+        }
+        Ok(chunk)
+    }
+
+    /// `session.git.status`：当前会话工作目录内的 Git 状态页。
+    ///
+    /// 非仓库与 Git 缺失是**成功结果**里的显式 `gitState`，不是协议错误；实现不得用空列表冒充干净
+    /// 仓库。其余顺序与 [`UseCases::list_session_files`] 相同。
+    pub async fn session_git_status(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        after: Option<&str>,
+    ) -> Result<GitStatusPage, PortError> {
+        let root = self
+            .session_files_root(actor, session, "session.git.status")
+            .await?;
+        let after = parse_page_token(after)?;
+        let page = self.files.git_status(&root, after.as_ref()).await?;
+        if page.entries().len() > crate::model::SESSION_FILE_PAGE_LIMIT {
+            return Err(PortError::Corrupt(
+                "git status page exceeds the v1 entry limit",
+            ));
+        }
+        Ok(page)
+    }
+
+    /// `session.git.diff`：当前会话工作目录内一个文件的 HEAD 与工作树差异。
+    ///
+    /// 差异默认比较 HEAD 与当前工作树（无 HEAD 时端口返回 `base = empty`）；二进制、冲突与超限是
+    /// 成功结果里的显式状态。路径形状在端口调用之前判定。
+    pub async fn session_git_diff(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        path: &str,
+    ) -> Result<GitDiff, PortError> {
+        let root = self
+            .session_files_root(actor, session, "session.git.diff")
+            .await?;
+        let path = SessionFilePath::parse(path)?;
+        let diff = self.files.git_diff(&root, &path).await?;
+        if diff.path() != &path {
+            return Err(PortError::Corrupt(
+                "git diff does not match the requested path",
+            ));
+        }
+        Ok(diff)
+    }
+
+    /// 四条会话文件查询共用的前置链：授权 → 会话来源 → 实际工作目录。
+    ///
+    /// 根**只**来自 `SessionStore::load_recovery().workspace_cwd`（§3.6 的窄读取）：未分组会话同样使用
+    /// 其实际 cwd；`None` 是明确的不可用，不按 workspace 别名反查、不回退到任何其它目录。imported
+    /// 会话在任何文件/Git 端口调用之前拒绝。
+    ///
+    /// imported 的判定**不能**只看 `SessionStore::load`：真实 imported 会话只存在于
+    /// `RemoteDeliveryStore` 的 `imported_session` 索引里，owned 存储中没有它们的行。因此 `load` 返回
+    /// `None` 时再问一次 imported 索引：命中 → `capability.unsupported_by_broker`；仍未命中才是
+    /// `session.not_found`。owned 行本身带远端来源时同样拒绝（同一事实的另一条防线）。
+    async fn session_files_root(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        command: &'static str,
+    ) -> Result<String, PortError> {
+        let request = self.ids.request_id();
+        self.broker
+            .authorize(actor, command, Some(session), &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let snapshot = match self.store.load(session).await? {
+            Some(snapshot) => snapshot,
+            None => {
+                if self
+                    .deliveries
+                    .find_imported_session(session)
+                    .await?
+                    .is_some()
+                {
+                    return Err(PortError::InvalidRequest(
+                        "capability.unsupported_by_broker",
+                    ));
+                }
+                return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+            }
+        };
+        if !snapshot.session.origin().is_local() {
+            return Err(PortError::InvalidRequest(
+                "capability.unsupported_by_broker",
+            ));
+        }
+        let recovery = self
+            .store
+            .load_recovery(session)
+            .await?
+            .ok_or(PortError::Unavailable(UnavailableKind::IoError))?;
+        let root = recovery
+            .workspace_cwd
+            .ok_or(PortError::Unavailable(UnavailableKind::IoError))?;
+        Ok(root)
     }
 
     /// Sync 快照 .directories()` 资源的投影（`SYNC_PROTOCOL.md` §9.4；spec `sync-workspace-catalog`）。
@@ -1953,6 +2150,13 @@ impl UseCases {
     }
 }
 
+/// 翻页位置标识的形状校验（`after`）：`None` 表示第一页。纯函数，不触碰任何端口。
+fn parse_page_token(text: Option<&str>) -> Result<Option<SessionPageToken>, PortError> {
+    text.map(SessionPageToken::parse)
+        .transpose()
+        .map_err(PortError::from)
+}
+
 fn owned_session(reference: &SessionReference) -> Result<SessionId, PortError> {
     match reference {
         SessionReference::Owned(owned) => Ok(owned.session_id.clone()),
@@ -2388,10 +2592,12 @@ mod tests {
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
     use crate::model::{
         AgentId, AgentRef, AgentSessionId, CommandKind, CommandPayload, CommittedEvent,
-        DeviceState, EventKind, EventOrigin, NodeId, Nonce, PairingState, PendingEvent,
+        ContentSnapshot, ContentVersion, DeviceState, EventKind, EventOrigin, FileReadPurpose,
+        GitDiff, GitDiffBase, GitDiffKind, GitState, GitStatusPage, NodeId, Nonce, PairingState,
+        PendingEvent, SessionFileChunk, SessionFileContentKind, SessionFilePage, SessionListPath,
         StoredPolicy, ViewJson,
     };
-    use crate::ports::{HistoryInclude, IdempotencyRecord, OwnedCommit};
+    use crate::ports::{HistoryInclude, IdempotencyRecord, OwnedCommit, SessionFiles};
 
     /// 用例自建临时目录的守卫：析构时尽力删除（正常结束与 panic 展开两条路径都生效）。
     ///
@@ -4930,6 +5136,137 @@ mod tests {
         }
     }
 
+    /// [`fixture`] 的会话文件端口可替换版本（注入替身以观察调用次数与实际根）。
+    fn fixture_with_session_files(files: Arc<dyn SessionFiles>) -> Fixture {
+        let Fixture {
+            use_cases,
+            world,
+            session,
+        } = fixture();
+        Fixture {
+            use_cases: use_cases.with_session_files(files),
+            world,
+            session,
+        }
+    }
+
+    /// 记录调用并返回固定形状的会话文件端口替身。**不读文件系统、不启动 Git**：它只证明用例把哪个根
+    /// 交给端口、以及哪些拒绝发生在端口之前。
+    #[derive(Default)]
+    struct RecordingFiles {
+        calls: std::sync::Mutex<Vec<&'static str>>,
+        roots: std::sync::Mutex<Vec<String>>,
+        paths: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingFiles {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn calls(&self) -> Vec<&'static str> {
+            lock(&self.calls).clone()
+        }
+
+        fn roots(&self) -> Vec<String> {
+            lock(&self.roots).clone()
+        }
+
+        fn paths(&self) -> Vec<String> {
+            lock(&self.paths).clone()
+        }
+
+        fn record(&self, call: &'static str, root: &str) {
+            lock(&self.calls).push(call);
+            lock(&self.roots).push(root.to_owned());
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SessionFiles for RecordingFiles {
+        async fn list(
+            &self,
+            root: &str,
+            path: Option<&SessionFilePath>,
+            _hide_ignored: bool,
+            _after: Option<&SessionPageToken>,
+        ) -> Result<SessionFilePage, PortError> {
+            self.record("list", root);
+            lock(&self.paths).push(path.map_or_else(String::new, |path| path.as_str().to_owned()));
+            let echo = SessionListPath::parse(path.map_or("", SessionFilePath::as_str))
+                .expect("list path");
+            SessionFilePage::try_new(echo, GitState::Available, Vec::new(), None)
+                .map_err(PortError::from)
+        }
+
+        async fn open_content(
+            &self,
+            root: &str,
+            path: &SessionFilePath,
+            purpose: FileReadPurpose,
+        ) -> Result<ContentSnapshot, PortError> {
+            self.record("open", root);
+            lock(&self.paths).push(path.as_str().to_owned());
+            ContentSnapshot::try_new(
+                path.clone(),
+                SessionFileContentKind::Text,
+                purpose,
+                0,
+                ContentVersion::parse("v1-test").expect("version"),
+                false,
+            )
+            .map_err(PortError::from)
+        }
+
+        async fn read_content(
+            &self,
+            version: &ContentVersion,
+            _offset: u64,
+        ) -> Result<SessionFileChunk, PortError> {
+            self.record("read", version.as_str());
+            let path = SessionFilePath::parse("src/main.rs").expect("path");
+            SessionFileChunk::try_new(
+                path,
+                SessionFileContentKind::Text,
+                0,
+                version.clone(),
+                0,
+                Vec::new(),
+                true,
+                false,
+            )
+            .map_err(PortError::from)
+        }
+
+        async fn release_content(&self, version: &ContentVersion) -> Result<(), PortError> {
+            self.record("release", version.as_str());
+            Ok(())
+        }
+
+        async fn git_status(
+            &self,
+            root: &str,
+            _after: Option<&SessionPageToken>,
+        ) -> Result<GitStatusPage, PortError> {
+            self.record("git_status", root);
+            GitStatusPage::try_new(GitState::Available, Vec::new(), None).map_err(PortError::from)
+        }
+
+        async fn git_diff(&self, root: &str, path: &SessionFilePath) -> Result<GitDiff, PortError> {
+            self.record("git_diff", root);
+            lock(&self.paths).push(path.as_str().to_owned());
+            GitDiff::try_new(
+                path.clone(),
+                GitDiffBase::Head,
+                GitDiffKind::Text,
+                Vec::new(),
+                None,
+                false,
+            )
+            .map_err(PortError::from)
+        }
+    }
+
     /// 一层里的一条目录条目（名称 + 绝对路径）。
     fn listing(parent: &std::path::Path, name: &str) -> DirectoryListing {
         DirectoryListing {
@@ -6890,6 +7227,304 @@ mod tests {
         assert_eq!(
             fixture.world.command(&request).expect("record").status(),
             CommandStatus::Failed
+        );
+    }
+
+    /// 给夹具的 owned 会话写入恢复列（`workspace_cwd` 是会话文件查询的唯一根来源）。
+    fn seed_files_recovery(fixture: &Fixture, root: &str) {
+        fixture.world.seed_recovery(
+            &fixture.session,
+            Some(AgentSessionId::new("acp-session-files").expect("agent session id")),
+            Some(root.to_owned()),
+        );
+    }
+
+    fn session_files_root() -> String {
+        std::env::temp_dir()
+            .join(format!("acpr-session-files-{}", uuid_text(61)))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// 未分组会话（没有目录登记归属）仍以持久化的实际 cwd 为根；查询不写命令/事件。
+    #[test]
+    fn session_file_queries_use_the_persisted_cwd_for_an_ungrouped_session() {
+        let files = Arc::new(RecordingFiles::new());
+        let fixture = fixture_with_session_files(files.clone());
+        let root = session_files_root();
+        seed_files_recovery(&fixture, &root);
+        assert!(
+            !lock(&fixture.world.state)
+                .workspace_directories
+                .contains_key(fixture.session.as_str()),
+            "夹具必须保持未分组：没有 workspace_directory_id"
+        );
+
+        let before_events = lock(&fixture.world.state).events.len();
+        let before_commands = lock(&fixture.world.state).commands.len();
+        let page = block_on(fixture.use_cases.list_session_files(
+            &Actor::LocalCli,
+            &fixture.session,
+            "",
+            false,
+            None,
+        ))
+        .expect("list");
+        assert!(page.entries().is_empty());
+        assert_eq!(files.calls(), vec!["list"], "只调用一次目录枚举端口");
+        assert_eq!(
+            files.roots(),
+            vec![root.clone()],
+            "根必须来自 load_recovery"
+        );
+        assert_eq!(files.paths(), vec![String::new()], "空串表示会话根");
+        assert_eq!(
+            lock(&fixture.world.state).events.len(),
+            before_events,
+            "查询不得产生事件"
+        );
+        assert_eq!(
+            lock(&fixture.world.state).commands.len(),
+            before_commands,
+            "查询不得写命令记录"
+        );
+        assert_eq!(fixture.world.commit_count(), 0, "查询不得提交事务");
+    }
+
+    /// imported 会话在任何文件/Git 端口调用之前被拒绝，也不读取恢复根。
+    ///
+    /// 真实语义：imported 会话**只**存在于 `RemoteDeliveryStore` 的 `imported_session` 索引里，owned
+    /// 存储中没有该行。因此这里只播种索引行、不播种 owned 会话行，验证前置链在 `SessionStore::load`
+    /// 返回 `None` 之后仍能识别出 imported，而不是误报 `session.not_found`。
+    #[test]
+    fn session_file_queries_reject_imported_sessions_before_any_port_call() {
+        let files = Arc::new(RecordingFiles::new());
+        let fixture = fixture_with_session_files(files.clone());
+        let remote = SessionId::new(&uuid_text(62)).expect("session id");
+        lock(&fixture.world.imported_sessions).push(imported_session_record(
+            &NodeId::new(&uuid_text(63)).expect("node id"),
+            &remote,
+            true,
+        ));
+        assert!(
+            !lock(&fixture.world.state)
+                .sessions
+                .contains_key(remote.as_str()),
+            "夹具必须保持真实语义：owned 存储里没有 imported 会话行"
+        );
+
+        for error in [
+            block_on(fixture.use_cases.list_session_files(
+                &Actor::LocalCli,
+                &remote,
+                "",
+                false,
+                None,
+            ))
+            .expect_err("imported list 必须拒绝"),
+            block_on(fixture.use_cases.read_session_file(
+                &Actor::LocalCli,
+                &remote,
+                "src/main.rs",
+                FileReadPurpose::Preview,
+                0,
+                None,
+            ))
+            .expect_err("imported read 必须拒绝"),
+            block_on(
+                fixture
+                    .use_cases
+                    .session_git_status(&Actor::LocalCli, &remote, None),
+            )
+            .expect_err("imported git status 必须拒绝"),
+            block_on(
+                fixture
+                    .use_cases
+                    .session_git_diff(&Actor::LocalCli, &remote, "src/main.rs"),
+            )
+            .expect_err("imported git diff 必须拒绝"),
+        ] {
+            assert!(
+                matches!(
+                    error,
+                    PortError::InvalidRequest("capability.unsupported_by_broker")
+                ),
+                "来源不支持必须是具名错误，实际 {error:?}"
+            );
+        }
+        assert!(
+            files.calls().is_empty(),
+            "imported 会话不得触碰文件/Git 端口"
+        );
+        assert!(
+            files.paths().is_empty(),
+            "imported 会话不得把任何路径交给端口"
+        );
+        assert_eq!(
+            fixture
+                .world
+                .recovery_reads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "来源判定必须发生在恢复列读取之前"
+        );
+    }
+
+    /// 两个存储里都查不到的会话回 `session.not_found`，同样不触碰文件/Git 端口。
+    #[test]
+    fn session_file_queries_report_an_unknown_session_as_not_found() {
+        let files = Arc::new(RecordingFiles::new());
+        let fixture = fixture_with_session_files(files.clone());
+        let unknown = SessionId::new(&uuid_text(65)).expect("session id");
+        let error = block_on(fixture.use_cases.list_session_files(
+            &Actor::LocalCli,
+            &unknown,
+            "",
+            false,
+            None,
+        ))
+        .expect_err("owned 与 imported 都没有的会话必须失败");
+        assert!(
+            matches!(&error, PortError::NotFound(EntityRef::Session(id)) if id == &unknown),
+            "必须是 session.not_found，实际 {error:?}"
+        );
+        assert!(files.calls().is_empty(), "未知会话不得触碰文件/Git 端口");
+    }
+
+    /// 非法路径在任何端口调用之前被拒绝（`sessionId`、来源与根都已通过）。
+    #[test]
+    fn session_file_queries_reject_illegal_paths_without_port_calls() {
+        let files = Arc::new(RecordingFiles::new());
+        let fixture = fixture_with_session_files(files.clone());
+        seed_files_recovery(&fixture, &session_files_root());
+
+        for path in [
+            "/etc/passwd",
+            "../outside",
+            ".git/config",
+            "C:\\repo\\x",
+            "a//b",
+        ] {
+            let error = block_on(fixture.use_cases.list_session_files(
+                &Actor::LocalCli,
+                &fixture.session,
+                path,
+                false,
+                None,
+            ))
+            .expect_err("非法目录路径必须拒绝");
+            assert!(matches!(error, PortError::InvalidRequest(_)));
+        }
+        for path in ["", "/abs", "..\\x", "dir/.git/HEAD", "file.txt:ads"] {
+            let error = block_on(fixture.use_cases.read_session_file(
+                &Actor::LocalCli,
+                &fixture.session,
+                path,
+                FileReadPurpose::Download,
+                0,
+                None,
+            ))
+            .expect_err("非法文件路径必须拒绝");
+            assert!(matches!(error, PortError::InvalidRequest(_)));
+        }
+        for path in ["/abs", "../x", "DIR/.GIT/HEAD"] {
+            let error = block_on(fixture.use_cases.session_git_diff(
+                &Actor::LocalCli,
+                &fixture.session,
+                path,
+            ))
+            .expect_err("非法 Git 差异路径必须拒绝");
+            assert!(matches!(error, PortError::InvalidRequest(_)));
+        }
+
+        assert!(
+            files.calls().is_empty(),
+            "形状非法时不得触碰文件/Git 端口，实际 {:?}",
+            files.calls()
+        );
+    }
+
+    /// 恢复列为空是明确的不可用，不回退到其它目录，也不调用端口。
+    #[test]
+    fn session_file_queries_report_a_missing_root_as_unavailable() {
+        let files = Arc::new(RecordingFiles::new());
+        let fixture = fixture_with_session_files(files.clone());
+        // 有意不 seed_recovery：会话行存在，但 workspace_cwd 为空。
+        let error = block_on(fixture.use_cases.list_session_files(
+            &Actor::LocalCli,
+            &fixture.session,
+            "",
+            false,
+            None,
+        ))
+        .expect_err("没有根必须明确失败");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+        assert!(files.calls().is_empty());
+    }
+
+    /// 合法查询经端口取块与 Git 视图，但不写命令终态、不产生事件、不提交事务。
+    #[test]
+    fn session_file_queries_have_no_persistent_side_effects() {
+        let files = Arc::new(RecordingFiles::new());
+        let fixture = fixture_with_session_files(files.clone());
+        let root = session_files_root();
+        seed_files_recovery(&fixture, &root);
+
+        let before_events = lock(&fixture.world.state).events.len();
+        let before_commands = lock(&fixture.world.state).commands.len();
+        let before_head = lock(&fixture.world.state).head;
+
+        let chunk = block_on(fixture.use_cases.read_session_file(
+            &Actor::LocalCli,
+            &fixture.session,
+            "src/main.rs",
+            FileReadPurpose::Preview,
+            0,
+            None,
+        ))
+        .expect("read");
+        assert!(chunk.eof());
+        assert_eq!(chunk.path().as_str(), "src/main.rs");
+        assert_eq!(chunk.version().as_str(), "v1-test");
+
+        block_on(
+            fixture
+                .use_cases
+                .session_git_status(&Actor::LocalCli, &fixture.session, None),
+        )
+        .expect("git status");
+        let diff = block_on(fixture.use_cases.session_git_diff(
+            &Actor::LocalCli,
+            &fixture.session,
+            "src/main.rs",
+        ))
+        .expect("git diff");
+        assert_eq!(diff.base(), GitDiffBase::Head);
+        assert_eq!(diff.kind(), GitDiffKind::Text);
+
+        assert_eq!(
+            lock(&fixture.world.state).events.len(),
+            before_events,
+            "查询不得产生事件"
+        );
+        assert_eq!(
+            lock(&fixture.world.state).commands.len(),
+            before_commands,
+            "查询不得写命令记录"
+        );
+        assert_eq!(
+            lock(&fixture.world.state).head,
+            before_head,
+            "查询不得推进全局序号"
+        );
+        assert_eq!(fixture.world.commit_count(), 0, "查询不得提交事务");
+        assert_eq!(
+            files.calls(),
+            vec!["open", "read", "git_status", "git_diff"],
+            "首次读取先建立快照再取块；Git 查询各调用一次"
         );
     }
 }

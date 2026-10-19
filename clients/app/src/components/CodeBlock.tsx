@@ -17,8 +17,9 @@
  * - 不发起任何远端加载：本组件没有图片/链接概念，也没有网络调用。
  * - 颜色全部来自 `theme.ts` 的 token（`hljs-*` 类名映射到 token 家族，未知类名回落到正文色）。
  *
- * 组件是纯函数：语言标记、正文、序号都从 props 来；复制入口只把 `(code, language)` 上抛给页面，
- * 组件自身不触碰剪贴板等平台能力（`docs/FRONTEND_DESIGN.md` §3 的分层口径，与 `SessionRow` 一致）。
+ * 组件是纯函数：语言标记、正文、序号都从 props 来；正文按行渲染并带行号列（行号不进复制载荷），
+ * 复制入口只把 `(code, language)` 上抛给页面，组件自身不触碰剪贴板等平台能力
+ * （`docs/FRONTEND_DESIGN.md` §3 的分层口径，与 `SessionRow` 一致）。
  */
 
 import type { ReactElement } from "react";
@@ -259,6 +260,25 @@ function highlightRuns(code: string, language: string): readonly CodeRun[] {
   return toRuns(hljs.highlight(code, { language, ignoreIllegals: true }).value);
 }
 
+/**
+ * 把 run 序列按换行切成**行**：高亮 span 可以跨行（多行字符串、块注释），行号与逐行渲染因此
+ * 必须在这里切分，而不是让 hljs 的 span 决定行边界。高亮只切文本、不改文本。
+ */
+function toLines(runs: readonly CodeRun[]): readonly (readonly CodeRun[])[] {
+  const lines: CodeRun[][] = [[]];
+  for (const run of runs) {
+    const pieces = run.text.split("\n");
+    pieces.forEach((piece, pieceIndex) => {
+      if (pieceIndex > 0) lines.push([]);
+      const current = lines[lines.length - 1];
+      if (current !== undefined && piece.length > 0) {
+        current.push({ text: piece, family: run.family });
+      }
+    });
+  }
+  return lines;
+}
+
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
@@ -301,12 +321,31 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.xs,
     },
     code: {
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+    },
+    /** 一行：行号列 + 正文列（行号不进入复制载荷，也不能被选中复制）。 */
+    codeLine: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+    },
+    codeLineNumber: {
+      minWidth: 28,
+      paddingRight: spacing.sm,
+      color: colors.ink3,
+      fontFamily: fontFamily.mono,
+      fontSize: fontSize.sm,
+      lineHeight: fontSize.sm + 5,
+      textAlign: "right",
+      userSelect: "none",
+    },
+    codeLineBody: {
+      flexGrow: 1,
+      flexShrink: 1,
       color: colors.ink,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.sm,
       lineHeight: fontSize.sm + 5,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
     },
     /** 高亮 run：只带字面样式，不带容器内边距（否则每个 token 都会再缩进一次）。 */
     codeRun: {
@@ -324,7 +363,7 @@ const TOKEN_STYLES = { light: buildTokenStyles(palettes.light), dark: buildToken
 /** 无语言标记时展示的标签（`data-code-language` 也是它，便于断言「有序且带标记」）。 */
 const UNLABELLED = "文本";
 
-/** 一个代码块：语言标记 + 复制入口 + 等宽正文。 */
+/** 一个代码块：语言标记 + 复制入口 + 带行号的等宽正文。 */
 export function CodeBlock({ code, language, index, onCopy }: CodeBlockProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -335,6 +374,7 @@ export function CodeBlock({ code, language, index, onCopy }: CodeBlockProps): Re
   const shownLabel = label.length === 0 ? UNLABELLED : label;
   const highlightLanguage = label.split(/\s+/)[0]?.toLowerCase() ?? "";
   const runs = highlightRuns(source, highlightLanguage);
+  const lines = toLines(runs);
 
   return (
     <View
@@ -356,16 +396,29 @@ export function CodeBlock({ code, language, index, onCopy }: CodeBlockProps): Re
           <Text style={styles.copyText}>复制</Text>
         </Pressable>
       </View>
-      <Text style={styles.code} dataSet={{ codeText: "true" }}>
-        {runs.map((run, runIndex) => (
-          <Text
-            key={runIndex}
-            style={run.family === null ? styles.codeRun : [styles.codeRun, tokenStyles[run.family]]}
-          >
-            {run.text}
-          </Text>
-        ))}
-      </Text>
+      <View style={styles.code} dataSet={{ codeText: "true", codeLineCount: lines.length }}>
+        {lines.map((line, lineIndex) => {
+          const number = String(lineIndex + 1);
+          return (
+            <View key={number} style={styles.codeLine} dataSet={{ codeLine: number }}>
+              {/* 行号列单独渲染：它是定位辅助，不是正文（复制载荷仍是 `source`）。 */}
+              <Text style={styles.codeLineNumber} dataSet={{ codeLineNumber: number }}>
+                {number}
+              </Text>
+              <Text style={styles.codeLineBody} dataSet={{ codeLineText: number }}>
+                {line.map((run, runIndex) => (
+                  <Text
+                    key={runIndex}
+                    style={run.family === null ? styles.codeRun : [styles.codeRun, tokenStyles[run.family]]}
+                  >
+                    {run.text}
+                  </Text>
+                ))}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
     </View>
   );
 }

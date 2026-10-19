@@ -47,6 +47,7 @@ import {
   CheckFailure,
   click,
   domText,
+  expectAbsent,
   expectEqual,
   expectNone,
   expectThat,
@@ -54,6 +55,7 @@ import {
   navigate,
   query,
   queryAll,
+  textOf,
   waitFor,
 } from "../support";
 import type { Check, Mounted, ScenarioOptions } from "../support";
@@ -95,8 +97,18 @@ const TOOL_RUN_TWO_ID = "d0000000-0000-4000-8000-000000000314";
 const TERMINAL_TWO_ID = "d0000000-0000-4000-8000-000000000313";
 /** 右栏那一处改动。 */
 const CHANGE_ID = "d0000000-0000-4000-8000-000000000321";
-/** 结构化差异行的行内容：只有服务端下发的这一份，客户端不拼、不从原文还原。 */
-const DIFF_TEXT = ["  const opts = resolveOptions(input);", "- const idleTimeout = 30_000;", "+ const idleTimeout = 10_000;"] as const;
+/**
+ * 结构化差异行的**原文**（不含行首前缀）：前缀由客户端按 kind 自动补上，因此夹具里的 `text`
+ * 必须是服务端下发的裸内容。夹具若把前缀也写进 `text`，渲染结果会出现两个前缀——这正是本用例
+ * 用「逐行文本恰好等于 前缀 + 原文」来钉住的那条。
+ */
+const DIFF_TEXT = [
+  "const opts = resolveOptions(input);",
+  "const idleTimeout = 30_000;",
+  "const idleTimeout = opts.idleTimeoutMs ?? 10_000;",
+] as const;
+/** 三档差异行的行首前缀（与 `FileChangesPanel` 的 `DIFF_LINE_PREFIXES` 同值）。 */
+const DIFF_PREFIXES = ["  ", "- ", "+ "] as const;
 /** 未下发的差异正文（只可能作为不可信原文出现在诊断槽位里）。 */
 const RAW_DIFF = JSON.stringify({ params: { update: { sessionUpdate: "tool_call_update", rawInput: { path: "docs/RAW_ONLY_MARKER.md" } } } });
 
@@ -727,6 +739,20 @@ const checks: readonly Check[] = [
           const filesText = domText(filesColumn);
           for (const line of DIFF_TEXT) {
             expectThat(filesText.includes(line), `差异行内容必须逐字来自结构化来源：${line}`);
+          }
+          // 前缀由客户端按 kind 自动补一次：每行渲染文本必须**恰好**是「前缀 + 原文」。
+          // 夹具若把前缀写进 `text`（或客户端补两次），这里会读到 `+ + …` / `- - …` 而判红。
+          const renderedLines = queryAll(filesColumn, "[data-diff-line-kind]").map(textOf);
+          expectEqual(
+            renderedLines,
+            DIFF_TEXT.map((text, index) => `${DIFF_PREFIXES[index]}${text}`),
+            "差异行必须只带一个由 kind 推出的行首前缀",
+          );
+          for (const [index, rendered] of renderedLines.entries()) {
+            const prefix = DIFF_PREFIXES[index];
+            expectThat(prefix !== undefined, `第 ${String(index + 1)} 行没有登记前缀`);
+            expectThat(rendered.startsWith(prefix), `第 ${String(index + 1)} 行缺少行首前缀`);
+            expectAbsent(rendered, `${prefix}${prefix}`, `第 ${String(index + 1)} 行出现了双前缀`);
           }
           // 差异行不来自解析 ACP 原文：未展开诊断时，原文片段一个都不出现。
           expectNone(domText(container), ["RAW_ONLY_MARKER"], "未展开诊断时页面上出现了未下发的 ACP 原文");

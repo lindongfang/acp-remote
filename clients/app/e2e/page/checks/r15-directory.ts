@@ -896,7 +896,8 @@ const checks: readonly Check[] = [
         }),
       );
       const mounted = await mountScenario(baseScenario({ workspaces, sessions }));
-      // 外壳不在替身里：给容器一个明确的视口高度，模拟真实布局链上的 `flex:1;min-height:0`。
+      // 给容器一个明确的视口高度，模拟真实布局链上的 `flex:1;min-height:0`（外壳的根节点
+      // 同样是弹性子项，会把这个高度继续传给目录页的滚动容器）。
       mounted.container.style.height = "600px";
       mounted.container.style.display = "flex";
       mounted.container.style.flexDirection = "column";

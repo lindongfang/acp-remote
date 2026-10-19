@@ -30,7 +30,11 @@
         "session.mode.set",
         "session.config.set",
         "permission.resolve",
-        "session.create"
+        "session.create",
+        "session.files.list",
+        "session.files.read",
+        "session.git.status",
+        "session.git.diff"
       ]
     },
     "command": {
@@ -103,6 +107,18 @@
             },
             {
               "$ref": "#/$defs/workspaceMkdir"
+            },
+            {
+              "$ref": "#/$defs/sessionFilesList"
+            },
+            {
+              "$ref": "#/$defs/sessionFilesRead"
+            },
+            {
+              "$ref": "#/$defs/sessionGitStatus"
+            },
+            {
+              "$ref": "#/$defs/sessionGitDiff"
             }
           ]
         }
@@ -851,6 +867,447 @@
         }
       }
     },
+    "sessionRelativePath": {
+      "description": "根内相对路径（`session.files.list`/`session.files.read`/`session.git.diff`）。结构是「非空分量 + 单个分隔符」，`/` 与 `\\` 都可作分隔符；拒绝绝对路径、盘符、UNC、父引用（`..`）、当前目录引用（`.`）、控制字符（含换行与制表符）、NUL、Windows alternate data stream 冒号（任意 `:`）、空路径分量（重复或尾随分隔符）以及任一分量为 `.git`（大小写不敏感，隐藏 Git 管理目录与 worktree 的 `.git` 管理文件）。长度上限 4096 字符是固定 v1 常量（docs/SYNC_PROTOCOL.md §14）。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!.*[\\u0000-\\u001F\\u007F-\\u009F:])(?!.*(?:^|[/\\\\])(?:\\.{1,2}|\\.[gG][iI][tT])(?=$|[/\\\\]))[^\\u0000-\\u001F\\u007F-\\u009F:/\\\\]+(?:[\\\\/][^\\u0000-\\u001F\\u007F-\\u009F:/\\\\]+)*$"
+    },
+    "sessionFilesPath": {
+      "description": "`session.files.list` 的路径：空串表示会话根，其余必须是 `sessionRelativePath`。它同时是请求字段与结果回显字段，必须逐字相同。",
+      "oneOf": [
+        {
+          "const": ""
+        },
+        {
+          "$ref": "#/$defs/sessionRelativePath"
+        }
+      ]
+    },
+    "sessionPageToken": {
+      "description": "`after`/`next`：只用于翻页的短期不透明位置标识，不授予读取权限。字符集与长度有界，客户端不得解析其结构。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "sessionContentVersion": {
+      "description": "连接期内容版本：不透明的只读快照标识，绑定连接、设备、会话与相对路径。它不是 bearer 凭据，客户端不得解析或跨连接复用。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "sessionFileData": {
+      "description": "一个内容块的原始字节，编码为无填充 base64url。单块原始字节最多 32 KiB（docs/SYNC_PROTOCOL.md §14），零字节文件允许空串。",
+      "type": "string",
+      "maxLength": 43691,
+      "pattern": "^[A-Za-z0-9_-]*$"
+    },
+    "sessionFileEntryKind": {
+      "enum": [
+        "file",
+        "directory",
+        "link",
+        "other"
+      ]
+    },
+    "sessionFileRestrictedReason": {
+      "enum": [
+        "outside_root",
+        "unreadable",
+        "unsupported"
+      ]
+    },
+    "sessionFileEntry": {
+      "description": "`session.files.list` 的一条条目。`openable` 为假时必须给出 `restricted`；根外链接仍列出名称与根内路径，但不下发目标绝对路径。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "name",
+        "kind",
+        "openable"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/sessionRelativePath"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "$ref": "#/$defs/sessionFileEntryKind"
+        },
+        "openable": {
+          "type": "boolean"
+        },
+        "restricted": {
+          "$ref": "#/$defs/sessionFileRestrictedReason"
+        }
+      }
+    },
+    "gitState": {
+      "description": "目录的 Git 状态。`not_repository`（不是仓库）与 `unavailable`（本机 Git 不可用）是不同的成功状态，都不得用空列表冒充干净仓库。",
+      "enum": [
+        "available",
+        "not_repository",
+        "unavailable"
+      ]
+    },
+    "sessionFilesList": {
+      "description": "Sync 面的 `session.files.list`：列出当前会话工作目录内一层的文件项。`path` 为空串表示根；`hideIgnored` 默认（省略）不得被解释为隐藏，键必须存在。结果形状由 `sessionFilesListResult` 决定。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
+      "properties": {
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.files.list"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "hideIgnored"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/sessionFilesPath"
+            },
+            "hideIgnored": {
+              "type": "boolean"
+            },
+            "after": {
+              "$ref": "#/$defs/sessionPageToken"
+            }
+          }
+        }
+      }
+    },
+    "sessionFilesListResult": {
+      "description": "`session.files.list` 的 completed 结果。条目按目录优先、名称 Unicode 码点、路径打破并列的确定顺序排列；每页最多 128 项（§14），`next` 为续读位置。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "gitState",
+        "entries"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/sessionFilesPath"
+        },
+        "gitState": {
+          "$ref": "#/$defs/gitState"
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/sessionFileEntry"
+          }
+        },
+        "next": {
+          "$ref": "#/$defs/sessionPageToken"
+        }
+      }
+    },
+    "sessionFilesReadPurpose": {
+      "enum": [
+        "preview",
+        "download"
+      ]
+    },
+    "sessionFilesRead": {
+      "description": "Sync 面的 `session.files.read`：从当前会话工作目录内的一个文件读取有界字节块。`offset` 与 `sizeBytes` 使用规范十进制字符串；`version` 省略时建立连接绑定的只读快照，出现时从同一版本续读。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
+      "properties": {
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.files.read"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "purpose",
+            "offset"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/sessionRelativePath"
+            },
+            "purpose": {
+              "$ref": "#/$defs/sessionFilesReadPurpose"
+            },
+            "offset": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "version": {
+              "$ref": "#/$defs/sessionContentVersion"
+            }
+          }
+        }
+      }
+    },
+    "sessionFilesReadResult": {
+      "description": "`session.files.read` 的 completed 结果：文件类别、原始大小、内容版本、本块偏移与 base64url 数据。`eof` 与 `previewTruncated` 都是必填布尔值；单块原始字节最多 32 KiB（§14）。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "kind",
+        "sizeBytes",
+        "version",
+        "offset",
+        "dataBase64",
+        "eof",
+        "previewTruncated"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/sessionRelativePath"
+        },
+        "kind": {
+          "$ref": "#/$defs/sessionFileContentKind"
+        },
+        "sizeBytes": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        },
+        "version": {
+          "$ref": "#/$defs/sessionContentVersion"
+        },
+        "offset": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        },
+        "dataBase64": {
+          "$ref": "#/$defs/sessionFileData"
+        },
+        "eof": {
+          "type": "boolean"
+        },
+        "previewTruncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "sessionFileContentKind": {
+      "enum": [
+        "text",
+        "image",
+        "binary"
+      ]
+    },
+    "sessionGitStatus": {
+      "description": "Sync 面的 `session.git.status`：当前会话工作目录内的 Git 未提交状态。payload 只有可选 `after` 翻页位置。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
+      "properties": {
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.git.status"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "$ref": "#/$defs/sessionPageToken"
+            }
+          }
+        }
+      }
+    },
+    "gitFileStatus": {
+      "enum": [
+        "added",
+        "modified",
+        "deleted",
+        "renamed",
+        "untracked"
+      ]
+    },
+    "gitStatusEntry": {
+      "description": "相对 HEAD 与工作树合并后的一个文件。`previousPath` 只在改名且能安全确认时出现；`conflicted` 与 `binary` 是显式标记，不得用空差异冒充。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "status",
+        "conflicted",
+        "binary"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/sessionRelativePath"
+        },
+        "status": {
+          "$ref": "#/$defs/gitFileStatus"
+        },
+        "previousPath": {
+          "$ref": "#/$defs/sessionRelativePath"
+        },
+        "conflicted": {
+          "type": "boolean"
+        },
+        "binary": {
+          "type": "boolean"
+        }
+      }
+    },
+    "sessionGitStatusResult": {
+      "description": "`session.git.status` 的 completed 结果。每页最多 128 项（§14），`next` 为续读位置。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gitState",
+        "entries"
+      ],
+      "properties": {
+        "gitState": {
+          "$ref": "#/$defs/gitState"
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/gitStatusEntry"
+          }
+        },
+        "next": {
+          "$ref": "#/$defs/sessionPageToken"
+        }
+      }
+    },
+    "sessionGitDiff": {
+      "description": "Sync 面的 `session.git.diff`：当前会话工作目录内一个文件相对 HEAD 与工作树的差异。请求只接受根内相对路径。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
+      "properties": {
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.git.diff"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/sessionRelativePath"
+            }
+          }
+        }
+      }
+    },
+    "gitDiffBase": {
+      "enum": [
+        "head",
+        "empty"
+      ]
+    },
+    "gitDiffKind": {
+      "enum": [
+        "text",
+        "binary",
+        "conflict"
+      ]
+    },
+    "gitDiffUnavailableReason": {
+      "enum": [
+        "not_repository",
+        "git_unavailable",
+        "too_large"
+      ]
+    },
+    "sessionGitDiffResult": {
+      "description": "`session.git.diff` 的 completed 结果。文本差异最多 400 行、合计 64 KiB、单行 4096 字符（§14）；超过时只带可行子集并置 `truncated`，不可用时只带 `unavailable`，两者不得同时出现。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "base",
+        "kind",
+        "truncated"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/sessionRelativePath"
+        },
+        "base": {
+          "$ref": "#/$defs/gitDiffBase"
+        },
+        "kind": {
+          "$ref": "#/$defs/gitDiffKind"
+        },
+        "diffLines": {
+          "type": "array",
+          "maxItems": 400,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "unavailable": {
+          "$ref": "#/$defs/gitDiffUnavailableReason"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
     "commandStatusRecord": {
       "type": "object",
       "required": [
@@ -1181,13 +1638,109 @@
               "if": {
                 "properties": {
                   "command": {
+                    "const": "session.files.list"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/sessionFilesListResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "const": "session.files.read"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/sessionFilesReadResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "const": "session.git.status"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/sessionGitStatusResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "const": "session.git.diff"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/sessionGitDiffResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
                     "enum": [
                       "session.list",
                       "session.read",
                       "command.status",
                       "session.mode.list",
                       "session.config.list",
-                      "workspace.browse"
+                      "workspace.browse",
+                      "session.files.list",
+                      "session.files.read",
+                      "session.git.status",
+                      "session.git.diff"
                     ]
                   },
                   "status": {

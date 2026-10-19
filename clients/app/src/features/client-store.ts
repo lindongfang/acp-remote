@@ -52,9 +52,35 @@ import {
   SESSION_HISTORY_FEATURE,
   assertHistoryPagesDoNotOverlap,
   assertPagesDoNotOverlap,
+  decodeBase64Url,
   toLoadedHistoryPage,
   toLoadedPage,
 } from "../sync-client";
+import type { AllFilesDirectoryView, FileSource, GitDiffView } from "../domain/session-files";
+import { buildSessionChangesModel } from "../domain/session-files";
+import {
+  SESSION_FILES_FEATURE,
+  decodeSessionFilesResult,
+  isSessionFilesCommandName,
+} from "../protocol/session-files";
+import type {
+  FileContentState,
+  FileViewContext,
+  SessionFilesPanelModel,
+  SessionFilesSourcesState,
+  SessionFilesState,
+} from "./session-files";
+import {
+  FILE_IMAGE_PREVIEW_BUDGET_BYTES,
+  FILE_PREVIEW_BUDGET_BYTES,
+  FILE_REFRESH_DEBOUNCE_MS,
+  FILE_REFRESH_MAX_RETRY_MS,
+  buildSessionFilesPanelModel,
+  emptyAllFilesDirectory,
+  initialSessionFilesState,
+  selectedSourceOf,
+  sourcesOf,
+} from "./session-files";
 import type { BlockingCause, CommandRecord, ConnectionEvent, ConnectionMachineState } from "../state";
 import {
   IllegalConnectionTransition,
@@ -95,7 +121,6 @@ import type {
   UsageReading,
 } from "./conversation-model";
 import {
-  CONVERSATION_SIDEBAR_BATCH_SIZE,
   DEFAULT_CONVERSATION_SECONDARY_VIEW,
   buildConversationModel,
   buildConversationSidebar,
@@ -114,7 +139,7 @@ import {
   deltaChannelOf,
 } from "./conversation-timeline";
 import type { DegradedEventModel } from "./degradation-model";
-import { buildDegradedRecordModel, isDegradedRecord } from "./degradation-model";
+import { buildDegradedRecordModel, buildRecordDiagnosticsModel, isDegradedRecord } from "./degradation-model";
 import { buildInteractionViews } from "./interaction-model";
 import type {
   CreateSessionEntryModel,
@@ -197,7 +222,9 @@ import { DEVICE_QR_FRAGMENT_PREFIX } from "../protocol";
  * 结构化历史（`history`）不在这里——它只在服务端协商到 `core.session-history.v1` 时才带上
  * （未协商却请求它会得到明确的不支持类错误，`design.md` 的 Compatibility）。
  */
-const CONVERSATION_INCLUDES: readonly SessionReadInclude[] = ["messages", "config_options", "pending_interactions"];
+// Sync v1 当前只支持这些首次读取资源；pending_interactions/turns/capabilities
+// 会使服务端拒绝整条查询。实时交互与结构化历史仍按原有事件路径处理。
+const CONVERSATION_INCLUDES: readonly SessionReadInclude[] = ["messages", "config_options"];
 
 /** 一次 `session.read` 取回的明细资源（v1 对话页需要的两样）。 */
 interface StagedReadResources {
@@ -218,10 +245,12 @@ export interface ConversationThreadState {
   readonly loadingEarlier: boolean;
   readonly loadingHistory: boolean;
   readonly pagingError: string | null;
+  /** 仅文件栏手动刷新会话变更的失败，不复用首次加载/消息翻页错误。 */
+  readonly historyRefreshError?: string | null;
 }
 
 /** 一次 `session.read` 的用途：首屏、向上翻消息、向上翻历史。三者合并结果的方式不同。 */
-type ReadIntent = "first" | "earlier" | "earlier_history";
+type ReadIntent = "first" | "earlier" | "earlier_history" | "refresh_history";
 
 /** 待完成的读取请求。 */
 interface PendingRead {
@@ -327,10 +356,12 @@ export interface ClientState {
   readonly conversationSecondaryView: ConversationSecondaryView;
   /** 对话页左栏的目录内搜索词；只影响左栏列表，不改中栏当前会话。 */
   readonly conversationSidebarQuery: string;
-  /** 对话页左栏一次呈现的会话条数（「继续加载」按批增加）。 */
-  readonly conversationSidebarLimit: number;
+  /** 对话页左栏页码输入；由模型纠正到有效页码。 */
+  readonly conversationSidebarPageInput: string;
   readonly pairing: PairingPageModel;
   readonly host: HostIdentityModel | null;
+  /** 文件栏三来源、互斥内容视图与刷新状态（WP4；与草稿/时间线/展开态互不重叠）。 */
+  readonly sessionFiles: SessionFilesState;
 }
 
 /** 初始状态：未配对、没有快照。 */
@@ -370,9 +401,10 @@ export function initialClientState(): ClientState {
     directoryDetailDirectoryId: null,
     conversationSecondaryView: DEFAULT_CONVERSATION_SECONDARY_VIEW,
     conversationSidebarQuery: "",
-    conversationSidebarLimit: CONVERSATION_SIDEBAR_BATCH_SIZE,
+    conversationSidebarPageInput: "",
     pairing: initialPairingPageModel(),
     host: null,
+    sessionFiles: initialSessionFilesState(),
   };
 }
 
@@ -627,6 +659,31 @@ export interface ClientStoreOptions {
    * 「正在配对」比当场说清楚更糟。测试替身注入它即可完整驱动配对流程（含 claim 与轮询）。
    */
   readonly pairing?: PairingWiring | undefined;
+  /**
+   * 退避定时端口（文件栏的突发事件合并与限流重试）。缺省不安排定时器：测试可直接调用
+   * `refreshFiles` 驱动，生产由组合根注入时钟的 `schedule`。
+   */
+  readonly schedule?: ((delayMs: number, task: () => void) => () => void) | undefined;
+}
+
+/** 一条在途的文件栏查询（请求代次与返回上下文在结果到达时逐项核对）。 */
+interface PendingFileQuery {
+  readonly requestId: Uuid;
+  readonly kind: "list" | "read" | "git_status" | "git_diff";
+  readonly sessionId: Uuid;
+  readonly source: FileSource;
+  readonly path: string | null;
+  readonly generation: number;
+  /** 列表/状态的续页标记：`undefined` = 第一页，`null` = 没有更多。 */
+  readonly after?: string | undefined;
+  /** 是否把结果追加到已有页（翻页）。 */
+  readonly append?: boolean | undefined;
+  /** 预览续块：已拼接的字节与版本。 */
+  readonly chunks?: Uint8Array[] | undefined;
+  readonly version?: string | undefined;
+  readonly sizeBytes?: string | undefined;
+  readonly fileKind?: "text" | "image" | "binary" | undefined;
+  readonly previewTruncated?: boolean | undefined;
 }
 
 /**
@@ -666,6 +723,15 @@ export class ClientStore {
   readonly #pendingReads = new Map<Uuid, PendingRead>();
   readonly #listeners = new Set<Listener>();
   readonly #directoryRefreshRequests = new Set<Uuid>();
+  readonly #schedule: ((delayMs: number, task: () => void) => () => void) | null;
+  /** 在途的文件栏查询（含请求代次与返回上下文）。 */
+  readonly #pendingFileQueries = new Map<Uuid, PendingFileQuery>();
+  /** 突发事件合并/限流退避定时器；键为 `<sessionId>|<source>`。 */
+  readonly #fileRefreshTimers = new Map<string, () => void>();
+  /** 已排队但在飞的刷新：一次只允许一个同来源查询。 */
+  readonly #fileRefreshQueued = new Set<string>();
+  /** 当前对话页的会话；切换时旧会话的文件读取必须作废（迟到的响应不能重新打开文件）。 */
+  #activeConversationSession: Uuid | null = null;
   #pairingSession: PairingSession | null = null;
   #state: ClientState = initialClientState();
 
@@ -676,6 +742,7 @@ export class ClientStore {
     this.#identity = options.identity;
     this.#ownerLabelOf = options.ownerLabelOf ?? ((ownerNodeId: string) => ownerNodeId);
     this.#pairing = options.pairing ?? null;
+    this.#schedule = options.schedule ?? null;
   }
 
   /** 当前状态。 */
@@ -698,9 +765,16 @@ export class ClientStore {
    * `resources`——§9.4 要求验证失败时保留上一次已完成的状态。
    */
   apply(event: SyncClientEvent): void {
-    const next = this.#reduce(event);
+    const reduced = this.#reduce(event);
+    // 连接离开 online（closed/blocked）或建立新连接（authenticated）后，旧连接上的在途
+    // 文件查询不会再回来：必须丢掉它们并把来源的 loading 复位，否则 in-flight 标记会让
+    // 下一次刷新被永久排队、来源永久停在加载中。
+    const resetFiles = event.kind === "authenticated" || event.kind === "closed" || event.kind === "blocked";
+    if (resetFiles) this.#resetFileQueries();
+    const next = resetFiles ? this.#withFileLoadingStopped(reduced) : reduced;
     if (next === this.#state) return;
     this.#commit(next);
+    this.#drainQueuedFileRefreshes();
     // 创建完成只带目录引用，路径必须从服务端快照取得，不能按用户输入伪造目录条目。
     if (event.kind === "command_result" && event.result.body.command === "session.create" &&
       event.result.body.status === "completed" && !this.#directoryRefreshRequests.has(event.result.body.requestId)) {
@@ -838,6 +912,12 @@ export class ClientStore {
     // 6) 消息通道：流式增量累加成**易失**正文，完成标记只改「增量流结束」，压缩事件作废轮次。
     next = this.#withMessageLane(next, record);
 
+    // 7) 文件栏：当前会话的 `file.changed` 只触发来源刷新与「过时」标记，不取消 Agent，
+    //    也不擅自用新内容覆盖正在阅读的视图（design D6）。
+    if (record.eventType === "file.changed" && record.sessionId !== null) {
+      next = this.#withFileChangedEvent(next, record);
+    }
+
     return next;
   }
 
@@ -904,6 +984,12 @@ export class ClientStore {
 
   /** 命令结果归并：终态回填 + `session.read`/`session.mode.list` 结果并入 + 结果不确定登记。 */
   #withCommandResult(result: CommandResultMessage): ClientState {
+    // 文件栏查询没有命令记录：正文（尤其 `session.files.read` 的 `dataBase64`）只活在本次
+    // 操作的闭包与在途表里，绝不能先落进 `commands`——那会把整份下载永久留在公开状态。
+    // 迟到或无 pending 的结果同样只走 `#withSessionFilesResult`，由它丢弃。
+    if (isSessionFilesCommandName(result.body.command)) {
+      return this.#withSessionFilesResult(this.#state, result);
+    }
     const record =
       this.#state.commands.get(result.body.requestId) ??
       createCommand({ requestId: result.body.requestId, command: result.body.command });
@@ -1042,27 +1128,34 @@ export class ClientStore {
     this.#pendingReads.delete(result.body.requestId);
     const threads = new Map(state.threads);
     const sessionId = pending.sessionId;
-    const existing = threads.get(sessionId) ?? {
-      page: null,
-      items: [] as readonly SnapshotItemMessages[],
-      historyHasEarlier: false,
-      nextBeforeHistory: null,
-      loadingEarlier: false,
-      loadingHistory: false,
-      pagingError: null,
-    };
+    const existing = threads.get(sessionId) ?? EMPTY_THREAD;
 
     if (result.body.command !== "session.read" || result.body.status !== "completed") {
       threads.set(sessionId, {
         ...existing,
         loadingEarlier: false,
         loadingHistory: false,
-        pagingError: describeCommandFailure(result),
+        pagingError: pending.intent === "refresh_history" ? existing.pagingError : describeCommandFailure(result),
+        historyRefreshError: pending.intent === "refresh_history" ? describeCommandFailure(result) : existing.historyRefreshError ?? null,
       });
       return { ...state, threads };
     }
 
     const read = result.body.result as SessionReadResult;
+    if (pending.intent === "refresh_history") {
+      const loaded = toLoadedHistoryPage(read);
+      const hadHistory = existing.page !== null || [...state.history.values()].some(record => record.sessionId === sessionId);
+      threads.set(sessionId, {
+        ...existing,
+        historyHasEarlier: hadHistory ? existing.historyHasEarlier : loaded.hasEarlier,
+        nextBeforeHistory: hadHistory ? existing.nextBeforeHistory : loaded.nextBeforeHistory,
+        loadingHistory: false,
+        pagingError: existing.pagingError,
+        historyRefreshError: null,
+      });
+      // 最新一页可以与旧记录重叠：按 eventId 去重合并，不重置消息页和历史翻页位置。
+      return { ...withHistory(state, sessionId, loaded.items), threads };
+    }
     if (pending.intent === "earlier_history") {
       const loaded = toLoadedHistoryPage(read);
       // 不重：新页不得与已有历史条目重叠（同一 `eventId` 出现两次说明游标算错）。
@@ -1091,6 +1184,7 @@ export class ClientStore {
       // 首屏同时拿到历史那一页的页标记与续取游标；消息翻页请求不动它们（两套游标独立）。
       const historyPage = pending.intent === "first" ? toLoadedHistoryPage(read) : null;
       threads.set(sessionId, {
+        ...existing,
         page: buildSessionReadPageView(loaded.result),
         items: loaded.messages,
         historyHasEarlier: historyPage?.hasEarlier ?? existing.historyHasEarlier,
@@ -1105,6 +1199,7 @@ export class ClientStore {
     // 向上翻页：不重不漏由 `assertPagesDoNotOverlap` 把关，违反即抛而不是静默拼接。
     assertPagesDoNotOverlap(existing.items, loaded.messages);
     threads.set(sessionId, {
+      ...existing,
       page: buildSessionReadPageView({
         sessionId,
         resources: { messages: [...loaded.messages, ...existing.items] },
@@ -1312,7 +1407,7 @@ export class ClientStore {
         sessionId,
         ownerLabelOf: this.#ownerLabelOf,
         query: this.#state.conversationSidebarQuery,
-        limit: this.#state.conversationSidebarLimit,
+        pageInput: this.#state.conversationSidebarPageInput,
         nowMs: nowMs ?? this.#now(),
       }),
       capabilities: conversationCapabilities({
@@ -1370,19 +1465,24 @@ export class ClientStore {
   }
 
   /**
-   * 诊断抽屉模型：选中**降级条目**的原文与元数据（R18）。
+   * 诊断抽屉模型：选中记录的原文与元数据（R18）。
    *
    * 记录从结构化记录里按 `eventId` 取（实时与历史都在内），因此历史条目的降级同样可诊断。
-   * 内容齐备、走专用视图的记录**不**在这里返回模型：它没有降级原因可讲，硬造一个会让抽屉
-   * 谎报归因。要看待呈现记录的原文，用它的视图模型自带的诊断数据
-   * （例如 `FileChangeView.diagnostics`）。
+   * 记录存在时一定给出模型：降级记录走 {@link buildDegradedRecordModel}（保留原有的降级
+   * 归因），其余记录走 {@link buildRecordDiagnosticsModel}（`reason.kind === "explicit"`）。
+   * 后者是必须的——`ConversationTimeline` 的「查看 ACP 原文」对正常工具调用也会调用
+   * `openDiagnostics(eventId)`，若这里只服务降级记录，那些按钮会打开一个空抽屉。
+   *
+   * 只有记录本身不存在时才返回 `null`（例如事件已被淘汰）。
    */
   diagnostics(): DegradedEventModel | null {
     const id = this.#state.diagnosticsEventId;
     if (id === null) return null;
     const record = this.#state.structured.get(id) ?? this.#state.history.get(id);
-    if (record === undefined || !isDegradedRecord(record)) return null;
-    return buildDegradedRecordModel(record);
+    if (record === undefined) return null;
+    return isDegradedRecord(record)
+      ? buildDegradedRecordModel(record)
+      : buildRecordDiagnosticsModel(record);
   }
 
   /** 该会话最新的配置项来源：配置事件优先，其次是首屏读回的 `config_options`。 */
@@ -1717,18 +1817,18 @@ export class ClientStore {
 
   /** 更新对话页左栏的目录内搜索词（只影响左栏列表）。 */
   setConversationSidebarQuery(query: string): void {
-    this.#commit({ ...this.#state, conversationSidebarQuery: query });
+    this.#commit({ ...this.#state, conversationSidebarQuery: query, conversationSidebarPageInput: "" });
   }
 
   /**
-   * 左栏「继续加载」：再放一批（{@link CONVERSATION_SIDEBAR_BATCH_SIZE} 条）。
+   * 切换左栏页码，每页条数由左栏模型统一定义。
    *
-   * 它只改呈现条数，不派发任何命令、也不改中栏当前会话。
+   * 它只改左栏呈现页，不派发任何命令、也不改中栏当前会话。
    */
-  loadMoreSidebarSessions(): void {
+  setConversationSidebarPage(pageInput: string): void {
     this.#commit({
       ...this.#state,
-      conversationSidebarLimit: this.#state.conversationSidebarLimit + CONVERSATION_SIDEBAR_BATCH_SIZE,
+      conversationSidebarPageInput: pageInput,
     });
   }
 
@@ -2469,6 +2569,199 @@ export class ClientStore {
     return this.#state.drafts.get(sessionId) ?? "";
   }
 
+  // ── 文件栏（WP4） ──────────────────────────────────────────────────────────
+
+  /**
+   * 文件栏 view model：三来源 + 会话改动归并 + 互斥内容态。
+   *
+   * 会话变更完全由已加载记录派生（实时 + 历史、按 `eventId` 去重后只留本会话），因此重放不会
+   * 产生重复记录，手动修改/其它会话的记录也不会混入。`historyHasEarlier` 只在读过历史页时
+   * 有值；未读时为 `null`，模型标注「范围未知」而不是声称完整。
+   */
+  sessionFilesPage(sessionId: Uuid): SessionFilesPanelModel {
+    const thread = this.#state.threads.get(sessionId);
+    // 未协商结构化历史时根本没有加载过历史页：范围是「未知」，不能声称完整。
+    const historyLoaded = this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE);
+    return buildSessionFilesPanelModel({
+      sessionId,
+      state: this.#state.sessionFiles,
+      records: this.#recordsOf(sessionId),
+      historyHasEarlier: thread === undefined || !historyLoaded ? null : thread.historyHasEarlier,
+      connectionOnline: this.#state.connection.state === "online",
+      historyRefreshSupported: historyLoaded,
+      historyReadPending: this.#pendingReads.size > 0,
+      historyRefreshError: thread?.historyRefreshError ?? null,
+    });
+  }
+
+  /**
+   * 通知仓库当前对话页属于哪个会话（路由切换时调用）。
+   *
+   * 会话变化时丢弃旧会话的文件读取并回到对话态：即使旧请求之后才返回，也会因为不在在途表
+   * 而无法重新打开文件。草稿、时间线与展开状态不在本切片里，因此不受影响。
+   */
+  setActiveConversationSession(sessionId: Uuid): void {
+    if (this.#activeConversationSession === sessionId) return;
+    this.#activeConversationSession = sessionId;
+    const content = this.#state.sessionFiles.content;
+    if (content.kind === "file" && content.context.sessionId !== sessionId) {
+      const generation = this.#state.sessionFiles.generation + 1;
+      this.#dropPendingContentQueries();
+      this.#commit(this.#withFileContent(this.#state, { kind: "conversation" }, generation));
+    }
+  }
+
+  /** 切换文件栏来源；进入「全部文件」/「Git 变更」时立即刷新，会话变更不发命令。 */
+  selectFileSource(sessionId: Uuid, source: FileSource): void {
+    this.#activeConversationSession = sessionId;
+    const selectedSources = new Map(this.#state.sessionFiles.selectedSources);
+    selectedSources.set(sessionId, source);
+    this.#commit({ ...this.#state, sessionFiles: { ...this.#state.sessionFiles, selectedSources } });
+    if (source === "session") return;
+    this.#refreshFileSource(sessionId, source);
+  }
+
+  /** 手动刷新当前来源；会话变更只重读最新结构化历史，不重置对话与历史分页。 */
+  refreshFiles(sessionId: Uuid): void {
+    this.#activeConversationSession = sessionId;
+    const source = selectedSourceOf(this.#state.sessionFiles, sessionId);
+    if (source === "session") {
+      if (!this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE) || this.#pendingReads.size > 0) return;
+      this.#requestPage(sessionId, "refresh_history");
+      return;
+    }
+    this.#cancelFileRefreshTimer(this.#fileKey(sessionId, source));
+    this.#refreshFileSource(sessionId, source);
+  }
+
+  /** 切换「隐藏忽略文件」；改变过滤口径后清掉逐层缓存并从根重新枚举。 */
+  toggleHideIgnored(sessionId: Uuid): void {
+    const sources = sourcesOf(this.#state.sessionFiles, sessionId);
+    const hideIgnored = !sources.all.hideIgnored;
+    const nextAll = { hideIgnored, directories: new Map(), unsupported: sources.all.unsupported };
+    this.#dropPendingSourceQueries(sessionId, "all");
+    this.#commit(this.#withSources(this.#state, sessionId, { ...sources, all: nextAll }));
+    this.#refreshFileSource(sessionId, "all");
+  }
+
+  /**
+   * 「全部文件」的**唯一**目录加载入口：未加载的目录取第一页，已加载且有 `next` 时取下一页。
+   *
+   * 首次展开子目录时没有既有缓存，因此这里不能以「目录不存在」为由静默返回；只有加载中或
+   * 没有下一页（含已到末尾）才不派发。`after: undefined` 即第一页。
+   */
+  loadMoreAllFiles(sessionId: Uuid, path: string): void {
+    // 旧主机/远程导入会话没有本机目录可枚举：即使调用方拿到一个路径也不派发。
+    if (this.#fileSourceUnsupported(sessionId, "all") !== null) return;
+    const directory = sourcesOf(this.#state.sessionFiles, sessionId).all.directories.get(path);
+    if (directory === undefined) {
+      this.#dispatchAllFilesPage(sessionId, path, undefined, false);
+      return;
+    }
+    if (directory.loading || directory.next === null) return;
+    this.#dispatchAllFilesPage(sessionId, path, directory.next, true);
+  }
+
+  /** 继续加载「Git 变更」的下一页。 */
+  loadMoreGitChanges(sessionId: Uuid): void {
+    const git = sourcesOf(this.#state.sessionFiles, sessionId).git;
+    if (git.unsupported !== null || git.next === null || git.loading) return;
+    this.#dispatchGitStatus(sessionId, git.next, true);
+  }
+
+  /**
+   * 打开文件内容，替换中间对话区（互斥）。
+   *
+   * 关闭/切换会话后的迟到响应由代次与上下文丢弃；来源为「会话变更」时直接从记录构造，
+   * 不派发查询。请求代次每次都递增，因此 A 的响应不可能覆盖随后打开的 B。
+   */
+  openFileContent(sessionId: Uuid, source: FileSource, path: string): void {
+    this.#activeConversationSession = sessionId;
+    const generation = this.#state.sessionFiles.generation + 1;
+    this.#dropPendingContentQueries();
+    const context: FileViewContext = { sessionId, source, path };
+
+    if (source === "session") {
+      const thread = this.#state.threads.get(sessionId);
+      const model = buildSessionChangesModel(this.#recordsOf(sessionId), thread?.historyHasEarlier ?? null);
+      const found = model.files.find((file) => file.path === path || file.key === `path:${path}`);
+      if (found === undefined || !found.readable) {
+        this.#commit(this.#withFileContent(this.#state, {
+          kind: "file",
+          context,
+          generation,
+          stale: false,
+          status: "error",
+          error: unreadableSessionChangeError(path),
+        }, generation));
+        return;
+      }
+      this.#commit(this.#withFileContent(this.#state, {
+        kind: "file",
+        context,
+        generation,
+        stale: false,
+        status: "ready",
+        content: { kind: "session_changes", path, records: found.records },
+      }, generation));
+      return;
+    }
+
+    const unsupported = this.#fileSourceUnsupported(sessionId, source);
+    if (unsupported !== null) {
+      this.#commit(this.#withFileContent(this.#state, {
+        kind: "file",
+        context,
+        generation,
+        stale: false,
+        status: "error",
+        error: unsupportedSourceError(unsupported),
+      }, generation));
+      return;
+    }
+    if (this.#identity.connectionId === null) {
+      this.#commit(this.#withFileContent(this.#state, {
+        kind: "file",
+        context,
+        generation,
+        stale: false,
+        status: "error",
+        error: notConnectedFileError(),
+      }, generation));
+      return;
+    }
+
+    this.#commit(this.#withFileContent(this.#state, {
+      kind: "file",
+      context,
+      generation,
+      stale: false,
+      status: "loading",
+    }, generation));
+
+    if (source === "all") {
+      this.#dispatchFileRead({
+        sessionId,
+        source,
+        path,
+        generation,
+        purpose: "preview",
+        offset: "0",
+        chunks: [],
+      });
+      return;
+    }
+    this.#dispatchGitDiff({ sessionId, source, path, generation });
+  }
+
+  /** 关闭文件视图，恢复对话；递增代次使所有在途响应作废。 */
+  closeFileContent(): void {
+    if (this.#state.sessionFiles.content.kind === "conversation") return;
+    const generation = this.#state.sessionFiles.generation + 1;
+    this.#dropPendingContentQueries();
+    this.#commit(this.#withFileContent(this.#state, { kind: "conversation" }, generation));
+  }
+
   /**
    * 提交一条**文本**提示。
    *
@@ -2498,6 +2791,671 @@ export class ClientStore {
     return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
   }
 
+  // ── 文件栏内部实现 ─────────────────────────────────────────────────────────
+
+  /** 一个来源的定时器键。 */
+  #fileKey(sessionId: Uuid, source: FileSource): string {
+    return `${sessionId}|${source}`;
+  }
+
+  /**
+   * 本机会话文件来源是否不可用。
+   *
+   * - 未协商 `core.session-files.v1`：旧主机明确降级，**不派发**（服务端也会在 I/O 前拒绝）；
+   * - 远程 imported 会话：保留已收到的会话变更，全部文件/Git 明确暂不支持，不查询本机目录。
+   */
+  #fileSourceUnsupported(sessionId: Uuid, source: FileSource): "feature_unavailable" | "remote_imported" | null {
+    if (source === "session") return null;
+    if (!this.#state.selectedFeatures.includes(SESSION_FILES_FEATURE)) return "feature_unavailable";
+    return this.#findSession(sessionId)?.origin.kind === "remote" ? "remote_imported" : null;
+  }
+
+  #cancelFileRefreshTimer(key: string): void {
+    const cancel = this.#fileRefreshTimers.get(key);
+    if (cancel === undefined) return;
+    cancel();
+    this.#fileRefreshTimers.delete(key);
+  }
+
+  /** 丢弃所有内容读取（关闭/切换/替换文件时调用；迟到响应因不在表中而被忽略）。 */
+  #dropPendingContentQueries(): void {
+    for (const [requestId, pending] of this.#pendingFileQueries) {
+      if (pending.kind === "read" || pending.kind === "git_diff") {
+        this.#pendingFileQueries.delete(requestId);
+      }
+    }
+  }
+
+  /** 丢弃某个来源的在途列表/状态查询（过滤口径或可用性变化后旧结果不再有效）。 */
+  #dropPendingSourceQueries(sessionId: Uuid, source: FileSource): void {
+    for (const [requestId, pending] of this.#pendingFileQueries) {
+      if (pending.sessionId !== sessionId || pending.source !== source) continue;
+      if (pending.kind === "list" || pending.kind === "git_status") {
+        this.#pendingFileQueries.delete(requestId);
+      }
+    }
+  }
+
+  /**
+   * 丢弃**全部**在途文件查询、合并/退避定时器与排队刷新（连接 closed/blocked/authenticated）。
+   *
+   * 这些请求属于已经失效的连接；留着它们只会让 `#fileQueryInFlight` 永远为真。内容读取
+   * （read/git_diff）一并丢弃：迟到的响应本来就会因不在在途表而被忽略。
+   */
+  #resetFileQueries(): void {
+    this.#pendingFileQueries.clear();
+    for (const cancel of this.#fileRefreshTimers.values()) cancel();
+    this.#fileRefreshTimers.clear();
+    this.#fileRefreshQueued.clear();
+  }
+
+  /** 把各会话各来源的 `loading` 复位为 false（连接重置后不再有请求在为它们加载）。 */
+  #withFileLoadingStopped(state: ClientState): ClientState {
+    const sources = state.sessionFiles.sources;
+    if (sources.size === 0) return state;
+    let changed = false;
+    const updated = new Map(sources);
+    for (const [sessionId, sourcesState] of sources) {
+      const directories = new Map(sourcesState.all.directories);
+      let directoriesChanged = false;
+      for (const [path, directory] of sourcesState.all.directories) {
+        if (!directory.loading) continue;
+        directories.set(path, { ...directory, loading: false });
+        directoriesChanged = true;
+      }
+      const all = directoriesChanged
+        ? { ...sourcesState.all, directories }
+        : sourcesState.all;
+      const git = sourcesState.git.loading ? { ...sourcesState.git, loading: false } : sourcesState.git;
+      if (all === sourcesState.all && git === sourcesState.git) continue;
+      changed = true;
+      updated.set(sessionId, { ...sourcesState, all, git });
+    }
+    if (!changed) return state;
+    return { ...state, sessionFiles: { ...state.sessionFiles, sources: updated } };
+  }
+
+  #withSources(state: ClientState, sessionId: Uuid, sources: SessionFilesSourcesState): ClientState {
+    const map = new Map(state.sessionFiles.sources);
+    map.set(sessionId, sources);
+    return { ...state, sessionFiles: { ...state.sessionFiles, sources: map } };
+  }
+
+  #withFileContent(state: ClientState, content: FileContentState, generation: number): ClientState {
+    return { ...state, sessionFiles: { ...state.sessionFiles, content, generation } };
+  }
+
+  /** 突发事件后的刷新排期：同一来源在同一窗口内只排一次（合并）。 */
+  #scheduleFileRefresh(sessionId: Uuid, source: FileSource, delayMs: number): void {
+    if (source === "session" || this.#schedule === null) return;
+    const key = this.#fileKey(sessionId, source);
+    if (this.#fileRefreshTimers.has(key)) return;
+    const cancel = this.#schedule(delayMs, () => {
+      this.#fileRefreshTimers.delete(key);
+      this.#refreshFileSource(sessionId, source);
+    });
+    this.#fileRefreshTimers.set(key, cancel);
+  }
+
+  /** 限流错误按 `retryAfterMs` 退避；没有该字段时只保留可见失败，不自动猜退避。 */
+  #scheduleRateLimitRetry(sessionId: Uuid, source: FileSource, error: PublicError | null): void {
+    if (error === null || error.code !== "resource.rate_limited") return;
+    const raw = error.details["retryAfterMs"];
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return;
+    this.#scheduleFileRefresh(sessionId, source, Math.min(raw, FILE_REFRESH_MAX_RETRY_MS));
+  }
+
+  /**
+   * 刷新一个来源（进入视图/手动刷新/事件触发共用）。
+   *
+   * 失败只补 `error`，保留此前的成功结果；同一来源已有在途查询时只记「排队」，由该次结果
+   * 落地后再补一次，避免突发事件打出一串并发查询。
+   */
+  #refreshFileSource(sessionId: Uuid, source: FileSource): void {
+    if (source === "session") return;
+    // 立即刷新取代尚未到期的合并/退避定时器，避免同一次意图排出两条查询。
+    this.#cancelFileRefreshTimer(this.#fileKey(sessionId, source));
+    const sources = sourcesOf(this.#state.sessionFiles, sessionId);
+    const unsupported = this.#fileSourceUnsupported(sessionId, source);
+    if (unsupported !== null) {
+      this.#dropPendingSourceQueries(sessionId, source);
+      const nextSources: SessionFilesSourcesState =
+        source === "all"
+          ? { ...sources, all: { ...sources.all, unsupported } }
+          : { ...sources, git: { ...sources.git, unsupported, loading: false } };
+      this.#commit(this.#withSources(this.#state, sessionId, nextSources));
+      return;
+    }
+    if (this.#identity.connectionId === null) {
+      const error = notConnectedFileError();
+      const nextSources: SessionFilesSourcesState =
+        source === "all"
+          ? {
+              ...sources,
+              all: {
+                ...sources.all,
+                directories: withDirectoryError(sources.all.directories, "", error),
+              },
+            }
+          : { ...sources, git: { ...sources.git, loading: false, error } };
+      this.#commit(this.#withSources(this.#state, sessionId, nextSources));
+      return;
+    }
+    const key = this.#fileKey(sessionId, source);
+    if (this.#fileQueryInFlight(sessionId, source)) {
+      this.#fileRefreshQueued.add(key);
+      return;
+    }
+    if (source === "all") {
+      this.#dispatchAllFilesPage(sessionId, "", undefined, false);
+    } else {
+      this.#dispatchGitStatus(sessionId, undefined, false);
+    }
+  }
+
+  #fileQueryInFlight(sessionId: Uuid, source: FileSource): boolean {
+    for (const pending of this.#pendingFileQueries.values()) {
+      if (pending.sessionId === sessionId && pending.source === source &&
+        (pending.kind === "list" || pending.kind === "git_status")) return true;
+    }
+    return false;
+  }
+
+  /** 目录枚举的一页；`after === undefined` 为第一页。 */
+  #dispatchAllFilesPage(sessionId: Uuid, path: string, after: string | undefined, append: boolean): void {
+    const sources = sourcesOf(this.#state.sessionFiles, sessionId);
+    const existing = sources.all.directories.get(path) ?? emptyAllFilesDirectory(path);
+    const directories = new Map(sources.all.directories);
+    directories.set(path, { ...existing, loading: true, error: null });
+    this.#commit(this.#withSources(this.#state, sessionId, {
+      ...sources,
+      all: { ...sources.all, unsupported: null, directories },
+    }));
+
+    const requestId = this.#ids.uuid();
+    const payload: { path: string; hideIgnored: boolean; after?: string } = {
+      path,
+      hideIgnored: sources.all.hideIgnored,
+    };
+    if (after !== undefined) payload.after = after;
+    const dispatched = this.#dispatchFileCommand(
+      {
+        requestId,
+        command: "session.files.list",
+        sessionId,
+        payload,
+      },
+      {
+        requestId,
+        kind: "list",
+        sessionId,
+        source: "all",
+        path,
+        generation: this.#state.sessionFiles.generation,
+        ...(after === undefined ? {} : { after }),
+        append,
+      },
+    );
+    if (!dispatched) {
+      const error = notConnectedFileError();
+      const afterDispatch = sourcesOf(this.#state.sessionFiles, sessionId);
+      const directoriesAfter = new Map(afterDispatch.all.directories);
+      const directory = directoriesAfter.get(path) ?? emptyAllFilesDirectory(path);
+      directoriesAfter.set(path, { ...directory, loading: false, error });
+      this.#commit(this.#withSources(this.#state, sessionId, {
+        ...afterDispatch,
+        all: { ...afterDispatch.all, directories: directoriesAfter },
+      }));
+    }
+  }
+
+  /** Git 未提交状态的一页。 */
+  #dispatchGitStatus(sessionId: Uuid, after: string | undefined, append: boolean): void {
+    const sources = sourcesOf(this.#state.sessionFiles, sessionId);
+    this.#commit(this.#withSources(this.#state, sessionId, {
+      ...sources,
+      git: { ...sources.git, unsupported: null, loading: true, error: null },
+    }));
+
+    const requestId = this.#ids.uuid();
+    const dispatched = this.#dispatchFileCommand(
+      {
+        requestId,
+        command: "session.git.status",
+        sessionId,
+        payload: after === undefined ? {} : { after },
+      },
+      {
+        requestId,
+        kind: "git_status",
+        sessionId,
+        source: "git",
+        path: null,
+        generation: this.#state.sessionFiles.generation,
+        ...(after === undefined ? {} : { after }),
+        append,
+      },
+    );
+    if (!dispatched) {
+      const error = notConnectedFileError();
+      const afterDispatch = sourcesOf(this.#state.sessionFiles, sessionId);
+      this.#commit(this.#withSources(this.#state, sessionId, {
+        ...afterDispatch,
+        git: { ...afterDispatch.git, loading: false, error },
+      }));
+    }
+  }
+
+  /** 预览块读取（首块或同版本续块）。 */
+  #dispatchFileRead(input: {
+    readonly sessionId: Uuid;
+    readonly source: FileSource;
+    readonly path: string;
+    readonly generation: number;
+    readonly purpose: "preview" | "download";
+    readonly offset: string;
+    readonly chunks: readonly Uint8Array[];
+    readonly version?: string;
+    readonly sizeBytes?: string;
+    readonly fileKind?: "text" | "image" | "binary";
+    readonly previewTruncated?: boolean;
+  }): void {
+    const requestId = this.#ids.uuid();
+    const payload: {
+      path: string;
+      purpose: "preview" | "download";
+      offset: string;
+      version?: string;
+    } = { path: input.path, purpose: input.purpose, offset: input.offset };
+    if (input.version !== undefined) payload.version = input.version;
+    const dispatched = this.#dispatchFileCommand(
+      {
+        requestId,
+        command: "session.files.read",
+        sessionId: input.sessionId,
+        payload,
+      },
+      {
+        requestId,
+        kind: "read",
+        sessionId: input.sessionId,
+        source: input.source,
+        path: input.path,
+        generation: input.generation,
+        chunks: [...input.chunks],
+        ...(input.version === undefined ? {} : { version: input.version }),
+        ...(input.sizeBytes === undefined ? {} : { sizeBytes: input.sizeBytes }),
+        ...(input.fileKind === undefined ? {} : { fileKind: input.fileKind }),
+        ...(input.previewTruncated === undefined ? {} : { previewTruncated: input.previewTruncated }),
+      },
+    );
+    if (!dispatched) this.#failCurrentFile(notConnectedFileError());
+  }
+
+  /** Git 差异查询。 */
+  #dispatchGitDiff(input: {
+    readonly sessionId: Uuid;
+    readonly source: FileSource;
+    readonly path: string;
+    readonly generation: number;
+  }): void {
+    const requestId = this.#ids.uuid();
+    const dispatched = this.#dispatchFileCommand(
+      {
+        requestId,
+        command: "session.git.diff",
+        sessionId: input.sessionId,
+        payload: { path: input.path },
+      },
+      {
+        requestId,
+        kind: "git_diff",
+        sessionId: input.sessionId,
+        source: input.source,
+        path: input.path,
+        generation: input.generation,
+      },
+    );
+    if (!dispatched) this.#failCurrentFile(notConnectedFileError());
+  }
+
+  /** 唯一文件查询出口：登记在途上下文后派发（查询没有 command 记录/终态事件）。 */
+  #dispatchFileCommand(body: CommandBody, pending: PendingFileQuery): boolean {
+    const connectionId = this.#identity.connectionId;
+    if (connectionId === null) return false;
+    this.#pendingFileQueries.set(body.requestId, pending);
+    this.#sync.dispatch({
+      protocolVersion: 1,
+      type: "command",
+      messageId: this.#ids.uuid(),
+      connectionId,
+      connectionSequence: "0",
+      body,
+    });
+    return true;
+  }
+
+  /** 只把错误落到**当前**文件内容（代次不匹配的旧请求不能改界面）。 */
+  #failCurrentFile(error: PublicError): void {
+    const content = this.#state.sessionFiles.content;
+    if (content.kind !== "file") return;
+    this.#commit(this.#withFileContent(this.#state, {
+      ...content,
+      status: "error",
+      error,
+    }, content.generation));
+  }
+
+  /**
+   * 文件栏查询结果归并。
+   *
+   * 先核对在途上下文与代次：不在表里（已关闭/已替换/已刷新）或代次不匹配的响应一律丢弃。
+   * 解码失败与失败状态都保留此前成功结果，不把空数组当成新的成功。
+   */
+  #withSessionFilesResult(state: ClientState, result: CommandResultMessage): ClientState {
+    if (!isSessionFilesCommandName(result.body.command)) return state;
+    const pending = this.#pendingFileQueries.get(result.body.requestId);
+    if (pending === undefined) return state;
+    this.#pendingFileQueries.delete(result.body.requestId);
+
+    const isContent = pending.kind === "read" || pending.kind === "git_diff";
+    if (isContent) {
+      const content = state.sessionFiles.content;
+      if (
+        pending.generation !== state.sessionFiles.generation ||
+        content.kind !== "file" ||
+        content.generation !== pending.generation ||
+        content.context.sessionId !== pending.sessionId ||
+        content.context.source !== pending.source ||
+        content.context.path !== pending.path
+      ) {
+        return state;
+      }
+    }
+
+    if (result.body.status !== "completed") {
+      const error = resultError(result);
+      const afterFailure = this.#applyFileQueryFailure(state, pending, error);
+      if (pending.kind === "list" || pending.kind === "git_status") {
+        this.#scheduleRateLimitRetry(pending.sessionId, pending.source, error);
+      }
+      return afterFailure;
+    }
+
+    switch (pending.kind) {
+      case "list":
+        return this.#applyAllFilesPage(state, pending, result.body.result);
+      case "git_status":
+        return this.#applyGitStatusPage(state, pending, result.body.result);
+      case "read":
+        return this.#applyFilePreviewChunk(state, pending, result.body.result);
+      case "git_diff":
+        return this.#applyGitDiff(state, pending, result.body.result);
+    }
+  }
+
+  /** 失败统一落到来源或当前内容；来源失败不清空已成功加载的条目。 */
+  #applyFileQueryFailure(state: ClientState, pending: PendingFileQuery, error: PublicError): ClientState {
+    if (pending.kind === "read" || pending.kind === "git_diff") {
+      return this.#withFileContent(state, {
+        kind: "file",
+        context: {
+          sessionId: pending.sessionId,
+          source: pending.source,
+          path: pending.path ?? "",
+        },
+        generation: pending.generation,
+        stale: false,
+        status: "error",
+        error,
+      }, pending.generation);
+    }
+    const sources = sourcesOf(state.sessionFiles, pending.sessionId);
+    if (pending.kind === "list") {
+      const path = pending.path ?? "";
+      const directories = new Map(sources.all.directories);
+      const directory = directories.get(path) ?? emptyAllFilesDirectory(path);
+      directories.set(path, { ...directory, loading: false, error });
+      return this.#withSources(state, pending.sessionId, { ...sources, all: { ...sources.all, directories } });
+    }
+    return this.#withSources(state, pending.sessionId, {
+      ...sources,
+      git: { ...sources.git, loading: false, error },
+    });
+  }
+
+  #applyAllFilesPage(
+    state: ClientState,
+    pending: PendingFileQuery,
+    value: unknown,
+  ): ClientState {
+    const decoded = decodeSessionFilesResult("session.files.list", value);
+    if (!decoded.ok) {
+      return this.#applyFileQueryFailure(state, pending, invalidFileResultError(decoded.detail));
+    }
+    if (decoded.value.path !== (pending.path ?? "")) {
+      return this.#applyFileQueryFailure(state, pending, invalidFileResultError("结果回显的 path 与请求不一致"));
+    }
+    const sources = sourcesOf(state.sessionFiles, pending.sessionId);
+    const path = pending.path ?? "";
+    const existing = sources.all.directories.get(path) ?? emptyAllFilesDirectory(path);
+    const entries = pending.append === true ? [...existing.entries, ...decoded.value.entries] : decoded.value.entries;
+    const directories = new Map(sources.all.directories);
+    directories.set(path, {
+      path,
+      entries,
+      next: decoded.value.next ?? null,
+      gitState: decoded.value.gitState,
+      loading: false,
+      error: null,
+    });
+    const nextState = this.#withSources(state, pending.sessionId, {
+      ...sources,
+      all: { ...sources.all, directories },
+    });
+    return nextState;
+  }
+
+  #applyGitStatusPage(
+    state: ClientState,
+    pending: PendingFileQuery,
+    value: unknown,
+  ): ClientState {
+    const decoded = decodeSessionFilesResult("session.git.status", value);
+    if (!decoded.ok) {
+      return this.#applyFileQueryFailure(state, pending, invalidFileResultError(decoded.detail));
+    }
+    const sources = sourcesOf(state.sessionFiles, pending.sessionId);
+    const entries = pending.append === true ? [...sources.git.entries, ...decoded.value.entries] : decoded.value.entries;
+    const nextState = this.#withSources(state, pending.sessionId, {
+      ...sources,
+      git: {
+        ...sources.git,
+        gitState: decoded.value.gitState,
+        entries,
+        next: decoded.value.next ?? null,
+        loading: false,
+        error: null,
+      },
+    });
+    return nextState;
+  }
+
+  #applyFilePreviewChunk(
+    state: ClientState,
+    pending: PendingFileQuery,
+    value: unknown,
+  ): ClientState {
+    const decoded = decodeSessionFilesResult("session.files.read", value);
+    if (!decoded.ok) {
+      return this.#applyFileQueryFailure(state, pending, invalidFileResultError(decoded.detail));
+    }
+    const chunk = decoded.value;
+    if (chunk.path !== pending.path) {
+      return this.#applyFileQueryFailure(state, pending, invalidFileResultError("结果 path 与打开的上下文不一致"));
+    }
+    const previous = pending.chunks ?? [];
+    const written = previous.reduce((total, part) => total + part.length, 0);
+    if (BigInt(chunk.offset) !== BigInt(written)) {
+      return this.#applyFileQueryFailure(state, pending, snapshotInvalidError());
+    }
+    if (pending.version !== undefined && pending.version !== chunk.version) {
+      return this.#applyFileQueryFailure(state, pending, snapshotInvalidError());
+    }
+    if (pending.sizeBytes !== undefined && pending.sizeBytes !== chunk.sizeBytes) {
+      return this.#applyFileQueryFailure(state, pending, snapshotInvalidError());
+    }
+    if (pending.fileKind !== undefined && pending.fileKind !== chunk.kind) {
+      return this.#applyFileQueryFailure(state, pending, snapshotInvalidError());
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = decodeBase64Url(chunk.dataBase64);
+    } catch {
+      return this.#applyFileQueryFailure(state, pending, invalidFileResultError("dataBase64 不是合法的无填充 base64url"));
+    }
+    const total = written + bytes.length;
+    // 图片走服务端的 4 MiB 预算；文本/二进制仍按 256 KiB。总大小、完成判定与截断阈值共用同一预算。
+    const budget = (pending.fileKind ?? chunk.kind) === "image"
+      ? FILE_IMAGE_PREVIEW_BUDGET_BYTES
+      : FILE_PREVIEW_BUDGET_BYTES;
+    if (total > budget) {
+      return this.#applyFileQueryFailure(state, pending, previewBudgetError());
+    }
+    const endOffset = (BigInt(chunk.offset) + BigInt(bytes.length)).toString();
+    const chunks = [...previous, bytes];
+    const truncated = pending.previewTruncated === true || chunk.previewTruncated;
+    const complete = chunk.eof || truncated || total >= budget || bytes.length === 0;
+    if (bytes.length === 0 && !chunk.eof && !truncated) {
+      return this.#applyFileQueryFailure(state, pending, invalidFileResultError("空块既非 EOF 也非截断，拒绝无限续读"));
+    }
+    if (!complete) {
+      this.#dispatchFileRead({
+        sessionId: pending.sessionId,
+        source: pending.source,
+        path: chunk.path,
+        generation: pending.generation,
+        purpose: "preview",
+        offset: endOffset,
+        chunks,
+        version: chunk.version,
+        sizeBytes: chunk.sizeBytes,
+        fileKind: chunk.kind,
+        previewTruncated: truncated,
+      });
+      return state;
+    }
+    const content: FileContentState = {
+      kind: "file",
+      context: {
+        sessionId: pending.sessionId,
+        source: pending.source,
+        path: chunk.path,
+      },
+      generation: pending.generation,
+      stale: false,
+      status: "ready",
+      content: {
+        kind: "preview",
+        path: chunk.path,
+        fileKind: chunk.kind,
+        sizeBytes: chunk.sizeBytes,
+        version: chunk.version,
+        offset: endOffset,
+        bytes: concatBytes(chunks),
+        eof: chunk.eof,
+        previewTruncated: truncated || total >= budget,
+      },
+    };
+    const nextState = this.#withFileContent(state, content, pending.generation);
+    return nextState;
+  }
+
+  #applyGitDiff(
+    state: ClientState,
+    pending: PendingFileQuery,
+    value: unknown,
+  ): ClientState {
+    const decoded = decodeSessionFilesResult("session.git.diff", value);
+    if (!decoded.ok) {
+      return this.#applyFileQueryFailure(state, pending, invalidFileResultError(decoded.detail));
+    }
+    if (decoded.value.path !== pending.path) {
+      return this.#applyFileQueryFailure(state, pending, invalidFileResultError("结果 path 与打开的上下文不一致"));
+    }
+    const diff: GitDiffView = {
+      path: decoded.value.path,
+      base: decoded.value.base,
+      kind: decoded.value.kind,
+      diffLines: decoded.value.diffLines ?? [],
+      unavailable: decoded.value.unavailable ?? null,
+      truncated: decoded.value.truncated,
+    };
+    const nextState = this.#withFileContent(state, {
+      kind: "file",
+      context: {
+        sessionId: pending.sessionId,
+        source: pending.source,
+        path: decoded.value.path,
+      },
+      generation: pending.generation,
+      stale: false,
+      status: "ready",
+      content: { kind: "git_diff", diff },
+    }, pending.generation);
+    return nextState;
+  }
+
+  /**
+   * 一次状态提交后补发「在飞期间收到事件」排队的刷新。
+   *
+   * 放在 `apply` 的提交之后（而不是归并函数内部）是为了不产生嵌套提交：归并函数返回的
+   * 状态先落地，排队的刷新再以新的当前状态为基线开始。
+   */
+  #drainQueuedFileRefreshes(): void {
+    if (this.#fileRefreshQueued.size === 0) return;
+    for (const key of [...this.#fileRefreshQueued]) {
+      this.#fileRefreshQueued.delete(key);
+      const separator = key.indexOf("|");
+      if (separator < 0) continue;
+      const sessionId = key.slice(0, separator);
+      const source = key.slice(separator + 1) as FileSource;
+      if (source !== "all" && source !== "git") continue;
+      if (this.#schedule === null) this.#refreshFileSource(sessionId, source);
+      else this.#scheduleFileRefresh(sessionId, source, 0);
+    }
+  }
+
+  /**
+   * 当前会话的 `file.changed`：只标「过时」并按来源排一次合并刷新，不覆盖正在阅读的内容。
+   */
+  #withFileChangedEvent(state: ClientState, record: StructuredRecord): ClientState {
+    const sessionId = record.sessionId;
+    if (sessionId === null) return state;
+    // 只刷新当前对话页所属会话的来源；其他会话的事件不打断当前视图。
+    if (this.#activeConversationSession !== null && this.#activeConversationSession !== sessionId) return state;
+    let next = state;
+
+    const content = state.sessionFiles.content;
+    if (content.kind === "file" && content.context.sessionId === sessionId) {
+      const displayPath = viewText(record.view, "displayPath");
+      const outside = record.view["outsideWorkspace"] === true;
+      if (!outside && displayPath !== null && displayPath === content.context.path) {
+        next = { ...next, sessionFiles: { ...next.sessionFiles, content: { ...content, stale: true } } };
+      }
+    }
+
+    const source = selectedSourceOf(state.sessionFiles, sessionId);
+    if (source === "session") return next;
+    const sources = sourcesOf(state.sessionFiles, sessionId);
+    const loaded = source === "all" ? sources.all.directories.size > 0 : sources.git.gitState !== null;
+    if (!loaded) return next;
+    const unsupported = this.#fileSourceUnsupported(sessionId, source);
+    if (unsupported !== null) return next;
+    this.#scheduleFileRefresh(sessionId, source, FILE_REFRESH_DEBOUNCE_MS);
+    return next;
+  }
+
   #requestPage(
     sessionId: Uuid,
     intent: ReadIntent,
@@ -2522,8 +3480,9 @@ export class ClientStore {
         threads.set(sessionId, {
           ...existing,
           loadingEarlier: intent === "earlier",
-          loadingHistory: intent === "earlier_history",
-          pagingError: null,
+          loadingHistory: intent === "earlier_history" || intent === "refresh_history",
+          pagingError: intent === "refresh_history" ? existing.pagingError : null,
+          historyRefreshError: intent === "refresh_history" ? null : existing.historyRefreshError ?? null,
         });
         return { threads };
       },
@@ -2543,6 +3502,7 @@ export class ClientStore {
       case "earlier":
         return ["messages"];
       case "earlier_history":
+      case "refresh_history":
         return ["history"];
       case "first":
         return historyNegotiated ? [...CONVERSATION_INCLUDES, "history"] : CONVERSATION_INCLUDES;
@@ -2609,4 +3569,105 @@ export class ClientStore {
     this.#state = next;
     for (const listener of [...this.#listeners]) listener();
   }
+}
+
+// ── 文件栏的纯辅助 ──────────────────────────────────────────────────────────
+
+/** 一条没有连接时的明确失败（不静默停在「读取中」）。 */
+function notConnectedFileError(): PublicError {
+  return {
+    code: "internal.unavailable",
+    message: "尚未建立已认证连接，无法读取会话文件。",
+    retryable: true,
+    details: {},
+  };
+}
+
+/** 服务端结果形状不符合合同：显式失败，不把错误形状当正确形状用。 */
+function invalidFileResultError(detail: string): PublicError {
+  return {
+    code: "internal.unavailable",
+    message: `服务端返回的会话文件结果不符合协议：${detail}`,
+    retryable: false,
+    details: {},
+  };
+}
+
+/** 内容版本/偏移不一致：快照失效，必须重新打开，不能拼接两个版本。 */
+function snapshotInvalidError(): PublicError {
+  return {
+    code: "internal.unavailable",
+    message: "文件在读取过程中发生变化，内容快照已失效；请重新打开文件。",
+    retryable: true,
+    details: {},
+  };
+}
+
+/** 预览超过客户端预算：明确按超大结果失败（不悄悄只显示前一段并冒充完整）。 */
+function previewBudgetError(): PublicError {
+  return {
+    code: "resource.result_too_large",
+    message: "文件超过预览预算，请改用下载。",
+    retryable: false,
+    details: {},
+  };
+}
+
+/** 会话变更里不可读取/越界的条目。 */
+function unreadableSessionChangeError(path: string): PublicError {
+  return {
+    code: "internal.unavailable",
+    message: `无法读取工作目录外的文件：${path}`,
+    retryable: false,
+    details: {},
+  };
+}
+
+/** 来源暂不可用（旧主机/远程导入会话）。 */
+function unsupportedSourceError(reason: "feature_unavailable" | "remote_imported"): PublicError {
+  return {
+    code: "capability.unsupported_by_broker",
+    message:
+      reason === "remote_imported"
+        ? "远程导入会话不支持读取本机文件或 Git 变更。"
+        : "此主机未协商会话文件能力（core.session-files.v1）。",
+    retryable: false,
+    details: {},
+  };
+}
+
+/** 失败结果 → 公开错误；服务端没给原因时补一条可辨识的说明。 */
+function resultError(result: CommandResultMessage): PublicError {
+  if (result.body.error !== null) return result.body.error;
+  return {
+    code: "internal.unavailable",
+    message: `服务端未给出会话文件查询失败的原因（${result.body.status}）。`,
+    retryable: false,
+    details: {},
+  };
+}
+
+/** 在一层目录上记失败，保留它此前成功加载的条目。 */
+function withDirectoryError(
+  directories: ReadonlyMap<string, AllFilesDirectoryView>,
+  path: string,
+  error: PublicError,
+): ReadonlyMap<string, AllFilesDirectoryView> {
+  const map = new Map(directories);
+  const existing = map.get(path) ?? emptyAllFilesDirectory(path);
+  map.set(path, { ...existing, loading: false, error });
+  return map;
+}
+
+/** 按到达顺序拼接预览块（单次预览预算内，内存在构造时已受上限约束）。 */
+function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const chunk of chunks) total += chunk.length;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
 }

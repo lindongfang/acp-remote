@@ -34,6 +34,7 @@
 
 import type { SocketHandlers, SocketOpenInput, SocketPort } from "../../src/sync-client";
 import { encodeBase64Url, REQUIRED_FEATURES, SESSION_HISTORY_FEATURE, sortedFeatures } from "../../src/sync-client";
+import { SESSION_FILES_FEATURE } from "../../src/protocol/session-files";
 import {
   encodeNulJoinedUtf8,
   encodeTranscript,
@@ -80,7 +81,7 @@ const CONNECTION_ID = "3c9f1b6e-6a41-4a2e-9a1c-2f0a5b7d9e13";
  * 选中它是安全的：transcript 与报文里的 `selectedFeatures` 都取自本常量，
  * 客户端用**报文里**的那份重建 transcript 验签（`connection.ts` 的 `#onServerChallenge`）。
  */
-const SERVER_SELECTED_FEATURES: readonly string[] = [...REQUIRED_FEATURES, SESSION_HISTORY_FEATURE];
+const SERVER_SELECTED_FEATURES: readonly string[] = [...REQUIRED_FEATURES, SESSION_HISTORY_FEATURE, SESSION_FILES_FEATURE];
 
 /** 非 `session.read` 命令的缺省应答结果（与本次变更前的取值逐字一致）。 */
 const DEFAULT_COMMAND_RESULT: Record<string, unknown> = { sessionId: "dddddddd-0000-4000-8000-0000000000ff" };
@@ -96,6 +97,8 @@ interface CommandFrame {
   readonly requestId: string;
   readonly command: string;
   readonly sessionId: string;
+  /** 完整 payload：文件栏查询的分页/路径断言与应答都要它。 */
+  readonly payload: Record<string, unknown>;
 }
 
 /** 从一帧里取出 `body` 并按 `type` 过滤；形状不符返回 `null`。 */
@@ -186,6 +189,13 @@ export interface FakeHostOptions {
   readonly events: readonly Record<string, unknown>[];
   /** `session.read` 的应答结果；缺省返回空页。 */
   readonly readResult: (sessionId: string) => Record<string, unknown>;
+  /**
+   * `session.files.*` / `session.git.*` 的应答结果；缺省回落到 `DEFAULT_COMMAND_RESULT`
+   * （旧用例不碰文件栏查询，不需要为它们编造结果）。
+   */
+  readonly filesResult?:
+    | ((command: string, sessionId: string, payload: Record<string, unknown>) => Record<string, unknown>)
+    | undefined;
   /**
    * 要**扣住**不应答的命令名（用例据此观察「未收到终态」的呈现）。
    *
@@ -356,10 +366,22 @@ export class FakeHost {
   #resultCounter = 0;
   /** 被扣住、尚未应答的命令帧（按发出次序；见 {@link FakeHostOptions.holdCommands}）。 */
   #held: CommandFrame[] = [];
+  /** 运行期追加的扣留命令（下载用例要等预览读取完成之后才开始扣 `session.files.read`）。 */
+  readonly #dynamicHolds = new Set<string>();
 
   constructor(options: FakeHostOptions, identity: FakeHostIdentity) {
     this.options = options;
     this.identity = identity;
+  }
+
+  /** 从此刻起扣住某条命令（直到 {@link releaseHeldCommand}）。 */
+  holdCommand(command: string): void {
+    this.#dynamicHolds.add(command);
+  }
+
+  /** 取消运行期的扣留；已扣住的帧仍由 `completeHeldCommand` 决定终态。 */
+  releaseHeldCommand(command: string): void {
+    this.#dynamicHolds.delete(command);
   }
 
   /** 注入给 `createComposition({ openSocket })` 的连接工厂。 */
@@ -451,10 +473,17 @@ export class FakeHost {
         requestId: requiredString(command, "requestId"),
         command: requiredString(command, "command"),
         sessionId: typeof command["sessionId"] === "string" ? command["sessionId"] : "",
+        payload:
+          typeof command["payload"] === "object" && command["payload"] !== null
+            ? (command["payload"] as Record<string, unknown>)
+            : {},
       };
       // 扣住用例点名的命令：只登记不应答，终态交给 `completeHeldCommand`。
       // `session.read` 永不扣——页面首帧就靠它，扣住只会让每条用例都超时，而不是断言到什么。
-      if (frame.command !== "session.read" && this.options.holdCommands?.includes(frame.command) === true) {
+      const held =
+        frame.command !== "session.read" &&
+        (this.options.holdCommands?.includes(frame.command) === true || this.#dynamicHolds.has(frame.command));
+      if (held) {
         this.#held.push(frame);
         return;
       }
@@ -621,9 +650,16 @@ export class FakeHost {
   }
 
   #sendCommandResult(command: CommandFrame): void {
+    const isFilesQuery = command.command.startsWith("session.files.") || command.command.startsWith("session.git.");
+    const filesResult = this.options.filesResult;
     this.#deliverResult(command, {
       status: "completed",
-      result: command.command === "session.read" ? this.options.readResult(command.sessionId) : DEFAULT_COMMAND_RESULT,
+      result:
+        command.command === "session.read"
+          ? this.options.readResult(command.sessionId)
+          : isFilesQuery && filesResult !== undefined
+            ? filesResult(command.command, command.sessionId, command.payload)
+            : DEFAULT_COMMAND_RESULT,
       acceptedAt: ACCEPTED_AT,
       error: null,
     });

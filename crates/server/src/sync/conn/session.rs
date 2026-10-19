@@ -167,6 +167,13 @@ pub trait MessageRoute: Send + Sync + 'static {
     /// 调用时机：认证成功、连接已登记之后，业务阶段开始之前——路由在收到 `sync.subscribe` 时必定已经
     /// 拿到本连接的门控输入。
     fn on_authenticated(&self, _session: &ConnectionHandle, _features: &[String]) {}
+
+    /// 连接关闭前的收尾钩子（正常关闭、断链、设备撤销与 daemon 关闭都经由同一会话收尾路径）。
+    ///
+    /// 默认实现为空操作。需要连接期资源的家族（命令面的连接绑定内容版本）在这里释放，**必须在
+    /// `ConnectionRegistry::unregister` 之前调用**：一旦连接从注册表消失，下一次其它连接的 `reclaim`
+    /// 就可能先把它的连接期状态丢掉，释放责任便无处落账。
+    async fn on_closed(&self, _session: &ConnectionHandle) {}
 }
 
 /// 路由的处理结果。
@@ -1197,6 +1204,9 @@ impl Session {
         match ending {
             Ending::Close(code, reason) => {
                 self.drain(&mut receiver).await;
+                // 先交接关闭钩子再摘除登记：命令面据此释放连接绑定的内容版本，其它连接的 `reclaim` 不会
+                // 在钩子之前抢先丢掉这份状态。
+                self.notify_closed(&handle).await;
                 self.conn.registry.unregister(&handle);
                 self.close(code, reason).await;
             }
@@ -1208,9 +1218,17 @@ impl Session {
                 //   发出去（FIFO，排在已入队帧之后）。socket 因此要等写任务结束，耗时 ≤ `CLOSE_DRAIN_BUDGET`；
                 // - 流已终止（读半边报错/对端结束）与写期限到期：写半边已结束或已不可信，**不再发任何 close
                 //   帧**，排空也没有意义（写半边已丢弃）。读半边在这里被丢弃，socket 随之关闭。
+                self.notify_closed(&handle).await;
                 self.conn.registry.unregister(&handle);
                 self.reader.take();
             }
+        }
+    }
+
+    /// 把连接关闭交接给路由（`MessageRoute::on_closed`）；没有路由时无事可做。
+    async fn notify_closed(&self, handle: &Arc<ConnectionHandle>) {
+        if let Some(route) = self.conn.route.as_ref() {
+            route.on_closed(handle.as_ref()).await;
         }
     }
 

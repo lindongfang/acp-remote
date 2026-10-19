@@ -234,6 +234,7 @@ ConfigCommands
 PermissionCommands
 SubscriptionQueries
 WorkspaceBrowse / SyncSnapshotQueries
+SessionFilesQueries
 DeviceManagement
 ExportManagement
 RemoteCatalogQueries
@@ -256,6 +257,7 @@ EventSink                后端事件通道；调用顺序即提交顺序
 ReadView                 一致性读视图，`sync.snapshot_*` 的 barrier
 DirectoryCreator         既有父目录下创建一层目录，独立于只读浏览（权威签名见 CORE_PORTS_AND_STORAGE §5.6）
 DirectoryBrowser         只读的逐层目录列举（`workspace.browse` 的根列表与一层子目录，只返回名称与绝对路径）
+SessionFiles             会话工作目录内的只读文件枚举/分块读取（连接绑定内存快照）与 Git status/diff；文件系统与 Git 子进程只在出站适配器
 Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交事务内分配）
 ```
 
@@ -276,7 +278,15 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
   - 默认本机实现的 Windows 隐藏/系统目录过滤规则以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5 为准；这是浏览可见性规则，不改变创建授权。
 - **建目录开关**：`session.create` 的目录来源为 `WorkspaceSource::PathWithCreate` 时，core 在启动后端**之前**创建目录（连同缺失的父层）并把 `canonicalize` 的结果作为权威值；开关与目录标识在**类型上**互斥（目录标识指向的目录必然已存在），被创建的目录与成功的会话在同一次提交里登记，且不在任何后续失败时被删除或回滚。
 
-`[决定]`（2026-10-17，`directory-auto-registration`）上述路径门控与别名引用已被**撤销**：目录改由成功的会话创建自动登记，快照 `workspaces` 条目始终为 `{ directoryId, path }`，会话摘要的 `workspace` 只有 `{ directoryId }`，`core.workspace-path.v1` 不再存在；`UseCases::sync_workspace_catalog(actor)` 没有协商参数。`session.create` 的目录来源是 `directoryId` 或 `workspacePath`（`createIfMissing` 只与后者相容）。适配层仍不读 feature 表；`workspace.browse` 与 `file.changed` 差异行两道 feature 门控不变。
+`[决定]`（2026-10-17，`directory-auto-registration`）上述路径门控与别名引用已被**撤销**：目录改由成功的会话创建自动登记，快照 `workspaces` 条目始终为 `{ directoryId, path }`，会话摘要的 `workspace` 只有 `{ directoryId }`，`core.workspace-path.v1` 不再存在；`UseCases::sync_workspace_catalog(actor)` 没有协商参数。`session.create` 的目录来源是 `directoryId` 或 `workspacePath`（`createIfMissing` 只与后者相容）。
+
+`[决定]`（2026-10-19，`session-file-browser` WP1）**会话文件与 Git 只读查询由 core 拥有规则、原生适配器负责 I/O**：
+
+- **core**：`UseCases::list_session_files` / `read_session_file` / `session_git_status` / `session_git_diff` 依次完成授权（命令名 `session.files.list`、`session.files.read`、`session.git.status`、`session.git.diff`）、会话来源判定（imported 在文件/Git 端口之前返回 `capability.unsupported_by_broker`）、从 `SessionStore::load_recovery().workspace_cwd` 取实际根（`None` 明确不可用，不按别名反查）、纯形状校验，最后才调用 `SessionFiles` 端口。查询不写命令终态、不产生事件、不改变持久状态。
+- **出站适配器**：文件句柄、目录枚举、Git 子进程、取消与进程树清理在 `app::session_files`（WP2），由组合根用 `UseCases::with_session_files` 注入；core 默认实现失败关闭。`core` 的直接依赖仍固定为 `async-trait`/`thiserror`/`p256`/`sha2`，不引入 Tokio、文件系统或 Git 库。
+- **不属于既有浏览合同**：`workspace.browse`（只列子目录、无文件内容）与 `DirectoryBrowser` 保持逐字不变；新能力是独立的 feature `core.session-files.v1`，只登记 Sync。
+
+适配层仍不读 feature 表；`workspace.browse` 与 `file.changed` 差异行两道 feature 门控不变。
 
 ### 4.2 `acp-protocol`
 
@@ -361,6 +371,8 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 唯一职责：实现持久化端口。
 
 `workspace.mkdir` 的无会话终态通过专用主体绑定入口按 `(actor, requestId)` 定位，避免跨主体同 requestId 的歧义；旧 `commit` 路径保持不变，不新增 DDL 或迁移。端口签名与无会话事务权威见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.2/§5.6。
+
+`session-file-browser` 的会话文件/Git 只读实现**不属于本 crate**：它不新增表、列或 migration，根仍来自既有 `owned_session.workspace_cwd`；原生文件句柄与 Git 子进程由 `app::session_files` 实现 `core::ports::SessionFiles`（§4.10）。本 crate 不获得任何文件系统或 Git 依赖。
 
 包含 schema、migration、`SessionStore`、`RemoteDeliveryStore`、TrustStore 持久部分、事务、容量清理、快照和 TTL。Owned content tables 与 imported delivery-index tables 必须物理或类型隔离，防止 Access 路径误写正文。
 
@@ -454,6 +466,8 @@ doctor
 首切片**不提供** `session create`：业务命令 `session.create` 的 transport 只有 `node_link`（本地通道不承载业务命令），本地会话入口是 `acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`）；`session list` 属 `post_mvp`。理由与展开见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.8、`INITIAL_DESIGN.md` §13.3。
 
 CLI 通过 core use case 或受认证的本地管理 transport 工作，不能复制 core 业务规则。`app` 是唯一允许依赖所有具体 crate 的位置。
+
+`session-file-browser` 的原生出站适配器由组合根装配：`app::session_files` 实现 `core::ports::SessionFiles`（文件句柄、目录枚举、Git 子进程与进程树取消），通过 `UseCases::with_session_files` 注入；它只做 I/O，不承载授权、会话选择或来源规则。`server::sync` 只调用用例并投影 wire DTO，不直接读磁盘、不启动 Git，也不调用其它入站适配器。未装配时 core 的默认实现失败关闭，不返回空成功。
 
 ### 4.11 `acpr-transcript`
 

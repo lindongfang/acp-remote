@@ -15,7 +15,7 @@
  * 2. **页面只是模型的函数**：同一份代码在「已关闭」与「运行中」两种快照下渲染出不同的输入区状态；
  *    「快照里没有这个会话」在模型层是 `null`（页面据此呈现明确说明，而不是伪造空数据）；
  * 3. **渲染不派发命令**：渲染期间网关没有任何新的派发记录（读取在 `useEffect` 里、命令只在交互里上抛）；
- * 4. **左栏与输入区的组合**：目录上下文 / 目录内搜索（**只**影响左栏）/ 同目录会话 / 已呈现数与
+ * 4. **左栏与输入区的组合**：目录上下文 / 目录内搜索（**只**影响左栏）/ 同目录会话 / 已显示数与
  *    继续加载 / 吸底新建；上下文胶囊 + 告警条、模型与模式胶囊、提示行；
  * 5. **连接事实**：未在线时给出内容来源与上次同步时刻（在线时不给），会话头的 Agent 胶囊在
  *    覆盖层缺席时呈现「状态未知」。
@@ -26,8 +26,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { ConversationStreamProps } from "./index";
-import { ConversationStream, RuntimeUnavailable } from "./index";
+import { ConversationStream, RuntimeUnavailable, StatusPill } from "./index";
 import { composerKeyAction } from "./ConversationComposer";
+import { classifyUserInputsInBand, jumpPillOf } from "./ConversationStream";
 import type { ConversationPageModel } from "../features/conversation-model";
 import type { ClientStore } from "../features/client-store";
 import type { SessionSummary } from "../protocol";
@@ -61,10 +62,10 @@ function renderPage(model: ConversationPageModel, extra: Partial<ConversationStr
       onOpenChangeDiagnostics: () => undefined,
       openChangeDiagnosticsEventId: null,
       onSecondaryViewChange: () => undefined,
-      onOpenDirectory: () => undefined,
+      onOpenDirectoryList: () => undefined,
       onOpenSession: () => undefined,
       onSidebarQueryChange: () => undefined,
-      onLoadMoreSidebar: () => undefined,
+      onSidebarPageChange: () => undefined,
       onCreateSession: () => undefined,
       availableWidth: 1024,
       ...extra,
@@ -162,9 +163,39 @@ describe("对话页正文：整页锚点", () => {
     expect(html).toContain('data-change-path="src/a.ts"');
     expect(html).toContain('data-composer="in_progress"');
     expect(html).toContain('data-settings="true"');
-    expect(html).toContain('data-segment="conversation-secondary-view"');
+    expect(html).not.toContain('data-segment="conversation-secondary-view"');
     expect(html).toContain('data-capabilities="true"');
     expect(html).toContain('data-can-send="true"');
+  });
+
+  it("三栏各有滚动容器；中栏自上而下是会话头、内容来源条、时间线滚动区、输入区", () => {
+    const { store } = filledStore("running");
+    const html = renderPage(pageOf(store), {
+      connectionState: "reconnecting",
+      lastSyncedAtMs: 1_700_000_000_000,
+    });
+
+    expect(html).toContain('data-conversation-scroll="sessions"');
+    expect(html).toContain('data-conversation-scroll="timeline"');
+    expect(html).toContain('data-conversation-scroll="files"');
+
+    // 输入区在**中栏**里（不再横跨三栏，也不在正文之外）。
+    const timeline = sliceBetween(
+      html,
+      'data-conversation-column="timeline"',
+      'data-conversation-column="files"',
+    );
+    expect(timeline).toContain('data-composer="in_progress"');
+    expect(timeline.indexOf('data-session-header="')).toBeLessThan(timeline.indexOf('data-connection-strip="true"'));
+    expect(timeline.indexOf('data-connection-strip="true"')).toBeLessThan(
+      timeline.indexOf('data-conversation-scroll="timeline"'),
+    );
+    expect(timeline.indexOf('data-conversation-scroll="timeline"')).toBeLessThan(timeline.indexOf('data-composer="'));
+
+    // 切换控件在三栏之外：它出现在正文容器之前。
+    expect(html.indexOf('data-segment="conversation-secondary-view"')).toBeLessThan(
+      html.indexOf('data-conversation-body="true"'),
+    );
   });
 
   it("页面不构造载荷：渲染期间没有任何新的派发（命令只在交互里上抛）", () => {
@@ -282,6 +313,11 @@ describe("会话头与 Agent 胶囊（同一份连接覆盖层）", () => {
     // 胶囊的弹层内容**始终在 DOM**（收起时只 `display: none`），因此静置状态就断言得到。
     expect(html).toContain('data-agent-chip="agents"');
     expect(html).toContain('data-agent-popover="closed"');
+    expect(html).toContain('data-agent-popover-title="本会话涉及的 Agent"');
+    expect(html).toContain("本会话涉及的 Agent");
+    // 覆盖层缺席 = 没有任何 Agent 处于连接态：胶囊圆点取空闲色（不冒充运行中）。
+    expect(html).toContain('data-agent-chip-dot="idle"');
+    expect(html.match(/data-agent-row-dot="unknown"/g) ?? []).toHaveLength(2);
     expect(html).toContain('data-agent-row="codex-a"');
     expect(html).toContain('data-agent-row="codex-b"');
     expect(html).toContain('data-agent-row-id="codex-a"');
@@ -294,6 +330,43 @@ describe("会话头与 Agent 胶囊（同一份连接覆盖层）", () => {
     // 名单来源必须说明清楚（连接事件，不是静态配置）。
     expect(html).toContain('data-agent-chip-source="connection-events"');
     expect(html).toContain("连接事件");
+  });
+
+  it("会话头是单行：标题、状态胶囊、Agent 名、弹性空白、Agent 胶囊依次排列", () => {
+    const fixture = filledStore("running");
+    const html = renderPage(pageOf(fixture.store), { hostPanel: fixture.store.hostPanel() });
+    const header = sliceBetween(html, 'data-session-header="', 'data-conversation-scroll="timeline"');
+
+    expect(header).toContain('data-session-header-layout="single-line"');
+    expect(header).toContain('data-session-title="true"');
+    expect(header).toContain('data-session-state="running"');
+    expect(header).toContain('data-session-agent="Claude"');
+    expect(header).toContain('data-agent-chip="agents"');
+    // 顺序：标题 → 状态胶囊 → Agent 名 → Agent 胶囊（弹性空白把它们推成左右两段）。
+    expect(header.indexOf('data-session-title="true"')).toBeLessThan(header.indexOf('data-session-state="running"'));
+    expect(header.indexOf('data-session-state="running"')).toBeLessThan(header.indexOf('data-session-agent="Claude"'));
+    expect(header.indexOf('data-session-agent="Claude"')).toBeLessThan(header.indexOf('data-agent-chip="agents"'));
+  });
+
+  it("状态胶囊带字形：运行/排队 ●、等待 ⏸、失败 ✕、关闭/空闲 ○；等你回复用警告色", () => {
+    const cases = [
+      ["running", "●", "okSoft"],
+      ["queued", "●", "accentSoft"],
+      ["waiting_permission", "⏸", "warnSoft"],
+      ["waiting_input", "⏸", "warnSoft"],
+      ["failed", "✕", "dangerSoft"],
+      ["closed", "○", "panel2"],
+      ["idle", "○", "panel2"],
+    ] as const;
+    for (const [state, glyph, tone] of cases) {
+      const html = renderToStaticMarkup(createElement(StatusPill, { state }));
+      expect(html, state).toContain(`data-session-state="${state}"`);
+      expect(html, state).toContain(`data-session-state-glyph="${glyph}"`);
+      expect(html, state).toContain(`data-session-state-tone="${tone}"`);
+      // 既有词表不动：字形只是前缀，文案仍是那七个词之一。
+      expect(html, state).toContain(glyph);
+    }
+    // 反例：等你回复沿用思考紫 → 上面 `waiting_input` 的 warnSoft 断言会红。
   });
 
   it("没有主机面板数据时不呈现胶囊（不编一份 Agent 名单）", () => {
@@ -321,6 +394,44 @@ describe("内容来源条：断连时标注上次同步", () => {
     expect(online).not.toContain("data-synced-at");
   });
 
+  it("按连接状态换说明句与色调；来源条不是第二个状态徽标", () => {
+    const { store } = filledStore("running");
+
+    const reconnecting = renderPage(pageOf(store), {
+      connectionState: "reconnecting",
+      lastSyncedAtMs: 1_700_000_000_000,
+    });
+    const reconnectingStrip = sliceBetween(
+      reconnecting,
+      'data-connection-strip="true"',
+      'data-conversation-scroll="timeline"',
+    );
+    expect(reconnectingStrip).toContain('data-connection-strip-state="reconnecting"');
+    expect(reconnectingStrip).toContain('data-connection-strip-tone="warn"');
+    expect(reconnectingStrip).toContain("正在重连电脑");
+    expect(reconnectingStrip).toContain('data-synced-at="1700000000000"');
+    // 来源条里没有设备胶囊的圆点/短词结构。
+    expect(reconnectingStrip).not.toContain("data-device-capsule");
+    expect(reconnectingStrip).not.toContain("data-capsule-short-word");
+
+    const disconnected = renderPage(pageOf(store), {
+      connectionState: "disconnected",
+      lastSyncedAtMs: 1_700_000_000_000,
+    });
+    const disconnectedStrip = sliceBetween(
+      disconnected,
+      'data-connection-strip="true"',
+      'data-conversation-scroll="timeline"',
+    );
+    expect(disconnectedStrip).toContain('data-connection-strip-state="disconnected"');
+    expect(disconnectedStrip).toContain('data-connection-strip-tone="danger"');
+    expect(disconnectedStrip).toContain("连接已断开");
+
+    // 在线时不呈现来源条（既有断言在上一用例；这里再钉一次状态变化的差别）。
+    const online = renderPage(pageOf(store), { connectionState: "online" });
+    expect(online).not.toContain("data-connection-strip");
+  });
+
   it("从未成功同步过时不给时刻（不编造一个）", () => {
     const { store } = filledStore("running");
     const html = renderPage(pageOf(store), { connectionState: "reconnecting", lastSyncedAtMs: null });
@@ -345,7 +456,7 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
     });
   }
 
-  it("目录上下文（展示名 + 逐字路径 + 全部 ›）、搜索、同目录会话与已呈现数都在", () => {
+  it("目录上下文、搜索、同目录会话与原型分页文案都在", () => {
     const { store } = sidebarStore({ withPaths: true });
     const html = renderPage(pageOf(store));
 
@@ -354,7 +465,7 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
     expect(html).toContain('data-sidebar-directory-name="api"');
     // 路径逐字取自服务端下发的引用。
     expect(html).toContain('data-sidebar-directory-path="D:\\work\\api"');
-    expect(html).toContain('data-action="open-directory"');
+    expect(html).not.toContain('data-action="open-directory"');
     expect(html).toContain('data-sidebar-search="true"');
     // 只列同目录会话（当前会话被标记为选中）。
     expect(html).toContain(`data-sidebar-session="${ONLINE_SESSION_ID}"`);
@@ -363,12 +474,63 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
     expect(html).toContain(`data-sidebar-session-selected="true"`);
     expect(html).toContain('data-sidebar-shown="2"');
     expect(html).toContain('data-sidebar-total="2"');
-    expect(html).toContain("已呈现该目录全部 2 个会话");
+    expect(html).not.toContain("已显示该目录全部会话");
+    expect(html).toContain('data-sidebar-page="1"');
+    expect(html).toContain('data-sidebar-page-count="1"');
     // 吸底的新建入口与副作用提示。
     expect(html).toContain('data-action="create-session-in-directory"');
-    expect(html).toContain("将在电脑上启动 Agent");
+    expect(html).not.toContain("将在电脑上启动 Agent");
     // 两条会话都够一页，因此没有「加载更多」。
     expect(html).not.toContain('data-action="load-more-sidebar"');
+  });
+
+  it("左栏保留返回目录入口，移除多余的全部按钮，目录头与新建按钮位于列表滚动区外", () => {
+    const { store } = sidebarStore({ withPaths: true });
+    const html = renderPage(pageOf(store));
+    const sidebar = sliceBetween(html, 'data-conversation-column="sessions"', 'data-conversation-column="timeline"');
+
+    // 与原型一致，只保留返回目录列表入口。
+    expect(sidebar).toContain('data-action="open-directory-list"');
+    expect(sidebar).toContain("‹ 目录");
+    expect(sidebar).not.toContain('data-action="open-directory"');
+    expect(sidebar).not.toContain("全部 ›");
+    // 路径是带标签的一行，不是展示名的一部分。
+    expect(sidebar).toContain('data-sidebar-directory-path-label="路径"');
+    expect(sidebar).toContain('data-sidebar-search-wrap="true"');
+    const scroll = sidebar.indexOf('data-conversation-scroll="sessions"');
+    expect(sidebar.indexOf('data-sidebar-search="true"')).toBeLessThan(scroll);
+    expect(sidebar.indexOf('data-sidebar-sessions="list"')).toBeGreaterThan(scroll);
+    expect(sidebar.indexOf('data-action="create-session-in-directory"')).toBeGreaterThan(
+      sidebar.indexOf('data-sidebar-shown='),
+    );
+  });
+
+  it("左栏会话行只呈现圆点、标题和时间，不附加状态词与 Agent 名", () => {
+    const { store } = onlineStore({
+      resources: resources({
+        sessions: [
+          session({ id: ONLINE_SESSION_ID, title: "当前这条", state: "running" }),
+          session({ id: "dddddddd-0000-4000-8000-0000000000b3", title: "等你回复的一条", state: "waiting_input" }),
+          session({ id: "dddddddd-0000-4000-8000-0000000000b4", title: "空闲的一条", state: "idle" }),
+        ],
+      }),
+    });
+    const html = renderPage(pageOf(store));
+    const list = sliceBetween(html, 'data-sidebar-sessions="list"', 'data-sidebar-shown=');
+
+    // 三条都是紧凑行；圆点、标题、时间仍在，等待中的那条还带状态词。
+    expect(list.match(/data-session-row-variant="compact"/g) ?? []).toHaveLength(3);
+    expect(list).toContain('data-session-state="running"');
+    expect(list).toContain('data-session-row-title="true"');
+    expect(list).not.toContain('data-session-title="true"');
+    expect(list).toContain('data-sidebar-session-selected="true"');
+    expect(list).toContain("当前这条");
+    expect(list).toContain("等你回复");
+    expect(list).toContain('data-session-updated-at="2026-10-01T00:00:00.000Z"');
+    // 反例：把目录页的五字段行原样搬进左栏 → Agent 名会出现在这里，下面两条会红。
+    expect(list).not.toContain("Claude");
+    expect(list).not.toContain("data-session-agent=");
+    expect(list.match(/data-session-state="waiting_input"/g) ?? []).toHaveLength(1);
   });
 
   it("路径始终在场：逐字来自快照条目（不拿展示名拼一段看起来像路径的文本）", () => {
@@ -379,7 +541,7 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
     expect(html).toContain('data-sidebar-directory-path="D:\\work\\api"');
   });
 
-  it("超过一批时呈现「已呈现 N / M」与继续加载；加载后分母不变、分子变大", () => {
+  it("超过一批时呈现「已显示 N / M」与继续加载；加载后分母不变、分子变大", () => {
     const many = [
       session({ id: ONLINE_SESSION_ID, title: "当前这条", state: "running" }),
       ...Array.from({ length: 17 }, (_, index) =>
@@ -391,13 +553,20 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
 
     expect(first).toContain('data-sidebar-shown="15"');
     expect(first).toContain('data-sidebar-total="18"');
-    expect(first).toContain("已呈现 15 / 18");
-    expect(first).toContain('data-action="load-more-sidebar"');
-    expect(first).toContain("加载更多（还有 3 个）");
+    expect(first).toContain('data-sidebar-page="1"');
+    expect(first).toContain('data-sidebar-page-count="2"');
+    expect(first).toContain('data-session-ordinal="1"');
+    expect(first).toContain('data-session-ordinal="15"');
+    expect(first).toContain('data-action="page-next"');
+    expect(first).not.toContain('data-action="load-more-sidebar"');
 
-    store.loadMoreSidebarSessions();
+    store.setConversationSidebarPage("2");
     const second = renderPage(pageOf(store));
-    expect(second).toContain('data-sidebar-shown="18"');
+    expect(second).toContain('data-sidebar-shown="3"');
+    expect(second).toContain('data-sidebar-page="2"');
+    expect(second).toContain('data-session-ordinal="16"');
+    expect(second).toContain('data-session-ordinal="18"');
+    expect(second).not.toContain('data-session-ordinal="1"');
     expect(second).toContain('data-sidebar-total="18"');
     expect(second).not.toContain('data-action="load-more-sidebar"');
   });
@@ -481,9 +650,12 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     expect(html).not.toContain("data-context-used");
     expect(html).not.toContain("data-context-percent");
     expect(html).not.toContain("data-context-warning");
-    // 未上报不是禁用理由：发送能力与输入区都不受影响。
+    // 未上报不是禁用理由：会话能力与输入区都不受影响。进行中的输入区是只读 + 停止：
+    // 渲染停止而不渲染发送（WP4 的口径；本条与「输入区只读」的用例互相印证）。
     expect(html).toContain('data-can-send="true"');
-    expect(html).toContain('data-submit-enabled="true"');
+    expect(html).not.toContain('data-action="submit-prompt"');
+    expect(html).not.toContain("data-submit-enabled");
+    expect(html).toContain('data-action="cancel-turn"');
   });
 
   it("模型与模式胶囊的弹层内容始终在 DOM（收起时只是不显示）", () => {
@@ -581,7 +753,7 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     expect(html).toContain("Shift");
     expect(html).toContain("换行");
     expect(html).toContain('data-attachment-notice="true"');
-    expect(html).toContain("附件（图片/文件）不受支持");
+    expect(html).toContain("附件暂不支持");
   });
 });
 
@@ -594,5 +766,35 @@ describe("回车提交的判定（不可提交时不得发命令）", () => {
     // 反例：把不可提交也当成 `submit`（组件一按回车就派发命令）→ 下面两条会红。
     expect(composerKeyAction(false, { key: "Enter" })).toBe("blocked");
     expect(composerKeyAction(false, { key: "Enter", shiftKey: false })).toBe("blocked");
+  });
+});
+
+/**
+ * 可见带换算（r2 检视 F1/F3）。
+ *
+ * `getBoundingClientRect()` 给的是**视口坐标**，跳转判定却以中栏滚动容器的可见带为原点；
+ * `classifyUserInputsInBand` 是这一步换算的**唯一**实现（`measure` 直接调用它）。这里直接喂
+ * 视口几何，不读源码：容器顶边以上被裁掉的消息即使还落在视口里，也不算「看得到」。
+ */
+describe("可见带换算：以中栏滚动容器的顶边为原点", () => {
+  it("容器顶边以上被裁掉的消息不算 visible", () => {
+    // 容器从视口 y=120 开始、高 600；两条消息都在容器顶边之上（虽然仍在视口内）。
+    const distribution = classifyUserInputsInBand(
+      [
+        { top: 40, bottom: 100 },
+        { top: -20, bottom: 30 },
+      ],
+      120,
+      600,
+    );
+    expect(distribution).toEqual({ visible: 0, above: [0, 1], below: [] });
+    expect(jumpPillOf(distribution)).toEqual({ direction: "up", remaining: 2 });
+  });
+
+  it("落在容器内的消息算 visible，即使它在视口里不靠上", () => {
+    // 视口坐标 200..320，换算到容器内是 80..200（容器高 600）——可见。
+    const distribution = classifyUserInputsInBand([{ top: 200, bottom: 320 }], 120, 600);
+    expect(distribution).toEqual({ visible: 1, above: [], below: [] });
+    expect(jumpPillOf(distribution)).toBeNull();
   });
 });

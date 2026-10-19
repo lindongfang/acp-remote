@@ -51,6 +51,7 @@ import { openDeviceIdentityStore } from "./platform/secure-storage.web";
 import type { DeviceIdentity, DeviceIdentityPort } from "./platform/secure-storage";
 import { createVolatileImportedContent, openLocalCache } from "./platform/local-cache.web";
 import { openLifecycle } from "./platform/lifecycle.web";
+import { openDownloadPort } from "./platform/download.web";
 import type { PlatformPorts } from "./platform";
 import { installFakeIndexedDB } from "./platform/testing/fake-indexeddb";
 import { repoRoot } from "./protocol/paths";
@@ -296,6 +297,7 @@ async function setup(input: HandshakeInput): Promise<Harness> {
     localCache: openLocalCache(),
     importedContent: createVolatileImportedContent(),
     lifecycle: openLifecycle(),
+    download: openDownloadPort(),
   };
   const signed: Uint8Array<ArrayBuffer>[] = [];
   const wired: PlatformPorts = { ...platform, deviceIdentity: recordingIdentity(platform.deviceIdentity, signed) };

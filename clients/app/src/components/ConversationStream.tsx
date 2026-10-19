@@ -11,20 +11,22 @@
  * 一套）。因此「窄屏不丢信息」是一条可断言的事实（两种形态的 `data-*` 集合在同一交互状态下完全
  * 相同），而不是靠自觉。
  *
- * 会话头、切换控件与输入区留在三栏**之外**：次级视图把中栏藏起来时，标题、切回去的入口与
- * 发送消息的地方都不能跟着消失。
+ * 宽屏下三栏**各自滚动**（左栏会话、中栏时间线、右栏变更文件各一个 `ScrollView`）；中栏自上而下
+ * 是会话头 → 内容来源条 → 时间线滚动区 → 输入区（输入区吸在中栏底部）。窄屏保留次级视图切换，
+ * 切换控件留在三栏**之外**：中栏被藏起来时，切回去的入口不能跟着消失。
  *
  * ## 判定不在本组件里
  *
  * 输入区能不能提交、编辑框是否只读、模型能不能切、差异行有没有、左栏列哪些会话，全部由
  * `ConversationPageModel` 里的判别值决定（`src/features/**` 与 `src/domain/**` 的纯函数）。
- * 本组件只做两件事：按模型渲染、把交互原样上抛。唯一落在组件里的判定是**视口测量**（跳转入口）
+ * 本组件只做两件事：按模型渲染、把交互原样上抛。唯一落在组件里的判定是**可见带测量**（跳转入口）
  * ——它读的是滚动位置这种只属于渲染现场的事实，与数据判定无关。
  *
  * ## 跳转入口与「短暂高亮」
  *
- * 时间线在视口外还有用户输入时呈现跳转胶囊（原型 `.jumppill`）；方向与剩余条数由
- * {@link classifyUserInputs} / {@link jumpPillOf} 给出（纯函数，组件测试直接喂几何）。跳转后用
+ * 时间线可见带外还有用户输入时呈现跳转胶囊（原型 `.jumppill`）；可见带换算与方向/条数由
+ * {@link classifyUserInputsInBand} / {@link classifyUserInputs} / {@link jumpPillOf} 给出
+ * （纯函数，组件测试直接喂几何）。跳转后用
  * 一圈描边把目标框住 `motion.pulse` 毫秒——目标条目属于 `ConversationTimeline` 的子树，本组件
  * 不为它加样式，因此高亮是一层 `position: fixed` 的覆盖层，坐标取自目标自己的
  * `getBoundingClientRect()`（网页专有面；node 侧不做测量，那时跳转入口不呈现）。
@@ -36,7 +38,7 @@
  * 连接状态仍然只由共享外壳的设备胶囊表达，这里呈现的是**内容来源**，不是第二个状态徽标。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import type { InteractionAnswer } from "../domain/interaction";
@@ -51,14 +53,22 @@ import type { HostPanelModel } from "../features/host-panel-model";
 import type { ConnectionStateName } from "../state";
 import { ConversationComposer } from "./ConversationComposer";
 import { ConversationTimeline } from "./ConversationTimeline";
+import { ConversationColumnResizer } from "./ConversationColumnResizer";
+import { CONVERSATION_SIDEBAR_PAGE_SIZE } from "../features/conversation-model";
 import { FileChangesPanel } from "./FileChangesPanel";
+import { FileContentViewer } from "./FileContentViewer";
+import type { FilePreviewArtifact } from "./FileContentViewer";
+import { SessionFilesPanel } from "./SessionFilesPanel";
+import type { FileSource, SessionFileDownloadState, SessionFilesPanelModel } from "../features";
 import { PendingInteractionsPanel } from "./PendingInteractionsPanel";
+import { Pager } from "./Pager";
 import { SegmentControl } from "./SegmentControl";
 import { SessionRow } from "./SessionRow";
 import { StatusPill } from "./StatusPill";
 import type { Palette } from "./theme";
 import {
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -131,14 +141,14 @@ export interface ConversationStreamProps {
   readonly onCopyCode?: ((code: string, language: string) => void) | undefined;
   /** 链接被点选时上抛的目标。 */
   readonly onLinkPress?: ((href: string) => void) | undefined;
-  /** 左栏「全部 ›」：进入当前会话所属目录的详情页。 */
-  readonly onOpenDirectory?: ((directoryId: string) => void) | undefined;
+  /** 左栏「‹ 目录」：返回目录列表页（`/`）。 */
+  readonly onOpenDirectoryList?: (() => void) | undefined;
   /** 左栏会话行：打开同目录的另一个会话。 */
   readonly onOpenSession?: ((sessionId: string) => void) | undefined;
   /** 左栏目录内搜索词变化（**只**影响左栏列表）。 */
   readonly onSidebarQueryChange?: ((query: string) => void) | undefined;
   /** 左栏「加载更多」：再呈现一批同目录会话。 */
-  readonly onLoadMoreSidebar?: (() => void) | undefined;
+  readonly onSidebarPageChange?: ((pageInput: string) => void) | undefined;
   /** 左栏底部的「⊕ 新建会话」：在该目录内创建会话。 */
   readonly onCreateSession?: ((directoryId: string) => void) | undefined;
   /**
@@ -150,6 +160,39 @@ export interface ConversationStreamProps {
   readonly connectionState?: ConnectionStateName | null;
   /** 上次成功同步的时刻（epoch 毫秒）；从未成功替换过快照时为 `null`。 */
   readonly lastSyncedAtMs?: number | null;
+  /**
+   * 文件栏三来源与互斥内容态（`store.sessionFilesPage(sessionId)`）。
+   *
+   * 缺省 `null` 时右栏退回旧版「会话变更」清单（`FileChangesPanel`）：组件测试与未接线的
+   * 消费者不需要伪造文件查询也能渲染对话页。
+   */
+  readonly filesPanel?: SessionFilesPanelModel | null;
+  /** 切换文件来源。 */
+  readonly onSelectFileSource?: ((source: FileSource) => void) | undefined;
+  /** 手动刷新当前来源。 */
+  readonly onRefreshFiles?: (() => void) | undefined;
+  /** 切换「隐藏忽略文件」。 */
+  readonly onToggleHideIgnored?: (() => void) | undefined;
+  /** 展开/分页加载某一层目录。 */
+  readonly onLoadMoreAllFiles?: ((path: string) => void) | undefined;
+  /** 继续加载 Git 变更。 */
+  readonly onLoadMoreGitChanges?: (() => void) | undefined;
+  /** 打开文件内容（来源 + 根内相对路径）。 */
+  readonly onOpenFile?: ((source: FileSource, path: string) => void) | undefined;
+  /** 关闭文件查看（焦点与窄屏返回由页面负责）。 */
+  readonly onCloseFile?: (() => void) | undefined;
+  /** 重新读取当前文件（过时/失败时）。 */
+  readonly onRetryFile?: (() => void) | undefined;
+  /** 主动下载当前预览文件。 */
+  readonly onDownloadFile?: ((path: string, sizeBytes: string | null, mimeType: string) => void) | undefined;
+  readonly onCancelDownload?: (() => void) | undefined;
+  readonly onReleaseDownload?: (() => void) | undefined;
+  /** 下载服务状态（`SessionFileDownloader.state`）；缺省 `null` = 尚未装配。 */
+  readonly downloadState?: SessionFileDownloadState | null;
+  /** 平台端口创建图片预览 Blob URL；缺省时查看区显式说明不支持。 */
+  readonly createPreviewUrl?:
+    | ((bytes: Uint8Array, mimeType: string) => FilePreviewArtifact | null)
+    | undefined;
 }
 
 /** 次级视图 → 切换控件上的文案（四个取值一个不少，键集合由类型保证）。 */
@@ -157,12 +200,18 @@ const SECONDARY_VIEW_LABELS: Readonly<Record<ConversationSecondaryView, string>>
   all: "全部",
   timeline: "对话",
   sessions: "会话",
-  files: "变更文件",
+  files: "文件",
 };
 
 /** 次级视图切换控件的选项：取值的清单与顺序都来自模型层的登记表，不在这里另列一份。 */
 const SECONDARY_VIEW_OPTIONS: readonly { readonly value: ConversationSecondaryView; readonly label: string }[] =
   CONVERSATION_SECONDARY_VIEWS.map((value) => ({ value, label: SECONDARY_VIEW_LABELS[value] }));
+
+/**
+ * 窄屏的切换选项：**没有「全部」**。窄屏的三栏是纵向堆叠，均分高度会把时间线挤成 0 高，
+ * 因此窄屏只提供「一栏占主体」的三个取值（`effectiveSecondaryView` 也把 `all` 归一为 `timeline`）。
+ */
+const NARROW_SECONDARY_VIEW_OPTIONS = SECONDARY_VIEW_OPTIONS.filter((option) => option.value !== "all");
 
 /** 会话状态 → 待处理跳转条的文案；只有「在等我们」的那两档给得出。 */
 const PENDING_BAR_LABELS: Readonly<Partial<Record<ConversationPageModel["header"]["state"], string>>> = {
@@ -171,41 +220,87 @@ const PENDING_BAR_LABELS: Readonly<Partial<Record<ConversationPageModel["header"
 };
 
 /**
- * 视口里的一条用户输入：相对**视口**的上边与下边（像素）。
+ * 非在线时的内容来源说明：同一句「内容来自上次同步」之后，按连接状态补一句**为什么会停在这里**。
  *
- * 浏览器给的是 `getBoundingClientRect()` 的原始值；组件测试直接喂假几何，因此下面的判定函数
- * 不需要 DOM。
+ * 两档语气：`warn` = 仍在尝试（连接中/认证中/追平中/重连中/配对中），`danger` = 不会再自己恢复
+ * （已断开、未配对、被撤销、版本不兼容、身份变化、被顶替）。这里只描述**内容来源**，不呈现状态
+ * 圆点或短词——连接状态仍只由共享外壳的设备胶囊表达（spec 的唯一性要求）。
+ */
+type ContentStripTone = "warn" | "danger";
+
+const CONTENT_STRIP_BY_STATE: Readonly<
+  Record<Exclude<ConnectionStateName, "online">, { readonly tone: ContentStripTone; readonly detail: string }>
+> = {
+  unpaired: { tone: "danger", detail: "本设备尚未配对，以下内容不会再更新。" },
+  pairing: { tone: "warn", detail: "正在完成配对，追平之前以下内容不是最新。" },
+  disconnected: { tone: "danger", detail: "与电脑的连接已断开，以下内容不会再更新。" },
+  connecting: { tone: "warn", detail: "正在连接电脑，收到新的同步之前以下内容不是最新。" },
+  authenticating: { tone: "warn", detail: "正在认证本设备，收到新的同步之前以下内容不是最新。" },
+  replaying: { tone: "warn", detail: "正在追平事件，追平之前以下内容可能落后。" },
+  reconnecting: { tone: "warn", detail: "正在重连电脑，恢复实时更新之前以下内容不是最新。" },
+  revoked: { tone: "danger", detail: "本设备已被主机撤销，以下内容不会再更新。" },
+  incompatible: { tone: "danger", detail: "客户端与主机版本不兼容，以下内容不会再更新。" },
+  identity_changed: { tone: "danger", detail: "主机身份已变化，请先在主机侧确认，以下内容不会再更新。" },
+  replaced: { tone: "danger", detail: "本连接已被其它标签页顶替，以下内容不会再更新。" },
+};
+
+/**
+ * 一条用户输入的上下边像素值。`getBoundingClientRect()` 给的是**视口坐标**；
+ * {@link classifyUserInputsInBand} 把它换算到可见带原点后再交给 {@link classifyUserInputs}
+ * （后者只认相对可见带顶端的坐标）。组件测试直接喂假几何，因此判定函数不需要 DOM。
  */
 export interface ViewportRect {
   readonly top: number;
   readonly bottom: number;
 }
 
-/** 视口边界的容差：与原型 `updateJump` 的 10px 同一口径（贴着边不算看到）。 */
+/** 可见带边界的容差：与原型 `updateJump` 的 10px 同一口径（贴着边不算看到）。 */
 export const JUMP_VIEWPORT_GUARD_PX = 10;
 
-/** 用户输入在视口里的分布：看得到的条数，以及上方 / 下方各是哪几条（按时间线次序的下标）。 */
+/** 用户输入在可见带里的分布：看得到的条数，以及上方 / 下方各是哪几条（按时间线次序的下标）。 */
 export interface UserInputDistribution {
   readonly visible: number;
   readonly above: readonly number[];
   readonly below: readonly number[];
 }
 
-/** 把用户输入条目按「视口上方 / 视口内 / 视口下方」分类（跳转判定的**唯一**一处输入）。 */
-export function classifyUserInputs(rects: readonly ViewportRect[], viewportHeight: number): UserInputDistribution {
+/**
+ * 把用户输入条目按「可见带上方 / 可见带内 / 可见带下方」分类（跳转判定的**唯一**一处输入）。
+ * `visibleHeight` 是可见带的高度（中栏滚动容器的可视高度；回退时是视口高度）。
+ */
+export function classifyUserInputs(rects: readonly ViewportRect[], visibleHeight: number): UserInputDistribution {
   const above: number[] = [];
   const below: number[] = [];
   let visible = 0;
   rects.forEach((rect, index) => {
     if (rect.bottom <= JUMP_VIEWPORT_GUARD_PX) above.push(index);
-    else if (rect.top >= viewportHeight - JUMP_VIEWPORT_GUARD_PX) below.push(index);
+    else if (rect.top >= visibleHeight - JUMP_VIEWPORT_GUARD_PX) below.push(index);
     else visible += 1;
   });
   return { visible, above, below };
 }
 
 /**
- * 跳转胶囊的呈现：**没有用户输入**、或至少有一条在视口内时不呈现（spec 的两条场景）。
+ * 把**视口坐标**（`getBoundingClientRect()` 的原值）换算到可见带内再分类：`containerTop` 是
+ * 可见带（中栏时间线滚动容器）的顶边，`containerHeight` 是它的高度。容器顶边以上被裁掉的
+ * 条目因此落在「上方」，不会因为还在视口里就算成看得到。
+ *
+ * 容器缺失时调用方传 `0` 与视口高度，于是退化为视口坐标——与 {@link classifyUserInputs} 同口径。
+ * 这一步换算是测量（`measure`）与判定之间**唯一**的落点，页面测试直接喂视口几何。
+ */
+export function classifyUserInputsInBand(
+  rects: readonly ViewportRect[],
+  containerTop: number,
+  containerHeight: number,
+): UserInputDistribution {
+  return classifyUserInputs(
+    rects.map((rect) => ({ top: rect.top - containerTop, bottom: rect.bottom - containerTop })),
+    containerHeight,
+  );
+}
+
+/**
+ * 跳转胶囊的呈现：**没有用户输入**、或至少有一条在可见带内时不呈现（spec 的两条场景）。
  *
  * 方向取「还有输入的那一侧」：上方有则向上，否则向下；条数是那一侧剩下的条数。
  */
@@ -231,32 +326,49 @@ const NO_USER_INPUTS: UserInputDistribution = { visible: 0, above: [], below: []
 /**
  * 生效的次级视图（三栏里哪几栏被藏起来由它决定）。
  *
- * 三条规则合起来保证「窄屏不丢信息」与「宽屏照旧三栏」：
+ * 四条规则合起来保证「窄屏不丢信息」「窄屏单栏吃掉高度」与「宽屏照旧三栏」：
  *
  * 1. **没有接线切换控件** → 三栏都呈现。藏了一栏却没有任何入口，就是静默丢弃信息；
  * 2. **宽屏 + 缺省取值** → 三栏都呈现。`DEFAULT_CONVERSATION_SECONDARY_VIEW` 是**窄屏**的默认
  *    形态（模型层的注释同样这么写），而宽屏的默认形态就是三栏并列（spec「对话页的宽屏两种形态」
  *    的第一句是 MUST）；用户在宽屏显式选过别的取值后照办；
- * 3. 其余情形照取值来。
+ * 3. **窄屏 + 「全部」** → 归一为对话本体。窄屏是纵向堆叠，三栏均分会把时间线挤成 0 高；
+ *    「全部」只属于宽屏的三栏并列形态；
+ * 4. 其余情形照取值来。
  */
 export function effectiveSecondaryView(input: {
   readonly requested: ConversationSecondaryView | null | undefined;
   readonly switchable: boolean;
   readonly wide: boolean;
 }): ConversationSecondaryView {
-  if (!input.switchable) return "all";
+  if (input.wide || !input.switchable) return "all";
   const requested = input.requested ?? DEFAULT_CONVERSATION_SECONDARY_VIEW;
   if (input.wide && requested === DEFAULT_CONVERSATION_SECONDARY_VIEW) return "all";
+  if (!input.wide && requested === "all") return "timeline";
   return requested;
 }
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
+    // 路由容器：外壳按视口高度固定后，它必须作为弹性子项吃掉剩余高度（`<section>` 原样是
+    // 块级元素，只靠内层 `flexGrow` 填不满父级）。语义用 `role="region"` 补回。
+    section: {
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+      minHeight: 0,
+    },
+    // 对话路由由外壳按视口高度固定（`contentFill`）：这里只把剩余高度逐层传下去，滚动交给
+    // 三栏各自的 `ScrollView`。`minHeight: 0` 让弹性子项真的能收缩（否则内容会把输入区挤出视口）。
     root: {
-      gap: spacing.md,
-      padding: spacing.lg,
-      backgroundColor: colors.bg,
+      flexGrow: 1,
+      flexShrink: 1,
+      minHeight: 0,
+      flexDirection: "column",
+      gap: 0,
+      padding: 0,
+      backgroundColor: colors.panel,
     },
     originStrip: {
       flexDirection: "row",
@@ -268,38 +380,73 @@ function buildStyles(colors: Palette) {
       borderWidth: 1,
       borderColor: colors.line,
       borderRadius: radius.sm,
+      backgroundColor: colors.panel2,
+      flexShrink: 0,
+    },
+    originStripWarn: {
+      borderColor: colors.warnSoft,
+      backgroundColor: colors.warnSoft,
+    },
+    originStripDanger: {
+      borderColor: colors.dangerSoft,
       backgroundColor: colors.dangerSoft,
     },
     originText: {
-      color: colors.danger,
+      color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
-    syncedAt: {
+    originTextWarn: {
+      color: colors.warn,
+    },
+    originTextDanger: {
       color: colors.danger,
+    },
+    syncedAt: {
+      color: colors.ink3,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
     },
+    syncedAtWarn: {
+      color: colors.warn,
+    },
+    syncedAtDanger: {
+      color: colors.danger,
+    },
     header: {
-      gap: spacing.xs,
-      paddingBottom: spacing.sm,
+      flexShrink: 0,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      minHeight: 56,
+      backgroundColor: colors.panel,
       borderBottomWidth: 1,
       borderBottomColor: colors.line,
     },
+    // 单行会话头（原型 `.convhead`）：标题、状态胶囊、Agent 名、弹性空白、Agent 胶囊靠右。
     headerRow: {
       flexDirection: "row",
-      flexWrap: "wrap",
+      flexWrap: "nowrap",
       alignItems: "center",
       gap: spacing.sm,
+      minWidth: 0,
+    },
+    headerSpacer: {
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
     },
     title: {
       flexShrink: 1,
+      minWidth: 0,
       color: colors.ink,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xl,
+      // 原型会话标题 15.5px：比正文大一档但不超过 17（`fontSize.lg`），取 md + 1.5。
+      fontSize: fontSize.md + 1.5,
       fontWeight: "600",
     },
     agent: {
+      flexShrink: 1,
+      minWidth: 0,
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
@@ -351,6 +498,12 @@ function buildStyles(colors: Palette) {
     popoverHidden: {
       display: "none",
     },
+    popoverTitle: {
+      color: colors.ink,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+      fontWeight: "600",
+    },
     agentRow: {
       flexDirection: "row",
       flexWrap: "wrap",
@@ -364,6 +517,14 @@ function buildStyles(colors: Palette) {
       width: 8,
       height: 8,
       borderRadius: 4,
+      backgroundColor: colors.ink3,
+    },
+    // 有 Agent 处于连接态时用「运行中」色，否则用空闲色（数据来自连接事件覆盖层；未知状态
+    // 不等于已断开，因此只区分「至少一个在跑」与「没有」）。
+    dotRunning: {
+      backgroundColor: colors.ok,
+    },
+    dotIdle: {
       backgroundColor: colors.ink3,
     },
     agentName: {
@@ -440,12 +601,18 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.sm,
     },
     bodyWide: {
+      flexGrow: 1,
+      flexShrink: 1,
+      minHeight: 0,
       flexDirection: "row",
       // 三栏等高：两侧栏目的「吸底」元素才有底可吸（窄屏是堆叠，不受影响）。
       alignItems: "stretch",
-      gap: spacing.md,
+      gap: 0,
     },
     bodyNarrow: {
+      flexGrow: 1,
+      flexShrink: 1,
+      minHeight: 0,
       flexDirection: "column",
       gap: spacing.md,
     },
@@ -453,40 +620,87 @@ function buildStyles(colors: Palette) {
     sessionsColumn: {
       flexBasis: 300,
       flexGrow: 0,
-      flexShrink: 0,
-      minWidth: 0,
+      // 宽屏但视口不足时允许两侧收缩：固定 300 + 360 在 720–900 区间会把中栏压成几十像素，
+      // 输入区随之换行成一条竖线。大屏仍按原型 300 / 1fr / 360 取宽。
+      flexShrink: 1,
+      minWidth: 160,
+      minHeight: 0,
+      flexDirection: "column",
       borderRightWidth: 1,
       borderRightColor: colors.line,
-      paddingRight: spacing.md,
+      backgroundColor: colors.panel,
     },
     timelineColumn: {
       flexGrow: 1,
       flexShrink: 1,
-      minWidth: 0,
-      gap: spacing.md,
+      // 中栏的可用下限：低于它时输入区会被压成竖条，时间线滚动区也会失去高度。
+      minWidth: 300,
+      minHeight: 0,
+      flexDirection: "column",
+      gap: 0,
+      backgroundColor: colors.panel,
     },
     filesColumn: {
       flexBasis: 360,
       flexGrow: 0,
-      flexShrink: 0,
-      minWidth: 0,
+      flexShrink: 1,
+      minWidth: 200,
+      minHeight: 0,
+      flexDirection: "column",
       gap: spacing.md,
       borderLeftWidth: 1,
       borderLeftColor: colors.line,
-      paddingLeft: spacing.md,
+      backgroundColor: colors.panel2,
+    },
+    // 窄屏：唯一可见的那一栏吃掉正文高度（次级视图把其余两栏 `display: none`）。
+    narrowColumn: {
+      flexBasis: 0,
+      flexGrow: 1,
+      flexShrink: 1,
+    },
+    // 三栏各自的滚动容器：宽屏下左右两栏固定宽、中栏吃掉余量，滚动互不影响。
+    columnScroll: {
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+      minHeight: 0,
+      width: "100%",
+    },
+    columnScrollBody: {
+      flexGrow: 1,
+      gap: spacing.sm,
+    },
+    timelineScrollBody: {
+      gap: spacing.md,
+      paddingTop: 22,
+      paddingHorizontal: 20,
+      paddingBottom: 8,
+    },
+    // 输入区吸在中栏底部：不参与中栏的弹性分配，时间线滚到哪它都留在原位。
+    composerDock: {
+      flexShrink: 0,
     },
     hidden: {
       display: "none",
     },
     sidebar: {
       flexGrow: 1,
-      gap: spacing.sm,
+      flexShrink: 1,
+      flexBasis: 0,
+      minHeight: 0,
+      gap: 0,
     },
     sidebarHead: {
-      gap: spacing.sm,
-      paddingBottom: spacing.sm,
+      gap: 0,
+      paddingVertical: 16,
+      paddingHorizontal: 16,
       borderBottomWidth: 1,
       borderBottomColor: colors.line2,
+    },
+    sidebarTopRow: {
+      flexDirection: "column",
+      alignItems: "stretch",
+      gap: 10,
     },
     sidebarDirRow: {
       flexDirection: "row",
@@ -502,49 +716,119 @@ function buildStyles(colors: Palette) {
     sidebarName: {
       color: colors.ink,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.md,
+      fontSize: 15,
+      lineHeight: 22,
       fontWeight: "600",
     },
-    sidebarPath: {
+    sidebarPathRow: {
+      marginTop: 10,
+      flexDirection: "row",
+      alignItems: "baseline",
+      gap: spacing.sm,
+      minWidth: 0,
+    },
+    // 「路径」是一个标签，不是值：与等宽路径取同一行，但用正文字族与低对比色。
+    sidebarPathLabel: {
+      flexShrink: 0,
+      minWidth: 34,
       color: colors.ink3,
-      fontFamily: fontFamily.mono,
+      fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+    },
+    sidebarPath: {
+      flexShrink: 1,
+      minWidth: 0,
+      color: colors.ink,
+      fontFamily: fontFamily.mono,
+      fontSize: 13,
+      lineHeight: 20,
       // 等宽「值」行取 500 档（原型 `.dirctx .pt`），不在这里写字面量。
       fontWeight: fontWeight.value,
     },
-    search: {
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.sm,
+    searchWrap: {
+      marginTop: 10,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 5,
       borderWidth: 1,
       borderColor: colors.line,
       borderRadius: radius.sm,
       backgroundColor: colors.panel2,
+    },
+    searchIcon: {
+      flexShrink: 0,
+      color: colors.ink3,
+      fontSize: fontSize.sm,
+    },
+    search: {
+      flexGrow: 1,
+      flexShrink: 1,
+      minWidth: 0,
+      padding: 0,
+      borderWidth: 0,
+      backgroundColor: "transparent",
+      lineHeight: 20.8,
+      outlineWidth: 0,
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
     sidebarList: {
-      gap: spacing.xs,
+      gap: 0,
     },
+    // 选中行：左侧 2px accent 边（原型 `.srow.on` 的 `border-left-color`）。未选中时保留同宽的
+    // 透明边，行内容不会因选中而左右跳动。
     sidebarRow: {
-      borderRadius: radius.sm,
+      borderRadius: 0,
+      borderLeftWidth: 2,
+      borderLeftColor: "transparent",
     },
     sidebarRowSelected: {
       backgroundColor: colors.accentSoft,
+      borderLeftColor: colors.accent,
     },
     sidebarPager: {
+      flexShrink: 0,
+      justifyContent: "center",
       flexDirection: "row",
       flexWrap: "wrap",
       alignItems: "center",
       gap: spacing.sm,
-      paddingTop: spacing.sm,
-    },
-    sidebarFoot: {
-      marginTop: "auto",
-      gap: spacing.xs,
-      paddingTop: spacing.sm,
+      paddingVertical: 10,
+      paddingHorizontal: 16,
       borderTopWidth: 1,
       borderTopColor: colors.line2,
+    },
+    sidebarFoot: {
+      flexShrink: 0,
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "center",
+      gap: 10,
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+      borderTopWidth: 1,
+      borderTopColor: colors.line2,
+      backgroundColor: colors.panel,
+    },
+    sidebarBack: {
+      alignSelf: "flex-start",
+      paddingVertical: 5,
+      paddingHorizontal: 11,
+    },
+    sidebarCreate: {
+      paddingVertical: 5,
+      paddingHorizontal: 11,
+      borderRadius: 6,
+      backgroundColor: colors.accentSoft,
+    },
+    sidebarCreateText: {
+      color: colors.accentInk,
+      fontFamily: fontFamily.sans,
+      fontSize: 13,
+      fontWeight: "600",
     },
     linkButton: {
       flexShrink: 0,
@@ -578,9 +862,9 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.sm,
     },
     jumpPill: {
-      // 固定在**视口**底部居中（原型把胶囊绝对定位在滚动栏内；本页的滚动者是文档，因此取
-      // `position: fixed` 才能一直停在可见区底部）。它渲染在中栏里：中栏被次级视图藏起来时，
-      // 这个入口也一起消失（那时时间线本来就不在台上）。
+      // 固定在**视口**底部居中（原型把胶囊绝对定位在滚动栏内）。它是中栏滚动容器的兄弟节点：
+      // 包含块因此是视口，胶囊不随内容滚动、也不会被滚动容器的 overflow 裁掉；中栏被次级视图
+      // 藏起来时，这个入口随中栏一起消失（那时时间线本来就不在台上）。
       left: "50%",
       bottom: spacing.lg,
       flexDirection: "row",
@@ -609,6 +893,8 @@ function buildStyles(colors: Palette) {
       ...webStyle({ position: "fixed" }),
     },
     footer: {
+      display: "none",
+      flexShrink: 0,
       flexDirection: "row",
       flexWrap: "wrap",
       alignItems: "center",
@@ -677,18 +963,22 @@ function AgentChip({ panel }: { readonly panel: HostPanelModel }): ReactElement 
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const [open, setOpen] = useState(false);
+  // 「有没有 Agent 在跑」只从面板已有的连接状态得出：`connected` 视为运行中，其余（含未知）
+  // 取空闲色。未知状态不会被降级成「已断开」——那一条仍由每行的连接文案承担。
+  const anyRunning = panel.agents.some((agent) => agent.connection === "connected");
+  const dotTone = anyRunning ? "running" : "idle";
 
   return (
     <View style={styles.chipWrap} dataSet={{ agentChip: "agents", agentChipOpen: String(open) }}>
       <Pressable
         role="button"
         style={styles.chip}
-        dataSet={{ action: "toggle-agent-chip", agentChipCount: String(panel.agents.length) }}
+        dataSet={{ action: "toggle-agent-chip", agentChipCount: String(panel.agents.length), agentChipDot: dotTone }}
         onPress={() => {
           setOpen(!open);
         }}
       >
-        <View style={styles.dot} />
+        <View style={[styles.dot, anyRunning ? styles.dotRunning : styles.dotIdle]} />
         <Text style={styles.chipText}>{`${String(panel.agents.length)} 个 Agent ▾`}</Text>
       </Pressable>
 
@@ -696,6 +986,9 @@ function AgentChip({ panel }: { readonly panel: HostPanelModel }): ReactElement 
         style={open ? styles.popover : [styles.popover, styles.popoverHidden]}
         dataSet={{ agentPopover: open ? "open" : "closed" }}
       >
+        <Text style={styles.popoverTitle} dataSet={{ agentPopoverTitle: "本会话涉及的 Agent" }}>
+          本会话涉及的 Agent
+        </Text>
         {panel.agents.length === 0 ? (
           <Text style={styles.note} dataSet={{ agentChipEmpty: "true" }}>
             最近一次同步的 Agent 目录里没有 Agent。
@@ -707,7 +1000,10 @@ function AgentChip({ panel }: { readonly panel: HostPanelModel }): ReactElement 
               style={styles.agentRow}
               dataSet={{ agentRow: agent.id, agentConnection: agent.connection }}
             >
-              <View style={styles.dot} />
+              <View
+                style={[styles.dot, agent.connection === "connected" ? styles.dotRunning : styles.dotIdle]}
+                dataSet={{ agentRowDot: agent.connection }}
+              />
               <Text style={styles.agentName} dataSet={{ agentRowName: agent.displayName }}>
                 {agent.displayName}
               </Text>
@@ -740,36 +1036,30 @@ function AgentChip({ panel }: { readonly panel: HostPanelModel }): ReactElement 
 }
 
 /**
- * 左栏：目录上下文（展示名 + 逐字路径 + 进详情页的入口）+ 目录内搜索 + 同目录会话列表 +
- * 「已呈现 N / M」与继续加载 + 吸底的新建会话入口。
+ * 左栏：目录上下文（返回目录列表、展示名、进本目录详情、带「路径」标签的逐字路径）+ 带图标的
+ * 目录内搜索 + 同目录会话列表 + 「已显示 N / M」与继续加载 + 吸底的新建会话入口。
  *
  * 搜索框是**受控**的（值来自 `model.query`，输入回到仓库的 `conversationSidebarQuery`）：它只
  * 影响本栏列表（模型层保证），因此「搜索不改中栏」在这里没有表达方式。
  */
 function Sidebar({
   model,
-  onOpenDirectory,
+  onOpenDirectoryList,
   onOpenSession,
   onQueryChange,
-  onLoadMore,
+  onPageChange,
   onCreateSession,
 }: {
   readonly model: ConversationSidebarModel;
-  readonly onOpenDirectory: ((directoryId: string) => void) | undefined;
+  readonly onOpenDirectoryList: (() => void) | undefined;
   readonly onOpenSession: ((sessionId: string) => void) | undefined;
   readonly onQueryChange: ((query: string) => void) | undefined;
-  readonly onLoadMore: (() => void) | undefined;
+  readonly onPageChange: ((pageInput: string) => void) | undefined;
   readonly onCreateSession: ((directoryId: string) => void) | undefined;
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const directory = model.directory;
-  const pagerLabel = model.canLoadMore
-    ? `已呈现 ${String(model.shown)} / ${String(model.total)}`
-    : model.total === 0
-      ? "这个目录还没有会话"
-      : `已呈现该目录全部 ${String(model.total)} 个会话`;
-
   return (
     <View style={styles.sidebar} dataSet={{ conversationSidebar: "true" }}>
       {/* 没有目录归属：说明它，而不是把左栏藏起来（中栏照常呈现）。 */}
@@ -781,58 +1071,74 @@ function Sidebar({
 
       {directory === null ? null : (
         <View style={styles.sidebarHead} dataSet={{ sidebarDirectory: directory.directoryId }}>
-          <View style={styles.sidebarDirRow}>
+          {/* 返回目录列表，目录名独占下一行。 */}
+          <View style={styles.sidebarTopRow}>
+            <Pressable
+              role="button"
+              style={[styles.linkButton, styles.sidebarBack]}
+              dataSet={{ action: "open-directory-list" }}
+              onPress={() => {
+                onOpenDirectoryList?.();
+              }}
+            >
+              <Text style={styles.linkButtonText}>‹ 目录</Text>
+            </Pressable>
             <View style={styles.sidebarDirNames}>
               <Text style={styles.sidebarName} dataSet={{ sidebarDirectoryName: directory.displayName }}>
                 {directory.displayName}
               </Text>
-              {/* 路径逐字来自快照目录条目，始终在场。 */}
-              <Text style={styles.sidebarPath} numberOfLines={1} dataSet={{ sidebarDirectoryPath: directory.path }}>
-                {directory.path}
-              </Text>
             </View>
-            <Pressable
-              role="button"
-              style={styles.linkButton}
-              dataSet={{ action: "open-directory", directoryId: directory.directoryId }}
-              onPress={() => {
-                onOpenDirectory?.(directory.directoryId);
-              }}
-            >
-              <Text style={styles.linkButtonText}>全部 ›</Text>
-            </Pressable>
+          </View>
+
+          {/* 路径逐字来自快照目录条目，始终在场；「路径」是标签，不是值的一部分。 */}
+          <View style={styles.sidebarPathRow}>
+            <Text style={styles.sidebarPathLabel} dataSet={{ sidebarDirectoryPathLabel: "路径" }}>
+              路径
+            </Text>
+            <Text style={styles.sidebarPath} numberOfLines={1} dataSet={{ sidebarDirectoryPath: directory.path }}>
+              {directory.path}
+            </Text>
           </View>
 
           {onQueryChange === undefined ? null : (
-            <TextInput
-              value={model.query}
-              placeholder="在本目录内搜索"
-              style={styles.search}
-              dataSet={{ sidebarSearch: "true" }}
-              onChangeText={(text: string) => {
-                onQueryChange(text);
-              }}
-            />
+            <View style={styles.searchWrap} dataSet={{ sidebarSearchWrap: "true" }}>
+              <Text style={styles.searchIcon}>🔍</Text>
+              <TextInput
+                placeholderTextColor={theme.colors.ink3}
+                value={model.query}
+                placeholder="在本目录内搜索"
+                style={styles.search}
+                dataSet={{ sidebarSearch: "true" }}
+                onChangeText={(text: string) => {
+                  onQueryChange(text);
+                }}
+              />
+            </View>
           )}
         </View>
       )}
 
+      <ScrollView style={styles.columnScroll} dataSet={{ conversationScroll: "sessions" }}>
       {directory === null || model.rows.length === 0 ? null : (
         <View role="list" style={styles.sidebarList} dataSet={{ sidebarSessions: "list" }}>
-          {model.rows.map((row) => {
+          {model.rows.map((row, index) => {
             const selected = row.id === model.selectedSessionId;
+            const ordinal = (model.page - 1) * CONVERSATION_SIDEBAR_PAGE_SIZE + index + 1;
             return (
-              // 选中态只在行的外框上（`SessionRow` 没有 selected 参数，也不该为对话页长出第二种会话行）。
+              // 选中态只在行的外框上（`SessionRow` 不做选中判定，也不该为对话页长出第二种选中逻辑）。
+              // 左栏用紧凑形态：只有圆点/标题/状态词/时间，Agent 名与行底边不呈现。
               <View
                 key={row.id}
                 style={selected ? [styles.sidebarRow, styles.sidebarRowSelected] : styles.sidebarRow}
                 dataSet={{ sidebarSession: row.id, sidebarSessionSelected: String(selected) }}
               >
                 {onOpenSession === undefined ? (
-                  <SessionRow session={row} />
+                  <SessionRow session={row} variant="compact" ordinal={ordinal} />
                 ) : (
                   <SessionRow
                     session={row}
+                    variant="compact"
+                    ordinal={ordinal}
                     onOpen={() => {
                       onOpenSession(row.id);
                     }}
@@ -844,37 +1150,31 @@ function Sidebar({
         </View>
       )}
 
-      {directory === null ? null : (
+      </ScrollView>
+      {directory === null || onPageChange === undefined ? null : (
         <View style={styles.sidebarPager} dataSet={{ sidebarShown: String(model.shown), sidebarTotal: String(model.total) }}>
-          <Text style={styles.note} dataSet={{ sidebarPagerLabel: model.canLoadMore ? "partial" : "complete" }}>
-            {pagerLabel}
-          </Text>
-          {!model.canLoadMore || onLoadMore === undefined ? null : (
-            <Pressable
-              role="button"
-              style={styles.linkButton}
-              dataSet={{ action: "load-more-sidebar" }}
-              onPress={onLoadMore}
-            >
-              <Text style={styles.linkButtonText}>{`加载更多（还有 ${String(model.total - model.shown)} 个）`}</Text>
-            </Pressable>
-          )}
+          <Pager
+            page={model.page}
+            pageCount={model.pageCount}
+            onPageChange={onPageChange}
+            data={{ pager: "sidebarPager", page: "sidebarPage", pageCount: "sidebarPageCount", input: "sidebarPageInput", inputValue: "sidebarPageInputValue" }}
+          />
         </View>
       )}
+
 
       {directory === null || onCreateSession === undefined ? null : (
         <View style={styles.sidebarFoot}>
           <Pressable
             role="button"
-            style={styles.linkButton}
+            style={styles.sidebarCreate}
             dataSet={{ action: "create-session-in-directory", directoryId: directory.directoryId }}
             onPress={() => {
               onCreateSession(directory.directoryId);
             }}
           >
-            <Text style={styles.linkButtonText}>⊕ 新建会话</Text>
+            <Text style={styles.sidebarCreateText}>⊕ 新建会话</Text>
           </Pressable>
-          <Text style={styles.hint}>将在电脑上启动 Agent</Text>
         </View>
       )}
     </View>
@@ -921,14 +1221,28 @@ export function ConversationStream({
   availableWidth,
   onCopyCode,
   onLinkPress,
-  onOpenDirectory,
+  onOpenDirectoryList,
   onOpenSession,
   onSidebarQueryChange,
-  onLoadMoreSidebar,
+  onSidebarPageChange,
   onCreateSession,
   hostPanel,
   connectionState,
   lastSyncedAtMs,
+  filesPanel,
+  onSelectFileSource,
+  onRefreshFiles,
+  onToggleHideIgnored,
+  onLoadMoreAllFiles,
+  onLoadMoreGitChanges,
+  onOpenFile,
+  onCloseFile,
+  onRetryFile,
+  onDownloadFile,
+  onCancelDownload,
+  onReleaseDownload,
+  downloadState,
+  createPreviewUrl,
 }: ConversationStreamProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -936,13 +1250,37 @@ export function ConversationStream({
   const width = availableWidth ?? windowDimensions.width;
   // 断点取自唯一一份 token（此前这里与另外两处各写了一次字面量 720）。
   const wide = width >= breakpoints.wide;
+  const [leftWidth, setLeftWidth] = useState(300);
+  const [rightWidth, setRightWidth] = useState(360);
+  // 为中栏保留 300px；透明拖动命中区不占栏宽。
+  const sideBudget = Math.max(360, width - 300);
+  const displayedLeftWidth = Math.max(160, Math.min(leftWidth, sideBudget - 200));
+  const displayedRightWidth = Math.max(200, Math.min(rightWidth, sideBudget - displayedLeftWidth));
   const switchable = onSecondaryViewChange !== undefined;
-  // 生效取值的三条规则（含「宽屏 + 缺省取值 = 三栏」与「没有切换控件时不藏栏」）见 `effectiveSecondaryView`。
+  // 生效取值的四条规则（含「宽屏 + 缺省取值 = 三栏」「窄屏不提供全部」与「没有切换控件时不藏栏」）
+  // 见 `effectiveSecondaryView`。
   const view = effectiveSecondaryView({ requested: secondaryView, switchable, wide });
   const hiddenColumns = hiddenConversationColumns(view);
+  /**
+   * 窄屏的「单栏吃高度」只在**确实藏了栏**时应用：三栏并列（没有切换控件，或宽屏的「全部」）
+   * 仍按各自的定宽/堆叠样式走。窄屏请求「全部」已被 `effectiveSecondaryView` 归一为单栏。
+   */
+  const singleColumn = !wide && hiddenColumns.length > 0;
   const paging = model.paging;
   const history = model.timeline.structuredHistory;
   const sidebar = model.sidebar;
+  const activeFilesPanel = filesPanel ?? null;
+  /**
+   * 中间查看区与对话**互斥但都留在 DOM**：文件打开时时间线与输入区只是 `display: none`，
+   * 因此时间线的滚动锚点（元素自身的 `scrollTop`）不被卸载重置；草稿与条目展开状态本来就在
+   * 页面/仓库里，组件不拥有它们。关闭后恢复的正是这一份现场，不强制滚到底。
+   */
+  const fileContent =
+    activeFilesPanel !== null &&
+    activeFilesPanel.content.kind === "file" &&
+    onCloseFile !== undefined
+      ? activeFilesPanel.content
+      : null;
   /**
    * 只把「时间线上没有对应卡片」的交互交给待处理清单：有卡片的那条已经在时间线上带着同一份
    * 可用性呈现（同一 `interactionId` 不重复呈现）。没有请求事件的读回待处理项因此不会消失。
@@ -966,6 +1304,19 @@ export function ConversationStream({
 
   // ── 跳转入口的测量（只属于渲染现场的事实：滚动位置与元素几何）───────────────────
   const rootRef = useRef<HTMLElement | null>(null);
+  // RNW 的 `View` 在网页侧就是宿主元素；测量代码只依赖它的 `querySelector` 与几何 API。
+  // 稳定的回调避免每次渲染都让 React 先摘再挂同一个节点。
+  const assignRootRef = useCallback((node: unknown) => {
+    rootRef.current = node as HTMLElement | null;
+  }, []);
+  /**
+   * 中栏自己的滚动容器（`ScrollView`）滚动的测量入口。
+   *
+   * 对话页的滚动者是三栏各自的 `ScrollView`，`window` 的 scroll 事件不再代表「时间线在滚」；
+   * 由 `ScrollView.onScroll` 调到这里，跳转入口才会随中栏滚动更新。node 侧没有触屏/滚动事件，
+   * 这个函数保持空实现（跳转入口因此不呈现）。
+   */
+  const measureRef = useRef<() => void>(() => undefined);
   const [distribution, setDistribution] = useState<UserInputDistribution>(NO_USER_INPUTS);
   const [flash, setFlash] = useState<{
     readonly messageId: string;
@@ -988,16 +1339,29 @@ export function ConversationStream({
     if (host === null || typeof window === "undefined") return;
     const ids = userMessageKey === "" ? [] : userMessageKey.split(",");
     const measure = (): void => {
+      // 可见带是**中栏时间线滚动容器**的上下边：会话头与来源条在它上面、输入区在它下面，
+      // 用视口高度会把这两块里露出的（或被容器裁掉的）消息算进「看得到」。容器缺失时退回
+      // 视口坐标，三栏未进入滚动布局（例如旧窄屏高度不足）时行为不变。
+      const container = host.querySelector<HTMLElement>('[data-conversation-scroll="timeline"]');
+      const bounds = container === null ? null : container.getBoundingClientRect();
       const rects = userInputNodes(host, ids).map((node) => {
         const rect = node.getBoundingClientRect();
         return { top: rect.top, bottom: rect.bottom };
       });
-      setDistribution(classifyUserInputs(rects, window.innerHeight));
+      setDistribution(
+        classifyUserInputsInBand(
+          rects,
+          bounds === null ? 0 : bounds.top,
+          bounds === null ? window.innerHeight : bounds.height,
+        ),
+      );
     };
+    measureRef.current = measure;
     measure();
     window.addEventListener("scroll", measure, { passive: true });
     window.addEventListener("resize", measure);
     return () => {
+      measureRef.current = () => undefined;
       window.removeEventListener("scroll", measure);
       window.removeEventListener("resize", measure);
     };
@@ -1041,51 +1405,31 @@ export function ConversationStream({
     host.querySelector("[data-interaction-id], [data-pending-interaction]")?.scrollIntoView({ block: "center" });
   };
 
+  /**
+   * 内容来源条：**只在非在线时**出现。连接状态只是「内容为什么不是最新的」的说明，不另画圆点或
+   * 短词——连接状态仍只由共享外壳的设备胶囊表达（spec 的唯一性要求）。
+   */
+  const contentStrip =
+    connectionState === "online"
+      ? null
+      : connectionState === null || connectionState === undefined
+        ? { tone: "warn" as const, detail: "连接状态未知，以下内容可能不是最新。" }
+        : CONTENT_STRIP_BY_STATE[connectionState];
+
   return (
-    <section ref={rootRef} data-route="session" data-session-id={model.header.sessionId}>
+    <View
+      ref={assignRootRef}
+      role="region"
+      style={styles.section}
+      dataSet={{ route: "session", sessionId: model.header.sessionId }}
+    >
       <View style={styles.root} dataSet={{ conversationPage: "true" }}>
-        {/* 内容来源条：未在线时说明内容是上次同步来的，并给出那一次的时刻（spec 的断连标注）。 */}
-        {connectionState === null || connectionState === "online" ? null : (
-          <View style={styles.originStrip} dataSet={{ connectionStrip: "true", contentOrigin: "last_sync" }}>
-            <Text style={styles.originText} dataSet={{ contentOriginLabel: "last_sync" }}>
-              {CONTENT_ORIGIN_LABELS.last_sync}
-            </Text>
-            {/* 从未成功替换过快照时没有时刻可呈现（那时也不编造一个）。
-                时刻的形态与目录页/详情页同一段 UTC 切片（`YYYY-MM-DD HH:MM UTC`）。 */}
-            {lastSyncedAtMs === null || lastSyncedAtMs === undefined ? null : (
-              <Text style={styles.syncedAt} dataSet={{ syncedAt: String(lastSyncedAtMs) }}>
-                {`已同步 ${new Date(lastSyncedAtMs).toISOString().slice(0, 16).replace("T", " ")} UTC`}
-              </Text>
-            )}
-          </View>
-        )}
-
-        <View style={styles.header} dataSet={{ sessionHeader: model.header.sessionId }}>
-          <View style={styles.headerRow}>
-            <Text style={styles.title} dataSet={{ sessionTitle: "true" }}>
-              {model.header.title}
-            </Text>
-            <StatusPill state={model.header.state} />
-            {model.header.originOfflineLabel === null ? null : (
-              <Text style={styles.offline} dataSet={{ originOffline: "true" }}>
-                {model.header.originOfflineLabel}
-              </Text>
-            )}
-          </View>
-          <View style={styles.headerRow}>
-            <Text style={styles.agent} dataSet={{ sessionAgent: model.header.agentName }}>
-              {model.header.agentName}
-            </Text>
-            {hostPanel === null || hostPanel === undefined ? null : <AgentChip panel={hostPanel} />}
-          </View>
-        </View>
-
         {/* 切换控件在三栏之外：中栏被次级视图藏起来时，这里仍是切回去的唯一入口。 */}
-        {switchable ? (
+        {switchable && !wide ? (
           <SegmentControl
             label="conversation-secondary-view"
             value={view}
-            options={SECONDARY_VIEW_OPTIONS}
+            options={NARROW_SECONDARY_VIEW_OPTIONS}
             onChange={(next) => {
               onSecondaryViewChange?.(next);
             }}
@@ -1093,26 +1437,137 @@ export function ConversationStream({
         ) : null}
 
         <View style={wide ? styles.bodyWide : styles.bodyNarrow} dataSet={{ conversationBody: "true" }}>
-          {/* 左栏：目录上下文 + 目录内搜索 + 同目录会话 + 已呈现数 + 继续加载 + 吸底新建会话。 */}
+          {/* 左栏：目录上下文（两个目录入口 + 路径标签 + 搜索图标）+ 同目录会话 + 已显示数 + 新建。 */}
           <View
-            style={hiddenColumns.includes("sessions") ? [styles.sessionsColumn, styles.hidden] : styles.sessionsColumn}
+            style={
+              hiddenColumns.includes("sessions")
+                ? [styles.sessionsColumn, singleColumn ? styles.narrowColumn : null, styles.hidden]
+                : [styles.sessionsColumn, singleColumn ? styles.narrowColumn : null,
+                    wide ? { flexBasis: displayedLeftWidth, flexShrink: 0 } : null]
+            }
             dataSet={{ conversationColumn: "sessions" }}
           >
-            <Sidebar
-              model={sidebar}
-              onOpenDirectory={onOpenDirectory}
-              onOpenSession={onOpenSession}
-              onQueryChange={onSidebarQueryChange}
-              onLoadMore={onLoadMoreSidebar}
-              onCreateSession={onCreateSession}
-            />
+            <View
+              style={styles.columnScroll}
+            >
+              <Sidebar
+                model={sidebar}
+                onOpenDirectoryList={onOpenDirectoryList}
+                onOpenSession={onOpenSession}
+                onQueryChange={onSidebarQueryChange}
+                onPageChange={onSidebarPageChange}
+                onCreateSession={onCreateSession}
+              />
+            </View>
           </View>
 
-          {/* 中栏：待处理跳转条 → 两套翻页 → 结构化历史说明 → 时间线 → 跳转胶囊。 */}
+          {wide ? <ConversationColumnResizer side="left" width={displayedLeftWidth}
+            maxWidth={sideBudget - displayedRightWidth} onChange={setLeftWidth} /> : null}
+
+          {/* 中栏：会话头 → 内容来源条 → 时间线（独立滚动）→ 输入区（吸底）。 */}
           <View
-            style={hiddenColumns.includes("timeline") ? [styles.timelineColumn, styles.hidden] : styles.timelineColumn}
+            style={
+              hiddenColumns.includes("timeline")
+                ? [styles.timelineColumn, singleColumn ? styles.narrowColumn : null, styles.hidden]
+                : [styles.timelineColumn, singleColumn ? styles.narrowColumn : null]
+            }
             dataSet={{ conversationColumn: "timeline" }}
           >
+            <View
+              style={styles.header}
+              dataSet={{ sessionHeader: model.header.sessionId, sessionHeaderLayout: "single-line" }}
+            >
+              <View style={styles.headerRow}>
+                <Text style={styles.title} numberOfLines={1} dataSet={{ sessionTitle: "true" }}>
+                  {model.header.title}
+                </Text>
+                <StatusPill state={model.header.state} />
+                <Text style={styles.agent} numberOfLines={1} dataSet={{ sessionAgent: model.header.agentName }}>
+                  {model.header.agentName}
+                </Text>
+                {model.header.originOfflineLabel === null ? null : (
+                  <Text style={styles.offline} dataSet={{ originOffline: "true" }}>
+                    {model.header.originOfflineLabel}
+                  </Text>
+                )}
+                <View style={styles.headerSpacer} />
+                {hostPanel === null || hostPanel === undefined ? null : <AgentChip panel={hostPanel} />}
+              </View>
+            </View>
+
+            {/* 内容来源条：未在线时说明内容是上次同步来的、按连接状态给出原因，并附真实同步时刻。 */}
+            {contentStrip === null ? null : (
+              <View
+                style={[
+                  styles.originStrip,
+                  contentStrip.tone === "danger" ? styles.originStripDanger : styles.originStripWarn,
+                ]}
+                dataSet={{
+                  connectionStrip: "true",
+                  contentOrigin: "last_sync",
+                  // 刻意不叫 `data-connection-state`：那是设备胶囊的机器证据，来源条不是第二个状态徽标。
+                  connectionStripState: connectionState ?? "unknown",
+                  connectionStripTone: contentStrip.tone,
+                }}
+              >
+                <Text
+                  style={[
+                    styles.originText,
+                    contentStrip.tone === "danger" ? styles.originTextDanger : styles.originTextWarn,
+                  ]}
+                  dataSet={{ contentOriginLabel: "last_sync" }}
+                >
+                  {CONTENT_ORIGIN_LABELS.last_sync}
+                </Text>
+                <Text
+                  style={[
+                    styles.originText,
+                    contentStrip.tone === "danger" ? styles.originTextDanger : styles.originTextWarn,
+                  ]}
+                >
+                  {contentStrip.detail}
+                </Text>
+                {/* 从未成功替换过快照时没有时刻可呈现（那时也不编造一个）。
+                    时刻的形态与目录页/详情页同一段 UTC 切片（`YYYY-MM-DD HH:MM UTC`）。 */}
+                {lastSyncedAtMs === null || lastSyncedAtMs === undefined ? null : (
+                  <Text
+                    style={[
+                      styles.syncedAt,
+                      contentStrip.tone === "danger" ? styles.syncedAtDanger : styles.syncedAtWarn,
+                    ]}
+                    dataSet={{ syncedAt: String(lastSyncedAtMs) }}
+                  >
+                    {`已同步 ${new Date(lastSyncedAtMs).toISOString().slice(0, 16).replace("T", " ")} UTC`}
+                  </Text>
+                )}
+              </View>
+            )}
+
+            {/* 中间互斥查看区：文件打开时它占据时间线的位置；时间线/输入区仍在 DOM（隐藏）。 */}
+            {fileContent === null || onCloseFile === undefined ? null : (
+              <FileContentViewer
+                content={fileContent}
+                historyNotice={activeFilesPanel?.historyNotice ?? null}
+                onClose={onCloseFile}
+                onRetry={onRetryFile}
+                onOpenChangeDiagnostics={onOpenChangeDiagnostics}
+                onDownload={onDownloadFile}
+                onCancelDownload={onCancelDownload}
+                onReleaseDownload={onReleaseDownload}
+                downloadState={downloadState ?? null}
+                createPreviewUrl={createPreviewUrl}
+              />
+            )}
+
+            <ScrollView
+              style={fileContent === null ? styles.columnScroll : [styles.columnScroll, styles.hidden]}
+              contentContainerStyle={styles.timelineScrollBody}
+              dataSet={{ conversationScroll: "timeline" }}
+              onScroll={() => {
+                measureRef.current();
+              }}
+              scrollEventThrottle={32}
+            >
             {pendingBarLabel === null ? null : (
               <View style={styles.jumpBar} dataSet={{ pendingJumpBar: model.header.state }}>
                 <Text style={styles.jumpBarText}>
@@ -1202,9 +1657,12 @@ export function ConversationStream({
               selectedChangeId={selectedChangeId ?? null}
               onSelectChange={onSelectChange}
             />
+            </ScrollView>
 
-            {/* 没有用户输入、或全部用户输入都在视口内时**不**呈现（spec 的两条场景）。 */}
-            {jump === null ? null : (
+            {/* 没有用户输入、或全部用户输入都在视口内时**不**呈现（spec 的两条场景）。
+                放在滚动容器**之后**：`position: fixed` 的包含块必须是视口——RNW 的 `ScrollView`
+                自带 `transform` 与 `overflow`，放进里面会把它变成随内容滚动、被裁切的定位容器。 */}
+            {jump === null || fileContent !== null ? null : (
               <Pressable
                 role="button"
                 style={styles.jumpPill}
@@ -1218,34 +1676,71 @@ export function ConversationStream({
                 </Text>
               </Pressable>
             )}
+
+            {/* 输入区吸在中栏底部：时间线独立滚动时它不跟着走（宽屏与窄屏同一份结构）。
+                查看文件时它仍在 DOM（草稿与输入焦点不丢），只是不占主体。 */}
+            <View
+              style={fileContent === null ? styles.composerDock : [styles.composerDock, styles.hidden]}
+              dataSet={{ composerDock: "true" }}
+            >
+              <ConversationComposer
+                input={model.input}
+                usage={model.usage}
+                settings={model.settings}
+                onDraftChange={onDraftChange}
+                onSubmit={onSubmitPrompt}
+                onCancel={onCancelTurn}
+                onSelectModel={onSelectModel}
+                onSelectMode={onSelectMode}
+              />
+            </View>
           </View>
 
-          {/* 右栏：改动清单与差异行。 */}
+          {wide ? <ConversationColumnResizer side="right" width={displayedRightWidth}
+            maxWidth={sideBudget - displayedLeftWidth} onChange={setRightWidth} /> : null}
+
+          {/* 右栏：改动清单与差异行（独立滚动）。 */}
           <View
-            style={hiddenColumns.includes("files") ? [styles.filesColumn, styles.hidden] : styles.filesColumn}
+            style={
+              hiddenColumns.includes("files")
+                ? [styles.filesColumn, singleColumn ? styles.narrowColumn : null, styles.hidden]
+                : [styles.filesColumn, singleColumn ? styles.narrowColumn : null,
+                    wide ? { flexBasis: displayedRightWidth, flexShrink: 0 } : null]
+            }
             dataSet={{ conversationColumn: "files" }}
           >
-            <FileChangesPanel
-              changes={model.fileChanges}
-              openDiagnosticsEventId={openChangeDiagnosticsEventId ?? null}
-              onOpenChangeDiagnostics={onOpenChangeDiagnostics}
-              selectedChangeId={selectedChangeId ?? null}
-              onSelectChange={onSelectChange}
-            />
+            <ScrollView
+              style={styles.columnScroll}
+              contentContainerStyle={styles.columnScrollBody}
+              dataSet={{ conversationScroll: "files" }}
+            >
+              {activeFilesPanel === null ? (
+                <FileChangesPanel
+                  changes={model.fileChanges}
+                  openDiagnosticsEventId={openChangeDiagnosticsEventId ?? null}
+                  onOpenChangeDiagnostics={onOpenChangeDiagnostics}
+                  selectedChangeId={selectedChangeId ?? null}
+                  onSelectChange={onSelectChange}
+                />
+              ) : (
+                <SessionFilesPanel
+                  model={activeFilesPanel}
+                  fileChanges={model.fileChanges}
+                  selectedChangeId={selectedChangeId ?? null}
+                  onSelectChange={onSelectChange}
+                  onOpenFile={onOpenFile}
+                  onSelectSource={onSelectFileSource}
+                  onRefresh={onRefreshFiles}
+                  onToggleHideIgnored={onToggleHideIgnored}
+                  onLoadMoreAllFiles={onLoadMoreAllFiles}
+                  onLoadMoreGitChanges={onLoadMoreGitChanges}
+                  openDiagnosticsEventId={openChangeDiagnosticsEventId ?? null}
+                  onOpenChangeDiagnostics={onOpenChangeDiagnostics}
+                />
+              )}
+            </ScrollView>
           </View>
         </View>
-
-        {/* 输入区在正文之外：次级视图把中栏藏起来时它仍要可用（否则切到「会话」就发不出消息）。 */}
-        <ConversationComposer
-          input={model.input}
-          usage={model.usage}
-          settings={model.settings}
-          onDraftChange={onDraftChange}
-          onSubmit={onSubmitPrompt}
-          onCancel={onCancelTurn}
-          onSelectModel={onSelectModel}
-          onSelectMode={onSelectMode}
-        />
 
         <View style={styles.footer} dataSet={{ capabilities: "true" }}>
           <Text style={styles.capability} dataSet={{ canSend: String(model.capabilities.canSend) }}>
@@ -1273,6 +1768,6 @@ export function ConversationStream({
           />
         )}
       </View>
-    </section>
+    </View>
   );
 }

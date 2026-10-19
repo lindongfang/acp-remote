@@ -74,14 +74,26 @@ export type RawAvailability =
     }
   | { readonly kind: "absent" };
 
-/** 降级原因（判别联合）。 */
+/**
+ * 诊断原因（判别联合）。
+ *
+ * 前四类都是**降级**判定；`explicit` 不是降级，而是用户主动点了「查看 ACP 原文」——
+ * 由 {@link buildRecordDiagnosticsModel} 产出。放进同一联合是因为诊断抽屉对两者渲染同一份
+ * 模型（元数据 / 原文 / `view`），只有说明文字不同；降级卡片仍只由前四类构造。
+ */
 export type DegradedReason =
   | { readonly kind: "no_dedicated_view" }
   | { readonly kind: "unsupported"; readonly by: UnsupportedBy; readonly detail: string }
   | { readonly kind: "raw_not_synced"; readonly reason: RawNotSyncedReason }
-  | { readonly kind: "binary_not_delivered"; readonly mimeType: string | null; readonly uri: string | null };
+  | { readonly kind: "binary_not_delivered"; readonly mimeType: string | null; readonly uri: string | null }
+  | { readonly kind: "explicit" };
 
-/** 一条降级事件的视图模型（也是诊断抽屉的数据来源）。 */
+/**
+ * 一条事件的诊断视图模型：降级条目与「用户主动查看原文」共用同一个形状。
+ *
+ * 降级条目由 {@link buildDegradedRecordModel} 构造（`reason` 为四类降级原因之一），
+ * 主动诊断由 {@link buildRecordDiagnosticsModel} 构造（`reason.kind === "explicit"`）。
+ */
 export interface DegradedEventModel {
   readonly eventId: string;
   /** 原样保留的事件类型：未识别的事件也照实显示，不替换成占位名称。 */
@@ -209,6 +221,25 @@ function unsupportedDetail(input: {
 }
 
 /**
+ * 诊断模型里与原因无关的字段（降级构造器与主动诊断构造器共用，避免两处字段表漂移）。
+ *
+ * 原文可用性由调用方传入：降级构造器已经为原因判定算过一次，这里不再重算。
+ */
+function recordDiagnosticsBase(record: StructuredRecord, raw: RawAvailability): Omit<DegradedEventModel, "reason"> {
+  return {
+    eventId: record.eventId,
+    eventType: record.eventType,
+    globalSequence: record.globalSequence,
+    sessionSequence: record.sessionSequence,
+    createdAt: record.createdAt,
+    sessionId: record.sessionId,
+    originKind: record.originKind,
+    raw,
+    view: record.view,
+  };
+}
+
+/**
  * 构造降级模型（实时事件与历史条目共用的唯一构造器）。
  *
  * 调用方只在 {@link isDegradedRecord} 为真、或卡片构造失败时调用：有专用视图且内容齐备时
@@ -239,18 +270,21 @@ export function buildDegradedRecordModel(
     reason = { kind: "binary_not_delivered", ...binaryReference(view) };
   }
 
-  return {
-    eventId: record.eventId,
-    eventType: record.eventType,
-    globalSequence: record.globalSequence,
-    sessionSequence: record.sessionSequence,
-    createdAt: record.createdAt,
-    sessionId: record.sessionId,
-    originKind: record.originKind,
-    reason,
-    raw,
-    view,
-  };
+  return { ...recordDiagnosticsBase(record, raw), reason };
+}
+
+/**
+ * 构造**诊断**模型：用户主动查看一条记录的原文与元数据。
+ *
+ * 与 {@link buildDegradedRecordModel} 同形（同一组字段、同一份原文可用性与 `view`），唯一的
+ * 差别是 `reason.kind === "explicit"`：这不是降级判定，因此**不**要求
+ * {@link isDegradedRecord} 为真。正常工具调用的记录同样能打开诊断抽屉——若诊断入口只服务
+ * 降级记录，`ConversationTimeline` 的「查看 ACP 原文」就会拿到 `null` 并渲染空片段。
+ *
+ * 原文仍只取记录携带的 `acp`（与降级模型同一口径），**不**解析 `rawJson` 生成结构化详情。
+ */
+export function buildRecordDiagnosticsModel(record: StructuredRecord): DegradedEventModel {
+  return { ...recordDiagnosticsBase(record, rawAvailabilityOf(record)), reason: { kind: "explicit" } };
 }
 
 /**

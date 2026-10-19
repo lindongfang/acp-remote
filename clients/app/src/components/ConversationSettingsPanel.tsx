@@ -4,8 +4,9 @@
  * ## 形态：胶囊 + 弹层（原型 `.pick`）
  *
  * 两节各是一个胶囊（`模型 <当前值> ▾` / `模式 <当前值> ▾`），点开是弹层：可选项、分节状态与
- * 说明都在弹层里。弹层内容**始终在 DOM**（收起时只 `display: none`），因此「未提供时不展示
- * 虚假可选项」「切换中当前值不变」这些判定在静置的渲染结果里就断言得到。
+ * 说明都在弹层里。弹层顶部固定一行「由 Agent 提供，下一轮生效」的来源说明，选项排在它之后。
+ * 弹层内容**始终在 DOM**（收起时只 `display: none`），因此「未提供时不展示虚假可选项」
+ * 「切换中当前值不变」这些判定在静置的渲染结果里就断言得到。
  *
  * ## 组件不做判定
  *
@@ -55,6 +56,16 @@ const SECTION_STATE_LABELS: Readonly<Record<SettingsSectionModel["state"], strin
 const SECTION_KICKERS: Readonly<Record<"model" | "mode", string>> = {
   model: "模型",
   mode: "模式",
+};
+
+/**
+ * 弹层顶部的一行来源说明：取值由 Agent 提供，切换只对下一轮生效。
+ *
+ * 与四态无关（`unavailable` 时同样说明「谁提供」），因此放在选项之前、始终渲染。
+ */
+const SECTION_SOURCE_NOTES: Readonly<Record<"model" | "mode", string>> = {
+  model: "模型（由 Agent 提供，下一轮生效）",
+  mode: "模式（由 Agent 提供，下一轮生效）",
 };
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
@@ -266,6 +277,11 @@ function SettingsSection({
             {SECTION_STATE_LABELS[section.state]}
           </Text>
         </View>
+
+        {/* 来源与生效时机：选项之前的一条固定说明（不随四态变化）。 */}
+        <Text style={styles.notice} dataSet={{ settingsSourceNote: name }}>
+          {SECTION_SOURCE_NOTES[name]}
+        </Text>
 
         <View style={styles.choices}>
           {section.choices.map((choice) => (

@@ -47,7 +47,11 @@ function syncRegistryFeatures(): readonly RegistryFeature[] {
  *
  * 它们是**客户端广告、服务端可选**的能力，客户端据此在协商命中后才请求/呈现对应数据。
  */
-const NEW_SYNC_FEATURES = ["core.workspace-browse.v1", "core.file-diff.v1"] as const;
+const NEW_SYNC_FEATURES = [
+  "core.workspace-browse.v1",
+  "core.file-diff.v1",
+  "core.session-files.v1",
+] as const;
 
 describe("feature 声明：逐层浏览 / 结构化差异两条新增 Sync feature", () => {
   it.each(NEW_SYNC_FEATURES)("%s 已在客户端广告且与机器登记一致", (feature) => {

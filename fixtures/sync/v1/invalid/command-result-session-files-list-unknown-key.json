@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "8f4c2a17-6e39-4d80-b5a1-9c3e7f0d2b56",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "129",
+  "body": {
+    "requestId": "2f9c4d81-7a36-4b52-8e04-6c1d9f3a5b72",
+    "command": "session.files.list",
+    "status": "completed",
+    "acceptedAt": "2026-10-19T08:12:01.250Z",
+    "terminalEventId": null,
+    "result": {
+      "path": "",
+      "gitState": "available",
+      "entries": [],
+      "next": "cGFnZS0y",
+      "recursive": true
+    },
+    "error": null
+  }
+}

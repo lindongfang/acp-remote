@@ -76,6 +76,8 @@ ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent
 
 Zed、CLI、PWA、手机 App 和桌面 App 都是客户端形态，不是固定权限角色。它们可以按授权查看消息、继续对话、取消 turn、处理权限/elicitation、选择模型或模式。会话创建、删除与管理能力：本机自己的设备通过认证即可执行（设备方向没有授权维度）；跨节点能力由 Export Policy 与 `grant.*` 决定。Node Link 首个纵向切片支持供 Zed 使用的受限远程 `session.create`；本机设备另可只读地逐层浏览目录以选择工作目录（`workspace.browse`，feature `core.workspace-browse.v1` 门控，见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2）；PWA 按 `FRONTEND_DESIGN.md` §2.2/§9 在目录内提供创建入口。
 
+对话页的「文件」栏有三个只读来源：「全部文件」逐层浏览**当前会话工作目录**内的文件、「Git 变更」查看该目录相对 HEAD 的未提交状态与差异、「会话变更」查看本会话 Agent 的修改记录（按文件归并）。三者都只读、不编辑文件、不执行 Git 写操作，也不读取会话工作目录之外的内容；根外链接只展示名称、不可打开。范围限于本节点直接管理的 owned 会话：远程导入（imported）会话仍可展示已收到的会话变更记录，但「全部文件」与「Git 变更」明确不受支持，不读取 Access 本机替代目录。文件内容、预览与下载只经已认证的 Sync 查询（feature `core.session-files.v1`，见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5），不生成长期 bearer 链接；内容与 Git 差异不写入会话日志或持久正文缓存，并受分页、预览/下载与并发上限约束。
+
 ### 3.4 Zed
 
 Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Client：

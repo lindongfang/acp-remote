@@ -324,7 +324,7 @@ describe("D2 两套独立分页", () => {
     const body = lastDispatch(gateway).body;
     if (body.command !== "session.read") throw new Error("命令不是 session.read");
     // 反例：无条件带 history 会得到明确的不支持类错误，而旧服务端连取值都不认识。
-    expect(body.payload.include).toEqual(["messages", "config_options", "pending_interactions"]);
+    expect(body.payload.include).toEqual(["messages", "config_options"]);
 
     const notice = store.conversationPage(SESSION_ID)?.timeline.structuredHistory;
     expect(notice?.state).toBe("unavailable");
@@ -586,5 +586,109 @@ describe("D6 右栏差异区的三种形态", () => {
       "28",
     );
     expect(unknownReason.diff).toBeNull();
+  });
+});
+
+describe("WP2 工具调用：跨事件详情归并与诊断入口", () => {
+  it("started 与 updated 合并成一张卡，输入与输出都保留，eventId 透传最新记录", () => {
+    const { store } = storeWithHistoryFeature();
+    const startedEventId = "dddddddd-0000-4000-8000-0000000000e1";
+    const updatedEventId = "dddddddd-0000-4000-8000-0000000000e2";
+
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "tool.call.started",
+        eventId: startedEventId,
+        sessionId: SESSION_ID,
+        globalSequence: "21",
+        view: {
+          toolCallId: "tc-1",
+          turnId: "11111111-0000-4000-8000-000000000001",
+          title: "读取文件",
+          state: "running",
+          toolDetail: { input: { path: "src/a.ts" } },
+        },
+      }),
+    });
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "tool.call.updated",
+        eventId: updatedEventId,
+        sessionId: SESSION_ID,
+        globalSequence: "22",
+        view: {
+          toolCallId: "tc-1",
+          turnId: "11111111-0000-4000-8000-000000000001",
+          title: "读取文件",
+          state: "completed",
+          toolDetail: { output: { bytes: 3 } },
+        },
+      }),
+    });
+
+    const entries = store.conversationPage(SESSION_ID)?.timeline.entries ?? [];
+    const cards = entries.filter((entry) => entry.kind === "tool_call");
+    // 反例：按记录逐条出卡时这里是 2 → 断言变红。
+    expect(cards).toHaveLength(1);
+    const card = cards[0];
+    if (card?.kind !== "tool_call") throw new Error("条目不是工具调用卡");
+    expect(card.state).toBe("completed");
+    expect(card.eventId).toBe(updatedEventId);
+    expect(card.detail).toEqual({
+      input: { present: true, value: { path: "src/a.ts" } },
+      output: { present: true, value: { bytes: 3 } },
+      text: null,
+      truncatedParts: [],
+    });
+  });
+
+  it("同一 eventId 的 tool_call 实时与历史只呈现一张，eventId 与详情原样透传", () => {
+    const { store, gateway } = storeWithHistoryFeature();
+    const sharedEventId = "dddddddd-0000-4000-8000-0000000000e3";
+    const view = {
+      toolCallId: "tc-2",
+      turnId: "11111111-0000-4000-8000-000000000002",
+      title: "执行命令",
+      state: "completed",
+      toolDetail: { output: { ok: true }, text: ["完成"] },
+    };
+
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "tool.call.completed",
+        eventId: sharedEventId,
+        sessionId: SESSION_ID,
+        globalSequence: "23",
+        view,
+      }),
+    });
+    store.loadSession(SESSION_ID);
+    store.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: SESSION_ID,
+        history: [
+          historyItem({
+            eventId: sharedEventId,
+            eventType: "tool.call.completed",
+            sessionSequence: "9",
+            view,
+          }),
+        ],
+      }),
+    });
+
+    const entries = store.conversationPage(SESSION_ID)?.timeline.entries ?? [];
+    const cards = entries.filter((entry) => entry.kind === "tool_call");
+    expect(cards).toHaveLength(1);
+    const card = cards[0];
+    if (card?.kind !== "tool_call") throw new Error("条目不是工具调用卡");
+    expect(card.eventId).toBe(sharedEventId);
+    expect(card.detail?.output).toEqual({ present: true, value: { ok: true } });
+    expect(card.detail?.text).toEqual(["完成"]);
   });
 });

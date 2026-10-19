@@ -1,0 +1,17 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "2f70b8d5-1c46-4e93-a8b2-7d0e5f3a9c14",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "123",
+  "body": {
+    "requestId": "a49d1f62-8e35-4c07-b6d0-0f3a7c9e2b51",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "command": "session.files.read",
+    "payload": {
+      "path": "/etc/passwd",
+      "purpose": "preview",
+      "offset": "0"
+    }
+  }
+}

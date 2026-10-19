@@ -4629,7 +4629,7 @@ pub(crate) mod test_support {
         DeviceRecord, DirectoryId, DirectoryRecord, EventId, ModeState, NodeId, NodeKind,
         NodeRecord, OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
         PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ResourceOrigin,
-        ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn, WorkspaceRef,
+        ServerEpoch, Session, SessionId, SessionSnapshot, SessionSummary, Turn, WorkspaceRef,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
@@ -6455,6 +6455,16 @@ pub(crate) mod test_support {
             _query: ImportedSessionQuery,
         ) -> Result<Vec<ImportedSessionRecord>, PortError> {
             Ok(lock(&self.world.imported_sessions).clone())
+        }
+
+        async fn find_imported_session(
+            &self,
+            session: &SessionId,
+        ) -> Result<Option<ImportedSessionRecord>, PortError> {
+            Ok(lock(&self.world.imported_sessions)
+                .iter()
+                .find(|record| &record.session.session_id == session)
+                .cloned())
         }
 
         async fn find_remote_request(

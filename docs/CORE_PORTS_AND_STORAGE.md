@@ -215,6 +215,35 @@ pub enum UnavailableKind {
 | `SeedState` | `{ seeded: bool, seeded_at: Option<Timestamp> }`；`seeded = false` 时启动流程才能导入种子，且该标记与种子 profile 同一事务提交（`LocalConfigStore::mark_seeded`，§5.3） | `CONFIG_REFERENCE.md`「配置与管理状态的权威」 |
 | `SecretValue` | 不透明凭据值（私有字段）：只经端口进出，**不实现** `Debug`/`Serialize`，不得落盘、进事件、进日志或进错误消息 | `IDENTITY_AND_AUTH_CONTRACT.md` §7 |
 
+### 3.8 会话文件与 Git 只读视图
+
+`session-file-browser` 的 core 值对象（`crates/core/src/model/session_files.rs`）。它们只承载根内相对文件事实；**绝对根不进值对象**（根只作为 [`SessionFiles`] 端口的入参由用例层从 `SessionRecoveryRecord.workspace_cwd` 取得）。
+
+| 类型 | 形状 / 不变量 | 出处 |
+|---|---|---|
+| `SessionFilePath` | newtype over `String`；非空、≤4096 字符；拒绝前导 `/`/`\`（绝对路径与 UNC）、任意 `:`（盘符与 Windows ADS）、NUL/控制字符、`.`/`..` 分量、空路径分量（重复/尾随分隔符）以及任一分量为 `.git`（大小写不敏感）。构造即校验，失败为 `PortError::InvalidRequest` | 本合同；`SYNC_PROTOCOL.md` §11.5 |
+| `SessionListPath` | `Option<SessionFilePath>`：`None` = 会话根（wire 空串），`Some` = 根内相对目录；`as_wire()` 给出请求/结果回显的原文 | 同上 |
+| `SessionFileEntryKind` | enum `File｜Directory｜Link｜Other`（wire `file/directory/link/other`） | 同上 |
+| `SessionFileRestrictedReason` | enum `OutsideRoot｜Unreadable｜Unsupported`（wire `outside_root/unreadable/unsupported`） | 同上 |
+| `SessionFileEntry` | `{ path: SessionFilePath, name: String(1..=256), kind, openable: bool, restricted: Option<SessionFileRestrictedReason> }`；不变式：`openable ⇔ restricted.is_none()`；根外链接可列出但不可打开 | 同上 |
+| `SessionFilePage` | `{ path: SessionListPath, git_state: GitState, entries: Vec<SessionFileEntry>(≤128), next: Option<SessionPageToken> }` | 同上 |
+| `GitState` | enum `Available｜NotRepository｜Unavailable`（wire `available/not_repository/unavailable`）；非仓库与 Git 缺失是两种不同的成功状态 | 同上 |
+| `SessionPageToken` | newtype over `String`；1..=256 个 `[A-Za-z0-9_-]`；不透明翻页位置，不授予读取权限 | 同上 |
+| `ContentVersion` | newtype over `String`；1..=128 个 `[A-Za-z0-9_-]`；连接期不透明内容版本，绑定连接/设备/会话/路径 | 同上 |
+| `ContentSnapshot` | `{ path: SessionFilePath, kind: SessionFileContentKind, purpose: FileReadPurpose, size_bytes: u64, version: ContentVersion, preview_truncated: bool }`；`purpose = download` 时 `size_bytes ≤ 64 MiB`，**预览不设原始大小上限**（只按文本 256 KiB / 图片 4 MiB 的预览预算截断并置 `preview_truncated`）；只在内存中，不落临时正文文件 | 同上 |
+| `SessionFileContentKind` | enum `Text｜Image｜Binary`（wire `text/image/binary`） | 同上 |
+| `FileReadPurpose` | enum `Preview｜Download`（wire `preview/download`） | 同上 |
+| `SessionFileChunk` | `{ path, kind, size_bytes, version, offset, data: Vec<u8>, eof, preview_truncated }`；`data.len() ≤ 32 KiB` 且 `offset + data.len() ≤ size_bytes` | 同上 |
+| `GitFileStatus` | enum `Added｜Modified｜Deleted｜Renamed｜Untracked`（wire `added/modified/deleted/renamed/untracked`） | 同上 |
+| `GitStatusEntry` | `{ path, status, previous_path: Option<SessionFilePath>, conflicted: bool, binary: bool }`；`previous_path` 只允许与 `Renamed` 同时出现 | 同上 |
+| `GitStatusPage` | `{ git_state: GitState, entries: Vec<GitStatusEntry>(≤128), next: Option<SessionPageToken> }` | 同上 |
+| `GitDiffBase` | enum `Head｜Empty`（无 HEAD 时为空基准） | 同上 |
+| `GitDiffKind` | enum `Text｜Binary｜Conflict` | 同上 |
+| `GitDiffUnavailableReason` | enum `NotRepository｜GitUnavailable｜TooLarge` | 同上 |
+| `GitDiff` | `{ path, base, kind, lines: Vec<String>, unavailable: Option<GitDiffUnavailableReason>, truncated: bool }`；`lines ≤ 400` 行、合计 ≤64 KiB、单行 ≤4096 字符；`unavailable.is_some()` 时 `lines` 必须为空 | 同上 |
+
+固定 v1 常量（`SYNC_PROTOCOL.md` §14）：`SESSION_FILE_PAGE_LIMIT = 128`、`SESSION_FILE_PATH_MAX_CHARS = 4096`、`SESSION_FILE_CHUNK_MAX_BYTES = 32 KiB`、`SESSION_FILE_TEXT_PREVIEW_MAX_BYTES = 256 KiB`、`SESSION_FILE_IMAGE_PREVIEW_MAX_BYTES = 4 MiB`、`SESSION_FILE_DOWNLOAD_MAX_BYTES = 64 MiB`、`GIT_DIFF_MAX_LINES = 400`、`GIT_DIFF_MAX_BYTES = 64 KiB`、`GIT_DIFF_LINE_MAX_CHARS = 4096`。
+
 ## 4. `core::use_cases` 用例面
 
 `[决定]` **每个**入口的第一个参数都是 `actor: &Actor`：授权只在 core 判定，`server` 不得传入“已授权”标志，也不得代替 core 判定（`AGENTS.md` §4/§5、`SECURITY_DESIGN.md` §8）。全部 mutation 只同步接受。
@@ -236,6 +265,7 @@ pub enum UnavailableKind {
 | `SyncDeviceHandshake` | `sync_device_handshake_view(deviceId) -> SyncDeviceHandshakeView`、`record_device_connected(deviceId) -> ()`、`record_device_auth_failure(deviceId) -> ()` | `server::sync` |
 | `SyncSnapshotQueries` | `sync_visible_sessions(actor, SyncSessionQuery, owner_reachable) -> Vec<SessionSummary>`、`sync_workspace_catalog(actor) -> Vec<WorkspaceCatalogEntry>`（快照的 `workspaces` 资源：每条都带目录标识与规范化路径；`core.workspace-path.v1` 已撤销，没有协商参数） | `server::sync`（快照的 `sessions`/`workspaces` 资源） |
 | `WorkspaceBrowse` | `workspace_browse(actor, Option<&str>) -> WorkspaceBrowse`（`workspace.browse`：`None` = 根列表；条目只含名称、绝对路径与是否已登记，按名称升序、单层上限 128 并置截断标记；受 feature `core.workspace-browse.v1` 门控，门控在适配层） | `server::sync` |
+| `SessionFilesQueries` | `list_session_files(actor, &SessionId, &str, bool, Option<&str>) -> SessionFilePage`、`read_session_file(actor, &SessionId, &str, FileReadPurpose, u64, Option<&str>) -> SessionFileChunk`、`session_git_status(actor, &SessionId, Option<&str>) -> GitStatusPage`、`session_git_diff(actor, &SessionId, &str) -> GitDiff`（授权 → 来源 → 实际 cwd → 形状 → `SessionFiles` 端口；imported 在端口前拒绝，查询无终态/无事件） | `server::sync`（feature 门控在适配层） |
 
 `[决定]` 配对通道的 actor 规则（design D12）：`claim_pairing`/`pairing`/`pairing_channel_view` 在 `Actor::LocalCli` 之外**只**接受 `Actor::PairingClaimant`，且 `actor.pairing` 必须等于本次调用的目标配对，否则与其它 actor 一样得到 `authorization.scope_denied`（同一拒绝形状，不区分「不是本机入口」与「绑定了别的配对」）；`consume_pairing` **只**接受与该配对已批准对端一致的 `Actor::Node`/`Actor::Device`，把 `approved` 推进到 `consumed`（`terminal_at` + 审计同一写集），已是 `consumed` 且对端一致时幂等成功（不覆盖首次 `terminal_at`，也不重复写审计）。
 
@@ -503,6 +533,9 @@ pub trait RemoteDeliveryStore: Send + Sync {
     async fn load_ack(&self, session: &RemoteSessionRef) -> Result<Option<OriginCursor>, PortError>;
     async fn upsert_session(&self, record: ImportedSessionRecord, at: Timestamp) -> Result<(), PortError>;
     async fn list_sessions(&self, query: ImportedSessionQuery) -> Result<Vec<ImportedSessionRecord>, PortError>;
+    /// `SessionId` → imported 索引行的**存在性**窄查询（`imported_session` 按 `session_id` 查一行）。
+    /// 只服务于「owned 存储里没有该会话时区分 imported 与不存在」，不用于归属或可见性判定。
+    async fn find_imported_session(&self, session: &SessionId) -> Result<Option<ImportedSessionRecord>, PortError>;
     /// `SessionStore::find_request` 的 imported 对应物。**改名过**（原名与前者同名，会迫使每个
     /// 同时持有两个 trait 的调用点写 UFCS）。
     async fn find_remote_request(&self, session: &RemoteSessionRef, request: &RequestId) -> Result<Option<RemoteCommandRef>, PortError>;
@@ -688,6 +721,31 @@ pub trait DirectoryCreator: Send + Sync {
 }
 ```
 
+### 5.7 会话文件与 Git 只读端口
+
+`[决定]`（2026-10-19，`session-file-browser` WP1）`SessionFiles` 是 `session.files.list` / `session.files.read` / `session.git.status` / `session.git.diff` 的唯一出站端口。core 只做授权、会话来源判定、根读取、纯形状校验与错误分类；文件句柄、目录枚举、Git 子进程、取消与进程树清理属于 `app::session_files` 的原生实现（WP2），不进入 core（`AGENTS.md` §5：core 不依赖文件系统/子进程/Tokio）。
+
+- **根**：`root` 是用例层从 `SessionStore::load_recovery().workspace_cwd` 取得的规范化绝对路径；实现 MUST NOT 按 workspace 别名反查、猜测或回退其它目录。`SessionFilePath` 已拒绝绝对/父引用/`.git` 等不安全形状，实现仍以实际打开的对象验证根边界（D3）。
+- **内存生命周期**：`open_content` 建立连接绑定、内存有界的只读快照；`read_content` 只按同一 `ContentVersion` 续读；`release_content` 在连接断开、取消、设备撤销与 60 秒空闲到期时释放。每连接最多一个快照、每节点最多两个；不写临时正文文件，不把快照版本当 bearer。
+- **预算**：单块 32 KiB、文本预览 256 KiB、图片预览 4 MiB、下载 64 MiB（§3.8 的常量 / `SYNC_PROTOCOL.md` §14）。预算按 `purpose` 分开：预览只受预览预算约束，原文件更大时如实返回 `size_bytes` 并置 `preview_truncated`，**不因超过 64 MiB 而拒绝预览**；只有 `download` 在 `size_bytes > 64 MiB` 时明确失败，不截断冒充完整。这条失败必须是**可识别**的：`open_content` MUST 返回 `PortError::InvalidRequest(core::model::RESULT_TOO_LARGE)`（文本 `resource.result_too_large`），服务端据此映射为同名 wire 错误码；不得落进通用形状错误。
+- **会话来源**：四条查询的 imported 判定不能只看 `SessionStore::load`——真实 imported 会话只存在 `imported_session` 索引里。`load` 返回 `None` 后再按 `RemoteDeliveryStore::find_imported_session` 查一次：命中即 `capability.unsupported_by_broker`（发生在任何文件/Git 端口调用之前），仍未命中才是 `session.not_found`。
+- **Git**：只读；实现不得运行仓库配置指定的 external diff/textconv/hook/fsmonitor/pager，也不修改索引或工作树。非仓库与 Git 缺失分别是 `git_state = not_repository` 与 `unavailable` 的成功状态。
+- **无副作用**：端口实现不写会话状态、登记表、缓存或审计；查询不产生命令终态事件。
+
+```rust
+#[async_trait]
+pub trait SessionFiles: Send + Sync {
+    async fn list(&self, root: &str, path: Option<&SessionFilePath>, hide_ignored: bool, after: Option<&SessionPageToken>) -> Result<SessionFilePage, PortError>;
+    async fn open_content(&self, root: &str, path: &SessionFilePath, purpose: FileReadPurpose) -> Result<ContentSnapshot, PortError>;
+    async fn read_content(&self, version: &ContentVersion, offset: u64) -> Result<SessionFileChunk, PortError>;
+    async fn release_content(&self, version: &ContentVersion) -> Result<(), PortError>;
+    async fn git_status(&self, root: &str, after: Option<&SessionPageToken>) -> Result<GitStatusPage, PortError>;
+    async fn git_diff(&self, root: &str, path: &SessionFilePath) -> Result<GitDiff, PortError>;
+}
+```
+
+组合根通过 `UseCases::with_session_files(Arc<dyn SessionFiles>)` 注入；core 的默认值 `UnavailableSessionFiles` 一律返回 `Unavailable(IoError)`（失败关闭，不是空成功）。`UseCaseDeps` 的必填字段不变，既有字面量构造点无需改动。
+
 ## 6. Broker 的顺序与事务契约
 
 1. owned：`EventSink` → broker 组装 `OwnedCommit` → `SessionStore::commit` → `EventPublisher::publish`（顺序不可交换）。
@@ -756,6 +814,7 @@ pub trait DirectoryCreator: Send + Sync {
 ### 7.1 文件、PRAGMA、连接与权限
 
 - 单文件 `<data_dir>/acp-remote.sqlite3`；附件目录 `<data_dir>/attachments`（`[决定]` 新增配置键 `storage.attachment_dir`，默认 `<data_dir>/attachments`，语义与权限同数据库目录）。
+- `[决定]` `session-file-browser` **不新增持久字段、表或 migration**：会话文件的根仍取既有 `owned_session.workspace_cwd`（§3.6 的窄读取），枚举/内容/Git 结果只在内存与 wire 中存在；不保存内容快照、文件正文、Git 差异或翻页位置。查询不改变 `owned_*`/`imported_*` 的任何行，也不推进 `global_sequence`。
 - `[决定]` 启动设置：`journal_mode = WAL`、`synchronous = FULL`、`foreign_keys = ON`、`busy_timeout = 5000`、`wal_autocheckpoint = 1000`。
 - `[决定]` 连接模型：1 个写连接（串行化写事务）＋ N 个只读连接；`read_view()` 打开一个显式只读事务（`BEGIN`）供快照使用。
 - `[决定]` 权限：Unix 目录 `0700`、数据库/WAL/`-shm`/附件 `0600`；启动时检查，正式模式失败关闭（`SECURITY_DESIGN.md` §13.2）。

@@ -53,6 +53,7 @@ import type {
   CacheStats,
   DeviceIdentity,
   DeviceIdentityPort,
+  DownloadPort,
   LifecycleEvent,
   LifecyclePort,
   LocalCachePort,
@@ -270,6 +271,24 @@ interface Harness {
   readonly fetches: { url: string; method: string; body: string }[];
 }
 
+/** 组合根装配用的下载端口替身：只证明接线存在，不复制平台实现。 */
+function fakeDownloadPort(): DownloadPort {
+  return {
+    blobLimitBytes: 64 * 1024 * 1024,
+    async open() {
+      return {
+        mode: "blob" as const,
+        async write() {},
+        async finish() {
+          return { kind: "blob" as const, url: null, bytesWritten: 0 };
+        },
+        async cancel() {},
+      };
+    },
+    revoke() {},
+  };
+}
+
 function setup(
   input: {
     readonly fetch?: FetchLike;
@@ -305,6 +324,7 @@ function setup(
       localCache: cache,
       importedContent: createVolatileImportedContent(),
       lifecycle,
+      download: fakeDownloadPort(),
     },
     openSocket: sockets.open,
     // 端口经 `ports` 接缝注入：退避定时与快照 digest 因此不需要真实时间与真实 SHA-256，
@@ -1817,6 +1837,25 @@ describe("组合根：已配对记录缺主机公钥不可用（旧口径的反�
     // 阻断态不自动重连：推进整个退避窗口也不会有第二条连接。
     context.clock.advanceBy(RECONNECT_MAX_WINDOW_MS);
     expect(context.sockets.sockets).toHaveLength(1);
+    context.composition.dispose();
+  });
+});
+
+describe("组合根：下载服务经平台端口装配", () => {
+  it("未认证时不打开落点、不派发，并给出显式原因", async () => {
+    const context = setup();
+    const started = await context.composition.downloads.start({
+      sessionId: SESSION_ID,
+      path: "src/a.ts",
+      mimeType: "text/plain",
+      sizeBytes: "10",
+    });
+    expect(started).toBe(false);
+    const state = context.composition.downloads.state;
+    expect(state.kind).toBe("failed");
+    expect(state.kind === "failed" ? state.error.code : null).toBe("internal.unavailable");
+    // 未配对时没有任何 socket；下载也没有绕开连接闸门。
+    expect(context.sockets.sockets).toHaveLength(0);
     context.composition.dispose();
   });
 });

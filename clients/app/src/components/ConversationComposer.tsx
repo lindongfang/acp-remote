@@ -9,6 +9,9 @@
  * 在这里没有表达方式——`submission.kind` 为 `pending_confirmation` 时只能说「等待服务端确认」，
  * `cancel.kind` 为 `requested` 时只能说「取消请求已提交，等待终态」。
  *
+ * 三态对应三种可观察形态：`editable` 可改草稿并呈现发送；`in_progress` 草稿只读、**不渲染**
+ * 发送按钮，只在轮次可取消时呈现停止；`closed` 只读、发送禁用并给出关闭原因。
+ *
  * ## 回车提交 / Shift+回车换行
  *
  * 回车走 `onKeyPress`（RNW 把宿主的 `keydown` 原样交给它，因此 `nativeEvent` 上读得到
@@ -82,7 +85,7 @@ export interface ConversationComposerProps {
 /** 输入区的状态文案：三态措辞互不相同。 */
 const STATE_LABELS: Readonly<Record<ConversationInputModel["state"], string>> = {
   editable: "可输入",
-  in_progress: "进行中（当前轮次结束后可继续输入）",
+  in_progress: "进行中",
   closed: "会话已关闭",
 };
 
@@ -95,7 +98,7 @@ const STATE_PLACEHOLDERS: Readonly<Record<ConversationInputModel["state"], strin
 
 /** 提示行里的状态补充；`editable` 不需要额外措辞。 */
 const STATE_HINTS: Readonly<Partial<Record<ConversationInputModel["state"], string>>> = {
-  in_progress: "进行中 · 按钮变为停止",
+  in_progress: "进行中 · 输入只读，按钮变为停止",
   closed: "会话已关闭",
 };
 
@@ -150,11 +153,12 @@ type ComposerKeyPress = NonNullable<TextInputProps["onKeyPress"]>;
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
     composer: {
-      gap: spacing.sm,
-      padding: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.md,
+      gap: spacing.xs,
+      paddingTop: 10,
+      paddingBottom: 14,
+      paddingHorizontal: 20,
+      borderTopWidth: 1,
+      borderTopColor: colors.line,
       backgroundColor: colors.panel,
     },
     warnBar: {
@@ -173,22 +177,12 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.sm,
     },
     bar: {
+      justifyContent: "flex-end",
+      marginBottom: 8,
       flexDirection: "row",
       flexWrap: "wrap",
       alignItems: "center",
       gap: spacing.sm,
-    },
-    head: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "baseline",
-      gap: spacing.sm,
-    },
-    state: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      fontWeight: "600",
     },
     inputRow: {
       flexDirection: "row",
@@ -223,10 +217,10 @@ function buildStyles(colors: Palette) {
       borderWidth: 1,
       borderColor: colors.accent,
       borderRadius: radius.sm,
-      backgroundColor: colors.accentSoft,
+      backgroundColor: colors.accent,
     },
     primaryText: {
-      color: colors.accentInk,
+      color: "#ffffff",
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
       fontWeight: "600",
@@ -245,10 +239,10 @@ function buildStyles(colors: Palette) {
       borderWidth: 1,
       borderColor: colors.danger,
       borderRadius: radius.sm,
-      backgroundColor: colors.dangerSoft,
+      backgroundColor: colors.danger,
     },
     stopText: {
-      color: colors.danger,
+      color: "#ffffff",
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
       fontWeight: "600",
@@ -416,11 +410,18 @@ export function ConversationComposer({
 }: ConversationComposerProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const closed = input.state === "closed";
+  const editable = input.state === "editable";
   const warning = contextWarningOf(usage);
-  // 提交闸门只有这一处：模型的 `canSubmit`（会话关闭 / 连接离线 / imported 来源都在模型里变成假）
-  // 加上「草稿非空」与「回调已接线」。仓库侧 `submitPrompt` 还会再拦一次，不靠组件记得禁用。
-  const submittable = input.canSubmit && input.draft.trim().length > 0;
+  // 进行中的提示随「停止」是否可用变化：没有可取消的轮次时不能暗示有一个停止按钮。
+  // 只有 `unavailable` 才说「不可取消」：`requested`/`confirmed` 是在等终态/已确认，
+  // 取消行自己给出精确措辞，这里回落通用提示，避免与「取消请求已提交」自相矛盾。
+  const stateHint =
+    input.state === "in_progress" && input.cancel.kind === "unavailable"
+      ? "进行中 · 输入只读，当前轮次不可取消"
+      : STATE_HINTS[input.state];
+  // 提交闸门只有这一处：模型的 `canSubmit`（会话关闭 / 连接离线 / 进行中 / imported 来源都在模型里
+  // 变成假）加上「草稿非空」与「回调已接线」。仓库侧 `submitPrompt` 还会再拦一次，不靠组件记得禁用。
+  const submittable = editable && input.canSubmit && input.draft.trim().length > 0;
 
   const onKeyPress: ComposerKeyPress = (event) => {
     // RNW 把宿主 `keydown` 原样交给 `onKeyPress`：`nativeEvent` 上读得到 `key` 与 `shiftKey`。
@@ -456,43 +457,39 @@ export function ConversationComposer({
         )}
       </View>
 
-      <View style={styles.head}>
-        <Text style={styles.state} dataSet={{ composerState: input.state }}>
-          {STATE_LABELS[input.state]}
-        </Text>
-        {/* 附件不受支持的显式说明：始终渲染，不因状态改变。 */}
-        <Text style={styles.hint} dataSet={{ attachmentsSupported: String(input.attachmentsSupported), attachmentNotice: "true" }}>
-          {input.attachmentNotice}
-        </Text>
-      </View>
-
       <View style={styles.inputRow}>
         <TextInput
           value={input.draft}
-          editable={!closed}
+          // 只有 `editable` 能改草稿：进行中与已关闭都只读（进行中的变化由停止按钮表达）。
+          editable={editable}
           multiline
           placeholder={STATE_PLACEHOLDERS[input.state]}
-          style={closed ? [styles.input, styles.inputClosed] : styles.input}
+          style={editable ? styles.input : [styles.input, styles.inputClosed]}
           dataSet={{ composerInput: input.state }}
           onChangeText={(text: string) => {
+            // 只读输入不再接受草稿写入：平台差异下即使触发了 `onChangeText`，也不上抛。
+            if (!editable) return;
             onDraftChange?.(text);
           }}
           onKeyPress={onKeyPress}
         />
 
-        <Pressable
-          role="button"
-          // 闸门是模型给的 `canSubmit`：关闭 / 离线 / imported 来源都会在这里变为不可点
-          // （仓库侧 `submitPrompt` 还会再拦一次，不靠组件记得禁用）。
-          disabled={!input.canSubmit || onSubmit === undefined}
-          style={!input.canSubmit || onSubmit === undefined ? [styles.primary, styles.buttonDisabled] : styles.primary}
-          dataSet={{ action: "submit-prompt", submitEnabled: String(input.canSubmit) }}
-          onPress={() => {
-            onSubmit?.(input.draft);
-          }}
-        >
-          <Text style={input.canSubmit ? styles.primaryText : [styles.primaryText, styles.buttonDisabledText]}>发送</Text>
-        </Pressable>
+        {/* 进行中只呈现停止（取消可用时）；发送按钮只在可输入与已关闭两态出现（后者禁用并说明原因）。 */}
+        {input.state === "in_progress" ? null : (
+          <Pressable
+            role="button"
+            // 闸门是模型给的 `canSubmit`：关闭 / 离线 / imported 来源都会在这里变为不可点
+            // （仓库侧 `submitPrompt` 还会再拦一次，不靠组件记得禁用）。
+            disabled={!input.canSubmit || onSubmit === undefined}
+            style={!input.canSubmit || onSubmit === undefined ? [styles.primary, styles.buttonDisabled] : styles.primary}
+            dataSet={{ action: "submit-prompt", submitEnabled: String(input.canSubmit) }}
+            onPress={() => {
+              onSubmit?.(input.draft);
+            }}
+          >
+            <Text style={input.canSubmit ? styles.primaryText : [styles.primaryText, styles.buttonDisabledText]}>发送</Text>
+          </Pressable>
+        )}
 
         {input.cancel.kind === "available" ? (
           <Pressable
@@ -517,22 +514,30 @@ export function ConversationComposer({
 
       {/* 提示行：按键口径与状态补充（原型 `.hint`）。 */}
       <View style={styles.hintRow} dataSet={{ composerHint: "true" }}>
+        <Text style={styles.hint} dataSet={{ composerState: input.state }}>
+          {STATE_LABELS[input.state]}
+        </Text>
+        {/* 附件不受支持的显式说明：始终渲染，不因状态改变。 */}
+        <Text style={styles.hint} dataSet={{ attachmentsSupported: String(input.attachmentsSupported), attachmentNotice: "true" }}>
+          {input.attachmentNotice}
+        </Text>
         <Text style={styles.hint} dataSet={{ composerKeys: "enter-submits" }}>
           <Text style={styles.kbd}>Enter</Text> 发送 · <Text style={styles.kbd}>Shift</Text>+
           <Text style={styles.kbd}>Enter</Text> 换行
         </Text>
-        {STATE_HINTS[input.state] === undefined ? null : (
+        {stateHint === undefined ? null : (
           <Text
             style={input.state === "closed" ? styles.hintDanger : styles.hintWarn}
             dataSet={{ composerStateHint: input.state }}
           >
-            {STATE_HINTS[input.state]}
+            {stateHint}
           </Text>
         )}
       </View>
 
       <SubmissionLine submission={input.submission} />
-      <CancelLine cancel={input.cancel} />
+      {/* 没有可取消轮次时不占一行：原型也没有这条静息文案，窄高度下它会挤掉时间线。 */}
+      {input.cancel.kind === "unavailable" ? null : <CancelLine cancel={input.cancel} />}
 
       {input.draftNotice === null ? null : (
         <Text style={styles.note} dataSet={{ draftNotice: "true" }}>

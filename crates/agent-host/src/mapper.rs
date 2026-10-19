@@ -6,7 +6,8 @@
 //!    同时把**逐字节原文**放进 `payload.acp`（`docs/SYNC_PROTOCOL.md` §10.3 的 `rawJson`）。
 //!    工具调用内容里的类型化 `Diff` 元素额外投影成 view 的 `diff` 键（见 [`diff_elements`]）：
 //!    core 的文件改动派生**只能**来自它，因此这里既不改写 ACP 原文，也**绝不**从自由形状的
-//!    `rawInput` 推断文件改动。
+//!    `rawInput` 推断文件改动。工具调用的 `rawInput`/`rawOutput` 与文本 content 另行投影成可选
+//!    `toolDetail`（见 [`attach_tool_detail`]），预算受 `docs/SYNC_PROTOCOL.md` §14 限制。
 //! 2. **turn 归属交给 core**：`EndpointEvent.turn` 一律 `None`，由 broker 用当前派发的 turn 补齐
 //!    （`SessionEndpoint::prompt` 的签名不携带 `TurnId`）。
 //! 3. **只有 core 真会消费的字段是硬要求**：`interactionId`（交互配对）与 `messageId`/`deltaIndex`/
@@ -297,6 +298,12 @@ fn tool_call_view(tool: &ToolCall, default_state: &str, raw: &RawDocument) -> Va
         "state": tool.status.clone().unwrap_or_else(|| default_state.to_owned()),
     });
     attach_diffs(&mut view, tool.content.as_deref(), raw);
+    attach_tool_detail(
+        &mut view,
+        tool.raw_input.as_ref(),
+        tool.raw_output.as_ref(),
+        tool.content.as_deref(),
+    );
     view
 }
 
@@ -307,7 +314,214 @@ fn tool_call_update_view(update: &ToolCallUpdate, default_state: &str, raw: &Raw
         "state": update.status.clone().unwrap_or_else(|| default_state.to_owned()),
     });
     attach_diffs(&mut view, update.content.as_deref(), raw);
+    attach_tool_detail(
+        &mut view,
+        update.raw_input.as_ref(),
+        update.raw_output.as_ref(),
+        update.content.as_deref(),
+    );
     view
+}
+
+/// `toolDetail` 每个部分的固定上限（`docs/SYNC_PROTOCOL.md` §14）：32 KiB，按 JSON 序列化后的
+/// UTF-8 字节计。
+const TOOL_DETAIL_PART_LIMIT: usize = 32 * 1024;
+
+/// `toolDetail` 整体的固定上限（§14）：64 KiB。
+const TOOL_DETAIL_TOTAL_LIMIT: usize = 64 * 1024;
+
+/// ACPR-CJ1 允许的最大嵌套深度（容器层数，顶层容器记 1）。与 `acpr-wire` 的
+/// `cj1::MAX_DEPTH` 同值；`agent-host` 不依赖那个 crate，这里保留同值常量。
+const CJ1_MAX_DEPTH: u16 = 128;
+
+/// ACPR-CJ1 允许的最大整数绝对值（2^53-1，即 JS 的 `Number.MAX_SAFE_INTEGER`）。
+const CJ1_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+/// `toolDetail` 的某个部分在 `payload.view` 里的容器深度：`view` 记 1、`toolDetail` 记 2、
+/// 部分本身记 3。判定从 3 起算，把外层两级一并计入 128 的预算——宁可少带一个值，也不让整条
+/// 事件因 `view` 的 ACPR-CJ1 校验失败而无法提交。
+const TOOL_DETAIL_VALUE_DEPTH: u16 = 3;
+
+/// 值能否以 ACPR-CJ1 的值域表达（判定口径与 `crates/acpr-wire/src/cj1.rs` 一致）。
+///
+/// `payload.view` 落库前要过 ACPR-CJ1：数字必须有限、无小数部分且 `|n| <= 2^53-1`，容器嵌套不超过
+/// 128 层（本模块不依赖 `acpr-wire`，因此就地实现，不新增 crate 依赖）。
+///
+/// `depth` 是 `value` **作为容器**时所在的容器层数；标量不占用新的一层，也不受深度限制。
+fn cj1_compatible(value: &Value, depth: u16) -> bool {
+    match value {
+        Value::Object(members) => {
+            depth <= CJ1_MAX_DEPTH
+                && members
+                    .values()
+                    .all(|member| cj1_compatible(member, depth + 1))
+        }
+        Value::Array(items) => {
+            depth <= CJ1_MAX_DEPTH && items.iter().all(|item| cj1_compatible(item, depth + 1))
+        }
+        Value::Number(number) => cj1_compatible_number(number),
+        Value::String(_) | Value::Bool(_) | Value::Null => true,
+    }
+}
+
+/// 单个 JSON 数字是否落在 ACPR-CJ1 值域内：按**值**判定，与 `cj1` 的「先取 f64 再要求有限、整数、
+/// 在 2^53-1 内」一致（因此 `1.0`/`1e2` 合法，`0.2`/`1e400`/`9007199254740992` 不合法）。
+fn cj1_compatible_number(number: &serde_json::Number) -> bool {
+    if let Some(value) = number.as_i64() {
+        return value.unsigned_abs() <= CJ1_MAX_SAFE_INTEGER;
+    }
+    if let Some(value) = number.as_u64() {
+        return value <= CJ1_MAX_SAFE_INTEGER;
+    }
+    number.as_f64().is_some_and(|value| {
+        value.is_finite() && value.fract() == 0.0 && value.abs() <= CJ1_MAX_SAFE_INTEGER as f64
+    })
+}
+
+/// 把 ACP 工具调用的输入、输出与文本内容挂到 view 的 `toolDetail` 键上。
+///
+/// 只读**类型化**字段：`rawInput`、`rawOutput`，以及 content 里 `Content` 包装的 `Text` 块。
+/// Diff、terminal 与未识别的 content 不进入这里：差异行由 [`attach_diffs`] 与 core 的派生承担，
+/// 终端输出走 `terminal.output`，未识别类型仍可经 `payload.acp` 的原文诊断查看。
+///
+/// 预算按 §14 执行（均按 JSON 序列化后的 UTF-8 字节）：`input`/`output` 各 32 KiB、`text` 合计
+/// 32 KiB、整个对象 64 KiB。超过部分上限的部分**整体省略**；整体预算不足时按 `output` → `text`
+/// → `input` 的优先序保留（结果与内容优先，输入通常已由 `tool.call.started` 下发），让出的部分
+/// 同样整体省略。被省略的部分名登记在 `truncatedParts`（按 `input`/`output`/`text` 的固定顺序），
+/// **绝不**发送被截断的 JSON 片段。
+///
+/// 另有值域约束：`input`/`output` 是自由 JSON，可能含浮点或超出 2^53-1 的整数；`payload.view` 落库前
+/// 要过 ACPR-CJ1，因此无法以该值域表达的部分（见 [`cj1_compatible`]）同样**整体缺席**并登记，
+/// 绝不让整条事件因 view 校验失败而无法提交。`text` 是字符串，不需要数值判定。
+///
+/// 完全没有详情时整个 `toolDetail` 键缺席。
+fn attach_tool_detail(
+    view: &mut Value,
+    raw_input: Option<&Value>,
+    raw_output: Option<&Value>,
+    content: Option<&[ToolCallContent]>,
+) {
+    let mut input = None;
+    let mut output = None;
+    let mut text = None;
+    let mut truncated = [false; 3];
+
+    if let Some(value) = raw_input {
+        if !cj1_compatible(value, TOOL_DETAIL_VALUE_DEPTH) {
+            // 无法以 ACPR-CJ1 值域表达：整体省略并登记，避免整个 payload 校验失败。
+            truncated[0] = true;
+        } else if value_json_len(value) <= TOOL_DETAIL_PART_LIMIT {
+            input = Some(value);
+        } else {
+            truncated[0] = true;
+        }
+    }
+    if let Some(value) = raw_output {
+        if !cj1_compatible(value, TOOL_DETAIL_VALUE_DEPTH) {
+            truncated[1] = true;
+        } else if value_json_len(value) <= TOOL_DETAIL_PART_LIMIT {
+            output = Some(value);
+        } else {
+            truncated[1] = true;
+        }
+    }
+    if let Some(blocks) = text_contents(content) {
+        let bytes: usize = blocks.iter().map(|block| text_json_len(block)).sum();
+        if bytes <= TOOL_DETAIL_PART_LIMIT {
+            text = Some(blocks);
+        } else {
+            truncated[2] = true;
+        }
+    }
+
+    loop {
+        let Some(candidate) = tool_detail_json(input, output, text.as_deref(), truncated) else {
+            return;
+        };
+        if value_json_len(&candidate) <= TOOL_DETAIL_TOTAL_LIMIT {
+            insert_tool_detail(view, candidate);
+            return;
+        }
+        // 整体预算不足：先牺牲输入，再牺牲文本，最后才牺牲输出（每个让出的部分都登记）。
+        if input.is_some() {
+            input = None;
+            truncated[0] = true;
+        } else if text.is_some() {
+            text = None;
+            truncated[2] = true;
+        } else if output.is_some() {
+            output = None;
+            truncated[1] = true;
+        } else {
+            // 只剩 `truncatedParts`：仍如实下发，说明数据存在但超过整体预算。
+            insert_tool_detail(view, candidate);
+            return;
+        }
+    }
+}
+
+/// 组装 `toolDetail` 对象；三个内容部分都缺席且没有截断登记时返回 `None`（整个键缺席）。
+fn tool_detail_json(
+    input: Option<&Value>,
+    output: Option<&Value>,
+    text: Option<&[String]>,
+    truncated: [bool; 3],
+) -> Option<Value> {
+    let mut object = serde_json::Map::new();
+    if let Some(value) = input {
+        object.insert("input".to_owned(), value.clone());
+    }
+    if let Some(value) = output {
+        object.insert("output".to_owned(), value.clone());
+    }
+    if let Some(blocks) = text {
+        object.insert(
+            "text".to_owned(),
+            Value::Array(blocks.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    let parts: Vec<Value> = ["input", "output", "text"]
+        .into_iter()
+        .zip(truncated)
+        .filter(|(_, truncated)| *truncated)
+        .map(|(name, _)| Value::String(name.to_owned()))
+        .collect();
+    if !parts.is_empty() {
+        object.insert("truncatedParts".to_owned(), Value::Array(parts));
+    }
+    (!object.is_empty()).then_some(Value::Object(object))
+}
+
+/// content 里的文本块，按 Agent 提供的顺序收集；没有文本块时返回 `None`（不是空数组）。
+///
+/// 只取 `ToolCallContent::Content` 包装的 `ContentBlock::Text`：其它 content block（图片、资源、
+/// 未识别）与 `Diff`/`Terminal` 元素都不文本化。
+fn text_contents(content: Option<&[ToolCallContent]>) -> Option<Vec<String>> {
+    let mut texts = Vec::new();
+    for element in content? {
+        if let ToolCallContent::Content(wrapper) = element {
+            if let ContentBlock::Text(text) = &wrapper.content {
+                texts.push(text.text.clone());
+            }
+        }
+    }
+    (!texts.is_empty()).then_some(texts)
+}
+
+fn insert_tool_detail(view: &mut Value, detail: Value) {
+    if let Some(object) = view.as_object_mut() {
+        object.insert("toolDetail".to_owned(), detail);
+    }
+}
+
+/// JSON 值的序列化字节数；序列化失败按「超限」处理（宁可省略也不发送无法保真的值）。
+fn value_json_len(value: &Value) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+/// 一个文本块按 JSON 字符串序列化后的字节数（含引号与转义），用于 `text` 的合计预算。
+fn text_json_len(text: &str) -> usize {
+    serde_json::to_vec(text).map_or(usize::MAX, |bytes| bytes.len())
 }
 
 /// 把工具调用内容里的**类型化 Diff 元素**挂到 view 的 `diff` 键上。
@@ -807,5 +1021,310 @@ mod tests {
         assert!(slice.contains("说明.md"));
         // 解码后的取值是原文里的码点，不是被重写过的转义。
         assert_eq!(elements[0]["newText"], "第一行\n第三行");
+    }
+
+    /// `tool.call.started`：`rawInput` 原样进入 `toolDetail.input`，不发明其它部分。
+    #[test]
+    fn tool_detail_carries_started_input() {
+        let raw =
+            document(r#"{"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"t-1"}}}"#);
+        let before = raw.as_str().to_owned();
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-1",
+            "title": "读取 schema",
+            "rawInput": {"path": "schemas/sync/v1/event-views.schema.json", "limit": 20}
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "pending", &raw);
+        let detail = view.get("toolDetail").expect("toolDetail");
+        assert_eq!(
+            detail["input"]["path"],
+            "schemas/sync/v1/event-views.schema.json"
+        );
+        assert_eq!(detail["input"]["limit"], 20);
+        assert!(detail.get("output").is_none(), "没有 rawOutput 时该键缺席");
+        assert!(
+            detail.get("text").is_none(),
+            "没有文本 content 时该键缺席（不是空数组）"
+        );
+        assert!(
+            detail.get("truncatedParts").is_none(),
+            "未超限时 truncatedParts 缺席（不是空数组）"
+        );
+        assert_eq!(view["state"], "pending");
+        assert_eq!(raw.as_str(), before, "携带 toolDetail 不改变 ACP 原文");
+    }
+
+    /// `tool.call.completed`：`rawOutput` 与文本块都进入 `toolDetail`，文本顺序与 Agent 一致；
+    /// diff 与 terminal 元素不进入（它们由既有派生与 `terminal.output` 承担）。
+    #[test]
+    fn tool_detail_carries_completed_output_and_text() {
+        let raw = document(
+            r#"{"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"t-2"}}}"#,
+        );
+        let update: ToolCallUpdate = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-2",
+            "title": "编译",
+            "status": "completed",
+            "rawOutput": {"exitCode": 0, "stdout": "ok"},
+            "content": [
+                {"type": "content", "content": {"type": "text", "text": "第一段"}},
+                {"type": "diff", "path": "src/main.rs", "newText": "x"},
+                {"type": "terminal", "terminalId": "term-1"},
+                {"type": "content", "content": {"type": "text", "text": "第二段"}}
+            ]
+        }))
+        .expect("tool call update");
+        let view = tool_call_update_view(&update, "in_progress", &raw);
+        let detail = view.get("toolDetail").expect("toolDetail");
+        assert_eq!(detail["output"]["exitCode"], 0);
+        assert_eq!(detail["output"]["stdout"], "ok");
+        assert_eq!(
+            detail["text"],
+            serde_json::json!(["第一段", "第二段"]),
+            "文本块顺序与 Agent 提供的一致"
+        );
+        assert!(detail.get("input").is_none(), "没有 rawInput 时该键缺席");
+        assert!(detail.get("truncatedParts").is_none());
+        assert_eq!(view["state"], "completed");
+    }
+
+    /// `rawInput` 含浮点（自由 JSON 允许）：无法以 ACPR-CJ1 值域表达，`input` 整体缺席并登记，
+    /// 而不是把会令整条事件落库失败的值放进 view。
+    #[test]
+    fn tool_detail_omits_fractional_input() {
+        let raw = document(r#"{"params":{"update":{"sessionUpdate":"tool_call"}}}"#);
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-float",
+            "title": "比例",
+            "rawInput": {"ratio": 0.2}
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "pending", &raw);
+        let detail = view.get("toolDetail").expect("截断登记仍须下发");
+        assert!(
+            detail.get("input").is_none(),
+            "非整数无法以 ACPR-CJ1 表达，必须整体缺席：{detail}"
+        );
+        assert_eq!(detail["truncatedParts"], serde_json::json!(["input"]));
+        assert!(
+            !view.to_string().contains("ratio"),
+            "不得下发无法保真的输入片段"
+        );
+    }
+
+    /// `rawInput` 含超出 2^53-1 的整数：同样整体缺席并登记 `input`。
+    #[test]
+    fn tool_detail_omits_integer_outside_cj1_range() {
+        let raw = document(r#"{"params":{"update":{"sessionUpdate":"tool_call"}}}"#);
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-big-int",
+            "title": "大整数",
+            "rawInput": {"id": 9007199254740992_i64}
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "pending", &raw);
+        let detail = view.get("toolDetail").expect("截断登记仍须下发");
+        assert!(
+            detail.get("input").is_none(),
+            "超过 2^53-1 的整数必须整体缺席：{detail}"
+        );
+        assert_eq!(detail["truncatedParts"], serde_json::json!(["input"]));
+        assert!(
+            !view.to_string().contains("9007199254740992"),
+            "不得下发无法保真的输入片段"
+        );
+    }
+
+    /// 边界内的值仍保留：`2^53-1`、整数值浮点与嵌套容器都通过 CJ1 判定。
+    #[test]
+    fn tool_detail_keeps_cj1_compatible_input() {
+        let raw = document(r#"{"params":{"update":{"sessionUpdate":"tool_call"}}}"#);
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-cj1-ok",
+            "title": "边界内",
+            "rawInput": {
+                "maxSafe": 9007199254740991_i64,
+                "negativeMaxSafe": -9007199254740991_i64,
+                "integral": 1.0,
+                "nested": [1, {"zero": 0}]
+            }
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "pending", &raw);
+        let detail = view.get("toolDetail").expect("toolDetail");
+        assert_eq!(detail["input"]["maxSafe"], 9007199254740991_i64);
+        assert_eq!(detail["input"]["negativeMaxSafe"], -9007199254740991_i64);
+        assert_eq!(detail["input"]["integral"], 1.0);
+        assert_eq!(
+            detail["input"]["nested"],
+            serde_json::json!([1, {"zero": 0}])
+        );
+        assert!(detail.get("truncatedParts").is_none());
+    }
+
+    /// 嵌套超过 ACPR-CJ1 的 128 层上限：整体缺席并登记 `input`（不递归到栈溢出）。
+    #[test]
+    fn tool_detail_omits_overdeep_input() {
+        let raw = document(r#"{"params":{"update":{"sessionUpdate":"tool_call"}}}"#);
+        let mut nested = serde_json::json!(1);
+        for _ in 0..130 {
+            nested = serde_json::Value::Array(vec![nested]);
+        }
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-deep",
+            "title": "过深",
+            "rawInput": {"nested": nested}
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "pending", &raw);
+        let detail = view.get("toolDetail").expect("截断登记仍须下发");
+        assert!(
+            detail.get("input").is_none(),
+            "超过 128 层的输入必须整体缺席"
+        );
+        assert_eq!(detail["truncatedParts"], serde_json::json!(["input"]));
+    }
+
+    /// 单部分超限：该部分**整体缺席**并登记，其余未超限部分照常下发；不发送被截断的片段。
+    #[test]
+    fn tool_detail_omits_oversized_output_but_keeps_other_parts() {
+        let raw = document(r#"{"params":{"update":{"sessionUpdate":"tool_call"}}}"#);
+        let big = "x".repeat(33 * 1024);
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-big",
+            "title": "大输出",
+            "rawInput": {"query": "small"},
+            "rawOutput": {"blob": big},
+            "content": [{"type": "content", "content": {"type": "text", "text": "摘要"}}]
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "completed", &raw);
+        let detail = view.get("toolDetail").expect("toolDetail");
+        assert!(
+            detail.get("output").is_none(),
+            "超过 32 KiB 的输出必须整体缺席：{detail}"
+        );
+        assert_eq!(detail["truncatedParts"], serde_json::json!(["output"]));
+        assert_eq!(detail["input"]["query"], "small", "未超限部分照常下发");
+        assert_eq!(detail["text"], serde_json::json!(["摘要"]));
+        assert!(
+            !view.to_string().contains("xxxxxxxxxx"),
+            "绝不发送被截断的 JSON 片段"
+        );
+    }
+
+    /// 多个部分各自超限：`truncatedParts` 是并集（不是只登记第一个）。
+    #[test]
+    fn tool_detail_registers_every_oversized_part() {
+        let raw = document(r#"{"params":{"update":{"sessionUpdate":"tool_call"}}}"#);
+        let big = "x".repeat(33 * 1024);
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-big-2",
+            "title": "大输入与大文本",
+            "rawInput": {"blob": big.clone()},
+            "rawOutput": {"ok": true},
+            "content": [{"type": "content", "content": {"type": "text", "text": big}}]
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "completed", &raw);
+        let detail = view.get("toolDetail").expect("toolDetail");
+        assert!(detail.get("input").is_none());
+        assert!(detail.get("text").is_none());
+        assert_eq!(
+            detail["truncatedParts"],
+            serde_json::json!(["input", "text"])
+        );
+        assert_eq!(
+            detail["output"]["ok"],
+            serde_json::json!(true),
+            "未超限的输出照常下发"
+        );
+    }
+
+    /// 整体 64 KiB 预算：两个部分各自未超 32 KiB、合计超限时，按 `output` → `text` → `input`
+    /// 的优先序保留，让出的输入整体缺席并登记。
+    #[test]
+    fn tool_detail_enforces_total_budget() {
+        let raw = document(r#"{"params":{"update":{"sessionUpdate":"tool_call"}}}"#);
+        // 序列化后各约 32 KiB（字符串长度 + `{"blob":…}` 包装），两项合计超过 64 KiB。
+        let near = "y".repeat(32 * 1024 - 18);
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-total",
+            "title": "接近上限",
+            "rawInput": {"blob": near.clone()},
+            "rawOutput": {"blob": near}
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "completed", &raw);
+        let detail = view.get("toolDetail").expect("toolDetail");
+        assert!(detail.get("input").is_none(), "整体预算不足时先让出输入");
+        assert!(detail.get("output").is_some(), "输出优先保留");
+        assert_eq!(detail["truncatedParts"], serde_json::json!(["input"]));
+        assert!(
+            value_json_len(detail) <= TOOL_DETAIL_TOTAL_LIMIT,
+            "toolDetail 整体不得超过 64 KiB"
+        );
+    }
+
+    /// 没有 `rawInput`/`rawOutput`/文本 content 时 `toolDetail` 整个键缺席，视图仍完整。
+    #[test]
+    fn tool_detail_absent_without_acp_detail() {
+        let raw = document(r#"{"params":{"update":{"sessionUpdate":"tool_call"}}}"#);
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-plain",
+            "title": "看文件",
+            "content": [{"type": "terminal", "terminalId": "q"}]
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "pending", &raw);
+        assert!(
+            view.get("toolDetail").is_none(),
+            "没有详情时不得出现空对象占位：{view}"
+        );
+        assert_eq!(view["toolCallId"], "t-plain", "视图本身不得缺失");
+
+        let update: ToolCallUpdate = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-plain",
+            "title": "看文件",
+            "status": "completed"
+        }))
+        .expect("tool call update");
+        let view = tool_call_update_view(&update, "completed", &raw);
+        assert!(view.get("toolDetail").is_none());
+    }
+
+    /// 未识别的 content 类型不被文本化；可映射的文本块仍照常交付。
+    #[test]
+    fn tool_detail_ignores_unrecognized_content() {
+        let raw = document(r#"{"params":{"update":{"sessionUpdate":"tool_call"}}}"#);
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-unknown",
+            "title": "未知内容",
+            "content": [{"type": "mystery", "secret": "不可文本化"}]
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "pending", &raw);
+        assert!(
+            view.get("toolDetail").is_none(),
+            "只有未识别 content 时不携带 toolDetail：{view}"
+        );
+
+        let tool: ToolCall = serde_json::from_value(serde_json::json!({
+            "toolCallId": "t-mixed",
+            "title": "混合内容",
+            "content": [
+                {"type": "mystery", "secret": "不可文本化"},
+                {"type": "content", "content": {"type": "text", "text": "可读文本"}}
+            ]
+        }))
+        .expect("tool call");
+        let view = tool_call_view(&tool, "pending", &raw);
+        let detail = view.get("toolDetail").expect("toolDetail");
+        assert_eq!(detail["text"], serde_json::json!(["可读文本"]));
+        assert!(
+            !view.to_string().contains("不可文本化"),
+            "未识别 content 不得被文本化或透传进 toolDetail"
+        );
     }
 }

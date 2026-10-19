@@ -1,4 +1,4 @@
-//! Sync 命令面：`command` 帧的解码分派、**授权前置**、六条查询命令的同步完成、结果超限的显式失败、
+//! Sync 命令面：`command` 帧的解码分派、**授权前置**、十条查询命令的同步完成、结果超限的显式失败、
 //! 按（设备，命令族）计数的命令限流与查询类命令的连接期去重
 //! （`docs/SYNC_PROTOCOL.md` §11/§12.2/§14；变更 `sync-server-commands` 的任务 2.1–2.6，
 //! 行为范围以 `openspec/changes/archive/2026-10-16-sync-server-commands/specs/sync-command-handling/spec.md`
@@ -61,18 +61,20 @@ use std::time::{Duration, Instant};
 use acp_core::broker::Broker;
 use acp_core::model::{
     Actor, ClientCommand, CommandKind, CommandPayload as CorePayload, CommandReceipt,
-    ConfigOptionId, ConfigValue as CoreConfigValue, ConflictKind,
+    ConfigOptionId, ConfigValue as CoreConfigValue, ConflictKind, ContentVersion,
     ElicitationAction as CoreElicitationAction, ElicitationValues, InteractionId, ModeId,
-    PortError, PromptContentBlock, PublicError as CorePublicError, ReadInclude as CoreReadInclude,
-    RequestId as CoreRequestId, Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
+    PortError, PromptContentBlock, PublicError as CorePublicError, RESULT_TOO_LARGE,
+    ReadInclude as CoreReadInclude, RequestId as CoreRequestId, SessionFilePath, SessionId,
+    Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
 };
+use acp_core::ports::SessionFiles;
 use acp_core::use_cases::UseCases;
 use identity_auth::Authority;
 use sha2::Digest as _;
 use sync_protocol::command::{
     Command, CommandName, CommandPayload, CommandResult, CommandResultPayload, CommandState,
     ElicitationAction as WireElicitationAction, IncludeResource as WireReadInclude,
-    SessionCreateResult, SessionCreateWorkspace,
+    SessionCreateResult, SessionCreateWorkspace, SessionFilesRead,
 };
 use sync_protocol::common::{
     ConfigOptionValue as WireConfigValue, Nullable, PublicError, RawObject,
@@ -101,6 +103,9 @@ use self::query::Rejection;
 pub const SESSION_CREATE_FEATURE: &str = "core.session-create.v1";
 /// 独立建目录的可选能力；旧连接不得触发文件系统写操作。
 pub const WORKSPACE_MKDIR_FEATURE: &str = "core.workspace-mkdir.v1";
+/// 会话文件与 Git 只读查询的能力 ID（§11.5）。`session.files.*`/`session.git.*` 的门控在用例调用与
+/// 任何文件/Git I/O 之前；宣告该 feature 的前提是真实路由与连接期内容版本释放已接线。
+pub const SESSION_FILES_FEATURE: &str = "core.session-files.v1";
 
 /// 单条命令结果的**信封**开销上界（字节）。
 ///
@@ -132,6 +137,57 @@ struct ConnectionState {
     answered: Vec<((Uuid, Uuid), CommandResult)>,
     /// 3.5：待观察终态的 mutation。连接断开即整表丢弃（观察者是连接期状态，不留 detached task）。
     watching: Vec<WatchedCommand>,
+    /// 本连接唯一的活动内容版本（§11.5）：`version=null` 的首次成功读取建立它，带 `version` 的续读必须
+    /// 命中同一 `(设备, 会话, 路径, 版本)`。连接关闭时由 [`CommandRoute::on_closed`] 释放。
+    content: Option<ContentBinding>,
+}
+
+/// 一条连接的活动内容版本及其绑定维度（`docs/SYNC_PROTOCOL.md` §11.5）。
+///
+/// 版本令牌只在建立它的连接/设备/会话/路径组合内有效，不能当作跨连接的 bearer 凭据。设备维度与连接
+/// 一一对应（连接在注册表里按设备键登记），但仍显式记录，使「跨连接/跨设备/跨会话/跨路径」四类拒绝
+/// 由同一处比较给出。
+#[derive(Debug, Clone)]
+struct ContentBinding {
+    /// 建立快照的连接所属设备。
+    device: acp_core::model::DeviceId,
+    /// 该快照所属的会话。
+    session: SessionId,
+    /// 根内相对路径。
+    path: SessionFilePath,
+    /// 不透明内容版本。
+    version: ContentVersion,
+}
+
+impl ContentBinding {
+    /// 续读是否命中同一绑定：设备、会话、路径与版本全部相同才算数。
+    fn matches(
+        &self,
+        device: &acp_core::model::DeviceId,
+        session: &SessionId,
+        path: &str,
+        version: &str,
+    ) -> bool {
+        self.device == *device
+            && self.session == *session
+            && self.path.as_str() == path
+            && self.version.as_str() == version
+    }
+}
+
+/// 释放一个连接期内容版本；失败只记诊断（释放是幂等的，端口的空闲 TTL 与 daemon 关闭的
+/// `release_all` 还有兜底）。抽成自由函数让「连接关闭必须调用端口」这条路径可被 fake 端口直接断言。
+async fn release_binding(files: &dyn SessionFiles, binding: Option<ContentBinding>) {
+    let Some(binding) = binding else {
+        return;
+    };
+    if let Err(error) = files.release_content(&binding.version).await {
+        debug!(
+            event = "sync.session_files_release_failed",
+            error = ?error,
+            "the content snapshot could not be released"
+        );
+    }
 }
 
 /// 3.5 的终态观察项：提交方按 `(deviceId, requestId)` 等自己的终态。
@@ -199,6 +255,9 @@ pub struct CommandRoute {
     /// （不得调用 `server::node_link`），因此这条运行时事实由组合根注入，与
     /// [`crate::sync::subscribe`] 的订阅面共用同一个来源。
     owner: Arc<dyn OwnerReachability>,
+    /// 会话文件/Git 只读端口：与 `UseCases` 内部注入的是**同一个实例**，连接关闭/换新版本时由本路由
+    /// 调用 `release_content`（用例面不暴露端口，释放责任在接线层）。
+    files: Arc<dyn SessionFiles>,
     rate: CommandRateLimiter,
     /// 连续超限多少次即以 `4429` 关闭连接（生产路径恒为
     /// [`limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS`]，用例把它压小）。
@@ -220,13 +279,15 @@ impl std::fmt::Debug for CommandRoute {
 }
 
 impl CommandRoute {
-    /// 装配。`owner` 与 [`crate::sync::subscribe::SubscribeRoute`] 拿到的是同一个来源。
+    /// 装配。`owner` 与 [`crate::sync::subscribe::SubscribeRoute`] 拿到的是同一个来源；`files` 必须与
+    /// 组合根注入 `UseCases::with_session_files` 的是**同一个实例**（连接级内容版本释放用它）。
     pub fn new(
         core: Arc<UseCases>,
         broker: Arc<Broker>,
         authority: Arc<Authority>,
         registry: Arc<ConnectionRegistry>,
         owner: Arc<dyn OwnerReachability>,
+        files: Arc<dyn SessionFiles>,
     ) -> Self {
         let (mkdir_queue, mkdir_receiver) = mpsc::channel(MKDIR_QUEUE_CAPACITY);
         Self {
@@ -235,6 +296,7 @@ impl CommandRoute {
             authority,
             registry,
             owner,
+            files,
             rate: CommandRateLimiter::new(limits::COMMANDS_PER_MINUTE, limits::COMMAND_WINDOW),
             consecutive_limit: limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS,
             states: Mutex::new(BTreeMap::new()),
@@ -477,11 +539,7 @@ impl CommandRoute {
     /// [`ENVELOPE_OVERHEAD_BYTES`] 后与本连接的 `maxMessageBytes` 比较。**不**截断、**不**分批、
     /// **不**把超限结果写成"看起来完整"的短结果——超限即显式失败，让客户端改用快照/事件视图。
     fn too_large(&self, handle: &ConnectionHandle, result: &CommandResult) -> bool {
-        let Ok(body) = encode_body(result) else {
-            return false; // 编码失败由 send_result 的 Encoding 分支诊断，不谎报超限。
-        };
-        let bytes = body.get().len() as u64 + ENVELOPE_OVERHEAD_BYTES;
-        bytes > handle.limits().max_message_bytes()
+        result_exceeds_message_limit(result, handle.limits().max_message_bytes())
     }
 
     /// 记录一次已答复的查询（连接期去重表，有界）。键是 `(messageId, requestId)`：同一连接内**同一帧**
@@ -519,15 +577,33 @@ impl CommandRoute {
             })
     }
 
-    /// 回收「不在存活连接集合里」的连接期状态（限流窗口与去重表随之消失）。
-    fn reclaim(&self, current: &str) {
+    /// 回收「不在存活连接集合里」的连接期状态（限流窗口、去重表与内容版本随之消失）。
+    ///
+    /// 内容版本不能只丢引用：这里同时调用端口 `release_content`。正常关闭已由
+    /// [`MessageRoute::on_closed`] 释放；本函数覆盖「连接任务被中止、没有走到收尾路径」的兜底。
+    async fn reclaim(&self, current: &str) {
         let alive: Vec<String> = self
             .registry
             .handles()
             .iter()
             .map(|handle| handle.connection_id().as_str().to_owned())
             .collect();
-        lock(&self.states).retain(|key, _| key == current || alive.contains(key));
+        let mut released = Vec::new();
+        {
+            let mut states = lock(&self.states);
+            states.retain(|key, state| {
+                let keep = key == current || alive.contains(key);
+                if !keep {
+                    if let Some(binding) = state.content.take() {
+                        released.push(binding);
+                    }
+                }
+                keep
+            });
+        }
+        for binding in released {
+            release_binding(self.files.as_ref(), Some(binding)).await;
+        }
     }
 
     /// 认证完成：记下本次协商结果（feature 门控的唯一来源）。
@@ -541,7 +617,7 @@ impl CommandRoute {
 
     /// 一条 `command` 帧的处理：解码 → 去重 → 限流 → 授权 → 查询/mutation。
     async fn on_command(&self, handle: &ConnectionHandle, message: &Envelope) -> RouteOutcome {
-        self.reclaim(handle.connection_id().as_str());
+        self.reclaim(handle.connection_id().as_str()).await;
         let command = match decode::decode_command(message) {
             Ok(command) => command,
             Err(fault) => {
@@ -607,6 +683,21 @@ impl CommandRoute {
             // 用例面（形状校验与目录读取）根本不会被调用（§11.5、spec `sync-workspace-browse`）。
             CommandPayload::WorkspaceBrowse(payload) => {
                 query::workspace_browse(&self.core, actor, payload, &features).await
+            }
+            // 四条会话文件查询的 feature 门控都在 `query::*`/`Self::session_files_read` 的第一行：
+            // 未协商时用例面（授权、会话读取、文件端口、Git 进程）一次都不会被调用。
+            CommandPayload::SessionFilesList(payload) => {
+                query::session_files_list(&self.core, actor, &command, payload, &features).await
+            }
+            CommandPayload::SessionFilesRead(payload) => {
+                self.session_files_read(handle, actor, &command, payload, &features)
+                    .await
+            }
+            CommandPayload::SessionGitStatus(payload) => {
+                query::session_git_status(&self.core, actor, &command, payload, &features).await
+            }
+            CommandPayload::SessionGitDiff(payload) => {
+                query::session_git_diff(&self.core, actor, &command, payload, &features).await
             }
             // 由 `CommandName::is_query` 与 `CommandPayload` 的判别一致性保证不可达；保留臂只为让判定
             // 穷尽，不 panic。
@@ -685,6 +776,114 @@ impl CommandRoute {
         self.remember(handle, message.message_id(), result.clone());
         self.send_result(handle, &result, "query");
         RouteOutcome::Claimed
+    }
+
+    /// `session.files.read`：连接期内容版本的校验、替换与登记（§11.5）。
+    ///
+    /// 顺序（全部在文件端口调用之前）：
+    ///
+    /// 1. **feature 门控**：未协商 `core.session-files.v1` → `protocol.feature_required`，用例与端口零调用；
+    /// 2. **带 `version` 的续读**：版本必须属于**本连接**且命中同一 `(设备, 会话, 路径)`，否则显式回
+    ///    `internal.unavailable`——绝不把别人的/别的路径的版本当成可读凭据；
+    /// 3. **不带 `version` 的首次读取**：先释放本连接既有的活动版本（同一连接只保留一个），再调用用例
+    ///    建立新快照；成功后登记新版本。
+    ///
+    /// 续读失败（快照过期、文件变化等）时清掉本地绑定并返回端口映射的显式错误，要求客户端重新读取。
+    async fn session_files_read(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        command: &Command,
+        payload: SessionFilesRead,
+        features: &NegotiatedFeatures,
+    ) -> Result<CommandResultPayload, Rejection> {
+        query::require_session_files(features)?;
+        let session = query::command_session(command)?;
+        let requested = payload
+            .version
+            .as_ref()
+            .map(|version| version.as_str().to_owned());
+        let path = payload.path.as_str().to_owned();
+        match requested.as_deref() {
+            Some(version) => {
+                if !self.content_matches(handle, &session, &path, version) {
+                    debug!(
+                        event = "sync.session_files_version_rejected",
+                        connection_id = handle.connection_id().as_str(),
+                        "the content version does not belong to this connection, session and path"
+                    );
+                    return Err(Rejection::Code(
+                        ErrorCode::InternalUnavailable,
+                        "the content version is not valid for this connection",
+                    ));
+                }
+            }
+            None => {
+                if let Some(previous) = self.take_content(handle) {
+                    release_binding(self.files.as_ref(), Some(previous)).await;
+                }
+            }
+        }
+        let chunk =
+            match query::session_files_read(&self.core, actor, command, &payload, features).await {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    // 版本已不可用（过期/变化/撤销）：端口已自行废弃快照，这里清掉绑定，下一步必须重新
+                    // 建立，避免客户端拿一个已死亡的版本反复续读。
+                    if requested.is_some() {
+                        if let Some(previous) = self.take_content(handle) {
+                            release_binding(self.files.as_ref(), Some(previous)).await;
+                        }
+                    }
+                    return Err(error);
+                }
+            };
+        if requested.is_none() {
+            self.bind_content(
+                handle,
+                ContentBinding {
+                    device: handle.device_id().clone(),
+                    session,
+                    path: chunk.path().clone(),
+                    version: chunk.version().clone(),
+                },
+            );
+        }
+        query::wire_session_file_chunk(&chunk)
+            .ok_or(Rejection::Code(
+                ErrorCode::InternalUnavailable,
+                "the session file chunk cannot be projected",
+            ))
+            .map(CommandResultPayload::SessionFilesRead)
+    }
+
+    /// 带 `version` 的续读是否命中本连接唯一的活动版本（设备、会话、路径与版本全部相同）。
+    fn content_matches(
+        &self,
+        handle: &ConnectionHandle,
+        session: &SessionId,
+        path: &str,
+        version: &str,
+    ) -> bool {
+        lock(&self.states)
+            .get(handle.connection_id().as_str())
+            .and_then(|state| state.content.as_ref())
+            .is_some_and(|binding| binding.matches(handle.device_id(), session, path, version))
+    }
+
+    /// 取出并清空本连接的活动内容版本（调用方负责在适当时机释放端口快照）。
+    fn take_content(&self, handle: &ConnectionHandle) -> Option<ContentBinding> {
+        lock(&self.states)
+            .get_mut(handle.connection_id().as_str())
+            .and_then(|state| state.content.take())
+    }
+
+    /// 登记本连接新的活动内容版本（此前已由 [`Self::take_content`] 清空）。
+    fn bind_content(&self, handle: &ConnectionHandle, binding: ContentBinding) {
+        lock(&self.states)
+            .entry(handle.connection_id().as_str().to_owned())
+            .or_default()
+            .content = Some(binding);
     }
 
     /// mutation 的接受路径（WP3 的 3.1）：**先持久接受、回 `accepted`，绝不在同一响应里给业务结果**。
@@ -1493,11 +1692,11 @@ impl CommandRoute {
     /// 轮询所有待观察命令：已终结的推终态并从观察表移除；连接消失的整条状态一起回收。
     async fn poll_pending(&self) {
         // 先回收离开注册表的连接：观察表是连接期状态，`MUST NOT` 留成无主表项。
-        self.reclaim("\u{0}");
+        self.reclaim("\u{0}").await;
         let mut done: Vec<(String, Uuid)> = Vec::new();
         for (connection_id, device_id, watched) in self.watching_snapshot() {
             let Some(handle) = self.handle_of(&connection_id) else {
-                self.forget_connection(&connection_id);
+                self.forget_connection(&connection_id).await;
                 continue;
             };
             if watched.since.elapsed() >= WATCH_MAX_AGE {
@@ -1585,8 +1784,11 @@ impl CommandRoute {
             .retain(|watched| watched.request_id != *request_id);
     }
 
-    fn forget_connection(&self, connection_id: &str) {
-        lock(&self.states).remove(connection_id);
+    async fn forget_connection(&self, connection_id: &str) {
+        let content = lock(&self.states)
+            .remove(connection_id)
+            .and_then(|state| state.content);
+        release_binding(self.files.as_ref(), content).await;
     }
 
     /// 本机装配失败（时间戳/错误体构造不出来）：这是接线缺陷，按 `internal.unavailable` 显式失败，
@@ -1654,6 +1856,29 @@ impl MessageRoute for CommandRoute {
     fn on_authenticated(&self, session: &ConnectionHandle, features: &[String]) {
         self.note_features(session, features);
     }
+
+    /// 连接关闭（正常关闭、断链、设备撤销、daemon 关闭都走同一收尾路径）：释放本连接的全部连接期状态，
+    /// 并显式 `release_content` 它唯一的活动内容版本（§11.5 的连接生命周期）。
+    ///
+    /// 先整表移出再 `await`：释放失败也不会让状态复活，且不跨 `await` 持有锁。快照的额外兜底是端口的
+    /// 空闲 TTL 与 daemon 关闭时的 `NativeSessionFiles::release_all`。
+    async fn on_closed(&self, session: &ConnectionHandle) {
+        let content = lock(&self.states)
+            .remove(session.connection_id().as_str())
+            .and_then(|state| state.content);
+        release_binding(self.files.as_ref(), content).await;
+    }
+}
+
+/// 结果超限判定（§11.5）：按**将要发出的那份 body** 的编码字节数加信封开销，与单条消息上限比较。
+///
+/// 编码失败返回 `false`：由 `send_result` 的 `Encoding` 分支诊断，不谎报超限。判定与比较只此一处，
+/// 让查询命令的入队前检查与用例可以用同一份字节口径断言「超限不发送」。
+fn result_exceeds_message_limit(result: &CommandResult, max_message_bytes: u64) -> bool {
+    let Ok(body) = encode_body(result) else {
+        return false;
+    };
+    body.get().len() as u64 + ENVELOPE_OVERHEAD_BYTES > max_message_bytes
 }
 
 /// `details.retryAfterMs`（`resource.rate_limited` 的唯一登记字段，§12.2）。
@@ -1756,9 +1981,21 @@ pub(crate) fn port_rejection(error: &PortError) -> Rejection {
             ErrorCode::AuthorizationScopeDenied,
             "the device is not allowed to send this command",
         ),
+        // 会话文件查询对 imported 会话的显式拒绝（core 在文件/Git 端口调用之前给出）。
+        PortError::InvalidRequest("capability.unsupported_by_broker") => Rejection::Code(
+            ErrorCode::CapabilityUnsupportedByBroker,
+            "the broker cannot serve session files for this session",
+        ),
         PortError::InvalidRequest(query::RETAINED_WINDOW_EXCEEDED) => {
             Rejection::CursorInvalid(CursorFault::CursorExpired)
         }
+        // 会话文件下载超过 64 MiB：core 用这条可识别文本表达预算失败（`SessionFiles::open_content`
+        // 的 MUST）。落进下面的通配臂会变成 `protocol.schema_invalid`——那是形状错误，客户端会以为
+        // 自己发的帧不合法，而 §11.5 要求的是 `resource.result_too_large`。
+        PortError::InvalidRequest(RESULT_TOO_LARGE) => Rejection::Code(
+            ErrorCode::ResourceResultTooLarge,
+            "the file exceeds the download budget",
+        ),
         PortError::InvalidRequest(reason) => Rejection::Schema(schema_hint(reason)),
         PortError::NotFound(_) => Rejection::Code(
             ErrorCode::SessionNotFound,
@@ -1900,6 +2137,12 @@ fn core_payload(payload: &CommandPayload) -> Result<CorePayload, &'static str> {
         CommandPayload::SessionCreate(_) => {
             return Err("session.create does not use CommandPayload");
         }
+        CommandPayload::SessionFilesList(_)
+        | CommandPayload::SessionFilesRead(_)
+        | CommandPayload::SessionGitStatus(_)
+        | CommandPayload::SessionGitDiff(_) => {
+            return Err("session file queries are not wired yet");
+        }
     })
 }
 
@@ -1913,4 +2156,265 @@ fn payload_fingerprint(payload: &CommandPayload) -> Option<acp_core::model::Dige
     let bytes = sha2::Sha256::digest(canonical.as_bytes());
     acp_core::model::Digest::new(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 下载超预算必须走 §11.5 的 `resource.result_too_large`，不能落进 `protocol.schema_invalid`
+    /// 通配臂——后者会让客户端以为请求形状不合法，而不是「文件太大」。
+    #[test]
+    fn download_budget_failure_maps_to_result_too_large() {
+        let rejection = port_rejection(&PortError::InvalidRequest(RESULT_TOO_LARGE));
+        assert_eq!(
+            rejection,
+            Rejection::Code(
+                ErrorCode::ResourceResultTooLarge,
+                "the file exceeds the download budget",
+            )
+        );
+        let (code, text, details) = rejection.into_parts();
+        assert_eq!(code.as_str(), "resource.result_too_large");
+        assert!(!text.is_empty(), "固定说明文本不得为空");
+        assert!(!text.contains('/'), "说明文本不得回显路径");
+        assert_eq!(details.get(), "{}", "该错误码没有登记 details");
+    }
+
+    /// 未登记的 `InvalidRequest` 仍按形状错误处理：新臂只认下载预算这一条文本。
+    #[test]
+    fn other_invalid_requests_still_map_to_schema_invalid() {
+        let rejection = port_rejection(&PortError::InvalidRequest("some other reason"));
+        let (code, _, _) = rejection.into_parts();
+        assert_eq!(code, ErrorCode::ProtocolSchemaInvalid);
+    }
+
+    /// imported 会话在 core 的文件/Git 端口调用**之前**返回 `capability.unsupported_by_broker`；
+    /// 会话缺失与端口不可用各自落到既有结构化错误码。
+    #[test]
+    fn session_file_source_and_io_failures_map_to_existing_codes() {
+        let imported = port_rejection(&PortError::InvalidRequest(
+            "capability.unsupported_by_broker",
+        ));
+        let (code, text, details) = imported.into_parts();
+        assert_eq!(code, ErrorCode::CapabilityUnsupportedByBroker);
+        assert!(!text.contains('/'), "说明文本不得回显路径");
+        assert_eq!(details.get(), "{}");
+
+        let missing = port_rejection(&PortError::NotFound(acp_core::model::EntityRef::Session(
+            SessionId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622c").expect("session id"),
+        )));
+        let (code, _, _) = missing.into_parts();
+        assert_eq!(code, ErrorCode::SessionNotFound);
+
+        let unavailable = port_rejection(&PortError::Unavailable(
+            acp_core::model::UnavailableKind::IoError,
+        ));
+        let (code, text, _) = unavailable.into_parts();
+        assert_eq!(code, ErrorCode::InternalUnavailable);
+        assert!(!text.contains('/'));
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 连接期内容版本（§11.5）：跨连接/跨设备/跨会话/跨路径拒绝，关闭时释放
+    // -------------------------------------------------------------------------------------
+
+    fn binding(device: &str, session: &str, path: &str, version: &str) -> ContentBinding {
+        ContentBinding {
+            device: acp_core::model::DeviceId::new(device).expect("device id"),
+            session: SessionId::new(session).expect("session id"),
+            path: SessionFilePath::parse(path).expect("session path"),
+            version: ContentVersion::parse(version).expect("content version"),
+        }
+    }
+
+    /// 版本只在建立它的四个维度内有效：换连接（设备）、换会话、换路径或换版本都必须拒绝。
+    #[test]
+    fn content_binding_matches_only_the_establishing_dimensions() {
+        let binding = binding(
+            "04dbad03-8869-4c5a-94fa-2f3af2fb622b",
+            "04dbad03-8869-4c5a-94fa-2f3af2fb622c",
+            "src/main.rs",
+            "version_1",
+        );
+        let device = acp_core::model::DeviceId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622b")
+            .expect("device id");
+        let session = SessionId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622c").expect("session id");
+        assert!(binding.matches(&device, &session, "src/main.rs", "version_1"));
+
+        // 另一个连接 = 另一台设备：同一份版本令牌不得当 bearer 使用。
+        let other_device = acp_core::model::DeviceId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622d")
+            .expect("device id");
+        assert!(!binding.matches(&other_device, &session, "src/main.rs", "version_1"));
+        // 同一设备上的另一个会话。
+        let other_session =
+            SessionId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622e").expect("session id");
+        assert!(!binding.matches(&device, &other_session, "src/main.rs", "version_1"));
+        // 同一会话的另一个路径。
+        assert!(!binding.matches(&device, &session, "src/lib.rs", "version_1"));
+        // 另一个版本。
+        assert!(!binding.matches(&device, &session, "src/main.rs", "version_2"));
+    }
+
+    /// 连接关闭路径必须把活动版本交给端口释放，而不是只从内存表里丢掉。
+    #[tokio::test]
+    async fn closing_a_connection_releases_the_bound_content_version() {
+        let files = RecordingFiles::default();
+        let binding = binding(
+            "04dbad03-8869-4c5a-94fa-2f3af2fb622b",
+            "04dbad03-8869-4c5a-94fa-2f3af2fb622c",
+            "src/main.rs",
+            "version_1",
+        );
+        release_binding(&files, Some(binding)).await;
+        assert_eq!(
+            files.releases.lock().expect("releases").as_slice(),
+            ["version_1"]
+        );
+        // 没有绑定（已释放/从未建立）时是空操作，不产生多余端口调用。
+        release_binding(&files, None).await;
+        assert_eq!(files.releases.lock().expect("releases").len(), 1);
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 消息预算与限流（§11.5/§14）
+    // -------------------------------------------------------------------------------------
+
+    /// 一条 32 KiB 内容块的 wire 结果在单帧预算下必须被判为超限，且判定与出站使用同一份编码字节；
+    /// 预算足够时不得误报（超限只换成 `resource.result_too_large`，绝不截断）。
+    #[test]
+    fn oversized_session_file_results_are_detected_before_sending() {
+        use sync_protocol::command::{SessionFilesReadResult, SessionRelativePath};
+        use sync_protocol::common::{DecimalString, Nullable};
+
+        let chunk = vec![b'a'; acp_core::model::SESSION_FILE_CHUNK_MAX_BYTES];
+        let data = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&chunk)
+        };
+        let result = CommandResult {
+            request_id: sync_protocol::common::Uuid::parse("04dbad03-8869-4c5a-94fa-2f3af2fb622b")
+                .expect("request id"),
+            command: CommandName::SessionFilesRead,
+            status: CommandState::Completed,
+            accepted_at: Nullable::null(),
+            terminal_event_id: Nullable::null(),
+            result: Nullable::value(CommandResultPayload::SessionFilesRead(
+                SessionFilesReadResult {
+                    path: SessionRelativePath::parse("src/main.rs").expect("path"),
+                    kind: sync_protocol::command::SessionFileContentKind::Text,
+                    size_bytes: DecimalString::parse("32768").expect("size"),
+                    version: sync_protocol::command::ContentVersion::parse("version_1")
+                        .expect("version"),
+                    offset: DecimalString::parse("0").expect("offset"),
+                    data_base64: sync_protocol::command::SessionFileData::parse(&data)
+                        .expect("base64url"),
+                    eof: true,
+                    preview_truncated: false,
+                },
+            )),
+            error: Nullable::null(),
+        };
+        // 单帧上限是小值：真实编码字节（含信封开销）必然超过它。
+        assert!(result_exceeds_message_limit(&result, 4 * 1024));
+        // 1 MiB 的默认消息预算下，32 KiB 内容块仍装得下：判定不得虚报。
+        assert!(!result_exceeds_message_limit(&result, 1024 * 1024));
+    }
+
+    /// 四条新命令与既有查询同属 `observe` 族（§14）；超限判定用同一个可重试错误码与 `retryAfterMs`。
+    #[test]
+    fn session_file_commands_share_the_observe_rate_family() {
+        for command in [
+            CommandName::SessionFilesList,
+            CommandName::SessionFilesRead,
+            CommandName::SessionGitStatus,
+            CommandName::SessionGitDiff,
+        ] {
+            assert_eq!(CommandFamily::of(command), CommandFamily::Observe);
+        }
+        let limiter = CommandRateLimiter::new(1, limits::COMMAND_WINDOW);
+        let now = Instant::now();
+        assert_eq!(
+            limiter.check_at("device-a", CommandFamily::Observe, now),
+            limits::RateOutcome::Allowed
+        );
+        let denied = limiter.check_at("device-a", CommandFamily::Observe, now);
+        assert!(matches!(denied, limits::RateOutcome::Denied { .. }));
+        let details = retry_after_details(Duration::from_millis(1500));
+        assert_eq!(
+            details.get(),
+            serde_json::json!({ "retryAfterMs": 1500 }).to_string()
+        );
+        assert_eq!(
+            ErrorCode::ResourceRateLimited.as_str(),
+            "resource.rate_limited"
+        );
+    }
+
+    /// 最小 `SessionFiles` 替身：只记录 `release_content` 调用（其余方法在本模块用例里不可达）。
+    #[derive(Default)]
+    struct RecordingFiles {
+        releases: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionFiles for RecordingFiles {
+        async fn list(
+            &self,
+            _root: &str,
+            _path: Option<&SessionFilePath>,
+            _hide_ignored: bool,
+            _after: Option<&acp_core::model::SessionPageToken>,
+        ) -> Result<acp_core::model::SessionFilePage, PortError> {
+            Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::IoError,
+            ))
+        }
+
+        async fn open_content(
+            &self,
+            _root: &str,
+            _path: &SessionFilePath,
+            _purpose: acp_core::model::FileReadPurpose,
+        ) -> Result<acp_core::model::ContentSnapshot, PortError> {
+            Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::IoError,
+            ))
+        }
+
+        async fn read_content(
+            &self,
+            _version: &ContentVersion,
+            _offset: u64,
+        ) -> Result<acp_core::model::SessionFileChunk, PortError> {
+            Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::IoError,
+            ))
+        }
+
+        async fn release_content(&self, version: &ContentVersion) -> Result<(), PortError> {
+            lock(&self.releases).push(version.as_str().to_owned());
+            Ok(())
+        }
+
+        async fn git_status(
+            &self,
+            _root: &str,
+            _after: Option<&acp_core::model::SessionPageToken>,
+        ) -> Result<acp_core::model::GitStatusPage, PortError> {
+            Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::IoError,
+            ))
+        }
+
+        async fn git_diff(
+            &self,
+            _root: &str,
+            _path: &SessionFilePath,
+        ) -> Result<acp_core::model::GitDiff, PortError> {
+            Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::IoError,
+            ))
+        }
+    }
 }

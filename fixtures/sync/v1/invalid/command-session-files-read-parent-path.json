@@ -1,0 +1,17 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "9c3e6a17-4b82-4f05-8d31-5a0c9e2b7f46",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "124",
+  "body": {
+    "requestId": "d0b53e89-7c26-4a91-bf04-8e1d3a6c5f72",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "command": "session.files.read",
+    "payload": {
+      "path": "src/../../outside.txt",
+      "purpose": "preview",
+      "offset": "0"
+    }
+  }
+}

@@ -4,9 +4,11 @@
  * ## 判别力从哪来
  *
  * - **差异区只有三态，且互不冒充**：有结构化差异行 → `data-diff-region="lines"` + 逐行
- *   `data-diff-line-kind`；有不可用标记 → `data-diff-unavailable="<reason>"` + `FILE_DIFF_UNAVAILABLE_LABELS`
+ *   `data-diff-line-kind`（行首按 kind 补 `+ ` / `- ` / 两个空格）；有不可用标记 → `data-diff-unavailable="<reason>"` + `FILE_DIFF_UNAVAILABLE_LABELS`
  *   里该原因的已登记文案；两者都没有 → `data-diff-not-delivered="true"` 的明确说明，且**不**渲染
  *   `data-diff-region`（不画占位差异行假装完整）。
+ * - **紧凑列表**：未选中的改动只呈现状态、路径与 +/- 统计（详情以 `display: none` 收起，
+ *   机器锚点仍在 DOM 里）；选中项才可见地展开摘要、差异与诊断入口。
  * - **不含 ACP 原文**：一段「看起来像差异」的原文（JSON 数组里带 `+/−` 文本）在默认渲染里既不成
  *   为逐行锚点、也不出现在任何位置（`rawJson` 原文串一次都不出现）。
  * - **原文只做诊断入口**：点开的入口是 `data-action="open-file-change-diagnostics"`，展开后原文
@@ -124,7 +126,7 @@ describe("变更文件右栏：只有结构化统计与相对化路径", () => {
       view: changeView("11111111-0000-4000-8000-0000000000d1"),
       acp: { mediaType: "application/json", rawJson: RAW_DIFF, byteLength: "120", sha256: "a".repeat(43) },
     });
-    const html = renderPage(store);
+    const html = renderPage(store, { selectedChangeId: "11111111-0000-4000-8000-0000000000d1" });
 
     expect(html).toContain('data-file-changes="list"');
     expect(html).toContain('data-file-change="11111111-0000-4000-8000-0000000000d1"');
@@ -144,6 +146,36 @@ describe("变更文件右栏：只有结构化统计与相对化路径", () => {
     expect(tagContaining(html, 'data-file-change="11111111-0000-4000-8000-0000000000d1"').startsWith("<li")).toBe(true);
   });
 
+  it("未选中的改动是紧凑行：状态、路径与 +/- 统计在，详情收起但机器锚点仍保留", () => {
+    const { store } = storeOf();
+    const changeId = "11111111-0000-4000-8000-0000000000d7";
+    applyFileChanged(store, {
+      eventId: "dddddddd-0000-4000-8000-000000000407",
+      view: changeView(changeId),
+    });
+    const html = renderPage(store);
+
+    const row = tagContaining(html, `data-file-change="${changeId}"`);
+    expect(attributeOf(row, "data-file-change-expanded")).toBe("false");
+    expect(html).toContain('data-change-compact="true"');
+    // 紧凑行里三样都在：状态、路径、增删统计。
+    expect(html).toContain('data-change-kind="update"');
+    expect(html).toContain('data-change-path="src/auth/session.ts"');
+    expect(html).toContain('data-change-added-lines="2"');
+    expect(html).toContain('data-change-deleted-lines="1"');
+
+    // 详情收起（视觉紧凑），但内容仍在 DOM 里：机器锚点不因收起而消失。
+    const collapsedDetails = tagContaining(html, "data-change-details");
+    expect(collapsedDetails).toContain('data-change-details="collapsed"');
+    expect(html).toContain('data-change-summary="true"');
+    expect(html).toContain('data-diff-not-delivered="true"');
+
+    // 选中后同一块详情展开（样式集合与收起时不同）。
+    const expandedDetails = tagContaining(renderPage(store, { selectedChangeId: changeId }), "data-change-details");
+    expect(expandedDetails).toContain('data-change-details="expanded"');
+    expect(attributeOf(expandedDetails, "class")).not.toBe(attributeOf(collapsedDetails, "class"));
+  });
+
   it("右栏不解析 ACP 原文：原文块与原文串在默认渲染里都不出现", () => {
     const { store } = storeOf();
     applyFileChanged(store, {
@@ -151,7 +183,7 @@ describe("变更文件右栏：只有结构化统计与相对化路径", () => {
       view: changeView("11111111-0000-4000-8000-0000000000d2"),
       acp: { mediaType: "application/json", rawJson: RAW_DIFF, byteLength: "120", sha256: "a".repeat(43) },
     });
-    const html = renderPage(store);
+    const html = renderPage(store, { selectedChangeId: "11111111-0000-4000-8000-0000000000d2" });
 
     // 反例：为了填满右栏去解析原文（或把原文当差异渲染）时，下面每一条都会变红。
     expect(html.match(/data-raw-json=/g) ?? []).toHaveLength(0);
@@ -210,27 +242,33 @@ describe("变更文件右栏：只有结构化统计与相对化路径", () => {
 });
 
 describe("变更文件右栏：差异区的三种形态互不冒充", () => {
-  it("有结构化差异行：逐行呈现并区分新增 / 删除 / 上下文", () => {
+  it("有结构化差异行：逐行呈现、按 kind 补前缀，并区分新增 / 删除 / 上下文", () => {
     const { store } = storeOf();
+    const changeId = "11111111-0000-4000-8000-0000000000e1";
     applyFileChanged(store, {
       eventId: "dddddddd-0000-4000-8000-000000000411",
-      view: changeView("11111111-0000-4000-8000-0000000000e1", {
+      view: changeView(changeId, {
         diffLines: [
-          { kind: "context", text: "  const opts = resolveOptions(input);" },
-          { kind: "deleted", text: "- const idleTimeout = 30_000;" },
-          { kind: "added", text: "+ const idleTimeout = opts.idleTimeoutMs ?? 10_000;" },
+          { kind: "context", text: "const opts = resolveOptions(input);" },
+          { kind: "deleted", text: "const idleTimeout = 30_000;" },
+          { kind: "added", text: "const idleTimeout = opts.idleTimeoutMs ?? 10_000;" },
         ],
       }),
     });
-    const html = renderPage(store);
+    const html = renderPage(store, { selectedChangeId: changeId });
 
     const region = tagContaining(html, 'data-diff-region="lines"');
     expect(attributeOf(region, "data-diff-line-count")).toBe("3");
     expect(html.match(/data-diff-line-kind="context"/g) ?? []).toHaveLength(1);
     expect(html.match(/data-diff-line-kind="deleted"/g) ?? []).toHaveLength(1);
     expect(html.match(/data-diff-line-kind="added"/g) ?? []).toHaveLength(1);
-    // 行内容逐字来自结构化来源（客户端不拼、不复原）。
-    expect(html).toContain("const idleTimeout = opts.idleTimeoutMs ?? 10_000;");
+    // 前缀按判别子补上（`text` 本身不带前缀）：纯文本复制后三种档位也分得清。
+    expect(html).toContain('data-diff-line-prefix="+ "');
+    expect(html).toContain('data-diff-line-prefix="- "');
+    expect(html).toContain('data-diff-line-prefix="  "');
+    expect(html).toContain("+ const idleTimeout = opts.idleTimeoutMs ?? 10_000;");
+    expect(html).toContain("- const idleTimeout = 30_000;");
+    expect(html).toContain("  const opts = resolveOptions(input);");
     // 有差异行时不再说「没有下发」。
     expect(html).not.toContain("data-diff-not-delivered");
     expect(html).not.toContain("data-diff-unavailable");
@@ -238,32 +276,34 @@ describe("变更文件右栏：差异区的三种形态互不冒充", () => {
 
   it("差异行按不可信文本处理：标签与链接只作为文本出现，不产生元素、不写地址属性", () => {
     const { store } = storeOf();
-    const hostile = '+ <script>alert(1)</script> [点我](https://evil.example/x)';
+    const changeId = "11111111-0000-4000-8000-0000000000e2";
+    const hostile = "<script>alert(1)</script> [点我](https://evil.example/x)";
     applyFileChanged(store, {
       eventId: "dddddddd-0000-4000-8000-000000000412",
-      view: changeView("11111111-0000-4000-8000-0000000000e2", {
+      view: changeView(changeId, {
         diffLines: [{ kind: "added", text: hostile }],
       }),
     });
-    const html = renderPage(store);
+    const html = renderPage(store, { selectedChangeId: changeId });
 
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<a ");
     expect(html).not.toMatch(/\s(href|src)="/);
-    // 不执行也不消失：原文以转义后的文本逐字出现。
+    // 不执行也不消失：原文以转义后的文本逐字出现（前缀不影响正文的逐字呈现）。
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).toContain("[点我](https://evil.example/x)");
   });
 
   it("有不可用标记：呈现已登记原因对应的文案", () => {
     const { store } = storeOf();
+    const changeId = "11111111-0000-4000-8000-0000000000e3";
     applyFileChanged(store, {
       eventId: "dddddddd-0000-4000-8000-000000000413",
-      view: changeView("11111111-0000-4000-8000-0000000000e3", {
+      view: changeView(changeId, {
         diffUnavailable: { reason: "size_limit" },
       }),
     });
-    const html = renderPage(store);
+    const html = renderPage(store, { selectedChangeId: changeId });
 
     expect(html).toContain('data-diff-unavailable="size_limit"');
     expect(html).toContain(FILE_DIFF_UNAVAILABLE_LABELS.size_limit);
@@ -274,11 +314,12 @@ describe("变更文件右栏：差异区的三种形态互不冒充", () => {
 
   it("两者都没有：明确说明而不是渲染占位差异行", () => {
     const { store } = storeOf();
+    const changeId = "11111111-0000-4000-8000-0000000000e4";
     applyFileChanged(store, {
       eventId: "dddddddd-0000-4000-8000-000000000414",
-      view: changeView("11111111-0000-4000-8000-0000000000e4"),
+      view: changeView(changeId),
     });
-    const html = renderPage(store);
+    const html = renderPage(store, { selectedChangeId: changeId });
 
     expect(html).toContain('data-diff-not-delivered="true"');
     expect(html).toContain("不渲染占位差异行");
@@ -288,24 +329,31 @@ describe("变更文件右栏：差异区的三种形态互不冒充", () => {
 
   it("形状不合规的下发（空数组与未知原因）落回「两者都没有」，不伪造成另一种形态", () => {
     const { store } = storeOf();
+    const emptyId = "11111111-0000-4000-8000-0000000000e5";
+    const unknownId = "11111111-0000-4000-8000-0000000000e6";
     applyFileChanged(store, {
       eventId: "dddddddd-0000-4000-8000-000000000415",
-      view: changeView("11111111-0000-4000-8000-0000000000e5", { diffLines: [] }),
+      view: changeView(emptyId, { diffLines: [] }),
     });
     applyFileChanged(store, {
       eventId: "dddddddd-0000-4000-8000-000000000416",
-      view: changeView("11111111-0000-4000-8000-0000000000e6", {
+      view: changeView(unknownId, {
         displayPath: "src/b.ts",
         diffUnavailable: { reason: "too_many" },
       }),
     });
-    const html = renderPage(store);
 
-    expect(html.match(/data-diff-not-delivered="true"/g) ?? []).toHaveLength(2);
-    expect(html).not.toContain('data-diff-region="lines"');
-    // 未知原因没有文案，不得拿 `size_limit` 的文案顶替。
-    expect(html).not.toContain("data-diff-unavailable");
-    expect(html).not.toContain(FILE_DIFF_UNAVAILABLE_LABELS.size_limit);
+    const emptyHtml = renderPage(store, { selectedChangeId: emptyId });
+    const unknownHtml = renderPage(store, { selectedChangeId: unknownId });
+    // 两处改动都退回「两者都没有」；详情在 DOM 里（未选中的那处收起），因此各出现两次。
+    expect(emptyHtml.match(/data-diff-not-delivered="true"/g) ?? []).toHaveLength(2);
+    expect(unknownHtml.match(/data-diff-not-delivered="true"/g) ?? []).toHaveLength(2);
+    for (const html of [emptyHtml, unknownHtml]) {
+      expect(html).not.toContain('data-diff-region="lines"');
+      // 未知原因没有文案，不得拿 `size_limit` 的文案顶替。
+      expect(html).not.toContain("data-diff-unavailable");
+      expect(html).not.toContain(FILE_DIFF_UNAVAILABLE_LABELS.size_limit);
+    }
   });
 });
 
@@ -361,7 +409,7 @@ describe("变更文件右栏：判定不出的统计省略而不是填零", () =
         outsideWorkspace: false,
       },
     });
-    const html = renderPage(store);
+    const html = renderPage(store, { selectedChangeId: "11111111-0000-4000-8000-0000000000d5" });
 
     expect(html).toContain('data-change-line-count-unavailable="true"');
     expect(html).not.toContain("data-change-added-lines");
@@ -384,7 +432,7 @@ describe("变更文件右栏：判定不出的统计省略而不是填零", () =
         outsideWorkspace: true,
       },
     });
-    const html = renderPage(store);
+    const html = renderPage(store, { selectedChangeId: "11111111-0000-4000-8000-0000000000d6" });
 
     expect(html).toContain('data-change-outside-workspace="true"');
     expect(html).toContain("工作区之外");

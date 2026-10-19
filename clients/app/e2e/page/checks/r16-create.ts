@@ -44,6 +44,7 @@ import {
   DIRECTORY_ID_BETA,
   DIRECTORY_PATH_ALPHA,
   DIRS_ROUTE,
+  SESSION_ALPHA,
   WORKSPACES_WITH_PATHS,
   dirRoute,
   sessionsForBothDirectories,
@@ -68,7 +69,7 @@ import {
 import type { Check, Mounted, ScenarioOptions } from "../support";
 import { typeIntoInput } from "./r15-directory";
 
-/** 创建弹层只出现在目录页与目录详情页；场景里没有任何授权设置可给（设备方向已无权限维度）。 */
+/** 创建弹层覆盖目录页、目录详情页与对话页；设备方向已无权限维度。 */
 function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions {
   return {
     canonicalOrigin: CANONICAL_ORIGIN,
@@ -242,7 +243,7 @@ function negotiateBrowse(mounted: Mounted): void {
 }
 
 const checks: readonly Check[] = [
-  ...[DIRS_ROUTE, dirRoute(DIRECTORY_ID_ALPHA)].map((route): Check => ({
+  ...[DIRS_ROUTE, dirRoute(DIRECTORY_ID_ALPHA), sessionRoute(SESSION_ALPHA)].map((route): Check => ({
     name: `R16 创建成功后自动进入新会话（${route.path}）`,
     async run() {
       const sessionId = "dddddddd-0000-4000-8000-0000000000ff";
@@ -257,6 +258,11 @@ const checks: readonly Check[] = [
           click(query(mounted.container, '[data-action="create-session"]'), "目录内新建");
           await waitFor(() => query(mounted.container, '[data-create-sheet]') !== null, "创建弹层");
           click(query(mounted.container, 'button[data-agent-id="codex-a"]'), "选择 Agent");
+        } else if (route.path.startsWith("/session/")) {
+          await waitFor(() => query(mounted.container, '[data-action="create-session-in-directory"]') !== null, "对话页新建入口");
+          click(query(mounted.container, '[data-action="create-session-in-directory"]'), "对话页新建");
+          await waitFor(() => query(mounted.container, '[data-create-sheet]') !== null, "创建弹层");
+          click(query(mounted.container, 'button[data-agent-id="codex-a"]'), "选择 Agent");
         } else {
           await openSheetWithAgent(mounted.container, "codex-a");
         }
@@ -265,7 +271,7 @@ const checks: readonly Check[] = [
         await waitFor(() => createFrame(mounted.host?.sent ?? []) !== null, "创建命令已发送");
         expectThat(mounted.host?.completeHeldCommand("session.create", { status: "accepted" }) === true, "确认受理");
         await waitFor(() => query(mounted.container, '[data-create-submission="accepted"]') !== null, "等待终态期间保留弹层");
-        expectThat(query(mounted.container, '[data-route="session"]') === null, "仅受理时不得跳转");
+        expectThat(query(mounted.container, `[data-session-id="${sessionId}"]`) === null, "仅受理时不得跳转到新会话");
         expectThat(mounted.host?.completeHeldCommand("session.create", { result: { sessionId } }) === true, "确认创建成功");
         await waitFor(() => query(mounted.container, `[data-session-id="${sessionId}"]`) !== null, "进入返回的新会话");
         expectThat(query(mounted.container, '[data-create-sheet]') === null, "导航后弹层已关闭");

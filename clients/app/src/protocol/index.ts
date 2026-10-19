@@ -23,6 +23,7 @@ export type * from "./common";
 export type * from "./auth";
 export type * from "./sync";
 export type * from "./command";
+export type * from "./session-files";
 export type * from "./event";
 export type * from "./error";
 export type * from "./pairing";
@@ -31,6 +32,13 @@ export type * from "./node-link";
 
 // 纯计算 + 编译期常量：无 Node 依赖，浏览器与 `src/domain/` 都可安全消费。
 export { projectView, isKnownEventType, KNOWN_EVENT_TYPES, KNOWN_EVENT_TYPE_COUNT } from "./event";
+export {
+  SESSION_FILES_COMMANDS,
+  SESSION_FILES_FEATURE,
+  decodeSessionFilesCommandBody,
+  decodeSessionFilesResult,
+  isSessionFilesCommandName,
+} from "./session-files";
 export {
   DEVICE_QR_VERSION,
   DEVICE_QR_PAYLOAD_BYTES,

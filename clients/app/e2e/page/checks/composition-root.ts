@@ -192,7 +192,8 @@ const checks: readonly Check[] = [
           query(mounted.container, '[data-directory-state="loading"]') !== null,
           "阻断态下目录页应是「等待快照」而不是伪造空数据",
         );
-        // 阻断原因在 `/hosts` 的主机面板；`mountScenario` 不挂共享外壳，因此这里不能断言胶囊。
+        // 阻断原因在 `/hosts` 的主机面板。`mountScenario` 现在挂的是与根布局同构的外壳
+        // （`Shell > Stack`），但胶囊表达的是连接状态而非阻断原因，因此这里仍只断言面板本身。
         navigate(HOSTS_ROUTE.path);
         await waitFor(
           () => query(mounted.container, '[data-blocking-detail="host_identity_changed"]') !== null,

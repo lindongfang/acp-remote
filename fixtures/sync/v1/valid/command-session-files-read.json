@@ -1,0 +1,18 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "a53d9f27-6b14-4c80-8e21-0f7b5d3c9a68",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "112",
+  "body": {
+    "requestId": "c81f3e60-4a27-4d95-b3f0-9e2c7a6d1b45",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "command": "session.files.read",
+    "payload": {
+      "path": "src/main.rs",
+      "purpose": "preview",
+      "offset": "0",
+      "version": "v3-c4f19a"
+    }
+  }
+}

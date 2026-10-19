@@ -23,7 +23,7 @@ import type { MessageView } from "../domain/conversation";
 import { buildDegradedEventModel } from "../features/degradation-model";
 import type { DegradedEventModel } from "../features/degradation-model";
 import { RAW_NOT_SYNCED_LABELS, UNSUPPORTED_LABELS } from "../features/degradation-model";
-import { eventMessage } from "../features/testing/fixtures";
+import { eventMessage, onlineStore, resources, session } from "../features/testing/fixtures";
 
 /** 渲染诊断抽屉。 */
 function renderDrawer(model: DegradedEventModel | null): string {
@@ -223,5 +223,71 @@ describe("R18 未识别事件与未知内容", () => {
     expect(html).toContain("结构化事件已收到");
     // 反例：若渲染一个假的图片位，这里会出现 <img，断言变红。
     expect(html).not.toContain("<img");
+  });
+});
+
+describe("诊断入口服务任意有视图/原文的事件", () => {
+  /** 已在线、快照里有 `s-1` 的仓库。 */
+  function storeWithSession() {
+    return onlineStore({ resources: resources({ sessions: [session({ id: "s-1" })] }) }).store;
+  }
+
+  it("正常工具调用记录：openDiagnostics 得到 explicit 模型，抽屉给出原文与说明", () => {
+    const store = storeWithSession();
+    const eventId = "dddddddd-0000-4000-8000-000000000701";
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "tool.call.started",
+        eventId,
+        sessionId: "s-1",
+        globalSequence: "70",
+        view: { toolCallId: "tool-raw", title: "读取 src/a.ts", state: "in_progress" },
+        acp: {
+          mediaType: "application/json",
+          rawJson: '{"phase":"started"}',
+          byteLength: "19",
+          sha256: "kQ8x2mB7yV1cJ0nP5rT9wZa3dE6fH8iL1sU4vX7yZ0aB2cD5eF8gH1iJ4kL7mN0p",
+        },
+      }),
+    });
+
+    // 前置：工具调用走专用视图，没有降级条目（对照下面「降级记录仍走原归因」）。
+    expect(store.conversationPage("s-1")?.degraded).toEqual([]);
+
+    store.openDiagnostics(eventId);
+    const model = store.diagnostics();
+    expect(model).not.toBeNull();
+    // 反例：诊断只服务降级记录时这里是 null → 抽屉渲染空片段。
+    expect(model?.reason).toEqual({ kind: "explicit" });
+    expect(model?.eventType).toBe("tool.call.started");
+    expect(model?.raw.kind).toBe("available");
+    expect(model?.view).toMatchObject({ toolCallId: "tool-raw" });
+
+    const html = renderDrawer(model);
+    expect(html).toContain('data-diagnostics-drawer="open"');
+    expect(html).toContain('data-degraded-reason="explicit"');
+    expect(html).toContain("以下是你请求查看的事件原文");
+    expect(html).toContain('data-raw-json="available"');
+    expect(html).toContain("{&quot;phase&quot;:&quot;started&quot;}");
+    expect(html).toContain("读取 src/a.ts");
+  });
+
+  it("对照：降级记录仍走原降级归因，不被 explicit 覆盖", () => {
+    const store = storeWithSession();
+    const eventId = "dddddddd-0000-4000-8000-000000000702";
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "acp.agent.vendor_status",
+        eventId,
+        sessionId: "s-1",
+        globalSequence: "71",
+        view: { phase: "review" },
+      }),
+    });
+
+    store.openDiagnostics(eventId);
+    expect(store.diagnostics()?.reason).toEqual({ kind: "no_dedicated_view" });
   });
 });

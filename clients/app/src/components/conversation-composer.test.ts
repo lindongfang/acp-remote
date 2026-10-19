@@ -10,8 +10,9 @@
  * - 取消未确认前只能是「取消请求已提交」：那时渲染结果里**没有**可点的取消按钮，也没有
  *   「已空闲」的呈现。
  *
- * 三态与关闭态另用「输入框是否只读 + 提交按钮是否可点」两组属性钉住；附件不受支持是**显式说明**
- * （断言说明文案与 `attachmentsSupported=false` 同时在），而不是「没提」。
+ * 三态另用「输入框是否只读 + 发送/停止按钮是否出现」两组属性钉住（进行中只读且不渲染发送，
+ * 只在轮次可取消时出现停止）；附件不受支持是**显式说明**（断言说明文案与 `attachmentsSupported=false`
+ * 同时在），而不是「没提」。
  */
 
 import { createElement } from "react";
@@ -32,7 +33,7 @@ function input(overrides: Partial<ConversationInputModel>): ConversationInputMod
     canSubmit: true,
     disabledReason: null,
     attachmentsSupported: false,
-    attachmentNotice: "v1 只支持文本输入：附件（图片/文件）不受支持，请改用文本描述。",
+    attachmentNotice: "📎 附件暂不支持 · 仅文本",
     draftInMemoryOnly: false,
     draftNotice: null,
     submission: { kind: "none" },
@@ -71,19 +72,45 @@ describe("输入区三态与附件边界", () => {
     // 附件：说明与标记同时在（「没提附件」与「说了不支持」是两件事）。
     expect(html).toContain('data-attachments-supported="false"');
     expect(html).toContain('data-attachment-notice="true"');
-    expect(html).toContain("附件（图片/文件）不受支持");
+    expect(html).toContain("附件暂不支持");
     // 三态之外没有「不可提交原因」的残留。
     expect(html).not.toContain("data-submit-unavailable");
   });
 
-  it("进行中：呈现进行中态，提交按钮不可点（未收到终态前不能再次提交）", () => {
-    const html = render(input({ state: "in_progress", canSubmit: false, disabledReason: "连接不可用，不能提交" }));
+  it("进行中：输入只读、不渲染发送，只呈现停止（可取消时）并说明按钮变化", () => {
+    const html = render(
+      input({
+        state: "in_progress",
+        canSubmit: false,
+        disabledReason: "会话进行中，完成后可继续输入",
+        cancel: { kind: "available", failure: null },
+      }),
+    );
 
     expect(html).toContain('data-composer="in_progress"');
-    expect(html).toContain('data-submit-enabled="false"');
-    expect(tagContaining(html, 'data-action="submit-prompt"')).toContain("disabled");
+    expect(tagContaining(html, 'data-composer-input="in_progress"')).toMatch(/readonly/i);
+    // 反例：进行中仍画出可用的发送按钮 → 下面两条会红。
+    expect(html).not.toContain('data-action="submit-prompt"');
+    expect(html).not.toContain("data-submit-enabled");
+    expect(html).toContain('data-action="cancel-turn"');
     expect(html).toContain("data-submit-unavailable");
-    expect(html).toContain("连接不可用，不能提交");
+    expect(html).toContain("会话进行中，完成后可继续输入");
+    expect(html).toContain("输入只读，按钮变为停止");
+  });
+
+  it("进行中且没有可取消的轮次：不渲染任何提交/取消按钮（不是点了没反应）", () => {
+    const html = render(
+      input({
+        state: "in_progress",
+        canSubmit: false,
+        disabledReason: "会话进行中，完成后可继续输入",
+        cancel: { kind: "unavailable" },
+      }),
+    );
+
+    expect(html).not.toContain('data-action="submit-prompt"');
+    expect(html).not.toContain('data-action="cancel-turn"');
+    expect(tagContaining(html, 'data-composer-input="in_progress"')).toMatch(/readonly/i);
   });
 
   it("已关闭：输入框只读、提交不可点，并说明原因", () => {
@@ -98,7 +125,14 @@ describe("输入区三态与附件边界", () => {
 
 describe("提交与取消以服务端终态为准", () => {
   it("待确认：只说等待服务端确认，不写「已发送」「已排队」", () => {
-    const html = render(input({ state: "in_progress", submission: { kind: "pending_confirmation", requestId: "req-1" } }));
+    const html = render(
+      input({
+        state: "in_progress",
+        canSubmit: false,
+        disabledReason: "会话进行中，完成后可继续输入",
+        submission: { kind: "pending_confirmation", requestId: "req-1" },
+      }),
+    );
 
     expect(html).toContain('data-submission="pending_confirmation"');
     expect(html).toContain('data-submission-request-id="req-1"');
@@ -145,6 +179,29 @@ describe("提交与取消以服务端终态为准", () => {
     const confirmed = render(input({ cancel: { kind: "confirmed" } }));
     expect(confirmed).toContain('data-cancel="confirmed"');
     expect(confirmed).toContain("服务端已确认取消");
+  });
+
+  it("取消请求已提交/已确认时，状态提示不与取消行自相矛盾", () => {
+    const inProgress = {
+      state: "in_progress" as const,
+      canSubmit: false,
+      disabledReason: "会话进行中，完成后可继续输入",
+    };
+
+    const requested = render(input({ ...inProgress, cancel: { kind: "requested", requestId: "req-c" } }));
+    expect(requested).toContain('data-cancel="requested"');
+    expect(requested).toContain("取消请求已提交");
+    // 反例：状态提示仍写「当前轮次不可取消」→ 与上一行互相否证。
+    expect(requested).not.toContain("当前轮次不可取消");
+    expect(requested).toContain("进行中 · 输入只读，按钮变为停止");
+
+    const confirmed = render(input({ ...inProgress, cancel: { kind: "confirmed" } }));
+    expect(confirmed).toContain('data-cancel="confirmed"');
+    expect(confirmed).not.toContain("当前轮次不可取消");
+
+    // 只有真正没有可取消轮次时才说「不可取消」。
+    const unavailable = render(input({ ...inProgress, cancel: { kind: "unavailable" } }));
+    expect(unavailable).toContain("当前轮次不可取消");
   });
 
   it("取消失败：回到可取消并带上失败原因，而不是冒充成功", () => {

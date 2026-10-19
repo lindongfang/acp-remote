@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-10-17",
+  "revision": "2026-10-19",
   "description": "ACP Remote feature ID 机器登记 v1：Sync 与 Node Link 的封闭 feature 词表。协议文档 §5.2 / §11.3 的 feature 表、fixture 里出现的 feature ID 与本文件由 scripts/check-features.mjs 断言逐一相等；新增或删除 feature 必须先改本文件。required 表示协议要求每次协商都必须选中该 feature（产品必须支持由 delivery 表达）。",
   "protocols": {
     "sync": {
@@ -75,6 +75,12 @@
         {
           "id": "core.file-diff.v1",
           "description": "`file.changed` 事件视图携带结构化差异行（§10.3 的 `diffLines` 与 `diffUnavailable`；只在协商时出现该键）",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.session-files.v1",
+          "description": "Sync 面当前会话工作目录内的只读文件查询：`session.files.list`/`session.files.read` 与 `session.git.status`/`session.git.diff`（§11.5 的请求/结果形状、§14 的分页与内容预算）",
           "delivery": "mvp",
           "required": false
         }

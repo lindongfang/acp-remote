@@ -15,7 +15,9 @@
 //! - [`daemon`]：启动序列、接受循环、周期任务与关闭序列；
 //! - [`cli`]：`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8 映射表的全部子命令（`daemon start|stop|status`、
 //!   本地配置/配对/Export/Import、`doctor`）与唯一的错误出口；
-//! - [`stdio`]：`acp-stdio` 的 stdin/stdout ↔ channel `0x02` 字节泵（不进管理信封）。
+//! - [`stdio`]：`acp-stdio` 的 stdin/stdout ↔ channel `0x02` 字节泵（不进管理信封）；
+//! - [`session_files`]：`core::ports::SessionFiles` 的只读原生实现（会话根内枚举/内容快照/Git 查询），
+//!   由组合根注入，见 `docs/SECURITY_DESIGN.md` §12.3。
 //!
 //! 唯一权威：`docs/CONFIG_REFERENCE.md`（配置键与默认值）、`docs/LOCAL_ADMIN_PROTOCOL.md`（通道与方法）、
 //! `docs/SECURITY_DESIGN.md` §12.1（启动/关闭顺序）。本 crate 只装配，不承载业务规则；`app` 可以依赖
@@ -30,6 +32,7 @@ pub mod daemon;
 pub mod identity;
 pub mod lock;
 pub mod logging;
+pub mod session_files;
 pub mod stdio;
 
 pub use client::{ClientOutcome, LocalAdminClient, outcome_of};

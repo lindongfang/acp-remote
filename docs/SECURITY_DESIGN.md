@@ -334,6 +334,10 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `session.config.set` | mutation | conditional_mvp |
 | `permission.resolve` | mutation | mvp |
 | `session.create` | mutation | mvp（Node Link 与 Sync 共用命令名，payload 不同） |
+| `session.files.list` | query | mvp |
+| `session.files.read` | query | mvp |
+| `session.git.status` | query | mvp |
+| `session.git.diff` | query | mvp |
 | `session.resume` | mutation | conditional_mvp（仅 Node Link） |
 
 仍由各层独立执行的下界：schema/长度/频率限制、会话状态机、幂等键、连接上限，以及本地管理入口的 OS 用户边界。
@@ -369,7 +373,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 - 可用时启用 Trusted Types；不支持的平台仍必须通过安全组件和 sanitizer 保证相同内容边界。
 - production source map 不得公开包含本地路径、secret 或未发布源信息；是否发布独立调试符号由发布流程决定。
 
-`[实现现状]`（2026-10-15，`sync-ui-hosting`）PWA 静态资源由 Daemon 同源托管在根路径，其 CSP **由响应头下发**（不依赖文档内的 `<meta>` 元标记——元标记约束不了 `frame-ancestors` 之类的指令），取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线 `default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`。与它一起下发的还有与两个配对端点同取值的 `cache-control: no-store`、`pragma: no-cache`、`referrer-policy: no-referrer`、`x-content-type-options: nosniff`；实现见 `crates/server/src/transport/net/static_ui.rs`，经接入层的「每路径默认响应头」缝下发，因此 Host 边界在静态 path 上的 400 也带这些头。**基线未被放宽**：产物里的两条内联 `<style>`（`expo-reset` 与 `react-native-web` 的运行时样式表）已由前端侧移除（`ui-csp-inline-styles`）——入口文档把 reset 外置成同源 `/entry-reset.css`，并在 bundle 之前声明一个**必须保持为空**的同源 `/rnw-stylesheet.css`，`react-native-web` 于模块求值期复用该 `<link>` 的 `sheet`、把它运行时生成的原子类 `insertRule` 进去；因此样式现在由**同源外部样式表**交付，CSP 取值一字未动。**口径要说准**：`insertRule` 本身**不是** CSP 的检查点——向一个受允的同源样式表写入规则既不能被描述成「CSP 阻止了样式注入」，也不能被描述成「放宽了 CSP」；样式文本的来源仍是同源 bundle（`script-src 'self'` 已信任），这条控制在原内联形态下本就已失效，本次只是消除冲突。裁定与判据见归档的 `openspec/changes/archive/2026-10-16-ui-csp-inline-styles/design.md`（D1/D3/R4）。
+`[实现现状]`（2026-10-15，`sync-ui-hosting`）PWA 静态资源由 Daemon 同源托管在根路径，其 CSP **由响应头下发**（不依赖文档内的 `<meta>` 元标记——元标记约束不了 `frame-ancestors` 之类的指令），取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线 `default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`。其中 `img-src 'self' blob:` 是只读图片预览的唯一增量（Blob URL 由已认证查询得到的字节创建），`script-src` 等其余指令未放宽。与它一起下发的还有与两个配对端点同取值的 `cache-control: no-store`、`pragma: no-cache`、`referrer-policy: no-referrer`、`x-content-type-options: nosniff`；实现见 `crates/server/src/transport/net/static_ui.rs`，经接入层的「每路径默认响应头」缝下发，因此 Host 边界在静态 path 上的 400 也带这些头。**基线未被放宽**：产物里的两条内联 `<style>`（`expo-reset` 与 `react-native-web` 的运行时样式表）已由前端侧移除（`ui-csp-inline-styles`）——入口文档把 reset 外置成同源 `/entry-reset.css`，并在 bundle 之前声明一个**必须保持为空**的同源 `/rnw-stylesheet.css`，`react-native-web` 于模块求值期复用该 `<link>` 的 `sheet`、把它运行时生成的原子类 `insertRule` 进去；因此样式现在由**同源外部样式表**交付，CSP 取值一字未动。**口径要说准**：`insertRule` 本身**不是** CSP 的检查点——向一个受允的同源样式表写入规则既不能被描述成「CSP 阻止了样式注入」，也不能被描述成「放宽了 CSP」；样式文本的来源仍是同源 bundle（`script-src 'self'` 已信任），这条控制在原内联形态下本就已失效，本次只是消除冲突。裁定与判据见归档的 `openspec/changes/archive/2026-10-16-ui-csp-inline-styles/design.md`（D1/D3/R4）。
 
 ### 11.2 不可信内容渲染
 
@@ -435,6 +439,18 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 - 文件路径展示和下载必须重新检查其属于会话授权边界；不能只依赖客户端传来的 path。
 - 规范化路径后再比较，处理 symlink、junction、大小写、UNC 和 `..`。可判定规则（权威实现归 core，见 `CORE_PORTS_AND_STORAGE.md` §11.9）：只接受**绝对路径**；写入与使用前都必须存在且是**目录**；`canonicalize` 后的结果才是持久权威值；拒绝相对路径与含 `..` 的输入；UNC/网络路径允许但记一次结构化警告；路径与规范化结果 MUST NOT 出现在事件、错误 `details`、日志或审计记录里，也不得出现在下面两处例外之外的任何 `command.result` 里。例外**只有两处**：一是快照的 `workspaces` 资源条目——已认证设备在那里收到**已记录**目录的规范化权威值（下发形式是剥掉平台 verbatim 前缀后的规范化结果）；二是只读目录浏览 `workspace.browse` 的 `command.result`——协商了 `core.workspace-browse.v1` 的设备在那里收到被请求那一层的直接子目录绝对路径与逐字回显的父路径（§10.2）。口径是「不得泄漏**客户端尚未知道的**宿主路径」：客户端自己提交的目录因此不构成泄漏，但它同样 MUST NOT 被回显为对端可见字段，也不会被登记为别名。`workspace.browse`（§10.2）只返回它必然要给客户端的那一层条目（名称、绝对路径、是否已登记），不得借该命令泄漏其它层的路径，且不产生登记、缓存或审计副作用。
 - Agent 的实际文件/命令权限仍由 Agent sandbox 和用户配置控制；ACP Remote 不能虚报更严格隔离。
+
+### 12.4 会话文件读取与 Git 查询
+
+`[决定]` 认证设备可以只读浏览当前本机会话工作目录（`workspace_cwd`）内的文件、预览文本/图片并主动下载；这不是新的授权维度，命令仍走 Sync 既有认证与 feature 协商。实现边界：
+
+- **根边界按实际对象判定**：core 只接受根内相对路径（拒绝绝对路径、盘符、UNC、`..`、NUL、ADS 冒号与 `.git` 管理路径）；原生适配器（`crates/app/src/session_files/`）必须重新规范化根与目标，并以**实际打开句柄的身份**确认对象仍在校验时的根内位置——Unix 比较 `dev+ino`，Windows 比较创建/修改时间、大小与属性（std 的 `file_index` 尚不稳定且仓库禁止 `unsafe`）。校验后被替换的链接、根外 symlink/junction、指向自身或祖先的循环链接一律拒绝；根外链接只显示名称，不下发目标绝对路径。目录枚举还逐项复核**非链接子项的规范父目录等于已校验目录**，枚举期间目录被替换成根外 junction 再换回时，无法证明归属的名称被跳过并计数，不当作本目录条目返回。`.` / `.GIT` 任一分量永久隐藏且不可读；Windows 设备保留名（`CON`/`NUL`/`COM1` 等）在打开前拒绝。
+- **只读普通文件**：只读取普通文件；命名管道、设备、套接字在列表里标记不可打开，读取直接拒绝且不得挂起（Unix 先按文件类型判定）。
+- **正文保护**：预览与下载复用已认证 Sync 查询，不生成 bearer URL。预览只取得固定预算（文本 256 KiB / 栅格图片 4 MiB）并如实给出原始大小与截断标记；下载超过 64 MiB 返回 `resource.result_too_large`，不静默截断。内容快照只在内存中、绑定连接期版本，单块不超过 32 KiB；每块发出前重新检查源文件身份，变化即废弃快照。快照总量与条数有界，连接断开/取消/撤销/空闲 60 秒都经同一释放入口，**不写临时正文文件、不写日志**。
+- **Git 是可选运行依赖**：Git status/diff 通过受管理的本机 `git` 子进程执行（Windows Job Object / Unix 进程组，10 秒超时，超时/取消/断连结束整棵进程树），固定参数、不经 shell、用户路径只作为 `:(literal)` pathspec。查询使用 `--no-optional-locks`/`GIT_OPTIONAL_LOCKS=0`，不写索引或工作树，不调用 checkout/clean/add/reset；禁用 external diff、textconv、fsmonitor、pager、hooks 与仓库全部有效配置层（含 `extensions.worktreeConfig` 的 `.git/config.worktree` 与 `include.path` 展开）声明的 `filter.*` 命令（含 `.gitattributes` 里 `filter=` 指向的空驱动名；驱动名无法按 UTF-8 无损解码、含 `=` 或含控制字符时——这些名字无法生成精确的覆盖键——整个枚举失败关闭）；枚举失败即报告 Git 不可用，不执行未识别的仓库命令。Git 缺失或不是仓库时分别返回 `gitState = unavailable` / `not_repository`，文件浏览照常；忽略过滤不可用时显式降级，不声称已过滤。
+- **版本与错误**：文件内容、版本令牌与 Git stderr 原文不进入日志或协议错误；预览/快照过期返回明确不可用，不复用会话 version conflict 语义。
+
+`[实现现状]` 原生只读适配器已实现并有 Windows 真实 junction/替换/Job Object 与临时仓库测试；Sync 入站门控与组合根接线完成前，设备端尚不能调用这四条查询（feature 未宣告）。
 
 ## 13. 持久化与本地数据保护
 

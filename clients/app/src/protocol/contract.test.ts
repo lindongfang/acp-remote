@@ -37,7 +37,7 @@ import type {
 } from "./command";
 import type { AuthAuthenticated } from "./auth";
 import type { WorkspaceRef } from "./common";
-import type { EventOriginKind, FileChangedDiff, FileChangedFields } from "./event";
+import type { EventOriginKind, FileChangedDiff, FileChangedFields, ToolCallFields, ToolCallStartedView } from "./event";
 import type { SnapshotItemHistory, SnapshotItemWorkspaces } from "./sync";
 
 /**
@@ -72,7 +72,7 @@ const HISTORY_KEY_MIRROR: Record<keyof SnapshotItemHistory, true> = {
 type UnionKeys<T> = T extends unknown ? keyof T : never;
 
 /**
- * `CommandName` 词表的编译期镜像（14 条 Sync 面命令）。
+ * `CommandName` 词表的编译期镜像（18 条 Sync 面命令）。
  *
  * 与 `INCLUDE_MIRROR` 同理：多一个或少一个取值都会让本文件编译失败，运行期那句比对的是
  * 「TS 联合 ↔ `command.schema.json` 的 `commandName` enum」这一对。新增/删除命令时既要在
@@ -93,6 +93,10 @@ const COMMAND_NAME_MIRROR: Record<CommandName, true> = {
   "session.config.set": true,
   "permission.resolve": true,
   "session.create": true,
+  "session.files.list": true,
+  "session.files.read": true,
+  "session.git.status": true,
+  "session.git.diff": true,
 };
 
 /**
@@ -116,6 +120,19 @@ const FILE_CHANGED_FIELD_MIRROR: Record<keyof FileChangedFields, true> = {
   addedLines: true,
   deletedLines: true,
   outsideWorkspace: true,
+};
+
+/**
+ * `tool.call.*` 的命名字段集合的编译期镜像（`toolDetail` 是唯一可选键）。
+ *
+ * 运行期与 `event-views.schema.json` 的三个 `$defs` 比对：schema 增删键而镜像没跟上时断言变红。
+ */
+const TOOL_CALL_FIELD_MIRROR: Record<keyof ToolCallFields, true> = {
+  toolCallId: true,
+  turnId: true,
+  title: true,
+  state: true,
+  toolDetail: true,
 };
 
 /**
@@ -214,6 +231,21 @@ function defs(schema: Record<string, unknown>): Record<string, unknown> {
   const value = schema["$defs"];
   expect(typeof value).toBe("object");
   return value as Record<string, unknown>;
+}
+
+/** 从 `unknown` 对象按属性名读取；不是对象时返回 `undefined`（schema 是外部 JSON，逐层确认）。 */
+function schemaField(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return Object.getOwnPropertyDescriptor(value, key)?.value;
+}
+
+/** 读取一个必须是对象的 schema 字段；形状不对时直接失败，后续断言才有意义。 */
+function schemaObjectField(value: unknown, key: string): object {
+  const field = schemaField(value, key);
+  if (typeof field !== "object" || field === null || Array.isArray(field)) {
+    throw new Error(`schema 字段 ${key} 不是对象`);
+  }
+  return field;
 }
 
 describe("AC3：消费同一份仓库根协议资产", () => {
@@ -618,7 +650,40 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect(unavailable.properties.reason.enum).toEqual(["size_limit"]);
   });
 
-  it("commandName 词表与镜像逐项相等，body.oneOf 覆盖全部 14 条 Sync 命令", () => {
+  it("tool.call.* 的命名字段含可选 toolDetail，三个视图形状一致", () => {
+    const schema = readSchema("event-views.schema.json");
+    const defsMap = defs(schema);
+    for (const eventType of ["tool.call.started", "tool.call.updated", "tool.call.completed"] as const) {
+      const view = defsMap[eventType];
+      const viewProperties = schemaObjectField(view, "properties");
+      // 新增字段是**可选**的：必填集合一字未动，旧服务端的事件仍被接受。
+      expect(schemaField(view, "required")).toEqual(["toolCallId", "turnId", "title", "state"]);
+      expect(Object.keys(viewProperties).sort()).toEqual(Object.keys(TOOL_CALL_FIELD_MIRROR).sort());
+      expect(schemaField(view, "additionalProperties")).toBe(true);
+
+      const toolDetail = schemaObjectField(viewProperties, "toolDetail");
+      expect(schemaField(toolDetail, "type")).toBe("object");
+      expect(schemaField(toolDetail, "minProperties")).toBe(1);
+      // 未知键按值保留：客户端只读已知部分，不因未来新增字段拒收。
+      expect(schemaField(toolDetail, "additionalProperties")).toBe(true);
+      const detailProperties = schemaObjectField(toolDetail, "properties");
+      expect(Object.keys(detailProperties).sort()).toEqual(["input", "output", "text", "truncatedParts"]);
+      // `input`/`output` 在场时不得是 JSON `null`：缺席才是「没有提供」。
+      expect(schemaField(detailProperties, "input")).toEqual({ not: { type: "null" } });
+      expect(schemaField(detailProperties, "output")).toEqual({ not: { type: "null" } });
+      const text = schemaObjectField(detailProperties, "text");
+      expect(schemaField(text, "type")).toBe("array");
+      expect(schemaField(text, "minItems")).toBe(1);
+      expect(schemaField(schemaObjectField(text, "items"), "type")).toBe("string");
+      const truncated = schemaObjectField(detailProperties, "truncatedParts");
+      expect(schemaField(truncated, "type")).toBe("array");
+      expect(schemaField(truncated, "minItems")).toBe(1);
+      expect(schemaField(truncated, "uniqueItems")).toBe(true);
+      expect(schemaField(schemaObjectField(truncated, "items"), "enum")).toEqual(["input", "output", "text"]);
+    }
+  });
+
+  it("commandName 词表与镜像逐项相等，body.oneOf 覆盖全部 18 条 Sync 命令", () => {
     const schema = readSchema("command.schema.json");
     const defsMap = defs(schema);
     const commandName = defsMap["commandName"] as { enum: string[] };
@@ -722,6 +787,107 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect(query?.then?.properties?.["terminalEventId"]).toEqual({ type: "null" });
   });
 
+  it("session.files.* / session.git.* 的请求与结果形状与镜像一致", () => {
+    const defsMap = defs(readSchema("command.schema.json"));
+
+    // 根内相对路径：上限 4096，且 pattern 拒绝父引用/盘符/控制字符与 `.git` 分量。
+    const relativePath = defsMap["sessionRelativePath"] as { type: string; minLength: number; maxLength: number; pattern: string };
+    expect(relativePath.type).toBe("string");
+    expect(relativePath.minLength).toBe(1);
+    expect(relativePath.maxLength).toBe(4096);
+    expect(relativePath.pattern).toContain("[gG][iI][tT]");
+
+    const list = defsMap["sessionFilesList"] as {
+      required: string[];
+      properties: { command: unknown; payload: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } };
+    };
+    expect(list.required).toEqual(["requestId", "command", "sessionId", "payload"]);
+    expect(list.properties.command).toEqual({ const: "session.files.list" });
+    expect(list.properties.payload.required).toEqual(["path", "hideIgnored"]);
+    expect(list.properties.payload.additionalProperties).toBe(false);
+    expect(Object.keys(list.properties.payload.properties).sort()).toEqual(["after", "hideIgnored", "path"]);
+
+    const read = defsMap["sessionFilesRead"] as {
+      properties: { command: unknown; payload: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } };
+    };
+    expect(read.properties.command).toEqual({ const: "session.files.read" });
+    expect(read.properties.payload.required).toEqual(["path", "purpose", "offset"]);
+    expect(read.properties.payload.additionalProperties).toBe(false);
+    expect(Object.keys(read.properties.payload.properties).sort()).toEqual(["offset", "path", "purpose", "version"]);
+    expect(defsMap["sessionFilesReadPurpose"]).toEqual({ enum: ["preview", "download"] });
+
+    const gitStatus = defsMap["sessionGitStatus"] as {
+      properties: {
+        command: unknown;
+        payload: { required?: string[]; additionalProperties: boolean; properties: Record<string, unknown> };
+      };
+    };
+    expect(gitStatus.properties.command).toEqual({ const: "session.git.status" });
+    // 空 payload 的 `required` 键可以缺省（schema 不写 `required: []`）：两种写法都表示「无必填键」。
+    expect(gitStatus.properties.payload.required ?? []).toEqual([]);
+    expect(Object.keys(gitStatus.properties.payload.properties)).toEqual(["after"]);
+
+    const gitDiff = defsMap["sessionGitDiff"] as {
+      properties: { command: unknown; payload: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } };
+    };
+    expect(gitDiff.properties.command).toEqual({ const: "session.git.diff" });
+    expect(gitDiff.properties.payload.required).toEqual(["path"]);
+    expect(Object.keys(gitDiff.properties.payload.properties)).toEqual(["path"]);
+
+    const listResult = defsMap["sessionFilesListResult"] as { required: string[]; properties: Record<string, unknown> };
+    expect([...listResult.required].sort()).toEqual(["entries", "gitState", "path"]);
+    expect(schemaField(defsMap["gitState"], "enum")).toEqual(["available", "not_repository", "unavailable"]);
+    expect(defsMap["sessionFileEntryKind"]).toEqual({ enum: ["file", "directory", "link", "other"] });
+    expect(defsMap["sessionFileRestrictedReason"]).toEqual({ enum: ["outside_root", "unreadable", "unsupported"] });
+    expect(defsMap["sessionFileContentKind"]).toEqual({ enum: ["text", "image", "binary"] });
+
+    const readResult = defsMap["sessionFilesReadResult"] as { required: string[] };
+    expect([...readResult.required].sort()).toEqual([
+      "dataBase64",
+      "eof",
+      "kind",
+      "offset",
+      "path",
+      "previewTruncated",
+      "sizeBytes",
+      "version",
+    ]);
+    expect(defsMap["gitFileStatus"]).toEqual({
+      enum: ["added", "modified", "deleted", "renamed", "untracked"],
+    });
+    expect(defsMap["gitDiffBase"]).toEqual({ enum: ["head", "empty"] });
+    expect(defsMap["gitDiffKind"]).toEqual({ enum: ["text", "binary", "conflict"] });
+    expect(defsMap["gitDiffUnavailableReason"]).toEqual({
+      enum: ["not_repository", "git_unavailable", "too_large"],
+    });
+
+    const statusResult = defsMap["sessionGitStatusResult"] as { required: string[] };
+    expect([...statusResult.required].sort()).toEqual(["entries", "gitState"]);
+    const diffResult = defsMap["sessionGitDiffResult"] as { required: string[] };
+    expect([...diffResult.required].sort()).toEqual(["base", "kind", "path", "truncated"]);
+
+    // completed 结果与命令名绑定，且四条查询都没有 terminalEventId。
+    const commandResult = defsMap["commandResult"] as {
+      properties: { body: { allOf: { if?: unknown; then?: { properties?: Record<string, unknown> } }[] } };
+    };
+    const allOf = commandResult.properties.body.allOf.map((branch) => ({
+      if: branch.if as { properties?: { command?: { const?: string; enum?: string[] } } } | undefined,
+      then: branch.then,
+    }));
+    const bindings: readonly [string, string][] = [
+      ["session.files.list", "sessionFilesListResult"],
+      ["session.files.read", "sessionFilesReadResult"],
+      ["session.git.status", "sessionGitStatusResult"],
+      ["session.git.diff", "sessionGitDiffResult"],
+    ];
+    for (const [command, resultDef] of bindings) {
+      const bound = allOf.find((branch) => branch.if?.properties?.command?.const === command);
+      expect(bound?.then?.properties?.["result"]).toEqual({ $ref: `#/$defs/${resultDef}` });
+      const query = allOf.find((branch) => branch.if?.properties?.command?.enum?.includes(command) === true);
+      expect(query?.then?.properties?.["terminalEventId"]).toEqual({ type: "null" });
+    }
+  });
+
   it("agent.connected / agent.disconnected 的 state 是唯一取值的封闭枚举", () => {
     const schema = readSchema("event-views.schema.json");
     const connected = defs(schema)["agent.connected"] as { properties: { state: { enum: string[] } } };
@@ -752,6 +918,35 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     const projected = projectView("agent.message.delta", view);
     expect(projected.kind).toBe("known");
     expect(projected.view).toHaveProperty("futureField");
+  });
+
+  it("tool.call.* 的 toolDetail 可缺席，在场时原样透传（含未知字段）", () => {
+    // 编译期：构造一个显式类型的视图——`toolDetail` 可选，已知部分按声明类型，未知键由 OpenView 保留。
+    const viewWithDetail: ToolCallStartedView = {
+      toolCallId: "tc-1",
+      turnId: "t-1",
+      title: "读取文件",
+      state: "running",
+      toolDetail: {
+        input: { path: "src/a.ts" },
+        text: ["第一块"],
+        truncatedParts: ["output"],
+        futureField: { nested: true },
+      },
+    };
+    const projected = projectView("tool.call.started", viewWithDetail);
+    if (projected.kind !== "known") throw new Error("tool.call.started 应被识别");
+    // `projectView` 只做 eventType 判别，不校验字段：`toolDetail`（含未知键）按值留存。
+    const view: Readonly<Record<string, unknown>> = projected.view;
+    expect(view["toolDetail"]).toEqual(viewWithDetail.toolDetail);
+
+    const withoutDetail: ToolCallStartedView = {
+      toolCallId: "tc-1",
+      turnId: "t-1",
+      title: "读取文件",
+      state: "running",
+    };
+    expect(projectView("tool.call.updated", withoutDetail).kind).toBe("known");
   });
 });
 
@@ -829,6 +1024,7 @@ describe("F1：protocol barrel 不得把 Node 内置模块带进 web bundle", ()
   it("barrel 的运行期重导出只含不依赖 node:* 的模块（含传递闭包）", () => {
     expect(runtimeReexportTargets(readFileSync(barrelPath, "utf8"))).toEqual([
       "./event",
+      "./session-files",
       "./device-qr",
     ]);
     expect(nodeBuiltinsReachableFromBarrel()).toEqual([]);

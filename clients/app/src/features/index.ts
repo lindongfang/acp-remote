@@ -140,7 +140,7 @@ export type {
 export {
   CONVERSATION_NO_DIRECTORY_NOTICE,
   CONVERSATION_SECONDARY_VIEWS,
-  CONVERSATION_SIDEBAR_BATCH_SIZE,
+  CONVERSATION_SIDEBAR_PAGE_SIZE,
   DEFAULT_CONVERSATION_SECONDARY_VIEW,
   buildConversationModel,
   buildConversationSidebar,
@@ -159,6 +159,53 @@ export {
   isDegradedRecord,
   rawAvailabilityOf,
 } from "./degradation-model";
+
+// ── 文件栏三来源与互斥内容态（WP4）─────────────────────────────────────────
+export type {
+  AllFilesSourceState,
+  FileContentState,
+  FileContentView,
+  FileGitDiffContent,
+  FilePreviewContent,
+  FileSessionChangesContent,
+  FileSource,
+  FileViewContext,
+  GitChangesSourceState,
+  SessionFilesPanelModel,
+  SessionFilesSourcesState,
+  SessionFilesState,
+} from "./session-files";
+export {
+  FILE_IMAGE_PREVIEW_BUDGET_BYTES,
+  FILE_PREVIEW_BUDGET_BYTES,
+  FILE_REFRESH_DEBOUNCE_MS,
+  FILE_REFRESH_MAX_RETRY_MS,
+  FILE_SOURCES,
+  FILE_SOURCE_LABELS,
+  buildSessionFilesPanelModel,
+  contentForSession,
+  emptyAllFilesDirectory,
+  emptyGitChanges,
+  emptySources,
+  initialSessionFilesState,
+  selectedSourceOf,
+  sessionChangesForPath,
+  sourceUnsupportedNotice,
+  sourcesOf,
+} from "./session-files";
+export type {
+  DownloadGate,
+  DownloadPortLike,
+  DownloadSinkLike,
+  SessionFileDownloadState,
+  SessionFileDownloaderOptions,
+} from "./session-file-download";
+export {
+  DOWNLOAD_RETRY_MAX_MS,
+  SESSION_FILE_DOWNLOAD_BUDGET_BYTES,
+  SessionFileDownloader,
+  safeDownloadFileName,
+} from "./session-file-download";
 
 // ── R19 主机与连接 ──────────────────────────────────────────────────────────
 export type { AgentRowModel, HostIdentityModel, HostPanelModel } from "./host-panel-model";

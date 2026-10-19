@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "f5a3c9e1-2d74-4b68-9c05-8e1b6d3f0a27",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "117",
+  "body": {
+    "requestId": "3a7d1f95-6c48-4b20-8e57-2f9b0a4c6d81",
+    "command": "session.git.diff",
+    "status": "completed",
+    "acceptedAt": "2026-10-19T08:12:04.000Z",
+    "terminalEventId": null,
+    "result": {
+      "path": "src/main.rs",
+      "base": "head",
+      "kind": "text",
+      "diffLines": [
+        "@@ -1,2 +1,3 @@",
+        " fn main() {",
+        "+    run();",
+        " }"
+      ],
+      "truncated": false
+    },
+    "error": null
+  }
+}

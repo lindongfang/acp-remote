@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-10-17",
+  "revision": "2026-10-19",
   "commands": [
     { "name": "session.list", "kind": "query", "scope": "session.list", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "session.read", "kind": "query", "scope": "session.read", "transport": ["sync", "node_link"], "delivery": "mvp" },
@@ -16,6 +16,10 @@
     { "name": "session.config.set", "kind": "mutation", "scope": "session.config.set", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
     { "name": "permission.resolve", "kind": "mutation", "scope": "permission.resolve", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "session.create", "kind": "mutation", "scope": "session.create", "transport": ["sync", "node_link"], "delivery": "mvp" },
+    { "name": "session.files.list", "kind": "query", "scope": "session.files.list", "transport": ["sync"], "delivery": "mvp" },
+    { "name": "session.files.read", "kind": "query", "scope": "session.files.read", "transport": ["sync"], "delivery": "mvp" },
+    { "name": "session.git.status", "kind": "query", "scope": "session.git.status", "transport": ["sync"], "delivery": "mvp" },
+    { "name": "session.git.diff", "kind": "query", "scope": "session.git.diff", "transport": ["sync"], "delivery": "mvp" },
     { "name": "session.resume", "kind": "mutation", "scope": "session.resume", "transport": ["node_link"], "delivery": "conditional_mvp" }
   ],
   "localCapabilities": [

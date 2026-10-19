@@ -5,7 +5,7 @@
 //! [`crate::envelope`] 承载；本模块只承载 `body`，与 `auth`/`control`/`error` 三个家族一致。
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它
-//! `transport` 含 `sync` 的 14 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
+//! `transport` 含 `sync` 的 18 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
 //! 按 `command.unsupported` 拒绝）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
@@ -30,7 +30,7 @@ use serde_json::value::RawValue;
 
 use crate::common::{
     ConfigOptionValue, ConfigOptionView, DecimalString, ModeState, NonEmptyText, Nullable,
-    PromptContentBlock, PublicError, RawObject, SessionSummary, Timestamp, UIntAtLeast, Uuid,
+    PromptContentBlock, PublicError, RawObject, SessionSummary, Text, Timestamp, UIntAtLeast, Uuid,
     ValueError, deserialize_optional_non_null,
 };
 use crate::sync::{
@@ -47,7 +47,7 @@ pub type RequestId = Uuid;
 
 /// `commandName`（`command.schema.json#/$defs/commandName`）。
 ///
-/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 14 条命令，顺序
+/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 18 条命令，顺序
 /// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.resume` 的结果）。
 ///
 /// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧是
@@ -86,11 +86,19 @@ pub enum CommandName {
     PermissionResolve,
     /// `session.create`
     SessionCreate,
+    /// `session.files.list`
+    SessionFilesList,
+    /// `session.files.read`
+    SessionFilesRead,
+    /// `session.git.status`
+    SessionGitStatus,
+    /// `session.git.diff`
+    SessionGitDiff,
 }
 
 impl CommandName {
     /// 与 `compatibility/commands/v1/commands.json` 的 sync 子集逐条相等，顺序一致。
-    pub const ALL: [CommandName; 14] = [
+    pub const ALL: [CommandName; 18] = [
         CommandName::SessionList,
         CommandName::SessionRead,
         CommandName::CommandStatus,
@@ -105,6 +113,10 @@ impl CommandName {
         CommandName::SessionConfigSet,
         CommandName::PermissionResolve,
         CommandName::SessionCreate,
+        CommandName::SessionFilesList,
+        CommandName::SessionFilesRead,
+        CommandName::SessionGitStatus,
+        CommandName::SessionGitDiff,
     ];
 
     /// 查询命令（`docs/SYNC_PROTOCOL.md` §11.5 的"类别"列）：不进入异步队列，`command.result` 的
@@ -118,6 +130,10 @@ impl CommandName {
                 | CommandName::SessionModeList
                 | CommandName::SessionConfigList
                 | CommandName::WorkspaceBrowse
+                | CommandName::SessionFilesList
+                | CommandName::SessionFilesRead
+                | CommandName::SessionGitStatus
+                | CommandName::SessionGitDiff
         )
     }
 
@@ -160,6 +176,10 @@ impl CommandName {
             CommandName::SessionConfigSet => "session.config.set",
             CommandName::PermissionResolve => "permission.resolve",
             CommandName::SessionCreate => "session.create",
+            CommandName::SessionFilesList => "session.files.list",
+            CommandName::SessionFilesRead => "session.files.read",
+            CommandName::SessionGitStatus => "session.git.status",
+            CommandName::SessionGitDiff => "session.git.diff",
         }
     }
 }
@@ -344,6 +364,511 @@ pub struct WorkspaceBrowseEntry {
 pub struct WorkspaceBrowseResult {
     pub path: Nullable<WorkspaceBrowsePath>,
     pub entries: Vec<WorkspaceBrowseEntry>,
+    pub truncated: bool,
+}
+
+/// `session.files.list` / `session.git.*` 的根内相对路径形状（`command.schema.json#/$defs/sessionRelativePath`）。
+///
+/// 与 core 的 `SessionFilePath` 同口径：非空、≤4096 字符、拒绝绝对路径/盘符/UNC/父引用/`.`、NUL、
+/// 任意冒号（ADS 与盘符）以及任一分量为 `.git`。wire 层只做形状判定，根边界由原生适配器按实际打开
+/// 的对象验证。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SessionRelativePath(String);
+
+impl SessionRelativePath {
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        validate_relative_path(text, false)?;
+        Ok(Self(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// `session.files.list` 的路径：空串 = 会话根，其余是根内相对目录。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SessionFilesPath(Option<SessionRelativePath>);
+
+impl SessionFilesPath {
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        if text.is_empty() {
+            validate_relative_path(text, true)?;
+            Ok(Self(None))
+        } else {
+            SessionRelativePath::parse(text).map(|path| Self(Some(path)))
+        }
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.0.is_none()
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref().map_or("", SessionRelativePath::as_str)
+    }
+}
+
+fn validate_relative_path(text: &str, allow_empty: bool) -> Result<(), ValueError> {
+    let length = text.chars().count();
+    if (length == 0 && !allow_empty) || length > 4096 {
+        return Err(ValueError::TextLength {
+            min: if allow_empty { 0 } else { 1 },
+            max: 4096,
+            actual: length,
+        });
+    }
+    let pattern = || ValueError::Pattern {
+        field: "path",
+        value: text.to_owned(),
+    };
+    if text.is_empty() {
+        return Ok(());
+    }
+    let bytes = text.as_bytes();
+    if matches!(bytes.first(), Some(&b'/') | Some(&b'\\'))
+        || text.contains(':')
+        || text.chars().any(|c| c == '\0' || c.is_control())
+    {
+        return Err(pattern());
+    }
+    for component in text.split(['/', '\\']) {
+        if component.is_empty()
+            || component == "."
+            || component == ".."
+            || component.eq_ignore_ascii_case(".git")
+        {
+            return Err(pattern());
+        }
+    }
+    Ok(())
+}
+
+impl Serialize for SessionRelativePath {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionRelativePath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(DeError::custom)
+    }
+}
+
+impl Serialize for SessionFilesPath {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionFilesPath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(DeError::custom)
+    }
+}
+
+/// `after`/`next`：不透明的短期翻页位置；字符集与长度有界。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SessionPageToken(String);
+
+impl SessionPageToken {
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        validate_token(text, "page token", 256).map(|()| Self(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Serialize for SessionPageToken {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionPageToken {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(DeError::custom)
+    }
+}
+
+/// 连接期内容版本（不透明标识；客户端不解析结构）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContentVersion(String);
+
+impl ContentVersion {
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        validate_token(text, "version", 128).map(|()| Self(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+fn validate_token(text: &str, field: &'static str, max: usize) -> Result<(), ValueError> {
+    let length = text.chars().count();
+    if length == 0 || length > max {
+        return Err(ValueError::TextLength {
+            min: 1,
+            max,
+            actual: length,
+        });
+    }
+    if !text
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(ValueError::Pattern {
+            field,
+            value: text.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+impl Serialize for ContentVersion {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ContentVersion {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(DeError::custom)
+    }
+}
+
+/// `dataBase64`：无填充 base64url 文本，可为空（零字节文件），上限由 32 KiB 原始字节反推。
+///
+/// 32 KiB = 32768 字节编码后是 `ceil(32768 / 3) * 4 - padding` = 43691 个字符（最后一组只剩 2 字节，
+/// 无填充时少 1 个 `=`）。43692 是本该被拒绝的「多 1 字符」边界，因此常量取 43691。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SessionFileData(String);
+
+impl SessionFileData {
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        if text.len() > 43_691
+            || !text
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(ValueError::Pattern {
+                field: "dataBase64",
+                value: text.to_owned(),
+            });
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Serialize for SessionFileData {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionFileData {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(DeError::custom)
+    }
+}
+
+/// 生成一个封闭的 wire token 枚举：`ALL`、`as_str()`、`Display`、`FromStr` 与 serde 往返。
+macro_rules! wire_enum {
+    ($(#[$meta:meta])* $name:ident { $($variant:ident => $token:literal),+ $(,)? }) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum $name {
+            $($variant),+
+        }
+
+        impl $name {
+            /// 全部取值，顺序即 schema 的 enum 顺序。
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// 稳定 wire token。
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $token),+
+                }
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(self.as_str())
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = ValueError;
+
+            fn from_str(text: &str) -> Result<Self, Self::Err> {
+                match text {
+                    $($token => Ok(Self::$variant),)+
+                    _ => Err(ValueError::Enumerated {
+                        field: stringify!($name),
+                        value: text.to_owned(),
+                    }),
+                }
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let text = String::deserialize(deserializer)?;
+                $name::from_str(&text).map_err(DeError::custom)
+            }
+        }
+    };
+}
+
+wire_enum!(
+    /// `entries[].kind`（`command.schema.json#/$defs/sessionFileEntry.properties.kind`）。
+    SessionFileEntryKind {
+        File => "file",
+        Directory => "directory",
+        Link => "link",
+        Other => "other",
+    }
+);
+
+wire_enum!(
+    /// `entries[].restricted`（不可打开的原因）。
+    SessionFileRestrictedReason {
+        OutsideRoot => "outside_root",
+        Unreadable => "unreadable",
+        Unsupported => "unsupported",
+    }
+);
+
+wire_enum!(
+    /// `gitState`：可查询、不是仓库、本机 Git 不可用。
+    GitState {
+        Available => "available",
+        NotRepository => "not_repository",
+        Unavailable => "unavailable",
+    }
+);
+
+wire_enum!(
+    /// Git status 中一个文件的合并状态。
+    GitFileStatus {
+        Added => "added",
+        Modified => "modified",
+        Deleted => "deleted",
+        Renamed => "renamed",
+        Untracked => "untracked",
+    }
+);
+
+wire_enum!(
+    /// Git 差异的比较基准。
+    GitDiffBase {
+        Head => "head",
+        Empty => "empty",
+    }
+);
+
+wire_enum!(
+    /// Git 差异的内容类别。
+    GitDiffKind {
+        Text => "text",
+        Binary => "binary",
+        Conflict => "conflict",
+    }
+);
+
+wire_enum!(
+    /// Git 差异不可用的显式原因（成功结果里的状态）。
+    GitDiffUnavailableReason {
+        NotRepository => "not_repository",
+        GitUnavailable => "git_unavailable",
+        TooLarge => "too_large",
+    }
+);
+
+wire_enum!(
+    /// 读取结果的字节内容类别。
+    SessionFileContentKind {
+        Text => "text",
+        Image => "image",
+        Binary => "binary",
+    }
+);
+
+wire_enum!(
+    /// 读取用途：预览或下载。
+    FileReadPurpose {
+        Preview => "preview",
+        Download => "download",
+    }
+);
+
+/// `sessionFileEntry`（`command.schema.json#/$defs/sessionFileEntry`）：根内路径、名称、类型、可打开性
+/// 与受限原因。可打开条目不得携带 `restricted`；不可打开条目必须给出原因（由原生适配器保证语义，
+/// wire 层只约束键与类型）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionFileEntry {
+    pub path: SessionRelativePath,
+    pub name: NonEmptyText<256>,
+    pub kind: SessionFileEntryKind,
+    pub openable: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub restricted: Option<SessionFileRestrictedReason>,
+}
+
+/// `sessionFilesList`（`command.schema.json#/$defs/sessionFilesList`）的 payload。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionFilesList {
+    pub path: SessionFilesPath,
+    pub hide_ignored: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub after: Option<SessionPageToken>,
+}
+
+/// `sessionFilesListResult`：`session.files.list` 的 completed 结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionFilesListResult {
+    pub path: SessionFilesPath,
+    pub git_state: GitState,
+    pub entries: Vec<SessionFileEntry>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub next: Option<SessionPageToken>,
+}
+
+/// `sessionFilesRead`（`command.schema.json#/$defs/sessionFilesRead`）的 payload。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionFilesRead {
+    pub path: SessionRelativePath,
+    pub purpose: FileReadPurpose,
+    pub offset: DecimalString,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub version: Option<ContentVersion>,
+}
+
+/// `sessionFilesReadResult`：`session.files.read` 的 completed 结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionFilesReadResult {
+    pub path: SessionRelativePath,
+    pub kind: SessionFileContentKind,
+    pub size_bytes: DecimalString,
+    pub version: ContentVersion,
+    pub offset: DecimalString,
+    pub data_base64: SessionFileData,
+    pub eof: bool,
+    pub preview_truncated: bool,
+}
+
+/// `sessionGitStatus`（`command.schema.json#/$defs/sessionGitStatus`）的 payload：只有可选翻页位置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionGitStatus {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub after: Option<SessionPageToken>,
+}
+
+/// `gitStatusEntry`：相对 HEAD 与工作树合并后的一个文件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitStatusEntry {
+    pub path: SessionRelativePath,
+    pub status: GitFileStatus,
+    #[serde(
+        rename = "previousPath",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub previous_path: Option<SessionRelativePath>,
+    pub conflicted: bool,
+    pub binary: bool,
+}
+
+/// `sessionGitStatusResult`：`session.git.status` 的 completed 结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionGitStatusResult {
+    pub git_state: GitState,
+    pub entries: Vec<GitStatusEntry>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub next: Option<SessionPageToken>,
+}
+
+/// `sessionGitDiff`（`command.schema.json#/$defs/sessionGitDiff`）的 payload。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionGitDiff {
+    pub path: SessionRelativePath,
+}
+
+/// `sessionGitDiffResult`：`session.git.diff` 的 completed 结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionGitDiffResult {
+    pub path: SessionRelativePath,
+    pub base: GitDiffBase,
+    pub kind: GitDiffKind,
+    #[serde(
+        rename = "diffLines",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub diff_lines: Option<Vec<Text<4096>>>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub unavailable: Option<GitDiffUnavailableReason>,
     pub truncated: bool,
 }
 
@@ -901,6 +1426,14 @@ pub enum CommandPayload {
     ElicitationRespond(ElicitationRespond),
     /// `command.status` 的 payload。
     CommandStatus(CommandStatus),
+    /// `session.files.list` 的 payload。
+    SessionFilesList(SessionFilesList),
+    /// `session.files.read` 的 payload。
+    SessionFilesRead(SessionFilesRead),
+    /// `session.git.status` 的 payload。
+    SessionGitStatus(SessionGitStatus),
+    /// `session.git.diff` 的 payload。
+    SessionGitDiff(SessionGitDiff),
 }
 
 impl CommandPayload {
@@ -971,6 +1504,24 @@ impl CommandPayload {
                 "{ targetRequestId: uuid }（commandStatus 的 payload）",
             )
             .map(CommandPayload::CommandStatus),
+            CommandName::SessionFilesList => parse_payload(
+                payload,
+                "{ path: 根内相对路径（空串 = 根）, hideIgnored: bool, after?: token }（sessionFilesList 的 payload）",
+            )
+            .map(CommandPayload::SessionFilesList),
+            CommandName::SessionFilesRead => parse_payload(
+                payload,
+                "{ path, purpose: preview|download, offset: decimalString, version?: token }（sessionFilesRead 的 payload）",
+            )
+            .map(CommandPayload::SessionFilesRead),
+            CommandName::SessionGitStatus => {
+                parse_payload(payload, "{ after?: token }（sessionGitStatus 的 payload）")
+                    .map(CommandPayload::SessionGitStatus)
+            }
+            CommandName::SessionGitDiff => {
+                parse_payload(payload, "{ path }（sessionGitDiff 的 payload）")
+                    .map(CommandPayload::SessionGitDiff)
+            }
         }
     }
 }
@@ -1241,6 +1792,14 @@ pub enum CommandResultPayload {
     ModeList(ModeListResult),
     /// `command.status` 的完成结果。
     CommandStatus(CommandStatusRecord),
+    /// `session.files.list` 的完成结果。
+    SessionFilesList(SessionFilesListResult),
+    /// `session.files.read` 的完成结果。
+    SessionFilesRead(SessionFilesReadResult),
+    /// `session.git.status` 的完成结果。
+    SessionGitStatus(SessionGitStatusResult),
+    /// `session.git.diff` 的完成结果。
+    SessionGitDiff(SessionGitDiffResult),
     /// 变更命令的完成结果，或非完成态的开放结果对象（基类型 `object | null`）。
     Object(RawObject),
 }
@@ -1312,6 +1871,34 @@ impl CommandResultPayload {
                         "commandStatusRecord（command.status 的 completed）",
                     )
                     .map(|value| Nullable::value(CommandResultPayload::CommandStatus(value)));
+                }
+                CommandName::SessionFilesList => {
+                    return parse_result::<SessionFilesListResult>(
+                        result,
+                        "sessionFilesListResult（session.files.list 的 completed）",
+                    )
+                    .map(|value| Nullable::value(CommandResultPayload::SessionFilesList(value)));
+                }
+                CommandName::SessionFilesRead => {
+                    return parse_result::<SessionFilesReadResult>(
+                        result,
+                        "sessionFilesReadResult（session.files.read 的 completed）",
+                    )
+                    .map(|value| Nullable::value(CommandResultPayload::SessionFilesRead(value)));
+                }
+                CommandName::SessionGitStatus => {
+                    return parse_result::<SessionGitStatusResult>(
+                        result,
+                        "sessionGitStatusResult（session.git.status 的 completed）",
+                    )
+                    .map(|value| Nullable::value(CommandResultPayload::SessionGitStatus(value)));
+                }
+                CommandName::SessionGitDiff => {
+                    return parse_result::<SessionGitDiffResult>(
+                        result,
+                        "sessionGitDiffResult（session.git.diff 的 completed）",
+                    )
+                    .map(|value| Nullable::value(CommandResultPayload::SessionGitDiff(value)));
                 }
                 _ => {}
             }
@@ -1535,7 +2122,7 @@ mod tests {
 
     #[test]
     fn command_name_covers_the_sync_subset_and_round_trips() {
-        assert_eq!(CommandName::ALL.len(), 14, "sync 子集是 14 条命令");
+        assert_eq!(CommandName::ALL.len(), 18, "sync 子集是 18 条命令");
         assert!(
             CommandName::ALL
                 .iter()
@@ -2040,5 +2627,240 @@ mod tests {
             serde_json::from_str::<CommandResult>(&result(Some("null"))).is_err(),
             "historyHasEarlier 没有 null 分支：显式 null 必须被拒"
         );
+    }
+
+    #[test]
+    fn session_file_queries_require_session_id_and_forbid_expected_version() {
+        for (command, payload) in [
+            ("session.files.list", r#"{"path":"","hideIgnored":false}"#),
+            (
+                "session.files.read",
+                r#"{"path":"src/main.rs","purpose":"preview","offset":"0"}"#,
+            ),
+            ("session.git.status", r#"{}"#),
+            ("session.git.diff", r#"{"path":"src/main.rs"}"#),
+        ] {
+            let with_session = body(command, &format!(r#""sessionId":"{SESSION}","#), payload);
+            let parsed: Command = serde_json::from_str(&with_session)
+                .unwrap_or_else(|error| panic!("{command} 合法请求必须接受：{error}"));
+            assert!(parsed.command.is_query(), "{command} 必须是 query");
+            assert!(parsed.command.requires_session_id());
+            assert!(!parsed.command.requires_expected_version());
+            assert!(parsed.expected_version.is_none());
+
+            let without_session = body(command, "", payload);
+            assert!(
+                serde_json::from_str::<Command>(&without_session).is_err(),
+                "{command} 缺少 sessionId 必须拒绝"
+            );
+
+            let with_version = body(
+                command,
+                &format!(r#""sessionId":"{SESSION}","expectedVersion":"1","#),
+                payload,
+            );
+            assert!(
+                serde_json::from_str::<Command>(&with_version).is_err(),
+                "{command} 出现 expectedVersion 必须拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn session_file_query_payloads_reject_unsafe_shapes() {
+        let with_session = |payload: &str| {
+            body(
+                "session.files.read",
+                &format!(r#""sessionId":"{SESSION}","#),
+                payload,
+            )
+        };
+        for rejected in [
+            // 键集合封闭：未知 payload 键一律拒绝。
+            r#"{"path":"src/main.rs","purpose":"preview","offset":"0","recursive":true}"#,
+            // 绝对路径、盘符、UNC 与父引用不是根内相对路径。
+            r#"{"path":"/etc/passwd","purpose":"preview","offset":"0"}"#,
+            r#"{"path":"C:\\repo\\file","purpose":"preview","offset":"0"}"#,
+            r#"{"path":"\\\\server\\share","purpose":"preview","offset":"0"}"#,
+            r#"{"path":"src/../outside","purpose":"preview","offset":"0"}"#,
+            r#"{"path":".git/config","purpose":"preview","offset":"0"}"#,
+            r#"{"path":"","purpose":"preview","offset":"0"}"#,
+            // purpose 是封闭枚举。
+            r#"{"path":"src/main.rs","purpose":"stream","offset":"0"}"#,
+            // offset 是规范十进制字符串：负数、小数与 JSON 数字都不是。
+            r#"{"path":"src/main.rs","purpose":"preview","offset":"-1"}"#,
+            r#"{"path":"src/main.rs","purpose":"preview","offset":"1.5"}"#,
+            r#"{"path":"src/main.rs","purpose":"preview","offset":0}"#,
+            // 版本是不透明的短 token，不是任意文本。
+            r#"{"path":"src/main.rs","purpose":"preview","offset":"0","version":"has spaces"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Command>(&with_session(rejected)).is_err(),
+                "payload 必须被拒：{rejected}"
+            );
+        }
+
+        for rejected in [
+            r#"{"path":"src","hideIgnored":false,"after":"bad token"}"#,
+            r#"{"path":"..","hideIgnored":false}"#,
+            r#"{"path":"","hideIgnored":false,"recursive":true}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Command>(&body(
+                    "session.files.list",
+                    &format!(r#""sessionId":"{SESSION}","#),
+                    rejected,
+                ))
+                .is_err(),
+                "list payload 必须被拒：{rejected}"
+            );
+        }
+
+        for rejected in [
+            r#"{"path":"src/main.rs","after":"bad token"}"#,
+            r#"{"path":"src/main.rs","recursive":true}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Command>(&body(
+                    "session.git.status",
+                    &format!(r#""sessionId":"{SESSION}","#),
+                    rejected,
+                ))
+                .is_err(),
+                "git status payload 必须被拒：{rejected}"
+            );
+        }
+
+        assert_eq!(FileReadPurpose::ALL.len(), 2);
+        assert_eq!(GitState::ALL.len(), 3);
+        assert_eq!(GitFileStatus::ALL.len(), 5);
+        assert_eq!(GitDiffKind::ALL.len(), 3);
+        assert_eq!(SessionFileContentKind::ALL.len(), 3);
+    }
+
+    #[test]
+    fn session_file_results_bind_to_their_completed_commands() {
+        let completed = |command: &str, result: &str| {
+            format!(
+                r#"{{"requestId":"{REQUEST}","command":"{command}","status":"completed","acceptedAt":"2026-09-17T12:12:00.000Z","terminalEventId":null,"result":{result},"error":null}}"#
+            )
+        };
+
+        let list = completed(
+            "session.files.list",
+            r#"{"path":"","gitState":"available","entries":[{"path":"src/main.rs","name":"main.rs","kind":"file","openable":true},{"path":"link","name":"link","kind":"link","openable":false,"restricted":"outside_root"}],"next":"c1"}"#,
+        );
+        let parsed: CommandResult = serde_json::from_str(&list).expect("list completed 必须接受");
+        match parsed.result.as_ref() {
+            Some(CommandResultPayload::SessionFilesList(result)) => {
+                assert!(result.path.is_root(), "根路径回显空串");
+                assert_eq!(result.entries.len(), 2);
+                assert_eq!(
+                    result.entries[1].restricted,
+                    Some(SessionFileRestrictedReason::OutsideRoot)
+                );
+                assert_eq!(
+                    result.next.as_ref().map(SessionPageToken::as_str),
+                    Some("c1")
+                );
+            }
+            other => panic!("completed 结果必须是 sessionFilesListResult：{other:?}"),
+        }
+
+        let read = completed(
+            "session.files.read",
+            r#"{"path":"src/main.rs","kind":"text","sizeBytes":"12","version":"v1-abc","offset":"0","dataBase64":"aGVsbG8","eof":false,"previewTruncated":true}"#,
+        );
+        let parsed: CommandResult = serde_json::from_str(&read).expect("read completed 必须接受");
+        match parsed.result.as_ref() {
+            Some(CommandResultPayload::SessionFilesRead(result)) => {
+                assert_eq!(result.size_bytes.as_str(), "12");
+                assert_eq!(result.version.as_str(), "v1-abc");
+                assert!(result.preview_truncated);
+            }
+            other => panic!("completed 结果必须是 sessionFilesReadResult：{other:?}"),
+        }
+
+        let status = completed(
+            "session.git.status",
+            r#"{"gitState":"available","entries":[{"path":"src/main.rs","status":"renamed","previousPath":"src/old.rs","conflicted":false,"binary":false}],"next":"c2"}"#,
+        );
+        let parsed: CommandResult =
+            serde_json::from_str(&status).expect("git status completed 必须接受");
+        match parsed.result.as_ref() {
+            Some(CommandResultPayload::SessionGitStatus(result)) => {
+                assert_eq!(result.entries[0].status, GitFileStatus::Renamed);
+                assert_eq!(
+                    result.entries[0]
+                        .previous_path
+                        .as_ref()
+                        .map(SessionRelativePath::as_str),
+                    Some("src/old.rs")
+                );
+            }
+            other => panic!("completed 结果必须是 sessionGitStatusResult：{other:?}"),
+        }
+
+        let diff = completed(
+            "session.git.diff",
+            r#"{"path":"src/main.rs","base":"head","kind":"text","diffLines":["@@ -1 +1 @@","-old","+new"],"truncated":false}"#,
+        );
+        let parsed: CommandResult =
+            serde_json::from_str(&diff).expect("git diff completed 必须接受");
+        match parsed.result.as_ref() {
+            Some(CommandResultPayload::SessionGitDiff(result)) => {
+                assert_eq!(result.base, GitDiffBase::Head);
+                assert_eq!(result.kind, GitDiffKind::Text);
+                assert_eq!(result.diff_lines.as_ref().map(Vec::len), Some(3));
+            }
+            other => panic!("completed 结果必须是 sessionGitDiffResult：{other:?}"),
+        }
+
+        // 查询命令的 completed 必须 terminalEventId = null。
+        let with_terminal = list.replace(
+            r#""terminalEventId":null"#,
+            &format!(r#""terminalEventId":"{TERMINAL}""#),
+        );
+        assert!(serde_json::from_str::<CommandResult>(&with_terminal).is_err());
+
+        for rejected in [
+            // 未知结果键。
+            r#"{"path":"","gitState":"available","entries":[],"next":"c1","recursive":true}"#,
+            // 缺失必填结果字段（`entries` 是 `sessionFilesListResult` 的 required 键）。
+            r#"{"path":"","gitState":"available"}"#,
+            // 条目缺名称；kind 是封闭枚举。
+            r#"{"path":"","gitState":"available","entries":[{"path":"src","kind":"file","openable":true}]}"#,
+            r#"{"path":"","gitState":"available","entries":[{"path":"src","name":"src","kind":"socket","openable":true}]}"#,
+            // gitState 不得用未登记取值。
+            r#"{"path":"","gitState":"clean","entries":[]}"#,
+        ] {
+            let wire = completed("session.files.list", rejected);
+            assert!(
+                serde_json::from_str::<CommandResult>(&wire).is_err(),
+                "list 结果必须被拒：{rejected}"
+            );
+        }
+
+        for rejected in [
+            // 缺失 version/previewTruncated 等必填字段。
+            r#"{"path":"src/main.rs","kind":"text","sizeBytes":"12","offset":"0","dataBase64":"","eof":true,"previewTruncated":false}"#,
+            // sizeBytes 与 offset 是规范十进制字符串。
+            r#"{"path":"src/main.rs","kind":"text","sizeBytes":12,"version":"v1","offset":"0","dataBase64":"","eof":true,"previewTruncated":false}"#,
+            // dataBase64 是 base64url，不允许标准 base64 的 `+`/`/`。
+            r#"{"path":"src/main.rs","kind":"text","sizeBytes":"12","version":"v1","offset":"0","dataBase64":"a+b/","eof":true,"previewTruncated":false}"#,
+        ] {
+            let wire = completed("session.files.read", rejected);
+            assert!(
+                serde_json::from_str::<CommandResult>(&wire).is_err(),
+                "read 结果必须被拒：{rejected}"
+            );
+        }
+
+        // 命令与结果形状不匹配不得放行。
+        let mismatched = list.replace(
+            r#""command":"session.files.list""#,
+            r#""command":"session.git.diff""#,
+        );
+        assert!(serde_json::from_str::<CommandResult>(&mismatched).is_err());
     }
 }

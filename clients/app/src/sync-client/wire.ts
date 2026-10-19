@@ -118,7 +118,7 @@ const RESET_REASONS: Record<string, true> = {
   cache_incompatible: true,
 };
 
-/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，13 条）。 */
+/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，18 条）。 */
 const COMMAND_NAMES: Record<string, true> = {
   "session.list": true,
   "session.read": true,
@@ -134,6 +134,10 @@ const COMMAND_NAMES: Record<string, true> = {
   "session.config.set": true,
   "permission.resolve": true,
   "session.create": true,
+  "session.files.list": true,
+  "session.files.read": true,
+  "session.git.status": true,
+  "session.git.diff": true,
 };
 
 /** `$defs.commandResult.body.status`。 */

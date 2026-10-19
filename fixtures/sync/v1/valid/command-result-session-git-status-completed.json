@@ -1,0 +1,39 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "6b02f7a9-3e48-4c15-9d70-1a5e8f3c2b64",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "115",
+  "body": {
+    "requestId": "9e4b2c78-0f51-4a63-bd87-5c2e8a1d6f30",
+    "command": "session.git.status",
+    "status": "completed",
+    "acceptedAt": "2026-10-19T08:12:03.500Z",
+    "terminalEventId": null,
+    "result": {
+      "gitState": "available",
+      "entries": [
+        {
+          "path": "src/main.rs",
+          "status": "modified",
+          "conflicted": false,
+          "binary": false
+        },
+        {
+          "path": "src/renamed.rs",
+          "status": "renamed",
+          "previousPath": "src/old.rs",
+          "conflicted": false,
+          "binary": false
+        },
+        {
+          "path": "assets/logo.bin",
+          "status": "added",
+          "conflicted": true,
+          "binary": true
+        }
+      ]
+    },
+    "error": null
+  }
+}

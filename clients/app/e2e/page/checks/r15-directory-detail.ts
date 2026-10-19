@@ -1041,7 +1041,7 @@ function detailFactsOf(container: HTMLElement): DetailFacts {
  *
  * 恢复必须放在 `finally`：宽度是模块级缓存，漏恢复会让后面的用例全部跑在窄屏上。
  */
-function overrideViewportWidth(width: number): () => void {
+export function overrideViewportWidth(width: number): () => void {
   const reported = Math.max(1, Math.round(width / (window.devicePixelRatio || 1)));
   const viewport = window.visualViewport;
   const documentElement = document.documentElement;
