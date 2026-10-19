@@ -40,7 +40,7 @@ use acp_core::broker::Broker;
 use acp_core::model::{
     Actor, CommittedEvent, NodeId, PeerPublicKey, PortError, SessionId, SessionState, Timestamp,
 };
-use acp_core::ports::{AttachmentStore as _, SessionQuery};
+use acp_core::ports::{AttachmentStore as _, SessionFiles, SessionQuery};
 use acp_core::use_cases::UseCases;
 use identity_auth::Authority;
 use server::local_admin::{
@@ -1204,8 +1204,9 @@ impl SyncIngress {
 /// 这是**唯一的 Sync 接线点**：组合根（[`NetIngress::start`]）与受控路径集成测试都调它，因此
 /// 「subprotocol 常量」「认证后消息的路由组合」「配对端点的安全响应头」不会在两处漂移：认证后的消息由
 /// [`SyncRoutes`]（订阅面 → 命令面）承接，`sync.*` 走 `SubscribeRoute`、`command` 走 `SyncCommandRoute`。
-/// 命令面本身覆盖 §11.5 的全部 13 条命令——包括只读目录浏览 `workspace.browse`：它的目录读取由
-/// `UseCases` 持有的目录浏览端口承担，因此组合根这里**不需要**再接一个目录读取实现（端口表见
+/// 命令面本身覆盖 §11.5 的全部 18 条命令——包括只读目录浏览 `workspace.browse` 与四条
+/// `session.files.*`/`session.git.*`：目录读取与文件/Git 查询都由 `UseCases` 持有的端口承担，因此组合根
+/// 这里只需要把同一个会话文件端口交给命令面（连接级版本释放），不再另接读取实现（端口表见
 /// [`crate::compose`]）。
 ///
 /// 配对端点的四个安全响应头经 `SyncPairingHttp::default_response_headers` **同时**声明给接入层
@@ -1219,6 +1220,9 @@ impl SyncIngress {
 ///
 /// `owner` 是 Owner 可达性（`sync.subscribe`/快照的运行时输入）：`server::sync` 不得调用平级的
 /// `server::node_link`，因此这条事实只能由组合根注入（见 [`NodeLinkReachability`]）。
+///
+/// `files` 是会话文件/Git 的只读端口：必须与组合根注入 `UseCases::with_session_files` 的是**同一个
+/// 实例**。命令面用它做连接级内容版本释放（断连/撤销/关闭），因此不能在这里另建一份。
 #[allow(clippy::too_many_arguments)] // 接线参数各自是独立持有者，收进结构体只会把装配顺序藏起来
 pub fn register_sync_paths(
     listener: &mut NetListener,
@@ -1228,6 +1232,7 @@ pub fn register_sync_paths(
     config: &SyncConfig,
     public_origin: Option<String>,
     owner: Arc<dyn OwnerReachability>,
+    files: Arc<dyn SessionFiles>,
     event_queue: Option<tokio::sync::mpsc::Receiver<CommittedEvent>>,
 ) -> Result<SyncIngress, NetworkError> {
     let registry = SyncConnectionRegistry::new();
@@ -1247,6 +1252,7 @@ pub fn register_sync_paths(
         Arc::clone(authority),
         Arc::clone(&registry),
         owner,
+        files,
     ));
     let route = Arc::new(SyncRoutes::new(vec![
         Arc::clone(&subscribe) as Arc<dyn SyncMessageRoute>,
@@ -1362,6 +1368,8 @@ impl NetIngress {
             },
         )?;
         // Sync 面：Owner 可达性只从 Node Link 的连接注册表读（两个适配器不互相调用，组合根是唯一的缝合点）。
+        // 会话文件端口与 `UseCases` 内部注入的是同一个 `NativeSessionFiles`（组合根持有）。
+        let session_files: Arc<dyn SessionFiles> = composition.session_files().clone();
         let sync = register_sync_paths(
             &mut listener,
             &core,
@@ -1370,6 +1378,7 @@ impl NetIngress {
             &sync_config(composition.config()),
             composition.config().public_origin.clone(),
             Arc::new(NodeLinkReachability::new(Arc::clone(ingress.registry()))),
+            session_files,
             sync_events,
         )?;
         // 静态面（`design.md` D1/D2/D3）：第三类端点，注册在**全部协议端点之后**（`tasks.md` 3.1 的装配

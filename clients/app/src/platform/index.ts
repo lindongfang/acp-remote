@@ -18,6 +18,7 @@
 import { openLifecycle } from "./lifecycle.web";
 import { openLocalCache } from "./local-cache.web";
 import { openDeviceIdentityStore } from "./secure-storage.web";
+import { openDownloadPort } from "./download.web";
 
 export type { LifecycleEvent, LifecyclePort, Unsubscribe, VisibilityState } from "./lifecycle";
 export type {
@@ -41,11 +42,25 @@ export {
 } from "./local-cache";
 export type { DeviceIdentity, DeviceIdentityPort, SecureStorageErrorKind } from "./secure-storage";
 export { DEVICE_IDENTITY_STORE, SecureStorageError } from "./secure-storage";
+export type {
+  DownloadArtifact,
+  DownloadEnvironment,
+  DownloadErrorKind,
+  DownloadMode,
+  DownloadPort,
+  DownloadSink,
+  DownloadTarget,
+  PreviewArtifact,
+  WritableFileLike,
+} from "./download.shared";
+export { BLOB_DOWNLOAD_LIMIT_BYTES, DownloadError } from "./download.shared";
+export { browserDownloadEnvironment, openDownloadPort } from "./download.web";
 export { createVolatileImportedContent } from "./local-cache.web";
 
 import type { LifecyclePort } from "./lifecycle";
 import type { LocalCachePort, VolatileImportedContent } from "./local-cache";
 import type { DeviceIdentityPort } from "./secure-storage";
+import type { DownloadPort } from "./download.shared";
 import { createVolatileImportedContent as createVolatile } from "./local-cache.web";
 
 /** 平台端口束：组合根装配一次，向下传给 Sync Client / 状态机 / feature。 */
@@ -55,6 +70,8 @@ export interface PlatformPorts {
   /** imported 正文的内存载体：**不是**持久端口，刷新即失效（R20）。 */
   readonly importedContent: VolatileImportedContent;
   readonly lifecycle: LifecyclePort;
+  /** 主动下载的保存/取消/对象 URL 生命周期端口（正文不落持久缓存）。 */
+  readonly download: DownloadPort;
 }
 
 /**
@@ -70,5 +87,6 @@ export function openPlatform(): PlatformPorts {
     localCache: openLocalCache(),
     importedContent: createVolatile(),
     lifecycle: openLifecycle(),
+    download: openDownloadPort(),
   };
 }

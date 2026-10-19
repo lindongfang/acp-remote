@@ -13,7 +13,7 @@
  * 顶栏（标识、设备胶囊、主题开关、帮助入口）由根布局装配的**共享外壳**承担，连接状态只由那一个
  * 设备胶囊表达。此前本页另拼了一条 `<main><nav>` 导航，与前几页的自建导航一样是「路由自行拼出
  * 的重复表达」——同一状态有两处判据，必然漂移，因此整条移除。本页的返回入口由浏览器/路由栈与
- * 左栏的「全部 ›」承担。
+ * 左栏的「‹ 目录」承担。
  *
  * ## 次级视图住在仓库里
  *
@@ -29,20 +29,28 @@
  */
 
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { ReactElement } from "react";
 
 import { ConversationStream, CreateSessionSheet, DiagnosticsDrawer, RuntimeUnavailable } from "../../src/components";
+import type { ConversationSecondaryView, FilePreviewArtifact } from "../../src/components";
 import { toastStore } from "../../src/components/shell/toast";
 import type { Palette } from "../../src/components/theme";
-import { StyleSheet, View, palettes, useTheme } from "../../src/components/theme";
+import { StyleSheet, View, breakpoints, palettes, useTheme, useWindowDimensions } from "../../src/components/theme";
+import type { FileSource } from "../../src/features";
+import { currentSessionFileDownloader } from "../../src/features/session-file-download";
 import { useClientState, useClientStore } from "../../src/features/runtime";
 
 /** 页面级布局：浅/深各建一次（与其余路由同一形态）。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
     page: {
+      // 对话路由由外壳按视口高度固定：页面容器只负责吃掉剩余高度，滚动交给三栏自己的容器。
       flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+      minHeight: 0,
+      flexDirection: "column",
       backgroundColor: colors.bg,
     },
   });
@@ -56,7 +64,29 @@ export default function SessionRoute(): ReactElement {
   const state = useClientState();
   const router = useRouter();
   const theme = useTheme();
+  const windowWidth = useWindowDimensions().width;
+  const narrow = windowWidth < breakpoints.wide;
   const sessionId = typeof id === "string" ? id : null;
+  /**
+   * 窄屏从文件列表打开文件后要返回的次级视图。宽屏不用它（三栏不切换）；
+   * 会话切换时清空，避免把上一个会话的返回位置带到新会话。
+   */
+  const [fileReturnView, setFileReturnView] = useState<ConversationSecondaryView | null>(null);
+  /**
+   * 主动下载与图片预览的服务：组合根装配一次，页面只拿它的能力面。
+   * 未装配时为 `null`，对应按钮显式禁用（不伪造可下载状态）。
+   */
+  const downloads = currentSessionFileDownloader();
+  const downloadState = useSyncExternalStore(
+    useCallback((listener: () => void) => downloads?.subscribe(listener) ?? (() => undefined), [downloads]),
+    useCallback(() => downloads?.state ?? null, [downloads]),
+    useCallback(() => downloads?.state ?? null, [downloads]),
+  );
+  const createPreviewUrl = useCallback(
+    (bytes: Uint8Array, mimeType: string): FilePreviewArtifact | null =>
+      downloads?.previewUrl(bytes, mimeType) ?? null,
+    [downloads],
+  );
   // 创建弹层里选中的 Agent 是页面局部状态（不跨路由存活，与弹层的开关无关）。
   const [agentId, setAgentId] = useState<string | null>(null);
   // 本地闸门拒绝提交的原因（未连接/Agent 不在目录/目录引用缺失）。这类拒绝不产生命令记录，
@@ -72,8 +102,12 @@ export default function SessionRoute(): ReactElement {
   const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null);
 
   // 明细现取：只在 store 就绪且还没有线程时发一次（store 内部有在途请求的去重）。
+  // 同时把「当前对话页属于哪个会话」告诉仓库：路由切换时旧会话的文件读取会被丢弃，
+  // 迟到的响应不能重新打开文件（spec「切换文件时旧响应迟到」）。
   useEffect(() => {
+    setFileReturnView(null);
     if (store === null || sessionId === null) return;
+    store.setActiveConversationSession(sessionId);
     store.loadSession(sessionId);
   }, [store, sessionId]);
 
@@ -89,6 +123,55 @@ export default function SessionRoute(): ReactElement {
       </View>
     );
   }
+
+  const filesPanel = store.sessionFilesPage(sessionId);
+  /**
+   * 打开文件：宽屏只替换中栏；窄屏把次级视图切到「对话」（查看区在中栏），并记下原来那一档，
+   * 关闭后返回原文件列表（展开目录与滚动位置由右栏自身的 DOM 保留）。
+   */
+  const openFile = (source: FileSource, path: string): void => {
+    const current = store.sessionFilesPage(sessionId).content;
+    if (narrow && current.kind !== "file" && state.conversationSecondaryView !== "timeline") {
+      setFileReturnView(state.conversationSecondaryView);
+    }
+    store.openFileContent(sessionId, source, path);
+    if (narrow) store.setConversationSecondaryView("timeline");
+  };
+
+  /** 关闭文件：恢复对话（DOM 未卸载，滚动锚点/草稿/展开状态都在），并归还焦点。 */
+  const closeFile = (): void => {
+    const current = store.sessionFilesPage(sessionId).content;
+    const context = current.kind === "file" ? current.context : null;
+    store.closeFileContent();
+    if (fileReturnView !== null) {
+      if (narrow) store.setConversationSecondaryView(fileReturnView === "all" ? "timeline" : fileReturnView);
+      setFileReturnView(null);
+    }
+    if (context !== null && typeof document !== "undefined") {
+      const wanted = `${context.source}:${context.path}`;
+      setTimeout(() => {
+        for (const row of document.querySelectorAll<HTMLElement>("[data-file-row]")) {
+          if (row.dataset["fileRow"] === wanted) {
+            row.focus();
+            break;
+          }
+        }
+      }, 0);
+    }
+  };
+
+  /** 过时/失败后重新读取同一个文件（不改变来源与路径，也不加页签）。 */
+  const retryFile = (): void => {
+    const current = store.sessionFilesPage(sessionId).content;
+    if (current.kind !== "file") return;
+    store.openFileContent(sessionId, current.context.source, current.context.path);
+  };
+
+  /** 时间线条目联动：切到「会话变更」并选中同一个文件，但不替换对话区。 */
+  const selectChange = (changeId: string): void => {
+    store.selectFileSource(sessionId, "session");
+    setSelectedChangeId(changeId);
+  };
 
   /**
    * 要呈现的创建弹层：`null` 表示本页不呈现。
@@ -148,19 +231,55 @@ export default function SessionRoute(): ReactElement {
           store.setMode(sessionId, modeId);
         }}
         // 右栏每处改动的 ACP 原文诊断：展开态是页面级视图状态（按 `eventId`）。
-        onOpenChangeDiagnostics={setOpenChangeDiagnostics}
+        // 窄屏查看器里点诊断时切到文件栏并展开该记录，保证入口有可见结果。
+        onOpenChangeDiagnostics={(eventId) => {
+          setOpenChangeDiagnostics(eventId);
+          if (eventId !== null && narrow) store.setConversationSecondaryView("files");
+        }}
         openChangeDiagnosticsEventId={openChangeDiagnostics}
         // 折叠块的展开状态：只记显式覆盖值（按条目键），默认值由条目状态在时间线那一侧推出。
         expandedTimelineEntries={expandedTimelineEntries}
         onToggleTimelineEntry={(key, expanded) => {
           setExpandedTimelineEntries((current) => ({ ...current, [key]: expanded }));
         }}
-        // 选中项：时间线条目与右栏清单共用同一份（从条目点进来时右栏已经选中同一个文件）。
+        // 选中项：时间线条目与右栏清单共用同一份（从条目点进来时右栏切到会话变更并选中同一个文件）。
         selectedChangeId={selectedChangeId}
-        onSelectChange={setSelectedChangeId}
-        // 左栏：目录上下文、同目录会话、目录内搜索（只影响左栏）、继续加载与目录内新建。
-        onOpenDirectory={(directoryId) => {
-          router.push(`/dir/${encodeURIComponent(directoryId)}`);
+        onSelectChange={selectChange}
+        // 文件栏三来源与中间只读查看：判定全在 store，页面只接线与处理窄屏返回。
+        filesPanel={filesPanel}
+        onSelectFileSource={(source) => {
+          store.selectFileSource(sessionId, source);
+        }}
+        onRefreshFiles={() => {
+          store.refreshFiles(sessionId);
+        }}
+        onToggleHideIgnored={() => {
+          store.toggleHideIgnored(sessionId);
+        }}
+        onLoadMoreAllFiles={(path) => {
+          store.loadMoreAllFiles(sessionId, path);
+        }}
+        onLoadMoreGitChanges={() => {
+          store.loadMoreGitChanges(sessionId);
+        }}
+        onOpenFile={openFile}
+        onCloseFile={closeFile}
+        onRetryFile={retryFile}
+        onDownloadFile={(path, sizeBytes, mimeType) => {
+          if (downloads === null) return;
+          void downloads.start({ sessionId, path, mimeType, sizeBytes });
+        }}
+        onCancelDownload={() => {
+          void downloads?.cancel();
+        }}
+        onReleaseDownload={() => {
+          downloads?.releaseArtifact();
+        }}
+        downloadState={downloadState}
+        createPreviewUrl={createPreviewUrl}
+        // 左栏：返回目录列表、同目录会话、目录内搜索、分页与新建。
+        onOpenDirectoryList={() => {
+          router.push("/");
         }}
         onOpenSession={(otherSessionId) => {
           router.push(`/session/${encodeURIComponent(otherSessionId)}`);
@@ -168,8 +287,8 @@ export default function SessionRoute(): ReactElement {
         onSidebarQueryChange={(query) => {
           store.setConversationSidebarQuery(query);
         }}
-        onLoadMoreSidebar={() => {
-          store.loadMoreSidebarSessions();
+        onSidebarPageChange={(pageInput) => {
+          store.setConversationSidebarPage(pageInput);
         }}
         onCreateSession={(directoryId) => {
           setCreateIssue(null);
@@ -223,6 +342,10 @@ export default function SessionRoute(): ReactElement {
       {sheetDirectoryId === null ? null : (
         <CreateSessionSheet
           model={store.createEntry(sheetDirectoryId)}
+          onCreated={(createdSessionId) => {
+            store.closeCreateSheet();
+            router.push(`/session/${encodeURIComponent(createdSessionId)}`);
+          }}
           selectedAgentId={agentId}
           submitIssue={createIssue}
           onSelectAgent={(next) => {

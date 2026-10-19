@@ -18,6 +18,10 @@
  *   都不出现；本地乐观清空取消态会让第一条变红。
  * - **附件不受支持**：断言 `data-attachments-supported="false"` 与一句**显式**说明同时在；
  *   提交载荷的键集恰好是 `content`——「静默丢弃附件后提交剩余文本」在这里既缺说明、又会多出键。
+ * - **进行中只读**：活动轮次下输入框 `readonly`、没有 `data-action="submit-prompt"`、有
+ *   `data-action="cancel-turn"`，且即使仓库里已有草稿，回车也不发出 `session.prompt`。
+ *   「提交 → 待确认 → 已接受 → 已完成」因此在**没有活动轮次**的场景里验证（两个场景分开），
+ *   否则用例只能在只读输入框上假装打字/提交，测的就不是真实行为。
  * - **只对亲历请求呈现可选项**：同一个页面上四条交互各自落在不同可用性上（亲历可答 / 仅历史读到 /
  *   已被其它设备处理 / 读回的待处理项），断言的是**可点按钮的总数**与每条的归因；把
  *   `witnessed` 判定从「实时来源」放宽成「有可选项」时，历史那条会冒出按钮 → 红。
@@ -167,12 +171,13 @@ function messageIdsOf(container: HTMLElement): readonly string[] {
 
 const checks: readonly Check[] = [
   {
-    name: "CP-4 输入区只收文本、附件显式不受支持；提交与取消在终态之前不是已发送/已空闲",
+    name: "CP-4 输入区只收文本、附件显式不受支持；进行中只读且只呈现停止，提交在无可提交轮次时以终态为准",
     async run() {
+      // ① 有进行中的轮次：输入只读、没有发送入口、只有停止；回车不得发出任何命令。
       await withSessionPage(
         sessionScenario({
-          // 扣住这两条命令的应答：没有观测窗口的话，「立刻当成已完成」根本无从证伪。
-          holdCommands: ["session.prompt", "session.cancel"],
+          // 扣住取消应答：没有观测窗口的话，「立刻当成已取消」根本无从证伪。
+          holdCommands: ["session.cancel"],
           events: [
             wireEvent({
               globalSequence: 11,
@@ -196,7 +201,7 @@ const checks: readonly Check[] = [
           );
           const attachmentNotice = textOf(query(container, "[data-attachment-notice]"));
           expectThat(
-            attachmentNotice.includes("附件") && attachmentNotice.includes("不受支持"),
+            attachmentNotice.includes("附件") && attachmentNotice.includes("不支持"),
             `输入区必须用一句说明交代附件不受支持；实际「${attachmentNotice}」`,
           );
           // 进行中的轮次决定输入区是「进行中」这一态（不是「可输入」也不是「已关闭」）。
@@ -208,6 +213,86 @@ const checks: readonly Check[] = [
           expectThat(
             textOf(query(container, "[data-composer-state]")).includes("进行中"),
             "进行中这一态必须有对应的文案",
+          );
+
+          // 进行中不得提供提交入口：没有发送按钮，也没有任何「可提交」标记。
+          expectEqual(
+            query(container, '[data-action="submit-prompt"]'),
+            null,
+            "进行中 MUST NOT 呈现发送入口",
+          );
+          expectEqual(
+            query(container, "[data-submit-enabled]"),
+            null,
+            "进行中 MUST NOT 呈现可提交标记",
+          );
+          expectThat(
+            query(container, 'button[data-action="cancel-turn"]') !== null,
+            "进行中必须呈现停止入口",
+          );
+
+          // 输入框只读：即使仓库里已有草稿，也不能通过界面改它。
+          const before = composerTextArea(container);
+          expectThat(before !== null, "进行中仍必须有一段只读的多行输入框");
+          expectEqual(before.readOnly, true, "进行中的输入框必须只读");
+          expectEqual(
+            query(container, '[data-composer-input="in_progress"]')?.hasAttribute("readonly") ?? false,
+            true,
+            "进行中的输入框必须带 readonly",
+          );
+          // 直接把草稿放进仓库（模拟轮次开始前留下的草稿），再按回车：MUST NOT 发命令。
+          mounted.composition?.store.setDraft(SESSION_ALPHA, PROMPT_TEXT);
+          await waitFor(
+            () => composerTextArea(container)?.value === PROMPT_TEXT,
+            "只读输入框回显仓库里的草稿",
+          );
+          pressEnter(container);
+          expectEqual(
+            commandBodies(mounted.host?.sent ?? [], "session.prompt").length,
+            0,
+            "进行中按回车 MUST NOT 发出 session.prompt",
+          );
+          expectEqual(query(container, "[data-submission]"), null, "进行中按回车不得产生提交呈现");
+          expectEqual(
+            mounted.composition?.store.draftOf(SESSION_ALPHA),
+            PROMPT_TEXT,
+            "进行中按回车不得改变草稿",
+          );
+
+          // 取消：未确认前不是空闲。
+          click(query(container, 'button[data-action="cancel-turn"]'), "取消当前轮次");
+          await waitFor(() => query(container, '[data-cancel="requested"]') !== null, "取消后等待服务端终态");
+          expectEqual(query(container, '[data-cancel="available"]'), null, "未确认前不得回到「当前轮次可取消」");
+          expectEqual(query(container, '[data-cancel="confirmed"]'), null, "未确认前不得呈现为已确认");
+          expectThat(
+            textOf(query(container, '[data-cancel="requested"]')).includes("等待服务端终态"),
+            "取消必须说明在等终态",
+          );
+          expectEqual(
+            commandBody(mounted.host?.sent ?? [], "session.cancel")?.["payload"],
+            { turnId: TURN_ID },
+            "取消必须指向当前进行中的轮次",
+          );
+          mounted.host?.completeHeldCommand("session.cancel", { status: "completed" });
+          await waitFor(() => query(container, '[data-cancel="confirmed"]') !== null, "终态后呈现已确认");
+        },
+      );
+
+      // ② 没有进行中的轮次：可以输入、可以提交；未收到终态前不是「已发送」。
+      await withSessionPage(
+        sessionScenario({
+          // 扣住提交应答：没有观测窗口的话，「立刻当成已完成」根本无从证伪。
+          holdCommands: ["session.prompt"],
+        }),
+        (container) =>
+          query(container, '[data-composer="editable"]') !== null &&
+          composerTextArea(container) !== null,
+        "可提交的输入区",
+        async (mounted) => {
+          const container = mounted.container;
+          expectThat(
+            query(container, 'button[data-action="submit-prompt"]') !== null,
+            "没有进行中的轮次时必须呈现发送入口",
           );
 
           // 打字：受控输入框 → `onChangeText` → 仓库草稿（文本是唯一通路）。
@@ -253,23 +338,6 @@ const checks: readonly Check[] = [
           expectNone(domText(container), ["已发送", "已排队"], "已接受仍不得写成已发送");
           mounted.host?.completeHeldCommand("session.prompt", { status: "completed" });
           await waitFor(() => query(container, '[data-submission="completed"]') !== null, "终态后呈现已完成");
-
-          // 取消：未确认前不是空闲。
-          click(query(container, 'button[data-action="cancel-turn"]'), "取消当前轮次");
-          await waitFor(() => query(container, '[data-cancel="requested"]') !== null, "取消后等待服务端终态");
-          expectEqual(query(container, '[data-cancel="available"]'), null, "未确认前不得回到「当前轮次可取消」");
-          expectEqual(query(container, '[data-cancel="confirmed"]'), null, "未确认前不得呈现为已确认");
-          expectThat(
-            textOf(query(container, '[data-cancel="requested"]')).includes("等待服务端终态"),
-            "取消必须说明在等终态",
-          );
-          expectEqual(
-            commandBody(mounted.host?.sent ?? [], "session.cancel")?.["payload"],
-            { turnId: TURN_ID },
-            "取消必须指向当前进行中的轮次",
-          );
-          mounted.host?.completeHeldCommand("session.cancel", { status: "completed" });
-          await waitFor(() => query(container, '[data-cancel="confirmed"]') !== null, "终态后呈现已确认");
         },
       );
     },
@@ -703,7 +771,7 @@ const checks: readonly Check[] = [
           );
 
           // 路由自己那一层：不再自建导航，也不再有第二个连接状态徽标
-          // （连接状态只由共享外壳的设备胶囊表达；本用例不挂外壳，因此这里只需证明路由层没有）。
+          // （连接状态只由共享外壳的设备胶囊表达；外壳在路由层之外，这里只需证明路由层没有）。
           const pageLayer = query(container, '[data-route="session"]')?.parentElement ?? null;
           expectThat(pageLayer !== null, '对话页应渲染出带 `data-route="session"` 的容器');
           expectEqual(query(pageLayer, "nav"), null, "路由层不得再自建导航");
@@ -719,20 +787,11 @@ const checks: readonly Check[] = [
   {
     name: "CP-9 回车提交、Shift+回车不提交；不可提交时回车不发任何命令",
     async run() {
+      // ① 没有进行中的轮次：回车提交、Shift+回车不提交。
       await withSessionPage(
-        sessionScenario({
-          events: [
-            wireEvent({
-              globalSequence: 11,
-              eventId: EVENT_TURN_STARTED,
-              sessionId: SESSION_ALPHA,
-              eventType: "turn.started",
-              view: { turnId: TURN_ID, state: "running" },
-            }),
-          ],
-        }),
-        (container) => query(container, "[data-composer-input]") !== null,
-        "输入区渲染",
+        sessionScenario(),
+        (container) => query(container, '[data-composer="editable"]') !== null,
+        "可提交的输入区渲染",
         async (mounted) => {
           const container = mounted.container;
           typeIntoComposer(container, PROMPT_TEXT);
@@ -756,6 +815,54 @@ const checks: readonly Check[] = [
             commandBody(mounted.host?.sent ?? [], "session.prompt")?.["payload"],
             { content: [{ type: "text", text: PROMPT_TEXT }] },
             "回车提交的载荷取自当前草稿",
+          );
+        },
+      );
+
+      // ② 有进行中的轮次：输入只读、没有发送入口；即使仓库里已有草稿，回车也不得发命令。
+      await withSessionPage(
+        sessionScenario({
+          events: [
+            wireEvent({
+              globalSequence: 11,
+              eventId: EVENT_TURN_STARTED,
+              sessionId: SESSION_ALPHA,
+              eventType: "turn.started",
+              view: { turnId: TURN_ID, state: "running" },
+            }),
+          ],
+        }),
+        (container) => query(container, '[data-composer="in_progress"]') !== null,
+        "进行中的输入区渲染",
+        async (mounted) => {
+          const container = mounted.container;
+          expectEqual(
+            query(container, '[data-action="submit-prompt"]'),
+            null,
+            "进行中 MUST NOT 呈现发送入口",
+          );
+          expectThat(
+            query(container, 'button[data-action="cancel-turn"]') !== null,
+            "进行中必须呈现停止入口",
+          );
+          expectEqual(composerTextArea(container)?.readOnly, true, "进行中的输入框必须只读");
+
+          mounted.composition?.store.setDraft(SESSION_ALPHA, PROMPT_TEXT);
+          await waitFor(
+            () => composerTextArea(container)?.value === PROMPT_TEXT,
+            "只读输入框回显仓库里的草稿",
+          );
+          pressEnter(container);
+          expectEqual(
+            commandBodies(mounted.host?.sent ?? [], "session.prompt").length,
+            0,
+            "进行中回车 MUST NOT 发出 session.prompt",
+          );
+          expectEqual(query(container, "[data-submission]"), null, "进行中回车不得产生提交呈现");
+          expectEqual(
+            mounted.composition?.store.draftOf(SESSION_ALPHA),
+            PROMPT_TEXT,
+            "进行中回车不得改变草稿",
           );
         },
       );
@@ -785,7 +892,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "CP-10 跳转胶囊：没有用户输入时不呈现；输入滚出视口时呈现，跳转后短暂高亮目标",
+    name: "CP-10 跳转胶囊：没有用户输入时不呈现；输入滚出中栏可视带时呈现，跳转后短暂高亮目标",
     async run() {
       // ① 一条用户输入都没有：MUST NOT 呈现跳转入口。
       const withoutInput = await enterRoute(
@@ -847,10 +954,19 @@ const checks: readonly Check[] = [
           "最后一条消息渲染（读取已完成）",
         );
 
-        window.scrollTo(0, document.body.scrollHeight);
+        // 对话页的滚动者是中栏自己的容器（三栏独立滚动），不是 `window`：把中栏滚到底，
+        // 用户输入才离开它的可视带。
+        const scroller = query(scrolled.container, '[data-conversation-scroll="timeline"]');
+        expectThat(scroller instanceof HTMLElement, "中栏必须有独立滚动容器");
+        await waitFor(
+          () => scroller.scrollHeight > scroller.clientHeight,
+          `中栏时间线必须超过可视高度（scrollHeight=${String(scroller.scrollHeight)}, clientHeight=${String(scroller.clientHeight)}）`,
+        );
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event("scroll"));
         await waitFor(
           () => query(scrolled.container, '[data-jump-pill="up"]') !== null,
-          "用户输入滚出视口后呈现向上跳转入口",
+          "用户输入滚出可视带后呈现向上跳转入口",
         );
         expectEqual(
           query(scrolled.container, '[data-jump-pill="up"]')?.getAttribute("data-jump-remaining"),
@@ -864,9 +980,8 @@ const checks: readonly Check[] = [
           "跳转后短暂高亮目标",
         );
       } finally {
+        // 滚动位置属于该场景自己的中栏容器，随卸载一起消失，不会留给后面的用例。
         await scrolled.unmount();
-        // 滚动位置是**页面级**的事实：留给后面的用例会让它们跑在一个被滚到底的文档上。
-        window.scrollTo(0, 0);
       }
     },
   },

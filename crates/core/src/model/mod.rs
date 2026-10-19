@@ -31,6 +31,11 @@ macro_rules! newtype {
                 Ok(Self(text.to_owned()))
             }
 
+            /// [`new`](Self::new) 的别名：与其它 wire/合同值对象的 `parse` 命名一致。
+            pub fn parse(text: &str) -> Result<Self, InvalidValue> {
+                Self::new(text)
+            }
+
             /// 底层文本。
             pub fn as_str(&self) -> &str {
                 &self.0
@@ -130,6 +135,7 @@ mod ids;
 mod json;
 mod scalars;
 mod session;
+mod session_files;
 
 pub use backend::*;
 pub use config::*;
@@ -146,6 +152,7 @@ pub(crate) use json::{
 };
 pub use scalars::*;
 pub use session::*;
+pub use session_files::*;
 
 #[cfg(test)]
 mod tests;

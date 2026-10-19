@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "0c8e5b31-7d26-4a94-bf03-6e1a9c4d8f52",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "116",
+  "body": {
+    "requestId": "3a7d1f95-6c48-4b20-8e57-2f9b0a4c6d81",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "command": "session.git.diff",
+    "payload": {
+      "path": "src/main.rs"
+    }
+  }
+}

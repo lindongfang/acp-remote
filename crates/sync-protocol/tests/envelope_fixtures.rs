@@ -28,7 +28,8 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// `sync-path-browse-and-diff-delivery`（WP1）新增 7 条合法夹具（`workspace.browse` 的根列表/某一层
 /// 与 completed 结果、`session.create` 的建目录开关、带路径的 `workspaces` 快照 chunk、`file.changed`
 /// 的差异行与不可用标记），故由 94 变为 101。
-const EXPECTED_VALID_MESSAGE_CASES: usize = 105;
+/// 变更 `session-file-browser`（WP1）新增 8 条合法会话文件查询/结果夹具，故由 105 变为 113。
+const EXPECTED_VALID_MESSAGE_CASES: usize = 113;
 /// 同一集合中 `valid: false` 且由**信封层**拒绝的用例数（`every_manifest_case_behaves_as_declared`
 /// 只显式登记 `invalid/ping-without-connection.json` 与 `invalid/sequence-is-number.json` 两条，
 /// 其余非法 WSS 用例都落在 body 类型化层）。
@@ -37,7 +38,12 @@ const EXPECTED_ENVELOPE_REJECTED: usize = 2;
 /// `sync-path-browse-and-diff-delivery`（WP1）新增 7 条非法夹具（`workspace.browse` 的缺父路径键/
 /// 多余 payload 键/非字符串父路径、浏览结果缺截断标记/条目带未登记键、`session.create` 的建目录开关
 /// 与别名同用、`workspaces` 条目的 `path` 为 `null`），故由 26 变为 33。
-const EXPECTED_BODY_REJECTED: usize = 42;
+/// 变更 `session-file-browser`（WP1）新增 11 条会话文件查询/结果的非法夹具（缺 `sessionId`、
+/// `expectedVersion`、未知 payload/result 键、绝对/父引用/`.git` 路径、非法 purpose、负/非十进制
+/// offset、缺失必填结果字段），故由 42 变为 53。
+/// `session-file-browser` WP1-fix2 新增 3 条路径形状负例（重复分隔符、尾随分隔符、控制字符），
+/// 故由 53 变为 56。
+const EXPECTED_BODY_REJECTED: usize = 56;
 /// 非 WSS 的 HTTPS 载荷（配对）用例数；它们由 `tests/pairing_fixtures.rs` 覆盖。
 /// 变更 `pairing-code-web-entry`（WP1）新增 lookup 的 2 条正例与 6 条负例，故由 5 变为 13。
 /// 变更 `device-pairing-qr-reference`（WP1）新增 qr-lookup 的 3 条正例与 3 条负例、并移除旧

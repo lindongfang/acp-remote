@@ -13,8 +13,9 @@
 //!   （[`subscribe::fanout`] / [`subscribe::SubscribeRoute::advance`]），再经**既有**那条有界出站队列
 //!   投递（§10.1/§10.3）；`event` 模块的公开入口 [`event::deliver`]（判定 → 诊断 → 装配 → 入队）
 //!   今天只有用例调用，生产链路不经过它；
-//! - [`command`]：命令面——`command` 帧的构造校验、§14 的按设备限流、授权判定与六条查询命令
-//!   （§11.3；`workspace.browse` 是其中的第六条）的 `command.result` 投影；
+//! - [`command`]：命令面——`command` 帧的构造校验、§14 的按设备限流、授权判定与十条查询命令
+//!   （§11.3；`workspace.browse` 与四条 `session.files.*`/`session.git.*` 是其中的只读命令）的
+//!   `command.result` 投影；
 //! - [`router`]：[`router::SyncRoutes`]——连接只有一个路由槽，本组合件把订阅面与命令面按序链起来，并把
 //!   认证后交接的 feature 转发给两者（组合根注册的就是它）；
 //! - [`snapshot`]：[`snapshot::plan`] 组装三类清单资源与分块，[`snapshot::send`] 下发并计算

@@ -666,9 +666,10 @@ async fn built_assets_are_served_with_matching_content_types() {
 
 #[tokio::test]
 async fn static_responses_carry_the_csp_baseline_and_the_access_layer_security_headers() {
-    // spec「入口文档带 CSP 响应头」：CSP 由**响应头**下发（不是文档内的 `<meta>`），取值逐字等于
-    // `docs/FRONTEND_DESIGN.md` §4.5 的基线；四个既有安全头取值与配对端点一致。
-    const CSP_BASELINE: &str = "default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+    // spec「入口文档带 CSP 响应头」：CSP 由**响应头**下发（不是文档内的 `<meta>`），取值等于
+    // `docs/FRONTEND_DESIGN.md` §4.5 的基线，**只**多允许同源 Blob 图片（`img-src 'self' blob:`）；
+    // 脚本、连接、对象、base 与 framing 策略保持原样。四个既有安全头取值与配对端点一致。
+    const CSP_BASELINE: &str = "default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
     let server = start_server(loopback_config(), register_static_only).await;
     let host = host_of(server.addr);
     for path in [

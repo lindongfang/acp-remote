@@ -22,15 +22,17 @@ use crate::model::{
     Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId, AttachmentGeneration,
     AttachmentId, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, CommandKind,
     CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery, CommittedEvent,
-    ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId, DeviceRecord,
-    Digest, DirectoryId, DirectoryRecord, EndpointEvent, EntityRef, EventId, EventOrigin,
-    EventPayload, EventType, GlobalCursor, InteractionId, InteractionResolution, LocalCursor,
+    ConfigOption, ConfigOptionId, ConfigValue, ContentSnapshot, ContentVersion,
+    CreateSessionRequest, DeviceId, DeviceRecord, Digest, DirectoryId, DirectoryRecord,
+    EndpointEvent, EntityRef, EventId, EventOrigin, EventPayload, EventType, FileReadPurpose,
+    GitDiff, GitStatusPage, GlobalCursor, InteractionId, InteractionResolution, LocalCursor,
     MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
     OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
     PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
     PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest, Sequence, ServerEpoch,
-    SessionId, SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState,
-    SessionSummary, Timestamp, Turn, TurnId, TurnState, Version,
+    SessionFileChunk, SessionFilePage, SessionFilePath, SessionId, SessionPageToken,
+    SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState, SessionSummary,
+    Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -854,6 +856,17 @@ pub trait RemoteDeliveryStore: Send + Sync {
         query: ImportedSessionQuery,
     ) -> Result<Vec<ImportedSessionRecord>, PortError>;
 
+    /// 按会话标识做**存在性**窄查询：该 `SessionId` 是否是本机的一条 imported 索引行。
+    ///
+    /// 用途只有一个：`session.files.*`/`session.git.*` 在 `SessionStore::load` 查不到会话时区分
+    /// 「imported（不访问本机文件系统，回 `capability.unsupported_by_broker`）」与「确实不存在」。
+    /// `imported_session` 的主键是 `(owner_node_id, session_id)`，同一会话标识理论上可来自多个 Owner，
+    /// 因此实现只回答「有没有」，返回任意一条匹配行即可；调用方不得据此做归属或可见性判定。
+    async fn find_imported_session(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<ImportedSessionRecord>, PortError>;
+
     /// imported 命令终态引用查询（与 `SessionStore::find_request` 同名会迫使调用点写 UFCS，故改名）。
     async fn find_remote_request(
         &self,
@@ -1365,5 +1378,115 @@ impl std::fmt::Debug for WorkspaceMkdirExecution {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WorkspaceMkdirExecution")
             .finish_non_exhaustive()
+    }
+}
+
+/// 会话文件与 Git 的**只读**出站端口（`docs/CORE_PORTS_AND_STORAGE.md` §5.7）。
+///
+/// 三条约束与 `workspace.browse` 的目录浏览端口同源，但作用域是**当前会话的实际工作目录**：
+///
+/// - **根由调用方给出**：`root` 是用例层从 `SessionStore::load_recovery().workspace_cwd` 取得的
+///   规范化绝对路径；实现 MUST NOT 按 workspace 别名反查、猜测或回退到其它目录。
+/// - **路径只接受根内相对形状**：类型 `SessionFilePath` 已在 core 构造期拒绝绝对路径、盘符、UNC、
+///   父引用、NUL、ADS 冒号与 `.git`；实现仍必须以实际打开的对象验证最终路径位于规范根内（D3），
+///   不能只用字符串前缀比较。
+/// - **只读、无正文落盘**：不写索引、工作树、缓存或会话状态；内容快照只在内存中存在，连接断开、
+///   取消、设备撤销或空闲到期即释放，不写临时正文文件。整个实现不得把 Tokio、文件系统、Git 子进程
+///   或 wire DTO 带进 core。
+#[async_trait]
+pub trait SessionFiles: Send + Sync {
+    /// 列出 `path` 的直接子项（`None` = 会话根），按目录优先、名称码点、路径打破并列的确定顺序。
+    /// `hide_ignored` 为真时按 Git 有效忽略规则过滤；实现必须在分页前完成过滤。
+    async fn list(
+        &self,
+        root: &str,
+        path: Option<&SessionFilePath>,
+        hide_ignored: bool,
+        after: Option<&SessionPageToken>,
+    ) -> Result<SessionFilePage, PortError>;
+
+    /// 打开一个连接绑定的只读内容快照。`preview` 只取得该用途的预算并给出截断标记；`download` 在
+    /// 超过下载预算（`SESSION_FILE_DOWNLOAD_MAX_BYTES`，64 MiB）时 MUST 返回
+    /// `PortError::InvalidRequest(RESULT_TOO_LARGE)`，不得悄悄只取前一段。`preview` 不设原始大小上限：
+    /// 文件更大时仍如实给出 `size_bytes` 并置 `preview_truncated`。
+    async fn open_content(
+        &self,
+        root: &str,
+        path: &SessionFilePath,
+        purpose: FileReadPurpose,
+    ) -> Result<ContentSnapshot, PortError>;
+
+    /// 从既有快照读取一个字节块。`version` 必须匹配同一连接/设备/会话/路径建立的快照；文件版本
+    /// 变化时实现必须废弃快照并明确要求重新读取，不得拼接两个版本。
+    async fn read_content(
+        &self,
+        version: &ContentVersion,
+        offset: u64,
+    ) -> Result<SessionFileChunk, PortError>;
+
+    /// 释放一个内容快照（幂等）。连接断开、取消、撤销与空闲到期都走同一入口。
+    async fn release_content(&self, version: &ContentVersion) -> Result<(), PortError>;
+
+    /// Git status（相对 HEAD 与工作树合并），只覆盖会话根内文件。
+    async fn git_status(
+        &self,
+        root: &str,
+        after: Option<&SessionPageToken>,
+    ) -> Result<GitStatusPage, PortError>;
+
+    /// Git 文本差异（HEAD 与当前工作树；无 HEAD 时以空基准）。实现不得运行仓库自定义命令。
+    async fn git_diff(&self, root: &str, path: &SessionFilePath) -> Result<GitDiff, PortError>;
+}
+
+/// `SessionFiles` 的默认实现：未装配原生适配器时一律失败关闭。
+///
+/// 与 `SystemDirectories` 不同，core 不能自带文件/Git 实现（`AGENTS.md` §5：core 不依赖文件系统、
+/// 子进程或 Tokio）；组合根必须注入 `app::session_files` 的实现。默认值只保证 `UseCases::new` 的
+/// 既有字面量构造点不被打断，并让「忘了装配」显式失败而不是返回空结果。
+pub(crate) struct UnavailableSessionFiles;
+
+#[async_trait]
+impl SessionFiles for UnavailableSessionFiles {
+    async fn list(
+        &self,
+        _root: &str,
+        _path: Option<&SessionFilePath>,
+        _hide_ignored: bool,
+        _after: Option<&SessionPageToken>,
+    ) -> Result<SessionFilePage, PortError> {
+        Err(PortError::Unavailable(UnavailableKind::IoError))
+    }
+
+    async fn open_content(
+        &self,
+        _root: &str,
+        _path: &SessionFilePath,
+        _purpose: FileReadPurpose,
+    ) -> Result<ContentSnapshot, PortError> {
+        Err(PortError::Unavailable(UnavailableKind::IoError))
+    }
+
+    async fn read_content(
+        &self,
+        _version: &ContentVersion,
+        _offset: u64,
+    ) -> Result<SessionFileChunk, PortError> {
+        Err(PortError::Unavailable(UnavailableKind::IoError))
+    }
+
+    async fn release_content(&self, _version: &ContentVersion) -> Result<(), PortError> {
+        Ok(())
+    }
+
+    async fn git_status(
+        &self,
+        _root: &str,
+        _after: Option<&SessionPageToken>,
+    ) -> Result<GitStatusPage, PortError> {
+        Err(PortError::Unavailable(UnavailableKind::IoError))
+    }
+
+    async fn git_diff(&self, _root: &str, _path: &SessionFilePath) -> Result<GitDiff, PortError> {
+        Err(PortError::Unavailable(UnavailableKind::IoError))
     }
 }

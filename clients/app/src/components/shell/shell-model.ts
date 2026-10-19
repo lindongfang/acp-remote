@@ -84,6 +84,13 @@ export interface ShellModel {
   readonly topBarVisible: boolean;
   /** 本页不在安全上下文（未加密托管）：顶部呈现开发模式横幅，顶栏呈现开发模式徽标。 */
   readonly insecure: boolean;
+  /**
+   * 本页按**视口高度**填满（对话页的三栏各自滚动、输入区吸在中栏底部）。
+   *
+   * 只有对话路由 `/session/<id>` 为 `true`；目录页、目录详情页、主机页与配对入口保持文档流
+   * ——把它们也按视口高度固定，会让长列表失去「整页随文档滚动」的既有形态。
+   */
+  readonly contentFill: boolean;
   readonly capsule: DeviceCapsuleModel;
 }
 
@@ -93,12 +100,31 @@ const PAIRING_PATHS: Readonly<Record<string, true>> = {
   "/node-link/pair": true,
 };
 
+/** 去掉查询串、片段与尾斜杠之后的路径（各判据共用的**唯一**一份归一化）。 */
+function normalizePath(pathname: string | null): string | null {
+  if (pathname === null) return null;
+  const pathOnly = pathname.split("?")[0]?.split("#")[0] ?? "";
+  return pathOnly.length > 1 ? pathOnly.replace(/\/+$/, "") : pathOnly;
+}
+
 /** 路径是否落在配对入口上：查询串与片段不参与判定，尾斜杠归一后再逐字比对。 */
 export function isPairingPath(pathname: string | null): boolean {
-  if (pathname === null) return false;
-  const pathOnly = pathname.split("?")[0]?.split("#")[0] ?? "";
-  const normalized = pathOnly.length > 1 ? pathOnly.replace(/\/+$/, "") : pathOnly;
-  return PAIRING_PATHS[normalized] === true;
+  const normalized = normalizePath(pathname);
+  return normalized !== null && PAIRING_PATHS[normalized] === true;
+}
+
+/** 对话路由的形态：`/session/<id>`，会话标识恰好一段。 */
+const CONVERSATION_PATH = /^\/session\/[^/]+$/;
+
+/**
+ * 路径是否是对话页（`/session/<id>`）。
+ *
+ * 这是 `contentFill` 的**唯一**判据：只有对话页需要按视口高度装配三栏与吸底输入区，其余路由
+ * 继续随文档滚动（见 `design.md` D7/D10 与 `plan.md` WP3 的验收口径）。
+ */
+export function isConversationPath(pathname: string | null): boolean {
+  const normalized = normalizePath(pathname);
+  return normalized !== null && CONVERSATION_PATH.test(normalized);
 }
 
 /**
@@ -162,6 +188,7 @@ export function buildShellModel(input: {
   return {
     topBarVisible: showsGlobalTopBar(input.pathname),
     insecure: !input.secureContext,
+    contentFill: isConversationPath(input.pathname),
     capsule: buildDeviceCapsule({ state: input.connectionState, hostAddress: input.hostAddress }),
   };
 }

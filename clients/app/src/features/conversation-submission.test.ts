@@ -97,7 +97,7 @@ describe("输入与提交以终态为准", () => {
     expect(pending?.input.draft).toBe("");
     // 附件不受支持是显式说明，不是「没提」。
     expect(pending?.input.attachmentsSupported).toBe(false);
-    expect(pending?.input.attachmentNotice).toContain("不受支持");
+    expect(pending?.input.attachmentNotice).toContain("不支持");
 
     if (!outcome.ok) throw new Error("提交应被接受");
     store.apply({
@@ -124,6 +124,22 @@ describe("输入与提交以终态为准", () => {
       kind: "accepted",
       acceptedAt: "2026-10-01T00:00:02.000Z",
     });
+  });
+
+  it("轮次进行中：canSubmit=false、给出原因，提交（含回车派发路径）不产生命令", () => {
+    const { store, gateway } = interactionStore();
+    store.apply(turnStarted("dddddddd-0000-4000-8000-0000000000d0", "10"));
+
+    const page = store.conversationPage(ONLINE_SESSION_ID);
+    expect(page?.input.state).toBe("in_progress");
+    // 反例：进行中仍可提交（旧实现只拦 closed）→ 下面两条会红。
+    expect(page?.input.canSubmit).toBe(false);
+    expect(page?.input.disabledReason).toContain("进行中");
+
+    const before = gateway.dispatches.length;
+    // 回车提交在组件里先看 `canSubmit`；仓库侧闸门是同一份模型值，因此这条路径不派发命令。
+    expect(store.submitPrompt(ONLINE_SESSION_ID, "这条不该发出去").ok).toBe(false);
+    expect(gateway.dispatches).toHaveLength(before);
   });
 
   it("空文本与未连接时不派发命令", () => {

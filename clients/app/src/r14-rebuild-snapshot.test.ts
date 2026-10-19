@@ -32,6 +32,7 @@ import { encodeNulJoinedUtf8, encodeTranscript, encodeU16be, encodeUtf8, encodeU
 const HOST_CHALLENGE_DOMAIN = "acp-remote/host-challenge/v1";
 import { createVolatileImportedContent, openLocalCache } from "./platform/local-cache.web";
 import { openLifecycle } from "./platform/lifecycle.web";
+import { openDownloadPort } from "./platform/download.web";
 import type { PlatformPorts } from "./platform";
 import { installFakeIndexedDB } from "./platform/testing/fake-indexeddb";
 import { FakeClock, FakeSocketFactory } from "./sync-client/testing/harness";
@@ -127,6 +128,7 @@ async function setupPaired(hostKey: HostKey): Promise<Harness> {
     localCache: openLocalCache(),
     importedContent: createVolatileImportedContent(),
     lifecycle: openLifecycle(),
+    download: openDownloadPort(),
   };
 
   const sockets = new FakeSocketFactory();

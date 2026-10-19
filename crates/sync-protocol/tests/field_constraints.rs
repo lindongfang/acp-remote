@@ -316,3 +316,48 @@ fn error_code_default_retryable_matches_documented_semantics() {
     assert_eq!(body.details.get(), "{}");
     assert!(body.correlation_id.is_null());
 }
+
+/// `session.files.*` 的两个 wire 上限与 schema 逐字对齐：
+///
+/// - `dataBase64` 是 32 KiB 原始字节的**无填充** base64url，最大 43691 字符（43692 是带 padding 的
+///   长度，必须拒绝）；
+/// - `sessionRelativePath` 只接受「分隔符 + 非空分量」的结构，控制字符、重复/尾随分隔符、绝对路径、
+///   盘符、UNC、`.`/`..`/`.git` 分量都在 DTO 边界被拒。
+#[test]
+fn session_file_wire_limits_match_the_schema() {
+    use sync_protocol::command::{SessionFileData, SessionRelativePath};
+
+    assert!(
+        SessionFileData::parse(&"A".repeat(43_691)).is_ok(),
+        "43691 字符是 32 KiB 无填充 base64url 的合法上界"
+    );
+    assert!(
+        SessionFileData::parse(&"A".repeat(43_692)).is_err(),
+        "43692 字符超出 32 KiB 无填充上界"
+    );
+    assert!(SessionFileData::parse("").is_ok(), "零字节文件允许空串");
+
+    for accepted in ["src/main.rs", "nested\\dir\\file.txt", "a..b", ".gitignore"] {
+        assert!(
+            SessionRelativePath::parse(accepted).is_ok(),
+            "根内相对路径必须接受：{accepted:?}"
+        );
+    }
+    for rejected in [
+        "a//b",
+        "dir/",
+        "a\\b/",
+        "line\nbreak",
+        "tab\there",
+        "C:\\repo\\file",
+        "\\\\server\\share\\file",
+        ".git/config",
+        "dir/.GIT/HEAD",
+        "file.txt:stream",
+    ] {
+        assert!(
+            SessionRelativePath::parse(rejected).is_err(),
+            "不安全的相对路径必须拒绝：{rejected:?}"
+        );
+    }
+}

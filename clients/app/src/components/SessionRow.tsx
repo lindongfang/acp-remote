@@ -123,6 +123,17 @@ function buildStyles(colors: Palette) {
       borderBottomWidth: 1,
       borderBottomColor: colors.line2,
     },
+    // 对话页左栏的紧凑行（原型 `.srow`）：只有圆点 / 标题 / 状态词 / 时间，没有行分隔线。
+    // 目录页与详情页仍走 `row`（五字段 + 底边），两种形态互不影响。
+    rowCompact: {
+      flexDirection: "row",
+      flexWrap: "nowrap",
+      alignItems: "center",
+      gap: spacing.sm + 2,
+      paddingVertical: 9,
+      paddingHorizontal: 16,
+      borderBottomWidth: 0,
+    },
     main: {
       flexGrow: 1,
       flexShrink: 1,
@@ -131,6 +142,17 @@ function buildStyles(colors: Palette) {
       flexWrap: "wrap",
       alignItems: "center",
       gap: spacing.md,
+    },
+    ordinal: {
+      minWidth: 18,
+      color: colors.ink3,
+      fontFamily: fontFamily.mono,
+      fontSize: 11.5,
+      textAlign: "right",
+    },
+    mainCompact: {
+      flexWrap: "nowrap",
+      gap: spacing.sm + 2,
     },
     dot: {
       width: 8,
@@ -154,6 +176,10 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
       lineHeight: 22.4,
+    },
+    titleCompact: {
+      fontSize: fontSize.sm + 0.5,
+      lineHeight: 20,
     },
     // 原型 `.stword`：纯文字（不是胶囊），固定 70px 右对齐、警告色、半粗。
     stateWord: {
@@ -185,6 +211,10 @@ function buildStyles(colors: Palette) {
       paddingHorizontal: spacing.xs,
       borderRadius: radius.sm,
     },
+    // 紧凑行的状态词不占固定 70px（左栏只有 300px，标题才是主体）。
+    stateWordCompact: {
+      width: "auto",
+    },
     // 原型 `.when`：固定 96px 右对齐。
     time: {
       flexShrink: 0,
@@ -195,34 +225,60 @@ function buildStyles(colors: Palette) {
       fontSize: 12.5,
       lineHeight: 20,
     },
+    // 原型 `.srow .w`：紧凑行的相对时间不占固定宽度。
+    timeCompact: {
+      width: "auto",
+      fontSize: 11.5,
+      lineHeight: 18.4,
+    },
   });
 }
 
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
+/**
+ * 会话行的两种形态：
+ *
+ * - `default`：目录页与目录详情页的五字段行（原型 `.row`）；
+ * - `compact`：对话页左栏的紧凑行（原型 `.srow`）——只有状态圆点、标题、状态词与相对时间，
+ *   不渲染 Agent 名、来源离线标注与行底边。目录页的既有断言不因这一档改变。
+ */
+export type SessionRowVariant = "default" | "compact";
+
 export interface SessionRowProps {
+  readonly ordinal?: number;
   readonly session: SessionRowModel;
   /** 打开这个会话（页面负责导航）；缺省时本行只是展示。 */
   readonly onOpen?: () => void;
+  /** 行的形态；缺省 `default`（目录页五字段行）。 */
+  readonly variant?: SessionRowVariant;
 }
 
 /** 一条会话行。 */
-export function SessionRow({ session, onOpen }: SessionRowProps): ReactElement {
+export function SessionRow({ session, onOpen, variant = "default", ordinal }: SessionRowProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const compact = variant === "compact";
 
   return (
     // 根节点带 `role="listitem"`：RNW 会渲染成 `<li>`，调用方的列表容器必须标 `role="list"`
     // （D1：`ul`/`li` 的列表语义用 role 补回）。`data-session-id` 只出现在这一个元素上。
-    <View role="listitem" style={styles.row} dataSet={{ sessionId: session.id }}>
+    <View
+      role="listitem"
+      style={compact ? [styles.row, styles.rowCompact] : styles.row}
+      dataSet={{ sessionId: session.id, sessionRowVariant: variant }}
+    >
       <Pressable
         role="button"
-        style={styles.main}
+        style={compact ? [styles.main, styles.mainCompact] : styles.main}
         dataSet={{ action: "open-session" }}
         onPress={() => {
           onOpen?.();
         }}
       >
+        {ordinal === undefined ? null : (
+          <Text style={styles.ordinal} dataSet={{ sessionOrdinal: String(ordinal) }}>{ordinal}</Text>
+        )}
         {/* 状态圆点：颜色按状态取；`data-session-state` 是**状态标识**（机器证据），不是文案。
             `accessibilityLabel` 与原型圆点上的 `title` 同一口径（给出状态标识）。 */}
         <View
@@ -230,26 +286,41 @@ export function SessionRow({ session, onOpen }: SessionRowProps): ReactElement {
           accessibilityLabel={session.state}
           dataSet={{ sessionState: session.state }}
         />
-        <Text style={styles.title} dataSet={{ sessionTitle: "true" }} numberOfLines={1}>
+        <Text
+          style={compact ? [styles.title, styles.titleCompact] : styles.title}
+          // 紧凑行不复用 `data-session-title`：对话页的会话头与左栏行同时在 DOM 里，两者共用
+          // 同一个锚点会让「会话头的标题」在整页里不再是第一个命中。目录页五字段行保持原锚点。
+          dataSet={compact ? { sessionRowTitle: "true" } : { sessionTitle: "true" }}
+          numberOfLines={1}
+        >
           {session.title}
         </Text>
         {/* 状态词只补「在等什么」：词表来自 `StatusPill` 的同一份，但这里按原型画成纯文字
             （`.stword`），不是带底色的胶囊。 */}
-        {NEEDS_STATE_WORD[session.state] === true ? (
-          <Text style={styles.stateWord} dataSet={{ sessionState: session.state }}>
+        {!compact && NEEDS_STATE_WORD[session.state] === true ? (
+          <Text
+            style={compact ? [styles.stateWord, styles.stateWordCompact] : styles.stateWord}
+            dataSet={{ sessionState: session.state }}
+          >
             {SESSION_STATE_LABEL[session.state]}
           </Text>
         ) : null}
-        <Text style={styles.agent} dataSet={{ sessionAgent: "true" }} numberOfLines={1}>
-          {session.agentName}
-        </Text>
+        {/* 紧凑行按原型 `.srow` 只保留四项：Agent 名不在行上（它就是用户要求去掉的那一列）。 */}
+        {compact ? null : (
+          <Text style={styles.agent} dataSet={{ sessionAgent: "true" }} numberOfLines={1}>
+            {session.agentName}
+          </Text>
+        )}
       </Pressable>
-      {session.originOfflineLabel === null ? null : (
+      {compact || session.originOfflineLabel === null ? null : (
         <Text style={styles.offline} dataSet={{ originOffline: "true" }}>
           {session.originOfflineLabel}
         </Text>
       )}
-      <Text style={styles.time} dataSet={{ sessionUpdatedAt: session.updatedAt }}>
+      <Text
+        style={compact ? [styles.time, styles.timeCompact] : styles.time}
+        dataSet={{ sessionUpdatedAt: session.updatedAt }}
+      >
         {session.updatedAtLabel}
       </Text>
     </View>

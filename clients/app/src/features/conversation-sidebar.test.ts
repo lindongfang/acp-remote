@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionSummary, WorkspaceCatalogEntry } from "../protocol";
 import {
   CONVERSATION_NO_DIRECTORY_NOTICE,
-  CONVERSATION_SIDEBAR_BATCH_SIZE,
+  CONVERSATION_SIDEBAR_PAGE_SIZE,
   CONVERSATION_UNKNOWN_DIRECTORY_NOTICE,
 } from "./conversation-model";
 import {
@@ -40,6 +40,14 @@ const SESSIONS: readonly SessionSummary[] = [
 ];
 
 describe("左栏只列同目录会话", () => {
+  it("按最近会话更新时间倒序排列，而不是按输入顺序或标题排列", () => {
+    const { store } = storeWith({ resources: resources({ workspaces: WORKSPACES, sessions: [
+      session({ id: ONLINE_SESSION_ID, title: "A", directoryId: "work-api", updatedAt: "2026-10-01T00:00:00.000Z" }),
+      session({ id: SIBLING_SESSION_ID, title: "Z", directoryId: "work-api", updatedAt: "2026-10-02T00:00:00.000Z" }),
+    ] }) });
+    expect(store.conversationPage(ONLINE_SESSION_ID)?.sidebar.rows.map((row) => row.id))
+      .toEqual([SIBLING_SESSION_ID, ONLINE_SESSION_ID]);
+  });
   it("列出同目录会话（时间倒序），当前会话在模型里被标记为选中", () => {
     const { store } = storeWith({ resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }) });
     const sidebar = store.conversationPage(ONLINE_SESSION_ID)?.sidebar;
@@ -93,7 +101,7 @@ describe("左栏只列同目录会话", () => {
     expect(sidebar.notice).toBe(CONVERSATION_UNKNOWN_DIRECTORY_NOTICE);
     expect(sidebar.rows).toEqual([]);
     expect(sidebar.total).toBe(0);
-    expect(sidebar.canLoadMore).toBe(false);
+    expect(sidebar.canNextPage).toBe(false);
   });
 });
 
@@ -108,7 +116,7 @@ describe("没有目录归属的会话", () => {
     expect(page.sidebar.directory).toBeNull();
     expect(page.sidebar.notice).toBe(CONVERSATION_NO_DIRECTORY_NOTICE);
     expect(page.sidebar.rows).toEqual([]);
-    expect(page.sidebar.canLoadMore).toBe(false);
+    expect(page.sidebar.canNextPage).toBe(false);
     expect(page.sidebar.selectedSessionId).toBe(ONLINE_SESSION_ID);
 
     // 中栏不受影响：会话头与时间线照常给出。
@@ -142,19 +150,28 @@ describe("已呈现数与总数、继续加载", () => {
     if (first === undefined) throw new Error("会话应在模型里");
 
     expect(first.total).toBe(20);
-    expect(first.shown).toBe(CONVERSATION_SIDEBAR_BATCH_SIZE);
-    expect(first.rows).toHaveLength(CONVERSATION_SIDEBAR_BATCH_SIZE);
-    expect(first.canLoadMore).toBe(true);
+    expect(first.shown).toBe(CONVERSATION_SIDEBAR_PAGE_SIZE);
+    expect(first.rows).toHaveLength(CONVERSATION_SIDEBAR_PAGE_SIZE);
+    expect(first.canNextPage).toBe(true);
     // 反例：把「已呈现」当成全部时，用户会以为这个目录只有 15 条会话。
     expect(first.shown).toBeLessThan(first.total);
 
-    store.loadMoreSidebarSessions();
+    store.setConversationSidebarPage("2");
     const second = store.conversationPage(ONLINE_SESSION_ID)?.sidebar;
     if (second === undefined) throw new Error("会话应在模型里");
 
-    expect(second.shown).toBe(20);
+    expect(second.shown).toBe(5);
+    expect(second.page).toBe(2);
+    expect(second.pageCount).toBe(2);
+    expect(second.rows.map((row) => row.id)).not.toContain(first.rows[0]?.id);
+    store.setConversationSidebarPage("1");
+    expect(store.conversationPage(ONLINE_SESSION_ID)?.sidebar.rows).toEqual(first.rows);
+    store.setConversationSidebarPage("99");
+    expect(store.conversationPage(ONLINE_SESSION_ID)?.sidebar.page).toBe(2);
+    store.setConversationSidebarQuery("会话 1");
+    expect(store.conversationPage(ONLINE_SESSION_ID)?.sidebar.page).toBe(1);
     expect(second.total).toBe(20);
-    expect(second.canLoadMore).toBe(false);
+    expect(second.canNextPage).toBe(false);
     // 继续加载只是呈现更多行，不派发任何命令。
     expect(gateway.dispatches).toEqual([]);
   });
@@ -168,7 +185,7 @@ describe("已呈现数与总数、继续加载", () => {
 
     expect(sidebar.shown).toBe(3);
     expect(sidebar.total).toBe(3);
-    expect(sidebar.canLoadMore).toBe(false);
+    expect(sidebar.canNextPage).toBe(false);
   });
 });
 
@@ -212,7 +229,7 @@ describe("左栏数据只来自快照", () => {
 
     const page = store.conversationPage(ONLINE_SESSION_ID);
     store.setConversationSidebarQuery("会话");
-    store.loadMoreSidebarSessions();
+    store.setConversationSidebarPage("2");
     store.conversationPage(ONLINE_SESSION_ID);
 
     // 反例：左栏若改走 `session.list` 之类，这里会出现派发记录。

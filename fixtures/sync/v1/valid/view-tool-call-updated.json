@@ -23,7 +23,10 @@
         "toolCallId": "toolu_01H8xk",
         "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
         "title": "读取 schema",
-        "state": "in_progress"
+        "state": "in_progress",
+        "toolDetail": {
+          "truncatedParts": ["output"]
+        }
       }
     }
   }

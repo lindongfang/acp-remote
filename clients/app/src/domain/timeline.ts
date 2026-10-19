@@ -26,7 +26,13 @@
  */
 
 import type { ConfigOptionChoice, ConfigOptionView, PublicError, RawAcp } from "../protocol/common";
-import type { EventMessage, PlanPriority, PlanStatus, TerminalStream } from "../protocol/event";
+import type {
+  EventMessage,
+  PlanPriority,
+  PlanStatus,
+  TerminalStream,
+  ToolDetailPart,
+} from "../protocol/event";
 import type { SnapshotItemHistory } from "../protocol/sync";
 import type { InteractionAvailability } from "./interaction";
 
@@ -163,6 +169,133 @@ export function viewText(view: Readonly<Record<string, unknown>>, key: string): 
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * 一个**存在**的工具详情部分。
+ *
+ * 用 `present` 而不是「值是否为真」来判定在场：`null`、`false`、`0`、`""` 都是合法的 JSON 取值，
+ * 把它们当成缺席会把「Agent 明确给出了空值」误报成「Agent 没有提供」。
+ */
+export interface ToolDetailPartValue {
+  readonly present: true;
+  readonly value: unknown;
+}
+
+/**
+ * 归一后的工具详情：三个内容部分各自可缺席，`truncatedParts` 按 `input` → `output` → `text`
+ * 的固定顺序去重。
+ *
+ * 只由 `view.toolDetail` 构造；`acp.rawJson` 不参与（客户端不得用原文补造结构化详情）。
+ */
+export interface ToolCallDetail {
+  readonly input: ToolDetailPartValue | null;
+  readonly output: ToolDetailPartValue | null;
+  readonly text: readonly string[] | null;
+  readonly truncatedParts: readonly ToolDetailPart[];
+}
+
+/** `toolDetail` 的三个内容部分（固定顺序，也用于截断集合的稳定排序）。 */
+const TOOL_DETAIL_PARTS: readonly ToolDetailPart[] = ["input", "output", "text"];
+
+const TOOL_DETAIL_PART_NAMES: Readonly<Record<string, true>> = { input: true, output: true, text: true };
+
+/** 普通对象（JSON 解析产物）：数组与 `null` 都不是 `toolDetail` 的合法形状。 */
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/** 读一个内容部分：按**键是否在场**判定，值本身可以是任意 JSON 值。 */
+function toolDetailPartField(
+  raw: Readonly<Record<string, unknown>>,
+  key: "input" | "output",
+): ToolDetailPartValue | null {
+  if (!Object.hasOwn(raw, key) || raw[key] === undefined) return null;
+  return { present: true, value: raw[key] };
+}
+
+/** 读 `text`：必须是**非空**的字符串数组；形状不合规时整部分按缺席处理。 */
+function toolDetailTextField(raw: Readonly<Record<string, unknown>>): readonly string[] | null {
+  if (!Object.hasOwn(raw, "text")) return null;
+  const value = raw["text"];
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const texts: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return null;
+    texts.push(item);
+  }
+  return texts;
+}
+
+/** 读 `truncatedParts`：未知取值忽略，已知取值按固定顺序去重（不因为一条垃圾值丢掉其余登记）。 */
+function toolDetailTruncatedPartsField(raw: Readonly<Record<string, unknown>>): readonly ToolDetailPart[] {
+  if (!Object.hasOwn(raw, "truncatedParts")) return [];
+  const value = raw["truncatedParts"];
+  if (!Array.isArray(value)) return [];
+  const present = new Set<ToolDetailPart>();
+  for (const item of value) {
+    if (typeof item === "string" && TOOL_DETAIL_PART_NAMES[item] === true) present.add(item as ToolDetailPart);
+  }
+  return TOOL_DETAIL_PARTS.filter((part) => present.has(part));
+}
+
+/**
+ * 从一条工具调用视图读取并归一 `toolDetail`。
+ *
+ * 返回 `null` 表示「没有任何可用详情」：`toolDetail` 缺席/不是普通对象，或三个部分都缺席且没有
+ * 截断登记。非法部分**逐部分**降级为缺席，不让一处坏形状吞掉其余合法部分，也不抛异常。
+ */
+export function toolDetailOf(view: Readonly<Record<string, unknown>>): ToolCallDetail | null {
+  if (!Object.hasOwn(view, "toolDetail")) return null;
+  const raw = view["toolDetail"];
+  if (!isPlainRecord(raw)) return null;
+  const detail: ToolCallDetail = {
+    input: toolDetailPartField(raw, "input"),
+    output: toolDetailPartField(raw, "output"),
+    text: toolDetailTextField(raw),
+    truncatedParts: toolDetailTruncatedPartsField(raw),
+  };
+  return hasToolDetail(detail) ? detail : null;
+}
+
+function hasToolDetail(detail: ToolCallDetail): boolean {
+  return (
+    detail.input !== null ||
+    detail.output !== null ||
+    detail.text !== null ||
+    detail.truncatedParts.length > 0
+  );
+}
+
+/**
+ * 跨事件归并同一 `toolCallId` 的详情。
+ *
+ * `views` 必须已按时间升序：每个内容部分取**最新出现的非缺席值**（`started` 通常只有输入、
+ * `completed` 才有输出，只取最新一条会丢掉输入）；`truncatedParts` 取所有记录的并集，避免
+ * 后一条事件覆盖掉先前的截断说明。
+ */
+function mergeToolDetails(views: readonly Readonly<Record<string, unknown>>[]): ToolCallDetail | null {
+  let input: ToolDetailPartValue | null = null;
+  let output: ToolDetailPartValue | null = null;
+  let text: readonly string[] | null = null;
+  const truncated = new Set<ToolDetailPart>();
+  for (const view of views) {
+    const detail = toolDetailOf(view);
+    if (detail === null) continue;
+    if (detail.input !== null) input = detail.input;
+    if (detail.output !== null) output = detail.output;
+    if (detail.text !== null) text = detail.text;
+    for (const part of detail.truncatedParts) truncated.add(part);
+  }
+  const detail: ToolCallDetail = {
+    input,
+    output,
+    text,
+    truncatedParts: TOOL_DETAIL_PARTS.filter((part) => truncated.has(part)),
+  };
+  return hasToolDetail(detail) ? detail : null;
+}
+
 /** 读结构化公开错误（`turn.failed.error`）；形状不对时返回 `null`，不编造码与消息。 */
 function errorField(view: Readonly<Record<string, unknown>>): PublicError | null {
   const value = view["error"];
@@ -285,6 +418,10 @@ export interface ToolCallTimelineCard {
   readonly turnId: string | null;
   readonly title: string;
   readonly state: string;
+  /** 最新记录的事件标识：诊断入口按它打开原文；原文可用性由诊断层判定。 */
+  readonly eventId: string;
+  /** 跨事件归并后的详情；三部分都缺席且没有截断登记时为 `null`（不呈现空占位）。 */
+  readonly detail: ToolCallDetail | null;
 }
 
 /** 终端输出卡片（按 `chunkIndex` 逐块呈现，不合并）。 */
@@ -484,7 +621,19 @@ export function buildTimelineCard(
       const title = viewText(view, "title");
       const state = viewText(view, "state");
       if (toolCallId === null || title === null || state === null) return null;
-      return { kind: "tool_call", toolCallId, turnId: viewText(view, "turnId"), title, state };
+      // 到达顺序不等于时间顺序；各部分组成取最新非缺席值，因此先按位置排序。
+      const ordered = [...group.records].sort((a, b) =>
+        compareTimelinePosition(positionOf(a), positionOf(b)),
+      );
+      return {
+        kind: "tool_call",
+        toolCallId,
+        turnId: viewText(view, "turnId"),
+        title,
+        state,
+        eventId: group.latest.eventId,
+        detail: mergeToolDetails(ordered.map((record) => record.view)),
+      };
     }
     case "terminal.output": {
       const terminalId = viewText(view, "terminalId");

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://acp-remote.dev/schemas/sync/v1/event-views.schema.json",
   "title": "ACP Remote Sync v1 Event View Definitions",
-  "description": "Minimum required fields for event.payload.view, one $defs entry per event type registered in docs/SYNC_PROTOCOL.md section 10.2. Every view is an open object: additionalProperties is true, and adding fields requires a negotiated feature.",
+  "description": "Minimum required fields for event.payload.view, one $defs entry per event type registered in docs/SYNC_PROTOCOL.md section 10.2. Every view is an open object: additionalProperties is true, and adding fields requires a negotiated feature. Backward-compatible optional fields (such as toolDetail) do not require feature negotiation.",
   "$defs": {
     "session.created": {
       "type": "object",
@@ -222,7 +222,27 @@
         "toolCallId": { "type": "string", "minLength": 1, "maxLength": 256 },
         "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
         "title": { "type": "string", "maxLength": 1024 },
-        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "toolDetail": {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "input": { "not": { "type": "null" } },
+            "output": { "not": { "type": "null" } },
+            "text": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            },
+            "truncatedParts": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "enum": ["input", "output", "text"] },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": true
+        }
       },
       "additionalProperties": true
     },
@@ -233,7 +253,27 @@
         "toolCallId": { "type": "string", "minLength": 1, "maxLength": 256 },
         "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
         "title": { "type": "string", "maxLength": 1024 },
-        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "toolDetail": {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "input": { "not": { "type": "null" } },
+            "output": { "not": { "type": "null" } },
+            "text": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            },
+            "truncatedParts": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "enum": ["input", "output", "text"] },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": true
+        }
       },
       "additionalProperties": true
     },
@@ -244,7 +284,27 @@
         "toolCallId": { "type": "string", "minLength": 1, "maxLength": 256 },
         "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
         "title": { "type": "string", "maxLength": 1024 },
-        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "toolDetail": {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "input": { "not": { "type": "null" } },
+            "output": { "not": { "type": "null" } },
+            "text": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            },
+            "truncatedParts": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "enum": ["input", "output", "text"] },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": true
+        }
       },
       "additionalProperties": true
     },

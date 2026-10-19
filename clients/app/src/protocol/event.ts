@@ -243,12 +243,31 @@ export type AgentMessageCompletedView = {
   readonly content: readonly AgentContentBlock[];
 } & OpenView;
 
+/** `toolDetail` 的内容部分名；也是 `truncatedParts` 的封闭词表。 */
+export type ToolDetailPart = "input" | "output" | "text";
+
+/**
+ * `tool.call.*.view.toolDetail`：Agent 确实提供的工具输入 / 输出 / 文本内容。
+ *
+ * 三个内容部分各自可选，缺席表示「Agent 没有提供」（或该部分超限，见 `truncatedParts`）；
+ * 存在时 `input`/`output` 保留原 JSON 值（例如 `null`、`false`、`0` 都是**存在**的取值）。
+ * 未知键按值保留：本类型只声明已知部分，不丢弃视图里的其它字段。
+ */
+export type ToolCallDetailView = {
+  readonly input?: unknown;
+  readonly output?: unknown;
+  readonly text?: readonly string[];
+  readonly truncatedParts?: readonly ToolDetailPart[];
+} & OpenView;
+
 /** `tool.call.started` / `.updated` / `.completed` 的公共字段。 */
 export interface ToolCallFields {
   readonly toolCallId: string;
   readonly turnId: Uuid;
   readonly title: string;
   readonly state: string;
+  /** 可选：Agent 提供的工具详情；缺席时视图仍完整。 */
+  readonly toolDetail?: ToolCallDetailView;
 }
 
 /** `$defs.tool.call.started` / `.updated` / `.completed`。 */

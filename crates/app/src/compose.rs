@@ -16,6 +16,7 @@
 //! | `ConnectionCloser` | [`NodeLinkCloser`]（把撤销通知与重新配对的连接作废接到 Node Link 的连接注册表与命令管线，把设备撤销接到 Sync 的连接注册表） |
 //! | `sync::subscribe::OwnerReachability` | [`NodeLinkReachability`]（Owner 可达 = 存在来自该 node 的活跃 Node Link 连接） |
 //! | `core::ports::DirectoryBrowser`（`workspace.browse` 的唯一端口） | core 自带的默认实现（[`UseCases::new`] 的默认值，即 `crates/core/src/use_cases.rs` 的 `SystemDirectories`：只列直接子目录、只读、不回退）。组合根**不替换**它——本机文件系统就是生产实现；[`UseCases::with_directory_browser`] 留给测试替身与另一份实现 |
+//! | `core::ports::SessionFiles`（会话文件/Git 只读查询） | [`NativeSessionFiles`]：组合根构造**一个**实例，同时交给 [`UseCases::with_session_files`] 与 Sync 命令面（连接级版本释放），并在 [`Composition::close`] 调 `release_all` |
 //! | `DaemonControl` | `crate::daemon::AppDaemonControl` |
 //!
 //! 关闭期的资源释放由 [`Composition::close`] 负责：它逐一释放共享句柄，再执行 `storage-sqlite` 的
@@ -32,7 +33,8 @@ use acp_core::model::{
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, EventPublisher, IdGenerator,
-    LocalConfigStore, NodeEventSink, RetentionPolicy, SessionBackendFactory, SessionStore,
+    LocalConfigStore, NodeEventSink, RetentionPolicy, SessionBackendFactory, SessionFiles,
+    SessionStore,
 };
 use acp_core::ports::{RemoteDeliveryStore, TrustStore};
 use acp_core::use_cases::{UseCaseDeps, UseCases};
@@ -55,6 +57,7 @@ use uuid::Uuid;
 use crate::clock::SystemClock;
 use crate::config::{Config, KeystoreChoice};
 use crate::identity::{IdentityUnavailable, NodeIdentity};
+use crate::session_files::NativeSessionFiles;
 
 /// keystore 根目录（`<data_dir>/keystore`）。
 const KEYSTORE_DIRECTORY: &str = "keystore";
@@ -161,6 +164,12 @@ pub struct Composition {
     /// （core 不读时钟、不设定时器，见 `crates/core/src/broker.rs` 模块头）。
     broker: Arc<Broker>,
     use_cases: Arc<UseCases>,
+    /// 会话文件/Git 的原生只读端口（与 `UseCases` 内部注入的是同一个实例）。
+    ///
+    /// 用例面不暴露端口，而连接级版本释放（`CommandRoute::on_closed`）与 daemon 关闭都要拿到同一实例，
+    /// 因此组合根显式持有它：`Composition::close` 调 [`NativeSessionFiles::release_all`]，确保关闭后不残留
+    /// 任何内容快照。
+    session_files: Arc<NativeSessionFiles>,
     /// 节点级事件提交任务的句柄（组合根持有，与 sink 闭包共享）。
     ///
     /// `NodeEvents` 的出口是**同步**闭包，而 `Broker::commit_node_event` 是异步的：每次投递都在组合根
@@ -256,18 +265,22 @@ impl Composition {
                 max_queued_turns: config.sessions.max_queued_turns,
             },
         ));
-        let use_cases = Arc::new(UseCases::new(UseCaseDeps {
-            broker: Arc::clone(&broker),
-            store: session_store,
-            deliveries,
-            trust: trust_store,
-            audit: audit_store,
-            config: local_config,
-            attachments,
-            catalog,
-            clock: Arc::clone(&clock),
-            ids: Arc::clone(&ids),
-        }));
+        let session_files = Arc::new(NativeSessionFiles::new());
+        let use_cases = Arc::new(
+            UseCases::new(UseCaseDeps {
+                broker: Arc::clone(&broker),
+                store: session_store,
+                deliveries,
+                trust: trust_store,
+                audit: audit_store,
+                config: local_config,
+                attachments,
+                catalog,
+                clock: Arc::clone(&clock),
+                ids: Arc::clone(&ids),
+            })
+            .with_session_files(Arc::clone(&session_files) as Arc<dyn SessionFiles>),
+        );
 
         // 节点级事件缝（`design.md` D6、`core-derived-events` R8）：把 WP4 的 `NodeEvents` 接到 WP3 的
         // `Broker::commit_node_event`。这是本文件承接的**规划缺口收尾**——该缝在 `plan.md` 没有所有者行。
@@ -312,6 +325,7 @@ impl Composition {
             host,
             broker,
             use_cases,
+            session_files,
             node_event_tasks,
         })
     }
@@ -349,6 +363,14 @@ impl Composition {
     /// 用例面。
     pub fn use_cases(&self) -> &Arc<UseCases> {
         &self.use_cases
+    }
+
+    /// 会话文件/Git 的原生只读端口（与 [`Composition::use_cases`] 注入的是同一个实例）。
+    ///
+    /// 组合根把它同时交给 `UseCases::with_session_files` 与 Sync 命令面；daemon 关闭时
+    /// [`Composition::close`] 用它释放全部连接期内容快照。
+    pub fn session_files(&self) -> &Arc<NativeSessionFiles> {
+        &self.session_files
     }
 
     /// broker（`UseCases` 内部的同一实例）：合并窗口的定时任务直接调 `Broker::pump`。
@@ -416,6 +438,7 @@ impl Composition {
         let Self {
             store,
             use_cases,
+            session_files,
             host,
             broker,
             authority,
@@ -427,6 +450,9 @@ impl Composition {
             node_event_tasks,
             ..
         } = self;
+        // 内容快照只存在于内存；连接断开的逐版本释放由 Sync 命令面完成，这里兜底释放全部（daemon 关闭）。
+        // 必须在关闭存储之前：`release_all` 不触碰存储，但关闭顺序上它属于「先释放资源」的一段。
+        session_files.release_all();
         // 显式释放：`UseCases`/`Broker`/`AgentHost` 各自持有存储句柄（`Arc<dyn …>` 克隆）。
         drop(use_cases);
         drop(broker);
@@ -1037,6 +1063,38 @@ mod tests {
         ))
         .expect("开发模式配置");
         assert!(build_keystore(&forced, entropy).is_ok());
+    }
+
+    /// 组合根把同一个 `NativeSessionFiles` 交给用例面与 Sync 命令面，并在 daemon 关闭路径释放全部
+    /// 连接期内容快照（WP3 3.2）。
+    #[tokio::test]
+    async fn daemon_close_releases_all_content_snapshots() {
+        let dir = TempDir::new("session-files");
+        let workspace = dir.path.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::write(workspace.join("note.txt"), b"hello").expect("file");
+        let composition =
+            Composition::assemble(dev_config(&dir.path, ""), Arc::new(LoggingPublisher))
+                .await
+                .expect("装配");
+        // 通过组合根持有的那个实例建立快照：`release_all` 若作用在另一份实例上，计数不会归零。
+        let files = Arc::clone(composition.session_files());
+        let path = acp_core::model::SessionFilePath::parse("note.txt").expect("path");
+        SessionFiles::open_content(
+            files.as_ref(),
+            workspace.to_str().expect("utf-8 workspace"),
+            &path,
+            acp_core::model::FileReadPurpose::Preview,
+        )
+        .await
+        .expect("open snapshot");
+        assert_eq!(files.snapshot_count(), 1);
+        composition.close().await.expect("关闭组合根");
+        assert_eq!(
+            files.snapshot_count(),
+            0,
+            "daemon 关闭路径必须调用 release_all 释放内容快照"
+        );
     }
 
     /// 关闭顺序：仍有其它句柄时 `close()` 必须失败关闭，全部释放后才关闭连接池。

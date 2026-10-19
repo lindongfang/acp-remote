@@ -199,8 +199,9 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.workspace-browse.v1` | Sync 面逐层浏览节点目录的查询命令 `workspace.browse`（§11.5 的请求/结果形状与失败分类、§14 的单层条目上限） | mvp | 否 |
 | `core.workspace-mkdir.v1` | Sync 独立创建当前父目录下的一层目录 `workspace.mkdir`（§11.5） | mvp | 否 |
 | `core.file-diff.v1` | `file.changed` 视图携带结构化差异行 `diffLines` 与不可用标记 `diffUnavailable`（§10.3）：未协商时该键缺席 | mvp | 否 |
+| `core.session-files.v1` | Sync 面当前会话工作目录内的只读文件查询：`session.files.list`/`session.files.read` 与 `session.git.status`/`session.git.diff`（§11.5 的请求/结果形状、§14 的分页与内容预算）；只登记 Sync，不进入 Node Link | mvp | 否 |
 
-- 本表的十一个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- 本表的十三个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
 - `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 没有这种 feature，必需性由客户端按自身需要声明。
 - 客户端发送支持列表和必需列表。
 - 服务端返回已选择的交集。
@@ -1026,7 +1027,7 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
 - 快照（§9.4）：`sessions` chunk 恒发一个（空会话也发空数组），`workspaces`/`agents` 受 `core.local-catalog.v1` 门控（未协商不下发、不以空数组占位），`chunkCount` 与实际块数一致且取值 `1..=3`；六类会话明细资源不进快照；`snapshotDigest` 按每个 chunk 的**原始 UTF-8 文本字节**分别求 SHA-256、按 `chunkIndex` 顺序连接后再求一次 SHA-256，结果取无填充 base64url。
 - ACK（§9.5）：只前进，回退被忽略并记诊断；超过本连接已发送最高游标时回 `sync.cursor_invalid`；ACK 不推进事件库 head，服务端保存的设备 ACK 最大值不决定新连接的恢复位置。
 
-**已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的六条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 14 条 Sync 命令（含 8 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）均已接线：命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
+**已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的十条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 18 条 Sync 命令（含 8 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）中的既有命令均已接线；新增的 `session.files.list`/`session.files.read`/`session.git.status`/`session.git.diff` 已由 WP3 接到真实用例与原生端口：门控先于任何文件/Git I/O，`session.files.read` 的连接绑定内容版本随连接关闭/撤销/daemon 关闭释放，`core.session-files.v1` 因此进入服务端支持集合。命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
 
 **仍未落地**（与本小节相邻）：imported 事件的回源投递见 §9.6 末条的计划标注；`session.read` 的三类明细资源与 imported 明细的降级见 §9.4 的说明。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
 
@@ -1200,7 +1201,7 @@ device.revoked
 
 ### 10.3 v1 Event View Contract
 
-所有 `view` 都是 object。下面字段是最低必填合同；可以增加已协商 feature 所允许的可选字段，但不得改变既有字段语义。 三条跨字段规则： (a) `deltaIndex` 在**每条消息内**从 `0` 开始严格加一，由生产事件的适配器分配；空洞不是协议错误，也不表示丢包（检测丢包请用 `payloadDigest`/序号），消费方按现存的 `deltaIndex` 升序拼接； (b) `agent.message.completed` **由 Broker 在 turn 结束时生成**，与该 turn 的终态事件在**同一次提交**内落盘：正文按该消息的 delta（含可选 `block`）折叠，规则见 `CORE_PORTS_AND_STORAGE.md` §6 第 14 条；`agent.thought.delta` 不产生收尾事件（登记在案的短保留期降级）； (c) delta 被 `turn.delta_compacted` 压缩后，**重放里由该 summary 事件替代**（不再出现那些 delta）；客户端察觉 delta 丢失靠会话内 `sessionSequence` 的稠密性（§9.4），终态正文一律以 `agent.message.completed` 为准（`CORE_PORTS_AND_STORAGE.md` §6 第 15 条）。`view` 内的 JSON 取值域遵守 §3.3 的 ACPR-CJ1：数字必须是整数（`|n| ≤ 2^53−1`），不得出现浮点，否则 `payloadDigest` 无法跨实现复算。
+所有 `view` 都是 object。下面字段是最低必填合同；可以增加已协商 feature 所允许的可选字段，但不得改变既有字段语义；向后兼容的可选字段（例如 `toolDetail`）不要求 feature 协商。 三条跨字段规则： (a) `deltaIndex` 在**每条消息内**从 `0` 开始严格加一，由生产事件的适配器分配；空洞不是协议错误，也不表示丢包（检测丢包请用 `payloadDigest`/序号），消费方按现存的 `deltaIndex` 升序拼接； (b) `agent.message.completed` **由 Broker 在 turn 结束时生成**，与该 turn 的终态事件在**同一次提交**内落盘：正文按该消息的 delta（含可选 `block`）折叠，规则见 `CORE_PORTS_AND_STORAGE.md` §6 第 14 条；`agent.thought.delta` 不产生收尾事件（登记在案的短保留期降级）； (c) delta 被 `turn.delta_compacted` 压缩后，**重放里由该 summary 事件替代**（不再出现那些 delta）；客户端察觉 delta 丢失靠会话内 `sessionSequence` 的稠密性（§9.4），终态正文一律以 `agent.message.completed` 为准（`CORE_PORTS_AND_STORAGE.md` §6 第 15 条）。`view` 内的 JSON 取值域遵守 §3.3 的 ACPR-CJ1：数字必须是整数（`|n| ≤ 2^53−1`），不得出现浮点，否则 `payloadDigest` 无法跨实现复算。
 
 | Event type | `view` 最低字段 |
 |---|---|
@@ -1219,7 +1220,7 @@ device.revoked
 | `agent.message.delta` | `messageId`, `turnId`, `deltaIndex: decimal string`, `text`, 可选 `block: AgentContentBlock`（**仅**在非文本内容时出现；`text` 始终是该 chunk 的文本投影，纯文本客户端只读它）。`block` 由**生产事件的适配器**投影（它持有 ACP DTO），Broker 不解析 ACP 原文 |
 | `agent.message.completed` | `messageId`, `turnId`, `content: AgentContentBlock[]` |
 | `agent.thought.delta` | `messageId`, `turnId`, `deltaIndex: decimal string`, `text` |
-| `tool.call.started`, `tool.call.updated`, `tool.call.completed` | `toolCallId`, `turnId`, `title`, `state`; 摘要字段可选，完整 ACP 保留在 `acp` |
+| `tool.call.started`, `tool.call.updated`, `tool.call.completed` | `toolCallId`, `turnId`, `title`, `state`; 可选 `toolDetail`（`input`/`output`/`text` 与 `truncatedParts`，语义见下）；摘要字段可选，完整 ACP 保留在 `acp` |
 | `permission.requested` | `interactionId`, `turnId`, `title`, `description`, `options: InteractionOption[]` |
 | `permission.resolved` | `interactionId`, `resolution`, `resolvedByDeviceId: UUID|null` |
 | `elicitation.requested` | `interactionId`, `turnId`, `title`, `schema`, `initialValues` |
@@ -1232,6 +1233,16 @@ device.revoked
 | `command.failed` | `requestId`, `error: PublicError` |
 | `command.uncertain` | `requestId`, `reason`, `mayHaveReachedAgent: true` |
 | `device.revoked` | `deviceId`, `revokedAt`；只发送给仍有权查看设备状态的其他客户端 |
+
+`toolDetail` 是 `tool.call.started` / `tool.call.updated` / `tool.call.completed` 的**可选**工具详情，只在 Agent 确实提供了对应数据时出现；它不包含任何由视图层推断的取值：
+
+- `input` / `output`：ACP `rawInput` / `rawOutput` 的 JSON 值，原样保留（不重新解释形状）。ACP 未提供对应字段时该键**缺席**；MUST NOT 以下发 `null`、空对象或空数组冒充。
+- `text`：ACP 工具内容里文本块（`ToolCallContent::Content` 包装的 `Text`）的文本数组，顺序与 Agent 提供的一致；没有文本块时缺席。Diff、terminal 与未识别的 content 类型**不进入** `text`——差异行继续由类型化 `diff` 与 `file.changed` 承担，终端输出走 `terminal.output`，未识别类型仍可经 `acp.rawJson` 诊断查看。未识别的 content MUST NOT 被文本化或猜测成上述任一部分。
+- `truncatedParts`：因超过 §14 的固定上限而**整体缺席**的部分名，取值只取 `"input"`、`"output"`、`"text"`（封闭词表，不得重复）；没有截断时缺席。它是「数据存在但未随本事件下发」的显式信号，客户端 MUST NOT 把缺席读成「参数/输出为空」。
+- **ACPR-CJ1 值域约束**：`input`/`output` 是自由 JSON，可能含浮点或超出 2^53−1 的整数，而 `view` 落库前必须通过 ACPR-CJ1 校验（§3.3：数字有限、无小数部分、`|n| ≤ 2^53−1`，嵌套不超过规定深度）。无法以该值域表达的部分同样**整体缺席**并登记在 `truncatedParts`，MUST NOT 让整条事件因 `view` 校验失败而无法提交。`text` 是字符串，不做数值判定。
+- 三个内容部分都缺席且没有截断时**整个 `toolDetail` 缺席**，视图仍完整；客户端 MUST NOT 呈现空占位。
+- **绝不发送被截断的 JSON 片段**：某一部分超过 §14 的上限时该部分整体缺席并登记；整体预算不足时按 `output` → `text` → `input` 的优先序保留（结果与内容优先，输入通常已由 `tool.call.started` 下发），让出的部分同样整体缺席并登记。`truncatedParts` 是并集语义：一次事件里多个部分超限时必须逐个列出。
+- `toolDetail` 不改写同一事件的 `acp.rawJson`：其字节、摘要与长度与不携带 `toolDetail` 时逐字节相同（§10.3），客户端仍可经原文诊断查看完整内容。
 
 `file.changed` 的三个可选字段的语义固定如下，客户端必须照此呈现，不得自行推断：
 
@@ -1438,6 +1449,10 @@ session.mode.set
 session.config.set
 permission.resolve
 session.create
+session.files.list
+session.files.read
+session.git.status
+session.git.diff
 ```
 
 Sync v1 尚未定义，或仅允许 Node 本地管理入口：
@@ -1508,9 +1523,13 @@ local.audit.export
 | `session.config.set` | mutation | 必须 | `{ configId, value }`，body `expectedVersion` 必须存在 | 先发 `session.config.changed`，再发 `command.completed` |
 | `permission.resolve` | mutation | 必须 | `{ interactionId, optionId }` | `permission.resolved` 后 `command.completed` |
 | `session.create` | mutation | 禁止（会话尚不存在） | 只允许四个键：`agentId`（必填）、`directoryId`（本机已记录目录的标识）、`workspacePath`（客户端提交的绝对目录，1..=4096 字符）与可选的布尔键 `createIfMissing`（显式的「目录不存在则先创建」开关）；`directoryId` 与 `workspacePath` **恰好出现一个**，且 `createIfMissing` 与 `directoryId` **互斥**（同时出现即 `protocol.schema_invalid`）；出现任何其它键（`cwd`、`templateParams`、MCP 配置或凭据字段）一律 `protocol.schema_invalid` | `accepted { result: null, terminalEventId: null }` → `completed { sessionId, session: SessionSummary }` 并附唯一 `terminalEventId`；目录形状非法（相对路径、含 `..`、别名未登记）以参数类错误拒绝且不触碰文件系统，形式合法但本机解析失败以 `internal.unavailable` 拒绝，两者都是**接受前**的拒绝（零副作用）；`createIfMissing` 为真且目录不存在时先创建它（连同缺失的父层）再启动 Agent，创建失败以 `internal.unavailable` 拒绝且不启动 Agent、不留会话行，按它创建出的目录不登记成别名（该会话的目录归属是「未分组」）且在后续失败时**不删除**；受理只落该命令的幂等记录（会话标识为空、不写会话行），会话行与终态在**同一次提交**里落盘，因此已接受的创建按「能否证明 Agent 侧未产生会话」终结——进程未能启动、Agent 明确返回错误、请求未发出 ⇒ `failed`（复用既有错误码 `internal.unavailable`，成因写在终态 `message` 里，不新增错误码），短请求超时、请求发出后连接断开、会话已建立之后才失败或崩溃窗口 ⇒ `uncertain`；上述接受前的拒绝与**建立失败**的 `failed`/`uncertain` 终态都零会话行、不下发会话标识；只有「会话确实已建立、仅终态结果无法投影」那一档 `uncertain` 例外——那时会话行与 `uncertain` 终态在**同一次提交**里落盘（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条），仍然不下发会话标识。同一 `requestId` 重发返回首次结果，不产生第二个会话 |
+| `session.files.list` | query | 必须 | `{ path, hideIgnored, after? }`；`path` 是根内相对目录，空字符串表示会话根；`hideIgnored` 必填布尔值；`after` 是可选翻页位置 | `completed { path, gitState, entries: SessionFileEntry[], next? }`；条目含根内路径、名称、类型（file/directory/link/other）、可打开性与受限原因；`gitState` 为 `available｜not_repository｜unavailable`；每页最多 128 项，`next` 为续读位置；受 `core.session-files.v1` 门控 |
+| `session.files.read` | query | 必须 | `{ path, purpose, offset, version? }`；`purpose` 为 `preview｜download`，`offset` 是规范十进制字符串，`version` 是连接期不透明标识 | `completed { path, kind, sizeBytes, version, offset, dataBase64, eof, previewTruncated }`；`kind` 为 `text｜image｜binary`，单块原始字节最多 32 KiB；版本缺失时建立快照，变化时明确要求重读 |
+| `session.git.status` | query | 必须 | `{ after? }` | `completed { gitState, entries: GitStatusEntry[], next? }`；每项含路径、状态（added/modified/deleted/renamed/untracked）、可用的旧路径及冲突/二进制标识；只覆盖会话根内文件 |
+| `session.git.diff` | query | 必须 | `{ path }` | `completed { path, base, kind, diffLines?, unavailable?, truncated }`；`base` 为 `head｜empty`，`kind` 为 `text｜binary｜conflict`；文本差异最多 400 行 / 64 KiB / 单行 4096 字符 |
 | `session.resume` | mutation | 仅 Node Link（经 `sessionRef`） | `{}` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；`accepted` 的 `result` 为 `null`，成功终态为 `completed SessionResumeResult`（`remoteSessionRef` + `sessionMeta`）；目标 Agent 未宣告 `sessionCapabilities.resume` 时以 `nodelink.command.unsupported` 失败；Sync v1 收到返回 `command.unsupported` |
 
-本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（14 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举包含其中 `transport` 含 `sync` 的 13 条；`session.resume` 只经 Node Link 接受，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在该枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 13 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
+本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（19 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举包含其中 `transport` 含 `sync` 的 18 条；`session.resume` 只经 Node Link 接受，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在该枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 13 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
 
 `session.create` 在两个传输面同名但 payload 不同，本表是 Sync 面的形状；Node Link 面的 payload 是 `{ agentId, directoryId }`（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 第 12.7 节），同样**不接受** `createIfMissing`。两个面共用同一套命令名、幂等与终态语义：先受理再执行（受理即持久化幂等记录，客户端拿到的首次响应是 `accepted`，其 `result` 与 `terminalEventId` 均为 `null`），最终以 `completed`/`failed`/`uncertain` 之一终结，同一 `requestId` 重发必须返回首次结果。`session.create` 的受理只写幂等记录（会话标识为空、不写会话行）：Agent 侧返回后的一次提交里落账——成功时写会话行（含 ACP 会话标识、core 自己解析的 cwd 与目录别名）、回填幂等行的会话标识并写 `completed`，失败时只写终态、**零会话行**。`session.create` 的 `accepted` 必须携带 `result: null`——这是服务端语义要求（与 `command.status` 的 `acceptedAt` 同类），schema 的 `accepted` 分支不对 `result` 取值做约束，因此客户端不得依赖它在 wire 上被强制。
 
@@ -1526,6 +1545,28 @@ local.audit.export
 - **只读、无副作用**：不写任何登记、缓存或会话状态，不改变本机 workspace 登记表，也不为被查看的目录补出任何后续权限或别名；一次浏览完成不产生审计记录，审计动作词表不因此扩张（design D6）。经它选定但未登记的目录创建的会话，其目录归属仍是「未分组」。
 - **条目上限**：单层条目数上限是固定 v1 常量（§14）；超过上限时只返回上限内的条目并把 `truncated` 置真——不得静默丢弃，也不得因超限而整次失败。结果本身超过单条消息上限时按本节末的既有规则返回 `resource.result_too_large`，不得截断后伪装成完整结果。
 
+
+`session.files.list` / `session.files.read` / `session.git.status` / `session.git.diff` 是 Sync 面带 `core.session-files.v1` 的四条**只读查询**（Node Link 不登记它们）：
+
+- **认证、协商与来源先于 I/O**：四条命令都在 body 顶层要求 `sessionId`，并禁止 `expectedVersion`。已认证连接未协商 `core.session-files.v1` 时，服务端在任何文件系统读取或 Git 启动之前返回 `protocol.feature_required`（`details.features` 给出缺的 feature），不得返回空结果冒充成功。目标会话必须是本机 owned 会话；imported 会话一律返回 `capability.unsupported_by_broker`，不访问 Access 本机文件系统，也不向 Owner 转发这些查询。设备撤销按既有认证规则拒绝。
+- **根是会话实际工作目录**：服务端从该会话持久化的实际工作目录（`SessionStore::load_recovery().workspace_cwd`）确定根；未分组会话同样使用其实际 cwd。目录登记/别名不参与根解析，也不存在回退目录。根不存在、不可读或恢复列为空时返回 `internal.unavailable`，MUST NOT 用空列表或其它目录冒充成功。
+- **路径只有根内相对形状**：请求只接受根内相对路径（`session.files.list` 的空字符串表示根），结构是「非空分量 + 单个 `/` 或 `\` 分隔符」。绝对路径、盘符、UNC、父引用（`..`）、`.` 分量、控制字符（含换行与制表符）、NUL、任意冒号（Windows alternate data stream 与盘符）以及任一分量为 `.git`（大小写不敏感）的路径一律按 `protocol.schema_invalid` 拒绝，且判定在文件/Git 端口调用之前。隐藏 `.git` 目录与 worktree 的 `.git` 管理文件既不出现在枚举结果中，也不能被直接读取。实现仍须以实际打开的对象验证根边界；本层形状校验不能替代适配器的安全打开。
+- **`session.files.list`**：`{ path, hideIgnored, after? }`，`hideIgnored` 必须显式给出。结果 `{ path, gitState, entries, next? }`；`path` 逐字回显请求（根为空串），条目含根内 `path`、`name`、`kind`（`file｜directory｜link｜other`）、`openable` 与不可打开时的 `restricted`（`outside_root｜unreadable｜unsupported`）。默认包含隐藏、系统属性与 Git 忽略项，只排除 `.git`；`hideIgnored` 为真时按 Git 有效忽略规则在分页前过滤。条目按目录优先、名称 Unicode 码点、路径打破并列的确定顺序排列；每页最多 128 项（§14），达到上限时给出 `next`，客户端据此继续读取，不得把一页当作已列完。`gitState` 区分可查询、非仓库与本机 Git 不可用；非仓库不把所有文件误判为被忽略。根外链接仍作为条目出现，但 `openable` 为假，且不下发目标绝对路径。
+- **`session.files.read`**：`{ path, purpose, offset, version? }`；`purpose` 为 `preview｜download`，`offset` 是规范十进制字符串。结果 `{ path, kind, sizeBytes, version, offset, dataBase64, eof, previewTruncated }`；`kind` 为 `text｜image｜binary`，`sizeBytes`/`offset` 是规范十进制字符串，`dataBase64` 是无填充 base64url。`version` 缺席时服务端建立**连接绑定**的只读内容快照并从 `offset` 返回第一块；带 `version` 时从同一版本续读。文件在后续块之前变化时服务端 MUST 废弃快照并明确要求重新读取，MUST NOT 拼接两个版本。单块原始字节最多 32 KiB；文本预览最多 256 KiB、栅格图片预览最多 4 MiB、一次下载最多 64 MiB；超过预览预算只取得预算内内容并置 `previewTruncated`，超过下载预算返回 `resource.result_too_large`，不得悄悄只下载前一段。快照版本绑定连接、设备、会话与相对路径，不得跨连接当作 bearer 使用。
+- **`session.git.status`**：`{ after? }`；结果 `{ gitState, entries, next? }`。每个文件只出现一次，合并已暂存、未暂存与未跟踪状态；每项含根内路径、`status`（`added｜modified｜deleted｜renamed｜untracked`）、可安全确认时的 `previousPath`，以及 `conflicted`/`binary` 标记。只覆盖会话根内的文件；根外的改名按根内删除/新增表达，不下发根外旧路径。非仓库与 Git 缺失是成功结果里的显式 `gitState`，不是空列表。
+- **`session.git.diff`**：`{ path }`；结果 `{ path, base, kind, diffLines?, unavailable?, truncated }`。`base` 为 `head｜empty`（无 HEAD 时以空基准比较），`kind` 为 `text｜binary｜conflict`。差异默认比较 HEAD 与当前工作树，不把已暂存与未暂存补丁相加；文本差异最多 400 行、合计 64 KiB、单行 4096 字符，超出时只带可行子集并置 `truncated`。二进制与冲突不伪造成文本；非仓库、Git 不可用或差异过大时只带 `unavailable`（`not_repository｜git_unavailable｜too_large`），`diffLines` 与 `unavailable` 不得同时出现。实现 MUST NOT 运行仓库配置指定的 external diff、textconv、hook、fsmonitor 或 pager，也不修改索引/工作树。
+- **查询语义**：四条命令都同步返回一次 `completed` 或 `rejected`，不产生 mutation 受理，也不写命令终态事件；`completed` 的 `terminalEventId` 固定为 `null`（§11.2 的 `allOf` 已把这四条列入查询集合）。重复 query 沿用连接期去重；主动刷新必须使用新的 `requestId`，不得复用旧结果。查询不改变会话、目录登记、Git 索引或工作树。
+- **错误映射**：非法路径/形状 → `protocol.schema_invalid`；会话不存在 → `session.not_found`；imported 会话 → `capability.unsupported_by_broker`；文件 I/O 或安全打开失败、根不可用 → `internal.unavailable`；一次下载超过 64 MiB（端口返回 `PortError::InvalidRequest(RESULT_TOO_LARGE)`）或整体结果超限 → `resource.result_too_large`；限流 → `resource.rate_limited`（遵守既有 `retryAfterMs`）。非仓库、二进制与冲突是成功结果里的显式状态。错误消息与日志 MUST NOT 含文件正文、内容版本令牌、Git stderr 原文或根外绝对路径。
+- **兼容**：旧客户端不协商 `core.session-files.v1`，因此不会发送这四条命令，原有会话与 `workspace.browse` 行为逐字不变；新客户端连接未宣告该 feature 的旧主机时不派发这些查询，并在界面上明确降级，不得读取本机替代目录或伪造空列表。
+
+服务端接线与连接生命周期（实现约束，不改变上面的 wire 形状）：
+
+- **feature 宣告以真实实现为前提**：`core.session-files.v1` 只在四条查询已接到用例面、内容版本释放与组合根装配完成后进入服务端支持集合；`auth.server_challenge.selectedFeatures` 是客户端判断「这台主机是否真的能查文件」的唯一依据，不得提前宣告。
+- **门控先于一切本地读取**：每条命令依次经过连接期去重与限流 → 设备认证（持久信任行）→ `core.session-files.v1` 协商判定，之后才进入 core 的授权、会话来源判定（owned / imported）与文件/Git 端口。未认证、设备已撤销、未协商或 imported 会话都在文件系统读取与 Git 进程启动**之前**失败；未协商时不产生任何端口调用。
+- **每连接一个活动内容版本**：`session.files.read` 省略 `version` 时建立新快照，成功后才登记该版本，并用 `(设备, 会话, 相对路径, 版本)` 四个维度绑定到发起它的连接；同一连接换新版本前先释放旧版本。带 `version` 续读必须命中本连接登记过的同一组维度，跨连接（跨设备）、跨会话或跨路径的令牌一律显式拒绝（`internal.unavailable`），不得退化成按令牌直接读取。
+- **释放责任在接线层**：连接正常关闭、传输断开、设备撤销与 daemon 关闭都经过同一连接收尾路径；服务端在该路径上调用端口 `release_content` 释放该连接的活动版本。daemon 关闭时还会对原生端口调用一次 `release_all` 兜底。快照只存在于内存，不写临时正文文件；空闲到期同样走 `release_content`。
+- **消息预算与限流**：四条命令与既有查询同属 `observe` 限流族（§14），超限沿用 `resource.rate_limited` + `details.retryAfterMs`。`completed` 结果在入队前按**编码后的完整信封字节**与连接的单条消息上限比较；超限即返回 `resource.result_too_large`，绝不截断后冒充完整结果。单块内容已在端口层限制为 32 KiB，服务端仍按整帧预算复核，不依赖这个上限保证装得下。
+- **安全响应头**：托管前端为安全预览图片只增加 `img-src 'self' blob:`（Blob URL 由页面从已认证查询得到的字节创建）；`script-src`、`connect-src`、`object-src`、`base-uri` 与 `frame-ancestors` 保持原策略，不放宽为任意外部来源、`data:` 或内联脚本。
 
 `session.read` 是会话明细的唯一入口（第 9.4 节：六类明细资源不进快照），因此它在 Sync 面带分页参数：
 
@@ -1712,9 +1753,18 @@ v1 默认上限：
 | 认证超时 | 15 秒 |
 | 配对默认有效期 | 5 分钟 |
 | 目录浏览的单层条目数（`workspace.browse`） | 128 |
+| 会话文件/ Git 状态枚举的单页条目数（`session.files.list` / `session.git.status`） | 128 |
+| 根内相对路径的字符数（`session.files.*` / `session.git.diff`） | 4,096 |
+| 单个文件内容块的原始字节（`session.files.read` 的 `dataBase64` 解码后） | 32 KiB |
+| 文本预览的原始字节（`session.files.read`，`purpose = preview`） | 256 KiB |
+| 栅格图片预览的原始字节（PNG/JPEG/GIF/WebP） | 4 MiB |
+| 一次完整下载的原始字节（`purpose = download`） | 64 MiB |
 | 单处改动的差异行数（`file.changed.diffLines`） | 400 行 |
 | 单处改动的差异行合计文本 | 64 KiB（UTF-8） |
 | 单行差异行文本 | 4,096 字符 |
+| 工具详情的单一部分（`tool.call.*` 的 `toolDetail.input` / `toolDetail.output`） | 各 32 KiB（JSON 序列化后的 UTF-8 字节） |
+| 工具详情的文本部分（`toolDetail.text`） | 32 KiB（各文本块 JSON 序列化后的字节合计） |
+| 工具详情整体（`toolDetail`） | 64 KiB（JSON 序列化后的 UTF-8 字节） |
 
 认证前固定上限不能等待 `auth.authenticated` 下发：
 
@@ -1738,9 +1788,11 @@ v1 默认上限：
 - 超限应在读取/分配完整 body 前尽早拒绝；未认证错误不得回显请求内容或暴露设备是否存在。
 - feature ID 只允许 `[a-z0-9.-]`，不得为空、包含连续分隔 NUL 或通过 Unicode 形成视觉混淆。
 
-- 只有 `maxMessageBytes`、`maxPromptBytes`、`maxReplayEventsPerBatch` 三项通过 `auth.authenticated.limits` 下发，服务端可以按部署情况下调；其余上限（本节的认证前固定上限、JSON nesting depth、单对象字段数、单数组元素数、设备名称长度、单连接待发送队列、认证超时、配对有效期、目录浏览的单层条目数、差异行的行数/合计文本/单行文本）都是固定 v1 常量，不得通过 `limits` 覆盖或下调。
+- 只有 `maxMessageBytes`、`maxPromptBytes`、`maxReplayEventsPerBatch` 三项通过 `auth.authenticated.limits` 下发，服务端可以按部署情况下调；其余上限（本节的认证前固定上限、JSON nesting depth、单对象字段数、单数组元素数、设备名称长度、单连接待发送队列、认证超时、配对有效期、目录浏览的单层条目数、会话文件/ Git 状态单页条目数、根内相对路径长度、内容块/预览/下载预算、差异行的行数/合计文本/单行文本、工具详情的各部分与整体上限）都是固定 v1 常量，不得通过 `limits` 覆盖或下调。
 - **新增固定上限的取值理由**：单层条目数 128 与差异行 400 行 / 64 KiB 按单条消息 1 MiB 反推——128 条目录条目在「路径接近 4,096 字符上限、JSON 要求转义反斜杠」的最坏情形下约 0.8 MiB，400 行差异在单行不超过 4,096 字符、合计不超过 64 KiB 时转义后的体积同样留在同一条消息内；超限时两者都**显式降级**（目录浏览置 `truncated` 并只回上限内条目、差异行改为 `diffUnavailable`），而不是让请求失败或下发被截断的内容。
+- **会话文件预算的取值理由**：单块 32 KiB 的 base64url 约 43.7 KiB，远低于 1 MiB 单条消息上限，给信封与同帧其它字段留足空间；文本预览 256 KiB、图片预览 4 MiB、下载 64 MiB 分别覆盖「可滚动阅读」「可解码栅格图」「用户主动保存的常规文件」，更大的文件明确不支持完整下载。快照只在内存中、绑定连接并受 60 秒空闲与并发上限约束，因此预算与内存占用可直接对应；超过预览预算时置 `previewTruncated`，超过下载预算时返回 `resource.result_too_large`，不截断后冒充完整内容。Git 文本差异沿用 400 行 / 64 KiB / 单行 4,096 字符的既有固定上限。
 - 目录浏览的条目数上限与差异行上限都**不得**导致整次失败：前者按 §11.5 回上限内条目并置 `truncated: true`，后者按 §10.3 改为只带统计并标记 `diffUnavailable`。只有当结果整体超过单条消息上限时才回 `resource.result_too_large`（§11.5）。
+- **工具详情的降级**：`toolDetail` 的三个部分独立判定 32 KiB（`text` 按各文本块 JSON 序列化字节合计），整体 64 KiB。超限的部分**整体缺席**并在 `truncatedParts` 中登记，MUST NOT 发送被截断的 JSON 片段；三个内容部分都缺席但存在截断时仍下发 `truncatedParts`，以便客户端区分「数据存在但超限」与「Agent 没有提供」。无法以 ACPR-CJ1 值域表达的部分（数字非有限、含小数部分或超出 2^53−1，或嵌套超过规定深度）同样**整体缺席**并登记，不得让整条事件因 `view` 校验失败而无法提交。整体预算不足时按 `output` → `text` → `input` 的优先序保留（§10.3）。这些上限是固定 v1 常量，不由 `auth.authenticated.limits` 下发。
 - 超过单消息上限应在分配大对象前拒绝。
 - 限流所用的「命令族」是**服务端自持的 v1 常量**：每个命令名恰好属于一个族，覆盖关系由服务端测试断言；命令名的封闭词表仍以 `compatibility/commands/v1/commands.json` 为唯一来源。数值不变：单设备 120 次/分钟、窗口 1 分钟，连续超限以 `4429` 关闭连接。
 - 超过本节速率时返回 `resource.rate_limited`（`retryable = true`），并在连续超限时以 `4429` 关闭连接；客户端应遵守 `details.retryAfterMs`（存在时）退避后再重试，不得立即重发。

@@ -103,6 +103,51 @@ describe("顶栏：根路由呈现、配对路由不呈现", () => {
   });
 });
 
+describe("按视口填满：只有对话路由", () => {
+  it("对话路由 contentFill 为 true，目录页/详情页/主机页/配对入口为 false", () => {
+    const shellOf = (pathname: string): ShellModel =>
+      buildShellModel({ pathname, connectionState: "online", hostAddress: null, secureContext: true });
+
+    expect(shellOf("/session/aaaaaaaa-0000-4000-8000-000000000001").contentFill).toBe(true);
+    // 查询串、片段与尾斜杠不改变判定。
+    expect(shellOf("/session/abc/?x=1#frag").contentFill).toBe(true);
+    for (const pathname of ["/", "/dir/work-api", "/hosts", "/pair", "/node-link/pair", "/session", "/session/"]) {
+      expect(shellOf(pathname).contentFill, pathname).toBe(false);
+    }
+  });
+
+  it("呈现层只在对话路由给根与内容区不同的装配（其余路由保持文档流）", () => {
+    const sessionHtml = renderShell({
+      model: buildShellModel({
+        pathname: "/session/abc",
+        connectionState: "online",
+        hostAddress: null,
+        secureContext: true,
+      }),
+    });
+    const directoryHtml = renderShell({
+      model: buildShellModel({
+        pathname: "/",
+        connectionState: "online",
+        hostAddress: null,
+        secureContext: true,
+      }),
+    });
+
+    expect(sessionHtml).toContain('data-shell-fill="true"');
+    expect(sessionHtml).toContain('data-shell-content-fill="true"');
+    expect(directoryHtml).toContain('data-shell-fill="false"');
+    expect(directoryHtml).toContain('data-shell-content-fill="false"');
+    // 反例：把 contentFill 套到所有路由 → 两次渲染的根/内容容器样式完全相同（下面两条会红）。
+    expect(sessionHtml.match(/<[^>]*data-shell="root"[^>]*>/)?.[0]).not.toEqual(
+      directoryHtml.match(/<[^>]*data-shell="root"[^>]*>/)?.[0],
+    );
+    expect(sessionHtml.match(/<[^>]*data-shell-content="true"[^>]*>/)?.[0]).not.toEqual(
+      directoryHtml.match(/<[^>]*data-shell-content="true"[^>]*>/)?.[0],
+    );
+  });
+});
+
 describe("设备胶囊：三档色与异常短词", () => {
   it("在线时不出现状态短词，档位是正常", () => {
     const html = renderShell({

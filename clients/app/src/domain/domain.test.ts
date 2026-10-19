@@ -10,11 +10,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { AgentCatalogEntry, SessionSummary, WorkspaceCatalogEntry } from "../protocol/common";
+import type { AgentCatalogEntry, RawAcp, SessionSummary, WorkspaceCatalogEntry } from "../protocol/common";
 import { buildAgentCatalogView } from "./agent-catalog";
 import { buildSessionReadPageView, buildContextUsageView, contextUsageLabel } from "./conversation";
 import { buildDirectoryViews, directoryNamesOf } from "./directory";
 import { buildSessionSummaryView, UNTITLED_SESSION_LABEL } from "./session-summary";
+import { buildTimelineCard, groupStructuredRecords, toolDetailOf } from "./timeline";
+import type { StructuredRecord, ToolCallTimelineCard } from "./timeline";
 
 /** 造一个最小合法的 `SessionSummary`。 */
 function summary(overrides: Partial<SessionSummary> & Pick<SessionSummary, "sessionId">): SessionSummary {
@@ -268,5 +270,197 @@ describe("session.read 分页视图", () => {
     const page = buildSessionReadPageView({ sessionId: "s1", hasEarlier: false, resources: {} });
     expect(page.messages).toEqual([]);
     expect(page.earliestCursor).toBeNull();
+  });
+});
+
+/** 造一条工具调用的结构化记录（实时来源即可：卡片构造不看来源）。 */
+function toolCallRecord(input: {
+  readonly eventId: string;
+  readonly eventType: string;
+  readonly view: Record<string, unknown>;
+  readonly globalSequence?: string;
+  readonly createdAt?: string;
+  readonly acp?: RawAcp;
+}): StructuredRecord {
+  return {
+    source: "realtime",
+    eventId: input.eventId,
+    eventType: input.eventType,
+    sessionId: null,
+    createdAt: input.createdAt ?? "2026-10-01T00:00:02.000Z",
+    sessionSequence: null,
+    globalSequence: input.globalSequence ?? "1",
+    originKind: "agent",
+    view: input.view,
+    ...(input.acp === undefined ? {} : { acp: input.acp }),
+  };
+}
+
+/** 工具调用的公共视图字段（详情由用例单独补）。 */
+function toolCallView(toolDetail?: Record<string, unknown>): Record<string, unknown> {
+  return {
+    toolCallId: "tc-1",
+    turnId: "t-1",
+    title: "读取文件",
+    state: "running",
+    ...(toolDetail === undefined ? {} : { toolDetail }),
+  };
+}
+
+/** 记录 → 唯一的一张工具调用卡片（同一 `toolCallId` 的记录组）。 */
+function toolCallCard(records: readonly StructuredRecord[]): ToolCallTimelineCard {
+  const group = groupStructuredRecords(records)[0];
+  if (group === undefined) throw new Error("没有记录组");
+  const card = buildTimelineCard(group, () => null);
+  if (card === null || card.kind !== "tool_call") throw new Error("卡片不是工具调用");
+  return card;
+}
+
+describe("WP2 工具详情：跨事件部分归并与严格形状", () => {
+  it("started 只有输入、updated 只有输出：按时间归并后两部分都保留，eventId 取最新记录", () => {
+    // 故意按**到达顺序**倒置：updated 先到、started 后到；归并必须按时间而不是到达顺序。
+    const card = toolCallCard([
+      toolCallRecord({
+        eventId: "e-updated",
+        eventType: "tool.call.updated",
+        globalSequence: "2",
+        view: toolCallView({ output: { bytes: 3 }, text: ["新正文"] }),
+      }),
+      toolCallRecord({
+        eventId: "e-started",
+        eventType: "tool.call.started",
+        globalSequence: "1",
+        view: toolCallView({ input: { path: "src/a.ts" }, text: ["旧正文"] }),
+      }),
+    ]);
+
+    expect(card.toolCallId).toBe("tc-1");
+    expect(card.eventId).toBe("e-updated");
+    expect(card.detail?.input).toEqual({ present: true, value: { path: "src/a.ts" } });
+    expect(card.detail?.output).toEqual({ present: true, value: { bytes: 3 } });
+    // 同一部分在两条记录里都出现：必须按时间取 updated 的「新正文」；
+    // 若按到达顺序覆盖，会错误取到后到的 started 的「旧正文」。
+    expect(card.detail?.text).toEqual(["新正文"]);
+    expect(card.detail?.truncatedParts).toEqual([]);
+  });
+
+  it("text 取最新出现的非缺席值（跨事件归并，不回退到旧正文）", () => {
+    const card = toolCallCard([
+      toolCallRecord({
+        eventId: "e1",
+        eventType: "tool.call.started",
+        globalSequence: "1",
+        view: toolCallView({ input: { path: "a" }, text: ["旧正文"] }),
+      }),
+      toolCallRecord({
+        eventId: "e2",
+        eventType: "tool.call.updated",
+        globalSequence: "2",
+        view: toolCallView({ text: ["新正文一", "新正文二"] }),
+      }),
+    ]);
+
+    expect(card.detail?.text).toEqual(["新正文一", "新正文二"]);
+    // 后一条没有 input，不能因此把先前的输入丢掉。
+    expect(card.detail?.input).toEqual({ present: true, value: { path: "a" } });
+  });
+
+  it("truncatedParts 取所有记录的并集，按 input→output→text 固定顺序去重", () => {
+    const card = toolCallCard([
+      toolCallRecord({
+        eventId: "e1",
+        eventType: "tool.call.started",
+        globalSequence: "1",
+        view: toolCallView({ truncatedParts: ["output"] }),
+      }),
+      toolCallRecord({
+        eventId: "e2",
+        eventType: "tool.call.updated",
+        globalSequence: "2",
+        view: toolCallView({ truncatedParts: ["text", "input"] }),
+      }),
+    ]);
+
+    expect(card.detail?.truncatedParts).toEqual(["input", "output", "text"]);
+    // 只有截断登记、没有内容部分时 detail 仍非 null（「数据存在但超限」可被区分）。
+    expect(card.detail?.input).toBeNull();
+    expect(card.detail?.output).toBeNull();
+    expect(card.detail?.text).toBeNull();
+  });
+
+  it("没有 toolDetail（或内容部分全缺席且无截断）时 detail 为 null，eventId 仍保留", () => {
+    const withoutDetail = toolCallCard([
+      toolCallRecord({
+        eventId: "e-only",
+        eventType: "tool.call.completed",
+        view: toolCallView(),
+      }),
+    ]);
+    expect(withoutDetail.detail).toBeNull();
+    expect(withoutDetail.eventId).toBe("e-only");
+
+    const emptyDetail = toolCallCard([
+      toolCallRecord({
+        eventId: "e-empty",
+        eventType: "tool.call.completed",
+        view: toolCallView({}),
+      }),
+    ]);
+    expect(emptyDetail.detail).toBeNull();
+  });
+
+  it("非法 toolDetail 形状逐部分降级为缺席，不抛异常、不伪造", () => {
+    // 整个 toolDetail 不是普通对象。
+    expect(toolDetailOf({ toolDetail: null })).toBeNull();
+    expect(toolDetailOf({ toolDetail: [] })).toBeNull();
+    expect(toolDetailOf({ toolDetail: "input" })).toBeNull();
+    // text 不是字符串数组：整部分缺席（不把数字文本化）。
+    expect(toolDetailOf({ toolDetail: { text: "不是数组" } })).toBeNull();
+    expect(toolDetailOf({ toolDetail: { text: ["ok", 3] } })).toBeNull();
+    // truncatedParts 不是数组：没有截断登记。
+    expect(toolDetailOf({ toolDetail: { truncatedParts: "output" } })).toBeNull();
+    // 合法部分不因同块里的非法部分或未知枚举值一起消失。
+    expect(
+      toolDetailOf({
+        toolDetail: { input: { a: 1 }, text: 5, truncatedParts: ["output", "future"] },
+      }),
+    ).toEqual({
+      input: { present: true, value: { a: 1 } },
+      output: null,
+      text: null,
+      truncatedParts: ["output"],
+    });
+  });
+
+  it("JSON null / false / 0 / 空字符串是存在的取值，不按缺席处理", () => {
+    expect(toolDetailOf({ toolDetail: { input: null } })).toEqual({
+      input: { present: true, value: null },
+      output: null,
+      text: null,
+      truncatedParts: [],
+    });
+    expect(toolDetailOf({ toolDetail: { output: false } })?.output).toEqual({ present: true, value: false });
+    expect(toolDetailOf({ toolDetail: { output: 0 } })?.output).toEqual({ present: true, value: 0 });
+    expect(toolDetailOf({ toolDetail: { text: [""] } })?.text).toEqual([""]);
+  });
+
+  it("只读 view.toolDetail，不从 acp.rawJson 补造详情", () => {
+    const acp: RawAcp = {
+      mediaType: "application/json",
+      rawJson: JSON.stringify({ rawInput: { path: "来自原文" }, rawOutput: { ok: true } }),
+      byteLength: "60",
+      sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    };
+    const card = toolCallCard([
+      toolCallRecord({
+        eventId: "e-acp",
+        eventType: "tool.call.completed",
+        view: toolCallView(),
+        acp,
+      }),
+    ]);
+
+    // 原文里有 rawInput/rawOutput，但视图没有 toolDetail：不解析、不伪造。
+    expect(card.detail).toBeNull();
   });
 });

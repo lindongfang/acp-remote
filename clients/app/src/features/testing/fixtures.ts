@@ -202,6 +202,8 @@ export function storeWith(input: {
    * 一份与会话时刻相配的时钟，而不是去打桩全局 `Date`。
    */
   readonly now?: () => number;
+  /** 文件栏刷新退避的定时端口；缺省不排期（测试直接调用 `refreshFiles`）。 */
+  readonly schedule?: (delayMs: number, task: () => void) => () => void;
 }): StoreFixture {
   const gateway = recordingGateway(input);
   let counter = 0;
@@ -216,6 +218,7 @@ export function storeWith(input: {
     now: input.now ?? (() => 1_700_000_000_000),
     // `??` 会把「显式传 null（未连接）」当成缺省，因此这里区分 undefined 与 null。
     identity: { connectionId: input.connectionId === undefined ? "2de54db7-74ae-4c21-88e3-05df0dc2e637" : input.connectionId },
+    ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
   });
 
   if (input.resources !== null) {

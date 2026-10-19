@@ -346,6 +346,29 @@ describe("解码：命令词表与快照 workspaces 的目录身份", () => {
     expect(decodeWireMessage(unknown)).toMatchObject({ ok: false, reason: "field_type" });
   });
 
+  it("四条 session.files.* / session.git.* 命令都在词表内", () => {
+    // 反例：这些命令已登记进 commands.json 与 command.schema.json（`transport` 只含 `sync`），
+    // 若封闭词表没跟上，valid fixture 会被按 `field_type` 拒收 → 断言变红。
+    for (const command of [
+      "session.files.list",
+      "session.files.read",
+      "session.git.status",
+      "session.git.diff",
+    ]) {
+      const frame = JSON.stringify({
+        ...COMMAND_ENVELOPE,
+        body: { requestId: REQUEST_ID, command },
+      });
+      expect(decodeWireMessage(frame), command).toMatchObject({ ok: true });
+    }
+    // 未登记的名字即便形状正确也必须被拒，避免词表退化成「任意非空字符串」。
+    const unknown = JSON.stringify({
+      ...COMMAND_ENVELOPE,
+      body: { requestId: REQUEST_ID, command: "session.files.write" },
+    });
+    expect(decodeWireMessage(unknown)).toMatchObject({ ok: false, reason: "field_type" });
+  });
+
   it("workspaces 条目必须是 directoryId + 非空 path，旧 alias/displayName 形状被拒", () => {
     // 当前合同：`directoryId` 与非空的规范化 `path` 成对出现。
     expect(decodeWireMessage(chunkWith([{ directoryId: DIRECTORY_ID, path: "/home/u/api" }]))).toMatchObject({

@@ -4,7 +4,7 @@
  * ## 形态：右侧抽屉（原型 `.dx` / `#dxScrim`）
  *
  * 从内联 `<aside>` 改成固定定位的右侧抽屉 + 遮罩：抽屉头是标题与关闭入口，主体是元数据、
- * 降级原因与原文三块。`data-diagnostics-drawer="open"` 与 `data-action="close-diagnostics"`
+ * 诊断说明与原文三块。`data-diagnostics-drawer="open"` 与 `data-action="close-diagnostics"`
  * 原样保留（e2e 与组件测试都按它们定位），`Esc` 关闭也保留——抽屉打开时在本组件内挂一个
  * `keydown` 监听（原型把 `closeDx()` 挂在同一处），它只依赖 `onClose`，因此页面与主机面板
  * 两个调用方都不必各自记得这条行为。
@@ -53,7 +53,10 @@ import {
 } from "./theme";
 
 export interface DiagnosticsDrawerProps {
-  /** 选中的降级事件；`null` 表示抽屉未打开。 */
+  /**
+   * 选中的事件：降级条目，或用户主动点「查看 ACP 原文」的任意记录
+   * （`reason.kind === "explicit"`）。`null` 表示抽屉未打开。
+   */
   readonly model: DegradedEventModel | null;
   readonly onClose: () => void;
 }
@@ -84,11 +87,18 @@ function MetadataRow({
   );
 }
 
-/** 降级原因的一句话说明。 */
+/** 诊断原因的一句话说明（四类降级原因 + 用户主动查看原文的 `explicit`）。 */
 function ReasonNote({ model }: { readonly model: DegradedEventModel }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const reason = model.reason;
+  if (reason.kind === "explicit") {
+    return (
+      <Text style={styles.reason} dataSet={{ degradedReason: "explicit" }}>
+        以下是你请求查看的事件原文。
+      </Text>
+    );
+  }
   if (reason.kind === "no_dedicated_view") {
     return (
       <Text style={styles.reason} dataSet={{ degradedReason: "no_dedicated_view" }}>

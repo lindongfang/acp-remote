@@ -129,12 +129,30 @@ function findCopyButtonProps(root: unknown): ElementLike["props"] {
   return undefined;
 }
 
-/** 代码块正文（`data-code-text="true"` 那个元素内部）的可见文本：不掺入语言标记与按钮。 */
+/** 代码块逐行正文列（`data-code-line-text`）的原始 HTML；行号列不在其中。 */
+function codeLineBodies(html: string): readonly string[] {
+  const rows = [...html.matchAll(/data-code-line="(\d+)"/g)];
+  return rows.map((row, index) => {
+    const rowStart = row.index ?? 0;
+    const marker = html.indexOf('data-code-line-text="', rowStart);
+    if (marker === -1) return "";
+    const open = html.indexOf(">", marker);
+    // 行正文是一个只含 `span` 的 `<div>`：在它自己的 `</div>` 处结束。
+    // 不能切到下一行的 `data-code-line` 标记——那会落在一个未闭合的 `<div ...` 中间，
+    // 把标签前缀漏进可见文本（行号/正文分离的断言因此会误红）。
+    const close = html.indexOf("</div>", open);
+    const end = close === -1 ? (rows[index + 1]?.index ?? html.length) : close;
+    return html.slice(open + 1, end);
+  });
+}
+
+/**
+ * 代码块正文（逐行正文列拼回去）的可见文本：不掺入语言标记、行号与按钮。
+ *
+ * 行号是定位辅助（不能被复制），因此它单独一列；正文列按行拼回原文（含换行）。
+ */
 function codeBodyText(html: string): string {
-  const at = html.indexOf('data-code-text="true"');
-  if (at === -1) return "";
-  const open = html.indexOf(">", at);
-  return open === -1 ? "" : visibleText(html.slice(open + 1));
+  return codeLineBodies(html).map((body) => visibleText(body)).join("\n");
 }
 
 /**
@@ -144,12 +162,10 @@ function codeBodyText(html: string): string {
  * 这是「颜色归属」可断言的机器证据（run 的 class 与家族一一对应）。
  */
 function codeRuns(html: string): readonly (readonly [string, string])[] {
-  const at = html.indexOf('data-code-text="true"');
-  const open = at === -1 ? -1 : html.indexOf(">", at);
-  const body = open === -1 ? "" : html.slice(open + 1);
-
-  return [...body.matchAll(/<span class="([^"]*)"[^>]*>([\s\S]*?)<\/span>/g)].map(
-    (match) => [visibleText(match[2] ?? ""), match[1] ?? ""] as const,
+  return codeLineBodies(html).flatMap((body) =>
+    [...body.matchAll(/<span class="([^"]*)"[^>]*>([\s\S]*?)<\/span>/g)].map(
+      (match) => [visibleText(match[2] ?? ""), match[1] ?? ""] as const,
+    ),
   );
 }
 
@@ -221,6 +237,58 @@ describe("代码块：复制入口与序号锚点", () => {
     expect(withoutCallback).not.toBeUndefined();
     expect(withoutCallback?.onPress).not.toBeUndefined();
     expect(findCopyButtonProps(captureCodeBlock({}))).not.toBeUndefined();
+  });
+
+  it("按行显示行号，且复制载荷只有原始 code、不含行号", () => {
+    const code = "const a = 1;\nconst b = 2;\n";
+    const html = renderCodeBlock({ code, language: "typescript" });
+
+    expect(html).toContain('data-code-line-count="3"');
+    expect(html.match(/data-code-line-number="\d+"/g) ?? []).toEqual([
+      'data-code-line-number="1"',
+      'data-code-line-number="2"',
+      'data-code-line-number="3"',
+    ]);
+    // 行号只占独立一列：逐行正文拼回去仍然是原文（行号不掺入）。
+    expect(codeBodyText(html)).toBe(code);
+
+    const payloads: string[] = [];
+    const copy = findCopyButtonProps(
+      captureCodeBlock({
+        code,
+        language: "typescript",
+        onCopy: (text) => {
+          payloads.push(text);
+        },
+      }),
+    );
+    copy?.onPress?.();
+    // 反例：把行号拼进复制内容 → 这里会多出 `1`/`2`/`3` 前缀。
+    expect(payloads).toEqual([code]);
+  });
+
+  it("跨行 span（块注释、多行模板字符串）仍按源码换行分行编号", () => {
+    const code = ["/*", " * 跨行注释", " */", "const text = `第一行", "第二行`;"].join("\n");
+    const html = renderCodeBlock({ code, language: "typescript" });
+
+    // hljs 的注释/字符串 span 会跨过换行：行边界必须按源码切，而不是按 span 切。
+    expect(html).toContain('data-code-line-count="5"');
+    expect(html.match(/data-code-line-number="\d+"/g) ?? []).toEqual([
+      'data-code-line-number="1"',
+      'data-code-line-number="2"',
+      'data-code-line-number="3"',
+      'data-code-line-number="4"',
+      'data-code-line-number="5"',
+    ]);
+    expect(codeLineBodies(html).map(visibleText)).toEqual([
+      "/*",
+      " * 跨行注释",
+      " */",
+      "const text = `第一行",
+      "第二行`;",
+    ]);
+    // 高亮只切文本：逐行拼回去仍是原文。
+    expect(codeBodyText(html)).toBe(code);
   });
 });
 

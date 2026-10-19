@@ -70,6 +70,21 @@ pub const VIEW_ENUMS: &[(&str, &str, &[&str])] = &[
         "/properties/diffUnavailable/properties/reason",
         &["size_limit"],
     ),
+    (
+        "tool.call.started",
+        "/properties/toolDetail/properties/truncatedParts/items",
+        &["input", "output", "text"],
+    ),
+    (
+        "tool.call.updated",
+        "/properties/toolDetail/properties/truncatedParts/items",
+        &["input", "output", "text"],
+    ),
+    (
+        "tool.call.completed",
+        "/properties/toolDetail/properties/truncatedParts/items",
+        &["input", "output", "text"],
+    ),
 ];
 
 /// `session.plan.changed.entries[].priority`。
@@ -980,6 +995,109 @@ pub struct TerminalOutput {
     pub extra: ExtraFields,
 }
 
+/// `toolDetail.truncatedParts[]`：因超过 `docs/SYNC_PROTOCOL.md` §14 的固定上限而**整体缺席**的部分名。
+///
+/// 这是封闭词表：客户端据此对相应部分给出明确的截断说明，MUST NOT 把缺席读成「没有内容」，也
+/// MUST NOT 把未登记的取值当成另一种截断。取值序列必须与 `event-views.schema.json` 三个
+/// `tool.call.*` 的 `properties.toolDetail.properties.truncatedParts.items.enum` 逐条相等。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolDetailPart {
+    Input,
+    Output,
+    Text,
+}
+
+impl ToolDetailPart {
+    pub const ALL: [ToolDetailPart; 3] = [
+        ToolDetailPart::Input,
+        ToolDetailPart::Output,
+        ToolDetailPart::Text,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolDetailPart::Input => "input",
+            ToolDetailPart::Output => "output",
+            ToolDetailPart::Text => "text",
+        }
+    }
+}
+
+impl fmt::Display for ToolDetailPart {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ToolDetailPart {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        ToolDetailPart::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "truncatedParts",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for ToolDetailPart {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolDetailPart {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse::<Self>().map_err(DeError::custom)
+    }
+}
+
+/// `toolDetail`（`event-views.schema.json#/$defs/tool.call.started.properties.toolDetail`，三个
+/// `tool.call.*` 定义同形）：
+/// 工具调用的输入、输出与文本内容，供客户端在折叠块里展示；ACP 原文仍逐字节保留在 `acp`。
+///
+/// 四个键都**可缺席**，且缺席是唯一合法的「无此部分」表达（下发的 MUST NOT 是 `null`、空对象或空
+/// 数组）。`input`/`output` 是内嵌的 [`Value`]：它们是 ACP `rawInput`/`rawOutput` 的 JSON 值，
+/// 视图层不进一步约束形状，只保证未被改写。
+///
+/// [`Self::input`]/[`Self::output`]/[`Self::text`] 的上限与截断由生产方（`agent-host` 映射层）执行：
+/// 某一部分超过 `docs/SYNC_PROTOCOL.md` §14 的 32 KiB 时**整体缺席**，并把部分名登记在
+/// [`Self::truncated_parts`]；绝不发送被截断的 JSON 片段。schema 只能描述形状，字节预算无法在
+/// schema 里表达。
+///
+/// 无法以 ACPR-CJ1 值域表达的部分（例如 `input`/`output` 含浮点或超出 2^53-1 的整数）同样
+/// **整体缺席**并登记在 [`Self::truncated_parts`]：`view` 落库前要过 ACPR-CJ1，宁可少带一个值，
+/// 也不让整条事件因 view 校验失败而无法提交。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallDetail {
+    /// ACP `rawInput` 的 JSON 值；Agent 未提供时缺席。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Value>,
+    /// ACP `rawOutput` 的 JSON 值；Agent 未提供时缺席。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<Value>,
+    /// ACP 工具内容里文本块（`ToolCallContent::Content` → `ContentBlock::Text`）的文本，按 Agent
+    /// 提供的顺序排列；没有文本块时缺席（不是空数组）。diff、terminal 与未识别的 content 不进入
+    /// 这里。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<Vec<String>>,
+    /// 因超限而整体缺席的部分名；没有截断时缺席（不是空数组）。
+    #[serde(
+        rename = "truncatedParts",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub truncated_parts: Option<Vec<ToolDetailPart>>,
+    /// `toolDetail` 同样是开放对象（schema 的 `additionalProperties: true`）：未知扩展键原样保留，
+    /// 与三个 `tool.call.*` 视图的 [`ExtraFields`] 同一口径。
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
 /// `tool.call.completed`（`event-views.schema.json#/$defs/tool.call.completed`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallCompleted {
@@ -989,6 +1107,13 @@ pub struct ToolCallCompleted {
     pub turn_id: Uuid,
     pub title: Text<1024>,
     pub state: NonEmptyText<32>,
+    /// 非 required：Agent 没有提供输入、输出或文本内容时**整个键缺席**，视图仍完整。
+    #[serde(
+        rename = "toolDetail",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_detail: Option<ToolCallDetail>,
     #[serde(flatten)]
     pub extra: ExtraFields,
 }
@@ -1002,6 +1127,13 @@ pub struct ToolCallStarted {
     pub turn_id: Uuid,
     pub title: Text<1024>,
     pub state: NonEmptyText<32>,
+    /// 非 required：Agent 没有提供输入、输出或文本内容时**整个键缺席**，视图仍完整。
+    #[serde(
+        rename = "toolDetail",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_detail: Option<ToolCallDetail>,
     #[serde(flatten)]
     pub extra: ExtraFields,
 }
@@ -1015,6 +1147,13 @@ pub struct ToolCallUpdated {
     pub turn_id: Uuid,
     pub title: Text<1024>,
     pub state: NonEmptyText<32>,
+    /// 非 required：Agent 没有提供输入、输出或文本内容时**整个键缺席**，视图仍完整。
+    #[serde(
+        rename = "toolDetail",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_detail: Option<ToolCallDetail>,
     #[serde(flatten)]
     pub extra: ExtraFields,
 }

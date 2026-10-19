@@ -1375,18 +1375,25 @@ impl HostNode {
             },
             acp_core::broker::BrokerConfig::default(),
         ));
-        let core = Arc::new(UseCases::new(UseCaseDeps {
-            broker: Arc::clone(&broker),
-            store: sessions,
-            deliveries,
-            trust,
-            audit: Arc::clone(&audit),
-            config: local_config,
-            attachments,
-            catalog,
-            clock: Arc::clone(&clock),
-            ids: Arc::clone(&ids),
-        }));
+        // 与组合根同一形状：同一个原生端口同时交给用例面与 Sync 命令面（连接级版本释放需要它）。
+        let session_files = Arc::new(app::session_files::NativeSessionFiles::new());
+        let core = Arc::new(
+            UseCases::new(UseCaseDeps {
+                broker: Arc::clone(&broker),
+                store: sessions,
+                deliveries,
+                trust,
+                audit: Arc::clone(&audit),
+                config: local_config,
+                attachments,
+                catalog,
+                clock: Arc::clone(&clock),
+                ids: Arc::clone(&ids),
+            })
+            .with_session_files(
+                Arc::clone(&session_files) as Arc<dyn acp_core::ports::SessionFiles>
+            ),
+        );
 
         // —— 网络接入面：与组合根同一批装配点（含 Sync 的 path 注册与实时扇出）——
         let mut listener =
@@ -1411,6 +1418,7 @@ impl HostNode {
             &app::daemon::sync_config(&config),
             config.public_origin.clone(),
             Arc::new(UnreachableOwners),
+            session_files,
             sync_events,
         )
         .expect("注册 Sync path");

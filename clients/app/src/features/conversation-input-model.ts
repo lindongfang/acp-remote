@@ -9,8 +9,8 @@
  *    或 `command.status` 的 `accepted`——本模块不提供任何「本地先当成已发送」的分支。
  * 2. **取消同理**：用户点了取消只得到 `requested`，`confirmed` 只能由终态产生，
  *    未确认前 MUST NOT 呈现为空闲。
- * 3. **关闭的会话不可提交**：`state: "closed"` 时 `canSubmit` 恒假并给出原因；
- *    提交闸门在 `ClientStore.submitPrompt` 里再拦一次（不派发命令），不靠组件记得禁用按钮。
+ * 3. **关闭或进行中的会话不可提交**：`state: "closed"` / `"in_progress"` 时 `canSubmit` 恒假并
+ *    给出原因；提交闸门在 `ClientStore.submitPrompt` 里再拦一次（不派发命令），不靠组件记得禁用。
  *
  * ## 草稿与附件
  *
@@ -134,15 +134,18 @@ export function buildConversationInputModel(input: {
       ? "连接不可用，不能提交"
       : !input.originLocal
         ? "来源为其它节点的会话不能提交（本设备只承载元数据）"
-        : null;
+        : state === "in_progress"
+          ? "会话进行中，完成后可继续输入"
+          : null;
 
   return {
     state,
     draft: input.draft ?? "",
-    canSubmit: disabledReason === null,
+    // 提交只发生在 `editable`：进行中（轮次运行或等待命令终态）与已关闭一视同仁。
+    canSubmit: state === "editable" && disabledReason === null,
     disabledReason,
     attachmentsSupported: false,
-    attachmentNotice: "v1 只支持文本输入：附件（图片/文件）不受支持，请改用文本描述。",
+    attachmentNotice: "📎 附件暂不支持 · 仅文本",
     draftInMemoryOnly: !input.originLocal,
     draftNotice: input.originLocal
       ? null

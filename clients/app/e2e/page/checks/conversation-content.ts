@@ -102,13 +102,16 @@ const DIFF_MARKERS = ["DIFF_BODY_LINE_REMOVED", "DIFF_BODY_LINE_ADDED"] as const
  * 还原出来的东西——「未展开诊断时原文片段一个都不出现」因此才有判别力。
  */
 const STRUCTURED_DIFF_LINES = [
-  { kind: "context", text: "  const opts = resolveOptions(input);" },
-  { kind: "deleted", text: "- const idleTimeout = 30_000;" },
-  { kind: "added", text: "+ const idleTimeout = opts.idleTimeoutMs ?? 10_000;" },
+  { kind: "context", text: "const opts = resolveOptions(input);" },
+  { kind: "deleted", text: "const idleTimeout = 30_000;" },
+  { kind: "added", text: "const idleTimeout = opts.idleTimeoutMs ?? 10_000;" },
 ] as const;
 
+/** 三档差异行的行首前缀（由客户端按 kind 补上；夹具的 `text` 只放裸原文）。 */
+const STRUCTURED_DIFF_PREFIXES = ["  ", "- ", "+ "] as const;
+
 /** 结构化差异行里出现过的文本片段（右栏必须逐字呈现它们）。 */
-const STRUCTURED_DIFF_MARKERS = ["const opts = resolveOptions(input);", "- const idleTimeout = 30_000;", "opts.idleTimeoutMs ?? 10_000;"] as const;
+const STRUCTURED_DIFF_MARKERS = ["const opts = resolveOptions(input);", "const idleTimeout = 30_000;", "opts.idleTimeoutMs ?? 10_000;"] as const;
 
 /** Markdown 的原文能力（`rawJson` 分支要求 sha256；客户端不校验，但夹具按协议给全）。 */
 function rawAcp(rawJson: string): Record<string, unknown> {
@@ -213,13 +216,17 @@ const checks: readonly Check[] = [
           );
           expectEqual(query(filesColumn, "[data-file-change-count]")?.getAttribute("data-file-change-count"), "3", "改动处数");
 
-          // 有结构化来源的那一项：相对化展示路径 + 两侧行数统计。
+          // 树形展示目录与文件尾段，完整相对路径仍保留在定位锚点。
           const changed = query(filesColumn, `[data-file-change="${CHANGE_ID}"]`);
           expectEqual(
             textOf(query(changed, "[data-change-path-label]")),
-            "src/app.ts",
-            "右栏必须呈现 core 已相对化的展示路径",
+            "app.ts",
+            "文件行只显示路径尾段，目录由树形层级展示",
           );
+          expectEqual(query(changed, "[data-change-path-label]")?.getAttribute("data-change-path-label"),
+            "src/app.ts", "文件定位仍保留完整相对路径");
+          expectThat(query(filesColumn, '[data-file-directory-row="src/"]') !== null,
+            "文件必须置于 src 目录，不丢弃层级");
           expectEqual(
             query(changed, "[data-change-added-lines]")?.getAttribute("data-change-added-lines"),
             "2",
@@ -258,6 +265,20 @@ const checks: readonly Check[] = [
             ["context", "deleted", "added"],
             "新增 / 删除 / 上下文三档必须各自成立",
           );
+          // 每行渲染文本必须**恰好**是「一个前缀 + 下发的裸原文」：夹具把前缀写进 text、
+          // 或客户端补两次，都会让这里读到双前缀而判红。
+          const renderedLines = queryAll(diffRegion, "[data-diff-line-kind]").map(textOf);
+          expectEqual(
+            renderedLines,
+            STRUCTURED_DIFF_LINES.map((line, index) => `${STRUCTURED_DIFF_PREFIXES[index]}${line.text}`),
+            "差异行必须只带一个由 kind 推出的行首前缀",
+          );
+          for (const [index, rendered] of renderedLines.entries()) {
+            const prefix = STRUCTURED_DIFF_PREFIXES[index];
+            expectThat(prefix !== undefined, `第 ${String(index + 1)} 行没有登记前缀`);
+            expectThat(rendered.startsWith(prefix), `第 ${String(index + 1)} 行缺少行首前缀`);
+            expectAbsent(rendered, `${prefix}${prefix}`, `第 ${String(index + 1)} 行出现了双前缀`);
+          }
           const filesText = domText(filesColumn);
           for (const marker of STRUCTURED_DIFF_MARKERS) {
             expectThat(filesText.includes(marker), `差异行内容必须逐字来自结构化来源：${marker}`);

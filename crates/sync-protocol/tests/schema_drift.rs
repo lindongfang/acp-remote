@@ -344,6 +344,33 @@ fn view_enums_match_schema() {
                     .to_vec()
             },
         ),
+        (
+            "tool.call.started",
+            "/properties/toolDetail/properties/truncatedParts/items",
+            || {
+                views::ToolDetailPart::ALL
+                    .map(|value| value.as_str())
+                    .to_vec()
+            },
+        ),
+        (
+            "tool.call.updated",
+            "/properties/toolDetail/properties/truncatedParts/items",
+            || {
+                views::ToolDetailPart::ALL
+                    .map(|value| value.as_str())
+                    .to_vec()
+            },
+        ),
+        (
+            "tool.call.completed",
+            "/properties/toolDetail/properties/truncatedParts/items",
+            || {
+                views::ToolDetailPart::ALL
+                    .map(|value| value.as_str())
+                    .to_vec()
+            },
+        ),
     ];
 
     // 双向：登记表里的每个条目都必须在本表里有镜像，本表的每个条目也必须已登记。

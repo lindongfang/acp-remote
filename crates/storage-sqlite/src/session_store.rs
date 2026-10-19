@@ -3643,6 +3643,22 @@ impl RemoteDeliveryStore for SqliteStore {
         Ok(records)
     }
 
+    async fn find_imported_session(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<ImportedSessionRecord>, PortError> {
+        // 主键是 `(owner_node_id, session_id)`：这里只回答存在性，取任意一条匹配行（稳定按主键排序）。
+        let row = sqlx::query(&format!(
+            "SELECT {IMPORTED_SESSION_COLUMNS} FROM imported_session \
+             WHERE session_id = ?1 ORDER BY owner_node_id ASC LIMIT 1"
+        ))
+        .bind(session.as_str())
+        .fetch_optional(&self.pools.read)
+        .await
+        .db()?;
+        Ok(row.as_ref().map(imported_session_from_row).transpose()?)
+    }
+
     async fn find_remote_request(
         &self,
         session: &RemoteSessionRef,

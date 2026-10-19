@@ -15,9 +15,11 @@
  * - **授权边界**：只有亲历且拿到可选项的请求才渲染应答按钮；历史读到的待处理项、
  *   已被其它设备处理的、本设备已提交待确认的，一律**没有**可点按钮。
  * - **条目形态**：用户气泡与 Agent 气泡是两档（`class` 集合不同）；终端输出是一张代码卡
- *   （语言条 + 复制）；进行中的轮次带运行指示、失败的轮次是一条失败条。
+ *   （语言条 + 行号 + 复制）；进行中的轮次带运行指示、失败的轮次是一条失败条。
  * - **折叠默认值由状态决定**：进行中的工具调用 `data-entry-expanded="true"`、已完成的
  *   `"false"`；同一份条目换成另一个状态就换默认值（不看它在列表里的位置）。
+ * - **工具详情只来自结构化视图**：参数/输出/文本内容与截断说明逐部分呈现，没有详情时不画空
+ *   占位；原文入口是诊断（`acp.rawJson` 不参与详情渲染）。
  * - **显式覆盖只影响本条**：给同状态的两条里的一条写覆盖值，另一条的有效值不变。
  * - **收起不丢内容**：收起时正文仍在 DOM 里（`display: none`），因此「内容消失」与「收起」是
  *   两件事。
@@ -600,6 +602,80 @@ describe("对话时间线：结构化条目的展开收起（D10）", () => {
 
     expect(html).toContain('data-fold-entry="event:dddddddd-0000-4000-8000-000000000404"');
     expect(html).not.toContain('data-action="toggle-timeline-entry"');
+  });
+});
+
+describe("对话时间线：工具调用的详情与原文入口", () => {
+  it("渲染参数/输出/文本内容与截断说明，并提供查看 ACP 原文的入口", () => {
+    const { store: client } = store();
+    const eventId = "dddddddd-0000-4000-8000-000000000601";
+    applyEvent(client, {
+      eventType: "tool.call.started",
+      eventId,
+      globalSequence: "80",
+      view: {
+        toolCallId: "tool-detail",
+        turnId: "turn-1",
+        title: "读取 src/a.ts",
+        state: "in_progress",
+        toolDetail: {
+          input: { path: "src/a.ts", limit: 10 },
+          output: { bytes: 42 },
+          text: ["第一段", "第二段"],
+          truncatedParts: ["output"],
+        },
+      },
+    });
+    const html = renderPage(pageOf(client));
+
+    // 进行中的工具调用默认展开，详情就在可观察的渲染结果里。
+    expect(html).toContain('data-tool-detail="present"');
+    expect(html).toContain('data-tool-detail-part="input"');
+    expect(html).toContain('data-tool-detail-part="output"');
+    expect(html).toContain('data-tool-detail-part="text"');
+    expect(html).toContain("参数");
+    expect(html).toContain("输出");
+    expect(html).toContain("文本内容");
+    // JSON 值按稳定 pretty-print 呈现（缩进与键值都在；引号在 HTML 文本里被转义）。
+    expect(html).toContain("  &quot;path&quot;: &quot;src/a.ts&quot;");
+    expect(html).toContain("bytes");
+    expect(html).toContain("第一段");
+    expect(html).toContain("第二段");
+    // 截断登记逐部分说明，而不是悄悄缺失。
+    expect(html).toContain('data-tool-detail-truncated="output"');
+    expect(html).toContain("输出因超过上限未下发");
+    // 原文入口按最新记录的 eventId 打开诊断。
+    expect(html).toContain('data-action="open-tool-call-diagnostics"');
+    expect(tagContaining(html, 'data-action="open-tool-call-diagnostics"')).toContain(`data-event-id="${eventId}"`);
+    expect(html).toContain("查看 ACP 原文");
+  });
+
+  it("没有 detail 时不渲染空占位；acp.rawJson 里的伪详情不参与渲染", () => {
+    const { store: client } = store();
+    const eventId = "dddddddd-0000-4000-8000-000000000602";
+    applyEvent(client, {
+      eventType: "tool.call.completed",
+      eventId,
+      globalSequence: "81",
+      view: { toolCallId: "tool-no-detail", title: "读取 src/b.ts", state: "completed" },
+      acp: {
+        mediaType: "application/json",
+        rawJson: '{"toolDetail":{"input":{"secret":"raw-only"},"text":["raw-only-text"]}}',
+        byteLength: "96",
+        sha256: "c".repeat(43),
+      },
+    });
+    const html = renderPage(pageOf(client), {
+      expandedTimelineEntries: { [foldKey(eventId)]: true },
+    });
+
+    // 反例：从原文补造详情 → 下面三条会红。
+    expect(html).not.toContain('data-tool-detail="present"');
+    expect(html).not.toContain("raw-only");
+    expect(html).not.toContain("因超过上限未下发");
+    // 没有详情不妨碍原文入口：它是诊断抽屉，不是详情来源。
+    expect(html).toContain('data-action="open-tool-call-diagnostics"');
+    expect(tagContaining(html, 'data-action="open-tool-call-diagnostics"')).toContain(`data-event-id="${eventId}"`);
   });
 });
 

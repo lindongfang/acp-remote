@@ -72,8 +72,10 @@ import type {
   PairingWiring,
 } from "./features/pairing-model";
 import { PairingQrInvalidError } from "./features/pairing-model";
+import type { DownloadGate } from "./features/session-file-download";
+import { SessionFileDownloader } from "./features/session-file-download";
 import type { ErrorCode, NodeLinkQrPayload, PairingLookupResponse, PublicError } from "./protocol";
-import { DEVICE_QR_FRAGMENT_PREFIX } from "./protocol";
+import { DEVICE_QR_FRAGMENT_PREFIX, SESSION_FILES_FEATURE } from "./protocol";
 import { openPlatform } from "./platform";
 import type { LifecycleEvent, PlatformPorts } from "./platform";
 import {
@@ -998,6 +1000,8 @@ export interface Composition {
   readonly pairing: PairingTransport;
   /** 已配对主机记录的写入口：配对批准后登记 Host 公钥，`start()` 与验签都读它。 */
   rememberPairedHost(record: PairedHostRecord): Promise<void>;
+  /** 会话文件主动下载（有界、可取消、对象 URL 生命周期由平台端口管理）。 */
+  readonly downloads: SessionFileDownloader;
   /** 异步启动：读设备身份与已配对主机记录，两者齐备才开始连接。 */
   start(): Promise<void>;
   /** 释放订阅与定时器。 */
@@ -1084,6 +1088,60 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     now: () => clock.now(),
     identity,
     pairing: pairingWiring,
+    schedule: (delayMs, task) => clock.schedule(delayMs, task),
+  });
+
+  /**
+   * 下载准入：连接、feature 协商与远程 imported 会话三道闸门。
+   *
+   * 远程会话不查询本机目录（spec「远程会话保留已有能力」）；未协商新能力的旧主机同样明确降级。
+   * 判定读 `store` 的当前状态，因此重新配对/重新协商后无需重建下载服务。
+   */
+  function downloadGate(sessionId: string): DownloadGate {
+    if (identity.connectionId === null) {
+      return {
+        ok: false,
+        error: {
+          code: "internal.unavailable",
+          message: "尚未建立已认证连接，无法下载文件。",
+          retryable: true,
+          details: {},
+        },
+      };
+    }
+    if (!store.state.selectedFeatures.includes(SESSION_FILES_FEATURE)) {
+      return {
+        ok: false,
+        error: {
+          code: "capability.unsupported_by_broker",
+          message: "此主机未协商会话文件能力（core.session-files.v1）。",
+          retryable: false,
+          details: {},
+        },
+      };
+    }
+    const summary = store.state.resources?.sessions.find((item) => item.sessionId === sessionId);
+    if (summary?.origin.kind === "remote") {
+      return {
+        ok: false,
+        error: {
+          code: "capability.unsupported_by_broker",
+          message: "远程导入会话不支持下载本机文件。",
+          retryable: false,
+          details: {},
+        },
+      };
+    }
+    return { ok: true };
+  }
+
+  const downloads = new SessionFileDownloader({
+    gateway: syncGateway,
+    ids,
+    identity,
+    ports: platform.download,
+    schedule: (delayMs, task) => clock.schedule(delayMs, task),
+    gate: downloadGate,
   });
 
   let unsubscribeStore: (() => void) | null = null;
@@ -1236,6 +1294,8 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
       clock,
       onEvent: (event) => {
         store.apply(event);
+        // 下载只关心自己派发的块读取；其他命令结果由 store 归并。
+        if (event.kind === "command_result") downloads.apply(event.result);
         // 追平完成才算真有进展：据此重置退避预算，与 `connection.ts` 的缺口预算同一口径。
         if (event.kind === "online") reconnectAttempts = 0;
         scheduleReconnect();
@@ -1261,9 +1321,10 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     sync?.disconnect();
     sync = null;
     assembledHost = null;
+    void downloads.dispose();
   }
 
-  return { store, pairing, rememberPairedHost, start, dispose };
+  return { store, pairing, rememberPairedHost, start, dispose, downloads };
 }
 
 /** 默认 `fetch`：组合根的 HTTPS 面只有这一个网络出口，注入替身时整条替换。 */

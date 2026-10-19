@@ -3,11 +3,15 @@
  *
  * ## 差异行只来自结构化来源，三种形态互不冒充
  *
- * 每处改动的差异区由 `FileChangeView.diff`（`domain/timeline.ts` 的 `FileDiffView` 判别联合）
- * 决定，**只有三支**：
+ * 每处改动在清单里是一条**紧凑行**（状态、路径、+/- 统计）；被选中（或打开诊断）时才**可见地**
+ * 展开摘要、差异区与原文入口——未选中时详情以 `display: none` 收起，内容与机器锚点仍留在 DOM 里
+ * （与折叠块同一口径）。差异区的形态由 `FileChangeView.diff`（`domain/timeline.ts` 的
+ * `FileDiffView` 判别联合）决定，**只有三支**：
  *
- * - `lines`：服务端随事件下发了结构化差异行 → 逐行呈现，新增/删除/上下文各一档底色，行内容按
- *   **不可信文本**处理（只经 `Text` 呈现，不解析标记、不执行链接、不插 HTML）；
+ * - `lines`：服务端随事件下发了结构化差异行 → 逐行呈现，按 `kind` 补 `+ ` / `- ` / 两个空格
+ *   前缀（`text` 本身不带前缀），新增/删除/上下文各一档底色；行内容按**不可信文本**处理
+ *   （只经 `Text` 呈现，不解析标记、不执行链接、不插 HTML）。当前模型只有 `added` / `deleted` /
+ *   `context` 三档，没有独立的 hunk 行类型，因此不伪造 hunk 头；
  * - `unavailable`：服务端说明了为什么没有 → 呈现 `FILE_DIFF_UNAVAILABLE_LABELS` 里该原因的
  *   已登记文案；
  * - `null`：两者都没有 → **明确说明**这一处原文未同步或超出单条上限，不渲染占位差异行假装完整。
@@ -57,9 +61,6 @@ function buildStyles(colors: Palette) {
     panel: {
       gap: spacing.sm,
       padding: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.md,
       backgroundColor: colors.panel2,
     },
     head: {
@@ -99,11 +100,18 @@ function buildStyles(colors: Palette) {
       borderColor: colors.accent,
       backgroundColor: colors.accentSoft,
     },
-    row: {
+    compactRow: {
       flexDirection: "row",
       flexWrap: "wrap",
       alignItems: "baseline",
       gap: spacing.sm,
+    },
+    details: {
+      gap: spacing.xs,
+    },
+    /** 未选中时详情仍在 DOM（`display: none`）：机器锚点与内容不因「收起」而消失。 */
+    hidden: {
+      display: "none",
     },
     selectablePath: {
       paddingVertical: 2,
@@ -209,12 +217,24 @@ const DIFF_LINE_STYLES: Readonly<Record<DiffLineView["kind"], "diffAdded" | "dif
 };
 
 /**
+ * 差异行的行首前缀：`text` 是**不带前缀**的行内容（`crates/core/src/derive.rs` 的 `DiffLine`），
+ * 因此 `+` / `-` / 两个空格由客户端按判别子补上——三种档位在纯文本复制后也分得清。
+ */
+const DIFF_LINE_PREFIXES: Readonly<Record<DiffLineView["kind"], string>> = {
+  added: "+ ",
+  deleted: "- ",
+  context: "  ",
+};
+
+/**
  * 一处改动的差异区：三种形态各一条分支，且**互不冒充**。
  *
  * 行内容按不可信文本处理：整行只经 `Text` 呈原样字符串，不解析行内标记、不识别链接、不插 HTML。
- * 新增/删除/上下文三档**只改底色**，不改变文本本身。
+ * 新增/删除/上下文三档各自一档底色，并在行首补上对应前缀（`+ ` / `- ` / 两个空格）。
+ *
+ * 导出给「会话变更」的文件查看区复用：同一份差异形态不在两个组件里各写一套。
  */
-function ChangeDiff({ diff }: { readonly diff: FileDiffView | null }): ReactElement {
+export function ChangeDiff({ diff }: { readonly diff: FileDiffView | null }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
@@ -241,16 +261,16 @@ function ChangeDiff({ diff }: { readonly diff: FileDiffView | null }): ReactElem
           // 差异行没有标识字段，按声明次序做键（它只是呈现，不参与任何判定）。
           key={`diff:${String(index)}`}
           style={[styles.diffLine, styles[DIFF_LINE_STYLES[line.kind]]]}
-          dataSet={{ diffLineKind: line.kind }}
+          dataSet={{ diffLineKind: line.kind, diffLinePrefix: DIFF_LINE_PREFIXES[line.kind] }}
         >
-          {line.text}
+          {`${DIFF_LINE_PREFIXES[line.kind]}${line.text}`}
         </Text>
       ))}
     </View>
   );
 }
 
-/** 一条改动。 */
+/** 一条改动：紧凑行（状态、路径、+/- 统计）+ 选中后展开的详情/差异/诊断。 */
 function ChangeRow({
   change,
   selected,
@@ -268,6 +288,8 @@ function ChangeRow({
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const eventId = change.diagnostics.eventId;
   const diagnosticsOpen = openDiagnosticsEventId === eventId;
+  // 详情跟随选中项；诊断本身也是「这一处被展开」的一条通路，因此两者取并集。
+  const expanded = selected || diagnosticsOpen;
 
   return (
     <View
@@ -276,12 +298,15 @@ function ChangeRow({
       dataSet={{
         fileChange: change.changeId,
         fileChangeSelected: String(selected),
+        fileChangeExpanded: String(expanded),
         changeKind: change.kind,
         changePath: change.displayPath,
         changeOutsideWorkspace: String(change.outsideWorkspace),
       }}
     >
-      <View style={styles.row}>
+      {/* 紧凑行：状态 → 路径 → 增删统计（选中后下方再展开详情）。 */}
+      <View style={styles.compactRow} dataSet={{ changeCompact: "true" }}>
+        <Text style={styles.chip}>{change.kind}</Text>
         {onSelectChange === undefined ? (
           <Text style={styles.path} dataSet={{ changePathLabel: change.displayPath }}>
             {change.displayPath}
@@ -298,19 +323,6 @@ function ChangeRow({
             <Text style={styles.path}>{change.displayPath}</Text>
           </Pressable>
         )}
-        <Text style={styles.chip}>{change.kind}</Text>
-        {change.outsideWorkspace ? (
-          <Text style={styles.chip} dataSet={{ changeOutsideWorkspaceNote: "true" }}>
-            工作区之外
-          </Text>
-        ) : null}
-      </View>
-
-      <Text style={styles.summary} dataSet={{ changeSummary: "true" }}>
-        {change.summary}
-      </Text>
-
-      <View style={styles.row}>
         {/* 「判定不出」时没有对应属性，而不是 `+0`。 */}
         {change.addedLines === null ? null : (
           <Text style={styles.added} dataSet={{ changeAddedLines: change.addedLines }}>
@@ -324,31 +336,45 @@ function ChangeRow({
         )}
         {change.addedLines === null && change.deletedLines === null ? (
           <Text style={styles.note} dataSet={{ changeLineCountUnavailable: "true" }}>
-            这次改动没有下发行数统计。
+            无行数统计
+          </Text>
+        ) : null}
+        {change.outsideWorkspace ? (
+          <Text style={styles.chip} dataSet={{ changeOutsideWorkspaceNote: "true" }}>
+            工作区之外
           </Text>
         ) : null}
       </View>
 
-      <Text style={styles.note} dataSet={{ changeStatisticsScope: "true" }}>
-        统计只覆盖 Agent 在工具调用里声明的改动；差异行只来自服务端下发的结构化来源，本栏不解析 ACP 原文。
-      </Text>
+      <View
+        style={expanded ? styles.details : [styles.details, styles.hidden]}
+        dataSet={{ changeDetails: expanded ? "expanded" : "collapsed" }}
+      >
+        <Text style={styles.summary} dataSet={{ changeSummary: "true" }}>
+          {change.summary}
+        </Text>
 
-      <ChangeDiff diff={change.diff} />
+        <Text style={styles.note} dataSet={{ changeStatisticsScope: "true" }}>
+          统计只覆盖 Agent 在工具调用里声明的改动；差异行只来自服务端下发的结构化来源，本栏不解析 ACP 原文。
+        </Text>
 
-      {onOpenChangeDiagnostics === undefined ? null : (
-        <Pressable
-          role="button"
-          style={styles.entry}
-          dataSet={{ action: "open-file-change-diagnostics", eventId, diagnosticsOpen: String(diagnosticsOpen) }}
-          onPress={() => {
-            onOpenChangeDiagnostics(diagnosticsOpen ? null : eventId);
-          }}
-        >
-          <Text style={styles.entryText}>{diagnosticsOpen ? "收起 ACP 原文（诊断）" : "查看 ACP 原文（诊断）"}</Text>
-        </Pressable>
-      )}
+        <ChangeDiff diff={change.diff} />
 
-      {diagnosticsOpen ? <ChangeDiagnosticsPanel diagnostics={change.diagnostics} /> : null}
+        {onOpenChangeDiagnostics === undefined ? null : (
+          <Pressable
+            role="button"
+            style={styles.entry}
+            dataSet={{ action: "open-file-change-diagnostics", eventId, diagnosticsOpen: String(diagnosticsOpen) }}
+            onPress={() => {
+              onOpenChangeDiagnostics(diagnosticsOpen ? null : eventId);
+            }}
+          >
+            <Text style={styles.entryText}>{diagnosticsOpen ? "收起 ACP 原文（诊断）" : "查看 ACP 原文（诊断）"}</Text>
+          </Pressable>
+        )}
+
+        {diagnosticsOpen ? <ChangeDiagnosticsPanel diagnostics={change.diagnostics} /> : null}
+      </View>
     </View>
   );
 }

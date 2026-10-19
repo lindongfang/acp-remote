@@ -42,7 +42,7 @@ import type { ConversationSettingsModel } from "./conversation-settings-model";
 import type { FileChangeView, TimelineEntry } from "./conversation-timeline";
 import type { DegradedEventModel } from "./degradation-model";
 import type { SessionRowModel } from "./directory-model";
-import { buildSessionRowsByDirectoryId } from "./directory-model";
+import { buildSessionRowsByDirectoryId, correctPageNumber } from "./directory-model";
 
 /** 一次用量事件的两项计数（`$defs.session.usage.changed`）。 */
 export interface UsageReading {
@@ -198,7 +198,9 @@ const ABSENT_SIDEBAR: ConversationSidebarModel = {
   query: "",
   total: 0,
   shown: 0,
-  canLoadMore: false,
+  page: 1,
+  pageCount: 1,
+  canNextPage: false,
   selectedSessionId: "",
   rows: [],
 };
@@ -224,20 +226,22 @@ export interface ConversationSidebarModel {
   readonly notice: string | null;
   /** 目录内搜索词（受控输入的回填值）；只影响本栏的 `rows`/`total`。 */
   readonly query: string;
-  /** 搜索命中后的同目录会话总数（「已呈现 N / M」的分母 M）。 */
+  /** 搜索命中后的同目录会话总数。 */
   readonly total: number;
-  /** 已呈现的会话数（`rows.length`）；与 `total` 一起构成「已呈现 N / M」。 */
+  /** 本页会话数（`rows.length`）。 */
   readonly shown: number;
-  /** 还能继续加载（`shown < total`）：左栏据此呈现「加载更多」入口。 */
-  readonly canLoadMore: boolean;
+  readonly page: number;
+  readonly pageCount: number;
+  /** 是否还有下一页。 */
+  readonly canNextPage: boolean;
   /** 当前会话在列表里的选中标记（行本身不带 `selected` 字段，组件按此值比对）。 */
   readonly selectedSessionId: string;
-  /** 同目录会话行：时间倒序、按搜索过滤、按批次截取。 */
+  /** 同目录会话行：时间倒序、按搜索过滤、按页截取。 */
   readonly rows: readonly SessionRowModel[];
 }
 
-/** 左栏一次呈现的会话条数；「继续加载」再放一批（与原型 `A.shown += 15` 同口径）。 */
-export const CONVERSATION_SIDEBAR_BATCH_SIZE = 15;
+/** 左栏每页的会话条数。 */
+export const CONVERSATION_SIDEBAR_PAGE_SIZE = 15;
 
 /** 会话没有目录归属时左栏的说明（规格：说明它没有目录归属，而不是静默隐藏左栏）。 */
 export const CONVERSATION_NO_DIRECTORY_NOTICE =
@@ -281,8 +285,8 @@ export function buildConversationSidebar(input: {
   readonly ownerLabelOf: (ownerNodeId: string) => string;
   /** 左栏目录内搜索词；空串即不过滤。 */
   readonly query: string;
-  /** 一次呈现的条数（{@link CONVERSATION_SIDEBAR_BATCH_SIZE} 的倍数）。 */
-  readonly limit: number;
+  /** 请求的页码；越界或无效输入由模型纠正。 */
+  readonly pageInput: string;
   /** 相对时间的基准（D3：时钟是**输入**）。 */
   readonly nowMs: number;
 }): ConversationSidebarModel {
@@ -294,7 +298,9 @@ export function buildConversationSidebar(input: {
       query: input.query,
       total: 0,
       shown: 0,
-      canLoadMore: false,
+      page: 1,
+      pageCount: 1,
+      canNextPage: false,
       selectedSessionId: input.sessionId,
       rows: [],
     };
@@ -311,7 +317,9 @@ export function buildConversationSidebar(input: {
       query: input.query,
       total: 0,
       shown: 0,
-      canLoadMore: false,
+      page: 1,
+      pageCount: 1,
+      canNextPage: false,
       selectedSessionId: input.sessionId,
       rows: [],
     };
@@ -331,7 +339,10 @@ export function buildConversationSidebar(input: {
       nowMs: input.nowMs,
     }).get(directory.directoryId) ?? [];
   const matched = rowsOfDirectory.filter((row) => needle.length === 0 || row.title.toLowerCase().includes(needle));
-  const rows = matched.slice(0, Math.max(1, input.limit));
+  const pageCount = Math.max(1, Math.ceil(matched.length / CONVERSATION_SIDEBAR_PAGE_SIZE));
+  const page = correctPageNumber({ requested: input.pageInput, pageCount, fallback: 1 });
+  const offset = (page - 1) * CONVERSATION_SIDEBAR_PAGE_SIZE;
+  const rows = matched.slice(offset, offset + CONVERSATION_SIDEBAR_PAGE_SIZE);
 
   return {
     directory,
@@ -339,7 +350,9 @@ export function buildConversationSidebar(input: {
     query: input.query,
     total: matched.length,
     shown: rows.length,
-    canLoadMore: matched.length > rows.length,
+    page,
+    pageCount,
+    canNextPage: page < pageCount,
     selectedSessionId: input.sessionId,
     rows,
   };

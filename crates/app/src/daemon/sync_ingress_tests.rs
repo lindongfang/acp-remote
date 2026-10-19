@@ -1104,8 +1104,39 @@ struct CommandClient {
 impl CommandClient {
     /// 发一条 `command` 帧并交回服务端的**下一条**消息（`command.result` 或 `error`）。
     async fn command(&mut self, request_id: &str, command: &str, payload: Value) -> Value {
+        self.command_with_session_optional(request_id, command, None, payload)
+            .await
+    }
+
+    /// 四条会话文件查询要求 `sessionId` 在 command 信封上（不在 payload 里）。
+    async fn command_with_session(
+        &mut self,
+        request_id: &str,
+        command: &str,
+        session_id: &str,
+        payload: Value,
+    ) -> Value {
+        self.command_with_session_optional(request_id, command, Some(session_id), payload)
+            .await
+    }
+
+    async fn command_with_session_optional(
+        &mut self,
+        request_id: &str,
+        command: &str,
+        session_id: Option<&str>,
+        payload: Value,
+    ) -> Value {
         self.sequence += 1;
         self.last_message_id = uuid_text();
+        let mut body = json!({
+            "requestId": request_id,
+            "command": command,
+            "payload": payload,
+        });
+        if let Some(session_id) = session_id {
+            body["sessionId"] = json!(session_id);
+        }
         self.client
             .send_text(
                 &json!({
@@ -1114,11 +1145,7 @@ impl CommandClient {
                     "messageId": self.last_message_id,
                     "connectionId": self.connection_id,
                     "connectionSequence": self.sequence.to_string(),
-                    "body": {
-                        "requestId": request_id,
-                        "command": command,
-                        "payload": payload,
-                    },
+                    "body": body,
                 })
                 .to_string(),
             )
@@ -1566,5 +1593,738 @@ async fn a_failed_browse_or_create_never_echoes_the_path() {
         "建目录失败的错误不得回显路径：{message}"
     );
 
+    harness.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// `session.files.*` / `session.git.*`：真实 daemon + 真实 SQLite + 临时目录/仓库（WP5 5.4）
+// ---------------------------------------------------------------------------------------------
+
+/// 只用于测试的会话标识（canonical uuid）。
+fn session_id_text() -> String {
+    uuid_text()
+}
+
+/// 直接写一条 owned 会话行：`session_files_root` 的唯一根来源是 `workspace_cwd`。
+async fn seed_owned_session(harness: &Harness, session: &str, workspace: &Path) {
+    let database = harness._temp.0.join("data").join("acp-remote.sqlite3");
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", database.display()))
+        .await
+        .expect("打开测试数据库");
+    let workspace = workspace
+        .to_str()
+        .expect("测试工作目录是 UTF-8 路径")
+        .to_owned();
+    sqlx::query(
+        "INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, origin_epoch, \
+         version, created_at, updated_at, agent_session_id, workspace_cwd) \
+         VALUES (?1, ?2, 'codex', 'Codex', 'idle', ?3, 1, ?4, ?4, ?5, ?6)",
+    )
+    .bind(session)
+    .bind("WP5 files")
+    .bind(uuid_text())
+    .bind("2026-10-19T09:00:00.000Z")
+    .bind("acp-session-wp5")
+    .bind(&workspace)
+    .execute(&pool)
+    .await
+    .expect("写入 owned 会话");
+    pool.close().await;
+}
+
+/// 直接写一条 imported 会话索引行（真实 imported 会话在 owned 存储里没有行）。
+async fn seed_imported_session(harness: &Harness, session: &str) {
+    let database = harness._temp.0.join("data").join("acp-remote.sqlite3");
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", database.display()))
+        .await
+        .expect("打开测试数据库");
+    sqlx::query(
+        "INSERT INTO imported_session (owner_node_id, session_id, title, agent_id, agent_name, \
+         state, version, created_at, next_local_sequence, updated_at) \
+         VALUES (?1, ?2, '远程会话', 'codex', 'Codex', 'idle', 1, ?3, 1, ?3)",
+    )
+    .bind(uuid_text())
+    .bind(session)
+    .bind("2026-10-19T09:00:00.000Z")
+    .execute(&pool)
+    .await
+    .expect("写入 imported 会话");
+    pool.close().await;
+}
+
+/// 一条查询结果的 `status` 与 `result`（失败时返回错误码）。
+fn query_outcome(message: &Value) -> (&str, Option<&Value>, Option<&str>) {
+    let body = &message["body"];
+    let status = body["status"].as_str().expect("status");
+    (
+        status,
+        body["result"].as_object().map(|_| &body["result"]),
+        body["error"]["code"].as_str(),
+    )
+}
+
+/// 读满一次 `session.files.read`（同一版本、按偏移续块），返回原始字节与首个块。
+async fn read_file_bytes(
+    client: &mut CommandClient,
+    session: &str,
+    path: &str,
+    purpose: &str,
+) -> (Vec<u8>, Value) {
+    let mut collected = Vec::new();
+    let mut version: Option<String> = None;
+    let mut first: Option<Value> = None;
+    loop {
+        let mut payload = json!({
+            "path": path,
+            "purpose": purpose,
+            "offset": collected.len().to_string(),
+        });
+        if let Some(version) = version.as_ref() {
+            payload["version"] = json!(version);
+        }
+        let message = client
+            .command_with_session(&uuid_text(), "session.files.read", session, payload)
+            .await;
+        let (status, result, error) = query_outcome(&message);
+        assert_eq!(
+            status, "completed",
+            "读取必须成功：{message}；错误 {error:?}"
+        );
+        let result = (*result.expect("completed 必须带 result")).clone();
+        if first.is_none() {
+            first = Some(result.clone());
+        }
+        assert_eq!(
+            result["offset"].as_str(),
+            Some(collected.len().to_string().as_str()),
+            "偏移必须与已拼接长度一致：{result}"
+        );
+        let data = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(result["dataBase64"].as_str().expect("dataBase64"))
+            .expect("dataBase64 是合法 base64url");
+        assert!(
+            data.len() <= acp_core::model::SESSION_FILE_CHUNK_MAX_BYTES,
+            "单块不得超过 32 KiB"
+        );
+        collected.extend_from_slice(&data);
+        if result["eof"] == json!(true) {
+            let size_bytes = result["sizeBytes"]
+                .as_str()
+                .and_then(|value| value.parse::<usize>().ok())
+                .expect("sizeBytes 是规范十进制字符串");
+            if result["previewTruncated"] == json!(true) {
+                assert!(
+                    collected.len() <= size_bytes,
+                    "截断预览不能超过原始大小：{} > {size_bytes}",
+                    collected.len()
+                );
+            } else {
+                assert_eq!(
+                    collected.len(),
+                    size_bytes,
+                    "完整读取的字节数必须等于 sizeBytes"
+                );
+            }
+            return (collected, first.expect("至少一个块"));
+        }
+        version = Some(result["version"].as_str().expect("version").to_owned());
+        assert!(!data.is_empty(), "非 EOF 的空块必须被拒绝");
+    }
+}
+
+/// 断开连接后等待连接级内容快照释放（真实 daemon 的取消路径）。
+async fn wait_for_no_snapshots(harness: &Harness) {
+    for _ in 0..200 {
+        if harness.composition().session_files().snapshot_count() == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!(
+        "断连后内容快照仍在：{} 个",
+        harness.composition().session_files().snapshot_count()
+    );
+}
+
+/// 未协商 `core.session-files.v1` 时四条查询在**任何 I/O 之前**拒绝。
+///
+/// 判别力：会话根指向一个**不存在**的目录。若门控晚于根解析/端口调用，错误会是
+/// `internal.unavailable`（根不可用）而不是 `protocol.feature_required`；同时端口快照计数保持 0。
+#[tokio::test]
+async fn session_file_queries_require_negotiation_before_any_io() {
+    let harness = Harness::start("files-feature-gate").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("origin");
+    let device = DeviceId::new(&uuid_text()).expect("device");
+    let features = SUPPORTED_FEATURES
+        .iter()
+        .copied()
+        .filter(|feature| *feature != "core.session-files.v1")
+        .collect();
+    let mut client = command_client_with_features(&harness, &origin, &device, features).await;
+    let session = session_id_text();
+    let missing = std::env::temp_dir().join(format!("acpr-no-such-{}", uuid_text()));
+    seed_owned_session(&harness, &session, &missing).await;
+
+    let list = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.list",
+            &session,
+            json!({ "path": "", "hideIgnored": false }),
+        )
+        .await;
+    assert_eq!(list["body"]["status"], json!("rejected"), "{list}");
+    assert_eq!(
+        list["body"]["error"]["code"],
+        json!("protocol.feature_required"),
+        "未协商必须在用例与文件端口之前拒绝：{list}"
+    );
+
+    let git = client
+        .command_with_session(&uuid_text(), "session.git.status", &session, json!({}))
+        .await;
+    assert_eq!(
+        git["body"]["error"]["code"],
+        json!("protocol.feature_required"),
+        "{git}"
+    );
+    let read = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.read",
+            &session,
+            json!({ "path": "note.txt", "purpose": "preview", "offset": "0" }),
+        )
+        .await;
+    assert_eq!(
+        read["body"]["error"]["code"],
+        json!("protocol.feature_required"),
+        "{read}"
+    );
+    assert_eq!(
+        harness.composition().session_files().snapshot_count(),
+        0,
+        "未协商时不得建立内容快照"
+    );
+    drop(client);
+    harness.stop().await;
+}
+
+/// imported 会话在任何文件/Git 端口调用之前显式拒绝（不读 Access 主机的目录）。
+#[tokio::test]
+async fn imported_sessions_are_rejected_before_touching_the_access_host() {
+    let harness = Harness::start("files-imported").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("origin");
+    let device = DeviceId::new(&uuid_text()).expect("device");
+    let mut client = command_client(&harness, &origin, &device).await;
+    let session = session_id_text();
+    seed_imported_session(&harness, &session).await;
+
+    let list = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.list",
+            &session,
+            json!({ "path": "", "hideIgnored": false }),
+        )
+        .await;
+    assert_eq!(
+        list["body"]["error"]["code"],
+        json!("capability.unsupported_by_broker"),
+        "{list}"
+    );
+    let git = client
+        .command_with_session(&uuid_text(), "session.git.status", &session, json!({}))
+        .await;
+    assert_eq!(
+        git["body"]["error"]["code"],
+        json!("capability.unsupported_by_broker"),
+        "{git}"
+    );
+    let read = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.read",
+            &session,
+            json!({ "path": "note.txt", "purpose": "preview", "offset": "0" }),
+        )
+        .await;
+    assert_eq!(
+        read["body"]["error"]["code"],
+        json!("capability.unsupported_by_broker"),
+        "{read}"
+    );
+    assert_eq!(
+        harness.composition().session_files().snapshot_count(),
+        0,
+        "imported 不得建立内容快照"
+    );
+    drop(client);
+    harness.stop().await;
+}
+
+/// 真实字节分块一致、预览预算截断、下载预算显式失败，断连释放快照。
+#[tokio::test]
+async fn real_files_are_chunked_consistently_and_budgets_are_enforced() {
+    let harness = Harness::start("files-bytes").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("origin");
+    let device = DeviceId::new(&uuid_text()).expect("device");
+    let mut client = command_client(&harness, &origin, &device).await;
+    let workspace = TempDir::new("files-bytes-workspace");
+    std::fs::create_dir_all(&workspace.0).expect("workspace");
+    let payload: Vec<u8> = (0..70_000u32).map(|index| (index % 251) as u8).collect();
+    std::fs::write(workspace.0.join("data.bin"), &payload).expect("write data");
+    let big: Vec<u8> = std::iter::repeat_with(|| b'a').take(300 * 1024).collect();
+    std::fs::write(workspace.0.join("big.txt"), &big).expect("write big");
+    let huge = std::fs::File::create(workspace.0.join("huge.bin")).expect("create huge");
+    huge.set_len(64 * 1024 * 1024 + 1).expect("sparse huge");
+    let session = session_id_text();
+    seed_owned_session(&harness, &session, &workspace.0).await;
+
+    // 列表：会话根内文件可见，隐藏/系统项默认可见（这里只验证真实枚举）。
+    let list = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.list",
+            &session,
+            json!({ "path": "", "hideIgnored": false }),
+        )
+        .await;
+    assert_eq!(list["body"]["status"], json!("completed"), "{list}");
+    let names: Vec<&str> = list["body"]["result"]["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|entry| entry["name"].as_str().expect("name"))
+        .collect();
+    assert!(names.contains(&"data.bin"), "真实文件必须列出：{names:?}");
+    assert_eq!(
+        list["body"]["result"]["gitState"],
+        json!("not_repository"),
+        "非仓库必须是成功结果里的显式状态"
+    );
+
+    let (download, first) = read_file_bytes(&mut client, &session, "data.bin", "download").await;
+    assert_eq!(download, payload, "多块拼接必须与真实文件逐字节一致");
+    assert_eq!(first["kind"], json!("binary"));
+    assert_eq!(
+        first["sizeBytes"].as_str(),
+        Some("70000"),
+        "大小是规范十进制字符串"
+    );
+
+    let (preview, preview_first) =
+        read_file_bytes(&mut client, &session, "big.txt", "preview").await;
+    assert_eq!(
+        preview_first["previewTruncated"],
+        json!(true),
+        "超过文本预览预算必须显式截断"
+    );
+    assert_eq!(
+        preview.len(),
+        acp_core::model::SESSION_FILE_TEXT_PREVIEW_MAX_BYTES as usize,
+        "预览只保存预算内的内容"
+    );
+
+    let huge_read = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.read",
+            &session,
+            json!({ "path": "huge.bin", "purpose": "download", "offset": "0" }),
+        )
+        .await;
+    assert_eq!(
+        huge_read["body"]["error"]["code"],
+        json!("resource.result_too_large"),
+        "超过 64 MiB 下载预算必须显式失败：{huge_read}"
+    );
+
+    // 手工路径形状错误在端口调用前拒绝（不访问磁盘）。
+    let invalid = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.list",
+            &session,
+            json!({ "path": "../outside", "hideIgnored": false }),
+        )
+        .await;
+    // 路径形状在 wire schema 层就被拒绝，响应是 error 帧而不是 command.result。
+    assert_eq!(
+        invalid["body"]["code"],
+        json!("protocol.schema_invalid"),
+        "{invalid}"
+    );
+
+    // 完成的读取可以立即释放快照，也可以保留到空闲 TTL；这里只钉住真正的生命周期保证：
+    // 连接断开后不得留下任何连接级内容快照。
+    drop(client);
+    wait_for_no_snapshots(&harness).await;
+    harness.stop().await;
+}
+
+/// 真实临时 Git 仓库：status 只覆盖会话根、diff 相对 HEAD、查询不写索引。
+#[tokio::test]
+async fn git_status_and_diff_use_the_real_repository_without_writing_the_index() {
+    let git_available = std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !git_available {
+        eprintln!("本机没有 git：真实 Git 查询用例按显式降级记录，不冒充通过");
+        return;
+    }
+    let harness = Harness::start("files-git").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("origin");
+    let device = DeviceId::new(&uuid_text()).expect("device");
+    let mut client = command_client(&harness, &origin, &device).await;
+
+    let repo = TempDir::new("files-git-repo");
+    std::fs::create_dir_all(repo.0.join("sub")).expect("sub");
+    let run_git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo.0)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "WP5")
+            .env("GIT_AUTHOR_EMAIL", "wp5@example.invalid")
+            .env("GIT_COMMITTER_NAME", "WP5")
+            .env("GIT_COMMITTER_EMAIL", "wp5@example.invalid")
+            .output()
+            .expect("运行 git");
+        assert!(
+            output.status.success(),
+            "git {args:?} 失败：{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    run_git(&["init", "-q", "-b", "main"]);
+    std::fs::write(repo.0.join("top.txt"), b"top\n").expect("top");
+    std::fs::write(repo.0.join("sub/tracked-sub.txt"), b"one\n").expect("tracked");
+    std::fs::write(repo.0.join("sub/removed.txt"), b"gone\n").expect("removed");
+    run_git(&["add", "."]);
+    run_git(&["commit", "-q", "-m", "init"]);
+    // 根外（相对会话根）的改动：不得进入会话结果。
+    std::fs::write(repo.0.join("top.txt"), b"top changed\n").expect("top changed");
+    std::fs::write(repo.0.join("sub/tracked-sub.txt"), b"two\n").expect("tracked changed");
+    std::fs::write(repo.0.join("sub/staged.txt"), b"staged\n").expect("staged");
+    run_git(&["add", "sub/staged.txt"]);
+    std::fs::write(repo.0.join("sub/staged.txt"), b"staged changed\n").expect("staged changed");
+    std::fs::write(repo.0.join("sub/untracked.txt"), b"untracked\n").expect("untracked");
+    std::fs::remove_file(repo.0.join("sub/removed.txt")).expect("remove");
+
+    let index_path = repo.0.join(".git").join("index");
+    let index_before = std::fs::read(&index_path).expect("read index");
+    let session = session_id_text();
+    seed_owned_session(&harness, &session, &repo.0.join("sub")).await;
+
+    let status = client
+        .command_with_session(&uuid_text(), "session.git.status", &session, json!({}))
+        .await;
+    assert_eq!(status["body"]["status"], json!("completed"), "{status}");
+    assert_eq!(status["body"]["result"]["gitState"], json!("available"));
+    let entries = status["body"]["result"]["entries"]
+        .as_array()
+        .expect("entries");
+    let entry = |path: &str| {
+        entries
+            .iter()
+            .find(|entry| entry["path"] == json!(path))
+            .unwrap_or_else(|| panic!("缺少 {path}：{entries:?}"))
+    };
+    assert_eq!(entry("tracked-sub.txt")["status"], json!("modified"));
+    assert_eq!(entry("staged.txt")["status"], json!("added"));
+    assert_eq!(entry("untracked.txt")["status"], json!("untracked"));
+    assert_eq!(entry("removed.txt")["status"], json!("deleted"));
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["path"] != json!("top.txt")),
+        "会话根之外的改动不得下发：{entries:?}"
+    );
+
+    let diff = client
+        .command_with_session(
+            &uuid_text(),
+            "session.git.diff",
+            &session,
+            json!({ "path": "tracked-sub.txt" }),
+        )
+        .await;
+    assert_eq!(diff["body"]["status"], json!("completed"), "{diff}");
+    assert_eq!(diff["body"]["result"]["base"], json!("head"));
+    assert_eq!(diff["body"]["result"]["kind"], json!("text"));
+    let lines = diff["body"]["result"]["diffLines"]
+        .as_array()
+        .expect("diffLines")
+        .iter()
+        .map(|line| line.as_str().expect("line"))
+        .collect::<Vec<_>>();
+    assert!(lines.contains(&"+two"), "新增行走真实 diff：{lines:?}");
+    assert!(lines.contains(&"-one"), "删除行走真实 diff：{lines:?}");
+
+    let untracked = client
+        .command_with_session(
+            &uuid_text(),
+            "session.git.diff",
+            &session,
+            json!({ "path": "untracked.txt" }),
+        )
+        .await;
+    // 仓库已有 HEAD：未跟踪文件相对 HEAD 展示为全量新增；`empty` 只用于尚无提交的仓库。
+    assert_eq!(
+        untracked["body"]["result"]["base"],
+        json!("head"),
+        "未跟踪文件按 HEAD 基准展示：{untracked}"
+    );
+
+    let after_index = std::fs::read(&index_path).expect("re-read index");
+    assert_eq!(index_before, after_index, "只读 Git 查询不得改写索引");
+    // 根外路径不能借 diff 读取。
+    let outside = client
+        .command_with_session(
+            &uuid_text(),
+            "session.git.diff",
+            &session,
+            json!({ "path": "../top.txt" }),
+        )
+        .await;
+    // 路径形状在 wire schema 层就被拒绝，响应是 error 帧而不是 command.result。
+    assert_eq!(
+        outside["body"]["code"],
+        json!("protocol.schema_invalid"),
+        "{outside}"
+    );
+
+    drop(client);
+    harness.stop().await;
+}
+
+/// 根外链接：可见但不可打开；直接读取与遍历都拒绝；循环链接不挂起。
+#[tokio::test]
+async fn links_outside_the_root_are_visible_but_not_openable_and_never_hang() {
+    let harness = Harness::start("files-links").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("origin");
+    let device = DeviceId::new(&uuid_text()).expect("device");
+    let mut client = command_client(&harness, &origin, &device).await;
+    let workspace = TempDir::new("files-links-workspace");
+    let outside = TempDir::new("files-links-outside");
+    std::fs::create_dir_all(&workspace.0).expect("workspace");
+    std::fs::create_dir_all(&outside.0).expect("outside");
+    std::fs::write(outside.0.join("secret.txt"), b"outside-secret").expect("secret");
+    std::fs::write(workspace.0.join("inside.txt"), b"inside").expect("inside");
+    let link = workspace.0.join("escape");
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside.0, &link).expect("symlink outside");
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&link)
+            .arg(&outside.0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("运行 mklink");
+        assert!(
+            status.success(),
+            "Windows junction 必须可创建（测试需要真实链接）"
+        );
+    }
+
+    // 会话根内的循环链接：遍历必须返回或显式拒绝，但绝不能挂起。
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&workspace.0, workspace.0.join("loop")).expect("symlink loop");
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(workspace.0.join("loop"))
+            .arg(&workspace.0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    let session = session_id_text();
+    seed_owned_session(&harness, &session, &workspace.0).await;
+
+    let list = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.list",
+            &session,
+            json!({ "path": "", "hideIgnored": false }),
+        )
+        .await;
+    assert_eq!(list["body"]["status"], json!("completed"), "{list}");
+    let entries = list["body"]["result"]["entries"]
+        .as_array()
+        .expect("entries");
+    let escape = entries
+        .iter()
+        .find(|entry| entry["name"] == json!("escape"))
+        .expect("根外链接条目必须可见");
+    assert_eq!(escape["kind"], json!("link"));
+    assert_eq!(
+        escape["openable"],
+        json!(false),
+        "根外链接不可打开：{escape}"
+    );
+    assert_eq!(escape["restricted"], json!("outside_root"));
+    let rendered = list.to_string();
+    assert!(
+        !rendered.contains(outside.0.to_str().expect("outside path")),
+        "不得泄漏根外绝对路径：{rendered}"
+    );
+
+    let read = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.read",
+            &session,
+            json!({ "path": "escape/secret.txt", "purpose": "preview", "offset": "0" }),
+        )
+        .await;
+    assert_eq!(
+        read["body"]["error"]["code"],
+        json!("internal.unavailable"),
+        "直接构造根外读取必须被拒绝：{read}"
+    );
+    let traverse = client
+        .command_with_session(
+            &uuid_text(),
+            "session.files.list",
+            &session,
+            json!({ "path": "escape", "hideIgnored": false }),
+        )
+        .await;
+    assert_eq!(
+        traverse["body"]["error"]["code"],
+        json!("internal.unavailable"),
+        "遍历根外目录必须被拒绝：{traverse}"
+    );
+    assert_eq!(
+        harness.composition().session_files().snapshot_count(),
+        0,
+        "被拒绝的读取不得留下快照"
+    );
+
+    // 循环链接：请求在预算内返回（成功或显式失败都可以，挂起不行）。
+    let loop_list = tokio::time::timeout(
+        IO_TIMEOUT,
+        client.command_with_session(
+            &uuid_text(),
+            "session.files.list",
+            &session,
+            json!({ "path": "loop", "hideIgnored": false }),
+        ),
+    )
+    .await
+    .expect("循环链接遍历不得挂起");
+    assert!(
+        loop_list["body"]["status"] == json!("completed")
+            || loop_list["body"]["error"]["code"].is_string(),
+        "循环链接必须显式返回：{loop_list}"
+    );
+
+    drop(client);
+    harness.stop().await;
+}
+
+/// Windows：断连中断一次进行中的 Git 查询后，进程/仓库仍可继续使用（真实平台测试，不标 ignore）。
+///
+/// 进程树清理本身由 `session_files` 适配器的 Job Object 用例证明；这里闭合的是**真实 daemon
+/// 连接**这一层：连接断开时取消路径不得留下占用仓库的进程或锁，后续连接仍能读到状态。
+#[cfg(windows)]
+#[tokio::test]
+async fn a_disconnected_git_query_leaves_the_repository_usable_on_windows() {
+    let git_available = std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !git_available {
+        eprintln!("本机没有 git：Windows Git 断连用例按显式降级记录，不冒充通过");
+        return;
+    }
+    let harness = Harness::start("files-git-disconnect").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("origin");
+    let device = DeviceId::new(&uuid_text()).expect("device");
+    let repo = TempDir::new("files-git-disconnect-repo");
+    std::fs::create_dir_all(&repo.0).expect("repo");
+    let run_git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo.0)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "WP5")
+            .env("GIT_AUTHOR_EMAIL", "wp5@example.invalid")
+            .env("GIT_COMMITTER_NAME", "WP5")
+            .env("GIT_COMMITTER_EMAIL", "wp5@example.invalid")
+            .output()
+            .expect("运行 git");
+        assert!(
+            output.status.success(),
+            "git {args:?} 失败：{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_git(&["init", "-q", "-b", "main"]);
+    // 足够多的未跟踪文件，让 status 有真实的取消窗口。
+    for index in 0..2_000 {
+        std::fs::write(repo.0.join(format!("untracked-{index:04}.txt")), b"x").expect("untracked");
+    }
+    let session = session_id_text();
+    seed_owned_session(&harness, &session, &repo.0).await;
+
+    let mut client = command_client(&harness, &origin, &device).await;
+    client.sequence += 1;
+    client.last_message_id = uuid_text();
+    client
+        .client
+        .send_text(
+            &json!({
+                "protocolVersion": 1,
+                "type": "command",
+                "messageId": client.last_message_id,
+                "connectionId": client.connection_id,
+                "connectionSequence": client.sequence.to_string(),
+                "body": {
+                    "requestId": uuid_text(),
+                    "command": "session.git.status",
+                    "sessionId": session.clone(),
+                    "payload": {},
+                },
+            })
+            .to_string(),
+        )
+        .await;
+    // 不读结果直接断开：取消/释放发生在连接生命周期里。
+    drop(client);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // 仓库仍然可用：直接 git status 成功，且新的认证连接能再次读到状态。
+    run_git(&["status", "--porcelain=v1"]);
+    let second = DeviceId::new(&uuid_text()).expect("device");
+    let mut again = command_client(&harness, &origin, &second).await;
+    let status = tokio::time::timeout(
+        IO_TIMEOUT,
+        again.command_with_session(&uuid_text(), "session.git.status", &session, json!({})),
+    )
+    .await
+    .expect("断连后新的 Git 查询不得挂起");
+    assert_eq!(status["body"]["status"], json!("completed"), "{status}");
+    assert_eq!(status["body"]["result"]["gitState"], json!("available"));
+    drop(again);
     harness.stop().await;
 }

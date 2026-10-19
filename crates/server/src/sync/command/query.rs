@@ -1,8 +1,8 @@
-//! 六条查询命令的用例面调用与 core → wire 投影（§11.2/§11.5；任务 2.3/2.4、3.1）。
+//! 十条查询命令的用例面调用与 core → wire 投影（§11.2/§11.5；任务 2.3/2.4、3.1）。
 //!
 //! 四条边界：
 //!
-//! - **同步完成**：六条查询命令都在本模块内直接算出终态，返回**一次** `completed` 或 `rejected`，
+//! - **同步完成**：十条查询命令都在本模块内直接算出终态，返回**一次** `completed` 或 `rejected`，
 //!   绝不先回 `accepted`（§11.2「查询命令不进入异步队列」）。结果的形状由命令名决定，逐条与
 //!   `command.schema.json` 的 `allOf/if-then` 对齐。
 //! - **授权已在调用方完成**：本模块只负责读取与投影；每条命令进入这里之前都已按设备 scope 判定过
@@ -28,15 +28,29 @@ use std::sync::Arc;
 use acp_core::broker::Broker;
 use acp_core::model::{
     AcpRaw as CoreAcpRaw, Actor, CommandRecord, ConfigOption as CoreConfigOption, ConfigOptionKind,
-    ConfigValue, ModeRef as CoreModeRef, OwnedSessionRef, RawUnavailableReason, RemoteSessionRef,
-    ResourceOrigin, Sequence, SessionId, SessionReference, SessionState as CoreSessionState,
+    ConfigValue, FileReadPurpose as CoreFileReadPurpose, GitDiff as CoreGitDiff,
+    GitDiffBase as CoreGitDiffBase, GitDiffKind as CoreGitDiffKind,
+    GitDiffUnavailableReason as CoreGitDiffUnavailable, GitFileStatus as CoreGitFileStatus,
+    GitState as CoreGitState, GitStatusPage, ModeRef as CoreModeRef, OwnedSessionRef,
+    RawUnavailableReason, RemoteSessionRef, ResourceOrigin, Sequence, SessionFileChunk,
+    SessionFileContentKind, SessionFileEntryKind as CoreEntryKind, SessionFilePage,
+    SessionFileRestrictedReason as CoreRestrictedReason, SessionId, SessionReference,
+    SessionState as CoreSessionState,
 };
 use acp_core::ports::{HistoryInclude, HistoryQuery, OwnedEventRecord, ReplayLimit};
 use acp_core::use_cases::{ModeListing, SyncSessionQuery, UseCases};
+use base64::Engine as _;
 use sync_protocol::command::{
     Command, CommandResultPayload, CommandStatus as WireCommandStatus, CommandStatusRecord,
-    ConfigListResult, IncludeList, SessionListResult, SessionRead, SessionReadResources,
-    SessionReadResult, WorkspaceBrowse, WorkspaceBrowseEntry, WorkspaceBrowseResult,
+    ConfigListResult, ContentVersion as WireContentVersion, FileReadPurpose as WireFileReadPurpose,
+    GitDiffBase as WireGitDiffBase, GitDiffKind as WireGitDiffKind,
+    GitDiffUnavailableReason as WireGitDiffUnavailable, GitFileStatus as WireGitFileStatus,
+    GitState as WireGitState, GitStatusEntry as WireGitStatusEntry, IncludeList, SessionFileData,
+    SessionFileEntry as WireSessionFileEntry, SessionFilesList, SessionFilesListResult,
+    SessionFilesPath, SessionFilesRead, SessionFilesReadResult, SessionGitDiff,
+    SessionGitDiffResult, SessionGitStatus, SessionGitStatusResult, SessionListResult,
+    SessionPageToken, SessionRead, SessionReadResources, SessionReadResult, SessionRelativePath,
+    WorkspaceBrowse, WorkspaceBrowseEntry, WorkspaceBrowseResult,
 };
 use sync_protocol::common::{
     AgentContentBlock, Base64Url, ConfigOption as WireConfigOptionEntry, ConfigOptionType,
@@ -566,6 +580,284 @@ pub async fn workspace_browse(
             truncated: browse.truncated,
         },
     ))
+}
+
+// ---------------------------------------------------------------------------------------------
+// 会话文件与 Git 只读查询（`core.session-files.v1`；§11.5、design D1/D2/D3）
+// ---------------------------------------------------------------------------------------------
+
+/// 四条会话文件查询的 feature 门控（`core.session-files.v1`，§11.5）。
+///
+/// 判定发生在**任何**用例调用之前：未协商时 `UseCases` 的授权、会话读取、文件端口与 Git 进程都不会
+/// 被调用一次，因此「未协商零 I/O」是可观察的（端口调用计数为零），而不只是错误码看着对。
+pub(super) fn require_session_files(features: &NegotiatedFeatures) -> Result<(), Rejection> {
+    if features.contains(super::SESSION_FILES_FEATURE) {
+        Ok(())
+    } else {
+        Err(Rejection::FeatureRequired(super::SESSION_FILES_FEATURE))
+    }
+}
+
+/// 命令信封上的 `sessionId`（四条文件/Git 查询都以它定位会话）。
+pub(super) fn command_session(command: &Command) -> Result<SessionId, Rejection> {
+    let Some(session) = command.session_id.as_ref() else {
+        return Err(Rejection::Schema("this command requires sessionId"));
+    };
+    SessionId::new(session.as_str()).map_err(|_| Rejection::Schema("sessionId is not a session id"))
+}
+
+/// `session.files.list`：当前会话工作目录内一层的只读枚举（§11.5）。
+pub async fn session_files_list(
+    core: &Arc<UseCases>,
+    actor: &Actor,
+    command: &Command,
+    payload: SessionFilesList,
+    features: &NegotiatedFeatures,
+) -> Result<CommandResultPayload, Rejection> {
+    require_session_files(features)?;
+    let session = command_session(command)?;
+    let page = core
+        .list_session_files(
+            actor,
+            &session,
+            payload.path.as_str(),
+            payload.hide_ignored,
+            payload.after.as_ref().map(|after| after.as_str()),
+        )
+        .await
+        .map_err(|error| port_rejection(&error))?;
+    let result = wire_session_file_page(&page, payload.path).ok_or(Rejection::Code(
+        ErrorCode::InternalUnavailable,
+        "a session file entry cannot be projected",
+    ))?;
+    Ok(CommandResultPayload::SessionFilesList(result))
+}
+
+/// `session.files.read`：读取连接绑定内容快照的一个字节块（§11.5）。
+///
+/// 返回 core 的字节块而不是 wire 结果：连接期内容版本的登记/校验必须与连接状态在同一处完成（见
+/// [`super::CommandRoute::session_files_read`]），本函数只负责门控、入参形状与用例调用。
+pub async fn session_files_read(
+    core: &Arc<UseCases>,
+    actor: &Actor,
+    command: &Command,
+    payload: &SessionFilesRead,
+    features: &NegotiatedFeatures,
+) -> Result<SessionFileChunk, Rejection> {
+    require_session_files(features)?;
+    let session = command_session(command)?;
+    let purpose = match payload.purpose {
+        WireFileReadPurpose::Preview => CoreFileReadPurpose::Preview,
+        WireFileReadPurpose::Download => CoreFileReadPurpose::Download,
+    };
+    // `offset` 是规范十进制字符串；超出 `u64` 的取值是形状错误，不得回绕成一个小偏移。
+    let offset = payload
+        .offset
+        .as_str()
+        .parse::<u64>()
+        .map_err(|_| Rejection::Schema("offset is not a decimal byte offset"))?;
+    let version = payload.version.as_ref().map(|version| version.as_str());
+    core.read_session_file(
+        actor,
+        &session,
+        payload.path.as_str(),
+        purpose,
+        offset,
+        version,
+    )
+    .await
+    .map_err(|error| port_rejection(&error))
+}
+
+/// `session.git.status`：当前会话工作目录内的 Git 状态页（§11.5）。
+pub async fn session_git_status(
+    core: &Arc<UseCases>,
+    actor: &Actor,
+    command: &Command,
+    payload: SessionGitStatus,
+    features: &NegotiatedFeatures,
+) -> Result<CommandResultPayload, Rejection> {
+    require_session_files(features)?;
+    let session = command_session(command)?;
+    let page = core
+        .session_git_status(
+            actor,
+            &session,
+            payload.after.as_ref().map(|after| after.as_str()),
+        )
+        .await
+        .map_err(|error| port_rejection(&error))?;
+    let result = wire_git_status_page(&page).ok_or(Rejection::Code(
+        ErrorCode::InternalUnavailable,
+        "a git status entry cannot be projected",
+    ))?;
+    Ok(CommandResultPayload::SessionGitStatus(result))
+}
+
+/// `session.git.diff`：当前会话工作目录内一个文件的 HEAD/工作树差异（§11.5）。
+pub async fn session_git_diff(
+    core: &Arc<UseCases>,
+    actor: &Actor,
+    command: &Command,
+    payload: SessionGitDiff,
+    features: &NegotiatedFeatures,
+) -> Result<CommandResultPayload, Rejection> {
+    require_session_files(features)?;
+    let session = command_session(command)?;
+    let diff = core
+        .session_git_diff(actor, &session, payload.path.as_str())
+        .await
+        .map_err(|error| port_rejection(&error))?;
+    let result = wire_git_diff(&diff).ok_or(Rejection::Code(
+        ErrorCode::InternalUnavailable,
+        "a git diff cannot be projected",
+    ))?;
+    Ok(CommandResultPayload::SessionGitDiff(result))
+}
+
+/// core 的枚举页 → wire `sessionFilesListResult`（`path` 逐字回显请求）。
+fn wire_session_file_page(
+    page: &SessionFilePage,
+    path: SessionFilesPath,
+) -> Option<SessionFilesListResult> {
+    let entries = page
+        .entries()
+        .iter()
+        .map(|entry| {
+            Some(WireSessionFileEntry {
+                path: SessionRelativePath::parse(entry.path().as_str()).ok()?,
+                name: NonEmptyText::<256>::parse(entry.name()).ok()?,
+                kind: match entry.kind() {
+                    CoreEntryKind::File => sync_protocol::command::SessionFileEntryKind::File,
+                    CoreEntryKind::Directory => {
+                        sync_protocol::command::SessionFileEntryKind::Directory
+                    }
+                    CoreEntryKind::Link => sync_protocol::command::SessionFileEntryKind::Link,
+                    CoreEntryKind::Other => sync_protocol::command::SessionFileEntryKind::Other,
+                },
+                openable: entry.openable(),
+                restricted: entry.restricted().map(|reason| match reason {
+                    CoreRestrictedReason::OutsideRoot => {
+                        sync_protocol::command::SessionFileRestrictedReason::OutsideRoot
+                    }
+                    CoreRestrictedReason::Unreadable => {
+                        sync_protocol::command::SessionFileRestrictedReason::Unreadable
+                    }
+                    CoreRestrictedReason::Unsupported => {
+                        sync_protocol::command::SessionFileRestrictedReason::Unsupported
+                    }
+                }),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let next = match page.next() {
+        Some(token) => Some(SessionPageToken::parse(token.as_str()).ok()?),
+        None => None,
+    };
+    Some(SessionFilesListResult {
+        path,
+        git_state: wire_git_state(page.git_state()),
+        entries,
+        next,
+    })
+}
+
+/// core 的字节块 → wire `sessionFilesReadResult`（`dataBase64` 为无填充 base64url）。
+pub(super) fn wire_session_file_chunk(chunk: &SessionFileChunk) -> Option<SessionFilesReadResult> {
+    let data = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(chunk.data());
+    Some(SessionFilesReadResult {
+        path: SessionRelativePath::parse(chunk.path().as_str()).ok()?,
+        kind: match chunk.kind() {
+            SessionFileContentKind::Text => sync_protocol::command::SessionFileContentKind::Text,
+            SessionFileContentKind::Image => sync_protocol::command::SessionFileContentKind::Image,
+            SessionFileContentKind::Binary => {
+                sync_protocol::command::SessionFileContentKind::Binary
+            }
+        },
+        size_bytes: decimal(&chunk.size_bytes().to_string())?,
+        version: WireContentVersion::parse(chunk.version().as_str()).ok()?,
+        offset: decimal(&chunk.offset().to_string())?,
+        data_base64: SessionFileData::parse(&data).ok()?,
+        eof: chunk.eof(),
+        preview_truncated: chunk.preview_truncated(),
+    })
+}
+
+/// core 的 Git 状态页 → wire `sessionGitStatusResult`。
+fn wire_git_status_page(page: &GitStatusPage) -> Option<SessionGitStatusResult> {
+    let entries = page
+        .entries()
+        .iter()
+        .map(|entry| {
+            Some(WireGitStatusEntry {
+                path: SessionRelativePath::parse(entry.path().as_str()).ok()?,
+                status: match entry.status() {
+                    CoreGitFileStatus::Added => WireGitFileStatus::Added,
+                    CoreGitFileStatus::Modified => WireGitFileStatus::Modified,
+                    CoreGitFileStatus::Deleted => WireGitFileStatus::Deleted,
+                    CoreGitFileStatus::Renamed => WireGitFileStatus::Renamed,
+                    CoreGitFileStatus::Untracked => WireGitFileStatus::Untracked,
+                },
+                previous_path: match entry.previous_path() {
+                    Some(path) => Some(SessionRelativePath::parse(path.as_str()).ok()?),
+                    None => None,
+                },
+                conflicted: entry.conflicted(),
+                binary: entry.binary(),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let next = match page.next() {
+        Some(token) => Some(SessionPageToken::parse(token.as_str()).ok()?),
+        None => None,
+    };
+    Some(SessionGitStatusResult {
+        git_state: wire_git_state(page.git_state()),
+        entries,
+        next,
+    })
+}
+
+/// core 的差异视图 → wire `sessionGitDiffResult`。
+fn wire_git_diff(diff: &CoreGitDiff) -> Option<SessionGitDiffResult> {
+    let diff_lines = if diff.lines().is_empty() {
+        None
+    } else {
+        Some(
+            diff.lines()
+                .iter()
+                .map(|line| Text::<4096>::parse(line).ok())
+                .collect::<Option<Vec<_>>>()?,
+        )
+    };
+    Some(SessionGitDiffResult {
+        path: SessionRelativePath::parse(diff.path().as_str()).ok()?,
+        base: match diff.base() {
+            CoreGitDiffBase::Head => WireGitDiffBase::Head,
+            CoreGitDiffBase::Empty => WireGitDiffBase::Empty,
+        },
+        kind: match diff.kind() {
+            CoreGitDiffKind::Text => WireGitDiffKind::Text,
+            CoreGitDiffKind::Binary => WireGitDiffKind::Binary,
+            CoreGitDiffKind::Conflict => WireGitDiffKind::Conflict,
+        },
+        diff_lines,
+        unavailable: diff.unavailable().map(|reason| match reason {
+            CoreGitDiffUnavailable::NotRepository => WireGitDiffUnavailable::NotRepository,
+            CoreGitDiffUnavailable::GitUnavailable => WireGitDiffUnavailable::GitUnavailable,
+            CoreGitDiffUnavailable::TooLarge => WireGitDiffUnavailable::TooLarge,
+        }),
+        truncated: diff.truncated(),
+    })
+}
+
+/// core 的三种 Git 可查询状态 → wire 封闭词表。
+fn wire_git_state(state: CoreGitState) -> WireGitState {
+    match state {
+        CoreGitState::Available => WireGitState::Available,
+        CoreGitState::NotRepository => WireGitState::NotRepository,
+        CoreGitState::Unavailable => WireGitState::Unavailable,
+    }
 }
 
 /// `sessionId` → owned 会话引用（`session.mode.list`/`session.config.list` 的入参形状）。
@@ -1113,4 +1405,208 @@ fn text_blocks(text: &str) -> Option<Vec<AgentContentBlock>> {
         text: Text::<MAX_TEXT_CHARS>::parse(&chunk).ok()?,
     });
     Some(blocks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acp_core::model::{
+        FileReadPurpose as CorePurpose, GitDiffBase as CoreBase, GitDiffKind as CoreDiffKind,
+        GitFileStatus as CoreStatus, GitState as CoreState, GitStatusEntry as CoreStatusEntry,
+        GitStatusPage as CoreStatusPage, SessionFileEntry as CoreEntry,
+        SessionFilePage as CorePage, SessionFilePath,
+        SessionFileRestrictedReason as CoreRestricted, SessionListPath as CoreListPath,
+        SessionPageToken as CoreToken,
+    };
+
+    fn path(text: &str) -> SessionFilePath {
+        SessionFilePath::parse(text).expect("session path")
+    }
+
+    /// 四条命令的 feature 门控在用例之前：未协商就是 `protocol.feature_required`，且 `details.features`
+    /// 只给出缺的那一条。
+    #[test]
+    fn session_file_queries_require_their_feature() {
+        let empty = NegotiatedFeatures::new(Vec::new());
+        let rejection = require_session_files(&empty).expect_err("未协商必须拒绝");
+        let (code, _, details) = rejection.into_parts();
+        assert_eq!(code, ErrorCode::ProtocolFeatureRequired);
+        assert_eq!(
+            details.get(),
+            serde_json::json!({ "features": ["core.session-files.v1"] }).to_string()
+        );
+
+        let negotiated =
+            NegotiatedFeatures::new(vec![super::super::SESSION_FILES_FEATURE.to_owned()]);
+        assert!(require_session_files(&negotiated).is_ok());
+    }
+
+    /// `session.files.list` 的成功投影：请求路径逐字回显、枚举类型/可打开性/受限原因与 `next` 同形。
+    #[test]
+    fn session_file_page_projects_the_wire_shape() {
+        let entries = vec![
+            CoreEntry::try_new(
+                path("src/main.rs"),
+                "main.rs",
+                CoreEntryKind::File,
+                true,
+                None,
+            )
+            .expect("entry"),
+            CoreEntry::try_new(
+                path("linked"),
+                "linked",
+                CoreEntryKind::Link,
+                false,
+                Some(CoreRestricted::OutsideRoot),
+            )
+            .expect("entry"),
+        ];
+        let page = CorePage::try_new(
+            CoreListPath::root(),
+            CoreState::Available,
+            entries,
+            Some(CoreToken::new("token_1").expect("token")),
+        )
+        .expect("page");
+        let requested = SessionFilesPath::parse("").expect("root path");
+        let wire = wire_session_file_page(&page, requested).expect("projection");
+        assert_eq!(
+            serde_json::to_value(&wire).expect("json"),
+            serde_json::json!({
+                "path": "",
+                "gitState": "available",
+                "entries": [
+                    {
+                        "path": "src/main.rs",
+                        "name": "main.rs",
+                        "kind": "file",
+                        "openable": true
+                    },
+                    {
+                        "path": "linked",
+                        "name": "linked",
+                        "kind": "link",
+                        "openable": false,
+                        "restricted": "outside_root"
+                    }
+                ],
+                "next": "token_1"
+            })
+        );
+    }
+
+    /// `session.files.read` 的 `dataBase64` 是无填充 base64url；块元数据逐项来自 core。
+    #[test]
+    fn session_file_chunk_uses_unpadded_base64url() {
+        let chunk = SessionFileChunk::try_new(
+            path("assets/logo.png"),
+            SessionFileContentKind::Image,
+            4,
+            acp_core::model::ContentVersion::parse("version_1").expect("version"),
+            0,
+            vec![0xfb, 0xff, 0x00, 0x01],
+            true,
+            false,
+        )
+        .expect("chunk");
+        let wire = wire_session_file_chunk(&chunk).expect("projection");
+        assert_eq!(wire.data_base64.as_str(), "-_8AAQ");
+        assert_eq!(wire.size_bytes.as_str(), "4");
+        assert_eq!(wire.offset.as_str(), "0");
+        assert_eq!(wire.version.as_str(), "version_1");
+        assert!(wire.eof);
+        assert!(!wire.preview_truncated);
+    }
+
+    /// `session.git.status`：改名带旧路径，冲突/二进制是显式标记；非仓库是成功结果里的状态。
+    #[test]
+    fn git_status_page_projects_explicit_states() {
+        let entries = vec![
+            CoreStatusEntry::try_new(
+                path("src/new.rs"),
+                CoreStatus::Renamed,
+                Some(path("src/old.rs")),
+                true,
+                false,
+            )
+            .expect("entry"),
+        ];
+        let page = CoreStatusPage::try_new(CoreState::NotRepository, entries, None).expect("page");
+        let wire = wire_git_status_page(&page).expect("projection");
+        assert_eq!(
+            serde_json::to_value(&wire).expect("json"),
+            serde_json::json!({
+                "gitState": "not_repository",
+                "entries": [{
+                    "path": "src/new.rs",
+                    "status": "renamed",
+                    "previousPath": "src/old.rs",
+                    "conflicted": true,
+                    "binary": false
+                }]
+            })
+        );
+    }
+
+    /// `session.git.diff`：文本行映射到 `diffLines`，不可用原因单独出现，二者不同时存在。
+    #[test]
+    fn git_diff_projects_lines_and_unavailability() {
+        let text = CoreGitDiff::try_new(
+            path("src/main.rs"),
+            CoreBase::Empty,
+            CoreDiffKind::Text,
+            vec!["+hello".to_owned(), "-world".to_owned()],
+            None,
+            true,
+        )
+        .expect("diff");
+        let wire = wire_git_diff(&text).expect("projection");
+        assert_eq!(
+            serde_json::to_value(&wire).expect("json"),
+            serde_json::json!({
+                "path": "src/main.rs",
+                "base": "empty",
+                "kind": "text",
+                "diffLines": ["+hello", "-world"],
+                "truncated": true
+            })
+        );
+
+        let unavailable = CoreGitDiff::try_new(
+            path("src/main.rs"),
+            CoreBase::Head,
+            CoreDiffKind::Binary,
+            Vec::new(),
+            Some(CoreGitDiffUnavailable::TooLarge),
+            false,
+        )
+        .expect("diff");
+        let wire = wire_git_diff(&unavailable).expect("projection");
+        let value = serde_json::to_value(&wire).expect("json");
+        assert_eq!(value["unavailable"], "too_large");
+        assert!(value.get("diffLines").is_none());
+        assert_eq!(value["kind"], "binary");
+    }
+
+    /// 读用途两个取值都必须显式映射，未知分支不存在（封闭枚举由编译器保证）。
+    #[test]
+    fn read_purpose_is_mapped_exactly() {
+        let chunk = SessionFileChunk::try_new(
+            path("a.txt"),
+            SessionFileContentKind::Text,
+            0,
+            acp_core::model::ContentVersion::parse("v").expect("version"),
+            0,
+            Vec::new(),
+            true,
+            false,
+        )
+        .expect("chunk");
+        assert_eq!(chunk.data().len(), 0);
+        // 用途映射本身由下方 `match` 的穷尽性保证；这里固定两个 wire 取值的字符串形态。
+        assert_eq!(WireFileReadPurpose::Preview.as_str(), "preview");
+        assert_eq!(WireFileReadPurpose::Download.as_str(), "download");
+        let _ = CorePurpose::Preview;
+    }
 }

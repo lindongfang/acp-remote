@@ -93,3 +93,24 @@ export {
   recordGroupOf,
   viewText,
 } from "./timeline";
+
+export type {
+  AllFilesDirectoryView,
+  AllFilesSourceView,
+  FileSource,
+  FileSourceUnsupportedReason,
+  GitChangesView,
+  GitDiffView,
+  HistoryCoverage,
+  SessionChangedFile,
+  SessionChangeDiagnostics,
+  SessionChangeRecord,
+  SessionChangesModel,
+} from "./session-files";
+export {
+  DEFAULT_FILE_SOURCE,
+  FILE_SOURCES,
+  FILE_SOURCE_UNSUPPORTED_NOTICES,
+  HISTORY_COVERAGE_NOTICES,
+  buildSessionChangesModel,
+} from "./session-files";

@@ -53,6 +53,14 @@ function buildStyles(colors: Palette) {
       // 附上一条 `::-webkit-scrollbar` 规则），取值仍来自调色板。
       ...webStyle({ scrollbarWidth: "thin", scrollbarColor: `${colors.line} transparent` }),
     },
+    // 对话路由：根节点按视口高度固定（`100dvh` 比 `100%` 更稳：移动端地址栏收起/展开时
+    // 仍然取可见高度），内部三栏各有自己的滚动容器。其余路由不套这一档，继续随文档滚动。
+    rootFill: {
+      flexGrow: 0,
+      flexShrink: 0,
+      overflow: "hidden",
+      ...webStyle({ height: "100dvh" }),
+    },
     content: {
       flexGrow: 1,
       flexShrink: 1,
@@ -60,6 +68,14 @@ function buildStyles(colors: Palette) {
       flexDirection: "column",
       // 路由容器之外的底色也跟随主题：宽屏页面自身的最大宽度两侧不会露出浏览器的白底。
       backgroundColor: colors.bg,
+    },
+    contentFill: {
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+      minHeight: 0,
+      overflow: "hidden",
+      ...webStyle({ overflow: "hidden" }),
     },
     devBanner: {
       flexDirection: "row",
@@ -387,7 +403,10 @@ export function ShellView(props: ShellViewProps): ReactElement {
   const drawerTransition = props.reducedMotion ? styles.noMotion : styles.drawerMotion;
 
   return (
-    <View style={styles.root} dataSet={{ shell: "root" }}>
+    <View
+      style={props.model.contentFill ? [styles.root, styles.rootFill] : styles.root}
+      dataSet={{ shell: "root", shellFill: props.model.contentFill ? "true" : "false" }}
+    >
       {props.model.insecure ? (
         <View style={styles.devBanner} dataSet={{ devBanner: "visible" }}>
           <Text style={styles.devBannerText}>{DEV_BANNER_TEXT}</Text>
@@ -464,7 +483,10 @@ export function ShellView(props: ShellViewProps): ReactElement {
         </View>
       ) : null}
 
-      <View style={styles.content} dataSet={{ shellContent: "true" }}>
+      <View
+        style={props.model.contentFill ? [styles.content, styles.contentFill] : styles.content}
+        dataSet={{ shellContent: "true", shellContentFill: props.model.contentFill ? "true" : "false" }}
+      >
         {props.children}
       </View>
 

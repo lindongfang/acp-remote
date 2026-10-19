@@ -12,6 +12,9 @@ import { COMPOSITION_CHECKS } from "./checks/composition-root";
 import { CONVERSATION_TIMELINE_CHECKS } from "./checks/conversation-timeline";
 import { CONVERSATION_INTERACTION_CHECKS } from "./checks/conversation-interaction";
 import { CONVERSATION_CONTENT_CHECKS } from "./checks/conversation-content";
+import { CONVERSATION_LAYOUT_CHECKS } from "./checks/conversation-layout";
+import { CONVERSATION_TOOL_DETAIL_CHECKS } from "./checks/conversation-tool-detail";
+import { SESSION_FILES_CHECKS } from "./checks/session-files";
 import { FRAME_ACCEPTANCE_CHECKS } from "./checks/frame-acceptance";
 import { PAIRING_FIRST_RUN_CHECKS } from "./checks/pairing-first-run";
 import { PAIRING_KIND_CHECKS } from "./checks/pairing-kinds";
@@ -50,9 +53,13 @@ import type { CheckResult } from "./support";
  * （`waitForDirectoryList` / `typeIntoInput` / `withScenario`）都在目录页那一半，
  * 由详情集单向导入——反过来导入会成环。
  *
- * 对话页（`pwa-conversation-ui`）按主题分三个检查集：时间线与结构化历史、输入/授权/设置、
- * 变更文件右栏/来源降级/富文本。三者的共用机关（`sessionScenario` / `enterRoute` /
- * `withSessionPage` / `commandBody`）与 R15 同一取舍，放在**时间线**那一半，另外两个单向导入。
+ * 对话页（`pwa-conversation-ui`）按主题分五个检查集：时间线与结构化历史、输入/授权/设置、
+ * 变更文件右栏/来源降级/富文本，以及布局/左栏（`conversation-layout.ts`）与工具详情/代码行号
+ * （`conversation-tool-detail.ts`）。共用机关（`sessionScenario` / `enterRoute` /
+ * `withSessionPage` / `commandBody`）与 R15 同一取舍，放在**时间线**那一半，其余四个单向导入。
+ *
+ * 布局检查排在内容检查之后：它依赖 `support.tsx` 的 `HarnessLayout` 与 `app/_layout.tsx` 同构
+ * （真实 `Shell`）。只挂 `Stack` 时对话页拿不到视口高度，三栏独立滚动在浏览器里无从成立。
  *
  * 帧受理面（`frame-acceptance.ts`）排在**各需求用例的最后一段**（配对用例之前）：它验的是
  * 解码边界的受理面——`origin.kind = "node"` 的协议合法事件进了账本、被页面呈现、游标继续前进。
@@ -79,6 +86,9 @@ const ALL_CHECKS = [
   ...CONVERSATION_TIMELINE_CHECKS,
   ...CONVERSATION_INTERACTION_CHECKS,
   ...CONVERSATION_CONTENT_CHECKS,
+  ...CONVERSATION_LAYOUT_CHECKS,
+  ...CONVERSATION_TOOL_DETAIL_CHECKS,
+  ...SESSION_FILES_CHECKS,
   ...FRAME_ACCEPTANCE_CHECKS,
   ...PAIRING_FIRST_RUN_CHECKS,
   ...PAIRING_KIND_CHECKS,

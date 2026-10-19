@@ -37,7 +37,7 @@
  *
  * 消息正文走 `Markdown`（原始 HTML 与远端资源都被降级）；终端输出的正文走 `CodeBlock`
  * （等宽 + 语言条 + 复制）。结构化卡片的字段一律经 `Text` 原样呈现，`acp.rawJson` 不参与
- * 渲染（D8）——它的入口是诊断抽屉（降级条目）或右栏（改动）。
+ * 渲染（D8）——它的入口是诊断抽屉（降级条目 / 工具调用）或右栏（改动）。
  */
 
 import type { ReactElement, ReactNode } from "react";
@@ -57,7 +57,7 @@ type EntryOf<K extends TimelineEntry["kind"]> = Extract<TimelineEntry, { readonl
 export interface ConversationTimelineProps {
   /** 时间线条目（唯一渲染列表，已按时间排序、已去重）。 */
   readonly entries: readonly TimelineEntry[];
-  /** 打开某条降级条目的诊断抽屉（页面负责把 `eventId` 交给仓库）。 */
+  /** 打开某条条目（降级 / 工具调用）的诊断抽屉（页面负责把 `eventId` 交给仓库）。 */
   readonly onOpenDiagnostics: (eventId: string) => void;
   /** 授权/提问的应答上抛；缺省时不渲染任何应答按钮（不是「渲染了但点了没反应」）。 */
   readonly onAnswerInteraction?: ((interactionId: string, answer: InteractionAnswer) => void) | undefined;
@@ -88,14 +88,15 @@ export interface ConversationTimelineProps {
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
     timeline: {
+      width: "100%",
+      maxWidth: 840,
+      alignSelf: "center",
       gap: spacing.md,
       paddingVertical: spacing.sm,
     },
     entry: {
       gap: spacing.xs,
-      paddingBottom: spacing.md,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.line2,
+      paddingBottom: 0,
     },
     message: {
       gap: spacing.xs,
@@ -157,6 +158,44 @@ function buildStyles(colors: Palette) {
     },
     mono: {
       fontFamily: fontFamily.mono,
+      fontSize: fontSize.sm,
+    },
+    /** 工具详情：三个部分各自一小块，标签在上、值在下（值按不可信文本逐字呈现）。 */
+    detail: {
+      gap: spacing.sm,
+    },
+    detailSection: {
+      gap: 2,
+      padding: spacing.sm,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: radius.sm,
+      backgroundColor: colors.panel2,
+    },
+    detailLabel: {
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
+      fontWeight: "600",
+    },
+    detailValue: {
+      color: colors.ink2,
+      fontFamily: fontFamily.mono,
+      fontSize: fontSize.xs,
+    },
+    /** 诊断入口（ACP 原文）：与右栏的原文入口同一语义。 */
+    diagnosticsEntry: {
+      alignSelf: "flex-start",
+      paddingVertical: spacing.xs,
+      paddingHorizontal: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: radius.sm,
+      backgroundColor: colors.panel2,
+    },
+    diagnosticsEntryText: {
+      color: colors.ink2,
+      fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
     meta: {
@@ -674,19 +713,66 @@ function TurnEntry({ entry }: { readonly entry: EntryOf<"turn"> }): ReactElement
   );
 }
 
-/** 工具调用卡片（可折叠：进行中的默认展开）。 */
+/** 工具详情三部分的标签（顺序与 `ToolCallDetail.truncatedParts` 的固定顺序一致）。 */
+const TOOL_DETAIL_LABELS: Readonly<Record<"input" | "output" | "text", string>> = {
+  input: "参数",
+  output: "输出",
+  text: "文本内容",
+};
+
+/**
+ * 工具详情的一个值 → 稳定文本。
+ *
+ * JSON 值按 `JSON.stringify(value, null, 2)` 逐字呈现（客户端不解析、不改写内容）；`undefined`、
+ * 函数等不可序列化的值（只可能来自非 JSON 的测试夹具）按 `String` 兜底，不抛异常。
+ */
+function toolDetailValueText(value: unknown): string {
+  try {
+    const text = JSON.stringify(value, null, 2);
+    return text === undefined ? String(value) : text;
+  } catch {
+    // 循环引用等序列化失败：按 `String` 呈现，仍然不抛异常、不伪造结构。
+    return String(value);
+  }
+}
+
+/** 一个工具详情部分（参数 / 输出 / 文本内容）；该部分缺席时不渲染任何区块。 */
+function ToolDetailSection({
+  part,
+  valueText,
+}: {
+  readonly part: "input" | "output" | "text";
+  readonly valueText: string;
+}): ReactElement {
+  const theme = useTheme();
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
+
+  return (
+    <View style={styles.detailSection} dataSet={{ toolDetailPart: part }}>
+      <Text style={styles.detailLabel}>{TOOL_DETAIL_LABELS[part]}</Text>
+      <Text style={styles.detailValue} dataSet={{ toolDetailValue: part }}>
+        {valueText}
+      </Text>
+    </View>
+  );
+}
+
+/** 工具调用卡片（可折叠：进行中的默认展开；详情只来自 `entry.detail`，不读 `acp.rawJson`）。 */
 function ToolCallEntry({
   entry,
   expanded,
   onToggle,
+  onOpenDiagnostics,
 }: {
   readonly entry: EntryOf<"tool_call">;
   readonly expanded: boolean;
   readonly onToggle: ((key: string, expanded: boolean) => void) | undefined;
+  readonly onOpenDiagnostics: (eventId: string) => void;
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const inProgress = entryInProgress(entry);
+  const detail = entry.detail;
 
   return (
     <View
@@ -717,6 +803,39 @@ function ToolCallEntry({
             {`所属轮次：${entry.turnId}`}
           </Text>
         )}
+        {detail === null ? null : (
+          <View style={styles.detail} dataSet={{ toolDetail: "present" }}>
+            {detail.input === null ? null : (
+              <ToolDetailSection part="input" valueText={toolDetailValueText(detail.input.value)} />
+            )}
+            {detail.output === null ? null : (
+              <ToolDetailSection part="output" valueText={toolDetailValueText(detail.output.value)} />
+            )}
+            {detail.text === null ? null : (
+              <ToolDetailSection part="text" valueText={detail.text.join("\n\n")} />
+            )}
+            {detail.truncatedParts.map((part) => (
+              <Text
+                key={`truncated:${part}`}
+                style={styles.chipWarn}
+                dataSet={{ toolDetailTruncated: part }}
+              >
+                {`${TOOL_DETAIL_LABELS[part]}因超过上限未下发`}
+              </Text>
+            ))}
+          </View>
+        )}
+        {/* 详情只来自结构化视图：原文入口始终是诊断抽屉（本组件不解析 `acp.rawJson`）。 */}
+        <Pressable
+          role="button"
+          style={styles.diagnosticsEntry}
+          dataSet={{ action: "open-tool-call-diagnostics", eventId: entry.eventId }}
+          onPress={() => {
+            onOpenDiagnostics(entry.eventId);
+          }}
+        >
+          <Text style={styles.diagnosticsEntryText}>查看 ACP 原文</Text>
+        </Pressable>
       </Fold>
     </View>
   );
@@ -1220,7 +1339,14 @@ function TimelineEntryView(props: {
     case "turn":
       return <TurnEntry entry={entry} />;
     case "tool_call":
-      return <ToolCallEntry entry={entry} expanded={expanded} onToggle={props.onToggleEntry} />;
+      return (
+        <ToolCallEntry
+          entry={entry}
+          expanded={expanded}
+          onToggle={props.onToggleEntry}
+          onOpenDiagnostics={props.onOpenDiagnostics}
+        />
+      );
     case "terminal_output":
       return <TerminalOutputEntry entry={entry} expanded={expanded} onToggle={props.onToggleEntry} />;
     case "plan":

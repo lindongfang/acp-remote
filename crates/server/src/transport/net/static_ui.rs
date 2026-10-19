@@ -39,12 +39,16 @@ use axum::response::Response;
 use crate::transport::net::route::PathDefaultHeaders;
 use crate::transport::net::route::apply_default_headers;
 
-/// 内容安全策略基线（`docs/FRONTEND_DESIGN.md` §4.5 的原文，逐字；`docs/SECURITY_DESIGN.md` §11.1）。
+/// 内容安全策略基线（`docs/FRONTEND_DESIGN.md` §4.5 的原文；`docs/SECURITY_DESIGN.md` §11.1）。
 ///
 /// 不得由本层放宽：前端的内联 `<style>` 形态已由前端侧移除（入口文档改用同源外部样式表，
 /// `ui-csp-inline-styles`），CSP 取值不变；放行 `unsafe-inline` 只会掩盖这类冲突，并同时打开
 /// XSS 面（Agent 产生的内容按不可信输入渲染）。
-pub(crate) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+///
+/// `img-src 'self' blob:` 是**唯一**的增量：会话文件预览把已认证查询得到的图片字节包装成同源 Blob
+/// URL（`blob:` 由页面自己创建，不接受任意外部来源）。脚本、连接、对象、base 与 framing 策略均保持
+/// 原样，`data:`/`http:`/`https:`/通配来源仍然禁止。
+pub(crate) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 
 /// 静态响应的安全响应头。
 ///
@@ -420,6 +424,7 @@ mod tests {
                 "default-src 'self'",
                 "script-src 'self'",
                 "connect-src 'self'",
+                "img-src 'self' blob:",
                 "object-src 'none'",
                 "base-uri 'none'",
                 "frame-ancestors 'none'",
