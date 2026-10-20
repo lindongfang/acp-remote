@@ -189,6 +189,27 @@ impl ConnectionHandle {
         self.send_with_frame(message_type, body).map(|_| ())
     }
 
+    /// 发送一条附件帧（`attachment.*`，`docs/SYNC_PROTOCOL.md` §3.4）。
+    ///
+    /// 与业务消息共用**同一份**出站账本：`connectionSequence` 严格加一、条数/字节双上限、高水位拒绝
+    /// 不消耗序号。协议要求两条连接各自的序号独立，但同一条连接上的业务与附件帧属于同一方向、同一个
+    /// 计数器；独立附件连接因此天然不占用业务连接的预算，也不需要第二套序号。
+    pub fn send_attachment(
+        &self,
+        body: &sync_protocol::attachment::FrameBody,
+    ) -> Result<(), SendFault> {
+        let state = lock(&self.outbound_state);
+        let candidate = state.sequence + 1;
+        let message_id =
+            Uuid::parse(self.ids.message_id().as_str()).map_err(|_| SendFault::Encoding)?;
+        let sequence =
+            DecimalString::parse(&candidate.to_string()).map_err(|_| SendFault::Encoding)?;
+        let text =
+            sync_protocol::attachment::encode(&message_id, &self.connection_id, &sequence, body)
+                .map_err(|_| SendFault::Encoding)?;
+        self.enqueue(state, candidate, text).map(|_| ())
+    }
+
     /// 发送一条认证后消息，并返回本次入队的**帧文本**。
     ///
     /// 与 [`ConnectionHandle::send`] 逐条同路径（同一临界区、同一序号与容量判定），只是把实际入队的那份
@@ -199,10 +220,22 @@ impl ConnectionHandle {
         message_type: MessageType,
         body: &T,
     ) -> Result<String, SendFault> {
-        let mut state = lock(&self.outbound_state);
+        let state = lock(&self.outbound_state);
         // ① 用候选序号装配信封：装配失败不触碰账本（也不消耗序号）。
         let candidate = state.sequence + 1;
         let text = self.encode(message_type, body, candidate)?;
+        self.enqueue(state, candidate, text)
+    }
+
+    /// 容量准入 + 入队 + 序号提交（业务消息与附件帧共用的唯一一条队列路径）。
+    ///
+    /// 调用方持锁进入并在返回时交出所有权：三步必须在同一临界区，否则被拒绝的投递可能已消耗序号。
+    fn enqueue(
+        &self,
+        mut state: MutexGuard<'_, OutboundState>,
+        candidate: u64,
+        text: String,
+    ) -> Result<String, SendFault> {
         let bytes = text.len() as u64;
         // ② 容量预算（条数 + 字节双上限）。
         if !state.admits(bytes) {
@@ -370,6 +403,12 @@ const RECOVERY_BYTES: u64 = MAX_PENDING_QUEUE_BYTES / 2;
 /// 「登记 + 判定 + 请求关闭旧连接」因此落在同一个临界区里（`design.md` D4 的竞态取舍）。
 pub struct ConnectionRegistry {
     connections: Mutex<BTreeMap<(String, String), Arc<ConnectionHandle>>>,
+    /// 独立附件连接（§3.4），键是 `connectionId`。
+    ///
+    /// 与业务表**刻意分开**：附件连接不参与 `(hostId, deviceId)` 的单连接替换（否则一条附件连接会把
+    /// 该设备的业务连接顶掉），也不进事件扇出与命令路由的目标集合（`handles()`/`active()` 只含业务
+    /// 连接）。撤销仍要覆盖它——`close_device` 两张表都扫。
+    attachments: Mutex<BTreeMap<String, Arc<ConnectionHandle>>>,
 }
 
 impl std::fmt::Debug for ConnectionRegistry {
@@ -385,6 +424,7 @@ impl Default for ConnectionRegistry {
     fn default() -> Self {
         Self {
             connections: Mutex::new(BTreeMap::new()),
+            attachments: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -414,12 +454,42 @@ impl ConnectionRegistry {
             .collect()
     }
 
+    /// 当前活跃的**附件**连接（不含业务连接；顺序按 `connectionId` 稳定）。
+    pub fn attachment_handles(&self) -> Vec<Arc<ConnectionHandle>> {
+        lock(&self.attachments).values().cloned().collect()
+    }
+
+    /// 登记一条已认证的独立附件连接。
+    ///
+    /// 不顶替、不排队：附件连接不属于 `(hostId, deviceId)` 槽位（§3.4 的「连接隔离」），同一设备可以
+    /// 同时持有业务连接与若干附件连接。`connectionId` 由握手唯一分配，重复登记只在防御性重入时发生，
+    /// 此时保留先登记的那条。
+    pub(crate) fn register_attachment(&self, handle: Arc<ConnectionHandle>) {
+        lock(&self.attachments)
+            .entry(handle.connection_id().as_str().to_owned())
+            .or_insert(handle);
+    }
+
+    /// 摘除一条附件连接（按 `connectionId`，不会碰到业务表）。
+    pub(crate) fn unregister_attachment(&self, handle: &ConnectionHandle) {
+        lock(&self.attachments).remove(handle.connection_id().as_str());
+    }
+
     /// 请求关闭某设备的全部连接（返回被请求的连接数）。WP6 的撤销钩子接在这里。
     ///
     /// 关闭失败与「没有连接」都是 `0`/`usize` 的普通结果：调用方在持久化撤销提交**之后**调用，关闭
     /// 失败只记日志，不回滚已提交的撤销（`design.md` D5：注册表不是事实来源）。
+    ///
+    /// 两张表都扫：撤销必须立即中止该设备**正在进行**的附件上传/读取（§3.4「撤销与过期」），但附件
+    /// 连接不参与业务槽位替换，因此它不在 [`ConnectionRegistry::handles_for_device`] 里。
     pub fn close_device(&self, device: &DeviceId, code: u16, reason: &'static str) -> usize {
-        let handles = self.handles_for_device(device);
+        let mut handles = self.handles_for_device(device);
+        handles.extend(
+            lock(&self.attachments)
+                .values()
+                .filter(|handle| handle.device_id() == device)
+                .cloned(),
+        );
         for handle in &handles {
             handle.request_close(code, reason);
         }
@@ -454,4 +524,156 @@ impl ConnectionRegistry {
 /// 锁中毒时取回内层数据而不是 panic：注册表在任何 panic 之后仍要能继续关闭连接。
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    //! 4.2 的连接生命周期回归：附件连接不占业务槽位、撤销同时扫两张表、断线只摘自己。
+
+    use super::*;
+    use crate::sync::conn::limits::SyncConfig;
+    use acp_core::model::{
+        InteractionId, MessageId, OriginEpoch, PairingId, RequestId, SessionId, TurnId,
+    };
+    use acp_core::ports::IdGenerator;
+
+    struct TestIds;
+
+    fn fresh() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    fn wire() -> Uuid {
+        Uuid::parse(&fresh()).expect("uuid")
+    }
+
+    impl IdGenerator for TestIds {
+        fn session_id(&self) -> SessionId {
+            SessionId::new(&fresh()).expect("session id")
+        }
+        fn turn_id(&self) -> TurnId {
+            TurnId::new(&fresh()).expect("turn id")
+        }
+        fn interaction_id(&self) -> InteractionId {
+            InteractionId::new(&fresh()).expect("interaction id")
+        }
+        fn pairing_id(&self) -> PairingId {
+            PairingId::new(&fresh()).expect("pairing id")
+        }
+        fn message_id(&self) -> MessageId {
+            MessageId::new(&fresh()).expect("message id")
+        }
+        fn origin_epoch(&self) -> OriginEpoch {
+            OriginEpoch::new(&fresh()).expect("origin epoch")
+        }
+        fn request_id(&self) -> RequestId {
+            RequestId::new(&fresh()).expect("request id")
+        }
+    }
+
+    fn handle(device: &DeviceId) -> (Arc<ConnectionHandle>, mpsc::Receiver<Outbound>) {
+        ConnectionHandle::new(
+            wire(),
+            NodeId::new(&fresh()).expect("host id"),
+            device.clone(),
+            IpAddr::from([127, 0, 0, 1]),
+            SessionLimits::negotiate(&SyncConfig::default()),
+            Arc::new(TestIds),
+        )
+    }
+
+    fn device() -> DeviceId {
+        DeviceId::new(&fresh()).expect("device id")
+    }
+
+    #[test]
+    fn attachment_registration_does_not_take_the_business_slot() {
+        let registry = ConnectionRegistry::new();
+        let device = device();
+        let (business, _business_rx) = handle(&device);
+        let (attachment, _attachment_rx) = handle(&device);
+        registry.register(business.clone());
+        registry.register_attachment(attachment.clone());
+
+        // 同一设备可以同时持有业务连接与附件连接，且附件不会顶替业务连接。
+        assert_eq!(registry.active(), 1);
+        assert_eq!(registry.handles().len(), 1);
+        assert_eq!(registry.attachment_handles().len(), 1);
+        assert_eq!(
+            registry.handles()[0].connection_id(),
+            business.connection_id()
+        );
+    }
+
+    #[test]
+    fn close_device_scans_business_and_attachment_tables() {
+        let registry = ConnectionRegistry::new();
+        let target = device();
+        let other = device();
+        let (business, _) = handle(&target);
+        let (attachment, _) = handle(&target);
+        let (unrelated, _) = handle(&other);
+        registry.register(business.clone());
+        registry.register_attachment(attachment.clone());
+        registry.register(unrelated.clone());
+
+        // 撤销：两张表都扫（附件上传/读取必须立即中止），无关设备不受影响。
+        assert_eq!(registry.close_device(&target, 4410, "device revoked"), 2);
+        assert_eq!(business.close_request(), Some((4410, "device revoked")));
+        assert_eq!(attachment.close_request(), Some((4410, "device revoked")));
+        assert_eq!(unrelated.close_request(), None);
+    }
+
+    #[test]
+    fn disconnect_only_removes_its_own_attachment_entry() {
+        let registry = ConnectionRegistry::new();
+        let device = device();
+        let (first, _) = handle(&device);
+        let (second, _) = handle(&device);
+        registry.register_attachment(first.clone());
+        registry.register_attachment(second.clone());
+
+        // 断线只摘自己（业务表完全不受影响）。
+        registry.unregister_attachment(&first);
+        assert_eq!(registry.attachment_handles().len(), 1);
+        assert_eq!(
+            registry.attachment_handles()[0].connection_id(),
+            second.connection_id()
+        );
+        assert_eq!(registry.active(), 0);
+    }
+
+    #[test]
+    fn rejected_send_does_not_consume_the_sequence() {
+        let (handle, mut receiver) = handle(&device());
+        let mut accepted = 0_u64;
+        loop {
+            match handle.send_with_frame(MessageType::Event, &serde_json::json!({ "marker": 1 })) {
+                Ok(_) => accepted += 1,
+                Err(SendFault::HighWater) => break,
+                Err(other) => panic!("unexpected send fault {other:?}"),
+            }
+        }
+        assert_eq!(accepted, MAX_PENDING_QUEUE_MESSAGES);
+        assert!(handle.saturated());
+        // 高水位期间投递方停读、客户端重连后按 cursor 重放——被拒绝的投递不得在序号上留下缺口。
+        assert_eq!(
+            handle.send_with_frame(MessageType::Event, &serde_json::json!({ "marker": 2 })),
+            Err(SendFault::HighWater)
+        );
+        let outbound = receiver.try_recv().expect("queued outbound");
+        handle.consumed(&outbound);
+        let text = handle
+            .send_with_frame(MessageType::Event, &serde_json::json!({ "marker": 3 }))
+            .expect("queue recovered");
+        let envelope = Envelope::decode(&text).expect("encoded envelope");
+        assert_eq!(
+            envelope
+                .connection()
+                .expect("post-auth connection fields")
+                .connection_sequence
+                .as_str(),
+            (accepted + 1).to_string()
+        );
+    }
 }

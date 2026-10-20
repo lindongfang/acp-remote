@@ -36,3 +36,22 @@ pub const IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
 /// 进程关闭后等待其退出的上限（避免 `wait` 永久悬挂）。
 pub const EXIT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+// ---------------------------------------------------------------------------------------------
+// ACP 终端服务（`terminal/*`）的固定 v1 常量
+// ---------------------------------------------------------------------------------------------
+
+/// 单个终端保留的输出字节上限（Agent 未给 `outputByteLimit` 时，以及 Agent 给得更大时的上限）。
+///
+/// Agent 请求的更小预算优先（ACP `CreateTerminalRequest.outputByteLimit` 的语义就是「最多保留多少」）；
+/// 这里只封顶，避免一个终端把 Daemon 的内存无界占住。取值来自 `SECURITY_DESIGN.md` §12.2。
+pub const TERMINAL_OUTPUT_BYTES: usize = 1_048_576;
+
+/// 单次读取与单条 `terminal.output` 事件的最大文本字节数。
+pub const TERMINAL_CHUNK_BYTES: usize = 8_192;
+
+/// 同一会话同时存在的终端数上限（运行保护，不是产品额度）。
+pub const TERMINAL_MAX_ACTIVE: usize = 8;
+
+/// 释放/关闭终端时等待输出排空的时长；超时即结束该终端的进程树并放弃剩余读取。
+pub const TERMINAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);

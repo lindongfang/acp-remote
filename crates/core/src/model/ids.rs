@@ -251,6 +251,11 @@ newtype!(
     check_uuid
 );
 newtype!(
+    /// 附件清单（一次提交的整批附件）标识，由客户端随 `attachment.manifest_begin` 给出。
+    SubmissionId,
+    check_uuid
+);
+newtype!(
     /// 事件库 epoch，首次创建时生成、普通升级与重启保持不变（`SYNC_PROTOCOL.md` §9.1）。
     ServerEpoch,
     check_uuid
@@ -544,6 +549,9 @@ pub enum EntityRef {
     Export(String),
     /// 只用于读取升级前的历史审计行（`import.*` 动作）：Import 已整族删除，本二进制不再产生它。
     Import(String),
+    /// 附件与附件清单的定位（附件传输/读取的错误只暴露标识，不含内容）。
+    Attachment(AttachmentId),
+    Submission(SubmissionId),
     /// 本地 Provider 引用（`provider.configured` 审计的目标；§11.6）。
     ///
     /// `ProviderRef.id` 是 `^[A-Za-z0-9._-]{1,64}$` 的引用名（不是凭据，也不是 UUID）。
@@ -563,6 +571,8 @@ impl EntityRef {
             Self::Node(_) => "node",
             Self::Export(_) => "export",
             Self::Import(_) => "import",
+            Self::Attachment(_) => "attachment",
+            Self::Submission(_) => "submission",
             Self::Provider(_) => "provider",
         }
     }
@@ -582,6 +592,8 @@ impl EntityRef {
             Self::Node(id) => id.as_str().to_owned(),
             Self::Export(id) => id.clone(),
             Self::Import(id) => id.clone(),
+            Self::Attachment(id) => id.as_str().to_owned(),
+            Self::Submission(id) => id.as_str().to_owned(),
             Self::Provider(id) => id.clone(),
         }
     }

@@ -9,18 +9,22 @@
  *    或 `command.status` 的 `accepted`——本模块不提供任何「本地先当成已发送」的分支。
  * 2. **取消同理**：用户点了取消只得到 `requested`，`confirmed` 只能由终态产生，
  *    未确认前 MUST NOT 呈现为空闲。
- * 3. **关闭或进行中的会话不可提交**：`state: "closed"` / `"in_progress"` 时 `canSubmit` 恒假并
- *    给出原因；提交闸门在 `ClientStore.submitPrompt` 里再拦一次（不派发命令），不靠组件记得禁用。
+ * 3. **已关闭的会话不可提交且只读；执行中可编辑但不可提交**：`state: "closed"` 时
+ *    `canSubmit` 恒假、`draftEditable` 也为假；`in_progress` 时 `canSubmit` 恒假但
+ *    `draftEditable` 为真（写好下一条草稿，不建立队列）。提交闸门在
+ *    `ClientStore.submitPrompt` 里再拦一次（不派发命令），不靠组件记得禁用。
  *
  * ## 草稿与附件
  *
- * 附件在 v1 不受支持，因此模型里 `attachmentsSupported` 恒为 `false`，并给出一句**显式**说明
- * （spec MUST NOT 静默丢弃附件后提交剩余文本）。来源为其它节点的会话，草稿只在内存保留并标注
+ * 附件按端到端协商结果可用：只有协商到 `core.attachment-transfer.v1` 且平台端口已装配时
+ * `attachmentsSupported` 才为真，并给出一句**显式**说明（支持与不支持都说清楚，
+ * spec MUST NOT 静默丢弃附件后提交剩余文本）。来源为其它节点的会话，草稿只在内存保留并标注
  * 未提交（`no-content-cache` 边界，D10）。
  */
 
 import type { CommandRecord } from "../state";
 import { isTerminalState } from "../state";
+import type { AttachmentBatchModel } from "./attachment-model";
 
 /** 输入区的三种状态（spec 的「可输入 / 进行中 / 已关闭」）。 */
 export type ConversationInputState = "editable" | "in_progress" | "closed";
@@ -46,14 +50,25 @@ export interface ConversationInputModel {
   readonly state: ConversationInputState;
   /** 当前草稿原文（只在内存；提交后由调用方清空）。 */
   readonly draft: string;
+  /**
+   * 输入框是否接受编辑。
+   *
+   * 与 `state` 分开：执行中仍可编辑下一条草稿（可先写好，轮次结束后发送），但 `canSubmit`
+   * 恒假、不排队；只有已关闭的会话才只读。
+   */
+  readonly draftEditable: boolean;
   /** 能否提交（唯一决定提交按钮可用性的字段）。 */
   readonly canSubmit: boolean;
   /** 不可提交的原因；可提交时为 `null`。 */
   readonly disabledReason: string | null;
-  /** v1 恒为 `false`：附件不受支持。 */
+  /** 当前连接是否协商到附件传输。 */
   readonly attachmentsSupported: boolean;
-  /** 附件不受支持的显式说明（恒非空）。 */
+  /** 附件/工作目录路径的显式说明（非空：支持与不支持都说清楚）。 */
   readonly attachmentNotice: string;
+  /** 已选择的附件与它们各自的上传状态（选择只在内存，发送后才上传）。 */
+  readonly attachments: AttachmentBatchModel;
+  /** 已添加的工作目录路径引用（相对路径；服务端再校验边界与链接逃逸）。 */
+  readonly pathRefs: readonly string[];
   /** 草稿是否只在内存（来源为其它节点的会话）。 */
   readonly draftInMemoryOnly: boolean;
   /** 草稿未提交/不落盘的标注；无需标注时为 `null`。 */
@@ -119,6 +134,12 @@ export function buildConversationInputModel(input: {
   readonly promptCommand: CommandRecord | null;
   readonly cancelCommand: CommandRecord | null;
   readonly draft?: string;
+  /** 是否协商到附件传输；缺省 `false`（与旧调用点等价）。 */
+  readonly attachmentsNegotiated?: boolean;
+  /** 已选附件与上传状态的模型；缺省为空批。 */
+  readonly attachments?: AttachmentBatchModel;
+  /** 已添加的工作目录路径引用。 */
+  readonly pathRefs?: readonly string[];
 }): ConversationInputModel {
   const submission = submissionOf(input.promptCommand);
   const awaitingTerminal = submission.kind === "pending_confirmation";
@@ -127,6 +148,8 @@ export function buildConversationInputModel(input: {
     : awaitingTerminal || input.turnInProgress
       ? "in_progress"
       : "editable";
+  const attachments = input.attachments ?? EMPTY_ATTACHMENTS;
+  const uploading = attachments.phase === "uploading";
 
   const disabledReason = !input.sessionOpen
     ? "会话已关闭，不能提交"
@@ -134,18 +157,24 @@ export function buildConversationInputModel(input: {
       ? "连接不可用，不能提交"
       : !input.originLocal
         ? "来源为其它节点的会话不能提交（本设备只承载元数据）"
-        : state === "in_progress"
+        : awaitingTerminal || input.turnInProgress
           ? "会话进行中，完成后可继续输入"
-          : null;
+          : uploading
+            ? "附件正在上传：全部封存后才能提交，Agent 尚未收到任何内容"
+            : attachments.blockedReason;
 
   return {
     state,
     draft: input.draft ?? "",
+    draftEditable: input.sessionOpen,
     // 提交只发生在 `editable`：进行中（轮次运行或等待命令终态）与已关闭一视同仁。
+    // 附件未全部封存时同样不可提交；上传失败保留完整草稿。
     canSubmit: state === "editable" && disabledReason === null,
     disabledReason,
-    attachmentsSupported: false,
-    attachmentNotice: "📎 附件暂不支持 · 仅文本",
+    attachmentsSupported: input.attachmentsNegotiated === true,
+    attachmentNotice: attachmentNoticeOf(input.attachmentsNegotiated === true, attachments),
+    attachments,
+    pathRefs: input.pathRefs ?? [],
     draftInMemoryOnly: !input.originLocal,
     draftNotice: input.originLocal
       ? null
@@ -153,4 +182,29 @@ export function buildConversationInputModel(input: {
     submission,
     cancel: cancelOf(input.cancelCommand, input.canCancel),
   };
+}
+
+/** 空批：未选择任何附件。 */
+const EMPTY_ATTACHMENTS: AttachmentBatchModel = {
+  attachments: [],
+  phase: "empty",
+  canSubmit: true,
+  blockedReason: null,
+  capabilityNotice: null,
+  uploadedBytes: "0",
+  totalBytes: "0",
+  error: null,
+};
+
+/** 附件区的显式说明：支持与不支持都必须说清楚（不得静默删附件后只发文字）。 */
+function attachmentNoticeOf(negotiated: boolean, batch: AttachmentBatchModel): string {
+  if (!negotiated) {
+    return "当前连接不支持附件传输（未协商 core.attachment-transfer.v1）：只能发送文本。";
+  }
+  if (batch.error !== null) return `附件不可用：${batch.error}`;
+  if (batch.capabilityNotice !== null) return batch.capabilityNotice;
+  if (batch.attachments.length > 0) {
+    return `已选择 ${String(batch.attachments.length)} 个附件；点击发送后才会上传，全部封存后整条提交。`;
+  }
+  return "可添加图片、文件或已有音频，也可引用当前工作目录内的相对路径；点击发送后才会上传。";
 }

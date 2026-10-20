@@ -389,6 +389,10 @@
               "items": {
                 "$ref": "common.schema.json#/$defs/promptContentBlock"
               }
+            },
+            "submissionId": {
+              "$ref": "common.schema.json#/$defs/uuid",
+              "description": "本会话/本主体已 `manifest_sealed` 的附件清单标识（docs/SYNC_PROTOCOL.md §11.5）。只在协商 `core.attachment-transfer.v1` 后被接受；未协商的旧 peer 省略该键，服务端不得因它缺席而丢弃附件引用，也不得为缺席的清单补造绑定。"
             }
           }
         }
@@ -592,6 +596,10 @@
             "interactionId": {
               "$ref": "common.schema.json#/$defs/uuid"
             },
+            "requestVersion": {
+              "$ref": "common.schema.json#/$defs/decimalString",
+              "description": "当前有效请求的版本（docs/SYNC_PROTOCOL.md §11.7），必须与 `session.read` 返回的 `effectiveInteraction.requestVersion` 一致。协商 `core.pending-interactions.v1` 后必须携带；未协商的旧 peer 可省略（schema 层保持可选，服务端按协商结果判定）。"
+            },
             "optionId": {
               "type": "string",
               "minLength": 1,
@@ -634,6 +642,10 @@
                 "interactionId": {
                   "$ref": "common.schema.json#/$defs/uuid"
                 },
+                "requestVersion": {
+                  "$ref": "common.schema.json#/$defs/decimalString",
+                  "description": "当前有效请求的版本（docs/SYNC_PROTOCOL.md §11.7）；协商 `core.pending-interactions.v1` 后必须携带，未协商的旧 peer 可省略。"
+                },
                 "action": {
                   "const": "submit"
                 },
@@ -657,6 +669,10 @@
                 "interactionId": {
                   "$ref": "common.schema.json#/$defs/uuid"
                 },
+                "requestVersion": {
+                  "$ref": "common.schema.json#/$defs/decimalString",
+                  "description": "当前有效请求的版本（docs/SYNC_PROTOCOL.md §11.7）；协商 `core.pending-interactions.v1` 后必须携带，未协商的旧 peer 可省略。"
+                },
                 "action": {
                   "const": "decline"
                 },
@@ -676,6 +692,10 @@
               "properties": {
                 "interactionId": {
                   "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "requestVersion": {
+                  "$ref": "common.schema.json#/$defs/decimalString",
+                  "description": "当前有效请求的版本（docs/SYNC_PROTOCOL.md §11.7）；协商 `core.pending-interactions.v1` 后必须携带，未协商的旧 peer 可省略。"
                 },
                 "action": {
                   "const": "cancel"
@@ -764,8 +784,9 @@
             },
             "pending_interactions": {
               "type": "array",
+              "description": "每条都是服务端在本次读取时确认过的当前有效请求（docs/SYNC_PROTOCOL.md §11.7）：`requestVersion`/`options`/`expiresAt` 与 `media.schema.json#/$defs/effectiveInteraction` 同形。历史卡片只有 `interactionId`，不能直接应答；未协商 `core.pending-interactions.v1` 时该键缺席或返回 `capability.unsupported_by_broker`，不得用空数组冒充。",
               "items": {
-                "$ref": "sync.schema.json#/$defs/snapshotItem.pending_interactions"
+                "$ref": "media.schema.json#/$defs/effectiveInteraction"
               }
             },
             "config_options": {

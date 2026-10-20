@@ -63,5 +63,93 @@ export interface IdentifierSource {
   uuid(): string;
 }
 
+/**
+ * 平台侧的**附件/媒体端口**（由组合根注入；feature 层不碰 DOM/Blob/File）。
+ *
+ * `AttachmentFileHandle` 是平台句柄的**不透明箱**：它带展示所需的元数据，真正的字节只在
+ * `readChunk` 里被读出。因此选择阶段只做本机预览，MUST NOT 上传（spec「发送后才上传」）。
+ */
+export interface AttachmentFileHandle {
+  /** 页内稳定标识；一次选择内唯一。 */
+  readonly localId: string;
+  readonly kind: "image" | "audio" | "file";
+  readonly fileName: string;
+  readonly mediaType: string;
+  /** 十进制字符串；平台不把它读成 number 再交回。 */
+  readonly byteLength: string;
+}
+
+export interface AttachmentMediaPort {
+  /** 打开平台选择器；取消返回空数组（不是错误）。 */
+  pick(kind: "image" | "audio" | "file"): Promise<readonly AttachmentFileHandle[]>;
+  /** 从粘贴事件里取出图片/文件；没有可粘贴内容返回空数组。 */
+  fromPaste(event: unknown): Promise<readonly AttachmentFileHandle[]>;
+  /** 读取 `[offset, offset+length)`；调用方保证 32 KiB 以内。 */
+  readChunk(handle: AttachmentFileHandle, offset: bigint, length: number): Promise<Uint8Array>;
+  /** 选择阶段的本机预览 URL；平台不支持返回 `null`（UI 明确说明，不伪造）。 */
+  previewUrl(handle: AttachmentFileHandle): string | null;
+  /** 媒体字节 → 对象 URL；平台不支持返回 `null`。 */
+  createObjectUrl(bytes: Uint8Array, mimeType: string): string | null;
+  /** 立即撤销对象 URL（关闭/替换/卸载时调用）。 */
+  releaseUrl(url: string): void;
+}
+
+/** 一次附件上传的输入（正文只在 `readChunk` 里按需读取）。 */
+export interface AttachmentUploadRequest {
+  readonly sessionId: string;
+  readonly subjectId: string;
+  readonly transferId: string;
+  readonly fileName: string;
+  readonly mediaType: string;
+  readonly totalLength: string;
+  readonly readChunk: (offset: bigint, length: number) => Promise<Uint8Array>;
+}
+
+/** 附件封存事实（`attachment.sealed`）。 */
+export interface AttachmentUploadSealed {
+  readonly attachmentId: string;
+  readonly sha256: string;
+  readonly sealedAt: string;
+}
+
+/** 一次清单封存的输入。 */
+export interface AttachmentManifestRequest {
+  readonly sessionId: string;
+  readonly subjectId: string;
+  readonly submissionId: string;
+  readonly transferIds: readonly string[];
+}
+
+/** 清单封存事实（`attachment.manifest_sealed`）。 */
+export interface AttachmentManifestSealedResult {
+  readonly attachmentCount: string;
+  readonly manifestDigest: string;
+}
+
+/** 一次附件读取请求。 */
+export interface AttachmentReadRequest {
+  readonly attachmentId: string;
+  readonly sessionId: string;
+  readonly offset: string;
+  readonly maxLength: number;
+}
+
+/** 读取到的一块（`attachment.read_chunk`）；`eof` 为真表示这是最后一块。 */
+export interface AttachmentReadResult {
+  readonly offset: string;
+  readonly length: string;
+  readonly totalLength: string;
+  readonly data: Uint8Array;
+  readonly eof: boolean;
+}
+
+/** 一次附件上传/读取的窄接口（由 `sync-client` 的附件连接适配，组合根装配）。 */
+export interface AttachmentTransferGateway {
+  upload(input: AttachmentUploadRequest): Promise<AttachmentUploadSealed>;
+  sealManifest(input: AttachmentManifestRequest): Promise<AttachmentManifestSealedResult>;
+  read(input: AttachmentReadRequest): Promise<AttachmentReadResult>;
+  abort(transferId: string, reason: "client_cancelled" | "budget_exceeded" | "revoked" | "digest_mismatch"): void;
+}
+
 /** 去重键别名（feature 层按 `eventId` 去重的键，与 `src/sync-client` 同源）。 */
 export type { EventDedupKey };

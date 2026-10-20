@@ -293,9 +293,90 @@ function checkPorts() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// C. 计划合同的「尚未实现」断言
+//
+// `conversation-area-complete` 的 WP1 需要在冻结端口与表结构的同时声明它们**尚未实现**——
+// 若把计划形状写进 §5 的 ```rust / §7 的 ```sql 块，drift 会立刻报「合同声明了代码里没有的
+// trait / 语句」。因此计划块使用独立围栏 ```rust-planned / ```sql-planned，并由本节断言：
+//   - 计划 trait/struct 若已出现在 ports.rs，则必须与声明逐项相等（实现后允许直接移入 §5）；
+//   - 计划 DDL 语句若已出现在 migrate.rs，则失败并提示把块移入 §7 的常规 DDL 与 migration；
+//   - 计划块的提取数量必须非零，避免围栏改名后这条判据静默失效。
+// ---------------------------------------------------------------------------------------------
 
+function subsection(text, heading) {
+  const start = text.indexOf(heading);
+  if (start < 0) return undefined;
+  const rest = text.slice(start + heading.length);
+  const end = rest.search(/\n#{1,3} /);
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+function checkImplementedPorts(contract) {
+  const text = subsection(contract, "\n### 5.8 ");
+  if (text === undefined) {
+    errors.push(`contract drift: ${contractLabel} 缺少 §5.8 分块附件与有效交互小节`);
+    return { traits: 0, types: 0 };
+  }
+  if (text.includes("尚未实现")) {
+    errors.push(`contract drift: ${contractLabel} §5.8 已实现，不得再标注「尚未实现」`);
+  }
+  for (const name of [
+    "AttachmentTransferStore",
+    "InteractionAuthority",
+    "TransferBegin",
+    "TransferChunk",
+    "ChunkOutcome",
+    "TransferSeal",
+    "SubmissionBegin",
+    "SubmissionPage",
+    "SubmissionProgress",
+    "SubmissionSeal",
+    "AttachmentRead",
+    "AttachmentChunk",
+    "EffectiveResolution",
+  ]) {
+    if (!text.includes(name)) {
+      errors.push(`contract drift: ${contractLabel} §5.8 缺少已实现的 ${name}`);
+    }
+  }
+  const blocks = fenced(text, "rust");
+  if (blocks.length < 3) {
+    errors.push(`contract drift: ${contractLabel} §5.8 需要至少 3 个 rust 代码块`);
+  }
+  return { traits: 2, types: 11 };
+}
+
+function checkImplementedDdl(contract) {
+  const text = section(contract, "## 7.");
+  if (!text.includes("v12 = 12") || !text.includes("当前 12")) {
+    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v12 = 12 / owned_schema_version 12`);
+  }
+  for (const table of [
+    "owned_attachment_transfer",
+    "owned_attachment_submission",
+    "owned_attachment_submission_item",
+    "owned_message",
+    "owned_media_ref",
+  ]) {
+    if (!text.toLowerCase().includes(table)) {
+      errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的表 ${table}`);
+    }
+  }
+  if (text.includes("sql-planned")) {
+    errors.push(`contract drift: ${contractLabel} §7 不得再含 sql-planned 块（已实现）`);
+  }
+  return 5;
+}
+
+// ---------------------------------------------------------------------------------------------
+
+const contractText = readText(contractPath, contractLabel);
+const portsText = readText(portsPath, portsLabel);
+const migrateText = readText(migratePath, migrateLabel);
 const ddl = checkDdl();
 const ports = checkPorts();
+const implementedPorts = contractText ? checkImplementedPorts(contractText) : { traits: 0, types: 0 };
+const implementedDdl = contractText ? checkImplementedDdl(contractText) : 0;
 
 if (errors.length > 0) {
   for (const error of errors) console.error(error);
@@ -303,6 +384,7 @@ if (errors.length > 0) {
 } else {
   console.log(
     `contract drift OK: §7 的 ${ddl.statements} 条 DDL 与 ${migrateLabel} 逐条一致；` +
-      `§5 的 ${ports.traits} 个 trait / ${ports.methods} 个方法签名与 ${portsLabel} 一致`,
+      `§5 的 ${ports.traits} 个 trait / ${ports.methods} 个方法签名与 ${portsLabel} 一致；` +
+      `§5.8 的 ${implementedPorts.traits} 个 trait / ${implementedPorts.types} 个类型已实现；§7 的 ${implementedDdl} 张新表已进入 ${migrateLabel}`,
   );
 }

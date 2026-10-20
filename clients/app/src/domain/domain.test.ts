@@ -317,6 +317,24 @@ function toolCallCard(records: readonly StructuredRecord[]): ToolCallTimelineCar
 }
 
 describe("WP2 工具详情：跨事件部分归并与严格形状", () => {
+  it("updated/completed 的空 title 不降级，沿用 started 的非空标题", () => {
+    const card = toolCallCard([
+      toolCallRecord({
+        eventId: "e-1",
+        eventType: "tool.call.started",
+        view: toolCallView(),
+        createdAt: "2026-10-01T00:00:02.000Z",
+      }),
+      toolCallRecord({
+        eventId: "e-2",
+        eventType: "tool.call.updated",
+        view: { ...toolCallView(), title: "" },
+        createdAt: "2026-10-01T00:00:03.000Z",
+      }),
+    ]);
+    expect(card.title).toBe("读取文件");
+  });
+
   it("started 只有输入、updated 只有输出：按时间归并后两部分都保留，eventId 取最新记录", () => {
     // 故意按**到达顺序**倒置：updated 先到、started 后到；归并必须按时间而不是到达顺序。
     const card = toolCallCard([

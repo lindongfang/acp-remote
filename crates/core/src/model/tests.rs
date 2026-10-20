@@ -1355,6 +1355,7 @@ fn committed_event_and_delivery_keep_session_sequences_consistent() {
         local_sequence: LocalCursor::from(1),
         event_type: EventType::new("agent.message.delta").expect("event type"),
         payload_digest: digest(),
+        created_at: ts("2026-09-17T12:10:00.123Z"),
         payload: Some(EventPayload::new(view(r#"{"text":"x"}"#), None)),
     };
     delivery.validate().expect("imported delivery");
@@ -1371,6 +1372,7 @@ fn committed_event_and_delivery_keep_session_sequences_consistent() {
         local_sequence: LocalCursor::from(1),
         event_type: EventType::new("agent.message.delta").expect("event type"),
         payload_digest: digest(),
+        created_at: ts("2026-09-17T12:10:00.123Z"),
         payload: None,
     };
     assert_eq!(foreign.validate(), Err(InvalidValue::Field));
@@ -2028,4 +2030,301 @@ fn cursors_are_compound_and_ordered() {
         Sequence::new(1).expect("sequence"),
     );
     assert_eq!(origin.origin_sequence.get(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// §3.3/§5.8：消息通道、部分结果、媒体引用与表单 schema（WP2）
+// ---------------------------------------------------------------------------------------------
+
+fn attachment_id() -> AttachmentId {
+    AttachmentId::from_str(UUID_A).expect("attachment id")
+}
+
+fn device_id() -> DeviceId {
+    DeviceId::from_str(UUID_B).expect("device id")
+}
+
+#[test]
+fn partial_results_keep_the_ongoing_state_distinct_from_failure() {
+    // 流式输出中：partial 允许没有原因（`media.schema.json#/$defs/partialResult` 允许 reason: null）。
+    let ongoing = PartialResult::try_new(MessageState::Partial, None).expect("ongoing partial");
+    assert_eq!(ongoing.state, MessageState::Partial);
+    assert_eq!(ongoing.reason, None);
+
+    // 已完成不得带原因；失败/取消必须说明原因。
+    assert!(PartialResult::try_new(MessageState::Completed, None).is_ok());
+    assert!(
+        PartialResult::try_new(MessageState::Completed, Some(PartialReason::AgentFailed)).is_err()
+    );
+    assert!(PartialResult::try_new(MessageState::Failed, None).is_err());
+    assert!(PartialResult::try_new(MessageState::Cancelled, None).is_err());
+    assert_eq!(
+        PartialResult::try_new(MessageState::Failed, Some(PartialReason::AgentFailed))
+            .expect("failed")
+            .reason,
+        Some(PartialReason::AgentFailed)
+    );
+    // token 词汇与 wire 逐值一致。
+    assert_eq!(MessageChannel::Reply.as_str(), "reply");
+    assert_eq!(MessageChannel::Thought.as_str(), "thought");
+    assert_eq!(MessageState::Partial.as_str(), "partial");
+    assert_eq!(PartialReason::TurnCancelled.as_str(), "turn_cancelled");
+    assert_eq!(MediaKind::Image.as_str(), "image");
+    assert_eq!(MediaAvailability::NotFetched.as_str(), "not_fetched");
+}
+
+#[test]
+fn media_references_carry_no_location_and_bound_their_strings() {
+    let reference = MediaReference::try_new(
+        attachment_id(),
+        session_id(),
+        MediaKind::Image,
+        "image/png",
+        123,
+        digest(),
+        Some("diagram.png"),
+        MediaAvailability::Available,
+    )
+    .expect("media reference");
+    assert_eq!(reference.attachment(), &attachment_id());
+    assert_eq!(reference.session(), &session_id());
+    assert_eq!(reference.kind(), MediaKind::Image);
+    assert_eq!(reference.byte_length(), 123);
+    assert_eq!(reference.display_name(), Some("diagram.png"));
+    assert_eq!(reference.availability(), MediaAvailability::Available);
+    assert!(
+        MediaReference::try_new(
+            attachment_id(),
+            session_id(),
+            MediaKind::File,
+            "",
+            0,
+            digest(),
+            None,
+            MediaAvailability::Available,
+        )
+        .is_err()
+    );
+    assert!(
+        MediaReference::try_new(
+            attachment_id(),
+            session_id(),
+            MediaKind::File,
+            "text/plain",
+            0,
+            digest(),
+            Some(""),
+            MediaAvailability::Available,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn attachment_subjects_are_only_devices_and_nodes() {
+    let device = AttachmentSubject::from_actor(&Actor::Device {
+        device: device_id(),
+    })
+    .expect("device subject");
+    assert_eq!(device.kind(), "device");
+    assert_eq!(device.id_text(), device_id().as_str());
+    let node = NodeId::from_str(UUID_C).expect("node id");
+    let node_subject = AttachmentSubject::from_actor(&Actor::Node {
+        node: node.clone(),
+        access_node: node.clone(),
+    })
+    .expect("node subject");
+    assert_eq!(node_subject.kind(), "node");
+    assert_eq!(node_subject.id_text(), node.as_str());
+    assert!(AttachmentSubject::from_actor(&Actor::LocalCli).is_none());
+}
+
+fn elicitation_schema() -> ElicitationSchema {
+    ElicitationSchema::new(
+        r#"{"type":"object","required":["count","mode"],"properties":{"count":{"type":"integer","minimum":1,"maximum":10},"mode":{"type":"string","enum":["fast","safe"]},"note":{"type":"string","maxLength":5},"tags":{"type":"array","items":{"type":"string"},"maxLength":2}}}"#,
+    )
+    .expect("schema")
+}
+
+fn values(text: &str) -> ElicitationValues {
+    ElicitationValues::parse_json(text).expect("values")
+}
+
+#[test]
+fn elicitation_schema_validates_exact_integers_enums_ranges_and_required() {
+    let schema = elicitation_schema();
+    schema
+        .validate_values(&values(r#"{"count":5,"mode":"fast"}"#))
+        .expect("valid");
+    // 精确整数：大于 2^53 的整数不经过浮点，范围比较仍然精确。
+    schema
+        .validate_values(&values(r#"{"count":9007199254740993,"mode":"safe"}"#))
+        .expect_err("beyond maximum");
+    for bad in [
+        r#"{"mode":"fast"}"#,
+        r#"{"count":0,"mode":"fast"}"#,
+        r#"{"count":11,"mode":"fast"}"#,
+        r#"{"count":5,"mode":"slow"}"#,
+        r#"{"count":5.0,"mode":"fast"}"#,
+        r#"{"count":5,"mode":"fast","note":"toolong"}"#,
+        r#"{"count":5,"mode":"fast","unknown":true}"#,
+        r#"{"count":5,"mode":"fast","tags":["a","b","c"]}"#,
+    ] {
+        assert!(
+            schema.validate_values(&values(bad)).is_err(),
+            "must reject {bad}"
+        );
+    }
+    assert!(
+        ElicitationValues::parse_json(r#"[{"count":5}]"#).is_err(),
+        "top-level array is not an elicitation content"
+    );
+    // 无 required 时 null 合法；有 required 时 null 不可代替填写。
+    let optional =
+        ElicitationSchema::new(r#"{"type":"object","properties":{"flag":{"type":"boolean"}}}"#)
+            .expect("schema");
+    optional
+        .validate_values(&ElicitationValues::null())
+        .expect("null without required");
+    assert!(schema.validate_values(&ElicitationValues::null()).is_err());
+    // 空对象与 null 是不同输入：required 下空对象同样不可用。
+    assert!(
+        schema
+            .validate_values(&ElicitationValues::empty_object())
+            .is_err()
+    );
+}
+
+#[test]
+fn elicitation_numeric_bounds_are_exact_beyond_2_53() {
+    // 2^53 附近的整数边界必须用精确整数比较：先转 f64 会让 9007199254740992 与
+    // 9007199254740993 变成同一个值。
+    let pinned = ElicitationSchema::new(
+        r#"{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740993,"maximum":9007199254740993}}}"#,
+    )
+    .expect("schema");
+    pinned
+        .validate_values(&values(r#"{"n":9007199254740993}"#))
+        .expect("the exact bound is inside");
+    for outside in [
+        r#"{"n":9007199254740992}"#,
+        r#"{"n":9007199254740994}"#,
+        r#"{"n":9007199254740995}"#,
+    ] {
+        assert!(
+            pinned.validate_values(&values(outside)).is_err(),
+            "must reject {outside}"
+        );
+    }
+
+    let maximum = ElicitationSchema::new(
+        r#"{"type":"object","properties":{"n":{"type":"integer","maximum":9007199254740992}}}"#,
+    )
+    .expect("schema");
+    assert!(
+        maximum
+            .validate_values(&values(r#"{"n":9007199254740993}"#))
+            .is_err(),
+        "2^53 + 1 不得因 f64 舍入而被当作 2^53"
+    );
+    maximum
+        .validate_values(&values(r#"{"n":9007199254740992}"#))
+        .expect("the bound itself is accepted");
+
+    let minimum = ElicitationSchema::new(
+        r#"{"type":"object","properties":{"n":{"type":"integer","minimum":9007199254740993}}}"#,
+    )
+    .expect("schema");
+    assert!(
+        minimum
+            .validate_values(&values(r#"{"n":9007199254740992}"#))
+            .is_err(),
+        "2^53 不得因 f64 舍入而被当作 2^53 + 1"
+    );
+
+    // 非整数边界仍回退浮点比较（`number` 类型）。
+    let float = ElicitationSchema::new(
+        r#"{"type":"object","properties":{"n":{"type":"number","maximum":1.5}}}"#,
+    )
+    .expect("schema");
+    float
+        .validate_values(&values(r#"{"n":1.5}"#))
+        .expect("equal bound");
+    assert!(
+        float
+            .validate_values(&values(r#"{"n":1.5000001}"#))
+            .is_err()
+    );
+}
+
+#[test]
+fn elicitation_schema_rejects_unrepresentable_required_types() {
+    // 未知类型（object）对必需字段一律拒绝。
+    let schema = ElicitationSchema::new(
+        r#"{"type":"object","required":["x"],"properties":{"x":{"type":"object"}}}"#,
+    )
+    .expect("schema");
+    let value = ElicitationValues::from_fields([(
+        "x".to_owned(),
+        ElicitationContentValue::unknown(r#"{"nested":true}"#).expect("unknown"),
+    )])
+    .expect("values");
+    assert!(schema.validate_values(&value).is_err());
+
+    // 无 schema 的 elicitation 只接受 null / 空对象，不凭空接受任意字段。
+    let interaction = EffectiveInteraction::try_new(
+        InteractionId::from_str(UUID_A).expect("interaction"),
+        session_id(),
+        InteractionKind::Elicitation,
+        Version::new(1),
+        None,
+        Vec::new(),
+        None,
+    )
+    .expect("effective");
+    interaction
+        .validate_submission(&ElicitationValues::null())
+        .expect("null");
+    interaction
+        .validate_submission(&ElicitationValues::empty_object())
+        .expect("empty");
+    assert!(
+        interaction
+            .validate_submission(&values(r#"{"x":1}"#))
+            .is_err()
+    );
+    // 0 不是有效请求版本。
+    assert!(
+        EffectiveInteraction::try_new(
+            InteractionId::from_str(UUID_A).expect("interaction"),
+            session_id(),
+            InteractionKind::Permission,
+            Version::new(0),
+            None,
+            Vec::new(),
+            None,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn message_records_store_the_folded_content_as_json_text() {
+    let content = JsonValueText::new(r#"[{"type":"text","text":"hi"}]"#).expect("content");
+    let record = MessageRecord::try_new(
+        MessageId::from_str(UUID_A).expect("message"),
+        session_id(),
+        Some(turn_id()),
+        MessageChannel::Thought,
+        PartialResult::try_new(MessageState::Cancelled, Some(PartialReason::TurnCancelled))
+            .expect("result"),
+        content.clone(),
+        Vec::new(),
+        ts(T0),
+        ts(T1),
+    )
+    .expect("message record");
+    assert_eq!(record.channel, MessageChannel::Thought);
+    assert_eq!(record.content.as_str(), content.as_str());
+    assert_eq!(record.result.reason, Some(PartialReason::TurnCancelled));
 }

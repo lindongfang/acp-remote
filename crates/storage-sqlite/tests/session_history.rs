@@ -116,6 +116,8 @@ fn query(session: &SessionId, before: Option<u64>, limit: u32) -> HistoryQuery {
             history: true,
         },
         before_history: before.map(|value| Sequence::new(value).expect("cursor")),
+        before_messages: None,
+        messages_limit: ReplayLimit::new(0),
         after: None,
         limit: ReplayLimit::new(limit),
     }
@@ -139,6 +141,8 @@ fn both_faces(
             history: true,
         },
         before_history: before_history.map(|value| Sequence::new(value).expect("cursor")),
+        before_messages: None,
+        messages_limit: ReplayLimit::new(0),
         after: after.map(cursor),
         limit: ReplayLimit::new(limit),
     }

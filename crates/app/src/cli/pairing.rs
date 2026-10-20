@@ -326,6 +326,11 @@ pub(crate) fn run(
 ) -> Result<(), Failure> {
     let interactive = std::io::stdin().is_terminal();
     let supplied = Supplied::parse(args.fingerprint.as_deref(), interactive)?;
+    // `node pair --mode access`：本机是**被 Owner 确认**的一侧，流程是「claim → 等待 Owner 本机确认」，
+    // 没有本地 confirm（ONLY Owner 的确认才创建信任，见 `LOCAL_ADMIN_PROTOCOL.md` §5.4）。
+    if target == PairTarget::Node && args.mode.as_deref() == Some("access") {
+        return run_access(context, args, supplied);
+    }
     let endpoint = context.endpoint()?;
     let runtime = context.runtime()?;
     let claimed = runtime.block_on(await_claim(&endpoint, target, args))?;
@@ -349,6 +354,169 @@ pub(crate) fn run(
     let id = text_field(&result, target.id_key())?;
     println!("已配对：{}={id}", target.id_key());
     Ok(())
+}
+
+/// `node pair --mode access` 的完整仪式。
+///
+/// 与 owner 方向的三点差别（`LOCAL_ADMIN_PROTOCOL.md` §5.4）：
+///
+/// - 没有本地 `confirm`：claim 之后由 Owner 本机确认，本 CLI 只轮询到 `approved`；
+/// - `--fingerprint` 对照的是 **Owner** 的指纹（二维码页面显示的那一枚），在轮询之前校验，不一致即
+///   调 `reject` 终结本地 claim 并失败；
+/// - 不打印配对 URL（它含一次性的 pairing secret）：用户已经把它交给命令，终端不再重复回显。
+fn run_access(
+    context: &mut Context,
+    args: &PairArgs,
+    supplied: Option<Supplied>,
+) -> Result<(), Failure> {
+    let endpoint = context.endpoint()?;
+    let runtime = context.runtime()?;
+    let claim = runtime.block_on(access_begin(&endpoint, args))?;
+    let shown = Claim {
+        display_name: None,
+        fingerprint: claim.fingerprint.clone(),
+        expires_at: claim.expires_at.clone(),
+    };
+    let verified = match &supplied {
+        Some(supplied) => {
+            verify_supplied(&shown, supplied)?;
+            true
+        }
+        None => ask_owner_fingerprint(&claim)?,
+    };
+    if !verified {
+        let _ = runtime.block_on(access_reject(&endpoint, &claim.pairing_id));
+        return Err(Failure::local(
+            LocalErrorCode::Conflict,
+            "用户未确认 Owner 指纹：已调用 `node.pair.reject` 终结本地 claim（未建立信任）",
+        ));
+    }
+    let approved = runtime.block_on(access_poll(&endpoint, &claim))?;
+    println!("已配对：nodeId={}", approved.node_id);
+    Ok(())
+}
+
+/// `node.pair.begin`（access）的结果（§5.4 的 `result` 中本 CLI 需要的字段）。
+struct AccessClaim {
+    pairing_id: String,
+    owner_node_id: String,
+    fingerprint: String,
+    expires_at: String,
+}
+
+/// 发起 claim 并展示 Owner 身份。
+async fn access_begin(endpoint: &str, args: &PairArgs) -> Result<AccessClaim, Failure> {
+    let mut client = LocalAdminClient::connect(endpoint)
+        .await
+        .map_err(client_failure)?;
+    let begin = call(
+        &mut client,
+        Method::NodePairBegin,
+        begin_params(PairTarget::Node, args),
+    )
+    .await?;
+    let claim = AccessClaim {
+        pairing_id: text_field(&begin, "pairingId")?,
+        owner_node_id: text_field(&begin, "peerNodeId")?,
+        fingerprint: text_field(&begin, "peerPublicKeyFingerprint")?,
+        expires_at: text_field(&begin, "expiresAt")?,
+    };
+    println!("claim 已提交，等待 Owner 本机确认…");
+    println!("  Owner           {}", claim.owner_node_id);
+    println!("  指纹            {}", claim.fingerprint);
+    println!("  过期            {}", claim.expires_at);
+    Ok(claim)
+}
+
+/// 汇总结果：Owner 已批准。
+struct AccessApproved {
+    node_id: String,
+}
+
+/// 轮询 `node.pair.status` 直到终态；`pending_confirmation` 之外的词表一律按协议错误失败。
+async fn access_poll(endpoint: &str, claim: &AccessClaim) -> Result<AccessApproved, Failure> {
+    let mut client = LocalAdminClient::connect(endpoint)
+        .await
+        .map_err(client_failure)?;
+    let started = Instant::now();
+    loop {
+        if now_text().as_str() >= claim.expires_at.as_str() {
+            return Err(Failure::local(
+                LocalErrorCode::Expired,
+                "Owner 配对已过期（未在有效期内完成本机确认）",
+            ));
+        }
+        if started.elapsed() >= MAX_WAIT {
+            return Err(Failure::local(
+                LocalErrorCode::Unavailable,
+                "等待 Owner 确认超时",
+            ));
+        }
+        let mut params = JsonObject::new();
+        params.insert(
+            "pairingId".to_owned(),
+            Value::from(claim.pairing_id.as_str()),
+        );
+        let status = call(&mut client, Method::NodePairStatus, params).await?;
+        let state = text_field(&status, "state")?;
+        match state.as_str() {
+            "approved" => {
+                return Ok(AccessApproved {
+                    node_id: text_field(&status, "peerNodeId")?,
+                });
+            }
+            "pending_confirmation" => {}
+            "rejected" => {
+                return Err(Failure::local(
+                    LocalErrorCode::Expired,
+                    "Owner 拒绝了本次配对（未建立信任）",
+                ));
+            }
+            "expired" | "consumed" => {
+                return Err(Failure::local(
+                    LocalErrorCode::Expired,
+                    "该配对已过期或 secret 已被使用（重新生成二维码后再试）",
+                ));
+            }
+            _ => {
+                return Err(Failure::local(
+                    LocalErrorCode::Internal,
+                    format!("node.pair.status 返回了未登记的状态 `{state}`"),
+                ));
+            }
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+/// 终结本地 claim（协议没有 Owner 侧的拒绝端点；这条调用只清本机内存态）。
+async fn access_reject(endpoint: &str, pairing_id: &str) -> Result<(), Failure> {
+    let response = call_once(endpoint, Method::NodePairReject, reject_params(pairing_id))
+        .await
+        .map_err(client_failure)?;
+    success(&outcome_of(&response))?;
+    Ok(())
+}
+
+/// 交互式核对 Owner 指纹：只有明确的 `y`/`Y` 才继续（与 owner 方向的确认仪式同一口径）。
+fn ask_owner_fingerprint(claim: &AccessClaim) -> Result<bool, Failure> {
+    print!(
+        "确认 Owner 指纹与本机二维码页面显示的一致（{}）？[y/N]: ",
+        claim.fingerprint
+    );
+    if std::io::stdout().flush().is_err() {
+        return Err(Failure::local(
+            LocalErrorCode::Internal,
+            "无法把确认提示写到 stdout",
+        ));
+    }
+    let mut line = String::new();
+    let read = std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line);
+    if read.is_err() {
+        // 读失败（不是 EOF）：用户意图未知，因此既不确认也不替用户拒绝。
+        return Err(Failure::local(LocalErrorCode::Internal, "无法读取确认输入"));
+    }
+    Ok(matches!(line.trim(), "y" | "Y"))
 }
 
 /// 配对方法的调用接缝。

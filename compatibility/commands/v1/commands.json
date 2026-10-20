@@ -27,5 +27,59 @@
     "local.device.manage",
     "local.node.rotate-key",
     "local.audit.export"
+  ],
+  "transportFrames": [
+    {
+      "protocol": "sync",
+      "feature": "core.attachment-transfer.v1",
+      "schema": "schemas/sync/v1/attachment.schema.json",
+      "budget": {
+        "chunkSize": 32768,
+        "maxUnacknowledgedChunks": 1,
+        "maxActiveTransfersPerDevice": 2,
+        "maxActiveTransfersPerNode": 8
+      },
+      "frames": [
+        "attachment.begin",
+        "attachment.chunk",
+        "attachment.chunk_ack",
+        "attachment.seal",
+        "attachment.sealed",
+        "attachment.status",
+        "attachment.abort",
+        "attachment.read",
+        "attachment.read_chunk",
+        "attachment.manifest_begin",
+        "attachment.manifest_page",
+        "attachment.manifest_sealed",
+        "attachment.error"
+      ]
+    },
+    {
+      "protocol": "node_link",
+      "feature": "node-link.attachment-transfer.v1",
+      "schema": "schemas/node-link/v1/attachment.schema.json",
+      "budget": {
+        "chunkSize": 32768,
+        "maxUnacknowledgedChunks": 1,
+        "maxActiveTransfersPerDevice": 2,
+        "maxActiveTransfersPerNode": 8
+      },
+      "frames": [
+        "attachment.begin",
+        "attachment.chunk",
+        "attachment.chunk_ack",
+        "attachment.seal",
+        "attachment.sealed",
+        "attachment.status",
+        "attachment.abort",
+        "attachment.read",
+        "attachment.read_chunk",
+        "attachment.manifest_begin",
+        "attachment.manifest_page",
+        "attachment.manifest_sealed",
+        "attachment.error"
+      ]
+    }
   ]
 }

@@ -74,6 +74,7 @@ use identity_auth::{
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use sync_protocol::attachment as attachment_frame;
 use sync_protocol::auth::{
     Authenticated as AuthenticatedBody, ClientHello, ClientProof, ServerChallenge,
 };
@@ -145,6 +146,20 @@ impl SessionWindows {
     }
 }
 
+/// 一条已认证连接的用途（§3.4）。
+///
+/// 两条连接共用同一套握手、来源绑定、撤销与心跳，但业务阶段的帧族不同：业务连接是 `sync.*`/`command`，
+/// 附件连接只有 `attachment.*`（加双向的 `control.ping`/`control.pong`）。把用途做成连接级事实而不是
+/// 「看第一条帧猜」的理由：路径在升级时已经确定，猜会让一条业务连接有机会拿到附件写入权限。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Purpose {
+    /// 业务连接（`/sync/v1`）。
+    #[default]
+    Business,
+    /// 独立附件连接（`/sync/v1/attachments`）。
+    Attachments,
+}
+
 /// 认证后消息的分派口（WP4 的订阅/快照/ACK 各自实现，组合根组合它们）。
 ///
 /// `conn` 只负责阶段、信封、序号、type 与限流判定；被路由看到的消息**已经**通过这些校验。本切片
@@ -192,6 +207,15 @@ pub struct SyncConn {
     config: SyncConfig,
     registry: Arc<ConnectionRegistry>,
     route: Option<Arc<dyn MessageRoute>>,
+    /// 本端点的用途（业务/附件）。附件端点用它决定业务阶段走哪条分派口。
+    purpose: Purpose,
+    /// 附件帧的分派口（`Purpose::Attachments` 时使用；业务端点留空）。
+    attachments: Option<Arc<dyn crate::sync::attachments::AttachmentRoute>>,
+    /// 本端点本次真正支持（且端点已注册）的 feature（排序去重）。
+    ///
+    /// 默认是 [`crate::sync::conn::handshake::feature_list`]；组合根在 `/sync/v1/attachments` 未注册时
+    /// 用 [`SyncConn::with_supported_features`] 收窄。
+    supported_features: Vec<String>,
     /// 单 IP 的新认证尝试限流（§14：100 次/分钟，键是 `PeerInfo::client_ip`）。
     auth_limit: SlidingWindowLimiter,
     /// 单 IP 的在途握手配额。
@@ -226,6 +250,9 @@ impl SyncConn {
             config,
             registry,
             route: None,
+            purpose: Purpose::Business,
+            attachments: None,
+            supported_features: handshake::feature_list(),
             auth_limit: SlidingWindowLimiter::new(AUTH_ATTEMPTS_PER_MINUTE, AUTH_WINDOW),
             handshakes: HandshakeSlots::new(MAX_IN_FLIGHT_HANDSHAKES_PER_IP),
             connections: Arc::new(ConnectionSlots::new(MAX_CONCURRENT_CONNECTIONS)),
@@ -236,6 +263,28 @@ impl SyncConn {
     /// 注册认证后消息的路由（WP4 的组合根接线）。
     pub fn with_route(mut self, route: Arc<dyn MessageRoute>) -> Self {
         self.route = Some(route);
+        self
+    }
+
+    /// 设置本端点本次宣告的 feature 集合（组合根在 `/sync/v1/attachments` 未注册时使用）。
+    pub fn with_supported_features(mut self, features: Vec<String>) -> Self {
+        self.supported_features = features;
+        self
+    }
+
+    /// 把本端点声明为独立附件连接（`/sync/v1/attachments` 的 handler 必须设成
+    /// [`Purpose::Attachments`]，业务端点保持默认值）。
+    pub fn with_purpose(mut self, purpose: Purpose) -> Self {
+        self.purpose = purpose;
+        self
+    }
+
+    /// 注册附件帧的分派口（[`Purpose::Attachments`] 的端点必须注册；缺失时附件帧按内部不可用关闭）。
+    pub fn with_attachment_route(
+        mut self,
+        route: Arc<dyn crate::sync::attachments::AttachmentRoute>,
+    ) -> Self {
+        self.attachments = Some(route);
         self
     }
 
@@ -626,30 +675,31 @@ impl Session {
             .await;
             return Flow::Finished;
         }
-        let selected = match handshake::negotiate_features(&hello) {
-            Ok(selected) => selected,
-            Err(fault) => {
-                let (code, message) = negotiation_error(&fault);
-                let missing = match &fault {
-                    NegotiationFault::FeaturesMissing(missing) => missing.clone(),
-                    NegotiationFault::VersionUnsupported => Vec::new(),
-                };
-                warn!(
-                    event = "sync.feature_negotiation_failed",
-                    missing = ?missing,
-                    "the client requires features this host does not support"
-                );
-                self.refuse_with_details(
-                    close::VERSION,
-                    code,
-                    message,
-                    wire::feature_details(&missing),
-                    Some(envelope.message_id().clone()),
-                )
-                .await;
-                return Flow::Finished;
-            }
-        };
+        let selected =
+            match handshake::negotiate_features_with(&hello, &self.conn.supported_features) {
+                Ok(selected) => selected,
+                Err(fault) => {
+                    let (code, message) = negotiation_error(&fault);
+                    let missing = match &fault {
+                        NegotiationFault::FeaturesMissing(missing) => missing.clone(),
+                        NegotiationFault::VersionUnsupported => Vec::new(),
+                    };
+                    warn!(
+                        event = "sync.feature_negotiation_failed",
+                        missing = ?missing,
+                        "the client requires features this host does not support"
+                    );
+                    self.refuse_with_details(
+                        close::VERSION,
+                        code,
+                        message,
+                        wire::feature_details(&missing),
+                        Some(envelope.message_id().clone()),
+                    )
+                    .await;
+                    return Flow::Finished;
+                }
+            };
         // Host 身份自报值必须等于本机 host id（§8.2：客户端同样核对 Host ID；`auth.host_mismatch`
         // 是 registry 为这条判定登记的码）。
         if hello.host_id.as_str() != self.conn.authority.local_node().as_str() {
@@ -984,26 +1034,38 @@ impl Session {
                 .await;
             return Flow::Finished;
         }
-        if let Some(displaced) = self.conn.registry.register(Arc::clone(&handle)) {
-            // §8.5：同一 `(hostId, deviceId)` 只保留一条 active 连接。旧连接只被**请求**关闭
-            // （先排空已入队消息再发 close 帧），设备本身不撤销、它的授权也不变。
-            info!(
-                event = "sync.connection_replaced",
-                device_id = device_id.as_str(),
-                replaced = displaced.connection_id().as_str(),
-                "a new connection replaced the previous one for this device"
-            );
-            displaced.request_close(close::REPLACED, "a new connection replaced this one");
-        }
-        // 连接上下文交接（认证成功、已登记之后）：把本次协商出的 feature 交给路由，供 §9.4 的目录资源
-        // 与 §9.6 的已导入会话门控使用。放在登记之后是因为路由的状态表以注册表为连接活跃判据。
-        if let Some(route) = self.conn.route.as_ref() {
-            route.on_authenticated(&handle, &self.handshake.features);
+        match self.conn.purpose {
+            Purpose::Business => {
+                if let Some(displaced) = self.conn.registry.register(Arc::clone(&handle)) {
+                    // §8.5：同一 `(hostId, deviceId)` 只保留一条 active 连接。旧连接只被**请求**关闭
+                    // （先排空已入队消息再发 close 帧），设备本身不撤销、它的授权也不变。
+                    info!(
+                        event = "sync.connection_replaced",
+                        device_id = device_id.as_str(),
+                        replaced = displaced.connection_id().as_str(),
+                        "a new connection replaced the previous one for this device"
+                    );
+                    displaced.request_close(close::REPLACED, "a new connection replaced this one");
+                }
+                // 连接上下文交接（认证成功、已登记之后）：把本次协商出的 feature 交给路由，供 §9.4 的目录
+                // 资源与 §9.6 的已导入会话门控使用。放在登记之后是因为路由的状态表以注册表为连接活跃
+                // 判据。
+                if let Some(route) = self.conn.route.as_ref() {
+                    route.on_authenticated(&handle, &self.handshake.features);
+                }
+            }
+            Purpose::Attachments => {
+                // §3.4：附件连接**不登记**业务注册表。它不占 `(hostId, deviceId)` 槽位（否则一条附件
+                // 连接会把该设备的业务连接顶掉），也不参与事件扇出与命令路由的目标集合；撤销经
+                // `ConnectionRegistry::close_device` 的第二张表覆盖。
+                self.conn.registry.register_attachment(Arc::clone(&handle));
+            }
         }
         info!(
             event = "sync.authenticated",
             device_id = device_id.as_str(),
             connection_id = connection_id.as_str(),
+            purpose = ?self.conn.purpose,
             "a sync connection completed authentication"
         );
         Flow::Ready { handle, receiver }
@@ -1207,7 +1269,7 @@ impl Session {
                 // 先交接关闭钩子再摘除登记：命令面据此释放连接绑定的内容版本，其它连接的 `reclaim` 不会
                 // 在钩子之前抢先丢掉这份状态。
                 self.notify_closed(&handle).await;
-                self.conn.registry.unregister(&handle);
+                self.unregister(&handle);
                 self.close(code, reason).await;
             }
             Ending::TransportClosed(_) => {
@@ -1219,8 +1281,23 @@ impl Session {
                 // - 流已终止（读半边报错/对端结束）与写期限到期：写半边已结束或已不可信，**不再发任何 close
                 //   帧**，排空也没有意义（写半边已丢弃）。读半边在这里被丢弃，socket 随之关闭。
                 self.notify_closed(&handle).await;
-                self.conn.registry.unregister(&handle);
+                self.unregister(&handle);
                 self.reader.take();
+            }
+        }
+    }
+
+    /// 按用途摘除登记（业务表与附件表是两张表，键也不同）。
+    fn unregister(&self, handle: &Arc<ConnectionHandle>) {
+        match self.conn.purpose {
+            Purpose::Business => self.conn.registry.unregister(handle),
+            Purpose::Attachments => {
+                // 先交接连接关闭（释放该连接预留的活动传输槽位），再摘除登记：附件路由的连接期账以
+                // `connectionId` 为键，摘除之后仍然可读，但顺序固定与业务面的 `notify_closed` 一致。
+                if let Some(route) = self.conn.attachments.as_ref() {
+                    route.released(handle.as_ref());
+                }
+                self.conn.registry.unregister_attachment(handle);
             }
         }
     }
@@ -1239,6 +1316,11 @@ impl Session {
         handle: &Arc<ConnectionHandle>,
         last_ping: &mut Option<Base64Url<16>>,
     ) -> Option<(u16, &'static str)> {
+        // 附件连接只接受 `attachment.*` 与三个双向控制帧；控制帧仍走业务信封的判定（心跳与 error 的
+        // 形状、序号与业务连接完全一致），其余一律按附件帧解码。
+        if self.conn.purpose == Purpose::Attachments && !is_control_frame(text) {
+            return self.on_attachment_frame(text, handle).await;
+        }
         let (judged, next) = wire::judge(
             text,
             Phase::PostAuth,
@@ -1352,6 +1434,133 @@ impl Session {
                 }
                 None
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 附件连接（§3.4）
+    // -----------------------------------------------------------------------------------------
+
+    /// 处理一条附件帧：信封（版本/type/connectionId/序号）在这里判定，body 与业务归属交给附件路由。
+    ///
+    /// 判定口径与业务连接一致：**消息级**错误（未知 type、body 形状不符）回 `attachment.error` 并保
+    /// 持连接；**致命**错误（序号跳号/回退、`connectionId` 不符、未协商）回错误后以 `4400` 关闭。
+    async fn on_attachment_frame(
+        &mut self,
+        text: &str,
+        handle: &Arc<ConnectionHandle>,
+    ) -> Option<(u16, &'static str)> {
+        let frame = match attachment_frame::Frame::decode(text) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let code = error.code();
+                self.reject_attachment(handle, None, code, "the attachment frame is malformed")
+                    .await;
+                // 信封/序号可读、只是 body 形状不符（`Schema`）属于**消息级**拒绝：帧已经占用了对端的
+                // 下一个序号，必须记同样的账，否则对端下一条被判 `protocol.sequence_invalid` 并以 4400
+                // 关闭——一次可恢复的 schema 错误会打断整条附件连接。口径与业务连接的
+                // `wire::sequence_after_rejection` 相同：只有 `connectionId` 与本次连接一致、且
+                // `connectionSequence` 正好是期望值时推进。`InvalidJson` 读不出序号，保持现状。
+                if error == attachment_frame::DecodeError::Schema {
+                    if let Some(next) = wire::sequence_after_rejection(
+                        text,
+                        Phase::PostAuth,
+                        Some(self.inbound_next),
+                        Some(handle.connection_id()),
+                    ) {
+                        self.inbound_next = next;
+                    }
+                }
+                // 版本与未知 type 属于连接级不兼容：与业务连接的口径一致，关闭；其余是消息级拒绝。
+                return match error {
+                    attachment_frame::DecodeError::VersionUnsupported
+                    | attachment_frame::DecodeError::TypeUnsupported => {
+                        Some((close::PROTOCOL, "unsupported attachment frame"))
+                    }
+                    _ => None,
+                };
+            }
+        };
+        if frame.connection_id.as_str() != handle.connection_id().as_str() {
+            self.reject_attachment(
+                handle,
+                None,
+                ErrorCode::ProtocolSequenceInvalid,
+                "the connectionId does not match this connection",
+            )
+            .await;
+            return Some((close::PROTOCOL, "connectionId mismatch"));
+        }
+        let Ok(sequence) = frame.connection_sequence.as_str().parse::<u64>() else {
+            self.reject_attachment(
+                handle,
+                None,
+                ErrorCode::ProtocolSchemaInvalid,
+                "the connectionSequence is not a decimal string",
+            )
+            .await;
+            return Some((
+                close::PROTOCOL,
+                "connectionSequence is not a decimal string",
+            ));
+        };
+        if sequence != self.inbound_next {
+            self.reject_attachment(
+                handle,
+                None,
+                ErrorCode::ProtocolSequenceInvalid,
+                "the connectionSequence is not the next expected value",
+            )
+            .await;
+            return Some((close::PROTOCOL, "connectionSequence is not the next value"));
+        }
+        // 与业务连接同口径：序号属于对端发出的消息，body 是否被接受不影响它。
+        self.inbound_next += 1;
+        let Some(route) = self.conn.attachments.as_ref() else {
+            warn!(
+                event = "sync.attachment_route_missing",
+                connection_id = handle.connection_id().as_str(),
+                "an attachment connection has no attachment route"
+            );
+            return Some((
+                close::UNAVAILABLE,
+                "this endpoint cannot serve attachment frames",
+            ));
+        };
+        match route.route(handle, &self.handshake.features, &frame).await {
+            crate::sync::attachments::AttachmentOutcome::Claimed => None,
+            crate::sync::attachments::AttachmentOutcome::Unavailable => Some((
+                close::UNAVAILABLE,
+                "this endpoint cannot serve attachment frames",
+            )),
+            crate::sync::attachments::AttachmentOutcome::Close(code, reason) => {
+                Some((code, reason))
+            }
+        }
+    }
+
+    /// 发一条附件错误帧（消息级拒绝；连接保持）。
+    async fn reject_attachment(
+        &mut self,
+        handle: &Arc<ConnectionHandle>,
+        transfer: Option<Uuid>,
+        code: ErrorCode,
+        message: &'static str,
+    ) {
+        let mut body = attachment_frame::ErrorBody::new(code, message);
+        if let Some(transfer) = transfer {
+            body.transfer_id = sync_protocol::common::Nullable::value(transfer);
+        }
+        if handle
+            .send_attachment(&attachment_frame::FrameBody::Error(body))
+            .is_err()
+        {
+            debug!(
+                event = "sync.attachment_error_dropped",
+                connection_id = handle.connection_id().as_str(),
+                code = code.as_str(),
+                "the attachment error could not be queued"
+            );
         }
     }
 
@@ -1864,6 +2073,21 @@ fn ping_body() -> Option<ControlBody> {
 /// 解码消息 body（`Envelope` 的 body 是原始字节；解码失败按 schema 错误处理）。
 fn decode_body<T: DeserializeOwned>(envelope: &Envelope) -> Option<T> {
     serde_json::from_str(envelope.body().get()).ok()
+}
+
+/// 这条文本是否是可复用在附件连接上的业务控制帧（`control.ping`/`control.pong`/`error`）。
+///
+/// 只看 `type` 的原始文本，不解 full envelope：附件帧与业务帧共用外层信封，但 `type` 词表不相交，因此
+/// 先按 `type` 分流不会把一条坏帧误判成另一族。解析失败一律按「不是控制帧」处理，交给附件解码去给出
+/// 精确的 `protocol.invalid_json`。
+fn is_control_frame(text: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    matches!(
+        value.get("type").and_then(serde_json::Value::as_str),
+        Some("control.ping" | "control.pong" | "error")
+    )
 }
 
 /// 定长 base64url 字段（`acpr-wire` 的值对象）的**规范**文本。

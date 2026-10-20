@@ -40,8 +40,8 @@ const PAGE = {
   hasEarlier: true,
   earliestCursor: { createdAt: "2026-10-01T00:00:00.000Z", messageId: "m-1" },
   messages: [
-    { id: "m-1", role: "user" as const, text: "开始", hasStructuredContent: false, createdAt: "2026-10-01T00:00:00.000Z", turnId: null },
-    { id: "m-2", role: "agent" as const, text: "好的", hasStructuredContent: false, createdAt: "2026-10-01T00:00:01.000Z", turnId: null },
+    { id: "m-1", role: "user" as const, channel: "reply" as const, text: "开始", content: { text: "开始", media: [], hasStructuredContent: false }, partial: null, hasStructuredContent: false, createdAt: "2026-10-01T00:00:00.000Z", turnId: null },
+    { id: "m-2", role: "agent" as const, channel: "reply" as const, text: "好的", content: { text: "好的", media: [], hasStructuredContent: false }, partial: null, hasStructuredContent: false, createdAt: "2026-10-01T00:00:01.000Z", turnId: null },
   ],
 };
 

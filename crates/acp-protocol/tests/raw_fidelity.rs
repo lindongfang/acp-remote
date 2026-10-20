@@ -127,7 +127,6 @@ fn unimplemented_and_unknown_methods_are_explicitly_unsupported() {
     let cases = [
         ("session/load", MethodStatus::NotImplemented),
         ("fs/read_text_file", MethodStatus::NotImplemented),
-        ("terminal/create", MethodStatus::NotImplemented),
         ("authenticate", MethodStatus::NotImplemented),
         ("$/cancel_request", MethodStatus::NotImplemented),
         ("_vendor/thing", MethodStatus::Extension),

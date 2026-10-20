@@ -19,7 +19,7 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
-use sqlx::{Row, SqliteConnection, Transaction};
+use sqlx::{Row, Sqlite, SqliteConnection, Transaction};
 use tokio::sync::Mutex;
 
 use acp_core::broker::HISTORY_ENTRY_EVENT_TYPES;
@@ -27,12 +27,13 @@ use acp_core::model::{
     AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
     AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedDelivery, CommittedEvent,
     ConflictKind, DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind, EventOrigin,
-    EventPayload, GlobalCursor, InteractionOption, InteractionResolution, LocalCursor, ModeId,
-    ModeRef, NodeId, OriginCursor, OriginEpoch, OriginEventRef, PendingInteraction, PortError,
-    PublicError, RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin, Sequence,
-    ServerEpoch, Session, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState,
-    SessionSummary, StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson,
-    WorkspaceRef,
+    EventPayload, GlobalCursor, InteractionOption, InteractionResolution, LocalCursor, MediaKind,
+    MediaReference, MessageChannel, MessageId, MessageRecord, MessageState, ModeId, ModeRef,
+    NodeId, OriginCursor, OriginEpoch, OriginEventRef, PartialReason, PartialResult,
+    PendingInteraction, PortError, PublicError, RawUnavailableReason, RemoteSessionRef, RequestId,
+    ResourceOrigin, Sequence, ServerEpoch, Session, SessionId, SessionRecoveryRecord,
+    SessionSnapshot, SessionState, SessionSummary, StoredPolicy, Timestamp, Turn, TurnId,
+    UnavailableKind, Version, ViewJson, WorkspaceRef,
 };
 use acp_core::ports::{
     AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
@@ -40,8 +41,8 @@ use acp_core::ports::{
     ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord, PendingInteractionOrigin,
     PruneReport, ReadView, ReceiptOutcome, RemoteCommandRef, RemoteDeliveryStore, ReplayBatch,
     ReplayLimit, ResetReason, RetentionPolicy, SessionAttachment, SessionQuery, SessionStore,
-    SettledSession, StateChange, StoreHealth, SyncEventRecord, SyncReplaySlice, TurnChange,
-    TurnUpdate,
+    SettledSession, StateChange, StoreHealth, SubmissionBinding, SyncEventRecord, SyncReplaySlice,
+    TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
@@ -105,6 +106,11 @@ impl SqliteStore {
     /// 写池（管理 store 模块共用）：§7.1 的单写连接，管理写集在它上面开 BEGIN IMMEDIATE。
     pub(crate) fn pools(&self) -> &Pools {
         &self.pools
+    }
+
+    /// 附件/传输实现共用的存储配置（附件目录、单附件上限等）。
+    pub(crate) fn config(&self) -> &StorageConfig {
+        &self.config
     }
     /// v10 升级时被删除的旧 Agent profile 行数（用于启动提示；没有迁移记录即 0）。
     pub async fn discarded_agent_profiles(&self) -> Result<u64, StorageError> {
@@ -1129,6 +1135,7 @@ impl SqliteStore {
         &self,
         commit: OwnedCommit,
         terminal_actor: Option<&Actor>,
+        binding: Option<SubmissionBinding>,
     ) -> Result<CommitOutcome, PortError> {
         // §6 第 13 条：创建 pending 交互行（`interactions`）与解析既有行（`state.interaction`）
         // 是互斥的两条路径，同一提交里同时出现即拒绝。
@@ -1211,6 +1218,22 @@ impl SqliteStore {
                     replayed: Some(IdempotentReplay { record }),
                 });
             }
+        }
+
+        // ---- 附件清单绑定（§6 第 22 条）：与受理行、事件、turn **同一事务**。
+        //
+        // 幂等命中已在上面提前返回，因此重试不会因「清单已过期」被误拒：首次受理的结果就是首次结果。
+        // 本段任一失败都让整事务回滚，调用方不会派发 Agent。
+        if let Some(binding) = &binding {
+            let session = commit.session.clone().ok_or(PortError::InvalidRequest(
+                "attachment binding requires a session",
+            ))?;
+            if commit.idempotency.is_none() || commit.command_terminal.is_some() {
+                return Err(PortError::InvalidRequest(
+                    "attachment binding is only valid on an acceptance commit",
+                ));
+            }
+            bind_submission(&mut tx, &session, binding, &self.config, &commit.at).await?;
         }
 
         // ---- 命令**终态**提交：`command_terminal` 自身不带 requestId，靠同一提交里
@@ -1598,6 +1621,13 @@ impl SqliteStore {
                     origin_sequence += 1;
                 }
             }
+        }
+
+        // ---- 消息正文（§6 第 14 条、§7.6）：与事件同一事务折叠进 `owned_message`/`owned_media_ref`。
+        // 先落盘正文再允许广播（broker 在 `commit` 返回后才 publish），压缩只影响 delta 事件，
+        // 不删除这里已保存的正文。
+        if let Some(session) = &session_id {
+            materialize_messages(&mut tx, session, &commit.events, &commit.at).await?;
         }
 
         // ---- §6 第 15 条：把被替代的 delta 行指向那条 summary 事件。
@@ -2167,7 +2197,7 @@ async fn resolve_interaction(
         "UPDATE owned_interaction SET state = 'resolved', resolved_at = ?1, \
          decision_option_id = ?2, decision_kind = ?3, elicitation_action = ?4, \
          elicitation_values_json = ?5, resolved_by_kind = ?6, resolved_by_id = ?7 \
-         WHERE interaction_id = ?8 AND state = 'pending'",
+         WHERE interaction_id = ?8 AND state = 'pending' AND invalidated_at IS NULL",
     )
     .bind(at.as_str())
     .bind(decision_option_id)
@@ -2184,18 +2214,24 @@ async fn resolve_interaction(
     if affected > 0 {
         return Ok(());
     }
-    let state: Option<String> =
-        sqlx::query_scalar("SELECT state FROM owned_interaction WHERE interaction_id = ?1")
-            .bind(resolved.interaction.as_str())
-            .fetch_optional(&mut **tx)
-            .await
-            .db()?;
-    match state {
-        Some(_) => Err(PortError::Conflict(ConflictKind::AlreadyResolved)),
-        None => Err(PortError::NotFound(EntityRef::Interaction(
+    let row = sqlx::query(
+        "SELECT state, invalidated_at FROM owned_interaction WHERE interaction_id = ?1",
+    )
+    .bind(resolved.interaction.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .db()?;
+    let Some(row) = row else {
+        return Err(PortError::NotFound(EntityRef::Interaction(
             resolved.interaction.clone(),
-        ))),
+        )));
+    };
+    if opt_text(&row, "invalidated_at")?.is_some() {
+        // 失效请求不可被旧路径消费：它与 `resolve_effective` 同一口径（Expired，而不是
+        // 「已处理」），调用方因此不会把「上游已丢失」误读成「别人先答了」。
+        return Err(PortError::Conflict(ConflictKind::Expired));
     }
+    Err(PortError::Conflict(ConflictKind::AlreadyResolved))
 }
 
 fn error_columns(
@@ -2222,6 +2258,7 @@ struct Sweep {
     interactions: u64,
     attachments: u64,
     audit: u64,
+    messages: u64,
     freed_bytes: u64,
 }
 
@@ -2231,6 +2268,7 @@ impl Sweep {
         self.interactions += other.interactions;
         self.attachments += other.attachments;
         self.audit += other.audit;
+        self.messages += other.messages;
         self.freed_bytes += other.freed_bytes;
     }
 }
@@ -2397,6 +2435,7 @@ pub(crate) async fn enforce_capacity(
 async fn sweep_attachments(
     ex: &mut SqliteConnection,
     budget_bytes: u64,
+    at: &Timestamp,
 ) -> Result<(u64, u64, Vec<String>), StorageError> {
     let total: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(byte_length), 0) FROM owned_attachment")
@@ -2408,7 +2447,10 @@ async fn sweep_attachments(
         return Ok((0, 0, Vec::new()));
     }
     let candidates: Vec<SqliteRow> = sqlx::query(
-        "SELECT sha256, byte_length, relative_path FROM owned_attachment \
+        "SELECT sha256, byte_length, relative_path FROM owned_attachment a \
+         WHERE NOT EXISTS (SELECT 1 FROM owned_media_ref r WHERE r.attachment_id = a.attachment_id) \
+           AND NOT EXISTS (SELECT 1 FROM owned_attachment_submission_item i \
+                           WHERE i.attachment_id = a.attachment_id) \
          ORDER BY last_used_at ASC, sha256 ASC",
     )
     .fetch_all(&mut *ex)
@@ -2417,6 +2459,7 @@ async fn sweep_attachments(
     let mut removed = 0_u64;
     let mut freed = 0_u64;
     let mut files = Vec::new();
+    let mut digests = Vec::new();
     for row in candidates {
         if remaining <= budget_bytes {
             break;
@@ -2439,9 +2482,485 @@ async fn sweep_attachments(
         removed += affected;
         freed += bytes;
         remaining = remaining.saturating_sub(bytes);
+        digests.push(sha);
         files.push(relative);
     }
+    crate::transfers::expire_transfers_for_digests(ex, at, &digests).await?;
     Ok((removed, freed, files))
+}
+
+/// 附件 GC（按引用）：删除既无会话绑定、又无消息媒体引用、也不在任何提交清单里，且超过 24 小时
+/// 未被使用的附件。共享引用因此天然安全：只要还有一条保留消息引用它，内容就不会被回收。
+///
+/// 返回 `(行数, 释放字节, 文件路径)`；文件由调用方在事务提交后删除。
+async fn sweep_unreferenced_attachments(
+    ex: &mut SqliteConnection,
+    cutoff: &Timestamp,
+    at: &Timestamp,
+) -> Result<(u64, u64, Vec<String>), StorageError> {
+    let rows: Vec<SqliteRow> = sqlx::query(
+        "SELECT attachment_id, sha256, byte_length, relative_path FROM owned_attachment a \
+         WHERE a.last_used_at <= ?1 \
+           AND NOT EXISTS (SELECT 1 FROM owned_attachment_link l \
+                           WHERE l.attachment_id = a.attachment_id) \
+           AND NOT EXISTS (SELECT 1 FROM owned_media_ref r \
+                           WHERE r.attachment_id = a.attachment_id) \
+           AND NOT EXISTS (SELECT 1 FROM owned_attachment_submission_item i \
+                           WHERE i.attachment_id = a.attachment_id)",
+    )
+    .bind(cutoff.as_str())
+    .fetch_all(&mut *ex)
+    .await
+    .db()?;
+    let mut removed = 0_u64;
+    let mut freed = 0_u64;
+    let mut files = Vec::new();
+    let mut digests = Vec::new();
+    for row in rows {
+        let id = text(&row, "attachment_id")?;
+        let sha = text(&row, "sha256")?;
+        let bytes = u64::try_from(int(&row, "byte_length")?).unwrap_or(0);
+        // 先删行（引用已由谓词排除，外键不会阻挡），文件在事务提交后删除。
+        sqlx::query("DELETE FROM owned_attachment WHERE attachment_id = ?1")
+            .bind(&id)
+            .execute(&mut *ex)
+            .await
+            .db()?;
+        removed += 1;
+        freed += bytes;
+        digests.push(sha);
+        files.push(text(&row, "relative_path")?);
+    }
+    // 附件行没了以后，指向它的已封存传输不能继续报 `sealed`（否则 `transfer()` 会得到
+    // `sealed: None`，重试 `seal_transfer` 也只会撞上 `Corrupt`）。两列一起改以维持 CHECK。
+    crate::transfers::expire_transfers_for_digests(ex, at, &digests).await?;
+    Ok((removed, freed, files))
+}
+
+// ---------------------------------------------------------------------------------------------
+// owned_message / owned_media_ref：事件 → 权威正文
+// ---------------------------------------------------------------------------------------------
+
+/// 从事件 view 解析一个对象；正文必须是 JSON object（`PendingEvent::validate` 已保证形状）。
+fn message_view(pending: &acp_core::model::PendingEvent) -> Result<serde_json::Value, PortError> {
+    serde_json::from_str(pending.payload.view.as_str())
+        .map_err(|_| PortError::InvalidRequest("message event view is not json"))
+}
+
+fn view_text(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+}
+
+/// 一个 turn 终态对消息正文的含义。
+fn terminal_message_state(
+    pending: &acp_core::model::PendingEvent,
+) -> Option<(MessageState, Option<PartialReason>)> {
+    match pending.event_type.as_str() {
+        "turn.completed" => Some((MessageState::Completed, None)),
+        "turn.cancelled" => Some((MessageState::Cancelled, Some(PartialReason::TurnCancelled))),
+        "turn.failed" => Some((MessageState::Failed, Some(PartialReason::AgentFailed))),
+        _ => None,
+    }
+}
+
+/// 本批次里出现的 turn 终态（最多一个；同一批出现多个说明组装错误）。
+type TerminalState = (Option<TurnId>, MessageState, Option<PartialReason>);
+
+fn terminal_of(
+    events: &[acp_core::model::PendingEvent],
+) -> Result<Option<TerminalState>, PortError> {
+    let mut found: Option<TerminalState> = None;
+    for pending in events {
+        if let Some((state, reason)) = terminal_message_state(pending) {
+            // 同一批出现多个终态只可能是组装错误；消息折叠取第一条，事件本身仍按原样落库。
+            found.get_or_insert((pending.turn.clone(), state, reason));
+        }
+    }
+    Ok(found)
+}
+
+fn media_kind_of(block_type: &str) -> Option<MediaKind> {
+    match block_type {
+        "image_ref" => Some(MediaKind::Image),
+        "audio_ref" => Some(MediaKind::Audio),
+        "file_ref" => Some(MediaKind::File),
+        _ => None,
+    }
+}
+
+/// 把本批事件折叠进 `owned_message` / `owned_media_ref`（§6 第 14 条、§7.6）。
+///
+/// 回复与思考分别持久化；`agent.thought.delta` 不产生 `agent.message.completed`，因此思考消息在 turn
+/// 终态时按终态收尾（正常完成 = `completed`，停止/失败保留正文并标记原因）。正文只来自事件 view，
+/// 存储层不解析 ACP 原文。
+async fn materialize_messages(
+    tx: &mut Transaction<'_, Sqlite>,
+    session: &SessionId,
+    events: &[acp_core::model::PendingEvent],
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    let relevant = events.iter().any(|pending| {
+        matches!(
+            pending.event_type.as_str(),
+            "agent.message.delta"
+                | "agent.thought.delta"
+                | "agent.message.completed"
+                | "turn.completed"
+                | "turn.cancelled"
+                | "turn.failed"
+        )
+    });
+    if !relevant {
+        return Ok(());
+    }
+    let terminal = terminal_of(events)?;
+
+    // 1. delta：先确保行存在，再按到达顺序追加 content block。
+    for pending in events {
+        let channel = match pending.event_type.as_str() {
+            "agent.message.delta" => MessageChannel::Reply,
+            "agent.thought.delta" => MessageChannel::Thought,
+            _ => continue,
+        };
+        let view = message_view(pending)?;
+        let Some(message_id) = view_text(&view, "messageId") else {
+            // 旧路径/非消息 delta 可能没有 messageId；事件照常落库，正文折叠只服务已类型化的消息。
+            continue;
+        };
+        let Ok(message_id) = MessageId::new(&message_id) else {
+            continue;
+        };
+        sqlx::query(
+            "INSERT INTO owned_message (message_id, session_id, turn_id, channel, state, \
+             content_json, partial_reason, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, 'partial', '[]', NULL, ?5, ?5) \
+             ON CONFLICT(message_id) DO NOTHING",
+        )
+        .bind(message_id.as_str())
+        .bind(session.as_str())
+        .bind(pending.turn.as_ref().map(TurnId::as_str))
+        .bind(channel.as_str())
+        .bind(at.as_str())
+        .execute(&mut **tx)
+        .await
+        .db()?;
+        let row = sqlx::query(
+            "SELECT channel, state, content_json FROM owned_message WHERE message_id = ?1",
+        )
+        .bind(message_id.as_str())
+        .fetch_one(&mut **tx)
+        .await
+        .db()?;
+        let stored_channel: MessageChannel = text(&row, "channel")?
+            .parse()
+            .map_err(|_| PortError::Corrupt("owned_message.channel is not a known channel"))?;
+        if stored_channel != channel {
+            return Err(PortError::InvalidRequest(
+                "a message id cannot change its channel",
+            ));
+        }
+        let state: MessageState = text(&row, "state")?
+            .parse()
+            .map_err(|_| PortError::Corrupt("owned_message.state is not a known state"))?;
+        if state == MessageState::Completed {
+            return Err(PortError::InvalidRequest(
+                "a message delta arrived after its completion",
+            ));
+        }
+        let mut blocks: Vec<serde_json::Value> = serde_json::from_str(&text(&row, "content_json")?)
+            .map_err(|_| PortError::Corrupt("owned_message.content_json is not an array"))?;
+        let block = match view.get("block") {
+            Some(block) if block.is_object() => block.clone(),
+            Some(_) => {
+                return Err(PortError::InvalidRequest(
+                    "message delta block is not an object",
+                ));
+            }
+            None => {
+                let text = view_text(&view, "text")
+                    .ok_or(PortError::InvalidRequest("message delta has no text"))?;
+                serde_json::json!({ "type": "text", "text": text })
+            }
+        };
+        blocks.push(block);
+        let content = serde_json::to_string(&blocks)
+            .map_err(|_| PortError::InvalidRequest("message content is not serializable"))?;
+        sqlx::query(
+            "UPDATE owned_message SET content_json = ?1, updated_at = ?2, \
+             turn_id = COALESCE(turn_id, ?3) WHERE message_id = ?4",
+        )
+        .bind(content)
+        .bind(at.as_str())
+        .bind(pending.turn.as_ref().map(TurnId::as_str))
+        .bind(message_id.as_str())
+        .execute(&mut **tx)
+        .await
+        .db()?;
+    }
+
+    // 2. `agent.message.completed`：收尾正文（回复通道）。
+    for pending in events {
+        if pending.event_type.as_str() != "agent.message.completed" {
+            continue;
+        }
+        let view = message_view(pending)?;
+        let Some(message_id) = view_text(&view, "messageId") else {
+            continue;
+        };
+        let Ok(message_id) = MessageId::new(&message_id) else {
+            continue;
+        };
+        let blocks = view
+            .get("content")
+            .and_then(|content| content.as_array())
+            .cloned()
+            .ok_or(PortError::InvalidRequest(
+                "completed message content is not an array",
+            ))?;
+        let (state, reason) = match &terminal {
+            Some((turn, state, reason)) if turn.as_ref() == pending.turn.as_ref() => {
+                (*state, *reason)
+            }
+            // 没有同批终态（例如恢复补写）：收尾事件本身即「完整折叠」，按完成处理。
+            _ => (MessageState::Completed, None),
+        };
+        let content = serde_json::to_string(&blocks)
+            .map_err(|_| PortError::InvalidRequest("message content is not serializable"))?;
+        sqlx::query(
+            "INSERT INTO owned_message (message_id, session_id, turn_id, channel, state, \
+             content_json, partial_reason, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, 'reply', ?4, ?5, ?6, ?7, ?7) \
+             ON CONFLICT(message_id) DO UPDATE SET state = excluded.state, \
+             content_json = excluded.content_json, partial_reason = excluded.partial_reason, \
+             updated_at = excluded.updated_at, \
+             turn_id = COALESCE(owned_message.turn_id, excluded.turn_id)",
+        )
+        .bind(message_id.as_str())
+        .bind(session.as_str())
+        .bind(pending.turn.as_ref().map(TurnId::as_str))
+        .bind(state.as_str())
+        .bind(&content)
+        .bind(reason.map(PartialReason::as_str))
+        .bind(at.as_str())
+        .execute(&mut **tx)
+        .await
+        .db()?;
+        // 媒体引用：只存引用，不存字节；不可用的内容（外部 URI）不产生引用。
+        sqlx::query("DELETE FROM owned_media_ref WHERE message_id = ?1")
+            .bind(message_id.as_str())
+            .execute(&mut **tx)
+            .await
+            .db()?;
+        for (position, block) in blocks.iter().enumerate() {
+            let Some(block_type) = block.get("type").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let Some(kind) = media_kind_of(block_type) else {
+                continue;
+            };
+            let Some(attachment) = block.get("attachmentId").and_then(|value| value.as_str())
+            else {
+                continue;
+            };
+            let attachment_id = AttachmentId::new(attachment)
+                .map_err(|_| PortError::InvalidRequest("media attachment id is malformed"))?;
+            let stored: Option<i64> =
+                sqlx::query_scalar("SELECT 1 FROM owned_attachment WHERE attachment_id = ?1")
+                    .bind(attachment_id.as_str())
+                    .fetch_optional(&mut **tx)
+                    .await
+                    .db()?;
+            if stored.is_none() {
+                return Err(PortError::InvalidRequest(
+                    "media reference points to an attachment that is not sealed",
+                ));
+            }
+            sqlx::query(
+                "INSERT INTO owned_media_ref (message_id, position, attachment_id, kind) \
+                 VALUES (?1, ?2, ?3, ?4)",
+            )
+            .bind(message_id.as_str())
+            .bind(i64::try_from(position).map_err(|_| {
+                PortError::InvalidRequest("media position exceeds the supported range")
+            })?)
+            .bind(attachment_id.as_str())
+            .bind(kind.as_str())
+            .execute(&mut **tx)
+            .await
+            .db()?;
+        }
+    }
+
+    // 3. turn 终态：思考消息按终态收尾；回复消息只在停止/失败时标记部分结果（正常完成的回复由
+    //    `agent.message.completed` 收尾，缺了它不得伪造成功）。
+    if let Some((turn, state, reason)) = terminal {
+        sqlx::query(
+            "UPDATE owned_message SET state = ?1, partial_reason = ?2, updated_at = ?3 \
+             WHERE session_id = ?4 AND channel = 'thought' AND state = 'partial' \
+             AND (turn_id IS ?5)",
+        )
+        .bind(state.as_str())
+        .bind(reason.map(PartialReason::as_str))
+        .bind(at.as_str())
+        .bind(session.as_str())
+        .bind(turn.as_ref().map(TurnId::as_str))
+        .execute(&mut **tx)
+        .await
+        .db()?;
+        if state != MessageState::Completed {
+            sqlx::query(
+                "UPDATE owned_message SET state = ?1, partial_reason = ?2, updated_at = ?3 \
+                 WHERE session_id = ?4 AND channel = 'reply' AND state = 'partial' \
+                 AND (turn_id IS ?5)",
+            )
+            .bind(state.as_str())
+            .bind(reason.map(PartialReason::as_str))
+            .bind(at.as_str())
+            .bind(session.as_str())
+            .bind(turn.as_ref().map(TurnId::as_str))
+            .execute(&mut **tx)
+            .await
+            .db()?;
+        } else {
+            // 正常终态但回复缺 `agent.message.completed`（适配器错误或崩溃窗口）：已收到的正文保留，
+            // 但**不得**伪装成完整成功（§6 第 14 条）。`failed` + `agent_failed` 是唯一的诚实表达；
+            // 留成 `partial` + `NULL` 原因会让 `PartialResult::try_new` 在读取时判为损坏。
+            sqlx::query(
+                "UPDATE owned_message SET state = 'failed', partial_reason = ?1, updated_at = ?2 \
+                 WHERE session_id = ?3 AND channel = 'reply' AND state = 'partial' \
+                 AND (turn_id IS ?4)",
+            )
+            .bind(PartialReason::AgentFailed.as_str())
+            .bind(at.as_str())
+            .bind(session.as_str())
+            .bind(turn.as_ref().map(TurnId::as_str))
+            .execute(&mut **tx)
+            .await
+            .db()?;
+        }
+    }
+    Ok(())
+}
+
+/// prompt 受理时的清单绑定（§6 第 22 条）：在**受理事务内**复核并写入会话绑定。
+///
+/// 复核项：清单存在且已封存、属于该会话与**认证主体**、条目与清单登记逐项相同、每个附件仍存在且
+/// 文件可读。任一失败 → 整事务回滚（命令不被受理、Agent 不会被派发）。
+///
+/// 成功绑定后**删除清单行**（条目随外键级联）：清单一旦被 prompt 消费就没有继续存在的理由，留着它
+/// 会让 `owned_attachment_submission_item` 永久成为附件 GC 根，使存储随每次带附件的 prompt 无界增长。
+async fn bind_submission(
+    tx: &mut Transaction<'_, Sqlite>,
+    session: &SessionId,
+    binding: &SubmissionBinding,
+    config: &StorageConfig,
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    let row = sqlx::query(
+        "SELECT session_id, subject_kind, subject_id, state FROM owned_attachment_submission \
+         WHERE submission_id = ?1",
+    )
+    .bind(binding.submission.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .db()?
+    .ok_or_else(|| PortError::NotFound(EntityRef::Submission(binding.submission.clone())))?;
+    if text(&row, "session_id")? != session.as_str() {
+        return Err(PortError::InvalidRequest(
+            "attachment manifest belongs to another session",
+        ));
+    }
+    // 主体在事务内复核：调用方（用例层）的事前检查不能替代这条不变量，任何直接调用
+    // `commit_with_submission` 的路径都必须经过这里。
+    if text(&row, "subject_kind")? != binding.subject.kind()
+        || text(&row, "subject_id")? != binding.subject.id_text()
+    {
+        return Err(PortError::InvalidRequest(
+            "attachment manifest belongs to another subject",
+        ));
+    }
+    if text(&row, "state")? != "sealed" {
+        return Err(PortError::InvalidRequest(
+            "attachment manifest is not sealed",
+        ));
+    }
+    let registered: Vec<String> = sqlx::query_scalar(
+        "SELECT attachment_id FROM owned_attachment_submission_item \
+         WHERE submission_id = ?1 ORDER BY position ASC",
+    )
+    .bind(binding.submission.as_str())
+    .fetch_all(&mut **tx)
+    .await
+    .db()?;
+    if registered.len() != binding.attachments.len()
+        || registered
+            .iter()
+            .zip(&binding.attachments)
+            .any(|(stored, expected)| stored != expected.as_str())
+    {
+        return Err(PortError::InvalidRequest(
+            "attachment binding does not match the sealed manifest",
+        ));
+    }
+    for attachment in &binding.attachments {
+        let relative: Option<String> = sqlx::query_scalar(
+            "SELECT relative_path FROM owned_attachment WHERE attachment_id = ?1",
+        )
+        .bind(attachment.as_str())
+        .fetch_optional(&mut **tx)
+        .await
+        .db()?;
+        let Some(relative) = relative else {
+            return Err(PortError::InvalidRequest(
+                "attachment binding references an attachment that is not sealed",
+            ));
+        };
+        let path = match relative.strip_prefix(&format!("{}/", migrate::ATTACHMENTS_DIR)) {
+            Some(name) => config.attachment_dir.join(name),
+            None => config.data_dir.join(&relative),
+        };
+        if !path.is_file() {
+            return Err(PortError::Corrupt("attachment bytes are missing"));
+        }
+        let affected = sqlx::query(
+            "INSERT INTO owned_attachment_link (session_id, attachment_id, generation, sha256) \
+             SELECT ?1, a.attachment_id, 1, a.sha256 FROM owned_attachment a \
+             WHERE a.attachment_id = ?2 \
+             ON CONFLICT(session_id, attachment_id) DO UPDATE SET sha256 = excluded.sha256",
+        )
+        .bind(session.as_str())
+        .bind(attachment.as_str())
+        .execute(&mut **tx)
+        .await
+        .db()?
+        .rows_affected();
+        if affected != 1 {
+            return Err(PortError::Corrupt(
+                "attachment vanished while binding the submission",
+            ));
+        }
+        // 去重后复用的旧内容保留首次上传的 `created_at`；绑定必须把「最近一次使用」推到本次
+        // 受理时刻，否则下一轮 `prune` 会按首次上传时间删掉这条刚建立的链接（随后 `read_chunk`
+        // 失去授权、24 小时后内容被 GC），而消息仍在正文保留期内。
+        sqlx::query("UPDATE owned_attachment SET last_used_at = ?1 WHERE attachment_id = ?2")
+            .bind(at.as_str())
+            .bind(attachment.as_str())
+            .execute(&mut **tx)
+            .await
+            .db()?;
+    }
+    // 清单的生命周期到此结束：条目随 `ON DELETE CASCADE` 一起删除，附件改由刚写入的
+    // `owned_attachment_link`/后续消息的 `owned_media_ref` 保护。重复受理同一 requestId 的幂等命中
+    // 发生在绑定之前（`accept_with_binding` 里 `replayed` 分支），因此重试不会因为清单已删除而失败。
+    sqlx::query("DELETE FROM owned_attachment_submission WHERE submission_id = ?1")
+        .bind(binding.submission.as_str())
+        .execute(&mut **tx)
+        .await
+        .db()?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2452,7 +2971,16 @@ async fn sweep_attachments(
 impl SessionStore for SqliteStore {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
         self.writable()?;
-        self.commit_owned(commit, None).await
+        self.commit_owned(commit, None, None).await
+    }
+
+    async fn commit_with_submission(
+        &self,
+        commit: OwnedCommit,
+        binding: Option<SubmissionBinding>,
+    ) -> Result<CommitOutcome, PortError> {
+        self.writable()?;
+        self.commit_owned(commit, None, binding).await
     }
 
     async fn commit_workspace_mkdir_terminal(
@@ -2461,7 +2989,7 @@ impl SessionStore for SqliteStore {
         commit: OwnedCommit,
     ) -> Result<CommitOutcome, PortError> {
         self.writable()?;
-        self.commit_owned(commit, Some(actor)).await
+        self.commit_owned(commit, Some(actor), None).await
     }
 
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {
@@ -2520,6 +3048,32 @@ impl SessionStore for SqliteStore {
             summaries.push(session_summary_from_row(row)?);
         }
         Ok(summaries)
+    }
+
+    async fn origin_epochs(
+        &self,
+        sessions: &[SessionId],
+    ) -> Result<Vec<(SessionId, OriginEpoch)>, PortError> {
+        if sessions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT session_id, origin_epoch FROM owned_session WHERE session_id IN ({})",
+            placeholders(sessions.len())
+        );
+        let mut statement = sqlx::query(&sql);
+        for session in sessions {
+            statement = statement.bind(session.as_str());
+        }
+        let rows = statement.fetch_all(&self.pools.read).await.db()?;
+        let mut epochs = Vec::with_capacity(rows.len());
+        for row in &rows {
+            epochs.push((
+                decode(&text(row, "session_id")?, "owned_session.session_id")?,
+                decode(&text(row, "origin_epoch")?, "owned_session.origin_epoch")?,
+            ));
+        }
+        Ok(epochs)
     }
 
     async fn head(&self) -> Result<GlobalCursor, PortError> {
@@ -2691,11 +3245,55 @@ impl SessionStore for SqliteStore {
         .rows_affected();
         // ③ 容量：只在超限时触发
         sweep.add(sweep_compacted(&mut tx, &policy, None, &self.measure_sql).await?);
+        // 消息正文随正文保留期清理（媒体引用经外键级联删除；共享引用的附件仍由后续 GC 保留）。
+        let message_threshold = threshold(&at, policy.transcript_retention_days)?;
+        sweep.messages += sqlx::query("DELETE FROM owned_message WHERE updated_at <= ?1")
+            .bind(message_threshold.as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?
+            .rows_affected();
+        // 消息清理时关联清理：附件的会话绑定（`owned_attachment_link`）只在附件仍处于消息保留窗口内、
+        // 或仍被某条保留消息的 `owned_media_ref` 引用时继续存在。链接消失后，内容由 ④′ 的按引用 GC
+        // 在闲置窗口后回收——这就是「消息保留期到期后附件被回收」的落点。
+        //
+        // 判定用「最近一次使用」而不是 `created_at`：内容寻址去重会让旧字节复用同一个附件行并在
+        // 行上保留**首次**上传的 `created_at`，按它判定会把「今天重发 90 天前的同一文件」刚建立的
+        // 链接在下一轮清理里删掉。`bind_submission`/`AttachmentStore::link` 在建立链接时把
+        // `last_used_at` 刷新到绑定时刻，因此保留期从最近一次绑定起算；未再被使用的旧附件照常回收。
+        sqlx::query(
+            "DELETE FROM owned_attachment_link \
+             WHERE NOT EXISTS (SELECT 1 FROM owned_media_ref r \
+                               WHERE r.attachment_id = owned_attachment_link.attachment_id) \
+               AND NOT EXISTS (SELECT 1 FROM owned_attachment a \
+                               WHERE a.attachment_id = owned_attachment_link.attachment_id \
+                                 AND a.last_used_at > ?1)",
+        )
+        .bind(message_threshold.as_str())
+        .execute(&mut *tx)
+        .await
+        .db()?;
+        // ④″ 传输与清单的生命周期：未绑定/未封存的清单与闲置的 receiving 传输在这里过期（与
+        // `prune_transfers` 同一实现）。必须先于附件的按引用 GC：否则已过期清单的条目会在**本轮**
+        // 继续把附件挡在 GC 根之外。
+        let (_, _, temporary) =
+            crate::transfers::expire_stale_uploads(&mut tx, &self.config, &at, 1000).await?;
         // ④ 附件 LRU（预算来自 §7.5 的 `storage.attachment_max_total_bytes`）
-        let (removed, freed, files) =
-            sweep_attachments(&mut tx, self.config.attachment_max_total_bytes).await?;
+        let (removed, freed, mut files) =
+            sweep_attachments(&mut tx, self.config.attachment_max_total_bytes, &at).await?;
         sweep.attachments += removed;
         sweep.freed_bytes += freed;
+        // ④′ 按引用的附件 GC：无会话绑定、无媒体引用、不在活跃清单里且闲置超过 24 小时的内容可回收。
+        let gc_cutoff_text = window::shift_days(at.as_str(), -1).ok_or(
+            StorageError::InvalidRequest("timestamp is outside the supported window"),
+        )?;
+        let gc_cutoff = Timestamp::new(&gc_cutoff_text)
+            .map_err(|_| StorageError::InvalidRequest("timestamp shape"))?;
+        let (removed, freed, unreferenced) =
+            sweep_unreferenced_attachments(&mut tx, &gc_cutoff, &at).await?;
+        sweep.attachments += removed;
+        sweep.freed_bytes += freed;
+        files.extend(unreferenced);
         // ⑤ 到期审计
         let audit_threshold = threshold(&at, policy.audit_retention_days)?;
         sweep.audit = sqlx::query("DELETE FROM imported_audit WHERE at <= ?1")
@@ -2719,12 +3317,18 @@ impl SessionStore for SqliteStore {
         let still_over_limit = over_capacity(&mut tx, &policy, None, &self.measure_sql).await?;
         tx.commit().await.db()?;
         remove_attachment_files(&self.config, &files);
+        // 传输临时文件（不在 `owned_attachment` 里）在提交之后删除：崩溃最坏留下一个孤儿文件，而
+        // 孤儿回收不会碰 `.transfers/` 子目录，因此这里必须自己删。
+        for path in temporary {
+            let _ = std::fs::remove_file(path);
+        }
 
         Ok(PruneReport {
             removed_events: sweep.events,
             removed_interactions: sweep.interactions,
             removed_attachments: sweep.attachments,
             removed_audit: sweep.audit,
+            removed_messages: sweep.messages,
             freed_bytes: sweep.freed_bytes,
             still_over_limit,
         })
@@ -3026,7 +3630,7 @@ impl ReadView for SqlReadView {
             "SELECT i.interaction_id, i.kind, i.session_id, i.created_at, e.event_id \
              FROM owned_interaction i \
              LEFT JOIN owned_event e ON e.global_sequence = i.request_event \
-             WHERE i.session_id = ?1 AND i.state = 'pending' \
+             WHERE i.session_id = ?1 AND i.state = 'pending' AND i.invalidated_at IS NULL \
              ORDER BY i.created_at ASC, i.interaction_id ASC",
         )
         .bind(session.as_str())
@@ -3213,6 +3817,135 @@ impl ReadView for SqlReadView {
         } else {
             (Vec::new(), false)
         };
+        // 消息正文页（`owned_message` 的权威正文）：按 `(created_at, message_id)` 复合游标取**一页**，
+        // 而不是整段会话历史。`messages_limit = 0` 或未开 `include.messages` 时完全不查这两张表。
+        let (messages, messages_has_earlier) = if query.include.messages
+            && query.messages_limit.events() > 0
+        {
+            let page_size = query.messages_limit.events();
+            let fetch = i64::from(page_size) + 1;
+            let (before_created, before_id) = match &query.before_messages {
+                Some(cursor) => (
+                    Some(cursor.created_at.as_str().to_owned()),
+                    Some(cursor.message_id.as_str().to_owned()),
+                ),
+                None => (None, None),
+            };
+            let rows = sqlx::query(
+                "SELECT message_id, session_id, turn_id, channel, state, content_json, \
+                            partial_reason, created_at, updated_at \
+                     FROM owned_message WHERE session_id = ?1 \
+                     AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND message_id < ?3)) \
+                     ORDER BY created_at DESC, message_id DESC LIMIT ?4",
+            )
+            .bind(query.session.as_str())
+            .bind(before_created.as_deref())
+            .bind(before_id.as_deref())
+            .bind(fetch)
+            .fetch_all(&mut **guard)
+            .await
+            .db()?;
+            let has_earlier = rows.len() as u32 > page_size;
+            let mut rows = rows;
+            rows.truncate(page_size as usize);
+            // 取的时候按倒序（最新一页），返回给调用方时翻回升序。
+            rows.reverse();
+            let ids: Vec<String> = rows
+                .iter()
+                .map(|row| text(row, "message_id"))
+                .collect::<Result<_, _>>()?;
+            // media 只查本页消息（`IN (…)` 的占位符数量 = 本页消息数，必然有界）。
+            let media_rows = if ids.is_empty() {
+                Vec::new()
+            } else {
+                let placeholders = vec!["?"; ids.len()].join(", ");
+                let sql = format!(
+                    "SELECT r.message_id, r.position, r.attachment_id, r.kind, a.media_type, \
+                                a.byte_length, a.sha256 \
+                         FROM owned_media_ref r \
+                         JOIN owned_attachment a ON a.attachment_id = r.attachment_id \
+                         WHERE r.message_id IN ({placeholders}) \
+                         ORDER BY r.message_id ASC, r.position ASC"
+                );
+                let mut media_query = sqlx::query(&sql);
+                for id in &ids {
+                    media_query = media_query.bind(id);
+                }
+                media_query.fetch_all(&mut **guard).await.db()?
+            };
+            let mut by_message: std::collections::HashMap<String, Vec<MediaReference>> =
+                std::collections::HashMap::new();
+            for row in &media_rows {
+                let message_id = text(row, "message_id")?;
+                let kind: MediaKind =
+                    text(row, "kind")?
+                        .parse()
+                        .map_err(|_| StorageError::ColumnValue {
+                            column: "owned_media_ref.kind",
+                            expected: "image|audio|file",
+                        })?;
+                let reference = MediaReference::try_new(
+                    decode(
+                        &text(row, "attachment_id")?,
+                        "owned_media_ref.attachment_id",
+                    )?,
+                    query.session.clone(),
+                    kind,
+                    &text(row, "media_type")?,
+                    u64::try_from(int(row, "byte_length")?).unwrap_or(0),
+                    decode(&text(row, "sha256")?, "owned_attachment.sha256")?,
+                    None,
+                    acp_core::model::MediaAvailability::Available,
+                )
+                .map_err(|_| PortError::Corrupt("stored media reference is invalid"))?;
+                by_message.entry(message_id).or_default().push(reference);
+            }
+            let mut messages = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let message_id_text = text(row, "message_id")?;
+                let channel: MessageChannel =
+                    text(row, "channel")?
+                        .parse()
+                        .map_err(|_| StorageError::ColumnValue {
+                            column: "owned_message.channel",
+                            expected: "reply|thought",
+                        })?;
+                let state: MessageState =
+                    text(row, "state")?
+                        .parse()
+                        .map_err(|_| StorageError::ColumnValue {
+                            column: "owned_message.state",
+                            expected: "partial|completed|failed|cancelled",
+                        })?;
+                let reason: Option<PartialReason> = match opt_text(row, "partial_reason")? {
+                    Some(text) => Some(text.parse().map_err(|_| StorageError::ColumnValue {
+                        column: "owned_message.partial_reason",
+                        expected: "agent_stopped|agent_failed|turn_cancelled|connection_lost|retention_expired",
+                    })?),
+                    None => None,
+                };
+                messages.push(
+                    MessageRecord::try_new(
+                        decode(&message_id_text, "owned_message.message_id")?,
+                        query.session.clone(),
+                        decode_opt(opt_text(row, "turn_id")?, "owned_message.turn_id")?,
+                        channel,
+                        PartialResult::try_new(state, reason)
+                            .map_err(|_| PortError::Corrupt("stored message result is invalid"))?,
+                        acp_core::model::JsonValueText::new(&text(row, "content_json")?).map_err(
+                            |_| PortError::Corrupt("stored message content is not json"),
+                        )?,
+                        by_message.remove(&message_id_text).unwrap_or_default(),
+                        decode(&text(row, "created_at")?, "owned_message.created_at")?,
+                        decode(&text(row, "updated_at")?, "owned_message.updated_at")?,
+                    )
+                    .map_err(|_| PortError::Corrupt("stored message is invalid"))?,
+                );
+            }
+            (messages, has_earlier)
+        } else {
+            (Vec::new(), false)
+        };
         let turns = if query.include.turns {
             let rows = sqlx::query(&format!(
                 "SELECT {TURN_COLUMNS} FROM owned_turn WHERE session_id = ?1 ORDER BY queue_index ASC"
@@ -3231,7 +3964,8 @@ impl ReadView for SqlReadView {
         let interactions = if query.include.pending_interactions {
             let rows = sqlx::query(&format!(
                 "SELECT {INTERACTION_COLUMNS} FROM owned_interaction WHERE session_id = ?1 \
-                 AND state = 'pending' ORDER BY created_at ASC, interaction_id ASC"
+                 AND state = 'pending' AND invalidated_at IS NULL \
+                 ORDER BY created_at ASC, interaction_id ASC"
             ))
             .bind(query.session.as_str())
             .fetch_all(&mut **guard)
@@ -3281,6 +4015,8 @@ impl ReadView for SqlReadView {
             events,
             history,
             history_has_earlier,
+            messages,
+            messages_has_earlier,
             turns,
             interactions,
             // 活体数据由用例层合并（`HistoryPage` 的文档注释）：持久层不保存 config/capabilities。
@@ -3906,7 +4642,7 @@ fn attachment_relative_path(digest: &Digest) -> String {
     format!("{}/{}", migrate::ATTACHMENTS_DIR, digest.as_str())
 }
 
-fn attachment_file_path(config: &StorageConfig, relative_path: &str) -> PathBuf {
+pub(crate) fn attachment_file_path(config: &StorageConfig, relative_path: &str) -> PathBuf {
     match relative_path.strip_prefix(&format!("{}/", migrate::ATTACHMENTS_DIR)) {
         Some(name) => config.attachment_dir.join(name),
         None => config.data_dir.join(relative_path),
@@ -4040,6 +4776,7 @@ impl AttachmentStore for SqliteStore {
         session: &SessionId,
         attachment: &AttachmentId,
         generation: AttachmentGeneration,
+        at: Timestamp,
     ) -> Result<(), PortError> {
         self.writable()?;
         let (digest, _) = self
@@ -4069,6 +4806,14 @@ impl AttachmentStore for SqliteStore {
         .execute(&mut *tx)
         .await
         .db()?;
+        // 内容寻址去重让旧字节复用同一行（`created_at` 仍是首次上传的时刻），因此绑定必须把
+        // 「最近一次使用」刷新到本次绑定的 `at`：`prune` 的链接清理与按引用 GC 都以它为界。
+        sqlx::query("UPDATE owned_attachment SET last_used_at = ?1 WHERE attachment_id = ?2")
+            .bind(at.as_str())
+            .bind(attachment.as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?;
         tx.commit().await.db()?;
         Ok(())
     }
@@ -4134,9 +4879,8 @@ impl AttachmentStore for SqliteStore {
 
     async fn prune_lru(&self, budget_bytes: u64, at: Timestamp) -> Result<PruneReport, PortError> {
         self.writable()?;
-        let _ = at;
         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
-        let (removed, freed, files) = sweep_attachments(&mut tx, budget_bytes).await?;
+        let (removed, freed, files) = sweep_attachments(&mut tx, budget_bytes, &at).await?;
         tx.commit().await.db()?;
         remove_attachment_files(&self.config, &files);
         let attached: i64 =

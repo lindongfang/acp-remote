@@ -21,6 +21,7 @@
  */
 
 import type { MessageView } from "../domain/conversation";
+import type { AgentMessageContent, MediaBlockView, PartialResultView } from "../domain/media";
 import type { InteractionAvailability, InteractionView } from "../domain/interaction";
 import type { FileDiffView, StructuredRecord, TimelineCard } from "../domain/timeline";
 import { buildTimelineCard, compareTimelinePosition, groupStructuredRecords, positionOf, recordGroupOf } from "../domain/timeline";
@@ -55,11 +56,81 @@ export interface VolatileMessageState {
   readonly createdAt: string;
   readonly deltas: ReadonlyMap<string, string>;
   readonly completed: boolean;
+  /** 增量里携带的媒体/资源块（按到达顺序）。 */
+  readonly mediaBlocks: readonly MediaBlockView[];
+  /** 终态的部分结果（`agent.message.completed.partial` 或 turn 失败/停止的标注）。 */
+  readonly partial: PartialResultView | null;
 }
 
 /** 易失正文：按到达次序拼接各次增量。 */
 export function volatileText(state: VolatileMessageState): string {
   return [...state.deltas.values()].join("");
+}
+
+/**
+ * 读取结果之后**仍然有效**的易失增量（按 `deltaIndex` 数值升序）。
+ *
+ * 读取结果会清掉「发起读取时已经存在」的增量；此后新到的增量留在叠加层里。时间线把这一段
+ * 接在权威正文之后，因此旧的读取结果不会把新内容抹掉（D5 的屏障语义）。没有残留时为 `""`。
+ */
+export function residualVolatileText(state: VolatileMessageState): string {
+  return [...state.deltas.entries()]
+    .sort((a, b) => (BigInt(a[0]) < BigInt(b[0]) ? -1 : 1))
+    .map(([, text]) => text)
+    .join("");
+}
+
+/**
+ * 把读取屏障之后到达的媒体块并入权威内容（按 `attachmentId` / `uri` 去重）。
+ *
+ * 读取屏障只清 `deltas`、不清 `mediaBlocks`；读取结果本身也可能已经带出同一附件。因此纯媒体
+ * 增量（`text` 为空、只有 `block`）在读取结果之后到达时，只能把**尚未出现过的**块追加进去。
+ * 没有稳定标识的块（无附件标识的图片/音频、`unsupported`）无法判断是否重复，按到达顺序保留。
+ */
+function mergeMediaBlocks(content: AgentMessageContent, blocks: readonly MediaBlockView[]): AgentMessageContent {
+  if (blocks.length === 0) return content;
+  const seen = new Set<string>();
+  for (const block of content.media) {
+    switch (block.kind) {
+      case "image":
+      case "audio":
+        if (block.attachmentId !== null) seen.add(`attachment:${block.attachmentId}`);
+        break;
+      case "file":
+        seen.add(`attachment:${block.attachmentId}`);
+        break;
+      case "resource":
+        seen.add(`resource:${block.uri}`);
+        break;
+      case "unsupported":
+        break;
+    }
+  }
+  const added: MediaBlockView[] = [];
+  for (const block of blocks) {
+    let identity: string | null = null;
+    switch (block.kind) {
+      case "image":
+      case "audio":
+        identity = block.attachmentId === null ? null : `attachment:${block.attachmentId}`;
+        break;
+      case "file":
+        identity = `attachment:${block.attachmentId}`;
+        break;
+      case "resource":
+        identity = `resource:${block.uri}`;
+        break;
+      case "unsupported":
+        break;
+    }
+    if (identity !== null) {
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+    }
+    added.push(block);
+  }
+  if (added.length === 0) return content;
+  return { ...content, media: [...content.media, ...added], hasStructuredContent: true };
 }
 
 /**
@@ -78,6 +149,7 @@ export function appendDelta(
     readonly deltaIndex: string;
     readonly text: string;
     readonly createdAt: string;
+    readonly mediaBlocks?: readonly MediaBlockView[];
   },
 ): VolatileMessageState {
   if (state === undefined) {
@@ -89,12 +161,21 @@ export function appendDelta(
       createdAt: input.createdAt,
       deltas: new Map([[input.deltaIndex, input.text]]),
       completed: false,
+      mediaBlocks: input.mediaBlocks ?? [],
+      partial: null,
     };
   }
   if (state.deltas.has(input.deltaIndex)) return state;
   const deltas = new Map(state.deltas);
   deltas.set(input.deltaIndex, input.text);
-  return { ...state, deltas };
+  return {
+    ...state,
+    deltas,
+    mediaBlocks:
+      input.mediaBlocks === undefined || input.mediaBlocks.length === 0
+        ? state.mediaBlocks
+        : [...state.mediaBlocks, ...input.mediaBlocks],
+  };
 }
 
 /** 增量事件类型 → 频道；不是增量事件时返回 `null`。 */
@@ -119,6 +200,8 @@ export interface MessageTimelineEntry extends TimelineEntryBase {
   readonly volatile: boolean;
   /** 增量流是否已被 `agent.message.completed` 标记结束（与「已持久化」无关）。 */
   readonly streamComplete: boolean;
+  /** 停止/失败/断线时的部分结果标注；完成或未标注为 `null`。 */
+  readonly partial: PartialResultView | null;
 }
 
 /** 一张结构化卡片条目。 */
@@ -165,23 +248,45 @@ export function buildTimeline(input: {
   readonly interactions: readonly InteractionView[];
 }): readonly TimelineEntry[] {
   const entries: TimelineEntry[] = [];
+  const volatileById = new Map(input.volatile.map((tail) => [tail.messageId, tail]));
   const readIds = new Set(input.messages.map((message) => message.id));
 
   for (const message of input.messages) {
+    // 读取结果之后到达的增量：接在权威正文之后，而不是被这条（较早的）读取结果抹掉。
+    const tail = volatileById.get(message.id);
+    const residual = tail === undefined ? "" : residualVolatileText(tail);
+    const mergedText =
+      residual.length === 0
+        ? message.text
+        : // 服务端读取与本地增量可能重叠：读到尾巴里已经包含这一段时不重复拼接。
+          message.text.endsWith(residual)
+          ? message.text
+          : message.text + residual;
+    // 媒体块同样跨越读取屏障：纯媒体增量（空文本 + 块）不会产生残留正文，若只按 `residual`
+    // 判断就会连同第二条循环一起丢掉。读取结果已带出的同一附件按标识去重。
+    const textContent =
+      mergedText === message.text ? message.content : { ...message.content, text: mergedText };
+    const content = mergeMediaBlocks(textContent, tail?.mediaBlocks ?? []);
     entries.push({
       kind: "message",
       key: `message:${message.id}`,
       createdAt: message.createdAt,
       sequence: null,
-      channel: message.role,
-      message,
-      volatile: false,
-      streamComplete: true,
+      channel: message.role === "user" ? "user" : message.channel === "thought" ? "thought" : "agent",
+      message: {
+        ...message,
+        text: mergedText,
+        content,
+        hasStructuredContent: message.hasStructuredContent || content.hasStructuredContent,
+      },
+      volatile: residual.length > 0,
+      streamComplete: tail?.completed ?? true,
+      partial: tail?.partial ?? message.partial,
     });
   }
 
   for (const tail of input.volatile) {
-    // 读取结果已经给出同 id 的完整正文：以它为准，易失条目不再呈现（MUST NOT 叠加成重复文本）。
+    // 读取结果已经给出同 id 的正文：残留增量已在上面并入那条权威消息，不再另起一条。
     if (readIds.has(tail.messageId)) continue;
     entries.push({
       kind: "message",
@@ -193,13 +298,21 @@ export function buildTimeline(input: {
         id: tail.messageId,
         // 思考也是 Agent 产生的：`role` 只表达「谁说的」，`channel` 才区分正文/思考。
         role: tail.channel === "user" ? "user" : "agent",
+        channel: tail.channel === "thought" ? "thought" : "reply",
         text: volatileText(tail),
-        hasStructuredContent: false,
+        content: {
+          text: volatileText(tail),
+          media: tail.mediaBlocks,
+          hasStructuredContent: tail.mediaBlocks.length > 0,
+        },
+        hasStructuredContent: tail.mediaBlocks.length > 0,
+        partial: tail.partial,
         createdAt: tail.createdAt,
         turnId: tail.turnId,
       },
       volatile: true,
       streamComplete: tail.completed,
+      partial: tail.partial,
     });
   }
 
@@ -299,4 +412,74 @@ export function buildFileChangeViews(records: readonly StructuredRecord[]): read
     });
   }
   return views;
+}
+
+/**
+ * 一个**轮次分组**：由用户发送及其引发的条目组成；未归属轮次的条目单独成组。
+ *
+ * 这里的「归属」只来自可靠标识（消息的 `turnId`、工具/授权/提问卡片的 `turnId`、轮次卡片自身），
+ * **不**按呈现顺序猜测。标识相同的连续条目进同一组；组序即它们在时间线上的位置。没有标识的条目
+ * （终端输出块、计划、文件改动、降级卡片等）保持独立按时间出现——宁可多一个独立块，也不猜分组。
+ */
+export interface TimelineTurnGroup {
+  readonly key: string;
+  readonly turnId: string | null;
+  /** 轮次状态（组内最新的轮次卡片）；没有轮次卡片为 `null`。 */
+  readonly state: string | null;
+  readonly entries: readonly TimelineEntry[];
+}
+
+/** 条目所属的轮次标识（只认可靠标识；取不到返回 `null`）。 */
+function entryTurnId(entry: TimelineEntry): string | null {
+  switch (entry.kind) {
+    case "message":
+      return entry.message.turnId;
+    case "turn":
+      return entry.turnId;
+    case "tool_call":
+      return entry.turnId;
+    case "permission_requested":
+    case "elicitation_requested":
+      return entry.turnId;
+    default:
+      return null;
+  }
+}
+
+/**
+ * 把已排序的时间线条目切成轮次分组。
+ *
+ * 纯函数：同一份条目换个次序时不变量仍成立（「同一标识连续出现才同组」），因此组件只负责画，
+ * 分组的对错可以在单测里直接断言。
+ */
+export function groupTimelineEntries(entries: readonly TimelineEntry[]): readonly TimelineTurnGroup[] {
+  const groups: TimelineTurnGroup[] = [];
+  // 同一 turnId 可能因中间夹着无标识条目（授权结果、计划、文件改动等）而切成**多个**组。
+  // 这些组的 `turnId` 合法地相同，但 React 兄弟节点的 key 必须唯一：第一次出现保持
+  // `turn:<turnId>`（常见路径不变，前置历史时键也不漂移），再次出现追加出现序号。
+  const occurrences = new Map<string, number>();
+  for (const entry of entries) {
+    const turnId = entryTurnId(entry);
+    const last = groups[groups.length - 1];
+    if (turnId !== null && last !== undefined && last.turnId === turnId) {
+      const state = entry.kind === "turn" ? entry.state : last.state;
+      groups[groups.length - 1] = { ...last, entries: [...last.entries, entry], state };
+      continue;
+    }
+    let key: string;
+    if (turnId === null) {
+      key = `entry:${entry.key}`;
+    } else {
+      const ordinal = occurrences.get(turnId) ?? 0;
+      occurrences.set(turnId, ordinal + 1);
+      key = ordinal === 0 ? `turn:${turnId}` : `turn:${turnId}#${String(ordinal)}`;
+    }
+    groups.push({
+      key,
+      turnId,
+      state: entry.kind === "turn" ? entry.state : null,
+      entries: [entry],
+    });
+  }
+  return groups;
 }

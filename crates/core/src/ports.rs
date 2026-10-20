@@ -20,19 +20,20 @@ use async_trait::async_trait;
 
 use crate::model::{
     Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId, AttachmentGeneration,
-    AttachmentId, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, CommandKind,
-    CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery, CommittedEvent,
-    ConfigOption, ConfigOptionId, ConfigValue, ContentSnapshot, ContentVersion,
-    CreateSessionRequest, DeviceId, DeviceRecord, Digest, DirectoryId, DirectoryRecord,
-    EndpointEvent, EntityRef, EventId, EventOrigin, EventPayload, EventType, FileReadPurpose,
-    GitDiff, GitStatusPage, GlobalCursor, InteractionId, InteractionResolution, LocalCursor,
-    MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
+    AttachmentId, AttachmentSubject, AttachmentSubmission, AttachmentTransfer, AuditAction,
+    AuditOutcome, AuditRecord, CapabilitySet, CommandKind, CommandRecord, CommandStatus,
+    CommandTerminalRecord, CommittedDelivery, CommittedEvent, ConfigOption, ConfigOptionId,
+    ConfigValue, ContentSnapshot, ContentVersion, CreateSessionRequest, DeviceId, DeviceRecord,
+    Digest, DirectoryId, DirectoryRecord, EffectiveInteraction, EndpointEvent, EntityRef, EventId,
+    EventOrigin, EventPayload, EventType, FileReadPurpose, GitDiff, GitStatusPage, GlobalCursor,
+    InteractionId, InteractionResolution, JsonValueText, LocalCursor, MessageId, MessageRecord,
+    ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
     OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
     PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
-    PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest, Sequence, ServerEpoch,
-    SessionFileChunk, SessionFilePage, SessionFilePath, SessionId, SessionPageToken,
-    SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState, SessionSummary,
-    Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
+    PublicError, RemoteSessionRef, RequestId, Resolution, ResumeSessionRequest, SealedAttachment,
+    Sequence, ServerEpoch, SessionFileChunk, SessionFilePage, SessionFilePath, SessionId,
+    SessionPageToken, SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState,
+    SessionSummary, SubmissionId, Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -136,6 +137,10 @@ pub trait SessionEndpoint: Send + Sync {
         request: PromptRequest,
         at: Timestamp,
     ) -> Result<TurnAccepted, PortError>;
+
+    /// 派发前的只读能力/帧预算预检。本地 Agent 端点据此在命令受理前拒绝不支持的媒体或
+    /// 超预算的 prompt，避免「先 accepted 再 turn.failed」并丢失客户端草稿。
+    async fn validate_prompt(&self, request: &PromptRequest) -> Result<(), PortError>;
 
     async fn cancel(&self, turn: Option<TurnId>) -> Result<(), PortError>;
 
@@ -429,6 +434,21 @@ pub struct CommitOutcome {
     pub replayed: Option<IdempotentReplay>,
 }
 
+/// prompt 受理时需要与命令同事务绑定的附件清单（`SYNC_PROTOCOL.md` §11.5 的 `submissionId`）。
+///
+/// `attachments` 是清单的**权威顺序**（与 `AttachmentSubmission::attachments` 逐项相同）；存储层在同一
+/// 事务里重新核对「清单已封存、会话/主体一致、每个附件仍存在且文件可读」，任一失败整事务回滚，
+/// 因此命令不会被受理，也不会派发给 Agent。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionBinding {
+    pub submission: SubmissionId,
+    pub attachments: Vec<AttachmentId>,
+    /// 认证主体（`device`/`node`）：存储层在**同一事务**里与清单行的 `subject_kind`/`subject_id`
+    /// 逐项比较，任一不符整事务回滚。主体因此不只由调用方在事务外校验（`UseCases` 也只做预检）——
+    /// 任何直接调用 `commit_with_submission` 的路径都不能绕过它。
+    pub subject: AttachmentSubject,
+}
+
 /// `session.list` 的过滤条件。授权过滤由用例层完成，存储层只按这里的条件取行。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionQuery {
@@ -453,6 +473,18 @@ pub struct HistoryInclude {
     pub history: bool,
 }
 
+/// 会话消息的分页游标：`(createdAt, messageId)` 复合游标。
+///
+/// `owned_message` 没有会话内序号，正文页按「创建时间 + 标识」稳定排序（同毫秒的消息靠标识决定先后）。
+/// 它只作用于 [`HistoryPage::messages`]，与 `events` 的 `after`（全局游标）和 `history` 的
+/// `before_history`（会话内序号）各自独立分页；取值只能来自上一页最早一条
+/// [`MessageRecord::created_at`]/[`MessageRecord::message_id`]，实现不得据此猜测或补全。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageCursor {
+    pub created_at: Timestamp,
+    pub message_id: MessageId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryQuery {
     pub session: SessionId,
@@ -471,7 +503,47 @@ pub struct HistoryQuery {
     /// [`PortError::InvalidRequest`]，MUST NOT 静默返回更少的条目让调用方误以为已到最早一条；游标正好
     /// 等于该下界时是合法的一页边界（空页 + 无更早条目，不是错误）。
     pub before_history: Option<Sequence>,
+    /// 消息正文页的游标：只返回 `(created_at, message_id)` **严格早于**它的 `owned_message` 行；
+    /// `None` = 最新一页。与 `before_history` 相同，只影响 [`HistoryPage::messages`].
+    pub before_messages: Option<MessageCursor>,
+    /// 消息正文页大小（与 `limit` 各自独立分页）：实现最多返回这么多条 `HistoryPage::messages`
+    /// （并据多取一条决定页标记），`0` 表示本请求不取正文。
+    pub messages_limit: ReplayLimit,
     pub limit: ReplayLimit,
+}
+
+/// Access 侧 imported 会话在线回源的读取页（[`RemoteSessionReads::read_imported`] 的返回值）。
+///
+/// `document` 是 Owner 的 `session.read` 完成结果原文（`SessionReadResult` 形状），**逐字节**保留：
+/// Access 只转发页边界与无正文索引，不重新解释正文，也不把它写入数据库、临时文件或日志
+/// （`NODE_LINK_PROTOCOL.md` §12.10、`AGENTS.md` §7）。本地 wire 投影由 Sync/Node Link 适配器在
+/// 内存中完成。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedRead {
+    pub document: JsonValueText,
+}
+
+/// imported 会话回源的入参（与 [`HistoryQuery`] 同义，去掉只对 owned 事件日志有意义的 `after`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedReadQuery {
+    pub include: HistoryInclude,
+    pub before_history: Option<Sequence>,
+    pub before_messages: Option<MessageCursor>,
+    pub messages_limit: ReplayLimit,
+    pub limit: ReplayLimit,
+}
+
+/// Access 侧 imported 会话的在线读取端口（`node-link-client::RemoteSession` 的实现由组合根装配）。
+///
+/// 实现必须在 Owner 不可达时返回 [`UnavailableKind::OwnerOffline`]（或 `RemoteUnavailable`），
+/// **不得**用空历史或空正文冒充成功；正文只在调用栈上存在，不落盘。
+#[async_trait]
+pub trait RemoteSessionReads: Send + Sync {
+    async fn read_imported(
+        &self,
+        session: &RemoteSessionRef,
+        query: ImportedReadQuery,
+    ) -> Result<ImportedRead, PortError>;
 }
 
 /// owned 事件 + 其持久化正文（Node Link 的 origin 重放、会话历史读与事件扇出共用；定位与正文严格
@@ -591,6 +663,17 @@ pub struct HistoryPage {
     /// [`HistoryPage::history`] 之前是否仍有更早条目（`SYNC_PROTOCOL.md` §11.5 的 `historyHasEarlier`）；
     /// `include.history` 为假时恒为假。为假只表示已到该会话**仍可读**的最早一条。
     pub history_has_earlier: bool,
+    /// 该会话的权威消息正文（`owned_message`；`include.messages` 为假或 `messages_limit` 为 0 时为空）。
+    ///
+    /// 回复与思考分别持久化（`channel` 区分），停止/失败/断线保留已收到正文并标记 `result`；
+    /// 正文只从这里取，**不**从 `events`/`history` 重复拼接（§7.6）。
+    ///
+    /// **一页**：按 `(created_at, message_id)` 升序返回，最多 `HistoryQuery::messages_limit` 条；
+    /// 省略 `before_messages` 时是最新一页，带游标时是严格更早的一页。
+    pub messages: Vec<MessageRecord>,
+    /// [`HistoryPage::messages`] 之前是否仍有更早消息；关闭 `include.messages` 或 `messages_limit = 0`
+    /// 时恒为假（本页不是消息页，不能据此推断「没有更早消息」）。
+    pub messages_has_earlier: bool,
     pub turns: Vec<Turn>,
     pub interactions: Vec<PendingInteraction>,
     pub config: Vec<ConfigOption>,
@@ -604,6 +687,25 @@ pub struct HistoryPage {
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError>;
+
+    /// 与 [`SessionStore::commit`] 相同的原子提交，并在**同一事务**里绑定 prompt 的附件清单
+    /// （§5.8/§6 第 22 条）：重新核对清单已封存、会话/主体一致、每个附件仍存在且文件可读，
+    /// 再把附件引用写入会话绑定。
+    ///
+    /// 默认实现只支持 `binding = None`：不实现该能力的存储（测试替身或旧适配器）收到清单时显式
+    /// `InvalidRequest`，绝不静默丢掉绑定后继续受理。
+    async fn commit_with_submission(
+        &self,
+        commit: OwnedCommit,
+        binding: Option<SubmissionBinding>,
+    ) -> Result<CommitOutcome, PortError> {
+        match binding {
+            None => self.commit(commit).await,
+            Some(_) => Err(PortError::InvalidRequest(
+                "this SessionStore does not implement attachment submission binding",
+            )),
+        }
+    }
 
     /// Actor-scoped terminal commit for workspace.mkdir only. Same atomicity as commit,
     /// but locates the unsessioned command by the full (actor, requestId) key.
@@ -626,6 +728,17 @@ pub trait SessionStore: Send + Sync {
     /// 实现 MUST NOT 按 `owned_session.workspace_cwd` 反查别名解析表来补出归属：`NULL` 就是未分组，
     /// 「不反查」是恢复与归属稳定（别名重指向不改变既有会话归属）的前提（§3.6、`design.md` D1/D6）。
     async fn list(&self, query: SessionQuery) -> Result<Vec<SessionSummary>, PortError>;
+
+    /// 批量读取会话的 origin epoch（`owned_session.origin_epoch`）。
+    ///
+    /// 唯一生产调用方是 Node Link 的 catalog 投影（`NODE_LINK_PROTOCOL.md` §12.3 的
+    /// `catalog.session.originEpoch`）：catalog 是 Access 在收到第一个 `resource.event` **之前**唯一
+    /// 能取得该会话 origin epoch 的地方，缺它会让 imported 会话在本地不可发现。读面只返回存在的会话；
+    /// 不存在的标识不出现在结果里（调用方按「未知」处置，不补值）。本方法只读、无正文、不改 cursor。
+    async fn origin_epochs(
+        &self,
+        sessions: &[SessionId],
+    ) -> Result<Vec<(SessionId, OriginEpoch)>, PortError>;
 
     async fn head(&self) -> Result<GlobalCursor, PortError>;
 
@@ -915,6 +1028,8 @@ pub struct PruneReport {
     pub removed_interactions: u64,
     pub removed_attachments: u64,
     pub removed_audit: u64,
+    /// 随正文保留期清理的消息行（`owned_message`；媒体引用随外键级联删除）。
+    pub removed_messages: u64,
     pub freed_bytes: u64,
     /// 清理后仍超出容量上限：写路径必须返回 `PortError::Unavailable(UnavailableKind::StorageFull)`。
     pub still_over_limit: bool,
@@ -1218,11 +1333,17 @@ pub trait AttachmentStore: Send + Sync {
 
     async fn get(&self, id: &AttachmentId) -> Result<Option<Vec<u8>>, PortError>;
 
+    /// 建立会话对附件的归属（附件授权与 GC 根的唯一来源）。
+    ///
+    /// `at` 是本链接的绑定时刻：实现必须把附件的 `last_used_at` 刷新到它。按引用 GC 与消息保留期
+    /// 回收都以「最近一次使用」为界（§7.5），内容寻址去重让旧字节复用同一个附件行（行上保留**首次**
+    /// 上传的 `created_at`），所以刚绑定的旧内容只能靠这次刷新免于下一轮清理。
     async fn link(
         &self,
         session: &SessionId,
         attachment: &AttachmentId,
         generation: AttachmentGeneration,
+        at: Timestamp,
     ) -> Result<(), PortError>;
 
     /// 按 LRU 清理到给定字节预算以下；返回被删除的附件。
@@ -1233,6 +1354,206 @@ pub trait AttachmentStore: Send + Sync {
     ///
     /// 一律在事务之外运行（文件删除只在行事务提交之后）；失败不阻止启动。
     async fn sweep_orphans(&self, at: Timestamp, limit: u32) -> Result<u32, PortError>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// §5.8 分块附件与有效交互（运行时无关）
+// ---------------------------------------------------------------------------------------------
+
+/// 开始一次附件传输（`attachment.begin`）。
+///
+/// `transfer` 由客户端给出（该次传输的稳定标识）：`chunk`/`seal`/`status`/`abort` 复用它。
+/// `total_length` 是无损整数（wire 上是十进制字符串）；`at` 由调用方传入，存储层不读系统时钟。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferBegin {
+    pub transfer: AttachmentId,
+    pub session: SessionId,
+    pub subject: AttachmentSubject,
+    pub total_length: u64,
+    pub media_type: String,
+    pub file_name: String,
+    pub at: Timestamp,
+}
+
+/// 追加一块原始数据（`attachment.chunk`）。`data.len()` 不得超过
+/// [`ATTACHMENT_CHUNK_SIZE`](crate::model::ATTACHMENT_CHUNK_SIZE)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferChunk {
+    pub transfer: AttachmentId,
+    pub offset: u64,
+    pub data: Vec<u8>,
+    pub at: Timestamp,
+}
+
+/// 块确认：`next_offset` 是该传输已确认的下一偏移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkOutcome {
+    pub next_offset: u64,
+    pub duplicate: bool,
+}
+
+/// 封存传输（`attachment.seal`）：`length` 是完整长度、`sha256` 是整段原始字节的流式摘要。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferSeal {
+    pub transfer: AttachmentId,
+    pub length: u64,
+    pub sha256: Digest,
+    pub at: Timestamp,
+}
+
+/// 开始登记一次提交清单（`attachment.manifest_begin`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionBegin {
+    pub submission: SubmissionId,
+    pub session: SessionId,
+    pub subject: AttachmentSubject,
+    pub attachment_count: u64,
+    pub at: Timestamp,
+}
+
+/// 一页清单（`attachment.manifest_page`）。`start_position` 是该页第一项的清单位置；
+/// `attachments` 的长度不得超过 [`ATTACHMENT_MANIFEST_PAGE`](crate::model::ATTACHMENT_MANIFEST_PAGE)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionPage {
+    pub submission: SubmissionId,
+    pub start_position: u64,
+    pub attachments: Vec<AttachmentId>,
+    pub at: Timestamp,
+}
+
+/// 清单登记进度（`begin_submission`/`append_submission_page` 的返回值）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionProgress {
+    pub submission: SubmissionId,
+    /// 已登记项数。
+    pub registered: u64,
+    /// 客户端声明的总数。
+    pub attachment_count: u64,
+    pub sealed: bool,
+}
+
+/// 封存清单（`attachment.manifest_sealed`）：整批复核（会话/主体/封存/数量/摘要）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionSeal {
+    pub submission: SubmissionId,
+    pub session: SessionId,
+    pub subject: AttachmentSubject,
+    /// 与分页登记的内容**逐项相同**的整批清单（顺序即清单顺序）。
+    pub attachments: Vec<AttachmentId>,
+    pub digest: Digest,
+    pub at: Timestamp,
+}
+
+/// 读取已封存附件的一段（`attachment.read`）。`max_length` 上限为 32 KiB。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentRead {
+    pub attachment: AttachmentId,
+    pub session: SessionId,
+    pub offset: u64,
+    pub max_length: u64,
+}
+
+/// 一段附件数据（`attachment.read_chunk`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentChunk {
+    pub offset: u64,
+    pub data: Vec<u8>,
+    pub total_length: u64,
+    pub eof: bool,
+}
+
+/// 分块附件端口（`docs/CORE_PORTS_AND_STORAGE.md` §5.8）：临时文件 + 元数据、流式摘要、清单与读取。
+///
+/// 与 [`AttachmentStore`]（整段字节的旧路径）的分工：新路径**不接受整文件字节**，内存工作集只与单块
+/// 大小有关，不随正文增大。两个端口都由 `storage-sqlite` 实现，组合根负责装配。
+#[async_trait]
+pub trait AttachmentTransferStore: Send + Sync {
+    /// 建临时文件与传输行（只创建，不写入任何正文）。
+    async fn begin_transfer(&self, write: TransferBegin) -> Result<AttachmentTransfer, PortError>;
+
+    /// 按期望偏移追加一块；重复同内容返回 `duplicate: true`，不同内容返回
+    /// [`ConflictKind::AlreadyExists`](crate::model::ConflictKind::AlreadyExists) 语义的冲突。
+    async fn append_chunk(&self, write: TransferChunk) -> Result<ChunkOutcome, PortError>;
+
+    /// 校验长度与流式摘要后封存：文件先写临时名，校验通过后 rename，再允许后续业务事务引用。
+    async fn seal_transfer(&self, write: TransferSeal) -> Result<SealedAttachment, PortError>;
+
+    async fn transfer(
+        &self,
+        transfer: &AttachmentId,
+    ) -> Result<Option<AttachmentTransfer>, PortError>;
+
+    /// 取消一次**仍在接收**的传输；已封存/已提交的附件不可取消。
+    async fn abort_transfer(
+        &self,
+        transfer: &AttachmentId,
+        at: Timestamp,
+    ) -> Result<AttachmentTransfer, PortError>;
+
+    /// 开始登记清单（`attachment_count` 是客户端声明的总数，封存时整批核对）。
+    async fn begin_submission(
+        &self,
+        write: SubmissionBegin,
+    ) -> Result<SubmissionProgress, PortError>;
+
+    /// 追加一页清单（幂等：同一位置重复同值是 `duplicate` 语义，不同内容拒绝）。
+    async fn append_submission_page(
+        &self,
+        write: SubmissionPage,
+    ) -> Result<SubmissionProgress, PortError>;
+
+    /// 封存整份清单：所有附件均已封存、同一会话/主体、顺序与分页登记一致、摘要与数量相符。
+    async fn finalize_submission(
+        &self,
+        write: SubmissionSeal,
+    ) -> Result<AttachmentSubmission, PortError>;
+
+    async fn submission(
+        &self,
+        submission: &SubmissionId,
+    ) -> Result<Option<AttachmentSubmission>, PortError>;
+
+    /// 读取一段已封存、且绑定到该会话的附件数据（`data.len() <= min(max_length, 32 KiB)`）。
+    async fn read_chunk(&self, request: &AttachmentRead) -> Result<AttachmentChunk, PortError>;
+
+    /// 清理闲置超过 24 小时的 `receiving` 传输（条件更新 + 事务提交后删文件），返回清理数。
+    async fn prune_transfers(&self, at: Timestamp, limit: u32) -> Result<u32, PortError>;
+}
+
+/// 一次有效性应答（`permission.resolve` / `elicitation.respond`）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectiveResolution {
+    pub interaction: InteractionId,
+    /// 目标会话：解析入口必须与行里的会话一致（跨会话请求按「不存在」处理）。
+    pub session: SessionId,
+    pub actor: Actor,
+    /// `None` = 旧 peer 未携带（只校验状态与上游存活）；`Some` 时必须等于当前版本。
+    pub request_version: Option<Version>,
+    pub resolution: InteractionResolution,
+    pub at: Timestamp,
+}
+
+/// 有效待处理交互端口（`docs/CORE_PORTS_AND_STORAGE.md` §5.8、`SYNC_PROTOCOL.md` §11.7）。
+///
+/// 与 `SessionStore::commit` 里 `state.interaction` 的分工：那条路径服务旧 peer 的「按 id 直接解析」；
+/// 本端口服务协商 `core.pending-interactions.v1` 的读-校验-原子胜出路径。首个有效答案由**条件更新**
+/// 选出（版本/状态/失效标记同一条 `WHERE`），失败校验不消费请求。
+#[async_trait]
+pub trait InteractionAuthority: Send + Sync {
+    /// 当前有效（`pending` 且未失效）的完整请求；`options`/`schema` 来自创建它的交互事件。
+    async fn effective(&self, session: &SessionId) -> Result<Vec<EffectiveInteraction>, PortError>;
+
+    /// 解析一次有效请求：版本不符 → [`ConflictKind::VersionMismatch`]，已处理 →
+    /// [`Resolution::AlreadyResolved`]，失效/不存在 → `NotFound` 或 `Conflict(Expired)`。
+    async fn resolve_effective(&self, write: EffectiveResolution) -> Result<Resolution, PortError>;
+
+    /// 把当前 `pending` 行标记为失效（上游丢失/重启恢复）：`session = None` 表示全部会话。
+    /// 失效行不可复活，也不参与 `effective`。
+    async fn invalidate_pending(
+        &self,
+        session: Option<&SessionId>,
+        at: Timestamp,
+    ) -> Result<u32, PortError>;
 }
 
 // ---------------------------------------------------------------------------------------------

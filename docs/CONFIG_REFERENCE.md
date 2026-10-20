@@ -108,6 +108,23 @@
 
 其余 Node Link 上限（握手超时 15 秒、心跳超时 90 秒、JSON 嵌套深度 64、单对象字段数 1024、单数组元素数 10000、节点名称 128 bytes）是固定 v1 常量。
 
+### 3.1 `[node_link.access]`（Access 侧出站）
+
+本机作为 **Access Node** 导入其他 Owner 时使用；只承载出站 TLS 的信任来源，不改变任何协议限额。
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `node_link.access.trust_roots` | string[] | `[]` | 追加到**系统根存储**的固定 CA（PEM 文件绝对路径）；空数组 = 只信任系统根 |
+
+- 信任集合 = 操作系统根存储 ∪ 本表列出的证书。列出的文件**不会**替换系统根，也无法关闭系统根。
+- 每条必须是非空绝对路径；相对路径会随工作目录漂移，解析期即拒绝。文件存在性与 PEM 内容在启动时校验：任一路径不可读或不含证书 → `daemon start` 失败关闭（`daemon.trust_*` 日志只记数量与文件名，不打印路径内容）。
+- 系统根与自定义 CA 都为空时同样失败关闭：不存在「空锚」或「跳过校验」的运行形态。
+- 生效路径：`app::config`（本键）→ `app::trust::OutboundTrust::load`（系统根 + PEM）→ `node-link-client` 的 `TlsTrust::Roots`（配对 claim/status 与 WSS 业务/附件连接共用同一份构造）。信任锚只在启动时加载，修改后需重启 Daemon。
+- **Owner 端点只允许 `wss://`**：持久化的 Owner 信任记录（core 的 `NodeRecord`）与配对 URL 的 `endpoint` 都只接受 `wss://`，因此出站 Owner 链路不存在明文运行形态。`node_link-client` 仍支持 `TlsTrust::PlaintextDev` 供独立传输测试使用，但 `AccessManager` 对 `http://`/`ws://` Owner 端点显式拒绝（`TrustError::PlaintextNotSupported`）；`dev_mode.enabled && dev_mode.allow_plaintext` 只服务入站监听与配对请求的 dev 形态，不放宽这里的出站链路。
+- `daemon.tls.*` 是**入站**（本机作为 Owner 终止 TLS）的设置，两者互不影响，也不互相回退。
+
+**实现现状（2026-10-20，`conversation-area-complete` WP5）**：本键已接线；`node pair --mode access` 的 claim/status 与启动时的 Owner 连接实例化都使用这里加载的信任锚。出站传输**按每条 Owner 端点**构造（`node-link-client` 的 `TransportFactory`）：`wss://` 用 `TlsTrust::Roots`，明文 scheme 在进入 `node-link-client` 之前就被拒绝；`ClientConfig.max_message_bytes` 随同一份配置进入该传输的帧/消息上限，不再是构造后被丢弃的字段。
+
 **本交付版本未接线（2026-09-26，`node-link-owner` 切片 5）**：上表七个键能被解析（仅类型层面），但 `app` 的配置加载**不消费它们**——它们被登记进 `Config::unwired`，启动时以 debug 级 `daemon.config_unwired` 逐键上报，也就是说显式配置该批键在当前交付版本里**不生效**（`net_config` 取 `NetConfig::default()` 的值）。之所以不影响行为：`NetConfig::default()` 与 `server::node_link` 的 `NodeLinkConfig::default()` 都取本节/`NODE_LINK_PROTOCOL.md` §2.5 的默认值，因此「接线后按配置下调」与当前实现的下发值一致；接线（含非法与越界取值的拒绝）属后续切片。
 
 ## 4. `sessions`

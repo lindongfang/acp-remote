@@ -21,7 +21,8 @@ use acp_core::model::{
     SessionReference, UnavailableKind,
 };
 use acp_core::ports::{
-    AgentCatalog, Clock, EventSink, IdGenerator, SessionBackendFactory, SessionEndpoint,
+    AgentCatalog, AttachmentStore, Clock, EventSink, IdGenerator, SessionBackendFactory,
+    SessionEndpoint,
 };
 use acp_protocol::Envelope;
 use acp_protocol::capability::AgentCapabilities;
@@ -34,7 +35,7 @@ use crate::error::HostError;
 use crate::launch;
 use crate::limits;
 use crate::node::{self, AgentLifecycle, ExitCause, ExitMark, NodeEvents};
-use crate::process::Supervisor;
+use crate::process::{Inbound, Supervisor};
 use crate::session::{AcpSession, Endpoint, SessionInit};
 
 /// 一个 Agent 的运行时（一个进程 + 该进程上的全部会话）。
@@ -247,6 +248,9 @@ pub struct AgentHost {
     /// 级日志。本 crate 在没有同步入站面时不发明投递通道，也**不**把节点级事件塞进某个会话的
     /// `EventSink`（那会把它们错误地归属到一个会话上）。
     node_events: Arc<std::sync::RwLock<NodeEvents>>,
+    /// 附件读取端口（组合根注入）。未接线时 `attachment_ref` 输入被**整条**拒绝——不把附件降级成
+    /// 文本、也不凭附件标识去猜内容。
+    attachments: std::sync::Mutex<Option<Arc<dyn AttachmentStore>>>,
 }
 
 impl std::fmt::Debug for AgentHost {
@@ -276,6 +280,7 @@ impl AgentHost {
             generations: std::sync::Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             node_events: Arc::new(std::sync::RwLock::new(NodeEvents::unbound())),
+            attachments: std::sync::Mutex::new(None),
         }
     }
 
@@ -300,10 +305,37 @@ impl AgentHost {
         read(&self.node_events).is_bound()
     }
 
+    /// 注入附件读取端口（组合根用 `AttachmentStore` 实现；测试可注入 fake）。
+    ///
+    /// 未注入时，含 `attachment_ref` 的 prompt 会被**整条**拒绝（`HostError::PromptRejected`）：
+    /// 没有可读的字节就绝不把附件当成文本或凭空编造内容发给 Agent。
+    #[must_use]
+    pub fn with_attachments(self, attachments: Arc<dyn AttachmentStore>) -> Self {
+        self.set_attachments(attachments);
+        self
+    }
+
+    /// 同 [`AgentHost::with_attachments`]，但作用于已构造的实例。
+    pub fn set_attachments(&self, attachments: Arc<dyn AttachmentStore>) {
+        *lock(&self.attachments) = Some(attachments);
+    }
+
+    fn attachments(&self) -> Option<Arc<dyn AttachmentStore>> {
+        lock(&self.attachments).clone()
+    }
+
     /// 空闲回收判据（`None` = 不因空闲关闭）。
     #[must_use]
     pub fn idle_timeout(&self) -> Option<Duration> {
         self.host_config.idle_timeout()
+    }
+
+    /// 终端服务是否已按切真实的端到端能力宣告启用。
+    ///
+    /// 声明与执行用**同一个**判据：`initialize` 里宣告的 `clientCapabilities.terminal` 就是它。
+    /// 未宣告时 Agent 发来的 `terminal/*` 一律按「方法未找到」拒绝，绝不偷偷执行命令。
+    fn terminal_enabled(&self) -> bool {
+        self.host_config.client_capabilities.terminal == Some(true)
     }
 
     /// 取（必要时启动）某个 Agent 的运行时。
@@ -342,6 +374,7 @@ impl AgentHost {
             runtimes.remove(agent);
             for session in runtime.sessions() {
                 session.close_session();
+                session.shutdown_terminals().await;
             }
             runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
@@ -384,6 +417,11 @@ impl AgentHost {
             });
         }
 
+        // 响应与通知共用同一条 FIFO，因此 router 必须在发出 `initialize` **之前**运行；
+        // 否则 initialize 的响应会排在一个没有消费者的队列里，启动必然超时。
+        // `report_connected` 仍等到 initialize 成功之后（见下）。
+        spawn_router(Arc::clone(&runtime), incoming);
+
         match self.initialize(&runtime, limits::STARTUP_TIMEOUT).await {
             Ok(capabilities) => {
                 supervisor.set_negotiated_capabilities(capabilities.clone());
@@ -399,11 +437,10 @@ impl AgentHost {
 
         runtime.touch();
         // 连接上报在进程**确实可服务会话**之后（`initialize` 成功），且每个进程实例一次。
-        // 必须早于 `spawn_router`：退出路由（`on_exit`）在进程立即死亡时会尝试上报断开，
-        // 若连接尚未上报，那条断开会被 `AgentLifecycle` 判为「从未连接」而丢弃——
-        // 于是留下一个「已死但被当作从未建立」的进程，与其真实生命周期不符。
+        // router 已在 initialize 之前启动（响应也走 FIFO）；若进程恰在 initialize 成功与本次
+        // 上报之间退出，路由的 `on_exit` 会先看到「尚未上报连接」并把断开当作从未连接——
+        // 这个窗口只有一次同步调用，且不会留下可用的半开进程。上报之后再插入运行目录表。
         runtime.report_connected();
-        spawn_router(Arc::clone(&runtime), incoming);
         runtimes.insert(agent.clone(), Arc::clone(&runtime));
         Ok((runtime, true))
     }
@@ -423,6 +460,7 @@ impl AgentHost {
             match runtime.session_for_acp(&acp_id) {
                 Some(previous) => {
                     previous.close_session();
+                    previous.shutdown_terminals().await;
                     runtime.remove_session(&previous);
                 }
                 // 映射不完整（只有 `by_core` 条目）：只摘掉它，不猜一个端点出来。
@@ -457,6 +495,7 @@ impl AgentHost {
         }
         for session in runtime.sessions() {
             session.close_session();
+            session.shutdown_terminals().await;
         }
         runtime.clear_sessions();
         runtime.supervisor.shutdown().await;
@@ -493,6 +532,7 @@ impl AgentHost {
             }
             for session in runtime.sessions() {
                 session.close_session();
+                session.shutdown_terminals().await;
             }
             runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
@@ -551,7 +591,7 @@ impl AgentHost {
         if idle_timeout.is_zero() {
             return;
         }
-        let reclaimed: Vec<Arc<AgentRuntime>> = {
+        let reclaimed: Vec<(Arc<AgentRuntime>, Vec<Arc<AcpSession>>)> = {
             let mut runtimes = self.runtimes.lock().await;
             let idle: Vec<AgentId> = runtimes
                 .iter()
@@ -562,17 +602,21 @@ impl AgentHost {
             for agent in idle {
                 if let Some(runtime) = runtimes.remove(&agent) {
                     // 先让端点作废（`close_session` 只改内存状态、不等待），再清空映射：
-                    // 回收后的既有会话不得再被 `open` 复用。
-                    for session in runtime.sessions() {
+                    // 回收后的既有会话不得再被 `open` 复用。终端驱动任务在锁外排空，避免长时间持锁。
+                    let sessions = runtime.sessions();
+                    for session in &sessions {
                         session.close_session();
                     }
                     runtime.clear_sessions();
-                    reclaimed.push(runtime);
+                    reclaimed.push((runtime, sessions));
                 }
             }
             reclaimed
         };
-        for runtime in reclaimed {
+        for (runtime, sessions) in reclaimed {
+            for session in sessions {
+                session.shutdown_terminals().await;
+            }
             runtime.supervisor.shutdown().await;
         }
     }
@@ -584,6 +628,7 @@ impl AgentHost {
         if let Some(runtime) = runtime {
             for session in runtime.sessions() {
                 session.close_session();
+                session.shutdown_terminals().await;
             }
             runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
@@ -604,6 +649,7 @@ impl AgentHost {
         for runtime in runtimes {
             for session in runtime.sessions() {
                 session.close_session();
+                session.shutdown_terminals().await;
             }
             runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
@@ -612,11 +658,16 @@ impl AgentHost {
 }
 
 /// 进站消息路由：把 Agent 的通知与请求分发给对应会话。
-fn spawn_router(runtime: Arc<AgentRuntime>, mut incoming: mpsc::UnboundedReceiver<Envelope>) {
+fn spawn_router(runtime: Arc<AgentRuntime>, mut incoming: mpsc::UnboundedReceiver<Inbound>) {
     let supervisor = Arc::clone(&runtime.supervisor);
     supervisor.spawn_owned(async move {
-        while let Some(envelope) = incoming.recv().await {
-            route(&runtime, &envelope);
+        while let Some(inbound) = incoming.recv().await {
+            match inbound {
+                Inbound::Notification(envelope) => route(&runtime, &envelope),
+                Inbound::Response { id, envelope } => {
+                    runtime.supervisor.settle_response(id, &envelope);
+                }
+            }
         }
         // 通道关闭 = 进程退出（读任务结束）：收敛进行中的 turn。
         runtime.on_exit();
@@ -716,6 +767,15 @@ impl SessionBackendFactory for AgentHost {
         let capabilities = lock(&runtime.capabilities).clone().unwrap_or_default();
 
         let params = session_new_params(&request)?;
+        // 工作目录的规范绝对路径：终端的默认 cwd 与 prompt 路径引用的边界都用它。
+        // `session_new_params` 已经拒绝没有 workspace 的请求，这里只是把取值取出来。
+        let workspace = request
+            .workspace
+            .as_ref()
+            .map(|workspace| PathBuf::from(workspace.canonical_path()))
+            .ok_or(PortError::InvalidRequest(
+                "session/new 需要已解析的 workspace（ACP 要求 cwd）",
+            ))?;
         let value = runtime
             .supervisor
             .request("session/new", &params, limits::SHORT_REQUEST_TIMEOUT)
@@ -746,6 +806,9 @@ impl SessionBackendFactory for AgentHost {
             capabilities,
             modes: response.modes,
             config_options: response.config_options.unwrap_or_default(),
+            workspace,
+            attachments: self.attachments(),
+            terminal_enabled: self.terminal_enabled(),
         }));
         runtime
             .insert_session(&session)
@@ -870,6 +933,9 @@ impl SessionBackendFactory for AgentHost {
             capabilities,
             modes: response.modes,
             config_options: response.config_options.unwrap_or_default(),
+            workspace: PathBuf::from(&workspace_cwd),
+            attachments: self.attachments(),
+            terminal_enabled: self.terminal_enabled(),
         }));
         if let Err(error) = runtime.insert_session(&endpoint_session) {
             self.discard_spawned_runtime(&agent_id, &runtime, spawned)

@@ -36,8 +36,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
 use crate::common::{
-    AgentId, DecimalString, DirectoryId, NonEmptyText, Nullable, PublicError, RawObject,
+    AgentId, Base64Url, DecimalString, DirectoryId, NonEmptyText, Nullable, PublicError, RawObject,
     RemoteSessionRef, SessionCreateResult, SessionResumeResult, Timestamp, Uuid, ValueError,
+    deserialize_optional_non_null,
 };
 
 /// `requestId`（`command.schema.json#/$defs/requestId`）：该 def 是 `common.schema.json#/$defs/uuid`
@@ -173,43 +174,125 @@ impl<'de> Deserialize<'de> for CommandName {
     }
 }
 
-/// `promptContentBlock.type`：v1 只有 `text` 一个取值（schema 的 `const`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PromptContentType;
+/// `promptContentBlock` 的会话工作目录内相对路径（`workspace_path_ref.path`）。
+///
+/// 与 Sync 面的同名值对象逐条同义（`docs/NODE_LINK_PROTOCOL.md` §12.7）。wire pattern 只拒绝前导 `/`、
+/// 任意冒号、`.`/`..` 分量与控制字符；实现额外拒绝反斜杠——在 Windows 上它同样是路径分隔符，
+/// `..\\..` 会绕过只按 `/` 分段的 pattern（这是安全判定，不是第二套 wire 词表）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspacePath(String);
 
-impl PromptContentType {
-    pub const VALUE: &'static str = "text";
-}
+impl WorkspacePath {
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        let length = text.chars().count();
+        if length == 0 || length > 4096 {
+            return Err(ValueError::TextLength {
+                min: 1,
+                max: 4096,
+                actual: length,
+            });
+        }
+        let invalid = text.starts_with('/')
+            || text.contains(':')
+            || text.contains('\\')
+            || text.chars().any(|ch| (ch as u32) < 0x20);
+        if invalid {
+            return Err(ValueError::Pattern {
+                field: "path",
+                value: text.to_owned(),
+            });
+        }
+        for component in text.split('/') {
+            if component == "." || component == ".." {
+                return Err(ValueError::Pattern {
+                    field: "path",
+                    value: text.to_owned(),
+                });
+            }
+        }
+        Ok(Self(text.to_owned()))
+    }
 
-impl Serialize for PromptContentType {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(Self::VALUE)
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-impl<'de> Deserialize<'de> for PromptContentType {
+impl Serialize for WorkspacePath {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkspacePath {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
-        if text != Self::VALUE {
-            return Err(DeError::custom(ValueError::Enumerated {
-                field: "type",
-                value: text,
-            }));
-        }
-        Ok(Self)
+        Self::parse(&text).map_err(DeError::custom)
     }
 }
 
-/// `promptContentBlock`（`command.schema.json#/$defs/promptContentBlock`）：一个文本内容块。
+/// `promptContentBlock`（`command.schema.json#/$defs/promptContentBlock`）：三个封闭分支。
 ///
-/// v1 的 prompt 只接受文本：schema 用 `additionalProperties: false` + `const "text"` 把别的 ACP 内容块
-/// 排除在外，因此这里不需要"未知块类型"的分支。
+/// 与 Sync 面同名同义，两个面不各自维护第二套词表。`attachment_ref` 只在协商
+/// `node-link.attachment-transfer.v1` 且清单已在本节点连接上封存并绑定同一会话/主体时接受；
+/// `workspace_path_ref` 只表示当前会话工作目录内的相对路径。未协商时新分支必须缺席。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PromptContentBlock {
-    #[serde(rename = "type")]
-    pub content_type: PromptContentType,
-    pub text: NonEmptyText<262144>,
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum PromptContentBlock {
+    /// `{"type": "text", "text": …}`
+    #[serde(rename = "text")]
+    Text { text: NonEmptyText<262144> },
+    /// `{"type": "attachment_ref", …}`
+    #[serde(rename = "attachment_ref")]
+    AttachmentRef {
+        #[serde(rename = "attachmentId")]
+        attachment_id: Uuid,
+        #[serde(rename = "mediaType")]
+        media_type: NonEmptyText<255>,
+        #[serde(rename = "byteLength")]
+        byte_length: DecimalString,
+        sha256: Base64Url<32>,
+    },
+    /// `{"type": "workspace_path_ref", "path": …}`
+    #[serde(rename = "workspace_path_ref")]
+    WorkspacePathRef { path: WorkspacePath },
+}
+
+/// [`PromptContentBlock::AttachmentRef`] 的只读字段视图。
+///
+/// Owner 在派发 `session.prompt` **之前**必须把每个引用绑定到本连接上已封存的清单（§12.7），而绑定
+/// 校验需要 `attachmentId`/`sha256`/`byteLength`。字段名与形状只在本 crate 有一份：适配器通过本视图
+/// 读取，既不重新序列化块再解析，也不会在字段改名时悄悄漏检。
+#[derive(Debug, Clone, Copy)]
+pub struct AttachmentRefView<'a> {
+    /// 已封存附件的标识。
+    pub attachment_id: &'a Uuid,
+    /// 附件的媒体类型（声明值，权威元数据由 Owner 按标识读取）。
+    pub media_type: &'a NonEmptyText<255>,
+    /// 附件声明长度（十进制字符串）。
+    pub byte_length: &'a DecimalString,
+    /// 整段内容的声明 SHA-256（无填充 base64url）。
+    pub sha256: &'a Base64Url<32>,
+}
+
+impl PromptContentBlock {
+    /// `attachment_ref` 的字段视图；`text`/`workspace_path_ref` 返回 `None`。
+    pub fn attachment_ref(&self) -> Option<AttachmentRefView<'_>> {
+        match self {
+            Self::AttachmentRef {
+                attachment_id,
+                media_type,
+                byte_length,
+                sha256,
+            } => Some(AttachmentRefView {
+                attachment_id,
+                media_type,
+                byte_length,
+                sha256,
+            }),
+            Self::Text { .. } | Self::WorkspacePathRef { .. } => None,
+        }
+    }
 }
 
 /// `session.prompt.payload.content`：`1..=64` 个 [`PromptContentBlock`]（schema 的
@@ -267,16 +350,19 @@ pub enum IncludeResource {
     ConfigOptions,
     /// `capabilities`
     Capabilities,
+    /// `history`（只在协商 `node-link.remote-history.v1` 后接受）
+    History,
 }
 
 impl IncludeResource {
     /// schema 的 `items.enum`，顺序一致。
-    pub const ALL: [IncludeResource; 5] = [
+    pub const ALL: [IncludeResource; 6] = [
         IncludeResource::Messages,
         IncludeResource::Turns,
         IncludeResource::PendingInteractions,
         IncludeResource::ConfigOptions,
         IncludeResource::Capabilities,
+        IncludeResource::History,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -286,6 +372,7 @@ impl IncludeResource {
             IncludeResource::PendingInteractions => "pending_interactions",
             IncludeResource::ConfigOptions => "config_options",
             IncludeResource::Capabilities => "capabilities",
+            IncludeResource::History => "history",
         }
     }
 }
@@ -405,11 +492,50 @@ impl<'de> Deserialize<'de> for ConfigValue {
 #[serde(deny_unknown_fields)]
 pub struct SessionList {}
 
-/// `sessionRead`（`command.schema.json#/$defs/submitSessionRead`）的 `payload`：`{ include }`。
+/// `session.read` 的消息页游标（`command.schema.json#/$defs/sessionReadBefore`）：与
+/// `SYNC_PROTOCOL.md` §11.5 的 `before` 逐字段同义。
+///
+/// `createdAt` 是 Daemon 持久化时间，`messageId` 只用来给同一时刻内的消息定序；两个键都必须存在，
+/// 单字段游标不合法（由结构体与 `deny_unknown_fields` 共同保证）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionReadBefore {
+    #[serde(rename = "createdAt")]
+    pub created_at: Timestamp,
+    #[serde(rename = "messageId")]
+    pub message_id: Uuid,
+}
+
+/// `sessionRead`（`command.schema.json#/$defs/submitSessionRead`）的 `payload`：
+/// `{ include, beforeHistory?, before?, limit? }`。
+///
+/// `history` include 与 `beforeHistory` 只在协商 `node-link.remote-history.v1` 后接受；消息页的
+/// `before`/`limit` 是同一 feature 下的远程历史分页参数（与 Sync 面同名同义），未协商的连接不得发送，
+/// 服务端收到时按 `nodelink.command.unsupported_field` 拒绝。旧 peer 省略这四个键时请求与结果形状
+/// 与既有 v1 逐字相同。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionRead {
     pub include: IncludeList,
+    #[serde(
+        rename = "beforeHistory",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub before_history: Option<DecimalString>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub before: Option<SessionReadBefore>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub limit: Option<u64>,
 }
 
 /// `submitCommandStatus`（`command.schema.json#/$defs/submitCommandStatus`）的 `payload`：
@@ -434,11 +560,22 @@ pub struct SessionModeList {}
 #[serde(deny_unknown_fields)]
 pub struct SessionConfigList {}
 
-/// `sessionPrompt`（`command.schema.json#/$defs/submitSessionPrompt`）的 `payload`：`{ content }`。
+/// `sessionPrompt`（`command.schema.json#/$defs/submitSessionPrompt`）的 `payload`：
+/// `{ content, submissionId? }`。
+///
+/// `submissionId` 只在协商 `node-link.attachment-transfer.v1` 后被接受，且清单必须已在本节点连接上
+/// 封存并绑定同一会话/主体；未协商的旧 peer 省略该键。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionPrompt {
     pub content: PromptContentList,
+    #[serde(
+        rename = "submissionId",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub submission_id: Option<Uuid>,
 }
 
 /// `sessionCancel`（`command.schema.json#/$defs/submitSessionCancel`）的 `payload`：`{ turnId }`。
@@ -511,15 +648,23 @@ impl<'de> Deserialize<'de> for ElicitationAction {
 }
 
 /// `submitElicitationRespond`（`command.schema.json#/$defs/submitElicitationRespond`）的 `payload`：
-/// `{ interactionId, action, values }`，其中 `values` 的形状由 `action` 决定（`submit` 为 object
-/// 或 `null`、`decline`/`cancel` 为 `null`）。
+/// `{ interactionId, requestVersion?, action, values }`，其中 `values` 的形状由 `action` 决定
+/// （`submit` 为 object 或 `null`、`decline`/`cancel` 为 `null`）。
 ///
+/// `requestVersion` 只在协商 `node-link.pending-interactions.v1` 后必须携带；未协商的旧 peer 可省略。
 /// `values` 是原始字节保真的开放对象（与 `error.body.details` 同类）：它的形状由被回答的那次
 /// elicitation 的 schema 决定，本层不做校验。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ElicitationRespond {
     #[serde(rename = "interactionId")]
     pub interaction_id: Uuid,
+    #[serde(
+        rename = "requestVersion",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_version: Option<DecimalString>,
     pub action: ElicitationAction,
     pub values: Nullable<RawObject>,
 }
@@ -529,6 +674,8 @@ pub struct ElicitationRespond {
 struct RawElicitationRespond {
     #[serde(rename = "interactionId")]
     interaction_id: Uuid,
+    #[serde(rename = "requestVersion", default)]
+    request_version: Option<DecimalString>,
     action: ElicitationAction,
     values: Box<RawValue>,
 }
@@ -578,6 +725,7 @@ impl<'de> Deserialize<'de> for ElicitationRespond {
 
         Ok(Self {
             interaction_id: fields.interaction_id,
+            request_version: fields.request_version,
             action: fields.action,
             values,
         })
@@ -603,15 +751,24 @@ pub struct SessionConfigSet {
 }
 
 /// `permissionResolve`（`command.schema.json#/$defs/submitPermissionResolve`）的 `payload`：
-/// `{ interactionId, optionId }`。
+/// `{ interactionId, requestVersion?, optionId }`。
 ///
 /// `optionId` 必须来自该 permission 请求给出的选项集合、`interaction.already_resolved` 之后到达的
-/// 应答必须被拒绝——那是 Owner 侧状态机（§15），不在本层。
+/// 应答必须被拒绝——那是 Owner 侧状态机（§15），不在本层。`requestVersion` 只在协商
+/// `node-link.pending-interactions.v1` 后必须携带，版本不符返回 `nodelink.interaction.version_conflict`
+/// 且不消耗请求（§12.10）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionResolve {
     #[serde(rename = "interactionId")]
     pub interaction_id: Uuid,
+    #[serde(
+        rename = "requestVersion",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_version: Option<DecimalString>,
     #[serde(rename = "optionId")]
     pub option_id: NonEmptyText<128>,
 }
@@ -1385,5 +1542,32 @@ mod tests {
                 .is_err(),
             "session.resume 的 completed 结果必须是 sessionResumeResult"
         );
+    }
+}
+
+#[cfg(test)]
+mod session_read_pagination_tests {
+    use super::*;
+
+    fn submit(payload: &str) -> Result<SessionRead, serde_json::Error> {
+        let text = format!(r#"{{"include":["messages"],{}}}"#, payload);
+        serde_json::from_str::<SessionRead>(&text)
+    }
+
+    #[test]
+    fn before_and_limit_are_accepted_only_as_the_documented_shape() {
+        let read = submit(r#""before":{"createdAt":"2026-01-01T00:00:00.000Z","messageId":"5d5ebeeb-eea9-453f-9e66-363c86cbd83e"},"limit":20"#)
+            .expect("before/limit");
+        assert_eq!(read.limit, Some(20));
+        assert_eq!(
+            read.before
+                .as_ref()
+                .map(|before| before.message_id.as_str()),
+            Some("5d5ebeeb-eea9-453f-9e66-363c86cbd83e")
+        );
+        // 单字段游标不合法（结构体要求两个键同时存在）。
+        assert!(submit(r#""before":{"createdAt":"2026-01-01T00:00:00.000Z"}"#).is_err());
+        // 未知键仍按旧 peer 的封闭形状拒绝。
+        assert!(submit(r#""offset":1"#).is_err());
     }
 }

@@ -4,6 +4,7 @@
 > 版本：0.6
 > 日期：2026-10-17  
 > 修订记录（2026-10-18，`device-pairing-qr-reference`）：设备二维码改为短引用格式——fragment 只带版本、32 字节扫码取回凭据与 32 字节主机公钥指纹，完整资料经同源 `POST /sync/v1/pairing/qr-lookup` 取回；取回统一失败 `pairing.qr_invalid`、独立 10 次/分钟限流、16 KiB 上限，凭据只存内存且认领/拒绝/失效/过期/重启后不可用。§5.1 增补移动端「先匹配完整 SHA-256 指纹，再验证 `hostProof`」的信任链说明；威胁模型与其它边界未变。字段与端点以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.6 为唯一权威。
+> 修订记录（2026-10-20，`conversation-area-complete` WP3）：新增 §12.6「ACP 终端服务」——Agent 经 `terminal/*` 请求在宿主执行命令的信任边界、会话归属、cwd 限制、环境注入、进程树与输出预算；§5 威胁表补一行对应控制；§12.2 固定上限表登记终端输出保留/分块/并发与排空时长。终端服务只在组合根宣告 `clientCapabilities.terminal` 后接受调用（未宣告时不启动任何进程）；命令、参数、环境值、输出与路径都不进日志。威胁模型与信任边界**未变**（终端执行属于 ACP 原生能力，不新增授权维度）。
 > 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「本机规范化路径永不出网」改写为**带前提的新边界**——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览 `workspace.browse` 的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显；日志、审计记录与错误 `details` 仍不含任何路径（§14.1 **未变**）。§3 把已记录目录的规范化路径纳入 `operational-metadata` 并写明例外共有两处（目录资源条目与只读浏览结果）；§8 补一句远程提交目录与目录浏览能力的边界；§10.2 新增只读查询命令 `workspace.browse`（feature `core.workspace-browse.v1` 门控、不登记、不产生审计动作）并改写 Sync 面目录校验的路径口径；§10.3 删去与 §10.2 自相矛盾的「规范化路径永不出网」表述、改为新口径；§12.3 把路径口径改为「只下发给协商该能力的设备、且只含已登记目录，另加只读浏览返回的那一层条目」；§19 登记残余风险。决策理由与被否决备选见 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)。威胁模型与信任边界**变**：在新前提下路径的可见面扩大（残余风险见 §19 与 ADR-0009）。  
 > 修订记录（2026-10-17，`directory-auto-registration`）：目录改由**成功的会话创建自动记录**（`directoryId = sha256(canonical_path)[..16]`），删除人工登记 `workspace.select` 与目录别名/展示名；目录的规范化路径**始终**随快照 `workspaces` 条目下发给已认证设备（撤销 `core.workspace-path.v1` 门控），会话摘要只带 `{ directoryId }`。路径的两处可见面（目录资源与只读浏览结果）与其余输出的禁路径口径不变。
 > 修订记录（2026-10-16，`pairing-model`）：配对只保留两条密码学校验（用配对载荷里的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节一致），**短验证码（SAS）两套全部删除**——§5 新增 §5.1 说明「为什么本协议不需要短验证码」，§9.3 的 pairing secret 用途、§9.4 的确认页展示项与 §18.1 的测试项随之收窄；**设备权限层删除**——§2.1/§2.2、§3 的 `security-metadata` 行、§4.2 的设备条目、§5 的威胁控制、§7.1/§7.2、§8、§9.4、§9.5、§10.1、§10.2 与 §12.3 改为「通过设备认证即可执行业务命令，设备不再有授权维度」，§10.2 的表格去掉「所属 pack」列、`pack.*`/`preset.*` 两类词汇删除；**保留**设备认证与每连接 challenge-response、配对确认只能由本机用户完成、撤销立即关闭连接、速率与各项上限、跨节点 `grant.*`/Export `scopes`/Import grants。威胁模型与信任边界没有放宽——删 SAS 的前提是 §5.1 写明的两条密码学要求已由 `pwa-web-client` 承担。  
@@ -124,11 +125,14 @@
 | CSWSH/CSRF/DNS rebinding | HTTPS、Origin/Host allowlist、同源接口、loopback 管理通道保护 |
 | XSS 和 Agent 内容注入 | CSP、无第三方脚本、结构化渲染、HTML 禁用/清洗、`rawJson` 文本化 |
 | 越权命令 | 服务端逐命令校验「已认证 + 会话状态 + workspace 边界」；`local.*` 无远程入口 |
+| Agent 借 `terminal/*` 在宿主执行任意命令 | 只在能力宣告后接受；参数数组不经 shell、cwd 限于会话根、环境先清空后按必要项+Agent 值注入（`ACPR_*`/`ACP_REMOTE_*` 静态拒绝）、每终端独立 Job/进程组与输出预算；命令/输出/路径不进日志 |
 | 已配对节点可完全访问本机资源 | 配对确认必须由本机用户完成；撤销即时关闭连接；审计保留 `viaNodeId` |
 | 节点循环和能力洗白 | 第一阶段单 hop；imported Agent 禁止再次导出；来源链检查 |
 | 重复 prompt/审批 | durable idempotency、Session Actor、interaction first-writer-wins |
 | 慢客户端和内存耗尽 | 有界队列、消息/速率限制、断开后 cursor 重放 |
 | 磁盘耗尽和超大输出 | TTL、配额、截断标识、存储失败关闭 |
+| 附件跨会话/跨主体冒用或公开下载地址泄露 | 独立已认证连接 + 每帧会话/主体绑定 + 内容寻址读取；不使用 bearer URL；撤销立即中止 |
+| 恶意附件内容（HTML/SVG/可执行）或外链追踪 | 只按不可信数据处理；HTML/脚本/可执行不活动渲染；外部图片与链接不自动加载 |
 | 日志或错误泄露 | 数据分类、字段 allowlist、默认脱敏 |
 | npm/二进制篡改 | 锁定构建、平台包映射、checksum、provenance、最小发布权限 |
 
@@ -302,6 +306,10 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 - 第一阶段明确采用节点级信任；Owner 可以按 Access Node 授权、限流和撤销，但不得把 `localPrincipalRef` 描述为 Owner 已直接认证的员工身份或不可抵赖证据。
 - 有效能力固定为「端到端 capability ∩ 本机资源边界」，任一侧撤销后立即收紧。
 - 第一阶段只允许一个 Node Link hop，并对资源来源链进行循环检查。
+- **Access 侧出站 TLS 信任边界**（用户裁决：系统根 + 可选固定 CA）：信任锚 = 操作系统根存储 ∪ `node_link.access.trust_roots` 列出的 PEM 证书；自定义 CA 只追加、不替换系统根，也没有「空锚」或「跳过校验」的运行形态（两处都为空、任一文件不可读或不含证书即拒绝启动）。配对 claim/status 的 HTTPS 与业务/附件 WSS 共用同一份信任构造（`app::trust` → `node-link-client` 的 `TlsTrust::Roots`）。出站传输按每条 Owner 端点构造（`node-link-client::TransportFactory`），Owner 端点只允许 `wss://` 并使用这份根集合：持久化的 Owner 信任记录与配对 URL 的 endpoint 都不接受 `ws://`，`AccessManager` 在建立链路前显式拒绝明文 scheme（`dev_mode.allow_plaintext` 不放宽出站 Owner 链路）。不存在把 `ws://` 端点套上 `Roots`、或把业务链路降级成明文的路径。
+- 证书校验失败即失败关闭：连接直接失败，不回退明文、不重试降级。入站 listener 与配对请求的明文只允许在 `dev_mode.enabled && dev_mode.allow_plaintext` 且目标为 loopback 时由组合根显式选择；出站 Owner 链路不提供明文选项。
+- 出站错误与日志只含状态/分类（`daemon.trust_*`、`local.remote_error`），不记录完整 URL、fragment、pairing secret、响应正文或凭据；`pairingUrl` 只作为同一次 `node.pair.begin` 的返回值交回调用方。
+- claim 的 Owner 身份以二维码中固定的 `ownerPublicKey` 验签 `ownerProof`，`approved` 状态再核对 `ownerNodeId`/公钥与本机 node id 逐字一致；人类核对使用 `peerPublicKeyFingerprint`（`--fingerprint` 逐字比较），指纹只在内存与终端出现。
 
 ## 10. 授权模型
 
@@ -373,7 +381,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 - 可用时启用 Trusted Types；不支持的平台仍必须通过安全组件和 sanitizer 保证相同内容边界。
 - production source map 不得公开包含本地路径、secret 或未发布源信息；是否发布独立调试符号由发布流程决定。
 
-`[实现现状]`（2026-10-15，`sync-ui-hosting`）PWA 静态资源由 Daemon 同源托管在根路径，其 CSP **由响应头下发**（不依赖文档内的 `<meta>` 元标记——元标记约束不了 `frame-ancestors` 之类的指令），取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线 `default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`。其中 `img-src 'self' blob:` 是只读图片预览的唯一增量（Blob URL 由已认证查询得到的字节创建），`script-src` 等其余指令未放宽。与它一起下发的还有与两个配对端点同取值的 `cache-control: no-store`、`pragma: no-cache`、`referrer-policy: no-referrer`、`x-content-type-options: nosniff`；实现见 `crates/server/src/transport/net/static_ui.rs`，经接入层的「每路径默认响应头」缝下发，因此 Host 边界在静态 path 上的 400 也带这些头。**基线未被放宽**：产物里的两条内联 `<style>`（`expo-reset` 与 `react-native-web` 的运行时样式表）已由前端侧移除（`ui-csp-inline-styles`）——入口文档把 reset 外置成同源 `/entry-reset.css`，并在 bundle 之前声明一个**必须保持为空**的同源 `/rnw-stylesheet.css`，`react-native-web` 于模块求值期复用该 `<link>` 的 `sheet`、把它运行时生成的原子类 `insertRule` 进去；因此样式现在由**同源外部样式表**交付，CSP 取值一字未动。**口径要说准**：`insertRule` 本身**不是** CSP 的检查点——向一个受允的同源样式表写入规则既不能被描述成「CSP 阻止了样式注入」，也不能被描述成「放宽了 CSP」；样式文本的来源仍是同源 bundle（`script-src 'self'` 已信任），这条控制在原内联形态下本就已失效，本次只是消除冲突。裁定与判据见归档的 `openspec/changes/archive/2026-10-16-ui-csp-inline-styles/design.md`（D1/D3/R4）。
+`[实现现状]`（2026-10-15，`sync-ui-hosting`）PWA 静态资源由 Daemon 同源托管在根路径，其 CSP **由响应头下发**（不依赖文档内的 `<meta>` 元标记——元标记约束不了 `frame-ancestors` 之类的指令），取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线 `default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`。其中 `img-src 'self' blob:` 是只读图片预览的唯一增量（Blob URL 由已认证查询得到的字节创建），`script-src` 等其余指令未放宽。**计划增量**：Agent 音频播放（`conversation-area-complete` WP6）需要追加 `media-src 'self' blob:`；在 Daemon 响应头真正下发之前该能力不得启用或宣称，当前取值仍是上面的基线。与它一起下发的还有与两个配对端点同取值的 `cache-control: no-store`、`pragma: no-cache`、`referrer-policy: no-referrer`、`x-content-type-options: nosniff`；实现见 `crates/server/src/transport/net/static_ui.rs`，经接入层的「每路径默认响应头」缝下发，因此 Host 边界在静态 path 上的 400 也带这些头。**基线未被放宽**：产物里的两条内联 `<style>`（`expo-reset` 与 `react-native-web` 的运行时样式表）已由前端侧移除（`ui-csp-inline-styles`）——入口文档把 reset 外置成同源 `/entry-reset.css`，并在 bundle 之前声明一个**必须保持为空**的同源 `/rnw-stylesheet.css`，`react-native-web` 于模块求值期复用该 `<link>` 的 `sheet`、把它运行时生成的原子类 `insertRule` 进去；因此样式现在由**同源外部样式表**交付，CSP 取值一字未动。**口径要说准**：`insertRule` 本身**不是** CSP 的检查点——向一个受允的同源样式表写入规则既不能被描述成「CSP 阻止了样式注入」，也不能被描述成「放宽了 CSP」；样式文本的来源仍是同源 bundle（`script-src 'self'` 已信任），这条控制在原内联形态下本就已失效，本次只是消除冲突。裁定与判据见归档的 `openspec/changes/archive/2026-10-16-ui-csp-inline-styles/design.md`（D1/D3/R4）。
 
 ### 11.2 不可信内容渲染
 
@@ -426,6 +434,11 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 | 单条 ACP 消息（stdout 解析上限） | 1 MiB | 与 `SYNC_PROTOCOL.md` §14 的 `maxMessageBytes` 同值，避免同一条消息在两跳上有两个上限 |
 | stderr 环形缓冲 | 256 KiB | 有界采集：内容原样进入固定上限的环形缓冲（不做内容脱敏），**内容不进日志**，只记丢弃字节数与采集总字节数（§14.1）；需要时按上限回取；超出丢弃最旧并记一条计数，不无界缓存 |
 | 空闲回收 | 复用 `sessions.idle_timeout_ms` | `0` = 不因空闲关闭；非零时只有「无 active 会话且空闲超过该值」才关闭进程 |
+| 单个终端保留输出 | 1 MiB（Agent 的 `outputByteLimit` 更小时取更小值） | 超出从**开头**丢弃并落在字符边界；`terminal/output` 置 `truncated`，实时 `terminal.output` 事件仍携带真实分块（每块 ≤ 8 KiB） |
+| 单条 `terminal/output` 响应 | 1 MiB（含 JSON-RPC 信封与 JSON 转义后的实际字节） | 保留正文放不进帧预算时再次从**开头**裁剪并置 `truncated`；发送失败必须回显式错误，不能悬挂 |
+| 单条 `terminal.output` 事件 / 单次读取 | 8 KiB | 远低于 1 MiB 单条消息上限；读取边界可以落在 UTF-8 多字节字符中间，由增量解码器拼接 |
+| 单会话并发终端 | 8 | 运行保护，不是产品额度；超出显式拒绝 `terminal/create` |
+| 终端关闭排空 | 2 s | 先结束进程树再等驱动任务交付已读输出；超时不阻塞关闭，剩余读取由任务结束收敛 |
 | 内存 | **规则而非数值** | 无法可靠测量 RSS；改为可判定规则：必须流式处理 ACP 消息与 stderr，不得缓存完整会话正文，超限即报错并结束该 Agent |
 
   这些常量落在 `agent-host`，并由 `agent-host` 的 fake ACP child 测试固定（测试要求见 `docs/MODULE_ARCHITECTURE.md` §11）；需要随部署变化的只有 `sessions.idle_timeout_ms`。
@@ -451,6 +464,35 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 - **版本与错误**：文件内容、版本令牌与 Git stderr 原文不进入日志或协议错误；预览/快照过期返回明确不可用，不复用会话 version conflict 语义。
 
 `[实现现状]` 原生只读适配器已实现并有 Windows 真实 junction/替换/Job Object 与临时仓库测试；Sync 入站门控与组合根接线完成前，设备端尚不能调用这四条查询（feature 未宣告）。
+
+### 12.5 附件传输与媒体读取（服务端引擎、连接面与组合根端点已实现）
+
+附件与媒体遵守与业务连接相同的身份、撤销与主机边界，但不把正文塞进业务消息：
+
+- **独立认证**：附件连接（Sync `/sync/v1/attachments`、Node Link `/node-link/v1/attachments`）必须重新完成对应协议的 challenge-response、Origin/Host 与撤销检查；不得复用业务连接的认证状态，也不得引入长期 bearer 或公开下载 URL。认证完成后按 `selectedFeatures` 门控：未协商对应 feature 的附件帧回 `attachment.negotiation_required`/`nodelink.attachment.negotiation_required` 并以 `4400` 关闭，**门控先于存储调用**（未协商的连接不产生任何写入）。
+- **逐帧绑定**：每一帧校验连接身份、`transferId`、会话与主体（设备/节点）；跨会话、跨主体或跨设备标识一律拒绝且不泄露内容。主体取自已认证连接的身份，**不采信**帧里自报的 `subject`；读取同样先鉴权再返回字节，存储层再核一次会话绑定。清单页（`manifest_page`）同样逐条比对会话与主体，整页拒绝而不是部分登记。
+- **prompt 绑定**：`session.prompt` 的 `attachment_ref` 不是「随便贴一个附件标识」：服务端在派发 Agent 之前要求本连接协商了附件 feature、携带已封存的 `submissionId`，并逐块比对清单里的 `attachmentId`/`sha256`/`byteLength`（`sha256`/`byteLength` 以已封存传输行为准，客户端自报值只是声明）。任一不符返回 `attachment.binding_mismatch`（或形状错误），既不泄露附件是否存在，也**不触发任何 Agent 执行**；`submissionId` 在 Node Link 面同样必须进入整批绑定入口，不能被静默丢弃。
+- **内容校验**：校验声明/实际大小、单块上限、期望偏移、总长度与整段流式 SHA-256；摘要不符或重复位置内容不同即拒绝。清单摘要按清单顺序的 `transferId` 复算（`SHA-256( Σ u32be(len) || id )`），不信任对端给出的摘要。类型按声明检查，渲染仍按不可信内容处理（HTML/SVG/可执行不活动渲染）。
+- **资源与失败关闭**：固定 32 KiB 分块、每传输一块未确认、单设备 2/单节点 8 个活动传输、每连接 6000 帧/60 秒（固定窗口）；发送预算与速率按附件族独立计数，不占业务命令配额。活动传输的预算检查与槽位预留在**同一临界区**完成（否则并发 `begin` 会突破上限），并在附件连接关闭时按连接释放该连接预留的槽位——拒绝服务不可由「开两个上传再断线」实现。磁盘不足映射为可重试的 `attachment.budget_exhausted`，I/O/后端故障映射为 `internal.unavailable`（可重试）；都显式失败，不截断冒充完整内容，也不阻塞事件投递。帧预算超限只拒绝该帧，不关闭连接。EOF 处的重复读取与 0 字节附件回显式形状错误，不会出现「已认领但无回帧」的挂起请求。
+- **临时内容**：上传先落临时文件，封存校验通过后才允许引用；孤儿文件由启动回收清理。未提交上传 24 小时闲置过期；最近活动不足窗口的不清理。
+- **撤销与保留**：设备/节点撤销立即中止上传与读取：`close_device`/`close_node` 同时扫描业务表与**附件连接表**并请求关闭（`4410`），附件连接不占业务连接槽位，但撤销绝不漏掉它。已提交附件不因撤销被删除，按消息保留策略处理。
+- **Access 无正文**：Access 只做有界内存转发，不把远程附件写入临时目录、SQLite、日志或持久缓存；Owner 是唯一权威。实现现状（2026-10-20，`conversation-area-complete` WP5）：Owner 入站侧与 `node-link-client::attachment::AttachmentForwarder` 均已落地（停等、单块 32 KiB、断线/撤销显式失败、无临时文件）；Access 侧配对（`app::access::AccessManager` 的 HTTPS claim/status）与 Daemon 启动时的 Owner 连接实例化已接线，转发由 `AccessManager::open_attachment` 提供，使用同一出站信任锚与独立认证连接。`revoke`/`shutdown_all` 通过 `SharedLink` 的关闭通道立即中止该 Owner 的在途上传与读取（不需要等 5 秒兜底，也不依赖对端先断开）。当前明确未接线的只有 `server::acp_facade`（把本地 Sync/ACP 的 mutation 转发给 Owner 的那一层），因此「本地客户端经 Sync 触发远程附件」仍不可用；库级与 `AccessManager` 级路径已可用。
+- **外部 URI**：只有外部 URI 的资源显示链接与「未获取」，客户端与服务端都不得因展示而自动下载。
+- **接线现状（安全相关的可用性事实，2026-10-20 WP5）**：两个附件端点由组合根在装配附件传输端口时注册到共享 listener；未装配存储时既不注册端点、也不宣告 `core.attachment-transfer.v1`/`node-link.attachment-transfer.v1`（宣告必然 404 的端点就是能力虚报）。端点本身沿用既有握手、Origin/Host、撤销与心跳边界；附件连接不进入业务连接表，撤销按 `4410` 同时关闭两类连接。
+- 机器合同：`schemas/{sync,node-link}/v1/attachment.schema.json`、`fixtures/` 的正反样例与 `compatibility/commands/v1/commands.json` 的 `transportFrames`。
+
+### 12.6 ACP 终端服务（已实现，`conversation-area-complete` WP3）
+
+Agent 可以通过 ACP 的 `terminal/create`/`output`/`wait_for_exit`/`kill`/`release` 请求 Daemon 在**宿主用户权限下**执行命令。这不是新增授权维度（ACP 原生能力），但必须按不可信输入处理：
+
+- **能力与执行同一判据**：只有组合根把 `clientCapabilities.terminal = true` 接进 `initialize` 时才接受 `terminal/*`；未宣告时按「方法未找到」拒绝，且**不启动任何进程**。反过来，宣告了就说明服务已完整接线（启动、输出、等待、停止、释放与清理都可工作）。
+- **会话绑定**：终端标识只存在于所属会话的服务里；另一个会话拿同一个标识只会得到「未知终端」，不泄露输出也不影响持有它的任务。`terminal/*` 的 `sessionId` 必须与会话一致。
+- **命令形状**：命令与参数按**数组**直接 spawn，不经 shell 拼接；stdin 关闭（不提供交互终端或 PTY，页面也不能手动输入命令）。
+- **工作目录**：缺省为会话工作目录；显式 `cwd` 必须是**已存在目录**，且 `canonicalize` 后仍位于会话工作目录内（挡 `..`、链接/junction 逃逸）。路径不进入日志或错误响应。
+- **环境**：先 `env_clear()`，再注入 `PATH`/`HOME`/`USERPROFILE`/`SystemRoot`/`TEMP`/`TMP`，最后叠加 Agent 显式给出的变量；变量名按 §12.2 的保留前缀（`ACPR_`/`ACP_REMOTE_`）静态拒绝。节点/设备密钥不在 Daemon 进程环境里，也不注入。
+- **输出**：stdout/stderr 分开读取、按实际接收次序合并保留；UTF-8 跨读取边界由增量解码器拼接（非法字节用替换字符消费，不静默丢弃）。保留正文受 §12.2 的固定上限与 Agent `outputByteLimit` 的较小值约束，从开头丢弃并落在字符边界；实时事件不截断。`terminal/output` 的**响应**还必须留在 ACP 单条消息上限内（按 JSON-RPC 信封与 JSON 转义后的**实际**字节计算，换行与 ANSI 序列都会膨胀），放不下时再次从开头裁剪并同样置 `truncated = true`；响应发送失败必须显式回 `-32603`（或已知的会话/进程错误），不能让 Agent 的请求悬挂。输出内容从不进日志。
+- **生命周期与进程树**：每个终端有独立的 Job Object（Windows，`KILL_ON_JOB_CLOSE`）或进程组（Unix），与 Agent 自己的 Job 分离。会话关闭、Agent 崩溃与 Daemon 关闭的顺序是：停止接受新请求 → 唤醒 `wait_for_exit` 等待者（返回明确错误，不悬挂）→ 结束整棵终端进程树 → 排空已读输出 → 结束驱动任务。同步关闭排空出的终端必须保留给随后的异步关闭，否则标准关闭路径上的「排空已读输出」会变成空操作；`create` 的关闭判定、并发上限与登记必须在同一临界区完成（先登记占位再 spawn；关闭在 spawn 期间发生时要结束刚启动的树），保证关闭不会漏掉已经 spawn 的终端。kill 只结束进程树并保留标识（之后仍可读输出与退出事实）；release 结束未退出任务并移除标识，之后所有操作都返回「未知终端」；kill 与自然退出竞争只记录一个退出事实。Unix 被信号终止时退出事实填信号名（如 `SIGKILL`），Windows 填退出码；两边都取不到时给确定性的非成功退出码。
+- **失败语义**：未知/已释放终端、会话已关闭、环境变量名不合法与启动失败分别返回可区分的 JSON-RPC 错误；响应只包含固定文案，不回显命令行、参数、环境值或路径。
 
 ## 13. 持久化与本地数据保护
 
@@ -478,7 +520,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 - sequence event 必须先持久化再广播。
 - `persist_deltas: false` 只允许 turn 完成后压缩/清理短期 delta。
 - 清理必须尊重 ACK、TTL、审计和 ACP 语义保真；过期 cursor 走 snapshot reset。
-- 大型终端、diff、附件和 raw payload 使用明确配额及 `truncated/rawUnavailable` 标识。
+- 大型终端、diff、附件和 raw payload 使用明确配额及 `truncated/rawUnavailable` 标识；附件使用 32 KiB 分块与并发/速率保护，不设附件数量/大小产品额度，但不以分块绕过磁盘与会话容量上限。
 - 删除是逻辑/文件系统删除，不宣称擦除 SSD、备份或快照。
 
 ### 13.4 客户端与 Access Node 数据最小化

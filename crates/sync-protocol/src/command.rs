@@ -33,9 +33,9 @@ use crate::common::{
     PromptContentBlock, PublicError, RawObject, SessionSummary, Text, Timestamp, UIntAtLeast, Uuid,
     ValueError, deserialize_optional_non_null,
 };
+use crate::media::EffectiveInteraction;
 use crate::sync::{
-    SnapshotItemCapability, SnapshotItemHistory, SnapshotItemMessage,
-    SnapshotItemPendingInteraction, SnapshotItemTurn,
+    SnapshotItemCapability, SnapshotItemHistory, SnapshotItemMessage, SnapshotItemTurn,
 };
 
 /// `requestId`（`command.schema.json#/$defs/requestId`）：该 def 是 `common.schema.json#/$defs/uuid`
@@ -1188,11 +1188,21 @@ impl<'de> Deserialize<'de> for PromptContentList {
     }
 }
 
-/// `sessionPrompt`（`command.schema.json#/$defs/sessionPrompt`）的 `payload`：`{ content }`。
+/// `sessionPrompt`（`command.schema.json#/$defs/sessionPrompt`）的 `payload`：`{ content, submissionId? }`。
+///
+/// `submissionId` 只在协商 `core.attachment-transfer.v1` 后被接受：它指向本会话/本主体已
+/// `manifest_sealed` 的附件清单。未协商的旧 peer 省略该键，行为与本变更前逐字相同。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionPrompt {
     pub content: PromptContentList,
+    #[serde(
+        rename = "submissionId",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub submission_id: Option<Uuid>,
 }
 
 /// `sessionCancel`（`command.schema.json#/$defs/sessionCancel`）的 `payload`：`{ turnId }`。
@@ -1235,12 +1245,22 @@ pub struct ModeSet {
 }
 
 /// `permissionResolve`（`command.schema.json#/$defs/permissionResolve`）的 `payload`：
-/// `{ interactionId, optionId }`。
+/// `{ interactionId, requestVersion?, optionId }`。
+///
+/// `requestVersion` 只在协商 `core.pending-interactions.v1` 后必须携带；未协商的旧 peer 可省略。
+/// 版本校验与「不消费请求」的语义见 `SYNC_PROTOCOL.md` §11.7。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionResolve {
     #[serde(rename = "interactionId")]
     pub interaction_id: Uuid,
+    #[serde(
+        rename = "requestVersion",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_version: Option<DecimalString>,
     #[serde(rename = "optionId")]
     pub option_id: NonEmptyText<128>,
 }
@@ -1307,15 +1327,23 @@ impl<'de> Deserialize<'de> for ElicitationAction {
 }
 
 /// `elicitationRespond`（`command.schema.json#/$defs/elicitationRespond`）的 `payload`：
-/// `{ interactionId, action, values }`，其中 `values` 的形状由 `action` 决定（`submit` 为 object
-/// 或 `null`，`decline`/`cancel` 为 `null`）。
+/// `{ interactionId, requestVersion?, action, values }`，其中 `values` 的形状由 `action` 决定
+/// （`submit` 为 object 或 `null`，`decline`/`cancel` 为 `null`）。
 ///
+/// `requestVersion` 只在协商 `core.pending-interactions.v1` 后必须携带；未协商的旧 peer 可省略。
 /// `values` 是原始字节保真的开放对象（与 `error.body.details` 同类），因为它的形状由被回答的
 /// `elicitation.requested` 决定，本层不做 schema 校验。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ElicitationRespond {
     #[serde(rename = "interactionId")]
     pub interaction_id: Uuid,
+    #[serde(
+        rename = "requestVersion",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_version: Option<DecimalString>,
     pub action: ElicitationAction,
     pub values: Nullable<RawObject>,
 }
@@ -1325,6 +1353,8 @@ pub struct ElicitationRespond {
 struct RawElicitationRespond {
     #[serde(rename = "interactionId")]
     interaction_id: Uuid,
+    #[serde(rename = "requestVersion", default)]
+    request_version: Option<DecimalString>,
     action: ElicitationAction,
     values: Box<RawValue>,
 }
@@ -1374,6 +1404,7 @@ impl<'de> Deserialize<'de> for ElicitationRespond {
 
         Ok(Self {
             interaction_id: fields.interaction_id,
+            request_version: fields.request_version,
             action: fields.action,
             values,
         })
@@ -1681,7 +1712,7 @@ pub struct SessionReadResources {
         deserialize_with = "deserialize_optional_non_null",
         skip_serializing_if = "Option::is_none"
     )]
-    pub pending_interactions: Option<Vec<SnapshotItemPendingInteraction>>,
+    pub pending_interactions: Option<Vec<EffectiveInteraction>>,
     #[serde(
         default,
         deserialize_with = "deserialize_optional_non_null",

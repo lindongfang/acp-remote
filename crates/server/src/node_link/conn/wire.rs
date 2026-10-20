@@ -288,7 +288,7 @@ pub(crate) fn judge(
 /// 「每次消息级拒绝都推进入站期望序号」），不推进会让对端其后每条消息都被判
 /// `nodelink.protocol.sequence_invalid` 且永不推进，连接退化成只出不进的哑管道。已知 type 的路径
 /// （`POST_MVP` 与路由拒绝）用同一口径，只是那时序号已经由 `Envelope` 解出、不需要重读帧。
-fn sequence_after_rejection(
+pub(crate) fn sequence_after_rejection(
     text: &str,
     phase: Phase,
     expected_sequence: Option<u64>,

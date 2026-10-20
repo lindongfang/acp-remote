@@ -36,19 +36,43 @@ import type {
   EventMessage,
   ModeState,
   PairingLookupResponse,
+  PromptContentBlock,
   PublicError,
   SessionReadInclude,
   SessionReadResult,
   SessionSummary,
   SnapshotItemHistory,
   SnapshotItemMessages,
-  SnapshotItemPendingInteractions,
   Uuid,
 } from "../protocol";
+import { ATTACHMENT_READ_MAX_LENGTH, decodeEffectiveInteraction, decodePartialResult, messageChannelOf } from "../protocol";
 import { isCommandStatusRecord } from "../sync-client/wire";
 import type { ReadCursor, StagedResources, SyncClientEvent } from "../sync-client";
+
+/** 刷新后附件连接可能仍在认证/重连：媒体读取对「尚未就绪」做有界等待，其他错误立即失败。 */
+const ATTACHMENT_READY_ATTEMPTS = 20;
+const ATTACHMENT_READY_DELAY_MS = 150;
+
+function isTransientAttachmentReadiness(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return (
+    text.includes("尚未就绪") ||
+    text.includes("尚未装配") ||
+    text.includes("not ready") ||
+    text.includes("not connected")
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  // 目标 lib 尚无 `Promise.withResolvers`（ES2024）；这里只有一个 resolve，执行器形式最直接。
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 import {
   AgentConnectionOverlayStore,
+  ATTACHMENT_FEATURE,
+  PENDING_INTERACTIONS_FEATURE,
   SESSION_HISTORY_FEATURE,
   assertHistoryPagesDoNotOverlap,
   assertPagesDoNotOverlap,
@@ -56,6 +80,9 @@ import {
   toLoadedHistoryPage,
   toLoadedPage,
 } from "../sync-client";
+import type {
+  PendingInteractionInput,
+} from "./interaction-model";
 import type { AllFilesDirectoryView, FileSource, GitDiffView } from "../domain/session-files";
 import { buildSessionChangesModel } from "../domain/session-files";
 import {
@@ -93,27 +120,51 @@ import {
 } from "../state";
 import type {
   AgentCatalogEntryView,
+  AttachmentMediaView,
+  FormInputValue,
   InteractionView,
   ModeChangedTimelineCard,
+  PartialResultView,
   SessionReadPageView,
   StructuredRecord,
 } from "../domain";
 import {
   INTERACTION_UNAVAILABLE_LABELS,
+  PARTIAL_RESULT_LABELS,
   buildAgentCatalogView,
+  buildElicitationForm,
   buildSessionReadPageView,
   buildTimelineCard,
   compareTimelinePosition,
   directoryNamesOf,
+  mediaBlocksOfDelta,
   mergeStructuredRecords,
   positionOf,
   recordFromEvent,
   recordFromHistoryItem,
   recordGroupOf,
+  validateElicitationForm,
   viewText,
 } from "../domain";
 import type { AgentConnectionOverlay } from "../domain/agent-catalog";
-import type { ConnectionIdentity, IdentifierSource, SyncGateway } from "./ports";
+import type {
+  AttachmentCapability,
+  AttachmentKind,
+  DraftAttachment,
+} from "./attachment-model";
+import {
+  attachmentCapabilityOf,
+  buildAttachmentBatch,
+  isWorkspacePathRef,
+} from "./attachment-model";
+import type {
+  AttachmentFileHandle,
+  AttachmentMediaPort,
+  AttachmentTransferGateway,
+  ConnectionIdentity,
+  IdentifierSource,
+  SyncGateway,
+} from "./ports";
 import type {
   ConversationHeaderModel,
   ConversationPageModel,
@@ -217,20 +268,20 @@ import { DEVICE_QR_FRAGMENT_PREFIX } from "../protocol";
 /**
  * 对话页首屏请求的明细资源。
  *
- * 正文（`messages`）之外还要两样：配置项（模型/模式的可选项，D5 的配置面）与待处理交互
- * （`pending_interactions`：历史读回的待处理项要呈现为「不可操作并说明原因」）。
- * 结构化历史（`history`）不在这里——它只在服务端协商到 `core.session-history.v1` 时才带上
- * （未协商却请求它会得到明确的不支持类错误，`design.md` 的 Compatibility）。
+ * 正文（`messages`）之外还要配置项（模型/模式的可选项）。`pending_interactions` 只在协商
+ * `core.pending-interactions.v1` 后带上：它返回服务端确认过的**当前有效**完整请求（含
+ * `requestVersion`/`options`），是刷新或换设备后仍可应答的唯一依据。结构化历史只在协商
+ * `core.session-history.v1` 时才带。
  */
-// Sync v1 当前只支持这些首次读取资源；pending_interactions/turns/capabilities
-// 会使服务端拒绝整条查询。实时交互与结构化历史仍按原有事件路径处理。
 const CONVERSATION_INCLUDES: readonly SessionReadInclude[] = ["messages", "config_options"];
 
-/** 一次 `session.read` 取回的明细资源（v1 对话页需要的两样）。 */
+/** 一次 `session.read` 取回的明细资源。 */
 interface StagedReadResources {
-  readonly pendingInteractions: readonly SnapshotItemPendingInteractions[];
+  readonly pendingInteractions: readonly PendingInteractionInput[];
   readonly configOptions: readonly ConfigOptionView[];
   readonly configVersion: string | null;
+  /** 本会话的 Agent 能力声明（`capabilities` 资源；服务端未提供时缺席）。 */
+  readonly agentCapabilities: Readonly<Record<string, unknown>> | null;
 }
 
 /** 一个会话的明细线程（分页现取的结果）。 */
@@ -247,16 +298,45 @@ export interface ConversationThreadState {
   readonly pagingError: string | null;
   /** 仅文件栏手动刷新会话变更的失败，不复用首次加载/消息翻页错误。 */
   readonly historyRefreshError?: string | null;
+  /**
+   * 本线程是否已完成过一次「重新取得当前有效请求」。
+   *
+   * 完成后仍未被服务端确认的历史交互不再标「尚未确认」（`read_from_history`），而改标
+   * 「服务端当前不再确认」（`not_effective`）——否则按钮点下去在结果为空时没有任何可见变化。
+   */
+  readonly interactionsRefreshed?: boolean;
 }
 
-/** 一次 `session.read` 的用途：首屏、向上翻消息、向上翻历史。三者合并结果的方式不同。 */
-type ReadIntent = "first" | "earlier" | "earlier_history" | "refresh_history";
+/** 一次 `session.read` 的用途：首屏、向上翻消息、向上翻历史、刷新历史、刷新有效交互。 */
+type ReadIntent = "first" | "earlier" | "earlier_history" | "refresh_history" | "refresh_interactions" | "refresh_messages";
 
 /** 待完成的读取请求。 */
 interface PendingRead {
   readonly sessionId: Uuid;
   readonly intent: ReadIntent;
+  /**
+   * 发起读取时已经存在于易失叠加层的增量（`messageId → deltaIndex`）。
+   *
+   * 读取结果只清掉**这一批**：同一请求之后新到的增量留在叠加层里，接在权威正文之后。
+   * 这就是 design D5 的「读取屏障」——旧读取不覆盖新增量。
+   */
+  readonly volatileAtRequest: ReadonlyMap<string, ReadonlySet<string>>;
 }
+
+/** 一次发送尝试的上传/清单状态（与业务命令记录分离：上传成功不等于消息被受理）。 */
+export interface AttachmentRunState {
+  readonly phase: "uploading" | "sealed" | "failed";
+  /** 稳定 `requestId`：本次发送重试复用同一个（服务端幂等）。 */
+  readonly promptRequestId: Uuid;
+  /** 清单标识（`manifest_sealed` 的标识；`session.prompt.submissionId`）。 */
+  readonly submissionId: Uuid;
+  /** 提交清单的过程与结果。 */
+  readonly manifestSealed: boolean;
+  readonly error: string | null;
+}
+
+/** 一条媒体读取的呈现状态（视图模型见 `domain/media.ts`）。 */
+export type AttachmentMediaState = AttachmentMediaView;
 
 /** 本设备提交的切换意图（模型/模式各一条），用于「切换中」的呈现。 */
 interface SwitchIntent {
@@ -288,6 +368,14 @@ export interface ClientState {
   readonly discardedTurns: ReadonlySet<string>;
   /** 会话的文本草稿（只在内存；`no-content-cache` 边界，D10）。 */
   readonly drafts: ReadonlyMap<Uuid, string>;
+  /** 已选择的附件（只在内存；选择阶段不上传、不落盘）。 */
+  readonly attachments: ReadonlyMap<Uuid, readonly DraftAttachment[]>;
+  /** 每次发送尝试的上传/清单状态；与命令记录分离。 */
+  readonly attachmentRuns: ReadonlyMap<Uuid, AttachmentRunState>;
+  /** 工作目录路径引用（相对路径；与服务端再校验之前只是草稿的一部分）。 */
+  readonly pathRefs: ReadonlyMap<Uuid, readonly string[]>;
+  /** 已读取的媒体（按 `attachmentId`）：只保存对象 URL 与状态，字节不留在公开状态里。 */
+  readonly attachmentMedia: ReadonlyMap<string, AttachmentMediaState>;
   /** 每个会话最近一次用量事件。键**不存在**即「从未收到用量事件」（R17 第一态）。 */
   readonly usage: ReadonlyMap<Uuid, UsageReading>;
   readonly threads: ReadonlyMap<Uuid, ConversationThreadState>;
@@ -378,6 +466,10 @@ export function initialClientState(): ClientState {
     volatile: new Map(),
     discardedTurns: new Set(),
     drafts: new Map(),
+    attachments: new Map(),
+    attachmentRuns: new Map(),
+    pathRefs: new Map(),
+    attachmentMedia: new Map(),
     usage: new Map(),
     threads: new Map(),
     readResources: new Map(),
@@ -514,6 +606,17 @@ function describeCommandFailure(result: CommandResultMessage): string {
   return error.retryable ? `${error.code}：${error.message}（可重试）` : `${error.code}：${error.message}`;
 }
 
+/** `partialResult` 视图；形状不合规时返回 `null`（不编造完成状态）。 */
+function partialViewFrom(value: unknown): PartialResultView | null {
+  const decoded = decodePartialResult(value);
+  if (!decoded.ok) return null;
+  return {
+    state: decoded.value.state,
+    reason: decoded.value.reason,
+    label: PARTIAL_RESULT_LABELS[decoded.value.state],
+  };
+}
+
 /**
  * 历史条目并入状态（按 `eventId` 去重）。
  *
@@ -529,16 +632,93 @@ function withHistory(state: ClientState, sessionId: Uuid, items: readonly Snapsh
   return { ...state, history };
 }
 
+/** 读回的待处理交互逐项解码（协商 `core.pending-interactions.v1` 后的 `effectiveInteraction` 与旧定位形状）。 */
+function decodePendingInteractions(raw: readonly unknown[]): PendingInteractionInput[] {
+  const pendingInteractions: PendingInteractionInput[] = [];
+  for (const item of raw) {
+    const decoded = decodeEffectiveInteraction(item);
+    if (decoded.ok) {
+      pendingInteractions.push({
+        interactionId: decoded.value.interactionId,
+        sessionId: decoded.value.sessionId,
+        kind: decoded.value.kind,
+        requestVersion: decoded.value.requestVersion,
+        expiresAt: decoded.value.expiresAt,
+        options: decoded.value.options,
+        schema: decoded.value.schema,
+        effective: true,
+        createdAt: null,
+      });
+      continue;
+    }
+    // 旧 peer 的定位形状（无 requestVersion/options）：保留为不可操作卡片，不静默丢掉。
+    const legacy = legacyPendingInteraction(item);
+    if (legacy !== null) pendingInteractions.push(legacy);
+  }
+  return pendingInteractions;
+}
+
 /** 首屏读回的明细资源落到会话上（待处理交互 + 配置项，D7 与 D5 的配置面）。 */
 function withReadResources(state: ClientState, sessionId: Uuid, read: SessionReadResult): ClientState {
   const item = read.resources.config_options?.[0];
+  const capabilityItem = read.resources.capabilities?.[0];
   const readResources = new Map(state.readResources);
   readResources.set(sessionId, {
-    pendingInteractions: read.resources.pending_interactions ?? [],
+    pendingInteractions: decodePendingInteractions(read.resources.pending_interactions ?? []),
     configOptions: item?.configOptions ?? [],
     configVersion: item?.version ?? null,
+    agentCapabilities:
+      capabilityItem !== undefined && typeof capabilityItem.agentCapabilities === "object" && capabilityItem.agentCapabilities !== null
+        ? capabilityItem.agentCapabilities
+        : null,
   });
   return { ...state, readResources };
+}
+
+/**
+ * 刷新有效交互的结果落到会话上：**只**替换 `pendingInteractions`。
+ *
+ * `config_options` 与 `capabilities` 来自首屏读取（它们不在这次请求的 include 里）；这里必须
+ * 原样保留，否则一次「重新取得当前有效请求」会把模型/模式可选项和 Agent 能力声明一起清空。
+ */
+function withPendingInteractions(state: ClientState, sessionId: Uuid, read: SessionReadResult): ClientState {
+  const existing = state.readResources.get(sessionId);
+  const readResources = new Map(state.readResources);
+  readResources.set(sessionId, {
+    pendingInteractions: decodePendingInteractions(read.resources.pending_interactions ?? []),
+    configOptions: existing?.configOptions ?? [],
+    configVersion: existing?.configVersion ?? null,
+    agentCapabilities: existing?.agentCapabilities ?? null,
+  });
+  return { ...state, readResources };
+}
+
+/** 旧 peer 的 `snapshotItem.pending_interactions` 形状 → 不可操作的内部条目。 */
+function legacyPendingInteraction(value: unknown): PendingInteractionInput | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const interactionId: unknown = Reflect.get(value, "interactionId");
+  const sessionId: unknown = Reflect.get(value, "sessionId");
+  const kind: unknown = Reflect.get(value, "kind");
+  const schema: unknown = Reflect.get(value, "schema");
+  const createdAt: unknown = Reflect.get(value, "createdAt");
+  if (
+    typeof interactionId !== "string" ||
+    typeof sessionId !== "string" ||
+    (kind !== "permission" && kind !== "elicitation")
+  ) {
+    return null;
+  }
+  return {
+    interactionId,
+    sessionId,
+    kind,
+    requestVersion: null,
+    expiresAt: null,
+    options: null,
+    schema: typeof schema === "object" && schema !== null ? (schema as Readonly<Record<string, unknown>>) : null,
+    effective: false,
+    createdAt: typeof createdAt === "string" ? createdAt : null,
+  };
 }
 
 /** 一次用户意图的提交结果：成功给出 `requestId`；失败给出原因且**没有派发任何命令**。 */
@@ -664,6 +844,16 @@ export interface ClientStoreOptions {
    * `refreshFiles` 驱动，生产由组合根注入时钟的 `schedule`。
    */
   readonly schedule?: ((delayMs: number, task: () => void) => () => void) | undefined;
+  /**
+   * 附件与媒体端口（组合根装配）。缺省时附件能力**明确不可用**：`attachmentsSupported`
+   * 为假并给出说明，不会伪造一个「点了没反应」的上传入口。
+   */
+  readonly attachments?:
+    | {
+        readonly media: AttachmentMediaPort;
+        readonly transfer: AttachmentTransferGateway;
+      }
+    | undefined;
 }
 
 /** 一条在途的文件栏查询（请求代次与返回上下文在结果到达时逐项核对）。 */
@@ -730,8 +920,37 @@ export class ClientStore {
   readonly #fileRefreshTimers = new Map<string, () => void>();
   /** 已排队但在飞的刷新：一次只允许一个同来源查询。 */
   readonly #fileRefreshQueued = new Set<string>();
+  /** 压缩通知后待重读权威消息的会话（`turn.delta_compacted`）。 */
+  readonly #messageRefreshQueued = new Set<Uuid>();
+  /** 首次读取在连接认证前被丢弃的会话；`authenticated` 后补发。 */
+  readonly #deferredReads = new Set<Uuid>();
+  /** `session.prompt` 派发前的草稿/附件快照：被拒绝或失败时恢复（不静默丢用户内容）。 */
+  readonly #promptDrafts = new Map<Uuid, {
+    readonly sessionId: Uuid;
+    readonly text: string;
+    readonly pathRefs: readonly string[];
+    readonly attachments: readonly DraftAttachment[];
+  }>();
   /** 当前对话页的会话；切换时旧会话的文件读取必须作废（迟到的响应不能重新打开文件）。 */
   #activeConversationSession: Uuid | null = null;
+  /** 附件端口（组合根装配）；未装配时附件入口明确不可用。 */
+  readonly #attachmentMedia: AttachmentMediaPort | null;
+  readonly #attachmentTransfer: AttachmentTransferGateway | null;
+  /** 平台句柄只活在私有表里；公开状态只带元数据与对象 URL。 */
+  readonly #attachmentHandles = new Map<string, AttachmentFileHandle>();
+  /** 正在进行的上传（避免同一会话重复启动两批）。 */
+  readonly #uploadingSessions = new Set<Uuid>();
+  /** 每个会话当前在途的传输标识（取消时用它发 `attachment.abort`）。 */
+  readonly #activeTransfers = new Map<Uuid, string>();
+  /** 被用户取消的上传（在途轮询到它即中止，且整批标为已取消）。 */
+  readonly #cancelledUploads = new Set<Uuid>();
+  /**
+   * 每次媒体读取的代次（按 `attachmentId`）。释放/重新读取都会换一个代次，因此迟到的读取结果
+   * 既不会重新挂上已撤销的对象 URL，也不会覆盖后一次读取。
+   */
+  readonly #mediaReads = new Map<string, number>();
+  /** 同一附件的在途读取：并发调用共享同一个 Promise；代次用于跨卸载/重建串行化。 */
+  readonly #mediaLoads = new Map<string, { readonly generation: number; readonly promise: Promise<void> }>();
   #pairingSession: PairingSession | null = null;
   #state: ClientState = initialClientState();
 
@@ -743,6 +962,8 @@ export class ClientStore {
     this.#ownerLabelOf = options.ownerLabelOf ?? ((ownerNodeId: string) => ownerNodeId);
     this.#pairing = options.pairing ?? null;
     this.#schedule = options.schedule ?? null;
+    this.#attachmentMedia = options.attachments?.media ?? null;
+    this.#attachmentTransfer = options.attachments?.transfer ?? null;
   }
 
   /** 当前状态。 */
@@ -775,6 +996,8 @@ export class ClientStore {
     if (next === this.#state) return;
     this.#commit(next);
     this.#drainQueuedFileRefreshes();
+    this.#drainQueuedMessageRefreshes();
+    if (event.kind === "authenticated") this.#drainDeferredReads();
     // 创建完成只带目录引用，路径必须从服务端快照取得，不能按用户输入伪造目录条目。
     if (event.kind === "command_result" && event.result.body.command === "session.create" &&
       event.result.body.status === "completed" && !this.#directoryRefreshRequests.has(event.result.body.requestId)) {
@@ -934,8 +1157,12 @@ export class ClientStore {
     if (channel !== null) {
       const messageId = viewText(record.view, "messageId");
       const deltaIndex = viewText(record.view, "deltaIndex");
+      // 纯媒体增量：schema 的 `text` 无 `minLength`，空串是合法取值，媒体块正是「仅非文本内容」
+      // 的载体。先解析块再判空，否则图片/音频/文件增量会被整体丢掉（实时里永远不出现）。
+      const rawBlock = record.view["block"];
+      const blockMedia = rawBlock === undefined ? [] : mediaBlocksOfDelta(rawBlock);
       const text = viewText(record.view, "text");
-      if (messageId === null || deltaIndex === null || text === null) return state;
+      if (messageId === null || deltaIndex === null || (text === null && blockMedia.length === 0)) return state;
       const turnId = viewText(record.view, "turnId");
       // 被压缩过的轮次：迟到的增量不再累加（作废的内容 MUST NOT 重新出现）。
       if (turnId !== null && sessionId !== null && state.discardedTurns.has(`${sessionId}|${turnId}`)) {
@@ -950,8 +1177,9 @@ export class ClientStore {
           channel,
           turnId,
           deltaIndex,
-          text,
+          text: text ?? "",
           createdAt: record.createdAt,
+          mediaBlocks: blockMedia,
         }),
       );
       return { ...state, volatile };
@@ -961,10 +1189,40 @@ export class ClientStore {
       const messageId = viewText(record.view, "messageId");
       if (messageId === null) return state;
       const existing = state.volatile.get(messageId);
-      if (existing === undefined || existing.completed) return state;
+      if (existing === undefined) return state;
+      const announcedChannel = messageChannelOf(record.view["channel"]);
+      // 协议通道是 `reply|thought`，时间线通道是 `user|agent|thought`：`reply` 属于 Agent 消息。
+      const channel =
+        announcedChannel === "thought" ? "thought" : announcedChannel === "reply" ? "agent" : existing.channel;
+      const partial = partialViewFrom(record.view["partial"]);
+      if (
+        existing.completed &&
+        existing.channel === channel &&
+        existing.partial?.state === partial?.state &&
+        existing.partial?.reason === partial?.reason
+      ) {
+        return state;
+      }
       const volatile = new Map(state.volatile);
-      volatile.set(messageId, { ...existing, completed: true });
+      volatile.set(messageId, { ...existing, completed: true, channel, partial: partial ?? existing.partial });
       return { ...state, volatile };
+    }
+
+    if (record.eventType === "turn.failed" || record.eventType === "turn.cancelled") {
+      const turnId = viewText(record.view, "turnId");
+      if (turnId === null || sessionId === null) return state;
+      const partial = partialViewFrom({
+        state: record.eventType === "turn.failed" ? "failed" : "cancelled",
+        reason: record.eventType === "turn.failed" ? "agent_failed" : "turn_cancelled",
+      });
+      const volatile = new Map(state.volatile);
+      let changed = false;
+      for (const [messageId, tail] of volatile) {
+        if (tail.turnId !== turnId || tail.sessionId !== sessionId) continue;
+        volatile.set(messageId, { ...tail, completed: true, partial });
+        changed = true;
+      }
+      return changed ? { ...state, volatile } : state;
     }
 
     if (record.eventType === "turn.delta_compacted") {
@@ -975,6 +1233,11 @@ export class ClientStore {
       const volatile = new Map(state.volatile);
       for (const [messageId, tail] of volatile) {
         if (tail.turnId === turnId && tail.sessionId === sessionId) volatile.delete(messageId);
+      }
+      // 压缩只清了易失叠加层；权威正文仍在 `owned_message`。当前会话必须重读消息页，
+      // 否则真实 Agent 的回复在实时视图与刷新后的历史里都会消失。
+      if (this.#activeConversationSession === sessionId) {
+        this.#messageRefreshQueued.add(sessionId);
       }
       return { ...state, discardedTurns, volatile };
     }
@@ -1006,6 +1269,23 @@ export class ClientStore {
     commands.set(updated.requestId, updated);
 
     let next: ClientState = { ...this.#state, commands };
+    if (result.body.command === "session.prompt") {
+      const snapshot = this.#promptDrafts.get(result.body.requestId);
+      if (snapshot !== undefined && (result.body.status === "rejected" || result.body.status === "failed")) {
+        // 受理前拒绝（如 Agent 不支持该媒体）或 turn 失败：把派发前清掉的草稿/选择完整放回。
+        const attachments = new Map(next.attachments);
+        attachments.set(snapshot.sessionId, snapshot.attachments);
+        next = {
+          ...next,
+          drafts: withEntry(next.drafts, snapshot.sessionId, snapshot.text),
+          pathRefs: withEntry(next.pathRefs, snapshot.sessionId, snapshot.pathRefs),
+          attachments,
+        };
+      }
+      if (["rejected", "failed", "completed", "uncertain"].includes(result.body.status)) {
+        this.#promptDrafts.delete(result.body.requestId);
+      }
+    }
     // 创建完成回复自带权威摘要；无需等待另一个 session.created 才让列表可见。
     // 只补缺失项：重投的创建结果不能覆盖之后的实时更新。
     if (result.body.command === "session.create" && result.body.status === "completed") {
@@ -1114,13 +1394,15 @@ export class ClientStore {
   /**
    * `session.read` 结果并入状态。
    *
-   * 三种用途各自合并自己那一份资源（D2）：
+   * 五种用途各自合并自己那一份资源（D2）：
    *
    * - `first`：整页替换消息、记下读回的明细资源（待处理交互/配置项）、记录历史页标记；
    *   并把读取结果里出现的 `messageId` 从易失叠加层里清掉——**读取结果为准**（D6）。
    * - `earlier`：消息向上翻页（不重不漏由 `assertPagesDoNotOverlap` 把关）。
    * - `earlier_history`：历史条目向上翻页（`assertHistoryPagesDoNotOverlap`）；
    *   它**不**动消息页，消息分页也**不**动历史页——两套游标互不影响。
+   * - `refresh_history`：只并入最新一页历史，不重置分页位置。
+   * - `refresh_interactions`：只替换服务端确认的当前有效请求，保留首屏的配置项与能力声明。
    */
   #applyReadResult(state: ClientState, result: CommandResultMessage): ClientState {
     const pending = this.#pendingReads.get(result.body.requestId);
@@ -1135,13 +1417,22 @@ export class ClientStore {
         ...existing,
         loadingEarlier: false,
         loadingHistory: false,
-        pagingError: pending.intent === "refresh_history" ? existing.pagingError : describeCommandFailure(result),
+        // 刷新有效交互失败时保持原分页/历史错误，不把别的读取的失败借用过来。
+        pagingError:
+          pending.intent === "refresh_history" || pending.intent === "refresh_interactions"
+            ? existing.pagingError
+            : describeCommandFailure(result),
         historyRefreshError: pending.intent === "refresh_history" ? describeCommandFailure(result) : existing.historyRefreshError ?? null,
       });
       return { ...state, threads };
     }
 
     const read = result.body.result as SessionReadResult;
+    if (pending.intent === "refresh_interactions") {
+      // 这一次读取本身就是「服务端当前有效请求」的确认：结果里没有的历史卡片从此标「不再有效」。
+      threads.set(sessionId, { ...existing, interactionsRefreshed: true });
+      return { ...withPendingInteractions(state, sessionId, read), threads };
+    }
     if (pending.intent === "refresh_history") {
       const loaded = toLoadedHistoryPage(read);
       const hadHistory = existing.page !== null || [...state.history.values()].some(record => record.sessionId === sessionId);
@@ -1171,9 +1462,36 @@ export class ClientStore {
     }
 
     const loaded = toLoadedPage(read);
-    // 读取结果胜出：同 id 的易失累加内容不再呈现（MUST NOT 叠加成重复文本）。
+    // 读取屏障：只清掉**发起读取时已经存在**的增量；之后新到的增量留在叠加层里，由时间线接在
+    // 权威正文之后。因此较早发出的读取结果不会覆盖较新的实时内容（design D5）。
     const volatileAfterRead = new Map(state.volatile);
-    for (const message of loaded.messages) volatileAfterRead.delete(message.messageId);
+    for (const message of loaded.messages) {
+      const tail = volatileAfterRead.get(message.messageId);
+      if (tail === undefined) continue;
+      const confirmed = pending.volatileAtRequest.get(message.messageId);
+      if (confirmed === undefined || confirmed.size === 0) continue;
+      const deltas = new Map(tail.deltas);
+      for (const deltaIndex of confirmed) deltas.delete(deltaIndex);
+      if (deltas.size === 0) volatileAfterRead.delete(message.messageId);
+      else volatileAfterRead.set(message.messageId, { ...tail, deltas });
+    }
+    if (pending.intent === "refresh_messages") {
+      // 压缩后的权威回填：用最新消息页替换同 id 的旧条目，保留更早已加载的页。
+      const loadedIds = new Set(loaded.messages.map((message) => message.messageId));
+      const items = [
+        ...loaded.messages,
+        ...existing.items.filter((item) => !loadedIds.has(item.messageId)),
+      ];
+      threads.set(sessionId, {
+        ...existing,
+        page: buildSessionReadPageView(loaded.result),
+        items,
+        loadingEarlier: false,
+        pagingError: null,
+      });
+      return { ...state, threads, volatile: volatileAfterRead };
+    }
+
     // 首屏同时把历史条目与明细资源（待处理交互、配置项）落进来；翻页请求只并入自己那一份。
     const staged =
       pending.intent === "first"
@@ -1338,6 +1656,7 @@ export class ClientStore {
 
     // 结构化记录：实时与历史按 `eventId` 去重（实时优先），再筛出本会话。
     const records = this.#recordsOf(sessionId);
+    const effectiveNow = nowMs ?? this.#now();
     const interactions = buildInteractionViews({
       records,
       pending: this.#state.readResources.get(sessionId)?.pendingInteractions ?? [],
@@ -1345,6 +1664,10 @@ export class ClientStore {
       commands: this.#state.commands,
       deviceId: this.#state.deviceId,
       sessionOpen,
+      effectiveAt: new Date(effectiveNow).toISOString(),
+      nowMs: effectiveNow,
+      pendingChecked: thread?.interactionsRefreshed === true,
+      requestVersionRequired: this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE),
     });
     const entries = buildTimeline({
       messages: thread?.page?.messages ?? [],
@@ -1367,6 +1690,19 @@ export class ClientStore {
       modeSwitchCommand: this.#switchCommandOf(sessionId, "mode"),
     });
     const activeTurn = activeTurnOf(records);
+    const draftAttachments = this.#state.attachments.get(sessionId) ?? [];
+    const pathRefs = this.#state.pathRefs.get(sessionId) ?? [];
+    const agentCapabilities = this.#state.readResources.get(sessionId)?.agentCapabilities ?? null;
+    const attachmentsNegotiated =
+      this.#state.selectedFeatures.includes(ATTACHMENT_FEATURE) &&
+      this.#attachmentTransfer !== null &&
+      this.#attachmentMedia !== null;
+    const attachmentBatch = buildAttachmentBatch({
+      attachments: draftAttachments,
+      pathRefs,
+      capabilityOf: (kind: AttachmentKind): AttachmentCapability =>
+        attachmentCapabilityOf(kind, agentCapabilities),
+    });
     const input: ConversationInputModel = buildConversationInputModel({
       sessionOpen,
       connectionOnline,
@@ -1377,6 +1713,9 @@ export class ClientStore {
       cancelCommand:
         activeTurn === null ? null : this.#lastCommandOf(this.#state.cancelRequestIds.get(activeTurn.turnId)),
       draft: this.#state.drafts.get(sessionId) ?? "",
+      attachmentsNegotiated,
+      attachments: attachmentBatch,
+      pathRefs,
     });
 
     return buildConversationModel({
@@ -1398,6 +1737,7 @@ export class ClientStore {
       nextBeforeHistory: thread?.nextBeforeHistory ?? null,
       input,
       interactions,
+      media: this.#state.attachmentMedia,
       settings,
       fileChanges: buildFileChangeViews(records),
       // 左栏只读快照：同目录会话、目录上下文与「已呈现 / 总数」都由快照推出，没有命令出口。
@@ -2410,7 +2750,22 @@ export class ClientStore {
    */
   loadSession(sessionId: Uuid): void {
     if (this.#pendingReads.size > 0) return;
-    this.#requestPage(sessionId, "first");
+    const requestId = this.#requestPage(sessionId, "first");
+    if (requestId === null) {
+      // 页面可能在认证完成前挂载（直接打开 `/session/<id>` 或刷新）；此时不能静默丢掉首次读取。
+      this.#deferredReads.add(sessionId);
+    } else {
+      this.#deferredReads.delete(sessionId);
+    }
+  }
+
+  /** 认证完成后补发被推迟的首次读取（只处理当前对话页的会话）。 */
+  #drainDeferredReads(): void {
+    for (const sessionId of [...this.#deferredReads]) {
+      if (this.#activeConversationSession !== sessionId) continue;
+      this.#deferredReads.delete(sessionId);
+      this.loadSession(sessionId);
+    }
   }
 
   /** 向上翻页（消息）：续取游标取上一页最早一条的 `(createdAt, messageId)`。 */
@@ -2431,6 +2786,26 @@ export class ClientStore {
     const beforeHistory = this.#state.threads.get(sessionId)?.nextBeforeHistory ?? null;
     if (beforeHistory === null || this.#pendingReads.size > 0) return;
     this.#requestPage(sessionId, "earlier_history", { beforeHistory });
+  }
+
+  /**
+   * 重新取得服务端确认的当前有效交互（刷新 / 换设备后）。
+   *
+   * 走**专门的** `refresh_interactions` 读取：协商 `core.pending-interactions.v1` 后只请求
+   * `pending_interactions`，结果只替换待处理交互这一份资源——`config_options`/`capabilities`
+   * 来自首屏读取，不能被这次刷新顺手清空。`effectiveInteraction` 会重建卡片的可用性；
+   * 服务端不再确认的卡片改标「不再有效」，因此点击一定有可见结果。
+   *
+   * 未协商到该 feature、已有读取在途或没有已认证连接时不派发命令，返回可呈现的原因。
+   */
+  refreshInteractions(sessionId: Uuid): CommandOutcome {
+    if (!this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE)) {
+      return { ok: false, reason: "当前连接未协商 core.pending-interactions.v1，无法重新取得服务端确认的请求" };
+    }
+    if (this.#pendingReads.size > 0) return { ok: false, reason: "已有一次会话读取在进行中，请等它完成" };
+    const requestId = this.#requestPage(sessionId, "refresh_interactions");
+    if (requestId === null) return NOT_CONNECTED;
+    return { ok: true, requestId };
   }
 
   /** 加载模式清单（`session.mode.list`）：模型/模式分节的「可选项」来源。 */
@@ -2471,6 +2846,10 @@ export class ClientStore {
     const interaction = this.#interactionOf(sessionId, interactionId);
     const blocked = responseGate(interaction);
     if (blocked !== null) return blocked;
+    // 协商后服务端不得因 `requestVersion` 缺席放宽校验：版本未知就**不发**命令。
+    if (interaction?.requestVersion == null && this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE)) {
+      return { ok: false, reason: INTERACTION_UNAVAILABLE_LABELS.request_version_unknown };
+    }
     const answers = interaction?.availability.kind === "answerable" ? interaction.availability.answers : [];
     if (!answers.some((answer) => answer.via === "option" && answer.optionId === optionId)) {
       return { ok: false, reason: "这次请求没有下发该可选项，不能提交" };
@@ -2481,11 +2860,35 @@ export class ClientStore {
         requestId: id,
         command: "permission.resolve",
         sessionId,
-        payload: { interactionId, optionId },
+        payload: {
+          interactionId,
+          optionId,
+          ...(interaction?.requestVersion == null ? {} : { requestVersion: interaction.requestVersion }),
+        },
       }),
       patch: (id) => ({ responseRequestIds: withEntry(this.#state.responseRequestIds, interactionId, id) }),
     });
     return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
+  }
+
+  /**
+   * 按当前有效请求的表单 schema 校验并提交 `values`。
+   *
+   * 未知必需字段/不可表达类型时**整体拒绝**（不派发命令），保留拒绝/取消等合法动作；
+   * 精确整数包成 `JsonNumberLiteral`，序列化时保持原文。
+   */
+  submitElicitationForm(
+    sessionId: Uuid,
+    interactionId: string,
+    input: Readonly<Record<string, FormInputValue>>,
+  ): CommandOutcome {
+    const interaction = this.#interactionOf(sessionId, interactionId);
+    if (interaction === null) return { ok: false, reason: "这条待处理交互不在本设备的状态里" };
+    if (interaction.kind !== "elicitation") return { ok: false, reason: "这不是一张表单" };
+    const form = buildElicitationForm(interaction.schema);
+    const validated = validateElicitationForm(form, input);
+    if (!validated.ok) return { ok: false, reason: validated.detail };
+    return this.respondToElicitation(sessionId, interactionId, "submit", validated.values);
   }
 
   /** 应答提问请求（`elicitation.respond`；`submit` 才带表单值，其余两支的 `values` 固定为 `null`）。 */
@@ -2498,12 +2901,28 @@ export class ClientStore {
     const interaction = this.#interactionOf(sessionId, interactionId);
     const blocked = responseGate(interaction);
     if (blocked !== null) return blocked;
+    // 同上：协商后应答必须携带 `requestVersion`，未知时不发命令。
+    if (interaction?.requestVersion == null && this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE)) {
+      return { ok: false, reason: INTERACTION_UNAVAILABLE_LABELS.request_version_unknown };
+    }
     const answers = interaction?.availability.kind === "answerable" ? interaction.availability.answers : [];
     if (!answers.some((answer) => answer.via === "action" && answer.action === action)) {
       return { ok: false, reason: "这次请求不支持该动作，不能提交" };
     }
     const payload: ElicitationRespondPayload =
-      action === "submit" ? { interactionId, action, values } : { interactionId, action, values: null };
+      action === "submit"
+        ? {
+            interactionId,
+            action,
+            values,
+            ...(interaction?.requestVersion == null ? {} : { requestVersion: interaction.requestVersion }),
+          }
+        : {
+            interactionId,
+            action,
+            values: null,
+            ...(interaction?.requestVersion == null ? {} : { requestVersion: interaction.requestVersion }),
+          };
     const requestId = this.#dispatchIntent({
       sessionId,
       build: (id) => ({ requestId: id, command: "elicitation.respond", sessionId, payload }),
@@ -2567,6 +2986,288 @@ export class ClientStore {
   /** 当前草稿；未输入过为空串。 */
   draftOf(sessionId: Uuid): string {
     return this.#state.drafts.get(sessionId) ?? "";
+  }
+
+  // ── 附件与媒体（WP6） ─────────────────────────────────────────────────────
+
+  /**
+   * 打开平台选择器并把选中项加入草稿（**不上传**）。
+   *
+   * 选择阶段只在内存：附件的平台句柄保存在私有表，公开状态只有元数据与本机预览 URL。
+   * 取消选择器返回空数组，不产生任何状态变化。
+   */
+  async pickAttachments(sessionId: Uuid, kind: AttachmentKind): Promise<CommandOutcome> {
+    const unavailable = this.#attachmentsUnavailable();
+    if (unavailable !== null) return unavailable;
+    const handles = await this.#attachmentMedia!.pick(kind);
+    return this.#addAttachmentHandles(sessionId, handles);
+  }
+
+  /** 从粘贴事件取出图片/文件（页面只上抛事件，不解析 DataTransfer）。 */
+  async pasteAttachments(sessionId: Uuid, event: unknown): Promise<CommandOutcome> {
+    const unavailable = this.#attachmentsUnavailable();
+    if (unavailable !== null) return unavailable;
+    const handles = await this.#attachmentMedia!.fromPaste(event);
+    if (handles.length === 0) return { ok: false, reason: "粘贴内容里没有可添加的图片或文件" };
+    return this.#addAttachmentHandles(sessionId, handles);
+  }
+
+  /** 移除一个已选附件（立即撤销本机预览 URL；不触碰已封存的服务端内容）。 */
+  removeAttachment(sessionId: Uuid, localId: string): void {
+    const attachments = this.#state.attachments.get(sessionId) ?? [];
+    const removed = attachments.find((item) => item.localId === localId);
+    if (removed === undefined) return;
+    if (removed.previewUrl !== null) this.#attachmentMedia?.releaseUrl(removed.previewUrl);
+    this.#attachmentHandles.delete(localId);
+    const remaining = attachments.filter((item) => item.localId !== localId);
+    const next = new Map(this.#state.attachments);
+    if (remaining.length === 0) next.delete(sessionId);
+    else next.set(sessionId, remaining);
+    // 选择变化使上一次发送尝试的稳定 requestId 不再适用（内容不同，不能复用幂等键）。
+    const runs = new Map(this.#state.attachmentRuns);
+    runs.delete(sessionId);
+    this.#commit({ ...this.#state, attachments: next, attachmentRuns: runs });
+  }
+
+  /** 添加一个工作目录相对路径引用（只在本机校验形状；边界由服务端最终判定）。 */
+  addPathRef(sessionId: Uuid, path: string): CommandOutcome {
+    const candidate = path.trim();
+    if (!isWorkspacePathRef(candidate)) {
+      return { ok: false, reason: "只能引用当前会话工作目录内的相对路径（不接受绝对路径、`..` 或冒号）" };
+    }
+    const existing = this.#state.pathRefs.get(sessionId) ?? [];
+    if (existing.includes(candidate)) return { ok: false, reason: "这个路径已经在草稿里" };
+    const pathRefs = new Map(this.#state.pathRefs);
+    pathRefs.set(sessionId, [...existing, candidate]);
+    const runs = new Map(this.#state.attachmentRuns);
+    runs.delete(sessionId);
+    this.#commit({ ...this.#state, pathRefs, attachmentRuns: runs });
+    return { ok: true, requestId: this.#ids.uuid() };
+  }
+
+  /** 移除一个路径引用。 */
+  removePathRef(sessionId: Uuid, path: string): void {
+    const existing = this.#state.pathRefs.get(sessionId) ?? [];
+    const remaining = existing.filter((item) => item !== path);
+    const pathRefs = new Map(this.#state.pathRefs);
+    if (remaining.length === 0) pathRefs.delete(sessionId);
+    else pathRefs.set(sessionId, remaining);
+    this.#commit({ ...this.#state, pathRefs });
+  }
+
+  /**
+   * 读取一条已封存附件并生成本地对象 URL。
+   *
+   * 分块读取（单块 ≤32 KiB）后一次性创建 Blob URL：呈现图片/音频/下载都需要完整字节，但读取
+   * 过程不把整个文件当作单个请求。失败是显式状态，不画空占位。
+   */
+  async loadAttachmentMedia(
+    sessionId: Uuid,
+    attachmentId: string,
+    mimeType: string,
+  ): Promise<void> {
+    const existing = this.#mediaLoads.get(attachmentId);
+    if (existing !== undefined) {
+      // 同一代次：共享在途读取。释放后重建（代次已变）：先等旧读取结束，再发起新读取——
+      // 绝不能并发发两个 `attachment.read offset=0`（单等待槽会互相覆盖）。
+      if (existing.generation === (this.#mediaReads.get(attachmentId) ?? 0)) return existing.promise;
+      await existing.promise;
+    }
+    const generation = (this.#mediaReads.get(attachmentId) ?? 0) + 1;
+    this.#mediaReads.set(attachmentId, generation);
+    const promise = this.#loadAttachmentMediaOnce(sessionId, attachmentId, mimeType, generation);
+    this.#mediaLoads.set(attachmentId, { generation, promise });
+    try {
+      await promise;
+    } finally {
+      if (this.#mediaLoads.get(attachmentId)?.promise === promise) {
+        this.#mediaLoads.delete(attachmentId);
+      }
+    }
+  }
+
+  async #loadAttachmentMediaOnce(
+    sessionId: Uuid,
+    attachmentId: string,
+    mimeType: string,
+    generation: number,
+  ): Promise<void> {
+    const media = this.#attachmentMedia;
+    const transfer = this.#attachmentTransfer;
+    if (media === null || transfer === null) {
+      this.#setMedia(attachmentId, {
+        kind: "failed",
+        sessionId,
+        detail: "当前连接未装配附件读取能力。",
+      });
+      return;
+    }
+    // 代次由调用方递增：上一次读取（或释放）之后到达的结果一律作废。
+    const previous = this.#state.attachmentMedia.get(attachmentId);
+    if (previous !== undefined && previous.kind === "ready") media.releaseUrl(previous.url);
+    this.#setMedia(attachmentId, { kind: "loading", sessionId });
+    try {
+      const chunks: Uint8Array[] = [];
+      let offset = 0n;
+      for (;;) {
+        let chunk: { readonly data: Uint8Array; readonly length: string; readonly eof: boolean; readonly totalLength: string } | null = null;
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            chunk = await transfer.read({
+              attachmentId,
+              sessionId,
+              offset: offset.toString(),
+              maxLength: ATTACHMENT_READ_MAX_LENGTH,
+            });
+            break;
+          } catch (error) {
+            if (
+              attempt + 1 >= ATTACHMENT_READY_ATTEMPTS ||
+              !isTransientAttachmentReadiness(error) ||
+              this.#mediaReads.get(attachmentId) !== generation
+            ) {
+              throw error;
+            }
+            await delay(ATTACHMENT_READY_DELAY_MS);
+          }
+        }
+        if (chunk === null) throw new Error("读取附件失败");
+        chunks.push(chunk.data);
+        if (chunk.eof) break;
+        const length = BigInt(chunk.length);
+        if (length === 0n) throw new Error("服务端返回了零长度且未标记 EOF 的读取块");
+        offset += length;
+        if (BigInt(chunk.totalLength) > 0n && offset > BigInt(chunk.totalLength)) {
+          throw new Error("读取偏移超过附件总长度");
+        }
+      }
+      const bytes = concatBytes(chunks);
+      const url = media.createObjectUrl(bytes, mimeType);
+      if (url === null) throw new Error("当前平台不能创建 Blob URL");
+      // 迟到的读取不能覆盖后一次读取，也不能把已释放的 URL 重新挂上：立即撤销自己的产物。
+      if (this.#mediaReads.get(attachmentId) !== generation) {
+        media.releaseUrl(url);
+        return;
+      }
+      this.#setMedia(attachmentId, {
+        kind: "ready",
+        sessionId,
+        url,
+        mimeType,
+        byteLength: String(bytes.length),
+      });
+    } catch (error) {
+      if (this.#mediaReads.get(attachmentId) !== generation) return;
+      this.#setMedia(attachmentId, {
+        kind: "failed",
+        sessionId,
+        detail: error instanceof Error ? error.message : "读取附件失败",
+      });
+    }
+  }
+
+  /** 立即撤销一条媒体的对象 URL。 */
+  releaseAttachmentMedia(attachmentId: string): void {
+    // 作废在途读取：它回来时不能重新挂上已撤销的对象 URL。保留在途表项，让重建的加载
+    // 等待旧读取结束再发起新读取（否则两个 read offset=0 会争用同一等待槽）。
+    this.#mediaReads.set(attachmentId, (this.#mediaReads.get(attachmentId) ?? 0) + 1);
+    const current = this.#state.attachmentMedia.get(attachmentId);
+    if (current !== undefined && current.kind === "ready") this.#attachmentMedia?.releaseUrl(current.url);
+    if (!this.#state.attachmentMedia.has(attachmentId)) return;
+    const next = new Map(this.#state.attachmentMedia);
+    next.delete(attachmentId);
+    this.#commit({ ...this.#state, attachmentMedia: next });
+  }
+
+  /** 撤销某个会话的全部对象 URL（切换会话 / 关闭页面时调用）。 */
+  releaseSessionMedia(sessionId: Uuid): void {
+    const next = new Map(this.#state.attachmentMedia);
+    let changed = false;
+    for (const [id, state] of next) {
+      if (state.sessionId !== sessionId) continue;
+      this.#mediaReads.set(id, (this.#mediaReads.get(id) ?? 0) + 1);
+      if (state.kind === "ready") this.#attachmentMedia?.releaseUrl(state.url);
+      next.delete(id);
+      changed = true;
+    }
+    if (changed) this.#commit({ ...this.#state, attachmentMedia: next });
+  }
+
+  #attachmentsUnavailable(): CommandOutcome | null {
+    if (this.#identity.connectionId === null) return NOT_CONNECTED;
+    if (!this.#state.selectedFeatures.includes(ATTACHMENT_FEATURE)) {
+      return { ok: false, reason: "当前主机未协商附件传输（core.attachment-transfer.v1）" };
+    }
+    if (this.#attachmentMedia === null || this.#attachmentTransfer === null) {
+      return { ok: false, reason: "附件能力尚未装配" };
+    }
+    return null;
+  }
+
+  #addAttachmentHandles(sessionId: Uuid, handles: readonly AttachmentFileHandle[]): CommandOutcome {
+    if (handles.length === 0) return { ok: false, reason: "没有选中任何附件" };
+    const existing = [...(this.#state.attachments.get(sessionId) ?? [])];
+    for (const handle of handles) {
+      const transferId = this.#ids.uuid();
+      this.#attachmentHandles.set(handle.localId, handle);
+      existing.push({
+        localId: handle.localId,
+        transferId,
+        attachmentId: null,
+        kind: handle.kind,
+        fileName: handle.fileName,
+        mediaType: handle.mediaType,
+        byteLength: handle.byteLength,
+        status: "selected",
+        uploadedBytes: "0",
+        sha256: null,
+        error: null,
+        previewUrl: this.#attachmentMedia?.previewUrl(handle) ?? null,
+      });
+    }
+    const attachments = new Map(this.#state.attachments);
+    attachments.set(sessionId, existing);
+    const runs = new Map(this.#state.attachmentRuns);
+    runs.delete(sessionId);
+    this.#commit({ ...this.#state, attachments, attachmentRuns: runs });
+    return { ok: true, requestId: this.#ids.uuid() };
+  }
+
+  #setMedia(attachmentId: string, state: AttachmentMediaState): void {
+    const attachmentMedia = new Map(this.#state.attachmentMedia);
+    attachmentMedia.set(attachmentId, state);
+    this.#commit({ ...this.#state, attachmentMedia });
+  }
+
+  #patchAttachment(
+    sessionId: Uuid,
+    localId: string,
+    update: (attachment: DraftAttachment) => DraftAttachment,
+  ): void {
+    const current = this.#state.attachments.get(sessionId);
+    if (current === undefined) return;
+    let changed = false;
+    const next = current.map((attachment) => {
+      if (attachment.localId !== localId) return attachment;
+      changed = true;
+      return update(attachment);
+    });
+    if (!changed) return;
+    const attachments = new Map(this.#state.attachments);
+    attachments.set(sessionId, next);
+    this.#commit({ ...this.#state, attachments });
+  }
+
+  #clearSessionAttachments(sessionId: Uuid): ClientState {
+    const attachments = new Map(this.#state.attachments);
+    for (const attachment of attachments.get(sessionId) ?? []) {
+      if (attachment.previewUrl !== null) this.#attachmentMedia?.releaseUrl(attachment.previewUrl);
+      this.#attachmentHandles.delete(attachment.localId);
+    }
+    attachments.delete(sessionId);
+    const runs = new Map(this.#state.attachmentRuns);
+    runs.delete(sessionId);
+    return { ...this.#state, attachments, attachmentRuns: runs };
   }
 
   // ── 文件栏（WP4） ──────────────────────────────────────────────────────────
@@ -2763,32 +3464,304 @@ export class ClientStore {
   }
 
   /**
-   * 提交一条**文本**提示。
+   * 提交一条提示（文本 + 已选附件 + 工作目录路径引用）。
    *
    * 闸门（任一不过即**不发命令**）：会话存在且可提交（关闭/离线/imported 来源都会给出原因）、
-   * 文本去除首尾空白后非空。附件不在签名里——v1 只支持文本，附件 MUST NOT 被静默丢弃后提交
-   * 剩余文本（因此本方法根本不接受附件参数）。
+   * 内容不为空、附件不是上传中/失败/能力不支持。没有附件时同步派发；有附件时**先上传**，
+   * 全部封存并登记清单后才派发一条携带 `submissionId` 的 `session.prompt`——任一附件失败或
+   * 取消都不会触发 Agent，也不会提交部分消息（完整草稿保留）。
+   *
+   * 稳定 `requestId`：一次发送尝试的 `promptRequestId` 在上传前就分配，并在重试时复用；
+   * 附件选择变化会使它失效（内容不同不能复用幂等键）。
    */
   submitPrompt(sessionId: Uuid, text: string): CommandOutcome {
     const page = this.conversationPage(sessionId);
     if (page === null) return { ok: false, reason: "会话不在本设备的状态里" };
     if (!page.input.canSubmit) return { ok: false, reason: page.input.disabledReason ?? "当前不能提交" };
     const trimmed = text.trim();
-    if (trimmed.length === 0) return { ok: false, reason: "不能提交空文本" };
-    const requestId = this.#dispatchIntent({
+    const attachments = page.input.attachments.attachments;
+    const pathRefs = page.input.pathRefs;
+    if (trimmed.length === 0 && attachments.length === 0 && pathRefs.length === 0) {
+      return { ok: false, reason: "不能提交空内容" };
+    }
+    // 仓库是草稿的唯一内存持有者：把这次提交的原文记进草稿，附件失败/取消时页面才能原样保留。
+    if (text.length > 0 && this.#state.drafts.get(sessionId) !== text) {
+      this.#commit({ ...this.#state, drafts: withEntry(this.#state.drafts, sessionId, text) });
+    }
+
+    if (attachments.length === 0) {
+      const outcome = this.#dispatchPrompt({
+        sessionId,
+        requestId: this.#ids.uuid(),
+        submissionId: null,
+        text: trimmed,
+        pathRefs,
+        attachments: [],
+      });
+      if (outcome.ok) {
+        const cleared = this.#clearSessionAttachments(sessionId);
+        // 已派发才清空草稿；失败时完整草稿留在输入区（spec「完整草稿保留」）。
+        this.#commit({ ...cleared, drafts: withoutEntry(cleared.drafts, sessionId) });
+      }
+      return outcome;
+    }
+
+    if (this.#uploadingSessions.has(sessionId)) {
+      return { ok: false, reason: "附件正在上传，等待这一批结束" };
+    }
+    this.#cancelledUploads.delete(sessionId);
+    const existingRun = this.#state.attachmentRuns.get(sessionId);
+    const promptRequestId = existingRun?.promptRequestId ?? this.#ids.uuid();
+    const submissionId = existingRun?.submissionId ?? this.#ids.uuid();
+    const runs = new Map(this.#state.attachmentRuns);
+    runs.set(sessionId, {
+      phase: "uploading",
+      promptRequestId,
+      submissionId,
+      manifestSealed: false,
+      error: null,
+    });
+    this.#commit({ ...this.#state, attachmentRuns: runs });
+    this.#uploadingSessions.add(sessionId);
+    void this.#uploadAndSubmit({
       sessionId,
+      promptRequestId,
+      submissionId,
+      text: trimmed,
+      pathRefs,
+    });
+    return { ok: true, requestId: promptRequestId };
+  }
+
+  /**
+   * 取消正在进行的附件上传。
+   *
+   * 语义是「这一批不再继续」：中止在途传输、把未封存的项标为已取消，并**不**派发
+   * `session.prompt`（Agent 从未收到任何内容）。已封存的附件留在服务端，重试时可复用。
+   */
+  cancelAttachmentUpload(sessionId: Uuid): CommandOutcome {
+    if (!this.#uploadingSessions.has(sessionId)) {
+      return { ok: false, reason: "当前没有正在进行的附件上传" };
+    }
+    this.#cancelledUploads.add(sessionId);
+    const active = this.#activeTransfers.get(sessionId);
+    if (active !== undefined) {
+      try {
+        this.#attachmentTransfer?.abort(active, "client_cancelled");
+      } catch {
+        // 连接已断开时 abort 无处可发：服务端会按闲置策略清理临时内容，本地照常标为已取消。
+      }
+    }
+    return { ok: true, requestId: this.#ids.uuid() };
+  }
+
+  /**
+   * 重试失败的附件上传。
+   *
+   * 失败/取消/过期的项换一个新的 `transferId` 重新开始（旧传输服务端按 24 小时闲置清理），
+   * 已封存的项保持不变。失败的上传**从未派发过 prompt**，因此重试分配新的稳定 `requestId`
+   * 不会造成第二次副作用。
+   */
+  retryAttachments(sessionId: Uuid): CommandOutcome {
+    if (this.#uploadingSessions.has(sessionId)) {
+      return { ok: false, reason: "附件正在上传，等到这一批结束或先取消" };
+    }
+    const current = this.#state.attachments.get(sessionId) ?? [];
+    const retryable = current.filter(
+      (attachment) =>
+        attachment.status === "failed" || attachment.status === "cancelled" || attachment.status === "expired",
+    );
+    if (retryable.length === 0) return { ok: false, reason: "没有需要重试的附件" };
+    const attachments = new Map(this.#state.attachments);
+    attachments.set(
+      sessionId,
+      current.map((attachment) =>
+        retryable.includes(attachment)
+          ? {
+              ...attachment,
+              transferId: this.#ids.uuid(),
+              attachmentId: null,
+              status: "selected" as const,
+              uploadedBytes: "0",
+              sha256: null,
+              error: null,
+            }
+          : attachment,
+      ),
+    );
+    const runs = new Map(this.#state.attachmentRuns);
+    runs.delete(sessionId);
+    this.#commit({ ...this.#state, attachments, attachmentRuns: runs });
+    return { ok: true, requestId: this.#ids.uuid() };
+  }
+
+  /** 上传全部附件、封存清单，然后派发一条 prompt；失败时不派发任何命令。 */
+  async #uploadAndSubmit(input: {
+    readonly sessionId: Uuid;
+    readonly promptRequestId: Uuid;
+    readonly submissionId: Uuid;
+    readonly text: string;
+    readonly pathRefs: readonly string[];
+  }): Promise<void> {
+    const media = this.#attachmentMedia;
+    const transfer = this.#attachmentTransfer;
+    const subjectId = this.#state.deviceId;
+    const sessionId = input.sessionId;
+    try {
+      if (media === null || transfer === null) throw new Error("附件能力尚未装配");
+      if (subjectId === null) throw new Error("尚未认证设备，不能上传附件");
+      const attachments = this.#state.attachments.get(sessionId) ?? [];
+      const transferIds: string[] = [];
+      for (const attachment of attachments) {
+        if (this.#cancelledUploads.has(sessionId)) throw new Error("附件上传已取消");
+        if (attachment.status === "sealed" && attachment.sha256 !== null) {
+          transferIds.push(attachment.transferId);
+          continue;
+        }
+        const handle = this.#attachmentHandles.get(attachment.localId);
+        if (handle === undefined) throw new Error(`${attachment.fileName} 的本机句柄已丢失，请重新选择`);
+        this.#patchAttachment(sessionId, attachment.localId, (current) => ({
+          ...current,
+          status: "uploading",
+          uploadedBytes: "0",
+          error: null,
+        }));
+        this.#activeTransfers.set(sessionId, attachment.transferId);
+        const sealed = await transfer.upload({
+          sessionId,
+          subjectId,
+          transferId: attachment.transferId,
+          fileName: attachment.fileName,
+          mediaType: attachment.mediaType,
+          totalLength: attachment.byteLength,
+          readChunk: (offset, length) => media.readChunk(handle, offset, length),
+        });
+        this.#activeTransfers.delete(sessionId);
+        this.#patchAttachment(sessionId, attachment.localId, (current) => ({
+          ...current,
+          status: "sealed",
+          uploadedBytes: current.byteLength,
+          attachmentId: sealed.attachmentId,
+          sha256: sealed.sha256,
+          error: null,
+        }));
+        transferIds.push(attachment.transferId);
+      }
+
+      if (this.#cancelledUploads.has(sessionId)) throw new Error("附件上传已取消");
+      await transfer.sealManifest({
+        sessionId,
+        subjectId,
+        submissionId: input.submissionId,
+        transferIds,
+      });
+      if (this.#cancelledUploads.has(sessionId)) throw new Error("附件上传已取消");
+      const runs = new Map(this.#state.attachmentRuns);
+      runs.set(sessionId, {
+        phase: "sealed",
+        promptRequestId: input.promptRequestId,
+        submissionId: input.submissionId,
+        manifestSealed: true,
+        error: null,
+      });
+      this.#commit({ ...this.#state, attachmentRuns: runs });
+
+      const sealedAttachments = this.#state.attachments.get(sessionId) ?? [];
+      const outcome = this.#dispatchPrompt({
+        sessionId,
+        requestId: input.promptRequestId,
+        submissionId: input.submissionId,
+        text: input.text,
+        pathRefs: this.#state.pathRefs.get(sessionId) ?? input.pathRefs,
+        attachments: sealedAttachments,
+      });
+      if (!outcome.ok) throw new Error(outcome.reason);
+      const cleared = this.#clearSessionAttachments(sessionId);
+      this.#commit({ ...cleared, drafts: withoutEntry(cleared.drafts, sessionId) });
+    } catch (error) {
+      const cancelled = this.#cancelledUploads.has(sessionId);
+      const detail = cancelled ? "附件上传已取消" : error instanceof Error ? error.message : "附件上传失败";
+      const attachments = this.#state.attachments.get(sessionId) ?? [];
+      for (const attachment of attachments) {
+        if (attachment.status === "sealed") continue;
+        this.#patchAttachment(sessionId, attachment.localId, (current) =>
+          current.status === "uploading" || current.status === "selected"
+            ? cancelled
+              ? { ...current, status: "cancelled", error: null }
+              : { ...current, status: "failed", error: detail }
+            : current,
+        );
+      }
+      const runs = new Map(this.#state.attachmentRuns);
+      runs.set(sessionId, {
+        phase: "failed",
+        promptRequestId: input.promptRequestId,
+        submissionId: input.submissionId,
+        manifestSealed: false,
+        error: cancelled ? "上传已取消：未向 Agent 派发任何内容，草稿与选择仍保留。" : detail,
+      });
+      this.#commit({ ...this.#state, attachmentRuns: runs });
+    } finally {
+      this.#uploadingSessions.delete(sessionId);
+      this.#activeTransfers.delete(sessionId);
+      this.#cancelledUploads.delete(sessionId);
+    }
+  }
+
+  /** 组装内容块并派发 `session.prompt`；空内容块时拒绝（不编造空消息）。 */
+  #dispatchPrompt(input: {
+    readonly sessionId: Uuid;
+    readonly requestId: Uuid;
+    readonly submissionId: Uuid | null;
+    readonly text: string;
+    readonly pathRefs: readonly string[];
+    readonly attachments: readonly DraftAttachment[];
+  }): CommandOutcome {
+    const content: PromptContentBlock[] = [];
+    for (const attachment of input.attachments) {
+      if (attachment.status !== "sealed" || attachment.sha256 === null || attachment.attachmentId === null) {
+        return { ok: false, reason: `${attachment.fileName} 还没有封存，不能提交` };
+      }
+      content.push({
+        type: "attachment_ref",
+        attachmentId: attachment.attachmentId,
+        mediaType: attachment.mediaType,
+        byteLength: attachment.byteLength,
+        sha256: attachment.sha256,
+      });
+    }
+    if (input.text.length > 0) content.push({ type: "text", text: input.text });
+    for (const path of input.pathRefs) {
+      content.push({ type: "workspace_path_ref", path });
+    }
+    if (content.length === 0) return { ok: false, reason: "不能提交空内容" };
+
+    const requestId = this.#dispatchIntent({
+      requestId: input.requestId,
+      sessionId: input.sessionId,
       build: (id) => ({
         requestId: id,
         command: "session.prompt",
-        sessionId,
-        payload: { content: [{ type: "text", text: trimmed }] },
+        sessionId: input.sessionId,
+        payload:
+          input.submissionId === null
+            ? { content }
+            : { content, submissionId: input.submissionId },
       }),
       patch: (id) => ({
-        promptRequestIds: withEntry(this.#state.promptRequestIds, sessionId, id),
-        drafts: withoutEntry(this.#state.drafts, sessionId),
+        promptRequestIds: withEntry(this.#state.promptRequestIds, input.sessionId, id),
+        drafts: withoutEntry(this.#state.drafts, input.sessionId),
+        pathRefs: withoutEntry(this.#state.pathRefs, input.sessionId),
       }),
     });
-    return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
+    if (requestId === null) return NOT_CONNECTED;
+    this.#promptDrafts.set(requestId, {
+      sessionId: input.sessionId,
+      text: input.text,
+      pathRefs: input.pathRefs,
+      attachments: input.attachments,
+    });
+    return { ok: true, requestId };
   }
 
   // ── 文件栏内部实现 ─────────────────────────────────────────────────────────
@@ -2847,6 +3820,7 @@ export class ClientStore {
     for (const cancel of this.#fileRefreshTimers.values()) cancel();
     this.#fileRefreshTimers.clear();
     this.#fileRefreshQueued.clear();
+    this.#messageRefreshQueued.clear();
   }
 
   /** 把各会话各来源的 `loading` 复位为 false（连接重置后不再有请求在为它们加载）。 */
@@ -3456,15 +4430,37 @@ export class ClientStore {
     return next;
   }
 
+  /** 当前会话的易失增量快照（`messageId → deltaIndex`）：读取屏障只清掉这一批。 */
+  #volatileSnapshot(sessionId: Uuid): ReadonlyMap<string, ReadonlySet<string>> {
+    const snapshot = new Map<string, Set<string>>();
+    for (const [messageId, tail] of this.#state.volatile) {
+      if (tail.sessionId !== sessionId) continue;
+      snapshot.set(messageId, new Set(tail.deltas.keys()));
+    }
+    return snapshot;
+  }
+
+  /** `turn.delta_compacted` 之后重读消息页；与文件刷新一样在提交后派发，避免嵌套提交。 */
+  #drainQueuedMessageRefreshes(): void {
+    if (this.#messageRefreshQueued.size === 0) return;
+    for (const sessionId of [...this.#messageRefreshQueued]) {
+      this.#messageRefreshQueued.delete(sessionId);
+      // 没有在途读取才发；已有读取会在结果里带上权威正文。
+      const inFlight = [...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId);
+      if (!inFlight) this.#requestPage(sessionId, "refresh_messages");
+    }
+  }
+
   #requestPage(
     sessionId: Uuid,
     intent: ReadIntent,
     cursors: { readonly before?: ReadCursor; readonly beforeHistory?: string } = {},
-  ): void {
-    this.#dispatchIntent({
+  ): Uuid | null {
+    const volatileAtRequest = this.#volatileSnapshot(sessionId);
+    return this.#dispatchIntent({
       sessionId,
       build: (requestId) => {
-        this.#pendingReads.set(requestId, { sessionId, intent });
+        this.#pendingReads.set(requestId, { sessionId, intent, volatileAtRequest });
         // 与 `paging.ts` 的 `buildReadPayload` 同一形状；这里就地构造是为了让 `include`
         // 保持 `SessionReadInclude[]`（协议类型），而 `PageRequest` 声明的是更宽的 `string[]`。
         const payload: { include: readonly SessionReadInclude[]; before?: ReadCursor; beforeHistory?: string } = {
@@ -3481,7 +4477,8 @@ export class ClientStore {
           ...existing,
           loadingEarlier: intent === "earlier",
           loadingHistory: intent === "earlier_history" || intent === "refresh_history",
-          pagingError: intent === "refresh_history" ? existing.pagingError : null,
+          // 刷新有效交互不动消息/历史分页错误：它只重读 pending_interactions。
+          pagingError: intent === "refresh_history" || intent === "refresh_interactions" ? existing.pagingError : null,
           historyRefreshError: intent === "refresh_history" ? null : existing.historyRefreshError ?? null,
         });
         return { threads };
@@ -3498,14 +4495,25 @@ export class ClientStore {
    */
   #includesFor(intent: ReadIntent): readonly SessionReadInclude[] {
     const historyNegotiated = this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE);
+    const pendingNegotiated = this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE);
     switch (intent) {
       case "earlier":
+        return ["messages"];
+      case "refresh_messages":
+        // `turn.delta_compacted` 之后的权威正文回填：只要消息页，不重读历史/配置。
         return ["messages"];
       case "earlier_history":
       case "refresh_history":
         return ["history"];
-      case "first":
-        return historyNegotiated ? [...CONVERSATION_INCLUDES, "history"] : CONVERSATION_INCLUDES;
+      case "refresh_interactions":
+        // 只重读服务端确认的当前有效请求；调用方已确认协商到该 feature。
+        return pendingNegotiated ? ["pending_interactions"] : [];
+      case "first": {
+        const includes: SessionReadInclude[] = [...CONVERSATION_INCLUDES];
+        if (historyNegotiated) includes.push("history");
+        if (pendingNegotiated) includes.push("pending_interactions");
+        return includes;
+      }
     }
   }
 
@@ -3517,13 +4525,14 @@ export class ClientStore {
    */
   #dispatchIntent(input: {
     readonly sessionId: Uuid | null;
+    readonly requestId?: Uuid;
     readonly build: (requestId: Uuid) => CommandBody;
     readonly patch?: (requestId: Uuid) => Partial<ClientState>;
   }): Uuid | null {
     const connectionId = this.#identity.connectionId;
     if (connectionId === null) return null;
 
-    const requestId = this.#ids.uuid();
+    const requestId = input.requestId ?? this.#ids.uuid();
     const body = input.build(requestId);
     const commands = new Map(this.#state.commands);
     // `markSubmitting`：未确认接受前不得显示已接受（R13 的第二条规则）。

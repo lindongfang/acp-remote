@@ -11,6 +11,8 @@
 
 import type { DecimalString, Uuid } from "../protocol/common";
 import type { SessionReadResult } from "../protocol/command";
+import type { AgentMessageContent, MessageChannelView, PartialResultView } from "./media";
+import { buildAgentMessageContent } from "./media";
 
 /** 消息的稳定标识。 */
 export type MessageId = Uuid;
@@ -27,10 +29,16 @@ export type MessageRole = "user" | "agent";
 export interface MessageView {
   readonly id: MessageId;
   readonly role: MessageRole;
-  /** 纯文本段落；结构化块（图片/资源）不在此列，由降级卡片承载。 */
+  /** 通道：`reply`（正文）或 `thought`（思考）。读取结果没有通道字段时按 `reply`。 */
+  readonly channel: MessageChannelView;
+  /** 纯文本段落（媒体块不混进正文）。 */
   readonly text: string;
-  /** 存在非文本内容块（图片引用/资源引用/不支持的块）。 */
+  /** 文本与类型化媒体/资源块的完整视图。 */
+  readonly content: AgentMessageContent;
+  /** 存在非文本内容块（图片/音频/文件/资源/不支持的块）。 */
   readonly hasStructuredContent: boolean;
+  /** turn 终态的部分结果标记；读取消息没有该字段时为 `null`。 */
+  readonly partial: PartialResultView | null;
   readonly createdAt: string;
   readonly turnId: Uuid | null;
 }
@@ -108,20 +116,16 @@ export function buildContextUsageView(
 export function buildSessionReadPageView(result: SessionReadResult): SessionReadPageView {
   const messages = result.resources.messages ?? [];
   const views: MessageView[] = messages.map((message) => {
-    const textParts: string[] = [];
-    let hasStructuredContent = false;
-    for (const block of message.content) {
-      if (block.type === "text") {
-        textParts.push(block.text);
-      } else {
-        hasStructuredContent = true;
-      }
-    }
+    const content = buildAgentMessageContent(message.content);
     return {
       id: message.messageId,
       role: message.role,
-      text: textParts.join("\n"),
-      hasStructuredContent,
+      // `snapshotItem.messages` 没有通道字段：读取结果按正文呈现。思考由实时/历史事件承载。
+      channel: "reply",
+      text: content.text,
+      content,
+      hasStructuredContent: content.hasStructuredContent,
+      partial: null,
       createdAt: message.createdAt,
       turnId: message.turnId,
     };

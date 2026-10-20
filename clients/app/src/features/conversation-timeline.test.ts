@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { SESSION_HISTORY_FEATURE } from "../sync-client";
 import { FILE_DIFF_UNAVAILABLE_LABELS } from "../domain";
 import type { FileChangeView, MessageTimelineEntry } from "./conversation-timeline";
+import { groupTimelineEntries } from "./conversation-timeline";
 import type { StoreFixture } from "./testing/fixtures";
 import {
   eventMessage,
@@ -125,6 +126,98 @@ describe("D1/D2 时间线：同一标识只呈现一处", () => {
     expect(messages[0]?.volatile).toBe(false);
     expect(messages[0]?.message.text).toBe("权威正文");
   });
+
+  it("读取结果之后到达的纯媒体增量：并入该消息、与读取结果按附件/URI 去重", () => {
+    const { store, gateway } = storeWithHistoryFeature();
+    const messageId = "cccccccc-0000-4000-8000-0000000000b2";
+    const attachmentId = "11111111-0000-4000-8000-0000000000c2";
+    const laterAttachmentId = "11111111-0000-4000-8000-0000000000c3";
+    const resourceUri = "https://example.test/report.pdf";
+
+    store.loadSession(SESSION_ID);
+    store.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: SESSION_ID,
+        messages: [
+          messageItem({
+            id: messageId,
+            createdAt: "2026-10-01T00:00:02.000Z",
+            role: "agent",
+            blocks: [
+              { type: "text", text: "这是一张图" },
+              { type: "image_ref", mimeType: "image/png", byteLength: "128", displayState: "available", attachmentId },
+              { type: "resource_ref", uri: resourceUri, name: "报告", displayState: "available" },
+            ],
+          }),
+        ],
+      }),
+    });
+
+    // 读取屏障之后到达的三条**纯媒体**增量（`text` 为空、只有 `block`）：两条重投读取结果里
+    // 已有的块，一条是新的。若第二条循环按 `readIds` 整条跳过，这三块都会消失。
+    const deltas = [
+      {
+        eventId: "dddddddd-0000-4000-8000-0000000000a5",
+        deltaIndex: "5",
+        block: { type: "image_ref", mimeType: "image/png", byteLength: "128", displayState: "available", attachmentId },
+      },
+      {
+        eventId: "dddddddd-0000-4000-8000-0000000000a6",
+        deltaIndex: "6",
+        block: { type: "resource_ref", uri: resourceUri, name: "报告", displayState: "available" },
+      },
+      {
+        eventId: "dddddddd-0000-4000-8000-0000000000a7",
+        deltaIndex: "7",
+        block: {
+          type: "image_ref",
+          mimeType: "image/jpeg",
+          byteLength: "256",
+          displayState: "available",
+          attachmentId: laterAttachmentId,
+        },
+      },
+    ];
+    for (const delta of deltas) {
+      store.apply({
+        kind: "event",
+        event: eventMessage({
+          eventType: "agent.message.delta",
+          eventId: delta.eventId,
+          sessionId: SESSION_ID,
+          globalSequence: delta.deltaIndex,
+          view: { messageId, turnId: "turn-1", deltaIndex: delta.deltaIndex, text: "", block: delta.block },
+        }),
+      });
+    }
+
+    const entries = store.conversationPage(SESSION_ID)?.timeline.entries ?? [];
+    const messages = entries.filter((entry): entry is MessageTimelineEntry => entry.kind === "message");
+    // 同一 messageId 不能因为易失层里还有一条 tail 而重复呈现。
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.message.text).toBe("这是一张图");
+    expect(messages[0]?.message.content.media).toHaveLength(3);
+    expect(
+      messages[0]?.message.content.media.filter(
+        (block) => block.kind === "image" && block.attachmentId === attachmentId,
+      ),
+    ).toHaveLength(1);
+    expect(
+      messages[0]?.message.content.media.filter(
+        (block) => block.kind === "image" && block.attachmentId === laterAttachmentId,
+      ),
+    ).toHaveLength(1);
+    expect(
+      messages[0]?.message.content.media.filter((block) => block.kind === "resource" && block.uri === resourceUri),
+    ).toHaveLength(1);
+    // 媒体可见即结构化内容可见：组件据此渲染媒体区，而不是把纯媒体消息画成空正文。
+    expect(messages[0]?.message.hasStructuredContent).toBe(true);
+    expect(messages[0]?.message.content.hasStructuredContent).toBe(true);
+    // 正文没有残留增量，因此不标记为易失。
+    expect(messages[0]?.volatile).toBe(false);
+  });
 });
 
 describe("D1 时间线：历史条目与实时事件同一套呈现", () => {
@@ -208,6 +301,72 @@ describe("D1 时间线：历史条目与实时事件同一套呈现", () => {
     const entries = store.conversationPage(SESSION_ID)?.timeline.entries ?? [];
     // 反例：把消息与卡片分成两段渲染时，这里会是 [message, message, terminal_output] → 红。
     expect(entries.map((entry) => entry.kind)).toEqual(["message", "terminal_output", "message"]);
+  });
+});
+
+describe("D9 轮次分组：同 turnId 被无标识条目切开", () => {
+  it("permission_requested → permission_resolved → agent.message 的组 key 不重复", () => {
+    const { store } = storeWithHistoryFeature();
+    const interactionId = "99999999-0000-4000-8000-000000000031";
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "permission.requested",
+        eventId: "dddddddd-0000-4000-8000-000000000031",
+        sessionId: SESSION_ID,
+        globalSequence: "31",
+        createdAt: "2026-10-01T00:00:03.000Z",
+        view: {
+          interactionId,
+          turnId: "turn-7",
+          title: "允许写入 src/ 吗？",
+          description: null,
+          options: [{ optionId: "allow-once", label: "允许一次", kind: "allow_once" }],
+        },
+      }),
+    });
+    // 授权结果不携带 turnId：它把同一轮次切成「有标识 / 无标识 / 有标识」三段。
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "permission.resolved",
+        eventId: "dddddddd-0000-4000-8000-000000000032",
+        sessionId: SESSION_ID,
+        globalSequence: "32",
+        createdAt: "2026-10-01T00:00:04.000Z",
+        view: { interactionId, resolution: "allow-once" },
+      }),
+    });
+    // 同一轮次的后续消息（真实增量通道携带 turnId）。
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "agent.message.delta",
+        eventId: "dddddddd-0000-4000-8000-000000000033",
+        sessionId: SESSION_ID,
+        globalSequence: "33",
+        createdAt: "2026-10-01T00:00:05.000Z",
+        view: {
+          messageId: "cccccccc-0000-4000-8000-000000000031",
+          turnId: "turn-7",
+          deltaIndex: "0",
+          text: "已经写入。",
+        },
+      }),
+    });
+
+    const entries = store.conversationPage(SESSION_ID)?.timeline.entries ?? [];
+    const groups = groupTimelineEntries(entries);
+    // 反例：key 仅由 turnId 组成时，这两个兄弟节点会拿到同一个 `turn:turn-7`。
+    const turnGroups = groups.filter((group) => group.turnId === "turn-7");
+    expect(turnGroups).toHaveLength(2);
+    const keys = groups.map((group) => group.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    // 第一次出现的组保持短 key（常见路径与前置历史时不漂移），第二次追加出现序号。
+    expect(turnGroups[0]?.key).toBe("turn:turn-7");
+    expect(turnGroups[1]?.key).toBe("turn:turn-7#1");
+    // 无标识的授权结果仍独立成组（不猜它属于哪个轮次）。
+    expect(groups.some((group) => group.turnId === null)).toBe(true);
   });
 });
 

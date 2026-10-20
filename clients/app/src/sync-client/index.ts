@@ -56,11 +56,15 @@ export type {
 } from "./connection";
 export {
   DECLARED_SUBPROTOCOLS,
+  ATTACHMENT_FEATURE,
+  PENDING_INTERACTIONS_FEATURE,
+  REMOTE_HISTORY_FEATURE,
   REQUIRED_FEATURES,
   SESSION_HISTORY_FEATURE,
   SUPPORTED_FEATURES,
   SYNC_WS_PATH,
   SYNC_WS_SUBPROTOCOL,
+  TYPED_MEDIA_FEATURE,
   SyncConnection,
   blockCauseForCloseCode,
   compareCursors,
@@ -68,6 +72,22 @@ export {
   sortedFeatures,
   syncSocketUrl,
 } from "./connection";
+export { AttachmentTransferClient, AttachmentTransferError } from "./attachment-transfer";
+export { AttachmentConnection, attachmentSocketUrl } from "./attachment-connection";
+export type { AttachmentConnectionOptions, AttachmentLink } from "./attachment-connection";
+export { AuthHandshake, PROTOCOL_VERSION } from "./handshake";
+export type { HandshakeOptions, HandshakeState } from "./handshake";
+export type {
+  AttachmentBinding,
+  AttachmentManifestSealed,
+  AttachmentReadChunk,
+  AttachmentSealed,
+  AttachmentTransferFailure,
+  AttachmentTransferOptions,
+  AttachmentUploadSource,
+} from "./attachment-transfer";
+export { Sha256, sha256Bytes } from "./sha256";
+export { stringifyJson } from "./json";
 export { SyncClient, SnapshotRepository } from "./client";
 export type { CompletedSnapshot, DispatchRecord, SyncClientOptions } from "./client";
 export { openWebSocket } from "./socket.web";

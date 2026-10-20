@@ -356,6 +356,11 @@ pub enum CommittedDelivery {
         local_sequence: LocalCursor,
         event_type: EventType,
         payload_digest: Digest,
+        /// 收据的持久化时间（`imported_delivery_index.received_at` 的同一次取值）。
+        ///
+        /// Sync 的 `event.createdAt` 是「Daemon 持久化时间」，因此 imported 事件的这一字段必须来自
+        /// 本机收据提交，不能由投递层在扇出时另读一次时钟（那会让实时帧与重放/审计看到两个时刻）。
+        created_at: Timestamp,
         payload: Option<EventPayload>,
     },
 }

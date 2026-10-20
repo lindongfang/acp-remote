@@ -29,6 +29,7 @@ import type {
   Timestamp,
   Uuid,
 } from "./common";
+import type { MessageChannel, PartialResult } from "./media";
 
 /**
  * `event.schema.json` 的 `body.origin.kind` 封闭词表（**五值**）。
@@ -236,11 +237,15 @@ export type AgentMessageDeltaView = MessageDeltaFields & {
 /** `$defs.agent.thought.delta`。 */
 export type AgentThoughtDeltaView = MessageDeltaFields & OpenView;
 
-/** `$defs.agent.message.completed`。 */
+/** `$defs.agent.message.completed`（`core.typed-media.v1` 增加通道与部分结果标记）。 */
 export type AgentMessageCompletedView = {
   readonly messageId: Uuid;
   readonly turnId: Uuid;
   readonly content: readonly AgentContentBlock[];
+  /** `reply`（默认）或 `thought`；回复与思考分别折叠。 */
+  readonly channel?: MessageChannel;
+  /** turn 终态的正文完整性；`partial` 不得被当作完整成功回复。 */
+  readonly partial?: PartialResult;
 } & OpenView;
 
 /** `toolDetail` 的内容部分名；也是 `truncatedParts` 的封闭词表。 */

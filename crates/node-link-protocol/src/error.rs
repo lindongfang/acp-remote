@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{Base64Url, Nullable, RawObject, Text, UIntAtLeast, Uuid, ValueError};
 
-/// Node Link v1 的错误码（24 个，顺序即 registry 与 `docs/NODE_LINK_PROTOCOL.md` §14.1 的顺序）。
+/// Node Link v1 的错误码（34 个，顺序即 registry 与 `docs/NODE_LINK_PROTOCOL.md` §14.1 的顺序）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// `nodelink.protocol.invalid_json`
@@ -58,13 +58,39 @@ pub enum ErrorCode {
     CommandUnsupportedField,
     /// `nodelink.command.uncertain`
     CommandUncertain,
+    /// `nodelink.attachment.negotiation_required`
+    AttachmentNegotiationRequired,
+    /// `nodelink.attachment.transfer_not_found`
+    AttachmentTransferNotFound,
+    /// `nodelink.attachment.binding_mismatch`
+    AttachmentBindingMismatch,
+    /// `nodelink.attachment.offset_mismatch`
+    AttachmentOffsetMismatch,
+    /// `nodelink.attachment.chunk_conflict`
+    AttachmentChunkConflict,
+    /// `nodelink.attachment.digest_mismatch`
+    AttachmentDigestMismatch,
+    /// `nodelink.attachment.sealed`
+    AttachmentSealed,
+    /// `nodelink.attachment.budget_exhausted`
+    AttachmentBudgetExhausted,
+    /// `nodelink.attachment.expired`
+    AttachmentExpired,
+    /// `nodelink.attachment.revoked`
+    AttachmentRevoked,
+    /// `nodelink.media.unavailable`
+    MediaUnavailable,
+    /// `nodelink.interaction.unavailable`
+    InteractionUnavailable,
+    /// `nodelink.interaction.version_conflict`
+    InteractionVersionConflict,
     /// `nodelink.internal.unavailable`
     InternalUnavailable,
 }
 
 impl ErrorCode {
     /// 与 `compatibility/errors/v1/errors.json` 的 node_link 列表逐条相等。
-    pub const ALL: [ErrorCode; 21] = [
+    pub const ALL: [ErrorCode; 34] = [
         ErrorCode::ProtocolInvalidJson,
         ErrorCode::ProtocolSchemaInvalid,
         ErrorCode::ProtocolMessageTooLarge,
@@ -85,11 +111,26 @@ impl ErrorCode {
         ErrorCode::CommandIdempotencyConflict,
         ErrorCode::CommandUnsupportedField,
         ErrorCode::CommandUncertain,
+        ErrorCode::AttachmentNegotiationRequired,
+        ErrorCode::AttachmentTransferNotFound,
+        ErrorCode::AttachmentBindingMismatch,
+        ErrorCode::AttachmentOffsetMismatch,
+        ErrorCode::AttachmentChunkConflict,
+        ErrorCode::AttachmentDigestMismatch,
+        ErrorCode::AttachmentSealed,
+        ErrorCode::AttachmentBudgetExhausted,
+        ErrorCode::AttachmentExpired,
+        ErrorCode::AttachmentRevoked,
+        ErrorCode::MediaUnavailable,
+        ErrorCode::InteractionUnavailable,
+        ErrorCode::InteractionVersionConflict,
         ErrorCode::InternalUnavailable,
     ];
 
     /// registry 记录的该码默认 retryable 语义（`compatibility/errors/v1/errors.json` 的
-    /// `protocols.node_link.errors[].retryable`）：只有 §14.1 中「可重试」的 5 个码为 `true`。
+    /// `protocols.node_link.errors[].retryable`）：§14.1 中标记为可重试的 8 个码为 `true`
+    /// （原 5 个，`conversation-area-complete` WP1 新增 `attachment.offset_mismatch`、
+    /// `attachment.budget_exhausted` 与 `interaction.version_conflict`）。
     ///
     /// 发送方不得自行发明：`Body::new` 的调用者应当以它为准。
     pub fn default_retryable(self) -> bool {
@@ -99,6 +140,9 @@ impl ErrorCode {
                 | ErrorCode::ResourceSnapshotUnavailable
                 | ErrorCode::ResourceOwnerUnavailable
                 | ErrorCode::ResourceRateLimited
+                | ErrorCode::AttachmentOffsetMismatch
+                | ErrorCode::AttachmentBudgetExhausted
+                | ErrorCode::InteractionVersionConflict
                 | ErrorCode::InternalUnavailable
         )
     }
@@ -125,6 +169,19 @@ impl ErrorCode {
             ErrorCode::CommandIdempotencyConflict => "nodelink.command.idempotency_conflict",
             ErrorCode::CommandUnsupportedField => "nodelink.command.unsupported_field",
             ErrorCode::CommandUncertain => "nodelink.command.uncertain",
+            ErrorCode::AttachmentNegotiationRequired => "nodelink.attachment.negotiation_required",
+            ErrorCode::AttachmentTransferNotFound => "nodelink.attachment.transfer_not_found",
+            ErrorCode::AttachmentBindingMismatch => "nodelink.attachment.binding_mismatch",
+            ErrorCode::AttachmentOffsetMismatch => "nodelink.attachment.offset_mismatch",
+            ErrorCode::AttachmentChunkConflict => "nodelink.attachment.chunk_conflict",
+            ErrorCode::AttachmentDigestMismatch => "nodelink.attachment.digest_mismatch",
+            ErrorCode::AttachmentSealed => "nodelink.attachment.sealed",
+            ErrorCode::AttachmentBudgetExhausted => "nodelink.attachment.budget_exhausted",
+            ErrorCode::AttachmentExpired => "nodelink.attachment.expired",
+            ErrorCode::AttachmentRevoked => "nodelink.attachment.revoked",
+            ErrorCode::MediaUnavailable => "nodelink.media.unavailable",
+            ErrorCode::InteractionUnavailable => "nodelink.interaction.unavailable",
+            ErrorCode::InteractionVersionConflict => "nodelink.interaction.version_conflict",
             ErrorCode::InternalUnavailable => "nodelink.internal.unavailable",
         }
     }

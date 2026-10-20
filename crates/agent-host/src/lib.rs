@@ -18,7 +18,7 @@
 //! - 子进程环境先清空，再注入「凭据端口给出的绑定 + 必要进程环境」；
 //! - 「能力不支持」与「协议/字段损坏」是两类错误，必须可区分；
 //! - **平台分支**的 `cfg` 只出现在 [`platform`]（`rg "cfg\(" crates/agent-host/src` 的判据）；
-//!   `launch.rs` 另有 1 处 `#[cfg(test)]`（测试模块，不是平台分支），`bin/` 零命中。
+//!   其余 `#[cfg(test)]` 都是测试模块（例如 `launch.rs`、`terminal.rs`），不是平台分支，`bin/` 零命中。
 //!
 //! 与 core 的分工（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条）：本 crate 只产出 ACP 派生投影
 //! （`block`/`title`/`options`/`deltaIndex` 等），**不**填 `turnId`/`version`——两者由 core 在提交前注入
@@ -34,7 +34,9 @@ pub mod mapper;
 pub mod node;
 pub mod platform;
 pub mod process;
+mod prompt;
 pub mod session;
+mod terminal;
 
 pub use config::HostConfig;
 pub use error::HostError;

@@ -517,8 +517,8 @@ fn error_codes_and_retryable_match_registry() {
 
     assert_eq!(
         declared.len(),
-        37,
-        "v1 的 sync 错误码应为 37 个（registry 有 {} 个）",
+        50,
+        "v1 的 sync 错误码应为 50 个（registry 有 {} 个）；conversation-area-complete WP1 新增附件/媒体/交互 13 个",
         registered.len()
     );
     assert_eq!(

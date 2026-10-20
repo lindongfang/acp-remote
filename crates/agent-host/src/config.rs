@@ -5,7 +5,11 @@
 
 use std::time::Duration;
 
-use acp_protocol::capability::{ClientCapabilities, Implementation};
+use acp_protocol::capability::Implementation;
+
+/// 客户端能力声明的公开入口（组合根构造 [`HostConfig::client_capabilities`] 时不需要直接依赖
+/// `acp-protocol`）。
+pub use acp_protocol::capability::ClientCapabilities;
 
 /// `agent-host` 的运行配置。
 #[derive(Debug, Clone, Default)]

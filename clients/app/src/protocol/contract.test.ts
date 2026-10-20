@@ -1025,6 +1025,9 @@ describe("F1：protocol barrel 不得把 Node 内置模块带进 web bundle", ()
     expect(runtimeReexportTargets(readFileSync(barrelPath, "utf8"))).toEqual([
       "./event",
       "./session-files",
+      "./attachment",
+      "./media",
+      "./json-number",
       "./device-qr",
     ]);
     expect(nodeBuiltinsReachableFromBarrel()).toEqual([]);

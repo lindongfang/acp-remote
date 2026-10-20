@@ -28,13 +28,15 @@ use std::time::Duration;
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
-    Actor, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, CommittedEvent, DeviceId,
-    EndpointEvent, EntityRef, NodeId, PortError, ServerEpoch, Timestamp,
+    Actor, AttachmentGeneration, AttachmentId, AuditAction, AuditOutcome, AuditRecord,
+    CommittedDelivery, CommittedEvent, DeviceId, EndpointEvent, EntityRef, NodeId, PortError,
+    ServerEpoch, SessionId, Timestamp, UnavailableKind,
 };
 use acp_core::ports::{
-    AgentCatalog, AttachmentStore, AuditStore, Clock, EventPublisher, IdGenerator,
-    LocalConfigStore, NodeEventSink, RetentionPolicy, SessionBackendFactory, SessionFiles,
-    SessionStore,
+    AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditStore, Clock,
+    EventPublisher, IdGenerator, ImportedRead, ImportedReadQuery, InteractionAuthority,
+    LocalConfigStore, NodeEventSink, PruneReport, RemoteSessionReads, RetentionPolicy,
+    SessionBackendFactory, SessionFiles, SessionStore,
 };
 use acp_core::ports::{RemoteDeliveryStore, TrustStore};
 use acp_core::use_cases::{UseCaseDeps, UseCases};
@@ -177,6 +179,11 @@ pub struct Composition {
     /// 最后一条 `agent.disconnected`（在 `AgentHost::shutdown_all` 内投递）会与紧随其后的
     /// `Composition::close()` 竞争，存储可能在提交被 poll 到之前就关闭（见 [`Composition::close`]）。
     node_event_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// Access 侧出站运行时（按持久化 Owner 信任建立连接、claim/status 与远程路由）。
+    ///
+    /// 由 `crate::daemon::run` 在组合根之外装配后经 [`Composition::with_access`] 注入：本结构不发起
+    /// 网络连接（`assemble` 只做本地装配），因此「启动序列里何时开始连 Owner」仍然只有一个位置。
+    access: Option<Arc<crate::access::AccessManager>>,
 }
 
 impl Composition {
@@ -219,6 +226,13 @@ impl Composition {
         let audit_store: Arc<dyn AuditStore> = store.clone();
         let local_config: Arc<dyn LocalConfigStore> = store.clone();
         let attachments: Arc<dyn AttachmentStore> = store.clone();
+        // 分块附件与清单端口：Sync/Node Link 的独立附件连接（`server::attachment_transfer`）只经它落盘，
+        // 适配器不另建临时文件（`CORE_PORTS_AND_STORAGE.md` §5.8）。
+        let attachment_transfers: Arc<dyn AttachmentTransferStore> = store.clone();
+        // 有效待处理交互的权威读面/仲裁端口：`session.read` 的 `pending_interactions` 与
+        // `permission.resolve`/`elicitation.respond` 的版本校验都经它；不注入时 Broker 只能退回
+        // 旧 peer 的按 id 路径，协商了新 feature 的客户端会收到 `internal.unavailable`。
+        let interaction_authority: Arc<dyn InteractionAuthority> = store.clone();
 
         let entropy: Arc<dyn EntropySource> = Arc::new(OsEntropy::new());
         let keystore = build_keystore(&config, Arc::clone(&entropy))?;
@@ -233,38 +247,56 @@ impl Composition {
             Arc::clone(&entropy),
             Arc::clone(&clock),
         ));
-        let host = Arc::new(AgentHost::new(
-            Arc::new(config.agents.clone()),
-            // 空闲回收复用 `sessions.idle_timeout_ms`（`CONFIG_REFERENCE.md` §4）；客户端能力宣告保持
-            // `HostConfig::default()`（`ClientCapabilities::none()`：没有可作答的上游客户端，不虚报能力）。
-            HostConfig {
-                idle_timeout: config.sessions.idle_timeout,
-                ..HostConfig::default()
-            },
-            Arc::clone(&ids),
-            Arc::clone(&clock),
-        ));
+        let host = Arc::new(
+            AgentHost::new(
+                Arc::new(config.agents.clone()),
+                // 空闲回收复用 `sessions.idle_timeout_ms`（`CONFIG_REFERENCE.md` §4）。客户端能力按实际
+                // 接线宣告：`agent-host` 的真实终端服务（WP3）已落地，因此 `terminal = true`；其余能力
+                // （fs/elicitation/session/auth）仍由 `none()` 保持未宣告。
+                HostConfig {
+                    idle_timeout: config.sessions.idle_timeout,
+                    client_capabilities: agent_host::config::ClientCapabilities {
+                        terminal: Some(true),
+                        ..agent_host::config::ClientCapabilities::none()
+                    },
+                    ..HostConfig::default()
+                },
+                Arc::clone(&ids),
+                Arc::clone(&clock),
+            )
+            // 附件字节读取端口：`session.prompt` 的附件引用由 core 校验后，本层再次核对长度与摘要并从
+            // 同一份存储读取（`prompt.rs`）。不注入时带附件的 prompt 会被显式拒绝。
+            //
+            // **必须是弱句柄**（[`WeakAttachmentStore`]）：该端口会随会话存活，而会话与 core 的会话槽位
+            // 之间存在一条引用环（会话持有 core 的 `EventSink` → sink 闭包持有槽位 → 槽位缓存端点 →
+            // 端点持有会话）。环在 `AgentHost::shutdown_all` 之后仍然存在，直到进程结束；注入强引用就会
+            // 让关闭序列报 `StoreStillShared` 并跳过 `wal_checkpoint(TRUNCATE)`。
+            .with_attachments(Arc::new(WeakAttachmentStore::new(&store))),
+        );
         let backends: Arc<dyn SessionBackendFactory> = host.clone();
         let catalog: Arc<dyn AgentCatalog> = host.clone();
-        let broker = Arc::new(Broker::new(
-            BrokerDeps {
-                store: Arc::clone(&session_store),
-                deliveries: Arc::clone(&deliveries),
-                backends,
-                trust: Arc::clone(&trust_store),
-                publisher,
-                clock: Arc::clone(&clock),
-                ids: Arc::clone(&ids),
-                audit: Some(Arc::clone(&audit_store)),
-            },
-            BrokerConfig {
-                persist_deltas: config.storage.persist_deltas,
-                // `sessions.*`（`CONFIG_REFERENCE.md` §4）：排队策略与上限由配置决定，默认同 v1
-                // （`queue` / 16，与 `SYNC_PROTOCOL.md` §11.6 的二选一一致）。
-                queue_policy: config.sessions.queue_policy,
-                max_queued_turns: config.sessions.max_queued_turns,
-            },
-        ));
+        let broker = Arc::new(
+            Broker::new(
+                BrokerDeps {
+                    store: Arc::clone(&session_store),
+                    deliveries: Arc::clone(&deliveries),
+                    backends,
+                    trust: Arc::clone(&trust_store),
+                    publisher,
+                    clock: Arc::clone(&clock),
+                    ids: Arc::clone(&ids),
+                    audit: Some(Arc::clone(&audit_store)),
+                },
+                BrokerConfig {
+                    persist_deltas: config.storage.persist_deltas,
+                    // `sessions.*`（`CONFIG_REFERENCE.md` §4）：排队策略与上限由配置决定，默认同 v1
+                    // （`queue` / 16，与 `SYNC_PROTOCOL.md` §11.6 的二选一一致）。
+                    queue_policy: config.sessions.queue_policy,
+                    max_queued_turns: config.sessions.max_queued_turns,
+                },
+            )
+            .with_interaction_authority(interaction_authority),
+        );
         let session_files = Arc::new(NativeSessionFiles::new());
         let use_cases = Arc::new(
             UseCases::new(UseCaseDeps {
@@ -279,7 +311,8 @@ impl Composition {
                 clock: Arc::clone(&clock),
                 ids: Arc::clone(&ids),
             })
-            .with_session_files(Arc::clone(&session_files) as Arc<dyn SessionFiles>),
+            .with_session_files(Arc::clone(&session_files) as Arc<dyn SessionFiles>)
+            .with_attachment_transfers(attachment_transfers),
         );
 
         // 节点级事件缝（`design.md` D6、`core-derived-events` R8）：把 WP4 的 `NodeEvents` 接到 WP3 的
@@ -327,12 +360,33 @@ impl Composition {
             use_cases,
             session_files,
             node_event_tasks,
+            access: None,
         })
     }
 
     /// 启动配置。
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// 注入 Access 侧出站运行时（装配顺序见 [`crate::daemon::run`]）。
+    ///
+    /// 同时把同一实例接成 core 的 imported 读取端口：`session.read` 回源的唯一实现就在
+    /// `AccessManager`（它持有活的 Owner link），组合根只做接线，不参与正文处理。
+    pub fn with_access(mut self, access: Arc<crate::access::AccessManager>) -> Self {
+        // `AccessManager` 持有 `UseCases`，`UseCases` 又持有读取端口；强引用会形成环，
+        // 关闭序列因此无法独占存储（`StoreStillShared`）。端口只持弱引用。
+        self.use_cases
+            .set_remote_session_reads(Arc::new(WeakImportedReads {
+                access: Arc::downgrade(&access),
+            }));
+        self.access = Some(access);
+        self
+    }
+
+    /// Access 侧出站运行时（`None` = 本进程没有装配出站适配器，例如只服务入站面的测试组合根）。
+    pub fn access(&self) -> Option<&Arc<crate::access::AccessManager>> {
+        self.access.as_ref()
     }
 
     /// Daemon 启动时间。
@@ -398,6 +452,11 @@ impl Composition {
         self.store.clone()
     }
 
+    /// imported 交付端口（Access 出站运行时的 `DeliveryBridge` 与主链路共用同一实例）。
+    pub fn deliveries(&self) -> Arc<dyn RemoteDeliveryStore> {
+        self.store.clone()
+    }
+
     /// 本节点公钥（`daemon.status.nodePublicKey`）。
     pub fn node_public_key(&self) -> &PeerPublicKey {
         self.identity.public_key()
@@ -448,8 +507,16 @@ impl Composition {
             identity,
             config,
             node_event_tasks,
+            access,
             ..
         } = self;
+        // Access 出站连接：先停 supervisor（等待其结束，无 detached task），再释放它对存储的句柄。
+        // 这一步必须在 `Arc::try_unwrap(store)` 之前——`access` 持有 `UseCases` 与 `RemoteDeliveryStore`
+        // 的强引用。
+        if let Some(access) = access {
+            access.shutdown_all().await;
+            drop(access);
+        }
         // 内容快照只存在于内存；连接断开的逐版本释放由 Sync 命令面完成，这里兜底释放全部（daemon 关闭）。
         // 必须在关闭存储之前：`release_all` 不触碰存储，但关闭顺序上它属于「先释放资源」的一段。
         session_files.release_all();
@@ -501,6 +568,92 @@ impl Composition {
 async fn futures_join(handles: Vec<tokio::task::JoinHandle<()>>) {
     for handle in handles {
         let _ = handle.await;
+    }
+}
+
+/// 注入给 `agent-host` 的附件读取端口：**非拥有**句柄（`Weak`）。
+///
+/// 由 [`Composition::assemble`] 构造并交给 [`AgentHost::with_attachments`]。它只把五个
+/// [`AttachmentStore`] 方法转发给同一份 SQLite 存储，自身不缓存字节、也不保留存储的强引用。
+///
+/// **为什么必须是 `Weak`**：`AgentHost` 把该端口交给每个会话，而会话与 core 的会话槽位之间存在一条
+/// 引用环——会话持有 core 给的 `EventSink`，sink 闭包持有 `Arc<Slot>`，槽位缓存
+/// `Arc<dyn SessionEndpoint>`，端点又持有会话。`AgentHost::shutdown_all` 只清运行目录与任务，环本身留到
+/// 进程结束；若注入强引用，[`Composition::close`] 的 `Arc::try_unwrap` 就会失败并上报
+/// [`ComposeError::StoreStillShared`]，跳过 `wal_checkpoint(TRUNCATE)`。弱句柄让泄漏的环不再钉住存储：
+/// 存储仍活着时端口行为完全相同；存储已关闭时如实返回 `Unavailable(IoError)`，不静默返回空字节。
+/// imported 读取端口的弱句柄：`AccessManager` 持有 `UseCases`，`UseCases` 持有本端口；
+/// 强引用会形成环，关闭时存储无法独占（`StoreStillShared`）。升级失败即明确不可用。
+struct WeakImportedReads {
+    access: std::sync::Weak<crate::access::AccessManager>,
+}
+
+#[async_trait::async_trait]
+impl RemoteSessionReads for WeakImportedReads {
+    async fn read_imported(
+        &self,
+        session: &acp_core::model::RemoteSessionRef,
+        query: ImportedReadQuery,
+    ) -> Result<ImportedRead, PortError> {
+        let Some(access) = self.access.upgrade() else {
+            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        };
+        access.read_imported(session, query).await
+    }
+}
+
+struct WeakAttachmentStore {
+    store: std::sync::Weak<SqliteStore>,
+}
+
+impl WeakAttachmentStore {
+    fn new(store: &Arc<SqliteStore>) -> Self {
+        Self {
+            store: Arc::downgrade(store),
+        }
+    }
+
+    /// 升级到存储句柄。存储已关闭（组合根关闭序列）时返回明确的不可用，而不是 panic。
+    fn upgrade(&self) -> Result<Arc<SqliteStore>, PortError> {
+        self.store
+            .upgrade()
+            .ok_or(PortError::Unavailable(UnavailableKind::IoError))
+    }
+}
+
+#[async_trait::async_trait]
+impl AttachmentStore for WeakAttachmentStore {
+    async fn put(
+        &self,
+        bytes: &[u8],
+        media_type: &str,
+        at: Timestamp,
+    ) -> Result<AttachmentRef, PortError> {
+        self.upgrade()?.put(bytes, media_type, at).await
+    }
+
+    async fn get(&self, id: &AttachmentId) -> Result<Option<Vec<u8>>, PortError> {
+        self.upgrade()?.get(id).await
+    }
+
+    async fn link(
+        &self,
+        session: &SessionId,
+        attachment: &AttachmentId,
+        generation: AttachmentGeneration,
+        at: Timestamp,
+    ) -> Result<(), PortError> {
+        self.upgrade()?
+            .link(session, attachment, generation, at)
+            .await
+    }
+
+    async fn prune_lru(&self, budget_bytes: u64, at: Timestamp) -> Result<PruneReport, PortError> {
+        self.upgrade()?.prune_lru(budget_bytes, at).await
+    }
+
+    async fn sweep_orphans(&self, at: Timestamp, limit: u32) -> Result<u32, PortError> {
+        self.upgrade()?.sweep_orphans(at, limit).await
     }
 }
 
@@ -737,13 +890,25 @@ pub struct NodeLinkCloser {
     command: Arc<CommandRoute>,
     /// Sync 的活跃连接表（登记者是 `server::sync` 的会话；组合根在 [`crate::daemon`] 里交给本实现）。
     sync: Arc<SyncConnectionRegistry>,
+    /// Access 侧出站运行时：`node.revoke` 提交后停止重连并取消远程路由。
+    access: Option<Arc<crate::access::AccessManager>>,
 }
 
 impl NodeLinkCloser {
     /// 装配：`command` 是本机（Owner）的命令管线，它内部持有连接注册表与 resource 路由；`sync` 是
     /// Sync 入站面的连接注册表（设备连接只登记在那里）。
     pub fn new(command: Arc<CommandRoute>, sync: Arc<SyncConnectionRegistry>) -> Self {
-        Self { command, sync }
+        Self {
+            command,
+            sync,
+            access: None,
+        }
+    }
+
+    /// 注入 Access 侧出站运行时（同一节点的两种角色可以同时存在，撤销必须两条腿都停）。
+    pub fn with_access(mut self, access: Arc<crate::access::AccessManager>) -> Self {
+        self.access = Some(access);
+        self
     }
 }
 
@@ -765,6 +930,10 @@ impl ConnectionCloser for NodeLinkCloser {
 
     async fn close_node(&self, node: &NodeId) {
         let closed = self.command.node_revoked(node).await;
+        // 出站腿：撤销后不再重连，并让远程路由（惰性构造自 link 表）随之失效。
+        if let Some(access) = self.access.as_ref() {
+            access.revoke(node).await;
+        }
         tracing::info!(
             event = "daemon.revocation_connection_sweep",
             target_kind = "node",
@@ -1094,6 +1263,66 @@ mod tests {
             files.snapshot_count(),
             0,
             "daemon 关闭路径必须调用 release_all 释放内容快照"
+        );
+    }
+
+    /// 组合根把同一个 SQLite 存储装配成附件传输端口：没有它，`/sync/v1/attachments` 与
+    /// `/node-link/v1/attachments` 不会注册、对应 feature 也不会宣告。
+    #[tokio::test]
+    async fn composition_injects_the_attachment_transfer_store() {
+        let dir = TempDir::new("attachments");
+        let composition =
+            Composition::assemble(dev_config(&dir.path, ""), Arc::new(LoggingPublisher))
+                .await
+                .expect("装配");
+        assert!(
+            composition.use_cases().attachment_transfers().is_some(),
+            "组合根必须注入 AttachmentTransferStore"
+        );
+        composition.close().await.expect("关闭组合根");
+    }
+
+    /// 回归（WP5c）：注入给 `AgentHost` 的附件端口必须**不拥有**存储。
+    ///
+    /// 会话与 core 的会话槽位之间的引用环保留到进程结束（见 [`WeakAttachmentStore`]），因此端口若持有
+    /// 强引用，`close()` 就会以 [`ComposeError::StoreStillShared`] 失败并跳过检查点——`node_link_e2e`
+    /// 的 AC1 用例正是如此暴露它。本用例直接断言：构造端口不增加强计数、仍能读写同一份存储，存储关闭后
+    /// 如实返回不可用（不 panic、不返回空字节）。
+    #[tokio::test]
+    async fn the_injected_attachment_port_does_not_own_the_store() {
+        let dir = TempDir::new("attachment-port");
+        let composition =
+            Composition::assemble(dev_config(&dir.path, ""), Arc::new(LoggingPublisher))
+                .await
+                .expect("装配");
+        let store = composition.attachments();
+        let before = Arc::strong_count(&store);
+        let port = WeakAttachmentStore::new(&store);
+        assert_eq!(
+            Arc::strong_count(&store),
+            before,
+            "弱端口不得增加存储的强引用（否则泄漏的会话环会阻止检查点）"
+        );
+
+        let at = composition.clock().now();
+        let reference = port
+            .put(b"attachment-bytes", "text/plain", at.clone())
+            .await
+            .expect("经弱端口写入");
+        assert_eq!(
+            port.get(&reference.id).await.expect("经弱端口读取"),
+            Some(b"attachment-bytes".to_vec()),
+            "弱端口必须转发到同一份存储"
+        );
+
+        drop(store);
+        composition.close().await.expect("关闭组合根");
+        assert!(
+            matches!(
+                port.get(&reference.id).await,
+                Err(PortError::Unavailable(UnavailableKind::IoError))
+            ),
+            "存储关闭后必须如实不可用，而不是 panic 或返回空字节"
         );
     }
 

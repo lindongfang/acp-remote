@@ -192,6 +192,7 @@ impl Harness {
                 composition.config().node_name.clone(),
                 closer,
             )),
+            access: None,
         }));
         Self {
             addr,

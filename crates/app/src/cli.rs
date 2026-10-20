@@ -154,10 +154,11 @@ enum NodeCommand {
     Revoke(NodeRevoke),
 }
 
-/// `node pair`：`--mode owner` 在本机生成二维码并本机确认；`--mode access` 本切片回 `local.unsupported`。
+/// `node pair`：`--mode owner` 在本机生成二维码并本机确认；`--mode access` 用 Owner 的配对 URL 发起
+/// claim，等待 Owner 本机确认（本机不再调用 `confirm`）。
 #[derive(Debug, Args)]
 struct NodePair {
-    /// 配对方向（`owner` | `access`，由方法侧校验）。
+    /// 配对方向（`owner` | `access`）。
     #[arg(long, value_name = "MODE")]
     mode: Option<String>,
     /// `--mode access` 时用户提供的 Owner 配对 URL（`--mode owner` 必须省略）。

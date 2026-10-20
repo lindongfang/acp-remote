@@ -40,7 +40,8 @@ impl std::fmt::Debug for LaunchSpec {
 /// 必要的进程环境：没有它们，Agent 常常连自己的工具都找不到。
 ///
 /// 这不是白名单的放松：它们是固定的、与凭据无关的宿主环境项，且只在 profile 没有自己提供同名变量时注入。
-const NECESSARY_ENV: &[&str] = &["PATH", "HOME", "USERPROFILE", "SystemRoot", "TEMP", "TMP"];
+pub(crate) const NECESSARY_ENV: &[&str] =
+    &["PATH", "HOME", "USERPROFILE", "SystemRoot", "TEMP", "TMP"];
 
 /// ACP Remote 自己的注入名前缀（Node/Device 密钥、token 等）与 core 保留的 daemon 前缀：子进程环境里
 /// 出现它们即视为配置错误（`ACPR_*` 是本 crate 的约定，`ACP_REMOTE_*` 与 `core::model` 的
@@ -69,7 +70,7 @@ pub fn resolve_launch(profile: &AgentProfile) -> Result<LaunchSpec, HostError> {
 /// `ACP_REMOTE_*` 名字，就在启动前失败关闭（而不是把「不得注入节点/设备密钥」全部押在运行时的
 /// `env_clear()` 上）。core 的 `AgentProfile` 已在模型边界拒绝 `ACP_REMOTE_*`（`is_reserved_env_name`），
 /// 这里是与它对齐的纵深防御：**旁路 core 校验的自定义凭据/配置来源也拦得住。**
-fn validate_env_name(name: &str) -> Result<(), HostError> {
+pub(crate) fn validate_env_name(name: &str) -> Result<(), HostError> {
     if name.is_empty() || name.contains('=') || name.contains('\0') {
         return Err(HostError::InvalidEnvName);
     }

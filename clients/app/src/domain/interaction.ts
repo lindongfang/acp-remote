@@ -32,13 +32,23 @@ import type { ElicitationResolutionAction } from "../protocol/event";
 export type InteractionKind = "permission" | "elicitation";
 
 /** 不可应答的原因（MUST 可区分：措辞不同、可核对）。 */
-export type InteractionUnavailableReason = "read_from_history" | "session_closed" | "options_missing";
+export type InteractionUnavailableReason =
+  | "read_from_history"
+  | "session_closed"
+  | "options_missing"
+  | "expired"
+  | "not_effective"
+  | "request_version_unknown";
 
 /** 不可应答原因的展示文案。 */
 export const INTERACTION_UNAVAILABLE_LABELS: Readonly<Record<InteractionUnavailableReason, string>> = {
-  read_from_history: "这条待处理项是从历史读到的，本设备没有收到过它的请求内容，无法应答",
+  read_from_history: "这条待处理项只从历史读到，尚未取得服务端确认的当前有效请求，无法应答",
   session_closed: "会话已关闭，不能再应答",
   options_missing: "这次请求没有下发可选项，无法应答",
+  expired: "这次请求已过期或上游等待方已不存在，不能再应答",
+  not_effective: "服务端当前不再确认这条请求仍然有效（可能已由其它设备处理），不能应答",
+  request_version_unknown:
+    "连接已协商 core.pending-interactions.v1，但这次请求尚未取得服务端确认的请求版本；重新取得当前有效请求后才能提交",
 };
 
 /**
@@ -103,10 +113,33 @@ export type InteractionAvailability =
  */
 export function buildInteractionAvailability(input: {
   readonly kind: InteractionKind;
-  /** 亲历请求里下发的可选项；历史读回的待处理项为 `null`。 */
+  /** 当前请求下发的可选项；只有历史卡片时为 `null`。 */
   readonly options: readonly InteractionOption[] | null;
-  /** 本设备连接期间是否收到过该请求的内容。 */
+  /** 本设备连接期间是否收到过该请求的实时事件。 */
   readonly witnessed: boolean;
+  /** 是否由本次 `session.read` 的服务端确认（`effectiveInteraction`）。 */
+  readonly effective?: boolean;
+  /** 服务端确认的请求版本；旧 peer / 仅历史卡片为 `null`。 */
+  readonly requestVersion?: string | null;
+  /**
+   * 本连接是否协商了 `core.pending-interactions.v1`（该 feature 协商后应答 MUST 携带
+   * `requestVersion`，服务端不得因缺席放宽校验）。
+   *
+   * 协商后版本未知（实时事件没带、也还没经 `session.read` 确认）时**不得**判为可应答：
+   * 那样画出的按钮点下去只会被服务端拒绝。
+   */
+  readonly requiresRequestVersion?: boolean;
+  /** 服务端确认的有效期；过期即不可应答（`null` = 未给出）。 */
+  readonly expiresAt?: string | null;
+  /**
+   * 是否已向服务端核对过当前有效请求（本会话完成过一次 `refresh_interactions`）。
+   *
+   * 核对后仍未确认的历史卡片改报 `not_effective`（服务端说它已不再有效），而不是继续报
+   * 「尚未取得确认」——否则刷新按钮在结果为空时没有任何可见效果。
+   */
+  readonly pendingChecked?: boolean;
+  /** 当前时刻（epoch 毫秒），用于判断 `expiresAt`；缺省不判过期。 */
+  readonly nowMs?: number;
   readonly sessionOpen: boolean;
   readonly resolution: InteractionResolution | null;
   /** 本设备已提交应答的 `requestId`；未提交为 `null`。 */
@@ -124,7 +157,22 @@ export function buildInteractionAvailability(input: {
   }
   if (input.pendingRequestId !== null) return { kind: "submitting", requestId: input.pendingRequestId };
   if (!input.sessionOpen) return { kind: "not_answerable", reason: "session_closed" };
-  if (!input.witnessed) return { kind: "not_answerable", reason: "read_from_history" };
+  if (input.expiresAt !== null && input.expiresAt !== undefined && input.nowMs !== undefined) {
+    if (Date.parse(input.expiresAt) <= input.nowMs) return { kind: "not_answerable", reason: "expired" };
+  }
+  // 亲历的实时请求，或服务端本次重新确认过且取得完整内容的请求，才谈得上应答。
+  if (!input.witnessed && input.effective !== true) {
+    // 已经向服务端核对过：仍未确认就是「不再有效」的事实，而不是「还没核对」。
+    return {
+      kind: "not_answerable",
+      reason: input.pendingChecked === true ? "not_effective" : "read_from_history",
+    };
+  }
+  // 协商后应答必须原样回传 `requestVersion`（§11.7）。版本未知时按钮点了必然失败，
+  // 因此不判可应答，而是引导用户先重新取得当前有效请求（同一张卡片上的刷新入口）。
+  if (input.requiresRequestVersion === true && (input.requestVersion ?? null) === null) {
+    return { kind: "not_answerable", reason: "request_version_unknown" };
+  }
   if (input.kind === "elicitation") return { kind: "answerable", answers: ELICITATION_ANSWERS };
   const options = input.options;
   if (options === null || options.length === 0) {
@@ -150,6 +198,15 @@ export interface InteractionView {
   /** 请求时间：亲历请求用事件时间，读回的待处理项用它的 `createdAt`。 */
   readonly requestedAt: string;
   readonly turnId: string | null;
+  /** 本设备连接期间收到过该请求的实时事件。 */
   readonly witnessed: boolean;
+  /** 服务端本次读取确认过（`effectiveInteraction`）。 */
+  readonly effective: boolean;
+  /** 请求版本：实时事件自带或被 `session.read` 确认；应答时必须原样回传（`null` = 两处都没有）。 */
+  readonly requestVersion: string | null;
+  /** 服务端给出的有效期（`null` = 未给出）。 */
+  readonly expiresAt: string | null;
+  /** 当前请求下发的可选项（授权）；提问为 `null`。 */
+  readonly options: readonly InteractionOption[] | null;
   readonly availability: InteractionAvailability;
 }

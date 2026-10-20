@@ -29,20 +29,25 @@ pub mod session;
 mod wire;
 
 pub use handshake::{
-    NegotiationFault, PROTOCOL_VERSION, SUPPORTED_FEATURES, connection_binding, negotiate_features,
-    negotiated_version, peer_trust, pending_pairing, transcript_features, wire_features,
+    NegotiationFault, PROTOCOL_VERSION, SUPPORTED_FEATURES, connection_binding, feature_list,
+    feature_list_without, negotiate_features, negotiate_features_with, negotiated_version,
+    peer_trust, pending_pairing, transcript_features, wire_features,
 };
 pub use limits::{SessionLimits, SyncConfig};
 pub use registry::{ConnectionHandle, ConnectionRegistry, PendingQueue, SendFault};
 pub use session::{
-    HEARTBEAT_SILENCE_TIMEOUT, MAX_IN_FLIGHT_HANDSHAKES_PER_IP, MessageRoute, RouteOutcome,
-    SyncConn, WsEndpoint,
+    HEARTBEAT_SILENCE_TIMEOUT, MAX_IN_FLIGHT_HANDSHAKES_PER_IP, MessageRoute, Purpose,
+    RouteOutcome, SyncConn, WsEndpoint,
 };
 
 use std::time::Duration;
 
 /// Sync WSS 端点（§3.1）。
 pub const WS_PATH: &str = "/sync/v1";
+
+/// 独立附件连接的 WSS 端点（§3.4）：subprotocol 与业务连接相同、认证流程完全相同，只有业务阶段的帧族
+/// 换成 `attachment.*`（[`Purpose::Attachments`]）。
+pub const ATTACHMENTS_WS_PATH: &str = "/sync/v1/attachments";
 
 /// Sync 的 WebSocket subprotocol（§3.1；接入层按它做 upgrade 白名单，机器登记见
 /// `compatibility/errors/v1/errors.json` 的 `protocols.sync.subprotocol`）。

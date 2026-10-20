@@ -29,6 +29,15 @@ use crate::platform::ProcessTree;
 
 type Pending = HashMap<u64, oneshot::Sender<Result<Value, HostError>>>;
 
+/// 进站队列的元素：通知与响应走同一条 FIFO。
+///
+/// 响应必须排在它之前的全部通知之后结算：`turn.completed` 的响应若先于最后一段
+/// `session/update` 被处理，合并窗口会在尾段 delta 到达前提交终态，尾段随后被拒收。
+pub enum Inbound {
+    Notification(Envelope),
+    Response { id: u64, envelope: Envelope },
+}
+
 /// 退出上报钩子的类型别名（避免在结构体字段上出现难以阅读的裸 `Box<dyn Fn(bool)>`）。
 type ExitReporter = Box<dyn Fn(bool) + Send + Sync>;
 
@@ -162,7 +171,7 @@ impl Supervisor {
     /// 响应不进通道（它们在 `stdout` 任务里直接结算给对应的未完成请求）。
     pub async fn start(
         spec: LaunchSpec,
-    ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Envelope>), HostError> {
+    ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Inbound>), HostError> {
         let mut command = Command::new(&spec.program);
         command.args(&spec.args);
         // 子进程环境**先清空**再逐项注入：未列入白名单的宿主变量（含任何密钥）都不得进入。
@@ -245,6 +254,17 @@ impl Supervisor {
         }
 
         Ok((supervisor, incoming_rx))
+    }
+
+    /// 结算一条已排到 FIFO 队首之后的响应（由 router 调用；集成测试也需要驱动这条路径）。
+    pub fn settle_response(&self, id: u64, envelope: &Envelope) {
+        let sender = self.pending.lock().ok().and_then(|mut map| map.remove(&id));
+        match sender {
+            Some(sender) => {
+                let _ = sender.send(settle(envelope));
+            }
+            None => tracing::warn!(id, "收到与任何未完成请求都不匹配的响应（协议错误）"),
+        }
     }
 
     /// 进程是否仍在运行。
@@ -540,7 +560,7 @@ async fn write_loop(
 async fn read_loop(
     mut stdout: tokio::process::ChildStdout,
     pending: Arc<Mutex<Pending>>,
-    incoming: mpsc::UnboundedSender<Envelope>,
+    incoming: mpsc::UnboundedSender<Inbound>,
     exit: Arc<ExitState>,
     tree: Arc<crate::platform::ProcessTree>,
 ) {
@@ -622,7 +642,7 @@ fn abort_agent(
 fn handle_line(
     line: &[u8],
     pending: &Arc<Mutex<Pending>>,
-    incoming: &mpsc::UnboundedSender<Envelope>,
+    incoming: &mpsc::UnboundedSender<Inbound>,
     exit: &Arc<ExitState>,
     tree: &crate::platform::ProcessTree,
 ) -> bool {
@@ -666,20 +686,15 @@ fn handle_line(
             .and_then(|text| text.parse::<u64>().ok());
         match id {
             Some(id) => {
-                let sender = pending.lock().ok().and_then(|mut map| map.remove(&id));
-                match sender {
-                    Some(sender) => {
-                        let _ = sender.send(settle(&envelope));
-                    }
-                    None => tracing::warn!(id, "收到与任何未完成请求都不匹配的响应（协议错误）"),
-                }
+                // 与通知走同一条 FIFO：由 router 在之前的通知处理完之后再结算。
+                let _ = incoming.send(Inbound::Response { id, envelope });
             }
             // 字符串 id（Zed 的形态）：本 crate 只发数字 id，因此不可能匹配得上。
             None => tracing::warn!("响应的 id 不是本进程发出的数字 id（协议错误）"),
         }
         return true;
     }
-    incoming.send(envelope).is_ok()
+    incoming.send(Inbound::Notification(envelope)).is_ok()
 }
 
 /// 把响应结算成结果。

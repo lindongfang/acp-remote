@@ -83,7 +83,7 @@ pub enum UnavailableKind {
 
 | 类型 | 形状 / 不变量 | 出处 |
 |---|---|---|
-| `NodeId` / `DeviceId` / `SessionId` / `EventId` / `RequestId` / `TurnId` / `InteractionId` / `PairingId` / `AttachmentId` / `MessageId` | newtype over canonical 小写 UUID 文本（`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`） | `SYNC_PROTOCOL.md` §3.3 |
+| `NodeId` / `DeviceId` / `SessionId` / `EventId` / `RequestId` / `TurnId` / `InteractionId` / `PairingId` / `AttachmentId` / `SubmissionId` / `MessageId` | newtype over canonical 小写 UUID 文本（`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`） | `SYNC_PROTOCOL.md` §3.3 |
 
 
 | `WorkspaceAlias` | `^[a-z0-9][a-z0-9._-]{0,63}$` | `NODE_LINK_PROTOCOL.md` §12.3 |
@@ -145,6 +145,19 @@ pub enum UnavailableKind {
 | `Resolution` | enum `Resolved ｜ AlreadyResolved` | `SYNC_PROTOCOL.md` §11.5 |
 | `PendingInteraction` | `{ id, kind, session, created_at, options: Vec<InteractionOption> }`；`options` 在**存储读视图**里恒为空——真值只存在于 `request_event` 指向的事件 payload（§5.2、§6 第 13 条） | `NODE_LINK_PROTOCOL.md` §12.4 |
 | `PendingInteractionWrite` | `{ interaction: PendingInteraction, turn: Option<TurnId> }`——新建 pending 交互行的写入形状。**不携带 `request_event`**：`owned_event.event_id` 由存储层在提交事务内分配（§3.1），装配方无法预知；`owned_interaction.request_event` 是 `INTEGER REFERENCES owned_event(global_sequence)`（§7.3），由存储层按「同一提交 + 事件 payload 的 `interactionId` 等于 `interaction.id()`」配对后写入该事件的 `global_sequence`，配不到即整事务 `InvalidRequest` | 本合同（§5.2、§6 第 13 条） |
+
+| `MessageChannel` | enum `Reply｜Thought`（wire `reply/thought`）；回复与思考分别持久化，`Thought` 只在 Agent 明确提供时产生，`agent.thought.delta` 不产生 `agent.message.completed` | `SYNC_PROTOCOL.md` §10.4 |
+| `PartialResult` | `{ state: Completed｜Partial｜Failed｜Cancelled, reason: Option<PartialReason> }`；`Partial` 表示保留已收到内容但上游未完成，MUST NOT 折叠成成功 | 同上 |
+| `PartialReason` | enum `AgentStopped｜AgentFailed｜TurnCancelled｜ConnectionLost｜RetentionExpired` | 同上 |
+| `MediaKind` | enum `Image｜Audio｜File` | 同上 |
+| `MediaAvailability` | enum `Available｜Expired｜NotFetched｜Unsupported`；不可用是显式事实，不得用空字节或空 URL 冒充 | 同上 |
+| `MediaReference` | `{ attachment: AttachmentId, session: SessionId, kind: MediaKind, media_type: String(1..=255), byte_length: u64, sha256: Digest, display_name: Option<String(1..=255)>, availability: MediaAvailability }`；**不含** URL、路径或 bearer 凭据 | 同上 |
+| `AttachmentSubject` | enum `Device(DeviceId)｜Node { access_node: NodeId }`；传输与清单的主体绑定，每一帧重复校验 | `SYNC_PROTOCOL.md` §3.4；`NODE_LINK_PROTOCOL.md` §12.9 |
+| `AttachmentTransferState` | enum `Receiving｜Sealed｜Aborted｜Expired` | 同上 |
+| `AttachmentTransfer` | `{ transfer: AttachmentId, session: SessionId, subject: AttachmentSubject, total_length: u64, received_length: u64, chunk_size: u32(32768), state: AttachmentTransferState, sealed: Option<SealedAttachment>, created_at, updated_at }`；`chunk_size` 是固定 v1 常量，不是客户端可协商值 | 本合同（§5.8/§7.6） |
+| `SealedAttachment` | `{ attachment: AttachmentId, length: u64, sha256: Digest, sealed_at: Timestamp }`；只在长度与流式摘要校验通过后产生 | 同上 |
+| `AttachmentSubmission` | `{ submission: SubmissionId, session: SessionId, subject: AttachmentSubject, attachments: Vec<AttachmentId>, digest: Digest, sealed_at: Timestamp }`；`attachments` 顺序即清单顺序，封存后不可追加 | 同上 |
+| `EffectiveInteraction` | `{ interaction: InteractionId, session: SessionId, kind: InteractionKind, request_version: Version, expires_at: Option<Timestamp>, options: Vec<InteractionOption>, schema: Option<ElicitationSchema> }`；`request_version` 每次 pending 写入递增，resolve 必须原样回传，不符即 `interaction.version_conflict` 且不消费请求 | `SYNC_PROTOCOL.md` §11.7 |
 
 `workspace.mkdir` 是无会话变更命令：受理和终态复用 `CommandRecord`，不构造 session/workspace 行。独立创建目录端口与一次性执行凭证见 §5.6；终态必须使用 §5.2 的主体绑定提交入口，避免不同主体使用相同 requestId 时发生歧义。
 
@@ -334,6 +347,7 @@ pub trait SessionEndpoint: Send + Sync {
     /// 实现**不得**编造占位值。
     fn agent_session_id(&self) -> Option<&AgentSessionId>;
     async fn prompt(&self, request: PromptRequest, at: Timestamp) -> Result<TurnAccepted, PortError>;
+    async fn validate_prompt(&self, request: &PromptRequest) -> Result<(), PortError>;
     async fn cancel(&self, turn: Option<TurnId>) -> Result<(), PortError>;
     /// 模式的只读枚举（`session.mode.list` 的唯一来源，§6 第 17 条）：候选列表来自 ACP 的
     /// `SessionModeState.availableModes`；core 不用它做授权或状态迁移，适配器不得凭当前模式编造候选。
@@ -403,7 +417,19 @@ pub struct HistoryQuery {
     /// **严格小于**它的条目；`None` = 最新一页。取值只能来自上一页最早条目的 `session_sequence`；
     /// 早于该会话仍可读条目的下界（行已被压缩/清理）时实现返回 `InvalidRequest`。
     pub before_history: Option<Sequence>,
+    /// 消息正文页的游标：`(createdAt, messageId)` 复合游标（`SYNC_PROTOCOL.md` §11.5 的
+    /// `beforeMessages`），只返回 `(created_at, message_id)` **严格早于**它的 `owned_message` 行；
+    /// `None` = 最新一页。与 `before_history` 各自独立分页。
+    pub before_messages: Option<MessageCursor>,
+    /// 消息正文页大小；`0` = 本请求不取 `HistoryPage.messages`。
+    pub messages_limit: ReplayLimit,
     pub limit: ReplayLimit,
+}
+
+/// 会话消息的分页游标：`owned_message` 没有会话内序号，正文页按「创建时间 + 标识」稳定排序。
+pub struct MessageCursor {
+    pub created_at: Timestamp,
+    pub message_id: MessageId,
 }
 
 /// owned 事件 + 其持久化正文：定位与正文严格同源（同一条行 / 同一次读视图），调用方不需要逐条再取一次。
@@ -453,6 +479,12 @@ pub struct HistoryPage {
     pub history: Vec<OwnedEventRecord>,
     /// `history` 之前是否仍有更早条目（§11.5 的 `historyHasEarlier`）；关闭 `history` 时恒为假。
     pub history_has_earlier: bool,
+    /// 该会话的权威消息正文（`owned_message`）：按 `(created_at, message_id)` 升序的**一页**，最多
+    /// `HistoryQuery::messages_limit` 条；`include.messages` 为假或 `messages_limit = 0` 时为空。
+    /// 媒体引用只查本页消息（`IN (…)`），不做整会话扫描。
+    pub messages: Vec<MessageRecord>,
+    /// `messages` 之前是否仍有更早消息；不是消息页时恒为假。
+    pub messages_has_earlier: bool,
     pub turns: Vec<Turn>,
     pub interactions: Vec<PendingInteraction>,
     pub config: Vec<ConfigOption>,
@@ -463,9 +495,18 @@ pub struct HistoryPage {
     pub next: Option<GlobalCursor>,
 }
 
+pub struct SubmissionBinding {
+    pub submission: SubmissionId,
+    pub attachments: Vec<AttachmentId>,
+    /// 认证主体：存储层在受理事务内与清单行逐项比较（直接调用 `commit_with_submission` 也绕不过）。
+    pub subject: AttachmentSubject,
+}
+
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError>;
+    /// 与 `commit` 同一原子提交，并在同一事务里绑定 prompt 的附件清单（§5.8/§6 第 22 条）。
+    async fn commit_with_submission(&self, commit: OwnedCommit, binding: Option<SubmissionBinding>) -> Result<CommitOutcome, PortError>;
     /// 仅 workspace.mkdir 的无会话终态；默认实现拒绝。按主体与 requestId 精确定位受理行。
     async fn commit_workspace_mkdir_terminal(&self, actor: &Actor, commit: OwnedCommit) -> Result<CommitOutcome, PortError>;
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError>;
@@ -473,6 +514,10 @@ pub trait SessionStore: Send + Sync {
     /// `owned_session.workspace_alias`（§3.1 的 `WorkspaceRef`）：展示名按别名关联目录记录，取不到时回退为
     /// 别名本身；别名为 `NULL` 时就是 `None`（未分组），MUST NOT 按 `workspace_cwd` 反查别名补齐。
     async fn list(&self, query: SessionQuery) -> Result<Vec<SessionSummary>, PortError>;
+    /// 批量读取会话的 origin epoch（`owned_session.origin_epoch`）。唯一生产调用方是 Node Link 的
+    /// catalog 投影（`NODE_LINK_PROTOCOL.md` §12.3 的 `catalog.session.originEpoch`）；不存在的标识
+    /// 不出现在结果里，调用方按「未知」处置、不补值。只读、无正文、不改 cursor。
+    async fn origin_epochs(&self, sessions: &[SessionId]) -> Result<Vec<(SessionId, OriginEpoch)>, PortError>;
     async fn head(&self) -> Result<GlobalCursor, PortError>;
     /// 一致性读视图：`sync.snapshot_*` 必须在本方法返回的视图内完成（barrier 依据）。
     async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError>;
@@ -564,6 +609,8 @@ pub trait RemoteDeliveryStore: Send + Sync {
   - **授权与投影**：用例入口 `UseCases::sync_replay(actor, after, limit)` 先按 `session.list` 走 `Broker::authorize`（设备主体恒通过、节点按 `grant.observe`），授权先于读取；它也不在 `require_local` 之外另设守卫（入口自带「为什么在 `require_local` 之外」的理由注释，与 `sync_visible_sessions` 同源）。core 不投影，owned 事件的字段由条目承载（`MODULE_ARCHITECTURE.md` §8），`remoteOrigin` 按 §9.6 恒为 `null`（本读面只返回 owned 事件，imported 的跳数由投递层的 imported 路径另行投影）；投递层不再按授权过滤事件。
   - **本条不新增表列、不改 §7**：`owned_event.origin_kind`/`causation` 与 `owned_command` 的 `actor_kind`/`actor_id` 早已就位，本次只是把它们读出（`EVENT_COLUMNS` 一直在 SELECT 它们，缺的只是组装 §10.1 形状的读面）。
 - `[决定]` `retention_window` 返回该会话仍可重放的 `session_sequence` 下界/上界；broker 据此决定 `sync.reset_required`（`reason` 枚举 `initial_sync|epoch_mismatch|cursor_expired|cache_incompatible`，`SYNC_PROTOCOL.md` §9.4）；cursor 的四种拒绝原因：格式非法 → `malformed`（协议层）、`serverEpoch` 与 `meta.server_epoch` 不符 → `epoch_mismatch`、超出 `head()` → `beyond_head`、低于窗口下界 → `cursor_expired`（`SYNC_PROTOCOL.md` §9.2）。
+
+**Access 侧 imported 回源端口（2026-10-20，`conversation-area-complete` WP5E5-read）**：`RemoteSessionReads::read_imported(session, ImportedReadQuery) -> ImportedRead` 是 `session.read` 对 imported 会话的唯一读面。`ImportedRead.document` 是 Owner `session.read` 完成结果的**原文**（`SessionReadResult` 形状），core 不解释其正文；实现（`node-link-client::RemoteSession`，组合根经 `AccessManager` 注入）MUST 在 Owner 不可达时返回 `UnavailableKind::OwnerOffline`，MUST NOT 返回空历史，也 MUST NOT 把正文写入数据库、临时文件或日志。`UseCases::read_imported_session` 先按 `session.read` 授权，再按 `RemoteDeliveryStore::find_imported_session` 判定来源：不是 imported 返回 `None`，未装配端口返回 `UnavailableKind::BackendUnsupported`。
 
 ### 5.3 信任、Export、审计与附件
 
@@ -746,6 +793,155 @@ pub trait SessionFiles: Send + Sync {
 
 组合根通过 `UseCases::with_session_files(Arc<dyn SessionFiles>)` 注入；core 的默认值 `UnavailableSessionFiles` 一律返回 `Unavailable(IoError)`（失败关闭，不是空成功）。`UseCaseDeps` 的必填字段不变，既有字面量构造点无需改动。
 
+### 5.8 分块附件与有效交互
+
+本节是 `conversation-area-complete` WP2 已实现的端口，与 `crates/core/src/ports.rs` 逐项绑定。
+上传只接受单块（`ATTACHMENT_CHUNK_SIZE = 32768`），清单用 `begin_submission`/`append_submission_page`
+分批登记（每页最多 64 项）后由 `finalize_submission` 整批校验；`prompt` 的受理经
+`SessionStore::commit_with_submission` 把清单绑定放进同一事务（§6 第 22 条）。
+
+```rust
+#[async_trait]
+pub trait AttachmentTransferStore: Send + Sync {
+    async fn begin_transfer(&self, write: TransferBegin) -> Result<AttachmentTransfer, PortError>;
+    async fn append_chunk(&self, write: TransferChunk) -> Result<ChunkOutcome, PortError>;
+    async fn seal_transfer(&self, write: TransferSeal) -> Result<SealedAttachment, PortError>;
+    async fn transfer(&self, transfer: &AttachmentId) -> Result<Option<AttachmentTransfer>, PortError>;
+    async fn abort_transfer(&self, transfer: &AttachmentId, at: Timestamp) -> Result<AttachmentTransfer, PortError>;
+    async fn begin_submission(&self, write: SubmissionBegin) -> Result<SubmissionProgress, PortError>;
+    async fn append_submission_page(&self, write: SubmissionPage) -> Result<SubmissionProgress, PortError>;
+    async fn finalize_submission(&self, write: SubmissionSeal) -> Result<AttachmentSubmission, PortError>;
+    async fn submission(&self, submission: &SubmissionId) -> Result<Option<AttachmentSubmission>, PortError>;
+    async fn read_chunk(&self, request: &AttachmentRead) -> Result<AttachmentChunk, PortError>;
+    async fn prune_transfers(&self, at: Timestamp, limit: u32) -> Result<u32, PortError>;
+}
+```
+
+```rust
+pub struct TransferBegin {
+    pub transfer: AttachmentId,
+    pub session: SessionId,
+    pub subject: AttachmentSubject,
+    pub total_length: u64,
+    pub media_type: String,
+    pub file_name: String,
+    pub at: Timestamp,
+}
+
+pub struct TransferChunk {
+    pub transfer: AttachmentId,
+    pub offset: u64,
+    pub data: Vec<u8>,
+    pub at: Timestamp,
+}
+
+pub struct ChunkOutcome {
+    pub next_offset: u64,
+    pub duplicate: bool,
+}
+
+pub struct TransferSeal {
+    pub transfer: AttachmentId,
+    pub length: u64,
+    pub sha256: Digest,
+    pub at: Timestamp,
+}
+
+pub struct SubmissionBegin {
+    pub submission: SubmissionId,
+    pub session: SessionId,
+    pub subject: AttachmentSubject,
+    pub attachment_count: u64,
+    pub at: Timestamp,
+}
+
+pub struct SubmissionPage {
+    pub submission: SubmissionId,
+    pub start_position: u64,
+    pub attachments: Vec<AttachmentId>,
+    pub at: Timestamp,
+}
+
+pub struct SubmissionProgress {
+    pub submission: SubmissionId,
+    pub registered: u64,
+    pub attachment_count: u64,
+    pub sealed: bool,
+}
+
+pub struct SubmissionSeal {
+    pub submission: SubmissionId,
+    pub session: SessionId,
+    pub subject: AttachmentSubject,
+    pub attachments: Vec<AttachmentId>,
+    pub digest: Digest,
+    pub at: Timestamp,
+}
+
+pub struct AttachmentRead {
+    pub attachment: AttachmentId,
+    pub session: SessionId,
+    pub offset: u64,
+    pub max_length: u64,
+}
+
+pub struct AttachmentChunk {
+    pub offset: u64,
+    pub data: Vec<u8>,
+    pub total_length: u64,
+    pub eof: bool,
+}
+```
+
+```rust
+#[async_trait]
+pub trait InteractionAuthority: Send + Sync {
+    async fn effective(&self, session: &SessionId) -> Result<Vec<EffectiveInteraction>, PortError>;
+    async fn resolve_effective(&self, write: EffectiveResolution) -> Result<Resolution, PortError>;
+    async fn invalidate_pending(&self, session: Option<&SessionId>, at: Timestamp) -> Result<u32, PortError>;
+}
+
+pub struct EffectiveResolution {
+    pub interaction: InteractionId,
+    pub session: SessionId,
+    pub actor: Actor,
+    pub request_version: Option<Version>,
+    pub resolution: InteractionResolution,
+    pub at: Timestamp,
+}
+```
+
+约束（实现必须满足，测试见 §9 判据 34–36）：
+
+- `append_chunk` 单次写入的 `data.len() ≤ 32768`；按期望偏移做条件更新，重复同内容返回
+  `ChunkOutcome { duplicate: true }`，不同内容返回 `Conflict(AlreadyExists)`，非期望偏移返回
+  `InvalidRequest`（wire 适配器据此填 `attachment.offset_mismatch` 的 `expectedOffset`/`actualOffset`）。
+- `seal_transfer` 在追加过程中维护流式 SHA-256 与已接收长度；校验失败不产生 `SealedAttachment`，
+  也不把已写入的临时内容标成可引用附件。
+- `begin_submission`/`append_submission_page` 分批登记清单（同位置同值幂等、不同值冲突，
+  越过声明数量拒绝）；`finalize_submission` 只在整批已封存、同一会话/主体、顺序与登记一致、
+  数量与摘要相符且无重复项时成功，封存后不可追加。
+- `commit_with_submission` 在受理事务内复核清单（已封存、会话、**认证主体**）与每个附件文件；任一
+  失败整事务回滚，命令不被受理，Agent 不会被派发。成功绑定后**删除清单行**（条目级联删除）：清单被
+  消费后不再是附件 GC 根，附件改由会话绑定与消息媒体引用保护。幂等命中先于绑定校验，因此重试返回首次
+  结果。
+- `read_chunk` 返回 `data.len() ≤ min(max_length, 32768)`；跨会话/主体读取返回 `NotFound`，不泄露内容。
+  附件文件一律经 `attachment_file_path` 映射（`attachments/<name>` → `storage.attachment_dir/<name>`），
+  因此自定义 `attachment_dir` 在封存、清单复核、绑定与读取之间一致生效。
+- `prune_transfers` 清理两类闲置对象（同一实现也被 `SessionStore::prune` 调用）：① `open` 超过 24 小时
+  或 `sealed` 超过 24 小时仍未绑定的清单（24 小时从 `created_at`/`sealed_at` 算，条目随外键级联删除）；
+  ② `state = Receiving` 且 `updated_at` 早于 24 小时窗口、且未被**活跃**清单引用的临时传输。删除文件在
+  事务提交之后；seal/提交与清理用条件更新互斥。传输临时文件位于 `attachment_dir/.transfers/`，不属于
+  孤儿回收扫描的顶层，因此活跃上传不会周期清理误删。
+- `resolve_effective` 是首个有效答案的原子入口：版本不符 → `Conflict(VersionMismatch)`，
+  已处理 → `Resolution::AlreadyResolved`，失效 → `Conflict(Expired)`，失败校验不推进版本、不消费请求。
+  `invalidate_pending` 把仍 `pending` 的行同时置为 `state = 'expired'` 并写 `invalidated_at`；失效行因此
+  不出现在任何 pending 读面（`effective`、`read_session` 的 `pending_interactions`、Node Link 快照），
+  旧解析路径（`StateChange::Update.interaction`）也返回 `Conflict(Expired)` 而不消费它，且不可复活。
+- `permission.resolve`/`elicitation.respond` 的版本、类别、表单与上游存活校验先于命令受理；受理之后的
+  竞态失败（另一设备抢先解析、窗口内失效、后端写失败）必须落一条 `command.failed` 终态，而不是把命令
+  留在 `accepted`。
+
 ## 6. Broker 的顺序与事务契约
 
 1. owned：`EventSink` → broker 组装 `OwnedCommit` → `SessionStore::commit` → `EventPublisher::publish`（顺序不可交换）。
@@ -788,7 +984,7 @@ pub trait SessionFiles: Send + Sync {
     - 同一趟恢复还要补写**缺失的收尾事件**：若某个 turn 已有已提交的 `agent.message.delta` 却没有 `agent.message.completed`（进程在终态提交前崩溃），必须用 `ReadView::event_payload` 从库里按第 14 条的规则重建该事件并在**同一次恢复提交**内落盘，否则那段已经广播出去的文本永远没有终态记录。
 17. `[决定]` **`session.mode.list` 的应答**：结果形状是 `ModeState { currentModeId, availableModes: ModeRef[], version }`（`SYNC_PROTOCOL.md` §11.5/§10.2）；`availableModes` **只能**来自 `SessionEndpoint::modes()`（§5.1），`version` 取该会话当前版本。core 不得凭 `current_mode` 编造候选列表，端口返回空列表时结果就是空列表（不伪造）。
 18. `[决定]` **附件文件与行的事务边界**：行的删除与它所在的事务一起提交，**文件删除一律在提交之后**（崩溃只会留下无人引用的孤儿文件，绝不会留下悬空行）；`AttachmentStore::prune_lru` 与 `sweep_orphans` 因此都在事务之外运行。
-    - **孤儿回收**由组合根在启动时调用一次 `sweep_orphans(启动时刻, 1000)`（紧跟 §6 第 16 条的恢复之后）：只删「不在 `owned_attachment` 里**且** `mtime` 早于本次进程启动时刻」的文件——第二条规则保护正在写入、行还没提交的新附件。回收失败**不阻止启动**，记一次结构化警告，剩余孤儿留到下次启动。
+    - **孤儿回收**由组合根在启动时调用一次 `sweep_orphans(启动时刻, 1000)`（紧跟 §6 第 16 条的恢复之后）：只删「不在 `owned_attachment` 里**且** `mtime` 早于本次进程启动时刻」的文件——第二条规则保护正在写入、行还没提交的新附件。它只扫描 `storage.attachment_dir` 的**顶层**条目；传输临时文件在 `attachment_dir/.transfers/` 子目录里，因此周期维护（每 60 s、以 `now` 为界）不会误删正在上传的文件。回收失败**不阻止启动**，记一次结构化警告，剩余孤儿留到下次启动。
 19. `[决定]` **提交前的 view 收口（`SYNC_PROTOCOL.md` §10.3 的身份与会话版本）**：owned 提交在 `commit_owned` 漏斗内、调用 `SessionStore::commit` **之前**完成两件事，因此落盘 view、重放 view 与广播所依据的 payload 同源：
     - **turn 归属**：事件类型属于 §10.3 要求 `turnId` 的集合（`turn.*`、`user.message.delta`、`agent.message.delta`、`agent.message.completed`、`agent.thought.delta`、`tool.call.started`/`updated`/`completed`、`permission.requested`、`elicitation.requested`）且该事件已被归属到某个 turn 时，view 顶层必须有 `turnId`，取值等于 core 已定稿的权威 turn；**不得**向其它事件类型添加未协商字段，无归属的事件不得出现该字段。适配器已给出同名字段时：取值一致 → 保留原字节；取值不同或值不是字符串 → 显式 `InvalidRequest`、不写任何行、不发布任何帧。归属只在批组装时定稿一次，注入是它的唯一消费者（不重新推导）。
     - **会话版本**：事件类型属于 §10.3 要求 `version` 的集合（`session.mode.changed`、`session.config.changed`）时，view 顶层必须有十进制字符串 `version`，取值等于该次提交后的会话版本。推导规则与存储层一致：含 `StateChange` 的提交为当前版本 + 1，否则不变；提交后必须与 `CommitOutcome.version` 比对，不一致 → `PortError::Corrupt`、不发布该批、不得报告成功（比对发生在存储返回之后，已落盘的行不由 core 撤销）。幂等命中（`replayed`）时不比对：返回的是首次提交的结果，第二次提交的 view 不得被重写。imported 路径**不**注入这两个字段（`turnId`/`version` 由拥有该会话的节点注入，`payloadDigest` 覆盖 Owner 给出的视图字节），只保留其取值。
@@ -809,6 +1005,17 @@ pub trait SessionFiles: Send + Sync {
     - **节点级 Agent 事件**（R8）：`agent.connected`/`agent.disconnected` 由适配器经 `NodeEventSink` 交付**已构造好的 `EndpointEvent`**，core 侧唯一入口是 `Broker::commit_node_event`——校验后按 `session: None` 的 `OwnedCommit` 落库（`owned_event` 的 `session_id`/`session_sequence`/`origin_epoch`/`origin_sequence` 四列由既有 CHECK 约束为同时为空），**不新增 migration**。`state` 是封闭词表且与该事件类型一一对应；这些事件**不表达**任何会话的活跃程度，也不得经会话级投递路径归属到任意会话。
     - **会话标题单向由 Agent 通知更新**（R9）：`StateChange::Update.title` 是**两层可选**（`None` = 不改该列、`Some(None)` = 显式置空、`Some(Some(text))` = 写入），唯一来源是 ACP `session_info_update` 投影出的 `session.info.changed`。判定「通知有没有携带标题」读的是 **ACP 原文**（`payload.acp` 的 `params.update.title` 键是否存在）——公共 view 的 `title` 是 `SYNC_PROTOCOL.md` §10.3 的 required 字段（`string|null`），键永远存在，表达不了「缺席 vs 显式 null」；ACP 原文不可用时退回 view 并把 `null` 当作「不改」（最保守解释，绝不把「不改」误判成「清空」）。标题超长（> 512 字符）→ 失败关闭（`InvalidRequest`），不写入违反值对象不变量的取值。**`updatedAt` 取 Daemon 持久化时间**（`commit.at`，由存储层写进 `owned_session.updated_at`）：view 里照常转发 Agent 自报值，但决定排序的权威时间不是它。命令目录**不存在**任何重命名会话的命令，也没有绕过该通知直接写标题的路径。
 
+22. `[决定]` **附件传输与消息绑定的提交顺序**（计划，WP2 实施；端口见 §5.8、表见 §7.6）：
+    - 上传：`begin` 只建传输行与临时文件；每个 `chunk` 按期望偏移做条件更新并追加到临时文件（重复同内容返回原确认，不同内容拒绝）；`seal` 在同一事务内校验总长度与流式 SHA-256 后把传输置为 `sealed` 并记录摘要。文件先写临时名，校验通过后 rename，**再**允许后续业务事务引用；跨资源原子性只保证「最坏留下孤儿文件，不留下悬空引用」。
+    - 提交：附件的引用绑定与 `session.prompt` 的幂等记录、消息行、清单引用在**同一业务事务**内完成；接受前重新校验清单 `sealed`、身份、会话、主体与 Agent 能力。上传成功不提前派发 Agent。
+    - 清理：先提交引用/行删除，再在事务之外删除文件（§6 第 18 条）；`prune_transfers`/`prune` 先把超过
+      24 小时的 `open`/`sealed` 清单过期（条目级联删除，释放其对附件的引用），再清 `receiving` 且
+      `updated_at` 早于 24 小时窗口的临时传输，与 seal/提交用条件更新互斥，不误删进行中的传输或仍被
+      引用的内容。传输临时文件位于 `attachment_dir/.transfers/` 子目录，孤儿回收只扫顶层，因此周期
+      维护不会误删活跃上传。成功绑定后清单行立即删除，未绑定清单最多保留 24 小时。
+    - 撤销：设备/节点撤销在事务内把相关 `receiving` 传输置为 `aborted` 并拒绝后续块/读取；已提交附件不因撤销被删除，按消息保留策略处理。
+    - 失败：磁盘满、摘要不符、预算耗尽都不得留下「可被 prompt 引用的半成品」；失败关闭路径与 §8 一致。
+
 ## 7. `storage-sqlite` v8 表结构（`imported_*` 家族仍为 v3）
 
 ### 7.1 文件、PRAGMA、连接与权限
@@ -824,9 +1031,9 @@ pub trait SessionFiles: Send + Sync {
 
 ### 7.2 Migration
 
-- `[决定]` `PRAGMA user_version` = 文件格式版本（当前 **v8 = 8**）；`meta` 保存两族 schema 版本：`owned_schema_version`（当前 8）、`imported_schema_version`（当前 3，imported 家族本次未变）。三个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`/`IMPORTED_SCHEMA_VERSION`。
+- `[决定]` `PRAGMA user_version` = 文件格式版本（当前 **v12 = 12**）；`meta` 保存两族 schema 版本：`owned_schema_version`（当前 12）、`imported_schema_version`（当前 4，imported 家族本次未变）。三个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`/`IMPORTED_SCHEMA_VERSION`。
 - `[决定]` 两族 migration 分开维护；单事务、可重复执行、失败整体回滚；文件格式版本**或**任一表结构版本高于本二进制已知版本 → 拒绝启动，不降级写入。
-- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 8` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库走 v2 段再走 v3 段再走 v4 段再走 v5 段再走 v6 段再走 v7 段再走 v8 段，v2 库走 v3/v4/v5/v6/v7/v8 段，v3 库走 v4/v5/v6/v7/v8 段，v4 库走 v5/v6/v7/v8 段，v5 库走 v6/v7/v8 段，v6 库走 v7/v8 段，v7 库只走 v8 段）；`user_version = 8` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL 建成 v8 形状（此时 `user_version` 是 0，不能只按版本号判断）。每段各自带 `file_version < N` 的守卫，因此「文件格式已比该段新、但仍低于最新版」的库不会重跑那一段。
+- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 12` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库依次走 v2…v12 段，v2 库走 v3…v12 段，…，v11 库只走 v12 段）；`user_version = 12` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL（含 v12 的新表与 `owned_interaction` 两列）建成 v12 形状（此时 `user_version` 是 0，不能只按版本号判断）。每段各自带 `file_version < N` 的守卫，因此「文件格式已比该段新、但仍低于最新版」的库不会重跑那一段。
 - `[决定]` v1 → v2 升级步骤（顺序固定，都在同一事务内）：
   1. 执行 §7.3/§7.4 的 DDL 常量：`CREATE ... IF NOT EXISTS` 建出新增的管理表与 `imported_import_export`，既有表不动；
   2. `owned_audit` 与 `imported_audit` 走 **12-step 表重建**（SQLite 不能修改既有 CHECK）：新建带完整 `action` CHECK 的表 → 按列拷贝**全部行（含 `audit_id`）** → `DROP` 旧表 → `RENAME` → 重建索引；之后按升级前的 `sqlite_sequence` 回填序列，**AUTOINCREMENT 不得回退**（审计有 365 天 TTL，尾部行被清理后 `seq` 会领先于 `max(audit_id)`）；
@@ -838,16 +1045,16 @@ pub trait SessionFiles: Send + Sync {
 - `[决定]` **v5 → v6 升级步骤**（与 v2/v3/v4/v5 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加一列 `workspace_alias TEXT`（会话的目录归属），用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK）；该列可空、**无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有目录归属（未分组）」，`MUST NOT` 被任何读取路径按 `workspace_cwd` 反查 `owned_workspace` 补齐，也 `MUST NOT` 用空串或占位别名代替（`NOT NULL DEFAULT ''` 做不到这一点：空串无法与「未分组」区分，会让「已分组」判定被默认值蒙蔽，与 v5 两列同一理由），§9 判据 28 逐行断言。写入侧与 v5 两列同属会话创建的那一次窄写提交（`CASE WHEN ?x IS NULL THEN col ELSE ?x END`，`None` = 不改该列），因此恢复流程既不读也不改它。`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'8'`、`PRAGMA user_version` 置为 `8`，`meta.imported_schema_version` 保持 `'3'`（imported 家族本次不变）。
 - `[决定]` **v6 → v7 升级步骤**（与 v2/v3/v4/v5/v6 段在同一事务内、顺序在后）：唯一差异是 `owned_event.origin_kind` 的 CHECK 从四值扩到五值（新增 `'node'`，§3.4/§10.1），列集合、列顺序、其余 CHECK 与索引**逐字不变**。SQLite 不能修改既有 CHECK，因此走 **12-step 表重建**（新建 `owned_event` 新形状 → 按列拷贝**全部行（含 `global_sequence`）** → `DROP` 旧表 → `RENAME` → 重建四个索引）。**子表必须一起挪开**：`owned_interaction.request_event` 是 `owned_event` 的子外键且是 `NO ACTION`，`foreign_keys = ON` 时 `DROP TABLE` 的隐式 DELETE 会直接违反它（实测 `FOREIGN KEY constraint failed`），而官方流程要求的 `PRAGMA foreign_keys = OFF` 在事务内是 no-op、与本段「单事务」的要求冲突；因此照 v1 → v2 段处理 `imported_import` 的同款手法，先把 `owned_interaction` 的行搬进一张**无外键的过渡表**并 `DROP` 该子表（它是叶子，删除永远安全），父表重建后按 §7.3 的**规范 DDL** 把它建回并回填行——过渡表不进 `sqlite_manifest` 的最终形状，升级库与新建库的 `owned_interaction` 逐列（名称/顺序/类型/`NOT NULL`/默认值）相等。`owned_event` 的 `AUTOINCREMENT` 序列（`sqlite_sequence`）与两张审计表一起在**全部**重建之前取一次、之后回填一次（`global_sequence` 是跨节点排序与 cursor 的基准，`MUST NOT` 因保留期清理过尾部行而回退）。行级保留要求见 §9 判据 28。
 - `[决定]` **v7 → v8 升级步骤**（与 v2/v3/v4/v5/v6/v7 段在同一事务内、顺序在后）：唯一差异是从 §7.3 的 `owned_device` **删除一列** `scopes_json`（设备不再有授权集合，§3.5、§6 第 5 条），用 `ALTER TABLE owned_device DROP COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK，见 §11.8）：该列既不在任何 CHECK/索引/外键/生成列里，也没有表引用 `owned_device`。本段**只作用于升级前就存在**的 `owned_device`（v1 库没有这张表，它由 §7.3 的 DDL 常量按**当前形状**直接建出、已不含该列，再 `ALTER TABLE ... DROP COLUMN` 会因缺列失败，因此与 v4 段同款加 `owned_device` 存在性守卫）；删列**不动** `owned_audit`/`imported_audit` 的 `action` CHECK——`'device.scopes_changed'` 作为**历史取值**保留（升级前的库可能已有这类审计行，收缩 CHECK 会让历史行写不回去、读不出来），只是本二进制不再产生它（§11.6 第 1 条）。删列后升级库与新建库的 `owned_device` 列清单（列名/顺序/类型/`NOT NULL`/默认值）逐项相等（§9 判据 28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'8'`、`PRAGMA user_version` 置为 `8`，`meta.imported_schema_version` 保持 `'3'`（imported 家族本次不变）。
+- `[决定]` **v11 → v12 升级步骤**（与 v2…v11 段在同一事务内、顺序在后）：五张新表由 §7.3 的 `CREATE ... IF NOT EXISTS` 建出；既有 `owned_interaction` 追加 `request_version INTEGER NOT NULL DEFAULT 1` 与 `invalidated_at TEXT` 两列（`ALTER TABLE`，先探测 `column_exists`，因此新建库与升级库同形）。本段只追加列，不改既有行；旧 pending 请求得到版本 1。
 - `[决定]` **目录归属的读取投影**（`design.md` D1/D6）：`SessionSummary.workspace` 取自 `owned_session.workspace_alias`，展示名由 `storage-sqlite` 在同一条读查询里 `LEFT JOIN owned_workspace ON w.alias = s.workspace_alias` 取得；**关联不上时回退为别名本身**（目录被删除不丢分组，也不让规范化路径进入摘要——路径只出现在快照的 `workspaces` 条目上，§11.1）。该 JOIN 留在 `storage-sqlite` 内部（它同时拥有两张表），**不上浮到 core**。实现 `MUST NOT` 存在任何「按 `owned_session.workspace_cwd` 反查别名」的查询——`NULL` 就是未分组，这是「别名重指向后既有会话归属不漂移」的前提。
 - `[决定]` 保留不变量：`server_epoch`、会话 `origin_epoch` 与事件 `global_sequence`/`session_sequence`、`requestId` 与幂等行、命令终态、全部既有审计都逐行保留，**不得重新编号**。管理表初始为空；profile 种子与「已初始化」标记在同一事务里提交（`LocalConfigStore::mark_seeded`，§5.3），不从聊天或审计内容推断信任。
 - `[决定]` 管理表纳入 §7.5 的容量度量（TEXT 列 + 附件字节）与清理顺序；撤销 tombstone 不因容量压力被删除，空间不足时拒绝新写入而不是删活动信任或未到期审计。
-- `[决定]` 迁移测试资产：`fixtures/storage/v2/` 三件套在 v3 之后是**冻结的历史升级输入**——`empty.sqlite3`（v2 形状的空库，v2 → … → v8 连续升级用例的输入）、`from-v1.sqlite3`（含会话/事件/cursor/幂等/审计数据的 v1 库，`owned_audit` 故意留下 `audit_id = 1,2,5` 的空洞以覆盖「序列领先于 `max(audit_id)`」；v1 → … → v8 连续升级用例的输入）与 `too-new.sqlite3`（`user_version = 3`，v3 之后不再「过新」，保留为历史资产）；`fixtures/storage/v1/` 的两个文件是更早的历史资产。当前二进制不再能生成 v2 形状的空库，因此 `from-v1.sqlite3` 的生成器（`crates/storage-sqlite/tests/migration.rs` 的 `regenerate_v1_fixture`，默认 `#[ignore]`）只重建它；v3、v4 与 v5 形状的库同样不由夹具提供，而由用例现场造（新建库写行 → `DROP` 掉换代才有的列、并把换代才删的列按旧声明补回 → 降版本键），`v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_columns_only`、`v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only` 与 `v5_database_upgrades_to_v6_by_appending_a_null_workspace_alias_column`（`tests/workspace_alias.rs`）分别覆盖三段；「版本过新拒绝启动」用例改在临时副本上把 `user_version` 顶到 `FILE_FORMAT_VERSION + 1`；「已是最新版则不重写」用例改在空目录新建的当前版本库上判定。
-- `[决定]` 回滚：v8 库不能被 v7 或更早的二进制打开（版本过新拒绝启动），因此回滚 = 恢复升级前的数据库备份 + 回退二进制；本合同**不提供**自动降级迁移（需要把库先降回 v7 形状的降级工具必须单独授权）。
+- `[决定]` 迁移测试资产：`fixtures/storage/v2/` 三件套在 v3 之后是**冻结的历史升级输入**——`empty.sqlite3`（v2 形状的空库，v2 → … → v12 连续升级用例的输入）、`from-v1.sqlite3`（含会话/事件/cursor/幂等/审计数据的 v1 库，`owned_audit` 故意留下 `audit_id = 1,2,5` 的空洞以覆盖「序列领先于 `max(audit_id)`」；v1 → … → v12 连续升级用例的输入）与 `too-new.sqlite3`（`user_version = 3`，v3 之后不再「过新」，保留为历史资产）；`fixtures/storage/v1/` 的两个文件是更早的历史资产。当前二进制不再能生成 v2 形状的空库，因此 `from-v1.sqlite3` 的生成器（`crates/storage-sqlite/tests/migration.rs` 的 `regenerate_v1_fixture`，默认 `#[ignore]`）只重建它；v3、v4 与 v5 形状的库同样不由夹具提供，而由用例现场造（新建库写行 → `DROP` 掉换代才有的列、并把换代才删的列按旧声明补回 → 降版本键），`v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_columns_only`、`v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only` 与 `v5_database_upgrades_to_v6_by_appending_a_null_workspace_alias_column`（`tests/workspace_alias.rs`）分别覆盖三段；「版本过新拒绝启动」用例改在临时副本上把 `user_version` 顶到 `FILE_FORMAT_VERSION + 1`；「已是最新版则不重写」用例改在空目录新建的当前版本库上判定。
+- `[决定]` 回滚：v12 库不能被 v11 或更早的二进制打开（版本过新拒绝启动），因此回滚 = 恢复升级前的数据库备份 + 回退二进制；本合同**不提供**自动降级迁移（需要把库先降回 v11 形状的降级工具必须单独授权）。
 
 ### 7.3 `owned_*` 表
 
 ```sql
-
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -958,7 +1165,9 @@ CREATE TABLE IF NOT EXISTS owned_interaction (
   decision_kind   TEXT CHECK (decision_kind IN ('allow_once','allow_always','reject_once','reject_always')),
   elicitation_action TEXT CHECK (elicitation_action IN ('submit','decline','cancel')),
   elicitation_values_json TEXT,
-  resolved_by_kind TEXT, resolved_by_id TEXT
+  resolved_by_kind TEXT, resolved_by_id TEXT,
+  request_version INTEGER NOT NULL DEFAULT 1,
+  invalidated_at  TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS owned_interaction_pending ON owned_interaction(session_id, state) WHERE state = 'pending';
 
@@ -999,6 +1208,69 @@ CREATE TABLE IF NOT EXISTS owned_attachment_link (
   sha256       TEXT NOT NULL REFERENCES owned_attachment(sha256),
   PRIMARY KEY (session_id, attachment_id)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_attachment_transfer (
+  transfer_id       TEXT PRIMARY KEY,
+  session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  subject_kind      TEXT NOT NULL CHECK (subject_kind IN ('device','node')),
+  subject_id        TEXT NOT NULL,
+  total_length      INTEGER NOT NULL,
+  received_length   INTEGER NOT NULL DEFAULT 0,
+  chunk_size        INTEGER NOT NULL CHECK (chunk_size = 32768),
+  state             TEXT NOT NULL CHECK (state IN ('receiving','sealed','aborted','expired')),
+  media_type        TEXT NOT NULL,
+  file_name         TEXT NOT NULL,
+  sealed_sha256     TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  CHECK ((state = 'sealed') = (sealed_sha256 IS NOT NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS owned_attachment_transfer_stale
+  ON owned_attachment_transfer(updated_at) WHERE state = 'receiving';
+
+CREATE TABLE IF NOT EXISTS owned_attachment_submission (
+  submission_id     TEXT PRIMARY KEY,
+  session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  subject_kind      TEXT NOT NULL CHECK (subject_kind IN ('device','node')),
+  subject_id        TEXT NOT NULL,
+  state             TEXT NOT NULL CHECK (state IN ('open','sealed')),
+  attachment_count  INTEGER NOT NULL,
+  manifest_digest   TEXT,
+  created_at        TEXT NOT NULL,
+  sealed_at         TEXT,
+  CHECK ((state = 'sealed') = (manifest_digest IS NOT NULL)),
+  CHECK ((state = 'sealed') = (sealed_at IS NOT NULL))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_attachment_submission_item (
+  submission_id     TEXT NOT NULL REFERENCES owned_attachment_submission(submission_id) ON DELETE CASCADE,
+  position          INTEGER NOT NULL,
+  attachment_id     TEXT NOT NULL,
+  PRIMARY KEY (submission_id, position)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_message (
+  message_id        TEXT PRIMARY KEY,
+  session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  turn_id           TEXT,
+  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought')),
+  state             TEXT NOT NULL CHECK (state IN ('partial','completed','failed','cancelled')),
+  content_json      TEXT NOT NULL,
+  partial_reason    TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  CHECK (state <> 'completed' OR partial_reason IS NULL)
+) STRICT;
+CREATE INDEX IF NOT EXISTS owned_message_session ON owned_message(session_id, created_at, message_id);
+
+CREATE TABLE IF NOT EXISTS owned_media_ref (
+  message_id        TEXT NOT NULL REFERENCES owned_message(message_id) ON DELETE CASCADE,
+  position          INTEGER NOT NULL,
+  attachment_id     TEXT NOT NULL,
+  kind              TEXT NOT NULL CHECK (kind IN ('image','audio','file')),
+  PRIMARY KEY (message_id, position)
+) STRICT;
+CREATE INDEX IF NOT EXISTS owned_media_ref_attachment ON owned_media_ref(attachment_id);
 
 CREATE TABLE IF NOT EXISTS owned_device (
   device_id     TEXT PRIMARY KEY,
@@ -1107,7 +1379,6 @@ CREATE TABLE IF NOT EXISTS owned_directory (
 ### 7.4 `imported_*` 表（无正文）
 
 ```sql
-
 CREATE TABLE IF NOT EXISTS imported_session (
   owner_node_id  TEXT NOT NULL,
   session_id     TEXT NOT NULL,
@@ -1177,7 +1448,6 @@ CREATE TABLE IF NOT EXISTS imported_audit (
   detail_digest TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
-
 ```
 
 约束与由来（含本轮修订）：
@@ -1206,7 +1476,9 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 | `storage.attachment_max_total_bytes` | 1 GiB | 附件总量，超出按 `last_used_at` LRU 清理 |
 | `storage.audit_retention_days` | 365 | 审计保留期（已确认）；到期后按 `at` 清理 `owned_audit`/`imported_audit`。容量压力下审计排在清理顺序**最后**（先清 delta → 正文/状态事件 → 已压缩批次 → 附件，再考虑审计），超限时宁可拒绝新写入也不静默丢证据 |
 
-`[决定]` 清理顺序：① 过期 delta → ② 过期正文/结构化/状态事件 → ②′ **终态交互行**（`owned_interaction.state <> 'pending'`）→ ③ 该会话最旧的已压缩 delta 批次 → ④ 附件 LRU → ⑤ 到期的审计（`storage.audit_retention_days`，365 天；`owned_audit` 与 `imported_audit` 都要清）→ ⑥ 仍超限则拒绝新写入（`PortError::Unavailable(StorageFull)`），不静默丢弃、不继续广播。TTL 清理（①②⑤、以及 ②′）由 `prune` 驱动；容量清理（②′③④）只在超限时触发。
+`[决定]` 清理顺序：① 过期 delta → ② 过期正文/结构化/状态事件 → ②′ **终态交互行**（`owned_interaction.state <> 'pending'`，含已失效的 `expired` 行）→ ③ 该会话最旧的已压缩 delta 批次 → ④″ **闲置清单与传输**（`open`/`sealed` 超过 24 小时的清单、`receiving` 超过 24 小时的传输）→ ④ 附件 LRU → ④′ 按引用 GC（无会话绑定/媒体引用/活跃清单且 `last_used_at` 早于 24 小时）→ ⑤ 到期的审计（`storage.audit_retention_days`，365 天；`owned_audit` 与 `imported_audit` 都要清）→ ⑥ 仍超限则拒绝新写入（`PortError::Unavailable(StorageFull)`），不静默丢弃、不继续广播。TTL 清理（①②②′④″⑤）由 `prune` 驱动；容量清理（②′③④）只在超限时触发。④″ 必须排在 ④/④′ 之前，否则已过期清单的条目会在本轮继续把附件挡在 GC 根之外。
+
+`[决定]` 消息保留期与附件的关联清理：`prune` 删除过期消息后，删除「不再被任何 `owned_media_ref` 引用、且附件的**最近一次使用**（`owned_attachment.last_used_at`）已早于正文保留窗口」的 `owned_attachment_link` 行。判定不按 `created_at`：内容寻址去重让旧字节复用同一个附件行并在行上保留**首次**上传的 `created_at`，按它判定会把「今天重发 90 天前的同一文件」刚建立的链接在下一轮清理里删掉（随后 `read_chunk` 失去授权、内容被 ④′ 回收）。因此 `bind_submission` 与 `AttachmentStore::link` 在建立链接时把该附件的 `last_used_at` 刷新为绑定时刻，保留期从最近一次绑定起算。附件因此随所属消息的保留期结束而失去会话绑定，随后由 ④′ 在闲置窗口后回收；仍被保留消息引用（或仍在保存期内）的内容不受影响。附件行被任一清理删除时，指向它的已封存传输在同一事务内置为 `expired` 并清空 `sealed_sha256`（CHECK 要求两列同有同无），不会出现「传输显示 sealed 但读不出附件」。
 
 `[决定]`（2026-09-23）**清理任务的驱动者与周期**（此前只写了“由 `prune` 驱动”，没写谁调、多久调一次，等于默认永不执行）：
 
@@ -1221,6 +1493,31 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 `[决定]` **幂等/终态行不参与 TTL 清理**：`owned_command` 的 mutation 行与 `status='uncertain'` 行保留到「目标会话被删除」或「actor 被撤销」，与 `SYNC_PROTOCOL.md` §11.2 的「至少保留到设备被撤销且目标会话被删除」一致。
 
 `[决定]` 清理不得破坏承诺期内的重放：窗口前移后 `retention_window` 必须反映新下界，broker 据此要求客户端重建 snapshot。
+
+### 7.6 临时传输、清单、消息与媒体引用的落盘语义
+
+本节描述 §7.3 已含的五张表与两列的实际语义（DDL 见 §7.3，版本见 §7.2）；
+`check-contract-drift` 已把它们与 `migrate.rs` 的 `OWNED_SCHEMA_V1` 逐条绑定。
+
+- `owned_attachment_transfer.received_length` 与 `updated_at` 在每次接受块时条件更新；
+  `state = receiving` 且最近活动不足 24 小时的传输不被清理。
+- `sealed_sha256` 与 `state = sealed` 同有同无（CHECK）；封存后不可追加，临时文件先落盘并校验，再写引用。
+- `owned_attachment_submission_item.position` 是清单顺序；`attachment_count`/`manifest_digest`/`sealed_at`
+  与 `state = sealed` 同生同灭（CHECK）；`prompt` 受理前按 `(session_id, subject)` 复核整份清单，绑定事务内
+  再复核一次主体并在成功后删除清单行（条目级联删除）。未绑定清单按 `created_at`/`sealed_at` 在 24 小时后
+  过期，因此 `owned_attachment_submission_item` 只对活跃清单构成附件 GC 根。
+- `owned_message` 是回复/思考/部分结果的权威正文表，`channel` 区分 `reply|thought`；
+  `completed` 的 `partial_reason` 恒为 NULL；`failed`/`cancelled` 必须给出原因；`partial` 允许 NULL——它
+  表示该 turn 仍在进行，turn 终态时由收尾逻辑改写为终态（未收到收尾则按 `failed` + `agent_failed` 落盘）。
+  历史读取只从这里取正文，并只取 `(created_at, message_id)` 游标指定的一页。
+- `owned_media_ref` 只存引用，不存媒体字节；附件的保留与回收按 `owned_media_ref`/`owned_attachment_link`/
+  `owned_attachment_submission_item` 的引用判定。`owned_attachment_link` 只在附件仍处于正文保留窗口内、或
+  仍被某条保留消息的媒体引用时保留；窗口按附件的 `last_used_at` 判定（建立链接时刷新为绑定时刻，见 §7.5），
+  不按内容首次上传的 `created_at`——去重复用的旧内容因此不会刚绑定就被回收。清单条目只对未绑定/未过期的清单存在。
+- `owned_interaction.request_version` 是当前有效请求版本（新行默认 1；本版本不递增——同一个 `pending` 请求
+  只有一次创建，重发/重试沿用该值）；`invalidated_at` 记录失效时刻，失效同时把 `state` 置为 `expired`，
+  所有 pending 读面按 `state = 'pending' AND invalidated_at IS NULL` 过滤，已终结请求不复活。失效行与其
+  请求事件在保留期到期后可被回收（②′ 与 ② 的既有谓词）。
 
 ## 8. 失败关闭
 
@@ -1266,6 +1563,10 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 31. **§10.3 的 view 身份与版本**（§6 第 19 条）：① 适配器视图不含 `turnId` 时，落盘 view 与 `owned_event.turn_id` 都等于 core 的权威 turn，且该 view 除新增的**一个前置成员**外逐字节不变（含未知字段、嵌套结构；ACP 原文 `raw_json`/`sha256`/`byte_length` 不变）；② 会话级或无归属事件不出现 `turnId`；未列入 §10.3 的类型（如 `terminal.output`）不新增该字段；③ 视图已带 `turnId` 且取值一致 → 字节不变且只出现一次，取值不一致 → `InvalidRequest` 且该批零落盘、零发布、turn 状态不变；④ 含 `session.mode.changed`/`session.config.changed` 的提交：无 `StateChange` 时注入当前版本且不递增，含 `StateChange` 时注入递增后的版本，两者都必须等于存储层返回值；存储返回不一致 → 不发布且不报成功；⑤ 幂等重放的 view 与首次落盘逐字节相同且不二次注入；⑥ 适配器 `prompt` 返回任意值（含全零占位）都不产生第二个 turn 行，也不改变归属。
 32. **节点信任不含授权清单**（§3.5/§7.2）：`owned_node` 只有身份、角色、状态与时间列；`exportIds`/`grants` 已随 v11 删除。
 33. **会话历史读（带正文、按会话内序号分页）**（本文件 §5.2 的对应 `[决定]`、§7.3；`design.md` D2/D4，`SYNC_PROTOCOL.md` §11.5）：① `include.history` 打开时 `HistoryPage.history` 按 `session_sequence` **升序**给出一页条目，省略游标 = 最新一页、带游标 = 严格更早的一页：以上一页最早条目的序号为游标续读**不重不漏**（两页交集为空、并集连续），以仍可读的最早条目为游标时页标记 `historyHasEarlier` 为假且不返回空占位，同一游标 + 同一 `limit` 重复读结果**完全相同**；② `include.history` 关闭时该集合为空且页标记恒为假；`events` 仍只受 `include.messages` 与 `after` 控制，两者在同一请求里互不改变对方的返回内容；③ 条目**自带持久化正文**：`view` 与库内 `payload_json` 逐字节相同（不重新序列化）、ACP 可用时字节保真、不可用时按行内 `acp_raw_unavailable_reason` 与同行摘要还原；「只查一遍库」（页内每个元素的正文都来自同一次取行，逐条回查 `event_payload` 的实现不合格）由**调用路径检视**判定，行为用例固定的是正文与库内字节的逐字节相等；④ `compacted_into IS NOT NULL` 的行不出现在条目里（也不占位、不计入页标记）；⑤ 原文被清理过的行给出 `AcpRaw::Unavailable` 并带 `acp_raw_unavailable_reason` 已登记的原因与同行摘要；⑥ 游标早于该会话仍可读条目的下界时返回 `InvalidRequest`（`SYNC_PROTOCOL.md` §11.5 的「保留窗口之前显式不可读」），不得静默返回更少的条目。
+
+34. **附件分块与封存（WP2 已实现）**（§5.8/§6 第 22 条/§7.6）：① 同偏移同内容重复提交返回原确认（`duplicate = true`）且不重复写入，同偏移不同内容返回冲突，非期望偏移返回带 `expected/actual` 的错误；② 处理 1 GiB 输入时进程驻留内存不随文件大小线性增长（断言单块工作集与 `chunk_size` 同阶）；③ 流式 SHA-256 与一次性摘要一致，长度/摘要不符不产生可引用附件；④ 跨会话、跨主体、跨设备的 `transferId`/`attachmentId` 一律 NotFound/InvalidRequest 且不泄露内容；⑤ 撤销在事务内中止 `receiving` 传输，已提交附件不被删除；⑥ 活动传输的临时文件（`attachment_dir/.transfers/`）在 `sweep_orphans(now)` 后仍存在且上传可继续；`prune_transfers` 不清理 `updated_at` 在 24 小时内的传输与仍被活跃消息/清单引用的内容；⑦ 已封存但未绑定的清单在 24 小时后过期，成功绑定则立即删除清单行（附件改由会话绑定/媒体引用保护）；⑧ 自定义 `storage.attachment_dir` 时封存、清单复核、绑定与 `read_chunk` 使用同一目录映射；⑨ 附件被 GC 后指向它的已封存传输变为 `expired`（`sealed: None` 不再出现）。
+35. **消息通道与部分正文（WP2 已实现）**（§3.3/§6 第 14 条/§7.6）：回复与思考分别落盘（`channel` 区分）；停止、失败、断线三种情形都保留已收到部分并标记 `partial_result`；`thought` 不产生 `agent.message.completed`；`owned_media_ref` 只存引用、不含字节；历史读只从 `owned_message` 取正文，不从事件或快照重复拼接。消息正文按 `(created_at, message_id)` 复合游标分页：省略游标 = 最新一页、带游标 = 严格更早的一页，`messages_has_earlier` 逐页收敛，最多返回 `messages_limit` 条（`0` 表示不取正文），媒体引用只查本页消息；消息保留期到期后，附件随会话绑定失效并由 GC 回收。
+36. **有效交互与版本（WP2 已实现）**（§3.3/§5.8/§6 第 13 条/§7.6）：`request_version` 是当前有效请求版本（新行默认 1；本版本不递增，重试沿用同一值）；版本不符返回冲突且不消费请求，且校验先于命令受理（失败不留 `accepted` 行）；两个并发应答恰好一个胜出、另一个得到已处理事实；受理之后的竞态失败落 `command.failed` 终态；Daemon 重启后上游丢失的交互被置为 `expired`（不再出现在 `effective`/`read_session`/Node Link 快照，旧解析路径返回 `Conflict(Expired)`）且不可复活；表单值整数不经浮点往返，整数 `minimum`/`maximum` 用精确整数比较（2^53 边界用例）。
 
 ## 10. 未决项
 

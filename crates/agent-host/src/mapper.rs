@@ -743,6 +743,36 @@ pub fn view_event_public(
     view_event(kind, event_type, view, None, at)
 }
 
+/// 一条 `terminal.output` 事件（`SYNC_PROTOCOL.md` §10.3 的字段：`terminalId`、十进制 `chunkIndex`、
+/// 可区分来源的 `stream`、`text` 与 `truncated`）。
+///
+/// `text` 是**本次读取**的真实内容（≤ `limits::TERMINAL_CHUNK_BYTES`），因此这里的 `truncated`
+/// 永远是 `false`：截断只发生在 `terminal/output` 的**保留正文**上（由响应里的 `truncated` 表达），
+/// 不会影响事件本身，也不会把事件内容裁成半截。`terminalId` 是工具调用内容里 `{type:"terminal"}`
+/// 引用的同一个标识，客户端据此把输出挂到对应工具卡片上。
+pub fn terminal_output_event(
+    terminal_id: &str,
+    chunk_index: u64,
+    stream: &str,
+    text: &str,
+    truncated: bool,
+    at: Timestamp,
+) -> Result<EndpointEvent, HostError> {
+    view_event(
+        EventKind::Delta,
+        "terminal.output",
+        json!({
+            "terminalId": terminal_id,
+            "chunkIndex": chunk_index.to_string(),
+            "stream": stream,
+            "text": text,
+            "truncated": truncated,
+        }),
+        None,
+        at,
+    )
+}
+
 fn view_event(
     kind: EventKind,
     event_type: &str,

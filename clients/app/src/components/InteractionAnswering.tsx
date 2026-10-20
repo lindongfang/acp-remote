@@ -143,6 +143,13 @@ export interface InteractionAnswerButtonsProps {
   readonly availability: InteractionAvailability;
   /** 应答上抛；缺省时**不**渲染按钮（不是渲染一个点了没反应的按钮）。 */
   readonly onAnswerInteraction?: ((interactionId: string, answer: InteractionAnswer) => void) | undefined;
+  /**
+   * 由外部控件接管的动作（例如表单自己渲染「提交」并带上值）。
+   *
+   * 被省略的动作不再出现在按钮组里：同一动作只有**一个**入口，避免「提交空值」与
+   * 「提交表单值」两个按钮并排。
+   */
+  readonly omitActions?: readonly ("submit" | "decline" | "cancel")[] | undefined;
 }
 
 /** 应答按钮组：可选项只来自这次请求自身的下发内容（模型给的可选项）。 */
@@ -150,11 +157,17 @@ export function InteractionAnswerButtons({
   interactionId,
   availability,
   onAnswerInteraction,
+  omitActions,
 }: InteractionAnswerButtonsProps): ReactElement | null {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
   if (availability.kind !== "answerable" || onAnswerInteraction === undefined) return null;
+  const omitted = new Set(omitActions ?? []);
+  const answers = availability.answers.filter(
+    (answer) => answer.via !== "action" || !omitted.has(answer.action),
+  );
+  if (answers.length === 0) return null;
 
   /** 严重度档位 → 该档的按钮/文字样式（样式表已按主题选好，这里只做查表）。 */
   const paintsOf = (severity: AnswerSeverity) => {
@@ -172,7 +185,7 @@ export function InteractionAnswerButtons({
 
   return (
     <View style={styles.actions}>
-      {availability.answers.map((answer) => {
+      {answers.map((answer) => {
         // 授权：按钮底色按 `kind` 的严重度分档（原型 `.p-once` / `.p-always` / `.p-reject`）。
         const paints = answer.via === "option" ? paintsOf(severityOfKind(answer.kind)) : null;
         return (

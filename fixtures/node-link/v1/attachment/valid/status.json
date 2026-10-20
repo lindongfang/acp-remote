@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "type": "attachment.status",
+  "messageId": "be6f7a8b-9c0d-4e1f-8a2b-4c5d6e7f8091",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "6",
+  "body": {
+    "transferId": "9b2f4c1d-6a3e-4f57-8b21-0c4d5e6f7a89",
+    "state": "receiving",
+    "receivedLength": "32768",
+    "nextOffset": "32768",
+    "sealedSha256": null
+  }
+}

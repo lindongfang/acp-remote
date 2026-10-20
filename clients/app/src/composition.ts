@@ -42,7 +42,11 @@
  */
 
 import {
+  ATTACHMENT_FEATURE,
   DECLARED_SUBPROTOCOLS,
+  REQUIRED_FEATURES,
+  SUPPORTED_FEATURES,
+  AttachmentTransferClient,
   encodeBase64Url,
   decodeBase64Url,
   openWebSocket,
@@ -50,10 +54,12 @@ import {
   SyncClient,
   syncSocketUrl,
 } from "./sync-client";
+import { AttachmentConnection, attachmentSocketUrl } from "./sync-client/attachment-connection";
 import type {
   ByteArray,
   CancelTimer,
   ClockPort,
+  DeviceIdentityLike,
   DigestPort,
   HostChallengeInput,
   HostIdentityPort,
@@ -63,7 +69,18 @@ import type {
   TranscriptCodec,
 } from "./sync-client";
 import { ClientStore } from "./features/client-store";
-import type { ConnectionIdentity, IdentifierSource, SyncGateway } from "./features/ports";
+import type {
+  AttachmentManifestRequest,
+  AttachmentManifestSealedResult,
+  AttachmentReadRequest,
+  AttachmentReadResult,
+  AttachmentTransferGateway,
+  AttachmentUploadRequest,
+  AttachmentUploadSealed,
+  ConnectionIdentity,
+  IdentifierSource,
+  SyncGateway,
+} from "./features/ports";
 import type {
   PairingLookupOutcome,
   PairingPollResult,
@@ -1009,6 +1026,204 @@ export interface Composition {
 }
 
 /**
+ * 附件连接的**生命周期管理者**（`docs/SYNC_PROTOCOL.md` §3.4）。
+ *
+ * 它把三件事装在一起，但各自仍可替换：
+ *
+ * 1. `AttachmentConnection`——第二条已认证 WSS 的协议面（握手在 `handshake.ts`）；
+ * 2. `AttachmentTransferClient`——帧状态机（逐块确认、seal、清单、read、超时）；
+ * 3. 重连与作废策略——业务连接认证到 `core.attachment-transfer.v1` 时开；业务连接断开、
+ *    页面卸载、阻断或撤销时关。**只在协商到该 feature 时**才开第二条连接：旧 peer 收到附件帧
+ *    会按协议错误关闭，探测式「发了再看」是错的。
+ *
+ * 对外只暴露 `AttachmentTransferGateway`：feature 层/仓库只看到「上传、封存清单、读取、取消」，
+ * 看不到 socket、序号或 token。连接未就绪时**明确失败**（抛错），不排队、不伪造成功——
+ * 仓库据此把附件标为失败并保留草稿。
+ */
+interface AttachmentTransportOptions {
+  readonly canonicalOrigin: string;
+  readonly hostId: string;
+  readonly identity: DeviceIdentityLike;
+  readonly host: HostIdentityPort;
+  readonly random: RandomPort;
+  readonly transcript: TranscriptCodec;
+  readonly openSocket: SocketFactory;
+  readonly clock: ClockPort;
+  readonly uuid: () => string;
+}
+
+/** 附件连接自己的退避（与业务连接分开计数；认证面相同，失败原因各自独立）。 */
+const ATTACHMENT_RECONNECT = {
+  baseDelayMs: 500,
+  maxDelayMs: 8_000,
+  maxAttempts: 6,
+} as const;
+
+class AttachmentTransport implements AttachmentTransferGateway {
+  readonly #options: AttachmentTransportOptions;
+  #connection: AttachmentConnection | null = null;
+  #transfer: AttachmentTransferClient | null = null;
+  #retry: CancelTimer | null = null;
+  #attempts = 0;
+  #stopped = true;
+  #blocked = false;
+
+  constructor(options: AttachmentTransportOptions) {
+    this.#options = options;
+  }
+
+  /** 连接与传输状态机都已就绪（可以发起上传/读取）。 */
+  get ready(): boolean {
+    return this.#transfer !== null && this.#transfer.negotiated && this.#connection !== null && !this.#connection.closed;
+  }
+
+  /** 开一条连接；重复调用不产生第二条。业务连接认证到附件 feature 后调用。 */
+  start(): void {
+    this.#stopped = false;
+    this.#blocked = false;
+    if (this.#connection !== null) return;
+    this.#open();
+  }
+
+  /** 关闭连接并作废进行中的传输（业务连接断开 / 页面卸载 / 撤销）。 */
+  stop(): void {
+    this.#stopped = true;
+    if (this.#retry !== null) {
+      this.#retry();
+      this.#retry = null;
+    }
+    const connection = this.#connection;
+    this.#teardown();
+    connection?.close();
+  }
+
+  upload(input: AttachmentUploadRequest): Promise<AttachmentUploadSealed> {
+    const transfer = this.#requireTransfer();
+    return transfer
+      .upload(
+        { sessionId: input.sessionId, subjectId: input.subjectId },
+        input.transferId,
+        {
+          totalLength: input.totalLength,
+          mediaType: input.mediaType,
+          fileName: input.fileName,
+          readChunk: input.readChunk,
+        },
+      )
+      .then((sealed) => ({ attachmentId: sealed.attachmentId, sha256: sealed.sha256, sealedAt: sealed.sealedAt }));
+  }
+
+  sealManifest(input: AttachmentManifestRequest): Promise<AttachmentManifestSealedResult> {
+    const transfer = this.#requireTransfer();
+    return transfer
+      .sealManifest(
+        { sessionId: input.sessionId, subjectId: input.subjectId },
+        input.submissionId,
+        input.transferIds,
+      )
+      .then((sealed) => ({ attachmentCount: sealed.attachmentCount, manifestDigest: sealed.manifestDigest }));
+  }
+
+  read(input: AttachmentReadRequest): Promise<AttachmentReadResult> {
+    const transfer = this.#requireTransfer();
+    return transfer
+      .read({
+        attachmentId: input.attachmentId,
+        sessionId: input.sessionId,
+        offset: input.offset,
+        maxLength: input.maxLength,
+      })
+      .then((chunk) => ({
+        offset: chunk.offset,
+        length: chunk.length,
+        totalLength: chunk.totalLength,
+        data: chunk.data,
+        eof: chunk.eof,
+      }));
+  }
+
+  /** 取消一个传输；连接已断开时是**无操作**（服务端会按闲置策略清理）。 */
+  abort(transferId: string, reason: "client_cancelled" | "budget_exceeded" | "revoked" | "digest_mismatch"): void {
+    const transfer = this.#transfer;
+    if (transfer === null || !transfer.negotiated) return;
+    transfer.abort(transferId, reason);
+  }
+
+  #requireTransfer(): AttachmentTransferClient {
+    const transfer = this.#transfer;
+    if (transfer === null || !transfer.negotiated || this.#connection === null || this.#connection.closed) {
+      throw new Error("附件连接尚未就绪（可能未协商 core.attachment-transfer.v1 或正在重连）");
+    }
+    return transfer;
+  }
+
+  #open(): void {
+    if (this.#stopped || this.#connection !== null) return;
+    this.#connection = new AttachmentConnection({
+      url: attachmentSocketUrl(this.#options.canonicalOrigin),
+      subprotocols: DECLARED_SUBPROTOCOLS,
+      hostId: this.#options.hostId,
+      identity: this.#options.identity,
+      host: this.#options.host,
+      random: this.#options.random,
+      transcript: this.#options.transcript,
+      openSocket: this.#options.openSocket,
+      supportedFeatures: SUPPORTED_FEATURES,
+      requiredFeatures: REQUIRED_FEATURES,
+      onReady: (link) => {
+        this.#attempts = 0;
+        this.#transfer = new AttachmentTransferClient({
+          connectionId: link.connectionId,
+          selectedFeatures: link.selectedFeatures,
+          send: (frame) => {
+            link.send(frame);
+          },
+          uuid: this.#options.uuid,
+          clock: this.#options.clock,
+        });
+      },
+      onFrame: (frame) => {
+        // 连接层已经做过严格解码；这里只是把帧交给状态机的等待者。
+        this.#transfer?.handleFrame(frame);
+      },
+      onClosed: () => {
+        this.#teardown();
+        this.#scheduleRetry();
+      },
+      onBlocked: () => {
+        // 撤销/版本/身份：不再重连（与业务连接的阻断语义一致）。
+        this.#blocked = true;
+        this.#teardown();
+      },
+      onRejected: () => {
+        // 单帧被拒不是阻断：连接层已按协议关闭需要关闭的连接，这里不缺省重连。
+      },
+    });
+  }
+
+  #teardown(): void {
+    this.#transfer?.abortAll("aborted");
+    this.#transfer = null;
+    this.#connection = null;
+  }
+
+  #scheduleRetry(): void {
+    if (this.#stopped || this.#blocked) return;
+    if (this.#attempts >= ATTACHMENT_RECONNECT.maxAttempts) return;
+    if (this.#retry !== null) return;
+    const delay = Math.min(
+      ATTACHMENT_RECONNECT.baseDelayMs * 2 ** this.#attempts,
+      ATTACHMENT_RECONNECT.maxDelayMs,
+    );
+    this.#attempts += 1;
+    this.#retry = this.#options.clock.schedule(delay, () => {
+      this.#retry = null;
+      this.#open();
+    });
+  }
+}
+
+/**
  * 装配运行时。
  *
  * 端口实现全部在这里落地，页面与 feature 层看不到任何平台 API。`start()` 是异步的：
@@ -1030,9 +1245,41 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
   const pairedHost = inputs.ports?.host ?? new PairedHostIdentity(platform.localCache, () => clock.now());
   const pairing = new HttpPairingTransport(fetchImpl, platform.deviceIdentity, () => clock.now(), random);
   const ids: IdentifierSource = { uuid: () => random.uuid() };
+  /**
+   * 平台附件/媒体端口。
+   *
+   * 缺省（注入的平台束没有它）时**不**向仓库装配附件：`attachmentsSupported` 为假并给出
+   * 说明，而不是画一个点了没反应的选择按钮。生产路径由 `openPlatform()` 提供。
+   */
+  const attachmentMedia = platform.attachments ?? null;
 
   // 未配对时不编造主机身份：`hostId` 与 `url` 要等 `start()` 读到配对记录才有意义。
   let sync: SyncClient | null = null;
+  /**
+   * 第二条已认证连接（附件）的生命周期管理者。
+   *
+   * 它**按主机装配**：`hostId` 与出站地址在构造期定格，与 `sync` 同一份判据切换主机时重建。
+   * 业务连接认证到 `core.attachment-transfer.v1` 才 `start()`；业务连接断开/阻断、页面卸载
+   * 或撤销时 `stop()`。网关对象是**稳定引用**（仓库在构造期拿它），内部委托给当前实例，
+   * 因此重新配对/重连不需要重建仓库。
+   */
+  let attachments: AttachmentTransport | null = null;
+
+  /** 取当前附件连接；未装配即抛错（store 会因此把附件标为失败并保留完整草稿）。 */
+  function requireAttachments(): AttachmentTransport {
+    if (attachments === null) throw new Error("附件连接尚未装配（未配对或主机正在切换）");
+    return attachments;
+  }
+
+  /** 附件网关：连接未装配或未就绪时明确失败，不排队也不伪造成功。 */
+  const attachmentGateway: AttachmentTransferGateway = {
+    upload: (input) => requireAttachments().upload(input),
+    sealManifest: (input) => requireAttachments().sealManifest(input),
+    read: (input) => requireAttachments().read(input),
+    abort: (transferId, reason) => {
+      attachments?.abort(transferId, reason);
+    },
+  };
   /**
    * 装配 `sync` 时用的那台主机（标识 + 规范化来源）。
    *
@@ -1089,6 +1336,10 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     identity,
     pairing: pairingWiring,
     schedule: (delayMs, task) => clock.schedule(delayMs, task),
+    // 附件端口只在平台真的提供了媒体端口时注入：缺它时仓库把附件明确标为不可用。
+    ...(attachmentMedia === null
+      ? {}
+      : { attachments: { media: attachmentMedia, transfer: attachmentGateway } }),
   });
 
   /**
@@ -1275,6 +1526,9 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
       sync.disconnect();
       sync = null;
     }
+    // 附件连接按主机定格（hostId/出站地址）：换主机必须作废旧连接与在途传输。
+    attachments?.stop();
+    attachments = null;
 
     sync = new SyncClient({
       hostId: record.hostId,
@@ -1296,16 +1550,41 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
         store.apply(event);
         // 下载只关心自己派发的块读取；其他命令结果由 store 归并。
         if (event.kind === "command_result") downloads.apply(event.result);
+        // 第二条连接只在业务连接**协商到附件能力**时才开；断开/阻断一律关掉。
+        if (event.kind === "authenticated") {
+          if (event.selectedFeatures?.includes(ATTACHMENT_FEATURE) === true) {
+            attachments?.start();
+          } else {
+            attachments?.stop();
+          }
+        }
+        if (event.kind === "closed" || event.kind === "blocked") attachments?.stop();
         // 追平完成才算真有进展：据此重置退避预算，与 `connection.ts` 的缺口预算同一口径。
         if (event.kind === "online") reconnectAttempts = 0;
         scheduleReconnect();
       },
     });
 
+    attachments = new AttachmentTransport({
+      canonicalOrigin,
+      hostId: record.hostId,
+      identity: platform.deviceIdentity,
+      host: pairedHost,
+      random,
+      transcript,
+      openSocket,
+      clock,
+      uuid: () => random.uuid(),
+    });
+
     unsubscribeStore = store.subscribe(scheduleReconnect);
     unsubscribeLifecycle = platform.lifecycle.subscribe((event: LifecycleEvent) => {
-      // `pagehide` 断开连接：未完成的暂存快照随之丢弃（§9.4），恢复路径交给下次连接。
-      if (event.kind === "pagehide") sync?.disconnect();
+      // `pagehide` 断开连接：未完成的暂存快照随之丢弃（§9.4），恢复路径交给下次连接；
+      // 附件连接一并关闭，进行中的传输由服务端按闲置策略清理（不做刷新续传）。
+      if (event.kind === "pagehide") {
+        sync?.disconnect();
+        attachments?.stop();
+      }
     });
     assembledHost = { hostId: record.hostId, canonicalOrigin };
   }
@@ -1320,6 +1599,8 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     unsubscribeLifecycle = null;
     sync?.disconnect();
     sync = null;
+    attachments?.stop();
+    attachments = null;
     assembledHost = null;
     void downloads.dispose();
   }

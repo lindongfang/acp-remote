@@ -80,7 +80,31 @@
         },
         {
           "id": "core.session-files.v1",
-          "description": "Sync 面当前会话工作目录内的只读文件查询：`session.files.list`/`session.files.read` 与 `session.git.status`/`session.git.diff`（§11.5 的请求/结果形状、§14 的分页与内容预算）",
+          "description": "Sync 面当前会话工作目录内的只读文件查询：`session.files.list`/`session.files.read` 与 `session.git.status`/`session.git.diff`（§11.5 的请求/结果形状、§14 的分页与内容预算）；只登记 Sync，不进入 Node Link",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.attachment-transfer.v1",
+          "description": "独立已认证附件 WSS 连接（§3.4）：`attachment.begin`/`chunk`/`chunk_ack`/`seal`/`sealed`/`status`/`abort`/`read`/`read_chunk`/`manifest_begin`/`manifest_page`/`manifest_sealed`/`error` 帧族；32 KiB 单块、十进制字符串偏移、每传输一块未确认、单设备 2/单节点 8 个活动传输；未协商时新帧族与 `attachment_ref` 必须缺席",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.typed-media.v1",
+          "description": "类型化媒体与消息通道（§10.4）：`AgentContentBlock` 的 `audio_ref`/`file_ref` 与 `image_ref.attachmentId`、`messageChannel`、`partialResult` 与媒体引用可用性；完整 ACP 原文仍逐字节保留",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.pending-interactions.v1",
+          "description": "可恢复的有效待处理交互（§10.4/§11.7）：`session.read` 的 `pending_interactions` 返回完整当前请求与 `requestVersion`，应答前重新校验有效性，首个有效答案胜出；已处理/失效请求不可复活",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.remote-history.v1",
+          "description": "远程历史读取（§9.6/§11.5）：imported 会话的结构化历史按会话内序号独立分页、读取前重新鉴权、正文由 Owner 回源提供；不可达或超出保留期显式不可用，Access 不持久化正文",
           "delivery": "mvp",
           "required": false
         }
@@ -117,6 +141,30 @@
           "id": "node-link.node-rotation.v1",
           "description": "node.rotate-key.*（只登记 ID 与消息名，收到即返回 type_unsupported）",
           "delivery": "post_mvp",
+          "required": false
+        },
+        {
+          "id": "node-link.attachment-transfer.v1",
+          "description": "节点间独立已认证附件连接（§12.9）：与 Sync 同名的 13 个附件帧、32 KiB 单块、十进制字符串偏移与流式摘要；主体绑定为已认证节点，Access 只做有界内存转发、不落盘",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "node-link.typed-media.v1",
+          "description": "跨节点类型化媒体、消息通道与部分结果（§11.4）：`resource.event.payload.view` 的媒体引用/思考/部分结果与 Sync §10.4 同义；Access 不解析 ACP 原文，完整原文仍逐字节保真",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "node-link.pending-interactions.v1",
+          "description": "跨节点有效待处理交互与真实表单（§12.7）：读取当前有效完整请求、`requestVersion` 校验与首个有效应答胜出；历史待处理项不可直接应答",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "node-link.remote-history.v1",
+          "description": "远程历史回源（§12.7/§17）：Access 按 origin cursor 向 Owner 读取历史分页、读取前鉴权；Owner 不可达或超出保留期显式不可用，Access 不持久化正文",
+          "delivery": "mvp",
           "required": false
         }
       ]

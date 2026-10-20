@@ -79,6 +79,17 @@ function readJson(path) {
   }
 }
 
+// 与 check-command-catalog.mjs / check-contract-drift.mjs 同口径：读取失败记一条错误并返回
+// `undefined`，由调用方跳过该文档的断言，而不是让整个脚本以 ReferenceError 崩掉。
+function readText(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    errors.push(`${relative(root, path)}: unreadable: ${error.message}`);
+    return undefined;
+  }
+}
+
 function resolvePointer(document, pointer) {
   if (!pointer || pointer === "#") return document;
   if (!pointer.startsWith("#/")) return undefined;
@@ -694,9 +705,137 @@ function checkDeviceQrAssets() {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// 附件传输帧族登记（`conversation-area-complete` WP1）：commands.json 的 `transportFrames` 是帧名与
+// 运行预算的唯一跨协议登记，schema 的 `frameType`/`transferBudget`、协议文档的帧表与预算表都必须与它
+// 相等。帧不是业务命令（它们不产生 command.result，也不进 commands 列表），因此登记放在单独的
+// `transportFrames` 段，而不是伪装成命令。
+// ---------------------------------------------------------------------------------------------
+
+const transportDocSources = {
+  sync: join(root, "docs", "SYNC_PROTOCOL.md"),
+  node_link: join(root, "docs", "NODE_LINK_PROTOCOL.md"),
+};
+
+const budgetRowKeys = {
+  单块原始数据: "chunkSize",
+  每传输未确认块: "maxUnacknowledgedChunks",
+  单设备活动传输: "maxActiveTransfersPerDevice",
+  单节点活动传输: "maxActiveTransfersPerNode",
+};
+
+/** `heading` 之后第一张 markdown 表的行（单元格 trim、去掉分隔行）。 */
+function tableAfterHeading(text, heading) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start < 0) return undefined;
+  const rows = [];
+  let inTable = false;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (!line.startsWith("|")) {
+      if (inTable) break;
+      continue;
+    }
+    inTable = true;
+    const cells = line
+      .split("|")
+      .slice(1, -1)
+      .map((cell) => cell.trim());
+    if (cells.every((cell) => /^-{2,}:?$/.test(cell))) continue;
+    rows.push(cells);
+  }
+  return rows.length > 0 ? rows : undefined;
+}
+
+function checkTransportFrames() {
+  const catalog = readJson(join(root, "compatibility", "commands", "v1", "commands.json"));
+  const features = readJson(join(root, "compatibility", "features", "v1", "features.json"));
+  if (!catalog || !features) return;
+  const entries = catalog.transportFrames;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    errors.push("compatibility/commands/v1/commands.json: transportFrames 必须登记 attachment 帧族");
+    return;
+  }
+
+  const seenProtocols = new Set();
+  for (const entry of entries) {
+    const protocol = entry?.protocol;
+    const label = `commands.json transportFrames[${protocol ?? "?"}]`;
+    if (typeof protocol !== "string" || seenProtocols.has(protocol)) {
+      errors.push(`${label}: protocol 缺失或重复`);
+      continue;
+    }
+    seenProtocols.add(protocol);
+    if (!(protocol in transportDocSources)) {
+      errors.push(`${label}: 未知 protocol ${protocol}`);
+      continue;
+    }
+
+    const featuresForProtocol = features.protocols?.[protocol]?.features ?? [];
+    if (!featuresForProtocol.some((feature) => feature.id === entry.feature)) {
+      errors.push(`${label}: feature ${entry.feature} 未在 compatibility/features/v1/features.json 的 ${protocol} 列表登记`);
+    }
+
+    const schemaPath = join(root, entry.schema ?? "");
+    const schema = readJson(schemaPath);
+    if (!schema) {
+      errors.push(`${label}: schema ${entry.schema} 不可读`);
+      continue;
+    }
+    const declaredFrames = schema.$defs?.frameType?.enum;
+    if (!Array.isArray(declaredFrames)) {
+      errors.push(`${label}: ${entry.schema} 缺少 $defs.frameType.enum`);
+    } else if (JSON.stringify(declaredFrames) !== JSON.stringify(entry.frames)) {
+      errors.push(
+        `${label}: frames 与 ${entry.schema} 的 $defs.frameType.enum 不一致（登记 ${entry.frames?.length} 个，schema ${declaredFrames.length} 个）`,
+      );
+    }
+
+    const documentedBudget = schema.$defs?.transferBudget?.properties ?? {};
+    for (const [key, value] of Object.entries(entry.budget ?? {})) {
+      const declared = documentedBudget[key]?.const;
+      if (declared !== value) {
+        errors.push(`${label}: budget.${key} 为 ${value}，${entry.schema} 为 ${JSON.stringify(declared)}`);
+      }
+    }
+
+    const docText = readText(transportDocSources[protocol]);
+    if (docText === undefined) continue;
+    const frameRows = tableAfterHeading(docText, "#### 帧族（`attachment.*`）");
+    if (!frameRows) {
+      errors.push(`${label}: ${relative(root, transportDocSources[protocol])} 缺少「#### 帧族（\`attachment.*\`）」表`);
+    } else {
+      const docFrames = frameRows.slice(1).map((cells) => (cells[0] ?? "").replace(/`/g, ""));
+      if (JSON.stringify(docFrames) !== JSON.stringify(entry.frames)) {
+        errors.push(`${label}: 协议文档帧表与 commands.json frames 不一致（文档 ${docFrames.length} 行，登记 ${entry.frames?.length} 个）`);
+      }
+    }
+
+    const budgetRows = tableAfterHeading(docText, "#### 附件传输预算");
+    if (!budgetRows) {
+      errors.push(`${label}: ${relative(root, transportDocSources[protocol])} 缺少「#### 附件传输预算」表`);
+    } else {
+      const docBudget = new Map(budgetRows.slice(1).map((cells) => [cells[0], cells[1]]));
+      for (const [rowLabel, key] of Object.entries(budgetRowKeys)) {
+        const cell = docBudget.get(rowLabel);
+        const value = Number.parseInt(String(cell ?? "").replace(/[^0-9]/g, ""), 10);
+        if (!Number.isInteger(value) || value !== entry.budget?.[key]) {
+          errors.push(`${label}: 协议文档预算行「${rowLabel}」为 ${JSON.stringify(cell)}，登记为 ${entry.budget?.[key]}`);
+        }
+      }
+    }
+  }
+
+  if (!seenProtocols.has("sync") || !seenProtocols.has("node_link")) {
+    errors.push("commands.json transportFrames 必须同时登记 sync 与 node_link 两个协议");
+  }
+}
+
 loadTranscriptRegistry();
 scanRemovedVocabulary();
 checkDeviceQrAssets();
+checkTransportFrames();
 await checkRoots();
 
 async function checkRoots() {

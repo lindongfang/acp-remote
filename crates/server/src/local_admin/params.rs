@@ -77,6 +77,18 @@ fn optional_string(params: &JsonObject, key: &str) -> Result<Option<String>, Adm
     }
 }
 
+/// 可缺省的可选字符串：字段缺失等价于 `null`（`node.pair.begin` 的 `displayName` 是**增量**字段，
+/// 旧 CLI 不发送它）。
+fn optional_string_or_absent(params: &JsonObject, key: &str) -> Result<Option<String>, AdminError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(invalid_params(format!(
+            "parameter `{key}` must be a string or null"
+        ))),
+    }
+}
+
 fn array<'a>(params: &'a JsonObject, key: &str) -> Result<&'a Vec<Value>, AdminError> {
     match value(params, key)? {
         Value::Array(items) => Ok(items),
@@ -256,24 +268,58 @@ pub fn device_pair_begin(params: &JsonObject) -> Result<DevicePairBegin, AdminEr
 pub enum NodePairBegin {
     /// `mode = "owner"`：本节点创建一次性配对并返回二维码 URL。
     Owner,
-    /// `mode = "access"`：本切片不支持（路由层回 `local.unsupported`，不发任何出站请求）。
-    Access,
+    /// `mode = "access"`：按 Owner 的配对 URL 发起 claim（实现由组合根注入）。
+    Access(NodePairAccessBegin),
 }
 
-/// `node.pair.begin`（§5.4）：`mode` 决定分支；`owner` 分支要求 `pairingUrl` 为 `null`。
+/// `node.pair.begin`（`mode = "access"`）的参数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodePairAccessBegin {
+    /// 用户提供的 Owner 配对 URL（`https://…/node-link/pair#data=…`）。
+    pub pairing_url: String,
+    /// 本节点在对端界面上的展示名（可空；Daemon 回落到 `[node] name`）。
+    pub display_name: Option<String>,
+}
+
+/// `node.pair.begin`（§5.4）：`mode` 决定分支；`owner` 分支要求 `pairingUrl` 为 `null`，
+/// `access` 分支要求 `pairingUrl` 非空字符串。
 ///
-/// `mode = "access"` 时**不继续解析**其余字段：本切片不实现该模式，把「不支持」报成「参数非法」
-/// 会误导调用方（§5.4 的 `mode = "access"` 分支与 `node.rotate-key.begin` 同类）。
-///
+/// `displayName` 只对 `access` 分支有效（`owner` 分支的展示名来自本机配置）；在 `owner` 分支给出非空值
+/// 会被当作参数错误，而不是静默忽略。
 pub fn node_pair_begin(params: &JsonObject) -> Result<NodePairBegin, AdminError> {
-    reject_unknown_fields(params, &["mode", "pairingUrl"])?;
+    reject_unknown_fields(params, &["mode", "pairingUrl", "displayName"])?;
     let mode = string(params, "mode")?;
     match mode.as_str() {
-        "access" => Ok(NodePairBegin::Access),
+        "access" => {
+            let pairing_url = optional_string(params, "pairingUrl")?
+                .filter(|url| !url.is_empty())
+                .ok_or_else(|| {
+                    invalid_params(
+                        "node.pair.begin: `pairingUrl` is required when `mode` is `access`",
+                    )
+                })?;
+            let display_name = optional_string_or_absent(params, "displayName")?;
+            if let Some(name) = &display_name {
+                if name.is_empty() || name.chars().count() > 128 {
+                    return Err(invalid_params(
+                        "node.pair.begin: `displayName` must be 1..=128 characters",
+                    ));
+                }
+            }
+            Ok(NodePairBegin::Access(NodePairAccessBegin {
+                pairing_url,
+                display_name,
+            }))
+        }
         "owner" => {
             if optional_string(params, "pairingUrl")?.is_some() {
                 return Err(invalid_params(
                     "node.pair.begin: `pairingUrl` must be null when `mode` is `owner`",
+                ));
+            }
+            if optional_string_or_absent(params, "displayName")?.is_some() {
+                return Err(invalid_params(
+                    "node.pair.begin: `displayName` is only accepted when `mode` is `access`",
                 ));
             }
             Ok(NodePairBegin::Owner)
@@ -514,5 +560,79 @@ pub fn map_pairing_error(operation: &str, error: PairingError) -> AdminError {
             LocalErrorCode::Internal,
             format!("{operation}: pairing state machine rejected the stored facts"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn object(value: Value) -> JsonObject {
+        value.as_object().expect("object").clone()
+    }
+
+    #[test]
+    fn node_pair_begin_access_requires_a_pairing_url() {
+        let error = node_pair_begin(&object(json!({ "mode": "access", "pairingUrl": null })))
+            .expect_err("access 缺 pairingUrl 必须失败");
+        assert_eq!(error.code(), LocalErrorCode::InvalidParams);
+    }
+
+    #[test]
+    fn node_pair_begin_access_accepts_an_optional_display_name() {
+        let params = object(json!({
+            "mode": "access",
+            "pairingUrl": "https://owner.example/node-link/pair#data=AAAA",
+        }));
+        assert_eq!(
+            node_pair_begin(&params).expect("access"),
+            NodePairBegin::Access(NodePairAccessBegin {
+                pairing_url: "https://owner.example/node-link/pair#data=AAAA".to_owned(),
+                display_name: None,
+            })
+        );
+
+        let params = object(json!({
+            "mode": "access",
+            "pairingUrl": "https://owner.example/node-link/pair#data=AAAA",
+            "displayName": "Office Access",
+        }));
+        let NodePairBegin::Access(access) = node_pair_begin(&params).expect("access") else {
+            panic!("必须是 access 分支");
+        };
+        assert_eq!(access.display_name.as_deref(), Some("Office Access"));
+
+        let params = object(json!({
+            "mode": "access",
+            "pairingUrl": "https://owner.example/node-link/pair#data=AAAA",
+            "displayName": "",
+        }));
+        assert_eq!(
+            node_pair_begin(&params)
+                .expect_err("空展示名必须失败")
+                .code(),
+            LocalErrorCode::InvalidParams
+        );
+    }
+
+    #[test]
+    fn node_pair_begin_owner_rejects_access_only_fields() {
+        let params = object(json!({
+            "mode": "owner",
+            "pairingUrl": null,
+            "displayName": "ignored",
+        }));
+        assert_eq!(
+            node_pair_begin(&params)
+                .expect_err("owner 不接受 displayName")
+                .code(),
+            LocalErrorCode::InvalidParams
+        );
+        let params = object(json!({ "mode": "owner", "pairingUrl": null }));
+        assert_eq!(
+            node_pair_begin(&params).expect("owner"),
+            NodePairBegin::Owner
+        );
     }
 }

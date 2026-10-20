@@ -533,7 +533,12 @@ async fn capabilities_are_negotiated_truthfully_and_gate_unsupported_calls() {
         .set_config(&unknown, support::boolean(true))
         .await
         .expect_err("未知配置项必须显式拒绝");
-    assert!(matches!(error, PortError::InvalidRequest(_)));
+    assert!(matches!(
+        error,
+        acp_core::model::PortError::Unavailable(
+            acp_core::model::UnavailableKind::BackendUnsupported
+        )
+    ));
 
     // 已宣告的配置项按 Agent 的真实结果返回（模式来自 `session/new` 的真实声明）。
     let modes = endpoint.modes().await.expect("modes");
@@ -558,6 +563,8 @@ async fn capabilities_are_negotiated_truthfully_and_gate_unsupported_calls() {
             session: session_id(SESSION),
             include: Default::default(),
             before_history: None,
+            before_messages: None,
+            messages_limit: acp_core::ports::ReplayLimit::new(10),
             after: None,
             limit: acp_core::ports::ReplayLimit::new(10),
         })

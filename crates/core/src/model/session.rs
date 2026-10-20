@@ -701,6 +701,9 @@ token_enum!(
         PendingInteractions => "pending_interactions",
         ConfigOptions => "config_options",
         Capabilities => "capabilities",
+        // 结构化历史条目（`SYNC_PROTOCOL.md` §11.5 / `NODE_LINK_PROTOCOL.md` §12.10）：只影响
+        // `HistoryPage::history`，核心不解释其正文。
+        History => "history",
     }
 );
 

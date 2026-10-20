@@ -13,7 +13,6 @@
 //! 校验只发生在反序列化：构造出来的值必然满足对应 schema，后续层不需要重复校验。
 
 use serde::de::Error as DeError;
-use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::ErrorCode;
@@ -276,14 +275,26 @@ pub enum DisplayState {
     Unsupported,
 }
 
-/// `agentContentBlock` 的 `unsupported.reason`：只有 `unsupported_by_client` 一个取值。
+/// `agentContentBlock.unsupported.reason`：只有 `unsupported_by_client` 一个取值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnsupportedByClient {
     UnsupportedByClient,
 }
 
-/// `common.schema.json#/$defs/agentContentBlock`：四个以 `type` 判别的互斥分支，
+/// `file_ref.displayState`：文件引用没有「未获取」态（它必然指向已封存附件），过期是显式状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileDisplayState {
+    /// 可读取。
+    Available,
+    /// 超出保留期或已随消息清理。
+    Expired,
+    /// 当前端到端能力不具备该类型。
+    Unsupported,
+}
+
+/// `common.schema.json#/$defs/agentContentBlock`：六个以 `type` 判别的互斥分支，
 /// 每个分支都是 `additionalProperties: false`，所以用带 `deny_unknown_fields` 的内部标签表示。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
@@ -300,6 +311,45 @@ pub enum AgentContentBlock {
         byte_length: Nullable<DecimalString>,
         #[serde(rename = "displayState")]
         display_state: DisplayState,
+        /// Owner 已抽取的嵌入字节对应的附件标识；只有外部 URI 或未取得内容时缺失或为 `null`。
+        #[serde(
+            rename = "attachmentId",
+            default,
+            deserialize_with = "deserialize_optional_nullable",
+            skip_serializing_if = "Option::is_none"
+        )]
+        attachment_id: Option<Nullable<Uuid>>,
+    },
+    /// `{"type": "audio_ref", …}`：音频引用（`core.typed-media.v1`）。
+    #[serde(rename = "audio_ref")]
+    AudioRef {
+        #[serde(rename = "mimeType")]
+        mime_type: NonEmptyText<128>,
+        #[serde(rename = "byteLength")]
+        byte_length: Nullable<DecimalString>,
+        #[serde(rename = "displayState")]
+        display_state: DisplayState,
+        #[serde(
+            rename = "attachmentId",
+            default,
+            deserialize_with = "deserialize_optional_nullable",
+            skip_serializing_if = "Option::is_none"
+        )]
+        attachment_id: Option<Nullable<Uuid>>,
+    },
+    /// `{"type": "file_ref", …}`：必然指向已封存附件（`core.typed-media.v1`）。
+    #[serde(rename = "file_ref")]
+    FileRef {
+        #[serde(rename = "attachmentId")]
+        attachment_id: Uuid,
+        #[serde(rename = "mimeType")]
+        mime_type: NonEmptyText<255>,
+        #[serde(rename = "byteLength")]
+        byte_length: DecimalString,
+        #[serde(rename = "displayName")]
+        display_name: Nullable<NonEmptyText<255>>,
+        #[serde(rename = "displayState")]
+        display_state: FileDisplayState,
     },
     /// `{"type": "resource_ref", …}`：资源引用。
     #[serde(rename = "resource_ref")]
@@ -328,41 +378,126 @@ pub struct InteractionOption {
     pub kind: NonEmptyText<64>,
 }
 
-/// `common.schema.json#/$defs/promptContentBlock`：目前只有 `{"type": "text", "text": …}`，
-/// `type` 的 `const` 在这里校验后才对外暴露（对外只有 `text` 一个字段）。
+/// `promptContentBlock` 的会话工作目录内相对路径（`workspace_path_ref.path`）。
+///
+/// wire pattern 只拒绝前导 `/`、任意冒号、`.`/`..` 分量与控制字符。实现额外拒绝反斜杠：在 Windows 上
+/// 它同样是路径分隔符，`..\\..` 会绕过只按 `/` 分段的 pattern —— 这是安全判定，不是第二套 wire 词表
+/// （schema 允许的路径仍然全部接受）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PromptContentBlock {
-    pub text: NonEmptyText<262144>,
-}
+pub struct WorkspacePath(String);
 
-impl Serialize for PromptContentBlock {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(2))?;
-        map.serialize_entry("type", "text")?;
-        map.serialize_entry("text", &self.text)?;
-        map.end()
+impl WorkspacePath {
+    /// 校验并构造。
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        let length = text.chars().count();
+        if length == 0 || length > 4096 {
+            return Err(ValueError::TextLength {
+                min: 1,
+                max: 4096,
+                actual: length,
+            });
+        }
+        let invalid = text.starts_with('/')
+            || text.contains(':')
+            || text.contains('\\')
+            || text.chars().any(|ch| (ch as u32) < 0x20);
+        if invalid {
+            return Err(ValueError::Pattern {
+                field: "path",
+                value: text.to_owned(),
+            });
+        }
+        for component in text.split('/') {
+            if component == "." || component == ".." {
+                return Err(ValueError::Pattern {
+                    field: "path",
+                    value: text.to_owned(),
+                });
+            }
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    /// 原样文本。
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-impl<'de> Deserialize<'de> for PromptContentBlock {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        /// `promptContentBlock` 的完整 wire 形状（`type` 是 `const: "text"`）。
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct PromptContentBlockWire {
-            #[serde(rename = "type")]
-            block_type: String,
-            text: NonEmptyText<262144>,
-        }
+impl Serialize for WorkspacePath {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
 
-        let wire = PromptContentBlockWire::deserialize(deserializer)?;
-        if wire.block_type != "text" {
-            return Err(DeError::custom(ValueError::Shape {
-                field: "promptContentBlock.type",
-                expected: "\"text\"",
-            }));
+impl<'de> Deserialize<'de> for WorkspacePath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(DeError::custom)
+    }
+}
+
+/// `common.schema.json#/$defs/promptContentBlock`：三个封闭分支。
+///
+/// `text` 始终可用；`attachment_ref` 只在协商 `core.attachment-transfer.v1` 且附件已封存、已绑定本
+/// 会话/主体时接受；`workspace_path_ref` 只表示当前会话工作目录内的相对路径，不固定版本、不追踪内容
+/// 变化。未协商时新分支必须缺席（门控在服务端适配器，形状在这里）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum PromptContentBlock {
+    /// `{"type": "text", "text": …}`
+    #[serde(rename = "text")]
+    Text { text: NonEmptyText<262144> },
+    /// `{"type": "attachment_ref", …}`：指向已封存附件的引用，不是内容快照。
+    #[serde(rename = "attachment_ref")]
+    AttachmentRef {
+        #[serde(rename = "attachmentId")]
+        attachment_id: Uuid,
+        #[serde(rename = "mediaType")]
+        media_type: NonEmptyText<255>,
+        #[serde(rename = "byteLength")]
+        byte_length: DecimalString,
+        sha256: Base64Url<32>,
+    },
+    /// `{"type": "workspace_path_ref", "path": …}`：当前会话工作目录内的相对路径。
+    #[serde(rename = "workspace_path_ref")]
+    WorkspacePathRef { path: WorkspacePath },
+}
+
+/// [`PromptContentBlock::AttachmentRef`] 的只读字段视图。
+///
+/// 服务端在派发 `session.prompt` **之前**必须把每个引用绑定到已封存清单（§11.5），而绑定校验需要
+/// `attachmentId`/`sha256`/`byteLength`。字段名与形状只在本 crate 有一份：适配器通过本视图读取，
+/// 既不重新序列化块再解析，也不会在字段改名时悄悄漏检。
+#[derive(Debug, Clone, Copy)]
+pub struct AttachmentRefView<'a> {
+    /// 已封存附件的标识。
+    pub attachment_id: &'a Uuid,
+    /// 附件的媒体类型（声明值，权威元数据由服务端按标识读取）。
+    pub media_type: &'a NonEmptyText<255>,
+    /// 附件声明长度（十进制字符串）。
+    pub byte_length: &'a DecimalString,
+    /// 整段内容的声明 SHA-256（无填充 base64url）。
+    pub sha256: &'a Base64Url<32>,
+}
+
+impl PromptContentBlock {
+    /// `attachment_ref` 的字段视图；`text`/`workspace_path_ref` 返回 `None`。
+    pub fn attachment_ref(&self) -> Option<AttachmentRefView<'_>> {
+        match self {
+            Self::AttachmentRef {
+                attachment_id,
+                media_type,
+                byte_length,
+                sha256,
+            } => Some(AttachmentRefView {
+                attachment_id,
+                media_type,
+                byte_length,
+                sha256,
+            }),
+            Self::Text { .. } | Self::WorkspacePathRef { .. } => None,
         }
-        Ok(Self { text: wire.text })
     }
 }
 

@@ -1289,6 +1289,8 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
                 history: true,
             },
             before_history: None,
+            before_messages: None,
+            messages_limit: ReplayLimit::default(),
             after: None,
             limit: ReplayLimit::default(),
         })
@@ -1349,7 +1351,7 @@ async fn node_link_slice_returns_origin_events_and_pending_interactions() {
                 event(
                     EventKind::FinalMessage,
                     "agent.message.completed",
-                    r#"{"messageId":"m1"}"#,
+                    r#"{"messageId":"66666666-6666-4666-8666-666666666666","content":[]}"#,
                     None,
                 ),
             ],

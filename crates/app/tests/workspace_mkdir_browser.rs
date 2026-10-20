@@ -46,6 +46,8 @@ lines.on('line', line => {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cert_path, std::fs::Permissions::from_mode(0o600))
+            .expect("certificate permissions");
         std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
             .expect("key permissions");
     }

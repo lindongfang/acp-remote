@@ -358,6 +358,15 @@ peerPublicKeyFingerprint string | null
 
 - `params`：`{ pairingId, reason: string | null }`
 - `result`：`{}`
+- `mode = access` 的 reject 只终结本机内存中的 claim 状态（Node Link 没有 Owner 侧的拒绝端点），不向 Owner 发请求。
+
+`[实现现状]`（2026-10-20，`conversation-area-complete` WP5）`mode = "access"` 已接线（出站实现由组合根经 `LocalAdminDeps::access` 注入）：
+
+- `begin` 解析 `pairingUrl` 的 fragment、验证 endpoint host 与 URL authority 一致、按 `NODE_LINK_PROTOCOL.md` §13.2 发出 claim，并用二维码固定的 Owner 公钥验签 `ownerProof`；成功后 `state = pending_confirmation`，`peerNodeId`/`peerPublicKeyFingerprint` 立即有值。`displayName` 可缺省（缺省用配置 `[node] name`，再回落到 node id 前缀）。
+- 错误码：URL/二维码载荷形状非法、`displayName` 越界 → `local.invalid_params`；邀请已过期 → `local.expired`；同一终态配对再次 `begin` → `local.conflict`；HTTPS 失败、证书校验失败、Owner 拒绝 claim 或 `ownerProof` 验签失败 → `local.remote_error`（消息只含状态与 wire `code`）。失败的 claim 不写任何持久状态。
+- `status` 在非终态时向 Owner 刷新（每次新 `requestNonce`）；刷新失败不改变 `state`，只在 `lastRefreshError` 给出简短原因。观察到 `approved` 且 Owner/Access 身份与邀请逐字一致后，Daemon 才把 Owner 信任记录（`kind = owner`、`state = paired`、endpoint）与公钥写入 `TrustStore`，并立即建立出站连接。
+- Access 方向的 `confirm` 只做幂等回读（已批准时返回 `nodeId`/`confirmedAt`）；未批准时返回 `local.conflict`——Access 不能代替 Owner 确认。配对状态只在内存，Daemon 重启后该 `pairingId` 不再可查询（重新生成二维码）。
+- `node.revoke` 在持久提交后停止该 Owner 的出站重连并取消远程路由（`daemon.status.links[]` 随之为空）。
 
 #### `node.list`
 

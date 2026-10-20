@@ -98,6 +98,7 @@ use identity_auth::{
     Authority, ChallengeId, ChallengeIssue, ChallengeRequest, ConnectionKind, CredentialStatus,
     Nonce, P1363Signature, ProofSubmission,
 };
+use node_link_protocol::attachment as attachment_frame;
 use node_link_protocol::common::{Base64Url, DecimalString, RawObject, Uuid};
 use node_link_protocol::envelope::{Envelope, MessageType, Phase, encode_body};
 use node_link_protocol::error::{ErrorCode, Ping, Pong};
@@ -218,6 +219,20 @@ pub(crate) fn heartbeat_outcome(result: Result<(), SendFault>) -> HeartbeatOutco
 /// 关闭时排空已入队消息的预算（撤销推送必须先送达再发 close 帧）。
 const CLOSE_DRAIN_BUDGET: Duration = Duration::from_secs(2);
 
+/// 一条已认证连接的用途（`NODE_LINK_PROTOCOL.md` §12.9）。
+///
+/// 两条连接共用同一套握手、endpoint 绑定、撤销与心跳，但业务阶段的帧族不同：业务连接是 catalog/
+/// resource/command，附件连接只有 `attachment.*`（加双向的 `link.ping`/`link.pong`）。用途由路径决定，
+/// 不从第一条帧猜。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Purpose {
+    /// 业务连接（`/node-link/v1`）。
+    #[default]
+    Business,
+    /// 独立附件连接（`/node-link/v1/attachments`）。
+    Attachments,
+}
+
 /// 认证后消息的分派口（WP5 的 catalog/resource、WP6 的 command 各自实现，组合根组合它们）。
 ///
 /// `conn` 只负责阶段、信封、序号、type 与限流判定；被路由看到的消息**已经**通过这些校验。
@@ -227,6 +242,17 @@ const CLOSE_DRAIN_BUDGET: Duration = Duration::from_secs(2);
 pub trait MessageRoute: Send + Sync + 'static {
     /// 处理一条认证后消息。返回 [`RouteOutcome::Claimed`] 表示本路由认领该 type。
     async fn route(&self, session: &ConnectionHandle, message: &Envelope) -> RouteOutcome;
+
+    /// 认证完成时的**连接上下文交接**：本次协商出的 feature 列表（`node.challenge.selectedFeatures`
+    /// 的同值，排序去重）。
+    ///
+    /// 默认实现为空操作——不需要连接上下文的路由不必实现它。需要它的理由与 Sync 面相同：命令面必须
+    /// 知道本连接是否协商了 `node-link.attachment-transfer.v1` 才能拒绝未协商的 `submissionId`/
+    /// `attachment_ref`（`NODE_LINK_PROTOCOL.md` §12.7），而 wire 上没有第二个承载协商结果的字段，
+    /// 连接句柄也只承载连接级事实（见 Sync 的 `MessageRoute::on_authenticated` 文档）。
+    ///
+    /// 调用时机：认证成功、连接已登记之后，`node.ready` 下发之前。
+    fn on_authenticated(&self, _session: &ConnectionHandle, _features: &[String]) {}
 }
 
 /// 路由的处理结果。
@@ -245,6 +271,15 @@ pub struct NodeLinkConn {
     config: NodeLinkConfig,
     registry: Arc<ConnectionRegistry>,
     route: Option<Arc<dyn MessageRoute>>,
+    /// 本端点的用途（业务/附件）。
+    purpose: Purpose,
+    /// 附件帧的分派口（`Purpose::Attachments` 时使用）。
+    attachments: Option<Arc<dyn crate::node_link::attachments::AttachmentRoute>>,
+    /// 本端点本次真正支持（且端点已注册）的 feature（排序去重）。
+    ///
+    /// 默认是 [`crate::node_link::conn::handshake::feature_list`]；组合根在某个端点未注册时用
+    /// [`NodeLinkConn::with_supported_features`] 收窄——未注册的端点不得在握手结果里宣告。
+    supported_features: Vec<String>,
     /// 单 IP 的新认证尝试限流（§2.5：10 次/分钟，键是 `PeerInfo::client_ip`）。
     auth_limit: SlidingWindowLimiter,
     /// 单 IP 的在途握手配额。
@@ -278,15 +313,40 @@ impl NodeLinkConn {
             config,
             registry,
             route: None,
+            purpose: Purpose::Business,
+            attachments: None,
+            supported_features: handshake::feature_list(),
             auth_limit: SlidingWindowLimiter::new(AUTH_ATTEMPTS_PER_MINUTE, AUTH_WINDOW),
             handshakes: HandshakeSlots::new(MAX_IN_FLIGHT_HANDSHAKES_PER_IP),
             windows: SessionWindows::from_protocol(),
         }
     }
 
+    /// 设置本端点本次宣告的 feature 集合（组合根在端点未全部注册时使用）。
+    pub fn with_supported_features(mut self, features: Vec<String>) -> Self {
+        self.supported_features = features;
+        self
+    }
+
     /// 注册认证后消息的路由（WP5/WP6 的组合根接线）。
     pub fn with_route(mut self, route: Arc<dyn MessageRoute>) -> Self {
         self.route = Some(route);
+        self
+    }
+
+    /// 把本端点声明为独立附件连接（`/node-link/v1/attachments` 的 handler 必须设成
+    /// [`Purpose::Attachments`]）。
+    pub fn with_purpose(mut self, purpose: Purpose) -> Self {
+        self.purpose = purpose;
+        self
+    }
+
+    /// 注册附件帧的分派口（`Purpose::Attachments` 的端点必须注册）。
+    pub fn with_attachment_route(
+        mut self,
+        route: Arc<dyn crate::node_link::attachments::AttachmentRoute>,
+    ) -> Self {
+        self.attachments = Some(route);
         self
     }
 
@@ -338,6 +398,9 @@ struct HandshakeState {
     client_nonce: Option<Nonce>,
     view: Option<NodeLinkHandshakeView>,
     node: Option<NodeId>,
+    /// 本次协商出的 feature（`node.challenge.selectedFeatures` 的同值）。附件 Connection 的门控只认它：
+    /// 未协商 `node-link.attachment-transfer.v1` 时任何附件帧都以 4400 关闭。
+    features: Vec<String>,
 }
 
 impl HandshakeState {
@@ -602,31 +665,33 @@ impl Session {
             .await;
             return Flow::Finished;
         }
-        let selected = match handshake::negotiate_features(&hello) {
-            Ok(selected) => selected,
-            Err(fault) => {
-                let (code, message) = negotiation_error(&fault);
-                let missing = match &fault {
-                    NegotiationFault::FeaturesMissing(missing) => missing.clone(),
-                    NegotiationFault::VersionUnsupported => Vec::new(),
-                };
-                warn!(
-                    event = "node_link.feature_negotiation_failed",
-                    missing = ?missing,
-                    "the access node requires features this owner does not support"
-                );
-                self.refuse_with_details(
-                    close::PROTOCOL,
-                    code,
-                    message,
-                    wire::feature_details(&missing),
-                    Some(envelope.message_id().clone()),
-                )
-                .await;
-                return Flow::Finished;
-            }
-        };
+        let selected =
+            match handshake::negotiate_features_with(&hello, &self.conn.supported_features) {
+                Ok(selected) => selected,
+                Err(fault) => {
+                    let (code, message) = negotiation_error(&fault);
+                    let missing = match &fault {
+                        NegotiationFault::FeaturesMissing(missing) => missing.clone(),
+                        NegotiationFault::VersionUnsupported => Vec::new(),
+                    };
+                    warn!(
+                        event = "node_link.feature_negotiation_failed",
+                        missing = ?missing,
+                        "the access node requires features this owner does not support"
+                    );
+                    self.refuse_with_details(
+                        close::PROTOCOL,
+                        code,
+                        message,
+                        wire::feature_details(&missing),
+                        Some(envelope.message_id().clone()),
+                    )
+                    .await;
+                    return Flow::Finished;
+                }
+            };
 
+        self.handshake.features = selected.clone();
         let Ok(access_node) = NodeId::new(hello.access_node_id.as_str()) else {
             self.reject(ErrorCode::ProtocolSchemaInvalid, wire::SCHEMA_MESSAGE)
                 .await;
@@ -896,7 +961,20 @@ impl Session {
             self.limits,
             Arc::clone(self.conn.core.ids()),
         );
-        self.conn.registry.register(Arc::clone(&handle));
+        match self.conn.purpose {
+            Purpose::Business => {
+                self.conn.registry.register(Arc::clone(&handle));
+                // 连接上下文交接（认证成功、已登记之后）：把本次协商出的 feature 交给路由，供命令面判定
+                // `submissionId`/`attachment_ref` 是否被协商（§11.3/§12.7）。放在登记之后是因为路由的
+                // 状态表以注册表为连接活跃判据。
+                if let Some(route) = self.conn.route.as_ref() {
+                    route.on_authenticated(&handle, &self.handshake.features);
+                }
+            }
+            // §12.9：附件连接不登记业务表（`handles()` 是 WP5 的订阅者集合），另用一张只承载「关闭」
+            // 的表；撤销经 `close_node` 两张表都扫。
+            Purpose::Attachments => self.conn.registry.register_attachment(Arc::clone(&handle)),
+        }
         if let Err(fault) = handle.send(MessageType::NodeReady, &ready) {
             warn!(
                 event = "node_link.ready_not_sent",
@@ -1123,9 +1201,7 @@ impl Session {
         match ending {
             Ending::Close(code, reason) => {
                 self.drain(&mut receiver).await;
-                self.conn
-                    .registry
-                    .unregister(handle.connection_id().as_str());
+                self.unregister(&handle);
                 self.close(code, reason).await;
             }
             Ending::TransportClosed(_) => {
@@ -1136,10 +1212,29 @@ impl Session {
                 //   发出去（FIFO，排在已入队帧之后）。socket 因此要等写任务结束，耗时 ≤ `CLOSE_DRAIN_BUDGET`；
                 // - 流已终止（读半边报错/对端结束）与写期限到期：写半边已结束或已不可信，**不再发任何 close
                 //   帧**，排空也没有意义（写半边已丢弃）。读半边在这里被丢弃，socket 随之关闭。
+                self.unregister(&handle);
+                self.reader.take();
+            }
+        }
+    }
+
+    /// 按用途摘除登记（业务表与附件表是两张表）。
+    fn unregister(&self, handle: &Arc<ConnectionHandle>) {
+        match self.conn.purpose {
+            Purpose::Business => self
+                .conn
+                .registry
+                .unregister(handle.connection_id().as_str()),
+            Purpose::Attachments => {
+                // 先交接连接关闭（释放该连接预留的活动传输槽位），再摘除登记：附件连接被放弃后，
+                // 进程内的 `receiving` 登记必须以连接为界清掉，否则单节点 8 个活动传输预算会被
+                // 已断开的客户端永久占住。
+                if let Some(route) = self.conn.attachments.as_ref() {
+                    route.released(handle.as_ref());
+                }
                 self.conn
                     .registry
-                    .unregister(handle.connection_id().as_str());
-                self.reader.take();
+                    .unregister_attachment(handle.connection_id().as_str());
             }
         }
     }
@@ -1151,6 +1246,11 @@ impl Session {
         handle: &Arc<ConnectionHandle>,
         last_ping: &mut Option<Base64Url<16>>,
     ) -> Option<(u16, &'static str)> {
+        // 附件连接只接受 `attachment.*` 与三个双向控制帧；控制帧仍走业务信封的判定（心跳与 error 的形状、
+        // 序号与业务连接完全一致），其余一律按附件帧解码。
+        if self.conn.purpose == Purpose::Attachments && !is_control_frame(text) {
+            return self.on_attachment_frame(text, handle).await;
+        }
         let (judged, next) = wire::judge(
             text,
             Phase::PostAuth,
@@ -1251,6 +1351,132 @@ impl Session {
                 }
                 None
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 附件连接（§12.9）
+    // -----------------------------------------------------------------------------------------
+
+    /// 处理一条附件帧：信封（版本/type/connectionId/序号）在这里判定，body 与归属交给附件路由。
+    ///
+    /// 判定口径与业务连接一致：**消息级**错误（未知 type、body 形状不符）回 `attachment.error` 并保持
+    /// 连接；**致命**错误（序号跳号/回退、`connectionId` 不符、版本或 type 不兼容）回错误后以 `4400`
+    /// 关闭。
+    async fn on_attachment_frame(
+        &mut self,
+        text: &str,
+        handle: &Arc<ConnectionHandle>,
+    ) -> Option<(u16, &'static str)> {
+        let frame = match attachment_frame::Frame::decode(text) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let code = error.code();
+                self.reject_attachment(handle, None, code, "the attachment frame is malformed")
+                    .await;
+                // 信封/序号可读、只是 body 形状不符（`Schema`）属于**消息级**拒绝：帧已经占用了对端的
+                // 下一个序号，必须记同样的账，否则对端下一条被判 `nodelink.protocol.sequence_invalid`
+                // 并以 4400 关闭——一次可恢复的 schema 错误会打断整条附件连接。口径与业务连接的
+                // `wire::sequence_after_rejection` 相同：只有 `connectionId` 与本次连接一致、且
+                // `connectionSequence` 正好是期望值时推进。`InvalidJson` 读不出序号，保持现状。
+                if error == attachment_frame::DecodeError::Schema {
+                    if let Some(next) = wire::sequence_after_rejection(
+                        text,
+                        Phase::PostAuth,
+                        Some(self.inbound_next),
+                        Some(handle.connection_id()),
+                    ) {
+                        self.inbound_next = next;
+                    }
+                }
+                return match error {
+                    attachment_frame::DecodeError::VersionUnsupported
+                    | attachment_frame::DecodeError::TypeUnsupported => {
+                        Some((close::PROTOCOL, "unsupported attachment frame"))
+                    }
+                    _ => None,
+                };
+            }
+        };
+        if frame.connection_id.as_str() != handle.connection_id().as_str() {
+            self.reject_attachment(
+                handle,
+                None,
+                ErrorCode::ProtocolSequenceInvalid,
+                "the connectionId does not match this connection",
+            )
+            .await;
+            return Some((close::PROTOCOL, "connectionId mismatch"));
+        }
+        let Ok(sequence) = frame.connection_sequence.as_str().parse::<u64>() else {
+            self.reject_attachment(
+                handle,
+                None,
+                ErrorCode::ProtocolSchemaInvalid,
+                "the connectionSequence is not a decimal string",
+            )
+            .await;
+            return Some((
+                close::PROTOCOL,
+                "connectionSequence is not a decimal string",
+            ));
+        };
+        if sequence != self.inbound_next {
+            self.reject_attachment(
+                handle,
+                None,
+                ErrorCode::ProtocolSequenceInvalid,
+                "the connectionSequence is not the next expected value",
+            )
+            .await;
+            return Some((close::PROTOCOL, "connectionSequence is not the next value"));
+        }
+        self.inbound_next += 1;
+        let Some(route) = self.conn.attachments.as_ref() else {
+            warn!(
+                event = "node_link.attachment_route_missing",
+                connection_id = handle.connection_id().as_str(),
+                "an attachment connection has no attachment route"
+            );
+            return Some((
+                close::UNAVAILABLE,
+                "this endpoint cannot serve attachment frames",
+            ));
+        };
+        match route.route(handle, &self.handshake.features, &frame).await {
+            crate::node_link::attachments::AttachmentOutcome::Claimed => None,
+            crate::node_link::attachments::AttachmentOutcome::Unavailable => Some((
+                close::UNAVAILABLE,
+                "this endpoint cannot serve attachment frames",
+            )),
+            crate::node_link::attachments::AttachmentOutcome::Close(code, reason) => {
+                Some((code, reason))
+            }
+        }
+    }
+
+    /// 发一条附件错误帧（消息级拒绝；连接保持）。
+    async fn reject_attachment(
+        &mut self,
+        handle: &Arc<ConnectionHandle>,
+        transfer: Option<Uuid>,
+        code: ErrorCode,
+        message: &'static str,
+    ) {
+        let mut body = attachment_frame::ErrorBody::new(code, message);
+        if let Some(transfer) = transfer {
+            body.transfer_id = node_link_protocol::common::Nullable::value(transfer);
+        }
+        if handle
+            .send_attachment(&attachment_frame::FrameBody::Error(body))
+            .is_err()
+        {
+            debug!(
+                event = "node_link.attachment_error_dropped",
+                connection_id = handle.connection_id().as_str(),
+                code = code.as_str(),
+                "the attachment error could not be queued"
+            );
         }
     }
 
@@ -1817,4 +2043,18 @@ impl Drop for HandshakeSlot {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// 这条文本是否是可复用在附件连接上的业务控制帧（`link.ping`/`link.pong`/`link.error`）。
+///
+/// 只看 `type` 的原始文本：附件帧与业务帧共用外层信封，但 `type` 词表不相交。解析失败一律按「不是控制
+/// 帧」处理，交给附件解码给出精确的 `protocol.invalid_json`。
+fn is_control_frame(text: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    matches!(
+        value.get("type").and_then(serde_json::Value::as_str),
+        Some("link.ping" | "link.pong" | "link.error")
+    )
 }

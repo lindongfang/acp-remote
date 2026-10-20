@@ -105,6 +105,19 @@
         "resource.backpressure",
         "resource.result_too_large",
         "resource.remote_unavailable",
+        "attachment.negotiation_required",
+        "attachment.transfer_not_found",
+        "attachment.binding_mismatch",
+        "attachment.offset_mismatch",
+        "attachment.chunk_conflict",
+        "attachment.digest_mismatch",
+        "attachment.sealed",
+        "attachment.budget_exhausted",
+        "attachment.expired",
+        "attachment.revoked",
+        "media.unavailable",
+        "interaction.unavailable",
+        "interaction.version_conflict",
         "internal.unavailable"
       ]
     },
@@ -203,7 +216,7 @@
           "required": ["kind", "ownerNodeId", "originEpoch", "online"],
           "properties": {
             "kind": { "const": "remote" },
-            "ownerNodeId": { "$ref": "#/$defs/uuid" },
+            "ownerNodeId": { "$ref": "#/$defs/uuid" },
             "originEpoch": { "$ref": "#/$defs/uuid" },
             "online": { "type": "boolean" }
           }
@@ -215,7 +228,7 @@
       "additionalProperties": false,
       "required": ["ownerNodeId", "originEpoch", "originEventId", "originSequence"],
       "properties": {
-        "ownerNodeId": { "$ref": "#/$defs/uuid" },
+        "ownerNodeId": { "$ref": "#/$defs/uuid" },
         "originEpoch": { "$ref": "#/$defs/uuid" },
         "originEventId": { "$ref": "#/$defs/uuid" },
         "originSequence": { "$ref": "#/$defs/decimalString" }
@@ -312,7 +325,42 @@
             "byteLength": {
               "oneOf": [{ "$ref": "#/$defs/decimalString" }, { "type": "null" }]
             },
-            "displayState": { "enum": ["available", "not_fetched", "unsupported"] }
+            "displayState": { "enum": ["available", "not_fetched", "unsupported"] },
+            "attachmentId": {
+              "description": "Owner 已抽取的嵌入字节对应的附件标识；只有 external URI 或未取得内容时为 null。读取仍须经 §3.4 的认证连接。",
+              "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "mimeType", "byteLength", "displayState"],
+          "properties": {
+            "type": { "const": "audio_ref" },
+            "mimeType": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "byteLength": {
+              "oneOf": [{ "$ref": "#/$defs/decimalString" }, { "type": "null" }]
+            },
+            "displayState": { "enum": ["available", "not_fetched", "unsupported"] },
+            "attachmentId": {
+              "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "attachmentId", "mimeType", "byteLength", "displayName", "displayState"],
+          "properties": {
+            "type": { "const": "file_ref" },
+            "attachmentId": { "$ref": "#/$defs/uuid" },
+            "mimeType": { "type": "string", "minLength": 1, "maxLength": 255 },
+            "byteLength": { "$ref": "#/$defs/decimalString" },
+            "displayName": {
+              "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 255 }, { "type": "null" }]
+            },
+            "displayState": { "enum": ["available", "expired", "unsupported"] }
           }
         },
         {
@@ -349,13 +397,45 @@
       }
     },
     "promptContentBlock": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "text"],
-      "properties": {
-        "type": { "const": "text" },
-        "text": { "type": "string", "minLength": 1, "maxLength": 262144 }
-      }
+      "description": "用户输入的内容块。text 始终可用；attachment_ref 只在协商 core.attachment-transfer.v1 且附件已封存、已绑定本会话/主体时接受；workspace_path_ref 只表示当前会话工作目录内的相对路径，不固定版本、不追踪内容变化。未协商时新分支必须缺席，不得把附件伪装成文本。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "text"],
+          "properties": {
+            "type": { "const": "text" },
+            "text": { "type": "string", "minLength": 1, "maxLength": 262144 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "attachmentId", "mediaType", "byteLength", "sha256"],
+          "properties": {
+            "type": { "const": "attachment_ref" },
+            "attachmentId": { "$ref": "#/$defs/uuid" },
+            "mediaType": { "type": "string", "minLength": 1, "maxLength": 255 },
+            "byteLength": { "$ref": "#/$defs/decimalString" },
+            "sha256": { "$ref": "#/$defs/base64url32" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "path"],
+          "properties": {
+            "type": { "const": "workspace_path_ref" },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^(?!/)(?!.*:)(?!.*(^|/)\\.\\.?(/|$))[^\\u0000-\\u001f]+$",
+              "description": "会话工作目录内的相对路径；拒绝绝对路径、盘符/ADS 的冒号、. 与 .. 分量以及控制字符。"
+            }
+          }
+        }
+      ]
     },
     "rawAcp": {
       "oneOf": [

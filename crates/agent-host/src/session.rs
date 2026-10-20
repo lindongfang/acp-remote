@@ -10,19 +10,23 @@
 //! - 能力门控：Agent 未宣告的能力不发消息、直接返回显式不支持。
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acp_core::model::{
-    AgentSessionId, ConfigOption, ConfigValue, ElicitationAction, EndpointEvent, InteractionId,
-    InteractionKind, InteractionResolution, ModeId, ModeRef, ModeState, OwnedSessionRef, PortError,
-    PromptContentBlock, PromptRequest, PublicError, SessionId, SessionReference, Timestamp, TurnId,
+    AgentSessionId, ConfigOption, ConfigValue, ElicitationAction, EndpointEvent, EventKind,
+    EventType, InteractionId, InteractionKind, InteractionResolution, ModeId, ModeRef, ModeState,
+    OwnedSessionRef, PortError, PromptRequest, PublicError, SessionId, SessionReference, Timestamp,
+    TurnId, ViewJson,
 };
 use acp_core::ports::{
-    Clock, EventSink, HistoryPage, HistoryQuery, IdGenerator, SessionEndpoint, TurnAccepted,
+    AttachmentStore, Clock, EventSink, HistoryPage, HistoryQuery, IdGenerator, SessionEndpoint,
+    TurnAccepted,
 };
 use acp_protocol::capability::AgentCapabilities;
 use acp_protocol::message::{self, PermissionOutcome, RequestPermissionResponse};
+use acp_protocol::terminal::{CreateTerminalRequest, CreateTerminalResponse, TerminalRefRequest};
 use acp_protocol::{Envelope, IdLiteral};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -31,6 +35,7 @@ use crate::error::HostError;
 use crate::limits;
 use crate::mapper::{self, UpdateState};
 use crate::process::Supervisor;
+use crate::terminal::{TerminalConfig, TerminalService};
 
 /// 已登记但尚未解析的交互。
 #[derive(Debug, Clone)]
@@ -64,6 +69,12 @@ pub struct AcpSession {
     sink: EventSink,
     ids: Arc<dyn IdGenerator>,
     clock: Arc<dyn Clock>,
+    /// 会话工作目录的规范绝对路径（终端默认 cwd 与 prompt 路径引用的边界）。
+    workspace: PathBuf,
+    /// 附件读取端口；未接线时含 `attachment_ref` 的 prompt 会被整条拒绝。
+    attachments: Option<Arc<dyn AttachmentStore>>,
+    /// 终端服务（重绑时把同一实例交给新绑定，旧绑定得到空替身）。
+    terminal: Mutex<Arc<TerminalService>>,
     inner: Mutex<Inner>,
 }
 
@@ -99,6 +110,12 @@ pub(crate) struct SessionInit {
     pub modes: Option<acp_protocol::message::SessionModeState>,
     /// `session/new` 给出的配置项原始对象。
     pub config_options: Vec<Value>,
+    /// 会话工作目录的规范绝对路径（创建来自 `request.workspace`，恢复来自持久化的 cwd）。
+    pub workspace: PathBuf,
+    /// 附件读取端口（组合根注入；未接线时显式拒绝附件输入）。
+    pub attachments: Option<Arc<dyn AttachmentStore>>,
+    /// 是否已宣告 `clientCapabilities.terminal`（未宣告时不接受 `terminal/*`）。
+    pub terminal_enabled: bool,
 }
 
 impl AcpSession {
@@ -115,7 +132,18 @@ impl AcpSession {
             capabilities,
             modes,
             config_options,
+            workspace,
+            attachments,
+            terminal_enabled,
         } = init;
+        let terminal = Mutex::new(Arc::new(TerminalService::new(TerminalConfig {
+            session: session.clone(),
+            workspace: workspace.clone(),
+            clock: Arc::clone(&clock),
+            supervisor: Arc::clone(&supervisor),
+            sink: sink.clone(),
+            enabled: terminal_enabled,
+        })));
         Self {
             reference: SessionReference::Owned(OwnedSessionRef::new(session)),
             acp_session_id,
@@ -124,6 +152,9 @@ impl AcpSession {
             sink,
             ids,
             clock,
+            workspace,
+            attachments,
+            terminal,
             inner: Mutex::new(Inner {
                 closed: false,
                 turn_running: false,
@@ -183,12 +214,16 @@ impl AcpSession {
     /// 发起一次 turn。
     ///
     /// 立即返回 [`TurnAccepted`]：`session/prompt` 不设超时，turn 的结束由响应到达或进程退出决定。
+    ///
+    /// 内容映射（媒体、路径引用、ACP 帧预算）在**派发前**完成：任何一块失败（能力未宣告、超出
+    /// 1 MiB 帧预算、路径逃逸、附件读取/摘要不符）都让整条 prompt 失败，**一个字节也不发**，
+    /// 也不会留下残缺的 prompt 或半截附件。
     pub async fn prompt(
         self: &Arc<Self>,
         request: PromptRequest,
         _at: Timestamp,
     ) -> Result<TurnAccepted, HostError> {
-        {
+        let capabilities = {
             let mut inner = lock(&self.inner);
             if inner.closed {
                 return Err(HostError::SessionClosed);
@@ -204,11 +239,28 @@ impl AcpSession {
             inner.cancel_requested = false;
             inner.updates.begin_turn();
             inner.last_activity = Instant::now();
-        }
+            inner.agent_capabilities.clone()
+        };
+
+        let encoded = crate::prompt::encode_prompt(
+            &request,
+            &capabilities,
+            self.attachments.as_deref(),
+            &self.workspace,
+        )
+        .await;
+        let prompt = match encoded {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                // 整条拒绝：turn 状态回滚，调用方看到明确失败，Agent 侧什么也没收到。
+                lock(&self.inner).turn_running = false;
+                return Err(error);
+            }
+        };
 
         let params = json!({
             "sessionId": self.acp_session_id,
-            "prompt": prompt_content(request)?,
+            "prompt": prompt,
         });
         let receiver = match self.supervisor.begin_request("session/prompt", &params) {
             Ok(receiver) => receiver,
@@ -228,6 +280,22 @@ impl AcpSession {
             // **不具权威性**（core 用自己分配的值，见 `crates/core/src/broker.rs`）。
             turn: self.ids.turn_id(),
         })
+    }
+
+    /// 派发前预检：与 [`Self::prompt`] 使用同一套内容映射/能力/帧预算校验，但不改变 turn 状态。
+    pub async fn validate_prompt(&self, request: &PromptRequest) -> Result<(), HostError> {
+        if lock(&self.inner).closed {
+            return Err(HostError::SessionClosed);
+        }
+        let capabilities = lock(&self.inner).agent_capabilities.clone();
+        crate::prompt::encode_prompt(
+            request,
+            &capabilities,
+            self.attachments.as_deref(),
+            &self.workspace,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// 结束 turn：把响应/失败收敛成**唯一**一个终态事件。
@@ -275,7 +343,10 @@ impl AcpSession {
     }
 
     /// 进程退出时的收敛：进行中的 turn 必须以明确失败结束，并且只结束一次。
+    ///
+    /// 终端任务也在这里回收：它们虽然由 Daemon spawn，但归属于这个会话；Agent 崩溃不留下孤儿进程树。
     pub fn on_agent_exit(&self, status: &str) {
+        self.terminal().shutdown_sync();
         let is_turn = {
             let inner = lock(&self.inner);
             inner.turn_running
@@ -302,12 +373,22 @@ impl AcpSession {
     }
 
     /// 处理一条来自 Agent 的信封（通知或 agent→client 请求）。
-    pub fn handle_envelope(&self, envelope: &Envelope) {
+    ///
+    /// 需要等待的终端请求（`wait_for_exit`/`release`）由监督者收养的任务异步处理：路由循环不能
+    /// 被一个长任务阻塞——否则同一 Agent 的 `session/update` 与其它请求都会停在这里。
+    pub fn handle_envelope(self: &Arc<Self>, envelope: &Envelope) {
         self.touch();
         match envelope.method() {
             Some("session/update") => self.handle_update(envelope),
             Some("session/request_permission") => self.handle_permission(envelope),
             Some("elicitation/create") => self.handle_elicitation(envelope),
+            Some(
+                method @ ("terminal/create"
+                | "terminal/output"
+                | "terminal/wait_for_exit"
+                | "terminal/kill"
+                | "terminal/release"),
+            ) => self.handle_terminal(envelope, method),
             Some(method) => {
                 // 未实现/未登记的 agent→client 请求：显式不支持，**不静默丢弃**。
                 if let Some(id) = envelope.id() {
@@ -321,6 +402,184 @@ impl AcpSession {
             }
             None => {}
         }
+    }
+
+    /// 终端服务方法的分发。
+    ///
+    /// 形状不合法的请求得到 `-32602`；未宣告 `clientCapabilities.terminal` 时得到 `-32601`
+    /// （等价于方法未找到）；未知/跨会话的终端标识得到 `-32602`。错误响应只携带协议元数据，
+    /// 不含命令行、参数、环境变量值或路径。
+    fn handle_terminal(self: &Arc<Self>, envelope: &Envelope, method: &str) {
+        let Some(id) = envelope.id().cloned() else {
+            tracing::warn!(method, "terminal 请求没有 id（无法回包）");
+            return;
+        };
+        let params = match envelope.params() {
+            Ok(params) => params,
+            Err(error) => {
+                tracing::warn!(method, error = %error, "terminal 请求缺少 params");
+                let _ = self.supervisor.send_error_response(
+                    &id,
+                    message::CODE_INVALID_PARAMS,
+                    "terminal 请求缺少参数",
+                );
+                return;
+            }
+        };
+        let service = self.terminal();
+        if !service.is_enabled() {
+            // 未宣告的能力：等价于方法未找到（不暴露「有服务但没开」之外的任何细节）。
+            let _ = self.supervisor.send_error_response(
+                &id,
+                message::CODE_METHOD_NOT_FOUND,
+                "terminal 能力未宣告",
+            );
+            return;
+        }
+
+        match method {
+            "terminal/create" => {
+                let request = match CreateTerminalRequest::from_params(&params) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        tracing::warn!(method, error = %error, "terminal/create 参数不合法");
+                        let _ = self.supervisor.send_error_response(
+                            &id,
+                            message::CODE_INVALID_PARAMS,
+                            "terminal/create 参数不合法",
+                        );
+                        return;
+                    }
+                };
+                if request.session_id != self.acp_session_id {
+                    let _ = self.supervisor.send_error_response(
+                        &id,
+                        message::CODE_INVALID_PARAMS,
+                        "请求指向未知会话",
+                    );
+                    return;
+                }
+                match service.create(&request) {
+                    Ok(terminal_id) => {
+                        let response = CreateTerminalResponse {
+                            terminal_id,
+                            meta: None,
+                        };
+                        match serde_json::to_value(&response) {
+                            Ok(value) => send_terminal_response(&self.supervisor, &id, &value),
+                            Err(_) => {
+                                let _ = self.supervisor.send_error_response(
+                                    &id,
+                                    message::CODE_INTERNAL_ERROR,
+                                    "terminal/create 响应无法编码",
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => send_terminal_error(&self.supervisor, &id, &error),
+                }
+            }
+            "terminal/output" => match TerminalRefRequest::from_params(&params) {
+                Ok(reference) => {
+                    // 预算按实际 id 计算：保留正文与 1 MiB 服务上限相等时，JSON 转义后的响应会超帧。
+                    let budget = crate::terminal::result_frame_budget(&id);
+                    match service.output(&reference.terminal_id, budget) {
+                        Ok(response) => match serde_json::to_value(&response) {
+                            Ok(value) => send_terminal_response(&self.supervisor, &id, &value),
+                            Err(_) => {
+                                let _ = self.supervisor.send_error_response(
+                                    &id,
+                                    message::CODE_INTERNAL_ERROR,
+                                    "terminal/output 响应无法编码",
+                                );
+                            }
+                        },
+                        Err(error) => send_terminal_error(&self.supervisor, &id, &error),
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(method, error = %error, "terminal/output 参数不合法");
+                    let _ = self.supervisor.send_error_response(
+                        &id,
+                        message::CODE_INVALID_PARAMS,
+                        "terminal/output 参数不合法",
+                    );
+                }
+            },
+            "terminal/kill" => match TerminalRefRequest::from_params(&params) {
+                Ok(reference) => {
+                    if let Err(error) = service.kill(&reference.terminal_id) {
+                        send_terminal_error(&self.supervisor, &id, &error);
+                    } else {
+                        send_terminal_response(&self.supervisor, &id, &json!({}));
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(method, error = %error, "terminal/kill 参数不合法");
+                    let _ = self.supervisor.send_error_response(
+                        &id,
+                        message::CODE_INVALID_PARAMS,
+                        "terminal/kill 参数不合法",
+                    );
+                }
+            },
+            "terminal/wait_for_exit" | "terminal/release" => {
+                let reference = match TerminalRefRequest::from_params(&params) {
+                    Ok(reference) => reference,
+                    Err(error) => {
+                        tracing::warn!(method, error = %error, "terminal 请求参数不合法");
+                        let _ = self.supervisor.send_error_response(
+                            &id,
+                            message::CODE_INVALID_PARAMS,
+                            "terminal 请求参数不合法",
+                        );
+                        return;
+                    }
+                };
+                let session = Arc::clone(self);
+                let method = method.to_owned();
+                self.supervisor.spawn_owned(async move {
+                    let outcome = if method == "terminal/wait_for_exit" {
+                        session
+                            .terminal()
+                            .wait_for_exit(&reference.terminal_id)
+                            .await
+                            .and_then(|response| {
+                                serde_json::to_value(&response).map_err(|_| {
+                                    HostError::TerminalRejected {
+                                        detail: "响应无法编码".to_owned(),
+                                    }
+                                })
+                            })
+                    } else {
+                        session
+                            .terminal()
+                            .release(&reference.terminal_id)
+                            .await
+                            .map(|()| json!({}))
+                    };
+                    match outcome {
+                        Ok(value) => {
+                            send_terminal_response(&session.supervisor, &id, &value);
+                        }
+                        Err(error) => send_terminal_error(&session.supervisor, &id, &error),
+                    }
+                });
+            }
+            _ => {
+                // 上面的 match 已经穷尽了会进入本函数的五个方法；不可达分支保持显式拒绝。
+                let _ = self.supervisor.send_error_response(
+                    &id,
+                    message::CODE_METHOD_NOT_FOUND,
+                    "terminal 方法不受支持",
+                );
+            }
+        }
+    }
+
+    /// 当前终端服务实例（`open` 重绑会把同一实例交给新绑定）。
+    fn terminal(&self) -> Arc<TerminalService> {
+        Arc::clone(&lock(&self.terminal))
     }
 
     fn handle_update(&self, envelope: &Envelope) {
@@ -499,7 +758,7 @@ impl AcpSession {
             .interactions
             .remove(interaction.as_str())
             .ok_or(HostError::UnknownInteraction)?;
-        let result = match (pending.kind, resolution) {
+        let result = match (pending.kind, resolution.clone()) {
             (InteractionKind::Permission, InteractionResolution::Permission(decision)) => {
                 let response = RequestPermissionResponse {
                     outcome: PermissionOutcome::Selected {
@@ -542,6 +801,39 @@ impl AcpSession {
             inner
                 .interactions
                 .insert(interaction.as_str().to_owned(), pending);
+            return result;
+        }
+        // ACP 没有「权限/elicitation 已解析」的通知：这是 Daemon 自己的事实，必须在成功回传后
+        // 生成事件，否则其他设备与刷新后的历史永远看不到 handled_elsewhere。
+        let (event_type, view) = match &resolution {
+            InteractionResolution::Permission(decision) => (
+                "permission.resolved",
+                json!({
+                    "interactionId": interaction.as_str(),
+                    "resolution": decision.option_id(),
+                    "resolvedByDeviceId": null,
+                }),
+            ),
+            InteractionResolution::Elicitation { action, .. } => (
+                "elicitation.resolved",
+                json!({
+                    "interactionId": interaction.as_str(),
+                    "action": action.as_str(),
+                    "resolvedByDeviceId": null,
+                }),
+            ),
+        };
+        if let (Ok(event_type), Ok(view)) =
+            (EventType::new(event_type), ViewJson::new(&view.to_string()))
+        {
+            self.emit(EndpointEvent::view_only(
+                EventKind::Structured,
+                event_type,
+                view,
+                None,
+                None,
+                self.clock.now(),
+            ));
         }
         result
     }
@@ -551,6 +843,19 @@ impl AcpSession {
     /// 交互与 turn 状态**不继承**：旧绑定已经让出，未解析的交互随旧绑定作废（不代答）。
     pub(crate) fn rebind(&self, sink: EventSink) -> Self {
         let inner = lock(&self.inner);
+        // 终端服务随 ACP 会话一起存活：新绑定接管同一实例并把事件出口指向新 sink；旧绑定拿到
+        // 空替身，因此旧端点即使被关闭也不会误杀新绑定上的终端。
+        let enabled = self.terminal().is_enabled();
+        let replacement = Arc::new(TerminalService::new(TerminalConfig {
+            session: self.session_id().clone(),
+            workspace: self.workspace.clone(),
+            clock: Arc::clone(&self.clock),
+            supervisor: Arc::clone(&self.supervisor),
+            sink: sink.clone(),
+            enabled,
+        }));
+        let terminal = std::mem::replace(&mut *lock(&self.terminal), replacement);
+        terminal.set_sink(sink.clone());
         Self {
             reference: self.reference.clone(),
             acp_session_id: self.acp_session_id.clone(),
@@ -559,6 +864,9 @@ impl AcpSession {
             sink,
             ids: Arc::clone(&self.ids),
             clock: Arc::clone(&self.clock),
+            workspace: self.workspace.clone(),
+            attachments: self.attachments.clone(),
+            terminal: Mutex::new(terminal),
             inner: Mutex::new(Inner {
                 closed: false,
                 turn_running: false,
@@ -574,6 +882,9 @@ impl AcpSession {
     }
 
     /// 关闭会话：先取消进行中的 turn，再让出 endpoint（进程由目录层统一回收）。
+    ///
+    /// 终端进程树在这里**同步**结束（Job 句柄关闭/进程组结束是内核操作），等待者随即被唤醒；
+    /// 需要排空已读输出与 join 驱动任务的路径调用 [`AcpSession::shutdown_terminals`]。
     pub fn close_session(&self) {
         let was_running = {
             let mut inner = lock(&self.inner);
@@ -582,12 +893,18 @@ impl AcpSession {
             inner.interactions.clear();
             inner.turn_running
         };
+        self.terminal().shutdown_sync();
         if was_running {
             let _ = self.supervisor.send_notification(
                 "session/cancel",
                 &json!({ "sessionId": self.acp_session_id }),
             );
         }
+    }
+
+    /// 关闭会话并等待终端驱动任务把已读输出交付完（有界；会话/Agent/Daemon 关闭路径使用）。
+    pub async fn shutdown_terminals(&self) {
+        self.terminal().shutdown().await;
     }
 
     /// 模式状态（未宣告时为空结果，不编造候选）。
@@ -658,16 +975,41 @@ impl AcpSession {
     }
 }
 
-/// 把 core 的 prompt 内容转成 ACP `prompt` 数组（逐字保留原始块，不改写结构）。
-fn prompt_content(request: PromptRequest) -> Result<Vec<Value>, HostError> {
-    request.validate().map_err(|_| HostError::InvalidPrompt)?;
-    request
-        .content
-        .iter()
-        .map(|block: &PromptContentBlock| {
-            serde_json::from_str::<Value>(block.as_str()).map_err(|_| HostError::InvalidPrompt)
-        })
-        .collect()
+/// 发送终端成功响应；发送失败时必须显式回一条错误响应，不能静默丢弃让请求悬挂。
+///
+/// 典型失败是编码后的帧超过 ACP 上限（`HostError::Protocol(Oversize)`）：调用方已按帧预算裁剪
+/// `terminal/output`，这里的兜底保证「即使预算计算与编码器有出入」也不会让 Agent 等到超时。
+/// 错误响应本身很小；若连它都发不出去（Agent 已退出、stdout 已关闭），已经没有可回话的通道。
+fn send_terminal_response(supervisor: &Supervisor, id: &IdLiteral, result: &Value) {
+    if let Err(error) = supervisor.send_response(id, result) {
+        tracing::warn!(error = %error, "terminal 响应发送失败（改回显式错误）");
+        let _ = supervisor.send_error_response(
+            id,
+            message::CODE_INTERNAL_ERROR,
+            "terminal 响应发送失败",
+        );
+    }
+}
+
+/// 终端请求失败的 JSON-RPC 错误响应。
+///
+/// 响应只带协议元数据性的固定文案：命令行、参数、环境变量值与路径都不回传给 Agent，
+/// 也不进日志（它本来就知道自己发了什么；这些字段可能被当作敏感内容记录）。
+fn send_terminal_error(supervisor: &Supervisor, id: &IdLiteral, error: &HostError) {
+    let (code, message) = match error {
+        HostError::CapabilityNotDeclared { .. } => {
+            (message::CODE_METHOD_NOT_FOUND, "terminal 能力未宣告")
+        }
+        HostError::UnknownTerminal => (message::CODE_INVALID_PARAMS, "未知终端"),
+        HostError::SessionClosed => (message::CODE_INVALID_PARAMS, "会话已关闭"),
+        HostError::InvalidEnvName | HostError::EnvNotAllowed { .. } => {
+            (message::CODE_INVALID_PARAMS, "环境变量不合法")
+        }
+        HostError::TerminalRejected { .. } => (message::CODE_INTERNAL_ERROR, "终端任务不可用"),
+        _ => (message::CODE_INTERNAL_ERROR, "终端请求失败"),
+    };
+    tracing::warn!(code, "terminal 请求失败（已显式拒绝）");
+    let _ = supervisor.send_error_response(id, code, message);
 }
 
 /// Agent 错误 → 公开错误（只使用已登记的错误码）。
@@ -771,6 +1113,13 @@ impl SessionEndpoint for Endpoint {
     ) -> Result<TurnAccepted, PortError> {
         self.session
             .prompt(request, at)
+            .await
+            .map_err(|error| error.to_port_error())
+    }
+
+    async fn validate_prompt(&self, request: &PromptRequest) -> Result<(), PortError> {
+        self.session
+            .validate_prompt(request)
             .await
             .map_err(|error| error.to_port_error())
     }
@@ -889,6 +1238,7 @@ impl SessionEndpoint for Endpoint {
 
     async fn close(&self) -> Result<(), PortError> {
         self.session.close_session();
+        self.session.shutdown_terminals().await;
         Ok(())
     }
 }

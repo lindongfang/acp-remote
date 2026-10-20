@@ -16,17 +16,18 @@ import type {
   ConfigOptionView,
   DecimalString,
   ModeState,
+  PromptContentBlock,
   PublicError,
   SessionSummary,
   Timestamp,
   Uuid,
 } from "./common";
+import type { EffectiveInteraction } from "./media";
 import type {
   SnapshotItemCapabilities,
   SnapshotItemConfigOptions,
   SnapshotItemHistory,
   SnapshotItemMessages,
-  SnapshotItemPendingInteractions,
   SnapshotItemTurns,
 } from "./sync";
 import type {
@@ -208,14 +209,20 @@ export interface SessionReadCommand extends CommandEnvelope {
   };
 }
 
-/** `$defs.sessionPrompt`：v1 只发送文本 prompt（图片/文件必须显式报不支持）。 */
+/**
+ * `$defs.sessionPrompt`：内容块按协商结果表达（文本 / 已封存附件引用 / 工作目录路径引用）。
+ *
+ * `submissionId` 只在本会话/本主体已 `manifest_sealed` 的附件清单存在时出现，且只在协商
+ * `core.attachment-transfer.v1` 后被接受；旧 peer 省略该键，行为与本变更前逐字相同。
+ */
 export interface SessionPromptCommand extends CommandEnvelope {
   readonly body: {
     readonly requestId: Uuid;
     readonly command: "session.prompt";
     readonly sessionId: Uuid;
     readonly payload: {
-      readonly content: readonly { readonly type: "text"; readonly text: string }[];
+      readonly content: readonly PromptContentBlock[];
+      readonly submissionId?: Uuid;
     };
   };
 }
@@ -283,6 +290,8 @@ export interface PermissionResolveCommand extends CommandEnvelope {
     readonly sessionId: Uuid;
     readonly payload: {
       readonly interactionId: Uuid;
+      /** 协商 `core.pending-interactions.v1` 后必须携带；旧 peer 可省略。 */
+      readonly requestVersion?: DecimalString;
       readonly optionId: string;
     };
   };
@@ -292,16 +301,20 @@ export interface PermissionResolveCommand extends CommandEnvelope {
 export type ElicitationRespondPayload =
   | {
       readonly interactionId: Uuid;
+      /** 协商 `core.pending-interactions.v1` 后必须携带；旧 peer 可省略。 */
+      readonly requestVersion?: DecimalString;
       readonly action: "submit";
       readonly values: Record<string, unknown> | null;
     }
   | {
       readonly interactionId: Uuid;
+      readonly requestVersion?: DecimalString;
       readonly action: "decline";
       readonly values: null;
     }
   | {
       readonly interactionId: Uuid;
+      readonly requestVersion?: DecimalString;
       readonly action: "cancel";
       readonly values: null;
     };
@@ -368,7 +381,8 @@ export interface SessionReadResult {
   readonly resources: {
     readonly messages?: readonly SnapshotItemMessages[];
     readonly turns?: readonly SnapshotItemTurns[];
-    readonly pending_interactions?: readonly SnapshotItemPendingInteractions[];
+    /** 服务端本次读取时确认过的**当前有效**请求（含 `requestVersion`/`options`/`schema`）。 */
+    readonly pending_interactions?: readonly EffectiveInteraction[];
     readonly config_options?: readonly SnapshotItemConfigOptions[];
     readonly capabilities?: readonly SnapshotItemCapabilities[];
     /** 结构化历史条目：与实时事件同形的 `view`，见 `sync.ts` 的 `SnapshotItemHistory`。 */

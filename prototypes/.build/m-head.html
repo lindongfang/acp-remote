@@ -156,6 +156,7 @@
   .tabbar button{flex:1;border:0;background:transparent;padding:8px 0;cursor:pointer;font-size:13px;
     color:var(--ink-3);min-height:42px;display:flex;align-items:center;justify-content:center;gap:7px}
   .tabbar button.on{color:var(--accent);font-weight:700;box-shadow:inset 0 -2px 0 var(--accent)}
+  .tabbar.file-tabbar{padding-bottom:var(--sab)}
   .composer{flex:none;background:var(--panel);border-top:1px solid var(--line);padding:6px 12px calc(6px + var(--sab))}
   .chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch}
   .chip-pick{flex:none;border:1px solid var(--line);background:var(--panel-2);border-radius:999px;
@@ -264,21 +265,91 @@
     gap:8px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:999px;
     padding:10px 16px;font-size:13px;color:var(--ink-2);z-index:9;min-height:44px}
   .jumppill b{color:var(--accent)}
-  .fitem{display:flex;align-items:center;gap:10px;padding:10px 13px;border-bottom:1px solid var(--line-2);
-    cursor:pointer;min-height:48px}
-  .fitem:active{background:var(--panel-2)} .fitem.on{background:var(--accent-soft)}
-  .fst{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;font-size:10px;font-weight:700;flex:none}
-  .fst.M{background:var(--warn-soft);color:var(--warn)} .fst.A{background:var(--ok-soft);color:var(--ok)}
-  .diffwrap{border-top:1px solid var(--line);padding:12px 14px}
-  .dt{font-family:var(--mono);font-size:12px;word-break:break-all}
-  .dm{font-size:11.5px;color:var(--ink-3);margin:3px 0 10px}
   .diff{border:1px solid var(--line);border-radius:8px;overflow:auto;background:var(--panel);
     font-family:var(--mono);font-size:11px}
   .diff div{padding:1px 9px;white-space:pre}
-  .diff .del{background:var(--danger-soft);color:var(--danger)}
-  .diff .add{background:var(--ok-soft);color:var(--ok)}
-  .diff .ctx{color:var(--ink-3)}
-  .diff .hd{background:var(--panel-2);color:var(--ink-3);font-size:10.5px;padding:4px 9px}
+  .diff .d-del{background:var(--danger-soft);color:var(--danger)}
+  .diff .d-add{background:var(--ok-soft);color:var(--ok)}
+  .diff .d-ctx{color:var(--ink-3)}
+  .diff .d-hd{background:var(--panel-2);color:var(--ink-3);font-size:10.5px;padding:4px 9px}
+
+  /* ---------- 文件 ---------- */
+  .filetab{flex:1;min-height:0;display:flex;flex-direction:column}
+  .file-controls{flex:none;padding:10px 12px 0;background:var(--bg)}
+  .file-controls .segbar{margin-bottom:8px}
+  .file-subbar{display:flex;align-items:center;gap:8px;min-height:36px;margin-bottom:8px}
+  .fpath{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+  .frefresh{width:36px;height:36px;flex:none;display:grid;place-items:center;border:1px solid var(--line);
+    border-radius:9px;background:var(--panel);color:var(--ink-2)}
+  .frefresh svg{width:16px;height:16px}
+  .fvsource{flex:none;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:5px;
+    background:var(--line-2);color:var(--ink-2)}
+  .fvsource.git{background:var(--warn-soft);color:var(--warn)}
+  .fclose{flex:none;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink-2);
+    font:inherit;font-size:12px;padding:7px 11px;min-height:36px}
+  .fclose:active{background:var(--accent-soft);color:var(--accent-ink)}
+  .ftoolbar{display:flex;align-items:center;gap:8px;min-height:34px;padding:0 2px 8px}
+  .fswitch{display:inline-flex;align-items:center;gap:9px;border:0;background:transparent;
+    color:var(--ink-2);font:inherit;font-size:13px;cursor:pointer;padding:6px 0;min-height:34px}
+  .fswitch .track{width:30px;height:18px;border-radius:999px;background:var(--line);position:relative;
+    flex:none;transition:background .12s}
+  .fswitch .knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+    background:var(--panel);box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .12s}
+  .fswitch.on .track{background:var(--accent)}
+  .fswitch.on .knob{transform:translateX(12px)}
+  .flegend{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12px;color:var(--ink-3)}
+  .flegend b{font-weight:500;color:var(--ink-2)}
+  .fdot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ink-3)}
+  .fdot.pos{background:var(--ok)} .fdot.neg{background:var(--danger)}
+  .file-scroll{flex:1;min-height:0;overflow:auto;background:var(--bg);padding:0 0 calc(10px + var(--sab))}
+  .ftree{display:flex;flex-direction:column}
+  .ftreeChildren{margin-left:22px;padding-left:2px;border-left:1px solid var(--line-2)}
+  .fdir{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;cursor:pointer;
+    font-size:14px;font-weight:500;color:var(--ink-2)}
+  .fdir:active{background:var(--line-2)}
+  .fdir.open{color:var(--ink)}
+  .frow{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;
+    font-size:14px;color:var(--ink);cursor:pointer}
+  .frow:active{background:var(--line-2)}
+  .frow.on{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
+  .frow.on .fname{font-weight:600}
+  .ficon{width:24px;height:24px;flex:none;display:flex;align-items:center;justify-content:center;
+    border-radius:7px;background:var(--line-2);color:var(--ink-3)}
+  .ficon.f-dir{background:var(--accent-soft);color:var(--accent-ink)}
+  .ficon.f-code{background:var(--tool-soft);color:var(--tool)}
+  .ficon.f-doc{background:var(--line-2);color:var(--ink-2)}
+  .ficon.f-config{background:var(--warn-soft);color:var(--warn)}
+  .ficon.f-image{background:var(--think-soft);color:var(--think)}
+  .ficon svg{width:18px;height:18px;display:block}
+  .fcount{margin-left:auto;flex:none;min-width:20px;text-align:right;font-family:var(--mono);
+    font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--ink-3)}
+  .fname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+  .fname.pos{color:var(--ok)} .fname.neg{color:var(--danger)}
+  .fmeta{display:flex;align-items:center;gap:5px;flex:none;font-size:12px;color:var(--ink-3)}
+  .fstat{height:18px;display:inline-flex;align-items:center;padding:0 6px;border-radius:5px;
+    font-family:var(--mono);font-size:11.5px;line-height:1;font-variant-numeric:tabular-nums}
+  .fstat.add{background:var(--ok-soft);color:var(--ok)}
+  .fstat.del{background:var(--danger-soft);color:var(--danger)}
+  .fchip{font-size:11px;padding:1px 6px;border-radius:5px;background:var(--line-2);color:var(--ink-2)}
+
+  /* 移动端的只读文件查看区 */
+  .file-viewer{flex:1;min-height:0;overflow:auto;padding:12px 12px calc(20px + var(--sab));background:var(--bg)}
+  .fvmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--ink-3);margin-bottom:8px}
+  .mcode{display:flex;border:1px solid var(--line);border-radius:10px;overflow:auto;background:var(--panel)}
+  .fvln{flex:none;position:sticky;left:0;z-index:1;min-width:3.4em;padding:12px 8px 12px 12px;
+    text-align:right;color:var(--ink-3);font-family:var(--mono);font-size:11.5px;line-height:1.65;
+    background:var(--panel-2);white-space:pre;font-variant-numeric:tabular-nums;
+    border-right:1px solid var(--line-2);user-select:none}
+  .fvtext{margin:0;padding:12px 12px;background:var(--panel);color:var(--ink);
+    font-family:var(--mono);font-size:12px;line-height:1.65;white-space:pre;tab-size:2;
+    overflow:visible;min-width:0}
+  .file-viewer .diff{font-size:12px;line-height:1.65}
+  .file-viewer .diff div{padding:2px 10px}
+  .file-viewer .diff .d-hd{font-size:11.5px;padding:4px 10px}
+  .fvempty{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:18px;
+    border:1px dashed var(--line);border-radius:10px;color:var(--ink-3);font-size:12.5px}
+  .fvempty b{color:var(--ink-2);font-weight:600}
 
   /* 容器查询：按画布宽度而非视口判断，桌面预览手机时同样生效 */
   @container (max-width:520px){ .kbdhint{display:none} }
@@ -618,25 +689,112 @@
     }
   })();
   SESSIONS.sort(function(a,b){ return b.at - a.at; });   /* 一律按时间倒序 */
-  var FILES = {
-    "src/auth/session.ts": { status:"M", add:12, del:4, diff:[
-      {t:"hd",x:"@@ -42,7 +42,7 @@ export function createSession"},
-      {t:"ctx",x:"  const opts = resolveOptions(input);"},
-      {t:"del",x:"- const idleTimeout = 30_000;"},
-      {t:"add",x:"+ const idleTimeout = opts.idleTimeoutMs ?? 10_000;"},
-      {t:"ctx",x:"  client.attach(idleTimeout);"},
-      {t:"hd",x:"@@ -88,6 +88,9 @@ function onIdle()"},
-      {t:"add",x:"+   scheduleClose(client, idleTimeout);"} ] },
-    "src/auth/config.ts": { status:"M", add:3, del:1, diff:[
-      {t:"hd",x:"@@ -10,4 +10,6 @@"},{t:"ctx",x:"export const defaults = {"},
-      {t:"del",x:"- idleTimeoutMs: 30_000,"},{t:"add",x:"+ idleTimeoutMs: 10_000,"},
-      {t:"ctx",x:"};"} ] },
-    "tests/auth.spec.ts": { status:"A", add:24, del:0, diff:[
-      {t:"hd",x:"@@ -0,0 +1,8 @@"},{t:"add",x:"+describe('idle timeout', () => {"},
-      {t:"add",x:"+  it('closes after 10s', async () => {"},{t:"add",x:"+  });"},
-      {t:"add",x:"+});"} ] }
+  var FILE_SOURCE_LABELS = { all:"全部文件", git:"Git 变更" };
+  var ALL_TREE = [
+    { kind:"dir", name:".agents", path:".agents", children:[
+      { kind:"dir", name:"skills", path:".agents/skills", children:[
+        { kind:"file", name:"review.md", path:".agents/skills/review.md" } ] } ] },
+    { kind:"dir", name:"assets", path:"assets", children:[
+      { kind:"file", name:"logo.png", path:"assets/logo.png", binary:true } ] },
+    { kind:"dir", name:"src", path:"src", children:[
+      { kind:"file", name:"app.ts", path:"src/app.ts" },
+      { kind:"dir", name:"auth", path:"src/auth", children:[
+        { kind:"file", name:"config.ts", path:"src/auth/config.ts" },
+        { kind:"file", name:"session.ts", path:"src/auth/session.ts" } ] } ] },
+    { kind:"dir", name:"tests", path:"tests", children:[
+      { kind:"file", name:"auth.spec.ts", path:"tests/auth.spec.ts" } ] },
+    { kind:"file", name:"README.md", path:"README.md" },
+    { kind:"file", name:"package.json", path:"package.json" },
+    { kind:"file", name:"debug.log", path:"debug.log", ignored:true },
+    { kind:"link", name:"escape", path:"escape", openable:false, restricted:"outside_root" }
+  ];
+  var ALL_FILE_CONTENTS = {
+    ".agents/skills/review.md": { kind:"text", size:"96 字节", text:[
+      "# review", "", "先看接口，再看实现。", "不要越过依赖方向。" ].join("\n") },
+    "README.md": { kind:"text", size:"1.2 KiB", text:[
+      "# api", "", "本地开发：", "", "```bash", "pnpm install", "pnpm dev", "```", "",
+      "页面里的 <script>window.__pwned = true<\/script> 只作为纯文本显示，不执行。",
+      "外部图片也不会自动加载。" ].join("\n") },
+    "package.json": { kind:"text", size:"486 字节", text:[
+      "{", '  "name": "api",', '  "private": true,', '  "scripts": {',
+      '    "dev": "tsx src/app.ts",', '    "test": "vitest run"', "  }", "}" ].join("\n") },
+    "src/app.ts": { kind:"text", size:"612 字节", text:[
+      'import { createServer } from "node:http";', 'import { createSession } from "./auth/session";', "",
+      'const port = Number(process.env.PORT ?? 3000);', "",
+      "createServer((request, response) => {", '  response.end("ok");', "}).listen(port);" ].join("\n") },
+    "src/auth/config.ts": { kind:"text", size:"128 字节", text:[
+      "export const defaults = {", "  idleTimeoutMs: 10_000,", "};" ].join("\n") },
+    "src/auth/session.ts": { kind:"text", size:"2.4 KiB", text:[
+      "export function createSession(input: SessionInput) {",
+      "  const opts = resolveOptions(input);",
+      "  const idleTimeout = opts.idleTimeoutMs ?? 10_000;",
+      "  client.attach(idleTimeout);",
+      "  return { id: client.id };", "}" ].join("\n") },
+    "tests/auth.spec.ts": { kind:"text", size:"388 字节", text:[
+      "describe('idle timeout', () => {", "  it('closes after 10s', async () => {",
+      "    await advance(10_000);", "    expect(client.closed).toBe(true);", "  });", "});" ].join("\n") },
+    "debug.log": { kind:"text", size:"760 字节", text:[
+      "[14:31:02] session started", "[14:31:26] config reloaded", "[14:33:02] idle" ].join("\n") },
+    "assets/logo.png": { kind:"image", size:"18.4 KiB" }
   };
-  var FILE_ORDER = ["src/auth/session.ts","src/auth/config.ts","tests/auth.spec.ts"];
+  var GIT_FILES = [
+    { path:"src/app.ts", status:"modified" },
+    { path:"src/auth/config.ts", status:"modified" },
+    { path:"src/auth/session.ts", status:"modified" },
+    { path:"old.txt", status:"deleted" },
+    { path:"new.txt", status:"added" },
+    { path:"untracked.txt", status:"untracked" }
+  ];
+  var GIT_DIFFS = {
+    "src/app.ts": [
+      "diff --git a/src/app.ts b/src/app.ts",
+      "index 1a2b3c4..5d6e7f8 100644",
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1,6 +1,7 @@",
+      ' import { createServer } from "node:http";',
+      '-const port = 3000;',
+      '+const port = Number(process.env.PORT ?? 3000);',
+      " ",
+      " createServer((request, response) => {",
+      '   response.end("ok");',
+      " }).listen(port);" ],
+    "src/auth/config.ts": [
+      "@@ -10,5 +10,5 @@ export const defaults = {",
+      "   idleTimeoutMs: 30_000,",
+      "-  retries: 3,",
+      "+  retries: 5,",
+      " };" ],
+    "src/auth/session.ts": [
+      "@@ -40,5 +40,5 @@ export function createSession",
+      "   const opts = resolveOptions(input);",
+      "-  const idleTimeout = 30_000;",
+      "+  const idleTimeout = opts.idleTimeoutMs ?? 10_000;",
+      "   client.attach(idleTimeout);" ],
+    "old.txt": [
+      "diff --git a/old.txt b/old.txt",
+      "deleted file mode 100644",
+      "--- a/old.txt",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-legacy line 1",
+      "-legacy line 2" ],
+    "new.txt": [
+      "diff --git a/new.txt b/new.txt",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/new.txt",
+      "@@ -0,0 +1,3 @@",
+      "+first line",
+      "+second line",
+      "+third line" ],
+    "untracked.txt": [
+      "diff --git a/untracked.txt b/untracked.txt",
+      "new file mode 100644",
+      "@@ -0,0 +1,2 @@",
+      "+draft notes",
+      "+not staged yet" ]
+  };
   var AGENT_PROFILES = [{id:"codex",name:"codex",def:true},{id:"omp",name:"omp",def:false}];
   /* 会话模式由 Agent 提供（ACP `SessionModeState.availableModes`，Sync 侧投影为 `ModeRef{modeId,displayName}`）：
      客户端只按 `modeId` 选择、直接显示 Agent 给的名字，不自己造候选；Agent 给空列表时就是空列表。 */
@@ -676,7 +834,8 @@
   var RAW_REASON = { size_limit:"超出单条上限", retention_expired:"保留期已过", storage_failure:"存储失败" };
   var A = {
     conn:"online", chatScenario:"running", ctx:"mid", degradeDemo:true,
-    session:"s1", tab:"chat", filter:"all", query:"", selFile:"src/auth/session.ts",
+    session:"s1", tab:"chat", filter:"all", query:"", selFile:null,
+    fileSource:"all", dirOpen:{}, hideIgnored:false, viewFile:null,
     open:{}, keys:[], permSet:{}, modelSel:{}, modeSel:{}, openPick:null,
     pair:"S0", pairLeft:PAIR_TTL, pairDeadline:0, pairCode:"", pairPrev:null, pairVia:"code", pairTimer:null, pairNavTimer:null, clearArmed:false, creating:null, newAgent:"codex", newErr:null, seq:0,
     newDir:"", mkdirCase:"ok", dirPickOpen:false,

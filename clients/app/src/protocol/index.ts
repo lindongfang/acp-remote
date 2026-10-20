@@ -25,6 +25,8 @@ export type * from "./sync";
 export type * from "./command";
 export type * from "./session-files";
 export type * from "./event";
+export type * from "./attachment";
+export type * from "./media";
 export type * from "./error";
 export type * from "./pairing";
 // node-link 侧只镜像了配对的二维码载荷（见该文件头）；它同样是**纯类型**，不进运行期面。
@@ -39,6 +41,29 @@ export {
   decodeSessionFilesResult,
   isSessionFilesCommandName,
 } from "./session-files";
+export {
+  ATTACHMENT_FEATURE,
+  ATTACHMENT_WS_PATH,
+  ATTACHMENT_CHUNK_SIZE,
+  ATTACHMENT_CHUNK_BASE64_MAX_LENGTH,
+  ATTACHMENT_MAX_UNACKNOWLEDGED_CHUNKS,
+  ATTACHMENT_MAX_ACTIVE_TRANSFERS_PER_DEVICE,
+  ATTACHMENT_MAX_ACTIVE_TRANSFERS_PER_NODE,
+  ATTACHMENT_MANIFEST_PAGE_SIZE,
+  ATTACHMENT_READ_MAX_LENGTH,
+  ATTACHMENT_FRAME_TYPES,
+  ATTACHMENT_TRANSFER_BUDGET,
+  decodeAttachmentFrame,
+  encodeAttachmentChunk,
+  decodeAttachmentChunk,
+} from "./attachment";
+export {
+  messageChannelOf,
+  decodePartialResult,
+  decodeMediaReference,
+  decodeEffectiveInteraction,
+} from "./media";
+export { JsonNumberLiteral, isJsonNumberLiteral } from "./json-number";
 export {
   DEVICE_QR_VERSION,
   DEVICE_QR_PAYLOAD_BYTES,

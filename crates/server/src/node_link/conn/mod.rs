@@ -25,20 +25,24 @@ pub mod session;
 mod wire;
 
 pub use handshake::{
-    NegotiationFault, REQUIRED_FEATURE, SUPPORTED_FEATURES, negotiate_features, node_endpoint,
-    peer_trust,
+    NegotiationFault, REQUIRED_FEATURE, SUPPORTED_FEATURES, feature_list, feature_list_without,
+    negotiate_features, negotiate_features_with, node_endpoint, peer_trust,
 };
 pub use limits::{NodeLinkConfig, SessionLimits};
 pub use registry::{ConnectionHandle, ConnectionRegistry, PendingQueue, SendFault};
 pub use session::{
     HEARTBEAT_SILENCE_TIMEOUT, MAX_IN_FLIGHT_HANDSHAKES_PER_IP, MessageRoute, NodeLinkConn,
-    RouteOutcome, WsEndpoint,
+    Purpose, RouteOutcome, WsEndpoint,
 };
 
 use std::time::Duration;
 
 /// Node Link WSS 端点（§2.1）。
 pub const WS_PATH: &str = "/node-link/v1";
+
+/// 独立附件连接的 WSS 端点（§12.9）：subprotocol 与业务连接相同、握手完全相同，只有业务阶段的帧族
+/// 换成 `attachment.*`（[`Purpose::Attachments`]）。
+pub const ATTACHMENTS_WS_PATH: &str = "/node-link/v1/attachments";
 
 /// Node Link 的 WebSocket subprotocol（§2.1；接入层按它做 upgrade 白名单）。
 pub const WS_SUBPROTOCOL: &str = "acp-remote.nodelink.v1.json";

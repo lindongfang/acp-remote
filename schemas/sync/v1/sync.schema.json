@@ -232,7 +232,7 @@
       "unevaluatedProperties": false
     },
     "snapshotResource": {
-      "description": "sync.snapshot_chunk.resource 的封闭词表：快照只承载 sessions/workspaces/agents 三类清单资源。六类 session-scoped 明细资源 messages/turns/pending_interactions/config_options/capabilities/history 一律不进快照，无论会话的 origin.kind 是 local 还是 remote（docs/SYNC_PROTOCOL.md §9.4，design D1）；它们的元素形状仍由下面的 snapshotItem.* 定义，供 session.read 的结果复用（command.schema.json#/$defs/sessionReadResult.resources）。本枚举的取值与 crates/sync-protocol 的 sync::SnapshotResource::ALL 逐条同序，由 tests/schema_drift.rs::snapshot_resources_match_schema_enum 双向门禁。",
+      "description": "sync.snapshot_chunk.resource 的封闭词表：快照只承载 sessions/workspaces/agents 三类清单资源。六类 session-scoped 明细资源 messages/turns/pending_interactions/config_options/capabilities/history 一律不进快照，无论会话的 origin.kind 是 local 还是 remote（docs/SYNC_PROTOCOL.md §9.4，design D1）；除 `pending_interactions` 改用 `media.schema.json#/$defs/effectiveInteraction` 外，它们的元素形状仍由下面的 snapshotItem.* 定义，供 session.read 的结果复用（command.schema.json#/$defs/sessionReadResult.resources）。本枚举的取值与 crates/sync-protocol 的 sync::SnapshotResource::ALL 逐条同序，由 tests/schema_drift.rs::snapshot_resources_match_schema_enum 双向门禁。",
       "enum": ["sessions", "workspaces", "agents"]
     },
     "snapshotItem.sessions": { "$ref": "common.schema.json#/$defs/sessionSummary" },
@@ -252,6 +252,14 @@
         "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
         "turnId": {
           "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        },
+        "channel": {
+          "description": "消息通道（`core.typed-media.v1`）：`reply` 与 `thought` 分别持久化。未协商该 feature 的连接不下发该键，旧 peer 的 shape 逐字不变（docs/SYNC_PROTOCOL.md §10.4/§11.5）。",
+          "$ref": "media.schema.json#/$defs/messageChannel"
+        },
+        "partial": {
+          "description": "正文完整性（`core.typed-media.v1`）：`partial` 表示已收到内容被保留但上游未完成，MUST NOT 被当作完整成功回复（docs/SYNC_PROTOCOL.md §10.4）。",
+          "$ref": "media.schema.json#/$defs/partialResult"
         }
       }
     },
@@ -276,6 +284,7 @@
       }
     },
     "snapshotItem.pending_interactions": {
+      "description": "会话范围待处理交互的基础定位形状（interactionId/sessionId/kind/state/schema/createdAt）。`session.read` 的 `resources.pending_interactions` 自 `conversation-area-complete` 起返回服务端确认过的 `effectiveInteraction`（`media.schema.json#/$defs/effectiveInteraction`，含 `requestVersion`/`options`/`expiresAt`）；本定义只保留历史卡片与内部条目所需的定位信息，历史条目不能直接应答（docs/SYNC_PROTOCOL.md §11.7）。",
       "type": "object",
       "additionalProperties": false,
       "required": ["interactionId", "sessionId", "kind", "state", "schema", "createdAt"],

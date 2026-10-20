@@ -17,7 +17,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Markdown } from "./Markdown";
+import { Markdown, MARKDOWN_CHUNK_CHARS, MARKDOWN_VISIBLE_CHUNKS, splitMarkdownSource } from "./Markdown";
 
 /**
  * 深浅色：`useTheme()` 读 `react-native-web` 的 `useColorScheme()`，这里把它换成受测试控制的
@@ -73,6 +73,7 @@ function renderMarkdown(props: {
   readonly value?: string;
   readonly onLinkPress?: (href: string) => void;
   readonly onCopyCode?: (code: string, language: string) => void;
+  readonly onFilePathPress?: (path: string) => void;
 }): string {
   return renderToStaticMarkup(createElement(Markdown, props));
 }
@@ -263,5 +264,93 @@ describe("富文本：样式全部来自 theme token", () => {
     expect(anchors(dark)).toEqual(anchors(light));
     // 并且确实读到了主题：两套调色板的原子 class 不可能相同。
     expect([...classes(dark)].sort()).not.toEqual([...classes(light)].sort());
+  });
+});
+
+describe("富文本：工作目录路径联动", () => {
+  it("只有文件形状的行内代码成为可点控件；命令、标识符、绝对路径与 .. 保持纯文本", () => {
+    const html = renderMarkdown({
+      value: "看 `src/a.ts`、`package.json`、`../evil.ts`、`/abs/x.ts`、`npm test`、`true`、`useState` 与 `C:secret`",
+      onFilePathPress: () => undefined,
+    });
+
+    expect(html).toContain('data-markdown-file-path="src/a.ts"');
+    // 无目录分隔符但有扩展名：仍是用户想联动查看的文件。
+    expect(html).toContain('data-markdown-file-path="package.json"');
+    expect(html).toContain('role="link"');
+    // 不可解析/不是文件的目标既不是链接锚点，也不会把原值放进路径属性。
+    expect(html).not.toContain('data-markdown-file-path="../evil.ts"');
+    expect(html).not.toContain('data-markdown-file-path="/abs/x.ts"');
+    expect(html).not.toContain('data-markdown-file-path="npm test"');
+    // 命令与普通标识符不能被画成文件链接（否则点击会去读一个不存在的路径）。
+    expect(html).not.toContain('data-markdown-file-path="true"');
+    expect(html).not.toContain('data-markdown-file-path="useState"');
+    expect(html).not.toContain('data-markdown-file-path="C:secret"');
+    // 文本仍逐字保留（降级呈现不丢内容）。
+    expect(visibleText(html)).toContain("../evil.ts");
+    expect(visibleText(html)).toContain("npm test");
+    expect(visibleText(html)).toContain("useState");
+  });
+
+  it("回调缺省时路径不渲染成可点控件（不制造点了没反应的入口）", () => {
+    const html = renderMarkdown({ value: "看 `src/a.ts`" });
+
+    expect(html).not.toContain("data-markdown-file-path");
+    expect(html).not.toContain('role="link"');
+    expect(visibleText(html)).toContain("src/a.ts");
+  });
+});
+
+describe("富文本：长输出分块与可见范围", () => {
+  /** 一个围栏未闭合的代码块（流式中途）：后文全部属于它，必须保持可读。 */
+  it("未闭合代码块留在同一块里且渲染成可读代码", () => {
+    const value = "```ts\nconst answer = 42;\nconst next =";
+    expect(splitMarkdownSource(value)).toHaveLength(1);
+
+    const html = renderMarkdown({ value });
+    expect(html).toContain('data-code-block="true"');
+    expect(visibleText(html)).toContain("const answer = 42;");
+    expect(visibleText(html)).toContain("const next =");
+  });
+
+  it("切分点只在围栏之外的空行，拼接后与原文逐字一致", () => {
+    const blocks = Array.from(
+      { length: 4 },
+      (_, index) => `## 第 ${String(index)} 节\n${"字".repeat(MARKDOWN_CHUNK_CHARS)}`,
+    );
+    const fenced = ["```text", "a", "", "b", "```"].join("\n");
+    const value = `${blocks.join("\n\n")}\n\n${fenced}\n\n末尾`;
+    const chunks = splitMarkdownSource(value);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("\n")).toBe(value);
+    // 围栏内部不切：整段围栏在同一块里（含它前后的边界空行）。
+    const fenceChunk = chunks.find((chunk) => chunk.includes("```text"));
+    expect(fenceChunk).toContain("a\n\nb");
+    expect(fenceChunk).toContain("```");
+  });
+
+  it("列表项的缩进续段不会被切开", () => {
+    const head = `- 第一项\n\n${"  ".repeat(0)}${"x".repeat(MARKDOWN_CHUNK_CHARS)}`;
+    const value = `${head}\n\n  续段属于同一项\n\n后续段落`;
+    const chunks = splitMarkdownSource(value);
+
+    expect(chunks.join("\n")).toBe(value);
+    expect(chunks[0]).toContain("续段属于同一项");
+  });
+
+  it("长输出默认只渲染末尾若干块，更早内容有显式展开入口", () => {
+    const total = MARKDOWN_VISIBLE_CHUNKS + 2;
+    const value = Array.from(
+      { length: total },
+      (_, index) => `第${String(index)}段 ${"段".repeat(MARKDOWN_CHUNK_CHARS)}`,
+    ).join("\n\n");
+    const html = renderMarkdown({ value });
+
+    expect(splitMarkdownSource(value)).toHaveLength(total);
+    expect(html).toContain(`data-markdown-chunks-hidden="2"`);
+    expect(visibleText(html)).toContain(`第${String(total - 1)}段`);
+    expect(visibleText(html)).not.toContain("第0段");
+    expect(visibleText(html)).toContain("还有 2 段更早内容未展开");
   });
 });

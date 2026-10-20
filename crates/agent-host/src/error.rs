@@ -111,9 +111,31 @@ pub enum HostError {
     #[error("prompt 载荷不合法")]
     InvalidPrompt,
 
+    /// prompt 内容无法按 Agent 能力与 ACP 帧预算派发。
+    ///
+    /// 这是**派发前**的整条拒绝：没有残缺 prompt 被发出，也没有为超限内容读取附件字节。
+    #[error("prompt 内容不可派发：{detail}")]
+    PromptRejected {
+        /// 拒绝原因（只含协议元数据，不含正文、路径或附件内容）。
+        detail: String,
+    },
+
     /// 请求还处于未完成状态（关闭时统一收敛）。
     #[error("关闭时未完成的请求")]
     ShutdownPending,
+
+    /// 未知或已释放的终端标识（含跨会话访问）。
+    #[error("未知终端")]
+    UnknownTerminal,
+
+    /// 终端任务无法创建或已不可操作（进程启动失败、活动终端数达到上限等）。
+    ///
+    /// `detail` 只用于诊断分类，**不含**命令行、参数、环境变量值或路径。
+    #[error("终端任务不可用：{detail}")]
+    TerminalRejected {
+        /// 拒绝原因（协议元数据级别）。
+        detail: String,
+    },
 }
 
 impl HostError {
@@ -131,7 +153,7 @@ impl HostError {
             Self::SpawnFailed { .. } => PortError::Unavailable(UnavailableKind::IoError),
             Self::Timeout { .. } => PortError::Unavailable(UnavailableKind::Busy),
             Self::CapabilityNotDeclared { .. } => {
-                PortError::InvalidRequest("capability not declared")
+                PortError::Unavailable(UnavailableKind::BackendUnsupported)
             }
             Self::UnknownInteraction => PortError::Conflict(ConflictKind::AlreadyResolved),
             Self::Protocol(_)
@@ -142,8 +164,11 @@ impl HostError {
             Self::EnvNotAllowed { .. } => {
                 PortError::InvalidRequest("reserved environment variable name")
             }
-            Self::InvalidResolution | Self::InvalidPrompt => {
+            Self::InvalidResolution | Self::InvalidPrompt | Self::PromptRejected { .. } => {
                 PortError::InvalidRequest("invalid agent-host request")
+            }
+            Self::UnknownTerminal | Self::TerminalRejected { .. } => {
+                PortError::InvalidRequest("terminal task is not available")
             }
             Self::IdUnavailable => PortError::Unavailable(UnavailableKind::IoError),
         }
@@ -182,6 +207,9 @@ impl HostError {
             | Self::UnknownInteraction
             | Self::InvalidResolution
             | Self::InvalidPrompt
+            | Self::PromptRejected { .. }
+            | Self::UnknownTerminal
+            | Self::TerminalRejected { .. }
             | Self::ShutdownPending
             | Self::IdUnavailable => false,
         }
@@ -241,7 +269,7 @@ mod tests {
 
     /// 逐变体钉死映射表。
     ///
-    /// `HostError` 目前有 20 个变体（`tasks.md`/`design.md` 里写的「16 个」是更早版本的计数）；
+    /// `HostError` 目前有 22 个变体（`tasks.md`/`design.md` 里写的「16 个」是更早版本的计数）；
     /// **新增变体时必须在这里补一行**——映射是 core 端口合同的一部分，合法调整应显式发生，
     /// 而不是被静默改坏。
     ///
@@ -250,7 +278,7 @@ mod tests {
     /// `session_establishment_failures_are_classified` 单独钉死。
     #[test]
     fn to_port_error_is_pinned_per_variant() {
-        let cases: [(&str, HostError, Shape); 19] = [
+        let cases: [(&str, HostError, Shape); 22] = [
             (
                 "UnknownProfile",
                 HostError::UnknownProfile,
@@ -310,7 +338,7 @@ mod tests {
                 HostError::CapabilityNotDeclared {
                     capability: "session.template".to_owned(),
                 },
-                Shape::InvalidRequest,
+                Shape::Unavailable(UnavailableKind::BackendUnsupported),
             ),
             (
                 "DuplicateSession",
@@ -362,8 +390,27 @@ mod tests {
                 Shape::InvalidRequest,
             ),
             (
+                "PromptRejected",
+                HostError::PromptRejected {
+                    detail: "prompt 超出 ACP 单条消息预算".to_owned(),
+                },
+                Shape::InvalidRequest,
+            ),
+            (
                 "ShutdownPending",
                 HostError::ShutdownPending,
+                Shape::InvalidRequest,
+            ),
+            (
+                "UnknownTerminal",
+                HostError::UnknownTerminal,
+                Shape::InvalidRequest,
+            ),
+            (
+                "TerminalRejected",
+                HostError::TerminalRejected {
+                    detail: "活动终端数已达上限".to_owned(),
+                },
                 Shape::InvalidRequest,
             ),
         ];

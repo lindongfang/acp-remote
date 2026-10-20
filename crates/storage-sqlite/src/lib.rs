@@ -13,3 +13,4 @@ pub mod admin;
 pub mod error;
 pub mod migrate;
 pub mod session_store;
+pub mod transfers;

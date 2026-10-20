@@ -10,8 +10,8 @@
  * - 取消未确认前只能是「取消请求已提交」：那时渲染结果里**没有**可点的取消按钮，也没有
  *   「已空闲」的呈现。
  *
- * 三态另用「输入框是否只读 + 发送/停止按钮是否出现」两组属性钉住（进行中只读且不渲染发送，
- * 只在轮次可取消时出现停止）；附件不受支持是**显式说明**（断言说明文案与 `attachmentsSupported=false`
+ * 三态另用「输入框是否只读 + 发送/停止按钮是否出现」两组属性钉住（进行中**可编辑**但发送
+ * 禁用、不排队；已关闭只读），附件不受支持是**显式说明**（断言说明文案与 `attachmentsSupported=false`
  * 同时在），而不是「没提」。
  */
 
@@ -30,10 +30,22 @@ function input(overrides: Partial<ConversationInputModel>): ConversationInputMod
   return {
     state: "editable",
     draft: "帮我改一下",
+    draftEditable: true,
     canSubmit: true,
     disabledReason: null,
     attachmentsSupported: false,
     attachmentNotice: "📎 附件暂不支持 · 仅文本",
+    attachments: {
+      attachments: [],
+      phase: "empty",
+      canSubmit: true,
+      blockedReason: null,
+      capabilityNotice: null,
+      uploadedBytes: "0",
+      totalBytes: "0",
+      error: null,
+    },
+    pathRefs: [],
     draftInMemoryOnly: false,
     draftNotice: null,
     submission: { kind: "none" },
@@ -77,10 +89,109 @@ describe("输入区三态与附件边界", () => {
     expect(html).not.toContain("data-submit-unavailable");
   });
 
-  it("进行中：输入只读、不渲染发送，只呈现停止（可取消时）并说明按钮变化", () => {
+  it("只有附件/路径引用、没有文字时仍可发送（与仓库「文字或附件或路径非空」同源）", () => {
+    const withAttachment = input({
+      draft: "",
+      attachments: {
+        attachments: [
+          {
+            localId: "11111111-0000-4000-8000-000000000001",
+            transferId: "22222222-0000-4000-8000-000000000002",
+            attachmentId: null,
+            kind: "image",
+            fileName: "a.png",
+            mediaType: "image/png",
+            byteLength: "10",
+            status: "selected",
+            uploadedBytes: "0",
+            sha256: null,
+            error: null,
+            previewUrl: null,
+          },
+        ],
+        phase: "selected",
+        canSubmit: true,
+        blockedReason: null,
+        capabilityNotice: null,
+        uploadedBytes: "0",
+        totalBytes: "10",
+        error: null,
+      },
+    });
+    const attachmentHtml = render(withAttachment);
+    expect(attachmentHtml).toContain('data-submit-enabled="true"');
+    expect(tagContaining(attachmentHtml, 'data-action="submit-prompt"')).not.toContain("disabled");
+
+    const withPathRef = render(input({ draft: "   ", pathRefs: ["src/a.ts"] }));
+    expect(withPathRef).toContain('data-submit-enabled="true"');
+    expect(tagContaining(withPathRef, 'data-action="submit-prompt"')).not.toContain("disabled");
+
+    // 对照：文字、附件、路径全空时按钮仍然禁用（闸门不是无条件放开）。
+    const empty = render(input({ draft: "   " }));
+    expect(empty).toContain('data-submit-enabled="false"');
+    expect(tagContaining(empty, 'data-action="submit-prompt"')).toContain('aria-disabled="true"');
+  });
+
+  it("只有图片用图片预览；音频附件显示名称与大小，不把音频 Blob 塞进 <img>", () => {
+    const base = {
+      status: "selected" as const,
+      uploadedBytes: "0",
+      sha256: null,
+      error: null,
+    };
+    const html = render(
+      input({
+        attachments: {
+          attachments: [
+            {
+              ...base,
+              localId: "11111111-0000-4000-8000-000000000011",
+              transferId: "22222222-0000-4000-8000-000000000011",
+              attachmentId: null,
+              kind: "image",
+              fileName: "shot.png",
+              mediaType: "image/png",
+              byteLength: "10",
+              previewUrl: "blob:image-preview",
+            },
+            {
+              ...base,
+              localId: "11111111-0000-4000-8000-000000000012",
+              transferId: "22222222-0000-4000-8000-000000000012",
+              attachmentId: null,
+              kind: "audio",
+              fileName: "voice.mp3",
+              mediaType: "audio/mpeg",
+              byteLength: "2048",
+              previewUrl: "blob:audio-preview",
+            },
+          ],
+          phase: "selected",
+          canSubmit: true,
+          blockedReason: null,
+          capabilityNotice: null,
+          uploadedBytes: "0",
+          totalBytes: "2058",
+          error: null,
+        },
+      }),
+    );
+
+    // 图片条目有一张预览；音频条目没有（反例：无条件渲染 <img> 时这里会是 2 张）。
+    expect((html.match(/<img /g) ?? []).length).toBe(1);
+    expect(html).toContain('data-attachment-preview="image"');
+    expect(html).not.toContain('data-attachment-preview="audio"');
+    expect(html).not.toContain("blob:audio-preview");
+    // 音频条目的名称、种类与大小仍在清单里（去掉破图不等于去掉信息）。
+    expect(html).toContain('data-attachment-name="voice.mp3"');
+    expect(html).toContain("音频 · 2.0 KiB");
+  });
+
+  it("进行中：可编辑下一条草稿、发送禁用不排队，并呈现停止（可取消时）", () => {
     const html = render(
       input({
         state: "in_progress",
+        draftEditable: true,
         canSubmit: false,
         disabledReason: "会话进行中，完成后可继续输入",
         cancel: { kind: "available", failure: null },
@@ -88,33 +199,43 @@ describe("输入区三态与附件边界", () => {
     );
 
     expect(html).toContain('data-composer="in_progress"');
-    expect(tagContaining(html, 'data-composer-input="in_progress"')).toMatch(/readonly/i);
-    // 反例：进行中仍画出可用的发送按钮 → 下面两条会红。
-    expect(html).not.toContain('data-action="submit-prompt"');
-    expect(html).not.toContain("data-submit-enabled");
+    // 执行中仍可编辑：输入框**不**只读，草稿可以写，但不建立队列。
+    expect(tagContaining(html, 'data-composer-input="in_progress"')).not.toMatch(/readonly/i);
+    // 发送按钮仍呈现但禁用（不是「消失」：状态与入口都在，闸门由 canSubmit 决定）。
+    expect(html).toContain('data-submit-enabled="false"');
+    expect(tagContaining(html, 'data-action="submit-prompt"')).toContain('aria-disabled="true"');
     expect(html).toContain('data-action="cancel-turn"');
     expect(html).toContain("data-submit-unavailable");
     expect(html).toContain("会话进行中，完成后可继续输入");
-    expect(html).toContain("输入只读，按钮变为停止");
+    expect(html).toContain("进行中 · 可编辑但发送禁用，不排队");
   });
 
-  it("进行中且没有可取消的轮次：不渲染任何提交/取消按钮（不是点了没反应）", () => {
+  it("进行中且没有可取消的轮次：发送仍禁用，只有停止不呈现（不是点了没反应）", () => {
     const html = render(
       input({
         state: "in_progress",
+        draftEditable: true,
         canSubmit: false,
         disabledReason: "会话进行中，完成后可继续输入",
         cancel: { kind: "unavailable" },
       }),
     );
 
-    expect(html).not.toContain('data-action="submit-prompt"');
+    expect(html).toContain('data-submit-enabled="false"');
+    expect(tagContaining(html, 'data-action="submit-prompt"')).toContain('aria-disabled="true"');
     expect(html).not.toContain('data-action="cancel-turn"');
-    expect(tagContaining(html, 'data-composer-input="in_progress"')).toMatch(/readonly/i);
+    expect(tagContaining(html, 'data-composer-input="in_progress"')).not.toMatch(/readonly/i);
   });
 
   it("已关闭：输入框只读、提交不可点，并说明原因", () => {
-    const html = render(input({ state: "closed", canSubmit: false, disabledReason: "会话已关闭，不能提交" }));
+    const html = render(
+      input({
+        state: "closed",
+        draftEditable: false,
+        canSubmit: false,
+        disabledReason: "会话已关闭，不能提交",
+      }),
+    );
 
     expect(html).toContain('data-composer="closed"');
     expect(html).toContain('data-submit-enabled="false"');
@@ -193,7 +314,7 @@ describe("提交与取消以服务端终态为准", () => {
     expect(requested).toContain("取消请求已提交");
     // 反例：状态提示仍写「当前轮次不可取消」→ 与上一行互相否证。
     expect(requested).not.toContain("当前轮次不可取消");
-    expect(requested).toContain("进行中 · 输入只读，按钮变为停止");
+    expect(requested).toContain("进行中 · 可编辑但发送禁用，不排队");
 
     const confirmed = render(input({ ...inProgress, cancel: { kind: "confirmed" } }));
     expect(confirmed).toContain('data-cancel="confirmed"');

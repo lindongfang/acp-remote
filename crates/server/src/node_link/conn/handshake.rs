@@ -11,7 +11,8 @@
 //! - **不得用错误区分节点是否存在**：未知节点的 `PeerTrust` 只是 `public_key = None` +
 //!   `CredentialStatus::Unknown`，`node.challenge` 照常签发；对端可见的失败推迟到 proof 阶段；
 //! - **feature 词表只有一个来源**：`compatibility/features/v1/features.json` 的 `node_link` 子集中
-//!   `delivery = mvp` 的五条（本切片实现），逐条常量在此登记并有契约测试比对。
+//!   `delivery = mvp` 的条目由本模块的 [`SUPPORTED_FEATURES`]/[`DEFERRED_FEATURES`] 显式划分（已接线
+//!   的四条 vs 尚未接线的四条），逐条常量在此登记并有契约测试比对。
 
 use acp_core::model::{NodeId, NodeKind, NodeRecord, NodeState, PairingRecord, PeerIdentity};
 use acp_core::use_cases::NodeLinkHandshakeView;
@@ -19,16 +20,59 @@ use identity_auth::{ConnectionBinding, CredentialStatus, FeatureList, NodeEndpoi
 use node_link_protocol::common::{FeatureId, FeatureList as WireFeatureList};
 use node_link_protocol::handshake::NodeHello;
 
-/// 本切片实现的 Node Link feature（`features.json` 的 `node_link` 子集里 `delivery = mvp` 的五条）。
+/// 本切片实现的 Node Link feature。
 ///
-/// `node-link.node-rotation.v1` 是 `post_mvp`（只登记 ID 与消息名），**不**选中：选中它等于虚报支持
-/// （`AGENTS.md` §4 的能力协商真实性）。
-pub const SUPPORTED_FEATURES: [&str; 4] = [
+/// 选中即承诺真实实现（`AGENTS.md` §4 的能力协商真实性）。当前登记全部 8 条 mvp 业务能力；
+/// `node-link.node-rotation.v1` 是 `post_mvp`，不选中。
+///
+/// `attachment-transfer` 与它的 `/node-link/v1/attachments` 端点一起接线（组合根注册端点后才把本表
+/// 传进连接）。组合根没有装配附件存储时，`register_node_link_paths` 用
+/// [`feature_list_without`] 从本表里去掉它——未注册的端点不得宣告。
+///
+/// `typed-media`/`pending-interactions`/`remote-history` 的门控点都在 `session.read`；该命令已在
+/// Owner 侧接线（共享投影 + core 用例），因此这三条可以如实宣告。Access 侧对这些能力的使用仍由
+/// `node-link-client` 与 Sync 的 imported 读取路径决定。
+pub const SUPPORTED_FEATURES: [&str; 8] = [
     "node-link.core.v1",
     "node-link.raw-acp.v1",
     "node-link.command-status.v1",
     "node-link.session-create.v1",
+    "node-link.attachment-transfer.v1",
+    "node-link.typed-media.v1",
+    "node-link.pending-interactions.v1",
+    "node-link.remote-history.v1",
 ];
+
+/// registry 里 `delivery = mvp` 但本实现**尚未接线**、因此不宣告的 feature。
+///
+/// 当前为空：全部 mvp feature 都有对应的真实入口。`supported_features_match_the_registry_mvp_subset`
+/// 仍会逐条比对，任何「没有宣告、也没有登记为 deferred」的 mvp feature 都会让该测试失败。
+pub const DEFERRED_FEATURES: [&str; 0] = [];
+
+/// 从 [`SUPPORTED_FEATURES`] 里去掉一条（组合根未注册对应端点时使用）。
+///
+/// 返回排序去重的 `Vec<String>`，与 [`negotiate_features_with`] 的入参同形。
+pub fn feature_list_without(feature: &str) -> Vec<String> {
+    let mut features: Vec<String> = SUPPORTED_FEATURES
+        .iter()
+        .filter(|entry| **entry != feature)
+        .map(|entry| (*entry).to_owned())
+        .collect();
+    features.sort();
+    features.dedup();
+    features
+}
+
+/// 本表全部 feature 的排序去重文本（组合根注册了全部端点时使用）。
+pub fn feature_list() -> Vec<String> {
+    let mut features: Vec<String> = SUPPORTED_FEATURES
+        .iter()
+        .map(|entry| (*entry).to_owned())
+        .collect();
+    features.sort();
+    features.dedup();
+    features
+}
 
 /// 每次握手都必须选中的 feature（registry 的 `required: true`，§11.3）。
 pub const REQUIRED_FEATURE: &str = "node-link.core.v1";
@@ -64,17 +108,28 @@ pub fn negotiated_version(hello: &NodeHello) -> Result<u64, NegotiationFault> {
 /// 必需集合 = Owner 的 [`REQUIRED_FEATURE`] ∪ 对端 `requiredFeatures`（§11.3：`node-link.core.v1`
 /// 是必需 feature；Access 未声明它时 Owner 仍要求它）。未被选中的必需 feature 按 UTF-8 字节升序、
 /// 去重后返回。返回值是协商结果的 feature ID 文本（排序去重）。
+///
+/// 本函数用 [`SUPPORTED_FEATURES`] 全集；组合根在某个端点未注册时改用
+/// [`negotiate_features_with`] 传入收窄后的集合。
 pub fn negotiate_features(hello: &NodeHello) -> Result<Vec<String>, NegotiationFault> {
+    negotiate_features_with(hello, &feature_list())
+}
+
+/// [`negotiate_features`] 的动态版本：`supported` 是本端本次真正支持（且端点已注册）的集合。
+pub fn negotiate_features_with(
+    hello: &NodeHello,
+    supported: &[String],
+) -> Result<Vec<String>, NegotiationFault> {
     let declared: Vec<&str> = hello
         .supported_features
         .as_slice()
         .iter()
         .map(FeatureId::as_str)
         .collect();
-    let mut selected: Vec<String> = SUPPORTED_FEATURES
+    let mut selected: Vec<String> = supported
         .iter()
-        .filter(|feature| declared.contains(*feature))
-        .map(|feature| (*feature).to_owned())
+        .filter(|feature| declared.contains(&feature.as_str()))
+        .cloned()
         .collect();
     selected.sort();
     selected.dedup();
@@ -251,10 +306,29 @@ mod tests {
             .iter()
             .map(|id| (*id).to_owned())
             .collect();
-        let mut mvp = mvp;
+        // 未接线的 mvp feature 必须在 `DEFERRED_FEATURES` 里逐条登记（显式差异，而不是静默漏项）：
+        // 任何「没有宣告、也没有登记为 deferred」的 mvp feature 都会让下面的等式失败。
+        let mut deferred: Vec<String> = DEFERRED_FEATURES
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect();
+        deferred.sort();
+        let mut expected: Vec<String> = mvp
+            .iter()
+            .filter(|id| !deferred.contains(id))
+            .cloned()
+            .collect();
         declared.sort();
-        mvp.sort();
-        assert_eq!(declared, mvp);
+        expected.sort();
+        assert_eq!(declared, expected);
+        // deferred 集合本身必须真的都是 registry 的 mvp（防止把已废弃的 ID 记成「稍后实现」）。
+        for id in &deferred {
+            assert!(mvp.contains(id), "{id} is not an mvp feature");
+        }
+        // 已宣告的必须全部在 mvp 子集里（不宣告 registry 之外或 post_mvp 的 ID）。
+        for id in &declared {
+            assert!(mvp.contains(id), "{id} is not an mvp feature");
+        }
         assert!(mvp.contains(&REQUIRED_FEATURE.to_owned()));
         // `required: true` 的唯一一条必须正好是我们的必需 feature。
         let required: Vec<&str> = registry["protocols"]["node_link"]["features"]
@@ -269,6 +343,37 @@ mod tests {
 
     fn selected(hello: &NodeHello) -> Vec<String> {
         negotiate_features(hello).expect("必需 feature 已满足")
+    }
+
+    /// 未注册附件端点时，组合根用 [`feature_list_without`] 收窄本端集合：对端声明了该 feature 也不会被
+    /// 选中；对端把它列为必需时握手必须失败（能力协商不得虚报，`AGENTS.md` §4）。
+    #[test]
+    fn an_unregistered_attachment_endpoint_is_never_announced() {
+        let attachment = crate::node_link::attachments::ATTACHMENT_FEATURE;
+        let narrowed = feature_list_without(attachment);
+        assert!(
+            !narrowed.iter().any(|feature| feature == attachment),
+            "未注册的端点必须从本端集合里去掉"
+        );
+
+        let declared = hello(
+            &[REQUIRED_FEATURE, attachment, "node-link.command-status.v1"],
+            &[REQUIRED_FEATURE],
+        );
+        let selected = negotiate_features_with(&declared, &narrowed).expect("必需 feature 已满足");
+        assert!(
+            !selected.iter().any(|feature| feature == attachment),
+            "未注册的端点不得出现在 selectedFeatures 里"
+        );
+
+        let required = hello(
+            &[REQUIRED_FEATURE, attachment],
+            &[REQUIRED_FEATURE, attachment],
+        );
+        assert!(
+            negotiate_features_with(&required, &narrowed).is_err(),
+            "对端必需但本端未注册时必须失败关闭"
+        );
     }
 
     #[test]

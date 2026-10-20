@@ -76,7 +76,7 @@ ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent
 
 Zed、CLI、PWA、手机 App 和桌面 App 都是客户端形态，不是固定权限角色。它们可以按授权查看消息、继续对话、取消 turn、处理权限/elicitation、选择模型或模式。会话创建、删除与管理能力：本机自己的设备通过认证即可执行（设备方向没有授权维度）；跨节点能力由 Export Policy 与 `grant.*` 决定。Node Link 首个纵向切片支持供 Zed 使用的受限远程 `session.create`；本机设备另可只读地逐层浏览目录以选择工作目录（`workspace.browse`，feature `core.workspace-browse.v1` 门控，见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2）；PWA 按 `FRONTEND_DESIGN.md` §2.2/§9 在目录内提供创建入口。
 
-对话页的「文件」栏有三个只读来源：「全部文件」逐层浏览**当前会话工作目录**内的文件、「Git 变更」查看该目录相对 HEAD 的未提交状态与差异、「会话变更」查看本会话 Agent 的修改记录（按文件归并）。三者都只读、不编辑文件、不执行 Git 写操作，也不读取会话工作目录之外的内容；根外链接只展示名称、不可打开。范围限于本节点直接管理的 owned 会话：远程导入（imported）会话仍可展示已收到的会话变更记录，但「全部文件」与「Git 变更」明确不受支持，不读取 Access 本机替代目录。文件内容、预览与下载只经已认证的 Sync 查询（feature `core.session-files.v1`，见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5），不生成长期 bearer 链接；内容与 Git 差异不写入会话日志或持久正文缓存，并受分页、预览/下载与并发上限约束。
+对话页的「文件」栏计划收敛为两个只读来源：「全部文件」逐层浏览**当前会话工作目录**内的文件、「Git 变更」查看该目录相对 HEAD 的未提交状态与差异。2026-10-19 已确认移除「会话变更」来源，代码与原型尚待调整；默认来源、旧选择回退与界面边界以 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §2 为准。Git 变更可能包含人工操作及其他会话的修改，不代表当前会话独占的改动；对话中的工具调用、文件差异与既有历史记录继续保留。两个来源都只读、不编辑文件、不执行 Git 写操作，也不读取会话工作目录之外的内容；根外链接只展示名称、不可打开。查询范围限于本节点直接管理的 owned 会话：远程导入（imported）会话的两个来源均明确不受支持，不读取 Access 本机替代目录。文件内容、预览与下载只经已认证的 Sync 查询（feature `core.session-files.v1`，见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5），不生成长期 bearer 链接；内容与 Git 差异不写入会话日志或持久正文缓存，并受分页、预览/下载与并发上限约束。
 
 ### 3.4 Zed
 
@@ -95,6 +95,44 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 - PWA 是真实的端到端验证客户端，与后续原生客户端共享协议、状态机和功能分层，不另建一次性 UI。
 - 后续客户端采用 TypeScript 与 Expo/React Native 通用工程，通过平台 adapter 使用 Keychain、Keystore、SQLite、相机和生命周期能力。
 - PWA 不能被视为原生安全存储、后台连接和系统通知的等价实现。
+
+### 3.6 对话内容与输入（计划，`conversation-area-complete`，尚未实现）
+
+对话区从“仅文本输入”扩为**按真实能力协商**的文本、图片、文件、已有音频与工作目录路径引用；能力、协议帧、端口与存储形状已在本次合同包冻结，实现仍按工作包推进，未实现前不得对外宣称已支持。
+
+- 内容范围：用户消息、Agent 回复、Agent 明确提供的思考、工具调用及结果、审批、提问、计划、终端、文件改动、轮次结果、多媒体与资源、异常与不可用提示。
+- 输入：点击发送后才上传附件，全部完成后整体提交；任一失败保留完整草稿、不触发执行。不支持的类型明确说明，MUST NOT 静默删除附件或只发文字。
+- 附件：无数量/大小产品额度，但有 32 KiB 分块、并发、速率、内存与磁盘保护；已提交附件随消息保留，未提交上传闲置 24 小时清理，刷新不承诺续传。
+- 交互与历史：刷新或换设备后可重新取得服务端确认的有效待处理请求再应答；首个有效答案胜出。历史与实时同形，超出保留期显式不可用。
+- 远程：Owner 保存正文与附件；Access 只在内存转发，不把远程正文写入 SQLite、临时文件、日志或持久缓存。
+
+需求追溯（Q1–Q23 来自 `docs/conversation-area-discussion.md` 的已确认范围；编号以该记录为准，Q22 为思考单独保存与历史恢复，Q23 为流式增量规则；本表给出**权威合同位置**，术语以各文档为准）：
+
+| 需求 | 合同位置 |
+|---|---|
+| Q1 内容范围 | 本节 / [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.2–§10.4 / [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4 |
+| Q2 图片、文件、已有音频输入 | 本节 / SYNC §11.5 `PromptContentBlock` / [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §5 |
+| Q3 以 ACP 标准能力为基础 | ACP 矩阵 §2/§5 / [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.5 |
+| Q4 实时、历史、失败与不支持 | SYNC §10.2–§10.4 / FRONTEND §4.2 |
+| Q5 本地与远程会话 | 本节 §3.2 / [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.10 |
+| Q6 选择/粘贴图片、文件与音频 | FRONTEND §4.2 / SYNC §11.5 |
+| Q7 附件内容、路径引用与外部链接 | SYNC §11.5 `workspace_path_ref` / §15 |
+| Q8 点发送才上传、整体提交 | SYNC §3.4 / §11.5 |
+| Q9 附件保留与清理 | SYNC §3.4 / [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7.5（计划 §7.6） |
+| Q10 无产品额度、有界传输 | SYNC §3.4 预算表 / §14 |
+| Q11 刷新/换设备重新取得有效请求 | SYNC §11.7 / §10.4 |
+| Q12 按一次发送组织轮次 | FRONTEND §4.1 / SYNC §10.3 |
+| Q13 折叠与默认展开 | FRONTEND §4.4 |
+| Q14 表单类型、校验与首个有效答案 | SYNC §11.7 / §10.4 / FRONTEND §4.1 |
+| Q15 执行中可编辑不可发送、无排队 | FRONTEND §4.1 |
+| Q16 分块、内存、速率与磁盘保护 | SYNC §3.4/§14 / CORE §5.8 |
+| Q17 路径引用不固定版本 | SYNC §11.5 |
+| Q18 草稿仅在内存、24 小时清理 | FRONTEND §4.1 / SYNC §3.4 / CORE §7.6（计划） |
+| Q19 上读保持锚点、回到底部 | FRONTEND §4.1 / SYNC §11.5 |
+| Q20 Markdown、代码与媒体安全渲染 | FRONTEND §4.5 / [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §11.2 |
+| Q21 真实 ACP 终端服务 | ACP 矩阵 terminal rows / MODULE §4.5 |
+| Q22 思考单独保存与历史恢复 | [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.4 / [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.3、§7.6（计划，WP2） / 本节 §10.3 |
+| Q23 增量原位更新、重放去重与部分结果 | SYNC §10.2–§10.4 / FRONTEND §4.2 / CORE §6 第 14 条 |
 
 ## 4. 总体架构
 
@@ -354,22 +392,26 @@ Owner Node 需要保存足以支持客户端和 Access Node 历史查看、断�
 - Turn 生命周期。
 - 必要的文件修改摘要。
 - 会话与底层 Agent session ID 映射。
+- 已提交附件的引用、封存清单与媒体引用（字节在附件目录，表只存引用/摘要）。
+- 回复与 Agent 明确提供的思考的消息通道，以及停止/失败时的部分结果状态。
+- 有效待处理交互的版本与终态事实（历史卡片不能直接应答）。
 
 ### 10.2 短期保存
 
 - 流式文本 delta。
 - 临时工具进度。
 - 未完成的请求状态。
+- 点击发送前不存在的上传；点击发送后才创建的临时传输与未封存清单（闲置 24 小时清理，不随刷新续传）。
 
 所有带 sequence 并进入 Sync Protocol 的流式 delta 都必须先写入短期事件日志，再广播。`persist_deltas: false` 只表示 turn 完成并形成最终消息后可以按 ACK、TTL 和容量策略压缩或清理，不允许绕过“先持久化、后广播”；清理造成 cursor 超出保留窗口时必须要求客户端重建 snapshot。
 
 ### 10.3 不保存或严格限量
 
 - 心跳、typing、presence：只放内存。
-- reasoning/thinking：默认不长期保存。
+- Agent 未明确提供的思考：从不生成、不保存；Agent 明确发送的思考按会话正文的保留/清理规则处理，并支持历史恢复（与回复分别保存）。
 - 终端完整输出：限制 head/tail 和总大小。
 - 大型 diff：压缩并限制容量。
-- 图片和附件：独立文件或内容寻址存储，配置配额。
+- 图片、音频与文件：已提交附件使用内容寻址存储，随所属消息保留与清理；不设附件数量/大小产品额度，但受分块、并发、速率、磁盘与库容量保护。未提交上传按 24 小时闲置清理；远程附件正文只由 Owner 保存，Access 不落盘。
 
 ### 10.4 保留策略默认值
 
@@ -523,7 +565,9 @@ Node pairing 与设备 pairing 使用相同的“一次性引导、长期公钥�
 - 浏览器客户端使用明确的 Origin allowlist。
 - 设置握手、读取、写入和空闲超时。
 - 日志不记录完整 prompt、响应、token、私钥或敏感路径。
-- 附件必须检查声明大小、实际大小和类型。
+- 附件必须检查声明大小、实际大小和类型；单块、偏移、总长度与流式摘要都必须校验，重复块只在内容相同时返回原确认。
+- 附件连接必须单独完成与业务连接相同的认证、Origin/Host、撤销与心跳校验；每一帧重新校验会话与主体绑定，读取不得依赖公开或长期 bearer URL。
+- 外部链接与远程媒体不因展示而自动获取；不可用/过期内容显式说明，不得以空内容冒充。
 - 不允许客户端或 Access Node 绕过允许的业务命令构造任意底层 ACP 方法。
 
 ## 13. Rust 实现建议
