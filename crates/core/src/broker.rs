@@ -40,20 +40,20 @@ use crate::model::{
     MessageId, ModeId, ModeRef, OriginEpoch, OriginEventRef, OwnedSessionRef, PendingEvent,
     PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
     PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
-    ResourceOrigin, ResumeSessionRequest, Sequence, SessionId, SessionRecoveryRecord,
-    SessionReference, SessionState, SessionSummary, StoredPolicy, Timestamp, TurnId, TurnState,
-    UnavailableKind, Version, ViewJson, WorkspaceRef, decode_json_string as json_string,
-    encode_json_string as json_text, insert_string_member_front, object_members as json_members,
-    top_level_member,
+    ResourceOrigin, ResumeSessionRequest, Sequence, SessionActivity, SessionId,
+    SessionRecoveryRecord, SessionReference, SessionState, SessionSummary, StoredPolicy, Timestamp,
+    TurnId, TurnState, UnavailableKind, Version, ViewJson, WorkspaceRef,
+    decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
+    object_members as json_members, top_level_member,
 };
 use crate::ports::{
-    AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EffectiveResolution,
-    EventPublisher, EventSink, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator,
-    IdempotencyRecord, InteractionAuthority, InteractionResolved, ModeChange, NewTurn, OwnedCommit,
+    AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
+    EventSink, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord,
+    InteractionAuthority, InteractionResolved, ModeChange, NewTurn, OwnedCommit,
     PendingInteractionWrite, PreparedSessionCreate, ReadView, ReceiptOutcome, RemoteDeliveryStore,
-    ReplayBatch, ReplayLimit, SessionBackendFactory, SessionCreateAdmission, SessionEndpoint,
-    SessionStore, SessionUpdate, SettledSession, StateChange, SubmissionBinding, TrustStore,
-    TurnChange, TurnUpdate,
+    ReplayBatch, ReplayLimit, SessionActivityFacts, SessionBackendFactory, SessionCreateAdmission,
+    SessionEndpoint, SessionQuery, SessionStore, SessionUpdate, SettledSession, StateChange,
+    SubmissionBinding, TrustStore, TurnChange, TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -202,9 +202,15 @@ const TURN_ID_VIEW_EVENT_TYPES: &[&str] = &[
     "elicitation.requested",
 ];
 
-/// §10.3 要求 view 带顶层 `version`（会话版本，十进制字符串）的事件类型。
-const SESSION_VERSION_VIEW_EVENT_TYPES: &[&str] =
-    &["session.mode.changed", "session.config.changed"];
+/// §10.3 要求 view 带会话版本（十进制字符串）的事件类型。
+///
+/// `session.updated` 的版本嵌在 `session.version` 里（与 `sessionSummary` 同形），其余是顶层
+/// `version`；[`finalize_owned_views`](Broker::finalize_owned_views) 按事件类型选择注入位置。
+const SESSION_VERSION_VIEW_EVENT_TYPES: &[&str] = &[
+    "session.mode.changed",
+    "session.config.changed",
+    "session.updated",
+];
 
 /// 该事件类型的 view 是否要求 `turnId`（§10.3）。
 fn view_requires_turn_id(event_type: &str) -> bool {
@@ -608,11 +614,6 @@ impl Slot {
         queue.running_actor = None;
     }
 
-    /// 该会话是否还有等待派发的 turn（放弃提交用它决定会话状态，见 [`Broker::abandon_failed_turn`]）。
-    fn has_waiting_turn(&self) -> bool {
-        !lock(&self.queue).waiting.is_empty()
-    }
-
     /// §6 第 9 条：放弃 `turn` 之后不让出 `running` 槽位，而是登记为待观测的占位。
     fn hold_abandoned_turn(&self, turn: &TurnId) {
         let mut queue = lock(&self.queue);
@@ -620,6 +621,14 @@ impl Slot {
             turn: turn.clone(),
             rounds: 0,
         });
+    }
+
+    /// 当前持有占位的 turn（`None` = 没有占位）。
+    fn held_turn(&self) -> Option<TurnId> {
+        lock(&self.queue)
+            .held
+            .as_ref()
+            .map(|held| held.turn.clone())
     }
 
     /// 释放【占位】：只有占位者本人能释放（更早被放弃的 turn 的迟到终态不得提前放行会话）。
@@ -1084,8 +1093,10 @@ impl Broker {
             return self.reject("session.not_found", "会话不存在", false);
         };
 
-        // §6.4：active turn 时的两种策略。
-        if Self::is_active(snapshot.session.state()) || slot.running_turn().is_some() {
+        // §6.4：已有未结束任务时的两种策略（排队中的 turn 也算「有工作」）。
+        let facts = self.deps.store.session_activity(&session).await?;
+        let busy = facts.unfinished_turns > 0 || slot.running_turn().is_some();
+        if busy {
             let waiting = lock(&slot.queue).waiting.len() as u32;
             match self.config.queue_policy {
                 QueuePolicy::RejectBusy => {
@@ -1109,7 +1120,7 @@ impl Broker {
             .await?;
 
         let turn = self.deps.ids.turn_id();
-        let event = pending_event(
+        let mut events = vec![pending_event(
             "turn.queued",
             EventKind::State,
             view_turn(&turn, TurnState::Queued)?,
@@ -1117,18 +1128,24 @@ impl Broker {
             Some(command.request.clone()),
             StoredPolicy::Durable,
             Some(actor),
-        )?;
-        // 会话状态：只有在没有 active turn 时才能从 Idle/Failed 推到 Queued；否则保持既有状态
-        // （`Running`/`WaitingPermission` 不能被排队中的 turn 覆盖）。
-        let state = if Self::is_active(snapshot.session.state()) {
+        )?];
+        // 会话状态：新增一个排队 turn 后按归约规则重算（`pending` 交互仍优先）。状态未变化时不重复
+        // 广播，也不无谓递增版本。
+        let at = self.now();
+        let state = self.state_after(&facts, 0, 1, slot.hold_blocks_dispatch());
+        let state = if snapshot.session.state() == state {
             None
         } else {
+            events.push(
+                self.session_updated_event(&session, state, &at, None)
+                    .await?,
+            );
             Some(StateChange::Update(SessionUpdate {
-                state: Some(SessionState::Queued),
+                state: Some(state),
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
                 interaction: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,
@@ -1141,7 +1158,7 @@ impl Broker {
             started_at: None,
         })];
         match self
-            .accept_with_binding(actor, command, &session, state, turns, vec![event], binding)
+            .accept_with_binding(actor, command, &session, state, turns, events, binding)
             .await?
         {
             Accept::Done(receipt) => Ok(receipt),
@@ -1247,7 +1264,15 @@ impl Broker {
             return self.reject("session.not_found", "会话不存在", false);
         };
         // §6.8：模型/配置切换只在 turn 边界生效。v1 选择"显式返回 state.version_conflict"而不是排队。
-        if Self::is_active(snapshot.session.state()) || slot.running_turn().is_some() {
+        if self
+            .deps
+            .store
+            .session_activity(&session)
+            .await?
+            .unfinished_turns
+            > 0
+            || slot.running_turn().is_some()
+        {
             return self.version_conflict(snapshot.session.version().get(), command);
         }
         match self
@@ -1272,8 +1297,8 @@ impl Broker {
                     state: None,
                     mode: ModeChange::Set(mode_ref(mode)?),
                     title: None,
-                    closed_at: None,
                     interaction: None,
+                    confirmation: None,
                     agent_session_id: None,
                     workspace_cwd: None,
                     workspace_directory_id: None,
@@ -1323,7 +1348,15 @@ impl Broker {
         let Some(snapshot) = self.deps.store.load(&session).await? else {
             return self.reject("session.not_found", "会话不存在", false);
         };
-        if Self::is_active(snapshot.session.state()) || slot.running_turn().is_some() {
+        if self
+            .deps
+            .store
+            .session_activity(&session)
+            .await?
+            .unfinished_turns
+            > 0
+            || slot.running_turn().is_some()
+        {
             return self.version_conflict(snapshot.session.version().get(), command);
         }
         match self
@@ -1346,8 +1379,8 @@ impl Broker {
                     state: None,
                     mode: ModeChange::Unchanged,
                     title: None,
-                    closed_at: None,
                     interaction: None,
+                    confirmation: None,
                     agent_session_id: None,
                     workspace_cwd: None,
                     workspace_directory_id: None,
@@ -1586,8 +1619,15 @@ impl Broker {
             return Ok(effective);
         }
         if let Err(error) = self.endpoint_for(reference).await {
+            let slot = self.owned_slot(&session);
+            let _guard = slot.gate.guard().await;
+            let at = self.now();
             let _ = authority
-                .invalidate_pending(Some(&session), self.now())
+                .invalidate_pending(Some(&session), at.clone())
+                .await;
+            // 失效改变了归约输入：不能只清行而留下 `pending` 摘要。
+            let _ = self
+                .refresh_activity(&session, &at, slot.hold_blocks_dispatch())
                 .await;
             return Err(error);
         }
@@ -1680,8 +1720,13 @@ impl Broker {
         };
         // 上游存活先于任何写入：失效的等待方不得被「解析」后留下一条假终态。
         if let Err(error) = self.endpoint(slot, session).await {
+            let at = self.now();
             let _ = authority
-                .invalidate_pending(Some(session), self.now())
+                .invalidate_pending(Some(session), at.clone())
+                .await;
+            // 失效改变了归约输入：不能只清行而留下 `pending` 摘要。
+            let _ = self
+                .refresh_activity(session, &at, slot.hold_blocks_dispatch())
                 .await;
             return Err(error);
         }
@@ -1715,6 +1760,10 @@ impl Broker {
     }
 
     /// 解析的写入阶段（调用方已完成 [`Self::preflight_effective_locked`] 与命令受理）。
+    ///
+    /// 版本化入口与旧 peer 的按 id 入口走**同一条**事务：[`SessionStore::commit`] 里
+    /// `SessionUpdate.interaction` 用条件更新选出首个有效答案（含 `request_version`/失效标记），
+    /// 因此仲裁、会话摘要与 `session.updated` 永远同批落盘（`session-activity` D2）。
     #[allow(clippy::too_many_arguments)] // 事务写入所需的稳定标识与已预检结果；拆结构体只会增加临时分配。
     async fn commit_effective_locked(
         &self,
@@ -1726,38 +1775,23 @@ impl Broker {
         request_version: Option<Version>,
         resolution: InteractionResolution,
     ) -> Result<Resolution, PortError> {
-        let Some(authority) = self.interactions.clone() else {
-            return self
-                .resolve_locked(actor, request, slot, session, interaction, resolution)
-                .await;
-        };
-        let outcome = authority
-            .resolve_effective(EffectiveResolution {
-                interaction: interaction.clone(),
-                session: session.clone(),
-                actor: actor.clone(),
-                request_version,
-                resolution: resolution.clone(),
-                at: self.now(),
-            })
-            .await?;
-        if outcome == Resolution::AlreadyResolved {
-            return Ok(outcome);
-        }
-        // 解析命令进入作用域：后端随后的 `permission.resolved`/`elicitation.resolved` 按这条命令归因。
-        slot.set_command_scope(CommandScope {
-            request: request.clone(),
-            actor: actor.clone(),
-        });
-        let endpoint = self.endpoint(slot, session).await?;
-        endpoint
-            .resolve_interaction(interaction, resolution)
-            .await?;
-        self.flush_locked(slot, session).await?;
-        Ok(Resolution::Resolved)
+        self.resolve_locked(
+            actor,
+            request,
+            slot,
+            session,
+            interaction,
+            request_version,
+            resolution,
+        )
+        .await
     }
 
-    /// 把 `pending` 交互标记为失效（上游丢失或重启恢复）：`session = None` 表示全部会话。
+    /// 把有效未解决交互标记为失效（上游丢失或重启恢复）：`session = None` 表示全部会话。
+    ///
+    /// 失效会同时改变会话摘要（有效请求可能清零），因此随后在同一串行门内重算并（仅在状态变化时）
+    /// 提交一次 `session.updated`。`session = None` 的全局失效先取「可能处于待处理/运行中」的会话快照，
+    /// 失效后逐个重算——不依赖失效后的查询结果，否则刚清空请求的会话不会被返回。
     pub async fn invalidate_pending_interactions(
         &self,
         session: Option<&SessionId>,
@@ -1766,7 +1800,212 @@ impl Broker {
         let Some(authority) = self.interactions.as_ref() else {
             return Ok(0);
         };
-        authority.invalidate_pending(session, at).await
+        let candidates: Vec<SessionId> = match session {
+            Some(session) => vec![session.clone()],
+            None => self
+                .deps
+                .store
+                .list(SessionQuery {
+                    only: None,
+                    states: vec![SessionState::Running, SessionState::Pending],
+                    limit: None,
+                })
+                .await?
+                .into_iter()
+                .map(|summary| summary.session_id().clone())
+                .collect(),
+        };
+        let affected = authority.invalidate_pending(session, at.clone()).await?;
+        for candidate in candidates {
+            let held = self.owned_slot(&candidate).hold_blocks_dispatch();
+            self.refresh_activity(&candidate, &at, held).await?;
+        }
+        Ok(affected)
+    }
+
+    /// 端点的正式应答**确认**：把已仲裁的交互移出有效未解决集合。
+    ///
+    /// 适配器在收到「Agent 已处理该应答」的明确结果后调用本方法（`session-activity` D2）。确认只对
+    /// `resolved` 且未确认的行生效；重复确认、未知交互或仍为 `pending` 的行都是无操作（返回 `false`），
+    /// 因此适配器的重复通知不会产生第二次副作用，也不会伪造授权。
+    ///
+    /// 确认行、提交后的会话摘要与（状态变化时的）`session.updated` 在**同一事务**里落盘。
+    pub async fn confirm_interaction(
+        &self,
+        session: &SessionId,
+        interaction: &InteractionId,
+    ) -> Result<bool, PortError> {
+        let slot = self.owned_slot(session);
+        let _guard = slot.gate.guard().await;
+        self.confirm_locked(&slot, session, interaction).await
+    }
+
+    /// 已持有会话串行门时的确认实现（适配器成功返回后的同一命令路径使用）。
+    async fn confirm_locked(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+        interaction: &InteractionId,
+    ) -> Result<bool, PortError> {
+        let at = self.now();
+        let facts = self.deps.store.session_activity(session).await?;
+        if !facts
+            .unconfirmed_interactions
+            .iter()
+            .any(|candidate| candidate == interaction)
+        {
+            // 未知/仍 pending/已确认：无操作。不写行、不广播。
+            return Ok(false);
+        }
+        let mut events = Vec::new();
+        let state = self.state_after(&facts, -1, 0, slot.hold_blocks_dispatch());
+        let changed = self.current_state(session).await? != Some(state);
+        if changed {
+            events.push(
+                self.session_updated_event(session, state, &at, None)
+                    .await?,
+            );
+        }
+        // 摘要不变时仍要落确认，但不重复广播、不递增版本。
+        let state_change = Some(StateChange::Update(SessionUpdate {
+            state: changed.then_some(state),
+            mode: ModeChange::Unchanged,
+            title: None,
+            interaction: None,
+            confirmation: Some(interaction.clone()),
+            agent_session_id: None,
+            workspace_cwd: None,
+            workspace_directory_id: None,
+        }));
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at,
+            expected_version: None,
+            state: state_change,
+            turns: Vec::new(),
+            events,
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = self.commit_owned(commit).await?;
+        self.publish(&outcome.appended);
+        Ok(true)
+    }
+
+    /// 提交后的会话状态（从已读事实 + 本提交增量归约）。
+    fn state_after(
+        &self,
+        facts: &SessionActivityFacts,
+        pending_delta: i64,
+        turn_delta: i64,
+        held: bool,
+    ) -> SessionState {
+        let pending = apply_delta(facts.unresolved_interactions, pending_delta) > 0;
+        let unfinished = apply_delta(facts.unfinished_turns, turn_delta) > 0 || held;
+        SessionActivity::reduce(pending, unfinished)
+    }
+
+    async fn current_state(&self, session: &SessionId) -> Result<Option<SessionState>, PortError> {
+        Ok(self
+            .deps
+            .store
+            .load(session)
+            .await?
+            .map(|snapshot| snapshot.session.state()))
+    }
+
+    /// 重算并（仅在状态变化时）提交会话摘要 + `session.updated`。
+    ///
+    /// `held` 表示该会话仍有「已派发但停止未确认」的执行占位（[`HeldTurn`]）：此时即使库里没有未结束
+    /// turn，也不能声称空闲（`session-activity` D3）。
+    async fn refresh_activity(
+        &self,
+        session: &SessionId,
+        at: &Timestamp,
+        held: bool,
+    ) -> Result<(), PortError> {
+        let facts = self.deps.store.session_activity(session).await?;
+        let state = self.state_after(&facts, 0, 0, held);
+        if self.current_state(session).await? == Some(state) {
+            return Ok(());
+        }
+        let event = self.session_updated_event(session, state, at, None).await?;
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: Some(StateChange::Update(SessionUpdate {
+                state: Some(state),
+                mode: ModeChange::Unchanged,
+                title: None,
+                interaction: None,
+                confirmation: None,
+                agent_session_id: None,
+                workspace_cwd: None,
+                workspace_directory_id: None,
+            })),
+            turns: Vec::new(),
+            events: vec![event],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = self.commit_owned(commit).await?;
+        self.publish(&outcome.appended);
+        Ok(())
+    }
+
+    /// `session.updated` 的 view：提交后的**完整**会话摘要（`event-views` 的 `session` 成员）。
+    ///
+    /// `version` 取本次提交将写入的版本（当前 + 1，因为状态变化总带一次 `SessionUpdate`），并由
+    /// [`Self::finalize_owned_views`] 的嵌套注入与 `CommitOutcome.version` 做漂移检查。
+    async fn session_updated_event(
+        &self,
+        session: &SessionId,
+        state: SessionState,
+        at: &Timestamp,
+        title: Option<Option<&str>>,
+    ) -> Result<PendingEvent, PortError> {
+        let mut summaries = self
+            .deps
+            .store
+            .list(SessionQuery {
+                only: Some(vec![session.clone()]),
+                states: Vec::new(),
+                limit: Some(1),
+            })
+            .await?;
+        let summary = summaries
+            .pop()
+            .ok_or_else(|| PortError::NotFound(EntityRef::Session(session.clone())))?;
+        // 同一提交可能同时写标题：`session.updated` 投影的是提交后的完整摘要，不能用提交前的行。
+        let summary = match title {
+            Some(title) => summary
+                .with_title(title.map(str::to_owned))
+                .map_err(PortError::from)?,
+            None => summary,
+        };
+        let version = summary
+            .version()
+            .get()
+            .checked_add(1)
+            .map(Version::new)
+            .ok_or(PortError::Corrupt("会话版本已溢出"))?;
+        let view = view_session_summary(&summary, state, &version, at)?;
+        pending_event(
+            "session.updated",
+            EventKind::State,
+            view,
+            None,
+            None,
+            StoredPolicy::Durable,
+            None,
+        )
     }
 
     /// §4 `PermissionCommands::resolve_interaction`（不带命令幂等键的入口）。
@@ -1799,12 +2038,24 @@ impl Broker {
         if resolution.validate().is_err() {
             return Err(PortError::InvalidRequest("交互解析不满足 schema"));
         }
-        self.resolve_locked(actor, &request, &slot, &session, interaction, resolution)
-            .await
+        self.resolve_locked(
+            actor,
+            &request,
+            &slot,
+            &session,
+            interaction,
+            None,
+            resolution,
+        )
+        .await
     }
 
     /// 交互解析的公共实现（调用方已持有串行门）：**先**用条件更新落盘仲裁（§6.7 first-writer-wins），
     /// **再**派发给后端，最后把后端发出的 `*.resolved` 事件落盘。
+    ///
+    /// 仲裁只把行推进到 `resolved`：`confirmed_at` 仍为空，状态归约因此**不会**提前解除待处理
+    /// （`session-activity` D2）。确认由 [`Broker::confirm_interaction`] 单独提交。
+    #[allow(clippy::too_many_arguments)] // 版本化与按 id 两条入口共用的完整事实集
     async fn resolve_locked(
         &self,
         actor: &Actor,
@@ -1812,18 +2063,20 @@ impl Broker {
         slot: &Slot,
         session: &SessionId,
         interaction: &InteractionId,
+        request_version: Option<Version>,
         resolution: InteractionResolution,
     ) -> Result<Resolution, PortError> {
         let state = StateChange::Update(SessionUpdate {
             state: None,
             mode: ModeChange::Unchanged,
             title: None,
-            closed_at: None,
             interaction: Some(InteractionResolved {
                 interaction: interaction.clone(),
                 resolution: resolution.clone(),
                 resolved_by: actor.clone(),
+                request_version,
             }),
+            confirmation: None,
             agent_session_id: None,
             workspace_cwd: None,
             workspace_directory_id: None,
@@ -1858,6 +2111,9 @@ impl Broker {
         endpoint
             .resolve_interaction(interaction, resolution)
             .await?;
+        // 适配器成功返回 = 应答已经写入 Agent 的 stdin（WP3 把「成功」收紧为写确认）。
+        // 此刻才把仲裁行移出有效集合；失败时保持 `resolved` 未确认，继续计入待处理。
+        self.confirm_locked(slot, session, interaction).await?;
         self.flush_locked(slot, session).await?;
         Ok(Resolution::Resolved)
     }
@@ -2655,12 +2911,105 @@ impl Broker {
     }
 
     async fn pump_locked(&self, slot: &Slot, session: &SessionId) -> Result<(), PortError> {
+        self.reconcile_persisted_queue(slot, session).await?;
         loop {
             self.flush_locked(slot, session).await?;
             if !self.dispatch_one(slot, session).await? {
                 return Ok(());
             }
         }
+    }
+
+    /// 把存储里遗留的 `queued` turn 与内存队列对齐（`session-activity` D3/恢复）。
+    ///
+    /// `Session.prompt` 正文**不**持久化（`owned_turn` 没有该列，正文只由 Agent 回显的
+    /// `user.message.delta` 留下），因此重启后无法安全地重放排队请求。这里在内存队列为空且没有在跑的
+    /// turn 时把遗留项显式终结为 `failed`（不重派、不静默丢弃），随后 FIFO 从后续项继续；它们的
+    /// `accepted` 命令由 [`Broker::recover_unsettled`] 以 `uncertain` 结算（不自动重试副作用）。
+    async fn reconcile_persisted_queue(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+    ) -> Result<(), PortError> {
+        {
+            let queue = lock(&slot.queue);
+            if queue.running.is_some() || !queue.waiting.is_empty() {
+                return Ok(());
+            }
+        }
+        let queued = self.deps.store.queued_turns(session).await?;
+        if queued.is_empty() {
+            return Ok(());
+        }
+        let at = self.now();
+        let error = PublicError::coded(
+            "internal.unavailable",
+            "重启后无法恢复排队任务的请求内容，该任务未派发",
+            false,
+        )
+        .map_err(PortError::from)?;
+        let mut events = Vec::with_capacity(queued.len());
+        let mut turns = Vec::with_capacity(queued.len());
+        for turn in &queued {
+            events.push(pending_event(
+                "turn.failed",
+                EventKind::State,
+                view_turn_error(turn.id(), &error)?,
+                Some(turn.id().clone()),
+                turn.causation().cloned(),
+                StoredPolicy::Durable,
+                None,
+            )?);
+            turns.push(TurnChange::Update(TurnUpdate {
+                turn: turn.id().clone(),
+                state: TurnState::Failed,
+                ended_at: Some(at.clone()),
+            }));
+        }
+        let facts = self.deps.store.session_activity(session).await?;
+        let expired: i64 = queued
+            .iter()
+            .map(|turn| i64::from(facts.unresolved_for_turn(turn.id())))
+            .sum();
+        let turn_delta = -i64::try_from(queued.len()).unwrap_or(i64::MAX);
+        let next_state = self.state_after(&facts, -expired, turn_delta, false);
+        let changed = self.current_state(session).await? != Some(next_state);
+        if changed {
+            events.push(
+                self.session_updated_event(session, next_state, &at, None)
+                    .await?,
+            );
+        }
+        let state = if changed {
+            Some(StateChange::Update(SessionUpdate {
+                state: Some(next_state),
+                mode: ModeChange::Unchanged,
+                title: None,
+                interaction: None,
+                confirmation: None,
+                agent_session_id: None,
+                workspace_cwd: None,
+                workspace_directory_id: None,
+            }))
+        } else {
+            None
+        };
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at,
+            expected_version: None,
+            state,
+            turns,
+            events,
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = self.commit_owned(commit).await?;
+        self.publish(&outcome.appended);
+        Ok(())
     }
 
     /// 落盘一批后端事件。按**终态事件**切批，保证 §6.10 的"不跨 turn 边界、不延迟终态事件"。
@@ -2721,7 +3070,6 @@ impl Broker {
         let scoped_command = slot.command_scope();
         let mut events: Vec<PendingEvent> = Vec::new();
         let mut turn_change: Option<TurnChange> = None;
-        let mut session_state: Option<SessionState> = None;
         let mut terminal: Option<(TurnState, CommandStatus)> = None;
         let mut terminal_request: Option<RequestId> = None;
         let mut terminal_turn: Option<TurnId> = None;
@@ -2743,6 +3091,8 @@ impl Broker {
         let mut info_update_seen = false;
         // 失败批次是否携带了**在跑的** turn 的事件：只有它才需要在写失败时放弃该 turn（§6 第 9 条）。
         let mut running_in_chunk = false;
+        // 本批是否因观测到被放弃 turn 的终态而释放了占位；释放后要重算摘要。
+        let mut released_hold = false;
         for event in chunk {
             let turn = event.turn.clone().or_else(|| {
                 if running.is_some() {
@@ -2763,6 +3113,7 @@ impl Broker {
                     // 释放（事件本身仍被丢弃）。
                     if is_turn_terminal(&event.event_type) {
                         slot.release_held_turn(turn_id);
+                        released_hold = true;
                     }
                     continue;
                 }
@@ -2813,7 +3164,6 @@ impl Broker {
                         state: turn_state,
                         ended_at: Some(at.clone()),
                     }));
-                    session_state = Some(turn_session_state(turn_state));
                     terminal = Some((turn_state, command_status));
                     terminal_turn = Some(turn_id.clone());
                     terminal_request = event.causation.clone().or_else(|| running_request.clone());
@@ -2924,6 +3274,10 @@ impl Broker {
                 }
             }
         }
+        // 释放占位的迟到终态被丢弃后，若没有后继排队工作，摘要必须从 running 收敛。
+        if released_hold && lock(&slot.queue).waiting.is_empty() {
+            self.refresh_activity(session, &at, false).await?;
+        }
         if events.is_empty() {
             return Ok(());
         }
@@ -2981,14 +3335,48 @@ impl Broker {
                 )?);
             }
         }
+        // 会话状态：turn 终态会失效该轮的遗留请求，新增交互请求会把摘要推到 `pending`。两者都在本事务
+        // 里生效，因此归约必须把「本批增量」算进去而不是逐事件写死转换（`session-activity` D1/D3）。
+        let mut session_state: Option<SessionState> = None;
+        let mut activity_event: Option<PendingEvent> = None;
+        if had_terminal || !interactions.is_empty() {
+            let facts = self.deps.store.session_activity(session).await?;
+            let expired = terminal_turn
+                .as_ref()
+                .map(|turn| i64::from(facts.unresolved_for_turn(turn)))
+                .unwrap_or(0);
+            let pending_delta = i64::try_from(interactions.len()).unwrap_or(i64::MAX) - expired;
+            let turn_delta = if had_terminal { -1 } else { 0 };
+            let next = self.state_after(
+                &facts,
+                pending_delta,
+                turn_delta,
+                slot.hold_blocks_dispatch(),
+            );
+            if self.current_state(session).await? != Some(next) {
+                session_state = Some(next);
+                activity_event = Some(
+                    self.session_updated_event(
+                        session,
+                        next,
+                        &at,
+                        title_update.as_ref().map(|title| title.as_deref()),
+                    )
+                    .await?,
+                );
+            }
+        }
+        if let Some(event) = activity_event {
+            events.push(event);
+        }
         // R9：标题窄写入、通知带来的权威时间推进与 turn 终态的状态修改合批（`None` = 本批不改状态）。
         let state = if session_state.is_some() || title_update.is_some() || info_update_seen {
             Some(StateChange::Update(SessionUpdate {
                 state: session_state,
                 mode: ModeChange::Unchanged,
                 title: title_update,
-                closed_at: None,
                 interaction: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,
@@ -3094,8 +3482,13 @@ impl Broker {
     async fn dispatch_one(&self, slot: &Slot, session: &SessionId) -> Result<bool, PortError> {
         // §6 第 9 条：被放弃 turn 的【占位】未释放前不得提升下一个排队 turn，
         // 否则它的迟到事件会被记到下一个 turn 上（见 [`HeldTurn`]）。兜底轮次也在这里推进。
+        let held_before = slot.held_turn();
         if slot.hold_blocks_dispatch() {
             return Ok(false);
+        }
+        // 兜底释放占位后必须重算摘要：没有后继 turn 时不能继续声称 running。
+        if held_before.is_some() && lock(&slot.queue).waiting.is_empty() {
+            self.refresh_activity(session, &self.now(), false).await?;
         }
         let next = {
             let mut queue = lock(&slot.queue);
@@ -3121,34 +3514,48 @@ impl Broker {
             actor: next.actor.clone(),
         });
         let at = self.now();
+        // queued → running 不改变「有未结束任务」这一事实，摘要通常不变；仍按统一归约重算，以便
+        // 恢复后第一次派发纠正历史摘要（`session-activity` D1/D3）。
+        let facts = self.deps.store.session_activity(session).await?;
+        let next_state = self.state_after(&facts, 0, 0, false);
+        let mut events = vec![pending_event(
+            "turn.started",
+            EventKind::State,
+            view_turn(&next.turn, TurnState::Running)?,
+            Some(next.turn.clone()),
+            Some(next.request.clone()),
+            StoredPolicy::Durable,
+            Some(&next.actor),
+        )?];
+        let state = if self.current_state(session).await? == Some(next_state) {
+            None
+        } else {
+            events.push(
+                self.session_updated_event(session, next_state, &at, None)
+                    .await?,
+            );
+            Some(StateChange::Update(SessionUpdate {
+                state: Some(next_state),
+                mode: ModeChange::Unchanged,
+                title: None,
+                interaction: None,
+                confirmation: None,
+                agent_session_id: None,
+                workspace_cwd: None,
+                workspace_directory_id: None,
+            }))
+        };
         let commit = OwnedCommit {
             session: Some(session.clone()),
             at: at.clone(),
             expected_version: None,
-            state: Some(StateChange::Update(SessionUpdate {
-                state: Some(SessionState::Running),
-                mode: ModeChange::Unchanged,
-                title: None,
-                closed_at: None,
-                interaction: None,
-                agent_session_id: None,
-                workspace_cwd: None,
-                workspace_directory_id: None,
-            })),
+            state,
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: next.turn.clone(),
                 state: TurnState::Running,
                 ended_at: None,
             })],
-            events: vec![pending_event(
-                "turn.started",
-                EventKind::State,
-                view_turn(&next.turn, TurnState::Running)?,
-                Some(next.turn.clone()),
-                Some(next.request.clone()),
-                StoredPolicy::Durable,
-                Some(&next.actor),
-            )?],
+            events,
             interactions: Vec::new(),
             compacted: Vec::new(),
             idempotency: None,
@@ -3186,45 +3593,63 @@ impl Broker {
     ) -> Result<(), PortError> {
         let at = self.now();
         let view = view_turn_error(&turn.turn, error)?;
+        // 本轮结束：该 turn 的遗留交互在同一事务里失效（存储层按 `turn_id` 处理），摘要按剩余工作重算。
+        // 失败不封死会话，后续排队 turn 仍会被 `pump` 提升（`session-activity` D3）。
+        let facts = self.deps.store.session_activity(session).await?;
+        let expired = i64::from(facts.unresolved_for_turn(&turn.turn));
+        let next_state = self.state_after(&facts, -expired, -1, slot.hold_blocks_dispatch());
+        let mut events = vec![
+            pending_event(
+                "turn.failed",
+                EventKind::State,
+                view,
+                Some(turn.turn.clone()),
+                Some(turn.request.clone()),
+                StoredPolicy::Durable,
+                Some(&turn.actor),
+            )?,
+            pending_event(
+                "command.failed",
+                EventKind::Structured,
+                view_command_failed(&turn.request, None)?,
+                Some(turn.turn.clone()),
+                Some(turn.request.clone()),
+                StoredPolicy::Durable,
+                Some(&turn.actor),
+            )?,
+        ];
+        let changed = self.current_state(session).await? != Some(next_state);
+        let state = if changed {
+            Some(StateChange::Update(SessionUpdate {
+                state: Some(next_state),
+                mode: ModeChange::Unchanged,
+                title: None,
+                interaction: None,
+                confirmation: None,
+                agent_session_id: None,
+                workspace_cwd: None,
+                workspace_directory_id: None,
+            }))
+        } else {
+            None
+        };
+        if changed {
+            events.push(
+                self.session_updated_event(session, next_state, &at, None)
+                    .await?,
+            );
+        }
         let commit = OwnedCommit {
             session: Some(session.clone()),
             at: at.clone(),
             expected_version: None,
-            state: Some(StateChange::Update(SessionUpdate {
-                state: Some(SessionState::Failed),
-                mode: ModeChange::Unchanged,
-                title: None,
-                closed_at: None,
-                interaction: None,
-                agent_session_id: None,
-                workspace_cwd: None,
-                workspace_directory_id: None,
-            })),
+            state,
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.turn.clone(),
                 state: TurnState::Failed,
                 ended_at: Some(at.clone()),
             })],
-            events: vec![
-                pending_event(
-                    "turn.failed",
-                    EventKind::State,
-                    view,
-                    Some(turn.turn.clone()),
-                    Some(turn.request.clone()),
-                    StoredPolicy::Durable,
-                    Some(&turn.actor),
-                )?,
-                pending_event(
-                    "command.failed",
-                    EventKind::Structured,
-                    view_command_failed(&turn.request, None)?,
-                    Some(turn.turn.clone()),
-                    Some(turn.request.clone()),
-                    StoredPolicy::Durable,
-                    Some(&turn.actor),
-                )?,
-            ],
+            events,
             interactions: Vec::new(),
             compacted: Vec::new(),
             idempotency: None,
@@ -3308,28 +3733,37 @@ impl Broker {
             StoredPolicy::Durable,
             actor,
         )?);
+        // 摘要：放弃的 turn 虽已标记失败，但它的执行占位仍被持有（停止未确认），因此**不**能声称空闲；
+        // 仍排队的 turn 也照旧计入未结束任务。二者都由统一归约表达（`session-activity` D3）。
+        let facts = self.deps.store.session_activity(session).await?;
+        let expired = i64::from(facts.unresolved_for_turn(turn));
+        let next_state = self.state_after(&facts, -expired, -1, true);
+        let changed = self.current_state(session).await? != Some(next_state);
+        if changed {
+            events.push(
+                self.session_updated_event(session, next_state, &at, None)
+                    .await?,
+            );
+        }
+        let state = if changed {
+            Some(StateChange::Update(SessionUpdate {
+                state: Some(next_state),
+                mode: ModeChange::Unchanged,
+                title: None,
+                interaction: None,
+                confirmation: None,
+                agent_session_id: None,
+                workspace_cwd: None,
+                workspace_directory_id: None,
+            }))
+        } else {
+            None
+        };
         let commit = OwnedCommit {
             session: Some(session.clone()),
             at: at.clone(),
             expected_version: None,
-            state: Some(StateChange::Update(SessionUpdate {
-                // 会话状态按「还有没有排队 turn」投影：放弃自己的 turn 不等于该会话没有工作。
-                // 仍排队的 turn 必须继续被驱动（组合根的合并窗口只枚举 `queued`/`running`/
-                // `waiting_*` 的会话），因此这种情况下不能写成 `Failed`——否则该会话再也不会被驱动，
-                // 兜底轮次永远推不动（§6 第 9 条）。
-                state: Some(if slot.has_waiting_turn() {
-                    SessionState::Queued
-                } else {
-                    SessionState::Failed
-                }),
-                mode: ModeChange::Unchanged,
-                title: None,
-                closed_at: None,
-                interaction: None,
-                agent_session_id: None,
-                workspace_cwd: None,
-                workspace_directory_id: None,
-            })),
+            state,
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.clone(),
                 state: TurnState::Failed,
@@ -3542,8 +3976,14 @@ impl Broker {
         let _ = self.invalidate_pending_interactions(None, self.now()).await;
         let commands = self.deps.store.unsettled_commands(limit).await?;
         let mut recovered = 0usize;
+        let mut sessions: Vec<SessionId> = Vec::new();
         for record in commands {
             let session = record.session().cloned();
+            if let Some(session) = &session
+                && !sessions.contains(session)
+            {
+                sessions.push(session.clone());
+            }
             match session {
                 Some(session) => {
                     let slot = self.owned_slot(&session);
@@ -3563,6 +4003,25 @@ impl Broker {
                 None => self.recover_command(None, &record).await?,
             }
             recovered += 1;
+        }
+        // 仍有未结束 turn 或未解决交互的会话（含迁移后摘要过期、以及恢复没覆盖到的排队项）：
+        // 逐个重算摘要并驱动持久队列。同一个会话只处理一次。
+        for session in self
+            .deps
+            .store
+            .sessions_with_pending_activity(limit)
+            .await?
+        {
+            if !sessions.contains(&session) {
+                sessions.push(session);
+            }
+        }
+        for session in sessions {
+            let slot = self.owned_slot(&session);
+            let _guard = slot.gate.guard().await;
+            self.pump_locked(&slot, &session).await?;
+            let held = slot.hold_blocks_dispatch();
+            self.refresh_activity(&session, &self.now(), held).await?;
         }
         Ok(recovered)
     }
@@ -3585,6 +4044,7 @@ impl Broker {
         let mut events: Vec<PendingEvent> = Vec::new();
         let mut turns: Vec<TurnChange> = Vec::new();
         let mut state = None;
+        let mut activity_event: Option<PendingEvent> = None;
         if let Some(session_id) = session {
             let view = self.deps.store.read_view().await?;
             let page = view
@@ -3624,16 +4084,27 @@ impl Broker {
                     state: TurnState::Failed,
                     ended_at: Some(at.clone()),
                 }));
-                state = Some(StateChange::Update(SessionUpdate {
-                    state: Some(SessionState::Failed),
-                    mode: ModeChange::Unchanged,
-                    title: None,
-                    closed_at: None,
-                    interaction: None,
-                    agent_session_id: None,
-                    workspace_cwd: None,
-                    workspace_directory_id: None,
-                }));
+                // 本轮已确认结束（恢复把它终结为失败）：遗留请求在同一事务里失效，摘要按剩余工作重算。
+                // `uncertain` 命令不重派；排队中的其它 turn 由 `pump` 继续（`session-activity` D3/恢复）。
+                let facts = self.deps.store.session_activity(session_id).await?;
+                let expired = i64::from(facts.unresolved_for_turn(turn.id()));
+                let next_state = self.state_after(&facts, -expired, -1, false);
+                if self.current_state(session_id).await? != Some(next_state) {
+                    activity_event = Some(
+                        self.session_updated_event(session_id, next_state, &at, None)
+                            .await?,
+                    );
+                    state = Some(StateChange::Update(SessionUpdate {
+                        state: Some(next_state),
+                        mode: ModeChange::Unchanged,
+                        title: None,
+                        interaction: None,
+                        confirmation: None,
+                        agent_session_id: None,
+                        workspace_cwd: None,
+                        workspace_directory_id: None,
+                    }));
+                }
                 // §6 第 16 条：已有已提交 delta 却没有 completed 的 turn，必须补写。
                 events.extend(
                     self.backfill_completed(&page, turn.id(), turn.causation())
@@ -3659,6 +4130,9 @@ impl Broker {
                 StoredPolicy::Durable,
                 Some(record.actor()),
             )?);
+        }
+        if let Some(event) = activity_event {
+            events.push(event);
         }
         let terminal = CommandTerminalRecord::try_new(
             CommandStatus::Uncertain,
@@ -4152,16 +4626,6 @@ impl Broker {
         Ok(Ok(InteractionResolution::permission(decision)))
     }
 
-    fn is_active(state: SessionState) -> bool {
-        matches!(
-            state,
-            SessionState::Queued
-                | SessionState::Running
-                | SessionState::WaitingInput
-                | SessionState::WaitingPermission
-        )
-    }
-
     fn publish(&self, events: &[CommittedEvent]) {
         for event in events {
             self.deps
@@ -4270,14 +4734,19 @@ impl Broker {
         let predicted = self.predict_session_version(&commit).await?;
         let text = predicted.to_string();
         for event in &mut commit.events {
-            if view_requires_session_version(event.event_type.as_str()) {
-                event.payload.view = ensure_view_string_field(
+            if !view_requires_session_version(event.event_type.as_str()) {
+                continue;
+            }
+            event.payload.view = if event.event_type.as_str() == "session.updated" {
+                ensure_nested_session_version(&event.payload.view, &text)?
+            } else {
+                ensure_view_string_field(
                     &event.payload.view,
                     "version",
                     &text,
                     "view 的 version 与会话当前版本不一致（§10.3）",
-                )?;
-            }
+                )?
+            };
         }
         Ok((commit, Some(predicted)))
     }
@@ -4489,6 +4958,7 @@ fn permission_kind(kind: &str) -> Option<PermissionDecisionKind> {
 const DAEMON_EVENT_TYPES: &[&str] = &[
     "device.revoked",
     "session.origin.online_changed",
+    "session.updated",
     "storage.integrity_failed",
 ];
 
@@ -4717,13 +5187,6 @@ fn turn_terminal(event_type: &EventType) -> Option<(TurnState, CommandStatus)> {
     }
 }
 
-fn turn_session_state(turn: TurnState) -> SessionState {
-    match turn {
-        TurnState::Failed => SessionState::Failed,
-        _ => SessionState::Idle,
-    }
-}
-
 fn mode_ref(mode: &ModeId) -> Result<ModeRef, PortError> {
     // displayName 由 ACP 的 ModeState 给出，core 侧没有模式枚举端口（§5.1 无 list_modes）；
     // 这里以 modeId 兜底，展示名由前端用 `session.mode.list` 结果覆盖（§11.5 的 ModeState）。
@@ -4732,6 +5195,69 @@ fn mode_ref(mode: &ModeId) -> Result<ModeRef, PortError> {
 
 fn view(text: String) -> Result<ViewJson, PortError> {
     ViewJson::new(&text).map_err(PortError::from)
+}
+
+/// 提交增量作用于计数：负数按 0 收敛（读到的计数可能已被并发的失效/终态提交压低）。
+fn apply_delta(value: u32, delta: i64) -> u32 {
+    if delta >= 0 {
+        value.saturating_add(u32::try_from(delta).unwrap_or(u32::MAX))
+    } else {
+        value.saturating_sub(u32::try_from(delta.unsigned_abs()).unwrap_or(u32::MAX))
+    }
+}
+
+/// `session.updated` 的 `session` 成员：提交后的完整会话摘要（`common.schema.json#/$defs/sessionSummary`）。
+///
+/// 只由 core 组装：`state`/`version`/`updatedAt` 是本提交将写入的权威值，其余投影字段原样取自会话行
+/// （`title`/`agent`/`origin`/`currentMode`/`createdAt`/`workspace`），不在这里重新解释。
+fn view_session_summary(
+    summary: &SessionSummary,
+    state: SessionState,
+    version: &Version,
+    at: &Timestamp,
+) -> Result<ViewJson, PortError> {
+    let title = summary
+        .title()
+        .map(json_text)
+        .unwrap_or_else(|| "null".to_owned());
+    let agent = summary.agent();
+    let current_mode = match summary.current_mode() {
+        Some(mode) => format!(
+            r#"{{"modeId":"{}","displayName":{}}}"#,
+            mode.mode_id().as_str(),
+            json_text(mode.display_name())
+        ),
+        None => "null".to_owned(),
+    };
+    let origin = match summary.origin() {
+        ResourceOrigin::Local => r#"{"kind":"local"}"#.to_owned(),
+        ResourceOrigin::Remote {
+            owner_node_id,
+            origin_epoch,
+            online,
+        } => format!(
+            r#"{{"kind":"remote","ownerNodeId":"{}","originEpoch":"{}","online":{online}}}"#,
+            owner_node_id.as_str(),
+            origin_epoch.as_str()
+        ),
+    };
+    let workspace = match summary.workspace() {
+        Some(reference) => format!(
+            r#"{{"directoryId":"{}"}}"#,
+            reference.directory_id().as_str()
+        ),
+        None => "null".to_owned(),
+    };
+    view(format!(
+        r#"{{"session":{{"sessionId":"{}","title":{title},"agent":{{"agentId":"{}","name":{}}},"state":"{}","origin":{origin},"currentMode":{current_mode},"version":"{}","createdAt":"{}","updatedAt":"{}","workspace":{workspace}}}}}"#,
+        summary.session_id().as_str(),
+        agent.agent_id().as_str(),
+        json_text(agent.name()),
+        state.as_str(),
+        version.get(),
+        summary.created_at().as_str(),
+        at.as_str(),
+    ))
 }
 
 fn view_turn(turn: &TurnId, state: TurnState) -> Result<ViewJson, PortError> {
@@ -5006,6 +5532,29 @@ fn ensure_view_string_field(
     }
 }
 
+/// `session.updated` 的版本在 `session.version`（与 `sessionSummary` 同形），不在顶层。
+///
+/// 与 [`ensure_view_string_field`] 的分工：这个注入只**校验**嵌套取值，不合成缺失字段——该 view 由
+/// core 自己组装，缺 `session.version` 属于内部组装错误（失败关闭），而不是适配器输入。
+fn ensure_nested_session_version(view: &ViewJson, value: &str) -> Result<ViewJson, PortError> {
+    let conflict = "session.updated 的 session.version 与 core 的权威版本不一致（§10.3）";
+    let members = json_members(view.as_str()).map_err(PortError::from)?;
+    let session = members
+        .iter()
+        .find(|(name, _)| name == "session")
+        .map(|(_, raw)| *raw)
+        .ok_or(PortError::InvalidRequest(conflict))?;
+    let session_members = json_members(session).map_err(PortError::from)?;
+    let current = session_members
+        .iter()
+        .find(|(name, _)| name == "version")
+        .and_then(|(_, raw)| json_string(raw));
+    match current {
+        Some(existing) if existing == value => Ok(view.clone()),
+        _ => Err(PortError::InvalidRequest(conflict)),
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // 事件组装的完整形状（含 §10.1 的 origin 判定）
 fn pending_event(
     event_type: &str,
@@ -5248,7 +5797,7 @@ pub(crate) mod test_support {
         pub(crate) resolved_interactions: Mutex<Vec<String>>,
         /// 已失效的交互（`invalidate_pending` 的调用记录与目标集合）。
         pub(crate) invalidated_interactions: Mutex<Vec<(Option<String>, usize)>>,
-        /// `InteractionAuthority::resolve_effective` 的脚本化错误（先进先出；空 = 正常仲裁）。
+        /// 适配器解析写入的脚本化错误（先进先出；空 = 写成功）。
         pub(crate) resolve_errors: Mutex<VecDeque<PortError>>,
         /// `SessionBackendFactory::open` 的脚本化错误（先进先出；空 = 成功）。
         pub(crate) open_errors: Mutex<VecDeque<PortError>>,
@@ -5322,6 +5871,14 @@ pub(crate) mod test_support {
         /// 创建该交互的 origin 事件 id（`node_link_slice` 的 `pending_interactions` 需要它；
         /// 真实存储用 `owned_interaction.request_event` 回查）。
         pub(crate) origin_event: EventId,
+        /// 所属 turn（`owned_interaction.turn_id` 的替身）：turn 终态时按它失效遗留请求。
+        pub(crate) turn: Option<TurnId>,
+        /// 请求版本（版本化应答的乐观并发依据）。
+        pub(crate) request_version: Option<Version>,
+        /// 是否已确认（`owned_interaction.confirmed_at IS NOT NULL` 的替身）。
+        pub(crate) confirmed: bool,
+        /// 是否已失效（`invalidated_at` 的替身）：失效行不参与有效集合与三态归约。
+        pub(crate) invalidated: bool,
     }
 
     impl WorldState {
@@ -5626,6 +6183,10 @@ pub(crate) mod test_support {
                     pending,
                     resolution: None,
                     origin_event,
+                    turn: None,
+                    request_version: Some(Version::new(1)),
+                    confirmed: false,
+                    invalidated: false,
                 },
             );
         }
@@ -5888,7 +6449,6 @@ pub(crate) mod test_support {
                         Version::from(1),
                         at.clone(),
                         at.clone(),
-                        None,
                     )?;
                     state.epochs.insert(session_id.as_str().to_owned(), epoch);
                     state
@@ -5932,7 +6492,6 @@ pub(crate) mod test_support {
                         Version::from(1),
                         at.clone(),
                         at.clone(),
-                        None,
                     )?;
                     state.epochs.insert(session_id.as_str().to_owned(), epoch);
                     state
@@ -5970,7 +6529,7 @@ pub(crate) mod test_support {
                             return Err(PortError::Conflict(ConflictKind::VersionMismatch));
                         }
                     }
-                    // §6.7：first-writer-wins 的条件更新。
+                    // §6.7：first-writer-wins 的条件更新（含失效标记与请求版本）。
                     if let Some(resolved) = &update.interaction {
                         match state.interactions.get_mut(resolved.interaction.as_str()) {
                             None => {
@@ -5978,21 +6537,35 @@ pub(crate) mod test_support {
                                     resolved.interaction.clone(),
                                 )));
                             }
+                            Some(row) if row.invalidated => {
+                                return Err(PortError::Conflict(ConflictKind::Expired));
+                            }
                             Some(row) if row.resolution.is_some() => {
                                 return Err(PortError::Conflict(ConflictKind::AlreadyResolved));
                             }
-                            Some(row) => row.resolution = Some(resolved.clone()),
+                            Some(row) => {
+                                if let Some(expected) = resolved.request_version
+                                    && row.request_version.as_ref() != Some(&expected)
+                                {
+                                    return Err(PortError::Conflict(ConflictKind::VersionMismatch));
+                                }
+                                row.resolution = Some(resolved.clone());
+                            }
                         }
+                    }
+                    // 确认：只对已仲裁、未确认、未失效的行生效；其余是无操作。
+                    if let Some(confirmation) = &update.confirmation
+                        && let Some(row) = state.interactions.get_mut(confirmation.as_str())
+                        && row.resolution.is_some()
+                        && !row.invalidated
+                    {
+                        row.confirmed = true;
                     }
                     let next_state = update.state.unwrap_or_else(|| current.state());
                     let mode = match &update.mode {
                         ModeChange::Unchanged => current.current_mode().cloned(),
                         ModeChange::Set(mode) => Some(mode.clone()),
                     };
-                    let closed_at = update
-                        .closed_at
-                        .clone()
-                        .or_else(|| current.closed_at().cloned());
                     // R9（`design.md` D7）：两层可选 —— `None` = 不改该列、`Some(None)` = 显式置空、
                     // `Some(Some(text))` = 写入。fake 与 `storage-sqlite` 的列语义逐条一致。
                     let title = match &update.title {
@@ -6011,7 +6584,6 @@ pub(crate) mod test_support {
                         Version::from(current.version().get() + 1),
                         current.created_at().clone(),
                         at.clone(),
-                        closed_at,
                     )?;
                     state
                         .sessions
@@ -6040,42 +6612,56 @@ pub(crate) mod test_support {
                 None => {}
             }
             if let Some(session_id) = commit.session.clone() {
-                let turns = state
-                    .turns
-                    .entry(session_id.as_str().to_owned())
-                    .or_default();
-                for change in &commit.turns {
-                    match change {
-                        TurnChange::Create(new) => {
-                            let queue_index = turns.len() as u32;
-                            let turn = Turn::try_new(
-                                new.turn.clone(),
-                                session_id.clone(),
-                                new.state,
-                                queue_index,
-                                new.causation.clone(),
-                                new.started_at.clone(),
-                                None,
-                            )?;
-                            turns.push(turn);
+                let mut ended_turns: Vec<TurnId> = Vec::new();
+                {
+                    let turns = state
+                        .turns
+                        .entry(session_id.as_str().to_owned())
+                        .or_default();
+                    for change in &commit.turns {
+                        match change {
+                            TurnChange::Create(new) => {
+                                let queue_index = turns.len() as u32;
+                                let turn = Turn::try_new(
+                                    new.turn.clone(),
+                                    session_id.clone(),
+                                    new.state,
+                                    queue_index,
+                                    new.causation.clone(),
+                                    new.started_at.clone(),
+                                    None,
+                                )?;
+                                turns.push(turn);
+                            }
+                            TurnChange::Update(update) => {
+                                let Some(turn) =
+                                    turns.iter_mut().find(|turn| turn.id() == &update.turn)
+                                else {
+                                    return Err(PortError::NotFound(EntityRef::Turn(
+                                        update.turn.clone(),
+                                    )));
+                                };
+                                *turn = Turn::try_new(
+                                    turn.id().clone(),
+                                    session_id.clone(),
+                                    update.state,
+                                    turn.queue_index(),
+                                    turn.causation().cloned(),
+                                    turn.started_at().cloned(),
+                                    update.ended_at.clone(),
+                                )?;
+                                if update.state.is_terminal() {
+                                    ended_turns.push(update.turn.clone());
+                                }
+                            }
                         }
-                        TurnChange::Update(update) => {
-                            let Some(turn) =
-                                turns.iter_mut().find(|turn| turn.id() == &update.turn)
-                            else {
-                                return Err(PortError::NotFound(EntityRef::Turn(
-                                    update.turn.clone(),
-                                )));
-                            };
-                            *turn = Turn::try_new(
-                                turn.id().clone(),
-                                session_id.clone(),
-                                update.state,
-                                turn.queue_index(),
-                                turn.causation().cloned(),
-                                turn.started_at().cloned(),
-                                update.ended_at.clone(),
-                            )?;
+                    }
+                }
+                // 所属任务确认结束：该轮的遗留请求在同一事务里失效（不伪造授权）。
+                for turn in ended_turns {
+                    for row in state.interactions.values_mut() {
+                        if row.turn.as_ref() == Some(&turn) {
+                            row.invalidated = true;
                         }
                     }
                 }
@@ -6204,6 +6790,10 @@ pub(crate) mod test_support {
                         pending: write.interaction.clone(),
                         resolution: None,
                         origin_event,
+                        turn: write.turn.clone(),
+                        request_version: Some(Version::new(1)),
+                        confirmed: false,
+                        invalidated: false,
                     },
                 );
             }
@@ -6498,6 +7088,98 @@ pub(crate) mod test_support {
                 .take(limit.events() as usize)
                 .cloned()
                 .collect())
+        }
+
+        /// 三态归约的事实读取（与真实存储同一口径）：`pending` 或「已仲裁未确认」且未失效。
+        async fn session_activity(
+            &self,
+            session: &SessionId,
+        ) -> Result<SessionActivityFacts, PortError> {
+            let state = lock(&self.world.state);
+            let mut unresolved = 0_u32;
+            let mut unconfirmed = Vec::new();
+            let mut by_turn: Vec<(TurnId, u32)> = Vec::new();
+            for row in state
+                .interactions
+                .values()
+                .filter(|row| row.pending.session() == session && !row.invalidated)
+            {
+                let resolved = row.resolution.is_some();
+                if resolved && row.confirmed {
+                    continue;
+                }
+                unresolved += 1;
+                if resolved {
+                    unconfirmed.push(row.pending.id().clone());
+                }
+                if let Some(turn) = row.turn.as_ref() {
+                    match by_turn.iter_mut().find(|(candidate, _)| candidate == turn) {
+                        Some((_, count)) => *count += 1,
+                        None => by_turn.push((turn.clone(), 1)),
+                    }
+                }
+            }
+            let unfinished = state
+                .turns
+                .get(session.as_str())
+                .map(|turns| {
+                    turns
+                        .iter()
+                        .filter(|turn| !turn.state().is_terminal())
+                        .count()
+                })
+                .unwrap_or(0);
+            Ok(SessionActivityFacts {
+                unresolved_interactions: unresolved,
+                unconfirmed_interactions: unconfirmed,
+                unresolved_by_turn: by_turn,
+                unfinished_turns: u32::try_from(unfinished).unwrap_or(u32::MAX),
+            })
+        }
+
+        async fn queued_turns(&self, session: &SessionId) -> Result<Vec<Turn>, PortError> {
+            let state = lock(&self.world.state);
+            let mut queued: Vec<Turn> = state
+                .turns
+                .get(session.as_str())
+                .map(|turns| {
+                    turns
+                        .iter()
+                        .filter(|turn| turn.state() == TurnState::Queued)
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            queued.sort_by_key(Turn::queue_index);
+            Ok(queued)
+        }
+
+        async fn sessions_with_pending_activity(
+            &self,
+            limit: ReplayLimit,
+        ) -> Result<Vec<SessionId>, PortError> {
+            let state = lock(&self.world.state);
+            let mut sessions: Vec<SessionId> = Vec::new();
+            for (id, turns) in &state.turns {
+                if turns.iter().any(|turn| !turn.state().is_terminal())
+                    && let Ok(session) = SessionId::new(id)
+                    && !sessions.contains(&session)
+                {
+                    sessions.push(session);
+                }
+            }
+            for row in state
+                .interactions
+                .values()
+                .filter(|row| !row.invalidated && (row.resolution.is_none() || !row.confirmed))
+            {
+                let session = row.pending.session().clone();
+                if !sessions.contains(&session) {
+                    sessions.push(session);
+                }
+            }
+            sessions.truncate(limit.events() as usize);
+            Ok(sessions)
         }
 
         async fn retention_window(
@@ -7434,7 +8116,10 @@ pub(crate) mod test_support {
             _interaction: &InteractionId,
             _resolution: InteractionResolution,
         ) -> Result<(), PortError> {
-            Ok(())
+            match lock(&self.world.resolve_errors).pop_front() {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }
         }
 
         async fn read_history(&self, _query: HistoryQuery) -> Result<HistoryPage, PortError> {
@@ -7458,8 +8143,8 @@ pub(crate) mod test_support {
     // 有效待处理交互 fake
     // -----------------------------------------------------------------------------------------
 
-    /// `InteractionAuthority` 的可观察替身：读取返回脚本化清单，解析先校验版本/失效状态再原子标记，
-    /// 失效把目标从清单移除（因此之后既读不到也解析不了）。
+    /// `InteractionAuthority` 的读面替身：`effective` 返回脚本化清单（版本/表单校验的来源）；
+    /// 应答仲裁与确认走存储端口（`SessionStore::commit`），因此本替身不再有写入阶段。
     pub(crate) struct FakeInteractions {
         pub(crate) world: Arc<FakeWorld>,
     }
@@ -7477,48 +8162,6 @@ pub(crate) mod test_support {
                 .collect())
         }
 
-        async fn resolve_effective(
-            &self,
-            write: EffectiveResolution,
-        ) -> Result<Resolution, PortError> {
-            if let Some(error) = lock(&self.world.resolve_errors).pop_front() {
-                return Err(error);
-            }
-            if lock(&self.world.resolved_interactions)
-                .iter()
-                .any(|id| id == write.interaction.as_str())
-            {
-                return Ok(Resolution::AlreadyResolved);
-            }
-            let current = lock(&self.world.effective_interactions)
-                .iter()
-                .find(|item| item.interaction == write.interaction)
-                .cloned();
-            let Some(current) = current else {
-                return Err(PortError::Conflict(ConflictKind::Expired));
-            };
-            if current.session != write.session {
-                return Err(PortError::NotFound(EntityRef::Interaction(
-                    write.interaction,
-                )));
-            }
-            if let Some(expected) = write.request_version
-                && expected != current.request_version
-            {
-                return Err(PortError::Conflict(ConflictKind::VersionMismatch));
-            }
-            write.resolution.validate().map_err(PortError::from)?;
-            if let InteractionResolution::Elicitation { action, values } = &write.resolution
-                && *action == ElicitationAction::Submit
-            {
-                current
-                    .validate_submission(values)
-                    .map_err(PortError::from)?;
-            }
-            lock(&self.world.resolved_interactions).push(write.interaction.as_str().to_owned());
-            Ok(Resolution::Resolved)
-        }
-
         async fn invalidate_pending(
             &self,
             session: Option<&SessionId>,
@@ -7533,6 +8176,13 @@ pub(crate) mod test_support {
             let removed = before - effective.len();
             lock(&self.world.invalidated_interactions)
                 .push((session.map(SessionId::as_str).map(str::to_owned), removed));
+            // 与真实存储同口径：失效把存储交互行移出有效集合（含已仲裁未确认的行）。
+            let mut state = lock(&self.world.state);
+            for row in state.interactions.values_mut() {
+                if session.is_none_or(|session| row.pending.session() == session) {
+                    row.invalidated = true;
+                }
+            }
             Ok(u32::try_from(removed).unwrap_or(u32::MAX))
         }
     }
@@ -7621,7 +8271,6 @@ pub(crate) mod test_support {
                 Version::from(1),
                 ts(0),
                 ts(0),
-                None,
             )
             .expect("session");
             world.seed_session(seeded);
@@ -7764,12 +8413,14 @@ mod tests {
             harness.world.event_types(&harness.session),
             vec![
                 "turn.queued",
+                "session.updated",
                 "turn.started",
                 "agent.message.delta",
                 "turn.completed",
                 "command.completed",
+                "session.updated",
             ],
-            "§11.2：领域事件先于 terminal event"
+            "§11.2：领域事件先于 terminal event；三态摘要随排队与终态各更新一次"
         );
         let record = harness.world.command(&harness.request(1)).expect("幂等行");
         assert_eq!(record.status(), CommandStatus::Completed);
@@ -8772,13 +9423,15 @@ mod tests {
             harness.world.event_types(&harness.session),
             vec![
                 "turn.queued",
+                "session.updated",
                 "turn.started",
                 "agent.message.delta",
                 "turn.failed",
                 "agent.message.completed",
                 "command.uncertain",
+                "session.updated",
             ],
-            "只保留已落盘的增量、收尾与失败终态"
+            "只保留已落盘的增量、收尾与失败终态；释放占位后摘要收敛"
         );
         assert_eq!(
             harness
@@ -8861,8 +9514,8 @@ mod tests {
                 .session(&harness.session)
                 .expect("session")
                 .state(),
-            SessionState::Queued,
-            "放弃后仍排队的会话必须是合并窗口能枚举到的状态（否则兑底永远推不动）"
+            SessionState::Running,
+            "放弃后仍排队的会话必须仍是运行中（否则合并窗口永远推不动）"
         );
 
         // ② 无归属的迟到终态：按被放弃的 T1 归属并丢弃，同时释放占位。
@@ -8887,6 +9540,7 @@ mod tests {
             harness.world.event_types(&harness.session),
             vec![
                 "turn.queued",
+                "session.updated",
                 "turn.started",
                 "turn.queued",
                 "turn.failed",
@@ -9161,14 +9815,15 @@ mod tests {
         assert!(
             batches.contains(&vec![
                 "turn.completed".to_owned(),
-                "command.completed".to_owned()
+                "command.completed".to_owned(),
+                "session.updated".to_owned()
             ]),
             "终态不延迟、也不与增量跨 turn 合并：{batches:?}"
         );
         assert_eq!(
             harness.world.events(&harness.session).len(),
-            7,
-            "合并不得丢事件（turn.queued + turn.started + 3 delta + turn.completed + command.completed）"
+            9,
+            "合并不得丢事件（turn.queued + session.updated + turn.started + 3 delta + turn.completed + command.completed + session.updated）"
         );
     }
 
@@ -9494,7 +10149,6 @@ mod tests {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
                 interaction: Some(InteractionResolved {
                     interaction: interaction.clone(),
                     resolution: InteractionResolution::permission(
@@ -9505,7 +10159,9 @@ mod tests {
                         .expect("decision"),
                     ),
                     resolved_by: Actor::LocalCli,
+                    request_version: None,
                 }),
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,
@@ -9612,6 +10268,7 @@ mod tests {
         let mode = EventType::new("session.mode.changed").expect("event type");
         let completed = EventType::new("command.completed").expect("event type");
         let revoked = EventType::new("device.revoked").expect("event type");
+        let updated = EventType::new("session.updated").expect("event type");
         let device = device_actor();
         let node = Actor::Node {
             node: NodeId::new(&uuid_text(44)).expect("node"),
@@ -9648,6 +10305,12 @@ mod tests {
         assert_eq!(event_origin(&revoked, None), EventOrigin::Daemon);
         assert_eq!(
             event_origin(&revoked, Some(&Actor::LocalCli)),
+            EventOrigin::Daemon
+        );
+        // Broker 计算的三态摘要也属于 daemon 产物，不得记成 agent。
+        assert_eq!(event_origin(&updated, None), EventOrigin::Daemon);
+        assert_eq!(
+            event_origin(&updated, Some(&Actor::LocalCli)),
             EventOrigin::Daemon
         );
         // 新增的第五个取值：wire/db token 都是 `node`。
@@ -9849,8 +10512,8 @@ mod tests {
                 .session(&harness.session)
                 .expect("session")
                 .state(),
-            SessionState::Running,
-            "本用例的前提是 turn 仍在跑（解析发生在 WaitingPermission 期间）"
+            SessionState::Pending,
+            "本用例的前提是 turn 仍在跑且有有效交互（三态下是待处理，不是运行中）"
         );
 
         // 后端在 `resolve_interaction` 期间产出 `permission.resolved`（适配器边界，core 只从 sink 收）：
@@ -9969,7 +10632,6 @@ mod tests {
                 Version::from(1),
                 ts(0),
                 ts(0),
-                None,
             )
             .expect("session"),
         );
@@ -10276,11 +10938,11 @@ mod tests {
                 at: ts(0),
                 expected_version: None,
                 state: Some(StateChange::Update(SessionUpdate {
-                    state: Some(SessionState::Queued),
+                    state: Some(SessionState::Running),
                     mode: ModeChange::Unchanged,
                     title: None,
-                    closed_at: None,
                     interaction: None,
+                    confirmation: None,
                     agent_session_id: None,
                     workspace_cwd: None,
                     workspace_directory_id: None,
@@ -10594,10 +11256,14 @@ mod tests {
             .collect();
         assert_eq!(
             types,
-            vec!["turn.queued".to_owned(), "turn.started".to_owned()],
+            vec![
+                "turn.queued".to_owned(),
+                "session.updated".to_owned(),
+                "turn.started".to_owned()
+            ],
             "冲突批不得落盘任何事件"
         );
-        assert_eq!(harness.world.publish_count(), 2, "冲突批不得发布任何帧");
+        assert_eq!(harness.world.publish_count(), 3, "冲突批不得发布任何帧");
         assert_eq!(
             harness.world.turns(&harness.session)[0].state(),
             TurnState::Running,
@@ -10697,8 +11363,8 @@ mod tests {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
                 interaction: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,
@@ -10992,7 +11658,7 @@ mod tests {
                 .any(|event| event.event_type.as_str() == "agent.message.delta"),
             "该批不得落盘"
         );
-        assert_eq!(harness.world.publish_count(), 2, "该批不得发布");
+        assert_eq!(harness.world.publish_count(), 3, "该批不得发布");
     }
 
     /// `expected_version` 已给出的纯事件提交：推导值即它，且与存储返回值一致（§6 第 19 条的快捷分支）。
@@ -11794,6 +12460,16 @@ mod tests {
             InteractionKind::Elicitation,
             Some(schema),
         ));
+        harness.world.seed_interaction(
+            PendingInteraction::try_new(
+                interaction.clone(),
+                InteractionKind::Elicitation,
+                harness.session.clone(),
+                ts(0),
+                Vec::new(),
+            )
+            .expect("pending"),
+        );
         let actor = device_actor();
         let values = |json: &str| ElicitationValues::parse_json(json).expect("values");
         let resolution =
@@ -11866,7 +12542,24 @@ mod tests {
             .count();
         assert_eq!(resolved, 1, "只能有一个第一个有效答案");
         assert_eq!(already, 1, "后到者拿到已处理事实");
-        assert_eq!(lock(&harness.world.resolved_interactions).len(), 1);
+        let state = lock(&harness.world.state);
+        assert_eq!(
+            state
+                .interactions
+                .values()
+                .filter(|row| row.resolution.is_some())
+                .count(),
+            1,
+            "仲裁后只允许一行"
+        );
+        assert!(
+            state
+                .interactions
+                .values()
+                .filter(|row| row.resolution.is_some())
+                .all(|row| row.confirmed),
+            "适配器成功返回后仲裁行必须已确认"
+        );
     }
 
     /// 同一 `requestId` 重试不会二次派发解析（幂等命中先于授权/解析）。
@@ -11922,10 +12615,13 @@ mod tests {
         ))
         .expect("replay");
         assert!(matches!(second, CommandReceipt::Accepted { .. }));
-        assert_eq!(
-            lock(&harness.world.resolved_interactions).len(),
-            1,
-            "重试不得二次调用 InteractionAuthority"
+        let state = lock(&harness.world.state);
+        assert!(
+            state
+                .interactions
+                .get(interaction.as_str())
+                .is_some_and(|row| row.resolution.is_some()),
+            "重试不得二次调用解析路径"
         );
     }
 
@@ -11943,6 +12639,25 @@ mod tests {
         // 服务端的当前请求版本是 2；客户端仍带着上一页读到的 1。
         current.request_version = Version::new(2);
         lock(&harness.world.effective_interactions).push(current);
+        harness.world.seed_interaction(
+            PendingInteraction::try_new(
+                interaction.clone(),
+                InteractionKind::Permission,
+                harness.session.clone(),
+                ts(0),
+                vec![
+                    InteractionOption::try_new("allow-once", "Allow once", "allow_once")
+                        .expect("option"),
+                ],
+            )
+            .expect("pending"),
+        );
+        if let Some(row) = lock(&harness.world.state)
+            .interactions
+            .get_mut(interaction.as_str())
+        {
+            row.request_version = Some(Version::new(2));
+        }
 
         let actor = harness.actor();
         let request = harness.request(6);
@@ -11976,7 +12691,13 @@ mod tests {
                 .contains_key(command_key(&actor, &request).as_str()),
             "校验失败不得留下 accepted 行"
         );
-        assert!(lock(&harness.world.resolved_interactions).is_empty());
+        assert!(
+            !lock(&harness.world.state)
+                .interactions
+                .get(interaction.as_str())
+                .is_some_and(|row| row.resolution.is_some()),
+            "校验失败不得消费请求"
+        );
 
         let receipt = block_on(harness.broker.submit_mutation_versioned(
             &actor,
@@ -11985,7 +12706,13 @@ mod tests {
         ))
         .expect("retry with the current version");
         assert!(matches!(receipt, CommandReceipt::Accepted { .. }));
-        assert_eq!(lock(&harness.world.resolved_interactions).len(), 1);
+        let state = lock(&harness.world.state);
+        let row = state
+            .interactions
+            .get(interaction.as_str())
+            .expect("interaction row");
+        assert!(row.resolution.is_some(), "重试成功后应落下仲裁结果");
+        assert!(row.confirmed, "适配器成功返回后应确认仲裁行");
     }
 
     /// 受理之后的竞态失败（另一设备抢先解析、请求在窗口内失效、后端写失败）必须落一条持久化终态：
@@ -12000,6 +12727,19 @@ mod tests {
             InteractionKind::Permission,
             None,
         ));
+        harness.world.seed_interaction(
+            PendingInteraction::try_new(
+                interaction.clone(),
+                InteractionKind::Permission,
+                harness.session.clone(),
+                ts(0),
+                vec![
+                    InteractionOption::try_new("allow-once", "Allow once", "allow_once")
+                        .expect("option"),
+                ],
+            )
+            .expect("pending"),
+        );
         lock(&harness.world.resolve_errors)
             .push_back(PortError::Unavailable(UnavailableKind::IoError));
 
@@ -12036,7 +12776,15 @@ mod tests {
             record.terminal_event().is_some(),
             "失败必须落 command.failed 终态事件"
         );
-        assert!(lock(&harness.world.resolved_interactions).is_empty());
+        {
+            let state = lock(&harness.world.state);
+            let row = state
+                .interactions
+                .get(interaction.as_str())
+                .expect("interaction row");
+            assert!(row.resolution.is_some(), "仲裁结果必须保留");
+            assert!(!row.confirmed, "适配器写失败不得把请求移出有效集合");
+        }
 
         // 重试是幂等重放，不会二次仲裁；终态已经存在，客户端可据此结束等待。
         let replay = block_on(harness.broker.submit_mutation_versioned(

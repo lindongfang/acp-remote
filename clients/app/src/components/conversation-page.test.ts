@@ -12,8 +12,9 @@
  * 因此这里钉住的是页面正文的这几件事：
  *
  * 1. **整页锚点齐全**：三栏、会话头、输入区、设置、能力脚注与次级视图切换全部出现在同一份渲染里；
- * 2. **页面只是模型的函数**：同一份代码在「已关闭」与「运行中」两种快照下渲染出不同的输入区状态；
- *    「快照里没有这个会话」在模型层是 `null`（页面据此呈现明确说明，而不是伪造空数据）；
+ * 2. **页面只是模型的函数**：同一份代码在「运行中」与「空闲」两种快照下渲染出各自的会话头，
+ *    输入可用性只随轮次/连接变化、不随主状态变化；「快照里没有这个会话」在模型层是 `null`
+ *    （页面据此呈现明确说明，而不是伪造空数据）；
  * 3. **渲染不派发命令**：渲染期间网关没有任何新的派发记录（读取在 `useEffect` 里、命令只在交互里上抛）；
  * 4. **左栏与输入区的组合**：目录上下文 / 目录内搜索（**只**影响左栏）/ 同目录会话 / 已显示数与
  *    继续加载 / 吸底新建；上下文胶囊 + 告警条、模型与模式胶囊、提示行；
@@ -165,7 +166,7 @@ describe("对话页正文：整页锚点", () => {
     expect(html).toContain('data-timeline-card="tool-call"');
     expect(html).toContain('data-conversation-column="timeline"');
     expect(html).toContain('data-conversation-column="files"');
-    expect(html).toContain('data-file-changes="list"');
+    expect(html).toContain('data-timeline-card="file-changed"');
     expect(html).toContain('data-change-path="src/a.ts"');
     expect(html).toContain('data-composer="in_progress"');
     expect(html).toContain('data-settings="true"');
@@ -214,14 +215,19 @@ describe("对话页正文：整页锚点", () => {
     expect(gateway.dispatches.length).toBe(before);
   });
 
-  it("页面只是模型的函数：同一份代码在「已关闭」快照下渲染出关闭的输入区", () => {
+  it("页面只是模型的函数：主状态决定会话头，不决定输入区可用性", () => {
     const running = renderPage(pageOf(filledStore("running").store));
-    const closed = renderPage(pageOf(filledStore("closed").store));
+    const idle = renderPage(pageOf(filledStore("idle").store));
 
+    expect(running).toContain('data-session-state="running"');
+    expect(idle).toContain('data-session-state="idle"');
+    // 两个快照都有进行中的轮次：输入区都是「执行中」——可用性来自轮次与连接，不来自主状态。
     expect(running).toContain('data-composer="in_progress"');
-    expect(closed).toContain('data-composer="closed"');
-    expect(closed).toContain("会话已关闭，不能提交");
-    expect(running).not.toEqual(closed);
+    expect(idle).toContain('data-composer="in_progress"');
+    // 三态里已经没有「已关闭」：既没有这个徽标，也没有这句只读说明。
+    expect(running).not.toContain('data-session-state="closed"');
+    expect(running).not.toContain("会话已关闭");
+    expect(running).not.toEqual(idle);
   });
 
   it("快照里没有这个会话时模型给 null（页面据此呈现明确说明，而不是伪造空数据）", () => {
@@ -234,6 +240,107 @@ describe("对话页正文：整页锚点", () => {
     const unavailable = renderToStaticMarkup(createElement(RuntimeUnavailable, { route: "session" }));
     expect(unavailable).toContain('data-runtime="unavailable"');
     expect(unavailable).toContain("客户端初始化失败");
+  });
+});
+
+describe("对话页：失败后空闲与页面切换", () => {
+  it("失败后主状态回到空闲，本轮失败原因仍可见，且不呈现「已关闭」", () => {
+    const { store } = filledStore("running");
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "turn.failed",
+        eventId: "dddddddd-0000-4000-8000-00000000070b",
+        sessionId: ONLINE_SESSION_ID,
+        globalSequence: "93",
+        view: {
+          turnId: "turn-1",
+          state: "failed",
+          error: { code: "agent.crashed", message: "Agent 崩溃了", retryable: true, details: {} },
+        },
+      }),
+    });
+    // 服务端确认后主状态回到 idle（本轮失败不是「会话关闭」）。
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "session.updated",
+        eventId: "dddddddd-0000-4000-8000-00000000070c",
+        sessionId: ONLINE_SESSION_ID,
+        globalSequence: "94",
+        view: { session: { ...session({ id: ONLINE_SESSION_ID, state: "idle" }), version: "2" } },
+      }),
+    });
+
+    const model = pageOf(store);
+    expect(model.header.state).toBe("idle");
+    expect(model.input.state).toBe("editable");
+    expect(model.input.canSubmit).toBe(true);
+
+    const html = renderPage(model);
+    expect(html).toContain('data-session-state="idle"');
+    expect(html).toContain('data-turn-error="agent.crashed"');
+    expect(html).toContain("轮次失败：Agent 崩溃了");
+    expect(html).not.toContain("已关闭");
+  });
+
+  it("摘要尚未取得时会话头说明「未知」，不编造空闲", () => {
+    const target = "aaaaaaaa-0000-4000-8000-0000000000ba";
+    const { store, gateway } = onlineStore({
+      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "idle" })] }),
+    });
+    store.loadSession(target);
+    store.apply({
+      kind: "command_result",
+      result: readResult({ requestId: lastDispatch(gateway).body.requestId, sessionId: target }),
+    });
+
+    const model = store.conversationPage(target);
+    if (model === null) throw new Error("读回了线程，模型不应为 null");
+    expect(model.header.state).toBeNull();
+    const html = renderPage(model);
+    expect(html).toContain('data-session-state="unknown"');
+    expect(html).toContain("状态未知");
+    // 反例：把「尚未取得」当成空闲 → 这里会出现空闲徽标。
+    expect(html).not.toContain('data-session-state="idle"');
+  });
+
+  it("切换页面既不取消轮次也不再派发：另一条会话渲染后切回，状态与模型不变", () => {
+    const other = "aaaaaaaa-0000-4000-8000-0000000000b9";
+    const { store, gateway } = onlineStore({
+      resources: resources({
+        sessions: [
+          session({ id: ONLINE_SESSION_ID, state: "running" }),
+          session({ id: other, title: "另一条", state: "idle" }),
+        ],
+      }),
+    });
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "turn.started",
+        eventId: "dddddddd-0000-4000-8000-00000000070d",
+        sessionId: ONLINE_SESSION_ID,
+        globalSequence: "95",
+        view: { turnId: "turn-1", state: "running" },
+      }),
+    });
+    const before = pageOf(store);
+    const dispatches = gateway.dispatches.length;
+
+    renderPage(before);
+    const otherModel = store.conversationPage(other);
+    if (otherModel === null) throw new Error("另一个会话的模型不应为 null");
+    renderPage(otherModel);
+    const after = pageOf(store);
+
+    // 页面切换只换渲染目标：主状态、输入可用性与渲染结果都不被改变。
+    expect(after.header.state).toBe("running");
+    expect(after.input.state).toBe("in_progress");
+    expect(after.input.canSubmit).toBe(before.input.canSubmit);
+    // 反例：切换时「顺手取消上一轮」或「重新派发」→ 下面两条会红。
+    expect(gateway.dispatches.length).toBe(dispatches);
+    expect(gateway.dispatches.some((dispatch) => dispatch.body.command === "session.cancel")).toBe(false);
   });
 });
 
@@ -354,14 +461,10 @@ describe("会话头与 Agent 胶囊（同一份连接覆盖层）", () => {
     expect(header.indexOf('data-session-agent="Claude"')).toBeLessThan(header.indexOf('data-agent-chip="agents"'));
   });
 
-  it("状态胶囊带字形：运行/排队 ●、等待 ⏸、失败 ✕、关闭/空闲 ○；等你回复用警告色", () => {
+  it("状态胶囊带字形：运行中 ●、待处理 ⏸、空闲 ○；三态词表之外没有旧七态", () => {
     const cases = [
       ["running", "●", "okSoft"],
-      ["queued", "●", "accentSoft"],
-      ["waiting_permission", "⏸", "warnSoft"],
-      ["waiting_input", "⏸", "warnSoft"],
-      ["failed", "✕", "dangerSoft"],
-      ["closed", "○", "panel2"],
+      ["pending", "⏸", "warnSoft"],
       ["idle", "○", "panel2"],
     ] as const;
     for (const [state, glyph, tone] of cases) {
@@ -369,10 +472,11 @@ describe("会话头与 Agent 胶囊（同一份连接覆盖层）", () => {
       expect(html, state).toContain(`data-session-state="${state}"`);
       expect(html, state).toContain(`data-session-state-glyph="${glyph}"`);
       expect(html, state).toContain(`data-session-state-tone="${tone}"`);
-      // 既有词表不动：字形只是前缀，文案仍是那七个词之一。
       expect(html, state).toContain(glyph);
     }
-    // 反例：等你回复沿用思考紫 → 上面 `waiting_input` 的 warnSoft 断言会红。
+    const idle = renderToStaticMarkup(createElement(StatusPill, { state: "idle" }));
+    // 旧标签不再有任何呈现（不是「换了个词」而是词表里没有它）。
+    expect(idle).not.toContain("已关闭");
   });
 
   it("没有主机面板数据时不呈现胶囊（不编一份 Agent 名单）", () => {
@@ -516,7 +620,7 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
       resources: resources({
         sessions: [
           session({ id: ONLINE_SESSION_ID, title: "当前这条", state: "running" }),
-          session({ id: "dddddddd-0000-4000-8000-0000000000b3", title: "等你回复的一条", state: "waiting_input" }),
+          session({ id: "dddddddd-0000-4000-8000-0000000000b3", title: "等你回复的一条", state: "pending" }),
           session({ id: "dddddddd-0000-4000-8000-0000000000b4", title: "空闲的一条", state: "idle" }),
         ],
       }),
@@ -524,7 +628,7 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
     const html = renderPage(pageOf(store));
     const list = sliceBetween(html, 'data-sidebar-sessions="list"', 'data-sidebar-shown=');
 
-    // 三条都是紧凑行；圆点、标题、时间仍在，等待中的那条还带状态词。
+    // 三条都是紧凑行；圆点、标题、时间仍在，待处理的那条还带状态词。
     expect(list.match(/data-session-row-variant="compact"/g) ?? []).toHaveLength(3);
     expect(list).toContain('data-session-state="running"');
     expect(list).toContain('data-session-row-title="true"');
@@ -536,7 +640,7 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
     // 反例：把目录页的五字段行原样搬进左栏 → Agent 名会出现在这里，下面两条会红。
     expect(list).not.toContain("Claude");
     expect(list).not.toContain("data-session-agent=");
-    expect(list.match(/data-session-state="waiting_input"/g) ?? []).toHaveLength(1);
+    expect(list.match(/data-session-state="pending"/g) ?? []).toHaveLength(1);
   });
 
   it("路径始终在场：逐字来自快照条目（不拿展示名拼一段看起来像路径的文本）", () => {
@@ -704,7 +808,7 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     expect(html).toContain('data-model-choice="smart"');
   });
 
-  it("待处理跳转条：会话在等授权时呈现，条数只数「本设备可应答」的", () => {
+  it("待处理跳转条只数「本设备可应答」的交互，不读会话主状态", () => {
     const { store } = filledStore("running");
     store.apply({
       kind: "event",
@@ -722,31 +826,49 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     });
     const html = renderPage(pageOf(store), { hostPanel: store.hostPanel() });
 
-    // 会话状态仍是 `running`（没有在等我们），因此不呈现跳转条。
-    expect(html).not.toContain("data-pending-jump-bar");
+    // 会话主状态仍是 `running`，但本设备手上确有一条可应答的交互：跳转条按条数出现。
+    expect(html).toContain('data-session-state="running"');
+    expect(html).toContain('data-pending-jump-bar="1"');
+    expect(html).toContain("待处理 1 项");
+    expect(html).toContain('data-action="jump-to-pending"');
 
-    const waiting = onlineStore({
-      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "waiting_permission" })] }),
+    // 对照：主状态是 `pending` 但没有可应答交互时不呈现跳转条（状态不是条数的来源）。
+    const pendingOnly = onlineStore({
+      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "pending" })] }),
     });
-    waiting.store.apply({
+    const pendingHtml = renderPage(pageOf(pendingOnly.store));
+    expect(pendingHtml).toContain('data-session-state="pending"');
+    expect(pendingHtml).not.toContain("data-pending-jump-bar");
+    expect(pendingHtml).not.toContain("待处理 1 项");
+
+    // 已被其它设备处理的请求同样不计入。
+    const handled = filledStore("pending");
+    handled.store.apply({
       kind: "event",
       event: eventMessage({
         eventType: "permission.requested",
-        eventId: "dddddddd-0000-4000-8000-000000000708",
+        eventId: "dddddddd-0000-4000-8000-000000000709",
         sessionId: ONLINE_SESSION_ID,
-        globalSequence: "98",
+        globalSequence: "99",
         view: {
-          interactionId: "perm-3",
+          interactionId: "perm-4",
           title: "写入工作区",
-          options: [{ optionId: "allow_once", label: "允许一次", kind: "allow_once" }],
+          options: [{ optionId: "deny", label: "拒绝", kind: "deny" }],
         },
       }),
     });
-    const waitingHtml = renderPage(pageOf(waiting.store));
-    expect(waitingHtml).toContain('data-pending-jump-bar="waiting_permission"');
-    expect(waitingHtml).toContain("正在等待授权");
-    expect(waitingHtml).toContain("待处理 1 项");
-    expect(waitingHtml).toContain('data-action="jump-to-pending"');
+    handled.store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "permission.resolved",
+        eventId: "dddddddd-0000-4000-8000-00000000070a",
+        sessionId: ONLINE_SESSION_ID,
+        globalSequence: "100",
+        view: { interactionId: "perm-4", resolution: "deny", resolvedByDeviceId: "another-device" },
+      }),
+    });
+    const handledHtml = renderPage(pageOf(handled.store));
+    expect(handledHtml).not.toContain("data-pending-jump-bar");
   });
 
   it("提示行给出回车口径与附件说明", () => {

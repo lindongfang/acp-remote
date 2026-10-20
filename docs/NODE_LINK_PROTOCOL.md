@@ -404,11 +404,12 @@ Node Link 握手交换：
 | `node-link.typed-media.v1` | 跨节点类型化媒体、消息通道与部分结果（§11.4）：`resource.event.payload.view` 的媒体引用/思考/部分结果与 Sync §10.4 同义；Access 不解析 ACP 原文，完整原文仍逐字节保真 | mvp | 否 |
 | `node-link.pending-interactions.v1` | 跨节点有效待处理交互与真实表单（§12.7）：读取当前有效完整请求、`requestVersion` 校验与首个有效应答胜出；历史待处理项不可直接应答 | mvp | 否 |
 | `node-link.remote-history.v1` | 远程历史回源（§12.7/§17）：Access 按 origin cursor 向 Owner 读取历史分页、读取前鉴权；Owner 不可达或超出保留期显式不可用，Access 不持久化正文 | mvp | 否 |
+| `core.session-activity.v1` | 跨节点会话主状态三态合同（§11.4/§12.3/§12.4）：`sessionMeta.state` 与 catalog `sessions[].state` 只有 `idle`/`running`/`pending`，与 Sync `sessionSummary.state` 同一取值集合；有效未解决交互优先为 `pending`，其次未结束任务（含排队）为 `running`，否则 `idle`。排队、等待原因与任务结果不经本 feature；旧七态只允许作为 `resource.event.payload.view` 的历史原文出现 | mvp | 是 |
 
 - feature ID 语法、排序与 transcript 编码与 `SYNC_PROTOCOL.md` §5.2 相同：`[a-z0-9.-]`、去重后按 UTF-8 字节升序、`negotiatedFeatures` 以 NUL 分隔。
-- `node-link.core.v1` 是必需 feature（`必需` 列为"是"，`required: true`）；Access 未声明时 Owner 返回 `nodelink.protocol.feature_required`，`details.features` 列出未被选择的 feature ID（排序去重），发送方必须给出。
+- 必需 feature 是 `node-link.core.v1` 与 `core.session-activity.v1`（`必需` 列为"是"，`required: true`）。Access MUST 在 `supportedFeatures` 与 `requiredFeatures` 中声明两者，Owner MUST 在 `node.challenge.selectedFeatures` 中返回两者；任一侧缺失时连接不进入业务阶段——Access 未声明时 Owner 返回 `nodelink.protocol.feature_required`，`details.features` 列出未被选择的 feature ID（排序去重），发送方必须给出；Owner 未选中时 Access 停止业务同步并提示版本不兼容。`core.session-activity.v1` 未选中前 MUST NOT 收发 `sessionMeta`、catalog 会话、快照条目或事件中的三态主状态，MUST NOT 回退七态或把 `pending` 折算成某个 `waiting_*`。
 - 首切片必须实现本表 `delivery = mvp` 的全部行；`node-link.node-rotation.v1` 只登记 ID 与消息名，实现时收到 `node.rotate-key.*` 返回 `nodelink.protocol.type_unsupported`，不得静默忽略。
-- **实现事实（2026-10-20，WP5E5-read）**：Owner 在 `node.challenge.selectedFeatures` 里宣告 registry 的全部 8 条 mvp feature（`node-link.core.v1`、`raw-acp.v1`、`command-status.v1`、`session-create.v1`、`attachment-transfer.v1`、`typed-media.v1`、`pending-interactions.v1`、`remote-history.v1`）。前五条与既有实现一致；后三条的门控点都在 `session.read`，该命令现已由 Owner 的真实存储投影（共享 `server::session_read`，消息正文/结构化历史/待处理交互/配置项），因此可以如实宣告。附件传输仍要求组合根注册端点并装配存储（未装配时用 `feature_list_without` 去掉它）；其余 feature 无额外装配前提。`supported_features_match_the_registry_mvp_subset` 逐条断言本表与 registry 的 mvp 子集相等。
+- **实现事实（2026-10-20，`session-activity-three-states` WP3）**：Owner 在 `node.challenge.selectedFeatures` 里宣告 registry 中已完整接线的 9 条 mvp feature（`node-link.core.v1`、`core.session-activity.v1`、`raw-acp.v1`、`command-status.v1`、`session-create.v1`、`attachment-transfer.v1`、`typed-media.v1`、`pending-interactions.v1`、`remote-history.v1`）。前五条与既有实现一致；后三条的门控点都在 `session.read`，该命令现已由 Owner 的真实存储投影（共享 `server::session_read`，消息正文/结构化历史/待处理交互/配置项），因此可以如实宣告。附件传输仍要求组合根注册端点并装配存储（未装配时用 `feature_list_without` 去掉它）；其余 feature 无额外装配前提。`core.session-activity.v1` 的三态映射、交互归约、`session.updated` 生产与持久迁移已接线，Owner 在支持集合与必需集合中都登记它。`supported_features_match_the_registry_mvp_subset` 逐条断言本表与 registry 的 mvp 子集相等。
 
 ### 11.4 事件类型与 `view` 契约（与 Sync 共享）
 
@@ -425,6 +426,7 @@ Node Link 不另立一份 event type 表：
 - 未协商的附件连接不会建立：Access 在 feature 未选中时不发起 `/node-link/v1/attachments`；若仍收到 `attachment.*` 帧，Owner 返回 `nodelink.attachment.negotiation_required` 并以 `4400` 关闭。
 - 旧 Owner 面对新 Access：新能力入口显式不可用（附件不支持、历史不可读、历史交互不可答），不得退化为本地文本或空历史；Access MUST NOT 用本机路径或缓存冒充 Owner 内容。
 - 未协商的封闭字段按 `nodelink.protocol.schema_invalid` 拒绝，未登记 type 按 `nodelink.protocol.type_unsupported` 拒绝，二者都不得静默忽略。
+- **三态合同是必需 feature**：`core.session-activity.v1` 未由双方选中时连接不进入业务阶段（§11.3）。旧 Owner 面对新 Access：`node.challenge.selectedFeatures` 里没有该 ID，Access MUST 停止同步并提示版本不兼容，MUST NOT 按七态摘要自行折算或把 `pending` 当作某个 `waiting_*`。旧 Access 面对新 Owner：`node.hello` 未声明该 ID，Owner MUST 以 `nodelink.protocol.feature_required` 拒绝，且 MUST NOT 下发三态 `sessionMeta`、catalog 会话或快照条目。
 
 ## 12. 消息族与消息体
 
@@ -477,6 +479,7 @@ node.hello → node.challenge → node.proof → node.ready
 
 `agents[]` 是 `{ agentId, name, capabilitiesRef }`；`directories[]` 是 `{ directoryId }`（不含路径）；`sessions[]` 是 `{ sessionId, originEpoch, agentId, state, version, createdAt, workspaceDirectoryId }`（不含正文）。
 
+- `sessions[].state` 与 `sessionMeta.state`、Sync 的 `sessionSummary.state` 是**同一个**三态取值集合（`common.schema.json#/$defs/sessionState`，feature `core.session-activity.v1`）：有效未解决交互优先为 `pending`，否则未结束任务（含已接受的排队任务）为 `running`，否则 `idle`。catalog 与 `sessionMeta` 都只承载该摘要，不回传旧七态（旧值只允许作为 `resource.event.payload.view` 的历史原文），Access MUST NOT 用它推断任务或交互结果。
 - `sessions[].originEpoch` 是该会话在 Owner 上的 origin epoch（与 `resource.event.originEpoch` 同一取值，来自 `owned_session.origin_epoch`）。Access 用它把 imported 会话投影成带 `origin.kind = "remote"` 的摘要，因此即使该会话还没有任何事件，也能在本地发现它；Owner MUST 每次投影时现读，不得缓存或改写。
 - 三个数组各自最多 500 项；catalog 是**连接期内存数据**，断开即失效，重连后重新订阅。
 - 已配对且未撤销的节点看到同一份清单。
@@ -501,7 +504,7 @@ resource.attach → resource.attached → resource.subscribe
 | `resource.event` | Owner → Access | `originEventId`(UUID)、`originEpoch`(UUID)、`originSequence`(decimal string)、`sessionRef`(`{ ownerNodeId, sessionId }`)、`eventType`(string，`^[a-z0-9_.-]{1,128}$`)、`payloadDigest`(base64url 32B)、`createdAt`(timestamp)、`payload`(`{ view?, acp? }`，二者至少一个) | 除 `payload.acp` 外全部必需 | Owner 的 origin 事件原样投递 |
 | `resource.ack` | Access → Owner | `sessionRef`(`{ ownerNodeId, sessionId }`)、`cursor`(`{ originEpoch, originSequence }`) | 全部必需 | 该会话的累计 ACK：此 cursor 及之前的 origin 事件在 Access 侧已进入可恢复的无正文索引 |
 
-- `sessionMeta` 字段：`state`(`"idle"`\|`"queued"`\|`"running"`\|`"waiting_input"`\|`"waiting_permission"`\|`"failed"`\|`"closed"`)、`version`(decimal string)。
+- `sessionMeta` 字段：`state`(`"idle"`\|`"running"`\|`"pending"`)、`version`(decimal string)。`state` 是会话的活跃程度摘要，取值集合由必需 feature `core.session-activity.v1` 协商（§11.3）：有有效未解决交互 → `pending`，否则有未结束任务（含排队）→ `running`，否则 `idle`；排队、等待原因与本轮结果不进入该字段。旧七态 MUST NOT 出现在 `sessionMeta` 里，它们只允许作为 `resource.event.payload.view` 的历史原文。
 - `pending_interactions` item 字段：`interactionId`(UUID)、`kind`(`"permission"`\|`"elicitation"`)、`createdAt`(timestamp)、`payloadDigest`(base64url 32B)；不含交互正文。
 - **正文绝不入快照**：`SessionSummary`、message、turn 与会话正文历史不存在于 Node Link 快照中；Access 需要正文时按 origin cursor 通过 `resource.event` 重放或经查询命令向 Owner 在线请求（Sync 侧见 `SYNC_PROTOCOL.md` §9.6）。
 - `resource.event` 必须携带完整 origin 三元组（`originEventId` + `originEpoch` + `originSequence`）；缺失任一字段即 `nodelink.protocol.schema_invalid`，Access 不得用本地生成的 ID 顶替，也不得把事件降级成本地事件。

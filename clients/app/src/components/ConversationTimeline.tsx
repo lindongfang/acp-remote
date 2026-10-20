@@ -46,8 +46,10 @@ import type { FormInputValue } from "../domain/form";
 import { buildElicitationForm } from "../domain/form";
 import type { InteractionAnswer, InteractionAvailability } from "../domain/interaction";
 import type { AttachmentMediaView } from "../domain/media";
-import type { TimelineEntry } from "../features/conversation-timeline";
+import type { FileChangeDiagnostics, TimelineEntry } from "../features/conversation-timeline";
 import { groupTimelineEntries } from "../features/conversation-timeline";
+import { ChangeDiagnosticsPanel } from "./ChangeDiagnosticsPanel";
+import { ChangeDiff } from "./ChangeDiff";
 import { CodeBlock } from "./CodeBlock";
 import { DegradedEntryContent } from "./DegradedEntryContent";
 import { ElicitationForm } from "./ElicitationForm";
@@ -83,13 +85,12 @@ export interface ConversationTimelineProps {
    * 所以翻转移位必须发生在知道有效值的那一侧）。缺省时表头不是可点控件。
    */
   readonly onToggleEntry?: ((key: string, expanded: boolean) => void) | undefined;
-  /** 已被选中的那一处改动（`file_changed` 条目的 `changeId`）；缺省 `null` = 没有选中。 */
-  readonly selectedChangeId?: string | null;
-  /**
-   * 选中一处改动（上抛 `changeId`）——右栏据此选中同一个文件（spec「从条目联动到右栏」）。
-   * 缺省时 `file_changed` 条目不是可点控件（不渲染点了没反应的按钮）。
-   */
-  readonly onSelectChange?: ((changeId: string) => void) | undefined;
+  /** 逐条改动的诊断数据（按 `changeId` 取）；缺省时不渲染文件改动的原文入口。 */
+  readonly changeDiagnostics?: ReadonlyMap<string, FileChangeDiagnostics> | undefined;
+  /** 当前展开诊断的改动事件（`eventId`）；缺省 `null` = 全部收起。 */
+  readonly openChangeDiagnosticsEventId?: string | null;
+  /** 打开 / 收起某处文件改动的诊断（`null` = 收起）；缺省时不渲染该入口。 */
+  readonly onOpenChangeDiagnostics?: ((eventId: string | null) => void) | undefined;
   /** 已读取的消息媒体（`attachmentId → 状态`）；缺省时媒体块显示「读取中」以外的显式状态。 */
   readonly media?: ReadonlyMap<string, AttachmentMediaView> | undefined;
   /** 请求读取一条已封存附件（页面接到仓库的 `loadAttachmentMedia`）。 */
@@ -422,23 +423,6 @@ function buildStyles(colors: Palette) {
       flexDirection: "row",
       flexWrap: "wrap",
       gap: spacing.sm,
-    },
-    selectablePath: {
-      paddingVertical: 2,
-      paddingHorizontal: spacing.xs,
-      borderRadius: radius.sm,
-      borderWidth: 1,
-      borderColor: colors.line,
-      backgroundColor: colors.panel,
-    },
-    selectablePathSelected: {
-      borderColor: colors.accent,
-      backgroundColor: colors.accentSoft,
-    },
-    selectablePathText: {
-      color: colors.ink,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.sm,
     },
   });
 }
@@ -1005,20 +989,22 @@ function PlanEntryView({
 }
 
 /**
- * 文件改动卡片：结构化统计与相对化路径（D8）。
+ * 文件改动卡片：结构化统计、相对化路径（D8）与结构化差异区（D6）。
  *
- * 差异行**不**在这里渲染——它属于右栏（D6：差异行只来自结构化来源，且没有下发时的说明也在
- * 那里）。这条条目携带文件标识（`changeId`），因此选中它会让右栏选中同一处改动
- * （spec「从条目联动到右栏」）；缺省回调时不渲染这个入口。
+ * 差异行只来自服务端下发的结构化来源，三种形态互不冒充；没有解析 `acp.rawJson` 的通路。
+ * 完整原文仍是**诊断入口**：展开后以单块不可信文本呈现，不作为差异渲染源。文件栏已移除
+ * 会话变更来源，因此这条卡片不再联动右栏。
  */
 function FileChangedEntry({
   entry,
-  selected,
-  onSelectChange,
+  diagnostics,
+  diagnosticsOpen,
+  onOpenChangeDiagnostics,
 }: {
   readonly entry: EntryOf<"file_changed">;
-  readonly selected: boolean;
-  readonly onSelectChange: ((changeId: string) => void) | undefined;
+  readonly diagnostics: FileChangeDiagnostics | undefined;
+  readonly diagnosticsOpen: boolean;
+  readonly onOpenChangeDiagnostics: ((eventId: string | null) => void) | undefined;
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -1032,29 +1018,15 @@ function FileChangedEntry({
         changeId: entry.changeId,
         changeKind: entry.changeKind,
         changePath: entry.displayPath,
-        changeSelected: String(selected),
         timelineEntryAt: entry.createdAt,
       }}
     >
       <View style={styles.card}>
         <View style={styles.cardHead}>
           <Text style={styles.kicker}>文件改动</Text>
-          {onSelectChange === undefined ? (
-            <Text style={styles.title} dataSet={{ changePathLabel: entry.displayPath }}>
-              {entry.displayPath}
-            </Text>
-          ) : (
-            <Pressable
-              role="button"
-              style={selected ? [styles.selectablePath, styles.selectablePathSelected] : styles.selectablePath}
-              dataSet={{ action: "select-file-change", changeId: entry.changeId, changePathLabel: entry.displayPath }}
-              onPress={() => {
-                onSelectChange(entry.changeId);
-              }}
-            >
-              <Text style={styles.selectablePathText}>{entry.displayPath}</Text>
-            </Pressable>
-          )}
+          <Text style={styles.title} dataSet={{ changePathLabel: entry.displayPath }}>
+            {entry.displayPath}
+          </Text>
           <Text style={styles.chip}>{entry.changeKind}</Text>
           {entry.outsideWorkspace ? (
             <Text style={styles.chipWarn} dataSet={{ changeOutsideWorkspace: "true" }}>
@@ -1084,9 +1056,34 @@ function FileChangedEntry({
             </Text>
           ) : null}
         </View>
-        <Text style={styles.dimNote} dataSet={{ changeDiagnosticsHint: "true" }}>
-          差异行与完整原文的入口都在「变更文件」栏（本卡片只呈现有结构化来源的统计，不解析原文）。
+        <ChangeDiff diff={entry.diff} />
+        <Text style={styles.dimNote} dataSet={{ changeStatisticsScope: "true" }}>
+          统计只覆盖 Agent 在工具调用里声明的改动；差异行只来自服务端下发的结构化来源，本卡片不解析 ACP 原文。
         </Text>
+        {diagnostics === undefined || onOpenChangeDiagnostics === undefined ? null : (
+          <Pressable
+            role="button"
+            style={styles.diagnosticsEntry}
+            dataSet={{
+              action: "open-file-change-diagnostics",
+              eventId: diagnostics.eventId,
+              diagnosticsOpen: String(diagnosticsOpen),
+            }}
+            onPress={() => {
+              onOpenChangeDiagnostics(diagnosticsOpen ? null : diagnostics.eventId);
+            }}
+          >
+            <Text style={styles.diagnosticsEntryText}>
+              {diagnosticsOpen ? "收起 ACP 原文（诊断）" : "查看 ACP 原文（诊断）"}
+            </Text>
+          </Pressable>
+        )}
+        {diagnosticsOpen && diagnostics !== undefined ? <ChangeDiagnosticsPanel diagnostics={diagnostics} /> : null}
+        {diagnosticsOpen && diagnostics === undefined ? (
+          <Text style={styles.note} dataSet={{ changeDiagnostics: entry.changeId }}>
+            这条改动没有可用的原文诊断数据（客户端未保留它的逐条投影）。
+          </Text>
+        ) : null}
       </View>
     </View>
   );
@@ -1478,8 +1475,9 @@ function TimelineEntryView(props: {
    * 它看不到「这条默认值是多少」（D10）。
    */
   readonly onToggleEntry: ((key: string, expanded: boolean) => void) | undefined;
-  readonly selectedChangeId: string | null;
-  readonly onSelectChange: ((changeId: string) => void) | undefined;
+  readonly changeDiagnostics: ReadonlyMap<string, FileChangeDiagnostics> | undefined;
+  readonly openChangeDiagnosticsEventId: string | null;
+  readonly onOpenChangeDiagnostics: ((eventId: string | null) => void) | undefined;
   readonly onOpenDiagnostics: (eventId: string) => void;
   readonly onAnswerInteraction: ((interactionId: string, answer: InteractionAnswer) => void) | undefined;
   readonly onCopyCode: ((code: string, language: string) => void) | undefined;
@@ -1526,14 +1524,19 @@ function TimelineEntryView(props: {
       return <TerminalOutputEntry entry={entry} expanded={expanded} onToggle={props.onToggleEntry} />;
     case "plan":
       return <PlanEntryView entry={entry} expanded={expanded} onToggle={props.onToggleEntry} />;
-    case "file_changed":
+    case "file_changed": {
+      const diagnostics = props.changeDiagnostics?.get(entry.changeId);
       return (
         <FileChangedEntry
           entry={entry}
-          selected={props.selectedChangeId === entry.changeId}
-          onSelectChange={props.onSelectChange}
+          diagnostics={diagnostics}
+          diagnosticsOpen={
+            diagnostics !== undefined && props.openChangeDiagnosticsEventId === diagnostics.eventId
+          }
+          onOpenChangeDiagnostics={props.onOpenChangeDiagnostics}
         />
       );
+    }
     case "mode_changed":
       return <ModeChangedEntry entry={entry} />;
     case "config_changed":
@@ -1583,8 +1586,9 @@ export function ConversationTimeline({
   onLinkPress,
   expandedEntries,
   onToggleEntry,
-  selectedChangeId,
-  onSelectChange,
+  changeDiagnostics,
+  openChangeDiagnosticsEventId,
+  onOpenChangeDiagnostics,
   media,
   onLoadMedia,
   onReleaseMedia,
@@ -1623,8 +1627,9 @@ export function ConversationTimeline({
                 sessionId={sessionId}
                 expandedEntries={expandedEntries}
                 onToggleEntry={onToggleEntry}
-                selectedChangeId={selectedChangeId ?? null}
-                onSelectChange={onSelectChange}
+                changeDiagnostics={changeDiagnostics}
+                openChangeDiagnosticsEventId={openChangeDiagnosticsEventId ?? null}
+                onOpenChangeDiagnostics={onOpenChangeDiagnostics}
                 onOpenDiagnostics={onOpenDiagnostics}
                 onAnswerInteraction={onAnswerInteraction}
                 onCopyCode={onCopyCode}

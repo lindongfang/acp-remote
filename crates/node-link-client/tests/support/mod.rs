@@ -43,6 +43,18 @@ use acp_core::model::Nonce;
 /// 附件测试使用的固定 Owner 节点标识（真实握手的信任锚）。
 pub const TEST_OWNER_NODE: &str = "5c6d7e8f-9012-4a3b-8c4d-5e6f708192c1";
 
+/// 每次握手都必须协商的 feature：直接取客户端的 [`node_link_client::REQUIRED_FEATURES`]。
+///
+/// 测试 Owner 必须选中它们，否则客户端按 `NODE_LINK_PROTOCOL.md` §11.3 中止握手。
+pub const REQUIRED_FEATURES: [&str; 2] = node_link_client::REQUIRED_FEATURES;
+
+/// 测试 Owner 选中的 feature：必选集合 + 用例附加能力。
+pub fn selected_features(extra: &[&'static str]) -> Vec<&'static str> {
+    let mut selected = REQUIRED_FEATURES.to_vec();
+    selected.extend_from_slice(extra);
+    selected
+}
+
 /// Access 侧的固定 P-256 身份（附件测试走真实握手，因此需要签名者）。
 pub struct AccessIdentity {
     node_id: NodeId,
@@ -344,12 +356,12 @@ pub struct OwnerSession {
     pub inbound_next: u64,
 }
 
-/// 完成一次 Owner 侧握手：读 `node.hello` → 签挑战 → 读 `node.proof` → 发 `node.ready`。
-pub async fn accept_handshake(
-    io: &mut OwnerIo,
-    owner: &OwnerIdentity,
-    features: &[&str],
-) -> OwnerSession {
+/// Owner 侧握手第一步：读 `node.hello`，按 `features` 与客户端声明取交集并发出签名的
+/// `node.challenge`。返回连接标识。
+///
+/// 负例（客户端按 `NODE_LINK_PROTOCOL.md` §11.3 中止）只需要走到本步：客户端不会发出
+/// `node.proof`，因此调用方不应继续等待。
+pub async fn send_challenge(io: &mut OwnerIo, owner: &OwnerIdentity, features: &[&str]) -> Uuid {
     let hello_text = io.recv().await.expect("node.hello");
     let hello = Envelope::decode(&hello_text).expect("hello 信封");
     assert_eq!(hello.message_type(), MessageType::NodeHello);
@@ -402,6 +414,17 @@ pub async fn accept_handshake(
     };
     io.send_raw(encode_envelope(MessageType::NodeChallenge, None, &body))
         .await;
+    connection_id
+}
+
+/// 完成一次 Owner 侧握手：`send_challenge` → 读 `node.proof` → 发 `node.ready`。
+pub async fn accept_handshake(
+    io: &mut OwnerIo,
+    owner: &OwnerIdentity,
+    features: &[&str],
+) -> OwnerSession {
+    let connection_id = send_challenge(io, owner, features).await;
+    let catalog_revision = 0u64;
 
     let proof_text = match tokio::time::timeout(std::time::Duration::from_secs(1), io.recv()).await
     {
@@ -474,9 +497,13 @@ pub async fn forwarder_pair(subject: &str) -> (AttachmentForwarder, OwnerIo, Uui
         owner: trust,
         supported_features: vec![
             node_link_client::CORE_FEATURE.to_owned(),
+            node_link_client::SESSION_ACTIVITY_FEATURE.to_owned(),
             node_link_client::ATTACHMENT_FEATURE.to_owned(),
         ],
-        required_features: vec![node_link_client::CORE_FEATURE.to_owned()],
+        required_features: vec![
+            node_link_client::CORE_FEATURE.to_owned(),
+            node_link_client::SESSION_ACTIVITY_FEATURE.to_owned(),
+        ],
     };
     let client_task = tokio::spawn(async move {
         let established =
@@ -486,10 +513,7 @@ pub async fn forwarder_pair(subject: &str) -> (AttachmentForwarder, OwnerIo, Uui
     let session = accept_handshake(
         &mut owner,
         &owner_identity,
-        &[
-            node_link_client::CORE_FEATURE,
-            node_link_client::ATTACHMENT_FEATURE,
-        ],
+        &selected_features(&[node_link_client::ATTACHMENT_FEATURE]),
     )
     .await;
     let (sink, source, established) = client_task

@@ -24,9 +24,9 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         .expect("open");
     store.close().await;
 
-    assert_eq!(FILE_FORMAT_VERSION, 12);
-    assert_eq!(OWNED_SCHEMA_VERSION, 12);
-    assert_eq!(IMPORTED_SCHEMA_VERSION, 4);
+    assert_eq!(FILE_FORMAT_VERSION, 13);
+    assert_eq!(OWNED_SCHEMA_VERSION, 13);
+    assert_eq!(IMPORTED_SCHEMA_VERSION, 5);
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
     let version: i64 = sqlx::query_scalar("PRAGMA user_version")
@@ -35,8 +35,8 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         .expect("user_version");
     assert_eq!(version, FILE_FORMAT_VERSION);
     let meta = meta_rows(&pool).await;
-    assert!(meta.contains(&("owned_schema_version".to_owned(), "12".to_owned())));
-    assert!(meta.contains(&("imported_schema_version".to_owned(), "4".to_owned())));
+    assert!(meta.contains(&("owned_schema_version".to_owned(), "13".to_owned())));
+    assert!(meta.contains(&("imported_schema_version".to_owned(), "5".to_owned())));
 
     for table in [
         "owned_attachment_transfer",
@@ -49,9 +49,20 @@ async fn fresh_databases_are_created_in_the_current_shape() {
     }
     let interaction_columns = column_names(&pool, "owned_interaction").await;
     assert_eq!(
-        &interaction_columns[interaction_columns.len() - 2..],
-        ["request_version", "invalidated_at"],
-        "新列必须追加在列清单末尾（与 v12 升级段同形）"
+        &interaction_columns[interaction_columns.len() - 4..],
+        [
+            "request_version",
+            "invalidated_at",
+            "confirmed_at",
+            "turn_id"
+        ],
+        "新列必须追加在列清单末尾（v12 两列 + v13 两列）"
+    );
+    assert!(
+        !column_names(&pool, "owned_session")
+            .await
+            .contains(&"closed_at".to_owned()),
+        "v13 之后会话表不得再有 closed_at"
     );
     let transfer_columns = column_names(&pool, "owned_attachment_transfer").await;
     for column in [
@@ -89,7 +100,7 @@ async fn fresh_databases_are_created_in_the_current_shape() {
     pool.close().await;
 }
 
-/// v2 形状的空库连续升级到 v12：新表与新列出现，版本号在升级后写入。
+/// v2 形状的空库连续升级到 v13：新表与新列出现，版本号在升级后写入。
 #[tokio::test]
 async fn v2_fixture_upgrades_to_v12() {
     let dir = temp_dir("upgrade-v2-v12");
@@ -118,6 +129,18 @@ async fn v2_fixture_upgrades_to_v12() {
             .iter()
             .any(|name| name == "invalidated_at")
     );
+    assert!(
+        interaction_columns
+            .iter()
+            .any(|name| name == "confirmed_at")
+    );
+    assert!(interaction_columns.iter().any(|name| name == "turn_id"));
+    assert!(
+        !column_names(&pool, "owned_session")
+            .await
+            .contains(&"closed_at".to_owned()),
+        "v13 之后会话表不得再有 closed_at"
+    );
     pool.close().await;
 
     // 再打开一次不产生任何 DDL 写入。
@@ -127,7 +150,104 @@ async fn v2_fixture_upgrades_to_v12() {
     reopened.close().await;
 }
 
-/// v1 夹具升级到 v12：既有数据保留，新表为空且可写。
+/// v13 把 imported 摘要的旧七态归一化成三态（值映射，不重建、不加正文列），`NULL` 保持 `NULL`。
+#[tokio::test]
+async fn v13_normalizes_imported_legacy_states() {
+    let dir = temp_dir("upgrade-imported-states-v13");
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("create current store");
+    store.close().await;
+    let path = dir.join("acp-remote.sqlite3");
+    let pool = raw_write_pool(&path).await;
+    let states = [
+        (1, Some("idle")),
+        (2, Some("queued")),
+        (3, Some("running")),
+        (4, Some("waiting_input")),
+        (5, Some("waiting_permission")),
+        (6, Some("failed")),
+        (7, Some("closed")),
+        (8, None),
+    ];
+    for (index, state) in states {
+        sqlx::query(
+            "INSERT INTO imported_session (owner_node_id, session_id, state, updated_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind("99999999-9999-4999-8999-999999999999")
+        .bind(format!("77777777-7777-4777-8777-77777777770{index}"))
+        .bind(state)
+        .bind(AT)
+        .execute(&pool)
+        .await
+        .expect("seed imported session");
+    }
+    // 回退到 v12 形状：文件版本与两族版本键都低于当前值，只让 v13 段生效。
+    sqlx::raw_sql(
+        "PRAGMA user_version = 12;
+         UPDATE meta SET value = '12' WHERE key = 'owned_schema_version';
+         UPDATE meta SET value = '4' WHERE key = 'imported_schema_version';",
+    )
+    .execute(&pool)
+    .await
+    .expect("rewind to v12");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
+
+    let reopened = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("v12 database must upgrade");
+    reopened.close().await;
+
+    let pool = raw_pool(&path).await;
+    let migrated: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT session_id, state FROM imported_session ORDER BY session_id")
+            .fetch_all(&pool)
+            .await
+            .expect("state rows");
+    pool.close().await;
+    assert_eq!(
+        migrated,
+        vec![
+            (
+                "77777777-7777-4777-8777-777777777701".to_owned(),
+                Some("idle".to_owned())
+            ),
+            (
+                "77777777-7777-4777-8777-777777777702".to_owned(),
+                Some("running".to_owned())
+            ),
+            (
+                "77777777-7777-4777-8777-777777777703".to_owned(),
+                Some("running".to_owned())
+            ),
+            (
+                "77777777-7777-4777-8777-777777777704".to_owned(),
+                Some("pending".to_owned())
+            ),
+            (
+                "77777777-7777-4777-8777-777777777705".to_owned(),
+                Some("pending".to_owned())
+            ),
+            (
+                "77777777-7777-4777-8777-777777777706".to_owned(),
+                Some("idle".to_owned())
+            ),
+            (
+                "77777777-7777-4777-8777-777777777707".to_owned(),
+                Some("idle".to_owned())
+            ),
+            ("77777777-7777-4777-8777-777777777708".to_owned(), None),
+        ],
+        "旧七态必须按 idle/queued/running/waiting_*/failed/closed 的映射归一化，NULL 保持 None"
+    );
+}
+
+/// v1 夹具升级到 v13：既有数据保留，新表为空且可写。
 #[tokio::test]
 async fn v1_fixture_preserves_data_and_gets_the_new_tables() {
     let dir = temp_dir("upgrade-v1-v12");

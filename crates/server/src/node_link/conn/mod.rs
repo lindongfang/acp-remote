@@ -25,7 +25,7 @@ pub mod session;
 mod wire;
 
 pub use handshake::{
-    NegotiationFault, REQUIRED_FEATURE, SUPPORTED_FEATURES, feature_list, feature_list_without,
+    NegotiationFault, REQUIRED_FEATURES, SUPPORTED_FEATURES, feature_list, feature_list_without,
     negotiate_features, negotiate_features_with, node_endpoint, peer_trust,
 };
 pub use limits::{NodeLinkConfig, SessionLimits};

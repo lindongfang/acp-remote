@@ -135,7 +135,7 @@ function agentMsg(text,time){
   }
 
 function permCard(s){
-    var st = A.permSet[s.id] || (s.state === "waiting_permission" ? "pending" : "remote");
+    var st = A.permSet[s.id] || (s.state === "pending" ? "pending" : "remote");
     if(st === "pending"){
       return '<div class="perm"><div class="ptitle">🔐 需要你的授权</div>' +
         '<div>运行 npm 命令，改动测试快照文件</div>' +

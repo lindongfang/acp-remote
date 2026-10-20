@@ -1,12 +1,13 @@
 /**
- * 文件栏三来源、中间只读查看与关闭恢复的浏览器级验证（`session-file-browser` 5.1–5.5）。
+ * 文件栏两来源、中间只读查看与关闭恢复的浏览器级验证。
  *
  * ## 假主机提供的是什么
  *
  * 这里用页内假主机（`../fake-host.ts`）应答四条真实查询，客户端走的是**生产**的 Sync 客户端、
  * `ClientStore` 与页面组件；被替换的只有传输与磁盘。因此这些检查证明的是：
  *
- * - 三个来源的判定与渲染路径（默认会话变更、目录树、忽略开关、Git 状态、根外链接）；
+ * - 两个来源的判定与渲染路径（默认全部文件、目录树、忽略开关、Git 状态、根外链接）；
+ * - 会话改动只在时间线呈现（结构化差异 + 诊断入口），文件栏没有会话变更清单；
  * - 中间查看区的互斥替换、关闭恢复、窄屏返回与跨断点保留；
  * - 不可信内容（脚本/远端图片/SVG）不成为活动内容，图片只从 Blob URL 加载；
  * - 下载经平台端口完成、可取消且 Blob URL 可撤销。
@@ -246,7 +247,7 @@ function sessionOptions(overrides: Partial<ScenarioOptions> = {}): ScenarioOptio
 }
 
 /** 等右栏出现指定来源。 */
-async function selectSource(container: HTMLElement, source: "all" | "git" | "session"): Promise<void> {
+async function selectSource(container: HTMLElement, source: "all" | "git"): Promise<void> {
   click(query(container, `[data-action="select-file-source"][data-file-source-option="${source}"]`), `切到 ${source}`);
   await waitFor(
     () => query(container, `[data-file-source-option="${source}"][data-file-source-selected="true"]`) !== null,
@@ -256,7 +257,7 @@ async function selectSource(container: HTMLElement, source: "all" | "git" | "ses
 
 const checks: readonly Check[] = [
   {
-    name: "SF-1 文件栏默认「会话变更」，三个来源可切换且无记录时不展示额外说明",
+    name: "SF-1 文件栏默认「全部文件」，只有两个来源；手动刷新只发对应目录查询",
     async run() {
       await withSessionPage(
         sessionOptions(),
@@ -266,24 +267,27 @@ const checks: readonly Check[] = [
           const container = mounted.container;
           expectEqual(textOf(query(container, "[data-files-panel-title]")), "文件", "右栏标题");
           const labels = queryAll(container, "[data-file-source-option]").map(textOf);
-          expectEqual(labels, ["全部文件", "Git 变更", "会话变更"], "三个来源的顺序与文案");
+          expectEqual(labels, ["全部文件", "Git 变更"], "两个来源的顺序与文案");
           expectEqual(
-            query(container, '[data-file-source-option="session"]')?.getAttribute("data-file-source-selected"),
+            query(container, '[data-file-source-option="all"]')?.getAttribute("data-file-source-selected"),
             "true",
-            "首次进入默认会话变更",
+            "首次进入默认全部文件",
           );
-          expectThat(
-            query(container, "[data-file-changes-empty-note]") === null,
-            "没有记录时不展示额外空态说明",
-          );
+          expectEqual(query(container, '[data-file-source-option="session"]'), null, "不得再出现会话变更来源");
+          await waitFor(() => query(container, '[data-file-entry="README.md"]') !== null, "默认来源首次加载目录");
           await waitFor(() => query(container, '[data-action="refresh-files"][data-refresh-disabled="false"]') !== null,
-            "会话历史初次加载后刷新可点击");
+            "目录加载完成后刷新可点击");
           const sentBefore = mounted.host?.sent.length ?? 0;
-          click(query(container, '[data-action="refresh-files"]'), "刷新会话变更");
-          await waitFor(() => commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.read") !== null,
-            "点击刷新真正发出历史读取");
-          const body = commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.read");
-          expectEqual(body?.["payload"], { include: ["history"] }, "刷新只读会话历史，不重载聊天消息");
+          click(query(container, '[data-action="refresh-files"]'), "刷新全部文件");
+          await waitFor(() => commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.files.list") !== null,
+            "点击刷新真正发出目录查询");
+          const body = commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.files.list");
+          expectEqual(body?.["payload"], { path: "", hideIgnored: false }, "刷新只读根目录，不重载聊天消息");
+          expectEqual(
+            commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.read"),
+            null,
+            "文件栏不再派发会话变更专属的历史刷新",
+          );
         },
       );
     },
@@ -364,6 +368,14 @@ const checks: readonly Check[] = [
           const container = mounted.container;
           await selectSource(container, "git");
           await waitFor(() => query(container, '[data-git-entry="src/app.ts"]') !== null, "Git 状态加载");
+          expectThat(
+            textOf(query(container, "[data-git-scope-notice]")).includes("整个会话工作目录"),
+            "Git 范围必须说明是整个工作目录",
+          );
+          expectThat(
+            textOf(query(container, "[data-git-scope-notice]")).includes("人工或其他会话"),
+            "Git 范围必须说明可能包含人工与其他会话的修改",
+          );
           expectEqual(
             query(container, '[data-git-entry="src/app.ts"]')?.getAttribute("data-git-status"),
             "modified",
@@ -431,20 +443,38 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "SF-5 会话变更按文件归并：同文件多次修改只列一行，打开后看到历次记录与部分历史提示",
+    name: "SF-5 会话改动只在时间线：文件栏无会话清单，结构化差异与诊断入口仍可用",
     async run() {
+      const rawDiff = '{"update":{"path":"src/app.ts","diff":"+const first = 1;"}}';
       await withSessionPage(
         sessionOptions({
           events: [
-            changedEvent(21, "cccccccc-0000-4000-8000-000000000021", "src/app.ts", {
-              diffLines: [{ kind: "added", text: "const first = 1;" }],
-              added: "1",
-              deleted: "0",
+            wireEvent({
+              globalSequence: 21,
+              eventId: "eeeeeeee-0000-4000-8000-000000000021",
+              sessionId: SESSION_ALPHA,
+              eventType: "file.changed",
+              view: changeView({
+                changeId: "cccccccc-0000-4000-8000-000000000021",
+                path: "src/app.ts",
+                added: "1",
+                deleted: "0",
+                diffLines: [{ kind: "added", text: "const first = 1;" }],
+              }),
+              acp: { mediaType: "application/json", rawJson: rawDiff, byteLength: "48", sha256: "a".repeat(43) },
             }),
-            changedEvent(22, "cccccccc-0000-4000-8000-000000000022", "src/app.ts", {
-              diffLines: [{ kind: "deleted", text: "const first = 1;" }],
-              added: "0",
-              deleted: "1",
+            wireEvent({
+              globalSequence: 22,
+              eventId: "eeeeeeee-0000-4000-8000-000000000022",
+              sessionId: SESSION_ALPHA,
+              eventType: "file.changed",
+              view: changeView({
+                changeId: "cccccccc-0000-4000-8000-000000000022",
+                path: "src/app.ts",
+                added: "0",
+                deleted: "1",
+                diffLines: [{ kind: "deleted", text: "const first = 1;" }],
+              }),
             }),
           ],
           readResult: (sessionId) =>
@@ -467,38 +497,36 @@ const checks: readonly Check[] = [
               historyHasEarlier: true,
             }),
         }),
-        (container) => query(container, '[data-session-file="src/app.ts"]') !== null,
-        "会话变更行渲染",
+        (container) =>
+          queryAll(container, '[data-timeline-card="file-changed"]').length === 3 &&
+          query(container, '[data-action="open-file-change-diagnostics"]') !== null,
+        "时间线文件改动渲染",
         async (mounted) => {
           const container = mounted.container;
-          expectEqual(queryAll(container, '[data-session-file="src/app.ts"]').length, 1, "同一文件只列一行");
+          // 文件栏没有会话变更清单或记录选择器。
+          expectEqual(queryAll(container, '[data-conversation-column="files"] [data-session-file]').length, 0, "文件栏无会话文件行");
+          expectEqual(query(container, '[data-action="select-file-change"]'), null, "不得再有会话来源联动入口");
+          expectEqual(query(container, '[data-file-view-content="session_changes"]'), null, "不得打开会话变更查看器");
+
+          // 实时两条与历史一条都在时间线；差异行只来自结构化来源。
           expectEqual(
-            query(container, '[data-session-file="src/app.ts"]')?.getAttribute("data-session-file-record-count"),
-            "2",
-            "记录条数",
+            queryAll(container, '[data-timeline-card="file-changed"]').map((node) => node.getAttribute("data-change-path")),
+            ["src/app.ts", "src/app.ts", "src/history.ts"],
+            "实时与历史的改动按时间呈现",
           );
-          const thread = mounted.composition?.store.state.threads.get(SESSION_ALPHA);
-          expectThat(thread?.historyHasEarlier === true, `historyHasEarlier=${String(thread?.historyHasEarlier)}`);
-          // `session.read` 的结果晚于实时改动落地；等面板重渲染出范围提示，而不是读早一帧。
-          await waitFor(
-            () => textOf(query(container, "[data-session-history-notice]")).includes("更早"),
-            "部分历史必须明确提示",
+          expectEqual(queryAll(container, '[data-timeline-card="file-changed"] [data-diff-region="lines"]').length, 2, "有差异行的两条逐行呈现");
+          expectEqual(queryAll(container, '[data-timeline-card="file-changed"] [data-diff-not-delivered="true"]').length, 1, "缺差异时明确说明");
+          expectThat(
+            textOf(query(container, '[data-timeline-card="file-changed"] [data-change-added-lines]')).includes("+1"),
+            "真实统计保留",
           );
-          click(
-            query(container, '[data-conversation-column="files"] [data-action="select-file-change"]'),
-            "打开同文件的历次记录",
-          );
-          await waitFor(() => query(container, '[data-file-view-content="session_changes"]') !== null, "会话变更查看器");
-          const viewer = query(container, "[data-file-view]");
-          expectEqual(queryAll(viewer, "[data-session-change-record]").length, 2, "历次记录都在");
-          // 单次统计各随其记录保留，不相加成净差异。
-          expectThat(queryAll(viewer, "[data-session-change-added-lines]").length >= 1, "新增统计在");
-          expectThat(queryAll(viewer, "[data-session-change-deleted-lines]").length >= 1, "删除统计在");
-          expectEqual(
-            query(container, "[data-file-tabs]"),
-            null,
-            "不得出现多文件页签",
-          );
+
+          // 诊断入口：原文以单块不可信文本呈现，不解析成差异行。
+          click(query(container, '[data-action="open-file-change-diagnostics"]'), "展开 ACP 原文诊断");
+          await waitFor(() => query(container, '[data-raw-json="available"]') !== null, "原文诊断展开");
+          expectThat(textOf(query(container, '[data-raw-json="available"]')).includes("const first = 1;"), "原文整串呈现");
+          expectEqual(queryAll(container, '[data-timeline-card="file-changed"] [data-diff-region="lines"]').length, 2, "原文不得变成额外差异行");
+          expectEqual(query(container, "[data-file-tabs]"), null, "不得出现多文件页签");
         },
       );
     },
@@ -599,6 +627,13 @@ const checks: readonly Check[] = [
           const timeline = query(container, '[data-conversation-scroll="timeline"]');
           expectThat(timeline !== null, "时间线滚动容器");
           timeline.scrollTop = 120;
+          // 只改 scrollTop 不会触发 React 的滚动状态；真实用户滚动会派发 scroll 事件。
+          // 不派发时页面仍按「跟随底部」处理，下一次内容变化会把位置归零。
+          timeline.dispatchEvent(new Event("scroll"));
+          await waitFor(
+            () => timeline.getAttribute("data-scroll-follow") === "false",
+            "时间线进入上读状态",
+          );
           const beforeScroll = timeline.scrollTop;
 
           await selectSource(container, "all");
@@ -621,6 +656,11 @@ const checks: readonly Check[] = [
           expectEqual(inputAfter.value, "还没发送的草稿", "草稿必须保留");
           expectThat(query(container, '[data-entry-expanded="true"]') !== null, "条目展开状态必须保留");
           const timelineAfter = query(container, '[data-conversation-scroll="timeline"]');
+          // 恢复发生在关闭后的被动 effect 里，必须等它落地再断言，而不是抢在 effect 之前读。
+          await waitFor(
+            () => timelineAfter?.scrollTop === beforeScroll,
+            "关闭后恢复原滚动位置（不强制滚到底）",
+          );
           expectEqual(timelineAfter?.scrollTop, beforeScroll, "关闭后恢复原滚动位置（不强制滚到底）");
           // 关闭后焦点回到触发文件行。
           await waitFor(
@@ -647,15 +687,8 @@ const checks: readonly Check[] = [
     async run() {
       const restore = overrideViewportWidth(600);
       try {
-        const events = Array.from({ length: 24 }, (_, index) =>
-          changedEvent(100 + index, `cccccccc-0000-4000-8000-${String(1000 + index).padStart(12, "0")}`, `src/file-${String(index)}.ts`, {
-            added: "1",
-            deleted: "1",
-            diffLines: [{ kind: "added", text: "x" }],
-          }),
-        );
         await withSessionPage(
-          sessionOptions({ events }),
+          sessionOptions(),
           (container) => query(container, '[data-segment="conversation-secondary-view"]') !== null,
           "窄屏切换控件",
           async (mounted) => {
@@ -665,14 +698,15 @@ const checks: readonly Check[] = [
               () => getComputedStyle(query(container, '[data-conversation-column="files"]') ?? container).display !== "none",
               "文件栏可见",
             );
+            await waitFor(() => query(container, '[data-file-entry="README.md"]') !== null, "根层加载");
             const filesScroll = query(container, '[data-conversation-scroll="files"]');
             expectThat(filesScroll !== null, "文件栏滚动容器");
             filesScroll.scrollTop = 50;
             const before = filesScroll.scrollTop;
 
             click(
-              query(container, '[data-conversation-column="files"] [data-action="select-file-change"]'),
-              "打开会话变更",
+              query(container, '[data-action="open-file"][data-file-path="README.md"]'),
+              "从全部文件打开",
             );
             await waitFor(() => query(container, "[data-file-view]") !== null, "窄屏查看器");
             expectEqual(

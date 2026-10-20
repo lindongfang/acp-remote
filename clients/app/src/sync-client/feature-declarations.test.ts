@@ -27,6 +27,9 @@ import { REQUIRED_FEATURES, SUPPORTED_FEATURES } from "./connection";
 /** 已撤销的目录路径 feature：`path` 现在始终随 `workspaces` 条目下发。 */
 const REVOKED_WORKSPACE_PATH_FEATURE = "core.workspace-path.v1";
 
+/** 三态会话摘要合同：登记表 `required: true`，客户端必须广告并列入必需集合。 */
+const SESSION_ACTIVITY_FEATURE = "core.session-activity.v1";
+
 /** 机器登记表里的一条 sync feature。 */
 interface RegistryFeature {
   readonly id: string;
@@ -64,6 +67,15 @@ describe("feature 声明：逐层浏览 / 结构化差异两条新增 Sync featu
     // 非必需：进了必需列表会让未广告它的服务端把连接判成 version_incompatible。
     expect(entry?.required).toBe(false);
     expect(REQUIRED_FEATURES).not.toContain(feature);
+  });
+
+  it(`${SESSION_ACTIVITY_FEATURE} 已在客户端广告且是必需 feature`, () => {
+    const entry = syncRegistryFeatures().find((item) => item.id === SESSION_ACTIVITY_FEATURE);
+    expect(entry).toBeDefined();
+    expect(entry?.delivery).toBe("mvp");
+    expect(entry?.required).toBe(true);
+    expect(SUPPORTED_FEATURES).toContain(SESSION_ACTIVITY_FEATURE);
+    expect(REQUIRED_FEATURES).toContain(SESSION_ACTIVITY_FEATURE);
   });
 
   it(`${REVOKED_WORKSPACE_PATH_FEATURE} 已从登记表撤销，客户端也不再广告`, () => {

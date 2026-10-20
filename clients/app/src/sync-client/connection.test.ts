@@ -787,7 +787,7 @@ describe("连接契约：必需 feature 的覆盖判定（§5.2）", () => {
     // 三者恢复路径不同，事件里必须能分开。
     expect(context.events.find((event) => event.kind === "rejected")).toMatchObject({
       reason: "required_features_missing",
-      detail: "core.command-status.v1",
+      detail: "core.command-status.v1,core.session-activity.v1",
     });
   });
 

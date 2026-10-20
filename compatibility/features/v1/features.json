@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-10-19",
+  "revision": "2026-10-20",
   "description": "ACP Remote feature ID 机器登记 v1：Sync 与 Node Link 的封闭 feature 词表。协议文档 §5.2 / §11.3 的 feature 表、fixture 里出现的 feature ID 与本文件由 scripts/check-features.mjs 断言逐一相等；新增或删除 feature 必须先改本文件。required 表示协议要求每次协商都必须选中该 feature（产品必须支持由 delivery 表达）。",
   "protocols": {
     "sync": {
@@ -107,6 +107,12 @@
           "description": "远程历史读取（§9.6/§11.5）：imported 会话的结构化历史按会话内序号独立分页、读取前重新鉴权、正文由 Owner 回源提供；不可达或超出保留期显式不可用，Access 不持久化正文",
           "delivery": "mvp",
           "required": false
+        },
+        {
+          "id": "core.session-activity.v1",
+          "description": "会话主状态三态合同（§10.2）：`sessionSummary.state` 只有 `idle`/`running`/`pending` 三个取值——存在有效未解决交互时为 `pending`，否则存在未结束任务（含已接受的排队任务）时为 `running`，否则为 `idle`；create/read/list/快照/事件视图与 Node Link 的 `sessionMeta`、catalog 会话共用同一取值集合。排队、等待原因与任务/命令结果不属于本 feature；旧七态只允许作为历史事件 `view` 的原文出现。required=true：双方必须选中，缺失时服务端返回 `protocol.feature_required`、客户端停止同步，选中前不得收发任何三态摘要、快照或事件载荷",
+          "delivery": "mvp",
+          "required": true
         }
       ]
     },
@@ -166,6 +172,12 @@
           "description": "远程历史回源（§12.7/§17）：Access 按 origin cursor 向 Owner 读取历史分页、读取前鉴权；Owner 不可达或超出保留期显式不可用，Access 不持久化正文",
           "delivery": "mvp",
           "required": false
+        },
+        {
+          "id": "core.session-activity.v1",
+          "description": "跨节点会话主状态三态合同（§11.4/§12.3/§12.4）：`sessionMeta.state` 与 catalog `sessions[].state` 只有 `idle`/`running`/`pending`，与 Sync `sessionSummary.state` 同一取值集合——有效未解决交互优先为 `pending`，其次未结束任务（含排队）为 `running`，否则 `idle`；排队、等待原因与任务结果不经本 feature。旧七态只允许作为 `resource.event.payload.view` 的历史原文出现。required=true：双方必须选中，缺失时 Owner 返回 `nodelink.protocol.feature_required`、Access 停止业务同步，选中前不得收发任何三态元数据或事件",
+          "delivery": "mvp",
+          "required": true
         }
       ]
     }

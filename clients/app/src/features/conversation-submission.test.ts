@@ -132,7 +132,8 @@ describe("输入与提交以终态为准", () => {
 
     const page = store.conversationPage(ONLINE_SESSION_ID);
     expect(page?.input.state).toBe("in_progress");
-    // 反例：进行中仍可提交（旧实现只拦 closed）→ 下面两条会红。
+    expect(page?.input.blockedBy).toBe("turn_in_progress");
+    // 反例：进行中仍可提交 → 下面两条会红。
     expect(page?.input.canSubmit).toBe(false);
     expect(page?.input.disabledReason).toContain("进行中");
 
@@ -142,13 +143,20 @@ describe("输入与提交以终态为准", () => {
     expect(gateway.dispatches).toHaveLength(before);
   });
 
-  it("空文本与未连接时不派发命令", () => {
+  it("空文本与未连接时不派发命令；未连接的原因说明是「来源离线」", () => {
     const { store, gateway } = interactionStore();
     const before = gateway.dispatches.length;
     expect(store.submitPrompt(ONLINE_SESSION_ID, "   ").ok).toBe(false);
     expect(gateway.dispatches).toHaveLength(before);
 
     const { store: offline, gateway: offlineGateway } = storeWithNoConnection();
+    const page = offline.conversationPage(ONLINE_SESSION_ID);
+    expect(page?.input.state).toBe("unavailable");
+    expect(page?.input.blockedBy).toBe("source_offline");
+    expect(page?.input.disabledReason).toContain("连接不可用");
+    // 不可用仍可编辑草稿（三态都不只读）。
+    offline.setDraft(ONLINE_SESSION_ID, "离线也能写");
+    expect(offline.conversationPage(ONLINE_SESSION_ID)?.input.draft).toBe("离线也能写");
     expect(offline.submitPrompt(ONLINE_SESSION_ID, "你好").ok).toBe(false);
     expect(offlineGateway.dispatches).toEqual([]);
   });

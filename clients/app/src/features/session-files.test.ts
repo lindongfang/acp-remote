@@ -1,7 +1,7 @@
 /**
- * 文件栏 feature 状态测试（tasks 4.2–4.4）。
+ * 文件栏 feature 状态测试。
  *
- * 覆盖三来源分离、会话改动归并、互斥内容态/请求代次、刷新合并与失败保留。所有断言都通过
+ * 覆盖两来源分离、默认/旧值归一、互斥内容态/请求代次、刷新合并与失败保留。所有断言都通过
  * `ClientStore` 的公开状态/方法与记账网关完成，不 mock 解码器或归并函数。
  */
 
@@ -18,6 +18,8 @@ import { ClientStore } from "./client-store";
 import { SESSION_FILES_FEATURE } from "../protocol/session-files";
 import type { SessionFilesCommandName } from "../protocol/session-files";
 import { encodeBase64Url } from "../sync-client";
+import { initialSessionFilesState, normalizeFileSource, selectedSourceOf } from "./session-files";
+import type { FileSource } from "./session-files";
 import {
   ONLINE_SESSION_ID,
   historyItem,
@@ -267,7 +269,7 @@ describe("文件栏：未协商与远程降级", () => {
     expect(page.content.kind === "file" ? page.content.status : null).toBe("error");
   });
 
-  it("imported 会话保留已收到的会话变更，另外两个来源暂不支持且不查本机目录", () => {
+  it("imported 会话的两个来源明确不支持，不查询本机目录；已收到的对话改动仍可查看", () => {
     const remoteId = "aaaaaaaa-0000-4000-8000-0000000000aa";
     const { store, gateway } = fileStore({
       sessions: [
@@ -285,135 +287,46 @@ describe("文件栏：未协商与远程降级", () => {
     });
     store.apply({ kind: "event", event: fileChanged({ eventId: "eeeeeeee-0000-4000-8000-000000000001", sessionId: remoteId, displayPath: "src/a.ts", sequence: "1" }) });
     store.selectFileSource(remoteId, "all");
+    store.selectFileSource(remoteId, "git");
 
     expect(gateway.dispatches).toHaveLength(0);
     const page = store.sessionFilesPage(remoteId);
     expect(page.allNotice).toContain("远程导入会话");
-    expect(page.sessionChanges.fileCount).toBe(1);
+    expect(page.gitNotice).toContain("远程导入会话");
+    // 文件栏不再有会话变更清单；改动仍进入对话时间线的逐条投影。
+    expect("sessionChanges" in page).toBe(false);
+    expect(store.conversationPage(remoteId)?.fileChanges.map((change) => change.displayPath)).toEqual(["src/a.ts"]);
   });
 });
 
-describe("文件栏：会话变更归并", () => {
-  it("重复重放不增加记录，同名不同路径不合并，其他会话不混入", () => {
-    const { store } = fileStore();
+describe("文件栏：会话改动不进文件栏", () => {
+  it("实时与历史改动仍进入对话的逐条投影，重复事件只呈现一次", () => {
+    const { store, gateway } = onlineStore({
+      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID })] }),
+      features: [SESSION_FILES_FEATURE, "core.session-history.v1"],
+    });
     const first = fileChanged({
       eventId: "eeeeeeee-0000-4000-8000-000000000001",
       displayPath: "src/a.ts",
       sequence: "1",
       addedLines: "12",
       deletedLines: "3",
-      diffLines: [{ kind: "added", text: "+const x = 1;" }],
+      diffLines: [{ kind: "added", text: "const x = 1;" }],
     });
     store.apply({ kind: "event", event: first });
     store.apply({ kind: "event", event: first });
-    store.apply({
-      kind: "event",
-      event: fileChanged({
-        eventId: "eeeeeeee-0000-4000-8000-000000000002",
-        displayPath: "lib/a.ts",
-        sequence: "2",
-      }),
-    });
-    store.apply({
-      kind: "event",
-      event: fileChanged({
-        eventId: "eeeeeeee-0000-4000-8000-000000000003",
-        displayPath: "src/a.ts",
-        sequence: "3",
-        addedLines: "5",
-        deletedLines: "1",
-      }),
-    });
-    store.apply({
-      kind: "event",
-      event: fileChanged({
-        eventId: "eeeeeeee-0000-4000-8000-000000000004",
-        sessionId: OTHER_SESSION_ID,
-        displayPath: "src/other.ts",
-        sequence: "4",
-      }),
-    });
-    // 手动修改（设备来源）属于其他来源，不并入会话变更。
-    store.apply({
-      kind: "event",
-      event: fileChanged({
-        eventId: "eeeeeeee-0000-4000-8000-000000000005",
-        displayPath: "src/manual.ts",
-        sequence: "5",
-        originKind: "device",
-      }),
-    });
-
-    const page = store.sessionFilesPage(ONLINE_SESSION_ID);
-    expect(page.sessionChanges.fileCount).toBe(2);
-    const byPath = new Map(page.sessionChanges.files.map((file) => [file.path, file]));
-    expect(byPath.get("src/a.ts")?.records.map((record) => record.eventId)).toEqual([
-      "eeeeeeee-0000-4000-8000-000000000001",
-      "eeeeeeee-0000-4000-8000-000000000003",
-    ]);
-    expect(byPath.get("lib/a.ts")?.records).toHaveLength(1);
-    expect(page.sessionChanges.files.some((file) => file.path === "src/other.ts")).toBe(false);
-    expect(page.sessionChanges.files.some((file) => file.path === "src/manual.ts")).toBe(false);
-    // 单次统计保留在详情，不提供累计净差异。
-    expect(byPath.get("src/a.ts")?.records.map((record) => [record.addedLines, record.deletedLines])).toEqual([
-      ["12", "3"],
-      ["5", "1"],
-    ]);
-    expect(Object.keys(byPath.get("src/a.ts") ?? {})).not.toContain("totalAddedLines");
-  });
-
-  it("根外事件只给 basename 时按事件各自保留且不可读取", () => {
-    const { store } = fileStore();
-    store.apply({
-      kind: "event",
-      event: fileChanged({
-        eventId: "eeeeeeee-0000-4000-8000-000000000011",
-        displayPath: "outside.txt",
-        sequence: "1",
-        outsideWorkspace: true,
-      }),
-    });
-    store.apply({
-      kind: "event",
-      event: fileChanged({
-        eventId: "eeeeeeee-0000-4000-8000-000000000012",
-        displayPath: "outside.txt",
-        sequence: "2",
-        outsideWorkspace: true,
-      }),
-    });
-    const page = store.sessionFilesPage(ONLINE_SESSION_ID);
-    expect(page.sessionChanges.files).toHaveLength(2);
-    for (const file of page.sessionChanges.files) {
-      expect(file.readable).toBe(false);
-      expect(file.path).toBeNull();
-      expect(file.unreadableReason).toContain("无法读取");
-      expect(file.records).toHaveLength(1);
-    }
-    store.openFileContent(ONLINE_SESSION_ID, "session", "outside.txt");
-    const content = store.sessionFilesPage(ONLINE_SESSION_ID).content;
-    expect(content.kind === "file" ? content.status : null).toBe("error");
-  });
-
-  it("只展示已加载历史，并用既有历史标记说明范围", () => {
-    const { store, gateway } = onlineStore({
-      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID })] }),
-      features: [SESSION_FILES_FEATURE, "core.session-history.v1"],
-    });
     store.loadSession(ONLINE_SESSION_ID);
-    const request = lastCommand(gateway);
-    const requestId = request.body.requestId;
     store.apply({
       kind: "command_result",
       result: readResult({
-        requestId,
+        requestId: lastCommand(gateway).body.requestId,
         history: [
           historyItem({
-            eventId: "eeeeeeee-0000-4000-8000-000000000021",
+            eventId: "eeeeeeee-0000-4000-8000-000000000002",
             eventType: "file.changed",
-            sessionSequence: "10",
+            sessionSequence: "2",
             view: {
-              changeId: "eeeeeeee-0000-4000-8000-000000000021",
+              changeId: "eeeeeeee-0000-4000-8000-000000000002",
               kind: "modified",
               displayPath: "src/history.ts",
               summary: "历史里的改动",
@@ -423,10 +336,25 @@ describe("文件栏：会话变更归并", () => {
         historyHasEarlier: true,
       }),
     });
+
+    const changes = store.conversationPage(ONLINE_SESSION_ID)?.fileChanges ?? [];
+    // 重复投递的同一 `eventId` 只出现一次；实时与历史都进入同一条投影。
+    expect(changes.map((change) => change.displayPath).sort()).toEqual(["src/a.ts", "src/history.ts"]);
+    expect(changes.find((change) => change.displayPath === "src/a.ts")?.diff)
+      .toEqual({ kind: "lines", lines: [{ kind: "added", text: "const x = 1;" }] });
+    // 文件栏模型没有会话清单/历史范围提示。
     const page = store.sessionFilesPage(ONLINE_SESSION_ID);
-    expect(page.historyCoverage).toBe("partial");
-    expect(page.historyNotice).toContain("历史");
-    expect(page.sessionChanges.fileCount).toBe(1);
+    expect(Object.keys(page).sort()).toEqual([
+      "all",
+      "allNotice",
+      "connectionOnline",
+      "content",
+      "git",
+      "gitNotice",
+      "refreshState",
+      "selectedSource",
+      "sessionId",
+    ]);
   });
 });
 
@@ -501,7 +429,6 @@ describe("文件栏：Git 状态与差异", () => {
     expect(page.git.gitState).toBe("available");
     expect(page.git.entries.map((entry) => entry.path)).toEqual(["src/a.ts", "src/new.ts"]);
     expect(page.git.next).toBe("git-page-2");
-    expect(page.sessionChanges.fileCount).toBe(0);
 
     store.openFileContent(ONLINE_SESSION_ID, "git", "src/a.ts");
     const diff = lastCommand(gateway);
@@ -690,7 +617,7 @@ describe("文件栏：互斥内容态与请求代次", () => {
     store.setDraft(ONLINE_SESSION_ID, "还没发的草稿");
     store.setConversationSecondaryView("timeline");
     const before = store.state;
-    store.openFileContent(ONLINE_SESSION_ID, "session", "src/a.ts");
+    store.openFileContent(ONLINE_SESSION_ID, "all", "src/a.ts");
     store.closeFileContent();
     const after = store.state;
     expect(after.drafts).toBe(before.drafts);
@@ -837,86 +764,158 @@ describe("文件栏：按内容 kind 选择预览预算", () => {
   });
 });
 
-describe("会话变更手动刷新", () => {
-  it("重读最新历史并去重合并，不重置消息和历史分页；在途点击不重复派发", () => {
-    const { store, gateway } = fileStore({ features: [SESSION_FILES_FEATURE, "core.session-history.v1"] });
-    const old = historyItem({ eventId: "eeeeeeee-0000-4000-8000-000000000081", eventType: "file.changed",
-      view: { kind: "modified", changeId: "old", displayPath: "src/old.ts", summary: "old" } });
-    const latest = historyItem({ eventId: "eeeeeeee-0000-4000-8000-000000000082", eventType: "file.changed", sessionSequence: "2",
-      view: { kind: "modified", changeId: "new", displayPath: "src/new.ts", summary: "new" } });
-    store.loadSession(ONLINE_SESSION_ID);
-    store.apply({ kind: "command_result", result: readResult({ requestId: lastCommand(gateway).body.requestId,
-      messages: [], history: [old], historyHasEarlier: true }) });
-    const thread = store.state.threads.get(ONLINE_SESSION_ID);
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshState.kind).toBe("available");
-    store.refreshFiles(ONLINE_SESSION_ID);
-    const refresh = lastCommand(gateway);
-    expect(refresh.body.command).toBe("session.read");
-    expect(refresh.body.payload).toEqual({ include: ["history"] });
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshState.kind).toBe("loading");
-    store.refreshFiles(ONLINE_SESSION_ID);
-    expect(gateway.dispatches).toHaveLength(2);
-    store.apply({ kind: "command_result", result: readResult({ requestId: refresh.body.requestId,
-      history: [old, latest], historyHasEarlier: false }) });
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).sessionChanges.files.map(file => file.path)).toEqual(["src/new.ts", "src/old.ts"]);
-    const after = store.state.threads.get(ONLINE_SESSION_ID);
-    expect(after?.page).toBe(thread?.page);
-    expect(after?.items).toBe(thread?.items);
-    expect(after?.historyHasEarlier).toBe(true);
-    expect(after?.nextBeforeHistory).toBe(thread?.nextBeforeHistory);
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshState.kind).toBe("available");
+describe("文件栏：来源默认与旧值归一", () => {
+  it("首次进入默认全部文件；旧的 session 与未知取值都回到全部文件且不派发历史刷新", () => {
+    const { store, gateway } = fileStore();
+    expect(store.sessionFilesPage(ONLINE_SESSION_ID).selectedSource).toBe("all");
+
+    const before = gateway.dispatches.length;
+    store.selectFileSource(ONLINE_SESSION_ID, "session" as unknown as FileSource);
+    expect(store.sessionFilesPage(ONLINE_SESSION_ID).selectedSource).toBe("all");
+    // 归一后的来源发出的是目录查询，绝不发会话变更专属的历史刷新。
+    expect(gateway.dispatches.slice(before).map((command) => command.body.command)).toEqual(["session.files.list"]);
+    expect(gateway.dispatches.some((command) => command.body.command === "session.read")).toBe(false);
+
+    for (const value of ["session", null, undefined, "unknown", 42]) {
+      expect(normalizeFileSource(value)).toBe("all");
+    }
+    expect(normalizeFileSource("git")).toBe("git");
   });
 
-  it("旧主机明确说明不可刷新，不发送不支持的历史查询", () => {
+  it("旧状态里残留的 session 选择在读取时也归一为全部文件", () => {
     const { store, gateway } = fileStore();
+    // 直接构造带旧取值的状态（类型上已不存在）：读取边界必须归一。
+    const state = {
+      ...initialSessionFilesState(),
+      selectedSources: new Map([[ONLINE_SESSION_ID, "session" as unknown as FileSource]]),
+    };
+    expect(selectedSourceOf(state, ONLINE_SESSION_ID)).toBe("all");
+
     store.refreshFiles(ONLINE_SESSION_ID);
-    expect(gateway.dispatches).toHaveLength(0);
-    const state = store.sessionFilesPage(ONLINE_SESSION_ID).refreshState;
-    expect(state.kind).toBe("unavailable");
-    expect(state.kind === "unavailable" ? state.reason : "").toContain("不支持读取会话历史");
+    expect(gateway.dispatches).toHaveLength(1);
+    expect(lastCommand(gateway).body.command).toBe("session.files.list");
   });
 });
 
-describe("文件栏刷新错误与会话读取错误分离", () => {
-  it("首次加载只请求后端可读资源，失败只在对话读取处呈现", () => {
-    const { store, gateway } = onlineStore({ resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID })] }), features: ["core.session-history.v1"] });
-    store.loadSession(ONLINE_SESSION_ID);
-    const command = lastCommand(gateway);
-    expect(command.body.command).toBe("session.read");
-    expect(command.body.payload).toEqual({ include: ["messages", "config_options", "history"] });
-    const result = readResult({ requestId: command.body.requestId });
-    store.apply({ kind: "command_result", result: { ...result, body: { ...result.body,
-      status: "failed", result: null,
-      error: { code: "capability.unsupported_by_broker", message: "the broker cannot express this resource", retryable: false, details: {} },
-    } } });
-    expect(store.conversationPage(ONLINE_SESSION_ID)?.paging.error).toContain("capability.unsupported_by_broker");
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshError).toBeNull();
-    store.refreshFiles(ONLINE_SESSION_ID);
-    expect(store.conversationPage(ONLINE_SESSION_ID)?.paging.error).toContain("capability.unsupported_by_broker");
-    store.apply({ kind: "command_result", result: readResult({ requestId: lastCommand(gateway).body.requestId }) });
-    expect(store.conversationPage(ONLINE_SESSION_ID)?.paging.error).toContain("capability.unsupported_by_broker");
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshError).toBeNull();
+describe("文件栏：手动刷新只发对应查询", () => {
+  it("离线时刷新不可用并说明原因", () => {
+    const { store } = fileStore();
+    store.apply({ kind: "closed", code: 4500, retryable: true });
+    const state = store.sessionFilesPage(ONLINE_SESSION_ID).refreshState;
+    expect(state.kind).toBe("unavailable");
+    expect(state.kind === "unavailable" ? state.reason : "").toContain("未连接");
   });
 
-  it("文件栏手动刷新失败仍显示真实错误，重试时清除", () => {
-    const { store, gateway } = onlineStore({ resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID })] }), features: ["core.session-history.v1"] });
+  it("Git 来源刷新在途时不重复派发；失败保留已有条目并说明原因", () => {
+    const { store, gateway } = fileStore();
+    store.selectFileSource(ONLINE_SESSION_ID, "git");
+    const first = lastCommand(gateway);
+    expect(first.body.command).toBe("session.git.status");
+    store.apply({
+      kind: "command_result",
+      result: commandResult(first.body.requestId, "session.git.status", {
+        gitState: "available",
+        entries: [{ path: "src/a.ts", status: "modified", conflicted: false, binary: false }],
+      }),
+    });
+    expect(store.sessionFilesPage(ONLINE_SESSION_ID).git.entries).toHaveLength(1);
+
     store.refreshFiles(ONLINE_SESSION_ID);
-    const command = lastCommand(gateway);
-    expect(command.body.payload).toEqual({ include: ["history"] });
-    const result = readResult({ requestId: command.body.requestId });
-    store.apply({ kind: "command_result", result: { ...result, body: { ...result.body,
-      status: "failed", result: null,
-      error: { code: "internal.unavailable", message: "history unavailable", retryable: true, details: {} },
-    } } });
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshError).toContain("history unavailable");
-    expect(store.conversationPage(ONLINE_SESSION_ID)?.paging.error).toBeNull();
-    store.loadSession(ONLINE_SESSION_ID);
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshError).toContain("history unavailable");
-    store.apply({ kind: "command_result", result: readResult({ requestId: lastCommand(gateway).body.requestId }) });
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshError).toContain("history unavailable");
+    const refresh = lastCommand(gateway);
+    expect(refresh.body.command).toBe("session.git.status");
+    // 在途时再点刷新不并发第二条查询：那次意图排队，等当前查询落地后才补发。
     store.refreshFiles(ONLINE_SESSION_ID);
-    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshError).toBeNull();
+    expect(gateway.dispatches).toHaveLength(2);
+
+    // 排队的刷新会在当前查询落地后立即补发下一条查询；失败结果要落在**补发的那条**上，
+    // 否则补发本身会把 `error` 置空（`#dispatchGitStatus` 重新开始一次查询）。
+    store.apply({
+      kind: "command_result",
+      result: commandResult(refresh.body.requestId, "session.git.status", {
+        gitState: "available",
+        entries: [{ path: "src/a.ts", status: "modified", conflicted: false, binary: false }],
+      }),
+    });
+    const retried = lastCommand(gateway);
     expect(gateway.dispatches).toHaveLength(3);
+    expect(retried.body.command).toBe("session.git.status");
+    expect(retried.body.requestId).not.toBe(refresh.body.requestId);
+
+    store.apply({
+      kind: "command_result",
+      result: commandResult(retried.body.requestId, "session.git.status", null, {
+        code: "internal.unavailable",
+        message: "Git 暂时不可用",
+        retryable: true,
+        details: {},
+      }),
+    });
+    const page = store.sessionFilesPage(ONLINE_SESSION_ID);
+    expect(page.git.error?.message).toContain("Git 暂时不可用");
+    expect(page.git.entries.map((entry) => entry.path)).toEqual(["src/a.ts"]);
+    expect(gateway.dispatches.some((command) => command.body.command === "session.read")).toBe(false);
+  });
+
+  it("全部文件刷新只发目录查询；失败保留已加载条目", () => {
+    const { store, gateway } = fileStore();
+    store.selectFileSource(ONLINE_SESSION_ID, "all");
+    const first = lastCommand(gateway);
+    store.apply({
+      kind: "command_result",
+      result: commandResult(first.body.requestId, "session.files.list", listResult({
+        entries: [{ path: "README.md", name: "README.md", kind: "file", openable: true }],
+      })),
+    });
+    store.refreshFiles(ONLINE_SESSION_ID);
+    const refresh = lastCommand(gateway);
+    expect(refresh.body.command).toBe("session.files.list");
+    store.apply({
+      kind: "command_result",
+      result: commandResult(refresh.body.requestId, "session.files.list", null, {
+        code: "internal.unavailable",
+        message: "目录暂时不可用",
+        retryable: true,
+        details: {},
+      }),
+    });
+    const root = store.sessionFilesPage(ONLINE_SESSION_ID).all.directories.get("");
+    expect(root?.error?.message).toContain("目录暂时不可用");
+    expect(root?.entries.map((entry) => entry.path)).toEqual(["README.md"]);
+  });
+});
+
+describe("文件栏：普通历史分页不受影响", () => {
+  it("首次读取与向上翻历史仍按各自游标派发 session.read", () => {
+    const { store, gateway } = onlineStore({
+      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID })] }),
+      features: [SESSION_FILES_FEATURE, "core.session-history.v1"],
+    });
+    store.loadSession(ONLINE_SESSION_ID);
+    const first = lastCommand(gateway);
+    expect(first.body.command).toBe("session.read");
+    expect(first.body.payload).toEqual({ include: ["messages", "config_options", "history"] });
+    store.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: first.body.requestId,
+        history: [
+          historyItem({
+            eventId: "eeeeeeee-0000-4000-8000-000000000091",
+            eventType: "turn.started",
+            sessionSequence: "9",
+            view: { turnId: "turn-1", state: "running" },
+          }),
+        ],
+        historyHasEarlier: true,
+      }),
+    });
+    const thread = store.state.threads.get(ONLINE_SESSION_ID);
+    expect(thread?.nextBeforeHistory).toBe("9");
+
+    store.loadEarlierHistory(ONLINE_SESSION_ID);
+    const earlier = lastCommand(gateway);
+    expect(earlier.body.command).toBe("session.read");
+    expect(earlier.body.payload).toEqual({ include: ["history"], beforeHistory: "9" });
   });
 });
 

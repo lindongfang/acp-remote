@@ -64,6 +64,7 @@ async fn rewind_to_v8(dir: &std::path::Path) -> std::path::PathBuf {
     let pool = raw_write_pool(&path).await;
     sqlx::raw_sql(
         "ALTER TABLE owned_session RENAME COLUMN workspace_directory_id TO workspace_alias;
+         ALTER TABLE owned_session ADD COLUMN closed_at TEXT;
          CREATE TABLE owned_workspace (
              alias          TEXT PRIMARY KEY,
              display_name   TEXT NOT NULL,
@@ -299,7 +300,7 @@ async fn the_written_directory_id_round_trips_verbatim_and_an_unwritten_row_stay
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: Some(absolute_path("round-trip")),
@@ -369,7 +370,7 @@ async fn a_mode_change_commit_also_persists_the_workspace_directory_id() {
                         .expect("mode ref"),
                 ),
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 interaction: None,
                 agent_session_id: Some(AgentSessionId::new("acp-session-1").expect("会话标识")),
                 workspace_cwd: Some(absolute_path("set-mode")),
@@ -460,7 +461,7 @@ async fn a_null_directory_id_is_never_back_filled_from_the_canonical_path() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: Some(cwd.clone()),
@@ -533,7 +534,7 @@ async fn the_resume_flow_neither_reads_nor_rewrites_the_directory_id() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 interaction: None,
                 agent_session_id: Some(AgentSessionId::new("acp-session-resume").expect("id")),
                 workspace_cwd: Some(absolute_path("resume")),

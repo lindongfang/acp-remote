@@ -273,6 +273,10 @@
         "default": { "type": "boolean" }
       }
     },
+    "sessionState": {
+      "description": "会话主状态（docs/SYNC_PROTOCOL.md §10.2 的 `SessionSummary.state`）：只表达活跃程度摘要。存在有效未解决交互时为 `pending`；否则存在未结束任务（含已接受的排队任务）时为 `running`；否则为 `idle`。排队、等待原因与任务结果不属于本词表；旧七态只允许作为历史事件 `view` 的原文出现，MUST NOT 出现在任何实时摘要里。",
+      "enum": ["idle", "running", "pending"]
+    },
     "sessionSummary": {
       "type": "object",
       "additionalProperties": false,
@@ -289,9 +293,7 @@
             "name": { "type": "string", "minLength": 1, "maxLength": 128 }
           }
         },
-        "state": {
-          "enum": ["idle", "queued", "running", "waiting_input", "waiting_permission", "failed", "closed"]
-        },
+        "state": { "$ref": "#/$defs/sessionState" },
         "origin": { "$ref": "#/$defs/originBlock" },
         "currentMode": {
           "oneOf": [{ "$ref": "#/$defs/modeRef" }, { "type": "null" }]

@@ -1,0 +1,11 @@
+{
+  "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+  "title": "旧七态的实时摘要",
+  "agent": { "agentId": "claude-code", "name": "Claude Code" },
+  "state": "waiting_permission",
+  "origin": { "kind": "local" },
+  "currentMode": null,
+  "version": "43",
+  "createdAt": "2026-09-17T11:00:00.000Z",
+  "updatedAt": "2026-09-17T12:12:00.000Z"
+}

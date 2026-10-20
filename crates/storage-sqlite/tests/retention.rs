@@ -601,11 +601,12 @@ async fn prune_clears_expired_events_referenced_by_terminal_interactions() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,
                 interaction: Some(InteractionResolved {
+                    request_version: None,
                     interaction: InteractionId::new(INTERACTION).expect("interaction id"),
                     resolution: InteractionResolution::Permission(
                         PermissionDecision::try_new(
@@ -736,11 +737,12 @@ async fn capacity_reports_storage_full_not_backend_when_events_are_referenced() 
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,
                 interaction: Some(InteractionResolved {
+                    request_version: None,
                     interaction: InteractionId::new(INTERACTION).expect("interaction id"),
                     resolution: InteractionResolution::Permission(
                         PermissionDecision::try_new(

@@ -171,7 +171,7 @@ function localHistory(): readonly Record<string, unknown>[] {
 
 const checks: readonly Check[] = [
   {
-    name: "CP-7 变更文件右栏：只呈现有结构化来源的统计与相对化路径，未下发的差异正文一次都不出现",
+    name: "CP-7 时间线文件改动：只呈现有结构化来源的统计与相对化路径，未下发的差异正文一次都不出现",
     async run() {
       await withSessionPage(
         sessionScenario({
@@ -203,30 +203,26 @@ const checks: readonly Check[] = [
             }),
           ],
         }),
-        (container) => query(container, `[data-file-change="${CHANGE_ID}"]`) !== null,
-        "变更文件栏渲染",
+        (container) => queryAll(container, '[data-timeline-card="file-changed"]').length === 3,
+        "时间线文件改动渲染",
         async (mounted) => {
           const container = mounted.container;
-          const filesColumn = query(container, '[data-conversation-column="files"]');
-          expectThat(filesColumn !== null, "变更文件必须落在右栏");
           expectEqual(
-            query(filesColumn, "[data-file-changes]")?.getAttribute("data-file-changes"),
-            "list",
-            "三处改动时右栏是清单",
+            queryAll(container, '[data-timeline-card="file-changed"]').length,
+            3,
+            "三处改动都进入时间线",
           );
-          expectEqual(query(filesColumn, "[data-file-change-count]")?.getAttribute("data-file-change-count"), "3", "改动处数");
+          // 文件栏不再恢复旧的文件改动清单。
+          expectEqual(
+            queryAll(container, '[data-conversation-column="files"] [data-file-change]').length,
+            0,
+            "文件栏不得再展示旧的文件改动清单",
+          );
 
-          // 树形展示目录与文件尾段，完整相对路径仍保留在定位锚点。
-          const changed = query(filesColumn, `[data-file-change="${CHANGE_ID}"]`);
-          expectEqual(
-            textOf(query(changed, "[data-change-path-label]")),
-            "app.ts",
-            "文件行只显示路径尾段，目录由树形层级展示",
-          );
-          expectEqual(query(changed, "[data-change-path-label]")?.getAttribute("data-change-path-label"),
-            "src/app.ts", "文件定位仍保留完整相对路径");
-          expectThat(query(filesColumn, '[data-file-directory-row="src/"]') !== null,
-            "文件必须置于 src 目录，不丢弃层级");
+          const changed = query(container, `[data-timeline-card="file-changed"][data-change-id="${CHANGE_ID}"]`);
+          expectThat(changed !== null, "结构化统计的那一处必须渲染");
+          expectEqual(changed?.getAttribute("data-change-path"),
+            "src/app.ts", "完整相对路径保留");
           expectEqual(
             query(changed, "[data-change-added-lines]")?.getAttribute("data-change-added-lines"),
             "2",
@@ -238,27 +234,27 @@ const checks: readonly Check[] = [
             "删除行数必须来自结构化统计",
           );
           // 判定不出的那一项：省略而不是填零。
-          const noStats = query(filesColumn, '[data-file-change="f0000000-0000-4000-8000-000000000102"]');
+          const noStats = query(container, '[data-timeline-card="file-changed"][data-change-id="f0000000-0000-4000-8000-000000000102"]');
           expectThat(
             query(noStats, "[data-change-line-count-unavailable]") !== null,
             "没有下发行数统计时必须明说，而不是填 +0/-0",
           );
           expectEqual(
-            queryAll(filesColumn, "[data-change-added-lines]").length,
+            queryAll(container, '[data-timeline-card="file-changed"] [data-change-added-lines]').length,
             2,
-            "右栏里只有有统计的那两项才出现行数锚点",
+            "只有有统计的那两项才出现行数锚点",
           );
           expectThat(
-            textOf(query(filesColumn, "[data-change-statistics-scope]")).includes("不解析 ACP 原文"),
-            "右栏必须说明差异行只来自结构化来源、不解析 ACP 原文",
+            textOf(query(container, "[data-change-statistics-scope]")).includes("不解析 ACP 原文"),
+            "必须说明差异行只来自结构化来源、不解析 ACP 原文",
           );
 
-          // 差异区的三种形态各就各位（右栏退回「只有统计」的形态时，下面这一组同时变红）。
-          const diffRegion = query(filesColumn, `[data-file-change="${CHANGE_ID}"] [data-diff-region]`);
+          // 差异区的三种形态各就各位（退回「只有统计」的形态时，下面这一组同时变红）。
+          const diffRegion = query(changed, "[data-diff-region]");
           expectEqual(
             diffRegion?.getAttribute("data-diff-region"),
             "lines",
-            "下发了结构化差异行时右栏必须逐行呈现",
+            "下发了结构化差异行时必须逐行呈现",
           );
           expectEqual(
             queryAll(diffRegion, "[data-diff-line-kind]").map((node) => node.getAttribute("data-diff-line-kind")),
@@ -279,13 +275,12 @@ const checks: readonly Check[] = [
             expectThat(rendered.startsWith(prefix), `第 ${String(index + 1)} 行缺少行首前缀`);
             expectAbsent(rendered, `${prefix}${prefix}`, `第 ${String(index + 1)} 行出现了双前缀`);
           }
-          const filesText = domText(filesColumn);
+          const timelineText = domText(container);
           for (const marker of STRUCTURED_DIFF_MARKERS) {
-            expectThat(filesText.includes(marker), `差异行内容必须逐字来自结构化来源：${marker}`);
+            expectThat(timelineText.includes(marker), `差异行内容必须逐字来自结构化来源：${marker}`);
           }
-          // 先取到那一项再断言它存在：`domText` 只接受非 null，缺元素时要报「有不可用标记的那处改动
-          // 没渲染」这条可定位的失败，而不是让 `domText(null)` 抛一个看不出原因的 TypeError。
-          const unavailableChange = query(filesColumn, `[data-file-change="${CHANGE_ID_UNAVAILABLE}"]`);
+          // 先取到那一项再断言它存在：缺元素时要报「有不可用标记的那处改动没渲染」。
+          const unavailableChange = query(container, `[data-timeline-card="file-changed"][data-change-id="${CHANGE_ID_UNAVAILABLE}"]`);
           expectThat(unavailableChange !== null, "有不可用标记的那处改动必须渲染");
           expectEqual(
             query(unavailableChange, "[data-diff-unavailable]")?.getAttribute("data-diff-unavailable"),
@@ -301,9 +296,9 @@ const checks: readonly Check[] = [
             "两者都没有时必须明确说明，而不是留一块空的差异区",
           );
 
-          // 每处改动都有诊断入口（入口只在右栏；时间线卡片给的是指向右栏的说明）。
+          // 每处改动都有诊断入口。
           expectEqual(
-            queryAll(filesColumn, 'button[data-action="open-file-change-diagnostics"]').length,
+            queryAll(container, '[data-timeline-card="file-changed"] button[data-action="open-file-change-diagnostics"]').length,
             3,
             "每处改动都要有查看 ACP 原文的诊断入口",
           );
@@ -311,9 +306,9 @@ const checks: readonly Check[] = [
           // MUST NOT：未展开诊断时，差异正文（含绝对路径）一个片段都不得出现。
           expectNone(domText(container), DIFF_MARKERS, "未展开诊断时页面上出现了未下发的差异正文");
           expectAbsent(
-            domHtml(filesColumn),
+            domHtml(container),
             "D:\\secret\\raw-diff-only",
-            "右栏呈现了未下发的差异正文里的本机路径",
+            "呈现了未下发的差异正文里的本机路径",
           );
           expectEqual(
             queryAll(container, "[data-change-diagnostics]").length,

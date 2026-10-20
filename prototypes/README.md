@@ -51,6 +51,10 @@
 那四处有意偏离（不是遗漏）是：响应式断点、来源与同步时刻标注的位置、Agent 连接状态缺席时呈现「状态未知」、
 授权按钮文字色的取色方式。它们的取舍理由以 `openspec/changes/pwa-prototype-parity/proposal.md` 为准。
 
+## 文件栏来源（2026-10-20）
+
+桌面原型与移动端生成物的文件栏都只有「全部文件」和「Git 变更」两个来源，首次进入、切换会话及关闭文件查看后都保持或回到「全部文件」；源码中没有「会话变更」按钮、历次记录模式或对应脚本分支（`data-open` 处理器只消费 `dataset.open`，已无 `source==="session"` 分支），宽屏右栏与窄屏入口共用同一来源集合。桌面原型的 Git 变更说明覆盖整个会话工作目录，并明确可能包含人工操作与其他会话的修改，不承诺当前会话独占。移动端仍由 `prototypes/.build/` 拼装生成，本轮未改其生成链，因此移动端的同等范围文案尚未同步（来源集合已一致，改文案需改 `.build/` 后重新拼装）。口径与 `docs/FRONTEND_DESIGN.md` §2/§4.1 一致，验收状态见 `docs/evidence/remove-session-file-changes.md`（未执行项在该文件标注）。
+
 ## 实现缺口清单
 
 [`IMPLEMENTATION-GAPS.md`](./IMPLEMENTATION-GAPS.md) 是按层列出的「要实现/要对齐还差什么」，同时如实登记

@@ -136,11 +136,9 @@ export default function SessionRoute(): ReactElement {
   // 「哪一处改动的 ACP 原文是展开的」是**页面级视图状态**：它不改变任何数据判定、也不需要
   // 跨页存活，因此留在这里（次级视图那一个是跨路由的 UI 偏好，因此住在仓库里）。
   const [openChangeDiagnostics, setOpenChangeDiagnostics] = useState<string | null>(null);
-  // 折叠块的显式展开状态（键为条目键）与「已选中的那一处改动」同属页面级视图状态：默认展开值由
-  // 条目状态推出（`ConversationTimeline` 的判定），页面只记用户**显式**给出的那一份覆盖值；
-  // 选中项让时间线上带文件标识的条目与右栏改动清单共用同一个文件（D10）。
+  // 折叠块的显式展开状态（键为条目键）属于页面级视图状态：默认展开值由条目状态推出
+  // （`ConversationTimeline` 的判定），页面只记用户**显式**给出的那一份覆盖值。
   const [expandedTimelineEntries, setExpandedTimelineEntries] = useState<Readonly<Record<string, boolean>>>({});
-  const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null);
 
   // 明细现取：只在 store 就绪且还没有线程时发一次（store 内部有在途请求的去重）。
   // 同时把「当前对话页属于哪个会话」告诉仓库：路由切换时旧会话的文件读取会被丢弃，
@@ -208,12 +206,6 @@ export default function SessionRoute(): ReactElement {
     store.openFileContent(sessionId, current.context.source, current.context.path);
   };
 
-  /** 时间线条目联动：切到「会话变更」并选中同一个文件，但不替换对话区。 */
-  const selectChange = (changeId: string): void => {
-    store.selectFileSource(sessionId, "session");
-    setSelectedChangeId(changeId);
-  };
-
   /**
    * 要呈现的创建弹层：`null` 表示本页不呈现。
    *
@@ -271,11 +263,10 @@ export default function SessionRoute(): ReactElement {
         onSelectMode={(modeId) => {
           store.setMode(sessionId, modeId);
         }}
-        // 右栏每处改动的 ACP 原文诊断：展开态是页面级视图状态（按 `eventId`）。
-        // 窄屏查看器里点诊断时切到文件栏并展开该记录，保证入口有可见结果。
+        // 右栏每处改动的 ACP 原文诊断：展开态是页面级视图状态（按 `eventId`），
+        // 入口在对话时间线的文件改动卡片里，原文按不可信文本就地呈现。
         onOpenChangeDiagnostics={(eventId) => {
           setOpenChangeDiagnostics(eventId);
-          if (eventId !== null && narrow) store.setConversationSecondaryView("files");
         }}
         openChangeDiagnosticsEventId={openChangeDiagnostics}
         // 折叠块的展开状态：只记显式覆盖值（按条目键），默认值由条目状态在时间线那一侧推出。
@@ -283,10 +274,7 @@ export default function SessionRoute(): ReactElement {
         onToggleTimelineEntry={(key, expanded) => {
           setExpandedTimelineEntries((current) => ({ ...current, [key]: expanded }));
         }}
-        // 选中项：时间线条目与右栏清单共用同一份（从条目点进来时右栏切到会话变更并选中同一个文件）。
-        selectedChangeId={selectedChangeId}
-        onSelectChange={selectChange}
-        // 文件栏三来源与中间只读查看：判定全在 store，页面只接线与处理窄屏返回。
+        // 文件栏两来源与中间只读查看：判定全在 store，页面只接线与处理窄屏返回。
         filesPanel={filesPanel}
         onSelectFileSource={(source) => {
           store.selectFileSource(sessionId, source);

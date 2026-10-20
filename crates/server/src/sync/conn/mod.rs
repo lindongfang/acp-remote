@@ -29,9 +29,9 @@ pub mod session;
 mod wire;
 
 pub use handshake::{
-    NegotiationFault, PROTOCOL_VERSION, SUPPORTED_FEATURES, connection_binding, feature_list,
-    feature_list_without, negotiate_features, negotiate_features_with, negotiated_version,
-    peer_trust, pending_pairing, transcript_features, wire_features,
+    NegotiationFault, PROTOCOL_VERSION, REQUIRED_FEATURES, SUPPORTED_FEATURES, connection_binding,
+    feature_list, feature_list_without, negotiate_features, negotiate_features_with,
+    negotiated_version, peer_trust, pending_pairing, transcript_features, wire_features,
 };
 pub use limits::{SessionLimits, SyncConfig};
 pub use registry::{ConnectionHandle, ConnectionRegistry, PendingQueue, SendFault};

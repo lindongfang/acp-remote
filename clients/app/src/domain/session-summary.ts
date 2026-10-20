@@ -13,15 +13,13 @@ import type { SessionSummary, Timestamp, Uuid } from "../protocol/common";
 /** 会话的稳定标识（wire 上的 `sessionId`）。 */
 export type SessionId = Uuid;
 
-/** `sessionSummary.state` 在视图层的同名取值域。 */
-export type SessionStateView =
-  | "idle"
-  | "queued"
-  | "running"
-  | "waiting_input"
-  | "waiting_permission"
-  | "failed"
-  | "closed";
+/**
+ * `sessionSummary.state` 在视图层的同名取值域。
+ *
+ * 三态只表达活跃程度：有效未解决交互 → `pending`；未结束任务（含已接受的排队任务）→
+ * `running`；其余 → `idle`。排队细节、等待原因与任务结果由会话内容另行表达，不属于这里。
+ */
+export type SessionStateView = "idle" | "running" | "pending";
 
 /** 会话标题：标题由 Agent 通知单向写入，空标题呈现为未命名（`design.md` D7）。 */
 export type SessionTitle = { readonly kind: "titled"; readonly text: string } | { readonly kind: "untitled" };

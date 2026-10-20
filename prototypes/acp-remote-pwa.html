@@ -93,10 +93,7 @@
   .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--ink-3)}
   .dot.running{background:var(--ok);box-shadow:0 0 0 0 rgba(18,138,78,.5);animation:ring 1.6s ease-out infinite}
   @keyframes ring{0%{box-shadow:0 0 0 0 rgba(18,138,78,.45)}70%{box-shadow:0 0 0 7px rgba(18,138,78,0)}100%{box-shadow:0 0 0 0 rgba(18,138,78,0)}}
-  .dot.queued{background:var(--accent)}
-  .dot.waiting_permission,.dot.waiting_input{background:var(--warn)}
-  .dot.failed{background:var(--danger)}
-  .dot.closed{opacity:.55}
+  .dot.pending{background:var(--warn)}
   button.hostchip{font:inherit;color:inherit;cursor:pointer}
   button.hostchip:hover{border-color:var(--accent);color:var(--accent-ink)}
   button.badge{cursor:pointer;font-family:inherit}
@@ -473,7 +470,6 @@
     background:var(--line-2);color:var(--ink-2);letter-spacing:.01em}
   .fvsource.all{background:var(--line-2);color:var(--ink-2)}
   .fvsource.git{background:var(--warn-soft);color:var(--warn)}
-  .fvsource.session{background:var(--accent-soft);color:var(--accent-ink)}
   .fvpath{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     font-family:var(--mono);font-size:13px}
   .fvpath .dir{color:var(--ink-3)} .fvpath .file{color:var(--ink);font-weight:600}
@@ -841,8 +837,8 @@
       <select id="scenarioSel">
         <option value="running">运行中（按钮变红色停止）</option>
         <option value="idle">空闲</option>
-        <option value="waiting">等待授权</option>
-        <option value="failed">失败</option>
+        <option value="pending">待处理（有未解决交互）</option>
+        <option value="failed">空闲（上一轮失败）</option>
       </select>
     </label>
     <label>对话：上下文
@@ -966,28 +962,29 @@
   }
   var DATES = ["2026-08-30","2026-08-28","2026-08-25","2026-08-21","2026-08-18","2026-08-14","2026-08-11",
     "2026-08-07","2026-08-04","2026-08-01","2026-07-29","2026-07-25"];
-  function mk(id, title, agent, state, at, dir){
-    return { id:id, title:title, agent:agent, state:state, at:at, dir:dir };
+  function mk(id, title, agent, state, at, dir, turnResult){
+    return { id:id, title:title, agent:agent, state:state, at:at, dir:dir, turnResult:turnResult||null };
   }
   var SESSIONS = [
     mk("s1","修复登录超时","codex","running",agoMin(2),"work-api"),
-    mk("s2","迁移数据库","omp","waiting_permission",agoMin(8),"work-api"),
+    mk("s2","迁移数据库","omp","pending",agoMin(8),"work-api"),
     mk("s3","补充分页测试","omp","idle",agoMin(12),"work-api"),
     mk("s4","重构鉴权模块","codex","idle",atTime("2026-09-17T17:20:00"),"work-api"),
     mk("s5",null,"codex","idle",atTime("2026-09-11T10:05:00"),"work-api"),
     mk("s6","周报草稿","omp","idle",atTime("2026-09-17T09:12:00"),"site"),
     mk("s7",null,"codex","idle",atTime("2026-09-11T15:40:00"),"site"),
-    mk("s8","失败的实验","omp","failed",atTime("2026-09-16T11:02:00"),"site"),
+    mk("s8","失败的实验","omp","idle",atTime("2026-09-16T11:02:00"),"site","failed"),
     mk("s9","老接口清理","codex","idle",atTime("2026-08-22T14:30:00"),"site"),
     mk("s10","老会话","codex","idle",atTime("2026-09-10T16:20:00"),"unsorted"),
     mk("s11","建库初期的测试","omp","idle",atTime("2026-09-02T09:30:00"),"unsorted")
   ];
   (function(){
     for(var i=0;i<90;i++){
-      var st = (i%11===3) ? "failed" : (i%7===5 ? "closed" : "idle");
+      /* 主状态只有三态；失败只是本轮结果，不参与主状态。 */
+      var st = "idle", tr = (i%11===3) ? "failed" : null;
       var dir = (i%4===0) ? "work-api" : ((i%4===1) ? "site" : ((i%4===2) ? "d4" : ((i%4===3) ? "d5" : "d6")));
       SESSIONS.push(mk("g"+i, POOL[i%POOL.length] + (i>=POOL.length?"（续）":""), i%3===0?"codex":"omp", st,
-        atTime(DATES[i%DATES.length] + "T" + (10 + i%5) + ":" + String((10 + i%4*12) % 60).padStart(2,"0") + ":00"), dir));
+        atTime(DATES[i%DATES.length] + "T" + (10 + i%5) + ":" + String((10 + i%4*12) % 60).padStart(2,"0") + ":00"), dir, tr));
     }
   })();
   /* 会话一律按时间倒序（详情页分页、卡片与左栏列表都按这个顺序） */
@@ -1423,7 +1420,7 @@
       (time?'<div class="tstamp">'+esc(time)+'</div>':'');
   }
   function permCard(s){
-    var st = A.permSet[s.id] || (s.state === "waiting_permission" ? "pending" : "remote");
+    var st = A.permSet[s.id] || (s.state === "pending" ? "pending" : "remote");
     if(st === "pending"){
       return '<div class="perm"><div class="ptitle">🔐 需要你的授权</div>' +
         '<div>运行 npm 命令，改动测试快照文件</div>' +
@@ -1471,32 +1468,47 @@
     var hit = ms.options.filter(function(o){ return o.value===ms.currentValue; })[0];
     return hit ? hit.name : null;
   }
+  /* 会话主状态只有 idle / running / pending 三态。旧七态标签（queued、waiting_*、failed、closed）
+     只作为历史或任务结果存在，不构成第四个主状态。 */
+  function mainState(st){
+    if(st==="waiting" || st==="waiting_permission" || st==="waiting_input" || st==="pending") return "pending";
+    if(st==="running" || st==="queued") return "running";
+    return "idle";
+  }
   function turnState(){
     var s=cur();
     var st = (s.id==="s1") ? A.chatScenario : s.state;
-    return (st==="waiting") ? "waiting_permission" : st;   /* 控制台场景名归一到协议状态名 */
+    return mainState(st);
   }
-  function running(){ var st=turnState(); return st==="running" || st==="queued"; }
-  /* turn 是否仍在进行中（含“卡在等授权/等你回复”——此时 turn 尚未终结） */
-  function active(){
-    var st=turnState();
-    return st==="running" || st==="queued" || st==="waiting_permission" || st==="waiting_input";
+  /* 本轮结果与主状态分开：失败/取消不把会话变成第四种状态。 */
+  function turnFailed(){
+    var s=cur();
+    return (s.id==="s1") ? A.chatScenario==="failed" : s.turnResult==="failed";
   }
-  function isClosed(){ return turnState()==="closed"; }
+  function waitDetail(){
+    return cur().wait==="reply" ? "等待回复" : "等待授权";
+  }
+  function running(){ return turnState()==="running"; }
+  /* 主状态 running 与 pending 都表示本轮尚未结束（pending 仍可能有可取消的 turn）。 */
+  function active(){ return turnState()==="running" || turnState()==="pending"; }
   function stateChip(){
     var st=turnState();
-    if(st==="running" || st==="queued") return '<span class="badge ok">● 运行中</span>';
-    if(st==="waiting_permission") return '<span class="badge warn">⏸ 等待授权</span>';
-    if(st==="waiting_input") return '<span class="badge warn">⏸ 等待回复</span>';
-    if(st==="failed") return '<span class="badge danger">✕ 失败</span>';
-    if(st==="closed") return '<span class="badge">○ 已关闭</span>';
+    if(st==="running") return '<span class="badge ok">● 运行中</span>';
+    if(st==="pending") return '<span class="badge warn">⏸ 待处理</span>';
     return '<span class="badge">○ 空闲</span>';
+  }
+  /* 等待原因 / 本轮结果：与主状态胶囊并排的独立细节，不伪装成主状态。 */
+  function stateDetail(){
+    var st=turnState();
+    if(st==="pending") return '<span class="badge warn">'+waitDetail()+'</span>';
+    if(turnFailed()) return '<span class="badge danger">✕ 本轮失败</span>';
+    return '';
   }
 
   function streamHTML(s){
     var out="";
-    if(turnState()==="waiting_permission" || turnState()==="waiting_input")
-      out += '<div class="jumpbar">⏸ 有 1 个待处理授权请求 <button class="linkbtn" data-jump>查看 ↓</button></div>';
+    if(turnState()==="pending")
+      out += '<div class="jumpbar">⏸ 有 1 个待处理请求 <button class="linkbtn" data-jump>查看 ↓</button></div>';
 
     /* s1 走完整演示内容 */
     if(s.id==="s1"){
@@ -1532,12 +1544,12 @@
           "optionId: reject\n提交于 14:29 · 已收到 command.completed",null,"14:29") +
         userMsg("继续，把订阅清理也补上","14:31:10");
 
-      if(turnState()==="failed"){
-        out += '<div class="streamfail">turn 失败：Agent 进程在写入文件后异常退出（退出码 1）。会话保留，后续消息仍可继续。</div>' +
+      if(turnFailed()){
+        out += '<div class="streamfail">本轮失败：Agent 进程在写入文件后异常退出（退出码 1）。会话仍为空闲，后续消息可继续。</div>' +
           '<div class="tstamp">14:33:07</div>' +
           fold("t3.edit","tool","🔧","src/auth/session.ts","done","","src/auth/session.ts","14:33:05",
             {rows:[["kind","edit"],["位置","src/auth/session.ts:45"],["改动","替换 1 行 · 删除 1 行"]]});
-      } else if(turnState()==="waiting_permission"){
+      } else if(turnState()==="pending"){
         out += fold("t3.think","think","🧠","思考中…","run",
           "关闭路径有两处：超时回调和主动 close。两边都要清订阅。",null,"14:31:12") +
           agentMsg("测试命令需要你授权才能跑。","14:31:40") + permCard(s);
@@ -1583,7 +1595,10 @@
       fold("g.think","think","🧠","思考","done","示例思考内容。",null,whenLabel(s.at)) +
       fold("g.read","tool","📄","src/auth/session.ts","done","",null,whenLabel(s.at),
         {rows:[["kind","read"],["位置","src/auth/session.ts:1-80"],["内容","80 行"]]});
-    if(s.state==="waiting_permission") out += permCard(s);
+    if(s.state==="pending") out += permCard(s);
+    if(s.turnResult==="failed")
+      out += '<div class="streamfail">本轮失败：Agent 进程异常退出（退出码 1）。会话仍为空闲，后续消息可继续。</div>' +
+        '<div class="tstamp">'+esc(whenLabel(s.at))+'</div>';
     return out;
   }
   function dirName(id){ var d=DIRS.concat(EXTRA_DIRS).filter(function(x){ return x.id===id; })[0]; return d?d.name:"?"; }
@@ -1803,8 +1818,9 @@
     return SESSIONS;
   }
   function passFilter(s){
-    if(A.filter==="running") return s.state==="running"||s.state==="queued";
-    if(A.filter==="waiting") return s.state==="waiting_permission"||s.state==="waiting_input";
+    var st = mainState(s.state);
+    if(A.filter==="running") return st==="running";
+    if(A.filter==="waiting") return st==="pending";
     return true;
   }
   function passQuery(d,s){
@@ -1816,9 +1832,11 @@
   function dirRow(s, opts){
     opts=opts||{};
     var name = s.title ? esc(s.title) : '<span class="noname">未命名会话</span>';
-    var stword = s.state==="waiting_permission" ? "待授权" : (s.state==="waiting_input" ? "等你回复" : "");
+    var mst = mainState(s.state);
+    /* 等待原因只是细节，行上的圆点只表达三态主状态。 */
+    var stword = mst==="pending" ? (s.wait==="reply" ? "等你回复" : "待授权") : "";
     return '<div class="row'+(A.offline?" dim":"")+'" data-session="'+s.id+'">' +
-      '<span class="dot '+s.state+'" title="'+s.state+'"></span>' +
+      '<span class="dot '+mst+'" title="'+mst+'"></span>' +
       '<span class="title'+(s.title?"":" noname")+'">'+name+'</span>' +
       '<span class="stword">'+stword+'</span>' +
       '<span class="agent">'+esc(s.agent)+'</span>' +
@@ -1859,8 +1877,8 @@
     var html="", any=cards.length>0;
     pageCards.forEach(function(card){
       var dir=card.dir, all=card.all, rows=card.rows;
-      var active = all.filter(function(s){ return s.state==="running"||s.state==="queued"; }).length;
-      var waiting= all.filter(function(s){ return s.state==="waiting_permission"||s.state==="waiting_input"; }).length;
+      var active = all.filter(function(s){ return mainState(s.state)==="running"; }).length;
+      var waiting= all.filter(function(s){ return mainState(s.state)==="pending"; }).length;
       var collapsed = A.open["d-"+dir.id] === true;
       html += '<section class="card'+(collapsed?" collapsed":"")+'">' +
         '<div class="dhead"><span class="caret" data-toggle="d-'+dir.id+'">▾</span>' +
@@ -2198,6 +2216,7 @@
       '<div class="fsources" role="tablist" aria-label="文件来源">'+tabs+'</div>'+
       '<div class="ftoolbar">'+parts.toolbar+'</div>'+
       (online ? "" : '<div class="fnotice" style="margin:0 10px 8px">当前不在线：已加载的文件与 Git 结果可能不是最新的。</div>')+
+      (A.fileSource==="git" ? '<div class="fnotice" style="margin:0 10px 8px">范围是整个会话工作目录的未提交修改，可能包含人工操作或其他会话的修改。</div>' : "")+
       '<div class="fscroll">'+parts.body+'</div></div>';
   }
 
@@ -2281,7 +2300,7 @@
   function viewChat(){
     A.keys=[];
     var s = cur();
-    var chip = stateChip();
+    var chip = stateChip() + stateDetail();
     var dir = DIRS.concat(EXTRA_DIRS).filter(function(d){ return d.id===s.dir; })[0];
     var list = SESSIONS.filter(function(x){ return x.dir===s.dir; }).slice(0,A.shown);
     var rest = SESSIONS.filter(function(x){ return x.dir===s.dir; }).length - list.length;
@@ -2294,7 +2313,7 @@
         '<div class="searchbox"><span>🔍</span><input placeholder="在本目录内搜索" /></div></div>' +
       '<div style="flex:1">'+list.map(function(x){
         return '<div class="srow'+(x.id===s.id?" on":"")+'" data-session="'+x.id+'">' +
-          '<span class="dot '+x.state+'"></span><span class="t'+(x.title?"":" noname")+'">'+
+          '<span class="dot '+mainState(x.state)+'"></span><span class="t'+(x.title?"":" noname")+'">'+
           (x.title?esc(x.title):"未命名会话")+'</span><span class="w">'+esc(whenLabel(x.at))+'</span></div>'; }).join("") +
       (rest>0?'<div class="pager">已显示 '+list.length+' / '+(list.length+rest)+
         '<button class="btn sm" id="more" style="margin-left:auto">加载更多（还有 '+rest+' 个）</button></div>'
@@ -2323,16 +2342,16 @@
           '<span class="pick'+(A.openPick==="model"?" open":"")+'"><button data-pick="model">模型 <b>'+esc(modelLabel(msel)||"未提供")+
             '</b> ▾</button><span class="pop"><span class="grp">模型（由 Agent 提供，下一轮生效）</span>'+modelPop+'</span></span>' +
         '</div>' +
-        '<div class="inputrow"><textarea id="ta"'+(active()||isClosed()?' readonly':'')+' placeholder="'+
-          (isClosed() ? "会话已关闭，不能继续发送"
+        '<div class="inputrow"><textarea id="ta"'+(active()?' readonly':'')+' placeholder="'+
+          (turnState()==="pending" ? "有未处理的请求，处理后才能继续"
             : active() ? "会话进行中，完成后可继续输入"
             : "给 Agent 发消息")+'"></textarea>' +
           (active() ? '<button class="btn stop" id="stopBtn">■ 停止</button>'
-           : '<button class="btn primary" id="sendBtn"'+(isClosed()?' disabled':'')+'>发送</button>') + '</div>' +
+           : '<button class="btn primary" id="sendBtn">发送</button>') + '</div>' +
         '<div class="hint"><span><span class="kbd">Enter</span> 发送 · <span class="kbd">Shift</span>+'+
           '<span class="kbd">Enter</span> 换行</span><span>📎 附件暂不支持 · 仅文本</span>'+
-          (isClosed() ? '<span style="color:var(--danger)">会话已关闭</span>'
-            : active() ? '<span style="color:var(--warn)">进行中 · 按钮变为停止</span>' : '')+'</div>' +
+          (active() ? '<span style="color:var(--warn)">'+
+            (turnState()==="pending" ? "待处理 · 处理后继续" : "进行中 · 按钮变为停止")+'</span>' : '')+'</div>' +
       '</div></div><button class="jumppill" id="jumpPill"></button>')+'</section>';
 
     var right = '<aside class="col right">' + filesPanelHTML(dir) + '</aside>';
@@ -2720,7 +2739,6 @@
       var op = t.closest("[data-open]");
       if(op){
         var source=op.dataset.open, path=op.dataset.path;
-        if(source==="session") A.selFile=path;
         A.viewFile={ source:source, path:path };
         render(); return;
       }
@@ -2773,7 +2791,6 @@
   }
 
   function submitText(){
-    if(isClosed()){ toast("会话已关闭，不能继续发送"); return; }
     if(active()){ toast("会话进行中，完成后再发送（先点「停止」可以中断）"); return; }
     var ta=$("ta"); if(!ta) return;
     if(!ta.value.trim()){ ta.focus(); return; }

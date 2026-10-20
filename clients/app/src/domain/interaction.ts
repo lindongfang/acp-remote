@@ -12,16 +12,17 @@
  *
  * ## 取值即边界
  *
- * 本模块把这件事收敛成判别联合，四种边界各是一种取值，另加两个「已提交/已处理」态：
+ * 本模块把这件事收敛成判别联合，每种边界各是一种取值，另加两个「已提交/已处理」态：
  *
  * 1. 亲历且持有可选项 → `answerable`；
  * 2. 仅从历史读到 → `not_answerable` / `read_from_history`；
  * 3. 已被其它设备处理 → `handled_elsewhere`（且不可重复提交）；
- * 4. 会话已关闭 → `not_answerable` / `session_closed`；
+ * 4. 已达过期时间 → `not_answerable` / `expired`；
  * 5. 本设备已提交、尚未收到终态 → `submitting`（**不得**呈现为已处理）；
  * 6. 本设备提交并已被服务端确认 → `handled_here`。
  *
- * 判定**只看输入**（是否亲历、是否有可选项、是否已处理、会话是否开放），不看具体组件，
+ * 判定**只看输入**（是否亲历、是否有可选项、是否已处理、是否过期），不看具体组件；会话主状态
+ * 不参与——`idle`/`running`/`pending` 都不是「不能再应答」的理由，有效交互由服务端权威归约。
  * 因此每种边界都可以脱离 UI 单测。
  */
 
@@ -34,7 +35,6 @@ export type InteractionKind = "permission" | "elicitation";
 /** 不可应答的原因（MUST 可区分：措辞不同、可核对）。 */
 export type InteractionUnavailableReason =
   | "read_from_history"
-  | "session_closed"
   | "options_missing"
   | "expired"
   | "not_effective"
@@ -43,7 +43,6 @@ export type InteractionUnavailableReason =
 /** 不可应答原因的展示文案。 */
 export const INTERACTION_UNAVAILABLE_LABELS: Readonly<Record<InteractionUnavailableReason, string>> = {
   read_from_history: "这条待处理项只从历史读到，尚未取得服务端确认的当前有效请求，无法应答",
-  session_closed: "会话已关闭，不能再应答",
   options_missing: "这次请求没有下发可选项，无法应答",
   expired: "这次请求已过期或上游等待方已不存在，不能再应答",
   not_effective: "服务端当前不再确认这条请求仍然有效（可能已由其它设备处理），不能应答",
@@ -140,7 +139,6 @@ export function buildInteractionAvailability(input: {
   readonly pendingChecked?: boolean;
   /** 当前时刻（epoch 毫秒），用于判断 `expiresAt`；缺省不判过期。 */
   readonly nowMs?: number;
-  readonly sessionOpen: boolean;
   readonly resolution: InteractionResolution | null;
   /** 本设备已提交应答的 `requestId`；未提交为 `null`。 */
   readonly pendingRequestId: string | null;
@@ -156,7 +154,6 @@ export function buildInteractionAvailability(input: {
         };
   }
   if (input.pendingRequestId !== null) return { kind: "submitting", requestId: input.pendingRequestId };
-  if (!input.sessionOpen) return { kind: "not_answerable", reason: "session_closed" };
   if (input.expiresAt !== null && input.expiresAt !== undefined && input.nowMs !== undefined) {
     if (Date.parse(input.expiresAt) <= input.nowMs) return { kind: "not_answerable", reason: "expired" };
   }

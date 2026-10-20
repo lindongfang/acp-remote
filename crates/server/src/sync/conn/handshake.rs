@@ -22,18 +22,21 @@ use identity_auth::{CanonicalOrigin, ConnectionBinding, CredentialStatus, Featur
 use sync_protocol::auth::ClientHello;
 use sync_protocol::common::{FeatureId, FeatureList as WireFeatureList};
 
-/// 本切片实现的 Sync feature（`features.json` 的 `sync` 子集里 `delivery = mvp` 中已完整接线的十五
+/// 本切片实现的 Sync feature（`features.json` 的 `sync` 子集里 `delivery = mvp` 中已完整接线的十七
 /// 条，§5.2）。
 ///
-/// 十五条全部 `required: false`：Sync v1 没有「协议要求每次协商都必须选中」的 feature（必需性由客户端按
-/// 自身需要声明），因此本模块的必需集合只来自对端。`core.session-files.v1` 在真实路由、连接期内容版本
-/// 释放与组合根装配完成后才登记在这里：宣告即承诺四条 `session.files.*`/`session.git.*` 查询的真实实现，
+/// 必需集合 = [`REQUIRED_FEATURES`] ∪ 对端 `requiredFeatures`。v1 baseline 里只有
+/// `core.session-activity.v1` 是 `required: true`：三态摘要的取值语义必须两端一致，缺任何一边都会让
+/// 同一份 `sessionSummary` 被按不同词表解码。`core.session-files.v1` 在真实路由、连接期内容版本释放与
+/// 组合根装配完成后才登记在这里：宣告即承诺四条 `session.files.*`/`session.git.*` 查询的真实实现，
 /// 不能先宣告后接线。
 ///
 /// 协商是**交集**（见 [`negotiate_features`]），因此这里漏登记一条 feature 会让它**静默失效**：客户端
 /// 声明了却被交集丢掉，服务端随后的门控（快照的 `path` 键、`workspace.browse`、`file.changed` 的
 /// 差异行）一律按「未协商」处置。新增 feature 时必须同时把它加进本表。
-pub const SUPPORTED_FEATURES: [&str; 16] = [
+pub const SUPPORTED_FEATURES: [&str; 17] = [
+    // §10.2：会话主状态三态合同（`idle`/`running`/`pending`）。两端都必须选中，否则摘要词表可能不一致。
+    "core.session-activity.v1",
     "core.snapshot.v1",
     "core.command-status.v1",
     "core.event-ack.v1",
@@ -61,6 +64,12 @@ pub const SUPPORTED_FEATURES: [&str; 16] = [
 // （`node-link-client`）。宣告它会让客户端对一个当前必然失败的读取路径保留入口——能力协商不得
 // 虚报（`AGENTS.md` §4）。WP5 接线后把它加进本表并补一条「imported 会话 history 走 Owner 回源」的
 // 用例。
+
+/// 每次协商都必须选中的 feature（`features.json` 里 `required: true` 的 Sync 条目，§5.2）。
+///
+/// 目前只有三态会话主状态合同：缺它时客户端与 Owner 对 `sessionSummary.state` 的取值集合可能不一致，
+/// 因此不能仅靠客户端自愿声明。
+pub const REQUIRED_FEATURES: [&str; 1] = ["core.session-activity.v1"];
 
 /// 本表全部 feature 的排序去重文本。
 pub fn feature_list() -> Vec<String> {
@@ -111,10 +120,11 @@ pub fn negotiated_version(hello: &ClientHello) -> Result<u64, NegotiationFault> 
 }
 
 /// feature 协商：`selected = 客户端 supportedFeatures ∩ 服务端支持集合`（排序去重），
-/// 然后核对客户端必需 feature 是否全部被选中（§5.2）。
+/// 然后核对必需 feature 是否全部被选中（§5.2）。
 ///
-/// 必需集合只来自对端（v1 baseline 全部 `required: false`）。未被选中的必需 feature 按 UTF-8 字节
-/// 升序、去重后返回。返回值是协商结果的 feature ID 文本（排序去重）。
+/// 必需集合 = 服务端 [`REQUIRED_FEATURES`] ∪ 对端 `requiredFeatures`：`core.session-activity.v1` 是
+/// 协议要求每次协商都必须选中的条目，客户端未声明它时服务端仍要求它。未被选中的必需 feature 按
+/// UTF-8 字节升序、去重后返回。返回值是协商结果的 feature ID 文本（排序去重）。
 ///
 /// 本函数用 [`SUPPORTED_FEATURES`] 全集；组合根在某个端点未注册时改用
 /// [`negotiate_features_with`] 传入收窄后的集合。
@@ -149,6 +159,11 @@ pub fn negotiate_features_with(
         .iter()
         .map(|feature| feature.as_str().to_owned())
         .collect();
+    required.extend(
+        REQUIRED_FEATURES
+            .iter()
+            .map(|feature| (*feature).to_owned()),
+    );
     required.sort();
     required.dedup();
 
@@ -272,18 +287,34 @@ mod tests {
             "未注册的端点必须从本端集合里去掉"
         );
 
-        let declared = hello(&[attachment, "core.snapshot.v1"], &[]);
-        let selected = negotiate_features_with(&declared, &narrowed).expect("没有必需 feature");
+        let mut supported = REQUIRED_FEATURES.to_vec();
+        supported.push(attachment);
+        supported.push("core.snapshot.v1");
+        let declared = hello(&supported, &[]);
+        let selected =
+            negotiate_features_with(&declared, &narrowed).expect("服务端必需 feature 已满足");
         assert!(
             !selected.iter().any(|feature| feature == attachment),
             "未注册的端点不得出现在 selectedFeatures 里"
         );
         assert!(selected.iter().any(|feature| feature == "core.snapshot.v1"));
 
-        let required = hello(&[attachment, "core.snapshot.v1"], &[attachment]);
+        let required = hello(&supported, &[attachment]);
         assert!(
             negotiate_features_with(&required, &narrowed).is_err(),
             "对端必需但本端未注册时必须失败关闭"
+        );
+    }
+
+    /// `core.session-activity.v1` 是服务端必需 feature：客户端只声明别的 feature 时也必须拒绝，
+    /// 且未满足集合按 UTF-8 字节升序去重。
+    #[test]
+    fn a_client_without_the_three_state_contract_is_rejected() {
+        let fault = negotiate_features(&hello(&["core.snapshot.v1"], &["core.snapshot.v1"]))
+            .expect_err("core.session-activity.v1 是服务端必需 feature");
+        assert_eq!(
+            fault,
+            NegotiationFault::FeaturesMissing(vec!["core.session-activity.v1".to_owned()])
         );
     }
 }

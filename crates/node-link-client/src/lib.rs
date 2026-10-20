@@ -42,8 +42,8 @@ pub use attachment::{
 pub use error::ClientError;
 pub use handshake::{
     ATTACHMENT_FEATURE, CORE_FEATURE, HandshakeConfig, OwnerTrust, PENDING_INTERACTIONS_FEATURE,
-    RAW_ACP_FEATURE, REMOTE_HISTORY_FEATURE, REQUIRED_FEATURES, SESSION_CREATE_FEATURE,
-    SUPPORTED_FEATURES, TYPED_MEDIA_FEATURE,
+    RAW_ACP_FEATURE, REMOTE_HISTORY_FEATURE, REQUIRED_FEATURES, SESSION_ACTIVITY_FEATURE,
+    SESSION_CREATE_FEATURE, SUPPORTED_FEATURES, TYPED_MEDIA_FEATURE,
 };
 pub use identity::{KeystoreIdentity, NodeIdentity};
 pub use manager::{ClientConfig, NodeLinkClient, OwnerLink, ReconnectPolicy};

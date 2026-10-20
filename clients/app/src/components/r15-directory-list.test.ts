@@ -17,7 +17,7 @@
  *   可区分（`[data-directory-id]` 仍每项恰好一处）；
  * - 三项汇总由会话摘要得出 → 会话总数胶囊恒在，运行中/待处理徽标只在非零时追加；
  * - 会话行五字段 → 圆点（带 `data-session-state`）、标题、状态词、Agent、相对时间；
- *   等待授权/等待输入各出现对应状态词，其余状态只留圆点；
+ *   待处理呈现状态词，空闲与运行中只留圆点；
  * - 目录内创建入口 → 调用方给了回调才呈现（缺省不留痕）。
  * - 顶部创建入口（工具条右端）→ 给了回调才呈现，位置在搜索框/筛选段之后、目录列表之前；
  *   空态与加载中同样在（一个目录都没登记时它是目录页上唯一的创建路径）。
@@ -52,7 +52,7 @@ import type { WorkspaceCatalogEntry } from "../protocol";
 
 const SESSIONS = [
   session({ id: "aaaaaaaa-0000-4000-8000-000000000001", state: "running" }),
-  session({ id: "aaaaaaaa-0000-4000-8000-000000000002", state: "waiting_permission" }),
+  session({ id: "aaaaaaaa-0000-4000-8000-000000000002", state: "pending" }),
   session({ id: "aaaaaaaa-0000-4000-8000-000000000003", state: "idle", directoryId: "personal-api" }),
 ];
 
@@ -427,17 +427,13 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     expect(rendered).toBe("20 分钟前");
   });
 
-  it("等待授权 / 等待输入各呈现对应状态词；其余状态只留状态圆点", () => {
-    const permission = renderSingleSessionRow("waiting_permission");
-    expect(permission).toContain('data-session-state="waiting_permission"');
-    expect(permission).toContain("待授权");
-
-    const waiting = renderSingleSessionRow("waiting_input");
-    expect(waiting).toContain('data-session-state="waiting_input"');
-    expect(waiting).toContain("等你回复");
+  it("待处理呈现状态词；空闲与运行中只留状态圆点", () => {
+    const pending = renderSingleSessionRow("pending");
+    expect(pending).toContain('data-session-state="pending"');
+    expect(pending).toContain("待处理");
 
     // 对照：非等待状态的圆点仍在（状态标识是机器证据），但**不**追加状态词——原型 `stword`
-    // 同样只在这两档非空；把状态词一律画出来（或一律不画）都会在这里红。
+    // 同样只在待处理时非空；把状态词一律画出来（或一律不画）都会在这里红。
     const idle = renderSingleSessionRow("idle");
     expect(idle).toContain('data-session-state="idle"');
     expect(idle).not.toContain("空闲");
@@ -465,7 +461,7 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     expect([...(store.directoryPageSessions().get("work-api") ?? [])].map((row) => row.id)).toEqual(before);
 
     // 查询 "api" 命中两个目录的展示名，running 只留下 work-api 的 running 会话：
-    // 同一张卡片里 waiting_permission / idle 的行必须被隐藏。
+    // 同一张卡片里 pending / idle 的行必须被隐藏。
     const html = renderDirectoryList(store.directoryPage(), {
       sessionsByDirectoryId: store.directoryPageSessions(),
       query: "api",

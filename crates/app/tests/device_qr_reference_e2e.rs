@@ -46,7 +46,7 @@ const CLAIM_PATH: &str = server::sync::pairing::CLAIM_PATH;
 const STATUS_PATH: &str = server::sync::pairing::STATUS_PATH;
 
 /// 四消息握手时声明的最小 feature 集（服务端按 `supportedFeatures` 协商）。
-const SUPPORTED_FEATURES: [&str; 1] = ["core.snapshot.v1"];
+const SUPPORTED_FEATURES: [&str; 2] = ["core.snapshot.v1", "core.session-activity.v1"];
 
 /// 一次 HTTP 响应（状态码 + 小写响应头 + 解析后的 JSON）。
 struct Reply {

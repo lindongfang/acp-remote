@@ -84,7 +84,6 @@ import type {
   PendingInteractionInput,
 } from "./interaction-model";
 import type { AllFilesDirectoryView, FileSource, GitDiffView } from "../domain/session-files";
-import { buildSessionChangesModel } from "../domain/session-files";
 import {
   SESSION_FILES_FEATURE,
   decodeSessionFilesResult,
@@ -105,6 +104,7 @@ import {
   buildSessionFilesPanelModel,
   emptyAllFilesDirectory,
   initialSessionFilesState,
+  normalizeFileSource,
   selectedSourceOf,
   sourcesOf,
 } from "./session-files";
@@ -296,8 +296,6 @@ export interface ConversationThreadState {
   readonly loadingEarlier: boolean;
   readonly loadingHistory: boolean;
   readonly pagingError: string | null;
-  /** 仅文件栏手动刷新会话变更的失败，不复用首次加载/消息翻页错误。 */
-  readonly historyRefreshError?: string | null;
   /**
    * 本线程是否已完成过一次「重新取得当前有效请求」。
    *
@@ -307,8 +305,8 @@ export interface ConversationThreadState {
   readonly interactionsRefreshed?: boolean;
 }
 
-/** 一次 `session.read` 的用途：首屏、向上翻消息、向上翻历史、刷新历史、刷新有效交互。 */
-type ReadIntent = "first" | "earlier" | "earlier_history" | "refresh_history" | "refresh_interactions" | "refresh_messages";
+/** 一次 `session.read` 的用途：首屏、向上翻消息、向上翻历史、刷新有效交互。 */
+type ReadIntent = "first" | "earlier" | "earlier_history" | "refresh_interactions" | "refresh_messages";
 
 /** 待完成的读取请求。 */
 interface PendingRead {
@@ -448,7 +446,7 @@ export interface ClientState {
   readonly conversationSidebarPageInput: string;
   readonly pairing: PairingPageModel;
   readonly host: HostIdentityModel | null;
-  /** 文件栏三来源、互斥内容视图与刷新状态（WP4；与草稿/时间线/展开态互不重叠）。 */
+  /** 文件栏两来源、互斥内容视图与刷新状态（与草稿/时间线/展开态互不重叠）。 */
   readonly sessionFiles: SessionFilesState;
 }
 
@@ -522,13 +520,22 @@ function withSessionSummary(resources: StagedResources | null, summary: SessionS
   return { ...resources, sessions: [summary, ...rest] };
 }
 
-/** `session.created`/`session.updated` 视图里的会话摘要。 */
+/**
+ * `session.created`/`session.updated` 视图里的会话摘要。
+ *
+ * 历史事件视图可能携带升级前的七态标签（`queued`/`waiting_*`/`failed`/`closed`）。那些标签是
+ * **带版本的过去事实**：实时主状态只能来自最新的权威三态摘要，因此这里只接受
+ * `idle|running|pending`，其余整条摘要都不采用——旧标签既不会覆盖当前状态，也不会抛错
+ * （design D4：不能用旧标签覆盖新状态）。缺少合法状态的摘要同样不采用。
+ */
 function sessionSummaryIn(event: EventMessage): SessionSummary | null {
   if (event.body.eventType !== "session.created" && event.body.eventType !== "session.updated") return null;
   const summary = event.body.payload.view["session"];
   if (typeof summary !== "object" || summary === null || !("sessionId" in summary)) return null;
   const candidate = summary.sessionId;
   if (typeof candidate !== "string" || candidate.length === 0) return null;
+  const state = "state" in summary ? summary.state : undefined;
+  if (state !== "idle" && state !== "running" && state !== "pending") return null;
   return summary as SessionSummary;
 }
 
@@ -1401,7 +1408,6 @@ export class ClientStore {
    * - `earlier`：消息向上翻页（不重不漏由 `assertPagesDoNotOverlap` 把关）。
    * - `earlier_history`：历史条目向上翻页（`assertHistoryPagesDoNotOverlap`）；
    *   它**不**动消息页，消息分页也**不**动历史页——两套游标互不影响。
-   * - `refresh_history`：只并入最新一页历史，不重置分页位置。
    * - `refresh_interactions`：只替换服务端确认的当前有效请求，保留首屏的配置项与能力声明。
    */
   #applyReadResult(state: ClientState, result: CommandResultMessage): ClientState {
@@ -1419,10 +1425,9 @@ export class ClientStore {
         loadingHistory: false,
         // 刷新有效交互失败时保持原分页/历史错误，不把别的读取的失败借用过来。
         pagingError:
-          pending.intent === "refresh_history" || pending.intent === "refresh_interactions"
+          pending.intent === "refresh_interactions"
             ? existing.pagingError
             : describeCommandFailure(result),
-        historyRefreshError: pending.intent === "refresh_history" ? describeCommandFailure(result) : existing.historyRefreshError ?? null,
       });
       return { ...state, threads };
     }
@@ -1432,20 +1437,6 @@ export class ClientStore {
       // 这一次读取本身就是「服务端当前有效请求」的确认：结果里没有的历史卡片从此标「不再有效」。
       threads.set(sessionId, { ...existing, interactionsRefreshed: true });
       return { ...withPendingInteractions(state, sessionId, read), threads };
-    }
-    if (pending.intent === "refresh_history") {
-      const loaded = toLoadedHistoryPage(read);
-      const hadHistory = existing.page !== null || [...state.history.values()].some(record => record.sessionId === sessionId);
-      threads.set(sessionId, {
-        ...existing,
-        historyHasEarlier: hadHistory ? existing.historyHasEarlier : loaded.hasEarlier,
-        nextBeforeHistory: hadHistory ? existing.nextBeforeHistory : loaded.nextBeforeHistory,
-        loadingHistory: false,
-        pagingError: existing.pagingError,
-        historyRefreshError: null,
-      });
-      // 最新一页可以与旧记录重叠：按 eventId 去重合并，不重置消息页和历史翻页位置。
-      return { ...withHistory(state, sessionId, loaded.items), threads };
     }
     if (pending.intent === "earlier_history") {
       const loaded = toLoadedHistoryPage(read);
@@ -1645,13 +1636,13 @@ export class ClientStore {
       sessionId,
       title: titleOf(summary),
       agentName: summary?.agent.name ?? "",
-      state: summary?.state ?? "idle",
+      // 没有摘要时是「未知」，不是空闲：MUST NOT 编造主状态。
+      state: summary?.state ?? null,
       directoryId: summary?.workspace?.directoryId ?? null,
       originOfflineLabel: originOfflineLabelOf(summary, this.#ownerLabelOf),
     };
     const origin: "local" | { readonly kind: "remote"; readonly online: boolean } =
       summary?.origin.kind === "remote" ? { kind: "remote", online: summary.origin.online } : "local";
-    const sessionOpen = (summary?.state ?? "idle") !== "closed";
     const connectionOnline = this.#state.connection.state === "online";
 
     // 结构化记录：实时与历史按 `eventId` 去重（实时优先），再筛出本会话。
@@ -1663,7 +1654,6 @@ export class ClientStore {
       responseRequestIds: this.#state.responseRequestIds,
       commands: this.#state.commands,
       deviceId: this.#state.deviceId,
-      sessionOpen,
       effectiveAt: new Date(effectiveNow).toISOString(),
       nowMs: effectiveNow,
       pendingChecked: thread?.interactionsRefreshed === true,
@@ -1704,11 +1694,11 @@ export class ClientStore {
         attachmentCapabilityOf(kind, agentCapabilities),
     });
     const input: ConversationInputModel = buildConversationInputModel({
-      sessionOpen,
       connectionOnline,
       originLocal: origin === "local",
       turnInProgress: activeTurn !== null,
-      canCancel: sessionOpen && activeTurn !== null,
+      // 取消只看「有活动轮次 + 连接可用」；主状态（idle/running/pending）不参与。
+      canCancel: connectionOnline && activeTurn !== null,
       promptCommand: this.#lastCommandOf(this.#state.promptRequestIds.get(sessionId)),
       cancelCommand:
         activeTurn === null ? null : this.#lastCommandOf(this.#state.cancelRequestIds.get(activeTurn.turnId)),
@@ -1752,7 +1742,7 @@ export class ClientStore {
       }),
       capabilities: conversationCapabilities({
         connectionOnline,
-        sessionState: summary?.state ?? "idle",
+        turnInProgress: activeTurn !== null,
         origin,
       }),
     });
@@ -2838,7 +2828,7 @@ export class ClientStore {
   /**
    * 应答授权请求（D7）。
    *
-   * 只有 `answerable`（本设备亲历、会话未关闭、请求下发了可选项）才派发命令；其余边界各自给出
+   * 只有 `answerable`（本设备亲历、请求下发了可选项）才派发命令；其余边界各自给出
    * 明确原因，因此「已被其它设备处理」不可能被重复提交、「仅历史读到」不可能有可点的按钮。
    * 提交之后呈现为**待确认**，直到服务端终态（`submitting` → `handled_here`）。
    */
@@ -3273,25 +3263,16 @@ export class ClientStore {
   // ── 文件栏（WP4） ──────────────────────────────────────────────────────────
 
   /**
-   * 文件栏 view model：三来源 + 会话改动归并 + 互斥内容态。
+   * 文件栏 view model：两来源 + 互斥内容态。
    *
-   * 会话变更完全由已加载记录派生（实时 + 历史、按 `eventId` 去重后只留本会话），因此重放不会
-   * 产生重复记录，手动修改/其它会话的记录也不会混入。`historyHasEarlier` 只在读过历史页时
-   * 有值；未读时为 `null`，模型标注「范围未知」而不是声称完整。
+   * 会话改动不进文件栏（时间线继续从已加载记录投影结构化差异与诊断），因此这里不读历史标记，
+   * 也不派发会话变更专属的历史刷新。
    */
   sessionFilesPage(sessionId: Uuid): SessionFilesPanelModel {
-    const thread = this.#state.threads.get(sessionId);
-    // 未协商结构化历史时根本没有加载过历史页：范围是「未知」，不能声称完整。
-    const historyLoaded = this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE);
     return buildSessionFilesPanelModel({
       sessionId,
       state: this.#state.sessionFiles,
-      records: this.#recordsOf(sessionId),
-      historyHasEarlier: thread === undefined || !historyLoaded ? null : thread.historyHasEarlier,
       connectionOnline: this.#state.connection.state === "online",
-      historyRefreshSupported: historyLoaded,
-      historyReadPending: this.#pendingReads.size > 0,
-      historyRefreshError: thread?.historyRefreshError ?? null,
     });
   }
 
@@ -3312,25 +3293,20 @@ export class ClientStore {
     }
   }
 
-  /** 切换文件栏来源；进入「全部文件」/「Git 变更」时立即刷新，会话变更不发命令。 */
+  /** 切换文件栏来源；归一后的来源只会是全部文件或 Git 变更，进入时立即刷新。 */
   selectFileSource(sessionId: Uuid, source: FileSource): void {
     this.#activeConversationSession = sessionId;
+    const normalized = normalizeFileSource(source);
     const selectedSources = new Map(this.#state.sessionFiles.selectedSources);
-    selectedSources.set(sessionId, source);
+    selectedSources.set(sessionId, normalized);
     this.#commit({ ...this.#state, sessionFiles: { ...this.#state.sessionFiles, selectedSources } });
-    if (source === "session") return;
-    this.#refreshFileSource(sessionId, source);
+    this.#refreshFileSource(sessionId, normalized);
   }
 
-  /** 手动刷新当前来源；会话变更只重读最新结构化历史，不重置对话与历史分页。 */
+  /** 手动刷新当前来源：只发对应来源的目录/Git 查询。 */
   refreshFiles(sessionId: Uuid): void {
     this.#activeConversationSession = sessionId;
     const source = selectedSourceOf(this.#state.sessionFiles, sessionId);
-    if (source === "session") {
-      if (!this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE) || this.#pendingReads.size > 0) return;
-      this.#requestPage(sessionId, "refresh_history");
-      return;
-    }
     this.#cancelFileRefreshTimer(this.#fileKey(sessionId, source));
     this.#refreshFileSource(sessionId, source);
   }
@@ -3353,7 +3329,7 @@ export class ClientStore {
    */
   loadMoreAllFiles(sessionId: Uuid, path: string): void {
     // 旧主机/远程导入会话没有本机目录可枚举：即使调用方拿到一个路径也不派发。
-    if (this.#fileSourceUnsupported(sessionId, "all") !== null) return;
+    if (this.#fileSourceUnsupported(sessionId) !== null) return;
     const directory = sourcesOf(this.#state.sessionFiles, sessionId).all.directories.get(path);
     if (directory === undefined) {
       this.#dispatchAllFilesPage(sessionId, path, undefined, false);
@@ -3373,42 +3349,18 @@ export class ClientStore {
   /**
    * 打开文件内容，替换中间对话区（互斥）。
    *
-   * 关闭/切换会话后的迟到响应由代次与上下文丢弃；来源为「会话变更」时直接从记录构造，
-   * 不派发查询。请求代次每次都递增，因此 A 的响应不可能覆盖随后打开的 B。
+   * 关闭/切换会话后的迟到响应由代次与上下文丢弃；来源在入口归一为全部文件或 Git 变更。
+   * 请求代次每次都递增，因此 A 的响应不可能覆盖随后打开的 B。
    */
   openFileContent(sessionId: Uuid, source: FileSource, path: string): void {
     this.#activeConversationSession = sessionId;
     const generation = this.#state.sessionFiles.generation + 1;
     this.#dropPendingContentQueries();
-    const context: FileViewContext = { sessionId, source, path };
+    // 旧页面状态可能仍传 `session`（类型上已不存在）：同样回到全部文件，不恢复专属查看。
+    const normalized = normalizeFileSource(source);
+    const context: FileViewContext = { sessionId, source: normalized, path };
 
-    if (source === "session") {
-      const thread = this.#state.threads.get(sessionId);
-      const model = buildSessionChangesModel(this.#recordsOf(sessionId), thread?.historyHasEarlier ?? null);
-      const found = model.files.find((file) => file.path === path || file.key === `path:${path}`);
-      if (found === undefined || !found.readable) {
-        this.#commit(this.#withFileContent(this.#state, {
-          kind: "file",
-          context,
-          generation,
-          stale: false,
-          status: "error",
-          error: unreadableSessionChangeError(path),
-        }, generation));
-        return;
-      }
-      this.#commit(this.#withFileContent(this.#state, {
-        kind: "file",
-        context,
-        generation,
-        stale: false,
-        status: "ready",
-        content: { kind: "session_changes", path, records: found.records },
-      }, generation));
-      return;
-    }
-
-    const unsupported = this.#fileSourceUnsupported(sessionId, source);
+    const unsupported = this.#fileSourceUnsupported(sessionId);
     if (unsupported !== null) {
       this.#commit(this.#withFileContent(this.#state, {
         kind: "file",
@@ -3440,10 +3392,10 @@ export class ClientStore {
       status: "loading",
     }, generation));
 
-    if (source === "all") {
+    if (normalized === "all") {
       this.#dispatchFileRead({
         sessionId,
-        source,
+        source: normalized,
         path,
         generation,
         purpose: "preview",
@@ -3452,7 +3404,7 @@ export class ClientStore {
       });
       return;
     }
-    this.#dispatchGitDiff({ sessionId, source, path, generation });
+    this.#dispatchGitDiff({ sessionId, source: normalized, path, generation });
   }
 
   /** 关闭文件视图，恢复对话；递增代次使所有在途响应作废。 */
@@ -3466,10 +3418,10 @@ export class ClientStore {
   /**
    * 提交一条提示（文本 + 已选附件 + 工作目录路径引用）。
    *
-   * 闸门（任一不过即**不发命令**）：会话存在且可提交（关闭/离线/imported 来源都会给出原因）、
-   * 内容不为空、附件不是上传中/失败/能力不支持。没有附件时同步派发；有附件时**先上传**，
-   * 全部封存并登记清单后才派发一条携带 `submissionId` 的 `session.prompt`——任一附件失败或
-   * 取消都不会触发 Agent，也不会提交部分消息（完整草稿保留）。
+   * 闸门（任一不过即**不发命令**）：当前输入可用性允许发送（执行中/离线/imported 来源都会
+   * 给出原因）、内容不为空、附件不是上传中/失败/能力不支持。没有附件时同步派发；有附件时
+   * **先上传**，全部封存并登记清单后才派发一条携带 `submissionId` 的 `session.prompt`——
+   * 任一附件失败或取消都不会触发 Agent，也不会提交部分消息（完整草稿保留）。
    *
    * 稳定 `requestId`：一次发送尝试的 `promptRequestId` 在上传前就分配，并在重试时复用；
    * 附件选择变化会使它失效（内容不同不能复用幂等键）。
@@ -3775,10 +3727,9 @@ export class ClientStore {
    * 本机会话文件来源是否不可用。
    *
    * - 未协商 `core.session-files.v1`：旧主机明确降级，**不派发**（服务端也会在 I/O 前拒绝）；
-   * - 远程 imported 会话：保留已收到的会话变更，全部文件/Git 明确暂不支持，不查询本机目录。
+   * - 远程 imported 会话：全部文件/Git 明确暂不支持，不查询本机替代目录；已收到的对话差异仍可查看。
    */
-  #fileSourceUnsupported(sessionId: Uuid, source: FileSource): "feature_unavailable" | "remote_imported" | null {
-    if (source === "session") return null;
+  #fileSourceUnsupported(sessionId: Uuid): "feature_unavailable" | "remote_imported" | null {
     if (!this.#state.selectedFeatures.includes(SESSION_FILES_FEATURE)) return "feature_unavailable";
     return this.#findSession(sessionId)?.origin.kind === "remote" ? "remote_imported" : null;
   }
@@ -3861,7 +3812,7 @@ export class ClientStore {
 
   /** 突发事件后的刷新排期：同一来源在同一窗口内只排一次（合并）。 */
   #scheduleFileRefresh(sessionId: Uuid, source: FileSource, delayMs: number): void {
-    if (source === "session" || this.#schedule === null) return;
+    if (this.#schedule === null) return;
     const key = this.#fileKey(sessionId, source);
     if (this.#fileRefreshTimers.has(key)) return;
     const cancel = this.#schedule(delayMs, () => {
@@ -3886,11 +3837,10 @@ export class ClientStore {
    * 落地后再补一次，避免突发事件打出一串并发查询。
    */
   #refreshFileSource(sessionId: Uuid, source: FileSource): void {
-    if (source === "session") return;
     // 立即刷新取代尚未到期的合并/退避定时器，避免同一次意图排出两条查询。
     this.#cancelFileRefreshTimer(this.#fileKey(sessionId, source));
     const sources = sourcesOf(this.#state.sessionFiles, sessionId);
-    const unsupported = this.#fileSourceUnsupported(sessionId, source);
+    const unsupported = this.#fileSourceUnsupported(sessionId);
     if (unsupported !== null) {
       this.#dropPendingSourceQueries(sessionId, source);
       const nextSources: SessionFilesSourcesState =
@@ -4420,11 +4370,10 @@ export class ClientStore {
     }
 
     const source = selectedSourceOf(state.sessionFiles, sessionId);
-    if (source === "session") return next;
     const sources = sourcesOf(state.sessionFiles, sessionId);
     const loaded = source === "all" ? sources.all.directories.size > 0 : sources.git.gitState !== null;
     if (!loaded) return next;
-    const unsupported = this.#fileSourceUnsupported(sessionId, source);
+    const unsupported = this.#fileSourceUnsupported(sessionId);
     if (unsupported !== null) return next;
     this.#scheduleFileRefresh(sessionId, source, FILE_REFRESH_DEBOUNCE_MS);
     return next;
@@ -4476,10 +4425,9 @@ export class ClientStore {
         threads.set(sessionId, {
           ...existing,
           loadingEarlier: intent === "earlier",
-          loadingHistory: intent === "earlier_history" || intent === "refresh_history",
+          loadingHistory: intent === "earlier_history",
           // 刷新有效交互不动消息/历史分页错误：它只重读 pending_interactions。
-          pagingError: intent === "refresh_history" || intent === "refresh_interactions" ? existing.pagingError : null,
-          historyRefreshError: intent === "refresh_history" ? null : existing.historyRefreshError ?? null,
+          pagingError: intent === "refresh_interactions" ? existing.pagingError : null,
         });
         return { threads };
       },
@@ -4503,7 +4451,6 @@ export class ClientStore {
         // `turn.delta_compacted` 之后的权威正文回填：只要消息页，不重读历史/配置。
         return ["messages"];
       case "earlier_history":
-      case "refresh_history":
         return ["history"];
       case "refresh_interactions":
         // 只重读服务端确认的当前有效请求；调用方已确认协商到该 feature。
@@ -4617,16 +4564,6 @@ function previewBudgetError(): PublicError {
   return {
     code: "resource.result_too_large",
     message: "文件超过预览预算，请改用下载。",
-    retryable: false,
-    details: {},
-  };
-}
-
-/** 会话变更里不可读取/越界的条目。 */
-function unreadableSessionChangeError(path: string): PublicError {
-  return {
-    code: "internal.unavailable",
-    message: `无法读取工作目录外的文件：${path}`,
     retryable: false,
     details: {},
   };

@@ -38,6 +38,7 @@ fn supported_features() -> Vec<&'static str> {
         "core.session-history.v1",
         "core.event-origin.v1",
         "core.future-thing.v1",
+        "core.session-activity.v1",
     ]
 }
 

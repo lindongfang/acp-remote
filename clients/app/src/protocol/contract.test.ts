@@ -423,17 +423,11 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
   it("sessionSummary.state 的枚举取值范围与 SessionStateView 一致", () => {
     const schema = readSchema("common.schema.json");
     const summary = defs(schema)["sessionSummary"] as {
-      properties: { state: { enum: string[] } };
+      properties: { state: { $ref?: string; enum?: string[] } };
     };
-    expect(summary.properties.state.enum).toEqual([
-      "idle",
-      "queued",
-      "running",
-      "waiting_input",
-      "waiting_permission",
-      "failed",
-      "closed",
-    ]);
+    expect(summary.properties.state.$ref).toBe("#/$defs/sessionState");
+    const state = defs(schema)["sessionState"] as { enum: string[] };
+    expect(state.enum).toEqual(["idle", "running", "pending"]);
   });
 
   it("auth.authenticated 的 body 必填集合与镜像一致（设备方向没有授权集合）", () => {

@@ -255,12 +255,15 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.typed-media.v1` | 类型化媒体与消息通道（§10.4）：`AgentContentBlock` 的 `audio_ref`/`file_ref` 与 `image_ref.attachmentId`、`messageChannel`、`partialResult` 与媒体引用可用性；完整 ACP 原文仍逐字节保留 | mvp | 否 |
 | `core.pending-interactions.v1` | 可恢复的有效待处理交互（§10.4/§11.7）：`session.read` 的 `pending_interactions` 返回完整当前请求与 `requestVersion`，应答前重新校验有效性，首个有效答案胜出；已处理/失效请求不可复活 | mvp | 否 |
 | `core.remote-history.v1` | 远程历史读取（§9.6/§11.5）：imported 会话的结构化历史按会话内序号独立分页、读取前重新鉴权、正文由 Owner 回源提供；不可达或超出保留期显式不可用，Access 不持久化正文 | mvp | 否 |
+| `core.session-activity.v1` | 会话主状态三态合同（§10.2）：`sessionSummary.state` 只有 `idle`/`running`/`pending`——存在有效未解决交互时为 `pending`，否则存在未结束任务（含已接受的排队任务）时为 `running`，否则为 `idle`；create/read/list/快照/`session.updated` 视图与 Node Link 的 `sessionMeta`、catalog 会话共用同一取值集合。排队、等待原因与任务/命令结果不属于本 feature；旧七态只允许作为历史事件 `view` 的原文出现 | mvp | 是 |
 
-- 本表的十七个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
-- **本版服务端不宣告一条 feature**：`auth.server_challenge.selectedFeatures` 只返回已完整接线的 16 条。
+- 本表的十八个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- **必需 feature 是双向拒绝点**：`core.session-activity.v1` 要求每次协商都选中。客户端 MUST 在 `supportedFeatures` 与 `requiredFeatures` 中声明它，服务端 MUST 在 `selectedFeatures` 中返回它；任一侧缺失时连接不得进入业务阶段——服务端对未声明该 ID 的连接返回 `protocol.feature_required`（`details.features` 列出缺失的 feature ID，排序去重），客户端对未被选中的必需项停止同步并提示版本不兼容。该 feature 未选中前 MUST NOT 发送或接收三态会话摘要、快照 chunk 与事件；MUST NOT 回退到七态，也 MUST NOT 把 `pending` 折算成某个 `waiting_*`。
+- **本版服务端宣告 17 条**：`auth.server_challenge.selectedFeatures` 只返回已完整接线的 ID（十八条减去 `core.remote-history.v1`）。
   - `core.remote-history.v1`：远程历史需要 Access 侧的 `node-link-client` 回源路径（尚未实现）。宣告一个当前必然失败的读取路径就是能力虚报。协商前 imported 会话的 `history` 仍回 `capability.unsupported_by_broker`，客户端必须明确显示不可用而非「没有历史」。接线后（WP5）再把它加入宣告表并补回源用例。
+  - `core.session-activity.v1`：三态映射、交互归约、`session.updated` 生产与持久迁移已接线；服务端在握手支持集合与必需集合中都登记它，任一侧缺失即拒绝进入业务阶段。
   - `core.attachment-transfer.v1`：连接面、帧族与引擎已实现（§3.4）；组合根装配附件传输端口时注册 `/sync/v1/attachments` 并把该 feature 纳入握手集合，未装配时不注册端点、不宣告。
-- `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 没有这种 feature，必需性由客户端按自身需要声明。
+- `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 当前只有 `core.session-activity.v1` 是必需 feature。
 - 客户端发送支持列表和必需列表。
 - 服务端返回已选择的交集。
 - 列表去重后按 UTF-8 字节升序排列。
@@ -269,12 +272,13 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 
 ### 5.3 旧 peer 与未协商行为
 
-新能力一律是**加性 feature**：未协商时行为与 v1 baseline 逐字相同，旧 peer 既不发送也不接收新封闭字段或新帧族。
+除唯一必需的 `core.session-activity.v1`（三态主状态，见下）外，新能力一律是**加性 feature**：未协商时行为与 v1 baseline 逐字相同，旧 peer 既不发送也不接收新封闭字段或新帧族。
 
 - **服务端（新）面对旧客户端**：`auth.server_challenge.selectedFeatures` 只返回旧客户端声明过的 ID；旧连接不会收到 `attachment_ref`/`workspace_path_ref` 内容块、`audio_ref`/`file_ref` 内容块、`requestVersion`、`pending_interactions` 或 `media` 等新键——服务端省略这些键，而不是下发 `null`、空数组或占位对象（封闭 schema 不接受未协商字段）。
 - **旧服务端面对新客户端**：新客户端只在 feature 被选中后才启用入口；未选中时附件、媒体、可恢复交互与远程历史入口显式不可用并说明原因，MUST NOT 退化为自动文本化附件、以空历史冒充成功或把失败答复当作已处理。
 - **未协商却出现新帧/新字段**：业务连接收到 `type` 不在本连接协商集合内的消息（含任何 `attachment.*` 帧）返回 `protocol.type_unsupported`；收到未协商的封闭字段按 `protocol.schema_invalid` 拒绝；附件连接在协商前收到附件帧返回 `attachment.negotiation_required` 并以 `4400` 关闭。任何一侧都不得静默忽略该消息后继续；重复的错误计数按 §14 的认证前/连接速率规则处理。
 - **降级不是静默改写**：未协商 `core.typed-media.v1` 时，无法表达的非文本内容仍按 §10.3 的 `unsupported` block 或未知事件降级，并保留 `acp.rawJson`；未协商 `core.remote-history.v1` 时，imported 会话的历史读取返回 `capability.unsupported_by_broker`，客户端明确说明不可用，而不是显示「没有历史」。
+- **三态合同是必需 feature，不是加性降级**：`core.session-activity.v1` 未由双方选中时连接不进入业务阶段（§5.2）。旧服务端面对新客户端：`selectedFeatures` 里没有该 ID，客户端 MUST 停止同步并提示版本不兼容，MUST NOT 按七态摘要自行折算或把 `pending` 当作某个 `waiting_*`。旧客户端面对新服务端：`auth.client_hello` 未声明该 ID，服务端 MUST 以 `protocol.feature_required` 拒绝，且 MUST NOT 向该连接下发三态摘要。
 - **不新增 second version**：以上全部在 v1 内通过 feature 演进；提升 `protocolVersion` 才允许改变已协商字段的语义（§16）。
 
 ## 6. 密钥与二进制表示
@@ -708,9 +712,13 @@ Origin: https://work-pc.example.ts.net
       "acp.raw-payload.v1",
       "core.command-status.v1",
       "core.event-ack.v1",
+      "core.session-activity.v1",
       "core.snapshot.v1"
     ],
-    "requiredFeatures": ["core.event-ack.v1"]
+    "requiredFeatures": [
+      "core.event-ack.v1",
+      "core.session-activity.v1"
+    ]
   }
 }
 ```
@@ -733,6 +741,7 @@ Origin: https://work-pc.example.ts.net
       "acp.raw-payload.v1",
       "core.command-status.v1",
       "core.event-ack.v1",
+      "core.session-activity.v1",
       "core.snapshot.v1"
     ],
     "hostProof": "<base64url-p1363-signature>"
@@ -1006,7 +1015,7 @@ Snapshot item 的最低 schema：
 
 `origin` 区分本地与 imported 会话（见第 9.6 节）。imported 会话的正文始终由 Owner 权威，客户端拿到 `origin.kind = "remote"` 的摘要后必须用 `session.read` 在线回源 Owner；本地会话的明细同样只经 `session.read` 现取，两者在 wire 上没有区别。
 
-**明细缺席不是「为空」**：客户端在快照里找不到某会话的明细资源时，该会话的明细状态是「尚未加载」而不是「没有消息、没有待处理交互」。客户端 MUST NOT 据此向用户呈现该会话为空。待处理交互数由 `SessionSummary.state` 的 `waiting_permission`/`waiting_input` 得出（目录页徽标），交互细节按需用 `session.read { include: ["pending_interactions"] }` 取得。
+**明细缺席不是「为空」**：客户端在快照里找不到某会话的明细资源时，该会话的明细状态是「尚未加载」而不是「没有消息、没有待处理交互」。客户端 MUST NOT 据此向用户呈现该会话为空。待处理交互数由 `SessionSummary.state` 为 `pending` 的会话数得出（目录页徽标按会话计数，不累加请求条数），交互细节按需用 `session.read { include: ["pending_interactions"] }` 取得。
 
 **本期服务端对三类明细资源显式回不支持**：`turns`、`pending_interactions` 与 `capabilities` 在当前 `core` 读面上**给不出本表要求的字段**——`Turn` 没有必填的 `createdAt`（也没有可选的 `terminalError`），`CapabilitySet` 是一个能力集合、给不出 `agentCapabilities` 与 `brokerAdditions` 的拆分，`PendingInteraction` 没有 `schema` 对象。服务端因此对这三类 `include` 一律回 `capability.unsupported_by_broker`，**不静默省略、不伪造字段**（符合 [AGENTS.md](../AGENTS.md) 第 4 节「无法安全处理的能力必须明确返回不支持」）。
 
@@ -1356,7 +1365,7 @@ SessionSummary {
   sessionId: UUID,
   title: string | null,
   agent: { agentId: string, name: string },
-  state: "idle" | "queued" | "running" | "waiting_input" | "waiting_permission" | "failed" | "closed",
+  state: "idle" | "running" | "pending",
   origin: { kind: "local" }
         | { kind: "remote", ownerNodeId: UUID, originEpoch: UUID, online: boolean },
   currentMode: ModeRef | null,
@@ -1384,6 +1393,8 @@ SessionConfigOptionView {
 InteractionOption { optionId: string, label: string, kind: string }
 PublicError { code: string, message: string, retryable: boolean, details: object }
 ```
+
+`state` 是会话的**活跃程度摘要**，取值集合只有 `idle`/`running`/`pending`，由 feature `core.session-activity.v1` 协商启用（§5.2）：存在有效未解决交互时为 `pending`；否则存在未结束任务（含已持久接受的排队任务）时为 `running`；否则为 `idle`。排队、等待原因与本轮结果分别留在 turn、交互与命令的词表里，不进入 `state`；`idle` 不是「连接正常」或「Agent 一定可用」的断言。旧七态（`queued`/`waiting_input`/`waiting_permission`/`failed`/`closed`）只允许作为**历史事件 `view` 的原文**出现：`session.read` 的 `history` 条目按原样返回旧 payload（`view` 是开放对象），不得据此改写实时摘要，实时主状态只取最新权威 `SessionSummary`。
 
 `SessionConfigOptionView` 是 ACP `SessionConfigOption` 的公开投影，按原样保留 `id`、`name`、`description`、`category` 和 `type`；`category` 为 `model` 或 `model_config` 的条目就是模型选择项，`currentValue` 是当前选中的 `value`（`type: "boolean"` 时为 boolean）。模型和模式都不再有独立的 Sync 专用类型。
 

@@ -213,7 +213,7 @@ pub enum InvalidValue {
     TooLong { max: usize },
     /// 不允许为空。
     Empty,
-    /// 违反跨字段不变量（如 `closed_at` 与 `state = closed` 不一致）。
+    /// 违反跨字段不变量（如 `Turn::ended_at` 与终态不一致）。
     Field,
     /// `PersistencePolicy::Ephemeral` 不可进入任何提交（§3.4）。
     Ephemeral,

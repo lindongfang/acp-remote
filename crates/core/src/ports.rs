@@ -30,10 +30,10 @@ use crate::model::{
     ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
     OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
     PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
-    PublicError, RemoteSessionRef, RequestId, Resolution, ResumeSessionRequest, SealedAttachment,
-    Sequence, ServerEpoch, SessionFileChunk, SessionFilePage, SessionFilePath, SessionId,
-    SessionPageToken, SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState,
-    SessionSummary, SubmissionId, Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
+    PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest, SealedAttachment, Sequence,
+    ServerEpoch, SessionFileChunk, SessionFilePage, SessionFilePath, SessionId, SessionPageToken,
+    SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState, SessionSummary,
+    SubmissionId, Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -282,13 +282,17 @@ pub struct SessionUpdate {
     /// （`design.md` D7）：不存在客户端发起的重命名命令，也没有绕过该通知直接写标题的路径。
     pub title: Option<Option<String>>,
     pub mode: ModeChange,
-    /// `Some` 时会话进入 `Closed` 并写 `closed_at`。
-    pub closed_at: Option<Timestamp>,
     /// 一次交互解析：由存储层用**条件更新**实现 first-writer-wins（§5.2、§6.7）。
     ///
     /// 受影响行数为 0 时存储层在同一事务内回读：行存在且 `state <> 'pending'` →
     /// `PortError::Conflict(AlreadyResolved)`；无行 → `PortError::NotFound`。
+    ///
+    /// 仲裁只把行推进到 `resolved` 并写 `resolved_at`，**不**写 `confirmed_at`：在端点确认处理结果之前，
+    /// 该行仍计入有效未解决交互（`session-activity` D2）。
     pub interaction: Option<InteractionResolved>,
+    /// 一次应答**确认**：把已是 `resolved`、尚未确认的行写入 `confirmed_at`。这是该交互退出有效集合的
+    /// 唯一途径（仲裁不算解除）。行不存在/不是 `resolved`/已确认时按无操作处理，不产生第二次副作用。
+    pub confirmation: Option<InteractionId>,
     /// `owned_session.agent_session_id`：`None` = 不改该列。
     ///
     /// `session.create` 不再经本列写入（它在 [`StateChange::SettleCreate`] 那条落账提交里一次建全），
@@ -314,6 +318,9 @@ pub struct InteractionResolved {
     pub interaction: InteractionId,
     pub resolution: InteractionResolution,
     pub resolved_by: Actor,
+    /// 版本化入口（`SYNC_PROTOCOL.md` §11.7）携带的 `expectedVersion`：`Some` 时必须等于行内
+    /// `request_version`，否则整事务 `Conflict(VersionMismatch)` 且不消费请求；`None` = 旧 peer 未携带。
+    pub request_version: Option<Version>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -684,9 +691,62 @@ pub struct HistoryPage {
     pub next: Option<GlobalCursor>,
 }
 
+/// [`SessionStore::session_activity`] 的读取结果：会话三态归约的全部输入。
+///
+/// 计数口径（与 `owned_interaction`/`owned_turn` 的落库语义一致）：
+/// - `unresolved_interactions`：未失效、且 `state = 'pending'` 或（`resolved` 且未确认）的行数；
+/// - `unconfirmed_interactions`：其中已仲裁未确认的行标识（确认后减法只作用于这些行）；
+/// - `unresolved_by_turn`：未失效未解决交互按 `turn_id` 的分组计数（`turn_id IS NULL` 的历史行不出现）；
+/// - `unfinished_turns`：`state IN ('queued','running','waiting_input','waiting_permission')` 的 turn 数。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionActivityFacts {
+    pub unresolved_interactions: u32,
+    pub unconfirmed_interactions: Vec<InteractionId>,
+    pub unresolved_by_turn: Vec<(TurnId, u32)>,
+    pub unfinished_turns: u32,
+}
+
+impl SessionActivityFacts {
+    /// 该 turn 结束时会被一并失效的未解决交互数。
+    pub fn unresolved_for_turn(&self, turn: &TurnId) -> u32 {
+        self.unresolved_by_turn
+            .iter()
+            .find(|(candidate, _)| candidate == turn)
+            .map(|(_, count)| *count)
+            .unwrap_or(0)
+    }
+}
+
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError>;
+
+    /// 会话活跃程度的权威事实（`session-activity` D1/D2）：由存储层在**同一事务口径**下读出，
+    /// 调用方据此计算 [`SessionActivity::reduce`](crate::model::SessionActivity::reduce) 的输入。
+    ///
+    /// 「有效未解决交互」= `state = 'pending'` 或 `state = 'resolved'` 但 `confirmed_at IS NULL`，
+    /// 且未失效（`invalidated_at IS NULL`）。`unconfirmed_interactions` 是其中已仲裁未确认的子集，
+    /// 供确认路径计算「确认后是否仍有待处理」。`unresolved_by_turn` 按 `turn_id` 分组，供 turn 终态
+    /// 提交计算同一事务里被失效的那些请求。
+    async fn session_activity(
+        &self,
+        session: &SessionId,
+    ) -> Result<SessionActivityFacts, PortError>;
+
+    /// 该会话的持久队列（`owned_turn.state = 'queued'`），按 `queue_index` 升序。
+    ///
+    /// 只承载 turn 元数据：`Session.prompt` 的正文不在 `owned_turn` 里（它只由 Agent 的
+    /// `user.message.delta` 回显持久化），因此重启后不能凭本方法重放 Agent 副作用；恢复流程据它
+    /// 识别并结算遗留排队项，再继续 FIFO（`session-activity` D3）。
+    async fn queued_turns(&self, session: &SessionId) -> Result<Vec<Turn>, PortError>;
+
+    /// 启动恢复用：仍有未结束 turn 或有效未解决交互的会话，最多 `limit` 个。
+    ///
+    /// 恢复据此在这些会话上重算摘要并驱动持久队列（`session-activity` 迁移计划的第 3 步）。
+    async fn sessions_with_pending_activity(
+        &self,
+        limit: ReplayLimit,
+    ) -> Result<Vec<SessionId>, PortError>;
 
     /// 与 [`SessionStore::commit`] 相同的原子提交，并在**同一事务**里绑定 prompt 的附件清单
     /// （§5.8/§6 第 22 条）：重新核对清单已封存、会话/主体一致、每个附件仍存在且文件可读，
@@ -1520,35 +1580,21 @@ pub trait AttachmentTransferStore: Send + Sync {
     async fn prune_transfers(&self, at: Timestamp, limit: u32) -> Result<u32, PortError>;
 }
 
-/// 一次有效性应答（`permission.resolve` / `elicitation.respond`）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct EffectiveResolution {
-    pub interaction: InteractionId,
-    /// 目标会话：解析入口必须与行里的会话一致（跨会话请求按「不存在」处理）。
-    pub session: SessionId,
-    pub actor: Actor,
-    /// `None` = 旧 peer 未携带（只校验状态与上游存活）；`Some` 时必须等于当前版本。
-    pub request_version: Option<Version>,
-    pub resolution: InteractionResolution,
-    pub at: Timestamp,
-}
-
 /// 有效待处理交互端口（`docs/CORE_PORTS_AND_STORAGE.md` §5.8、`SYNC_PROTOCOL.md` §11.7）。
 ///
-/// 与 `SessionStore::commit` 里 `state.interaction` 的分工：那条路径服务旧 peer 的「按 id 直接解析」；
-/// 本端口服务协商 `core.pending-interactions.v1` 的读-校验-原子胜出路径。首个有效答案由**条件更新**
-/// 选出（版本/状态/失效标记同一条 `WHERE`），失败校验不消费请求。
+/// 只承载**读**与**失效**：应答仲裁与确认都走 `SessionStore::commit`（`SessionUpdate.interaction` /
+/// `SessionUpdate.confirmation`），因此交互阶段、会话摘要与 `session.updated` 事件永远在同一事务里。
+/// 首个有效答案仍由存储层的**条件更新**选出（版本/状态/失效标记同一条 `WHERE`），失败校验不消费请求。
 #[async_trait]
 pub trait InteractionAuthority: Send + Sync {
     /// 当前有效（`pending` 且未失效）的完整请求；`options`/`schema` 来自创建它的交互事件。
+    ///
+    /// 已仲裁但未确认的行**不**在这里出现：它们阻止其他设备再次应答（条件更新会得到
+    /// `AlreadyResolved`），但仍计入会话摘要的待处理数（`SessionStore::session_activity`）。
     async fn effective(&self, session: &SessionId) -> Result<Vec<EffectiveInteraction>, PortError>;
 
-    /// 解析一次有效请求：版本不符 → [`ConflictKind::VersionMismatch`]，已处理 →
-    /// [`Resolution::AlreadyResolved`]，失效/不存在 → `NotFound` 或 `Conflict(Expired)`。
-    async fn resolve_effective(&self, write: EffectiveResolution) -> Result<Resolution, PortError>;
-
-    /// 把当前 `pending` 行标记为失效（上游丢失/重启恢复）：`session = None` 表示全部会话。
-    /// 失效行不可复活，也不参与 `effective`。
+    /// 把有效未解决行（`pending`，或 `resolved` 但未确认）标记为失效（上游丢失/重启恢复）：
+    /// `session = None` 表示全部会话。失效行不可复活，也不参与 `effective` 与三态归约。
     async fn invalidate_pending(
         &self,
         session: Option<&SessionId>,

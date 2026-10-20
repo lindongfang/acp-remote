@@ -735,7 +735,7 @@ const checks: readonly Check[] = [
           idPrefix: "bbbbbbbb",
           titles: ["文档整理"],
           at: ["2026-10-03T09:00:00.000Z"],
-          states: ["waiting_input"],
+          states: ["pending"],
         }),
       ];
       await withScenario(
@@ -908,7 +908,7 @@ const checks: readonly Check[] = [
           idPrefix: "bbbbbbbb",
           titles: ["文档整理"],
           at: ["2026-10-03T09:00:00.000Z"],
-          states: ["waiting_input"],
+          states: ["pending"],
         }),
       ];
       await withScenario(

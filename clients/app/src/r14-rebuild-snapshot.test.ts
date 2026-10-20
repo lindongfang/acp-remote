@@ -60,7 +60,13 @@ const DEVICE_ID = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
 const ORIGIN = "https://work-pc.example.ts.net";
 const SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
 const NOW_MS = 1_700_000_000_000;
-const FEATURES = ["acp.raw-payload.v1", "core.command-status.v1", "core.event-ack.v1", "core.snapshot.v1"];
+const FEATURES = [
+  "acp.raw-payload.v1",
+  "core.command-status.v1",
+  "core.event-ack.v1",
+  "core.session-activity.v1",
+  "core.snapshot.v1",
+];
 
 /** 已完成快照的会话标题：整条用例都靠它证明「仓库没被未完成内容覆盖」。 */
 const COMPLETED_TITLE = "已完成的那次同步";

@@ -186,37 +186,29 @@ pub struct RemoteSessionRef {
 }
 
 /// `common.schema.json#/$defs/sessionState`：与 Sync 的 `sessionSummary.state` 同一取值集合。
+///
+/// 只表达活跃程度摘要：有效未解决交互 → `pending`；否则未结束任务（含已接受的排队任务）→
+/// `running`；否则 `idle`。排队、等待原因与任务结果不属于本词表；旧七态只允许出现在历史事件的
+/// `payload.view` 原文里（开放对象），MUST NOT 出现在 `sessionMeta`、catalog 会话或快照条目中。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionState {
     Idle,
-    Queued,
     Running,
-    WaitingInput,
-    WaitingPermission,
-    Failed,
-    Closed,
+    Pending,
 }
 
 impl SessionState {
-    pub const ALL: [SessionState; 7] = [
+    pub const ALL: [SessionState; 3] = [
         SessionState::Idle,
-        SessionState::Queued,
         SessionState::Running,
-        SessionState::WaitingInput,
-        SessionState::WaitingPermission,
-        SessionState::Failed,
-        SessionState::Closed,
+        SessionState::Pending,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             SessionState::Idle => "idle",
-            SessionState::Queued => "queued",
             SessionState::Running => "running",
-            SessionState::WaitingInput => "waiting_input",
-            SessionState::WaitingPermission => "waiting_permission",
-            SessionState::Failed => "failed",
-            SessionState::Closed => "closed",
+            SessionState::Pending => "pending",
         }
     }
 }
@@ -510,5 +502,56 @@ mod tests {
             "domain 枚举必须与 transcript 表逐条相等"
         );
         assert_eq!(TRANSCRIPT_CODEC, "acpr-transcript-v1");
+    }
+
+    #[test]
+    fn session_state_is_the_three_state_summary() {
+        assert_eq!(
+            SessionState::ALL.map(SessionState::as_str),
+            ["idle", "running", "pending"],
+            "实时摘要只能有这三个取值"
+        );
+
+        for state in SessionState::ALL {
+            let text = state.as_str();
+            let encoded = serde_json::to_string(&state).expect("可序列化");
+            assert_eq!(encoded, format!("\"{text}\""));
+            assert_eq!(
+                serde_json::from_str::<SessionState>(&encoded).expect("往返可解码"),
+                state
+            );
+            assert_eq!(
+                text.parse::<SessionState>().expect("Display/FromStr 互逆"),
+                state
+            );
+        }
+
+        // `sessionMeta` 走同一枚举：三态可解，旧七态必须被拒。
+        for (state, text) in [
+            (SessionState::Idle, "idle"),
+            (SessionState::Running, "running"),
+            (SessionState::Pending, "pending"),
+        ] {
+            let meta: SessionMeta =
+                serde_json::from_str(&format!("{{\"state\":\"{text}\",\"version\":\"7\"}}"))
+                    .expect("三态 sessionMeta 合法");
+            assert_eq!(meta.state, state);
+            assert_eq!(meta.version.as_str(), "7");
+        }
+        for legacy in [
+            "queued",
+            "waiting_input",
+            "waiting_permission",
+            "failed",
+            "closed",
+        ] {
+            assert!(
+                serde_json::from_str::<SessionMeta>(&format!(
+                    "{{\"state\":\"{legacy}\",\"version\":\"7\"}}"
+                ))
+                .is_err(),
+                "sessionMeta.state 不得接受旧值 {legacy}"
+            );
+        }
     }
 }

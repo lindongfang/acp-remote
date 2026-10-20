@@ -112,7 +112,6 @@ export function buildInteractionViews(input: {
   readonly responseRequestIds: ReadonlyMap<string, string>;
   readonly commands: ReadonlyMap<string, CommandRecord>;
   readonly deviceId: string | null;
-  readonly sessionOpen: boolean;
   /** 本次读取的时刻（`effectiveInteraction` 没有 `createdAt`，用它定位）。 */
   readonly effectiveAt?: string;
   /** 当前时刻（epoch 毫秒）：只有给出时才判定 `expiresAt`。 */
@@ -271,7 +270,6 @@ export function buildInteractionViews(input: {
       expiresAt: request.expiresAt,
       ...(input.pendingChecked === true ? { pendingChecked: true } : {}),
       ...(input.nowMs === undefined ? {} : { nowMs: input.nowMs }),
-      sessionOpen: input.sessionOpen,
       resolution,
       pendingRequestId: inFlight && requestId !== undefined ? requestId : null,
     });

@@ -4,8 +4,8 @@
  * 消费 `src/domain/` 的 `SessionStateView`，**不**接收任何协议字段。
  *
  * 迁移到 RNW 原语（`design.md` D1）：`Text` + `StyleSheet`，配色取自主题 token。
- * `data-session-state` 与 `SESSION_STATE_LABEL` 词表都**不变**——前者是 e2e 的机器证据，
- * 后者是对外契约。
+ * `data-session-state` 与 `SESSION_STATE_LABEL` 词表是**三态**：前者是 e2e 的机器证据，
+ * 后者是对外契约；旧七态取值不再出现。
  */
 
 import type { ReactElement } from "react";
@@ -23,12 +23,8 @@ import { StyleSheet, Text, fontFamily, fontSize, palettes, radius, spacing, useT
  */
 export const SESSION_STATE_LABEL: Record<SessionStateView, string> = {
   idle: "空闲",
-  queued: "排队中",
   running: "运行中",
-  waiting_input: "等你回复",
-  waiting_permission: "待授权",
-  failed: "失败",
-  closed: "已关闭",
+  pending: "待处理",
 };
 
 /**
@@ -40,14 +36,9 @@ export const SESSION_STATE_LABEL: Record<SessionStateView, string> = {
  */
 const TONE_BY_STATE: Record<SessionStateView, { readonly fg: ColorToken; readonly bg: ColorToken }> = {
   idle: { fg: "ink2", bg: "panel2" },
-  queued: { fg: "accentInk", bg: "accentSoft" },
   running: { fg: "ok", bg: "okSoft" },
-  // 等你回复与待授权同属「在等我们处理」：两档都用警告色（原型 `.state.waiting` 的口径），
-  // 此前 `waiting_input` 用的思考紫会把「等你」说得比「待授权」更轻。
-  waiting_input: { fg: "warn", bg: "warnSoft" },
-  waiting_permission: { fg: "warn", bg: "warnSoft" },
-  failed: { fg: "danger", bg: "dangerSoft" },
-  closed: { fg: "ink3", bg: "panel2" },
+  // 「有有效未解决交互」在等我们处理：用警告色（原型 `.state.waiting` 的口径）。
+  pending: { fg: "warn", bg: "warnSoft" },
 };
 
 /**
@@ -57,32 +48,18 @@ const TONE_BY_STATE: Record<SessionStateView, { readonly fg: ColorToken; readonl
  */
 const GLYPH_BY_STATE: Record<SessionStateView, string> = {
   idle: "○",
-  queued: "●",
   running: "●",
-  waiting_input: "⏸",
-  waiting_permission: "⏸",
-  failed: "✕",
-  closed: "○",
+  // 有待处理交互：与状态词的「⏸」同一口径。
+  pending: "⏸",
 };
 
 /** 每个状态在样式表里的键（显式列出，避免用字符串现拼样式名）。 */
-type ToneStyleKey =
-  | "idle"
-  | "queued"
-  | "running"
-  | "waitingInput"
-  | "waitingPermission"
-  | "failed"
-  | "closed";
+type ToneStyleKey = "idle" | "running" | "pending";
 
 const STYLE_KEY_BY_STATE: Record<SessionStateView, ToneStyleKey> = {
   idle: "idle",
-  queued: "queued",
   running: "running",
-  waiting_input: "waitingInput",
-  waiting_permission: "waitingPermission",
-  failed: "failed",
-  closed: "closed",
+  pending: "pending",
 };
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
@@ -103,12 +80,8 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.xs,
     },
     idle: tone("idle"),
-    queued: tone("queued"),
     running: tone("running"),
-    waitingInput: tone("waiting_input"),
-    waitingPermission: tone("waiting_permission"),
-    failed: tone("failed"),
-    closed: tone("closed"),
+    pending: tone("pending"),
   });
 }
 
@@ -121,8 +94,8 @@ export interface StatusPillProps {
 /**
  * 渲染一个状态徽标。
  *
- * 文案仍是 `SESSION_STATE_LABEL` 的那七个词，`data-session-state` 仍是**状态标识**（不是文案）：
- * 两处都不能被这块胶囊的样式改动碰到。字形（`● / ⏸ / ✕ / ○`）只是文案前缀，另以
+ * 文案是 `SESSION_STATE_LABEL` 的那三个词，`data-session-state` 仍是**状态标识**（不是文案）：
+ * 两处都不能被这块胶囊的样式改动碰到。字形（`● / ⏸ / ○`）只是文案前缀，另以
  * `data-session-state-glyph` 进 DOM；色调以 `data-session-state-tone`（底色 token）留作机器证据。
  */
 export function StatusPill({ state }: StatusPillProps): ReactElement {
@@ -136,7 +109,7 @@ export function StatusPill({ state }: StatusPillProps): ReactElement {
       dataSet={{
         sessionState: state,
         sessionStateGlyph: glyph,
-        // 配色的机器证据：`waiting_input` 与 `waiting_permission` 都是 `warnSoft`。
+        // 配色的机器证据：`pending` 的底色是 `warnSoft`。
         sessionStateTone: TONE_BY_STATE[state].bg,
       }}
     >

@@ -90,7 +90,7 @@ function sidebarSessions(): readonly SessionSummary[] {
   );
   const titles = ["登录流程", ...Array.from({ length: 16 }, (_, index) => `任务 ${String(index + 2)}`)];
   const states: readonly SessionSummary["state"][] = [
-    "waiting_input",
+    "pending",
     ...Array.from({ length: 16 }, () => "idle" as const),
   ];
   return [
@@ -239,7 +239,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "CP-12 左栏紧凑行只有圆点/标题/状态词/时间；「‹ 目录」回列表、「全部 ›」进详情；分页 15 / 18",
+    name: "CP-12 左栏紧凑行只有圆点/标题/状态词/时间；「‹ 目录」回列表；分页 15 / 18",
     async run() {
       await withSessionPage(
         sessionScenario({
@@ -301,7 +301,7 @@ const checks: readonly Check[] = [
           // 状态圆点与状态词：同一个 `data-session-state` 取值出现两次——圆点没有文本，
           // 状态词是「等你回复」。少了圆点（或把它缩成一个纯色块以外的表达）时集合会变。
           expectEqual(
-            queryAll(waitingRow, '[data-session-state="waiting_input"]').map((node) => textOf(node)),
+            queryAll(waitingRow, '[data-session-state="pending"]').map((node) => textOf(node)),
             [""],
             "紧凑行必须有状态圆点与状态词",
           );
@@ -334,9 +334,10 @@ const checks: readonly Check[] = [
           // 两个目录入口是分开的控件。
           const backToList = query(container, '[data-action="open-directory-list"]');
           expectThat(textOf(backToList).includes("‹ 目录"), "「‹ 目录」必须回到目录列表");
-          expectThat(
-            query(container, '[data-action="open-directory"]') !== null,
-            "必须给出进入该目录详情页的「全部 ›」入口",
+          expectEqual(
+            query(container, '[data-action="open-directory"]'),
+            null,
+            "对话页左栏只保留返回目录列表的入口，不重复目录详情入口",
           );
           click(query(container, '[data-action="open-directory-list"]'), "回到目录列表");
           await waitFor(() => currentPath() === "/", "点击「‹ 目录」后回到目录列表");

@@ -108,6 +108,7 @@ export type { PendingInteractionInput } from "./interaction-model";
 // ── 输入/取消与设置（D5/D6）────────────────────────────────────────────────
 export type {
   CancelPresentation,
+  ConversationInputBlock,
   ConversationInputModel,
   ConversationInputState,
   SubmissionPresentation,
@@ -189,14 +190,13 @@ export {
   rawAvailabilityOf,
 } from "./degradation-model";
 
-// ── 文件栏三来源与互斥内容态（WP4）─────────────────────────────────────────
+// ── 文件栏两来源与互斥内容态 ──────────────────────────────────────────────
 export type {
   AllFilesSourceState,
   FileContentState,
   FileContentView,
   FileGitDiffContent,
   FilePreviewContent,
-  FileSessionChangesContent,
   FileSource,
   FileViewContext,
   GitChangesSourceState,
@@ -217,8 +217,8 @@ export {
   emptyGitChanges,
   emptySources,
   initialSessionFilesState,
+  normalizeFileSource,
   selectedSourceOf,
-  sessionChangesForPath,
   sourceUnsupportedNotice,
   sourcesOf,
 } from "./session-files";

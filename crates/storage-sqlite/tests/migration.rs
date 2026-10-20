@@ -266,8 +266,8 @@ async fn current_version_database_is_untouched_by_two_consecutive_starts() {
         let store = SqliteStore::open(still_writable(&dir), &at())
             .await
             .unwrap_or_else(|error| panic!("round {round} must open: {error}"));
-        assert_eq!(store.metadata().owned_schema_version, 12);
-        assert_eq!(store.metadata().imported_schema_version, 4);
+        assert_eq!(store.metadata().owned_schema_version, 13);
+        assert_eq!(store.metadata().imported_schema_version, 5);
         store.close().await;
 
         let pool = raw_pool(&path).await;
@@ -455,8 +455,8 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 12);
-    assert_eq!(store.metadata().imported_schema_version, 4);
+    assert_eq!(store.metadata().owned_schema_version, 13);
+    assert_eq!(store.metadata().imported_schema_version, 5);
 
     // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
     // `event_payload` 还原——不是「行还在但读不出来」。
@@ -781,7 +781,7 @@ async fn v7_upgrade_carries_interaction_rows_and_a_leading_event_sequence() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database with interaction rows must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 12);
+    assert_eq!(store.metadata().owned_schema_version, 13);
     store.close().await;
 
     let pool = raw_write_pool(&path).await;
@@ -896,8 +896,8 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v2 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 12);
-    assert_eq!(store.metadata().imported_schema_version, 4);
+    assert_eq!(store.metadata().owned_schema_version, 13);
+    assert_eq!(store.metadata().imported_schema_version, 5);
     store.close().await;
 
     let pool = raw_write_pool(&path).await;
@@ -1047,6 +1047,11 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
         .execute(&pool)
         .await
         .expect("把 owned_device 补回 v8 之前就有的 scopes_json（v8 段只删这一列，合成的旧形状必须带上它）");
+    // v13 删除的关闭时间列也属于旧形状。
+    sqlx::query("ALTER TABLE owned_session ADD COLUMN closed_at TEXT")
+        .execute(&pool)
+        .await
+        .expect("把 owned_session 补回 v13 之前的 closed_at");
     sqlx::query("PRAGMA user_version = 3")
         .execute(&pool)
         .await
@@ -1091,8 +1096,8 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v3 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 12);
-    assert_eq!(store.metadata().imported_schema_version, 4);
+    assert_eq!(store.metadata().owned_schema_version, 13);
+    assert_eq!(store.metadata().imported_schema_version, 5);
     store.close().await;
 
     let pool = raw_pool(&path).await;
@@ -1229,22 +1234,93 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     pool.close().await;
 }
 
-/// §7.2/R13/R16：**v4 → v6 只给 `owned_session` 末尾追加三个可空列**（v5 两列 + v6 的 `workspace_directory_id`）。
+/// v13：owned 摘要的旧七态按 `idle→idle、queued/running→running、waiting_*→pending、
+/// failed/closed→idle` 收敛为三态；`closed_at` 删除，事件/序号不受影响。
+#[tokio::test]
+async fn v13_maps_legacy_owned_states_to_three_states() {
+    let dir = temp_dir("migrate-owned-states-v13");
+    let path = copy_fixture("empty.sqlite3", &dir);
+    let pool = raw_write_pool(&path).await;
+    let states = [
+        "idle",
+        "queued",
+        "running",
+        "waiting_input",
+        "waiting_permission",
+        "failed",
+        "closed",
+    ];
+    for (index, state) in states.iter().enumerate() {
+        sqlx::query(
+            r#"INSERT INTO owned_session (session_id, title, agent_id, agent_name, state,
+             origin_epoch, current_mode_id, current_mode_name, version, created_at, updated_at,
+             closed_at) VALUES (?1, ?2, 'fixture-agent', 'Fixture Agent', ?3, ?4, NULL, NULL, 1,
+             ?5, ?5, NULL)"#,
+        )
+        .bind(format!("88888888-8888-4888-8888-88888888880{index}"))
+        .bind(format!("state-{state}"))
+        .bind(state)
+        .bind(FIXTURE_EPOCH)
+        .bind(AT)
+        .execute(&pool)
+        .await
+        .expect("seed a legacy-state session");
+    }
+    let events_before = ints(&pool, "SELECT COUNT(*) FROM owned_event").await;
+    pool.close().await;
+
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("a v2 database must upgrade");
+    store.close().await;
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        texts(&pool, "SELECT state FROM owned_session ORDER BY title").await,
+        vec![
+            "idle", "idle", "idle", "running", "running", "pending", "pending"
+        ],
+        "旧七态必须按迁移映射收敛为三态（按 title 排序：closed,failed,idle,queued,running,waiting_input,waiting_permission）"
+    );
+    assert_eq!(
+        ints(&pool, "SELECT COUNT(*) FROM owned_event").await,
+        events_before,
+        "状态迁移不得改动事件行"
+    );
+    assert!(
+        !column_names(&pool, "owned_session")
+            .await
+            .contains(&"closed_at".to_owned()),
+        "v13 必须删除 closed_at"
+    );
+    assert_eq!(
+        ints(
+            &pool,
+            "SELECT COUNT(*) FROM owned_session WHERE state NOT IN ('idle','running','pending')"
+        )
+        .await,
+        vec![0],
+        "升级后不得残留七态取值"
+    );
+    pool.close().await;
+}
+
+/// §7.2/R13/R16：v4 → 当前形状（v5/v6 追加恢复列 + v13 三态重建）。
 ///
 /// 造 v4 库的手法与上一条同款：新建当前形状的库 → 写入一条真的 owned 会话行（除追加的三列外列列有值）
-/// 与两行设备行（覆盖 `last_seen_at` 的 `NULL`/非 `NULL`）→ `DROP` 掉才有的三列、把 v8 才删的
-/// `owned_device.scopes_json` 补回，并把版本键降到 4。四条判据：
+/// 与两行设备行（覆盖 `last_seen_at` 的 `NULL`/非 `NULL`）→ `DROP` 掉才有的三列、补回 v8 删除的
+/// `owned_device.scopes_json` 与 v13 删除的 `owned_session.closed_at`，并把版本键降到 4。四条判据：
 ///
-/// 1. 既有会话行的其余列逐字节不变，三列都是 `NULL`（不是空串、不是占位别名/路径）；
+/// 1. 既有会话行的其余列逐字节不变，三列都是 `NULL`（不是空串、不是占位别名/路径），`closed_at` 已删除；
 /// 2. `NULL` 不被任何读取路径补齐、推导或以别名解析结果替换——`load_recovery` 对这条会话返回
 ///    `Ok(None)`（= 该会话没有可用于恢复的数据，恢复必须显式失败），摘要的 `workspace` 是 `None`
 ///    （= 未分组）；
 /// 3. 除 `owned_session` 外每条表的 DDL 文本逐字节不变（v4 库不得重跑任何 12-step 重建），
-///    `PRAGMA user_version` 与两族版本键为 6/6/3；两族列清单与新建库逐项相等。
+///    `PRAGMA user_version` 与两族版本键升到当前版本；两族列清单与新建库逐项相等。
 /// 4. 设备行逐列保留：v8 段只删 `scopes_json`，`DROP COLUMN` 重写整张表，行里其余列必须逐字节不变
 ///    （两行覆盖 `last_seen_at` 的 `NULL`/非 `NULL`），且升级后设备表不再有 `scopes_json` 列。
 #[tokio::test]
-async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
+async fn v4_database_upgrades_to_the_three_state_shape_and_keeps_recovery_columns() {
     let dir = temp_dir("migrate-from-v4");
     let created = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
@@ -1254,11 +1330,16 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     let session = SessionId::new(FIXTURE_SESSION).expect("fixture session id");
 
     // 造 v4 库：写入一条真的会话行与两行设备行，再去掉 v5 才有的三列、把版本降到 4。
+    // 当前新建库已经不再有 `closed_at`（v13 删除），因此先把它补回，合成的库才真的是 v4 形状。
     let pool = raw_write_pool(&path).await;
+    sqlx::query("ALTER TABLE owned_session ADD COLUMN closed_at TEXT")
+        .execute(&pool)
+        .await
+        .expect("把 owned_session 补回 v13 之前的 closed_at");
     sqlx::query(
         r#"INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, origin_epoch,
          current_mode_id, current_mode_name, version, created_at, updated_at, closed_at)
-         VALUES (?1, 'fixture session', 'fixture-agent', 'Fixture Agent', 'waiting_input', ?2,
+         VALUES (?1, 'fixture session', 'fixture-agent', 'Fixture Agent', 'idle', ?2,
          'code', 'Code', 7, ?3, ?3, NULL)"#,
     )
     .bind(FIXTURE_SESSION)
@@ -1331,8 +1412,8 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v4 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 12);
-    assert_eq!(store.metadata().imported_schema_version, 4);
+    assert_eq!(store.metadata().owned_schema_version, 13);
+    assert_eq!(store.metadata().imported_schema_version, 5);
     // ② `NULL` = 没有可用于恢复的数据：升级后的既有会话一律显式失败，不出现「升级后突然可恢复」。
     assert_eq!(
         store
@@ -1359,22 +1440,28 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
         );
     }
 
-    // ① 既有会话行：其余列逐字节不变，两列是 `NULL`。
+    // ① 既有会话行的其余列逐字节不变，三列是 `NULL`；状态只有三态，本行保持 `idle`。
     assert_eq!(
         texts(
             &pool,
             "SELECT session_id || '|' || COALESCE(title, '∅') || '|' || agent_id || '|' || \
              agent_name || '|' || state || '|' || origin_epoch || '|' || \
              COALESCE(current_mode_id, '∅') || '|' || COALESCE(current_mode_name, '∅') || '|' || \
-             version || '|' || created_at || '|' || updated_at || '|' || COALESCE(closed_at, '∅') \
+             version || '|' || created_at || '|' || updated_at \
              FROM owned_session"
         )
         .await,
         vec![format!(
-            "{FIXTURE_SESSION}|fixture session|fixture-agent|Fixture Agent|waiting_input|\
-             {FIXTURE_EPOCH}|code|Code|7|{AT}|{AT}|∅"
+            "{FIXTURE_SESSION}|fixture session|fixture-agent|Fixture Agent|idle|\
+             {FIXTURE_EPOCH}|code|Code|7|{AT}|{AT}"
         )],
         "升级后既有会话行的其余列必须逐字节不变"
+    );
+    assert!(
+        !column_names(&pool, "owned_session")
+            .await
+            .contains(&"closed_at".to_owned()),
+        "升级后会话表不得再有 closed_at 列"
     );
     assert_eq!(
         ints(
@@ -1499,7 +1586,7 @@ async fn recovery_columns_round_trip_and_are_not_rewritten_by_the_resume_flow() 
                 state: None,
                 mode: acp_core::ports::ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 interaction: None,
                 agent_session_id: Some(agent_session_id.clone()),
                 workspace_cwd: Some(workspace_cwd.clone()),
@@ -1739,8 +1826,8 @@ async fn a_failed_upgrade_rolls_back_to_v1() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("retry must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 12);
-    assert_eq!(store.metadata().imported_schema_version, 4);
+    assert_eq!(store.metadata().owned_schema_version, 13);
+    assert_eq!(store.metadata().imported_schema_version, 5);
     store.close().await;
 }
 
@@ -2159,6 +2246,23 @@ async fn v10_to_v11_drops_export_import_and_merges_imported_sessions() {
     .execute(&pool)
     .await
     .expect("insert delivery for the winning export");
+    // 该夹具是 v1 形状，但版本被直接标成 10：v5/v6 两段（file_version < 5/6）因此不会执行。
+    // 造一个真正的 v10 形状必须把这两段追加的列补上，否则后续 v13 重建读不到它们。
+    let session_columns = column_names(&pool, "owned_session").await;
+    for column in [
+        "agent_session_id",
+        "workspace_cwd",
+        "workspace_directory_id",
+    ] {
+        if !session_columns.iter().any(|name| name == column) {
+            sqlx::query(&format!(
+                "ALTER TABLE owned_session ADD COLUMN {column} TEXT"
+            ))
+            .execute(&pool)
+            .await
+            .expect("补上 v5/v6 的会话列");
+        }
+    }
     sqlx::raw_sql(
         "UPDATE meta SET value = '10' WHERE key = 'owned_schema_version';
          UPDATE meta SET value = '3' WHERE key = 'imported_schema_version';
@@ -2172,8 +2276,8 @@ async fn v10_to_v11_drops_export_import_and_merges_imported_sessions() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v10 database must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 12);
-    assert_eq!(store.metadata().imported_schema_version, 4);
+    assert_eq!(store.metadata().owned_schema_version, 13);
+    assert_eq!(store.metadata().imported_schema_version, 5);
     store.close().await;
 
     let pool = raw_pool(&path).await;

@@ -206,7 +206,7 @@ core::testing     fake ports 和契约测试工具，仅测试 feature 导出
 ```text
 NodeId / DeviceId / ExportId / ImportId / SessionId / EventId / RequestId / TurnId / InteractionId / PairingId / AttachmentId
 OwnedSessionRef / RemoteSessionRef / OriginEventRef / SessionReference
-Session / SessionSummary / SessionSnapshot / SessionState / Turn / TurnState / ResourceOrigin
+Session / SessionSummary / SessionSnapshot / SessionState / SessionActivity / Turn / TurnState / ResourceOrigin
 ClientCommand / CommandPayload / CommandReceipt / CommandRecord / CommandTerminalRecord / CommandStatus / CommandKind
 InteractionId / InteractionKind / InteractionOption / PermissionDecision / InteractionResolution / PendingInteraction / Resolution
 Event / EventType / EventKind / EventOrigin / EventPayload / AcpRaw / PersistencePolicy / StoredPolicy
@@ -218,7 +218,7 @@ Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord 
 
 以上是**冻结全量**；每个类型的形状与不变量见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3。
 
-`conversation-area-complete` 的 WP2 已在该文档 §3.3 落地 `MessageChannel`、`PartialResult`、`MediaReference`、`AttachmentSubject`、`AttachmentTransfer`、`AttachmentSubmission` 与 `EffectiveInteraction`，端口见 §5.8；storage 的 v12 migration 与五张新表见 §7.3/§7.6。
+`conversation-area-complete` 的 WP2 已在该文档 §3.3 落地 `MessageChannel`、`PartialResult`、`MediaReference`、`AttachmentSubject`、`AttachmentTransfer`、`AttachmentSubmission` 与 `EffectiveInteraction`，端口见 §5.8；storage 的 v12 migration 与五张新表见 §7.3/§7.6（当前 schema 已由 `session-activity-three-states` WP2 推进到 v13，见 §4.7）。
 
 规则：
 
@@ -227,6 +227,8 @@ Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord 
 - ID 使用 newtype；状态转换由领域方法验证，adapter 不能直接修改状态字段。
 - Owned 与 imported session 必须在类型或 `ResourceOrigin` 上可区分，禁止依靠 nullable `ownerNodeId` 猜测持久化规则。
 - `core::broker` 实现每会话串行、active turn、授权调用点、幂等、permission first-writer-wins、模型切换时机和先提交后发布。
+- `[决定]`（`session-activity-three-states`，WP2 已实现）**会话主状态只有 `idle|running|pending`**，取值只由 `SessionActivity::reduce(pending, unfinished_turns)` 决定：有效未解决交互（含已仲裁未确认）优先 → `pending`；否则未结束 turn（`queued`/`running`/`waiting_*`，含已派发但停止未确认的占位）→ `running`；否则 `idle`。`TurnState`/`CommandStatus` 词表不变；失败/取消一个 turn 不终结会话，后续排队继续。`session.updated` 由 core 在状态变化时生成（携带完整摘要与嵌套 `session.version`），每次提交最多一条，仲裁/确认/turn 终态/恢复都不得各自另发。应答的 first-writer-wins 只写 `resolved_at`，端点确认（`SessionUpdate.confirmation`）才写 `confirmed_at`；`agent-host` 现在把「字节已写入并 flush 到 Agent stdin」作为 `prompt` 与交互应答的成功条件，core 在适配器成功返回后经 `Broker::confirm_interaction` 原子写 `confirmed_at` 与摘要，失败或写未确认时保持待处理并在重启恢复统一失效。
+- `[决定]` 启动恢复重水化持久队列：`SessionStore::queued_turns` 给出遗留排队项（`owned_turn` 不含 prompt 正文，**不得**重放 Agent 副作用），内存队列为空时显式终结为 `failed` 并由 `unsettled_commands` 把 `accepted` 命令结算为 `uncertain`；`sessions_with_pending_activity` 补齐仍需重算摘要的会话。`uncertain` 命令与无法确认停止的执行不自动重试。
 - 事件 view 的职责分工（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条）：适配器负责 ACP 派生投影（`block`/`title`/`options`/`deltaIndex` 等，它持有 ACP DTO），`core::broker` 在提交前补 `SYNC_PROTOCOL.md` §10.3 要求的身份与会话版本字段（`turnId`、`version`）并在存储返回后比对版本；两侧不得互相替代，也不得在 broker 的公共领域视图里重建 ACP 语义。同一分工下，`file.changed` 的**行级差异统计与结构化差异行**（新增/删除/上下文，feature `core.file-diff.v1`）都由 `core::broker` 从**同一次**类型化 Diff 派生，受 `SYNC_PROTOCOL.md` §14 的固定行数/字节/单行上限约束，超限时只带统计并以已登记原因标记差异行未下发；未协商该 feature 的连接由投递层去掉该键。
 
 入站 use case 按能力拆分：
@@ -249,14 +251,14 @@ RemoteCatalogQueries
 AgentCatalog             枚举可用 Agent 与能力
 SessionBackendFactory    受约束地 create/open/resume SessionEndpoint（`resume` 是进程不在时的唯一恢复入口，能力门控在实现侧）
 SessionEndpoint          reference/agent_session_id/prompt/cancel/modes/set-mode/list-config/set-config/resolve-interaction/read-history/close，绑定单个 live session（`modes` 是 `session.mode.list` 的唯一候选来源；`agent_session_id` 是创建后回填 ACP 会话标识的来源，未取得时返回 `None`）
-SessionStore             原子提交 owned session 状态、事件与 requestId 幂等；提供 head、一致性读视图与恢复数据的窄读取（`load_recovery`）
+SessionStore             原子提交 owned session 状态、事件与 requestId 幂等；提供 head、一致性读视图、恢复数据的窄读取（`load_recovery`），以及三态归约的读缝（`session_activity`/`queued_turns`/`sessions_with_pending_activity`）
 RemoteDeliveryStore      只提交 imported event 的 cursor/digest/local-sequence 索引
 TrustStore               设备、节点配对、信任与撤销元数据
 ExportStore              Owner Export 与 Access Import 记录
 AuditStore               不含内容的审计记录（读写）
 AttachmentStore          内容寻址附件字节、会话绑定（建立链接时刷新附件的最近使用时间，供保留期判定）与 LRU 清理
 AttachmentTransferStore  运行时无关的分块附件、封存、清单与临时清理（已实现，CORE §5.8）
-InteractionAuthority     有效待处理交互读取与版本化原子解析（已实现，CORE §5.8）
+InteractionAuthority     有效待处理交互的只读查询与 `invalidate_pending`（已实现，CORE §5.8）；应答仲裁与端点确认不在此端口，走 `SessionStore::commit` 的 `SessionUpdate.interaction`/`confirmation`
 EventPublisher           发布已经提交的事件或远程交付
 EventSink                后端事件通道；调用顺序即提交顺序
 ReadView                 一致性读视图，`sync.snapshot_*` 的 barrier
@@ -353,6 +355,7 @@ AttachmentTransfer（计划，`attachment.schema.json`）：独立已认证附�
 
 - 启动和监督 ACP Agent 子进程。
 - stdin/stdout JSON-RPC transport。
+- **出站写确认**（`session-activity-three-states` WP3）：`session/prompt` 与交互应答的 `SessionEndpoint` 成功，只在写入任务确认 `write_all` + `flush` 已到达 Agent stdin 之后返回；入队成功不算确认。写入未确认时 prompt 回滚 turn、交互保留「已仲裁未确认」阶段，由 core 继续计入待处理。
 - request ID、ACP session ID 与 live endpoint generation 映射。
 - capability negotiation。
 - stderr 的有界采集与结构化计数、超时、取消和进程树清理。
@@ -408,9 +411,11 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 - migration 按族分开维护，允许单独重放或清理 `imported_*` 而不影响 owned 权威事件日志。
 - 只有当出现"必须靠操作系统级隔离（不同文件/不同权限）才能满足的威胁模型"时，才拆成两个数据库文件，并按 `AGENTS.md` §9 新增 ADR。
 
-它不解析 ACP、不广播 WebSocket、不执行会话状态转换、不保存明文私钥。数据库 record 与领域对象通过 mapper 转换。
+它不解析 ACP、不广播 WebSocket、不决定会话状态（三态归约只在 core；本 crate 只按提交写入与读取摘要、迁移时写暂存值）、不保存明文私钥。数据库 record 与领域对象通过 mapper 转换。
 
-`[决定]`（2026-10-19，`conversation-area-complete` WP2 已实现）分块附件、封存清单、消息通道/部分结果与媒体引用的落盘由本 crate 拥有（`CORE_PORTS_AND_STORAGE.md` §5.8/§7.3/§7.6）：临时传输、清单、`owned_message`、`owned_media_ref` 与交互版本列都经**版本化 migration** 追加（当前 v12），`imported_*` 家族不新增任何正文列。
+`[决定]`（2026-10-19，`conversation-area-complete` WP2 已实现）分块附件、封存清单、消息通道/部分结果与媒体引用的落盘由本 crate 拥有（`CORE_PORTS_AND_STORAGE.md` §5.8/§7.3/§7.6）：临时传输、清单、`owned_message`、`owned_media_ref` 与交互版本列都经**版本化 migration** 追加（v12 引入，当前 v13），`imported_*` 家族不新增任何正文列。
+
+`[决定]`（2026-10-20，`session-activity-three-states` WP2 已实现）本 crate 是会话三态摘要的**持久化守卫**：`owned_session.state` 的 CHECK 只接受 `idle|running|pending`，没有 `closed_at`；`owned_interaction` 增 `confirmed_at` 与 `turn_id`（`turn_id` 由创建事件回填）。迁移到 **v13 / imported v5**：旧 `owned_session` 走 12-step 重建（旧七态写迁移暂存值 `idle`/`running`/`pending`，随后由启动恢复按 `SessionActivity::reduce` 重算），旧 `resolved` 交互回填 `confirmed_at = resolved_at`，`imported_session.state` 只做值归一化；结构变化、回填与版本落盘同一事务、失败整体回滚。新增读缝 `session_activity`（有效未解决交互含「已仲裁未确认」、按 `turn_id` 分组、未结束 turn 数）、`queued_turns`（持久队列）与 `sessions_with_pending_activity`（恢复候选）供 core 重水化队列与重算摘要。`SessionUpdate.confirmation` 与 `session_activity` 的读口径见 `CORE_PORTS_AND_STORAGE.md` §5.2/§6；适配器侧的确认调用（Agent 明确处理结果 → `Broker::confirm_interaction`）属 **WP3**，本 crate 只提供落盘与读缝。
 
 `owned_session.version` 的递增规则（含 `StateChange` 的提交 +1，否则不变）由本 crate 在提交事务内实现，是唯一权威；core 只按同一规则推导 view 的 `version` 并在提交后与之比对（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条），双方不一致时 core 失败关闭（`PortError::Corrupt`）而不能静默采用任一方。
 

@@ -1146,12 +1146,8 @@ fn snapshot_end(
 pub(crate) fn session_meta(summary: &acp_core::model::SessionSummary) -> Option<SessionMeta> {
     let state = match summary.state() {
         CoreSessionState::Idle => WireSessionState::Idle,
-        CoreSessionState::Queued => WireSessionState::Queued,
         CoreSessionState::Running => WireSessionState::Running,
-        CoreSessionState::WaitingInput => WireSessionState::WaitingInput,
-        CoreSessionState::WaitingPermission => WireSessionState::WaitingPermission,
-        CoreSessionState::Failed => WireSessionState::Failed,
-        CoreSessionState::Closed => WireSessionState::Closed,
+        CoreSessionState::Pending => WireSessionState::Pending,
     };
     Some(SessionMeta {
         state,

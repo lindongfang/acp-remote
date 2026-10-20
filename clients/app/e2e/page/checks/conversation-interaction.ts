@@ -351,7 +351,7 @@ const checks: readonly Check[] = [
       await withSessionPage(
         sessionScenario({
           holdCommands: ["permission.resolve"],
-          sessions: [sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "waiting_permission" })],
+          sessions: [sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "pending" })],
           events: [
             wireEvent({
               globalSequence: 11,
@@ -656,7 +656,8 @@ const checks: readonly Check[] = [
             DIRECTORY_PATH_ALPHA,
             "路径逐字来自服务端下发的引用",
           );
-          expectThat(query(container, '[data-action="open-directory"]') !== null, "必须给出进入该目录详情页的入口");
+          expectThat(query(container, '[data-action="open-directory-list"]') !== null, "左栏必须给出返回目录列表的入口");
+          expectEqual(query(container, '[data-action="open-directory"]'), null, "对话页左栏不重复目录详情入口");
           expectAbsent(domText(container), DIRECTORY_ID_ALPHA, "左栏可见文本里出现了目录标识");
           expectThat(query(container, "[data-sidebar-search]") !== null, "必须有目录内搜索框");
 
@@ -870,27 +871,46 @@ const checks: readonly Check[] = [
         },
       );
 
-      // 已关闭的会话：回车 MUST NOT 发出任何命令，也不改变输入区的状态说明。
-      const closed = await enterRoute(
-        sessionScenario({ sessions: [sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "closed" })] }),
+      // 来源离线的会话：回车 MUST NOT 发出任何命令，也不改变输入区的状态说明。
+      // 三态下不存在「已关闭」主状态；不可提交只由当前事实（这里来源离线）决定。
+      const unavailable = await enterRoute(
+        sessionScenario({
+          sessions: [
+            sessionSummary({
+              id: SESSION_ALPHA,
+              directoryId: DIRECTORY_ID_ALPHA,
+              state: "idle",
+              origin: {
+                kind: "remote",
+                ownerNodeId: "f0000000-0000-4000-8000-0000000000aa",
+                exportId: "export-1",
+                originEpoch: "f0000000-0000-4000-8000-0000000000bb",
+                online: false,
+              },
+            }),
+          ],
+        }),
       );
       try {
-        await waitFor(() => query(closed.container, '[data-composer="closed"]') !== null, "已关闭的输入区");
-        const reason = textOf(query(closed.container, "[data-submit-unavailable]"));
-        pressEnter(closed.container);
+        await waitFor(
+          () => query(unavailable.container, '[data-composer="unavailable"]') !== null,
+          "来源离线的输入区",
+        );
+        const reason = textOf(query(unavailable.container, "[data-submit-unavailable]"));
+        pressEnter(unavailable.container);
         expectEqual(
-          commandBodies(closed.host?.sent ?? [], "session.prompt").length,
+          commandBodies(unavailable.host?.sent ?? [], "session.prompt").length,
           0,
           "不可提交时回车 MUST NOT 发出 session.prompt",
         );
-        expectEqual(query(closed.container, "[data-submission]"), null, "回车不得产生提交呈现");
+        expectEqual(query(unavailable.container, "[data-submission]"), null, "回车不得产生提交呈现");
         expectEqual(
-          textOf(query(closed.container, "[data-submit-unavailable]")),
+          textOf(query(unavailable.container, "[data-submit-unavailable]")),
           reason,
           "回车不得改变输入区的状态说明",
         );
       } finally {
-        await closed.unmount();
+        await unavailable.unmount();
       }
     },
   },

@@ -13,9 +13,13 @@
       "acp.raw-payload.v1",
       "core.command-status.v1",
       "core.event-ack.v1",
+      "core.session-activity.v1",
       "core.snapshot.v1"
     ],
-    "requiredFeatures": ["core.event-ack.v1"]
+    "requiredFeatures": [
+      "core.event-ack.v1",
+      "core.session-activity.v1"
+    ]
   }
 }
 

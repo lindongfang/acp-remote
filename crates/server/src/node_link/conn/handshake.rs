@@ -12,7 +12,8 @@
 //!   `CredentialStatus::Unknown`，`node.challenge` 照常签发；对端可见的失败推迟到 proof 阶段；
 //! - **feature 词表只有一个来源**：`compatibility/features/v1/features.json` 的 `node_link` 子集中
 //!   `delivery = mvp` 的条目由本模块的 [`SUPPORTED_FEATURES`]/[`DEFERRED_FEATURES`] 显式划分（已接线
-//!   的四条 vs 尚未接线的四条），逐条常量在此登记并有契约测试比对。
+//!   vs 尚未接线），逐条常量在此登记并有契约测试比对；`required: true` 的条目汇总在
+//!   [`REQUIRED_FEATURES`]。
 
 use acp_core::model::{NodeId, NodeKind, NodeRecord, NodeState, PairingRecord, PeerIdentity};
 use acp_core::use_cases::NodeLinkHandshakeView;
@@ -22,7 +23,7 @@ use node_link_protocol::handshake::NodeHello;
 
 /// 本切片实现的 Node Link feature。
 ///
-/// 选中即承诺真实实现（`AGENTS.md` §4 的能力协商真实性）。当前登记全部 8 条 mvp 业务能力；
+/// 选中即承诺真实实现（`AGENTS.md` §4 的能力协商真实性）。当前登记全部 9 条 mvp 业务能力；
 /// `node-link.node-rotation.v1` 是 `post_mvp`，不选中。
 ///
 /// `attachment-transfer` 与它的 `/node-link/v1/attachments` 端点一起接线（组合根注册端点后才把本表
@@ -32,8 +33,10 @@ use node_link_protocol::handshake::NodeHello;
 /// `typed-media`/`pending-interactions`/`remote-history` 的门控点都在 `session.read`；该命令已在
 /// Owner 侧接线（共享投影 + core 用例），因此这三条可以如实宣告。Access 侧对这些能力的使用仍由
 /// `node-link-client` 与 Sync 的 imported 读取路径决定。
-pub const SUPPORTED_FEATURES: [&str; 8] = [
+pub const SUPPORTED_FEATURES: [&str; 9] = [
     "node-link.core.v1",
+    // §11.4/§12.3：会话主状态三态合同。与 Sync 的 `core.session-activity.v1` 同一取值集合。
+    "core.session-activity.v1",
     "node-link.raw-acp.v1",
     "node-link.command-status.v1",
     "node-link.session-create.v1",
@@ -75,7 +78,10 @@ pub fn feature_list() -> Vec<String> {
 }
 
 /// 每次握手都必须选中的 feature（registry 的 `required: true`，§11.3）。
-pub const REQUIRED_FEATURE: &str = "node-link.core.v1";
+///
+/// `core.session-activity.v1` 与 `node-link.core.v1` 同属协议必需：缺少三态摘要词表的握手无法保证
+/// 两侧对 `sessionMeta.state` 的取值集合一致，因此 Owner 不等 Access 自愿声明就要求它。
+pub const REQUIRED_FEATURES: [&str; 2] = ["node-link.core.v1", "core.session-activity.v1"];
 
 /// v1 唯一的协议版本（`node.challenge.selectedProtocolVersion` 与交集结果）。
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -105,9 +111,9 @@ pub fn negotiated_version(hello: &NodeHello) -> Result<u64, NegotiationFault> {
 /// feature 协商：`selected = 对端 supportedFeatures ∩ Owner 支持集合`（排序去重），
 /// 然后核对「必需 feature」是否全部被选中。
 ///
-/// 必需集合 = Owner 的 [`REQUIRED_FEATURE`] ∪ 对端 `requiredFeatures`（§11.3：`node-link.core.v1`
-/// 是必需 feature；Access 未声明它时 Owner 仍要求它）。未被选中的必需 feature 按 UTF-8 字节升序、
-/// 去重后返回。返回值是协商结果的 feature ID 文本（排序去重）。
+/// 必需集合 = Owner 的 [`REQUIRED_FEATURES`] ∪ 对端 `requiredFeatures`（§11.3：`node-link.core.v1`
+/// 与 `core.session-activity.v1` 是必需 feature；Access 未声明它们时 Owner 仍要求它们）。未被选中的
+/// 必需 feature 按 UTF-8 字节升序、去重后返回。返回值是协商结果的 feature ID 文本（排序去重）。
 ///
 /// 本函数用 [`SUPPORTED_FEATURES`] 全集；组合根在某个端点未注册时改用
 /// [`negotiate_features_with`] 传入收窄后的集合。
@@ -140,7 +146,11 @@ pub fn negotiate_features_with(
         .iter()
         .map(|feature| feature.as_str().to_owned())
         .collect();
-    required.push(REQUIRED_FEATURE.to_owned());
+    required.extend(
+        REQUIRED_FEATURES
+            .iter()
+            .map(|feature| (*feature).to_owned()),
+    );
     required.sort();
     required.dedup();
 
@@ -329,16 +339,21 @@ mod tests {
         for id in &declared {
             assert!(mvp.contains(id), "{id} is not an mvp feature");
         }
-        assert!(mvp.contains(&REQUIRED_FEATURE.to_owned()));
-        // `required: true` 的唯一一条必须正好是我们的必需 feature。
-        let required: Vec<&str> = registry["protocols"]["node_link"]["features"]
+        for id in REQUIRED_FEATURES {
+            assert!(mvp.contains(&id.to_owned()), "{id} is not an mvp feature");
+        }
+        // registry 里 `required: true` 的条目必须正好是我们的必需集合（顺序无关）。
+        let mut registry_required: Vec<&str> = registry["protocols"]["node_link"]["features"]
             .as_array()
             .expect("features")
             .iter()
             .filter(|entry| entry["required"].as_bool() == Some(true))
             .map(|entry| entry["id"].as_str().expect("id"))
             .collect();
-        assert_eq!(required, vec![REQUIRED_FEATURE]);
+        registry_required.sort();
+        let mut expected_required = REQUIRED_FEATURES.to_vec();
+        expected_required.sort();
+        assert_eq!(registry_required, expected_required);
     }
 
     fn selected(hello: &NodeHello) -> Vec<String> {
@@ -356,20 +371,21 @@ mod tests {
             "未注册的端点必须从本端集合里去掉"
         );
 
-        let declared = hello(
-            &[REQUIRED_FEATURE, attachment, "node-link.command-status.v1"],
-            &[REQUIRED_FEATURE],
-        );
+        let mut declared_features = REQUIRED_FEATURES.to_vec();
+        declared_features.push(attachment);
+        declared_features.push("node-link.command-status.v1");
+        let declared = hello(&declared_features, &REQUIRED_FEATURES);
         let selected = negotiate_features_with(&declared, &narrowed).expect("必需 feature 已满足");
         assert!(
             !selected.iter().any(|feature| feature == attachment),
             "未注册的端点不得出现在 selectedFeatures 里"
         );
 
-        let required = hello(
-            &[REQUIRED_FEATURE, attachment],
-            &[REQUIRED_FEATURE, attachment],
-        );
+        let mut supported = REQUIRED_FEATURES.to_vec();
+        supported.push(attachment);
+        let mut required = REQUIRED_FEATURES.to_vec();
+        required.push(attachment);
+        let required = hello(&supported, &required);
         assert!(
             negotiate_features_with(&required, &narrowed).is_err(),
             "对端必需但本端未注册时必须失败关闭"
@@ -381,6 +397,7 @@ mod tests {
         let selected = selected(&hello(
             &[
                 "node-link.core.v1",
+                "core.session-activity.v1",
                 "node-link.command-status.v1",
                 // Owner 不认识（也不实现）的 ID 只是被忽略，不进 selectedFeatures。
                 "node-link.future-thing.v1",
@@ -390,6 +407,7 @@ mod tests {
         assert_eq!(
             selected,
             vec![
+                "core.session-activity.v1".to_owned(),
                 "node-link.command-status.v1".to_owned(),
                 "node-link.core.v1".to_owned()
             ]
@@ -398,6 +416,7 @@ mod tests {
         assert_eq!(
             transcript_features(&selected).as_slice(),
             vec![
+                "core.session-activity.v1".to_owned(),
                 "node-link.command-status.v1".to_owned(),
                 "node-link.core.v1".to_owned()
             ]
@@ -411,14 +430,31 @@ mod tests {
         .expect_err("必需 feature 未满足必须拒绝");
         assert_eq!(
             fault,
-            NegotiationFault::FeaturesMissing(vec!["node-link.node-rotation.v1".to_owned()])
+            NegotiationFault::FeaturesMissing(vec![
+                "core.session-activity.v1".to_owned(),
+                "node-link.node-rotation.v1".to_owned()
+            ])
         );
 
         // 对端连 `core` 都不声明（Owner 的必需 feature）同样拒绝。
         let fault = negotiate_features(&hello(&[], &[])).expect_err("core 未被声明");
         assert_eq!(
             fault,
-            NegotiationFault::FeaturesMissing(vec![REQUIRED_FEATURE.to_owned()])
+            NegotiationFault::FeaturesMissing(vec![
+                "core.session-activity.v1".to_owned(),
+                "node-link.core.v1".to_owned()
+            ])
+        );
+    }
+
+    /// 三态会话主状态合同是 Owner 的必需 feature：Access 只声明 `core` 也必须被拒绝。
+    #[test]
+    fn a_peer_without_the_three_state_contract_is_rejected() {
+        let fault = negotiate_features(&hello(&["node-link.core.v1"], &[]))
+            .expect_err("core.session-activity.v1 是 Owner 必需 feature");
+        assert_eq!(
+            fault,
+            NegotiationFault::FeaturesMissing(vec!["core.session-activity.v1".to_owned()])
         );
     }
 

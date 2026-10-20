@@ -10,21 +10,21 @@ use std::time::Duration;
 
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::{Executor, Row, Sqlite, Transaction};
+use sqlx::{Connection, Executor, Row, Sqlite, SqliteConnection, Transaction};
 
 use acp_core::model::derive_directory_id;
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v12：分块附件传输/清单、消息通道与媒体引用、
-/// 交互 `request_version`/`invalidated_at`；v9 的目录标识与 `owned_directory` 表、v8 的
-/// `owned_device.scopes_json` 删除、v7 的 `owned_event.origin_kind` 第五取值、v6 的目录归属列与
-/// v5 的两列保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 12;
-/// §7.2：`meta.owned_schema_version` 的已知版本（v12 新增附件传输/清单、消息与媒体引用表）。
-pub const OWNED_SCHEMA_VERSION: i64 = 12;
-/// §7.2：`meta.imported_schema_version` 的已知版本（v5–v12 都只动 owned 家族）。
-pub const IMPORTED_SCHEMA_VERSION: i64 = 4;
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v13：会话摘要收敛为 `idle|running|pending` 三态、
+/// 删除 `closed_at`、交互 `confirmed_at`/`turn_id`；v12 的分块附件传输/清单、消息通道与媒体引用、
+/// 交互 `request_version`/`invalidated_at` 保持不变）。
+pub const FILE_FORMAT_VERSION: i64 = 13;
+/// §7.2：`meta.owned_schema_version` 的已知版本（v13 重建三态 `owned_session` 并扩展
+/// `owned_interaction`）。
+pub const OWNED_SCHEMA_VERSION: i64 = 13;
+/// §7.2：`meta.imported_schema_version` 的已知版本（v13 归一化 `imported_session.state` 的旧七态）。
+pub const IMPORTED_SCHEMA_VERSION: i64 = 5;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -62,14 +62,13 @@ CREATE TABLE IF NOT EXISTS owned_session (
   title             TEXT,
   agent_id          TEXT NOT NULL,
   agent_name        TEXT NOT NULL,
-  state             TEXT NOT NULL CHECK (state IN ('idle','queued','running','waiting_input','waiting_permission','failed','closed')),
+  state             TEXT NOT NULL CHECK (state IN ('idle','running','pending')),
   origin_epoch      TEXT NOT NULL,
   current_mode_id   TEXT,
   current_mode_name TEXT,
   version           INTEGER NOT NULL,
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL,
-  closed_at         TEXT,
   agent_session_id  TEXT,                      -- Agent（ACP）侧会话标识；NULL = 该会话没有可用于恢复的标识，不得被补齐/推导
   workspace_cwd     TEXT,                      -- 创建时解析出的规范化绝对路径；NULL = 同上（不得按别名重解析来填上）
   workspace_directory_id TEXT                  -- 创建时解析出的目录标识；NULL = 未分组（不得按 workspace_cwd 反查补齐）
@@ -164,7 +163,9 @@ CREATE TABLE IF NOT EXISTS owned_interaction (
   elicitation_values_json TEXT,
   resolved_by_kind TEXT, resolved_by_id TEXT,
   request_version INTEGER NOT NULL DEFAULT 1,
-  invalidated_at  TEXT
+  invalidated_at  TEXT,
+  confirmed_at    TEXT,                        -- 端点确认处理结果的时刻；NULL = 仍计入有效待处理
+  turn_id         TEXT REFERENCES owned_turn(turn_id)  -- 所属 turn（由创建事件回填）；NULL = 历史行无法归属
 ) STRICT;
 CREATE INDEX IF NOT EXISTS owned_interaction_pending ON owned_interaction(session_id, state) WHERE state = 'pending';
 
@@ -887,6 +888,122 @@ async fn v12_upgrade_owned(tx: &mut Transaction<'_, Sqlite>) -> Result<(), Stora
     Ok(())
 }
 
+/// §7.2 的 v12 → v13 升级：会话摘要收敛为三态，交互补上确认阶段与 turn 归属。
+///
+/// 三件事在同一事务里完成，版本只在全部成功后才前进（失败整体回滚，重开可重试）：
+///
+/// 1. `owned_interaction` 追加 `confirmed_at`/`turn_id`。两列都可空，`turn_id` 用**创建它的交互事件**
+///    的真实 `turn_id` 回填——事件是权威归属，绝不按时间相邻或会话内最近 turn 猜测；`request_event`
+///    为空（历史行）时保持 `NULL`。旧的 `resolved` 行在旧模型里已经算「处理完毕」（它们不再计入旧摘要的
+///    待处理数），因此回填 `confirmed_at = resolved_at`，避免升级后凭空多出一批「已仲裁未确认」。
+/// 2. 重建 `owned_session`：删除 `closed_at`，把 `state` 的 CHECK 换成三态，并按旧七态做迁移暂存映射
+///    （idle→idle、queued/running→running、waiting_input/waiting_permission→pending、failed/closed→idle）。
+///    这里是**暂存值**：真正的三态由启动恢复按有效交互与未结束 turn 重算，迁移不得凭旧标签伪造任务结果。
+/// 3. 归一化 `imported_session.state` 的旧七态（imported 表没有 CHECK，因此只改值，不重建、不加正文列）。
+///
+/// **为什么重建 `owned_session` 依赖事务外关闭外键**：它的每个子表都用 `ON DELETE CASCADE` 引用
+/// `owned_session(session_id)`。外键开启时，`DROP TABLE` 旧表会级联删除全部子表行。`migrate()` 因此在
+/// `BEGIN` **之前**关闭 `PRAGMA foreign_keys`（事务内该 pragma 是 no-op），迁移结束后恢复。
+///
+/// 重建顺序**不重命名旧表**，而是「建新表 → 拷贝 → DROP 旧表 → 把新表改名为规范名」：子表的外键
+/// 文本始终指向 `owned_session` 这个名字，DROP 时外键检查关闭、不级联，改名时也没有任何引用指向
+/// 临时表名，因此不会像「先重命名父表」那样把子表的 `REFERENCES` 改写成临时表名。
+const V13_REBUILD_OWNED_SESSION: &str = r#"
+CREATE TABLE owned_session_v13_new (
+  session_id        TEXT PRIMARY KEY,
+  title             TEXT,
+  agent_id          TEXT NOT NULL,
+  agent_name        TEXT NOT NULL,
+  state             TEXT NOT NULL CHECK (state IN ('idle','running','pending')),
+  origin_epoch      TEXT NOT NULL,
+  current_mode_id   TEXT,
+  current_mode_name TEXT,
+  version           INTEGER NOT NULL,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  agent_session_id  TEXT,
+  workspace_cwd     TEXT,
+  workspace_directory_id TEXT
+) STRICT;
+
+INSERT INTO owned_session_v13_new (session_id, title, agent_id, agent_name, state, origin_epoch,
+                                   current_mode_id, current_mode_name, version, created_at,
+                                   updated_at, agent_session_id, workspace_cwd,
+                                   workspace_directory_id)
+  SELECT session_id, title, agent_id, agent_name,
+         CASE state
+           WHEN 'queued' THEN 'running'
+           WHEN 'running' THEN 'running'
+           WHEN 'waiting_input' THEN 'pending'
+           WHEN 'waiting_permission' THEN 'pending'
+           ELSE 'idle'
+         END,
+         origin_epoch, current_mode_id, current_mode_name, version, created_at, updated_at,
+         agent_session_id, workspace_cwd, workspace_directory_id
+  FROM owned_session;
+
+DROP TABLE owned_session;
+ALTER TABLE owned_session_v13_new RENAME TO owned_session;
+"#;
+
+async fn v13_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
+    // ---- 交互：确认阶段与 turn 归属
+    if !column_exists(&mut **tx, "owned_interaction", "confirmed_at").await? {
+        sqlx::raw_sql("ALTER TABLE owned_interaction ADD COLUMN confirmed_at TEXT;")
+            .execute(&mut **tx)
+            .await?;
+    }
+    if !column_exists(&mut **tx, "owned_interaction", "turn_id").await? {
+        sqlx::raw_sql(
+            "ALTER TABLE owned_interaction ADD COLUMN turn_id TEXT REFERENCES owned_turn(turn_id);",
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+    // 归属只取创建交互的那条事件：`request_event` 是唯一可靠关联，不按时间相邻猜测。
+    sqlx::query(
+        "UPDATE owned_interaction SET turn_id = ( \
+             SELECT e.turn_id FROM owned_event e \
+             WHERE e.global_sequence = owned_interaction.request_event) \
+         WHERE turn_id IS NULL AND request_event IS NOT NULL",
+    )
+    .execute(&mut **tx)
+    .await?;
+    // 旧 `resolved` 行在旧模型里已经退出待处理集合；升级后保持这个结论，不制造「未确认」。
+    sqlx::query(
+        "UPDATE owned_interaction SET confirmed_at = resolved_at \
+         WHERE state = 'resolved' AND confirmed_at IS NULL",
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    // ---- 会话：三态 CHECK + 删除关闭时间
+    //
+    // 父表的重建依赖 `migrate()` 在事务外关闭外键：这样 `RENAME` 不会改写子表的 `REFERENCES`
+    // 子句，`DROP` 旧表也不会级联删除子表行（详见 [`migrate`] 的说明）。
+    if column_exists(&mut **tx, "owned_session", "closed_at").await? {
+        sqlx::raw_sql(V13_REBUILD_OWNED_SESSION)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    // ---- imported：旧七态只做值归一化（无 CHECK、无正文列）
+    sqlx::query(
+        "UPDATE imported_session SET state = CASE state \
+             WHEN 'queued' THEN 'running' \
+             WHEN 'running' THEN 'running' \
+             WHEN 'waiting_input' THEN 'pending' \
+             WHEN 'waiting_permission' THEN 'pending' \
+             ELSE 'idle' \
+         END \
+         WHERE state IN ('idle','queued','running','waiting_input','waiting_permission','failed','closed')",
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 /// v10 升级前统计旧 `owned_agent_profile` 的行数；表不存在（新库或已升级）即 0。
 async fn legacy_agent_profile_count(tx: &mut Transaction<'_, Sqlite>) -> Result<i64, StorageError> {
     let exists: Option<String> = sqlx::query_scalar(
@@ -1392,8 +1509,35 @@ fn expect_ok(results: Vec<String>) -> Result<(), StorageError> {
 /// `owned_device`；v1 库没有这两张表，它们由 DDL 常量直接建成当前形状）；v5/v6 两段的追加对象
 /// `owned_session` 与 v7 段的重建对象 `owned_event` 是「升级库 vs 新建库」的判据本身，走升级分支即必然
 /// 已存在（v1 起每代都有这两张表）。
+/// §7.2：执行 migration。单事务、幂等、失败整体回滚、版本过新拒绝启动。
+///
+/// 12-step 表重建会 `DROP` 被 `ON DELETE CASCADE` 子表引用的父表（`owned_session` → `owned_turn`/
+/// `owned_event`/…）。`foreign_keys` 在事务内是 no-op，因此本函数先在**事务外**把写连接的外键检查
+/// 关掉，再在同一个连接上开 `BEGIN IMMEDIATE`，结束后无论成败都恢复为 `ON`（连接会回到池里）。
+/// 标准 12-step 流程正是这么做的：关外键时 `ALTER TABLE ... RENAME` 也不会改写子表的 `REFERENCES`
+/// 子句，旧表因此可以被安全删除，重建后的新表仍以原名被引用。
 pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, StorageError> {
-    let mut tx = write.begin_with("BEGIN IMMEDIATE").await?;
+    let mut connection = write.acquire().await?;
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *connection)
+        .await?;
+    let result = migrate_locked(&mut connection, at).await;
+    // 无论升级成功与否都复位：失败路径也要把连接完好地还给池。
+    let restored = sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *connection)
+        .await;
+    match (result, restored) {
+        (Ok(metadata), Ok(_)) => Ok(metadata),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error.into()),
+    }
+}
+
+async fn migrate_locked(
+    connection: &mut SqliteConnection,
+    at: &str,
+) -> Result<StoreMetadata, StorageError> {
+    let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
 
     let file_version = read_user_version(&mut *tx).await?;
     if file_version > FILE_FORMAT_VERSION {
@@ -1490,6 +1634,9 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
         }
         if file_version < 12 {
             v12_upgrade_owned(&mut tx).await?;
+        }
+        if file_version < 13 {
+            v13_upgrade(&mut tx).await?;
         }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;

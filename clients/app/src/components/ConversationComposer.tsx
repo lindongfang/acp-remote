@@ -4,13 +4,14 @@
  *
  * ## 三态与「提交不等于完成」
  *
- * 输入区只呈现模型给的三态（`editable` / `in_progress` / `closed`）与两个呈现值
+ * 输入区只呈现模型给的三态（`editable` / `in_progress` / `unavailable`）与两个呈现值
  * （`submission` / `cancel`）：**本组件不构造命令、不本地置态**。因此「提交后立刻显示已发送」
  * 在这里没有表达方式——`submission.kind` 为 `pending_confirmation` 时只能说「等待服务端确认」，
  * `cancel.kind` 为 `requested` 时只能说「取消请求已提交，等待终态」。
  *
- * `closed` 只读；`in_progress` **可编辑下一条草稿但不可发送**（不排队）；`editable` 可发送。
- * 「可编辑」与「可发送」是两个字段（`draftEditable` / `canSubmit`），组件不自行推断。
+ * 三态都**可编辑草稿**：`in_progress`（轮次执行中或提交等待终态）与 `unavailable`（来源离线、
+ * imported 来源、附件能力未协商等）只是不能发送，且必须说明当前实际原因。组件不把会话主状态
+ * 读成只读——`idle`/`running`/`pending` 都不构成永久禁提交的理由。
  *
  * ## 附件：选择只在内存，点击发送才上传
  *
@@ -27,8 +28,8 @@
  *
  * 回车走 `onKeyPress`（RNW 把宿主的 `keydown` 原样交给它，因此 `nativeEvent` 上读得到
  * `key`/`shiftKey`，`preventDefault()` 也拦得住换行）。判定收敛在 {@link composerKeyAction}：
- * **不可提交**（会话已关闭 / 来源离线 / 执行中 / 文字、附件与路径引用全空 / 没接线回调）时回车被拦下且
- * **不派发任何命令**，连换行也不插入——「回车」在这里没有第三条含义。
+ * **不可提交**（执行中 / 来源离线 / imported 来源 / 文字、附件与路径引用全空 / 没接线回调）时
+ * 回车被拦下且**不派发任何命令**，连换行也不插入——「回车」在这里没有第三条含义。
  *
  * ## 上下文胶囊与告警条
  *
@@ -105,24 +106,24 @@ export interface ConversationComposerProps {
   readonly onRemovePathRef?: ((path: string) => void) | undefined;
 }
 
-/** 输入区的状态文案：三态措辞互不相同。 */
+/** 输入区的状态文案：三态措辞互不相同，且都不暗示只读。 */
 const STATE_LABELS: Readonly<Record<ConversationInputModel["state"], string>> = {
   editable: "可输入",
   in_progress: "进行中",
-  closed: "会话已关闭",
+  unavailable: "当前不可用",
 };
 
-/** 输入框的占位文案：与状态对应，避免关闭的会话看起来还能输入。 */
+/** 输入框的占位文案：不可提交时仍可编辑草稿（原因在下方单独说明）。 */
 const STATE_PLACEHOLDERS: Readonly<Record<ConversationInputModel["state"], string>> = {
   editable: "给 Agent 发消息：可附带图片、文件、已有音频或工作目录路径",
   in_progress: "进行中：可以继续编辑下一条草稿，完成后才能发送",
-  closed: "会话已关闭",
+  unavailable: "当前不可提交：草稿仍可编辑，原因见下方",
 };
 
 /** 提示行里的状态补充；`editable` 不需要额外措辞。 */
 const STATE_HINTS: Readonly<Partial<Record<ConversationInputModel["state"], string>>> = {
   in_progress: "进行中 · 可编辑但发送禁用，不排队",
-  closed: "会话已关闭",
+  unavailable: "当前不可提交 · 草稿仍可编辑",
 };
 
 /** 附件状态的展示文案（每种状态一句，互不混用）。 */
@@ -262,9 +263,6 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
     },
-    inputClosed: {
-      color: colors.ink3,
-    },
     primary: {
       flexShrink: 0,
       paddingVertical: spacing.xs,
@@ -330,11 +328,6 @@ function buildStyles(colors: Palette) {
     },
     hintWarn: {
       color: colors.warn,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-    },
-    hintDanger: {
-      color: colors.danger,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
     },
@@ -653,8 +646,7 @@ export function ConversationComposer({
 }: ConversationComposerProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
-  // 「可编辑」与「可发送」是模型给的两个字段：执行中前者为真、后者为假（不排队）。
-  const editable = input.draftEditable;
+  // 三态都允许编辑草稿：`in_progress` 与 `unavailable` 只关掉提交闸门，不关输入框。
   const warning = contextWarningOf(usage);
   const [pathDraft, setPathDraft] = useState("");
   const [pathIssue, setPathIssue] = useState<string | null>(null);
@@ -667,10 +659,10 @@ export function ConversationComposer({
     input.state === "in_progress" && input.cancel.kind === "unavailable"
       ? "进行中 · 可编辑但发送禁用，当前轮次不可取消"
       : STATE_HINTS[input.state];
-  // 提交闸门只有这一处：模型的 `canSubmit`（会话关闭 / 连接离线 / 进行中 / imported 来源都在模型里
-  // 变成假）加上「有可提交内容」与「回调已接线」。可提交内容与仓库 `submitPrompt` 同源：
+  // 提交闸门只有这一处：模型的 `canSubmit`（执行中 / 连接离线 / imported 来源 / 附件未就绪都在
+  // 模型里变成假）加上「有可提交内容」与「回调已接线」。可提交内容与仓库 `submitPrompt` 同源：
   // 文字、附件、路径引用三者有任一非空即可——纯附件消息不能被 UI 单独挡死。
-  const submittable = editable && input.canSubmit && hasUnsent;
+  const submittable = input.canSubmit && hasUnsent;
 
   // 粘贴图片/文件：只在剪贴板里真的有文件时拦截，普通文本粘贴不受影响。
   useEffect(() => {
@@ -806,7 +798,6 @@ export function ConversationComposer({
           <Text style={styles.attachmentMeta}>引用工作目录内的相对路径：</Text>
           <TextInput
             value={pathDraft}
-            editable={editable}
             placeholder="例如 src/main.ts"
             style={styles.pathInput}
             dataSet={{ pathRefInput: "true" }}
@@ -823,7 +814,6 @@ export function ConversationComposer({
           />
           <Pressable
             role="button"
-            disabled={!editable}
             style={styles.attachmentButton}
             dataSet={{ action: "add-path-ref" }}
             onPress={addPathRef}
@@ -847,25 +837,21 @@ export function ConversationComposer({
       <View style={styles.inputRow}>
         <TextInput
           value={input.draft}
-          // 执行中仍可编辑下一条草稿；只有已关闭的会话只读。
-          editable={editable}
           multiline
           placeholder={STATE_PLACEHOLDERS[input.state]}
-          style={editable ? styles.input : [styles.input, styles.inputClosed]}
+          style={styles.input}
           dataSet={{ composerInput: input.state }}
           onChangeText={(text: string) => {
-            // 只读输入不再接受草稿写入：平台差异下即使触发了 `onChangeText`，也不上抛。
-            if (!editable) return;
             onDraftChange?.(text);
           }}
           onKeyPress={onKeyPress}
         />
 
-        {/* 发送按钮始终呈现，是否可点只由闸门决定（执行中禁用并说明原因，不排队）。 */}
+        {/* 发送按钮始终呈现，是否可点只由闸门决定（执行中/不可用禁用并说明原因，不排队）。 */}
         <Pressable
           role="button"
-          // 闸门是模型给的 `canSubmit`：关闭 / 离线 / 进行中 / imported 来源都会在这里变为不可点
-          // （仓库侧 `submitPrompt` 还会再拦一次，不靠组件记得禁用）。
+          // 闸门是模型给的 `canSubmit`：执行中 / 离线 / imported 来源 / 附件未就绪都会在这里
+          // 变为不可点（仓库侧 `submitPrompt` 还会再拦一次，不靠组件记得禁用）。
           disabled={!submittable || onSubmit === undefined}
           style={!submittable || onSubmit === undefined ? [styles.primary, styles.buttonDisabled] : styles.primary}
           dataSet={{ action: "submit-prompt", submitEnabled: String(submittable && onSubmit !== undefined) }}
@@ -912,7 +898,7 @@ export function ConversationComposer({
         </Text>
         {stateHint === undefined ? null : (
           <Text
-            style={input.state === "closed" ? styles.hintDanger : styles.hintWarn}
+            style={styles.hintWarn}
             dataSet={{ composerStateHint: input.state }}
           >
             {stateHint}

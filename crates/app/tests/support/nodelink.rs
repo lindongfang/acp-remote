@@ -758,13 +758,14 @@ impl NodeLinkClient {
 // 握手（含 catalogRevision 验签路径）
 // ---------------------------------------------------------------------------------------------
 
-/// Access 侧声明的 feature（本切片实现的五条 mvp feature）。
-const DECLARED_FEATURES: [&str; 5] = [
+/// Access 侧声明的 feature（本切片实现的 mvp feature 加三态摘要合同）。
+const DECLARED_FEATURES: [&str; 6] = [
     "node-link.core.v1",
     "node-link.raw-acp.v1",
     "node-link.command-status.v1",
     "node-link.session-create.v1",
     "node-link.export-revoke.v1",
+    "core.session-activity.v1",
 ];
 
 /// 执行一次完整握手（hello → challenge → proof → ready），返回 `node.ready`。

@@ -6,7 +6,7 @@
 
 mod support;
 
-use sync_protocol::command::Command;
+use sync_protocol::command::{Command, CommandResult, CommandResultPayload};
 use sync_protocol::common::{ModeState, RawObject, SessionSummary};
 use sync_protocol::envelope::Envelope;
 use sync_protocol::event::Body as EventBody;
@@ -252,23 +252,35 @@ fn session_summary_workspace_keeps_absent_null_and_value_apart() {
 
 #[test]
 fn snapshot_session_state_enum_is_enforced() {
-    let ok: Result<SnapshotChunk, String> = decode(
-        "sync.snapshot_chunk",
-        &format!(
-            "{{\"snapshotId\":\"{EVENT_ID}\",\"chunkIndex\":\"0\",\"resource\":\"sessions\",\"items\":[{}]}}",
-            session_summary("waiting_permission", "\"标题\"")
-        ),
-    );
-    assert!(ok.is_ok(), "waiting_permission 是合法 state：{ok:?}");
+    for state in ["idle", "running", "pending"] {
+        let ok: Result<SnapshotChunk, String> = decode(
+            "sync.snapshot_chunk",
+            &format!(
+                "{{\"snapshotId\":\"{EVENT_ID}\",\"chunkIndex\":\"0\",\"resource\":\"sessions\",\"items\":[{}]}}",
+                session_summary(state, "\"标题\"")
+            ),
+        );
+        assert!(ok.is_ok(), "{state} 是合法 state：{ok:?}");
+    }
 
-    let bad: Result<SnapshotChunk, String> = decode(
-        "sync.snapshot_chunk",
-        &format!(
-            "{{\"snapshotId\":\"{EVENT_ID}\",\"chunkIndex\":\"0\",\"resource\":\"sessions\",\"items\":[{}]}}",
-            session_summary("archived", "null")
-        ),
-    );
-    assert!(bad.is_err(), "未登记的 state 必须被拒");
+    // 旧七态只是历史事件 `view` 的原文，实时摘要不得再解码它们。
+    for legacy in [
+        "queued",
+        "waiting_input",
+        "waiting_permission",
+        "failed",
+        "closed",
+        "archived",
+    ] {
+        let bad: Result<SnapshotChunk, String> = decode(
+            "sync.snapshot_chunk",
+            &format!(
+                "{{\"snapshotId\":\"{EVENT_ID}\",\"chunkIndex\":\"0\",\"resource\":\"sessions\",\"items\":[{}]}}",
+                session_summary(legacy, "null")
+            ),
+        );
+        assert!(bad.is_err(), "实时摘要不得接受未登记或旧值 state：{legacy}");
+    }
 
     let bad_timestamp: Result<SnapshotChunk, String> = decode(
         "sync.snapshot_chunk",
@@ -279,6 +291,44 @@ fn snapshot_session_state_enum_is_enforced() {
     assert!(
         bad_timestamp.is_err(),
         "timestamp 必须带毫秒与 Z（schema 的 pattern）"
+    );
+}
+
+/// 历史读取边界：`session.read` 的 `history[].view` 是开放对象，旧七态 `session.updated` 原文必须
+/// 原样可读，而同一个取值作为**实时**摘要的 `state` 必须被拒（见上一个测试）。两者共用同一份
+/// schema/Rust DTO，说明收窄的是实时词表，不是历史原文。
+#[test]
+fn session_read_history_keeps_legacy_session_state_readable() {
+    let text = support::read_text(&support::repo_path(
+        "fixtures/sync/v1/valid/command-result-session-read-history-legacy-state.json",
+    ));
+    let envelope = Envelope::decode(&text).expect("信封合法");
+    let body: CommandResult =
+        serde_json::from_str(envelope.body().get()).expect("session.read 结果合法");
+    let payload = body.result.as_ref().expect("completed 结果带 result");
+    let result = match payload {
+        CommandResultPayload::SessionRead(result) => result,
+        other => panic!("应是 session.read 结果：{other:?}"),
+    };
+    let history = result
+        .resources
+        .history
+        .as_deref()
+        .expect("本次读取带 history");
+    let item = history.first().expect("至少一条历史条目");
+    assert_eq!(item.event_type.as_str(), "session.updated");
+
+    let view: serde_json::Value =
+        serde_json::from_str(item.view.get()).expect("历史 view 是 JSON 对象");
+    assert_eq!(
+        view["session"]["state"], "waiting_permission",
+        "历史事件的 view 必须逐字保留旧七态原文"
+    );
+
+    assert!(
+        serde_json::from_str::<sync_protocol::common::SessionState>("\"waiting_permission\"")
+            .is_err(),
+        "同一取值不得作为实时摘要解码"
     );
 }
 

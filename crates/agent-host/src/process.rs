@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use acp_protocol::{Envelope, RawDocument};
 use serde_json::Value;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::{Notify, mpsc, oneshot};
 
@@ -28,6 +28,25 @@ use crate::limits;
 use crate::platform::ProcessTree;
 
 type Pending = HashMap<u64, oneshot::Sender<Result<Value, HostError>>>;
+
+/// 写入确认：`Ok(())` 表示 `write_all` 与 `flush` 都成功，字节已交给 Agent 的 stdin。
+///
+/// 只有需要「真的写进 stdin」的调用方（`session/prompt`、权限/elicitation 应答）才带 ack；
+/// 普通通知保持 best-effort，**不**把「已入队」误当成「已写入」。
+pub type WriteAck = oneshot::Sender<Result<(), ()>>;
+
+/// 已登记请求：ACP 请求 id、编码后的文档与响应接收端。
+type PendingRequest = (
+    u64,
+    RawDocument,
+    oneshot::Receiver<Result<Value, HostError>>,
+);
+
+/// 出站帧：载荷 + 可选的写入确认。
+struct Outbound {
+    payload: Vec<u8>,
+    ack: Option<WriteAck>,
+}
 
 /// 进站队列的元素：通知与响应走同一条 FIFO。
 ///
@@ -144,7 +163,7 @@ impl StderrRing {
 pub struct Supervisor {
     program: String,
     tree: Arc<ProcessTree>,
-    outbound: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
+    outbound: Mutex<Option<mpsc::UnboundedSender<Outbound>>>,
     pending: Arc<Mutex<Pending>>,
     next_id: AtomicU64,
     exit: Arc<ExitState>,
@@ -350,11 +369,40 @@ impl Supervisor {
     }
 
     /// 发送一条请求并登记等待（**不**阻塞）。
+    ///
+    /// 这是 best-effort 路径：返回 `Ok` 只表示已经入队，不表示写进 stdin。需要后者请用
+    /// [`Supervisor::begin_request_confirmed`]。
     pub fn begin_request(
         &self,
         method: &str,
         params: &Value,
     ) -> Result<oneshot::Receiver<Result<Value, HostError>>, HostError> {
+        let (id, document, rx) = self.register_request(method, params)?;
+        if let Err(error) = self.enqueue_document(&document, None) {
+            self.remove_pending(id);
+            return Err(error);
+        }
+        Ok(rx)
+    }
+
+    /// 发送一条请求、登记等待，并且**等到 stdin 写入确认**才返回。
+    ///
+    /// 写入失败时登记会被撤销，调用方拿到与进程不可用一致的错误；响应接收器因此不会留下
+    /// 永远等不到结果的陈旧登记。
+    pub async fn begin_request_confirmed(
+        &self,
+        method: &str,
+        params: &Value,
+    ) -> Result<oneshot::Receiver<Result<Value, HostError>>, HostError> {
+        let (id, document, rx) = self.register_request(method, params)?;
+        if let Err(error) = self.write_document_confirmed(&document).await {
+            self.remove_pending(id);
+            return Err(error);
+        }
+        Ok(rx)
+    }
+
+    fn register_request(&self, method: &str, params: &Value) -> Result<PendingRequest, HostError> {
         if !self.is_running() {
             return Err(self.not_running_error());
         }
@@ -364,8 +412,13 @@ impl Supervisor {
         if let Ok(mut pending) = self.pending.lock() {
             pending.insert(id, tx);
         }
-        self.write_document(&document)?;
-        Ok(rx)
+        Ok((id, document, rx))
+    }
+
+    fn remove_pending(&self, id: u64) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.remove(&id);
+        }
     }
 
     /// 发送一条请求并等待结果（有超时的短请求）。
@@ -404,6 +457,16 @@ impl Supervisor {
         self.write_document(&document)
     }
 
+    /// 发送一条响应并确认它**真的写进**了 Agent 的 stdin。
+    pub async fn send_response_confirmed(
+        &self,
+        id: &acp_protocol::IdLiteral,
+        result: &Value,
+    ) -> Result<(), HostError> {
+        let document = acp_protocol::message::response(id, result)?;
+        self.write_document_confirmed(&document).await
+    }
+
     /// 发送一条错误响应（显式不支持等）。
     pub fn send_error_response(
         &self,
@@ -415,7 +478,27 @@ impl Supervisor {
         self.write_document(&document)
     }
 
+    /// best-effort 写入：只保证入队。
     fn write_document(&self, document: &RawDocument) -> Result<(), HostError> {
+        self.enqueue_document(document, None)
+    }
+
+    /// 写入并等待写出任务的确认（`write_all` + `flush` 都成功）。
+    pub async fn write_document_confirmed(&self, document: &RawDocument) -> Result<(), HostError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.enqueue_document(document, Some(ack_tx))?;
+        match ack_rx.await {
+            Ok(Ok(())) => Ok(()),
+            // 写失败或写出任务已经退出：具体原因沿用进程不可用的既有映射。
+            Ok(Err(())) | Err(_) => Err(self.not_running_error()),
+        }
+    }
+
+    fn enqueue_document(
+        &self,
+        document: &RawDocument,
+        ack: Option<WriteAck>,
+    ) -> Result<(), HostError> {
         let mut payload = Vec::with_capacity(document.len() + 1);
         payload.extend_from_slice(document.bytes());
         payload.push(b'\n');
@@ -425,7 +508,9 @@ impl Supervisor {
             .ok()
             .and_then(|slot| slot.as_ref().cloned())
             .ok_or_else(|| self.not_running_error())?;
-        sender.send(payload).map_err(|_| self.not_running_error())
+        sender
+            .send(Outbound { payload, ack })
+            .map_err(|_| self.not_running_error())
     }
 
     fn not_running_error(&self) -> HostError {
@@ -536,16 +621,23 @@ impl Drop for Supervisor {
     }
 }
 
-/// 写出任务：把行缓冲写到 stdin。
-async fn write_loop(
-    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
-    mut stdin: tokio::process::ChildStdin,
-) {
-    while let Some(payload) = rx.recv().await {
-        if stdin.write_all(&payload).await.is_err() {
-            break;
+/// 写出任务：把行缓冲写到 stdin，并在需要时回报写入确认。
+///
+/// 确认只在 `write_all` **与** `flush` 都成功之后发出 `Ok(())`；任何一步失败都发 `Err(())`
+/// 并停止写出任务。入队成功本身不是确认，因此 best-effort 调用方（`ack: None`）行为不变。
+async fn write_loop<W>(mut rx: mpsc::UnboundedReceiver<Outbound>, mut stdin: W)
+where
+    W: AsyncWrite + Unpin,
+{
+    while let Some(outbound) = rx.recv().await {
+        let result = match stdin.write_all(&outbound.payload).await {
+            Ok(()) => stdin.flush().await,
+            Err(error) => Err(error),
+        };
+        if let Some(ack) = outbound.ack {
+            let _ = ack.send(if result.is_ok() { Ok(()) } else { Err(()) });
         }
-        if stdin.flush().await.is_err() {
+        if result.is_err() {
             break;
         }
     }
@@ -769,4 +861,162 @@ async fn wait_loop(mut child: Child, exit: Arc<ExitState>, pending: Arc<Mutex<Pe
     tracing::info!(status = %status, "Agent 进程退出");
     exit.mark(status);
     exit.report_exit();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use tokio::io::{AsyncReadExt, AsyncWrite};
+
+    use super::{Outbound, write_loop};
+
+    /// 第一次尝试写入时通知测试的包装器，用来证明「写入已开始、确认尚未发出」。
+    struct SignalWriter {
+        inner: tokio::io::DuplexStream,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    }
+
+    impl AsyncWrite for SignalWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let this = self.get_mut();
+            if let Some(started) = this.started.take() {
+                let _ = started.send(());
+            }
+            Pin::new(&mut this.inner).poll_write(cx, buf)
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+        }
+    }
+
+    /// 永远写失败的 writer（模拟 Agent 已关闭 stdin 的管道）。
+    struct FailingWriter;
+
+    impl AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "stdin closed",
+            )))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// 写入确认只在 `write_all` + `flush` 完成后发出：管道被写满时不得提前确认。
+    #[tokio::test]
+    async fn write_ack_is_sent_only_after_write_and_flush() {
+        // 1 字节容量：32 字节的帧必然让 `write_all` 停在半途。
+        let (client, mut server) = tokio::io::duplex(1);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(write_loop(
+            out_rx,
+            SignalWriter {
+                inner: client,
+                started: Some(started_tx),
+            },
+        ));
+
+        let (ack_tx, mut ack_rx) = tokio::sync::oneshot::channel();
+        out_tx
+            .send(Outbound {
+                payload: vec![b'x'; 32],
+                ack: Some(ack_tx),
+            })
+            .expect("enqueue");
+        started_rx.await.expect("写入已开始");
+        assert!(
+            matches!(
+                ack_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "写入尚未完成时不得发出确认"
+        );
+
+        let mut received = Vec::new();
+        let mut buf = [0u8; 32];
+        while received.len() < 32 {
+            let read = server.read(&mut buf).await.expect("read");
+            assert!(read > 0, "写端在完成前关闭");
+            received.extend_from_slice(&buf[..read]);
+        }
+        assert_eq!(received, vec![b'x'; 32]);
+
+        assert!(matches!(ack_rx.await, Ok(Ok(()))), "写入完成后必须确认成功");
+        drop(out_tx);
+        task.await.expect("join");
+    }
+
+    /// 写失败：确认是 `Err(())`，并且写出任务停止（后续帧不再被接收）。
+    #[tokio::test]
+    async fn write_failure_reports_error_and_stops_the_loop() {
+        let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(write_loop(out_rx, FailingWriter));
+
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        out_tx
+            .send(Outbound {
+                payload: b"blocked\n".to_vec(),
+                ack: Some(ack_tx),
+            })
+            .expect("enqueue");
+        assert!(matches!(ack_rx.await, Ok(Err(()))), "写失败必须回报 Err");
+
+        task.await.expect("join");
+        let (later_tx, later_rx) = tokio::sync::oneshot::channel();
+        assert!(
+            out_tx
+                .send(Outbound {
+                    payload: b"later\n".to_vec(),
+                    ack: Some(later_tx),
+                })
+                .is_err(),
+            "写出任务结束后不得再接收帧"
+        );
+        assert!(later_rx.await.is_err(), "未写出的帧不得被确认");
+    }
+
+    /// best-effort 路径（普通通知）：仍然真正写出，只是不带确认。
+    #[tokio::test]
+    async fn best_effort_write_still_delivers_without_ack() {
+        let (client, mut server) = tokio::io::duplex(64);
+        let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(write_loop(out_rx, client));
+
+        out_tx
+            .send(Outbound {
+                payload: b"hello\n".to_vec(),
+                ack: None,
+            })
+            .expect("enqueue");
+        let mut buf = [0u8; 6];
+        server.read_exact(&mut buf).await.expect("read");
+        assert_eq!(&buf, b"hello\n");
+
+        drop(out_tx);
+        task.await.expect("join");
+    }
 }

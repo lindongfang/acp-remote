@@ -468,7 +468,7 @@ async fn a_connection_without_the_attachment_feature_is_unsupported() {
     // `from_parts` 不做握手校验；这里验证 `connect` 的 feature 门控由 `Established` 决定。
     let established = support::established(
         "018f0000-0000-4000-8000-000000000040",
-        &["node-link.core.v1"],
+        &support::REQUIRED_FEATURES,
     );
     assert!(!established.has(node_link_client::ATTACHMENT_FEATURE));
     let _ = established;

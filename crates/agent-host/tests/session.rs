@@ -27,6 +27,8 @@ const OTHER_SESSION: &str = "22222222-2222-4222-8222-222222222222";
 const RESUME_SESSION: &str = "33333333-3333-4333-8333-333333333333";
 const RESUME_REFUSED_SESSION: &str = "44444444-4444-4444-8444-444444444444";
 const REPEATED_RESUME_SESSION: &str = "55555555-5555-4555-8555-555555555555";
+const RESOLVE_FAIL_SESSION: &str = "99999999-9999-4999-8999-999999999999";
+const EXIT_SESSION: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 fn host(profiles: Vec<AgentProfile>) -> Arc<AgentHost> {
     Arc::new(AgentHost::new(
@@ -446,6 +448,120 @@ async fn permission_request_waits_for_external_resolution_and_returns_the_same_o
         .await
         .expect_err("重复解析必须失败");
     assert!(matches!(again, PortError::Conflict(_)));
+    drop(endpoint);
+    host.shutdown_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_resolution_is_not_emitted_when_the_write_fails() {
+    let collector = Collector::new();
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "permission-request-then-exit"],
+    )]);
+    let endpoint = create(&host, RESOLVE_FAIL_SESSION, &collector).await;
+    endpoint
+        .prompt(prompt("改文件"), support::timestamp())
+        .await
+        .expect("prompt 在写入确认后才被接受");
+    assert!(
+        collector
+            .wait_for_type("permission.requested", Duration::from_secs(10))
+            .await,
+        "权限请求必须交付给 core"
+    );
+    let view = collector.first_view("permission.requested").expect("view");
+    let view: Value = serde_json::from_str(&view).expect("view");
+    let interaction = view
+        .get("interactionId")
+        .and_then(Value::as_str)
+        .expect("interactionId")
+        .to_owned();
+    let interaction = acp_core::model::InteractionId::new(&interaction).expect("interaction id");
+    let resolution = InteractionResolution::permission(
+        PermissionDecision::try_new("allow-1", PermissionDecisionKind::AllowOnce)
+            .expect("decision"),
+    );
+
+    // 等退出被观察到（turn 以失败收敛）再解析：此后 stdin 的读端确定已经消失。
+    assert!(
+        collector
+            .wait_for_type("turn.failed", Duration::from_secs(10))
+            .await,
+        "进程退出必须收敛为 turn.failed：{:?}",
+        collector.event_types()
+    );
+
+    // Agent 已退出：应答没有任何写入目标。入队成功不是确认，因此必须返回错误。
+    let error = outcome_error(
+        endpoint
+            .resolve_interaction(&interaction, resolution.clone())
+            .await,
+    );
+    assert!(
+        matches!(error, PortError::Unavailable(UnavailableKind::IoError)),
+        "写失败必须映射为既有不可用错误：{error:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        collector.count("permission.resolved"),
+        0,
+        "写入未确认时不得发出 permission.resolved"
+    );
+
+    // 登记已放回：第二次解析仍能走到写入失败，而不是 UnknownInteraction（交互凭空消失）。
+    let again = outcome_error(endpoint.resolve_interaction(&interaction, resolution).await);
+    assert!(
+        matches!(again, PortError::Unavailable(UnavailableKind::IoError)),
+        "失败的解析不得丢掉登记：{again:?}"
+    );
+    drop(endpoint);
+    host.shutdown_all().await;
+}
+
+/// prompt 写入失败（进程已退出）：turn 状态必须回滚，后续可以再次尝试而不报「已有进行中的 turn」。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_prompt_write_rolls_back_the_turn() {
+    let collector = Collector::new();
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "exit-after-new"],
+    )]);
+    let endpoint = create(&host, EXIT_SESSION, &collector).await;
+    let agent = AgentId::new("agent-1").expect("id");
+    for _ in 0..200 {
+        if !runtime_running(&host, &agent) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !runtime_running(&host, &agent),
+        "fake child 必须已退出（写失败前置条件）"
+    );
+
+    let error = outcome_error(
+        endpoint
+            .prompt(prompt("写不进去"), support::timestamp())
+            .await,
+    );
+    assert!(
+        matches!(error, PortError::Unavailable(UnavailableKind::IoError)),
+        "写入确认失败必须返回既有不可用错误：{error:?}"
+    );
+    let again = outcome_error(
+        endpoint
+            .prompt(prompt("再试一次"), support::timestamp())
+            .await,
+    );
+    assert!(
+        matches!(again, PortError::Unavailable(UnavailableKind::IoError)),
+        "失败的 prompt 必须回滚 turn_running（否则会得到 InvalidRequest）：{again:?}"
+    );
+    assert_eq!(collector.count("turn.failed"), 0);
+    assert_eq!(collector.count("turn.completed"), 0);
     drop(endpoint);
     host.shutdown_all().await;
 }

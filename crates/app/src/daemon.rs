@@ -923,16 +923,12 @@ trait MergeWindow: Send + Sync {
 
 /// 本轮枚举的状态集合（§6 第 10 条的合并窗口只对「有内存缓冲的会话」有意义）。
 ///
-/// 会话状态转换与触发它的事件批次**在同一事务**提交（§6 第 1/2 条），因此持久状态为 `idle`/`failed`/
-/// `closed` 蕴含该会话没有待提交的缓冲；反过来，正在跑或排队的会话必然是 `queued`/`running`/`waiting_*`。
-/// 只取这四种状态而不取全表，是因为 `SessionQuery` 没有 offset/cursor（`core::ports` §4 的查询形状），
-/// 无法分页续取——状态过滤是这里唯一能把返回集限制在少数活动会话的手段（过滤在 SQL 侧完成）。
-const MERGE_WINDOW_STATES: [SessionState; 4] = [
-    SessionState::Queued,
-    SessionState::Running,
-    SessionState::WaitingInput,
-    SessionState::WaitingPermission,
-];
+/// 会话状态转换与触发它的事件批次**在同一事务**提交（§6 第 1/2 条），因此持久状态为 `idle` 蕴含该会话
+/// 没有待提交的缓冲；反过来，仍在跑的会话必然是 `running`，而 `pending`（存在有效未解决交互）也必须有
+/// 机会被驱动：交互确认与仲裁的去向要经 broker 的合并窗口落盘。只取这两种状态而不取全表，是因为
+/// `SessionQuery` 没有 offset/cursor（`core::ports` §4 的查询形状），无法分页续取——状态过滤是这里
+/// 唯一能把返回集限制在少数活动会话的手段（过滤在 SQL 侧完成）。
+const MERGE_WINDOW_STATES: [SessionState; 2] = [SessionState::Running, SessionState::Pending];
 
 /// 生产实现：`UseCases::list_sessions` 枚举 + `Broker::pump` 驱动。
 struct BrokerMergeWindow {

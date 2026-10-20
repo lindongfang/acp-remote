@@ -102,7 +102,12 @@ export interface ConversationHeaderModel {
   readonly sessionId: string;
   readonly title: string;
   readonly agentName: string;
-  readonly state: SessionStateView;
+  /**
+   * 主状态；`null` = 尚未取得权威摘要（不编造空闲）。
+   *
+   * 三态词表由 `domain/session-summary.ts` 给出；这里没有第四个取值，也没有旧七态。
+   */
+  readonly state: SessionStateView | null;
   /** 会话所属目录的标识；只用于导航与键，MUST NOT 呈现为界面文本。 */
   readonly directoryId: string | null;
   /** imported 会话来源离线时的标注；本节点自有会话为 `null`。 */
@@ -176,9 +181,11 @@ const ABSENT_TIMELINE: ConversationTimelineModel = {
 };
 
 const ABSENT_INPUT: ConversationInputModel = {
-  state: "editable",
+  // 手拼模型没有真实输入区：三态里只能是「不可用」，原因槽位由 `disabledReason` 的
+  // 「未提供」措辞说明；`blockedBy` 只是该占位模型的机器槽位，生产路径不会走到这里。
+  state: "unavailable",
+  blockedBy: "source_offline",
   draft: "",
-  draftEditable: false,
   canSubmit: false,
   disabledReason: "本页模型未提供输入区数据",
   attachmentsSupported: false,
@@ -475,20 +482,21 @@ export function buildConversationModel(input: {
 /**
  * 会话可用能力（与用量无关）。
  *
- * R20：来源离线的 imported 会话不得把输入标记为已发送或已排队，因此 `canSend` 为假。
+ * 没有「会话已关闭」这一档：三态都不构成永久禁提交的理由。发送看连接与来源（R20：imported
+ * 会话不得把输入标记为已发送），取消看是否存在未结束的轮次且连接可用——两者都不从「会话是否
+ * 关闭」推导，也不由会话主状态回推。
  */
 export function conversationCapabilities(input: {
   readonly connectionOnline: boolean;
-  readonly sessionState: SessionStateView;
+  /** 时间线上是否有未结束的轮次（与输入模型的 `canCancel` 同源）。 */
+  readonly turnInProgress: boolean;
   readonly origin: "local" | { readonly kind: "remote"; readonly online: boolean };
 }): ConversationCapabilitiesModel {
-  const open = input.sessionState !== "closed";
-  const sendable = input.connectionOnline && open && input.origin === "local";
   return {
-    // 历史与取消不受连接状态限制：未上报、断连都不是禁用理由。
-    canViewHistory: open,
-    canCancel: open && input.sessionState === "running",
-    canSend: sendable,
+    // 历史不受连接状态限制：未上报、断连都不是禁用理由。
+    canViewHistory: true,
+    canCancel: input.connectionOnline && input.turnInProgress,
+    canSend: input.connectionOnline && input.origin === "local",
     canLoadEarlier: false,
   };
 }

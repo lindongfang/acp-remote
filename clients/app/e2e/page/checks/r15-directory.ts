@@ -195,7 +195,7 @@ function searchableSessions() {
       idPrefix: "bbbbbbbb",
       titles: ["文档整理"],
       at: ["2026-10-03T09:00:00.000Z"],
-      states: ["waiting_input"],
+      states: ["pending"],
     }),
   ];
 }
@@ -681,14 +681,14 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-21 内联会话行五字段：状态圆点、标题、等待状态词、Agent、相对时间",
+    name: "R15-21 内联会话行五字段：状态圆点、标题、待处理状态词、Agent、相对时间",
     async run() {
       const sessions = sessionSeries({
         directoryId: DIRECTORY_ID_ALPHA,
         idPrefix: "aaaaaaaa",
         titles: ["授权中的一单", "等回信的一单", "尚未开始的一单"],
         at: ["2026-10-05T09:00:00.000Z", "2026-10-04T09:00:00.000Z", "2026-10-03T09:00:00.000Z"],
-        states: ["waiting_permission", "waiting_input", "idle"],
+        states: ["pending", "pending", "idle"],
       });
       await withScenario(baseScenario({ sessions }), async (container) => {
         await waitForDirectoryList(container);
@@ -701,7 +701,7 @@ const checks: readonly Check[] = [
         // 圆点上的状态标识（机器证据）+ 与状态对应的状态词。
         expectEqual(
           rows.map((row) => query(row, "[data-session-state]")?.getAttribute("data-session-state")),
-          ["waiting_permission", "waiting_input", "idle"],
+          ["pending", "pending", "idle"],
           "三条行圆点上的状态标识",
         );
         expectEqual(
@@ -712,9 +712,9 @@ const checks: readonly Check[] = [
           ["授权中的一单", "等回信的一单", "尚未开始的一单"],
           "三条行的标题",
         );
-        expectThat(textOf(rows[0]).includes("待授权"), "等待授权必须在行内说明原因");
-        expectThat(textOf(rows[1]).includes("等你回复"), "等待输入必须在行内说明原因");
-        expectThat(!textOf(rows[2]).includes("空闲"), "非等待状态不追加状态词（只有圆点标识状态）");
+        expectThat(textOf(rows[0]).includes("待处理"), "待处理会话必须在行内给出状态词");
+        expectThat(textOf(rows[1]).includes("待处理"), "待处理会话必须在行内给出状态词");
+        expectThat(!textOf(rows[2]).includes("空闲"), "非待处理状态不追加状态词（只有圆点标识状态）");
         expectEqual(textOf(query(rows[0] ?? null, "[data-session-agent]")), "codex", "Agent 名称");
 
         // 时间按**相对口径**呈现（刚刚 / N 分钟前 / 年月日），绝不是 `MM-DD HH:MM` 那种绝对切片。

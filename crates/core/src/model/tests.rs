@@ -50,7 +50,7 @@ fn view(text: &str) -> ViewJson {
     ViewJson::from_str(text).expect("view json")
 }
 
-fn local_session(state: SessionState, closed_at: Option<&str>) -> Session {
+fn local_session(state: SessionState) -> Session {
     let created = ts(T0);
     let reference = OwnedSessionRef::new(session_id());
     Session::try_new(
@@ -64,7 +64,6 @@ fn local_session(state: SessionState, closed_at: Option<&str>) -> Session {
         Version::from(1),
         created.clone(),
         created,
-        closed_at.map(ts),
     )
     .expect("session")
 }
@@ -432,66 +431,40 @@ fn view_json_rejects_nesting_beyond_the_cap() {
 // ---------------------------------------------------------------- §3.3 会话/turn/状态机
 
 #[test]
-fn session_state_machine_is_terminal_aware() {
-    use SessionState::*;
-    assert!(!Idle.is_terminal());
-    assert!(Failed.is_terminal());
-    assert!(Closed.is_terminal());
+fn session_state_has_exactly_three_values_and_a_single_reducer() {
+    assert_eq!(
+        SessionState::ALL,
+        &[
+            SessionState::Idle,
+            SessionState::Running,
+            SessionState::Pending
+        ]
+    );
+    // 唯一归约规则：有效交互优先，其次未结束任务，否则空闲。会话没有终态。
+    assert_eq!(SessionActivity::reduce(false, false), SessionState::Idle);
+    assert_eq!(SessionActivity::reduce(false, true), SessionState::Running);
+    assert_eq!(SessionActivity::reduce(true, false), SessionState::Pending);
+    assert_eq!(SessionActivity::reduce(true, true), SessionState::Pending);
+    assert!(SessionActivity::turn_is_unfinished(TurnState::Queued));
+    assert!(SessionActivity::turn_is_unfinished(
+        TurnState::WaitingPermission
+    ));
+    assert!(!SessionActivity::turn_is_unfinished(TurnState::Completed));
+    assert!(!SessionActivity::turn_is_unfinished(TurnState::Failed));
 
-    assert!(Idle.can_transition_to(Running));
-    assert!(Running.can_transition_to(WaitingPermission));
-    assert!(WaitingPermission.can_transition_to(Running));
-    assert!(Running.can_transition_to(Closed));
-    assert!(!Idle.can_transition_to(WaitingInput));
-    assert!(!Running.can_transition_to(Queued));
-
-    let mut session = local_session(Idle, None);
-    session
-        .transition(Running, &ts(T0))
-        .expect("idle -> running");
-    assert_eq!(session.state(), Running);
-    session
-        .transition(WaitingPermission, &ts(T1))
-        .expect("running -> waiting_permission");
+    let mut session = local_session(SessionState::Idle);
+    session.transition(SessionState::Running, &ts(T0));
+    assert_eq!(session.state(), SessionState::Running);
+    session.transition(SessionState::Pending, &ts(T1));
     assert_eq!(session.updated_at().as_str(), T1);
-    session
-        .transition(Closed, &ts(T2))
-        .expect("waiting_permission -> closed");
-    assert_eq!(session.closed_at().map(Timestamp::as_str), Some(T2));
-    // 终态无出边。
-    assert_eq!(
-        session.transition(Idle, &ts(T2)),
-        Err(InvalidValue::StateTransition)
-    );
-    // 非法转换同样被拒。
-    let mut idle = local_session(Idle, None);
-    assert_eq!(
-        idle.transition(WaitingInput, &ts(T0)),
-        Err(InvalidValue::StateTransition)
-    );
+    session.transition(SessionState::Idle, &ts(T2));
+    assert_eq!(session.updated_at().as_str(), T2);
 }
 
 #[test]
 fn session_constructor_checks_cross_field_invariants() {
     let created = ts(T0);
     let reference = OwnedSessionRef::new(session_id());
-    // closed_at 与 state 必须一致。
-    assert_eq!(
-        Session::try_new(
-            session_id(),
-            reference.clone(),
-            None,
-            agent_ref(),
-            SessionState::Closed,
-            ResourceOrigin::Local,
-            None,
-            Version::from(1),
-            created.clone(),
-            created.clone(),
-            None,
-        ),
-        Err(InvalidValue::Field)
-    );
     // reference 必须指向本 id。
     assert_eq!(
         Session::try_new(
@@ -505,7 +478,6 @@ fn session_constructor_checks_cross_field_invariants() {
             Version::from(1),
             created.clone(),
             created.clone(),
-            None,
         ),
         Err(InvalidValue::Field)
     );
@@ -521,12 +493,11 @@ fn session_constructor_checks_cross_field_invariants() {
             Version::from(1),
             created.clone(),
             created,
-            None,
         ),
         Err(InvalidValue::TooLong { max: 512 })
     );
 
-    let summary = local_session(SessionState::Running, None).summary(None);
+    let summary = local_session(SessionState::Running).summary(None);
     assert_eq!(summary.session_id(), &session_id());
     assert_eq!(summary.state(), SessionState::Running);
     assert_eq!(summary.version(), Version::from(1));

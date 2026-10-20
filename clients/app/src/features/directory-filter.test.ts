@@ -45,12 +45,12 @@ const DIRS = [
 
 const DIR_SESSIONS: readonly SessionSummary[] = [
   session({ id: "cccccccc-0000-4000-8000-000000000001", title: "订单重构", state: "running", directoryId: "core-eu" }),
-  // 第二条给 core-eu 添上「运行中 2」，用来证明汇总数字不因筛选变小。
-  session({ id: "cccccccc-0000-4000-8000-000000000002", title: "排队中", state: "queued", directoryId: "core-eu" }),
+  // 第二条同样是运行中（排队任务已受理，会话仍属 running），用来证明汇总数字不因筛选变小。
+  session({ id: "cccccccc-0000-4000-8000-000000000002", title: "排队中", state: "running", directoryId: "core-eu" }),
   session({
     id: "cccccccc-0000-4000-8000-000000000003",
     title: "Design Tokens",
-    state: "waiting_permission",
+    state: "pending",
     directoryId: "web-ui",
   }),
   session({ id: "cccccccc-0000-4000-8000-000000000004", title: null, state: "idle", directoryId: "lab" }),
@@ -152,19 +152,19 @@ describe("目录页状态筛选", () => {
     ]);
   });
 
-  it("running 只留存在排队中或运行中会话的目录", () => {
+  it("running 只留存在运行中会话的目录", () => {
     expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, filter: "running" }))).toEqual(["core-eu"]);
   });
 
-  it("pending 只留存在等待输入或等待授权会话的目录", () => {
+  it("pending 只留存在待处理会话的目录", () => {
     expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, filter: "pending" }))).toEqual(["web-ui"]);
   });
 
   it("汇总数字不因筛选改变", () => {
     const model = page({ sessions: DIR_SESSIONS, workspaces: DIRS, filter: "running" });
     if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
-    // core-eu 有两条会话（running + queued）：留下的项仍报自己的全部会话数，而不是命中数。
-    // 反例：若把汇总改写成「命中数」，这里会变成 {total: 1, active: 1}。
+    // core-eu 有两条运行中会话：留下的项仍报自己的全部会话数，而不是命中数。
+    // 目录汇总恒按该目录全部会话计算，与当前筛选无关。
     expect(model.directories[0]?.counts).toEqual({ total: 2, active: 2, pending: 0 });
   });
 
@@ -385,7 +385,7 @@ describe("目录页卡内会话行：搜索与筛选只影响可见行", () => {
 
   it("状态筛选只保留对应状态，目录汇总数字不由它改变", () => {
     const rows = rowsOf("core-eu");
-    // core-eu 有一条 running、一条 queued：两档都属于「运行中」的可见行。
+    // core-eu 有两条 running 会话：两行都属于「运行中」的可见行。
     expect(
       filterSessionsForDirectory({
         rows,

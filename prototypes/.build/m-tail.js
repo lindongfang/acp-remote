@@ -31,16 +31,29 @@ function modelLabel(ms){
   var hit = ms.options.filter(function(o){ return o.value===ms.currentValue; })[0];
   return hit ? hit.name : null;
 }
+/* 会话主状态只有 idle / running / pending 三态；旧七态标签只作历史或任务结果。 */
+function mainState(st){
+  if(st==="waiting"||st==="waiting_permission"||st==="waiting_input"||st==="pending") return "pending";
+  if(st==="running"||st==="queued") return "running";
+  return "idle";
+}
 function turnState(){
   var s=cur();
   var st = (s.id==="s1") ? A.chatScenario : s.state;
-  return (st==="waiting") ? "waiting_permission" : st;
+  return mainState(st);
+}
+function turnFailed(){
+  var s=cur();
+  return (s.id==="s1") ? A.chatScenario==="failed" : s.turnResult==="failed";
+}
+function waitDetail(s){
+  var x = s || cur();
+  return x.wait==="reply" ? "等你回复" : "待授权";
 }
 function active(){
   var st=turnState();
-  return st==="running"||st==="queued"||st==="waiting_permission"||st==="waiting_input";
+  return st==="running"||st==="pending";
 }
-function isClosed(){ return turnState()==="closed"; }
 function dirById(id){ return DIRS.filter(function(d){ return d.id===id; })[0]; }
 /* 远端节点上的目录树（原型假数据）：Windows 可能有多个盘，所以根是「此电脑」+ 盘符列表；
    已登记目录都在 D: 上，另外补几层让浏览看起来像真的磁盘。真实实现里这些来自服务端的目录列举。 */
@@ -133,8 +146,9 @@ function dirBranchNotice(path){
 function dirPath(){ return (A.newDir||"").trim(); }
 function mdInlinePlain(t){ return esc(t); }
 function passFilter(s){
-  if(A.filter==="running") return s.state==="running"||s.state==="queued";
-  if(A.filter==="waiting") return s.state==="waiting_permission"||s.state==="waiting_input";
+  var st = mainState(s.state);
+  if(A.filter==="running") return st==="running";
+  if(A.filter==="waiting") return st==="pending";
   return true;
 }
 function toast(m){ var t=$("toast"); t.textContent=m; t.classList.add("show");
@@ -240,7 +254,7 @@ function viewDirs(){
   if(!cards.length){ body += '<div class="blank"><h2>没有匹配的结果</h2><p>换个关键词。</p></div>'; }
   pageCards.forEach(function(card){
     var dir = card.dir, all = card.all, rows = card.rows;
-    var active0 = all.filter(function(s){ return s.state==="running"||s.state==="queued"; }).length;
+    var active0 = all.filter(function(s){ return mainState(s.state)==="running"; }).length;
     var collapsed = !!A.open["d-"+dir.id];
     body += '<div class="card'+(collapsed?" collapsed":"")+'"><div class="dhead">' +
       '<span class="caret" data-toggle="d-'+dir.id+'">▼</span>' +
@@ -269,9 +283,10 @@ function viewDirs(){
 }
 function srow(s){
   var name = s.title ? esc(s.title) : '<span class="noname">未命名会话</span>';
-  var st = s.state==="waiting_permission" ? '<span class="st">待授权</span>' : '';
+  var mst = mainState(s.state);
+  var st = mst==="pending" ? '<span class="st">'+waitDetail(s)+'</span>' : '';
   return '<div class="srow'+(s.id===A.session?" on":"")+'" data-session="'+s.id+'">' +
-    '<span class="dot '+s.state+'"></span><span class="t'+(s.title?"":" noname")+'">'+name+'</span>'+st+
+    '<span class="dot '+mst+'"></span><span class="t'+(s.title?"":" noname")+'">'+name+'</span>'+st+
     '<span class="w">'+esc(whenLabel(s.at))+'</span></div>';
 }
 
@@ -339,10 +354,16 @@ function viewSessions(){
 function streamHTML(s){
   var out = "";
   var jumping = !!A.jumpTo && A.jumpTo.session===s.id;
-  if(turnState()==="waiting_permission"||turnState()==="waiting_input")
-    out += '<div class="notice warn"><span>⏸</span><span>有 1 个待处理授权请求，处理后才能继续。</span></div>';
+  if(turnState()==="pending")
+    out += '<div class="notice warn"><span>⏸</span><span>有 1 个待处理请求，处理后才能继续。</span></div>';
   if(s.id==="s1"){
     out += userMsg("继续，把订阅清理也补上","14:31:10");
+    if(turnFailed()){
+      out += '<div class="streamfail">本轮失败：Agent 进程在写入文件后异常退出（退出码 1）。会话仍为空闲，后续消息可继续。</div>' +
+        '<div class="tstamp">14:33:07</div>' +
+        fold("t.edit","tool","🔧","src/auth/session.ts","done","","src/auth/session.ts","14:33:05",
+          {rows:[["kind","edit"],["改动","替换 1 行 · 删除 1 行"]]});
+    } else {
     if(jumping) out += '<div class="notice info"><span>↕</span><span>已定位到你这条消息。' +
       (A.jumpTo.perm ? '授权卡片就在下方。' : '继续往下看即可。') + '</span></div>';
     out += fold("t.think","think","🧠","思考中…","run","关闭路径有两处：超时回调和主动 close。",null,"14:31:12") +
@@ -360,11 +381,15 @@ function streamHTML(s){
         '<span class="mono">acp.agent.custom_status</span><br>当前网页端没有专用视图，已保留原文。',"unknown","查看原文与元数据") +
       degCard("warn","原文未同步（超出单条上限）",
         '<span class="mono">file.changed · src/legacy/report.ts</span><br>diff 正文未随事件下发。',"bigdiff","查看原因") : "");
+    }
   } else {
     out += userMsg("（这个会话的最近一条输入）", whenLabel(s.at)) +
       agentMsg("这是 `"+s.agent+"` 在 "+(dirById(s.dir)?dirById(s.dir).name:"")+" 下的会话。", whenLabel(s.at)) +
       fold("g.think","think","🧠","思考","done","示例思考内容。",null,whenLabel(s.at));
-    if(s.state==="waiting_permission") out += permCard(s);
+    if(s.state==="pending") out += permCard(s);
+    if(s.turnResult==="failed")
+      out += '<div class="streamfail">本轮失败：Agent 进程异常退出（退出码 1）。会话仍为空闲，后续消息可继续。</div>' +
+        '<div class="tstamp">'+esc(whenLabel(s.at))+'</div>';
   }
   /* 「跳到你最近的输入」胶囊：滚动离开用户消息时浮出（移动端需手动吸附到底部） */
   out += '<button class="jumppill" id="jumpPill"></button>';
@@ -393,8 +418,8 @@ function chatPane(s){
       '<button class="chip-pick" data-act="mode">模式 <b>'+esc(modeLabel(modeState())||"未提供")+'</b> ▾</button>' +
       '<button class="chip-pick" data-act="model">模型 <b>'+esc(modelLabel(modelState())||"未提供")+'</b> ▾</button>' +
     '</div>' +
-    '<div class="inputrow"><textarea id="ta"'+(active()||isClosed()?' readonly':'')+' placeholder="'+
-      (isClosed()?"会话已关闭":(active()?"进行中，完成后可继续输入":"给 Agent 发消息"))+'"></textarea>' +
+    '<div class="inputrow"><textarea id="ta"'+(active()?' readonly':'')+' placeholder="'+
+      (turnState()==="pending"?"有未处理的请求，处理后才能继续":(active()?"进行中，完成后可继续输入":"给 Agent 发消息"))+'"></textarea>' +
       (active()?'<button class="btn stop" data-act="stop">■ 停止</button>'
                :'<button class="btn primary" data-act="send">发送</button>')+'</div>' +
     '<div class="hintrow"><span class="kbdhint">Enter 发送 · Shift+Enter 换行</span><span>📎 附件暂不支持</span></div></div>';
@@ -1168,7 +1193,6 @@ function handleAct(a){
   if(a==="newdir"){ A.newDir=""; A.dirPickOpen=false; A.newErr=null; openSheet("new", null); return; }
   if(a==="sessions"){ location.hash="#/sessions"; return; }
   if(a==="send"){
-    if(isClosed()){ toast("会话已关闭"); return; }
     if(active()){ toast("进行中，完成后再发送（可先点「停止」）"); return; }
     var ta=$("ta"); if(!ta||!ta.value.trim()) return; ta.value="";
     toast("已提交（accepted ≠ 完成，等待终态事件）"); return;

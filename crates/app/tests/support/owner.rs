@@ -29,14 +29,14 @@ use acp_core::model::{
     CreateSessionRequest, EndpointEvent, EventKind, EventPayload, EventType, GlobalCursor,
     InteractionId, InteractionResolution, ModeId, ModeState, OriginEpoch, OwnedSessionRef,
     PortError, PromptRequest, RequestId, ResumeSessionRequest, Sequence, SessionId,
-    SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionSummary, Timestamp, TurnId,
-    UnavailableKind, ViewJson,
+    SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionSummary, Timestamp, Turn,
+    TurnId, UnavailableKind, ViewJson,
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, CommitOutcome, EventSink, HistoryPage,
     HistoryQuery, IdGenerator, LocalConfigStore, OwnedCommit, PruneReport, ReadView,
-    RemoteDeliveryStore, ReplayLimit, RetentionPolicy, SessionBackendFactory, SessionEndpoint,
-    SessionQuery, SessionStore, StoreHealth, TrustStore, TurnAccepted,
+    RemoteDeliveryStore, ReplayLimit, RetentionPolicy, SessionActivityFacts, SessionBackendFactory,
+    SessionEndpoint, SessionQuery, SessionStore, StoreHealth, TrustStore, TurnAccepted,
 };
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use identity_auth::{Authority, EntropySource, IdentityKeystore};
@@ -133,6 +133,15 @@ impl OwnerNode {
         Self::start_configured(label, daemon_extra, None, 0).await
     }
 
+    /// 在**已有的临时根**上启动：重启用例在同一个 `data_dir` 上再起一个 Owner（第一轮的 Owner 必须先
+    /// `stop`）。临时根的所有权留在调用方（`TempRoot::new` 的所有者负责删除），本实例只持借用的视图。
+    ///
+    /// `seed` 固定节点身份：`EphemeralKeystore` 每个实例只活在进程内，不固定种子的话重启会得到**新的**
+    /// node id 与公钥，已批准的配对信任与配对的 Access 连接就都失效了——那不是「同一节点的重启」。
+    pub async fn start_in_root(root: &std::path::Path, seed: [u8; 32]) -> Self {
+        Self::start_root(TempRoot::borrowed(root), "", None, 0, Some(seed)).await
+    }
+
     /// 装配主体（可覆盖 public origin 的主机名与端口）。
     async fn start_configured(
         label: &str,
@@ -140,8 +149,18 @@ impl OwnerNode {
         public_host: Option<&str>,
         port: u16,
     ) -> Self {
+        Self::start_root(TempRoot::new(label), daemon_extra, public_host, port, None).await
+    }
+
+    /// 装配主体的真正实现：临时根、`daemon` 段追加内容、public origin 覆盖与（可选的）固定身份种子。
+    async fn start_root(
+        root: TempRoot,
+        daemon_extra: &str,
+        public_host: Option<&str>,
+        port: u16,
+        seed: Option<[u8; 32]>,
+    ) -> Self {
         install_trace_logging();
-        let root = TempRoot::new(label);
         let data_dir = root.join("data");
         super::create_owner_only_dir(&data_dir);
         let public_origin = match public_host {
@@ -181,8 +200,10 @@ impl OwnerNode {
         let attachments: Arc<dyn AttachmentStore> = store.clone();
 
         let entropy: Arc<dyn EntropySource> = Arc::new(OsEntropy::new());
-        let keystore: Arc<dyn IdentityKeystore> =
-            Arc::new(EphemeralKeystore::new(Arc::clone(&entropy)));
+        let keystore: Arc<dyn IdentityKeystore> = match seed {
+            Some(seed) => Arc::new(EphemeralKeystore::with_seed(seed)),
+            None => Arc::new(EphemeralKeystore::new(Arc::clone(&entropy))),
+        };
         let identity = app::NodeIdentity::ensure(keystore.as_ref())
             .await
             .expect("本机身份就绪");
@@ -396,6 +417,22 @@ impl OwnerNode {
         self.parked.release(marker)
     }
 
+    /// 只释放某个 marker 暂存的**前 `count` 条**后端事件；其余继续暂存。
+    ///
+    /// 「旧执行停止未确认」用例需要把同一轮的两个阶段分开：先交付失败批（非终态），再交付终态。
+    /// 一次性 `release_events` 会把两者塞进同一批，覆盖不到「占位未释放」的路径。
+    pub fn release_event_prefix(&self, marker: &str, count: usize) -> usize {
+        self.parked.release_prefix(marker, count)
+    }
+
+    /// 后端 `prompt` 实际被调用时的正文（按派发顺序）。
+    ///
+    /// 这是「副作用发生过几次」的直接观察点：重启用例断言第二次启动的 Owner 一次都没有调用后端，
+    /// 队列用例断言后续 turn 在占位释放前没有被派发。
+    pub fn prompt_log(&self) -> Vec<String> {
+        self.parked.prompts()
+    }
+
     /// 调用一个本地管理方法（与本地通道同一处理器；失败即 panic 出可读消息）。
     pub async fn admin(&self, method: Method, params: serde_json::Value) -> serde_json::Value {
         let response = self.call(method, params).await;
@@ -537,6 +574,25 @@ impl SessionStore for FlakySessionStore {
 
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {
         self.inner.load(session).await
+    }
+
+    /// 活跃事实与队列读取只用于恢复/摘要重算，故障注入只作用在 `commit`，因此原样转发。
+    async fn session_activity(
+        &self,
+        session: &SessionId,
+    ) -> Result<SessionActivityFacts, PortError> {
+        self.inner.session_activity(session).await
+    }
+
+    async fn queued_turns(&self, session: &SessionId) -> Result<Vec<Turn>, PortError> {
+        self.inner.queued_turns(session).await
+    }
+
+    async fn sessions_with_pending_activity(
+        &self,
+        limit: ReplayLimit,
+    ) -> Result<Vec<SessionId>, PortError> {
+        self.inner.sessions_with_pending_activity(limit).await
     }
 
     async fn list(&self, query: SessionQuery) -> Result<Vec<SessionSummary>, PortError> {
@@ -758,6 +814,8 @@ struct Parked {
     events: Mutex<std::collections::BTreeMap<String, Vec<EndpointEvent>>>,
     /// 最近一次由工厂拿到的 sink（本切片只有一个会话，够用）。
     sink: Mutex<Option<EventSink>>,
+    /// 后端 `prompt` 实际收到的正文（按调用顺序）。用例据此判断「副作用发生了几次」。
+    prompts: Mutex<Vec<String>>,
 }
 
 /// `std::sync::Mutex` 的取锁简写（中毒即 panic：用例内不可能有别的持有者）。
@@ -787,6 +845,44 @@ impl Parked {
             None => panic!("脚本端点还没有拿到 sink"),
         }
         count
+    }
+
+    /// 只把某个 marker 暂存的**前 `count` 条**事件送进 sink，其余留在暂存区。
+    ///
+    /// 返回实际释放的条数（marker 不存在时 0）。
+    pub fn release_prefix(&self, marker: &str, count: usize) -> usize {
+        let released = {
+            let mut events = lock(&self.events);
+            let Some(parked) = events.get_mut(marker) else {
+                return 0;
+            };
+            let take = count.min(parked.len());
+            let released: Vec<EndpointEvent> = parked.drain(..take).collect();
+            if parked.is_empty() {
+                events.remove(marker);
+            }
+            released
+        };
+        let count = released.len();
+        match lock(&self.sink).as_ref() {
+            Some(sink) => {
+                for event in released {
+                    sink.send(event);
+                }
+            }
+            None => panic!("脚本端点还没有拿到 sink"),
+        }
+        count
+    }
+
+    /// 记录一次后端 `prompt` 的正文（副作用发生的顺序证据）。
+    fn record_prompt(&self, marker: &str) {
+        lock(&self.prompts).push(marker.to_owned());
+    }
+
+    /// 后端 `prompt` 实际收到的正文（按调用顺序）。
+    pub fn prompts(&self) -> Vec<String> {
+        lock(&self.prompts).clone()
     }
 }
 
@@ -852,6 +948,7 @@ impl SessionEndpoint for ScriptedEndpoint {
     ) -> Result<TurnAccepted, PortError> {
         let marker = prompt_text(&request);
         self.parked.remember_sink(&self.sink);
+        self.parked.record_prompt(&marker);
         self.parked.park(&marker, self.script(&marker));
         Ok(TurnAccepted {
             turn: TurnId::new(&nodelink::uuid_text()).expect("turn id 是规范 uuid 文本"),

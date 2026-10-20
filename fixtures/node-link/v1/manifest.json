@@ -83,6 +83,12 @@
       "expectedKeyword": "additionalProperties"
     },
     {
+      "fixture": "invalid/resource-attached-legacy-state.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
       "fixture": "invalid/session-resume-with-cwd.json",
       "schema": "../../../schemas/node-link/v1/message.schema.json",
       "valid": false,
