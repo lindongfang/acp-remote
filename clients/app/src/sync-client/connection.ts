@@ -202,6 +202,7 @@ export const SUPPORTED_FEATURES = [
   "acp.raw-payload.v1",
   "core.command-status.v1",
   "core.event-ack.v1",
+  "core.session-activity.v1",
   "core.file-diff.v1",
   "core.local-catalog.v1",
   "core.session-create.v1",
@@ -217,8 +218,15 @@ export const SUPPORTED_FEATURES = [
   "resource.remote-origin.v1",
 ] as const;
 
-/** 客户端必需 feature：ACK 与命令状态查询缺失则无法满足 R13/R14。 */
-export const REQUIRED_FEATURES = ["core.command-status.v1", "core.event-ack.v1"] as const;
+/**
+ * 客户端必需 feature：ACK 与命令状态查询缺失则无法满足 R13/R14；
+ * `core.session-activity.v1` 是三态会话摘要的合同，缺失时两端对 `state` 的词表可能不一致。
+ */
+export const REQUIRED_FEATURES = [
+  "core.command-status.v1",
+  "core.event-ack.v1",
+  "core.session-activity.v1",
+] as const;
 
 /**
  * 结构化历史（`session.read` 的 `history` include）所需的 feature ID。

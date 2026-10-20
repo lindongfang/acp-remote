@@ -20,7 +20,7 @@ use node_link_client::{ClientConfig, ClientError, NodeLinkClient, TlsTrust};
 
 use support::{
     MemTransport, OwnerIdentity, OwnerIo, RecordingDeliveries, RecordingSink, accept_handshake,
-    decimal, uuid_text,
+    decimal, selected_features, uuid_text,
 };
 
 use acp_core::model::{NodeId, PeerPublicKey};
@@ -203,7 +203,7 @@ async fn prompt_routes_through_the_attachment_ticket_and_keeps_the_caller_reques
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -339,7 +339,7 @@ async fn a_lost_command_is_uncertain_and_only_queried_after_reconnect() {
         let session = accept_handshake(
             &mut io,
             &owner_for_task,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -400,7 +400,7 @@ async fn a_lost_command_is_uncertain_and_only_queried_after_reconnect() {
         let session = accept_handshake(
             &mut io,
             &owner_for_task,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -489,7 +489,7 @@ async fn lose_the_prompt_on_the_first_connection(
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -528,7 +528,7 @@ async fn an_uncorrelated_rate_limit_error_fails_the_only_pending_command_without
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -612,7 +612,7 @@ async fn an_in_flight_limit_rejection_settles_only_the_rejected_command() {
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -740,7 +740,7 @@ async fn a_status_query_accepted_reply_is_correlated_and_keeps_the_command_uncer
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -846,7 +846,7 @@ async fn a_command_not_found_link_error_clears_the_uncertain_command_without_rec
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -918,7 +918,7 @@ async fn a_public_status_query_resolves_on_command_accepted() {
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -994,7 +994,7 @@ async fn a_correlated_attach_rejection_settles_without_closing_the_connection() 
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -1060,7 +1060,7 @@ async fn a_correlated_subscribe_rejection_is_reported_and_keeps_the_connection()
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -1144,7 +1144,7 @@ async fn a_correlated_ack_rejection_settles_and_marks_the_subscription() {
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -1238,7 +1238,7 @@ async fn subscribing_while_the_link_is_offline_fails_instead_of_hanging() {
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -1301,7 +1301,7 @@ async fn a_retryable_subscribe_rejection_is_observable_and_resubscribed_from_the
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -1461,7 +1461,7 @@ async fn retryable_subscribe_rejections_stop_after_the_bounded_budget() {
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -1557,7 +1557,7 @@ async fn a_stale_generation_subscribe_rejection_re_attaches_before_resubscribing
         let session = accept_handshake(
             &mut io,
             &owner,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;

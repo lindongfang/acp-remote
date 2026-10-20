@@ -164,8 +164,18 @@ describe("R17：上下文三态经 ClientStore 投影后仍可区分", () => {
 
   it("未上报不影响其它交互：历史、发送、取消仍可用", () => {
     const store = storeWithSnapshot();
+    // 取消能力看的是**未结束的轮次**（时间线上的记录），不是摘要里的主状态。
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "turn.started",
+        eventId: "dddddddd-0000-4000-8000-00000000000a",
+        sessionId: SESSION_ID,
+        globalSequence: "12",
+        view: { turnId: "turn-1", state: "running" },
+      }),
+    });
     const page = store.conversationPage(SESSION_ID);
-    // 会话处于 running（夹具默认），因此可发送、可取消；用量状态与之无关。
     expect(page?.usage.kind).toBe("unreported");
     expect(page?.capabilities.canViewHistory).toBe(true);
     expect(page?.capabilities.canCancel).toBe(true);

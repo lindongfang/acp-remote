@@ -1,26 +1,22 @@
 /**
- * 「文件」右栏（`session-file-browser` 5.1；spec「文件栏提供三种来源」「全部文件逐层浏览与过滤」
+ * 「文件」右栏（spec「文件栏提供三种来源」（标题沿用旧增量，正文为两来源）「全部文件逐层浏览与过滤」
  * 「Git 变更的展示与不可用原因」）。
  *
- * ## 三个来源各一条渲染路径，互不冒充
+ * ## 两个来源各一条渲染路径，互不冒充
  *
- * 标题固定为「文件」，下面只有三个选项：全部文件 / Git 变更 / 会话变更。来源的选中值、三份数据
- * 与不可用原因都由 `SessionFilesPanelModel` 给出（`features/session-files.ts` 是唯一组装点），
- * 本组件不判定「该不该降级」：
+ * 标题固定为「文件」，下面只有两个选项：全部文件 / Git 变更。来源的选中值、两份数据与不可用原因
+ * 都由 `SessionFilesPanelModel` 给出（`features/session-files.ts` 是唯一组装点），本组件不判定
+ * 「该不该降级」：
  *
  * - **全部文件**：逐层展开目录。根层始终加载；子目录第一次展开时由 {@link DirectoryLevel} 触发
  *   `onLoadMoreAllFiles(path)`。忽略开关默认关闭（即显示被忽略项），`.git` 条目在这里**再过滤
  *   一次**——服务端已经隐藏，但「`.git` 永不出现」不能只依赖上游一道防线。
  * - **Git 变更**：staged/unstaged/untracked 都只是 `status` 的不同取值，统一按文件列出；非仓库、
- *   Git 不可用、冲突、二进制与截断都各自有显式说明，不用空列表冒充干净仓库。
- * - **会话变更**：按**可靠路径**归并后的文件清单（`SessionChangesModel`）。清单只列一个文件：
- *   同一文件的历次记录在展开区（以及中间查看区）里按时间排列，单次统计各随记录保留，不相加。
+ *   Git 不可用、冲突、二进制与截断都各自有显式说明，不用空列表冒充干净仓库。范围是整个会话
+ *   工作目录的未提交修改，界面明确说明它可能包含人工与其他会话的改动。
  *
- * ## 机器锚点保持既有口径
- *
- * 会话变更的行沿用 `FileChangesPanel` 的 `data-file-change*` 口径（改动状态、路径、增删统计、
- * 差异区、诊断入口），因此时间线条目联动、既有浏览器用例与右栏诊断都继续成立；新增的
- * `data-session-file` / `data-file-row` 只用于「同一文件多次修改」与关闭后的焦点归还。
+ * 会话改动只在对话时间线呈现（结构化差异 + 诊断入口），文件栏不提供第三种来源、记录选择器或
+ * 专属刷新。
  *
  * ## 展开状态住在组件里，滚动位置由父级滚动容器保留
  *
@@ -34,28 +30,12 @@ import type { ReactElement } from "react";
 
 import type { FileSource, SessionFilesPanelModel } from "../features/session-files";
 import { FILE_SOURCES, FILE_SOURCE_LABELS } from "../features/session-files";
-import type { FileChangeView } from "../features/conversation-timeline";
-import type { FileChangeDiagnostics } from "../features/conversation-timeline";
-import type { SessionChangedFile } from "../domain/session-files";
 import type { GitStatusEntry } from "../protocol/session-files";
-import { ChangeDiff } from "./FileChangesPanel";
-import { ChangeDiagnosticsPanel } from "./ChangeDiagnosticsPanel";
 import type { Palette } from "./theme";
 import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
 
 export interface SessionFilesPanelProps {
   readonly model: SessionFilesPanelModel;
-  /**
-   * 逐条改动的原始呈现模型（`ConversationPageModel.fileChanges`）。
-   *
-   * 归并模型只保留展示字段；ACP 原文可用性仍由这条既有投影携带。诊断面板按 `changeId` 取回它，
-   * 因此「原文是诊断入口而不是渲染源」的口径在合并清单里不变。
-   */
-  readonly fileChanges?: readonly FileChangeView[] | undefined;
-  /** 与时间线条目共用的选中改动（`changeId`）；缺省 `null`。 */
-  readonly selectedChangeId?: string | null;
-  /** 选中一处改动（时间线联动）；缺省时路径不可点。 */
-  readonly onSelectChange?: ((changeId: string) => void) | undefined;
   /** 打开文件内容（来源 + 根内相对路径）。缺省时条目不可打开。 */
   readonly onOpenFile?: ((source: FileSource, path: string) => void) | undefined;
   /** 切换来源；缺省时选项不可点（不是点了没反应的按钮）。 */
@@ -68,8 +48,6 @@ export interface SessionFilesPanelProps {
   readonly onLoadMoreAllFiles?: ((path: string) => void) | undefined;
   /** 继续加载 Git 变更的下一页。 */
   readonly onLoadMoreGitChanges?: (() => void) | undefined;
-  readonly openDiagnosticsEventId?: string | null;
-  readonly onOpenChangeDiagnostics?: ((eventId: string | null) => void) | undefined;
 }
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
@@ -215,19 +193,8 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
     },
-    changedFile: {
-      minWidth: 0,
-      paddingHorizontal: 6,
-      paddingLeft: 22,
-    },
     changedFileSelected: {
       backgroundColor: colors.accentSoft,
-    },
-    compactRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      minHeight: 32,
-      gap: 6,
     },
     selectablePath: {
       flex: 1,
@@ -241,26 +208,6 @@ function buildStyles(colors: Palette) {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
-    },
-    added: {
-      color: colors.ok,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
-    },
-    deleted: {
-      color: colors.danger,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
-    },
-    summary: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
-    details: {
-      gap: spacing.xs,
-      paddingVertical: spacing.sm,
-      paddingLeft: 22,
     },
     hidden: {
       display: "none",
@@ -544,6 +491,9 @@ function GitChanges({
 
   return (
     <View style={styles.list} dataSet={{ gitChanges: git.entries.length === 0 ? "empty" : "list", gitEntryCount: String(git.entries.length) }}>
+      <Text style={styles.notice} dataSet={{ gitScopeNotice: "true" }}>
+        范围是整个会话工作目录的未提交修改（含已暂存、未暂存与未跟踪文件），可能包含人工或其他会话的改动。
+      </Text>
       {git.error === null ? null : (
         <Text style={styles.error} dataSet={{ gitError: git.error.code }}>
           {`刷新失败，下面保留上次成功的结果：${git.error.message}`}
@@ -627,248 +577,15 @@ function GitChanges({
   );
 }
 
-/** 一个会话变更文件的展开记录区（诊断入口与差异区沿用既有口径）。 */
-function SessionChangeDetails({
-  file,
-  record,
-  diagnostics,
-  expanded,
-  openDiagnosticsEventId,
-  onOpenChangeDiagnostics,
-}: {
-  readonly file: SessionChangedFile;
-  readonly record: SessionChangedFile["records"][number];
-  readonly diagnostics: FileChangeDiagnostics | undefined;
-  readonly expanded: boolean;
-  readonly openDiagnosticsEventId: string | null;
-  readonly onOpenChangeDiagnostics: ((eventId: string | null) => void) | undefined;
-}): ReactElement {
-  const theme = useTheme();
-  const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const diagnosticsOpen = openDiagnosticsEventId === record.eventId;
-
-  return (
-    <View
-      style={expanded ? styles.details : [styles.details, styles.hidden]}
-      dataSet={{ changeDetails: expanded ? "expanded" : "collapsed", sessionChangeRecord: record.eventId }}
-    >
-      <Text style={styles.summary} dataSet={{ changeSummary: "true" }}>
-        {record.summary}
-      </Text>
-      <Text style={styles.note} dataSet={{ changeStatisticsScope: "true" }}>
-        统计只覆盖 Agent 在工具调用里声明的改动；差异行只来自服务端下发的结构化来源，本栏不解析 ACP 原文。
-        历次统计各随其记录保留，不相加为净差异。
-      </Text>
-      {file.outsideWorkspace ? (
-        <Text style={styles.chipWarn} dataSet={{ changeOutsideWorkspaceNote: "true" }}>
-          工作区之外
-        </Text>
-      ) : null}
-      {file.unreadableReason === null ? null : (
-        <Text style={styles.note} dataSet={{ sessionFileUnreadable: "true" }}>
-          {file.unreadableReason}
-        </Text>
-      )}
-      <ChangeDiff diff={record.diff} />
-      {onOpenChangeDiagnostics === undefined ? null : (
-        <Pressable
-          role="button"
-          style={styles.entryButton}
-          dataSet={{
-            action: "open-file-change-diagnostics",
-            eventId: record.eventId,
-            diagnosticsOpen: String(diagnosticsOpen),
-          }}
-          onPress={() => {
-            onOpenChangeDiagnostics(diagnosticsOpen ? null : record.eventId);
-          }}
-        >
-          <Text style={styles.entryButtonText}>
-            {diagnosticsOpen ? "收起 ACP 原文（诊断）" : "查看 ACP 原文（诊断）"}
-          </Text>
-        </Pressable>
-      )}
-      {diagnosticsOpen && diagnostics !== undefined ? <ChangeDiagnosticsPanel diagnostics={diagnostics} /> : null}
-      {diagnosticsOpen && diagnostics === undefined ? (
-        <Text style={styles.note} dataSet={{ changeDiagnostics: record.eventId }}>
-          这条改动没有可用的原文诊断数据（客户端未保留它的逐条投影）。
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
-/** 会话变更：按文件归并后的清单（每行一个文件，不合成累计净差异）。 */
-function SessionChanges({
-  model,
-  fileChanges,
-  selectedChangeId,
-  onSelectChange,
-  onOpenFile,
-  openDiagnosticsEventId,
-  onOpenChangeDiagnostics,
-}: {
-  readonly model: SessionFilesPanelModel;
-  readonly fileChanges: readonly FileChangeView[];
-  readonly selectedChangeId: string | null;
-  readonly onSelectChange: ((changeId: string) => void) | undefined;
-  readonly onOpenFile: ((source: FileSource, path: string) => void) | undefined;
-  readonly openDiagnosticsEventId: string | null;
-  readonly onOpenChangeDiagnostics: ((eventId: string | null) => void) | undefined;
-}): ReactElement {
-  const theme = useTheme();
-  const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const files = model.sessionChanges.files;
-  const diagnosticsByChange = new Map(fileChanges.map((change) => [change.changeId, change.diagnostics]));
-
-  return (
-    <View
-      style={styles.list}
-      dataSet={{
-        fileChanges: files.length === 0 ? "empty" : "list",
-        fileChangeCount: files.length,
-      }}
-    >
-      <Text style={styles.note} dataSet={{ fileChangeCountLabel: String(files.length) }}>
-        {`${String(files.length)} 个文件`}
-      </Text>
-      {model.historyNotice === null || model.historyCoverage === "unknown" ? null : (
-        <Text style={styles.notice} dataSet={{ sessionHistoryNotice: model.historyCoverage }}>
-          {model.historyNotice}
-        </Text>
-      )}
-      {files.length === 0 ? null : (
-        <View role="list" style={styles.list} dataSet={{ fileChangeList: "changes" }}>
-          <ChangeTree items={files} pathOf={(file) => file.path} renderItem={(file) => {
-            const selected =
-              selectedChangeId !== null && file.records.some((record) => record.changeId === selectedChangeId);
-            const primary =
-              file.records.find((record) => record.changeId === selectedChangeId) ??
-              file.records[file.records.length - 1];
-            if (primary === undefined) return null;
-            const latest = file.records[file.records.length - 1];
-            const appearance = changeAppearance(latest?.kind ?? "unknown");
-            const nameStyle = appearance === "negative" ? styles.negativeName : appearance === "positive" ? styles.positiveName : {};
-            const label = file.path?.split("/").pop() ?? file.displayPath;
-            const detailsOpen =
-              selected && onOpenFile === undefined || openDiagnosticsEventId !== null && file.records.some((record) => record.eventId === openDiagnosticsEventId);
-            const openKey = `session:${file.path ?? file.key}`;
-            const summary = file.records.length === 1 ? primary.summary : `${String(file.records.length)} 次修改`;
-            return (
-              <View
-                key={file.key}
-                role="listitem"
-                style={selected ? [styles.changedFile, styles.changedFileSelected] : styles.changedFile}
-                tabIndex={0}
-                dataSet={{
-                  fileRow: openKey,
-                  sessionFile: file.path ?? file.key,
-                  sessionFileRecordCount: String(file.records.length),
-                  fileChange: primary.changeId,
-                  fileChangeSelected: String(selected),
-                  fileChangeExpanded: String(detailsOpen),
-                  changeKind: primary.kind,
-                  changePath: file.displayPath,
-                  changeOutsideWorkspace: String(file.outsideWorkspace),
-                }}
-              >
-                <View style={styles.compactRow} dataSet={{ changeCompact: "true" }}>
-                  <FileEntryIcon path={file.path ?? file.displayPath} />
-                  {file.readable && onSelectChange !== undefined ? (
-                    <Pressable
-                      role="button"
-                      style={styles.selectablePath}
-                      dataSet={{
-                        action: "select-file-change",
-                        changeId: primary.changeId,
-                        changePathLabel: file.displayPath,
-                      }}
-                      onPress={() => {
-                        onSelectChange(primary.changeId);
-                        if (onOpenFile !== undefined && file.path !== null) onOpenFile("session", file.path);
-                      }}
-                    >
-                      <Text numberOfLines={1} style={[styles.path, nameStyle]}>{label}</Text>
-                    </Pressable>
-                  ) : (
-                    <Text numberOfLines={1} style={[styles.path, { flex: 1 }, nameStyle]} dataSet={{ changePathLabel: file.displayPath }}>
-                      {label}
-                    </Text>
-                  )}
-                  <View style={styles.rowMeta}>
-                  {appearance === "neutral" ? <Text style={styles.note}>{latest?.kind}</Text> : <Text style={[styles.marker, nameStyle]} dataSet={{ fileChangeMarker: appearance }}>{appearance === "negative" ? "-" : "+"}</Text>}
-                  {file.outsideWorkspace ? (
-                    <Text style={styles.chip} dataSet={{ changeOutsideWorkspaceNote: "true" }}>
-                      工作区之外
-                    </Text>
-                  ) : null}
-                  {file.records.length > 1 ? (
-                    <Text style={styles.note} aria-label={`${String(file.records.length)} 次修改`} dataSet={{ sessionFileRecordCount: String(file.records.length) }}>
-                      {`×${String(file.records.length)}`}
-                    </Text>
-                  ) : null}
-                  {file.records.length === 1 ? (
-                    <>
-                      {primary.addedLines === null ? null : (
-                        <Text style={styles.added} dataSet={{ changeAddedLines: primary.addedLines }}>
-                          {`+${primary.addedLines}`}
-                        </Text>
-                      )}
-                      {primary.deletedLines === null ? null : (
-                        <Text style={styles.deleted} dataSet={{ changeDeletedLines: primary.deletedLines }}>
-                          {`-${primary.deletedLines}`}
-                        </Text>
-                      )}
-                      {primary.addedLines === null && primary.deletedLines === null ? (
-                        <Text style={[styles.note, styles.hidden]} dataSet={{ changeLineCountUnavailable: "true" }}>
-                          无行数统计
-                        </Text>
-                      ) : null}
-                    </>
-                  ) : (
-                    <Text style={[styles.note, styles.hidden]} dataSet={{ changeLineCountUnavailable: "true" }}>
-                      逐次统计见下方记录
-                    </Text>
-                  )}
-                  </View>
-                  <Text style={[styles.note, styles.hidden]} dataSet={{ sessionFileSummary: "true" }}>
-                    {summary}
-                  </Text>
-                </View>
-                {file.records.map((record) => (
-                  <SessionChangeDetails
-                    key={record.eventId}
-                    file={file}
-                    record={record}
-                    diagnostics={diagnosticsByChange.get(record.changeId)}
-                    expanded={detailsOpen}
-                    openDiagnosticsEventId={openDiagnosticsEventId}
-                    onOpenChangeDiagnostics={onOpenChangeDiagnostics}
-                  />
-                ))}
-              </View>
-            );
-          }} />
-        </View>
-      )}
-    </View>
-  );
-}
-
 /** 「文件」右栏。 */
 export function SessionFilesPanel({
   model,
-  fileChanges = [],
-  selectedChangeId,
-  onSelectChange,
   onOpenFile,
   onSelectSource,
   onRefresh,
   onToggleHideIgnored,
   onLoadMoreAllFiles,
   onLoadMoreGitChanges,
-  openDiagnosticsEventId,
-  onOpenChangeDiagnostics,
 }: SessionFilesPanelProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -921,7 +638,6 @@ export function SessionFilesPanel({
       </View>
 
       {model.refreshState.kind === "unavailable" ? <Text style={styles.note} dataSet={{ fileRefreshUnavailable: "true" }}>{model.refreshState.reason}</Text> : null}
-      {model.refreshError === null ? null : <Text style={styles.error} dataSet={{ fileRefreshError: "true" }}>{model.refreshError}</Text>}
       <View style={styles.sources} dataSet={{ fileSources: "true" }}>
         {FILE_SOURCES.map((source) => {
           const selected = source === model.selectedSource;
@@ -1012,18 +728,6 @@ export function SessionFilesPanel({
 
       {model.selectedSource === "git" ? (
         <GitChanges model={model} onOpenFile={onOpenFile} onLoadMore={onLoadMoreGitChanges} />
-      ) : null}
-
-      {model.selectedSource === "session" ? (
-        <SessionChanges
-          model={model}
-          fileChanges={fileChanges}
-          selectedChangeId={selectedChangeId ?? null}
-          onSelectChange={onSelectChange}
-          onOpenFile={onOpenFile}
-          openDiagnosticsEventId={openDiagnosticsEventId ?? null}
-          onOpenChangeDiagnostics={onOpenChangeDiagnostics}
-        />
       ) : null}
     </View>
   );

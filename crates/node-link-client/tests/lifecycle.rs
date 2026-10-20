@@ -19,13 +19,13 @@ use node_link_protocol::catalog::{
 use node_link_protocol::common::{Text, Timestamp as WireTimestamp};
 use node_link_protocol::envelope::MessageType;
 
-use node_link_client::handshake::OwnerTrust;
+use node_link_client::handshake::{HandshakeConfig, OwnerTrust};
 use node_link_client::identity::NodeIdentity;
 use node_link_client::{ClientConfig, ClientError, NodeLinkClient, TlsTrust, TransportFactory};
 
 use support::{
     MemTransport, OwnerIdentity, OwnerIo, RecordingDeliveries, RecordingSink, accept_handshake,
-    decimal, encode_envelope, uuid_text,
+    decimal, encode_envelope, selected_features, send_challenge, uuid_text,
 };
 
 const ACCESS_NODE: &str = "9f1c3a52-6a4e-4f0e-8d3c-5b2a1e0f7c11";
@@ -91,11 +91,8 @@ async fn revocation_stops_reconnect_and_never_reopens_the_transport() {
     let (client_connection, mut io) = OwnerIo::pair();
     transport.push(client_connection);
 
-    let features = [
-        "node-link.core.v1",
-        "node-link.command-status.v1",
-        "node-link.session-create.v1",
-    ];
+    let features =
+        selected_features(&["node-link.command-status.v1", "node-link.session-create.v1"]);
     let owner_task = tokio::spawn(async move {
         let session = accept_handshake(&mut io, &owner, &features).await;
         let mut inbound = session.inbound_next;
@@ -177,7 +174,7 @@ async fn an_auth_revoked_error_also_stops_the_link() {
         let session = accept_handshake(
             &mut io,
             &owner_for_task,
-            &["node-link.core.v1", "node-link.command-status.v1"],
+            &selected_features(&["node-link.command-status.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -279,8 +276,12 @@ async fn shutdown_stops_every_supervisor_without_waiting_for_the_timeout() {
     let second_owner_for_task =
         OwnerIdentity::new([0x45; 32], "5c6d7e8f-9012-4a3b-8c4d-5e6f708192c3");
     let first_task = tokio::spawn(async move {
-        let session =
-            accept_handshake(&mut first_io, &first_owner_for_task, &["node-link.core.v1"]).await;
+        let session = accept_handshake(
+            &mut first_io,
+            &first_owner_for_task,
+            &selected_features(&[]),
+        )
+        .await;
         let mut inbound = session.inbound_next;
         let _ = first_io
             .recv_envelope(&session.connection_id, &mut inbound)
@@ -291,7 +292,7 @@ async fn shutdown_stops_every_supervisor_without_waiting_for_the_timeout() {
         let session = accept_handshake(
             &mut second_io,
             &second_owner_for_task,
-            &["node-link.core.v1"],
+            &selected_features(&[]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -341,7 +342,7 @@ async fn attachment_connections_use_the_post_handshake_sequence_and_abort_on_shu
     let (upload_started_tx, upload_started_rx) = tokio::sync::oneshot::channel();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     let owner_for_task = OwnerIdentity::new([0x48; 32], "5c6d7e8f-9012-4a3b-8c4d-5e6f708192c4");
-    let features = ["node-link.core.v1", "node-link.attachment-transfer.v1"];
+    let features = selected_features(&["node-link.attachment-transfer.v1"]);
     let owner_task = tokio::spawn(async move {
         let session = accept_handshake(&mut business_io, &owner_for_task, &features).await;
         let mut inbound = session.inbound_next;
@@ -477,7 +478,7 @@ async fn an_attachment_handshake_that_never_answers_times_out() {
         let session = accept_handshake(
             &mut business_io,
             &owner_for_task,
-            &["node-link.core.v1", "node-link.attachment-transfer.v1"],
+            &selected_features(&["node-link.attachment-transfer.v1"]),
         )
         .await;
         let mut inbound = session.inbound_next;
@@ -500,6 +501,48 @@ async fn an_attachment_handshake_that_never_answers_times_out() {
     stop_tx.send(()).expect("stop owner");
     owner_task.await.expect("owner task");
     link.shutdown().await;
+}
+
+/// Owner 只选中 `node-link.core.v1`（漏掉 required 的 `core.session-activity.v1`）时，客户端必须在
+/// 收到 challenge 后中止：不发出 `node.proof`，连接关闭（`NODE_LINK_PROTOCOL.md` §11.3）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_owner_that_skips_the_session_activity_feature_is_rejected() {
+    let owner = OwnerIdentity::new([0x4c; 32], "5c6d7e8f-9012-4a3b-8c4d-5e6f708192c6");
+    let (client_connection, mut io) = OwnerIo::pair();
+    let (mut sink, mut source) = client_connection.split();
+    let config = HandshakeConfig {
+        identity: Arc::new(FixedIdentity::new([0x4d; 32])),
+        owner: owner_trust(&owner),
+        supported_features: node_link_client::SUPPORTED_FEATURES
+            .iter()
+            .map(|feature| (*feature).to_owned())
+            .collect(),
+        required_features: node_link_client::REQUIRED_FEATURES
+            .iter()
+            .map(|feature| (*feature).to_owned())
+            .collect(),
+    };
+    let client = tokio::spawn(async move {
+        node_link_client::handshake::handshake(&mut *sink, &mut *source, &config).await
+    });
+
+    // challenge 本身合法、签名正确，但 `selectedFeatures` 少了必需的会话活跃度 feature。
+    send_challenge(&mut io, &owner, &[node_link_client::CORE_FEATURE]).await;
+    let error = client
+        .await
+        .expect("handshake task")
+        .expect_err("the client must reject a missing required feature");
+    assert!(matches!(error, ClientError::Handshake(_)), "got {error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains(node_link_client::SESSION_ACTIVITY_FEATURE),
+        "got {error}"
+    );
+    assert!(
+        io.recv().await.is_none(),
+        "the client must not send node.proof after rejecting the challenge"
+    );
 }
 
 /// 传输按**每条 Owner 的 `ClientConfig`** 构造：信任方式与 `max_message_bytes` 不再被进程级共享的
@@ -571,7 +614,7 @@ async fn every_owner_link_builds_its_transport_from_its_own_config() {
 async fn a_permanently_rejected_subscription_is_not_retried_after_reconnect() {
     const IMPORTED_SESSION: &str = "2bc8b944-2a4f-46a7-8c31-b2c40923f60b";
     const OWNER_NODE: &str = "5c6d7e8f-9012-4a3b-8c4d-5e6f708192a5";
-    let features = ["node-link.core.v1", "node-link.command-status.v1"];
+    let features = selected_features(&["node-link.command-status.v1"]);
     let owner = OwnerIdentity::new([0x33; 32], OWNER_NODE);
     let transport = Arc::new(MemTransport::default());
     let (first_connection, mut first_io) = OwnerIo::pair();

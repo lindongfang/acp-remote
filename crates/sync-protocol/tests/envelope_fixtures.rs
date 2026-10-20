@@ -33,7 +33,10 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// 的类型化媒体/部分结果视图），故由 113 变为 114。
 /// 同一变更（WP4）新增 1 条合法 `session.read` 结果夹具（消息页的加性 `channel`/`partial`），
 /// 故由 114 变为 115。
-const EXPECTED_VALID_MESSAGE_CASES: usize = 115;
+/// 变更 `session-activity-three-states`（WP1）新增 1 条合法 `session.read` 结果夹具（历史条目
+/// `view` 里保留旧七态 `session.updated` 原文，证明历史读取边界不受实时三态收窄影响），故由 115
+/// 变为 116。
+const EXPECTED_VALID_MESSAGE_CASES: usize = 116;
 /// 同一集合中 `valid: false` 且由**信封层**拒绝的用例数（`every_manifest_case_behaves_as_declared`
 /// 只显式登记 `invalid/ping-without-connection.json` 与 `invalid/sequence-is-number.json` 两条，
 /// 其余非法 WSS 用例都落在 body 类型化层）。
@@ -67,8 +70,11 @@ const EXPECTED_SKIPPED_PAIRING: usize = 18;
 /// 1 条 `common.schema.json#/$defs/agentContentBlock` 片段用例（`audio_ref` 类型化媒体块）与
 /// 1 条 `command.schema.json#/$defs/sessionReadResult` 片段用例（`resources.pending_interactions`
 /// 必须满足 `media.schema.json#/$defs/effectiveInteraction`），故由 14 变为 25。
+/// 变更 `session-activity-three-states`（WP1）新增 2 条 `common.schema.json#/$defs/sessionSummary`
+/// 片段用例（合法 `pending` 摘要，与旧七态 `waiting_permission` 作为实时摘要被拒的负例），故由 25
+/// 变为 27。
 /// 它们由 `check-schema-fixtures.mjs` 的 `checkValueAtPointer` 与 `tests/contract_vectors_r1_r9.rs` 覆盖。
-const EXPECTED_TARGETED_PAYLOADS: usize = 25;
+const EXPECTED_TARGETED_PAYLOADS: usize = 27;
 /// 附件传输帧（`schema` 指向 `attachment.schema.json`）的 manifest 用例数。它们属于独立已认证的
 /// 附件 WSS 连接（docs/SYNC_PROTOCOL.md §3.4），**不是** `message.schema.json` 的信封消息，因此不经
 /// 信封层与 `TypedBody`；正例/负例的结构由 `check-schema-fixtures.mjs` 用同一 schema 校验。这里是

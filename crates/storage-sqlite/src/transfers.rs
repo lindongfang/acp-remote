@@ -7,9 +7,9 @@
 //!   `seal_transfer` 以 32 KiB 为步长做流式 SHA-256，`read_chunk` 每次最多返回一块。
 //! - **事务与文件的顺序**：临时文件先写、校验通过后 rename，**再**提交引用行；删除一律在事务提交
 //!   之后（崩溃最坏留下无人引用的孤儿文件，绝不会留下悬空行）。
-//! - **首个有效答案胜出**：`resolve_effective` 用一条带 `state`/`invalidated_at`/`request_version`
-//!   条件的 `UPDATE` 仲裁；受影响行数为 0 时在同一事务内回读，区分「已处理」「版本不符」「已失效」
-//!   与「不存在」，失败校验不消费请求。
+//! - **交互阶段**：`effective` 只读 `pending` 未失效行；仲裁（`pending -> resolved`）与确认
+//!   （`resolved + confirmed_at IS NULL -> confirmed_at`）都走 `SessionStore::commit`，因此首答胜出、
+//!   确认与会话摘要永远在同一事务里收敛。本模块只保留读与批量失效。
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -20,18 +20,18 @@ use sqlx::sqlite::SqliteRow;
 use acp_core::model::{
     AttachmentId, AttachmentSubject, AttachmentSubmission, AttachmentTransfer,
     AttachmentTransferState, ConflictKind, Digest, EffectiveInteraction, ElicitationSchema,
-    EntityRef, InteractionId, InteractionKind, InteractionOption, InteractionResolution, PortError,
-    Resolution, SealedAttachment, SessionId, SubmissionId, Timestamp, UnavailableKind, Version,
+    EntityRef, InteractionId, InteractionKind, InteractionOption, PortError, SealedAttachment,
+    SessionId, SubmissionId, Timestamp, UnavailableKind, Version,
 };
 use acp_core::ports::{
-    AttachmentChunk, AttachmentRead, AttachmentTransferStore, ChunkOutcome, EffectiveResolution,
-    InteractionAuthority, SubmissionBegin, SubmissionPage, SubmissionProgress, SubmissionSeal,
-    TransferBegin, TransferChunk, TransferSeal,
+    AttachmentChunk, AttachmentRead, AttachmentTransferStore, ChunkOutcome, InteractionAuthority,
+    SubmissionBegin, SubmissionPage, SubmissionProgress, SubmissionSeal, TransferBegin,
+    TransferChunk, TransferSeal,
 };
 
 use crate::error::StorageError;
 use crate::migrate::{self, StorageConfig, window};
-use crate::session_store::{Db, SqliteStore, actor_key, int, opt_text, text};
+use crate::session_store::{Db, SqliteStore, int, opt_text, text};
 
 /// 附件传输的固定单块上限（与 core 的常量同值；wire 的 `chunkSize` 也是它）。
 const CHUNK_SIZE: usize = 32_768;
@@ -1237,97 +1237,6 @@ impl InteractionAuthority for SqliteStore {
         Ok(effective)
     }
 
-    async fn resolve_effective(&self, write: EffectiveResolution) -> Result<Resolution, PortError> {
-        self.writable()?;
-        write.resolution.validate().map_err(PortError::from)?;
-        let (decision_option_id, decision_kind, elicitation_action, elicitation_values) =
-            match &write.resolution {
-                InteractionResolution::Permission(decision) => (
-                    Some(decision.option_id().to_owned()),
-                    Some(decision.kind().as_str()),
-                    None,
-                    None,
-                ),
-                InteractionResolution::Elicitation { action, values } => (
-                    None,
-                    None,
-                    Some(action.as_str()),
-                    Some(values.to_json_text()),
-                ),
-            };
-        let (resolved_by_kind, resolved_by_id) = actor_key(&write.actor);
-        let mut tx = self
-            .pools()
-            .write
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .db()?;
-        let mut statement = String::from(
-            "UPDATE owned_interaction SET state = 'resolved', resolved_at = ?1, \
-             decision_option_id = ?2, decision_kind = ?3, elicitation_action = ?4, \
-             elicitation_values_json = ?5, resolved_by_kind = ?6, resolved_by_id = ?7 \
-             WHERE interaction_id = ?8 AND session_id = ?9 AND state = 'pending' \
-             AND invalidated_at IS NULL",
-        );
-        if write.request_version.is_some() {
-            statement.push_str(" AND request_version = ?10");
-        }
-        let mut query = sqlx::query(&statement)
-            .bind(write.at.as_str())
-            .bind(decision_option_id)
-            .bind(decision_kind)
-            .bind(elicitation_action)
-            .bind(elicitation_values)
-            .bind(resolved_by_kind.as_str())
-            .bind(resolved_by_id)
-            .bind(write.interaction.as_str())
-            .bind(write.session.as_str());
-        if let Some(version) = write.request_version {
-            query = query.bind(storable(version.get())?);
-        }
-        let affected = query.execute(&mut *tx).await.db()?.rows_affected();
-        if affected == 1 {
-            tx.commit().await.db()?;
-            return Ok(Resolution::Resolved);
-        }
-        let row = sqlx::query(
-            "SELECT state, invalidated_at, request_version, session_id FROM owned_interaction \
-             WHERE interaction_id = ?1",
-        )
-        .bind(write.interaction.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .db()?;
-        let Some(row) = row else {
-            return Err(PortError::NotFound(EntityRef::Interaction(
-                write.interaction,
-            )));
-        };
-        if text(&row, "session_id")? != write.session.as_str() {
-            // 只有同一会话才能解析；不匹配按「不存在」处理，避免泄露其它会话的交互事实。
-            return Err(PortError::NotFound(EntityRef::Interaction(
-                write.interaction,
-            )));
-        }
-        if opt_text(&row, "invalidated_at")?.is_some() {
-            // 失效行现在同时是 `state = 'expired'`：先判失效，才能把「上游丢失」与「别的设备抢先
-            // 解析」区分开（前者 `Conflict(Expired)`，后者 `AlreadyResolved`）。
-            return Err(PortError::Conflict(ConflictKind::Expired));
-        }
-        if text(&row, "state")? != "pending" {
-            return Ok(Resolution::AlreadyResolved);
-        }
-        if let Some(expected) = write.request_version {
-            let current = u64::try_from(int(&row, "request_version")?)
-                .map_err(|_| PortError::Corrupt("request_version is negative"))?;
-            if current != expected.get() {
-                return Err(PortError::Conflict(ConflictKind::VersionMismatch));
-            }
-        }
-        // 行仍 pending、未失效、版本相符却更新不到：只可能是并发写者已抢先解析。
-        Ok(Resolution::AlreadyResolved)
-    }
-
     async fn invalidate_pending(
         &self,
         session: Option<&SessionId>,
@@ -1335,12 +1244,16 @@ impl InteractionAuthority for SqliteStore {
     ) -> Result<u32, PortError> {
         self.writable()?;
         // 失效必须同时把 `state` 推进到 `expired`：所有「仍在等待」的读面（`effective`、`read_session`
-        // 的 pending 集合、Node Link 快照）与旧解析路径都按 `state = 'pending'` 过滤，只写
-        // `invalidated_at` 会让它们继续把失效请求当成可应答。`invalidated_at` 保留失效时刻供诊断。
+        // 的 pending 集合、Node Link 快照）与旧的解析路径都按状态过滤，只写 `invalidated_at` 会让它们
+        // 继续把失效请求当成可应答。失效范围是**仍未解决**的行：`pending` 与已仲裁但未确认的
+        // `resolved`（`session-activity` D2：仲裁不等于处理完成）。已确认的行保留原状。
+        // `invalidated_at` 保留失效时刻供诊断。
         let affected = match session {
             Some(session) => sqlx::query(
                 "UPDATE owned_interaction SET state = 'expired', invalidated_at = ?1 \
-                 WHERE state = 'pending' AND invalidated_at IS NULL AND session_id = ?2",
+                 WHERE invalidated_at IS NULL \
+                 AND (state = 'pending' OR (state = 'resolved' AND confirmed_at IS NULL)) \
+                 AND session_id = ?2",
             )
             .bind(at.as_str())
             .bind(session.as_str())
@@ -1349,7 +1262,8 @@ impl InteractionAuthority for SqliteStore {
             .db()?,
             None => sqlx::query(
                 "UPDATE owned_interaction SET state = 'expired', invalidated_at = ?1 \
-                 WHERE state = 'pending' AND invalidated_at IS NULL",
+                 WHERE invalidated_at IS NULL \
+                 AND (state = 'pending' OR (state = 'resolved' AND confirmed_at IS NULL))",
             )
             .bind(at.as_str())
             .execute(&self.pools().write)

@@ -85,10 +85,7 @@
   .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--ink-3);display:inline-block}
   .dot.running{background:var(--ok);animation:ring 1.6s ease-out infinite}
   @keyframes ring{0%{box-shadow:0 0 0 0 rgba(18,138,78,.45)}70%{box-shadow:0 0 0 6px rgba(18,138,78,0)}100%{box-shadow:0 0 0 0 rgba(18,138,78,0)}}
-  .dot.queued{background:var(--accent)}
-  .dot.waiting_permission,.dot.waiting_input{background:var(--warn)}
-  .dot.failed{background:var(--danger)}
-  .dot.closed{opacity:.55}
+  .dot.pending{background:var(--warn)}
 
   /* ---------- 通用 ---------- */
   .scroll{flex:1;overflow:auto;padding:10px 12px;padding-bottom:calc(10px + var(--sab))}
@@ -565,7 +562,7 @@
     <div class="row" id="navRow">
       <button data-go="#/dirs">目录</button>
       <button data-go="#/chat/s1">对话</button>
-      <button data-go="#/chat/s2">待授权</button>
+      <button data-go="#/chat/s2">待处理</button>
       <button data-go="#/pair/S0">配对</button>
     </div>
     <label>配对页状态<select id="pairSel">
@@ -600,8 +597,8 @@
     <label>对话状态<select id="scenSel">
       <option value="running">运行中</option>
       <option value="idle">空闲</option>
-      <option value="waiting">等待授权</option>
-      <option value="failed">失败</option>
+      <option value="pending">待处理（有未解决交互）</option>
+      <option value="failed">空闲（上一轮失败）</option>
     </select></label>
     <label>上下文<select id="ctxSel">
       <option value="mid">中 48%</option>
@@ -647,8 +644,8 @@
     { id:"sandbox",  name:"sandbox", path:"D:\\tmp\\sandbox" },
     { id:"unsorted", name:"未分组",   path:null }
   ];
-  function mk(id,title,agent,state,at,dir){
-    return { id:id,title:title,agent:agent,state:state,at:at,dir:dir };
+  function mk(id,title,agent,state,at,dir,turnResult){
+    return { id:id,title:title,agent:agent,state:state,at:at,dir:dir,turnResult:turnResult||null };
   }
   /* 会话时间：每条会话带真实时间戳，展示由 whenLabel 现算（1 小时内「N 分钟前」，超过给年月日） */
   var HOUR = 3600000;
@@ -662,7 +659,7 @@
   }
   var SESSIONS = [
     mk("s1","修复登录超时","codex","running",agoMin(2),"work-api"),
-    mk("s2","迁移数据库","omp","waiting_permission",agoMin(8),"work-api"),
+    mk("s2","迁移数据库","omp","pending",agoMin(8),"work-api"),
     mk("s3","补充分页测试","omp","idle",agoMin(12),"work-api"),
     mk("s4","重构鉴权模块","codex","idle",atTime("2026-09-17T17:20:00"),"work-api"),
     mk("s5",null,"codex","idle",atTime("2026-09-11T10:05:00"),"work-api"),
@@ -670,7 +667,7 @@
     mk("s7","排查内存泄漏","omp","idle",atTime("2026-08-28T11:05:00"),"work-api"),
     mk("s8","周报草稿","omp","idle",atTime("2026-09-17T09:12:00"),"site"),
     mk("s9",null,"codex","idle",atTime("2026-09-11T15:40:00"),"site"),
-    mk("s10","失败的实验","omp","failed",atTime("2026-09-16T11:02:00"),"site"),
+    mk("s10","失败的实验","omp","idle",atTime("2026-09-16T11:02:00"),"site","failed"),
     mk("s11","老会话","codex","idle",atTime("2026-09-10T16:20:00"),"unsorted"),
     mk("s12","建库初期的测试","omp","idle",atTime("2026-09-02T09:30:00"),"unsorted")
   ];
@@ -683,9 +680,9 @@
     var dirs = ["work-api","site","sandbox","unsorted"];
     for(var i=0;i<80;i++){
       SESSIONS.push(mk("g"+i, POOL[i%POOL.length] + (i>=POOL.length?"（续）":""), i%3===0?"codex":"omp",
-        (i%11===3)?"failed":"idle",
+        "idle",
         atTime(DATES_M[i%DATES_M.length] + "T" + (10 + i%5) + ":" + String((10 + i%4*12)%60).padStart(2,"0") + ":00"),
-        dirs[i%4]));
+        dirs[i%4], (i%11===3)?"failed":null));
     }
   })();
   SESSIONS.sort(function(a,b){ return b.at - a.at; });   /* 一律按时间倒序 */

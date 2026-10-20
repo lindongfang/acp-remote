@@ -92,9 +92,9 @@ export type DirectoryContentOrigin = "live" | "last_sync";
 /**
  * 目录页的状态筛选。
  *
- * `all` 不过滤；`running` 命中存在排队中或运行中会话的目录；`pending` 命中存在等待输入
- * 或等待授权会话的目录。判定复用会话汇总里的 `active`/`pending`（与 `buildDirectoryViews`
- * 同源），因此不会出现第二套状态口径。
+ * `all` 不过滤；`running` 命中存在 `running` 会话的目录；`pending` 命中存在 `pending`
+ * 会话的目录。判定复用会话汇总里的 `active`/`pending`（与 `buildDirectoryViews` 同源），
+ * 因此不会出现第二套状态口径。
  */
 export type DirectoryFilter = "all" | "running" | "pending";
 
@@ -391,14 +391,8 @@ export function filterSessionsForDirectory(input: {
   const needle = input.query.trim().toLowerCase();
   const nameMatches = needle.length === 0 || input.displayName.toLowerCase().includes(needle);
   return input.rows.filter((row) => {
-    if (input.filter === "running" && row.state !== "running" && row.state !== "queued") return false;
-    if (
-      input.filter === "pending" &&
-      row.state !== "waiting_input" &&
-      row.state !== "waiting_permission"
-    ) {
-      return false;
-    }
+    if (input.filter === "running" && row.state !== "running") return false;
+    if (input.filter === "pending" && row.state !== "pending") return false;
     if (nameMatches) return true;
     return row.title.toLowerCase().includes(needle);
   });

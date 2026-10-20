@@ -37,6 +37,12 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 /// `node-link.core.v1`（`compatibility/features/v1/features.json`）。
 pub const CORE_FEATURE: &str = "node-link.core.v1";
 
+/// `core.session-activity.v1`：会话状态只有 `idle|running|pending` 三态。
+///
+/// 该 feature 在登记表里是 `required`：Owner 未选中它时，编解码层会把三态之外的旧值当成非法，
+/// 因此握手阶段必须失败关闭（`NODE_LINK_PROTOCOL.md` §11.3）。
+pub const SESSION_ACTIVITY_FEATURE: &str = "core.session-activity.v1";
+
 /// `node-link.raw-acp.v1`。
 pub const RAW_ACP_FEATURE: &str = "node-link.raw-acp.v1";
 
@@ -62,8 +68,9 @@ pub const REMOTE_HISTORY_FEATURE: &str = "node-link.remote-history.v1";
 ///
 /// 每一条都对应当前真实实现的客户端行为：附件转发（有界内存）、类型化媒体映射、有效交互读取与远程
 /// 历史分页。未实现的能力不在此列——能力协商不得虚报（`AGENTS.md` §4）。
-pub const SUPPORTED_FEATURES: [&str; 8] = [
+pub const SUPPORTED_FEATURES: [&str; 9] = [
     CORE_FEATURE,
+    SESSION_ACTIVITY_FEATURE,
     RAW_ACP_FEATURE,
     COMMAND_STATUS_FEATURE,
     SESSION_CREATE_FEATURE,
@@ -74,7 +81,10 @@ pub const SUPPORTED_FEATURES: [&str; 8] = [
 ];
 
 /// 没有这些 feature 就没有可用的业务语义（§11：Owner 未选中时必须中止）。
-pub const REQUIRED_FEATURES: [&str; 1] = [CORE_FEATURE];
+///
+/// `core.session-activity.v1` 与 `node-link.core.v1` 一起是注册表里的 `required`：三态摘要
+/// 是 catalog/事件投影的既定语义，缺少它时旧七态会以非法值进入 core。
+pub const REQUIRED_FEATURES: [&str; 2] = [CORE_FEATURE, SESSION_ACTIVITY_FEATURE];
 
 /// Owner 的已配对身份（来自本机 `TrustStore`，**不**取自 wire）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,14 +202,9 @@ pub async fn handshake(
         .iter()
         .map(|feature| feature.as_str().to_owned())
         .collect();
-    for required in &config.supported_features {
+    for required in &config.required_features {
         // 只校验「本端要求」的那一批；supported 里其余条目允许 Owner 不选（显式降级）。
-        if config
-            .required_features
-            .iter()
-            .any(|entry| entry == required)
-            && !selected.iter().any(|entry| entry == required)
-        {
+        if !selected.iter().any(|entry| entry == required) {
             return Err(ClientError::Handshake(format!(
                 "the owner did not select required feature {required}"
             )));

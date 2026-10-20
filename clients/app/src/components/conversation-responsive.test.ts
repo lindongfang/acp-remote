@@ -232,7 +232,7 @@ describe("对话页宽窄两形态：信息集合相同", () => {
       expect(html).toContain('data-conversation-column="timeline"');
       expect(html).toContain('data-conversation-column="files"');
       expect(html).toContain('data-timeline="entries"');
-      expect(html).toContain('data-file-changes="list"');
+      expect(html).toContain('data-files-panel-unavailable="true"');
       expect(html).toContain('data-composer="in_progress"');
       expect(html).toContain('data-settings="true"');
       expect(html).toContain('data-capabilities="true"');
@@ -437,6 +437,33 @@ describe("跳转入口的判定（纯函数）", () => {
     );
     expect(edge).toEqual({ visible: 0, above: [0], below: [1] });
     expect(JUMP_VIEWPORT_GUARD_PX).toBe(10);
+  });
+});
+
+describe("文件栏两来源：宽窄屏一致", () => {
+  it("宽屏与窄屏都只有全部文件 / Git 变更，且默认全部文件", () => {
+    const fixture = storeOf();
+    fill(fixture, "agent");
+    const model = pageOf(fixture.store);
+    const filesPanel = fixture.store.sessionFilesPage(ONLINE_SESSION_ID);
+    for (const width of [NARROW_WIDTH, WIDE_WIDTH]) {
+      const html = renderToStaticMarkup(
+        createElement(ConversationStream, {
+          model,
+          filesPanel,
+          onLoadEarlier: () => undefined,
+          onOpenDiagnostics: () => undefined,
+          availableWidth: width,
+          secondaryView: width === NARROW_WIDTH ? "files" : "all",
+          onSecondaryViewChange: () => undefined,
+        }),
+      );
+      const options = [...html.matchAll(/data-file-source-option="([^"]+)"/g)].map((match) => match[1]);
+      expect(options, `宽度 ${String(width)} 的来源集合`).toEqual(["all", "git"]);
+      expect(html).toContain('data-file-source-option="all" data-file-source-selected="true"');
+      expect(html).not.toContain('data-file-source-option="session"');
+      expect(html).not.toContain("会话变更");
+    }
   });
 });
 

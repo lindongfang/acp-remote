@@ -9,8 +9,9 @@
 //!   PortError` 把它收敛成 `PortError::InvalidRequest`）。没有 `From<String>`，也不提供可变字段。
 //! - **带不变量的记录**：字段私有 + `try_new(..)` + 只读访问器；纯由已验证类型组合、且没有跨字段规则的
 //!   聚合（`PendingEvent`/`CommittedEvent`/`ClientCommand` 等）用公有字段，跨字段规则另给 `validate()`。
-//! - **状态机**：`Session`/`Turn` 的状态字段私有，只能经 `transition(..)` 前进；终止态不可离开
-//!   （`SessionState::Failed`/`Closed`、`TurnState::Completed`/`Failed`/`Cancelled`）。
+//! - **状态机**：`Session`/`Turn` 的状态字段私有，只能经 `transition(..)` 前进。会话主状态只有
+//!   `idle`/`running`/`pending` 且没有终态，取值统一由 `SessionActivity::reduce` 归约；turn 的终态
+//!   （`TurnState::Completed`/`Failed`/`Cancelled`）不可离开。
 //! - **不读系统时间**：所有需要时间的入口都把 `Timestamp` 作为参数传入（§2）；本层不提供 `now()`。
 //! - **不 panic**：正常路径没有 `unwrap`/`expect`/`panic`，错误都是返回值。
 //!

@@ -204,15 +204,13 @@ export interface AgentCatalogEntry {
   readonly default: boolean;
 }
 
-/** `$defs.sessionSummary.state`：封闭词表（目录页的「待处理」徽标由此得出）。 */
-export type SessionState =
-  | "idle"
-  | "queued"
-  | "running"
-  | "waiting_input"
-  | "waiting_permission"
-  | "failed"
-  | "closed";
+/**
+ * `$defs.sessionSummary.state`：封闭词表（目录页的「待处理」徽标由此得出）。
+ *
+ * 只表达活跃程度：存在有效未解决交互时为 `pending`；否则存在未结束任务（含已接受的排队任务）
+ * 时为 `running`；否则为 `idle`。排队、等待原因与任务结果不属于本词表。
+ */
+export type SessionState = "idle" | "running" | "pending";
 
 /** `$defs.sessionSummary.agent`（内嵌对象，无独立 `$defs` 条目）。 */
 export interface SessionSummaryAgent {

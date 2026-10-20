@@ -10,9 +10,10 @@
  * - 取消未确认前只能是「取消请求已提交」：那时渲染结果里**没有**可点的取消按钮，也没有
  *   「已空闲」的呈现。
  *
- * 三态另用「输入框是否只读 + 发送/停止按钮是否出现」两组属性钉住（进行中**可编辑**但发送
- * 禁用、不排队；已关闭只读），附件不受支持是**显式说明**（断言说明文案与 `attachmentsSupported=false`
- * 同时在），而不是「没提」。
+ * 三态另用「输入框是否可编辑 + 发送/停止按钮是否出现」两组属性钉住：三种状态**都**可编辑
+ * 草稿，`in_progress`/`unavailable` 只是发送禁用，且 `unavailable` 必须说明当前实际原因；
+ * 附件不受支持是**显式说明**（断言说明文案与 `attachmentsSupported=false` 同时在），而不是
+ * 「没提」。
  */
 
 import { createElement } from "react";
@@ -29,8 +30,8 @@ import { resources, session, storeWith } from "../features/testing/fixtures";
 function input(overrides: Partial<ConversationInputModel>): ConversationInputModel {
   return {
     state: "editable",
+    blockedBy: null,
     draft: "帮我改一下",
-    draftEditable: true,
     canSubmit: true,
     disabledReason: null,
     attachmentsSupported: false,
@@ -191,7 +192,7 @@ describe("输入区三态与附件边界", () => {
     const html = render(
       input({
         state: "in_progress",
-        draftEditable: true,
+        blockedBy: "turn_in_progress",
         canSubmit: false,
         disabledReason: "会话进行中，完成后可继续输入",
         cancel: { kind: "available", failure: null },
@@ -214,7 +215,7 @@ describe("输入区三态与附件边界", () => {
     const html = render(
       input({
         state: "in_progress",
-        draftEditable: true,
+        blockedBy: "turn_in_progress",
         canSubmit: false,
         disabledReason: "会话进行中，完成后可继续输入",
         cancel: { kind: "unavailable" },
@@ -227,20 +228,23 @@ describe("输入区三态与附件边界", () => {
     expect(tagContaining(html, 'data-composer-input="in_progress"')).not.toMatch(/readonly/i);
   });
 
-  it("已关闭：输入框只读、提交不可点，并说明原因", () => {
+  it("不可用（来源离线）：输入框仍可编辑，提交不可点，并说明当前实际原因", () => {
     const html = render(
       input({
-        state: "closed",
-        draftEditable: false,
+        state: "unavailable",
+        blockedBy: "source_offline",
         canSubmit: false,
-        disabledReason: "会话已关闭，不能提交",
+        disabledReason: "连接不可用，不能提交",
       }),
     );
 
-    expect(html).toContain('data-composer="closed"');
+    expect(html).toContain('data-composer="unavailable"');
     expect(html).toContain('data-submit-enabled="false"');
-    expect(tagContaining(html, 'data-composer-input="closed"')).toMatch(/readonly/i);
-    expect(html).toContain("会话已关闭，不能提交");
+    // 反例：把「不可用」实现成只读 → 下面两条会红。
+    expect(tagContaining(html, 'data-composer-input="unavailable"')).not.toMatch(/readonly/i);
+    expect(html).toContain('data-composer-state-hint="unavailable"');
+    expect(html).toContain("连接不可用，不能提交");
+    expect(html).toContain("当前不可提交 · 草稿仍可编辑");
   });
 });
 
@@ -361,14 +365,16 @@ describe("输入区：生产路径（仓库模型 → 组件）", () => {
     );
   }
 
-  it("已关闭的会话：输入区是 closed 且不可提交（关闭是快照给的，不是页面猜的）", () => {
+  it("未连接：输入区是 unavailable 且不可提交，原因来自当前连接而不是会话主状态", () => {
     const sessionId = "aaaaaaaa-0000-4000-8000-0000000000c9";
-    const { store } = storeWith({ resources: resources({ sessions: [session({ id: sessionId, state: "closed" })] }) });
+    const { store } = storeWith({ resources: resources({ sessions: [session({ id: sessionId, state: "idle" })] }) });
     const html = renderInputOf(store, sessionId);
 
-    expect(html).toContain('data-composer="closed"');
+    expect(html).toContain('data-composer="unavailable"');
     expect(html).toContain('data-submit-enabled="false"');
-    expect(html).toContain("会话已关闭，不能提交");
+    expect(html).toContain("连接不可用，不能提交");
+    // 主状态是 `idle` 也不构成只读：草稿仍可编辑。
+    expect(tagContaining(html, 'data-composer-input="unavailable"')).not.toMatch(/readonly/i);
   });
 
   it("来源为其它节点且离线的会话：草稿只在内存（R20 的输入侧）", () => {

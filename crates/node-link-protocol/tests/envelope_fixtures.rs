@@ -36,7 +36,9 @@ const TRANSPORT_FRAME_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/attachment.sch
 
 const EXPECTED_VALID_MESSAGE_CASES: usize = 38;
 const EXPECTED_ENVELOPE_REJECTED: usize = 1;
-const EXPECTED_BODY_REJECTED: usize = 10;
+/// 变更 `session-activity-three-states`（WP1）新增 1 条负例（`resource.attached` 的
+/// `sessionMeta.state` 用旧七态取值），故由 10 变为 11。
+const EXPECTED_BODY_REJECTED: usize = 11;
 const EXPECTED_SKIPPED_PAIRING: usize = 2;
 const EXPECTED_SKIPPED_TRANSPORT_FRAMES: usize = 24;
 

@@ -1,7 +1,7 @@
 /**
- * D7 授权与提问应答的**四条边界**（spec「授权与提问应答的可用边界」）。
+ * D7 授权与提问应答的三条边界（spec「授权与提问应答的可用边界」）。
  *
- * 四条边界各有一条实测：
+ * 三条边界各有一条实测：
  *
  * 1. **亲历的请求可应答**：本设备连接期间收到 `permission.requested` → 可选项来自该请求自身，
  *    提交后派发 `permission.resolve`，呈现先变 `submitting`（待确认）再变 `handled_here`。
@@ -9,7 +9,10 @@
  *    → `not_answerable(read_from_history)`，且 `resolvePermission` **不派发任何命令**。
  * 3. **已被其它设备处理**：`permission.resolved` 的 `resolvedByDeviceId` 不是本设备
  *    → `handled_elsewhere`，重复提交被拒绝（`interactions` 不可重复提交，spec MUST NOT）。
- * 4. **会话已关闭**：即便请求是亲历的，也不能再应答。
+ *
+ * 会话主状态不再是应答的边界：`idle`/`running`/`pending` 都不构成「不能再应答」，也**不**
+ * 存在 `session_closed` 这一不可应答原因。历史事件视图里的旧七态标签（例如 `closed`）不会被
+ * 当成当前摘要应用——见下面「旧标签不覆盖当前状态」。
  *
  * 另有一条对照证明「本设备提交并获确认」呈现为 `handled_here`（否则上面第 1 条只是「永远
  * 不确认」的平凡通过）。
@@ -262,25 +265,25 @@ describe("D7 边界三：已被其它设备处理", () => {
   });
 });
 
-describe("D7 边界四：会话已关闭", () => {
-  it("会话关闭后亲历的请求也不能再应答", () => {
-    const { store, gateway } = interactionStore();
-    store.apply(permissionRequested({ eventId: "dddddddd-0000-4000-8000-0000000000c8", globalSequence: "18" }));
-    expect(interactionViewOf(store, PERMISSION_ID)?.availability.kind).toBe("answerable");
-
-    store.apply({
+describe("旧七态标签不覆盖当前三态", () => {
+  /** 一条携带旧七态摘要的 `session.updated`（历史事件视图可能仍带这种载荷）。 */
+  function legacySummaryEvent(eventId: string, globalSequence: string, state: string): {
+    readonly kind: "event";
+    readonly event: EventMessage;
+  } {
+    return {
       kind: "event",
       event: eventMessage({
         eventType: "session.updated",
-        eventId: "dddddddd-0000-4000-8000-0000000000c9",
+        eventId,
         sessionId: ONLINE_SESSION_ID,
-        globalSequence: "19",
+        globalSequence,
         view: {
           session: {
             sessionId: ONLINE_SESSION_ID,
-            title: null,
+            title: "历史标题",
             agent: { agentId: "claude", name: "Claude" },
-            state: "closed",
+            state,
             origin: { kind: "local" },
             currentMode: null,
             version: "2",
@@ -289,50 +292,41 @@ describe("D7 边界四：会话已关闭", () => {
           },
         },
       }),
-    });
+    };
+  }
 
-    expect(interactionViewOf(store, PERMISSION_ID)?.availability).toEqual({
-      kind: "not_answerable",
-      reason: "session_closed",
-    });
-    const dispatches = gateway.dispatches.length;
+  it("旧 `closed` 标签既不写进当前状态，也不让交互或提交变得不可用", () => {
+    const { store, gateway } = interactionStore();
+    store.apply(permissionRequested({ eventId: "dddddddd-0000-4000-8000-0000000000c8", globalSequence: "18" }));
+    const before = store.conversationPage(ONLINE_SESSION_ID);
+    expect(before?.header.state).toBe("running");
+
+    // 反例：把历史旧标签当实时摘要应用 → 状态变成 closed、交互变为不可应答、提交被拦。
+    store.apply(legacySummaryEvent("dddddddd-0000-4000-8000-0000000000c9", "19", "closed"));
+
+    const summary = store.state.resources?.sessions.find((item) => item.sessionId === ONLINE_SESSION_ID);
+    expect(summary?.state).toBe("running");
+    expect(store.conversationPage(ONLINE_SESSION_ID)?.header.state).toBe("running");
+    expect(interactionViewOf(store, PERMISSION_ID)?.availability.kind).toBe("answerable");
+
     const outcome = store.resolvePermission(ONLINE_SESSION_ID, PERMISSION_ID, "allow-once");
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.reason).toContain("会话已关闭");
-    expect(gateway.dispatches).toHaveLength(dispatches);
+    expect(outcome.ok).toBe(true);
+    expect(lastDispatch(gateway).body.command).toBe("permission.resolve");
   });
 
-  it("会话关闭后也不接受文本提交（输入区的第三种状态）", () => {
+  it("旧 `closed` 标签不再限制文本提交（三态里没有第三种只读）", () => {
     const { store, gateway } = interactionStore();
-    store.apply({
-      kind: "event",
-      event: eventMessage({
-        eventType: "session.updated",
-        eventId: "dddddddd-0000-4000-8000-0000000000ca",
-        sessionId: ONLINE_SESSION_ID,
-        globalSequence: "20",
-        view: {
-          session: {
-            sessionId: ONLINE_SESSION_ID,
-            title: null,
-            agent: { agentId: "claude", name: "Claude" },
-            state: "closed",
-            origin: { kind: "local" },
-            currentMode: null,
-            version: "3",
-            createdAt: "2026-10-01T00:00:00.000Z",
-            updatedAt: "2026-10-01T00:00:06.000Z",
-          },
-        },
-      }),
-    });
+    store.apply(legacySummaryEvent("dddddddd-0000-4000-8000-0000000000ca", "20", "waiting_permission"));
 
     const page = store.conversationPage(ONLINE_SESSION_ID);
-    expect(page?.input.state).toBe("closed");
-    expect(page?.input.canSubmit).toBe(false);
+    // 反例：旧标签把输入区判成 closed → 状态与原因都会以「已关闭」出现。
+    expect(page?.input.state).toBe("editable");
+    expect(page?.input.blockedBy).toBeNull();
+
     const dispatches = gateway.dispatches.length;
-    expect(store.submitPrompt(ONLINE_SESSION_ID, "还能发吗").ok).toBe(false);
-    expect(gateway.dispatches).toHaveLength(dispatches);
+    expect(store.submitPrompt(ONLINE_SESSION_ID, "还能发吗").ok).toBe(true);
+    expect(gateway.dispatches.length).toBe(dispatches + 1);
+    expect(lastDispatch(gateway).body.command).toBe("session.prompt");
   });
 });
 

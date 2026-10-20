@@ -793,6 +793,11 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-result-session-read-history-legacy-state.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "invalid/command-session-read-before-missing-message-id.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
@@ -1397,6 +1402,19 @@
       "schema": "../../../schemas/sync/v1/common.schema.json",
       "schemaPointer": "#/$defs/agentContentBlock",
       "valid": true
+    },
+    {
+      "fixture": "valid/session-summary-pending.json",
+      "schema": "../../../schemas/sync/v1/common.schema.json",
+      "schemaPointer": "#/$defs/sessionSummary",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/session-summary-state-waiting-permission.json",
+      "schema": "../../../schemas/sync/v1/common.schema.json",
+      "schemaPointer": "#/$defs/sessionSummary",
+      "valid": false,
+      "expectedKeyword": "enum"
     },
     {
       "fixture": "valid/view-agent-message-completed-channel-partial.json",

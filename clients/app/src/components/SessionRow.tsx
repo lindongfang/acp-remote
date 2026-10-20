@@ -17,9 +17,9 @@
  *
  * - **圆点**：所有状态都画，颜色按状态取主题 token（原型 `.dot.<state>`）。它同时带
  *   `data-session-state`（状态标识，不是文案）——那是 e2e 的机器证据。
- * - **状态词**：只有「等待输入 / 等待授权」两档追加，词表复用 `StatusPill` 的**唯一一份**
+ * - **状态词**：只有 `pending` 追加，词表复用 `StatusPill` 的**唯一一份**
  *   `SESSION_STATE_LABEL`，但按原型 `.stword` 渲染成纯文字（不是带底色的胶囊），于是用户
- *   不必进入会话就知道在等什么。
+ *   不必进入会话就知道有请求在等自己处理（等待原因另由会话内容说明）。
  *
  * 组件是纯函数：所有交互通过回调上抛，导航由页面负责。
  */
@@ -46,57 +46,38 @@ import {
 } from "./theme";
 
 /**
- * 状态圆点需要的、**解释「在等什么」**的两档：只有它们追加状态词。
+ * 状态圆点需要的、**解释「在等我们处理」**的一档：只有它追加状态词。
  *
  * 用「状态 → 是否有状态词」的显式映射（与 `domain/directory.ts` 的 `IS_ACTIVE` 同一写法），
- * 而不是在渲染路径上写 `=== "waiting_input" || === "waiting_permission"`：新增状态时这里会
- * 编译不过，从而必须显式决定它有没有状态词。
+ * 而不是在渲染路径上写 `=== "pending"`：新增状态时这里会编译不过，从而必须显式决定它有没有
+ * 状态词。等待的具体原因（授权 / 提问）由会话内容表达，不再占用主状态词表。
  */
 const NEEDS_STATE_WORD: Readonly<Record<SessionStateView, true | undefined>> = {
-  waiting_input: true,
-  waiting_permission: true,
+  pending: true,
   idle: undefined,
-  queued: undefined,
   running: undefined,
-  failed: undefined,
-  closed: undefined,
 };
 
 /**
  * 状态 → 圆点颜色 token。
  *
- * 与 `StatusPill` 的 `TONE_BY_STATE` **同一组** token（`ok`/`warn`/`danger`/`accent`/`ink3`），
+ * 与 `StatusPill` 的 `TONE_BY_STATE` **同一组** token（`ok`/`warn`/`ink3`），
  * 只是圆点要的是实心色而不是「前景 + 底色」一对。键取自同一个 `SessionStateView` 联合，
  * 因此新增状态时两处都会编译不过，配色不会单方面漂移。
  */
 const DOT_TOKEN_BY_STATE: Record<SessionStateView, ColorToken> = {
   idle: "ink3",
-  queued: "accent",
   running: "ok",
-  waiting_input: "warn",
-  waiting_permission: "warn",
-  failed: "danger",
-  closed: "ink3",
+  pending: "warn",
 };
 
 /** 每个状态在样式表里的键（显式列出，避免用字符串现拼样式名）。 */
-type DotStyleKey =
-  | "dotIdle"
-  | "dotQueued"
-  | "dotRunning"
-  | "dotWaitingInput"
-  | "dotWaitingPermission"
-  | "dotFailed"
-  | "dotClosed";
+type DotStyleKey = "dotIdle" | "dotRunning" | "dotPending";
 
 const DOT_STYLE_KEY_BY_STATE: Record<SessionStateView, DotStyleKey> = {
   idle: "dotIdle",
-  queued: "dotQueued",
   running: "dotRunning",
-  waiting_input: "dotWaitingInput",
-  waiting_permission: "dotWaitingPermission",
-  failed: "dotFailed",
-  closed: "dotClosed",
+  pending: "dotPending",
 };
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
@@ -161,13 +142,8 @@ function buildStyles(colors: Palette) {
       flexShrink: 0,
     },
     dotIdle: dot("idle"),
-    dotQueued: dot("queued"),
     dotRunning: dot("running"),
-    dotWaitingInput: dot("waiting_input"),
-    dotWaitingPermission: dot("waiting_permission"),
-    dotFailed: dot("failed"),
-    // 已关闭的会话圆点更淡（原型 `.dot.closed{opacity:.55}`）。
-    dotClosed: { ...dot("closed"), opacity: 0.55 },
+    dotPending: dot("pending"),
     title: {
       flexGrow: 1,
       flexShrink: 1,
@@ -295,7 +271,7 @@ export function SessionRow({ session, onOpen, variant = "default", ordinal }: Se
         >
           {session.title}
         </Text>
-        {/* 状态词只补「在等什么」：词表来自 `StatusPill` 的同一份，但这里按原型画成纯文字
+        {/* 状态词只补「有请求在等」：词表来自 `StatusPill` 的同一份，但这里按原型画成纯文字
             （`.stword`），不是带底色的胶囊。 */}
         {!compact && NEEDS_STATE_WORD[session.state] === true ? (
           <Text

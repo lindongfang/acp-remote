@@ -2900,7 +2900,6 @@ mod tests {
                 Version::from(1),
                 crate::broker::test_support::ts(0),
                 crate::broker::test_support::ts(0),
-                None,
             )
             .expect("session"),
         );
@@ -3199,7 +3198,6 @@ mod tests {
                 Version::from(2),
                 crate::broker::test_support::ts(0),
                 crate::broker::test_support::ts(0),
-                None,
             )
             .expect("session"),
         );

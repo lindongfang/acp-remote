@@ -1,0 +1,43 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "0f6c1d92-5b78-4a3e-9c41-8d2f7e6a3b05",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "78",
+  "body": {
+    "requestId": "b3e8a150-6c24-4d97-8f10-2a5b7c9d4e63",
+    "command": "session.read",
+    "status": "completed",
+    "acceptedAt": "2026-09-17T12:16:00.000Z",
+    "terminalEventId": null,
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "resources": {
+        "history": [
+          {
+            "eventId": "c41f8a26-9d30-4b17-a5e2-6f7c8b1d0e94",
+            "eventType": "session.updated",
+            "sessionSequence": "97",
+            "createdAt": "2026-09-17T12:05:00.000Z",
+            "view": {
+              "session": {
+                "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+                "title": "修复 schema 覆盖门禁",
+                "agent": { "agentId": "company-agent", "name": "Company Agent" },
+                "state": "waiting_permission",
+                "origin": { "kind": "local" },
+                "currentMode": { "modeId": "default", "displayName": "Default" },
+                "version": "41",
+                "createdAt": "2026-09-17T12:00:00.000Z",
+                "updatedAt": "2026-09-17T12:05:00.000Z"
+              }
+            }
+          }
+        ]
+      },
+      "hasEarlier": false,
+      "historyHasEarlier": false
+    },
+    "error": null
+  }
+}

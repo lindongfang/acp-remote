@@ -375,11 +375,7 @@ fn wire_agent(profile: &acp_core::model::AgentProfile) -> Option<AgentCatalogEnt
 fn wire_state(state: CoreSessionState) -> WireSessionState {
     match state {
         CoreSessionState::Idle => WireSessionState::Idle,
-        CoreSessionState::Queued => WireSessionState::Queued,
         CoreSessionState::Running => WireSessionState::Running,
-        CoreSessionState::WaitingInput => WireSessionState::WaitingInput,
-        CoreSessionState::WaitingPermission => WireSessionState::WaitingPermission,
-        CoreSessionState::Failed => WireSessionState::Failed,
-        CoreSessionState::Closed => WireSessionState::Closed,
+        CoreSessionState::Pending => WireSessionState::Pending,
     }
 }

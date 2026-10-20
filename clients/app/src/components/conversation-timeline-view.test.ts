@@ -23,7 +23,9 @@
  * - **显式覆盖只影响本条**：给同状态的两条里的一条写覆盖值，另一条的有效值不变。
  * - **收起不丢内容**：收起时正文仍在 DOM 里（`display: none`），因此「内容消失」与「收起」是
  *   两件事。
- * - **联动到右栏**：时间线上带文件标识的条目与右栏改动清单共用同一个选中值。
+ * - **文件改动卡片自足**：结构化统计、逐行差异与 ACP 原文诊断都在时间线；不再联动文件栏
+ *   会话来源，也不把原文解析成差异。差异行同样是**不可信文本**：标签与链接只作为字面文本
+ *   出现，不产生元素、不写 `href`/`src`。
  */
 
 import { createElement, useState } from "react";
@@ -59,6 +61,7 @@ function renderPage(model: ConversationPageModel, extra: Partial<ConversationStr
       model,
       onLoadEarlier: () => undefined,
       onOpenDiagnostics: () => undefined,
+      onOpenChangeDiagnostics: () => undefined,
       onAnswerInteraction: () => undefined,
       ...extra,
     }),
@@ -682,14 +685,16 @@ describe("对话时间线：工具调用的详情与原文入口", () => {
   });
 });
 
-describe("对话时间线：从条目联动到右栏", () => {
+describe("对话时间线：文件改动条目不依赖文件栏会话来源", () => {
   const changeId = "11111111-0000-4000-8000-0000000000d1";
+  const eventId = "dddddddd-0000-4000-8000-000000000501";
+  const rawDiff = '[{"type":"add","line":12,"text":"+const idleTimeout = 30000"}]';
 
-  /** 注入一条 `file.changed`（带相对化展示路径）。 */
+  /** 注入一条 `file.changed`（带相对化展示路径与结构化差异）。 */
   function applyFileChanged(client: ClientStore): void {
     applyEvent(client, {
       eventType: "file.changed",
-      eventId: "dddddddd-0000-4000-8000-000000000501",
+      eventId,
       globalSequence: "70",
       view: {
         changeId,
@@ -699,39 +704,97 @@ describe("对话时间线：从条目联动到右栏", () => {
         addedLines: "2",
         deletedLines: "1",
         outsideWorkspace: false,
+        diffLines: [
+          { kind: "context", text: "const opts = resolveOptions(input);" },
+          { kind: "deleted", text: "const idleTimeout = 30_000;" },
+          { kind: "added", text: "const idleTimeout = opts.idleTimeoutMs ?? 10_000;" },
+        ],
       },
+      acp: { mediaType: "application/json", rawJson: rawDiff, byteLength: "60", sha256: "a".repeat(43) },
     });
   }
 
-  it("带文件标识的条目被选中时，时间线与右栏指向同一处改动", () => {
-    const { store: client } = store();
-    applyFileChanged(client);
-    const html = renderPage(pageOf(client), {
-      selectedChangeId: changeId,
-      onSelectChange: () => undefined,
-      onOpenChangeDiagnostics: () => undefined,
-    });
-
-    // 时间线条目与右栏行都标出「同一处改动被选中」。
-    expect(attributeOf(tagContaining(html, `data-change-id="${changeId}"`), "data-change-selected")).toBe("true");
-    expect(
-      attributeOf(tagContaining(html, `data-file-change="${changeId}"`), "data-file-change-selected"),
-    ).toBe("true");
-    // 两个入口（时间线条目 + 右栏行）都上抛同一个 `changeId`。
-    expect(html.match(/data-action="select-file-change"/g) ?? []).toHaveLength(2);
-  });
-
-  it("没有选中时两处都不标出选中；回调缺省时不渲染可点入口", () => {
+  it("条目自带结构化差异、真实统计与诊断入口，不切换到文件栏来源", () => {
     const { store: client } = store();
     applyFileChanged(client);
     const html = renderPage(pageOf(client));
 
-    expect(attributeOf(tagContaining(html, `data-change-id="${changeId}"`), "data-change-selected")).toBe("false");
-    expect(
-      attributeOf(tagContaining(html, `data-file-change="${changeId}"`), "data-file-change-selected"),
-    ).toBe("false");
-    // 反例：回调缺省却仍画出可点路径 → 这里不为 0。
-    expect(html.match(/data-action="select-file-change"/g) ?? []).toHaveLength(0);
+    expect(attributeOf(tagContaining(html, 'data-timeline-card="file-changed"'), "data-change-path")).toBe("src/auth/session.ts");
+    expect(html).toContain('data-change-added-lines="2"');
+    expect(html).toContain('data-change-deleted-lines="1"');
+    // 差异行只来自结构化来源，并按 kind 补一次前缀。
+    expect(html).toContain('data-diff-region="lines"');
+    expect(html.match(/data-diff-line-kind=/g)).toHaveLength(3);
+    expect(html).toContain("+ const idleTimeout = opts.idleTimeoutMs ?? 10_000;");
+    expect(html).toContain("- const idleTimeout = 30_000;");
+    expect(html).toContain("  const opts = resolveOptions(input);");
+    // 诊断入口在条目上；不再有切到会话来源的联动控件。
+    expect(html).toContain('data-action="open-file-change-diagnostics"');
+    expect(html).not.toContain('data-action="select-file-change"');
+    expect(html).not.toContain("data-file-change=");
+    // 未展开诊断时原文一个字节都不出现（不解析成结构化差异）。
+    expect(html).not.toContain("const idleTimeout = 30000");
+    expect(html).not.toContain('data-raw-json="available"');
+  });
+
+  it("差异行按不可信文本处理：标签与链接只作为文本出现，不产生元素、不写地址属性", () => {
+    const { store: client } = store();
+    const hostile = "<script>alert(1)</script> [点我](https://evil.example/x)";
+    applyEvent(client, {
+      eventType: "file.changed",
+      eventId: "dddddddd-0000-4000-8000-000000000503",
+      globalSequence: "72",
+      view: {
+        changeId: "11111111-0000-4000-8000-0000000000d3",
+        kind: "update",
+        displayPath: "src/auth/hostile.ts",
+        summary: "一行原文",
+        outsideWorkspace: false,
+        diffLines: [{ kind: "added", text: hostile }],
+      },
+    });
+    const html = renderPage(pageOf(client));
+
+    // 反例：改用 Markdown/富文本渲染差异行 → 下面三条会红。
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("<a ");
+    expect(html).not.toMatch(/\s(href|src)="/);
+    // 不执行也不消失：原文以转义后的文本逐字出现（前缀不影响正文的逐字呈现）。
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain("[点我](https://evil.example/x)");
+  });
+
+  it("展开诊断：原文以单块不可信文本就地呈现，新增为差异行源", () => {
+    const { store: client } = store();
+    applyFileChanged(client);
+    const html = renderPage(pageOf(client), { openChangeDiagnosticsEventId: eventId });
+
+    expect(html).toContain(`data-event-id="${eventId}"`);
+    expect(html.match(/data-raw-json="available"/g) ?? []).toHaveLength(1);
+    expect(html).toContain("const idleTimeout = 30000");
+    // 结构化差异仍只来自事件里的三行，原文没有被切成差异行。
+    expect(html.match(/data-diff-line-kind=/g)).toHaveLength(3);
+  });
+
+  it("没有差异行时明确说明，不渲染占位差异", () => {
+    const { store: client } = store();
+    applyEvent(client, {
+      eventType: "file.changed",
+      eventId: "dddddddd-0000-4000-8000-000000000502",
+      globalSequence: "71",
+      view: {
+        changeId: "11111111-0000-4000-8000-0000000000d2",
+        kind: "update",
+        displayPath: "src/auth/config.ts",
+        summary: "只给统计",
+        outsideWorkspace: false,
+      },
+    });
+    const html = renderPage(pageOf(client));
+
+    expect(html).toContain('data-diff-not-delivered="true"');
+    expect(html).toContain("不渲染占位差异行");
+    expect(html).not.toContain('data-diff-region="lines"');
   });
 });
 

@@ -27,22 +27,22 @@ use acp_core::model::{
     AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
     AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedDelivery, CommittedEvent,
     ConflictKind, DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind, EventOrigin,
-    EventPayload, GlobalCursor, InteractionOption, InteractionResolution, LocalCursor, MediaKind,
-    MediaReference, MessageChannel, MessageId, MessageRecord, MessageState, ModeId, ModeRef,
-    NodeId, OriginCursor, OriginEpoch, OriginEventRef, PartialReason, PartialResult,
-    PendingInteraction, PortError, PublicError, RawUnavailableReason, RemoteSessionRef, RequestId,
-    ResourceOrigin, Sequence, ServerEpoch, Session, SessionId, SessionRecoveryRecord,
-    SessionSnapshot, SessionState, SessionSummary, StoredPolicy, Timestamp, Turn, TurnId,
-    UnavailableKind, Version, ViewJson, WorkspaceRef,
+    EventPayload, GlobalCursor, InteractionId, InteractionOption, InteractionResolution,
+    LocalCursor, MediaKind, MediaReference, MessageChannel, MessageId, MessageRecord, MessageState,
+    ModeId, ModeRef, NodeId, OriginCursor, OriginEpoch, OriginEventRef, PartialReason,
+    PartialResult, PendingInteraction, PortError, PublicError, RawUnavailableReason,
+    RemoteSessionRef, RequestId, ResourceOrigin, Sequence, ServerEpoch, Session, SessionId,
+    SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary, StoredPolicy, Timestamp,
+    Turn, TurnId, UnavailableKind, Version, ViewJson, WorkspaceRef,
 };
 use acp_core::ports::{
     AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
     HistoryPage, HistoryQuery, IdempotentReplay, ImportedSessionQuery, ImportedSessionRecord,
     ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord, PendingInteractionOrigin,
     PruneReport, ReadView, ReceiptOutcome, RemoteCommandRef, RemoteDeliveryStore, ReplayBatch,
-    ReplayLimit, ResetReason, RetentionPolicy, SessionAttachment, SessionQuery, SessionStore,
-    SettledSession, StateChange, StoreHealth, SubmissionBinding, SyncEventRecord, SyncReplaySlice,
-    TurnChange, TurnUpdate,
+    ReplayLimit, ResetReason, RetentionPolicy, SessionActivityFacts, SessionAttachment,
+    SessionQuery, SessionStore, SettledSession, StateChange, StoreHealth, SubmissionBinding,
+    SyncEventRecord, SyncReplaySlice, TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
@@ -56,7 +56,7 @@ const EVENT_COLUMNS: &str = "global_sequence, session_id, session_sequence, orig
 
 /// `owned_session` 的读列（`load` 的 `Session` 聚合：不带目录归属）。
 const SESSION_COLUMNS: &str = "session_id, title, agent_id, agent_name, state, origin_epoch, \
-     current_mode_id, current_mode_name, version, created_at, updated_at, closed_at";
+     current_mode_id, current_mode_name, version, created_at, updated_at";
 
 /// 返回 [`SessionSummary`] 的三条读路径（`list`/`read_session`/`node_link_slice`）的读列：
 /// `SESSION_COLUMNS` 加上**持久化的目录标识**。
@@ -65,7 +65,7 @@ const SESSION_COLUMNS: &str = "session_id, title, agent_id, agent_name, state, o
 /// ——`NULL` 就是未分组（`design.md` D1/D6）。
 const SESSION_SUMMARY_COLUMNS: &str = "s.session_id, s.title, s.agent_id, s.agent_name, s.state, \
      s.origin_epoch, s.current_mode_id, s.current_mode_name, s.version, s.created_at, \
-     s.updated_at, s.closed_at, s.workspace_directory_id";
+     s.updated_at, s.workspace_directory_id";
 
 /// [`SESSION_SUMMARY_COLUMNS`] 的 FROM 子句。
 const SESSION_SUMMARY_FROM: &str = "owned_session s";
@@ -533,7 +533,6 @@ fn session_from_row(row: &SqliteRow) -> Result<Session, StorageError> {
         parse_version(int(row, "version")?, "owned_session.version")?,
         decode(&text(row, "created_at")?, "owned_session.created_at")?,
         decode(&text(row, "updated_at")?, "owned_session.updated_at")?,
-        decode_opt(opt_text(row, "closed_at")?, "owned_session.closed_at")?,
     )
     .map_err(|_| StorageError::ColumnValue {
         column: "owned_session",
@@ -1394,56 +1393,40 @@ impl SqliteStore {
                 // 「存储层只校验已有 epoch 时必须一致」一致）：否则同批的会话级事件会因缺 epoch 被拒。
                 origin_epoch.get_or_insert(stored_epoch);
                 // `SessionUpdate.state` 是 `Option`：`None` = 不改状态（例如只解析一个交互）。
-                // `closed_at` 为 `Some` 时会话进入 `Closed`；两者必须一致（`Session::try_new` 的不变量）。
-                let effective_state = match (update.state, &update.closed_at) {
-                    (_, Some(_)) => Some(SessionState::Closed),
-                    (Some(SessionState::Closed), None) => {
-                        return Err(PortError::InvalidRequest(
-                            "closing a session requires closed_at",
-                        ));
-                    }
-                    (Some(state), None) => Some(state),
-                    (None, None) => None,
-                };
+                // 状态只有三态（`idle|running|pending`），取值由 core 的 `SessionActivity::reduce` 统一
+                // 计算；存储层不再有「关闭」这一层语义，也不写任何关闭时间列。
+                let state = update.state.map(SessionState::as_str);
                 let (mode_id, mode_name) = mode_columns(&update.mode);
-                // `CASE WHEN ?x IS NULL` 让「未提供的字段保持原值」，避免把已关闭会话的
-                // `closed_at` 或既有状态写成 NULL。恢复所需的 `agent_session_id`/`workspace_cwd` 与
-                // 目录归属的 `workspace_alias` 走同一条规则（§7.2 的 v5/v6 三列）：`None` = 不改该列，
-                // 因此恢复流程（它永远传 `None`）不可能覆写已持久化的取值（spec R22），`workspace_alias`
-                // 也不会被恢复改写。恢复两列不在任何读投影里（§3.6 的窄读取）；`workspace_alias` 只由
-                // 摘要投影消费。
+                // `CASE WHEN ?x IS NULL` 让「未提供的字段保持原值」。恢复所需的 `agent_session_id`/
+                // `workspace_cwd` 与目录归属的 `workspace_directory_id` 走同一条规则（§7.2 的 v5/v6 三列）：
+                // `None` = 不改该列，因此恢复流程（它永远传 `None`）不可能覆写已持久化的取值（spec R22）。
+                // 恢复两列不在任何读投影里（§3.6 的窄读取）；`workspace_directory_id` 只由摘要投影消费。
                 // 参数编号按各语句自己连续编号：SQLite 的 `?NNN` 是按位置绑定，中间留空会让后面的
                 // 绑定落到未使用的下标上（`?7 IS NULL` 恒真 → 静默不写）。
                 let statement = match &update.mode {
                     ModeChange::Unchanged => {
                         "UPDATE owned_session SET \
                          state = CASE WHEN ?1 IS NULL THEN state ELSE ?1 END, \
-                         closed_at = CASE WHEN ?2 IS NULL THEN closed_at ELSE ?2 END, \
-                         agent_session_id = CASE WHEN ?5 IS NULL THEN agent_session_id ELSE ?5 END, \
-                         workspace_cwd = CASE WHEN ?6 IS NULL THEN workspace_cwd ELSE ?6 END, \
-                         workspace_directory_id = CASE WHEN ?7 IS NULL THEN workspace_directory_id ELSE ?7 END, \
-                         title = CASE WHEN ?9 THEN NULL WHEN ?8 IS NULL THEN title ELSE ?8 END, \
-                         version = version + 1, updated_at = ?3 \
-                         WHERE session_id = ?4 RETURNING version"
+                         agent_session_id = CASE WHEN ?2 IS NULL THEN agent_session_id ELSE ?2 END, \
+                         workspace_cwd = CASE WHEN ?3 IS NULL THEN workspace_cwd ELSE ?3 END, \
+                         workspace_directory_id = CASE WHEN ?4 IS NULL THEN workspace_directory_id ELSE ?4 END, \
+                         title = CASE WHEN ?6 THEN NULL WHEN ?5 IS NULL THEN title ELSE ?5 END, \
+                         version = version + 1, updated_at = ?7 \
+                         WHERE session_id = ?8 RETURNING version"
                     }
                     ModeChange::Set(_) => {
                         "UPDATE owned_session SET \
                          state = CASE WHEN ?1 IS NULL THEN state ELSE ?1 END, \
-                         closed_at = CASE WHEN ?2 IS NULL THEN closed_at ELSE ?2 END, \
-                         agent_session_id = CASE WHEN ?7 IS NULL THEN agent_session_id ELSE ?7 END, \
-                         workspace_cwd = CASE WHEN ?8 IS NULL THEN workspace_cwd ELSE ?8 END, \
-                         workspace_directory_id = CASE WHEN ?9 IS NULL THEN workspace_directory_id ELSE ?9 END, \
-                         title = CASE WHEN ?11 THEN NULL WHEN ?10 IS NULL THEN title ELSE ?10 END, \
-                         version = version + 1, updated_at = ?3, \
-                         current_mode_id = ?5, current_mode_name = ?6 \
-                         WHERE session_id = ?4 RETURNING version"
+                         agent_session_id = CASE WHEN ?4 IS NULL THEN agent_session_id ELSE ?4 END, \
+                         workspace_cwd = CASE WHEN ?5 IS NULL THEN workspace_cwd ELSE ?5 END, \
+                         workspace_directory_id = CASE WHEN ?6 IS NULL THEN workspace_directory_id ELSE ?6 END, \
+                         title = CASE WHEN ?8 THEN NULL WHEN ?7 IS NULL THEN title ELSE ?7 END, \
+                         version = version + 1, updated_at = ?9, \
+                         current_mode_id = ?2, current_mode_name = ?3 \
+                         WHERE session_id = ?10 RETURNING version"
                     }
                 };
-                let mut query = sqlx::query_scalar::<_, i64>(statement)
-                    .bind(effective_state.map(SessionState::as_str))
-                    .bind(update.closed_at.as_ref().map(Timestamp::as_str))
-                    .bind(commit.at.as_str())
-                    .bind(session.as_str());
+                let mut query = sqlx::query_scalar::<_, i64>(statement).bind(state);
                 if let ModeChange::Set(_) = &update.mode {
                     query = query.bind(mode_id).bind(mode_name);
                 }
@@ -1453,14 +1436,16 @@ impl SqliteStore {
                     .bind(update.workspace_directory_id.as_deref());
                 // R9（`design.md` D7）：标题是**两层可选**——`None` = 不改该列，`Some(None)` = 显式置空，
                 // `Some(Some(text))` = 写入该标题。SQLite 的 `?N IS NULL` 区分不了「不改」与「置空」，因此
-                // 借一条按真值判定的**哨兵**参数 `?9`（`ModeChange::Set` 下是 `?11`）把「不改」编码成
-                // `?9 = 0 且 ?8 IS NULL`、把「置空」编码成 `?9 = 1`：一个 `CASE` 同时表达三态，与其余列共用
-                // **同一条**语句，因此 `version = version + 1`、`updated_at = ?3` 与同一提交里的其它列一律
-                // 照写（§5.2/§6 第 21 条；旧实现另起窄语句，曾丢弃这三者）。
-                // `?N` 的编号与绑定顺序一一对应（`?8` 是标题值、`?9` 是置空哨兵；`ModeChange::Set` 下依次
-                // 为 `?10`/`?11`），因此这两条绑定必须按值、哨兵的顺序追加。
+                // 借一条按真值判定的**哨兵**参数（`ModeChange::Unchanged` 下是 `?6`，`Set` 下是 `?8`）把
+                // 「不改」编码成「哨兵 = 0 且值为 NULL」、把「置空」编码成「哨兵 = 1」：一个 `CASE` 同时
+                // 表达三态，与其余列共用**同一条**语句，因此 `version = version + 1`、`updated_at` 与同一
+                // 提交里的其它列一律照写（§5.2/§6 第 21 条）。
                 let clear_title = i64::from(matches!(update.title, Some(None)));
-                let query = query.bind(update.title.clone().flatten()).bind(clear_title);
+                let query = query
+                    .bind(update.title.clone().flatten())
+                    .bind(clear_title)
+                    .bind(commit.at.as_str())
+                    .bind(session.as_str());
                 let new_version: Option<i64> = query.fetch_optional(&mut *tx).await.db()?;
                 version = match new_version {
                     Some(value) => parse_version(value, "owned_session.version")?,
@@ -1468,7 +1453,12 @@ impl SqliteStore {
                 };
                 // §5.2/§6.7：交互解析用条件更新实现 first-writer-wins，与状态修改同一事务。
                 if let Some(resolved) = &update.interaction {
-                    resolve_interaction(&mut tx, resolved, &commit.at).await?;
+                    resolve_interaction(&mut tx, &session, resolved, &commit.at).await?;
+                }
+                // 应答仲裁不等于处理完成：`confirmation` 在同一事务里写 `confirmed_at`，该交互此后
+                // 才退出有效集合（`session-activity` D2）。
+                if let Some(confirmation) = &update.confirmation {
+                    confirm_interaction(&mut tx, &session, confirmation, &commit.at).await?;
                 }
             }
             None => match &commit.session {
@@ -1512,6 +1502,17 @@ impl SqliteStore {
                     }
                     update_turn(&mut tx, &session, update).await?;
                 }
+            }
+        }
+
+        // turn 终结时，它名下的有效请求在同一事务里失效（`session-activity` D2）：任务结束/失败/取消
+        // 都不该留下永远等待的卡片。只失效**本 turn** 的行——按 `turn_id` 关联，绝不误伤其它 turn；
+        // 失效范围是仍未解决的行（`pending` 或已仲裁未确认），已确认/已失效的行保持原状。
+        for change in &commit.turns {
+            if let TurnChange::Update(update) = change
+                && update.state.is_terminal()
+            {
+                expire_turn_interactions(&mut tx, &update.turn, &commit.at).await?;
             }
         }
 
@@ -1705,13 +1706,14 @@ impl SqliteStore {
             };
             sqlx::query(
                 "INSERT INTO owned_interaction (interaction_id, session_id, kind, request_event, \
-                 state, created_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
+                 state, created_at, turn_id) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6)",
             )
             .bind(write.interaction.id().as_str())
             .bind(session.as_str())
             .bind(write.interaction.kind().as_str())
             .bind(storable(event_sequence.get())?)
             .bind(write.interaction.created_at().as_str())
+            .bind(write.turn.as_ref().map(TurnId::as_str))
             .execute(&mut *tx)
             .await
             .db()?;
@@ -2048,8 +2050,8 @@ async fn insert_session_row(
     sqlx::query(
         "INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, \
          origin_epoch, current_mode_id, current_mode_name, version, created_at, \
-         updated_at, closed_at) \
-         VALUES (?1, ?2, ?3, ?4, 'idle', ?5, NULL, NULL, 1, ?6, ?6, NULL)",
+         updated_at) \
+         VALUES (?1, ?2, ?3, ?4, 'idle', ?5, NULL, NULL, 1, ?6, ?6)",
     )
     .bind(id_text)
     .bind(title.as_deref())
@@ -2074,8 +2076,8 @@ async fn insert_created_session_row(
     sqlx::query(
         "INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, \
          origin_epoch, current_mode_id, current_mode_name, version, created_at, updated_at, \
-         closed_at, agent_session_id, workspace_cwd, workspace_directory_id) \
-         VALUES (?1, ?2, ?3, ?4, 'idle', ?5, NULL, NULL, 1, ?6, ?6, NULL, ?7, ?8, ?9)",
+         agent_session_id, workspace_cwd, workspace_directory_id) \
+         VALUES (?1, ?2, ?3, ?4, 'idle', ?5, NULL, NULL, 1, ?6, ?6, ?7, ?8, ?9)",
     )
     .bind(settled.session.as_str())
     .bind(settled.title.as_deref())
@@ -2169,11 +2171,14 @@ async fn apply_terminal(
 
 /// §5.2/§6.7：交互解析的 first-writer-wins。
 ///
-/// 条件更新（`state = 'pending'`）+ 受影响行数为 0 时**在同一事务内**回读：
-/// 行存在且 `state <> 'pending'` → `Conflict(AlreadyResolved)`；无行 → `NotFound`。
-/// 因此第二个应答不会覆盖既有结果（`decision_*`/`resolved_at` 保持不变）。
+/// 条件更新（`state = 'pending'` 且未失效、版本相符）+ 受影响行数为 0 时**在同一事务内**回读：
+/// 行存在且 `state <> 'pending'` → `Conflict(AlreadyResolved)`；无行或跨会话 → `NotFound`；
+/// 版本不符 → `Conflict(VersionMismatch)`；已失效 → `Conflict(Expired)`。
+/// 因此第二个应答不会覆盖既有结果（`decision_*`/`resolved_at` 保持不变）。仲裁**只**写
+/// `resolved_at`，`confirmed_at` 保持 `NULL`：处理结果确认之前该行仍计入有效待处理。
 async fn resolve_interaction(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
+    session: &SessionId,
     resolved: &acp_core::ports::InteractionResolved,
     at: &Timestamp,
 ) -> Result<(), PortError> {
@@ -2193,11 +2198,16 @@ async fn resolve_interaction(
             ),
         };
     let (resolved_by_kind, resolved_by_id) = actor_key(&resolved.resolved_by);
+    let expected_version = resolved
+        .request_version
+        .map(|version| storable(version.get()))
+        .transpose()?;
     let affected = sqlx::query(
         "UPDATE owned_interaction SET state = 'resolved', resolved_at = ?1, \
          decision_option_id = ?2, decision_kind = ?3, elicitation_action = ?4, \
          elicitation_values_json = ?5, resolved_by_kind = ?6, resolved_by_id = ?7 \
-         WHERE interaction_id = ?8 AND state = 'pending' AND invalidated_at IS NULL",
+         WHERE interaction_id = ?8 AND session_id = ?9 AND state = 'pending' \
+         AND invalidated_at IS NULL AND (?10 IS NULL OR request_version = ?10)",
     )
     .bind(at.as_str())
     .bind(decision_option_id)
@@ -2207,6 +2217,8 @@ async fn resolve_interaction(
     .bind(resolved_by_kind.as_str())
     .bind(resolved_by_id)
     .bind(resolved.interaction.as_str())
+    .bind(session.as_str())
+    .bind(expected_version)
     .execute(&mut **tx)
     .await
     .db()?
@@ -2215,7 +2227,8 @@ async fn resolve_interaction(
         return Ok(());
     }
     let row = sqlx::query(
-        "SELECT state, invalidated_at FROM owned_interaction WHERE interaction_id = ?1",
+        "SELECT state, invalidated_at, request_version, session_id FROM owned_interaction \
+         WHERE interaction_id = ?1",
     )
     .bind(resolved.interaction.as_str())
     .fetch_optional(&mut **tx)
@@ -2226,12 +2239,72 @@ async fn resolve_interaction(
             resolved.interaction.clone(),
         )));
     };
+    if text(&row, "session_id")? != session.as_str() {
+        // 跨会话请求按「不存在」处理，避免泄露其它会话的交互事实。
+        return Err(PortError::NotFound(EntityRef::Interaction(
+            resolved.interaction.clone(),
+        )));
+    }
     if opt_text(&row, "invalidated_at")?.is_some() {
-        // 失效请求不可被旧路径消费：它与 `resolve_effective` 同一口径（Expired，而不是
+        // 失效请求不可被旧路径消费：与 `invalidate_pending` 同一口径（Expired，而不是
         // 「已处理」），调用方因此不会把「上游已丢失」误读成「别人先答了」。
         return Err(PortError::Conflict(ConflictKind::Expired));
     }
+    if text(&row, "state")? != "pending" {
+        return Err(PortError::Conflict(ConflictKind::AlreadyResolved));
+    }
+    if let Some(expected) = expected_version {
+        if int(&row, "request_version")? != expected {
+            return Err(PortError::Conflict(ConflictKind::VersionMismatch));
+        }
+    }
     Err(PortError::Conflict(ConflictKind::AlreadyResolved))
+}
+
+/// 一次应答**确认**：把 `resolved` 且未确认的行写入 `confirmed_at`。
+///
+/// 确认是交互退出有效集合的唯一途径，但它不是「仲裁」的替代：未知行、仍 `pending`、已失效或已确认
+/// 的行都是**无操作**（重复投递/旧 peer 不产生第二次副作用，也不报错）。
+async fn confirm_interaction(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    session: &SessionId,
+    interaction: &InteractionId,
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    sqlx::query(
+        "UPDATE owned_interaction SET confirmed_at = ?1 \
+         WHERE interaction_id = ?2 AND session_id = ?3 AND state = 'resolved' \
+         AND confirmed_at IS NULL",
+    )
+    .bind(at.as_str())
+    .bind(interaction.as_str())
+    .bind(session.as_str())
+    .execute(&mut **tx)
+    .await
+    .db()?;
+    Ok(())
+}
+
+/// turn 进入终态时失效它名下仍未解决的交互（`pending` 或已仲裁未确认）。
+///
+/// `invalidated_at` 与 `state = 'expired'` 同时写：所有「仍在等待」的读面都按 `state = 'pending'`
+/// 过滤，只写标记会让失效请求继续出现在读面里；`confirmed_at` 不动，行仍保留原有仲裁结果供审计。
+async fn expire_turn_interactions(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    turn: &TurnId,
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    sqlx::query(
+        "UPDATE owned_interaction SET state = 'expired', invalidated_at = ?1 \
+         WHERE turn_id = ?2 AND invalidated_at IS NULL \
+         AND (state = 'pending' OR (state = 'resolved' AND confirmed_at IS NULL))",
+    )
+    .bind(at.as_str())
+    .bind(turn.as_str())
+    .execute(&mut **tx)
+    .await
+    .db()?;
+    Ok(())
 }
 
 fn error_columns(
@@ -2990,6 +3063,107 @@ impl SessionStore for SqliteStore {
     ) -> Result<CommitOutcome, PortError> {
         self.writable()?;
         self.commit_owned(commit, Some(actor), None).await
+    }
+
+    /// 三态归约的事实读取（`session-activity` D1/D2）：一个只读事务里读交互与 turn 两侧，
+    /// 口径与 §7.3 的落库语义一致。`pending` 与「已仲裁未确认」都算未解决，失效行一律不算。
+    async fn session_activity(
+        &self,
+        session: &SessionId,
+    ) -> Result<SessionActivityFacts, PortError> {
+        let mut tx = self.pools.read.begin_with("BEGIN").await.db()?;
+        let rows = sqlx::query(
+            "SELECT interaction_id, state, turn_id FROM owned_interaction \
+             WHERE session_id = ?1 AND invalidated_at IS NULL \
+             AND (state = 'pending' OR (state = 'resolved' AND confirmed_at IS NULL)) \
+             ORDER BY created_at ASC, interaction_id ASC",
+        )
+        .bind(session.as_str())
+        .fetch_all(&mut *tx)
+        .await
+        .db()?;
+        let mut unresolved = 0_u32;
+        let mut unconfirmed = Vec::new();
+        let mut by_turn: Vec<(TurnId, u32)> = Vec::new();
+        for row in &rows {
+            unresolved = unresolved.saturating_add(1);
+            if text(row, "state")? == "resolved" {
+                unconfirmed.push(decode::<InteractionId>(
+                    &text(row, "interaction_id")?,
+                    "owned_interaction.interaction_id",
+                )?);
+            }
+            if let Some(turn) = opt_text(row, "turn_id")? {
+                let turn: TurnId = decode(&turn, "owned_interaction.turn_id")?;
+                match by_turn.iter().position(|(candidate, _)| candidate == &turn) {
+                    Some(index) => {
+                        by_turn[index].1 = by_turn[index].1.saturating_add(1);
+                    }
+                    None => by_turn.push((turn, 1)),
+                }
+            }
+        }
+        let unfinished: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM owned_turn WHERE session_id = ?1 \
+             AND state IN ('queued','running','waiting_input','waiting_permission')",
+        )
+        .bind(session.as_str())
+        .fetch_one(&mut *tx)
+        .await
+        .db()?;
+        Ok(SessionActivityFacts {
+            unresolved_interactions: unresolved,
+            unconfirmed_interactions: unconfirmed,
+            unresolved_by_turn: by_turn,
+            unfinished_turns: u32::try_from(unfinished).unwrap_or(u32::MAX),
+        })
+    }
+
+    /// 持久队列：`owned_turn.state = 'queued'`，按存储层分配的 `queue_index` 升序（D3）。
+    async fn queued_turns(&self, session: &SessionId) -> Result<Vec<Turn>, PortError> {
+        let rows = sqlx::query(
+            "SELECT turn_id, session_id, state, queue_index, causation, started_at, ended_at \
+             FROM owned_turn WHERE session_id = ?1 AND state = 'queued' \
+             ORDER BY queue_index ASC",
+        )
+        .bind(session.as_str())
+        .fetch_all(&self.pools.read)
+        .await
+        .db()?;
+        let mut turns = Vec::with_capacity(rows.len());
+        for row in &rows {
+            turns.push(turn_from_row(row)?);
+        }
+        Ok(turns)
+    }
+
+    /// 启动恢复入口：仍有未结束 turn 或有效未解决交互的会话（上限由调用方给出）。
+    async fn sessions_with_pending_activity(
+        &self,
+        limit: ReplayLimit,
+    ) -> Result<Vec<SessionId>, PortError> {
+        let rows = sqlx::query(
+            "SELECT s.session_id FROM owned_session s \
+             WHERE EXISTS (SELECT 1 FROM owned_turn t WHERE t.session_id = s.session_id \
+                           AND t.state IN ('queued','running','waiting_input','waiting_permission')) \
+                OR EXISTS (SELECT 1 FROM owned_interaction i WHERE i.session_id = s.session_id \
+                           AND i.invalidated_at IS NULL \
+                           AND (i.state = 'pending' \
+                                OR (i.state = 'resolved' AND i.confirmed_at IS NULL))) \
+             ORDER BY s.session_id ASC LIMIT ?1",
+        )
+        .bind(i64::from(limit.events()))
+        .fetch_all(&self.pools.read)
+        .await
+        .db()?;
+        let mut sessions = Vec::with_capacity(rows.len());
+        for row in &rows {
+            sessions.push(decode(
+                &text(row, "session_id")?,
+                "owned_session.session_id",
+            )?);
+        }
+        Ok(sessions)
     }
 
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {

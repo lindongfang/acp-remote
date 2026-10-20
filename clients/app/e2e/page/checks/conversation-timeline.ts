@@ -107,7 +107,7 @@ const DIFF_TEXT = [
   "const idleTimeout = 30_000;",
   "const idleTimeout = opts.idleTimeoutMs ?? 10_000;",
 ] as const;
-/** 三档差异行的行首前缀（与 `FileChangesPanel` 的 `DIFF_LINE_PREFIXES` 同值）。 */
+/** 三档差异行的行首前缀（与 `ChangeDiff` 的 `DIFF_LINE_PREFIXES` 同值）。 */
 const DIFF_PREFIXES = ["  ", "- ", "+ "] as const;
 /** 未下发的差异正文（只可能作为不可信原文出现在诊断槽位里）。 */
 const RAW_DIFF = JSON.stringify({ params: { update: { sessionUpdate: "tool_call_update", rawInput: { path: "docs/RAW_ONLY_MARKER.md" } } } });
@@ -686,7 +686,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "CP-5 从条目联动到右栏：右栏逐行呈现结构化差异行，选中时间线条目即选中同一处改动",
+    name: "CP-5 文件改动在时间线：逐行结构化差异、真实统计与 ACP 原文诊断",
     async run() {
       await withSessionPage(
         sessionScenario({
@@ -715,34 +715,32 @@ const checks: readonly Check[] = [
             }),
           ],
         }),
-        (container) =>
-          query(container, `[data-file-change="${CHANGE_ID}"]`) !== null &&
-          query(container, `[data-timeline-card="file-changed"] [data-action="select-file-change"]`) !== null,
-        "改动进入右栏且时间线可选中",
+        (container) => query(container, '[data-timeline-card="file-changed"] [data-diff-region="lines"]') !== null,
+        "时间线文件改动卡片",
         async (mounted) => {
           const container = mounted.container;
-          const filesColumn = query(container, '[data-conversation-column="files"]');
-          expectThat(filesColumn !== null, "变更文件必须落在右栏");
+          const card = query(container, '[data-timeline-card="file-changed"]');
+          expectThat(card !== null, "文件改动必须落在时间线");
+          if (card === null) throw new CheckFailure("文件改动卡片缺失");
 
-          // 右栏逐行呈现结构化差异行：退回「只有统计」的形态时，下面这几条同时变红。
+          // 逐行呈现结构化差异行：退回「只有统计」的形态时，下面这几条同时变红。
           expectEqual(
-            query(filesColumn, "[data-diff-region]")?.getAttribute("data-diff-region"),
+            query(card, "[data-diff-region]")?.getAttribute("data-diff-region"),
             "lines",
-            "右栏必须有结构化差异区",
+            "时间线必须有结构化差异区",
           );
-          expectEqual(queryAll(filesColumn, "[data-diff-line-kind]").length, 3, "差异行必须逐行呈现");
+          expectEqual(queryAll(card, "[data-diff-line-kind]").length, 3, "差异行必须逐行呈现");
           expectEqual(
-            queryAll(filesColumn, "[data-diff-line-kind]").map((node) => node.getAttribute("data-diff-line-kind")),
+            queryAll(card, "[data-diff-line-kind]").map((node) => node.getAttribute("data-diff-line-kind")),
             ["context", "deleted", "added"],
             "新增 / 删除 / 上下文三档必须各自成立",
           );
-          const filesText = domText(filesColumn);
+          const cardText = domText(card);
           for (const line of DIFF_TEXT) {
-            expectThat(filesText.includes(line), `差异行内容必须逐字来自结构化来源：${line}`);
+            expectThat(cardText.includes(line), `差异行内容必须逐字来自结构化来源：${line}`);
           }
           // 前缀由客户端按 kind 自动补一次：每行渲染文本必须**恰好**是「前缀 + 原文」。
-          // 夹具若把前缀写进 `text`（或客户端补两次），这里会读到 `+ + …` / `- - …` 而判红。
-          const renderedLines = queryAll(filesColumn, "[data-diff-line-kind]").map(textOf);
+          const renderedLines = queryAll(card, "[data-diff-line-kind]").map(textOf);
           expectEqual(
             renderedLines,
             DIFF_TEXT.map((text, index) => `${DIFF_PREFIXES[index]}${text}`),
@@ -754,25 +752,38 @@ const checks: readonly Check[] = [
             expectThat(rendered.startsWith(prefix), `第 ${String(index + 1)} 行缺少行首前缀`);
             expectAbsent(rendered, `${prefix}${prefix}`, `第 ${String(index + 1)} 行出现了双前缀`);
           }
+          expectThat(
+            textOf(query(card, "[data-change-added-lines]")).includes("+2"),
+            "真实统计保留",
+          );
+          expectThat(
+            textOf(query(card, "[data-change-deleted-lines]")).includes("-1"),
+            "真实统计保留（删除）",
+          );
           // 差异行不来自解析 ACP 原文：未展开诊断时，原文片段一个都不出现。
           expectNone(domText(container), ["RAW_ONLY_MARKER"], "未展开诊断时页面上出现了未下发的 ACP 原文");
 
-          // 联动：时间线条目上点一下 → 右栏同一处改动被选中（用户不必在右栏再找一次）。
+          // 文件栏没有会话变更清单或联动入口；条目本身仍可展开诊断。
+          expectEqual(
+            queryAll(container, '[data-conversation-column="files"] [data-session-file]').length,
+            0,
+            "文件栏不得出现会话文件清单",
+          );
+          expectEqual(
+            query(container, '[data-action="select-file-change"]'),
+            null,
+            "不得再把条目联动到会话来源",
+          );
+          click(query(card, '[data-action="open-file-change-diagnostics"]'), "展开文件改动诊断");
+          await waitFor(() => query(container, '[data-raw-json="available"]') !== null, "原文诊断展开");
           expectThat(
-            query(container, '[data-file-change-selected="true"]') === null,
-            "未点选之前右栏不得有选中项",
+            textOf(query(container, '[data-raw-json="available"]')).includes("RAW_ONLY_MARKER"),
+            "原文作为不可信文本呈现",
           );
-          click(
-            query(container, `[data-timeline-card="file-changed"] [data-action="select-file-change"]`),
-            "在时间线上选中这处改动",
-          );
-          await waitFor(
-            () => query(container, `[data-file-change="${CHANGE_ID}"][data-file-change-selected="true"]`) !== null,
-            "右栏选中同一处改动",
-          );
-          expectThat(
-            query(container, `[data-timeline-card="file-changed"][data-change-selected="true"]`) !== null,
-            "时间线条目自己也必须标出选中",
+          expectEqual(
+            queryAll(container, "[data-diff-line-kind]").length,
+            3,
+            "原文不得被解析成额外差异行",
           );
         },
       );

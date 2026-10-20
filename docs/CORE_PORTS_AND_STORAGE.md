@@ -35,6 +35,8 @@
 
 > 版本：0.22（2026-10-17，`sync-path-browse-and-diff-delivery` 变更 WP2：**目录浏览端口与目录资源投影**——§5 新增 §5.5 的 `DirectoryBrowser`（`roots`/`directories`，只列直接子目录、只读、顺序不作要求）与 `DirectoryListing { name, path }`；§3.7 新增 `WorkspaceCatalogEntry { alias, display_name, path }`（`path` 为 `None` = 该键缺席，取值是规范化结果剥掉 verbatim 前缀后的形式）；§4 新增 `WorkspaceBrowse`（`workspace_browse`）与 `SyncSnapshotQueries` 的 `sync_workspace_catalog`，`session.create` 的目录来源增 `WorkspaceSource::PathWithCreate`（显式建目录开关，与别名在类型上互斥、失败不删除已建目录）；§11.1/§11.9 的路径口径改写为「**已登记**目录的路径只在协商 `core.workspace-path.v1` 时随 `workspaces` 条目下发，客户端自己提交的目录不被回显」。**§7 的 DDL 与 migration 未变**（路径取自既有 `owned_workspace.canonical_path`，无回填、无新列），漂移门禁逐条成立）
 
+> 版本：0.23（2026-10-20，`session-activity-three-states` 变更 WP2c：会话主状态收敛为 **`idle | running | pending`** 三态并由 `SessionActivity::reduce(pending, unfinished_turns)` 唯一归约；`Session` 删除 `closed_at`。§3.3 记录归约规则并声明 `TurnState`/`CommandStatus` 词表不变；§5.2 新增 `session_activity`/`queued_turns`/`sessions_with_pending_activity` 三条读缝，`SessionUpdate` 增 `confirmation`（`confirmation` 与仲裁同事务）；`InteractionResolved` 带 `request_version`，`InteractionAuthority` 收敛为读 + `invalidate_pending`（删除 `resolve_effective`/`EffectiveResolution`）。§6 把仲裁与确认拆为两阶段、turn 终态按 `turn_id` 失效本轮交互、恢复先失效再结算并重水化持久队列、`session.updated` 最多一条。§7 升级到 **v13 / imported v5**：`owned_session` 三态 CHECK 且无 `closed_at`，`owned_interaction` 增 `confirmed_at`/`turn_id`，新增 v12 → v13 段（旧七态暂存映射、按创建事件回填 turn 归属、imported 归一化、同事务版本落盘）。§9 判据 11/28/36 改写并新增 37–39。**§7 的 SQL 块与漂移门禁逐条一致**，`npm run check:drift` 通过。
+
 ## 1. 范围与非目标
 
 范围：core 的值对象/用例/端口/错误类型、broker 的提交与发布契约、`storage-sqlite` 的 PRAGMA/文件布局/migration/表结构/索引/保留与容量/崩溃恢复、以及实现该合同的验收判据。
@@ -118,10 +120,11 @@ pub enum UnavailableKind {
 | 类型 | 形状 / 不变量 | 出处 |
 |---|---|---|
 | `ResourceOrigin` | enum `Local ｜ Remote { ownerNodeId, exportId, originEpoch, online }`；owned/imported 在类型上可区分 | `MODULE_ARCHITECTURE.md` §4.1；`schemas/sync/v1/common.schema.json#/$defs/originBlock` |
-| `Session` | `{ id: SessionId, reference: OwnedSessionRef, title: Option<String(≤512)>, agent: AgentRef, state: SessionState, origin: ResourceOrigin, current_mode: Option<ModeRef>, version: Version, created_at, updated_at, closed_at: Option<Timestamp> }` | `SYNC_PROTOCOL.md` §9.6；`common.schema.json#/$defs/sessionSummary` |
+| `Session` | `{ id: SessionId, reference: OwnedSessionRef, title: Option<String(≤512)>, agent: AgentRef, state: SessionState, origin: ResourceOrigin, current_mode: Option<ModeRef>, version: Version, created_at, updated_at }`；**没有 `closed_at`**：会话没有关闭动作，也没有终态（`session-activity` 变更删除该字段） | `SYNC_PROTOCOL.md` §9.6；`common.schema.json#/$defs/sessionSummary` |
 | `SessionSummary` | `Session` 的可投影子集（wire 形状见协议 crate）；owned 与 imported 用同一形状 | `SYNC_PROTOCOL.md` §9.6 |
 | `SessionSnapshot` | `Session` + `origin_epoch: OriginEpoch` + `head: GlobalCursor` | 本合同（供 `commit`/`load` 返回） |
-| `SessionState` | enum `Idle｜Queued｜Running｜WaitingInput｜WaitingPermission｜Failed｜Closed` | `common.schema.json#/$defs/sessionSummary` |
+| `SessionState` | enum `Idle｜Running｜Pending`——**只有活跃程度，没有终态**。`TurnState`（`Queued｜Running｜WaitingInput｜WaitingPermission｜Completed｜Failed｜Cancelled`）与 `CommandStatus`（`Accepted｜Completed｜Failed｜Rejected｜Uncertain`）词表**不因本收敛而改变**：任务失败/取消与命令结果仍如实保留，只是不再把会话压成 `Failed`/`Closed` | `common.schema.json#/$defs/sessionSummary` |
+| `SessionActivity` | 零大小类型 + 唯一归约函数 `SessionActivity::reduce(pending: bool, unfinished_turns: bool) -> SessionState`：`pending` 优先 → `Pending`；否则 `unfinished_turns` → `Running`；否则 `Idle`。辅助判定 `SessionActivity::turn_is_unfinished(turn: TurnState) -> bool` = `!turn.is_terminal()`（`queued`/`running`/`waiting_*` 都算未结束）。所有写入方（broker、存储层恢复/失效路径）只按此函数取值，不得各自维护转换表；有效未解决交互的细节留在 `SessionActivityFacts`（§5.2），等待原因留在有效交互上，不新增互斥的单值原因字段 | `crates/core/src/model/session.rs`（`session-activity` D1） |
 | `ModeState` | `{ current_mode: Option<ModeRef>, available: Vec<ModeRef> }`——`session.mode.list` 的端口侧形状；`version` 属于会话（用例层补），不在本类型里 | `SYNC_PROTOCOL.md` §11.5/§10.2 |
 | `TurnId`/`Turn` | `Turn { id, session: SessionId, state: TurnState, queue_index: u32, causation: Option<RequestId>, started_at/ended_at }` | `SYNC_PROTOCOL.md` §11.6 |
 | `TurnState` | enum `Queued｜Running｜WaitingInput｜WaitingPermission｜Completed｜Failed｜Cancelled` | 同上 |
@@ -518,6 +521,13 @@ pub trait SessionStore: Send + Sync {
     /// catalog 投影（`NODE_LINK_PROTOCOL.md` §12.3 的 `catalog.session.originEpoch`）；不存在的标识
     /// 不出现在结果里，调用方按「未知」处置、不补值。只读、无正文、不改 cursor。
     async fn origin_epochs(&self, sessions: &[SessionId]) -> Result<Vec<(SessionId, OriginEpoch)>, PortError>;
+    /// 会话活跃程度归约的全部输入（`SessionActivityFacts`）：有效未解决交互数、已仲裁未确认的标识、
+    /// 按 `turn_id` 分组的未解决交互数，以及未结束 turn 数。读口径见本节 `[决定]`。
+    async fn session_activity(&self, session: &SessionId) -> Result<SessionActivityFacts, PortError>;
+    /// 该会话的持久队列（`owned_turn.state = 'queued'`），按 `queue_index` 升序。
+    async fn queued_turns(&self, session: &SessionId) -> Result<Vec<Turn>, PortError>;
+    /// 启动恢复用：仍有未结束 turn 或有效未解决交互的会话，最多 `limit` 个。
+    async fn sessions_with_pending_activity(&self, limit: ReplayLimit) -> Result<Vec<SessionId>, PortError>;
     async fn head(&self) -> Result<GlobalCursor, PortError>;
     /// 一致性读视图：`sync.snapshot_*` 必须在本方法返回的视图内完成（barrier 依据）。
     async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError>;
@@ -598,6 +608,8 @@ pub trait RemoteDeliveryStore: Send + Sync {
 - `[决定]` **`StateChange::Update` 新增三个可空列**（§3.6 的 `agent_session_id`/`workspace_cwd` 与承载 §3.1 `WorkspaceRef` 的 `workspace_alias`）：`None` = 不改该列。`session.create` **不再经这条列写入**（`session-create-settle-order` 变更）：三列随会话行在**落账提交**（`StateChange::SettleCreate`）里一次写入（§6 第 20 条）——`agent_session_id` 取 `SessionEndpoint::agent_session_id()`，`workspace_cwd` 取 core 自己已解析的 `ResolvedWorkspace::canonical_path()`，`workspace_alias` 取**同一次解析**用掉的别名原文 `ResolvedWorkspace::alias()`（三者都不依赖后端回报）；`agent_session_id()` 为 `None` 时三列都不写，该会话不被当作可恢复会话，目录归属也就是「未分组」。落账提交把会话行与终态放在**同一次**提交里（新建行的 `version` 因此只有一个取值），不再有「写列一次、终态再一次」的两笔。写入之后这三列**只读**：恢复流程只经 `load_recovery` 读其中两列，MUST NOT 覆写，MUST NOT 读或写 `workspace_alias`（`design.md` D1 的归属来源 + D2 的契约订正）。**`title` 是两层可选**（`sync-scope-and-pwa-client` 变更 WP3 新增）：`Option<Option<String>>` —— `None` = 不改该列、`Some(None)` = **显式置空**（写入 `NULL`）、`Some(Some(text))` = 写入该标题（上限 512 字符）。上面「`None` = 不改该列」的单层口径**覆盖不了**置空这第三个状态，因此存储层的 `CASE WHEN ?x IS NULL` 之外必须再叠一条**哨兵参数**判定来表达「本次提交要置空」；置空与其余列共用**同一条** `UPDATE`，故版本递增（`version = version + 1`）与 `updated_at = commit.at` 对两条路径一致。该字段的语义、唯一来源（Agent 的 `session_info_update` 经 broker 投影出的 `session.info.changed`，**不存在**客户端重命名入口）与失败关闭口径见 §6 第 21 条。
 - `[决定]` **目录归属的投影来源只有持久化的别名**：`SessionStore::list`（以及 `ReadView` 中返回摘要的 `read_session`/`node_link_slice`）给出的 `SessionSummary.workspace` 必须由 `owned_session.workspace_alias` 关联 `owned_workspace` 的展示名得出——该 JOIN 留在同时拥有两张表的存储实现内部，不上浮到 core。MUST NOT 按 `owned_session.workspace_cwd` 反查别名解析表来补出归属：`NULL` 就是未分组，「不反查」才能保证同一别名重指向后老会话的归属不漂移、投影期不引入对别名解析表的隐式耦合（`design.md` D1/D6，`workspace-resolution` 的创建时持久化要求）。
 - `[决定]` 交互的创建与解析规则见 §6 第 13 条。`SessionStore` **没有** `resolve_interaction` 方法：解析是 `OwnedCommit.state.interaction` 的一部分；`SessionEndpoint::resolve_interaction` 是后端（Agent）侧入口，不落盘。
+- `[决定]`（`session-activity` 变更）**`StateChange::Update` 的形状**（`crates/core/src/ports.rs` 的 `SessionUpdate`）：`state: Option<SessionState>`（`None` = 不改状态）、`title: Option<Option<String>>`（两层可选，见上）、`mode: ModeChange`、`interaction: Option<InteractionResolved>`（仲裁）、`confirmation: Option<InteractionId>`（**确认**）、`agent_session_id`/`workspace_cwd`/`workspace_directory_id`（`None` = 不改列）。**没有 `closed_at`**。`InteractionResolved { interaction, resolution, resolved_by, request_version: Option<Version> }`：`request_version` 为 `Some` 时必须等于行内 `owned_interaction.request_version`，不符 → 整事务 `Conflict(VersionMismatch)` 且不消费请求。仲裁只把行推进到 `state='resolved'` 并写 `resolved_at`，**不写 `confirmed_at`**：在端点确认处理结果前该行仍是有效待处理（归约到 `pending`）。`confirmation` 是唯一把 `confirmed_at` 写入的路径；行不存在、不是 `resolved` 或已确认时是无操作（不产生第二次副作用），且确认与会话摘要、`session.updated` 同事务。
+- `[决定]` **`SessionActivityFacts` 的读口径**（§5.2 的 `session_activity`）：`unresolved_interactions` = 未失效（`invalidated_at IS NULL`）且 `state='pending'` 或（`resolved` 且 `confirmed_at IS NULL`）的行数；`unconfirmed_interactions` = 其中已仲裁未确认的行标识；`unresolved_by_turn` = 按 `turn_id` 分组的未解决计数（`turn_id IS NULL` 的历史行不出现，供 turn 终态提交计算同事务失效数）；`unfinished_turns` = `owned_turn.state IN ('queued','running','waiting_input','waiting_permission')` 的行数。调用方据此取 `SessionActivity::reduce(unresolved_interactions > 0, unfinished_turns > 0)`。
 - `[决定]`（`pwa-conversation-ui` D2/D4）**会话历史读的元素带持久化正文、按会话内序号分页**：`HistoryPage.events`（`messages` 面的原料，`after`/`next` 的全局 cursor 升序）与 `HistoryPage.history`（结构化历史条目，`before_history`/`history_has_earlier`）都由既有 `OwnedEventRecord` 承载——**正文与定位来自同一条行**，实现在一次取行里一并取出 `payload_json` 与 ACP 五列（`acp_media_type`/`acp_raw_json`/`acp_byte_length`/`acp_sha256`/`acp_raw_unavailable_reason`），MUST NOT 为逐条事件再调 `ReadView::event_payload`（N+1）。原文不可用时按行里的 `acp_raw_unavailable_reason` 还原为 `AcpRaw::Unavailable`（与 `event_payload` 同规则，摘要不因原文被清掉而丢失）。历史条目按 `owned_event.session_sequence` 取行，走的正是已有的唯一索引 `owned_event_session(session_id, session_sequence)`——**本次不新增索引、不改 §7**；省略游标 = 最新一页、带游标 = 严格更早的一页、只跳过 `compacted_into IS NOT NULL` 的行（已压缩事件不产生条目、也不占位），且**只取条目集合内的事件类型**——集合是 `SYNC_PROTOCOL.md` §10.2.1 的 17 类（该表同时登记了不进入的 17 类：消息正文与其收尾、摘要/仪表类、命令终态类、连接与审计类），由存储查询以 `event_type IN (...)` 与 `limit`/`history_has_earlier` 在**同一条语句**里施加：事后过滤会让页大小与页标记按未过滤的行计数，客户端会拿到空页或短页却被 `historyHasEarlier` 告知「更早还有条目」，而它按「上一页最早条目的会话内序号」续读时没有游标可用。集合只定义一次（`HISTORY_ENTRY_EVENT_TYPES`），`storage-sqlite` 与 core 的读视图替身共用它，不各写一份字面量。游标早于该会话仍可读**条目**的下界时返回 `InvalidRequest`（保留窗口之前显式不可读，MUST NOT 静默少返回让调用方误以为已到最早一条）。`HistoryInclude.history` 只决定该集合是否下发，两个集合在同一次请求里各自分页、互不影响（`SYNC_PROTOCOL.md` §11.5）。
 - `[决定]`（`sync-server-connection` 变更 WP1 的 1.6，2026-10-14）**Sync 事件读面（`ReadView::sync_replay` + `SyncEventRecord`/`SyncReplaySlice` + 用例入口 `UseCases::sync_replay`）**：`SYNC_PROTOCOL.md` §10.1 的 `event` 帧把 `origin.kind`/`origin.deviceId`、`origin.nodeId` 与 `causationRequestId` 列为必需字段，而这几项只存在于 `owned_event` 的两个列（`origin_kind`/`causation`，§7.3），`CommittedEvent` 与 `EventPayload` 都不承载——因此新条目类型承载它们，**不**改 `CommittedEvent`/`OwnedEventRecord` 的形状（两者有大量现存调用方）。口径逐条如下：
   - **来源的取值只有一处**：`origin.kind` 取 `owned_event.origin_kind`，**五个**取值（`agent`/`device`/`daemon`/`local_cli`/`node`）原样往返（§7.3 的 CHECK 与 wire 词表同集，`node` 由 1.7 的前置补入）；词表外取值是**列值损坏**（实现返回 `Corrupt`），不得静默降级或挑近义取值。MUST NOT 用「这条事件有没有 `session_id`」推断来源（与 §5.2 关于 `PendingEvent.origin` 的条款同口径）。
@@ -897,17 +909,7 @@ pub struct AttachmentChunk {
 #[async_trait]
 pub trait InteractionAuthority: Send + Sync {
     async fn effective(&self, session: &SessionId) -> Result<Vec<EffectiveInteraction>, PortError>;
-    async fn resolve_effective(&self, write: EffectiveResolution) -> Result<Resolution, PortError>;
     async fn invalidate_pending(&self, session: Option<&SessionId>, at: Timestamp) -> Result<u32, PortError>;
-}
-
-pub struct EffectiveResolution {
-    pub interaction: InteractionId,
-    pub session: SessionId,
-    pub actor: Actor,
-    pub request_version: Option<Version>,
-    pub resolution: InteractionResolution,
-    pub at: Timestamp,
 }
 ```
 
@@ -933,11 +935,16 @@ pub struct EffectiveResolution {
   ② `state = Receiving` 且 `updated_at` 早于 24 小时窗口、且未被**活跃**清单引用的临时传输。删除文件在
   事务提交之后；seal/提交与清理用条件更新互斥。传输临时文件位于 `attachment_dir/.transfers/`，不属于
   孤儿回收扫描的顶层，因此活跃上传不会周期清理误删。
-- `resolve_effective` 是首个有效答案的原子入口：版本不符 → `Conflict(VersionMismatch)`，
-  已处理 → `Resolution::AlreadyResolved`，失效 → `Conflict(Expired)`，失败校验不推进版本、不消费请求。
-  `invalidate_pending` 把仍 `pending` 的行同时置为 `state = 'expired'` 并写 `invalidated_at`；失效行因此
-  不出现在任何 pending 读面（`effective`、`read_session` 的 `pending_interactions`、Node Link 快照），
-  旧解析路径（`StateChange::Update.interaction`）也返回 `Conflict(Expired)` 而不消费它，且不可复活。
+- `InteractionAuthority` **只有读与失效**：应答的 first-writer-wins 仲裁走
+  `SessionStore::commit` 的 `SessionUpdate.interaction`，确认走 `SessionUpdate.confirmation`，因此交互阶段、
+  会话摘要与 `session.updated` 永远在同一事务里；旧端口方法 `resolve_effective` 与其输入
+  `EffectiveResolution` 已删除，**不存在**可单独调用的解析写入口。仲裁的条件更新同时校验
+  版本/状态/失效标记：版本不符 → `Conflict(VersionMismatch)`，已处理 → `Resolution::AlreadyResolved`，
+  失效 → `Conflict(Expired)`，失败校验不推进版本、不消费请求。
+  `invalidate_pending` 把仍 `pending`（或 `resolved` 但未确认）的行同时置为 `state = 'expired'` 并写
+  `invalidated_at`；失效行因此不出现在任何 pending 读面（`effective`、`read_session` 的
+  `pending_interactions`、Node Link 快照），旧解析路径（`StateChange::Update.interaction`）也返回
+  `Conflict(Expired)` 而不消费它，且不可复活。
 - `permission.resolve`/`elicitation.respond` 的版本、类别、表单与上游存活校验先于命令受理；受理之后的
   竞态失败（另一设备抢先解析、窗口内失效、后端写失败）必须落一条 `command.failed` 终态，而不是把命令
   留在 `accepted`。
@@ -945,29 +952,32 @@ pub struct EffectiveResolution {
 ## 6. Broker 的顺序与事务契约
 
 1. owned：`EventSink` → broker 组装 `OwnedCommit` → `SessionStore::commit` → `EventPublisher::publish`（顺序不可交换）。
+    - `[决定]`（`session-activity-three-states`）`session.updated` 的**唯一生产者是 core**：状态变化时 broker 生成一条 `EventKind::State` 事件，payload 是提交后的完整会话摘要、版本嵌在 `session.version`（与 `sessionSummary` 同形）。状态不变不生成；同一次提交最多一条；仲裁、确认、turn 终态与恢复路径都不得各自另发，也不得由适配器/存储层伪造。
 2. imported：`node-link-client` → broker 组装 `DeliveryReceipt` → `RemoteDeliveryStore::commit_receipt` → 发布（正文只在内存）。
 3. `[决定]` 每会话串行：一个会话一个 actor，命令/后端事件/终态在同一串行队列内处理；不同会话并行。
 4. `[决定]` active turn：同一会话最多一个非终态 turn。`sessions.queue_policy = queue` 时按持久化接受顺序排队，超过 `sessions.max_queued_turns`（16）返回 `session.busy`；`= reject_busy` 时直接返回 `session.busy`（`CONFIG_REFERENCE.md` §4）。
 5. `[决定]` 授权调用点：设备与节点方向**没有命令级判定**——认证通过即可执行业务命令；配对认领方永远不授权。core 不信任 adapter 的“已授权”标志。
 6. `[决定]` 幂等键是**协议维度**的 `(actor, requestId)`：Sync 侧 actor 由 `deviceId` 决定（`SYNC_PROTOCOL.md` §11.1），Node Link 侧由 `(ownerNodeId, accessNodeId)` 决定（`NODE_LINK_PROTOCOL.md` §12.5）。重复提交时必须比对 `command`/`kind`/`session`/`expected_version`/`request_fingerprint`：任一不同 → `command.idempotency_conflict`；全同 → 返回首次结果（`CommitOutcome::replayed`），**不得**二次派发。
-7. `[决定]` 权限仲裁：`resolve_interaction` 的 first-writer-wins；`interaction.already_resolved` 之后到达的应答必须被拒绝且不覆盖既有结果。
+7. `[决定]` 权限仲裁与确认是**两个阶段**：仲裁（`SessionUpdate.interaction`）沿用 first-writer-wins，只把行推进到 `state='resolved'` 并写 `resolved_at`——它阻止其它设备重复应答，但在端点确认前该交互仍计入有效待处理、会话摘要仍是 `pending`；确认（`SessionUpdate.confirmation`）才写 `confirmed_at` 并把它移出有效集合。`interaction.already_resolved` 之后到达的应答必须被拒绝且不覆盖既有结果；重复确认是无操作，不产生第二次副作用。两个阶段都与会话摘要、`session.updated` 同事务。
 8. `[决定]` 模型/配置切换只在 turn 边界生效；非终态 turn 期间的 `set_mode`/`set_config` 排队到边界或返回 `state.version_conflict`。
 9. `[决定]` 磁盘写失败：`commit` 返回 `PortError::Unavailable` → 命令显式失败或 `uncertain`；**不得**发布对应事件（`SECURITY_DESIGN.md` §15）。
     - **非终态批次失败不得只丢弃**（`node-link-owner` 的修复轮次）：失败批次携带在跑 turn 的事件时，broker 必须用一次提交把该 turn 终结为 `failed`、把命令置为 `uncertain`，并把该 turn **已落盘** delta 的 `agent.message.completed`（第 14 条）与它们同批提交——缺的那一块不伪造。
     - 被终结的 turn 进入「已放弃」集合：它后续到达的事件（含终态）不再提交，因此库里不会出现「报完成但正文缺失」的记录；适配器不带 turn 标识时，无在跑 turn 的迟到事件按最后被放弃的 turn 归属（归属集合见第 19 条的 `turnId` 集合），而不是被记到下一个 turn 上。
     - **被放弃的 turn 继续占住会话槽**（`node-link-owner` 的修复轮次）：在它的终态被端点观测到之前，`dispatch_one` **不得**提升下一个排队 turn。理由是归属只能靠「有在跑 turn 时归给它」推断（第 19 条）：一旦提前派发，下一个 turn 就成了那个「在跑的 turn」，上一个 turn 的迟到事件（含终态）会被记到它头上——客户端看到下一个命令 `completed`，而它的正文被按上一个 turn 的收尾折叠。占住期间它的迟到事件（含 permission/elicitation 请求）一律按它归属并丢弃：不落库、不写交互行、不广播——这是相对第 19 条「无归属时照常落库（`turnId` 为 NULL）」的**有意更强的处置**，只在有可归属的被放弃 turn 时适用；收敛这个已经终结为 `uncertain` 的 turn 是端点的职责。占住期间该会话按**仍有 active turn** 处理（`TurnQueue.running` 未清空），客户端可见后果是：`session.mode.set`/`session.config.set` 返回 `state.version_conflict`（第 8 条），`session.prompt` 按 `sessions.queue_policy` 受理排队或返回 `session.busy`（第 4 条）。
         - 释放占位有两条路径：①该 turn 的终态事件到达（按上面丢弃，但视为「端点已观测到它结束」）；②兜底——占位消耗的驱动轮次达到 core 常量 `ABANDONED_TURN_HOLD_ROUNDS`（`1200` 轮；组合根按 `storage.flush_interval_ms` 驱动活动会话，默认 250 ms 一轮 ≈ 5 分钟）。core 不读时钟、不设定时器，因此兜底按轮次而不按墙钟计时：端点永不收敛时优先让会话继续可用。
-        - 仍有排队 turn 时，这次放弃提交把会话状态写成 `queued`（而非 `failed`）：组合根的合并窗口只枚举 `queued`/`running`/`waiting_*` 的会话，写成 `failed` 会让该会话再也不被驱动，兜底轮次永远推不动。
+        - 仍有排队 turn 时，这次放弃提交把会话状态归约为 `running`（占位 turn 已失败，但仍有未结束 turn）：三态下没有 `queued` 主状态，组合根的合并窗口按未结束 turn/持久队列驱动，而不是只筛旧状态。
         - 释放之后无归属事件回到「归给在跑的 turn」的既有规则（第 19 条/§10.3），因此兜底是最后手段：它只在端点确实不再收敛时触发。**它的代价要显式登记**：占位一旦释放，该被放弃 turn 若还有迟到事件（含它终态之后的尾巴），会按在跑的 turn 归属并照常提交——兜底把窗口收窄到有界轮次，不是消除它；这是「提前派发（每个被放弃的 turn 都会发作）」与「会话永久卡住」之间的取舍，彻底消除需要适配器为 `EndpointEvent` 给出权威 turn 标识（本切片不要求）。
     - 该路径不压缩已落盘的 delta（第 15 条是可选动作），也不向调用方冒泡错误（与带终态的批次失败时的既有口径一致）：可观测信号就是上面两条持久事件（core 不含日志依赖，`AGENTS.md` §8）；失败批次没有在跑 turn 可归属时（例如会话级事件）仍然只有「不发布」这一个效果，没有命令可终结。
 10. `[决定]` `storage.flush_interval_ms = 250` 允许把同一会话短窗口内的 delta 合并为一次 `commit`；合并不得改变顺序、不得跨 turn 边界、不得延迟终态事件。
 11. `[决定]` `OwnedCommit.events` 只接受 `StoredPolicy`；`Ephemeral` 由 broker 在组装前过滤（内存转发），`commit` 收到 `Ephemeral` 视为 `InvalidRequest`（类型上已不可表达）。
 12. `[决定]` 快照与重放必须来自 `SessionStore::read_view()` 返回的同一读视图，`sync.snapshot_begin`/`sync.snapshot_end` 与之后的事件游标都以该视图的 `head()` 为 barrier（`SYNC_PROTOCOL.md` §9.3/§9.4）。
 13. `[决定]` **交互（权限 / elicitation）的创建与解析**：
-    - 创建：Agent 的请求由 broker 组装成一条 `kind = interaction` 的事件**加上** `OwnedCommit.interactions` 里的 `PendingInteractionWrite`，**同一次 `commit`**（§9 判据 15）。写入形状**不带** `request_event`（`event_id` 由存储层分配、装配方预知不了）：存储层在同一提交里找 `kind = 'interaction'` 且 payload 的 `interactionId` 等于 `interaction.id()` 的那条事件，把该事件的 `global_sequence` 写进 `owned_interaction.request_event`（列类型是 `INTEGER REFERENCES owned_event(global_sequence)`，不是 `event_id`）；配不到（事件缺失或被 Ephemeral 过滤）→ 整事务 `InvalidRequest`，**不得**写入悬空引用。
-    - 解析：走 `OwnedCommit.state.interaction`（`InteractionResolved { interaction, resolution, resolved_by }`）——**不是** `SessionStore` 的独立方法，因此「行更新 + `*.resolved` 事件 + 命令终态」仍在 `commit` 的单次事务边界内。`SessionEndpoint::resolve_interaction` 只负责把决定交给后端。
-    - 仲裁顺序（不可交换）：先条件更新落盘仲裁 → 再派发后端 → 最后 flush 后端发出的 `*.resolved` 事件。受影响行数为 0 时存储层在同一事务内回读：行存在且 `state <> 'pending'` → `PortError::Conflict(AlreadyResolved)`；无行 → `PortError::NotFound`。
-    - 崩溃窗口：上面三步之间崩溃会留下「交互行已终态、`*.resolved` 事件未落盘」。重试同一条命令返回 `AlreadyResolved` 且**不**二次派发；UI 以交互行（`HistoryInclude.pending_interactions`）恢复，不依赖事件流补齐。该窗口是本轮接受的取舍（消除它需要「解析意向」行或两阶段提交，见 §10）。
+    - 创建：Agent 的请求由 broker 组装成一条 `kind = interaction` 的事件**加上** `OwnedCommit.interactions` 里的 `PendingInteractionWrite`，**同一次 `commit`**（§9 判据 15）。同一事务里还要按归约重算摘要（新增交互把会话推到 `pending`），状态变化时附带一条 `session.updated`；三件事（交互行、事件、摘要/`session.updated`）要么全落盘要么全不落盘。写入形状**不带** `request_event`（`event_id` 由存储层分配、装配方预知不了）：存储层在同一提交里找 `kind = 'interaction'` 且 payload 的 `interactionId` 等于 `interaction.id()` 的那条事件，把该事件的 `global_sequence` 写进 `owned_interaction.request_event`（列类型是 `INTEGER REFERENCES owned_event(global_sequence)`，不是 `event_id`）；配不到（事件缺失或被 Ephemeral 过滤）→ 整事务 `InvalidRequest`，**不得**写入悬空引用。
+    - 解析：走 `OwnedCommit.state.interaction`（`InteractionResolved { interaction, resolution, resolved_by, request_version }`）——**不是** `SessionStore` 的独立方法，因此「行更新 + 摘要 + `session.updated` + `*.resolved` 事件 + 命令终态」仍在 `commit` 的单次事务边界内。`SessionEndpoint::resolve_interaction` 只负责把决定交给后端。`request_version` 是可选版本校验：不符 → 整事务 `Conflict(VersionMismatch)`，不消费请求。
+    - 仲裁顺序（不可交换）：先条件更新落盘仲裁（`state='resolved'`、`resolved_at`，**`confirmed_at` 保持 `NULL`**）→ 再派发后端 → 最后 flush 后端发出的 `*.resolved` 事件。受影响行数为 0 时存储层在同一事务内回读：行存在且 `state <> 'pending'` → `PortError::Conflict(AlreadyResolved)`；无行 → `PortError::NotFound`。
+    - 确认：`OwnedCommit.state.confirmation`（`Some(InteractionId)`）把**已 `resolved` 且未确认**的行写入 `confirmed_at`；行不存在/仍 `pending`/已确认时是无操作（不覆盖、不重复写）。确认提交同时重算摘要：若状态因此从 `pending` 变为 `running`/`idle`，`session.updated` 与该确认**同一次提交**；状态未变时只落确认、不重复生成 `session.updated`。未确认的已仲裁行仍计入有效待处理（§5.2 的 `SessionActivityFacts`）。
+    - **turn 终态失效**：turn 进入 `completed`/`failed`/`cancelled`（含派发失败、放弃与启动恢复的终结）时，存储层在同一次提交里把该 `turn_id` 下仍未失效的交互置为 `expired` 并写 `invalidated_at`（`pending` 与「`resolved` 未确认」都失效），broker 用 `SessionActivityFacts.unresolved_for_turn(turn)` 扣减待处理数并重算摘要——只失效**本 turn** 的行，绝不误伤其它 turn。终态提交里的 `session.updated` 最多一条。
+    - 崩溃窗口：仲裁与确认之间崩溃会留下「行已 `resolved`、`confirmed_at` 未写」；重启恢复按 §6 第 16 条先调用 `invalidate_pending` 把仍有效的行失效（不可复活），因此不会永久停在待处理。重试同一条应答返回 `AlreadyResolved` 且**不**二次派发；UI 以交互行（`HistoryInclude.pending_interactions`）恢复，不依赖事件流补齐。
     - `options` **不落库**（`owned_interaction` 无该列）：读视图里 `PendingInteraction.options` 恒为空。还原路径是事件流（`replay` 返回的 `CommittedEvent` 带 `id`；`read_session` 返回的 `events`/`history` 元素直接带持久化正文），再用 `ReadView::event_payload(id)` 取那条 `interaction` 事件的正文并解析候选项（§5.2）；不要拿 `request_event`（它是 `global_sequence`）直接当 `event_payload` 的参数。
 14. `[决定]` **助手消息的收尾正文**（`SYNC_PROTOCOL.md` §10.2 的 `agent.message.completed`）：turn 进入终态（`completed`/`cancelled`/`failed`）时，broker 必须为**该 turn 内出现过 `agent.message.delta` 的每个 `messageId`** 生成恰好一条 `agent.message.completed`，并与该 turn 的终态事件在**同一次 `commit`** 内提交（因此它对重放与快照恒可见）。规则：
     - `content` 由该消息的 delta **按 `deltaIndex` 升序**折叠而成：连续的文本 delta 合并为**一个** `{type:"text", text}` 块（文本按序拼接）；带 `block` 字段的 delta（非文本内容，由适配器投影，见 `SYNC_PROTOCOL.md` §10.2）按顺序插入对应块。
@@ -982,6 +992,9 @@ pub struct EffectiveResolution {
     - 重放里 summary 事件**替代**被压的 delta：客户端据此知道该段历史已压缩；「是否丢过 delta」由会话内 `session_sequence` 的稠密性判定（§9 判据 4），不由 summary 承载。
 16. `[决定]` **启动恢复**（`SYNC_PROTOCOL.md` §11：「Daemon 恢复时发现外部 Agent 副作用无法确认，必须先持久化 `command.uncertain`，再向客户端广播」）：组合根在取得单实例锁、开始监听**之前**，必须以 `LocalCli` actor 调用 `RecoverUnsettled` 用例；它对 `SessionStore::unsettled_commands` 返回的每条 `accepted` 命令，在该会话的串行门内终结为 `uncertain`——写终态事件 `command.uncertain { requestId, reason, mayHaveReachedAgent: true }` 并更新幂等行（`status`/`terminal_event_id`），同时把该命令对应的未终态 turn 终结为 `failed`（`PublicError { code: "command.uncertain" }`）。有会话与无会话两类都要覆盖：`session.create` 在受理与落账之间崩溃留下的 `accepted` 行是**无会话**的（`session_id` 为 `NULL`、没有会话行，第 20 条），它不进任何会话串行门、也没有可终结的 turn，恢复只为它写一条 `session` 为空（`None`）的 `command.uncertain` 提交——本机因此不会出现该会话的会话行。**不得**自动重放副作用，也不得让 `accepted` 行静默存活。`uncertain` 行不参与 TTL 清理（§7.5）。
     - 同一趟恢复还要补写**缺失的收尾事件**：若某个 turn 已有已提交的 `agent.message.delta` 却没有 `agent.message.completed`（进程在终态提交前崩溃），必须用 `ReadView::event_payload` 从库里按第 14 条的规则重建该事件并在**同一次恢复提交**内落盘，否则那段已经广播出去的文本永远没有终态记录。
+    - **交互与队列的恢复顺序**（`session-activity` D3）：恢复开始时先调用 `InteractionAuthority::invalidate_pending(None, now)` 把仍有效的交互（含已仲裁未确认）失效——重启后上游 ACP 请求已不存在，不得再被当作可应答，也不得复活；然后按 `unsettled_commands` 终结 `accepted` 命令（对应 turn → `failed`，同事务失效该 turn 的交互），最后用 `SessionStore::sessions_with_pending_activity(limit)` 补齐仍有未结束 turn/有效交互的会话，逐个 `pump` 并 `refresh_activity` 重算摘要。恢复可重复执行：已终结的行不会被再次终结，已失效的交互不会被重新计数。
+    - **持久队列的恢复**：`SessionStore::queued_turns` 按 `queue_index` 升序给出遗留 `queued` turn；`Session.prompt` 正文不在 `owned_turn` 里（只由 Agent 回显的 `user.message.delta` 留下），因此**不得**重放它们的 Agent 副作用。内存队列为空且没有在跑 turn 时，broker 把这些遗留项显式终结为 `failed`（`internal.unavailable`，不静默删除）、`accepted` 命令由恢复结算为 `uncertain`，然后 FIFO 从后续项继续；同一会话最多一个 active turn 的不变量不变。**不确定的工作不重派**：`uncertain` 命令、被放弃的 turn 与无法确认停止的执行都不自动重试，后者保留占位与运行阻塞，不提前 `idle`、不提升后续 turn。
+    - **摘要收敛**：同一趟恢复里每个会话的摘要只按 `SessionActivity::reduce` 重算一次，状态未变不写行、不生成 `session.updated`；变化时摘要更新与 `session.updated` 同一次提交，不得重复生成。
 17. `[决定]` **`session.mode.list` 的应答**：结果形状是 `ModeState { currentModeId, availableModes: ModeRef[], version }`（`SYNC_PROTOCOL.md` §11.5/§10.2）；`availableModes` **只能**来自 `SessionEndpoint::modes()`（§5.1），`version` 取该会话当前版本。core 不得凭 `current_mode` 编造候选列表，端口返回空列表时结果就是空列表（不伪造）。
 18. `[决定]` **附件文件与行的事务边界**：行的删除与它所在的事务一起提交，**文件删除一律在提交之后**（崩溃只会留下无人引用的孤儿文件，绝不会留下悬空行）；`AttachmentStore::prune_lru` 与 `sweep_orphans` 因此都在事务之外运行。
     - **孤儿回收**由组合根在启动时调用一次 `sweep_orphans(启动时刻, 1000)`（紧跟 §6 第 16 条的恢复之后）：只删「不在 `owned_attachment` 里**且** `mtime` 早于本次进程启动时刻」的文件——第二条规则保护正在写入、行还没提交的新附件。它只扫描 `storage.attachment_dir` 的**顶层**条目；传输临时文件在 `attachment_dir/.transfers/` 子目录里，因此周期维护（每 60 s、以 `now` 为界）不会误删正在上传的文件。回收失败**不阻止启动**，记一次结构化警告，剩余孤儿留到下次启动。
@@ -1016,7 +1029,7 @@ pub struct EffectiveResolution {
     - 撤销：设备/节点撤销在事务内把相关 `receiving` 传输置为 `aborted` 并拒绝后续块/读取；已提交附件不因撤销被删除，按消息保留策略处理。
     - 失败：磁盘满、摘要不符、预算耗尽都不得留下「可被 prompt 引用的半成品」；失败关闭路径与 §8 一致。
 
-## 7. `storage-sqlite` v8 表结构（`imported_*` 家族仍为 v3）
+## 7. `storage-sqlite` v13 表结构（`imported_*` 家族为 v5）
 
 ### 7.1 文件、PRAGMA、连接与权限
 
@@ -1031,26 +1044,32 @@ pub struct EffectiveResolution {
 
 ### 7.2 Migration
 
-- `[决定]` `PRAGMA user_version` = 文件格式版本（当前 **v12 = 12**）；`meta` 保存两族 schema 版本：`owned_schema_version`（当前 12）、`imported_schema_version`（当前 4，imported 家族本次未变）。三个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`/`IMPORTED_SCHEMA_VERSION`。
+- `[决定]` `PRAGMA user_version` = 文件格式版本（上一版为 v12 = 12；当前 **v13 = 13**）；`meta` 保存两族 schema 版本：`owned_schema_version`（当前 13；旧文档的「`owned_schema_version` 当前 12」已被本段取代）、`imported_schema_version`（当前 5）。三个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`/`IMPORTED_SCHEMA_VERSION`。
 - `[决定]` 两族 migration 分开维护；单事务、可重复执行、失败整体回滚；文件格式版本**或**任一表结构版本高于本二进制已知版本 → 拒绝启动，不降级写入。
-- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 12` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库依次走 v2…v12 段，v2 库走 v3…v12 段，…，v11 库只走 v12 段）；`user_version = 12` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL（含 v12 的新表与 `owned_interaction` 两列）建成 v12 形状（此时 `user_version` 是 0，不能只按版本号判断）。每段各自带 `file_version < N` 的守卫，因此「文件格式已比该段新、但仍低于最新版」的库不会重跑那一段。
+- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 13` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库依次走 v2…v13 段，v2 库走 v3…v13 段，…，v12 库只走 v13 段）；`user_version = 13` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL（三态 `owned_session`、`owned_interaction` 的 `confirmed_at`/`turn_id` 与 v12 的五张表）建成 v13 形状（此时 `user_version` 是 0，不能只按版本号判断）。每段各自带 `file_version < N` 的守卫，因此「文件格式已比该段新、但仍低于最新版」的库不会重跑那一段。
 - `[决定]` v1 → v2 升级步骤（顺序固定，都在同一事务内）：
   1. 执行 §7.3/§7.4 的 DDL 常量：`CREATE ... IF NOT EXISTS` 建出新增的管理表与 `imported_import_export`，既有表不动；
   2. `owned_audit` 与 `imported_audit` 走 **12-step 表重建**（SQLite 不能修改既有 CHECK）：新建带完整 `action` CHECK 的表 → 按列拷贝**全部行（含 `audit_id`）** → `DROP` 旧表 → `RENAME` → 重建索引；之后按升级前的 `sqlite_sequence` 回填序列，**AUTOINCREMENT 不得回退**（审计有 365 天 TTL，尾部行被清理后 `seq` 会领先于 `max(audit_id)`）；
   3. `imported_import` 重建：去掉 `export_id` 与 `UNIQUE (owner_node_id, export_id)`，新增 `grants_json`；原行的 `(owner_node_id, export_id)` 与 `created_at` 迁为一条 `imported_import_export` 关联行（`added_at` = 原 `created_at`）。旧行**没有可信的 grants 来源**，因此 `grants_json` 一律写 `'[]'`——**不得凭空补齐或默认放权**，这类 Import 保持不可用，等本地重新授权；
-  4. 本段**不单独落盘版本**：`meta.owned_schema_version`/`meta.imported_schema_version` 与 `PRAGMA user_version` 都由同一事务内紧随其后的升级段在**全部**段结束后统一按当前常量写入（本次为 `'8'`/`'3'` 与 `8`，见下面几条），因此不存在「已写 v2 版本号、表仍是 v1 形状」的中间落盘。
+  4. 本段**不单独落盘版本**：`meta.owned_schema_version`/`meta.imported_schema_version` 与 `PRAGMA user_version` 都由同一事务内紧随其后的升级段在**全部**段结束后统一按当前常量写入（本次为 `'13'`/`'5'` 与 `13`，见下面几条），因此不存在「已写 v2 版本号、表仍是 v1 形状」的中间落盘。
 - `[决定]` **v2 → v3 升级步骤**（与 v2 段在同一事务内、顺序在后）：两张审计表同样走 12-step 表重建，**列集合与列顺序逐字不变**，只扩宽 CHECK——`actor_kind` 增 `'pairing_claimant'`（配对认领方的审计归因）、`action` 增 `'node.authenticated'`/`'node.auth_failed'`（节点握手留痕）；之后按本次升级前的 `sqlite_sequence` 回填序列（两段重建各自 `DROP` 过审计表，因此序列只在**全部**重建结束后回填一次）；版本键与 `PRAGMA user_version` 的落盘不在本段，见下一条。`owned_command` **不重建**：认领方永不提交命令，它的 `actor_kind` CHECK 保持 `('device','node','cli')`（design D12）——因此 v3 库上两张审计表接受四值、`owned_command` 只接受三值。
 - `[决定]` **v3 → v4 升级步骤**（与 v2/v3 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_node` 在**列清单末尾**追加一列 `export_ids_json TEXT NOT NULL DEFAULT '[]'`，用 `ALTER TABLE owned_node ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK，见 §11.8），`NOT NULL` 由默认值满足，因此既有行得到 `'[]'`（**不得默认放权**，§11.8）；`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 28）。版本键与 `PRAGMA user_version` 的落盘不在本段，见下一条。
-- `[决定]` **v4 → v5 升级步骤**（与 v2/v3/v4 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加两列 `agent_session_id TEXT` 与 `workspace_cwd TEXT`，用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK）；两列都可空、**无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有可用于恢复的标识或目录」，`MUST NOT` 被任何读取路径补全、推导或替换为别名解析结果（`NOT NULL DEFAULT ''` 做不到这一点：空串无法与「未取得」区分，会让「可恢复」判定被默认值蒙蔽），§9 判据 28 逐行断言。`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'8'`、`PRAGMA user_version` 置为 `8`，`meta.imported_schema_version` 保持 `'3'`（imported 家族本次不变）。
-- `[决定]` **v5 → v6 升级步骤**（与 v2/v3/v4/v5 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加一列 `workspace_alias TEXT`（会话的目录归属），用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK）；该列可空、**无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有目录归属（未分组）」，`MUST NOT` 被任何读取路径按 `workspace_cwd` 反查 `owned_workspace` 补齐，也 `MUST NOT` 用空串或占位别名代替（`NOT NULL DEFAULT ''` 做不到这一点：空串无法与「未分组」区分，会让「已分组」判定被默认值蒙蔽，与 v5 两列同一理由），§9 判据 28 逐行断言。写入侧与 v5 两列同属会话创建的那一次窄写提交（`CASE WHEN ?x IS NULL THEN col ELSE ?x END`，`None` = 不改该列），因此恢复流程既不读也不改它。`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'8'`、`PRAGMA user_version` 置为 `8`，`meta.imported_schema_version` 保持 `'3'`（imported 家族本次不变）。
+- `[决定]` **v4 → v5 升级步骤**（与 v2/v3/v4 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加两列 `agent_session_id TEXT` 与 `workspace_cwd TEXT`，用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK）；两列都可空、**无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有可用于恢复的标识或目录」，`MUST NOT` 被任何读取路径补全、推导或替换为别名解析结果（`NOT NULL DEFAULT ''` 做不到这一点：空串无法与「未取得」区分，会让「可恢复」判定被默认值蒙蔽），§9 判据 28 逐行断言。`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'13'`、`PRAGMA user_version` 置为 `13`，`meta.imported_schema_version` 置为 `'5'`（见 v12 → v13 段）。
+- `[决定]` **v5 → v6 升级步骤**（与 v2/v3/v4/v5 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加一列 `workspace_alias TEXT`（会话的目录归属），用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK）；该列可空、**无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有目录归属（未分组）」，`MUST NOT` 被任何读取路径按 `workspace_cwd` 反查 `owned_workspace` 补齐，也 `MUST NOT` 用空串或占位别名代替（`NOT NULL DEFAULT ''` 做不到这一点：空串无法与「未分组」区分，会让「已分组」判定被默认值蒙蔽，与 v5 两列同一理由），§9 判据 28 逐行断言。写入侧与 v5 两列同属会话创建的那一次窄写提交（`CASE WHEN ?x IS NULL THEN col ELSE ?x END`，`None` = 不改该列），因此恢复流程既不读也不改它。`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'13'`、`PRAGMA user_version` 置为 `13`，`meta.imported_schema_version` 置为 `'5'`（见 v12 → v13 段）。
 - `[决定]` **v6 → v7 升级步骤**（与 v2/v3/v4/v5/v6 段在同一事务内、顺序在后）：唯一差异是 `owned_event.origin_kind` 的 CHECK 从四值扩到五值（新增 `'node'`，§3.4/§10.1），列集合、列顺序、其余 CHECK 与索引**逐字不变**。SQLite 不能修改既有 CHECK，因此走 **12-step 表重建**（新建 `owned_event` 新形状 → 按列拷贝**全部行（含 `global_sequence`）** → `DROP` 旧表 → `RENAME` → 重建四个索引）。**子表必须一起挪开**：`owned_interaction.request_event` 是 `owned_event` 的子外键且是 `NO ACTION`，`foreign_keys = ON` 时 `DROP TABLE` 的隐式 DELETE 会直接违反它（实测 `FOREIGN KEY constraint failed`），而官方流程要求的 `PRAGMA foreign_keys = OFF` 在事务内是 no-op、与本段「单事务」的要求冲突；因此照 v1 → v2 段处理 `imported_import` 的同款手法，先把 `owned_interaction` 的行搬进一张**无外键的过渡表**并 `DROP` 该子表（它是叶子，删除永远安全），父表重建后按 §7.3 的**规范 DDL** 把它建回并回填行——过渡表不进 `sqlite_manifest` 的最终形状，升级库与新建库的 `owned_interaction` 逐列（名称/顺序/类型/`NOT NULL`/默认值）相等。`owned_event` 的 `AUTOINCREMENT` 序列（`sqlite_sequence`）与两张审计表一起在**全部**重建之前取一次、之后回填一次（`global_sequence` 是跨节点排序与 cursor 的基准，`MUST NOT` 因保留期清理过尾部行而回退）。行级保留要求见 §9 判据 28。
-- `[决定]` **v7 → v8 升级步骤**（与 v2/v3/v4/v5/v6/v7 段在同一事务内、顺序在后）：唯一差异是从 §7.3 的 `owned_device` **删除一列** `scopes_json`（设备不再有授权集合，§3.5、§6 第 5 条），用 `ALTER TABLE owned_device DROP COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK，见 §11.8）：该列既不在任何 CHECK/索引/外键/生成列里，也没有表引用 `owned_device`。本段**只作用于升级前就存在**的 `owned_device`（v1 库没有这张表，它由 §7.3 的 DDL 常量按**当前形状**直接建出、已不含该列，再 `ALTER TABLE ... DROP COLUMN` 会因缺列失败，因此与 v4 段同款加 `owned_device` 存在性守卫）；删列**不动** `owned_audit`/`imported_audit` 的 `action` CHECK——`'device.scopes_changed'` 作为**历史取值**保留（升级前的库可能已有这类审计行，收缩 CHECK 会让历史行写不回去、读不出来），只是本二进制不再产生它（§11.6 第 1 条）。删列后升级库与新建库的 `owned_device` 列清单（列名/顺序/类型/`NOT NULL`/默认值）逐项相等（§9 判据 28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'8'`、`PRAGMA user_version` 置为 `8`，`meta.imported_schema_version` 保持 `'3'`（imported 家族本次不变）。
+- `[决定]` **v7 → v8 升级步骤**（与 v2/v3/v4/v5/v6/v7 段在同一事务内、顺序在后）：唯一差异是从 §7.3 的 `owned_device` **删除一列** `scopes_json`（设备不再有授权集合，§3.5、§6 第 5 条），用 `ALTER TABLE owned_device DROP COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK，见 §11.8）：该列既不在任何 CHECK/索引/外键/生成列里，也没有表引用 `owned_device`。本段**只作用于升级前就存在**的 `owned_device`（v1 库没有这张表，它由 §7.3 的 DDL 常量按**当前形状**直接建出、已不含该列，再 `ALTER TABLE ... DROP COLUMN` 会因缺列失败，因此与 v4 段同款加 `owned_device` 存在性守卫）；删列**不动** `owned_audit`/`imported_audit` 的 `action` CHECK——`'device.scopes_changed'` 作为**历史取值**保留（升级前的库可能已有这类审计行，收缩 CHECK 会让历史行写不回去、读不出来），只是本二进制不再产生它（§11.6 第 1 条）。删列后升级库与新建库的 `owned_device` 列清单（列名/顺序/类型/`NOT NULL`/默认值）逐项相等（§9 判据 28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'13'`、`PRAGMA user_version` 置为 `13`，`meta.imported_schema_version` 置为 `'5'`（见 v12 → v13 段）。
 - `[决定]` **v11 → v12 升级步骤**（与 v2…v11 段在同一事务内、顺序在后）：五张新表由 §7.3 的 `CREATE ... IF NOT EXISTS` 建出；既有 `owned_interaction` 追加 `request_version INTEGER NOT NULL DEFAULT 1` 与 `invalidated_at TEXT` 两列（`ALTER TABLE`，先探测 `column_exists`，因此新建库与升级库同形）。本段只追加列，不改既有行；旧 pending 请求得到版本 1。
+- `[决定]` **v12 → v13 升级步骤**（与 v2…v12 段在同一事务内、顺序在后；`session-activity` 变更）：
+  1. `owned_interaction` 追加两列（先 `column_exists` 探测，新建库与升级库同形）：`confirmed_at TEXT`（可空；`NULL` = 仍计入有效待处理）与 `turn_id TEXT REFERENCES owned_turn(turn_id)`（可空）。`turn_id` 只按**创建该交互的事件**回填——`turn_id = (SELECT e.turn_id FROM owned_event e WHERE e.global_sequence = owned_interaction.request_event)`，`request_event` 为空的旧行保持 `NULL`；**不得**按时间相邻或会话内最近 turn 猜测归属。旧 `state='resolved'` 行在旧模型里已经退出待处理集合，因此回填 `confirmed_at = resolved_at`，不制造一批「已仲裁未确认」。
+  2. `owned_session` 走 **12-step 表重建**（SQLite 不能修改既有 CHECK）：建三态新表（`state IN ('idle','running','pending')`，**无 `closed_at`**）→ 拷贝全部行并按旧七态写迁移暂存值（idle→idle、queued/running→running、waiting_input/waiting_permission→pending、failed/closed→idle）→ `DROP` 旧表 → `RENAME` 为规范名。子表全部以 `ON DELETE CASCADE` 引用 `owned_session`，因此 `migrate()` 在 `BEGIN` **之前**关闭 `PRAGMA foreign_keys`（事务内该 pragma 是 no-op）、迁移结束后恢复；否则 `DROP TABLE` 会级联删除子表行。重建保留列、行主键、`version`、时间列与恢复列；索引由规范 DDL 重建。
+     - 映射值是**暂存值**，不是权威摘要：迁移不发布摘要、不广播事件；开放业务接入前的启动恢复用 `SessionActivity::reduce` 按有效交互与未结束 turn 重算（§6 第 16 条），旧标签不得覆盖重算结果，也不得据此伪造任务结果。
+  3. 归一化 `imported_session.state` 的旧七态（imported 表没有 CHECK，因此只改值、不重建、不加正文列）：`queued`/`running` → `running`、`waiting_input`/`waiting_permission` → `pending`、`failed`/`closed` → `idle`，只作用于这七个旧取值。
+  4. 版本只在三件事全部成功后统一落盘（与其它段同一事务）：`meta.owned_schema_version = '13'`、`meta.imported_schema_version = '5'`、`PRAGMA user_version = 13`。失败整体回滚，重开可重试；`sqlite_sequence`、既有索引、外键与事件/审计字节保持不变（§9 判据 37）。
 - `[决定]` **目录归属的读取投影**（`design.md` D1/D6）：`SessionSummary.workspace` 取自 `owned_session.workspace_alias`，展示名由 `storage-sqlite` 在同一条读查询里 `LEFT JOIN owned_workspace ON w.alias = s.workspace_alias` 取得；**关联不上时回退为别名本身**（目录被删除不丢分组，也不让规范化路径进入摘要——路径只出现在快照的 `workspaces` 条目上，§11.1）。该 JOIN 留在 `storage-sqlite` 内部（它同时拥有两张表），**不上浮到 core**。实现 `MUST NOT` 存在任何「按 `owned_session.workspace_cwd` 反查别名」的查询——`NULL` 就是未分组，这是「别名重指向后既有会话归属不漂移」的前提。
 - `[决定]` 保留不变量：`server_epoch`、会话 `origin_epoch` 与事件 `global_sequence`/`session_sequence`、`requestId` 与幂等行、命令终态、全部既有审计都逐行保留，**不得重新编号**。管理表初始为空；profile 种子与「已初始化」标记在同一事务里提交（`LocalConfigStore::mark_seeded`，§5.3），不从聊天或审计内容推断信任。
 - `[决定]` 管理表纳入 §7.5 的容量度量（TEXT 列 + 附件字节）与清理顺序；撤销 tombstone 不因容量压力被删除，空间不足时拒绝新写入而不是删活动信任或未到期审计。
 - `[决定]` 迁移测试资产：`fixtures/storage/v2/` 三件套在 v3 之后是**冻结的历史升级输入**——`empty.sqlite3`（v2 形状的空库，v2 → … → v12 连续升级用例的输入）、`from-v1.sqlite3`（含会话/事件/cursor/幂等/审计数据的 v1 库，`owned_audit` 故意留下 `audit_id = 1,2,5` 的空洞以覆盖「序列领先于 `max(audit_id)`」；v1 → … → v12 连续升级用例的输入）与 `too-new.sqlite3`（`user_version = 3`，v3 之后不再「过新」，保留为历史资产）；`fixtures/storage/v1/` 的两个文件是更早的历史资产。当前二进制不再能生成 v2 形状的空库，因此 `from-v1.sqlite3` 的生成器（`crates/storage-sqlite/tests/migration.rs` 的 `regenerate_v1_fixture`，默认 `#[ignore]`）只重建它；v3、v4 与 v5 形状的库同样不由夹具提供，而由用例现场造（新建库写行 → `DROP` 掉换代才有的列、并把换代才删的列按旧声明补回 → 降版本键），`v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_columns_only`、`v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only` 与 `v5_database_upgrades_to_v6_by_appending_a_null_workspace_alias_column`（`tests/workspace_alias.rs`）分别覆盖三段；「版本过新拒绝启动」用例改在临时副本上把 `user_version` 顶到 `FILE_FORMAT_VERSION + 1`；「已是最新版则不重写」用例改在空目录新建的当前版本库上判定。
-- `[决定]` 回滚：v12 库不能被 v11 或更早的二进制打开（版本过新拒绝启动），因此回滚 = 恢复升级前的数据库备份 + 回退二进制；本合同**不提供**自动降级迁移（需要把库先降回 v11 形状的降级工具必须单独授权）。
+- `[决定]` 回滚：v13 库不能被 v12 或更早的二进制打开（版本过新拒绝启动），因此回滚 = 恢复升级前的数据库备份 + 回退二进制；本合同**不提供**自动降级迁移（需要把库先降回 v12 形状的降级工具必须单独授权）。
 
 ### 7.3 `owned_*` 表
 
@@ -1065,14 +1084,13 @@ CREATE TABLE IF NOT EXISTS owned_session (
   title             TEXT,
   agent_id          TEXT NOT NULL,
   agent_name        TEXT NOT NULL,
-  state             TEXT NOT NULL CHECK (state IN ('idle','queued','running','waiting_input','waiting_permission','failed','closed')),
+  state             TEXT NOT NULL CHECK (state IN ('idle','running','pending')),
   origin_epoch      TEXT NOT NULL,
   current_mode_id   TEXT,
   current_mode_name TEXT,
   version           INTEGER NOT NULL,
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL,
-  closed_at         TEXT,
   agent_session_id  TEXT,                      -- Agent（ACP）侧会话标识；NULL = 该会话没有可用于恢复的标识，不得被补齐/推导
   workspace_cwd     TEXT,                      -- 创建时解析出的规范化绝对路径；NULL = 同上（不得按别名重解析来填上）
   workspace_directory_id TEXT                  -- 创建时解析出的目录标识；NULL = 未分组（不得按 workspace_cwd 反查补齐）
@@ -1167,7 +1185,9 @@ CREATE TABLE IF NOT EXISTS owned_interaction (
   elicitation_values_json TEXT,
   resolved_by_kind TEXT, resolved_by_id TEXT,
   request_version INTEGER NOT NULL DEFAULT 1,
-  invalidated_at  TEXT
+  invalidated_at  TEXT,
+  confirmed_at    TEXT,                        -- 端点确认处理结果的时刻；NULL = 仍计入有效待处理
+  turn_id         TEXT REFERENCES owned_turn(turn_id)  -- 所属 turn（由创建事件回填）；NULL = 历史行无法归属
 ) STRICT;
 CREATE INDEX IF NOT EXISTS owned_interaction_pending ON owned_interaction(session_id, state) WHERE state = 'pending';
 
@@ -1518,6 +1538,11 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
   只有一次创建，重发/重试沿用该值）；`invalidated_at` 记录失效时刻，失效同时把 `state` 置为 `expired`，
   所有 pending 读面按 `state = 'pending' AND invalidated_at IS NULL` 过滤，已终结请求不复活。失效行与其
   请求事件在保留期到期后可被回收（②′ 与 ② 的既有谓词）。
+- `owned_interaction.confirmed_at` 是**端点确认处理结果**的时刻：仲裁只写 `resolved_at`，`confirmed_at`
+  保持 `NULL`，该行仍计入有效待处理；`confirmation` 提交才写它。`turn_id` 是交互的轮次归属，取自创建
+  它的交互事件（`request_event` 指向的 `owned_event.turn_id`），turn 终态按它失效本轮的未解决交互；
+  `turn_id IS NULL` 的历史行不参与按 turn 的失效，但若仍有效（`pending` 或 `resolved` 未确认）仍计入
+  会话摘要，由重启恢复统一失效。
 
 ## 8. 失败关闭
 
@@ -1527,7 +1552,7 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 
 ## 9. 验收判据（实现该合同的测试）
 
-1. **migration**：空目录新建的当前版本库连续两次启动后 `PRAGMA user_version`、`meta.*_schema_version`、`sqlite_master` 里每条 SQL 文本与全部表的行集**逐字节相同**（幂等）；把 `fixtures/storage/v2/empty.sqlite3`（v2 形状）的临时副本的 `user_version` 顶到 `FILE_FORMAT_VERSION + 1` → 返回具名错误且不写入任何行；`fixtures/storage/v2/from-v1.sqlite3` 的 v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 连续升级按判据 28 断言保留性。
+1. **migration**：空目录新建的当前版本库连续两次启动后 `PRAGMA user_version`、`meta.*_schema_version`、`sqlite_master` 里每条 SQL 文本与全部表的行集**逐字节相同**（幂等）；把 `fixtures/storage/v2/empty.sqlite3`（v2 形状）的临时副本的 `user_version` 顶到 `FILE_FORMAT_VERSION + 1` → 返回具名错误且不写入任何行；`fixtures/storage/v2/from-v1.sqlite3` 的 v1 → v2 → … → v13 连续升级按判据 28 断言保留性。
 2. **单事务提交**：用一个装饰 `SessionStore` 的测试替身统计 `commit` 调用次数，并对第二次调用注入失败；断言
 (a) 每个 mutation 恰好一次**接受提交**（幂等行那一次；重试与 `Ephemeral` 过滤都不新增提交，见 §6 第 6/11 条）——一次 mutation 天然还会产生终态提交与 delta 合批提交，本条只约束接受语义不得重复；
 (b) 失败后 `owned_session.version`、`owned_turn`、`owned_event`、`owned_command` 与调用前快照逐行相同；
@@ -1540,11 +1565,11 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 8. **容量**：用极小配置值驱动 `max_total_size_bytes`/`max_session_size_bytes`，断言清理顺序（先 delta、再正文/状态、再附件）与被删行集合；**库中存在已过期但仍被 `owned_interaction.request_event` 引用的交互事件时**，容量清理仍必须完成并给出 `Unavailable(StorageFull)`（而不是外键错误映射的 `Backend`）；仍超限时 `commit` 返回 `Unavailable(StorageFull)` 且 `EventPublisher` 收到零次调用。
 9. **摘要自洽**：对每条 `owned_event`，用 ACPR-CJ1 重新规范化 `payload_json` 后取 SHA-256，必须等于 `payload_digest`。
 10. **引用完整性**：`owned_event.turn_id`、`owned_interaction.request_event`、`owned_attachment_link.sha256` 的悬空行数必须为 0（外键 + 断言）；`owned_command` 的 `(actor_kind, actor_id, request_id)` 唯一。
-11. **权限仲裁**：两个**并发**解析请求（单写连接会串行化它们，判据看的是结果而不是交错）恰好一个 `Resolved`；已解析后再次应答 → `AlreadyResolved` 且 `resolved_at`/`decision_option_id` 不变；对不存在的 `interactionId` → `PortError::NotFound`。
+11. **权限仲裁与确认**：两个**并发**解析请求（单写连接会串行化它们，判据看的是结果而不是交错）恰好一个 `Resolved`；已解析后再次应答 → `AlreadyResolved` 且 `resolved_at`/`decision_option_id` 不变；对不存在的 `interactionId` → `PortError::NotFound`。胜出行的 `confirmed_at` 仍为 `NULL`，`session_activity` 仍计入有效待处理（摘要保持 `pending`）；随后 `confirmation` 提交才写 `confirmed_at` 并按归约转为 `running`/`idle`；重复确认是无操作、不产生第二次提交副作用。
 12. **ACL 判定**：把平台 ACL 读取抽象成纯函数（输入为合成的权限视图），单测覆盖「组/其他可写」「非当前用户可读写」等视图 → 判定为宽松；正式模式下宽松即失败关闭。真实第二账号的端到端检查作为可选集成测试。
 13. **端口纯度**：`cargo tree -p core --edges normal` 的输出与冻结 allow-list 逐行相等（黄金文件）——`core` 的直接依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`——其中 `p256` **只开 `arithmetic`**（core 只做曲线级点校验，不签名也不验签），因此 `ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8`/`spki`/`pem-rfc7468` 等签名与编码栈**不在**闭包内；完整普通依赖闭包与 allow-list 逐项登记在 `scripts/check-crate-boundaries.mjs` 的 `CORE_ALLOWED_CLOSURE`；`cargo public-api -p core` 快照不得出现 §3/§5 之外的类型（该半条需要 nightly toolchain + 外部 `cargo-public-api`，未安装时应记录为**未执行**并说明替代判据，不得声称已通过）。
 14. **审计**：`action` 只能取 §3.5 的枚举（表级 CHECK + 用例层枚举，**每个取值都要有写入用例**，含该合同 §7.3 与 §7.4 的 `action` CHECK 里 `export.*`/`import.*`/`provider.configured` 五类，以及 v3 新增的 `node.authenticated`/`node.auth_failed`）；`actor_kind` 的取值集在两张审计表上与 `ActorKind` 逐值相等，但在 `owned_command` 上**只有三值**（无 `pairing_claimant`，design D12）；`owned_audit` 与 `imported_audit` 都要有「黄金列清单」测试（逐列 `PRAGMA table_info` 比对，新增内容列即失败）。
-15. **交互创建**：一次 `commit` 写入 `interaction` 事件 + `PendingInteractionWrite` 后，`owned_interaction` 恰好一行且 `request_event` 等于**配对事件**的 `global_sequence`（列类型见 §7.3；§9 判据 10 的悬空引用为 0）；装配方传入的任何占位值都不得入库；同一提交里 `interactions` 与 `state.interaction` 同时出现 → `InvalidRequest`；随后 `HistoryInclude.pending_interactions` 读回的行 `options` 为空，而按事件流取到配对事件的 `id` 后 `ReadView::event_payload(id)` 能还原出非空 `options`。
+15. **交互创建**：一次 `commit` 写入 `interaction` 事件 + `PendingInteractionWrite` 后，`owned_interaction` 恰好一行且 `request_event` 等于**配对事件**的 `global_sequence`（列类型见 §7.3；§9 判据 10 的悬空引用为 0），`turn_id` 等于该配对事件的 `turn_id`（事件不带 turn 时为 `NULL`，不得按时间相邻猜测），`confirmed_at` 为 `NULL`；装配方传入的任何占位值都不得入库；同一提交里 `interactions` 与 `state.interaction` 同时出现 → `InvalidRequest`；会话摘要与 `session.updated`（状态变化时）和这一行在同一次提交；随后 `HistoryInclude.pending_interactions` 读回的行 `options` 为空，而按事件流取到配对事件的 `id` 后 `ReadView::event_payload(id)` 能还原出非空 `options`。
 16. **正文读取**：`ReadView::event_payload` 返回的 `view` 文本与库内 `payload_json` **逐字节**相同（含未知字段与嵌套），`AcpRaw::Available.raw_json` 与写入时逐字节相同；原文被清理过的行返回 `AcpRaw::Unavailable`，且 `reason`、`byte_length`、`sha256` 三者都必须与行内列一致（**摘要不得因为原文被清理而丢失**——`acp_sha256` 与 `acp_raw_json` 只有在没有不可用原因时才同有同无）；不存在的事件 id 返回 `None`。
 17. **非会话级事件**：`session: None` 的提交落库后 `session_sequence`/`origin_epoch`/`origin_sequence` 三列都是 NULL，且该行仍出现在 `replay` 流里；`session: Some` 的事件三列都非 NULL（成对 CHECK 不得被绕过）。
 18. **消息收尾**（§6 第 14 条）：正常结束、取消、失败三种终态各一例；同一 turn 内两个 `messageId` 各自收尾；**没有** delta 的 turn 不产生 `agent.message.completed`；`content` 的文本等于该消息 delta 文本按 `deltaIndex` 的拼接；`completed` 与该 turn 的终态事件在**同一次提交**（用装饰 store 断言批次）；`agent.thought.delta` 不产生 `completed`。
@@ -1557,7 +1582,7 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 25. **配对公钥与信任材料**（§11.5、§5.3）：认领并重启后仍能经 `TrustStore::peer_key` 取到验签公钥；指纹与公钥不一致的写集无法落库（表级 CHECK + 用例层构造校验）。
 26. **imported 家族按 Owner 节点寻址**（§7.4）：`imported_session` 主键为 `(owner_node_id, session_id)`，交付索引与命令引用没有 `export_id` 列。
 27. **本地配置边界**：Agent profile 只来自启动配置 `[agent]`，不写 SQLite；目录由成功的会话创建自动记录；v10 迁移删除 `owned_agent_profile` 与 `owned_provider_ref`，被删除的 profile 条数记入 meta 供启动提示；不再有 Provider 凭据解析端口。
-28. **旧库升级的保留与幂等**（§7.2）：升级保留 `server_epoch`、事件 `global_sequence`/`session_sequence` 与 origin cursor、`requestId` 与幂等行、命令终态与全部既有审计；`audit_id` 与其 `AUTOINCREMENT` 序列不回退（v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 连续升级也要保持），审计表的新取值在升级库上可写、`owned_command` 的 `actor_kind` 不接受 `pairing_claimant`；`imported_import` 不再有 `export_id`，Export 关联迁入 `imported_import_export` 且 `added_at` 取原 `created_at`，无可信来源的 grants 保持 ''[]''（该 Import 不可用）；升级后第二次打开 `sqlite_master`/`meta`/行集逐字节不变；v4、v5 与 v6 的追加列不改变以上任何一条，v7 段重建的两张事件表也不改变以上任何一条（`owned_event` 的全部行与 `global_sequence` 逐行保留、`owned_interaction` 的行与外键逐行保留，且升级库的 `origin_kind` CHECK 接受五值——含新增的 `node`），v8 段删除的 `owned_device.scopes_json` 同样不改变以上任何一条（`owned_device` 的既有行逐列保留、删列后升级库与新建库的列清单逐项相等），并额外断言：① 升级库与新建库的 **owned** 家族列清单（列名/顺序/类型/`NOT NULL` 与默认值）逐项相等，`owned_node.export_ids_json` 与 `owned_session` 的 `agent_session_id`/`workspace_cwd`/`workspace_alias` 分别在各自表的末尾（按各自追加顺序）；② v3 及更早的库升级后既有节点行的 `export_ids_json` 为 ''[]''（即不得默认放权），这些行的其余列逐列不变；③ v4 及更早的库升级后既有会话行的 `agent_session_id`/`workspace_cwd` 为 `NULL`（不是空串、不是占位路径），其余列逐列不变，且这些会话不被任何路径当作可恢复会话（`SessionStore::load_recovery` 返回 `Ok(None)`）；④ 恢复两列写入后重开库读回的值与写入时逐字节相同，未写入两列的会话读回仍为 `NULL`（不出现空串、别名或占位路径），且恢复流程（`load_recovery` + `session.resume` 的 `accepted` 幂等行）不覆写它们、不改会话版本；⑤ v5 库升级后既有会话行的 `workspace_alias` 为 `NULL`（不是空串、不是任何占位别名），其余列逐列不变，且这些会话的 `SessionSummary.workspace` 为 `None`（未分组）——即使它的 `workspace_cwd` 恰好等于某个**已登记**目录的规范化路径，也**不得**反查补齐；⑥ 别名写入后重开库读回的值与写入时逐字节相同，未写入的会话读回 `None`；别名已登记时展示名取 `owned_workspace.display_name`，别名不再登记时回退为**别名本身**，同一别名重指向别的目录后既有会话的归属不变（`workspace_cwd` 也不被改写）；恢复流程前后该列逐字节不变。
+28. **旧库升级的保留与幂等**（§7.2）：升级保留 `server_epoch`、事件 `global_sequence`/`session_sequence` 与 origin cursor、`requestId` 与幂等行、命令终态与全部既有审计；`audit_id` 与其 `AUTOINCREMENT` 序列不回退（v1 → v2 → … → v13 连续升级也要保持），审计表的新取值在升级库上可写、`owned_command` 的 `actor_kind` 不接受 `pairing_claimant`；`imported_import` 不再有 `export_id`，Export 关联迁入 `imported_import_export` 且 `added_at` 取原 `created_at`，无可信来源的 grants 保持 ''[]''（该 Import 不可用）；升级后第二次打开 `sqlite_master`/`meta`/行集逐字节不变；v4、v5 与 v6 的追加列不改变以上任何一条，v7 段重建的两张事件表也不改变以上任何一条（`owned_event` 的全部行与 `global_sequence` 逐行保留、`owned_interaction` 的行与外键逐行保留，且升级库的 `origin_kind` CHECK 接受五值——含新增的 `node`），v8 段删除的 `owned_device.scopes_json` 同样不改变以上任何一条（`owned_device` 的既有行逐列保留、删列后升级库与新建库的列清单逐项相等），并额外断言：① 升级库与新建库的 **owned** 家族列清单（列名/顺序/类型/`NOT NULL` 与默认值）逐项相等，`owned_node.export_ids_json` 与 `owned_session` 的 `agent_session_id`/`workspace_cwd`/`workspace_alias` 分别在各自表的末尾（按各自追加顺序）；② v3 及更早的库升级后既有节点行的 `export_ids_json` 为 ''[]''（即不得默认放权），这些行的其余列逐列不变；③ v4 及更早的库升级后既有会话行的 `agent_session_id`/`workspace_cwd` 为 `NULL`（不是空串、不是占位路径），其余列逐列不变，且这些会话不被任何路径当作可恢复会话（`SessionStore::load_recovery` 返回 `Ok(None)`）；④ 恢复两列写入后重开库读回的值与写入时逐字节相同，未写入两列的会话读回仍为 `NULL`（不出现空串、别名或占位路径），且恢复流程（`load_recovery` + `session.resume` 的 `accepted` 幂等行）不覆写它们、不改会话版本；⑤ v5 库升级后既有会话行的 `workspace_alias` 为 `NULL`（不是空串、不是任何占位别名），其余列逐列不变，且这些会话的 `SessionSummary.workspace` 为 `None`（未分组）——即使它的 `workspace_cwd` 恰好等于某个**已登记**目录的规范化路径，也**不得**反查补齐；⑥ 别名写入后重开库读回的值与写入时逐字节相同，未写入的会话读回 `None`；别名已登记时展示名取 `owned_workspace.display_name`，别名不再登记时回退为**别名本身**，同一别名重指向别的目录后既有会话的归属不变（`workspace_cwd` 也不被改写）；恢复流程前后该列逐字节不变；⑦ v13 段：升级库的 `owned_session` 无 `closed_at`、`state` CHECK 只接受三值，旧七态按迁移暂存映射写成 `idle`/`running`/`pending`（不发布、不据此伪造任务结果）；升级库的 `owned_interaction` 有 `confirmed_at` 与 `turn_id` 两列，`turn_id` 只等于创建事件（`request_event`）的 `turn_id`，旧 `resolved` 行 `confirmed_at = resolved_at`；`imported_session.state` 只留下三态；版本常量落为 13/5、`PRAGMA user_version = 13`，第二次打开逐字节不变；升级失败整体回滚、重开可重试，`sqlite_sequence`、既有索引、外键、事件与审计行逐字节保留。
 29. **管理状态纳入容量与失败关闭**（§7.5、§8）：容量度量包含管理表的 TEXT 列；超限时拒绝新写入而不删除活动信任、撤销记录或未到期审计；损坏库或宽松权限下**管理写路径**与 owned 写路径一样全部被拒，只读查询仍可用。
 30. **管理记录的终态与单调性**（§11.1、§11.2 第 4/5 条、§5.2/§5.3 约束、§7.4）：① `put_export` 对已撤销的 Export 不得清除 `revoked_at`——传入未撤销记录 → `Conflict(AlreadyExists)` 且该行逐列不变，传入 `revoked_at` 非空记录 → `InvalidRequest` 且零写入（含零审计）；② 完整移除 Import 后，携带该 `(ownerNodeId, exportId)` 的 `upsert_session` 与 `commit_receipt` 都返回 `NotFound(Export)`，`imported_session`/`imported_delivery_index`/`imported_command_ref` 保持为空且不推进 `local_sequence`；③ `owned_peer_key`/`owned_pairing_peer`/`owned_device` 中任一行 `fingerprint` 与同行 `public_key` 的派生值不一致时，对应读取路径（设备记录含单读与列表读）返回 `PortError::Corrupt` 且不返回材料；④ `last_seen_at`/`last_connected_at` 在「旧值为空」「新值更早」「新值为空」三种边界下都不丢值、不倒退，且不使调用失败或丢弃同写集的其他字段。
 31. **§10.3 的 view 身份与版本**（§6 第 19 条）：① 适配器视图不含 `turnId` 时，落盘 view 与 `owned_event.turn_id` 都等于 core 的权威 turn，且该 view 除新增的**一个前置成员**外逐字节不变（含未知字段、嵌套结构；ACP 原文 `raw_json`/`sha256`/`byte_length` 不变）；② 会话级或无归属事件不出现 `turnId`；未列入 §10.3 的类型（如 `terminal.output`）不新增该字段；③ 视图已带 `turnId` 且取值一致 → 字节不变且只出现一次，取值不一致 → `InvalidRequest` 且该批零落盘、零发布、turn 状态不变；④ 含 `session.mode.changed`/`session.config.changed` 的提交：无 `StateChange` 时注入当前版本且不递增，含 `StateChange` 时注入递增后的版本，两者都必须等于存储层返回值；存储返回不一致 → 不发布且不报成功；⑤ 幂等重放的 view 与首次落盘逐字节相同且不二次注入；⑥ 适配器 `prompt` 返回任意值（含全零占位）都不产生第二个 turn 行，也不改变归属。
@@ -1566,7 +1591,10 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 
 34. **附件分块与封存（WP2 已实现）**（§5.8/§6 第 22 条/§7.6）：① 同偏移同内容重复提交返回原确认（`duplicate = true`）且不重复写入，同偏移不同内容返回冲突，非期望偏移返回带 `expected/actual` 的错误；② 处理 1 GiB 输入时进程驻留内存不随文件大小线性增长（断言单块工作集与 `chunk_size` 同阶）；③ 流式 SHA-256 与一次性摘要一致，长度/摘要不符不产生可引用附件；④ 跨会话、跨主体、跨设备的 `transferId`/`attachmentId` 一律 NotFound/InvalidRequest 且不泄露内容；⑤ 撤销在事务内中止 `receiving` 传输，已提交附件不被删除；⑥ 活动传输的临时文件（`attachment_dir/.transfers/`）在 `sweep_orphans(now)` 后仍存在且上传可继续；`prune_transfers` 不清理 `updated_at` 在 24 小时内的传输与仍被活跃消息/清单引用的内容；⑦ 已封存但未绑定的清单在 24 小时后过期，成功绑定则立即删除清单行（附件改由会话绑定/媒体引用保护）；⑧ 自定义 `storage.attachment_dir` 时封存、清单复核、绑定与 `read_chunk` 使用同一目录映射；⑨ 附件被 GC 后指向它的已封存传输变为 `expired`（`sealed: None` 不再出现）。
 35. **消息通道与部分正文（WP2 已实现）**（§3.3/§6 第 14 条/§7.6）：回复与思考分别落盘（`channel` 区分）；停止、失败、断线三种情形都保留已收到部分并标记 `partial_result`；`thought` 不产生 `agent.message.completed`；`owned_media_ref` 只存引用、不含字节；历史读只从 `owned_message` 取正文，不从事件或快照重复拼接。消息正文按 `(created_at, message_id)` 复合游标分页：省略游标 = 最新一页、带游标 = 严格更早的一页，`messages_has_earlier` 逐页收敛，最多返回 `messages_limit` 条（`0` 表示不取正文），媒体引用只查本页消息；消息保留期到期后，附件随会话绑定失效并由 GC 回收。
-36. **有效交互与版本（WP2 已实现）**（§3.3/§5.8/§6 第 13 条/§7.6）：`request_version` 是当前有效请求版本（新行默认 1；本版本不递增，重试沿用同一值）；版本不符返回冲突且不消费请求，且校验先于命令受理（失败不留 `accepted` 行）；两个并发应答恰好一个胜出、另一个得到已处理事实；受理之后的竞态失败落 `command.failed` 终态；Daemon 重启后上游丢失的交互被置为 `expired`（不再出现在 `effective`/`read_session`/Node Link 快照，旧解析路径返回 `Conflict(Expired)`）且不可复活；表单值整数不经浮点往返，整数 `minimum`/`maximum` 用精确整数比较（2^53 边界用例）。
+36. **有效交互、仲裁与确认（WP2 已实现）**（§3.3/§5.8/§6 第 13 条/§7.6）：`request_version` 是当前有效请求版本（新行默认 1；本版本不递增，重试沿用同一值）；版本不符返回冲突且不消费请求，且校验先于命令受理（失败不留 `accepted` 行）；两个并发应答恰好一个胜出、另一个得到已处理事实，胜出行 `confirmed_at` 仍为 `NULL` 且继续计入 `session_activity`；只有 `confirmation` 写 `confirmed_at` 并把该交互移出有效集合，重复确认/未知交互/仍 `pending` 的确认都是无操作；turn 终态只失效该 `turn_id` 下未失效的交互（含已仲裁未确认），不误伤其它 turn；受理之后的竞态失败落 `command.failed` 终态；Daemon 重启后上游丢失的交互被置为 `expired`（不再出现在 `effective`/`read_session`/Node Link 快照，旧解析路径返回 `Conflict(Expired)`）且不可复活；表单值整数不经浮点往返，整数 `minimum`/`maximum` 用精确整数比较（2^53 边界用例）。
+37. **三态归约**（§3.3/§5.2/§6 第 7/13/16 条）：`SessionActivity::reduce` 是唯一取值来源；有有效未解决交互 → `pending`（含已仲裁未确认）；无交互但有未结束 turn（`queued`/`running`/`waiting_*`）或「已派发但停止未确认」的占位 → `running`；否则 `idle`。失败/取消一个 turn 后会话不再进入终态，后续排队 turn 继续推进；状态未变的提交不重复生成 `session.updated`，变化时摘要事件与 `session.updated` 同一次提交且 `session.updated` 携带完整摘要与嵌套 `session.version`。
+38. **持久队列恢复（§6 第 16 条/§4）**：`queued_turns` 按 `queue_index` 升序返回遗留排队项；重启后在内存队列为空且无在跑 turn 时，遗留项被显式终结为 `failed`（不静默删除）、`accepted` 命令结算为 `uncertain`，随后 FIFO 从后续项继续；`sessions_with_pending_activity` 返回仍有未结束 turn 或有效交互的会话（含刚被失效清空的会话在失效前的快照路径）；`uncertain` 命令与无法确认停止的执行**不**自动重试、不重放 Agent 副作用，后者保留占位、不提前 `idle`。
+39. **`session.updated` 的唯一来源（§6）**：事件由 core 在状态变化时生成，一次提交最多一条；确认、仲裁、turn 终态与恢复路径都不得各自另发一条；payload 的 `session.version` 等于 `CommitOutcome.version`，漂移 → 失败关闭（§6 第 19 条）。
 
 ## 10. 未决项
 
@@ -1596,7 +1624,7 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 - `[已裁定]` `payload_digest` 由**存储层**用 `acpr-wire` 的 ACPR-CJ1 实现从 `payload_json` 重算（§7.3/§9 判据 9）：原实现直接哈希库内字节，而 `payload_json` 按判据 16 原样保留调用方字节（不重排键），两者只有在调用方恰好传了规范 JSON 时才相等——跨节点复算与 imported 去重都会失配。ACPR-CJ1 是跨 Sync/Node Link 的共用机制，因此实现放 `acpr-wire`（叶子 crate），并与 JS 参考实现在同一批 fixture 上互校。
 - `[已裁定]` 清理顺序补 ②′（终态交互行必须先删）且 ②/③ 谓词必须排除仍被 `owned_interaction.request_event` 引用的行；容量度量补 `imported_*` 家族分量（否则 Access-only 节点度量恒 0、永不回收）；⑤ 的审计清理对 `owned_audit` 与 `imported_audit` 都生效。三条都是实测缺陷：外键会让 `prune` 整事务回滚、并让超限提交报 `Backend` 而不是 `StorageFull`。
 - `[已裁定]` `PendingEvent` 增加必填 `origin: EventOrigin`（§3.4）：原写入形状没有 origin，存储层只能按「有没有会话」猜出 `agent`/`daemon`，等于伪造 `origin.kind`。
-- `[open]` 交互解析的崩溃窗口（「行已终态、`*.resolved` 事件未落盘」）的补偿机制：当前按 §6 第 13 条接受；若将来要消除，需要「解析意向」行或两阶段提交。
+- `[open]` 交互解析的崩溃窗口与补偿机制（`session-activity` 后为「仲裁后未确认」）：当前用 `confirmed_at` 区分阶段、启动恢复 `invalidate_pending` 终结仍有效的行（不可复活），因此不会永久停在待处理；若要连「已仲裁未确认」也精确补偿，需要「解析意向」行或两阶段提交。
 - `[已裁定]` **附件文件删除的事务边界与孤儿回收**（§6 第 18 条）：行删除与事务同提交、文件删除在提交之后；孤儿回收由组合根启动时调用一次 `AttachmentStore::sweep_orphans(启动时刻, 1000)`，只删「不在表里且 mtime 早于本次启动」的文件，失败不阻止启动。新增该端口方法（§5.3）。
 - `[已裁定]`（2026-09-23）管理写集需要的 `ConflictKind` 新取值（`AlreadyExists`、`IdentityMismatch`、`DuplicateOwnership`）与 `UnavailableKind::KeystoreUnavailable`：枚举本体、`ALL`/`as_str` 与 §2 的取值表已同批落地（`crates/core/src/model/error.rs`）；写集侧映射义务与 `port_error_public` 不得用通配臂吞掉新取值的陷阱见 §5.3 与 §11.6 末段。
 - `[已裁定]`（2026-09-23）`AuditAction` 追加 `ExportCreated`/`ExportRevoked`/`ImportAdded`/`ImportRemoved`/`ProviderConfigured`（`SECURITY_DESIGN.md` §14.2）：落库靠 §7.3 与 §7.4 两张审计表 `action` CHECK 的扩宽；既有 v1 库走 §7.2 的第 ② 步 12-step 表重建（保留全部行与 `audit_id`、`AUTOINCREMENT` 序列不回退）。

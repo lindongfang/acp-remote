@@ -1,20 +1,19 @@
 //! 会话、turn、命令与交互（`docs/CORE_PORTS_AND_STORAGE.md` §3.3）。
 //!
-//! 状态机规则（本合同在 §3.3/§6 的允许范围内给出的唯一转换表；`Session`/`Turn` 的状态字段私有，只能经
-//! `transition(..)` 前进，适配器无法直接改状态）：
+//! 状态规则（`Session`/`Turn` 的状态字段私有，只能经 `transition(..)` 前进，适配器无法直接改状态）：
 //!
 //! ```text
-//! SessionState: idle → queued|running|closed|failed
-//!               queued → running|idle|closed|failed
-//!               running → waiting_input|waiting_permission|idle|failed|closed
-//!               waiting_input|waiting_permission → running|failed|closed
-//!               failed|closed → (终态，无出边)
+//! SessionState:  idle | running | pending —— 没有终态，也没有逐写入方的转换边。
+//!               唯一取值规则是 SessionActivity::reduce（`session-activity` D1）：
+//!                 有效未解决交互 > 未结束 turn > idle。
 //! TurnState:    queued → running|cancelled|failed
 //!               running → waiting_input|waiting_permission|completed|failed|cancelled
 //!               waiting_input|waiting_permission → running|failed|cancelled
 //!               completed|failed|cancelled → (终态，无出边)
 //! CommandStatus: accepted → completed|failed|rejected|uncertain；(其余为终态)
 //! ```
+//!
+//! 会话关闭/失败不再是主状态：任务结果留在 `TurnState`/`CommandStatus`，等待原因来自有效交互。
 
 use std::fmt;
 use std::str::FromStr;
@@ -67,48 +66,37 @@ impl ResourceOrigin {
 }
 
 token_enum!(
-    /// 会话状态（`common.schema.json#/$defs/sessionSummary`）。
+    /// 会话主状态（`common.schema.json#/$defs/sessionSummary`）：只有活跃程度，没有终态。
     SessionState {
         Idle => "idle",
-        Queued => "queued",
         Running => "running",
-        WaitingInput => "waiting_input",
-        WaitingPermission => "waiting_permission",
-        Failed => "failed",
-        Closed => "closed",
+        Pending => "pending",
     }
 );
 
-impl SessionState {
-    /// 终态：`failed` 与 `closed` 之后不再有合法转换。
-    pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::Failed | Self::Closed)
+/// 会话主状态的**唯一**归约规则（`session-activity` D1）。
+///
+/// 所有写入方（broker 的任务/交互生命周期提交、存储层的恢复与失效路径）都只按本函数取值，不得各自
+/// 维护转换表：有效未解决交互优先；否则存在未结束任务（含排队与「已派发但停止未确认」）时为运行中；
+/// 否则为空闲。任务结果与等待原因分别留在 `TurnState`/`CommandStatus` 与有效交互上。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SessionActivity;
+
+impl SessionActivity {
+    /// `pending` = 至少一个有效未解决交互；`unfinished_turns` = 至少一个未结束任务。
+    pub const fn reduce(pending: bool, unfinished_turns: bool) -> SessionState {
+        if pending {
+            SessionState::Pending
+        } else if unfinished_turns {
+            SessionState::Running
+        } else {
+            SessionState::Idle
+        }
     }
 
-    /// 是否允许一次状态转换。
-    pub const fn can_transition_to(self, next: Self) -> bool {
-        match self {
-            Self::Idle => matches!(
-                next,
-                Self::Queued | Self::Running | Self::Closed | Self::Failed
-            ),
-            Self::Queued => matches!(
-                next,
-                Self::Running | Self::Idle | Self::Closed | Self::Failed
-            ),
-            Self::Running => matches!(
-                next,
-                Self::WaitingInput
-                    | Self::WaitingPermission
-                    | Self::Idle
-                    | Self::Failed
-                    | Self::Closed
-            ),
-            Self::WaitingInput | Self::WaitingPermission => {
-                matches!(next, Self::Running | Self::Failed | Self::Closed)
-            }
-            Self::Failed | Self::Closed => false,
-        }
+    /// `turn` 是否仍算未结束任务（`queued`/`running`/`waiting_*` 都是）。
+    pub const fn turn_is_unfinished(turn: TurnState) -> bool {
+        !turn.is_terminal()
     }
 }
 
@@ -164,12 +152,11 @@ pub struct Session {
     version: Version,
     created_at: Timestamp,
     updated_at: Timestamp,
-    closed_at: Option<Timestamp>,
 }
 
 impl Session {
-    /// 构造。`title` 上限 512 字符；`closed_at` 必须与 `state = closed` 一致；`reference` 必须指向本 id。
-    #[allow(clippy::too_many_arguments)] // §3.3 冻结的 11 字段记录，不为此引入 builder
+    /// 构造。`title` 上限 512 字符；`reference` 必须指向本 id。
+    #[allow(clippy::too_many_arguments)] // §3.3 冻结的记录形状，不为此引入 builder
     pub fn try_new(
         id: SessionId,
         reference: OwnedSessionRef,
@@ -181,16 +168,12 @@ impl Session {
         version: Version,
         created_at: Timestamp,
         updated_at: Timestamp,
-        closed_at: Option<Timestamp>,
     ) -> Result<Self, InvalidValue> {
         if reference.session_id != id {
             return Err(InvalidValue::Field);
         }
         if let Some(title) = &title {
             require_bounded(title, 0, 512)?;
-        }
-        if closed_at.is_some() != (state == SessionState::Closed) {
-            return Err(InvalidValue::Field);
         }
         Ok(Self {
             id,
@@ -203,7 +186,6 @@ impl Session {
             version,
             created_at,
             updated_at,
-            closed_at,
         })
     }
 
@@ -257,25 +239,13 @@ impl Session {
         &self.updated_at
     }
 
-    /// 关闭时间。
-    pub fn closed_at(&self) -> Option<&Timestamp> {
-        self.closed_at.as_ref()
-    }
-
-    /// 状态转换；非法转换（含离开终态）返回 `InvalidValue::StateTransition`。
+    /// 状态转换；`updated_at` 随之刷新。会话没有终态，也没有逐边转换表——取值由
+    /// [`SessionActivity::reduce`] 决定，本方法只承载「写入归约结果」这一个动作。
     ///
-    /// 进入 `closed` 时写入 `closed_at`，任何转换都刷新 `updated_at`。version 由存储层在提交事务内递增，
-    /// 不在这里改（§5.2 的 `CommitOutcome.version` 是唯一来源）。
-    pub fn transition(&mut self, next: SessionState, at: &Timestamp) -> Result<(), InvalidValue> {
-        if !self.state.can_transition_to(next) {
-            return Err(InvalidValue::StateTransition);
-        }
+    /// version 由存储层在提交事务内递增，不在这里改（§5.2 的 `CommitOutcome.version` 是唯一来源）。
+    pub fn transition(&mut self, next: SessionState, at: &Timestamp) {
         self.state = next;
         self.updated_at = at.clone();
-        if next == SessionState::Closed {
-            self.closed_at = Some(at.clone());
-        }
-        Ok(())
     }
 
     /// 可投影摘要（`SYNC_PROTOCOL.md` §9.6 的 `sessionSummary`）。
@@ -400,6 +370,15 @@ impl SessionSummary {
     /// 目录归属：`None` = 未分组（持久化别名为 `NULL`；不得由 `workspace_cwd` 推导补齐）。
     pub fn workspace(&self) -> Option<&WorkspaceRef> {
         self.workspace.as_ref()
+    }
+
+    /// 同一提交内的标题覆盖：`session.updated` 必须投影**提交后**的完整摘要，不能回读提交前的行。
+    pub(crate) fn with_title(mut self, title: Option<String>) -> Result<Self, InvalidValue> {
+        if let Some(title) = &title {
+            require_bounded(title, 0, 512)?;
+        }
+        self.title = title;
+        Ok(self)
     }
 }
 

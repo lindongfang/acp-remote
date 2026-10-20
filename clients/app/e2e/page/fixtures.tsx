@@ -155,7 +155,7 @@ export function seriesSessionId(idPrefix: string, index: number): string {
 export function sessionsForBothDirectories(): readonly SessionSummary[] {
   return [
     sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "running" }),
-    sessionSummary({ id: SESSION_BETA, directoryId: DIRECTORY_ID_BETA, state: "waiting_input" }),
+    sessionSummary({ id: SESSION_BETA, directoryId: DIRECTORY_ID_BETA, state: "pending" }),
   ];
 }
 

@@ -2757,12 +2757,8 @@ fn session_summary(
     let agent = summary.agent();
     let state = match summary.state() {
         acp_core::model::SessionState::Idle => sync::SessionState::Idle,
-        acp_core::model::SessionState::Queued => sync::SessionState::Queued,
         acp_core::model::SessionState::Running => sync::SessionState::Running,
-        acp_core::model::SessionState::WaitingInput => sync::SessionState::WaitingInput,
-        acp_core::model::SessionState::WaitingPermission => sync::SessionState::WaitingPermission,
-        acp_core::model::SessionState::Failed => sync::SessionState::Failed,
-        acp_core::model::SessionState::Closed => sync::SessionState::Closed,
+        acp_core::model::SessionState::Pending => sync::SessionState::Pending,
     };
     let origin = match summary.origin() {
         ResourceOrigin::Local => sync::OriginBlock::Local,

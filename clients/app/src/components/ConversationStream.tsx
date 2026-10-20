@@ -57,7 +57,6 @@ import { ConversationComposer } from "./ConversationComposer";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { ConversationColumnResizer } from "./ConversationColumnResizer";
 import { CONVERSATION_SIDEBAR_PAGE_SIZE } from "../features/conversation-model";
-import { FileChangesPanel } from "./FileChangesPanel";
 import { FileContentViewer } from "./FileContentViewer";
 import type { FilePreviewArtifact } from "./FileContentViewer";
 import { SessionFilesPanel } from "./SessionFilesPanel";
@@ -126,13 +125,6 @@ export interface ConversationStreamProps {
   readonly expandedTimelineEntries?: Readonly<Record<string, boolean>> | undefined;
   /** 折叠块表头被点选（上抛 `entry.key` 与切换后的展开值）；缺省时表头不可点。 */
   readonly onToggleTimelineEntry?: ((key: string, expanded: boolean) => void) | undefined;
-  /**
-   * 已选中的那一处改动（`changeId`）。时间线上带文件标识的条目与右栏改动清单**共用**这一份选中
-   * 状态（spec「从条目联动到右栏」）；缺省 `null` = 没有选中。
-   */
-  readonly selectedChangeId?: string | null;
-  /** 选中一处改动（上抛 `changeId`）；缺省时不渲染对应的可点控件。 */
-  readonly onSelectChange?: ((changeId: string) => void) | undefined;
   /** 次级视图（仓库里的单份 UI 状态）；缺省时按宽度取默认值。 */
   readonly secondaryView?: ConversationSecondaryView | null;
   /** 次级视图切换；缺省时不渲染切换控件（那时三栏都呈现，见文件头）。 */
@@ -195,10 +187,10 @@ export interface ConversationStreamProps {
   /** 上次成功同步的时刻（epoch 毫秒）；从未成功替换过快照时为 `null`。 */
   readonly lastSyncedAtMs?: number | null;
   /**
-   * 文件栏三来源与互斥内容态（`store.sessionFilesPage(sessionId)`）。
+   * 文件栏两来源与互斥内容态（`store.sessionFilesPage(sessionId)`）。
    *
-   * 缺省 `null` 时右栏退回旧版「会话变更」清单（`FileChangesPanel`）：组件测试与未接线的
-   * 消费者不需要伪造文件查询也能渲染对话页。
+   * 缺省 `null` 时右栏只给一句中性说明：未接入文件查询的消费者不再回到旧的文件改动清单，
+   * 也不伪造来源。
    */
   readonly filesPanel?: SessionFilesPanelModel | null;
   /** 切换文件来源。 */
@@ -246,12 +238,6 @@ const SECONDARY_VIEW_OPTIONS: readonly { readonly value: ConversationSecondaryVi
  * 因此窄屏只提供「一栏占主体」的三个取值（`effectiveSecondaryView` 也把 `all` 归一为 `timeline`）。
  */
 const NARROW_SECONDARY_VIEW_OPTIONS = SECONDARY_VIEW_OPTIONS.filter((option) => option.value !== "all");
-
-/** 会话状态 → 待处理跳转条的文案；只有「在等我们」的那两档给得出。 */
-const PENDING_BAR_LABELS: Readonly<Partial<Record<ConversationPageModel["header"]["state"], string>>> = {
-  waiting_permission: "正在等待授权",
-  waiting_input: "正在等待你的回复",
-};
 
 /**
  * 非在线时的内容来源说明：同一句「内容来自上次同步」之后，按连接状态补一句**为什么会停在这里**。
@@ -1308,8 +1294,6 @@ export function ConversationStream({
   openChangeDiagnosticsEventId,
   expandedTimelineEntries,
   onToggleTimelineEntry,
-  selectedChangeId,
-  onSelectChange,
   secondaryView,
   onSecondaryViewChange,
   availableWidth,
@@ -1374,6 +1358,8 @@ export function ConversationStream({
    * 仍按各自的定宽/堆叠样式走。窄屏请求「全部」已被 `effectiveSecondaryView` 归一为单栏。
    */
   const singleColumn = !wide && hiddenColumns.length > 0;
+  // 时间线的文件改动条目复用逐条改动的诊断投影（原文可用性/事件视图都在那里）。
+  const changeDiagnostics = new Map(model.fileChanges.map((change) => [change.changeId, change.diagnostics]));
   const paging = model.paging;
   const history = model.timeline.structuredHistory;
   const sidebar = model.sidebar;
@@ -1408,7 +1394,6 @@ export function ConversationStream({
   const answerableCount = model.interactions.filter(
     (interaction) => interaction.availability.kind === "answerable",
   ).length;
-  const pendingBarLabel = PENDING_BAR_LABELS[model.header.state] ?? null;
 
   // ── 滚动跟随与阅读锚点（spec「流式阅读保持位置」）────────────────────────────
   const sessionId = model.header.sessionId;
@@ -1416,6 +1401,11 @@ export function ConversationStream({
   /** 稳定的 ref 回调：每次渲染换一个函数会让 React 先摘再挂同一个节点。 */
   const assignScrollRef = useCallback((node: unknown) => {
     scrollRef.current = node as ScrollHandle | null;
+  }, []);
+  /** 右栏文件列表的滚动容器；窄屏打开文件时它被 `display:none`，需要单独保存位置。 */
+  const filesScrollRef = useRef<ScrollHandle | null>(null);
+  const assignFilesScrollRef = useCallback((node: unknown) => {
+    filesScrollRef.current = node as ScrollHandle | null;
   }, []);
   const followingRef = useRef(true);
   const [following, setFollowing] = useState(true);
@@ -1433,6 +1423,8 @@ export function ConversationStream({
   const previousSession = useRef(sessionId);
   /** 打开文件查看前的时间线位置；关闭时恢复（查看期间时间线只是被隐藏）。 */
   const savedBeforeFile = useRef<{ readonly sessionId: string; readonly offsetY: number } | null>(null);
+  /** 打开文件查看前的右栏文件列表位置；窄屏关闭后恢复文件列表而不是回到顶部。 */
+  const savedFilesScroll = useRef<{ readonly sessionId: string; readonly offsetY: number } | null>(null);
 
   /** 真实滚动容器（RNW 的 `ScrollView` 在网页侧就是可滚动的宿主元素）。node 侧为 `null`。 */
   const scroller = (): HTMLElement | null => {
@@ -1440,8 +1432,25 @@ export function ConversationStream({
     if (typeof HTMLElement === "undefined") return null;
     return node instanceof HTMLElement ? node : null;
   };
+  const filesScroller = (): HTMLElement | null => {
+    const node = filesScrollRef.current?.getScrollableNode?.();
+    if (typeof HTMLElement === "undefined") return null;
+    return node instanceof HTMLElement ? node : null;
+  };
   const scrollToY = (y: number): void => {
     scrollRef.current?.scrollTo?.({ y, animated: false });
+  };
+  /**
+   * 打开文件前同步记下两个滚动容器的位置。
+   *
+   * 不能在文件视图的 effect 里再读：那时两栏已经 `display:none`，浏览器会把 `scrollTop`
+   * 报成 0。捕获放在触发打开的同一次事件里，关闭后再恢复。
+   */
+  const captureOpenFileScroll = (): void => {
+    const host = scroller();
+    if (host !== null) savedBeforeFile.current = { sessionId, offsetY: host.scrollTop };
+    const filesHost = filesScroller();
+    if (filesHost !== null) savedFilesScroll.current = { sessionId, offsetY: filesHost.scrollTop };
   };
   /** 记下当前阅读锚点（上读时才会用到；没有条目时锚点为 `null`）。 */
   const captureAnchor = (): void => {
@@ -1548,23 +1557,28 @@ export function ConversationStream({
   /** 打开文件查看时保存时间线位置，关闭时恢复（不强制滚到底）。 */
   const fileOpen = fileContent !== null;
   useEffect(() => {
+    if (fileOpen) return;
     const host = scroller();
-    if (fileOpen) {
-      if (host !== null) savedBeforeFile.current = { sessionId, offsetY: host.scrollTop };
-      return;
-    }
     const saved = savedBeforeFile.current;
-    if (saved === null || saved.sessionId !== sessionId) return;
     savedBeforeFile.current = null;
-    if (host === null) return;
-    scrollToY(saved.offsetY);
-    const next = isFollowingBottom({
-      offsetY: saved.offsetY,
-      contentHeight: host.scrollHeight,
-      viewportHeight: host.clientHeight,
-    });
-    followingRef.current = next;
-    setFollowing(next);
+    if (host !== null && saved !== null && saved.sessionId === sessionId) {
+      // 关闭后这次恢复必须同步落到节点上：`scrollTo` 在刚取消 `display:none` 的同一帧
+      // 可能排到布局之后，而内容尺寸回调会先按「跟随底部」改写位置。
+      host.scrollTop = saved.offsetY;
+      const next = isFollowingBottom({
+        offsetY: saved.offsetY,
+        contentHeight: host.scrollHeight,
+        viewportHeight: host.clientHeight,
+      });
+      followingRef.current = next;
+      setFollowing(next);
+    }
+    const filesSaved = savedFilesScroll.current;
+    savedFilesScroll.current = null;
+    if (filesSaved !== null && filesSaved.sessionId === sessionId) {
+      const filesHost = filesScroller();
+      if (filesHost !== null) filesHost.scrollTop = filesSaved.offsetY;
+    }
   }, [fileOpen, sessionId]);
 
   // ── 跳转入口的测量（只属于渲染现场的事实：滚动位置与元素几何）───────────────────
@@ -1746,7 +1760,14 @@ export function ConversationStream({
                 <Text style={styles.title} numberOfLines={1} dataSet={{ sessionTitle: "true" }}>
                   {model.header.title}
                 </Text>
-                <StatusPill state={model.header.state} />
+                {model.header.state === null ? (
+                  // 摘要尚未取得：说明「未知」，MUST NOT 编造空闲（更没有旧七态的关闭）。
+                  <Text style={styles.agent} dataSet={{ sessionState: "unknown" }}>
+                    状态未知
+                  </Text>
+                ) : (
+                  <StatusPill state={model.header.state} />
+                )}
                 <Text style={styles.agent} numberOfLines={1} dataSet={{ sessionAgent: model.header.agentName }}>
                   {model.header.agentName}
                 </Text>
@@ -1812,10 +1833,8 @@ export function ConversationStream({
             {fileContent === null || onCloseFile === undefined ? null : (
               <FileContentViewer
                 content={fileContent}
-                historyNotice={activeFilesPanel?.historyNotice ?? null}
                 onClose={onCloseFile}
                 onRetry={onRetryFile}
-                onOpenChangeDiagnostics={onOpenChangeDiagnostics}
                 onDownload={onDownloadFile}
                 onCancelDownload={onCancelDownload}
                 onReleaseDownload={onReleaseDownload}
@@ -1837,12 +1856,10 @@ export function ConversationStream({
               onContentSizeChange={handleContentSizeChange}
               scrollEventThrottle={32}
             >
-            {pendingBarLabel === null ? null : (
-              <View style={styles.jumpBar} dataSet={{ pendingJumpBar: model.header.state }}>
+            {answerableCount === 0 ? null : (
+              <View style={styles.jumpBar} dataSet={{ pendingJumpBar: String(answerableCount) }}>
                 <Text style={styles.jumpBarText}>
-                  {answerableCount === 0
-                    ? `⏸ ${pendingBarLabel}`
-                    : `⏸ ${pendingBarLabel}，待处理 ${String(answerableCount)} 项`}
+                  {`⏸ 待处理 ${String(answerableCount)} 项`}
                 </Text>
                 <Pressable
                   role="button"
@@ -1930,8 +1947,9 @@ export function ConversationStream({
               onLinkPress={onLinkPress}
               expandedEntries={expandedTimelineEntries}
               onToggleEntry={onToggleTimelineEntry}
-              selectedChangeId={selectedChangeId ?? null}
-              onSelectChange={onSelectChange}
+              changeDiagnostics={changeDiagnostics}
+              openChangeDiagnosticsEventId={openChangeDiagnosticsEventId ?? null}
+              onOpenChangeDiagnostics={onOpenChangeDiagnostics}
               media={media}
               onLoadMedia={onLoadMedia}
               onReleaseMedia={onReleaseMedia}
@@ -2014,32 +2032,27 @@ export function ConversationStream({
             dataSet={{ conversationColumn: "files" }}
           >
             <ScrollView
+              ref={assignFilesScrollRef}
               style={styles.columnScroll}
               contentContainerStyle={styles.columnScrollBody}
               dataSet={{ conversationScroll: "files" }}
             >
               {activeFilesPanel === null ? (
-                <FileChangesPanel
-                  changes={model.fileChanges}
-                  openDiagnosticsEventId={openChangeDiagnosticsEventId ?? null}
-                  onOpenChangeDiagnostics={onOpenChangeDiagnostics}
-                  selectedChangeId={selectedChangeId ?? null}
-                  onSelectChange={onSelectChange}
-                />
+                <Text style={styles.note} dataSet={{ filesPanelUnavailable: "true" }}>
+                  文件栏尚未接入文件查询；会话改动只在对话时间线呈现。
+                </Text>
               ) : (
                 <SessionFilesPanel
                   model={activeFilesPanel}
-                  fileChanges={model.fileChanges}
-                  selectedChangeId={selectedChangeId ?? null}
-                  onSelectChange={onSelectChange}
-                  onOpenFile={onOpenFile}
+                  onOpenFile={onOpenFile === undefined ? undefined : (source, path) => {
+                    captureOpenFileScroll();
+                    onOpenFile(source, path);
+                  }}
                   onSelectSource={onSelectFileSource}
                   onRefresh={onRefreshFiles}
                   onToggleHideIgnored={onToggleHideIgnored}
                   onLoadMoreAllFiles={onLoadMoreAllFiles}
                   onLoadMoreGitChanges={onLoadMoreGitChanges}
-                  openDiagnosticsEventId={openChangeDiagnosticsEventId ?? null}
-                  onOpenChangeDiagnostics={onOpenChangeDiagnostics}
                 />
               )}
             </ScrollView>

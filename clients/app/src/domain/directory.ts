@@ -23,11 +23,11 @@ export type DirectoryId = string;
 
 /** 目录的会话汇总，全部由会话摘要得出。 */
 export interface DirectorySessionCounts {
-  /** 该目录全部会话数（含已关闭）。 */
+  /** 该目录全部会话数。 */
   readonly total: number;
-  /** `state` 为 `queued` 或 `running` 的会话数。 */
+  /** `state` 为 `running` 的会话数。 */
   readonly active: number;
-  /** `state` 为 `waiting_input` 或 `waiting_permission` 的会话数。 */
+  /** `state` 为 `pending` 的会话数。 */
   readonly pending: number;
 }
 
@@ -152,24 +152,16 @@ export const DIRECTION_EMPTY_STATES: readonly DirectoryEmptyState[] = [
 
 /** 会话状态 → 是否计入「运行中」（静态词表，用 `Record` 而非 `Set`）。 */
 const IS_ACTIVE: Record<SessionStateView, true | undefined> = {
-  queued: true,
   running: true,
   idle: undefined,
-  waiting_input: undefined,
-  waiting_permission: undefined,
-  failed: undefined,
-  closed: undefined,
+  pending: undefined,
 };
 
 /** 会话状态 → 是否计入「待处理」（静态词表，用 `Record` 而非 `Set`）。 */
 const IS_PENDING: Record<SessionStateView, true | undefined> = {
-  waiting_input: true,
-  waiting_permission: true,
+  pending: true,
   idle: undefined,
-  queued: undefined,
   running: undefined,
-  failed: undefined,
-  closed: undefined,
 };
 
 /**

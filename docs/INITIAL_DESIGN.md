@@ -76,7 +76,7 @@ ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent
 
 Zed、CLI、PWA、手机 App 和桌面 App 都是客户端形态，不是固定权限角色。它们可以按授权查看消息、继续对话、取消 turn、处理权限/elicitation、选择模型或模式。会话创建、删除与管理能力：本机自己的设备通过认证即可执行（设备方向没有授权维度）；跨节点能力由 Export Policy 与 `grant.*` 决定。Node Link 首个纵向切片支持供 Zed 使用的受限远程 `session.create`；本机设备另可只读地逐层浏览目录以选择工作目录（`workspace.browse`，feature `core.workspace-browse.v1` 门控，见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2）；PWA 按 `FRONTEND_DESIGN.md` §2.2/§9 在目录内提供创建入口。
 
-对话页的「文件」栏计划收敛为两个只读来源：「全部文件」逐层浏览**当前会话工作目录**内的文件、「Git 变更」查看该目录相对 HEAD 的未提交状态与差异。2026-10-19 已确认移除「会话变更」来源，代码与原型尚待调整；默认来源、旧选择回退与界面边界以 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §2 为准。Git 变更可能包含人工操作及其他会话的修改，不代表当前会话独占的改动；对话中的工具调用、文件差异与既有历史记录继续保留。两个来源都只读、不编辑文件、不执行 Git 写操作，也不读取会话工作目录之外的内容；根外链接只展示名称、不可打开。查询范围限于本节点直接管理的 owned 会话：远程导入（imported）会话的两个来源均明确不受支持，不读取 Access 本机替代目录。文件内容、预览与下载只经已认证的 Sync 查询（feature `core.session-files.v1`，见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5），不生成长期 bearer 链接；内容与 Git 差异不写入会话日志或持久正文缓存，并受分页、预览/下载与并发上限约束。
+对话页的「文件」栏收敛为两个只读来源：「全部文件」逐层浏览**当前会话工作目录**内的文件、「Git 变更」查看该目录相对 HEAD 的未提交状态与差异。2026-10-19 已确认移除「会话变更」来源，客户端与桌面原型已按此调整；首次进入默认「全部文件」，旧的「会话变更」选择回退到「全部文件」，默认来源、回退与界面边界以 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §2 为准。仓库级验证（PV1–PV4）已通过；真实 Daemon 验收尚未执行，状态与未执行项以 [`docs/evidence/remove-session-file-changes.md`](./evidence/remove-session-file-changes.md) 为准。Git 变更可能包含人工操作及其他会话的修改，不代表当前会话独占的改动；对话中的工具调用、文件差异与既有历史记录继续保留。两个来源都只读、不编辑文件、不执行 Git 写操作，也不读取会话工作目录之外的内容；根外链接只展示名称、不可打开。查询范围限于本节点直接管理的 owned 会话：远程导入（imported）会话的两个来源均明确不受支持，不读取 Access 本机替代目录。文件内容、预览与下载只经已认证的 Sync 查询（feature `core.session-files.v1`，见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5），不生成长期 bearer 链接；内容与 Git 差异不写入会话日志或持久正文缓存，并受分页、预览/下载与并发上限约束。
 
 ### 3.4 Zed
 
@@ -201,6 +201,13 @@ session-2 -> command queue -> agent
 - 不同会话可以并行执行。
 - Agent 忙碌时，新 prompt 进入队列或由策略拒绝。
 - 模型切换在空闲时立即生效；运行中则默认从下一 turn 生效。
+
+会话主状态（2026-10-20 `session-activity-three-states`）：
+
+- 会话只有三种活跃程度：`idle`、`running`、`pending`。判断顺序固定：至少一个有效未解决交互 → `pending`；否则仍有未结束 turn（`queued`/`running`/`waiting_*`，含已派发但停止尚未确认的执行）→ `running`；否则 `idle`。
+- `failed`/`cancelled` 是一个 **turn** 的结果，不是会话终态：失败或取消只终结当前轮，会话按剩余排队/交互重新归约，后续 prompt 继续执行。会话没有 `closed` 状态，也没有 `closed_at`。
+- `pending` 包含「已仲裁、等待 Agent 确认处理」的交互：first-writer-wins 只阻止其它设备重复应答，不冒充已解除；端点确认后该交互才退出有效集合。一个会话可同时有授权与表单请求，原因从各有效交互取得，不用单一互斥字段。
+- 历史数据里的 `queued`/`waiting_*`/`failed`/`closed` 只是**旧版本的过去事实**（迁移暂存或显式历史读取），不能作为实时摘要解码，也不得覆盖重算后的三态摘要。任务失败、命令 `uncertain` 等结果词表不变。
 
 ### 5.3 ACP 兼容性不变量
 

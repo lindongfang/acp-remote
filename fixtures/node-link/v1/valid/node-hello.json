@@ -9,12 +9,14 @@
     "role": "access",
     "clientNonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
     "supportedFeatures": [
+      "core.session-activity.v1",
       "node-link.command-status.v1",
       "node-link.core.v1",
       "node-link.raw-acp.v1",
       "node-link.session-create.v1"
     ],
     "requiredFeatures": [
+      "core.session-activity.v1",
       "node-link.core.v1"
     ]
   }

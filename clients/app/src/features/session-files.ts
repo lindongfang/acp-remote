@@ -1,11 +1,11 @@
 /**
- * 文件栏的 feature 状态与 view model（WP4）。
+ * 文件栏的 feature 状态与 view model。
  *
- * ## 三来源分开、互斥内容态
+ * ## 两来源分开、互斥内容态
  *
- * `SessionFilesState` 里三个来源各有自己的形状：`all`（逐层目录 + 忽略开关）、`git`（未提交
- * 状态）、`session`（由 `domain/session-files.ts` 从已持久化记录归并）。它们不共享一个
- * 「文件数组」，因此一个来源刷新失败或不可用不会把另一个来源的结果冲掉。
+ * `SessionFilesState` 里两个来源各有自己的形状：`all`（逐层目录 + 忽略开关）与 `git`（未提交
+ * 状态）。它们不共享一个「文件数组」，因此一个来源刷新失败或不可用不会把另一个来源的结果冲掉。
+ * 会话改动不再进入文件栏：时间线继续呈现结构化差异与诊断，文件栏只保留全部文件与 Git 变更。
  *
  * 中间查看区只有 `conversation | file` **一个**判别值（`FileContentState`）。`file` 内部再分
  * `loading | ready | error`，并携带返回上下文 `{ sessionId, source, path }` 与请求代次
@@ -25,27 +25,22 @@
  */
 
 import type { PublicError, Uuid } from "../protocol";
-import type { StructuredRecord } from "../domain/timeline";
 import type {
   AllFilesDirectoryView,
   FileSource,
   FileSourceUnsupportedReason,
   GitChangesView,
   GitDiffView,
-  SessionChangedFile,
-  SessionChangesModel,
-  SessionChangeRecord,
-  HistoryCoverage,
 } from "../domain/session-files";
 import {
   DEFAULT_FILE_SOURCE,
   FILE_SOURCE_UNSUPPORTED_NOTICES,
-  buildSessionChangesModel,
+  normalizeFileSource,
 } from "../domain/session-files";
 
 // UI 与测试从 feature 层消费同一份来源词表；不要在组件里再抄一份。
 export type { FileSource } from "../domain/session-files";
-export { FILE_SOURCES } from "../domain/session-files";
+export { FILE_SOURCES, normalizeFileSource } from "../domain/session-files";
 
 /** 文本/二进制预览的客户端预算（服务端还会按自己的预算下发 `previewTruncated`）。 */
 export const FILE_PREVIEW_BUDGET_BYTES = 256 * 1024;
@@ -68,7 +63,6 @@ export const FILE_REFRESH_MAX_RETRY_MS = 30_000;
 export const FILE_SOURCE_LABELS: Readonly<Record<FileSource, string>> = {
   all: "全部文件",
   git: "Git 变更",
-  session: "会话变更",
 };
 
 /** 全部文件来源状态：忽略开关 + 逐层缓存（按根内相对路径，空串为根）。 */
@@ -84,7 +78,7 @@ export interface GitChangesSourceState extends GitChangesView {
   readonly unsupported: FileSourceUnsupportedReason | null;
 }
 
-/** 一个会话的三来源状态（会话变更本身由记录派生，不在这里存事件）。 */
+/** 一个会话的两来源状态（会话改动由时间线从记录投影，不在这里存事件）。 */
 export interface SessionFilesSourcesState {
   readonly all: AllFilesSourceState;
   readonly git: GitChangesSourceState;
@@ -117,14 +111,7 @@ export interface FileGitDiffContent {
   readonly diff: GitDiffView;
 }
 
-/** 会话变更内容：该文件全部已加载的历次记录（不合成累计净差异）。 */
-export interface FileSessionChangesContent {
-  readonly kind: "session_changes";
-  readonly path: string;
-  readonly records: readonly SessionChangeRecord[];
-}
-
-export type FileContentView = FilePreviewContent | FileGitDiffContent | FileSessionChangesContent;
+export type FileContentView = FilePreviewContent | FileGitDiffContent;
 
 /** 互斥的中间内容态。查看期间文件改变只置 `stale`，不擅自替换正在阅读的内容。 */
 export type FileContentState =
@@ -185,12 +172,16 @@ export function initialSessionFilesState(): SessionFilesState {
   return { selectedSources: new Map(), sources: new Map(), content: { kind: "conversation" }, generation: 0 };
 }
 
-/** 某会话当前选中的来源（默认「会话变更」）。 */
+/**
+ * 某会话当前选中的来源（默认「全部文件」）。
+ *
+ * 状态里可能残留旧页面写入的取值，因此读取也走同一条归一：旧的 `session` 回到 `all`。
+ */
 export function selectedSourceOf(state: SessionFilesState, sessionId: Uuid): FileSource {
-  return state.selectedSources.get(sessionId) ?? DEFAULT_FILE_SOURCE;
+  return normalizeFileSource(state.selectedSources.get(sessionId) ?? DEFAULT_FILE_SOURCE);
 }
 
-/** 某会话的三来源状态（未创建过时返回空状态，不写入 map）。 */
+/** 某会话的两来源状态（未创建过时返回空状态，不写入 map）。 */
 export function sourcesOf(state: SessionFilesState, sessionId: Uuid): SessionFilesSourcesState {
   return state.sources.get(sessionId) ?? emptySources();
 }
@@ -201,71 +192,47 @@ export function contentForSession(state: SessionFilesState, sessionId: Uuid): Fi
   return state.content.context.sessionId === sessionId ? state.content : { kind: "conversation" };
 }
 
-/** 三条来源的不可用文案（可用时为 `null`）。 */
+/** 来源的不可用文案（可用时为 `null`）。 */
 export function sourceUnsupportedNotice(reason: FileSourceUnsupportedReason | null): string | null {
   return reason === null ? null : FILE_SOURCE_UNSUPPORTED_NOTICES[reason];
 }
 
-/** 文件栏 view model（WP5 消费的唯一形状）。 */
+/** 文件栏 view model（组件消费的唯一形状）。 */
 export interface SessionFilesPanelModel {
   readonly refreshState: { readonly kind: "available" | "loading" } | { readonly kind: "unavailable"; readonly reason: string };
-  readonly refreshError: string | null;
   readonly sessionId: Uuid;
   readonly selectedSource: FileSource;
   readonly all: AllFilesSourceState;
   readonly git: GitChangesSourceState;
-  readonly sessionChanges: SessionChangesModel;
   readonly content: FileContentState;
   readonly connectionOnline: boolean;
   readonly allNotice: string | null;
   readonly gitNotice: string | null;
-  /** 会话变更历史范围说明；完整加载时为 `null`。 */
-  readonly historyNotice: string | null;
-  readonly historyCoverage: HistoryCoverage;
 }
 
 /** 组装文件栏 view model。 */
 export function buildSessionFilesPanelModel(input: {
   readonly sessionId: Uuid;
   readonly state: SessionFilesState;
-  /** 本会话已去重的结构化记录（实时 + 历史）。 */
-  readonly records: readonly StructuredRecord[];
-  readonly historyHasEarlier: boolean | null;
   readonly connectionOnline: boolean;
-  readonly historyRefreshSupported?: boolean;
-  readonly historyReadPending?: boolean;
-  readonly historyRefreshError?: string | null;
 }): SessionFilesPanelModel {
   const sources = sourcesOf(input.state, input.sessionId);
-  const sessionChanges = buildSessionChangesModel(input.records, input.historyHasEarlier);
   const selectedSource = selectedSourceOf(input.state, input.sessionId);
-  const unavailable = !input.connectionOnline ? "当前未连接，连接恢复后可刷新。"
-    : selectedSource === "session" ? input.historyRefreshSupported !== true ? "此主机不支持读取会话历史，无法手动刷新会话变更；已收到的改动仍会自动显示。" : null
+  const unavailable = !input.connectionOnline
+    ? "当前未连接，连接恢复后可刷新。"
     : sourceUnsupportedNotice(selectedSource === "all" ? sources.all.unsupported : sources.git.unsupported);
-  const loading = selectedSource === "session" ? input.historyReadPending === true
-    : selectedSource === "git" ? sources.git.loading : [...sources.all.directories.values()].some(directory => directory.loading);
+  const loading = selectedSource === "git"
+    ? sources.git.loading
+    : [...sources.all.directories.values()].some(directory => directory.loading);
   return {
     refreshState: unavailable !== null ? { kind: "unavailable", reason: unavailable } : { kind: loading ? "loading" : "available" },
-    refreshError: selectedSource === "session" ? input.historyRefreshError ?? null : null,
     sessionId: input.sessionId,
     selectedSource,
     all: sources.all,
     git: sources.git,
-    sessionChanges,
     content: contentForSession(input.state, input.sessionId),
     connectionOnline: input.connectionOnline,
     allNotice: sourceUnsupportedNotice(sources.all.unsupported),
     gitNotice: sourceUnsupportedNotice(sources.git.unsupported),
-    historyNotice: sessionChanges.historyNotice,
-    historyCoverage: sessionChanges.historyCoverage,
   };
-}
-
-/** 一个会话变更文件的记录列表（按可靠路径/事件键取）；不存在返回 `null`。 */
-export function sessionChangesForPath(
-  model: SessionChangesModel,
-  path: string,
-): { readonly file: SessionChangedFile; readonly records: readonly SessionChangeRecord[] } | null {
-  const file = model.files.find((candidate) => candidate.path === path || candidate.key === `path:${path}`);
-  return file === undefined ? null : { file, records: file.records };
 }

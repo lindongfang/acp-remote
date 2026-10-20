@@ -65,7 +65,7 @@ function session(input: {
 
 const SESSIONS = [
   session({ id: "aaaaaaaa-0000-4000-8000-000000000001", state: "running" }),
-  session({ id: "aaaaaaaa-0000-4000-8000-000000000002", state: "waiting_permission" }),
+  session({ id: "aaaaaaaa-0000-4000-8000-000000000002", state: "pending" }),
   session({ id: "aaaaaaaa-0000-4000-8000-000000000003", state: "idle", directoryId: "personal-api" }),
 ];
 
@@ -210,7 +210,7 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
     expect(offline.kind).toBe("ready");
     if (offline.kind !== "ready") return;
     const workApi = offline.directories.find((item) => item.directoryId === "work-api");
-    // 两条会话属于 work-api：一条 running（运行中 1）、一条 waiting_permission（待处理 1）。
+    // 两条会话属于 work-api：一条 running（运行中 1）、一条 pending（待处理 1）。
     expect(workApi?.counts).toEqual({ total: 2, active: 1, pending: 1 });
     // 反例：断连时不给出汇总（而不是给 0），这里会变 null，断言变红。
     expect(offline.contentOrigin).toBe("last_sync");

@@ -67,6 +67,11 @@ async fn rewind_to_v4(dir: &std::path::Path) -> std::path::PathBuf {
         .execute(&pool)
         .await
         .expect("把 owned_device 补回 v8 之前就有的 scopes_json（v8 段只删这一列）");
+    // v13 删除了 `closed_at`；当前库没有该列，合成的 v4 形状必须把它补回。
+    sqlx::query("ALTER TABLE owned_session ADD COLUMN closed_at TEXT")
+        .execute(&pool)
+        .await
+        .expect("把 owned_session 补回 v13 之前的 closed_at");
     sqlx::query("PRAGMA user_version = 4")
         .execute(&pool)
         .await
@@ -89,7 +94,7 @@ async fn seed_v4_session(path: &std::path::Path, session_id: &str, title: &str) 
     sqlx::query(
         r#"INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, origin_epoch,
          current_mode_id, current_mode_name, version, created_at, updated_at, closed_at)
-         VALUES (?1, ?2, 'fixture-agent', 'Fixture Agent', 'waiting_input', ?3,
+         VALUES (?1, ?2, 'fixture-agent', 'Fixture Agent', 'idle', ?3,
          'code', 'Code', 7, ?4, ?4, NULL)"#,
     )
     .bind(session_id)
@@ -116,7 +121,6 @@ async fn other_columns_quote(pool: &sqlx::SqlitePool, session_id: &str) -> Optio
            || '|version=' || quote(version)
            || '|created_at=' || quote(created_at)
            || '|updated_at=' || quote(updated_at)
-           || '|closed_at=' || quote(closed_at)
            FROM owned_session WHERE session_id = ?1"#,
     )
     .bind(session_id)
@@ -138,33 +142,21 @@ async fn ddl(pool: &sqlx::SqlitePool, table: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 强制输入：v4→v6 必须是「ALTER 追加」，不得触发 12-step 重建。
+// v13：会话表重建为三态并删除 closed_at，恢复列保持可用。
 // ---------------------------------------------------------------------------------------------
 
-/// **判别式**断言：v4→v6 段对 `owned_session` 只做 `ALTER TABLE … ADD COLUMN`，不重建表。
+/// v4 → 当前形状：`owned_session` 被 v13 重建（去掉 `closed_at`、CHECK 收敛为三态），
+/// 恢复三列保留在列清单末尾，既有行与设备行逐列保留。
 ///
-/// 这正是 spec R13/R16 要求的性质（「这些列只做追加，MUST NOT 触发 12-step 表重建」）。既有迁移用例
-/// （`migration.rs`）对 `owned_session` 只断言 `after.contains("agent_session_id")`，因此**如果有人
-/// 把 v5/v6 段误写成重建**（例如为加 CHECK 而重建 `owned_session`），那些断言**仍然会通过**。本用例补上
-/// 缺口，并且自带一条**反证**：本仓库的 12-step 重建段一律写成
-/// `CREATE TABLE owned_x_vN (…) … DROP TABLE owned_x; ALTER TABLE owned_x_vN RENAME TO owned_x`，
-/// SQLite 会把改名后的存储文本记成**带双引号的表名**（`CREATE TABLE "owned_x" (`），而
-/// `ALTER TABLE … ADD COLUMN` 是**原地追加**、表名保持不带引号。本用例据此断言：
+/// 本用例在 `migration.rs` 的列清单相等断言之外补上**结构判别式**：
 ///
-/// 1. `owned_session` 升级后的存储文本以**不带引号**的 `CREATE TABLE owned_session (` 开头（即追加
-///    路径），且**不含**重建用的临时表名（`owned_session_v2` / `_v3` / `_v5`）。
-///    **注意**：`IF NOT EXISTS` **不能**用作判别式——实测 `ALTER TABLE ADD COLUMN` 会把它从存储文本里
-///    去掉，而重建文本本来就没有它，**两条路径都不含**，按它断言会恒真（实测表见
-///    测试设计文档 §2.1；本用例内联注释 ① 同样记录了这次标定）。判别式只认
-///    「表名是否带双引号」。
-/// 2. 既有列的**原始定义文本**（含列名后的空白与 `STRICT` 结尾）在升级后逐字节保留——重建会重排空白、
-///    重新排版并改写 `STRICT` 之外的形式；
-/// 3. 三列位于列清单**末尾**且是纯追加（`PRAGMA table_info` 的 `cid` 连续、无空洞）；
-/// 4. 反证：v1 库升级里**确实会重建**的 `owned_audit`，其文本以**带双引号**的
-///    `CREATE TABLE "owned_audit" (` 开头（RENAME 的签名）——证明本用例的判别式不是恒真。若把 ① 的
-///    判别式方向写反或改成恒真表达式，本断言会立刻失败。
+/// 1. 升级后的存储文本以 `CREATE TABLE owned_session (` 开头（v13 直接创建规范表，不靠 RENAME
+///    临时表），且不含 `closed_at`、CHECK 只有三态；
+/// 2. 列清单 =「v4 的 12 列去掉 closed_at」+ 恢复三列，`cid` 连续无空洞；
+/// 3. 反证：v1 升级里确实重建的 `owned_audit` 文本带双引号表名（RENAME 的签名），说明「重建会改
+///    存储文本」的判断有实际判别力。
 #[tokio::test]
-async fn v6_appends_the_recovery_and_workspace_columns_instead_of_rebuilding_owned_session() {
+async fn v13_rebuilds_owned_session_without_closed_at_and_keeps_recovery_columns() {
     let dir = temp_dir("tp2-append-not-rebuild");
     let path = rewind_to_v4(&dir).await;
     let before_pool = raw_pool(&path).await;
@@ -174,40 +166,48 @@ async fn v6_appends_the_recovery_and_workspace_columns_instead_of_rebuilding_own
         !ddl_before.contains("agent_session_id") && !ddl_before.contains("workspace_cwd"),
         "回退出来的库必须真的没有两列"
     );
-    assert_eq!(columns_before.len(), 12, "v4 的 owned_session 是 12 列");
+    assert_eq!(
+        columns_before.len(),
+        12,
+        "v4 的 owned_session 是 12 列（含 v13 删除的 closed_at）"
+    );
+    assert!(
+        columns_before.iter().any(|(name, ..)| name == "closed_at"),
+        "合成的 v4 形状必须带 closed_at"
+    );
     before_pool.close().await;
 
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
-        .expect("v4 库必须能升到 v6");
+        .expect("v4 库必须能升到当前三态形状");
     store.close().await;
 
     let pool = raw_pool(&path).await;
     let ddl_after = ddl(&pool, "owned_session").await;
     let columns_after = column_specs(&pool, "owned_session").await;
 
-    // ① **判别式（实测标定）**：本仓库的 12-step 重建段一律写成
-    //    `CREATE TABLE owned_x_vN (...) … DROP TABLE owned_x; ALTER TABLE owned_x_vN RENAME TO owned_x`，
-    //    SQLite 会把改名后的存储文本记成**带双引号的表名** `CREATE TABLE "owned_x"`；而 `ALTER TABLE …
-    //    ADD COLUMN` 是**原地追加**，存储文本里表名保持不带引号。因此：
-    //    - 追加路径 ⇒ `CREATE TABLE owned_session (`（无引号）；
-    //    - 重建路径 ⇒ `CREATE TABLE "owned_session" (`（有引号）。
-    //    （注意：`IF NOT EXISTS` **不能**用作判别式——实测 `ALTER TABLE ADD COLUMN` 会把它从存储文本里
-    //    去掉，而重建文本本来就没有它，两条路径都不含，断言会恒真。此处已按实测标定。）
+    // ① v13 重建会话表：`DROP` 旧表后把新表改名为规范名，SQLite 因此把存储文本记成带双引号的
+    //    `CREATE TABLE "owned_session" (`；临时表在成功后已删除。保留列的名称/顺序/类型必须仍是
+    //    v4 的次序，只去掉 `closed_at`。
     assert!(
-        ddl_after.starts_with("CREATE TABLE owned_session ("),
-        "追加路径的存储文本必须是不带引号的表名；重建路径会写成带引号的 \"owned_session\"：{ddl_after}"
+        ddl_after.starts_with("CREATE TABLE \"owned_session\" ("),
+        "v13 通过 RENAME 落成规范表名（表名带双引号）：{ddl_after}"
     );
     assert!(
-        !ddl_after.starts_with("CREATE TABLE \"owned_session\" ("),
-        "owned_session 被 12-step 重建了（表名带引号是 RENAME 的签名）：{ddl_after}"
+        !ddl_after.contains("closed_at"),
+        "v13 之后会话表不得再有 closed_at：{ddl_after}"
     );
-    // 反向：重建不得在本库留下任何临时表（追加不建任何对象）。
+    assert!(
+        ddl_after.contains("CHECK (state IN ('idle','running','pending'))"),
+        "会话状态 CHECK 必须收敛为三态：{ddl_after}"
+    );
     for table in [
         "owned_session_v2",
         "owned_session_v3",
         "owned_session_v5",
         "owned_session_v6",
+        "owned_session_v13_old",
+        "owned_session_v13_new",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
@@ -218,44 +218,29 @@ async fn v6_appends_the_recovery_and_workspace_columns_instead_of_rebuilding_own
             .await
             .expect("查 sqlite_master"),
             0,
-            "重建会先建临时表 {table} 再改名，追加不会"
+            "重建成功后不得留下临时表 {table}"
         );
     }
 
-    // ② 既有列的定义文本逐字节保留：`ALTER ADD COLUMN` 只在原文本末尾**拼接**追加列；
-    //    重建会按重建脚本重新排版整段 DDL。取「原文本去掉表尾的 `)` 与其后的 `STRICT`」作为既有列
-    //    部分（`DROP COLUMN` 会把表尾重排到同一行，因此这里按**最后一个**右括号切，不依赖换行）。
-    let head_before = ddl_before
-        .rfind(')')
-        .map(|cut| ddl_before[..cut].trim_end().trim_end_matches(','))
-        .unwrap_or_else(|| panic!("v4 文本形状异常（找不到表尾右括号）：{ddl_before}"));
-    assert!(
-        ddl_after.contains(head_before),
-        "既有列的定义文本必须逐字节保留（重建会重排空白与排版）：\n{head_before}\n{ddl_after}"
-    );
-    // 追加列紧跟在最后一个既有列之后（SQLite 的追加渲染形状）。
-    assert!(
-        ddl_after.contains(&format!(
-            "{head_before}, agent_session_id TEXT, workspace_cwd TEXT, workspace_directory_id TEXT)"
-        )),
-        "三列必须紧跟既有列追加：{ddl_after}"
-    );
-
-    // ③ 列清单是「原 12 列 + 末尾三列」的严格追加，`cid` 连续无空洞。
-    assert_eq!(columns_after.len(), 15, "v6 的 owned_session 是 15 列");
+    // ② 列清单 =「v4 的 12 列去掉 closed_at」（前 11 列）+ 恢复三列；`cid` 连续无空洞。
     assert_eq!(
-        &columns_after[..12],
-        &columns_before[..],
-        "既有 12 列的名称/顺序/类型/NOT NULL/默认值必须逐项不变"
+        columns_after.len(),
+        14,
+        "v13 的 owned_session 是 14 列（v4 的 12 列去掉 closed_at + 恢复三列）"
     );
-    assert_eq!(columns_after[12].0, "agent_session_id");
-    assert_eq!(columns_after[13].0, "workspace_cwd");
-    assert_eq!(columns_after[14].0, "workspace_directory_id");
+    assert_eq!(
+        &columns_after[..11],
+        &columns_before[..11],
+        "保留列的名称/顺序/类型/NOT NULL/默认值必须逐项不变"
+    );
+    assert_eq!(columns_after[11].0, "agent_session_id");
+    assert_eq!(columns_after[12].0, "workspace_cwd");
+    assert_eq!(columns_after[13].0, "workspace_directory_id");
     assert_eq!(
         (
+            &columns_after[11].1,
             &columns_after[12].1,
-            &columns_after[13].1,
-            &columns_after[14].1
+            &columns_after[13].1
         ),
         (&"TEXT".to_owned(), &"TEXT".to_owned(), &"TEXT".to_owned()),
         "三列都是 TEXT"
@@ -264,14 +249,10 @@ async fn v6_appends_the_recovery_and_workspace_columns_instead_of_rebuilding_own
         .fetch_all(&pool)
         .await
         .expect("读 cid");
-    assert_eq!(
-        cids,
-        (0..15).collect::<Vec<i64>>(),
-        "cid 必须连续无空洞（追加不会留空洞；重建会按重建脚本重排）"
-    );
+    assert_eq!(cids, (0..14).collect::<Vec<i64>>(), "cid 必须连续无空洞");
 
-    // ④ 反证：v1→v6 的路径里**确实**重建 `owned_audit`，其文本的表名**带双引号**（RENAME 的签名）——
-    //    因此 ① 的判别式不是恒真（若方向写反，本断言会立刻失败）。
+    // ③ 反证：v1 升级路径里确实重建 `owned_audit`，其文本的表名**带双引号**（RENAME 的签名）——
+    //    说明本文件的「重建会改存储文本」判断有实际判别力。
     let v1_dir = temp_dir("tp2-append-not-rebuild-v1");
     let v1_path = copy_fixture("from-v1.sqlite3", &v1_dir);
     let v1_store = SqliteStore::open(StorageConfig::new(&v1_dir), &at())
@@ -387,9 +368,9 @@ async fn a_half_null_recovery_pair_is_still_no_recovery_data() {
         sqlx::query(
             r#"INSERT INTO owned_session (session_id, title, agent_id, agent_name, state,
              origin_epoch, current_mode_id, current_mode_name, version, created_at, updated_at,
-             closed_at, agent_session_id, workspace_cwd)
+             agent_session_id, workspace_cwd)
              VALUES (?1, 't', 'fixture-agent', 'Fixture Agent', 'idle', ?2, NULL, NULL, 1, ?3, ?3,
-             NULL, ?4, ?5)"#,
+             ?4, ?5)"#,
         )
         .bind(session_id)
         .bind(EPOCH)
@@ -440,9 +421,9 @@ async fn recovery_columns_round_trip_byte_exactly_and_are_never_derived() {
         sqlx::query(
             r#"INSERT INTO owned_session (session_id, title, agent_id, agent_name, state,
              origin_epoch, current_mode_id, current_mode_name, version, created_at, updated_at,
-             closed_at, agent_session_id, workspace_cwd)
+             agent_session_id, workspace_cwd)
              VALUES (?1, 't', 'fixture-agent', 'Fixture Agent', 'idle', ?2, NULL, NULL, 1, ?3, ?3,
-             NULL, ?4, ?5)"#,
+             ?4, ?5)"#,
         )
         .bind(session_id)
         .bind(EPOCH)

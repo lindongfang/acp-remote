@@ -4,8 +4,10 @@
 //! 依赖环境变量传参。所有场景都只经 stdio 的 LF 分隔 JSON 通信，与真实 Agent 的分帧一致。
 //!
 //! 场景清单见 `README`/`tasks.md` 2.13：`normal`、`chunked-updates`、`permission-request`、
+//! `permission-request-then-exit`（写出权限请求后退出，用于验证写入确认失败路径）、
 //! `elicitation`、`slow-initialize`、`no-response`、`illegal-json`、`unknown-id`、`out-of-order`、
-//! `crash-on-prompt`、`spawn-grandchild`、`heartbeat-child`、`stderr-flood`、
+//! `crash-on-prompt`、`exit-after-new`（`session/new` 应答后退出）、`spawn-grandchild`、
+//! `heartbeat-child`、`stderr-flood`、
 //! `stderr-protocol-noise`（在 **stderr** 上写语法完全合法的 ACP 报文，stdout 仍正常应答），
 //! 另有 `--dump-env <path>` 便于断言注入给子进程的环境变量集合。
 //!
@@ -495,6 +497,12 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
                 );
             }
             respond(out, &id, Value::Object(result));
+            if args.scenario == "exit-after-new" {
+                // 让 session/new 的响应先被读侧处理，再退出：之后任何写入都必须失败
+                // （用于验证写确认失败路径）。
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                std::process::exit(0);
+            }
         }
         (Some("session/set_mode"), Some(id)) => {
             // 形状校验：`{ sessionId, modeId }`（pinned schema 的两个必填字段）。
@@ -699,30 +707,12 @@ fn start_prompt(state: &mut State, out: &mut impl Write, args: &Args, id: Value,
             state.prompts.push((session.to_owned(), id));
         }
         "permission-request" => {
-            let request_id = state.next_id();
-            state.interactions.push((request_id, "permission", id));
-            write_line(
-                out,
-                &json!({
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "method": "session/request_permission",
-                    "params": {
-                        "sessionId": session,
-                        "toolCall": {
-                            "toolCallId": "tool-1",
-                            "title": "写入文件",
-                            "kind": "edit",
-                            "status": "pending",
-                            "rawInput": { "path": "a.txt" },
-                        },
-                        "options": [
-                            { "optionId": "allow-1", "name": "允许一次", "kind": "allow_once" },
-                            { "optionId": "reject-1", "name": "拒绝", "kind": "reject_once" },
-                        ],
-                    },
-                }),
-            );
+            send_permission_request(state, out, session, id);
+        }
+        "permission-request-then-exit" => {
+            // 请求写出后立刻退出：之后对权限的应答必然无法写进 stdin（用于验证确认失败路径）。
+            send_permission_request(state, out, session, id);
+            std::process::exit(0);
         }
         "elicitation" => {
             let request_id = state.next_id();
@@ -972,6 +962,34 @@ fn start_prompt(state: &mut State, out: &mut impl Write, args: &Args, id: Value,
             respond(out, &id, json!({ "stopReason": "end_turn" }));
         }
     }
+}
+
+/// 发出一条权限请求并把对应的 prompt 登记为待交互。
+fn send_permission_request(state: &mut State, out: &mut impl Write, session: &str, prompt: Value) {
+    let request_id = state.next_id();
+    state.interactions.push((request_id, "permission", prompt));
+    write_line(
+        out,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": session,
+                "toolCall": {
+                    "toolCallId": "tool-1",
+                    "title": "写入文件",
+                    "kind": "edit",
+                    "status": "pending",
+                    "rawInput": { "path": "a.txt" },
+                },
+                "options": [
+                    { "optionId": "allow-1", "name": "允许一次", "kind": "allow_once" },
+                    { "optionId": "reject-1", "name": "拒绝", "kind": "reject_once" },
+                ],
+            },
+        }),
+    );
 }
 
 fn terminal_kind_for(scenario: &str) -> Option<TerminalFlowKind> {

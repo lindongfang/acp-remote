@@ -6,13 +6,13 @@ use acp_core::model::{
     Actor, AgentId, AgentRef, DeviceId, ElicitationAction, ElicitationContentValue,
     ElicitationValues, EntityRef, EventKind, EventOrigin, EventPayload, EventType, InteractionId,
     InteractionKind, InteractionOption, InteractionResolution, OriginEpoch, PendingInteraction,
-    PermissionDecision, PermissionDecisionKind, PortError, Resolution, SessionId, StoredPolicy,
-    Timestamp, Version, ViewJson,
+    PermissionDecision, PermissionDecisionKind, PortError, SessionId, StoredPolicy, Timestamp,
+    Version, ViewJson,
 };
 use acp_core::ports::{
-    EffectiveResolution, HistoryInclude, HistoryQuery, InteractionAuthority, InteractionResolved,
-    ModeChange, NewSession, OwnedCommit, PendingInteractionWrite, ReplayLimit, SessionStore,
-    SessionUpdate, StateChange,
+    HistoryInclude, HistoryQuery, InteractionAuthority, InteractionResolved, ModeChange,
+    NewSession, OwnedCommit, PendingInteractionWrite, ReplayLimit, SessionStore, SessionUpdate,
+    StateChange,
 };
 use storage_sqlite::migrate::StorageConfig;
 use storage_sqlite::session_store::SqliteStore;
@@ -175,20 +175,216 @@ fn elicitation(values: &str) -> InteractionResolution {
     }
 }
 
-fn resolution(
+/// 一次仲裁提交：`SessionUpdate.interaction` 是唯一写入口，first-writer-wins 与状态修改同事务。
+fn resolution_commit(
     interaction: &InteractionId,
     session: &SessionId,
+    actor: Actor,
     request_version: Option<Version>,
     resolution: InteractionResolution,
-) -> EffectiveResolution {
-    EffectiveResolution {
-        interaction: interaction.clone(),
-        session: session.clone(),
-        actor: actor(OTHER_DEVICE),
-        request_version,
-        resolution,
-        at: at(2),
+    hour: u32,
+) -> OwnedCommit {
+    OwnedCommit {
+        session: Some(session.clone()),
+        at: at(hour),
+        expected_version: None,
+        state: Some(StateChange::Update(SessionUpdate {
+            state: None,
+            mode: ModeChange::Unchanged,
+            title: None,
+            confirmation: None,
+            interaction: Some(InteractionResolved {
+                interaction: interaction.clone(),
+                resolution,
+                resolved_by: actor,
+                request_version,
+            }),
+            agent_session_id: None,
+            workspace_cwd: None,
+            workspace_directory_id: None,
+        })),
+        turns: Vec::new(),
+        events: Vec::new(),
+        interactions: Vec::new(),
+        compacted: Vec::new(),
+        idempotency: None,
+        command_terminal: None,
+        origin_epoch: None,
     }
+}
+
+/// 一次确认提交：把 `resolved` 未确认的行写 `confirmed_at`（重复确认是无操作）。
+fn confirmation_commit(interaction: &InteractionId, session: &SessionId, hour: u32) -> OwnedCommit {
+    OwnedCommit {
+        session: Some(session.clone()),
+        at: at(hour),
+        expected_version: None,
+        state: Some(StateChange::Update(SessionUpdate {
+            state: None,
+            mode: ModeChange::Unchanged,
+            title: None,
+            confirmation: Some(interaction.clone()),
+            interaction: None,
+            agent_session_id: None,
+            workspace_cwd: None,
+            workspace_directory_id: None,
+        })),
+        turns: Vec::new(),
+        events: Vec::new(),
+        interactions: Vec::new(),
+        compacted: Vec::new(),
+        idempotency: None,
+        command_terminal: None,
+        origin_epoch: None,
+    }
+}
+
+/// 仲裁不等于处理完成：`resolved` 未确认仍计入摘要；`confirmation` 后归零，重复/过早确认都是无操作。
+#[tokio::test]
+async fn confirmation_is_the_only_way_out_of_the_effective_set() {
+    let dir = temp_dir("interactions-confirmation");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let interaction = create_permission(&store, &session, PERMISSION).await;
+
+    // 未仲裁：pending 计入未解决，但不是「已仲裁未确认」。
+    let facts = store.session_activity(&session).await.expect("activity");
+    assert_eq!(facts.unresolved_interactions, 1);
+    assert!(facts.unconfirmed_interactions.is_empty());
+    assert_eq!(facts.unfinished_turns, 0);
+
+    // 对仍 pending 的行确认是无操作（不写 confirmed_at、不报错）。
+    store
+        .commit(confirmation_commit(&interaction, &session, 2))
+        .await
+        .expect("confirming a pending row is a no-op");
+    assert_eq!(
+        store
+            .session_activity(&session)
+            .await
+            .expect("activity")
+            .unresolved_interactions,
+        1
+    );
+
+    // 仲裁：行变 resolved 但未确认——仍计入摘要，且不再出现在有效读取里。
+    store
+        .commit(resolution_commit(
+            &interaction,
+            &session,
+            actor(DEVICE),
+            Some(Version::new(1)),
+            permission("allow-once"),
+            2,
+        ))
+        .await
+        .expect("first answer wins");
+    let facts = store.session_activity(&session).await.expect("activity");
+    assert_eq!(facts.unresolved_interactions, 1);
+    assert_eq!(facts.unconfirmed_interactions, vec![interaction.clone()]);
+    assert!(
+        store
+            .effective(&session)
+            .await
+            .expect("effective")
+            .is_empty()
+    );
+
+    // 确认：退出有效集合与摘要；重复确认（含未知 id）都不产生第二次副作用。
+    store
+        .commit(confirmation_commit(&interaction, &session, 3))
+        .await
+        .expect("confirm");
+    let facts = store.session_activity(&session).await.expect("activity");
+    assert_eq!(facts.unresolved_interactions, 0);
+    assert!(facts.unconfirmed_interactions.is_empty());
+
+    store
+        .commit(confirmation_commit(&interaction, &session, 4))
+        .await
+        .expect("second confirmation is a no-op");
+    let unknown = InteractionId::new("44444444-4444-4444-8444-999999999999").expect("id");
+    store
+        .commit(confirmation_commit(&unknown, &session, 4))
+        .await
+        .expect("unknown confirmation is a no-op");
+
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    let confirmed: Option<String> =
+        sqlx::query_scalar("SELECT confirmed_at FROM owned_interaction WHERE interaction_id = ?1")
+            .bind(interaction.as_str())
+            .fetch_one(&pool)
+            .await
+            .expect("confirmed_at");
+    assert_eq!(
+        confirmed.as_deref(),
+        Some(at(3).as_str()),
+        "确认时间取本次提交的 at，且重复确认不覆盖"
+    );
+    pool.close().await;
+
+    store.close().await;
+}
+
+/// 失效范围包括「已仲裁未确认」的行：它们同样退出摘要与有效集合，且不可复活。
+#[tokio::test]
+async fn invalidate_pending_expires_unconfirmed_resolutions() {
+    let dir = temp_dir("interactions-invalidate-confirmed");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let interaction = create_permission(&store, &session, PERMISSION).await;
+    store
+        .commit(resolution_commit(
+            &interaction,
+            &session,
+            actor(DEVICE),
+            Some(Version::new(1)),
+            permission("allow-once"),
+            2,
+        ))
+        .await
+        .expect("resolve");
+    assert_eq!(
+        store
+            .session_activity(&session)
+            .await
+            .expect("activity")
+            .unresolved_interactions,
+        1
+    );
+    assert_eq!(
+        store
+            .invalidate_pending(Some(&session), at(3))
+            .await
+            .expect("invalidate"),
+        1,
+        "已仲裁未确认的行必须被失效"
+    );
+    assert_eq!(
+        store
+            .session_activity(&session)
+            .await
+            .expect("activity")
+            .unresolved_interactions,
+        0
+    );
+    // 失效后确认也是无操作（行已不是 resolved）。
+    store
+        .commit(confirmation_commit(&interaction, &session, 4))
+        .await
+        .expect("confirm after invalidation is a no-op");
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    let (state, confirmed): (String, Option<String>) = sqlx::query_as(
+        "SELECT state, confirmed_at FROM owned_interaction WHERE interaction_id = ?1",
+    )
+    .bind(interaction.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("row");
+    assert_eq!(state, "expired");
+    assert_eq!(confirmed, None);
+    pool.close().await;
+    store.close().await;
 }
 
 /// 有效读取给出完整请求（选项/表单来自创建事件）、版本与会话；无上游字段时不被伪造。
@@ -276,11 +472,13 @@ async fn version_checks_and_first_writer_win() {
 
     // 版本不符 → VersionMismatch，且请求仍 pending。
     let error = store
-        .resolve_effective(resolution(
+        .commit(resolution_commit(
             &interaction,
             &session,
+            actor(OTHER_DEVICE),
             Some(Version::new(2)),
             permission("allow-once"),
+            2,
         ))
         .await
         .expect_err("stale version");
@@ -297,11 +495,13 @@ async fn version_checks_and_first_writer_win() {
     // 未知交互 / 跨会话 → NotFound（不泄露其它会话的交互事实）。
     let unknown = InteractionId::new("44444444-4444-4444-8444-999999999999").expect("id");
     let error = store
-        .resolve_effective(resolution(
+        .commit(resolution_commit(
             &unknown,
             &session,
+            actor(OTHER_DEVICE),
             None,
             permission("allow-once"),
+            2,
         ))
         .await
         .expect_err("unknown");
@@ -309,13 +509,17 @@ async fn version_checks_and_first_writer_win() {
         error,
         PortError::NotFound(EntityRef::Interaction(_))
     ));
-    let other_session = SessionId::new("77777777-7777-4777-8777-777777777777").expect("session id");
+    // 跨会话解析：目标会话必须真实存在（否则先是会话 NotFound），这里用第二个真实会话证明
+    // 交互也按会话隔离（不泄露其它会话的交互事实）。
+    let other_session = create_session(&store).await;
     let error = store
-        .resolve_effective(resolution(
+        .commit(resolution_commit(
             &interaction,
             &other_session,
+            actor(OTHER_DEVICE),
             None,
             permission("allow-once"),
+            2,
         ))
         .await
         .expect_err("cross-session");
@@ -324,60 +528,63 @@ async fn version_checks_and_first_writer_win() {
         PortError::NotFound(EntityRef::Interaction(_))
     ));
 
-    // 两个设备并发提交：恰好一个 Resolved，另一个 AlreadyResolved。
-    let mut first = resolution(
-        &interaction,
-        &session,
-        Some(Version::new(1)),
-        permission("allow-once"),
-    );
-    first.actor = actor(DEVICE);
-    let second = resolution(
-        &interaction,
-        &session,
-        Some(Version::new(1)),
-        permission("reject-once"),
-    );
+    // 两个设备并发提交：恰好一个成功，另一个 AlreadyResolved。
     let (left, right) = tokio::join!(
-        store.resolve_effective(first),
-        store.resolve_effective(second),
+        store.commit(resolution_commit(
+            &interaction,
+            &session,
+            actor(DEVICE),
+            Some(Version::new(1)),
+            permission("allow-once"),
+            2,
+        )),
+        store.commit(resolution_commit(
+            &interaction,
+            &session,
+            actor(OTHER_DEVICE),
+            Some(Version::new(1)),
+            permission("reject-once"),
+            2,
+        )),
     );
-    let outcomes = [left.expect("first"), right.expect("second")];
-    assert_eq!(
-        outcomes
-            .iter()
-            .filter(|outcome| **outcome == Resolution::Resolved)
-            .count(),
-        1
-    );
-    assert_eq!(
-        outcomes
-            .iter()
-            .filter(|outcome| **outcome == Resolution::AlreadyResolved)
-            .count(),
-        1
-    );
+    let mut accepted = 0;
+    let mut rejected = 0;
+    for outcome in [left, right] {
+        match outcome {
+            Ok(_) => accepted += 1,
+            Err(PortError::Conflict(acp_core::model::ConflictKind::AlreadyResolved)) => {
+                rejected += 1
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+    assert_eq!(accepted, 1, "恰好一个应答胜出");
+    assert_eq!(rejected, 1, "后到应答得到已处理事实");
     assert!(
         store
             .effective(&session)
             .await
             .expect("effective")
-            .is_empty()
+            .is_empty(),
+        "仲裁后不再出现在有效读取里（确认之前仍计入摘要）"
     );
 
-    // 重复同一 requestId 的语义由用例层幂等处理；存储层对已处理请求继续返回事实。
-    assert_eq!(
-        store
-            .resolve_effective(resolution(
-                &interaction,
-                &session,
-                None,
-                permission("allow-once"),
-            ))
-            .await
-            .expect("again"),
-        Resolution::AlreadyResolved
-    );
+    // 重复应答同一请求：继续返回已处理事实，不覆盖首个结果。
+    let error = store
+        .commit(resolution_commit(
+            &interaction,
+            &session,
+            actor(OTHER_DEVICE),
+            None,
+            permission("allow-once"),
+            3,
+        ))
+        .await
+        .expect_err("again");
+    assert!(matches!(
+        error,
+        PortError::Conflict(acp_core::model::ConflictKind::AlreadyResolved)
+    ));
 
     store.close().await;
 }
@@ -413,11 +620,13 @@ async fn invalidated_requests_cannot_be_revived() {
             .is_empty()
     );
     let error = store
-        .resolve_effective(resolution(
+        .commit(resolution_commit(
             &permission_id,
             &session,
+            actor(OTHER_DEVICE),
             None,
             permission("allow-once"),
+            4,
         ))
         .await
         .expect_err("invalidated");
@@ -444,11 +653,13 @@ async fn invalidated_requests_cannot_be_revived() {
         0
     );
     let error = reopened
-        .resolve_effective(resolution(
+        .commit(resolution_commit(
             &permission_id,
             &session,
+            actor(OTHER_DEVICE),
             None,
             permission("allow-once"),
+            5,
         ))
         .await
         .expect_err("still invalidated");
@@ -520,8 +731,9 @@ async fn invalidated_requests_disappear_from_every_pending_reader() {
             state: None,
             mode: ModeChange::Unchanged,
             title: None,
-            closed_at: None,
+            confirmation: None,
             interaction: Some(InteractionResolved {
+                request_version: None,
                 interaction: permission_id.clone(),
                 resolution: permission("allow-once"),
                 resolved_by: actor(DEVICE),
@@ -576,14 +788,15 @@ async fn elicitation_values_round_trip_exactly() {
     let session = create_session(&store).await;
     let interaction = create_elicitation(&store, &session).await;
 
-    let resolution = resolution(
-        &interaction,
-        &session,
-        Some(Version::new(1)),
-        elicitation(r#"{"count":9007199254740993,"mode":"safe"}"#),
-    );
     store
-        .resolve_effective(resolution)
+        .commit(resolution_commit(
+            &interaction,
+            &session,
+            actor(OTHER_DEVICE),
+            Some(Version::new(1)),
+            elicitation(r#"{"count":9007199254740993,"mode":"safe"}"#),
+            2,
+        ))
         .await
         .expect("resolve elicitation");
 

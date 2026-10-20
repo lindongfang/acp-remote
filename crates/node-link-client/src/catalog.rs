@@ -65,16 +65,12 @@ pub fn imported_record(
     })
 }
 
-/// 会话状态的封闭词表映射（wire 与 core 的取值集合逐条相同）。
+/// 会话状态的封闭词表映射（wire 与 core 的取值集合逐条相同：只有活跃程度三态）。
 pub fn core_state(state: WireSessionState) -> CoreSessionState {
     match state {
         WireSessionState::Idle => CoreSessionState::Idle,
-        WireSessionState::Queued => CoreSessionState::Queued,
         WireSessionState::Running => CoreSessionState::Running,
-        WireSessionState::WaitingInput => CoreSessionState::WaitingInput,
-        WireSessionState::WaitingPermission => CoreSessionState::WaitingPermission,
-        WireSessionState::Failed => CoreSessionState::Failed,
-        WireSessionState::Closed => CoreSessionState::Closed,
+        WireSessionState::Pending => CoreSessionState::Pending,
     }
 }
 

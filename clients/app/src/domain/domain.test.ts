@@ -92,8 +92,8 @@ describe("R15 目录视图模型", () => {
   it("会话数、运行中、待处理由摘要得出", () => {
     const state = buildDirectoryViews(workspaces, [
       summary({ sessionId: "s1", state: "running", workspace: { directoryId: "work-api" } }),
-      summary({ sessionId: "s2", state: "queued", workspace: { directoryId: "work-api" } }),
-      summary({ sessionId: "s3", state: "waiting_permission", workspace: { directoryId: "work-api" } }),
+      summary({ sessionId: "s2", state: "running", workspace: { directoryId: "work-api" } }),
+      summary({ sessionId: "s3", state: "pending", workspace: { directoryId: "work-api" } }),
       summary({ sessionId: "s4", state: "idle", workspace: { directoryId: "site" } }),
       // 未归属会话（没有 workspace 引用）不计入任何目录。
       summary({ sessionId: "s5", state: "running" }),

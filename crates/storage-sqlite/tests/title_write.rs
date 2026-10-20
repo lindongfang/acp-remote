@@ -167,12 +167,12 @@ fn session_update_with(
     workspace_cwd: Option<&str>,
 ) -> SessionUpdate {
     SessionUpdate {
-        state: Some(SessionState::WaitingInput),
+        state: Some(SessionState::Pending),
         mode: ModeChange::Set(
             ModeRef::try_new(ModeId::new("code").expect("mode id"), "Code").expect("mode ref"),
         ),
         title,
-        closed_at: None,
+        confirmation: None,
         agent_session_id: agent_session_id
             .map(|id| acp_core::model::AgentSessionId::new(id).expect("agent session id")),
         workspace_cwd: workspace_cwd.map(str::to_owned),
@@ -212,7 +212,7 @@ async fn setting_a_title_writes_it_and_bumps_the_version() {
     assert_eq!(row.title.as_deref(), Some("新标题"));
     assert_eq!(row.version, 2);
     assert_eq!(row.updated_at, at(1).as_str(), "权威更新时间取 commit.at");
-    assert_eq!(row.state, "waiting_input");
+    assert_eq!(row.state, "pending");
     assert_eq!(row.mode_id.as_deref(), Some("code"));
     assert_eq!(
         row.workspace_directory_id.as_deref(),
@@ -270,7 +270,7 @@ async fn clearing_a_title_bumps_the_version_and_keeps_the_rest_of_the_batch() {
         "F1：updated_at 必须前进到 commit.at（旧实现不写该列）"
     );
     // 同批的其它列——旧实现的窄语句把这一整组静默丢弃。
-    assert_eq!(row.state, "waiting_input", "同批的 state 不得被吞掉");
+    assert_eq!(row.state, "pending", "同批的 state 不得被吞掉");
     assert_eq!(
         row.agent_session_id.as_deref(),
         Some(AGENT_SESSION_ID),
@@ -372,7 +372,7 @@ async fn clearing_a_title_with_a_mode_change_writes_both_columns() {
                         .expect("mode ref"),
                 ),
                 title: Some(None),
-                closed_at: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,

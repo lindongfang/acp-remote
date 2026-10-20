@@ -13,7 +13,7 @@
         "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
         "title": "修复测试",
         "agent": { "agentId": "claude-code", "name": "Claude Code" },
-        "state": "waiting_permission",
+        "state": "pending",
         "origin": { "kind": "local" },
         "currentMode": { "modeId": "default", "displayName": "Default" },
         "version": "42",

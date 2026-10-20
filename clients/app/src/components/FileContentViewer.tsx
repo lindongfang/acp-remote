@@ -1,14 +1,15 @@
 /**
  * 中间只读文件查看区（`session-file-browser` 5.2/5.3；spec「中间文件查看与关闭恢复」「只读预览与主动下载」）。
  *
- * ## 与来源对应的三种内容
+ * ## 与来源对应的两种内容
  *
  * - `preview`：`session.files.read` 的有界字节块。文本按**不可信纯文本**呈现（不注入 HTML/SVG、
  *   不加载其中引用的远端资源）；图片只接受 PNG/JPEG/GIF/WebP，并通过平台端口创建同源 Blob URL；
  *   其余按二进制处理，给出大小、预览截断说明与主动下载入口。
  * - `git_diff`：相对 HEAD 的合并差异。行内容原样呈现（已带 `+`/`-`/空格前缀），hunk 头保留；
  *   二进制、冲突、不可用与截断各有显式说明，不伪造文本差异。
- * - `session_changes`：同一文件的历次记录，按时间排列，单次统计各随记录保留。
+ *
+ * 会话改动的历次记录不再作为第三种文件内容：它在对话时间线里按条目呈现。
  *
  * ## 关闭始终可用
  *
@@ -26,8 +27,7 @@ import type { ReactElement } from "react";
 
 import type { FileContentState, FilePreviewContent, SessionFileDownloadState } from "../features";
 import { FILE_SOURCE_LABELS } from "../features";
-import type { GitDiffView, SessionChangeRecord } from "../domain/session-files";
-import { ChangeDiff } from "./FileChangesPanel";
+import type { GitDiffView } from "../domain/session-files";
 import type { Palette } from "./theme";
 import { Pressable, ScrollView, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
 
@@ -39,11 +39,8 @@ export interface FilePreviewArtifact {
 
 export interface FileContentViewerProps {
   readonly content: Exclude<FileContentState, { readonly kind: "conversation" }>;
-  /** 会话变更的历史范围说明（完整加载时为 `null`）。 */
-  readonly historyNotice?: string | null;
   readonly onClose: () => void;
   readonly onRetry?: (() => void) | undefined;
-  readonly onOpenChangeDiagnostics?: ((eventId: string | null) => void) | undefined;
   /** 主动下载（只对 `preview` 内容有意义）。 */
   readonly onDownload?: ((path: string, sizeBytes: string | null, mimeType: string) => void) | undefined;
   readonly onCancelDownload?: (() => void) | undefined;
@@ -205,44 +202,6 @@ function buildStyles(colors: Palette) {
       borderRadius: radius.sm,
       backgroundColor: colors.panel2,
     },
-    recordHead: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "baseline",
-      gap: spacing.sm,
-    },
-    chip: {
-      paddingHorizontal: spacing.sm,
-      paddingVertical: 2,
-      borderRadius: radius.sm,
-      color: colors.ink2,
-      backgroundColor: colors.line2,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
-    },
-    added: {
-      paddingHorizontal: spacing.sm,
-      paddingVertical: 2,
-      borderRadius: radius.sm,
-      color: colors.ok,
-      backgroundColor: colors.okSoft,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
-    },
-    deleted: {
-      paddingHorizontal: spacing.sm,
-      paddingVertical: 2,
-      borderRadius: radius.sm,
-      color: colors.danger,
-      backgroundColor: colors.dangerSoft,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
-    },
-    summary: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
   });
 }
 
@@ -384,76 +343,6 @@ function GitDiffBody({ diff }: { readonly diff: GitDiffView }): ReactElement {
           })}
         </View>
       )}
-    </View>
-  );
-}
-
-/** 会话变更的历次记录。 */
-function SessionChangesBody({
-  records,
-  historyNotice,
-  onOpenChangeDiagnostics,
-}: {
-  readonly records: readonly SessionChangeRecord[];
-  readonly historyNotice: string | null;
-  readonly onOpenChangeDiagnostics: ((eventId: string | null) => void) | undefined;
-}): ReactElement {
-  const theme = useTheme();
-  const styles = theme.dark ? STYLES.dark : STYLES.light;
-
-  return (
-    <View style={styles.body} dataSet={{ fileViewContent: "session_changes", sessionChangeCount: String(records.length) }}>
-      {historyNotice === null ? null : (
-        <Text style={styles.note} dataSet={{ sessionHistoryNotice: "true" }}>
-          {historyNotice}
-        </Text>
-      )}
-      {records.length === 0 ? (
-        <Text style={styles.note} dataSet={{ sessionChangesEmpty: "true" }}>
-          这个文件没有已加载的改动记录。
-        </Text>
-      ) : null}
-      {records.map((record, index) => (
-        <View key={record.eventId} style={styles.record} dataSet={{ sessionChangeRecord: record.eventId, sessionChangeIndex: String(index + 1) }}>
-          <View style={styles.recordHead}>
-            <Text style={styles.chip}>{record.kind}</Text>
-            <Text style={styles.note} dataSet={{ sessionChangeTime: record.createdAt }}>
-              {record.createdAt}
-            </Text>
-            {record.addedLines === null ? null : (
-              <Text style={styles.added} dataSet={{ sessionChangeAddedLines: record.addedLines }}>
-                {`+${record.addedLines}`}
-              </Text>
-            )}
-            {record.deletedLines === null ? null : (
-              <Text style={styles.deleted} dataSet={{ sessionChangeDeletedLines: record.deletedLines }}>
-                {`-${record.deletedLines}`}
-              </Text>
-            )}
-            {record.addedLines === null && record.deletedLines === null ? (
-              <Text style={styles.note} dataSet={{ sessionChangeLineCountUnavailable: "true" }}>
-                无行数统计
-              </Text>
-            ) : null}
-          </View>
-          <Text style={styles.summary} dataSet={{ sessionChangeSummary: "true" }}>
-            {record.summary}
-          </Text>
-          <ChangeDiff diff={record.diff} />
-          {onOpenChangeDiagnostics === undefined ? null : (
-            <Pressable
-              role="button"
-              style={styles.action}
-              dataSet={{ action: "open-session-change-diagnostics", eventId: record.eventId }}
-              onPress={() => {
-                onOpenChangeDiagnostics(record.eventId);
-              }}
-            >
-              <Text style={styles.actionText}>查看这条改动的 ACP 原文（诊断）</Text>
-            </Pressable>
-          )}
-        </View>
-      ))}
     </View>
   );
 }
@@ -676,10 +565,8 @@ function TextPreview({ preview }: { readonly preview: FilePreviewContent }): Rea
 /** 中间只读文件查看区。 */
 export function FileContentViewer({
   content,
-  historyNotice = null,
   onClose,
   onRetry,
-  onOpenChangeDiagnostics,
   onDownload,
   onCancelDownload,
   onReleaseDownload,
@@ -791,14 +678,6 @@ export function FileContentViewer({
 
       {content.status === "ready" && content.content.kind === "git_diff" ? (
         <GitDiffBody diff={content.content.diff} />
-      ) : null}
-
-      {content.status === "ready" && content.content.kind === "session_changes" ? (
-        <SessionChangesBody
-          records={content.content.records}
-          historyNotice={historyNotice}
-          onOpenChangeDiagnostics={onOpenChangeDiagnostics}
-        />
       ) : null}
       </ScrollView>
     </View>

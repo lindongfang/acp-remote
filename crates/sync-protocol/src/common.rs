@@ -510,17 +510,69 @@ pub struct SessionAgentRef {
     pub name: NonEmptyText<128>,
 }
 
-/// `sessionSummary.state`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// `common.schema.json#/$defs/sessionState`：会话主状态只表达活跃程度摘要。
+///
+/// 取值集合与 Node Link 的 `sessionMeta.state` 完全一致（`docs/SYNC_PROTOCOL.md` §10.2）：存在有效未
+/// 解决交互 → `pending`；否则存在未结束任务（含已接受的排队任务）→ `running`；否则 `idle`。排队、
+/// 等待原因与任务结果**不是**本词表的取值，它们留在任务/交互/命令各自的词表里；旧七态只允许作为
+/// 历史事件 `view` 的原文出现（`view` 是开放对象，不经过本枚举），MUST NOT 作为实时摘要解码。
+///
+/// 实时摘要的取值集合只有这一份定义：任何 `sessionSummary.state` 的消费方都必须用它，不得在别处
+/// 再声明第二个实时枚举或补一张旧值映射表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionState {
     Idle,
-    Queued,
     Running,
-    WaitingInput,
-    WaitingPermission,
-    Failed,
-    Closed,
+    Pending,
+}
+
+impl SessionState {
+    pub const ALL: [SessionState; 3] = [
+        SessionState::Idle,
+        SessionState::Running,
+        SessionState::Pending,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionState::Idle => "idle",
+            SessionState::Running => "running",
+            SessionState::Pending => "pending",
+        }
+    }
+}
+
+impl std::fmt::Display for SessionState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SessionState {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        SessionState::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "state",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for SessionState {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionState {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        std::str::FromStr::from_str(&text).map_err(DeError::custom)
+    }
 }
 
 /// `common.schema.json#/$defs/workspaceRef`：已记录目录的**引用**（会话摘要用）。
@@ -623,6 +675,48 @@ mod tests {
             assert!(
                 serde_json::from_str::<Cursor>(rejected).is_err(),
                 "cursor {rejected} 应被拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn session_state_is_the_three_state_summary() {
+        assert_eq!(
+            SessionState::ALL.map(SessionState::as_str),
+            ["idle", "running", "pending"],
+            "实时摘要只能有这三个取值"
+        );
+
+        for state in SessionState::ALL {
+            let text = state.as_str();
+            let encoded = serde_json::to_string(&state).expect("可序列化");
+            assert_eq!(encoded, format!("\"{text}\""));
+            assert_eq!(
+                serde_json::from_str::<SessionState>(&encoded).expect("往返可解码"),
+                state
+            );
+            assert_eq!(
+                text.parse::<SessionState>()
+                    .expect("Display 与 FromStr 互逆"),
+                state
+            );
+        }
+
+        // 旧七态只允许留在历史事件 `view` 的原文里；作为实时摘要解码必须被拒。
+        for legacy in [
+            "queued",
+            "waiting_input",
+            "waiting_permission",
+            "failed",
+            "closed",
+        ] {
+            assert!(
+                serde_json::from_str::<SessionState>(&format!("\"{legacy}\"")).is_err(),
+                "{legacy} 不再是实时会话状态"
+            );
+            assert!(
+                legacy.parse::<SessionState>().is_err(),
+                "{legacy} 不得被解析"
             );
         }
     }

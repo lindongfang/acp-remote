@@ -10,7 +10,7 @@ use acp_core::model::{
 };
 use acp_core::ports::{
     HistoryInclude, HistoryQuery, IdempotencyRecord, ModeChange, NewTurn, OwnedCommit, ReplayLimit,
-    SessionQuery, SessionStore, SessionUpdate, StateChange, TurnChange,
+    SessionQuery, SessionStore, SessionUpdate, StateChange, TurnChange, TurnUpdate,
 };
 use storage_sqlite::migrate::{FILE_FORMAT_VERSION, StorageConfig};
 use storage_sqlite::session_store::SqliteStore;
@@ -132,7 +132,7 @@ async fn commit_writes_state_turns_events_and_terminal_in_one_transaction() {
             state: Some(SessionState::Running),
             mode: ModeChange::Unchanged,
             title: None,
-            closed_at: None,
+            confirmation: None,
             agent_session_id: None,
             workspace_cwd: None,
             workspace_directory_id: None,
@@ -269,7 +269,7 @@ async fn failed_commit_rolls_back_every_row() {
             state: Some(SessionState::Running),
             mode: ModeChange::Unchanged,
             title: None,
-            closed_at: None,
+            confirmation: None,
             agent_session_id: None,
             workspace_cwd: None,
             workspace_directory_id: None,
@@ -821,11 +821,12 @@ async fn interaction_resolution_is_first_writer_wins() {
             state: None,
             mode: ModeChange::Unchanged,
             title: None,
-            closed_at: None,
+            confirmation: None,
             agent_session_id: None,
             workspace_cwd: None,
             workspace_directory_id: None,
             interaction: Some(acp_core::ports::InteractionResolved {
+                request_version: None,
                 interaction: InteractionId::new(INTERACTION).expect("interaction id"),
                 resolution: InteractionResolution::Permission(
                     PermissionDecision::try_new(option, PermissionDecisionKind::AllowOnce)
@@ -910,11 +911,12 @@ async fn interaction_resolution_is_first_writer_wins() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,
                 interaction: Some(acp_core::ports::InteractionResolved {
+                    request_version: None,
                     interaction: InteractionId::new("99999999-9999-4999-8999-999999999999")
                         .expect("interaction id"),
                     resolution: InteractionResolution::Permission(
@@ -938,6 +940,144 @@ async fn interaction_resolution_is_first_writer_wins() {
         .await
         .expect_err("unknown interaction");
     assert!(matches!(missing, PortError::NotFound(_)));
+
+    store.close().await;
+}
+
+/// turn 终态在同一事务里失效它名下仍未解决的交互；其它 turn 的交互与已确认的行不受影响。
+#[tokio::test]
+async fn terminal_turn_expires_only_its_own_unresolved_interactions() {
+    let dir = temp_dir("commit-turn-expires-interactions");
+    let store = store(&dir).await;
+    let created = store.commit(create_session("first")).await.expect("create");
+    let session = created.session_id.expect("session id");
+    let turn_one = TurnId::new(TURN).expect("turn id");
+    let turn_two = TurnId::new("33333333-3333-4333-8333-333333333334").expect("turn id");
+
+    store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at(1),
+            expected_version: None,
+            state: None,
+            turns: vec![
+                TurnChange::Create(NewTurn {
+                    turn: turn_one.clone(),
+                    state: TurnState::Running,
+                    causation: None,
+                    started_at: Some(at(1)),
+                }),
+                TurnChange::Create(NewTurn {
+                    turn: turn_two.clone(),
+                    state: TurnState::Running,
+                    causation: None,
+                    started_at: Some(at(1)),
+                }),
+            ],
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: Some(origin_epoch()),
+        })
+        .await
+        .expect("two running turns");
+
+    // 四个交互：本 turn 的 pending / 已仲裁未确认 / 已确认，以及另一个 turn 的 pending。
+    let path = dir.join("acp-remote.sqlite3");
+    let pool = raw_write_pool(&path).await;
+    for (id, state, turn, confirmed) in [
+        (
+            "44444444-4444-4444-8444-444444444401",
+            "pending",
+            TURN,
+            None,
+        ),
+        (
+            "44444444-4444-4444-8444-444444444402",
+            "resolved",
+            TURN,
+            None,
+        ),
+        (
+            "44444444-4444-4444-8444-444444444403",
+            "resolved",
+            TURN,
+            Some(AT),
+        ),
+        (
+            "44444444-4444-4444-8444-444444444404",
+            "pending",
+            "33333333-3333-4333-8333-333333333334",
+            None,
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO owned_interaction (interaction_id, session_id, kind, state, created_at, \
+             resolved_at, confirmed_at, turn_id) \
+             VALUES (?1, ?2, 'permission', ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(id)
+        .bind(session.as_str())
+        .bind(state)
+        .bind(AT)
+        .bind((state == "resolved").then_some(AT))
+        .bind(confirmed)
+        .bind(turn)
+        .execute(&pool)
+        .await
+        .expect("seed interaction");
+    }
+    pool.close().await;
+
+    store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at(2),
+            expected_version: None,
+            state: None,
+            turns: vec![TurnChange::Update(TurnUpdate {
+                turn: turn_one,
+                state: TurnState::Completed,
+                ended_at: Some(at(2)),
+            })],
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: Some(origin_epoch()),
+        })
+        .await
+        .expect("terminal turn");
+
+    let pool = raw_pool(&path).await;
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT interaction_id, state, invalidated_at, confirmed_at FROM owned_interaction \
+         ORDER BY interaction_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("interaction rows");
+    pool.close().await;
+    assert_eq!(rows.len(), 4);
+    // 本 turn 的 pending 与已仲裁未确认：失效，且保留既有确认状态（未确认仍是 NULL）。
+    assert_eq!(rows[0].1, "expired", "本 turn 的 pending 必须失效");
+    assert_eq!(rows[0].2.as_deref(), Some(at(2).as_str()));
+    assert_eq!(
+        rows[1].1, "expired",
+        "本 turn 的已仲裁未确认行必须失效（仲裁不等于处理完成）"
+    );
+    assert_eq!(rows[1].2.as_deref(), Some(at(2).as_str()));
+    assert_eq!(rows[1].3, None, "失效不伪造确认");
+    // 已确认的行不受影响。
+    assert_eq!(rows[2].1, "resolved");
+    assert_eq!(rows[2].2, None);
+    assert_eq!(rows[2].3.as_deref(), Some(AT));
+    // 其它 turn 的 pending 完全不受影响。
+    assert_eq!(rows[3].1, "pending");
+    assert_eq!(rows[3].2, None);
 
     store.close().await;
 }
@@ -1181,7 +1321,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,
@@ -1218,7 +1358,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
                 state: Some(SessionState::Running),
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,
@@ -1249,7 +1389,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
                 state: Some(SessionState::Running),
                 mode: ModeChange::Unchanged,
                 title: None,
-                closed_at: None,
+                confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_directory_id: None,

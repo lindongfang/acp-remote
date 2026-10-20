@@ -241,7 +241,7 @@ impl Fixture {
                         state: None,
                         mode: ModeChange::Unchanged,
                         title: None,
-                        closed_at: None,
+                        confirmation: None,
                         interaction: None,
                         agent_session_id: Some(
                             AgentSessionId::new(AGENT_SESSION_ID).expect("agent session id"),
@@ -1443,10 +1443,12 @@ async fn session_activity_never_manufactures_a_connection_event() {
         "R8：会话活跃不得产生任何 Agent 连接/断开事件"
     );
     // 会话状态只体现在会话行自己的状态字段上（`sessionSummary.state` 的来源），与节点级事件无关。
+    // 本夹具没有未结束 turn 与有效交互，归约结果必须是空闲。
     let state = fixture.session_row().await.session.state();
-    assert!(
-        !matches!(state, SessionState::Closed | SessionState::Failed),
-        "R8：会话状态由会话行承载，实际 {state:?}"
+    assert_eq!(
+        state,
+        SessionState::Idle,
+        "R8：会话状态由会话行承载且按三态归约，实际 {state:?}"
     );
 }
 
@@ -1654,7 +1656,7 @@ async fn unchanged_mode_without_a_title_keeps_it_and_still_advances_the_version(
             state: None,
             mode: ModeChange::Unchanged,
             title: value,
-            closed_at: None,
+            confirmation: None,
             interaction: None,
             agent_session_id: None,
             workspace_cwd: None,
@@ -1741,7 +1743,7 @@ async fn unchanged_mode_title_clear_writes_every_column_in_the_batch() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: Some(Some("先有".to_owned())),
-                closed_at: None,
+                confirmation: None,
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
@@ -1767,10 +1769,10 @@ async fn unchanged_mode_title_clear_writes_every_column_in_the_batch() {
             at: stamp(61),
             expected_version: None,
             state: Some(StateChange::Update(SessionUpdate {
-                state: Some(SessionState::WaitingInput),
+                state: Some(SessionState::Pending),
                 mode: ModeChange::Unchanged,
                 title: Some(None),
-                closed_at: None,
+                confirmation: None,
                 interaction: None,
                 agent_session_id: Some(
                     AgentSessionId::new(AGENT_SESSION_ID).expect("agent session id"),
@@ -1809,7 +1811,7 @@ async fn unchanged_mode_title_clear_writes_every_column_in_the_batch() {
     // 同批的其它列不得被吞掉（`ModeChange::Unchanged` 语句的绑定编号判据）。
     assert_eq!(
         after.session.state(),
-        SessionState::WaitingInput,
+        SessionState::Pending,
         "同批的 state 不得被吞掉"
     );
     let recovery = fixture

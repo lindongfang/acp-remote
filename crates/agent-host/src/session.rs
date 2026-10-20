@@ -51,6 +51,8 @@ struct PendingInteraction {
 struct Inner {
     closed: bool,
     turn_running: bool,
+    /// `session/prompt` 的字节已经确认写入 Agent stdin（写确认前不算已派发）。
+    turn_dispatched: bool,
     cancel_requested: bool,
     agent_capabilities: AgentCapabilities,
     modes: Option<acp_protocol::message::SessionModeState>,
@@ -158,6 +160,7 @@ impl AcpSession {
             inner: Mutex::new(Inner {
                 closed: false,
                 turn_running: false,
+                turn_dispatched: false,
                 cancel_requested: false,
                 agent_capabilities: capabilities,
                 modes,
@@ -213,7 +216,10 @@ impl AcpSession {
 
     /// 发起一次 turn。
     ///
-    /// 立即返回 [`TurnAccepted`]：`session/prompt` 不设超时，turn 的结束由响应到达或进程退出决定。
+    /// 返回 [`TurnAccepted`] 之前先等待 `session/prompt` **真的写进** Agent 的 stdin：入队成功不算
+    /// 接受。写入失败时回滚 turn 状态、不派发 `finish_turn`，并返回明确错误。
+    ///
+    /// turn 本身不设超时：它的结束由响应到达或进程退出决定。
     ///
     /// 内容映射（媒体、路径引用、ACP 帧预算）在**派发前**完成：任何一块失败（能力未宣告、超出
     /// 1 MiB 帧预算、路径逃逸、附件读取/摘要不符）都让整条 prompt 失败，**一个字节也不发**，
@@ -262,13 +268,19 @@ impl AcpSession {
             "sessionId": self.acp_session_id,
             "prompt": prompt,
         });
-        let receiver = match self.supervisor.begin_request("session/prompt", &params) {
+        let receiver = match self
+            .supervisor
+            .begin_request_confirmed("session/prompt", &params)
+            .await
+        {
             Ok(receiver) => receiver,
             Err(error) => {
+                // 字节没有真正写入 stdin：回滚 turn 状态，不派发 `finish_turn`。
                 lock(&self.inner).turn_running = false;
                 return Err(error);
             }
         };
+        lock(&self.inner).turn_dispatched = true;
 
         let session = Arc::clone(self);
         self.supervisor.spawn_owned(async move {
@@ -332,6 +344,7 @@ impl AcpSession {
                 return;
             }
             inner.turn_running = false;
+            inner.turn_dispatched = false;
             inner.cancel_requested = false;
             inner.last_activity = Instant::now();
         }
@@ -349,7 +362,8 @@ impl AcpSession {
         self.terminal().shutdown_sync();
         let is_turn = {
             let inner = lock(&self.inner);
-            inner.turn_running
+            // 写确认前进程退出：prompt 从未真正到达 Agent，不得伪造一个 turn 终态。
+            inner.turn_running && inner.turn_dispatched
         };
         if !is_turn {
             return;
@@ -366,6 +380,7 @@ impl AcpSession {
                 return;
             }
             inner.turn_running = false;
+            inner.turn_dispatched = false;
         }
         if let Ok(event) = mapper::turn_event("turn.failed", error.as_ref(), at) {
             self.emit(event);
@@ -747,7 +762,10 @@ impl AcpSession {
     }
 
     /// 解析一个交互。
-    pub fn resolve(
+    ///
+    /// 应答必须先**真的写进** Agent 的 stdin 才产生 `*.resolved`：入队成功不等于送达。写入失败时
+    /// 登记被放回（交互没有凭空消失），调用方拿到明确错误，core 会让它保持仲裁未确认。
+    pub async fn resolve(
         &self,
         interaction: &InteractionId,
         resolution: InteractionResolution,
@@ -766,9 +784,14 @@ impl AcpSession {
                     },
                     meta: None,
                 };
-                serde_json::to_value(&response)
-                    .map_err(|_| HostError::IdUnavailable)
-                    .and_then(|value| self.supervisor.send_response(&pending.id, &value))
+                match serde_json::to_value(&response) {
+                    Ok(value) => {
+                        self.supervisor
+                            .send_response_confirmed(&pending.id, &value)
+                            .await
+                    }
+                    Err(_) => Err(HostError::IdUnavailable),
+                }
             }
             (InteractionKind::Permission, InteractionResolution::Elicitation { .. }) => {
                 Err(HostError::InvalidResolution)
@@ -789,14 +812,15 @@ impl AcpSession {
                 };
                 let response = acp_protocol::message::ElicitationResponse { action, content };
                 self.supervisor
-                    .send_response(&pending.id, &response.to_result())
+                    .send_response_confirmed(&pending.id, &response.to_result())
+                    .await
             }
             (InteractionKind::Elicitation, InteractionResolution::Permission(_)) => {
                 Err(HostError::InvalidResolution)
             }
         };
         if result.is_err() {
-            // 回传失败时把登记放回，避免「交互凭空消失」。
+            // 回传失败时把登记放回，避免「交互凭空消失」；`*.resolved` 也因此不会发出。
             let mut inner = lock(&self.inner);
             inner
                 .interactions
@@ -870,6 +894,7 @@ impl AcpSession {
             inner: Mutex::new(Inner {
                 closed: false,
                 turn_running: false,
+                turn_dispatched: false,
                 cancel_requested: false,
                 agent_capabilities: inner.agent_capabilities.clone(),
                 modes: inner.modes.clone(),
@@ -1224,6 +1249,7 @@ impl SessionEndpoint for Endpoint {
     ) -> Result<(), PortError> {
         self.session
             .resolve(interaction, resolution)
+            .await
             .map_err(|error| error.to_port_error())
     }
 
