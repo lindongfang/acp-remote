@@ -569,6 +569,15 @@ async fn custom_attachment_directory_is_used_end_to_end() {
     let mut config = StorageConfig::new(&data);
     config.attachment_dir = blobs.join("blobs");
     std::fs::create_dir_all(&config.attachment_dir).expect("blob dir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            &config.attachment_dir,
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .expect("blob dir permissions");
+    }
     let store = SqliteStore::open(config, &at(0)).await.expect("open");
     let session = create_session(&store).await;
     let attachment = seal_bytes(
