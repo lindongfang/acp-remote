@@ -67,22 +67,45 @@
       "$ref": "common.schema.json#/$defs/uuid"
     },
     "promptContentBlock": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "type",
-        "text"
-      ],
-      "properties": {
-        "type": {
-          "const": "text"
+      "description": "用户输入的内容块，字段与 Sync 面 `common.schema.json#/$defs/promptContentBlock` 同名同义（docs/NODE_LINK_PROTOCOL.md §12.7）。text 始终可用；attachment_ref 只在协商 `node-link.attachment-transfer.v1` 且附件已封存、已绑定同一会话/主体时接受；workspace_path_ref 只表示当前会话工作目录内的相对路径，不固定版本、不追踪内容变化。未协商时新分支必须缺席，不得把附件伪装成文本。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "text"],
+          "properties": {
+            "type": { "const": "text" },
+            "text": { "type": "string", "minLength": 1, "maxLength": 262144 }
+          }
         },
-        "text": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 262144
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "attachmentId", "mediaType", "byteLength", "sha256"],
+          "properties": {
+            "type": { "const": "attachment_ref" },
+            "attachmentId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "mediaType": { "type": "string", "minLength": 1, "maxLength": 255 },
+            "byteLength": { "$ref": "common.schema.json#/$defs/decimalString" },
+            "sha256": { "$ref": "common.schema.json#/$defs/base64url32" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "path"],
+          "properties": {
+            "type": { "const": "workspace_path_ref" },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^(?!/)(?!.*:)(?!.*(^|/)\\.\\.?(/|$))[^\\u0000-\\u001f]+$",
+              "description": "会话工作目录内的相对路径；拒绝绝对路径、盘符/ADS 的冒号、. 与 .. 分量以及控制字符。"
+            }
+          }
         }
-      }
+      ]
     },
     "configValue": {
       "oneOf": [
@@ -264,6 +287,23 @@
       ],
       "unevaluatedProperties": false
     },
+    "sessionReadBefore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "createdAt",
+        "messageId"
+      ],
+      "properties": {
+        "createdAt": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "messageId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        }
+      },
+      "description": "session.read 消息页的复合游标（docs/NODE_LINK_PROTOCOL.md §12.7），与 Sync 面 §11.5 的 before 同义：两个键必须同时出现，单字段游标被拒绝。"
+    },
     "submitSessionRead": {
       "allOf": [
         {
@@ -304,9 +344,23 @@
                       "turns",
                       "pending_interactions",
                       "config_options",
-                      "capabilities"
+                      "capabilities",
+                      "history"
                     ]
                   }
+                },
+                "beforeHistory": {
+                  "$ref": "common.schema.json#/$defs/decimalString",
+                  "description": "历史条目游标：origin 会话内事件序号（docs/NODE_LINK_PROTOCOL.md §12.7/§12.10），与 Sync 面同义。`history` 与 `beforeHistory` 只在协商 `node-link.remote-history.v1` 后接受；未协商的旧 peer 省略这两个键，请求行为与本变更前一致。"
+                },
+                "before": {
+                  "$ref": "#/$defs/sessionReadBefore",
+                  "description": "消息页游标（`core` 的 `(createdAt, messageId)` 复合游标），与 Sync 面 §11.5 的 `before` 同义。只在协商 `node-link.remote-history.v1` 后接受；未协商的连接发送它按 `nodelink.command.unsupported_field` 拒绝。"
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "本页消息条数上限（结构常量，不是十进制字符串）。省略时使用服务端默认页；超过服务端上限时收敛到上限并照常返回。只在协商 `node-link.remote-history.v1` 后接受。"
                 }
               }
             }
@@ -456,6 +510,10 @@
                   "items": {
                     "$ref": "#/$defs/promptContentBlock"
                   }
+                },
+                "submissionId": {
+                  "$ref": "common.schema.json#/$defs/uuid",
+                  "description": "本节点连接上已 `manifest_sealed` 的附件清单标识（docs/NODE_LINK_PROTOCOL.md §12.7）。只在协商 `node-link.attachment-transfer.v1` 后被接受；未协商的旧 peer 省略该键，服务端不得因它缺席而丢弃附件引用，也不得为缺席的清单补造绑定。"
                 }
               }
             }
@@ -541,6 +599,10 @@
                     "interactionId": {
                       "$ref": "common.schema.json#/$defs/uuid"
                     },
+                    "requestVersion": {
+                      "$ref": "common.schema.json#/$defs/decimalString",
+                      "description": "当前有效请求的版本（docs/NODE_LINK_PROTOCOL.md §12.10）；协商 `node-link.pending-interactions.v1` 后必须携带，未协商的旧 peer 可省略，服务端不得据缺省值猜测版本。"
+                    },
                     "action": {
                       "const": "submit"
                     },
@@ -563,6 +625,10 @@
                     "interactionId": {
                       "$ref": "common.schema.json#/$defs/uuid"
                     },
+                    "requestVersion": {
+                      "$ref": "common.schema.json#/$defs/decimalString",
+                      "description": "当前有效请求的版本（docs/NODE_LINK_PROTOCOL.md §12.10）；协商 `node-link.pending-interactions.v1` 后必须携带，未协商的旧 peer 可省略，服务端不得据缺省值猜测版本。"
+                    },
                     "action": {
                       "const": "decline"
                     },
@@ -582,6 +648,10 @@
                   "properties": {
                     "interactionId": {
                       "$ref": "common.schema.json#/$defs/uuid"
+                    },
+                    "requestVersion": {
+                      "$ref": "common.schema.json#/$defs/decimalString",
+                      "description": "当前有效请求的版本（docs/NODE_LINK_PROTOCOL.md §12.10）；协商 `node-link.pending-interactions.v1` 后必须携带，未协商的旧 peer 可省略，服务端不得据缺省值猜测版本。"
                     },
                     "action": {
                       "const": "cancel"
@@ -719,6 +789,10 @@
               "properties": {
                 "interactionId": {
                   "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "requestVersion": {
+                  "$ref": "common.schema.json#/$defs/decimalString",
+                  "description": "当前有效请求的版本（docs/NODE_LINK_PROTOCOL.md §12.10）；协商 `node-link.pending-interactions.v1` 后必须携带，未协商的旧 peer 可省略，服务端不得据缺省值猜测版本。"
                 },
                 "optionId": {
                   "type": "string",

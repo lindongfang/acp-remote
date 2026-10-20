@@ -73,7 +73,14 @@ fn fixture_payloads_canonicalize_to_their_payload_digest() {
         paths.sort();
         for path in paths {
             let text = std::fs::read_to_string(&path).expect("fixture 必须是 UTF-8");
-            let fixture: Fixture = serde_json::from_str(&text).expect("fixture 必须是 JSON");
+            let value: serde_json::Value =
+                serde_json::from_str(&text).expect("fixture 必须是 JSON");
+            // 媒体负例等片段 fixture 的顶层可能是字符串/数组；它们不是 `body` 形状的样例，
+            // 与本测试的 payloadDigest 判据无关，直接跳过（不能把合法 JSON 当成结构错误）。
+            if !value.is_object() {
+                continue;
+            }
+            let fixture: Fixture = serde_json::from_value(value).expect("fixture 必须是 JSON 对象");
             let Some(body) = fixture.body else { continue };
             let (Some(payload), Some(expected_digest)) = (body.payload, body.payload_digest) else {
                 continue;

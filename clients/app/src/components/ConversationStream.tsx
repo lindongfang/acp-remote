@@ -42,6 +42,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import type { InteractionAnswer } from "../domain/interaction";
+import type { AttachmentMediaView, FormInputValue } from "../domain";
+import type { AttachmentKind } from "../features/attachment-model";
 import {
   CONVERSATION_SECONDARY_VIEWS,
   DEFAULT_CONVERSATION_SECONDARY_VIEW,
@@ -141,6 +143,38 @@ export interface ConversationStreamProps {
   readonly onCopyCode?: ((code: string, language: string) => void) | undefined;
   /** 链接被点选时上抛的目标。 */
   readonly onLinkPress?: ((href: string) => void) | undefined;
+  /** 打开 Markdown 里可解析的工作目录相对路径（页面负责校验并打开文件）。 */
+  readonly onFilePathPress?: ((path: string) => void) | undefined;
+  /** 已读取的消息媒体（`attachmentId → 状态`）。 */
+  readonly media?: ReadonlyMap<string, AttachmentMediaView> | undefined;
+  /** 请求读取一条已封存的媒体（页面接到仓库）。 */
+  readonly onLoadMedia?: ((attachmentId: string, sessionId: string, mimeType: string) => void) | undefined;
+  /** 释放一条媒体的对象 URL（消息卸载时）。 */
+  readonly onReleaseMedia?: ((attachmentId: string) => void) | undefined;
+  /** 下载消息里的文件附件。 */
+  readonly onDownloadAttachment?:
+    | ((attachmentId: string, mimeType: string, fileName: string) => void)
+    | undefined;
+  /** 提交提问表单（值已通过客户端校验）。 */
+  readonly onSubmitElicitation?:
+    | ((interactionId: string, values: Readonly<Record<string, FormInputValue>>) => void)
+    | undefined;
+  /** 重新取得服务端确认的当前有效请求。 */
+  readonly onRefreshInteractions?: (() => void) | undefined;
+  /** 打开平台选择器选择附件（选择阶段只在本机预览，发送后才上传）。 */
+  readonly onPickAttachment?: ((kind: AttachmentKind) => void) | undefined;
+  /** 粘贴事件（交给平台端口解析）。 */
+  readonly onPasteAttachments?: ((event: unknown) => void) | undefined;
+  /** 移除一个已选附件。 */
+  readonly onRemoveAttachment?: ((localId: string) => void) | undefined;
+  /** 重试失败/取消的附件。 */
+  readonly onRetryAttachments?: (() => void) | undefined;
+  /** 取消正在进行的附件上传（保留草稿，不派发消息）。 */
+  readonly onCancelAttachmentUpload?: (() => void) | undefined;
+  /** 添加工作目录相对路径引用；返回拒绝原因。 */
+  readonly onAddPathRef?: ((path: string) => string | null) | undefined;
+  /** 移除一个路径引用。 */
+  readonly onRemovePathRef?: ((path: string) => void) | undefined;
   /** 左栏「‹ 目录」：返回目录列表页（`/`）。 */
   readonly onOpenDirectoryList?: (() => void) | undefined;
   /** 左栏会话行：打开同目录的另一个会话。 */
@@ -256,6 +290,45 @@ export interface ViewportRect {
 
 /** 可见带边界的容差：与原型 `updateJump` 的 10px 同一口径（贴着边不算看到）。 */
 export const JUMP_VIEWPORT_GUARD_PX = 10;
+
+/**
+ * 距底部多少像素内仍算「在底部」（跟随新内容的阈值）。
+ *
+ * 取 24px：小于它时新内容会立刻进入视口，继续跟随比停住更符合阅读预期；超过它才视为
+ * 「用户主动上读」，此后不自动滚动。
+ */
+export const SCROLL_FOLLOW_GUARD_PX = 24;
+
+/** 时间线滚动容器的几何读数（`onScroll` 给的原值）。 */
+export interface ScrollMetrics {
+  readonly offsetY: number;
+  readonly contentHeight: number;
+  readonly viewportHeight: number;
+}
+
+/**
+ * 是否在底部（跟随新内容的**唯一**判定）。
+ *
+ * 只看几何，不看「上一次是不是在底部」：用户手动滚回底部后立刻恢复跟随，无需额外状态。
+ */
+export function isFollowingBottom(metrics: ScrollMetrics): boolean {
+  const distance = metrics.contentHeight - (metrics.offsetY + metrics.viewportHeight);
+  return distance <= SCROLL_FOLLOW_GUARD_PX;
+}
+
+/**
+ * 锚点补偿的滚动增量：内容在锚点上方增长时（更早历史、媒体加载）`scrollTop` 要加上同样多的
+ * 像素，阅读位置才不动；内容只增在下方时差值为 0（不需要滚动）。
+ */
+export function anchorScrollDelta(offsetBefore: number, offsetAfter: number): number {
+  return offsetAfter - offsetBefore;
+}
+
+/** 滚动容器的窄接口：只依赖真实用到的几个成员（RNW 的 `ScrollView` 结构上满足它）。 */
+interface ScrollHandle {
+  scrollTo?: (options: { readonly y?: number; readonly animated?: boolean }) => void;
+  getScrollableNode?: () => unknown;
+}
 
 /** 用户输入在可见带里的分布：看得到的条数，以及上方 / 下方各是哪几条（按时间线次序的下标）。 */
 export interface UserInputDistribution {
@@ -884,6 +957,27 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
+    /** 「回到底部」入口：与跳转胶囊同形，放在它上方一档（两者可同时出现：方向不同）。 */
+    scrollPill: {
+      left: "50%",
+      bottom: spacing.lg + 48,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      borderRadius: radius.lg,
+      backgroundColor: colors.accentSoft,
+      zIndex: zIndex.topBar,
+      ...webStyle({ position: "fixed", transform: "translateX(-50%)" }),
+    },
+    scrollPillText: {
+      color: colors.accentInk,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
     // 跳转后的短暂高亮：一层不吃点击的固定覆盖层（目标条目的样式不归本组件管）。
     flashRing: {
       borderWidth: 2,
@@ -1221,6 +1315,20 @@ export function ConversationStream({
   availableWidth,
   onCopyCode,
   onLinkPress,
+  onFilePathPress,
+  media,
+  onLoadMedia,
+  onReleaseMedia,
+  onDownloadAttachment,
+  onSubmitElicitation,
+  onRefreshInteractions,
+  onPickAttachment,
+  onPasteAttachments,
+  onRemoveAttachment,
+  onRetryAttachments,
+  onCancelAttachmentUpload,
+  onAddPathRef,
+  onRemovePathRef,
   onOpenDirectoryList,
   onOpenSession,
   onSidebarQueryChange,
@@ -1301,6 +1409,163 @@ export function ConversationStream({
     (interaction) => interaction.availability.kind === "answerable",
   ).length;
   const pendingBarLabel = PENDING_BAR_LABELS[model.header.state] ?? null;
+
+  // ── 滚动跟随与阅读锚点（spec「流式阅读保持位置」）────────────────────────────
+  const sessionId = model.header.sessionId;
+  const scrollRef = useRef<ScrollHandle | null>(null);
+  /** 稳定的 ref 回调：每次渲染换一个函数会让 React 先摘再挂同一个节点。 */
+  const assignScrollRef = useCallback((node: unknown) => {
+    scrollRef.current = node as ScrollHandle | null;
+  }, []);
+  const followingRef = useRef(true);
+  const [following, setFollowing] = useState(true);
+  /** 上读期间有新内容到达（只影响提示措辞，不改变滚动位置）。 */
+  const [unseen, setUnseen] = useState(false);
+  /** 上读时的锚点：第一条仍在可视带内的条目键与它相对容器顶边的偏移。 */
+  const anchorRef = useRef<{ readonly key: string; readonly offset: number } | null>(null);
+  /** 会话切换前的位置（按会话标识）：切回时恢复，不强制回到最新。 */
+  const savedScroll = useRef<Map<string, number> | null>(null);
+  /** 首次真正记录位置时才建表：渲染路径上不为此分配。 */
+  const scrollPositions = (): Map<string, number> => {
+    if (savedScroll.current === null) savedScroll.current = new Map<string, number>();
+    return savedScroll.current;
+  };
+  const previousSession = useRef(sessionId);
+  /** 打开文件查看前的时间线位置；关闭时恢复（查看期间时间线只是被隐藏）。 */
+  const savedBeforeFile = useRef<{ readonly sessionId: string; readonly offsetY: number } | null>(null);
+
+  /** 真实滚动容器（RNW 的 `ScrollView` 在网页侧就是可滚动的宿主元素）。node 侧为 `null`。 */
+  const scroller = (): HTMLElement | null => {
+    const node = scrollRef.current?.getScrollableNode?.();
+    if (typeof HTMLElement === "undefined") return null;
+    return node instanceof HTMLElement ? node : null;
+  };
+  const scrollToY = (y: number): void => {
+    scrollRef.current?.scrollTo?.({ y, animated: false });
+  };
+  /** 记下当前阅读锚点（上读时才会用到；没有条目时锚点为 `null`）。 */
+  const captureAnchor = (): void => {
+    const host = scroller();
+    if (host === null) return;
+    const hostTop = host.getBoundingClientRect().top;
+    for (const node of host.querySelectorAll<HTMLElement>("[data-timeline-key]")) {
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom <= hostTop + 1) continue;
+      anchorRef.current = { key: node.dataset["timelineKey"] ?? "", offset: rect.top - hostTop };
+      return;
+    }
+    anchorRef.current = null;
+  };
+  /** 内容高度变化后把锚点移回原偏移：内容在上方增长（更早历史、媒体加载）时补偿 `scrollTop`。 */
+  const restoreAnchor = (): void => {
+    const anchor = anchorRef.current;
+    const host = scroller();
+    if (anchor === null || host === null) return;
+    const hostTop = host.getBoundingClientRect().top;
+    for (const node of host.querySelectorAll<HTMLElement>("[data-timeline-key]")) {
+      if (node.dataset["timelineKey"] !== anchor.key) continue;
+      const delta = anchorScrollDelta(anchor.offset, node.getBoundingClientRect().top - hostTop);
+      if (delta !== 0) scrollToY(host.scrollTop + delta);
+      return;
+    }
+  };
+  const handleContentSizeChange = (): void => {
+    // 查看文件期间时间线被隐藏，维度变化不是「新内容」，不能借机滚到底。
+    if (fileContent !== null) return;
+    const host = scroller();
+    if (host === null) return;
+    if (followingRef.current) {
+      scrollToY(host.scrollHeight);
+      return;
+    }
+    restoreAnchor();
+  };
+  const handleTimelineScroll = (): void => {
+    measureRef.current();
+    const host = scroller();
+    if (host === null) return;
+    const next = isFollowingBottom({
+      offsetY: host.scrollTop,
+      contentHeight: host.scrollHeight,
+      viewportHeight: host.clientHeight,
+    });
+    if (next === followingRef.current) {
+      if (next && unseen) setUnseen(false);
+      return;
+    }
+    followingRef.current = next;
+    setFollowing(next);
+    if (next) setUnseen(false);
+    else captureAnchor();
+  };
+  const scrollToBottom = (): void => {
+    const host = scroller();
+    if (host === null) return;
+    followingRef.current = true;
+    setFollowing(true);
+    setUnseen(false);
+    scrollToY(host.scrollHeight);
+  };
+
+  /**
+   * 新内容到达（条目数、最后一条标识或流式正文长度变化）且用户上读时，只点亮提示，
+   * 不动滚动位置。展开/收起详情不改变这些键，因此不会把用户自己的操作误报成新内容。
+   */
+  const lastEntry = model.timeline.entries[model.timeline.entries.length - 1];
+  const lastMessage = model.messages[model.messages.length - 1];
+  const contentKey = `${String(model.timeline.entries.length)}|${lastEntry?.key ?? ""}|${String(
+    model.messages.length,
+  )}|${lastMessage?.text.length ?? 0}`;
+  const firstContent = useRef(true);
+  useEffect(() => {
+    if (firstContent.current) {
+      firstContent.current = false;
+      return;
+    }
+    if (!followingRef.current) setUnseen(true);
+  }, [contentKey]);
+
+  /** 会话切换：先记下旧会话的位置，再在新会话的布局完成后恢复（没有记录即跟随最新）。 */
+  useEffect(() => {
+    if (previousSession.current === sessionId) return undefined;
+    const host = scroller();
+    if (host !== null) scrollPositions().set(previousSession.current, host.scrollTop);
+    previousSession.current = sessionId;
+    anchorRef.current = null;
+    const saved = scrollPositions().get(sessionId);
+    followingRef.current = saved === undefined;
+    setFollowing(saved === undefined);
+    setUnseen(false);
+    if (saved === undefined) return undefined;
+    const timer = setTimeout(() => {
+      scrollToY(saved);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [sessionId]);
+
+  /** 打开文件查看时保存时间线位置，关闭时恢复（不强制滚到底）。 */
+  const fileOpen = fileContent !== null;
+  useEffect(() => {
+    const host = scroller();
+    if (fileOpen) {
+      if (host !== null) savedBeforeFile.current = { sessionId, offsetY: host.scrollTop };
+      return;
+    }
+    const saved = savedBeforeFile.current;
+    if (saved === null || saved.sessionId !== sessionId) return;
+    savedBeforeFile.current = null;
+    if (host === null) return;
+    scrollToY(saved.offsetY);
+    const next = isFollowingBottom({
+      offsetY: saved.offsetY,
+      contentHeight: host.scrollHeight,
+      viewportHeight: host.clientHeight,
+    });
+    followingRef.current = next;
+    setFollowing(next);
+  }, [fileOpen, sessionId]);
 
   // ── 跳转入口的测量（只属于渲染现场的事实：滚动位置与元素几何）───────────────────
   const rootRef = useRef<HTMLElement | null>(null);
@@ -1560,12 +1825,16 @@ export function ConversationStream({
             )}
 
             <ScrollView
+              ref={assignScrollRef}
               style={fileContent === null ? styles.columnScroll : [styles.columnScroll, styles.hidden]}
               contentContainerStyle={styles.timelineScrollBody}
-              dataSet={{ conversationScroll: "timeline" }}
-              onScroll={() => {
-                measureRef.current();
+              dataSet={{
+                conversationScroll: "timeline",
+                scrollFollow: String(following),
+                scrollUnseen: String(unseen),
               }}
+              onScroll={handleTimelineScroll}
+              onContentSizeChange={handleContentSizeChange}
               scrollEventThrottle={32}
             >
             {pendingBarLabel === null ? null : (
@@ -1594,7 +1863,10 @@ export function ConversationStream({
                   label="加载更早的消息"
                   disabled={!model.capabilities.canLoadEarlier}
                   loading={paging.loading}
-                  onPress={onLoadEarlier}
+                  onPress={() => {
+                    captureAnchor();
+                    onLoadEarlier();
+                  }}
                 />
                 {paging.hasEarlier ? (
                   <Text style={styles.note} dataSet={{ pagingPageSize: String(model.messages.length) }}>
@@ -1621,7 +1893,10 @@ export function ConversationStream({
                     label="加载更早的结构化条目"
                     disabled={!paging.hasEarlierHistory || paging.loadingHistory}
                     loading={paging.loadingHistory}
-                    onPress={onLoadEarlierHistory}
+                    onPress={() => {
+                      captureAnchor();
+                      onLoadEarlierHistory();
+                    }}
                   />
                   {paging.hasEarlierHistory ? (
                     <Text style={styles.note} dataSet={{ historyPagingRemaining: "true" }}>
@@ -1648,6 +1923,7 @@ export function ConversationStream({
             )}
             <ConversationTimeline
               entries={model.timeline.entries}
+              sessionId={sessionId}
               onOpenDiagnostics={onOpenDiagnostics}
               onAnswerInteraction={onAnswerInteraction}
               onCopyCode={onCopyCode}
@@ -1656,8 +1932,29 @@ export function ConversationStream({
               onToggleEntry={onToggleTimelineEntry}
               selectedChangeId={selectedChangeId ?? null}
               onSelectChange={onSelectChange}
+              media={media}
+              onLoadMedia={onLoadMedia}
+              onReleaseMedia={onReleaseMedia}
+              onDownloadAttachment={onDownloadAttachment}
+              onSubmitElicitation={onSubmitElicitation}
+              onRefreshInteractions={onRefreshInteractions}
+              onFilePathPress={onFilePathPress}
             />
             </ScrollView>
+
+            {/* 上读时的新内容/回到底部入口：不自动改变滚动位置，只有用户主动点它才恢复跟随。 */}
+            {following || fileContent !== null ? null : (
+              <Pressable
+                role="button"
+                style={styles.scrollPill}
+                dataSet={{ action: "scroll-to-bottom", scrollUnseen: String(unseen) }}
+                onPress={scrollToBottom}
+              >
+                <Text style={styles.scrollPillText}>
+                  {unseen ? "↓ 有新内容 · 回到底部" : "↓ 回到底部"}
+                </Text>
+              </Pressable>
+            )}
 
             {/* 没有用户输入、或全部用户输入都在视口内时**不**呈现（spec 的两条场景）。
                 放在滚动容器**之后**：`position: fixed` 的包含块必须是视口——RNW 的 `ScrollView`
@@ -1692,6 +1989,13 @@ export function ConversationStream({
                 onCancel={onCancelTurn}
                 onSelectModel={onSelectModel}
                 onSelectMode={onSelectMode}
+                onPickAttachment={onPickAttachment}
+                onPasteAttachments={onPasteAttachments}
+                onRemoveAttachment={onRemoveAttachment}
+                onRetryAttachments={onRetryAttachments}
+                onCancelAttachmentUpload={onCancelAttachmentUpload}
+                onAddPathRef={onAddPathRef}
+                onRemovePathRef={onRemovePathRef}
               />
             </View>
           </View>

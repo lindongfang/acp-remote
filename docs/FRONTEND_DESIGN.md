@@ -1,11 +1,15 @@
 # ACP Remote 前端设计
 
-对话页交互补充（2026-10-19）：桌面左右栏支持拖动栏间分隔线调整宽度，分隔线可聚焦并以方向键调整，Home/End 调至最小/最大宽度；调整须保留中栏 300px 最小可用宽度，窄屏不显示拖动柄。宽度为页面内存状态。左栏按服务端 `updatedAt` 最近更新时间倒序排列，并显示跨页连续序号（每页 15 条，第二页从 16 起）；序号随排序与搜索结果更新。搜索框按桌面原型使用独立外框、透明且无独立边框的输入区、13px 字号和 5px/10px 上下/左右内边距。
+> 修订记录（2026-10-19，`conversation-area-complete` WP6，**客户端页面已接线；服务端 WP2–WP5 未实现**）：对话页组件补齐附件选择/粘贴/移除/重试/取消与工作目录路径引用、提问表单提交与有效交互重新确认、类型化媒体读取与 Blob 回收、Markdown 文件路径联动；`ConversationStream` 实现「底部跟随 / 上读锚点 / 新内容与回到底部入口」，加载更早历史、媒体加载、会话切换与打开/关闭文件查看均保持阅读位置；`Markdown` 改为按块缓存词法与末尾可见范围渲染，长流式输出不再整段重复解析。`app/session/[id].tsx` 只做接线（附件、媒体、表单、路径都落到 `ClientStore` 的端口），不直接操作 WebSocket 或存储。**仍未完成**：Daemon 侧分块上传/封存与有效交互（WP2–WP5）、CSP 的 `media-src 'self' blob:` 增量、真实浏览器 PV6 与真机证据（WP7）。
+>
+> 对话页交互补充（2026-10-19）：桌面左右栏支持拖动栏间分隔线调整宽度，分隔线可聚焦并以方向键调整，Home/End 调至最小/最大宽度；调整须保留中栏 300px 最小可用宽度，窄屏不显示拖动柄。宽度为页面内存状态。左栏按服务端 `updatedAt` 最近更新时间倒序排列，并显示跨页连续序号（每页 15 条，第二页从 16 起）；序号随排序与搜索结果更新。搜索框按桌面原型使用独立外框、透明且无独立边框的输入区、13px 字号和 5px/10px 上下/左右内边距。
 
+> 修订记录（2026-10-19，`conversation-area-complete` WP6，**客户端逻辑层已落地；页面接线随后由上方 WP6 收尾修订完成**）：`clients/app/src/protocol/` 新增附件帧族（13 帧、32 KiB 块、十进制字符串偏移、主体/会话绑定、严格解码）与类型化媒体/有效交互镜像；`sync-client/` 新增流式 SHA-256、精确整数 JSON 序列化（表单整数不经 `number`）与 `AttachmentTransferClient`（每传输一块未确认、重复块确认、偏移续传、清单分批封存、读取分块与超时）。`features/` 新增附件选择/上传状态机（选择 → 上传 → 封存，失败/取消/过期旁路，全部封存才可提交）、上传与业务受理分离（先上传+清单封存，再派发一条带 `submissionId` 的 `session.prompt`）、有效待处理交互（`requestVersion` 原样回传、刷新后经 `session.read` 重新确认）与表单模型（文本/整数/数值/布尔/枚举/多选、必填与范围、未知必需类型整表不可提交）。读取屏障改为「只清发起读取时已存在的增量」，`:partial`/通道/媒体块进入时间线模型，并新增轮次分组纯函数。**该修订记录的「尚未接线」部分已被上方 WP6 修订取代**：独立附件 WSS 已在组合根装配，输入区/时间线/表单/滚动锚点的页面接线已完成；服务端 WP2–WP5 与真实浏览器证据仍未完成。
+> 修订记录（2026-10-19，`conversation-area-complete` WP1，合同先行、前端**尚未实现**）：登记对话区完整内容边界——附件（图片/文件/已有音频与工作目录路径引用）、可填写表单与有效待处理恢复、思考/媒体/部分结果、流式原位更新与阅读锚点。§4.1 的相关“只支持文本/只读草稿/历史交互不可答”条目改写为**协商后能力 + 计划实现**，§4.2/§6 的 `pending_interactions` 降级仅适用于未协商；§7 的本地数据边界补充上传/媒体缓冲不落盘。实现状态仍以 `prototypes/IMPLEMENTATION-GAPS.md` 与验证结果为准，不因本次文档修订宣称已支持。
 > 修订记录（2026-10-19，`session-file-browser`，**已实现，待主检出 PV3–PV7 复验**）：对话页右栏标题与窄屏入口改为「文件」，标题下三个选项为「全部文件 / Git 变更 / 会话变更」，首次进入默认「会话变更」。全部文件按目录树逐层浏览，默认显示隐藏与被忽略项、始终隐藏 `.git`，忽略开关在非 Git 目录禁用并说明；根外链接可见不可打开。点击文件把**中栏**替换为只读查看区（文本/代码、安全栅格图片、Git 相对 HEAD 差异、会话历次记录），右上角「关闭文件查看」可键盘触发；再点文件直接替换、不加页签。文件打开时时间线与输入区仍在 DOM（`display: none`），关闭后恢复原滚动位置、草稿与条目展开状态，窄屏关闭返回原文件列表与滚动位置，跨断点保留当前文件与来源。图片只经平台端口创建/撤销 Blob URL，HTML/SVG 不作为活动内容，静态面 CSP 仅增加 `img-src 'self' blob:`。证据分层见 [`docs/evidence/session-file-browser.md`](./evidence/session-file-browser.md)：假主机、真实 Daemon 与未执行项分开记录。
 > 状态：编码前客户端约束  
 > 版本：0.6
-> 修订记录（2026-10-19，`conversation-page-prototype-parity`，**已实现**）：§4.1 与 §9 第 11 条写回对话页的宽屏三栏独立滚动与窄屏三档次级视图、`contentFill` 的生效范围、左栏两个目录入口与紧凑会话行、单行会话头与状态字形、内容来源提示的语义（设备胶囊仍是唯一的连接状态徽标）、输入区三态（进行中只读且只呈现停止、`canSubmit=false` 时回车不发命令）、工具 `toolDetail` 与显式原文诊断、代码块行号、右栏紧凑清单与差异前缀。移动原型导航、PWA 安装与 i18n 仍未落地，差异登记见 [`prototypes/IMPLEMENTATION-GAPS.md`](../prototypes/IMPLEMENTATION-GAPS.md)。
+> 修订记录（2026-10-19，`conversation-page-prototype-parity`，**已实现**）：§4.1 与 §9 第 11 条写回对话页的宽屏三栏独立滚动与窄屏三档次级视图、`contentFill` 的生效范围、左栏两个目录入口与紧凑会话行、单行会话头与状态字形、内容来源提示的语义（设备胶囊仍是唯一的连接状态徽标）、输入区三态（当时进行中只读且只呈现停止、`canSubmit=false` 时回车不发命令；后续 `conversation-area-complete` WP6 改为执行中可编辑、发送禁用不排队）、工具 `toolDetail` 与显式原文诊断、代码块行号、右栏紧凑清单与差异前缀。移动原型导航、PWA 安装与 i18n 仍未落地，差异登记见 [`prototypes/IMPLEMENTATION-GAPS.md`](../prototypes/IMPLEMENTATION-GAPS.md)。
 > 修订记录（2026-10-18，`device-pairing-qr-reference`，**已实现**；Native 真机未执行）：PWA 设备配对**只保留配对码入口**。`/pair` 打开新设备 `q2=` 短二维码片段时只清除片段并显示固定 App 指引，打开旧设备 `data=` 片段时清除并提示已不支持；两者都不发 lookup/qr-lookup/claim/status。设备二维码取回、指纹校验与有限重试由**未来原生 App 的共享消费合同**承载；共享解码/指纹/来源绑定与重试策略已有测试调用方，但 Android/iOS App、相机、keystore 与真机扫码**未执行**，PWA 不接入该取回器。`/node-link/pair` 不变。协议与机器合同见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.6，二维码字段不在本文重复。
 > 修订记录（2026-10-18，`pairing-theme-toggle`）：配对页右上角增加复用共享主题偏好的明暗切换按钮（`PairingThemeToggle`）；页面仍不呈现全局顶栏、页头或返回入口，主题状态仍由 `themePreferenceStore` 统一持有。
 > 修订记录（2026-10-18，`pairing-code-web-entry`）：`/pair` 增加第二种入口——无 `data=` 片段时显示 8 位配对码输入（对应原型 S0），有片段时行为不变；移动端仍只使用 `#data=` 二维码载荷，`/node-link/pair` 仍只接受片段、不提供配对码输入。配对码输入页在 lookup 之前 MUST NOT 显示数字倒计时，只显示静态提示“配对码 5 分钟内有效。”；lookup 成功后改用服务端响应里的 `expiresAt` 启动倒计时，服务端始终是过期事实的权威。lookup 的任何失败（含响应丢失）统一呈现固定文案「配对码不对或已过期，请重新生成配对码」，不回显后端 `message`、不自动重试。配对码 MUST NOT 进入 URL、Cookie、localStorage、sessionStorage、地址历史或日志，只活在页面内存并在终态/卸载时清除。上一轮 `pairing-page-open-url` 对 `/pair` 的「仅地址片段入口」表述由本条取代；`/node-link/pair` 的仅片段入口不变。
@@ -39,6 +43,16 @@
 - 前端阶段、客户端分层与平台能力以本文为准。
 
 ## 2. 已确认决策
+
+### 文件栏来源收敛（2026-10-19，已确认、待实现）
+
+本条取代本文早先关于文件栏“三来源”、默认“会话变更”及其专属刷新、归并清单与历次记录查看的交付要求；早先修订记录仅说明当时实现，不代表本次调整已落地。
+
+- 文件栏仅保留“全部文件”和“Git 变更”，移除“会话变更”入口及其专属查看。首次进入默认“全部文件”；旧的“会话变更”选择回退到“全部文件”。保留“全部文件”的现有名称。
+- “Git 变更”表示整个当前会话工作目录内的未提交修改，可能来自人工操作或其他会话，不承诺仅包含当前会话造成的修改。非 Git 目录明确说明 Git 查询不可用，仍可浏览全部文件。
+- 对话时间线中的工具调用、文件差异与已有历史记录继续保留，不删除后端 `file.changed` 事件，也不改变 ACP 能力、历史读取或事件保留规则。
+- 目录浏览与 Git 查询沿用现有只读、路径限制和能力协商规则；远程导入会话不支持这两类查询，明确显示不可用原因，不读取 Access 本机替代目录。
+- 本次只确认并记录设计；代码、原型与验证仍待后续正式变更处理。
 
 文件栏展示补充（2026-10-19）：全部文件、Git 变更、会话变更均保留目录层级，以文件夹轮廓区分目录与文件，用缩进呈现父子关系。变更列表按可靠的根内相对路径分组，目录可展开/收起；无法确认归属的路径保持独立显示。新增、修改文件名显示绿色并附 `+`，删除显示红色并附 `-`；未跟踪按新增展示，重命名及未知状态保留原状态说明。会话文件颜色取最新已加载记录，不随选中的历史记录变化；此标记不是增删行数统计。
 
@@ -123,7 +137,7 @@ clients/
 
 ### 4.1 必须实现
 
-对话首次读取只请求当前 Sync 服务端可表达的 `messages` 与 `config_options`，协商 `core.session-history.v1` 后再带 `history`。当前服务端明确不支持的 `pending_interactions`、`turns`、`capabilities` 不混入首次读取，避免一项不支持使整条消息/历史读取失败；实时交互与结构化历史的处理保持原有规则。文件栏的会话变更刷新错误仅取该刷新请求的结果，不借用首次加载或消息翻页的错误。
+对话首次读取只请求当前 Sync 服务端可表达的 `messages` 与 `config_options`，协商 `core.session-history.v1` 后再带 `history`。`pending_interactions` 只在协商 `core.pending-interactions.v1` 后混入首次读取（客户端已按协商结果请求；服务端读取面待 WP4）；未协商的 `pending_interactions` 与始终降级的 `turns`、`capabilities` 不混入首次读取，避免一项不支持使整条消息/历史读取失败；实时交互与结构化历史的处理保持原有规则。文件栏的会话变更刷新错误仅取该刷新请求的结果，不借用首次加载或消息翻页的错误。
 
 页面启动读取本地身份与配对记录期间，统一显示普通的“正在加载…”状态，不挂载业务页面，也不显示红色初始化错误或未配对提示。初始化成功后进入正常页面；只有初始化失败才显示明确错误与刷新重试指引。
 
@@ -172,18 +186,23 @@ clients/
 - 目录内创建会话：目录详情页与目录项都提供在该目录内创建会话的入口，两者使用同一条 `session.create` 命令，选择器来自本机已配置的 Agent profile；提交的载荷只允许**三类**字段——Agent 标识、目录引用（本机已记录的目录标识，或浏览主机文件系统后选定的一层，二者之一）与一个可选的「目录不存在则先创建」开关。出现其它键（含 MCP 配置与凭据字段）或把该开关与目录标识同时给出时，服务端以 schema 校验错误拒绝，客户端不得因此回显提交内容。指定目录有**两条**路径：选择本机已登记的目录，或从主机的根列表开始逐层浏览并选定（面包屑、上一级、已登记目录标注、并在浏览过程中新建一层）；服务端未提供浏览能力时，入口必须明确说明该能力不可用，并保留选择已登记目录这条路径，不得呈现一个必然失败的手工输入。入口**不因权限不可用**——设备方向没有授权维度，页面 MUST NOT 出现「没有创建会话的权限」「需要电脑端授予」一类说明，也不得把入口藏起来当作「权限不足」的处理。目录引用不可用时以可区分的失败原因呈现（不存在、不是目录、权限不足各自可区分，且不回退到任何替代目录）。入口旁 MUST 说明提交会在电脑上启动一个新的 Agent 进程。提交期间显示创建中状态且不接受重复提交，收到终态后进入新会话或显示可区分的失败原因，结果不确定时显眼保留直到用户处理。
 - 历史快照、cursor 补发和实时事件切换。
 - 用户 prompt、Agent 流式回复和最终消息。
-- 第一阶段只发送文本 prompt；图片、文件和 resource 输入必须明确显示不支持，不能静默删除后提交剩余内容。
+- 输入支持文本，以及**协商后**的图片、文件、已有音频与工作目录路径引用（客户端已接线，协议见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5 的 `PromptContentBlock`；真正可用还要求 Daemon 侧分块上传/清单封存落地）。端到端能力不支持某类型时明确说明并保留完整草稿，不能静默删除附件后提交剩余文本；录音、录像与视频专用预览仍不在范围内。
+- 附件的选择与上传状态分离：选择阶段只在当前设备内存预览；点击发送后才上传，全部附件封存并整体登记清单后才提交一次消息。任一失败或取消时不派发命令、保留全部草稿；上传成功不等于消息受理。刷新不承诺续传，未提交上传由服务端在闲置 24 小时后清理（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §3.4）。
 - 结构化工具调用、权限请求、终端、文件修改与行级差异统计的基础展示。
 - 取消当前 turn：未确认前呈现为「取消请求已提交」并等待终态，呈现以服务端终态为准，不得在未确认前把会话呈现为空闲。
 - 模型与模式：config option（`category=model`）列表、模式可选项、当前值、切换中、下一轮生效和不支持状态；切换以服务端确认的结果为准，未提供时不得展示任何可点选项。
 - WebSocket 断线重连、ACK、事件去重和命令幂等。
 - 未识别 ACP 扩展事件的明确降级展示和诊断信息入口。
 - 对话页时间线与结构化卡片：消息与结构化条目在同一条按时间排序的时间线上呈现；来自实时事件与来自按会话读取的历史条目使用同一套条目呈现，同一标识的内容不得因两条来源并存而重复呈现。思考、工具调用、终端输出、计划、权限与提问、文件改动与降级各自成卡，而「某个事件类型有没有专用卡片」由客户端自己的呈现覆盖决定（§6）——协议词表认识、而客户端没有专用视图的事件同样必须走降级卡片，不得静默丢弃。重新进入本机自有会话时，保留期内的结构化历史条目仍然呈现；来源为其它节点且拿不到结构化历史的会话，必须显式说明该部分不可用，不得让用户误以为该会话没有结构化内容。时间线中的代码块按行呈现行号，复制载荷是代码正文本身，不得包含行号。
-- 对话页输入与提交：输入区只支持文本并显式说明附件不受支持（图片与文件不得被静默丢弃后提交剩余文本）；区分可输入、进行中与已关闭三种状态——可输入呈现发送；进行中草稿只读，只呈现「停止」（轮次可取消时），**不呈现发送**，模型给出 `canSubmit=false`，此时回车被拦下且不派发任何命令；已关闭只读、呈现禁用发送并说明关闭原因，不得发出提交。提交期间呈现为待确认，未确认前不得呈现为已发送或已排队，结果不确定时显著保留直到用户处理。来源为其它节点的会话不可达时，其草稿只在内存保留并标注未提交，不得写入任何持久存储。
+- 流式呈现（客户端已实现）：回复、思考、工具与终端按稳定标识就地把实际增量累加为易失内容，不新增重复卡片；收到权威读取结果时按版本/序号屏障替换，忽略已被权威正文覆盖的早期增量，新到达的后续增量不得被旧读取结果覆盖。已应用事件按 `eventId` 去重，断线重放只补遗漏。停止或失败保留已收到内容并标记真实结果；未闭合 Markdown 不得导致正文丢失或整段卸载。
+- 阅读锚点（客户端已实现）：位于底部时跟随新内容；向上阅读后保持位置并显示「新内容 / 回到底部」入口。加载更早历史、媒体加载与切回会话时保持阅读锚点；打开/关闭文件查看保留草稿、折叠状态与滚动位置。锚点判定与几何补偿的纯函数在 `components/ConversationStream.tsx`，浏览器用例覆盖中栏独立滚动。
+- 富文本长输出（客户端已实现）：`Markdown` 按「围栏之外的空行」切块并缓存每块的词法结果，流式追加只重新分析最后一块；默认只渲染末尾若干块，更早内容由用户展开。行内代码里通过 `isMarkdownFilePath`（在合法相对路径形状之上要求**无空白且含 `/` 或扩展名**）的文本成为文件查看入口，`npm test`、`true`、`useState` 这类命令与标识符保持纯文本。HTML/脚本只作字面文本，外链图片不自动加载，代码复制载荷不含行号。
+- 对话页输入与提交：区分可输入、进行中与已关闭三种状态——可输入呈现发送；进行中草稿**可编辑但不可发送、不排队**，只呈现「停止」（轮次可取消时），模型给出 `canSubmit=false`，此时回车被拦下且不派发任何命令；已关闭只读、呈现禁用发送并说明关闭原因，不得发出提交。提交期间呈现为待确认，未确认前不得呈现为已发送或已排队，结果不确定时显著保留直到用户处理。来源为其它节点的会话不可达时，其草稿只在内存保留并标注未提交，不得写入任何持久存储。
 - 对话页会话头与内容来源：会话头单行呈现标题、状态胶囊、Agent 名与 Agent 胶囊；状态胶囊以 `●` / `⏸` / `✕` / `○` 字形辅以状态词，`waiting_input` 与 `waiting_permission` 同用警告色，状态不能只靠颜色区分。Agent 胶囊展开后列出「本会话涉及的 Agent」，并说明名单与连接状态来自 `agent.connected` / `agent.disconnected` 连接事件；覆盖层缺席时写「状态未知」，不得写成「已断开」。会话头下方的内容来源提示条只在**非在线**时出现，按连接状态更换说明句与色调（仍在尝试 = 警告色，不会再自行恢复 = 危险色），非在线且存在最近一次成功同步时呈现真实的上次同步时刻；从未成功同步时不编造时刻。**设备胶囊是唯一的连接状态徽标**；内容来源提示只说明「内容为什么不是最新」，不得再画状态圆点、短词或第二枚胶囊来冒充状态徽标。
 - 对话页左栏：固定目录头依次呈现独占一行的「‹ 目录」返回按钮、目录展示名、带「路径」标签的逐字路径、带图标的目录内搜索，不增加「全部 ›」入口。中间滚动区只呈现同目录会话紧凑行（状态圆点、标题、相对时间；不呈现状态词、Agent 名、路径与行分隔线）。列表每页 15 条，分页控件固定在滚动区外、新建区域上方，支持上一页、下一页与输入页码；只有一页时显示 1 / 1，前后按钮禁用。不再提供加载更多或「已显示该目录全部会话」提示。搜索变化回到第一页，越界页码按当前总页数纠正；翻页只改变左栏，不改变中栏当前会话。底部固定区域只呈现「⊕ 新建会话」。搜索只作用于左栏，不得改变中栏当前会话的呈现；当前会话没有目录归属时，左栏明确说明它没有目录归属，不得因此隐藏中栏。
 - 对话页三栏与宽窄两形态：宽屏呈现**三栏**——左栏（目录上下文 + 同目录会话）、中栏（会话头 → 内容来源提示条 → 时间线滚动区 → 输入区）、右栏（变更文件）；三栏各自拥有独立的滚动容器，输入区吸在中栏底部；大屏按原型 300 / 1fr / 360 取宽，视口不足时两侧栏可收缩，中栏保留 300px 最小宽度（否则输入区会被压成竖条并挤掉时间线）。对话页的外壳根按**视口高度**装配并隐藏内容区溢出——`contentFill` **只**对 `/session/<id>` 生效；目录页、目录详情页、配对入口与主机页保持文档流，不得被套成视口高度而失去整页滚动。窄屏只有「对话 / 会话 / 变更文件」**三档**次级视图，不再提供「全部」档（该档只属于宽屏三栏并列形态，窄屏请求会被归一为「对话」）；三栏内容始终在 DOM，未选中的栏只是不占主体，切换控件留在三栏之外，两种形态必须呈现同一信息集合，不得因窄屏静默丢弃信息或改变判定结果。
-- 权限与 elicitation 应答：只对本设备连接期间收到过请求内容的待处理交互提供应答动作，可选项只来自该请求自身的下发内容；仅从历史读取得到的待处理项呈现为不可操作并说明原因，不得呈现无法成功的应答按钮；已被其它设备处理的呈现为已处理并说明不是本设备所为。
+- 权限与 elicitation 应答：协商 `core.pending-interactions.v1` 后（客户端已接线；服务端有效交互见 WP2/WP4），客户端可对**经服务端重新确认的当前有效请求**提供应答：先用 `session.read` 的 `pending_interactions` 取得完整请求与 `requestVersion`，提交时原样回传；可选项只来自该请求当前下发内容。历史卡片本身只提供定位信息、不直接授权应答；只有历史且尚未重新确认时呈现为不可操作并说明原因，并提供「重新取得当前有效请求」入口（`ClientStore.refreshInteractions` 以独立的 `refresh_interactions` 用途请求 `session.read` 的 `pending_interactions`；结果只替换待处理交互，**不清空**首屏读到的 `config_options`/`capabilities`。服务端不再确认的卡片改标「不再有效」，因此点击必有可见结果）。已处理、失效或版本不符时说明原因且不消耗请求；已被其它设备处理的呈现为已处理并说明不是本设备所为。
+- 可填写表单（客户端已实现；服务端再校验见 WP2）：按当前 ACP 快照支持的 schema 子集生成文本、整数/数值、布尔、单选/枚举与字符串数组多选控件，显示必填与范围校验；整数不得先经 JavaScript number 再回传（`JsonNumberLiteral` 保留十进制原文）。未知必需字段或不可表达类型使整个提交不可用并说明，保留拒绝/取消等合法动作；不得以空对象或 `null` 冒充填写。
 - 变更文件右栏：清单以紧凑行呈现（改动状态、相对化展示路径、增/删统计），选中该行（或打开其诊断）后才展开摘要、差异区与原文入口；未选中时详情内容与机器锚点仍留在 DOM，只是不可见。差异行只来自服务端随事件下发的结构化来源：客户端按行类型在行首补 `+ ` / `- ` / 两个空格前缀（服务端 `text` 不带前缀），新增、删除与上下文各一档底色；当前模型没有独立的 hunk 行类型，因此不得伪造 hunk 头。服务端未下发时明确说明原因（原文未同步或超出单条上限），不得渲染占位差异行假装完整，也不得为了填补空白而解析 ACP 原文并据此渲染。差异行与展示路径同源，都由变更 `sync-path-browse-and-diff-delivery` 下发（`file.changed` 视图的 `diffLines` / `diffUnavailable`）；客户端不得绕过 wire 自行构造或推导这两类取值。
 - 对话页「文件」栏与中间查看：右栏标题与窄屏入口为「文件」，三个选项「全部文件 / Git 变更 / 会话变更」，首次进入默认会话变更。全部文件逐层浏览并默认显示隐藏/忽略项（`.git` 始终不出现），忽略开关在非 Git 目录禁用并说明原因；根外链接可见但不可打开。Git 变更按文件展示 staged/unstaged/untracked，相对 HEAD 合并差异（不拼接两段补丁），非仓库/不可用/冲突/二进制/截断各自显式说明。会话变更按可靠路径归并，清单一文件一行，打开后看历次记录与部分历史提示。点击文件替换**中栏**为只读查看区并明确显示路径与来源，右上角关闭按钮名称明确、可键盘触发；再点文件直接替换、无页签。查看文件不取消 Agent；时间线与输入区保留在 DOM（隐藏），关闭后恢复滚动位置、草稿与条目展开状态；窄屏关闭返回原文件列表与滚动位置，跨断点保留当前文件与来源。图片只经平台端口创建 Blob URL，HTML/SVG 不执行，CSP 只允许 `img-src 'self' blob:`。
 - 对话页工具调用详情：折叠块按 `toolDetail` 呈现参数、输出与文本内容，并按 `truncatedParts` 逐部分给出「因超过上限未下发」的说明；单部分 32 KiB、文本部分合计 32 KiB、整体 64 KiB 的上限由服务端执行；某一部分超过其上限制时该部分整体缺席并登记，整体预算不足时按 `output` → `text` → `input` 的优先序保留，让出的部分同样整体缺席并登记（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14），无法以 ACPR-CJ1 表达的值同样整体缺席并登记，客户端不得把缺席呈现成空内容。客户端只读 `view.toolDetail`，MUST NOT 为生成结构化详情而解析 `acp.rawJson`；「查看 ACP 原文」始终打开诊断抽屉（显式诊断），原文按不可信文本呈现。
@@ -191,7 +210,7 @@ clients/
 
 ### 4.2 明确不包含
 
-- 会话明细中的 `turns`、`pending_interactions`、`capabilities` 三类资源，以及 imported（来源为其它节点）会话的明细资源。本期服务端对它们的请求一律回 `capability.unsupported_by_broker`（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.4），PWA 因此不展示这三类明细与 imported 明细。**这不影响其余三类明细**：`messages`、`config_options` 与 `history` 照常经 `session.read` 取得并呈现。客户端 MUST NOT 把该拒绝渲染成「该会话没有 turn / 没有待处理交互 / 没有能力信息」，也 MUST NOT 因此认为明细已到最早一条——它是「本期服务端不提供这一类」，必须按 §6 的降级规则呈现为不可用并说明原因。
+- 会话明细中的 `turns`、`capabilities` 两类资源，以及 imported（来源为其它节点）会话中未协商的明细资源。服务端对未协商能力的请求回 `capability.unsupported_by_broker`（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.4）；`pending_interactions` 在协商 `core.pending-interactions.v1` 后不再属于降级范围（客户端已消费；服务端待 WP4），未协商时才按同一错误呈现。客户端 MUST NOT 把该拒绝渲染成「该会话没有 turn / 没有待处理交互 / 没有能力信息」，也 MUST NOT 因此认为明细已到最早一条——它是「本期服务端不提供这一类」，必须按 §6 的降级规则呈现为不可用并说明原因。
 - Android APK/AAB 和 iOS App/IPA。
 - APNs、FCM 或 Web Push 服务。
 - 后台常驻 WebSocket。
@@ -254,7 +273,7 @@ PWA 不需要独立云服务器。`[决定]`（2026-10-15，`sync-ui-hosting`）
 
 第一阶段浏览器验收覆盖 Android Chrome、iOS Safari 和桌面 Chrome/Edge。HTTPS Provider 必须同时通过 Tailscale Serve 和至少一种非 Tailscale 同机方案。
 
-PWA 不加载第三方脚本、字体或 CDN 资源。CSP 最低基线为 `default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`，Agent 产生的 Markdown、终端、diff 和工具内容全部按不可信输入渲染。
+PWA 不加载第三方脚本、字体或 CDN 资源。CSP 最低基线为 `default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`，Agent 产生的 Markdown、终端、diff 和工具内容全部按不可信输入渲染。Agent 提供音频的播放（客户端已接线，`media-src 'self' blob:` 尚未进入 Daemon 响应头）只增设 `media-src 'self' blob:`（Blob URL 由已认证媒体读取得到的字节创建并即时撤销）；外部源、`data:`、内联脚本与 `unsafe-eval` 一律不放宽。在该响应头缺失时，浏览器会按基线 CSP 拒绝音频 Blob，只有此增量落地后才能声称音频可播放。
 
 `[实现现状]`（2026-10-16，`ui-csp-inline-styles`）入口文档的**样式形态**已按上述基线落地：`expo export` 生成的入口文档里原有的内联 `<style id="expo-reset">` 被抽出为同源 `/entry-reset.css`，并在 bundle 的 `<script defer>` **之前**声明一份**必须保持为空**的同源 `/rnw-stylesheet.css`——`react-native-web`（RNW）于模块求值期按 id 复用该 `<link>` 的 `sheet`，把它的初始 reset 与全部原子类 `insertRule` 进去，因此页面不再依赖任何内联样式形态。两个文件都由 Daemon 在同源根路径托管（`MIME_TYPES` 已含 `css → text/css; charset=utf-8`，托管层与响应头一字未动），样式由此在**既定 CSP** 的同源托管下完整交付（此前「同源托管下前端无样式」的缺口就此闭合）；**这不是放宽 CSP**（`insertRule` 不是 CSP 的检查点）。取舍、失败形态与判据见归档的 `openspec/changes/archive/2026-10-16-ui-csp-inline-styles/design.md`（D1/R2/R3）。**硬边界**：`/rnw-stylesheet.css` 必须保持为空，写进内容会让 RNW 的 hydration 遍历到无 `[stylesheet-group]` 标记的规则并抛错（整页空白）；link 必须排在 bundle 之前（RNW 取 `link.sheet`，未加载完时为 `null` 且不重试）；回归判据是浏览器级的**计算样式**断言，而不是「DOM 里有 `<style>`」。
 
@@ -314,7 +333,7 @@ draft -> submitting -> accepted -> completed | failed | rejected | uncertain
 - 暂时没有专用组件时显示明确的“当前客户端未提供专用视图”，不能直接隐藏事件。
 - ACP 原文按 `acp.rawJson` 作为不可信文本保存或诊断展示；不得为了渲染先解析再覆盖原值，尤其不能损坏超过 JavaScript safe integer 的未知数字。
 - `unsupported_by_client`、`unsupported_by_broker` 和 `unsupported_by_agent` 必须可区分。
-- `unsupported_by_broker` 的呈现必须说清是**服务端本期不提供**，而不是「内容为空」或「已到最早一条」：本期服务端对 `turns`、`pending_interactions`、`capabilities` 三类明细资源与 imported 会话的明细一律回该错误（§4.2 与 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.4），客户端据此呈现「本期不可用」并说明原因，`hasEarlier` 之类的分页标记不得由该拒绝推断。其余三类明细（`messages`、`config_options`、`history`）不受影响。
+- `unsupported_by_broker` 的呈现必须说清是**服务端本期不提供**，而不是「内容为空」或「已到最早一条」：未协商 `core.pending-interactions.v1` 时 `pending_interactions`、`turns` 与 `capabilities` 仍回该错误；未协商 `core.remote-history.v1` 时 imported 会话的历史同样显式不可用（§4.2 与 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.4/§11.7），客户端据此呈现「本期不可用」并说明原因，`hasEarlier` 之类的分页标记不得由该拒绝推断。`messages`、`config_options` 与（本机会话的）`history` 不受影响。协商成功后这三类能力按各自的真实结果呈现，不再走入该降级。
 - capability negotiation 的结果进入客户端 feature gate，不能只靠版本号猜测能力。
 - 呈现覆盖由客户端自持：客户端呈现能力由客户端自己维护，不进入服务端快照；服务端不定义、不协商也不下发客户端呈现能力字段。客户端自己维护「哪些事件类型有专用视图」的覆盖判定，而协议的**事件类型词表只决定客户端能否解析一个事件**，不得以该词表代替覆盖判定。对任一被消费的事件，只有两种结果——按专用视图呈现，或呈现明确的降级卡片；「协议认识该类型、但客户端当前没有它的专用视图」的事件同样必须呈现降级卡片并保留原文与事件元数据的入口，不得存在既不呈现也不降级的第三种结果。覆盖判定未命中不得导致整个会话渲染失败。
 - 未知事件不得导致整个会话渲染崩溃。
@@ -333,6 +352,7 @@ PWA 首个版本只持久化连接和恢复所需的最小数据：
 规则：
 
 - imported resource 遵守 `no-content-cache`，不得把会话摘要、prompt、回复、工具内容、diff、终端、附件或 ACP raw 写入 IndexedDB、Cache Storage 或其他持久浏览器存储。
+- 上传中的选择项、媒体缓冲与 Blob URL 只存在于页面内存：关闭/刷新即丢弃，不写入 IndexedDB、Cache Storage、Service Worker 或任何持久草稿；已提交附件由 Owner 保存，页面只按需经已认证分块连接读取并即时撤销 Blob URL。
 - 对当前节点本地拥有的资源，只有节点本地策略显式允许时才缓存精简历史；缓存不是权威数据，重连后以 Daemon 快照和事件日志校正。
 - 敏感字段不得因方便调试而进入普通浏览器存储。
 - 必须设置大小上限、版本和迁移策略：v1 的固定值为本节点自有资源摘要缓存上限 **8 MiB**、TTL **30 天**、超出时按 LRU 淘汰。这些是固定常量，不是可由用户放宽的配置项。
@@ -397,7 +417,9 @@ PWA MVP 至少满足：
 
 `[实现现状]`（2026-10-18，目录页与目录详情页按桌面原型补齐视觉与行为细节）：目录卡片始终单列堆叠（不再随宽屏并排），卡片头自成一栏（`panel-2` 底 + 下边框），折叠箭头不带底色块；`⊕ 新建` 改为淡主色底+主色字，`查看全部 ›` 改为弱化文字，顶部 `⊕ 新建` 改为实心主色底白字，搜索框带图标且最大宽度 420。卡内会话行按当前搜索/筛选收窄（展示名命中保留全部按筛选后的行，只命中标题时只留命中行），超过 5 行时卡体底部再给一个「查看全部 ›」；「一个目录都没有」的空态标题改为「还没有可用的目录」；工具条在所有状态都保留搜索、状态筛选与右上角创建入口，空态块内另给一个常规尺寸的同一入口。任意目录创建仍走「逐层浏览主机目录 + `createIfMissing`」那条链路。详情页页头改为描边次级「目录」按钮 + 21px 目录名 + 会话数胶囊 + 路径等宽值，会话行直接铺在页面上。主机与连接面板不再内联在目录页（原型只经设备胶囊打开），本实现由设备胶囊进入 `/hosts` 路由；宽屏内容区两侧的留白铺当前主题底色，不再露出路由容器的默认白底。证据：`cd clients/app && npm run check` = 74 files / 1063 passed + `expo export` 成功；`node e2e/run-e2e.mjs` = **81/81**（含 `R15-*`、`R16-*`）。
 
-`[实现现状]`（2026-10-19，`conversation-page-prototype-parity`）第 11 条的对话页细节已按 §4.1 写回的口径落地：三栏各有一个 `ScrollView`（左栏会话、中栏时间线、右栏变更文件），中栏自上而下为会话头 → 内容来源条 → 时间线 → 吸底输入区（`components/ConversationStream.tsx`）；`contentFill` 的唯一判据是 `/session/<id>`（`components/shell/shell-model.ts` 的 `isConversationPath`），只有该路由让外壳根按视口高度装配并隐藏内容区溢出，其余路由保持文档流。窄屏切换控件只给「对话 / 会话 / 变更文件」三档，请求「全部」会被归一为「对话」；宽屏默认三栏并列。左栏仅保留「‹ 目录」返回目录列表（`data-action="open-directory-list"`），不显示额外的「全部」按钮，会话行用 `SessionRow variant="compact"`（圆点、标题、状态词、相对时间，无 Agent 名、路径与行底边），路径行带「路径」标签。会话头单行；`StatusPill` 以 `● / ⏸ / ✕ / ○` 前缀加状态词，`waiting_input` 与 `waiting_permission` 同为警告色；`AgentChip` 弹层有「本会话涉及的 Agent」标题与连接事件来源说明。内容来源条只在非在线时出现，文案与色调随连接状态切换并附真实 `lastSyncedAtMs`；它刻意不叫 `data-connection-state`，设备胶囊仍是唯一的连接状态徽标。输入区在 `in_progress` 只读且只渲染停止，`canSubmit=false` 时回车不发命令（`components/ConversationComposer.tsx`）。工具调用折叠块渲染 `toolDetail` 的三部分与逐部分截断说明（`components/ConversationTimeline.tsx`、`domain/timeline.ts`），原文入口打开诊断抽屉且不解析 `acp.rawJson`。代码块逐行渲染行号，复制载荷仍是不含行号的 `source`（`components/CodeBlock.tsx`）。右栏清单为紧凑行、选中后展开详情，差异行按 `kind` 补 `+ ` / `- ` / 两个空格前缀（`components/FileChangesPanel.tsx`）。对应用例在 `conversation-page.test.ts`、`conversation-responsive.test.ts`、`conversation-composer.test.ts`、`conversation-timeline-view.test.ts`、`file-changes-panel.test.ts`、`codeblock.test.ts` 与 `shell-view.test.ts`；本轮门禁由主检出执行，本文不预填计数。**仍存的差异**：移动原型导航、PWA 安装与 i18n 未做，差异行也没有 hunk 类型（不伪造 hunk 头），完整清单见 [`prototypes/IMPLEMENTATION-GAPS.md`](../prototypes/IMPLEMENTATION-GAPS.md)。
+`[实现现状]`（2026-10-19，`conversation-page-prototype-parity`）第 11 条的对话页细节已按 §4.1 写回的口径落地：三栏各有一个 `ScrollView`（左栏会话、中栏时间线、右栏变更文件），中栏自上而下为会话头 → 内容来源条 → 时间线 → 吸底输入区（`components/ConversationStream.tsx`）；`contentFill` 的唯一判据是 `/session/<id>`（`components/shell/shell-model.ts` 的 `isConversationPath`），只有该路由让外壳根按视口高度装配并隐藏内容区溢出，其余路由保持文档流。窄屏切换控件只给「对话 / 会话 / 变更文件」三档，请求「全部」会被归一为「对话」；宽屏默认三栏并列。左栏仅保留「‹ 目录」返回目录列表（`data-action="open-directory-list"`），不显示额外的「全部」按钮，会话行用 `SessionRow variant="compact"`（圆点、标题、状态词、相对时间，无 Agent 名、路径与行底边），路径行带「路径」标签。会话头单行；`StatusPill` 以 `● / ⏸ / ✕ / ○` 前缀加状态词，`waiting_input` 与 `waiting_permission` 同为警告色；`AgentChip` 弹层有「本会话涉及的 Agent」标题与连接事件来源说明。内容来源条只在非在线时出现，文案与色调随连接状态切换并附真实 `lastSyncedAtMs`；它刻意不叫 `data-connection-state`，设备胶囊仍是唯一的连接状态徽标。输入区在 `in_progress` 可编辑下一条草稿、发送按钮禁用且不排队，`canSubmit=false` 时回车不发命令；`closed` 才只读（`components/ConversationComposer.tsx`，2026-10-19 `conversation-area-complete` WP6 修正）。工具调用折叠块渲染 `toolDetail` 的三部分与逐部分截断说明（`components/ConversationTimeline.tsx`、`domain/timeline.ts`），原文入口打开诊断抽屉且不解析 `acp.rawJson`。代码块逐行渲染行号，复制载荷仍是不含行号的 `source`（`components/CodeBlock.tsx`）。右栏清单为紧凑行、选中后展开详情，差异行按 `kind` 补 `+ ` / `- ` / 两个空格前缀（`components/FileChangesPanel.tsx`）。对应用例在 `conversation-page.test.ts`、`conversation-responsive.test.ts`、`conversation-composer.test.ts`、`conversation-timeline-view.test.ts`、`file-changes-panel.test.ts`、`codeblock.test.ts` 与 `shell-view.test.ts`；本轮门禁由主检出执行，本文不预填计数。**仍存的差异**：移动原型导航、PWA 安装与 i18n 未做，差异行也没有 hunk 类型（不伪造 hunk 头），完整清单见 [`prototypes/IMPLEMENTATION-GAPS.md`](../prototypes/IMPLEMENTATION-GAPS.md)。
+
+`[实现现状]`（2026-10-19，`conversation-area-complete` WP6，**客户端接线完成；PV6 已通过**）：对话页把附件选择/粘贴/移除/重试/取消与工作目录路径引用接到输入区，表单提交走 `ClientStore.submitElicitationForm`（整数经 `JsonNumberLiteral` 保持原文），媒体读取/释放走 `loadAttachmentMedia` / `releaseAttachmentMedia`，时间线渲染图片/音频/文件下载，Markdown 行内合法相对路径经 `onFilePathPress` 打开文件查看；页面自身不碰 WebSocket、附件连接或存储。滚动实现「底部跟随 / 上读锚点 / 新内容与回到底部入口」：加载更早历史与媒体加载用锚点几何补偿，切换会话按会话标识恢复位置，打开/关闭文件查看保存并恢复时间线位置。`Markdown` 按围栏外空行分块并缓存词法结果、默认只渲染末尾 `MARKDOWN_VISIBLE_CHUNKS` 块（更早内容显式展开），未闭合代码块保持可读，代码复制仍不含行号。对应用例：`features/attachment-upload.test.ts`（失败不发文字、取消、重试、Blob 回收）、`components/conversation-page.test.ts`（跟随判定与初始不呈现回底入口）、`components/markdown.test.ts`（路径联动、分块/可见范围/未闭合代码块）。**仍未完成**：真实浏览器与真实 Daemon 证据（WP7）、Daemon 侧上传/封存与有效交互（WP2–WP5）、CSP 的 `media-src 'self' blob:`；`npm run check` 已在主检出通过。
 
 `[实现现状]`（2026-10-17，`pairing-page-open-url`；2026-10-18 由 `pairing-code-web-entry` 扩展；其中设备 `#data=` 自动认领已被下一条 2026-10-18 `device-pairing-qr-reference` 的实绩取代）第 2 条的配对页形态已按上述口径落地：`/pair` 与 `/node-link/pair` 共用同一状态页；有 `data=` 片段时读到后立即清除，`/pair` 的 sync 载荷自动开始认领，`/node-link/pair` 的 node-link 载荷只呈现对端信息、不发起 claim/status。`/pair` 无片段时显示 8 位配对码输入（S0），lookup 之前不发 claim/status，也不显示数字倒计时（只显示静态提示“配对码 5 分钟内有效。”）；lookup 成功后改用响应里的 `expiresAt` 启动倒计时。`/node-link/pair` 仍只接受片段，无片段时走「没有载荷」文案，不提供配对码输入。页内不绘制页头与返回，全局顶栏仍不呈现。二维码入口的倒计时取自载荷 `expiresAt`，归零与打开即过期都停止轮询并进入「地址已过期」；配对码入口在服务端返回过期或 lookup 失败时进入固定失败呈现。审批通过后约 1.6 秒自动进入目录页（路由 `/`），连接装配失败仍进目录、由设备胶囊表达断开与重连。失败页十类各走固定文案（含 `/node-link/pair` 无载荷、载荷类型不匹配与配对码无效三种专用呈现），不渲染后端 `message`、无任何按钮，恢复路径是电脑重新生成地址或配对码。配对页颜色全部来自当前主题调色板；右上角提供复用共享偏好的明暗切换按钮（`PairingThemeToggle`），不建立第二份主题状态。`pairing-page-open-url` 本身后端零行为变更；本轮 `pairing-code-web-entry` 新增 lookup 端点、`pairing.code_invalid` 与 `device.pair.begin` 的 `pairingCode`，wire 细节以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.5 与 §12.2 为准，本文不重复。
 

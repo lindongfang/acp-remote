@@ -29,7 +29,11 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// 与 completed 结果、`session.create` 的建目录开关、带路径的 `workspaces` 快照 chunk、`file.changed`
 /// 的差异行与不可用标记），故由 94 变为 101。
 /// 变更 `session-file-browser`（WP1）新增 8 条合法会话文件查询/结果夹具，故由 105 变为 113。
-const EXPECTED_VALID_MESSAGE_CASES: usize = 113;
+/// 变更 `conversation-area-complete`（WP1）新增 1 条合法 WSS 夹具（`agent.message.completed`
+/// 的类型化媒体/部分结果视图），故由 113 变为 114。
+/// 同一变更（WP4）新增 1 条合法 `session.read` 结果夹具（消息页的加性 `channel`/`partial`），
+/// 故由 114 变为 115。
+const EXPECTED_VALID_MESSAGE_CASES: usize = 115;
 /// 同一集合中 `valid: false` 且由**信封层**拒绝的用例数（`every_manifest_case_behaves_as_declared`
 /// 只显式登记 `invalid/ping-without-connection.json` 与 `invalid/sequence-is-number.json` 两条，
 /// 其余非法 WSS 用例都落在 body 类型化层）。
@@ -50,14 +54,28 @@ const EXPECTED_BODY_REJECTED: usize = 56;
 /// 设备二维码格式的正例 `valid/pairing-qr-payload.json`，故由 13 变为 18。
 const EXPECTED_SKIPPED_PAIRING: usize = 18;
 /// 只针对某个 **子模式**（`schemaPointer`）的载荷用例：它们不是一条完整的 WSS 消息，因此不经过
-/// 信封层。三类来源：acp 上游的片段（`fixtures/acp/v1/...`）、事件视图封闭 enum 与可选字段的
-/// 负例（`event-views.schema.json#/$defs/*`）、以及 `sync.cursor_invalid.details.reason` 的词表
-/// 负例（`common.schema.json#/$defs/errorCode`）。变更 `sync-path-browse-and-diff-delivery`（WP1）
+/// 信封层。来源：acp 上游的片段（`fixtures/acp/v1/...`）、事件视图封闭 enum 与可选字段的
+/// 负例（`event-views.schema.json#/$defs/*`）、`sync.cursor_invalid.details.reason` 的词表
+/// 负例（`common.schema.json#/$defs/errorCode`）、类型化媒体与有效交互的值对象
+/// （`media.schema.json#/$defs/*` 与 `common.schema.json#/$defs/agentContentBlock`），以及
+/// `session.read` 结果里的 `pending_interactions`（`command.schema.json#/$defs/sessionReadResult`）。
+/// 变更 `sync-path-browse-and-diff-delivery`（WP1）
 /// 新增 5 条 `file.changed` 的差异行负例（`diffLines` 为 `null`、行判别子未登记、不可用原因未登记、
 /// `diffLines` 与 `diffUnavailable` 同时出现、`diffLines` 为空数组违反 `minItems`），故由 9 变为 14。
+/// 变更 `conversation-area-complete`（WP1）新增 9 条 `media.schema.json#/$defs/*` 片段用例
+/// （`mediaReference`/`effectiveInteraction`/`partialResult`/`messageChannel` 的正例与负例）、
+/// 1 条 `common.schema.json#/$defs/agentContentBlock` 片段用例（`audio_ref` 类型化媒体块）与
+/// 1 条 `command.schema.json#/$defs/sessionReadResult` 片段用例（`resources.pending_interactions`
+/// 必须满足 `media.schema.json#/$defs/effectiveInteraction`），故由 14 变为 25。
 /// 它们由 `check-schema-fixtures.mjs` 的 `checkValueAtPointer` 与 `tests/contract_vectors_r1_r9.rs` 覆盖。
-const EXPECTED_TARGETED_PAYLOADS: usize = 14;
+const EXPECTED_TARGETED_PAYLOADS: usize = 25;
+/// 附件传输帧（`schema` 指向 `attachment.schema.json`）的 manifest 用例数。它们属于独立已认证的
+/// 附件 WSS 连接（docs/SYNC_PROTOCOL.md §3.4），**不是** `message.schema.json` 的信封消息，因此不经
+/// 信封层与 `TypedBody`；正例/负例的结构由 `check-schema-fixtures.mjs` 用同一 schema 校验。这里是
+/// 显式跳过，不是静默漏计：数量变化会让本断言失败。
+const EXPECTED_SKIPPED_TRANSPORT_FRAMES: usize = 24;
 const PAIRING_SCHEMA_SUFFIX: &str = "schemas/sync/v1/pairing.schema.json";
+const TRANSPORT_FRAME_SCHEMA_SUFFIX: &str = "schemas/sync/v1/attachment.schema.json";
 
 fn parse<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, String> {
     serde_json::from_str(body).map_err(|error| error.to_string())
@@ -151,12 +169,19 @@ fn every_manifest_case_behaves_as_declared() {
     let mut envelope_rejected = 0;
     let mut body_rejected = 0;
     let mut skipped_pairing = 0;
+    let mut skipped_transport_frames = 0;
     let mut targeted_payloads = 0;
 
     for case in &cases {
         if !is_wss_message(&case.schema) {
             if case.schema.ends_with(PAIRING_SCHEMA_SUFFIX) {
                 skipped_pairing += 1;
+                continue;
+            }
+            if case.schema.ends_with(TRANSPORT_FRAME_SCHEMA_SUFFIX) {
+                // 附件帧走独立的已认证连接，不是 WSS 信封消息；其结构由 `check-schema-fixtures.mjs`
+                // 用 `attachment.schema.json` 校验（见 `EXPECTED_SKIPPED_TRANSPORT_FRAMES`）。
+                skipped_transport_frames += 1;
                 continue;
             }
             // `schemaPointer` 只校验子模式的片段：不是完整消息，由 `check-schema-fixtures.mjs`
@@ -251,11 +276,15 @@ fn every_manifest_case_behaves_as_declared() {
         targeted_payloads, EXPECTED_TARGETED_PAYLOADS,
         "schemaPointer 子模式用例数变化"
     );
+    assert_eq!(
+        skipped_transport_frames, EXPECTED_SKIPPED_TRANSPORT_FRAMES,
+        "附件传输帧用例数变化"
+    );
 
     println!(
         "sync envelope: {valid_message_cases} 条合法消息全部保真并类型化往返一致，\
 {envelope_rejected} 条被信封层拒绝，{body_rejected} 条被 body 层拒绝，跳过 {skipped_pairing} 条非 WSS 用例、\
-{targeted_payloads} 条 schemaPointer 子模式用例"
+{skipped_transport_frames} 条附件帧用例、{targeted_payloads} 条 schemaPointer 子模式用例"
     );
 }
 

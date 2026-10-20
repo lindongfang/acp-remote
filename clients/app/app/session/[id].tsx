@@ -29,7 +29,7 @@
  */
 
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactElement } from "react";
 
 import { ConversationStream, CreateSessionSheet, DiagnosticsDrawer, RuntimeUnavailable } from "../../src/components";
@@ -87,6 +87,47 @@ export default function SessionRoute(): ReactElement {
       downloads?.previewUrl(bytes, mimeType) ?? null,
     [downloads],
   );
+  /**
+   * 一条待保存的消息附件：先让仓库按已认证的附件连接读取并生成 Blob URL，再交给浏览器保存。
+   * 页面只触发交互，不自己发网络请求。
+   */
+  const pendingAttachmentDownload = useRef<{ readonly attachmentId: string; readonly fileName: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    const pending = pendingAttachmentDownload.current;
+    if (pending === null || store === null || state === null) return;
+    const media = state.attachmentMedia.get(pending.attachmentId);
+    if (media === undefined || media.kind === "loading") return;
+    pendingAttachmentDownload.current = null;
+    if (media.kind !== "ready") {
+      toastStore.show(`下载失败：${media.detail}`);
+      return;
+    }
+    if (typeof document === "undefined") {
+      store.releaseAttachmentMedia(pending.attachmentId);
+      return;
+    }
+    const anchor = document.createElement("a");
+    anchor.href = media.url;
+    anchor.download = pending.fileName;
+    anchor.rel = "noopener";
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    // Blob URL 由仓库持有：保存点完立即撤销会取消下载，留出浏览器取走字节的时间再回收。
+    const attachmentId = pending.attachmentId;
+    setTimeout(() => {
+      store.releaseAttachmentMedia(attachmentId);
+    }, 1000);
+  }, [state, store]);
+  // 离开会话（切换或卸载）时回收本会话的全部对象 URL：不留永久公开地址。
+  useEffect(() => {
+    if (store === null || sessionId === null) return;
+    return () => {
+      store.releaseSessionMedia(sessionId);
+    };
+  }, [store, sessionId]);
   // 创建弹层里选中的 Agent 是页面局部状态（不跨路由存活，与弹层的开关无关）。
   const [agentId, setAgentId] = useState<string | null>(null);
   // 本地闸门拒绝提交的原因（未连接/Agent 不在目录/目录引用缺失）。这类拒绝不产生命令记录，
@@ -329,6 +370,60 @@ export default function SessionRoute(): ReactElement {
           if (globalThis.open(href, "_blank", "noopener,noreferrer") === null) {
             toastStore.show("浏览器拦下了新标签，链接未打开");
           }
+        }}
+        // Markdown 里的工作目录路径：沿用文件查看的同一条入口（窄屏会切到对话栏并记住返回位置）。
+        onFilePathPress={(path) => {
+          openFile("all", path);
+        }}
+        // 类型化媒体：读取走仓库的附件连接；卸载时组件上抛释放，仓库撤销对象 URL。
+        media={model.media}
+        onLoadMedia={(attachmentId, mediaSessionId, mimeType) => {
+          void store.loadAttachmentMedia(mediaSessionId, attachmentId, mimeType);
+        }}
+        onReleaseMedia={(attachmentId) => {
+          store.releaseAttachmentMedia(attachmentId);
+        }}
+        onDownloadAttachment={(attachmentId, mimeType, fileName) => {
+          pendingAttachmentDownload.current = { attachmentId, fileName };
+          void store.loadAttachmentMedia(sessionId, attachmentId, mimeType);
+        }}
+        // 提问表单：客户端已校验的值交给仓库再校验并派发；刷新时用同一次 `session.read` 重新确认。
+        onSubmitElicitation={(interactionId, values) => {
+          const outcome = store.submitElicitationForm(sessionId, interactionId, values);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
+        onRefreshInteractions={() => {
+          const outcome = store.refreshInteractions(sessionId);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
+        // 附件选择只在本地入草稿；发送后由仓库上传并在全部封存后才派发 prompt。
+        onPickAttachment={(kind) => {
+          void store.pickAttachments(sessionId, kind).then((outcome) => {
+            if (!outcome.ok) toastStore.show(outcome.reason);
+          });
+        }}
+        onPasteAttachments={(event) => {
+          void store.pasteAttachments(sessionId, event).then((outcome) => {
+            if (!outcome.ok) toastStore.show(outcome.reason);
+          });
+        }}
+        onRemoveAttachment={(localId) => {
+          store.removeAttachment(sessionId, localId);
+        }}
+        onRetryAttachments={() => {
+          const outcome = store.retryAttachments(sessionId);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
+        onCancelAttachmentUpload={() => {
+          const outcome = store.cancelAttachmentUpload(sessionId);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
+        onAddPathRef={(path) => {
+          const outcome = store.addPathRef(sessionId, path);
+          return outcome.ok ? null : outcome.reason;
+        }}
+        onRemovePathRef={(path) => {
+          store.removePathRef(sessionId, path);
         }}
         secondaryView={state.conversationSecondaryView}
         onSecondaryViewChange={(view) => {

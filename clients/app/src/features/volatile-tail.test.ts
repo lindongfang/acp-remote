@@ -14,6 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import type { EventMessage } from "../protocol";
 import type { MessageTimelineEntry } from "./conversation-timeline";
 import type { ClientStore } from "./client-store";
 import { SESSION_HISTORY_FEATURE } from "../sync-client";
@@ -38,7 +39,7 @@ function storeWithSession(): StoreFixture {
   });
 }
 
-/** 一条消息增量事件。 */
+/** 一条消息增量事件（`block` 是 `agent.message.delta` 可选的媒体/资源块）。 */
 function delta(input: {
   readonly eventId: string;
   readonly globalSequence: string;
@@ -47,7 +48,8 @@ function delta(input: {
   readonly deltaIndex: string;
   readonly text: string;
   readonly turnId?: string;
-}): { readonly kind: "event"; readonly event: ReturnType<typeof eventMessage> } {
+  readonly block?: Record<string, unknown>;
+}): { readonly kind: "event"; readonly event: EventMessage } {
   return {
     kind: "event",
     event: eventMessage({
@@ -60,6 +62,7 @@ function delta(input: {
         turnId: input.turnId ?? TURN_ID,
         deltaIndex: input.deltaIndex,
         text: input.text,
+        ...(input.block === undefined ? {} : { block: input.block }),
       },
     }),
   };
@@ -267,5 +270,133 @@ describe("D6 易失叠加层：累加、替换、作废", () => {
     });
 
     expect(messageEntries(store)).toHaveLength(1);
+  });
+});
+
+/**
+ * 纯媒体增量（`text` 为空、只有 `block`）。
+ *
+ * schema 的 `text` 无 `minLength`，媒体块正是「仅非文本内容」的载体；正文投影为空串。判空若
+ * 发生在块解析之前（或把空串当缺席），图片/音频/文件增量会被整体丢弃——实时会话里这条媒体
+ * 在手动读取前永远不会出现。三条用例分别钉住三种块，另有一条对照证明判空没有放宽成「什么都收」。
+ */
+describe("D6 纯媒体增量进入易失叠加层", () => {
+  const ATTACHMENT_ID = "eeeeeeee-0000-4000-8000-000000000001";
+
+  it("图片增量：正文为空串，媒体块原样进入易失内容", () => {
+    const { store } = storeWithSession();
+    const messageId = "cccccccc-0000-4000-8000-0000000000f1";
+    store.apply(
+      delta({
+        eventId: "dddddddd-0000-4000-8000-0000000000f1",
+        globalSequence: "31",
+        eventType: "agent.message.delta",
+        messageId,
+        deltaIndex: "0",
+        text: "",
+        block: {
+          type: "image_ref",
+          attachmentId: ATTACHMENT_ID,
+          mimeType: "image/png",
+          byteLength: "12",
+          displayState: "available",
+        },
+      }),
+    );
+
+    const entries = messageEntries(store);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.volatile).toBe(true);
+    expect(entries[0]?.message.text).toBe("");
+    expect(entries[0]?.message.hasStructuredContent).toBe(true);
+    expect(entries[0]?.message.content).toEqual({
+      text: "",
+      media: [
+        {
+          kind: "image",
+          mimeType: "image/png",
+          byteLength: "12",
+          availability: "available",
+          attachmentId: ATTACHMENT_ID,
+        },
+      ],
+      hasStructuredContent: true,
+    });
+  });
+
+  it("音频与文件增量各自保留种类（按到达顺序累积）", () => {
+    const { store } = storeWithSession();
+    const messageId = "cccccccc-0000-4000-8000-0000000000f2";
+    store.apply(
+      delta({
+        eventId: "dddddddd-0000-4000-8000-0000000000f2",
+        globalSequence: "32",
+        eventType: "agent.message.delta",
+        messageId,
+        deltaIndex: "0",
+        text: "",
+        block: {
+          type: "audio_ref",
+          attachmentId: "eeeeeeee-0000-4000-8000-000000000002",
+          mimeType: "audio/mpeg",
+          byteLength: "99",
+          displayState: "available",
+        },
+      }),
+    );
+    store.apply(
+      delta({
+        eventId: "dddddddd-0000-4000-8000-0000000000f3",
+        globalSequence: "33",
+        eventType: "agent.message.delta",
+        messageId,
+        deltaIndex: "1",
+        text: "",
+        block: {
+          type: "file_ref",
+          attachmentId: "eeeeeeee-0000-4000-8000-000000000003",
+          mimeType: "application/pdf",
+          byteLength: "34",
+          displayName: "报告.pdf",
+          displayState: "not_fetched",
+        },
+      }),
+    );
+
+    const media = messageEntries(store)[0]?.message.content.media;
+    expect(media).toEqual([
+      {
+        kind: "audio",
+        mimeType: "audio/mpeg",
+        byteLength: "99",
+        availability: "available",
+        attachmentId: "eeeeeeee-0000-4000-8000-000000000002",
+      },
+      {
+        kind: "file",
+        attachmentId: "eeeeeeee-0000-4000-8000-000000000003",
+        mimeType: "application/pdf",
+        byteLength: "34",
+        displayName: "报告.pdf",
+        availability: "not_fetched",
+      },
+    ]);
+  });
+
+  it("空文本且没有块仍被丢弃：判空只放行「有可呈现内容」的增量", () => {
+    const { store } = storeWithSession();
+    store.apply(
+      delta({
+        eventId: "dddddddd-0000-4000-8000-0000000000f4",
+        globalSequence: "34",
+        eventType: "agent.message.delta",
+        messageId: "cccccccc-0000-4000-8000-0000000000f3",
+        deltaIndex: "0",
+        text: "",
+      }),
+    );
+
+    expect(messageEntries(store)).toHaveLength(0);
+    expect(store.state.volatile.size).toBe(0);
   });
 });

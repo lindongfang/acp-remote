@@ -20,6 +20,7 @@
 //! 本切片（WP3a + WP3b1 + WP3b2）的信封层与方法路由已就位：方法集里的本地配置族、`daemon.*`、
 //! Export/Import、`audit.export` 与设备/节点配对族（2.10–2.12）已实现；只剩
 //! `node.rotate-key.begin`（§5.7：字段定义落地前恒回 `local.unsupported`）。
+pub mod access;
 pub(crate) mod audit;
 pub mod daemon;
 pub mod envelope;
@@ -32,6 +33,7 @@ pub mod router;
 
 pub(crate) mod view;
 
+pub use access::AccessPairing;
 pub use daemon::{
     DaemonAgent, DaemonControl, DaemonCounts, DaemonLink, DaemonLinkState, DaemonStatus,
     MAX_STOP_GRACE_MS,

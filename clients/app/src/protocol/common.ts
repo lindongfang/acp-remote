@@ -70,6 +70,8 @@ export type ErrorCode =
   | "session.not_found"
   | "session.busy"
   | "interaction.already_resolved"
+  | "interaction.unavailable"
+  | "interaction.version_conflict"
   | "capability.unsupported_by_client"
   | "capability.unsupported_by_broker"
   | "capability.unsupported_by_agent"
@@ -77,6 +79,17 @@ export type ErrorCode =
   | "resource.backpressure"
   | "resource.result_too_large"
   | "resource.remote_unavailable"
+  | "attachment.negotiation_required"
+  | "attachment.transfer_not_found"
+  | "attachment.binding_mismatch"
+  | "attachment.offset_mismatch"
+  | "attachment.chunk_conflict"
+  | "attachment.digest_mismatch"
+  | "attachment.sealed"
+  | "attachment.budget_exhausted"
+  | "attachment.expired"
+  | "attachment.revoked"
+  | "media.unavailable"
   | "internal.unavailable";
 
 // ── 游标与错误 ──────────────────────────────────────────────────────────────
@@ -223,7 +236,14 @@ export interface SessionSummary {
 
 // ── 内容块 ──────────────────────────────────────────────────────────────────
 
-/** `$defs.agentContentBlock`：四分支 `oneOf`，每支的必填集合不同。 */
+/**
+ * `$defs.agentContentBlock`：六分支 `oneOf`（`core.typed-media.v1` 新增 `audio_ref`/`file_ref`，
+ * 并给 `image_ref`/`audio_ref` 增加可选的嵌入字节附件标识）。
+ *
+ * 这些块**不替代** ACP 原文：同一事件的 `acp.rawJson` 逐字节保真，客户端只消费专用视图。
+ * `attachmentId` 只有 Owner 已把嵌入字节抽取为附件后才有；只有外部 URI 或未取得内容时为
+ * `null` 或缺失——读取仍须经 §3.4 的已认证连接。
+ */
 export type AgentContentBlock =
   | { readonly type: "text"; readonly text: string }
   | {
@@ -231,6 +251,22 @@ export type AgentContentBlock =
       readonly mimeType: string;
       readonly byteLength: DecimalString | null;
       readonly displayState: "available" | "not_fetched" | "unsupported";
+      readonly attachmentId?: Uuid | null;
+    }
+  | {
+      readonly type: "audio_ref";
+      readonly mimeType: string;
+      readonly byteLength: DecimalString | null;
+      readonly displayState: "available" | "not_fetched" | "unsupported";
+      readonly attachmentId?: Uuid | null;
+    }
+  | {
+      readonly type: "file_ref";
+      readonly attachmentId: Uuid;
+      readonly mimeType: string;
+      readonly byteLength: DecimalString;
+      readonly displayName: string | null;
+      readonly displayState: "available" | "expired" | "unsupported";
     }
   | {
       readonly type: "resource_ref";
@@ -251,11 +287,25 @@ export interface InteractionOption {
   readonly kind: string;
 }
 
-/** `$defs.promptContentBlock`：v1 只允许文本输入。 */
-export interface PromptContentBlock {
-  readonly type: "text";
-  readonly text: string;
-}
+/**
+ * `$defs.promptContentBlock`：三分支 `oneOf`（`core.attachment-transfer.v1` / 工作目录路径引用）。
+ *
+ * - `text` 始终可用；
+ * - `attachment_ref` 只在附件已封存、已绑定本会话/主体时接受；
+ * - `workspace_path_ref` 只表示**当前会话工作目录内**的相对路径，不固定版本、不追踪内容变化。
+ *
+ * 未协商对应 feature 时这两支**必须缺席**：不得把附件伪装成文本，也不得用空附件占位。
+ */
+export type PromptContentBlock =
+  | { readonly type: "text"; readonly text: string }
+  | {
+      readonly type: "attachment_ref";
+      readonly attachmentId: Uuid;
+      readonly mediaType: string;
+      readonly byteLength: DecimalString;
+      readonly sha256: Base64Url32;
+    }
+  | { readonly type: "workspace_path_ref"; readonly path: string };
 
 // ── ACP 原文 ────────────────────────────────────────────────────────────────
 

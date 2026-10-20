@@ -38,11 +38,13 @@ use std::time::{Duration, Instant};
 
 use acp_core::broker::Broker;
 use acp_core::model::{
-    Actor, CommittedEvent, NodeId, PeerPublicKey, PortError, SessionId, SessionState, Timestamp,
+    Actor, CommittedDelivery, CommittedEvent, NodeId, PeerPublicKey, PortError, SessionId,
+    SessionState, Timestamp,
 };
 use acp_core::ports::{AttachmentStore as _, SessionFiles, SessionQuery};
 use acp_core::use_cases::UseCases;
-use identity_auth::Authority;
+use identity_auth::{Authority, EntropySource};
+use identity_keystore::OsEntropy;
 use server::local_admin::{
     AdminError, AdminOutcome, AdminRequest, AdminResponse, DaemonAgent, DaemonControl,
     DaemonCounts, DaemonStatus, LocalAdminDeps, LocalAdminHandler, LocalAdminRouter,
@@ -51,12 +53,16 @@ use server::local_admin::{
 use server::node_link::{
     CLAIM_PATH, CatalogRoute, CommandRoute, NodeLinkConfig, NodeLinkConn, PairingHttp,
     PairingHttpConfig, ResourceRoute, Routes, STATUS_PATH, WS_PATH, WS_SUBPROTOCOL, WsEndpoint,
-    conn::ConnectionRegistry,
+    attachments::AttachmentService as NodeAttachmentService,
+    conn::ATTACHMENTS_WS_PATH as NODE_LINK_ATTACHMENTS_WS_PATH, conn::ConnectionRegistry,
+    conn::Purpose as NodeLinkPurpose,
 };
+use server::sync::attachments::AttachmentService as SyncAttachmentService;
 use server::sync::command::CommandRoute as SyncCommandRoute;
 use server::sync::conn::MessageRoute as SyncMessageRoute;
 use server::sync::conn::{
-    ConnectionRegistry as SyncConnectionRegistry, SyncConfig, SyncConn, WS_PATH as SYNC_WS_PATH,
+    ATTACHMENTS_WS_PATH as SYNC_ATTACHMENTS_WS_PATH, ConnectionRegistry as SyncConnectionRegistry,
+    Purpose as SyncPurpose, SyncConfig, SyncConn, WS_PATH as SYNC_WS_PATH,
     WS_SUBPROTOCOL as SYNC_WS_SUBPROTOCOL, WsEndpoint as SyncWsEndpoint,
 };
 use server::sync::pairing::{
@@ -79,6 +85,7 @@ use server::transport::net::{
 use tokio::sync::{Notify, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
 
+use crate::access::{AccessDeps, AccessManager};
 use crate::compose::{
     AuditWriter, ComposeError, Composition, NodeLinkCloser, NodeLinkReachability,
     forked_publisher_with_sync,
@@ -86,6 +93,7 @@ use crate::compose::{
 use crate::config::Config;
 use crate::config::Loaded;
 use crate::lock::{DaemonLock, LockError, LockRecord};
+use crate::trust::{OutboundTrust, TrustError};
 use storage_sqlite::session_store::SqliteStore;
 
 #[cfg(test)]
@@ -220,6 +228,9 @@ pub enum DaemonError {
     /// 关闭时存储未能完成检查点（仍有共享句柄）。
     #[error("关闭时存储未能完成检查点")]
     StoreClose(#[source] ComposeError),
+    /// Access 侧出站 TLS 信任锚不可用（系统根为空、配置的 CA 不可读或不是 PEM）。
+    #[error("出站 TLS 信任锚不可用")]
+    Trust(#[source] TrustError),
 }
 
 impl DaemonError {
@@ -231,7 +242,7 @@ impl DaemonError {
             Self::Compose(_) | Self::Lock(_) | Self::Endpoint(_) | Self::StoreClose(_) => {
                 LocalErrorCode::Unavailable.as_str()
             }
-            Self::Network(_) => LocalErrorCode::Unavailable.as_str(),
+            Self::Network(_) | Self::Trust(_) => LocalErrorCode::Unavailable.as_str(),
         }
     }
 
@@ -262,6 +273,7 @@ impl DaemonError {
             }
             Self::StoreClose(error) => error.message(),
             Self::Network(error) => error.message(),
+            Self::Trust(error) => error.message(),
         }
     }
 }
@@ -418,14 +430,14 @@ struct AppDaemonControl {
     /// 的结果），因此版本与浏览器拿到的资源必然出自同一次构建。`None` = 版本缺失（占位入口，或产物里
     /// 没有可解析的版本文件），是**显式**的缺失语义：不编造、也不拿资源哈希顶替。
     ui_build_version: Option<String>,
+    /// Access 侧出站运行时（`daemon.status.links` 的来源；`None` = 未装配）。
+    access: Option<Arc<AccessManager>>,
     shutdown: Arc<ShutdownSignal>,
 }
 
 #[async_trait::async_trait]
 impl DaemonControl for AppDaemonControl {
     async fn status(&self) -> DaemonStatus {
-        // `links` 恒空：Node Link 的**出站**重连管理器属切片 6（入站连接由 `server::node_link` 的
-        // 连接注册表管理，不进 `daemon.status`，§5.2 的字段注记）。
         DaemonStatus {
             ui_build_version: self.ui_build_version.clone(),
             version: self.version.clone(),
@@ -440,7 +452,12 @@ impl DaemonControl for AppDaemonControl {
             public_origin: self.public_origin.clone(),
             counts: self.counts().await,
             agents: self.agents().await,
-            links: Vec::new(),
+            // 出站重连管理器（`node-link-client` 的 supervisor）是 `links[]` 的唯一来源；入站连接
+            // 不进该字段（§5.2 的字段注记）。
+            links: self
+                .access
+                .as_ref()
+                .map_or_else(Vec::new, |access| access.links()),
         }
     }
 
@@ -487,6 +504,7 @@ impl AppDaemonControl {
             node_public_key: composition.node_public_key().clone(),
             core: Arc::clone(composition.use_cases()),
             ui_build_version: ingress.ui_build_version(),
+            access: composition.access().cloned(),
             shutdown,
         }
     }
@@ -1130,6 +1148,15 @@ pub fn register_node_link_paths(
     link: &NodeLinkConfig,
 ) -> Result<NodeLinkIngress, NetworkError> {
     let ingress = NodeLinkIngress::assemble(Arc::clone(core), Arc::clone(authority));
+    // 附件端点与它的 feature 一起接线：没有装配附件存储的进程**不**注册该 path，也**不**宣告
+    // `node-link.attachment-transfer.v1`（能力协商不得虚报，`AGENTS.md` §4）。
+    let attachment_service = NodeAttachmentService::from_core(core);
+    let supported = match attachment_service.is_some() {
+        true => server::node_link::conn::feature_list(),
+        false => server::node_link::conn::feature_list_without(
+            server::node_link::attachments::ATTACHMENT_FEATURE,
+        ),
+    };
     let conn = Arc::new(
         NodeLinkConn::new(
             Arc::clone(core),
@@ -1137,11 +1164,34 @@ pub fn register_node_link_paths(
             link.clone(),
             Arc::clone(&ingress.registry),
         )
-        .with_route(Arc::new(ingress.routes(Arc::clone(core)))),
+        .with_route(Arc::new(ingress.routes(Arc::clone(core))))
+        .with_supported_features(supported.clone()),
     );
     listener
         .register_ws(WS_PATH, WS_SUBPROTOCOL, WsEndpoint::handler(conn))
         .map_err(NetworkError::Route)?;
+    if let Some(service) = attachment_service {
+        // 附件连接与业务连接共用同一张连接注册表：撤销、心跳与 endpoint 绑定完全一致，只有业务阶段
+        // 的帧族换成 `attachment.*`（`NODE_LINK_PROTOCOL.md` §12.9）。
+        let attachment_conn = Arc::new(
+            NodeLinkConn::new(
+                Arc::clone(core),
+                Arc::clone(authority),
+                link.clone(),
+                Arc::clone(&ingress.registry),
+            )
+            .with_purpose(NodeLinkPurpose::Attachments)
+            .with_attachment_route(service)
+            .with_supported_features(supported),
+        );
+        listener
+            .register_ws(
+                NODE_LINK_ATTACHMENTS_WS_PATH,
+                WS_SUBPROTOCOL,
+                WsEndpoint::handler(attachment_conn),
+            )
+            .map_err(NetworkError::Route)?;
+    }
     let pairing = Arc::new(PairingHttp::new(
         Arc::clone(core),
         Arc::clone(authority),
@@ -1167,7 +1217,7 @@ pub struct SyncIngress {
     registry: Arc<SyncConnectionRegistry>,
     /// 实时事件扇出的接收端（`NetIngress::start` spawn 分发循环；发布端由组合根的
     /// `EventPublisher` 分叉持有，见 `compose::forked_publisher`）。
-    event_queue: tokio::sync::mpsc::Receiver<CommittedEvent>,
+    event_queue: tokio::sync::mpsc::Receiver<CommittedDelivery>,
     /// 订阅面路由。它同时是注册给 `/sync/v1` 的 [`SyncRoutes`] 的一个子路由：分发循环按它的屏障状态找
     /// 实时目标，因此这里必须持有**同一个**实例（另一份克隆会让扇出看不到路由线程建立的屏障）。
     subscribe: Arc<SubscribeRoute>,
@@ -1193,7 +1243,7 @@ impl SyncIngress {
     ) -> (
         Arc<SubscribeRoute>,
         Arc<SyncConnectionRegistry>,
-        tokio::sync::mpsc::Receiver<CommittedEvent>,
+        tokio::sync::mpsc::Receiver<CommittedDelivery>,
     ) {
         (self.subscribe, self.registry, self.event_queue)
     }
@@ -1233,7 +1283,7 @@ pub fn register_sync_paths(
     public_origin: Option<String>,
     owner: Arc<dyn OwnerReachability>,
     files: Arc<dyn SessionFiles>,
-    event_queue: Option<tokio::sync::mpsc::Receiver<CommittedEvent>>,
+    event_queue: Option<tokio::sync::mpsc::Receiver<CommittedDelivery>>,
 ) -> Result<SyncIngress, NetworkError> {
     let registry = SyncConnectionRegistry::new();
     // 认证后消息路由：订阅面（`sync.subscribe`/`sync.snapshot_request`/`sync.ack`）与它的事件投递腿
@@ -1270,6 +1320,12 @@ pub fn register_sync_paths(
             path: "/sync/v1".to_owned(),
         }));
     };
+    let attachment_service = SyncAttachmentService::from_core(core);
+    let supported = if attachment_service.is_some() {
+        server::sync::conn::feature_list()
+    } else {
+        server::sync::conn::feature_list_without(server::sync::attachments::ATTACHMENT_FEATURE)
+    };
     let conn = Arc::new(
         SyncConn::new(
             Arc::clone(core),
@@ -1277,7 +1333,8 @@ pub fn register_sync_paths(
             config.clone(),
             Arc::clone(&registry),
         )
-        .with_route(route),
+        .with_route(route)
+        .with_supported_features(supported.clone()),
     );
     listener
         .register_ws(
@@ -1286,6 +1343,27 @@ pub fn register_sync_paths(
             SyncWsEndpoint::handler(conn),
         )
         .map_err(NetworkError::Route)?;
+    if let Some(service) = attachment_service {
+        // 附件连接与业务连接共用同一张设备连接注册表：设备撤销同时关闭两者（`SYNC_PROTOCOL.md` §3.4）。
+        let attachment_conn = Arc::new(
+            SyncConn::new(
+                Arc::clone(core),
+                Arc::clone(authority),
+                config.clone(),
+                Arc::clone(&registry),
+            )
+            .with_purpose(SyncPurpose::Attachments)
+            .with_attachment_route(service)
+            .with_supported_features(supported),
+        );
+        listener
+            .register_ws(
+                SYNC_ATTACHMENTS_WS_PATH,
+                SYNC_WS_SUBPROTOCOL,
+                SyncWsEndpoint::handler(attachment_conn),
+            )
+            .map_err(NetworkError::Route)?;
+    }
     let pairing = Arc::new(SyncPairingHttp::new(
         Arc::clone(core),
         Arc::clone(authority),
@@ -1334,7 +1412,28 @@ pub struct NetIngress {
     /// 在 [`NetIngress::start`] 里从**注册为静态面的那份资源表**读一次并留在这里：`daemon.status` 的回答
     /// 因此与浏览器拿到的资源同源，且不在每次 `daemon.status` 时重复解析版本文件。
     ui_build_version: Option<String>,
+    /// Access 侧出站运行时（撤销通知与 Sync 面 `origin.online` 的第二条来源）。
+    access: Option<Arc<AccessManager>>,
     tasks: Vec<(&'static str, JoinHandle<()>)>,
+}
+
+/// `OwnerReachability` 的组合：入站 Node Link 连接（本机作为 Owner）**或**出站 link（本机作为 Access）。
+///
+/// 两侧都只回答「此刻有没有到该 node 的活跃连接」，不缓存、不读持久状态；任一来源断开后下一次查询即为
+/// 不可达（`sync` 的 `origin.online` 因此与连接状态同步）。
+struct CombinedReachability {
+    inbound: NodeLinkReachability,
+    access: Option<Arc<AccessManager>>,
+}
+
+impl OwnerReachability for CombinedReachability {
+    fn reachable(&self, owner: &NodeId) -> bool {
+        self.inbound.reachable(owner)
+            || self
+                .access
+                .as_ref()
+                .is_some_and(|access| access.is_online(owner))
+    }
 }
 
 impl NetIngress {
@@ -1346,7 +1445,7 @@ impl NetIngress {
     pub async fn start(
         composition: &Composition,
         event_queue: mpsc::Receiver<CommittedEvent>,
-        sync_events: Option<mpsc::Receiver<CommittedEvent>>,
+        sync_events: Option<mpsc::Receiver<CommittedDelivery>>,
     ) -> Result<Self, NetworkError> {
         let mut listener = NetListener::bind(net_config(composition.config()))
             .await
@@ -1367,9 +1466,14 @@ impl NetIngress {
                 ..NodeLinkConfig::default()
             },
         )?;
-        // Sync 面：Owner 可达性只从 Node Link 的连接注册表读（两个适配器不互相调用，组合根是唯一的缝合点）。
+        // Sync 面：Owner 可达性来自两处——Node Link 的入站连接注册表（本机作为 Owner 被访问）与本机
+        // 作为 Access 的出站 link（imported 会话的来源）。两个适配器不互相调用，组合根是唯一缝合点。
         // 会话文件端口与 `UseCases` 内部注入的是同一个 `NativeSessionFiles`（组合根持有）。
         let session_files: Arc<dyn SessionFiles> = composition.session_files().clone();
+        let reachability: Arc<dyn OwnerReachability> = Arc::new(CombinedReachability {
+            inbound: NodeLinkReachability::new(Arc::clone(ingress.registry())),
+            access: composition.access().cloned(),
+        });
         let sync = register_sync_paths(
             &mut listener,
             &core,
@@ -1377,7 +1481,7 @@ impl NetIngress {
             composition.broker(),
             &sync_config(composition.config()),
             composition.config().public_origin.clone(),
-            Arc::new(NodeLinkReachability::new(Arc::clone(ingress.registry()))),
+            reachability,
             session_files,
             sync_events,
         )?;
@@ -1484,6 +1588,7 @@ impl NetIngress {
             registry: ingress.registry,
             sync_registry,
             ui_build_version,
+            access: composition.access().cloned(),
             tasks,
         })
     }
@@ -1522,7 +1627,12 @@ impl NetIngress {
     /// 这是**唯一**的撤销缝接线点——组合根（[`run`]）与受控路径用例都调它，因此「设备撤销关的是哪张
     /// 连接表」不会在两处漂移（此前 `close_device` 恒报「没有可关闭的连接」正是因为这里没有第二张表）。
     pub fn connection_closer(&self) -> NodeLinkCloser {
-        NodeLinkCloser::new(Arc::clone(&self.command), Arc::clone(&self.sync_registry))
+        let closer =
+            NodeLinkCloser::new(Arc::clone(&self.command), Arc::clone(&self.sync_registry));
+        match self.access.as_ref() {
+            Some(access) => closer.with_access(Arc::clone(access)),
+            None => closer,
+        }
     }
 
     /// 停接入层的**第一步（同步）**：触发关闭信号。触发后 listener 停止 accept（并按
@@ -1634,6 +1744,28 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         .await
         .map_err(DaemonError::Compose)?;
 
+    // Access 侧出站运行时：先加载信任锚（系统根 + 可选自定义 CA；任一失败即拒绝启动），再按持久化
+    // Owner 信任建立连接。两条失败语义不同：**信任不可用是启动失败**（没有可信锚的客户端不能上线），
+    // 单个 Owner 不可达只让该 link 保持离线并由 supervisor 重连。
+    let trust = OutboundTrust::load(composition.config()).map_err(DaemonError::Trust)?;
+    let entropy: Arc<dyn EntropySource> = Arc::new(OsEntropy::new());
+    let access = Arc::new(
+        AccessManager::new(
+            AccessDeps {
+                identity: composition.identity().clone(),
+                keystore: Arc::clone(composition.keystore()),
+                core: Arc::clone(composition.use_cases()),
+                broker: Arc::clone(composition.broker()),
+                deliveries: composition.deliveries(),
+                clock: Arc::clone(composition.clock()),
+                entropy,
+                node_name: composition.config().node_name.clone(),
+            },
+            trust,
+        )
+        .map_err(DaemonError::Trust)?,
+    );
+    let composition = composition.with_access(Arc::clone(&access));
     // §6 第 16 条：启动恢复在取锁与开始监听**之前**（`LocalCli`）。
     let recovered = composition
         .use_cases()
@@ -1647,6 +1779,8 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
             "启动恢复终结了未决命令（不确定终态，未重放副作用）"
         );
     }
+    // 出站连接在启动恢复之后才开始：imported 事件要等本机状态一致后再落索引。
+    access.start_persisted().await;
 
     // 单实例锁：失败即明确错误退出，绝不强杀已有进程。
     let instance_id = InstanceId::generate();
@@ -1730,10 +1864,15 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
             // 不再是「只记日志」的桩（`design.md` D7）。`device.revoke` 关的是 Sync 的连接注册表。
             Arc::new(net_ingress.connection_closer()),
         )),
+        // Access 方向：出站 HTTPS claim/status 与 Owner 信任落盘（`app::access::AccessManager`）。
+        access: Some(Arc::clone(&access) as Arc<dyn server::local_admin::AccessPairing>),
     });
     // 共享的管理处理器（router）。**每条连接**的处理器由 `accept_loop` 按连接装配：关闭请求标记
     // （[`ConnectionShutdown`]）必须与 `serve_connection` 看到的是同一个，因此它不能在这里跨连接复用。
     let admin: Arc<dyn LocalAdminHandler> = Arc::new(router);
+    // 本地 `access` 句柄只用于装配：router/`NetIngress`/`AppDaemonControl` 各自持有自己的克隆，
+    // 并在关闭序列里先释放。若本函数继续持有它，`Composition::close` 会看到存储仍被共享。
+    drop(access);
 
     let mut tasks = OwnedTasks::new();
     spawn_maintenance(&mut tasks, &composition, Arc::clone(&shutdown));

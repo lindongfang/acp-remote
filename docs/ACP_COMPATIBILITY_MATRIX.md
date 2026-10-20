@@ -4,6 +4,8 @@
 > ACP wire 版本：1  
 > 修订记录（2026-09-18）：新增 §6 `acp_facade` 的 `session/new` 映射与错误映射；`elicitation/create` 的 capability 占位符改为 `clientCapabilities.elicitation.form`；新增 `meta_fields_byte_exact`、`extension_method_explicit_unsupported` 两个不变量，未知判别子改为 `visible_degradation`；capability 路径改为可校验的字面量；`content.resource_link` 的 gate 由 `embeddedContext` 改为 `null`（上游把它列为 baseline，不是 opt-in）；补齐 Sync/Node Link 的 `elicitation.respond` 动作集到 ACP 的 `accept`/`decline`/`cancel`（此前缺 `decline`，会让 Access 节点上的上游客户端无法表达"拒绝"）。  
 > 修订记录（2026-10-17）：`tool_content.diff` 的第一阶段交付由「行级差异统计 + 相对化展示路径」扩为「统计 + 相对化路径 + **有界**结构化逐行差异」——逐行差异在客户端协商 `core.file-diff.v1` 时随 `file.changed` 视图出现，受固定的行数与字节上限约束，超限时只带统计并显式标记差异行未下发（见 §5 第 4 条）；该行的 `delivery` 仍为 `mvp`、`layers.pwa` 仍为 `view_only`（机器矩阵相应条目只更新其 `revision` 元信息，其余字段不变）。  
+> 修订记录（2026-10-19，`conversation-area-complete` WP1，合同先行、实现待后续工作包）：`content.audio`/`content.resource` 与 `cap.agent.prompt_audio`/`cap.agent.prompt_embedded_context` 的 `delivery` 提升为 `conditional_mvp`（`sync=event`、`pwa=view_only`、`facade=advertise_if_end_to_end`），对应类型化媒体与附件输入；`cap.client.terminal` 与五个 `terminal/*` 方法提升为 `mvp`（`broker=local_service`、`sync=event`、`pwa=view_only`、`facade=advertise_if_end_to_end`），对应真实 ACP 终端服务。`content.resource_link` 保持 `post_mvp`；本轮不改 wire 形状与矩阵结构，§5 的门槛文字同步为「协商后启用」。  
+> 修订记录（2026-10-20，`conversation-area-complete` WP3，已实现）：五个 `terminal/*` 方法的 Rust 登记改为 `implemented`，由 `agent-host` 的终端服务用**真实子进程**提供（stdout/stderr 增量 `terminal.output`、跨 UTF-8 边界、`outputByteLimit` 保留预算与开头截断、非零退出、kill 后可读、release 后不可操作；会话/Agent/Daemon 关闭按顺序结束每终端进程树）。`clientCapabilities.terminal` 与执行用同一判据：只有组合根宣告后才接受 `terminal/*`，未宣告时按方法未找到拒绝且不启动任何进程。输入侧：`PromptContentBlock` 的 `text` 原样映射为 ACP `text`；`attachment_ref` 按 `mediaType` 映射为 `image`/`audio`/`resource`（分别要求 `promptCapabilities.image`/`audio`/`embeddedContext`，未宣告整条拒绝且不读附件字节）；`workspace_path_ref` 只做形状/规范化前缀/链接逃逸校验，然后作为**相对路径文本**交给 Agent（ACP 没有路径引用内容类型；不读文件、不固定版本、不生成快照），`content.resource_link` 的 `post_mvp` 行因此**未变**。派发前先按声明长度预估 ACP 帧预算、编码后再精确校验 1 MiB；超限或摘要/长度不符整条拒绝，不存在残缺 prompt。
 > 修订记录（2026-09-30）：`method.session_resume` 与 `cap.agent.session_resume` 的 `delivery` 由 `post_mvp` 提升为 `conditional_mvp`，`broker` 层由 `explicit_unsupported` 改为 `project_and_preserve`（`acp=native`、`sync`/`pwa=explicit_unsupported`、`facade=not_advertised` 不变）；`session/load` 仍为 `post_mvp`。  
 > 上游快照已 vendored 到 `schemas/acp/v1/upstream/schema.json`，`check:acp` 强制重算其 sha256 并与本文固定值比对；`fixtures/acp/v1` 由 `manifest.json` 驱动、按同一快照做 ajv 校验。
 > 上游快照：`agentclientprotocol/agent-client-protocol@c4137ab3b168d97f0ad6c542f483b6a417b2d610`  
@@ -178,15 +180,21 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 
 1. `initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/update` 的 fake Agent 端到端测试，并覆盖 Owner—Access Node Link；
 2. 全部 11 种 `session/update` 的解码与 raw 保真测试，即使 PWA 尚不能完整呈现其中某项；
-3. text prompt 输入；Agent 输出的五种 content block 均不会静默丢失；
-4. tool call、diff、permission、elicitation 的结构化内容块与事件视图保持结构化或明确降级；其中 `tool_content.diff` 是 `file.changed` 事件的**唯一**派生源（`delivery = mvp`），首阶段即交付行级差异统计 `addedLines`/`deletedLines`、相对化展示路径 `displayPath`／`outsideWorkspace`，以及**有界**的结构化逐行差异（每行标明新增、删除或上下文；受固定的行数与字节上限约束，超限时改为只带统计并显式标记「差异行未下发」与已登记原因，MUST NOT 下发被截断或被裁剪的行）——逐行差异只在客户端协商 `core.file-diff.v1` 时随 `file.changed` 视图出现，未协商时该键缺席（不是空数组）。行数只覆盖 Agent 在工具调用里声明的改动——shell 驱动的改动不计入、判定不出时省略而非填零，字段语义见 `SYNC_PROTOCOL.md` §10.3；tool result 中的 terminal 内容块（`tool_content.terminal`）同属首阶段必须结构化，agent→client 的 `terminal/*` 服务方法不在此列——它们仍是 `post_mvp`、`facade=not_advertised`；
+3. text prompt 输入，以及在 Agent 宣告对应能力后按协商提供的 image/audio/embedded-context 输入（`delivery = conditional_mvp`，未宣告时明确拒绝）；Agent 输出的五种 content block 均不会静默丢失；
+4. tool call、diff、permission、elicitation 的结构化内容块与事件视图保持结构化或明确降级；其中 `tool_content.diff` 是 `file.changed` 事件的**唯一**派生源（`delivery = mvp`），首阶段即交付行级差异统计 `addedLines`/`deletedLines`、相对化展示路径 `displayPath`／`outsideWorkspace`，以及**有界**的结构化逐行差异（每行标明新增、删除或上下文；受固定的行数与字节上限约束，超限时改为只带统计并显式标记「差异行未下发」与已登记原因，MUST NOT 下发被截断或被裁剪的行）——逐行差异只在客户端协商 `core.file-diff.v1` 时随 `file.changed` 视图出现，未协商时该键缺席（不是空数组）。行数只覆盖 Agent 在工具调用里声明的改动——shell 驱动的改动不计入、判定不出时省略而非填零，字段语义见 `SYNC_PROTOCOL.md` §10.3；tool result 中的 terminal 内容块（`tool_content.terminal`）同属首阶段必须结构化；agent→client 的 `terminal/*` 服务方法自 2026-10-19 起为 `delivery = mvp`（真实终端服务，见下），不再属于 `post_mvp`；
 5. `_meta`、下划线扩展方法和未知未来 discriminator 的保真/显式不支持行为：已知消息内出现的未知字段与任意层级的 `_meta` 必须逐字节保真（`invariant.meta_fields_byte_exact`，`expectation = byte_exact`）；未知的 `_` 前缀方法必须由 facade 显式拒绝（ACP 方法未找到的等价错误），不得转发或静默丢弃（`invariant.extension_method_explicit_unsupported`）；未出现在上游固定快照中的 `sessionUpdate` 判别子按未知事件可见降级并保留 `acp.rawJson`（`invariant.future_update_visible`，`expectation = visible_degradation`）。`visible_degradation` 的含义是：无法理解的结构化字段必须保留原文并向用户可见降级，既不得静默丢弃，也不得降格为普通文本；这与 `explicit_unsupported` 的区别在于前者仍保持内容可见，后者是明确的拒绝。
 6. capability 未宣告、已宣告但 Broker 不支持、Broker 支持但 PWA 不支持三种路径可区分；
 7. `acp-facade` 只宣告经端到端测试证明的能力。
 
 `update.session_info_update` 的 `delivery = mvp`，首阶段即交付会话标题的单向更新：标题的唯一来源是该判别子投影出的 `session.info.changed`，更新方向为 Agent → 会话摘要，`sync` 层不提供任何客户端发起的重命名命令（命令目录中不存在该命令，`sync = event` 只承载 Agent 通知的投影）。字段语义与「无客户端重命名入口」的表述见 `SYNC_PROTOCOL.md` §10.3。
 
-`session/list`、`session/delete`、`session/close`、完整 config option、文件服务和 agent→client 的 `terminal/*` 服务方法可以排在后续阶段（`delivery=post_mvp`，按 §3.4 必须 `facade=not_advertised` 且不得通过 `sync`/`pwa` 宣告），但必须由矩阵驱动明确拒绝，不能被成功响应、空响应或普通文本替代。
+`session/list`、`session/delete`、`session/close`、完整 config option 与文件服务可以排在后续阶段（`delivery=post_mvp`，按 §3.4 必须 `facade=not_advertised` 且不得通过 `sync`/`pwa` 宣告），但必须由矩阵驱动明确拒绝，不能被成功响应、空响应或普通文本替代。
+
+agent→client 的 `terminal/*` 服务方法**不在**上述 `post_mvp` 集合：五个方法与 `cap.client.terminal` 在本矩阵中为 `delivery = mvp`（`broker=local_service`、`sync=event`、`pwa=view_only`、`facade=advertise_if_end_to_end`），由 `agent-host` 的终端服务所有者实现真实 create/output/wait_for_exit/kill/release，并只在与完整服务接线后才宣告。PWA 只展示命令、输出与退出结果，不提供用户手动输入的交互终端。
+
+`[实现现状]`（2026-10-20，WP3）上述终端服务已由 `crates/agent-host/src/terminal.rs` 真实实现，并用 fake ACP child 驱动的**真实子进程**测试覆盖：分块输出与跨 UTF-8 边界、非零退出、`outputByteLimit` 截断（只影响 `terminal/output` 的保留正文，事件始终携带真实分块）、kill 后仍可读取、release 后 output/kill/wait/release 全部拒绝、kill/wait 重复调用的收敛，以及会话关闭/Agent 崩溃/Daemon 关闭后的进程树清理（Windows Job Object 探针）。`clientCapabilities.terminal` 只有在组合根把它接进 `initialize` 时才接受调用；未宣告时不 spawn 任何进程。
+
+输入映射的实现在 `crates/agent-host/src/prompt.rs`：`attachment_ref` 的字节来自 `AttachmentStore`，映射前先按声明长度预估帧预算（超预算不读取字节），读取后复核长度与 SHA-256；`workspace_path_ref` 只按平台分隔符拆分量做形状校验，再以最深已存在祖先的 `canonicalize` 结果确认仍位于会话工作目录内（挡住链接逃逸与 `..\` 这类只按 `/` 判定会漏掉的写法），随后只把该相对路径作为文本块发出。
 
 `session/resume` 不在上述 `post_mvp` 集合：`method.session_resume` 与 `cap.agent.session_resume` 的 `delivery` 为 `conditional_mvp`，启用条件就是 Agent 经 `initialize` 宣告 `agentCapabilities.sessionCapabilities.resume`（矩阵行的 `capability`，Rust 侧判定见 `crates/acp-protocol` 的 `supports_session_resume()`）。因此：
 
@@ -198,7 +206,7 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 
 这里的 ACP `session/list` 是底层 Agent 的可选原生方法，不等同于 ACP Remote 自己列出 Daemon 会话的 Sync `session.list`。同理，`promptCapabilities.image/audio/embeddedContext` 只约束 Client 向 Agent 发送的 prompt 内容；Agent 输出中出现相同 content block 时仍必须保留并明确呈现，不能因未宣告 prompt 输入能力而丢弃。
 
-上游固定快照把 `ContentBlock::Text` 与 `ContentBlock::ResourceLink` 列为 baseline prompt 能力，只有 `image`、`audio`、`embeddedContext` 三个 opt-in 开关；因此矩阵里 `content.resource_link` 的 `capability` 是 `null`（它没有 gate），而 `content.resource`（`ContentBlock::Resource`）才由 `agentCapabilities.promptCapabilities.embeddedContext` 门控。`content.resource_link` 的 `delivery = post_mvp` 描述的是 ACP Remote 自己的输入路径（v1 PWA 只发文本，见 `SYNC_PROTOCOL.md` §11.5），不是声称 Agent 侧缺少该能力；无论哪个阶段，收到该 content block 都必须保留或明确拒绝，不得静默丢弃。
+上游固定快照把 `ContentBlock::Text` 与 `ContentBlock::ResourceLink` 列为 baseline prompt 能力，只有 `image`、`audio`、`embeddedContext` 三个 opt-in 开关；因此矩阵里 `content.resource_link` 的 `capability` 是 `null`（它没有 gate），而 `content.resource`（`ContentBlock::Resource`）才由 `agentCapabilities.promptCapabilities.embeddedContext` 门控。`content.resource_link` 的 `delivery = post_mvp` 描述的是 ACP Remote 自己的输入路径（v1 仍不发送 resource link；用户文件经 `attachment_ref` 上传，见 `SYNC_PROTOCOL.md` §11.5），不是声称 Agent 侧缺少该能力；无论哪个阶段，收到该 content block 都必须保留或明确拒绝，不得静默丢弃。`image`/`audio`/`resource` 的协商由附件传输与类型化媒体 feature 共同门控：未宣告 Agent 能力时整条消息明确拒绝，不自动转文本或改发路径。
 
 ## 6. `acp_facade` 的 `session/new` 映射与错误映射
 

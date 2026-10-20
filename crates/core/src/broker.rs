@@ -34,10 +34,10 @@ use crate::model::{
     AcpRaw, Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand, CommandKind,
     CommandPayload, CommandReceipt, CommandRecord, CommandResult, CommandStatus,
     CommandTerminalRecord, CommittedDelivery, CommittedEvent, ConfigOptionId, ConfigValue,
-    ConflictKind, CreateSessionRequest, Digest, ElicitationAction, ElicitationValues,
-    EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType, GlobalCursor,
-    InteractionId, InteractionKind, InteractionResolution, LocalCursor, MemberValue, MessageId,
-    ModeId, ModeRef, OriginEpoch, OriginEventRef, OwnedSessionRef, PendingEvent,
+    ConflictKind, CreateSessionRequest, Digest, EffectiveInteraction, ElicitationAction,
+    ElicitationValues, EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType,
+    GlobalCursor, InteractionId, InteractionKind, InteractionResolution, LocalCursor, MemberValue,
+    MessageId, ModeId, ModeRef, OriginEpoch, OriginEventRef, OwnedSessionRef, PendingEvent,
     PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
     PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
     ResourceOrigin, ResumeSessionRequest, Sequence, SessionId, SessionRecoveryRecord,
@@ -47,12 +47,13 @@ use crate::model::{
     top_level_member,
 };
 use crate::ports::{
-    AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
-    EventSink, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord,
-    InteractionResolved, ModeChange, NewTurn, OwnedCommit, PendingInteractionWrite,
-    PreparedSessionCreate, ReadView, ReceiptOutcome, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
-    SessionBackendFactory, SessionCreateAdmission, SessionEndpoint, SessionStore, SessionUpdate,
-    SettledSession, StateChange, TrustStore, TurnChange, TurnUpdate,
+    AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EffectiveResolution,
+    EventPublisher, EventSink, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator,
+    IdempotencyRecord, InteractionAuthority, InteractionResolved, ModeChange, NewTurn, OwnedCommit,
+    PendingInteractionWrite, PreparedSessionCreate, ReadView, ReceiptOutcome, RemoteDeliveryStore,
+    ReplayBatch, ReplayLimit, SessionBackendFactory, SessionCreateAdmission, SessionEndpoint,
+    SessionStore, SessionUpdate, SettledSession, StateChange, SubmissionBinding, TrustStore,
+    TurnChange, TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -672,6 +673,9 @@ pub struct Broker {
     /// [`Broker::settle_session_create`] 里取走；适配层对每个 `Prepared` 都必须结算一次，未结算的条目
     /// 会一直留到进程退出（那条命令停在 `accepted`，由启动恢复终结为 `uncertain`）。
     prepared: Mutex<HashMap<String, PreparedCreate>>,
+    /// 有效待处理交互端口（§5.8）：服务协商 `core.pending-interactions.v1` 的读-校验-原子胜出路径。
+    /// 未注入时该路径显式不可用（旧 peer 的按 id 解析路径不受影响）。
+    interactions: Option<Arc<dyn InteractionAuthority>>,
 }
 
 /// 窗口期状态：落账提交（[`StateChange::SettleCreate`]）的全部输入，外加会话行的两个时间戳来源。
@@ -702,7 +706,14 @@ impl Broker {
             config,
             slots: Mutex::new(HashMap::new()),
             prepared: Mutex::new(HashMap::new()),
+            interactions: None,
         }
+    }
+
+    /// 注入有效待处理交互端口（组合根在装配时调用；见 [`InteractionAuthority`]）。
+    pub fn with_interaction_authority(mut self, authority: Arc<dyn InteractionAuthority>) -> Self {
+        self.interactions = Some(authority);
+        self
     }
 
     pub fn config(&self) -> BrokerConfig {
@@ -943,6 +954,19 @@ impl Broker {
         actor: &Actor,
         command: &ClientCommand,
     ) -> Result<CommandReceipt, PortError> {
+        self.submit_mutation_versioned(actor, command, None).await
+    }
+
+    /// 带交互应答版本（`core.pending-interactions.v1` 的 `requestVersion`）的 mutation 管道。
+    ///
+    /// 未协商该 feature 的旧 peer 走 [`Self::submit_mutation`]（`request_version = None`）：
+    /// 命令形状与行为逐字不变；协商后的客户端必须把 `session.read` 拿到的当前版本原样回传。
+    pub async fn submit_mutation_versioned(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        request_version: Option<Version>,
+    ) -> Result<CommandReceipt, PortError> {
         let name = command_name(&command.payload);
         if command.command != name || command.kind != command_kind(&command.payload) {
             return self.reject(
@@ -971,16 +995,29 @@ impl Broker {
                 interaction,
                 option_id,
             } => {
-                self.submit_permission_resolve(actor, command, interaction, option_id)
-                    .await
+                self.submit_permission_resolve(
+                    actor,
+                    command,
+                    interaction,
+                    option_id,
+                    request_version,
+                )
+                .await
             }
             CommandPayload::ElicitationRespond {
                 interaction,
                 action,
                 values,
             } => {
-                self.submit_elicitation_respond(actor, command, interaction, *action, values)
-                    .await
+                self.submit_elicitation_respond(
+                    actor,
+                    command,
+                    interaction,
+                    *action,
+                    values,
+                    request_version,
+                )
+                .await
             }
             // 查询命令不在此派发：结果由 §4 的查询入口（`list_sessions`/`read_session`/
             // `command_status`/`config_options`）返回 core 类型，由适配器投影到 wire（core 不做 JSON
@@ -997,11 +1034,38 @@ impl Broker {
         }
     }
 
+    /// `session.prompt` 的带附件清单入口（`core.attachment-transfer.v1`）。
+    ///
+    /// 与 [`Self::submit_mutation`] 的区别只在受理提交：附件清单纯粹随**同一次** `commit` 绑定
+    /// （§6 第 22 条）。任一校验/写入失败都会让受理失败，因此 Agent 不会收到残缺 prompt；
+    /// 幂等命中在绑定之前发生，重试不会二次派发。
+    pub async fn submit_prompt_with_submission(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        content: &[PromptContentBlock],
+        binding: SubmissionBinding,
+    ) -> Result<CommandReceipt, PortError> {
+        self.submit_prompt_bound(actor, command, content, Some(binding))
+            .await
+    }
+
     async fn submit_prompt(
         &self,
         actor: &Actor,
         command: &ClientCommand,
         content: &[PromptContentBlock],
+    ) -> Result<CommandReceipt, PortError> {
+        self.submit_prompt_bound(actor, command, content, None)
+            .await
+    }
+
+    async fn submit_prompt_bound(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        content: &[PromptContentBlock],
+        binding: Option<SubmissionBinding>,
     ) -> Result<CommandReceipt, PortError> {
         let Some(session) = command.session.clone() else {
             return self.reject(
@@ -1034,6 +1098,15 @@ impl Broker {
                 }
             }
         }
+
+        // 派发前预检：不支持的媒体/超预算必须在**受理之前**整条拒绝，否则客户端会先看到
+        // accepted、再看到泛化的 turn.failed，并已清空草稿与附件。
+        let endpoint = self.endpoint(&slot, &session).await?;
+        endpoint
+            .validate_prompt(&PromptRequest {
+                content: content.to_vec(),
+            })
+            .await?;
 
         let turn = self.deps.ids.turn_id();
         let event = pending_event(
@@ -1068,7 +1141,7 @@ impl Broker {
             started_at: None,
         })];
         match self
-            .accept(actor, command, &session, state, turns, vec![event])
+            .accept_with_binding(actor, command, &session, state, turns, vec![event], binding)
             .await?
         {
             Accept::Done(receipt) => Ok(receipt),
@@ -1308,6 +1381,7 @@ impl Broker {
         command: &ClientCommand,
         interaction: &InteractionId,
         option_id: &str,
+        request_version: Option<Version>,
     ) -> Result<CommandReceipt, PortError> {
         let Some(session) = command.session.clone() else {
             return self.reject(
@@ -1328,6 +1402,9 @@ impl Broker {
             Ok(resolution) => resolution,
             Err(receipt) => return Ok(receipt),
         };
+        // 版本/类别/表单/上游存活校验全部先于受理：失败时不留下没有终态的 `accepted` 行。
+        self.preflight_effective_locked(&slot, &session, interaction, request_version, &resolution)
+            .await?;
         match self
             .accept(actor, command, &session, None, Vec::new(), Vec::new())
             .await?
@@ -1335,16 +1412,40 @@ impl Broker {
             Accept::Done(receipt) => return Ok(receipt),
             Accept::Committed => {}
         }
-        let outcome = self
-            .resolve_locked(
+        let outcome = match self
+            .commit_effective_locked(
                 actor,
                 &command.request,
                 &slot,
                 &session,
                 interaction,
+                request_version,
                 resolution,
             )
-            .await?;
+            .await
+        {
+            Ok(outcome) => outcome,
+            // 受理之后的竞态（另一设备抢先解析、请求在窗口内失效、后端写入失败）：必须落一条
+            // 持久化终态，客户端按同一 requestId 重试才能拿到确定结果。
+            Err(error) => {
+                let public = self.port_error_public(&error)?;
+                let at = self.now();
+                self.commit_terminal(
+                    &session,
+                    command,
+                    CommandStatus::Failed,
+                    Some(public),
+                    None,
+                    None,
+                    &at,
+                )
+                .await?;
+                return Ok(CommandReceipt::Accepted {
+                    request: command.request.clone(),
+                    turn: None,
+                });
+            }
+        };
         let at = self.now();
         let status = match outcome {
             Resolution::Resolved => CommandStatus::Completed,
@@ -1376,6 +1477,7 @@ impl Broker {
         interaction: &InteractionId,
         action: ElicitationAction,
         values: &ElicitationValues,
+        request_version: Option<Version>,
     ) -> Result<CommandReceipt, PortError> {
         let Some(session) = command.session.clone() else {
             return self.reject(
@@ -1395,6 +1497,9 @@ impl Broker {
         if let Some(receipt) = self.idempotency(actor, command).await? {
             return Ok(receipt);
         }
+        // 版本/类别/表单/上游存活校验全部先于受理：失败时不留下没有终态的 `accepted` 行。
+        self.preflight_effective_locked(&slot, &session, interaction, request_version, &resolution)
+            .await?;
         match self
             .accept(actor, command, &session, None, Vec::new(), Vec::new())
             .await?
@@ -1402,16 +1507,39 @@ impl Broker {
             Accept::Done(receipt) => return Ok(receipt),
             Accept::Committed => {}
         }
-        let outcome = self
-            .resolve_locked(
+        let outcome = match self
+            .commit_effective_locked(
                 actor,
                 &command.request,
                 &slot,
                 &session,
                 interaction,
+                request_version,
                 resolution,
             )
-            .await?;
+            .await
+        {
+            Ok(outcome) => outcome,
+            // 同权限路径：受理之后的任何失败都必须留下持久化终态。
+            Err(error) => {
+                let public = self.port_error_public(&error)?;
+                let at = self.now();
+                self.commit_terminal(
+                    &session,
+                    command,
+                    CommandStatus::Failed,
+                    Some(public),
+                    None,
+                    None,
+                    &at,
+                )
+                .await?;
+                return Ok(CommandReceipt::Accepted {
+                    request: command.request.clone(),
+                    turn: None,
+                });
+            }
+        };
         let at = self.now();
         let (status, error) = match outcome {
             Resolution::Resolved => (CommandStatus::Completed, None),
@@ -1433,6 +1561,212 @@ impl Broker {
             request: command.request.clone(),
             turn: None,
         })
+    }
+
+    /// 当前有效的完整待处理请求（`SYNC_PROTOCOL.md` §11.7）。
+    ///
+    /// 先授权身份/会话，再由 [`InteractionAuthority`] 读出**服务端确认过**的行；随后校验该会话的上游
+    /// 仍存活：端点不可得时把这些行标记为失效并返回错误，绝不把已丢失上游的请求继续当作可应答。
+    pub async fn effective_interactions(
+        &self,
+        actor: &Actor,
+        reference: &SessionReference,
+    ) -> Result<Vec<EffectiveInteraction>, PortError> {
+        let session = self.owned_session(reference)?;
+        let request = self.deps.ids.request_id();
+        self.authorize(actor, "session.read", Some(&session), &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let authority = self
+            .interactions
+            .clone()
+            .ok_or(PortError::Unavailable(UnavailableKind::BackendUnsupported))?;
+        let effective = authority.effective(&session).await?;
+        if effective.is_empty() {
+            return Ok(effective);
+        }
+        if let Err(error) = self.endpoint_for(reference).await {
+            let _ = authority
+                .invalidate_pending(Some(&session), self.now())
+                .await;
+            return Err(error);
+        }
+        Ok(effective)
+    }
+
+    /// 解析一次**当前有效**的交互（`permission.resolve`/`elicitation.respond` 的版本化入口）。
+    ///
+    /// 校验顺序（任一失败都不消耗请求）：身份/会话授权 → 请求存在 → 版本一致 → 表单值符合 schema →
+    /// 上游存活 → 条件更新选出首个有效答案。存储层的条件更新同时校验状态/失效标记/版本，因此两个设备
+    /// 并发提交时只有一个胜出，其余拿到 [`Resolution::AlreadyResolved`]。
+    pub async fn resolve_effective(
+        &self,
+        actor: &Actor,
+        reference: &SessionReference,
+        interaction: &InteractionId,
+        request_version: Option<Version>,
+        resolution: InteractionResolution,
+    ) -> Result<Resolution, PortError> {
+        let session = self.owned_session(reference)?;
+        let command = if matches!(resolution, InteractionResolution::Permission(_)) {
+            "permission.resolve"
+        } else {
+            "elicitation.respond"
+        };
+        let request = self.deps.ids.request_id();
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        self.authorize(actor, command, Some(&session), &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        self.resolve_effective_locked(
+            actor,
+            &request,
+            &slot,
+            &session,
+            interaction,
+            request_version,
+            resolution,
+        )
+        .await
+    }
+
+    /// 版本化交互解析的公共实现（调用方已持有串行门并完成授权）。
+    ///
+    /// 未注入 [`InteractionAuthority`] 时退回旧 peer 的按 id 解析路径（状态条件更新仍保证
+    /// first-writer-wins，但没有版本/表单/失效校验）。注入后按 §11.7 的顺序校验并原子胜出。
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_effective_locked(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        slot: &Slot,
+        session: &SessionId,
+        interaction: &InteractionId,
+        request_version: Option<Version>,
+        resolution: InteractionResolution,
+    ) -> Result<Resolution, PortError> {
+        self.preflight_effective_locked(slot, session, interaction, request_version, &resolution)
+            .await?;
+        self.commit_effective_locked(
+            actor,
+            request,
+            slot,
+            session,
+            interaction,
+            request_version,
+            resolution,
+        )
+        .await
+    }
+
+    /// 解析前的**只读**校验：分辨率形状、交互类别、请求版本、表单值、上游存活。
+    ///
+    /// 它必须先于命令受理（`accept`）执行：这些校验失败时命令不得留下一条没有终态的 `accepted` 行。
+    /// 上游不可得时顺带把该会话的 waiting 请求标记为失效（不复活），随后返回错误——这是唯一允许的
+    /// 副作用，因为它不消费请求、也不产生命令终态。
+    async fn preflight_effective_locked(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+        interaction: &InteractionId,
+        request_version: Option<Version>,
+        resolution: &InteractionResolution,
+    ) -> Result<(), PortError> {
+        resolution.validate().map_err(PortError::from)?;
+        let Some(authority) = self.interactions.clone() else {
+            // 旧 peer 路径没有版本/权威读面；解析阶段的条件更新仍保证 first-writer-wins。
+            return Ok(());
+        };
+        // 上游存活先于任何写入：失效的等待方不得被「解析」后留下一条假终态。
+        if let Err(error) = self.endpoint(slot, session).await {
+            let _ = authority
+                .invalidate_pending(Some(session), self.now())
+                .await;
+            return Err(error);
+        }
+        let effective = authority.effective(session).await?;
+        if let Some(current) = effective
+            .iter()
+            .find(|item| item.interaction.as_str() == interaction.as_str())
+        {
+            if let Some(expected) = request_version
+                && expected != current.request_version
+            {
+                return Err(PortError::Conflict(ConflictKind::VersionMismatch));
+            }
+            if current.kind
+                != match resolution {
+                    InteractionResolution::Permission(_) => InteractionKind::Permission,
+                    InteractionResolution::Elicitation { .. } => InteractionKind::Elicitation,
+                }
+            {
+                return Err(PortError::InvalidRequest("交互类别与解析动作不一致"));
+            }
+            if let InteractionResolution::Elicitation { action, values } = resolution
+                && *action == ElicitationAction::Submit
+            {
+                current
+                    .validate_submission(values)
+                    .map_err(PortError::from)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 解析的写入阶段（调用方已完成 [`Self::preflight_effective_locked`] 与命令受理）。
+    #[allow(clippy::too_many_arguments)] // 事务写入所需的稳定标识与已预检结果；拆结构体只会增加临时分配。
+    async fn commit_effective_locked(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        slot: &Slot,
+        session: &SessionId,
+        interaction: &InteractionId,
+        request_version: Option<Version>,
+        resolution: InteractionResolution,
+    ) -> Result<Resolution, PortError> {
+        let Some(authority) = self.interactions.clone() else {
+            return self
+                .resolve_locked(actor, request, slot, session, interaction, resolution)
+                .await;
+        };
+        let outcome = authority
+            .resolve_effective(EffectiveResolution {
+                interaction: interaction.clone(),
+                session: session.clone(),
+                actor: actor.clone(),
+                request_version,
+                resolution: resolution.clone(),
+                at: self.now(),
+            })
+            .await?;
+        if outcome == Resolution::AlreadyResolved {
+            return Ok(outcome);
+        }
+        // 解析命令进入作用域：后端随后的 `permission.resolved`/`elicitation.resolved` 按这条命令归因。
+        slot.set_command_scope(CommandScope {
+            request: request.clone(),
+            actor: actor.clone(),
+        });
+        let endpoint = self.endpoint(slot, session).await?;
+        endpoint
+            .resolve_interaction(interaction, resolution)
+            .await?;
+        self.flush_locked(slot, session).await?;
+        Ok(Resolution::Resolved)
+    }
+
+    /// 把 `pending` 交互标记为失效（上游丢失或重启恢复）：`session = None` 表示全部会话。
+    pub async fn invalidate_pending_interactions(
+        &self,
+        session: Option<&SessionId>,
+        at: Timestamp,
+    ) -> Result<u32, PortError> {
+        let Some(authority) = self.interactions.as_ref() else {
+            return Ok(0);
+        };
+        authority.invalidate_pending(session, at).await
     }
 
     /// §4 `PermissionCommands::resolve_interaction`（不带命令幂等键的入口）。
@@ -2273,13 +2607,14 @@ impl Broker {
         let reference = SessionReference::Remote(session.clone());
         let slot = self.slot(&reference);
         let _guard = slot.gate.guard().await;
+        let at = self.now();
         let receipt = DeliveryReceipt {
             session: session.clone(),
             origin: origin.clone(),
             origin_sequence,
             event_type: event_type.clone(),
             payload_digest: payload_digest.clone(),
-            at: self.now(),
+            at: at.clone(),
         };
         let outcome: ReceiptOutcome = self.deps.deliveries.commit_receipt(receipt).await?;
         if outcome.duplicate {
@@ -2292,6 +2627,8 @@ impl Broker {
             local_sequence: outcome.local_sequence,
             event_type,
             payload_digest,
+            // 与 `DeliveryReceipt.at` 是同一次取值的两个投影（见该字段的口径注释）。
+            created_at: at,
             payload,
         });
         Ok(true)
@@ -2406,7 +2743,7 @@ impl Broker {
         let mut info_update_seen = false;
         // 失败批次是否携带了**在跑的** turn 的事件：只有它才需要在写失败时放弃该 turn（§6 第 9 条）。
         let mut running_in_chunk = false;
-        for (event_index, event) in chunk.into_iter().enumerate() {
+        for event in chunk {
             let turn = event.turn.clone().or_else(|| {
                 if running.is_some() {
                     return running.clone();
@@ -2458,14 +2795,17 @@ impl Broker {
             let inducing_actor = inducing.as_ref().map(|scope| &scope.actor);
             let inducing_request = inducing.as_ref().map(|scope| scope.request.clone());
             let policy = persistence_policy(&event.event_type);
-            // §6 第 14 条：登记本批里的 delta 片段（提交成功后才并入累积）。
-            if is_agent_message_delta(&event.event_type) {
-                if let (Some(turn_id), Some(fragment)) =
-                    (turn.clone(), delta_fragment(&event.payload.view))
-                {
-                    delta_plan.push((event_index, turn_id, fragment));
+            // §6 第 14 条：登记本批里的 delta 片段。输出索引要等事件真正 push 后才知道
+            // （同一条输入可能派生 `file.changed` 等前置事件），否则回查 `outcome.appended`
+            // 会错位，后段 delta 不会并入 completed 正文。
+            let pending_delta = if is_agent_message_delta(&event.event_type) {
+                match (turn.clone(), delta_fragment(&event.payload.view)) {
+                    (Some(turn_id), Some(fragment)) => Some((turn_id, fragment)),
+                    _ => None,
                 }
-            }
+            } else {
+                None
+            };
             if let Some((turn_state, command_status)) = turn_terminal(&event.event_type) {
                 if let Some(turn_id) = turn.clone() {
                     turn_change = Some(TurnChange::Update(TurnUpdate {
@@ -2481,12 +2821,22 @@ impl Broker {
                     // §6 第 14 条：该 turn 内出现过 delta 的每个 messageId 各发恰好一条 completed，
                     // 与终态事件同批提交；没有 delta 的消息不发。它们与终态事件同属该 turn，因此带上同一
                     // 个诱发命令的 `causation`（`origin.kind` 仍是 `agent`——Agent 产出的）。
-                    completed_events =
-                        self.completed_events_for(slot, &turn_id, terminal_request.as_ref())?;
+                    let in_chunk: Vec<DeltaFragment> = delta_plan
+                        .iter()
+                        .filter(|(_, chunk_turn, _)| chunk_turn == &turn_id)
+                        .map(|(_, _, fragment)| fragment.clone())
+                        .collect();
+                    completed_events = self.completed_events_for(
+                        slot,
+                        &turn_id,
+                        terminal_request.as_ref(),
+                        &in_chunk,
+                    )?;
                     let count = lock(&slot.deltas)
                         .get(turn_id.as_str())
                         .map(|fragments| fragments.len())
-                        .unwrap_or(0);
+                        .unwrap_or(0)
+                        + in_chunk.len();
                     compact_after = Some((turn_id, count));
                 }
             }
@@ -2554,7 +2904,7 @@ impl Broker {
                 // 因此下面的 `state` 组装把它计入「本次需要一次 `SessionUpdate`」的判据。
             }
             // §6.11：`Ephemeral` 由 `PendingEvent::from_persistence` 直接排除（`None` = 只做内存转发）。
-            if let Some(pending) = PendingEvent::from_persistence(
+            let pushed = if let Some(pending) = PendingEvent::from_persistence(
                 interaction_event_kind(event.kind, &event.event_type),
                 event.event_type.clone(),
                 policy,
@@ -2564,6 +2914,14 @@ impl Broker {
                 event.causation.or(inducing_request),
             ) {
                 events.push(pending);
+                true
+            } else {
+                false
+            };
+            if pushed {
+                if let Some((turn_id, fragment)) = pending_delta {
+                    delta_plan.push((events.len() - 1, turn_id, fragment));
+                }
             }
         }
         if events.is_empty() {
@@ -2920,7 +3278,7 @@ impl Broker {
             return Ok(());
         };
         lock(&slot.abandoned).push(turn.clone());
-        let completed = self.completed_events_for(slot, turn, request)?;
+        let completed = self.completed_events_for(slot, turn, request, &[])?;
         lock(&slot.deltas).remove(turn.as_str());
         lock(&slot.turn_deltas).remove(turn.as_str());
         slot.hold_abandoned_turn(turn);
@@ -3069,11 +3427,15 @@ impl Broker {
         slot: &Slot,
         turn: &TurnId,
         causation: Option<&RequestId>,
+        in_chunk: &[DeltaFragment],
     ) -> Result<Vec<PendingEvent>, PortError> {
-        let fragments: Vec<DeltaFragment> = lock(&slot.deltas)
+        let mut fragments: Vec<DeltaFragment> = lock(&slot.deltas)
             .get(turn.as_str())
             .cloned()
             .unwrap_or_default();
+        // 终态事件可能与最后一段 delta 落在**同一个** flush 批次里：这些片段还没并入
+        // `slot.deltas`，但终态的 completed 正文与压缩计数必须包含它们，否则尾段会丢失。
+        fragments.extend(in_chunk.iter().cloned());
         if fragments.is_empty() {
             return Ok(Vec::new());
         }
@@ -3175,6 +3537,9 @@ impl Broker {
     /// 终态事件 + 更新幂等行，并把对应未终态 turn 终结为 `failed`），并补写缺失的
     /// `agent.message.completed`。**不**自动重放副作用；广播一律发生在 `commit` 之后。
     pub async fn recover_unsettled(&self, limit: ReplayLimit) -> Result<usize, PortError> {
+        // §11.7「不可复活」：重启后上游 ACP 请求已不存在，任何仍标 `pending` 的交互都不得再被当作
+        // 可应答；先标记失效，再恢复命令（两者都在监听之前完成）。
+        let _ = self.invalidate_pending_interactions(None, self.now()).await;
         let commands = self.deps.store.unsettled_commands(limit).await?;
         let mut recovered = 0usize;
         for record in commands {
@@ -3234,6 +3599,8 @@ impl Broker {
                         history: false,
                     },
                     before_history: None,
+                    before_messages: None,
+                    messages_limit: ReplayLimit::new(0),
                     after: None,
                     limit: ReplayLimit::new(512),
                 })
@@ -3492,6 +3859,8 @@ impl Broker {
                 ..HistoryInclude::default()
             },
             before_history: None,
+            before_messages: None,
+            messages_limit: ReplayLimit::new(0),
             after: None,
             limit: ReplayLimit::new(64),
         };
@@ -3523,6 +3892,22 @@ impl Broker {
         turns: Vec<TurnChange>,
         events: Vec<PendingEvent>,
     ) -> Result<Accept, PortError> {
+        self.accept_with_binding(actor, command, session, state, turns, events, None)
+            .await
+    }
+
+    /// 同 [`Self::accept`]，并把附件清单绑定放进同一次 `commit`（`None` = 无附件）。
+    #[allow(clippy::too_many_arguments)] // 事务入参固定为一组已校验的业务事实；无需引入中间 DTO。
+    async fn accept_with_binding(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        session: &SessionId,
+        state: Option<StateChange>,
+        turns: Vec<TurnChange>,
+        events: Vec<PendingEvent>,
+        binding: Option<SubmissionBinding>,
+    ) -> Result<Accept, PortError> {
         let at = self.now();
         let commit = OwnedCommit {
             session: Some(session.clone()),
@@ -3546,7 +3931,7 @@ impl Broker {
             command_terminal: None,
             origin_epoch: None,
         };
-        match self.commit_owned(commit).await {
+        match self.commit_owned_with_binding(commit, binding).await {
             Ok(outcome) => {
                 if let Some(replayed) = &outcome.replayed {
                     // 竞态：另一路径已经用同一幂等键落盘（§5.2 的 `replayed`），不二次派发。
@@ -3686,42 +4071,67 @@ impl Broker {
 
     /// 权限解析：optionId 必须来自该未解决请求（§11.5），`kind` 由请求里的 `InteractionOption.kind`
     /// 决定（core 不发明分类）。
+    ///
+    /// 候选项的权威来源是创建交互的事件 payload。注入 [`InteractionAuthority`] 时直接用它投影出的
+    /// **完整** `EffectiveInteraction`（`SqliteStore` 从 `owned_interaction.request_event` 的 payload 还原
+    /// options，`SqlReadView` 的旧投影则只带元数据、options 恒为空）；未注入时退回旧读视图，此时只有
+    /// 调用方自己注入了 options 的存储替身才能通过校验。
     async fn permission_resolution(
         &self,
         session: &SessionId,
         interaction: &InteractionId,
         option_id: &str,
     ) -> Result<Result<InteractionResolution, CommandReceipt>, PortError> {
-        let query = HistoryQuery {
-            session: session.clone(),
-            include: HistoryInclude {
-                pending_interactions: true,
-                ..HistoryInclude::default()
-            },
-            before_history: None,
-            after: None,
-            limit: ReplayLimit::new(64),
+        let options = match self.interactions.as_ref() {
+            Some(authority) => {
+                let effective = authority.effective(session).await?;
+                let Some(current) = effective
+                    .iter()
+                    .find(|item| item.interaction.as_str() == interaction.as_str())
+                else {
+                    return Ok(Err(self.reject(
+                        "command.not_found",
+                        "交互不存在或已经终态",
+                        false,
+                    )?));
+                };
+                current.options.clone()
+            }
+            None => {
+                let query = HistoryQuery {
+                    session: session.clone(),
+                    include: HistoryInclude {
+                        pending_interactions: true,
+                        ..HistoryInclude::default()
+                    },
+                    before_history: None,
+                    before_messages: None,
+                    messages_limit: ReplayLimit::new(0),
+                    after: None,
+                    limit: ReplayLimit::new(64),
+                };
+                let page = self
+                    .deps
+                    .store
+                    .read_view()
+                    .await?
+                    .read_session(query)
+                    .await?;
+                let Some(pending) = page
+                    .interactions
+                    .iter()
+                    .find(|item| item.id() == interaction)
+                else {
+                    return Ok(Err(self.reject(
+                        "command.not_found",
+                        "交互不存在或已经终态",
+                        false,
+                    )?));
+                };
+                pending.options().to_vec()
+            }
         };
-        let page = self
-            .deps
-            .store
-            .read_view()
-            .await?
-            .read_session(query)
-            .await?;
-        let Some(pending) = page
-            .interactions
-            .iter()
-            .find(|item| item.id() == interaction)
-        else {
-            return Ok(Err(self.reject(
-                "command.not_found",
-                "交互不存在或已经终态",
-                false,
-            )?));
-        };
-        let Some(option) = pending
-            .options()
+        let Some(option) = options
             .iter()
             .find(|option| option.option_id() == option_id)
         else {
@@ -3785,6 +4195,18 @@ impl Broker {
     /// 同一提交里 `interactions` 非空**且** `state.interaction` 为 `Some` → `InvalidRequest`：
     /// 创建与解析是两条互斥路径（§6 第 13 条），同时出现意味着组装出了自相矛盾的事务。
     async fn commit_owned(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+        self.commit_owned_with_binding(commit, None).await
+    }
+
+    /// 同 [`Self::commit_owned`]，并把附件清单绑定交给存储层的**同一个事务**。
+    ///
+    /// 绑定失败（清单不存在/未封存/跨会话/文件缺失/磁盘错误）会让整次提交失败；调用方据此在派发给
+    /// Agent **之前**结束命令，因此不会出现「Agent 收到 prompt 但附件没绑定」的窗口。
+    async fn commit_owned_with_binding(
+        &self,
+        commit: OwnedCommit,
+        binding: Option<SubmissionBinding>,
+    ) -> Result<CommitOutcome, PortError> {
         let resolving = commit
             .state
             .as_ref()
@@ -3799,7 +4221,11 @@ impl Broker {
             ));
         }
         let (commit, predicted) = self.finalize_owned_views(commit).await?;
-        let outcome = self.deps.store.commit(commit).await?;
+        let outcome = self
+            .deps
+            .store
+            .commit_with_submission(commit, binding)
+            .await?;
         // §10.3 的 `version` 规则漂移检测：推导值必须等于存储层返回值。幂等命中时本批内容未被采用
         // （返回的是首次提交的结果），因此不参与比对。
         if let (Some(predicted), None) = (predicted, &outcome.replayed) {
@@ -4625,11 +5051,12 @@ pub(crate) mod test_support {
     use super::*;
     use crate::model::{
         ActorKind, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId,
-        AttachmentGeneration, AttachmentId, AuditRecord, CapabilitySet, ConfigOption, DeviceId,
-        DeviceRecord, DirectoryId, DirectoryRecord, EventId, ModeState, NodeId, NodeKind,
-        NodeRecord, OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
-        PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ResourceOrigin,
-        ServerEpoch, Session, SessionId, SessionSnapshot, SessionSummary, Turn, WorkspaceRef,
+        AttachmentGeneration, AttachmentId, AttachmentSubmission, AuditRecord, CapabilitySet,
+        ConfigOption, DeviceId, DeviceRecord, DirectoryId, DirectoryRecord, EventId, ModeState,
+        NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch, PairingId, PairingPeer,
+        PairingRecord, PairingState, PairingTarget, PeerIdentity, PeerPublicKey,
+        PendingInteraction, ResourceOrigin, ServerEpoch, Session, SessionId, SessionSnapshot,
+        SessionSummary, Turn, WorkspaceRef,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
@@ -4811,6 +5238,20 @@ pub(crate) mod test_support {
         pub(crate) create_errors: Mutex<VecDeque<PortError>>,
         /// `load_recovery` 的调用次数（断言「授权先于本机读取」：未授权时不得读会话行）。
         pub(crate) recovery_reads: AtomicUsize,
+        /// 已封存附件清单（`submit_prompt_with_submission` 的 `submission()` 读取源）。
+        pub(crate) submissions: Mutex<HashMap<String, AttachmentSubmission>>,
+        /// 成功受理时实际交给存储的附件绑定（顺序即调用顺序）。
+        pub(crate) bindings: Mutex<Vec<SubmissionBinding>>,
+        /// `InteractionAuthority::effective` 的脚本化结果。
+        pub(crate) effective_interactions: Mutex<Vec<EffectiveInteraction>>,
+        /// 已被解析的交互（同一标识再次解析 → `AlreadyResolved`）。
+        pub(crate) resolved_interactions: Mutex<Vec<String>>,
+        /// 已失效的交互（`invalidate_pending` 的调用记录与目标集合）。
+        pub(crate) invalidated_interactions: Mutex<Vec<(Option<String>, usize)>>,
+        /// `InteractionAuthority::resolve_effective` 的脚本化错误（先进先出；空 = 正常仲裁）。
+        pub(crate) resolve_errors: Mutex<VecDeque<PortError>>,
+        /// `SessionBackendFactory::open` 的脚本化错误（先进先出；空 = 成功）。
+        pub(crate) open_errors: Mutex<VecDeque<PortError>>,
     }
 
     /// `owned_session` 的两列恢复数据（§3.6 `SessionRecoveryRecord`）。
@@ -5889,6 +6330,43 @@ pub(crate) mod test_support {
         async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
             self.commit_scoped(commit, None).await
         }
+
+        /// §6 第 22 条的 fake 等价物：受理前核对清单（会话/顺序）与已登记清单相等；失败整次拒绝。
+        /// 成功后才记录绑定，因此调用方观察到的 `bindings` 只包含真正落账的受理。
+        async fn commit_with_submission(
+            &self,
+            commit: OwnedCommit,
+            binding: Option<SubmissionBinding>,
+        ) -> Result<CommitOutcome, PortError> {
+            let Some(binding) = binding else {
+                return self.commit_scoped(commit, None).await;
+            };
+            let session = commit.session.clone().ok_or(PortError::InvalidRequest(
+                "attachment binding requires a session",
+            ))?;
+            if commit.idempotency.is_none() || commit.command_terminal.is_some() {
+                return Err(PortError::InvalidRequest(
+                    "attachment binding is only valid on an acceptance commit",
+                ));
+            }
+            let manifest = lock(&self.world.submissions)
+                .get(binding.submission.as_str())
+                .cloned()
+                .ok_or_else(|| {
+                    PortError::NotFound(EntityRef::Submission(binding.submission.clone()))
+                })?;
+            if manifest.session != session || manifest.attachments != binding.attachments {
+                return Err(PortError::InvalidRequest(
+                    "attachment binding does not match the sealed manifest",
+                ));
+            }
+            let outcome = self.commit_scoped(commit, None).await?;
+            if outcome.replayed.is_none() {
+                lock(&self.world.bindings).push(binding);
+            }
+            Ok(outcome)
+        }
+
         async fn commit_workspace_mkdir_terminal(
             &self,
             actor: &Actor,
@@ -5932,6 +6410,27 @@ pub(crate) mod test_support {
                 summaries.truncate(limit as usize);
             }
             Ok(summaries)
+        }
+
+        async fn origin_epochs(
+            &self,
+            sessions: &[SessionId],
+        ) -> Result<Vec<(SessionId, OriginEpoch)>, PortError> {
+            let state = lock(&self.world.state);
+            Ok(sessions
+                .iter()
+                .filter(|session| state.sessions.contains_key(session.as_str()))
+                .map(|session| {
+                    (
+                        session.clone(),
+                        state
+                            .epochs
+                            .get(session.as_str())
+                            .cloned()
+                            .unwrap_or_else(|| origin_epoch_of(500)),
+                    )
+                })
+                .collect())
         }
 
         async fn head(&self) -> Result<GlobalCursor, PortError> {
@@ -6351,6 +6850,8 @@ pub(crate) mod test_support {
                 events,
                 history,
                 history_has_earlier,
+                messages: Vec::new(),
+                messages_has_earlier: false,
                 turns,
                 interactions,
                 config: Vec::new(),
@@ -6743,6 +7244,7 @@ pub(crate) mod test_support {
             _session: &SessionId,
             _attachment: &AttachmentId,
             _generation: AttachmentGeneration,
+            _at: Timestamp,
         ) -> Result<(), PortError> {
             Ok(())
         }
@@ -6800,6 +7302,9 @@ pub(crate) mod test_support {
             reference: SessionReference,
             sink: EventSink,
         ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+            if let Some(error) = lock(&self.world.open_errors).pop_front() {
+                return Err(error);
+            }
             Ok(Box::new(FakeEndpoint {
                 world: self.world.clone(),
                 sink,
@@ -6890,6 +7395,10 @@ pub(crate) mod test_support {
             })
         }
 
+        async fn validate_prompt(&self, _request: &PromptRequest) -> Result<(), PortError> {
+            Ok(())
+        }
+
         async fn cancel(&self, _turn: Option<TurnId>) -> Result<(), PortError> {
             Ok(())
         }
@@ -6946,6 +7455,89 @@ pub(crate) mod test_support {
     }
 
     // -----------------------------------------------------------------------------------------
+    // 有效待处理交互 fake
+    // -----------------------------------------------------------------------------------------
+
+    /// `InteractionAuthority` 的可观察替身：读取返回脚本化清单，解析先校验版本/失效状态再原子标记，
+    /// 失效把目标从清单移除（因此之后既读不到也解析不了）。
+    pub(crate) struct FakeInteractions {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    #[async_trait]
+    impl InteractionAuthority for FakeInteractions {
+        async fn effective(
+            &self,
+            session: &SessionId,
+        ) -> Result<Vec<EffectiveInteraction>, PortError> {
+            Ok(lock(&self.world.effective_interactions)
+                .iter()
+                .filter(|item| &item.session == session)
+                .cloned()
+                .collect())
+        }
+
+        async fn resolve_effective(
+            &self,
+            write: EffectiveResolution,
+        ) -> Result<Resolution, PortError> {
+            if let Some(error) = lock(&self.world.resolve_errors).pop_front() {
+                return Err(error);
+            }
+            if lock(&self.world.resolved_interactions)
+                .iter()
+                .any(|id| id == write.interaction.as_str())
+            {
+                return Ok(Resolution::AlreadyResolved);
+            }
+            let current = lock(&self.world.effective_interactions)
+                .iter()
+                .find(|item| item.interaction == write.interaction)
+                .cloned();
+            let Some(current) = current else {
+                return Err(PortError::Conflict(ConflictKind::Expired));
+            };
+            if current.session != write.session {
+                return Err(PortError::NotFound(EntityRef::Interaction(
+                    write.interaction,
+                )));
+            }
+            if let Some(expected) = write.request_version
+                && expected != current.request_version
+            {
+                return Err(PortError::Conflict(ConflictKind::VersionMismatch));
+            }
+            write.resolution.validate().map_err(PortError::from)?;
+            if let InteractionResolution::Elicitation { action, values } = &write.resolution
+                && *action == ElicitationAction::Submit
+            {
+                current
+                    .validate_submission(values)
+                    .map_err(PortError::from)?;
+            }
+            lock(&self.world.resolved_interactions).push(write.interaction.as_str().to_owned());
+            Ok(Resolution::Resolved)
+        }
+
+        async fn invalidate_pending(
+            &self,
+            session: Option<&SessionId>,
+            _at: Timestamp,
+        ) -> Result<u32, PortError> {
+            let mut effective = lock(&self.world.effective_interactions);
+            let before = effective.len();
+            effective.retain(|item| match session {
+                Some(session) => &item.session != session,
+                None => false,
+            });
+            let removed = before - effective.len();
+            lock(&self.world.invalidated_interactions)
+                .push((session.map(SessionId::as_str).map(str::to_owned), removed));
+            Ok(u32::try_from(removed).unwrap_or(u32::MAX))
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
     // 组装与执行器
     // -----------------------------------------------------------------------------------------
 
@@ -6958,13 +7550,37 @@ pub(crate) mod test_support {
 
     impl Harness {
         pub(crate) fn new(config: BrokerConfig) -> Self {
+            Self::build(config, None)
+        }
+
+        /// 带 `InteractionAuthority` 的装配：返回 broker 与可观察的 fake 授权端口。
+        pub(crate) fn with_interactions(config: BrokerConfig) -> (Self, Arc<FakeInteractions>) {
             let world = FakeWorld::new();
+            let authority = Arc::new(FakeInteractions {
+                world: world.clone(),
+            });
+            (
+                Self::build_in(config, Some(authority.clone()), world),
+                authority,
+            )
+        }
+
+        fn build(config: BrokerConfig, interactions: Option<Arc<FakeInteractions>>) -> Self {
+            let world = FakeWorld::new();
+            Self::build_in(config, interactions, world)
+        }
+
+        fn build_in(
+            config: BrokerConfig,
+            interactions: Option<Arc<FakeInteractions>>,
+            world: Arc<FakeWorld>,
+        ) -> Self {
             let store = Arc::new(FakeStore {
                 world: world.clone(),
             });
             let seq = Sequence::new(1).expect("sequence");
             let _ = seq;
-            let broker = Arc::new(Broker::new(
+            let mut broker = Broker::new(
                 BrokerDeps {
                     store: store.clone(),
                     deliveries: Arc::new(FakeDeliveries {
@@ -6986,7 +7602,11 @@ pub(crate) mod test_support {
                     })),
                 },
                 config,
-            ));
+            );
+            if let Some(authority) = interactions {
+                broker = broker.with_interaction_authority(authority);
+            }
+            let broker = Arc::new(broker);
             let session = SessionId::new(&uuid_text(7)).expect("session id");
             let agent = AgentRef::try_new(AgentId::new("agent-1").expect("agent id"), "Agent One")
                 .expect("agent ref");
@@ -7087,11 +7707,14 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::lock;
     use super::test_support::*;
     use super::*;
     use crate::model::{
-        AcpRaw, AgentId, AgentRef, AgentSessionId, DeviceId, EventId, InteractionKind,
+        AcpRaw, AgentId, AgentRef, AgentSessionId, AttachmentId, AttachmentSubject,
+        AttachmentSubmission, DeviceId, ElicitationSchema, EventId, InteractionKind,
         InteractionOption, ModeState, NodeId, PairingId, PendingInteraction, ResourceOrigin,
+        SubmissionId,
     };
 
     /// 一个已认证的设备主体（§10.1 的「按诱发命令的执行者分类」断言与授权回归都用它）。
@@ -8741,6 +9364,8 @@ mod tests {
                 history: false,
             },
             before_history: None,
+            before_messages: None,
+            messages_limit: ReplayLimit::new(0),
             after: None,
             limit: ReplayLimit::default(),
         }))
@@ -8821,6 +9446,8 @@ mod tests {
                 ..HistoryInclude::default()
             },
             before_history: None,
+            before_messages: None,
+            messages_limit: ReplayLimit::new(0),
             after: None,
             limit: ReplayLimit::new(64),
         }))
@@ -10937,5 +11564,495 @@ mod tests {
         let _ = harness.submit_prompt(1, 'I');
         let session = harness.world.session(&harness.session).expect("会话");
         assert!(session.title().is_none(), "R9：显式置空 → 未命名会话");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // §5.8/§6 第 22 条：附件清单的原子绑定与有效交互
+    // -----------------------------------------------------------------------------------------
+
+    fn submission_of(
+        session: &SessionId,
+        n: u64,
+    ) -> (SubmissionId, AttachmentId, AttachmentSubmission) {
+        let submission = SubmissionId::new(&uuid_text(600 + n)).expect("submission id");
+        let attachment = AttachmentId::new(&uuid_text(700 + n)).expect("attachment id");
+        let manifest = AttachmentSubmission {
+            submission: submission.clone(),
+            session: session.clone(),
+            subject: AttachmentSubject::Device(DeviceId::new(&uuid_text(800 + n)).expect("device")),
+            attachments: vec![attachment.clone()],
+            digest: digest('S'),
+            sealed_at: ts(0),
+        };
+        (submission, attachment, manifest)
+    }
+
+    fn prompt_with_binding(
+        harness: &Harness,
+        binding: SubmissionBinding,
+        fingerprint: char,
+    ) -> Result<CommandReceipt, PortError> {
+        let actor = harness.actor();
+        let command = prompt_command(&actor, &harness.session, &harness.request(1), fingerprint);
+        block_on(harness.broker.submit_prompt_with_submission(
+            &actor,
+            &command,
+            &[PromptContentBlock::new(json_view(
+                r#"{"type":"text","text":"see attachment"}"#,
+            ))],
+            binding,
+        ))
+    }
+
+    /// 受理提交携带清单时，绑定与幂等行、事件同批落账；重试返回首次结果且不重复绑定。
+    #[test]
+    fn prompt_submission_binding_is_committed_with_the_acceptance() {
+        let harness = Harness::new(BrokerConfig::default());
+        let (submission, attachment, manifest) = submission_of(&harness.session, 1);
+        let subject = manifest.subject.clone();
+        lock(&harness.world.submissions).insert(submission.as_str().to_owned(), manifest);
+        let binding = SubmissionBinding {
+            submission,
+            attachments: vec![attachment],
+            subject,
+        };
+
+        let receipt =
+            prompt_with_binding(&harness, binding.clone(), 'A').expect("accept with submission");
+        assert!(matches!(receipt, CommandReceipt::Accepted { .. }));
+        assert_eq!(harness.world.prompt_count(), 1, "受理后才派发给 Agent");
+        assert_eq!(lock(&harness.world.bindings).len(), 1);
+        assert!(
+            harness.world.commit_count() >= 1,
+            "受理提交至少一次，且绑定只随它落账"
+        );
+
+        // 同一 requestId 重试：幂等命中（先于绑定校验），不再次绑定、不二次派发。
+        let replay = prompt_with_binding(&harness, binding, 'A').expect("replay");
+        assert!(matches!(replay, CommandReceipt::Accepted { .. }));
+        assert_eq!(harness.world.prompt_count(), 1);
+        assert_eq!(lock(&harness.world.bindings).len(), 1);
+    }
+
+    /// 清单不存在/跨会话/持久化失败：命令不被受理、Agent 未被调用、也没有广播。
+    #[test]
+    fn failed_submission_binding_never_dispatches_or_publishes() {
+        let harness = Harness::new(BrokerConfig::default());
+        let (unknown, attachment, manifest) = submission_of(&harness.session, 2);
+        let error = prompt_with_binding(
+            &harness,
+            SubmissionBinding {
+                submission: unknown,
+                attachments: vec![attachment],
+                subject: manifest.subject,
+            },
+            'B',
+        )
+        .expect_err("unknown submission");
+        assert!(matches!(
+            error,
+            PortError::NotFound(EntityRef::Submission(_))
+        ));
+        assert_eq!(harness.world.prompt_count(), 0);
+        assert_eq!(harness.world.publish_count(), 0);
+        assert!(lock(&harness.world.bindings).is_empty());
+
+        // 清单属于另一个会话。
+        let (submission, attachment, mut manifest) = submission_of(&harness.session, 3);
+        manifest.session = SessionId::new(&uuid_text(77)).expect("other session");
+        let subject = manifest.subject.clone();
+        lock(&harness.world.submissions).insert(submission.as_str().to_owned(), manifest);
+        let error = prompt_with_binding(
+            &harness,
+            SubmissionBinding {
+                submission,
+                attachments: vec![attachment],
+                subject,
+            },
+            'C',
+        )
+        .expect_err("cross-session submission");
+        assert!(matches!(error, PortError::InvalidRequest(_)));
+        assert_eq!(harness.world.prompt_count(), 0);
+        assert_eq!(harness.world.publish_count(), 0);
+
+        // 存储写失败：绑定已通过校验，但受理事务失败 ⇒ 不派发、不广播。
+        let (submission, attachment, manifest) = submission_of(&harness.session, 4);
+        let subject = manifest.subject.clone();
+        lock(&harness.world.submissions).insert(submission.as_str().to_owned(), manifest);
+        harness.world.fail_next_commit();
+        let receipt = prompt_with_binding(
+            &harness,
+            SubmissionBinding {
+                submission,
+                attachments: vec![attachment],
+                subject,
+            },
+            'D',
+        )
+        .expect("persistence failure is a command-level rejection");
+        assert!(matches!(
+            receipt,
+            CommandReceipt::Rejected { error } if error.code() == "internal.unavailable"
+        ));
+        assert_eq!(harness.world.prompt_count(), 0);
+        assert_eq!(harness.world.publish_count(), 0);
+        assert!(lock(&harness.world.bindings).is_empty());
+    }
+
+    fn effective(
+        session: &SessionId,
+        interaction: &InteractionId,
+        kind: InteractionKind,
+        schema: Option<ElicitationSchema>,
+    ) -> EffectiveInteraction {
+        EffectiveInteraction::try_new(
+            interaction.clone(),
+            session.clone(),
+            kind,
+            Version::new(1),
+            None,
+            if kind == InteractionKind::Permission {
+                vec![
+                    InteractionOption::try_new("allow-once", "Allow once", "allow_once")
+                        .expect("option"),
+                ]
+            } else {
+                Vec::new()
+            },
+            schema,
+        )
+        .expect("effective interaction")
+    }
+
+    /// 有效读取返回完整请求；上游不可得时先标记失效并返回错误，绝不继续当作可应答。
+    #[test]
+    fn effective_interactions_require_a_live_upstream() {
+        let (harness, _authority) = Harness::with_interactions(BrokerConfig::default());
+        let interaction = InteractionId::new(&uuid_text(300)).expect("interaction");
+        lock(&harness.world.effective_interactions).push(effective(
+            &harness.session,
+            &interaction,
+            InteractionKind::Permission,
+            None,
+        ));
+        let actor = device_actor();
+        let found = block_on(
+            harness
+                .broker
+                .effective_interactions(&actor, &harness.reference()),
+        )
+        .expect("effective");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].interaction, interaction);
+
+        // 新 harness：尚未打开端点，脚本化 open 失败 ⇒ 失效 + 错误。
+        let (dead, authority) = Harness::with_interactions(BrokerConfig::default());
+        let dead_interaction = InteractionId::new(&uuid_text(301)).expect("interaction");
+        lock(&dead.world.effective_interactions).push(effective(
+            &dead.session,
+            &dead_interaction,
+            InteractionKind::Permission,
+            None,
+        ));
+        lock(&dead.world.open_errors)
+            .push_back(PortError::Unavailable(UnavailableKind::RemoteUnavailable));
+        let error = block_on(
+            dead.broker
+                .effective_interactions(&actor, &dead.reference()),
+        )
+        .expect_err("upstream unavailable");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::RemoteUnavailable)
+        ));
+        assert_eq!(
+            lock(&dead.world.invalidated_interactions).len(),
+            1,
+            "上游丢失时必须标记失效"
+        );
+        assert_eq!(
+            block_on(authority.effective(&dead.session))
+                .expect("effective")
+                .len(),
+            0
+        );
+    }
+
+    /// 版本不符/表单无效都不消费请求；第一个有效答案胜出，后到者得到已处理事实。
+    #[test]
+    fn effective_resolution_validates_before_consuming() {
+        let (harness, authority) = Harness::with_interactions(BrokerConfig::default());
+        let interaction = InteractionId::new(&uuid_text(302)).expect("interaction");
+        let schema = ElicitationSchema::new(
+            r#"{"type":"object","required":["count","mode"],"properties":{"count":{"type":"integer","minimum":1,"maximum":10},"mode":{"type":"string","enum":["fast","safe"]}}}"#,
+        )
+        .expect("schema");
+        lock(&harness.world.effective_interactions).push(effective(
+            &harness.session,
+            &interaction,
+            InteractionKind::Elicitation,
+            Some(schema),
+        ));
+        let actor = device_actor();
+        let values = |json: &str| ElicitationValues::parse_json(json).expect("values");
+        let resolution =
+            |action: ElicitationAction, json: &str| InteractionResolution::Elicitation {
+                action,
+                values: values(json),
+            };
+
+        // 版本不符。
+        let error = block_on(harness.broker.resolve_effective(
+            &actor,
+            &harness.reference(),
+            &interaction,
+            Some(Version::new(2)),
+            resolution(ElicitationAction::Submit, r#"{"count":5,"mode":"fast"}"#),
+        ))
+        .expect_err("stale version");
+        assert!(matches!(
+            error,
+            PortError::Conflict(ConflictKind::VersionMismatch)
+        ));
+        assert!(lock(&harness.world.resolved_interactions).is_empty());
+
+        // 表单值不符合 schema。
+        let error = block_on(harness.broker.resolve_effective(
+            &actor,
+            &harness.reference(),
+            &interaction,
+            Some(Version::new(1)),
+            resolution(ElicitationAction::Submit, r#"{"count":0,"mode":"fast"}"#),
+        ))
+        .expect_err("invalid form");
+        assert!(matches!(
+            error,
+            PortError::InvalidRequest(_) | PortError::Conflict(_)
+        ));
+        assert!(lock(&harness.world.resolved_interactions).is_empty());
+        assert_eq!(
+            block_on(authority.effective(&harness.session))
+                .expect("effective")
+                .len(),
+            1
+        );
+
+        // 两个设备并发提交同一版本：恰好一个胜出。
+        let reference = harness.reference();
+        let other_actor = device_actor();
+        let first = harness.broker.resolve_effective(
+            &actor,
+            &reference,
+            &interaction,
+            Some(Version::new(1)),
+            resolution(ElicitationAction::Submit, r#"{"count":5,"mode":"fast"}"#),
+        );
+        let second = harness.broker.resolve_effective(
+            &other_actor,
+            &reference,
+            &interaction,
+            Some(Version::new(1)),
+            resolution(ElicitationAction::Decline, "null"),
+        );
+        let outcomes = run_all(vec![first, second]);
+        let resolved = outcomes
+            .iter()
+            .filter(|item| item.as_ref().ok() == Some(&Resolution::Resolved))
+            .count();
+        let already = outcomes
+            .iter()
+            .filter(|item| item.as_ref().ok() == Some(&Resolution::AlreadyResolved))
+            .count();
+        assert_eq!(resolved, 1, "只能有一个第一个有效答案");
+        assert_eq!(already, 1, "后到者拿到已处理事实");
+        assert_eq!(lock(&harness.world.resolved_interactions).len(), 1);
+    }
+
+    /// 同一 `requestId` 重试不会二次派发解析（幂等命中先于授权/解析）。
+    #[test]
+    fn duplicate_resolution_request_is_idempotent() {
+        let (harness, _authority) = Harness::with_interactions(BrokerConfig::default());
+        let interaction = InteractionId::new(&uuid_text(303)).expect("interaction");
+        lock(&harness.world.effective_interactions).push(effective(
+            &harness.session,
+            &interaction,
+            InteractionKind::Permission,
+            None,
+        ));
+        harness.world.seed_interaction(
+            PendingInteraction::try_new(
+                interaction.clone(),
+                InteractionKind::Permission,
+                harness.session.clone(),
+                ts(0),
+                vec![
+                    InteractionOption::try_new("allow-once", "Allow once", "allow_once")
+                        .expect("option"),
+                ],
+            )
+            .expect("pending"),
+        );
+        let actor = harness.actor();
+        let command = |request: RequestId| ClientCommand {
+            actor: actor.clone(),
+            request,
+            command: "permission.resolve".to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(harness.session.clone()),
+            expected_version: None,
+            request_fingerprint: digest('R'),
+            payload: CommandPayload::PermissionResolve {
+                interaction: interaction.clone(),
+                option_id: "allow-once".to_owned(),
+            },
+        };
+        let request = harness.request(5);
+        let first = block_on(harness.broker.submit_mutation_versioned(
+            &actor,
+            &command(request.clone()),
+            Some(Version::new(1)),
+        ))
+        .expect("first");
+        assert!(matches!(first, CommandReceipt::Accepted { .. }));
+        let second = block_on(harness.broker.submit_mutation_versioned(
+            &actor,
+            &command(request),
+            Some(Version::new(1)),
+        ))
+        .expect("replay");
+        assert!(matches!(second, CommandReceipt::Accepted { .. }));
+        assert_eq!(
+            lock(&harness.world.resolved_interactions).len(),
+            1,
+            "重试不得二次调用 InteractionAuthority"
+        );
+    }
+
+    /// 版本/表单/上游校验必须**先于**受理：失败时没有 `accepted` 行，同一 requestId 用正确版本可重试。
+    #[test]
+    fn resolution_validation_precedes_acceptance() {
+        let (harness, _authority) = Harness::with_interactions(BrokerConfig::default());
+        let interaction = InteractionId::new(&uuid_text(310)).expect("interaction");
+        let mut current = effective(
+            &harness.session,
+            &interaction,
+            InteractionKind::Permission,
+            None,
+        );
+        // 服务端的当前请求版本是 2；客户端仍带着上一页读到的 1。
+        current.request_version = Version::new(2);
+        lock(&harness.world.effective_interactions).push(current);
+
+        let actor = harness.actor();
+        let request = harness.request(6);
+        let command = ClientCommand {
+            actor: actor.clone(),
+            request: request.clone(),
+            command: "permission.resolve".to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(harness.session.clone()),
+            expected_version: None,
+            request_fingerprint: digest('V'),
+            payload: CommandPayload::PermissionResolve {
+                interaction: interaction.clone(),
+                option_id: "allow-once".to_owned(),
+            },
+        };
+        let error = block_on(harness.broker.submit_mutation_versioned(
+            &actor,
+            &command,
+            Some(Version::new(1)),
+        ))
+        .expect_err("stale version");
+        assert!(matches!(
+            error,
+            PortError::Conflict(ConflictKind::VersionMismatch)
+        ));
+        // 校验失败不落受理行、不消费请求——重试因此不会被「accepted 但没有终态」卡死。
+        assert!(
+            !lock(&harness.world.state)
+                .commands
+                .contains_key(command_key(&actor, &request).as_str()),
+            "校验失败不得留下 accepted 行"
+        );
+        assert!(lock(&harness.world.resolved_interactions).is_empty());
+
+        let receipt = block_on(harness.broker.submit_mutation_versioned(
+            &actor,
+            &command,
+            Some(Version::new(2)),
+        ))
+        .expect("retry with the current version");
+        assert!(matches!(receipt, CommandReceipt::Accepted { .. }));
+        assert_eq!(lock(&harness.world.resolved_interactions).len(), 1);
+    }
+
+    /// 受理之后的竞态失败（另一设备抢先解析、请求在窗口内失效、后端写失败）必须落一条持久化终态：
+    /// 客户端按同一 requestId 重试拿到确定结果，而不是永远停在 `accepted`。
+    #[test]
+    fn post_accept_resolution_failure_records_a_terminal() {
+        let (harness, _authority) = Harness::with_interactions(BrokerConfig::default());
+        let interaction = InteractionId::new(&uuid_text(311)).expect("interaction");
+        lock(&harness.world.effective_interactions).push(effective(
+            &harness.session,
+            &interaction,
+            InteractionKind::Permission,
+            None,
+        ));
+        lock(&harness.world.resolve_errors)
+            .push_back(PortError::Unavailable(UnavailableKind::IoError));
+
+        let actor = harness.actor();
+        let request = harness.request(7);
+        let command = ClientCommand {
+            actor: actor.clone(),
+            request: request.clone(),
+            command: "permission.resolve".to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(harness.session.clone()),
+            expected_version: None,
+            request_fingerprint: digest('P'),
+            payload: CommandPayload::PermissionResolve {
+                interaction: interaction.clone(),
+                option_id: "allow-once".to_owned(),
+            },
+        };
+        let receipt = block_on(harness.broker.submit_mutation_versioned(
+            &actor,
+            &command,
+            Some(Version::new(1)),
+        ))
+        .expect("accepted, then failed");
+        assert!(matches!(receipt, CommandReceipt::Accepted { .. }));
+
+        let record = lock(&harness.world.state)
+            .commands
+            .get(command_key(&actor, &request).as_str())
+            .cloned()
+            .expect("acceptance row");
+        assert_eq!(record.status(), CommandStatus::Failed);
+        assert!(
+            record.terminal_event().is_some(),
+            "失败必须落 command.failed 终态事件"
+        );
+        assert!(lock(&harness.world.resolved_interactions).is_empty());
+
+        // 重试是幂等重放，不会二次仲裁；终态已经存在，客户端可据此结束等待。
+        let replay = block_on(harness.broker.submit_mutation_versioned(
+            &actor,
+            &command,
+            Some(Version::new(1)),
+        ))
+        .expect("replay");
+        assert!(matches!(replay, CommandReceipt::Accepted { .. }));
+        assert!(lock(&harness.world.resolved_interactions).is_empty());
+        assert_eq!(
+            lock(&harness.world.state)
+                .commands
+                .get(command_key(&actor, &request).as_str())
+                .map(|record| record.status()),
+            Some(CommandStatus::Failed)
+        );
     }
 }

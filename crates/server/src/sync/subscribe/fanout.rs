@@ -40,8 +40,8 @@ const EVENT_QUEUE_CAPACITY: usize = 1024;
 /// 通道的接收端由本结构持有（`take_receiver`）：发布端必须先装进组合根的 `EventPublisher` 分叉，而
 /// 那时分发循环还没有启动——两侧的生命周期因此必然错开，接收端在这里等 `NetIngress::start` 来取。
 pub struct SyncPublisher {
-    queue: mpsc::Sender<CommittedEvent>,
-    receiver: Option<mpsc::Receiver<CommittedEvent>>,
+    queue: mpsc::Sender<CommittedDelivery>,
+    receiver: Option<mpsc::Receiver<CommittedDelivery>>,
 }
 
 impl SyncPublisher {
@@ -55,29 +55,40 @@ impl SyncPublisher {
     }
 
     /// 取回通道的接收端（只应取一次；第二次起得 `None`，调用方据此失败关闭而不是静默丢事件）。
-    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<CommittedEvent>> {
+    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<CommittedDelivery>> {
         self.receiver.take()
     }
 }
 
 impl EventPublisher for SyncPublisher {
     fn publish(&self, delivery: CommittedDelivery) {
-        // 只投 owned：imported 事件没有本地正文可组装（§9.6），其回源投递本次不做（任务 4.9 的登记口径）。
-        let CommittedDelivery::Owned(event) = delivery else {
-            return;
+        // 两种投递都进入同一道有界队列：imported 的正文只在下一次投递时存在于内存里，若在这里丢掉它，
+        // 本地客户端就再也拿不到实时正文（它不在本机事件库，重放路径读不到）。
+        let (event_id, global_sequence) = match &delivery {
+            CommittedDelivery::Owned(event) => {
+                (event.id.as_str().to_owned(), event.global_sequence.get())
+            }
+            CommittedDelivery::Imported {
+                origin,
+                local_sequence,
+                ..
+            } => (
+                origin.origin_event_id.as_str().to_owned(),
+                local_sequence.get(),
+            ),
         };
         // `try_send` 失败即丢：事件已持久化，客户端重连后凭 cursor 重放补齐（§9.5）。
-        if let Err(error) = self.queue.try_send(event) {
+        if let Err(error) = self.queue.try_send(delivery) {
             match error {
-                mpsc::error::TrySendError::Full(event) => warn!(
+                mpsc::error::TrySendError::Full(_) => warn!(
                     event = "sync.fanout_queue_full",
-                    event_id = event.id.as_str(),
-                    global_sequence = event.global_sequence.get(),
-                    "the sync fan-out queue is full; the device replays the event by cursor"
+                    event_id = event_id.as_str(),
+                    global_sequence,
+                    "the sync fan-out queue is full; the device replays owned events by cursor"
                 ),
-                mpsc::error::TrySendError::Closed(event) => debug!(
+                mpsc::error::TrySendError::Closed(_) => debug!(
                     event = "sync.fanout_closed",
-                    event_id = event.id.as_str(),
+                    event_id = event_id.as_str(),
                     "the sync fan-out is shutting down"
                 ),
             }
@@ -93,27 +104,73 @@ pub async fn dispatch<E: EventReader + 'static>(
     registry: Arc<ConnectionRegistry>,
     subscribe: Arc<SubscribeRoute>,
     reader: Arc<E>,
-    mut queue: mpsc::Receiver<CommittedEvent>,
+    mut queue: mpsc::Receiver<CommittedDelivery>,
     shutdown: Shutdown,
 ) {
     loop {
-        let event = tokio::select! {
+        let delivery = tokio::select! {
             biased;
             () = shutdown.clone().wait() => {
                 debug!(event = "sync.fanout_shutdown", "the sync event fan-out stops");
                 return;
             }
             received = queue.recv() => match received {
-                Some(event) => event,
+                Some(delivery) => delivery,
                 None => return,
             },
         };
-        deliver(&registry, &subscribe, reader.as_ref(), &event).await;
+        match delivery {
+            CommittedDelivery::Owned(event) => {
+                deliver_owned(&registry, &subscribe, reader.as_ref(), &event).await;
+            }
+            imported @ CommittedDelivery::Imported { .. } => {
+                deliver_imported(&registry, &subscribe, &imported);
+            }
+        }
+    }
+}
+
+/// 把一条 imported 投递投递给全部**已建立屏障**的连接（`SYNC_PROTOCOL.md` §9.6）。
+///
+/// 正文只存在于这次投递里（`imported_delivery_index` 没有正文列），因此这里不查事件库、也不重新读盘：
+/// 帧素材由 [`crate::sync::subscribe::event::imported_event_body`] 从投递单元装配。未同时协商
+/// `resource.remote-origin.v1` 与 `core.event-origin.v1` 的连接拿不到合法形状（`remoteOrigin` 由前者
+/// 门控、`kind = node` 由后者门控），按失败关闭跳过并记一条可见诊断——绝不伪造来源或降级 `kind`。
+fn deliver_imported(
+    registry: &ConnectionRegistry,
+    subscribe: &SubscribeRoute,
+    delivery: &CommittedDelivery,
+) {
+    let targets = subscribe.live_targets(registry);
+    if targets.is_empty() {
+        return;
+    }
+    for (target, _actor) in &targets {
+        let features = subscribe.features(target);
+        match crate::sync::subscribe::event::imported_event_body(delivery, &features) {
+            Ok(body) => {
+                if target.send(MessageType::Event, &body).is_err() {
+                    debug!(
+                        event = "sync.fanout_skipped",
+                        connection_id = target.connection_id().as_str(),
+                        "the connection cannot take the imported event right now"
+                    );
+                }
+            }
+            Err(fault) => {
+                debug!(
+                    event = "sync.fanout_imported_unassemblable",
+                    connection_id = target.connection_id().as_str(),
+                    fault = %fault,
+                    "the imported event cannot be expressed to this connection; it is not delivered"
+                );
+            }
+        }
     }
 }
 
 /// 把一条已持久化的 owned 事件投递给全部**已建立屏障**的连接。
-async fn deliver<E: EventReader>(
+async fn deliver_owned<E: EventReader>(
     registry: &ConnectionRegistry,
     subscribe: &SubscribeRoute,
     reader: &E,
@@ -179,6 +236,186 @@ async fn deliver<E: EventReader>(
                     "the persisted event cannot be mapped to a v1 event frame"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 4.4 的扇出回归：`publish` 在提交路径上被同步调用，队列满时只能丢这一条，绝不得阻塞 broker。
+
+    use super::*;
+
+    fn event(number: u64) -> CommittedEvent {
+        let uuid = || uuid::Uuid::new_v4().to_string();
+        CommittedEvent {
+            id: acp_core::model::EventId::new(&uuid()).expect("event id"),
+            event_type: acp_core::model::EventType::new("agent.message.delta").expect("type"),
+            session: None,
+            session_sequence: None,
+            global_sequence: acp_core::model::Sequence::new(number + 1).expect("sequence"),
+            origin_epoch: None,
+            origin_sequence: None,
+            created_at: acp_core::model::Timestamp::new("2026-01-01T00:00:00.000Z")
+                .expect("timestamp"),
+        }
+    }
+
+    #[test]
+    fn a_full_queue_drops_instead_of_blocking_the_publisher() {
+        let mut publisher = SyncPublisher::channel();
+        let mut receiver = publisher.take_receiver().expect("receiver");
+        for number in 0..EVENT_QUEUE_CAPACITY as u64 {
+            publisher.publish(CommittedDelivery::Owned(event(number)));
+        }
+        // 队列已满：这次发布仍立即返回（丢弃），broker 的提交路径不会被慢连接拖住。
+        publisher.publish(CommittedDelivery::Owned(event(10_000)));
+        let mut delivered = 0;
+        while receiver.try_recv().is_ok() {
+            delivered += 1;
+        }
+        assert_eq!(delivered, EVENT_QUEUE_CAPACITY);
+    }
+
+    #[test]
+    fn imported_deliveries_are_published_to_the_sync_fan_out() {
+        let mut publisher = SyncPublisher::channel();
+        let mut receiver = publisher.take_receiver().expect("receiver");
+        // imported 事件没有本机可重放的正文：实时投递是本地客户端看到它的唯一路径，因此它必须进队列。
+        let imported = imported_delivery();
+        let origin_event_id = match &imported {
+            CommittedDelivery::Imported { origin, .. } => origin.origin_event_id.clone(),
+            CommittedDelivery::Owned(_) => unreachable!(),
+        };
+        publisher.publish(imported);
+        let received = receiver.try_recv().expect("imported delivery is queued");
+        match received {
+            CommittedDelivery::Imported { origin, .. } => {
+                assert_eq!(origin.origin_event_id, origin_event_id);
+            }
+            CommittedDelivery::Owned(_) => panic!("imported 投递不得表达成 owned"),
+        }
+    }
+
+    /// 帧装配：所有定位字段来自投递单元，`remoteOrigin` 是必填对象，`origin` 如实指向交付节点。
+    #[test]
+    fn an_imported_delivery_becomes_a_remote_origin_event_frame() {
+        use crate::sync::subscribe::{NegotiatedFeatures, event::imported_event_body};
+
+        let delivery = imported_delivery();
+        let features = NegotiatedFeatures::new(vec![
+            crate::sync::snapshot::REMOTE_ORIGIN_FEATURE.to_owned(),
+            crate::sync::subscribe::event::EVENT_ORIGIN_FEATURE.to_owned(),
+        ]);
+        let body = imported_event_body(&delivery, &features).expect("imported frame");
+        let (session, origin, local) = match &delivery {
+            CommittedDelivery::Imported {
+                session,
+                origin,
+                local_sequence,
+                ..
+            } => (session, origin, local_sequence),
+            CommittedDelivery::Owned(_) => unreachable!(),
+        };
+        assert_eq!(
+            body.event_id.as_str(),
+            origin.origin_event_id.as_str(),
+            "eventId 必须等于 originEventId（跨跳去重）"
+        );
+        assert_eq!(
+            body.global_sequence.as_str(),
+            local.get().to_string(),
+            "imported 的全局序号是本机投递序号"
+        );
+        assert_eq!(
+            body.session_sequence
+                .as_ref()
+                .map(|value| value.as_str().to_owned()),
+            Some(local.get().to_string()),
+            "会话序号同样是本机投递序号"
+        );
+        let remote = body
+            .remote_origin
+            .as_ref()
+            .expect("imported 事件必须有 remoteOrigin");
+        assert_eq!(
+            remote.owner_node_id.as_str(),
+            session.owner_node_id.as_str()
+        );
+        assert_eq!(remote.origin_epoch.as_str(), origin.origin_epoch.as_str());
+        assert_eq!(
+            remote.origin_event_id.as_str(),
+            origin.origin_event_id.as_str()
+        );
+        assert_eq!(
+            body.origin.kind.as_str(),
+            "node",
+            "Access 只能如实陈述交付该事件的节点"
+        );
+        assert_eq!(
+            body.origin
+                .node_id
+                .as_ref()
+                .and_then(|node| node.as_ref())
+                .map(|node| node.as_str().to_owned()),
+            Some(session.owner_node_id.as_str().to_owned()),
+            "kind = node 必须带 owner 的 nodeId"
+        );
+        assert!(
+            body.origin.device_id.is_null(),
+            "kind = node 的 deviceId 必须为 null"
+        );
+        assert!(
+            body.causation_request_id.is_null(),
+            "Node Link 不携带 Owner 侧的诱发命令，不得编造 requestId"
+        );
+        assert_eq!(body.payload.view.get(), r#"{"text":"hello"}"#);
+    }
+
+    /// 未协商 `resource.remote-origin.v1` / `core.event-origin.v1` 时不得下发 imported 帧。
+    #[test]
+    fn an_imported_delivery_without_the_features_is_not_assembled() {
+        use crate::sync::subscribe::{NegotiatedFeatures, event::imported_event_body};
+
+        let delivery = imported_delivery();
+        let only_remote = NegotiatedFeatures::new(vec![
+            crate::sync::snapshot::REMOTE_ORIGIN_FEATURE.to_owned(),
+        ]);
+        assert!(imported_event_body(&delivery, &only_remote).is_err());
+        let only_origin = NegotiatedFeatures::new(vec![
+            crate::sync::subscribe::event::EVENT_ORIGIN_FEATURE.to_owned(),
+        ]);
+        assert!(imported_event_body(&delivery, &only_origin).is_err());
+    }
+
+    /// 一条完整的 imported 投递（定位 + 本机序号 + 内存正文）。
+    fn imported_delivery() -> CommittedDelivery {
+        let owner = acp_core::model::NodeId::new(&uuid::Uuid::new_v4().to_string()).expect("node");
+        CommittedDelivery::Imported {
+            session: acp_core::model::RemoteSessionRef::new(
+                owner.clone(),
+                acp_core::model::SessionId::new(&uuid::Uuid::new_v4().to_string())
+                    .expect("session"),
+            ),
+            origin: acp_core::model::OriginEventRef::new(
+                owner,
+                acp_core::model::OriginEpoch::new(&uuid::Uuid::new_v4().to_string())
+                    .expect("epoch"),
+                acp_core::model::EventId::new(&uuid::Uuid::new_v4().to_string()).expect("event"),
+            ),
+            origin_sequence: acp_core::model::Sequence::new(3).expect("sequence"),
+            local_sequence: acp_core::model::LocalCursor::new(11),
+            event_type: acp_core::model::EventType::new("agent.message.completed").expect("type"),
+            payload_digest: acp_core::model::Digest::new(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .expect("digest"),
+            created_at: acp_core::model::Timestamp::new("2026-01-01T00:00:00.000Z")
+                .expect("timestamp"),
+            payload: Some(acp_core::model::EventPayload::new(
+                acp_core::model::ViewJson::new(r#"{"text":"hello"}"#).expect("view"),
+                None,
+            )),
         }
     }
 }

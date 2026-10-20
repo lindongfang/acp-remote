@@ -578,14 +578,13 @@ fn history_entries_reuse_the_event_payload_shape() {
     }
 }
 
-/// 「分页只作用于客户端同步面」：Node Link 面的 `session.read` 载荷形状不受 Sync 新增分页参数影响。
+/// Node Link 面的 `session.read` 载荷只接受文档登记的游标：`before`/`limit`（消息页）与
+/// `beforeHistory`（远程历史页），全部可选，`include` 是唯一必填键；`additionalProperties: false`。
 ///
-/// 判据取自机器资产而不是实现细节：`schemas/node-link/v1/command.schema.json` 里每个声明了
-/// `include` 的载荷对象，其键集必须恰好是 `{ include }` 且 `additionalProperties: false`。于是
-/// 「Node Link 调用方不带分页参数照常工作」与「它一旦带上分页参数就被拒」同时被钉住——Sync 面
-/// 新增 `before`/`limit` 不会顺着 `$ref` 或复制粘贴渗进 Node Link 面。
+/// 判据取自机器资产而不是实现细节：Sync 面与 Node Link 面共用分页语义，但 Node Link 不
+/// 接受 `after`（不存在向后翻页）；未知键一旦出现会被 schema 拒绝。
 #[test]
-fn node_link_session_read_payload_carries_no_paging_parameters() {
+fn node_link_session_read_payload_allows_the_documented_pagination() {
     let document = support::read_json(&support::repo_path(
         "schemas/node-link/v1/command.schema.json",
     ));
@@ -596,22 +595,39 @@ fn node_link_session_read_payload_carries_no_paging_parameters() {
         !include_payloads.is_empty(),
         "node-link command.schema.json 里没有找到声明 include 的载荷——本断言会空转，必须重写"
     );
-    for (keys, closed) in &include_payloads {
+    for (keys, required, closed) in &include_payloads {
+        assert_eq!(
+            required,
+            &["include".to_owned()],
+            "include 仍是唯一必填键：分页游标与 limit 必须可选"
+        );
         assert_eq!(
             keys,
-            &["include".to_owned()],
-            "Node Link 面的 session.read 载荷只允许 include，不得出现分页参数"
+            &[
+                "before".to_owned(),
+                "beforeHistory".to_owned(),
+                "include".to_owned(),
+                "limit".to_owned()
+            ],
+            "Node Link 面的 session.read 载荷只允许 include + before/beforeHistory/limit"
+        );
+        assert!(
+            !keys.iter().any(|key| key.as_str() == "after"),
+            "Node Link 面没有 after：不存在向后翻页"
         );
         assert!(
             *closed,
-            "Node Link 面的载荷必须 additionalProperties: false，否则分页参数会被静默接受"
+            "Node Link 面的载荷必须 additionalProperties: false，否则未知分页参数会被静默接受"
         );
     }
 }
 
 /// 递归收集文档里每个「`required` 含 `include` 且 `properties` 含 `include`」的载荷对象：
-/// 键集，以及它是否 `additionalProperties: false`。
-fn collect_include_payloads(node: &serde_json::Value, found: &mut Vec<(Vec<String>, bool)>) {
+/// 键集、必填键集，以及它是否 `additionalProperties: false`。
+fn collect_include_payloads(
+    node: &serde_json::Value,
+    found: &mut Vec<(Vec<String>, Vec<String>, bool)>,
+) {
     // `allOf`/`oneOf`/`anyOf` 都是数组：载荷定义常藏在数组项里，只走对象键会漏掉它们。
     if let Some(items) = node.as_array() {
         for value in items {
@@ -625,10 +641,9 @@ fn collect_include_payloads(node: &serde_json::Value, found: &mut Vec<(Vec<Strin
     let properties = object
         .get("properties")
         .and_then(serde_json::Value::as_object);
-    let requires_include = object
-        .get("required")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|required| required.iter().any(|item| item == "include"));
+    let required = object.get("required").and_then(serde_json::Value::as_array);
+    let requires_include =
+        required.is_some_and(|required| required.iter().any(|item| item == "include"));
     if requires_include && properties.is_some_and(|props| props.contains_key("include")) {
         let mut keys: Vec<String> = properties
             .expect("已判定 properties 存在")
@@ -636,10 +651,17 @@ fn collect_include_payloads(node: &serde_json::Value, found: &mut Vec<(Vec<Strin
             .cloned()
             .collect();
         keys.sort();
+        let mut required_keys: Vec<String> = required
+            .expect("已判定 required 存在")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        required_keys.sort();
         let closed = object
             .get("additionalProperties")
             .is_some_and(|value| value == &serde_json::Value::Bool(false));
-        found.push((keys, closed));
+        found.push((keys, required_keys, closed));
     }
     for value in object.values() {
         collect_include_payloads(value, found);

@@ -21,23 +21,21 @@
 //!   `capability.unsupported_by_broker`，不能伪装成功」），而不是静默省略该键、返回一份「看起来完整」
 //!   的空资源。
 
-use std::collections::BTreeMap;
 use std::str::FromStr as _;
 use std::sync::Arc;
 
 use acp_core::broker::Broker;
 use acp_core::model::{
-    AcpRaw as CoreAcpRaw, Actor, CommandRecord, ConfigOption as CoreConfigOption, ConfigOptionKind,
-    ConfigValue, FileReadPurpose as CoreFileReadPurpose, GitDiff as CoreGitDiff,
+    Actor, CommandRecord, FileReadPurpose as CoreFileReadPurpose, GitDiff as CoreGitDiff,
     GitDiffBase as CoreGitDiffBase, GitDiffKind as CoreGitDiffKind,
     GitDiffUnavailableReason as CoreGitDiffUnavailable, GitFileStatus as CoreGitFileStatus,
-    GitState as CoreGitState, GitStatusPage, ModeRef as CoreModeRef, OwnedSessionRef,
-    RawUnavailableReason, RemoteSessionRef, ResourceOrigin, Sequence, SessionFileChunk,
-    SessionFileContentKind, SessionFileEntryKind as CoreEntryKind, SessionFilePage,
+    GitState as CoreGitState, GitStatusPage, MessageId, ModeRef as CoreModeRef, OwnedSessionRef,
+    RemoteSessionRef, ResourceOrigin, Sequence, SessionFileChunk, SessionFileContentKind,
+    SessionFileEntryKind as CoreEntryKind, SessionFilePage,
     SessionFileRestrictedReason as CoreRestrictedReason, SessionId, SessionReference,
-    SessionState as CoreSessionState,
+    SessionState as CoreSessionState, Timestamp as CoreTimestamp,
 };
-use acp_core::ports::{HistoryInclude, HistoryQuery, OwnedEventRecord, ReplayLimit};
+use acp_core::ports::{HistoryInclude, MessageCursor};
 use acp_core::use_cases::{ModeListing, SyncSessionQuery, UseCases};
 use base64::Engine as _;
 use sync_protocol::command::{
@@ -49,23 +47,23 @@ use sync_protocol::command::{
     SessionFileEntry as WireSessionFileEntry, SessionFilesList, SessionFilesListResult,
     SessionFilesPath, SessionFilesRead, SessionFilesReadResult, SessionGitDiff,
     SessionGitDiffResult, SessionGitStatus, SessionGitStatusResult, SessionListResult,
-    SessionPageToken, SessionRead, SessionReadResources, SessionReadResult, SessionRelativePath,
-    WorkspaceBrowse, WorkspaceBrowseEntry, WorkspaceBrowseResult,
+    SessionPageToken, SessionRead, SessionRelativePath, WorkspaceBrowse, WorkspaceBrowseEntry,
+    WorkspaceBrowseResult,
 };
 use sync_protocol::common::{
-    AgentContentBlock, Base64Url, ConfigOption as WireConfigOptionEntry, ConfigOptionType,
-    ConfigOptionValue, ConfigOptionView as WireConfigOptionView, DecimalString,
-    ModeRef as WireModeRef, ModeState as WireModeState, NonEmptyText, Nullable, OriginBlock,
-    RawAcp, RawAcpUnavailableReason, RawObject, SessionAgentRef, SessionState as WireSessionState,
+    DecimalString, ModeRef as WireModeRef, ModeState as WireModeState, NonEmptyText, Nullable,
+    OriginBlock, RawObject, SessionAgentRef, SessionState as WireSessionState,
     SessionSummary as WireSessionSummary, Text, Timestamp, Uuid, WorkspaceRef as WireWorkspaceRef,
 };
 use sync_protocol::error::ErrorCode;
-use sync_protocol::event::EventType;
-use sync_protocol::sync::{MessageRole, SnapshotItemHistory, SnapshotItemMessage};
-use sync_protocol::views::{View, project};
 use tracing::debug;
 
-use crate::sync::event::{FILE_DIFF_FEATURE, RAW_PAYLOAD_FEATURE};
+use crate::session_read::{
+    DEFAULT_PAGE_MESSAGES, MAX_PAGE_MESSAGES, SessionReadSource, wire_config_option,
+};
+#[cfg(test)]
+use crate::session_read::{Message, MessageMerger, needs_older_agents};
+use crate::sync::event::{FILE_DIFF_FEATURE, RAW_PAYLOAD_FEATURE, TYPED_MEDIA_FEATURE};
 use crate::sync::snapshot::{LOCAL_CATALOG_FEATURE, REMOTE_ORIGIN_FEATURE};
 use crate::sync::subscribe::cursor::CursorFault;
 use crate::sync::subscribe::{NegotiatedFeatures, OwnerReachability};
@@ -78,6 +76,10 @@ use super::{core_request_id, details_object, port_rejection, wire_public_error, 
 /// MUST NOT 静默忽略该 include 后返回一份看似完整的空结果。
 pub const SESSION_HISTORY_FEATURE: &str = "core.session-history.v1";
 
+/// `core.pending-interactions.v1`：`session.read` 的 `include: ["pending_interactions"]` 需要协商该
+/// feature（§11.7）。未协商时显式回 `protocol.feature_required`，不得返回空数组。
+pub const PENDING_INTERACTIONS_FEATURE: &str = "core.pending-interactions.v1";
+
 /// core 表达「游标早于仍可读的下界」的那条静态文本（`storage-sqlite` 的 `read_session`：
 /// `PortError::InvalidRequest("history cursor precedes the retained window")`）。
 ///
@@ -86,25 +88,6 @@ pub const SESSION_HISTORY_FEATURE: &str = "core.session-history.v1";
 /// `sync.cursor_invalid` + `details.reason = "cursor_expired"`，落进通配臂则变成
 /// `protocol.schema_invalid`——另一类事实（形状错误），会让客户端以为是自己发的帧不合法。
 pub const RETAINED_WINDOW_EXCEEDED: &str = "history cursor precedes the retained window";
-
-/// `session.read` 单页消息数的服务端上限（客户端给的 `limit` 收敛到它；§11.5「超过服务端为该会话配置的
-/// 明细条数上限时，服务端收敛到自己的上限并照常返回」）。
-const MAX_PAGE_MESSAGES: u32 = 200;
-
-/// `session.read` 省略 `limit` 时的默认页大小（§11.5：默认页是最近 20 条用户输入）。
-const DEFAULT_PAGE_MESSAGES: u32 = 20;
-
-/// 单次 `session.read` 扫描事件的上限（超出即显式失败，见 [`session_read`]）。
-const MAX_SCAN_EVENTS: u64 = 20_000;
-
-/// 扫描事件时的单批取行数（与 §14 的 `maxReplayEventsPerBatch` 同量级）。
-const SCAN_BATCH_EVENTS: u32 = 2_000;
-
-/// 内嵌 ACP 原文的单条上限（§10.1/§11.5：超过即 `rawAcp.unavailable{size_limit}`）。
-const MAX_INLINE_ACP_BYTES: usize = 256 * 1024;
-
-/// 单个文本块的字符上限（`common.schema.json#/$defs/agentContentBlock` 的 `text.maxLength`）。
-const MAX_TEXT_CHARS: usize = 262_144;
 
 /// 一次查询的拒绝（调用方把它折成 `command.result` 的 `rejected` 终态）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +110,9 @@ pub enum Rejection {
     FeatureRequired(&'static str),
     /// 请求了用例面无法表达的资源（`capability.unsupported_by_broker`）。
     UnsupportedResource(&'static str),
+    /// Owner 不在线（imported 会话回源失败）：`resource.remote_unavailable` +
+    /// `details.reason = "owner_offline"`。这是显式的「现在读不到」，不是 `session.not_found` 或空历史。
+    RemoteUnavailable,
     /// `expectedVersion` 与当前会话版本不一致（`state.version_conflict`）。
     ///
     /// registry 为这个码登记的必需 `details.currentVersion` 就在这里给出：它是**读到的当前版本**，
@@ -169,6 +155,11 @@ impl Rejection {
                     RawObject::empty(),
                 )
             }
+            Rejection::RemoteUnavailable => (
+                ErrorCode::ResourceRemoteUnavailable,
+                "the owner node is not reachable",
+                details_object(&serde_json::json!({ "reason": "owner_offline" })),
+            ),
         }
     }
 }
@@ -233,15 +224,14 @@ pub async fn session_list(
 /// 超过 [`MAX_SCAN_EVENTS`] 仍未读完时以 `resource.result_too_large` 显式失败——宁可不给，也不给一页
 /// 会被误当成最新页的**旧**内容（wire 上没有「还有更新的内容」这个页标记，静默返回旧页会让客户端以为
 /// 已经到底而停止翻页）。
-pub async fn session_read(
-    core: &Arc<UseCases>,
+pub async fn session_read<C: SessionReadSource>(
+    core: &C,
     actor: &Actor,
     command: &Command,
     payload: SessionRead,
     features: &NegotiatedFeatures,
 ) -> Result<CommandResultPayload, Rejection> {
     let Some(session) = command.session_id.as_ref() else {
-        // schema 的 `required` 已保证出现；保留判定只为不 panic。
         return Err(Rejection::Schema("session.read requires sessionId"));
     };
     let Some(session_id) = SessionId::new(session.as_str()).ok() else {
@@ -251,13 +241,14 @@ pub async fn session_read(
     if include.history && !features.contains(SESSION_HISTORY_FEATURE) {
         return Err(Rejection::FeatureRequired(SESSION_HISTORY_FEATURE));
     }
+    if include.pending_interactions && !features.contains(PENDING_INTERACTIONS_FEATURE) {
+        return Err(Rejection::UnsupportedResource("pending_interactions"));
+    }
     for (requested, resource) in [
         (include.turns, "turns"),
-        (include.pending_interactions, "pending_interactions"),
         (include.capabilities, "capabilities"),
     ] {
         if requested {
-            // core 读面给不出投影这些资源所需的取值（见模块文档），因此显式拒绝而不是省略。
             return Err(Rejection::UnsupportedResource(resource));
         }
     }
@@ -265,9 +256,6 @@ pub async fn session_read(
         .limit
         .as_ref()
         .map_or(DEFAULT_PAGE_MESSAGES, |limit| {
-            // `limit` 是 `UIntAtLeast<1>`（u64）而页大小是 `u32`：转换必须**饱和**——`as u32` 会让
-            // ≥ 2^32 的取值回绕（2^32 → 0，再被下面的 clamp 抬到 1），把 §11.5 的「超过服务端上限时
-            // 收敛到上限并照常返回」变成「只给一条」。
             u32::try_from(limit.get()).unwrap_or(MAX_PAGE_MESSAGES)
         })
         .clamp(1, MAX_PAGE_MESSAGES);
@@ -275,154 +263,59 @@ pub async fn session_read(
         Some(value) => Some(parse_sequence(value.as_str())?),
         None => None,
     };
-    let cursor = payload.before.as_ref().map(|before| {
-        (
-            before.created_at.as_str().to_owned(),
-            before.message_id.clone(),
-        )
-    });
-
-    let mut batch = core
-        .read_session(
-            actor,
-            HistoryQuery {
-                session: session_id.clone(),
-                include,
-                after: None,
-                before_history,
-                limit: ReplayLimit::new(page_limit),
-            },
-        )
+    let before_messages = match payload.before.as_ref() {
+        Some(before) => Some(MessageCursor {
+            created_at: CoreTimestamp::new(before.created_at.as_str())
+                .map_err(|_| Rejection::Schema("before.createdAt is not a timestamp"))?,
+            message_id: MessageId::new(before.message_id.as_str())
+                .map_err(|_| Rejection::Schema("before.messageId is not a message id"))?,
+        }),
+        None => None,
+    };
+    let request = crate::session_read::SessionReadRequest {
+        session: session_id.clone(),
+        include,
+        before_history,
+        before_messages,
+        page_limit,
+        typed_media: features.contains(TYPED_MEDIA_FEATURE),
+        negotiate_acp: features.contains(RAW_PAYLOAD_FEATURE),
+        negotiate_file_diff: features.contains(FILE_DIFF_FEATURE),
+    };
+    match crate::session_read::read_session(core, actor, request)
         .await
-        .map_err(|error| port_rejection(&error))?;
-    // 首批同时给出 `history` 那一页与 live config；后续批次只为把事件读到 head，因此两者都只取首批。
-    let config_options = std::mem::take(&mut batch.config);
-    let history = std::mem::take(&mut batch.history);
-    let history_has_earlier = batch.history_has_earlier;
-    let mut merger = MessageMerger::new(cursor);
-    let mut scanned = 0_u64;
-    let mut complete = false;
-    loop {
-        if include.messages {
-            for record in &batch.events {
-                merger.absorb(record);
-            }
-            scanned += batch.events.len() as u64;
+        .map_err(session_read_fault)?
+    {
+        crate::session_read::SessionReadOutcome::Owned(result) => {
+            Ok(CommandResultPayload::SessionRead(result))
         }
-        let Some(next) = batch.next.clone() else {
-            complete = true;
-            break;
-        };
-        if !include.messages {
-            // 不请求消息时不必把事件读到 head：`history` 那一页已经在首批里取完。
-            complete = true;
-            break;
-        }
-        if scanned >= MAX_SCAN_EVENTS {
-            break;
-        }
-        batch = core
-            .read_session(
-                actor,
-                HistoryQuery {
-                    session: session_id.clone(),
-                    include: HistoryInclude {
-                        messages: true,
-                        ..HistoryInclude::default()
-                    },
-                    after: Some(next),
-                    before_history: None,
-                    limit: ReplayLimit::new(SCAN_BATCH_EVENTS),
-                },
+        crate::session_read::SessionReadOutcome::Imported(page) => {
+            crate::session_read::project_imported_read(
+                page,
+                &session_id,
+                include,
+                features.contains(TYPED_MEDIA_FEATURE),
+                features.contains(RAW_PAYLOAD_FEATURE),
+                features.contains(FILE_DIFF_FEATURE),
             )
-            .await
-            .map_err(|error| port_rejection(&error))?;
+            .map(CommandResultPayload::SessionRead)
+            .map_err(session_read_fault)
+        }
     }
-    if !complete {
-        debug!(
-            event = "sync.session_read_window_exceeded",
-            session_id = session_id.as_str(),
-            scanned,
-            "the session history exceeds the readable window of a single read"
-        );
-        return Err(Rejection::Code(
-            ErrorCode::ResourceResultTooLarge,
-            "the session history exceeds the readable window of a single read",
-        ));
+}
+
+/// 共享投影失败 → 本模块的拒绝（错误码与 details 的唯一声明点仍在 [`Rejection::into_parts`]）。
+fn session_read_fault(fault: crate::session_read::SessionReadFault) -> Rejection {
+    use crate::session_read::SessionReadFault;
+    match fault {
+        SessionReadFault::Schema(text) => Rejection::Schema(text),
+        SessionReadFault::CursorExpired => Rejection::CursorInvalid(CursorFault::CursorExpired),
+        SessionReadFault::TooLarge(text) => {
+            Rejection::Code(ErrorCode::ResourceResultTooLarge, text)
+        }
+        SessionReadFault::Internal(text) => Rejection::Code(ErrorCode::InternalUnavailable, text),
+        SessionReadFault::Port(error) => port_rejection(&error),
     }
-    let page = merger.finish(page_limit);
-    // 消息游标早于保留窗口：显式拒绝，不静默返回一页「看起来已到最早一条」的空页（§11.5）。只在请求了
-    // `messages` 时判定——没请求消息就没有消息游标可谈（那时 `before` 不描述任何返回的页）。
-    if include.messages && page.cursor_expired {
-        debug!(
-            event = "sync.session_read_cursor_expired",
-            session_id = session_id.as_str(),
-            "the message cursor precedes the readable window"
-        );
-        return Err(Rejection::CursorInvalid(CursorFault::CursorExpired));
-    }
-    let messages = if include.messages {
-        Some(
-            page.messages
-                .iter()
-                .map(|message| message.to_wire(session))
-                .collect::<Option<Vec<_>>>()
-                .ok_or(Rejection::Code(
-                    ErrorCode::InternalUnavailable,
-                    "a message cannot be projected",
-                ))?,
-        )
-    } else {
-        None
-    };
-    let negotiate_acp = features.contains(RAW_PAYLOAD_FEATURE);
-    let negotiate_file_diff = features.contains(FILE_DIFF_FEATURE);
-    let history_items = if include.history {
-        Some(
-            history
-                .iter()
-                .map(|record| wire_history_item(record, negotiate_acp, negotiate_file_diff))
-                .collect::<Option<Vec<_>>>()
-                .ok_or(Rejection::Code(
-                    ErrorCode::InternalUnavailable,
-                    "a history entry cannot be projected",
-                ))?,
-        )
-    } else {
-        None
-    };
-    let config = if include.config_options {
-        Some(
-            config_options
-                .iter()
-                .map(wire_config_option)
-                .collect::<Option<Vec<_>>>()
-                .ok_or(Rejection::Code(
-                    ErrorCode::InternalUnavailable,
-                    "a config option cannot be projected",
-                ))?,
-        )
-    } else {
-        None
-    };
-    Ok(CommandResultPayload::SessionRead(SessionReadResult {
-        session_id: Uuid::parse(session.as_str())
-            .map_err(|_| Rejection::Schema("sessionId is not a uuid"))?,
-        resources: SessionReadResources {
-            messages,
-            turns: None,
-            pending_interactions: None,
-            config_options: config,
-            capabilities: None,
-            history: history_items,
-        },
-        has_earlier: page.has_earlier,
-        history_has_earlier: if include.history {
-            Some(history_has_earlier)
-        } else {
-            None
-        },
-    }))
 }
 
 /// `command.status`：目标请求的当前记录（§11.4）。
@@ -1006,52 +899,6 @@ fn wire_mode_state(listing: &ModeListing) -> Option<WireModeState> {
     })
 }
 
-/// core 的 `ConfigOption` → wire `configOptionView`。
-fn wire_config_option(option: &CoreConfigOption) -> Option<WireConfigOptionView> {
-    let current_value = match option.current() {
-        ConfigValue::Text(text) => ConfigOptionValue::Text(text.as_str().to_owned()),
-        ConfigValue::Select(select) => ConfigOptionValue::Text(select.as_str().to_owned()),
-        ConfigValue::Boolean(flag) => ConfigOptionValue::Boolean(*flag),
-    };
-    let candidates = option
-        .options()
-        .iter()
-        .map(|entry| {
-            Some(WireConfigOptionEntry {
-                value: NonEmptyText::<256>::parse(entry.value().as_str()).ok()?,
-                name: NonEmptyText::<256>::parse(entry.name()).ok()?,
-                description: match entry.description() {
-                    Some(text) => Nullable::value(Text::<1024>::parse(text).ok()?),
-                    None => Nullable::null(),
-                },
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
-    Some(WireConfigOptionView {
-        id: NonEmptyText::<256>::parse(option.id().as_str()).ok()?,
-        name: NonEmptyText::<256>::parse(option.name()).ok()?,
-        description: match option.description() {
-            Some(text) => Nullable::value(Text::<1024>::parse(text).ok()?),
-            None => Nullable::null(),
-        },
-        category: match option.category() {
-            Some(text) => Nullable::value(Text::<128>::parse(text).ok()?),
-            None => Nullable::null(),
-        },
-        option_type: match option.kind() {
-            ConfigOptionKind::Select => ConfigOptionType::Select,
-            ConfigOptionKind::Boolean => ConfigOptionType::Boolean,
-        },
-        current_value,
-        // 空候选在 wire 上是**键缺席**（§11.5 的 `options` 不在 required 里），不是空数组。
-        options: if candidates.is_empty() {
-            None
-        } else {
-            Some(candidates)
-        },
-    })
-}
-
 /// core 的 `CommandRecord` → wire `commandStatusRecord`（`command.status` 的完成结果）。
 fn wire_status_record(record: &CommandRecord) -> Option<CommandStatusRecord> {
     Some(CommandStatusRecord {
@@ -1080,344 +927,26 @@ fn wire_status_record(record: &CommandRecord) -> Option<CommandStatusRecord> {
     })
 }
 
-/// 一条结构化历史条目 → wire `snapshotItem.history`（与 `event` 帧的 `payload` 同形：同一个 `view` 原文、
-/// 同一条 `acp.raw-payload.v1` 门控，以及同一条 `core.file-diff.v1` 门控）。
-///
-/// 两条门控共用事件腿的判定（[`crate::sync::event::gate_file_diff`]）：历史条目里装的就是同一条
-/// `file.changed` 视图，未协商差异行能力的连接在**任何一条**下发路径上都不该收到那两个键。
-fn wire_history_item(
-    record: &OwnedEventRecord,
-    negotiate_acp: bool,
-    negotiate_file_diff: bool,
-) -> Option<SnapshotItemHistory> {
-    let event = &record.event;
-    let sequence = event.session_sequence.as_ref()?;
-    let view = RawObject::parse(record.payload.view.as_str()).ok()?;
-    // `view` 是库里原文（`payload_json`）：未协商差异行时只在 `file.changed` 上去掉那两个键，其余字节
-    // 原样（不解析、不重新序列化）。
-    let view =
-        crate::sync::event::gate_file_diff(event.event_type.as_str(), &view, negotiate_file_diff)
-            .unwrap_or(view);
-    Some(SnapshotItemHistory {
-        event_id: Uuid::parse(event.id.as_str()).ok()?,
-        event_type: EventType::parse(event.event_type.as_str()).ok()?,
-        session_sequence: decimal(&sequence.get().to_string())?,
-        created_at: Timestamp::parse(event.created_at.as_str()).ok()?,
-        view,
-        acp: if negotiate_acp {
-            wire_raw_acp(record.payload.acp.as_ref())?
-        } else {
-            None
-        },
-    })
-}
-
-/// core 的 `payload.acp` → wire 的 `rawAcp`（`Complete`/`Unavailable` 两个分支）。
-///
-/// 口径与 [`crate::sync::subscribe::event`] 的同名映射**逐条相同**（media type 固定 `application/json`、
-/// 内嵌上限 256 KiB、超限改判 `size_limit`、不可用原因三种一一对应），因为那是 §10.1 的登记规则；本模块
-/// **拿不到**那两个函数（它们是订阅模块的私有实现），而历史条目的 `acp` 必须与事件帧的 `acp` 同源同规则，
-/// 因此这份规则在本目录里各自持有（代价与 `design.md` D1 登记的「256 KiB 两处常量」同一性质）。
-fn wire_raw_acp(acp: Option<&CoreAcpRaw>) -> Option<Option<RawAcp>> {
-    Some(match acp {
-        Some(CoreAcpRaw::Available {
-            media_type,
-            raw_json,
-            byte_length,
-            sha256,
-        }) => {
-            let digest = Base64Url::<32>::parse(sha256.as_str()).ok()?;
-            if media_type != "application/json" || raw_json.len() > MAX_INLINE_ACP_BYTES {
-                Some(RawAcp::Unavailable {
-                    reason: if media_type != "application/json" {
-                        RawAcpUnavailableReason::StorageFailure
-                    } else {
-                        RawAcpUnavailableReason::SizeLimit
-                    },
-                    byte_length: decimal(&byte_length.to_string())?,
-                    sha256: Nullable::value(digest),
-                })
-            } else {
-                Some(RawAcp::Complete {
-                    // `rawJson` 是 JSON **字符串**（内容是 ACP 原文档文本），因此编码一次字符串字面量；
-                    // 绝不先解析再重新序列化（那会改写空白、键序与超出 64 位的整数字面量）。
-                    raw_json: serde_json::value::RawValue::from_string(
-                        serde_json::to_string(raw_json).ok()?,
-                    )
-                    .ok()?,
-                    byte_length: decimal(&byte_length.to_string())?,
-                    sha256: digest,
-                })
-            }
-        }
-        Some(CoreAcpRaw::Unavailable {
-            reason,
-            byte_length,
-            sha256,
-        }) => Some(RawAcp::Unavailable {
-            reason: match reason {
-                RawUnavailableReason::SizeLimit => RawAcpUnavailableReason::SizeLimit,
-                RawUnavailableReason::RetentionExpired => RawAcpUnavailableReason::RetentionExpired,
-                RawUnavailableReason::StorageFailure => RawAcpUnavailableReason::StorageFailure,
-            },
-            byte_length: decimal(&byte_length.to_string())?,
-            sha256: match sha256 {
-                Some(digest) => Nullable::value(Base64Url::<32>::parse(digest.as_str()).ok()?),
-                None => Nullable::null(),
-            },
-        }),
-        None => None,
-    })
-}
-
-// ---------------------------------------------------------------------------------------------
-// 消息页：从持久化事件折叠出一页 `resources.messages`
-// ---------------------------------------------------------------------------------------------
-
-/// 一条待投影的消息（取值只来自持久化事件，不重算、不补全）。
-#[derive(Debug, Clone)]
-struct Message {
-    message_id: Uuid,
-    role: MessageRole,
-    content: Vec<AgentContentBlock>,
-    created_at: Timestamp,
-    turn_id: Option<Uuid>,
-}
-
-impl Message {
-    /// wire 的 `snapshotItem.messages` 元素。
-    ///
-    /// `status` 是 §11.5 未登记词表的开放串（`NonEmptyText<32>`，客户端不消费它）：这里的取值
-    /// `completed` 表达的是**持久化日志里该消息的正文已完整**——用户消息的来源是它自己的全部 delta
-    /// （发送即完整），Agent 消息的来源是 turn 收尾时由 Broker 折叠出的 `agent.message.completed`。
-    fn to_wire(&self, session: &Uuid) -> Option<SnapshotItemMessage> {
-        Some(SnapshotItemMessage {
-            message_id: self.message_id.clone(),
-            session_id: session.clone(),
-            role: self.role,
-            content: self.content.clone(),
-            status: NonEmptyText::<32>::parse("completed").ok()?,
-            created_at: self.created_at.clone(),
-            turn_id: match self.turn_id.as_ref() {
-                Some(turn) => Nullable::value(turn.clone()),
-                None => Nullable::null(),
-            },
-        })
-    }
-}
-
-/// 把事件流折叠成消息页的累加器（`session.read` 的 `messages` 面）。
-///
-/// 折叠规则：
-///
-/// - `user.message.delta` 是用户输入的持久化载体（正文的权威在 `messages`）：同一 `messageId` 的多个
-///   delta 按 `deltaIndex` 升序拼成文本，`createdAt` 取最早一条，`turnId` 取该消息的 turn；
-/// - `agent.message.completed` 是 Agent 消息的收尾正文（Broker 在 turn 结束时生成），直接采用其
-///   `content` 块数组；`agent.message.delta`/`agent.thought.delta` **不参与**——它们在事件轨道上是流式
-///   增量（客户端另有易失叠加层），把它们当持久正文会与收尾正文形成第二份来源；
-/// - 其它事件类型不产生消息（历史条目是另一套资源，见 [`wire_history_item`]）。
-#[derive(Debug)]
-struct MessageMerger {
-    /// 复合游标（`{createdAt, messageId}`）：只收集**严格早于**它的消息；`None` = 不按游标收窄。
-    cursor: Option<(String, Uuid)>,
-    users: BTreeMap<Uuid, UserMessage>,
-    agents: Vec<Message>,
-}
-
-#[derive(Debug, Default)]
-struct UserMessage {
-    created_at: Option<Timestamp>,
-    turn_id: Option<Uuid>,
-    parts: Vec<(u64, String)>,
-}
-
-/// 一页消息 + 页标记（`cursor_expired` 见 [`MessageMerger::finish`]）。
-struct MessagePage {
-    messages: Vec<Message>,
-    has_earlier: bool,
-    cursor_expired: bool,
-}
-
-impl MessageMerger {
-    fn new(cursor: Option<(String, Uuid)>) -> Self {
-        Self {
-            cursor,
-            users: BTreeMap::new(),
-            agents: Vec::new(),
-        }
-    }
-
-    /// 收下一条持久化事件（不承载消息正文的事件类型直接跳过）。
-    fn absorb(&mut self, record: &OwnedEventRecord) {
-        let event_type = record.event.event_type.as_str();
-        if event_type != "user.message.delta" && event_type != "agent.message.completed" {
-            return;
-        }
-        let Ok(view_object) = RawObject::parse(record.payload.view.as_str()) else {
-            return;
-        };
-        let Ok(view) = project(event_type, &view_object) else {
-            // 形状不符只记诊断并跳过该事件：`session.read` 是读取面，不因为一条坏行让整页失败
-            // （事件轨道那一侧的显式降级由 `sync::event` 负责）。
-            debug!(
-                event = "sync.session_read_view_skipped",
-                event_type, "the persisted view does not match the registered shape"
-            );
-            return;
-        };
-        match view {
-            View::UserMessageDelta(delta) => {
-                let created_at = Timestamp::parse(record.event.created_at.as_str()).ok();
-                let entry = self.users.entry(delta.message_id.clone()).or_default();
-                if entry.created_at.is_none() {
-                    entry.created_at = created_at;
-                }
-                entry.turn_id = Some(delta.turn_id.clone());
-                let index = delta
-                    .delta_index
-                    .as_str()
-                    .parse::<u64>()
-                    .unwrap_or(u64::MAX);
-                entry.parts.push((index, delta.text.as_str().to_owned()));
-            }
-            View::AgentMessageCompleted(completed) => {
-                let Some(created_at) = Timestamp::parse(record.event.created_at.as_str()).ok()
-                else {
-                    return;
-                };
-                self.agents.push(Message {
-                    message_id: completed.message_id.clone(),
-                    role: MessageRole::Agent,
-                    content: completed.content.clone(),
-                    created_at,
-                    turn_id: Some(completed.turn_id.clone()),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    /// 折叠出一页：按 `createdAt` 升序（同一时刻以 `messageId` 稳定定序）、只保留游标之前的消息，再取
-    /// **最新**一页（页里最多 `limit` 条用户输入，与 §11.5 的默认页口径一致）。
-    ///
-    /// 同时给出 `cursor_expired`：游标在场、这一页为空、页标记也说没有更早内容、且游标**严格早于**本次
-    /// 读到的**最早一条可读消息**（或本次一条可读消息都没有）时，唯一能解释「游标指向的东西不在这份读
-    /// 口里」的物理事实就是它已被保留策略清理（更早的行按 §9.7 前缀清理/压缩后不再可读）。比较必须是
-    /// 严格的：游标恰好等于最早一条可读消息是**合法**的（客户端翻到最早一条后再问一页，得到的空页正是
-    /// 「确实没有更早的」），不得报过期。
-    ///
-    /// 这份读口能给出的下界就是「最早一条可读消息」：`before` 只可能来自上一页返回的消息，而消息页是
-    /// 单调前缀清理的，游标低于该下界即意味着它指向的行已不可读。窗口**内部**的空洞（例如窗口没前移、
-    /// 但某条消息的 delta 被压缩掉）从这一份读口看不出来，不在本判定的覆盖范围内。
-    fn finish(self, limit: u32) -> MessagePage {
-        let MessageMerger {
-            cursor,
-            users,
-            agents,
-        } = self;
-        let mut messages: Vec<Message> = users
-            .into_iter()
-            .filter_map(|(message_id, user)| {
-                let created_at = user.created_at?;
-                let mut parts = user.parts;
-                parts.sort_by_key(|(index, _)| *index);
-                let text = parts.into_iter().map(|(_, text)| text).collect::<String>();
-                Some(Message {
-                    message_id,
-                    role: MessageRole::User,
-                    content: text_blocks(&text)?,
-                    created_at,
-                    turn_id: user.turn_id,
-                })
-            })
-            .chain(agents)
-            .collect();
-        // `createdAt` 定宽（UTC 毫秒），字典序即时间序；同一时刻以 `messageId` 作稳定 tie-breaker。
-        messages.sort_by(|left, right| {
-            (left.created_at.as_str(), &left.message_id)
-                .cmp(&(right.created_at.as_str(), &right.message_id))
-        });
-        // 可读窗口的下界（本次读口内最早的一条消息），必须在按游标收窄**之前**取。
-        let earliest = messages.first().map(|message| {
-            (
-                message.created_at.as_str().to_owned(),
-                message.message_id.clone(),
-            )
-        });
-        messages.retain(|message| match &cursor {
-            Some((created_at, message_id)) => {
-                (message.created_at.as_str(), &message.message_id)
-                    < (created_at.as_str(), message_id)
-            }
-            None => true,
-        });
-        // 最新一页：从尾部往前收，直到这一页已含 `limit` 条用户输入；页首之前的 Agent 消息留在页内
-        // （它们属于这一页的 turn）。
-        let mut start = messages.len();
-        let mut users_in_page = 0_u32;
-        while start > 0 {
-            let candidate = &messages[start - 1];
-            let is_user = candidate.role == MessageRole::User;
-            if is_user && users_in_page == limit {
-                break;
-            }
-            if is_user {
-                users_in_page += 1;
-            }
-            start -= 1;
-        }
-        let has_earlier = start > 0;
-        messages.drain(..start);
-        let cursor_expired = match (&cursor, &earliest) {
-            // 游标早于最早一条可读消息：它指向的行已不在读口内。
-            (Some(cursor), Some(earliest)) => {
-                messages.is_empty()
-                    && !has_earlier
-                    && (cursor.0.as_str(), &cursor.1) < (earliest.0.as_str(), &earliest.1)
-            }
-            // 一条可读消息都没有：任何游标都指向读口之外的区间。
-            (Some(_), None) => true,
-            (None, _) => false,
-        };
-        MessagePage {
-            messages,
-            has_earlier,
-            cursor_expired,
-        }
-    }
-}
-
-/// 一段文本 → `agentContentBlock` 列表（单个块的文本上限是 262144 **字符**，超出即切分为多个块：既不
-/// 丢字也不改写内容；空白串产生一个空文本块，与"消息存在但正文为空"一致）。
-fn text_blocks(text: &str) -> Option<Vec<AgentContentBlock>> {
-    let mut blocks = Vec::new();
-    let mut chunk = String::new();
-    for character in text.chars() {
-        if chunk.chars().count() >= MAX_TEXT_CHARS {
-            blocks.push(AgentContentBlock::Text {
-                text: Text::<MAX_TEXT_CHARS>::parse(&chunk).ok()?,
-            });
-            chunk.clear();
-        }
-        chunk.push(character);
-    }
-    blocks.push(AgentContentBlock::Text {
-        text: Text::<MAX_TEXT_CHARS>::parse(&chunk).ok()?,
-    });
-    Some(blocks)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_read::message_key;
     use acp_core::model::{
+        AgentId, AgentRef, EffectiveInteraction as CoreEffectiveInteraction,
         FileReadPurpose as CorePurpose, GitDiffBase as CoreBase, GitDiffKind as CoreDiffKind,
         GitFileStatus as CoreStatus, GitState as CoreState, GitStatusEntry as CoreStatusEntry,
-        GitStatusPage as CoreStatusPage, SessionFileEntry as CoreEntry,
-        SessionFilePage as CorePage, SessionFilePath,
-        SessionFileRestrictedReason as CoreRestricted, SessionListPath as CoreListPath,
-        SessionPageToken as CoreToken,
+        GitStatusPage as CoreStatusPage, GlobalCursor, JsonValueText,
+        MessageChannel as CoreMessageChannel, MessageRecord, PartialResult as CorePartialResult,
+        PortError, ServerEpoch, SessionFileEntry as CoreEntry, SessionFilePage as CorePage,
+        SessionFilePath, SessionFileRestrictedReason as CoreRestricted,
+        SessionListPath as CoreListPath, SessionPageToken as CoreToken, SessionSummary, Version,
     };
+    use acp_core::ports::{HistoryPage, HistoryQuery, OwnedEventRecord};
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    use sync_protocol::common::AgentContentBlock;
+
+    use async_trait::async_trait;
 
     fn path(text: &str) -> SessionFilePath {
         SessionFilePath::parse(text).expect("session path")
@@ -1608,5 +1137,468 @@ mod tests {
         assert_eq!(WireFileReadPurpose::Preview.as_str(), "preview");
         assert_eq!(WireFileReadPurpose::Download.as_str(), "download");
         let _ = CorePurpose::Preview;
+    }
+
+    fn uid(number: u32) -> String {
+        format!("00000000-0000-4000-8000-{number:012}")
+    }
+
+    /// 一条持久化的 `user.message.delta`（正文页的输入那一半）。
+    fn user_delta(
+        event: u32,
+        message: u32,
+        index: u64,
+        text: &str,
+        created_at: &str,
+    ) -> OwnedEventRecord {
+        let session = acp_core::model::SessionId::new(&uid(1)).expect("session id");
+        let view = serde_json::json!({
+            "messageId": uid(message),
+            "turnId": uid(90),
+            "deltaIndex": index.to_string(),
+            "text": text,
+        })
+        .to_string();
+        OwnedEventRecord {
+            event: acp_core::model::CommittedEvent {
+                id: acp_core::model::EventId::new(&uid(event)).expect("event id"),
+                event_type: acp_core::model::EventType::new("user.message.delta")
+                    .expect("event type"),
+                session: Some(session.clone()),
+                session_sequence: Some(
+                    acp_core::model::Sequence::new(index + 1).expect("sequence"),
+                ),
+                global_sequence: acp_core::model::Sequence::new(event as u64 + 1)
+                    .expect("sequence"),
+                origin_epoch: Some(
+                    acp_core::model::OriginEpoch::new(&uid(2)).expect("origin epoch"),
+                ),
+                origin_sequence: Some(acp_core::model::Sequence::new(index + 1).expect("sequence")),
+                created_at: acp_core::model::Timestamp::new(created_at).expect("timestamp"),
+            },
+            payload: acp_core::model::EventPayload::new(
+                acp_core::model::ViewJson::new(&view).expect("view"),
+                None,
+            ),
+        }
+    }
+
+    fn text_of(message: &Message) -> String {
+        message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                AgentContentBlock::Text { text } => Some(text.as_str().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 已提交增量在重连后重复到达：整体只应用一次（不重复追加）。
+    #[test]
+    fn duplicate_user_delta_events_are_applied_once() {
+        let record = user_delta(10, 2, 0, "hello ", "2026-01-01T00:00:00.000Z");
+        let mut merger = MessageMerger::new(None);
+        merger.absorb(&record);
+        merger.absorb(&record);
+        let page = merger.finish(20, Vec::new(), false);
+        assert_eq!(page.messages.len(), 1);
+        assert_eq!(text_of(&page.messages[0]), "hello ");
+        assert_eq!(
+            page.messages[0].message_id,
+            Uuid::parse(&uid(2)).expect("message id")
+        );
+    }
+
+    /// 同一 `(messageId, deltaIndex)` 换了 eventId 重投：也只应用一次。
+    #[test]
+    fn duplicate_delta_position_with_a_new_event_id_is_applied_once() {
+        let first = user_delta(11, 3, 0, "same", "2026-01-01T00:00:00.000Z");
+        let retried = user_delta(12, 3, 0, "same", "2026-01-01T00:00:00.000Z");
+        let mut merger = MessageMerger::new(None);
+        merger.absorb(&first);
+        merger.absorb(&retried);
+        let page = merger.finish(20, Vec::new(), false);
+        assert_eq!(page.messages.len(), 1);
+        assert_eq!(text_of(&page.messages[0]), "same");
+    }
+
+    /// 读取屏障：每次读只覆盖读口内的增量；旧页不因新增量而改变，新页按游标只取游标之前的消息。
+    #[test]
+    fn read_barrier_keeps_the_snapshot_and_later_reads_see_new_increments() {
+        let first = user_delta(20, 4, 0, "one", "2026-01-01T00:00:00.000Z");
+        let second = user_delta(21, 5, 0, "two", "2026-01-01T00:00:01.000Z");
+        let mut initial = MessageMerger::new(None);
+        initial.absorb(&first);
+        initial.absorb(&second);
+        let snapshot = initial.finish(20, Vec::new(), false);
+        assert_eq!(
+            snapshot.messages.iter().map(text_of).collect::<Vec<_>>(),
+            vec!["one".to_owned(), "two".to_owned()]
+        );
+
+        // 新增量到达后：不带游标的读看到全部三条；带游标（`before` = 第三条）的读只看到它之前的两条。
+        // 旧的一次读是已经被取走的页，不会被后来的增量“覆盖”成三条。
+        let third = user_delta(22, 6, 0, "three", "2026-01-01T00:00:02.000Z");
+        let mut latest = MessageMerger::new(None);
+        for record in [&first, &second, &third] {
+            latest.absorb(record);
+        }
+        let head = latest.finish(20, Vec::new(), false);
+        assert_eq!(
+            head.messages.iter().map(text_of).collect::<Vec<_>>(),
+            vec!["one".to_owned(), "two".to_owned(), "three".to_owned()]
+        );
+
+        let cursor = (
+            "2026-01-01T00:00:02.000Z".to_owned(),
+            Uuid::parse(&uid(6)).expect("message id"),
+        );
+        let mut older = MessageMerger::new(Some(cursor));
+        for record in [&first, &second, &third] {
+            older.absorb(record);
+        }
+        let page = older.finish(20, Vec::new(), false);
+        assert_eq!(
+            page.messages.iter().map(text_of).collect::<Vec<_>>(),
+            vec!["one".to_owned(), "two".to_owned()]
+        );
+        assert_eq!(text_of(&snapshot.messages[0]), "one");
+        assert_eq!(snapshot.messages.len(), 2);
+    }
+
+    /// 一条持久化的 Agent 正文（`owned_message` 的投影原料）。
+    fn message_record(content: &serde_json::Value) -> MessageRecord {
+        MessageRecord::try_new(
+            MessageId::new(&uid(80)).expect("message id"),
+            acp_core::model::SessionId::new(&uid(1)).expect("session id"),
+            None,
+            CoreMessageChannel::Reply,
+            CorePartialResult::completed(),
+            acp_core::model::JsonValueText::new(&content.to_string()).expect("content"),
+            Vec::new(),
+            CoreTimestamp::new("2026-01-01T00:00:00.000Z").expect("timestamp"),
+            CoreTimestamp::new("2026-01-01T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("record")
+    }
+
+    /// 未协商 `core.typed-media.v1` 的消息页必须走与事件轨道**同一个**降级：`audio_ref`/`file_ref`
+    /// 整块去掉、`image_ref` 去掉 `attachmentId`。否则旧 peer 的封闭 `agentContentBlock` 词表会让整条
+    /// `session.read` 结果解码失败；协商的连接则必须逐字保留。
+    #[test]
+    fn unnegotiated_message_content_is_degraded_like_event_views() {
+        let record = message_record(&serde_json::json!([
+            {"type": "text", "text": "hi"},
+            {
+                "type": "image_ref",
+                "mimeType": "image/png",
+                "byteLength": "3",
+                "displayState": "available",
+                "attachmentId": uid(70)
+            },
+            {
+                "type": "audio_ref",
+                "mimeType": "audio/wav",
+                "byteLength": "9",
+                "displayState": "available",
+                "attachmentId": uid(71)
+            },
+            {
+                "type": "file_ref",
+                "attachmentId": uid(72),
+                "mimeType": "text/plain",
+                "byteLength": "5",
+                "displayName": null,
+                "displayState": "available"
+            }
+        ]));
+        let legacy = Message::from_record(&record, false).expect("legacy projection");
+        let blocks = serde_json::to_value(&legacy.content)
+            .expect("json")
+            .as_array()
+            .expect("blocks")
+            .clone();
+        assert_eq!(blocks.len(), 2, "audio_ref/file_ref 整块去掉");
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "image_ref");
+        assert!(
+            blocks[1].get("attachmentId").is_none(),
+            "旧 peer 的 image_ref 没有 attachmentId"
+        );
+
+        // 协商的连接不做任何改写。
+        let current = Message::from_record(&record, true).expect("projection");
+        let blocks = serde_json::to_value(&current.content)
+            .expect("json")
+            .as_array()
+            .expect("blocks")
+            .clone();
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[1]["attachmentId"], uid(70));
+    }
+
+    /// 页边界：用户输入超过一页时，下界是从最新往前数第 `limit+1` 条用户消息；不超过一页时没有下界
+    /// （页从最早一条开始）。下界只统计**严格早于**游标的用户消息。
+    #[test]
+    fn page_floor_is_the_user_message_before_the_page() {
+        let mut merger = MessageMerger::new(None);
+        for (index, second) in [0u32, 1, 2].into_iter().enumerate() {
+            merger.absorb(&user_delta(
+                30 + index as u32,
+                10 + second,
+                0,
+                "x",
+                &format!("2026-01-01T00:00:0{second}.000Z"),
+            ));
+        }
+        assert_eq!(merger.floor(3), None);
+        assert_eq!(
+            merger.floor(2),
+            Some(("2026-01-01T00:00:00.000Z".to_owned(), uid(10)))
+        );
+
+        // 游标 = 最新一条：它的下界是第二条（游标本身不计数）。
+        let cursor = (
+            "2026-01-01T00:00:02.000Z".to_owned(),
+            Uuid::parse(&uid(12)).expect("message id"),
+        );
+        let mut narrowed = MessageMerger::new(Some(cursor));
+        for (index, second) in [0u32, 1, 2].into_iter().enumerate() {
+            narrowed.absorb(&user_delta(
+                40 + index as u32,
+                10 + second,
+                0,
+                "x",
+                &format!("2026-01-01T00:00:0{second}.000Z"),
+            ));
+        }
+        assert_eq!(
+            narrowed.floor(1),
+            Some(("2026-01-01T00:00:00.000Z".to_owned(), uid(10)))
+        );
+    }
+
+    /// Agent 正文的补齐判定：没有下界时读到最早；有下界时最早一条严格更早才算覆盖。
+    #[test]
+    fn message_paging_continues_until_the_page_floor_is_covered() {
+        let floor = ("2026-01-01T00:00:01.000Z".to_owned(), uid(10));
+        assert!(needs_older_agents(None, None));
+        assert!(needs_older_agents(Some(&floor), None));
+        assert!(needs_older_agents(Some(&floor), Some(&floor)));
+        assert!(needs_older_agents(
+            Some(&floor),
+            Some(&("2026-01-01T00:00:02.000Z".to_owned(), uid(11)))
+        ));
+        assert!(!needs_older_agents(
+            Some(&floor),
+            Some(&("2026-01-01T00:00:00.000Z".to_owned(), uid(9)))
+        ));
+    }
+
+    /// `session.read` 的用例读面替身：`messages` 按真实端口的口径分页（`before` 严格更早、一页
+    /// `messages_limit` 条、多取一条决定页标记），并记录每次请求的游标。
+    struct PagedSource {
+        all: Vec<MessageRecord>,
+        events: Vec<OwnedEventRecord>,
+        session: SessionSummary,
+        queries: Mutex<Vec<(Option<MessageCursor>, u32)>>,
+    }
+
+    #[async_trait]
+    impl SessionReadSource for PagedSource {
+        async fn read_session(
+            &self,
+            _actor: &Actor,
+            query: HistoryQuery,
+        ) -> Result<HistoryPage, PortError> {
+            let limit = query.messages_limit.events();
+            self.queries
+                .lock()
+                .expect("query log")
+                .push((query.before_messages.clone(), limit));
+            let (messages, messages_has_earlier) = if limit == 0 {
+                (Vec::new(), false)
+            } else {
+                let end = match &query.before_messages {
+                    None => self.all.len(),
+                    Some(cursor) => {
+                        let key = (
+                            cursor.created_at.as_str().to_owned(),
+                            cursor.message_id.as_str().to_owned(),
+                        );
+                        self.all.partition_point(|record| message_key(record) < key)
+                    }
+                };
+                let start = end.saturating_sub(limit as usize);
+                (self.all[start..end].to_vec(), start > 0)
+            };
+            // 首批（无 `after`、无 `before`）带回用户输入事件；更早的正文页不重复给。
+            let events = if limit > 0 && query.after.is_none() && query.before_messages.is_none() {
+                self.events.clone()
+            } else {
+                Vec::new()
+            };
+            Ok(HistoryPage {
+                session: self.session.clone(),
+                events,
+                history: Vec::new(),
+                history_has_earlier: false,
+                messages,
+                messages_has_earlier,
+                turns: Vec::new(),
+                interactions: Vec::new(),
+                config: Vec::new(),
+                capabilities: None,
+                head: GlobalCursor::new(
+                    ServerEpoch::new(&uid(2)).expect("server epoch"),
+                    Sequence::new(1).expect("sequence"),
+                ),
+                next: None,
+            })
+        }
+
+        async fn effective_interactions(
+            &self,
+            _actor: &Actor,
+            _reference: &SessionReference,
+        ) -> Result<Vec<CoreEffectiveInteraction>, PortError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn second(index: u32) -> String {
+        format!("2026-01-01T00:{:02}:{:02}.000Z", index / 60, index % 60)
+    }
+
+    /// 编号 `index` 的 Agent 正文（升序全集里的第 `index` 条）。
+    fn agent_record(index: u32) -> MessageRecord {
+        let created_at = second(index);
+        MessageRecord::try_new(
+            MessageId::new(&uid(1000 + index)).expect("message id"),
+            acp_core::model::SessionId::new(&uid(1)).expect("session id"),
+            None,
+            CoreMessageChannel::Reply,
+            CorePartialResult::completed(),
+            JsonValueText::new(&format!(r#"[{{"type":"text","text":"agent {index}"}}]"#))
+                .expect("content"),
+            Vec::new(),
+            CoreTimestamp::new(&created_at).expect("timestamp"),
+            CoreTimestamp::new(&created_at).expect("timestamp"),
+        )
+        .expect("record")
+    }
+
+    fn page_session() -> SessionSummary {
+        let created_at = CoreTimestamp::new(&second(0)).expect("timestamp");
+        SessionSummary::try_new(
+            acp_core::model::SessionId::new(&uid(1)).expect("session id"),
+            Some("paged".to_owned()),
+            AgentRef::try_new(AgentId::new("codex").expect("agent id"), "Codex CLI")
+                .expect("agent ref"),
+            CoreSessionState::Idle,
+            ResourceOrigin::Local,
+            None,
+            Version::new(1),
+            created_at.clone(),
+            created_at,
+            None,
+        )
+        .expect("summary")
+    }
+
+    /// 修复前：补齐循环每轮都用初始页最早一条当 `before`，重复取同一页直到 `resource.result_too_large`。
+    /// 这里用 450 条 Agent 正文（200 + 200 + 50 三页）驱动真正的 `session_read`：游标必须逐页前移，
+    /// 合并页完整且无重复，`hasEarlier` 与真实页边界一致。
+    #[tokio::test]
+    async fn session_read_completes_agent_messages_across_pages() {
+        let all = (0..450).map(agent_record).collect::<Vec<_>>();
+        let source = PagedSource {
+            all,
+            events: vec![user_delta(
+                900,
+                5000,
+                0,
+                "hello",
+                "2026-01-01T00:03:45.500Z",
+            )],
+            session: page_session(),
+            queries: Mutex::new(Vec::new()),
+        };
+        let command: Command = serde_json::from_str(&format!(
+            r#"{{"requestId":"{}","command":"session.read","sessionId":"{}","payload":{{"include":["messages"],"limit":2}}}}"#,
+            uid(7),
+            uid(1)
+        ))
+        .expect("session.read command");
+        let crate::sync::command::CommandPayload::SessionRead(payload) = command.payload.clone()
+        else {
+            panic!("payload is session.read");
+        };
+        let outcome = session_read(
+            &source,
+            &Actor::LocalCli,
+            &command,
+            payload,
+            &NegotiatedFeatures::new(Vec::new()),
+        )
+        .await
+        .expect("多页 Agent 正文不应以 resource.result_too_large 失败");
+
+        let CommandResultPayload::SessionRead(result) = outcome else {
+            panic!("session.read returns SessionReadResult");
+        };
+        assert!(!result.has_earlier, "已读到最早一条：hasEarlier 必须为假");
+        let messages = result.resources.messages.expect("messages requested");
+        assert_eq!(messages.len(), 451, "450 条 Agent 正文 + 1 条用户输入");
+        let ids = messages
+            .iter()
+            .map(|message| message.message_id.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(ids.len(), messages.len(), "分页不得重复同一条消息");
+        let order = messages
+            .iter()
+            .map(|message| {
+                (
+                    message.created_at.as_str(),
+                    message.message_id.as_str().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut sorted = order.clone();
+        sorted.sort();
+        assert_eq!(order, sorted, "合并页必须按 (createdAt, messageId) 升序");
+        assert_eq!(
+            messages.first().expect("first").message_id,
+            Uuid::parse(&uid(1000)).expect("message id")
+        );
+        assert_eq!(
+            messages.last().expect("last").message_id,
+            Uuid::parse(&uid(1449)).expect("message id")
+        );
+        assert!(
+            ids.contains(&Uuid::parse(&uid(5000)).expect("message id")),
+            "事件流里的用户输入必须仍在合并页内"
+        );
+
+        let queries = source.queries.lock().expect("query log");
+        assert_eq!(queries.len(), 3, "初始页 + 两个更早的 Agent 正文页");
+        assert!(queries[0].0.is_none(), "首批没有游标");
+        assert_eq!(
+            queries[1]
+                .0
+                .as_ref()
+                .map(|cursor| cursor.message_id.clone()),
+            Some(MessageId::new(&uid(1250)).expect("message id")),
+            "第二个游标是初始页最早一条，而不是重复首批"
+        );
+        assert_eq!(
+            queries[2]
+                .0
+                .as_ref()
+                .map(|cursor| cursor.message_id.clone()),
+            Some(MessageId::new(&uid(1050)).expect("message id")),
+            "第三个游标是第二页最早一条"
+        );
     }
 }

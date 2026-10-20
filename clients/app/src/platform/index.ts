@@ -19,6 +19,7 @@ import { openLifecycle } from "./lifecycle.web";
 import { openLocalCache } from "./local-cache.web";
 import { openDeviceIdentityStore } from "./secure-storage.web";
 import { openDownloadPort } from "./download.web";
+import { openAttachmentMediaPort } from "./attachment.web";
 
 export type { LifecycleEvent, LifecyclePort, Unsubscribe, VisibilityState } from "./lifecycle";
 export type {
@@ -56,11 +57,18 @@ export type {
 export { BLOB_DOWNLOAD_LIMIT_BYTES, DownloadError } from "./download.shared";
 export { browserDownloadEnvironment, openDownloadPort } from "./download.web";
 export { createVolatileImportedContent } from "./local-cache.web";
+export type {
+  PlatformAttachmentHandle,
+  PlatformAttachmentKind,
+  PlatformAttachmentPort,
+} from "./attachment";
+export { openAttachmentMediaPort } from "./attachment.web";
 
 import type { LifecyclePort } from "./lifecycle";
 import type { LocalCachePort, VolatileImportedContent } from "./local-cache";
 import type { DeviceIdentityPort } from "./secure-storage";
 import type { DownloadPort } from "./download.shared";
+import type { PlatformAttachmentPort } from "./attachment";
 import { createVolatileImportedContent as createVolatile } from "./local-cache.web";
 
 /** 平台端口束：组合根装配一次，向下传给 Sync Client / 状态机 / feature。 */
@@ -72,6 +80,13 @@ export interface PlatformPorts {
   readonly lifecycle: LifecyclePort;
   /** 主动下载的保存/取消/对象 URL 生命周期端口（正文不落持久缓存）。 */
   readonly download: DownloadPort;
+  /**
+   * 附件选择/预览端口（可选：注入的替身平台束可以没有它）。
+   *
+   * 缺省时组合根**不**向仓库装配附件：`attachmentsSupported` 为假并给出说明。生产实现由
+   * `openPlatform()` 提供。
+   */
+  readonly attachments?: PlatformAttachmentPort;
 }
 
 /**
@@ -88,5 +103,7 @@ export function openPlatform(): PlatformPorts {
     importedContent: createVolatile(),
     lifecycle: openLifecycle(),
     download: openDownloadPort(),
+    // 页内句柄标识由平台生成：与设备身份/配对无关，只是本次选择内的稳定键。
+    attachments: openAttachmentMediaPort(() => globalThis.crypto.randomUUID()),
   };
 }

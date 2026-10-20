@@ -37,7 +37,10 @@ function renderStream(degraded: readonly DegradedEventModel[]): string {
   const message: MessageView = {
     id: "m-1",
     role: "user",
+    channel: "reply",
     text: "开始",
+    content: { text: "开始", media: [], hasStructuredContent: false },
+    partial: null,
     hasStructuredContent: false,
     createdAt: "2026-10-01T00:00:00.000Z",
     turnId: null,
@@ -72,6 +75,7 @@ function renderStream(degraded: readonly DegradedEventModel[]): string {
           message,
           volatile: false,
           streamComplete: true,
+          partial: null,
         },
         ...degraded.map((item) => ({
           kind: "degraded" as const,

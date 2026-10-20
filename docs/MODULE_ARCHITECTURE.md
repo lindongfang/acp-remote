@@ -2,6 +2,7 @@
 
 > 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 已落地的路径是切片 4 的 `transport::local` + `local_admin`、切片 5 的 `transport::net` + `node_link`、`sync-server-connection` 的 `sync`（认证、订阅、投递、快照与配对 HTTP）与 `sync-server-commands` 的业务命令面，以及 `sync-ui-hosting` 在 `transport::net` 上的根路径静态托管（见 §4.9），`acp_facade` 仍待后续切片；`app` 已按切片 4/5/本变更接线，见 §3 `[现状]` 与 `README.md` 的 crate 表）
 > 版本：0.5
+> 修订记录（2026-10-19，`conversation-area-complete` WP1 合同 + WP2 实现）：§4.1 的价值对象、`AttachmentTransferStore`/`InteractionAuthority` 与 §4.7 的消息/清单/临时传输表已由 WP2 落地（版本化 migration 到 v12）；§4.3/§4.4 的独立附件帧编解码、§4.5 的媒体投影、§4.6 的 Access 转发与 §4.9 的附件端点仍属后续工作包。crate 边界与依赖矩阵未变。
 > 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery` WP2）：§4.1 的 out-port 摘要新增 `DirectoryBrowser`（`workspace.browse` 的逐层目录列举）、入站能力新增 `WorkspaceBrowse / SyncSnapshotQueries`，并新增一条 `[决定]` 收口「已登记目录的路径边界 + 目录浏览 + 建目录开关」三条职责（[ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)）；`file.changed` 的行级统计与结构化差异行同源派生也记入 §4.1 的事件 view 分工。§4.9 新增一条 `[决定]`：Sync 面的三处 feature 门控（浏览命令、`workspaces` 的路径键、`file.changed` 的差异行）是投递层的唯一判定点，core 不读 feature 表。crate 边界与依赖矩阵**未变**。
 > 修订记录（2026-10-16，`pairing-model`）：§4.8 的 `identity-auth` 职责与授权词汇段按设备权限层删除改写（`identity-auth` 保留跨节点 `grant.*` 展开，设备方向没有授权词汇；`pack.*`/`preset.*` 删除）；§4.9 `[现状]` 把 `sync::command` 的「逐命令 scope 授权先于本机读取」改为「认证与撤销判定先于本机读取」；§11 的词表来源去掉 `pack`。crate 边界、依赖矩阵与 `[现状]` 的落地范围**未变**。
 > 修订记录（2026-10-15，`sync-ui-hosting` WP4/WP2）：§3.1 新增依赖选型的 `[决定]`（`rust-embed 8.13` + `debug-embed`：四判据核验、依赖闭包 8 个节点、落选候选与「为何不用 `interpolate-folder-path`」）；§4.9 `[现状]` 按静态面实绩更新（`transport::net` 的**三类端点**、嵌入资源表模块与 `crates/server/build.rs` 的编译期二选一、发布构建缺产物即拒绝启动、`daemon.status.uiBuildVersion`）；§3 状态行的 `server` 已落地范围随之补上业务命令面（此前 `sync-server-commands` 只更新了 §4.9）与根路径静态托管。
@@ -217,6 +218,8 @@ Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord 
 
 以上是**冻结全量**；每个类型的形状与不变量见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3。
 
+`conversation-area-complete` 的 WP2 已在该文档 §3.3 落地 `MessageChannel`、`PartialResult`、`MediaReference`、`AttachmentSubject`、`AttachmentTransfer`、`AttachmentSubmission` 与 `EffectiveInteraction`，端口见 §5.8；storage 的 v12 migration 与五张新表见 §7.3/§7.6。
+
 规则：
 
 - `core` 不依赖任何 wire protocol、Tokio runtime、Axum、SQLite、WebSocket、子进程和具体 Agent。
@@ -251,7 +254,9 @@ RemoteDeliveryStore      只提交 imported event 的 cursor/digest/local-sequen
 TrustStore               设备、节点配对、信任与撤销元数据
 ExportStore              Owner Export 与 Access Import 记录
 AuditStore               不含内容的审计记录（读写）
-AttachmentStore          内容寻址附件字节与 LRU 清理
+AttachmentStore          内容寻址附件字节、会话绑定（建立链接时刷新附件的最近使用时间，供保留期判定）与 LRU 清理
+AttachmentTransferStore  运行时无关的分块附件、封存、清单与临时清理（已实现，CORE §5.8）
+InteractionAuthority     有效待处理交互读取与版本化原子解析（已实现，CORE §5.8）
 EventPublisher           发布已经提交的事件或远程交付
 EventSink                后端事件通道；调用顺序即提交顺序
 ReadView                 一致性读视图，`sync.snapshot_*` 的 barrier
@@ -263,7 +268,7 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。独立 `workspace.mkdir` 由 core 拥有持久受理、一次性执行凭证、创建和无会话终态顺序；具体端口与事务见该文档 §5.2/§5.6，server 不执行文件系统写入。
 
-管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。Daemon/CLI 接线与 `server` 的**本地**入站适配器（`server::local_admin`）已随切片 4 落地（`identity-auth`/`identity-keystore` 见 §4.8/§4.12，`app` 见 §4.10），因此这些管理能力已可经本地通道端到端使用（两处按合同的例外：`import.add` 需要 Owner 的 catalog 快照，而提供该快照的 Access 侧 `node-link-client` 属切片 6，因此它恒返回 `local.unavailable`；`node pair --mode access` 返回 `local.unsupported`）；仍未实现的是 `server::sync`/`server::acp_facade` 与 `node-link-client`（`server::transport::net` 与 `server::node_link` 的 Owner 侧入站面已随切片 5 落地，Access 侧出站属切片 6，见 §4.9）。业务决定仍由 core 用例拥有。
+管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。Daemon/CLI 接线与 `server` 的**本地**入站适配器（`server::local_admin`）已随切片 4 落地（`identity-auth`/`identity-keystore` 见 §4.8/§4.12，`app` 见 §4.10），因此这些管理能力已可经本地通道端到端使用（`node pair --mode access` 已接线（WP5d，经 `LocalAdminDeps::access` 注入 `app::access::AccessManager`）；Access 侧出站运行时 `node-link-client` 已落地并由 `app` 装配（§4.6）；`server::transport::net` 与 `server::node_link` 的 Owner 侧入站面、`server::sync` 的同步面均已落地（§4.9）。仍未实现的是 `server::acp_facade`（本地 ACP 客户端的业务命令转发）。业务决定仍由 core 用例拥有。
 
 `SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 
@@ -287,6 +292,13 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 - **不属于既有浏览合同**：`workspace.browse`（只列子目录、无文件内容）与 `DirectoryBrowser` 保持逐字不变；新能力是独立的 feature `core.session-files.v1`，只登记 Sync。
 
 适配层仍不读 feature 表；`workspace.browse` 与 `file.changed` 差异行两道 feature 门控不变。
+
+`[决定]`（2026-10-19，`conversation-area-complete` WP1 合同 + WP2 实现）**对话内容与附件由 core 拥有规则、适配器负责字节与 wire**：
+
+- **消息通道与部分结果**：`reply`/`thought` 分别持久化；停止、失败或断线保留已收到正文并标记 `PartialResult`，MUST NOT 折叠成完整成功。思考只在 Agent 明确提供时产生，且不生成 `agent.message.completed`。正文只从消息资源读取，结构化历史不重复承载同段正文。
+- **类型化媒体**：`MediaReference` 只含附件标识、会话、类型、长度、摘要与可用性，不含 URL/路径/凭据；媒体字节由附件端口读取，事件与命令只携带引用。外部 URI 不自动下载。
+- **附件**：分块、封存、清单与临时清理由 `AttachmentTransferStore`（已实现）拥有；`core` 不接触文件系统或网络，字节由出站适配器提供。`prompt` 接受前复核清单封存、身份、会话、主体与能力；上传成功不等于命令受理。
+- **有效交互**：读取当前有效请求与 `requestVersion`、首个有效答案的原子胜出由 `InteractionAuthority`（已实现）拥有；失败校验不消费请求，重启后上游丢失的交互不可复活。core 不读 feature 表，协商门控仍在 `server`（§4.9）。
 
 ### 4.2 `acp-protocol`
 
@@ -313,7 +325,8 @@ ClientCommand / CommandAccepted / CommandRejected
 Pairing DTO（设备短二维码 q2 编解码、claim/status、配对码 lookup、扫码取回 qr-lookup）
 ProtocolVersion / Feature negotiation
 Heartbeat（control.ping / control.pong）
-Connection error lifecycle（error body 与 37 个错误码，认证前后两种信封形状）
+Connection error lifecycle（error body 与 50 个错误码，认证前后两种信封形状）
+AttachmentTransfer（计划，`attachment.schema.json`）：独立已认证附件连接的 13 个帧与固定预算；不属于业务 `message.schema.json` 联合入口
 ```
 
 信封的 `body` 在传输层保持原文承载（`RawValue`），家族 body 由调用方显式解析——这条同时适用于已实现的家族与后续增量，`AGENTS.md` §4 的保真要求不允许中间经通用 DTO 往返。
@@ -330,6 +343,8 @@ Connection error lifecycle（error body 与 37 个错误码，认证前后两种
 
 `node-link-protocol` 同时拥有机器可验证资产 [`schemas/node-link/v1/`](../schemas/node-link/v1/) 与 [`fixtures/node-link/v1/`](../fixtures/node-link/v1/)；wire 变更必须同时更新两者，Rust 实现消费同一 manifest，不能各自复制一套测试样例。
 
+`[决定]`（2026-10-19，`conversation-area-complete` WP1，计划/待实施）本 crate 另拥有**独立附件连接**的帧编解码：`attachment.schema.json` 的 13 个帧与固定预算，连接先执行 §9 的节点 transcript 认证。它不进业务 `message.schema.json` 联合入口，也不复用 Sync 的 DTO 或错误码（错误码在本面以 `nodelink.attachment.*` 登记）。
+
 ### 4.5 `agent-host`
 
 唯一职责：把一个本地 ACP 子进程实现为 `AgentCatalog + SessionBackendFactory + SessionEndpoint`。
@@ -343,6 +358,8 @@ Connection error lifecycle（error body 与 37 个错误码，认证前后两种
 - stderr 的有界采集与结构化计数、超时、取消和进程树清理。
 - 通用 Agent profile registry。
 - 隔离的兼容性 quirk。
+- `session/prompt` 的**输入映射**（已实现，`conversation-area-complete` WP3；`crates/agent-host/src/prompt.rs`）：Sync `PromptContentBlock` 的 `text` 原样成为 ACP `text`；`attachment_ref` 的字节经 `AttachmentStore` 读取并复核长度/SHA-256 后按 `mediaType` 映射为 `image`/`audio`/`resource`，分别要求 Agent 宣告 `promptCapabilities.image`/`audio`/`embeddedContext`——未宣告时**整条拒绝**（不降级成文本、不删除附件、不读字节）；`workspace_path_ref` 只做形状校验（绝对路径、盘符/ADS、`.`/`..`、控制字符，按 `/` 与 `\` 两种分隔符拆分量）与最深已存在祖先的规范化前缀检查（挡链接逃逸），然后**只把相对路径作为文本块**交给 Agent，不读文件、不固定版本、不生成快照。编码前按声明长度预估 ACP 帧预算（附件按 base64 体积），编码后再对最终 `params` 精确校验 1 MiB；超预算/摘要或长度不符一个字节都不发。
+- **ACP 终端服务**（已实现，同 WP3；`crates/agent-host/src/terminal.rs`）：按上游 `terminal/create`/`output`/`wait_for_exit`/`kill`/`release` 语义启动真实子进程（参数数组、不经 shell、stdin 关闭、stdout/stderr 分开读取），以增量 UTF-8 解码器跨读取边界交付 `terminal.output` 事件（`terminalId` + 十进制 `chunkIndex` + `stream`）；保留正文受 Agent 的 `outputByteLimit` 与固定服务上限的较小值约束（从开头丢弃、落在字符边界，`terminal/output` 用 `truncated` 标记），实时事件始终携带真实分块。kill 保留标识、release 移除标识并拒绝后续操作；kill 与自然退出收敛为唯一的退出事实。每个终端有独立的 Job Object/进程组，会话关闭、Agent 崩溃与 Daemon 关闭都先结束进程树、再唤醒 `wait_for_exit` 等待者（不悬挂）、最后排空已读输出。`clientCapabilities.terminal` 与接受 `terminal/*` 用同一判据：组合根未宣告时不执行任何命令。
 
 wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` 与公共领域 view 同时交给 core，不能只交规范化文本。优先使用一个通用 ACP 实现；Codex、OMP 差异优先表示为 capability/profile 数据。
 
@@ -366,6 +383,12 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 
 默认 `no-content-cache` 下不得把 prompt、回复、工具内容、diff、终端、附件或 ACP raw 写入 Access SQLite；正文重放回源 Owner。断线后只自动恢复订阅和安全查询，不自动重放副作用命令。`agent-host` 与 `node-link-client` 是平级 backend，不能互相调用。
 
+`[现状]`（2026-10-20，`conversation-area-complete` WP5）crate 已落地并登记为 workspace 成员，依赖边界是 `core + node-link-protocol + identity-auth + acpr-wire`（`acpr-transcript` 只作为测试依赖；`scripts/check-crate-boundaries.mjs` 逐条断言）。已实现：WSS `Transport`、`node.hello`→`node.ready` 握手与 Owner 签名校验、单任务连接所有权/重连/撤销、catalog 无正文投影、`commit_receipt` → 发布 → `resource.ack` 的顺序、远程 `SessionEndpoint` 与 `SessionBackendFactory`，以及按 `node-link.attachment-transfer.v1` 的独立附件连接（`attachment` 模块：`begin`/`chunk`/`seal`/`status`/`abort`/`read`/清单，停等、有界内存、不落盘；已转发不等于已提交）。
+
+`[现状]`（2026-10-20，`conversation-area-complete` WP5d）Access 侧出站装配已接线：`app::trust::OutboundTrust` 加载系统根 + `node_link.access.trust_roots`（空锚/坏 PEM 失败关闭），`app::access::AccessManager` 实现 `node pair --mode access` 的 claim/status（二维码固定公钥验签 `ownerProof`、批准后才写 Owner 信任）、启动时按持久化 `kind = owner`/`state = paired` 记录建立 `OwnerLink`、向本地调用方提供远程 `SessionEndpoint`（惰性构造自当前 link）与附件转发入口，并在 `node.revoke` 后停止重连、让路由随 link 移除而失效；`Composition::close` 先 `shutdown_all` 再关存储（supervisor 有取消与 abort 两条终止路径，不留 detached task）。`daemon.status.links[]` 由该管理器填充。仍未落地：`server::acp_facade`（本地 ACP 客户端的业务命令转发）与 Node Link 面的 `session.read` 正文投影。
+
+`[现状]`（2026-10-20，WP5c）两处收口：① `app` 组合根注入 `agent-host` 的附件读取端口是**非拥有**句柄（`compose::WeakAttachmentStore`，每次调用升级一次）。原因是会话持有 core 的 `EventSink`、sink 闭包持有会话槽位、槽位缓存端点、端点又持有会话，这条环在 `AgentHost::shutdown_all` 之后仍留到进程结束；强引用会让 `Composition::close` 以 `StoreStillShared` 跳过检查点。端口语义不变：存储关闭后如实返回 `Unavailable(IoError)`。环本身属 core 的关闭语义（`Broker` 暂无释放槽位端点的入口），登记为残余。② 集成判据补齐：`crates/app/tests/imported_delivery.rs`（收据先于广播、重复事件不追加、ACK 与重启恢复、Access 磁盘无远程正文）与 `tests/remote_session.rs`（附票证路由、稳定 requestId、uncertain 只回查不重发）、以及两份握手协商的「未注册端点不宣告」单测。
+
 ### 4.7 `storage-sqlite`
 
 唯一职责：实现持久化端口。
@@ -386,6 +409,8 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 - 只有当出现"必须靠操作系统级隔离（不同文件/不同权限）才能满足的威胁模型"时，才拆成两个数据库文件，并按 `AGENTS.md` §9 新增 ADR。
 
 它不解析 ACP、不广播 WebSocket、不执行会话状态转换、不保存明文私钥。数据库 record 与领域对象通过 mapper 转换。
+
+`[决定]`（2026-10-19，`conversation-area-complete` WP2 已实现）分块附件、封存清单、消息通道/部分结果与媒体引用的落盘由本 crate 拥有（`CORE_PORTS_AND_STORAGE.md` §5.8/§7.3/§7.6）：临时传输、清单、`owned_message`、`owned_media_ref` 与交互版本列都经**版本化 migration** 追加（当前 v12），`imported_*` 家族不新增任何正文列。
 
 `owned_session.version` 的递增规则（含 `StateChange` 的提交 +1，否则不变）由本 crate 在提交事务内实现，是唯一权威；core 只按同一规则推导 view 的 `version` 并在提交后与之比对（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条），双方不一致时 core 失败关闭（`PortError::Corrupt`）而不能静默采用任一方。
 
@@ -433,6 +458,8 @@ server::transport    listener、连接级 backpressure 与根路径静态托管�
 `server::acp_facade` 常驻 daemon：ACP 会话状态、幂等记录与事件提交都必须落在拥有该会话的进程里，因此 `acp-remote acp-stdio` 只是“stdin/stdout ↔ 本地通道”的字节泵，不内嵌 core、storage 或 agent-host（否则会与 daemon 争用同一 SQLite，违反单实例锁与单一权威写入者）。本地通道因此承载两类载荷：`server::local_admin` 的管理请求/响应，以及 `server::acp_facade` 的长期双向 ACP 流；两者各自的编码由本地通道适配器拥有，不复用 Sync 与 Node Link 的 DTO。该通道的 endpoint、访问控制、framing、管理信封、两类载荷的会话语义、方法集与本地错误码以 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 为唯一权威来源（ACP 流见其 §3.1）。daemon 未运行时 `acp-stdio` 必须以明确错误退出，不得自行打开数据库或启动第二套核心。
 
 Node Link 和 Sync attachment 必须具有 connection generation 或 attachment ID。重新认证/重新订阅会生成新 generation，延迟到达的旧连接 frame 必须被拒绝，不能误投递到新会话绑定。
+
+`[决定]`（2026-10-19，`conversation-area-complete` WP1，计划/待实施）`server::sync` 与 `server::node_link` 各自拥有**独立附件端点**的入站适配（`/sync/v1/attachments`、`/node-link/v1/attachments`）：复用同一 listener 与各自的认证/撤销/心跳规则，在认证后按连接协商结果门控帧族；未协商、跨会话/主体、撤销与预算超限都在触碰存储或网络字节之前拒绝。附件帧只调用 `core::use_cases`（`AttachmentTransferStore`/`InteractionAuthority` 的计划入口），两个 adapter 仍不得互相调用。旧 peer 的 `message.schema.json` 与业务消息路径逐字不变。
 
 ### 4.10 `app`
 
@@ -526,24 +553,24 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 ## 5. 依赖矩阵
 `✓` 表示允许直接依赖：
 
-| From / To | core | acp-protocol | agent-host | storage-sqlite | sync-protocol | node-link-protocol | acpr-transcript | acpr-wire | identity-auth | identity-keystore | server | app | windows-local-ipc |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| core | — |  |  |  |  |  |  |  |  |  |  |  |  |
-| acp-protocol |  | — |  |  |  |  |  |  |  |  |  |  |  |
-| agent-host | ✓ | ✓ | — |  |  |  |  |  |  |  |  |  |  |
-| sync-protocol |  |  |  |  | — |  | ✓ | ✓ |  |  |  |  |  |
-| node-link-protocol |  |  |  |  |  | — | ✓ | ✓ |  |  |  |  |  |
-| acpr-transcript |  |  |  |  |  |  | — |  |  |  |  |  |  |
-| acpr-wire |  |  |  |  |  |  | ✓ | — |  |  |  |  |  |
-| node-link-client | ✓ | ✓ |  |  |  | ✓ |  |  |  |  |  |  |  |
-| storage-sqlite | ✓ |  |  | — |  |  |  | ✓ |  |  |  |  |  |
-| identity-auth | ✓ |  |  |  | ✓ | ✓ | ✓ |  | — |  |  |  |  |
-| identity-keystore |  |  |  |  |  |  |  |  | ✓ | — |  |  |  |
-| server | ✓ | ✓ |  |  | ✓ | ✓ |  | ✓ | ✓ |  | — |  | ✓ |
-| app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |  |
-| windows-local-ipc |  |  |  |  |  |  |  |  |  |  |  |  | — |
+| From / To | core | acp-protocol | agent-host | storage-sqlite | sync-protocol | node-link-protocol | acpr-transcript | acpr-wire | identity-auth | identity-keystore | server | app | windows-local-ipc | node-link-client |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| core | — |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| acp-protocol |  | — |  |  |  |  |  |  |  |  |  |  |  |  |
+| agent-host | ✓ | ✓ | — |  |  |  |  |  |  |  |  |  |  |  |
+| sync-protocol |  |  |  |  | — |  | ✓ | ✓ |  |  |  |  |  |  |
+| node-link-protocol |  |  |  |  |  | — | ✓ | ✓ |  |  |  |  |  |  |
+| acpr-transcript |  |  |  |  |  |  | — |  |  |  |  |  |  |  |
+| acpr-wire |  |  |  |  |  |  | ✓ | — |  |  |  |  |  |  |
+| node-link-client | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ |  |  |  |  | — |
+| storage-sqlite | ✓ |  |  | — |  |  |  | ✓ |  |  |  |  |  |  |
+| identity-auth | ✓ |  |  |  | ✓ | ✓ | ✓ |  | — |  |  |  |  |  |
+| identity-keystore |  |  |  |  |  |  |  |  | ✓ | — |  |  |  |  |
+| server | ✓ | ✓ |  |  | ✓ | ✓ |  | ✓ | ✓ |  | — |  | ✓ |  |
+| app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |  | ✓ |
+| windows-local-ipc |  |  |  |  |  |  |  |  |  |  |  |  | — |  |
 
-注：本矩阵的「列」是**可被依赖的对象**，「行」是发起方。切片 4 落地后的实际关系：§3 中除 `node-link-client` 之外的十二个 crate 都已是 workspace 成员，也都在本矩阵里成列——`storage-sqlite` 的列此前缺失，已随 `crates/app` 进入 `members` 的同一改动补上（`storage-sqlite` 此前只作为行，缺列会让「成员的依赖不在列里」硬失败，因此这两件事必须同批落地）。`node-link-client` 只作为「行」出现：它待切片 6 落地、不是 workspace 成员，当前没有任何依赖方，因而不需要列。`windows-local-ipc` 是矩阵的**列**（因为 `server` 依赖它），在矩阵里**也有一行**（该行除自身格外全空白——**它自己不依赖任何 crate**）；它是 `vendor/` 下的 path 依赖、**永远不是** workspace 成员（§3.1），其依赖面不进门禁判定，因此那一行只是占位、不需要维护。门禁的覆盖范围如实说明：`scripts/check-crate-boundaries.mjs` 会因「某成员的依赖不在列的集合里」硬失败，但对**行缺席是静默的**（矩阵里查不到该行时它只做列成员判定），因此行与列的增减都必须人工维护，不能指望门禁替你发现漏登记的行。
+注：本矩阵的「列」是**可被依赖的对象**，「行」是发起方。§3 的十三个 crate 都是 workspace 成员，也都成列；`node-link-client` 自 WP5d 起被 `app` 依赖（出站运行时装配），因此必须成列。`windows-local-ipc` 是矩阵的**列**（因为 `server` 依赖它），在矩阵里**也有一行**（该行除自身格外全空白——它不依赖任何 workspace crate）。`core` 的普通依赖闭包仍由 §9 判据 13 的 allow-list 冻结。
 
 额外规则：
 
@@ -705,7 +732,7 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 | node-link-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算；v1 信封与全部 29 个消息类型（连接字段规则、body 字节保真、类型化 body 往返、非法 body 分层拒绝）；配对 HTTPS 载荷；grant 词表与 `commands.json`、错误码与 registry、`MessageType` 与 schema union 三个漂移门禁 |
 | acpr-transcript | 长度前缀编解码往返、字段乱序/重复/缺字段拒绝、magic 与 `codecVersion` 校验；表驱动层的字段数量、tag 成员与定长宽度校验 |
 | acpr-wire | 值对象取值域（uuid/decimalString/timestamp/featureList/rawAcp 的正反用例）、`Nullable` 的「缺键报错 / null / 值」三态、`ExtraFields` 的未知字段值保真（含超出 u64 的整数字面量）、base64url 规范无填充口径 |
-| agent-host | fake ACP child、超时、崩溃、乱序响应 |
+| agent-host | fake ACP child、超时、崩溃、乱序响应；prompt 媒体/路径映射与能力/帧预算门控；真实终端子进程的分块输出/跨 UTF-8 边界/预算截断/非零退出、kill 后可读、release 后不可操作、重复操作收敛，以及会话/Agent/Daemon 关闭的进程树清理（Windows Job Object 心跳探针） |
 | node-link-client | fake Owner、attachment generation、显式重连、origin 去重、capability 收缩、uncertain |
 | storage-sqlite | migration、owned 原子提交、imported 无正文约束、TTL、容量限制 |
 | identity-auth | 设备/节点配对过期、重放、无传递信任、grant 交集和撤销 |

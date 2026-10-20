@@ -28,11 +28,17 @@ use node_link_protocol::resource::{
 const FIXTURE_ROOT: &str = "fixtures/node-link/v1/";
 const MANIFEST: &str = "fixtures/node-link/v1/manifest.json";
 const PAIRING_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/pairing.schema.json";
+/// 附件传输帧（`schema` 指向 `attachment.schema.json`）的 manifest 用例数。它们属于节点间独立已认证
+/// 的附件 WSS 连接（docs/NODE_LINK_PROTOCOL.md §12.9），**不是** `message.schema.json` 的信封消息，
+/// 因此不经信封层与 `TypedBody`；正例/负例的结构由 `check-schema-fixtures.mjs` 用同一 schema 校验。
+/// 这里是显式跳过，不是静默漏计：数量变化会让本断言失败。
+const TRANSPORT_FRAME_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/attachment.schema.json";
 
 const EXPECTED_VALID_MESSAGE_CASES: usize = 38;
 const EXPECTED_ENVELOPE_REJECTED: usize = 1;
 const EXPECTED_BODY_REJECTED: usize = 10;
 const EXPECTED_SKIPPED_PAIRING: usize = 2;
+const EXPECTED_SKIPPED_TRANSPORT_FRAMES: usize = 24;
 
 fn parse<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, String> {
     serde_json::from_str(body).map_err(|error| error.to_string())
@@ -166,12 +172,18 @@ fn every_manifest_case_behaves_as_declared() {
     let mut envelope_rejected = 0;
     let mut body_rejected = 0;
     let mut skipped_pairing = 0;
+    let mut skipped_transport_frames = 0;
 
     for case in &cases {
         if !is_wss_message(&case.schema) {
+            if case.schema.ends_with(TRANSPORT_FRAME_SCHEMA_SUFFIX) {
+                // 附件帧走独立已认证连接，不是 WSS 信封消息（见 `EXPECTED_SKIPPED_TRANSPORT_FRAMES`）。
+                skipped_transport_frames += 1;
+                continue;
+            }
             assert!(
                 case.schema.ends_with(PAIRING_SCHEMA_SUFFIX),
-                "{}：非 WSS 用例只允许是 pairing 载荷（其余需在本测试内覆盖）",
+                "{}：非 WSS 用例只允许是 pairing 载荷或附件传输帧（其余需在本测试内覆盖）",
                 case.fixture
             );
             skipped_pairing += 1;
@@ -245,10 +257,15 @@ fn every_manifest_case_behaves_as_declared() {
         "body 层拒绝的负例数变化"
     );
     assert_eq!(skipped_pairing, EXPECTED_SKIPPED_PAIRING, "配对用例数变化");
+    assert_eq!(
+        skipped_transport_frames, EXPECTED_SKIPPED_TRANSPORT_FRAMES,
+        "附件传输帧用例数变化"
+    );
 
     println!(
         "node-link envelope: {valid_message_cases} 条合法消息全部保真并类型化往返一致，\
-{envelope_rejected} 条被信封层拒绝，{body_rejected} 条被 body 层拒绝，跳过 {skipped_pairing} 条配对载荷"
+{envelope_rejected} 条被信封层拒绝，{body_rejected} 条被 body 层拒绝，跳过 {skipped_pairing} 条配对载荷、\
+{skipped_transport_frames} 条附件帧"
     );
 }
 

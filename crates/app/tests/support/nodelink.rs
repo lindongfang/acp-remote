@@ -837,6 +837,7 @@ pub async fn handshake(
         .expect("node.challenge 的 nodeProof 必须由 ownerPublicKey 对 catalogRevision 验签通过");
 
     // ② 用同一条 revision 构造自己的证明。
+    let negotiated = selected.clone();
     let proof_input = NodeLinkProof {
         owner_node_id: node(&ticket.owner_node_id),
         access_node_id: node(access.node_id()),
@@ -873,5 +874,8 @@ pub async fn handshake(
         json!(catalog_revision.to_string()),
         "node.ready 的 catalogRevision 必须与 node.challenge 同源"
     );
+    let mut ready = ready;
+    // 协商结果只在 `node.challenge` 里出现；把它挂到返回值上供「端点注册 → feature 宣告」的断言读取。
+    ready["selectedFeatures"] = json!(negotiated);
     ready
 }

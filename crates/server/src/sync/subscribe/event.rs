@@ -15,11 +15,13 @@
 //! 本模块不做可见性判定：scope 过滤与序号空洞是投递层的事（`subscribe::advance`）。
 
 use acp_core::model::{
-    AcpRaw as CoreAcpRaw, EventOrigin as CoreEventOrigin, EventPayload as CoreEventPayload,
+    AcpRaw as CoreAcpRaw, CommittedDelivery, CommittedEvent, EventOrigin as CoreEventOrigin,
+    EventPayload as CoreEventPayload,
 };
 use acp_core::ports::SyncEventRecord;
 use sync_protocol::common::{
-    Base64Url, DecimalString, Nullable, RawAcp, RawAcpUnavailableReason, RawObject, Timestamp, Uuid,
+    Base64Url, DecimalString, Nullable, RawAcp, RawAcpUnavailableReason, RawObject, RemoteOrigin,
+    Timestamp, Uuid,
 };
 use sync_protocol::event::{Body, EventOrigin, EventOriginKind, EventType, Payload};
 
@@ -90,12 +92,92 @@ pub fn event_body(record: &SyncEventRecord, negotiated: bool) -> Result<Body, Ev
             device_id,
             node_id,
         },
-        // 本模块只读 owned 事件：imported 事件的回源投递本次不做（4.9），因此没有来源可写。
+        // owned 事件没有远端来源；imported 的来源由 [`imported_event_body`] 在同一次装配后写入。
         remote_origin: Nullable::null(),
         created_at: Timestamp::parse(event.created_at.as_str())
             .map_err(|_| EventFrameFault::CreatedAt)?,
         payload: wire_payload(&record.payload)?,
     })
+}
+
+/// imported 投递 → `event` 帧的 body（`SYNC_PROTOCOL.md` §9.6）。
+///
+/// imported 事件没有本机 `owned_event` 行：定位（origin 三元组）、本机序列与正文全部来自
+/// [`CommittedDelivery::Imported`]，而正文只存在于这次投递的内存里。因此本函数的输入是投递单元本身，
+/// **不**经过 `EventReader`（那条路径按 `eventId` 查本机事件库，imported 事件不在其中）。
+///
+/// 字段口径：
+///
+/// - `globalSequence`/`sessionSequence` 都是**本机**投递序号（`local_sequence`；存储层分配时保证全库单调，
+///   见 `imported_delivery_index` 的注释），跨节点排序一律看 `remoteOrigin`；
+/// - `eventId` **逐字**等于 `originEventId`（§9.6：跨跳去重的前提）；
+/// - `remoteOrigin` 是必填对象，四个字段全部来自投递单元；
+/// - `origin.kind = "node"`、`nodeId = ownerNodeId`：Access 能如实陈述的产生者就是**交付这条事件的节点**
+///   （Node Link 的 `resource.event` 不携带 Owner 侧的产生者类型，Access 不得据此猜测 `agent`/`device`）。
+///   因为 `kind = node` 的形状由 `core.event-origin.v1` 引入，未协商该 feature 的连接无法收到合法的
+///   imported 事件——两个 feature 都协商了才投递（[`EventFrameFault::FeatureNotNegotiated`]）；
+/// - `causationRequestId` 为 `null`：诱发命令在 Owner 上，Node Link 的 `resource.event` 不携带它，
+///   本层不编造一个本机不存在的 requestId；
+/// - `createdAt` 是**收据提交时间**（`imported_delivery_index.received_at`），由投递单元携带。
+pub fn imported_event_body(
+    delivery: &CommittedDelivery,
+    features: &crate::sync::subscribe::NegotiatedFeatures,
+) -> Result<Body, EventFrameFault> {
+    let CommittedDelivery::Imported {
+        session,
+        origin,
+        origin_sequence,
+        local_sequence,
+        event_type,
+        created_at,
+        payload,
+        ..
+    } = delivery
+    else {
+        return Err(EventFrameFault::NotImported);
+    };
+    if !features.contains(crate::sync::snapshot::REMOTE_ORIGIN_FEATURE)
+        || !features.contains(EVENT_ORIGIN_FEATURE)
+    {
+        return Err(EventFrameFault::FeatureNotNegotiated);
+    }
+    let payload = payload.as_ref().ok_or(EventFrameFault::Payload)?;
+    let local = acp_core::model::Sequence::new(local_sequence.get())
+        .map_err(|_| EventFrameFault::Sequence)?;
+    let record = SyncEventRecord {
+        event: CommittedEvent {
+            id: origin.origin_event_id.clone(),
+            event_type: event_type.clone(),
+            session: Some(session.session_id.clone()),
+            session_sequence: Some(local),
+            global_sequence: local,
+            origin_epoch: Some(origin.origin_epoch.clone()),
+            origin_sequence: Some(*origin_sequence),
+            created_at: created_at.clone(),
+        },
+        payload: payload.clone(),
+        origin_kind: CoreEventOrigin::Node,
+        origin_device_id: None,
+        origin_node_id: Some(session.owner_node_id.clone()),
+        causation: None,
+    };
+    let mut body = crate::sync::event::frame(&record, features)?;
+    body.remote_origin = Nullable::value(RemoteOrigin {
+        owner_node_id: Uuid::parse(session.owner_node_id.as_str()).map_err(|_| {
+            EventFrameFault::Identity {
+                field: "ownerNodeId",
+            }
+        })?,
+        origin_epoch: Uuid::parse(origin.origin_epoch.as_str()).map_err(|_| {
+            EventFrameFault::Identity {
+                field: "originEpoch",
+            }
+        })?,
+        origin_event_id: Uuid::parse(origin.origin_event_id.as_str())
+            .map_err(|_| EventFrameFault::EventId)?,
+        origin_sequence: decimal(&origin_sequence.get().to_string())?,
+    });
+    Ok(body)
 }
 
 /// 十进制串（序号/byteLength 的线上形状）。
@@ -197,6 +279,11 @@ pub enum EventFrameFault {
     Payload,
     /// `payload.acp.sha256` 不是规范 base64url。
     PayloadDigest,
+    /// 投递单元不是 imported（[`imported_event_body`] 只接受该分支）。
+    NotImported,
+    /// 连接没有同时协商 `resource.remote-origin.v1` 与 `core.event-origin.v1`：imported 事件无法组装成
+    /// 合法帧（§9.6/§10.1），必须跳过而不是伪造来源。
+    FeatureNotNegotiated,
 }
 
 impl std::fmt::Display for EventFrameFault {
@@ -212,6 +299,8 @@ impl std::fmt::Display for EventFrameFault {
             Self::CreatedAt => formatter.write_str("createdAt"),
             Self::Payload => formatter.write_str("payload"),
             Self::PayloadDigest => formatter.write_str("payload.acp.sha256"),
+            Self::NotImported => formatter.write_str("committed delivery"),
+            Self::FeatureNotNegotiated => formatter.write_str("selected feature"),
         }
     }
 }

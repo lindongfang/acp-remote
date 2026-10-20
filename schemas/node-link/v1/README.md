@@ -4,7 +4,8 @@
 
 入口：
 
-- `message.schema.json`：所有 Node Link WSS message 的联合入口。
+- `message.schema.json`：所有 Node Link WSS message 的联合入口（不含附件连接）。
+- `attachment.schema.json`：独立已认证附件连接（`/node-link/v1/attachments`）的帧联合入口，含 `frameType` 词表与 `transferBudget` 固定预算；只在该连接上使用，未协商 `node-link.attachment-transfer.v1` 时不得出现。
 - `handshake.schema.json`：`node.hello`、`node.challenge`、`node.proof`、`node.ready`。
 - `catalog.schema.json`：`catalog.*`、`node.trust.revoked`、`node.rotate-key.*`。
 - `resource.schema.json`：`resource.attach/attached/detach`、`resource.subscribe`、`resource.snapshot_*`、`resource.event`、`resource.ack`。

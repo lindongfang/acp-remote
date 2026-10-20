@@ -107,7 +107,7 @@
       "type": "object",
       "required": ["ownerNodeId", "originEpoch", "online"],
       "properties": {
-        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
         "originEpoch": { "$ref": "common.schema.json#/$defs/uuid" },
         "online": { "type": "boolean" }
       },
@@ -211,7 +211,9 @@
         "content": {
           "type": "array",
           "items": { "$ref": "common.schema.json#/$defs/agentContentBlock" }
-        }
+        },
+        "channel": { "$ref": "media.schema.json#/$defs/messageChannel" },
+        "partial": { "$ref": "media.schema.json#/$defs/partialResult" }
       },
       "additionalProperties": true
     },

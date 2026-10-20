@@ -519,7 +519,8 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         "配对码必须以 XXXX-XXXX 展示：{code_line}"
     );
 
-    // `node pair --mode access` 在本切片由方法侧回 `local.unsupported`（CLI 原样带出，不自行编造错误码）。
+    // `node pair --mode access` 现在会真的解析 Owner 的配对 URL：形状非法的 URL 在方法侧
+    // 以 `local.invalid_params` 失败关闭（不再有 `local.unsupported` 这条占位路径）。
     let run = run_cli(
         "node-access",
         Some(daemon.config_path()),
@@ -535,7 +536,7 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         ],
         Stdin::Null,
     );
-    assert_failure_contract(&run, "local.unsupported", &[]);
+    assert_failure_contract(&run, "local.invalid_params", &["owner.example.invalid"]);
 
     daemon.stop();
 }

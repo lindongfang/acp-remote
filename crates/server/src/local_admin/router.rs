@@ -26,6 +26,7 @@ use acp_core::use_cases::UseCases;
 use identity_auth::{IdentityKeystore, PairingDecision, PairingSpec};
 use serde_json::Value;
 
+use crate::local_admin::access::AccessPairing;
 use crate::local_admin::audit;
 use crate::local_admin::daemon::DaemonControl;
 use crate::local_admin::envelope::{AdminRequest, AdminResponse, JsonObject};
@@ -51,6 +52,11 @@ pub struct LocalAdminDeps {
     /// 配对方法的注入口：共享的 `identity-auth` 状态机、本机 canonical origin（由组合根从配置注入）
     /// 与撤销后的连接关闭钩子（§5.3/§5.4）。
     pub pairing: Arc<PairingSessions>,
+    /// `node.pair.*` 的 **Access 方向**注入口（出站 HTTPS claim/status 与 Owner 信任落盘）。
+    ///
+    /// `None` = 本进程没有装配出站适配器（例如只服务入站面的测试组合根）：`mode = "access"` 以
+    /// `local.unsupported` 失败关闭，而不是发明一条「无出站实现」的成功响应。
+    pub access: Option<Arc<dyn AccessPairing>>,
 }
 
 /// v1 管理方法的路由实现（替换 WP3a 的 `UnroutedAdminHandler`）。
@@ -351,19 +357,25 @@ impl LocalAdminRouter {
     // 节点配对与信任（§5.4）
     // -----------------------------------------------------------------------------------------
 
-    /// `node.pair.begin`（§5.4）：只有 `mode = "owner"` 落地；`mode = "access"` 固定不支持。
+    /// `node.pair.begin`（§5.4）：`mode = "owner"` 在本机创建一次性配对；`mode = "access"` 委托给
+    /// 组合根注入的出站配对实现（`LocalAdminDeps::access`）。
     async fn node_pair_begin(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
         const OPERATION: &str = "node.pair.begin";
-        let params::NodePairBegin::Owner = params::node_pair_begin(params)? else {
-            // §5.4：`mode = "access"` 需要对 Owner 执行 HTTPS claim，本切片未落地。这里不构造任何
-            // HTTP 调用、不写任何状态，也不另行填充参数形状（与 §5.7 的 `node.rotate-key.begin` 同款）。
-            return Err(AdminError::new(
-                LocalErrorCode::Unsupported,
-                format!(
-                    "{OPERATION}: mode `access` is not implemented yet (no outbound claim is issued)"
-                ),
-            ));
-        };
+        match params::node_pair_begin(params)? {
+            params::NodePairBegin::Access(access) => {
+                let Some(pairing) = self.deps.access.as_ref() else {
+                    // 没有出站适配器：显式不支持（不构造 HTTP 调用、不写任何状态）。
+                    return Err(AdminError::new(
+                        LocalErrorCode::Unsupported,
+                        format!("{OPERATION}: no outbound node-link adapter is assembled"),
+                    ));
+                };
+                return pairing
+                    .begin(&access.pairing_url, access.display_name.as_deref())
+                    .await;
+            }
+            params::NodePairBegin::Owner => {}
+        }
         let display_name = self
             .deps
             .pairing
@@ -418,10 +430,15 @@ impl LocalAdminRouter {
         ]))
     }
 
-    /// `node.pair.status`（§5.4）：本切片没有向 Owner 的远程刷新，`lastRefreshError` 恒为 `null`。
+    /// `node.pair.status`（§5.4）：Access 方向的配对由出站实现刷新；其余走本机配对记录。
     async fn node_pair_status(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
         const OPERATION: &str = "node.pair.status";
         let pairing_id = params::pairing_id(params)?;
+        if let Some(access) = self.deps.access.as_ref() {
+            if let Some(result) = access.status(pairing_id.as_str()).await? {
+                return Ok(result);
+            }
+        }
         let view = self
             .pairing_view(OPERATION, &pairing_id, PairingTarget::Node)
             .await?;
@@ -459,6 +476,11 @@ impl LocalAdminRouter {
     async fn node_pair_confirm(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
         const OPERATION: &str = "node.pair.confirm";
         let confirm = params::node_pair_confirm(params)?;
+        if let Some(access) = self.deps.access.as_ref() {
+            if let Some(result) = access.confirm(confirm.pairing_id.as_str()).await? {
+                return Ok(result);
+            }
+        }
         let record = self
             .require_pairing(OPERATION, &confirm.pairing_id, PairingTarget::Node)
             .await?;
@@ -506,6 +528,15 @@ impl LocalAdminRouter {
 
     /// `node.pair.reject`（§5.4）：终结配对，不创建任何信任。
     async fn node_pair_reject(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        let reject = params::pairing_reject(params)?;
+        if let Some(access) = self.deps.access.as_ref() {
+            if access
+                .reject(reject.pairing_id.as_str(), reject.reason.as_deref())
+                .await?
+            {
+                return Ok(object(vec![]));
+            }
+        }
         self.pairing_reject_for(params, PairingTarget::Node, "node.pair.reject")
             .await
     }

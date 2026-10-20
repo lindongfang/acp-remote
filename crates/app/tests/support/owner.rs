@@ -27,10 +27,10 @@ use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
     Actor, AgentDescriptor, AgentRef, AgentSessionId, CapabilitySet, CommandRecord, ConfigOption,
     CreateSessionRequest, EndpointEvent, EventKind, EventPayload, EventType, GlobalCursor,
-    InteractionId, InteractionResolution, ModeId, ModeState, OwnedSessionRef, PortError,
-    PromptRequest, RequestId, ResumeSessionRequest, Sequence, SessionId, SessionRecoveryRecord,
-    SessionReference, SessionSnapshot, SessionSummary, Timestamp, TurnId, UnavailableKind,
-    ViewJson,
+    InteractionId, InteractionResolution, ModeId, ModeState, OriginEpoch, OwnedSessionRef,
+    PortError, PromptRequest, RequestId, ResumeSessionRequest, Sequence, SessionId,
+    SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionSummary, Timestamp, TurnId,
+    UnavailableKind, ViewJson,
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, CommitOutcome, EventSink, HistoryPage,
@@ -91,6 +91,15 @@ pub struct OwnerNode {
     tasks: Vec<(&'static str, JoinHandle<()>)>,
 }
 
+/// `[daemon.tls]` 的 `direct` 段（路径只用于本进程的 listener；不进日志与断言）。
+fn tls_section(cert_path: &std::path::Path, key_path: &std::path::Path) -> String {
+    format!(
+        "[daemon.tls]\nmode = \"direct\"\ncert_path = \"{}\"\nkey_path = \"{}\"\n",
+        cert_path.display().to_string().replace('\\', "/"),
+        key_path.display().to_string().replace('\\', "/"),
+    )
+}
+
 impl OwnerNode {
     /// 起一个受控路径的 Owner Node（真实存储 + 真实 listener + 脚本化 Agent 后端）。
     pub async fn start(label: &str) -> Self {
@@ -103,24 +112,45 @@ impl OwnerNode {
         cert_path: &std::path::Path,
         key_path: &std::path::Path,
     ) -> Self {
-        let tls = format!(
-            "[daemon.tls]\nmode = \"direct\"\ncert_path = \"{}\"\nkey_path = \"{}\"\n",
-            cert_path.display().to_string().replace('\\', "/"),
-            key_path.display().to_string().replace('\\', "/"),
-        );
+        let tls = tls_section(cert_path, key_path);
         Self::start_with(label, &tls).await
+    }
+
+    /// TLS `direct` + **固定 loopback origin/端口**：配对 URL 的 authority 因此是 `localhost:<port>`，
+    /// Access 侧的 claim 可以真的连上它（默认 harness 的 public_origin 是不可解析的展示用主机名）。
+    pub async fn start_tls_on(
+        label: &str,
+        cert_path: &std::path::Path,
+        key_path: &std::path::Path,
+        port: u16,
+    ) -> Self {
+        let tls = tls_section(cert_path, key_path);
+        Self::start_configured(label, &tls, Some("localhost"), port).await
     }
 
     /// 装配主体：`daemon_extra` 追加在 `[daemon]` 段之后（可含 `[daemon.tls]` 表）。
     async fn start_with(label: &str, daemon_extra: &str) -> Self {
+        Self::start_configured(label, daemon_extra, None, 0).await
+    }
+
+    /// 装配主体（可覆盖 public origin 的主机名与端口）。
+    async fn start_configured(
+        label: &str,
+        daemon_extra: &str,
+        public_host: Option<&str>,
+        port: u16,
+    ) -> Self {
         install_trace_logging();
         let root = TempRoot::new(label);
         let data_dir = root.join("data");
         super::create_owner_only_dir(&data_dir);
+        let public_origin = match public_host {
+            Some(host) => format!("https://{host}:{port}"),
+            None => format!("https://{}", nodelink::PUBLIC_HOST),
+        };
         let config_text = format!(
-            "[daemon]\ndata_dir = \"{}\"\npublic_origin = \"https://{}\"\nport = 0\nbind = \"127.0.0.1\"\n[dev_mode]\nenabled = true\n[agent]\ndefault = \"codex\"\ncodex = [\"{}\", \"acp\"]\n{daemon_extra}",
+            "[daemon]\ndata_dir = \"{}\"\npublic_origin = \"{public_origin}\"\nport = {port}\nbind = \"127.0.0.1\"\n[dev_mode]\nenabled = true\n[agent]\ndefault = \"codex\"\ncodex = [\"{}\", \"acp\"]\n{daemon_extra}",
             data_dir.display().to_string().replace('\\', "/"),
-            nodelink::PUBLIC_HOST,
             env!("CARGO_BIN_EXE_acp-remote").replace('\\', "/"),
         );
         let config = app::Config::from_toml(&config_text).expect("测试配置合法");
@@ -262,6 +292,9 @@ impl OwnerNode {
                     SyncConnectionRegistry::new(),
                 )),
             )),
+            // 本 harness 服务入站面，不装配出站适配器：`node.pair.begin` 的 access 分支以
+            // `local.unsupported` 失败关闭（与没有出站运行时的组合根一致）。
+            access: None,
         }));
 
         Self {
@@ -508,6 +541,13 @@ impl SessionStore for FlakySessionStore {
 
     async fn list(&self, query: SessionQuery) -> Result<Vec<SessionSummary>, PortError> {
         self.inner.list(query).await
+    }
+
+    async fn origin_epochs(
+        &self,
+        sessions: &[SessionId],
+    ) -> Result<Vec<(SessionId, OriginEpoch)>, PortError> {
+        self.inner.origin_epochs(sessions).await
     }
 
     async fn head(&self) -> Result<GlobalCursor, PortError> {
@@ -816,6 +856,10 @@ impl SessionEndpoint for ScriptedEndpoint {
         Ok(TurnAccepted {
             turn: TurnId::new(&nodelink::uuid_text()).expect("turn id 是规范 uuid 文本"),
         })
+    }
+
+    async fn validate_prompt(&self, _request: &PromptRequest) -> Result<(), PortError> {
+        Ok(())
     }
 
     async fn cancel(&self, _turn: Option<TurnId>) -> Result<(), PortError> {

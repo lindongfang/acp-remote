@@ -1208,6 +1208,13 @@ impl acp_core::ports::SessionEndpoint for ScriptedEndpoint {
         })
     }
 
+    async fn validate_prompt(
+        &self,
+        _request: &acp_core::model::PromptRequest,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+
     async fn cancel(&self, _turn: Option<acp_core::model::TurnId>) -> Result<(), PortError> {
         Ok(())
     }
@@ -1494,6 +1501,7 @@ impl HostNode {
                     Arc::clone(&sync_registry),
                 )),
             )),
+            access: None,
         }));
 
         Self {

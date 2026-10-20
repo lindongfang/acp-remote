@@ -28,7 +28,13 @@ import { describe, expect, it } from "vitest";
 import type { ConversationStreamProps } from "./index";
 import { ConversationStream, RuntimeUnavailable, StatusPill } from "./index";
 import { composerKeyAction } from "./ConversationComposer";
-import { classifyUserInputsInBand, jumpPillOf } from "./ConversationStream";
+import {
+  SCROLL_FOLLOW_GUARD_PX,
+  anchorScrollDelta,
+  classifyUserInputsInBand,
+  isFollowingBottom,
+  jumpPillOf,
+} from "./ConversationStream";
 import type { ConversationPageModel } from "../features/conversation-model";
 import type { ClientStore } from "../features/client-store";
 import type { SessionSummary } from "../protocol";
@@ -650,11 +656,11 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     expect(html).not.toContain("data-context-used");
     expect(html).not.toContain("data-context-percent");
     expect(html).not.toContain("data-context-warning");
-    // 未上报不是禁用理由：会话能力与输入区都不受影响。进行中的输入区是只读 + 停止：
-    // 渲染停止而不渲染发送（WP4 的口径；本条与「输入区只读」的用例互相印证）。
+    // 未上报不是禁用理由：会话能力与输入区都不受影响。进行中的输入区可编辑但发送禁用，
+    // 同时呈现停止（spec「执行中可编辑但不可发送」；发送入口在、但闸门关着）。
     expect(html).toContain('data-can-send="true"');
-    expect(html).not.toContain('data-action="submit-prompt"');
-    expect(html).not.toContain("data-submit-enabled");
+    expect(html).toContain('data-action="submit-prompt"');
+    expect(html).toContain('data-submit-enabled="false"');
     expect(html).toContain('data-action="cancel-turn"');
   });
 
@@ -753,7 +759,7 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     expect(html).toContain("Shift");
     expect(html).toContain("换行");
     expect(html).toContain('data-attachment-notice="true"');
-    expect(html).toContain("附件暂不支持");
+    expect(html).toContain("不支持附件传输");
   });
 });
 
@@ -796,5 +802,50 @@ describe("可见带换算：以中栏滚动容器的顶边为原点", () => {
     const distribution = classifyUserInputsInBand([{ top: 200, bottom: 320 }], 120, 600);
     expect(distribution).toEqual({ visible: 1, above: [], below: [] });
     expect(jumpPillOf(distribution)).toBeNull();
+  });
+});
+
+describe("对话页：流式阅读保持位置", () => {
+  it("距底部不超过防护值才算跟随；上读后立即停止跟随", () => {
+    // 内容 1000、视口 400：offset 600 正好在底部。
+    expect(
+      isFollowingBottom({ offsetY: 600, contentHeight: 1000, viewportHeight: 400 }),
+    ).toBe(true);
+    expect(
+      isFollowingBottom({
+        offsetY: 600 - SCROLL_FOLLOW_GUARD_PX,
+        contentHeight: 1000,
+        viewportHeight: 400,
+      }),
+    ).toBe(true);
+    // 再往上多读一像素就退出跟随：新内容不得把阅读位置拽走。
+    expect(
+      isFollowingBottom({
+        offsetY: 600 - SCROLL_FOLLOW_GUARD_PX - 1,
+        contentHeight: 1000,
+        viewportHeight: 400,
+      }),
+    ).toBe(false);
+    // 内容比视口短：没有可滚动的距离，视为在底部。
+    expect(isFollowingBottom({ offsetY: 0, contentHeight: 200, viewportHeight: 400 })).toBe(true);
+  });
+
+  it("初始渲染处于跟随状态，不呈现「回到底部」入口", () => {
+    const { store } = filledStore("idle");
+    const html = renderPage(pageOf(store));
+
+    expect(html).toContain('data-scroll-follow="true"');
+    expect(html).not.toContain('data-action="scroll-to-bottom"');
+  });
+});
+
+describe("对话页：阅读锚点的几何补偿", () => {
+  it("内容在上方增长时补偿同样的像素；只在下方增长时不滚动", () => {
+    // 更早历史/媒体加载把锚点向下推 120px：scrollTop 也要 +120，阅读位置才不动。
+    expect(anchorScrollDelta(240, 360)).toBe(120);
+    // 新内容追加在下方：锚点相对容器顶边的偏移不变，不产生滚动。
+    expect(anchorScrollDelta(240, 240)).toBe(0);
+    // 折叠块在上方收起：内容变短，阅读位置相应上移。
+    expect(anchorScrollDelta(240, 200)).toBe(-40);
   });
 });

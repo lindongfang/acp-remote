@@ -59,6 +59,26 @@ export type {
 export { ELICITATION_ANSWERS, INTERACTION_UNAVAILABLE_LABELS, buildInteractionAvailability } from "./interaction";
 
 export type {
+  ElicitationField,
+  ElicitationForm,
+  FormChoice,
+  FormInputValue,
+  FormValidation,
+} from "./form";
+export { buildElicitationForm, validateElicitationForm } from "./form";
+
+export type {
+  MessageChannelView,
+  PartialResultView,
+  MediaKindView,
+  MediaAvailabilityView,
+  MediaBlockView,
+  AgentMessageContent,
+  AttachmentMediaView,
+} from "./media";
+export { PARTIAL_RESULT_LABELS, MEDIA_UNAVAILABLE_LABELS, buildAgentMessageContent, mediaBlocksOfDelta } from "./media";
+
+export type {
   ConfigChangedTimelineCard,
   DiffLineKind,
   DiffLineView,

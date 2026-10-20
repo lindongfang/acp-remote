@@ -33,6 +33,16 @@ identity-keystore = { path = "../identity-keystore" }
 agent-host = { path = "../agent-host" }
 # 入站适配器：本地管理通道（`transport::local`）与管理信封/方法路由（`local_admin`）。
 server = { path = "../server" }
+# Access 侧的出站适配器（`docs/MODULE_ARCHITECTURE.md` §4.6）：组合根按持久化 Owner 信任建立连接、
+# 执行配对 claim/status 并挂接远程会话/附件路由。依赖方向是 `app -> node-link-client`。
+node-link-client = { path = "../node-link-client" }
+# Node Link wire 类型（配对 status 词表）：组合根只做投影，不另造一份枚举。
+node-link-protocol = { path = "../node-link-protocol" }
+# Access 出站 TLS 的系统根（平台根存储）与 PEM 解析：信任锚的**唯一**来源，见 `app::trust`。
+rustls-native-certs.workspace = true
+rustls-pki-types.workspace = true
+# 配对 nonce 的规范无填充 base64url 文本（core 的 `Nonce` 形状）。
+base64.workspace = true
 # `rt-multi-thread`/`macros`/`sync`/`time`/`net`/`io-util`/`signal` 由 workspace 基线开启：runtime 由本
 # crate 创建并持有（`docs/MODULE_ARCHITECTURE.md` §4.5/§4.7：适配器不自建 runtime），`signal` 驱动关闭序列。
 # `io-std` 是 `acp-stdio` 字节泵自己的消费面（`tokio::io::stdin/stdout`），因此只在本 manifest 增量开启，
@@ -73,15 +83,13 @@ tokio.workspace = true
 # 受控路径全链路集成测试扮演 Access Node：它按 Access 侧的方式构造 wire 消息、认领证明与节点证明，
 # 因此需要与 `node-link-client` 相同的 wire 类型、transcript 输入与签名原语（P-256 的 `ecdsa` 只在
 # 测试目标上开，生产 `app` 不签名）。版本与 feature 口径只在根 `Cargo.toml`。
-node-link-protocol = { path = "../node-link-protocol" }
+# `node-link-protocol`/`base64`/`rustls-pki-types` 已是普通依赖（出站运行时要用），不重复声明。
 identity-auth = { path = "../identity-auth" }
 p256 = { workspace = true, features = ["ecdsa"] }
-base64.workspace = true
 # TLS `direct` 轮次的客户端：自签证书现算（仓库不提交任何私钥材料）+ rustls 客户端只信任该证书。
 rcgen.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
-rustls-pki-types.workspace = true
 sqlx = { workspace = true }
 
 [lints]

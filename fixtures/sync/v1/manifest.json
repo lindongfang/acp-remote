@@ -80,6 +80,11 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-result-session-read-typed-media-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "invalid/command-session-read-single-field-before.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
@@ -412,7 +417,7 @@
       "fixture": "invalid/prompt-image-content.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
-      "expectedKeyword": "const"
+      "expectedKeyword": "oneOf"
     },
     {
       "fixture": "invalid/command-unknown-field.json",
@@ -1194,6 +1199,211 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "required"
+    },
+    {
+      "fixture": "attachment/valid/begin.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/chunk.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/chunk-ack-duplicate.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/seal.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/sealed.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/status.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/abort-revoked.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/read.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/read-chunk.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/manifest-begin.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/manifest-page.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/manifest-sealed.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-offset-mismatch.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-chunk-conflict.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-negotiation-required.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-binding-mismatch.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-revoked.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/invalid/chunk-offset-number.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
+    },
+    {
+      "fixture": "attachment/invalid/chunk-missing-transfer-id.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "attachment/invalid/chunk-data-invalid.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "attachment/invalid/chunk-unknown-field.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "attachment/invalid/seal-missing-sha256.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "attachment/invalid/begin-subject-node.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "const"
+    },
+    {
+      "fixture": "attachment/invalid/read-missing-attachment-id.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "media/valid/media-reference-image.json",
+      "schema": "../../../schemas/sync/v1/media.schema.json",
+      "schemaPointer": "#/$defs/mediaReference",
+      "valid": true
+    },
+    {
+      "fixture": "media/invalid/media-reference-availability-unknown.json",
+      "schema": "../../../schemas/sync/v1/media.schema.json",
+      "schemaPointer": "#/$defs/mediaReference",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "media/invalid/media-reference-missing-byte-length.json",
+      "schema": "../../../schemas/sync/v1/media.schema.json",
+      "schemaPointer": "#/$defs/mediaReference",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "media/valid/effective-interaction-elicitation.json",
+      "schema": "../../../schemas/sync/v1/media.schema.json",
+      "schemaPointer": "#/$defs/effectiveInteraction",
+      "valid": true
+    },
+    {
+      "fixture": "media/invalid/effective-interaction-missing-version.json",
+      "schema": "../../../schemas/sync/v1/media.schema.json",
+      "schemaPointer": "#/$defs/effectiveInteraction",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "media/valid/partial-result-partial.json",
+      "schema": "../../../schemas/sync/v1/media.schema.json",
+      "schemaPointer": "#/$defs/partialResult",
+      "valid": true
+    },
+    {
+      "fixture": "media/invalid/partial-result-unknown-state.json",
+      "schema": "../../../schemas/sync/v1/media.schema.json",
+      "schemaPointer": "#/$defs/partialResult",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "media/valid/message-channel-thought.json",
+      "schema": "../../../schemas/sync/v1/media.schema.json",
+      "schemaPointer": "#/$defs/messageChannel",
+      "valid": true
+    },
+    {
+      "fixture": "media/invalid/message-channel-unknown.json",
+      "schema": "../../../schemas/sync/v1/media.schema.json",
+      "schemaPointer": "#/$defs/messageChannel",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "media/valid/session-read-result-effective-interactions.json",
+      "schema": "../../../schemas/sync/v1/command.schema.json",
+      "schemaPointer": "#/$defs/sessionReadResult",
+      "valid": true
+    },
+    {
+      "fixture": "media/valid/agent-content-block-audio-ref.json",
+      "schema": "../../../schemas/sync/v1/common.schema.json",
+      "schemaPointer": "#/$defs/agentContentBlock",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-agent-message-completed-channel-partial.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/agent.message.completed",
+      "valid": true
     }
   ],
   "deviceQrVectors": [

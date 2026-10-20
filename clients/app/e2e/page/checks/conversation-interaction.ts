@@ -18,10 +18,10 @@
  *   都不出现；本地乐观清空取消态会让第一条变红。
  * - **附件不受支持**：断言 `data-attachments-supported="false"` 与一句**显式**说明同时在；
  *   提交载荷的键集恰好是 `content`——「静默丢弃附件后提交剩余文本」在这里既缺说明、又会多出键。
- * - **进行中只读**：活动轮次下输入框 `readonly`、没有 `data-action="submit-prompt"`、有
- *   `data-action="cancel-turn"`，且即使仓库里已有草稿，回车也不发出 `session.prompt`。
+ * - **进行中可编辑但发送禁用**：活动轮次下输入框可编辑（写好下一条草稿、不排队），发送按钮
+ *   `aria-disabled="true"`，有 `data-action="cancel-turn"`；回车不发出 `session.prompt`。
  *   「提交 → 待确认 → 已接受 → 已完成」因此在**没有活动轮次**的场景里验证（两个场景分开），
- *   否则用例只能在只读输入框上假装打字/提交，测的就不是真实行为。
+ *   否则用例只能在禁用的发送按钮上假装提交，测的就不是真实行为。
  * - **只对亲历请求呈现可选项**：同一个页面上四条交互各自落在不同可用性上（亲历可答 / 仅历史读到 /
  *   已被其它设备处理 / 读回的待处理项），断言的是**可点按钮的总数**与每条的归因；把
  *   `witnessed` 判定从「实时来源」放宽成「有可选项」时，历史那条会冒出按钮 → 红。
@@ -171,9 +171,9 @@ function messageIdsOf(container: HTMLElement): readonly string[] {
 
 const checks: readonly Check[] = [
   {
-    name: "CP-4 输入区只收文本、附件显式不受支持；进行中只读且只呈现停止，提交在无可提交轮次时以终态为准",
+    name: "CP-4 输入区只收文本、附件显式不受支持；进行中可编辑但发送禁用，提交在无可提交轮次时以终态为准",
     async run() {
-      // ① 有进行中的轮次：输入只读、没有发送入口、只有停止；回车不得发出任何命令。
+      // ① 有进行中的轮次：可编辑但发送禁用、只有停止；回车不得发出任何命令。
       await withSessionPage(
         sessionScenario({
           // 扣住取消应答：没有观测窗口的话，「立刻当成已取消」根本无从证伪。
@@ -215,36 +215,39 @@ const checks: readonly Check[] = [
             "进行中这一态必须有对应的文案",
           );
 
-          // 进行中不得提供提交入口：没有发送按钮，也没有任何「可提交」标记。
-          expectEqual(
-            query(container, '[data-action="submit-prompt"]'),
-            null,
-            "进行中 MUST NOT 呈现发送入口",
+          // 进行中：发送入口仍在，但被闸门禁用；回车不派发、不排队（spec「不可提交时回车无副作用」）。
+          expectThat(
+            query(container, '[data-action="submit-prompt"]') !== null,
+            "进行中仍应呈现发送入口（禁用而不是消失）",
           );
           expectEqual(
-            query(container, "[data-submit-enabled]"),
-            null,
-            "进行中 MUST NOT 呈现可提交标记",
+            query(container, "[data-submit-enabled]")?.getAttribute("data-submit-enabled"),
+            "false",
+            "进行中发送必须标为不可提交",
+          );
+          expectEqual(
+            query(container, '[data-action="submit-prompt"]')?.getAttribute("aria-disabled"),
+            "true",
+            "进行中的发送按钮必须真的禁用",
           );
           expectThat(
             query(container, 'button[data-action="cancel-turn"]') !== null,
             "进行中必须呈现停止入口",
           );
 
-          // 输入框只读：即使仓库里已有草稿，也不能通过界面改它。
+          // 执行中仍可编辑下一条草稿（不建立队列）：通过界面真的把字打进去。
           const before = composerTextArea(container);
-          expectThat(before !== null, "进行中仍必须有一段只读的多行输入框");
-          expectEqual(before.readOnly, true, "进行中的输入框必须只读");
+          expectThat(before !== null, "进行中仍必须有一段多行输入框");
+          expectEqual(before.readOnly, false, "进行中的输入框必须可编辑");
           expectEqual(
             query(container, '[data-composer-input="in_progress"]')?.hasAttribute("readonly") ?? false,
-            true,
-            "进行中的输入框必须带 readonly",
+            false,
+            "进行中的输入框不得带 readonly",
           );
-          // 直接把草稿放进仓库（模拟轮次开始前留下的草稿），再按回车：MUST NOT 发命令。
-          mounted.composition?.store.setDraft(SESSION_ALPHA, PROMPT_TEXT);
+          typeIntoComposer(container, PROMPT_TEXT);
           await waitFor(
-            () => composerTextArea(container)?.value === PROMPT_TEXT,
-            "只读输入框回显仓库里的草稿",
+            () => mounted.composition?.store.draftOf(SESSION_ALPHA) === PROMPT_TEXT,
+            "执行中的输入必须写进草稿",
           );
           pressEnter(container);
           expectEqual(
@@ -819,7 +822,7 @@ const checks: readonly Check[] = [
         },
       );
 
-      // ② 有进行中的轮次：输入只读、没有发送入口；即使仓库里已有草稿，回车也不得发命令。
+      // ② 有进行中的轮次：发送禁用但输入仍可编辑；回车不派发、不排队。
       await withSessionPage(
         sessionScenario({
           events: [
@@ -837,20 +840,20 @@ const checks: readonly Check[] = [
         async (mounted) => {
           const container = mounted.container;
           expectEqual(
-            query(container, '[data-action="submit-prompt"]'),
-            null,
-            "进行中 MUST NOT 呈现发送入口",
+            query(container, '[data-action="submit-prompt"]')?.getAttribute("aria-disabled"),
+            "true",
+            "进行中的发送必须禁用（不是消失）",
           );
           expectThat(
             query(container, 'button[data-action="cancel-turn"]') !== null,
             "进行中必须呈现停止入口",
           );
-          expectEqual(composerTextArea(container)?.readOnly, true, "进行中的输入框必须只读");
+          expectEqual(composerTextArea(container)?.readOnly, false, "进行中的输入框必须可编辑");
 
-          mounted.composition?.store.setDraft(SESSION_ALPHA, PROMPT_TEXT);
+          typeIntoComposer(container, PROMPT_TEXT);
           await waitFor(
-            () => composerTextArea(container)?.value === PROMPT_TEXT,
-            "只读输入框回显仓库里的草稿",
+            () => mounted.composition?.store.draftOf(SESSION_ALPHA) === PROMPT_TEXT,
+            "执行中的输入必须写进草稿",
           );
           pressEnter(container);
           expectEqual(

@@ -282,7 +282,7 @@ function downloadMimeTypeOf(preview: FilePreviewContent): string {
 }
 
 /** 规范十进制字节数 → 便于阅读的大小（未知/非法时不编造）。 */
-function formatBytes(sizeBytes: string): string {
+export function formatBytes(sizeBytes: string): string {
   let value: bigint;
   try {
     value = BigInt(sizeBytes);

@@ -16,13 +16,14 @@ use acp_core::model::derive_directory_id;
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v9：目录标识与 `owned_directory` 表；v8 的
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v12：分块附件传输/清单、消息通道与媒体引用、
+/// 交互 `request_version`/`invalidated_at`；v9 的目录标识与 `owned_directory` 表、v8 的
 /// `owned_device.scopes_json` 删除、v7 的 `owned_event.origin_kind` 第五取值、v6 的目录归属列与
 /// v5 的两列保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 11;
-/// §7.2：`meta.owned_schema_version` 的已知版本（v9 新增 `owned_directory` 并改目录归属列语义）。
-pub const OWNED_SCHEMA_VERSION: i64 = 11;
-/// §7.2：`meta.imported_schema_version` 的已知版本（v5–v8 都只动 owned 家族）。
+pub const FILE_FORMAT_VERSION: i64 = 12;
+/// §7.2：`meta.owned_schema_version` 的已知版本（v12 新增附件传输/清单、消息与媒体引用表）。
+pub const OWNED_SCHEMA_VERSION: i64 = 12;
+/// §7.2：`meta.imported_schema_version` 的已知版本（v5–v12 都只动 owned 家族）。
 pub const IMPORTED_SCHEMA_VERSION: i64 = 4;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
@@ -161,7 +162,9 @@ CREATE TABLE IF NOT EXISTS owned_interaction (
   decision_kind   TEXT CHECK (decision_kind IN ('allow_once','allow_always','reject_once','reject_always')),
   elicitation_action TEXT CHECK (elicitation_action IN ('submit','decline','cancel')),
   elicitation_values_json TEXT,
-  resolved_by_kind TEXT, resolved_by_id TEXT
+  resolved_by_kind TEXT, resolved_by_id TEXT,
+  request_version INTEGER NOT NULL DEFAULT 1,
+  invalidated_at  TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS owned_interaction_pending ON owned_interaction(session_id, state) WHERE state = 'pending';
 
@@ -202,6 +205,69 @@ CREATE TABLE IF NOT EXISTS owned_attachment_link (
   sha256       TEXT NOT NULL REFERENCES owned_attachment(sha256),
   PRIMARY KEY (session_id, attachment_id)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_attachment_transfer (
+  transfer_id       TEXT PRIMARY KEY,
+  session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  subject_kind      TEXT NOT NULL CHECK (subject_kind IN ('device','node')),
+  subject_id        TEXT NOT NULL,
+  total_length      INTEGER NOT NULL,
+  received_length   INTEGER NOT NULL DEFAULT 0,
+  chunk_size        INTEGER NOT NULL CHECK (chunk_size = 32768),
+  state             TEXT NOT NULL CHECK (state IN ('receiving','sealed','aborted','expired')),
+  media_type        TEXT NOT NULL,
+  file_name         TEXT NOT NULL,
+  sealed_sha256     TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  CHECK ((state = 'sealed') = (sealed_sha256 IS NOT NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS owned_attachment_transfer_stale
+  ON owned_attachment_transfer(updated_at) WHERE state = 'receiving';
+
+CREATE TABLE IF NOT EXISTS owned_attachment_submission (
+  submission_id     TEXT PRIMARY KEY,
+  session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  subject_kind      TEXT NOT NULL CHECK (subject_kind IN ('device','node')),
+  subject_id        TEXT NOT NULL,
+  state             TEXT NOT NULL CHECK (state IN ('open','sealed')),
+  attachment_count  INTEGER NOT NULL,
+  manifest_digest   TEXT,
+  created_at        TEXT NOT NULL,
+  sealed_at         TEXT,
+  CHECK ((state = 'sealed') = (manifest_digest IS NOT NULL)),
+  CHECK ((state = 'sealed') = (sealed_at IS NOT NULL))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_attachment_submission_item (
+  submission_id     TEXT NOT NULL REFERENCES owned_attachment_submission(submission_id) ON DELETE CASCADE,
+  position          INTEGER NOT NULL,
+  attachment_id     TEXT NOT NULL,
+  PRIMARY KEY (submission_id, position)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_message (
+  message_id        TEXT PRIMARY KEY,
+  session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  turn_id           TEXT,
+  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought')),
+  state             TEXT NOT NULL CHECK (state IN ('partial','completed','failed','cancelled')),
+  content_json      TEXT NOT NULL,
+  partial_reason    TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  CHECK (state <> 'completed' OR partial_reason IS NULL)
+) STRICT;
+CREATE INDEX IF NOT EXISTS owned_message_session ON owned_message(session_id, created_at, message_id);
+
+CREATE TABLE IF NOT EXISTS owned_media_ref (
+  message_id        TEXT NOT NULL REFERENCES owned_message(message_id) ON DELETE CASCADE,
+  position          INTEGER NOT NULL,
+  attachment_id     TEXT NOT NULL,
+  kind              TEXT NOT NULL CHECK (kind IN ('image','audio','file')),
+  PRIMARY KEY (message_id, position)
+) STRICT;
+CREATE INDEX IF NOT EXISTS owned_media_ref_attachment ON owned_media_ref(attachment_id);
 
 CREATE TABLE IF NOT EXISTS owned_device (
   device_id     TEXT PRIMARY KEY,
@@ -792,6 +858,32 @@ async fn v9_upgrade_owned(tx: &mut Transaction<'_, Sqlite>, at: &str) -> Result<
     )
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+/// §7.2 的 v11 → v12 升级：交互有效版本与失效标记。
+///
+/// 新表（`owned_attachment_transfer`/`owned_attachment_submission`/`owned_attachment_submission_item`/
+/// `owned_message`/`owned_media_ref`）已由 [`OWNED_SCHEMA_V1`] 的 `CREATE ... IF NOT EXISTS` 建出，
+/// 因此本段只给既有 `owned_interaction` 追加两列：
+///
+/// - `request_version INTEGER NOT NULL DEFAULT 1`（旧行得到 1：既有的 pending 请求仍有唯一版本）；
+/// - `invalidated_at TEXT`（可空 = 尚未失效）。
+///
+/// 列存在性守卫让本段可重复执行：升级事务被重试、或某段已被人工应用时不会因重复列失败。
+async fn v12_upgrade_owned(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
+    if !column_exists(&mut **tx, "owned_interaction", "request_version").await? {
+        sqlx::raw_sql(
+            "ALTER TABLE owned_interaction ADD COLUMN request_version INTEGER NOT NULL DEFAULT 1;",
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+    if !column_exists(&mut **tx, "owned_interaction", "invalidated_at").await? {
+        sqlx::raw_sql("ALTER TABLE owned_interaction ADD COLUMN invalidated_at TEXT;")
+            .execute(&mut **tx)
+            .await?;
+    }
     Ok(())
 }
 
@@ -1395,6 +1487,9 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
         }
         if file_version < 11 {
             v11_upgrade_storage(&mut tx).await?;
+        }
+        if file_version < 12 {
+            v12_upgrade_owned(&mut tx).await?;
         }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;

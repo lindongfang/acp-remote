@@ -186,6 +186,8 @@ async fn interaction_creation_links_the_request_event() {
                 history: false,
             },
             before_history: None,
+            before_messages: None,
+            messages_limit: ReplayLimit::default(),
             after: None,
             limit: ReplayLimit::default(),
         })

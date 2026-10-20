@@ -4,7 +4,9 @@
 
 入口：
 
-- `message.schema.json`：所有 WSS message 的联合入口。
+- `message.schema.json`：所有 WSS message 的联合入口（不含附件连接）。
+- `attachment.schema.json`：独立已认证附件连接（`/sync/v1/attachments`）的帧联合入口，含 `frameType` 词表与 `transferBudget` 固定预算；**不属于** `message.schema.json`，未协商 `core.attachment-transfer.v1` 时不得出现。
+- `media.schema.json`：消息通道、媒体引用、部分结果与有效待处理交互的公共值对象（`$defs`），由事件 view 与 `session.read` 复用。
 - `pairing.schema.json`：HTTPS pairing request/response（含 `qrLookupRequest`/`qrLookupResponse`；设备短二维码 `q2` 布局不是 JSON，由 `fixtures/sync/v1/device-qr/vectors.json` 与 Rust/TypeScript 编解码测试固定）。
 - `common.schema.json`：共享值对象。
 - `auth.schema.json`：WSS 认证消息。

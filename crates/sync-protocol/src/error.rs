@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{Nullable, RawObject, Text, Uuid, ValueError};
 
-/// Sync v1 的错误码（37 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
+/// Sync v1 的错误码（50 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// `protocol.invalid_json`
@@ -86,13 +86,39 @@ pub enum ErrorCode {
     ResourceResultTooLarge,
     /// `resource.remote_unavailable`
     ResourceRemoteUnavailable,
+    /// `attachment.negotiation_required`
+    AttachmentNegotiationRequired,
+    /// `attachment.transfer_not_found`
+    AttachmentTransferNotFound,
+    /// `attachment.binding_mismatch`
+    AttachmentBindingMismatch,
+    /// `attachment.offset_mismatch`
+    AttachmentOffsetMismatch,
+    /// `attachment.chunk_conflict`
+    AttachmentChunkConflict,
+    /// `attachment.digest_mismatch`
+    AttachmentDigestMismatch,
+    /// `attachment.sealed`
+    AttachmentSealed,
+    /// `attachment.budget_exhausted`
+    AttachmentBudgetExhausted,
+    /// `attachment.expired`
+    AttachmentExpired,
+    /// `attachment.revoked`
+    AttachmentRevoked,
+    /// `media.unavailable`
+    MediaUnavailable,
+    /// `interaction.unavailable`
+    InteractionUnavailable,
+    /// `interaction.version_conflict`
+    InteractionVersionConflict,
     /// `internal.unavailable`
     InternalUnavailable,
 }
 
 impl ErrorCode {
     /// 与 `compatibility/errors/v1/errors.json` 的 sync 列表逐条相等。
-    pub const ALL: [ErrorCode; 37] = [
+    pub const ALL: [ErrorCode; 50] = [
         ErrorCode::ProtocolInvalidJson,
         ErrorCode::ProtocolSchemaInvalid,
         ErrorCode::ProtocolMessageTooLarge,
@@ -129,6 +155,19 @@ impl ErrorCode {
         ErrorCode::ResourceBackpressure,
         ErrorCode::ResourceResultTooLarge,
         ErrorCode::ResourceRemoteUnavailable,
+        ErrorCode::AttachmentNegotiationRequired,
+        ErrorCode::AttachmentTransferNotFound,
+        ErrorCode::AttachmentBindingMismatch,
+        ErrorCode::AttachmentOffsetMismatch,
+        ErrorCode::AttachmentChunkConflict,
+        ErrorCode::AttachmentDigestMismatch,
+        ErrorCode::AttachmentSealed,
+        ErrorCode::AttachmentBudgetExhausted,
+        ErrorCode::AttachmentExpired,
+        ErrorCode::AttachmentRevoked,
+        ErrorCode::MediaUnavailable,
+        ErrorCode::InteractionUnavailable,
+        ErrorCode::InteractionVersionConflict,
         ErrorCode::InternalUnavailable,
     ];
 
@@ -145,6 +184,9 @@ impl ErrorCode {
                 | ErrorCode::ResourceRateLimited
                 | ErrorCode::ResourceBackpressure
                 | ErrorCode::ResourceRemoteUnavailable
+                | ErrorCode::AttachmentOffsetMismatch
+                | ErrorCode::AttachmentBudgetExhausted
+                | ErrorCode::InteractionVersionConflict
                 | ErrorCode::InternalUnavailable
         )
     }
@@ -187,6 +229,19 @@ impl ErrorCode {
             ErrorCode::ResourceBackpressure => "resource.backpressure",
             ErrorCode::ResourceResultTooLarge => "resource.result_too_large",
             ErrorCode::ResourceRemoteUnavailable => "resource.remote_unavailable",
+            ErrorCode::AttachmentNegotiationRequired => "attachment.negotiation_required",
+            ErrorCode::AttachmentTransferNotFound => "attachment.transfer_not_found",
+            ErrorCode::AttachmentBindingMismatch => "attachment.binding_mismatch",
+            ErrorCode::AttachmentOffsetMismatch => "attachment.offset_mismatch",
+            ErrorCode::AttachmentChunkConflict => "attachment.chunk_conflict",
+            ErrorCode::AttachmentDigestMismatch => "attachment.digest_mismatch",
+            ErrorCode::AttachmentSealed => "attachment.sealed",
+            ErrorCode::AttachmentBudgetExhausted => "attachment.budget_exhausted",
+            ErrorCode::AttachmentExpired => "attachment.expired",
+            ErrorCode::AttachmentRevoked => "attachment.revoked",
+            ErrorCode::MediaUnavailable => "media.unavailable",
+            ErrorCode::InteractionUnavailable => "interaction.unavailable",
+            ErrorCode::InteractionVersionConflict => "interaction.version_conflict",
             ErrorCode::InternalUnavailable => "internal.unavailable",
         }
     }

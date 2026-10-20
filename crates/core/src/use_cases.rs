@@ -20,30 +20,31 @@ use std::sync::Arc;
 use crate::broker::{Broker, Denied, command_name};
 use crate::model::{
     Actor, AgentDescriptor, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
-    AuditAction, AuditOutcome, AuditRecord, CapabilitySet, ClientCommand, CommandKind,
-    CommandReceipt, CommandRecord, CommandResult, CommandStatus, ConfigOption, ConfigOptionId,
-    ConfigValue, ConflictKind, ContentVersion, CreateSessionRequest, DeviceId, DeviceRecord,
-    Digest, DirectoryId, DirectoryRecord, ElicitationAction, ElicitationValues, EntityRef, EventId,
-    EventPayload, EventType, FileReadPurpose, GitDiff, GitStatusPage, GlobalCursor, InteractionId,
-    InteractionResolution, LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, NodeState,
-    OriginCursor, OriginEpoch, OwnedSessionRef, PairingClaim, PairingId, PairingRecord,
-    PairingSettlement, PairingState, PairingTarget, PeerIdentity, PeerPublicKey,
-    PendingInteraction, PortError, PublicError, RemoteSessionRef, RequestId, Resolution,
-    ResolvedWorkspace, ResourceOrigin, Sequence, SessionFileChunk, SessionFilePage,
-    SessionFilePath, SessionId, SessionListPath, SessionPageToken, SessionReference,
-    SessionSummary, Timestamp, UnavailableKind, Version, WorkspaceCatalogEntry, WorkspaceRef,
-    WorkspaceSource,
+    AttachmentSubject, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, ClientCommand,
+    CommandKind, CommandReceipt, CommandRecord, CommandResult, CommandStatus, ConfigOption,
+    ConfigOptionId, ConfigValue, ConflictKind, ContentVersion, CreateSessionRequest, DeviceId,
+    DeviceRecord, Digest, DirectoryId, DirectoryRecord, EffectiveInteraction, ElicitationAction,
+    ElicitationValues, EntityRef, EventId, EventPayload, EventType, FileReadPurpose, GitDiff,
+    GitStatusPage, GlobalCursor, InteractionId, InteractionResolution, LocalCursor, ModeId,
+    ModeState, NodeId, NodeKind, NodeRecord, NodeState, OriginCursor, OriginEpoch, OwnedSessionRef,
+    PairingClaim, PairingId, PairingRecord, PairingSettlement, PairingState, PairingTarget,
+    PeerIdentity, PeerPublicKey, PendingInteraction, PortError, PromptContentBlock, PublicError,
+    RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace, ResourceOrigin, Sequence,
+    SessionFileChunk, SessionFilePage, SessionFilePath, SessionId, SessionListPath,
+    SessionPageToken, SessionReference, SessionSummary, SubmissionId, Timestamp, UnavailableKind,
+    Version, WorkspaceCatalogEntry, WorkspaceRef, WorkspaceSource,
 };
 use crate::ports::{
-    AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
-    DeliveryIndexEntry, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryCreator,
-    DirectoryListing, ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, ImportedSessionQuery,
-    ImportedSessionRecord, LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite,
-    PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
-    PairingWrite, PendingAudit, PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
-    RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionFiles, SessionQuery,
-    SessionStore, StoreHealth, SyncReplaySlice, TrustRecordRef, TrustStore,
-    WorkspaceMkdirAdmission, WorkspaceMkdirExecution, WriteContext,
+    AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditQuery, AuditStore,
+    Clock, DeliveryIndexEntry, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryCreator,
+    DirectoryListing, ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, ImportedRead,
+    ImportedReadQuery, ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore,
+    NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite,
+    PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit, PruneReport,
+    RemoteDeliveryStore, RemoteSessionReads, ReplayBatch, ReplayLimit, RetentionPolicy,
+    RevokeReason, SessionCreateAdmission, SessionFiles, SessionQuery, SessionStore, StoreHealth,
+    SubmissionBinding, SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceMkdirAdmission,
+    WorkspaceMkdirExecution, WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -187,8 +188,19 @@ pub struct NodeLinkCatalogView {
     pub agents: Vec<AgentDescriptor>,
     /// 本机全部目录（已记录；路径不进 catalog）。
     pub directories: Vec<DirectoryRecord>,
-    /// 本机全部会话摘要（catalog 的 sessions 投影）。
-    pub sessions: Vec<SessionSummary>,
+    /// 本机全部会话投影（catalog 的 sessions 投影），每条带该会话的 origin epoch。
+    ///
+    /// epoch 必须与 summary 一起在同一份视图里给出：catalog 是 Access 在收到第一个事件**之前**唯一能
+    /// 取得它的位置（`NODE_LINK_PROTOCOL.md` §12.3 的 `catalog.session.originEpoch`），分开读会允许
+    /// 「会话在、epoch 不在」的中间态。
+    pub sessions: Vec<NodeLinkCatalogSession>,
+}
+
+/// `catalog.sessions` 的一项：会话摘要 + 该会话的 origin epoch。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeLinkCatalogSession {
+    pub session: SessionSummary,
+    pub origin_epoch: OriginEpoch,
 }
 
 /// Node Link 会话视图（`NODE_LINK_PROTOCOL.md` §12.4 的快照元数据）。
@@ -257,6 +269,16 @@ pub struct UseCases {
     /// 实现，因此默认是失败关闭的 [`crate::ports::UnavailableSessionFiles`]；组合根用
     /// [`UseCases::with_session_files`] 注入 `app::session_files` 的原生实现。
     files: Arc<dyn SessionFiles>,
+    /// 分块附件与清单端口（§5.8）。默认不可用：未装配的进程显式拒绝附件路径，绝不静默把附件丢掉
+    /// 只发文字。
+    transfers: Option<Arc<dyn AttachmentTransferStore>>,
+    /// Access 侧 imported 会话的在线读取端口（`session.read` 回源）。默认不可用：未装配的进程对
+    /// imported 会话显式 `BackendUnsupported`，不返回空页冒充「没有历史」。
+    ///
+    /// 用 [`std::sync::OnceLock`] 而不是构造参数：组合根先建 [`UseCases`]，`AccessManager`（实现该端口的
+    /// 出站运行时）必须持有同一个 `Arc<UseCases>` 才能构造，二者因此构成装配顺序上的环。与
+    /// `AgentHost::set_node_events` 同款处理——原地接线一次，之后只读。
+    remote_reads: std::sync::OnceLock<Arc<dyn RemoteSessionReads>>,
 }
 
 /// [`UseCases`] 的依赖。
@@ -289,7 +311,26 @@ impl UseCases {
             browser: Arc::new(SystemDirectories),
             creator: Arc::new(SystemDirectories),
             files: Arc::new(crate::ports::UnavailableSessionFiles),
+            transfers: None,
+            remote_reads: std::sync::OnceLock::new(),
         }
+    }
+
+    /// 接线 Access 侧 imported 会话的在线读取端口（组合根在构造 `AccessManager` 之后调用一次）。
+    ///
+    /// 重复接线返回 `false` 且保留首次实现：端口一经装配就不再变化，静默覆盖会让同一进程里的读取
+    /// 走到两条不同的 Owner 路由上。
+    pub fn set_remote_session_reads(&self, reads: Arc<dyn RemoteSessionReads>) -> bool {
+        self.remote_reads.set(reads).is_ok()
+    }
+
+    /// 注入分块附件端口（组合根装配 `storage-sqlite` 的实现）。
+    pub fn with_attachment_transfers(
+        mut self,
+        transfers: Arc<dyn AttachmentTransferStore>,
+    ) -> Self {
+        self.transfers = Some(transfers);
+        self
     }
 
     /// 换用另一份目录浏览实现（组合根注入别的实现，或测试注入记录调用的替身）。
@@ -431,6 +472,87 @@ impl UseCases {
             });
         }
         self.broker.submit_mutation(actor, &command).await
+    }
+
+    /// 带有效交互版本（`requestVersion`）的 mutation 入口。
+    ///
+    /// 协商 `core.pending-interactions.v1` 后，`permission.resolve`/`elicitation.respond` 必须经本入口；
+    /// 旧 peer 仍走 [`UseCases::submit_command`]（版本缺席 = 不做版本校验，但状态/上游校验照旧）。
+    pub async fn submit_command_versioned(
+        &self,
+        actor: &Actor,
+        command: ClientCommand,
+        request_version: Option<Version>,
+    ) -> Result<CommandReceipt, PortError> {
+        command.validate().map_err(PortError::from)?;
+        if command.kind == CommandKind::Query {
+            return Err(PortError::InvalidRequest("查询命令不使用交互应答版本"));
+        }
+        self.broker
+            .submit_mutation_versioned(actor, &command, request_version)
+            .await
+    }
+
+    /// `session.prompt` 的整批附件入口（`core.attachment-transfer.v1`）。
+    ///
+    /// 受理前复核清单（存在、会话、主体），再把清单绑定随受理提交放进**同一事务**。任一失败都返回
+    /// 错误且不派发 Agent；重复 `requestId` 由幂等记录返回首次结果。
+    pub async fn submit_prompt_with_submission(
+        &self,
+        actor: &Actor,
+        command: ClientCommand,
+        content: Vec<PromptContentBlock>,
+        submission: SubmissionId,
+    ) -> Result<CommandReceipt, PortError> {
+        command.validate().map_err(PortError::from)?;
+        let session = command
+            .session
+            .clone()
+            .ok_or(PortError::InvalidRequest("session.prompt 必须带 sessionId"))?;
+        let transfers = self
+            .transfers
+            .clone()
+            .ok_or(PortError::Unavailable(UnavailableKind::BackendUnsupported))?;
+        let manifest = transfers
+            .submission(&submission)
+            .await?
+            .ok_or_else(|| PortError::NotFound(EntityRef::Submission(submission.clone())))?;
+        let subject = AttachmentSubject::from_actor(actor)
+            .ok_or(PortError::InvalidRequest("本机入口不参与远程附件传输"))?;
+        if manifest.session != session || manifest.subject != subject {
+            return Err(PortError::InvalidRequest("附件清单不属于本会话或本主体"));
+        }
+        let binding = SubmissionBinding {
+            submission,
+            attachments: manifest.attachments.clone(),
+            subject,
+        };
+        self.broker
+            .submit_prompt_with_submission(actor, &command, &content, binding)
+            .await
+    }
+
+    /// 当前有效的完整待处理请求（`session.read` 的 `pending_interactions`）。
+    pub async fn effective_interactions(
+        &self,
+        actor: &Actor,
+        reference: &SessionReference,
+    ) -> Result<Vec<EffectiveInteraction>, PortError> {
+        self.broker.effective_interactions(actor, reference).await
+    }
+
+    /// 版本化交互解析（非命令入口；带命令幂等键的路径见 [`UseCases::submit_command_versioned`]）。
+    pub async fn resolve_effective(
+        &self,
+        actor: &Actor,
+        reference: &SessionReference,
+        interaction: InteractionId,
+        request_version: Option<Version>,
+        resolution: InteractionResolution,
+    ) -> Result<Resolution, PortError> {
+        self.broker
+            .resolve_effective(actor, reference, &interaction, request_version, resolution)
+            .await
     }
 
     /// `session.create`（Node Link §12.7 / Sync §11.5）：先把目录来源解析成本机规范化绝对路径，
@@ -986,7 +1108,13 @@ impl UseCases {
             .map_err(Denied::into_port_error)?;
         let mut page = self.broker.read_session(query.clone()).await?;
         if query.include.config_options {
-            page.config = self.live_config(&query.session).await?;
+            // 配置项是只读会话的附属信息：守护进程重启后没有活动 endpoint 时，读取历史/正文
+            // 仍必须成功（否则首屏整体失败）。取不到就留空，不伪造选项；其余错误仍向上返回。
+            match self.live_config(&query.session).await {
+                Ok(config) => page.config = config,
+                Err(PortError::InvalidRequest("没有该会话的活动 endpoint")) => {}
+                Err(error) => return Err(error),
+            }
         }
         if query.include.capabilities {
             page.capabilities = Some(
@@ -996,6 +1124,34 @@ impl UseCases {
             );
         }
         Ok(page)
+    }
+
+    /// imported 会话的 `session.read` 回源（Access 侧）：`Ok(None)` 表示该标识不是本机的 imported
+    /// 索引行（调用方按 `session.not_found` 处理），`Ok(Some(_))` 是 Owner 的完成结果原文。
+    ///
+    /// 授权与 owned 读取走同一条 `session.read` 判定（同一 actor、同一会话）；正文只在内存转发，
+    /// 不写数据库、临时文件或日志。Owner 不可达由端口返回 [`UnavailableKind::OwnerOffline`]，本层
+    /// 不把失败改写成空页——「不可读」与「没有内容」在 wire 上必须是两件事。
+    pub async fn read_imported_session(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        query: ImportedReadQuery,
+    ) -> Result<Option<ImportedRead>, PortError> {
+        let request = self.ids.request_id();
+        self.broker
+            .authorize(actor, "session.read", Some(session), &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let Some(record) = self.deliveries.find_imported_session(session).await? else {
+            return Ok(None);
+        };
+        let Some(reads) = self.remote_reads.get() else {
+            // 未装配出站运行时：这是能力缺失，不是「空历史」。Sync 据此回
+            // `capability.unsupported_by_broker`。
+            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        };
+        reads.read_imported(&record.session, query).await.map(Some)
     }
 
     /// `session.mode.list` / `session.config.list` 的 config 部分（§11.5 的 `SessionConfigOptionView`）。
@@ -1713,7 +1869,7 @@ impl UseCases {
         let node = self.trust.node(access_node, NodeKind::Access).await?;
         let directories = self.config.directories().await?;
         let agents = self.catalog.agents().await?;
-        let sessions = self
+        let summaries = self
             .store
             .list(SessionQuery {
                 only: None,
@@ -1721,6 +1877,25 @@ impl UseCases {
                 limit: None,
             })
             .await?;
+        // epoch 与摘要同批读取：catalog 的 `originEpoch` 是 imported 会话在本地可发现的前提
+        // （`NODE_LINK_PROTOCOL.md` §12.3），缺席时宁可让本次投影失败，也不返回一个缺字段的目录。
+        let ids: Vec<SessionId> = summaries
+            .iter()
+            .map(|summary| summary.session_id().clone())
+            .collect();
+        let epochs: std::collections::BTreeMap<SessionId, OriginEpoch> =
+            self.store.origin_epochs(&ids).await?.into_iter().collect();
+        let mut sessions = Vec::with_capacity(summaries.len());
+        for summary in summaries {
+            let origin_epoch = epochs
+                .get(summary.session_id())
+                .cloned()
+                .ok_or_else(|| PortError::Corrupt("a listed session has no origin epoch"))?;
+            sessions.push(NodeLinkCatalogSession {
+                session: summary,
+                origin_epoch,
+            });
+        }
         let revision = self.audit.watermark().await?;
         Ok(NodeLinkCatalogView {
             revision,
@@ -2017,6 +2192,22 @@ impl UseCases {
         &self.ids
     }
 
+    /// 分块附件与清单端口（§5.8）：`None` = 本进程未装配附件传输（入站适配器据此显式拒绝附件路径，
+    /// 不下发「已支持」的假象）。
+    ///
+    /// 入站适配器（Sync/Node Link 的独立附件连接）直接使用该端口的 `begin/chunk/seal/...` 方法：
+    /// 它们不是命令，没有 `ClientCommand` 形状，也不经过幂等/派发时序。附件**正文**因此只由该端口
+    /// 落盘，适配器不另建临时文件。
+    pub fn attachment_transfers(&self) -> Option<&Arc<dyn AttachmentTransferStore>> {
+        self.transfers.as_ref()
+    }
+
+    /// 时间来源（`Clock` 端口）：附件帧带时间，但 core 的端口签名都要求调用方传入 `Timestamp`；
+    /// 适配器因此必须与 core 使用**同一个**时钟，不能自己读系统时间。
+    pub fn clock(&self) -> &Arc<dyn Clock> {
+        &self.clock
+    }
+
     pub async fn audit(
         &self,
         actor: &Actor,
@@ -2073,7 +2264,10 @@ impl UseCases {
         generation: AttachmentGeneration,
     ) -> Result<(), PortError> {
         self.require_local(actor)?;
-        self.attachments.link(session, attachment, generation).await
+        let at = self.clock.now();
+        self.attachments
+            .link(session, attachment, generation, at)
+            .await
     }
 
     pub async fn prune_attachments(
@@ -3530,6 +3724,8 @@ mod tests {
                     history: true,
                 },
                 before_history: None,
+                before_messages: None,
+                messages_limit: ReplayLimit::new(0),
                 after: None,
                 limit: ReplayLimit::default(),
             },

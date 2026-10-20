@@ -29,6 +29,7 @@ pub mod limits;
 pub mod message;
 pub mod methods;
 pub mod raw;
+pub mod terminal;
 pub mod update;
 
 pub use envelope::{Envelope, MessageClass};

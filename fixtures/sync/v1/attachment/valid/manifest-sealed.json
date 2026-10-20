@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "type": "attachment.manifest_sealed",
+  "messageId": "14c5d041-5263-4e7f-8071-a2b3c4d5e6f7",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "12",
+  "body": {
+    "submissionId": "4e5d6c7b-8a90-4b1c-9d2e-3f4a5b6c7d8e",
+    "attachmentCount": "2",
+    "manifestDigest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "sealedAt": "2026-10-19T12:00:01.000Z"
+  }
+}

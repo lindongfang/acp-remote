@@ -40,5 +40,7 @@ export const SYNC_SCHEMA_FILES = [
   "event.schema.json",
   "event-views.schema.json",
   "command.schema.json",
+  "attachment.schema.json",
+  "media.schema.json",
   "error.schema.json",
 ] as const;

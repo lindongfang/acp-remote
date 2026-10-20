@@ -17,6 +17,7 @@ use crate::common::{
     Timestamp, Uuid, ValueError, WorkspaceCatalogEntry, deserialize_optional_non_null,
 };
 use crate::event::EventType;
+use crate::media::{MessageChannel, PartialResult};
 
 /// `sync.resetRequired.reason` / `sync.snapshotRequest.reason` 的取值（`sync.schema.json` 的两处 `enum`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -311,6 +312,23 @@ pub struct SnapshotItemMessage {
     pub created_at: Timestamp,
     #[serde(rename = "turnId")]
     pub turn_id: Nullable<Uuid>,
+    /// 消息通道（`core.typed-media.v1`）：回复与思考分别持久化，客户端据此区分。
+    ///
+    /// 未协商该 feature 的连接不下发该键（旧 peer 的 wire 形状逐字不变）；语义上它描述的是
+    /// `owned_message.channel`，不改变 `role` 的 user/agent 二分。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub channel: Option<MessageChannel>,
+    /// 正文完整性（`core.typed-media.v1`）：`partial` 表示已收到内容被保留但上游未完成。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub partial: Option<PartialResult>,
 }
 
 /// `sync.snapshotItem.turns` 的单个元素。

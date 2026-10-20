@@ -13,7 +13,7 @@
  * 每个阻断态的触发源各不相同，但都收敛到 `SyncClientEvent.blocked`：
  * close code 4411（被顶替）、4410（撤销）、4406（版本不兼容）、`hostProof` 校验失败
  * 或 host key 与配对记录不一致（身份变化），以及**服务端没有选中约定的子协议**
- * （§3.1，在 `#onOpen` 之后核 `SocketPort.negotiatedSubprotocol()`）与**必需 feature 未被选中**
+ * （§3.1，在 socket 的 `onOpen` 回调之后核 `SocketPort.negotiatedSubprotocol()`）与**必需 feature 未被选中**
  * （§5.2，在 `#onServerChallenge` 里比对 `REQUIRED_FEATURES`）。后两种与版本不兼容落到同一个
  * 阻断态，成因由事件的 `reason` 分开（见 `IncompatibleReason`）。判定完成后 `SyncClient`
  * 停止自动重连。
@@ -21,8 +21,6 @@
 
 import type {
   AuthAuthenticated,
-  AuthClientHello,
-  AuthClientProof,
   AuthServerChallenge,
   CommandMessage,
   CommandResultMessage,
@@ -37,15 +35,13 @@ import type {
   SyncWireMessage,
   Uuid,
 } from "../protocol";
-import { decodeBase64Url, encodeBase64Url } from "./base64url";
+import { stringifyJson } from "./json";
 import { decodeWireMessage } from "./wire";
 import { EventLedger, isImportedEventIdConsistent } from "./dedupe";
 import type {
-  ByteArray,
   ClockPort,
   CancelTimer,
   DeviceIdentityLike,
-  DeviceIdentityMaterial,
   HostIdentityPort,
   RandomPort,
   SocketFactory,
@@ -53,9 +49,9 @@ import type {
   TranscriptCodec,
 } from "./ports";
 import { SnapshotStaging, SnapshotValidationError, type SnapshotDiscardReason, type VerifiedSnapshot } from "./snapshot";
-
-/** 本实现的协议版本（`schemas/sync/v1` 的 `const 1`）。 */
-const PROTOCOL_VERSION = 1;
+import type { ClientBlockCause, IncompatibleReason } from "./blocking";
+import { blockCauseForCloseCode, CLOSE, isRetryableCloseCode } from "./blocking";
+import { AuthHandshake, PROTOCOL_VERSION, sortedFeatures } from "./handshake";
 
 /**
  * Sync WSS 端点路径（`docs/SYNC_PROTOCOL.md` §3.1）。
@@ -105,33 +101,6 @@ export function syncSocketUrl(canonicalOrigin: string): string {
   return `${canonicalOrigin.replace(/^https:\/\//, "wss://")}${SYNC_WS_PATH}`;
 }
 
-/** Device proof 的 domain tag（§6.3；Host challenge 的校验在 `HostIdentityPort` 实现侧）。 */
-const DEVICE_PROOF_DOMAIN = "acp-remote/device-proof/v1";
-
-/** transcript 全局字段 tag（§6.3）。 */
-const TAG = {
-  protocolVersion: 1,
-  hostId: 2,
-  deviceId: 3,
-  canonicalOrigin: 6,
-  clientNonce: 9,
-  serverNonce: 10,
-  connectionId: 11,
-  negotiatedFeatures: 12,
-} as const;
-
-/** 关闭码（§12.3 的封闭表）。 */
-const CLOSE = {
-  normal: 1000,
-  protocolError: 4400,
-  authRequired: 4401,
-  versionIncompatible: 4406,
-  identityConflict: 4409,
-  deviceRevoked: 4410,
-  connectionReplaced: 4411,
-  serverUnavailable: 4500,
-} as const;
-
 /**
  * 发现丢失区间后的重新订阅：退避参数与连续次数上限。
  *
@@ -169,31 +138,8 @@ const GAP_RESUBSCRIBE = {
   maxAttempts: 5,
 } as const;
 
-/** 阻断原因（与 `src/state/connection-machine.ts` 的 `BlockingCause` 一一对应）。 */
-export type ClientBlockCause =
-  | "device_revoked"
-  | "version_incompatible"
-  | "host_identity_changed"
-  | "replaced_by_other_connection";
-
-/**
- * `version_incompatible` 之下**具体是哪一步谈不拢**（`blocked` 事件的 `reason`）：封闭词表。
- *
- * 为什么粗粒度原因不够：`version_incompatible` 同时覆盖三种**恢复路径不同**的情形——
- * 服务端没接受约定的子协议（要对准两端的部署与来源）、协议版本不兼容（要升级客户端或主机）、
- * 必需 feature 未被选中（要在主机侧升级）。三者落到同一个 `cause` 就再也分不出来，
- * 用户与诊断只能看到「协议或能力不兼容」这一句笼统的说明。
- *
- * 词表只登记这一族的细化：其余阻断原因（撤销、身份变化、被顶替）本身已经足够具体，
- * 没有进一步可分的取值，事件里因此不带 `reason`。
- */
-export type IncompatibleReason =
-  /** 服务端没有选中约定的子协议（§3.1；`#onOpen` 比对 `SocketPort.negotiatedSubprotocol()`）。 */
-  | "subprotocol_not_selected"
-  /** 协议版本不兼容（close 4406 / `protocol.version_unsupported` / 选中的版本不等于本实现）。 */
-  | "protocol_version_unsupported"
-  /** 服务端选中的 feature 未覆盖 `REQUIRED_FEATURES`（§5.2；握手校验或 `protocol.feature_required`）。 */
-  | "required_features_missing";
+/** 阻断原因与细化成因的**定义**在 `blocking.ts`（两条已认证连接共用同一份判定）。 */
+export type { ClientBlockCause, IncompatibleReason };
 
 /** 客户端向消费方（`src/state/` 与 WP7 的 feature 层）发出的事件。 */
 export type SyncClientEvent =
@@ -264,6 +210,10 @@ export const SUPPORTED_FEATURES = [
   "core.workspace-browse.v1",
   "core.workspace-mkdir.v1",
   "core.session-files.v1",
+  "core.attachment-transfer.v1",
+  "core.typed-media.v1",
+  "core.pending-interactions.v1",
+  "core.remote-history.v1",
   "resource.remote-origin.v1",
 ] as const;
 
@@ -279,6 +229,18 @@ export const REQUIRED_FEATURES = ["core.command-status.v1", "core.event-ack.v1"]
  */
 export const SESSION_HISTORY_FEATURE = "core.session-history.v1";
 
+/** 类型化媒体/消息通道（§10.4）。 */
+export const TYPED_MEDIA_FEATURE = "core.typed-media.v1";
+
+/** 可恢复的有效待处理交互（§11.7）。 */
+export const PENDING_INTERACTIONS_FEATURE = "core.pending-interactions.v1";
+
+/** 远程结构化历史回源（§9.6/§11.5）。 */
+export const REMOTE_HISTORY_FEATURE = "core.remote-history.v1";
+
+/** 附件传输（§3.4）。与 `src/protocol/attachment.ts` 的常量同值，只在这里导出便于消费方取用。 */
+export { ATTACHMENT_FEATURE } from "../protocol";
+
 /** 一条连接的构造输入（端口由组合根注入）。 */
 export interface SyncConnectionOptions {
   readonly hostId: Uuid;
@@ -287,7 +249,7 @@ export interface SyncConnectionOptions {
    * 本连接在升级请求里声明的子协议列表（由组合根给出，见 `DECLARED_SUBPROTOCOLS`）。
    *
    * 它有两处用途，缺一都不可：交给 socket 端口作为升级请求的声明（§3.1），
-   * 以及核对服务端**实际选中**的那一条（未选中即终止连接，见 `#onOpen`）。
+   * 以及核对服务端**实际选中**的那一条（未选中即终止连接，见 socket 的 `onOpen` 回调）。
    * 必填而不是给缺省值：声明错一条与不声明都表现为「连接被拒」，只有让组合根显式给出，
    * 这两件事才不会在装配处被悄悄省略。
    */
@@ -330,16 +292,9 @@ export class SyncConnection {
   readonly #options: SyncConnectionOptions;
   readonly #socket: SocketPort;
   readonly #random: RandomPort;
-  readonly #transcript: TranscriptCodec;
-  readonly #identity: DeviceIdentityLike;
-  readonly #host: HostIdentityPort;
   readonly #onEvent: (event: SyncClientEvent) => void;
-
-  /** 本连接的 `clientNonce`；每次 `start()` 重新生成，绝不复用。 */
-  #clientNonce: ByteArray | null = null;
-  /** 已加载的设备身份材料（握手期间缓存，避免每条消息重复读 IndexedDB）。 */
-  #identityMaterial: DeviceIdentityMaterial | null = null;
-  #connectionId: Uuid | null = null;
+  /** §8 的握手状态机（与附件连接共用同一份实现，见 `handshake.ts`）。 */
+  readonly #handshake: AuthHandshake;
   /**
    * 客户端方向的 `connectionSequence` 计数器（§4.1）。
    *
@@ -350,13 +305,6 @@ export class SyncConnection {
   #outboundSequence = 0;
   /** 本连接的认证结果（serverEpoch 与限额据此生效）。 */
   #authenticated: AuthenticatedInfo | null = null;
-  /**
-   * 服务端在 `auth.server_challenge` 里选中的 feature 列表。
-   *
-   * 它只属于**当前** WSS 连接（与认证状态同生命周期），随 `authenticated` 事件交付给消费方，
-   * 供其决定可选 include 的取舍（例如 `session.read` 的 `history`）。
-   */
-  #selectedFeatures: readonly string[] | null = null;
   /**
    * 去重账本。
    *
@@ -389,19 +337,39 @@ export class SyncConnection {
   constructor(options: SyncConnectionOptions, staging: SnapshotStaging) {
     this.#options = options;
     this.#random = options.random;
-    this.#transcript = options.transcript;
-    this.#identity = options.identity;
-    this.#host = options.host;
     this.#onEvent = options.onEvent;
     this.#staging = staging;
     this.#acked = options.resumeCursor;
     this.#lastAcked = options.resumeCursor;
+    this.#handshake = new AuthHandshake({
+      hostId: options.hostId,
+      identity: options.identity,
+      host: options.host,
+      random: options.random,
+      transcript: options.transcript,
+      subprotocols: options.subprotocols,
+      supportedFeatures: [...SUPPORTED_FEATURES],
+      requiredFeatures: [...REQUIRED_FEATURES],
+      ...(options.clientKind === undefined ? {} : { clientKind: options.clientKind }),
+      send: (message) => {
+        this.#send(message);
+      },
+      close: (code, reason) => {
+        this.close(code, reason);
+      },
+      onRejected: (reason, detail) => {
+        this.#onEvent({ kind: "rejected", reason, detail });
+      },
+      onBlocked: (cause, code, reason) => {
+        this.#block(cause, code, reason);
+      },
+    });
     this.#socket = options.openSocket({
       url: options.url,
       protocols: options.subprotocols,
       handlers: {
         onOpen: () => {
-          void this.#onOpen();
+          void this.#handshake.begin(this.#socket.negotiatedSubprotocol());
         },
         onMessage: (text) => {
           this.#onMessage(text);
@@ -418,7 +386,7 @@ export class SyncConnection {
 
   /** 本连接的身份信息（认证成功后可用）。 */
   get connectionId(): Uuid | null {
-    return this.#connectionId;
+    return this.#handshake.connectionId;
   }
 
   /**
@@ -464,146 +432,19 @@ export class SyncConnection {
     if (this.#closed || this.#authenticated === null) return;
     this.#sendSubscribe(null);
   }
-  /** 读取并缓存设备身份材料；本连接只读一次（读一次即可覆盖整个握手）。 */
-  async #loadIdentityMaterial(): Promise<DeviceIdentityMaterial | null> {
-    if (this.#identityMaterial !== null) return this.#identityMaterial;
-    const identity = await this.#identity.loadIdentity();
-    if (identity === null) {
-      // 本地无身份 = 需要重新配对（浏览器清过站点数据），不是可重试的连接失败。
-      this.#onEvent({ kind: "rejected", reason: "identity_missing", detail: "本地无设备身份" });
-      return null;
-    }
-    this.#identityMaterial = identity;
-    return identity;
-  }
-
 
   // ── 握手 ────────────────────────────────────────────────────────────────
-  async #onOpen(): Promise<void> {
-    // §3.1 的最后一句：「服务端必须选择该 subprotocol，否则客户端终止连接」。
-    //
-    // 这一步不能省：服务端不选 subprotocol 时升级**仍然成功**，内核只在 `WebSocket.protocol`
-    // 上留一个空串——没有 error 事件、没有非 1000 的关闭码，于是「未选中」与「网络断开」在
-    // socket 层完全同形。不在 open 之后核一次，客户端就会在一条没有协商过的连接上开始握手，
-    // 失败后按普通断网退避重连（重连会得到同样的升级结果，只会把配置问题刷成无限重试）。
-    const negotiated = this.#socket.negotiatedSubprotocol();
-    if (!this.#options.subprotocols.includes(negotiated)) {
-      this.#onEvent({ kind: "rejected", reason: "subprotocol_not_selected", detail: negotiated });
-      this.#block("version_incompatible", CLOSE.versionIncompatible, "subprotocol_not_selected");
-      return;
-    }
-    const identity = await this.#loadIdentityMaterial();
-    if (identity === null) {
-      this.close(CLOSE.authRequired, "identity_missing");
-      return;
-    }
-    // nonce 每次连接重新生成，绝不复用（§8.1）。
-    const nonce = this.#random.bytes(32);
-    this.#clientNonce = nonce;
-    const hello: AuthClientHello = {
-      protocolVersion: PROTOCOL_VERSION,
-      type: "auth.client_hello",
-      messageId: this.#random.uuid(),
-      body: {
-        minProtocolVersion: PROTOCOL_VERSION,
-        maxProtocolVersion: PROTOCOL_VERSION,
-        hostId: this.#options.hostId,
-        deviceId: identity.deviceId,
-        clientKind: this.#options.clientKind ?? "pwa",
-        clientNonce: encodeBase64Url(nonce),
-        supportedFeatures: [...SUPPORTED_FEATURES],
-        requiredFeatures: [...REQUIRED_FEATURES],
-      },
-    };
-    this.#send(hello);
-  }
-
-  /** `auth.server_challenge`：校验 hostProof，然后签设备证明。 */
+  /** `auth.server_challenge` 的验签与 `client_proof` 由共享握手状态机完成。 */
   async #onServerChallenge(message: AuthServerChallenge): Promise<void> {
-    const identity = await this.#loadIdentityMaterial();
-    const clientNonce = this.#clientNonce;
-    if (identity === null || clientNonce === null) {
-      this.close(CLOSE.authRequired, "identity_missing");
-      return;
-    }
-    const serverNonce = decodeBase64Url(message.body.serverNonce, 32);
-    this.#connectionId = message.body.connectionId;
-    this.#selectedFeatures = [...message.body.selectedFeatures];
-
-    // §8.2：Host ID、两个 nonce、connection ID、版本与 features 全部要核对，
-    // 且 hostProof 必须用**已配对**的 Host key 验证。
-    const paired = await this.#host.loadPairedHost(identity.canonicalOrigin);
-    if (paired === null || paired.hostId !== message.body.hostId) {
-      this.#block("host_identity_changed", CLOSE.identityConflict);
-      return;
-    }
-    if (message.body.selectedProtocolVersion !== PROTOCOL_VERSION) {
-      this.#block("version_incompatible", CLOSE.versionIncompatible, "protocol_version_unsupported");
-      return;
-    }
-    // §5.2：hello 里声明的 `requiredFeatures` 服务端**必须**全选中，否则这条连接缺少客户端
-    // 赖以成立的能力（ACK 与命令状态查询）。校验放在验签**之前**：这条连接已经要被拒，
-    // 没必要为它做一次主机验签——也绝不在这条连接上签设备证明（`client_proof` 只发一次，
-    // 下面那段就是它唯一的发出点）。
-    //
-    // 为什么不「照常使用这条缺能力的连接」：缺 `core.event-ack.v1` 时 ACK 发不出去，
-    // 缺 `core.command-status.v1` 时命令状态查询不可用，两者都会让上层在**看起来已认证**的
-    // 连接上静默丢失 R13/R14 的保证。
-    const missing = REQUIRED_FEATURES.filter((feature) => !message.body.selectedFeatures.includes(feature));
-    if (missing.length > 0) {
-      this.#onEvent({ kind: "rejected", reason: "required_features_missing", detail: missing.join(",") });
-      this.#block("version_incompatible", CLOSE.versionIncompatible, "required_features_missing");
-      return;
-    }
-    const verified = await this.#host.verifyHostChallenge({
-      canonicalOrigin: identity.canonicalOrigin,
-      hostId: message.body.hostId,
-      deviceId: identity.deviceId,
-      hostPublicKeyBase64Url: paired.publicKeyBase64Url,
-      connectionId: message.body.connectionId,
-      serverNonce,
-      clientNonce,
-      negotiatedFeatures: message.body.selectedFeatures,
-      signatureBase64Url: message.body.hostProof,
-    });
-    if (!verified) {
-      this.#block("host_identity_changed", CLOSE.identityConflict);
-      return;
-    }
-
-    const transcript = this.#transcript.encode(DEVICE_PROOF_DOMAIN, [
-      { tag: TAG.protocolVersion, bytes: this.#transcript.u16be(PROTOCOL_VERSION) },
-      { tag: TAG.hostId, bytes: this.#transcript.uuid16(message.body.hostId) },
-      { tag: TAG.deviceId, bytes: this.#transcript.uuid16(identity.deviceId) },
-      { tag: TAG.canonicalOrigin, bytes: this.#transcript.utf8(identity.canonicalOrigin) },
-      { tag: TAG.clientNonce, bytes: clientNonce },
-      { tag: TAG.serverNonce, bytes: serverNonce },
-      { tag: TAG.connectionId, bytes: this.#transcript.uuid16(message.body.connectionId) },
-      { tag: TAG.negotiatedFeatures, bytes: this.#transcript.nulJoinedUtf8(sortedFeatures(message.body.selectedFeatures)) },
-    ]);
-    const proof = await this.#identity.signDeviceProof(transcript);
-    const clientProof: AuthClientProof = {
-      protocolVersion: PROTOCOL_VERSION,
-      type: "auth.client_proof",
-      messageId: this.#random.uuid(),
-      body: {
-        connectionId: message.body.connectionId,
-        deviceId: identity.deviceId,
-        deviceProof: encodeBase64Url(proof),
-      },
-    };
-    this.#send(clientProof);
+    await this.#handshake.acceptChallenge(message);
   }
 
   /** `auth.authenticated`：按最后确认游标订阅，进入重放追平。 */
   #onAuthenticated(message: AuthAuthenticated): void {
-    if (message.body.deviceId !== this.#identityMaterial?.deviceId) {
-      this.#onEvent({ kind: "rejected", reason: "device_mismatch", detail: "authenticated 的 deviceId 不符" });
-      this.close(CLOSE.identityConflict, "device_mismatch");
-      return;
-    }
+    if (!this.#handshake.acceptAuthenticated(message)) return;
+    const handshake = this.#handshake.state;
+    if (handshake === null) return;
     this.#authenticated = message.body;
-    this.#connectionId = message.connectionId;
     // 账本的 epoch 必须来自本次认证结果；换 epoch 即意味着必须重建快照。
     this.#ledger = this.#options.ledgerFor(message.body.serverEpoch);
     // 恢复游标必须与账本对 epoch 的处理保持一致：`ledgerFor` 在 epoch 变化时把 `resumeFrom`
@@ -619,7 +460,7 @@ export class SyncConnection {
     this.#onEvent({
       kind: "authenticated",
       info: message.body,
-      selectedFeatures: this.#selectedFeatures ?? [],
+      selectedFeatures: handshake.selectedFeatures,
     });
     this.#onEvent({ kind: "replaying", cursor: this.#acked });
   }
@@ -1020,7 +861,7 @@ export class SyncConnection {
    * 此时 §4.1 要求省略该字段，调用方给什么就发什么。
    */
   sendCommand(command: CommandMessage): void {
-    if (this.#connectionId === null) {
+    if (this.#handshake.connectionId === null) {
       this.#send(command);
       return;
     }
@@ -1054,11 +895,12 @@ export class SyncConnection {
   }
 
   #send(message: SyncWireMessage): void {
-    this.#socket.send(JSON.stringify(message));
+    // 精确整数（表单值）必须以裸数字落进 wire：`JSON.stringify` 会把它变成对象或改值。
+    this.#socket.send(stringifyJson(message));
   }
 
   #requireConnectionId(): Uuid {
-    const id = this.#connectionId;
+    const id = this.#handshake.connectionId;
     if (id === null) {
       throw new Error("连接尚未通过认证：缺少 connectionId");
     }
@@ -1066,19 +908,8 @@ export class SyncConnection {
   }
 }
 
-/** 关闭码 → 阻断原因；`null` 表示不是阻断（可退避重连）。 */
-export function blockCauseForCloseCode(code: number): ClientBlockCause | null {
-  if (code === CLOSE.connectionReplaced) return "replaced_by_other_connection";
-  if (code === CLOSE.deviceRevoked) return "device_revoked";
-  if (code === CLOSE.versionIncompatible) return "version_incompatible";
-  if (code === CLOSE.identityConflict) return "host_identity_changed";
-  return null;
-}
-
-/** 关闭码是否值得退避重试。 */
-export function isRetryableCloseCode(code: number): boolean {
-  return code === CLOSE.normal || code === CLOSE.serverUnavailable || code === CLOSE.protocolError || code === CLOSE.authRequired;
-}
+/** 关闭码判定在 `blocking.ts`（附件连接共用同一份表）。 */
+export { blockCauseForCloseCode, isRetryableCloseCode };
 
 /** 游标比较（同一 epoch 内按序号；跨 epoch 不可比，返回 `-1` 触发重新订阅）。 */
 export function compareCursors(left: Cursor, right: Cursor): number {
@@ -1090,10 +921,8 @@ export function compareCursors(left: Cursor, right: Cursor): number {
   return 0;
 }
 
-/** feature 列表按 UTF-8 字节升序去重（transcript 的 `negotiatedFeatures` 编码要求，§5.2）。 */
-export function sortedFeatures(features: readonly string[]): string[] {
-  return [...new Set(features)].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
-}
+/** feature 升序去重的定义在 `handshake.ts`（transcript 编码与连接对外导出共用一份）。 */
+export { sortedFeatures };
 
 /**
  * 解码一条入站文本；失败时发 `rejected` 事件并返回 `null`。

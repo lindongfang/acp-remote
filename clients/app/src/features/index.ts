@@ -30,10 +30,35 @@ export interface FeatureViewModels {
 }
 
 // ── 端口 ────────────────────────────────────────────────────────────────────
-export type { CommandGateway, ConnectionIdentity, IdentifierSource, SnapshotGateway, SyncGateway } from "./ports";
+export type {
+  AttachmentFileHandle,
+  AttachmentMediaPort,
+  AttachmentTransferGateway,
+  CommandGateway,
+  ConnectionIdentity,
+  IdentifierSource,
+  SnapshotGateway,
+  SyncGateway,
+} from "./ports";
+
+export type {
+  AttachmentBatchModel,
+  AttachmentCapability,
+  AttachmentKind,
+  AttachmentUploadStatus,
+  DraftAttachment,
+} from "./attachment-model";
+export {
+  attachmentCapabilityOf,
+  buildAttachmentBatch,
+  isWorkspacePathRef,
+  withUploadedBytes,
+} from "./attachment-model";
 
 // ── 状态仓库 ────────────────────────────────────────────────────────────────
 export type {
+  AttachmentMediaState,
+  AttachmentRunState,
   ClientState,
   ClientStoreOptions,
   CommandOutcome,
@@ -63,6 +88,7 @@ export type {
   MessageTimelineEntry,
   TimelineEntry,
   TimelineEntryBase,
+  TimelineTurnGroup,
   VolatileMessageState,
 } from "./conversation-timeline";
 export {
@@ -70,11 +96,14 @@ export {
   buildFileChangeViews,
   buildTimeline,
   deltaChannelOf,
+  groupTimelineEntries,
+  residualVolatileText,
   volatileText,
 } from "./conversation-timeline";
 
 // ── 交互应答（D7）──────────────────────────────────────────────────────────
 export { buildInteractionViews } from "./interaction-model";
+export type { PendingInteractionInput } from "./interaction-model";
 
 // ── 输入/取消与设置（D5/D6）────────────────────────────────────────────────
 export type {

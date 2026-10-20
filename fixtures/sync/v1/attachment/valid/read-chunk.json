@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "type": "attachment.read_chunk",
+  "messageId": "e192ad1e-2f30-4b4c-9d5e-7f8091a2b3c4",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "9",
+  "body": {
+    "attachmentId": "1f2e3d4c-5b6a-4978-8a6b-5c4d3e2f1a0b",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "offset": "0",
+    "length": "5",
+    "totalLength": "5",
+    "data": "aGVsbG8",
+    "eof": true
+  }
+}

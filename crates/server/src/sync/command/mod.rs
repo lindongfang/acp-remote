@@ -60,12 +60,12 @@ use std::time::{Duration, Instant};
 
 use acp_core::broker::Broker;
 use acp_core::model::{
-    Actor, ClientCommand, CommandKind, CommandPayload as CorePayload, CommandReceipt,
-    ConfigOptionId, ConfigValue as CoreConfigValue, ConflictKind, ContentVersion,
+    Actor, AttachmentId, ClientCommand, CommandKind, CommandPayload as CorePayload, CommandReceipt,
+    ConfigOptionId, ConfigValue as CoreConfigValue, ConflictKind, ContentVersion, Digest,
     ElicitationAction as CoreElicitationAction, ElicitationValues, InteractionId, ModeId,
     PortError, PromptContentBlock, PublicError as CorePublicError, RESULT_TOO_LARGE,
     ReadInclude as CoreReadInclude, RequestId as CoreRequestId, SessionFilePath, SessionId,
-    Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
+    SubmissionId, Timestamp as CoreTimestamp, TurnId, UnavailableKind, Version, WorkspaceSource,
 };
 use acp_core::ports::SessionFiles;
 use acp_core::use_cases::UseCases;
@@ -86,7 +86,11 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
+use crate::attachment_transfer::{
+    AttachmentBinding, Fault as AttachmentFault, verify_prompt_bindings,
+};
 use crate::command_log::{self, Cause, Subject, TerminalClass};
+use crate::sync::attachments::ATTACHMENT_FEATURE;
 use crate::sync::conn::registry::SendFault;
 use crate::sync::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close};
 use crate::sync::snapshot::LOCAL_CATALOG_FEATURE;
@@ -923,6 +927,41 @@ impl CommandRoute {
             );
             return RouteOutcome::Claimed;
         };
+        // §11.5/§11.7：`requestVersion` 与 `submissionId` 是 mutation 的两个可恢复入口。两者都在
+        // `core_payload` 之外处理：前者改变提交入口（条件更新），后者改变整批附件的原子绑定入口；
+        // 把它们塞进 `ClientCommand.payload` 会让指纹与幂等语义偏离 wire payload 的原文。
+        let request_version = match wire_request_version(&command.payload) {
+            Ok(version) => version,
+            Err(reason) => {
+                self.deny(handle, &command, reason, ErrorCode::ProtocolSchemaInvalid);
+                return RouteOutcome::Claimed;
+            }
+        };
+        if request_version.is_none()
+            && matches!(
+                command.payload,
+                CommandPayload::PermissionResolve(_) | CommandPayload::ElicitationRespond(_)
+            )
+            && self
+                .features(handle)
+                .contains(crate::sync::command::query::PENDING_INTERACTIONS_FEATURE)
+        {
+            // 协商了 `core.pending-interactions.v1` 就必须回传版本：否则无法证明应答针对的是当前请求。
+            self.deny(
+                handle,
+                &command,
+                "requestVersion is required once core.pending-interactions.v1 is negotiated",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        }
+        let submission = match wire_submission(&command.payload) {
+            Ok(submission) => submission,
+            Err(reason) => {
+                self.deny(handle, &command, reason, ErrorCode::ProtocolSchemaInvalid);
+                return RouteOutcome::Claimed;
+            }
+        };
         let Some(fingerprint) = payload_fingerprint(&command.payload) else {
             return self.encoding_fault(handle);
         };
@@ -933,6 +972,21 @@ impl CommandRoute {
             .session_id
             .as_ref()
             .and_then(|session| acp_core::model::SessionId::new(session.as_str()).ok());
+        // 附件引用（§11.5）在**任何派发之前**判定：`attachment_ref` 只在协商 `core.attachment-transfer.v1`
+        // 后被接受，且必须携带已封存的 `submissionId`、逐块绑定到该清单。这里拒绝的请求既不触碰存储的
+        // 业务行，也不会派发 Agent。
+        if let Some(outcome) = self
+            .check_prompt_attachments(
+                handle,
+                &command,
+                &actor,
+                target_session.as_ref(),
+                &submission,
+            )
+            .await
+        {
+            return outcome;
+        }
         let client_command = ClientCommand {
             actor: actor.clone(),
             request: request_id.clone(),
@@ -951,7 +1005,45 @@ impl CommandRoute {
         // 读 `owned_command`、比命令名/kind/session/expectedVersion/ACPR-CJ1 指纹）。服务端**不**在
         // 提交前另查一次 `command.status`：那需要 `grant.observe`，会把只持 `grant.interact` 的
         // 设备误拒——而「重放自己的命令」只应凭当初提交它的那份授权。
-        let receipt = match self.core.submit_command(&actor, client_command).await {
+        // 整批附件：受理前复核清单（存在、会话、主体），再随受理提交放进**同一事务**（§3.4）。
+        // `submissionId` 只出现在 `session.prompt` 上：先取出正文，避免把 `client_command` 移进 core 时
+        // 仍被 `&payload` 借用。
+        let prompt_content = if submission.is_some() {
+            let CorePayload::Prompt { content } = &client_command.payload else {
+                // 其他命令带 `submissionId` 属于形状错误。
+                self.deny(
+                    handle,
+                    &command,
+                    "submissionId is only accepted on session.prompt",
+                    ErrorCode::ProtocolSchemaInvalid,
+                );
+                return RouteOutcome::Claimed;
+            };
+            Some(content.clone())
+        } else {
+            None
+        };
+        let receipt = match (&submission, request_version) {
+            (Some(submission), _) => {
+                let content = prompt_content.expect("a submission implies a prompt payload");
+                self.core
+                    .submit_prompt_with_submission(
+                        &actor,
+                        client_command,
+                        content,
+                        submission.clone(),
+                    )
+                    .await
+            }
+            // 版本化应答（§11.7）：版本不符或已处理都回显式错误，且不消费请求。
+            (None, Some(version)) => {
+                self.core
+                    .submit_command_versioned(&actor, client_command, Some(version))
+                    .await
+            }
+            (None, None) => self.core.submit_command(&actor, client_command).await,
+        };
+        let receipt = match receipt {
             Ok(receipt) => receipt,
             Err(error) => {
                 // 「带了版本但版本不对」必须回 `state.version_conflict` 并给**当前真实版本**（§11.5 的
@@ -1002,6 +1094,111 @@ impl CommandRoute {
             }
         }
         RouteOutcome::Claimed
+    }
+
+    /// `session.prompt` 的附件前置判定（§11.5）：返回 `Some(_)` 表示已回拒绝、调用方必须停止。
+    ///
+    /// 三道判定与 schema 的声明对齐（「`attachment_ref` 只在协商 `core.attachment-transfer.v1` 且附件已
+    /// 封存、已绑定本会话/主体时接受」）：
+    ///
+    /// 1. 出现 `attachment_ref`（或 `submissionId`）时，本连接必须协商附件 feature——没有协商就说明客户端
+    ///    不可能是那个清单的作者，回 `attachment.negotiation_required`；
+    /// 2. `attachment_ref` 必须携带已封存的 `submissionId`——清单绑定是引用的唯一凭据，缺了就回
+    ///    `protocol.schema_invalid`；
+    /// 3. 清单本身必须已封存、属于本会话/本主体；每个引用的 `attachmentId`/`sha256`/`byteLength` 必须
+    ///    与清单逐块一致（[`verify_prompt_bindings`]），否则回 `attachment.binding_mismatch`。
+    ///
+    /// 只有 `submissionId`（全部是 `text` 块）也走第 3 条的清单校验（绑定列表为空）：未封存或
+    /// 跨会话/主体的清单必须在派发前显式拒绝，而不是落到 core 的通用参数错误上。校验通过后 core 的
+    /// `submit_prompt_with_submission` 会把整批附件与消息放进同一事务。
+    async fn check_prompt_attachments(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        actor: &Actor,
+        session: Option<&SessionId>,
+        submission: &Option<SubmissionId>,
+    ) -> Option<RouteOutcome> {
+        let Ok(bindings) = prompt_attachments(&command.payload) else {
+            self.deny(
+                handle,
+                command,
+                "the prompt content blocks cannot be used",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return Some(RouteOutcome::Claimed);
+        };
+        let bound = !bindings.is_empty() || submission.is_some();
+        if !bound {
+            return None;
+        }
+        if !self.features(handle).contains(ATTACHMENT_FEATURE) {
+            self.deny(
+                handle,
+                command,
+                "the connection did not negotiate core.attachment-transfer.v1",
+                ErrorCode::AttachmentNegotiationRequired,
+            );
+            return Some(RouteOutcome::Claimed);
+        }
+        let Some(submission) = submission.as_ref() else {
+            self.deny(
+                handle,
+                command,
+                "an attachment_ref requires a sealed submissionId",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return Some(RouteOutcome::Claimed);
+        };
+        let Some(session) = session else {
+            self.deny(
+                handle,
+                command,
+                "session.prompt requires sessionId",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return Some(RouteOutcome::Claimed);
+        };
+        let Some(subject) = crate::attachment_transfer::Subject::from_actor(actor) else {
+            self.deny(
+                handle,
+                command,
+                "the connection identity is not an attachment subject",
+                ErrorCode::InternalUnavailable,
+            );
+            return Some(RouteOutcome::Claimed);
+        };
+        let Some(store) = self.core.attachment_transfers().cloned() else {
+            // 没有装配附件端口却协商了 feature：接线错误，失败关闭。
+            self.deny(
+                handle,
+                command,
+                "the attachment store is not assembled",
+                ErrorCode::InternalUnavailable,
+            );
+            return Some(RouteOutcome::Claimed);
+        };
+        match verify_prompt_bindings(&store, &subject, session, submission, &bindings).await {
+            Ok(()) => None,
+            Err(AttachmentFault::BindingMismatch) => {
+                self.deny(
+                    handle,
+                    command,
+                    "the attachment reference is not bound to this submission",
+                    ErrorCode::AttachmentBindingMismatch,
+                );
+                Some(RouteOutcome::Claimed)
+            }
+            Err(_) => {
+                self.deny(
+                    handle,
+                    command,
+                    "the attachment binding cannot be verified",
+                    ErrorCode::InternalUnavailable,
+                );
+                Some(RouteOutcome::Claimed)
+            }
+        }
     }
 
     /// 无会话的目录 mutation：持久接受后执行，并只回复持久记录里的终态。
@@ -1997,10 +2194,22 @@ pub(crate) fn port_rejection(error: &PortError) -> Rejection {
             "the file exceeds the download budget",
         ),
         PortError::InvalidRequest(reason) => Rejection::Schema(schema_hint(reason)),
+        // Owner 不在线（imported 会话回源）：显式「现在读不到」，不是 `session.not_found` 或空历史。
+        PortError::Unavailable(
+            UnavailableKind::OwnerOffline | UnavailableKind::RemoteUnavailable,
+        ) => Rejection::RemoteUnavailable,
         PortError::NotFound(_) => Rejection::Code(
             ErrorCode::SessionNotFound,
             "the referenced session is not available",
         ),
+        // 目标 Agent 未宣告所需能力（或会话没有所需的持久化数据）：这是永久失败，不是
+        // `internal.unavailable` 的临时故障。客户端据此保留草稿并显示明确原因。
+        PortError::Unavailable(acp_core::model::UnavailableKind::BackendUnsupported) => {
+            Rejection::Code(
+                ErrorCode::CommandUnsupported,
+                "the agent does not support this command",
+            )
+        }
         _ => Rejection::Code(
             ErrorCode::InternalUnavailable,
             "the command cannot be served",
@@ -2146,6 +2355,76 @@ fn core_payload(payload: &CommandPayload) -> Result<CorePayload, &'static str> {
     })
 }
 
+/// wire payload 的 `requestVersion`（`permission.resolve`/`elicitation.respond`）。
+///
+/// 只在两组命令上有意义；其它 payload 返回 `Ok(None)`。值必须 ≥ 1（0 不是可回传的版本）。
+fn wire_request_version(payload: &CommandPayload) -> Result<Option<Version>, &'static str> {
+    let version = match payload {
+        CommandPayload::PermissionResolve(resolve) => resolve.request_version.as_ref(),
+        CommandPayload::ElicitationRespond(respond) => respond.request_version.as_ref(),
+        _ => return Ok(None),
+    };
+    let Some(version) = version else {
+        return Ok(None);
+    };
+    let value = version
+        .as_str()
+        .parse::<u64>()
+        .map_err(|_| "requestVersion is not a decimal string")?;
+    if value == 0 {
+        return Err("requestVersion must be at least 1");
+    }
+    Ok(Some(Version::new(value)))
+}
+
+/// wire payload 的 `submissionId`（只有 `session.prompt` 有）。
+fn wire_submission(payload: &CommandPayload) -> Result<Option<SubmissionId>, &'static str> {
+    let CommandPayload::SessionPrompt(prompt) = payload else {
+        return Ok(None);
+    };
+    let Some(submission) = prompt.submission_id.as_ref() else {
+        return Ok(None);
+    };
+    SubmissionId::new(submission.as_str())
+        .map(Some)
+        .map_err(|_| "submissionId is not a submission id")
+}
+
+/// `session.prompt.content` 里的 `attachment_ref` 声明（协议中立；其余命令/分支返回空）。
+///
+/// 只读 `attachment_ref` 的字段视图（`sync_protocol::common::AttachmentRefView`），不重新序列化块：
+/// 形状与字段名只在协议 crate 有一份。数值转换失败（不可能是解码后的合法 wire 值）按形状错误拒绝。
+fn prompt_attachments(payload: &CommandPayload) -> Result<Vec<AttachmentBinding>, ()> {
+    let CommandPayload::SessionPrompt(prompt) = payload else {
+        return Ok(Vec::new());
+    };
+    let mut bindings = Vec::new();
+    for block in prompt.content.as_slice() {
+        let Some(reference) = block.attachment_ref() else {
+            continue;
+        };
+        let attachment = AttachmentId::new(reference.attachment_id.as_str()).map_err(|_| ())?;
+        let byte_length = reference
+            .byte_length
+            .as_str()
+            .parse::<u64>()
+            .map_err(|_| ())?;
+        bindings.push(AttachmentBinding {
+            attachment,
+            sha256: wire_digest(reference.sha256)?,
+            byte_length,
+        });
+    }
+    Ok(bindings)
+}
+
+/// 定长 base64url 摘要 → core 的规范摘要文本（校验口径一致，只做编码转换）。
+fn wire_digest(value: &sync_protocol::common::Base64Url<32>) -> Result<Digest, ()> {
+    use base64::Engine as _;
+    let text = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
+    Digest::new(&text).map_err(|_| ())
+}
+
 /// 载荷指纹（ACPR-CJ1 之后的 SHA-256，§6 第 6 条）——幂等冲突判定的唯一依据。
 ///
 /// 与 `node_link` 的同名助手同一算法；协议无关，但各自持有本协议的 DTO，因此不复用一个函数。
@@ -2181,6 +2460,60 @@ mod tests {
         assert_eq!(details.get(), "{}", "该错误码没有登记 details");
     }
 
+    /// Owner 离线（imported 会话回源）必须是可区分的 `resource.remote_unavailable` +
+    /// `details.reason = "owner_offline"`，不能退化成 `session.not_found` 或通用 `internal.unavailable`。
+    /// `RemoteUnavailable` 是同一事实的另一种端口分类，映射必须一致。
+    #[test]
+    fn owner_offline_maps_to_resource_remote_unavailable() {
+        for kind in [
+            UnavailableKind::OwnerOffline,
+            UnavailableKind::RemoteUnavailable,
+        ] {
+            let (code, text, details) = port_rejection(&PortError::Unavailable(kind)).into_parts();
+            assert_eq!(code.as_str(), "resource.remote_unavailable");
+            assert_eq!(text, "the owner node is not reachable");
+            let parsed: serde_json::Value =
+                serde_json::from_str(details.get()).expect("details 是 JSON");
+            assert_eq!(
+                parsed,
+                serde_json::json!({ "reason": "owner_offline" }),
+                "详情必须给出 owner_offline"
+            );
+            assert_ne!(code.as_str(), "session.not_found");
+        }
+    }
+
+    /// `attachment_ref` 块经协议 crate 的字段视图读取：文本块忽略，摘要/长度按声明取值，其他命令没有
+    /// 附件声明。这是 `session.prompt` 绑定校验的输入端，字段名因此只由协议 crate 决定。
+    #[test]
+    fn prompt_attachment_refs_are_extracted_from_wire_blocks() {
+        use base64::Engine as _;
+        let sha = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode({
+            use sha2::Digest as _;
+            sha2::Sha256::digest(b"hello")
+        });
+        let attachment = "00000000-0000-4000-8000-000000000123";
+        let prompt: sync_protocol::command::SessionPrompt = serde_json::from_str(&format!(
+            r#"{{"content":[{{"type":"text","text":"hi"}},{{"type":"attachment_ref",
+                "attachmentId":"{attachment}","mediaType":"text/plain",
+                "byteLength":"5","sha256":"{sha}"}}]}}"#
+        ))
+        .expect("prompt");
+        let bindings =
+            prompt_attachments(&CommandPayload::SessionPrompt(prompt)).expect("bindings");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].attachment.as_str(), attachment);
+        assert_eq!(bindings[0].byte_length, 5);
+        assert_eq!(bindings[0].sha256.as_str(), sha);
+        assert!(
+            prompt_attachments(&CommandPayload::SessionList(
+                sync_protocol::command::SessionList {}
+            ))
+            .expect("no bindings")
+            .is_empty()
+        );
+    }
+
     /// 未登记的 `InvalidRequest` 仍按形状错误处理：新臂只认下载预算这一条文本。
     #[test]
     fn other_invalid_requests_still_map_to_schema_invalid() {
@@ -2213,6 +2546,13 @@ mod tests {
         let (code, text, _) = unavailable.into_parts();
         assert_eq!(code, ErrorCode::InternalUnavailable);
         assert!(!text.contains('/'));
+
+        let unsupported = port_rejection(&PortError::Unavailable(
+            acp_core::model::UnavailableKind::BackendUnsupported,
+        ));
+        let (code, text, _) = unsupported.into_parts();
+        assert_eq!(code, ErrorCode::CommandUnsupported);
+        assert!(text.contains("does not support"));
     }
 
     // -------------------------------------------------------------------------------------

@@ -26,6 +26,7 @@
 use std::io::{BufRead, Write};
 use std::process::ExitCode;
 
+use acp_protocol::limits::MAX_MESSAGE_BYTES;
 use serde_json::{Value, json};
 
 /// `stderr-protocol-noise` 场景写进 stderr 的唯一 marker（测试用它断言「stderr 不得进入事件流」）。
@@ -45,6 +46,16 @@ struct Args {
     no_config_options: bool,
     /// 收到任何配置写入请求就退出：用来证明「拒绝时真的没有发消息」。
     exit_on_config_write: bool,
+    /// `--terminal-child <mode>`：本进程扮演 **Daemon 启动的终端子进程**（`terminal/create` 的
+    /// `command` 指向本可执行文件的场景），而不是 ACP Agent。
+    terminal_child: Option<String>,
+    /// `--terminal-bytes <n>`：`big` 子进程模式写出的字节数。
+    terminal_bytes: usize,
+    /// `--probe-file <path>`：把内部探针结果按行追加（例如「收到了预期的错误响应」），
+    /// 让负面路径在进程外可观察。
+    probe_file: Option<String>,
+    /// `--terminal-heartbeat <path>`：`grandchild` 终端子进程写心跳的文件（进程树清理探针）。
+    terminal_heartbeat: Option<String>,
 }
 
 impl Args {
@@ -64,6 +75,10 @@ impl Args {
             no_modes: false,
             no_config_options: false,
             exit_on_config_write: false,
+            terminal_child: None,
+            terminal_bytes: 8192,
+            probe_file: None,
+            terminal_heartbeat: None,
         };
         let mut index = 0;
         while index < argv.len() {
@@ -82,6 +97,12 @@ impl Args {
                 ("--capabilities", Some(value)) => {
                     args.capabilities = serde_json::from_str(&value).unwrap_or_else(|_| json!({}));
                 }
+                ("--terminal-child", Some(value)) => args.terminal_child = Some(value),
+                ("--terminal-bytes", Some(value)) => {
+                    args.terminal_bytes = value.parse().unwrap_or(8192);
+                }
+                ("--probe-file", Some(value)) => args.probe_file = Some(value),
+                ("--terminal-heartbeat", Some(value)) => args.terminal_heartbeat = Some(value),
                 ("--no-modes", _) => args.no_modes = true,
                 ("--no-config-options", _) => args.no_config_options = true,
                 ("--exit-on-config-write", _) => args.exit_on_config_write = true,
@@ -107,6 +128,8 @@ struct State {
     /// 从而让「回传不保真」在测试里表现为可观察的失败，而不是被默默接受。
     interactions: Vec<(u64, &'static str, Value)>,
     prompt_seq: u64,
+    /// 进行中的终端探针流程（`terminal/*` 场景）。
+    terminal_flow: Option<TerminalFlow>,
 }
 
 impl State {
@@ -116,9 +139,55 @@ impl State {
     }
 }
 
+/// 终端探针场景的种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalFlowKind {
+    /// 正常输出 + 失败/非零退出 + 释放。
+    Happy,
+    /// 非零退出。
+    NonZero,
+    /// 输出预算截断。
+    Big,
+    /// kill 后仍可读、重复操作收敛。
+    Kill,
+    /// 留下一个仍在运行的终端（清理探针）。
+    Orphan,
+    /// 留下一个仍在运行的终端，然后 Agent 崩溃（清理探针）。
+    OrphanCrash,
+    /// 跨会话访问终端标识必须被拒绝。
+    CrossSession,
+    /// 未宣告能力时 `terminal/create` 必须被拒绝，且不得启动任何进程。
+    NotAdvertised,
+    /// `wait_for_exit` 在会话关闭时必须被取消（不悬挂）。
+    WaitHang,
+    /// 接近 1 MiB 的纯文本输出：`terminal/output` 的响应必须留在 ACP 帧预算内。
+    FrameBudget,
+    /// 大量换行/ANSI 转义：保留正文放得进 1 MiB，但 JSON 转义后会超帧，必须再次裁剪。
+    FrameEscapes,
+}
+
+/// 进行中的终端探针流程（fake Agent 侧的状态机）。
+struct TerminalFlow {
+    kind: TerminalFlowKind,
+    session: String,
+    prompt: Value,
+    /// 当前在等待响应的请求 id。
+    request_id: u64,
+    step: u8,
+    terminal_id: Option<String>,
+    /// 上一次 `wait_for_exit` 的退出码（重复等待必须一致）。
+    exit_code: Option<u64>,
+    /// 输出轮询次数：首次 `terminal/output` 可能早于子进程写出内容（真实异步语义）。
+    output_polls: u32,
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
 
+    // 终端探针：本可执行文件被 `terminal/create` 当作命令启动时，扮演普通子进程而不是 ACP Agent。
+    if let Some(mode) = args.terminal_child.clone() {
+        return run_terminal_child(&args, &mode);
+    }
     if args.scenario == "heartbeat-child" {
         return heartbeat_child(&args);
     }
@@ -181,6 +250,102 @@ fn heartbeat_loop(path: &str) -> Result<(), ()> {
         }
         let _ = file.flush();
         std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// 终端子进程模式：本可执行文件被 `terminal/create` 当作命令启动时执行。
+///
+/// 这些模式是**真实子进程**（stdout/stderr 是真实管道），因此可以验证分块输出、跨 UTF-8 边界、
+/// 非零退出、输出预算与进程树清理——不是进程内模拟。
+fn run_terminal_child(args: &Args, mode: &str) -> ExitCode {
+    match mode {
+        "echo-utf8" => {
+            let mut out = std::io::stdout();
+            // 5 个汉字 + 一个 4 字节 emoji（分两次写出，强制跨读取边界）+ 3 个汉字。
+            write_stdout(&mut out, "第一段".as_bytes());
+            let emoji = "🙂".as_bytes();
+            write_stdout(&mut out, &emoji[..2]);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            write_stdout(&mut out, &emoji[2..]);
+            write_stdout(&mut out, "第二段\n".as_bytes());
+            let _ = std::io::stderr().write_all("警告\n".as_bytes());
+            let _ = std::io::stderr().flush();
+            ExitCode::SUCCESS
+        }
+        "exit-code" => {
+            let mut out = std::io::stdout();
+            write_stdout(&mut out, "boom\n".as_bytes());
+            let _ = std::io::stderr().write_all("失败原因\n".as_bytes());
+            let _ = std::io::stderr().flush();
+            ExitCode::from(3)
+        }
+        "big" => {
+            let mut out = std::io::stdout();
+            let payload = vec![b'x'; args.terminal_bytes];
+            write_stdout(&mut out, &payload);
+            write_stdout(&mut out, b"\n");
+            ExitCode::SUCCESS
+        }
+        "escaped" => {
+            // 每 9 字节里有 1 个换行（2 字节转义）与 1 个 ESC（6 字节转义），JSON 后约膨胀到 1.44 倍。
+            let mut out = std::io::stdout();
+            let line = b"\x1b[31mX\n";
+            let payload: Vec<u8> = line
+                .iter()
+                .copied()
+                .cycle()
+                .take(args.terminal_bytes.saturating_mul(line.len()))
+                .collect();
+            write_stdout(&mut out, &payload);
+            ExitCode::SUCCESS
+        }
+        "hang" => {
+            let mut out = std::io::stdout();
+            write_stdout(&mut out, "started\n".as_bytes());
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
+        "exit-with-background" => {
+            // 启动一个**继承 stdout/stderr 的后台子进程**并立即退出：后台进程继续持有管道写端，
+            // Daemon 侧因此永远观察不到 EOF。用于验证退出事实不是「管道 EOF」的产物。
+            let exe = std::env::current_exe().unwrap_or_default();
+            let spawned = std::process::Command::new(exe)
+                .args(["--terminal-child", "hang"])
+                .spawn();
+            if spawned.is_err() {
+                return ExitCode::from(4);
+            }
+            let mut out = std::io::stdout();
+            write_stdout(&mut out, "exiting\n".as_bytes());
+            ExitCode::from(7)
+        }
+        "grandchild" => {
+            if let Some(path) = &args.terminal_heartbeat {
+                let exe = std::env::current_exe().unwrap_or_default();
+                let _ = std::process::Command::new(exe)
+                    .args(["--scenario", "heartbeat-child", "--heartbeat-file", path])
+                    .spawn();
+            }
+            let mut out = std::io::stdout();
+            write_stdout(&mut out, "started\n".as_bytes());
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
+        _ => ExitCode::from(2),
+    }
+}
+
+fn write_stdout(out: &mut impl Write, bytes: &[u8]) {
+    let _ = out.write_all(bytes);
+    let _ = out.flush();
+}
+
+/// 探针结果追加一行（测试在进程外读取；失败不影响协议流程）。
+fn probe(args: &Args, line: &str) {
+    if let Some(path) = &args.probe_file {
+        append_line(path, line);
     }
 }
 
@@ -448,6 +613,9 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
         }
         // 我们发出去的请求收到了响应（权限/elicitation）：校验后结清对应的 prompt。
         (None, Some(id)) => {
+            if handle_terminal_response(message, state, out, args) {
+                return;
+            }
             let number = id.as_u64();
             let mut remaining = Vec::new();
             let mut matched: Vec<(&'static str, Value)> = Vec::new();
@@ -493,6 +661,10 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
 }
 
 fn start_prompt(state: &mut State, out: &mut impl Write, args: &Args, id: Value, session: &str) {
+    if let Some(kind) = terminal_kind_for(args.scenario.as_str()) {
+        start_terminal_flow(state, out, args, kind, id, session);
+        return;
+    }
     match args.scenario.as_str() {
         "crash-on-prompt" => {
             emit_chunk(out, session, "崩溃前的一小段");
@@ -800,6 +972,676 @@ fn start_prompt(state: &mut State, out: &mut impl Write, args: &Args, id: Value,
             respond(out, &id, json!({ "stopReason": "end_turn" }));
         }
     }
+}
+
+fn terminal_kind_for(scenario: &str) -> Option<TerminalFlowKind> {
+    Some(match scenario {
+        "terminal-ok" => TerminalFlowKind::Happy,
+        "terminal-exit-code" => TerminalFlowKind::NonZero,
+        "terminal-big" => TerminalFlowKind::Big,
+        "terminal-kill" => TerminalFlowKind::Kill,
+        "terminal-orphan" => TerminalFlowKind::Orphan,
+        "terminal-orphan-crash" => TerminalFlowKind::OrphanCrash,
+        "terminal-cross-session" => TerminalFlowKind::CrossSession,
+        "terminal-not-advertised" => TerminalFlowKind::NotAdvertised,
+        "terminal-wait-hang" => TerminalFlowKind::WaitHang,
+        "terminal-frame-budget" => TerminalFlowKind::FrameBudget,
+        "terminal-frame-escapes" => TerminalFlowKind::FrameEscapes,
+        _ => return None,
+    })
+}
+
+fn start_terminal_flow(
+    state: &mut State,
+    out: &mut impl Write,
+    args: &Args,
+    kind: TerminalFlowKind,
+    prompt: Value,
+    session: &str,
+) {
+    let exe = std::env::current_exe()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (mode, extra) = match kind {
+        TerminalFlowKind::Happy
+        | TerminalFlowKind::CrossSession
+        | TerminalFlowKind::NotAdvertised => ("echo-utf8", Vec::new()),
+        TerminalFlowKind::NonZero => ("exit-code", Vec::new()),
+        TerminalFlowKind::Big => (
+            "big",
+            vec!["--terminal-bytes".to_owned(), "8192".to_owned()],
+        ),
+        TerminalFlowKind::FrameBudget => (
+            "big",
+            vec!["--terminal-bytes".to_owned(), "1048576".to_owned()],
+        ),
+        TerminalFlowKind::FrameEscapes => (
+            "escaped",
+            vec!["--terminal-bytes".to_owned(), "120000".to_owned()],
+        ),
+        TerminalFlowKind::Kill => ("hang", Vec::new()),
+        TerminalFlowKind::WaitHang => {
+            let mut extra = Vec::new();
+            if let Some(path) = &args.terminal_heartbeat {
+                extra.push("--terminal-heartbeat".to_owned());
+                extra.push(path.clone());
+            }
+            ("grandchild", extra)
+        }
+        TerminalFlowKind::Orphan | TerminalFlowKind::OrphanCrash => {
+            let mut extra = Vec::new();
+            if let Some(path) = &args.terminal_heartbeat {
+                extra.push("--terminal-heartbeat".to_owned());
+                extra.push(path.clone());
+            }
+            ("grandchild", extra)
+        }
+    };
+    let mut child_args = vec!["--terminal-child".to_owned(), mode.to_owned()];
+    child_args.extend(extra);
+    let mut params = json!({ "sessionId": session, "command": exe, "args": child_args });
+    if kind == TerminalFlowKind::Big {
+        params["outputByteLimit"] = json!(1024);
+    }
+    let mut flow = TerminalFlow {
+        kind,
+        session: session.to_owned(),
+        prompt,
+        request_id: 0,
+        step: 0,
+        terminal_id: None,
+        exit_code: None,
+        output_polls: 0,
+    };
+    send_terminal_request(state, out, &mut flow, "terminal/create", params);
+    state.terminal_flow = Some(flow);
+}
+
+fn send_terminal_request(
+    state: &mut State,
+    out: &mut impl Write,
+    flow: &mut TerminalFlow,
+    method: &str,
+    params: Value,
+) {
+    let id = state.next_id();
+    flow.request_id = id;
+    write_line(
+        out,
+        &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+    );
+}
+
+fn terminal_ref_params(session: &str, terminal_id: &str) -> Value {
+    json!({ "sessionId": session, "terminalId": terminal_id })
+}
+
+fn emit_terminal_tool(out: &mut impl Write, session: &str, terminal_id: &str) {
+    notify(
+        out,
+        "session/update",
+        json!({
+            "sessionId": session,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "terminal-tool-1",
+                "title": "运行命令",
+                "kind": "execute",
+                "status": "in_progress",
+                "content": [ { "type": "terminal", "terminalId": terminal_id } ],
+            },
+        }),
+    );
+}
+
+fn finish_terminal_flow(out: &mut impl Write, flow: &TerminalFlow) {
+    respond(out, &flow.prompt, json!({ "stopReason": "end_turn" }));
+}
+
+/// 校验失败：发一条带 `PROBE_FAILED` 的普通增量（测试断言它不出现）并以 `refusal` 结清 prompt。
+fn fail_terminal_flow(out: &mut impl Write, args: &Args, flow: &TerminalFlow, reason: &str) {
+    probe(args, &format!("failed: {reason}"));
+    emit_chunk(out, &flow.session, &format!("PROBE_FAILED:{reason}"));
+    respond(out, &flow.prompt, json!({ "stopReason": "refusal" }));
+}
+
+fn response_error(message: &Value) -> bool {
+    message.get("error").is_some_and(|value| !value.is_null())
+}
+
+/// 处理一条发给 fake Agent 的响应；返回 `true` 表示它属于终端探针流程。
+fn handle_terminal_response(
+    message: &Value,
+    state: &mut State,
+    out: &mut impl Write,
+    args: &Args,
+) -> bool {
+    let Some(expected) = state.terminal_flow.as_ref().map(|flow| flow.request_id) else {
+        return false;
+    };
+    if message.get("id").and_then(Value::as_u64) != Some(expected) {
+        return false;
+    }
+    let Some(mut flow) = state.terminal_flow.take() else {
+        return false;
+    };
+    let failed = response_error(message);
+    let result = message.get("result").cloned().unwrap_or(Value::Null);
+    let session = flow.session.clone();
+    let mut keep = true;
+
+    match flow.kind {
+        TerminalFlowKind::NotAdvertised => {
+            if failed {
+                probe(args, "create_rejected");
+                finish_terminal_flow(out, &flow);
+            } else {
+                fail_terminal_flow(out, args, &flow, "未宣告能力却创建成功");
+            }
+            keep = false;
+        }
+        TerminalFlowKind::Happy
+        | TerminalFlowKind::NonZero
+        | TerminalFlowKind::Big
+        | TerminalFlowKind::FrameBudget
+        | TerminalFlowKind::FrameEscapes => {
+            match flow.step {
+                0 => match result.get("terminalId").and_then(Value::as_str) {
+                    Some(terminal_id) => {
+                        flow.terminal_id = Some(terminal_id.to_owned());
+                        emit_terminal_tool(out, &session, terminal_id);
+                        flow.step = 1;
+                        send_terminal_request(
+                            state,
+                            out,
+                            &mut flow,
+                            "terminal/output",
+                            terminal_ref_params(&session, terminal_id),
+                        );
+                    }
+                    None => {
+                        fail_terminal_flow(out, args, &flow, "create 响应缺少 terminalId");
+                        keep = false;
+                    }
+                },
+                1 => {
+                    let output = result.get("output").and_then(Value::as_str).unwrap_or("");
+                    let truncated = result
+                        .get("truncated")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let ok = match flow.kind {
+                        TerminalFlowKind::Happy => {
+                            // stdout 与 stderr 按实际接收次序合并：stderr 可能夹在两个 stdout 分块之间，
+                            // 因此只要求两段 stdout 都在、emoji 没被拆坏。
+                            output.contains("第一段🙂") && output.contains("第二段") && !truncated
+                        }
+                        TerminalFlowKind::NonZero => output.contains("boom") && !truncated,
+                        TerminalFlowKind::Big => {
+                            truncated
+                                && output.chars().count() <= 1024
+                                && output.chars().all(|ch| ch == 'x' || ch == '\n')
+                        }
+                        TerminalFlowKind::FrameBudget | TerminalFlowKind::FrameEscapes => {
+                            // 线上帧必须留在 ACP 单条消息上限内；正文仍保留绝大部分（转义模式
+                            // 因每个换行/ESC 变长而保留得少一些），且必须如实上报 truncated。
+                            let wire = serde_json::to_string(message)
+                                .map(|text| text.len())
+                                .unwrap_or(usize::MAX);
+                            let retained = if flow.kind == TerminalFlowKind::FrameEscapes {
+                                500_000
+                            } else {
+                                1_000_000
+                            };
+                            let tail_ok = if flow.kind == TerminalFlowKind::FrameEscapes {
+                                output.ends_with("X\n")
+                            } else {
+                                output.ends_with('\n')
+                            };
+                            truncated
+                                && wire <= MAX_MESSAGE_BYTES
+                                && output.len() >= retained
+                                && tail_ok
+                        }
+                        _ => false,
+                    };
+                    if !ok && flow.output_polls < 200 {
+                        // 真实 ACP 语义：output 读到的是「到目前为止」的内容，可能还没写出。
+                        flow.output_polls += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                        send_terminal_request(
+                            state,
+                            out,
+                            &mut flow,
+                            "terminal/output",
+                            terminal_ref_params(&session, &terminal_id),
+                        );
+                    } else if !ok {
+                        fail_terminal_flow(out, args, &flow, "输出内容/顺序/预算不符");
+                        keep = false;
+                    } else {
+                        if matches!(
+                            flow.kind,
+                            TerminalFlowKind::FrameBudget | TerminalFlowKind::FrameEscapes
+                        ) {
+                            probe(args, "frame_budget_ok");
+                        }
+                        let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                        flow.step = 2;
+                        send_terminal_request(
+                            state,
+                            out,
+                            &mut flow,
+                            "terminal/wait_for_exit",
+                            terminal_ref_params(&session, &terminal_id),
+                        );
+                    }
+                }
+                2 => {
+                    let expected = match flow.kind {
+                        TerminalFlowKind::Happy
+                        | TerminalFlowKind::Big
+                        | TerminalFlowKind::FrameBudget
+                        | TerminalFlowKind::FrameEscapes => Some(0),
+                        TerminalFlowKind::NonZero => Some(3),
+                        _ => None,
+                    };
+                    if result.get("exitCode").and_then(Value::as_u64) != expected {
+                        fail_terminal_flow(out, args, &flow, "退出码不符");
+                        keep = false;
+                    } else {
+                        let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                        flow.step = 3;
+                        send_terminal_request(
+                            state,
+                            out,
+                            &mut flow,
+                            "terminal/release",
+                            terminal_ref_params(&session, &terminal_id),
+                        );
+                    }
+                }
+                3 => {
+                    if failed {
+                        fail_terminal_flow(out, args, &flow, "release 被拒绝");
+                        keep = false;
+                    } else {
+                        let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                        flow.step = 4;
+                        send_terminal_request(
+                            state,
+                            out,
+                            &mut flow,
+                            "terminal/output",
+                            terminal_ref_params(&session, &terminal_id),
+                        );
+                    }
+                }
+                4 => {
+                    if failed {
+                        probe(args, "output_after_release_rejected");
+                        let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                        flow.step = 5;
+                        send_terminal_request(
+                            state,
+                            out,
+                            &mut flow,
+                            "terminal/release",
+                            terminal_ref_params(&session, &terminal_id),
+                        );
+                    } else {
+                        fail_terminal_flow(out, args, &flow, "release 后仍可读取输出");
+                        keep = false;
+                    }
+                }
+                5 => {
+                    if failed {
+                        probe(args, "release_after_release_rejected");
+                        finish_terminal_flow(out, &flow);
+                    } else {
+                        fail_terminal_flow(out, args, &flow, "release 可以重复成功");
+                    }
+                    keep = false;
+                }
+                _ => {
+                    fail_terminal_flow(out, args, &flow, "流程步数越界");
+                    keep = false;
+                }
+            }
+        }
+        TerminalFlowKind::Kill => match flow.step {
+            0 => match result.get("terminalId").and_then(Value::as_str) {
+                Some(terminal_id) => {
+                    flow.terminal_id = Some(terminal_id.to_owned());
+                    emit_terminal_tool(out, &session, terminal_id);
+                    flow.step = 1;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/output",
+                        terminal_ref_params(&session, terminal_id),
+                    );
+                }
+                None => {
+                    fail_terminal_flow(out, args, &flow, "create 响应缺少 terminalId");
+                    keep = false;
+                }
+            },
+            1 => {
+                if result.get("output").and_then(Value::as_str) != Some("started\n") {
+                    if flow.output_polls < 200 {
+                        flow.output_polls += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                        send_terminal_request(
+                            state,
+                            out,
+                            &mut flow,
+                            "terminal/output",
+                            terminal_ref_params(&session, &terminal_id),
+                        );
+                    } else {
+                        fail_terminal_flow(out, args, &flow, "kill 前的输出不符");
+                        keep = false;
+                    }
+                } else {
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 2;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/kill",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                }
+            }
+            2 => {
+                if failed {
+                    fail_terminal_flow(out, args, &flow, "kill 被拒绝");
+                    keep = false;
+                } else {
+                    probe(args, "kill_ok");
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 3;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/wait_for_exit",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                }
+            }
+            3 => {
+                let code = result.get("exitCode").and_then(Value::as_u64);
+                let signal = result.get("signal").and_then(Value::as_str);
+                // Unix 被 SIGKILL 时只有 signal（code 为 null），Windows 只有 exitCode；
+                // 两个都有或都没有都说明退出事实不可判定。
+                if failed || code.is_some() == signal.is_some() {
+                    fail_terminal_flow(out, args, &flow, "kill 后没有可判定的退出事实");
+                    keep = false;
+                } else {
+                    flow.exit_code = code;
+                    probe(args, "kill_exit_reported");
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 4;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/kill",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                }
+            }
+            4 => {
+                if failed {
+                    fail_terminal_flow(out, args, &flow, "重复 kill 被拒绝");
+                    keep = false;
+                } else {
+                    probe(args, "kill_twice_ok");
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 5;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/wait_for_exit",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                }
+            }
+            5 => {
+                if result.get("exitCode").and_then(Value::as_u64) != flow.exit_code {
+                    fail_terminal_flow(out, args, &flow, "重复等待的退出码不一致");
+                    keep = false;
+                } else {
+                    probe(args, "wait_twice_stable");
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 6;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/output",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                }
+            }
+            6 => {
+                let readable = result.get("output").and_then(Value::as_str) == Some("started\n")
+                    && result
+                        .get("exitStatus")
+                        .is_some_and(|value| !value.is_null());
+                if !readable {
+                    fail_terminal_flow(out, args, &flow, "kill 后输出不可读或没有退出状态");
+                    keep = false;
+                } else {
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 7;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/release",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                }
+            }
+            7 => {
+                if failed {
+                    fail_terminal_flow(out, args, &flow, "release 被拒绝");
+                    keep = false;
+                } else {
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 8;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/output",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                }
+            }
+            8 => {
+                if failed {
+                    probe(args, "output_after_release_rejected");
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 9;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/release",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                } else {
+                    fail_terminal_flow(out, args, &flow, "release 后仍可读取输出");
+                    keep = false;
+                }
+            }
+            9 => {
+                if failed {
+                    probe(args, "release_after_release_rejected");
+                    finish_terminal_flow(out, &flow);
+                } else {
+                    fail_terminal_flow(out, args, &flow, "release 可以重复成功");
+                }
+                keep = false;
+            }
+            _ => {
+                fail_terminal_flow(out, args, &flow, "流程步数越界");
+                keep = false;
+            }
+        },
+        TerminalFlowKind::CrossSession => match flow.step {
+            0 => match result.get("terminalId").and_then(Value::as_str) {
+                Some(terminal_id) => {
+                    flow.terminal_id = Some(terminal_id.to_owned());
+                    emit_terminal_tool(out, &session, terminal_id);
+                    flow.step = 1;
+                    let other = if session == "acp-session-1" {
+                        "acp-session-2"
+                    } else {
+                        "acp-session-1"
+                    };
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/output",
+                        terminal_ref_params(other, terminal_id),
+                    );
+                }
+                None => {
+                    fail_terminal_flow(out, args, &flow, "create 响应缺少 terminalId");
+                    keep = false;
+                }
+            },
+            1 => {
+                if failed {
+                    probe(args, "cross_session_rejected");
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 2;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/output",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                } else {
+                    fail_terminal_flow(out, args, &flow, "跨会话访问没有被拒绝");
+                    keep = false;
+                }
+            }
+            2 => {
+                if failed {
+                    fail_terminal_flow(out, args, &flow, "本会话输出被拒绝");
+                    keep = false;
+                } else {
+                    let terminal_id = flow.terminal_id.clone().unwrap_or_default();
+                    flow.step = 3;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/release",
+                        terminal_ref_params(&session, &terminal_id),
+                    );
+                }
+            }
+            3 => {
+                if failed {
+                    fail_terminal_flow(out, args, &flow, "release 被拒绝");
+                } else {
+                    finish_terminal_flow(out, &flow);
+                }
+                keep = false;
+            }
+            _ => {
+                fail_terminal_flow(out, args, &flow, "流程步数越界");
+                keep = false;
+            }
+        },
+        TerminalFlowKind::Orphan | TerminalFlowKind::OrphanCrash => match flow.step {
+            0 => match result.get("terminalId").and_then(Value::as_str) {
+                Some(terminal_id) => {
+                    flow.terminal_id = Some(terminal_id.to_owned());
+                    emit_terminal_tool(out, &session, terminal_id);
+                    probe(args, "orphan_created");
+                    finish_terminal_flow(out, &flow);
+                    keep = false;
+                    if flow.kind == TerminalFlowKind::OrphanCrash {
+                        // 等到孙进程真的开始写心跳，再崩溃：这样「Agent 退出后进程树被清理」是可观察的。
+                        if let Some(path) = &args.terminal_heartbeat {
+                            let deadline =
+                                std::time::Instant::now() + std::time::Duration::from_secs(3);
+                            while !std::path::Path::new(path).exists()
+                                && std::time::Instant::now() < deadline
+                            {
+                                std::thread::sleep(std::time::Duration::from_millis(20));
+                            }
+                        }
+                        let _ = out.flush();
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        std::process::exit(0);
+                    }
+                }
+                None => {
+                    fail_terminal_flow(out, args, &flow, "create 响应缺少 terminalId");
+                    keep = false;
+                }
+            },
+            _ => {
+                fail_terminal_flow(out, args, &flow, "流程步数越界");
+                keep = false;
+            }
+        },
+        TerminalFlowKind::WaitHang => match flow.step {
+            0 => match result.get("terminalId").and_then(Value::as_str) {
+                Some(terminal_id) => {
+                    flow.terminal_id = Some(terminal_id.to_owned());
+                    emit_terminal_tool(out, &session, terminal_id);
+                    probe(args, "wait_pending");
+                    flow.step = 1;
+                    send_terminal_request(
+                        state,
+                        out,
+                        &mut flow,
+                        "terminal/wait_for_exit",
+                        terminal_ref_params(&session, terminal_id),
+                    );
+                }
+                None => {
+                    fail_terminal_flow(out, args, &flow, "create 响应缺少 terminalId");
+                    keep = false;
+                }
+            },
+            1 => {
+                if failed {
+                    probe(args, "wait_cancelled");
+                    finish_terminal_flow(out, &flow);
+                } else {
+                    fail_terminal_flow(out, args, &flow, "等待退出没有被取消");
+                }
+                keep = false;
+            }
+            _ => {
+                fail_terminal_flow(out, args, &flow, "流程步数越界");
+                keep = false;
+            }
+        },
+    }
+
+    if keep {
+        state.terminal_flow = Some(flow);
+    }
+    true
 }
 
 fn emit_chunk(out: &mut impl Write, session: &str, text: &str) {

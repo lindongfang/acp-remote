@@ -156,6 +156,7 @@
   .tabbar button{flex:1;border:0;background:transparent;padding:8px 0;cursor:pointer;font-size:13px;
     color:var(--ink-3);min-height:42px;display:flex;align-items:center;justify-content:center;gap:7px}
   .tabbar button.on{color:var(--accent);font-weight:700;box-shadow:inset 0 -2px 0 var(--accent)}
+  .tabbar.file-tabbar{padding-bottom:var(--sab)}
   .composer{flex:none;background:var(--panel);border-top:1px solid var(--line);padding:6px 12px calc(6px + var(--sab))}
   .chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch}
   .chip-pick{flex:none;border:1px solid var(--line);background:var(--panel-2);border-radius:999px;
@@ -264,21 +265,91 @@
     gap:8px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:999px;
     padding:10px 16px;font-size:13px;color:var(--ink-2);z-index:9;min-height:44px}
   .jumppill b{color:var(--accent)}
-  .fitem{display:flex;align-items:center;gap:10px;padding:10px 13px;border-bottom:1px solid var(--line-2);
-    cursor:pointer;min-height:48px}
-  .fitem:active{background:var(--panel-2)} .fitem.on{background:var(--accent-soft)}
-  .fst{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;font-size:10px;font-weight:700;flex:none}
-  .fst.M{background:var(--warn-soft);color:var(--warn)} .fst.A{background:var(--ok-soft);color:var(--ok)}
-  .diffwrap{border-top:1px solid var(--line);padding:12px 14px}
-  .dt{font-family:var(--mono);font-size:12px;word-break:break-all}
-  .dm{font-size:11.5px;color:var(--ink-3);margin:3px 0 10px}
   .diff{border:1px solid var(--line);border-radius:8px;overflow:auto;background:var(--panel);
     font-family:var(--mono);font-size:11px}
   .diff div{padding:1px 9px;white-space:pre}
-  .diff .del{background:var(--danger-soft);color:var(--danger)}
-  .diff .add{background:var(--ok-soft);color:var(--ok)}
-  .diff .ctx{color:var(--ink-3)}
-  .diff .hd{background:var(--panel-2);color:var(--ink-3);font-size:10.5px;padding:4px 9px}
+  .diff .d-del{background:var(--danger-soft);color:var(--danger)}
+  .diff .d-add{background:var(--ok-soft);color:var(--ok)}
+  .diff .d-ctx{color:var(--ink-3)}
+  .diff .d-hd{background:var(--panel-2);color:var(--ink-3);font-size:10.5px;padding:4px 9px}
+
+  /* ---------- 文件 ---------- */
+  .filetab{flex:1;min-height:0;display:flex;flex-direction:column}
+  .file-controls{flex:none;padding:10px 12px 0;background:var(--bg)}
+  .file-controls .segbar{margin-bottom:8px}
+  .file-subbar{display:flex;align-items:center;gap:8px;min-height:36px;margin-bottom:8px}
+  .fpath{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+  .frefresh{width:36px;height:36px;flex:none;display:grid;place-items:center;border:1px solid var(--line);
+    border-radius:9px;background:var(--panel);color:var(--ink-2)}
+  .frefresh svg{width:16px;height:16px}
+  .fvsource{flex:none;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:5px;
+    background:var(--line-2);color:var(--ink-2)}
+  .fvsource.git{background:var(--warn-soft);color:var(--warn)}
+  .fclose{flex:none;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink-2);
+    font:inherit;font-size:12px;padding:7px 11px;min-height:36px}
+  .fclose:active{background:var(--accent-soft);color:var(--accent-ink)}
+  .ftoolbar{display:flex;align-items:center;gap:8px;min-height:34px;padding:0 2px 8px}
+  .fswitch{display:inline-flex;align-items:center;gap:9px;border:0;background:transparent;
+    color:var(--ink-2);font:inherit;font-size:13px;cursor:pointer;padding:6px 0;min-height:34px}
+  .fswitch .track{width:30px;height:18px;border-radius:999px;background:var(--line);position:relative;
+    flex:none;transition:background .12s}
+  .fswitch .knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+    background:var(--panel);box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .12s}
+  .fswitch.on .track{background:var(--accent)}
+  .fswitch.on .knob{transform:translateX(12px)}
+  .flegend{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12px;color:var(--ink-3)}
+  .flegend b{font-weight:500;color:var(--ink-2)}
+  .fdot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ink-3)}
+  .fdot.pos{background:var(--ok)} .fdot.neg{background:var(--danger)}
+  .file-scroll{flex:1;min-height:0;overflow:auto;background:var(--bg);padding:0 0 calc(10px + var(--sab))}
+  .ftree{display:flex;flex-direction:column}
+  .ftreeChildren{margin-left:22px;padding-left:2px;border-left:1px solid var(--line-2)}
+  .fdir{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;cursor:pointer;
+    font-size:14px;font-weight:500;color:var(--ink-2)}
+  .fdir:active{background:var(--line-2)}
+  .fdir.open{color:var(--ink)}
+  .frow{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;
+    font-size:14px;color:var(--ink);cursor:pointer}
+  .frow:active{background:var(--line-2)}
+  .frow.on{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
+  .frow.on .fname{font-weight:600}
+  .ficon{width:24px;height:24px;flex:none;display:flex;align-items:center;justify-content:center;
+    border-radius:7px;background:var(--line-2);color:var(--ink-3)}
+  .ficon.f-dir{background:var(--accent-soft);color:var(--accent-ink)}
+  .ficon.f-code{background:var(--tool-soft);color:var(--tool)}
+  .ficon.f-doc{background:var(--line-2);color:var(--ink-2)}
+  .ficon.f-config{background:var(--warn-soft);color:var(--warn)}
+  .ficon.f-image{background:var(--think-soft);color:var(--think)}
+  .ficon svg{width:18px;height:18px;display:block}
+  .fcount{margin-left:auto;flex:none;min-width:20px;text-align:right;font-family:var(--mono);
+    font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--ink-3)}
+  .fname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+  .fname.pos{color:var(--ok)} .fname.neg{color:var(--danger)}
+  .fmeta{display:flex;align-items:center;gap:5px;flex:none;font-size:12px;color:var(--ink-3)}
+  .fstat{height:18px;display:inline-flex;align-items:center;padding:0 6px;border-radius:5px;
+    font-family:var(--mono);font-size:11.5px;line-height:1;font-variant-numeric:tabular-nums}
+  .fstat.add{background:var(--ok-soft);color:var(--ok)}
+  .fstat.del{background:var(--danger-soft);color:var(--danger)}
+  .fchip{font-size:11px;padding:1px 6px;border-radius:5px;background:var(--line-2);color:var(--ink-2)}
+
+  /* 移动端的只读文件查看区 */
+  .file-viewer{flex:1;min-height:0;overflow:auto;padding:12px 12px calc(20px + var(--sab));background:var(--bg)}
+  .fvmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--ink-3);margin-bottom:8px}
+  .mcode{display:flex;border:1px solid var(--line);border-radius:10px;overflow:auto;background:var(--panel)}
+  .fvln{flex:none;position:sticky;left:0;z-index:1;min-width:3.4em;padding:12px 8px 12px 12px;
+    text-align:right;color:var(--ink-3);font-family:var(--mono);font-size:11.5px;line-height:1.65;
+    background:var(--panel-2);white-space:pre;font-variant-numeric:tabular-nums;
+    border-right:1px solid var(--line-2);user-select:none}
+  .fvtext{margin:0;padding:12px 12px;background:var(--panel);color:var(--ink);
+    font-family:var(--mono);font-size:12px;line-height:1.65;white-space:pre;tab-size:2;
+    overflow:visible;min-width:0}
+  .file-viewer .diff{font-size:12px;line-height:1.65}
+  .file-viewer .diff div{padding:2px 10px}
+  .file-viewer .diff .d-hd{font-size:11.5px;padding:4px 10px}
+  .fvempty{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:18px;
+    border:1px dashed var(--line);border-radius:10px;color:var(--ink-3);font-size:12.5px}
+  .fvempty b{color:var(--ink-2);font-weight:600}
 
   /* 容器查询：按画布宽度而非视口判断，桌面预览手机时同样生效 */
   @container (max-width:520px){ .kbdhint{display:none} }
@@ -618,25 +689,112 @@
     }
   })();
   SESSIONS.sort(function(a,b){ return b.at - a.at; });   /* 一律按时间倒序 */
-  var FILES = {
-    "src/auth/session.ts": { status:"M", add:12, del:4, diff:[
-      {t:"hd",x:"@@ -42,7 +42,7 @@ export function createSession"},
-      {t:"ctx",x:"  const opts = resolveOptions(input);"},
-      {t:"del",x:"- const idleTimeout = 30_000;"},
-      {t:"add",x:"+ const idleTimeout = opts.idleTimeoutMs ?? 10_000;"},
-      {t:"ctx",x:"  client.attach(idleTimeout);"},
-      {t:"hd",x:"@@ -88,6 +88,9 @@ function onIdle()"},
-      {t:"add",x:"+   scheduleClose(client, idleTimeout);"} ] },
-    "src/auth/config.ts": { status:"M", add:3, del:1, diff:[
-      {t:"hd",x:"@@ -10,4 +10,6 @@"},{t:"ctx",x:"export const defaults = {"},
-      {t:"del",x:"- idleTimeoutMs: 30_000,"},{t:"add",x:"+ idleTimeoutMs: 10_000,"},
-      {t:"ctx",x:"};"} ] },
-    "tests/auth.spec.ts": { status:"A", add:24, del:0, diff:[
-      {t:"hd",x:"@@ -0,0 +1,8 @@"},{t:"add",x:"+describe('idle timeout', () => {"},
-      {t:"add",x:"+  it('closes after 10s', async () => {"},{t:"add",x:"+  });"},
-      {t:"add",x:"+});"} ] }
+  var FILE_SOURCE_LABELS = { all:"全部文件", git:"Git 变更" };
+  var ALL_TREE = [
+    { kind:"dir", name:".agents", path:".agents", children:[
+      { kind:"dir", name:"skills", path:".agents/skills", children:[
+        { kind:"file", name:"review.md", path:".agents/skills/review.md" } ] } ] },
+    { kind:"dir", name:"assets", path:"assets", children:[
+      { kind:"file", name:"logo.png", path:"assets/logo.png", binary:true } ] },
+    { kind:"dir", name:"src", path:"src", children:[
+      { kind:"file", name:"app.ts", path:"src/app.ts" },
+      { kind:"dir", name:"auth", path:"src/auth", children:[
+        { kind:"file", name:"config.ts", path:"src/auth/config.ts" },
+        { kind:"file", name:"session.ts", path:"src/auth/session.ts" } ] } ] },
+    { kind:"dir", name:"tests", path:"tests", children:[
+      { kind:"file", name:"auth.spec.ts", path:"tests/auth.spec.ts" } ] },
+    { kind:"file", name:"README.md", path:"README.md" },
+    { kind:"file", name:"package.json", path:"package.json" },
+    { kind:"file", name:"debug.log", path:"debug.log", ignored:true },
+    { kind:"link", name:"escape", path:"escape", openable:false, restricted:"outside_root" }
+  ];
+  var ALL_FILE_CONTENTS = {
+    ".agents/skills/review.md": { kind:"text", size:"96 字节", text:[
+      "# review", "", "先看接口，再看实现。", "不要越过依赖方向。" ].join("\n") },
+    "README.md": { kind:"text", size:"1.2 KiB", text:[
+      "# api", "", "本地开发：", "", "```bash", "pnpm install", "pnpm dev", "```", "",
+      "页面里的 <script>window.__pwned = true<\/script> 只作为纯文本显示，不执行。",
+      "外部图片也不会自动加载。" ].join("\n") },
+    "package.json": { kind:"text", size:"486 字节", text:[
+      "{", '  "name": "api",', '  "private": true,', '  "scripts": {',
+      '    "dev": "tsx src/app.ts",', '    "test": "vitest run"', "  }", "}" ].join("\n") },
+    "src/app.ts": { kind:"text", size:"612 字节", text:[
+      'import { createServer } from "node:http";', 'import { createSession } from "./auth/session";', "",
+      'const port = Number(process.env.PORT ?? 3000);', "",
+      "createServer((request, response) => {", '  response.end("ok");', "}).listen(port);" ].join("\n") },
+    "src/auth/config.ts": { kind:"text", size:"128 字节", text:[
+      "export const defaults = {", "  idleTimeoutMs: 10_000,", "};" ].join("\n") },
+    "src/auth/session.ts": { kind:"text", size:"2.4 KiB", text:[
+      "export function createSession(input: SessionInput) {",
+      "  const opts = resolveOptions(input);",
+      "  const idleTimeout = opts.idleTimeoutMs ?? 10_000;",
+      "  client.attach(idleTimeout);",
+      "  return { id: client.id };", "}" ].join("\n") },
+    "tests/auth.spec.ts": { kind:"text", size:"388 字节", text:[
+      "describe('idle timeout', () => {", "  it('closes after 10s', async () => {",
+      "    await advance(10_000);", "    expect(client.closed).toBe(true);", "  });", "});" ].join("\n") },
+    "debug.log": { kind:"text", size:"760 字节", text:[
+      "[14:31:02] session started", "[14:31:26] config reloaded", "[14:33:02] idle" ].join("\n") },
+    "assets/logo.png": { kind:"image", size:"18.4 KiB" }
   };
-  var FILE_ORDER = ["src/auth/session.ts","src/auth/config.ts","tests/auth.spec.ts"];
+  var GIT_FILES = [
+    { path:"src/app.ts", status:"modified" },
+    { path:"src/auth/config.ts", status:"modified" },
+    { path:"src/auth/session.ts", status:"modified" },
+    { path:"old.txt", status:"deleted" },
+    { path:"new.txt", status:"added" },
+    { path:"untracked.txt", status:"untracked" }
+  ];
+  var GIT_DIFFS = {
+    "src/app.ts": [
+      "diff --git a/src/app.ts b/src/app.ts",
+      "index 1a2b3c4..5d6e7f8 100644",
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1,6 +1,7 @@",
+      ' import { createServer } from "node:http";',
+      '-const port = 3000;',
+      '+const port = Number(process.env.PORT ?? 3000);',
+      " ",
+      " createServer((request, response) => {",
+      '   response.end("ok");',
+      " }).listen(port);" ],
+    "src/auth/config.ts": [
+      "@@ -10,5 +10,5 @@ export const defaults = {",
+      "   idleTimeoutMs: 30_000,",
+      "-  retries: 3,",
+      "+  retries: 5,",
+      " };" ],
+    "src/auth/session.ts": [
+      "@@ -40,5 +40,5 @@ export function createSession",
+      "   const opts = resolveOptions(input);",
+      "-  const idleTimeout = 30_000;",
+      "+  const idleTimeout = opts.idleTimeoutMs ?? 10_000;",
+      "   client.attach(idleTimeout);" ],
+    "old.txt": [
+      "diff --git a/old.txt b/old.txt",
+      "deleted file mode 100644",
+      "--- a/old.txt",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-legacy line 1",
+      "-legacy line 2" ],
+    "new.txt": [
+      "diff --git a/new.txt b/new.txt",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/new.txt",
+      "@@ -0,0 +1,3 @@",
+      "+first line",
+      "+second line",
+      "+third line" ],
+    "untracked.txt": [
+      "diff --git a/untracked.txt b/untracked.txt",
+      "new file mode 100644",
+      "@@ -0,0 +1,2 @@",
+      "+draft notes",
+      "+not staged yet" ]
+  };
   var AGENT_PROFILES = [{id:"codex",name:"codex",def:true},{id:"omp",name:"omp",def:false}];
   /* 会话模式由 Agent 提供（ACP `SessionModeState.availableModes`，Sync 侧投影为 `ModeRef{modeId,displayName}`）：
      客户端只按 `modeId` 选择、直接显示 Agent 给的名字，不自己造候选；Agent 给空列表时就是空列表。 */
@@ -676,7 +834,8 @@
   var RAW_REASON = { size_limit:"超出单条上限", retention_expired:"保留期已过", storage_failure:"存储失败" };
   var A = {
     conn:"online", chatScenario:"running", ctx:"mid", degradeDemo:true,
-    session:"s1", tab:"chat", filter:"all", query:"", selFile:"src/auth/session.ts",
+    session:"s1", tab:"chat", filter:"all", query:"", selFile:null,
+    fileSource:"all", dirOpen:{}, hideIgnored:false, viewFile:null,
     open:{}, keys:[], permSet:{}, modelSel:{}, modeSel:{}, openPick:null,
     pair:"S0", pairLeft:PAIR_TTL, pairDeadline:0, pairCode:"", pairPrev:null, pairVia:"code", pairTimer:null, pairNavTimer:null, clearArmed:false, creating:null, newAgent:"codex", newErr:null, seq:0,
     newDir:"", mkdirCase:"ok", dirPickOpen:false,
@@ -1267,6 +1426,11 @@ function streamHTML(s){
   return out;
 }
 
+function tabbarHtml(bottom){
+  return '<div class="tabbar'+(bottom?" file-tabbar":"")+'">'+
+    '<button data-tab="chat" class="'+(A.tab==="chat"?"on":"")+'">对话</button>'+
+    '<button data-tab="files" class="'+(A.tab==="files"?"on":"")+'">文件</button></div>';
+}
 function chatPane(s){
   var c = CONN[A.conn] || CONN.online;
   /* 会话页顶栏只留四样：返回、会话标题、agent 标识、主题（颜色）切换。
@@ -1278,8 +1442,7 @@ function chatPane(s){
     esc(c.strip[0])+'</div>' : '';
   var body = '<div class="scroll" id="stream">'+streamHTML(s)+
     '<div style="height:8px"></div></div>';
-  var tabbar = '<div class="tabbar"><button data-tab="chat" class="'+(A.tab==="chat"?"on":"")+'">对话</button>' +
-    '<button data-tab="files" class="'+(A.tab==="files"?"on":"")+'">变更文件 ('+FILE_ORDER.length+')</button></div>';
+  var tabbar = tabbarHtml();
   var composer = '<div class="composer">' + ctxWarn() +
     '<div class="chips">' + connChip() +
       '<button class="chip-pick" data-act="mode">模式 <b>'+esc(modeLabel(modeState())||"未提供")+'</b> ▾</button>' +
@@ -1293,24 +1456,227 @@ function chatPane(s){
   return head + strip + '<div style="flex:1;display:flex;flex-direction:column;min-height:0">' +
     body + tabbar + composer + '</div>';
 }
-function filesPane(){
-  var f = FILES[A.selFile];
-  var head = appbar('变更文件', FILE_ORDER.length + ' 个 · 整个会话', '', false);
-  var list = FILE_ORDER.map(function(p){
-    var x=FILES[p];
-    return '<div class="fitem'+(p===A.selFile?" on":"")+'" data-file="'+esc(p)+'">' +
-      '<span class="fst '+x.status+'">'+x.status+'</span><span class="mono" style="flex:1;min-width:0;'+
-      'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px">'+esc(p)+'</span>' +
-      '<span style="font-size:11px;color:var(--ink-3)">+'+x.add+' −'+x.del+'</span></div>';
-  }).join("");
-  var d = f ? '<div class="diffwrap"><div class="dt">'+esc(A.selFile)+'</div>' +
-    '<div class="dm">+'+f.add+' −'+f.del+'</div><div class="diff">' + f.diff.map(function(l){
-      return '<div class="'+l.t+'">'+(l.t==="hd"?"":(l.t==="del"?"- ":l.t==="add"?"+ ":"  "))+hl(l.x)+'</div>';
-    }).join("") + '</div><div class="dm" style="margin:10px 0 0">超出单条上限或未同步时显示明确说明，不渲染占位 diff。</div></div>' : '';
-  return head + '<div class="scroll" style="padding:0">'+list+d+'</div>';
-}
+  /* ==================== 文件 ==================== */
+  function iconSvg(body){
+    return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" '+
+      'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+body+'</svg>';
+  }
+  var ICON_DIR = iconSvg('<path d="M1.5 4.5V2.8c0-.4.3-.7.7-.7h3.1l1.3 1.7h6.2c.4 0 .7.3.7.7v8.1c0 .4-.3.7-.7.7H2.2a.7.7 0 0 1-.7-.7V4.5Z" fill="var(--panel-2)"/>');
+  var ICON_CODE = iconSvg('<path d="m5.4 4.2-3.6 3.8 3.6 3.8M10.6 4.2l3.6 3.8-3.6 3.8"/>');
+  var ICON_CONFIG = iconSvg('<path d="M6.2 3.3H5.6a2 2 0 0 0-2 2v1.1c0 .9-.5 1.5-1.4 1.8.9.3 1.4.9 1.4 1.8v1.1c0 1.1.9 2 2 2h.6M9.8 3.3h.6a2 2 0 0 1 2 2v1.1c0 .9.5 1.5 1.4 1.8-.9.3-1.4.9-1.4 1.8v1.1c0 1.1-.9 2-2 2h-.6"/>');
+  var ICON_DOC = iconSvg('<path d="M3 3.5h10M3 6.5h10M3 9.5h10M3 12.5h6"/>');
+  var ICON_IMAGE = iconSvg('<rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2"/><circle cx="5.2" cy="6.2" r="1.1" fill="currentColor" stroke="none"/><path d="m2.8 11.6 3.4-3.2 2.4 2.1 1.9-1.7 2.7 2.6"/>');
+  var ICON_FILE = iconSvg('<path d="M4 1.8h5.2l3 3V13.4c0 .4-.3.7-.7.7H4.7a.7.7 0 0 1-.7-.7V2.5c0-.4.3-.7.7-.7Z"/><path d="M9 1.9v3.1h3.1"/>');
+  var REFRESH_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 6.5A5.2 5.2 0 1 0 13.2 9"/><path d="M13 3v3.5H9.5"/></svg>';
+  var FILE_LANGUAGES = {
+    ts:"TypeScript", tsx:"TypeScript", js:"JavaScript", jsx:"JavaScript",
+    rs:"Rust", json:"JSON", toml:"TOML", yaml:"YAML", yml:"YAML", md:"Markdown", txt:"Text"
+  };
+  function folderIconHtml(){ return '<span class="ficon f-dir" aria-hidden="true">'+ICON_DIR+'</span>'; }
+  function fileIconHtml(path){
+    var name=String(path||"").split("/").pop() || "";
+    var ext=name.indexOf(".")>=0 ? name.split(".").pop().toLowerCase() : "";
+    if(["ts","tsx","js","jsx","rs"].indexOf(ext)>=0) return '<span class="ficon f-code" aria-hidden="true">'+ICON_CODE+'</span>';
+    if(["json","toml","yaml","yml"].indexOf(ext)>=0) return '<span class="ficon f-config" aria-hidden="true">'+ICON_CONFIG+'</span>';
+    if(ext==="md"||ext==="txt") return '<span class="ficon f-doc" aria-hidden="true">'+ICON_DOC+'</span>';
+    if(["png","jpg","jpeg","gif","webp","svg","ico"].indexOf(ext)>=0) return '<span class="ficon f-image" aria-hidden="true">'+ICON_IMAGE+'</span>';
+    return '<span class="ficon" aria-hidden="true">'+ICON_FILE+'</span>';
+  }
+  function fileLanguage(path){
+    var name=String(path||"").split("/").pop() || "";
+    var ext=name.indexOf(".")>=0 ? name.split(".").pop().toLowerCase() : "";
+    return FILE_LANGUAGES[ext] || null;
+  }
+  function highlightedText(text, path){
+    var name=String(path||"").split("/").pop() || "";
+    var ext=name.indexOf(".")>=0 ? name.split(".").pop().toLowerCase() : "";
+    if(["ts","tsx","js","jsx","rs","json","toml","yaml","yml"].indexOf(ext)<0) return esc(text);
+    return text.split("\n").map(function(line){ return hl(line); }).join("\n");
+  }
+  function compressDirectory(entry){
+    var label=entry.name, target=entry, seen=[entry.path];
+    while(target.children){
+      var dirs=target.children.filter(function(child){ return child.kind==="dir"; });
+      var files=target.children.filter(function(child){ return child.kind!=="dir"; });
+      if(dirs.length!==1 || files.length!==0) break;
+      var next=dirs[0];
+      if(seen.indexOf(next.path)>=0) break;
+      label += "/"+next.name; seen.push(next.path); target=next;
+    }
+    return { label:label, target:target };
+  }
+  function countAllFiles(items){
+    var n=0;
+    (items||[]).forEach(function(item){
+      if(item.kind==="dir") n += countAllFiles(item.children);
+      else if(!(item.ignored && A.hideIgnored)) n += 1;
+    });
+    return n;
+  }
+  function allTreeHTML(items){
+    var out="";
+    items.forEach(function(entry){
+      if(entry.kind==="dir"){
+        var packed=compressDirectory(entry);
+        var key="all:"+entry.path, open=!!A.dirOpen[key];
+        var count=countAllFiles(packed.target.children || []);
+        out += '<div class="fdir'+(open?" open":"")+'" data-dir="'+esc(key)+'" role="button" tabindex="0" aria-expanded="'+open+'">'+
+          folderIconHtml()+'<span class="fname">'+esc(packed.label)+'</span>'+
+          (count>0 ? '<span class="fcount">'+count+'</span>' : '')+'</div>';
+        if(open) out += '<div class="ftreeChildren">'+allTreeHTML(packed.target.children || [])+'</div>';
+        return;
+      }
+      if(entry.ignored && A.hideIgnored) return;
+      var blocked = entry.openable===false;
+      out += '<div class="frow'+(blocked?" blocked":"")+
+        (A.viewFile && A.viewFile.source==="all" && A.viewFile.path===entry.path?" on":"")+'"'+
+        (blocked ? ' aria-disabled="true"' : ' data-open="all" data-path="'+esc(entry.path)+'" role="button" tabindex="0"')+'>'+
+        fileIconHtml(entry.path)+'<span class="fname">'+esc(entry.name)+'</span>'+
+        (entry.kind==="link" ? '<span class="fchip">链接</span>' : '')+'</div>';
+    });
+    return out;
+  }
+  function sortedNames(dirs){
+    return Object.keys(dirs).sort(function(a,b){ return a.localeCompare(b, undefined, { numeric:true, sensitivity:"base" }); });
+  }
+  function groupByDirectory(items){
+    var root={ dirs:{}, files:[] };
+    items.forEach(function(item){
+      var parts=item.path.split("/"), node=root;
+      for(var i=0;i<parts.length-1;i++){
+        var name=parts[i];
+        if(!node.dirs[name]) node.dirs[name]={ name:name, children:{ dirs:{}, files:[] } };
+        node=node.dirs[name].children;
+      }
+      node.files.push(item);
+    });
+    return root;
+  }
+  function countChangeFiles(node){
+    var n=node.files.length;
+    sortedNames(node.dirs).forEach(function(name){ n += countChangeFiles(node.dirs[name].children); });
+    return n;
+  }
+  function lineStatsHtml(record){
+    var out="";
+    if(typeof record.add==="number" && record.add>0) out += '<span class="fstat add">+'+record.add+'</span>';
+    if(typeof record.del==="number" && record.del>0) out += '<span class="fstat del">−'+record.del+'</span>';
+    return out;
+  }
+  function gitLineCounts(path){
+    var add=0, del=0;
+    (GIT_DIFFS[path] || []).forEach(function(line){
+      if(line.indexOf("diff ")===0 || line.indexOf("index ")===0 || line.indexOf("new file")===0 ||
+        line.indexOf("deleted file")===0 || line.indexOf("+++")===0 || line.indexOf("---")===0) return;
+      if(line.charAt(0)==="+") add++; else if(line.charAt(0)==="-") del++;
+    });
+    return { add:add, del:del };
+  }
+  function changeTreeHTML(node, prefix){
+    var out="";
+    sortedNames(node.dirs).forEach(function(name){
+      var dir=node.dirs[name], label=name, path=prefix+name+"/";
+      var target=dir.children;
+      while(true){
+        var names=sortedNames(target.dirs);
+        if(names.length!==1 || target.files.length!==0) break;
+        var next=names[0]; label += "/"+next; path += next+"/"; target=target.dirs[next].children;
+      }
+      var key="git:"+path, open=!!A.dirOpen[key];
+      var count=countChangeFiles(target);
+      out += '<div class="fdir'+(open?" open":"")+'" data-dir="'+esc(key)+'" role="button" tabindex="0" aria-expanded="'+open+'">'+
+        folderIconHtml()+'<span class="fname">'+esc(label)+'</span>'+
+        (count>0 ? '<span class="fcount">'+count+'</span>' : '')+'</div>';
+      if(open) out += '<div class="ftreeChildren">'+changeTreeHTML(target, path)+'</div>';
+    });
+    node.files.sort(function(a,b){ return a.path.localeCompare(b.path); }).forEach(function(item){
+      var label=item.path.split("/").pop() || item.path;
+      var app=item.status==="deleted" ? "neg" : "pos";
+      var meta=lineStatsHtml(gitLineCounts(item.path));
+      out += '<div class="frow'+(A.viewFile && A.viewFile.source==="git" && A.viewFile.path===item.path?" on":"")+
+        '" data-open="git" data-path="'+esc(item.path)+'" role="button" tabindex="0">'+
+        fileIconHtml(item.path)+'<span class="fname '+app+'">'+esc(label)+'</span>'+
+        (meta ? '<span class="fmeta">'+meta+'</span>' : '')+'</div>';
+    });
+    return out;
+  }
+  function allSourceParts(){
+    return {
+      toolbar: '<button class="fswitch'+(A.hideIgnored?" on":"")+'" data-toggle-ignored role="switch" aria-checked="'+String(A.hideIgnored)+'">'+
+        '<span class="track"><span class="knob"></span></span><span>隐藏忽略文件</span></button>',
+      body: '<div class="ftree">'+allTreeHTML(ALL_TREE)+'</div>'
+    };
+  }
+  function gitSourceParts(){
+    return {
+      toolbar: '<div class="flegend"><span class="fdot pos"></span><b>新增</b><span class="fdot neg"></span><b>删除</b></div>',
+      body: '<div class="ftree">'+changeTreeHTML(groupByDirectory(GIT_FILES),"")+'</div>'
+    };
+  }
+  function allFileViewBody(path){
+    var content = ALL_FILE_CONTENTS[path];
+    if(!content) return '<div class="fvempty">这个路径没有可展示的内容。</div>';
+    var language = fileLanguage(path);
+    var meta = '<div class="fvmeta">'+
+      (language ? '<span>'+esc(language)+'</span><span>·</span>' : '')+
+      (content.size ? '<span>'+esc(content.size)+'</span><span>·</span>' : '')+
+      '<span>只读预览</span></div>';
+    if(content.kind==="text"){
+      var lines=content.text.split("\n"), numbers=[];
+      for(var i=1;i<=lines.length;i++) numbers.push(i);
+      return meta+'<div class="mcode"><div class="fvln">'+numbers.join("\n")+'</div>'+
+        '<pre class="fvtext">'+highlightedText(content.text, path)+'</pre></div>';
+    }
+    if(content.kind==="image"){
+      return meta+'<div class="fvempty"><b>图片预览</b><span>实现通过同源 Blob URL 加载 PNG / JPEG / GIF / WebP；原型不加载真实图片。</span></div>';
+    }
+    return meta+'<div class="fvempty"><b>二进制文件</b><span>不渲染内容。</span></div>';
+  }
+  function gitFileViewBody(path){
+    var lines=GIT_DIFFS[path];
+    if(!lines) return '<div class="fvempty">没有可展示的差异行。</div>';
+    return '<div class="diff">'+lines.map(function(line){
+      var cls = (line.indexOf("@@")===0 || line.indexOf("+++")===0 || line.indexOf("---")===0 ||
+        line.indexOf("diff --git")===0 || line.indexOf("index ")===0 || line.indexOf("new file")===0 ||
+        line.indexOf("deleted file")===0) ? "hd"
+        : (line.charAt(0)==="+" ? "add" : (line.charAt(0)==="-" ? "del" : "ctx"));
+      return '<div class="d-'+cls+'">'+esc(line)+'</div>';
+    }).join("")+'</div>';
+  }
+  function sessionTitleHtml(){
+    var s=cur();
+    return esc(s.title||"未命名会话")+'<span class="chip">'+esc(s.agent)+'</span>';
+  }
+  function fileViewPane(view){
+    var head=appbar(sessionTitleHtml(), '', '', true);
+    var bar='<div class="file-subbar">'+
+      '<span class="fvsource '+view.source+'">'+esc(FILE_SOURCE_LABELS[view.source])+'</span>'+
+      '<span class="fpath">'+esc(view.path)+'</span>'+
+      '<button class="fclose" data-closefile aria-label="关闭文件查看">关闭</button></div>';
+    var body=view.source==="git" ? gitFileViewBody(view.path) : allFileViewBody(view.path);
+    return head+'<div class="filetab"><div class="file-controls">'+bar+'</div>'+
+      '<div class="file-viewer">'+body+'</div></div>';
+  }
+  function filesPane(){
+    if(A.viewFile) return fileViewPane(A.viewFile);
+    var s=cur(), dir=dirById(s.dir);
+    var head=appbar(sessionTitleHtml(), '', '', true);
+    var pathbar='<div class="file-subbar"><span class="fpath">'+
+      esc(dir&&dir.path?dir.path:"本会话工作目录")+'</span>'+
+      '<button class="frefresh" data-refresh-files title="刷新文件" aria-label="刷新文件">'+REFRESH_ICON+'</button></div>';
+    var tabs='<div class="segbar">'+["all","git"].map(function(source){
+      var selected=A.fileSource===source;
+      return '<button data-fsource="'+source+'" class="'+(selected?"on":"")+'" role="tab" aria-selected="'+
+        String(selected)+'">'+esc(FILE_SOURCE_LABELS[source])+'</button>';
+    }).join("")+'</div>';
+    var parts=A.fileSource==="git" ? gitSourceParts() : allSourceParts();
+    return head+'<div class="filetab"><div class="file-controls">'+pathbar+tabs+
+      '<div class="ftoolbar">'+parts.toolbar+'</div></div>'+
+      '<div class="file-scroll">'+parts.body+'</div></div>';
+  }
 
 function viewChat(id){
+  if(id && id !== A.session){ A.viewFile=null; A.fileSource="all"; }
   A.session = id || A.session;
   var s = cur();
   var c = CONN[A.conn] || CONN.online;
@@ -1320,7 +1686,7 @@ function viewChat(id){
       '<div style="margin-top:12px"><button class="btn primary block" data-go="'+esc(c.block[3]||"")+'">' +
       esc(c.block[2])+'</button></div></div></div>';
   }
-  if(A.tab==="files") return filesPane();
+  if(A.tab==="files") return filesPane() + tabbarHtml(true);
   return chatPane(s);
 }
 
@@ -1773,10 +2139,15 @@ function bind(){
     if(ag){ A.newAgent = ag.dataset.agent; A.newErr = null; paintSheet(); return; }
     var sk = t.closest("[data-seckey]");
     if(sk){ sheetState.sec[sk.dataset.seckey] = !sheetState.sec[sk.dataset.seckey]; paintSheet(); return; }
-    var fd = t.closest("[data-file]");
-    if(fd){ A.selFile = fd.dataset.file; A.tab = "files"; render(); return; }
-    var fc = t.closest(".fold[data-file]");
-    if(fc){ A.selFile = fc.dataset.file; A.tab = "files"; render(); return; }
+    var fs = t.closest("[data-fsource]");
+    if(fs){ A.fileSource = fs.dataset.fsource; render(); return; }
+    var fd = t.closest("[data-dir]");
+    if(fd){ A.dirOpen[fd.dataset.dir] = !A.dirOpen[fd.dataset.dir]; render(); return; }
+    var op = t.closest("[data-open]");
+    if(op){ A.viewFile = { source:op.dataset.open, path:op.dataset.path }; A.tab = "files"; render(); return; }
+    if(t.closest("[data-closefile]")){ A.viewFile = null; render(); return; }
+    if(t.closest("[data-toggle-ignored]")){ A.hideIgnored = !A.hideIgnored; render(); return; }
+    if(t.closest("[data-refresh-files]")){ toast("已刷新文件列表（原型占位）"); return; }
     var dx = t.closest("[data-dx]");
     if(dx){ openSheet("dx", dx.dataset.dx); return; }
     var dg = t.closest("[data-diag]");

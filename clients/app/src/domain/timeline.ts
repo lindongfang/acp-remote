@@ -618,13 +618,19 @@ export function buildTimelineCard(
     case "tool.call.updated":
     case "tool.call.completed": {
       const toolCallId = viewText(group.earliest.view, "toolCallId");
-      const title = viewText(view, "title");
-      const state = viewText(view, "state");
-      if (toolCallId === null || title === null || state === null) return null;
       // 到达顺序不等于时间顺序；各部分组成取最新非缺席值，因此先按位置排序。
       const ordered = [...group.records].sort((a, b) =>
         compareTimelinePosition(positionOf(a), positionOf(b)),
       );
+      // 真实 Agent 的 updated/completed 可能把 title 写成空串；空串不是「标题缺失」的
+      // 权威事实，取组内最新的非空标题（通常来自 started），否则才降级。
+      const title =
+        ordered
+          .map((record) => viewText(record.view, "title"))
+          .filter((value): value is string => value !== null && value.length > 0)
+          .at(-1) ?? null;
+      const state = viewText(view, "state");
+      if (toolCallId === null || title === null || state === null) return null;
       return {
         kind: "tool_call",
         toolCallId,

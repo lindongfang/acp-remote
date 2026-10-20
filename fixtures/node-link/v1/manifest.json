@@ -272,6 +272,133 @@
       "schema": "../../../schemas/node-link/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "required"
+    },
+    {
+      "fixture": "attachment/valid/begin.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/chunk.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/chunk-ack-duplicate.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/seal.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/sealed.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/status.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/abort-revoked.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/read.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/read-chunk.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/manifest-begin.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/manifest-page.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/manifest-sealed.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-offset-mismatch.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-chunk-conflict.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-negotiation-required.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-binding-mismatch.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-revoked.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/invalid/chunk-offset-number.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
+    },
+    {
+      "fixture": "attachment/invalid/chunk-missing-transfer-id.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "attachment/invalid/chunk-data-invalid.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "attachment/invalid/chunk-unknown-field.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "attachment/invalid/seal-missing-sha256.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "attachment/invalid/begin-subject-device.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "const"
+    },
+    {
+      "fixture": "attachment/invalid/read-missing-attachment-id.json",
+      "schema": "../../../schemas/node-link/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
     }
   ],
   "transcriptVectors": [

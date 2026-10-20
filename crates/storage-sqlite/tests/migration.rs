@@ -266,7 +266,7 @@ async fn current_version_database_is_untouched_by_two_consecutive_starts() {
         let store = SqliteStore::open(still_writable(&dir), &at())
             .await
             .unwrap_or_else(|error| panic!("round {round} must open: {error}"));
-        assert_eq!(store.metadata().owned_schema_version, 11);
+        assert_eq!(store.metadata().owned_schema_version, 12);
         assert_eq!(store.metadata().imported_schema_version, 4);
         store.close().await;
 
@@ -455,7 +455,7 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 11);
+    assert_eq!(store.metadata().owned_schema_version, 12);
     assert_eq!(store.metadata().imported_schema_version, 4);
 
     // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
@@ -781,7 +781,7 @@ async fn v7_upgrade_carries_interaction_rows_and_a_leading_event_sequence() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database with interaction rows must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 11);
+    assert_eq!(store.metadata().owned_schema_version, 12);
     store.close().await;
 
     let pool = raw_write_pool(&path).await;
@@ -896,7 +896,7 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v2 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 11);
+    assert_eq!(store.metadata().owned_schema_version, 12);
     assert_eq!(store.metadata().imported_schema_version, 4);
     store.close().await;
 
@@ -1091,7 +1091,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v3 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 11);
+    assert_eq!(store.metadata().owned_schema_version, 12);
     assert_eq!(store.metadata().imported_schema_version, 4);
     store.close().await;
 
@@ -1331,7 +1331,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v4 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 11);
+    assert_eq!(store.metadata().owned_schema_version, 12);
     assert_eq!(store.metadata().imported_schema_version, 4);
     // ② `NULL` = 没有可用于恢复的数据：升级后的既有会话一律显式失败，不出现「升级后突然可恢复」。
     assert_eq!(
@@ -1739,7 +1739,7 @@ async fn a_failed_upgrade_rolls_back_to_v1() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("retry must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 11);
+    assert_eq!(store.metadata().owned_schema_version, 12);
     assert_eq!(store.metadata().imported_schema_version, 4);
     store.close().await;
 }
@@ -2172,7 +2172,7 @@ async fn v10_to_v11_drops_export_import_and_merges_imported_sessions() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v10 database must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 11);
+    assert_eq!(store.metadata().owned_schema_version, 12);
     assert_eq!(store.metadata().imported_schema_version, 4);
     store.close().await;
 

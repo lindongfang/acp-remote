@@ -11,13 +11,13 @@
 import type {
   CommandMessage,
   CommandResultMessage,
+  EffectiveInteraction,
   EventMessage,
   RawAcp,
   SessionSummary,
   SnapshotItemConfigOptions,
   SnapshotItemHistory,
   SnapshotItemMessages,
-  SnapshotItemPendingInteractions,
   WorkspaceCatalogEntry,
 } from "../../protocol";
 import type { CompletedSnapshot, StagedResources } from "../../sync-client";
@@ -243,6 +243,7 @@ export function eventMessage(input: {
   readonly view?: Record<string, unknown>;
   readonly acp?: RawAcp;
   readonly globalSequence?: string;
+  readonly createdAt?: string;
 }): EventMessage {
   const payload: { view: Record<string, unknown>; acp?: RawAcp } = { view: input.view ?? {} };
   if (input.acp !== undefined) payload.acp = input.acp;
@@ -261,7 +262,7 @@ export function eventMessage(input: {
       causationRequestId: null,
       origin: { kind: "agent", deviceId: null },
       remoteOrigin: null,
-      createdAt: "2026-10-01T00:00:02.000Z",
+      createdAt: input.createdAt ?? "2026-10-01T00:00:02.000Z",
       payload,
     },
   };
@@ -353,7 +354,7 @@ export function readResult(input: {
   readonly sessionId?: string;
   readonly messages?: readonly SnapshotItemMessages[];
   readonly history?: readonly SnapshotItemHistory[];
-  readonly pending?: readonly SnapshotItemPendingInteractions[];
+  readonly pending?: readonly Record<string, unknown>[];
   readonly configOptions?: readonly SnapshotItemConfigOptions[];
   readonly hasEarlier?: boolean;
   readonly historyHasEarlier?: boolean;
@@ -375,7 +376,9 @@ export function readResult(input: {
         resources: {
           ...(input.messages === undefined ? {} : { messages: input.messages }),
           ...(input.history === undefined ? {} : { history: input.history }),
-          ...(input.pending === undefined ? {} : { pending_interactions: input.pending }),
+          ...(input.pending === undefined
+            ? {}
+            : { pending_interactions: input.pending as unknown as readonly EffectiveInteraction[] }),
           ...(input.configOptions === undefined ? {} : { config_options: input.configOptions }),
         },
         hasEarlier: input.hasEarlier ?? false,

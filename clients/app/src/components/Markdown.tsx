@@ -37,11 +37,12 @@
  * 组件是纯函数：内容与回调都从 props 来，缺省等价于「不启用」。
  */
 
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { TextStyle, ViewStyle } from "react-native";
 import { lexer } from "marked";
 import type { MarkedToken, Token, Tokens } from "marked";
+import { isMarkdownFilePath } from "../features/attachment-model";
 import { CodeBlock } from "./CodeBlock";
 import type { Palette } from "./theme";
 import {
@@ -65,6 +66,86 @@ export interface MarkdownProps {
   readonly onLinkPress?: ((href: string) => void) | undefined;
   /** 代码块的复制入口落点（页面接平台剪贴板能力）；缺省时复制按钮仍渲染，只是没有落点。 */
   readonly onCopyCode?: ((code: string, language: string) => void) | undefined;
+  /**
+   * 打开工作目录内的相对路径（行内代码里出现的路径）。
+   *
+   * 缺省时行内代码一律是纯文本：本组件不渲染「点了没反应」的路径控件。
+   */
+  readonly onFilePathPress?: ((path: string) => void) | undefined;
+}
+
+/**
+ * 单个源码分块的目标长度（字符数）。
+ *
+ * 分块只发生在**围栏代码块之外**的块边界（空行），因此每一块都能独立词法分析而不改变
+ * Markdown 结构。增量输出时前面的块文本不变、缓存命中，只有最后一块需要重新词法分析。
+ */
+export const MARKDOWN_CHUNK_CHARS = 6000;
+
+/** 默认最多渲染末尾多少块；更早的块由用户展开（长输出不一次挂满整棵视图树）。 */
+export const MARKDOWN_VISIBLE_CHUNKS = 8;
+
+/**
+ * 把 Markdown 源码切成可独立词法分析的块。
+ *
+ * 规则只有一条：**围栏之外**的空行是切点；切点前累计长度达到 `maxChunkChars` 才真的切。
+ * 还有两条保护：紧跟缩进续行（列表项的第二段）时不切，避免把同一列表项劈成两棵树；围栏
+ * 未闭合时一直留在同一块（未完成的代码块因此始终可读，不会因为增量而被拆散）。
+ *
+ * 返回的每一块都是原文字串，拼接后与原文逐字一致（不丢换行、不改内容）。
+ */
+export function splitMarkdownSource(
+  value: string,
+  maxChunkChars: number = MARKDOWN_CHUNK_CHARS,
+): readonly string[] {
+  if (value.length === 0) return [];
+  const lines = value.split("\n");
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let size = 0;
+  let fence: string | null = null;
+
+  const flush = (): void => {
+    if (current.length === 0) return;
+    chunks.push(current.join("\n"));
+    current = [];
+    size = 0;
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trimStart();
+    const fenceMatch = /^(`{3,}|~{3,})/.exec(trimmed);
+    if (fence === null) {
+      if (fenceMatch !== null) fence = fenceMatch[1] ?? null;
+    } else if (
+      fenceMatch !== null &&
+      fenceMatch[1]?.[0] === fence[0] &&
+      (fenceMatch[1]?.length ?? 0) >= fence.length
+    ) {
+      fence = null;
+    }
+
+    current.push(line);
+    size += line.length + 1;
+
+    if (fence !== null || trimmed.length !== 0 || size < maxChunkChars) continue;
+    // 空行是候选切点：下一行若缩进（列表项续段）或当前块里围栏刚关闭，都继续留在同一块。
+    const next = nextNonBlankLine(lines, index + 1);
+    if (next !== null && /^[ \t]/.test(next)) continue;
+    flush();
+  }
+  flush();
+  return chunks;
+}
+
+/** 从 `start` 起找第一条非空行（返回它的原文；没有则 `null`）。 */
+function nextNonBlankLine(lines: readonly string[], start: number): string | null {
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (line.trim().length > 0) return line;
+  }
+  return null;
 }
 
 /** 渲染上下文：一次渲染内共享的样式、回调与代码块计数器。 */
@@ -72,6 +153,14 @@ interface RenderContext {
   readonly styles: MarkdownStyles;
   readonly onLinkPress: ((href: string) => void) | undefined;
   readonly onCopyCode: ((code: string, language: string) => void) | undefined;
+  /**
+   * 打开一个**工作目录内**的相对路径（行内代码里出现的路径）。
+   *
+   * 只在该路径通过 `isMarkdownFilePath`（合法相对路径形状 + 无空白 + 含 `/` 或扩展名）时成为
+   * 可点控件；`npm test`、`true`、`useState` 这类命令与标识符保持纯文本——本组件不猜路径、
+   * 不规范化、也不打开工作目录外的目标。
+   */
+  readonly onFilePathPress: ((path: string) => void) | undefined;
   readonly codeIndex: { next: number };
 }
 
@@ -415,12 +504,32 @@ function renderInline(raw: Token, key: string, ctx: RenderContext): ReactNode {
         </Text>
       );
 
-    case "codespan":
+    case "codespan": {
+      // 工作目录内的文件路径联动：只有通过 `isMarkdownFilePath` 的文本才是可点控件；
+      // 其他行内代码（命令、标识符、绝对路径、含 `..`/冒号的目标）保持纯文本，本组件不猜路径。
+      const path = ctx.onFilePathPress;
+      const asPath = path !== undefined && isMarkdownFilePath(token.text);
       return (
-        <Text key={key} style={styles.codespan} dataSet={{ markdownCodespan: "true" }}>
+        <Text
+          key={key}
+          style={styles.codespan}
+          dataSet={{
+            markdownCodespan: "true",
+            ...(asPath ? { markdownFilePath: token.text } : {}),
+          }}
+          {...(asPath
+            ? {
+                role: "link" as const,
+                onPress: () => {
+                  path(token.text);
+                },
+              }
+            : {})}
+        >
           {token.text}
         </Text>
       );
+    }
 
     case "br":
       return <Text key={key}>{"\n"}</Text>;
@@ -488,16 +597,55 @@ function renderInline(raw: Token, key: string, ctx: RenderContext): ReactNode {
   }
 }
 
-/** 一段 Agent 产出的 Markdown。 */
-export function Markdown({ value, onLinkPress, onCopyCode }: MarkdownProps): ReactElement {
+/**
+ * 一段 Agent 产出的 Markdown。
+ *
+ * 长输出按 {@link splitMarkdownSource} 切块：每块按**它自己的源码**缓存词法结果，增量只让最后
+ * 一块失效，因此流式追加不会每次全量重新解析。渲染默认只挂末尾 {@link MARKDOWN_VISIBLE_CHUNKS}
+ * 块，更早内容由用户显式展开（不一次构建整棵视图树）。缓存只在本次挂载内有效，抹掉它不会影响
+ * 任何语义（下次重新词法分析即可）。
+ */
+export function Markdown({ value, onLinkPress, onCopyCode, onFilePathPress }: MarkdownProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  // 源码分块 → 词法结果。键是块的**原文**：流式输出中前面的块不变，命中缓存。
+  const [cache] = useState(() => new Map<string, readonly Token[]>());
+  const [extraChunks, setExtraChunks] = useState(0);
+  const chunks = splitMarkdownSource(value ?? "");
+  const visibleCount = Math.min(chunks.length, MARKDOWN_VISIBLE_CHUNKS + extraChunks);
+  const hiddenCount = chunks.length - visibleCount;
+  const visible = visibleCount === 0 ? [] : chunks.slice(hiddenCount);
+
+  const lexChunk = (source: string): readonly Token[] => {
+    const cached = cache.get(source);
+    if (cached !== undefined) return cached;
+    const tokens = lexer(source, { gfm: true });
+    // 缓存的不是无限增长：超过源码块数的两倍就丢掉最早的一批（长输出只会淘汰已滚出视野的块）。
+    if (cache.size > chunks.length * 2 && cache.size > 32) cache.clear();
+    cache.set(source, tokens);
+    return tokens;
+  };
+
   // 代码块序号只在这一次渲染里有意义，因此放在渲染上下文里而不是模块作用域（保持纯函数）。
-  const ctx: RenderContext = { styles, onLinkPress, onCopyCode, codeIndex: { next: 0 } };
+  const ctx: RenderContext = { styles, onLinkPress, onCopyCode, onFilePathPress, codeIndex: { next: 0 } };
 
   return (
     <View style={styles.root} dataSet={{ markdown: "true" }}>
-      {renderBlocks(lexer(value ?? "", { gfm: true }), "md", ctx)}
+      {hiddenCount === 0 ? null : (
+        <Text
+          role="button"
+          style={styles.omitted}
+          dataSet={{ markdownChunks: String(chunks.length), markdownChunksHidden: String(hiddenCount) }}
+          onPress={() => {
+            setExtraChunks((current) => current + MARKDOWN_VISIBLE_CHUNKS);
+          }}
+        >
+          {`… 还有 ${String(hiddenCount)} 段更早内容未展开（点击显示）`}
+        </Text>
+      )}
+      {visible.map((source, index) =>
+        renderBlocks(lexChunk(source), `md.${String(hiddenCount + index)}`, ctx),
+      )}
     </View>
   );
 }

@@ -11,6 +11,7 @@ members = [
     "crates/node-link-protocol",
     "crates/acp-protocol",
     "crates/agent-host",
+    "crates/node-link-client",
     "crates/server",
     "crates/app",
 ]
@@ -89,7 +90,7 @@ windows-dpapi = "0.2"
 clap = { version = "4.6", features = ["derive"] }
 # `config origin` 的只读网卡枚举：`if-addrs` 0.14（MIT OR BSD-3-Clause）是跨平台 getifaddrs 包装，只返回接口地址，
 # 不启动网络、不解析主机名；`config origin` 是唯一消费点，启动路径不依赖它。
-if-addrs = "0.15"
+if-addrs = "0.14"
 # `app` 读 CONFIG_REFERENCE.md 的配置文件（只读，不回写，因此不引入 toml_edit）。
 toml = "1.1"
 # 单实例锁的 OS advisory 文件锁：unix 走 `flock`、Windows 走 `LockFileEx`，公开 API 只有独占锁 +
@@ -117,10 +118,22 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 # 同理，`tokio-rustls` 的默认 feature 会经 `rustls/aws_lc_rs` 把 provider 拉回 aws-lc-rs（feature 是加法的，
 # 只关 rustls 一边的默认值不够），因此这里也关默认 feature、只开 `ring`。
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+# WebSocket 客户端（`node-link-client` 的出站连接）：只开 `handshake`——本仓库的客户端自己完成 TCP、
+# TLS 与 HTTP upgrade，`connect`/`native-tls`/`rustls-tls-*` 都不启用，因此不存在「由 crate 隐式选择
+# 信任锚」的路径（TLS 信任锚由调用方注入，见 `node-link-client` 的 `TlsTrust`）。
+# 版本与 `axum` 的 `ws` 解析到的节点相同（`cargo tree` 里已是同一份 0.29），不新增传递依赖节点；
+# 许可证 MIT，MSRV 1.63 ≤ 本仓库 MSRV。
+tokio-tungstenite = { version = "0.29", default-features = false }
 # PEM 解析用 rustls 家族自己的 `pem` 模块（`rustls_pki_types::pem::PemObject`）：design.md D1 列的候选
 # `rustls-pemfile 2` 已被上游归档（GitHub archived，README 明确指向本模块），因此改登记它的后继 API；
 # 该 crate 本就是 rustls 的传递依赖，不引入新的传递依赖（旧接口与其 `base64` 依赖都绕开了）。
 rustls-pki-types = { version = "1", features = ["std"] }
+# Access 侧出站 TLS 的**系统根**来源（`node-link-client` 只接受显式信任锚，不自行读平台存储；组合根在
+# `app::trust` 里把系统根 + 可选自定义 CA 合并后注入）。选型：`rustls-native-certs 0.8` 是 rustls 官方
+# 组织的平台根读取实现（Windows 走 `schannel`，Unix 走 PEM 目录），MIT/Apache-2.0，MSRV ≤ 1.85；
+# 它只读取**证书**，不建立连接、不跳过校验。落选候选 `webpki-roots` 是一份随 crate 发布的静态根集合，
+# 会把信任锚变成「编译期快照」，与「使用操作系统信任」这一决策冲突。
+rustls-native-certs = "0.8"
 # WebSocket 读写半边拆分（`session-write-deadline` 变更 WP1；消费方是 `server::transport::net::ws` 的
 # `WsConnection::split`，设计见 `crates/server/src/node_link/conn/session.rs` 模块文档「写路径与写任务」）：
 # 只用到 `StreamExt::split`，把一条 `WebSocket` 拆成可分别 poll 的 `SplitSink`/`SplitStream`，好让写半边

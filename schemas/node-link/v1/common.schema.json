@@ -120,9 +120,10 @@
     "catalogSession": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sessionId", "agentId", "state", "version", "createdAt", "workspaceDirectoryId"],
+      "required": ["sessionId", "originEpoch", "agentId", "state", "version", "createdAt", "workspaceDirectoryId"],
       "properties": {
         "sessionId": { "$ref": "#/$defs/uuid" },
+        "originEpoch": { "$ref": "#/$defs/uuid" },
         "agentId": { "$ref": "#/$defs/agentId" },
         "state": { "$ref": "#/$defs/sessionState" },
         "version": { "$ref": "#/$defs/decimalString" },
@@ -199,6 +200,19 @@
         "nodelink.command.idempotency_conflict",
         "nodelink.command.unsupported_field",
         "nodelink.command.uncertain",
+        "nodelink.attachment.negotiation_required",
+        "nodelink.attachment.transfer_not_found",
+        "nodelink.attachment.binding_mismatch",
+        "nodelink.attachment.offset_mismatch",
+        "nodelink.attachment.chunk_conflict",
+        "nodelink.attachment.digest_mismatch",
+        "nodelink.attachment.sealed",
+        "nodelink.attachment.budget_exhausted",
+        "nodelink.attachment.expired",
+        "nodelink.attachment.revoked",
+        "nodelink.media.unavailable",
+        "nodelink.interaction.unavailable",
+        "nodelink.interaction.version_conflict",
         "nodelink.internal.unavailable"
       ]
     },

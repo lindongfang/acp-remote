@@ -25,6 +25,7 @@
 //! 唯一权威：`docs/NODE_LINK_PROTOCOL.md` §13（配对 HTTP）与 §2.5（固定限流），行为范围以
 //! `openspec/changes/archive/2026-09-27-node-link-owner/specs/node-link-pairing-http/spec.md` 的 R19–R35 为准。
 
+pub mod attachments;
 pub mod catalog;
 pub mod command;
 pub mod conn;
@@ -88,5 +89,13 @@ impl MessageRoute for Routes {
             }
         }
         RouteOutcome::Unclaimed
+    }
+
+    fn on_authenticated(&self, session: &conn::ConnectionHandle, features: &[String]) {
+        // 本次协商结果的唯一交接点：一个不落地转发给每个子路由（漏转发不会报错，只会让门控静默取到
+        // 空集——失败关闭的方向，但那是静默的能力缺失，所以这里按「一个不落」实现）。
+        for part in &self.parts {
+            part.on_authenticated(session, features);
+        }
     }
 }

@@ -92,7 +92,17 @@ fn tls_direct_terminates_the_same_handshake() {
         // ③ WSS（TLS 之上）完成同一握手，并取回一份 catalog 快照。
         let mut client =
             NodeLinkClient::connect_tls(owner.addr, std::sync::Arc::clone(&config)).await;
-        support::nodelink::handshake(&mut client, &access, &ticket, &client_nonce).await;
+        // 协商结果（`node.challenge.selectedFeatures`）由 helper 挂在返回值上：保留它作为后可断言的输入。
+        let ready =
+            support::nodelink::handshake(&mut client, &access, &ticket, &client_nonce).await;
+        assert!(
+            ready["selectedFeatures"]
+                .as_array()
+                .is_some_and(|selected| selected
+                    .iter()
+                    .any(|feature| feature.as_str() == Some("node-link.core.v1"))),
+            "核心 feature 必须被选中"
+        );
         client
             .send("catalog.subscribe", json!({ "knownRevision": null }))
             .await;

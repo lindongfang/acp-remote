@@ -65,14 +65,17 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use acp_core::model::{
-    Actor, AgentId, AgentRef, ClientCommand, CommandKind, CommandPayload as CorePayload,
-    CommandReceipt, CommandRecord, CommandStatus as CoreStatus, ConfigOptionId,
-    ConfigValue as CoreConfigValue, CreateSessionRequest, DirectoryId,
+    Actor, AgentId, AgentRef, AttachmentId, ClientCommand, CommandKind,
+    CommandPayload as CorePayload, CommandReceipt, CommandRecord, CommandStatus as CoreStatus,
+    ConfigOptionId, ConfigValue as CoreConfigValue, CreateSessionRequest, Digest, DirectoryId,
     ElicitationAction as CoreElicitationAction, ElicitationValues, EntityRef, InteractionId,
-    ModeId, NodeId, PortError, PromptContentBlock, ReadInclude, RequestId as CoreRequestId,
-    ResourceOrigin, SessionId, Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
+    MessageId, ModeId, NodeId, PortError, PromptContentBlock, ReadInclude,
+    RequestId as CoreRequestId, ResourceOrigin, Sequence, SessionId, SubmissionId,
+    Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
 };
-use acp_core::ports::{PreparedSessionCreate, SessionCreateAdmission, SessionQuery};
+use acp_core::ports::{
+    HistoryInclude, MessageCursor, PreparedSessionCreate, SessionCreateAdmission, SessionQuery,
+};
 use acp_core::use_cases::{NodeLinkCatalogView, UseCases};
 use identity_auth::Authority;
 use node_link_protocol::catalog::NodeTrustRevoked;
@@ -92,7 +95,12 @@ use serde::de::DeserializeOwned;
 use sha2::{Digest as _, Sha256};
 use tracing::{debug, info, warn};
 
+use crate::attachment_transfer::{
+    AttachmentBinding, Fault as AttachmentFault, Subject as AttachmentSubject,
+    verify_prompt_bindings,
+};
 use crate::command_log::{self, Cause, Subject, TerminalClass};
+use crate::node_link::attachments::ATTACHMENT_FEATURE;
 use crate::node_link::conn::{
     ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close,
 };
@@ -102,6 +110,18 @@ use crate::transport::net::{RateLimit, Shutdown, SlidingWindowLimiter};
 
 /// 单连接命令速率（§2.5：120 次/分钟，固定常量、不可配置）。
 pub const COMMANDS_PER_MINUTE: u32 = 120;
+
+/// `session.read` 的 `pending_interactions` 返回完整有效请求的 feature（§11.3/§12.10）。
+const PENDING_INTERACTIONS_FEATURE: &str = "node-link.pending-interactions.v1";
+
+/// `session.read` 的 `history`/`beforeHistory` 与消息分页参数 feature（§11.3/§12.7）。
+const REMOTE_HISTORY_FEATURE: &str = "node-link.remote-history.v1";
+
+/// 类型化媒体（消息通道、媒体引用、部分结果）的 feature（§11.3/§11.4）。
+const TYPED_MEDIA_FEATURE: &str = "node-link.typed-media.v1";
+
+/// ACP 原文随事件/历史下发的 feature（§11.3）。
+const RAW_ACP_FEATURE: &str = "node-link.raw-acp.v1";
 
 /// 命令限流的窗口（§2.5 的固定 1 分钟）。
 pub const COMMAND_WINDOW: Duration = Duration::from_secs(60);
@@ -131,6 +151,10 @@ struct ConnectionState {
     limiter: SlidingWindowLimiter,
     consecutive_rate_limited: u32,
     pending: Vec<PendingCommand>,
+    /// 本次协商出的 feature（`node.challenge.selectedFeatures` 的同值）：命令面据此判定
+    /// `submissionId`/`attachment_ref` 是否被协商（§11.3/§12.7）。经
+    /// [`MessageRoute::on_authenticated`] 一次性交接。
+    features: Vec<String>,
 }
 
 /// 待观察终态的 mutation。
@@ -240,7 +264,7 @@ impl CommandRoute {
         let Some(submit) = decode::<CommandSubmit>(message) else {
             return self.reject_schema(handle, message, "the command does not match the v1 schema");
         };
-        if !self.admit_rate(handle) {
+        if !self.admit_rate(handle, message) {
             return RouteOutcome::Claimed;
         }
         match submit.command {
@@ -271,7 +295,7 @@ impl CommandRoute {
         let Some(status) = decode::<WireStatusBody>(message) else {
             return self.reject_schema(handle, message, "the command.status body is invalid");
         };
-        if !self.admit_rate(handle) {
+        if !self.admit_rate(handle, message) {
             return RouteOutcome::Claimed;
         }
         self.on_status(handle, message, &status.target_request_id)
@@ -363,6 +387,16 @@ impl CommandRoute {
                 return outcome;
             }
         }
+        let actor = node_actor(handle.node_id());
+        // §12.7/§11.3：`submissionId` 与 `attachment_ref` 只在协商 `node-link.attachment-transfer.v1` 后
+        // 接受，且必须绑定到本节点连接上已封存的清单。判定在 core 的任何派发之前。
+        let prompt_submission = match self
+            .check_prompt_attachments(handle, message, submit, target.as_ref())
+            .await
+        {
+            Ok(submission) => submission,
+            Err(outcome) => return outcome,
+        };
         let payload = match core_payload(command, submit) {
             Ok(payload) => payload,
             Err(reason) => return self.reject_schema(handle, message, reason),
@@ -370,7 +404,7 @@ impl CommandRoute {
         if payload.family() == CommandKind::Query {
             return self.on_query(handle, message, submit, command).await;
         }
-        if !self.admit_in_flight(handle).await {
+        if !self.admit_in_flight(handle, message).await {
             return RouteOutcome::Claimed;
         }
         // 幂等键与持久化记录都以 core 的 `RequestId` 为准（wire 的 `requestId` 是同一 uuid 文本）。
@@ -393,7 +427,6 @@ impl CommandRoute {
             },
             None => None,
         };
-        let actor = node_actor(handle.node_id());
         let client_command = ClientCommand {
             actor: actor.clone(),
             request: request.clone(),
@@ -404,7 +437,32 @@ impl CommandRoute {
             request_fingerprint: fingerprint,
             payload,
         };
-        let receipt = match self.core.submit_command(&actor, client_command).await {
+        // 带已封存清单的 prompt 必须走整批附件的原子绑定入口（与 Sync 同一路径）：`submissionId` 被静默
+        // 丢弃会让消息与附件清单脱钩，客户端以为绑定成功、Agent 却看不到附件。正文先取出，避免把
+        // `client_command` 移进 core 时仍被 `&payload` 借用。
+        let prompt_content = if prompt_submission.is_some() {
+            match &client_command.payload {
+                CorePayload::Prompt { content } => Some(content.clone()),
+                _ => {
+                    return self.reject_schema(
+                        handle,
+                        message,
+                        "submissionId is only accepted on session.prompt",
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        let receipt = match (prompt_submission, prompt_content) {
+            (Some(submission), Some(content)) => {
+                self.core
+                    .submit_prompt_with_submission(&actor, client_command, content, submission)
+                    .await
+            }
+            _ => self.core.submit_command(&actor, client_command).await,
+        };
+        let receipt = match receipt {
             Ok(receipt) => receipt,
             Err(error) => return self.port_fault(handle, message, &error),
         };
@@ -493,7 +551,17 @@ impl CommandRoute {
                     Err(error) => return self.port_fault(handle, message, &error),
                 }
             }
-            // 其余三个查询的 wire 结果形状属 Access facade 的正文路径（见模块文档）：显式回不支持，
+            CommandName::SessionRead => {
+                let WirePayload::SessionRead(read) = &submit.payload else {
+                    return self.reject_schema(
+                        handle,
+                        message,
+                        "the session.read payload is not the session read payload",
+                    );
+                };
+                return self.on_session_read(handle, message, submit, read).await;
+            }
+            // 其余两个查询的 wire 结果形状属 Access facade 的正文路径（见模块文档）：显式回不支持，
             // 不返回被裁剪的结果。
             _ => {
                 debug!(
@@ -526,6 +594,327 @@ impl CommandRoute {
         };
         let _ = handle.send(MessageType::CommandTerminal, &body);
         RouteOutcome::Claimed
+    }
+
+    /// `session.read`：owned 会话的正文、结构化历史、有效待处理交互与配置项（§12.7/§12.10）。
+    ///
+    /// 只调用 core 的用例读面（经共享投影 [`crate::session_read`]），不调用 `server::sync`。旧 peer 的
+    /// 请求（没有 `history`/`beforeHistory`/`before`/`limit`）与新 feature 的连接走同一入口，差别只在
+    /// feature 门控与 `SessionReadRequest` 的布尔字段；未协商的新字段一律显式拒绝，不静默忽略。
+    async fn on_session_read(
+        &self,
+        handle: &ConnectionHandle,
+        message: &Envelope,
+        submit: &CommandSubmit,
+        read: &node_link_protocol::command::SessionRead,
+    ) -> RouteOutcome {
+        let target = match self.session_target(handle, message, submit) {
+            Ok(target) => target,
+            Err(outcome) => return outcome,
+        };
+        let features = lock(&self.states)
+            .get(handle.connection_id().as_str())
+            .map(|state| state.features.clone())
+            .unwrap_or_default();
+        let has = |feature: &str| features.iter().any(|entry| entry == feature);
+        let includes = read.include.as_slice();
+        let wants_history = includes
+            .iter()
+            .any(|item| matches!(item, node_link_protocol::command::IncludeResource::History));
+        let wants_pending = includes.iter().any(|item| {
+            matches!(
+                item,
+                node_link_protocol::command::IncludeResource::PendingInteractions
+            )
+        });
+        if (wants_history
+            || read.before_history.is_some()
+            || read.before.is_some()
+            || read.limit.is_some())
+            && !has(REMOTE_HISTORY_FEATURE)
+        {
+            let field = if read.before.is_some() {
+                "before"
+            } else if read.limit.is_some() {
+                "limit"
+            } else if read.before_history.is_some() {
+                "beforeHistory"
+            } else {
+                "history"
+            };
+            return self.reject_field(handle, CommandName::SessionRead, &submit.request_id, field);
+        }
+        if wants_pending && !has(PENDING_INTERACTIONS_FEATURE) {
+            return self.reject_field(
+                handle,
+                CommandName::SessionRead,
+                &submit.request_id,
+                "pending_interactions",
+            );
+        }
+        if includes.iter().any(|item| {
+            matches!(
+                item,
+                node_link_protocol::command::IncludeResource::Turns
+                    | node_link_protocol::command::IncludeResource::Capabilities
+            )
+        }) {
+            return self.reject_code(
+                handle,
+                CommandName::SessionRead,
+                &submit.request_id,
+                "nodelink.command.unsupported",
+            );
+        }
+        if read.limit == Some(0) {
+            return self.reject_schema(handle, message, "limit must be at least 1");
+        }
+        let include = HistoryInclude {
+            messages: includes
+                .iter()
+                .any(|item| matches!(item, node_link_protocol::command::IncludeResource::Messages)),
+            turns: false,
+            pending_interactions: wants_pending,
+            config_options: includes.iter().any(|item| {
+                matches!(
+                    item,
+                    node_link_protocol::command::IncludeResource::ConfigOptions
+                )
+            }),
+            capabilities: false,
+            history: wants_history,
+        };
+        let before_history = match read.before_history.as_ref() {
+            Some(value) => match value.as_str().parse::<u64>() {
+                Ok(value) => match Sequence::new(value) {
+                    Ok(sequence) => Some(sequence),
+                    Err(_) => {
+                        return self.reject_schema(
+                            handle,
+                            message,
+                            "beforeHistory is not a decimal sequence",
+                        );
+                    }
+                },
+                Err(_) => {
+                    return self.reject_schema(
+                        handle,
+                        message,
+                        "beforeHistory is not a decimal sequence",
+                    );
+                }
+            },
+            None => None,
+        };
+        let before_messages = match read.before.as_ref() {
+            Some(before) => Some(MessageCursor {
+                created_at: match CoreTimestamp::new(before.created_at.as_str()) {
+                    Ok(at) => at,
+                    Err(_) => {
+                        return self.reject_schema(
+                            handle,
+                            message,
+                            "before.createdAt is not a timestamp",
+                        );
+                    }
+                },
+                message_id: match MessageId::new(before.message_id.as_str()) {
+                    Ok(message_id) => message_id,
+                    Err(_) => {
+                        return self.reject_schema(
+                            handle,
+                            message,
+                            "before.messageId is not a message id",
+                        );
+                    }
+                },
+            }),
+            None => None,
+        };
+        let page_limit = read
+            .limit
+            .map(|limit| u32::try_from(limit).unwrap_or(crate::session_read::MAX_PAGE_MESSAGES))
+            .unwrap_or(crate::session_read::DEFAULT_PAGE_MESSAGES);
+        let request = crate::session_read::SessionReadRequest {
+            session: target.session.clone(),
+            include,
+            before_history,
+            before_messages,
+            page_limit,
+            typed_media: has(TYPED_MEDIA_FEATURE),
+            negotiate_acp: has(RAW_ACP_FEATURE),
+            // Node Link 没有 `core.file-diff.v1`；事件视图按共享合同原样下发。
+            negotiate_file_diff: true,
+        };
+        let outcome = match crate::session_read::read_session(
+            self.core.as_ref(),
+            &node_actor(handle.node_id()),
+            request,
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(fault) => return self.session_read_fault(handle, message, submit, fault),
+        };
+        let result = match outcome {
+            crate::session_read::SessionReadOutcome::Owned(result) => result,
+            crate::session_read::SessionReadOutcome::Imported(_) => {
+                // 第一阶段禁止再次导出 imported 资源（`NODE_LINK_PROTOCOL.md` §12.4）。
+                return self.reject_code(
+                    handle,
+                    CommandName::SessionRead,
+                    &submit.request_id,
+                    "nodelink.command.unsupported",
+                );
+            }
+        };
+        let text = match serde_json::to_string(&result) {
+            Ok(text) => text,
+            Err(_) => return self.port_fault(handle, message, &clock_fault()),
+        };
+        let object = match RawObject::parse(&text) {
+            Ok(object) => object,
+            Err(_) => return self.port_fault(handle, message, &clock_fault()),
+        };
+        let body = CommandTerminal {
+            request_id: submit.request_id.clone(),
+            command: CommandName::SessionRead,
+            terminal: Terminal {
+                status: TerminalStatus::Completed,
+                terminal_at: match wire_timestamp(&self.clock()) {
+                    Some(at) => at,
+                    None => return self.port_fault(handle, message, &clock_fault()),
+                },
+                terminal_event_id: Nullable::null(),
+                result: Nullable::value(node_link_protocol::command::CommandResultPayload::Object(
+                    object,
+                )),
+                error: Nullable::null(),
+            },
+        };
+        let _ = handle.send(MessageType::CommandTerminal, &body);
+        RouteOutcome::Claimed
+    }
+
+    /// `session.read` 的共享投影失败 → wire 拒绝（不把「不可读」伪装成空页）。
+    fn session_read_fault(
+        &self,
+        handle: &ConnectionHandle,
+        message: &Envelope,
+        submit: &CommandSubmit,
+        fault: crate::session_read::SessionReadFault,
+    ) -> RouteOutcome {
+        use crate::session_read::SessionReadFault;
+        match fault {
+            SessionReadFault::Port(error) => self.port_fault(handle, message, &error),
+            SessionReadFault::Schema(text) => self.reject_schema(handle, message, text),
+            SessionReadFault::CursorExpired => self.send_rejected(
+                handle,
+                CommandName::SessionRead,
+                &submit.request_id,
+                &error_info("nodelink.command.unsupported"),
+                RawObject::empty(),
+            ),
+            SessionReadFault::TooLarge(_) | SessionReadFault::Internal(_) => self.reject_code(
+                handle,
+                CommandName::SessionRead,
+                &submit.request_id,
+                "nodelink.internal.unavailable",
+            ),
+        }
+    }
+
+    ///
+    /// 与 Sync 面同一套判定（各自拿自己的 wire DTO）：
+    ///
+    /// 1. 出现 `attachment_ref`（或 `submissionId`）时本连接必须协商 `node-link.attachment-transfer.v1`，
+    ///    否则回 `nodelink.attachment.negotiation_required`；
+    /// 2. `attachment_ref` 必须携带 `submissionId`，缺了回 `nodelink.protocol.schema_invalid`；
+    /// 3. 清单必须**已封存**、属于本会话与本已认证节点，且每个引用逐块匹配
+    ///    [`verify_prompt_bindings`]，否则回 `nodelink.attachment.binding_mismatch`。
+    ///
+    /// 判定通过后调用方必须走 `UseCases::submit_prompt_with_submission`（整批附件的原子绑定），不能退回
+    /// 普通 `submit_command` 而把 `submissionId` 丢掉。
+    async fn check_prompt_attachments(
+        &self,
+        handle: &ConnectionHandle,
+        message: &Envelope,
+        submit: &CommandSubmit,
+        target: Option<&SessionTarget>,
+    ) -> Result<Option<SubmissionId>, RouteOutcome> {
+        let WirePayload::SessionPrompt(prompt) = &submit.payload else {
+            return Ok(None);
+        };
+        let bindings = match prompt_attachments(prompt) {
+            Ok(bindings) => bindings,
+            Err(reason) => return Err(self.reject_schema(handle, message, reason)),
+        };
+        let submission = match prompt.submission_id.as_ref() {
+            Some(id) => Some(SubmissionId::new(id.as_str()).map_err(|_| {
+                self.reject_schema(handle, message, "the submissionId is not a submission id")
+            })?),
+            None => None,
+        };
+        if bindings.is_empty() && submission.is_none() {
+            return Ok(None);
+        }
+        let negotiated = lock(&self.states)
+            .get(handle.connection_id().as_str())
+            .is_some_and(|state| {
+                state
+                    .features
+                    .iter()
+                    .any(|feature| feature == ATTACHMENT_FEATURE)
+            });
+        if !negotiated {
+            return Err(self.send_and_claim(
+                handle,
+                ErrorCode::AttachmentNegotiationRequired,
+                "the connection did not negotiate node-link.attachment-transfer.v1",
+                Some(message.message_id()),
+            ));
+        }
+        let Some(submission) = submission else {
+            return Err(self.reject_schema(
+                handle,
+                message,
+                "an attachment_ref requires a submissionId",
+            ));
+        };
+        let Some(target) = target else {
+            return Err(self.reject_schema(
+                handle,
+                message,
+                "session.prompt requires a sessionRef",
+            ));
+        };
+        let subject = AttachmentSubject::Node(handle.node_id().as_str().to_owned());
+        let Some(store) = self.core.attachment_transfers().cloned() else {
+            // 没有装配附件端口却协商了 feature：接线错误，失败关闭。
+            return Err(self.send_and_claim(
+                handle,
+                ErrorCode::InternalUnavailable,
+                "the attachment store is not assembled",
+                Some(message.message_id()),
+            ));
+        };
+        match verify_prompt_bindings(&store, &subject, &target.session, &submission, &bindings)
+            .await
+        {
+            Ok(()) => Ok(Some(submission)),
+            Err(AttachmentFault::BindingMismatch) => Err(self.send_and_claim(
+                handle,
+                ErrorCode::AttachmentBindingMismatch,
+                "the attachment reference is not bound to this submission",
+                Some(message.message_id()),
+            )),
+            Err(_) => Err(self.send_and_claim(
+                handle,
+                ErrorCode::InternalUnavailable,
+                "the attachment binding cannot be verified",
+                Some(message.message_id()),
+            )),
+        }
     }
 
     /// `session.list`：已配对节点看到本机全部会话，不按 Export/授权集合过滤。
@@ -641,7 +1030,7 @@ impl CommandRoute {
             Ok(None) => {}
             Err(error) => return self.port_fault(handle, message, &error),
         }
-        if !self.admit_in_flight(handle).await {
+        if !self.admit_in_flight(handle, message).await {
             return RouteOutcome::Claimed;
         }
         // ④ 先回 `accepted(result = null)`，创建完成后发 `terminal`（两者连续入队）。
@@ -1049,7 +1438,7 @@ impl CommandRoute {
             Ok(None) => {}
             Err(error) => return self.port_fault(handle, message, &error),
         }
-        if !self.admit_in_flight(handle).await {
+        if !self.admit_in_flight(handle, message).await {
             return RouteOutcome::Claimed;
         }
         // ⑤ 先回 `accepted(result = null)`，恢复完成后发 `terminal`（两者连续入队）。
@@ -1586,7 +1975,10 @@ impl CommandRoute {
     // -----------------------------------------------------------------------------------------
 
     /// 命令限流（§2.5：单连接 120/分钟 + 连续超限 4429）。返回 `false` 表示本次命令已被拒绝。
-    fn admit_rate(&self, handle: &ConnectionHandle) -> bool {
+    ///
+    /// `link.error.correlationId` 必须指回被拒帧的 `messageId`：拒绝有明确的关联请求，Access 据此
+    /// 立即结清该命令（明确未执行，不产生 uncertain），而不是等超时。
+    fn admit_rate(&self, handle: &ConnectionHandle, message: &Envelope) -> bool {
         let mut states = lock(&self.states);
         let state = states
             .entry(handle.connection_id().as_str().to_owned())
@@ -1613,7 +2005,7 @@ impl CommandRoute {
                     ErrorCode::ResourceRateLimited,
                     "the command rate limit was exceeded",
                     rate_limit_details(retry_after),
-                    None,
+                    Some(message.message_id()),
                 );
                 if close_now {
                     handle.request_close(close::RATE_LIMITED, "command rate limit exceeded");
@@ -1626,7 +2018,7 @@ impl CommandRoute {
     /// 单连接 in-flight 上限（§2.5：默认 32，只算已接受但未终结的 mutation）。
     ///
     /// 先摘掉已经终结的观察项（每条最多一次 `command_status` 读），再看是否已满；因此该表恒不超过上限。
-    async fn admit_in_flight(&self, handle: &ConnectionHandle) -> bool {
+    async fn admit_in_flight(&self, handle: &ConnectionHandle, message: &Envelope) -> bool {
         let limit = handle.limits().max_in_flight_commands() as usize;
         let pending = self.pending_of(handle);
         if pending.len() < limit {
@@ -1669,7 +2061,7 @@ impl CommandRoute {
             ErrorCode::ResourceRateLimited,
             "the in-flight command limit was reached",
             rate_limit_details(IN_FLIGHT_RETRY_AFTER),
-            None,
+            Some(message.message_id()),
         );
         false
     }
@@ -1688,6 +2080,7 @@ impl CommandRoute {
             limiter: SlidingWindowLimiter::new(COMMANDS_PER_MINUTE, COMMAND_WINDOW),
             consecutive_rate_limited: 0,
             pending: Vec::new(),
+            features: Vec::new(),
         }
     }
 
@@ -1928,6 +2321,15 @@ impl MessageRoute for CommandRoute {
             MessageType::CommandStatus => self.on_standalone_status(session, message).await,
             _ => RouteOutcome::Unclaimed,
         }
+    }
+
+    /// 认证后交接本连接的协商结果：后续 `command.submit` 的附件门控只看这一次握手的交集。
+    fn on_authenticated(&self, session: &ConnectionHandle, features: &[String]) {
+        let mut states = lock(&self.states);
+        states
+            .entry(session.connection_id().as_str().to_owned())
+            .or_insert_with(Self::new_state)
+            .features = features.to_vec();
     }
 }
 
@@ -2408,6 +2810,41 @@ fn agent_display_name(view: &NodeLinkCatalogView, agent: &str) -> String {
         .unwrap_or_else(|| agent.to_owned())
 }
 
+/// `session.prompt.content` 里的 `attachment_ref` 声明（协议中立）。
+///
+/// 只读 `node_link_protocol::command::AttachmentRefView`，不重新序列化块。字段转换失败（不可能是解码后
+/// 的合法 wire 值）按形状错误拒绝。
+fn prompt_attachments(
+    prompt: &node_link_protocol::command::SessionPrompt,
+) -> Result<Vec<AttachmentBinding>, &'static str> {
+    let mut bindings = Vec::new();
+    for block in prompt.content.as_slice() {
+        let Some(reference) = block.attachment_ref() else {
+            continue;
+        };
+        let attachment = AttachmentId::new(reference.attachment_id.as_str())
+            .map_err(|_| "the attachmentId is not an attachment id")?;
+        let byte_length = reference
+            .byte_length
+            .as_str()
+            .parse::<u64>()
+            .map_err(|_| "the byteLength is not a decimal string")?;
+        bindings.push(AttachmentBinding {
+            attachment,
+            sha256: wire_digest(reference.sha256)?,
+            byte_length,
+        });
+    }
+    Ok(bindings)
+}
+
+/// 定长 base64url 摘要 → core 的规范摘要文本（校验口径一致，只做编码转换）。
+fn wire_digest(value: &node_link_protocol::common::Base64Url<32>) -> Result<Digest, &'static str> {
+    use base64::Engine as _;
+    let text = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
+    Digest::new(&text).map_err(|_| "the sha256 is not a canonical digest")
+}
+
 /// wire payload → core payload（判别式由 `command` 给出，`node-link-protocol` 已校验形状）。
 fn core_payload(command: CommandName, submit: &CommandSubmit) -> Result<CorePayload, &'static str> {
     let payload = match &submit.payload {
@@ -2423,8 +2860,9 @@ fn core_payload(command: CommandName, submit: &CommandSubmit) -> Result<CorePayl
                     WireInclude::PendingInteractions => ReadInclude::PendingInteractions,
                     WireInclude::ConfigOptions => ReadInclude::ConfigOptions,
                     WireInclude::Capabilities => ReadInclude::Capabilities,
+                    WireInclude::History => ReadInclude::History,
                 })
-                .collect(),
+                .collect::<Vec<_>>(),
         },
         WirePayload::CommandStatus(status) => CorePayload::CommandStatus {
             target_request: core_request(&status.target_request_id)
@@ -2523,4 +2961,36 @@ fn decode<T: DeserializeOwned>(message: &Envelope) -> Option<T> {
 /// 锁中毒时取回内层数据而不是 panic：命令管线在任何 panic 之后仍要能回答与关闭连接。
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `attachment_ref` 块经协议 crate 的字段视图读取：文本块忽略，摘要/长度按声明取值。这是
+    /// `session.prompt` 绑定校验的输入端，字段名因此只由协议 crate 决定。
+    #[test]
+    fn prompt_attachment_refs_are_extracted_from_wire_blocks() {
+        use base64::Engine as _;
+        let sha = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode({
+            use sha2::Digest as _;
+            sha2::Sha256::digest(b"hello")
+        });
+        let attachment = "00000000-0000-4000-8000-000000000123";
+        let prompt: node_link_protocol::command::SessionPrompt = serde_json::from_str(&format!(
+            r#"{{"content":[{{"type":"text","text":"hi"}},{{"type":"attachment_ref",
+                "attachmentId":"{attachment}","mediaType":"text/plain",
+                "byteLength":"5","sha256":"{sha}"}}]}}"#
+        ))
+        .expect("prompt");
+        let bindings = prompt_attachments(&prompt).expect("bindings");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].attachment.as_str(), attachment);
+        assert_eq!(bindings[0].byte_length, 5);
+        assert_eq!(bindings[0].sha256.as_str(), sha);
+
+        let text_only: node_link_protocol::command::SessionPrompt =
+            serde_json::from_str(r#"{"content":[{"type":"text","text":"hi"}]}"#).expect("prompt");
+        assert!(prompt_attachments(&text_only).expect("bindings").is_empty());
+    }
 }

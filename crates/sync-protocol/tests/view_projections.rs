@@ -26,7 +26,9 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// 再追加一条 `session.created` 视图夹具，故为 40。变更
 /// `sync-path-browse-and-diff-delivery`（WP1）又追加两条 `file.changed` 合法视图夹具
 /// （`diffLines` 结构化差异行、`diffUnavailable` 不可用标记），故为 42。
-const EXPECTED_VIEW_CASES: usize = 42;
+/// `conversation-area-complete`（WP1）追加一条 `agent.message.completed` 合法视图夹具
+/// （类型化 `channel`/`partial`），故为 43。
+const EXPECTED_VIEW_CASES: usize = 43;
 /// 被夹具覆盖的**不同** event 类型数，等于 `event-views.schema.json` 的 `$defs` 条目数。
 const EXPECTED_DISTINCT_VIEWS: usize = 34;
 

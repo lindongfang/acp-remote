@@ -26,15 +26,18 @@
  * - **联动到右栏**：时间线上带文件标识的条目与右栏改动清单共用同一个选中值。
  */
 
-import { createElement } from "react";
+import { createElement, useState } from "react";
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { RefreshInteractionsAction } from "./ConversationTimeline";
 import { ConversationStream } from "./index";
 import type { ConversationStreamProps } from "./index";
 import type { ConversationPageModel } from "../features/conversation-model";
 import type { ClientStore } from "../features/client-store";
-import { SESSION_HISTORY_FEATURE } from "../sync-client";
+import type { InteractionAvailability } from "../domain/interaction";
+import { PENDING_INTERACTIONS_FEATURE, SESSION_HISTORY_FEATURE } from "../sync-client";
 import type { StoreFixture } from "../features/testing/fixtures";
 import {
   ONLINE_SESSION_ID,
@@ -798,6 +801,64 @@ describe("对话时间线：授权与提问的可用边界", () => {
     expect([once, always, reject]).not.toContain(future);
   });
 
+  it("协商有效交互后实时请求缺版本：不可应答，授权与提问卡片都给出重新取得入口", () => {
+    const { store: client } = onlineStore({
+      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "running" })] }),
+      features: [SESSION_HISTORY_FEATURE, PENDING_INTERACTIONS_FEATURE],
+    });
+    applyEvent(client, {
+      eventType: "permission.requested",
+      eventId: "dddddddd-0000-4000-8000-00000000020f",
+      globalSequence: "45",
+      view: {
+        interactionId: "perm-noversion",
+        title: "运行 npm test",
+        options: [{ optionId: "allow-once", label: "允许一次", kind: "allow_once" }],
+      },
+    });
+    applyEvent(client, {
+      eventType: "elicitation.requested",
+      eventId: "dddddddd-0000-4000-8000-000000000210",
+      globalSequence: "46",
+      view: { interactionId: "ask-noversion", title: "选一个分支", schema: { type: "object", properties: {} } },
+    });
+
+    const html = renderPage(pageOf(client), { onRefreshInteractions: () => undefined });
+
+    expect(html).toContain('data-interaction-unavailable="request_version_unknown"');
+    expect(html).toContain('data-refresh-interactions-reason="request_version_unknown"');
+    // 两张卡片各有一个刷新入口：版本未知时它是唯一能让卡片变得可应答的动作。
+    expect(html.match(/data-action="refresh-interactions"/g) ?? []).toHaveLength(2);
+    expect(html).toContain("重新取得当前有效请求");
+    // 反例：画出必然被服务端拒绝的应答按钮 → 下面两条变红。
+    expect(html).not.toContain("data-answer-option");
+    expect(html).not.toContain("data-answer-action");
+  });
+
+  it("协商有效交互且实时请求自带版本：直接可应答，不出现版本未知的刷新入口", () => {
+    const { store: client } = onlineStore({
+      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "running" })] }),
+      features: [SESSION_HISTORY_FEATURE, PENDING_INTERACTIONS_FEATURE],
+    });
+    applyEvent(client, {
+      eventType: "permission.requested",
+      eventId: "dddddddd-0000-4000-8000-000000000211",
+      globalSequence: "47",
+      view: {
+        interactionId: "perm-versioned",
+        title: "运行 npm test",
+        options: [{ optionId: "allow-once", label: "允许一次", kind: "allow_once" }],
+        requestVersion: "7",
+      },
+    });
+    const html = renderPage(pageOf(client), { onRefreshInteractions: () => undefined });
+
+    expect(html).toContain('data-interaction-availability="answerable"');
+    expect(html).toContain('data-answer-option="allow-once"');
+    expect(html).not.toContain('data-interaction-unavailable="request_version_unknown"');
+    expect(html).not.toContain('data-refresh-interactions-reason="request_version_unknown"');
+  });
+
   it("仅从历史读到的待处理项：不可操作、有说明、没有应答按钮", () => {
     const { store: client, gateway } = store();
     client.loadSession(ONLINE_SESSION_ID);
@@ -882,7 +943,7 @@ describe("对话时间线：授权与提问的可用边界", () => {
     expect(html).not.toContain('data-answer-option="reject"');
   });
 
-  it("提问请求：三条动作来自模型，表单结构按不可信文本原样呈现", () => {
+  it("提问请求：三条动作来自模型，受支持字段渲染成可填写控件", () => {
     const { store: client } = interactionStore();
     applyEvent(client, {
       eventType: "elicitation.requested",
@@ -892,11 +953,48 @@ describe("对话时间线：授权与提问的可用边界", () => {
     });
     const html = renderPage(pageOf(client));
 
-    expect(html).toContain('data-answer-action="submit"');
-    expect(html).toContain('data-answer-action="decline"');
-    expect(html).toContain('data-answer-action="cancel"');
-    expect(html).toContain('data-elicitation-schema="true"');
-    expect(html).toContain('data-elicitation-values="not-collected"');
+    expect(html).toContain('data-elicitation-form="supported"');
+    expect(html).toContain('data-form-field="branch"');
+    expect(html).toContain('data-form-input="branch"');
+    expect(html).toContain('data-action="submit-elicitation-form"');
+    expect(html).toContain('data-action="decline-elicitation"');
+    expect(html).toContain('data-action="cancel-elicitation"');
+  });
+});
+
+describe("对话时间线：轮次分组", () => {
+  it("同一 turnId 的连续条目进一个组，未归属轮次的条目独立成组", () => {
+    const { store: client } = store();
+    applyEvent(client, {
+      eventType: "turn.started",
+      eventId: "dddddddd-0000-4000-8000-000000000301",
+      globalSequence: "51",
+      view: { turnId: "turn-9", state: "running" },
+    });
+    applyEvent(client, {
+      eventType: "tool.call.started",
+      eventId: "dddddddd-0000-4000-8000-000000000302",
+      globalSequence: "52",
+      view: { toolCallId: "tool-9", turnId: "turn-9", title: "读取 src/b.ts", state: "running" },
+    });
+    applyEvent(client, {
+      eventType: "session.plan.changed",
+      eventId: "dddddddd-0000-4000-8000-000000000303",
+      globalSequence: "53",
+      view: { entries: [{ content: "补充测试", priority: "medium", status: "pending" }] },
+    });
+    const html = renderPage(pageOf(client));
+
+    // 组只来自可靠标识：两条 `turn-9` 同组（计数 2），计划没有标识因此单独成组。
+    const turnGroup = tagContaining(html, 'data-turn-group-id="turn-9"');
+    expect(attributeOf(turnGroup, "data-turn-group-entry-count")).toBe("2");
+    expect(html.match(/data-turn-group-id="turn-9"/g) ?? []).toHaveLength(1);
+    const unassignedGroup = tagContaining(html, 'data-turn-group-id="unassigned"');
+    expect(attributeOf(unassignedGroup, "data-turn-group-entry-count")).toBe("1");
+    // 组内保持发生顺序：turn 卡在工具卡之前。
+    expect(html.indexOf('data-timeline-card="turn"')).toBeLessThan(
+      html.indexOf('data-timeline-card="tool-call"'),
+    );
   });
 });
 
@@ -941,5 +1039,50 @@ describe("对话时间线：降级条目", () => {
     expect(tagContaining(html, 'data-degraded-entry=').startsWith("<li")).toBe(true);
     // 锚点互不冲突：降级条目用自己的锚点，不占用消息的 `data-message-id`。
     expect(dataAttributes(html).some((attribute) => attribute.startsWith('data-degraded-entry='))).toBe(true);
+  });
+});
+
+/**
+ * 同一卡片跨两次渲染的 hook 顺序。
+ *
+ * `renderToStaticMarkup` 单次渲染不保留 hook 链，测不到「提前 return 之后才调用 hook」。这里让
+ * 外层探针在渲染期间用 `useState` 触发 render-phase update：服务端渲染器会在**同一次渲染内**
+ * 复用同一条 hook 链重跑组件，hook 数量一旦变化就抛
+ * "Rendered more hooks than during the previous render"——与客户端复用 fiber 时的约束一致。
+ */
+function rerenderRefreshAction(
+  first: InteractionAvailability,
+  second: InteractionAvailability,
+): string {
+  function Harness(): ReactElement {
+    const [step, setStep] = useState<0 | 1>(0);
+    if (step === 0) setStep(1);
+    const availability = step === 0 ? first : second;
+    return (
+      RefreshInteractionsAction({ availability, onRefreshInteractions: () => undefined }) ?? createElement("span", {
+        "data-refresh-action": "absent",
+      })
+    );
+  }
+  return renderToStaticMarkup(createElement(Harness));
+}
+
+const ANSWERABLE: InteractionAvailability = { kind: "answerable", answers: [] };
+const VERSION_UNKNOWN: InteractionAvailability = { kind: "not_answerable", reason: "request_version_unknown" };
+
+describe("刷新交互入口的 hook 顺序（同一卡片重渲染）", () => {
+  it("刷新成功：版本未知 → 可应答，同一卡片重渲染不抛错且入口消失", () => {
+    const html = rerenderRefreshAction(VERSION_UNKNOWN, ANSWERABLE);
+
+    expect(html).toContain('data-refresh-action="absent"');
+    // 变成可应答后入口必须消失；若 hook 顺序被改回提前 return 之后，这里先抛错。
+    expect(html).not.toContain('data-action="refresh-interactions"');
+  });
+
+  it("可应答 → 版本未知：hook 数量变化由重渲染直接抛错（提前 return 后调用 hook 的反例）", () => {
+    const html = rerenderRefreshAction(ANSWERABLE, VERSION_UNKNOWN);
+
+    expect(html).toContain('data-action="refresh-interactions"');
+    expect(html).toContain('data-refresh-interactions-reason="request_version_unknown"');
   });
 });

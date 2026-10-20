@@ -171,8 +171,8 @@ export interface SocketPort {
    *
    * 为什么协商结果必须经端口读出来：`WebSocket.protocol` 是浏览器暴露这一事实的**唯一**位置——
    * 服务端不选 subprotocol 时升级仍然成功，既没有 error 事件也没有非 1000 的关闭码，因此
-   * 「未选中」与「网络断开」在 socket 层完全同形。判定留给连接层（`SyncConnection.#onOpen`
-   * 拿它与自己声明的列表比对，见 `docs/SYNC_PROTOCOL.md` §3.1「服务端必须选择该 subprotocol，
+   * 「未选中」与「网络断开」在 socket 层完全同形。判定留给连接层（`SyncConnection` 在 socket 的
+   * `onOpen` 回调里拿它与自己声明的列表比对，见 `docs/SYNC_PROTOCOL.md` §3.1「服务端必须选择该 subprotocol，
    * 否则客户端终止连接」），假 socket 因此可以把它设成任意值来证伪这条判定。
    */
   negotiatedSubprotocol(): string;

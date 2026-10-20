@@ -22,6 +22,12 @@ const MAX_BATCH_ITEMS: usize = 500;
 pub struct CatalogSession {
     #[serde(rename = "sessionId")]
     pub session_id: Uuid,
+    /// 该会话在 Owner 上的 origin epoch（`NODE_LINK_PROTOCOL.md` §12.3）。
+    ///
+    /// 它让 Access 在收到第一个 `resource.event` **之前**就能把 imported 会话投影成带
+    /// `origin.kind = "remote"` 的摘要；不是一个可以省略的元数据。
+    #[serde(rename = "originEpoch")]
+    pub origin_epoch: Uuid,
     #[serde(rename = "agentId")]
     pub agent_id: AgentId,
     pub state: SessionState,

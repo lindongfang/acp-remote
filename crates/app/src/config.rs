@@ -218,6 +218,48 @@ fn parse_agents(
     Ok(profiles)
 }
 
+/// `node_link.access.*`（`CONFIG_REFERENCE.md` §3）：Access 侧出站连接的本地设置。
+///
+/// 只承载「信任哪些 CA」这一条部署事实；限额、重连策略与 feature 集合都是协议/实现常量，不在这里开口。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NodeLinkAccessConfig {
+    /// 追加到系统根存储的固定 CA（PEM 文件，绝对路径）；空 = 只信任系统根。
+    ///
+    /// 文件存在性与 PEM 内容在 [`crate::trust::OutboundTrust::load`] 里校验：任一路径不可读或无证书
+    /// 即拒绝启动（失败关闭）。
+    pub trust_roots: Vec<PathBuf>,
+}
+
+impl NodeLinkAccessConfig {
+    /// 解析 `[node_link.access]`：路径必须是绝对路径（相对路径会随工作目录漂移，不是部署事实）。
+    fn from_raw(raw: Option<RawNodeLinkAccess>) -> Result<Self, ConfigError> {
+        let Some(raw) = raw else {
+            return Ok(Self::default());
+        };
+        let Some(paths) = raw.trust_roots else {
+            return Ok(Self::default());
+        };
+        let mut roots = Vec::with_capacity(paths.len());
+        for path in paths {
+            if path.is_empty() {
+                return Err(ConfigError::Invalid {
+                    detail: "`node_link.access.trust_roots` 的条目不得为空".to_owned(),
+                });
+            }
+            let path = PathBuf::from(&path);
+            if !path.is_absolute() {
+                return Err(ConfigError::Invalid {
+                    detail:
+                        "`node_link.access.trust_roots` 必须是绝对路径（文件的存在性与 PEM 格式在启动时校验）"
+                            .to_owned(),
+                });
+            }
+            roots.push(path);
+        }
+        Ok(Self { trust_roots: roots })
+    }
+}
+
 /// 已解析并校验的启动配置。
 ///
 /// `unwired` 是「已知但未接线」的键名列表（本切片不消费的段落与实际出现的键），由启动日志以 debug
@@ -262,6 +304,8 @@ pub struct Config {
     pub sync: SyncConfig,
     /// `sessions.*`（`CONFIG_REFERENCE.md` §4）。
     pub sessions: SessionsConfig,
+    /// `node_link.access.*`（Access 侧出站设置；本机作为 Owner 入站时不使用）。
+    pub node_link_access: NodeLinkAccessConfig,
     /// 「已知但未接线」的键。
     pub unwired: Vec<String>,
 }
@@ -412,6 +456,9 @@ impl Config {
         {
             unwired.push(key.to_owned());
         }
+        // `[node_link.access]` 是**已接线**的：只承载出站信任锚（见 `crate::trust`）。
+        let node_link_access =
+            NodeLinkAccessConfig::from_raw(raw.node_link.and_then(|section| section.access))?;
         let sessions = RawSessions::into_config(raw.sessions.unwrap_or_default())?;
         let node_name = raw.node.and_then(|node| node.name);
         if let Some(name) = &node_name {
@@ -517,6 +564,7 @@ impl Config {
             dev_mode,
             sync,
             sessions,
+            node_link_access,
             unwired,
         })
     }
@@ -813,6 +861,14 @@ struct RawNodeLink {
     max_pending_queue_bytes: Option<u64>,
     max_pending_queue_messages: Option<u64>,
     heartbeat_interval_ms: Option<u64>,
+    access: Option<RawNodeLinkAccess>,
+}
+
+/// `[node_link.access]`（`CONFIG_REFERENCE.md` §3）。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawNodeLinkAccess {
+    trust_roots: Option<Vec<String>>,
 }
 
 impl RawNodeLink {
@@ -1202,6 +1258,44 @@ idle_timeout_ms = 1000
                 "`{key}` 已接线，不得再报未接线",
             );
         }
+    }
+
+    /// `[node_link.access]` 是**已接线**的（出站信任锚），且只接受绝对路径：相对路径会随工作目录
+    /// 漂移，不是部署事实。文件存在性与 PEM 内容在启动时由 `app::trust` 校验。
+    #[test]
+    fn access_trust_roots_are_wired_and_must_be_absolute() {
+        let config = parse(
+            r#"
+[node_link]
+heartbeat_interval_ms = 30000
+
+[node_link.access]
+trust_roots = []
+"#,
+        )
+        .expect("空数组合法");
+        assert!(config.node_link_access.trust_roots.is_empty());
+        assert_eq!(config.unwired, vec!["node_link.heartbeat_interval_ms"]);
+
+        let absolute = std::env::temp_dir().join("acpr-ca.pem");
+        let absolute = absolute.display().to_string().replace('\\', "/");
+        let config = parse(&format!(
+            "[node_link.access]\ntrust_roots = [\"{absolute}\"]\n"
+        ))
+        .expect("绝对路径合法");
+        assert_eq!(
+            config.node_link_access.trust_roots,
+            vec![PathBuf::from(&absolute)]
+        );
+        assert!(config.unwired.is_empty());
+
+        let error = parse("[node_link.access]\ntrust_roots = [\"ca.pem\"]\n")
+            .expect_err("相对路径必须失败关闭");
+        assert!(matches!(error, ConfigError::Invalid { .. }), "{error}");
+
+        let error =
+            parse("[node_link.access]\ntrust_roots = [\"\"]\n").expect_err("空条目必须失败关闭");
+        assert!(matches!(error, ConfigError::Invalid { .. }), "{error}");
     }
 
     /// `sync.*` 三个键**已接线**（`CONFIG_REFERENCE.md` §2）：写下的值一路进 `SyncConfig` →

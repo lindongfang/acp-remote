@@ -8,6 +8,9 @@
 //! - [`clock`]：`core::ports::Clock` 的实现与 `core` 时间戳文本的格式化；
 //! - [`identity`]：本节点身份（keystore 条目 + 由节点公钥确定性派生的 `nodeId`）；
 //! - [`lock`]：单实例锁、`instanceId` 与锁文件记录（CLI 判定「Daemon 是否运行」的依据）；
+//! - [`access`]：Access 侧出站运行时（按持久化 Owner 信任建立连接、`node pair --mode access` 的
+//!   claim/status、远程端点注册与撤销后停止重连）；
+//! - [`trust`]：出站 TLS 的信任锚（系统根 + 可选自定义 CA；空锚/坏 PEM 失败关闭）；
 //! - [`compose`]：组合根——构造并持有全部具体实现（`storage-sqlite`、`identity-keystore`、熵源、
 //!   `Clock`、`IdGenerator`、`identity_auth::Authority`、`core::use_cases::UseCases`、
 //!   `LocalAdminDeps` 与四个注入口）；
@@ -23,6 +26,7 @@
 //! `docs/SECURITY_DESIGN.md` §12.1（启动/关闭顺序）。本 crate 只装配，不承载业务规则；`app` 可以依赖
 //! 全部具体 crate，任何其它 crate 不得依赖 `app`。
 
+pub mod access;
 pub mod cli;
 pub mod client;
 pub mod clock;
@@ -34,6 +38,7 @@ pub mod lock;
 pub mod logging;
 pub mod session_files;
 pub mod stdio;
+pub mod trust;
 
 pub use client::{ClientOutcome, LocalAdminClient, outcome_of};
 pub use config::{Config, Loaded};

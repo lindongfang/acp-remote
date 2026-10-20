@@ -44,7 +44,7 @@
 //! 本模块这一条（`docs/MODULE_ARCHITECTURE.md` §5 的矩阵是 crate 粒度的）。
 
 use acp_core::ports::SyncEventRecord;
-use sync_protocol::common::{RawObject, ValueError};
+use sync_protocol::common::ValueError;
 use sync_protocol::event::Body;
 use sync_protocol::views;
 use tracing::{debug, warn};
@@ -68,11 +68,13 @@ pub const RAW_PAYLOAD_FEATURE: &str = "acp.raw-payload.v1";
 /// 形状），其余字段与协商时逐字节一致。
 pub const FILE_DIFF_FEATURE: &str = "core.file-diff.v1";
 
-/// 承载差异行的视图类型（唯一一个会被 [`frame`] 去键的 `eventType`）。
-const FILE_CHANGED_EVENT: &str = "file.changed";
+/// `core.typed-media.v1`：类型化媒体与消息通道（§10.4）。未协商时事件视图里不得出现
+/// `channel`/`partial`/`audio_ref`/`file_ref`/`image_ref.attachmentId`（§5.3）。
+pub const TYPED_MEDIA_FEATURE: &str = "core.typed-media.v1";
 
-/// `file.changed` 视图上受 [`FILE_DIFF_FEATURE`] 门控的两个顶层键（互斥，但一起去掉）。
-const FILE_DIFF_VIEW_KEYS: [&str; 2] = ["diffLines", "diffUnavailable"];
+// 视图门控的唯一实现在 `crate::session_read`（`session.read` 的历史条目与事件帧共用同一套降级规则）：
+// 这里只做重导出，避免两条下发路径各持一份判定。
+pub(crate) use crate::session_read::{gate_file_diff, gate_typed_media};
 
 /// 一次 `payload.view` 形状判定的结论。
 ///
@@ -176,160 +178,11 @@ pub fn frame(
     ) {
         body.payload.view = view;
     }
+    if let Some(view) = gate_typed_media(&body.payload.view, features.contains(TYPED_MEDIA_FEATURE))
+    {
+        body.payload.view = view;
+    }
     Ok(body)
-}
-
-/// `file.changed` 视图里差异行键的投递侧门控：未协商 `core.file-diff.v1` 时去掉
-/// [`FILE_DIFF_VIEW_KEYS`] 两个顶层键；协商了、或不是 `file.changed` 时返回 `None`（视图原样）。
-///
-/// 视图的两条下发路径——事件帧（[`frame`]）与 `session.read` 的历史条目（`sync::command::query` 的
-/// `snapshotItem.history`）——共用这一处判定与去键，因此「同一个视图在两条路径上按同一份协商结果去键」
-/// 不会分叉。调用方各自给出「本连接是否协商了该 feature」（门控的输入只有连接知道）。
-pub(crate) fn gate_file_diff(
-    event_type: &str,
-    view: &RawObject,
-    negotiated: bool,
-) -> Option<RawObject> {
-    if negotiated || event_type != FILE_CHANGED_EVENT {
-        return None;
-    }
-    // 视图文本由 core 的 `file_changed_view` 逐字符拼出（紧凑 JSON），去键只删掉键与它的值，其余字段的
-    // 字节原样保留；文本不合形状时原样下发（判定失败不改变「这一条是否下发」，见模块文档的显式降级）。
-    let text = without_keys(view.get(), &FILE_DIFF_VIEW_KEYS)?;
-    RawObject::parse(&text).ok()
-}
-
-/// 从一个**顶层对象**的 JSON 文本里删掉给定的若干顶层键，其余字节逐字保留（键不存在时返回原文的
-/// 拷贝）。
-///
-/// 为什么是文本级去键而不是「解析成 `serde_json::Value` 再序列化」：`payload.view` 的字节保真是本
-/// 模块的硬规则（模块文档），而 `serde_json` 在没有 `preserve_order` 时会按字典序重排键、并按自己的
-/// 规则重写数字与转义——那会让未协商的连接收到一份与协商时**其余字段逐字节不同**的视图（规格场景
-/// 「其余字段与协商时逐字节一致」）。因此这里只做两件事：定位顶层键、按它的值跨度切掉，其余原样
-/// 拼接（成员之间的空白与逗号按紧凑形式规范化，注册的生产者写出的视图本就是紧凑文本）。
-///
-/// 返回 `None` 表示这段文本不是「一个顶层对象」（调用方保留原文，不猜测）。
-///
-/// core 的 `file_changed_view` 今天把两个受门控的键写在**末位**、且写出的本就是紧凑文本，因此这个分支
-/// 在实际输入上不出现——但那是**一个生产者的成员顺序**，不是契约：`event-views.schema.json#/$defs/
-/// file.changed` 不约束成员顺序，将来多一个 `file.changed` 视图生产者、或既有生产者换个顺序，都是合法
-/// 输入。而返回 `None` 的后果是调用方**保留原文**，也就是未协商 `core.file-diff.v1` 的连接照常收到那两个
-/// 键（fail-open，不是拒绝），因此「删掉若干成员后剩下的成员仍然拼得对」必须对收到的**任何**顶层对象
-/// 成立，不能依赖顺序。
-fn without_keys(text: &str, keys: &[&str]) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut cursor = 0usize;
-    skip_whitespace(bytes, &mut cursor);
-    if bytes.get(cursor) != Some(&b'{') {
-        return None;
-    }
-    cursor += 1;
-    let mut out = String::with_capacity(text.len());
-    out.push('{');
-    // 两个标记各管一件事，**不能**合并成一个：`first` 只决定「本成员前要不要补逗号」，`expect_member`
-    // 是**语法位置**（此处是否该出现一个成员）。被删的成员走的是 `continue`——它同样让「上一个成员」
-    // 结束，因此只影响逗号的补充、不影响语法位置：成员末尾一律把 `expect_member` 置 `false`。合并成
-    // 一个标记时（曾经的写法），删掉**首位**成员后那个标记不变，下一次循环读到的合法分隔逗号会被当成
-    // 「开头就是逗号」而让整段文本判失败，调用方因此保留原文（未协商能力的连接照常收到被删键，
-    // 即 fail-open）——见 `event/tests.rs` 的两种成员顺序用例。
-    let mut first = true;
-    let mut expect_member = true;
-    loop {
-        skip_whitespace(bytes, &mut cursor);
-        let byte = *bytes.get(cursor)?;
-        if byte == b'}' {
-            out.push('}');
-            return Some(out);
-        }
-        if byte == b',' {
-            // 逗号只在成员之间出现：语法位置说「此处该出现成员」（对象开头、或紧跟在逗号之后）时，
-            // 开头就是逗号不是合法对象。
-            if expect_member {
-                return None;
-            }
-            cursor += 1;
-            // 逗号之后**必须**紧跟一个成员——下面就地强制（要求 `"` 开头），因此这里不需要（也没有读点）
-            // 把 `expect_member` 置回 `true`：唯一能回到循环顶部并读到它的路径是「本成员解析成功」，
-            // 而那条路径在成员末尾一律置 `false`。
-        } else if !expect_member {
-            // 成员之间必须有逗号（第一个成员前面没有）。
-            return None;
-        }
-        skip_whitespace(bytes, &mut cursor);
-        if bytes.get(cursor) != Some(&b'"') {
-            return None;
-        }
-        let key_start = cursor;
-        let key_end = scan_string(bytes, cursor)?;
-        cursor = key_end;
-        skip_whitespace(bytes, &mut cursor);
-        if bytes.get(cursor) != Some(&b':') {
-            return None;
-        }
-        cursor += 1;
-        skip_whitespace(bytes, &mut cursor);
-        let value_end = scan_value(bytes, cursor)?;
-        cursor = value_end;
-        // 本成员（无论保留还是删掉）到此结束：语法位置变成「刚消费完一个成员」，下一个成员必须由逗号
-        // 引出。这一句是上面注释里那个坑的另一半——删除路径也必须走到它。
-        expect_member = false;
-        // 键与值之间的空白属于被删成员的跨度；其余成员（`key_start..value_end`）原样保留。
-        let key = &text[key_start + 1..key_end - 1];
-        if keys.contains(&key) {
-            continue;
-        }
-        if !first {
-            out.push(',');
-        }
-        first = false;
-        out.push_str(&text[key_start..value_end]);
-    }
-}
-
-/// 跳过 JSON 文本里的空白。
-fn skip_whitespace(bytes: &[u8], cursor: &mut usize) {
-    while matches!(bytes.get(*cursor), Some(b' ' | b'\t' | b'\n' | b'\r')) {
-        *cursor += 1;
-    }
-}
-
-/// 从起始 `"` 扫描一个 JSON 字符串，返回**收尾引号之后**的下标。
-fn scan_string(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut cursor = start + 1;
-    while let Some(byte) = bytes.get(cursor) {
-        match byte {
-            b'\\' => cursor += 2,
-            b'"' => return Some(cursor + 1),
-            _ => cursor += 1,
-        }
-    }
-    None
-}
-
-/// 从值的起始字节扫描一个 JSON 值，返回它的结束下标（顶层对象的成员边界：`}` 或 `,`）。
-fn scan_value(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut cursor = start;
-    let mut depth = 0usize;
-    while let Some(byte) = bytes.get(cursor) {
-        match byte {
-            b'"' => cursor = scan_string(bytes, cursor)?,
-            b'{' | b'[' => {
-                depth += 1;
-                cursor += 1;
-            }
-            b'}' | b']' => {
-                if depth == 0 {
-                    // 走到自己这一层对象的收尾：值在此结束（不吞掉这个 `}`）。
-                    return Some(cursor);
-                }
-                depth -= 1;
-                cursor += 1;
-            }
-            b',' if depth == 0 => return Some(cursor),
-            _ => cursor += 1,
-        }
-    }
-    if depth == 0 { Some(cursor) } else { None }
 }
 
 /// 一条事件投递给一条连接的结论（调用方只按它决定控制流，不自己判高水位）。

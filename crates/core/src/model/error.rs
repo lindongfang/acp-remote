@@ -219,6 +219,8 @@ pub enum InvalidValue {
     Ephemeral,
     /// `ElicitationAction::Cancel` 时 `ElicitationValues` 必须为 `None`（§3.3 `[待确认]` 已冻结部分）。
     ElicitationValues,
+    /// elicitation 表单 schema 不是良构 object，或声明了我们无法无损解释的结构。
+    ElicitationSchema,
     /// 状态机不允许该转换，或源状态已是终态。
     StateTransition,
 }
@@ -254,6 +256,7 @@ impl InvalidValue {
             Self::ElicitationValues => {
                 "elicitation values must be absent when the action is cancel"
             }
+            Self::ElicitationSchema => "elicitation schema is not an object we can interpret",
             Self::StateTransition => "state transition is not allowed",
         }
     }

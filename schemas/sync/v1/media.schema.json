@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/media.schema.json",
+  "title": "ACP Remote Sync v1 Typed Media and Effective Interaction Types",
+  "description": "消息通道、媒体引用、部分结果与有效待处理交互的公共值对象（docs/SYNC_PROTOCOL.md §10.4/§11.7）。它们不是独立消息类型：媒体引用出现在事件 view 的 AgentContentBlock 与 session.read 结果中，有效交互出现在 session.read 的 pending_interactions 与 resolve 命令的版本校验中。Node Link 面复用同一 view 语义（NODE_LINK_PROTOCOL.md §11.4），不复制本文件为第二套词表。",
+  "$defs": {
+    "messageChannel": {
+      "type": "string",
+      "description": "消息通道的封闭词表；回复与思考分别持久化，Agent 未提供思考时不生成 thought。",
+      "enum": ["reply", "thought"]
+    },
+    "partialResult": {
+      "type": "object",
+      "description": "turn 终态的正文完整性标记。partial 表示已收到内容被保留但上游未完成；MUST NOT 当作 completed。",
+      "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": { "enum": ["completed", "partial", "failed", "cancelled"] },
+        "reason": {
+          "oneOf": [
+            { "enum": ["agent_stopped", "agent_failed", "turn_cancelled", "connection_lost", "retention_expired"] },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "mediaReference": {
+      "type": "object",
+      "description": "Owner 侧已封存附件的读取引用。它只标识内容与可用性，不带任何下载 URL、临时路径或 bearer 凭据；读取必须经 §3.4 的已认证附件连接并重新校验会话与主体归属。imported 会话的媒体引用由 Owner 持有，Access 只透传引用、不落正文。",
+      "additionalProperties": false,
+      "required": ["attachmentId", "sessionId", "kind", "mediaType", "byteLength", "sha256", "displayName", "availability"],
+      "properties": {
+        "attachmentId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "kind": { "enum": ["image", "audio", "file"] },
+        "mediaType": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "byteLength": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "sha256": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "displayName": {
+          "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 255 }, { "type": "null" }]
+        },
+        "availability": {
+          "enum": ["available", "expired", "not_fetched", "unsupported"],
+          "description": "expired = 超出保留期或已随消息清理；not_fetched = 只有外部 URI，未自动下载；unsupported = 当前端到端能力不具备该类型。"
+        }
+      }
+    },
+    "effectiveInteraction": {
+      "type": "object",
+      "description": "服务端重新确认过的当前有效待处理交互。requestVersion 是每次 pending 写入时递增的十进制字符串；resolve 必须原样回传，版本不符或已失效时拒绝且不消费请求。历史条目只有定位信息，不能直接应答。",
+      "additionalProperties": false,
+      "required": ["interactionId", "sessionId", "kind", "requestVersion", "expiresAt", "options", "schema"],
+      "properties": {
+        "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "kind": { "enum": ["permission", "elicitation"] },
+        "requestVersion": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "expiresAt": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "common.schema.json#/$defs/interactionOption" }
+        },
+        "schema": {
+          "description": "elicitation 的 ACP 表单 schema 原样投影；permission 时为 null。未知必需类型必须使提交不可用，MUST NOT 以空答案代答。",
+          "type": ["object", "null"]
+        }
+      }
+    }
+  }
+}

@@ -371,6 +371,11 @@ function streamHTML(s){
   return out;
 }
 
+function tabbarHtml(bottom){
+  return '<div class="tabbar'+(bottom?" file-tabbar":"")+'">'+
+    '<button data-tab="chat" class="'+(A.tab==="chat"?"on":"")+'">对话</button>'+
+    '<button data-tab="files" class="'+(A.tab==="files"?"on":"")+'">文件</button></div>';
+}
 function chatPane(s){
   var c = CONN[A.conn] || CONN.online;
   /* 会话页顶栏只留四样：返回、会话标题、agent 标识、主题（颜色）切换。
@@ -382,8 +387,7 @@ function chatPane(s){
     esc(c.strip[0])+'</div>' : '';
   var body = '<div class="scroll" id="stream">'+streamHTML(s)+
     '<div style="height:8px"></div></div>';
-  var tabbar = '<div class="tabbar"><button data-tab="chat" class="'+(A.tab==="chat"?"on":"")+'">对话</button>' +
-    '<button data-tab="files" class="'+(A.tab==="files"?"on":"")+'">变更文件 ('+FILE_ORDER.length+')</button></div>';
+  var tabbar = tabbarHtml();
   var composer = '<div class="composer">' + ctxWarn() +
     '<div class="chips">' + connChip() +
       '<button class="chip-pick" data-act="mode">模式 <b>'+esc(modeLabel(modeState())||"未提供")+'</b> ▾</button>' +
@@ -397,24 +401,227 @@ function chatPane(s){
   return head + strip + '<div style="flex:1;display:flex;flex-direction:column;min-height:0">' +
     body + tabbar + composer + '</div>';
 }
-function filesPane(){
-  var f = FILES[A.selFile];
-  var head = appbar('变更文件', FILE_ORDER.length + ' 个 · 整个会话', '', false);
-  var list = FILE_ORDER.map(function(p){
-    var x=FILES[p];
-    return '<div class="fitem'+(p===A.selFile?" on":"")+'" data-file="'+esc(p)+'">' +
-      '<span class="fst '+x.status+'">'+x.status+'</span><span class="mono" style="flex:1;min-width:0;'+
-      'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px">'+esc(p)+'</span>' +
-      '<span style="font-size:11px;color:var(--ink-3)">+'+x.add+' −'+x.del+'</span></div>';
-  }).join("");
-  var d = f ? '<div class="diffwrap"><div class="dt">'+esc(A.selFile)+'</div>' +
-    '<div class="dm">+'+f.add+' −'+f.del+'</div><div class="diff">' + f.diff.map(function(l){
-      return '<div class="'+l.t+'">'+(l.t==="hd"?"":(l.t==="del"?"- ":l.t==="add"?"+ ":"  "))+hl(l.x)+'</div>';
-    }).join("") + '</div><div class="dm" style="margin:10px 0 0">超出单条上限或未同步时显示明确说明，不渲染占位 diff。</div></div>' : '';
-  return head + '<div class="scroll" style="padding:0">'+list+d+'</div>';
-}
+  /* ==================== 文件 ==================== */
+  function iconSvg(body){
+    return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" '+
+      'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+body+'</svg>';
+  }
+  var ICON_DIR = iconSvg('<path d="M1.5 4.5V2.8c0-.4.3-.7.7-.7h3.1l1.3 1.7h6.2c.4 0 .7.3.7.7v8.1c0 .4-.3.7-.7.7H2.2a.7.7 0 0 1-.7-.7V4.5Z" fill="var(--panel-2)"/>');
+  var ICON_CODE = iconSvg('<path d="m5.4 4.2-3.6 3.8 3.6 3.8M10.6 4.2l3.6 3.8-3.6 3.8"/>');
+  var ICON_CONFIG = iconSvg('<path d="M6.2 3.3H5.6a2 2 0 0 0-2 2v1.1c0 .9-.5 1.5-1.4 1.8.9.3 1.4.9 1.4 1.8v1.1c0 1.1.9 2 2 2h.6M9.8 3.3h.6a2 2 0 0 1 2 2v1.1c0 .9.5 1.5 1.4 1.8-.9.3-1.4.9-1.4 1.8v1.1c0 1.1-.9 2-2 2h-.6"/>');
+  var ICON_DOC = iconSvg('<path d="M3 3.5h10M3 6.5h10M3 9.5h10M3 12.5h6"/>');
+  var ICON_IMAGE = iconSvg('<rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2"/><circle cx="5.2" cy="6.2" r="1.1" fill="currentColor" stroke="none"/><path d="m2.8 11.6 3.4-3.2 2.4 2.1 1.9-1.7 2.7 2.6"/>');
+  var ICON_FILE = iconSvg('<path d="M4 1.8h5.2l3 3V13.4c0 .4-.3.7-.7.7H4.7a.7.7 0 0 1-.7-.7V2.5c0-.4.3-.7.7-.7Z"/><path d="M9 1.9v3.1h3.1"/>');
+  var REFRESH_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 6.5A5.2 5.2 0 1 0 13.2 9"/><path d="M13 3v3.5H9.5"/></svg>';
+  var FILE_LANGUAGES = {
+    ts:"TypeScript", tsx:"TypeScript", js:"JavaScript", jsx:"JavaScript",
+    rs:"Rust", json:"JSON", toml:"TOML", yaml:"YAML", yml:"YAML", md:"Markdown", txt:"Text"
+  };
+  function folderIconHtml(){ return '<span class="ficon f-dir" aria-hidden="true">'+ICON_DIR+'</span>'; }
+  function fileIconHtml(path){
+    var name=String(path||"").split("/").pop() || "";
+    var ext=name.indexOf(".")>=0 ? name.split(".").pop().toLowerCase() : "";
+    if(["ts","tsx","js","jsx","rs"].indexOf(ext)>=0) return '<span class="ficon f-code" aria-hidden="true">'+ICON_CODE+'</span>';
+    if(["json","toml","yaml","yml"].indexOf(ext)>=0) return '<span class="ficon f-config" aria-hidden="true">'+ICON_CONFIG+'</span>';
+    if(ext==="md"||ext==="txt") return '<span class="ficon f-doc" aria-hidden="true">'+ICON_DOC+'</span>';
+    if(["png","jpg","jpeg","gif","webp","svg","ico"].indexOf(ext)>=0) return '<span class="ficon f-image" aria-hidden="true">'+ICON_IMAGE+'</span>';
+    return '<span class="ficon" aria-hidden="true">'+ICON_FILE+'</span>';
+  }
+  function fileLanguage(path){
+    var name=String(path||"").split("/").pop() || "";
+    var ext=name.indexOf(".")>=0 ? name.split(".").pop().toLowerCase() : "";
+    return FILE_LANGUAGES[ext] || null;
+  }
+  function highlightedText(text, path){
+    var name=String(path||"").split("/").pop() || "";
+    var ext=name.indexOf(".")>=0 ? name.split(".").pop().toLowerCase() : "";
+    if(["ts","tsx","js","jsx","rs","json","toml","yaml","yml"].indexOf(ext)<0) return esc(text);
+    return text.split("\n").map(function(line){ return hl(line); }).join("\n");
+  }
+  function compressDirectory(entry){
+    var label=entry.name, target=entry, seen=[entry.path];
+    while(target.children){
+      var dirs=target.children.filter(function(child){ return child.kind==="dir"; });
+      var files=target.children.filter(function(child){ return child.kind!=="dir"; });
+      if(dirs.length!==1 || files.length!==0) break;
+      var next=dirs[0];
+      if(seen.indexOf(next.path)>=0) break;
+      label += "/"+next.name; seen.push(next.path); target=next;
+    }
+    return { label:label, target:target };
+  }
+  function countAllFiles(items){
+    var n=0;
+    (items||[]).forEach(function(item){
+      if(item.kind==="dir") n += countAllFiles(item.children);
+      else if(!(item.ignored && A.hideIgnored)) n += 1;
+    });
+    return n;
+  }
+  function allTreeHTML(items){
+    var out="";
+    items.forEach(function(entry){
+      if(entry.kind==="dir"){
+        var packed=compressDirectory(entry);
+        var key="all:"+entry.path, open=!!A.dirOpen[key];
+        var count=countAllFiles(packed.target.children || []);
+        out += '<div class="fdir'+(open?" open":"")+'" data-dir="'+esc(key)+'" role="button" tabindex="0" aria-expanded="'+open+'">'+
+          folderIconHtml()+'<span class="fname">'+esc(packed.label)+'</span>'+
+          (count>0 ? '<span class="fcount">'+count+'</span>' : '')+'</div>';
+        if(open) out += '<div class="ftreeChildren">'+allTreeHTML(packed.target.children || [])+'</div>';
+        return;
+      }
+      if(entry.ignored && A.hideIgnored) return;
+      var blocked = entry.openable===false;
+      out += '<div class="frow'+(blocked?" blocked":"")+
+        (A.viewFile && A.viewFile.source==="all" && A.viewFile.path===entry.path?" on":"")+'"'+
+        (blocked ? ' aria-disabled="true"' : ' data-open="all" data-path="'+esc(entry.path)+'" role="button" tabindex="0"')+'>'+
+        fileIconHtml(entry.path)+'<span class="fname">'+esc(entry.name)+'</span>'+
+        (entry.kind==="link" ? '<span class="fchip">链接</span>' : '')+'</div>';
+    });
+    return out;
+  }
+  function sortedNames(dirs){
+    return Object.keys(dirs).sort(function(a,b){ return a.localeCompare(b, undefined, { numeric:true, sensitivity:"base" }); });
+  }
+  function groupByDirectory(items){
+    var root={ dirs:{}, files:[] };
+    items.forEach(function(item){
+      var parts=item.path.split("/"), node=root;
+      for(var i=0;i<parts.length-1;i++){
+        var name=parts[i];
+        if(!node.dirs[name]) node.dirs[name]={ name:name, children:{ dirs:{}, files:[] } };
+        node=node.dirs[name].children;
+      }
+      node.files.push(item);
+    });
+    return root;
+  }
+  function countChangeFiles(node){
+    var n=node.files.length;
+    sortedNames(node.dirs).forEach(function(name){ n += countChangeFiles(node.dirs[name].children); });
+    return n;
+  }
+  function lineStatsHtml(record){
+    var out="";
+    if(typeof record.add==="number" && record.add>0) out += '<span class="fstat add">+'+record.add+'</span>';
+    if(typeof record.del==="number" && record.del>0) out += '<span class="fstat del">−'+record.del+'</span>';
+    return out;
+  }
+  function gitLineCounts(path){
+    var add=0, del=0;
+    (GIT_DIFFS[path] || []).forEach(function(line){
+      if(line.indexOf("diff ")===0 || line.indexOf("index ")===0 || line.indexOf("new file")===0 ||
+        line.indexOf("deleted file")===0 || line.indexOf("+++")===0 || line.indexOf("---")===0) return;
+      if(line.charAt(0)==="+") add++; else if(line.charAt(0)==="-") del++;
+    });
+    return { add:add, del:del };
+  }
+  function changeTreeHTML(node, prefix){
+    var out="";
+    sortedNames(node.dirs).forEach(function(name){
+      var dir=node.dirs[name], label=name, path=prefix+name+"/";
+      var target=dir.children;
+      while(true){
+        var names=sortedNames(target.dirs);
+        if(names.length!==1 || target.files.length!==0) break;
+        var next=names[0]; label += "/"+next; path += next+"/"; target=target.dirs[next].children;
+      }
+      var key="git:"+path, open=!!A.dirOpen[key];
+      var count=countChangeFiles(target);
+      out += '<div class="fdir'+(open?" open":"")+'" data-dir="'+esc(key)+'" role="button" tabindex="0" aria-expanded="'+open+'">'+
+        folderIconHtml()+'<span class="fname">'+esc(label)+'</span>'+
+        (count>0 ? '<span class="fcount">'+count+'</span>' : '')+'</div>';
+      if(open) out += '<div class="ftreeChildren">'+changeTreeHTML(target, path)+'</div>';
+    });
+    node.files.sort(function(a,b){ return a.path.localeCompare(b.path); }).forEach(function(item){
+      var label=item.path.split("/").pop() || item.path;
+      var app=item.status==="deleted" ? "neg" : "pos";
+      var meta=lineStatsHtml(gitLineCounts(item.path));
+      out += '<div class="frow'+(A.viewFile && A.viewFile.source==="git" && A.viewFile.path===item.path?" on":"")+
+        '" data-open="git" data-path="'+esc(item.path)+'" role="button" tabindex="0">'+
+        fileIconHtml(item.path)+'<span class="fname '+app+'">'+esc(label)+'</span>'+
+        (meta ? '<span class="fmeta">'+meta+'</span>' : '')+'</div>';
+    });
+    return out;
+  }
+  function allSourceParts(){
+    return {
+      toolbar: '<button class="fswitch'+(A.hideIgnored?" on":"")+'" data-toggle-ignored role="switch" aria-checked="'+String(A.hideIgnored)+'">'+
+        '<span class="track"><span class="knob"></span></span><span>隐藏忽略文件</span></button>',
+      body: '<div class="ftree">'+allTreeHTML(ALL_TREE)+'</div>'
+    };
+  }
+  function gitSourceParts(){
+    return {
+      toolbar: '<div class="flegend"><span class="fdot pos"></span><b>新增</b><span class="fdot neg"></span><b>删除</b></div>',
+      body: '<div class="ftree">'+changeTreeHTML(groupByDirectory(GIT_FILES),"")+'</div>'
+    };
+  }
+  function allFileViewBody(path){
+    var content = ALL_FILE_CONTENTS[path];
+    if(!content) return '<div class="fvempty">这个路径没有可展示的内容。</div>';
+    var language = fileLanguage(path);
+    var meta = '<div class="fvmeta">'+
+      (language ? '<span>'+esc(language)+'</span><span>·</span>' : '')+
+      (content.size ? '<span>'+esc(content.size)+'</span><span>·</span>' : '')+
+      '<span>只读预览</span></div>';
+    if(content.kind==="text"){
+      var lines=content.text.split("\n"), numbers=[];
+      for(var i=1;i<=lines.length;i++) numbers.push(i);
+      return meta+'<div class="mcode"><div class="fvln">'+numbers.join("\n")+'</div>'+
+        '<pre class="fvtext">'+highlightedText(content.text, path)+'</pre></div>';
+    }
+    if(content.kind==="image"){
+      return meta+'<div class="fvempty"><b>图片预览</b><span>实现通过同源 Blob URL 加载 PNG / JPEG / GIF / WebP；原型不加载真实图片。</span></div>';
+    }
+    return meta+'<div class="fvempty"><b>二进制文件</b><span>不渲染内容。</span></div>';
+  }
+  function gitFileViewBody(path){
+    var lines=GIT_DIFFS[path];
+    if(!lines) return '<div class="fvempty">没有可展示的差异行。</div>';
+    return '<div class="diff">'+lines.map(function(line){
+      var cls = (line.indexOf("@@")===0 || line.indexOf("+++")===0 || line.indexOf("---")===0 ||
+        line.indexOf("diff --git")===0 || line.indexOf("index ")===0 || line.indexOf("new file")===0 ||
+        line.indexOf("deleted file")===0) ? "hd"
+        : (line.charAt(0)==="+" ? "add" : (line.charAt(0)==="-" ? "del" : "ctx"));
+      return '<div class="d-'+cls+'">'+esc(line)+'</div>';
+    }).join("")+'</div>';
+  }
+  function sessionTitleHtml(){
+    var s=cur();
+    return esc(s.title||"未命名会话")+'<span class="chip">'+esc(s.agent)+'</span>';
+  }
+  function fileViewPane(view){
+    var head=appbar(sessionTitleHtml(), '', '', true);
+    var bar='<div class="file-subbar">'+
+      '<span class="fvsource '+view.source+'">'+esc(FILE_SOURCE_LABELS[view.source])+'</span>'+
+      '<span class="fpath">'+esc(view.path)+'</span>'+
+      '<button class="fclose" data-closefile aria-label="关闭文件查看">关闭</button></div>';
+    var body=view.source==="git" ? gitFileViewBody(view.path) : allFileViewBody(view.path);
+    return head+'<div class="filetab"><div class="file-controls">'+bar+'</div>'+
+      '<div class="file-viewer">'+body+'</div></div>';
+  }
+  function filesPane(){
+    if(A.viewFile) return fileViewPane(A.viewFile);
+    var s=cur(), dir=dirById(s.dir);
+    var head=appbar(sessionTitleHtml(), '', '', true);
+    var pathbar='<div class="file-subbar"><span class="fpath">'+
+      esc(dir&&dir.path?dir.path:"本会话工作目录")+'</span>'+
+      '<button class="frefresh" data-refresh-files title="刷新文件" aria-label="刷新文件">'+REFRESH_ICON+'</button></div>';
+    var tabs='<div class="segbar">'+["all","git"].map(function(source){
+      var selected=A.fileSource===source;
+      return '<button data-fsource="'+source+'" class="'+(selected?"on":"")+'" role="tab" aria-selected="'+
+        String(selected)+'">'+esc(FILE_SOURCE_LABELS[source])+'</button>';
+    }).join("")+'</div>';
+    var parts=A.fileSource==="git" ? gitSourceParts() : allSourceParts();
+    return head+'<div class="filetab"><div class="file-controls">'+pathbar+tabs+
+      '<div class="ftoolbar">'+parts.toolbar+'</div></div>'+
+      '<div class="file-scroll">'+parts.body+'</div></div>';
+  }
 
 function viewChat(id){
+  if(id && id !== A.session){ A.viewFile=null; A.fileSource="all"; }
   A.session = id || A.session;
   var s = cur();
   var c = CONN[A.conn] || CONN.online;
@@ -424,7 +631,7 @@ function viewChat(id){
       '<div style="margin-top:12px"><button class="btn primary block" data-go="'+esc(c.block[3]||"")+'">' +
       esc(c.block[2])+'</button></div></div></div>';
   }
-  if(A.tab==="files") return filesPane();
+  if(A.tab==="files") return filesPane() + tabbarHtml(true);
   return chatPane(s);
 }
 
@@ -877,10 +1084,15 @@ function bind(){
     if(ag){ A.newAgent = ag.dataset.agent; A.newErr = null; paintSheet(); return; }
     var sk = t.closest("[data-seckey]");
     if(sk){ sheetState.sec[sk.dataset.seckey] = !sheetState.sec[sk.dataset.seckey]; paintSheet(); return; }
-    var fd = t.closest("[data-file]");
-    if(fd){ A.selFile = fd.dataset.file; A.tab = "files"; render(); return; }
-    var fc = t.closest(".fold[data-file]");
-    if(fc){ A.selFile = fc.dataset.file; A.tab = "files"; render(); return; }
+    var fs = t.closest("[data-fsource]");
+    if(fs){ A.fileSource = fs.dataset.fsource; render(); return; }
+    var fd = t.closest("[data-dir]");
+    if(fd){ A.dirOpen[fd.dataset.dir] = !A.dirOpen[fd.dataset.dir]; render(); return; }
+    var op = t.closest("[data-open]");
+    if(op){ A.viewFile = { source:op.dataset.open, path:op.dataset.path }; A.tab = "files"; render(); return; }
+    if(t.closest("[data-closefile]")){ A.viewFile = null; render(); return; }
+    if(t.closest("[data-toggle-ignored]")){ A.hideIgnored = !A.hideIgnored; render(); return; }
+    if(t.closest("[data-refresh-files]")){ toast("已刷新文件列表（原型占位）"); return; }
     var dx = t.closest("[data-dx]");
     if(dx){ openSheet("dx", dx.dataset.dx); return; }
     var dg = t.closest("[data-diag]");

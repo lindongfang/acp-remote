@@ -179,10 +179,44 @@ impl ConnectionHandle {
         message_type: MessageType,
         body: &T,
     ) -> Result<String, SendFault> {
-        let mut state = lock(&self.outbound_state);
+        let state = lock(&self.outbound_state);
         // ① 用候选序号装配信封：装配失败不触碰账本（也不消耗序号）。
         let candidate = state.sequence + 1;
         let text = self.encode(message_type, body, candidate)?;
+        self.enqueue(state, candidate, text)
+    }
+
+    /// 发送一条附件帧（`attachment.*`，`NODE_LINK_PROTOCOL.md` §12.9）。
+    ///
+    /// 与业务消息共用同一份出站账本：序号严格加一、条数/字节双上限、高水位拒绝不消耗序号。独立附件
+    /// 连接因此不占用业务连接的预算，也不需要第二套序号。
+    pub fn send_attachment(
+        &self,
+        body: &node_link_protocol::attachment::FrameBody,
+    ) -> Result<(), SendFault> {
+        let state = lock(&self.outbound_state);
+        let candidate = state.sequence + 1;
+        let message_id =
+            Uuid::parse(self.ids.message_id().as_str()).map_err(|_| SendFault::Encoding)?;
+        let sequence =
+            DecimalString::parse(&candidate.to_string()).map_err(|_| SendFault::Encoding)?;
+        let text = node_link_protocol::attachment::encode(
+            &message_id,
+            &self.connection_id,
+            &sequence,
+            body,
+        )
+        .map_err(|_| SendFault::Encoding)?;
+        self.enqueue(state, candidate, text).map(|_| ())
+    }
+
+    /// 容量准入 + 入队 + 序号提交（业务消息与附件帧共用的唯一一条队列路径）。
+    fn enqueue(
+        &self,
+        mut state: MutexGuard<'_, OutboundState>,
+        candidate: u64,
+        text: String,
+    ) -> Result<String, SendFault> {
         let bytes = text.len() as u64;
         // ② 容量预算（条数 + 字节双上限）。
         if !state.admits(self.limits, bytes) {
@@ -371,6 +405,10 @@ pub(crate) const RECOVERY_WATERMARK_DIVISOR: u64 = 2;
 #[derive(Default)]
 pub struct ConnectionRegistry {
     connections: Mutex<BTreeMap<String, Arc<ConnectionHandle>>>,
+    /// 独立附件连接的独立表（`NODE_LINK_PROTOCOL.md` §12.9）。与业务表分开是因为
+    /// [`ConnectionRegistry::handles`] 是 WP5 找订阅者的地方：附件连接既没有订阅，也不该被当成业务连接。
+    /// 撤销仍要覆盖它——[`ConnectionRegistry::close_node`] 两张表都扫。
+    attachments: Mutex<BTreeMap<String, Arc<ConnectionHandle>>>,
 }
 
 impl std::fmt::Debug for ConnectionRegistry {
@@ -412,7 +450,13 @@ impl ConnectionRegistry {
     /// 关闭失败与「没有连接」都是 `Ok`：调用方（撤销传播）在持久化提交**之后**调用，关闭失败只记日志，
     /// 不回滚已提交的撤销（§11.6 第 5 条）。
     pub fn close_node(&self, node: &NodeId, code: u16, reason: &'static str) -> usize {
-        let handles = self.handles_for_node(node);
+        let mut handles = self.handles_for_node(node);
+        handles.extend(
+            lock(&self.attachments)
+                .values()
+                .filter(|handle| handle.node_id() == node)
+                .cloned(),
+        );
         for handle in &handles {
             handle.request_close(code, reason);
         }
@@ -426,9 +470,123 @@ impl ConnectionRegistry {
     pub(crate) fn unregister(&self, connection_id: &str) {
         lock(&self.connections).remove(connection_id);
     }
+
+    /// 当前活跃的附件连接（不含业务连接）。
+    pub fn attachment_handles(&self) -> Vec<Arc<ConnectionHandle>> {
+        lock(&self.attachments).values().cloned().collect()
+    }
+
+    /// 登记一条已认证的附件连接（不参与业务连接的替换与扇出）。
+    pub(crate) fn register_attachment(&self, handle: Arc<ConnectionHandle>) {
+        lock(&self.attachments)
+            .entry(handle.connection_id().as_str().to_owned())
+            .or_insert(handle);
+    }
+
+    pub(crate) fn unregister_attachment(&self, connection_id: &str) {
+        lock(&self.attachments).remove(connection_id);
+    }
 }
 
 /// 锁中毒时取回内层数据而不是 panic：注册表在任何 panic 之后仍要能继续关闭连接。
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    //! 4.2 的 Node Link 侧连接生命周期回归：附件连接独立登记、撤销扫两张表、断线只摘自己。
+
+    use super::*;
+    use crate::node_link::conn::limits::NodeLinkConfig;
+    use acp_core::model::{
+        InteractionId, MessageId, OriginEpoch, PairingId, RequestId, SessionId, TurnId,
+    };
+    use acp_core::ports::IdGenerator;
+
+    struct TestIds;
+
+    fn fresh() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    fn wire() -> Uuid {
+        Uuid::parse(&fresh()).expect("uuid")
+    }
+
+    impl IdGenerator for TestIds {
+        fn session_id(&self) -> SessionId {
+            SessionId::new(&fresh()).expect("session id")
+        }
+        fn turn_id(&self) -> TurnId {
+            TurnId::new(&fresh()).expect("turn id")
+        }
+        fn interaction_id(&self) -> InteractionId {
+            InteractionId::new(&fresh()).expect("interaction id")
+        }
+        fn pairing_id(&self) -> PairingId {
+            PairingId::new(&fresh()).expect("pairing id")
+        }
+        fn message_id(&self) -> MessageId {
+            MessageId::new(&fresh()).expect("message id")
+        }
+        fn origin_epoch(&self) -> OriginEpoch {
+            OriginEpoch::new(&fresh()).expect("origin epoch")
+        }
+        fn request_id(&self) -> RequestId {
+            RequestId::new(&fresh()).expect("request id")
+        }
+    }
+
+    fn handle(node: &NodeId) -> (Arc<ConnectionHandle>, mpsc::Receiver<Outbound>) {
+        ConnectionHandle::new(
+            wire(),
+            node.clone(),
+            IpAddr::from([127, 0, 0, 1]),
+            SessionLimits::negotiate(&NodeLinkConfig::default()),
+            Arc::new(TestIds),
+        )
+    }
+
+    fn node() -> NodeId {
+        NodeId::new(&fresh()).expect("node id")
+    }
+
+    #[test]
+    fn close_node_scans_business_and_attachment_tables() {
+        let registry = ConnectionRegistry::new();
+        let target = node();
+        let other = node();
+        let (business, _) = handle(&target);
+        let (attachment, _) = handle(&target);
+        let (unrelated, _) = handle(&other);
+        registry.register(business.clone());
+        registry.register_attachment(attachment.clone());
+        registry.register(unrelated.clone());
+
+        assert_eq!(registry.close_node(&target, 4410, "node revoked"), 2);
+        assert_eq!(business.close_request(), Some((4410, "node revoked")));
+        assert_eq!(attachment.close_request(), Some((4410, "node revoked")));
+        assert_eq!(unrelated.close_request(), None);
+        // 附件连接不进业务集合（WP5 的订阅者发现只看 `handles()`）。
+        assert_eq!(registry.handles().len(), 2);
+        assert_eq!(registry.attachment_handles().len(), 1);
+    }
+
+    #[test]
+    fn disconnect_only_removes_its_own_attachment_entry() {
+        let registry = ConnectionRegistry::new();
+        let node = node();
+        let (first, _) = handle(&node);
+        let (second, _) = handle(&node);
+        registry.register_attachment(first.clone());
+        registry.register_attachment(second.clone());
+        registry.unregister_attachment(first.connection_id().as_str());
+        assert_eq!(registry.attachment_handles().len(), 1);
+        assert_eq!(
+            registry.attachment_handles()[0].connection_id(),
+            second.connection_id()
+        );
+        assert_eq!(registry.active(), 0);
+    }
 }

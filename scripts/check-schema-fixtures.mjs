@@ -292,6 +292,10 @@ for (const assetRoot of assetRoots) {
     const declared = declaredTypes({ $ref: unionEntry.key }, unionEntry);
     const covered = new Set();
     for (const testCase of manifest.cases ?? []) {
+      // 只统计以 `message.schema.json` 校验的用例：附件帧（独立已认证连接）与媒体/有效交互
+      // 片段（`schemaPointer`）不是消息类型，把它们计入会让 `attachment.*` 被当成未登记的消息
+      // 类型。非消息用例仍由上面的 ajv 校验与 `checkValueAtPointer` 覆盖，只是不参与本门禁。
+      if (resolve(assetRoot.fixtureRoot, testCase.schema) !== unionPath) continue;
       const fixturePath = resolve(assetRoot.fixtureRoot, testCase.fixture);
       if (!existsSync(fixturePath)) continue;
       const fixture = readJson(fixturePath);

@@ -309,7 +309,7 @@ fn declares_post_auth_type(text: &str) -> bool {
 /// 条件命中时，无论拒绝码是 `type_unsupported` 还是 `schema_invalid`，都必须推进：帧已经在 wire 上占用
 /// 了对端的下一个序号（`specs/sync-device-auth/spec.md` 的「协议错误码与入站序号推进」），不推进会让对端
 /// 其后每条消息都被判 `protocol.sequence_invalid` 且永不推进，连接退化成只出不进的哑管道。
-fn sequence_after_rejection(
+pub(crate) fn sequence_after_rejection(
     text: &str,
     phase: Phase,
     expected_sequence: Option<u64>,

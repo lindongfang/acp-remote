@@ -119,3 +119,9 @@ format = "text"
 # max_pending_queue_bytes = 8388608
 # max_pending_queue_messages = 2000
 # heartbeat_interval_ms = 30000
+
+# Access 侧出站信任锚（本机作为 Access 导入其他 Owner 时使用）。
+# 默认空 = 只信任操作系统根存储；列出的 PEM 证书会**追加**到系统根，不会替换它。
+# 必须是绝对路径；任一文件不可读或不含证书都会让 `daemon start` 失败关闭（不存在空锚/跳过校验）。
+# [node_link.access]
+# trust_roots = ["C:/ProgramData/acp-remote/owner-ca.pem"]

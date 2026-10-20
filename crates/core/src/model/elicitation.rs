@@ -72,6 +72,13 @@ impl ElicitationContentValue {
     }
 
     /// 规范序列化（`Unknown` 输出其原文）。
+    pub fn to_json_text(&self) -> String {
+        let mut out = String::new();
+        self.write_json(&mut out);
+        out
+    }
+
+    /// 规范序列化（`Unknown` 输出其原文）。
     fn write_json(&self, out: &mut String) {
         match self {
             Self::Text(text) => out.push_str(&encode_json_string(text)),
@@ -254,6 +261,15 @@ impl FromStr for ElicitationValues {
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         Self::parse_json(text)
     }
+}
+
+/// 把一个 JSON 值原文归类成 ACP 取值（`Unknown` 保存原文）。
+///
+/// 供 `ElicitationSchema` 读取 `required`/`enum` 的原始值：与 [`ElicitationValues::parse_json`] 的成员
+/// 归类逐条同口径，因此「客户端提交的值」与「schema 里声明的值」用同一套类型判定。
+pub(crate) fn parse_value(raw: &str) -> Result<ElicitationContentValue, InvalidValue> {
+    validate_document(raw, false)?;
+    classify(raw)
 }
 
 /// 把一个 JSON 值原文归类成 ACP 取值；无法归类（未来变体、超出 `i64` 的大整数、非全字符串数组、null、

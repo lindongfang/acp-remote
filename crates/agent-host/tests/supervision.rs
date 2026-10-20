@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use acp_core::model::EndpointEvent;
 use agent_host::launch::LaunchSpec;
-use agent_host::process::Supervisor;
+use agent_host::process::{Inbound, Supervisor};
 use serde_json::json;
 use support::{Collector, TempFile, launch_spec, scenario, scenario_with};
 
@@ -19,12 +19,18 @@ async fn started(spec: LaunchSpec) -> (std::sync::Arc<Supervisor>, Collector) {
     let collector = Collector::new();
     // 进站通道必须在测试期间被消费，否则路由端会积压；这里把消息丢给收集器即可。
     let sink = collector.sink();
+    let router = std::sync::Arc::clone(&supervisor);
     tokio::spawn(async move {
         let mut incoming = incoming;
-        while let Some(envelope) = incoming.recv().await {
-            let view = envelope.document().as_str().to_owned();
-            let _ = &sink;
-            let _ = view;
+        while let Some(inbound) = incoming.recv().await {
+            match inbound {
+                Inbound::Notification(envelope) => {
+                    let view = envelope.document().as_str().to_owned();
+                    let _ = &sink;
+                    let _ = view;
+                }
+                Inbound::Response { id, envelope } => router.settle_response(id, &envelope),
+            }
         }
     });
     (supervisor, collector)

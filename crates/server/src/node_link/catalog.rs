@@ -12,8 +12,7 @@
 use std::str::FromStr as _;
 use std::sync::Arc;
 
-use acp_core::model::SessionSummary;
-use acp_core::use_cases::NodeLinkCatalogView;
+use acp_core::use_cases::{NodeLinkCatalogSession, NodeLinkCatalogView};
 use node_link_protocol::catalog::{
     AgentEntryList, CatalogSession, CatalogSessionList, CatalogSnapshot, CatalogSubscribe,
     DirectoryEntryList,
@@ -222,9 +221,12 @@ fn project(view: &NodeLinkCatalogView) -> Result<CatalogSnapshot, ProjectionFaul
     })
 }
 
-fn project_session(summary: &SessionSummary) -> Result<CatalogSession, ProjectionFault> {
+fn project_session(entry: &NodeLinkCatalogSession) -> Result<CatalogSession, ProjectionFault> {
+    let summary = &entry.session;
     Ok(CatalogSession {
         session_id: Uuid::parse(summary.session_id().as_str())
+            .map_err(|_| ProjectionFault::Field)?,
+        origin_epoch: Uuid::parse(entry.origin_epoch.as_str())
             .map_err(|_| ProjectionFault::Field)?,
         agent_id: node_link_protocol::common::AgentId::parse(summary.agent().agent_id().as_str())
             .map_err(|_| ProjectionFault::Field)?,

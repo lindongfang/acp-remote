@@ -132,11 +132,11 @@ async fn link_records_session_ownership() {
         .expect("put");
 
     store
-        .link(&session, &reference.id, AttachmentGeneration::new(3))
+        .link(&session, &reference.id, AttachmentGeneration::new(3), at(2))
         .await
         .expect("link");
     store
-        .link(&session, &reference.id, AttachmentGeneration::new(4))
+        .link(&session, &reference.id, AttachmentGeneration::new(4), at(3))
         .await
         .expect("re-link bumps generation");
 
@@ -158,6 +158,7 @@ async fn link_records_session_ownership() {
             &unknown_session,
             &reference.id,
             AttachmentGeneration::new(1),
+            at(2),
         )
         .await
         .expect_err("unknown session");
@@ -169,7 +170,12 @@ async fn link_records_session_ownership() {
     let unknown_attachment =
         acp_core::model::AttachmentId::new("99999999-9999-4999-8999-999999999999").expect("id");
     let missing_attachment = store
-        .link(&session, &unknown_attachment, AttachmentGeneration::new(1))
+        .link(
+            &session,
+            &unknown_attachment,
+            AttachmentGeneration::new(1),
+            at(2),
+        )
         .await
         .expect_err("unknown attachment");
     assert!(matches!(

@@ -28,9 +28,13 @@
  */
 
 import type {
+  AgentMessageContent,
+  AttachmentMediaView,
   ContextUsageView,
   InteractionView,
+  MessageChannelView,
   MessageView,
+  PartialResultView,
   SessionReadPageView,
   SessionStateView,
 } from "../domain";
@@ -105,12 +109,15 @@ export interface ConversationHeaderModel {
   readonly originOfflineLabel: string | null;
 }
 
-/** 一条消息的展示模型。结构化内容不进正文——由降级卡片承载（R18）。 */
+/** 一条消息的展示模型。结构化内容不混进正文——由时间线按媒体块呈现。 */
 export interface ConversationMessageModel {
   readonly id: string;
   readonly role: "user" | "agent";
+  readonly channel: MessageChannelView;
   readonly text: string;
-  /** 存在非文本内容块：正文只渲染文本，其余由降级卡片说明。 */
+  readonly content: AgentMessageContent;
+  readonly partial: PartialResultView | null;
+  /** 存在非文本内容块：正文之外还有媒体/资源块。 */
   readonly hasStructuredContent: boolean;
   readonly createdAt: string;
 }
@@ -171,10 +178,22 @@ const ABSENT_TIMELINE: ConversationTimelineModel = {
 const ABSENT_INPUT: ConversationInputModel = {
   state: "editable",
   draft: "",
+  draftEditable: false,
   canSubmit: false,
   disabledReason: "本页模型未提供输入区数据",
   attachmentsSupported: false,
-  attachmentNotice: "v1 只支持文本输入：附件（图片/文件）不受支持，请改用文本描述。",
+  attachmentNotice: "本页模型未提供附件能力信息。",
+  attachments: {
+    attachments: [],
+    phase: "empty",
+    canSubmit: true,
+    blockedReason: null,
+    capabilityNotice: null,
+    uploadedBytes: "0",
+    totalBytes: "0",
+    error: null,
+  },
+  pathRefs: [],
   draftInMemoryOnly: false,
   draftNotice: null,
   submission: { kind: "none" },
@@ -264,6 +283,8 @@ export interface ConversationPageModel {
   readonly capabilities: ConversationCapabilitiesModel;
   readonly input: ConversationInputModel;
   readonly interactions: readonly InteractionView[];
+  /** 已读取的附件媒体（`attachmentId → 状态`）：组件按它渲染图片/音频/下载。 */
+  readonly media: ReadonlyMap<string, AttachmentMediaView>;
   readonly settings: ConversationSettingsModel;
   readonly fileChanges: readonly FileChangeView[];
   /** 左栏：目录上下文与同目录会话列表（宽屏常驻、窄屏为次级视图之一）。 */
@@ -405,6 +426,7 @@ export function buildConversationModel(input: {
   readonly nextBeforeHistory?: string | null;
   readonly input?: ConversationInputModel;
   readonly interactions?: readonly InteractionView[];
+  readonly media?: ReadonlyMap<string, AttachmentMediaView>;
   readonly settings?: ConversationSettingsModel;
   readonly fileChanges?: readonly FileChangeView[];
   /** 左栏模型（目录上下文 + 同目录会话列表）；缺省时用「未提供」的缺省支。 */
@@ -421,7 +443,10 @@ export function buildConversationModel(input: {
       page?.messages.map((message: MessageView) => ({
         id: message.id,
         role: message.role,
+        channel: message.channel,
         text: message.text,
+        content: message.content,
+        partial: message.partial,
         hasStructuredContent: message.hasStructuredContent,
         createdAt: message.createdAt,
       })) ?? [],
@@ -440,6 +465,7 @@ export function buildConversationModel(input: {
     capabilities: { ...input.capabilities, canLoadEarlier: hasEarlier && input.loadingEarlier === false },
     input: input.input ?? ABSENT_INPUT,
     interactions: input.interactions ?? [],
+    media: input.media ?? new Map<string, AttachmentMediaView>(),
     settings: input.settings ?? ABSENT_SETTINGS,
     fileChanges: input.fileChanges ?? [],
     sidebar: input.sidebar ?? ABSENT_SIDEBAR,

@@ -19,8 +19,7 @@
  * 这条判定把「只有亲历的请求可应答」从一句约定变成了结构上的事实。
  */
 
-import type { InteractionOption } from "../protocol/common";
-import type { SnapshotItemPendingInteractions } from "../protocol";
+import type { InteractionOption } from "../protocol";
 import type { CommandRecord } from "../state";
 import { isTerminalState } from "../state";
 import type {
@@ -33,6 +32,26 @@ import { buildInteractionAvailability } from "../domain/interaction";
 import type { StructuredRecord } from "../domain/timeline";
 import { compareTimelinePosition, positionOf, viewText } from "../domain/timeline";
 
+/**
+ * `session.read` 返回的一条待处理交互（客户端内部输入）。
+ *
+ * 服务端协商 `core.pending-interactions.v1` 后返回 `effectiveInteraction`（完整、可应答）；
+ * 旧 peer 只给定位形状（无 `requestVersion`/可选项）时按 `effective: false` 保留为不可操作卡片，
+ * 而不是静默丢掉这张卡。
+ */
+export interface PendingInteractionInput {
+  readonly interactionId: string;
+  readonly sessionId: string;
+  readonly kind: InteractionKind;
+  readonly requestVersion: string | null;
+  readonly expiresAt: string | null;
+  readonly options: readonly InteractionOption[] | null;
+  readonly schema: Readonly<Record<string, unknown>> | null;
+  readonly effective: boolean;
+  /** 旧 peer 定位形状自带的创建时间；有效请求没有这个字段。 */
+  readonly createdAt: string | null;
+}
+
 /** 请求侧的累积（同一 `interactionId` 只保留最新一条请求）。 */
 interface RequestAccumulator {
   readonly interactionId: string;
@@ -43,6 +62,10 @@ interface RequestAccumulator {
   readonly schema: Readonly<Record<string, unknown>> | null;
   readonly options: readonly InteractionOption[] | null;
   readonly turnId: string | null;
+  /** 服务端本次读取确认过（`effectiveInteraction`）。 */
+  readonly effective: boolean;
+  readonly requestVersion: string | null;
+  readonly expiresAt: string | null;
 }
 
 /** 读 `permission.requested.options`；形状不完整即返回 `null`（不给「点了会失败」的按钮数据）。 */
@@ -85,11 +108,29 @@ function commandResultDetail(record: CommandRecord): string {
  */
 export function buildInteractionViews(input: {
   readonly records: readonly StructuredRecord[];
-  readonly pending: readonly SnapshotItemPendingInteractions[];
+  readonly pending: readonly PendingInteractionInput[];
   readonly responseRequestIds: ReadonlyMap<string, string>;
   readonly commands: ReadonlyMap<string, CommandRecord>;
   readonly deviceId: string | null;
   readonly sessionOpen: boolean;
+  /** 本次读取的时刻（`effectiveInteraction` 没有 `createdAt`，用它定位）。 */
+  readonly effectiveAt?: string;
+  /** 当前时刻（epoch 毫秒）：只有给出时才判定 `expiresAt`。 */
+  readonly nowMs?: number;
+  /**
+   * 本会话是否已向服务端核对过「当前有效请求」。
+   *
+   * 核对过后仍未被确认的历史卡片不再说「尚未确认」，而说明「服务端当前不再确认」——
+   * 否则用户点「重新取得」在结果为空时看不到任何变化。
+   */
+  readonly pendingChecked?: boolean;
+  /**
+   * 本连接是否协商了 `core.pending-interactions.v1`。
+   *
+   * 协商后应答 MUST 携带 `requestVersion`；实时请求没带版本、又尚未经 `session.read`
+   * 确认时，卡片不得判为可应答（见 `domain/interaction.ts` 的同名输入）。
+   */
+  readonly requestVersionRequired?: boolean;
 }): readonly InteractionView[] {
   const requests = new Map<string, RequestAccumulator>();
   const resolutions = new Map<string, { readonly resolution: InteractionResolution; readonly record: StructuredRecord }>();
@@ -120,6 +161,11 @@ export function buildInteractionViews(input: {
           schema: schemaField(view),
           options: kind === "permission" ? optionsField(view) : null,
           turnId: viewText(view, "turnId"),
+          effective: false,
+          // 实时事件视图可能自带版本（`additionalProperties` 允许）：有就原样用，
+          // 没有则留给可用性判定决定「先重新取得当前有效请求」。
+          requestVersion: viewText(view, "requestVersion"),
+          expiresAt: null,
         });
         break;
       }
@@ -147,19 +193,41 @@ export function buildInteractionViews(input: {
     }
   }
 
+  /**
+   * 服务端确认过的当前有效请求覆盖同名累积：
+   *
+   * - 它带完整 `options`/`schema`/`requestVersion`，因此刷新或换设备后**可以**应答；
+   * - 标题与描述仍只来自实时请求（`effectiveInteraction` 没有这两个字段），缺了就保持 `null`，
+   *   不编造；
+   * - 只从历史读到、且本次读取**没有**确认的卡片不会进入这份列表：服务端不再确认它就是「不可
+   *   应答」的事实，MUST NOT 画出必然失败的按钮。
+   */
   for (const item of input.pending) {
-    if (requests.has(item.interactionId)) continue;
-    // 读回的待处理项没有请求内容：没有可选项、没有标题，且 `witnessed` 由「没有实时请求记录」
-    // 表达为假——它因此只能呈现为不可操作。
+    const existing = requests.get(item.interactionId);
+    const effectiveAt = input.effectiveAt ?? item.createdAt ?? item.expiresAt ?? "1970-01-01T00:00:00.000Z";
+    if (existing === undefined) {
+      requests.set(item.interactionId, {
+        interactionId: item.interactionId,
+        kind: item.kind,
+        record: pendingRecordOf(item, effectiveAt),
+        title: null,
+        description: null,
+        schema: item.kind === "elicitation" ? item.schema : null,
+        options: item.kind === "permission" ? item.options : null,
+        turnId: null,
+        effective: item.effective,
+        requestVersion: item.requestVersion,
+        expiresAt: item.expiresAt,
+      });
+      continue;
+    }
     requests.set(item.interactionId, {
-      interactionId: item.interactionId,
-      kind: item.kind,
-      record: pendingRecordOf(item),
-      title: null,
-      description: null,
-      schema: item.kind === "elicitation" ? item.schema : null,
-      options: null,
-      turnId: null,
+      ...existing,
+      schema: item.kind === "elicitation" ? item.schema : existing.schema,
+      options: item.kind === "permission" ? item.options : existing.options,
+      effective: item.effective,
+      requestVersion: item.requestVersion,
+      expiresAt: item.expiresAt,
     });
   }
 
@@ -192,10 +260,17 @@ export function buildInteractionViews(input: {
                 : requestId !== undefined,
           };
 
+    const witnessed = request.record.source === "realtime";
     const availability: InteractionAvailability = buildInteractionAvailability({
       kind: request.kind,
       options: request.options,
-      witnessed: request.record.source === "realtime",
+      witnessed,
+      effective: request.effective,
+      requestVersion: request.requestVersion,
+      requiresRequestVersion: input.requestVersionRequired === true,
+      expiresAt: request.expiresAt,
+      ...(input.pendingChecked === true ? { pendingChecked: true } : {}),
+      ...(input.nowMs === undefined ? {} : { nowMs: input.nowMs }),
       sessionOpen: input.sessionOpen,
       resolution,
       pendingRequestId: inFlight && requestId !== undefined ? requestId : null,
@@ -210,7 +285,11 @@ export function buildInteractionViews(input: {
       schema: request.schema,
       requestedAt: request.record.createdAt,
       turnId: request.turnId,
-      witnessed: request.record.source === "realtime",
+      witnessed,
+      effective: request.effective,
+      requestVersion: request.requestVersion,
+      expiresAt: request.expiresAt,
+      options: request.options,
       availability,
     });
   }
@@ -220,14 +299,14 @@ export function buildInteractionViews(input: {
   );
 }
 
-/** 读回待处理项的位置（它的 `createdAt` 参与「最新请求胜出」的比较）。 */
-function pendingRecordOf(item: SnapshotItemPendingInteractions): StructuredRecord {
+/** 服务端确认项的定位记录：它的位置取本次读取时间（`effectiveInteraction` 没有 `createdAt`）。 */
+function pendingRecordOf(item: PendingInteractionInput, readAt: string): StructuredRecord {
   return {
     source: "history",
     eventId: `pending:${item.interactionId}`,
     eventType: item.kind === "permission" ? "permission.requested" : "elicitation.requested",
     sessionId: item.sessionId,
-    createdAt: item.createdAt,
+    createdAt: readAt,
     sessionSequence: null,
     globalSequence: null,
     originKind: null,

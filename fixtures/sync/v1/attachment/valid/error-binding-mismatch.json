@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "type": "attachment.error",
+  "messageId": "58191485-96a7-42a3-8cb5-e6f708192a3b",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "16",
+  "body": {
+    "code": "attachment.binding_mismatch",
+    "message": "Transfer is not bound to this session and subject.",
+    "retryable": false,
+    "transferId": "9b2f4c1d-6a3e-4f57-8b21-0c4d5e6f7a89",
+    "details": {}
+  }
+}

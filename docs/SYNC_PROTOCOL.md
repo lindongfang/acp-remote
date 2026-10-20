@@ -116,6 +116,57 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 - 二进制字段使用无填充 base64url，不得使用标准 base64 的 `+`、`/` 或 `=`。
 - 普通 JSON 不做 canonicalization，也不直接用于签名或 HMAC。
 
+### 3.4 附件传输连接（独立已认证 WSS）
+
+附件内容不占用业务消息连接：协商 `core.attachment-transfer.v1` 后，客户端另建一条已认证 WSS 连接专门承载附件帧。
+
+- **端点与认证**：`wss://<host>/sync/v1/attachments`，subprotocol 仍为 `acp-remote.sync.v1.json`（§3.1）。连接必须完整执行 §8 的 challenge-response，沿用同一设备身份、Origin/Host 校验、撤销与心跳规则。认证完成前只接受认证消息（附件帧按 §4.2 的未知/阶段不符规则拒绝）；认证完成后，`selectedFeatures` 里没有 `core.attachment-transfer.v1` 的连接收到任何 `attachment.*` 帧时回 `attachment.negotiation_required` 并以 `4400` 关闭，且**不触碰存储**。认证状态不跨连接共享，也不引入长期 bearer 或公开下载 URL。
+- **接线状态（实现事实，2026-10-20 WP5）**：服务端的连接面、协商门控与帧族已实现（`server::sync::attachments`），组合根在装配附件传输端口时把 `/sync/v1/attachments` 注册到 listener，并**同时**把 `core.attachment-transfer.v1` 纳入 `SUPPORTED_FEATURES`；未装配存储时不注册端点、并用 `feature_list_without` 从握手集合里去掉它（宣告一个必然 404 的端点就是能力虚报）。未协商的连接发 `attachment_ref` 会按 §5.3 被拒绝。
+- **协商与隔离**：连接在 `selectedFeatures` 中声明 `core.attachment-transfer.v1` 后才进入附件帧族。未协商时新帧族、`attachment_ref` 内容块与 `attachment` 相关错误都不得出现（§5.3）。
+- **绑定**：每一帧都重复 `transferId`，`begin`/`manifest_begin` 携带 `sessionId` 与 `subject`。传输只能被创建它的同一主体、同一会话使用；跨会话、跨主体或跨设备复用标识返回 `attachment.binding_mismatch`，不泄露内容也不触发任何 Agent 执行。清单页同样逐条校验：`manifest_page` 里的每个 `transferId` 必须已封存、且会话与主体都与该清单的 `manifest_begin` 一致，否则整页拒绝（不部分登记）。读取（`attachment.read`）同样先校验身份、会话与附件归属。
+- **prompt 绑定（实现事实）**：带 `attachment_ref` 的 `session.prompt` 在派发前要求本连接已协商 `core.attachment-transfer.v1`、携带已封存的 `submissionId`，并逐块比对清单里的 `attachmentId`/`sha256`/`byteLength`；任一不符返回 `attachment.negotiation_required`/`protocol.schema_invalid`/`attachment.binding_mismatch`，不派发 Agent。只有 `submissionId`（全部是文本块）时同样先复核清单的封存状态与归属。
+- **分块**：单块原始数据与偏移规则见下方预算表；`offset`、`length`、`totalLength`、`maxLength` 一律是无前导零十进制字符串。客户端按期望偏移提交：同偏移同内容重复提交返回原 `chunk_ack`（`duplicate: true`），同偏移不同内容返回 `attachment.chunk_conflict`（`details.offset`），非期望偏移返回 `attachment.offset_mismatch`（`details.expectedOffset`/`actualOffset`，可重试）。每传输同时最多一块未确认。
+- **封存**：`attachment.seal` 携带完整长度与整段原始字节的流式 SHA-256；长度或摘要不符返回 `attachment.digest_mismatch`，且不产生可引用附件。重复封存相同内容返回原 `attachment.sealed`，不同内容返回 `attachment.sealed` 错误。
+- **清单**：大清单不塞进单帧。`attachment.manifest_begin` 声明 `submissionId`、会话、主体与总数；`attachment.manifest_page` 每页最多 64 个 `transferId` 并以 `final` 标记最后一页；`attachment.manifest_sealed` 给出 `manifestDigest`。`manifestDigest` 按**清单顺序的 `transferId`** 计算：`SHA-256( Σ u32be(len(id)) || id )`，结果是无填充 base64url；服务端重新计算并逐字比较，客户端因此能用它能看到的标识自行复算。`session.prompt` 只携带该已封存 `submissionId` 的引用（§11.5），服务端在接受前重新核对清单完整性、身份、会话、路由与 Agent 能力。清单草稿只存在进程内（断线后重放 `manifest_begin` + 各页即可重建，重复页幂等）。
+- **读取边界**：`attachment.read` 的 `offset` 必须指向仍有字节的位置。`offset == totalLength`（EOF 处再读一次）与 0 字节附件都读到空数据，而 `read_chunk.data` 至少 1 字节，因此服务端回 `protocol.schema_invalid`（不可重试）而不是认领后不发回帧；客户端按 `read_chunk.eof` 停止读取，不得把空块当成合法回复。
+- **状态不等于受理**：`attachment.sealed`/`attachment.status` 只表达传输事实；消息仍要单独提交，`accepted` 才表示命令被受理，二者都完成前 Agent 不会收到内容。
+- **活动传输预算的释放**：单设备 2 / 单节点 8 的活动传输计数在封存、取消、失效时释放，并在附件连接关闭时释放该连接预留的槽位——客户端放弃上传（断线/崩溃/主动关闭）不会把该主体的预算永久锁死。计数只存在于进程内；持久化的半成品由 24 小时清理负责。
+- **撤销与过期**：设备或节点撤销时，`close_device`/`close_node` 同时扫描业务表与附件表并以 `4410` 关闭相关连接，正在进行的上传/读取随连接立即中止；已提交附件仍按消息保留策略处理，不因撤销被删除。最近活动不足 24 小时的传输与未提交清单不被清理；超时未提交后该 `transferId` 不再可读，服务端按 `attachment.transfer_not_found` 处理（`attachment.expired`/`attachment.revoked` 是登记的错误码，但本实现不主动发送它们——撤销走关闭连接，过期归入不存在）。已提交附件随所属消息保留与清理（见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7.5）。
+- **失败语义**：磁盘不足、摘要不符或超预算都显式失败，MUST NOT 截断后冒充完整内容，也不得因此阻塞业务连接上的事件交付。
+- **机器合同**：帧名与预算的唯一跨协议登记是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的 `transportFrames`，形状见 `schemas/sync/v1/attachment.schema.json`；`check:contract-assets` 断言帧表、预算表与它逐项相等。
+
+#### 帧族（`attachment.*`）
+
+| 帧 | 方向 | 说明 |
+|---|---|---|
+| `attachment.begin` | 客户端 → 服务端 | 声明 transferId、会话、主体、总长度、块大小与媒体类型 |
+| `attachment.chunk` | 客户端 → 服务端 | 指定偏移的一块原始数据（base64url） |
+| `attachment.chunk_ack` | 服务端 → 客户端 | 确认偏移与长度，`duplicate` 表示重复同块 |
+| `attachment.seal` | 客户端 → 服务端 | 提交总长度与整段 SHA-256，请求封存 |
+| `attachment.sealed` | 服务端 → 客户端 | 封存成功事实、内容寻址 `attachmentId` 与封存时间；`session.prompt` 的 `attachment_ref.attachmentId` 使用该值 |
+| `attachment.status` | 双向 | 查询/报告当前传输状态与已接收长度 |
+| `attachment.abort` | 双向 | 取消传输并给出封闭原因 |
+| `attachment.read` | 客户端 → 服务端 | 请求读取已封存附件的一段 |
+| `attachment.read_chunk` | 服务端 → 客户端 | 返回一段原始数据与 EOF 标记 |
+| `attachment.manifest_begin` | 客户端 → 服务端 | 开始登记一次提交清单 |
+| `attachment.manifest_page` | 客户端 → 服务端 | 分批登记清单中的 transferId |
+| `attachment.manifest_sealed` | 双向 | 清单已封存及其摘要 |
+| `attachment.error` | 双向 | 结构化附件错误（code 复用 §12.2 词表） |
+
+#### 附件传输预算
+
+| 项目 | 固定值 |
+|---|---:|
+| 单块原始数据 | 32768 bytes |
+| 每传输未确认块 | 1 |
+| 单设备活动传输 | 2 |
+| 单节点活动传输 | 8 |
+| 每连接附件帧预算 | 6000 帧 / 60 秒（固定窗口） |
+
+超出活动传输或帧预算都回 `attachment.budget_exhausted`（可重试，`retryable: true`）；帧预算超限**不关闭**连接——附件是批量数据，关连接会让已传完的块全部作废，而错误本身已经给出退避信号。帧预算按附件连接独立计数（同一条连接上的业务与附件帧共用一个出站序号，但独立连接天然不占业务预算）。
+
+上表是**运行保护**，不是附件数量或大小的产品额度：单连接发送预算与速率按附件传输族独立计数（§14），不占用业务命令的配额；附件总量只受会话/库容量与磁盘实际可用空间约束。
+
 ## 4. 通用消息信封
 
 ### 4.1 格式
@@ -200,14 +251,31 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.workspace-mkdir.v1` | Sync 独立创建当前父目录下的一层目录 `workspace.mkdir`（§11.5） | mvp | 否 |
 | `core.file-diff.v1` | `file.changed` 视图携带结构化差异行 `diffLines` 与不可用标记 `diffUnavailable`（§10.3）：未协商时该键缺席 | mvp | 否 |
 | `core.session-files.v1` | Sync 面当前会话工作目录内的只读文件查询：`session.files.list`/`session.files.read` 与 `session.git.status`/`session.git.diff`（§11.5 的请求/结果形状、§14 的分页与内容预算）；只登记 Sync，不进入 Node Link | mvp | 否 |
+| `core.attachment-transfer.v1` | 独立已认证附件 WSS 连接（§3.4）：`attachment.begin`/`chunk`/`chunk_ack`/`seal`/`sealed`/`status`/`abort`/`read`/`read_chunk`/`manifest_begin`/`manifest_page`/`manifest_sealed`/`error` 帧族；32 KiB 单块、十进制字符串偏移、每传输一块未确认、单设备 2/单节点 8 个活动传输；未协商时新帧族与 `attachment_ref` 必须缺席 | mvp | 否 |
+| `core.typed-media.v1` | 类型化媒体与消息通道（§10.4）：`AgentContentBlock` 的 `audio_ref`/`file_ref` 与 `image_ref.attachmentId`、`messageChannel`、`partialResult` 与媒体引用可用性；完整 ACP 原文仍逐字节保留 | mvp | 否 |
+| `core.pending-interactions.v1` | 可恢复的有效待处理交互（§10.4/§11.7）：`session.read` 的 `pending_interactions` 返回完整当前请求与 `requestVersion`，应答前重新校验有效性，首个有效答案胜出；已处理/失效请求不可复活 | mvp | 否 |
+| `core.remote-history.v1` | 远程历史读取（§9.6/§11.5）：imported 会话的结构化历史按会话内序号独立分页、读取前重新鉴权、正文由 Owner 回源提供；不可达或超出保留期显式不可用，Access 不持久化正文 | mvp | 否 |
 
-- 本表的十三个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- 本表的十七个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- **本版服务端不宣告一条 feature**：`auth.server_challenge.selectedFeatures` 只返回已完整接线的 16 条。
+  - `core.remote-history.v1`：远程历史需要 Access 侧的 `node-link-client` 回源路径（尚未实现）。宣告一个当前必然失败的读取路径就是能力虚报。协商前 imported 会话的 `history` 仍回 `capability.unsupported_by_broker`，客户端必须明确显示不可用而非「没有历史」。接线后（WP5）再把它加入宣告表并补回源用例。
+  - `core.attachment-transfer.v1`：连接面、帧族与引擎已实现（§3.4）；组合根装配附件传输端口时注册 `/sync/v1/attachments` 并把该 feature 纳入握手集合，未装配时不注册端点、不宣告。
 - `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 没有这种 feature，必需性由客户端按自身需要声明。
 - 客户端发送支持列表和必需列表。
 - 服务端返回已选择的交集。
 - 列表去重后按 UTF-8 字节升序排列。
 - 认证 transcript 中的 feature bytes 为排序后 ID 逐项以 `0x00` 分隔的 UTF-8 字节；ID 本身不得包含 NUL。
 - 客户端必需 feature 未被选择时，认证不得进入业务阶段。
+
+### 5.3 旧 peer 与未协商行为
+
+新能力一律是**加性 feature**：未协商时行为与 v1 baseline 逐字相同，旧 peer 既不发送也不接收新封闭字段或新帧族。
+
+- **服务端（新）面对旧客户端**：`auth.server_challenge.selectedFeatures` 只返回旧客户端声明过的 ID；旧连接不会收到 `attachment_ref`/`workspace_path_ref` 内容块、`audio_ref`/`file_ref` 内容块、`requestVersion`、`pending_interactions` 或 `media` 等新键——服务端省略这些键，而不是下发 `null`、空数组或占位对象（封闭 schema 不接受未协商字段）。
+- **旧服务端面对新客户端**：新客户端只在 feature 被选中后才启用入口；未选中时附件、媒体、可恢复交互与远程历史入口显式不可用并说明原因，MUST NOT 退化为自动文本化附件、以空历史冒充成功或把失败答复当作已处理。
+- **未协商却出现新帧/新字段**：业务连接收到 `type` 不在本连接协商集合内的消息（含任何 `attachment.*` 帧）返回 `protocol.type_unsupported`；收到未协商的封闭字段按 `protocol.schema_invalid` 拒绝；附件连接在协商前收到附件帧返回 `attachment.negotiation_required` 并以 `4400` 关闭。任何一侧都不得静默忽略该消息后继续；重复的错误计数按 §14 的认证前/连接速率规则处理。
+- **降级不是静默改写**：未协商 `core.typed-media.v1` 时，无法表达的非文本内容仍按 §10.3 的 `unsupported` block 或未知事件降级，并保留 `acp.rawJson`；未协商 `core.remote-history.v1` 时，imported 会话的历史读取返回 `capability.unsupported_by_broker`，客户端明确说明不可用，而不是显示「没有历史」。
+- **不新增 second version**：以上全部在 v1 内通过 feature 演进；提升 `protocolVersion` 才允许改变已协商字段的语义（§16）。
 
 ## 6. 密钥与二进制表示
 
@@ -1009,11 +1077,12 @@ remoteOrigin = {
 - imported 会话的 `messages`、`turns`、`pending_interactions` 和 `config_options` 不得进入 Access 的 snapshot，也不得进入 Access 的正文缓存；Access 只持久化身份、索引、`eventId`/`eventType`/digest 和 local sequence 映射。
 - `sessions` chunk 与 `session.list` 必须包含 imported 会话的摘要并带 `origin.kind = "remote"`，否则客户端无法发现该会话；摘要之外的正文类资源一律不进入 snapshot。
 - 客户端一律通过 `session.read` 在线回源 Owner 获取正文、turn 历史和待处理交互。Access 不排队、不缓存正文、不改写 ACP 语义与 `acp.rawJson`、不扩张 capability、不修改会话状态。
+- **（计划条款，待实施）** 远程历史：协商 `core.remote-history.v1` 后，imported 会话的结构化历史同样经 `session.read` 的 `history` include 与 `beforeHistory` 游标从 Owner 分页读取；Access 只持有 origin/local 序号映射与无正文收据，页边界、条目标识与 `historyHasEarlier` 由 Owner 决定，Access MUST NOT 重新排序或截断后冒充完整页。每次读取前重新校验连接身份、会话来源与撤销状态；Owner 不可达返回 `resource.remote_unavailable`，超出保留期返回 `history` 不可用事实，两种情况都 MUST NOT 返回空页冒充「没有历史」。该能力当前尚未实现，实现前对 imported 会话仍按 §9.4 的不支持错误降级。
 - 客户端对 `origin.kind = "remote"` 的会话不得持久化正文与 `acp.rawJson`，只允许缓存摘要、cursor 和事件 digest。
 - Owner 不可达时 `session.read` 返回 `resource.remote_unavailable`，同时把该会话的 `origin.online` 置为 `false` 并广播一次 `session.origin.online_changed`；恢复可达后同样以该事件把 `online` 置回 `true`。
 - Owner 离线期间客户端不得把远程会话的输入标记为已发送或已接受；本地 draft 可以保留，但必须显式标记为未提交。
 - `session.list` 只返回该设备有权查看的本地会话与 imported 摘要，两者使用同一 `SessionSummary` 形状；不得为远程会话发明第二套字段。
-- **（计划条款，尚未实现）** imported 事件没有可回放的本地正文：`sync.subscribe` 从 cursor 增量重放时，Access 必须按 origin cursor 向 Owner 重新获取对应事件后再交付；无法回源的区间（例如已超出 Owner 的保留窗口或 Owner 离线）必须以 `sync.reset_required`（`reason` 取 `cursor_expired` 或 `epoch_mismatch`）让客户端重建会话视图，不得发送只有 `sha256`/digest 而没有内容的伪事件，也不得把内存中的临时投递当作可重放历史。**实现现状**：本条的**回源投递**尚未落地——它需要 `node_link` 边界的回源端口（`server::sync` 按 `MODULE_ARCHITECTURE.md` §4.9 不得调用平级的 `server::node_link`），而 imported 的 `local_sequence` 与 `owned_event.global_sequence` 是两个序号空间、还需要一处统一的「连接内排序与 ACK」分配器，两者都不在本交付范围内（`tasks.md` WP4 任务 4.9 已登记该缺口与所需接缝）。已落地的是 §9.6 的**清单与门控**部分：`sessions` chunk 与设备可见会话清单会合并自有与已导入会话、未协商该 feature 时一律不含 imported 条目且不携带来源信息（`crates/server/src/sync/snapshot/mod.rs`、`core::use_cases::sync_visible_sessions`）。
+- **实时投递已落地，回源重放仍是计划条款**：imported 事件不进入本地事件库，但 `imported_delivery_index.local_sequence` 是全库单调的本机投递序号，`EventPublisher` 的 `CommittedDelivery::Imported` 因此可以直接进入 Sync 的实时扇出（`crates/server/src/sync/subscribe/fanout.rs`）：屏障已建立的连接收到 `event` 帧，`globalSequence`/`sessionSequence` 都是该本机序号，`eventId` 逐字等于 `remoteOrigin.originEventId`，正文来自当次投递的内存（MUST NOT 落盘）。`origin.kind` 取 `"node"`、`nodeId` 取 Owner：Access 能如实陈述的产生者就是交付这条事件的节点（Node Link 的 `resource.event` 不携带 Owner 侧的产生者类型，Access 不得据此猜测 `agent`/`device`）；因此 imported 事件只投给同时协商了 `resource.remote-origin.v1` 与 `core.event-origin.v1` 的连接，未协商时跳过并记诊断，绝不伪造来源。`causationRequestId` 为 `null`（诱发命令在 Owner 上，Node Link 不携带它）。**仍未落地**：`sync.subscribe` 的 cursor **重放**对 imported 区间没有回源端口（`server::sync` 按 `MODULE_ARCHITECTURE.md` §4.9 不得调用平级的 `server::node_link`），`local_replay` 的正文无法在 Access 侧重建；断线期间的 imported 区间只能由 Owner 重连后的 origin cursor 重放重新作为实时投递到达。已落地的是 §9.6 的**清单、门控与实时腿**：`sessions` chunk 与设备可见会话清单会合并自有与已导入会话、未协商该 feature 时一律不含 imported 条目且不携带来源信息（`crates/server/src/sync/snapshot/mod.rs`、`core::use_cases::sync_visible_sessions`），`catalog.session.originEpoch` 让还没有任何事件的 imported 会话也能被投影（`docs/NODE_LINK_PROTOCOL.md` §12.3）。
 
 未协商该 feature 时，Access 不得返回任何 `origin.kind = "remote"` 的会话，也不得发送带非空 `remoteOrigin` 的事件。
 
@@ -1029,7 +1098,7 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
 
 **已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的十条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 18 条 Sync 命令（含 8 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）中的既有命令均已接线；新增的 `session.files.list`/`session.files.read`/`session.git.status`/`session.git.diff` 已由 WP3 接到真实用例与原生端口：门控先于任何文件/Git I/O，`session.files.read` 的连接绑定内容版本随连接关闭/撤销/daemon 关闭释放，`core.session-files.v1` 因此进入服务端支持集合。命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
 
-**仍未落地**（与本小节相邻）：imported 事件的回源投递见 §9.6 末条的计划标注；`session.read` 的三类明细资源与 imported 明细的降级见 §9.4 的说明。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
+**仍未落地**（与本小节相邻）：imported 事件的**回源重放**（实时腿已落地，见 §9.6 末条）；`session.read` 的三类明细资源与 imported 明细的降级见 §9.4 的说明。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
 
 ## 10. Event
 
@@ -1197,7 +1266,7 @@ device.revoked
 | `command.completed` / `command.failed` / `command.uncertain` | 命令终态：由 `command.result` 与 `command.status` 承担，条目里重复会让同一事实有两个来源 |
 | `agent.connected` / `agent.disconnected` / `device.revoked` / `turn.delta_compacted` | 连接与审计类：不是会话时间线上用户要读的内容 |
 
-**已按保留策略压缩的事件不产生条目**：`compacted_into IS NOT NULL` 的行既不进历史也不可读（与第 11.5 节的保留窗口口径一致）。因此 `agent.thought.delta` 没有收尾事件，压缩后即消失——**思考内容不承诺出现在历史里**，历史条目里的思考只有在该 delta 仍在保留期内且未被压缩时才可能作为条目出现。这是如实口径，不是实现可以补齐的缺口。
+**已按保留策略压缩的事件不产生条目**：`compacted_into IS NOT NULL` 的行既不进历史也不可读（与第 11.5 节的保留窗口口径一致）。因此 `agent.thought.delta` 没有收尾事件，压缩后即从**事件流**消失。Agent 明确提供的思考按 `MessageChannel.Thought` 与回复分别落盘到 `owned_message`（`CORE_PORTS_AND_STORAGE.md` §7.6，计划由 WP2 实施），历史恢复经 `session.read` 的 `messages` 取得，不依赖 delta 事件仍在保留期内；压缩只影响事件重放，不删除已保存的正文。WP2 落地前，`owned_message` 的思考正文尚不存在，不得据此宣称思考历史恢复已实现。
 
 ### 10.3 v1 Event View Contract
 
@@ -1332,6 +1401,24 @@ PublicError { code: string, message: string, retryable: boolean, details: object
 ```
 
 公共 view 不是 ACP 原文替代品。无法形成专用 view 时必须使用 `unsupported` block 或未知事件降级，同时保留 `acp.rawJson` 或明确的 `rawUnavailable`。
+
+### 10.4 消息通道、类型化媒体与部分结果
+
+`core.typed-media.v1` 为消息与媒体补上类型化投影。它们不替代 ACP 原文：同一事件的 `acp.rawJson` 字节、长度与摘要保持不变，客户端只消费专用视图。
+
+| 值对象 | 形状与语义 |
+|---|---|
+| `messageChannel` | `reply｜thought`。回复与思考**分别**持久化、分别折叠；Agent 未提供思考时不得生成思考消息；`agent.thought.delta` 不产生 `agent.message.completed`（§10.3） |
+| `mediaReference` | `{ attachmentId, sessionId, kind: image｜audio｜file, mediaType, byteLength, sha256, displayName, availability }`；只标识内容与可用性，**不含**下载 URL、临时路径或凭据 |
+| `partialResult` | `{ state: completed｜partial｜failed｜cancelled, reason }`；`partial` 表示停止/失败/断线时已收到内容被保留，MUST NOT 被客户端当作完整成功回复 |
+
+- `mediaReference.availability` 是封闭词表：`available`（可经 §3.4 读取）、`expired`（超出保留期或已随消息清理）、`not_fetched`（只有外部 URI，未自动下载）、`unsupported`（当前端到端能力不具备该类型）。不可用是显式事实，MUST NOT 用空字节或空 URL 冒充内容。
+- `AgentContentBlock` 在既有 `text`/`image_ref`/`resource_ref`/`unsupported` 之外新增 `audio_ref` 与 `file_ref`，并给 `image_ref`/`audio_ref` 增加可选 `attachmentId`：嵌入字节由 Owner 抽取为附件后才有该标识；只有外部 URI 或未取得内容时为 `null` 或缺失。`file_ref` 必然指向已封存附件。读取一律经 §3.4 的已认证连接并重新校验会话与归属，不使用长期地址。
+- **媒体不阻塞事件**：媒体字节不进入事件帧或业务命令（超过 §14 消息预算的原生块按 §11.5 的 PromptContentBlock 规则整条拒绝，见 `ACP_COMPATIBILITY_MATRIX.md`）。事件只携带引用与可用性，字节由附件连接按需分块读取。
+- **只在 Agent 确实提供时产生**：Agent 输出的图片/音频/资源经 `agent-host` 类型化投影进入 core；未识别的 content 仍按 `unsupported` 或未知事件降级并保留原文，MUST NOT 文本化或猜测。外部链接不因展示而自动获取（§15）。
+- 历史与实时同形：`session.read` 的 `messages` 与事件 view 使用同一组 `AgentContentBlock`；保留期外读到 `availability = expired`，不再返回正文或空占位。
+- **消息页的加性字段**：`schemas/sync/v1/sync.schema.json#/$defs/snapshotItem.messages` 增加可选的 `channel` 与 `partial`（同一 session.read 消息页与事件视图复用它）。它们是**加性**的：未协商 `core.typed-media.v1` 的连接收到的消息里这两个键**缺席**（不是 `null`），旧 peer 看到的 shape 逐字不变；协商后 `channel` 区分回复/思考，`partial` 表达已保留但未完成。该修改不提升 `protocolVersion`（§16.1）。
+- **有效待处理交互**：`effectiveInteraction`（`interactionId`、`sessionId`、`kind`、`requestVersion`、`expiresAt`、`options`、`schema`）是服务端重新确认过的当前请求，只在协商 `core.pending-interactions.v1` 后经 `session.read` 的 `pending_interactions` 返回，规则见 §11.7。历史卡片只有定位信息，不能直接应答。
 
 ## 11. Command 与幂等
 
@@ -1510,18 +1597,18 @@ local.audit.export
 | Command | 类别 | `sessionId` | Payload | 成功结果/终态 |
 |---|---|---|---|---|
 | `session.list` | query | 禁止 | `{}` | `completed { sessions: SessionSummary[] }` |
-| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities,history`；Sync 面另接受可选 `before`（复合游标）、`beforeHistory`（会话内事件序号，十进制字符串）与 `limit` | `completed SessionReadResult`，`resources` 与第 9.4 节同名元素同形并附必填 `hasEarlier` 与只描述 `history` 这一页的可选 `historyHasEarlier`；imported 会话回源 Owner。**本期降级**：`turns`/`pending_interactions`/`capabilities` 三类与 imported 会话的明细一律回 `capability.unsupported_by_broker`（见第 9.4 节的说明），客户端 MUST NOT 把它当成「会话无内容」或「已到最早一条」 |
+| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities,history`；Sync 面另接受可选 `before`（复合游标）、`beforeHistory`（会话内事件序号，十进制字符串）与 `limit` | `completed SessionReadResult`，`resources` 与第 9.4 节同名元素同形并附必填 `hasEarlier` 与只描述 `history` 这一页的可选 `historyHasEarlier`；imported 会话回源 Owner。**协商后**：`pending_interactions` 在 `core.pending-interactions.v1` 被选中时返回每个当前有效请求的完整 `effectiveInteraction`（含 `requestVersion`，见 §11.7），未协商时回 `capability.unsupported_by_broker`；imported 会话的 `history` 在 `core.remote-history.v1` 被选中时回源 Owner 分页，未协商时同样显式不支持。`turns`/`capabilities` 与未协商的 imported 明细仍回 `capability.unsupported_by_broker`（见第 9.4 节），客户端 MUST NOT 把不支持当成「会话无内容」或「已到最早一条」 |
 | `command.status` | query | 禁止 | `{ targetRequestId }` | `completed CommandStatusRecord` |
 | `session.mode.list` | query | 必须 | `{}` | `completed ModeState { currentModeId, availableModes: ModeRef[], version }` |
 | `session.config.list` | query | 必须 | `{}` | `completed { configOptions: SessionConfigOptionView[], version }` |
 | `workspace.mkdir` | mutation | 禁止 | `{ parentPath, name }`；父路径 1..4096 字符，单组件名字 1..255 字符 | `accepted` 后由持久终态报告 `completed { created: true }`；结果不含路径；受 `core.workspace-mkdir.v1` 门控 |
 | `workspace.browse` | query | 禁止 | `{ path: 绝对路径或 null }`——只含一个父路径字段：绝对路径（1..=4096 字符）请求该层，`null` 请求该节点的根列表（该键必须存在，不可缺席） | `completed { path, entries: WorkspaceBrowseEntry[], truncated }`；`entries` 只含该层的**直接子目录**（`{ name, path, registered }`），不含文件条目、文件内容、大小、时间戳或权限；条目按名称以确定顺序（Unicode 码点升序）排列，超过 §14 的单层条目上限时只返回上限内条目并置 `truncated: true`（不静默丢弃、不整次失败）；受 feature `core.workspace-browse.v1` 门控，未协商时在触碰文件系统之前返回 `protocol.feature_required`；只读：不产生任何登记、会话或审计副作用 |
-| `session.prompt` | mutation | 必须 | `{ content: PromptContentBlock[] }` | `accepted { turnId }`，随后 turn/domain event 和 command terminal event |
+| `session.prompt` | mutation | 必须 | `{ content: PromptContentBlock[], submissionId?: UUID }`；`submissionId` 只指向本会话/本主体已 `manifest_sealed` 的附件清单，出现未封存或不存在的清单返回 `attachment.transfer_not_found`/`attachment.binding_mismatch`；未协商 `core.attachment-transfer.v1` 时该键缺席 | `accepted { turnId }`，随后 turn/domain event 和 command terminal event |
 | `session.cancel` | mutation | 必须 | `{ turnId }` | 取消请求生效后 `command.completed`；目标已经终态则幂等完成 |
-| `elicitation.respond` | mutation | 必须 | `{ interactionId, action, values }` | `action` 为 `submit|decline|cancel`（对齐 ACP `accept`/`decline`/`cancel`）；`submit` 的 `values` 是 `object|null`（`null` 对应 ACP `content: null`），`decline`/`cancel` 的 `values` 必须为 `null`；校验后产生 `elicitation.resolved` |
+| `elicitation.respond` | mutation | 必须 | `{ interactionId, requestVersion?, action, values }`；`requestVersion` 只在协商 `core.pending-interactions.v1` 后必须携带，未协商的旧 peer 可省略 | `action` 为 `submit|decline|cancel`（对齐 ACP `accept`/`decline`/`cancel`）；`requestVersion` 必须等于当前有效请求的版本（§11.7），不符返回 `interaction.version_conflict` 且不消耗请求；`submit` 的 `values` 是 `object|null`（`null` 对应 ACP `content: null`），`decline`/`cancel` 的 `values` 必须为 `null`；校验后产生 `elicitation.resolved` |
 | `session.mode.set` | mutation | 必须 | `{ modeId }`，body `expectedVersion` 必须存在 | `session.mode.changed` 后 `command.completed` |
 | `session.config.set` | mutation | 必须 | `{ configId, value }`，body `expectedVersion` 必须存在 | 先发 `session.config.changed`，再发 `command.completed` |
-| `permission.resolve` | mutation | 必须 | `{ interactionId, optionId }` | `permission.resolved` 后 `command.completed` |
+| `permission.resolve` | mutation | 必须 | `{ interactionId, requestVersion?, optionId }`；`requestVersion` 只在协商 `core.pending-interactions.v1` 后必须携带，未协商的旧 peer 可省略 | `permission.resolved` 后 `command.completed`；版本不符或请求已失效返回 `interaction.version_conflict`/`interaction.unavailable` 且不消耗请求 |
 | `session.create` | mutation | 禁止（会话尚不存在） | 只允许四个键：`agentId`（必填）、`directoryId`（本机已记录目录的标识）、`workspacePath`（客户端提交的绝对目录，1..=4096 字符）与可选的布尔键 `createIfMissing`（显式的「目录不存在则先创建」开关）；`directoryId` 与 `workspacePath` **恰好出现一个**，且 `createIfMissing` 与 `directoryId` **互斥**（同时出现即 `protocol.schema_invalid`）；出现任何其它键（`cwd`、`templateParams`、MCP 配置或凭据字段）一律 `protocol.schema_invalid` | `accepted { result: null, terminalEventId: null }` → `completed { sessionId, session: SessionSummary }` 并附唯一 `terminalEventId`；目录形状非法（相对路径、含 `..`、别名未登记）以参数类错误拒绝且不触碰文件系统，形式合法但本机解析失败以 `internal.unavailable` 拒绝，两者都是**接受前**的拒绝（零副作用）；`createIfMissing` 为真且目录不存在时先创建它（连同缺失的父层）再启动 Agent，创建失败以 `internal.unavailable` 拒绝且不启动 Agent、不留会话行，按它创建出的目录不登记成别名（该会话的目录归属是「未分组」）且在后续失败时**不删除**；受理只落该命令的幂等记录（会话标识为空、不写会话行），会话行与终态在**同一次提交**里落盘，因此已接受的创建按「能否证明 Agent 侧未产生会话」终结——进程未能启动、Agent 明确返回错误、请求未发出 ⇒ `failed`（复用既有错误码 `internal.unavailable`，成因写在终态 `message` 里，不新增错误码），短请求超时、请求发出后连接断开、会话已建立之后才失败或崩溃窗口 ⇒ `uncertain`；上述接受前的拒绝与**建立失败**的 `failed`/`uncertain` 终态都零会话行、不下发会话标识；只有「会话确实已建立、仅终态结果无法投影」那一档 `uncertain` 例外——那时会话行与 `uncertain` 终态在**同一次提交**里落盘（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条），仍然不下发会话标识。同一 `requestId` 重发返回首次结果，不产生第二个会话 |
 | `session.files.list` | query | 必须 | `{ path, hideIgnored, after? }`；`path` 是根内相对目录，空字符串表示会话根；`hideIgnored` 必填布尔值；`after` 是可选翻页位置 | `completed { path, gitState, entries: SessionFileEntry[], next? }`；条目含根内路径、名称、类型（file/directory/link/other）、可打开性与受限原因；`gitState` 为 `available｜not_repository｜unavailable`；每页最多 128 项，`next` 为续读位置；受 `core.session-files.v1` 门控 |
 | `session.files.read` | query | 必须 | `{ path, purpose, offset, version? }`；`purpose` 为 `preview｜download`，`offset` 是规范十进制字符串，`version` 是连接期不透明标识 | `completed { path, kind, sizeBytes, version, offset, dataBase64, eof, previewTruncated }`；`kind` 为 `text｜image｜binary`，单块原始字节最多 32 KiB；版本缺失时建立快照，变化时明确要求重读 |
@@ -1577,6 +1664,8 @@ local.audit.export
 - **默认页是最近 20 条用户输入**（`role: "user"` 的消息数）。用户输入与 turn 边界天然接近，是用户能数得清的量，服务端按此计数取页，使一页体积对用户可预期。
 - **`limit` 是可选的整数码数**（`minimum: 1`，与 `chunkCount` 同属第 3.3 节的结构性常量一类，不走十进制字符串规则）。省略时用服务端配置默认页；**超过服务端为该会话配置的明细条数上限时，服务端收敛到自己的上限并照常返回，MUST NOT 因此让请求失败**——因此 schema 上没有 `maximum`。
 - **到达最早一条时**结果给出 `hasEarlier: false`，且不返回空占位；客户端据此停止翻页。
+- **一页包含该页边界内的全部消息**：服务端按页内用户输入计数，但返回的消息还包括页边界之后的 Agent 回复与思考——两段用户输入之间可以有任意多条 Agent 正文（回复 + 思考），服务端一直往前读到覆盖页首用户消息之前的那条为止，MUST NOT 因内部页大小（200 条）静默截断；那会让更早的 Agent 消息永远无法通过 `before` 取回。超过单次读取的硬上限时返回 `resource.result_too_large`，而不是一份缺条目的页。
+- **未协商 `core.typed-media.v1` 时消息正文也降级**：`messages` 页的 `agentContentBlock` 与事件视图共用同一个判定——`audio_ref`/`file_ref` 整块不出现、`image_ref` 不带 `attachmentId`，`channel`/`partial` 亦缺席。旧 peer 的封闭词表因此不会遇到无法解码的块（否则整条 `session.read` 结果会失败，而不是少显示一张卡片）。
 - **保留窗口之前的游标显式不可读**：请求的 `before` 早于该节点对与会话消息的保留窗口、且更早的消息已按保留策略清理时，服务端返回 `sync.cursor_invalid`（`details.reason = "cursor_expired"`），MUST NOT 静默返回更少的元素让客户端误以为已到最早一条。
 
 结构化历史条目（`include` 含 `history`）走**同一命令、独立的一套游标与页标记**（design D2），因此上面关于消息的规则都不因它而改变：
@@ -1590,21 +1679,25 @@ local.audit.export
 
 `SessionReadResult` 的 `resources` 每个键都可缺席，但 `hasEarlier` 是必填布尔值，指示本次返回的这一页**消息**之前是否仍有更早内容；它缺席即形状错误，客户端不得默认成 `false`。只描述结构化历史条目那一页的同名结论由**可选**的 `historyHasEarlier` 承担：两者互相独立，`historyHasEarlier` 的缺席表示本次没有请求 `history`，它也不改变 `hasEarlier` 的消息语义。
 
-**分页只作用于 Sync 面**（design D3、D11）：`before`、`beforeHistory`、`history` 这个 include 取值与 `limit` 只在 `schemas/sync/v1/command.schema.json` 生效。`schemas/node-link/v1/command.schema.json` 与 `crates/node-link-protocol` 的同名命令 DTO 不含这些键与取值，行为与本变更前完全一致——按既有形状发起、不带任何分页参数的 Node Link 调用方照常返回该会话明细，MUST NOT 因缺少分页参数被拒绝，也 MUST NOT 因出现 Sync 面的取值或字段而改变形状或失败。代价是同一个命令名在两个协议下的载荷形状不同：Node Link 侧的正文有 `no-content-cache` 硬约束（第 12.4 节），Access 侧根本不保留正文，不需要分页，也不提供结构化历史条目。
+**分页的传输面**（design D3、D11）：`before`、`beforeHistory`、`history` 这个 include 取值与 `limit` 在 `schemas/sync/v1/command.schema.json` 生效。`schemas/node-link/v1/command.schema.json` 与 `crates/node-link-protocol` 的同名命令 DTO 在协商 `node-link.remote-history.v1` 后也接受 `before`/`limit`（与 Sync 面同名同义，`limit` 为结构常量整数）与 `history`/`beforeHistory`；未协商该 feature 时这些键缺席，按既有形状发起、不带任何分页参数的 Node Link 调用方照常返回该会话明细，MUST NOT 因缺少分页参数被拒绝，也 MUST NOT 因出现 Sync 面的取值或字段而改变形状或失败。Access 的 imported `session.read` 因此可以把本地客户端的分页参数原样转给 Owner，并把 Owner 返回的同一 `sessionReadResult` 形状投影回本地；Access 仍不持久化正文。
 
 `ModeState` 是 ACP `SessionModeState` 的公开投影：`currentModeId` 可为 `null`，`availableModes` 的每一项是 `ModeRef { modeId, displayName }`。`SessionConfigOptionView` 定义见第 10.3 节，`session.config.set` 的 `value` 必须是该 option 当前 `type` 允许的取值（`select` 用 `string`，`boolean` 用 boolean）。
 
-`PromptContentBlock` v1 baseline 只有：
+`PromptContentBlock` 有三个封闭分支（`schemas/sync/v1/common.schema.json#/$defs/promptContentBlock`）：
 
 ```json
 { "type": "text", "text": "..." }
+{ "type": "attachment_ref", "attachmentId": "...", "mediaType": "...", "byteLength": "...", "sha256": "..." }
+{ "type": "workspace_path_ref", "path": "src/main.rs" }
 ```
 
-- `content` 至少 1 项，最多 64 项；合计 UTF-8 text 受 `maxPromptBytes` 限制。
-- v1 PWA 不发送图片、文件、resource link 或任意 ACP content block。尝试发送返回 `capability.unsupported_by_client`，不能静默删除非文本 block 后继续。
-- Agent 输出中的图片/resource 仍通过 `AgentContentBlock` 和 ACP raw payload 显式呈现；缺少下载/渲染能力不等于丢弃事件。
-- `elicitation.respond.values` 必须符合原 `elicitation.requested.schema`，最大 64 KiB、深度 16；`cancel` 时 values 必须为 `null`。
-- `permission.resolve.optionId` 必须来自对应未解决 request，不能由客户端提交任意权限字符串。
+- `text` 始终可用。`attachment_ref` 只在协商 `core.attachment-transfer.v1` 且附件已封存、已绑定本会话/本主体时接受；`workspace_path_ref` 只表示**当前会话工作目录内**的相对路径，服务端校验规范化后的前缀关系与链接逃逸，不固定版本、不追踪内容变化，也不把路径当作附件快照。
+- `content` 至少 1 项，最多 64 项；合计 UTF-8 text 受 `maxPromptBytes` 限制。附件字节数不计入该文本预算，但计入 Agent 侧的真实输入预算（§14 与 `ACP_COMPATIBILITY_MATRIX.md`）。
+- 未协商对应 feature 时这两个分支**必须缺席**：客户端发送它们会被 `protocol.schema_invalid` 拒绝；服务端不得把附件静默转成文本、删掉附件后只发文字，或用空 `attachment_ref` 占位。
+- Agent 输出中的媒体/resource 仍通过 `AgentContentBlock`（§10.4）和 ACP raw payload 显式呈现；缺少下载/渲染能力不等于丢弃事件。外部 URI 不自动下载。
+- `elicitation.respond.values` 必须符合原 `elicitation.requested.schema`，最大 64 KiB、深度 16；`cancel` 时 values 必须为 `null`。未知必需字段或无法表达的类型必须使提交不可用并说明，MUST NOT 以空对象冒充填写。
+- `permission.resolve.optionId` 必须来自对应未解决 request，不能由客户端提交任意权限字符串；`requestVersion` 必须与当前有效请求一致（§11.7）。
+- `session.prompt.submissionId` 与两个应答命令的 `requestVersion` 在 `schemas/sync/v1/command.schema.json` 里是**可选**字段，这是为旧 peer 保留的 wire 形状，不是语义上的可省略：未协商 `core.attachment-transfer.v1` / `core.pending-interactions.v1` 的客户端不发送它们，行为与本变更前逐字相同；一旦协商，客户端 MUST 发送，服务端不得用缺省值猜测版本或清单绑定，也不得因字段缺席而放宽校验。
 - query 结果超过单消息上限时返回 `resource.result_too_large`，客户端应改用 snapshot/事件视图；不得截断后伪装成完整结果。
 
 ### 11.6 多端并发
@@ -1615,6 +1708,17 @@ local.audit.export
 - 并发 prompt 按服务端持久化接受顺序排队，或按配置明确返回 `session.busy`。
 - config option 与模式变更必须带 `expectedVersion`；版本不匹配返回 `state.version_conflict` 和当前版本（`details.currentVersion` 必需，`details.expectedVersion` 回显请求携带的版本），客户端据此重读后再决定是否重试。
 - 权限或 elicitation 响应使用请求自身的 expected state/version；第一个有效响应成为权威结果，之后返回 `interaction.already_resolved`。
+
+### 11.7 有效待处理交互与应答版本
+
+`core.pending-interactions.v1` 让刷新或换设备后的客户端重新取得**当前有效**的完整请求，而不是只能看历史卡片。
+
+- **读取**：`session.read` 的 `include` 含 `pending_interactions` 时，`resources.pending_interactions` 返回 `effectiveInteraction[]`（机器定义 `schemas/sync/v1/media.schema.json#/$defs/effectiveInteraction`，语义见 §10.4），每项含服务端在本次读取时确认的 `requestVersion`、完整 `options`/`schema` 与可选的 `expiresAt`。未协商该 feature 时返回 `capability.unsupported_by_broker`，不得返回空数组冒充「没有待处理请求」。
+- **历史只是定位信息**：从事件历史或快照恢复的待处理卡片仅携带 `interactionId`，MUST NOT 直接授权应答；客户端必须先调用 `session.read` 取得当前有效请求。
+- **应答前校验**：`permission.resolve`/`elicitation.respond` 在接受前依次校验连接身份与撤销状态、会话归属、请求仍为 pending、`requestVersion` 等于当前值、Agent 上游等待方仍存活、表单值符合当前 schema。任一失败都**不消耗**请求：版本不符返回 `interaction.version_conflict`（`details.expectedVersion`/`currentVersion`，可重试），已处理返回 `interaction.already_resolved`，已失效/上游丢失/远程不可达返回 `interaction.unavailable`（`details.reason` 为 `expired｜upstream_lost｜owner_offline`）。
+- **首个有效答案胜出**：多个设备并发提交时，服务端用一次原子条件更新选出唯一胜者；其余设备收到 `interaction.already_resolved` 并看到由其他设备完成的事实。重复相同 `requestId` 幂等返回首次结果，不重复派发。
+- **不可复活**：Daemon 重启后上游 ACP 请求已不存在的交互保持终态，MUST NOT 被迁移或重新标记为 pending；历史应答不会「补发」给 Agent。
+- **值保真**：表单整数不得先经 JavaScript number 再序列化；未知必需字段或不可表达的 ACP 类型使提交整体不可用并说明原因。`submit` 的空对象与 `null` 分别对应 ACP `content: {}` 与 `content: null`，不得互换。
 
 ## 12. Error
 
@@ -1678,6 +1782,19 @@ resource.rate_limited
 resource.backpressure
 resource.result_too_large
 resource.remote_unavailable
+attachment.negotiation_required
+attachment.transfer_not_found
+attachment.binding_mismatch
+attachment.offset_mismatch
+attachment.chunk_conflict
+attachment.digest_mismatch
+attachment.sealed
+attachment.budget_exhausted
+attachment.expired
+attachment.revoked
+media.unavailable
+interaction.unavailable
+interaction.version_conflict
 internal.unavailable
 ```
 
@@ -1690,8 +1807,13 @@ internal.unavailable
 | `state.version_conflict` | `expectedVersion`（可选）、`currentVersion`（必需） |
 | `resource.rate_limited` | `retryAfterMs`（可选） |
 | `resource.remote_unavailable` | `ownerNodeId`（可选）、`reason`（必需） |
+| `attachment.offset_mismatch` | `expectedOffset`（必需）、`actualOffset`（必需） |
+| `attachment.chunk_conflict` | `offset`（必需） |
+| `media.unavailable` | `reason`（必需） |
+| `interaction.unavailable` | `reason`（必需） |
+| `interaction.version_conflict` | `expectedVersion`（可选）、`currentVersion`（必需） |
 
-未在上表列出的 code **不登记任何** `details` 字段：发送方必须送 `{}`。字段的取值域由 registry 的 `details` 片段约束：`sync.cursor_invalid.reason ∈ {malformed, epoch_mismatch, beyond_head, cursor_expired}`；`resource.remote_unavailable.reason ∈ {owner_offline}`；`protocol.feature_required.features` 是 1..64 个 feature ID 的排序去重列表（`requiredFeatures` 中未被协商的那些）；`resource.rate_limited.retryAfterMs` 是建议退避毫秒数；`state.version_conflict` 的两个版本号都是十进制字符串。每个登记字段都要标注 `必需` 或 `可选`，与 registry 的 `required` 逐一对应。`details` 始终是开放扩展点（接收方必须忽略未知字段，§4.2），新增字段按 §16.1 的兼容变更登记。上表与 `compatibility/errors/v1/errors.json` 的 `details` 片段逐条相等，由 `npm run check` 的 `check:errors` 断言。`resource.remote_unavailable` 只用于 `origin.kind = "remote"` 的会话正文回源失败，本节点资源不得返回该错误码。
+未在上表列出的 code **不登记任何** `details` 字段：发送方必须送 `{}`。字段的取值域由 registry 的 `details` 片段约束：`sync.cursor_invalid.reason ∈ {malformed, epoch_mismatch, beyond_head, cursor_expired}`；`resource.remote_unavailable.reason ∈ {owner_offline}`；`protocol.feature_required.features` 是 1..64 个 feature ID 的排序去重列表（`requiredFeatures` 中未被协商的那些）；`resource.rate_limited.retryAfterMs` 是建议退避毫秒数；`state.version_conflict` 的两个版本号都是十进制字符串；`attachment.offset_mismatch` 的两个偏移与 `attachment.chunk_conflict.offset` 都是十进制字符串；`media.unavailable.reason ∈ {expired, not_found, external_uri_not_fetched}`；`interaction.unavailable.reason ∈ {expired, upstream_lost, owner_offline}`；`interaction.version_conflict` 的两个版本号同样是十进制字符串。每个登记字段都要标注 `必需` 或 `可选`，与 registry 的 `required` 逐一对应。`details` 始终是开放扩展点（接收方必须忽略未知字段，§4.2），新增字段按 §16.1 的兼容变更登记。上表与 `compatibility/errors/v1/errors.json` 的 `details` 片段逐条相等，由 `npm run check` 的 `check:errors` 断言。`resource.remote_unavailable` 只用于 `origin.kind = "remote"` 的会话正文回源失败，本节点资源不得返回该错误码。
 
 错误码可以向后兼容地增加。客户端遇到未知错误码时按 `retryable` 和 code 首段做保守处理，并展示通用错误。
 
@@ -1796,7 +1918,7 @@ v1 默认上限：
 - 超过单消息上限应在分配大对象前拒绝。
 - 限流所用的「命令族」是**服务端自持的 v1 常量**：每个命令名恰好属于一个族，覆盖关系由服务端测试断言；命令名的封闭词表仍以 `compatibility/commands/v1/commands.json` 为唯一来源。数值不变：单设备 120 次/分钟、窗口 1 分钟，连续超限以 `4429` 关闭连接。
 - 超过本节速率时返回 `resource.rate_limited`（`retryable = true`），并在连续超限时以 `4429` 关闭连接；客户端应遵守 `details.retryAfterMs`（存在时）退避后再重试，不得立即重发。
-- attachment、大型 diff 和完整终端输出不内嵌绕过限制；未来使用单独的受授权内容接口或 binary feature。
+- 附件正文、大型 diff 和完整终端输出不内嵌到业务消息中绕过 1 MiB 上限：附件走 §3.4 的独立已认证连接，按 32 KiB 分块、每传输最多一块未确认；其单连接发送预算与速率按附件传输族**独立**计数，不占用业务命令配额，也不因大文件拖慢事件投递。diff 与终端输出仍按本节既有预算显式降级。
 - 待发送队列达到高水位后先停止读取新的 replay batch；持续过慢则发送 `resource.backpressure` 并断开。
 - 断开慢客户端后由其 cursor 重放，不能丢弃 Agent 事件或阻塞其他连接。
 - rate limit 至少按 IP、device ID 和 command 分类；网络身份不能替代设备认证。
@@ -1811,6 +1933,8 @@ v1 默认上限：
 - JSON schema 验证发生在进入 Broker 之前；设备认证（Sync 面）与 节点认证（Node Link 面）都发生在业务用例执行之前。
 - Agent 生成的 Markdown、HTML、终端、diff 和工具输出始终是不可信数据。
 - `Origin`、Host key、device key 与设备认证状态都是独立检查，任一通过不能替代其他检查。
+- 附件连接的每一帧都重新校验连接身份、设备撤销状态、传输会话与主体绑定；附件读取不依赖公开或长期 bearer URL，跨会话/跨主体标识不得泄露内容。
+- 外部 URI 与链接不因展示或解析而自动下载；媒体字节只在已认证读取路径中进入内存或页面 Blob，且按保留期与撤销立即失效。
 - TLS channel 不使用应用长期 signing key 做加密；身份密钥和连接临时密钥保持分离。
 
 ## 16. 兼容与演进
@@ -1828,7 +1952,8 @@ v1 默认上限：
 - 改变现有字段含义、类型或必填性。
 - 改变排序、ACK、cursor 或幂等语义。
 - 改变 transcript codec、算法、domain 或 field tag。
-- 引入 binary framing、压缩、附件传输或不同 Transport Profile。
+- 引入 binary framing、压缩、或不同 Transport Profile。
+- 附件传输、类型化媒体、可恢复交互与远程历史按 §5.2 的 feature 引入；它们不要求提升 `protocolVersion`，但未协商时不得出现新帧或新封闭字段（§5.3）。
 
 ### 16.3 数据迁移
 
@@ -1846,6 +1971,8 @@ fixture 目录至少覆盖：
 fixtures/sync/v1/
 ├─ valid/          应通过 schema 的认证、同步、事件、命令、错误和配对样例
 ├─ invalid/        必须失败并声明 expectedKeyword 的反向样例
+├─ attachment/     独立附件连接的正反样例（§3.4；重复块、错误偏移、未协商、跨会话/主体、撤销）
+├─ media/          类型化媒体、消息通道、部分结果与有效交互的值对象样例（§10.4）
 ├─ transcripts/    transcript、HMAC 和签名固定向量（第 6.3 节全部 domain）
 ├─ device-qr/      新设备短二维码的 Rust/TypeScript 共享向量（§7.1.1，含旧 #data= 拒绝样例）
 └─ manifest.json   schema、view $defs、fixture、deviceQrVectors 与预期结果映射
@@ -1865,6 +1992,7 @@ node scripts/check-acp-compatibility.mjs
 - `check-contract-assets.mjs` 负责静态引用完整性与需要真正计算的绑定：`$ref` 目标存在、`$id` 在每个 asset root 内唯一、`rawJson` 的 `byteLength`/`sha256` 与文本本身一致、事件的 `payloadDigest` 与 `payload` 的 ACPR-CJ1 sha256 一致、transcript 固定向量的 SHA-256/HMAC/P1363 重算通过。transcript 向量还必须**由 `codec`/`domain`/`input` 经 `compatibility/transcripts/v1/transcripts.json` 的字段表重新编码**并与 `expected.transcriptBase64url` 逐字节一致，因此 tag 顺序、宽度或字段集合写错会让检查失败；`transcripts/invalid/` 下的负向量则断言解码器以声明的错误拒绝畸形输入。
 - `check-command-catalog.mjs` 断言命令名在 `compatibility/commands/v1/commands.json`、`schemas/sync/v1/command.schema.json`（`transport` 含 `sync` 的子集）、`schemas/node-link/v1/command.schema.json`（`transport` 含 `node_link` 的子集）、本文 §11.5 与 `SECURITY_DESIGN.md` §10.2 之间一致。
 - `check-error-registry.mjs` 断言 `compatibility/errors/v1/errors.json` 与两个协议的 `$defs.errorCode` enum、以及本文 §12.2 与 `NODE_LINK_PROTOCOL.md` §14.1 的列表一致，并拒绝任何第二处内联定义的公开错误码。
+- `check-contract-assets.mjs` 同时断言附件帧族：`compatibility/commands/v1/commands.json` 的 `transportFrames`、两个 `attachment.schema.json` 的 `$defs.frameType.enum`/`$defs.transferBudget`、本文 §3.4 与 `NODE_LINK_PROTOCOL.md` §12.9 的帧表与预算表逐项相等，且所引用的 feature ID 已在 feature registry 登记。
 
 - `manifest.deviceQrVectors` 登记的 `device-qr/vectors.json` 由 Rust `device_qr_vectors.rs` 与 TypeScript `device-qr.test.ts` **消费同一文件**：规范 65 字节布局、旧 `#data=`、未知版本、错误长度、非规范 base64url、主机公钥 SHA-256 指纹、134 字节地址与 58×29 矩阵预算都在两侧各断言一次。`valid/`/`invalid/` 中不得再出现旧设备完整资料样例；节点资产保持在 `fixtures/node-link/v1/`。
 
@@ -1897,7 +2025,7 @@ Rust 实现必须在自己的 wire DTO（`crates/sync-protocol`）上形成独�
 
 - Noise over WSS 或不可信中继。
 - Protobuf、MessagePack 或通用 binary envelope。
-- 应用层压缩和 attachment streaming。
+- 应用层压缩与通用 binary envelope；附件分块传输已在 v1 baseline 内由 §3.4 承载，不再属于暂缓项。
 - 云端离线队列、云推送和跨 Host 聚合。
 - 多用户账号、组织权限或远程身份提供商。
 - 每条业务消息重复签名。

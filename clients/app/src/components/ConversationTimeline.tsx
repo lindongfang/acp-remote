@@ -42,12 +42,18 @@
 
 import type { ReactElement, ReactNode } from "react";
 
-import type { InteractionAnswer } from "../domain/interaction";
+import type { FormInputValue } from "../domain/form";
+import { buildElicitationForm } from "../domain/form";
+import type { InteractionAnswer, InteractionAvailability } from "../domain/interaction";
+import type { AttachmentMediaView } from "../domain/media";
 import type { TimelineEntry } from "../features/conversation-timeline";
+import { groupTimelineEntries } from "../features/conversation-timeline";
 import { CodeBlock } from "./CodeBlock";
 import { DegradedEntryContent } from "./DegradedEntryContent";
+import { ElicitationForm } from "./ElicitationForm";
 import { InteractionAnswerButtons, InteractionAvailabilityNote } from "./InteractionAnswering";
 import { Markdown } from "./Markdown";
+import { MessageMedia } from "./MessageMedia";
 import type { Palette } from "./theme";
 import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
 
@@ -57,6 +63,8 @@ type EntryOf<K extends TimelineEntry["kind"]> = Extract<TimelineEntry, { readonl
 export interface ConversationTimelineProps {
   /** 时间线条目（唯一渲染列表，已按时间排序、已去重）。 */
   readonly entries: readonly TimelineEntry[];
+  /** 归属会话标识：媒体读取要求会话绑定（页面从 `model.header.sessionId` 给出）。 */
+  readonly sessionId: string;
   /** 打开某条条目（降级 / 工具调用）的诊断抽屉（页面负责把 `eventId` 交给仓库）。 */
   readonly onOpenDiagnostics: (eventId: string) => void;
   /** 授权/提问的应答上抛；缺省时不渲染任何应答按钮（不是「渲染了但点了没反应」）。 */
@@ -82,6 +90,24 @@ export interface ConversationTimelineProps {
    * 缺省时 `file_changed` 条目不是可点控件（不渲染点了没反应的按钮）。
    */
   readonly onSelectChange?: ((changeId: string) => void) | undefined;
+  /** 已读取的消息媒体（`attachmentId → 状态`）；缺省时媒体块显示「读取中」以外的显式状态。 */
+  readonly media?: ReadonlyMap<string, AttachmentMediaView> | undefined;
+  /** 请求读取一条已封存附件（页面接到仓库的 `loadAttachmentMedia`）。 */
+  readonly onLoadMedia?: ((attachmentId: string, sessionId: string, mimeType: string) => void) | undefined;
+  /** 释放一条媒体的对象 URL（消息卸载时）。 */
+  readonly onReleaseMedia?: ((attachmentId: string) => void) | undefined;
+  /** 下载消息里的文件附件（页面负责生成 Blob URL 并触发保存）。 */
+  readonly onDownloadAttachment?:
+    | ((attachmentId: string, mimeType: string, fileName: string) => void)
+    | undefined;
+  /** 提交提问表单（值已通过客户端校验）。 */
+  readonly onSubmitElicitation?:
+    | ((interactionId: string, values: Readonly<Record<string, FormInputValue>>) => void)
+    | undefined;
+  /** 重新取得服务端确认的当前有效请求（刷新/换设备后用 `session.read`）。 */
+  readonly onRefreshInteractions?: (() => void) | undefined;
+  /** 打开 Markdown 里可解析的工作目录相对路径。 */
+  readonly onFilePathPress?: ((path: string) => void) | undefined;
 }
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
@@ -93,6 +119,13 @@ function buildStyles(colors: Palette) {
       alignSelf: "center",
       gap: spacing.md,
       paddingVertical: spacing.sm,
+    },
+    /** 轮次分组：继承时间线的条目间距（原条目是时间线的直接子节点）。 */
+    turnGroup: {
+      gap: spacing.md,
+    },
+    turnGroupEntry: {
+      gap: 0,
     },
     entry: {
       gap: spacing.xs,
@@ -587,12 +620,24 @@ function MessageEntry({
   onToggle,
   onCopyCode,
   onLinkPress,
+  media,
+  onLoadMedia,
+  onReleaseMedia,
+  onDownloadAttachment,
+  onFilePathPress,
+  sessionId,
 }: {
   readonly entry: EntryOf<"message">;
   readonly expanded: boolean;
   readonly onToggle: ((key: string, expanded: boolean) => void) | undefined;
   readonly onCopyCode: ((code: string, language: string) => void) | undefined;
   readonly onLinkPress: ((href: string) => void) | undefined;
+  readonly media: ReadonlyMap<string, AttachmentMediaView>;
+  readonly onLoadMedia: ConversationTimelineProps["onLoadMedia"];
+  readonly onReleaseMedia: ConversationTimelineProps["onReleaseMedia"];
+  readonly onDownloadAttachment: ConversationTimelineProps["onDownloadAttachment"];
+  readonly onFilePathPress: ConversationTimelineProps["onFilePathPress"];
+  readonly sessionId: string;
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -605,13 +650,31 @@ function MessageEntry({
         style={entry.channel === "user" ? [styles.body, styles.bodyUser] : [styles.body, styles.bodyAgent]}
         dataSet={{ messageText: "true" }}
       >
-        <Markdown value={message.text} onLinkPress={onLinkPress} onCopyCode={onCopyCode} />
+        <Markdown
+          value={message.text}
+          onLinkPress={onLinkPress}
+          onCopyCode={onCopyCode}
+          onFilePathPress={onFilePathPress}
+        />
       </View>
-      {message.hasStructuredContent ? (
-        <Text style={styles.note} dataSet={{ hasStructuredContent: "true" }}>
-          这条消息还有非文本内容块，逐条说明见时间线上的结构化卡片。
+      {/* 类型化媒体：图片预览 / 音频播放 / 文件下载；不可用状态各自说明。 */}
+      <MessageMedia
+        media={message.content.media}
+        sources={media}
+        sessionId={sessionId}
+        onLoad={onLoadMedia}
+        onRelease={onReleaseMedia}
+        onDownload={onDownloadAttachment}
+      />
+      {entry.partial === null || entry.partial.label === null ? null : (
+        <Text
+          role="alert"
+          style={styles.note}
+          dataSet={{ messagePartial: entry.partial.state, messagePartialReason: entry.partial.reason ?? "none" }}
+        >
+          {entry.partial.label}
         </Text>
-      ) : null}
+      )}
       {entry.volatile ? (
         <Text style={styles.note} dataSet={{ messageVolatileNote: "true" }}>
           流式增量（尚未持久化）：正文以按会话读取的结果为准。
@@ -1099,18 +1162,60 @@ function ConfigChangedEntry({ entry }: { readonly entry: EntryOf<"config_changed
 }
 
 /**
+ * 「重新取得当前有效请求」入口。
+ *
+ * 只在**版本/有效性未知**的不可应答态出现：仅历史读到、刷新后服务端不再确认、以及协商了
+ * `core.pending-interactions.v1` 但实时请求没带 `requestVersion`。这三种情况下卡片本身没有
+ * 可提交的内容，刷新是唯一能让它变得可应答或有可见结论的动作。
+ */
+export function RefreshInteractionsAction({
+  availability,
+  onRefreshInteractions,
+}: {
+  readonly availability: InteractionAvailability;
+  readonly onRefreshInteractions: (() => void) | undefined;
+}): ReactElement | null {
+  // hook 必须在所有提前返回之前：这个组件在卡片里是**无条件渲染**的，卡片从不可应答态
+  // 变为可应答态（刷新成功）时 React 会复用同一 fiber——若这次渲染跳过 `useTheme()`，
+  // hook 数量就会变化并抛错。`onRefreshInteractions` 从缺省变为接线时同理。
+  const theme = useTheme();
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
+  if (onRefreshInteractions === undefined) return null;
+  if (availability.kind !== "not_answerable") return null;
+  const reason = availability.reason;
+  if (reason !== "read_from_history" && reason !== "not_effective" && reason !== "request_version_unknown") {
+    return null;
+  }
+  return (
+    <Pressable
+      role="button"
+      style={styles.foldHead}
+      dataSet={{ action: "refresh-interactions", refreshInteractionsReason: reason }}
+      onPress={onRefreshInteractions}
+    >
+      <Text style={styles.note}>重新取得当前有效请求</Text>
+    </Pressable>
+  );
+}
+
+/**
  * 授权请求卡片（原型 `.perm` 的形态：标题 + 说明块 + 三个应答按钮）。
  *
  * 三种可区分呈现来自 `availability` 这一个判别值：本设备亲历（`answerable`，有按钮）／仅历史读到
  * （`not_answerable read_from_history`，没有按钮 + 说明）／已被其它设备处理（`handled_elsewhere`，
  * 没有按钮 + 处理设备标识）——判定本身在 `domain/interaction.ts`，本卡片只照着画。
+ *
+ * 协商 `core.pending-interactions.v1` 后版本未知（实时事件没带 `requestVersion`）时同样是
+ * `not_answerable`，并给出刷新入口：没有版本就发出的应答必然被服务端拒绝。
  */
 function PermissionRequestedEntry({
   entry,
   onAnswerInteraction,
+  onRefreshInteractions,
 }: {
   readonly entry: EntryOf<"permission_requested">;
   readonly onAnswerInteraction: ((interactionId: string, answer: InteractionAnswer) => void) | undefined;
+  readonly onRefreshInteractions: (() => void) | undefined;
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -1154,21 +1259,50 @@ function PermissionRequestedEntry({
           />
         </View>
         <InteractionAvailabilityNote availability={entry.availability} />
+        <RefreshInteractionsAction
+          availability={entry.availability}
+          onRefreshInteractions={onRefreshInteractions}
+        />
       </View>
     </View>
   );
 }
 
-/** 提问请求卡片。 */
+/** 提问请求卡片：按当前有效请求的 schema 渲染可填写控件；不可应答时只说明原因。 */
 function ElicitationRequestedEntry({
   entry,
   onAnswerInteraction,
+  onSubmitElicitation,
+  onRefreshInteractions,
 }: {
   readonly entry: EntryOf<"elicitation_requested">;
   readonly onAnswerInteraction: ((interactionId: string, answer: InteractionAnswer) => void) | undefined;
+  readonly onSubmitElicitation:
+    | ((interactionId: string, values: Readonly<Record<string, FormInputValue>>) => void)
+    | undefined;
+  readonly onRefreshInteractions: (() => void) | undefined;
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const form = buildElicitationForm(entry.schema);
+  const answerable = entry.availability.kind === "answerable";
+  const formSignature =
+    form.kind === "form"
+      ? `${form.fields.map((field) => field.name).join(",")}|${JSON.stringify(form.initial)}`
+      : `unavailable:${form.reason}`;
+  const decline = (): void => {
+    onAnswerInteraction?.(entry.interactionId, { via: "action", action: "decline", label: "拒绝" });
+  };
+  const cancel = (): void => {
+    onAnswerInteraction?.(entry.interactionId, { via: "action", action: "cancel", label: "取消" });
+  };
+  /** 不可应答时只列出字段名与类型：让用户看得出「这里曾要求填什么」，但不给可点的控件。 */
+  const fieldSummary =
+    form.kind === "form" && form.fields.length > 0
+      ? `表单字段：${form.fields
+          .map((field) => `${field.label}（${field.kind}${field.required ? "，必填" : ""}）`)
+          .join("、")}`
+      : null;
 
   return (
     <View
@@ -1190,21 +1324,48 @@ function ElicitationRequestedEntry({
           </Text>
           <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
         </View>
-        {/* 表单结构是开放对象：原样作为不可信文本呈现，不据此推断控件、也不构造载荷。 */}
-        <Text style={styles.kicker} dataSet={{ elicitationSchema: "true" }}>
-          {JSON.stringify(entry.schema)}
-        </Text>
-        {/* 本客户端不构造表单值：`submit` 以空内容提交（协议允许 `values: null`）。把这句话写出来，
-            用户才不会以为「提交」会带上他刚看到的那份表单结构。 */}
-        <Text style={styles.note} dataSet={{ elicitationValues: "not-collected" }}>
-          本客户端不收集表单值：直接提交时以空内容应答（协议允许 `values: null`）。
-        </Text>
+        {entry.turnId === null ? null : (
+          <Text style={styles.meta} dataSet={{ interactionTurnId: entry.turnId }}>
+            {`所属轮次：${entry.turnId}`}
+          </Text>
+        )}
+        {answerable ? (
+          // 表单自己渲染「提交」（带值），按钮组只保留拒绝/取消：同一动作只有一个入口。
+          <ElicitationForm
+            key={formSignature}
+            form={form}
+            {...(onSubmitElicitation === undefined
+              ? {}
+              : {
+                  onSubmit: (values: Readonly<Record<string, FormInputValue>>) => {
+                    onSubmitElicitation(entry.interactionId, values);
+                  },
+                })}
+            {...(onAnswerInteraction === undefined ? {} : { onDecline: decline, onCancel: cancel })}
+          />
+        ) : (
+          <>
+            {fieldSummary === null ? null : (
+              <Text style={styles.kicker} dataSet={{ elicitationFieldSummary: "true" }}>
+                {fieldSummary}
+              </Text>
+            )}
+            <Text style={styles.note} dataSet={{ elicitationUnavailableHint: "true" }}>
+              这条提问当前不可填写：取得服务端确认的当前有效请求后才能提交值。
+            </Text>
+          </>
+        )}
         <InteractionAnswerButtons
           interactionId={entry.interactionId}
           availability={entry.availability}
           onAnswerInteraction={onAnswerInteraction}
+          omitActions={answerable ? ["submit", "decline", "cancel"] : []}
         />
         <InteractionAvailabilityNote availability={entry.availability} />
+        <RefreshInteractionsAction
+          availability={entry.availability}
+          onRefreshInteractions={onRefreshInteractions}
+        />
       </View>
     </View>
   );
@@ -1309,6 +1470,7 @@ function DegradedEntry({
 /** 一条时间线条目的呈现。 */
 function TimelineEntryView(props: {
   readonly entry: TimelineEntry;
+  readonly sessionId: string;
   readonly expandedEntries: Readonly<Record<string, boolean>> | undefined;
   /**
    * 折叠块表头被点选：上抛条目键与**切换后的**值。子组件拿到的是当前**生效**值
@@ -1322,6 +1484,13 @@ function TimelineEntryView(props: {
   readonly onAnswerInteraction: ((interactionId: string, answer: InteractionAnswer) => void) | undefined;
   readonly onCopyCode: ((code: string, language: string) => void) | undefined;
   readonly onLinkPress: ((href: string) => void) | undefined;
+  readonly media: ReadonlyMap<string, AttachmentMediaView>;
+  readonly onLoadMedia: ConversationTimelineProps["onLoadMedia"];
+  readonly onReleaseMedia: ConversationTimelineProps["onReleaseMedia"];
+  readonly onDownloadAttachment: ConversationTimelineProps["onDownloadAttachment"];
+  readonly onSubmitElicitation: ConversationTimelineProps["onSubmitElicitation"];
+  readonly onRefreshInteractions: ConversationTimelineProps["onRefreshInteractions"];
+  readonly onFilePathPress: ConversationTimelineProps["onFilePathPress"];
 }): ReactElement {
   const entry = props.entry;
   const expanded = isExpanded(entry, props.expandedEntries);
@@ -1334,6 +1503,12 @@ function TimelineEntryView(props: {
           onToggle={props.onToggleEntry}
           onCopyCode={props.onCopyCode}
           onLinkPress={props.onLinkPress}
+          media={props.media}
+          onLoadMedia={props.onLoadMedia}
+          onReleaseMedia={props.onReleaseMedia}
+          onDownloadAttachment={props.onDownloadAttachment}
+          onFilePathPress={props.onFilePathPress}
+          sessionId={props.sessionId}
         />
       );
     case "turn":
@@ -1364,9 +1539,22 @@ function TimelineEntryView(props: {
     case "config_changed":
       return <ConfigChangedEntry entry={entry} />;
     case "permission_requested":
-      return <PermissionRequestedEntry entry={entry} onAnswerInteraction={props.onAnswerInteraction} />;
+      return (
+        <PermissionRequestedEntry
+          entry={entry}
+          onAnswerInteraction={props.onAnswerInteraction}
+          onRefreshInteractions={props.onRefreshInteractions}
+        />
+      );
     case "elicitation_requested":
-      return <ElicitationRequestedEntry entry={entry} onAnswerInteraction={props.onAnswerInteraction} />;
+      return (
+        <ElicitationRequestedEntry
+          entry={entry}
+          onAnswerInteraction={props.onAnswerInteraction}
+          onSubmitElicitation={props.onSubmitElicitation}
+          onRefreshInteractions={props.onRefreshInteractions}
+        />
+      );
     case "permission_resolved":
       return <PermissionResolvedEntry entry={entry} />;
     case "elicitation_resolved":
@@ -1381,9 +1569,14 @@ function TimelineEntryView(props: {
  *
  * 容器同时带 `data-timeline="entries"`（新的一等锚点）与 `data-message-list="messages"`（既有
  * 消费方的锚点）：消息与结构化条目进的是同一份列表，因此两者都在它里面。
+ *
+ * 条目按**可靠轮次标识**分组（`groupTimelineEntries`）：同一 `turnId` 的连续条目进一个组，
+ * 没有标识的条目独立成组。分组只来自标识，不按呈现顺序猜测。每个条目外层带
+ * `data-timeline-key`：滚动锚点按它定位（内容在组内原位更新时节点不换）。
  */
 export function ConversationTimeline({
   entries,
+  sessionId,
   onOpenDiagnostics,
   onAnswerInteraction,
   onCopyCode,
@@ -1392,9 +1585,18 @@ export function ConversationTimeline({
   onToggleEntry,
   selectedChangeId,
   onSelectChange,
+  media,
+  onLoadMedia,
+  onReleaseMedia,
+  onDownloadAttachment,
+  onSubmitElicitation,
+  onRefreshInteractions,
+  onFilePathPress,
 }: ConversationTimelineProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const sources = media ?? new Map<string, AttachmentMediaView>();
+  const groups = groupTimelineEntries(entries);
 
   return (
     <View
@@ -1402,19 +1604,42 @@ export function ConversationTimeline({
       style={styles.timeline}
       dataSet={{ timeline: "entries", messageList: "messages", timelineEntryCount: entries.length }}
     >
-      {entries.map((entry) => (
-        <TimelineEntryView
-          key={entry.key}
-          entry={entry}
-          expandedEntries={expandedEntries}
-          onToggleEntry={onToggleEntry}
-          selectedChangeId={selectedChangeId ?? null}
-          onSelectChange={onSelectChange}
-          onOpenDiagnostics={onOpenDiagnostics}
-          onAnswerInteraction={onAnswerInteraction}
-          onCopyCode={onCopyCode}
-          onLinkPress={onLinkPress}
-        />
+      {groups.map((group) => (
+        <View
+          key={group.key}
+          style={styles.turnGroup}
+          role="group"
+          dataSet={{
+            turnGroup: group.key,
+            turnGroupId: group.turnId ?? "unassigned",
+            turnGroupState: group.state ?? "unknown",
+            turnGroupEntryCount: String(group.entries.length),
+          }}
+        >
+          {group.entries.map((entry) => (
+            <View key={entry.key} style={styles.turnGroupEntry} dataSet={{ timelineKey: entry.key }}>
+              <TimelineEntryView
+                entry={entry}
+                sessionId={sessionId}
+                expandedEntries={expandedEntries}
+                onToggleEntry={onToggleEntry}
+                selectedChangeId={selectedChangeId ?? null}
+                onSelectChange={onSelectChange}
+                onOpenDiagnostics={onOpenDiagnostics}
+                onAnswerInteraction={onAnswerInteraction}
+                onCopyCode={onCopyCode}
+                onLinkPress={onLinkPress}
+                media={sources}
+                onLoadMedia={onLoadMedia}
+                onReleaseMedia={onReleaseMedia}
+                onDownloadAttachment={onDownloadAttachment}
+                onSubmitElicitation={onSubmitElicitation}
+                onRefreshInteractions={onRefreshInteractions}
+                onFilePathPress={onFilePathPress}
+              />
+            </View>
+          ))}
+        </View>
       ))}
     </View>
   );
