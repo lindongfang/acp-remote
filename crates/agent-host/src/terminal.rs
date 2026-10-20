@@ -389,11 +389,14 @@ impl TerminalService {
         if self.is_closed() {
             return Err(HostError::SessionClosed);
         }
-        lock(&self.terminals)
-            .get(terminal_id)
-            .cloned()
-            .flatten()
-            .ok_or(HostError::UnknownTerminal)
+        let terminal = lock(&self.terminals).get(terminal_id).cloned().flatten();
+        match terminal {
+            Some(terminal) => Ok(terminal),
+            // `begin_close` 在持有 `terminals` 锁时置关闭标志并清空登记：上面的检查与这次取锁之间
+            // 可能刚好关闭。此时“找不到”表达的是会话已关闭，而不是一个从未存在的标识。
+            None if self.is_closed() => Err(HostError::SessionClosed),
+            None => Err(HostError::UnknownTerminal),
+        }
     }
 
     /// 校验 `cwd`：必须是已存在目录，且规范化后仍在会话工作目录内。
