@@ -341,6 +341,8 @@ impl TestCertificate {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&cert_path, std::fs::Permissions::from_mode(0o600))
+                .expect("证书权限");
             std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
                 .expect("私钥权限");
         }
