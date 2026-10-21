@@ -33,7 +33,13 @@
  */
 
 import type { SocketHandlers, SocketOpenInput, SocketPort } from "../../src/sync-client";
-import { encodeBase64Url, REQUIRED_FEATURES, SESSION_HISTORY_FEATURE, sortedFeatures } from "../../src/sync-client";
+import {
+  encodeBase64Url,
+  REQUIRED_FEATURES,
+  SESSION_HISTORY_FEATURE,
+  SESSION_TITLE_FEATURE,
+  sortedFeatures,
+} from "../../src/sync-client";
 import { SESSION_FILES_FEATURE } from "../../src/protocol/session-files";
 import {
   encodeNulJoinedUtf8,
@@ -81,7 +87,12 @@ const CONNECTION_ID = "3c9f1b6e-6a41-4a2e-9a1c-2f0a5b7d9e13";
  * 选中它是安全的：transcript 与报文里的 `selectedFeatures` 都取自本常量，
  * 客户端用**报文里**的那份重建 transcript 验签（`connection.ts` 的 `#onServerChallenge`）。
  */
-const SERVER_SELECTED_FEATURES: readonly string[] = [...REQUIRED_FEATURES, SESSION_HISTORY_FEATURE, SESSION_FILES_FEATURE];
+const SERVER_SELECTED_FEATURES: readonly string[] = [
+  ...REQUIRED_FEATURES,
+  SESSION_HISTORY_FEATURE,
+  SESSION_FILES_FEATURE,
+  SESSION_TITLE_FEATURE,
+];
 
 /** 非 `session.read` 命令的缺省应答结果（与本次变更前的取值逐字一致）。 */
 const DEFAULT_COMMAND_RESULT: Record<string, unknown> = { sessionId: "dddddddd-0000-4000-8000-0000000000ff" };
@@ -377,6 +388,16 @@ export class FakeHost {
   /** 从此刻起扣住某条命令（直到 {@link releaseHeldCommand}）。 */
   holdCommand(command: string): void {
     this.#dynamicHolds.add(command);
+  }
+
+  /**
+   * 在场景中途追加一条事件（连接与序号由假主机补齐）。
+   *
+   * 用于观察「命令终态」与「权威摘要」的会合时序：标题保存必须等 `session.updated` 落地后
+   * 才退出编辑，因此用例需要先看到 completed、再单独投递这条摘要事件。
+   */
+  deliverEvent(event: Record<string, unknown>): void {
+    this.#deliver(JSON.stringify({ ...event, connectionId: CONNECTION_ID, connectionSequence: "1" }));
   }
 
   /** 取消运行期的扣留；已扣住的帧仍由 `completeHeldCommand` 决定终态。 */

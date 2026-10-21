@@ -27,7 +27,7 @@ use acp_core::model::RemoteSessionRef;
 use acp_core::model::{
     AgentId, AgentRef, AgentSessionId, ConfigOption, ConfigOptionId, ConfigValue, DirectoryId,
     InteractionId, InteractionResolution, ModeId, ModeState, PortError, PromptRequest, RequestId,
-    SessionId, SessionReference, Timestamp, TurnId, UnavailableKind,
+    SessionId, SessionReference, SessionTitle, Timestamp, TurnId, UnavailableKind,
 };
 use acp_core::ports::{
     EventSink, HistoryInclude, HistoryPage, HistoryQuery, RemoteReadQuery, SessionBackendFactory,
@@ -38,6 +38,7 @@ use node_link_protocol::command::{
     ElicitationRespond, IncludeResource, PermissionResolve, PromptContentBlock, PromptContentList,
     SessionCancel, SessionConfigList, SessionConfigSet, SessionCreate, SessionModeList,
     SessionModeSet, SessionPrompt, SessionRead, SessionReadBefore,
+    SessionTitle as WireSessionTitle, SessionTitleSet,
 };
 use node_link_protocol::common::{
     AgentId as WireAgentId, DecimalString, DirectoryId as WireDirectoryId, Nullable, RawObject,
@@ -389,6 +390,33 @@ impl RemoteSession {
             .submit(submit, Completion::Terminal)
             .await
             .map_err(|error| error.to_port_error())
+    }
+
+    /// `session.title.set`：Owner 元数据命令（`design.md` D2/D3）。
+    ///
+    /// 三条约束都在这里落实：`request` 由调用方给出并**原样使用**（重试复用同一 id，不在此换号）；
+    /// `expectedVersion` 恒为 `null`（合同不接受版本确认，按 Owner 提交顺序后写生效）；attachment 与代际
+    /// 取当前连接的路由票证（与 `set_mode`/`set_config` 同一 `submit_session` 模式）。等待到 Owner 的
+    /// 终态：该命令在 Owner 侧与终态同事务提交，因此正常情况下不会多等一轮。
+    ///
+    /// 本方法只转发，不保存标题、不缓存结果；`uncertain` 等结果仍按 [`CommandOutcome`] 表达，调用方
+    /// （[`crate::runtime::RemoteRuntime`]）据此决定是否显式回查。
+    pub async fn set_title(
+        &self,
+        request: RequestId,
+        title: &SessionTitle,
+    ) -> Result<CommandOutcome, ClientError> {
+        let title = WireSessionTitle::parse(title.as_str())
+            .map_err(|_| ClientError::Local("the title is not encodable for node link"))?;
+        let payload = SessionTitleSet { title };
+        self.submit_session(
+            request,
+            CommandName::SessionTitleSet,
+            CommandPayload::SessionTitleSet(payload),
+            Completion::Terminal,
+            Nullable::null(),
+        )
+        .await
     }
 }
 

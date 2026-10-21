@@ -2,6 +2,7 @@
 
 > 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 27 个消息类型——信封与消息类型分派，`auth`/`sync`（含 9 个 `sync.remote_*` 来源流消息）/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（设备短二维码 `q2` 编解码、claim、status、lookup、qr-lookup、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的既有配对 HTTP（§7.6 `qr-lookup` 待 WP2–WP4）、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。
 > 协议版本：1  
+> 修订记录（2026-10-21，custom-session-title（合同与实现））：§5.2 登记 feature `core.session-title.v1` 并宣告（Owner 持久化、Access 转发、客户端编辑已接线）；§9.4 的快照 `sessions[].title`、§10.3 的 `session.info.changed` 行与标题来源说明改为「Agent 标题 + 自定义标题 → 有效标题」投影；§11.5 新增 mutation `session.title.set`（closed payload `{ title }`，输入按 wire 原文 1..=512 个 Unicode 标量值、保存 trim 后的文本、trim 后为空拒绝、超长不截断），命令集合更新为 20 条（Sync 枚举 19 条、Node Link 枚举 14 条）。**取代**旧条款「标题只来自 Agent 的 `session_info_update`、命令目录不存在客户端重命名命令」；Owner 的 `custom_title` 持久化与命令接线已落地。  
 > 修订记录（2026-10-18，`device-pairing-qr-reference`）：**设备二维码完全替换**为 `https://<canonical-origin>/pair#q2=<payload>`——payload 是 `base64url-no-pad(0x02 || 32 字节扫码取回凭据 || 32 字节主机公钥指纹)`，共 65 字节 / 87 个 ASCII 字符；旧设备 `#data=` 完整资料格式**退出且不降级**，节点二维码与 `/node-link/pair` 不变。新增 §7.6 `POST /sync/v1/pairing/qr-lookup`（请求 `{protocolVersion:1, qrToken}`，成功返回与配对码 lookup 同形的七字段，统一 `401 pairing.qr_invalid`，独立 10 次/分钟限流，16 KiB 上限）。PWA 只保留配对码入口：打开 `q2=` 或旧 `data=` 片段只在清除片段后显示固定指引/不支持文案，不发任何配对请求（行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md)）。本轮先交付协议类型、机器合同、共享固定向量与本文；服务端取回路由、身份内存材料与 PWA/原生消费方为**计划/待实现**（WP2–WP4），原生 App 真机扫码仍是后续交付。机器资产同步：`pairing.schema.json` 增加 qr-lookup 请求/成功/失败形状、`pairing.qr_invalid` 登记到唯一错误词表、删除旧 `qrPayload`，新增 `fixtures/sync/v1/device-qr/vectors.json`（Rust/TypeScript 共享）。
 > 修订记录（2026-10-18，`pairing-code-web-entry`）：配对新增第二个入口——`POST /sync/v1/pairing/lookup` 用 8 位 Crockford 配对码一次性换回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`，之后与二维码入口共用同一套状态机、claim/status 与 transcript。§7.1 写清两个入口的关系；新增 §7.5 的 lookup wire 行为（成功即消耗、统一 `401 pairing.code_invalid`、与 claim 各自 10 次/分钟、同一组安全响应头与 `no-store`）；§7.4 的状态表补 lookup；§12.2 增加 `pairing.code_invalid`。schema、fixture 与错误词表同步；claim/status 的 wire 与 transcript 未变。
 > 修订记录（2026-10-16，`pairing-model`）：**删除两套短验证码**——§6.1/§6.3 删去 `acp-remote/pairing-sas/v1` domain 与 `pairing SAS` 字段集合；§7.2 改为两条设备侧密码学校验（用配对载荷里固定的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节相同），不再派生或展示 SAS；§7.3 的 `approved` 响应不再返回授权集合；§17 的固定向量判据去掉 SAS 重算。**删除设备权限层**——§7.0 的确认不再分配授权；§8.4 的 `auth.authenticated` 不再携带设备 scope 集合；§9.2/§9.3/§9.4 不再按设备授权过滤事件、会话与目录资源；§11.1/§11.3/§11.4/§11.5 改为「已认证即执行前提」，并把 `session.create` 的 Sync 面载荷放开为「`directoryId` 或客户端提交的绝对目录 `workspacePath`，二者取一」（Node Link 面仍只允许别名、且请求不得携带任意 Owner 路径）；§12.1 的示例错误码换掉设备 scope 拒绝；§14 的「命令族」改为服务端自持的 v1 常量（不再取自 `commands.json` 的 `packs`）；§15 的逐命令 scope 授权改为认证状态与幂等校验。**保留**：设备认证与每连接 challenge-response、撤销传播与速率上限、配对确认必须由本机用户完成、跨节点 `grant.*`/Export `scopes`/Import grants。  
@@ -259,11 +260,13 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.pending-interactions.v1` | 可恢复的有效待处理交互（§10.4/§11.7）：`session.read` 的 `pending_interactions` 返回完整当前请求与 `requestVersion`，应答前重新校验有效性，首个有效答案胜出；已处理/失效请求不可复活 | mvp | 否 |
 | `core.remote-history.v1` | 远程历史读取（§9.6/§11.5）：imported 会话的结构化历史按会话内序号独立分页、读取前重新鉴权、正文由 Owner 回源提供；不可达或超出保留期显式不可用，Access 不持久化正文 | mvp | 否 |
 | `core.session-activity.v1` | 会话主状态三态合同（§10.2）：`sessionSummary.state` 只有 `idle`/`running`/`pending`——存在有效未解决交互时为 `pending`，否则存在未结束任务（含已接受的排队任务）时为 `running`，否则为 `idle`；create/read/list/快照/`session.updated` 视图与 Node Link 的 `sessionMeta`、catalog 会话共用同一取值集合。排队、等待原因与任务/命令结果不属于本 feature；旧七态只允许作为历史事件 `view` 的原文出现 | mvp | 是 |
+| `core.session-title.v1` | Owner 元数据命令 `session.title.set`（§11.5 的 closed payload `{ title: string }`，输入按 wire 原文 1..=512 个 Unicode 标量值、保存值为 trim 后的文本）与有效标题投影：标题由 **Owner 持久化**（自定义标题优先，否则 Agent 标题，否则未命名），`SessionSummary.title` 始终下发有效值、不新增 `customTitle` 键；Access 只转发命令、不回源持久化标题或命令状态；未协商时命令返回 `protocol.feature_required`。不是 ACP 能力，不新增 ACP 方法 | mvp | 否 |
 
-- 本表的二十一个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`；`conditional_mvp` 表示端到端通路接线后才宣告，未接线前客户端必须按不支持降级）。
+- 本表的二十二个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`；`conditional_mvp` 表示端到端通路接线后才宣告，未接线前客户端必须按不支持降级）。
 - **必需 feature 是双向拒绝点**：`core.session-activity.v1` 要求每次协商都选中。客户端 MUST 在 `supportedFeatures` 与 `requiredFeatures` 中声明它，服务端 MUST 在 `selectedFeatures` 中返回它；任一侧缺失时连接不得进入业务阶段——服务端对未声明该 ID 的连接返回 `protocol.feature_required`（`details.features` 列出缺失的 feature ID，排序去重），客户端对未被选中的必需项停止同步并提示版本不兼容。该 feature 未选中前 MUST NOT 发送或接收三态会话摘要、快照 chunk 与事件；MUST NOT 回退到七态，也 MUST NOT 把 `pending` 折算成某个 `waiting_*`。
-- **本版服务端宣告 20 条**：`auth.server_challenge.selectedFeatures` 只返回已完整接线的 ID（二十一条减去尚未接线的 `core.remote-history.v1`）。
+- **本版服务端宣告 21 条**：`auth.server_challenge.selectedFeatures` 只返回已完整接线的 ID（二十二条减去尚未接线的 `core.remote-history.v1`）。
   - `core.remote-history.v1`：远程历史需要 Access 侧的 `node-link-client` 回源路径（尚未实现）。宣告一个当前必然失败的读取路径就是能力虚报。协商前 imported 会话的 `history` 仍回 `capability.unsupported_by_broker`，客户端必须明确显示不可用而非「没有历史」。接线后（WP5）再把它加入宣告表并补回源用例。
+  - `core.session-title.v1`：命令与摘要合同（`session.title.set`、有效标题投影）已接线——Owner 的 `custom_title` 持久化、命令事务、Access 转发与客户端编辑入口均按本变更实现，服务端在 `selectedFeatures` 中宣告它。
   - `resource.stateless-origin.v1`：运行期目录/来源端口、`sync.remote_*` 路由与客户端消费已接线；宣告后旧客户端据 `selectedFeatures` 缺失按「远程来源流不支持」明确降级，不回退到任何本地落盘中转。
   - `core.session-activity.v1`：三态映射、交互归约、`session.updated` 生产与持久迁移已接线；服务端在握手支持集合与必需集合中都登记它，任一侧缺失即拒绝进入业务阶段。
   - `core.attachment-transfer.v1`：连接面、帧族与引擎已实现（§3.4）；组合根装配附件传输端口时注册 `/sync/v1/attachments` 并把该 feature 纳入握手集合，未装配时不注册端点、不宣告。
@@ -284,6 +287,7 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 - **降级不是静默改写**：未协商 `core.typed-media.v1` 时，无法表达的非文本内容仍按 §10.3 的 `unsupported` block 或未知事件降级，并保留 `acp.rawJson`；未协商 `core.remote-history.v1` 时，imported 会话的历史读取返回 `capability.unsupported_by_broker`，客户端明确说明不可用，而不是显示「没有历史」。
 - **三态合同是必需 feature，不是加性降级**：`core.session-activity.v1` 未由双方选中时连接不进入业务阶段（§5.2）。旧服务端面对新客户端：`selectedFeatures` 里没有该 ID，客户端 MUST 停止同步并提示版本不兼容，MUST NOT 按七态摘要自行折算或把 `pending` 当作某个 `waiting_*`。旧客户端面对新服务端：`auth.client_hello` 未声明该 ID，服务端 MUST 以 `protocol.feature_required` 拒绝，且 MUST NOT 向该连接下发三态摘要。
 - **远程来源流是加性 feature**：未协商 `resource.stateless-origin.v1` 时，新连接既不发送也不接收任何 `sync.remote_*` 类型、`session.read` 的 `readCursor`/`sessionSummary`/`messageCoverage` 或 `command.status.remoteTarget`；收到未协商的远程帧按 `protocol.type_unsupported` 拒绝，收到未协商的封闭字段按 `protocol.schema_invalid` 拒绝。服务端 MUST NOT 用旧的本地落盘中转来「兼容」，客户端也不得把不支持静默降级成本地缓存（§9.7）。
+- **标题写入是加性 feature**：未协商 `core.session-title.v1` 的连接提交 `session.title.set` 时，服务端在触碰会话状态之前返回 `protocol.feature_required`（`details.features` 给出缺的 ID），标题与版本都不变；客户端在 feature 未选中时禁用标题编辑入口并说明不可用，MUST NOT 冒充保存成功、MUST NOT 改为在本地改写标题。已协商连接的**读取**面不变：`SessionSummary.title` 仍是原来的 `string|null` 键与长度上限，旧客户端因此照样显示有效标题，不需要新键（§11.5）。
 - **不新增 second version**：以上全部在 v1 内通过 feature 演进；提升 `protocolVersion` 才允许改变已协商字段的语义（§16）。
 
 ## 6. 密钥与二进制表示
@@ -1000,7 +1004,7 @@ Snapshot item 的最低 schema：
 
 | Resource | 每个 item 的必填字段 |
 |---|---|
-| `sessions` | `sessionId`, `agent`, `state`, `origin`, `version`, `createdAt`, `updatedAt`; `title`, `currentMode` 可为 `null`；`workspace` 是 `core.local-catalog.v1` 门控下的**可选**引用（缺席或 `null`，见第 10.3 节） |
+| `sessions` | `sessionId`, `agent`, `state`, `origin`, `version`, `createdAt`, `updatedAt`; `title` 是**有效标题**（自定义标题优先，否则 Agent 标题，两者都缺席时为 `null`）且可为 `null`；`currentMode` 可为 `null`；`workspace` 是 `core.local-catalog.v1` 门控下的**可选**引用（缺席或 `null`，见第 10.3 节） |
 | `messages` | `messageId`, `sessionId`, `role`, `content`, `status`, `createdAt`; `turnId` 可为 `null`；**只经 `session.read` 返回，不进快照** |
 | `turns` | `turnId`, `sessionId`, `state`, `createdAt`; `startedAt`, `completedAt`, `terminalError` 可为 `null`；**只经 `session.read` 返回，不进快照** |
 | `pending_interactions` | `interactionId`, `sessionId`, `kind`, `state`, `schema`, `createdAt`；**只经 `session.read` 返回，不进快照** |
@@ -1110,7 +1114,7 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
 - 快照（§9.4）：`sessions` chunk 恒发一个（空会话也发空数组），`workspaces`/`agents` 受 `core.local-catalog.v1` 门控（未协商不下发、不以空数组占位），`chunkCount` 与实际块数一致且取值 `1..=3`；六类会话明细资源不进快照；`snapshotDigest` 按每个 chunk 的**原始 UTF-8 文本字节**分别求 SHA-256、按 `chunkIndex` 顺序连接后再求一次 SHA-256，结果取无填充 base64url。
 - ACK（§9.5）：只前进，回退被忽略并记诊断；超过本连接已发送最高游标时回 `sync.cursor_invalid`；ACK 不推进事件库 head，服务端保存的设备 ACK 最大值不决定新连接的恢复位置。
 
-**已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的十条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 18 条 Sync 命令（含 8 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）中的既有命令均已接线；新增的 `session.files.list`/`session.files.read`/`session.git.status`/`session.git.diff` 已由 WP3 接到真实用例与原生端口：门控先于任何文件/Git I/O，`session.files.read` 的连接绑定内容版本随连接关闭/撤销/daemon 关闭释放，`core.session-files.v1` 因此进入服务端支持集合。命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
+**已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的十条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 19 条 Sync 命令（含 9 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）均已接线；新增的 `session.files.list`/`session.files.read`/`session.git.status`/`session.git.diff` 已由 WP3 接到真实用例与原生端口：门控先于任何文件/Git I/O，`session.files.read` 的连接绑定内容版本随连接关闭/撤销/daemon 关闭释放，`core.session-files.v1` 因此进入服务端支持集合。命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
 
 **仍未落地**（与本小节相邻）：imported 事件的**回源重放**（实时腿已落地，见 §9.6 末条）；`session.read` 的三类明细资源与 imported 明细的降级见 §9.4 的说明。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
 
@@ -1321,7 +1325,7 @@ device.revoked
 | Event type | `view` 最低字段 |
 |---|---|
 | `session.created`, `session.updated` | `session: SessionSummary` |
-| `session.info.changed` | `title: string|null`, `updatedAt: timestamp` |
+| `session.info.changed` | `title: string|null`, `updatedAt: timestamp`；这是 **Agent 侧** `session_info_update` 的投影，只描述 Agent 标题，不表示有效标题已改变 |
 | `session.config.changed` | `configOptions: SessionConfigOptionView[]`, `version: decimal string` |
 | `session.mode.changed` | `currentModeId: string|null`, `version: decimal string` |
 | `session.plan.changed` | `entries: { content: string, priority: "high"|"medium"|"low", status: "pending"|"in_progress"|"completed" }[]` |
@@ -1375,7 +1379,7 @@ device.revoked
 
 `agent.connected`/`agent.disconnected` 的 `state` 是**封闭词表**：连接事件只取 `"connected"`，断开事件只取 `"disconnected"`，两者互不相同，客户端据此区分事件类型，不得依赖自由文本或别的取值。它们是**节点级**事件（事件信封的 `sessionId` 为空），生命周期归属于 Agent profile 的进程：同一 profile 的进程被多个会话复用时不会重复产生连接事件，Agent 连接状态也**不表达**任何单个会话的活跃程度。当前这两类事件尚无投递通道，客户端在该通道就绪前 MUST 把缺失的覆盖层呈现为状态未知，不得以其它信号推断连接状态。
 
-会话标题的更新是**单向**的：标题只来自 Agent 的 `session/update` 中 `session_info_update` 投影出的 `session.info.changed`（见上表），据此写入会话摘要。命令目录中**不存在**任何由客户端发起的重命名会话的命令，服务端也不提供绕过该通知直接写入标题的路径；通知只携带更新时间而不含标题时标题保持不变，通知显式把标题置空时客户端呈现为未命名会话。
+会话标题有两个来源，**有效标题**是它们的优先级投影：自定义标题（用户经 `session.title.set` 保存，feature `core.session-title.v1`）优先 → 否则 Agent 标题（ACP `session_info_update` 投影出的 `session.info.changed`，见上表）→ 否则未命名。`SessionSummary.title` 与 `session.updated` 视图里的 `session.title` **始终下发这个有效值**，因此头部、会话列表与搜索都只消费一处，不新增 `customTitle` 键：旧客户端的封闭 schema 不变，也不会因为版本落后退回 Agent 标题。Agent 通知只写 Agent 标题那一列，永远不覆盖已存在的自定义标题；显式把 Agent 标题置空同样不改自定义标题。自定义标题一旦确立就没有清除或恢复入口（不提供「恢复 Agent 标题」命令），Agent 原值仍按原样保留在 Agent 列上，但不作为恢复接口暴露。标题由**会话所属节点（Owner）**持久保存并向获准客户端同步；Access 只转发写入命令、不持久化标题、命令状态或收据，本地也不得据缓存伪造「已保存」。
 
 ACP `session/update` 判别子到 Sync event type 的完整映射（判别子取值以上游 ACP v1 固定快照为准）：
 
@@ -1400,7 +1404,7 @@ ACP `session/update` 判别子到 Sync event type 的完整映射（判别子取
 ```text
 SessionSummary {
   sessionId: UUID,
-  title: string | null,
+  title: string | null,          // 有效标题：自定义标题优先，否则 Agent 标题，否则 null（未命名）
   agent: { agentId: string, name: string },
   state: "idle" | "running" | "pending",
   origin: { kind: "local" }
@@ -1524,8 +1528,8 @@ PublicError { code: string, message: string, retryable: boolean, details: object
 body 字段规则：
 
 - `command` 必填，取值是第 11.5 节表首列的命令名，必须与原始 `command` 请求一致；查询命令的 `result` 形状由它决定。
-- `acceptedAt` 仅在 `status = "rejected"` 时为 `null`；其余状态都必须是该命令首次被持久化接受的时间。
-- `terminalEventId` 是 `UUID | null`：查询命令固定为 `null`，mutation 的 `accepted` 也固定为 `null`；重复查询一个已终结的 mutation 时必填，且等于该 request 唯一的 command terminal event 的 `eventId`。
+- `acceptedAt` 仅在 `status = "rejected"` 时为 `null`；其余状态都必须是该命令首次被持久化接受的时间。Access 代理的 imported 会话命令若 Owner 终态不携带受理时间，由 Access 在**转发之前**记录的受理时刻补齐；它是代理受理时间，不是 Owner 的事实，Owner 给出自己的值时必须优先使用它。
+- `terminalEventId` 是 `UUID | null`：查询命令固定为 `null`，mutation 的 `accepted` 也固定为 `null`；重复查询一个已终结的 mutation 时必填，且等于该 request 唯一的 command terminal event 的 `eventId`。`uncertain` 且 Access 没有收到 Owner 终态事件时允许为 `null`（结果未知，不代表没有终态）；收到 Owner 终态事件时必须原样透传其标识。
 - `status = "rejected"` 时 `result` 必须是 `null` 且 `error` 必须是结构化 `PublicError`；其余状态 `error` 为 `null`。
 - `completed` 时 `result` 必须符合 `command` 对应的结果形状（见第 11.5 节）；`failed` 携带 `PublicError`，`uncertain` 可只给 `reason`。mutation 完成后如果没有可返回的数据（如 `session.cancel`、`session.prompt`），`result` 允许为 `null`；Node Link 对此更严（`NODE_LINK_PROTOCOL.md` §12.5 要求 `completed` 必须带非空 `result`），该差异是有意的，由两侧各自的适配层负责保证。
 
@@ -1588,6 +1592,7 @@ session.files.list
 session.files.read
 session.git.status
 session.git.diff
+session.title.set
 ```
 
 Sync v1 尚未定义，或仅允许 Node 本地管理入口：
@@ -1665,8 +1670,11 @@ local.audit.export
 | `session.git.status` | query | 必须 | `{ after? }` | `completed { gitState, entries: GitStatusEntry[], next? }`；每项含路径、状态（added/modified/deleted/renamed/untracked）、可用的旧路径及冲突/二进制标识；只覆盖会话根内文件 |
 | `session.git.diff` | query | 必须 | `{ path }` | `completed { path, base, kind, diffLines?, unavailable?, truncated }`；`base` 为 `head｜empty`，`kind` 为 `text｜binary｜conflict`；文本差异最多 400 行 / 64 KiB / 单行 4096 字符 |
 | `session.resume` | mutation | 仅 Node Link（经 `sessionRef`） | `{}` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；`accepted` 的 `result` 为 `null`，成功终态为 `completed SessionResumeResult`（`remoteSessionRef` + `sessionMeta`）；目标 Agent 未宣告 `sessionCapabilities.resume` 时以 `nodelink.command.unsupported` 失败；Sync v1 收到返回 `command.unsupported` |
+| `session.title.set` | mutation | 必须 | `{ title }`：closed object，只允许这一个键；输入（trim 前）是 1..=512 个 Unicode 标量值，保存值是 trim 后的文本，trim 后为空则拒绝；超长按输入计、不截断（schema 给 `minLength`/`maxLength` 与拒绝纯空白的 `pattern`；wire codec 保真原文并校验标量与空白，保存值由 core 去首尾空白），**不含** `expectedVersion` | Owner 在同一事务内写标题、推进会话版本并落完整 `session.updated` 后再回 `completed`（`result` 只是终态占位，权威摘要取同事务的 `session.updated`）；不依赖 Agent 重命名能力、不启动 Agent、不占 active turn，`idle`/`running`/`pending` 均可执行；保存值是 trim 后的文本，不截断、不接受 `null`；同一 `requestId` 重试返回首次结果，参数不同报 `command.idempotency_conflict`；未协商 `core.session-title.v1` 返回 `protocol.feature_required`，会话不存在返回 `session.not_found`；Access 只转发该命令，不落盘标题或命令状态 |
 
-本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（19 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举包含其中 `transport` 含 `sync` 的 18 条；`session.resume` 只经 Node Link 接受，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在该枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 13 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
+本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（20 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举包含其中 `transport` 含 `sync` 的 19 条；`session.resume` 只经 Node Link 接受，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在该枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 14 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
+
+`session.title.set` 是 **Owner 元数据命令**（feature `core.session-title.v1`），不是 ACP 能力：它不映射任何 ACP 方法，不要求 Agent 宣告重命名能力，也不改变 ACP 原文或 `session.info.changed` 的 Agent 投影。payload 只有一个键 `title`；`expectedVersion` 不在本命令的 body 上（按 Owner 提交顺序后写生效），出现未知键或 `expectedVersion` 按 `protocol.schema_invalid` 拒绝。校验顺序：feature 协商 → 形状与长度（输入按 wire 原文计 1..=512 个 Unicode 标量值，保存值是 trim 后的文本，trim 后为空则拒绝；超长按输入计、不截断；拒绝 `null`）→ 会话存在性与归属 → 幂等比对。重复 `requestId` 返回首次结果；相同文字也**必须**确立自定义标题（Agent 标题相同不构成「无需保存」的理由）。没有清除或恢复命令：要撤销自定义标题只能再保存一个新标题。
 
 `session.create` 在两个传输面同名但 payload 不同，本表是 Sync 面的形状；Node Link 面的 payload 是 `{ agentId, directoryId }`（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 第 12.7 节），同样**不接受** `createIfMissing`。两个面共用同一套命令名、幂等与终态语义：先受理再执行（受理即持久化幂等记录，客户端拿到的首次响应是 `accepted`，其 `result` 与 `terminalEventId` 均为 `null`），最终以 `completed`/`failed`/`uncertain` 之一终结，同一 `requestId` 重发必须返回首次结果。`session.create` 的受理只写幂等记录（会话标识为空、不写会话行）：Agent 侧返回后的一次提交里落账——成功时写会话行（含 ACP 会话标识、core 自己解析的 cwd 与目录别名）、回填幂等行的会话标识并写 `completed`，失败时只写终态、**零会话行**。`session.create` 的 `accepted` 必须携带 `result: null`——这是服务端语义要求（与 `command.status` 的 `acceptedAt` 同类），schema 的 `accepted` 分支不对 `result` 取值做约束，因此客户端不得依赖它在 wire 上被强制。
 

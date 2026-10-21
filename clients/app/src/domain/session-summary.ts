@@ -21,7 +21,10 @@ export type SessionId = Uuid;
  */
 export type SessionStateView = "idle" | "running" | "pending";
 
-/** 会话标题：标题由 Agent 通知单向写入，空标题呈现为未命名（`design.md` D7）。 */
+/**
+ * 会话标题：`SessionSummary.title` 是服务端合并后的**有效值**（自定义标题优先 → Agent
+ * 标题 → 未命名）。客户端不复制 Agent 标题、不另建优先级；空值呈现为未命名（D1/D7）。
+ */
 export type SessionTitle = { readonly kind: "titled"; readonly text: string } | { readonly kind: "untitled" };
 
 /** 未命名会话的展示文案（原型 `acp-remote-pwa.html` 的 `noname` 文案）。 */

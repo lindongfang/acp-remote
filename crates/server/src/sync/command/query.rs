@@ -414,9 +414,12 @@ fn wire_remote_status_record(
             Some(at) => Nullable::value(Timestamp::parse(at.as_str()).ok()?),
             None => Nullable::null(),
         },
-        // Owner 的记录只有终态结果，没有「终态事件标识」；wire 上该键 required 且可 `null`，
-        // 这里如实给 `null`（不伪造一个事件 id）。
-        terminal_event_id: Nullable::null(),
+        // Owner 的终态事件标识原样透传：`accepted` 记录没有终态事件，如实给 `null`。
+        // **不是**本机事件 id——Access 不据此伪造本地序号或落盘索引（`RemoteCommandRecord` 的合同）。
+        terminal_event_id: match record.terminal_event_id.as_ref() {
+            Some(event) => Nullable::value(Uuid::parse(event.as_str()).ok()?),
+            None => Nullable::null(),
+        },
         result: match record.result.as_ref() {
             Some(result) => Nullable::value(RawObject::parse(result.as_str()).ok()?),
             None => Nullable::null(),

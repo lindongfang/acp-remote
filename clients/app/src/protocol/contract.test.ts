@@ -72,7 +72,7 @@ const HISTORY_KEY_MIRROR: Record<keyof SnapshotItemHistory, true> = {
 type UnionKeys<T> = T extends unknown ? keyof T : never;
 
 /**
- * `CommandName` 词表的编译期镜像（18 条 Sync 面命令）。
+ * `CommandName` 词表的编译期镜像（19 条 Sync 面命令）。
  *
  * 与 `INCLUDE_MIRROR` 同理：多一个或少一个取值都会让本文件编译失败，运行期那句比对的是
  * 「TS 联合 ↔ `command.schema.json` 的 `commandName` enum」这一对。新增/删除命令时既要在
@@ -81,6 +81,7 @@ type UnionKeys<T> = T extends unknown ? keyof T : never;
 const COMMAND_NAME_MIRROR: Record<CommandName, true> = {
   "session.list": true,
   "session.read": true,
+  "session.title.set": true,
   "command.status": true,
   "session.mode.list": true,
   "session.config.list": true,
@@ -677,7 +678,7 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     }
   });
 
-  it("commandName 词表与镜像逐项相等，body.oneOf 覆盖全部 18 条 Sync 命令", () => {
+  it("commandName 词表与镜像逐项相等，body.oneOf 覆盖全部 19 条 Sync 命令", () => {
     const schema = readSchema("command.schema.json");
     const defsMap = defs(schema);
     const commandName = defsMap["commandName"] as { enum: string[] };
@@ -697,6 +698,36 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
       return branch.properties.command.const;
     });
     expect([...names].sort()).toEqual(Object.keys(COMMAND_NAME_MIRROR).sort());
+  });
+
+  it("session.title.set 的 payload 是 closed {title}，body 上没有 expectedVersion", () => {
+    const defsMap = defs(readSchema("command.schema.json"));
+    const titleSet = defsMap["sessionTitleSet"] as {
+      required: string[];
+      additionalProperties: boolean;
+      properties: {
+        command: unknown;
+        payload: {
+          required: string[];
+          additionalProperties: boolean;
+          properties: Record<string, unknown>;
+        };
+      };
+    };
+    expect(titleSet.required).toEqual(["requestId", "command", "sessionId", "payload"]);
+    expect(titleSet.additionalProperties).toBe(false);
+    expect(titleSet.properties.command).toEqual({ const: "session.title.set" });
+    // 提交顺序即生效顺序：`expectedVersion` 不在 body 上（也不接受 null 清空）。
+    expect(Object.keys(titleSet.properties).sort()).toEqual(["command", "payload", "requestId", "sessionId"]);
+    expect(titleSet.properties.payload.required).toEqual(["title"]);
+    expect(titleSet.properties.payload.additionalProperties).toBe(false);
+    expect(Object.keys(titleSet.properties.payload.properties)).toEqual(["title"]);
+    expect(defsMap["sessionTitle"]).toMatchObject({
+      type: "string",
+      minLength: 1,
+      maxLength: 512,
+      pattern: "\\S",
+    });
   });
 
   it("快照 workspaces 条目是 workspaceCatalogEntry：directoryId + 必填 path，workspaceRef 只有标识", () => {

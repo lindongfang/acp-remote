@@ -10,7 +10,7 @@ mod support;
 
 use acp_core::model::{
     Actor, AgentId, AgentRef, AgentSessionId, AuditAction, CommandKind, Digest, EventId,
-    OriginEpoch, RequestId, Sequence, SessionId, Timestamp, Version,
+    OriginEpoch, RequestId, Sequence, SessionId, SessionTitle, Timestamp, Version,
 };
 use acp_core::ports::{
     IdempotencyRecord, NewSession, OwnedCommit, SessionStore, SessionUpdate, StateChange,
@@ -1111,23 +1111,23 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
             "升级库的 {table} 列（名称/顺序/类型/NOT NULL/默认值）必须与新建库逐项相等"
         );
     }
-    // v5/v6 的三列：都在 `owned_session` 末尾、都可空且**无默认值**（NULL = 没有可恢复数据/未分组，
-    // 不是空串也不是占位别名）。
+    // v5/v6/v15 的四列：都在 `owned_session` 末尾、都可空且**无默认值**（NULL = 没有可恢复数据/未分组/
+    // 没有自定义标题，不是空串也不是占位别名）。
     let session_specs = column_specs(&pool, "owned_session").await;
     let appended_specs: Vec<_> = session_specs
         .iter()
         .filter(|spec| {
             matches!(
                 spec.0.as_str(),
-                "agent_session_id" | "workspace_cwd" | "workspace_directory_id"
+                "agent_session_id" | "workspace_cwd" | "workspace_directory_id" | "custom_title"
             )
         })
         .cloned()
         .collect();
     assert_eq!(
-        session_specs[session_specs.len().saturating_sub(3)..].to_vec(),
+        session_specs[session_specs.len().saturating_sub(4)..].to_vec(),
         appended_specs,
-        "追加的三列必须是 owned_session 的最后三列"
+        "追加的四列必须是 owned_session 的最后四列"
     );
     assert_eq!(
         appended_specs
@@ -1138,8 +1138,9 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
             ("agent_session_id".to_owned(), false, None),
             ("workspace_cwd".to_owned(), false, None),
             ("workspace_directory_id".to_owned(), false, None),
+            ("custom_title".to_owned(), false, None),
         ],
-        "追加的三列必须可空且无默认值"
+        "追加的四列必须可空且无默认值"
     );
     fresh_pool.close().await;
 
@@ -1490,6 +1491,237 @@ async fn v4_database_upgrades_to_the_three_state_shape_and_keeps_recovery_column
     pool.close().await;
 }
 
+/// v14 → v15（`custom-session-title`）：`owned_session` 追加可空 `custom_title`。
+///
+/// 判据：旧行 Agent 标题逐字保留、新列是 `NULL`（不是空串）；升级后能写入自定义标题且摘要只下发有效
+/// 标题；重开不重复加列；升级库与新建库的列清单（名称/顺序/类型/NOT NULL/默认值）逐项相等。
+#[tokio::test]
+async fn v14_database_gains_a_null_custom_title_and_stays_writable() {
+    let dir = temp_dir("migrate-from-v14");
+    let created = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("create the store that is then rewound to v14");
+    created.close().await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    let session = SessionId::new(FIXTURE_SESSION).expect("fixture session id");
+
+    let pool = raw_write_pool(&path).await;
+    sqlx::query(
+        r#"INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, origin_epoch,
+         current_mode_id, current_mode_name, version, created_at, updated_at)
+         VALUES (?1, '旧 Agent 标题', 'fixture-agent', 'Fixture Agent', 'idle', ?2, NULL, NULL, 3, ?3, ?3)"#,
+    )
+    .bind(FIXTURE_SESSION)
+    .bind(FIXTURE_EPOCH)
+    .bind(AT)
+    .execute(&pool)
+    .await
+    .expect("seed a v14 session row");
+    sqlx::query("ALTER TABLE owned_session DROP COLUMN custom_title")
+        .execute(&pool)
+        .await
+        .expect("rewind owned_session to its v14 shape");
+    sqlx::query("PRAGMA user_version = 14")
+        .execute(&pool)
+        .await
+        .expect("rewind the file format version");
+    sqlx::query("UPDATE meta SET value = '14' WHERE key = 'owned_schema_version'")
+        .execute(&pool)
+        .await
+        .expect("rewind the owned schema version");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    assert!(
+        !column_names(&pool, "owned_session")
+            .await
+            .contains(&"custom_title".to_owned())
+    );
+    let events_before = ints(&pool, "SELECT COUNT(*) FROM owned_event").await;
+    pool.close().await;
+
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("a v14 database must upgrade");
+    assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
+    let loaded = store.load(&session).await.expect("load").expect("session");
+    assert_eq!(
+        loaded.session.title(),
+        Some("旧 Agent 标题"),
+        "升级必须逐字保留 Agent 标题"
+    );
+    assert_eq!(
+        loaded.session.custom_title(),
+        None,
+        "v15 的新列对旧行必须是 NULL"
+    );
+    assert_eq!(loaded.session.effective_title(), Some("旧 Agent 标题"));
+
+    // 升级后可写：自定义标题进列、版本 +1、Agent 列不动、摘要只下发有效标题。
+    let version = loaded.session.version();
+    let custom = SessionTitle::parse("自定义标题").expect("title");
+    let outcome = store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at(),
+            expected_version: Some(version),
+            state: Some(StateChange::Update(SessionUpdate {
+                state: None,
+                mode: acp_core::ports::ModeChange::Unchanged,
+                title: None,
+                custom_title: Some(custom),
+                confirmation: None,
+                interaction: None,
+                agent_session_id: None,
+                workspace_cwd: None,
+                workspace_directory_id: None,
+            })),
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        })
+        .await
+        .expect("an upgraded database must stay writable");
+    assert_eq!(outcome.version.get(), version.get() + 1);
+    let summaries = store
+        .list(acp_core::ports::SessionQuery {
+            only: Some(vec![session.clone()]),
+            states: Vec::new(),
+            limit: Some(1),
+        })
+        .await
+        .expect("list");
+    assert_eq!(summaries[0].title(), Some("自定义标题"));
+    let reloaded = store.load(&session).await.expect("load").expect("session");
+    assert_eq!(reloaded.session.title(), Some("旧 Agent 标题"));
+    store.close().await;
+
+    // 重开幂等：不重复加列、版本不前移、事件行不变。
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("second open of the upgraded database");
+    store.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        FILE_FORMAT_VERSION
+    );
+    assert_eq!(
+        meta_version(&pool, "owned_schema_version").await,
+        Some(OWNED_SCHEMA_VERSION.to_string())
+    );
+    assert_eq!(
+        ints(
+            &pool,
+            "SELECT COUNT(*) FROM pragma_table_info('owned_session') WHERE name = 'custom_title'"
+        )
+        .await,
+        vec![1],
+        "重开不得重复追加列"
+    );
+    assert_eq!(
+        ints(&pool, "SELECT COUNT(*) FROM owned_event").await,
+        events_before,
+        "升级不得改动事件行"
+    );
+
+    let fresh_dir = temp_dir("migrate-fresh-columns-v15");
+    let fresh = SqliteStore::open(StorageConfig::new(&fresh_dir), &at())
+        .await
+        .expect("fresh store");
+    fresh.close().await;
+    let fresh_pool = raw_pool(&fresh_dir.join("acp-remote.sqlite3")).await;
+    for table in OWNED_TABLES.iter().copied() {
+        assert_eq!(
+            column_specs(&pool, table).await,
+            column_specs(&fresh_pool, table).await,
+            "升级库的 {table} 列（名称/顺序/类型/NOT NULL/默认值）必须与新建库逐项相等"
+        );
+    }
+    fresh_pool.close().await;
+    pool.close().await;
+}
+
+/// v15 段在 migration 的同一事务里：后续步骤失败必须整体回滚（列不存在、版本仍是 14）。
+///
+/// 手法：把 `meta` 换成拒绝写入 `'15'` 的形状（`CHECK (value <> '15')`），使事务末尾的
+/// `mark_schema_versions` 失败；`ALTER TABLE ... ADD COLUMN custom_title` 必须随事务一起回滚。
+#[tokio::test]
+async fn a_failed_v15_upgrade_rolls_back_the_added_column() {
+    let dir = temp_dir("migrate-v15-rollback");
+    let created = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("create the store that is then rewound to v14");
+    created.close().await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+
+    let pool = raw_write_pool(&path).await;
+    sqlx::query("ALTER TABLE owned_session DROP COLUMN custom_title")
+        .execute(&pool)
+        .await
+        .expect("rewind owned_session to its v14 shape");
+    sqlx::query("ALTER TABLE meta RENAME TO meta_old")
+        .execute(&pool)
+        .await
+        .expect("park the current meta table");
+    sqlx::query(
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL CHECK (value <> '15')) STRICT",
+    )
+    .execute(&pool)
+    .await
+    .expect("install a meta table that rejects the v15 version write");
+    sqlx::query(
+        "INSERT INTO meta (key, value) SELECT key, value FROM meta_old \
+         WHERE key <> 'owned_schema_version'",
+    )
+    .execute(&pool)
+    .await
+    .expect("copy the remaining meta rows");
+    sqlx::query("INSERT INTO meta (key, value) VALUES ('owned_schema_version', '14')")
+        .execute(&pool)
+        .await
+        .expect("rewind the owned schema version");
+    sqlx::query("DROP TABLE meta_old")
+        .execute(&pool)
+        .await
+        .expect("drop the parked meta table");
+    sqlx::query("PRAGMA user_version = 14")
+        .execute(&pool)
+        .await
+        .expect("rewind the file format version");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
+
+    let failed = SqliteStore::open(StorageConfig::new(&dir), &at()).await;
+    assert!(failed.is_err(), "版本写入失败必须让整段 migration 回滚");
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        14,
+        "失败后文件格式版本必须停在 14"
+    );
+    assert_eq!(
+        meta_version(&pool, "owned_schema_version").await,
+        Some("14".to_owned())
+    );
+    assert!(
+        !column_names(&pool, "owned_session")
+            .await
+            .contains(&"custom_title".to_owned()),
+        "v15 追加的列必须随事务回滚"
+    );
+    pool.close().await;
+}
+
 /// §7.2/R17/R21/R22：恢复列只在创建流程写入一次，之后**逐字节**读回、不被推导、不被恢复流程覆写。
 ///
 /// 三步（与 core 的 `create_session` / `resume_session` 的真实存储交互同形）：
@@ -1525,6 +1757,7 @@ async fn recovery_columns_round_trip_and_are_not_rewritten_by_the_resume_flow() 
                 state: None,
                 mode: acp_core::ports::ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 confirmation: None,
                 interaction: None,
                 agent_session_id: Some(agent_session_id.clone()),

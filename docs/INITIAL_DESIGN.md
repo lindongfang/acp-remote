@@ -2,6 +2,7 @@
 
 > 目录选择器补充（2026-10-18）：Windows 默认浏览不展示隐藏或系统属性目录；PWA 按名称忽略大小写、数字自然升序显示收到的目录。这些规则仅影响浏览与显示，不新增创建路径授权限制。实现边界见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.1。
 
+> 修订记录（2026-10-21，custom-session-title（合同与实现））：§8 的会话标题口径改写为「两个来源 + 有效标题投影」——登记 Owner 元数据命令 `session.title.set` 与 feature `core.session-title.v1`，有效标题 = 自定义标题优先 → 否则 Agent 标题 → 否则未命名，由 Owner 投影成既有 `SessionSummary.title`；删除「标题只由 Agent 单向更新 / 不存在客户端重命名入口」的旧条款（原文见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.3 与 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §5），明确 Access 只转发命令、不持久化标题与命令状态，且该命令不新增 ACP 方法。Owner 的 `custom_title` 持久化与命令事务已接线。  
 > 状态：编码前原始设计（Draft）  
 > 版本：0.5  
 > 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「workspace 实际路径不离开 Owner Node」收窄为带前提的边界——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显（§2/§8）。本机自己的设备新增两项受限能力：`session.create` 可带一个「目录不存在则先创建」开关，`workspace.browse` 提供只读的逐层目录浏览（feature 门控、不登记、不产生审计动作）。口径以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2/§12.3 与 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md) 为权威。
@@ -365,6 +366,8 @@ Daemon 立即返回接受、排队或拒绝状态；实际执行结果通过事�
 命令名不等于权限：设备方向以「该连接已通过设备认证且设备未撤销」为执行前提（设备没有授权维度，配对不授予授权），跨节点方向另按 Owner Export Policy 与 `grant.*` 授权；逐命令的对照表见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2。原始 workspace 路径选择、Agent/Provider 配置、设备与 Export 管理、Node key 轮换和审计导出只能由 Owner Node 本地管理入口执行，永不远程授予，清单见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.3。
 
 跨节点的远程 `session.create` 只能选择已发布的 Agent 与 workspace template，禁止提交 `cwd`、`mcpServers`、绝对路径或任何 Provider/MCP 凭据；本机自己的设备在 Sync 面可以提交一个绝对目录，但必须先通过本机的绝对路径与存在性校验，客户端提交的目录不会被回显，路径的可见面只有两处：协商 `core.workspace-path.v1` 时随目录资源下发**已登记**目录的规范化路径，协商 `core.workspace-browse.v1` 时随只读浏览结果下发该层直接子目录的绝对路径（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §12.3）。目录浏览 `workspace.browse` 是只读查询（feature `core.workspace-browse.v1` 门控，不登记、不产生审计动作），创建会话时可带一个「目录不存在则先创建」开关；命令与载荷形状以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5 为准。
+
+会话标题有两个来源：Agent 经 ACP `session_info_update` 给出的标题，以及用户经 `session.title.set`（feature `core.session-title.v1`）设置的**自定义标题**。有效标题 = 自定义标题优先 → 否则 Agent 标题 → 否则未命名，由会话所属节点（Owner）投影成既有的 `SessionSummary.title` 下发，因此旧客户端不需要新字段也能显示。标题只由 Owner 持久保存并向获准客户端同步；Access 只转发命令，不持久化标题、命令状态或转发进度。该命令是 Owner 元数据能力，不是 ACP 能力：不新增 ACP 方法，不要求 Agent 具备重命名能力，也不改写 ACP 原文。系统不提供清除自定义标题或恢复 Agent 标题的命令；Agent 改名与显式清空只更新 Agent 标题，不覆盖已存在的自定义标题。
 
 ## 9. 模型与模式选择
 

@@ -1,5 +1,5 @@
 /**
- * feature 声明：逐层浏览 / 结构化差异两条新增 Sync feature（§5.2 协商是交集），
+ * feature 声明：逐层浏览 / 结构化差异 / 会话标题等新增 Sync feature（§5.2 协商是交集），
  * 以及已撤销的 `core.workspace-path.v1`。
  *
  * ## 判别力
@@ -46,7 +46,7 @@ function syncRegistryFeatures(): readonly RegistryFeature[] {
 }
 
 /**
- * 两条新增 feature 的 ID：逐层浏览、结构化差异行。
+ * 新增 feature 的 ID：逐层浏览、结构化差异行、会话文件与标题编辑。
  *
  * 它们是**客户端广告、服务端可选**的能力，客户端据此在协商命中后才请求/呈现对应数据。
  */
@@ -55,7 +55,8 @@ const NEW_SYNC_FEATURES = [
   "core.file-diff.v1",
   "core.session-files.v1",
   "core.session-git-stats.v1",
-    "core.session-git-compare.v1",
+  "core.session-git-compare.v1",
+  "core.session-title.v1",
 ] as const;
 
 describe("feature 声明：逐层浏览 / 结构化差异两条新增 Sync feature", () => {

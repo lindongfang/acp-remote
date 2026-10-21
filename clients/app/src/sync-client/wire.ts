@@ -159,10 +159,11 @@ const REMOTE_SOURCE_STATES: Record<string, true> = {
 /** `$defs.remoteEvent` 的 `event.eventType`：`^[a-z0-9_.-]{1,128}$`。 */
 const REMOTE_EVENT_TYPE_PATTERN = /^[a-z0-9_.-]{1,128}$/;
 
-/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，18 条）。 */
+/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，19 条）。 */
 const COMMAND_NAMES: Record<string, true> = {
   "session.list": true,
   "session.read": true,
+  "session.title.set": true,
   "command.status": true,
   "session.mode.list": true,
   "session.config.list": true,

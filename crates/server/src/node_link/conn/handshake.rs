@@ -23,7 +23,7 @@ use node_link_protocol::handshake::NodeHello;
 
 /// 本切片实现的 Node Link feature。
 ///
-/// 选中即承诺真实实现（`AGENTS.md` §4 的能力协商真实性）。当前登记全部 9 条 mvp 业务能力；
+/// 选中即承诺真实实现（`AGENTS.md` §4 的能力协商真实性）。当前登记全部 11 条 mvp 业务能力；
 /// `node-link.node-rotation.v1` 是 `post_mvp`，不选中。
 ///
 /// `attachment-transfer` 与它的 `/node-link/v1/attachments` 端点一起接线（组合根注册端点后才把本表
@@ -33,7 +33,7 @@ use node_link_protocol::handshake::NodeHello;
 /// `typed-media`/`pending-interactions`/`remote-history` 的门控点都在 `session.read`；该命令已在
 /// Owner 侧接线（共享投影 + core 用例），因此这三条可以如实宣告。Access 侧对这些能力的使用仍由
 /// `node-link-client` 与 Sync 的 imported 读取路径决定。
-pub const SUPPORTED_FEATURES: [&str; 10] = [
+pub const SUPPORTED_FEATURES: [&str; 11] = [
     "node-link.core.v1",
     "resource.stateless-origin.v1",
     // §11.4/§12.3：会话主状态三态合同。与 Sync 的 `core.session-activity.v1` 同一取值集合。
@@ -45,6 +45,9 @@ pub const SUPPORTED_FEATURES: [&str; 10] = [
     "node-link.typed-media.v1",
     "node-link.pending-interactions.v1",
     "node-link.remote-history.v1",
+    // §12.7：`command.submit{command:"session.title.set"}` 与有效标题投影。宣告即承诺 Owner 侧
+    // `CommandRoute::on_dispatched` 的真实路由与 `nodelink.protocol.feature_required` 门控。
+    "core.session-title.v1",
 ];
 
 /// registry 里 `delivery = mvp` 但本实现**尚未接线**、因此不宣告的 feature。

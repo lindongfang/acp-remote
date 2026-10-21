@@ -2,6 +2,7 @@
 
 > 状态：编码前安全基线（Draft）  
 > 版本：0.6
+> 修订记录（2026-10-21，custom-session-title（合同与实现））：§10.2 的命令表登记 `session.title.set`（mutation、mvp、feature `core.session-title.v1`，Owner 元数据而非 ACP capability；只写本地会话标题列、不启动 Agent）；客户端改名禁令与「标题仅由 Agent 更新」的旧口径由本变更取代（原文见 SYNC_PROTOCOL §10.3 与 ACP_COMPATIBILITY_MATRIX §5）。威胁模型与信任边界未变；`custom_title` 持久化与命令接线已落地。
 > 日期：2026-10-17  
 > 修订记录（2026-10-18，`device-pairing-qr-reference`）：设备二维码改为短引用格式——fragment 只带版本、32 字节扫码取回凭据与 32 字节主机公钥指纹，完整资料经同源 `POST /sync/v1/pairing/qr-lookup` 取回；取回统一失败 `pairing.qr_invalid`、独立 10 次/分钟限流、16 KiB 上限，凭据只存内存且认领/拒绝/失效/过期/重启后不可用。§5.1 增补移动端「先匹配完整 SHA-256 指纹，再验证 `hostProof`」的信任链说明；威胁模型与其它边界未变。字段与端点以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.6 为唯一权威。
 > 修订记录（2026-10-20，`conversation-area-complete` WP3）：新增 §12.6「ACP 终端服务」——Agent 经 `terminal/*` 请求在宿主执行命令的信任边界、会话归属、cwd 限制、环境注入、进程树与输出预算；§5 威胁表补一行对应控制；§12.2 固定上限表登记终端输出保留/分块/并发与排空时长。终端服务只在组合根宣告 `clientCapabilities.terminal` 后接受调用（未宣告时不启动任何进程）；命令、参数、环境值、输出与路径都不进日志。威胁模型与信任边界**未变**（终端执行属于 ACP 原生能力，不新增授权维度）。
@@ -347,6 +348,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `session.git.status` | query | mvp |
 | `session.git.diff` | query | mvp |
 | `session.resume` | mutation | conditional_mvp（仅 Node Link） |
+| `session.title.set` | mutation | mvp（feature `core.session-title.v1`；Owner 元数据，非 ACP capability） |
 
 仍由各层独立执行的下界：schema/长度/频率限制、会话状态机、幂等键、连接上限，以及本地管理入口的 OS 用户边界。
 

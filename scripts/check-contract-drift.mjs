@@ -348,8 +348,8 @@ function checkImplementedPorts(contract) {
 
 function checkImplementedDdl(contract) {
   const text = section(contract, "## 7.");
-  if (!text.includes("v14 = 14") || !text.includes("当前 **v14 = 14**")) {
-    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v14 = 14 / owned_schema_version 14`);
+  if (!text.includes("v15 = 15") || !text.includes("当前 **v15 = 15**")) {
+    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v15 = 15 / owned_schema_version 15`);
   }
   for (const table of [
     "owned_attachment_transfer",
@@ -361,6 +361,10 @@ function checkImplementedDdl(contract) {
     if (!text.toLowerCase().includes(table)) {
       errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的表 ${table}`);
     }
+  }
+  // v15：`owned_session.custom_title`（`session.title.set` 的持久化列）必须出现在 §7.3 的 DDL 里。
+  if (!subsection(contract, "\n### 7.3 ").includes("custom_title")) {
+    errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的列 owned_session.custom_title`);
   }
   if (text.includes("sql-planned")) {
     errors.push(`contract drift: ${contractLabel} §7 不得再含 sql-planned 块（已实现）`);

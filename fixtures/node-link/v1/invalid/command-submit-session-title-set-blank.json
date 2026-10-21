@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 1,
+  "type": "command.submit",
+  "messageId": "0b7e4c92-5a38-4d17-9f60-2c8e6b1a3d45",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "11",
+  "body": {
+    "requestId": "6a1d9f37-4c82-4b05-8e63-7f2a0c5d9b18",
+    "command": "session.title.set",
+    "sessionRef": {
+      "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
+    },
+    "attachmentId": "7b0c1d2e-3f40-4a51-8b62-7c8d9e0f1a2b",
+    "attachmentGeneration": "1",
+    "expectedVersion": null,
+    "payload": {
+      "title": "  \t "
+    }
+  }
+}

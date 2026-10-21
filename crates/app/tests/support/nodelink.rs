@@ -758,14 +758,15 @@ impl NodeLinkClient {
 // 握手（含 catalogRevision 验签路径）
 // ---------------------------------------------------------------------------------------------
 
-/// Access 侧声明的 feature（本切片实现的 mvp feature 加三态摘要合同）。
-const DECLARED_FEATURES: [&str; 6] = [
+/// Access 侧声明的 feature（本切片实现的 mvp feature 加三态摘要合同与标题命令）。
+pub const DECLARED_FEATURES: [&str; 7] = [
     "node-link.core.v1",
     "node-link.raw-acp.v1",
     "node-link.command-status.v1",
     "node-link.session-create.v1",
     "node-link.export-revoke.v1",
     "core.session-activity.v1",
+    "core.session-title.v1",
 ];
 
 /// 执行一次完整握手（hello → challenge → proof → ready），返回 `node.ready`。
@@ -782,6 +783,17 @@ pub async fn handshake(
     ticket: &PairingTicket,
     client_nonce: &str,
 ) -> Value {
+    handshake_with_features(client, access, ticket, client_nonce, &DECLARED_FEATURES).await
+}
+
+/// 同 [`handshake`]，但由调用方给出 `supportedFeatures`（feature 门控用例需要一条「没协商」的连接）。
+pub async fn handshake_with_features(
+    client: &mut NodeLinkClient,
+    access: &AccessKey,
+    ticket: &PairingTicket,
+    client_nonce: &str,
+    declared: &[&str],
+) -> Value {
     client.step("node.hello");
     client
         .send_pre_auth(
@@ -792,7 +804,7 @@ pub async fn handshake(
                 "accessNodeId": access.node_id(),
                 "role": "access",
                 "clientNonce": client_nonce,
-                "supportedFeatures": DECLARED_FEATURES,
+                "supportedFeatures": declared,
                 "requiredFeatures": ["node-link.core.v1"],
             }),
         )

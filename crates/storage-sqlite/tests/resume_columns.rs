@@ -56,6 +56,7 @@ async fn rewind_to_v4(dir: &std::path::Path) -> std::path::PathBuf {
         "agent_session_id",
         "workspace_cwd",
         "workspace_directory_id",
+        "custom_title",
     ] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
@@ -221,11 +222,12 @@ async fn v13_rebuilds_owned_session_without_closed_at_and_keeps_recovery_columns
         );
     }
 
-    // ② 列清单 =「v4 的 12 列去掉 closed_at」（前 11 列）+ 恢复三列；`cid` 连续无空洞。
+    // ② 列清单 =「v4 的 12 列去掉 closed_at」（前 11 列）+ 恢复三列 + v15 的 custom_title；
+    //    `cid` 连续无空洞。
     assert_eq!(
         columns_after.len(),
-        14,
-        "v13 的 owned_session 是 14 列（v4 的 12 列去掉 closed_at + 恢复三列）"
+        15,
+        "当前 owned_session 是 15 列（v4 的 12 列去掉 closed_at + 恢复三列 + custom_title）"
     );
     assert_eq!(
         &columns_after[..11],
@@ -235,20 +237,27 @@ async fn v13_rebuilds_owned_session_without_closed_at_and_keeps_recovery_columns
     assert_eq!(columns_after[11].0, "agent_session_id");
     assert_eq!(columns_after[12].0, "workspace_cwd");
     assert_eq!(columns_after[13].0, "workspace_directory_id");
+    assert_eq!(columns_after[14].0, "custom_title");
     assert_eq!(
         (
             &columns_after[11].1,
             &columns_after[12].1,
-            &columns_after[13].1
+            &columns_after[13].1,
+            &columns_after[14].1
         ),
-        (&"TEXT".to_owned(), &"TEXT".to_owned(), &"TEXT".to_owned()),
-        "三列都是 TEXT"
+        (
+            &"TEXT".to_owned(),
+            &"TEXT".to_owned(),
+            &"TEXT".to_owned(),
+            &"TEXT".to_owned()
+        ),
+        "四列都是 TEXT"
     );
     let cids: Vec<i64> = sqlx::query_scalar("SELECT cid FROM pragma_table_info('owned_session')")
         .fetch_all(&pool)
         .await
         .expect("读 cid");
-    assert_eq!(cids, (0..14).collect::<Vec<i64>>(), "cid 必须连续无空洞");
+    assert_eq!(cids, (0..15).collect::<Vec<i64>>(), "cid 必须连续无空洞");
 
     // ③ 反证：v1 升级路径里确实重建 `owned_audit`，其文本的表名**带双引号**（RENAME 的签名）——
     //    说明本文件的「重建会改存储文本」判断有实际判别力。

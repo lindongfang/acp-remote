@@ -36,15 +36,16 @@ const PAIRING_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/pairing.schema.json";
 const TRANSPORT_FRAME_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/attachment.schema.json";
 
 /// 变更 `access-owner-data-stateless`（WP1）新增 3 条合法 `resource.caught_up`/`reset_required`/
-/// `unavailable` 夹具，故由 38 变为 41。
-const EXPECTED_VALID_MESSAGE_CASES: usize = 41;
+/// `unavailable` 夹具，故由 38 变为 41；`custom-session-title`（WP1）再新增 4 条合法的
+/// `session.title.set` / 未协商拒绝夹具，故为 45。
+const EXPECTED_VALID_MESSAGE_CASES: usize = 45;
 const EXPECTED_ENVELOPE_REJECTED: usize = 1;
 /// 变更 `session-activity-three-states`（WP1）新增 1 条负例（`resource.attached` 的
 /// `sessionMeta.state` 用旧七态取值），故由 10 变为 11。
 /// 变更 `access-owner-data-stateless`（WP1）新增 3 条负例（`resource.caught_up` 缺
 /// `attachmentGeneration`、`resource.reset_required` 用了未登记 reason、`resource.unavailable`
 /// 缺结构化 error），故由 11 变为 14。
-const EXPECTED_BODY_REJECTED: usize = 14;
+const EXPECTED_BODY_REJECTED: usize = 21;
 const EXPECTED_SKIPPED_PAIRING: usize = 2;
 const EXPECTED_SKIPPED_TRANSPORT_FRAMES: usize = 24;
 

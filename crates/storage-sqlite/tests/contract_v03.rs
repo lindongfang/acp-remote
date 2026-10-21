@@ -263,6 +263,7 @@ async fn creating_and_resolving_in_one_commit_is_rejected() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,

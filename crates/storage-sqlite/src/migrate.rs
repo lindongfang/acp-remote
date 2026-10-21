@@ -16,11 +16,12 @@ use acp_core::model::derive_directory_id;
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v14：删除全部 `imported_*` 远程资源表并清理可辨认的
-/// 远程代理记录；v13 的三态 `owned_session`、v12 的分块附件传输/清单、消息通道与媒体引用保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 14;
-/// §7.2：`meta.owned_schema_version` 的已知版本（v14 只删除 `imported_*` 家族，owned 表结构沿用 v13）。
-pub const OWNED_SCHEMA_VERSION: i64 = 14;
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v15：`owned_session` 追加可空的 `custom_title`，
+/// 保存用户设置的自定义标题；v14 删除全部 `imported_*` 远程资源表并清理可辨认的远程代理记录，
+/// v13 的三态 `owned_session`、v12 的分块附件传输/清单、消息通道与媒体引用保持不变）。
+pub const FILE_FORMAT_VERSION: i64 = 15;
+/// §7.2：`meta.owned_schema_version` 的已知版本（v15 给 `owned_session` 追加 `custom_title`）。
+pub const OWNED_SCHEMA_VERSION: i64 = 15;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -68,7 +69,8 @@ CREATE TABLE IF NOT EXISTS owned_session (
   updated_at        TEXT NOT NULL,
   agent_session_id  TEXT,                      -- Agent（ACP）侧会话标识；NULL = 该会话没有可用于恢复的标识，不得被补齐/推导
   workspace_cwd     TEXT,                      -- 创建时解析出的规范化绝对路径；NULL = 同上（不得按别名重解析来填上）
-  workspace_directory_id TEXT                  -- 创建时解析出的目录标识；NULL = 未分组（不得按 workspace_cwd 反查补齐）
+  workspace_directory_id TEXT,                 -- 创建时解析出的目录标识；NULL = 未分组（不得按 workspace_cwd 反查补齐）
+  custom_title      TEXT                       -- 用户设置的自定义标题（trim 后 1..=512 标量值）；NULL = 从未设置。与 title 互不覆盖
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS owned_turn (
@@ -963,6 +965,23 @@ async fn v14_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageErro
     Ok(())
 }
 
+/// §7.2 的 v14 → v15 升级：给 `owned_session` 追加可空的 `custom_title`（`session.title.set` 的
+/// 持久化列，`design.md` D1/D2）。
+///
+/// - 旧行保持 `NULL`（= 从未设置自定义标题），Agent 标题列 `title` 原样保留，事件/epoch/幂等/审计一律
+///   不动：升级只加一列。
+/// - 列追加在表尾，新建库的 DDL 也把它写在表尾，因此升级库与新建库的 `pragma table_info` 列顺序逐项
+///   相同（§9 的迁移判据）。
+/// - `column_exists` 守卫让重开/重跑幂等：已经加过列的文件不会再次 `ALTER`（那会报重复列并回滚整段）。
+async fn v15_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
+    if !column_exists(&mut **tx, "owned_session", "custom_title").await? {
+        sqlx::raw_sql("ALTER TABLE owned_session ADD COLUMN custom_title TEXT;")
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
 /// v14：把可辨认的远程代理记录从 owned 家族清出（不触碰 owned 事件/epoch/幂等/信任）。
 const V14_CLEAN_OWNED_PROXIES: &str = r#"
 CREATE TABLE v14_remote_sessions AS
@@ -1621,6 +1640,9 @@ async fn migrate_locked(
         }
         if file_version < 14 {
             v14_upgrade(&mut tx).await?;
+        }
+        if file_version < 15 {
+            v15_upgrade(&mut tx).await?;
         }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;

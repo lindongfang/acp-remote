@@ -21,11 +21,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use acp_core::model::{
-    AcpRaw, AgentId, AgentRef, CommandResult, CommandStatus, Digest, EventId, EventPayload,
-    EventType, JsonValueText, MessageChannel, MessageId, MessageRecord, MessageState, ModeId,
-    ModeRef, NodeId, OriginCursor, OriginEpoch, OriginEventRef, PartialReason, PartialResult,
-    PortError, RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin, Sequence,
-    SessionId, SessionState, SessionSummary, Timestamp, TurnId, UnavailableKind, Version, ViewJson,
+    AcpRaw, AgentId, AgentRef, CommandResult, CommandStatus, ConflictKind, Digest, EventId,
+    EventPayload, EventType, JsonValueText, MessageChannel, MessageId, MessageRecord, MessageState,
+    ModeId, ModeRef, NodeId, OriginCursor, OriginEpoch, OriginEventRef, PartialReason,
+    PartialResult, PortError, RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin,
+    Sequence, SessionId, SessionState, SessionSummary, SessionTitle, Timestamp, TurnId,
+    UnavailableKind, Version, ViewJson,
 };
 use acp_core::ports::{
     HistoryInclude, MessageCoverage, RemoteCatalogRevision, RemoteCommandLookup,
@@ -34,6 +35,7 @@ use acp_core::ports::{
     RemoteReadQuery, RemoteReadResult, RemoteRuntimeDirectory, RemoteSessionEntry,
     RemoteSourceBarrier, RemoteSourceNotice, RemoteSourceReads, RemoteSourceState,
     RemoteStreamEvent, RemoteStreamItem, RemoteStreamReceiver, RemoteStreamResetReason,
+    RemoteTitleWrite,
 };
 use async_trait::async_trait;
 use node_link_protocol::catalog::CatalogSnapshot;
@@ -1111,6 +1113,80 @@ impl RemoteCommandStatus for RemoteRuntime {
     }
 }
 
+#[async_trait]
+impl RemoteTitleWrite for RemoteRuntime {
+    /// Access 侧向 Owner 提交 `session.title.set`（`design.md` D2/D3）。
+    ///
+    /// 顺序即合同：**在线**（`link_of`）→ **feature**（Owner 选中了 `core.session-title.v1`）→
+    /// **代际**（调用方给的 `generation` 仍是当前代）→ 提交 → 提交返回后**再复核一次代际**。
+    ///
+    /// 三条否定都是显式分类，不互相替代：
+    /// - Owner 未选中 feature / 不认识该命令 → `capability.unsupported_by_broker`（永久失败；**不**发副作用
+    ///   命令，也不落到 `BackendUnsupported`——那个码在本进程里表示「没有远程写面」，Sync 层据此回
+    ///   `session.not_found`）；
+    /// - 连接不在线 → `OwnerOffline`；
+    /// - 代际已变（断线/撤销/重连）→ `OwnerOffline`，迟到的成功一律丢弃。
+    ///
+    /// **不落盘**：本实现只在内存中转发，返回 Owner 的当前记录；标题、命令状态与请求引用都不写入任何
+    /// 本地设施。`requestId` 原样使用（不换号、不自动重发）。
+    async fn set_title(
+        &self,
+        session: &RemoteSessionRef,
+        generation: RemoteGeneration,
+        request: &RequestId,
+        title: &SessionTitle,
+    ) -> Result<RemoteCommandRecord, PortError> {
+        let link = self
+            .link_of(&session.owner_node_id)
+            .map_err(|error| error.to_port_error())?;
+        if !link.has_feature(crate::handshake::SESSION_TITLE_FEATURE) {
+            return Err(PortError::InvalidRequest(
+                "capability.unsupported_by_broker",
+            ));
+        }
+        if self.current_generation(&session.owner_node_id) != Some(generation) {
+            return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
+        }
+        let remote = crate::remote_session::RemoteSession::open(link, session.clone());
+        let outcome = match remote.set_title(request.clone(), title).await {
+            Ok(outcome) => outcome,
+            // 帧已写出但结果丢失：Owner 可能已经提交，不能报成确定失败。返回 `uncertain` 记录，
+            // 让客户端保留原 requestId 并在重连后走 `command.status` 回源（不自动换号重发）。
+            Err(
+                ClientError::Uncertain
+                | ClientError::Timeout
+                | ClientError::Transport(_)
+                | ClientError::Closed,
+            ) => {
+                return Ok(uncertain_title_record(session, request));
+            }
+            Err(error) => return Err(error.to_port_error()),
+        };
+        // 迟到结果：写出期间代际已经变了（断线/撤销/重连）就不认这次成功，但也不能断言失败。
+        if self.current_generation(&session.owner_node_id) != Some(generation) {
+            return Ok(uncertain_title_record(session, request));
+        }
+        title_record(session, request, outcome)
+    }
+}
+
+/// 结果未知的标题命令记录：没有 Owner 终态、没有终态事件标识，只说明「不能确定是否已提交」。
+fn uncertain_title_record(session: &RemoteSessionRef, request: &RequestId) -> RemoteCommandRecord {
+    RemoteCommandRecord {
+        target: RemoteCommandTarget {
+            owner_node_id: session.owner_node_id.clone(),
+            session_id: Some(session.session_id.clone()),
+        },
+        request: request.clone(),
+        status: CommandStatus::Uncertain,
+        accepted_at: None,
+        terminal_at: None,
+        terminal_event_id: None,
+        result: None,
+        error: None,
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // 运行期来源事件流（`RemoteEventStream`）：broadcast 缓冲 + 屏障 + 终止信号
 // ---------------------------------------------------------------------------------------------
@@ -1519,6 +1595,115 @@ fn parse_uuid(text: &str) -> Result<Uuid, PortError> {
     Uuid::parse(text).map_err(|_| PortError::InvalidRequest("the id is not a uuid"))
 }
 
+/// `command.terminal.terminalEventId` → core 的事件标识（`None` = 该终态没有终态事件，如实保留）。
+///
+/// 它是 **Owner** 的事件 id：Access 只透传，不用它伪造本地事件或落盘索引。
+fn terminal_event_id(
+    terminal: &node_link_protocol::command::Terminal,
+) -> Result<Option<EventId>, PortError> {
+    match terminal.terminal_event_id.as_ref() {
+        Some(event) => EventId::new(event.as_str())
+            .map(Some)
+            .map_err(|_| PortError::Corrupt("command.terminal carries an invalid terminalEventId")),
+        None => Ok(None),
+    }
+}
+
+/// `session.title.set` 的 Owner 结果 → [`RemoteCommandRecord`]（`design.md` D3）。
+///
+/// 与 `command.status` 的投影只差一处：这里接受 `Rejected` 作为**错误**——未接受的命令没有业务记录，
+/// 不能被投影成一条「完成过的」记录。
+fn title_record(
+    session: &RemoteSessionRef,
+    request: &RequestId,
+    outcome: CommandOutcome,
+) -> Result<RemoteCommandRecord, PortError> {
+    let target = RemoteCommandTarget {
+        owner_node_id: session.owner_node_id.clone(),
+        session_id: Some(session.session_id.clone()),
+    };
+    let build = |status: CommandStatus,
+                 accepted_at: Option<Timestamp>,
+                 terminal_at: Option<Timestamp>,
+                 terminal_event_id: Option<EventId>,
+                 result: Option<CommandResult>,
+                 error: Option<acp_core::model::PublicError>| RemoteCommandRecord {
+        target: target.clone(),
+        request: request.clone(),
+        status,
+        accepted_at,
+        terminal_at,
+        terminal_event_id,
+        result,
+        error,
+    };
+    match outcome {
+        CommandOutcome::Accepted {
+            accepted_at,
+            result,
+        } => {
+            let accepted_at = Timestamp::new(accepted_at.as_str())
+                .map_err(|_| PortError::Corrupt("command.accepted carries an invalid timestamp"))?;
+            Ok(build(
+                CommandStatus::Accepted,
+                Some(accepted_at),
+                None,
+                None,
+                result.as_ref().and_then(object_result),
+                None,
+            ))
+        }
+        CommandOutcome::Terminal(terminal) => {
+            let terminal_at = Timestamp::new(terminal.terminal_at.as_str())
+                .map_err(|_| PortError::Corrupt("command.terminal carries an invalid timestamp"))?;
+            let status = match terminal.status {
+                TerminalStatus::Completed => CommandStatus::Completed,
+                TerminalStatus::Failed => CommandStatus::Failed,
+                TerminalStatus::Uncertain => CommandStatus::Uncertain,
+                // 终态 `rejected` = 从未被接受：没有可投影的记录。
+                TerminalStatus::Rejected => return Err(title_rejection(terminal.error.as_ref())),
+            };
+            Ok(build(
+                status,
+                // Node Link 的 `command.terminal` 不携带接受时间：不拿本地时钟冒充 Owner 的时间。
+                None,
+                Some(terminal_at),
+                terminal_event_id(&terminal)?,
+                terminal.result.as_ref().and_then(object_result),
+                terminal.error.as_ref().map(core_public_error),
+            ))
+        }
+        CommandOutcome::Rejected(error) => Err(title_rejection(Some(&error))),
+    }
+}
+
+/// Owner 的拒绝 → 端口错误。能力类拒绝是**永久**失败（`capability.unsupported_by_broker`），
+/// 其余保留结构化的 Owner 错误（`Backend`，不伪装成本地参数错误）。
+fn title_rejection(error: Option<&node_link_protocol::common::PublicError>) -> PortError {
+    let Some(error) = error else {
+        return PortError::Backend(Box::new(std::io::Error::other(
+            "the owner rejected the session title command",
+        )));
+    };
+    if matches!(
+        error.code.as_str(),
+        "nodelink.protocol.feature_required" | "nodelink.command.unsupported"
+    ) {
+        return PortError::InvalidRequest("capability.unsupported_by_broker");
+    }
+    // 同一 requestId 换参是命令级冲突，不是本机故障：保留为可映射的 `Conflict`，让 Sync 客户端
+    // 看到 `command.idempotency_conflict`（而不是可重试的 `internal.unavailable`）。
+    if error.code.as_str() == "nodelink.command.idempotency_conflict" {
+        return PortError::Conflict(ConflictKind::IdempotencyConflict);
+    }
+    ClientError::Rejected {
+        code: error.code.as_str().to_owned(),
+        retryable: error.retryable,
+        error: core_public_error(error),
+    }
+    .to_port_error()
+}
+
 fn map_command_outcome(
     target: &RemoteCommandTarget,
     request: &RequestId,
@@ -1528,6 +1713,7 @@ fn map_command_outcome(
         |status: CommandStatus,
          accepted_at: Option<Timestamp>,
          terminal_at: Option<Timestamp>,
+         terminal_event_id: Option<EventId>,
          result: Option<CommandResult>,
          error: Option<acp_core::model::PublicError>| RemoteCommandRecord {
             target: target.clone(),
@@ -1535,6 +1721,7 @@ fn map_command_outcome(
             status,
             accepted_at,
             terminal_at,
+            terminal_event_id,
             result,
             error,
         };
@@ -1550,6 +1737,7 @@ fn map_command_outcome(
                 CommandStatus::Accepted,
                 Some(accepted_at),
                 None,
+                None,
                 result,
                 None,
             )))
@@ -1559,13 +1747,14 @@ fn map_command_outcome(
                 .map_err(|_| PortError::Corrupt("command.terminal carries an invalid timestamp"))?;
             let error = terminal.error.as_ref().map(core_public_error);
             let result = terminal.result.as_ref().and_then(object_result);
+            let event_id = terminal_event_id(&terminal)?;
             let status = match terminal.status {
                 TerminalStatus::Completed => CommandStatus::Completed,
                 TerminalStatus::Failed => CommandStatus::Failed,
                 TerminalStatus::Rejected => return Ok(RemoteCommandLookup::NotFound),
                 TerminalStatus::Uncertain => CommandStatus::Uncertain,
             };
-            let record = record(status, None, Some(terminal_at), result, error);
+            let record = record(status, None, Some(terminal_at), event_id, result, error);
             Ok(if status == CommandStatus::Uncertain {
                 RemoteCommandLookup::Uncertain(record)
             } else {
@@ -1957,4 +2146,27 @@ pub fn include_list(include: &HistoryInclude) -> Result<Vec<IncludeResource>, Po
         ));
     }
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Owner 的幂等冲突必须保留为 `Conflict`，sync 层才能回 `command.idempotency_conflict`；
+    /// 折成 `Backend` 会变成可重试的 `internal.unavailable`，客户端会错误地重试。
+    #[test]
+    fn owner_idempotency_conflict_keeps_its_identity() {
+        let error: node_link_protocol::common::PublicError =
+            serde_json::from_value(serde_json::json!({
+                "code": "nodelink.command.idempotency_conflict",
+                "message": "the requestId was used with a different payload",
+                "retryable": false,
+                "details": {}
+            }))
+            .expect("public error");
+        assert!(matches!(
+            title_rejection(Some(&error)),
+            PortError::Conflict(ConflictKind::IdempotencyConflict)
+        ));
+    }
 }

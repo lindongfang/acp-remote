@@ -241,6 +241,7 @@ impl Fixture {
                         state: None,
                         mode: ModeChange::Unchanged,
                         title: None,
+                        custom_title: None,
                         confirmation: None,
                         interaction: None,
                         agent_session_id: Some(
@@ -1646,6 +1647,7 @@ async fn unchanged_mode_without_a_title_keeps_it_and_still_advances_the_version(
             state: None,
             mode: ModeChange::Unchanged,
             title: value,
+            custom_title: None,
             confirmation: None,
             interaction: None,
             agent_session_id: None,
@@ -1690,10 +1692,14 @@ async fn unchanged_mode_without_a_title_keeps_it_and_still_advances_the_version(
     );
 }
 
-/// `TP2-R9-NO-RENAME-ENTRY`：命令目录中不存在重命名会话的命令，core 也没有写标题的第二条路径。
+/// `custom-session-title` D2：命令目录里**唯一**的标题修改入口是 `session.title.set`。
+///
+/// 旧断言（`TP2-R9-NO-RENAME-ENTRY`，客户端禁止改名年代）要求目录里没有任何 title 命令；本变更用
+/// `session.title.set` 取代那条禁令，因此判据改成「只有它，且没有 rename/恢复类命令」——否则会漏掉
+/// 「悄悄多出一个 restore 入口」这类回归。
 #[tokio::test]
-async fn the_command_catalog_has_no_rename_entry() {
-    // ① 机器目录（`npm run check` 的 `check:commands` 读的就是它）里没有任何改名命令。
+async fn the_command_catalog_registers_only_session_title_set_for_titles() {
+    // 机器目录（`npm run check` 的 `check:commands` 读的就是它）。
     const CATALOG: &str = include_str!("../../../compatibility/commands/v1/commands.json");
     let names: Vec<&str> = CATALOG
         .match_indices("\"name\": \"")
@@ -1707,10 +1713,19 @@ async fn the_command_catalog_has_no_rename_entry() {
         "前置条件：命令目录必须可解析出命令名（否则本断言是空转）"
     );
     assert!(
-        !names.iter().any(|name| name.contains("rename")
-            || name.contains("title")
-            || name.contains("info.set")),
-        "R9：命令目录中不得存在任何修改会话标题的命令，实际 {names:?}"
+        names.contains(&"session.title.set"),
+        "命令目录必须登记 session.title.set：{names:?}"
+    );
+    assert_eq!(
+        names.iter().filter(|name| name.contains("title")).count(),
+        1,
+        "标题只能由 session.title.set 修改：{names:?}"
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.contains("rename") || name.contains("info.set")),
+        "不存在改名或恢复 Agent 标题的第二条命令：{names:?}"
     );
 }
 
@@ -1733,6 +1748,7 @@ async fn unchanged_mode_title_clear_writes_every_column_in_the_batch() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: Some(Some("先有".to_owned())),
+                custom_title: None,
                 confirmation: None,
                 interaction: None,
                 agent_session_id: None,
@@ -1762,6 +1778,7 @@ async fn unchanged_mode_title_clear_writes_every_column_in_the_batch() {
                 state: Some(SessionState::Pending),
                 mode: ModeChange::Unchanged,
                 title: Some(None),
+                custom_title: None,
                 confirmation: None,
                 interaction: None,
                 agent_session_id: Some(

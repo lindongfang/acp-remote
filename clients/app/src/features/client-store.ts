@@ -30,6 +30,7 @@
 import type {
   CommandBody,
   CommandResultMessage,
+  CommandResultStatus,
   ConfigOptionView,
   ElicitationResolutionAction,
   ElicitationRespondPayload,
@@ -92,6 +93,7 @@ import {
   ATTACHMENT_FEATURE,
   PENDING_INTERACTIONS_FEATURE,
   SESSION_HISTORY_FEATURE,
+  SESSION_TITLE_FEATURE,
   assertHistoryPagesDoNotOverlap,
   assertPagesDoNotOverlap,
   decodeBase64Url,
@@ -114,6 +116,25 @@ import type {
   SessionFilesSourcesState,
   SessionFilesState,
 } from "./session-files";
+import type {
+  SessionTitleCommitReason,
+  SessionTitleEditorState,
+  SessionTitleEditorView,
+  SessionTitlePendingCommit,
+} from "./session-title-editor";
+import {
+  abandonTitleEditing,
+  beginTitleEditing,
+  buildSessionTitleEditorView,
+  cancelTitleEditing,
+  editTitleDraft,
+  initialSessionTitleEditorState,
+  markTitleEditError,
+  markTitleSubmitting,
+  shouldAttemptTitleCommit,
+  titleCommitReflected,
+  validateSessionTitle,
+} from "./session-title-editor";
 import {
   FILE_IMAGE_PREVIEW_BUDGET_BYTES,
   FILE_PREVIEW_BUDGET_BYTES,
@@ -457,6 +478,12 @@ export interface ClientState {
   readonly discardedTurns: ReadonlySet<string>;
   /** 会话的文本草稿（只在内存；`no-content-cache` 边界，D10）。 */
   readonly drafts: ReadonlyMap<Uuid, string>;
+  /** 会话标题编辑器（按会话绑定；内存、不恢复进度，`design.md` D4）。 */
+  readonly titleEditor: SessionTitleEditorState;
+  /** 已派发、尚未以「终态 + 权威摘要」收束的标题命令（按 `requestId`）。 */
+  readonly titleCommits: ReadonlyMap<Uuid, SessionTitlePendingCommit>;
+  /** 离页后失败的可归因提示（按会话）；只显示错误，不保留跨页草稿。 */
+  readonly titleNotices: ReadonlyMap<Uuid, string>;
   /** 已选择的附件（只在内存；选择阶段不上传、不落盘）。 */
   readonly attachments: ReadonlyMap<Uuid, readonly DraftAttachment[]>;
   /** 每次发送尝试的上传/清单状态；与命令记录分离。 */
@@ -559,6 +586,9 @@ export function initialClientState(): ClientState {
     volatile: new Map(),
     discardedTurns: new Set(),
     drafts: new Map(),
+    titleEditor: initialSessionTitleEditorState(),
+    titleCommits: new Map(),
+    titleNotices: new Map(),
     attachments: new Map(),
     attachmentRuns: new Map(),
     pathRefs: new Map(),
@@ -993,10 +1023,27 @@ function toResultRecord(value: unknown): Readonly<Record<string, unknown>> | nul
   return value as Readonly<Record<string, unknown>>;
 }
 
-/** 会话标题（空标题呈现为未命名，`design.md` D7：标题单向由 Agent 通知写入）。 */
+/**
+ * 会话有效标题（`design.md` D1/D7）：服务端已把「自定义 > Agent > 未命名」合并进
+ * `SessionSummary.title`，客户端只读这一个值，不复制 Agent 标题、不另建优先级。
+ * 空标题呈现为未命名占位。
+ */
 function titleOf(summary: SessionSummary | undefined): string {
   const title = summary?.title;
   return title === undefined || title === null || title.length === 0 ? "未命名会话" : title;
+}
+
+/** 标题命令失败/结果未知的呈现文案（不编造完成）。 */
+function titleFailureText(status: CommandResultStatus, error: PublicError | null): string {
+  if (error !== null) {
+    return error.retryable
+      ? `${error.code}：${error.message}（可重试）`
+      : `${error.code}：${error.message}`;
+  }
+  if (status === "uncertain") {
+    return "标题修改结果未知；恢复连接后会查询原请求，不会自动重发。";
+  }
+  return `标题修改未成功（${status}）。`;
 }
 
 /** 命令失败的说明（结构化：码 + 消息 + 可重试）。 */
@@ -1329,6 +1376,8 @@ export class ClientStore {
   readonly #fileRefreshQueued = new Set<string>();
   /** 压缩通知后待重读权威消息的会话（`turn.delta_compacted`）。 */
   readonly #messageRefreshQueued = new Set<Uuid>();
+  /** 每条标题命令本连接上已发出过结果查询的 `requestId`（重连后清空，不换号重发）。 */
+  readonly #titleStatusQueries = new Set<Uuid>();
   /** 首次读取在连接认证前被丢弃的会话；`authenticated` 后补发。 */
   readonly #deferredReads = new Set<Uuid>();
   /** 远程来源在订阅/重置/重连后待发起的原子读取重建。 */
@@ -1426,6 +1475,8 @@ export class ClientStore {
    * `resources`——§9.4 要求验证失败时保留上一次已完成的状态。
    */
   apply(event: SyncClientEvent): void {
+    // 新连接上的结果查询重新计数：同一条标题命令每次重连后都会再查一次原请求。
+    if (event.kind === "authenticated") this.#titleStatusQueries.clear();
     const reduced = this.#reduce(event);
     // 连接离开 online（closed/blocked）或建立新连接（authenticated）后，旧连接上的在途
     // 文件查询不会再回来：必须丢掉它们并把来源的 loading 复位，否则 in-flight 标记会让
@@ -1433,11 +1484,18 @@ export class ClientStore {
     const resetFiles = event.kind === "authenticated" || event.kind === "closed" || event.kind === "blocked";
     if (resetFiles) this.#resetFileQueries();
     const next = resetFiles ? this.#withFileLoadingStopped(reduced) : reduced;
-    if (next === this.#state) return;
-    this.#commit(next);
+    // 快照、`session.updated`、读取结果等任何归并之后都检查一次：标题命令的「completed」
+    // 只有在权威摘要反映这次保存后才能退出编辑。
+    const settled = this.#settleTitleCommits(next);
+    if (settled === this.#state) return;
+    this.#commit(settled);
     this.#drainQueuedFileRefreshes();
     this.#drainQueuedMessageRefreshes();
-    if (event.kind === "authenticated") this.#drainDeferredReads();
+    if (event.kind === "authenticated") {
+      this.#drainDeferredReads();
+      // 认证完成即查询上一条连接上未收束的标题命令（原 requestId，不重发）。
+      this.#drainTitleStatusQueries();
+    }
     if (event.kind === "snapshot_verified") {
       // 快照到达后才能判定来源：补发延迟读取，并为已打开的远程会话建立订阅与重建。
       this.#drainDeferredReads();
@@ -1505,23 +1563,23 @@ export class ClientStore {
       case "online":
         return this.#withConnection({ kind: "caught_up" });
       case "closed":
-        return clearAllRemoteData({
+        return this.#withTitleConnectionLost(clearAllRemoteData({
           ...this.#withConnection({ kind: "connection_closed", retryable: event.retryable }),
           lastClose: {
             code: event.code,
             reason: event.detail ?? null,
             atMs: this.#now(),
           },
-        });
+        }));
       case "blocked":
-        return clearAllRemoteData({
+        return this.#withTitleConnectionLost(clearAllRemoteData({
           ...this.#withConnection({ kind: "blocked", cause: event.cause }),
           lastClose: {
             code: event.code,
             reason: event.reason ?? event.cause,
             atMs: this.#now(),
           },
-        });
+        }));
       case "snapshot_verified":
         return { ...this.#state, resources: event.snapshot.resources };
       case "event":
@@ -2003,6 +2061,13 @@ export class ClientStore {
         next = { ...next, resources: withSessionSummary(next.resources, summary) };
       }
     }
+    if (result.body.command === "session.title.set") {
+      next = this.#withTitleTerminal(next, {
+        requestId: result.body.requestId,
+        status: result.body.status,
+        error: result.body.error,
+      });
+    }
     const folder = next.folderRequest;
     const statusRecord = result.body.result;
     if (result.body.command === "command.status" && result.body.status === "completed" &&
@@ -2017,6 +2082,24 @@ export class ClientStore {
         if (statusRecord.state === "uncertain" && !next.uncertainRequestIds.includes(folder.requestId)) {
           next = { ...next, uncertainRequestIds: [...next.uncertainRequestIds, folder.requestId] };
         }
+      }
+    }
+    // 结果未知的标题命令在重连后用原 `requestId` 查回；查询结果按同一份命令记录归并。
+    if (result.body.command === "command.status" && result.body.status === "completed" &&
+      isCommandStatusRecord(statusRecord)) {
+      const original = commands.get(statusRecord.targetRequestId);
+      if (original?.command === "session.title.set") {
+        commands.set(original.requestId, applyCommandResult(original, {
+          requestId: original.requestId, status: statusRecord.state, acceptedAt: statusRecord.acceptedAt,
+          terminalEventId: statusRecord.terminalEventId, terminalAt: statusRecord.terminalAt,
+          result: statusRecord.result, error: statusRecord.error,
+        }));
+        this.#titleStatusQueries.delete(original.requestId);
+        next = this.#withTitleTerminal(next, {
+          requestId: original.requestId,
+          status: statusRecord.state,
+          error: statusRecord.error,
+        });
       }
     }
     if (updated.state === "uncertain" && !next.uncertainRequestIds.includes(updated.requestId)) {
@@ -3838,6 +3921,345 @@ export class ClientStore {
   /** 当前草稿；未输入过为空串。 */
   draftOf(sessionId: Uuid): string {
     return this.#state.drafts.get(sessionId) ?? "";
+  }
+
+  // ── 会话标题（`session.title.set`，design D4） ──────────────────────────────
+
+  /**
+   * 顶部标题的编辑视图。
+   *
+   * 只返回「需要呈现点什么」时的模型：编辑中/提交中/失败，或一条可归因原会话的离页失败
+   * 提示。读取的永远是 `SessionSummary.title`（服务端下发的有效标题），客户端不另存
+   * Agent 标题、也不推导第二套优先级。
+   */
+  titleEditorView(sessionId: Uuid): SessionTitleEditorView | null {
+    return buildSessionTitleEditorView({
+      sessionId,
+      editor: this.#state.titleEditor,
+      notice: this.#state.titleNotices.get(sessionId) ?? null,
+    });
+  }
+
+  /**
+   * 双击顶部标题：进入原地编辑。
+   *
+   * 输入框为空，当前有效标题只作为灰色占位（占位不是真实输入）；不输入直接确认就保留旧标题，
+   * 不派发命令。未协商 `core.session-title.v1`、离线或来源离线时只记录不可用原因，阶段仍是
+   * `viewing`——不进入可保存状态，也就不可能显示本地保存成功。
+   */
+  beginTitleEdit(sessionId: Uuid): void {
+    const open = this.#state.titleEditor;
+    if (open.sessionId === sessionId && open.phase !== "viewing") return;
+    // 路由切换的一帧窗口里仍可能握着上一会话的编辑：先按离页规则收口原会话，再进入新会话。
+    if (open.sessionId !== null && open.sessionId !== sessionId && open.phase !== "viewing") {
+      this.leaveConversationSession(open.sessionId);
+    }
+    const editor = this.#state.titleEditor;
+    const summary = this.#findSession(sessionId);
+    const titleNotices = new Map(this.#state.titleNotices);
+    titleNotices.delete(sessionId);
+    this.#commit({
+      ...this.#state,
+      titleNotices,
+      titleEditor: beginTitleEditing(editor, {
+        sessionId,
+        effectiveTitle: summary?.title ?? null,
+        unavailableReason: this.#titleUnavailableReason(sessionId),
+      }),
+    });
+  }
+
+  /** 修改草稿（只影响当前会话的编辑器，不碰权威摘要）。 */
+  setTitleDraft(sessionId: Uuid, draft: string): void {
+    const next = editTitleDraft(this.#state.titleEditor, sessionId, draft);
+    if (next === this.#state.titleEditor) return;
+    this.#commit({ ...this.#state, titleEditor: next });
+  }
+
+  /**
+   * 提交一次编辑（Enter、失焦与离页共用这一条出口）。
+   *
+   * 非法输入、离线/未协商都**不派发命令**，保留输入框并显示原因；提交中再调用是 no-op，
+   * 因此 Enter 紧随其后的失焦不会产生第二条命令或第二个 `requestId`。同值错误后的重复
+   * 失焦/离页同样不再派发（显式 Enter 才重试）。
+   */
+  commitTitleEdit(sessionId: Uuid, reason: SessionTitleCommitReason = "enter"): void {
+    const editor = this.#state.titleEditor;
+    if (!shouldAttemptTitleCommit(editor, sessionId, reason)) return;
+    // 不输入（含只输入空白）直接确认 = 使用旧标题：退出编辑、不派发命令。旧标题只作为灰色
+    // 占位呈现，不是真实输入；只有用户输入非空文本才提交。
+    if (editor.draft.trim().length === 0) {
+      this.#commit({
+        ...this.#state,
+        titleEditor: abandonTitleEditing(editor, sessionId),
+      });
+      return;
+    }
+    const unavailable = this.#titleUnavailableReason(sessionId);
+    if (unavailable !== null) {
+      this.#commit({
+        ...this.#state,
+        titleEditor: markTitleEditError(editor, { sessionId, reason: unavailable }),
+      });
+      return;
+    }
+    const validation = validateSessionTitle(editor.draft);
+    if (!validation.ok) {
+      this.#commit({
+        ...this.#state,
+        titleEditor: markTitleEditError(editor, { sessionId, reason: validation.reason }),
+      });
+      return;
+    }
+    const baseVersion = this.#findSession(sessionId)?.version ?? null;
+    const requestId = this.#dispatchIntent({
+      sessionId,
+      build: (id) => ({
+        requestId: id,
+        command: "session.title.set",
+        sessionId,
+        payload: { title: validation.title },
+      }),
+      patch: (id) => {
+        const titleCommits = new Map(this.#state.titleCommits);
+        titleCommits.set(id, {
+          requestId: id,
+          sessionId,
+          title: validation.title,
+          baseVersion,
+          leftPage: false,
+          terminal: null,
+        });
+        return {
+          titleCommits,
+          titleEditor: markTitleSubmitting(this.#state.titleEditor, {
+            sessionId,
+            requestId: id,
+            title: validation.title,
+          }),
+        };
+      },
+    });
+    if (requestId === null) {
+      this.#commit({
+        ...this.#state,
+        titleEditor: markTitleEditError(this.#state.titleEditor, {
+          sessionId,
+          reason: "尚未建立已认证连接，无法提交标题修改。",
+        }),
+      });
+    }
+  }
+
+  /**
+   * Escape：取消编辑并丢弃草稿；已发出的命令不在客户端撤销。
+   *
+   * 提交中按 Escape 同样退出编辑（只是关掉输入框，不撤回命令）；该次提交转为「用户已离开」
+   * 归属，失败只留可归因提示，成功则等摘要落地后由列表/头部呈现。
+   */
+  cancelTitleEdit(sessionId: Uuid): void {
+    const editor = this.#state.titleEditor;
+    if (editor.phase === "submitting" && editor.sessionId === sessionId && editor.requestId !== null) {
+      const titleCommits = new Map(this.#state.titleCommits);
+      const commit = titleCommits.get(editor.requestId);
+      if (commit !== undefined) titleCommits.set(editor.requestId, { ...commit, leftPage: true });
+      this.#commit({
+        ...this.#state,
+        titleCommits,
+        titleEditor: abandonTitleEditing(editor, sessionId),
+      });
+      return;
+    }
+    const next = cancelTitleEditing(editor, sessionId);
+    if (next === editor) return;
+    this.#commit({ ...this.#state, titleEditor: next });
+  }
+
+  /**
+   * 离开当前对话页（切换会话/返回目录/卸载）。
+   *
+   * 先为原会话**尝试**提交一次，再让调用方照常导航——不等待网络结果锁住页面。随后放弃
+   * 输入（不保存跨页草稿）；仍在途的命令按原 `requestId`/`sessionId` 归属，失败只记一条
+   * 可归因原会话的提示，不跳回、不恢复草稿。切回原会话时总是只读当前标题。
+   */
+  leaveConversationSession(sessionId: Uuid): void {
+    const editor = this.#state.titleEditor;
+    if (editor.sessionId !== sessionId) return;
+    if (editor.phase === "editing" || editor.phase === "editing-error") {
+      this.commitTitleEdit(sessionId, "navigation");
+    }
+    const after = this.#state.titleEditor;
+    if (after.sessionId !== sessionId || after.phase === "viewing") return;
+    const titleCommits = new Map(this.#state.titleCommits);
+    if (after.requestId !== null) {
+      const commit = titleCommits.get(after.requestId);
+      if (commit !== undefined && !commit.leftPage) {
+        titleCommits.set(after.requestId, { ...commit, leftPage: true });
+      }
+    }
+    this.#commit({
+      ...this.#state,
+      titleCommits,
+      titleEditor: abandonTitleEditing(after, sessionId),
+    });
+  }
+
+  /** 当前是否允许发起一次新的标题提交；`null` 表示允许。 */
+  #titleUnavailableReason(sessionId: Uuid): string | null {
+    if (!this.#state.selectedFeatures.includes(SESSION_TITLE_FEATURE)) {
+      return "此主机未协商标题修改能力（core.session-title.v1），当前不能编辑标题。";
+    }
+    if (this.#state.connection.state !== "online") {
+      return "当前离线，标题修改不可用；恢复连接后再试。";
+    }
+    const summary = this.#findSession(sessionId);
+    if (summary?.origin.kind === "remote" && !summary.origin.online) {
+      return "会话所属节点当前离线，标题修改不可用。";
+    }
+    return null;
+  }
+
+  /**
+   * 连接在提交期间断开：仍在当前页的编辑器保留输入并说明「结果未知」。
+   *
+   * 这不是终态失败——命令记录保持未完成，重连后用原 `requestId` 查询；提示里明确写清
+   * 不会自动重发，避免用户把「已发出」误读成「一定没保存」。
+   */
+  #withTitleConnectionLost(state: ClientState): ClientState {
+    const editor = state.titleEditor;
+    if (editor.phase !== "submitting" || editor.requestId === null) return state;
+    const commit = state.titleCommits.get(editor.requestId);
+    if (commit === undefined || commit.leftPage) return state;
+    return {
+      ...state,
+      titleEditor: markTitleEditError(editor, {
+        sessionId: commit.sessionId,
+        reason: "连接已断开，标题修改结果未知；恢复连接后会查询原请求，不会自动重发。",
+        requestId: commit.requestId,
+        submittedTitle: commit.title,
+      }),
+    };
+  }
+
+  /**
+   * 标题命令的终态归并。
+   *
+   * - `accepted` 只说明 Owner 收到了命令，**不**退出编辑、也不显示完成；
+   * - `completed` 进入「等待权威摘要」，由 {@link #settleTitleCommits} 在摘要反映这次保存时
+   *   退出编辑（`terminalEventId` 可能是 Owner 的事件标识，不能拿去本地事件表里找）；
+   * - `failed`/`rejected` 保留输入并显示原因；`uncertain` 同样保留，并在重连后查询原请求；
+   * - 只有 `requestId` 与编辑器都指向同一次提交时才改编辑器——迟到结果不会覆盖新会话/新提交。
+   */
+  #withTitleTerminal(
+    state: ClientState,
+    result: {
+      readonly requestId: Uuid;
+      readonly status: CommandResultStatus;
+      readonly error: PublicError | null;
+    },
+  ): ClientState {
+    const commit = state.titleCommits.get(result.requestId);
+    if (commit === undefined || result.status === "accepted") return state;
+    this.#titleStatusQueries.delete(result.requestId);
+    const titleCommits = new Map(state.titleCommits);
+    if (result.status === "completed") {
+      titleCommits.set(commit.requestId, { ...commit, terminal: "completed" });
+      return { ...state, titleCommits };
+    }
+    const reason = titleFailureText(result.status, result.error);
+    let next: ClientState = { ...state, titleCommits };
+    if (result.status === "uncertain") {
+      // 结果未知：保留原请求，重连后用 `command.status` 查询；不自动换号重发。
+      titleCommits.set(commit.requestId, { ...commit, terminal: "uncertain" });
+    } else {
+      titleCommits.delete(commit.requestId);
+    }
+    const editor = state.titleEditor;
+    if (
+      editor.sessionId === commit.sessionId &&
+      editor.requestId === commit.requestId &&
+      editor.phase !== "viewing"
+    ) {
+      next = {
+        ...next,
+        titleEditor: markTitleEditError(editor, {
+          sessionId: commit.sessionId,
+          reason,
+          requestId: result.status === "uncertain" ? commit.requestId : null,
+          submittedTitle: commit.title,
+        }),
+      };
+    } else if (commit.leftPage) {
+      const titleNotices = new Map(next.titleNotices);
+      titleNotices.set(commit.sessionId, reason);
+      next = { ...next, titleNotices };
+    }
+    return next;
+  }
+
+  /**
+   * 一次提交收束：`completed` 的提交遇到「标题等于保存值或版本更新」的权威摘要后才退出编辑。
+   *
+   * 摘要在终态之前到达也没关系——终态到达时这里会看到当前摘要；摘要在终态之后到达则在下一次
+   * 快照/`session.updated` 归并后收束。离页的提交只清掉在途记录与失败提示，不恢复任何草稿。
+   */
+  #settleTitleCommits(state: ClientState): ClientState {
+    if (state.titleCommits.size === 0) return state;
+    const summaries = state.resources?.sessions ?? [];
+    let titleCommits: Map<Uuid, SessionTitlePendingCommit> | null = null;
+    let titleEditor = state.titleEditor;
+    let titleNotices: Map<Uuid, string> | null = null;
+    for (const commit of state.titleCommits.values()) {
+      if (commit.terminal !== "completed") continue;
+      const summary = summaries.find((item) => item.sessionId === commit.sessionId);
+      if (summary === undefined || !titleCommitReflected(commit, summary)) continue;
+      if (titleCommits === null) titleCommits = new Map(state.titleCommits);
+      titleCommits.delete(commit.requestId);
+      if (
+        titleEditor.sessionId === commit.sessionId &&
+        titleEditor.requestId === commit.requestId &&
+        (titleEditor.phase === "submitting" || titleEditor.phase === "editing-error")
+      ) {
+        titleEditor = abandonTitleEditing(titleEditor, commit.sessionId);
+      }
+      if (state.titleNotices.has(commit.sessionId)) {
+        if (titleNotices === null) titleNotices = new Map(state.titleNotices);
+        titleNotices.delete(commit.sessionId);
+      }
+    }
+    if (titleCommits === null) return state;
+    return {
+      ...state,
+      titleCommits,
+      titleEditor,
+      ...(titleNotices === null ? {} : { titleNotices }),
+    };
+  }
+
+  /**
+   * 重连后查询结果未知的标题命令（原 `requestId`，不重发、不换号）。
+   *
+   * 每条命令在**当前连接**上只查一次；新认证后清空标记，因此再次断线重连还会再查。
+   */
+  #drainTitleStatusQueries(): void {
+    for (const commit of this.#state.titleCommits.values()) {
+      if (commit.terminal === "completed" || this.#titleStatusQueries.has(commit.requestId)) continue;
+      const remote = remoteRefOf(this.#state, commit.sessionId);
+      const payload: {
+        readonly targetRequestId: Uuid;
+        readonly remoteTarget?: { readonly ownerNodeId: Uuid; readonly sessionId: Uuid | null };
+      } = remote !== null && this.#state.selectedFeatures.includes(STATELESS_ORIGIN_FEATURE)
+        ? {
+            targetRequestId: commit.requestId,
+            remoteTarget: { ownerNodeId: remote.ownerNodeId, sessionId: commit.sessionId },
+          }
+        : { targetRequestId: commit.requestId };
+      const dispatched = this.#dispatchIntent({
+        sessionId: commit.sessionId,
+        build: (id) => ({ requestId: id, command: "command.status", payload }),
+      });
+      if (dispatched !== null) this.#titleStatusQueries.add(commit.requestId);
+    }
   }
 
   // ── 附件与媒体（WP6） ─────────────────────────────────────────────────────
