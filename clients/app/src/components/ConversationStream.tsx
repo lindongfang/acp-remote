@@ -1,7 +1,7 @@
 /**
  * 对话页正文（三栏骨架 + 会话头 + 输入区；spec「对话页的宽窄两种形态」「对话页左栏呈现同目录会话」
- * 「跳转到最近的用户输入」「未上报的上下文不得以零冒充」「Agent 目录与连接状态分两层呈现」
- * 「断连时标注上次同步时间」；`design.md` D7/D8/D9/D10）。
+ * 「跳转到最近的用户输入」「未上报的上下文不得以零冒充」「Agent 目录与连接状态分两层呈现」；
+ * `design.md` D7/D8/D9/D10）。
  *
  * ## 一页 = 三栏，三栏内容**始终在 DOM**
  *
@@ -12,7 +12,7 @@
  * 相同），而不是靠自觉。
  *
  * 宽屏下三栏**各自滚动**（左栏会话、中栏时间线、右栏变更文件各一个 `ScrollView`）；中栏自上而下
- * 是会话头 → 内容来源条 → 时间线滚动区 → 输入区（输入区吸在中栏底部）。窄屏保留次级视图切换，
+ * 是会话头 → 时间线滚动区 → 输入区（输入区吸在中栏底部）。窄屏保留次级视图切换，
  * 切换控件留在三栏**之外**：中栏被藏起来时，切回去的入口不能跟着消失。
  *
  * ## 判定不在本组件里
@@ -30,12 +30,6 @@
  * 一圈描边把目标框住 `motion.pulse` 毫秒——目标条目属于 `ConversationTimeline` 的子树，本组件
  * 不为它加样式，因此高亮是一层 `position: fixed` 的覆盖层，坐标取自目标自己的
  * `getBoundingClientRect()`（网页专有面；node 侧不做测量，那时跳转入口不呈现）。
- *
- * ## 内容来源
- *
- * 未在线时顶部呈现条状标注：内容来自上次同步 + 该次同步的时刻（spec「断连时标注上次同步时间」）。
- * 「来自上次同步」这一段文案取自 `directory-model.ts` 的**唯一**词表，不在本文件另写一份；
- * 连接状态仍然只由共享外壳的设备胶囊表达，这里呈现的是**内容来源**，不是第二个状态徽标。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -50,9 +44,7 @@ import {
   hiddenConversationColumns,
 } from "../features/conversation-model";
 import type { ConversationPageModel, ConversationSecondaryView, ConversationSidebarModel } from "../features/conversation-model";
-import { CONTENT_ORIGIN_LABELS } from "../features/directory-model";
 import type { HostPanelModel } from "../features/host-panel-model";
-import type { ConnectionStateName } from "../state";
 import { ConversationComposer } from "./ConversationComposer";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { ConversationColumnResizer } from "./ConversationColumnResizer";
@@ -182,10 +174,6 @@ export interface ConversationStreamProps {
    * （`agents` 列表本体来自快照，连接状态是可选覆盖层；覆盖层缺席时每行是「状态未知」）。
    */
   readonly hostPanel?: HostPanelModel | null;
-  /** 连接状态机的当前状态（内容来源条据此判定）；`null` = 运行时尚未装配。 */
-  readonly connectionState?: ConnectionStateName | null;
-  /** 上次成功同步的时刻（epoch 毫秒）；从未成功替换过快照时为 `null`。 */
-  readonly lastSyncedAtMs?: number | null;
   /**
    * 文件栏两来源与互斥内容态（`store.sessionFilesPage(sessionId)`）。
    *
@@ -238,31 +226,6 @@ const SECONDARY_VIEW_OPTIONS: readonly { readonly value: ConversationSecondaryVi
  * 因此窄屏只提供「一栏占主体」的三个取值（`effectiveSecondaryView` 也把 `all` 归一为 `timeline`）。
  */
 const NARROW_SECONDARY_VIEW_OPTIONS = SECONDARY_VIEW_OPTIONS.filter((option) => option.value !== "all");
-
-/**
- * 非在线时的内容来源说明：同一句「内容来自上次同步」之后，按连接状态补一句**为什么会停在这里**。
- *
- * 两档语气：`warn` = 仍在尝试（连接中/认证中/追平中/重连中/配对中），`danger` = 不会再自己恢复
- * （已断开、未配对、被撤销、版本不兼容、身份变化、被顶替）。这里只描述**内容来源**，不呈现状态
- * 圆点或短词——连接状态仍只由共享外壳的设备胶囊表达（spec 的唯一性要求）。
- */
-type ContentStripTone = "warn" | "danger";
-
-const CONTENT_STRIP_BY_STATE: Readonly<
-  Record<Exclude<ConnectionStateName, "online">, { readonly tone: ContentStripTone; readonly detail: string }>
-> = {
-  unpaired: { tone: "danger", detail: "本设备尚未配对，以下内容不会再更新。" },
-  pairing: { tone: "warn", detail: "正在完成配对，追平之前以下内容不是最新。" },
-  disconnected: { tone: "danger", detail: "与电脑的连接已断开，以下内容不会再更新。" },
-  connecting: { tone: "warn", detail: "正在连接电脑，收到新的同步之前以下内容不是最新。" },
-  authenticating: { tone: "warn", detail: "正在认证本设备，收到新的同步之前以下内容不是最新。" },
-  replaying: { tone: "warn", detail: "正在追平事件，追平之前以下内容可能落后。" },
-  reconnecting: { tone: "warn", detail: "正在重连电脑，恢复实时更新之前以下内容不是最新。" },
-  revoked: { tone: "danger", detail: "本设备已被主机撤销，以下内容不会再更新。" },
-  incompatible: { tone: "danger", detail: "客户端与主机版本不兼容，以下内容不会再更新。" },
-  identity_changed: { tone: "danger", detail: "主机身份已变化，请先在主机侧确认，以下内容不会再更新。" },
-  replaced: { tone: "danger", detail: "本连接已被其它标签页顶替，以下内容不会再更新。" },
-};
 
 /**
  * 一条用户输入的上下边像素值。`getBoundingClientRect()` 给的是**视口坐标**；
@@ -429,49 +392,6 @@ function buildStyles(colors: Palette) {
       padding: 0,
       backgroundColor: colors.panel,
     },
-    originStrip: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "center",
-      gap: spacing.md,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
-      flexShrink: 0,
-    },
-    originStripWarn: {
-      borderColor: colors.warnSoft,
-      backgroundColor: colors.warnSoft,
-    },
-    originStripDanger: {
-      borderColor: colors.dangerSoft,
-      backgroundColor: colors.dangerSoft,
-    },
-    originText: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
-    originTextWarn: {
-      color: colors.warn,
-    },
-    originTextDanger: {
-      color: colors.danger,
-    },
-    syncedAt: {
-      color: colors.ink3,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
-    },
-    syncedAtWarn: {
-      color: colors.warn,
-    },
-    syncedAtDanger: {
-      color: colors.danger,
-    },
     header: {
       flexShrink: 0,
       paddingVertical: 12,
@@ -509,15 +429,6 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
-    },
-    offline: {
-      paddingVertical: 2,
-      paddingHorizontal: spacing.xs,
-      borderRadius: radius.sm,
-      color: colors.danger,
-      backgroundColor: colors.dangerSoft,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
     },
     chip: {
       flexDirection: "row",
@@ -1330,8 +1241,6 @@ export function ConversationStream({
   onSidebarPageChange,
   onCreateSession,
   hostPanel,
-  connectionState,
-  lastSyncedAtMs,
   filesPanel,
   onSelectFileSource,
   onRefreshFiles,
@@ -1695,17 +1604,6 @@ export function ConversationStream({
     host.querySelector("[data-interaction-id], [data-pending-interaction]")?.scrollIntoView({ block: "center" });
   };
 
-  /**
-   * 内容来源条：**只在非在线时**出现。连接状态只是「内容为什么不是最新的」的说明，不另画圆点或
-   * 短词——连接状态仍只由共享外壳的设备胶囊表达（spec 的唯一性要求）。
-   */
-  const contentStrip =
-    connectionState === "online"
-      ? null
-      : connectionState === null || connectionState === undefined
-        ? { tone: "warn" as const, detail: "连接状态未知，以下内容可能不是最新。" }
-        : CONTENT_STRIP_BY_STATE[connectionState];
-
   return (
     <View
       ref={assignRootRef}
@@ -1754,7 +1652,7 @@ export function ConversationStream({
           {wide ? <ConversationColumnResizer side="left" width={displayedLeftWidth}
             maxWidth={sideBudget - displayedRightWidth} onChange={setLeftWidth} /> : null}
 
-          {/* 中栏：会话头 → 内容来源条 → 时间线（独立滚动）→ 输入区（吸底）。 */}
+          {/* 中栏：会话头 → 时间线（独立滚动）→ 输入区（吸底）。 */}
           <View
             style={
               hiddenColumns.includes("timeline")
@@ -1782,63 +1680,10 @@ export function ConversationStream({
                 <Text style={styles.agent} numberOfLines={1} dataSet={{ sessionAgent: model.header.agentName }}>
                   {model.header.agentName}
                 </Text>
-                {model.header.originOfflineLabel === null ? null : (
-                  <Text style={styles.offline} dataSet={{ originOffline: "true" }}>
-                    {model.header.originOfflineLabel}
-                  </Text>
-                )}
                 <View style={styles.headerSpacer} />
                 {hostPanel === null || hostPanel === undefined ? null : <AgentChip panel={hostPanel} />}
               </View>
             </View>
-
-            {/* 内容来源条：未在线时说明内容是上次同步来的、按连接状态给出原因，并附真实同步时刻。 */}
-            {contentStrip === null ? null : (
-              <View
-                style={[
-                  styles.originStrip,
-                  contentStrip.tone === "danger" ? styles.originStripDanger : styles.originStripWarn,
-                ]}
-                dataSet={{
-                  connectionStrip: "true",
-                  contentOrigin: "last_sync",
-                  // 刻意不叫 `data-connection-state`：那是设备胶囊的机器证据，来源条不是第二个状态徽标。
-                  connectionStripState: connectionState ?? "unknown",
-                  connectionStripTone: contentStrip.tone,
-                }}
-              >
-                <Text
-                  style={[
-                    styles.originText,
-                    contentStrip.tone === "danger" ? styles.originTextDanger : styles.originTextWarn,
-                  ]}
-                  dataSet={{ contentOriginLabel: "last_sync" }}
-                >
-                  {CONTENT_ORIGIN_LABELS.last_sync}
-                </Text>
-                <Text
-                  style={[
-                    styles.originText,
-                    contentStrip.tone === "danger" ? styles.originTextDanger : styles.originTextWarn,
-                  ]}
-                >
-                  {contentStrip.detail}
-                </Text>
-                {/* 从未成功替换过快照时没有时刻可呈现（那时也不编造一个）。
-                    时刻的形态与目录页/详情页同一段 UTC 切片（`YYYY-MM-DD HH:MM UTC`）。 */}
-                {lastSyncedAtMs === null || lastSyncedAtMs === undefined ? null : (
-                  <Text
-                    style={[
-                      styles.syncedAt,
-                      contentStrip.tone === "danger" ? styles.syncedAtDanger : styles.syncedAtWarn,
-                    ]}
-                    dataSet={{ syncedAt: String(lastSyncedAtMs) }}
-                  >
-                    {`已同步 ${new Date(lastSyncedAtMs).toISOString().slice(0, 16).replace("T", " ")} UTC`}
-                  </Text>
-                )}
-              </View>
-            )}
 
             {/* 中间互斥查看区：文件打开时它占据时间线的位置；时间线/输入区仍在 DOM（隐藏）。 */}
             {fileContent === null || onCloseFile === undefined ? null : (

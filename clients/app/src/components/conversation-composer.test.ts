@@ -372,7 +372,8 @@ describe("输入区：生产路径（仓库模型 → 组件）", () => {
 
     expect(html).toContain('data-composer="unavailable"');
     expect(html).toContain('data-submit-enabled="false"');
-    expect(html).toContain("连接不可用或来源节点离线，不能提交");
+    expect(html).toContain("当前不能提交。");
+    expect(html).not.toContain("连接不可用或来源节点离线，不能提交");
     expect(tagContaining(html, 'data-composer-input="unavailable"')).not.toMatch(/readonly/i);
   });
 

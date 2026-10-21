@@ -14,6 +14,12 @@
  * - 提示 → `toastStore.show()`（模块级订阅源，见 `./toast.ts`）；
  * - 胶囊 → `router.push("/hosts")`（主机与连接面板）。
  *
+ * ## 首屏认证闸门与连接问题
+ *
+ * 业务路由（`/`、`/dir/...`、`/session/...`）在本次会话尚未认证时只呈现 `AuthTransition`：
+ * 不画顶栏、不挂业务内容。认证失败复用 `features/connection-problem.ts` 的同一份模型与同一
+ * 个弹层组件；已认证后的连接问题则盖在内容区之上（顶栏保持可见，方便进主机页排查）。
+ *
  * 呈现全部交给 `ShellView`（`./ShellView.tsx`）：它只吃模型与回调，因此本文件不参与组件测试，
  * 也不把 `expo-router` 拖进 `vitest` 的 node 环境。
  */
@@ -23,11 +29,14 @@ import { useEffect, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 
 import type { ClientState } from "../../features/client-store";
-import { useClientState } from "../../features/runtime";
+import { buildConnectionProblem, shouldShowConnectionProblem } from "../../features/connection-problem";
+import type { ConnectionProblemModel } from "../../features/connection-problem";
+import { useClientState, useClientStore } from "../../features/runtime";
+import { AuthTransition } from "../AuthTransition";
 import type { ThemePreference } from "../theme";
 import { THEME_PREFERENCE_LABELS, themePreferenceStore, useTheme, useThemePreference } from "../theme";
 import { useReducedMotion } from "./reduced-motion";
-import { buildShellModel, isPairingPath } from "./shell-model";
+import { buildShellModel, isBusinessPath, isPairingPath } from "./shell-model";
 import { ShellView } from "./ShellView";
 import { toastStore, useToastMessage } from "./toast";
 
@@ -43,6 +52,7 @@ export interface ShellProps {
 export function Shell({ children }: ShellProps): ReactElement {
   const pathname = usePathname();
   const state: ClientState | null = useClientState();
+  const store = useClientStore();
   const themePreference = useThemePreference();
   const theme = useTheme();
   const reducedMotion = useReducedMotion();
@@ -57,10 +67,39 @@ export function Shell({ children }: ShellProps): ReactElement {
     }
   }, [state?.host, state === null, pathname, router]);
 
+  // 连接问题的文案/动作只有一份（`features/connection-problem.ts`）。首屏尚未认证时由
+  // `AuthTransition` 呈现同一个弹层；已认证后只在未被排除的业务路由上盖在内容区之上。
+  const problem: ConnectionProblemModel | null =
+    state === null
+      ? null
+      : buildConnectionProblem({
+          connection: state.connection.state,
+          hasAuthenticated: state.hasAuthenticated,
+          lastClose: state.lastClose,
+          reconnect: state.reconnect,
+          nowMs: store?.nowMs() ?? Date.now(),
+        });
+  const authGateOpen = state !== null && !state.hasAuthenticated && isBusinessPath(pathname);
+  const overlayProblem =
+    state !== null && state.hasAuthenticated && shouldShowConnectionProblem(pathname) ? problem : null;
+
+  const onRepair = (): void => {
+    router.push("/pair");
+  };
+  const onReload = (): void => {
+    if (typeof globalThis.location !== "undefined") globalThis.location.reload();
+  };
+
+  // 未认证的业务路由不呈现顶栏与业务内容：认证失败时 `AuthTransition` 复用同一个问题弹层。
+  if (authGateOpen) {
+    return <AuthTransition problem={problem} onRepair={onRepair} onReload={onReload} />;
+  }
+
   const model = buildShellModel({
     pathname,
     connectionState: state?.connection.state ?? null,
     hostAddress: state?.host?.address ?? null,
+    hasAuthenticated: state?.hasAuthenticated ?? false,
     // 环境事实与组合根 `CompositionInputs.secureContext` 读的是**同一个**浏览器全局
     // （`docs/FRONTEND_DESIGN.md` §4.4：无 HTTPS 时 UI 必须明确显示「开发/不安全连接」）。
     // 没有这个全局的运行时（node / 组件测试）按安全处理：那里既没有页面托管，也没有明文连接。
@@ -93,6 +132,9 @@ export function Shell({ children }: ShellProps): ReactElement {
       onOpenHosts={() => {
         router.push("/hosts");
       }}
+      problem={overlayProblem}
+      onRepair={onRepair}
+      onReload={onReload}
     >
       {children}
     </ShellView>

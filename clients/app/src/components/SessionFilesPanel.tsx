@@ -715,11 +715,6 @@ export function SessionFilesPanel({
       </View>
 
       {model.refreshState.kind === "unavailable" ? <Text style={styles.note} dataSet={{ fileRefreshUnavailable: "true" }}>{model.refreshState.reason}</Text> : null}
-      {model.connectionOnline ? null : (
-        <Text style={styles.notice} dataSet={{ filesOffline: "true" }}>
-          当前不在线：已加载的文件与 Git 结果可能不是最新的。
-        </Text>
-      )}
 
       <View style={model.selectedSource === "all" ? styles.list : [styles.list, styles.hidden]}>
           {model.allNotice === null ? null : (

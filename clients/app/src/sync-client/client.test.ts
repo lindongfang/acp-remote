@@ -628,6 +628,8 @@ describe("MINOR-3：门面只有一套时间来源", () => {
   it("未注入 nowMs 时，快照时间戳实时读自 clock.now()", async () => {
     const context = buildClient({ omitNowMs: true });
     await authenticate(context);
+    // 本用例推进假时钟验证快照时间戳：关闭存活探测，避免 3 秒宽限在断言前关闭连接。
+    context.client.setProbeVisible(false);
     await deliverCompleteSnapshot(context, SNAPSHOT_ID);
     expect(context.client.snapshots.current?.verifiedAtMs).toBe(1_700_000_000_000);
 
@@ -644,5 +646,35 @@ describe("MINOR-3：门面只有一套时间来源", () => {
     await authenticate(context);
     await deliverCompleteSnapshot(context, SNAPSHOT_ID);
     expect(context.client.snapshots.current?.verifiedAtMs).toBe(1_700_000_000_000);
+  });
+});
+
+describe("应用层存活探测：门面保存可见性并下发给连接", () => {
+  it("连接前设置隐藏：认证后不探测；连接存在时切换立即生效", async () => {
+    const context = buildClient();
+    context.client.setProbeVisible(false);
+    await authenticate(context);
+    const socket = context.sockets.latest;
+    expect(socket.types()).not.toContain("control.ping");
+
+    // 恢复可见：下发给当前连接并立即补发一条 ping。
+    context.client.setProbeVisible(true);
+    expect(socket.types().filter((type) => type === "control.ping")).toHaveLength(1);
+
+    // 再次隐藏后长时间推进：既不再发 ping，也不会因 3 秒宽限被判超时。
+    context.client.setProbeVisible(false);
+    context.clock.advanceBy(5_000);
+    expect(socket.types().filter((type) => type === "control.ping")).toHaveLength(1);
+    expect(context.events.some((event) => event.kind === "closed")).toBe(false);
+  });
+
+  it("重连时新连接继承已保存的隐藏状态", async () => {
+    const context = buildClient();
+    await authenticate(context);
+    context.client.setProbeVisible(false);
+    context.client.disconnect();
+
+    await authenticate(context);
+    expect(context.sockets.latest.types()).not.toContain("control.ping");
   });
 });

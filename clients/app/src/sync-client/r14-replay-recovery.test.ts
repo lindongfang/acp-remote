@@ -314,6 +314,8 @@ describe("R14：服务端漏投一条可见事件时必须补齐并有界重订�
     };
 
     await completeHandshake(context);
+    // 本用例用 8 秒推进退避预算：关闭存活探测，否则 3 秒宽限会把连接提前判死。
+    context.connection.setProbeVisible(false);
     await waitUntil(() => context.events.some((event) => event.kind === "online"), "首轮追平完成");
     expect(subscribes).toBe(1);
 

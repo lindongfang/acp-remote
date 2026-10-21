@@ -56,6 +56,8 @@ export { PairingPanel } from "./PairingPanel";
 export { PairingThemeToggle } from "./PairingThemeToggle";
 export type { RuntimeUnavailableProps } from "./RuntimeUnavailable";
 export { RuntimeUnavailable } from "./RuntimeUnavailable";
+export type { AuthTransitionProps } from "./AuthTransition";
+export { AuthTransition } from "./AuthTransition";
 
 // 样式基座（design D1）：token 与 `useTheme()` 是这两个页面的公共样式面。
 // 三个新原语只吃消费方的扁平数据，交互一律回调上抛。

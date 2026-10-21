@@ -46,6 +46,7 @@ import type {
   Uuid,
 } from "../protocol";
 import { stringifyJson } from "./json";
+import { encodeBase64Url } from "./base64url";
 import { decodeWireMessage } from "./wire";
 import { EventLedger, isImportedEventIdConsistent } from "./dedupe";
 import { compareOriginCursors } from "./remote-merge";
@@ -99,6 +100,23 @@ export const SYNC_WS_SUBPROTOCOL = "acp-remote.sync.v1.json";
  * 不会各自抄一份。
  */
 export const DECLARED_SUBPROTOCOLS: readonly string[] = [SYNC_WS_SUBPROTOCOL];
+
+/**
+ * 应用层存活探测的发送间隔（§13：浏览器不能发 WebSocket Ping frame，只能应用层 `control.ping`）。
+ *
+ * 认证成功后立即发第一条，此后每秒一条。间隔必须显著小于超时，才能在一条 pong 丢失时
+ * 由后续 ping 的 pong 继续证明连接存活；`1000ms` 给出三次重试机会，又不会在移动网络上
+ * 制造可观的额外流量。
+ */
+export const LIVENESS_PROBE_INTERVAL_MS = 1_000;
+
+/**
+ * 未收到匹配 `control.pong` 的最长等待（从**最早一条**未确认 ping 的发送时刻起算）。
+ *
+ * 取 3 秒：单次 pong 丢失（服务端繁忙/瞬时拥塞）不应立刻把连接判死，而真正的半开连接
+ * （NAT 超时、对端静默消失）又必须在一个可感知的短窗口内被发现，交给状态机走重连。
+ */
+export const LIVENESS_TIMEOUT_MS = 3_000;
 
 /**
  * 规范化来源 → 同步连接地址（`https://host[:port]` → `wss://host[:port]/sync/v1`，§3.1/§8）。
@@ -406,6 +424,26 @@ export class SyncConnection {
   #gapAttempts = 0;
   /** 待触发的缺口重订阅定时器；同一时刻至多一个。 */
   #gapRetry: CancelTimer | null = null;
+  /** 待触发的存活探测定时器；同一时刻至多一个。 */
+  #probeTimer: CancelTimer | null = null;
+  /**
+   * 页面当前是否可见（应用层探测只在可见时运行）。
+   *
+   * 默认 `false`：直接构造连接的测试/消费者不会自动产生 ping；组合根在装配时按
+   * `LifecyclePort.currentVisibility()` 显式打开。认证先于可见性设置完成时，随后那次
+   * `setProbeVisible(true)` 会立即补发第一条 ping。
+   */
+  #probeVisible = false;
+  /** 已发出、尚未收到匹配 `control.pong` 的 ping：`nonce → sentAtMs`（插入序即发送序）。 */
+  readonly #pendingPings = new Map<string, number>();
+  /**
+   * 本次连接的关闭是否由存活超时触发。
+   *
+   * 超时后 socket 的 `onClose` 很可能随后到达；若不记这一位，`#onClose` 会在已发出
+   * `detail: "liveness_timeout"` 的 `closed` 之后再发一条普通 `closed`，让消费方对同一次
+   * 断线看到两个关闭事件（状态机会据此重复安排重连）。
+   */
+  #livenessTimedOut = false;
   /**
    * 本连接上已登记的远程订阅：`subscriptionId → sessionRef`。
    *
@@ -499,6 +537,7 @@ export class SyncConnection {
   /** 主动关闭（用户断开）。 */
   close(code: number = CLOSE.normal, reason = "client_closed"): void {
     this.#closed = true;
+    this.#stopProbe();
     this.#clearSnapshotBacklog();
     this.#cancelGapResubscribe();
     this.#forgetRemoteSubscriptions();
@@ -514,6 +553,22 @@ export class SyncConnection {
   refreshSnapshot(): void {
     if (this.#closed || this.#authenticated === null) return;
     this.#sendSubscribe(null);
+  }
+
+  /**
+   * 设置存活探测的可见性（组合根把 `document.visibilityState` 翻译成它）。
+   *
+   * 隐藏时立即取消计时器并丢弃待确认 ping：后台标签页里的定时器既会被浏览器节流，也不该
+   * 因为一次挂起就判死连接；恢复可见时**立刻**补发一条 ping（不等下一个整秒），并从那一刻
+   * 重新获得完整的 3 秒宽限。认证前与关闭后调用都是安全的空操作（只记录期望值）。
+   */
+  setProbeVisible(visible: boolean): void {
+    this.#probeVisible = visible;
+    if (!visible) {
+      this.#stopProbe();
+      return;
+    }
+    this.#startProbe();
   }
 
   // ── 握手 ────────────────────────────────────────────────────────────────
@@ -546,6 +601,9 @@ export class SyncConnection {
       selectedFeatures: handshake.selectedFeatures,
     });
     this.#onEvent({ kind: "replaying", cursor: this.#acked });
+    // 订阅已经发出，连接进入可探测状态：此后每秒一条 `control.ping`，直到关闭/阻断或页面隐藏。
+    // 放在认证事件之后，消费方看到的顺序始终是「已认证 → （可能）关闭」，不会反过来。
+    this.#startProbe();
   }
 
   /**
@@ -634,6 +692,9 @@ export class SyncConnection {
         });
         return;
       case "control.pong":
+        // 只有匹配本连接发出过的 nonce 才算确认；不请自来的 pong 不得清除任何待确认 ping。
+        this.#pendingPings.delete(message.body.nonce);
+        return;
       case "sync.ack":
       case "sync.subscribe":
       case "sync.snapshot_request":
@@ -775,6 +836,91 @@ export class SyncConnection {
     if (this.#gapRetry === null) return;
     this.#gapRetry();
     this.#gapRetry = null;
+  }
+
+  // ── 应用层存活探测（§13） ─────────────────────────────────────────────────
+
+  /**
+   * 启动探测：立即检查一次并发出第一条 ping，然后按 `LIVENESS_PROBE_INTERVAL_MS` 继续。
+   *
+   * 未认证、已关闭、页面隐藏或已有计时器时都是空操作：调用方（认证完成 / 可见性恢复）
+   * 因此无需自己判前置条件，重复调用也不会产生第二条计时器链。
+   */
+  #startProbe(): void {
+    if (this.#probeTimer !== null) return;
+    if (this.#closed || this.#authenticated === null || !this.#probeVisible) return;
+    this.#probeTick();
+  }
+
+  /** 取消计时器并丢弃全部待确认 ping（关闭/阻断/隐藏/超时都走这里）。 */
+  #stopProbe(): void {
+    if (this.#probeTimer !== null) {
+      this.#probeTimer();
+      this.#probeTimer = null;
+    }
+    this.#pendingPings.clear();
+  }
+
+  /**
+   * 一次探测节拍：先判最早一条未确认 ping 是否已超时，再补发下一条。
+   *
+   * 只在 `control.pong` 里删除对应 nonce：业务事件、服务端 `control.ping`、命令结果都**不**
+   * 证明本客户端→服务端方向是通的，拿它们续命会让半开连接永远不被发现。
+   */
+  #probeTick(): void {
+    this.#probeTimer = null;
+    if (this.#closed || this.#authenticated === null || !this.#probeVisible) return;
+    const now = this.#options.clock.now();
+    // `Map` 保持插入序：第一个键就是最早发出、尚未确认的 ping。
+    const oldest = this.#pendingPings.values().next();
+    if (oldest.done !== true && now - oldest.value >= LIVENESS_TIMEOUT_MS) {
+      this.#failLiveness();
+      return;
+    }
+    this.#sendLivenessPing(now);
+    this.#probeTimer = this.#options.clock.schedule(LIVENESS_PROBE_INTERVAL_MS, () => {
+      this.#probeTick();
+    });
+  }
+
+  /**
+   * 发一条 `control.ping`，并在发送**之前**登记 nonce。
+   *
+   * 先登记再发送：真实实现里 pong 不可能同步到达，但把顺序定死可以让「收到 pong 时 nonce
+   * 一定已在表里」成为结构性事实，而不是依赖事件循环时序。
+   */
+  #sendLivenessPing(nowMs: number): void {
+    const nonce = encodeBase64Url(this.#random.bytes(16));
+    this.#pendingPings.set(nonce, nowMs);
+    this.#send({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "control.ping",
+      messageId: this.#random.uuid(),
+      connectionId: this.#requireConnectionId(),
+      connectionSequence: this.#nextOutboundSequence(),
+      body: { nonce },
+    });
+  }
+
+  /**
+   * 存活超时：本地终止连接并发**唯一**一条 `closed`。
+   *
+   * `#livenessTimedOut` 让随后到达的 socket `onClose` 不再重复通知；`close()` 负责取消计时器、
+   * 清空待确认 ping 与释放连接级状态。事件里的 `retryable: true` 交给状态机按全局退避重连，
+   * 本层不自己排程。
+   */
+  #failLiveness(): void {
+    this.#livenessTimedOut = true;
+    this.close(CLOSE.serverUnavailable, "liveness_timeout");
+    // close() 已撤销定时器/订阅与在途重订阅；未完成的快照暂存也要丢弃——后续的 socket
+    // `onClose` 会被上面的标志抑制，不会再走一遍 `#onClose` 的清理路径。
+    this.discardStaging("connection_closed");
+    this.#onEvent({
+      kind: "closed",
+      code: CLOSE.serverUnavailable,
+      retryable: true,
+      detail: "liveness_timeout",
+    });
   }
 
   /** 连接结束：远程订阅映射与连接级确认一并作废（运行期连续位置由门面保留）。 */
@@ -1040,7 +1186,10 @@ export class SyncConnection {
   }
 
   #onClose(code: number, reason: string): void {
+    this.#stopProbe();
     if (this.#closed) {
+      // 存活超时已经发过唯一的 `closed`；socket 随后到达的关闭回调不得再通知一次。
+      if (this.#livenessTimedOut) return;
       this.#onEvent({ kind: "closed", code, retryable: false });
       return;
     }
@@ -1077,6 +1226,8 @@ export class SyncConnection {
    */
   #block(cause: ClientBlockCause, code: number, reason?: IncompatibleReason): void {
     this.#closed = true;
+    // 阻断态下不再探测：计时器与待确认 ping 必须随阻断一起作废（与重订阅定时器同理）。
+    this.#stopProbe();
     // 阻断态下不再补发任何东西：重订阅定时器必须随阻断一起撤销。
     this.#cancelGapResubscribe();
     this.#forgetRemoteSubscriptions();

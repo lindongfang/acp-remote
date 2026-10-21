@@ -1910,6 +1910,10 @@ close reason 不得包含敏感信息，且不是结构化错误的替代品。
 
 第一阶段不支持电脑离线时排队 prompt。离线输入只能保留为明确的本地 draft，不能标记为已提交。
 
+### 13.1 客户端探活
+
+已认证的 PWA 在页面可见时每秒发送一次 `control.ping`，只有 `nonce` 与在途 ping 匹配的 `control.pong` 计入存活：最早一条未应答的 ping 超过 3 秒即判定连接离线。页面隐藏（`document.visibilityState !== "visible"`）时暂停发送；恢复可见后继续。服务端 30 秒 heartbeat 与 90 秒静默超时（见本节上方）保持不变，两种探活互不替代。本条只描述客户端行为，不改变 wire 消息或 schema。
+
 ## 14. Limits 与 Backpressure
 
 v1 默认上限：

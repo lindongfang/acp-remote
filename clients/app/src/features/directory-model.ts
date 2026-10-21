@@ -16,7 +16,7 @@
  *
  * ## 数据只来自快照
  *
- * 构造输入只有「上一次成功替换的快照资源」「连接状态」与「时钟」三个，**没有任何命令出口**：
+ * 构造输入只有「上一次成功替换的快照资源」「时钟」与查询/分页原文，**没有任何命令出口**：
  * 目录面因此在结构上不可能依赖额外的在线查询命令，断连时也照常渲染（R15 MUST）。
  */
 
@@ -24,7 +24,6 @@ import type { DirectoryListState, DirectoryView, SessionSummaryView } from "../d
 import { UNTITLED_SESSION_LABEL, buildDirectoryViews, buildSessionSummaryView, directoryNamesOf } from "../domain";
 import type { SessionSummary, WorkspaceCatalogEntry } from "../protocol";
 import type { StagedResources } from "../sync-client";
-import type { ConnectionStateName } from "../state";
 
 /** 一分钟的毫秒数（相对时间的分档线）。 */
 const MINUTE_MS = 60_000;
@@ -86,9 +85,6 @@ export interface DirectoryRowModel {
   readonly latestActivityAt: string | null;
 }
 
-/** 目录内容的来源：实时同步 vs 上一次成功同步的快照（断连时必须明确标注）。 */
-export type DirectoryContentOrigin = "live" | "last_sync";
-
 /**
  * 目录页的状态筛选。
  *
@@ -111,8 +107,6 @@ export interface SessionRowModel {
   readonly agentName: string;
   readonly state: SessionSummaryView["state"];
   readonly directoryId: string | null;
-  /** imported 会话来源离线时的标注；本节点自有会话为 `null`。 */
-  readonly originOfflineLabel: string | null;
   readonly updatedAt: string;
   /** 相对文案（刚刚 / N 分钟前 / 年月日），时钟经输入注入。 */
   readonly updatedAtLabel: string;
@@ -136,9 +130,6 @@ export type DirectoryPageModel =
   | {
       readonly kind: "ready";
       readonly directories: readonly DirectoryRowModel[];
-      readonly contentOrigin: DirectoryContentOrigin;
-      /** 快照替换时刻（epoch 毫秒）；从未同步过为 `null`。 */
-      readonly lastSyncedAtMs: number | null;
     } & DirectoryPageInfo
   | {
       readonly kind: "empty";
@@ -151,8 +142,6 @@ export type DirectoryPageModel =
        * `data-empty-state` 仍只在 `empty` 出现，`ready` / `no_match` / `loading` 的判定条件不变。
        */
       readonly directories: readonly DirectoryRowModel[];
-      readonly contentOrigin: DirectoryContentOrigin;
-      readonly lastSyncedAtMs: number | null;
     } & DirectoryPageInfo
   | {
       /**
@@ -163,8 +152,6 @@ export type DirectoryPageModel =
        * 本支**不占用** `data-empty-state`（否则会污染 R15 既有的空态负向断言）。
        */
       readonly kind: "no_match";
-      readonly contentOrigin: DirectoryContentOrigin;
-      readonly lastSyncedAtMs: number | null;
     };
 
 /**
@@ -228,7 +215,6 @@ export type DirectoryDetailModel =
        * 该目录的全部会话数（分页前）：页面头部的「N 个会话」与总页数都从它算出。
        */
       readonly total: number;
-      readonly contentOrigin: DirectoryContentOrigin;
     }
   | {
       /** 目录标识不在快照目录里（目录被删或链接过期）：与「目录存在但无会话」是不同呈现。 */
@@ -248,12 +234,6 @@ export const DIRECTORY_EMPTY_COPY: Readonly<
     title: "目录已登记，但还没有会话",
     guidance: "在下面选一个目录进入详情页，然后在目录内创建一个会话。",
   },
-};
-
-/** 内容来源标注：断连时必须让人看出这些内容来自上次同步，而不是刚刚推送的。 */
-export const CONTENT_ORIGIN_LABELS: Readonly<Record<DirectoryContentOrigin, string>> = {
-  live: "内容来自本次同步",
-  last_sync: "内容来自上次同步，当前未连接",
 };
 
 /**
@@ -327,11 +307,6 @@ function latestActivityByDirectoryId(sessions: readonly SessionSummary[]): Reado
     if (current === undefined || summary.updatedAt > current) map.set(directoryId, summary.updatedAt);
   }
   return map;
-}
-
-/** 断连（含未配对与全部阻断态）时内容来源是「上次同步」。 */
-function contentOriginOf(connection: ConnectionStateName): DirectoryContentOrigin {
-  return connection === "online" ? "live" : "last_sync";
 }
 
 /** 目录页匹配所需的「目录标识 → 该目录下会话的呈现标题」。 */
@@ -433,8 +408,6 @@ function paginateDirectoryRows(
 /** 目录页模型。 */
 export function buildDirectoryPageModel(input: {
   readonly resources: StagedResources | null;
-  readonly connection: ConnectionStateName;
-  readonly lastSyncedAtMs: number | null;
   readonly query?: string;
   readonly filter?: DirectoryFilter;
   /** 页码输入框里的原文（提交时已纠正）；缺省第一页。 */
@@ -443,7 +416,6 @@ export function buildDirectoryPageModel(input: {
   if (input.resources === null) return { kind: "loading" };
 
   const list: DirectoryListState = buildDirectoryViews(input.resources.workspaces, input.resources.sessions);
-  const contentOrigin = contentOriginOf(input.connection);
   // 同名判定与展示名都按**整份快照**算（不是按筛选后的子集）：它们都是数据的性质，
   // 不因为用户敲了一个查询词就变——否则消歧段会时有时无。
   const names = directoryNamesOf(input.resources.workspaces);
@@ -458,7 +430,7 @@ export function buildDirectoryPageModel(input: {
           )
       : [];
     if (list.empty === "directories_without_sessions" && directories.length === 0) {
-      return { kind: "no_match", contentOrigin, lastSyncedAtMs: input.lastSyncedAtMs };
+      return { kind: "no_match" };
     }
     return {
       kind: "empty",
@@ -467,8 +439,6 @@ export function buildDirectoryPageModel(input: {
       // 那一支必须真有目录项（每一项都是零汇总行），否则指引指向不存在的入口；
       // `no_directories` 时确实是空数组。本支的 kind/empty 取值与判定条件都不因此改变。
       ...paginateDirectoryRows(directories, input.pageInput),
-      contentOrigin,
-      lastSyncedAtMs: input.lastSyncedAtMs,
     };
   }
 
@@ -483,30 +453,23 @@ export function buildDirectoryPageModel(input: {
   // 目录列表非空，且缺省查询/筛选下命中的就是全部目录，因此这一支只在显式提供了非空查询
   // 或非默认筛选时才可达——`empty` 于是仍然只表达「没有目录 / 目录里从来没有会话」两种空态。
   if (directories.length === 0) {
-    return { kind: "no_match", contentOrigin, lastSyncedAtMs: input.lastSyncedAtMs };
+    return { kind: "no_match" };
   }
 
   return {
     kind: "ready",
     ...paginateDirectoryRows(directories, input.pageInput),
-    contentOrigin,
-    lastSyncedAtMs: input.lastSyncedAtMs,
   };
 }
 
-/** 会话摘要 → 会话行。imported 会话来源离线时标注来源（R20：只显示元数据）。 */
+/** 会话摘要 → 会话行（R20：只显示元数据）。 */
 function toSessionRow(summary: SessionSummaryView, nowMs: number): SessionRowModel {
-  const offline =
-    summary.origin.kind === "remote" && !summary.origin.online
-      ? `来源「${summary.origin.ownerLabel}」当前离线`
-      : null;
   return {
     id: summary.id,
     title: summary.title.kind === "titled" ? summary.title.text : UNTITLED_SESSION_LABEL,
     agentName: summary.agentName,
     state: summary.state,
     directoryId: summary.directoryId,
-    originOfflineLabel: offline,
     updatedAt: summary.updatedAt,
     updatedAtLabel: formatRelativeTime(summary.updatedAt, nowMs),
   };
@@ -596,7 +559,6 @@ function findDirectoryByDirectoryId(
  */
 export function buildDirectoryDetailModel(input: {
   readonly resources: StagedResources | null;
-  readonly connection: ConnectionStateName;
   readonly directoryId: string;
   /** imported 会话的来源展示名（按 `ownerNodeId` 解析）。 */
   readonly ownerLabelOf: (ownerNodeId: string) => string;
@@ -646,6 +608,5 @@ export function buildDirectoryDetailModel(input: {
     pageSize: DIRECTORY_DETAIL_PAGE_SIZE,
     shown: sessions.length,
     total,
-    contentOrigin: contentOriginOf(input.connection),
   };
 }

@@ -12,6 +12,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { buildConnectionProblem } from "../../features/connection-problem";
+import type { ConnectionProblemModel } from "../../features/connection-problem";
 import type { ThemePreference } from "../theme";
 import { buildShellModel } from "./shell-model";
 import type { ShellModel } from "./shell-model";
@@ -25,6 +27,8 @@ const NOOP_HANDLERS = {
   onOpenHelp: () => {},
   onCloseHelp: () => {},
   onOpenHosts: () => {},
+  onRepair: () => {},
+  onReload: () => {},
 } as const;
 
 /** 用例要覆盖的入参；其余按缺省补齐。 */
@@ -35,6 +39,7 @@ interface ShellRenderInput {
   readonly reducedMotion?: boolean;
   readonly helpOpen?: boolean;
   readonly toastMessage?: string | null;
+  readonly problem?: ConnectionProblemModel | null;
 }
 
 function renderShell(input: ShellRenderInput): string {
@@ -45,10 +50,32 @@ function renderShell(input: ShellRenderInput): string {
     reducedMotion: input.reducedMotion ?? false,
     helpOpen: input.helpOpen ?? false,
     toastMessage: input.toastMessage ?? null,
+    problem: input.problem ?? null,
     ...NOOP_HANDLERS,
   };
   return renderToStaticMarkup(createElement(ShellView, props, createElement("main", null, "路由内容")));
 }
+
+/** 固定时刻的问题模型：五个变体共用同一份关闭记录，只有连接状态不同。 */
+function problemFor(state: "disconnected" | "reconnecting" | "revoked" | "incompatible" | "identity_changed" | "replaced"): ConnectionProblemModel {
+  const problem = buildConnectionProblem({
+    connection: state,
+    hasAuthenticated: true,
+    lastClose: { code: 4500, reason: "snapshot_validation_failed", atMs: Date.parse("2026-10-01T00:00:08.000Z") },
+    reconnect: { attempts: 3, nextRetryAtMs: Date.parse("2026-10-01T00:00:16.000Z") },
+    nowMs: Date.parse("2026-10-01T00:00:08.000Z"),
+  });
+  if (problem === null) throw new Error("这些状态都应产生连接问题模型");
+  return problem;
+}
+
+/** 在线模型：弹层的覆盖关系与顶栏是否可见都要在同一个页面上看。 */
+const ONLINE_MODEL = buildShellModel({
+  pathname: "/",
+  connectionState: "online",
+  hostAddress: "https://pc.example.ts.net",
+  secureContext: true,
+});
 
 /** 某个属性片段在渲染结果里出现了几次（用于「只有一处」这类断言）。 */
 function countOccurrences(html: string, fragment: string): number {
@@ -148,7 +175,7 @@ describe("按视口填满：只有对话路由", () => {
   });
 });
 
-describe("设备胶囊：三档色与异常短词", () => {
+describe("设备胶囊：在线/离线两档", () => {
   it("在线时不出现状态短词，档位是正常", () => {
     const html = renderShell({
       model: buildShellModel({
@@ -159,10 +186,12 @@ describe("设备胶囊：三档色与异常短词", () => {
       }),
     });
     expect(html).toContain('data-capsule-tone="ok"');
+    expect(html).toContain('data-capsule-availability="online"');
+    expect(html).toContain("在线");
     expect(html).not.toContain("data-capsule-short-word");
   });
 
-  it("阻断态呈现阻断档与对应短词", () => {
+  it("阻断态不追加原因短词，也不追加离线文案：原因交给连接问题弹层", () => {
     const html = renderShell({
       model: buildShellModel({
         pathname: "/",
@@ -172,34 +201,43 @@ describe("设备胶囊：三档色与异常短词", () => {
       }),
     });
     expect(html).toContain('data-capsule-tone="danger"');
-    expect(html).toContain('data-capsule-short-word="true"');
-    expect(html).toContain("已被移除");
+    expect(html).toContain('data-capsule-availability="offline"');
+    expect(html).not.toContain("data-capsule-short-word");
+    for (const word of ["已被移除", "密钥已变化", "版本不兼容", "已在别处接管", "正在重连"]) {
+      expect(html, word).not.toContain(word);
+    }
   });
 
-  it("离线态按阻断档呈现红色，并给出「离线」短词", () => {
-    const html = renderShell({
-      model: buildShellModel({
-        pathname: "/",
-        connectionState: "disconnected",
-        hostAddress: null,
-        secureContext: true,
-      }),
-    });
-    expect(html).toContain('data-capsule-tone="danger"');
-    expect(html).toContain("离线");
+  it("断开与重连中都是离线档，只靠圆点档位表达、不追加文案", () => {
+    for (const connectionState of ["disconnected", "reconnecting"] as const) {
+      const html = renderShell({
+        model: buildShellModel({
+          pathname: "/",
+          connectionState,
+          hostAddress: null,
+          secureContext: true,
+        }),
+      });
+      expect(html, connectionState).toContain('data-capsule-tone="danger"');
+      expect(html, connectionState).not.toContain("data-capsule-short-word");
+      expect(html, connectionState).not.toContain("正在重连");
+    }
   });
 
-  it("需要注意档呈现自己的短词", () => {
+  it("尚未认证的握手阶段只给中性圆点，不添加在线/离线文案", () => {
     const html = renderShell({
       model: buildShellModel({
-        pathname: "/",
-        connectionState: "reconnecting",
+        pathname: "/hosts",
+        connectionState: "authenticating",
         hostAddress: null,
         secureContext: true,
       }),
     });
     expect(html).toContain('data-capsule-tone="warn"');
-    expect(html).toContain("正在重连");
+    expect(html).toContain('data-capsule-availability="unknown"');
+    expect(html).not.toContain("data-capsule-short-word");
+    expect(html).not.toContain(">在线<");
+    expect(html).not.toContain(">离线<");
   });
 });
 
@@ -268,5 +306,112 @@ describe("帮助抽屉与提示", () => {
     const withToast = renderShell({ model, toastMessage: "主题已切换为「黑夜」" });
     expect(withToast).toContain('data-toast="visible"');
     expect(withToast).toContain("主题已切换为「黑夜」");
+  });
+});
+
+describe("连接问题弹层：五种变体与唯一动作", () => {
+  const VARIANTS = [
+    { state: "disconnected", kind: "offline", title: "连接已断开", action: null },
+    { state: "reconnecting", kind: "offline", title: "正在重连", action: null },
+    { state: "revoked", kind: "revoked", title: "设备已被撤销", action: "重新配对" },
+    { state: "incompatible", kind: "incompatible", title: "版本或能力不兼容", action: "重新加载" },
+    { state: "identity_changed", kind: "identity_changed", title: "主机身份已变化", action: "重新配对" },
+    { state: "replaced", kind: "replaced", title: "已被其他标签页顶替", action: "重新加载" },
+  ] as const;
+
+  it("每个变体呈现标题、码位与恰好一个动作（普通离线没有按钮）", () => {
+    for (const variant of VARIANTS) {
+      const html = renderShell({ model: ONLINE_MODEL, problem: problemFor(variant.state) });
+      expect(html, variant.state).toContain(`data-connection-problem="${variant.kind}"`);
+      expect(html, variant.state).toContain('role="dialog"');
+      expect(html, variant.state).toContain('aria-modal="true"');
+      expect(html, variant.state).toContain(variant.title);
+      expect(html, variant.state).toContain('data-problem-close-code="4500"');
+      if (variant.action === null) {
+        expect(html, variant.state).not.toContain("data-problem-action=");
+      } else {
+        expect(countOccurrences(html, "data-problem-action="), variant.state).toBe(1);
+        expect(html, variant.state).toContain(variant.action);
+      }
+    }
+  });
+
+  it("阻断变体给出协议错误码，普通离线不给错误码", () => {
+    const expected = {
+      disconnected: null,
+      reconnecting: null,
+      revoked: "auth.device_revoked",
+      incompatible: "protocol.version_unsupported",
+      identity_changed: "auth.host_mismatch",
+      replaced: "connection.replaced",
+    } as const;
+    for (const variant of VARIANTS) {
+      const html = renderShell({ model: ONLINE_MODEL, problem: problemFor(variant.state) });
+      const code = expected[variant.state];
+      if (code === null) {
+        expect(html, variant.state).not.toContain("data-problem-error-code");
+      } else {
+        expect(html, variant.state).toContain(`data-problem-error-code="${code}"`);
+      }
+    }
+  });
+
+  it("动作与状态一一对应：repair 只给重新配对，reload 只给重新加载", () => {
+    for (const state of ["revoked", "identity_changed"] as const) {
+      const html = renderShell({ model: ONLINE_MODEL, problem: problemFor(state) });
+      expect(html, state).toContain('data-problem-action="repair"');
+      expect(html, state).not.toContain('data-problem-action="reload"');
+    }
+    for (const state of ["incompatible", "replaced"] as const) {
+      const html = renderShell({ model: ONLINE_MODEL, problem: problemFor(state) });
+      expect(html, state).toContain('data-problem-action="reload"');
+      expect(html, state).not.toContain('data-problem-action="repair"');
+    }
+  });
+
+  it("普通离线呈现重连进度；阻断态不呈现自动重连", () => {
+    const offline = renderShell({ model: ONLINE_MODEL, problem: problemFor("reconnecting") });
+    expect(offline).toContain('data-problem-reconnect="true"');
+    expect(offline).toContain('data-problem-reconnect-attempts="3"');
+    expect(offline).toContain("已重试 3 次");
+    expect(offline).toContain("下次重试");
+
+    for (const state of ["revoked", "incompatible", "identity_changed", "replaced"] as const) {
+      const html = renderShell({ model: ONLINE_MODEL, problem: problemFor(state) });
+      expect(html, state).not.toContain("data-problem-reconnect");
+    }
+  });
+
+  it("技术详情默认收起但始终在 DOM 里，且不含原始关闭原因以外的秘密字段", () => {
+    const html = renderShell({ model: ONLINE_MODEL, problem: problemFor("revoked") });
+    expect(html).toContain('data-action="toggle-problem-detail"');
+    expect(html).toContain('data-problem-detail-open="false"');
+    expect(html).toContain('data-problem-detail="true"');
+    expect(html).toContain("技术详情");
+    expect(html).toContain("error=auth.device_revoked");
+    expect(html).toContain("reason=snapshot_validation_failed");
+    expect(html).not.toContain("pairingSecret");
+  });
+
+  it("弹层不可关闭：没有关闭按钮、遮罩或 dismiss 动作", () => {
+    const html = renderShell({ model: ONLINE_MODEL, problem: problemFor("incompatible") });
+    for (const fragment of ["close-problem", "dismiss-problem", "problem-dismiss"]) {
+      expect(html, fragment).not.toContain(fragment);
+    }
+    // 帮助抽屉自己的关闭入口与遮罩不随弹层增加。
+    expect(countOccurrences(html, 'data-help-scrim="closed"')).toBe(1);
+  });
+
+  it("弹层盖在内容区之上但顶栏仍可见，且内容仍在 DOM 里", () => {
+    const html = renderShell({ model: ONLINE_MODEL, problem: problemFor("revoked") });
+    expect(html).toContain('data-shell-top-bar="visible"');
+    expect(html).toContain("路由内容");
+    expect(html.indexOf("路由内容")).toBeLessThan(html.indexOf('data-connection-problem-overlay="true"'));
+  });
+
+  it("没有问题时不渲染弹层", () => {
+    const html = renderShell({ model: ONLINE_MODEL });
+    expect(html).not.toContain("data-connection-problem");
+    expect(html).not.toContain("data-problem-action");
   });
 });

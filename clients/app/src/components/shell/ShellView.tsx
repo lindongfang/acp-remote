@@ -14,6 +14,7 @@
 
 import type { ReactElement, ReactNode } from "react";
 
+import type { ConnectionProblemModel } from "../../features/connection-problem";
 import type { Palette, ThemePreference } from "../theme";
 import {
   Pressable,
@@ -33,6 +34,7 @@ import {
   webStyle,
   zIndex,
 } from "../theme";
+import { ConnectionProblemDialog } from "./ConnectionProblemDialog";
 import type { ShellModel } from "./shell-model";
 
 /** 未加密托管时的横幅文案（原型 `.devbanner` 的口径）。 */
@@ -66,6 +68,8 @@ function buildStyles(colors: Palette) {
       flexShrink: 1,
       minHeight: 0,
       flexDirection: "column",
+      // 连接问题弹层按内容区定位（不盖住顶栏）：作为它的定位祖先。
+      position: "relative",
       // 路由容器之外的底色也跟随主题：宽屏页面自身的最大宽度两侧不会露出浏览器的白底。
       backgroundColor: colors.bg,
     },
@@ -76,6 +80,20 @@ function buildStyles(colors: Palette) {
       minHeight: 0,
       overflow: "hidden",
       ...webStyle({ overflow: "hidden" }),
+    },
+    problemOverlay: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: spacing.xl,
+      // 盖住内容区里所有带 z-index 的浮层（会话头弹层、跳转胶囊等），否则它们会穿透遮罩。
+      zIndex: zIndex.modal,
+      backgroundColor: "rgba(10,12,16,.58)",
+      ...webStyle({ backdropFilter: "blur(2px)" }),
     },
     devBanner: {
       flexDirection: "row",
@@ -176,12 +194,6 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
       lineHeight: 22.4,
-    },
-    capsuleShortWord: {
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      lineHeight: 20.8,
-      opacity: 0.9,
     },
     // 折角：原型用一段内联 SVG（文字字形的高低不对）。这里用两条边框旋转 45° 画出同一个形状，
     // 同样是样式类，不引入 SVG 依赖、也不写内联样式。
@@ -384,6 +396,10 @@ export interface ShellViewProps {
   readonly onOpenHelp: () => void;
   readonly onCloseHelp: () => void;
   readonly onOpenHosts: () => void;
+  /** 需要打断操作的连接问题；`null` = 不呈现弹层（在线、首屏认证或排除路由）。 */
+  readonly problem: ConnectionProblemModel | null;
+  readonly onRepair: () => void;
+  readonly onReload: () => void;
   readonly children?: ReactNode;
 }
 
@@ -430,6 +446,7 @@ export function ShellView(props: ShellViewProps): ReactElement {
               deviceCapsule: "true",
               capsuleTone: tone,
               capsuleState: props.model.capsule.state ?? "unknown",
+              capsuleAvailability: props.model.capsule.availability ?? "unknown",
               action: "open-hosts",
             }}
             onPress={props.onOpenHosts}
@@ -438,11 +455,6 @@ export function ShellView(props: ShellViewProps): ReactElement {
             <Text numberOfLines={1} style={[styles.capsuleLabel, toneTextStyle]} dataSet={{ capsuleDevice: "true" }}>
               {props.model.capsule.deviceLabel}
             </Text>
-            {props.model.capsule.shortWord === null ? null : (
-              <Text style={[styles.capsuleShortWord, toneTextStyle]} dataSet={{ capsuleShortWord: "true" }}>
-                {props.model.capsule.shortWord}
-              </Text>
-            )}
             <View style={styles.capsuleCaret} />
           </Pressable>
 
@@ -488,6 +500,15 @@ export function ShellView(props: ShellViewProps): ReactElement {
         dataSet={{ shellContent: "true", shellContentFill: props.model.contentFill ? "true" : "false" }}
       >
         {props.children}
+        {props.problem === null ? null : (
+          <View style={styles.problemOverlay} dataSet={{ connectionProblemOverlay: "true" }}>
+            <ConnectionProblemDialog
+              problem={props.problem}
+              onRepair={props.onRepair}
+              onReload={props.onReload}
+            />
+          </View>
+        )}
       </View>
 
       <View

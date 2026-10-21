@@ -18,8 +18,8 @@
  * 3. **渲染不派发命令**：渲染期间网关没有任何新的派发记录（读取在 `useEffect` 里、命令只在交互里上抛）；
  * 4. **左栏与输入区的组合**：目录上下文 / 目录内搜索（**只**影响左栏）/ 同目录会话 / 已显示数与
  *    继续加载 / 吸底新建；上下文胶囊 + 告警条、模型与模式胶囊、提示行；
- * 5. **连接事实**：未在线时给出内容来源与上次同步时刻（在线时不给），会话头的 Agent 胶囊在
- *    覆盖层缺席时呈现「状态未知」。
+ * 5. **连接事实**：页面不再呈现内容来源条或上次同步时刻；连接状态只由共享外壳的设备胶囊表达。
+ *    会话头的 Agent 胶囊在覆盖层缺席时呈现「状态未知」。
  */
 
 import { createElement } from "react";
@@ -175,12 +175,9 @@ describe("对话页正文：整页锚点", () => {
     expect(html).toContain('data-can-send="true"');
   });
 
-  it("三栏各有滚动容器；中栏自上而下是会话头、内容来源条、时间线滚动区、输入区", () => {
+  it("三栏各有滚动容器；中栏自上而下是会话头、时间线滚动区、输入区", () => {
     const { store } = filledStore("running");
-    const html = renderPage(pageOf(store), {
-      connectionState: "reconnecting",
-      lastSyncedAtMs: 1_700_000_000_000,
-    });
+    const html = renderPage(pageOf(store));
 
     expect(html).toContain('data-conversation-scroll="sessions"');
     expect(html).toContain('data-conversation-scroll="timeline"');
@@ -193,8 +190,7 @@ describe("对话页正文：整页锚点", () => {
       'data-conversation-column="files"',
     );
     expect(timeline).toContain('data-composer="in_progress"');
-    expect(timeline.indexOf('data-session-header="')).toBeLessThan(timeline.indexOf('data-connection-strip="true"'));
-    expect(timeline.indexOf('data-connection-strip="true"')).toBeLessThan(
+    expect(timeline.indexOf('data-session-header="')).toBeLessThan(
       timeline.indexOf('data-conversation-scroll="timeline"'),
     );
     expect(timeline.indexOf('data-conversation-scroll="timeline"')).toBeLessThan(timeline.indexOf('data-composer="'));
@@ -487,67 +483,19 @@ describe("会话头与 Agent 胶囊（同一份连接覆盖层）", () => {
   });
 });
 
-describe("内容来源条：断连时标注上次同步", () => {
-  it("未在线时给出「内容来自上次同步」与该次同步时刻；在线时不呈现", () => {
+describe("页面不呈现内容来源与同步时间", () => {
+  it("渲染结果里没有内容来源条、同步时刻与来源离线标注", () => {
     const { store } = filledStore("running");
-    const offline = renderPage(pageOf(store), { connectionState: "disconnected", lastSyncedAtMs: 1_700_000_000_000 });
+    const html = renderPage(pageOf(store));
 
-    expect(offline).toContain('data-connection-strip="true"');
-    expect(offline).toContain('data-content-origin="last_sync"');
-    expect(offline).toContain("内容来自上次同步");
-    expect(offline).toContain('data-synced-at="1700000000000"');
-    expect(offline).toContain("已同步 2023-11-14 22:13 UTC");
-
-    // 在线时不呈现来源条（那时内容就是本次同步来的）。
-    const online = renderPage(pageOf(store), { connectionState: "online", lastSyncedAtMs: 1_700_000_000_000 });
-    expect(online).not.toContain("data-connection-strip");
-    expect(online).not.toContain("data-synced-at");
-  });
-
-  it("按连接状态换说明句与色调；来源条不是第二个状态徽标", () => {
-    const { store } = filledStore("running");
-
-    const reconnecting = renderPage(pageOf(store), {
-      connectionState: "reconnecting",
-      lastSyncedAtMs: 1_700_000_000_000,
-    });
-    const reconnectingStrip = sliceBetween(
-      reconnecting,
-      'data-connection-strip="true"',
-      'data-conversation-scroll="timeline"',
-    );
-    expect(reconnectingStrip).toContain('data-connection-strip-state="reconnecting"');
-    expect(reconnectingStrip).toContain('data-connection-strip-tone="warn"');
-    expect(reconnectingStrip).toContain("正在重连电脑");
-    expect(reconnectingStrip).toContain('data-synced-at="1700000000000"');
-    // 来源条里没有设备胶囊的圆点/短词结构。
-    expect(reconnectingStrip).not.toContain("data-device-capsule");
-    expect(reconnectingStrip).not.toContain("data-capsule-short-word");
-
-    const disconnected = renderPage(pageOf(store), {
-      connectionState: "disconnected",
-      lastSyncedAtMs: 1_700_000_000_000,
-    });
-    const disconnectedStrip = sliceBetween(
-      disconnected,
-      'data-connection-strip="true"',
-      'data-conversation-scroll="timeline"',
-    );
-    expect(disconnectedStrip).toContain('data-connection-strip-state="disconnected"');
-    expect(disconnectedStrip).toContain('data-connection-strip-tone="danger"');
-    expect(disconnectedStrip).toContain("连接已断开");
-
-    // 在线时不呈现来源条（既有断言在上一用例；这里再钉一次状态变化的差别）。
-    const online = renderPage(pageOf(store), { connectionState: "online" });
-    expect(online).not.toContain("data-connection-strip");
-  });
-
-  it("从未成功同步过时不给时刻（不编造一个）", () => {
-    const { store } = filledStore("running");
-    const html = renderPage(pageOf(store), { connectionState: "reconnecting", lastSyncedAtMs: null });
-
-    expect(html).toContain('data-connection-strip="true"');
+    // 连接状态只由共享外壳的设备胶囊表达：页面正文不再有第二个状态徽标或来源条。
+    expect(html).not.toContain("data-connection-strip");
+    expect(html).not.toContain("data-content-origin");
     expect(html).not.toContain("data-synced-at");
+    expect(html).not.toContain("内容来自上次同步");
+    expect(html).not.toContain("已同步 ");
+    expect(html).not.toContain("data-origin-offline");
+    expect(html).not.toContain("当前离线");
   });
 });
 

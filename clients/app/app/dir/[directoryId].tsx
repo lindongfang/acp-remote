@@ -149,8 +149,7 @@ export default function DirectoryDetailRoute(): ReactElement {
       <View style={styles.page}>
         <DirectoryDetail
           model={store.directoryDetail(directoryId)}
-        lastSyncedAtMs={state.lastSyncedAtMs}
-        onBack={() => {
+          onBack={() => {
           // 从目录页进来时 back() 保留来源页状态；直接用 URL 打开详情页（没有应用内历史）
           // 时 back() 什么也不做，因此明确回到目录页。
           if (router.canGoBack()) router.back();

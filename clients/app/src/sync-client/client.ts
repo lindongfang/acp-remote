@@ -150,6 +150,17 @@ export class SyncClient {
    */
   #ackedCursor: Cursor | null;
   readonly #now: () => number;
+  /**
+   * 期望的存活探测可见性（跨连接保存）。
+   *
+   * 它必须活在门面上：重连时新建的 `SyncConnection` 还没有认证，组合根也不一定再次收到
+   * 可见性事件；若只在连接实例上设置，重连后的第一条连接就会按「始终可见」探测，后台标签页
+   * 也会持续发 ping。`connect()` 把这里的值应用到新连接。
+   *
+   * 缺省 `false`：直接构造 `SyncClient` 的测试/消费者不自动产生 ping；组合根在装配时
+   * 按 `LifecyclePort.currentVisibility()` 显式打开。
+   */
+  #probeVisible = false;
 
   constructor(options: SyncClientOptions) {
     this.#options = options;
@@ -180,6 +191,17 @@ export class SyncClient {
   /** 已确认游标；重连时作为 `sync.subscribe` 的恢复点。 */
   get ackedCursor(): Cursor | null {
     return this.#ackedCursor;
+  }
+
+  /**
+   * 设置应用层存活探测的可见性，并下发给当前连接（若有）。
+   *
+   * 没有连接时只记录期望值：连接建立后由 `connect()` 应用，认证完成后才真正开始探测。
+   * 该方法是幂等的，且不改变任何命令/订阅行为。
+   */
+  setProbeVisible(visible: boolean): void {
+    this.#probeVisible = visible;
+    this.#connection?.setProbeVisible(visible);
   }
 
   /** 认证信息；未认证时为 `null`。 */
@@ -231,6 +253,8 @@ export class SyncClient {
       new SnapshotStaging(this.#options.digest),
     );
     this.#connection = connection;
+    // 新连接继承门面保存的可见性；认证完成后 `#startProbe` 才真正生效。
+    connection.setProbeVisible(this.#probeVisible);
     connection.start();
   }
 

@@ -52,6 +52,20 @@ describe("文件栏的目录与状态展示", () => {
     expect(html).toContain('data-git-legend="true"');
   });
 
+  it("断连时不呈现「文件可能不是最新」的来源提示，刷新不可用原因仍保留", () => {
+    const model = base();
+    const offline = renderToStaticMarkup(createElement(SessionFilesPanel, { model: {
+      ...model,
+      connectionOnline: false,
+      refreshState: { kind: "unavailable", reason: "当前不在线，无法刷新。" },
+    } }));
+    expect(offline).not.toContain("data-files-offline");
+    expect(offline).not.toContain("已加载的文件与 Git 结果可能不是最新的");
+    // 功能性原因仍呈现：刷新不可用是操作反馈，不是内容来源标注。
+    expect(offline).toContain('data-file-refresh-unavailable="true"');
+    expect(offline).toContain("当前不在线，无法刷新。");
+  });
+
   it("只有全部文件与 Git 变更两个来源，没有会话变更选项或专属记录入口", () => {
     const model = base();
     const html = renderToStaticMarkup(createElement(SessionFilesPanel, { model }));

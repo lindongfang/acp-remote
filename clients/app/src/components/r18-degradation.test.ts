@@ -52,7 +52,6 @@ function renderStream(degraded: readonly DegradedEventModel[]): string {
       agentName: "Claude",
       state: "idle",
       directoryId: "work-api",
-      originOfflineLabel: null,
     },
     page: {
       sessionId: "s-1",

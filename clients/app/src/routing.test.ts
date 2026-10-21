@@ -326,7 +326,9 @@ describe("3.3 片段不是第二条导航通路", () => {
     const readers = [...sourceFiles(SRC_ROOT), ...sourceFiles(ROUTE_ROOT)]
       .filter((file) => /globalThis\.(?:location|history)/.test(readFileSync(file, "utf8")))
       .map((file) => relative(APP_ROOT, file).replaceAll("\\", "/"));
-    expect(readers).toEqual(["src/composition.ts"]);
+    // Shell 只调用 `location.reload()`（连接问题弹窗的恢复动作），不读取片段或地址；
+    // 片段读取点仍唯一在组合根。
+    expect(readers).toEqual(["src/components/shell/Shell.tsx", "src/composition.ts"]);
     // 同一处读点的第二条约束：清除片段只能用 `replaceState`——`pushState` 会把带秘密的地址留在历史里。
     expect(readFileSync(join(SRC_ROOT, "composition.ts"), "utf8")).not.toContain("pushState");
   });

@@ -143,7 +143,7 @@ describe("输入与提交以终态为准", () => {
     expect(gateway.dispatches).toHaveLength(before);
   });
 
-  it("空文本与未连接时不派发命令；未连接的原因说明是「来源离线」", () => {
+  it("空文本与未连接时不派发命令；设备离线不再重复输入区原因文案", () => {
     const { store, gateway } = interactionStore();
     const before = gateway.dispatches.length;
     expect(store.submitPrompt(ONLINE_SESSION_ID, "   ").ok).toBe(false);
@@ -152,8 +152,9 @@ describe("输入与提交以终态为准", () => {
     const { store: offline, gateway: offlineGateway } = storeWithNoConnection();
     const page = offline.conversationPage(ONLINE_SESSION_ID);
     expect(page?.input.state).toBe("unavailable");
-    expect(page?.input.blockedBy).toBe("source_offline");
-    expect(page?.input.disabledReason).toContain("连接不可用");
+    expect(page?.input.blockedBy).toBe("connection_offline");
+    // 原因由连接问题弹层完整说明；输入区只关闭提交闸门，不重复一句「连接不可用」。
+    expect(page?.input.disabledReason).toBeNull();
     // 不可用仍可编辑草稿（三态都不只读）。
     offline.setDraft(ONLINE_SESSION_ID, "离线也能写");
     expect(offline.conversationPage(ONLINE_SESSION_ID)?.input.draft).toBe("离线也能写");
@@ -177,6 +178,8 @@ describe("输入与提交以终态为准", () => {
 
     const page = store.conversationPage(ONLINE_SESSION_ID);
     expect(page?.input.canSubmit).toBe(false);
+    expect(page?.input.blockedBy).toBe("source_offline");
+    expect(page?.input.disabledReason).toBe("来源节点离线，不能提交");
     expect(page?.input.draftInMemoryOnly).toBe(true);
     expect(page?.input.draftNotice).toContain("只在内存");
 
@@ -446,7 +449,7 @@ describe("模型与模式的呈现与切换", () => {
   });
 });
 
-describe("session.origin.online_changed 只改来源可达性标注", () => {
+describe("session.origin.online_changed 只改来源可达性", () => {
   it("逐字段保持摘要其余字段（只翻 origin.online）", () => {
     const remote: SessionSummary = session({
       id: ONLINE_SESSION_ID,
@@ -462,7 +465,6 @@ describe("session.origin.online_changed 只改来源可达性标注", () => {
     });
     const { store } = onlineStore({ resources: resources({ sessions: [remote] }) });
     const before = store.conversationPage(ONLINE_SESSION_ID);
-    expect(before?.header.originOfflineLabel).toBeNull();
 
     store.apply({
       kind: "event",
@@ -495,9 +497,9 @@ describe("session.origin.online_changed 只改来源可达性标注", () => {
     expect(after.version).toBe(remote.version);
     expect(after.workspace).toEqual(remote.workspace);
 
-    // 呈现上只多了那一句离线标注，其余模型字段不变。
+    // 呈现上不再有来源离线标注：只有输入可用性随可达性变化。
     const offline = store.conversationPage(ONLINE_SESSION_ID);
-    expect(offline?.header.originOfflineLabel).toContain("当前离线");
+    expect(offline?.header).not.toHaveProperty("originOfflineLabel");
     expect(offline?.header.title).toBe(before?.header.title);
     expect(offline?.header.state).toBe(before?.header.state);
     // 来源离线后不得再把输入标为可发送；在线时远程来源可发送（stateless origin 的远程命令）。
@@ -525,7 +527,7 @@ describe("session.origin.online_changed 只改来源可达性标注", () => {
     });
     const back = store.state.resources?.sessions.find((item) => item.sessionId === ONLINE_SESSION_ID);
     expect(back).toEqual(remote);
-    expect(store.conversationPage(ONLINE_SESSION_ID)?.header.originOfflineLabel).toBeNull();
+    expect(store.conversationPage(ONLINE_SESSION_ID)?.capabilities.canSend).toBe(true);
   });
 
   it("本节点自有的会话不会被这条事件安上来源节点", () => {

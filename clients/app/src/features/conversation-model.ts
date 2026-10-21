@@ -110,8 +110,6 @@ export interface ConversationHeaderModel {
   readonly state: SessionStateView | null;
   /** 会话所属目录的标识；只用于导航与键，MUST NOT 呈现为界面文本。 */
   readonly directoryId: string | null;
-  /** imported 会话来源离线时的标注；本节点自有会话为 `null`。 */
-  readonly originOfflineLabel: string | null;
 }
 
 /** 一条消息的展示模型。结构化内容不混进正文——由时间线按媒体块呈现。 */

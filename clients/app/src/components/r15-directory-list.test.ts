@@ -9,7 +9,7 @@
  * - 目录标识不出现在界面上 → 断言标识标签锚点与标识的可见文本都不在，而 `data-directory-id`
  *   仍每项恰好一处（它只作路由与命令引用的内部标识）；
  * - 两种空态可区分 → 两段文案与 `data-empty-state` 都不同；
- * - 断连仍可渲染并标注来源 → 断连时目录行仍在，且标注「来自上次同步」；
+ * - 断连仍可渲染 → 断连时目录行仍在，且页面不呈现内容来源或同步时刻；
  * - 目录页不再呈现最近活动时间（该需求已随原型撤销）→ 整页不得出现 `data-directory-latest-at`；
  * - 空态指引指向列表 → 有目录时空态与目录列表**同时**呈现（含目录项），一个目录都没有时
  *   不得出现任何目录项；
@@ -163,8 +163,6 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
     const html = renderDirectoryList(
       buildDirectoryPageModel({
         resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES_WITH_PATHS }),
-        connection: "online",
-        lastSyncedAtMs: 1_700_000_000_000,
       }),
     );
 
@@ -187,8 +185,6 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
     const html = renderDirectoryList(
       buildDirectoryPageModel({
         resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-        connection: "online",
-        lastSyncedAtMs: null,
       }),
     );
 
@@ -212,8 +208,6 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
           sessions: [session({ id: "aaaaaaaa-0000-4000-8000-000000000009", directoryId: "solo" })],
           workspaces: solo,
         }),
-        connection: "online",
-        lastSyncedAtMs: null,
       }),
     );
 
@@ -229,8 +223,6 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
     const html = renderDirectoryList(
       buildDirectoryPageModel({
         resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-        connection: "online",
-        lastSyncedAtMs: null,
       }),
     );
 
@@ -248,8 +240,6 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
     const html = renderDirectoryList(
       buildDirectoryPageModel({
         resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-        connection: "online",
-        lastSyncedAtMs: null,
       }),
     );
 
@@ -268,31 +258,19 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
   });
 });
 
-describe("R15 断连时目录仍可渲染", () => {
-  it("断连时目录行照常渲染，并明确标注内容来自上次同步", () => {
+describe("R15 断连时目录仍可渲染（不呈现内容来源）", () => {
+  it("断连时目录行照常渲染，且没有来源标注或同步时间", () => {
     const model = buildDirectoryPageModel({
       resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-      connection: "disconnected",
-      lastSyncedAtMs: 1_700_000_000_000,
     });
     const html = renderDirectoryList(model);
 
-    expect(model.kind === "loading" ? null : model.contentOrigin).toBe("last_sync");
-    expect(html).toContain('data-content-origin="last_sync"');
+    expect("contentOrigin" in model).toBe(false);
+    expect(html).not.toContain("data-content-origin");
+    expect(html).not.toContain("data-synced-at");
     expect(html).not.toContain("内容来自上次同步");
     // 反例：断连时不渲染目录项，这里会是空列表，断言变红。
     expect(html).toContain('data-directory-id="work-api"');
-  });
-
-  it("对照：在线时标注为本次同步（证明上一条不是因为标注写死）", () => {
-    const html = renderDirectoryList(
-      buildDirectoryPageModel({
-        resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-        connection: "online",
-        lastSyncedAtMs: null,
-      }),
-    );
-    expect(html).toContain('data-content-origin="live"');
   });
 });
 
@@ -301,8 +279,6 @@ describe("R15 两种空态可区分", () => {
     const html = renderDirectoryList(
       buildDirectoryPageModel({
         resources: resources({ sessions: [], workspaces: WORKSPACES }),
-        connection: "online",
-        lastSyncedAtMs: null,
       }),
     );
     expect(html).toContain('data-empty-state="directories_without_sessions"');
@@ -314,8 +290,6 @@ describe("R15 两种空态可区分", () => {
     const html = renderDirectoryList(
       buildDirectoryPageModel({
         resources: resources({ sessions: [], workspaces: [] }),
-        connection: "online",
-        lastSyncedAtMs: null,
       }),
     );
 
@@ -329,7 +303,7 @@ describe("R15 两种空态可区分", () => {
 
   it("从未同步过：呈现 loading，不冒充任何一种空态", () => {
     const html = renderDirectoryList(
-      buildDirectoryPageModel({ resources: null, connection: "online", lastSyncedAtMs: null }),
+      buildDirectoryPageModel({ resources: null }),
     );
     // 反例：若无快照时渲染「还没有可用的目录」，这里会出现 data-empty-state，断言变红。
     expect(html).toContain('data-directory-state="loading"');
@@ -340,8 +314,6 @@ describe("R15 两种空态可区分", () => {
     // 这就是那条死路：空态指引写着「在下面选一个目录进入详情页」，此前下面什么也没有。
     const model = buildDirectoryPageModel({
       resources: resources({ sessions: [], workspaces: WORKSPACES }),
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     expect(model.kind).toBe("empty");
 
@@ -368,8 +340,6 @@ describe("R15 两种空态可区分", () => {
   it("一个目录都没有的空态：不呈现任何目录项，也不呈现目录列表容器", () => {
     const model = buildDirectoryPageModel({
       resources: resources({ sessions: [], workspaces: [] }),
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     expect(model.kind).toBe("empty");
 
@@ -478,8 +448,6 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     // 有快照、有目录，只是查询词一个都不命中 → `no_match`，不是任何一种空态。
     const model = buildDirectoryPageModel({
       resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-      connection: "online",
-      lastSyncedAtMs: null,
       query: "不存在的目录或会话",
     });
     expect(model.kind).toBe("no_match");
@@ -506,7 +474,7 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
       }),
     );
     const withMany = { resources: resources({ sessions: many, workspaces: WORKSPACES }) };
-    const model = buildDirectoryPageModel({ ...withMany, connection: "online", lastSyncedAtMs: null });
+    const model = buildDirectoryPageModel({ ...withMany });
     const html = renderDirectoryList(model, {
       sessionsByDirectoryId: storeWith(withMany).store.directoryPageSessions(),
     });
@@ -529,8 +497,6 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     const onlyWorkApi = [session({ id: "aaaaaaaa-0000-4000-8000-000000000001", state: "running" })];
     const model = buildDirectoryPageModel({
       resources: resources({ sessions: onlyWorkApi, workspaces: WORKSPACES }),
-      connection: "online",
-      lastSyncedAtMs: null,
     });
 
     const html = renderDirectoryList(model);
@@ -573,36 +539,11 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     expect(html).not.toContain("需要电脑端授予");
     expect(html).not.toContain("没有创建会话的权限");
   });
-
-  it("断连且有上次同步时刻：来源旁给出同步时间；从未同步过时不编造时间", () => {
-    const offline = buildDirectoryPageModel({
-      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-      connection: "disconnected",
-      lastSyncedAtMs: 1_700_000_000_000,
-    });
-    const withClock = renderDirectoryList(offline);
-    expect(withClock).toContain('data-content-origin="last_sync"');
-    // 精确值经属性进 DOM；展示文本是 **UTC 固定切片**，因此可以逐字断言（不随机器时区漂移）。
-    expect(withClock).toContain('data-synced-at="1700000000000"');
-    expect(withClock).not.toContain("已同步");
-
-    // 从未成功替换过快照：`lastSyncedAtMs` 为 null → 不得出现任何同步时间。
-    const never = buildDirectoryPageModel({
-      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-      connection: "disconnected",
-      lastSyncedAtMs: null,
-    });
-    const withoutClock = renderDirectoryList(never);
-    expect(withoutClock).not.toContain("data-synced-at");
-    expect(withoutClock).not.toContain("已同步");
-  });
 });
 
 describe("R15 目录页工具条右端的顶部创建入口", () => {
   const ready = buildDirectoryPageModel({
     resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-    connection: "online",
-    lastSyncedAtMs: null,
   });
 
   it("画在工具条右端：搜索框与筛选段之后、目录列表之前，且只在给了回调时呈现", () => {
@@ -623,8 +564,6 @@ describe("R15 目录页工具条右端的顶部创建入口", () => {
   it("空态与加载中都不消失：那时它是目录页上唯一的创建路径", () => {
     const emptyModel = buildDirectoryPageModel({
       resources: resources({ sessions: [], workspaces: [] }),
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     expect(emptyModel.kind).toBe("empty");
 
@@ -638,7 +577,7 @@ describe("R15 目录页工具条右端的顶部创建入口", () => {
 
     // 从未同步过：还没拿到快照，但入口照旧在（它是页面上的创建路径）。
     const loading = renderDirectoryList(
-      buildDirectoryPageModel({ resources: null, connection: "online", lastSyncedAtMs: null }),
+      buildDirectoryPageModel({ resources: null }),
       { onCreateSessionToBrowse: () => undefined },
     );
     expect(loading).toContain('data-directory-state="loading"');
@@ -672,8 +611,6 @@ describe("R15 目录项：不再呈现最近活动时间 + 目录内创建入口
   it("每个目录项都呈现一处目录内创建入口（必填 props 后不再有「不给回调」的分支）", () => {
     const model = buildDirectoryPageModel({
       resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-      connection: "online",
-      lastSyncedAtMs: null,
     });
 
     const granted = renderDirectoryList(model);

@@ -309,11 +309,6 @@ const checks: readonly Check[] = [
       const mounted = await mountScenario(baseScenario());
       try {
         await waitForDirectoryList(mounted.container);
-        // 在线时来源标注必须是「本次同步」，否则下面的 last_sync 断言没有对照价值。
-        await waitFor(
-          () => query(mounted.container, '[data-content-origin="live"]') !== null,
-          "连接在线后目录页标注 live",
-        );
 
         const alphaRow = query(mounted.container, `[data-directory-id="${DIRECTORY_ID_ALPHA}"]`);
         const betaRow = query(mounted.container, `[data-directory-id="${DIRECTORY_ID_BETA}"]`);
@@ -325,11 +320,19 @@ const checks: readonly Check[] = [
         expectThat(alphaText.includes("运行中") && !alphaText.includes("待处理"), "alpha 只应带运行中徽标");
         expectThat(betaText.includes("待处理") && !betaText.includes("运行中"), "beta 只应带待处理徽标");
 
-        // 断开连接：内容必须仍在，且来源标注切换成「上次同步」。
+        // 断开连接：内容必须仍在；页面不呈现任何内容来源或同步时刻标注。
         mounted.host?.drop();
         await waitFor(
-          () => query(mounted.container, '[data-content-origin="last_sync"]') !== null,
-          "断连后目录页标注 last_sync",
+          () => query(document, '[data-capsule-availability="offline"]') !== null,
+          "断连后设备胶囊报告离线",
+        );
+        expectThat(
+          query(mounted.container, "[data-content-origin]") === null,
+          "页面不得呈现内容来源机器属性",
+        );
+        expectThat(
+          query(mounted.container, "[data-synced-at]") === null,
+          "页面不得呈现同步时刻机器属性",
         );
         expectEqual(queryAll(mounted.container, "[data-directory-id]").length, 2, "断连后的目录行数");
         const text = domText(mounted.container);
@@ -595,53 +598,51 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-12 断连时标注上次同步时刻（且不随重新渲染改变）；从未成功同步时不呈现任何时刻",
+    name: "R15-12 页面不呈现内容来源与同步时刻（在线与断连都如此）",
     async run() {
       const mounted = await mountScenario(baseScenario());
       try {
         await waitForDirectoryList(mounted.container);
+        // 在线时就已经没有来源标注；断连后也不能冒出第二个状态徽标或同步时刻。
+        expectThat(
+          query(mounted.container, "[data-content-origin]") === null,
+          "在线时不得呈现内容来源机器属性",
+        );
+        expectThat(
+          query(mounted.container, "[data-synced-at]") === null,
+          "在线时不得呈现同步时刻机器属性",
+        );
+        expectAbsent(domText(mounted.container), "内容来自", "页面不得呈现内容来源文案");
+        expectAbsent(domText(mounted.container), "已同步", "页面不得呈现同步时刻文案");
+
         mounted.host?.drop();
         await waitFor(
-          () => query(mounted.container, '[data-content-origin="last_sync"]') !== null,
-          "断连后目录页标注 last_sync",
+          () => query(document, '[data-capsule-availability="offline"]') !== null,
+          "断连后设备胶囊报告离线",
         );
-        await waitFor(
-          () => query(mounted.container, "[data-synced-at]") !== null,
-          "断连后标注上次同步时刻",
-        );
-        const epochMs = query(mounted.container, "[data-synced-at]")?.getAttribute("data-synced-at") ?? "";
+        // 连接状态只由共享外壳的设备胶囊表达：页面正文不再有来源条或同步时刻。
         expectThat(
-          /^\d{13}$/.test(epochMs) && Number(epochMs) > 0,
-          `同步时刻应是快照替换时的 epoch 毫秒，实际 ${JSON.stringify(epochMs)}`,
+          query(mounted.container, "[data-content-origin]") === null,
+          "断连后页面不得呈现内容来源机器属性",
         );
-        // 展示文本是 UTC 固定切片（`YYYY-MM-DD HH:MM UTC`），因此可以逐字断言：走本地时区
-        // 或改成「N 分钟前」都会在这里红。
-        expectAbsent(domText(mounted.container), "已同步", "No visible sync timestamp");
-        // 重新渲染（敲一次查询）后时刻不得变：它不是「渲染时的当前时间」。
-        typeIntoInput(mounted.container, "[data-directory-search]", "api", "目录页搜索框");
-        await waitFor(
-          () => query(mounted.container, '[data-directory-search-value="api"]') !== null,
-          "查询词进入受控输入框",
+        expectThat(
+          query(mounted.container, "[data-synced-at]") === null,
+          "断连后页面不得呈现同步时刻机器属性",
         );
-        expectEqual(
-          query(mounted.container, "[data-synced-at]")?.getAttribute("data-synced-at") ?? null,
-          epochMs,
-          "重新渲染后标注的仍是那次快照的时刻",
-        );
+        expectAbsent(domText(mounted.container), "内容来自", "断连后不得呈现内容来源文案");
+        expectAbsent(domText(mounted.container), "已同步", "断连后不得呈现同步时刻文案");
+        // 反例：断连后不再渲染目录项 → 这里会是空列表。
+        expectEqual(queryAll(mounted.container, "[data-directory-id]").length, 2, "断连后的目录行数");
       } finally {
         await mounted.unmount();
       }
 
-      // 从未成功替换过快照：连接已经建起来（认证通过、已订阅、停在追平），但仓库里没有快照。
+      // 从未成功替换过快照：页面停在加载态，同样没有任何同步时刻可标注。
       // 等待条件用真实目录页的加载态文案（占位 `RuntimeUnavailable` 不发它）。
       await withScenario(baseScenario({ deliverSnapshot: false }), async (container) => {
         await waitFor(
           () => query(container, '[data-directory-state="loading"]') !== null,
           "连接已认证并订阅（尚未追平）",
-        );
-        expectThat(
-          query(container, '[data-directory-state="loading"]') !== null,
-          "从未同步过时必须呈现等待同步的状态",
         );
         expectThat(
           query(container, "[data-synced-at]") === null,

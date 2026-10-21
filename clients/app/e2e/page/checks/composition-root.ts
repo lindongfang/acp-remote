@@ -74,40 +74,24 @@ async function readObservedUpgrade(url: URL): Promise<{ readonly path: string | 
 
 const checks: readonly Check[] = [
   {
-    name: "CR-1 真实的 app/_layout.tsx：start() 在浏览器里真的跑了，页面离开 RuntimeUnavailable",
+    name: "CR-1 真实的 app/_layout.tsx：start() 在浏览器里真的跑了，首屏进入认证过渡而非 RuntimeUnavailable",
     async run() {
       mountRoute(DIRS_ROUTE);
       const mounted = await mountRootLayout();
       try {
-        // 先等**真实页面**渲染出来，再断言 RuntimeUnavailable 已消失：挂载后 React 的首帧
-        // 还没跑，此时「没有 unavailable」与「什么都还没渲染」长得一模一样。
-        //
-        // 等待条件必须用**只有真实 `DirectoryList` 才会发**的属性：`[data-route="dirs"]`
-        // 不能用作这个防呆——store 为 `null` 时的占位 `RuntimeUnavailable`
-        // （`src/components/RuntimeUnavailable.tsx:24`）同样渲染 `<section data-route={route}>`，
-        // 于是等待会在**首帧占位**时立即成立，紧随其后的断言便与 `composition.start()`
-        // 的 resolve 形成真竞态（间歇性误红）。`data-directory-state="loading"` 只有
-        // `DirectoryList` 的加载分支会发（`src/components/DirectoryList.tsx:39`）。
+        // 真实根布局现在有认证门：预置主机指向不存在的端口时，业务页不渲染，而是认证过渡屏。
+        // 这个锚点只能由真实 `Shell` 的认证门产生，占位 `RuntimeUnavailable` 不会发它。
         await waitFor(
-          () => query(mounted.container, '[data-directory-state="loading"]') !== null,
-          "真实目录页渲染",
+          () => query(mounted.container, '[data-auth-transition="pending"]') !== null,
+          "真实认证过渡屏渲染",
         );
         expectThat(
           query(mounted.container, '[data-runtime="unavailable"]') === null,
           "组合根装配完成后页面必须离开 RuntimeUnavailable",
         );
-        // start() 读到了预置的 paired-host/<origin> 记录：主机面板已不在目录页内联呈现，
-        // 因此这里读外壳设备胶囊的标签（它由同一份 host 记录派生，主机端口是 `127.0.0.1:1`）。
-        await waitFor(
-          () =>
-            query(mounted.container, "[data-capsule-device]")?.textContent ===
-            new URL(CANONICAL_ORIGIN).host,
-          "组合根读到预置的已配对主机记录",
-        );
         expectThat(
-          query(mounted.container, "[data-capsule-state]")?.getAttribute("data-capsule-state") !==
-            "unpaired",
-          "状态机不得停在 unpaired",
+          query(mounted.container, '[data-directory-state="loading"]') === null,
+          "认证完成前不得渲染业务目录页",
         );
       } finally {
         await mounted.unmount();
@@ -178,22 +162,21 @@ const checks: readonly Check[] = [
         );
         // 验签失败发生在签设备证明**之前**：客户端不会把挑战传给一条身份不明的连接。
         expectEqual(mounted.host?.deviceProofs.length ?? -1, 0, "验签失败后不得签出设备证明");
-        // 阻断不是崩溃：目录页仍然渲染（此刻是「尚未收到第一份快照」）。
-        //
-        // 等待条件必须用**只有真实页面才发**的属性：`[data-route="dirs"]` 同时被占位
-        // `RuntimeUnavailable` 命中，用它等待可能在首帧占位时就成立。这里用
-        // `[data-directory-state="loading"]`（真实目录页的加载态文案，占位不发）。
+        // 首次认证失败时业务页不渲染：同一个连接问题弹层显示在认证过渡屏中央。
         await waitFor(
-          () => query(mounted.container, '[data-directory-state="loading"]') !== null,
-          "阻断态下真实页面渲染",
+          () => query(mounted.container, '[data-auth-transition="problem"]') !== null,
+          "认证过渡屏呈现连接问题",
         );
-        expectThat(query(mounted.container, '[data-route="dirs"]') !== null, "阻断态下页面仍应渲染目录页");
+        expectEqual(
+          query(mounted.container, "[data-connection-problem]")?.getAttribute("data-connection-problem"),
+          "identity_changed",
+          "连接问题变体",
+        );
         expectThat(
-          query(mounted.container, '[data-directory-state="loading"]') !== null,
-          "阻断态下目录页应是「等待快照」而不是伪造空数据",
+          query(mounted.container, '[data-route="dirs"]') === null,
+          "认证完成前不得渲染业务目录页",
         );
-        // 阻断原因在 `/hosts` 的主机面板。`mountScenario` 现在挂的是与根布局同构的外壳
-        // （`Shell > Stack`），但胶囊表达的是连接状态而非阻断原因，因此这里仍只断言面板本身。
+        // 阻断原因也可从 `/hosts` 的主机面板查看；它不经过认证门。
         navigate(HOSTS_ROUTE.path);
         await waitFor(
           () => query(mounted.container, '[data-blocking-detail="host_identity_changed"]') !== null,
@@ -213,13 +196,12 @@ const checks: readonly Check[] = [
           () => mounted.composition?.store.state.connection.state === "unpaired",
           "记录非法时状态机停在 unpaired",
         );
-        // 状态机断言看的是 store，可能先于 React 首帧满足；DOM 断言前先等真实页面渲染。
-        // 等待条件用 `[data-directory-state="loading"]`（真实目录页的加载态文案）而不是
-        // `[data-route="dirs"]`：后者同时被占位 `RuntimeUnavailable` 命中，
-        // 等待会在首帧占位时就成立，后续断言便与 `start()` 的 resolve 形成竞态。
+        // 未配对时认证门先呈现过渡屏，随后路由重定向到配对页；两者都不渲染业务目录。
         await waitFor(
-          () => query(mounted.container, '[data-directory-state="loading"]') !== null,
-          "未配对时真实页面渲染",
+          () =>
+            query(mounted.container, "[data-auth-transition]") !== null ||
+            query(mounted.container, "[data-pairing-entry]") !== null,
+          "未配对时进入认证过渡或配对页",
         );
         // 验签绝不被跳过：连接连发都没发，设备证明自然也没有。
         expectEqual(mounted.host?.sent.length ?? -1, 0, "记录非法时不得发出任何 wire 帧");
@@ -228,9 +210,10 @@ const checks: readonly Check[] = [
           query(mounted.container, '[data-empty-state="no_directories"]') === null,
           "未配对时不得呈现「还没有可用的目录」",
         );
-        expectThat(
-          query(mounted.container, '[data-directory-state="loading"]') !== null,
-          "未配对时目录页应是「尚未收到第一份快照」",
+        expectEqual(
+          query(mounted.container, '[data-directory-state="loading"]'),
+          null,
+          "未配对时不得渲染业务目录页",
         );
         // 主机面板不在目录页内联呈现；「尚未配对」由 `/hosts` 路由的面板与外壳胶囊表达，
         // 这里的职责是确保目录页不把未配对伪造成空目录。
