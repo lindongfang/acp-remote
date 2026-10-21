@@ -61,7 +61,7 @@ class WebAttachmentMediaPort implements PlatformAttachmentPort {
   async pick(kind: PlatformAttachmentKind): Promise<readonly PlatformAttachmentHandle[]> {
     if (typeof document === "undefined") return [];
     const files = await this.#chooseFiles(ACCEPT[kind]);
-    return this.#register(files, () => kind);
+    return this.#register(files, (file) => kind === "file" ? kindOfMime(file.type) : kind);
   }
 
   async fromPaste(event: unknown): Promise<readonly PlatformAttachmentHandle[]> {
