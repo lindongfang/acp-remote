@@ -15,13 +15,11 @@
 //! 本模块不做可见性判定：scope 过滤与序号空洞是投递层的事（`subscribe::advance`）。
 
 use acp_core::model::{
-    AcpRaw as CoreAcpRaw, CommittedDelivery, CommittedEvent, EventOrigin as CoreEventOrigin,
-    EventPayload as CoreEventPayload,
+    AcpRaw as CoreAcpRaw, EventOrigin as CoreEventOrigin, EventPayload as CoreEventPayload,
 };
 use acp_core::ports::SyncEventRecord;
 use sync_protocol::common::{
-    Base64Url, DecimalString, Nullable, RawAcp, RawAcpUnavailableReason, RawObject, RemoteOrigin,
-    Timestamp, Uuid,
+    Base64Url, DecimalString, Nullable, RawAcp, RawAcpUnavailableReason, RawObject, Timestamp, Uuid,
 };
 use sync_protocol::event::{Body, EventOrigin, EventOriginKind, EventType, Payload};
 
@@ -119,68 +117,6 @@ pub fn event_body(record: &SyncEventRecord, negotiated: bool) -> Result<Body, Ev
 /// - `causationRequestId` 为 `null`：诱发命令在 Owner 上，Node Link 的 `resource.event` 不携带它，
 ///   本层不编造一个本机不存在的 requestId；
 /// - `createdAt` 是**收据提交时间**（`imported_delivery_index.received_at`），由投递单元携带。
-pub fn imported_event_body(
-    delivery: &CommittedDelivery,
-    features: &crate::sync::subscribe::NegotiatedFeatures,
-) -> Result<Body, EventFrameFault> {
-    let CommittedDelivery::Imported {
-        session,
-        origin,
-        origin_sequence,
-        local_sequence,
-        event_type,
-        created_at,
-        payload,
-        ..
-    } = delivery
-    else {
-        return Err(EventFrameFault::NotImported);
-    };
-    if !features.contains(crate::sync::snapshot::REMOTE_ORIGIN_FEATURE)
-        || !features.contains(EVENT_ORIGIN_FEATURE)
-    {
-        return Err(EventFrameFault::FeatureNotNegotiated);
-    }
-    let payload = payload.as_ref().ok_or(EventFrameFault::Payload)?;
-    let local = acp_core::model::Sequence::new(local_sequence.get())
-        .map_err(|_| EventFrameFault::Sequence)?;
-    let record = SyncEventRecord {
-        event: CommittedEvent {
-            id: origin.origin_event_id.clone(),
-            event_type: event_type.clone(),
-            session: Some(session.session_id.clone()),
-            session_sequence: Some(local),
-            global_sequence: local,
-            origin_epoch: Some(origin.origin_epoch.clone()),
-            origin_sequence: Some(*origin_sequence),
-            created_at: created_at.clone(),
-        },
-        payload: payload.clone(),
-        origin_kind: CoreEventOrigin::Node,
-        origin_device_id: None,
-        origin_node_id: Some(session.owner_node_id.clone()),
-        causation: None,
-    };
-    let mut body = crate::sync::event::frame(&record, features)?;
-    body.remote_origin = Nullable::value(RemoteOrigin {
-        owner_node_id: Uuid::parse(session.owner_node_id.as_str()).map_err(|_| {
-            EventFrameFault::Identity {
-                field: "ownerNodeId",
-            }
-        })?,
-        origin_epoch: Uuid::parse(origin.origin_epoch.as_str()).map_err(|_| {
-            EventFrameFault::Identity {
-                field: "originEpoch",
-            }
-        })?,
-        origin_event_id: Uuid::parse(origin.origin_event_id.as_str())
-            .map_err(|_| EventFrameFault::EventId)?,
-        origin_sequence: decimal(&origin_sequence.get().to_string())?,
-    });
-    Ok(body)
-}
-
-/// 十进制串（序号/byteLength 的线上形状）。
 fn decimal(text: &str) -> Result<DecimalString, EventFrameFault> {
     DecimalString::parse(text).map_err(|_| EventFrameFault::Sequence)
 }

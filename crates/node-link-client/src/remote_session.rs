@@ -26,12 +26,11 @@ use std::sync::Arc;
 use acp_core::model::RemoteSessionRef;
 use acp_core::model::{
     AgentId, AgentRef, AgentSessionId, ConfigOption, ConfigOptionId, ConfigValue, DirectoryId,
-    InteractionId, InteractionResolution, JsonValueText, ModeId, ModeState, PortError,
-    PromptRequest, RequestId, SessionId, SessionReference, Timestamp, TurnId, UnavailableKind,
+    InteractionId, InteractionResolution, ModeId, ModeState, PortError, PromptRequest, RequestId,
+    SessionId, SessionReference, Timestamp, TurnId, UnavailableKind,
 };
 use acp_core::ports::{
-    EventSink, HistoryInclude, HistoryPage, HistoryQuery, ImportedRead, ImportedReadQuery,
-    ImportedSessionQuery, RemoteDeliveryStore, RemoteSessionReads, SessionBackendFactory,
+    EventSink, HistoryInclude, HistoryPage, HistoryQuery, RemoteReadQuery, SessionBackendFactory,
     SessionEndpoint, TurnAccepted,
 };
 use node_link_protocol::command::{
@@ -71,7 +70,6 @@ pub struct CreatedRemoteSession {
 pub struct RemoteSession {
     shared: Arc<SharedLink>,
     remote: RemoteSessionRef,
-    deliveries: Arc<dyn RemoteDeliveryStore>,
     /// 最近一次被接受（`command.accepted`）的 turn；只用于 `cancel` 的默认值，**不是** Owner 的 turn id。
     last_turn: std::sync::Mutex<Option<TurnId>>,
 }
@@ -88,15 +86,10 @@ impl std::fmt::Debug for RemoteSession {
 
 impl RemoteSession {
     /// 打开一个已存在的远程会话（不触发网络；attachment 在第一次使用时申请）。
-    pub fn open(
-        shared: Arc<SharedLink>,
-        remote: RemoteSessionRef,
-        deliveries: Arc<dyn RemoteDeliveryStore>,
-    ) -> Self {
+    pub fn open(shared: Arc<SharedLink>, remote: RemoteSessionRef) -> Self {
         Self {
             shared,
             remote,
-            deliveries,
             last_turn: std::sync::Mutex::new(None),
         }
     }
@@ -104,7 +97,6 @@ impl RemoteSession {
     /// 创建远程会话：`session.create` 只携带 Owner catalog 的 `agentId`/`directoryId`。
     pub async fn create(
         shared: Arc<SharedLink>,
-        deliveries: Arc<dyn RemoteDeliveryStore>,
         agent: &AgentId,
         directory: &DirectoryId,
         request: RequestId,
@@ -165,7 +157,7 @@ impl RemoteSession {
             session_id,
         );
         let _ = meta;
-        Ok(Self::open(shared, remote, deliveries))
+        Ok(Self::open(shared, remote))
     }
 
     /// 远程会话引用（core 类型）。
@@ -180,21 +172,11 @@ impl RemoteSession {
 
     /// 读取当前会话的版本（`set_mode`/`set_config` 的 `expectedVersion` 来源）。
     async fn version(&self) -> Result<DecimalString, PortError> {
-        let rows = self
-            .deliveries
-            .list_sessions(ImportedSessionQuery {
-                only: Some(vec![self.remote.clone()]),
-                limit: Some(1),
-            })
-            .await?;
-        let version = rows
-            .first()
-            .and_then(|row| row.version)
-            .ok_or(PortError::InvalidRequest(
-                "the imported session has no known version",
-            ))?;
-        DecimalString::parse(&version.get().to_string())
-            .map_err(|_| PortError::InvalidRequest("the session version cannot be encoded"))
+        // 版本来自当前连接的 attachment 元数据（运行期事实，不读任何本地索引）。
+        self.ticket()
+            .await
+            .map(|ticket| ticket.meta.version)
+            .map_err(|error| error.to_port_error())
     }
 
     /// 提交一条会话范围命令。
@@ -267,24 +249,18 @@ impl RemoteSession {
         }
     }
 
-    /// `session.read` 的类型化入口：把 core 的分页参数翻译成 Node Link payload，并把 Owner 的完成结果
-    /// 原文交给 [`ImportedRead`]。
+    /// `session.read` 的运行期入口：把 core 的分页参数翻译成 Node Link payload，返回 Owner 的完成
+    /// 结果对象原样（类型化投影与覆盖校验在 `runtime` 内完成）。
     ///
-    /// **正文不落盘**：返回的 `document` 是 Owner 响应对象的内存拷贝，调用方只做协议投影，MUST NOT
-    /// 写入数据库、临时文件或日志（`NODE_LINK_PROTOCOL.md` §12.10）。
-    ///
-    /// `turns`/`capabilities` 无法由 Owner 的 Node Link 结果表达（§12.7 只登记会话正文、历史、有效交互
-    /// 与配置项），请求它们时显式 `BackendUnsupported`，不返回被裁剪的结果。
-    pub async fn read_page(&self, query: ImportedReadQuery) -> Result<ImportedRead, PortError> {
-        // 先判链路可用，再做 feature 门控：离线时 `selected_features` 为空，先判 feature 会把
-        // 「Owner 离线」误报成「不支持」。
+    /// 正文不落盘：返回的对象只在调用栈与有界运行期内存中存在。
+    pub async fn read_document(&self, query: RemoteReadQuery) -> Result<RawObject, PortError> {
         if !self.shared.is_online() {
             return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
         }
         if query.include.turns || query.include.capabilities {
             return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
         }
-        let features = self.shared.snapshot().selected_features;
+        let features = self.shared.features();
         let has = |feature: &str| features.iter().any(|entry| entry == feature);
         if query.include.history && !has(REMOTE_HISTORY_FEATURE) {
             return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
@@ -323,14 +299,8 @@ impl RemoteSession {
             (true, value @ 1..) => Some(u64::from(value)),
             _ => None,
         };
-        let document = self
-            .read_remote(new_request_id()?, include, before_history, before, limit)
-            .await?;
-        Ok(ImportedRead {
-            document: JsonValueText::new(document.get()).map_err(|_| {
-                PortError::Corrupt("the owner returned a malformed session.read result")
-            })?,
-        })
+        self.read_remote(new_request_id()?, include, before_history, before, limit)
+            .await
     }
 
     /// `session.mode.list`：返回 Owner 的结果对象原样（类型化投影属 facade）。
@@ -560,23 +530,6 @@ impl SessionEndpoint for RemoteSession {
     }
 }
 
-#[async_trait::async_trait]
-impl RemoteSessionReads for RemoteSession {
-    async fn read_imported(
-        &self,
-        session: &RemoteSessionRef,
-        query: ImportedReadQuery,
-    ) -> Result<ImportedRead, PortError> {
-        // 端口按引用定位会话：实现不自造第二个路由，请求必须指向本端点持有的同一会话。
-        if session != &self.remote {
-            return Err(PortError::InvalidRequest(
-                "the imported read targets another remote session",
-            ));
-        }
-        self.read_page(query).await
-    }
-}
-
 /// core 的 `HistoryInclude` → Node Link 的 `include` 词表（顺序与 schema 的枚举一致）。
 fn wire_include(include: &HistoryInclude) -> Result<Vec<IncludeResource>, PortError> {
     let mut items = Vec::new();
@@ -695,22 +648,17 @@ impl RemoteSession {
 /// catalog 后调用。
 pub struct RemoteSessionFactory {
     shared: Arc<SharedLink>,
-    deliveries: Arc<dyn RemoteDeliveryStore>,
 }
 
 impl RemoteSessionFactory {
     /// 装配。
-    pub fn new(shared: Arc<SharedLink>, deliveries: Arc<dyn RemoteDeliveryStore>) -> Self {
-        Self { shared, deliveries }
+    pub fn new(shared: Arc<SharedLink>) -> Self {
+        Self { shared }
     }
 
     /// 打开一个已登记的 imported 会话。
     pub fn session(&self, remote: RemoteSessionRef) -> RemoteSession {
-        RemoteSession::open(
-            Arc::clone(&self.shared),
-            remote,
-            Arc::clone(&self.deliveries),
-        )
+        RemoteSession::open(Arc::clone(&self.shared), remote)
     }
 }
 

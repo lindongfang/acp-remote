@@ -500,7 +500,9 @@ describe("session.origin.online_changed 只改来源可达性标注", () => {
     expect(offline?.header.originOfflineLabel).toContain("当前离线");
     expect(offline?.header.title).toBe(before?.header.title);
     expect(offline?.header.state).toBe(before?.header.state);
-    expect(offline?.capabilities).toEqual(before?.capabilities);
+    // 来源离线后不得再把输入标为可发送；在线时远程来源可发送（stateless origin 的远程命令）。
+    expect(before?.capabilities.canSend).toBe(true);
+    expect(offline?.capabilities.canSend).toBe(false);
     // 该事件走摘要通道，因此不进时间线、也不产生降级卡片。
     expect(offline?.timeline.entries).toEqual([]);
     expect(offline?.degraded).toEqual([]);

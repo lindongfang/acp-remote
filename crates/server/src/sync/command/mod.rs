@@ -51,7 +51,7 @@
 
 pub mod decode;
 pub mod limits;
-mod query;
+pub(crate) mod query;
 
 use std::collections::BTreeMap;
 use std::str::FromStr as _;
@@ -677,7 +677,7 @@ impl CommandRoute {
                 query::session_read(&self.core, actor, &command, payload, &features).await
             }
             CommandPayload::CommandStatus(payload) => {
-                query::command_status(&self.core, actor, payload).await
+                query::command_status(&self.core, actor, payload, &features).await
             }
             CommandPayload::ModeList(_) => query::mode_list(&self.core, actor, &command).await,
             CommandPayload::ConfigList(_) => {

@@ -38,8 +38,6 @@ export type ConversationInputState = "editable" | "in_progress" | "unavailable";
 export type ConversationInputBlock =
   /** 连接不可用（本机未连上或来源节点离线）。 */
   | "source_offline"
-  /** imported 会话：本设备只承载元数据。 */
-  | "origin_remote"
   /** 上一次提交还在等服务端终态。 */
   | "submission_in_flight"
   /** 本轮的 Agent 执行仍在进行。 */
@@ -133,14 +131,13 @@ function cancelOf(record: CommandRecord | null, canCancel: boolean): CancelPrese
 /** 当前挡住提交的原因（`null` = 可提交）。 */
 function blockOf(input: {
   readonly connectionOnline: boolean;
-  readonly originLocal: boolean;
+  readonly originOnline: boolean;
   readonly awaitingTerminal: boolean;
   readonly turnInProgress: boolean;
   readonly attachmentsNegotiated: boolean;
   readonly attachments: AttachmentBatchModel;
 }): ConversationInputBlock | null {
-  if (!input.connectionOnline) return "source_offline";
-  if (!input.originLocal) return "origin_remote";
+  if (!input.connectionOnline || !input.originOnline) return "source_offline";
   if (input.awaitingTerminal) return "submission_in_flight";
   if (input.turnInProgress) return "turn_in_progress";
   // 已选了附件、却没协商到附件传输：整条不能发（不得静默删掉附件只发文本）。
@@ -156,9 +153,7 @@ function blockOf(input: {
 function blockText(block: ConversationInputBlock, attachments: AttachmentBatchModel): string {
   switch (block) {
     case "source_offline":
-      return "连接不可用，不能提交";
-    case "origin_remote":
-      return "来源为其它节点的会话不能提交（本设备只承载元数据）";
+      return "连接不可用或来源节点离线，不能提交";
     case "submission_in_flight":
       return "消息已提交，等待服务端确认后才能继续发送";
     case "turn_in_progress":
@@ -176,7 +171,8 @@ function blockText(block: ConversationInputBlock, attachments: AttachmentBatchMo
  * 构造输入区模型。
  *
  * @param connectionOnline 连接是否在线（离线时无法把任何输入标记为已提交）。
- * @param originLocal 会话是否本节点自有（imported 会话不可提交，R20）。
+ * @param originLocal 会话是否本节点自有（远程会话的草稿只留内存）。
+ * @param originOnline 来源是否可达；本节点自有会话恒为真，远程会话取来源状态。
  * @param turnInProgress 是否有进行中的轮次（只决定「执行中」，不决定只读）。
  * @param canCancel 当前轮次是否可取消（有活动轮次且连接可用；与主状态无关）。
  * @param promptCommand 最近一次提示提交的命令记录。
@@ -186,6 +182,8 @@ function blockText(block: ConversationInputBlock, attachments: AttachmentBatchMo
 export function buildConversationInputModel(input: {
   readonly connectionOnline: boolean;
   readonly originLocal: boolean;
+  /** 来源可达性；缺省为真（本节点自有会话）。 */
+  readonly originOnline?: boolean;
   readonly turnInProgress: boolean;
   readonly canCancel: boolean;
   readonly promptCommand: CommandRecord | null;
@@ -202,7 +200,7 @@ export function buildConversationInputModel(input: {
   const attachments = input.attachments ?? EMPTY_ATTACHMENTS;
   const blockedBy = blockOf({
     connectionOnline: input.connectionOnline,
-    originLocal: input.originLocal,
+    originOnline: input.originOnline ?? true,
     awaitingTerminal: submission.kind === "pending_confirmation",
     turnInProgress: input.turnInProgress,
     attachmentsNegotiated: input.attachmentsNegotiated === true,

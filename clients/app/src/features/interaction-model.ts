@@ -301,6 +301,7 @@ export function buildInteractionViews(input: {
 function pendingRecordOf(item: PendingInteractionInput, readAt: string): StructuredRecord {
   return {
     source: "history",
+    ownerNodeId: null,
     eventId: `pending:${item.interactionId}`,
     eventType: item.kind === "permission" ? "permission.requested" : "elicitation.requested",
     sessionId: item.sessionId,

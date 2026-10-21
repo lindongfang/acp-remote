@@ -33,7 +33,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use acp_core::model::NodeId;
-use acp_core::model::PortError;
 use acp_core::model::Timestamp as CoreTimestamp;
 use node_link_protocol::catalog::{CatalogSnapshot, NodeTrustRevoked};
 use node_link_protocol::command::{
@@ -55,6 +54,7 @@ use crate::error::ClientError;
 use crate::handshake::{
     Established, HandshakeConfig, handshake, random_bytes_16, wire_connection_fields,
 };
+use crate::runtime::{EventDisposition, RemoteRuntime};
 use crate::transport::{Incoming, MessageSink, MessageSource};
 
 /// 心跳的默认间隔（与 `node.ready.limits.heartbeatIntervalMs` 的默认 30 秒一致）。
@@ -120,41 +120,6 @@ pub struct AttachmentTicket {
     pub generation: DecimalString,
     pub remote: RemoteSessionRef,
     pub meta: SessionMeta,
-}
-
-/// 入站事件的消费者（组合根实现：无正文收据 + 发布 + ACK 持久化）。
-#[async_trait::async_trait]
-pub trait ImportedSink: Send + Sync {
-    /// 一条 `resource.event`。
-    ///
-    /// 返回 `Some(cursor)` 表示收据已提交、可以确认到该 origin cursor；`None` 表示本事件已被索引
-    /// （重复投递），但调用方仍可确认当前累计位置——本实现返回会话持久化的 ACK，不透传未提交位置。
-    async fn event(&self, owner: &NodeId, event: &Event)
-    -> Result<Option<OriginCursor>, PortError>;
-
-    /// `catalog.snapshot`：登记/更新 imported 会话索引（无正文）。
-    async fn catalog(&self, owner: &NodeId, snapshot: &CatalogSnapshot) -> Result<(), PortError>;
-
-    /// 快照里的 `session_meta` item：更新 imported 会话的状态与版本。
-    async fn session_meta(
-        &self,
-        owner: &NodeId,
-        session: &RemoteSessionRef,
-        meta: &SessionMeta,
-    ) -> Result<(), PortError>;
-
-    /// Owned 节点撤回了本节点的长期信任（`node.trust.revoked` 或 `link.error(auth.node_revoked)`）。
-    ///
-    /// 这是**持久事实**：接收方必须把本地信任行落成撤销终态，否则重启后 `start_persisted` 仍会把一个
-    /// 已被 Owner 撤销的节点当成 `paired` 重连（Owner 会再次拒绝，但本地状态与事实不符）。默认实现是
-    /// 空操作，只为不打断仅消费事件的测试替身；生产实现（`app::access`）必须落库。
-    async fn revoked(
-        &self,
-        _owner: &NodeId,
-        _revoked_at: Option<&CoreTimestamp>,
-    ) -> Result<(), PortError> {
-        Ok(())
-    }
 }
 
 /// 出站请求（只有 [`Link::run`] 能把它变成帧）。
@@ -424,6 +389,15 @@ impl SharedLink {
             .attachments
             .get(session.session_id.as_str())
             .cloned()
+    }
+
+    /// 按 attachment id 反查会话（新资源帧只带 attachmentId）。
+    pub fn session_by_attachment(&self, id: &Uuid) -> Option<RemoteSessionRef> {
+        lock(&self.state)
+            .attachments
+            .values()
+            .find(|ticket| &ticket.id == id)
+            .map(|ticket| ticket.remote.clone())
     }
 
     /// 上次断线时留下、尚未确认结果的命令。
@@ -720,7 +694,8 @@ pub enum LinkEnd {
 pub struct Link {
     shared: Arc<SharedLink>,
     config: HandshakeConfig,
-    sink: Arc<dyn ImportedSink>,
+    runtime: Arc<RemoteRuntime>,
+    generation: acp_core::ports::RemoteGeneration,
     heartbeat: Duration,
     silence_timeout: Duration,
 }
@@ -730,14 +705,16 @@ impl Link {
     pub fn new(
         shared: Arc<SharedLink>,
         config: HandshakeConfig,
-        sink: Arc<dyn ImportedSink>,
+        runtime: Arc<RemoteRuntime>,
+        generation: acp_core::ports::RemoteGeneration,
         heartbeat: Duration,
         silence_timeout: Duration,
     ) -> Self {
         Self {
             shared,
             config,
-            sink,
+            runtime,
+            generation,
             heartbeat,
             silence_timeout,
         }
@@ -778,7 +755,9 @@ impl Link {
         generation: DecimalString,
         cursor: Option<OriginCursor>,
         attempts: u32,
+        snapshot_queue: &mut VecDeque<RemoteSessionRef>,
     ) -> Result<(), SendFailure> {
+        snapshot_queue.push_back(remote.clone());
         let body = Subscribe {
             attachment_id: attachment,
             attachment_generation: generation,
@@ -834,12 +813,20 @@ impl Link {
             }
         };
         self.shared.set_online(Some(&established));
+        self.runtime.online(
+            &self.shared.owner().clone(),
+            self.generation,
+            Arc::clone(&self.shared),
+        );
 
         let owner = self.shared.owner().clone();
         let mut next_sequence = established.next_sequence;
         let mut pending: Vec<Pending> = Vec::new();
         let mut attach_queue: VecDeque<AttachRequest> = VecDeque::new();
         let mut resource_requests: VecDeque<ResourceRequest> = VecDeque::new();
+        // 每个 resource.subscribe 对应一个快照；快照消息不带 sessionRef，因此按发送顺序关联。
+        let mut snapshot_queue: VecDeque<RemoteSessionRef> = VecDeque::new();
+        let mut snapshot_current: Option<RemoteSessionRef> = None;
 
         // 重连后的安全恢复（只读）：catalog 订阅 + 每会话 attach/subscribe + 未确定命令的
         // `command.status` 查询。任何副作用命令都**不**在这里重发。
@@ -1066,6 +1053,7 @@ impl Link {
                                 generation,
                                 cursor,
                                 0,
+                                &mut snapshot_queue,
                             )
                             .await
                             {
@@ -1157,12 +1145,16 @@ impl Link {
                         MessageType::CatalogSnapshot => {
                             match decode_body::<CatalogSnapshot>(&envelope) {
                                 Ok(snapshot) => {
-                                    if let Err(error) = self.sink.catalog(&owner, &snapshot).await {
+                                    if let Err(error) = self.runtime.apply_catalog(
+                                        &owner,
+                                        self.generation,
+                                        &snapshot,
+                                    ) {
                                         tracing::warn!(
                                             event = "node_link_client.catalog_apply_failed",
                                             owner = %owner,
                                             error = ?error,
-                                            "the catalog snapshot could not be persisted"
+                                            "the catalog snapshot cannot be applied to the runtime directory"
                                         );
                                     }
                                 }
@@ -1197,6 +1189,7 @@ impl Link {
                                             ticket.generation.clone(),
                                             cursor,
                                             request.subscribe_attempts,
+                                            &mut snapshot_queue,
                                         )
                                         .await
                                         {
@@ -1229,7 +1222,7 @@ impl Link {
                             // `resource.subscribe` 是单向的（服务端直接发快照/重放）。
                         }
                         MessageType::ResourceSnapshotBegin => {
-                            // 快照边界本身不携带业务事实；chunk 的 session_meta 会更新索引。
+                            snapshot_current = snapshot_queue.pop_front();
                         }
                         MessageType::ResourceSnapshotChunk => {
                             let body: node_link_protocol::resource::SnapshotChunk = match decode_body(&envelope) {
@@ -1243,16 +1236,17 @@ impl Link {
                                         self.shared
                                             .clear_subscription_fault(&item.session_ref);
                                         cancel_subscription_retry(&mut retries, &item.session_ref);
-                                        if let Err(error) = self
-                                            .sink
-                                            .session_meta(&owner, &item.session_ref, &item.session_meta)
-                                            .await
-                                        {
+                                        if let Err(error) = self.runtime.apply_session_meta(
+                                            &owner,
+                                            self.generation,
+                                            &item.session_ref,
+                                            &item.session_meta,
+                                        ) {
                                             tracing::warn!(
                                                 event = "node_link_client.session_meta_failed",
                                                 owner = %owner,
                                                 error = ?error,
-                                                "a snapshot session_meta item could not be persisted"
+                                                "a snapshot session_meta item cannot be applied"
                                             );
                                         }
                                     }
@@ -1260,7 +1254,47 @@ impl Link {
                             }
                         }
                         MessageType::ResourceSnapshotEnd => {
-                            // 快照结束的 cursor 是续读点；随后的 `resource.event` 会按 origin 序号到达。
+                            let body: node_link_protocol::resource::SnapshotEnd =
+                                match decode_body(&envelope) {
+                                    Ok(body) => body,
+                                    Err(error) => break LinkEnd::Failed(error),
+                                };
+                            if let Some(remote) = snapshot_current.take() {
+                                self.runtime.apply_snapshot_end(&owner, &remote, &body.cursor);
+                            }
+                        }
+                        MessageType::ResourceCaughtUp => {
+                            let body: node_link_protocol::resource::CaughtUp =
+                                match decode_body(&envelope) {
+                                    Ok(body) => body,
+                                    Err(error) => break LinkEnd::Failed(error),
+                                };
+                            if let Some(remote) = self.shared.session_by_attachment(&body.attachment_id) {
+                                self.runtime.apply_caught_up(&owner, &remote, &body);
+                            }
+                        }
+                        MessageType::ResourceResetRequired => {
+                            let body: node_link_protocol::resource::ResetRequired =
+                                match decode_body(&envelope) {
+                                    Ok(body) => body,
+                                    Err(error) => break LinkEnd::Failed(error),
+                                };
+                            if let Some(remote) = self.shared.session_by_attachment(&body.attachment_id) {
+                                self.runtime.apply_reset(&owner, &remote, &body);
+                            }
+                        }
+                        MessageType::ResourceUnavailable => {
+                            let body: node_link_protocol::resource::Unavailable =
+                                match decode_body(&envelope) {
+                                    Ok(body) => body,
+                                    Err(error) => break LinkEnd::Failed(error),
+                                };
+                            let remote = body
+                                .attachment_id
+                                .as_ref()
+                                .and_then(|id| self.shared.session_by_attachment(id));
+                            self.runtime
+                                .apply_unavailable(&owner, remote.as_ref(), &body);
                         }
                         MessageType::ResourceEvent => {
                             let body: Event = match decode_body(&envelope) {
@@ -1270,11 +1304,24 @@ impl Link {
                             // 实时事件只证明扇出在工作，**不**证明被拒绝的快照/重放已补齐：
                             // 保留同一 cursor 的重发计划，让 Owner 补缺口（重复事件按 originEventId 去重）。
                             // 故障记录由快照项或显式重新订阅清除，不能因一条实时事件消失。
-                            match self.sink.event(&owner, &body).await {
-                                Ok(Some(cursor)) => {
-                                    let ack = Ack {
-                                        session_ref: body.session_ref.clone(),
-                                        cursor,
+                            match self.runtime.apply_event(&owner, self.generation, &body) {
+                                Ok(EventDisposition::Forwarded(cursor)) => {
+                                    // 运行期 ACK：只在 `resource.stateless-origin.v1` 协商后发送；
+                                    // 它只表达「当前连接已交给有界下游」，不落盘、不是可恢复索引。
+                                    if !self
+                                        .shared
+                                        .has_feature(crate::runtime::STATELESS_ORIGIN_FEATURE)
+                                    {
+                                        continue;
+                                    }
+                                    let Some(ack) = crate::runtime::wire_ack(&body.session_ref, &cursor)
+                                    else {
+                                        tracing::warn!(
+                                            event = "node_link_client.ack_encode_failed",
+                                            owner = %owner,
+                                            "the resource.ack cursor cannot be encoded"
+                                        );
+                                        continue;
                                     };
                                     match encode_body(&ack) {
                                         Ok(ack_body) => {
@@ -1307,16 +1354,21 @@ impl Link {
                                         ),
                                     }
                                 }
-                                Ok(None) => {}
+                                Ok(EventDisposition::Ignored) => {
+                                    // 重复/过期事件：不转发、不 ACK。
+                                }
                                 Err(error) => {
-                                    // 收据提交失败：不 ACK、不发布。事件留在 Owner，重连后按 cursor 重放。
+                                    // 协议违规（跨 Owner/摘要不符/epoch 冲突）：不 ACK、关闭连接。
                                     tracing::warn!(
-                                        event = "node_link_client.event_commit_failed",
+                                        event = "node_link_client.event_rejected",
                                         owner = %owner,
                                         event_type = body.event_type.as_str(),
                                         error = ?error,
-                                        "an imported event could not be committed; it will be replayed"
+                                        "a source event failed runtime validation"
                                     );
+                                    break LinkEnd::Failed(ClientError::Protocol(
+                                        "a source event failed runtime validation".to_owned(),
+                                    ));
                                 }
                             }
                         }
@@ -1420,11 +1472,8 @@ impl Link {
                                 // `start_persisted` 把一个已被撤销的 Owner 当成 `paired` 重连。
                                 let revoked_at =
                                     CoreTimestamp::new(body.revoked_at.as_str()).ok();
-                                if let Err(error) = self
-                                    .sink
-                                    .revoked(&owner, revoked_at.as_ref())
-                                    .await
-                                {
+                                let _ = revoked_at;
+                                if let Err(error) = self.runtime.revoked(&owner).await {
                                     tracing::warn!(
                                         event = "node_link_client.revoked_persist_failed",
                                         owner = %owner,
@@ -1459,7 +1508,7 @@ impl Link {
                                     error = %error,
                                     "the owner revoked this access node"
                                 );
-                                if let Err(error) = self.sink.revoked(&owner, None).await {
+                                if let Err(error) = self.runtime.revoked(&owner).await {
                                     tracing::warn!(
                                         event = "node_link_client.revoked_persist_failed",
                                         owner = %owner,
@@ -1601,6 +1650,7 @@ impl Link {
                             ticket.generation.clone(),
                             retry.cursor.clone(),
                             retry.attempts,
+                            &mut snapshot_queue,
                         )
                         .await
                         {
@@ -2127,6 +2177,9 @@ pub fn status_submit(request_id: Uuid, target: Uuid) -> Result<CommandSubmit, Cl
         expected_version: Nullable::null(),
         payload: CommandPayload::CommandStatus(StatusBody {
             target_request_id: target,
+            // 这里只按 requestId 向**本连接的对端**查询；远程来源定位由调用方显式给出，不在重连
+            // 恢复路径上凭本地记录猜测（`resource.stateless-origin.v1`，NODE_LINK_PROTOCOL §12.5）。
+            remote_target: None,
         }),
     })
 }

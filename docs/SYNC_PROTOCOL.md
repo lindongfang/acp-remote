@@ -1,6 +1,6 @@
 # ACP Remote Sync Protocol
 
-> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（设备短二维码 `q2` 编解码、claim、status、lookup、qr-lookup、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的既有配对 HTTP（§7.6 `qr-lookup` 待 WP2–WP4）、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。
+> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 27 个消息类型——信封与消息类型分派，`auth`/`sync`（含 9 个 `sync.remote_*` 来源流消息）/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（设备短二维码 `q2` 编解码、claim、status、lookup、qr-lookup、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的既有配对 HTTP（§7.6 `qr-lookup` 待 WP2–WP4）、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。
 > 协议版本：1  
 > 修订记录（2026-10-18，`device-pairing-qr-reference`）：**设备二维码完全替换**为 `https://<canonical-origin>/pair#q2=<payload>`——payload 是 `base64url-no-pad(0x02 || 32 字节扫码取回凭据 || 32 字节主机公钥指纹)`，共 65 字节 / 87 个 ASCII 字符；旧设备 `#data=` 完整资料格式**退出且不降级**，节点二维码与 `/node-link/pair` 不变。新增 §7.6 `POST /sync/v1/pairing/qr-lookup`（请求 `{protocolVersion:1, qrToken}`，成功返回与配对码 lookup 同形的七字段，统一 `401 pairing.qr_invalid`，独立 10 次/分钟限流，16 KiB 上限）。PWA 只保留配对码入口：打开 `q2=` 或旧 `data=` 片段只在清除片段后显示固定指引/不支持文案，不发任何配对请求（行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md)）。本轮先交付协议类型、机器合同、共享固定向量与本文；服务端取回路由、身份内存材料与 PWA/原生消费方为**计划/待实现**（WP2–WP4），原生 App 真机扫码仍是后续交付。机器资产同步：`pairing.schema.json` 增加 qr-lookup 请求/成功/失败形状、`pairing.qr_invalid` 登记到唯一错误词表、删除旧 `qrPayload`，新增 `fixtures/sync/v1/device-qr/vectors.json`（Rust/TypeScript 共享）。
 > 修订记录（2026-10-18，`pairing-code-web-entry`）：配对新增第二个入口——`POST /sync/v1/pairing/lookup` 用 8 位 Crockford 配对码一次性换回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`，之后与二维码入口共用同一套状态机、claim/status 与 transcript。§7.1 写清两个入口的关系；新增 §7.5 的 lookup wire 行为（成功即消耗、统一 `401 pairing.code_invalid`、与 claim 各自 10 次/分钟、同一组安全响应头与 `no-store`）；§7.4 的状态表补 lookup；§12.2 增加 `pairing.code_invalid`。schema、fixture 与错误词表同步；claim/status 的 wire 与 transcript 未变。
@@ -61,8 +61,8 @@ Sync Protocol 提供适合客户端消费的公共视图，但公共视图不是
 
 ### 2.3 权威性与投递语义
 
-- 对本地 Agent/会话，当前 Daemon 是资源权威；对 imported Agent/会话，Owner Node 是资源权威，当前 Access Node 只对本地身份、无正文交付索引和 local sequence 负责。
-- 本地资源事件必须先写入当前节点的权威事件日志再广播。远程资源事件已由 Owner 先持久化；Access 在向本地客户端广播前只提交 origin cursor、eventId/type/digest 和 local sequence 映射，默认不得复制正文。
+- 对本地 Agent/会话，当前 Daemon 是资源权威；对 imported Agent/会话，Owner Node 是资源权威，当前 Access Node 只对本地身份（会话摘要与授权）负责，不为远程内容维护交付索引、cursor/ACK 或 local sequence（§9.7）。
+- 本地资源事件必须先写入当前节点的权威事件日志再广播。远程资源事件已由 Owner 先持久化；Access 只在已认证连接期经有界内存缓冲把来源事件逐字转发给本地客户端，不落盘、不分配 local sequence（§9.7），默认不得复制正文。
 - 事件采用至少一次投递，客户端按 `eventId` 去重。
 - 同一事件日志实例内，`globalSequence` 严格递增；同一会话内，`sessionSequence` 严格递增。
 - `requestId` 保证客户端重试不会创建第二次命令接受或第二次 Agent 派发。
@@ -243,6 +243,7 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.event-ack.v1` | 客户端 ACK 与断线续传（`sync.ack`） | mvp | 否 |
 | `acp.raw-payload.v1` | 事件携带 ACP 原文（`rawAcp.rawJson` 保真，见 §10.3） | mvp | 否 |
 | `resource.remote-origin.v1` | imported 资源来源承载（§9.6：`ownerNodeId`/origin cursor/`online`） | mvp | 否 |
+| `resource.stateless-origin.v1` | 无持久中转的远程来源流/运行期 ACK（§9.7）：`sync.remote_*` 帧族、Owner origin cursor 直接作为订阅游标、`session.read` 的 `readCursor`/`sessionSummary`/`messageCoverage` 与 `command.status` 的 `remoteTarget`；Access 不持久化远程正文、收据、ACK 或命令状态。全部已接线 | mvp | 否 |
 | `core.local-catalog.v1` | 本机目录与 Agent profile 随快照下发（§9.4 的 `workspaces`/`agents` 资源、§10.3 的 `workspaceRef`/`agentCatalogEntry`），以及 `SessionSummary` 的可选 `workspace` 字段；`session.create` 的选择器由它供数。目录条目始终同时带 `directoryId` 与 `path` | mvp | 否 |
 | `core.session-create.v1` | Sync 面 `session.create`（§11.5 的目录来源二选一 payload——`directoryId` 或客户端提供的 `workspacePath`——加必填 `agentId`，以及可选的「目录不存在则先创建」开关 `createIfMissing`；`completed { sessionId, session }` 终态结果） | mvp | 否 |
 | `core.session-history.v1` | Sync 面按会话读取结构化历史条目：§11.5 的 `include` 取值 `history`、`beforeHistory` 序号游标与结果里的 `history`/`historyHasEarlier`，条目类型集合见 §10.2、明细资源口径见 §9.4 | mvp | 否 |
@@ -259,10 +260,11 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.remote-history.v1` | 远程历史读取（§9.6/§11.5）：imported 会话的结构化历史按会话内序号独立分页、读取前重新鉴权、正文由 Owner 回源提供；不可达或超出保留期显式不可用，Access 不持久化正文 | mvp | 否 |
 | `core.session-activity.v1` | 会话主状态三态合同（§10.2）：`sessionSummary.state` 只有 `idle`/`running`/`pending`——存在有效未解决交互时为 `pending`，否则存在未结束任务（含已接受的排队任务）时为 `running`，否则为 `idle`；create/read/list/快照/`session.updated` 视图与 Node Link 的 `sessionMeta`、catalog 会话共用同一取值集合。排队、等待原因与任务/命令结果不属于本 feature；旧七态只允许作为历史事件 `view` 的原文出现 | mvp | 是 |
 
-- 本表的十八个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- 本表的二十一个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`；`conditional_mvp` 表示端到端通路接线后才宣告，未接线前客户端必须按不支持降级）。
 - **必需 feature 是双向拒绝点**：`core.session-activity.v1` 要求每次协商都选中。客户端 MUST 在 `supportedFeatures` 与 `requiredFeatures` 中声明它，服务端 MUST 在 `selectedFeatures` 中返回它；任一侧缺失时连接不得进入业务阶段——服务端对未声明该 ID 的连接返回 `protocol.feature_required`（`details.features` 列出缺失的 feature ID，排序去重），客户端对未被选中的必需项停止同步并提示版本不兼容。该 feature 未选中前 MUST NOT 发送或接收三态会话摘要、快照 chunk 与事件；MUST NOT 回退到七态，也 MUST NOT 把 `pending` 折算成某个 `waiting_*`。
-- **本版服务端宣告 17 条**：`auth.server_challenge.selectedFeatures` 只返回已完整接线的 ID（十八条减去 `core.remote-history.v1`）。
+- **本版服务端宣告 20 条**：`auth.server_challenge.selectedFeatures` 只返回已完整接线的 ID（二十一条减去尚未接线的 `core.remote-history.v1`）。
   - `core.remote-history.v1`：远程历史需要 Access 侧的 `node-link-client` 回源路径（尚未实现）。宣告一个当前必然失败的读取路径就是能力虚报。协商前 imported 会话的 `history` 仍回 `capability.unsupported_by_broker`，客户端必须明确显示不可用而非「没有历史」。接线后（WP5）再把它加入宣告表并补回源用例。
+  - `resource.stateless-origin.v1`：运行期目录/来源端口、`sync.remote_*` 路由与客户端消费已接线；宣告后旧客户端据 `selectedFeatures` 缺失按「远程来源流不支持」明确降级，不回退到任何本地落盘中转。
   - `core.session-activity.v1`：三态映射、交互归约、`session.updated` 生产与持久迁移已接线；服务端在握手支持集合与必需集合中都登记它，任一侧缺失即拒绝进入业务阶段。
   - `core.attachment-transfer.v1`：连接面、帧族与引擎已实现（§3.4）；组合根装配附件传输端口时注册 `/sync/v1/attachments` 并把该 feature 纳入握手集合，未装配时不注册端点、不宣告。
 - `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 当前只有 `core.session-activity.v1` 是必需 feature。
@@ -281,6 +283,7 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 - **未协商却出现新帧/新字段**：业务连接收到 `type` 不在本连接协商集合内的消息（含任何 `attachment.*` 帧）返回 `protocol.type_unsupported`；收到未协商的封闭字段按 `protocol.schema_invalid` 拒绝；附件连接在协商前收到附件帧返回 `attachment.negotiation_required` 并以 `4400` 关闭。任何一侧都不得静默忽略该消息后继续；重复的错误计数按 §14 的认证前/连接速率规则处理。
 - **降级不是静默改写**：未协商 `core.typed-media.v1` 时，无法表达的非文本内容仍按 §10.3 的 `unsupported` block 或未知事件降级，并保留 `acp.rawJson`；未协商 `core.remote-history.v1` 时，imported 会话的历史读取返回 `capability.unsupported_by_broker`，客户端明确说明不可用，而不是显示「没有历史」。
 - **三态合同是必需 feature，不是加性降级**：`core.session-activity.v1` 未由双方选中时连接不进入业务阶段（§5.2）。旧服务端面对新客户端：`selectedFeatures` 里没有该 ID，客户端 MUST 停止同步并提示版本不兼容，MUST NOT 按七态摘要自行折算或把 `pending` 当作某个 `waiting_*`。旧客户端面对新服务端：`auth.client_hello` 未声明该 ID，服务端 MUST 以 `protocol.feature_required` 拒绝，且 MUST NOT 向该连接下发三态摘要。
+- **远程来源流是加性 feature**：未协商 `resource.stateless-origin.v1` 时，新连接既不发送也不接收任何 `sync.remote_*` 类型、`session.read` 的 `readCursor`/`sessionSummary`/`messageCoverage` 或 `command.status.remoteTarget`；收到未协商的远程帧按 `protocol.type_unsupported` 拒绝，收到未协商的封闭字段按 `protocol.schema_invalid` 拒绝。服务端 MUST NOT 用旧的本地落盘中转来「兼容」，客户端也不得把不支持静默降级成本地缓存（§9.7）。
 - **不新增 second version**：以上全部在 v1 内通过 feature 演进；提升 `protocolVersion` 才允许改变已协商字段的语义（§16）。
 
 ## 6. 密钥与二进制表示
@@ -1053,7 +1056,7 @@ Snapshot item 的最低 schema：
 
 ### 9.6 imported 资源（`resource.remote-origin.v1`）
 
-Access Node 可以向已协商 feature `resource.remote-origin.v1` 的客户端展示由 Owner Node 导出的会话。该模式下 Owner 始终是正文权威，Access 只转发并维护本地索引。
+Access Node 可以向已协商 feature `resource.remote-origin.v1` 的客户端展示由 Owner Node 导出的会话。该模式下 Owner 始终是正文权威，Access 只在线转发，不维护本地索引、收据或游标（§9.7）。
 
 会话摘要增加必填 `origin`：
 
@@ -1079,21 +1082,21 @@ remoteOrigin = {
 ```
 
 - imported 事件的 `eventId` 必须等于 `remoteOrigin.originEventId`；`eventId` 跨跳不变，客户端因此可以跨 Access 与 Owner 去重同一条事件。
-- imported 事件的 `globalSequence` 与 `sessionSequence` 是 Access 本地 sequence，只用于本连接的排序与 ACK；跨节点排序一律以 `(originEpoch, originSequence)` 为准。
+- imported 事件不分配 Access 本机 `globalSequence`/`sessionSequence`；跨节点排序、ACK 与去重一律以 Owner 来源序号 `(originEpoch, originSequence)` 为准（去重键还落在 `ownerNodeId`/`sessionId` 命名空间内，见 §9.7）。
 - `origin.kind` 仍描述产生事件的来源类型（`agent`/`device`/`daemon`/`local_cli`/`node`，其中 `node` 与身份字段 `nodeId` 由 feature `core.event-origin.v1` 门控，见第 10.1 节）；远程跳数只由 `remoteOrigin` 表达，不放进 `origin.kind`。
 - 不得为本地事件伪造 `remoteOrigin`；`originEventId` 必须来自 `remoteOrigin.ownerNodeId` 的事件日志。
 
 交付与缓存规则：
 
-- imported 会话的 `messages`、`turns`、`pending_interactions` 和 `config_options` 不得进入 Access 的 snapshot，也不得进入 Access 的正文缓存；Access 只持久化身份、索引、`eventId`/`eventType`/digest 和 local sequence 映射。
+- imported 会话的 `messages`、`turns`、`pending_interactions` 和 `config_options` 不得进入 Access 的 snapshot，也不得进入 Access 的任何持久存储。Access **不持久化**远程会话身份索引、`eventId`/`eventType`/digest 或 local sequence 映射；这些值只在已认证连接期有界存在，断线、撤销或来源 epoch 变化即整代丢弃（design D1/D2）。
 - `sessions` chunk 与 `session.list` 必须包含 imported 会话的摘要并带 `origin.kind = "remote"`，否则客户端无法发现该会话；摘要之外的正文类资源一律不进入 snapshot。
 - 客户端一律通过 `session.read` 在线回源 Owner 获取正文、turn 历史和待处理交互。Access 不排队、不缓存正文、不改写 ACP 语义与 `acp.rawJson`、不扩张 capability、不修改会话状态。
-- **（计划条款，待实施）** 远程历史：协商 `core.remote-history.v1` 后，imported 会话的结构化历史同样经 `session.read` 的 `history` include 与 `beforeHistory` 游标从 Owner 分页读取；Access 只持有 origin/local 序号映射与无正文收据，页边界、条目标识与 `historyHasEarlier` 由 Owner 决定，Access MUST NOT 重新排序或截断后冒充完整页。每次读取前重新校验连接身份、会话来源与撤销状态；Owner 不可达返回 `resource.remote_unavailable`，超出保留期返回 `history` 不可用事实，两种情况都 MUST NOT 返回空页冒充「没有历史」。该能力当前尚未实现，实现前对 imported 会话仍按 §9.4 的不支持错误降级。
-- 客户端对 `origin.kind = "remote"` 的会话不得持久化正文与 `acp.rawJson`，只允许缓存摘要、cursor 和事件 digest。
+- **（计划条款，待实施）** 远程历史：协商 `core.remote-history.v1` 后，imported 会话的结构化历史同样经 `session.read` 的 `history` include 与 `beforeHistory` 游标从 Owner 分页读取；Access **不保存** origin/local 序号映射、无正文收据或页缓存，页边界、条目标识与 `historyHasEarlier` 由 Owner 决定，Access MUST NOT 重新排序或截断后冒充完整页。每次读取前重新校验连接身份、会话来源与撤销状态；Owner 不可达返回 `resource.remote_unavailable`，超出保留期返回 `history` 不可用事实，两种情况都 MUST NOT 返回空页冒充「没有历史」。该能力当前尚未实现，实现前对 imported 会话仍按 §9.4 的不支持错误降级。
+- 客户端对 `origin.kind = "remote"` 的会话不得持久化正文、`acp.rawJson`、摘要副本或事件 digest；只允许在**本次连接期内存**中持有来源游标与有界重建缓冲（design D4），断线后来源业务模型必须清除。
 - Owner 不可达时 `session.read` 返回 `resource.remote_unavailable`，同时把该会话的 `origin.online` 置为 `false` 并广播一次 `session.origin.online_changed`；恢复可达后同样以该事件把 `online` 置回 `true`。
 - Owner 离线期间客户端不得把远程会话的输入标记为已发送或已接受；本地 draft 可以保留，但必须显式标记为未提交。
 - `session.list` 只返回该设备有权查看的本地会话与 imported 摘要，两者使用同一 `SessionSummary` 形状；不得为远程会话发明第二套字段。
-- **实时投递已落地，回源重放仍是计划条款**：imported 事件不进入本地事件库，但 `imported_delivery_index.local_sequence` 是全库单调的本机投递序号，`EventPublisher` 的 `CommittedDelivery::Imported` 因此可以直接进入 Sync 的实时扇出（`crates/server/src/sync/subscribe/fanout.rs`）：屏障已建立的连接收到 `event` 帧，`globalSequence`/`sessionSequence` 都是该本机序号，`eventId` 逐字等于 `remoteOrigin.originEventId`，正文来自当次投递的内存（MUST NOT 落盘）。`origin.kind` 取 `"node"`、`nodeId` 取 Owner：Access 能如实陈述的产生者就是交付这条事件的节点（Node Link 的 `resource.event` 不携带 Owner 侧的产生者类型，Access 不得据此猜测 `agent`/`device`）；因此 imported 事件只投给同时协商了 `resource.remote-origin.v1` 与 `core.event-origin.v1` 的连接，未协商时跳过并记诊断，绝不伪造来源。`causationRequestId` 为 `null`（诱发命令在 Owner 上，Node Link 不携带它）。**仍未落地**：`sync.subscribe` 的 cursor **重放**对 imported 区间没有回源端口（`server::sync` 按 `MODULE_ARCHITECTURE.md` §4.9 不得调用平级的 `server::node_link`），`local_replay` 的正文无法在 Access 侧重建；断线期间的 imported 区间只能由 Owner 重连后的 origin cursor 重放重新作为实时投递到达。已落地的是 §9.6 的**清单、门控与实时腿**：`sessions` chunk 与设备可见会话清单会合并自有与已导入会话、未协商该 feature 时一律不含 imported 条目且不携带来源信息（`crates/server/src/sync/snapshot/mod.rs`、`core::use_cases::sync_visible_sessions`），`catalog.session.originEpoch` 让还没有任何事件的 imported 会话也能被投影（`docs/NODE_LINK_PROTOCOL.md` §12.3）。
+- **来源流走 §9.7，不再经过本地交付索引**：imported 事件不进入本地事件库，也不分配 Access 本机 `globalSequence`/`sessionSequence`（design D3）；来源事件经 `sync.remote_event` 逐字转发，`eventId` 逐字等于 `remoteOrigin.originEventId`，正文只来自当次连接的有界内存（MUST NOT 落盘）。`origin.kind` 取 `"node"`、`nodeId` 取 Owner：Access 能如实陈述的产生者就是交付这条事件的节点（Node Link 的 `resource.event` 不携带 Owner 侧的产生者类型，Access 不得据此猜测 `agent`/`device`）；因此远程事件只投给同时协商了 `resource.remote-origin.v1`、`resource.stateless-origin.v1` 与 `core.event-origin.v1` 的连接，未协商时明确不支持并记诊断，绝不伪造来源。`causationRequestId` 为 `null`（诱发命令在 Owner 上，Node Link 不携带它）。**实现状态**：本段是 `access-owner-data-stateless` 冻结的新合同；旧实现中的 `imported_delivery_index.local_sequence`、本地交付索引与 Access 侧收据随该变更的 WP3/WP4 一并删除，任何 Access 序号都不再作为远程游标或恢复依据。
 
 未协商该 feature 时，Access 不得返回任何 `origin.kind = "remote"` 的会话，也不得发送带非空 `remoteOrigin` 的事件。
 
@@ -1110,6 +1113,38 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
 **已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的十条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 18 条 Sync 命令（含 8 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）中的既有命令均已接线；新增的 `session.files.list`/`session.files.read`/`session.git.status`/`session.git.diff` 已由 WP3 接到真实用例与原生端口：门控先于任何文件/Git I/O，`session.files.read` 的连接绑定内容版本随连接关闭/撤销/daemon 关闭释放，`core.session-files.v1` 因此进入服务端支持集合。命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
 
 **仍未落地**（与本小节相邻）：imported 事件的**回源重放**（实时腿已落地，见 §9.6 末条）；`session.read` 的三类明细资源与 imported 明细的降级见 §9.4 的说明。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
+
+### 9.7 无持久中转的远程来源流（`resource.stateless-origin.v1`）
+
+本节是 feature `resource.stateless-origin.v1` 的冻结 wire 合同（design D3–D6）。它替换 §9.6 中「Access 维护本地交付索引/收据」的做法：**Owner 的来源日志是唯一顺序权威，Access 只在已认证连接期转发**，不为 imported 事件分配 Access 本地 `globalSequence`，也不持久化任何远程进度。
+
+**分域前提**：`sync.subscribe`/`event`/`sync.caught_up`/`sync.ack` 与 §9.1–§9.5 的 `serverEpoch`/`globalSequence` **仍然只描述本节点 owned 日志**，语义与持久化合同不变。远程流使用独立的 9 个消息类型，游标直接是 Owner 的 `originCursor = { originEpoch, originSequence }`（`originEpoch` 是 UUID，`originSequence` 是十进制字符串）。两个序号域不得互相翻译、钳制或混用。
+
+| 消息 | 方向 | body | 语义 |
+|---|---|---|---|
+| `sync.remote_subscribe` | 客户端 → Access | `subscriptionId`(UUID)、`sessionRef`(`{ ownerNodeId, sessionId }`)、`cursor`(`originCursor` \| null) | 绑定本设备可访问的当前来源会话；`cursor=null` 走首次重建路径，非空走来源增量重放 |
+| `sync.remote_event` | Access → 客户端 | `subscriptionId`(UUID)、`event`(`{ originEventId, originEpoch, originSequence, sessionRef, eventType, payloadDigest, createdAt, payload }`) | Owner 来源事件逐字转发；**不带** Access 的 `globalSequence`/`sessionSequence` |
+| `sync.remote_caught_up` | Access → 客户端 | `subscriptionId`、`cursor`(`originCursor`) | Owner 已完成来源重放屏障；此后才是实时事件 |
+| `sync.remote_ack` | 客户端 → Access | `subscriptionId`、`cursor`(`originCursor`) | 仅本次连接该订阅的连续处理进度；不落盘，不表示可恢复索引 |
+| `sync.remote_reset_required` | Access → 客户端 | `subscriptionId`、`reason`(`epoch_mismatch`\|`cursor_expired`\|`cache_incompatible`)、`cursor`(`originCursor` \| null) | 客户端必须回源 `session.read` 重建；只有 Owner 已验证的有效 head 才能给 `cursor` |
+| `sync.remote_unsubscribe` | 客户端 → Access | `subscriptionId`(UUID) | 取消本连接订阅及其所属观察者 |
+| `sync.remote_unavailable` | Access → 客户端 | `subscriptionId`、`error`(`publicError`) | 断线、撤销、不支持分别复用既有错误码，不新造词表 |
+| `sync.remote_catalog_changed` | Access → 客户端 | `ownerNodeId`(UUID)、`revision`(十进制字符串) | 该来源清单失效；客户端重新查询，不携带旧资源副本 |
+| `sync.remote_source_state` | Access → 客户端 | `ownerNodeId`(UUID)、`state`(`online`\|`offline`\|`revoked`) | 来源连接事实；不是 owned 业务事件，不写入本地事件流 |
+
+全部 body 都是 closed object（`additionalProperties: false`），字段与 `schemas/sync/v1/sync.schema.json` 的 `$defs` 一一对应；不得为这些语义另造业务命令同义词。
+
+- **事件形状**：`sync.remote_event.event` 保留 `resource.event` 的 origin 三元组、`sessionRef`、`eventType`、`payloadDigest`、`createdAt` 与 `payload`。`payload` 与 Node Link 同义，`view` 与 `acp` 至少出现一个；`payload.acp` 的原始 ACP 文本逐字转发，MUST NOT 经通用数字 DTO 重编码。`eventId` 使用 Owner 的 `originEventId`，不创建替代标识；客户端去重键绑定 `(ownerNodeId, sessionId, originEpoch, originEventId)`（`docs/NODE_LINK_PROTOCOL.md` §12.4）。
+- **订阅来源**：`sessionRef` 必须是本设备当前有权访问的来源；`subscriptionId` 是本次连接内的随机标识，不得跨连接复用。同一 `(ownerNodeId, sessionId)` 的多个订阅互不影响。
+- **订阅与退订的限流族**：两者归入既有 `observe` 速率族；单连接最多 32 个远程订阅，超限返回 `resource.rate_limited`（`details.retryAfterMs`）。单帧、发送队列与重放批次沿用 §14 的既有预算；客户端重建缓冲计入同一有界预算，超限必须明确 backpressure 或重建，MUST NOT 落盘扩容。本变更不新增配置开关。
+- **重放与屏障**：非空 `cursor` 从该位置之后按 `originSequence` 升序重放，随后发 `sync.remote_caught_up`；屏障之后的实时事件不得越过它。**MUST NOT 用定时器推测追平**。
+- **首次重建（`cursor=null`）**：Access 先取得 Owner 当前元数据 snapshot 的屏障 B，验证完成后向客户端发 `sync.remote_reset_required(reason=cache_incompatible, cursor=B)`；客户端回源 `session.read` 重建明细，在有界缓冲到 B 后再消费事件。此处客户端并不持有可兼容远程状态，因此不使用持久化 cursor。
+- **重连**：只要断线策略已清除来源业务模型，客户端即使仍持有最后处理位置 C，也必须重新回源 `session.read` 并按每页覆盖信息重建，不能只重放 C 之后的事件。仍持有 C 时可以把它交给 Owner 请求来源重放并缓冲，同时读取最新权威页；有效 C 只是衔接与去重位置，不能证明页面仍拥有此前内容。没有 C 则走 null 订阅 + B 后读取的首次重建路径。epoch 不匹配/过期先明确 `remote_reset_required`，再走首次重建；Owner 不可达则明确 `remote_unavailable`，不展示已清除内容。只有重建读取成功且来源屏障已追平后才能呈现可用视图。
+- **ACK 语义**：`sync.remote_ack` 只是当前连接该订阅的连续处理进度。Access MUST NOT 持久化它，也不得把它当成客户端已阅读或可恢复的承诺；Owner 不据此提前清理保留期内数据。回退的 ACK 忽略并记诊断，越过该订阅已发 head 的 ACK 返回 `protocol.sequence_invalid`。慢客户端超限时取消**该订阅**，不得阻塞 Owner 或其他客户端。
+- **未协商降级**：未协商 `resource.stateless-origin.v1` 的连接 MUST NOT 收到任一 `sync.remote_*` 消息；服务端不得回退到 §9.6 的本地落盘中转来「兼容」。客户端若收到未协商的 `sync.remote_*` 类型，按 §5.3 以 `protocol.type_unsupported` 拒绝并停止该订阅；服务端若收到未协商的 `sync.remote_subscribe`/`remote_ack`/`remote_unsubscribe`，同样拒绝并在诊断中标明缺失 feature。远程资源只有在端到端能力（本 feature 与 §9.6 的来源 feature）实际满足时开放，未满足时明确不支持。
+- **旧 imported 游标**：`sync.remote_subscribe.cursor` 只接受 `originCursor`（`originEpoch`/`originSequence`）或 `null`。收到 `sync.cursor`（`serverEpoch`/`globalSequence`）形状时按封闭对象在解码层以 `protocol.schema_invalid` 拒绝（§5.3），MUST NOT 翻译、钳制或改写成本地序号，也不得把它折叠成 `sync.cursor_invalid` 的任一 `reason`——`errors.json` 的 `cursor_invalid.reason` 中并没有 `cache_incompatible`。客户端需要重建时由 `sync.remote_reset_required(reason=cache_incompatible)` 驱动。
+
+`session.read` 的加性读取覆盖与 `command.status` 的 `remoteTarget` 见 §11.5/§11.4；它们同样只在本 feature 协商后出现。
 
 ## 10. Event
 
@@ -1603,6 +1638,8 @@ local.audit.export
 
 `command.status` 的完成结果就是 `CommandStatusRecord`：`{ targetRequestId, state, acceptedAt, terminalAt, terminalEventId, result, error }`，字段语义与第 11.2 节一致。
 
+协商 `resource.stateless-origin.v1` 后，`command.status` 的 payload 必须另带 `remoteTarget = { ownerNodeId, sessionId: UUID | null }`（§9.7，design D5）：Access 直接向原 Owner 查询命令的接受/终态，不凭本地记录判断，也不得因为本地没有该 `requestId` 就回答 `command.not_found` 或自动重发。`sessionId` 为 `null` 只用于尚未建成会话的 `session.create`，其他会话操作必须给出原来源会话。Owner 以既有 `(ownerNodeId, accessNodeId, requestId)` 隔离与参数冲突合同校验；不同设备仍必须生成全局随机且稳定的 `requestId`，碰撞按既有 `command.idempotency_conflict` 拒绝，Access MUST NOT 静默换号。未协商该 feature 的连接 MUST NOT 发送 `remoteTarget`；已协商却缺少它按 `protocol.schema_invalid` 拒绝。
+
 ### 11.5 v1 Command Schema
 
 字段约定：表中未列出的 payload 字段在 v1 中拒绝；`{}` 表示必须是空 object。`sessionId` 是 command body 顶层字段，不在 payload 内重复。
@@ -1610,8 +1647,8 @@ local.audit.export
 | Command | 类别 | `sessionId` | Payload | 成功结果/终态 |
 |---|---|---|---|---|
 | `session.list` | query | 禁止 | `{}` | `completed { sessions: SessionSummary[] }` |
-| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities,history`；Sync 面另接受可选 `before`（复合游标）、`beforeHistory`（会话内事件序号，十进制字符串）与 `limit` | `completed SessionReadResult`，`resources` 与第 9.4 节同名元素同形并附必填 `hasEarlier` 与只描述 `history` 这一页的可选 `historyHasEarlier`；imported 会话回源 Owner。**协商后**：`pending_interactions` 在 `core.pending-interactions.v1` 被选中时返回每个当前有效请求的完整 `effectiveInteraction`（含 `requestVersion`，见 §11.7），未协商时回 `capability.unsupported_by_broker`；imported 会话的 `history` 在 `core.remote-history.v1` 被选中时回源 Owner 分页，未协商时同样显式不支持。`turns`/`capabilities` 与未协商的 imported 明细仍回 `capability.unsupported_by_broker`（见第 9.4 节），客户端 MUST NOT 把不支持当成「会话无内容」或「已到最早一条」 |
-| `command.status` | query | 禁止 | `{ targetRequestId }` | `completed CommandStatusRecord` |
+| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities,history`；Sync 面另接受可选 `before`（复合游标）、`beforeHistory`（会话内事件序号，十进制字符串）与 `limit` | `completed SessionReadResult`，`resources` 与第 9.4 节同名元素同形并附必填 `hasEarlier` 与只描述 `history` 这一页的可选 `historyHasEarlier`；**协商 `resource.stateless-origin.v1` 后**另带 `readCursor`（本次读取原子捕获的来源位置 R）、同次读取的完整 `sessionSummary` 与 `messageCoverage[]{messageId, through, lastDeltaIndex}`（design D4；`through` 等于 R，`lastDeltaIndex` 为十进制字符串或 `null`），未协商时三者缺席；imported 会话回源 Owner。**协商后**：`pending_interactions` 在 `core.pending-interactions.v1` 被选中时返回每个当前有效请求的完整 `effectiveInteraction`（含 `requestVersion`，见 §11.7），未协商时回 `capability.unsupported_by_broker`；imported 会话的 `history` 在 `core.remote-history.v1` 被选中时回源 Owner 分页，未协商时同样显式不支持。`turns`/`capabilities` 与未协商的 imported 明细仍回 `capability.unsupported_by_broker`（见第 9.4 节），客户端 MUST NOT 把不支持当成「会话无内容」或「已到最早一条」 |
+| `command.status` | query | 禁止 | `{ targetRequestId }`；**协商 `resource.stateless-origin.v1` 后**必须另带 `remoteTarget`(`{ ownerNodeId, sessionId: UUID \| null }`)——直接指向原 Owner 与其来源会话，`sessionId` 为 `null` 只用于尚未建成会话的 `session.create`；未协商连接 MUST NOT 发送该键 | `completed CommandStatusRecord` |
 | `session.mode.list` | query | 必须 | `{}` | `completed ModeState { currentModeId, availableModes: ModeRef[], version }` |
 | `session.config.list` | query | 必须 | `{}` | `completed { configOptions: SessionConfigOptionView[], version }` |
 | `workspace.mkdir` | mutation | 禁止 | `{ parentPath, name }`；父路径 1..4096 字符，单组件名字 1..255 字符 | `accepted` 后由持久终态报告 `completed { created: true }`；结果不含路径；受 `core.workspace-mkdir.v1` 门控 |
@@ -1886,6 +1923,7 @@ v1 默认上限：
 | 单数组元素数 | 10,000 |
 | 设备名称 UTF-8 长度 | 128 bytes |
 | 单批 replay event 数 | 500 |
+| 单连接的远程订阅数（`sync.remote_subscribe`，`resource.stateless-origin.v1`） | 32 |
 | 单连接待发送队列 | 8 MiB 或 2,000 messages，先到者触发 |
 | 认证超时 | 15 秒 |
 | 配对默认有效期 | 5 分钟 |

@@ -284,6 +284,7 @@ function toolCallRecord(input: {
 }): StructuredRecord {
   return {
     source: "realtime",
+    ownerNodeId: null,
     eventId: input.eventId,
     eventType: input.eventType,
     sessionId: null,

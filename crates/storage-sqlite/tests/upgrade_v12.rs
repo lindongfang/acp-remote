@@ -3,9 +3,7 @@
 mod support;
 
 use acp_core::ports::SessionStore;
-use storage_sqlite::migrate::{
-    FILE_FORMAT_VERSION, IMPORTED_SCHEMA_VERSION, OWNED_SCHEMA_VERSION, StorageConfig,
-};
+use storage_sqlite::migrate::{FILE_FORMAT_VERSION, OWNED_SCHEMA_VERSION, StorageConfig};
 use storage_sqlite::session_store::SqliteStore;
 use support::*;
 
@@ -24,9 +22,8 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         .expect("open");
     store.close().await;
 
-    assert_eq!(FILE_FORMAT_VERSION, 13);
-    assert_eq!(OWNED_SCHEMA_VERSION, 13);
-    assert_eq!(IMPORTED_SCHEMA_VERSION, 5);
+    assert_eq!(FILE_FORMAT_VERSION, 14);
+    assert_eq!(OWNED_SCHEMA_VERSION, 14);
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
     let version: i64 = sqlx::query_scalar("PRAGMA user_version")
@@ -35,8 +32,7 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         .expect("user_version");
     assert_eq!(version, FILE_FORMAT_VERSION);
     let meta = meta_rows(&pool).await;
-    assert!(meta.contains(&("owned_schema_version".to_owned(), "13".to_owned())));
-    assert!(meta.contains(&("imported_schema_version".to_owned(), "5".to_owned())));
+    assert!(meta.contains(&("owned_schema_version".to_owned(), "14".to_owned())));
 
     for table in [
         "owned_attachment_transfer",
@@ -150,48 +146,75 @@ async fn v2_fixture_upgrades_to_v12() {
     reopened.close().await;
 }
 
-/// v13 把 imported 摘要的旧七态归一化成三态（值映射，不重建、不加正文列），`NULL` 保持 `NULL`。
+/// v13 → v14：删除全部 imported 表，并按明确来源谓词清掉 owned 家族里的远程代理审计；
+/// 本机审计与 owned 数据保留；重复打开不再改变结构或数据。
 #[tokio::test]
-async fn v13_normalizes_imported_legacy_states() {
-    let dir = temp_dir("upgrade-imported-states-v13");
+async fn v14_drops_imported_tables_and_remote_proxy_audits() {
+    let dir = temp_dir("upgrade-imported-cleanup-v14");
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("create current store");
     store.close().await;
     let path = dir.join("acp-remote.sqlite3");
     let pool = raw_write_pool(&path).await;
-    let states = [
-        (1, Some("idle")),
-        (2, Some("queued")),
-        (3, Some("running")),
-        (4, Some("waiting_input")),
-        (5, Some("waiting_permission")),
-        (6, Some("failed")),
-        (7, Some("closed")),
-        (8, None),
-    ];
-    for (index, state) in states {
-        sqlx::query(
-            "INSERT INTO imported_session (owner_node_id, session_id, state, updated_at) \
-             VALUES (?1, ?2, ?3, ?4)",
-        )
-        .bind("99999999-9999-4999-8999-999999999999")
-        .bind(format!("77777777-7777-4777-8777-77777777770{index}"))
-        .bind(state)
-        .bind(AT)
-        .execute(&pool)
-        .await
-        .expect("seed imported session");
-    }
-    // 回退到 v12 形状：文件版本与两族版本键都低于当前值，只让 v13 段生效。
+    // 复刻 v13 的 imported 形状（只保留 v14 需要读取/删除的列）。
     sqlx::raw_sql(
-        "PRAGMA user_version = 12;
-         UPDATE meta SET value = '12' WHERE key = 'owned_schema_version';
-         UPDATE meta SET value = '4' WHERE key = 'imported_schema_version';",
+        "CREATE TABLE imported_session (owner_node_id TEXT NOT NULL, session_id TEXT NOT NULL,
+           updated_at TEXT NOT NULL, PRIMARY KEY (owner_node_id, session_id));
+         CREATE TABLE imported_delivery_index (owner_node_id TEXT NOT NULL, session_id TEXT NOT NULL,
+           origin_event_id TEXT NOT NULL);
+         CREATE TABLE imported_command_ref (owner_node_id TEXT NOT NULL, session_id TEXT NOT NULL,
+           request_id TEXT NOT NULL);
+         CREATE TABLE imported_audit (audit_id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL);",
     )
     .execute(&pool)
     .await
-    .expect("rewind to v12");
+    .expect("recreate imported family");
+    let remote_a = "77777777-7777-4777-8777-777777777701";
+    let remote_b = "77777777-7777-4777-8777-777777777702";
+    let local = "11111111-1111-4111-8111-111111111111";
+    for session in [remote_a, remote_b] {
+        sqlx::query(
+            "INSERT INTO imported_session (owner_node_id, session_id, updated_at) VALUES (?1, ?2, ?3)",
+        )
+        .bind("99999999-9999-4999-8999-999999999999")
+        .bind(session)
+        .bind(AT)
+        .execute(&pool)
+        .await
+        .expect("seed remote session");
+    }
+    for (target_kind, target_id) in [
+        ("session", remote_a.to_string()),
+        (
+            "command",
+            format!("{remote_a}/33333333-3333-4333-8333-333333333333"),
+        ),
+        ("session", local.to_owned()),
+        ("node", "99999999-9999-4999-8999-999999999999".to_owned()),
+        ("import", "55555555-5555-4555-8555-555555555555".to_owned()),
+    ] {
+        sqlx::query(
+            "INSERT INTO owned_audit (at, action, actor_kind, actor_id, target_kind, target_id, outcome) \
+             VALUES (?1, 'node.authenticated', 'node', ?2, ?3, ?4, 'success')",
+        )
+        .bind(AT)
+        .bind("99999999-9999-4999-8999-999999999999")
+        .bind(target_kind)
+        .bind(target_id)
+        .execute(&pool)
+        .await
+        .expect("seed audit");
+    }
+    // 回退到 v13：文件版本与 owned 版本键都低于当前值，只让 v14 段生效。
+    sqlx::raw_sql(
+        "PRAGMA user_version = 13;
+         UPDATE meta SET value = '13' WHERE key = 'owned_schema_version';
+         DELETE FROM meta WHERE key = 'imported_schema_version';",
+    )
+    .execute(&pool)
+    .await
+    .expect("rewind to v13");
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(&pool)
         .await
@@ -200,51 +223,59 @@ async fn v13_normalizes_imported_legacy_states() {
 
     let reopened = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
-        .expect("v12 database must upgrade");
+        .expect("v13 database must upgrade");
+    assert_eq!(
+        reopened.metadata().owned_schema_version,
+        OWNED_SCHEMA_VERSION
+    );
     reopened.close().await;
 
     let pool = raw_pool(&path).await;
-    let migrated: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT session_id, state FROM imported_session ORDER BY session_id")
+    for table in [
+        "imported_session",
+        "imported_delivery_index",
+        "imported_command_ref",
+        "imported_audit",
+        "imported_import",
+        "imported_import_export",
+    ] {
+        assert!(!table_exists(&pool, table).await, "{table} must be dropped");
+    }
+
+    let audits: Vec<(String, String)> =
+        sqlx::query_as("SELECT target_kind, target_id FROM owned_audit ORDER BY audit_id")
             .fetch_all(&pool)
             .await
-            .expect("state rows");
-    pool.close().await;
+            .expect("audit rows");
     assert_eq!(
-        migrated,
+        audits,
         vec![
+            ("session".to_owned(), local.to_owned()),
             (
-                "77777777-7777-4777-8777-777777777701".to_owned(),
-                Some("idle".to_owned())
+                "node".to_owned(),
+                "99999999-9999-4999-8999-999999999999".to_owned()
             ),
-            (
-                "77777777-7777-4777-8777-777777777702".to_owned(),
-                Some("running".to_owned())
-            ),
-            (
-                "77777777-7777-4777-8777-777777777703".to_owned(),
-                Some("running".to_owned())
-            ),
-            (
-                "77777777-7777-4777-8777-777777777704".to_owned(),
-                Some("pending".to_owned())
-            ),
-            (
-                "77777777-7777-4777-8777-777777777705".to_owned(),
-                Some("pending".to_owned())
-            ),
-            (
-                "77777777-7777-4777-8777-777777777706".to_owned(),
-                Some("idle".to_owned())
-            ),
-            (
-                "77777777-7777-4777-8777-777777777707".to_owned(),
-                Some("idle".to_owned())
-            ),
-            ("77777777-7777-4777-8777-777777777708".to_owned(), None),
         ],
-        "旧七态必须按 idle/queued/running/waiting_*/failed/closed 的映射归一化，NULL 保持 None"
+        "只有明确指向远程来源的审计被清掉；本机会话与连接身份审计保留"
     );
+    let schema_before = schema_sql(&pool).await;
+    let audits_before = audits;
+    pool.close().await;
+
+    // 重复打开不再改变结构或数据。
+    let again = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("reopen");
+    again.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(schema_sql(&pool).await, schema_before);
+    let audits_after: Vec<(String, String)> =
+        sqlx::query_as("SELECT target_kind, target_id FROM owned_audit ORDER BY audit_id")
+            .fetch_all(&pool)
+            .await
+            .expect("audit rows");
+    assert_eq!(audits_after, audits_before);
+    pool.close().await;
 }
 
 /// v1 夹具升级到 v13：既有数据保留，新表为空且可写。

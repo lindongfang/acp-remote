@@ -25,7 +25,7 @@ use crate::model::{
     ConfigOptionId, ConfigValue, ConflictKind, ContentVersion, CreateSessionRequest, DeviceId,
     DeviceRecord, Digest, DirectoryId, DirectoryRecord, EffectiveInteraction, ElicitationAction,
     ElicitationValues, EntityRef, EventId, EventPayload, EventType, FileReadPurpose, GitDiff,
-    GitStatusPage, GlobalCursor, InteractionId, InteractionResolution, LocalCursor, ModeId,
+    GitStatusPage, GlobalCursor, InteractionId, InteractionResolution, MessageId, ModeId,
     ModeState, NodeId, NodeKind, NodeRecord, NodeState, OriginCursor, OriginEpoch, OwnedSessionRef,
     PairingClaim, PairingId, PairingRecord, PairingSettlement, PairingState, PairingTarget,
     PeerIdentity, PeerPublicKey, PendingInteraction, PortError, PromptContentBlock, PublicError,
@@ -36,13 +36,14 @@ use crate::model::{
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditQuery, AuditStore,
-    Clock, DeliveryIndexEntry, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryCreator,
-    DirectoryListing, ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, ImportedRead,
-    ImportedReadQuery, ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore,
-    NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite,
-    PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit, PruneReport,
-    RemoteDeliveryStore, RemoteSessionReads, ReplayBatch, ReplayLimit, RetentionPolicy,
-    RevokeReason, SessionCreateAdmission, SessionFiles, SessionQuery, SessionStore, StoreHealth,
+    Clock, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryCreator, DirectoryListing,
+    ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore, MessageCoverage,
+    NodeConnectedWrite, NodeRevocation, NodeWrite, OriginReadPage, PairingClaimOutcome,
+    PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
+    PruneReport, RemoteCommandLookup, RemoteCommandStatus, RemoteCommandTarget, RemoteReadQuery,
+    RemoteReadResult, RemoteRuntimeDirectory, RemoteSessionEntry, RemoteSourceReads,
+    RemoteSourceState, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
+    SessionCreateAdmission, SessionFiles, SessionQuery, SessionStore, StoreHealth,
     SubmissionBinding, SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceMkdirAdmission,
     WorkspaceMkdirExecution, WriteContext,
 };
@@ -119,20 +120,28 @@ pub struct SyncDeviceHandshakeView {
 /// `sync_visible_sessions` 的入参（`SYNC_PROTOCOL.md` §9.6 的 `sessions` 资源；spec
 /// `sync-event-delivery`「设备可见的会话清单范围」）。
 ///
-/// 三个字段各承载一件**调用方**的判定，core 不替它决定：两侧的分页/过滤条件按各自存储的既有语义透传，
-/// `include_imported` 是 feature `resource.remote-origin.v1` 的**协商结果**（feature 协商在各协议边界，
-/// core 不读 feature 表、也不缓存它）。
+/// 两个字段各承载一件**调用方**的判定，core 不替它决定：自有会话的过滤/分页按 `SessionStore` 的既有
+/// 语义透传；`remote` 是 feature `resource.remote-origin.v1`（远程条目）的**协商结果**——`None` 表示
+/// 未协商，一行远程摘要都不得出现；`Some(..)` 才向运行期目录取条目并按其条件收窄（feature 协商在
+/// 各协议边界，core 不读 feature 表、也不缓存它）。
 ///
-/// `Default` = 两侧都不过滤 + **不**纳入已导入会话：未协商 feature 时一行 imported 摘要都不得出现，
-/// 因此保守取值就是 `false`。
+/// `Default` = 自有侧不过滤 + **不**纳远程条目：未协商 feature 时不得出现远程摘要，因此保守取值就是
+/// `None`。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncSessionQuery {
     /// 自有会话的过滤/分页（与 [`UseCases::list_sessions`] 同款，原样透传给 `SessionStore::list`）。
     pub owned: SessionQuery,
-    /// 已导入会话的过滤/分页（原样透传给 `RemoteDeliveryStore::list_sessions`）。
-    pub imported: ImportedSessionQuery,
-    /// 是否把已导入会话纳入结果（调用方传入的 `resource.remote-origin.v1` 协商结果）。
-    pub include_imported: bool,
+    /// 远程条目的过滤/分页（`None` = 不纳入任何远程条目）。
+    pub remote: Option<RemoteSessionQuery>,
+}
+
+/// 运行期远程条目的收窄条件（只作用于 [`RemoteRuntimeDirectory::list`] 的结果）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemoteSessionQuery {
+    /// 只返回这些远程会话（按 `(ownerNodeId, sessionId)` 精确比较）；`None` = 不按会话过滤。
+    pub only: Option<Vec<RemoteSessionRef>>,
+    /// 返回行数上限；`None` = 不限。
+    pub limit: Option<u32>,
 }
 
 /// `workspace.browse` 的单层条目上限（`SYNC_PROTOCOL.md` §14 的固定 v1 常量：128）。
@@ -249,7 +258,6 @@ pub struct NodeLinkReplay {
 pub struct UseCases {
     broker: Arc<Broker>,
     store: Arc<dyn SessionStore>,
-    deliveries: Arc<dyn RemoteDeliveryStore>,
     trust: Arc<dyn TrustStore>,
     audit: Arc<dyn AuditStore>,
     config: Arc<dyn LocalConfigStore>,
@@ -272,20 +280,20 @@ pub struct UseCases {
     /// 分块附件与清单端口（§5.8）。默认不可用：未装配的进程显式拒绝附件路径，绝不静默把附件丢掉
     /// 只发文字。
     transfers: Option<Arc<dyn AttachmentTransferStore>>,
-    /// Access 侧 imported 会话的在线读取端口（`session.read` 回源）。默认不可用：未装配的进程对
-    /// imported 会话显式 `BackendUnsupported`，不返回空页冒充「没有历史」。
-    ///
-    /// 用 [`std::sync::OnceLock`] 而不是构造参数：组合根先建 [`UseCases`]，`AccessManager`（实现该端口的
-    /// 出站运行时）必须持有同一个 `Arc<UseCases>` 才能构造，二者因此构成装配顺序上的环。与
-    /// `AgentHost::set_node_events` 同款处理——原地接线一次，之后只读。
-    remote_reads: std::sync::OnceLock<Arc<dyn RemoteSessionReads>>,
+    /// 远程运行期目录（`design.md` D2）：已认证连接期的 Owner 会话摘要/在线状态/目录 revision 与
+    /// generation。默认未装配：没有远程运行时的进程只返回本机 owned 清单。
+    remote_directory: std::sync::OnceLock<Arc<dyn RemoteRuntimeDirectory>>,
+    /// 远程来源的在线回源读取与来源屏障（`design.md` D4）。默认未装配：显式
+    /// `BackendUnsupported`，不返回空页。
+    remote_sources: std::sync::OnceLock<Arc<dyn RemoteSourceReads>>,
+    /// Owner 远程命令状态查询（`design.md` D5）。默认未装配：显式 `BackendUnsupported`。
+    remote_commands: std::sync::OnceLock<Arc<dyn RemoteCommandStatus>>,
 }
 
 /// [`UseCases`] 的依赖。
 pub struct UseCaseDeps {
     pub broker: Arc<Broker>,
     pub store: Arc<dyn SessionStore>,
-    pub deliveries: Arc<dyn RemoteDeliveryStore>,
     pub trust: Arc<dyn TrustStore>,
     pub audit: Arc<dyn AuditStore>,
     pub config: Arc<dyn LocalConfigStore>,
@@ -300,7 +308,6 @@ impl UseCases {
         Self {
             broker: deps.broker,
             store: deps.store,
-            deliveries: deps.deliveries,
             trust: deps.trust,
             audit: deps.audit,
             config: deps.config,
@@ -312,16 +319,28 @@ impl UseCases {
             creator: Arc::new(SystemDirectories),
             files: Arc::new(crate::ports::UnavailableSessionFiles),
             transfers: None,
-            remote_reads: std::sync::OnceLock::new(),
+            remote_directory: std::sync::OnceLock::new(),
+            remote_sources: std::sync::OnceLock::new(),
+            remote_commands: std::sync::OnceLock::new(),
         }
     }
 
-    /// 接线 Access 侧 imported 会话的在线读取端口（组合根在构造 `AccessManager` 之后调用一次）。
+    /// 接线远程运行期目录（组合根在建立 Access 出站运行时后调用一次）。
     ///
-    /// 重复接线返回 `false` 且保留首次实现：端口一经装配就不再变化，静默覆盖会让同一进程里的读取
-    /// 走到两条不同的 Owner 路由上。
-    pub fn set_remote_session_reads(&self, reads: Arc<dyn RemoteSessionReads>) -> bool {
-        self.remote_reads.set(reads).is_ok()
+    /// 重复接线返回 `false` 且保留首次实现：同一进程里的目录必须只有一份，否则「断开整代失效」会出现
+    /// 两个互不知道的代际。
+    pub fn set_remote_runtime_directory(&self, directory: Arc<dyn RemoteRuntimeDirectory>) -> bool {
+        self.remote_directory.set(directory).is_ok()
+    }
+
+    /// 接线远程来源的在线回源读取（`design.md` D4）。重复接线返回 `false` 且保留首次实现。
+    pub fn set_remote_source_reads(&self, reads: Arc<dyn RemoteSourceReads>) -> bool {
+        self.remote_sources.set(reads).is_ok()
+    }
+
+    /// 接线 Owner 远程命令状态查询（`design.md` D5）。重复接线返回 `false` 且保留首次实现。
+    pub fn set_remote_command_status(&self, commands: Arc<dyn RemoteCommandStatus>) -> bool {
+        self.remote_commands.set(commands).is_ok()
     }
 
     /// 注入分块附件端口（组合根装配 `storage-sqlite` 的实现）。
@@ -721,11 +740,12 @@ impl UseCases {
         self.store.list(query).await
     }
 
-    /// Sync 快照的 `sessions` 资源来源：**自有 + 已导入合并**后的设备可见清单
-    /// （`SYNC_PROTOCOL.md` §9.6；spec `sync-event-delivery`「设备可见的会话清单范围」）。
+    /// Sync 快照的 `sessions` 资源来源：**自有 + 当前运行期远程目录**合并后的设备可见清单
+    /// （`SYNC_PROTOCOL.md` §9.6；spec `sync-event-delivery`「设备可见的会话清单范围」、
+    /// `stateless-access`「远程数据只用于当前在线处理」）。
     ///
     /// 为什么合并必须发生在 core（`design.md` D3）：可见性判定（`Broker::authorize`）在 core；若适配层
-    /// 分别调 `SessionStore::list` 与 `RemoteDeliveryStore::list_sessions` 再自行拼接，就会出现**第二条
+    /// 分别调 `SessionStore::list` 与 `RemoteRuntimeDirectory::list` 再自行拼接，就会出现**第二条
     /// 可见性判定路径**（`MODULE_ARCHITECTURE.md` §5 的单一判定点原则）。
     ///
     /// **为什么也不走 [`UseCases::require_local`]**：本入口服务的是入站设备的快照读取，它带 `actor`；
@@ -738,51 +758,65 @@ impl UseCases {
     /// 1. 先按 `session.list` 走 `Broker::authorize`——与 [`UseCases::list_sessions`] **逐字同口径**
     ///    （同一个命令名、同一个 broker 判定、同一个 `authorization.scope_denied`）：本层不写任何授权
     ///    判定。设备与节点主体恒通过（已认证即可执行本节点命令，`local.*` 除外）；授权先于本层的
-    ///    任何读取，未授权时不读会话/索引存储、也不返回任何会话；
+    ///    任何读取，未授权时不读会话/目录、也不返回任何会话；
     /// 2. 自有条目直接取 `SessionStore::list`：`workspace` 因此取自该会话行**持久化**的
     ///    `workspace_directory_id`（§3.6 的决定原文，含「不得按 `workspace_cwd` 反查」）——本层不重算归属；
-    /// 3. `include_imported` 为真时才取 `RemoteDeliveryStore::list_sessions` 的行并投影成**同一形状**的
-    ///    `SessionSummary`（§9.6：imported 摘要不得另造字段）；为假时一行都不取——未协商
-    ///    `resource.remote-origin.v1` 的客户端 MUST NOT 看到任何 `origin.kind = remote` 的会话，连空占位
-    ///    条目也不得出现。
+    /// 3. `query.remote` 为 `Some` 时才向 [`RemoteRuntimeDirectory::list`] 取当前已认证连接期的远程条目，
+    ///    并原样纳入它们**已在目录里组装好**的 `SessionSummary`（`origin` 恒为 `ResourceOrigin::Remote`）；
+    ///    为 `None` 时一行都不取——未协商 `resource.remote-origin.v1` 的客户端 MUST NOT 看到任何
+    ///    `origin.kind = remote` 的会话，连空占位条目也不得出现。
     ///
-    /// 顺序是「自有在前、已导入在后」，两侧各自的顺序由存储层给出、本层不重排（`SessionSummary` 没有排序
-    /// 语义字段，快照是集合语义）：同一次读取的输入决定同一次读取的输出。`query` 两侧的过滤/分页同样只是
-    /// 调用方给出的确定性收窄，不构成第二个可见性判定点。
+    /// 远程条目只来自运行期目录（没有任何持久索引可读）。目录未装配（进程没有远程运行时）时远程部分
+    /// 为空；来源已断开/撤销时其整代目录已被清除，因此这里不会把某个不可达 Owner 表达成「成功读到空
+    /// 清单」——客户端通过来源状态通知（`sync.remote_source_state`，连接期消息）得知该来源不可用。
     ///
-    /// `owner_reachable` 给出 imported 条目的 `origin.online`（Owner 可达性）：它是**运行时事实**，core
-    /// 不缓存（`MODULE_ARCHITECTURE.md` §4.1：可达性变化经 `EventPublisher` 的
-    /// `session.origin.online_changed` 暴露，「不在 core 里维护独立的在线状态缓存」），因此由调用方按自己
-    /// 的连接事实传入，本层只做投影、不判定也不记忆。刻意**不**取固定保守值：§9.6 规定 Owner 离线期间
-    /// 客户端不得把远程会话的输入标记为已发送，把一个确实可达的 Owner 一律标成 `false` 会让客户端错误地
-    /// 封禁可用会话——那比缺席更糟。
+    /// 顺序是「自有在前、远程在后」，两侧各自的顺序由存储层/目录给出、本层不重排（`SessionSummary` 没有
+    /// 排序语义字段，快照是集合语义）：同一次读取的输入决定同一次读取的输出。`query.owned` 与
+    /// `query.remote` 只是调用方给出的确定性收窄，不构成第二个可见性判定点。
     ///
-    /// 闭包要求 `Send + Sync`：适配器会把本调用放进可被 `spawn` 的 future。
+    /// `owner_reachable` 是旧的调用方可达性闭包：**保留参数只为装配兼容**（WP4 会把它从 `server`
+    /// 移除）。在线状态现在由 [`RemoteRuntimeDirectory`] 的条目权威给出，本层**不**用闭包覆盖它——
+    /// 否则同一事实会有两个来源，且可能与目录的 generation 不一致。闭包仍要求 `Send + Sync`：适配器会
+    /// 把本调用放进可被 `spawn` 的 future。
     pub async fn sync_visible_sessions(
         &self,
         actor: &Actor,
         query: SyncSessionQuery,
-        owner_reachable: impl Fn(&RemoteSessionRef) -> bool + Send + Sync,
+        _owner_reachable: impl Fn(&RemoteSessionRef) -> bool + Send + Sync,
     ) -> Result<Vec<SessionSummary>, PortError> {
         let request = self.ids.request_id();
         self.broker
             .authorize(actor, "session.list", None, &request)
             .await
             .map_err(Denied::into_port_error)?;
-        let SyncSessionQuery {
-            owned,
-            imported,
-            include_imported,
-        } = query;
+        let SyncSessionQuery { owned, remote } = query;
         let mut sessions = self.store.list(owned).await?;
-        if !include_imported {
+        let Some(remote) = remote else {
             return Ok(sessions);
-        }
-        let rows = self.deliveries.list_sessions(imported).await?;
-        for record in &rows {
-            if let Some(summary) = imported_summary(record, &owner_reachable)? {
-                sessions.push(summary);
+        };
+        let Some(directory) = self.remote_directory.get() else {
+            // 本进程没有远程运行期：没有可合并的来源，而不是把某个已知来源报成空清单。
+            return Ok(sessions);
+        };
+        let entries = directory.list().await?;
+        let mut added = 0u32;
+        for entry in &entries {
+            // 先校验来源一致性，再做调用方收窄：损坏条目不能被过滤条件藏起来。
+            remote_origin(entry)?;
+            // 断开/撤销的来源已按代失效；若实现仍短暂保留条目，也不得把其摘要下发（D2 的清除口径）。
+            if !entry.source.is_online() {
+                continue;
             }
+            if !remote_matches(&remote, entry) {
+                continue;
+            }
+            if let Some(limit) = remote.limit {
+                if added >= limit {
+                    break;
+                }
+            }
+            sessions.push(entry.summary.clone());
+            added += 1;
         }
         Ok(sessions)
     }
@@ -1023,10 +1057,11 @@ impl UseCases {
     /// 其实际 cwd；`None` 是明确的不可用，不按 workspace 别名反查、不回退到任何其它目录。imported
     /// 会话在任何文件/Git 端口调用之前拒绝。
     ///
-    /// imported 的判定**不能**只看 `SessionStore::load`：真实 imported 会话只存在于
-    /// `RemoteDeliveryStore` 的 `imported_session` 索引里，owned 存储中没有它们的行。因此 `load` 返回
-    /// `None` 时再问一次 imported 索引：命中 → `capability.unsupported_by_broker`；仍未命中才是
-    /// `session.not_found`。owned 行本身带远端来源时同样拒绝（同一事实的另一条防线）。
+    /// imported 的判定**不能**只看 `SessionStore::load`：远程会话只存在于当前运行期目录里，owned 存储
+    /// 中没有它们的行。因此 `load` 返回 `None` 时再问一次运行期目录：命中 →
+    /// `capability.unsupported_by_broker`；仍未命中才是 `session.not_found`。本层**不**回退到本机文件
+    /// 路径或持久 imported 索引（`design.md` D2）。owned 行本身带远端来源时同样拒绝（同一事实的另一条
+    /// 防线）。
     async fn session_files_root(
         &self,
         actor: &Actor,
@@ -1041,15 +1076,12 @@ impl UseCases {
         let snapshot = match self.store.load(session).await? {
             Some(snapshot) => snapshot,
             None => {
-                if self
-                    .deliveries
-                    .find_imported_session(session)
-                    .await?
-                    .is_some()
-                {
-                    return Err(PortError::InvalidRequest(
-                        "capability.unsupported_by_broker",
-                    ));
+                if let Some(directory) = self.remote_directory.get() {
+                    if !directory.find_by_session(session).await?.is_empty() {
+                        return Err(PortError::InvalidRequest(
+                            "capability.unsupported_by_broker",
+                        ));
+                    }
                 }
                 return Err(PortError::NotFound(EntityRef::Session(session.clone())));
             }
@@ -1126,32 +1158,91 @@ impl UseCases {
         Ok(page)
     }
 
-    /// imported 会话的 `session.read` 回源（Access 侧）：`Ok(None)` 表示该标识不是本机的 imported
-    /// 索引行（调用方按 `session.not_found` 处理），`Ok(Some(_))` 是 Owner 的完成结果原文。
+    /// 带来源位置的会话读（`design.md` D4）：授权与 `read_session` 同口径，页、R 与逐消息覆盖由
+    /// 存储层在同一只读事务内返回。配置项/能力仍按 include 合并，规则与 [`Self::read_session`] 一致。
+    pub async fn read_session_origin(
+        &self,
+        actor: &Actor,
+        query: HistoryQuery,
+    ) -> Result<OriginReadPage, PortError> {
+        let request = self.ids.request_id();
+        self.broker
+            .authorize(actor, "session.read", Some(&query.session), &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let mut origin = self.broker.read_session_origin(query.clone()).await?;
+        if query.include.config_options {
+            match self.live_config(&query.session).await {
+                Ok(config) => origin.page.config = config,
+                Err(PortError::InvalidRequest("没有该会话的活动 endpoint")) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        if query.include.capabilities {
+            origin.page.capabilities = Some(
+                self.catalog
+                    .agent_capabilities(origin.page.session.agent())
+                    .await?,
+            );
+        }
+        Ok(origin)
+    }
+
+    /// imported 会话的 `session.read` 回源（Access 侧）：来源身份与在线状态先由
+    /// [`RemoteRuntimeDirectory`] 校验，再调用在线读取端口。
+    ///
+    /// `Ok(None)` 表示当前运行期目录里没有该标识的远程会话（调用方按 `session.not_found` 处理）：
+    /// **本机 owned 路径不会在这里回退**，owned 会话由 [`UseCases::read_session`] 处理。远程目录里有
+    /// 多条同名 `SessionId`（不同 Owner）时明确拒绝，不挑选其中任意一条。
     ///
     /// 授权与 owned 读取走同一条 `session.read` 判定（同一 actor、同一会话）；正文只在内存转发，
     /// 不写数据库、临时文件或日志。Owner 不可达由端口返回 [`UnavailableKind::OwnerOffline`]，本层
-    /// 不把失败改写成空页——「不可读」与「没有内容」在 wire 上必须是两件事。
-    pub async fn read_imported_session(
+    /// 不把失败改写成空页——「不可读」与「没有内容」在 wire 上必须是两件事。读取期间来源代际改变
+    /// （断开/撤销）时丢弃结果并返回 `OwnerOffline`，MUST NOT 返回跨代正文。
+    /// 远程会话的一页权威读取（`design.md` D4）：来源身份 → 在线状态 → 代际 → 回源 → 结果校验。
+    ///
+    /// 与 [`UseCases::read_imported_session`] 的分工：那个入口服务于仍以 Owner 原文转发 `session.read`
+    /// 的旧 wire 路径；本入口返回 core 类型化的 [`RemoteReadResult`]，供需要 `readCursor`/`messageCoverage`
+    /// 合并判定的调用方使用。两者都必须先经过运行期目录，不得从持久 imported 索引或本机文件回答。
+    pub async fn read_remote_source(
         &self,
         actor: &Actor,
-        session: &SessionId,
-        query: ImportedReadQuery,
-    ) -> Result<Option<ImportedRead>, PortError> {
+        session: &RemoteSessionRef,
+        query: RemoteReadQuery,
+    ) -> Result<RemoteReadResult, PortError> {
         let request = self.ids.request_id();
         self.broker
-            .authorize(actor, "session.read", Some(session), &request)
+            .authorize(actor, "session.read", Some(&session.session_id), &request)
             .await
             .map_err(Denied::into_port_error)?;
-        let Some(record) = self.deliveries.find_imported_session(session).await? else {
-            return Ok(None);
-        };
-        let Some(reads) = self.remote_reads.get() else {
-            // 未装配出站运行时：这是能力缺失，不是「空历史」。Sync 据此回
-            // `capability.unsupported_by_broker`。
+        let Some(directory) = self.remote_directory.get() else {
             return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
         };
-        reads.read_imported(&record.session, query).await.map(Some)
+        let Some(entry) = directory.lookup(session).await? else {
+            return Err(PortError::NotFound(EntityRef::Session(
+                session.session_id.clone(),
+            )));
+        };
+        require_online_entry(&entry, session)?;
+        let Some(reads) = self.remote_sources.get() else {
+            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        };
+        let result = reads.read(session, entry.generation, query).await?;
+        validate_remote_read_result(session, &result)?;
+        self.ensure_current_generation(&entry).await?;
+        Ok(result)
+    }
+
+    /// 读取返回后再次确认来源代际未变：断开/撤销/重新认证会让旧代结果作废，不得把跨代正文返回给客户端。
+    async fn ensure_current_generation(&self, entry: &RemoteSessionEntry) -> Result<(), PortError> {
+        let remote = remote_reference(entry)?;
+        let Some(directory) = self.remote_directory.get() else {
+            return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
+        };
+        match directory.generation(&remote.owner_node_id).await? {
+            Some(current) if current == entry.generation => Ok(()),
+            _ => Err(PortError::Unavailable(UnavailableKind::OwnerOffline)),
+        }
     }
 
     /// `session.mode.list` / `session.config.list` 的 config 部分（§11.5 的 `SessionConfigOptionView`）。
@@ -1181,6 +1272,75 @@ impl UseCases {
             .await
             .map_err(Denied::into_port_error)?;
         self.broker.command_status(actor, &request).await
+    }
+
+    /// 远程 `command.status`（`design.md` D5；spec `sync-command-handling`「远程状态查询携带显式来源」）：
+    /// 按原 `requestId` 与显式 `remoteTarget` 直接向 Owner 查询，**不**读本地请求表。
+    ///
+    /// 顺序：授权（与 owned `command.status` 同一条命令名）→ 来源可访问性（`session_id` 非空时必须是该
+    /// Owner 当前在线的会话；`session.create` 允许只按 Owner 定位）→ Owner 查询。来源不可达是
+    /// `Unavailable`；Owner 证明没有该请求是 [`RemoteCommandLookup::NotFound`]；Owner 无法确定执行结果
+    /// 是 [`RemoteCommandLookup::Uncertain`]——三者不得互相替代。
+    ///
+    /// 同一 `requestId` 的幂等与参数冲突完全由 Owner 判定：本层不记录、不去重、不换号，也不把「查不到」
+    /// 解释成「没执行」。
+    pub async fn remote_command_status(
+        &self,
+        actor: &Actor,
+        target: RemoteCommandTarget,
+        request: RequestId,
+    ) -> Result<RemoteCommandLookup, PortError> {
+        let audit_request = self.ids.request_id();
+        self.broker
+            .authorize(actor, "command.status", None, &audit_request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let Some(directory) = self.remote_directory.get() else {
+            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        };
+        // 先判来源可达性：Owner 离线/撤销是 `Unavailable`，不能被误报成「没有该请求」。
+        match directory.owner_state(&target.owner_node_id).await? {
+            RemoteSourceState::Online => {}
+            RemoteSourceState::Offline => {
+                return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
+            }
+            RemoteSourceState::Revoked => {
+                return Err(PortError::Unavailable(UnavailableKind::RemoteUnavailable));
+            }
+        }
+        let checked = match &target.session_id {
+            Some(session) => {
+                // 损坏的目录条目（不是远程来源）必须上抛 `Corrupt`，不能像 NotFound 那样被吞掉。
+                let entries = directory
+                    .find_by_session(session)
+                    .await?
+                    .into_iter()
+                    .map(|entry| remote_reference(&entry).map(|remote| (entry, remote)))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let selected = entries
+                    .into_iter()
+                    .find(|(_, remote)| remote.owner_node_id == target.owner_node_id);
+                match selected {
+                    // 来源声明与目录不符：明确「不存在」，不返回其他 Owner 的结果。
+                    None => return Ok(RemoteCommandLookup::NotFound),
+                    Some((entry, remote)) => {
+                        require_online_entry(&entry, &remote)?;
+                        Some(entry)
+                    }
+                }
+            }
+            // 尚未建成会话的 `session.create`：来源可达性已经在上方判定。
+            None => None,
+        };
+        let Some(commands) = self.remote_commands.get() else {
+            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        };
+        let outcome = commands.query(&target, &request).await?;
+        validate_remote_command_lookup(&target, &request, &outcome)?;
+        if let Some(entry) = &checked {
+            self.ensure_current_generation(entry).await?;
+        }
+        Ok(outcome)
     }
 
     /// 远端目录投影（§4 的 `RemoteCatalogQueries`）：本节点的 Agent 目录。
@@ -1285,30 +1445,6 @@ impl UseCases {
             .await
             .map_err(Denied::into_port_error)?;
         self.broker.replay(after, limit).await
-    }
-
-    /// imported 会话的本地重放（只含无正文索引）。
-    pub async fn remote_replay(
-        &self,
-        actor: &Actor,
-        reference: &SessionReference,
-        after: Option<LocalCursor>,
-        limit: ReplayLimit,
-    ) -> Result<Vec<DeliveryIndexEntry>, PortError> {
-        let request = self.ids.request_id();
-        match reference {
-            SessionReference::Remote(_) => {
-                self.broker
-                    .authorize(actor, "session.read", None, &request)
-                    .await
-                    .map_err(Denied::into_port_error)?;
-
-                self.broker.remote_replay(after, limit).await
-            }
-            SessionReference::Owned(_) => {
-                Err(PortError::InvalidRequest("owned 会话的重放请使用 replay()"))
-            }
-        }
     }
 
     /// §6 第 17 条：`session.mode.list`。候选**只**来自 `SessionEndpoint::modes()`，版本取会话当前版本；
@@ -2180,11 +2316,6 @@ impl UseCases {
         self.config.directory(directory_id).await
     }
 
-    /// 交付索引存储：imported 家族的无正文交付索引与命令终态引用（§7.4）。
-    pub fn deliveries(&self) -> &Arc<dyn RemoteDeliveryStore> {
-        &self.deliveries
-    }
-
     /// id 分配器：入站适配器需要为**非命令**的标识取值（例如 Node Link 每条消息的 `messageId`、
     /// `session.create` 会话 id 之外的说明性标识）时经它分配，保持「id 分配收敛到两处权威」（§3.1）。
     /// 它不参与授权，也不暴露任何持久事实。
@@ -2360,57 +2491,285 @@ fn owned_session(reference: &SessionReference) -> Result<SessionId, PortError> {
     }
 }
 
-/// [`ImportedSessionRecord`] → [`SessionSummary`] 投影（`SYNC_PROTOCOL.md` §9.6）。
+/// 校验条目的来源分量，返回 `(ownerNodeId, originEpoch)` 的借用。
 ///
-/// 仓库里没有任何 `ImportedSessionRecord → SessionSummary` 的转换函数（`upsert_session` 目前只有测试
-/// 调用方，索引行的生产写入方是待落地的 `node-link-client`），本函数是它的**唯一**实现，供
-/// [`UseCases::sync_visible_sessions`] 使用。返回 `None` 表示该索引行**还不能**投影成摘要，调用方跳过它，
-/// 而不是替它编造字段：
-///
-/// - `origin_epoch`/`agent`/`state`/`version`/`created_at` 在 `imported_session` 表里可空，而
-///   `SessionSummary` 与 §9.4 的 `sessions` 资源都要求这几个字段有值。为 NULL 时恰好没有可投影的内容，
-///   而 §3.6 对 `NULL` 的既有口径是「不是错误，但也不得被推导或补齐」：该会话在 Owner 侧的元数据补齐前不
-///   出现在结果里，而不是以假值（例如把 `state` 说成 `idle`、把 `created_at` 说成 `updated_at`）出现。
-/// - `current_mode` 恒为 `None`：正文类字段不进 Access 的索引（§9.6 的 no-content-cache）。
-/// - `workspace` 恒为 `None`：`imported_session` **没有** `workspace_directory_id` 列（§7.4 的黄金列清单），而
-///   §9.6 明确 imported 会话的 `workspace` 固定为 `null`，直到 Owner 侧投影真的带来目录引用为止；Access
-///   MUST NOT 用 `owner_node_id`/本机路径或任何其它列推导归属。
-///
-/// `owner_reachable` 是调用方给出的 Owner 可达性事实（见 [`UseCases::sync_visible_sessions`]）。
-///
-/// 构造失败（例如索引行里的标题超过 512 字符）按**列值损坏**上抛：那不是「不完整」，而是存储里出现了不满足
-/// 值对象约束的数据，静默跳过会让损坏看不见。
-fn imported_summary(
-    record: &ImportedSessionRecord,
-    owner_reachable: &impl Fn(&RemoteSessionRef) -> bool,
-) -> Result<Option<SessionSummary>, PortError> {
-    let (Some(origin_epoch), Some(agent), Some(state), Some(version), Some(created_at)) = (
-        record.origin_epoch.clone(),
-        record.agent.clone(),
-        record.state,
-        record.version,
-        record.created_at.clone(),
-    ) else {
-        return Ok(None);
+/// 运行期目录**只能**承载远程会话：`origin` 必须是 `ResourceOrigin::Remote`，`online` 必须与条目自己的
+/// `source` 一致。任何不一致都是适配器把两代/两类来源混在了一个条目里，按**列值损坏**上抛而不是猜测
+/// 一个可投影的取值（§3.6 的既有口径：不推导、不补齐）。
+fn remote_origin(entry: &RemoteSessionEntry) -> Result<(&NodeId, &OriginEpoch), PortError> {
+    let ResourceOrigin::Remote {
+        owner_node_id,
+        origin_epoch,
+        online,
+    } = entry.summary.origin()
+    else {
+        return Err(PortError::Corrupt(
+            "remote directory entry carries a local origin",
+        ));
     };
-    let summary = SessionSummary::try_new(
-        record.session.session_id.clone(),
-        record.title.clone(),
-        agent,
-        state,
-        ResourceOrigin::Remote {
-            owner_node_id: record.session.owner_node_id.clone(),
-            origin_epoch,
-            online: owner_reachable(&record.session),
+    if *online != entry.source.is_online() {
+        return Err(PortError::Corrupt(
+            "remote directory entry online flag disagrees with its source state",
+        ));
+    }
+    Ok((owner_node_id, origin_epoch))
+}
+
+/// 目录条目是否落在调用方给出的远程收窄条件内（`SyncSessionQuery.remote`）。
+///
+/// `only` 按 `(ownerNodeId, sessionId)` 精确比较：不同 Owner 的同名 `SessionId` 不是同一会话。`limit`
+/// 由调用方在遍历时计数（本函数不读它）。
+fn remote_matches(query: &RemoteSessionQuery, entry: &RemoteSessionEntry) -> bool {
+    let Some(remote) = entry
+        .summary
+        .origin()
+        .remote_session(entry.summary.session_id().clone())
+    else {
+        return false;
+    };
+    match &query.only {
+        Some(only) => only.contains(&remote),
+        None => true,
+    }
+}
+
+/// 目录条目的 `(ownerNodeId, sessionId)` 引用（`origin` 必须是远程来源）。
+fn remote_reference(entry: &RemoteSessionEntry) -> Result<RemoteSessionRef, PortError> {
+    let (owner_node_id, _) = remote_origin(entry)?;
+    Ok(RemoteSessionRef::new(
+        owner_node_id.clone(),
+        entry.summary.session_id().clone(),
+    ))
+}
+
+/// 校验目录条目确实属于请求的 `(ownerNodeId, sessionId)` 且当前可用。
+///
+/// 回源读取前的唯一来源检查：条目不存在 → `NotFound`；被撤销 → `Unavailable`；断开 → `OwnerOffline`。
+fn require_online_entry(
+    entry: &RemoteSessionEntry,
+    expected: &RemoteSessionRef,
+) -> Result<(), PortError> {
+    let (owner_node_id, _) = remote_origin(entry)?;
+    let actual = RemoteSessionRef::new(owner_node_id.clone(), entry.summary.session_id().clone());
+    if &actual != expected {
+        return Err(PortError::Corrupt(
+            "remote directory entry identity disagrees with the lookup key",
+        ));
+    }
+    match entry.source {
+        RemoteSourceState::Online => Ok(()),
+        RemoteSourceState::Offline => Err(PortError::Unavailable(UnavailableKind::OwnerOffline)),
+        RemoteSourceState::Revoked => {
+            Err(PortError::Unavailable(UnavailableKind::RemoteUnavailable))
+        }
+    }
+}
+
+/// 远程读取结果的一致性校验（`design.md` D4）。
+///
+/// - 摘要必须属于 `(owner, session)` 且为远程来源；
+/// - `read_cursor` 与摘要的 `origin_epoch` 必须一致，`coverage` 的 `through` 必须**全部等于** `R`；
+/// - `coverage` 只能覆盖本次返回的消息（未返回消息不得出现覆盖项），且每条消息至多一项；反过来，每条
+///   返回消息都必须恰有一项覆盖（漏报会让客户端重复拼接已返回的正文）；
+/// - 每条消息与历史条目都必须属于本次请求的会话/ Owner。
+///
+/// 任一不成立都按 `Corrupt` 失败关闭：这些是来源适配器把两次读取拼在一起或伪造覆盖的迹象，静默接受会
+/// 让客户端丢弃本应保留的缓冲事件（D4 的「不能静默遗漏」）。
+pub fn validate_remote_read_result(
+    expected: &RemoteSessionRef,
+    result: &RemoteReadResult,
+) -> Result<(), PortError> {
+    if result.summary.session_id() != &expected.session_id {
+        return Err(PortError::Corrupt(
+            "remote read result returns a different session summary",
+        ));
+    }
+    let ResourceOrigin::Remote {
+        owner_node_id,
+        origin_epoch,
+        online,
+    } = result.summary.origin()
+    else {
+        return Err(PortError::Corrupt("remote read result has a local origin"));
+    };
+    if owner_node_id != &expected.owner_node_id || !online {
+        return Err(PortError::Corrupt(
+            "remote read result does not belong to the requested online source",
+        ));
+    }
+    if origin_epoch != &result.read_cursor.origin_epoch {
+        return Err(PortError::Corrupt(
+            "remote read cursor belongs to a different origin epoch",
+        ));
+    }
+    for message in &result.messages {
+        if message.session != expected.session_id {
+            return Err(PortError::Corrupt(
+                "remote read result contains a message from another session",
+            ));
+        }
+    }
+    for record in &result.history {
+        if record.origin.owner_node_id != expected.owner_node_id {
+            return Err(PortError::Corrupt(
+                "remote read result contains history from another owner",
+            ));
+        }
+    }
+    let mut seen = Vec::with_capacity(result.coverage.len());
+    for coverage in &result.coverage {
+        if coverage.through != result.read_cursor {
+            return Err(PortError::Corrupt(
+                "remote message coverage does not match the read cursor",
+            ));
+        }
+        if !result
+            .messages
+            .iter()
+            .any(|message| message.message == coverage.message_id)
+        {
+            return Err(PortError::Corrupt(
+                "remote message coverage references a message that was not returned",
+            ));
+        }
+        if seen.contains(&&coverage.message_id) {
+            return Err(PortError::Corrupt(
+                "remote read result repeats a message coverage entry",
+            ));
+        }
+        seen.push(&coverage.message_id);
+    }
+    // 反向完整性：每条返回消息都必须恰有 coverage，否则适配器漏报，客户端会把已返回的正文再拼一次。
+    for message in &result.messages {
+        if !seen.contains(&&message.message) {
+            return Err(PortError::Corrupt(
+                "remote read result returns a message without coverage",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 缓冲事件相对一页读取结果的合并判定（`design.md` D4）。
+///
+/// 只按**来源身份与来源次序**判定，不解释正文：同一消息在页面覆盖范围内的创建/增量事件不再拼接；
+/// 覆盖范围之外的事件必须保留；未返回消息的事件永远不受本页覆盖影响。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoveredEventDecision {
+    /// 该事件已被页面返回的完整内容覆盖，不再拼接。
+    AlreadyCovered,
+    /// 该事件尚未被页面覆盖，按来源次序与 `deltaIndex` 应用。
+    Apply,
+    /// 该事件属于本页未返回的消息：本页覆盖声明不适用，必须保留并应用。
+    UncoveredMessage,
+}
+
+/// 判定一条缓冲事件是否已被某一页的覆盖信息吸收（`design.md` D4）。
+///
+/// - `delta_index = None` 表示创建/完成类事件：来源游标不晚于 `through` 即被覆盖；
+/// - `delta_index = Some(d)` 只有 `d <= last_delta_index` 才算覆盖——`last_delta_index` 是**最后连续**
+///   增量，超出它的增量即便游标不晚于 `through` 也不得丢弃（页面没有把它拼进正文）；
+/// - 来源 epoch 与 `through` 不同时不能比较，按未覆盖处理（调用方应先走 reset/重建）。
+pub fn classify_covered_event(
+    coverage: &[MessageCoverage],
+    message: &MessageId,
+    event_cursor: &OriginCursor,
+    delta_index: Option<u64>,
+) -> CoveredEventDecision {
+    let Some(covered) = coverage.iter().find(|entry| &entry.message_id == message) else {
+        return CoveredEventDecision::UncoveredMessage;
+    };
+    if event_cursor.origin_epoch != covered.through.origin_epoch {
+        return CoveredEventDecision::Apply;
+    }
+    if event_cursor.origin_sequence > covered.through.origin_sequence {
+        return CoveredEventDecision::Apply;
+    }
+    match delta_index {
+        None => CoveredEventDecision::AlreadyCovered,
+        Some(index) => match covered.last_delta_index {
+            Some(last) if index <= last => CoveredEventDecision::AlreadyCovered,
+            _ => CoveredEventDecision::Apply,
         },
-        None,
-        version,
-        created_at,
-        record.updated_at.clone(),
-        None,
-    )
-    .map_err(PortError::from)?;
-    Ok(Some(summary))
+    }
+}
+
+/// 一页内容能否替换当前已应用的消息内容（`design.md` D4 的「旧页不能回滚新内容」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemotePageMerge {
+    /// 页面覆盖不旧于当前：可替换/合并。
+    Replace,
+    /// 页面覆盖更旧：保留当前内容，忽略本页内容（但页面里未覆盖到的其它消息仍按各自覆盖处理）。
+    IgnoreStale,
+    /// 来源 epoch 不同：不能比较，必须走来源 reset/重建。
+    ResetRequired,
+}
+
+/// 比较新旧两页对同一条消息的覆盖位置。
+///
+/// 同一 `through` 下仍比较 `last_delta_index`：相同游标但更少的已覆盖增量是更旧的页面内容，不能覆盖
+/// 已经拼入更多增量的当前内容；当前已拼入增量（`Some`）而本页没有增量覆盖（`None`）同样视为更旧。
+/// `current = None` 时必然可替换。
+pub fn decide_remote_page(
+    current: Option<&MessageCoverage>,
+    page: &MessageCoverage,
+) -> RemotePageMerge {
+    let Some(current) = current else {
+        return RemotePageMerge::Replace;
+    };
+    if current.through.origin_epoch != page.through.origin_epoch {
+        return RemotePageMerge::ResetRequired;
+    }
+    match page
+        .through
+        .origin_sequence
+        .cmp(&current.through.origin_sequence)
+    {
+        std::cmp::Ordering::Greater => RemotePageMerge::Replace,
+        std::cmp::Ordering::Less => RemotePageMerge::IgnoreStale,
+        std::cmp::Ordering::Equal => match (current.last_delta_index, page.last_delta_index) {
+            // 当前内容已拼入至少一个增量、本页却没有任何增量覆盖：本页是更旧的内容。
+            (Some(_), None) => RemotePageMerge::IgnoreStale,
+            (Some(current), Some(page)) if page < current => RemotePageMerge::IgnoreStale,
+            _ => RemotePageMerge::Replace,
+        },
+    }
+}
+
+/// 远程命令查询结果的归属与状态一致性校验（`design.md` D5）。
+///
+/// 端口返回的记录必须指向本次请求的 `target`/`requestId`，且变体与 `CommandStatus` 一致：`Accepted`
+/// 必须是 `accepted`，`Terminal` 必须是终态，`Uncertain` 必须是 `uncertain`。不一致按 `Corrupt` 失败
+/// 关闭——它意味着查询被路由到了别的来源，或结果在到达 core 之前已被改写。
+fn validate_remote_command_lookup(
+    target: &RemoteCommandTarget,
+    request: &RequestId,
+    outcome: &RemoteCommandLookup,
+) -> Result<(), PortError> {
+    let check = |record: &crate::ports::RemoteCommandRecord,
+                 expected: fn(CommandStatus) -> bool| {
+        if &record.target != target || &record.request != request {
+            return Err(PortError::Corrupt(
+                "remote command result does not belong to the requested target",
+            ));
+        }
+        if !expected(record.status) {
+            return Err(PortError::Corrupt(
+                "remote command result carries an inconsistent status",
+            ));
+        }
+        Ok(())
+    };
+    match outcome {
+        RemoteCommandLookup::Accepted(record) => {
+            check(record, |status| status == CommandStatus::Accepted)
+        }
+        RemoteCommandLookup::Terminal(record) => check(record, CommandStatus::is_terminal),
+        RemoteCommandLookup::Uncertain(record) => {
+            check(record, |status| status == CommandStatus::Uncertain)
+        }
+        RemoteCommandLookup::NotFound => Ok(()),
+    }
 }
 
 /// 配对通道（claim/status）的访问判定（design D12）：本机入口恒可；`Actor::PairingClaimant` 只在绑定
@@ -2779,19 +3138,22 @@ mod tests {
 
     use super::*;
     use crate::broker::test_support::{
-        FakeAttachments, FakeDeliveries, FakeLocalConfig, FakeStore, FakeTrust, FakeWorld,
-        TestAudit, TestCatalog, TestClock, TestIds, TestPublisher, block_on, digest, lock,
-        prompt_command, ts, uuid_text,
+        FakeAttachments, FakeLocalConfig, FakeStore, FakeTrust, FakeWorld, TestAudit, TestCatalog,
+        TestClock, TestIds, TestPublisher, block_on, digest, lock, prompt_command, ts, uuid_text,
     };
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
     use crate::model::{
         AgentId, AgentRef, AgentSessionId, CommandKind, CommandPayload, CommittedEvent,
-        ContentSnapshot, ContentVersion, DeviceState, EventKind, EventOrigin, FileReadPurpose,
-        GitDiff, GitDiffBase, GitDiffKind, GitState, GitStatusPage, NodeId, Nonce, PairingState,
-        PendingEvent, SessionFileChunk, SessionFileContentKind, SessionFilePage, SessionListPath,
-        StoredPolicy, ViewJson,
+        ContentSnapshot, ContentVersion, DeviceState, EventKind, EventOrigin, EventPayload,
+        EventType, FileReadPurpose, GitDiff, GitDiffBase, GitDiffKind, GitState, GitStatusPage,
+        JsonValueText, MessageChannel, MessageId, MessageRecord, NodeId, Nonce, PairingState,
+        PartialResult, PendingEvent, SessionFileChunk, SessionFileContentKind, SessionFilePage,
+        SessionListPath, StoredPolicy, ViewJson,
     };
-    use crate::ports::{HistoryInclude, IdempotencyRecord, OwnedCommit, SessionFiles};
+    use crate::ports::{
+        HistoryInclude, IdempotencyRecord, OwnedCommit, RemoteCatalogRevision, RemoteCommandRecord,
+        RemoteDirectorySnapshot, RemoteGeneration, RemoteSourceBarrier, SessionFiles,
+    };
 
     /// 用例自建临时目录的守卫：析构时尽力删除（正常结束与 panic 展开两条路径都生效）。
     ///
@@ -2843,7 +3205,7 @@ mod tests {
         session: SessionId,
     }
 
-    fn fixture() -> Fixture {
+    fn make_fixture() -> Fixture {
         fixture_with_trust(FakeWorld::new(), None)
     }
 
@@ -2863,9 +3225,6 @@ mod tests {
         let broker = Arc::new(Broker::new(
             BrokerDeps {
                 store: store.clone(),
-                deliveries: Arc::new(FakeDeliveries {
-                    world: world.clone(),
-                }),
                 backends: Arc::new(crate::broker::test_support::FakeBackend {
                     world: world.clone(),
                 }),
@@ -2906,9 +3265,6 @@ mod tests {
         let use_cases = UseCases::new(UseCaseDeps {
             broker,
             store,
-            deliveries: Arc::new(FakeDeliveries {
-                world: world.clone(),
-            }),
             trust: trust_port,
             audit: Arc::new(TestAudit {
                 world: world.clone(),
@@ -3076,7 +3432,7 @@ mod tests {
     /// 授权判定（`pairing-model`：通过认证即可执行）。
     #[test]
     fn query_command_is_authorized_without_side_effects() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let command = ClientCommand {
             actor: Actor::LocalCli,
             request: RequestId::new(&uuid_text(950)).expect("uuid"),
@@ -3117,7 +3473,7 @@ mod tests {
     /// §4：`session.list` 返回 core 类型（wire 投影留给适配器）。
     #[test]
     fn list_sessions_returns_core_summaries() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let summaries = block_on(fixture.use_cases.list_sessions(
             &Actor::LocalCli,
             SessionQuery {
@@ -3132,52 +3488,352 @@ mod tests {
         assert_eq!(summaries[0].state(), crate::model::SessionState::Idle);
     }
 
-    /// 只播种一条 imported 索引行（§7.4 的 `imported_session`，无正文）；`None` 的字段就是表里的 NULL。
-    fn imported_session_record(
-        owner: &NodeId,
-        session: &SessionId,
-        complete: bool,
-    ) -> ImportedSessionRecord {
-        // 半成品行对应真实表里确实可空的列（Owner 侧元数据还没到），不是替身漏填。
-        let (origin_epoch, title, agent, state, version, created_at, last_origin_sequence) =
-            if complete {
-                (
-                    Some(OriginEpoch::new(&uuid_text(777)).expect("epoch")),
-                    Some("Remote one".to_owned()),
-                    Some(
-                        AgentRef::try_new(AgentId::new("agent-2").expect("agent id"), "Agent Two")
-                            .expect("agent ref"),
-                    ),
-                    Some(crate::model::SessionState::Running),
-                    Some(Version::from(4)),
-                    Some(crate::broker::test_support::ts(10)),
-                    Some(Sequence::new(3).expect("sequence")),
-                )
-            } else {
-                (None, None, None, None, None, None, None)
-            };
-        ImportedSessionRecord {
-            session: RemoteSessionRef::new(owner.clone(), session.clone()),
-            origin_epoch,
-            title,
-            agent,
-            state,
-            version,
-            created_at,
-            last_origin_sequence,
-            acked: None,
-            attachment: None,
-            updated_at: crate::broker::test_support::ts(11),
+    /// 运行期远程目录替身：条目与代际都在内存里；`invalidate` 按代清空该 Owner 的全部条目。
+    ///
+    /// 它刻意**不**读写任何存储：用例层若还在读 `RemoteDeliveryStore`，本测试的条目就不会被看见。
+    struct MockRemoteDirectory {
+        entries: std::sync::Mutex<Vec<RemoteSessionEntry>>,
+        owners: std::sync::Mutex<
+            std::collections::HashMap<String, (RemoteGeneration, RemoteSourceState)>,
+        >,
+    }
+
+    impl MockRemoteDirectory {
+        fn new() -> Self {
+            Self {
+                entries: std::sync::Mutex::new(Vec::new()),
+                owners: std::sync::Mutex::new(std::collections::HashMap::new()),
+            }
+        }
+
+        fn seed(&self, entry: RemoteSessionEntry) {
+            let remote = remote_reference(&entry).expect("remote entry");
+            self.owners.lock().expect("lock").insert(
+                remote.owner_node_id.as_str().to_owned(),
+                (entry.generation, entry.source),
+            );
+            self.seed_unchecked(entry);
+        }
+
+        /// 塞入一条**不经来源校验**的条目：模拟适配器把损坏条目（本地来源或 `online` 与 `source`
+        /// 不一致）送进运行期目录，用例层必须自己失败关闭。
+        fn seed_unchecked(&self, entry: RemoteSessionEntry) {
+            self.entries.lock().expect("lock").push(entry);
+        }
+
+        fn seed_owner(
+            &self,
+            owner: &NodeId,
+            generation: RemoteGeneration,
+            source: RemoteSourceState,
+        ) {
+            self.owners
+                .lock()
+                .expect("lock")
+                .insert(owner.as_str().to_owned(), (generation, source));
+        }
+
+        fn len(&self) -> usize {
+            self.entries.lock().expect("lock").len()
         }
     }
 
-    /// Sync WP1（任务 1.3）：快照的 `sessions` 资源来源把**自有与已导入合并**后交给设备——自有条目排在
-    /// 前、`workspace` 取会话行持久化的别名；imported 条目按调用方传入的 feature 协商结果纳入、`workspace`
-    /// 恒为 `None`（表里没有该列，不得推导）、`online` 取调用方传入的可达性事实。设备不再有授权维度，
-    /// 因此任何已认证设备都拿得到自己的全部会话（`pairing-model`）。
+    #[async_trait::async_trait]
+    impl RemoteRuntimeDirectory for MockRemoteDirectory {
+        async fn list(&self) -> Result<Vec<RemoteSessionEntry>, PortError> {
+            Ok(self.entries.lock().expect("lock").clone())
+        }
+
+        async fn snapshot(
+            &self,
+            owner: &NodeId,
+        ) -> Result<Option<RemoteDirectorySnapshot>, PortError> {
+            let owners = self.owners.lock().expect("lock");
+            let Some((generation, source)) = owners.get(owner.as_str()) else {
+                return Ok(None);
+            };
+            let sessions = self
+                .entries
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|entry| {
+                    remote_reference(entry)
+                        .map(|remote| &remote.owner_node_id == owner)
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            Ok(Some(RemoteDirectorySnapshot {
+                owner_node_id: owner.clone(),
+                generation: *generation,
+                revision: RemoteCatalogRevision::new(generation.get()),
+                source: *source,
+                sessions,
+            }))
+        }
+
+        async fn lookup(
+            &self,
+            session: &RemoteSessionRef,
+        ) -> Result<Option<RemoteSessionEntry>, PortError> {
+            Ok(self
+                .entries
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|entry| remote_reference(entry).is_ok_and(|remote| &remote == session))
+                .cloned())
+        }
+
+        async fn find_by_session(
+            &self,
+            session: &SessionId,
+        ) -> Result<Vec<RemoteSessionEntry>, PortError> {
+            Ok(self
+                .entries
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|entry| entry.summary.session_id() == session)
+                .cloned()
+                .collect())
+        }
+
+        async fn owner_state(&self, owner: &NodeId) -> Result<RemoteSourceState, PortError> {
+            Ok(self
+                .owners
+                .lock()
+                .expect("lock")
+                .get(owner.as_str())
+                .map(|(_, source)| *source)
+                .unwrap_or(RemoteSourceState::Offline))
+        }
+
+        async fn generation(&self, owner: &NodeId) -> Result<Option<RemoteGeneration>, PortError> {
+            Ok(self
+                .owners
+                .lock()
+                .expect("lock")
+                .get(owner.as_str())
+                .map(|(generation, _)| *generation))
+        }
+
+        async fn invalidate(
+            &self,
+            owner: &NodeId,
+            generation: RemoteGeneration,
+        ) -> Result<(), PortError> {
+            let matched = {
+                let mut owners = self.owners.lock().expect("lock");
+                match owners.get(owner.as_str()) {
+                    Some((current, _)) if *current == generation => {
+                        owners.remove(owner.as_str());
+                        true
+                    }
+                    _ => false,
+                }
+            };
+            if matched {
+                self.entries.lock().expect("lock").retain(|entry| {
+                    remote_reference(entry)
+                        .map(|remote| &remote.owner_node_id != owner)
+                        .unwrap_or(false)
+                });
+            }
+            Ok(())
+        }
+    }
+
+    /// 类型化回源读取替身：记录每次调用的来源与代际，可在返回前让来源失效（验证代际隔离）。
+    struct MockRemoteSourceReads {
+        result: std::sync::Mutex<Option<RemoteReadResult>>,
+        barrier: std::sync::Mutex<OriginCursor>,
+        calls: std::sync::Mutex<Vec<(RemoteSessionRef, RemoteGeneration, RemoteReadQuery)>>,
+        invalidate_on_read:
+            std::sync::Mutex<Option<(Arc<MockRemoteDirectory>, NodeId, RemoteGeneration)>>,
+    }
+
+    impl MockRemoteSourceReads {
+        fn new(result: RemoteReadResult) -> Self {
+            let barrier = result.read_cursor.clone();
+            Self {
+                result: std::sync::Mutex::new(Some(result)),
+                barrier: std::sync::Mutex::new(barrier),
+                calls: std::sync::Mutex::new(Vec::new()),
+                invalidate_on_read: std::sync::Mutex::new(None),
+            }
+        }
+
+        fn invalidate_on_read(
+            &self,
+            directory: Arc<MockRemoteDirectory>,
+            owner: NodeId,
+            generation: RemoteGeneration,
+        ) {
+            *self.invalidate_on_read.lock().expect("lock") = Some((directory, owner, generation));
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.lock().expect("lock").len()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RemoteSourceReads for MockRemoteSourceReads {
+        async fn read(
+            &self,
+            session: &RemoteSessionRef,
+            generation: RemoteGeneration,
+            query: RemoteReadQuery,
+        ) -> Result<RemoteReadResult, PortError> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push((session.clone(), generation, query));
+            let invalidation = { self.invalidate_on_read.lock().expect("lock").take() };
+            if let Some((directory, owner, current)) = invalidation {
+                directory.invalidate(&owner, current).await?;
+            }
+            self.result
+                .lock()
+                .expect("lock")
+                .clone()
+                .ok_or(PortError::Unavailable(UnavailableKind::RemoteUnavailable))
+        }
+
+        async fn replay_barrier(
+            &self,
+            _session: &RemoteSessionRef,
+            generation: RemoteGeneration,
+            _after: Option<OriginCursor>,
+        ) -> Result<RemoteSourceBarrier, PortError> {
+            Ok(RemoteSourceBarrier {
+                cursor: self.barrier.lock().expect("lock").clone(),
+                generation,
+            })
+        }
+    }
+
+    /// Owner 命令查询替身：记录原 requestId 与显式来源，不做任何本地去重。
+    struct MockRemoteCommands {
+        outcome: std::sync::Mutex<RemoteCommandLookup>,
+        calls: std::sync::Mutex<Vec<(RemoteCommandTarget, RequestId)>>,
+    }
+
+    impl MockRemoteCommands {
+        fn new(outcome: RemoteCommandLookup) -> Self {
+            Self {
+                outcome: std::sync::Mutex::new(outcome),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.lock().expect("lock").len()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RemoteCommandStatus for MockRemoteCommands {
+        async fn query(
+            &self,
+            target: &RemoteCommandTarget,
+            request: &RequestId,
+        ) -> Result<RemoteCommandLookup, PortError> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push((target.clone(), request.clone()));
+            Ok(self.outcome.lock().expect("lock").clone())
+        }
+    }
+
+    fn remote_summary(
+        owner: &NodeId,
+        session: &SessionId,
+        epoch: &OriginEpoch,
+        online: bool,
+        title: &str,
+    ) -> SessionSummary {
+        SessionSummary::try_new(
+            session.clone(),
+            Some(title.to_owned()),
+            AgentRef::try_new(AgentId::new("agent-2").expect("agent id"), "Agent Two")
+                .expect("agent ref"),
+            crate::model::SessionState::Running,
+            ResourceOrigin::Remote {
+                owner_node_id: owner.clone(),
+                origin_epoch: epoch.clone(),
+                online,
+            },
+            None,
+            Version::from(4),
+            ts(10),
+            ts(11),
+            None,
+        )
+        .expect("remote summary")
+    }
+
+    fn remote_entry(
+        owner: &NodeId,
+        session: &SessionId,
+        epoch: &OriginEpoch,
+        generation: u64,
+        source: RemoteSourceState,
+    ) -> RemoteSessionEntry {
+        RemoteSessionEntry {
+            summary: remote_summary(owner, session, epoch, source.is_online(), "Remote one"),
+            generation: RemoteGeneration::new(generation),
+            source,
+        }
+    }
+
+    fn remote_message(session: &SessionId, message: &MessageId) -> MessageRecord {
+        MessageRecord::try_new(
+            message.clone(),
+            session.clone(),
+            None,
+            MessageChannel::Reply,
+            PartialResult::completed(),
+            JsonValueText::new("[]").expect("content"),
+            Vec::new(),
+            ts(12),
+            ts(12),
+        )
+        .expect("message")
+    }
+
+    fn remote_read_result(
+        owner: &NodeId,
+        session: &SessionId,
+        epoch: &OriginEpoch,
+        messages: Vec<MessageRecord>,
+        coverage: Vec<MessageCoverage>,
+    ) -> RemoteReadResult {
+        RemoteReadResult {
+            summary: remote_summary(owner, session, epoch, true, "Remote one"),
+            read_cursor: OriginCursor::new(epoch.clone(), Sequence::new(9).expect("sequence")),
+            messages,
+            history: Vec::new(),
+            coverage,
+            messages_has_earlier: false,
+            history_has_earlier: false,
+        }
+    }
+
+    fn origin_cursor(epoch: &OriginEpoch, sequence: u64) -> OriginCursor {
+        OriginCursor::new(epoch.clone(), Sequence::new(sequence).expect("sequence"))
+    }
+
+    /// Sync 快照的 `sessions` 资源来源：**自有 + 当前运行期目录**合并后交给设备。
+    ///
+    /// 运行期目录给出的条目必须原样进入结果（`origin` 为 `Remote`、`online` 来自目录），且调用方
+    /// 传入的旧可达性闭包不得覆盖目录事实；未请求远程条目时一行都不得出现。
     #[test]
-    fn sync_visible_sessions_merges_owned_and_imported() {
-        let fixture = fixture();
+    fn sync_visible_sessions_merges_owned_and_runtime_directory() {
+        let fixture = make_fixture();
         let actor = Actor::Device {
             device: DeviceId::new(&uuid_text(241)).expect("device"),
         };
@@ -3215,43 +3871,46 @@ mod tests {
             .expect("workspace record"),
         );
 
-        // imported 索引：一条完整行 + 一条缺 `agent`/`state`/… 的半成品行（表里这些列可空）。
+        // 运行期目录：一条远程条目 + 另一 Owner 的条目。
         let owner = NodeId::new(&uuid_text(243)).expect("owner node");
         let remote_session = SessionId::new(&uuid_text(244)).expect("session id");
-        let incomplete = SessionId::new(&uuid_text(245)).expect("session id");
-        let remote = RemoteSessionRef::new(owner.clone(), remote_session.clone());
-        lock(&fixture.world.imported_sessions).push(imported_session_record(
-            &owner,
-            &remote_session,
-            true,
+        let epoch = OriginEpoch::new(&uuid_text(999)).expect("epoch");
+        let other_owner = NodeId::new(&uuid_text(245)).expect("owner node");
+        let other_session = SessionId::new(&uuid_text(246)).expect("session id");
+        let other_epoch = OriginEpoch::new(&uuid_text(998)).expect("epoch");
+        let other_remote = RemoteSessionRef::new(other_owner.clone(), other_session.clone());
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed(RemoteSessionEntry {
+            summary: remote_summary(&owner, &remote_session, &epoch, true, "Runtime one"),
+            generation: RemoteGeneration::new(1),
+            source: RemoteSourceState::Online,
+        });
+        directory.seed(remote_entry(
+            &other_owner,
+            &other_session,
+            &other_epoch,
+            7,
+            RemoteSourceState::Online,
         ));
-        lock(&fixture.world.imported_sessions).push(imported_session_record(
-            &owner,
-            &incomplete,
-            false,
-        ));
+        assert!(
+            fixture
+                .use_cases
+                .set_remote_runtime_directory(directory.clone())
+        );
 
         let query = SyncSessionQuery {
-            include_imported: true,
+            remote: Some(RemoteSessionQuery::default()),
             ..SyncSessionQuery::default()
         };
+        // 闭包恒 false：它只是装配兼容参数，在线状态必须来自目录条目。
         let sessions = block_on(fixture.use_cases.sync_visible_sessions(
             &actor,
             query.clone(),
-            |reference| reference == &remote,
+            |_| false,
         ))
         .expect("merged list");
 
-        assert_eq!(
-            sessions.len(),
-            3,
-            "两条自有 + 一条可投影的 imported；半成品行不可投影（缺失字段不得被编造）"
-        );
-        assert_eq!(
-            sessions.last().map(SessionSummary::session_id),
-            Some(&remote_session),
-            "自有在前、已导入在后"
-        );
+        assert_eq!(sessions.len(), 4, "两条自有 + 两条运行期远程条目");
         // 自有两条的顺序由存储层给出（`FakeStore` 用 HashMap，不保证顺序），因此按集合比较。
         let mut owned_ids: Vec<&str> = sessions[..2]
             .iter()
@@ -3278,49 +3937,41 @@ mod tests {
         let merged_remote = sessions
             .iter()
             .find(|summary| summary.session_id() == &remote_session)
-            .expect("imported 条目");
+            .expect("运行期远程条目");
         let ResourceOrigin::Remote {
             owner_node_id,
             origin_epoch,
             online,
         } = merged_remote.origin()
         else {
-            unreachable!("本层投影的 imported 条目恒为 remote origin");
+            unreachable!("运行期目录条目恒为 remote origin");
         };
         assert_eq!(owner_node_id, &owner);
-        assert_eq!(
-            origin_epoch,
-            &OriginEpoch::new(&uuid_text(777)).expect("epoch"),
-            "来源 epoch 来自索引行"
-        );
-        assert!(*online, "可达性取调用方传入的运行时事实（core 不缓存它）");
-        assert_eq!(
-            merged_remote.state(),
-            crate::model::SessionState::Running,
-            "状态取自索引行的对应列"
-        );
-        assert_eq!(
-            merged_remote.version(),
-            Version::from(4),
-            "版本取自索引行的对应列"
-        );
-        assert_eq!(
-            merged_remote.agent().name(),
-            "Agent Two",
-            "Agent 引用取自索引行的 agent 列"
-        );
+        assert_eq!(origin_epoch, &epoch, "epoch 取自运行期目录，不取自持久索引");
+        assert!(*online, "目录条目在线；旧的 owner_reachable 闭包不得覆盖它");
+        assert_eq!(merged_remote.title(), Some("Runtime one"));
+        assert_eq!(merged_remote.state(), crate::model::SessionState::Running);
+        assert_eq!(merged_remote.version(), Version::from(4));
         assert_eq!(
             merged_remote.workspace(),
             None,
-            "`imported_session` 没有 workspace_directory_id 列：不得由 owner/export 或本机路径推导归属"
+            "远程摘要没有本机目录归属，不得推导"
         );
-        assert_eq!(merged_remote.current_mode(), None, "索引不落正文类字段");
+        assert_eq!(merged_remote.current_mode(), None);
+        assert_eq!(
+            sessions
+                .iter()
+                .filter(|summary| summary.origin().is_local())
+                .count(),
+            2,
+            "持久 imported 索引里那条会话没有混进来"
+        );
 
-        // 未协商 `resource.remote-origin.v1`：一行 imported 都不出现（连占位也没有）。
+        // 未协商 `resource.remote-origin.v1`：一行远程都不出现（连占位也没有）。
         let gated = block_on(fixture.use_cases.sync_visible_sessions(
             &actor,
             SyncSessionQuery {
-                include_imported: false,
+                remote: None,
                 ..query.clone()
             },
             |_| true,
@@ -3337,8 +3988,7 @@ mod tests {
                     only: Some(vec![owned.clone()]),
                     ..SessionQuery::default()
                 },
-                include_imported: false,
-                ..query.clone()
+                remote: None,
             },
             |_| true,
         ))
@@ -3346,16 +3996,52 @@ mod tests {
         assert_eq!(narrowed.len(), 1);
         assert_eq!(narrowed[0].session_id(), &owned);
 
-        // 设备方向不再有按授权的可见性过滤（`pairing-model`）：一台从未被授予任何 scope 的已认证设备
-        // 拿到的仍是同一份完整清单（自有 + 已导入），一行不少——这与旧实现「无 scope 即失败关闭」相反，
-        // 因此本断言可独立变红。
+        // 远程条目的 `only` 与 `limit` 也只作用于目录结果。
+        let only_other = block_on(fixture.use_cases.sync_visible_sessions(
+            &actor,
+            SyncSessionQuery {
+                remote: Some(RemoteSessionQuery {
+                    only: Some(vec![other_remote.clone()]),
+                    limit: None,
+                }),
+                ..SyncSessionQuery::default()
+            },
+            |_| true,
+        ))
+        .expect("远程收窄");
+        assert_eq!(only_other.len(), 3);
+        assert_eq!(
+            only_other
+                .iter()
+                .filter(|summary| matches!(summary.origin(), ResourceOrigin::Remote { .. }))
+                .map(SessionSummary::session_id)
+                .collect::<Vec<_>>(),
+            vec![&other_session]
+        );
+
+        let limited = block_on(fixture.use_cases.sync_visible_sessions(
+            &actor,
+            SyncSessionQuery {
+                remote: Some(RemoteSessionQuery {
+                    only: None,
+                    limit: Some(1),
+                }),
+                ..SyncSessionQuery::default()
+            },
+            |_| true,
+        ))
+        .expect("远程限流");
+        assert_eq!(limited.len(), 3, "两条自有 + 一条远程（limit 只数远程）");
+        assert_eq!(directory.len(), 2, "读路径不清除目录");
+
+        // 设备方向不再有按授权的可见性过滤（`pairing-model`）：任意已认证设备看到同一份清单。
         let same_device = Actor::Device {
-            device: DeviceId::new(&uuid_text(246)).expect("device"),
+            device: DeviceId::new(&uuid_text(247)).expect("device"),
         };
         let all = block_on(fixture.use_cases.sync_visible_sessions(
             &same_device,
             query.clone(),
-            |reference| reference == &remote,
+            |_| false,
         ))
         .expect("已认证设备必须读得到全部会话");
         let mut all_ids: Vec<&str> = all
@@ -3371,6 +4057,659 @@ mod tests {
         assert_eq!(all_ids, sessions_ids, "设备维度不得再过滤任何会话：{all:?}");
     }
 
+    /// 运行期目录条目混入本地来源（或 `online` 与 `source` 不一致）时按列值损坏失败关闭，不得猜测投影。
+    #[test]
+    fn runtime_directory_entry_must_be_remote_and_consistent() {
+        let fixture = make_fixture();
+        let actor = Actor::Device {
+            device: DeviceId::new(&uuid_text(251)).expect("device"),
+        };
+        let owner = NodeId::new(&uuid_text(252)).expect("owner");
+        let session = SessionId::new(&uuid_text(253)).expect("session");
+        let epoch = OriginEpoch::new(&uuid_text(254)).expect("epoch");
+        let directory = Arc::new(MockRemoteDirectory::new());
+        let local = SessionSummary::try_new(
+            session.clone(),
+            Some("local".to_owned()),
+            AgentRef::try_new(AgentId::new("agent-1").expect("agent id"), "Agent One")
+                .expect("agent ref"),
+            crate::model::SessionState::Idle,
+            ResourceOrigin::Local,
+            None,
+            Version::from(1),
+            ts(0),
+            ts(0),
+            None,
+        )
+        .expect("summary");
+        directory.seed_unchecked(RemoteSessionEntry {
+            summary: local,
+            generation: RemoteGeneration::new(1),
+            source: RemoteSourceState::Online,
+        });
+        fixture
+            .use_cases
+            .set_remote_runtime_directory(directory.clone());
+
+        let error = block_on(fixture.use_cases.sync_visible_sessions(
+            &actor,
+            SyncSessionQuery {
+                remote: Some(RemoteSessionQuery::default()),
+                ..SyncSessionQuery::default()
+            },
+            |_| true,
+        ))
+        .expect_err("本地来源不得出现在远程目录里");
+        assert!(matches!(error, PortError::Corrupt(_)), "{error:?}");
+
+        // 在线标志与 source 不一致同样是损坏。
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed_unchecked(RemoteSessionEntry {
+            summary: remote_summary(&owner, &session, &epoch, true, "Remote one"),
+            generation: RemoteGeneration::new(1),
+            source: RemoteSourceState::Offline,
+        });
+        let second = make_fixture();
+        second.use_cases.set_remote_runtime_directory(directory);
+        let error = block_on(second.use_cases.sync_visible_sessions(
+            &Actor::Device {
+                device: DeviceId::new(&uuid_text(255)).expect("device"),
+            },
+            SyncSessionQuery {
+                remote: Some(RemoteSessionQuery::default()),
+                ..SyncSessionQuery::default()
+            },
+            |_| true,
+        ))
+        .expect_err("online 必须与 source 一致");
+        assert!(matches!(error, PortError::Corrupt(_)), "{error:?}");
+    }
+
+    /// 断开/撤销整代失效：按代清除只影响该 Owner；旧代的迟到失效不得误删新一代目录。
+    #[test]
+    fn runtime_directory_invalidation_is_generation_scoped() {
+        let fixture = make_fixture();
+        let actor = Actor::Device {
+            device: DeviceId::new(&uuid_text(261)).expect("device"),
+        };
+        let owner_a = NodeId::new(&uuid_text(262)).expect("owner");
+        let owner_b = NodeId::new(&uuid_text(263)).expect("owner");
+        let session_a = SessionId::new(&uuid_text(264)).expect("session");
+        let session_b = SessionId::new(&uuid_text(265)).expect("session");
+        let epoch = OriginEpoch::new(&uuid_text(266)).expect("epoch");
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed(remote_entry(
+            &owner_a,
+            &session_a,
+            &epoch,
+            1,
+            RemoteSourceState::Online,
+        ));
+        directory.seed(remote_entry(
+            &owner_b,
+            &session_b,
+            &epoch,
+            5,
+            RemoteSourceState::Online,
+        ));
+        fixture
+            .use_cases
+            .set_remote_runtime_directory(directory.clone());
+
+        let query = SyncSessionQuery {
+            remote: Some(RemoteSessionQuery::default()),
+            ..SyncSessionQuery::default()
+        };
+        let before = block_on(fixture.use_cases.sync_visible_sessions(
+            &actor,
+            query.clone(),
+            |_| true,
+        ))
+        .expect("initial");
+        assert_eq!(before.len(), 3, "自有 + 两个来源");
+
+        // 旧代（1 已不是 A 的当前代）迟到失效：不清除。
+        block_on(directory.invalidate(&owner_a, RemoteGeneration::new(0))).expect("stale");
+        assert_eq!(directory.len(), 2);
+        assert_eq!(
+            block_on(directory.owner_state(&owner_a)).expect("state"),
+            RemoteSourceState::Online
+        );
+
+        // 当前代失效：该 Owner 的条目整代清除，另一 Owner 不受影响。
+        block_on(directory.invalidate(&owner_a, RemoteGeneration::new(1))).expect("invalidate");
+        assert_eq!(directory.len(), 1);
+        assert_eq!(
+            block_on(directory.owner_state(&owner_a)).expect("state"),
+            RemoteSourceState::Offline
+        );
+        assert_eq!(block_on(directory.generation(&owner_a)).expect("gen"), None);
+        assert_eq!(
+            block_on(directory.owner_state(&owner_b)).expect("state"),
+            RemoteSourceState::Online
+        );
+        let after = block_on(fixture.use_cases.sync_visible_sessions(
+            &actor,
+            query.clone(),
+            |_| true,
+        ))
+        .expect("after invalidation");
+        assert_eq!(after.len(), 2, "自有 + B 仍在");
+        assert!(after.iter().any(|summary| summary.origin().is_local()));
+        assert_eq!(
+            after
+                .iter()
+                .filter(|summary| matches!(summary.origin(), ResourceOrigin::Remote { .. }))
+                .map(SessionSummary::session_id)
+                .collect::<Vec<_>>(),
+            vec![&session_b]
+        );
+
+        // 新一代重新建立后，旧的失效请求仍然无效。
+        directory.seed(remote_entry(
+            &owner_a,
+            &session_a,
+            &epoch,
+            2,
+            RemoteSourceState::Online,
+        ));
+        block_on(directory.invalidate(&owner_a, RemoteGeneration::new(1))).expect("old");
+        assert_eq!(directory.len(), 2, "旧代失效不得清除新一代");
+        assert_eq!(
+            block_on(directory.generation(&owner_a)).expect("gen"),
+            Some(RemoteGeneration::new(2))
+        );
+
+        // 所有远程来源都失效后，owned 清单仍然完整（远程故障不得影响本机资源）。
+        block_on(directory.invalidate(&owner_a, RemoteGeneration::new(2))).expect("a");
+        block_on(directory.invalidate(&owner_b, RemoteGeneration::new(5))).expect("b");
+        let owned_only = block_on(
+            fixture
+                .use_cases
+                .sync_visible_sessions(&actor, query, |_| true),
+        )
+        .expect("owned only");
+        assert_eq!(owned_only.len(), 1);
+        assert_eq!(owned_only[0].session_id(), &fixture.session);
+        assert!(owned_only[0].origin().is_local());
+    }
+
+    /// 类型化回源：校验覆盖只涉及返回消息、`through == read_cursor`，并按代际丢弃跨代结果。
+    #[test]
+    fn read_remote_source_validates_coverage_and_generation() {
+        let actor = Actor::Device {
+            device: DeviceId::new(&uuid_text(281)).expect("device"),
+        };
+        let owner = NodeId::new(&uuid_text(282)).expect("owner");
+        let session = SessionId::new(&uuid_text(283)).expect("session");
+        let epoch = OriginEpoch::new(&uuid_text(284)).expect("epoch");
+        let remote = RemoteSessionRef::new(owner.clone(), session.clone());
+        let message = MessageId::new(&uuid_text(285)).expect("message");
+        let cursor = origin_cursor(&epoch, 9);
+        let query = RemoteReadQuery {
+            include: HistoryInclude::default(),
+            before_history: None,
+            before_messages: None,
+            messages_limit: ReplayLimit::new(16),
+            limit: ReplayLimit::new(16),
+        };
+
+        let result = remote_read_result(
+            &owner,
+            &session,
+            &epoch,
+            vec![remote_message(&session, &message)],
+            vec![MessageCoverage {
+                message_id: message.clone(),
+                through: cursor.clone(),
+                last_delta_index: Some(2),
+            }],
+        );
+        validate_remote_read_result(&remote, &result).expect("valid result");
+
+        let fixture = make_fixture();
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed(remote_entry(
+            &owner,
+            &session,
+            &epoch,
+            1,
+            RemoteSourceState::Online,
+        ));
+        fixture
+            .use_cases
+            .set_remote_runtime_directory(directory.clone());
+        let reads = Arc::new(MockRemoteSourceReads::new(result.clone()));
+        assert!(fixture.use_cases.set_remote_source_reads(reads.clone()));
+        let page = block_on(
+            fixture
+                .use_cases
+                .read_remote_source(&actor, &remote, query.clone()),
+        )
+        .expect("typed read");
+        assert_eq!(page.read_cursor, cursor);
+        assert_eq!(reads.calls(), 1);
+        assert_eq!(
+            reads.calls.lock().expect("lock")[0].1,
+            RemoteGeneration::new(1),
+            "端口收到目录代际"
+        );
+
+        // 覆盖引用了未返回的消息 → 失败关闭。
+        let mut invalid = result.clone();
+        invalid.coverage.push(MessageCoverage {
+            message_id: MessageId::new(&uuid_text(286)).expect("message"),
+            through: cursor.clone(),
+            last_delta_index: None,
+        });
+        let error = validate_remote_read_result(&remote, &invalid).expect_err("unknown coverage");
+        assert!(matches!(error, PortError::Corrupt(_)), "{error:?}");
+
+        // 覆盖 through 与 readCursor 不同 → 失败关闭。
+        let mut invalid = result.clone();
+        invalid.coverage[0].through = origin_cursor(&epoch, 8);
+        let error = validate_remote_read_result(&remote, &invalid).expect_err("through mismatch");
+        assert!(matches!(error, PortError::Corrupt(_)), "{error:?}");
+
+        // 返回消息没有对应的覆盖项（适配器漏报）→ 失败关闭：否则客户端会把已返回的正文再拼一次。
+        let mut invalid = result.clone();
+        invalid.coverage.clear();
+        let error = validate_remote_read_result(&remote, &invalid).expect_err("missing coverage");
+        assert!(matches!(error, PortError::Corrupt(_)), "{error:?}");
+
+        // 读取期间代际改变 → 丢弃结果。
+        let stale = make_fixture();
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed(remote_entry(
+            &owner,
+            &session,
+            &epoch,
+            1,
+            RemoteSourceState::Online,
+        ));
+        stale
+            .use_cases
+            .set_remote_runtime_directory(directory.clone());
+        let reads = Arc::new(MockRemoteSourceReads::new(result));
+        reads.invalidate_on_read(directory.clone(), owner.clone(), RemoteGeneration::new(1));
+        stale.use_cases.set_remote_source_reads(reads);
+        let error = block_on(stale.use_cases.read_remote_source(&actor, &remote, query))
+            .expect_err("generation changed");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::OwnerOffline)
+        ));
+    }
+
+    /// 远程命令查询：原 requestId 原样交给 Owner、不查本地请求表、不自己去重；来源声明不符明确 NotFound。
+    #[test]
+    fn remote_command_status_uses_owner_and_rejects_foreign_source() {
+        let actor = Actor::Device {
+            device: DeviceId::new(&uuid_text(291)).expect("device"),
+        };
+        let owner = NodeId::new(&uuid_text(292)).expect("owner");
+        let other_owner = NodeId::new(&uuid_text(293)).expect("owner");
+        let session = SessionId::new(&uuid_text(294)).expect("session");
+        let epoch = OriginEpoch::new(&uuid_text(295)).expect("epoch");
+        let request = RequestId::new(&uuid_text(296)).expect("request");
+        let target = RemoteCommandTarget {
+            owner_node_id: owner.clone(),
+            session_id: Some(session.clone()),
+        };
+        let record = RemoteCommandRecord {
+            target: target.clone(),
+            request: request.clone(),
+            status: CommandStatus::Accepted,
+            accepted_at: Some(ts(1)),
+            terminal_at: None,
+            result: None,
+            error: None,
+        };
+        let fixture = make_fixture();
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed(remote_entry(
+            &owner,
+            &session,
+            &epoch,
+            1,
+            RemoteSourceState::Online,
+        ));
+        directory.seed_owner(
+            &other_owner,
+            RemoteGeneration::new(2),
+            RemoteSourceState::Online,
+        );
+        fixture.use_cases.set_remote_runtime_directory(directory);
+        let commands = Arc::new(MockRemoteCommands::new(RemoteCommandLookup::Accepted(
+            record.clone(),
+        )));
+        assert!(
+            fixture
+                .use_cases
+                .set_remote_command_status(commands.clone())
+        );
+
+        let first = block_on(fixture.use_cases.remote_command_status(
+            &actor,
+            target.clone(),
+            request.clone(),
+        ))
+        .expect("query");
+        assert!(matches!(first, RemoteCommandLookup::Accepted(_)));
+        assert_eq!(commands.calls(), 1);
+        assert_eq!(
+            commands.calls.lock().expect("lock")[0],
+            (target.clone(), request.clone()),
+            "原 requestId 与显式来源原样交给 Owner"
+        );
+
+        // 同 requestId 再查一次：仍然交给 Owner（core 不去重、不落本地记录）。
+        block_on(
+            fixture
+                .use_cases
+                .remote_command_status(&actor, target.clone(), request.clone()),
+        )
+        .expect("repeat");
+        assert_eq!(commands.calls(), 2);
+        assert_eq!(fixture.world.commit_count(), 0, "远程查询不写本地请求表");
+
+        // 来源声明与目录不符：明确不存在，且不调用 Owner。
+        let foreign = RemoteCommandTarget {
+            owner_node_id: other_owner.clone(),
+            session_id: Some(session.clone()),
+        };
+        let outcome = block_on(fixture.use_cases.remote_command_status(
+            &actor,
+            foreign,
+            request.clone(),
+        ))
+        .expect("foreign");
+        assert!(matches!(outcome, RemoteCommandLookup::NotFound));
+        assert_eq!(commands.calls(), 2, "不向错误 Owner 查询");
+
+        // 只按 Owner 定位（session.create）：Owner 在线即可查询。
+        let create_target = RemoteCommandTarget {
+            owner_node_id: other_owner.clone(),
+            session_id: None,
+        };
+        // Owner 对 session.create 请求返回的记录本身没有会话标识；查询目标必须与记录归属一致。
+        *commands.outcome.lock().expect("lock") =
+            RemoteCommandLookup::Accepted(RemoteCommandRecord {
+                target: create_target.clone(),
+                request: request.clone(),
+                status: CommandStatus::Accepted,
+                accepted_at: Some(ts(1)),
+                terminal_at: None,
+                result: None,
+                error: None,
+            });
+        block_on(
+            fixture
+                .use_cases
+                .remote_command_status(&actor, create_target, request.clone()),
+        )
+        .expect("owner only");
+        assert_eq!(commands.calls(), 3);
+
+        // 未知/离线 Owner：不可用，且不调用 Owner。
+        let offline_target = RemoteCommandTarget {
+            owner_node_id: NodeId::new(&uuid_text(297)).expect("owner"),
+            session_id: None,
+        };
+        let error = block_on(fixture.use_cases.remote_command_status(
+            &actor,
+            offline_target,
+            request.clone(),
+        ))
+        .expect_err("offline owner");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::OwnerOffline)
+        ));
+        assert_eq!(commands.calls(), 3);
+
+        // Owner 返回了别的来源/请求：失败关闭，不把结果交给调用方。
+        let foreign_record = make_fixture();
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed(remote_entry(
+            &owner,
+            &session,
+            &epoch,
+            1,
+            RemoteSourceState::Online,
+        ));
+        foreign_record
+            .use_cases
+            .set_remote_runtime_directory(directory);
+        let mut wrong = record.clone();
+        wrong.request = RequestId::new(&uuid_text(298)).expect("request");
+        foreign_record
+            .use_cases
+            .set_remote_command_status(Arc::new(MockRemoteCommands::new(
+                RemoteCommandLookup::Terminal(wrong),
+            )));
+        let error = block_on(
+            foreign_record
+                .use_cases
+                .remote_command_status(&actor, target, request),
+        )
+        .expect_err("foreign record");
+        assert!(matches!(error, PortError::Corrupt(_)), "{error:?}");
+
+        // `uncertain` 语义原样保留：Owner 无法确定执行结果时，core 不得把它折叠成 failed 或 accepted。
+        let uncertain_fixture = make_fixture();
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed(remote_entry(
+            &owner,
+            &session,
+            &epoch,
+            1,
+            RemoteSourceState::Online,
+        ));
+        uncertain_fixture
+            .use_cases
+            .set_remote_runtime_directory(directory);
+        let request = RequestId::new(&uuid_text(299)).expect("request");
+        let target = RemoteCommandTarget {
+            owner_node_id: owner.clone(),
+            session_id: Some(session.clone()),
+        };
+        let uncertain = RemoteCommandRecord {
+            target: target.clone(),
+            request: request.clone(),
+            status: CommandStatus::Uncertain,
+            accepted_at: Some(ts(1)),
+            terminal_at: Some(ts(2)),
+            result: None,
+            error: None,
+        };
+        uncertain_fixture
+            .use_cases
+            .set_remote_command_status(Arc::new(MockRemoteCommands::new(
+                RemoteCommandLookup::Uncertain(uncertain),
+            )));
+        let outcome = block_on(
+            uncertain_fixture
+                .use_cases
+                .remote_command_status(&actor, target, request),
+        )
+        .expect("uncertain");
+        assert!(matches!(
+            outcome,
+            RemoteCommandLookup::Uncertain(record) if record.status == CommandStatus::Uncertain
+        ));
+    }
+
+    /// 目录里混入损坏条目（摘要不是远程来源）时查询必须上抛 `Corrupt`：损坏不是「没有该请求」，
+    /// 不能折叠成 `NotFound`，也不能在查询 Owner 之前被静默跳过。
+    #[test]
+    fn remote_command_status_propagates_corrupt_directory_entry() {
+        let actor = Actor::Device {
+            device: DeviceId::new(&uuid_text(321)).expect("device"),
+        };
+        let owner = NodeId::new(&uuid_text(322)).expect("owner");
+        let session = SessionId::new(&uuid_text(323)).expect("session");
+        let request = RequestId::new(&uuid_text(324)).expect("request");
+        let fixture = make_fixture();
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed_owner(&owner, RemoteGeneration::new(1), RemoteSourceState::Online);
+        directory.seed_unchecked(RemoteSessionEntry {
+            summary: SessionSummary::try_new(
+                session.clone(),
+                Some("local".to_owned()),
+                AgentRef::try_new(AgentId::new("agent-1").expect("agent id"), "Agent One")
+                    .expect("agent ref"),
+                crate::model::SessionState::Idle,
+                ResourceOrigin::Local,
+                None,
+                Version::from(1),
+                ts(0),
+                ts(0),
+                None,
+            )
+            .expect("summary"),
+            generation: RemoteGeneration::new(1),
+            source: RemoteSourceState::Online,
+        });
+        fixture.use_cases.set_remote_runtime_directory(directory);
+        let commands = Arc::new(MockRemoteCommands::new(RemoteCommandLookup::NotFound));
+        assert!(
+            fixture
+                .use_cases
+                .set_remote_command_status(commands.clone())
+        );
+
+        let target = RemoteCommandTarget {
+            owner_node_id: owner,
+            session_id: Some(session),
+        };
+        let error = block_on(
+            fixture
+                .use_cases
+                .remote_command_status(&actor, target, request),
+        )
+        .expect_err("损坏条目必须上抛");
+        assert!(matches!(error, PortError::Corrupt(_)), "{error:?}");
+        assert_eq!(commands.calls(), 0, "损坏在查询 Owner 之前失败");
+    }
+
+    /// D4 的合并判定是纯函数：页面覆盖只吸收已返回消息的连续增量，未返回消息与覆盖之后的增量必须保留，
+    /// 旧页不得回滚新内容。
+    #[test]
+    fn page_coverage_merge_keeps_uncovered_events_and_ignores_stale_pages() {
+        let epoch = OriginEpoch::new(&uuid_text(311)).expect("epoch");
+        let other_epoch = OriginEpoch::new(&uuid_text(312)).expect("epoch");
+        let message = MessageId::new(&uuid_text(313)).expect("message");
+        let other = MessageId::new(&uuid_text(314)).expect("message");
+        let read = origin_cursor(&epoch, 10);
+        let coverage = vec![MessageCoverage {
+            message_id: message.clone(),
+            through: read.clone(),
+            last_delta_index: Some(2),
+        }];
+
+        // 页面已返回该消息的完整内容：覆盖窗口内的创建/增量事件不再拼接。
+        assert_eq!(
+            classify_covered_event(&coverage, &message, &origin_cursor(&epoch, 9), None),
+            CoveredEventDecision::AlreadyCovered
+        );
+        assert_eq!(
+            classify_covered_event(&coverage, &message, &origin_cursor(&epoch, 9), Some(1)),
+            CoveredEventDecision::AlreadyCovered
+        );
+        assert_eq!(
+            classify_covered_event(&coverage, &message, &origin_cursor(&epoch, 9), Some(2)),
+            CoveredEventDecision::AlreadyCovered
+        );
+        // 不连续的增量（索引 3）没有被页面拼进正文：必须应用，不能静默遗漏。
+        assert_eq!(
+            classify_covered_event(&coverage, &message, &origin_cursor(&epoch, 9), Some(3)),
+            CoveredEventDecision::Apply
+        );
+        // 覆盖位置之后的实时增量必须应用。
+        assert_eq!(
+            classify_covered_event(&coverage, &message, &origin_cursor(&epoch, 11), Some(3)),
+            CoveredEventDecision::Apply
+        );
+        // 未返回消息的事件不受本页覆盖影响。
+        assert_eq!(
+            classify_covered_event(&coverage, &other, &origin_cursor(&epoch, 9), None),
+            CoveredEventDecision::UncoveredMessage
+        );
+        // epoch 不同不能比较，按未覆盖处理（调用方先 reset）。
+        assert_eq!(
+            classify_covered_event(&coverage, &message, &origin_cursor(&other_epoch, 9), None),
+            CoveredEventDecision::Apply
+        );
+
+        // 页替换判定：更新/相同可替换，更旧不得回滚。
+        assert_eq!(
+            decide_remote_page(None, &coverage[0]),
+            RemotePageMerge::Replace
+        );
+        let newer = MessageCoverage {
+            message_id: message.clone(),
+            through: origin_cursor(&epoch, 11),
+            last_delta_index: Some(0),
+        };
+        let current = MessageCoverage {
+            message_id: message.clone(),
+            through: read.clone(),
+            last_delta_index: Some(2),
+        };
+        assert_eq!(
+            decide_remote_page(Some(&current), &newer),
+            RemotePageMerge::Replace
+        );
+        let older = MessageCoverage {
+            message_id: message.clone(),
+            through: origin_cursor(&epoch, 9),
+            last_delta_index: Some(5),
+        };
+        assert_eq!(
+            decide_remote_page(Some(&current), &older),
+            RemotePageMerge::IgnoreStale
+        );
+        let fewer_deltas = MessageCoverage {
+            message_id: message.clone(),
+            through: read.clone(),
+            last_delta_index: Some(1),
+        };
+        assert_eq!(
+            decide_remote_page(Some(&current), &fewer_deltas),
+            RemotePageMerge::IgnoreStale
+        );
+        // 相同游标、本页却没有任何增量覆盖（`lastDeltaIndex = null`）：比已拼入增量的当前内容更旧，
+        // 直接替换会把增量回滚掉。
+        let no_deltas = MessageCoverage {
+            message_id: message.clone(),
+            through: read.clone(),
+            last_delta_index: None,
+        };
+        assert_eq!(
+            decide_remote_page(Some(&current), &no_deltas),
+            RemotePageMerge::IgnoreStale
+        );
+        // 当前也没有增量覆盖时，空覆盖页只是同一份完整内容。
+        assert_eq!(
+            decide_remote_page(Some(&no_deltas), &no_deltas),
+            RemotePageMerge::Replace
+        );
+        assert_eq!(
+            decide_remote_page(Some(&current), &coverage[0]),
+            RemotePageMerge::Replace
+        );
+        let wrong_epoch = MessageCoverage {
+            message_id: message,
+            through: origin_cursor(&other_epoch, 20),
+            last_delta_index: None,
+        };
+        assert_eq!(
+            decide_remote_page(Some(&current), &wrong_epoch),
+            RemotePageMerge::ResetRequired
+        );
+    }
+
     /// 1.6（Sync 事件读面）：`SYNC_PROTOCOL.md` §10.1 的 `event` 帧所需的字段由
     /// [`UseCases::sync_replay`] 如实带回——**五个** `origin.kind` 原样往返、`origin.deviceId` 只经
     /// `causation` 回查**设备命令行**得到、`origin.nodeId` 只经同一条 `causation` 回查**节点命令行**
@@ -3380,7 +4719,7 @@ mod tests {
     /// **一次读都不发生**。
     #[test]
     fn sync_replay_roundtrips_origin_and_requires_session_list_scope() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let device = DeviceId::new(&uuid_text(301)).expect("device");
         let request = RequestId::new(&uuid_text(302)).expect("request");
         let node = NodeId::new(&uuid_text(304)).expect("node");
@@ -3647,11 +4986,11 @@ mod tests {
         };
 
         // ① `causation` 为空：连回查的键都没有。
-        let missing_causation = fixture();
+        let missing_causation = make_fixture();
         seed(&missing_causation, None, None);
 
         // ② 命令行不存在：该 requestId 没有对应命令（不在本机历史窗口内，或该命令由别的入口发起）。
-        let missing_command = fixture();
+        let missing_command = make_fixture();
         seed(
             &missing_command,
             Some(RequestId::new(&uuid_text(322)).expect("request")),
@@ -3659,7 +4998,7 @@ mod tests {
         );
 
         // ③ 命令行存在但 actor 类别不对：设备事件带的是本机 CLI 命令。
-        let wrong_actor = fixture();
+        let wrong_actor = make_fixture();
         seed(
             &wrong_actor,
             Some(RequestId::new(&uuid_text(322)).expect("request")),
@@ -3708,7 +5047,7 @@ mod tests {
     /// §4：`session.read` 的活体字段（config/capabilities）由用例层从后端合并。
     #[test]
     fn read_session_merges_live_config_from_the_endpoint() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let page = block_on(fixture.use_cases.read_session(
             &Actor::LocalCli,
             HistoryQuery {
@@ -3745,7 +5084,7 @@ mod tests {
     /// §4/§6.6：`command.status` 只能查询该 actor 自己提交的命令。
     #[test]
     fn command_status_is_scoped_to_the_submitting_actor() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         fixture
             .world
             .push_script(crate::broker::test_support::Script::new(vec![
@@ -3887,7 +5226,7 @@ mod tests {
     /// 会话版本因此停在 1（不是 2）：落账提交建行（v1）与终态在同一个批次里完成，此后没有第二次状态提交。
     #[test]
     fn the_settlement_commit_writes_the_recovery_columns_together_with_the_terminal() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let agent_session_id = AgentSessionId::new("acp-session-1").expect("agent session id");
         fixture.world.set_agent_session_id(agent_session_id.clone());
         let workspace = temp_dir(&format!("acpr-resume-{}-a", std::process::id()));
@@ -4038,7 +5377,7 @@ mod tests {
     /// 独立保存；归属投影取自持久化的别名（展示名按别名关联目录记录）。
     #[test]
     fn create_session_persists_the_resolved_alias_next_to_the_canonical_path() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         fixture.world.set_agent_session_id(
             crate::model::AgentSessionId::new("acp-session-alias").expect("agent session id"),
         );
@@ -4066,7 +5405,7 @@ mod tests {
     /// 反查别名解析表补齐——即使那条路径当前确实能匹配某个已登记目录。
     #[test]
     fn a_null_workspace_directory_is_never_backfilled_from_the_canonical_path() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let (_alias, dir) = register_workspace(&fixture, 202, "repo", "Repository");
         let canonical = std::fs::canonicalize(&*dir)
             .expect("canonicalize")
@@ -4091,7 +5430,7 @@ mod tests {
     /// 保持创建时的原值（展示名随目录记录更新——归属不漂移、路径不被改写）。
     #[test]
     fn repointing_a_workspace_keeps_the_persisted_ownership() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         fixture.world.set_agent_session_id(
             crate::model::AgentSessionId::new("acp-session-repoint").expect("agent session id"),
         );
@@ -4130,7 +5469,7 @@ mod tests {
     /// 落盘的别名在恢复前后逐字不变。
     #[test]
     fn resume_session_neither_reads_nor_rewrites_the_workspace_directory() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         fixture.world.set_agent_session_id(
             crate::model::AgentSessionId::new("acp-session-resume-alias")
                 .expect("agent session id"),
@@ -4161,7 +5500,7 @@ mod tests {
     /// `load_recovery` 因此返回 `None`（`NULL` 就是「没有可用于恢复的数据」）。
     #[test]
     fn create_session_writes_no_recovery_columns_without_an_agent_session_id() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let request = create_session_request_id();
         let created = create_and_settle(&fixture, request, digest('A'), create_request(), None);
 
@@ -4189,7 +5528,7 @@ mod tests {
 
     /// 一个已带两列恢复数据的夹具：临时目录 + `agent_session_id`。
     fn resume_fixture(name: &str) -> (Fixture, TempDir, crate::model::AgentSessionId) {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let workspace = temp_dir(&format!("acpr-{name}-{}", std::process::id()));
         let canonical = std::fs::canonicalize(&*workspace)
             .expect("canonicalize")
@@ -4367,7 +5706,7 @@ mod tests {
     /// `BackendUnsupported`、**不启动进程**、不降级为新建会话。
     #[test]
     fn resume_session_reports_missing_recovery_data_as_unsupported() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let request = resume_request_id(6);
         let error = block_on(fixture.use_cases.resume_session(
             &Actor::LocalCli,
@@ -4490,7 +5829,7 @@ mod tests {
     /// ③ 已终结后重发 → `Settled`：回首次终态，不覆盖。
     #[test]
     fn session_create_replay_does_not_create_a_second_session() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let actor = Actor::LocalCli;
         let request = create_session_request_id();
         let fingerprint = digest('A');
@@ -4588,7 +5927,7 @@ mod tests {
     /// 每一刻，本机都**查不到**这个会话；落账之后它才作为一行出现（并带上 ACP 会话标识与目录归属）。
     #[test]
     fn the_admission_leaves_no_session_row_until_the_settlement() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let actor = Actor::LocalCli;
         let request = create_session_request_id();
         let agent_session_id =
@@ -4675,7 +6014,7 @@ mod tests {
     /// **零会话行**，命令必须到达终态。
     #[test]
     fn a_provable_backend_failure_terminates_as_failed_with_no_session_row() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let actor = Actor::LocalCli;
         let request = create_session_request_id();
         let before = session_count(&fixture);
@@ -4720,7 +6059,7 @@ mod tests {
     /// 结 `uncertain` 并标记可能已到达 Agent，同样**零会话行**。
     #[test]
     fn an_unprovable_backend_failure_terminates_as_uncertain_with_no_session_row() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let actor = Actor::LocalCli;
         let request = create_session_request_id();
         let before = session_count(&fixture);
@@ -4762,7 +6101,7 @@ mod tests {
     /// 旧口径里的「恢复走有会话分支」因此不再成立（`CORE_PORTS` §6 第 20 条同步改写）。
     #[test]
     fn the_crash_window_recovers_as_uncertain_without_a_session_row() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let actor = Actor::LocalCli;
         let request = create_session_request_id();
         let before = session_count(&fixture);
@@ -4844,7 +6183,7 @@ mod tests {
     /// §6 第 20 条：终态提交把结果写进持久记录（`terminalEventId` 非空），且**不覆盖**已终结的记录。
     #[test]
     fn settle_session_create_persists_the_terminal_result() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let actor = Actor::LocalCli;
         let request = create_session_request_id();
         let prepared = match block_on(fixture.use_cases.create_session(
@@ -4909,7 +6248,7 @@ mod tests {
     /// §11.9：未登记的别名是参数类错误，且不得触达后端。
     #[test]
     fn create_session_rejects_unregistered_workspace_directory() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let error = block_on(fixture.use_cases.create_session(
             &Actor::LocalCli,
             create_session_request_id(),
@@ -4926,7 +6265,7 @@ mod tests {
     /// §11.9：已登记但本机解析失败是 `Unavailable(IoError)`，**不得**降级为参数错误。
     #[test]
     fn create_session_reports_local_resolution_failure_as_unavailable() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let alias = DirectoryId::new("22222222222222222222222222222222").expect("alias");
         let missing = std::env::temp_dir().join(format!("acpr-missing-{}", uuid_text(12)));
         let record = DirectoryRecord::try_new(
@@ -5007,7 +6346,7 @@ mod tests {
     /// 的规范化路径照常落盘，归属则呈现为「未分组」，且目录**不被登记**进 workspace 目录表。
     #[test]
     fn create_session_with_a_client_directory_persists_the_path_without_an_alias() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         fixture.world.set_agent_session_id(
             crate::model::AgentSessionId::new("acp-session-client-path").expect("agent session id"),
         );
@@ -5100,7 +6439,7 @@ mod tests {
     /// 该会话呈现为「未分组」。
     #[test]
     fn the_create_switch_creates_missing_parents_before_starting_the_agent() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         fixture
             .world
             .set_agent_session_id(AgentSessionId::new("acp-session-created").expect("session id"));
@@ -5160,7 +6499,7 @@ mod tests {
     /// 不删除**既有内容，也不启动 Agent、不留会话行。
     #[test]
     fn the_create_switch_refuses_when_a_component_is_not_a_directory() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let root = temp_dir(&format!("acpr-create-switch-file-{}", std::process::id()));
         let file = root.join("blocker");
         std::fs::write(&file, b"not a directory").expect("write file");
@@ -5217,7 +6556,7 @@ mod tests {
     /// 目录不会被（部分）创建出来。
     #[test]
     fn the_create_switch_still_rejects_an_illegal_shape_without_touching_the_filesystem() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let root = temp_dir(&format!("acpr-create-switch-shape-{}", std::process::id()));
         let created = root.join("escape");
         let escaped = format!(
@@ -5248,7 +6587,7 @@ mod tests {
     /// 不删除）。
     #[test]
     fn a_created_directory_survives_a_later_backend_failure() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let root = temp_dir(&format!("acpr-create-switch-fail-{}", std::process::id()));
         let target = root.join("keep").join("me");
         fixture
@@ -5322,7 +6661,7 @@ mod tests {
             use_cases,
             world,
             session,
-        } = fixture();
+        } = make_fixture();
         Fixture {
             use_cases: use_cases.with_directory_browser(browser),
             world,
@@ -5336,7 +6675,7 @@ mod tests {
             use_cases,
             world,
             session,
-        } = fixture();
+        } = make_fixture();
         Fixture {
             use_cases: use_cases.with_session_files(files),
             world,
@@ -5504,7 +6843,7 @@ mod tests {
     #[test]
     fn workspace_browse_reports_an_unreachable_layer_as_unavailable() {
         // 用随 core 提供的默认实现：真实临时目录下不存在的一层。
-        let fixture = fixture();
+        let fixture = make_fixture();
         let missing = std::env::temp_dir().join(format!("acpr-browse-missing-{}", uuid_text(31)));
         let error = block_on(
             fixture
@@ -5555,7 +6894,7 @@ mod tests {
     /// 默认实现只返回**目录**：同一层里的普通文件不出现在条目里，条目也不带任何大小/时间戳字段。
     #[test]
     fn workspace_browse_lists_directories_only() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let root = temp_dir(&format!("acpr-browse-layer-{}", std::process::id()));
         std::fs::create_dir_all(root.join("nested")).expect("nested dir");
         std::fs::write(root.join("note.txt"), b"content").expect("file");
@@ -5589,7 +6928,7 @@ mod tests {
     fn workspace_browse_omits_hidden_and_system_directories_by_attributes() {
         use std::os::windows::fs::MetadataExt;
 
-        let fixture = fixture();
+        let fixture = make_fixture();
         let root = temp_dir(&format!("acpr-browse-attributes-{}", std::process::id()));
         for name in [
             "visible",
@@ -5837,7 +7176,7 @@ mod tests {
     /// 目录资源投影：每条都带规范化路径（`strip_verbatim` 之后的形式），路径是 schema 必填键。
     #[test]
     fn the_workspace_catalog_carries_paths() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let alias = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias");
         fixture.world.directories().lock().expect("lock").push(
             DirectoryRecord::try_new(
@@ -5889,7 +7228,7 @@ mod tests {
 
     #[test]
     fn revoke_device_carries_its_audit_in_the_write_set() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let device = DeviceId::new(&uuid_text(31)).expect("device");
         block_on(fixture.use_cases.revoke_device(&Actor::LocalCli, &device)).expect("revoke");
         assert_eq!(
@@ -5903,7 +7242,7 @@ mod tests {
     /// 拒绝两族都写 `pairing.rejected`。
     #[test]
     fn pairing_settlement_carries_the_target_family_audit() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node = PairingId::new(&uuid_text(41)).expect("pairing");
         let device = PairingId::new(&uuid_text(42)).expect("pairing");
         let rejected = PairingId::new(&uuid_text(43)).expect("pairing");
@@ -5965,7 +7304,7 @@ mod tests {
     /// 设备与节点方向都已无授权判定，因此这条守卫的判别力落在配对认领方（它永远不得提交命令）。
     #[test]
     fn create_session_authorizes_before_resolving_the_workspace() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let alias = DirectoryId::new("fedcba9876543210fedcba9876543210").expect("alias");
         // 已登记但目录不存在：只要解析被触发，错误就会先变成 `Unavailable(IoError)`。
         // 用临时目录下不存在的子路径而不是固定的盘符路径：`DirectoryRecord` 只校验绝对路径形状，
@@ -6066,7 +7405,7 @@ mod tests {
     /// 身份材料、最近一次配对与本机水位；未知节点得到空视图（不是错误）；全过程零写入。
     #[test]
     fn node_link_handshake_view_is_bound_to_one_reported_node_id() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node_id = NodeId::new(&uuid_text(101)).expect("node");
         let pairing = PairingId::new(&uuid_text(102)).expect("pairing");
         seed_pairing(
@@ -6426,7 +7765,7 @@ mod tests {
     /// Export/授权集合过滤。
     #[test]
     fn node_link_catalog_view_reads_the_audit_watermark() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node = NodeId::new(&uuid_text(121)).expect("node");
         fixture.world.nodes.lock().expect("lock").push(node_record(
             &node,
@@ -6471,7 +7810,7 @@ mod tests {
     /// 不存在 Export/授权集合维度。
     #[test]
     fn node_link_session_reads_are_bound_to_the_node() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node = NodeId::new(&uuid_text(123)).expect("node");
         fixture.world.nodes.lock().expect("lock").push(node_record(
             &node,
@@ -6527,7 +7866,7 @@ mod tests {
     /// 最大 origin 序列；事件正文读取按会话归属收窄。
     #[test]
     fn node_link_replay_returns_origin_events_with_payloads() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node = NodeId::new(&uuid_text(131)).expect("node");
         fixture.world.nodes.lock().expect("lock").push(node_record(
             &node,
@@ -6621,7 +7960,7 @@ mod tests {
 
     #[test]
     fn node_link_auth_audit_is_narrow() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node = NodeId::new(&uuid_text(111)).expect("node");
         for (action, outcome) in [
             (AuditAction::NodeAuthenticated, AuditOutcome::Success),
@@ -6691,7 +8030,7 @@ mod tests {
     /// 已认证节点不需要任何 grant/Export 记录即可执行本节点命令（配对即完全信任）。
     #[test]
     fn node_commands_need_no_grant_or_export_record() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node = NodeId::new(&uuid_text(124)).expect("node");
         let actor = Actor::Node {
             node: node.clone(),
@@ -6726,7 +8065,7 @@ mod tests {
 
     #[test]
     fn pairing_channel_accepts_only_the_bound_claimant() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let pairing = PairingId::new(&uuid_text(61)).expect("pairing");
         let bound = Actor::PairingClaimant {
             pairing: pairing.clone(),
@@ -6802,7 +8141,7 @@ mod tests {
     /// 未认领的配对没有对端行，未知配对 id 返回 `None`（而不是错误）。
     #[test]
     fn pairing_channel_view_is_bound_to_the_claimant() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node_id = NodeId::new(&uuid_text(66)).expect("node");
         let pairing = PairingId::new(&uuid_text(67)).expect("pairing");
         seed_pairing(
@@ -6874,7 +8213,7 @@ mod tests {
     /// （`grant.*` 的唯一来源）；同一对端的 `owner` 行属于另一个方向，不被选中。
     #[test]
     fn pairing_channel_view_exposes_the_node_role_after_approval() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node_id = NodeId::new(&uuid_text(76)).expect("node");
         let pairing = PairingId::new(&uuid_text(77)).expect("pairing");
         seed_pairing(
@@ -6915,7 +8254,7 @@ mod tests {
     /// 把认证留痕写进同一写集；对端一致的重复调用幂等成功，且不覆盖首次 `terminal_at`、不重复写审计。
     #[test]
     fn consume_pairing_advances_approved_and_is_idempotent() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let device = DeviceId::new(&uuid_text(71)).expect("device");
         let actor = Actor::Device {
             device: device.clone(),
@@ -6962,7 +8301,7 @@ mod tests {
     /// design D12：节点路径写 `node.authenticated`。
     #[test]
     fn consume_pairing_audits_node_authentication() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let node = NodeId::new(&uuid_text(81)).expect("node");
         let actor = Actor::Node {
             node: node.clone(),
@@ -6989,7 +8328,7 @@ mod tests {
     /// design D12：只接受与该配对已批准对端一致的设备/节点 actor；claimant、本机入口、对端错配一律拒绝。
     #[test]
     fn consume_pairing_rejects_other_actors_and_peers() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let device = DeviceId::new(&uuid_text(91)).expect("device");
         let pairing = PairingId::new(&uuid_text(92)).expect("pairing");
         seed_pairing(
@@ -7036,7 +8375,7 @@ mod tests {
     /// design D12：状态机——未批准拒、已终结具名拒、配对或对端行缺失各自具名。
     #[test]
     fn consume_pairing_rejects_unapproved_and_terminal_states() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let device = DeviceId::new(&uuid_text(101)).expect("device");
         let actor = Actor::Device {
             device: device.clone(),
@@ -7128,7 +8467,7 @@ mod tests {
 
     #[test]
     fn mkdir_creates_three_levels_without_sessions_or_workspace_registration() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let root = temp_dir(&format!("acpr-mkdir-levels-{}", std::process::id()));
         let mut parent = root.to_path_buf();
         let before = lock(&fixture.world.state).sessions.len();
@@ -7175,7 +8514,7 @@ mod tests {
 
     #[test]
     fn mkdir_replay_conflict_and_crash_recovery_never_repeat_creation() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let root = temp_dir(&format!("acpr-mkdir-replay-{}", std::process::id()));
         let request = RequestId::new(&uuid_text(813)).expect("request");
         let execution = mkdir_admit(&fixture, 813, &root, "created");
@@ -7227,7 +8566,7 @@ mod tests {
 
     #[test]
     fn mkdir_store_failures_never_report_uncommitted_success() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let root = temp_dir(&format!("acpr-mkdir-store-failure-{}", std::process::id()));
         fixture.world.fail_next_commit();
         let request = RequestId::new(&uuid_text(814)).expect("request");
@@ -7267,7 +8606,7 @@ mod tests {
 
     #[test]
     fn mkdir_invalid_inputs_are_rejected_before_admission_or_io() {
-        let fixture = fixture();
+        let fixture = make_fixture();
         let root = temp_dir(&format!("acpr-mkdir-invalid-{}", std::process::id()));
         for name in ["", ".", "..", "a/b", "a\\b", "C:folder", "nul\0byte"] {
             let before = fixture.world.commit_count();
@@ -7487,19 +8826,25 @@ mod tests {
 
     /// imported 会话在任何文件/Git 端口调用之前被拒绝，也不读取恢复根。
     ///
-    /// 真实语义：imported 会话**只**存在于 `RemoteDeliveryStore` 的 `imported_session` 索引里，owned
-    /// 存储中没有该行。因此这里只播种索引行、不播种 owned 会话行，验证前置链在 `SessionStore::load`
-    /// 返回 `None` 之后仍能识别出 imported，而不是误报 `session.not_found`。
+    /// 真实语义：远程会话**只**存在于运行期目录里，owned 存储中没有该行。因此这里只播种目录条目、
+    /// 不播种 owned 会话行，验证前置链在 `SessionStore::load` 返回 `None` 之后仍能识别出远程来源，
+    /// 而不是误报 `session.not_found`。
     #[test]
     fn session_file_queries_reject_imported_sessions_before_any_port_call() {
         let files = Arc::new(RecordingFiles::new());
         let fixture = fixture_with_session_files(files.clone());
         let remote = SessionId::new(&uuid_text(62)).expect("session id");
-        lock(&fixture.world.imported_sessions).push(imported_session_record(
-            &NodeId::new(&uuid_text(63)).expect("node id"),
+        let owner = NodeId::new(&uuid_text(63)).expect("node id");
+        let epoch = OriginEpoch::new(&uuid_text(64)).expect("epoch");
+        let directory = Arc::new(MockRemoteDirectory::new());
+        directory.seed(remote_entry(
+            &owner,
             &remote,
-            true,
+            &epoch,
+            1,
+            RemoteSourceState::Online,
         ));
+        fixture.use_cases.set_remote_runtime_directory(directory);
         assert!(
             !lock(&fixture.world.state)
                 .sessions

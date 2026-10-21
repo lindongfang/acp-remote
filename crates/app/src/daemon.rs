@@ -38,8 +38,7 @@ use std::time::{Duration, Instant};
 
 use acp_core::broker::Broker;
 use acp_core::model::{
-    Actor, CommittedDelivery, CommittedEvent, NodeId, PeerPublicKey, PortError, SessionId,
-    SessionState, Timestamp,
+    Actor, CommittedEvent, NodeId, PeerPublicKey, PortError, SessionId, SessionState, Timestamp,
 };
 use acp_core::ports::{AttachmentStore as _, SessionFiles, SessionQuery};
 use acp_core::use_cases::UseCases;
@@ -1213,7 +1212,7 @@ pub struct SyncIngress {
     registry: Arc<SyncConnectionRegistry>,
     /// 实时事件扇出的接收端（`NetIngress::start` spawn 分发循环；发布端由组合根的
     /// `EventPublisher` 分叉持有，见 `compose::forked_publisher`）。
-    event_queue: tokio::sync::mpsc::Receiver<CommittedDelivery>,
+    event_queue: tokio::sync::mpsc::Receiver<CommittedEvent>,
     /// 订阅面路由。它同时是注册给 `/sync/v1` 的 [`SyncRoutes`] 的一个子路由：分发循环按它的屏障状态找
     /// 实时目标，因此这里必须持有**同一个**实例（另一份克隆会让扇出看不到路由线程建立的屏障）。
     subscribe: Arc<SubscribeRoute>,
@@ -1239,7 +1238,7 @@ impl SyncIngress {
     ) -> (
         Arc<SubscribeRoute>,
         Arc<SyncConnectionRegistry>,
-        tokio::sync::mpsc::Receiver<CommittedDelivery>,
+        tokio::sync::mpsc::Receiver<CommittedEvent>,
     ) {
         (self.subscribe, self.registry, self.event_queue)
     }
@@ -1279,7 +1278,8 @@ pub fn register_sync_paths(
     public_origin: Option<String>,
     owner: Arc<dyn OwnerReachability>,
     files: Arc<dyn SessionFiles>,
-    event_queue: Option<tokio::sync::mpsc::Receiver<CommittedDelivery>>,
+    remote: Option<server::sync::remote::RemotePorts>,
+    event_queue: Option<tokio::sync::mpsc::Receiver<CommittedEvent>>,
 ) -> Result<SyncIngress, NetworkError> {
     let registry = SyncConnectionRegistry::new();
     // 认证后消息路由：订阅面（`sync.subscribe`/`sync.snapshot_request`/`sync.ack`）与它的事件投递腿
@@ -1300,10 +1300,17 @@ pub fn register_sync_paths(
         owner,
         files,
     ));
-    let route = Arc::new(SyncRoutes::new(vec![
+    let mut parts: Vec<Arc<dyn SyncMessageRoute>> = vec![
         Arc::clone(&subscribe) as Arc<dyn SyncMessageRoute>,
         Arc::clone(&command) as Arc<dyn SyncMessageRoute>,
-    ]));
+    ];
+    if let Some(ports) = remote {
+        parts.push(Arc::new(server::sync::remote::RemoteRoute::new(
+            Arc::clone(&registry),
+            ports,
+        )) as Arc<dyn SyncMessageRoute>);
+    }
+    let route = Arc::new(SyncRoutes::new(parts));
     // 实时扇出的接收端由组合根经 `sync_publisher.take_receiver()` 取出后交进来：发布端先装进组合根的
     // `EventPublisher` 分叉（两侧生命周期必然错开）。`None` = 取过了，这条进线上不会有实时投递——
     // 接线错误，日志如实记下（快照与重放腿不受影响，客户端断线重连后仍能补齐）。
@@ -1441,7 +1448,7 @@ impl NetIngress {
     pub async fn start(
         composition: &Composition,
         event_queue: mpsc::Receiver<CommittedEvent>,
-        sync_events: Option<mpsc::Receiver<CommittedDelivery>>,
+        sync_events: Option<mpsc::Receiver<CommittedEvent>>,
     ) -> Result<Self, NetworkError> {
         let mut listener = NetListener::bind(net_config(composition.config()))
             .await
@@ -1479,6 +1486,13 @@ impl NetIngress {
             composition.config().public_origin.clone(),
             reachability,
             session_files,
+            composition.access().map(|access| {
+                let runtime = access.runtime();
+                server::sync::remote::RemotePorts {
+                    directory: runtime.clone(),
+                    stream: runtime,
+                }
+            }),
             sync_events,
         )?;
         // 静态面（`design.md` D1/D2/D3）：第三类端点，注册在**全部协议端点之后**（`tasks.md` 3.1 的装配
@@ -1751,8 +1765,7 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
                 identity: composition.identity().clone(),
                 keystore: Arc::clone(composition.keystore()),
                 core: Arc::clone(composition.use_cases()),
-                broker: Arc::clone(composition.broker()),
-                deliveries: composition.deliveries(),
+                runtime: node_link_client::RemoteRuntime::new(),
                 clock: Arc::clone(composition.clock()),
                 entropy,
                 node_name: composition.config().node_name.clone(),
@@ -1786,6 +1799,13 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         Err(LockError::Held) => return Err(DaemonError::AlreadyRunning),
         Err(error) => return Err(DaemonError::Lock(error)),
     };
+
+    // §7.2 启动清理门禁：迁移已提交，开始监听之前重写数据库并清空 WAL/自由页副本。
+    // 失败即拒绝启动；完成标记只在成功后才写，因此下一次启动会安全重试。
+    composition
+        .run_startup_gate()
+        .await
+        .map_err(DaemonError::Compose)?;
 
     // 配对内存态的重启语义（§4.3、`CORE_PORTS_AND_STORAGE.md` §11.6 第 1 条）：取锁成功**之后**、
     // 开始监听之前先清空 secret/配对码，再终结已无法继续验密的未确认配对——否则第二个进程会在启动

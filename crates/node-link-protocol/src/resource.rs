@@ -1,11 +1,16 @@
 //! `resource.*` 家族 body（`schemas/node-link/v1/resource.schema.json`）：attachment 生命周期、游标订阅、
-//! 快照重建、origin 事件投递与累计 ACK。
+//! 快照重建、origin 事件投递、运行期 ACK 与来源屏障/不可用。
 //!
 //! 对应 `docs/NODE_LINK_PROTOCOL.md` §12.4。这里只做 wire 形状与取值域校验；**会话层**的状态判定不在这里：
 //! `attachmentGeneration` 是否是当前 generation、`sessionRef` 是否属于本连接的 attachment、
 //! `cursor.originEpoch` 与会话 origin epoch 是否一致、`originEventId` 去重、`chunkIndex` 是否连续、
 //! `chunkCount` 在 `snapshot_begin`/`snapshot_end` 之间是否一致、`snapshotDigest`/`payloadDigest` 是否
-//! 与正文匹配、`resource.ack.cursor` 是否单调不减——都由持有 attachment 的会话层判定。
+//! 与正文匹配、`resource.ack.cursor` 是否单调不减且不越过已发 head、`resource.caught_up` 是否恰好落在
+//! 实时投递之前——都由持有 attachment 的会话层判定。
+//!
+//! `resource.stateless-origin.v1` 相关的三条消息（`caught_up`/`reset_required`/`unavailable`）与收窄后的
+//! `resource.ack` 语义只在该 feature 协商后生效；未协商的连接收到它们按
+//! `nodelink.protocol.type_unsupported` 拒绝（§11.5）。
 //!
 //! 本模块内**可判定**的跨字段一致性有两条，都在反序列化时校验：
 //!
@@ -30,7 +35,7 @@ use acpr_wire::{
     Timestamp, Uuid, ValueError,
 };
 
-use crate::common::{OriginCursor, PendingInteraction, RemoteSessionRef, SessionMeta};
+use crate::common::{OriginCursor, PendingInteraction, PublicError, RemoteSessionRef, SessionMeta};
 
 /// `resource.event.body.eventType`：`^[a-z0-9_.-]{1,128}$`。
 ///
@@ -535,12 +540,114 @@ pub struct Event {
     pub payload: EventPayload,
 }
 
+/// `resource.reset_required.reason` 的取值（`resource.schema.json#/$defs/resourceResetRequired`）。
+///
+/// 复用 Sync `docs/SYNC_PROTOCOL.md` §9.4 词表里对来源有意义的三项；本变更不新增错误码。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResetReason {
+    EpochMismatch,
+    CursorExpired,
+    CacheIncompatible,
+}
+
+impl ResetReason {
+    pub const ALL: [ResetReason; 3] = [
+        ResetReason::EpochMismatch,
+        ResetReason::CursorExpired,
+        ResetReason::CacheIncompatible,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ResetReason::EpochMismatch => "epoch_mismatch",
+            ResetReason::CursorExpired => "cursor_expired",
+            ResetReason::CacheIncompatible => "cache_incompatible",
+        }
+    }
+}
+
+impl fmt::Display for ResetReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ResetReason {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        ResetReason::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "reason",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for ResetReason {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ResetReason {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        ResetReason::from_str(&text).map_err(DeError::custom)
+    }
+}
+
+/// `resource.caught_up` 的 body（`resource.schema.json#/$defs/resourceCaughtUp`；§12.4，design D4）。
+///
+/// 来源重放屏障：Owner 已把 `cursor` 之前的来源事件全部发出，之后的 `resource.event` 才是实时事件。
+/// `attachmentId`/`attachmentGeneration` 必须指向当前连接上的 attachment（会话层判定）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaughtUp {
+    #[serde(rename = "attachmentId")]
+    pub attachment_id: Uuid,
+    #[serde(rename = "attachmentGeneration")]
+    pub attachment_generation: DecimalString,
+    pub cursor: OriginCursor,
+}
+
+/// `resource.reset_required` 的 body（`resource.schema.json#/$defs/resourceResetRequired`；§12.4）。
+///
+/// Access 必须以新的订阅或读取重建，不得沿用旧 generation 或旧游标继续重放。`cursor` 只在 Owner 已
+/// 验证有效 head 时出现，否则为 `null`；本消息不新增错误码。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetRequired {
+    #[serde(rename = "attachmentId")]
+    pub attachment_id: Uuid,
+    #[serde(rename = "attachmentGeneration")]
+    pub attachment_generation: DecimalString,
+    pub reason: ResetReason,
+    pub cursor: Nullable<OriginCursor>,
+}
+
+/// `resource.unavailable` 的 body（`resource.schema.json#/$defs/resourceUnavailable`；§12.4）。
+///
+/// 断线、撤销与快照不可用分别复用既有错误码（`nodelink.resource.owner_unavailable`、
+/// `nodelink.auth.node_revoked`、`nodelink.resource.snapshot_unavailable` 等），本变更不新增词表。
+/// `attachment_id` 在无法归属当前 attachment 时为 `null`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Unavailable {
+    #[serde(rename = "attachmentId")]
+    pub attachment_id: Nullable<Uuid>,
+    pub error: PublicError,
+}
+
 /// `resource.ack` 的 body（`resource.schema.json#/$defs/resourceAck`）。
 ///
-/// 该会话的累计 ACK：此 cursor 及之前的 origin 事件在 Access 侧已进入可恢复的无正文索引。`cursor` 必须
-/// 单调不减、`cursor.originEpoch` 必须与该会话的 origin epoch 一致，回退或不符视为
-/// `nodelink.protocol.sequence_invalid`（`docs/NODE_LINK_PROTOCOL.md` §12.4/§15；单调性由会话层判定，
-/// 本模块只校验形状）。
+/// `resource.stateless-origin.v1` 下语义收窄为**当前连接/来源会话的运行期累计处理进度**：此 cursor
+/// 及之前的 origin 事件已被有界下游接收。它**不表示 Access 已落盘，也不是可恢复索引**，Owner 不能
+/// 据此提前清理保留期内数据（design D5）。`cursor` 必须单调不减、不得越过 Owner 已发 head，
+/// `cursor.originEpoch` 必须与该会话的 origin epoch 一致；回退、越界或不符视为
+/// `nodelink.protocol.sequence_invalid`（§12.4/§15；判定由会话层完成，本模块只校验形状）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ack {

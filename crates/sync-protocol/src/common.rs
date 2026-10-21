@@ -57,6 +57,48 @@ pub struct Cursor {
     pub global_sequence: DecimalString,
 }
 
+/// `common.schema.json#/$defs/originCursor`：Owner 来源日志的位置（`resource.stateless-origin.v1`）。
+///
+/// 这是**来源**的序号域，与 [`Cursor`] 的 Access 本机序号无关（design D3）：远程流直接以
+/// `(originEpoch, originSequence)` 订阅与 ACK，不为 imported 事件分配 Access 本地 `globalSequence`。
+/// Node Link 在自己的 crate 里定义同名同形类型，两个协议 crate 不互相依赖。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OriginCursor {
+    #[serde(rename = "originEpoch")]
+    pub origin_epoch: Uuid,
+    #[serde(rename = "originSequence")]
+    pub origin_sequence: DecimalString,
+}
+
+/// `common.schema.json#/$defs/sessionRef`：Owner 侧会话的跨节点引用。
+///
+/// `(ownerNodeId, sessionId)` 共同构成来源命名空间：客户端去重键与远程订阅都绑定它，
+/// 不同 Owner 上相同的 `sessionId` 不得被合并（design D3 的风险项）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRef {
+    #[serde(rename = "ownerNodeId")]
+    pub owner_node_id: Uuid,
+    #[serde(rename = "sessionId")]
+    pub session_id: Uuid,
+}
+
+/// `common.schema.json#/$defs/messageCoverage`：单条消息的读取覆盖声明（design D4）。
+///
+/// `through` 等于同次读取结果的 `readCursor`；`last_delta_index` 是该消息在所返回完整内容中已覆盖的
+/// 最后一个**连续**增量索引，无增量时为 `null`。它是逐条消息的合并依据，不声明整页或整个浏览是同一
+/// 历史快照：下一页有自己的 `readCursor`，迟到的旧页不得覆盖更新的消息内容。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageCoverage {
+    #[serde(rename = "messageId")]
+    pub message_id: Uuid,
+    pub through: OriginCursor,
+    #[serde(rename = "lastDeltaIndex")]
+    pub last_delta_index: Nullable<DecimalString>,
+}
+
 /// `common.schema.json#/$defs/originBlock`：会话/事件的归属，`kind` 是判别标签。
 ///
 /// 两个分支都是 `additionalProperties: false`（`local` 分支只允许 `kind`）。serde 的内部标签

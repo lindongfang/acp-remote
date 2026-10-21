@@ -17,26 +17,11 @@ Access SHALL 建立并管理到 Owner 的已认证 Node Link 连接，支持重�
 
 ### Requirement: 远程命令保持稳定身份与结果
 
-可重试远程命令 SHALL 保持稳定请求标识及来源身份；Access MUST NOT 因连接断开重新执行无法确定结果的副作用。命令受理、完成、失败与结果不确定 SHALL 分别呈现；Owner 的资源范围、导出授权及实际能力限制 SHALL 在执行前校验。
+可重试远程命令 SHALL 保持稳定请求标识及来源身份；Access MUST NOT 因连接断开重新执行无法确定结果的副作用，也 MUST NOT 持久保存命令状态或结果引用。命令受理、完成、失败与结果不确定 SHALL 分别呈现；Owner 的资源范围、授权及实际能力限制 SHALL 在执行前校验。Owner 负责请求防重复执行，调用方仍持有标识时查询原结果；标识丢失时只重新读取当前资源。
 
 #### Scenario: 接受后连接中断
-
 - **WHEN** Owner 已接受消息而 Access 未收到结果即断线
-- **THEN** 恢复时查询或重放原结果，不产生第二次 Agent 执行；无法确定时显示结果不确定
-
-### Requirement: 无正文交付与回源历史
-
-Owner SHALL 是事件、消息、思考、附件与命令结果的权威；Access SHALL 在广播 imported 事件前提交无正文交付收据。正文仅在内存转发且 MUST NOT 落入 Access 数据库、临时文件、日志或持久缓存。历史 SHALL 在线向 Owner 读取，Owner 不可达时 SHALL 明确不可用而非返回空历史。
-
-#### Scenario: 事件重放与本地重复投递
-
-- **WHEN** 同一 Owner 事件在重连后再次到达
-- **THEN** Access 保持稳定来源与交付映射，客户端不重复呈现，Access 磁盘没有远程正文
-
-#### Scenario: 离线后重新可达
-
-- **WHEN** Owner 离线后恢复连接
-- **THEN** Access 依据持久化来源游标补回事件并恢复历史读取，不依赖断线前的内存广播队列
+- **THEN** 持有原请求标识时恢复查询或重放原结果，不产生第二次 Agent 执行；无法确定时显示结果不确定，不以新标识重发
 
 ### Requirement: 远程附件流向所属节点
 
@@ -46,3 +31,20 @@ Owner SHALL 是事件、消息、思考、附件与命令结果的权威；Acces
 
 - **WHEN** 用户向远程会话上传时节点信任被撤销
 - **THEN** 传输和后续提交失败，Owner 不执行残缺消息，Access 没有附件落盘
+
+### Requirement: Owner 持久化后在线转发
+
+Owner SHALL 先持久化事件再交付。Access SHALL 验证来源身份、路由、序号和摘要后有界转发，MUST NOT 写入资源索引、交付收据或来源进度。历史 SHALL 在线向 Owner 读取，Owner 不可达时明确不可用而非返回空历史。ACK SHALL 只承诺当前运行期流控处理，不承诺 Access 已落盘，Owner MUST NOT 据此提前清理权威保留数据。
+
+#### Scenario: 事件重放与重复投递
+- **WHEN** 同一 Owner 事件在重连后再次到达
+- **THEN** 来源事件身份保持不变，客户端按来源身份去重，Access 没有远程资源或进度落盘
+
+#### Scenario: 离线后重新可达
+- **WHEN** Owner 恢复连接
+- **THEN** 重新获取清单并建立临时路由；调用方有来源位置时回源重放，没有时重建当前状态和历史
+
+#### Scenario: 旧节点要求落盘 ACK
+- **WHEN** 对端没有协商新的运行期 ACK 语义
+- **THEN** 远程资源能力明确不可用，不发送声称已进入 Access 可恢复索引的 ACK
+

@@ -10,7 +10,16 @@
     { "$ref": "#/$defs/snapshotBegin" },
     { "$ref": "#/$defs/snapshotChunk" },
     { "$ref": "#/$defs/snapshotEnd" },
-    { "$ref": "#/$defs/ack" }
+    { "$ref": "#/$defs/ack" },
+    { "$ref": "#/$defs/remoteSubscribe" },
+    { "$ref": "#/$defs/remoteEvent" },
+    { "$ref": "#/$defs/remoteCaughtUp" },
+    { "$ref": "#/$defs/remoteAck" },
+    { "$ref": "#/$defs/remoteResetRequired" },
+    { "$ref": "#/$defs/remoteUnsubscribe" },
+    { "$ref": "#/$defs/remoteUnavailable" },
+    { "$ref": "#/$defs/remoteCatalogChanged" },
+    { "$ref": "#/$defs/remoteSourceState" }
   ],
   "$defs": {
     "postAuthBase": {
@@ -225,6 +234,256 @@
               "additionalProperties": false,
               "required": ["cursor"],
               "properties": { "cursor": { "$ref": "common.schema.json#/$defs/cursor" } }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "remoteSubscribe": {
+      "description": "`sync.remote_subscribe`（docs/SYNC_PROTOCOL.md §9.7，design D3）：按 `(ownerNodeId, sessionId)` 订阅单个来源会话。`cursor` 为 `null` 时先取得 Owner 当前元数据屏障 B 并回 `remote_reset_required`；非空时从该 Owner origin cursor 增量重放。只在 `resource.stateless-origin.v1` 协商后合法。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "sync.remote_subscribe" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriptionId", "sessionRef", "cursor"],
+              "properties": {
+                "subscriptionId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "sessionRef": { "$ref": "common.schema.json#/$defs/sessionRef" },
+                "cursor": {
+                  "oneOf": [
+                    { "$ref": "common.schema.json#/$defs/originCursor" },
+                    { "type": "null" }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "remoteEvent": {
+      "description": "`sync.remote_event`（§9.7，design D3）：Owner 来源事件逐字转发。事件保留 `resource.event` 的 origin 三元组与 `payloadDigest`，**不带** Access 的 `globalSequence`/`sessionSequence`；`payload.acp` 的原始 ACP 文本逐字保留，不按通用数字 DTO 重编码。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "sync.remote_event" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriptionId", "event"],
+              "properties": {
+                "subscriptionId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "event": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "originEventId",
+                    "originEpoch",
+                    "originSequence",
+                    "sessionRef",
+                    "eventType",
+                    "payloadDigest",
+                    "createdAt",
+                    "payload"
+                  ],
+                  "properties": {
+                    "originEventId": { "$ref": "common.schema.json#/$defs/uuid" },
+                    "originEpoch": { "$ref": "common.schema.json#/$defs/uuid" },
+                    "originSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+                    "sessionRef": { "$ref": "common.schema.json#/$defs/sessionRef" },
+                    "eventType": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9_.-]{1,128}$"
+                    },
+                    "payloadDigest": { "$ref": "common.schema.json#/$defs/base64url32" },
+                    "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+                    "payload": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "anyOf": [{ "required": ["view"] }, { "required": ["acp"] }],
+                      "description": "与 Node Link `resource.event.payload` 同义：事件类型有登记 view 时必须携带 view；无法形成 view 时必须保留 acp 原文档。二者至少要有一个。",
+                      "properties": {
+                        "view": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "description": "开放视图：扩展字段原样保留，按 `SYNC_PROTOCOL.md` §10.3 解释登记字段。"
+                        },
+                        "acp": { "$ref": "common.schema.json#/$defs/rawAcp" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "remoteCaughtUp": {
+      "description": "`sync.remote_caught_up`（§9.7，design D4）：Owner 已完成来源重放屏障。此帧之后才发送实时事件；客户端 MUST NOT 用定时器推测追平。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "sync.remote_caught_up" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriptionId", "cursor"],
+              "properties": {
+                "subscriptionId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "cursor": { "$ref": "common.schema.json#/$defs/originCursor" }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "remoteAck": {
+      "description": "`sync.remote_ack`（§9.7，design D5）：仅本次连接该订阅的连续处理进度；不落盘、不表示可恢复索引，也不作为任何客户端已阅读或持久恢复承诺。Access 不保存该值。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "sync.remote_ack" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriptionId", "cursor"],
+              "properties": {
+                "subscriptionId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "cursor": { "$ref": "common.schema.json#/$defs/originCursor" }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "remoteResetRequired": {
+      "description": "`sync.remote_reset_required`（§9.7，design D4）：客户端必须回源 `session.read` 重建。`reason` 复用既有 reset 词表（不含 `initial_sync`）；`cursor` 只在 Owner 已给出有效 head 时出现，否则为 `null`。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "sync.remote_reset_required" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriptionId", "reason", "cursor"],
+              "properties": {
+                "subscriptionId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "reason": {
+                  "enum": ["epoch_mismatch", "cursor_expired", "cache_incompatible"]
+                },
+                "cursor": {
+                  "oneOf": [
+                    { "$ref": "common.schema.json#/$defs/originCursor" },
+                    { "type": "null" }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "remoteUnsubscribe": {
+      "description": "`sync.remote_unsubscribe`（§9.7）：取消本连接上的订阅及其所属观察者；不改变 Owner 侧任何持久状态。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "sync.remote_unsubscribe" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriptionId"],
+              "properties": {
+                "subscriptionId": { "$ref": "common.schema.json#/$defs/uuid" }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "remoteUnavailable": {
+      "description": "`sync.remote_unavailable`（§9.7，design D4/D6）：断线、撤销与不支持分别使用既有错误码（`resource.remote_unavailable`、`auth.device_revoked`、`capability.unsupported_by_broker` 等），本消息不新造错误码。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "sync.remote_unavailable" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriptionId", "error"],
+              "properties": {
+                "subscriptionId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "error": { "$ref": "common.schema.json#/$defs/publicError" }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "remoteCatalogChanged": {
+      "description": "`sync.remote_catalog_changed`（§9.7，design D6）：该来源清单失效，客户端重新查询；不携带任何旧资源副本。`revision` 是十进制字符串。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "sync.remote_catalog_changed" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ownerNodeId", "revision"],
+              "properties": {
+                "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "revision": { "$ref": "common.schema.json#/$defs/decimalString" }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "remoteSourceState": {
+      "description": "`sync.remote_source_state`（§9.7，design D6）：来源连接事实。它不是 owned 业务事件，不写入本地 owned 事件流，只在连接期发送。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "sync.remote_source_state" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ownerNodeId", "state"],
+              "properties": {
+                "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "state": { "enum": ["online", "offline", "revoked"] }
+              }
             }
           }
         }

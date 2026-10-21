@@ -397,12 +397,19 @@ export function structuredHistoryAvailability(input: {
   readonly historyFeatureNegotiated: boolean;
 }): ConversationTimelineModel["structuredHistory"] {
   if (input.origin !== "local") {
-    return {
-      state: "unavailable",
-      notice: input.origin.online
-        ? "这是来源为其它节点的会话：结构化历史在本设备不可用（本机只承载消息正文）。"
-        : "来源节点当前不可达，无法获取结构化历史；这不代表该会话没有结构化内容。",
-    };
+    if (!input.historyFeatureNegotiated) {
+      return {
+        state: "unavailable",
+        notice: "服务端未提供结构化历史（未协商 core.session-history.v1），当前只呈现消息正文。",
+      };
+    }
+    if (!input.origin.online) {
+      return {
+        state: "unavailable",
+        notice: "来源节点当前不可达，无法获取结构化历史；这不代表该会话没有结构化内容。",
+      };
+    }
+    return { state: "available", notice: null };
   }
   if (!input.historyFeatureNegotiated) {
     return {
@@ -482,9 +489,9 @@ export function buildConversationModel(input: {
 /**
  * 会话可用能力（与用量无关）。
  *
- * 没有「会话已关闭」这一档：三态都不构成永久禁提交的理由。发送看连接与来源（R20：imported
- * 会话不得把输入标记为已发送），取消看是否存在未结束的轮次且连接可用——两者都不从「会话是否
- * 关闭」推导，也不由会话主状态回推。
+ * 没有「会话已关闭」这一档：三态都不构成永久禁提交的理由。发送看连接与来源是否可达
+ * （远程来源离线时不得把输入标记为已发送或排队），取消看是否存在未结束的轮次且连接可用——
+ * 两者都不从「会话是否关闭」推导，也不由会话主状态回推。
  */
 export function conversationCapabilities(input: {
   readonly connectionOnline: boolean;
@@ -496,7 +503,7 @@ export function conversationCapabilities(input: {
     // 历史不受连接状态限制：未上报、断连都不是禁用理由。
     canViewHistory: true,
     canCancel: input.connectionOnline && input.turnInProgress,
-    canSend: input.connectionOnline && input.origin === "local",
+    canSend: input.connectionOnline && (input.origin === "local" || input.origin.online),
     canLoadEarlier: false,
   };
 }

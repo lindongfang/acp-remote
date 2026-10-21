@@ -1334,7 +1334,6 @@ impl HostNode {
                 .expect("打开真实存储"),
         );
         let sessions: Arc<dyn acp_core::ports::SessionStore> = store.clone();
-        let deliveries: Arc<dyn acp_core::ports::RemoteDeliveryStore> = store.clone();
         let trust: Arc<dyn acp_core::ports::TrustStore> = store.clone();
         let audit: Arc<dyn acp_core::ports::AuditStore> = store.clone();
         let local_config: Arc<dyn acp_core::ports::LocalConfigStore> = store.clone();
@@ -1372,7 +1371,6 @@ impl HostNode {
         let broker = Arc::new(acp_core::broker::Broker::new(
             acp_core::broker::BrokerDeps {
                 store: Arc::clone(&sessions),
-                deliveries: Arc::clone(&deliveries),
                 backends,
                 trust: Arc::clone(&trust),
                 publisher,
@@ -1388,7 +1386,6 @@ impl HostNode {
             UseCases::new(UseCaseDeps {
                 broker: Arc::clone(&broker),
                 store: sessions,
-                deliveries,
                 trust,
                 audit: Arc::clone(&audit),
                 config: local_config,
@@ -1426,6 +1423,7 @@ impl HostNode {
             config.public_origin.clone(),
             Arc::new(UnreachableOwners),
             session_files,
+            None,
             sync_events,
         )
         .expect("注册 Sync path");

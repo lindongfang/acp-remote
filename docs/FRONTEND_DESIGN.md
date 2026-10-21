@@ -369,12 +369,12 @@ PWA 首个版本只持久化连接和恢复所需的最小数据：
 
 规则：
 
-- imported resource 遵守 `no-content-cache`，不得把会话摘要、prompt、回复、工具内容、diff、终端、附件或 ACP raw 写入 IndexedDB、Cache Storage 或其他持久浏览器存储。
+- imported 资源遵守 `no-content-cache` 且**不持久化任何远程资料**：不得把会话摘要、标题、prompt、回复、工具内容、diff、终端、附件、ACP raw、Owner cursor/ACK、命令状态或事件 digest 写入 IndexedDB、Cache Storage 或其他持久浏览器存储。来源游标与重建缓冲只在本次连接内存中存在。
 - 上传中的选择项、媒体缓冲与 Blob URL 只存在于页面内存：关闭/刷新即丢弃，不写入 IndexedDB、Cache Storage、Service Worker 或任何持久草稿；已提交附件由 Owner 保存，页面只按需经已认证分块连接读取并即时撤销 Blob URL。
 - 对当前节点本地拥有的资源，只有节点本地策略显式允许时才缓存精简历史；缓存不是权威数据，重连后以 Daemon 快照和事件日志校正。
 - 敏感字段不得因方便调试而进入普通浏览器存储。
 - 必须设置大小上限、版本和迁移策略：v1 的固定值为本节点自有资源摘要缓存上限 **8 MiB**、TTL **30 天**、超出时按 LRU 淘汰。这些是固定常量，不是可由用户放宽的配置项。
-- imported 资源只允许持久化恢复所需的无正文元数据：owner/export/session 标识、origin/global/session cursor、ACK、稳定 `requestId`、命令终态引用、事件类型与 SHA-256 digest、local sequence 映射。这里的 digest 是密码学摘要，不是会话摘要、标题、消息预览或内容摘录；这些内容只能保留在内存。元数据也必须有容量与清理边界，不得以“不占正文配额”为由无限增长。
+- imported 资源**没有**持久恢复元数据：owner/session 标识、cursor/ACK、`requestId`、命令终态引用、事件 digest 与 local sequence 映射都不得写入持久浏览器存储。断线或刷新后来源业务模型必须清除，重连时重新 `session.list`/`session.read` 并按每页 `readCursor`/`messageCoverage` 重建（`SYNC_PROTOCOL.md` §9.7）。
 - 清除缓存与撤销设备是不同操作；清除设备密钥后必须重新配对。
 - `expo-sqlite` 的 Web 支持在采用前必须单独验证；第一阶段可以使用受封装的 IndexedDB adapter，不能让存储实现泄漏到 feature 层。
 
@@ -457,7 +457,7 @@ PWA MVP 至少满足：
 - 状态机：连接、认证、重放、在线、断线、撤销、身份变化。
 - 幂等：接受响应丢失、重试、重复事件和 cursor 回退。
 - 组件：结构化 ACP 事件、未知事件和能力降级。
-- 存储：同步元数据迁移、容量限制、清除和损坏恢复，并验证 imported resource 正文不会落盘；remote 事件的固定用例是 [`fixtures/sync/v1/valid/event-remote-origin.json`](../fixtures/sync/v1/valid/event-remote-origin.json)。
+- 存储：同步元数据迁移、容量限制、清除和损坏恢复，并验证 imported resource 正文、摘要、cursor/ACK 与命令状态都不会落盘；remote 事件的固定用例是 [`fixtures/sync/v1/valid/event-remote-origin.json`](../fixtures/sync/v1/valid/event-remote-origin.json)，来源流（订阅/重放/追平/ACK/重置/清单变化/来源状态/不可用/退订）与读取覆盖的用例是 `fixtures/sync/v1/valid/sync-remote-*.json` 与 `command-result-session-read-remote-coverage.json`。
 - 浏览器端到端：Daemon fake/fixture、真实 WebSocket、重连和慢客户端。
 - 安全：敏感信息不进入日志、URL、普通存储或错误页面。
 

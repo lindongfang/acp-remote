@@ -21,8 +21,7 @@ mod support;
 use acp_core::model::{AgentSessionId, SessionId, Timestamp};
 use acp_core::ports::SessionStore as _;
 use storage_sqlite::migrate::{
-    DATABASE_FILE, FILE_FORMAT_VERSION, IMPORTED_SCHEMA_VERSION, OWNED_SCHEMA_VERSION,
-    StorageConfig,
+    DATABASE_FILE, FILE_FORMAT_VERSION, OWNED_SCHEMA_VERSION, StorageConfig,
 };
 use storage_sqlite::session_store::SqliteStore;
 use support::*;
@@ -297,10 +296,6 @@ async fn upgraded_sessions_keep_their_bytes_and_report_no_recovery_data() {
         .await
         .expect("升级到 v5");
     assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
-    assert_eq!(
-        store.metadata().imported_schema_version,
-        IMPORTED_SCHEMA_VERSION
-    );
     let session = SessionId::new(SESSION).expect("session id");
     // 端口层的读回语义：`NULL` 是「没有恢复数据」，因此是 `Ok(None)`（不是 Err，也不是别的形状）。
     assert_eq!(
@@ -551,10 +546,6 @@ async fn two_consecutive_opens_leave_the_schema_byte_identical() {
             .await
             .unwrap_or_else(|error| panic!("第 {round} 次打开必须成功：{error}"));
         assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
-        assert_eq!(
-            store.metadata().imported_schema_version,
-            IMPORTED_SCHEMA_VERSION
-        );
         store.close().await;
     }
 
@@ -567,10 +558,6 @@ async fn two_consecutive_opens_leave_the_schema_byte_identical() {
     assert_eq!(
         meta_version_of(&pool, "owned_schema_version").await,
         OWNED_SCHEMA_VERSION.to_string()
-    );
-    assert_eq!(
-        meta_version_of(&pool, "imported_schema_version").await,
-        IMPORTED_SCHEMA_VERSION.to_string()
     );
     // 每条 owned 表的 DDL 都必须带上追加的三列（且只有 owned_session 带）。
     assert!(

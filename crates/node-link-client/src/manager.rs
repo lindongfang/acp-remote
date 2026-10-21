@@ -19,16 +19,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use acp_core::model::NodeId;
-use acp_core::ports::RemoteDeliveryStore;
+use acp_core::ports::RemoteGeneration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::delivery;
 use crate::error::ClientError;
 use crate::handshake::{Established, HANDSHAKE_TIMEOUT, HandshakeConfig, OwnerTrust, handshake};
 use crate::identity::NodeIdentity;
-use crate::link::{ImportedSink, Link, LinkEnd, ResumeSession, SharedLink, channel};
+use crate::link::{Link, LinkEnd, ResumeSession, SharedLink, channel};
 use crate::remote_session::{RemoteSession, RemoteSessionFactory};
+use crate::runtime::RemoteRuntime;
 use crate::transport::{
     ConnectionTarget, MessageSink, MessageSource, TlsTrust, Transport, TransportFactory,
 };
@@ -151,17 +151,13 @@ impl OwnerLink {
     }
 
     /// 打开一个 imported 会话的端点。
-    pub fn session(
-        &self,
-        remote: acp_core::model::RemoteSessionRef,
-        deliveries: Arc<dyn RemoteDeliveryStore>,
-    ) -> RemoteSession {
-        RemoteSession::open(Arc::clone(&self.shared), remote, deliveries)
+    pub fn session(&self, remote: acp_core::model::RemoteSessionRef) -> RemoteSession {
+        RemoteSession::open(Arc::clone(&self.shared), remote)
     }
 
     /// `SessionBackendFactory` 形状的远程实现。
-    pub fn factory(&self, deliveries: Arc<dyn RemoteDeliveryStore>) -> RemoteSessionFactory {
-        RemoteSessionFactory::new(Arc::clone(&self.shared), deliveries)
+    pub fn factory(&self) -> RemoteSessionFactory {
+        RemoteSessionFactory::new(Arc::clone(&self.shared))
     }
 
     /// 建立一条独立认证的附件连接（每次调用一条新连接，用完即关）。
@@ -235,8 +231,7 @@ impl OwnerLink {
 pub struct NodeLinkClient {
     factory: Arc<dyn TransportFactory>,
     identity: Arc<dyn NodeIdentity>,
-    sink: Arc<dyn ImportedSink>,
-    deliveries: Arc<dyn RemoteDeliveryStore>,
+    runtime: Arc<RemoteRuntime>,
 }
 
 impl NodeLinkClient {
@@ -247,14 +242,12 @@ impl NodeLinkClient {
     pub fn new(
         factory: Arc<dyn TransportFactory>,
         identity: Arc<dyn NodeIdentity>,
-        sink: Arc<dyn ImportedSink>,
-        deliveries: Arc<dyn RemoteDeliveryStore>,
+        runtime: Arc<RemoteRuntime>,
     ) -> Self {
         Self {
             factory,
             identity,
-            sink,
-            deliveries,
+            runtime,
         }
     }
 
@@ -281,8 +274,7 @@ impl NodeLinkClient {
         let revoked = Arc::new(AtomicBool::new(false));
         let owner = config.owner.node_id.clone();
         let endpoint = config.endpoint.clone();
-        let sink = Arc::clone(&self.sink);
-        let deliveries = Arc::clone(&self.deliveries);
+        let runtime = Arc::clone(&self.runtime);
         let identity = Arc::clone(&self.identity);
         let handshake_for_supervisor = Arc::clone(&handshake);
         let heartbeat = crate::link::DEFAULT_HEARTBEAT;
@@ -302,8 +294,7 @@ impl NodeLinkClient {
                     supported_features: handshake_for_supervisor.supported_features.clone(),
                     required_features: handshake_for_supervisor.required_features.clone(),
                 }),
-                sink,
-                deliveries,
+                runtime,
                 shared_for_task,
                 outgoing,
                 shutdown_rx,
@@ -332,8 +323,7 @@ async fn supervise(
     endpoint: String,
     transport: Arc<dyn Transport>,
     handshake: Arc<HandshakeConfig>,
-    sink: Arc<dyn ImportedSink>,
-    deliveries: Arc<dyn RemoteDeliveryStore>,
+    runtime: Arc<RemoteRuntime>,
     shared: Arc<SharedLink>,
     mut outgoing: tokio::sync::mpsc::Receiver<crate::link::Outbound>,
     mut shutdown: watch::Receiver<bool>,
@@ -382,46 +372,10 @@ async fn supervise(
             }
         };
         let (sink_half, source_half) = connection.split();
-        // 恢复计划在建链前从持久化索引取：只看非正文事实。
-        let startup = match delivery::subscriptions(deliveries.as_ref(), &owner).await {
-            Ok(rows) => {
-                let mut plan = Vec::new();
-                for (remote, cursor) in rows {
-                    match crate::remote_session::wire_remote(&remote) {
-                        Ok(remote) => {
-                            // 已被 Owner 以不可重试错误拒绝的订阅不再进入计划：否则每次重连都会
-                            // 重复 attach 同一个不可能成功的会话（重连循环）。
-                            if shared.subscription_rejected(&remote) {
-                                tracing::debug!(
-                                    event = "node_link_client.subscription_skipped",
-                                    owner = %owner,
-                                    session_id = remote.session_id.as_str(),
-                                    "the owner rejected this subscription permanently; it is skipped"
-                                );
-                                continue;
-                            }
-                            plan.push(ResumeSession { remote, cursor });
-                        }
-                        Err(error) => tracing::warn!(
-                            event = "node_link_client.subscription_plan_invalid",
-                            owner = %owner,
-                            error = %error,
-                            "an imported session reference cannot be encoded; it is skipped"
-                        ),
-                    }
-                }
-                plan
-            }
-            Err(error) => {
-                tracing::warn!(
-                    event = "node_link_client.subscription_plan_failed",
-                    owner = %owner,
-                    error = ?error,
-                    "the imported session index cannot be read; this connection resumes without subscriptions"
-                );
-                Vec::new()
-            }
-        };
+        // 重连恢复只使用上层显式提交的来源位置：Access 没有可读的持久投递状态。
+        let startup: Vec<ResumeSession> = Vec::new();
+        // 每次连接尝试推进一代：上一代的目录、事件与屏障在 `begin` 时整代清除。
+        let generation: RemoteGeneration = runtime.begin(&owner);
         let link = Link::new(
             Arc::clone(&shared),
             HandshakeConfig {
@@ -430,7 +384,8 @@ async fn supervise(
                 supported_features: handshake.supported_features.clone(),
                 required_features: handshake.required_features.clone(),
             },
-            Arc::clone(&sink),
+            Arc::clone(&runtime),
+            generation,
             heartbeat,
             silence,
         );
@@ -444,7 +399,10 @@ async fn supervise(
             )
             .await;
         match end {
-            LinkEnd::Shutdown => return,
+            LinkEnd::Shutdown => {
+                runtime.offline(&owner, generation);
+                return;
+            }
             LinkEnd::Revoked => {
                 revoked.store(true, Ordering::SeqCst);
                 // 撤销同样中止该 Owner 的在途附件连接（它们 select 同一个关闭通道）。
@@ -457,6 +415,7 @@ async fn supervise(
                 return;
             }
             LinkEnd::Closed => {
+                runtime.offline(&owner, generation);
                 tracing::debug!(
                     event = "node_link_client.disconnected",
                     owner = %owner,
@@ -465,6 +424,7 @@ async fn supervise(
                 );
             }
             LinkEnd::Failed(error) => {
+                runtime.offline(&owner, generation);
                 // `link.error(auth.node_revoked)` 由 `link_error` 收敛成 `Revoked`：它与
                 // `node.trust.revoked` 是同一事实，必须停止重连，而不是按普通断线退避。
                 if matches!(error, ClientError::Revoked) {

@@ -622,6 +622,13 @@ file = "{log}"
         let deadline = Instant::now() + EXIT_TIMEOUT;
         while Instant::now() < deadline {
             if let Some(status) = child.try_wait().expect("try_wait") {
+                if !status.success() {
+                    eprintln!(
+                        "daemon 非零退出 {status:?}；stderr:\n{}",
+                        std::fs::read_to_string(&self.stderr_path).unwrap_or_default()
+                    );
+                    eprintln!("daemon 运行记录:\n{}", self.log());
+                }
                 return status;
             }
             std::thread::sleep(POLL);

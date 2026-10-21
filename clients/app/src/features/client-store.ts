@@ -35,11 +35,13 @@ import type {
   ElicitationRespondPayload,
   EventMessage,
   ModeState,
+  OriginCursor,
   PairingLookupResponse,
   PromptContentBlock,
   PublicError,
   SessionReadInclude,
   SessionReadResult,
+  SessionRef,
   SessionSummary,
   SnapshotItemHistory,
   SnapshotItemMessages,
@@ -47,11 +49,27 @@ import type {
 } from "../protocol";
 import { ATTACHMENT_READ_MAX_LENGTH, decodeEffectiveInteraction, decodePartialResult, messageChannelOf } from "../protocol";
 import { isCommandStatusRecord } from "../sync-client/wire";
-import type { ReadCursor, StagedResources, SyncClientEvent } from "../sync-client";
+import type {
+  ReadCursor,
+  RemoteCoverageMap,
+  StagedResources,
+  SyncClientEvent,
+} from "../sync-client";
+import {
+  EMPTY_REMOTE_COVERAGE,
+  advanceOriginCursor,
+  coverageFromRead,
+  isDeltaCovered,
+  mergeRemoteCoverage,
+  pruneCoveredDeltas,
+} from "../sync-client";
 
 /** 刷新后附件连接可能仍在认证/重连：媒体读取对「尚未就绪」做有界等待，其他错误立即失败。 */
 const ATTACHMENT_READY_ATTEMPTS = 20;
 const ATTACHMENT_READY_DELAY_MS = 150;
+
+/** 远程来源流能力（`resource.stateless-origin.v1`，§9.7）。 */
+const STATELESS_ORIGIN_FEATURE = "resource.stateless-origin.v1";
 
 function isTransientAttachmentReadiness(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
@@ -138,10 +156,10 @@ import {
   compareTimelinePosition,
   directoryNamesOf,
   mediaBlocksOfDelta,
-  mergeStructuredRecords,
   positionOf,
   recordFromEvent,
   recordFromHistoryItem,
+  recordFromRemoteEvent,
   recordGroupOf,
   validateElicitationForm,
   viewText,
@@ -306,7 +324,14 @@ export interface ConversationThreadState {
 }
 
 /** 一次 `session.read` 的用途：首屏、向上翻消息、向上翻历史、刷新有效交互。 */
-type ReadIntent = "first" | "earlier" | "earlier_history" | "refresh_interactions" | "refresh_messages";
+type ReadIntent =
+  | "first"
+  | "earlier"
+  | "earlier_history"
+  | "refresh_interactions"
+  | "refresh_messages"
+  /** 来源断开/重置/刷新后：无论是否仍持有 C，都先回源读取重建（D4）。 */
+  | "rebuild_remote";
 
 /** 待完成的读取请求。 */
 interface PendingRead {
@@ -319,6 +344,10 @@ interface PendingRead {
    * 这就是 design D5 的「读取屏障」——旧读取不覆盖新增量。
    */
   readonly volatileAtRequest: ReadonlyMap<string, ReadonlySet<string>>;
+  /** 远程来源坐标；本节点自有读取为 `null`。 */
+  readonly remote: SessionRef | null;
+  /** 发起读取时的来源代数；返回时代数已变说明来源被清除/重置，结果必须丢弃。 */
+  readonly generation: number;
 }
 
 /** 一次发送尝试的上传/清单状态（与业务命令记录分离：上传成功不等于消息被受理）。 */
@@ -342,6 +371,41 @@ interface SwitchIntent {
   readonly kind: "model" | "mode";
 }
 
+/** 来源连接事实（`sync.remote_source_state`）；只存在于当前运行期。 */
+export type RemoteSourceKind = "unknown" | "online" | "offline" | "revoked";
+
+/**
+ * 一个 Owner 来源的运行期代数与状态。
+ *
+ * `generation` 在每次「来源业务模型失效」时递增（断开、离线/撤销、重置）：在途读取带着旧
+ * 代数返回时必须被丢弃，旧页因此不可能回滚新内容。
+ */
+export interface RemoteSourceRuntime {
+  readonly state: RemoteSourceKind;
+  readonly generation: number;
+}
+
+/**
+ * 一个远程会话的运行期模型（`design.md` D3/D4）。
+ *
+ * - `phase === "ready"` 才表示「读取重建完成且来源已追平」，此前不呈现消息/结构化内容；
+ * - `cursor` 是最后连续处理位置 C（只用于回源重放衔接与去重，不是可恢复索引）；
+ * - `coverage` 记录每条消息已应用的读取覆盖位置，迟到增量据此不再拼接；
+ * - `error` 是读取失败或来源不可用的明确原因（不展示缓存标题）。
+ */
+export interface RemoteSessionRuntime {
+  readonly ownerNodeId: Uuid;
+  readonly sessionId: Uuid;
+  readonly phase: "subscribing" | "replaying" | "ready" | "unavailable";
+  readonly sourceState: RemoteSourceKind;
+  readonly cursor: OriginCursor | null;
+  readonly caughtUp: boolean;
+  readonly rebuilt: boolean;
+  readonly coverage: RemoteCoverageMap;
+  readonly error: PublicError | null;
+  readonly generation: number;
+}
+
 /** 客户端状态（不可变快照）。 */
 export interface ClientState {
   readonly connection: ConnectionMachineState;
@@ -352,6 +416,14 @@ export interface ClientState {
   /** 最后一次**验证通过并完成替换**的快照资源；断连时仍是目录页的唯一数据来源。 */
   readonly resources: StagedResources | null;
   readonly lastSyncedAtMs: number | null;
+  /**
+   * 来源 Owner 的运行期状态与代数（内存；不落盘）。
+   *
+   * 连接断开或来源 `offline`/`revoked` 时清除该来源的展示数据并递增代数，在途读取据此失效。
+   */
+  readonly remoteSources: ReadonlyMap<Uuid, RemoteSourceRuntime>;
+  /** 远程会话的运行期模型（内存；刷新即失去，下次打开先回源读取重建）。 */
+  readonly remoteSessions: ReadonlyMap<Uuid, RemoteSessionRuntime>;
   readonly overlay: readonly AgentConnectionOverlay[];
   /** 实时事件归一后的结构化记录（按 `eventId`，先到先留）。 */
   readonly structured: ReadonlyMap<string, StructuredRecord>;
@@ -458,6 +530,8 @@ export function initialClientState(): ClientState {
     selectedFeatures: [],
     resources: null,
     lastSyncedAtMs: null,
+    remoteSources: new Map(),
+    remoteSessions: new Map(),
     overlay: [],
     structured: new Map(),
     history: new Map(),
@@ -513,11 +587,304 @@ function applyConnectionEvent(current: ConnectionMachineState, event: Connection
   }
 }
 
+/**
+ * 结构化记录的去重键：**来源节点 + 事件标识**。
+ *
+ * 只按裸 `eventId` 会让不同 Owner 的同名标识互相覆盖（来源命名空间要求），因此本节点记录
+ * 用 `local:` 前缀，远程记录用自己的 `ownerNodeId`。
+ */
+function recordKey(record: StructuredRecord): string {
+  return `${record.ownerNodeId ?? "local"}:${record.eventId}`;
+}
+
+/** 一条来源不可用的结构化原因（不把远程数据写进错误载荷，只给固定类别）。 */
+function remoteUnavailableError(ownerNodeId: Uuid, detail?: string): PublicError {
+  return {
+    code: "resource.remote_unavailable",
+    message:
+      detail === undefined
+        ? `来源节点「${ownerNodeId}」当前不可用；远程会话只在来源在线时可读取。`
+        : detail,
+    retryable: true,
+    details: {},
+  };
+}
+
+/** 某个会话的远程来源坐标；本节点自有会话或未知时为 `null`。 */
+function remoteRefOf(state: ClientState, sessionId: Uuid): SessionRef | null {
+  const summary = state.resources?.sessions.find((item) => item.sessionId === sessionId);
+  if (summary !== undefined && summary.origin.kind === "remote") {
+    return { ownerNodeId: summary.origin.ownerNodeId, sessionId };
+  }
+  const runtime = state.remoteSessions.get(sessionId);
+  return runtime === undefined ? null : { ownerNodeId: runtime.ownerNodeId, sessionId };
+}
+
+/** 来源代数：不存在时为 0（首次清除从 1 开始，在途读取凭旧值被丢弃）。 */
+function sourceGenerationOf(state: ClientState, ownerNodeId: Uuid): number {
+  return state.remoteSources.get(ownerNodeId)?.generation ?? 0;
+}
+
+/**
+ * 清除**一个 Owner** 的远程展示数据（不触碰本节点自有资源与其它来源）。
+ *
+ * 这是 spec「来源断开时清除该来源的业务展示数据」的唯一实现：会话摘要、实时/历史结构化
+ * 记录、易失增量、线程、读回的明细资源、用量与来源命令记录一起清除；运行期模型保留，
+ * 以便显示「不可用」而不是一段凭空消失的页面。`generation` 递增使在途读取失效。
+ *
+ * @param nextState 该来源的新连接事实（`offline`/`revoked`/`unknown`）。
+ * @param error 明确的不可用原因；`null` 表示只清数据（例如主动重建前）。
+ */
+function clearRemoteOwnerData(
+  state: ClientState,
+  ownerNodeId: Uuid,
+  nextState: RemoteSourceKind,
+  error: PublicError | null,
+): ClientState {
+  const generation = sourceGenerationOf(state, ownerNodeId) + 1;
+  const sessionIds = new Set<Uuid>();
+  for (const summary of state.resources?.sessions ?? []) {
+    if (summary.origin.kind === "remote" && summary.origin.ownerNodeId === ownerNodeId) {
+      sessionIds.add(summary.sessionId);
+    }
+  }
+  for (const [sessionId, runtime] of state.remoteSessions) {
+    if (runtime.ownerNodeId === ownerNodeId) sessionIds.add(sessionId);
+  }
+  for (const record of state.structured.values()) {
+    if (record.ownerNodeId === ownerNodeId && record.sessionId !== null) sessionIds.add(record.sessionId);
+  }
+  for (const record of state.history.values()) {
+    if (record.ownerNodeId === ownerNodeId && record.sessionId !== null) sessionIds.add(record.sessionId);
+  }
+
+  const resources =
+    state.resources === null
+      ? null
+      : {
+          ...state.resources,
+          sessions: state.resources.sessions.filter(
+            (summary) => !(summary.origin.kind === "remote" && summary.origin.ownerNodeId === ownerNodeId),
+          ),
+        };
+  const structured = new Map(state.structured);
+  for (const [key, record] of structured) {
+    if (record.ownerNodeId === ownerNodeId) structured.delete(key);
+  }
+  const history = new Map(state.history);
+  for (const [key, record] of history) {
+    if (record.ownerNodeId === ownerNodeId) history.delete(key);
+  }
+  const volatile = new Map(state.volatile);
+  for (const [messageId, tail] of volatile) {
+    if (tail.sessionId !== null && sessionIds.has(tail.sessionId)) volatile.delete(messageId);
+  }
+  const threads = new Map(state.threads);
+  const readResources = new Map(state.readResources);
+  const usage = new Map(state.usage);
+  const modeStates = new Map(state.modeStates);
+  const switchIntents = new Map(state.switchIntents);
+  const attachmentRuns = new Map(state.attachmentRuns);
+  const promptRequestIds = new Map(state.promptRequestIds);
+  const commands = new Map(state.commands);
+  const removedRequests = new Set<Uuid>();
+  for (const sessionId of sessionIds) {
+    threads.delete(sessionId);
+    readResources.delete(sessionId);
+    usage.delete(sessionId);
+    modeStates.delete(sessionId);
+    switchIntents.delete(sessionId);
+    attachmentRuns.delete(sessionId);
+    promptRequestIds.delete(sessionId);
+  }
+  for (const [requestId, record] of commands) {
+    if (record.sessionId !== null && sessionIds.has(record.sessionId)) {
+      commands.delete(requestId);
+      removedRequests.add(requestId);
+    }
+  }
+  const uncertainRequestIds = state.uncertainRequestIds.filter((id) => !removedRequests.has(id));
+  const remoteSessions = new Map(state.remoteSessions);
+  for (const sessionId of sessionIds) {
+    const existing = remoteSessions.get(sessionId);
+    remoteSessions.set(sessionId, {
+      ownerNodeId,
+      sessionId,
+      phase: nextState === "online" ? "subscribing" : "unavailable",
+      sourceState: nextState,
+      cursor: existing?.cursor ?? null,
+      caughtUp: false,
+      rebuilt: false,
+      coverage: EMPTY_REMOTE_COVERAGE,
+      error: nextState === "online" ? null : error,
+      generation,
+    });
+  }
+  const remoteSources = new Map(state.remoteSources);
+  remoteSources.set(ownerNodeId, { state: nextState, generation });
+  // 文件栏若正打开该来源会话的文件，内容同样属于远程展示数据：退回对话态并递增代次，
+  // 使在途查询的结果无法再落回界面。
+  const sessionFiles =
+    state.sessionFiles.content.kind === "file" &&
+    sessionIds.has(state.sessionFiles.content.context.sessionId)
+      ? {
+          ...state.sessionFiles,
+          content: { kind: "conversation" as const },
+          generation: state.sessionFiles.generation + 1,
+        }
+      : state.sessionFiles;
+
+  return {
+    ...state,
+    resources,
+    structured,
+    history,
+    volatile,
+    threads,
+    readResources,
+    usage,
+    modeStates,
+    switchIntents,
+    attachmentRuns,
+    promptRequestIds,
+    commands,
+    uncertainRequestIds,
+    remoteSessions,
+    remoteSources,
+    sessionFiles,
+  };
+}
+
+/** 清空**全部**远程来源（连接断开/阻断时）：本节点自有资源保持原样。 */
+function clearAllRemoteData(state: ClientState): ClientState {
+  const owners = new Set<Uuid>();
+  for (const [owner] of state.remoteSources) owners.add(owner);
+  for (const runtime of state.remoteSessions.values()) owners.add(runtime.ownerNodeId);
+  for (const summary of state.resources?.sessions ?? []) {
+    if (summary.origin.kind === "remote") owners.add(summary.origin.ownerNodeId);
+  }
+  let next = state;
+  for (const owner of owners) {
+    next = clearRemoteOwnerData(next, owner, "unknown", remoteUnavailableError(owner));
+  }
+  return next;
+}
+
+/**
+ * 清除**一个远程会话**的展示数据（订阅结束/来源重置）。
+ *
+ * 与 `clearRemoteOwnerData` 的差别只在范围：摘要保留（来源仍在线时它不是缓存），但线程、
+ * 记录、易失增量与来源命令记录必须丢弃，因为下一次呈现只能来自新的原子读取。
+ */
+function clearRemoteSessionData(
+  state: ClientState,
+  runtime: RemoteSessionRuntime,
+  phase: RemoteSessionRuntime["phase"],
+  error: PublicError | null,
+): ClientState {
+  const ownerNodeId = runtime.ownerNodeId;
+  const sessionId = runtime.sessionId;
+  const generation = sourceGenerationOf(state, ownerNodeId) + 1;
+  const structured = new Map(state.structured);
+  for (const [key, record] of structured) {
+    if (record.ownerNodeId === ownerNodeId && record.sessionId === sessionId) structured.delete(key);
+  }
+  const history = new Map(state.history);
+  for (const [key, record] of history) {
+    if (record.ownerNodeId === ownerNodeId && record.sessionId === sessionId) history.delete(key);
+  }
+  const volatile = new Map(state.volatile);
+  for (const [messageId, tail] of volatile) {
+    if (tail.sessionId === sessionId) volatile.delete(messageId);
+  }
+  const threads = new Map(state.threads);
+  threads.delete(sessionId);
+  const readResources = new Map(state.readResources);
+  readResources.delete(sessionId);
+  const usage = new Map(state.usage);
+  usage.delete(sessionId);
+  const modeStates = new Map(state.modeStates);
+  modeStates.delete(sessionId);
+  const switchIntents = new Map(state.switchIntents);
+  switchIntents.delete(sessionId);
+  const attachmentRuns = new Map(state.attachmentRuns);
+  attachmentRuns.delete(sessionId);
+  const promptRequestIds = new Map(state.promptRequestIds);
+  promptRequestIds.delete(sessionId);
+  const commands = new Map(state.commands);
+  const removedRequests = new Set<Uuid>();
+  for (const [requestId, record] of commands) {
+    if (record.sessionId === sessionId) {
+      commands.delete(requestId);
+      removedRequests.add(requestId);
+    }
+  }
+  const remoteSessions = new Map(state.remoteSessions);
+  remoteSessions.set(sessionId, {
+    ...runtime,
+    phase,
+    caughtUp: false,
+    rebuilt: false,
+    coverage: EMPTY_REMOTE_COVERAGE,
+    error,
+    generation,
+  });
+  const remoteSources = new Map(state.remoteSources);
+  remoteSources.set(ownerNodeId, { state: runtime.sourceState, generation });
+  const sessionFiles =
+    state.sessionFiles.content.kind === "file" &&
+    state.sessionFiles.content.context.sessionId === sessionId
+      ? {
+          ...state.sessionFiles,
+          content: { kind: "conversation" as const },
+          generation: state.sessionFiles.generation + 1,
+        }
+      : state.sessionFiles;
+  return {
+    ...state,
+    structured,
+    history,
+    volatile,
+    threads,
+    readResources,
+    usage,
+    modeStates,
+    switchIntents,
+    attachmentRuns,
+    promptRequestIds,
+    commands,
+    uncertainRequestIds: state.uncertainRequestIds.filter((id) => !removedRequests.has(id)),
+    remoteSessions,
+    remoteSources,
+    sessionFiles,
+  };
+}
+
 /** 会话摘要 → 替换 `resources.sessions` 里的同 id 条目（目录汇总随之更新）。 */
 function withSessionSummary(resources: StagedResources | null, summary: SessionSummary): StagedResources | null {
   if (resources === null) return resources;
   const rest = resources.sessions.filter((item) => item.sessionId !== summary.sessionId);
   return { ...resources, sessions: [summary, ...rest] };
+}
+
+/**
+ * 远程读取结果里的原子 `sessionSummary`：只有**不更旧**的版本才替换清单条目。
+ *
+ * 读取位置 R 与清单可能隔着一次实时更新；用更旧的读取摘要覆盖清单会让标题/状态回滚
+ * （D6 明确要求用读取时的摘要与版本防止这一竞态）。
+ */
+function withVersionedSummary(
+  resources: StagedResources | null,
+  summary: SessionSummary,
+): StagedResources | null {
+  if (resources === null) return resources;
+  const existing = resources.sessions.find((item) => item.sessionId === summary.sessionId);
+  if (existing !== undefined) {
+    const incoming = BigInt(summary.version);
+    const current = BigInt(existing.version);
+    if (incoming < current) return resources;
+  }
+  return withSessionSummary(resources, summary);
 }
 
 /**
@@ -537,6 +904,20 @@ function sessionSummaryIn(event: EventMessage): SessionSummary | null {
   const state = "state" in summary ? summary.state : undefined;
   if (state !== "idle" && state !== "running" && state !== "pending") return null;
   return summary as SessionSummary;
+}
+
+/** 远程事件摘要：会话标识、来源节点都必须与订阅一致，否则不采用。 */
+function isRemoteSummary(value: unknown, sessionId: Uuid, ownerNodeId: Uuid): value is SessionSummary {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<SessionSummary>;
+  if (candidate.sessionId !== sessionId) return false;
+  const origin = candidate.origin;
+  return (
+    typeof origin === "object" &&
+    origin !== null &&
+    origin.kind === "remote" &&
+    origin.ownerNodeId === ownerNodeId
+  );
 }
 
 /** `session.usage.changed` 视图里的两项计数。 */
@@ -630,11 +1011,18 @@ function partialViewFrom(value: unknown): PartialResultView | null {
  * 去重的两道口子都在这里：实时已收到的事件不因历史再收一遍而多出一条（首次呈现的
  * 那份记录更全——它带 `globalSequence` 与本次投递的原文字节）；同一历史页重复读取也不重复。
  */
-function withHistory(state: ClientState, sessionId: Uuid, items: readonly SnapshotItemHistory[]): ClientState {
+function withHistory(
+  state: ClientState,
+  sessionId: Uuid,
+  items: readonly SnapshotItemHistory[],
+  ownerNodeId: string | null = null,
+): ClientState {
   const history = new Map(state.history);
   for (const item of items) {
-    if (state.structured.has(item.eventId) || history.has(item.eventId)) continue;
-    history.set(item.eventId, recordFromHistoryItem(item, sessionId));
+    const record = recordFromHistoryItem(item, sessionId, ownerNodeId);
+    const key = recordKey(record);
+    if (state.structured.has(key) || history.has(key)) continue;
+    history.set(key, record);
   }
   return { ...state, history };
 }
@@ -931,6 +1319,8 @@ export class ClientStore {
   readonly #messageRefreshQueued = new Set<Uuid>();
   /** 首次读取在连接认证前被丢弃的会话；`authenticated` 后补发。 */
   readonly #deferredReads = new Set<Uuid>();
+  /** 远程来源在订阅/重置/重连后待发起的原子读取重建。 */
+  readonly #remoteRebuilds = new Set<Uuid>();
   /** `session.prompt` 派发前的草稿/附件快照：被拒绝或失败时恢复（不静默丢用户内容）。 */
   readonly #promptDrafts = new Map<Uuid, {
     readonly sessionId: Uuid;
@@ -1005,6 +1395,21 @@ export class ClientStore {
     this.#drainQueuedFileRefreshes();
     this.#drainQueuedMessageRefreshes();
     if (event.kind === "authenticated") this.#drainDeferredReads();
+    if (event.kind === "snapshot_verified") {
+      // 快照到达后才能判定来源：补发延迟读取，并为已打开的远程会话建立订阅与重建。
+      this.#drainDeferredReads();
+      const active = this.#activeConversationSession;
+      if (active !== null) {
+        const ref = remoteRefOf(this.#state, active);
+        if (ref !== null) {
+          this.#sync.subscribeRemote(ref);
+          this.#queueRemoteRebuild(active);
+        }
+      }
+    }
+    // 来源清单失效只重新查询清单（快照），不携带任何旧资源副本。
+    if (event.kind === "remote_catalog_changed") this.#sync.refreshSnapshot();
+    this.#drainQueuedRemoteRebuilds();
     // 创建完成只带目录引用，路径必须从服务端快照取得，不能按用户输入伪造目录条目。
     if (event.kind === "command_result" && event.result.body.command === "session.create" &&
       event.result.body.status === "completed" && !this.#directoryRefreshRequests.has(event.result.body.requestId)) {
@@ -1056,15 +1461,29 @@ export class ClientStore {
       case "online":
         return this.#withConnection({ kind: "caught_up" });
       case "closed":
-        return this.#withConnection({ kind: "connection_closed", retryable: event.retryable });
+        return clearAllRemoteData(this.#withConnection({ kind: "connection_closed", retryable: event.retryable }));
       case "blocked":
-        return this.#withConnection({ kind: "blocked", cause: event.cause });
+        return clearAllRemoteData(this.#withConnection({ kind: "blocked", cause: event.cause }));
       case "snapshot_verified":
         return { ...this.#state, resources: event.snapshot.resources, lastSyncedAtMs: this.#now() };
       case "event":
         return this.#withEvent(event.event);
       case "command_result":
         return this.#withCommandResult(event.result);
+      case "remote_subscribing":
+        return this.#withRemoteSubscribing(event);
+      case "remote_event":
+        return this.#withRemoteEvent(event);
+      case "remote_caught_up":
+        return this.#withRemoteCaughtUp(event);
+      case "remote_reset_required":
+        return this.#withRemoteReset(event);
+      case "remote_unavailable":
+        return this.#withRemoteUnavailable(event);
+      case "remote_unsubscribed":
+        return this.#withRemoteUnsubscribed(event);
+      case "remote_source_state":
+        return this.#withRemoteSourceState(event.ownerNodeId, event.state);
       default:
         return this.#state;
     }
@@ -1072,6 +1491,227 @@ export class ClientStore {
 
   #withConnection(event: ConnectionEvent): ClientState {
     return { ...this.#state, connection: applyConnectionEvent(this.#state.connection, event) };
+  }
+
+  /** 来源订阅已（重新）发出：登记运行期模型并排队一次原子读取重建。 */
+  #withRemoteSubscribing(event: Extract<SyncClientEvent, { kind: "remote_subscribing" }>): ClientState {
+    const { ownerNodeId, sessionId } = event.sessionRef;
+    const previous = this.#state.remoteSessions.get(sessionId);
+    const existing = previous?.ownerNodeId === ownerNodeId ? previous : undefined;
+    const sourceState = existing?.sourceState ?? this.#state.remoteSources.get(ownerNodeId)?.state ?? "online";
+    const runtime: RemoteSessionRuntime = {
+      ownerNodeId,
+      sessionId,
+      phase: "subscribing",
+      sourceState,
+      cursor: event.cursor ?? existing?.cursor ?? null,
+      caughtUp: false,
+      rebuilt: false,
+      coverage: existing?.coverage ?? EMPTY_REMOTE_COVERAGE,
+      error: null,
+      generation: sourceGenerationOf(this.#state, ownerNodeId),
+    };
+    const remoteSessions = new Map(this.#state.remoteSessions);
+    remoteSessions.set(sessionId, runtime);
+    const remoteSources = new Map(this.#state.remoteSources);
+    if (!remoteSources.has(ownerNodeId)) {
+      remoteSources.set(ownerNodeId, { state: "online", generation: runtime.generation });
+    }
+    this.#remoteRebuilds.add(sessionId);
+    return { ...this.#state, remoteSessions, remoteSources };
+  }
+
+  /**
+   * 一条来源事件：先按覆盖位置过滤已被读取页包含的增量，再走与 live 事件同一套记录/易失归并。
+   *
+   * 未返回消息的覆盖项不存在，因此事件照常保留；同一 `originEventId` 的去重已在门面完成，
+   * 这里再用记录键兜底（重订阅窗口）。
+   */
+  #withRemoteEvent(event: Extract<SyncClientEvent, { kind: "remote_event" }>): ClientState {
+    const { ownerNodeId, sessionId } = event.sessionRef;
+    let runtime = this.#state.remoteSessions.get(sessionId);
+    if (runtime === undefined || runtime.ownerNodeId !== ownerNodeId) {
+      runtime = {
+        ownerNodeId,
+        sessionId,
+        phase: "subscribing",
+        sourceState: this.#state.remoteSources.get(ownerNodeId)?.state ?? "online",
+        cursor: null,
+        caughtUp: false,
+        rebuilt: false,
+        coverage: EMPTY_REMOTE_COVERAGE,
+        error: null,
+        generation: sourceGenerationOf(this.#state, ownerNodeId),
+      };
+    }
+    const remoteEvent = event.event;
+    const view = remoteEvent.payload.view ?? {};
+    if (remoteEvent.eventType === "session.origin.online_changed" && view["online"] === false) {
+      return clearRemoteOwnerData(
+        this.#state,
+        ownerNodeId,
+        "offline",
+        remoteUnavailableError(ownerNodeId, "来源节点当前不可达，远程会话已清除。"),
+      );
+    }
+    const nextCursor = advanceOriginCursor(runtime.cursor, {
+      originEpoch: remoteEvent.originEpoch,
+      originSequence: remoteEvent.originSequence,
+    });
+    const deltaChannel = deltaChannelOf(remoteEvent.eventType);
+    if (deltaChannel !== null) {
+      const messageId = viewText(view, "messageId");
+      const deltaIndex = viewText(view, "deltaIndex");
+      if (messageId !== null && deltaIndex !== null && isDeltaCovered(runtime.coverage, messageId, deltaIndex)) {
+        // 已被读取页覆盖：不再拼接，也不产生第二条记录；位置仍前进（这条事件确实处理过）。
+        const remoteSessions = new Map(this.#state.remoteSessions);
+        remoteSessions.set(sessionId, { ...runtime, cursor: nextCursor });
+        return { ...this.#state, remoteSessions };
+      }
+    }
+
+    let next: ClientState = { ...this.#state, remoteSessions: new Map(this.#state.remoteSessions) };
+    const record = recordFromRemoteEvent(remoteEvent);
+    const key = recordKey(record);
+    if (!next.structured.has(key)) {
+      const structured = new Map(next.structured);
+      structured.set(key, record);
+      next = { ...next, structured };
+    }
+    next = this.#withMessageLane(next, record);
+
+    if (remoteEvent.eventType === "session.created" || remoteEvent.eventType === "session.updated") {
+      const summary = view["session"];
+      if (isRemoteSummary(summary, sessionId, ownerNodeId)) {
+        next = { ...next, resources: withSessionSummary(next.resources, summary) };
+      }
+    }
+    if (remoteEvent.eventType === "session.usage.changed") {
+      const used = view["used"];
+      const size = view["size"];
+      if (typeof used === "string" && typeof size === "string") {
+        const usage = new Map(next.usage);
+        usage.set(sessionId, { used, size });
+        next = { ...next, usage };
+      }
+    }
+    const runtimeWithCursor: RemoteSessionRuntime = {
+      ...(next.remoteSessions.get(sessionId) ?? runtime),
+      cursor: nextCursor,
+    };
+    const remoteSessions = new Map(next.remoteSessions);
+    remoteSessions.set(sessionId, runtimeWithCursor);
+    return { ...next, remoteSessions };
+  }
+
+  #withRemoteCaughtUp(event: Extract<SyncClientEvent, { kind: "remote_caught_up" }>): ClientState {
+    const runtime = this.#state.remoteSessions.get(event.sessionRef.sessionId);
+    if (runtime === undefined) return this.#state;
+    const remoteSessions = new Map(this.#state.remoteSessions);
+    const caughtUp: RemoteSessionRuntime = {
+      ...runtime,
+      caughtUp: true,
+      cursor: advanceOriginCursor(runtime.cursor, event.cursor),
+      phase: runtime.rebuilt ? "ready" : "replaying",
+      error: null,
+    };
+    remoteSessions.set(runtime.sessionId, caughtUp);
+    if (!runtime.rebuilt) this.#remoteRebuilds.add(runtime.sessionId);
+    return { ...this.#state, remoteSessions };
+  }
+
+  #withRemoteReset(event: Extract<SyncClientEvent, { kind: "remote_reset_required" }>): ClientState {
+    const runtime = this.#state.remoteSessions.get(event.sessionRef.sessionId);
+    if (runtime === undefined) return this.#state;
+    // C 已不可恢复：先清展示数据与旧覆盖，再回源读取重建（D4 的首次重建路径）。
+    this.#remoteRebuilds.add(runtime.sessionId);
+    return clearRemoteSessionData(this.#state, runtime, "subscribing", null);
+  }
+
+  #withRemoteUnavailable(event: Extract<SyncClientEvent, { kind: "remote_unavailable" }>): ClientState {
+    return clearRemoteOwnerData(this.#state, event.sessionRef.ownerNodeId, "unknown", event.error);
+  }
+
+  #withRemoteUnsubscribed(event: Extract<SyncClientEvent, { kind: "remote_unsubscribed" }>): ClientState {
+    const runtime = this.#state.remoteSessions.get(event.sessionRef.sessionId);
+    if (runtime === undefined) return this.#state;
+    return clearRemoteSessionData(
+      this.#state,
+      runtime,
+      "unavailable",
+      remoteUnavailableError(runtime.ownerNodeId, "该来源订阅已结束，请重新打开会话。"),
+    );
+  }
+
+  #withRemoteSourceState(ownerNodeId: Uuid, state: RemoteSourceKind): ClientState {
+    if (state === "online") {
+      const remoteSources = new Map(this.#state.remoteSources);
+      const generation = sourceGenerationOf(this.#state, ownerNodeId);
+      remoteSources.set(ownerNodeId, { state, generation });
+      const remoteSessions = new Map(this.#state.remoteSessions);
+      for (const [sessionId, runtime] of remoteSessions) {
+        if (runtime.ownerNodeId !== ownerNodeId) continue;
+        const revived: RemoteSessionRuntime = {
+          ...runtime,
+          sourceState: state,
+          phase: "subscribing",
+          caughtUp: false,
+          rebuilt: false,
+          coverage: EMPTY_REMOTE_COVERAGE,
+          error: null,
+        };
+        remoteSessions.set(sessionId, revived);
+        this.#remoteRebuilds.add(sessionId);
+      }
+      // 来源恢复后重新读取清单，才能把此前清除的摘要重新取回（不保留旧副本）。
+      this.#sync.refreshSnapshot();
+      return { ...this.#state, remoteSources, remoteSessions };
+    }
+    return clearRemoteOwnerData(this.#state, ownerNodeId, state, remoteUnavailableError(ownerNodeId));
+  }
+
+  /** 排队一次远程原子读取；真正派发在提交之后（避免归并函数内嵌套提交）。 */
+  #queueRemoteRebuild(sessionId: Uuid): void {
+    this.#remoteRebuilds.add(sessionId);
+  }
+
+  /** 提交之后补发排队的远程重建；同一会话已有读取在途时保留队列。 */
+  #drainQueuedRemoteRebuilds(): void {
+    if (this.#remoteRebuilds.size === 0) return;
+    // 认证前没有 connectionId / deviceId：保留队列，待认证结果到达后再判定 feature 并派发。
+    if (this.#identity.connectionId === null || this.#state.deviceId === null) return;
+    for (const sessionId of [...this.#remoteRebuilds]) {
+      const runtime = this.#state.remoteSessions.get(sessionId);
+      if (runtime === undefined || runtime.sourceState === "offline" || runtime.sourceState === "revoked") {
+        this.#remoteRebuilds.delete(sessionId);
+        continue;
+      }
+      if (runtime.rebuilt && runtime.caughtUp) {
+        this.#remoteRebuilds.delete(sessionId);
+        continue;
+      }
+      const inFlight = [...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId);
+      if (inFlight) continue;
+      if (!this.#state.selectedFeatures.includes(STATELESS_ORIGIN_FEATURE)) {
+        this.#remoteRebuilds.delete(sessionId);
+        this.#sync.unsubscribeRemote({ ownerNodeId: runtime.ownerNodeId, sessionId });
+        const remoteSessions = new Map(this.#state.remoteSessions);
+        remoteSessions.set(sessionId, {
+          ...runtime,
+          phase: "unavailable",
+          error: {
+            code: "capability.unsupported_by_broker",
+            message: "此主机未协商 resource.stateless-origin.v1，远程会话不可用。",
+            retryable: false,
+            details: {},
+          },
+        });
+        this.#commit({ ...this.#state, remoteSessions });
+        continue;
+      }
+      this.#remoteRebuilds.delete(sessionId);
+      this.#requestPage(sessionId, "rebuild_remote");
+    }
   }
 
   /**
@@ -1085,9 +1725,10 @@ export class ClientStore {
 
     // 1) 归一记录：实时事件按 `eventId` 先到先留（重投不产生第二条）。
     const record = recordFromEvent(event);
-    if (!next.structured.has(record.eventId)) {
+    const key = recordKey(record);
+    if (!next.structured.has(key)) {
       const structured = new Map(next.structured);
-      structured.set(record.eventId, record);
+      structured.set(key, record);
       next = { ...next, structured };
     }
 
@@ -1399,6 +2040,59 @@ export class ClientStore {
   }
 
   /**
+   * `session.read` 的外层：先走既有的分页合并，再把本次读取的原子来源信息并入运行期模型。
+   *
+   * - `readCursor` 推进最后连续位置 C（只用于衔接/去重，不持久化）；
+   * - `messageCoverage` 只覆盖本次返回的消息：已被覆盖的增量从易失层移除，未覆盖的保留；
+   * - `sessionSummary` 只有版本不更旧时才替换清单条目（D6，防止读取与实时更新竞态回滚标题）。
+   */
+  #applyReadResult(state: ClientState, result: CommandResultMessage): ClientState {
+    const pending = this.#pendingReads.get(result.body.requestId);
+    if (pending === undefined) return state;
+    if (pending.remote !== null) {
+      const currentGeneration = sourceGenerationOf(state, pending.remote.ownerNodeId);
+      const runtime = state.remoteSessions.get(pending.sessionId);
+      // 来源被清除/重置后，迟到结果不得把远程正文重新填回（design D3/D4）。
+      if (
+        currentGeneration !== pending.generation ||
+        runtime === undefined ||
+        runtime.ownerNodeId !== pending.remote.ownerNodeId
+      ) {
+        this.#pendingReads.delete(result.body.requestId);
+        return state;
+      }
+    }
+    const next = this.#applyReadResultInner(state, result);
+    if (result.body.command !== "session.read" || result.body.status !== "completed") return next;
+    const read = result.body.result as SessionReadResult;
+    const runtime = next.remoteSessions.get(pending.sessionId);
+    if (runtime === undefined) return next;
+    const coverage = coverageFromRead(read.messageCoverage);
+    const merged = mergeRemoteCoverage(runtime.coverage, coverage);
+    let cursor = runtime.cursor;
+    if (read.readCursor !== undefined) cursor = advanceOriginCursor(cursor, read.readCursor);
+    const rebuilt = runtime.rebuilt || read.readCursor !== undefined;
+    const phase = runtime.caughtUp && rebuilt ? "ready" : runtime.phase;
+    const remoteSessions = new Map(next.remoteSessions);
+    remoteSessions.set(pending.sessionId, { ...runtime, coverage: merged, cursor, rebuilt, phase });
+    const volatile = new Map(next.volatile);
+    if (read.resources.messages !== undefined) {
+      for (const message of read.resources.messages) {
+        const tail = volatile.get(message.messageId);
+        if (tail === undefined) continue;
+        const deltas = pruneCoveredDeltas(tail.deltas, coverage.get(message.messageId));
+        if (deltas.size === 0) volatile.delete(message.messageId);
+        else volatile.set(message.messageId, { ...tail, deltas });
+      }
+    }
+    const resources =
+      read.sessionSummary === undefined
+        ? next.resources
+        : withVersionedSummary(next.resources, read.sessionSummary);
+    return { ...next, remoteSessions, volatile, resources };
+  }
+
+  /**
    * `session.read` 结果并入状态。
    *
    * 五种用途各自合并自己那一份资源（D2）：
@@ -1410,7 +2104,7 @@ export class ClientStore {
    *   它**不**动消息页，消息分页也**不**动历史页——两套游标互不影响。
    * - `refresh_interactions`：只替换服务端确认的当前有效请求，保留首屏的配置项与能力声明。
    */
-  #applyReadResult(state: ClientState, result: CommandResultMessage): ClientState {
+  #applyReadResultInner(state: ClientState, result: CommandResultMessage): ClientState {
     const pending = this.#pendingReads.get(result.body.requestId);
     if (pending === undefined) return state;
     this.#pendingReads.delete(result.body.requestId);
@@ -1449,7 +2143,10 @@ export class ClientStore {
         loadingHistory: false,
         pagingError: null,
       });
-      return { ...withHistory(state, sessionId, loaded.items), threads };
+      return {
+        ...withHistory(state, sessionId, loaded.items, pending.remote?.ownerNodeId ?? null),
+        threads,
+      };
     }
 
     const loaded = toLoadedPage(read);
@@ -1483,15 +2180,41 @@ export class ClientStore {
       return { ...state, threads, volatile: volatileAfterRead };
     }
 
-    // 首屏同时把历史条目与明细资源（待处理交互、配置项）落进来；翻页请求只并入自己那一份。
-    const staged =
-      pending.intent === "first"
-        ? withReadResources(withHistory(state, sessionId, read.resources.history ?? []), sessionId, read)
-        : state;
+    // 首屏/远程重建把历史首页与明细资源落进来；翻页请求只并入自己那一份。
+    const replacing = pending.intent === "first" || pending.intent === "rebuild_remote";
+    let staged = state;
+    if (replacing) {
+      let base = state;
+      if (pending.intent === "rebuild_remote" && pending.remote !== null) {
+        // 重建是来源的最新权威视图：先清掉该来源该会话的旧历史，再并入本次首页。
+        const history = new Map(state.history);
+        for (const [key, record] of history) {
+          if (
+            record.ownerNodeId === pending.remote.ownerNodeId &&
+            record.sessionId === sessionId
+          ) {
+            history.delete(key);
+          }
+        }
+        base = { ...state, history };
+      }
+      staged = withReadResources(
+        withHistory(base, sessionId, read.resources.history ?? [], pending.remote?.ownerNodeId ?? null),
+        sessionId,
+        read,
+      );
+    }
 
-    if (pending.intent === "first" || existing.page === null) {
-      // 首屏同时拿到历史那一页的页标记与续取游标；消息翻页请求不动它们（两套游标独立）。
-      const historyPage = pending.intent === "first" ? toLoadedHistoryPage(read) : null;
+    if (
+      pending.intent === "first" ||
+      pending.intent === "rebuild_remote" ||
+      existing.page === null
+    ) {
+      // 首屏/远程重建都是**最新权威页**：直接替换消息页，绝不当成向上翻页做重叠断言。
+      const historyPage =
+        pending.intent === "first" || pending.intent === "rebuild_remote"
+          ? toLoadedHistoryPage(read)
+          : null;
       threads.set(sessionId, {
         ...existing,
         page: buildSessionReadPageView(loaded.result),
@@ -1630,7 +2353,67 @@ export class ClientStore {
   conversationPage(sessionId: Uuid, nowMs?: number): ConversationPageModel | null {
     const thread = this.#state.threads.get(sessionId);
     const summary = this.#findSession(sessionId);
+    const runtime = this.#state.remoteSessions.get(sessionId);
+    if (summary === undefined && runtime !== undefined) {
+      // 来源已清除且读取失败：给出一页明确的不可用，而不是继续展示缓存标题或假装空历史。
+      const error = runtime.error;
+      const origin = { kind: "remote" as const, online: false };
+      const input = buildConversationInputModel({
+        connectionOnline: false,
+        originLocal: false,
+        originOnline: false,
+        turnInProgress: false,
+        canCancel: false,
+        promptCommand: null,
+        cancelCommand: null,
+        attachmentsNegotiated: false,
+        attachments: buildAttachmentBatch({
+          attachments: [],
+          pathRefs: [],
+          capabilityOf: (): AttachmentCapability => ({ kind: "supported" }),
+        }),
+        pathRefs: [],
+      });
+      return buildConversationModel({
+        header: {
+          sessionId,
+          title: "远程会话不可用",
+          agentName: "",
+          state: null,
+          directoryId: null,
+          originOfflineLabel: error?.message ?? "来源节点当前不可用。",
+        },
+        page: null,
+        usage: null,
+        degraded: [],
+        timeline: {
+          entries: [],
+          structuredHistory: structuredHistoryAvailability({
+            origin,
+            historyFeatureNegotiated: this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE),
+          }),
+        },
+        loadingEarlier: false,
+        pagingError: error?.message ?? "来源节点当前不可用。",
+        input,
+        interactions: [],
+        capabilities: conversationCapabilities({
+          connectionOnline: false,
+          turnInProgress: false,
+          origin,
+        }),
+      });
+    }
+
     if (thread === undefined && summary === undefined) return null;
+
+    const remoteOrigin = summary?.origin.kind === "remote" ? summary.origin : null;
+    const sourceOnline =
+      remoteOrigin === null ||
+      (remoteOrigin.online && runtime?.sourceState !== "offline" && runtime?.sourceState !== "revoked");
+    const remoteReady = remoteOrigin === null || runtime === undefined || runtime.phase === "ready";
+    const origin: "local" | { readonly kind: "remote"; readonly online: boolean } =
+      remoteOrigin === null ? "local" : { kind: "remote", online: sourceOnline };
 
     const header: ConversationHeaderModel = {
       sessionId,
@@ -1639,32 +2422,40 @@ export class ClientStore {
       // 没有摘要时是「未知」，不是空闲：MUST NOT 编造主状态。
       state: summary?.state ?? null,
       directoryId: summary?.workspace?.directoryId ?? null,
-      originOfflineLabel: originOfflineLabelOf(summary, this.#ownerLabelOf),
+      originOfflineLabel:
+        remoteOrigin === null
+          ? originOfflineLabelOf(summary, this.#ownerLabelOf)
+          : !remoteReady
+            ? runtime?.error?.message ?? "正在从来源重建会话，完成后才呈现内容。"
+            : originOfflineLabelOf(summary, this.#ownerLabelOf),
     };
-    const origin: "local" | { readonly kind: "remote"; readonly online: boolean } =
-      summary?.origin.kind === "remote" ? { kind: "remote", online: summary.origin.online } : "local";
     const connectionOnline = this.#state.connection.state === "online";
 
-    // 结构化记录：实时与历史按 `eventId` 去重（实时优先），再筛出本会话。
-    const records = this.#recordsOf(sessionId);
+    // 结构化记录：实时与历史按来源 + `eventId` 去重（实时优先），再筛出本会话。
+    // 来源尚未重建完成时一律不呈现，避免把部分事件误当成完整视图。
+    const records = remoteReady ? this.#recordsOf(sessionId) : [];
     const effectiveNow = nowMs ?? this.#now();
-    const interactions = buildInteractionViews({
-      records,
-      pending: this.#state.readResources.get(sessionId)?.pendingInteractions ?? [],
-      responseRequestIds: this.#state.responseRequestIds,
-      commands: this.#state.commands,
-      deviceId: this.#state.deviceId,
-      effectiveAt: new Date(effectiveNow).toISOString(),
-      nowMs: effectiveNow,
-      pendingChecked: thread?.interactionsRefreshed === true,
-      requestVersionRequired: this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE),
-    });
-    const entries = buildTimeline({
-      messages: thread?.page?.messages ?? [],
-      records,
-      volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === sessionId),
-      interactions,
-    });
+    const interactions = remoteReady
+      ? buildInteractionViews({
+          records,
+          pending: this.#state.readResources.get(sessionId)?.pendingInteractions ?? [],
+          responseRequestIds: this.#state.responseRequestIds,
+          commands: this.#state.commands,
+          deviceId: this.#state.deviceId,
+          effectiveAt: new Date(effectiveNow).toISOString(),
+          nowMs: effectiveNow,
+          pendingChecked: thread?.interactionsRefreshed === true,
+          requestVersionRequired: this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE),
+        })
+      : [];
+    const entries = remoteReady
+      ? buildTimeline({
+          messages: thread?.page?.messages ?? [],
+          records,
+          volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === sessionId),
+          interactions,
+        })
+      : [];
     // 降级条目与时间线**同源**：扁平列表是时间线上 `kind === "degraded"` 的投影，
     // 因此不可能出现「时间线没有降级卡而诊断列表有」这类不一致。
     const degraded = entries.flatMap((entry) => (entry.kind === "degraded" ? [entry.degraded] : []));
@@ -1696,6 +2487,7 @@ export class ClientStore {
     const input: ConversationInputModel = buildConversationInputModel({
       connectionOnline,
       originLocal: origin === "local",
+      originOnline: origin === "local" ? true : origin.online,
       turnInProgress: activeTurn !== null,
       // 取消只看「有活动轮次 + 连接可用」；主状态（idle/running/pending）不参与。
       canCancel: connectionOnline && activeTurn !== null,
@@ -1710,8 +2502,8 @@ export class ClientStore {
 
     return buildConversationModel({
       header,
-      page: thread?.page ?? null,
-      usage: this.#state.usage.get(sessionId) ?? null,
+      page: remoteReady ? (thread?.page ?? null) : null,
+      usage: remoteReady ? (this.#state.usage.get(sessionId) ?? null) : null,
       degraded,
       timeline: {
         entries,
@@ -1720,11 +2512,13 @@ export class ClientStore {
           historyFeatureNegotiated: this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE),
         }),
       },
-      loadingEarlier: thread?.loadingEarlier ?? false,
-      pagingError: thread?.pagingError ?? null,
-      historyHasEarlier: thread?.historyHasEarlier ?? false,
-      loadingHistory: thread?.loadingHistory ?? false,
-      nextBeforeHistory: thread?.nextBeforeHistory ?? null,
+      loadingEarlier: remoteReady ? (thread?.loadingEarlier ?? false) : false,
+      pagingError: remoteReady
+        ? (thread?.pagingError ?? null)
+        : (runtime?.error?.message ?? "正在从来源重建会话，完成后才呈现内容。"),
+      historyHasEarlier: remoteReady ? (thread?.historyHasEarlier ?? false) : false,
+      loadingHistory: remoteReady ? (thread?.loadingHistory ?? false) : false,
+      nextBeforeHistory: remoteReady ? (thread?.nextBeforeHistory ?? null) : null,
       input,
       interactions,
       media: this.#state.attachmentMedia,
@@ -1808,7 +2602,12 @@ export class ClientStore {
   diagnostics(): DegradedEventModel | null {
     const id = this.#state.diagnosticsEventId;
     if (id === null) return null;
-    const record = this.#state.structured.get(id) ?? this.#state.history.get(id);
+    const record =
+      this.#state.structured.get(id) ??
+      this.#state.history.get(id) ??
+      [...this.#state.structured.values(), ...this.#state.history.values()].find(
+        (candidate) => candidate.eventId === id,
+      );
     if (record === undefined) return null;
     return isDegradedRecord(record)
       ? buildDegradedRecordModel(record)
@@ -2740,7 +3539,20 @@ export class ClientStore {
    */
   loadSession(sessionId: Uuid): void {
     if (this.#pendingReads.size > 0) return;
-    const requestId = this.#requestPage(sessionId, "first");
+    const remote = remoteRefOf(this.#state, sessionId);
+    const runtime = this.#state.remoteSessions.get(sessionId);
+    if (remote !== null && runtime !== undefined &&
+      (runtime.sourceState === "offline" || runtime.sourceState === "revoked")) {
+      return;
+    }
+    if (
+      remote !== null &&
+      this.#state.deviceId !== null &&
+      !this.#state.selectedFeatures.includes(STATELESS_ORIGIN_FEATURE)
+    ) {
+      return;
+    }
+    const requestId = this.#requestPage(sessionId, remote === null ? "first" : "rebuild_remote");
     if (requestId === null) {
       // 页面可能在认证完成前挂载（直接打开 `/session/<id>` 或刷新）；此时不能静默丢掉首次读取。
       this.#deferredReads.add(sessionId);
@@ -2751,6 +3563,8 @@ export class ClientStore {
 
   /** 认证完成后补发被推迟的首次读取（只处理当前对话页的会话）。 */
   #drainDeferredReads(): void {
+    // 快照未到时无法判定会话来源：此刻按 local 派发会把远程会话的 include 选错。
+    if (this.#state.resources === null) return;
     for (const sessionId of [...this.#deferredReads]) {
       if (this.#activeConversationSession !== sessionId) continue;
       this.#deferredReads.delete(sessionId);
@@ -3284,6 +4098,7 @@ export class ClientStore {
    */
   setActiveConversationSession(sessionId: Uuid): void {
     if (this.#activeConversationSession === sessionId) return;
+    const previous = this.#activeConversationSession;
     this.#activeConversationSession = sessionId;
     const content = this.#state.sessionFiles.content;
     if (content.kind === "file" && content.context.sessionId !== sessionId) {
@@ -3291,6 +4106,17 @@ export class ClientStore {
       this.#dropPendingContentQueries();
       this.#commit(this.#withFileContent(this.#state, { kind: "conversation" }, generation));
     }
+    if (previous !== null) {
+      const previousRef = remoteRefOf(this.#state, previous);
+      if (previousRef !== null) this.#sync.unsubscribeRemote(previousRef);
+    }
+    const ref = remoteRefOf(this.#state, sessionId);
+    if (ref === null) return;
+    if (this.#state.remoteSessions.get(sessionId)?.sourceState === "revoked") return;
+    // 认证前先登记订阅意图（门面保存 wanted），feature 协商结果在认证后才可见。
+    this.#sync.subscribeRemote(ref);
+    this.#queueRemoteRebuild(sessionId);
+    this.#drainQueuedRemoteRebuilds();
   }
 
   /** 切换文件栏来源；归一后的来源只会是全部文件或 Git 变更，进入时立即刷新。 */
@@ -4407,14 +5233,16 @@ export class ClientStore {
     cursors: { readonly before?: ReadCursor; readonly beforeHistory?: string } = {},
   ): Uuid | null {
     const volatileAtRequest = this.#volatileSnapshot(sessionId);
+    const remote = remoteRefOf(this.#state, sessionId);
+    const generation = remote === null ? 0 : sourceGenerationOf(this.#state, remote.ownerNodeId);
     return this.#dispatchIntent({
       sessionId,
       build: (requestId) => {
-        this.#pendingReads.set(requestId, { sessionId, intent, volatileAtRequest });
+        this.#pendingReads.set(requestId, { sessionId, intent, volatileAtRequest, remote, generation });
         // 与 `paging.ts` 的 `buildReadPayload` 同一形状；这里就地构造是为了让 `include`
         // 保持 `SessionReadInclude[]`（协议类型），而 `PageRequest` 声明的是更宽的 `string[]`。
         const payload: { include: readonly SessionReadInclude[]; before?: ReadCursor; beforeHistory?: string } = {
-          include: this.#includesFor(intent),
+          include: this.#includesFor(intent, remote !== null),
         };
         if (cursors.before !== undefined) payload.before = cursors.before;
         if (cursors.beforeHistory !== undefined) payload.beforeHistory = cursors.beforeHistory;
@@ -4442,7 +5270,7 @@ export class ClientStore {
    * `loadEarlierHistory` 都先查这一点）：未协商却请求它时服务端会回明确的不支持类错误，
    * 而旧服务端连该取值都不认识。翻页请求只要自己那一份资源，两套分页因此互不影响（D2）。
    */
-  #includesFor(intent: ReadIntent): readonly SessionReadInclude[] {
+  #includesFor(intent: ReadIntent, remote: boolean): readonly SessionReadInclude[] {
     const historyNegotiated = this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE);
     const pendingNegotiated = this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE);
     switch (intent) {
@@ -4454,9 +5282,18 @@ export class ClientStore {
       case "earlier_history":
         return ["history"];
       case "refresh_interactions":
-        // 只重读服务端确认的当前有效请求；调用方已确认协商到该 feature。
+        // 远程读取面不返回有效交互；本地路径只在协商后请求。
+        if (remote) return [];
         return pendingNegotiated ? ["pending_interactions"] : [];
-      case "first": {
+      case "first":
+      case "rebuild_remote": {
+        // 远程读取面只表达 messages/history：配置项与有效交互是 Owner 本机路由的能力，
+        // 请求它们会让服务端显式回 capability.unsupported_by_broker（design D4/D6）。
+        if (remote) {
+          const includes: SessionReadInclude[] = ["messages"];
+          if (historyNegotiated) includes.push("history");
+          return includes;
+        }
         const includes: SessionReadInclude[] = [...CONVERSATION_INCLUDES];
         if (historyNegotiated) includes.push("history");
         if (pendingNegotiated) includes.push("pending_interactions");
@@ -4505,9 +5342,17 @@ export class ClientStore {
 
   /** 本会话的结构化记录（实时与历史按 `eventId` 去重，实时优先）。 */
   #recordsOf(sessionId: Uuid): readonly StructuredRecord[] {
-    return mergeStructuredRecords([...this.#state.structured.values()], [...this.#state.history.values()]).filter(
-      (record) => record.sessionId === sessionId,
-    );
+    // 去重键绑定来源节点：不同 Owner 的同名 `eventId` 是不同事件，不能只按裸标识合并。
+    const merged = new Map<string, StructuredRecord>();
+    for (const record of this.#state.structured.values()) {
+      if (record.sessionId === sessionId) merged.set(recordKey(record), record);
+    }
+    for (const record of this.#state.history.values()) {
+      if (record.sessionId !== sessionId) continue;
+      const key = recordKey(record);
+      if (!merged.has(key)) merged.set(key, record);
+    }
+    return [...merged.values()];
   }
 
   /** 一条交互的呈现模型（可应答性的唯一判定入口）。 */

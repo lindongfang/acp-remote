@@ -1,6 +1,6 @@
 # ACP Remote Node Link 设计
 
-> 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。Owner 侧的节点状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）已由 `server::node_link` 落地（切片 5，`node-link-owner`）；Access 侧的出站客户端 crate `node-link-client` 已落地（WSS 握手、单任务重连与撤销、catalog 无正文投影、`commit_receipt` → 发布 → `resource.ack`、远程 `SessionEndpoint`/`SessionBackendFactory`、独立附件连接与有界内存转发）；**已接线**的是 Access 侧配对（`node pair --mode access` 的 HTTPS claim/status 与 Owner 信任落盘）、Daemon 启动时对 `NodeLinkClient`/Owner 连接的实例化，以及 `AccessManager` 向本地调用方暴露的远程 `SessionEndpoint` 与附件转发入口（2026-10-20，WP5d）；仍未落地的是 `server::acp_facade`（本地 ACP 客户端的业务命令转发）。  
+> 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 30 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。Owner 侧的节点状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）已由 `server::node_link` 落地（切片 5，`node-link-owner`）；Access 侧的出站客户端 crate `node-link-client` 已落地（WSS 握手、单任务重连与撤销、catalog 无正文投影、`commit_receipt` → 发布 → `resource.ack`、远程 `SessionEndpoint`/`SessionBackendFactory`、独立附件连接与有界内存转发）；**已接线**的是 Access 侧配对（`node pair --mode access` 的 HTTPS claim/status 与 Owner 信任落盘）、Daemon 启动时对 `NodeLinkClient`/Owner 连接的实例化，以及 `AccessManager` 向本地调用方暴露的远程 `SessionEndpoint` 与附件转发入口（2026-10-20，WP5d）；仍未落地的是 `server::acp_facade`（本地 ACP 客户端的业务命令转发）。  
 > 版本：1.0  
 > 修订记录（2026-10-19，`conversation-area-complete` 的合同包，无实现变更）：§11.3 登记 `node-link.attachment-transfer.v1`/`node-link.typed-media.v1`/`node-link.pending-interactions.v1`/`node-link.remote-history.v1`；新增 §11.5（旧 peer 与未协商行为）、§12.9（独立已认证附件连接、13 个附件帧与固定预算）与 §12.10（有效交互与远程历史）；§12.7 的 `session.read`/`session.prompt`/`elicitation.respond`/`permission.resolve` 增加协商后字段；§14.1 增补附件/媒体/交互错误码与 details 登记；§2.5、§17、§18 同步预算、范围与必测场景。实现与 fixture 之外的 wire 行为仍标为计划/待实施，`node-link-client` 仍未落地。  
 > 修订记录（2026-10-16，`pairing-model`）：**删除节点配对的短验证码**——§9.2 的 domain 表与 §9.4 的字段集合删除 `acp-remote/node-link-pairing-sas/v1` 一行与 SAS 计算规则，§8.2 与 §13.2 的确认仪式去掉 SAS（本机界面仍显示节点名、类型、指纹与待授予的 `grant.*`），机器资产（`compatibility/transcripts/v1/transcripts.json` 与节点侧固定向量）同步删除。**设备方向不再有授权维度**——§3.4 与 §10 的措辞收窄为「设备通过认证即可执行本节点命令」，`pack.*`/`preset.*` 两类词汇（设备授权包与配对预设）删除，跨节点导出授权 `grant.*`、Export `scopes` 与 Import `grants` 边界不变。Node Link 面的这次修订**不改 wire**：本节列出的都是节点配对仪式与词汇表口径，消息形状、握手、catalog、resource、command 与 `fixtures/node-link/v1/` 的其余向量不变（仅删除 `transcripts/pairing-sas.json` 与 `manifest.json` 的对应条目；§12.7 的 `session.create` 仍只接受 `workspaceDirectory`、请求不得携带任意 Owner 路径）。  
@@ -127,6 +127,7 @@ Node Link 不依赖 TLS 提供的节点身份：TLS 只保护传输，节点身�
 - 整个握手（`node.hello` → `node.ready`）必须在 15 秒内完成，否则任一方以 `4408` 关闭。
 - 连续 90 秒无任何入站消息或 `link.pong`，Owner 可以关闭连接。
 - 超过单消息上限应在分配大对象前以 `1009` 拒绝。
+- `resource.caught_up`/`resource.reset_required`/`resource.unavailable` 与收窄后的 `resource.ack` **不新增上限**：单帧、单连接待发送队列与来源重放批次沿用本表既有预算；Access 为重建持有的来源缓冲计入同一有界预算，超限必须明确 backpressure 或重建，不得落盘扩容（design D3/D4）。
 - 待发送队列达到高水位后先停止读取新的 snapshot 批次；持续过慢时发送 `link.backpressure`（`post_mvp`）并断开，由 origin cursor 重放补回（§15）。
 - v1 不允许 diff 或终端输出通过“再分片”绕过上限；附件正文走 §12.9 的独立已认证连接（32 KiB 分块、每传输一块未确认、单连接 2 个/单节点 8 个活动传输），其发送预算与速率按附件族独立计数，不占用本节业务命令/消息配额。除此之外的正文仍走 `resource.event` 的既有上限或 `post_mvp` 的独立内容 feature。
 - 超过单连接命令速率时返回 `link.error`（`code = "nodelink.resource.rate_limited"`，`retryable = true`），并在连续超限时以 `4429` 关闭连接；`details.retryAfterMs` 给出建议退避毫秒数，存在时 Access 必须遵守后再重试。该拒绝（以及单连接 in-flight 上限的拒绝）有明确的关联命令：`correlationId` 取被拒命令帧的 `messageId`，Access 立即结清该请求——admission 拒绝代表命令**未执行**，不得登记 `uncertain`。
@@ -153,7 +154,7 @@ Node Link 不依赖 TLS 提供的节点身份：TLS 只保护传输，节点身�
 
 - 可以通过本地 `acp_facade` 服务 Zed；
 - 可以通过 Sync Server 服务 PWA、手机或桌面 UI；
-- 默认只保存无正文交付索引和本地游标，不保存远程会话正文；
+- 远程正文与事件只在已认证连接期经有界内存目录/缓冲转发，不写本地交付索引、cursor/ACK 或 local sequence，也不保存远程会话正文；断线、撤销或来源 epoch 变化时整代清除；
 - 不能扩大 Owner Node 授予的能力。
 
 ### 3.4 Client
@@ -163,7 +164,7 @@ Node Link 不依赖 TLS 提供的节点身份：TLS 只保护传输，节点身�
 ### 3.5 Owner 与 Access
 
 - **Owner Node** 是资源的唯一权威：本机会话、事件、命令终态与审计都只写它的 SQLite。
-- **Access Node** 通过 Node Link 访问 Owner 的资源；默认 `no-content-cache`，只保存无正文的交付索引、cursor/ACK 与命令终态引用。
+- **Access Node** 通过 Node Link 访问 Owner 的资源；默认 `no-content-cache`：远程正文、事件与命令结果只经已认证连接期的有界内存目录/缓冲转发，不写本地交付索引、cursor/ACK 或 local sequence，断线/撤销即整代清除。Access 只持久化自己的 Import 配置、远程 endpoint 与本地 principal/授权。
 - 节点之间没有 Export/Import 记录：一次成功的配对就是该节点可以访问本节点全部资源的信任事实（`local.*` 除外）。
 
 ## 4. 目标拓扑
@@ -210,23 +211,20 @@ Owner Node / Broker ── ACP stdio ── Company Agent
 | Origin event sequence 与命令终态 | Owner Node |
 | Import 配置、远程 endpoint | Access Node |
 | Access Node 本地 principal 与本地授权 | Access Node |
-| Access Node 无正文交付索引和 local sequence | Access Node |
 
-第一阶段默认使用 `no-content-cache`。Access Node 不把远程会话正文写入本地 SQLite，只提交用于幂等、重连和本地投递的无正文索引：
+第一阶段默认使用 `no-content-cache`。Access Node 不把远程会话正文、事件或任何交付索引写入本地 SQLite：来源事件在内存中只保留 Owner 的来源坐标、事件类型与摘要，经已认证连接期逐字转发给本地客户端，断线、撤销或来源 epoch 变化即整代清除：
 
 ```text
 ownerNodeId
-
 sessionId
 originEventId
 originEpoch
 originSequence
-localSequence
 eventType
 payloadDigest
 ```
 
-`localSequence` 只服务本节点客户端，不得覆盖或伪装 `originSequence`。Access Node 必须先提交这份索引，再向本地客户端广播事件；正文重放按 origin cursor 向 Owner 请求。Prompt、Agent 回复、工具内容、diff、终端输出、附件和 ACP raw document 只允许在内存中完成有界转发。Owner Node 离线时，Access Node 不展示会话正文，也不能把 prompt 标记为已接受。
+本节点不生成 `localSequence`，来源坐标也不得被本地序号覆盖或伪装。Access 不写本地交付索引、cursor/ACK，也不「先落盘再广播」：排序、ACK 与去重一律以 `(originEpoch, originSequence)`（去重键还含 `ownerNodeId`/`sessionId`）为准，正文重放按 origin cursor 向 Owner 请求（§12.4）。Prompt、Agent 回复、工具内容、diff、终端输出、附件和 ACP raw document 只允许在内存中完成有界转发。Owner Node 离线时，Access Node 不展示会话正文，也不能把 prompt 标记为已接受。
 
 Owner 的 `no-content-cache` 策略和独立 ADR
 
@@ -404,12 +402,13 @@ Node Link 握手交换：
 | `node-link.typed-media.v1` | 跨节点类型化媒体、消息通道与部分结果（§11.4）：`resource.event.payload.view` 的媒体引用/思考/部分结果与 Sync §10.4 同义；Access 不解析 ACP 原文，完整原文仍逐字节保真 | mvp | 否 |
 | `node-link.pending-interactions.v1` | 跨节点有效待处理交互与真实表单（§12.7）：读取当前有效完整请求、`requestVersion` 校验与首个有效应答胜出；历史待处理项不可直接应答 | mvp | 否 |
 | `node-link.remote-history.v1` | 远程历史回源（§12.7/§17）：Access 按 origin cursor 向 Owner 读取历史分页、读取前鉴权；Owner 不可达或超出保留期显式不可用，Access 不持久化正文 | mvp | 否 |
+| `resource.stateless-origin.v1` | 无持久中转的远程来源流/运行期 ACK（§11.4/§12.4）：`resource.caught_up` 来源重放屏障、`resource.reset_required`/`resource.unavailable` 显式错误、`resource.ack` 收窄为运行期累计处理进度（不表示 Access 落盘），以及 `session.read` 的读取覆盖与 `command.status` 的 `remoteTarget`。全部已接线 | mvp | 否 |
 | `core.session-activity.v1` | 跨节点会话主状态三态合同（§11.4/§12.3/§12.4）：`sessionMeta.state` 与 catalog `sessions[].state` 只有 `idle`/`running`/`pending`，与 Sync `sessionSummary.state` 同一取值集合；有效未解决交互优先为 `pending`，其次未结束任务（含排队）为 `running`，否则 `idle`。排队、等待原因与任务结果不经本 feature；旧七态只允许作为 `resource.event.payload.view` 的历史原文出现 | mvp | 是 |
 
 - feature ID 语法、排序与 transcript 编码与 `SYNC_PROTOCOL.md` §5.2 相同：`[a-z0-9.-]`、去重后按 UTF-8 字节升序、`negotiatedFeatures` 以 NUL 分隔。
 - 必需 feature 是 `node-link.core.v1` 与 `core.session-activity.v1`（`必需` 列为"是"，`required: true`）。Access MUST 在 `supportedFeatures` 与 `requiredFeatures` 中声明两者，Owner MUST 在 `node.challenge.selectedFeatures` 中返回两者；任一侧缺失时连接不进入业务阶段——Access 未声明时 Owner 返回 `nodelink.protocol.feature_required`，`details.features` 列出未被选择的 feature ID（排序去重），发送方必须给出；Owner 未选中时 Access 停止业务同步并提示版本不兼容。`core.session-activity.v1` 未选中前 MUST NOT 收发 `sessionMeta`、catalog 会话、快照条目或事件中的三态主状态，MUST NOT 回退七态或把 `pending` 折算成某个 `waiting_*`。
-- 首切片必须实现本表 `delivery = mvp` 的全部行；`node-link.node-rotation.v1` 只登记 ID 与消息名，实现时收到 `node.rotate-key.*` 返回 `nodelink.protocol.type_unsupported`，不得静默忽略。
-- **实现事实（2026-10-20，`session-activity-three-states` WP3）**：Owner 在 `node.challenge.selectedFeatures` 里宣告 registry 中已完整接线的 9 条 mvp feature（`node-link.core.v1`、`core.session-activity.v1`、`raw-acp.v1`、`command-status.v1`、`session-create.v1`、`attachment-transfer.v1`、`typed-media.v1`、`pending-interactions.v1`、`remote-history.v1`）。前五条与既有实现一致；后三条的门控点都在 `session.read`，该命令现已由 Owner 的真实存储投影（共享 `server::session_read`，消息正文/结构化历史/待处理交互/配置项），因此可以如实宣告。附件传输仍要求组合根注册端点并装配存储（未装配时用 `feature_list_without` 去掉它）；其余 feature 无额外装配前提。`core.session-activity.v1` 的三态映射、交互归约、`session.updated` 生产与持久迁移已接线，Owner 在支持集合与必需集合中都登记它。`supported_features_match_the_registry_mvp_subset` 逐条断言本表与 registry 的 mvp 子集相等。
+- 首切片必须实现本表 `delivery = mvp` 的全部行；`conditional_mvp` 行在真实通路接线后才宣告（未接线前收到对应新消息按 `nodelink.protocol.type_unsupported` 拒绝）；`node-link.node-rotation.v1` 只登记 ID 与消息名，实现时收到 `node.rotate-key.*` 返回 `nodelink.protocol.type_unsupported`，不得静默忽略。
+- **实现事实（2026-10-20，`session-activity-three-states` WP3）**：Owner 在 `node.challenge.selectedFeatures` 里宣告 registry 中已完整接线的 10 条 mvp feature（`node-link.core.v1`、`resource.stateless-origin.v1`、`core.session-activity.v1`、`raw-acp.v1`、`command-status.v1`、`session-create.v1`、`attachment-transfer.v1`、`typed-media.v1`、`pending-interactions.v1`、`remote-history.v1`）。前五条与既有实现一致；后三条的门控点都在 `session.read`，该命令现已由 Owner 的真实存储投影（共享 `server::session_read`，消息正文/结构化历史/待处理交互/配置项），因此可以如实宣告。附件传输仍要求组合根注册端点并装配存储（未装配时用 `feature_list_without` 去掉它）；其余 feature 无额外装配前提。`core.session-activity.v1` 的三态映射、交互归约、`session.updated` 生产与持久迁移已接线，Owner 在支持集合与必需集合中都登记它。`supported_features_match_the_registry_mvp_subset` 逐条断言本表与 registry 的 mvp 子集相等。
 
 ### 11.4 事件类型与 `view` 契约（与 Sync 共享）
 
@@ -426,6 +425,7 @@ Node Link 不另立一份 event type 表：
 - 未协商的附件连接不会建立：Access 在 feature 未选中时不发起 `/node-link/v1/attachments`；若仍收到 `attachment.*` 帧，Owner 返回 `nodelink.attachment.negotiation_required` 并以 `4400` 关闭。
 - 旧 Owner 面对新 Access：新能力入口显式不可用（附件不支持、历史不可读、历史交互不可答），不得退化为本地文本或空历史；Access MUST NOT 用本机路径或缓存冒充 Owner 内容。
 - 未协商的封闭字段按 `nodelink.protocol.schema_invalid` 拒绝，未登记 type 按 `nodelink.protocol.type_unsupported` 拒绝，二者都不得静默忽略。
+- **来源流是加性 feature**：未协商 `resource.stateless-origin.v1` 时不发送也不接收 `resource.caught_up`/`resource.reset_required`/`resource.unavailable`、`command.status.remoteTarget` 或 `session.read` 的 `readCursor`/`sessionSummary`/`messageCoverage`；收到未协商的新资源帧按 `nodelink.protocol.type_unsupported` 拒绝，收到未协商的封闭字段按 `nodelink.protocol.schema_invalid` 拒绝。`resource.ack` 的 wire 形状不变，但只有在该 feature 协商后才按「运行期处理进度」解释；未协商时沿用既有 v1 语义。Access MUST NOT 用本地落盘索引冒充该 feature，Owner 也不得据此提前清理保留期数据。
 - **三态合同是必需 feature**：`core.session-activity.v1` 未由双方选中时连接不进入业务阶段（§11.3）。旧 Owner 面对新 Access：`node.challenge.selectedFeatures` 里没有该 ID，Access MUST 停止同步并提示版本不兼容，MUST NOT 按七态摘要自行折算或把 `pending` 当作某个 `waiting_*`。旧 Access 面对新 Owner：`node.hello` 未声明该 ID，Owner MUST 以 `nodelink.protocol.feature_required` 拒绝，且 MUST NOT 下发三态 `sessionMeta`、catalog 会话或快照条目。
 
 ## 12. 消息族与消息体
@@ -441,6 +441,7 @@ Node Link 不另立一份 event type 表：
 | Catalog | `catalog.changed` | post_mvp |
 | Catalog | `node.rotate-key.request`、`node.rotate-key.result` | post_mvp |
 | Resource | `resource.attach`、`resource.attached`、`resource.subscribe`、`resource.snapshot_begin`、`resource.snapshot_chunk`、`resource.snapshot_end`、`resource.event`、`resource.ack` | mvp |
+| Resource | `resource.caught_up`、`resource.reset_required`、`resource.unavailable` | mvp（受 `resource.stateless-origin.v1` 门控） |
 | Resource | `resource.detach` | post_mvp |
 | Command | `command.submit`、`command.accepted`、`command.rejected`、`command.terminal`、`command.status` | mvp |
 | 控制 | `link.ping`、`link.pong`、`link.error` | mvp |
@@ -489,8 +490,11 @@ node.hello → node.challenge → node.proof → node.ready
 ```text
 resource.attach → resource.attached → resource.subscribe
   → resource.snapshot_begin → resource.snapshot_chunk* → resource.snapshot_end
-  → resource.event* → resource.ack*
+  → resource.event* → resource.caught_up → resource.event*  (resource.stateless-origin.v1)
+  → resource.ack*；错误路径：resource.reset_required / resource.unavailable
 ```
+
+`resource.caught_up`、`resource.reset_required`、`resource.unavailable` 与收窄后的 `resource.ack` 语义属于 feature `resource.stateless-origin.v1`；未协商该 feature 的连接收到它们按 `nodelink.protocol.type_unsupported` 拒绝（§11.5），空游标订阅仍按既有 snapshot 路径工作。
 
 | 消息 | 方向 | body 字段 | 必需性 | 语义 |
 |---|---|---|---|---|
@@ -502,7 +506,10 @@ resource.attach → resource.attached → resource.subscribe
 | `resource.snapshot_chunk` | Owner → Access | `snapshotId`、`chunkIndex`(decimal string)、`resource`(`"session_meta"`\|`"pending_interactions"`)、`items`(array) | 全部必需 | 只承载元数据；`resource` 决定 item 形状 |
 | `resource.snapshot_end` | Owner → Access | `snapshotId`、`cursor`、`chunkCount`(integer)、`snapshotDigest`(base64url 32B) | 全部必需 | 快照完成；其后事件从 `cursor` 继续 |
 | `resource.event` | Owner → Access | `originEventId`(UUID)、`originEpoch`(UUID)、`originSequence`(decimal string)、`sessionRef`(`{ ownerNodeId, sessionId }`)、`eventType`(string，`^[a-z0-9_.-]{1,128}$`)、`payloadDigest`(base64url 32B)、`createdAt`(timestamp)、`payload`(`{ view?, acp? }`，二者至少一个) | 除 `payload.acp` 外全部必需 | Owner 的 origin 事件原样投递 |
-| `resource.ack` | Access → Owner | `sessionRef`(`{ ownerNodeId, sessionId }`)、`cursor`(`{ originEpoch, originSequence }`) | 全部必需 | 该会话的累计 ACK：此 cursor 及之前的 origin 事件在 Access 侧已进入可恢复的无正文索引 |
+| `resource.ack` | Access → Owner | `sessionRef`(`{ ownerNodeId, sessionId }`)、`cursor`(`{ originEpoch, originSequence }`) | 全部必需 | **运行期累计处理进度**（`resource.stateless-origin.v1`）：此 cursor 及之前的 origin 事件已被有界下游接收；不表示 Access 落盘，不是可恢复索引，Owner 不得据此提前清理保留期内数据 |
+| `resource.caught_up` | Owner → Access | `attachmentId`(UUID)、`attachmentGeneration`(decimal string)、`cursor`(`{ originEpoch, originSequence }`) | 全部必需 | 来源重放屏障：此 cursor 之前的来源事件已全部发出，之后才是实时事件；Access MUST NOT 用定时器推测追平 |
+| `resource.reset_required` | Owner → Access | `attachmentId`(UUID)、`attachmentGeneration`(decimal string)、`reason`(`"epoch_mismatch"`\|`"cursor_expired"`\|`"cache_incompatible"`)、`cursor`(`{ originEpoch, originSequence }` \| null) | 全部必需，`cursor` 可为 `null` | Access 必须以新的订阅或读取重建；只有 Owner 已验证有效 head 才能给 `cursor`；不新增错误码 |
+| `resource.unavailable` | Owner → Access | `attachmentId`(UUID \| null)、`error`(`{ code, message, retryable, details }`) | 全部必需 | 来源不可继续投递：断线/撤销/快照不可用分别复用既有错误码（`nodelink.resource.owner_unavailable`、`nodelink.auth.node_revoked`、`nodelink.resource.snapshot_unavailable`） |
 
 - `sessionMeta` 字段：`state`(`"idle"`\|`"running"`\|`"pending"`)、`version`(decimal string)。`state` 是会话的活跃程度摘要，取值集合由必需 feature `core.session-activity.v1` 协商（§11.3）：有有效未解决交互 → `pending`，否则有未结束任务（含排队）→ `running`，否则 `idle`；排队、等待原因与本轮结果不进入该字段。旧七态 MUST NOT 出现在 `sessionMeta` 里，它们只允许作为 `resource.event.payload.view` 的历史原文。
 - `pending_interactions` item 字段：`interactionId`(UUID)、`kind`(`"permission"`\|`"elicitation"`)、`createdAt`(timestamp)、`payloadDigest`(base64url 32B)；不含交互正文。
@@ -512,7 +519,9 @@ resource.attach → resource.attached → resource.subscribe
 - `resource.event.sessionRef` 与 `resource.ack.sessionRef` 必须指向当前连接上 attachment 所属的会话。`sessionRef` 不属于本连接、或 `cursor.originEpoch` 与该会话的 origin epoch 不一致时，接收方返回 `nodelink.protocol.sequence_invalid`，不得投递或接受。
 - `payloadDigest = base64url(SHA-256(ACPR-CJ1(payload)))`，其中 ACPR-CJ1 是 `SYNC_PROTOCOL.md` §3.3 定义的规范 JSON；`pending_interactions[].payloadDigest` 是对创建该交互的 origin 事件的 `payload` 对象应用同一规则的结果。
 - `snapshotDigest` 的计算方式与 `SYNC_PROTOCOL.md` §9.4 相同：对每个完整 `resource.snapshot_chunk` 消息的原始 UTF-8 bytes 分别求 SHA-256，按 `chunkIndex` 顺序连接后对连接结果再求一次 SHA-256；接收方不得通过重新序列化 JSON 计算该值。
-- `resource.ack` 的 `cursor` 必须单调不减；回退视为 `nodelink.protocol.sequence_invalid`。
+- `resource.ack` 的 `cursor` 必须单调不减、不得越过 Owner 已发送的最高来源位置；回退或越界视为 `nodelink.protocol.sequence_invalid`。ACK 只是当前连接/来源会话的运行期处理进度：Access MUST NOT 持久化它，Owner MUST NOT 把它当作「客户端已阅读」或可恢复索引，也不得据此提前清理保留期内数据（design D5）。
+- `resource.caught_up` 是来源重放的明确屏障（design D4）：Owner 先按 origin cursor 增量重放来源事件，再发这一帧，之后的 `resource.event` 才是实时事件。Access 只有在收到屏障后才能把重建缓冲置为可用状态；MUST NOT 用计时器或事件空闲推测追平。
+- 重连与重建：`resource.reset_required(reason=cache_incompatible)` 或 epoch 不匹配/游标过期时，Access 必须重新订阅并按 `session.read` 的 `readCursor`/`messageCoverage` 重建，不得沿用旧 generation 或旧游标继续重放。来源不可达或已撤销时 Owner 发 `resource.unavailable`，Access 清除该来源的运行期模型并明确降级，不展示已清除内容。
 
 ### 12.5 Command 消息
 
@@ -522,11 +531,12 @@ resource.attach → resource.attached → resource.subscribe
 | `command.accepted` | Owner → Access | `requestId`、`command`(命令名)、`acceptedAt`(timestamp)、`result`(object \| null) | 全部必需 | 同步确认接受；`acceptedAt` 永远是真实接受时间（拒绝不复用本消息），`result` 为 `null` 时表示本次回复不携带同步结果 |
 | `command.rejected` | Owner → Access | `requestId`、`command`(命令名)、`error`(`{ code, message, retryable, details }`) | 全部必需 | 未接受，无副作用；本消息没有 `acceptedAt` 字段 |
 | `command.terminal` | Owner → Access | `requestId`、`command`(命令名)、`terminal`(`{ status, terminalAt, terminalEventId, result, error }`) | 全部必需 | 终态；`status` ∈ `"completed"`\|`"failed"`\|`"rejected"`\|`"uncertain"`；`terminalEventId` 是 `T \| null` 字段：`command.status` 重查返回时必须非 `null`，其余情况可为 `null`；`status=completed` 时 `result` 为非空 object 且 `error=null`，其余 status 必须给出 `error` |
-| `command.status` | Access → Owner | `targetRequestId`(UUID) | 必需 | 重查同一 `requestId` 的终态；回复使用同一信封的 `command.terminal` 形状 |
+| `command.status` | Access → Owner | `targetRequestId`(UUID)、`remoteTarget`(`{ ownerNodeId, sessionId: UUID \| null }`，仅 `resource.stateless-origin.v1` 协商后) | `targetRequestId` 必需；`remoteTarget` 在协商后必需 | 重查同一 `requestId` 的终态；回复使用同一信封的 `command.terminal` 形状。`remoteTarget` 直接指向原 Owner 与其来源会话，`sessionId` 为 `null` 只用于尚未建成会话的 `session.create` |
 
 - `command.submit` 的 `command` 取值是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的 13 个命令名；`sessionRef`、`attachmentId`、`attachmentGeneration`、`expectedVersion` 在不适用时显式写 `null`，不用省略代替。
 - `command.accepted`、`command.rejected` 与 `command.terminal` 都必须携带 `command`，取该 request 提交时的命令名（`command.status` 查询的回复填被查询 mutation 的命令名）；结果形状因此可以只凭帧自洽分派，不依赖接收方本地的 requestId 表。
 - `command.status` 有两种等价形式：作为 `command.submit` 的 `command` 提交（`payload = { "targetRequestId": … }`），或使用独立的 `command.status` 消息。两者产生相同的 `command.terminal` 形状回复；独立消息不占用 mutation 的幂等键。
+- 协商 `resource.stateless-origin.v1` 后，两种形式的 `command.status` payload 都必须另带 `remoteTarget = { ownerNodeId, sessionId: UUID | null }`（§12.4/§12.7，design D5）：Access 直接向原 Owner 查询，不凭本地记录判断，也不得因本地没有该 `requestId` 就回答 `nodelink.command.not_found` 或自动重发。`sessionId` 为 `null` 只用于尚未建成会话的 `session.create`。Owner 以既有 `(ownerNodeId, accessNodeId, requestId)` 隔离与参数冲突合同校验；未协商的连接 MUST NOT 发送该键。
 - `command.accepted` 与 `command.terminal` 可以连续发送，也可以只发送 `command.terminal`：同步查询结果放在 `command.accepted.result` 或 `command.terminal.terminal.result`；`command.terminal` 始终是权威终态，客户端以 `requestId` 去重。
 - Node Link 把统一结果形状拆成三条消息，`acceptedAt` 规则与 `SYNC_PROTOCOL.md` §11.2 的 `status=rejected ⇒ acceptedAt=null` 等价：`command.accepted` 的 `acceptedAt` 永远非 `null`；`command.rejected` 表达拒绝，因此完全不携带 `acceptedAt`；`command.terminal` 也不携带 `acceptedAt`。
 - `command.terminal` 的 `completed` 必须携带非空 `result`（与 Sync 的 `command.result` 允许 `result` 为 `null` 不同）：该差异是有意的，因为 Node Link 的 `session.create` 必须回传 `SessionCreateResult`（§12.7）。core 只保留 `Option<CommandResult>`，**非空由本协议的适配层（`server::node_link`）在映射期保证**并由契约测试覆盖。
@@ -551,7 +561,7 @@ resource.attach → resource.attached → resource.subscribe
 |---|---|
 | `session.list` | `{}`（空 object） |
 | `session.read` | `{ "include": ["messages"\|"turns"\|"pending_interactions"\|"config_options"\|"capabilities"\|"history", …], "beforeHistory"?: decimal string, "before"?: { "createdAt": timestamp, "messageId": UUID }, "limit"?: integer ≥ 1 }`；`history` 与 `beforeHistory` 只在协商 `node-link.remote-history.v1` 后接受，按 origin 会话内序号独立分页并回源 Owner；消息页的 `before`/`limit` 在同一 feature 下接受（与 Sync 面同名同义，`limit` 是结构常量而非十进制字符串）；`pending_interactions` 只在协商 `node-link.pending-interactions.v1` 后返回完整有效请求；未协商却携带新字段按 `nodelink.command.unsupported_field` 拒绝 |
-| `command.status` | `{ "targetRequestId": UUID }` |
+| `command.status` | `{ "targetRequestId": UUID, "remoteTarget"?: { "ownerNodeId": UUID, "sessionId": UUID \| null } }`；`remoteTarget` 在协商 `resource.stateless-origin.v1` 后必须携带（`sessionId` 为 `null` 只用于尚未建成会话的 `session.create`），未协商时缺席 |
 | `session.mode.list` | `{}` |
 | `session.config.list` | `{}` |
 | `session.prompt` | `{ "content": [ { "type": "text", "text": "…" }, … ], "submissionId"?: UUID }`；`attachment_ref`/`workspace_path_ref` 与 `submissionId` 只在协商 `node-link.attachment-transfer.v1` 后接受，且清单必须已在本节点连接上封存并绑定同一会话/主体 |
@@ -565,7 +575,11 @@ resource.attach → resource.attached → resource.subscribe
 
 `session.read` 在两个传输面同名，载荷在协商 `node-link.remote-history.v1` 后才有分页参数：Sync 面另有可选的 `before`（`(createdAt, messageId)` 复合游标）与 `limit`；Node Link 面在同一 feature 下接受同名同义的 `before`/`limit`（`limit` 为结构常量整数），并保留 `beforeHistory`（origin 会话内序号）供结构化历史独立分页。未协商该 feature 的旧 peer 省略这些键，请求与结果形状与本变更前逐字相同；Owner 收到未协商的新键时按 `nodelink.command.unsupported_field` 拒绝，不静默忽略。
 
-`schemas/node-link/v1/command.schema.json` 对上述协商后字段保持**可选**：`session.read` 的 `history`/`beforeHistory`/`before`/`limit`、`session.prompt` 的 `attachment_ref`/`workspace_path_ref`/`submissionId`、以及 `elicitation.respond`/`permission.resolve` 的 `requestVersion`。这是旧 peer 的 wire 形状——未协商对应 feature 时它们缺席，连接行为与本变更前逐字相同；协商后客户端 MUST 发送，服务端不得用缺省值猜测版本或清单绑定，也不得因字段缺席放宽校验。`session.prompt` 的 `promptContentBlock` 分支与 Sync 面同名同义，两个面不各自维护第二套词表。
+协商 `resource.stateless-origin.v1` 后，`session.read` 的 `completed` 结果另带三个加性字段（`schemas/node-link/v1/command.schema.json#/$defs/sessionReadResult`，design D4）：`readCursor`（同一次 Owner 只读事务原子捕获的来源位置 R）、该次读取的完整 `sessionSummary`、以及 `messageCoverage[]{messageId, through: originCursor, lastDeltaIndex: decimalString | null}`——每个已返回消息恰有一项，`through` 等于 R，`lastDeltaIndex` 是该消息在所返回完整内容中已覆盖的最后连续增量索引（无增量时为 `null`）。数据和覆盖信息必须同次原子读取，不能在读取结束后再采样 head。`messageCoverage`/`readCursor` 只在该 feature 协商后出现；`messages`/`history` 原有页边界与 `hasEarlier`/`historyHasEarlier` 不改变，每个读取结果独立合并，不声明整页或整个分页浏览是同一历史快照。Access 逐字节转发 Owner 的结果对象，不重新解释或补造条目。
+
+客户端以 `(来源, messageId)` 记录当前已应用覆盖位置，只有较新或相同覆盖页可替换消息；页面内容覆盖 `through` 及之前针对该消息的创建/增量事件，对应缓冲项不再拼接，`through` 之后按来源次序与 `deltaIndex` 应用。未返回的消息不受 R 覆盖，不能丢弃其缓冲事件；`history` 按来源稳定 `eventId` 去重。缓冲溢出必须明确取消并重建，不得静默丢事件。
+
+`schemas/node-link/v1/command.schema.json` 对上述协商后字段保持**可选**：`session.read` 的 `history`/`beforeHistory`/`before`/`limit`、`session.prompt` 的 `attachment_ref`/`workspace_path_ref`/`submissionId`、以及 `elicitation.respond`/`permission.resolve` 的 `requestVersion`。`command.status` 的 `remoteTarget` 与 `session.read` 结果的 `readCursor`/`sessionSummary`/`messageCoverage` 同样按 `resource.stateless-origin.v1` 门控为可选。这是旧 peer 的 wire 形状——未协商对应 feature 时它们缺席，连接行为与本变更前逐字相同；协商后客户端 MUST 发送，服务端不得用缺省值猜测版本或清单绑定，也不得因字段缺席放宽校验。`session.prompt` 的 `promptContentBlock` 分支与 Sync 面同名同义，两个面不各自维护第二套词表。
 
 > **实现事实：Node Link 远程读取（2026-10-20，`conversation-area-complete` WP5E5-read）**。Owner 的 `session.read` 已接线到 core 用例面与共享投影 `server::session_read`：消息页（用户输入 + Agent 回复/思考、`before`/`limit`、`hasEarlier`）、结构化历史（`beforeHistory`、`historyHasEarlier`、`history` include）、有效待处理交互（协商 `node-link.pending-interactions.v1`）与配置项都按 §11.4/§11.5 的共享形状返回；`turns`/`capabilities` 仍显式回 `nodelink.command.unsupported`（core 读面无法投影）。未协商 `typed-media.v1` 时消息的 `channel`/`partial` 与媒体块按旧 peer 形状降级，未协商 `remote-history.v1` 时历史与消息分页字段被显式拒绝。Access 侧 `node-link-client::RemoteSession::read_page` 把上述结果原样（不落盘）交给 `UseCases::read_imported_session`，由 Sync 的 imported `session.read` 投影给本地客户端；Owner 离线返回 `resource.remote_unavailable`（`details.reason = "owner_offline"`），不返回 `session.not_found` 或空历史。
 
@@ -635,6 +649,9 @@ resource.attach → resource.attached → resource.subscribe
 | `resource.snapshot_end` | `resource.schema.json` | `resourceSnapshotEnd` |
 | `resource.event` | `resource.schema.json` | `resourceEvent` |
 | `resource.ack` | `resource.schema.json` | `resourceAck` |
+| `resource.caught_up` | `resource.schema.json` | `resourceCaughtUp` |
+| `resource.reset_required` | `resource.schema.json` | `resourceResetRequired` |
+| `resource.unavailable` | `resource.schema.json` | `resourceUnavailable` |
 | `command.submit` | `command.schema.json` | `commandSubmit` |
 | `command.accepted` | `command.schema.json` | `commandAccepted` |
 | `command.rejected` | `command.schema.json` | `commandRejected` |
@@ -714,7 +731,7 @@ Node Link 的配对 HTTP 载荷（§13）不在 WSS 联合入口内：
 
 - **有效待处理交互**：协商 `node-link.pending-interactions.v1` 后，`session.read` 的 `pending_interactions` 从 Owner 取得当前有效的完整请求（`effectiveInteraction`，形状与 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.4 相同），包括 `requestVersion` 与完整 options/schema。历史卡片只提供定位信息，不能直接应答。该 feature 已随 `session.read` 接线并宣告（§11.3）。
 - **应答校验**：`permission.resolve`/`elicitation.respond` 在 Owner 侧重新校验节点身份、会话、请求仍为 pending、`requestVersion`、上游等待方存活与表单值；版本不符返回 `nodelink.interaction.version_conflict`，已处理返回既有 `nodelink.command.idempotency_conflict` 或已处理事实，失效/上游丢失/Owner 不可达返回 `nodelink.interaction.unavailable`，均不消耗请求。首个有效答案胜出，其余显式返回已处理。
-- **远程历史**：协商 `node-link.remote-history.v1` 后，`session.read` 的 `history` include、`beforeHistory` 与消息页的 `before`/`limit` 由 Owner 按 origin 会话内序号/复合游标分页，Access 只转发页边界与无正文索引；每次读取前重新鉴权，Owner 不可达返回 `nodelink.resource.owner_unavailable`，超出保留期显式不可用，MUST NOT 返回空页。
+- **远程历史**：协商 `node-link.remote-history.v1` 后，`session.read` 的 `history` include、`beforeHistory` 与消息页的 `before`/`limit` 由 Owner 按 origin 会话内序号/复合游标分页，Access 只转发页边界与来源游标，不保存无正文索引；每次读取前重新鉴权，Owner 不可达返回 `nodelink.resource.owner_unavailable`，超出保留期显式不可用，MUST NOT 返回空页。
 - **不复制正文**：两类读取都只在内存转发；Access MUST NOT 把历史条目、交互 schema 或表单值写入数据库、临时文件、日志或持久缓存。
 
 ## 13. 节点配对 HTTP
@@ -958,13 +975,14 @@ close reason 不得包含敏感信息，且不是结构化错误的替代品。
 
 - Owner 事件必须先持久化，再发送 Node Link。
 - Node Link 至少一次投递，Access Node 按 `originEventId` 去重。
-- Access Node 按会话 ACK Owner cursor（`sessionRef` + `originEpoch` + `originSequence`）；给本地客户端使用独立 local cursor。
+- Access Node 按会话 ACK Owner cursor（`sessionRef` + `originEpoch` + `originSequence`）；ACK 只表示当前连接/来源会话的运行期处理进度，不落盘、不是可恢复索引。对本地客户端直接使用 Owner origin cursor 定位与去重，不创建 Access 本地序号映射。
+- `resource.caught_up` 是来源重放的屏障：Owner 必须先重放完 `cursor` 之前的来源事件再发这一帧，Access 收到后才把重建缓冲置为可读；不得用计时器推测追平。
 - session-scoped command 必须携带当前 `attachmentId`/`attachmentGeneration`；重连后先重新 attach，再恢复订阅。
 - 同一会话最多一个 active turn，由 Owner Node 最终强制执行。
 - 多个 Access Node 同时提交命令时，Owner 使用会话版本与串行队列裁决。
 - Agent 调用结果无法确认时，Owner 写入 `uncertain`；Access Node 不能自行重试产生第二次副作用。`session.create` 与 `session.resume` 都会改变 Owner 本机状态（后者会拉起 Agent 进程），因此两者在不确定窗口结束后必须靠原 `requestId` 查询终态，不得重发。
 - 断线恢复只自动重建安全查询和订阅；mutation 必须通过原 `requestId` 查询状态，不因新 attachment 自动重放。
-- 节点撤销后立即拒绝新命令并关闭连接；Access 删除无正文交付索引和内存内容。
+- 节点撤销后立即拒绝新命令并关闭连接；Access 清除该来源的运行期模型与内存内容（本就不存在持久交付索引）。
 - 慢消费者触发 backpressure 或断开后，由 origin cursor 重放补回，不得丢弃 Owner 事件或阻塞其他连接。
 - 交互请求（权限、elicitation）属于**会话**而非某条连接：Owner 的 `permission.requested` 到达 Access 后必须由持有该会话 attachment 的 facade 转成对上游客户端的请求（外部 turn 同样如此，Zed 会渲染并应答），答案按该 interaction 的 `requestId` 关联回传为 `permission.resolve`。Owner 已写入 `interaction.already_resolved` 之后到达的应答必须被拒绝，不得覆盖既有结果。
 
@@ -973,7 +991,7 @@ close reason 不得包含敏感信息，且不是结构化错误的替代品。
 - **首次连接**：Owner 侧配对 `approved` 后，Access **立即**尝试建立 Node Link 连接，不等用户下一次操作。
 - **启动连接**：组合根启动完成后，对每条 `kind = owner` 且 `state = paired` 的记录自动发起连接；`pending`/`revoked` 不连。
 - **重连退避**：断线后指数退避（初值 1 s、上限 60 s、每次翻倍），并且**不得小于**服务端给出的退避要求（`nodelink.resource.rate_limited` 的 `details.retryAfterMs`，§14.1）。
-- **心跳超时**：按 `node_link.heartbeat_interval_ms`（默认 30 s）发送心跳；超过 90 s（固定常量，§2.5）未收到对端任何消息 → 关闭连接并进入重连，**不**删除信任、**不**清理无正文索引。
+- **心跳超时**：按 `node_link.heartbeat_interval_ms`（默认 30 s）发送心跳；超过 90 s（固定常量，§2.5）未收到对端任何消息 → 关闭连接并进入重连，**不**删除信任；来源业务模型与重建缓冲按断线策略整代清除，重连后重新订阅并用 `session.read` 重建。
 - **撤销即停**：收到 `node.trust.revoked`（§12.3）或本地 `node.revoke` 提交后→停止重连并关闭连接。该条**只**由撤销触发（这两个触发条件之一），**不**包括服务端因其它原因主动关闭连接——例如 `node.pair.confirm` 提交后的重新配对以 `1000` 关闭该节点的活动连接（§8.2）：那只是连接作废、授权已重算，对端仍按上面的首次/启动连接与重连退避规则自动重连。
 - **每次连接都重取 catalog**：catalog 是连接期内存数据（§12.3），重连后重新 `catalog.subscribe`；先 `resource.attach` 再恢复订阅（本节首段）。
 - **不自动重放副作用**：重连只自动恢复安全查询与订阅；mutation 只能按原 `requestId` 查询终态（本节首段）。
@@ -1001,7 +1019,7 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 5. capability 交集（§11.1）、raw ACP 保真（`node-link.raw-acp.v1` 与 `resource.event.payload.acp`）、断线重放与命令幂等（§15）；
 6. 不支持 imported Agent 再导出；
 7. `session/new` 经稳定 `requestId` 映射为 `command.submit{command:"session.create"}`（§12.7）；禁止在 **Node Link 的 `session.create.payload`** 中携带 `cwd`/`mcpServers`，ACP `session/new.cwd` 的处理见 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6；
-8. Access Node 默认仅持久化无正文交付索引（§6）；
+8. Access Node 默认不持久化任何远程正文、交付索引、cursor/ACK 或 local sequence，远程内容只在已认证连接期经有界内存转发（§6）；
 9. Owner 以 Access Node 为授权 principal，最终用户引用只用于审计（§8.3）。
 
 首切片不实现的消息：`catalog.changed`、`resource.detach`、`node.rotate-key.request`/`node.rotate-key.result`、`link.backpressure`（§12.1 的 `post_mvp` 行）；收到时显式返回 `nodelink.protocol.type_unsupported`，不静默忽略。
@@ -1020,7 +1038,7 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 8. 未知 ACP 字段和超大整数跨两次持久化及 Node Link 后 raw bytes 保真。
 9. 循环导入/再次导出被拒绝。
 10. Owner 离线时会话正文不可用，prompt 不进入伪 accepted 状态。
-11. Access Node 重启后可凭无正文交付索引和 origin cursor 从 Owner 重建投递，不产生第二份会话正文数据库。
+11. Access Node 重启后不沿用任何本地投递状态：重新建链、向 Owner 重新订阅，并从 origin cursor 或 `session.read` 重建投递，不产生第二份会话正文数据库（§6、§12.4）。
 12. Zed `session/new` 的必填绝对 `cwd` 不作为拒绝理由；直接向 Node Link `session.create.payload` 注入未知 `workspaceDirectory` 或 `cwd` 等原始路径字段时，Owner 以 `nodelink.command.unsupported_field` 拒绝且不创建会话（§12.7、[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）。
 13. 旧 attachment 的延迟 frame 在重连后被拒绝（`nodelink.resource.attach_generation_stale`），不能命中新 generation 的 SessionEndpoint。
 14. 六个 transcript domain 的固定向量在 Rust 与 WebCrypto 两侧产生逐字节一致的 transcript、签名与 HMAC（§9.5）。

@@ -538,16 +538,37 @@ pub struct SessionRead {
     pub limit: Option<u64>,
 }
 
+/// `command.schema.json#/$defs/remoteTarget`：远程查询的来源定位（`resource.stateless-origin.v1`）。
+///
+/// 只在 feature 协商后出现；`sessionId` 为 `null` 只用于尚未建成会话的 `session.create`，
+/// 其他会话操作必须给出原来源会话（docs/NODE_LINK_PROTOCOL.md §12.5/§12.7）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteTarget {
+    #[serde(rename = "ownerNodeId")]
+    pub owner_node_id: Uuid,
+    #[serde(rename = "sessionId")]
+    pub session_id: Nullable<Uuid>,
+}
+
 /// `submitCommandStatus`（`command.schema.json#/$defs/submitCommandStatus`）的 `payload`：
-/// `{ targetRequestId }`。
+/// `{ targetRequestId, remoteTarget? }`。
 ///
 /// `command.status` 还有独立消息形式（同文件的 `$defs/commandStatus`），两者的 body 形状逐字段相同
-/// （§12.5："两者产生相同的 `command.terminal` 形状回复"），因此共用一个类型。
+/// （§12.5："两者产生相同的 `command.terminal` 形状回复"），因此共用一个类型。`remoteTarget` 是
+/// `resource.stateless-origin.v1` 的加性字段：Access 直接向原 Owner 查询，不凭本地记录判断。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandStatus {
     #[serde(rename = "targetRequestId")]
     pub target_request_id: RequestId,
+    #[serde(
+        rename = "remoteTarget",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub remote_target: Option<RemoteTarget>,
 }
 
 /// `session.mode.list` 的 `payload`：schema 要求空 object。

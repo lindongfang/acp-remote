@@ -16,9 +16,7 @@ use acp_core::ports::{
     IdempotencyRecord, NewSession, OwnedCommit, SessionStore, SessionUpdate, StateChange,
 };
 use storage_sqlite::error::StorageError;
-use storage_sqlite::migrate::{
-    FILE_FORMAT_VERSION, IMPORTED_SCHEMA_VERSION, OWNED_SCHEMA_VERSION, StorageConfig,
-}; // probe
+use storage_sqlite::migrate::{FILE_FORMAT_VERSION, OWNED_SCHEMA_VERSION, StorageConfig}; // probe
 use storage_sqlite::session_store::SqliteStore;
 use support::*;
 
@@ -266,8 +264,7 @@ async fn current_version_database_is_untouched_by_two_consecutive_starts() {
         let store = SqliteStore::open(still_writable(&dir), &at())
             .await
             .unwrap_or_else(|error| panic!("round {round} must open: {error}"));
-        assert_eq!(store.metadata().owned_schema_version, 13);
-        assert_eq!(store.metadata().imported_schema_version, 5);
+        assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
         store.close().await;
 
         let pool = raw_pool(&path).await;
@@ -326,17 +323,13 @@ async fn fresh_directory_is_created_at_the_current_version() {
         "created_at",
         "last_prune_at",
         "owned_schema_version",
-        "imported_schema_version",
     ] {
         assert!(
             meta.iter().any(|(name, _)| name == key),
             "meta.{key} must exist"
         );
     }
-    for (key, expected_version) in [
-        ("owned_schema_version", OWNED_SCHEMA_VERSION),
-        ("imported_schema_version", IMPORTED_SCHEMA_VERSION),
-    ] {
+    for (key, expected_version) in [("owned_schema_version", OWNED_SCHEMA_VERSION)] {
         assert_eq!(
             meta_version(&pool, key).await,
             Some(expected_version.to_string()),
@@ -441,22 +434,12 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
         7,
         "the fixture keeps an audit sequence that is ahead of max(audit_id)"
     );
-    assert_eq!(
-        scalar_i64(
-            &pool,
-            "SELECT seq FROM sqlite_sequence WHERE name = 'imported_audit'"
-        )
-        .await,
-        3,
-        "the imported side is ahead of its max(audit_id) too"
-    );
     pool.close().await;
 
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 13);
-    assert_eq!(store.metadata().imported_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
 
     // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
     // `event_payload` 还原——不是「行还在但读不出来」。
@@ -498,10 +481,7 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
         Some(server_epoch_before),
         "server_epoch must survive the upgrade"
     );
-    for (key, expected_version) in [
-        ("owned_schema_version", OWNED_SCHEMA_VERSION),
-        ("imported_schema_version", IMPORTED_SCHEMA_VERSION),
-    ] {
+    for (key, expected_version) in [("owned_schema_version", OWNED_SCHEMA_VERSION)] {
         assert_eq!(
             meta_version(&pool, key).await,
             Some(expected_version.to_string()),
@@ -601,15 +581,6 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
         7,
         "the rebuilt table must not rewind the AUTOINCREMENT sequence"
     );
-    assert_eq!(
-        scalar_i64(
-            &pool,
-            "SELECT seq FROM sqlite_sequence WHERE name = 'imported_audit'"
-        )
-        .await,
-        3,
-        "the rebuilt imported table must not rewind the sequence either"
-    );
     let audit_ddl: String = sqlx::query_scalar(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'owned_audit'",
     )
@@ -642,27 +613,18 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
         );
     }
 
-    // cursor/ACK、交付索引与命令引用逐行保留。
-    assert_eq!(
-        ints(&pool, "SELECT last_origin_sequence FROM imported_session").await,
-        vec![FIXTURE_LAST_ORIGIN_SEQUENCE]
-    );
-    assert_eq!(
-        ints(&pool, "SELECT acked_origin_sequence FROM imported_session").await,
-        vec![FIXTURE_ACKED_ORIGIN_SEQUENCE]
-    );
-    assert_eq!(
-        ints(&pool, "SELECT local_sequence FROM imported_delivery_index").await,
-        vec![FIXTURE_LOCAL_SEQUENCE]
-    );
-    assert_eq!(
-        texts(&pool, "SELECT request_id FROM imported_command_ref").await,
-        vec![FIXTURE_IMPORT_REQUEST.to_owned()]
-    );
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_audit").await,
-        2
-    );
+    // 远程家族已被 v14 删除：没有任何持久远程资源、命令状态或交付进度。
+    for table in [
+        "imported_session",
+        "imported_delivery_index",
+        "imported_command_ref",
+        "imported_audit",
+    ] {
+        assert!(
+            !table_exists(&pool, table).await,
+            "{table} must be dropped by v14"
+        );
+    }
 
     // spec 的「黄金列清单逐项相等」（R14）：升级库的**两族**每张表都必须与新建库逐项相等——
     // 否则重建脚本/新增列的列名、列顺序、列集合可以悄悄与 DDL 常量分叉。v4 的
@@ -673,12 +635,7 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
         .expect("fresh v2 store");
     fresh_store.close().await;
     let fresh_pool = raw_pool(&fresh_dir.join("acp-remote.sqlite3")).await;
-    for table in OWNED_TABLES.iter().copied().chain([
-        "imported_session",
-        "imported_delivery_index",
-        "imported_command_ref",
-        "imported_audit",
-    ]) {
+    for table in OWNED_TABLES.iter().copied() {
         assert_eq!(
             column_names(&pool, table).await,
             column_names(&fresh_pool, table).await,
@@ -689,7 +646,7 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
 
     // 升级库的两张审计表 DDL 必须列出**全部** `AuditAction` 取值：12-step 重建少写一个取值就会红
     // （新建库一侧由 `enum_coverage.rs` 的逐值断言覆盖）。
-    for table in ["owned_audit", "imported_audit"] {
+    for table in ["owned_audit"] {
         let ddl = texts(
             &pool,
             &format!("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '{table}'"),
@@ -781,7 +738,7 @@ async fn v7_upgrade_carries_interaction_rows_and_a_leading_event_sequence() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database with interaction rows must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 13);
+    assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
     store.close().await;
 
     let pool = raw_write_pool(&path).await;
@@ -834,7 +791,7 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     // 夹具必须真的长着 v2 的样子：`user_version = 2`，且两张审计表的 CHECK 还不接受新取值。
     let pool = raw_write_pool(&path).await;
     assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, 2);
-    for table in ["owned_audit", "imported_audit"] {
+    for table in ["owned_audit"] {
         let ddl = table_ddl(&pool, table).await;
         assert!(
             !ddl.contains("pairing_claimant"),
@@ -896,8 +853,7 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v2 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 13);
-    assert_eq!(store.metadata().imported_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
     store.close().await;
 
     let pool = raw_write_pool(&path).await;
@@ -905,10 +861,7 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
         scalar_i64(&pool, "PRAGMA user_version").await,
         FILE_FORMAT_VERSION
     );
-    for (key, expected_version) in [
-        ("owned_schema_version", OWNED_SCHEMA_VERSION),
-        ("imported_schema_version", IMPORTED_SCHEMA_VERSION),
-    ] {
+    for (key, expected_version) in [("owned_schema_version", OWNED_SCHEMA_VERSION)] {
         assert_eq!(
             meta_version(&pool, key).await,
             Some(expected_version.to_string()),
@@ -929,9 +882,9 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
         7,
         "12-step 重建不得把 AUTOINCREMENT 序列压回 max(audit_id)"
     );
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_audit").await,
-        1
+    assert!(
+        !table_exists(&pool, "imported_audit").await,
+        "v14 must drop the remote audit family"
     );
     // 新取值在升级库上可写：两个 node 动作 + 认领方的 `actor_kind`。
     insert_audit_row(&pool, 20, "node.authenticated", "node", FIXTURE_NODE)
@@ -1089,15 +1042,16 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     );
     let mut ddl_before = Vec::new();
     for table in TABLES {
-        ddl_before.push((*table, table_ddl(&pool, table).await));
+        if table_exists(&pool, table).await {
+            ddl_before.push((*table, table_ddl(&pool, table).await));
+        }
     }
     pool.close().await;
 
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v3 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 13);
-    assert_eq!(store.metadata().imported_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
     store.close().await;
 
     let pool = raw_pool(&path).await;
@@ -1105,10 +1059,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
         scalar_i64(&pool, "PRAGMA user_version").await,
         FILE_FORMAT_VERSION
     );
-    for (key, expected_version) in [
-        ("owned_schema_version", OWNED_SCHEMA_VERSION),
-        ("imported_schema_version", IMPORTED_SCHEMA_VERSION),
-    ] {
+    for (key, expected_version) in [("owned_schema_version", OWNED_SCHEMA_VERSION)] {
         assert_eq!(
             meta_version(&pool, key).await,
             Some(expected_version.to_string()),
@@ -1153,12 +1104,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
         .expect("fresh store");
     fresh_store.close().await;
     let fresh_pool = raw_pool(&fresh_dir.join("acp-remote.sqlite3")).await;
-    for table in OWNED_TABLES.iter().copied().chain([
-        "imported_session",
-        "imported_delivery_index",
-        "imported_command_ref",
-        "imported_audit",
-    ]) {
+    for table in OWNED_TABLES.iter().copied() {
         assert_eq!(
             column_specs(&pool, table).await,
             column_specs(&fresh_pool, table).await,
@@ -1405,15 +1351,16 @@ async fn v4_database_upgrades_to_the_three_state_shape_and_keeps_recovery_column
     let devices_before = device_rows(&pool).await;
     let mut ddl_before = Vec::new();
     for table in TABLES {
-        ddl_before.push((*table, table_ddl(&pool, table).await));
+        if table_exists(&pool, table).await {
+            ddl_before.push((*table, table_ddl(&pool, table).await));
+        }
     }
     pool.close().await;
 
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v4 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 13);
-    assert_eq!(store.metadata().imported_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
     // ② `NULL` = 没有可用于恢复的数据：升级后的既有会话一律显式失败，不出现「升级后突然可恢复」。
     assert_eq!(
         store
@@ -1429,10 +1376,7 @@ async fn v4_database_upgrades_to_the_three_state_shape_and_keeps_recovery_column
         scalar_i64(&pool, "PRAGMA user_version").await,
         FILE_FORMAT_VERSION
     );
-    for (key, expected_version) in [
-        ("owned_schema_version", OWNED_SCHEMA_VERSION),
-        ("imported_schema_version", IMPORTED_SCHEMA_VERSION),
-    ] {
+    for (key, expected_version) in [("owned_schema_version", OWNED_SCHEMA_VERSION)] {
         assert_eq!(
             meta_version(&pool, key).await,
             Some(expected_version.to_string()),
@@ -1504,12 +1448,7 @@ async fn v4_database_upgrades_to_the_three_state_shape_and_keeps_recovery_column
         .expect("fresh store");
     fresh_store.close().await;
     let fresh_pool = raw_pool(&fresh_dir.join("acp-remote.sqlite3")).await;
-    for table in OWNED_TABLES.iter().copied().chain([
-        "imported_session",
-        "imported_delivery_index",
-        "imported_command_ref",
-        "imported_audit",
-    ]) {
+    for table in OWNED_TABLES.iter().copied() {
         assert_eq!(
             column_specs(&pool, table).await,
             column_specs(&fresh_pool, table).await,
@@ -1727,7 +1666,7 @@ async fn rebuild_text_differs_from_the_fresh_text() {
     fresh_store.close().await;
     let fresh_pool = raw_pool(&fresh_dir.join("acp-remote.sqlite3")).await;
 
-    for table in ["owned_audit", "imported_audit"] {
+    for table in ["owned_audit"] {
         assert_ne!(
             table_ddl(&rebuilt_pool, table).await,
             table_ddl(&fresh_pool, table).await,
@@ -1826,8 +1765,7 @@ async fn a_failed_upgrade_rolls_back_to_v1() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("retry must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 13);
-    assert_eq!(store.metadata().imported_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
     store.close().await;
 }
 
@@ -1848,7 +1786,9 @@ async fn second_open_of_an_upgraded_database_rewrites_nothing() {
     let version = scalar_i64(&pool, "PRAGMA user_version").await;
     let mut rows = Vec::new();
     for table in TABLES {
-        rows.push((*table, table_snapshot(&pool, table).await));
+        if table_exists(&pool, table).await {
+            rows.push((*table, table_snapshot(&pool, table).await));
+        }
     }
     pool.close().await;
 
@@ -2276,8 +2216,7 @@ async fn v10_to_v11_drops_export_import_and_merges_imported_sessions() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v10 database must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 13);
-    assert_eq!(store.metadata().imported_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
     store.close().await;
 
     let pool = raw_pool(&path).await;
@@ -2296,59 +2235,17 @@ async fn v10_to_v11_drops_export_import_and_merges_imported_sessions() {
             "owned_node.{column} must be dropped"
         );
     }
-    assert!(
-        !column_names(&pool, "imported_session")
-            .await
-            .contains(&"export_id".to_owned()),
-        "imported_session.export_id must be dropped"
-    );
-    assert_eq!(
-        ints(
-            &pool,
-            &format!(
-                "SELECT COUNT(*) FROM imported_session WHERE owner_node_id = '{FIXTURE_NODE}' \
-                 AND session_id = '{FIXTURE_SESSION}'"
-            )
-        )
-        .await,
-        vec![1],
-        "duplicate sessions must merge into one row"
-    );
-    assert_eq!(
-        texts(
-            &pool,
-            &format!(
-                "SELECT title FROM imported_session WHERE owner_node_id = '{FIXTURE_NODE}' \
-                 AND session_id = '{FIXTURE_SESSION}'"
-            )
-        )
-        .await,
-        vec!["newer title".to_owned()],
-        "the latest row wins"
-    );
-    assert_eq!(
-        ints(
-            &pool,
-            &format!(
-                "SELECT next_local_sequence FROM imported_session WHERE owner_node_id = '{FIXTURE_NODE}' \
-                 AND session_id = '{FIXTURE_SESSION}'"
-            )
-        )
-        .await,
-        vec![9],
-        "next_local_sequence must not regress"
-    );
-    assert_eq!(
-        ints(
-            &pool,
-            "SELECT COUNT(*) FROM imported_delivery_index d LEFT JOIN imported_session s \
-             ON s.owner_node_id = d.owner_node_id AND s.session_id = d.session_id \
-             WHERE s.session_id IS NULL"
-        )
-        .await,
-        vec![0],
-        "no orphan delivery index may remain"
-    );
+    // v14 之后远程家族整体不存在：没有持久远程会话、命令引用或交付索引。
+    for table in [
+        "imported_session",
+        "imported_delivery_index",
+        "imported_command_ref",
+        "imported_audit",
+        "imported_import",
+        "imported_import_export",
+    ] {
+        assert!(!table_exists(&pool, table).await, "{table} must be dropped");
+    }
     pool.close().await;
 }
 

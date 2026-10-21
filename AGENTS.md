@@ -48,7 +48,7 @@
 ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 
 - 一个节点可以直接管理本地 Agent，也可以通过 Node Link 导入其他节点导出的 Agent；同一节点可以同时承担 Owner 和 Access 角色。
-- 每个 Agent/会话的 Owner Node 是该资源的唯一权威；默认 `no-content-cache`，Access Node 不复制远程会话正文，可持久化的字段清单见 [`CORE_PORTS_AND_STORAGE.md`](docs/CORE_PORTS_AND_STORAGE.md) §7。
+- 每个 Agent/会话的 Owner Node 是该资源的唯一权威；Access Node **不持久化任何 Owner 远程资源、命令状态或事件转发进度**——远程会话正文、摘要、附件、游标、收据、ACK 与请求引用只在已认证连接的运行期有界存在，恢复一律靠 Owner 回源。可持久化的范围（连接与信任资料、节点自有资源）以 [`CORE_PORTS_AND_STORAGE.md`](docs/CORE_PORTS_AND_STORAGE.md) §7 的封闭白名单为准。
 - 手机、电脑、Zed、PWA 和 CLI 是客户端形态，不是固定权限角色；能力由已认证的设备/节点身份、Export grant 与端到端 capability 的交集决定。
 - Node Link 首个纵向切片必须支持受 `remote-work`、已导出 Agent 和 workspace template 约束的远程 `session.create`（Zed `session/new` 的映射规则见 [`ACP_COMPATIBILITY_MATRIX.md`](docs/ACP_COMPATIBILITY_MATRIX.md) §6）；当前 PWA MVP 可以不展示创建入口。
 - Zed 是可选客户端，项目不得与 Zed 强绑定。
@@ -78,11 +78,11 @@ ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 ### 会话与消息不变量
 
 - 同一个会话同时最多有一个 active turn；不同会话可以并行。
-- Owned Agent 事件必须由 Owner 的 `SessionStore` 先持久化成功，再向客户端广播；imported 事件已经由 Owner 持久化，Access 必须先提交无正文 `RemoteDeliveryStore` 收据再向本地客户端广播。
+- Owned Agent 事件必须由 Owner 的 `SessionStore` 先持久化成功，再向客户端广播。Imported 事件已经由 Owner 持久化；Access **不写任何本地收据或交付索引**，只在已认证连接期从 Owner 来源重放并用有界内存转发（`docs/SYNC_PROTOCOL.md` §9.7、`docs/NODE_LINK_PROTOCOL.md` §12.4）。
 - `persist_deltas: false` 只允许 turn 完成后压缩或清理短期 delta，不允许未持久化就广播带 sequence 的事件。
 - 事件采用至少一次投递，客户端按稳定 `eventId` 去重。
 - 可重试命令必须携带稳定 `requestId`；客户端重试不得造成第二次接受或派发，外部 Agent 崩溃窗口无法确认时必须显式进入 `uncertain`。
-- 断线恢复依赖持久化 sequence/cursor，不依赖进程内消息队列。
+- 断线恢复：owned 事件依赖 Owner 持久化的 `serverEpoch`/`globalSequence`；远程来源不映射为 Access 本地可持久恢复序号，客户端持有的 Owner origin cursor（`originEpoch`/`originSequence`）只是衔接与去重位置，重连后必须回源 `session.read` 重建（`docs/SYNC_PROTOCOL.md` §9.7）。两者都不依赖进程内消息队列。
 - 一个状态只能有一个权威写入者。
 
 ### 安全不变量
@@ -141,7 +141,7 @@ core use_cases   -> core ports + core model
 - 需要其它模块的能力时通过端口或函数签名传入（组合根装配），不要 import 隔壁模块的实现。
 - ACP DTO 只存在于 ACP 边界，Sync DTO 只存在于同步协议边界，数据库 record 只存在于 SQLite 适配器。
 - 禁止定义巨型 `AgentRuntime`；本地和远程 backend 通过 `AgentCatalog`、`SessionBackendFactory` 和会话级 `SessionEndpoint` 实现。
-- Owned session 使用 `SessionStore` 单次事务提交状态、事件和幂等；imported session 使用无正文 `RemoteDeliveryStore`，不得复用 owned content 写入路径。
+- Owned session 使用 `SessionStore` 单次事务提交状态、事件和幂等；imported session 只经 core 的纯类型运行期目录/来源/查询端口访问，不写入任何持久 store，也不得复用 owned content 写入路径。
 - `app` 是组合根，可以装配具体实现，但不能承载业务规则。
 - 禁止创建万能 `common`、`helpers` 或 `utils` 模块；代码应放到拥有其语义的模块中。
 - 不要为了复用几行代码破坏依赖方向。
@@ -162,7 +162,7 @@ core use_cases   -> core ports + core model
 - 命令、事件、ACK、快照和错误使用明确的结构化类型。
 - 查询命令同步完成；mutation 只同步接受，最终状态使用持久化 command terminal event。不得让 UI 自行猜测命令是否完成。
 - 所有输入都有长度、数量、频率和资源限制。
-- 慢客户端不能阻塞 Broker 或 Agent；断开后依靠 cursor 重放。
+- 慢客户端不能阻塞 Broker 或 Agent；owned 事件断开后依靠持久化 cursor 重放，远程来源依靠 Owner 重放加一次原子读取重建，Access 不保存两者之间的映射。
 - 协议变更必须说明向前/向后兼容策略，并增加 fixture 或契约测试。
 - Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例；Sync wire 变更要同步维护的文件清单见 §9。
 - 错误码、feature ID、命令名等封闭词汇表只能有一处机器定义：错误码在 `compatibility/errors/v1/errors.json`，feature ID 在 `compatibility/features/v1/features.json`，命令与 grant 在 `compatibility/commands/v1/commands.json`；新增或修改时必须同步更新对应 schema enum 或协议文档表格、`compatibility/transcripts/v1/transcripts.json`（涉及签名/HMAC 字段时）与相应 fixture，并让 `npm run check` 通过。
@@ -171,7 +171,7 @@ core use_cases   -> core ports + core model
 ### Node Link
 
 - Node Link 与客户端 Sync Protocol 是不同边界，不能直接复用 wire DTO 或把 ACP stdio 透明隧道化。
-- Owner Node 保存 origin event/sequence、命令终态和会话正文；Access Node 默认只保存无正文的交付索引，并保留来源身份、cursor、摘要和 local sequence 映射。
+- Owner Node 保存 origin event/sequence、命令终态和会话正文；Access Node **不保存** Owner 的目录、摘要、游标、收据、ACK、交付索引或命令引用——它只在已认证连接期持有有界内存的来源目录与事件缓冲，断线、撤销或 epoch 变化即整代丢弃（`crates/node-link-client` 的实现边界，见 `docs/NODE_LINK_PROTOCOL.md` §12.4/§15）。
 - 第一阶段采用节点级信任：Owner 认证并授权 Access Node，Access 对本地 Zed/PWA/CLI 负责；`localPrincipalRef` 只用于审计归因，不是 Owner 直接认证的最终用户身份。
 - 有效权限是 Owner Export grant、Access 本地授权和实际 capability 的交集；节点配对不产生传递信任。
 - 第一阶段 imported Agent 只能提供给本节点客户端，禁止再次通过 Node Link 导出。
@@ -192,7 +192,7 @@ core use_cases   -> core ports + core model
 
 ## 7. 持久化规则
 
-- Owner Node 的 SQLite 是其本地 Agent/会话的权威事件日志。默认 `no-content-cache` 下，Access Node SQLite 只能保存 import、来源引用、cursor/ACK、幂等记录、命令终态引用和无正文交付索引；正文通过 Owner 重放获取，不把内存广播队列当作事实来源。
+- Owner Node 的 SQLite 是其本地 Agent/会话的权威事件日志。Access Node 的 SQLite 只保存连接与信任资料（节点/设备身份、公钥指纹、地址与协议配置、本机信任/撤销决定、连接重试配置）以及节点自有的 owned 资源；**禁止**保存任何 Owner 远程资源、摘要、附件、正文、generation、来源游标、收据、ACK、local sequence 映射、远程 `requestId`/命令状态/结果引用。远程数据只在已认证连接期内有界存在，恢复靠 Owner 回源；正文不把内存广播队列当作事实来源。
 - 需要原子性的状态变化和事件追加必须放在同一事务中。
 - schema 变更必须提供可重复执行或版本化 migration，并测试旧数据库升级。
 - Owner Node 长期保存最终消息、关键结构化事件、权限结果、状态变化和必要摘要；本条不得被解释为允许 Access Node 默认复制远程会话正文。

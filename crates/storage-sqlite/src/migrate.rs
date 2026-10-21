@@ -16,15 +16,11 @@ use acp_core::model::derive_directory_id;
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v13：会话摘要收敛为 `idle|running|pending` 三态、
-/// 删除 `closed_at`、交互 `confirmed_at`/`turn_id`；v12 的分块附件传输/清单、消息通道与媒体引用、
-/// 交互 `request_version`/`invalidated_at` 保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 13;
-/// §7.2：`meta.owned_schema_version` 的已知版本（v13 重建三态 `owned_session` 并扩展
-/// `owned_interaction`）。
-pub const OWNED_SCHEMA_VERSION: i64 = 13;
-/// §7.2：`meta.imported_schema_version` 的已知版本（v13 归一化 `imported_session.state` 的旧七态）。
-pub const IMPORTED_SCHEMA_VERSION: i64 = 5;
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v14：删除全部 `imported_*` 远程资源表并清理可辨认的
+/// 远程代理记录；v13 的三态 `owned_session`、v12 的分块附件传输/清单、消息通道与媒体引用保持不变）。
+pub const FILE_FORMAT_VERSION: i64 = 14;
+/// §7.2：`meta.owned_schema_version` 的已知版本（v14 只删除 `imported_*` 家族，owned 表结构沿用 v13）。
+pub const OWNED_SCHEMA_VERSION: i64 = 14;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -34,9 +30,10 @@ pub const ATTACHMENTS_DIR: &str = "attachments";
 /// §7.2 的 `meta` 必需键（§7.3）。
 pub const META_SERVER_EPOCH: &str = "server_epoch";
 pub const META_OWNED_SCHEMA_VERSION: &str = "owned_schema_version";
-pub const META_IMPORTED_SCHEMA_VERSION: &str = "imported_schema_version";
 pub const META_CREATED_AT: &str = "created_at";
 pub const META_LAST_PRUNE_AT: &str = "last_prune_at";
+/// 启动清理门禁已完成的文件格式版本：缺失或低于当前版本时，下一次启动必须重写数据库。
+pub const META_STARTUP_CLEANUP_VERSION: &str = "startup_cleanup_version";
 /// v9 → v10 删除 `owned_agent_profile` 时记下的行数；启动日志据此提示「Agent 需在配置中重新声明」。
 pub const META_DISCARDED_AGENT_PROFILES: &str = "discarded_agent_profiles";
 
@@ -357,83 +354,6 @@ CREATE TABLE IF NOT EXISTS owned_directory (
   created_at     TEXT NOT NULL,
   last_used_at   TEXT NOT NULL
 ) STRICT;
-"#;
-
-/// §7.4 的 `imported_*` 无正文表（`no-content-cache`）。
-///
-/// 列集合是合同冻结的**黄金列清单**：`tests/imported.rs` 用 `PRAGMA table_info` 与之逐项比对
-/// （`owned_audit`/`imported_audit` 的列清单在 `tests/commit.rs`），新增列即失败（§9.6/§9.14）。
-pub const IMPORTED_SCHEMA_V1: &str = r#"
-CREATE TABLE IF NOT EXISTS imported_session (
-  owner_node_id  TEXT NOT NULL,
-  session_id     TEXT NOT NULL,
-  title          TEXT,
-  agent_id       TEXT, agent_name TEXT,
-  state          TEXT,
-  version        INTEGER,
-  created_at     TEXT,
-  last_origin_epoch   TEXT,
-  last_origin_sequence INTEGER,
-  acked_origin_epoch  TEXT,
-  acked_origin_sequence INTEGER,
-  next_local_sequence INTEGER NOT NULL DEFAULT 1,
-  attachment_id TEXT,
-  attachment_generation INTEGER,
-  updated_at     TEXT NOT NULL,
-  PRIMARY KEY (owner_node_id, session_id)
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS imported_delivery_index (
-  owner_node_id   TEXT NOT NULL,
-  session_id      TEXT NOT NULL,
-  origin_event_id TEXT NOT NULL,
-  origin_epoch    TEXT NOT NULL,
-  origin_sequence INTEGER NOT NULL,
-  local_sequence  INTEGER NOT NULL,
-  event_type      TEXT NOT NULL,
-  payload_digest  TEXT NOT NULL,
-  received_at     TEXT NOT NULL,
-  PRIMARY KEY (owner_node_id, session_id, origin_event_id),
-  UNIQUE (owner_node_id, session_id, local_sequence),
-  UNIQUE (owner_node_id, session_id, origin_epoch, origin_sequence),
-  FOREIGN KEY (owner_node_id, session_id)
-    REFERENCES imported_session(owner_node_id, session_id) ON DELETE CASCADE
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS imported_command_ref (
-  owner_node_id  TEXT NOT NULL, session_id TEXT NOT NULL,
-  request_id     TEXT NOT NULL,
-  command        TEXT NOT NULL,
-  status         TEXT NOT NULL CHECK (status IN ('accepted','completed','failed','rejected','uncertain')),
-  accepted_at    TEXT,
-  terminal_at    TEXT, terminal_event_id TEXT,
-  error_code     TEXT, retryable INTEGER,
-  PRIMARY KEY (owner_node_id, session_id, request_id),
-  CHECK (status = 'rejected' OR accepted_at IS NOT NULL),
-  FOREIGN KEY (owner_node_id, session_id)
-    REFERENCES imported_session(owner_node_id, session_id) ON DELETE CASCADE
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS imported_audit (
-  audit_id     INTEGER PRIMARY KEY AUTOINCREMENT,
-  at           TEXT NOT NULL,
-  action       TEXT NOT NULL CHECK (action IN (
-                 'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
-                 'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
-                 'node.paired','node.authenticated','node.auth_failed','node.trust_revoked','node.identity_changed',
-                 'export.created','export.revoked','import.added','import.removed','provider.configured',
-                 'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
-  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli','pairing_claimant')),
-  actor_id     TEXT NOT NULL,
-  owner_node_id TEXT, export_id TEXT, session_id TEXT,
-  request_id   TEXT,
-  local_principal_ref TEXT,
-  target_kind  TEXT NOT NULL, target_id TEXT NOT NULL,
-  outcome      TEXT NOT NULL CHECK (outcome IN ('success','denied','failed')),
-  detail_digest TEXT
-) STRICT;
-CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
-
 "#;
 
 /// §7.2 的 v1 → v2 升级：`owned_audit` 的 12-step 表重建（§11.8 第 7 条）。
@@ -987,22 +907,91 @@ async fn v13_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageErro
             .await?;
     }
 
-    // ---- imported：旧七态只做值归一化（无 CHECK、无正文列）
-    sqlx::query(
-        "UPDATE imported_session SET state = CASE state \
-             WHEN 'queued' THEN 'running' \
-             WHEN 'running' THEN 'running' \
-             WHEN 'waiting_input' THEN 'pending' \
-             WHEN 'waiting_permission' THEN 'pending' \
-             ELSE 'idle' \
-         END \
-         WHERE state IN ('idle','queued','running','waiting_input','waiting_permission','failed','closed')",
-    )
-    .execute(&mut **tx)
-    .await?;
-
     Ok(())
 }
+
+/// §7.2 的 v13 → v14 升级：删除全部 `imported_*` 远程资源表，并按**明确来源谓词**清理 owned 家族里
+/// 可辨认的远程代理记录。
+///
+/// 顺序与判据（不可交换）：
+/// 1. 先把 `imported_session.session_id` 固化成一张过渡表；**只**取不在 `owned_session` 里的标识——
+///    两边都有的标识归属无法安全判定，迁移失败并给出本机诊断，不按时间/名称猜测；
+/// 2. `owned_command.session_id` 指向这些远程标识的行删除（正常外键下不可能存在，但历史库可能在外键
+///    关闭时写入过）；
+/// 3. `owned_audit` 里目标明确指向这些远程标识的行删除：`target_kind = 'session'` 精确匹配、
+///    `target_kind = 'command'` 的 `"{session}/{request}"` 前段匹配，以及已废除的 `import` 目标。
+///    不按 turn/interaction 标识或时间猜测归属；
+/// 4. 按外键依赖顺序 `DROP` 远程表（交付索引与命令引用先于会话），并删掉旧的 `meta.imported_schema_version`。
+///
+/// owned 会话、事件（含 `global_sequence` 序列）、epoch、命令幂等与节点信任一律不动。
+async fn v14_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
+    if table_exists(&mut **tx, "imported_session").await? {
+        // 同一标识既在本机 owned 会话里、又在远程索引里：归属本身无法判定。只有确实存在
+        // **指向该标识**的 owned 审计/命令行时才失败关闭；没有这类行时，删除远程索引不会误伤任何
+        // 本机记录，可以继续（不得凭时间或名称猜测）。
+        // `owned_command` 有指向 `owned_session` 的外键：标识两边都有时，那一行按外键定义就是本机
+        // 记录，不需要判定；只有没有外键的 `owned_audit` 才可能无法归因。
+        let ambiguous: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM owned_audit a \
+             WHERE (a.target_kind = 'session' AND a.target_id IN (\
+                      SELECT session_id FROM imported_session \
+                      INTERSECT SELECT session_id FROM owned_session)) \
+                OR (a.target_kind = 'command' AND instr(a.target_id, '/') > 0 \
+                    AND substr(a.target_id, 1, instr(a.target_id, '/') - 1) IN (\
+                        SELECT session_id FROM imported_session \
+                        INTERSECT SELECT session_id FROM owned_session))",
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+        if ambiguous > 0 {
+            // 诊断只含计数：不得把远程会话标识或正文写进错误消息（§8）。
+            return Err(StorageError::FailClosed(
+                "a session id is both locally owned and remotely imported while owned audits reference it; ownership cannot be determined",
+            ));
+        }
+        sqlx::raw_sql(V14_CLEAN_OWNED_PROXIES)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::raw_sql("DROP TABLE v14_remote_sessions;")
+            .execute(&mut **tx)
+            .await?;
+    }
+    sqlx::raw_sql(V14_DROP_IMPORTED).execute(&mut **tx).await?;
+    sqlx::query("DELETE FROM meta WHERE key = 'imported_schema_version'")
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// v14：把可辨认的远程代理记录从 owned 家族清出（不触碰 owned 事件/epoch/幂等/信任）。
+const V14_CLEAN_OWNED_PROXIES: &str = r#"
+CREATE TABLE v14_remote_sessions AS
+  SELECT session_id FROM imported_session
+  WHERE session_id NOT IN (SELECT session_id FROM owned_session);
+
+DELETE FROM owned_command
+ WHERE session_id IS NOT NULL
+   AND session_id IN (SELECT session_id FROM v14_remote_sessions);
+
+DELETE FROM owned_audit
+ WHERE (target_kind = 'session'
+        AND target_id IN (SELECT session_id FROM v14_remote_sessions))
+    OR (target_kind = 'command'
+        AND instr(target_id, '/') > 0
+        AND substr(target_id, 1, instr(target_id, '/') - 1)
+            IN (SELECT session_id FROM v14_remote_sessions))
+    OR target_kind = 'import';
+"#;
+
+/// v14：按外键依赖顺序删除全部远程资源表（`IF EXISTS` 让没有这些表的新库与已清理库也能走完）。
+const V14_DROP_IMPORTED: &str = r#"
+DROP TABLE IF EXISTS imported_delivery_index;
+DROP TABLE IF EXISTS imported_command_ref;
+DROP TABLE IF EXISTS imported_session;
+DROP TABLE IF EXISTS imported_audit;
+DROP TABLE IF EXISTS imported_import_export;
+DROP TABLE IF EXISTS imported_import;
+"#;
 
 /// v10 升级前统计旧 `owned_agent_profile` 的行数；表不存在（新库或已升级）即 0。
 async fn legacy_agent_profile_count(tx: &mut Transaction<'_, Sqlite>) -> Result<i64, StorageError> {
@@ -1263,7 +1252,6 @@ pub struct StoreMetadata {
     /// §3.2 `ServerEpoch`：事件库首次创建时生成，升级与重启保持不变。
     pub server_epoch: String,
     pub owned_schema_version: i64,
-    pub imported_schema_version: i64,
     pub created_at: String,
     pub last_prune_at: String,
 }
@@ -1557,23 +1545,16 @@ async fn migrate_locked(
     // 在 DDL 常量执行前已经存在（v1 起每代都有这张表），因此这两段不再单独探测。
 
     sqlx::raw_sql(OWNED_SCHEMA_V1).execute(&mut *tx).await?;
-    sqlx::raw_sql(IMPORTED_SCHEMA_V1).execute(&mut *tx).await?;
 
     let owned_version = read_meta_row(&mut *tx, META_OWNED_SCHEMA_VERSION)
         .await?
         .map(|value| parse_version(&value, "meta.owned_schema_version"))
         .transpose()?
         .unwrap_or(OWNED_SCHEMA_VERSION);
-    let imported_version = read_meta_row(&mut *tx, META_IMPORTED_SCHEMA_VERSION)
-        .await?
-        .map(|value| parse_version(&value, "meta.imported_schema_version"))
-        .transpose()?
-        .unwrap_or(IMPORTED_SCHEMA_VERSION);
-
-    if owned_version > OWNED_SCHEMA_VERSION || imported_version > IMPORTED_SCHEMA_VERSION {
+    if owned_version > OWNED_SCHEMA_VERSION {
         return Err(StorageError::SchemaTooNew {
-            found: owned_version.max(imported_version),
-            supported: OWNED_SCHEMA_VERSION.min(IMPORTED_SCHEMA_VERSION),
+            found: owned_version,
+            supported: OWNED_SCHEMA_VERSION,
         });
     }
 
@@ -1638,6 +1619,9 @@ async fn migrate_locked(
         if file_version < 13 {
             v13_upgrade(&mut tx).await?;
         }
+        if file_version < 14 {
+            v14_upgrade(&mut tx).await?;
+        }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;
     }
@@ -1649,12 +1633,6 @@ async fn migrate_locked(
         &mut tx,
         META_OWNED_SCHEMA_VERSION,
         &OWNED_SCHEMA_VERSION.to_string(),
-    )
-    .await?;
-    write_meta_if_absent(
-        &mut tx,
-        META_IMPORTED_SCHEMA_VERSION,
-        &IMPORTED_SCHEMA_VERSION.to_string(),
     )
     .await?;
 
@@ -1678,7 +1656,6 @@ async fn migrate_locked(
     Ok(StoreMetadata {
         server_epoch,
         owned_schema_version: OWNED_SCHEMA_VERSION,
-        imported_schema_version: IMPORTED_SCHEMA_VERSION,
         created_at,
         last_prune_at,
     })
@@ -1720,8 +1697,8 @@ where
 /// §7.2：重建前需要保留的 `sqlite_sequence` 现值（`(表名, seq)`）。
 ///
 /// 重建会把那一行随 `DROP TABLE` 一起删掉；只按现存行的 `max(…)` 回填会让「尾部行已被保留期清理」的库
-/// 序列回退——审计有 365 天 TTL、事件也有保留窗口（§7.5），这个场景是常态。三张表都是
-/// `AUTOINCREMENT`（`owned_audit`/`imported_audit` 的 `audit_id`、`owned_event` 的 `global_sequence`），
+/// 序列回退——审计有 365 天 TTL、事件也有保留窗口（§7.5），这个场景是常态。两张表都是
+/// `AUTOINCREMENT`（`owned_audit` 的 `audit_id`、`owned_event` 的 `global_sequence`），
 /// 因此 `sqlite_sequence` 一定存在，且**都**必须原样保留：`global_sequence` 是跨节点排序与 cursor 的
 /// 基准（`NODE_LINK_PROTOCOL.md` §7），回退等于重复编号。
 async fn autoincrement_sequences<'e, E>(executor: E) -> Result<Vec<(String, i64)>, StorageError>
@@ -1730,7 +1707,7 @@ where
 {
     let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT name, seq FROM sqlite_sequence \
-         WHERE name IN ('owned_audit','imported_audit','owned_event')",
+         WHERE name IN ('owned_audit','owned_event')",
     )
     .fetch_all(executor)
     .await?;
@@ -1764,21 +1741,18 @@ async fn restore_sequences(
     Ok(())
 }
 
-/// §7.2：升级的最后一步：把两族版本键写成当前常量。
+/// §7.2：升级的最后一步：把 owned 版本键写成当前常量。
 ///
 /// `write_meta_if_absent` 只在键缺失时写入，升级路径必须显式覆盖既有值（新建库走不到这里，它的版本
 /// 键由 `write_meta_if_absent` 按当前常量写入）。
 async fn mark_schema_versions(tx: &mut sqlx::Transaction<'_, Sqlite>) -> Result<(), StorageError> {
-    for (key, value) in [
-        (META_OWNED_SCHEMA_VERSION, OWNED_SCHEMA_VERSION),
-        (META_IMPORTED_SCHEMA_VERSION, IMPORTED_SCHEMA_VERSION),
-    ] {
+    {
         sqlx::query(
             "INSERT INTO meta (key, value) VALUES (?1, ?2) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )
-        .bind(key)
-        .bind(value.to_string())
+        .bind(META_OWNED_SCHEMA_VERSION)
+        .bind(OWNED_SCHEMA_VERSION.to_string())
         .execute(&mut **tx)
         .await?;
     }

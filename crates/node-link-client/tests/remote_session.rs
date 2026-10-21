@@ -19,8 +19,7 @@ use node_link_client::identity::NodeIdentity;
 use node_link_client::{ClientConfig, ClientError, NodeLinkClient, TlsTrust};
 
 use support::{
-    MemTransport, OwnerIdentity, OwnerIo, RecordingDeliveries, RecordingSink, accept_handshake,
-    decimal, selected_features, uuid_text,
+    MemTransport, OwnerIdentity, OwnerIo, accept_handshake, decimal, selected_features, uuid_text,
 };
 
 use acp_core::model::{NodeId, PeerPublicKey};
@@ -103,12 +102,21 @@ fn attached() -> Attached {
 
 /// 回填空 catalog（supervisor 在握手后总会先发 `catalog.subscribe`）。
 async fn send_catalog_snapshot(io: &mut OwnerIo, connection: &node_link_protocol::common::Uuid) {
+    let session = node_link_protocol::catalog::CatalogSession {
+        session_id: uuid_text(SESSION),
+        origin_epoch: uuid_text("018f0000-0000-4000-8000-0000000000ee"),
+        agent_id: node_link_protocol::common::AgentId::parse("codex").expect("agent id"),
+        state: SessionState::Idle,
+        version: decimal(VERSION),
+        created_at: Timestamp::parse("2026-10-20T00:00:00.000Z").expect("timestamp"),
+        workspace_directory_id: node_link_protocol::common::Nullable::null(),
+    };
     let snapshot = node_link_protocol::catalog::CatalogSnapshot {
         revision: decimal(1),
         agents: node_link_protocol::catalog::AgentEntryList::new(Vec::new()).expect("agents"),
         directories: node_link_protocol::catalog::DirectoryEntryList::new(Vec::new())
             .expect("directories"),
-        sessions: node_link_protocol::catalog::CatalogSessionList::new(Vec::new())
+        sessions: node_link_protocol::catalog::CatalogSessionList::new(vec![session])
             .expect("sessions"),
     };
     io.send_envelope(MessageType::CatalogSnapshot, connection, &snapshot)
@@ -279,8 +287,7 @@ async fn prompt_routes_through_the_attachment_ticket_and_keeps_the_caller_reques
     let client = NodeLinkClient::new(
         mem.factory(),
         Arc::new(FixedIdentity::new([0x61; 32])),
-        Arc::new(RecordingSink::default()),
-        Arc::new(RecordingDeliveries::default()),
+        node_link_client::RemoteRuntime::new(),
     );
     let link = client
         .open(ClientConfig::new(
@@ -292,7 +299,7 @@ async fn prompt_routes_through_the_attachment_ticket_and_keeps_the_caller_reques
     // 等在线（握手与 catalog 订阅由 supervisor 自己完成）。
     wait_online(&link).await;
 
-    let session = link.session(remote(), Arc::new(RecordingDeliveries::default()));
+    let session = link.session(remote());
     let stable = request("11111111-2222-4333-8444-555555555555");
     let accepted = session
         .prompt_with_request(stable.clone(), prompt(), None)
@@ -366,8 +373,7 @@ async fn a_lost_command_is_uncertain_and_only_queried_after_reconnect() {
     let client = NodeLinkClient::new(
         mem.factory(),
         Arc::new(FixedIdentity::new([0x62; 32])),
-        Arc::new(RecordingSink::default()),
-        Arc::new(RecordingDeliveries::default()),
+        node_link_client::RemoteRuntime::new(),
     );
     let link = client
         .open(ClientConfig::new(
@@ -378,7 +384,7 @@ async fn a_lost_command_is_uncertain_and_only_queried_after_reconnect() {
         .expect("open");
     wait_online(&link).await;
 
-    let session = link.session(remote(), Arc::new(RecordingDeliveries::default()));
+    let session = link.session(remote());
     let outcome = session
         .prompt_with_request(stable.clone(), prompt(), None)
         .await;
@@ -565,7 +571,7 @@ async fn an_uncorrelated_rate_limit_error_fails_the_only_pending_command_without
 
     let link = open_client(&mem, [0x65; 32]);
     wait_online(&link).await;
-    let session = link.session(remote(), Arc::new(RecordingDeliveries::default()));
+    let session = link.session(remote());
     let rejected = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         session.prompt_with_request(
@@ -657,8 +663,8 @@ async fn an_in_flight_limit_rejection_settles_only_the_rejected_command() {
 
     let link = open_client(&mem, [0x66; 32]);
     wait_online(&link).await;
-    let first_session = link.session(remote(), Arc::new(RecordingDeliveries::default()));
-    let second_session = link.session(remote(), Arc::new(RecordingDeliveries::default()));
+    let first_session = link.session(remote());
+    let second_session = link.session(remote());
     let accepted = tokio::spawn(async move {
         first_session
             .prompt_with_request(
@@ -699,8 +705,7 @@ fn open_client(mem: &Arc<MemTransport>, seed: [u8; 32]) -> Arc<node_link_client:
     let client = NodeLinkClient::new(
         mem.factory(),
         Arc::new(FixedIdentity::new(seed)),
-        Arc::new(RecordingSink::default()),
-        Arc::new(RecordingDeliveries::default()),
+        node_link_client::RemoteRuntime::new(),
     );
     client
         .open(ClientConfig::new(
@@ -720,7 +725,7 @@ async fn a_status_query_accepted_reply_is_correlated_and_keeps_the_command_uncer
     let link = open_client(&mem, [0x63; 32]);
     wait_online(&link).await;
 
-    let session = link.session(remote(), Arc::new(RecordingDeliveries::default()));
+    let session = link.session(remote());
     assert!(
         session
             .prompt_with_request(stable.clone(), prompt(), None)
@@ -827,7 +832,7 @@ async fn a_command_not_found_link_error_clears_the_uncertain_command_without_rec
     let first = lose_the_prompt_on_the_first_connection(&mem, &stable).await;
     let link = open_client(&mem, [0x64; 32]);
     wait_online(&link).await;
-    let session = link.session(remote(), Arc::new(RecordingDeliveries::default()));
+    let session = link.session(remote());
     assert!(
         session
             .prompt_with_request(stable.clone(), prompt(), None)
@@ -954,7 +959,7 @@ async fn a_public_status_query_resolves_on_command_accepted() {
 
     let link = open_client(&mem, [0x65; 32]);
     wait_online(&link).await;
-    let session = link.session(remote(), Arc::new(RecordingDeliveries::default()));
+    let session = link.session(remote());
     let target = request("dddddddd-eeee-4fff-8000-111111111111");
     let started = std::time::Instant::now();
     let outcome = tokio::time::timeout(
@@ -1210,8 +1215,15 @@ async fn a_correlated_ack_rejection_settles_and_marks_the_subscription() {
     link.shutdown().await;
 }
 
-/// 连续 origin 序号的 `resource.event` wire body（`payloadDigest` 只需是 32 字节 base64url）。
+/// 连续 origin 序号的 `resource.event` wire body（摘要按 ACPR-CJ1 实际计算）。
 fn event_body(sequence: u64, event_id: &str) -> serde_json::Value {
+    let payload = serde_json::json!({"view": {}});
+    let text = serde_json::to_string(&payload).expect("payload json");
+    let canonical = acpr_wire::cj1::canonicalize(&text).expect("canonical json");
+    let digest = {
+        use sha2::Digest as _;
+        support::base64url(&sha2::Sha256::digest(canonical.as_bytes()))
+    };
     serde_json::json!({
         "originEventId": event_id,
         "originEpoch": "018f0000-0000-4000-8000-0000000000ee",
@@ -1221,7 +1233,7 @@ fn event_body(sequence: u64, event_id: &str) -> serde_json::Value {
             "sessionId": SESSION,
         },
         "eventType": "session.updated",
-        "payloadDigest": support::base64url(&[0x2a; 32]),
+        "payloadDigest": digest,
         "createdAt": "2026-10-20T00:00:00.000Z",
         "payload": {"view": {}},
     })
@@ -1364,12 +1376,11 @@ async fn a_retryable_subscribe_rejection_is_observable_and_resubscribed_from_the
         stop_rx.await.expect("stop");
     });
 
-    let sink: Arc<RecordingSink> = Arc::new(RecordingSink::default());
+    let runtime = node_link_client::RemoteRuntime::new();
     let client = NodeLinkClient::new(
         mem.factory(),
         Arc::new(FixedIdentity::new([0x6b; 32])),
-        sink.clone(),
-        Arc::new(RecordingDeliveries::default()),
+        runtime.clone(),
     );
     let link = client
         .open(ClientConfig::new(
@@ -1416,17 +1427,11 @@ async fn a_retryable_subscribe_rejection_is_observable_and_resubscribed_from_the
     );
 
     wait_until(
-        || sink.events.lock().expect("events").len() == 2,
+        || runtime.observed_events().len() == 2,
         "both events after the resubscribe",
     )
     .await;
-    let ids: Vec<String> = sink
-        .events
-        .lock()
-        .expect("events")
-        .iter()
-        .map(|(_, id)| id.clone())
-        .collect();
+    let ids: Vec<String> = runtime.observed_events();
     assert_eq!(
         ids,
         vec![
@@ -1627,12 +1632,11 @@ async fn a_stale_generation_subscribe_rejection_re_attaches_before_resubscribing
         stop_rx.await.expect("stop");
     });
 
-    let sink: Arc<RecordingSink> = Arc::new(RecordingSink::default());
+    let runtime = node_link_client::RemoteRuntime::new();
     let client = NodeLinkClient::new(
         mem.factory(),
         Arc::new(FixedIdentity::new([0x6e; 32])),
-        sink.clone(),
-        Arc::new(RecordingDeliveries::default()),
+        runtime.clone(),
     );
     let link = client
         .open(ClientConfig::new(
@@ -1665,7 +1669,7 @@ async fn a_stale_generation_subscribe_rejection_re_attaches_before_resubscribing
     )
     .await;
     wait_until(
-        || sink.events.lock().expect("events").len() == 1,
+        || runtime.observed_events().len() == 1,
         "the event after the refreshed subscription",
     )
     .await;

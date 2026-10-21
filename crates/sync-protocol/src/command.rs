@@ -29,9 +29,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
 use crate::common::{
-    ConfigOptionValue, ConfigOptionView, DecimalString, ModeState, NonEmptyText, Nullable,
-    PromptContentBlock, PublicError, RawObject, SessionSummary, Text, Timestamp, UIntAtLeast, Uuid,
-    ValueError, deserialize_optional_non_null,
+    ConfigOptionValue, ConfigOptionView, DecimalString, MessageCoverage, ModeState, NonEmptyText,
+    Nullable, OriginCursor, PromptContentBlock, PublicError, RawObject, SessionSummary, Text,
+    Timestamp, UIntAtLeast, Uuid, ValueError, deserialize_optional_non_null,
 };
 use crate::media::EffectiveInteraction;
 use crate::sync::{
@@ -1487,13 +1487,36 @@ impl<'de> Deserialize<'de> for ElicitationRespond {
     }
 }
 
+/// `command.schema.json#/$defs/remoteTarget`：远程查询的来源定位（`resource.stateless-origin.v1`）。
+///
+/// `sessionId` 为 `null` 只允许用于尚未建成会话的 `session.create`；其他会话操作必须给出原来源会话。
+/// 该键只在 feature 协商后出现，未协商的连接 MUST NOT 发送它（docs/SYNC_PROTOCOL.md §9.7/§11.4）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteTarget {
+    #[serde(rename = "ownerNodeId")]
+    pub owner_node_id: Uuid,
+    #[serde(rename = "sessionId")]
+    pub session_id: Nullable<Uuid>,
+}
+
 /// `commandStatus`（`command.schema.json#/$defs/commandStatus`）的 `payload`：
-/// `{ targetRequestId }`。
+/// `{ targetRequestId, remoteTarget? }`。
+///
+/// `remote_target` 是 `resource.stateless-origin.v1` 的加性字段：Access 直接向原 Owner 查询，
+/// 不凭本地记录判断（design D5）。未协商该 feature 时它缺席。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandStatus {
     #[serde(rename = "targetRequestId")]
     pub target_request_id: RequestId,
+    #[serde(
+        rename = "remoteTarget",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub remote_target: Option<RemoteTarget>,
 }
 
 /// `command`（`command.schema.json#/$defs/command`）`body` 的 `payload`（该 def 的 `body.oneOf`）。
@@ -1834,6 +1857,32 @@ pub struct SessionReadResult {
         skip_serializing_if = "Option::is_none"
     )]
     pub history_has_earlier: Option<bool>,
+    /// 本次读取在 Owner 只读事务中原子捕获的来源位置 R（`resource.stateless-origin.v1`，design D4）。
+    /// 只描述这一页的读取边界，不声明整个分页浏览是同一历史快照；未协商该 feature 时缺席。
+    #[serde(
+        rename = "readCursor",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub read_cursor: Option<OriginCursor>,
+    /// 与同一次读取原子取得的完整会话摘要（design D4/D6），用于防止清单与来源屏障之间的竞态。
+    #[serde(
+        rename = "sessionSummary",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_summary: Option<SessionSummary>,
+    /// 本次返回的每条消息恰有一项；`through` 等于 [`read_cursor`](Self::read_cursor)（design D4）。
+    /// 未协商该 feature 时缺席。
+    #[serde(
+        rename = "messageCoverage",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub message_coverage: Option<Vec<MessageCoverage>>,
 }
 
 /// `configListResult`（`command.schema.json#/$defs/configListResult`）：`session.config.list` 的
@@ -1883,6 +1932,7 @@ pub struct CommandStatusRecord {
 /// 撑大到其余变体的数倍（`clippy::large_enum_variant`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // 与 wire schema 的 result 联合一一对应；装箱会改变跨 crate 的解码 API。
 pub enum CommandResultPayload {
     /// `session.list` 的完成结果。
     SessionList(SessionListResult),

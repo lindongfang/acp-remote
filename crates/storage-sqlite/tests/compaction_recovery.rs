@@ -145,10 +145,7 @@ async fn compaction_points_the_deltas_at_the_summary_event() {
     let sequences: Vec<u64> = batch
         .events
         .iter()
-        .filter_map(|delivery| match delivery {
-            acp_core::model::CommittedDelivery::Owned(event) => Some(event.global_sequence.get()),
-            _ => None,
-        })
+        .map(|event| event.global_sequence.get())
         .collect();
     assert_eq!(
         sequences,

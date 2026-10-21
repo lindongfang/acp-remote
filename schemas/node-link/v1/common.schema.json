@@ -90,6 +90,19 @@
         "originSequence": { "$ref": "#/$defs/decimalString" }
       }
     },
+    "messageCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "`session.read` 对单条消息的覆盖声明（docs/NODE_LINK_PROTOCOL.md §12.7）：`through` 是本次原子读取捕获的来源位置，`lastDeltaIndex` 是该消息已覆盖的最后一个连续增量索引（无增量为 null）。与 Sync §11.5 同义；只在 `resource.stateless-origin.v1` 协商后出现。",
+      "required": ["messageId", "through", "lastDeltaIndex"],
+      "properties": {
+        "messageId": { "$ref": "#/$defs/uuid" },
+        "through": { "$ref": "#/$defs/originCursor" },
+        "lastDeltaIndex": {
+          "oneOf": [{ "$ref": "#/$defs/decimalString" }, { "type": "null" }]
+        }
+      }
+    },
     "remoteSessionRef": {
       "type": "object",
       "additionalProperties": false,

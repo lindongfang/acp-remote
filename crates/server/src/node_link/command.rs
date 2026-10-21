@@ -278,7 +278,8 @@ impl CommandRoute {
                     );
                 };
                 let target = status.target_request_id.clone();
-                self.on_status(handle, message, &target).await
+                self.on_status(handle, message, &target, status.remote_target.as_ref())
+                    .await
             }
             CommandName::SessionCreate => self.on_session_create(handle, message, &submit).await,
             CommandName::SessionResume => self.on_session_resume(handle, message, &submit).await,
@@ -298,8 +299,13 @@ impl CommandRoute {
         if !self.admit_rate(handle, message) {
             return RouteOutcome::Claimed;
         }
-        self.on_status(handle, message, &status.target_request_id)
-            .await
+        self.on_status(
+            handle,
+            message,
+            &status.target_request_id,
+            status.remote_target.as_ref(),
+        )
+        .await
     }
 
     // -----------------------------------------------------------------------------------------
@@ -312,7 +318,25 @@ impl CommandRoute {
         handle: &ConnectionHandle,
         message: &Envelope,
         target: &Uuid,
+        remote: Option<&node_link_protocol::command::RemoteTarget>,
     ) -> RouteOutcome {
+        if remote.is_some() && !negotiated(self, handle, "resource.stateless-origin.v1") {
+            return self.reject_schema(
+                handle,
+                message,
+                "remoteTarget requires resource.stateless-origin.v1",
+            );
+        }
+        if let Some(remote) = remote {
+            if remote.owner_node_id.as_str() != self.node_id.as_str() {
+                return self.reject_code(
+                    handle,
+                    CommandName::CommandStatus,
+                    target,
+                    "nodelink.command.unsupported",
+                );
+            }
+        }
         let Some(request) = core_request(target) else {
             return self.reject_schema(handle, message, "the targetRequestId is not a uuid");
         };
@@ -336,6 +360,22 @@ impl CommandRoute {
             );
             return RouteOutcome::Claimed;
         };
+        if let Some(remote) = remote {
+            let session_matches = match remote.session_id.as_ref() {
+                Some(session) => record
+                    .session()
+                    .is_some_and(|value| value.as_str() == session.as_str()),
+                None => record.command() == "session.create",
+            };
+            if !session_matches {
+                return self.reject_code(
+                    handle,
+                    CommandName::CommandStatus,
+                    target,
+                    "nodelink.command.unsupported",
+                );
+            }
+        }
         if record.status().is_terminal() {
             self.send_terminal(handle, &record);
             return RouteOutcome::Claimed;
@@ -745,6 +785,9 @@ impl CommandRoute {
             negotiate_acp: has(RAW_ACP_FEATURE),
             // Node Link 没有 `core.file-diff.v1`；事件视图按共享合同原样下发。
             negotiate_file_diff: true,
+            // Node Link 没有 `core.local-catalog.v1`；摘要投影按无该 feature 的三态处理。
+            catalog: false,
+            stateless_origin: has("resource.stateless-origin.v1"),
         };
         let outcome = match crate::session_read::read_session(
             self.core.as_ref(),
@@ -757,8 +800,14 @@ impl CommandRoute {
             Err(fault) => return self.session_read_fault(handle, message, submit, fault),
         };
         let result = match outcome {
-            crate::session_read::SessionReadOutcome::Owned(result) => result,
-            crate::session_read::SessionReadOutcome::Imported(_) => {
+            crate::session_read::SessionReadOutcome::Owned(result) => {
+                if has("resource.stateless-origin.v1") {
+                    owner_remote_summary(result, &self.node_id)
+                } else {
+                    result
+                }
+            }
+            crate::session_read::SessionReadOutcome::Remote(_) => {
                 // 第一阶段禁止再次导出 imported 资源（`NODE_LINK_PROTOCOL.md` §12.4）。
                 return self.reject_code(
                     handle,
@@ -820,6 +869,12 @@ impl CommandRoute {
                 CommandName::SessionRead,
                 &submit.request_id,
                 "nodelink.internal.unavailable",
+            ),
+            SessionReadFault::Unsupported(_) => self.reject_code(
+                handle,
+                CommandName::SessionRead,
+                &submit.request_id,
+                "nodelink.command.unsupported",
             ),
         }
     }
@@ -2313,6 +2368,13 @@ impl CommandRoute {
     }
 }
 
+/// 本连接是否协商了指定 feature（失败关闭：未知 = 未协商）。
+fn negotiated(route: &CommandRoute, session: &ConnectionHandle, feature: &str) -> bool {
+    lock(&route.states)
+        .get(session.connection_id().as_str())
+        .is_some_and(|state| state.features.iter().any(|value| value == feature))
+}
+
 #[async_trait::async_trait]
 impl MessageRoute for CommandRoute {
     async fn route(&self, session: &ConnectionHandle, message: &Envelope) -> RouteOutcome {
@@ -2747,6 +2809,30 @@ fn wire_timestamp(value: &CoreTimestamp) -> Option<WireTimestamp> {
 /// 时钟给出的值不是规范 wire 时间戳（本机缺陷：`Clock` 实现不满足合同）。
 fn clock_fault() -> PortError {
     PortError::Corrupt("the clock produced a non-canonical timestamp")
+}
+
+/// Owner 侧 `session.read` 的 `sessionSummary` 对 Access 而言是**远程**来源：把 core 投影的
+/// `origin.kind = local` 改写为 `remote{ownerNodeId, originEpoch, online}`，originEpoch 取同一次读取的 R。
+/// 只改 wire 投影，不改 core 状态。
+fn owner_remote_summary(
+    mut result: sync_protocol::command::SessionReadResult,
+    owner: &NodeId,
+) -> sync_protocol::command::SessionReadResult {
+    let Some(summary) = result.session_summary.as_mut() else {
+        return result;
+    };
+    let (Some(cursor), Ok(owner_node_id)) = (
+        result.read_cursor.as_ref(),
+        sync_protocol::common::Uuid::parse(owner.as_str()),
+    ) else {
+        return result;
+    };
+    summary.origin = sync_protocol::common::OriginBlock::Remote {
+        owner_node_id,
+        origin_epoch: cursor.origin_epoch.clone(),
+        online: true,
+    };
+    result
 }
 
 /// core 的 `SessionSummary` → Sync 的 `sessionSummary`（§11.4 的共享合同，Node Link 不另立形状）。

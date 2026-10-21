@@ -306,6 +306,8 @@ function storeWithPairing(pairing: PairingWiring | undefined): ClientStore {
       refreshSnapshot: () => undefined,
       authenticatedInfo: null,
       dispatch: () => undefined,
+      subscribeRemote: () => undefined,
+      unsubscribeRemote: () => undefined,
     },
     ids: { uuid: () => "00000000-0000-4000-8000-000000000001" },
     now: () => NOW_MS,

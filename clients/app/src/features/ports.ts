@@ -17,7 +17,7 @@
  * `src/sync-client/`，由组合根装配后从这里进入（`AGENTS.md` §6）。
  */
 
-import type { CommandMessage } from "../protocol";
+import type { CommandMessage, SessionRef } from "../protocol";
 import type { AuthenticatedInfo, CompletedSnapshot, EventDedupKey } from "../sync-client";
 
 /** 快照读取与刷新面：断连时保留已验证清单，刷新复用同步协议。 */
@@ -40,6 +40,17 @@ export interface AuthenticatedGateway {
   readonly authenticatedInfo: AuthenticatedInfo | null;
 }
 
+/**
+ * 远程来源订阅面（`resource.stateless-origin.v1`，§9.7）。
+ *
+ * 门面保存当前运行期的最后连续位置 C 与去重窗口；feature 层只表达「哪条来源会话要订阅」。
+ * **没有**任何持久化或离线队列入口——刷新后重新订阅并回源读取重建。
+ */
+export interface RemoteSourceGateway {
+  subscribeRemote(sessionRef: SessionRef): void;
+  unsubscribeRemote(sessionRef: SessionRef): void;
+}
+
 
 /**
  * 已建立连接的标识。
@@ -56,7 +67,7 @@ export interface ConnectionIdentity {
  * `SyncClient` 结构上满足它（`snapshots` 是只读属性），组合根可直接传入；
  * 测试则注入记账替身来证明「目录渲染不发任何命令」。
  */
-export type SyncGateway = SnapshotGateway & CommandGateway & AuthenticatedGateway;
+export type SyncGateway = SnapshotGateway & CommandGateway & AuthenticatedGateway & RemoteSourceGateway;
 
 /** 标识生成面（`requestId` / `messageId`）。 */
 export interface IdentifierSource {

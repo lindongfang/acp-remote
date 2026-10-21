@@ -12,11 +12,10 @@
 
 use super::error::InvalidValue;
 use super::ids::{
-    EventId, OriginEpoch, OriginEventRef, RemoteSessionRef, RequestId, SessionId, TurnId,
-    is_event_type, require_bounded,
+    EventId, OriginEpoch, RequestId, SessionId, TurnId, is_event_type, require_bounded,
 };
 use super::json::validate_document;
-use super::scalars::{Digest, LocalCursor, Sequence, Timestamp};
+use super::scalars::{Digest, Sequence, Timestamp};
 use std::fmt;
 use std::str::FromStr;
 
@@ -341,50 +340,5 @@ impl CommittedEvent {
             return Err(InvalidValue::Field);
         }
         Ok(())
-    }
-}
-
-/// 交给 `EventPublisher` 的投递单元（§3.4）：owned 带完整事件定位，imported 只带 origin 引用与摘要，
-/// `payload` 只在内存中存在（`imported_*` 表不得出现正文）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CommittedDelivery {
-    Owned(CommittedEvent),
-    Imported {
-        session: RemoteSessionRef,
-        origin: OriginEventRef,
-        origin_sequence: Sequence,
-        local_sequence: LocalCursor,
-        event_type: EventType,
-        payload_digest: Digest,
-        /// 收据的持久化时间（`imported_delivery_index.received_at` 的同一次取值）。
-        ///
-        /// Sync 的 `event.createdAt` 是「Daemon 持久化时间」，因此 imported 事件的这一字段必须来自
-        /// 本机收据提交，不能由投递层在扇出时另读一次时钟（那会让实时帧与重放/审计看到两个时刻）。
-        created_at: Timestamp,
-        payload: Option<EventPayload>,
-    },
-}
-
-impl CommittedDelivery {
-    /// 投递单元的相容性：owned 的会话级序号自洽；imported 的 origin 必须属于该会话的 Owner，
-    /// 且 `payload`（若存在）必须是有效 payload。
-    pub fn validate(&self) -> Result<(), InvalidValue> {
-        match self {
-            Self::Owned(event) => event.validate(),
-            Self::Imported {
-                session,
-                origin,
-                payload,
-                ..
-            } => {
-                if origin.owner_node_id != session.owner_node_id {
-                    return Err(InvalidValue::Field);
-                }
-                match payload {
-                    Some(payload) => payload.validate(),
-                    None => Ok(()),
-                }
-            }
-        }
     }
 }

@@ -34,9 +34,10 @@ use sync_protocol::common::{FeatureId, FeatureList as WireFeatureList};
 /// 协商是**交集**（见 [`negotiate_features`]），因此这里漏登记一条 feature 会让它**静默失效**：客户端
 /// 声明了却被交集丢掉，服务端随后的门控（快照的 `path` 键、`workspace.browse`、`file.changed` 的
 /// 差异行）一律按「未协商」处置。新增 feature 时必须同时把它加进本表。
-pub const SUPPORTED_FEATURES: [&str; 19] = [
+pub const SUPPORTED_FEATURES: [&str; 20] = [
     // §10.2：会话主状态三态合同（`idle`/`running`/`pending`）。两端都必须选中，否则摘要词表可能不一致。
     "core.session-activity.v1",
+    "resource.stateless-origin.v1",
     "core.snapshot.v1",
     "core.command-status.v1",
     "core.event-ack.v1",

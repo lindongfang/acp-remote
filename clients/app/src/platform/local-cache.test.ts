@@ -1,60 +1,39 @@
 /**
- * R20 平台侧的可核对证据。
+ * R20 平台侧的可核对证据（只保留本机摘要缓存）。
  *
  * 两类断言：
  *
- * 1. **纯策略**（`evictToFit` / `assertPersistableForOrigin`）：固定上限、TTL、LRU 顺序、
- *    imported 正文拒绝落盘——不依赖任何浏览器 API，直接在 Node 里判定；
- * 2. **端口行为**（`openLocalCache` + imported 内存载体）：写入、读取、LRU 刷新、清除，
- *    以及 imported 正文只进内存 Map、`clear()` 后消失。
+ * 1. **纯策略**（`evictToFit` / `assertLocalSummary`）：固定上限、TTL、LRU 顺序，以及
+ *    任何夹带来源元数据/正文的写入在运行期被拒绝；不依赖浏览器 API；
+ * 2. **端口行为**（`openLocalCache`）：写入、读取、LRU 刷新、配额收敛、清除，以及并发写
+ *    不丢条目的串行化。
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   CachePolicyError,
-  IMPORTED_METADATA_MAX_BYTES,
-  IMPORTED_METADATA_TTL_MS,
   SUMMARY_CACHE_MAX_BYTES,
   SUMMARY_CACHE_TTL_MS,
-  assertPersistableForOrigin,
+  assertLocalSummary,
   estimateEntryBytes,
   evictToFit,
   type CacheEntry,
-  type ImportedMetadata,
 } from "./local-cache";
-import { createVolatileImportedContent, openLocalCache } from "./local-cache.web";
+import { openLocalCache } from "./local-cache.web";
 import { installFakeIndexedDB } from "./testing/fake-indexeddb";
 
 const NOW = 1_700_000_000_000;
 
-/** 造一条本地摘要条目。 */
+/** 造一条本机摘要条目。 */
 function localEntry(key: string, summary: string, lastUsedAtMs: number): CacheEntry {
-  return {
-    kind: "local",
-    key,
-    summary,
-    updatedAtMs: NOW,
-    lastUsedAtMs,
-  };
+  return { key, summary, updatedAtMs: NOW, lastUsedAtMs };
 }
-
-const PERSISTABLE_METADATA: ImportedMetadata = {
-  ownerNodeId: "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-  exportId: "export-1",
-  sessionId: "session-1",
-  originCursor: "1-2",
-  localSequence: "7",
-  contentDigestSha256: "a".repeat(64),
-  acks: ["1", "2"],
-};
 
 describe("R20：固定上限 / TTL / LRU 是固定常量", () => {
   it("上限与存活期是文档冻结的固定值", () => {
     expect(SUMMARY_CACHE_MAX_BYTES).toBe(8 * 1024 * 1024);
     expect(SUMMARY_CACHE_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
-    expect(IMPORTED_METADATA_TTL_MS).toBe(7 * 24 * 60 * 60 * 1000);
-    expect(IMPORTED_METADATA_MAX_BYTES).toBeLessThan(SUMMARY_CACHE_MAX_BYTES);
   });
 
   it("超出上限时按最近最少使用淘汰到配额以内", () => {
@@ -88,22 +67,19 @@ describe("R20：固定上限 / TTL / LRU 是固定常量", () => {
     expect(kept.map((entry) => entry.key)).toEqual(["expired-but-recent"]);
   });
 
-  it("imported 正文在任何来源下都被拒绝进入持久层", () => {
+  it("落盘守门只在运行期接受本机摘要：夹带来源元数据即拒绝", () => {
+    expect(() => assertLocalSummary({ summary: "一段会话摘要" })).not.toThrow();
+    // 反例：把远程元数据/游标/ACK 挂在入参上 → 这里必须抛策略错误。
     expect(() =>
-      assertPersistableForOrigin({ kind: "imported" }, { summary: "会话正文" }),
-    ).toThrow(CachePolicyError);
-    // 元数据形状允许。
-    expect(() =>
-      assertPersistableForOrigin({ kind: "imported" }, { metadata: PERSISTABLE_METADATA }),
-    ).not.toThrow();
-    // 本节点自有条目不得使用 imported 元数据形状。
-    expect(() =>
-      assertPersistableForOrigin({ kind: "local" }, { metadata: PERSISTABLE_METADATA }),
+      assertLocalSummary({
+        summary: "摘要",
+        metadata: { ownerNodeId: "node-1", originCursor: "1-2", acks: ["1"] },
+      }),
     ).toThrow(CachePolicyError);
   });
 });
 
-describe("R20：缓存端口行为与 imported 不落盘", () => {
+describe("R20：缓存端口只保留本机摘要", () => {
   beforeEach(() => {
     installFakeIndexedDB();
   });
@@ -113,12 +89,12 @@ describe("R20：缓存端口行为与 imported 不落盘", () => {
     await cache.putLocalSummary({ key: "s1", summary: "第一条", nowMs: NOW });
 
     const hit = await cache.get("s1", NOW + 1000);
-    expect(hit?.entry.kind).toBe("local");
+    expect(hit?.entry.summary).toBe("第一条");
     expect(hit?.remainingTtlMs).toBe(SUMMARY_CACHE_TTL_MS - 1000);
 
     const stats = await cache.stats(NOW);
-    expect(stats.localEntries).toBe(1);
-    expect(stats.importedEntries).toBe(0);
+    expect(stats.entries).toBe(1);
+    expect(stats).not.toHaveProperty("importedEntries");
   });
 
   it("过期条目在读取时被丢弃", async () => {
@@ -127,39 +103,16 @@ describe("R20：缓存端口行为与 imported 不落盘", () => {
     expect(await cache.get("s1", NOW + SUMMARY_CACHE_TTL_MS)).toBeNull();
   });
 
-  it("imported 只落无正文元数据，正文只进内存且清除后消失", async () => {
-    const cache = openLocalCache();
-    const volatile = createVolatileImportedContent();
-
-    await cache.putImportedMetadata({ key: "remote-1", metadata: PERSISTABLE_METADATA, nowMs: NOW });
-    volatile.put("remote-1", "imported 的正文只在内存");
-
-    // 持久侧只拿到元数据。
-    const hit = await cache.get("remote-1", NOW + 1000);
-    expect(hit?.entry.kind).toBe("imported");
-    const persisted = JSON.stringify(hit?.entry);
-    expect(persisted).not.toContain("imported 的正文只在内存");
-    expect(persisted).toContain(PERSISTABLE_METADATA.contentDigestSha256);
-
-    // 内存侧持有正文，清除后即消失。
-    expect(volatile.get("remote-1")).toBe("imported 的正文只在内存");
-    volatile.clear();
-    expect(volatile.get("remote-1")).toBeNull();
-    expect(volatile.keys()).toEqual([]);
-  });
-
   it("清除数据清空持久缓存", async () => {
     const cache = openLocalCache();
     await cache.putLocalSummary({ key: "s1", summary: "x", nowMs: NOW });
-    await cache.putImportedMetadata({ key: "r1", metadata: PERSISTABLE_METADATA, nowMs: NOW });
     await cache.clear();
 
     const stats = await cache.stats(NOW);
-    expect(stats.localEntries).toBe(0);
-    expect(stats.importedEntries).toBe(0);
+    expect(stats.entries).toBe(0);
   });
 
-  it("持久配额按 LRU 收敛（本节点摘要）", async () => {
+  it("持久配额按 LRU 收敛（本机摘要）", async () => {
     const cache = openLocalCache();
     const big = "x".repeat(SUMMARY_CACHE_MAX_BYTES / 2);
     await cache.putLocalSummary({ key: "a", summary: big, nowMs: NOW - 2000 });
@@ -167,7 +120,7 @@ describe("R20：缓存端口行为与 imported 不落盘", () => {
     await cache.putLocalSummary({ key: "c", summary: big, nowMs: NOW });
 
     const stats = await cache.stats(NOW);
-    expect(stats.localBytes).toBeLessThanOrEqual(SUMMARY_CACHE_MAX_BYTES);
+    expect(stats.bytes).toBeLessThanOrEqual(SUMMARY_CACHE_MAX_BYTES);
     // 最久未使用的 `a` 应已被淘汰。
     expect(await cache.get("a", NOW)).toBeNull();
   });
@@ -175,15 +128,14 @@ describe("R20：缓存端口行为与 imported 不落盘", () => {
   it("并发写入不丢条目：两条并发 put 都落盘（F2）", async () => {
     const cache = openLocalCache();
     await Promise.all([
-      cache.putLocalSummary({ key: "A", summary: "本地摘要 A", nowMs: NOW }),
-      cache.putImportedMetadata({ key: "B", metadata: PERSISTABLE_METADATA, nowMs: NOW }),
+      cache.putLocalSummary({ key: "A", summary: "本机摘要 A", nowMs: NOW }),
+      cache.putLocalSummary({ key: "B", summary: "本机摘要 B", nowMs: NOW }),
     ]);
 
     const stats = await cache.stats(NOW);
-    expect(stats.localEntries).toBe(1);
-    expect(stats.importedEntries).toBe(1);
-    expect((await cache.get("A", NOW))?.entry.kind).toBe("local");
-    expect((await cache.get("B", NOW))?.entry.kind).toBe("imported");
+    expect(stats.entries).toBe(2);
+    expect((await cache.get("A", NOW))?.entry.summary).toBe("本机摘要 A");
+    expect((await cache.get("B", NOW))?.entry.summary).toBe("本机摘要 B");
   });
 
   it("clear 与并发 put 竞争时 clear 胜出，存储为空（F2）", async () => {
@@ -196,33 +148,25 @@ describe("R20：缓存端口行为与 imported 不落盘", () => {
     ]);
 
     const stats = await cache.stats(NOW);
-    expect(stats.localEntries).toBe(0);
-    expect(stats.importedEntries).toBe(0);
+    expect(stats.entries).toBe(0);
   });
 
-  it("落盘守门被真的接线：imported 元数据携带正文即拒绝且未落盘（F4）", async () => {
-    const cache = openLocalCache();
-    const withBody = {
-      ...PERSISTABLE_METADATA,
-      body: "imported 会话正文",
-    } as unknown as ImportedMetadata;
-
-    await expect(
-      cache.putImportedMetadata({ key: "r1", metadata: withBody, nowMs: NOW }),
-    ).rejects.toBeInstanceOf(CachePolicyError);
-    expect((await cache.stats(NOW)).importedEntries).toBe(0);
-  });
-
-  it("落盘守门被真的接线：本节点条目携带 imported 元数据形状即拒绝（F4）", async () => {
+  it("落盘守门被真的接线：本机摘要夹带来源元数据即拒绝且未落盘（F4）", async () => {
     const cache = openLocalCache();
     const smuggled = {
       key: "s1",
       summary: "摘要",
-      metadata: PERSISTABLE_METADATA,
+      metadata: { ownerNodeId: "node-1", originCursor: "1-2", acks: ["1"] },
       nowMs: NOW,
     } as unknown as { readonly key: string; readonly summary: string; readonly nowMs: number };
 
     await expect(cache.putLocalSummary(smuggled)).rejects.toBeInstanceOf(CachePolicyError);
-    expect((await cache.stats(NOW)).localEntries).toBe(0);
+    expect((await cache.stats(NOW)).entries).toBe(0);
+  });
+
+  it("端口没有远程元数据写入口（来源资料不落盘）", () => {
+    const cache = openLocalCache() as unknown as Record<string, unknown>;
+    expect(cache["putImportedMetadata"]).toBeUndefined();
+    expect("importedContent" in cache).toBe(false);
   });
 });

@@ -14,6 +14,10 @@ use serde_json::value::RawValue;
 use crate::common::{DecimalString, ProtocolVersionV1, Uuid};
 
 /// v1 的全部消息类型，逐条对应 `schemas/sync/v1/*.schema.json` 里的 `properties.type.const`。
+///
+/// 其中 9 个 `sync.remote_*` 类型属于 feature `resource.stateless-origin.v1`（`docs/SYNC_PROTOCOL.md`
+/// §9.7）：枚举保留它们是为了让 schema 漂移门禁与解码分派覆盖全词表；业务连接必须先确认该 feature
+/// 已协商，未协商时收到这些类型按 `protocol.type_unsupported` 拒绝（§5.3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageType {
     AuthClientHello,
@@ -28,6 +32,15 @@ pub enum MessageType {
     SyncSnapshotChunk,
     SyncSnapshotEnd,
     SyncAck,
+    SyncRemoteSubscribe,
+    SyncRemoteEvent,
+    SyncRemoteCaughtUp,
+    SyncRemoteAck,
+    SyncRemoteResetRequired,
+    SyncRemoteUnsubscribe,
+    SyncRemoteUnavailable,
+    SyncRemoteCatalogChanged,
+    SyncRemoteSourceState,
     ControlPing,
     ControlPong,
     Error,
@@ -49,7 +62,7 @@ pub enum AuthState {
 
 impl MessageType {
     /// 与 schema 的 `type` 常量逐条相等的完整集合，顺序即 `docs/SYNC_PROTOCOL.md` §4 的家族顺序。
-    pub const ALL: [MessageType; 18] = [
+    pub const ALL: [MessageType; 27] = [
         MessageType::AuthClientHello,
         MessageType::AuthServerChallenge,
         MessageType::AuthClientProof,
@@ -62,6 +75,15 @@ impl MessageType {
         MessageType::SyncSnapshotChunk,
         MessageType::SyncSnapshotEnd,
         MessageType::SyncAck,
+        MessageType::SyncRemoteSubscribe,
+        MessageType::SyncRemoteEvent,
+        MessageType::SyncRemoteCaughtUp,
+        MessageType::SyncRemoteAck,
+        MessageType::SyncRemoteResetRequired,
+        MessageType::SyncRemoteUnsubscribe,
+        MessageType::SyncRemoteUnavailable,
+        MessageType::SyncRemoteCatalogChanged,
+        MessageType::SyncRemoteSourceState,
         MessageType::ControlPing,
         MessageType::ControlPong,
         MessageType::Error,
@@ -84,6 +106,15 @@ impl MessageType {
             MessageType::SyncSnapshotChunk => "sync.snapshot_chunk",
             MessageType::SyncSnapshotEnd => "sync.snapshot_end",
             MessageType::SyncAck => "sync.ack",
+            MessageType::SyncRemoteSubscribe => "sync.remote_subscribe",
+            MessageType::SyncRemoteEvent => "sync.remote_event",
+            MessageType::SyncRemoteCaughtUp => "sync.remote_caught_up",
+            MessageType::SyncRemoteAck => "sync.remote_ack",
+            MessageType::SyncRemoteResetRequired => "sync.remote_reset_required",
+            MessageType::SyncRemoteUnsubscribe => "sync.remote_unsubscribe",
+            MessageType::SyncRemoteUnavailable => "sync.remote_unavailable",
+            MessageType::SyncRemoteCatalogChanged => "sync.remote_catalog_changed",
+            MessageType::SyncRemoteSourceState => "sync.remote_source_state",
             MessageType::ControlPing => "control.ping",
             MessageType::ControlPong => "control.pong",
             MessageType::Error => "error",

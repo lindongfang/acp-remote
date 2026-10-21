@@ -26,8 +26,18 @@ import type {
   CommandResultMessage,
   Cursor,
   EventMessage,
+  OriginCursor,
+  RemoteEventItem,
+  RemoteResetReason,
+  RemoteSourceStateKind,
+  SessionRef,
   SyncAck,
   SyncCaughtUp,
+  SyncRemoteCaughtUp,
+  SyncRemoteEvent,
+  SyncRemoteResetRequired,
+  SyncRemoteUnavailable,
+  SyncRemoteUnsubscribe,
   SyncResetRequired,
   SyncSnapshotBegin,
   SyncSnapshotChunk,
@@ -38,6 +48,7 @@ import type {
 import { stringifyJson } from "./json";
 import { decodeWireMessage } from "./wire";
 import { EventLedger, isImportedEventIdConsistent } from "./dedupe";
+import { compareOriginCursors } from "./remote-merge";
 import type {
   ClockPort,
   CancelTimer,
@@ -195,7 +206,58 @@ export type SyncClientEvent =
       readonly reason?: IncompatibleReason;
     }
   /** 消息被解码拒绝（诊断用；不进入阻断态，除非调用方据此升级）。 */
-  | { readonly kind: "rejected"; readonly reason: string; readonly detail: string };
+  | { readonly kind: "rejected"; readonly reason: string; readonly detail: string }
+  // ── 远程来源流（`resource.stateless-origin.v1`，§9.7） ────────────────────
+  //
+  // 这些事件都只在**当前连接**上有意义：连接关闭后订阅与游标不再由连接持有（客户端运行期
+  // 的连续位置由门面保存），消费方必须清除远程展示数据。远程序号是 Owner 的 `originCursor`，
+  // 与 Access 本机的 `Cursor` 互不翻译。
+  /** 已为某个来源会话发出（或重发）`sync.remote_subscribe`；消费方应回源读取重建。 */
+  | {
+      readonly kind: "remote_subscribing";
+      readonly sessionRef: SessionRef;
+      readonly subscriptionId: Uuid;
+      readonly cursor: OriginCursor | null;
+    }
+  /** 一条已通过本订阅去重的来源事件。 */
+  | {
+      readonly kind: "remote_event";
+      readonly sessionRef: SessionRef;
+      readonly subscriptionId: Uuid;
+      readonly event: RemoteEventItem;
+    }
+  /** Owner 已完成来源重放屏障；此后才是实时事件。 */
+  | {
+      readonly kind: "remote_caught_up";
+      readonly sessionRef: SessionRef;
+      readonly subscriptionId: Uuid;
+      readonly cursor: OriginCursor;
+    }
+  /** 来源要求重建（epoch/保留期/不兼容）；`cursor` 只在 Owner 已验证 head 时出现。 */
+  | {
+      readonly kind: "remote_reset_required";
+      readonly sessionRef: SessionRef;
+      readonly subscriptionId: Uuid;
+      readonly reason: RemoteResetReason;
+      readonly cursor: OriginCursor | null;
+    }
+  /** 来源当前不可用（断线/撤销/不支持），必须清除该来源展示数据。 */
+  | {
+      readonly kind: "remote_unavailable";
+      readonly sessionRef: SessionRef;
+      readonly subscriptionId: Uuid;
+      readonly error: SyncRemoteUnavailable["body"]["error"];
+    }
+  /** 本连接上的订阅已结束（服务端确认或客户端主动取消）。 */
+  | {
+      readonly kind: "remote_unsubscribed";
+      readonly sessionRef: SessionRef;
+      readonly subscriptionId: Uuid;
+    }
+  /** 某个 Owner 的来源清单失效：客户端重新查询（快照），不保留旧副本。 */
+  | { readonly kind: "remote_catalog_changed"; readonly ownerNodeId: Uuid; readonly revision: string }
+  /** 某个 Owner 的连接事实：`offline`/`revoked` 时清除该来源展示数据。 */
+  | { readonly kind: "remote_source_state"; readonly ownerNodeId: Uuid; readonly state: RemoteSourceStateKind };
 
 /** 客户端需要的 feature 词表（`compatibility/features/v1/features.json` 的 sync 段）。 */
 export const SUPPORTED_FEATURES = [
@@ -218,6 +280,7 @@ export const SUPPORTED_FEATURES = [
   "core.pending-interactions.v1",
   "core.remote-history.v1",
   "resource.remote-origin.v1",
+  "resource.stateless-origin.v1",
 ] as const;
 
 /**
@@ -343,6 +406,15 @@ export class SyncConnection {
   #gapAttempts = 0;
   /** 待触发的缺口重订阅定时器；同一时刻至多一个。 */
   #gapRetry: CancelTimer | null = null;
+  /**
+   * 本连接上已登记的远程订阅：`subscriptionId → sessionRef`。
+   *
+   * 映射随连接消亡（关闭/阻断即清空）。客户端运行期的连续位置不在这里，而是在门面：
+   * 连接只是投递通道，重连必须换一条新订阅。
+   */
+  readonly #remoteSubscriptions = new Map<Uuid, SessionRef>();
+  /** 每个远程订阅在本连接上已确认的连续位置（只用于让 `remote_ack` 单调前进）。 */
+  readonly #remoteAcked = new Map<Uuid, OriginCursor>();
 
   constructor(options: SyncConnectionOptions, staging: SnapshotStaging) {
     this.#options = options;
@@ -429,6 +501,7 @@ export class SyncConnection {
     this.#closed = true;
     this.#clearSnapshotBacklog();
     this.#cancelGapResubscribe();
+    this.#forgetRemoteSubscriptions();
     this.#socket.close(code, reason);
   }
 
@@ -565,6 +638,42 @@ export class SyncConnection {
       case "sync.subscribe":
       case "sync.snapshot_request":
         return;
+      case "sync.remote_subscribe":
+        // 服务端不会向客户端发起订阅；形状虽可解码，角色是错的。
+        this.#onEvent({ kind: "rejected", reason: "unexpected_type", detail: message.type });
+        return;
+      case "sync.remote_event":
+        this.#onRemoteEvent(message);
+        return;
+      case "sync.remote_caught_up":
+        this.#onRemoteCaughtUp(message);
+        return;
+      case "sync.remote_ack":
+        // 客户端→Access 的累计确认；服务端回送一帧不改变任何状态，也不进入阻断态。
+        return;
+      case "sync.remote_reset_required":
+        this.#onRemoteResetRequired(message);
+        return;
+      case "sync.remote_unsubscribe":
+        this.#onRemoteUnsubscribe(message);
+        return;
+      case "sync.remote_unavailable":
+        this.#onRemoteUnavailable(message);
+        return;
+      case "sync.remote_catalog_changed":
+        this.#onEvent({
+          kind: "remote_catalog_changed",
+          ownerNodeId: message.body.ownerNodeId,
+          revision: message.body.revision,
+        });
+        return;
+      case "sync.remote_source_state":
+        this.#onEvent({
+          kind: "remote_source_state",
+          ownerNodeId: message.body.ownerNodeId,
+          state: message.body.state,
+        });
+        return;
       default:
         this.#onEvent({ kind: "rejected", reason: "unexpected_type", detail: message.type });
     }
@@ -668,6 +777,12 @@ export class SyncConnection {
     this.#gapRetry = null;
   }
 
+  /** 连接结束：远程订阅映射与连接级确认一并作废（运行期连续位置由门面保留）。 */
+  #forgetRemoteSubscriptions(): void {
+    this.#remoteSubscriptions.clear();
+    this.#remoteAcked.clear();
+  }
+
   /**
    * `sync.caught_up`：服务端给出的**权威屏障**（§9.3 第 4 步）。
    *
@@ -715,6 +830,117 @@ export class SyncConnection {
     }
     this.#acked = barrier;
     return true;
+  }
+
+  /**
+   * `sync.remote_event`：只接受当前连接上已登记订阅的帧。
+   *
+   * 订阅已被替换（新 `subscriptionId`）或已取消后迟到的帧不属于任何当前订阅，按未知订阅拒绝；
+   * 这不是协议错误，也不进入阻断态。`originEventId` 的去重在门面（跨连接窗口）完成，
+   * 这里只保证「帧属于当前订阅、来源与登记一致」。
+   */
+  #onRemoteEvent(message: SyncRemoteEvent): void {
+    const ref = this.#remoteSubscriptions.get(message.body.subscriptionId);
+    if (ref === undefined) {
+      this.#onEvent({
+        kind: "rejected",
+        reason: "unknown_remote_subscription",
+        detail: message.body.subscriptionId,
+      });
+      return;
+    }
+    const event = message.body.event;
+    if (event.sessionRef.ownerNodeId !== ref.ownerNodeId || event.sessionRef.sessionId !== ref.sessionId) {
+      this.#onEvent({
+        kind: "rejected",
+        reason: "remote_source_mismatch",
+        detail: `${event.sessionRef.ownerNodeId}/${event.sessionRef.sessionId}`,
+      });
+      return;
+    }
+    this.#onEvent({
+      kind: "remote_event",
+      sessionRef: ref,
+      subscriptionId: message.body.subscriptionId,
+      event,
+    });
+    this.#sendRemoteAck(message.body.subscriptionId, {
+      originEpoch: event.originEpoch,
+      originSequence: event.originSequence,
+    });
+  }
+
+  #onRemoteCaughtUp(message: SyncRemoteCaughtUp): void {
+    const ref = this.#remoteSubscriptions.get(message.body.subscriptionId);
+    if (ref === undefined) {
+      this.#onEvent({
+        kind: "rejected",
+        reason: "unknown_remote_subscription",
+        detail: message.body.subscriptionId,
+      });
+      return;
+    }
+    this.#onEvent({
+      kind: "remote_caught_up",
+      sessionRef: ref,
+      subscriptionId: message.body.subscriptionId,
+      cursor: message.body.cursor,
+    });
+    this.#sendRemoteAck(message.body.subscriptionId, message.body.cursor);
+  }
+
+  #onRemoteResetRequired(message: SyncRemoteResetRequired): void {
+    const ref = this.#remoteSubscriptions.get(message.body.subscriptionId);
+    if (ref === undefined) {
+      this.#onEvent({
+        kind: "rejected",
+        reason: "unknown_remote_subscription",
+        detail: message.body.subscriptionId,
+      });
+      return;
+    }
+    // 重置后的旧确认不可再用于任何位置：本连接对这条订阅的累计确认从零开始。
+    this.#remoteAcked.delete(message.body.subscriptionId);
+    this.#onEvent({
+      kind: "remote_reset_required",
+      sessionRef: ref,
+      subscriptionId: message.body.subscriptionId,
+      reason: message.body.reason,
+      cursor: message.body.cursor,
+    });
+  }
+
+  #onRemoteUnsubscribe(message: SyncRemoteUnsubscribe): void {
+    const ref = this.#remoteSubscriptions.get(message.body.subscriptionId);
+    if (ref === undefined) return;
+    this.#remoteSubscriptions.delete(message.body.subscriptionId);
+    this.#remoteAcked.delete(message.body.subscriptionId);
+    this.#onEvent({
+      kind: "remote_unsubscribed",
+      sessionRef: ref,
+      subscriptionId: message.body.subscriptionId,
+    });
+  }
+
+  #onRemoteUnavailable(message: SyncRemoteUnavailable): void {
+    const ref = this.#remoteSubscriptions.get(message.body.subscriptionId);
+    if (ref === undefined) {
+      this.#onEvent({
+        kind: "rejected",
+        reason: "unknown_remote_subscription",
+        detail: message.body.subscriptionId,
+      });
+      return;
+    }
+    // 该订阅在当前连接上已无法继续：移除映射，后续迟到帧不再应用（运行期位置仍由门面保留）。
+    this.#remoteSubscriptions.delete(message.body.subscriptionId);
+    this.#remoteAcked.delete(message.body.subscriptionId);
+    this.#onEvent({
+      kind: "remote_unavailable",
+      sessionRef: ref,
+      subscriptionId: message.body.subscriptionId,
+      error: message.body.error,
+    });
   }
 
   /**
@@ -822,6 +1048,7 @@ export class SyncConnection {
     // 之前只置位客户端主动 `close()` 的路径，服务端关闭这条会留下一个「仍在线」的连接对象。
     this.#closed = true;
     this.#clearSnapshotBacklog();
+    this.#forgetRemoteSubscriptions();
     // 连接已结束：撤销待触发的重订阅，恢复交给重连（那里有全局退避）。
     this.#cancelGapResubscribe();
     this.discardStaging("connection_closed");
@@ -852,6 +1079,7 @@ export class SyncConnection {
     this.#closed = true;
     // 阻断态下不再补发任何东西：重订阅定时器必须随阻断一起撤销。
     this.#cancelGapResubscribe();
+    this.#forgetRemoteSubscriptions();
     this.#staging.discard("connection_blocked");
     if (reason === undefined) {
       this.#onEvent({ kind: "blocked", cause, code });
@@ -876,6 +1104,75 @@ export class SyncConnection {
       return;
     }
     this.#send({ ...command, connectionSequence: this.#nextOutboundSequence() });
+  }
+
+  /**
+   * 在当前连接上订阅一个远程来源会话（§9.7）。
+   *
+   * `subscriptionId` 由门面生成：同一条连接上重新订阅必须换新 ID，旧 ID 的后续帧随即
+   * 不再属于任何当前订阅（`#remoteSubscriptions` 只保留一份映射）。未认证时**不登记、
+   * 不发送**——认证前的信封没有 `connectionId`，服务端也无从绑定设备。
+   */
+  sendRemoteSubscribe(input: {
+    readonly subscriptionId: Uuid;
+    readonly sessionRef: SessionRef;
+    readonly cursor: OriginCursor | null;
+  }): boolean {
+    if (this.#closed || this.#authenticated === null) return false;
+    this.#remoteSubscriptions.set(input.subscriptionId, input.sessionRef);
+    this.#remoteAcked.delete(input.subscriptionId);
+    this.#send({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "sync.remote_subscribe",
+      messageId: this.#random.uuid(),
+      connectionId: this.#requireConnectionId(),
+      connectionSequence: this.#nextOutboundSequence(),
+      body: {
+        subscriptionId: input.subscriptionId,
+        sessionRef: input.sessionRef,
+        cursor: input.cursor,
+      },
+    });
+    return true;
+  }
+
+  /** 取消本连接上的一个远程订阅；映射立即移除，迟到帧不会再被当成有效事件。 */
+  sendRemoteUnsubscribe(subscriptionId: Uuid): void {
+    if (!this.#remoteSubscriptions.has(subscriptionId)) return;
+    this.#remoteSubscriptions.delete(subscriptionId);
+    this.#remoteAcked.delete(subscriptionId);
+    if (this.#closed || this.#authenticated === null) return;
+    this.#send({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "sync.remote_unsubscribe",
+      messageId: this.#random.uuid(),
+      connectionId: this.#requireConnectionId(),
+      connectionSequence: this.#nextOutboundSequence(),
+      body: { subscriptionId },
+    });
+  }
+
+  /**
+   * 本连接上对某个订阅的累计确认（`sync.remote_ack`）。
+   *
+   * 它只表示「这条连接已把该位置之前的事件交给上层」，不落盘、不代表用户已读、也不推进
+   * Owner head（§9.7/D5）。因此回退或跨 epoch 的确认直接忽略，不报错也不发送。
+   */
+  #sendRemoteAck(subscriptionId: Uuid, cursor: OriginCursor): void {
+    const last = this.#remoteAcked.get(subscriptionId);
+    if (last !== undefined) {
+      const comparison = compareOriginCursors(cursor, last);
+      if (comparison === null || comparison <= 0) return;
+    }
+    this.#remoteAcked.set(subscriptionId, cursor);
+    this.#send({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "sync.remote_ack",
+      messageId: this.#random.uuid(),
+      connectionId: this.#requireConnectionId(),
+      connectionSequence: this.#nextOutboundSequence(),
+      body: { subscriptionId, cursor },
+    });
   }
 
   /** ACK 只能前进：回退值被忽略并记录诊断（§9.5）。 */

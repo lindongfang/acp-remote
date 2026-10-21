@@ -1,6 +1,6 @@
 //! fixture 驱动：`fixtures/sync/v1/manifest.json` 的每条 WSS 消息用例都必须按它在合同里的角色通过。
 //!
-//! 覆盖传输层与全部 18 个消息类型（`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body）。
+//! 覆盖传输层与全部 27 个消息类型（`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body）。
 //! 它同时证明两件事：合法消息的 body 字节**逐字节**不被信封层改动；非法消息在正确的层被拒绝（信封层或
 //! body 层）。`TypedBody::decode` 的 `match` 是穷尽的——新增消息类型必然在此编译失败，不会静默漏掉。
 
@@ -36,7 +36,9 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// 变更 `session-activity-three-states`（WP1）新增 1 条合法 `session.read` 结果夹具（历史条目
 /// `view` 里保留旧七态 `session.updated` 原文，证明历史读取边界不受实时三态收窄影响），故由 115
 /// 变为 116。
-const EXPECTED_VALID_MESSAGE_CASES: usize = 116;
+/// 变更 `access-owner-data-stateless`（WP1）新增 10 条合法 `sync.remote_*` 来源流夹具与 2 条
+/// 带 `resource.stateless-origin.v1` 加性字段的 `command`/`command.result` 夹具，故由 116 变为 128。
+const EXPECTED_VALID_MESSAGE_CASES: usize = 128;
 /// 同一集合中 `valid: false` 且由**信封层**拒绝的用例数（`every_manifest_case_behaves_as_declared`
 /// 只显式登记 `invalid/ping-without-connection.json` 与 `invalid/sequence-is-number.json` 两条，
 /// 其余非法 WSS 用例都落在 body 类型化层）。
@@ -50,7 +52,11 @@ const EXPECTED_ENVELOPE_REJECTED: usize = 2;
 /// offset、缺失必填结果字段），故由 42 变为 53。
 /// `session-file-browser` WP1-fix2 新增 3 条路径形状负例（重复分隔符、尾随分隔符、控制字符），
 /// 故由 53 变为 56。
-const EXPECTED_BODY_REJECTED: usize = 56;
+/// 变更 `access-owner-data-stateless`（WP1）新增 10 条来源流/读取覆盖负例（缺 `sessionRef`、
+/// 旧 imported 游标、未协商额外键、Access 序号混入、ACK 带 `sessionRef`、十进制 `revision` 写成数字、
+/// 未登记来源状态、缺结构化 error、`remoteTarget` 缺 `sessionId`、`readCursor` 缺 `originEpoch`），
+/// 故由 56 变为 66。
+const EXPECTED_BODY_REJECTED: usize = 66;
 /// 非 WSS 的 HTTPS 载荷（配对）用例数；它们由 `tests/pairing_fixtures.rs` 覆盖。
 /// 变更 `pairing-code-web-entry`（WP1）新增 lookup 的 2 条正例与 6 条负例，故由 5 变为 13。
 /// 变更 `device-pairing-qr-reference`（WP1）新增 qr-lookup 的 3 条正例与 3 条负例、并移除旧
@@ -87,7 +93,7 @@ fn parse<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, String> {
     serde_json::from_str(body).map_err(|error| error.to_string())
 }
 
-/// 六个家族的类型化 body。`decode` 的 match 穷尽 v1 的 18 个消息类型。
+/// 六个家族的类型化 body。`decode` 的 match 穷尽 v1 的 27 个消息类型。
 enum TypedBody {
     ClientHello(Box<auth::ClientHello>),
     ServerChallenge(Box<auth::ServerChallenge>),
@@ -101,6 +107,15 @@ enum TypedBody {
     SnapshotChunk(Box<sync::SnapshotChunk>),
     SnapshotEnd(Box<sync::SnapshotEnd>),
     Ack(Box<sync::Ack>),
+    RemoteSubscribe(Box<sync::RemoteSubscribe>),
+    RemoteEvent(Box<sync::RemoteEvent>),
+    RemoteCaughtUp(Box<sync::RemoteCaughtUp>),
+    RemoteAck(Box<sync::RemoteAck>),
+    RemoteResetRequired(Box<sync::RemoteResetRequired>),
+    RemoteUnsubscribe(Box<sync::RemoteUnsubscribe>),
+    RemoteUnavailable(Box<sync::RemoteUnavailable>),
+    RemoteCatalogChanged(Box<sync::RemoteCatalogChanged>),
+    RemoteSourceState(Box<sync::RemoteSourceState>),
     Control(control::Body),
     Error(Box<error::Body>),
     Event(Box<event::Body>),
@@ -123,6 +138,25 @@ impl TypedBody {
             MessageType::SyncSnapshotChunk => TypedBody::SnapshotChunk(Box::new(parse(body)?)),
             MessageType::SyncSnapshotEnd => TypedBody::SnapshotEnd(Box::new(parse(body)?)),
             MessageType::SyncAck => TypedBody::Ack(Box::new(parse(body)?)),
+            MessageType::SyncRemoteSubscribe => TypedBody::RemoteSubscribe(Box::new(parse(body)?)),
+            MessageType::SyncRemoteEvent => TypedBody::RemoteEvent(Box::new(parse(body)?)),
+            MessageType::SyncRemoteCaughtUp => TypedBody::RemoteCaughtUp(Box::new(parse(body)?)),
+            MessageType::SyncRemoteAck => TypedBody::RemoteAck(Box::new(parse(body)?)),
+            MessageType::SyncRemoteResetRequired => {
+                TypedBody::RemoteResetRequired(Box::new(parse(body)?))
+            }
+            MessageType::SyncRemoteUnsubscribe => {
+                TypedBody::RemoteUnsubscribe(Box::new(parse(body)?))
+            }
+            MessageType::SyncRemoteUnavailable => {
+                TypedBody::RemoteUnavailable(Box::new(parse(body)?))
+            }
+            MessageType::SyncRemoteCatalogChanged => {
+                TypedBody::RemoteCatalogChanged(Box::new(parse(body)?))
+            }
+            MessageType::SyncRemoteSourceState => {
+                TypedBody::RemoteSourceState(Box::new(parse(body)?))
+            }
             MessageType::ControlPing | MessageType::ControlPong => TypedBody::Control(parse(body)?),
             MessageType::Error => TypedBody::Error(Box::new(parse(body)?)),
             MessageType::Event => TypedBody::Event(Box::new(parse(body)?)),
@@ -146,6 +180,15 @@ impl TypedBody {
             TypedBody::SnapshotChunk(body) => serde_json::to_string(body),
             TypedBody::SnapshotEnd(body) => serde_json::to_string(body),
             TypedBody::Ack(body) => serde_json::to_string(body),
+            TypedBody::RemoteSubscribe(body) => serde_json::to_string(body),
+            TypedBody::RemoteEvent(body) => serde_json::to_string(body),
+            TypedBody::RemoteCaughtUp(body) => serde_json::to_string(body),
+            TypedBody::RemoteAck(body) => serde_json::to_string(body),
+            TypedBody::RemoteResetRequired(body) => serde_json::to_string(body),
+            TypedBody::RemoteUnsubscribe(body) => serde_json::to_string(body),
+            TypedBody::RemoteUnavailable(body) => serde_json::to_string(body),
+            TypedBody::RemoteCatalogChanged(body) => serde_json::to_string(body),
+            TypedBody::RemoteSourceState(body) => serde_json::to_string(body),
             TypedBody::Control(body) => serde_json::to_string(body),
             TypedBody::Error(body) => serde_json::to_string(body),
             TypedBody::Event(body) => serde_json::to_string(body),
@@ -296,7 +339,7 @@ fn every_manifest_case_behaves_as_declared() {
 
 #[test]
 fn every_message_type_is_covered_by_a_valid_fixture() {
-    // 18 个类型都必须有至少一条合法夹具真正走通"信封 + 类型化 body"，而不是只出现在分派表里。
+    // 27 个类型都必须有至少一条合法夹具真正走通"信封 + 类型化 body"，而不是只出现在分派表里。
     let mut covered: HashSet<MessageType> = HashSet::new();
 
     for case in support::manifest_cases(MANIFEST) {
@@ -320,7 +363,7 @@ fn every_message_type_is_covered_by_a_valid_fixture() {
         missing.is_empty(),
         "以下消息类型没有任何合法夹具覆盖：{missing:?}"
     );
-    assert_eq!(covered.len(), 18, "覆盖到的消息类型数变化");
+    assert_eq!(covered.len(), 27, "覆盖到的消息类型数变化");
 }
 
 #[test]

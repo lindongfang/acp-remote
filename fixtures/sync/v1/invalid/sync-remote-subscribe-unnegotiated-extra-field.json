@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.remote_subscribe",
+  "messageId": "ce05a6eb-c61d-4df7-895c-eb7dacb1d4f9",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "65",
+  "body": {
+    "subscriptionId": "1b2c3d4e-5f60-4b71-8d82-9fa0b1c2d3e4",
+    "sessionRef": {
+      "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+      "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
+    },
+    "cursor": null,
+    "feature": "resource.stateless-origin.v1"
+  }
+}

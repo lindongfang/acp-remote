@@ -82,7 +82,7 @@ function checkDdl() {
   if (!contract || !migrate) return { statements: 0 };
 
   const blocks = fenced(section(contract, "## 7."), "sql");
-  const constNames = ["OWNED_SCHEMA_V1", "IMPORTED_SCHEMA_V1"];
+  const constNames = ["OWNED_SCHEMA_V1"];
   if (blocks.length !== constNames.length) {
     errors.push(
       `contract drift: ${contractLabel} §7 期望 ${constNames.length} 个 \`\`\`sql 块，实际 ${blocks.length} 个`,
@@ -348,8 +348,8 @@ function checkImplementedPorts(contract) {
 
 function checkImplementedDdl(contract) {
   const text = section(contract, "## 7.");
-  if (!text.includes("v12 = 12") || !text.includes("当前 12")) {
-    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v12 = 12 / owned_schema_version 12`);
+  if (!text.includes("v14 = 14") || !text.includes("当前 **v14 = 14**")) {
+    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v14 = 14 / owned_schema_version 14`);
   }
   for (const table of [
     "owned_attachment_transfer",

@@ -709,6 +709,18 @@
         }
       }
     },
+    "remoteTarget": {
+      "description": "远程命令/查询的来源定位（`resource.stateless-origin.v1`，docs/SYNC_PROTOCOL.md §9.7/§11.4）：直接指向原 Owner 与其会话，Access 不凭本地记录判断。`sessionId` 为 `null` 只用于尚未建成会话的 `session.create`，其他会话操作必须给出原来源会话。该键只在 feature 协商后出现；未协商的连接 MUST NOT 发送它。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerNodeId", "sessionId"],
+      "properties": {
+        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "sessionId": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        }
+      }
+    },
     "commandStatus": {
       "type": "object",
       "additionalProperties": false,
@@ -733,6 +745,9 @@
           "properties": {
             "targetRequestId": {
               "$ref": "#/$defs/requestId"
+            },
+            "remoteTarget": {
+              "$ref": "#/$defs/remoteTarget"
             }
           }
         }
@@ -754,7 +769,7 @@
       }
     },
     "sessionReadResult": {
-      "description": "session.read 的完成结果。resources 的每个键都可缺席；hasEarlier 是必填布尔值，指示本次返回的这一页消息之前是否仍有更早内容，客户端据此决定是否继续用最早一条的 (createdAt, messageId) 构造 before 翻页；historyHasEarlier 是可选布尔值，只描述 resources.history 这一页之前是否仍有更早条目，客户端据此用最早一条的 sessionSequence 构造 beforeHistory 翻页。两者各自分页，互不影响（docs/SYNC_PROTOCOL.md §11.5）。",
+      "description": "session.read 的完成结果。resources 的每个键都可缺席；hasEarlier 是必填布尔值，指示本次返回的这一页消息之前是否仍有更早内容，客户端据此决定是否继续用最早一条的 (createdAt, messageId) 构造 before 翻页；historyHasEarlier 是可选布尔值，只描述 resources.history 这一页之前是否仍有更早条目，客户端据此用最早一条的 sessionSequence 构造 beforeHistory 翻页。两者各自分页，互不影响（docs/SYNC_PROTOCOL.md §11.5）。协商 `resource.stateless-origin.v1` 后另带 `readCursor`/`sessionSummary`/`messageCoverage`；未协商时这三个键缺席，页边界与既有字段逐字不变。",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -814,6 +829,21 @@
         },
         "historyHasEarlier": {
           "type": "boolean"
+        },
+        "readCursor": {
+          "description": "本次读取在 Owner 只读事务中原子捕获的来源位置 R（`resource.stateless-origin.v1`，design D4）。它只描述这一页读取边界，不声明整个分页浏览是同一历史快照；未协商该 feature 时缺席。",
+          "$ref": "common.schema.json#/$defs/originCursor"
+        },
+        "sessionSummary": {
+          "description": "与同一次读取原子取得的完整会话摘要（design D4/D6）：用于防止清单与来源屏障之间竞态回滚标题。未协商该 feature 时缺席。",
+          "$ref": "common.schema.json#/$defs/sessionSummary"
+        },
+        "messageCoverage": {
+          "description": "本次返回的每条消息恰有一项的覆盖声明（design D4）：`through` 等于 `readCursor`，`lastDeltaIndex` 为该消息在所返回完整内容中已覆盖的最后连续增量索引（无增量为 null）。它与数据同次原子读取取得，不能读取后再采样 head。未协商该 feature 时缺席。",
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/messageCoverage"
+          }
         }
       }
     },

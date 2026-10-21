@@ -1,0 +1,23 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "e027c80d-e83f-4fb9-ab7e-0d9fcee3f61b",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "67",
+  "body": {
+    "requestId": "c52e9d31-4d78-4ba6-9f13-8e6dab2c7e41",
+    "command": "session.read",
+    "status": "completed",
+    "acceptedAt": null,
+    "terminalEventId": null,
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "resources": {},
+      "hasEarlier": false,
+      "readCursor": {
+        "originSequence": "2320"
+      }
+    },
+    "error": null
+  }
+}

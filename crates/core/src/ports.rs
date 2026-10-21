@@ -21,19 +21,19 @@ use async_trait::async_trait;
 use crate::model::{
     Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId, AttachmentGeneration,
     AttachmentId, AttachmentSubject, AttachmentSubmission, AttachmentTransfer, AuditAction,
-    AuditOutcome, AuditRecord, CapabilitySet, CommandKind, CommandRecord, CommandStatus,
-    CommandTerminalRecord, CommittedDelivery, CommittedEvent, ConfigOption, ConfigOptionId,
+    AuditOutcome, AuditRecord, CapabilitySet, CommandKind, CommandRecord, CommandResult,
+    CommandStatus, CommandTerminalRecord, CommittedEvent, ConfigOption, ConfigOptionId,
     ConfigValue, ContentSnapshot, ContentVersion, CreateSessionRequest, DeviceId, DeviceRecord,
     Digest, DirectoryId, DirectoryRecord, EffectiveInteraction, EndpointEvent, EntityRef, EventId,
     EventOrigin, EventPayload, EventType, FileReadPurpose, GitDiff, GitStatusPage, GlobalCursor,
-    InteractionId, InteractionResolution, JsonValueText, LocalCursor, MessageId, MessageRecord,
-    ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
-    OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
-    PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
-    PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest, SealedAttachment, Sequence,
-    ServerEpoch, SessionFileChunk, SessionFilePage, SessionFilePath, SessionId, SessionPageToken,
-    SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState, SessionSummary,
-    SubmissionId, Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
+    InteractionId, InteractionResolution, MessageId, MessageRecord, ModeId, ModeRef, ModeState,
+    NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch, OriginEventRef, PairingClaim,
+    PairingId, PairingPeer, PairingRecord, PairingSettlement, PeerIdentity, PeerPublicKey,
+    PendingEvent, PendingInteraction, PortError, PromptRequest, PublicError, RemoteSessionRef,
+    RequestId, ResumeSessionRequest, SealedAttachment, Sequence, ServerEpoch, SessionFileChunk,
+    SessionFilePage, SessionFilePath, SessionId, SessionPageToken, SessionRecoveryRecord,
+    SessionReference, SessionSnapshot, SessionState, SessionSummary, SubmissionId, Timestamp, Turn,
+    TurnId, TurnState, UnavailableKind, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -519,40 +519,6 @@ pub struct HistoryQuery {
     pub limit: ReplayLimit,
 }
 
-/// Access 侧 imported 会话在线回源的读取页（[`RemoteSessionReads::read_imported`] 的返回值）。
-///
-/// `document` 是 Owner 的 `session.read` 完成结果原文（`SessionReadResult` 形状），**逐字节**保留：
-/// Access 只转发页边界与无正文索引，不重新解释正文，也不把它写入数据库、临时文件或日志
-/// （`NODE_LINK_PROTOCOL.md` §12.10、`AGENTS.md` §7）。本地 wire 投影由 Sync/Node Link 适配器在
-/// 内存中完成。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportedRead {
-    pub document: JsonValueText,
-}
-
-/// imported 会话回源的入参（与 [`HistoryQuery`] 同义，去掉只对 owned 事件日志有意义的 `after`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportedReadQuery {
-    pub include: HistoryInclude,
-    pub before_history: Option<Sequence>,
-    pub before_messages: Option<MessageCursor>,
-    pub messages_limit: ReplayLimit,
-    pub limit: ReplayLimit,
-}
-
-/// Access 侧 imported 会话的在线读取端口（`node-link-client::RemoteSession` 的实现由组合根装配）。
-///
-/// 实现必须在 Owner 不可达时返回 [`UnavailableKind::OwnerOffline`]（或 `RemoteUnavailable`），
-/// **不得**用空历史或空正文冒充成功；正文只在调用栈上存在，不落盘。
-#[async_trait]
-pub trait RemoteSessionReads: Send + Sync {
-    async fn read_imported(
-        &self,
-        session: &RemoteSessionRef,
-        query: ImportedReadQuery,
-    ) -> Result<ImportedRead, PortError>;
-}
-
 /// owned 事件 + 其持久化正文（Node Link 的 origin 重放、会话历史读与事件扇出共用；定位与正文严格
 /// 同源——都来自**同一条行**/同一次读视图，因此调用方不需要逐条再取一次正文）。
 #[derive(Debug, Clone, PartialEq)]
@@ -840,6 +806,14 @@ pub trait SessionStore: Send + Sync {
     async fn health(&self) -> Result<StoreHealth, PortError>;
 }
 
+/// 一次带来源位置的会话读取（`ReadView::read_session_origin`）：页、来源位置 R 与逐消息覆盖。
+#[derive(Debug, Clone)]
+pub struct OriginReadPage {
+    pub page: HistoryPage,
+    pub read_cursor: OriginCursor,
+    pub coverage: Vec<MessageCoverage>,
+}
+
 #[async_trait]
 pub trait ReadView: Send + Sync {
     async fn head(&self) -> Result<GlobalCursor, PortError>;
@@ -854,8 +828,8 @@ pub trait ReadView: Send + Sync {
     /// （定位 + 持久化正文 + [`SyncEventRecord`] 的三个来源字段），按 `global_sequence` 升序，并给出
     /// 生成这批数据时的 head（`sync.caught_up` 的屏障游标）。
     ///
-    /// 与本 trait 的 [`ReadView::replay`] 的分工：`replay` 服务**本机**客户端的全局重放（owned 与
-    /// imported 合并成 `CommittedDelivery`，并给出 `reset_required`/`next`）；本方法只服务入站设备的
+    /// 与本 trait 的 [`ReadView::replay`] 的分工：`replay` 服务**本机**客户端的 owned 全局重放
+    /// （给出 `reset_required`/`next`）；本方法只服务入站设备的
     /// `event` 帧，回传 §10.1 要求的来源字段，且不做任何 cursor 解释。
     ///
     /// - 窗口：严格在 `after` 之后（`None` = 从头）、升序、最多 `limit` 条；已压缩的 delta 不出现
@@ -885,6 +859,13 @@ pub trait ReadView: Send + Sync {
     /// 分页只跳过已按保留策略压缩的行（`compacted_into IS NOT NULL`），游标早于仍可读条目的下界时返回
     /// [`PortError::InvalidRequest`] 而不是更少条目。
     async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError>;
+
+    /// Owner 侧一次原子读取：在**同一个只读事务**里取得页数据、来源位置与逐消息增量覆盖
+    /// （`design.md` D4）。实现必须先捕获来源位置 R，再在同一事务内取页，最后按 R 之前的 delta 计算
+    /// 每条返回消息的连续覆盖；不得读取结束后另开事务采样 head。
+    ///
+    /// 没有来源位置的只读视图必须显式返回不支持，不得伪造 R。
+    async fn read_session_origin(&self, query: HistoryQuery) -> Result<OriginReadPage, PortError>;
 
     /// 取回一条 owned 事件的持久化正文——重放、`sync.snapshot_*` 与 `PendingInteraction.options`
     /// 补全的唯一入口（复用 [`EventPayload`]/`AcpRaw`，不新增类型）。
@@ -918,139 +899,6 @@ pub trait ReadView: Send + Sync {
     ) -> Result<Option<EventPayload>, PortError>;
 }
 
-/// imported 家族的唯一写入口载荷：**无正文**（§7.4）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeliveryReceipt {
-    pub session: RemoteSessionRef,
-    pub origin: OriginEventRef,
-    pub origin_sequence: Sequence,
-    pub event_type: EventType,
-    pub payload_digest: Digest,
-    pub at: Timestamp,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReceiptOutcome {
-    pub local_sequence: LocalCursor,
-    /// 同一 `origin_event_id` 重发：既有行不变，也不新增 `local_sequence`（§9.5）。
-    pub duplicate: bool,
-}
-
-/// 无正文交付索引条目（`NODE_LINK_PROTOCOL.md` §6 白名单）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeliveryIndexEntry {
-    pub session: RemoteSessionRef,
-    pub origin: OriginEventRef,
-    pub origin_sequence: Sequence,
-    pub local_sequence: LocalCursor,
-    pub event_type: EventType,
-    pub payload_digest: Digest,
-    pub received_at: Timestamp,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AckOutcome {
-    /// `true` = 游标前进并已持久化；`false` = 回退请求被忽略，既有游标不变。
-    pub applied: bool,
-    /// 存储当前的已确认游标（可能是本次之前的旧值）。
-    pub cursor: Option<OriginCursor>,
-}
-
-/// 当前连接上的 attachment 凭据；断开即清空，不跨重启保留。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionAttachment {
-    pub id: AttachmentId,
-    pub generation: AttachmentGeneration,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportedSessionRecord {
-    pub session: RemoteSessionRef,
-    pub origin_epoch: Option<OriginEpoch>,
-    pub title: Option<String>,
-    pub agent: Option<AgentRef>,
-    pub state: Option<SessionState>,
-    pub version: Option<Version>,
-    pub created_at: Option<Timestamp>,
-    pub last_origin_sequence: Option<Sequence>,
-    pub acked: Option<OriginCursor>,
-    pub attachment: Option<SessionAttachment>,
-    pub updated_at: Timestamp,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ImportedSessionQuery {
-    /// 只返回这些远程会话；`None` = 不按会话过滤。
-    pub only: Option<Vec<RemoteSessionRef>>,
-    /// 返回行数上限；`None` = 不限。
-    pub limit: Option<u32>,
-}
-
-/// imported 命令终态引用（`imported_command_ref` 行）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteCommandRef {
-    pub request: RequestId,
-    pub command: String,
-    pub status: CommandStatus,
-    pub accepted_at: Option<Timestamp>,
-    pub terminal_at: Option<Timestamp>,
-    pub terminal_event: Option<EventId>,
-    pub error: Option<PublicError>,
-}
-
-#[async_trait]
-pub trait RemoteDeliveryStore: Send + Sync {
-    async fn commit_receipt(&self, receipt: DeliveryReceipt) -> Result<ReceiptOutcome, PortError>;
-
-    async fn local_replay(
-        &self,
-        after: Option<LocalCursor>,
-        limit: ReplayLimit,
-    ) -> Result<Vec<DeliveryIndexEntry>, PortError>;
-
-    async fn ack(
-        &self,
-        session: &RemoteSessionRef,
-        cursor: OriginCursor,
-        at: Timestamp,
-    ) -> Result<AckOutcome, PortError>;
-
-    async fn load_ack(&self, session: &RemoteSessionRef)
-    -> Result<Option<OriginCursor>, PortError>;
-
-    async fn upsert_session(
-        &self,
-        record: ImportedSessionRecord,
-        at: Timestamp,
-    ) -> Result<(), PortError>;
-
-    async fn list_sessions(
-        &self,
-        query: ImportedSessionQuery,
-    ) -> Result<Vec<ImportedSessionRecord>, PortError>;
-
-    /// 按会话标识做**存在性**窄查询：该 `SessionId` 是否是本机的一条 imported 索引行。
-    ///
-    /// 用途只有一个：`session.files.*`/`session.git.*` 在 `SessionStore::load` 查不到会话时区分
-    /// 「imported（不访问本机文件系统，回 `capability.unsupported_by_broker`）」与「确实不存在」。
-    /// `imported_session` 的主键是 `(owner_node_id, session_id)`，同一会话标识理论上可来自多个 Owner，
-    /// 因此实现只回答「有没有」，返回任意一条匹配行即可；调用方不得据此做归属或可见性判定。
-    async fn find_imported_session(
-        &self,
-        session: &SessionId,
-    ) -> Result<Option<ImportedSessionRecord>, PortError>;
-
-    /// imported 命令终态引用查询（与 `SessionStore::find_request` 同名会迫使调用点写 UFCS，故改名）。
-    async fn find_remote_request(
-        &self,
-        session: &RemoteSessionRef,
-        request: &RequestId,
-    ) -> Result<Option<RemoteCommandRef>, PortError>;
-
-    async fn prune(&self, policy: RetentionPolicy, at: Timestamp)
-    -> Result<PruneReport, PortError>;
-}
-
 /// 需要重建快照的原因（`SYNC_PROTOCOL.md` §9.4）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResetReason {
@@ -1063,7 +911,7 @@ pub enum ResetReason {
 /// 一批重放结果。`reset_required` 是**服务端主动**要求重建快照的唯一依据（`SYNC_PROTOCOL.md` §9.2）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplayBatch {
-    pub events: Vec<CommittedDelivery>,
+    pub events: Vec<CommittedEvent>,
     /// 生成这批数据时视图的 head（barrier）：客户端据此发 `sync.caught_up`。
     pub head: GlobalCursor,
     /// 续读游标；`None` = 已到 `head`。
@@ -1097,7 +945,7 @@ pub struct PruneReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreHealth {
-    /// §7.5 的容量度量现值（owned 与 imported 两家族 TEXT 列 + 附件字节）；调用方据此解释 `still_over_limit`。
+    /// §7.5 的容量度量现值（owned 家族 TEXT 列 + 附件字节）；调用方据此解释 `still_over_limit`。
     pub total_bytes: u64,
     /// `PRAGMA quick_check` 的结果；`false` 即只读失败关闭。
     pub integrity_ok: bool,
@@ -1105,7 +953,6 @@ pub struct StoreHealth {
     pub read_only: bool,
     pub user_version: u32,
     pub owned_schema_version: u32,
-    pub imported_schema_version: u32,
     pub server_epoch: ServerEpoch,
 }
 
@@ -1656,7 +1503,7 @@ impl std::fmt::Debug for NodeEventSink {
 
 /// 发布已提交的投递。`publish` 不返回结果，且不得回滚已提交事务（§5.4）。
 pub trait EventPublisher: Send + Sync {
-    fn publish(&self, delivery: CommittedDelivery);
+    fn publish(&self, event: CommittedEvent);
 }
 
 pub trait Clock: Send + Sync {
@@ -1856,4 +1703,383 @@ impl SessionFiles for UnavailableSessionFiles {
     async fn git_diff(&self, _root: &str, _path: &SessionFilePath) -> Result<GitDiff, PortError> {
         Err(PortError::Unavailable(UnavailableKind::IoError))
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// §5.9 远程运行期目录与在线回源
+// ---------------------------------------------------------------------------------------------
+
+/// 一个远程来源（Owner 节点）在当前已认证连接期的状态（`design.md` D2/D6）。
+///
+/// 它只描述**连接事实**，不是持久化的资源状态：`Online` 只在当前连接通过认证且目录已取得时成立；
+/// 断开、撤销与 Owner epoch 改变都会让整代目录失效（[`RemoteRuntimeDirectory::invalidate`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RemoteSourceState {
+    /// 当前连接可用，目录与回源读取有效。
+    Online,
+    /// 当前没有已认证连接（运行期条目已按代清除）。
+    Offline,
+    /// 本机已撤销对该 Owner 的信任（连接必须关闭，条目不得继续渲染）。
+    Revoked,
+}
+
+impl RemoteSourceState {
+    /// 是否可继续提供远程资源。
+    pub const fn is_online(self) -> bool {
+        matches!(self, Self::Online)
+    }
+}
+
+/// 远程运行期目录的代际：每次重新认证/重新取得目录都推进，旧的异步结果据此丢弃。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RemoteGeneration(u64);
+
+impl RemoteGeneration {
+    /// 构造。
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// 底层数值。
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Owner 侧目录 revision（`catalogRevision` 的 core 侧取值）。
+///
+/// 只用于判定「同一 Owner 的目录是否发生了变化」；比较在同一 Owner 内进行，跨 Owner 无意义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RemoteCatalogRevision(u64);
+
+impl RemoteCatalogRevision {
+    /// 构造。
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// 底层数值。
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// 运行期目录中的一条远程会话摘要。
+///
+/// `summary.origin` 必须是 [`crate::model::ResourceOrigin::Remote`]，且 `online` 必须与 `source`
+/// 一致；`generation` 是取得该条目时的目录代际（用于丢弃旧连接留下的异步结果）。core 在
+/// [`crate::use_cases::UseCases::sync_visible_sessions`] 与回源读取前校验这些来源一致性，不信任
+/// 适配器把本地会话混进远程目录。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteSessionEntry {
+    pub summary: SessionSummary,
+    pub generation: RemoteGeneration,
+    pub source: RemoteSourceState,
+}
+
+/// 一个 Owner 的目录快照（同一已认证连接期内的一致性视图）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteDirectorySnapshot {
+    pub owner_node_id: NodeId,
+    pub generation: RemoteGeneration,
+    pub revision: RemoteCatalogRevision,
+    pub source: RemoteSourceState,
+    pub sessions: Vec<RemoteSessionEntry>,
+}
+
+/// 远程运行期目录端口（`design.md` D2/D6；spec `stateless-access`、`sync-event-delivery`）。
+///
+/// **生命期**：实现只在已认证连接期持有数据；连接断开、信任撤销或 Owner epoch 改变时调用
+/// [`RemoteRuntimeDirectory::invalidate`] 整代清除，并取消该代的所有读写任务。目录与其中的摘要
+/// **不得**写入数据库、临时文件或日志，也不得跨重启恢复。
+///
+/// **有界**：目录、快照与列表沿用协议既有的目录/帧/队列/超时限额，不新增无界缓存；`list` 返回的
+/// 条目数量必须受这些限额约束，超出时由实现显式失败或截断并报告，而不是静默增长。
+#[async_trait]
+pub trait RemoteRuntimeDirectory: Send + Sync {
+    /// 当前所有在线 Owner 的会话条目（连接期视图；本进程没有远程运行期时为空）。
+    async fn list(&self) -> Result<Vec<RemoteSessionEntry>, PortError>;
+
+    /// 指定 Owner 的一致性目录快照；未认证或已失效时为 `None`。
+    async fn snapshot(&self, owner: &NodeId) -> Result<Option<RemoteDirectorySnapshot>, PortError>;
+
+    /// 按 `(ownerNodeId, sessionId)` 精确查找一条条目。
+    async fn lookup(
+        &self,
+        session: &RemoteSessionRef,
+    ) -> Result<Option<RemoteSessionEntry>, PortError>;
+
+    /// 只按会话标识查找**所有** Owner 下的匹配条目。
+    ///
+    /// 调用方（core）必须自己处理 0/1/多条的歧义：不同 Owner 的同名 `SessionId` 不是同一会话，
+    /// 多条命中时不得挑选其中任意一条。本方法不用于可见性判定。
+    async fn find_by_session(
+        &self,
+        session: &SessionId,
+    ) -> Result<Vec<RemoteSessionEntry>, PortError>;
+
+    /// 指定 Owner 的当前状态；从未建立过连接时返回 `Offline`（不虚构 `Revoked`）。
+    async fn owner_state(&self, owner: &NodeId) -> Result<RemoteSourceState, PortError>;
+
+    /// 指定 Owner 的当前代际；没有任何有效目录时为 `None`。
+    async fn generation(&self, owner: &NodeId) -> Result<Option<RemoteGeneration>, PortError>;
+
+    /// 使指定代际失效（断开/撤销/epoch 改变）。只有 `generation` 与当前代际相等时才清除，因此旧连接
+    /// 迟到的失效不会误删新连接建立的目录；返回后该代的所有条目与未完成结果都不可再被读到。
+    async fn invalidate(
+        &self,
+        owner: &NodeId,
+        generation: RemoteGeneration,
+    ) -> Result<(), PortError>;
+}
+
+/// 一条已返回消息在某个读取边界上的增量覆盖（`design.md` D4）。
+///
+/// `through` 恒等于该次读取结果的 `read_cursor`；`last_delta_index` 是消息在当前完整内容中已覆盖的
+/// **最后连续**增量索引（没有增量时为 `None`）。覆盖只适用于本次返回的消息，不得用来丢弃未返回消息
+/// 的缓冲事件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageCoverage {
+    pub message_id: MessageId,
+    pub through: OriginCursor,
+    pub last_delta_index: Option<u64>,
+}
+
+/// 远程历史的一项：来源稳定标识 + 事件类型 + 原样正文。
+///
+/// 不复用 [`CommittedEvent`]：那是 Access 本地事件定位（带 `global_sequence`/`session_sequence`），
+/// 远程历史只认 Owner 的 `originEventId` 与来源序号，不得冒用本地序号。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteHistoryRecord {
+    pub origin: OriginEventRef,
+    /// Owner 的**来源会话内序号**（`originSequence` 的同一数值域）。
+    ///
+    /// 它只是从 Owner 的结果里原样取出的分页键（`beforeHistory` 用它续读），**不是** Access 分配的
+    /// 本地 `session_sequence`：跨重启后它仍指向 Owner 的同一条事件。
+    pub origin_sequence: Sequence,
+    pub event_type: EventType,
+    pub payload: EventPayload,
+    pub created_at: Timestamp,
+}
+
+/// 远程会话的一页权威读取结果（`session.read` 的回源形状；`design.md` D4）。
+///
+/// `messages`/`history`/`summary`/`read_cursor`/`coverage` 必须来自 Owner 的**同一次**只读边界：
+/// `read_cursor` 是该次读取捕获的来源位置，`coverage` 只覆盖本次返回的消息。正文只在调用栈与有界
+/// 运行期内存中存在，不写数据库、临时文件或日志。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteReadResult {
+    pub summary: SessionSummary,
+    pub read_cursor: OriginCursor,
+    pub messages: Vec<MessageRecord>,
+    pub history: Vec<RemoteHistoryRecord>,
+    pub coverage: Vec<MessageCoverage>,
+    /// `messages` 这一页之前是否仍有更早消息（Owner `session.read` 的 `hasEarlier` 原值）。
+    ///
+    /// 它与 [`Self::history_has_earlier`] 各自分页、互不影响；本端口不重新推断页标记，缺了它调用方
+    /// 只能猜「这一页是不是最后一页」。
+    pub messages_has_earlier: bool,
+    /// `history` 这一页之前是否仍有更早条目（Owner `session.read` 的 `historyHasEarlier` 原值）；
+    /// 未请求 `history` 时为 `false`。
+    pub history_has_earlier: bool,
+}
+
+/// 远程读取的入参（与 [`ImportedReadQuery`] 同形，去掉只对本地 owned 事件日志有意义的字段）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteReadQuery {
+    pub include: HistoryInclude,
+    pub before_history: Option<Sequence>,
+    pub before_messages: Option<MessageCursor>,
+    pub messages_limit: ReplayLimit,
+    pub limit: ReplayLimit,
+}
+
+/// 来源重放/追平屏障：Owner 已把 `after` 之后的事件重放到 `cursor`，之后才允许发实时事件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSourceBarrier {
+    pub cursor: OriginCursor,
+    pub generation: RemoteGeneration,
+}
+
+/// 远程来源事件流与回源读取端口（`design.md` D2/D4；spec `sync-event-delivery`、
+/// `sync-session-history`）。
+///
+/// **生命期**：调用方必须先经 [`RemoteRuntimeDirectory`] 校验来源身份与在线状态，并传入该条目的
+/// `generation`；连接断开/撤销后实现必须让未完成的读取以 `Unavailable` 结束，且结果不得继续被返回。
+/// 读取结果只在内存中存在，不落盘。
+#[async_trait]
+pub trait RemoteSourceReads: Send + Sync {
+    /// 读取 Owner 当前的权威页（摘要 + 来源位置 + 消息 + 历史 + 覆盖）。
+    async fn read(
+        &self,
+        session: &RemoteSessionRef,
+        generation: RemoteGeneration,
+        query: RemoteReadQuery,
+    ) -> Result<RemoteReadResult, PortError>;
+
+    /// 取得来源重放屏障：`after` 为 `None` 时从 Owner 当前元数据快照取得屏障（首次重建）。
+    async fn replay_barrier(
+        &self,
+        session: &RemoteSessionRef,
+        generation: RemoteGeneration,
+        after: Option<OriginCursor>,
+    ) -> Result<RemoteSourceBarrier, PortError>;
+}
+
+/// 来源流重置的原因（`sync.remote_reset_required.reason` 的 core 侧取值，`design.md` D4）。
+///
+/// `CacheIncompatible` 只用于「首次重建」：客户端当前不持有可兼容的远程状态，必须回源
+/// [`RemoteSourceReads::read`] 重建明细；它不是 `cursor_invalid` 的一种。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RemoteStreamResetReason {
+    EpochMismatch,
+    CursorExpired,
+    CacheIncompatible,
+}
+
+/// 来源流里的一条事件（Owner 的 origin 事件，正文逐字节保真，`design.md` D3）。
+///
+/// `payload` 直接承载 core 的 [`EventPayload`]（`view` 是 Owner 的原文、`acp` 是原始 ACP 文本），
+/// 因此适配层不需要、也不得重新序列化正文；`payload_digest` 是 Owner 对该 payload 的
+/// `payloadDigest`，逐字保留，不重新计算。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteStreamEvent {
+    pub owner_node_id: NodeId,
+    pub session_id: SessionId,
+    pub origin_event_id: EventId,
+    pub origin_epoch: OriginEpoch,
+    pub origin_sequence: Sequence,
+    pub event_type: EventType,
+    pub payload_digest: Digest,
+    pub created_at: Timestamp,
+    pub payload: EventPayload,
+}
+
+/// 来源流的下一项（与 `sync.remote_*` 的帧一一对应，`design.md` D3/D4）。
+///
+/// 顺序不变量：`CaughtUp` 之前的 `Event` 都是 Owner 的重放，之后才是实时事件；`Reset`/`Unavailable`
+/// 终止本次订阅（调用方必须取消该订阅，不得继续消费）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoteStreamItem {
+    Event(RemoteStreamEvent),
+    CaughtUp(RemoteSourceBarrier),
+    Reset {
+        reason: RemoteStreamResetReason,
+        cursor: Option<OriginCursor>,
+    },
+    Unavailable(PublicError),
+}
+
+/// 来源清单/连接事实的变化通知（`sync.remote_catalog_changed`/`sync.remote_source_state` 的来源，
+/// `design.md` D6）。
+///
+/// 它是**连接事实**的推送，不是 owned 业务事件：调用方只能把它投影成 `sync.remote_*` 通知，不得写入
+/// 本地事件流或磁盘。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteSourceNotice {
+    CatalogChanged {
+        owner_node_id: NodeId,
+        revision: RemoteCatalogRevision,
+    },
+    State {
+        owner_node_id: NodeId,
+        state: RemoteSourceState,
+    },
+}
+
+/// 一条来源事件流的接收端（`RemoteEventStream::subscribe` 的返回值）。
+///
+/// `next` 返回 `None` 表示本次订阅已结束（Owner 断线、撤销、退订或调用方 drop）；实现必须在 drop 时
+/// 取消底层观察者，不留 detached 订阅。
+#[async_trait]
+pub trait RemoteStreamReceiver: Send {
+    async fn next(&mut self) -> Option<RemoteStreamItem>;
+}
+
+/// 来源通知的接收端（`RemoteEventStream::notices` 的返回值）；`None` = 运行期结束。
+#[async_trait]
+pub trait RemoteNoticeReceiver: Send {
+    async fn next(&mut self) -> Option<RemoteSourceNotice>;
+}
+
+/// 运行期远程来源事件流端口（`design.md` D3/D4/D6；spec `sync-event-delivery`）。
+///
+/// **与 [`RemoteSourceReads`] 的分工**：读取给出一次权威页（含读取边界与覆盖），本端口给出**有序的
+/// 来源事件流**（重放 → 屏障 → 实时）。两者都必须先经 [`RemoteRuntimeDirectory`] 校验来源身份与代际。
+///
+/// **生命期**：只服务当前已认证连接。连接断开/撤销/代际失效后实现必须让 [`RemoteStreamReceiver::next`]
+/// 以 `Unavailable`/`None` 结束；缓冲只在内存中，不落盘。
+///
+/// **有界**：实现只在协议既有预算内维护每会话缓冲；慢消费者不得被静默丢事件——缓冲溢出必须投影成
+/// [`RemoteStreamItem::Unavailable`]（backpressure），由调用方取消该订阅并要求客户端重建。
+#[async_trait]
+pub trait RemoteEventStream: Send + Sync {
+    /// 订阅一个来源会话：`after` 为 `None` 时从 Owner 当前元数据屏障开始（首次重建），非空时先重放
+    /// `after` 之后的事件、再发 `CaughtUp` 屏障。
+    async fn subscribe(
+        &self,
+        session: &RemoteSessionRef,
+        generation: RemoteGeneration,
+        after: Option<OriginCursor>,
+    ) -> Result<Box<dyn RemoteStreamReceiver>, PortError>;
+
+    /// 取消本连接上该来源会话的订阅（客户端退订/订阅结束时调用）。代际不匹配是迟到调用，忽略。
+    async fn unsubscribe(&self, session: &RemoteSessionRef, generation: RemoteGeneration);
+
+    /// 当前连接全部来源的清单/状态变化通知；接收端关闭 = 运行期结束。
+    async fn notices(&self) -> Result<Box<dyn RemoteNoticeReceiver>, PortError>;
+}
+
+/// 远程命令查询的显式来源（`design.md` D5；spec `sync-command-handling`）。
+///
+/// `session_id = None` 只用于尚未建成会话的 `session.create`；其余操作必须给出原来源会话。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RemoteCommandTarget {
+    pub owner_node_id: NodeId,
+    pub session_id: Option<SessionId>,
+}
+
+/// Owner 侧的命令记录（只承载 `command.status` 需要的字段；不进入本地请求表）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteCommandRecord {
+    pub target: RemoteCommandTarget,
+    pub request: RequestId,
+    pub status: CommandStatus,
+    pub accepted_at: Option<Timestamp>,
+    pub terminal_at: Option<Timestamp>,
+    pub result: Option<CommandResult>,
+    pub error: Option<PublicError>,
+}
+
+/// 远程命令查询的结果分类（`design.md` D5）。
+///
+/// Owner 不可达由端口返回 [`PortError::Unavailable`]；本枚举把「原请求不存在」与「执行结果不确定」
+/// 与已接受/已终结区分开，避免调用方把不确定误报成成功或失败。
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoteCommandLookup {
+    /// Owner 已接受、仍在执行。
+    Accepted(RemoteCommandRecord),
+    /// Owner 已给出终态（含 `completed`/`failed`/`rejected`/`uncertain`）。
+    Terminal(RemoteCommandRecord),
+    /// Owner 证明没有该 `(ownerNodeId, accessNodeId, requestId)` 记录。
+    NotFound,
+    /// Owner 无法确定本次执行是否发生（不得据此判定失败或成功）。
+    Uncertain(RemoteCommandRecord),
+}
+
+/// Owner 远程命令状态查询端口（`design.md` D5；spec `sync-command-handling`）。
+///
+/// Access **不**保存远程命令状态：本端口按原 `(remoteTarget, requestId)` 直接向 Owner 查询，同一
+/// `requestId` 的幂等与参数冲突判定完全由 Owner 负责。实现必须在 Owner 不可达时返回
+/// [`PortError::Unavailable`]，不得用本地记录或空结果代替。
+///
+/// **生命期**：只服务当前已认证连接；断开/撤销后未完成查询以 `Unavailable` 结束，不留下可跨重启
+/// 恢复的请求或结果引用。
+#[async_trait]
+pub trait RemoteCommandStatus: Send + Sync {
+    async fn query(
+        &self,
+        target: &RemoteCommandTarget,
+        request: &RequestId,
+    ) -> Result<RemoteCommandLookup, PortError>;
 }

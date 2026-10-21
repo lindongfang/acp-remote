@@ -28,9 +28,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use acp_core::model::{
-    AcpRaw, CommittedDelivery, CommittedEvent, EntityRef, EventPayload as CoreEventPayload,
-    InteractionKind, NodeId, OriginCursor as CoreOriginCursor, PortError, RawUnavailableReason,
-    SessionId, SessionState as CoreSessionState,
+    AcpRaw, CommittedEvent, EntityRef, EventPayload as CoreEventPayload, InteractionKind, NodeId,
+    OriginCursor as CoreOriginCursor, PortError, RawUnavailableReason, SessionId,
+    SessionState as CoreSessionState,
 };
 use acp_core::ports::{EventPublisher, ReplayLimit};
 use acp_core::use_cases::{NodeLinkEvent, NodeLinkReplay, UseCases};
@@ -43,8 +43,9 @@ use node_link_protocol::common::{
 use node_link_protocol::envelope::{Envelope, MessageType};
 use node_link_protocol::error::ErrorCode;
 use node_link_protocol::resource::{
-    Ack, Attach, Attached, Event, EventPayload as WireEventPayload, EventType as WireEventType,
-    SnapshotBegin, SnapshotChunk, SnapshotEnd, SnapshotItemSessionMeta, SnapshotItems, Subscribe,
+    Ack, Attach, Attached, CaughtUp, Event, EventPayload as WireEventPayload,
+    EventType as WireEventType, SnapshotBegin, SnapshotChunk, SnapshotEnd, SnapshotItemSessionMeta,
+    SnapshotItems, Subscribe,
 };
 use serde::de::DeserializeOwned;
 use sha2::{Digest as _, Sha256};
@@ -72,6 +73,8 @@ struct ConnectionState {
     subscriptions: BTreeMap<String, Subscription>,
     /// 每个会话最近一次 ACK 的 origin cursor（单调不减）。
     acks: BTreeMap<String, CoreOriginCursor>,
+    /// 本连接协商出的 feature（认证完成时交接）。
+    features: Vec<String>,
 }
 
 /// 一个会话的 attachment（`resource.attached` 下发的临时路由凭据）。
@@ -305,6 +308,12 @@ impl MessageRoute for ResourceRoute {
             },
             _ => RouteOutcome::Unclaimed,
         }
+    }
+
+    fn on_authenticated(&self, session: &ConnectionHandle, features: &[String]) {
+        self.with_state(session, |state| {
+            state.features = features.to_vec();
+        });
     }
 }
 
@@ -544,7 +553,8 @@ impl ResourceRoute {
         let Some(snapshot_digest) = snapshot_digest(&digests) else {
             return self.fault(handle, &PortError::Corrupt("snapshot digest"), message);
         };
-        let Some(end) = snapshot_end(snapshot_id, cursor, chunk_count, snapshot_digest) else {
+        let Some(end) = snapshot_end(snapshot_id, cursor.clone(), chunk_count, snapshot_digest)
+        else {
             return self.fault(handle, &PortError::Corrupt("snapshot end"), message);
         };
         if handle.send(MessageType::ResourceSnapshotEnd, &end).is_err() {
@@ -552,6 +562,13 @@ impl ResourceRoute {
                 event = "node_link.snapshot_paused",
                 connection_id = handle.connection_id().as_str(),
                 "the snapshot end could not be queued"
+            );
+        }
+        if self.stateless_origin(handle) && !self.send_caught_up(handle, attachment, &cursor) {
+            debug!(
+                event = "node_link.caught_up_paused",
+                connection_id = handle.connection_id().as_str(),
+                "the caught-up barrier could not be queued"
             );
         }
         debug!(
@@ -642,6 +659,34 @@ impl ResourceRoute {
         })
     }
 
+    /// 本连接是否协商了运行期来源流（`resource.stateless-origin.v1`）。
+    fn stateless_origin(&self, handle: &ConnectionHandle) -> bool {
+        self.with_state(handle, |state| {
+            state
+                .features
+                .iter()
+                .any(|feature| feature == "resource.stateless-origin.v1")
+        })
+    }
+
+    /// 追平屏障（`resource.caught_up`）：只在协商后发送；旧端继续用 `snapshot_end.cursor`。
+    fn send_caught_up(
+        &self,
+        handle: &ConnectionHandle,
+        attachment: &Attachment,
+        cursor: &OriginCursor,
+    ) -> bool {
+        let Some(generation) = DecimalString::parse(&attachment.generation.to_string()).ok() else {
+            return false;
+        };
+        let body = CaughtUp {
+            attachment_id: attachment.id.clone(),
+            attachment_generation: generation,
+            cursor: cursor.clone(),
+        };
+        handle.send(MessageType::ResourceCaughtUp, &body).is_ok()
+    }
+
     /// 增量重放：从该 origin cursor 之后的事件继续（epoch 不一致一律拒绝）。
     async fn replay(
         &self,
@@ -651,16 +696,42 @@ impl ResourceRoute {
         message: &Envelope,
     ) -> RouteOutcome {
         let limit = ReplayLimit::new(handle.limits().resource_snapshot_batch_size());
-        let replay = match self
-            .core
-            .node_link_replay(handle.node_id(), &attachment.session, Some(cursor), limit)
-            .await
+        let fallback = cursor.clone();
+        let mut after = Some(cursor);
+        let mut head: Option<CoreOriginCursor> = None;
+        debug_assert!(head.is_none());
+        loop {
+            let replay = match self
+                .core
+                .node_link_replay(handle.node_id(), &attachment.session, after.clone(), limit)
+                .await
+            {
+                Ok(replay) => replay,
+                Err(error) => return self.attach_fault(handle, &error, message),
+            };
+            if self.send_events(handle, attachment, &replay).is_err() {
+                // 发送失败：不发屏障，Access 会用最后收到的游标续读。
+                return RouteOutcome::Claimed;
+            }
+            head = Some(replay.head.clone());
+            let Some(last) = replay.events.last() else {
+                break;
+            };
+            if replay.events.len() < limit.events() as usize
+                || last.origin_sequence >= replay.head.origin_sequence
+            {
+                break;
+            }
+            after = Some(CoreOriginCursor::new(
+                last.origin_epoch.clone(),
+                last.origin_sequence,
+            ));
+        }
+        let head = head.unwrap_or(fallback);
+        if self.stateless_origin(handle)
+            && let Some(wire_head) = wire_origin_cursor(&head)
         {
-            Ok(replay) => replay,
-            Err(error) => return self.attach_fault(handle, &error, message),
-        };
-        if self.send_events(handle, attachment, &replay).is_err() {
-            return RouteOutcome::Claimed;
+            let _ = self.send_caught_up(handle, attachment, &wire_head);
         }
         RouteOutcome::Claimed
     }
@@ -946,11 +1017,7 @@ impl NodeLinkPublisher {
 }
 
 impl EventPublisher for NodeLinkPublisher {
-    fn publish(&self, delivery: CommittedDelivery) {
-        // 只映射 owned：imported 投递不跨节点再导出（§4 拓扑规则）。
-        let CommittedDelivery::Owned(event) = delivery else {
-            return;
-        };
+    fn publish(&self, event: CommittedEvent) {
         if event.session.is_none() {
             // 非会话级事件（node 作用域）没有会话级 origin cursor，也不属于任何 attachment。
             return;
@@ -1160,6 +1227,14 @@ fn wire_cursor(view: &acp_core::use_cases::NodeLinkSessionView) -> Option<Origin
     Some(OriginCursor {
         origin_epoch: Uuid::parse(view.head.origin_epoch.as_str()).ok()?,
         origin_sequence: DecimalString::parse(&view.head.origin_sequence.get().to_string()).ok()?,
+    })
+}
+
+/// core 的 origin cursor → wire（`resource.caught_up` 与重放共用）。
+fn wire_origin_cursor(cursor: &CoreOriginCursor) -> Option<OriginCursor> {
+    Some(OriginCursor {
+        origin_epoch: Uuid::parse(cursor.origin_epoch.as_str()).ok()?,
+        origin_sequence: DecimalString::parse(&cursor.origin_sequence.get().to_string()).ok()?,
     })
 }
 

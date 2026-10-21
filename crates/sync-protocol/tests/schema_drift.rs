@@ -6,7 +6,7 @@
 //! 消息类型的抽取规则与 `scripts/check-schema-fixtures.mjs` 的 `declaredTypes` 一致：从
 //! `message.schema.json` 的 union 出发，只沿 `$ref` 与 `allOf`/`oneOf`/`anyOf` 递归，**不进入**
 //! `properties.*`。因此 `common.schema.json` 里 content block 的判别子（`text`/`image_ref`/…）
-//! 不会被误收——这正是"按 glob 全文件抽 const"会得到 22 个而非 18 个的原因。
+//! 不会被误收——这正是"按 glob 全文件抽 const"会得到更多个而非 27 个的原因。
 
 mod support;
 
@@ -164,8 +164,8 @@ fn message_types_match_schema_union() {
 
     assert_eq!(
         expected.len(),
-        18,
-        "从 message.schema.json 的 union 应当恰好抽出 18 个 type 常量，实际：{expected:?}"
+        27,
+        "从 message.schema.json 的 union 应当恰好抽出 27 个 type 常量，实际：{expected:?}"
     );
     let missing: Vec<&String> = expected.difference(&declared).collect();
     let extra: Vec<&String> = declared.difference(&expected).collect();
@@ -173,7 +173,7 @@ fn message_types_match_schema_union() {
         missing.is_empty() && extra.is_empty(),
         "schema 有而 Rust 没有：{missing:?}；Rust 有而 schema 没有：{extra:?}"
     );
-    assert_eq!(declared.len(), 18, "v1 的 type 常量数应为 18");
+    assert_eq!(declared.len(), 27, "v1 的 type 常量数应为 27");
     assert!(
         expected.iter().all(
             |constant| !["text", "image_ref", "resource_ref", "unsupported"]

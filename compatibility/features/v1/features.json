@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-10-20",
+  "revision": "2026-10-21",
   "description": "ACP Remote feature ID 机器登记 v1：Sync 与 Node Link 的封闭 feature 词表。协议文档 §5.2 / §11.3 的 feature 表、fixture 里出现的 feature ID 与本文件由 scripts/check-features.mjs 断言逐一相等；新增或删除 feature 必须先改本文件。required 表示协议要求每次协商都必须选中该 feature（产品必须支持由 delivery 表达）。",
   "protocols": {
     "sync": {
@@ -33,6 +33,12 @@
         {
           "id": "resource.remote-origin.v1",
           "description": "imported 资源来源承载（§9.6：ownerNodeId/origin cursor/online）",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "resource.stateless-origin.v1",
+          "description": "无持久中转的远程来源流/运行期 ACK（§9.7）：`sync.remote_subscribe`/`remote_event`/`remote_caught_up`/`remote_ack`/`remote_reset_required`/`remote_unsubscribe`/`remote_unavailable`/`remote_catalog_changed`/`remote_source_state` 帧族、Owner origin cursor 直接作为订阅游标、`session.read` 的 `readCursor`/`sessionSummary`/`messageCoverage` 与 `command.status` 的 `remoteTarget`；Access 不持久化远程正文、收据、ACK 或命令状态",
           "delivery": "mvp",
           "required": false
         },
@@ -182,6 +188,12 @@
         {
           "id": "node-link.remote-history.v1",
           "description": "远程历史回源（§12.7/§17）：Access 按 origin cursor 向 Owner 读取历史分页、读取前鉴权；Owner 不可达或超出保留期显式不可用，Access 不持久化正文",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "resource.stateless-origin.v1",
+          "description": "无持久中转的远程来源流/运行期 ACK（§11.4/§12.4）：`resource.caught_up` 来源重放屏障、`resource.reset_required`/`resource.unavailable` 显式错误、`resource.ack` 收窄为当前连接/来源会话的运行期累计处理进度（不表示 Access 落盘），以及 `session.read` 的 `readCursor`/`sessionSummary`/`messageCoverage` 与 `command.status` 的 `remoteTarget`",
           "delivery": "mvp",
           "required": false
         },

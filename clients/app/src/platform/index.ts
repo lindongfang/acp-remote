@@ -22,22 +22,12 @@ import { openDownloadPort } from "./download.web";
 import { openAttachmentMediaPort } from "./attachment.web";
 
 export type { LifecycleEvent, LifecyclePort, Unsubscribe, VisibilityState } from "./lifecycle";
-export type {
-  CacheEntry,
-  CacheHit,
-  CacheOrigin,
-  CacheStats,
-  ImportedMetadata,
-  LocalCachePort,
-  VolatileImportedContent,
-} from "./local-cache";
+export type { CacheEntry, CacheHit, CacheStats, LocalCachePort } from "./local-cache";
 export {
   CachePolicyError,
-  IMPORTED_METADATA_MAX_BYTES,
-  IMPORTED_METADATA_TTL_MS,
   SUMMARY_CACHE_MAX_BYTES,
   SUMMARY_CACHE_TTL_MS,
-  assertPersistableForOrigin,
+  assertLocalSummary,
   estimateEntryBytes,
   evictToFit,
 } from "./local-cache";
@@ -56,7 +46,6 @@ export type {
 } from "./download.shared";
 export { BLOB_DOWNLOAD_LIMIT_BYTES, DownloadError } from "./download.shared";
 export { browserDownloadEnvironment, openDownloadPort } from "./download.web";
-export { createVolatileImportedContent } from "./local-cache.web";
 export type {
   PlatformAttachmentHandle,
   PlatformAttachmentKind,
@@ -65,18 +54,15 @@ export type {
 export { openAttachmentMediaPort } from "./attachment.web";
 
 import type { LifecyclePort } from "./lifecycle";
-import type { LocalCachePort, VolatileImportedContent } from "./local-cache";
+import type { LocalCachePort } from "./local-cache";
 import type { DeviceIdentityPort } from "./secure-storage";
 import type { DownloadPort } from "./download.shared";
 import type { PlatformAttachmentPort } from "./attachment";
-import { createVolatileImportedContent as createVolatile } from "./local-cache.web";
 
 /** 平台端口束：组合根装配一次，向下传给 Sync Client / 状态机 / feature。 */
 export interface PlatformPorts {
   readonly deviceIdentity: DeviceIdentityPort;
   readonly localCache: LocalCachePort;
-  /** imported 正文的内存载体：**不是**持久端口，刷新即失效（R20）。 */
-  readonly importedContent: VolatileImportedContent;
   readonly lifecycle: LifecyclePort;
   /** 主动下载的保存/取消/对象 URL 生命周期端口（正文不落持久缓存）。 */
   readonly download: DownloadPort;
@@ -100,7 +86,6 @@ export function openPlatform(): PlatformPorts {
   return {
     deviceIdentity: openDeviceIdentityStore(),
     localCache: openLocalCache(),
-    importedContent: createVolatile(),
     lifecycle: openLifecycle(),
     download: openDownloadPort(),
     // 页内句柄标识由平台生成：与设备身份/配对无关，只是本次选择内的稳定键。

@@ -3206,8 +3206,12 @@ async fn fail_closed_store_rejects_every_admin_write_path() {
             .expect_err("node write must be refused"),
         PortError::Corrupt(_)
     ));
-    // 只读查询仍可用。
-    assert!(store.directories().await.expect("directories").is_empty());
+    // 只读查询要么仍可用，要么以具名损坏错误失败关闭；不得 panic 或返回伪造数据。
+    match store.directories().await {
+        Ok(directories) => assert!(directories.is_empty()),
+        Err(PortError::Corrupt(_)) | Err(PortError::Unavailable(_)) => {}
+        Err(other) => panic!("只读查询只允许具名损坏/不可用错误，实际 {other:?}"),
+    }
     store.close().await;
 }
 

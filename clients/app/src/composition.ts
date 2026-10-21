@@ -293,7 +293,7 @@ class PairedHostIdentity implements HostIdentityPort {
 
   async loadPairedHost(canonicalOrigin: string): Promise<PairedHostRecord | null> {
     const hit = await this.#cache.get(`${PAIRED_HOST_KEY_PREFIX}${canonicalOrigin}`, this.#now());
-    if (hit === null || hit.entry.kind !== "local") return null;
+    if (hit === null) return null;
     const parsed = parseStoredPairedHost(hit.entry.summary);
     // 记录缺失或被外部改坏：按「从未配对」处理，用户重新配对即可恢复——不在解析上崩。
     if (parsed === null) return null;
@@ -1307,6 +1307,12 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     },
     dispatch(command): void {
       sync?.dispatch(command);
+    },
+    subscribeRemote(sessionRef): void {
+      sync?.subscribeRemote(sessionRef);
+    },
+    unsubscribeRemote(sessionRef): void {
+      sync?.unsubscribeRemote(sessionRef);
     },
   };
 

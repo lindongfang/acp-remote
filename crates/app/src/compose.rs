@@ -29,16 +29,15 @@ use std::time::Duration;
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
     Actor, AttachmentGeneration, AttachmentId, AuditAction, AuditOutcome, AuditRecord,
-    CommittedDelivery, CommittedEvent, DeviceId, EndpointEvent, EntityRef, NodeId, PortError,
-    ServerEpoch, SessionId, Timestamp, UnavailableKind,
+    CommittedEvent, DeviceId, EndpointEvent, EntityRef, NodeId, PortError, ServerEpoch, SessionId,
+    Timestamp, UnavailableKind,
 };
+use acp_core::ports::TrustStore;
 use acp_core::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditStore, Clock,
-    EventPublisher, IdGenerator, ImportedRead, ImportedReadQuery, InteractionAuthority,
-    LocalConfigStore, NodeEventSink, PruneReport, RemoteSessionReads, RetentionPolicy,
-    SessionBackendFactory, SessionFiles, SessionStore,
+    EventPublisher, IdGenerator, InteractionAuthority, LocalConfigStore, NodeEventSink,
+    PruneReport, RetentionPolicy, SessionBackendFactory, SessionFiles, SessionStore,
 };
-use acp_core::ports::{RemoteDeliveryStore, TrustStore};
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use agent_host::{AgentHost, HostConfig, NodeEvents};
 use identity_auth::{Authority, EntropySource, IdentityKeystore, PeerPublicKey};
@@ -221,7 +220,6 @@ impl Composition {
         // 同一个 `SqliteStore` 实例实现七个端口：每个端口一次显式向上转型（`Arc<SqliteStore>` →
         // `Arc<dyn …>`），不在字段位置依赖隐式强制转换。
         let session_store: Arc<dyn SessionStore> = store.clone();
-        let deliveries: Arc<dyn RemoteDeliveryStore> = store.clone();
         let trust_store: Arc<dyn TrustStore> = store.clone();
         let audit_store: Arc<dyn AuditStore> = store.clone();
         let local_config: Arc<dyn LocalConfigStore> = store.clone();
@@ -279,7 +277,6 @@ impl Composition {
             Broker::new(
                 BrokerDeps {
                     store: Arc::clone(&session_store),
-                    deliveries: Arc::clone(&deliveries),
                     backends,
                     trust: Arc::clone(&trust_store),
                     publisher,
@@ -302,7 +299,6 @@ impl Composition {
             UseCases::new(UseCaseDeps {
                 broker: Arc::clone(&broker),
                 store: session_store,
-                deliveries,
                 trust: trust_store,
                 audit: audit_store,
                 config: local_config,
@@ -374,12 +370,12 @@ impl Composition {
     /// 同时把同一实例接成 core 的 imported 读取端口：`session.read` 回源的唯一实现就在
     /// `AccessManager`（它持有活的 Owner link），组合根只做接线，不参与正文处理。
     pub fn with_access(mut self, access: Arc<crate::access::AccessManager>) -> Self {
-        // `AccessManager` 持有 `UseCases`，`UseCases` 又持有读取端口；强引用会形成环，
-        // 关闭序列因此无法独占存储（`StoreStillShared`）。端口只持弱引用。
+        // 三个运行期远程面共用同一个 `RemoteRuntime` 实例：目录、回源读取与命令查询必须
+        // 看到同一份代际/连接事实。
         self.use_cases
-            .set_remote_session_reads(Arc::new(WeakImportedReads {
-                access: Arc::downgrade(&access),
-            }));
+            .set_remote_runtime_directory(access.runtime());
+        self.use_cases.set_remote_source_reads(access.runtime());
+        self.use_cases.set_remote_command_status(access.runtime());
         self.access = Some(access);
         self
     }
@@ -387,6 +383,14 @@ impl Composition {
     /// Access 侧出站运行时（`None` = 本进程没有装配出站适配器，例如只服务入站面的测试组合根）。
     pub fn access(&self) -> Option<&Arc<crate::access::AccessManager>> {
         self.access.as_ref()
+    }
+
+    /// 启动清理门禁（§7.2）：迁移成功后、开始监听前执行一次；失败即拒绝启动，重开可安全重试。
+    pub async fn run_startup_gate(&self) -> Result<bool, ComposeError> {
+        self.store
+            .run_startup_gate()
+            .await
+            .map_err(ComposeError::Store)
     }
 
     /// Daemon 启动时间。
@@ -449,11 +453,6 @@ impl Composition {
 
     /// 审计仓储（`audit.export` 的读面与连接级拒绝的写面）。
     pub fn audit_store(&self) -> Arc<dyn AuditStore> {
-        self.store.clone()
-    }
-
-    /// imported 交付端口（Access 出站运行时的 `DeliveryBridge` 与主链路共用同一实例）。
-    pub fn deliveries(&self) -> Arc<dyn RemoteDeliveryStore> {
         self.store.clone()
     }
 
@@ -582,26 +581,6 @@ async fn futures_join(handles: Vec<tokio::task::JoinHandle<()>>) {
 /// 进程结束；若注入强引用，[`Composition::close`] 的 `Arc::try_unwrap` 就会失败并上报
 /// [`ComposeError::StoreStillShared`]，跳过 `wal_checkpoint(TRUNCATE)`。弱句柄让泄漏的环不再钉住存储：
 /// 存储仍活着时端口行为完全相同；存储已关闭时如实返回 `Unavailable(IoError)`，不静默返回空字节。
-/// imported 读取端口的弱句柄：`AccessManager` 持有 `UseCases`，`UseCases` 持有本端口；
-/// 强引用会形成环，关闭时存储无法独占（`StoreStillShared`）。升级失败即明确不可用。
-struct WeakImportedReads {
-    access: std::sync::Weak<crate::access::AccessManager>,
-}
-
-#[async_trait::async_trait]
-impl RemoteSessionReads for WeakImportedReads {
-    async fn read_imported(
-        &self,
-        session: &acp_core::model::RemoteSessionRef,
-        query: ImportedReadQuery,
-    ) -> Result<ImportedRead, PortError> {
-        let Some(access) = self.access.upgrade() else {
-            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
-        };
-        access.read_imported(session, query).await
-    }
-}
-
 struct WeakAttachmentStore {
     store: std::sync::Weak<SqliteStore>,
 }
@@ -736,27 +715,13 @@ uuid_id! {
 pub struct LoggingPublisher;
 
 impl EventPublisher for LoggingPublisher {
-    fn publish(&self, delivery: CommittedDelivery) {
-        match delivery {
-            CommittedDelivery::Owned(event) => tracing::trace!(
-                event = "daemon.published",
-                kind = "owned",
-                event_id = %event.id.as_str(),
-                global_sequence = event.global_sequence.get(),
-                "本切片没有事件订阅者（server::sync/node_link 未落地）"
-            ),
-            CommittedDelivery::Imported {
-                event_type,
-                local_sequence,
-                ..
-            } => tracing::trace!(
-                event = "daemon.published",
-                kind = "imported",
-                event_type = event_type.as_str(),
-                local_sequence = local_sequence.get(),
-                "本切片没有事件订阅者（server::sync/node_link 未落地）"
-            ),
-        }
+    fn publish(&self, event: CommittedEvent) {
+        tracing::trace!(
+            event = "daemon.published",
+            event_id = %event.id.as_str(),
+            global_sequence = event.global_sequence.get(),
+            "本切片没有事件订阅者（server::sync/node_link 未落地）"
+        );
     }
 }
 
@@ -990,12 +955,11 @@ struct ForkedPublisher {
 }
 
 impl EventPublisher for ForkedPublisher {
-    fn publish(&self, delivery: CommittedDelivery) {
-        LoggingPublisher.publish(delivery.clone());
-        // 只有 `CommittedDelivery::Owned` 会变成 `resource.event`（imported 投递不跨节点再导出，§4）。
-        self.node_link.publish(delivery.clone());
+    fn publish(&self, event: CommittedEvent) {
+        LoggingPublisher.publish(event.clone());
+        self.node_link.publish(event.clone());
         if let Some(sync) = self.sync.as_ref() {
-            sync.publish(delivery);
+            sync.publish(event);
         }
     }
 }
@@ -1085,8 +1049,8 @@ mod tests {
     }
 
     /// 已提交投递的最小构造（只填扇出分叉会读到的字段）。
-    fn owned_delivery(sequence: u64) -> CommittedDelivery {
-        CommittedDelivery::Owned(CommittedEvent {
+    fn owned_delivery(sequence: u64) -> CommittedEvent {
+        CommittedEvent {
             id: EventId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622b").expect("event id"),
             event_type: EventType::new("turn.queued").expect("event type"),
             session: Some(
@@ -1097,7 +1061,7 @@ mod tests {
             origin_epoch: None,
             origin_sequence: None,
             created_at: timestamp("2026-09-17T12:10:00.123Z"),
-        })
+        }
     }
 
     /// `ForkedPublisher` 必须把同一条已提交投递**同时**分叉给 Node Link 与 Sync 两路。

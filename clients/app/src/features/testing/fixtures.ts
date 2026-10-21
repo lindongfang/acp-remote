@@ -182,6 +182,8 @@ export function recordingGateway(input: {
     dispatch(command: CommandMessage) {
       dispatches.push(command);
     },
+    subscribeRemote: () => undefined,
+    unsubscribeRemote: () => undefined,
   };
 }
 

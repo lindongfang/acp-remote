@@ -119,11 +119,13 @@ pub async fn plan(
     let Some(wire_barrier) = wire_cursor(cursor) else {
         return Err(PortError::Corrupt("snapshot cursor"));
     };
-    // `sessions`：自有 + 已导入（已导入仅在协商 `resource.remote-origin.v1` 时纳入）；设备方向不再有
-    // 按授权的过滤，本层因此只做投影，不重算任何可见性。
-    let include_imported = inputs.features.contains(REMOTE_ORIGIN_FEATURE);
+    // `sessions`：自有 + 已导入。远程条目只在端到端协商 `resource.stateless-origin.v1` 后纳入；
+    // 只有旧 `resource.remote-origin.v1` 的客户端明确降级（不下发它无法安全处理的远程通道）。
+    let include_imported = inputs
+        .features
+        .contains(crate::sync::remote::STATELESS_ORIGIN_FEATURE);
     let query = SyncSessionQuery {
-        include_imported,
+        remote: include_imported.then(acp_core::use_cases::RemoteSessionQuery::default),
         ..SyncSessionQuery::default()
     };
     let summaries = core

@@ -243,6 +243,7 @@ SessionFilesQueries
 DeviceManagement
 ExportManagement
 RemoteCatalogQueries
+RemoteSessionQueries
 ```
 
 出站 port 不使用巨型 `AgentRuntime`，而采用会话级能力：
@@ -252,7 +253,10 @@ AgentCatalog             枚举可用 Agent 与能力
 SessionBackendFactory    受约束地 create/open/resume SessionEndpoint（`resume` 是进程不在时的唯一恢复入口，能力门控在实现侧）
 SessionEndpoint          reference/agent_session_id/prompt/cancel/modes/set-mode/list-config/set-config/resolve-interaction/read-history/close，绑定单个 live session（`modes` 是 `session.mode.list` 的唯一候选来源；`agent_session_id` 是创建后回填 ACP 会话标识的来源，未取得时返回 `None`）
 SessionStore             原子提交 owned session 状态、事件与 requestId 幂等；提供 head、一致性读视图、恢复数据的窄读取（`load_recovery`），以及三态归约的读缝（`session_activity`/`queued_turns`/`sessions_with_pending_activity`）
-RemoteDeliveryStore      只提交 imported event 的 cursor/digest/local-sequence 索引
+RemoteDeliveryStore      旧 imported 索引/收据/ACK 端口（WP2 起 core 用例层不再读取远程清单、来源身份或命令状态；保留定义到 WP3 删除持久路径）
+RemoteRuntimeDirectory   已认证连接期的 Owner 会话摘要、在线状态、目录 revision/generation 与整代失效（有界内存实现由 node-link-client 提供）
+RemoteSourceReads        按 (ownerNodeId, sessionId) 的权威页读取（readCursor、消息覆盖）与来源重放/追平屏障
+RemoteCommandStatus      按 remoteTarget + 原 requestId 直接向 Owner 查询命令状态（accepted/terminal/not_found/uncertain）
 TrustStore               设备、节点配对、信任与撤销元数据
 ExportStore              Owner Export 与 Access Import 记录
 AuditStore               不含内容的审计记录（读写）
@@ -274,7 +278,7 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 `SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 
-`read-history` 服务于 Sync 的 `session.read`：owned session 由 `storage-sqlite` 从本地事件日志回答，imported session 必须由 `node-link-client` 在线向 Owner 取，Access 不得把它写进本地正文缓存；Owner 不可达时返回可区分的错误，由 `server::sync` 映射成 `resource.remote_unavailable`。远程可达性变化通过 `EventPublisher` 以 `session.origin.online_changed` 暴露给客户端，不在 core 里维护独立的在线状态缓存。
+`read-history` 服务于 Sync 的 `session.read`：owned session 由 `storage-sqlite` 从本地事件日志回答；远程 session 必须先经 `RemoteRuntimeDirectory` 校验来源身份与在线状态，再由 `node-link-client` 在线向 Owner 取页（`RemoteSourceReads` 返回 `readCursor` 与逐消息 `messageCoverage`），Access 不得把它写进本地正文缓存，也不得回退到本机文件或持久 imported 索引。Owner 不可达时返回可区分的错误，由 `server::sync` 映射成 `resource.remote_unavailable`。远程可达性不再由 `EventPublisher`/`session.origin.online_changed` 维护：目录的代际与在线状态只存在于 `node-link-client` 的有界运行期实现里，core 只经端口读取，并在断开/撤销/epoch 改变时整代失效。`[决定]`（2026-10-21，`access-owner-data-stateless` WP2）远程清单由 `sync_visible_sessions` 从运行期目录组装（`origin.online` 来自目录条目），远程命令状态由 `remote_command_status` 带显式 `remoteTarget` 直接向 Owner 查询；两者都不读 `RemoteDeliveryStore`。
 
 端口签名、值对象形状、用例入口与 broker 事务顺序已冻结在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3–§6；本节只保留职责边界与依赖规则。
 
@@ -382,9 +386,9 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 
 唯一职责：把 Owner Node 导出的远程 Agent 实现为 `AgentCatalog + SessionBackendFactory + SessionEndpoint`。
 
-它负责 Import 配置、catalog、live attachment、无正文交付索引、跨节点 requestId、origin cursor 和显式重连。参考 Pi client，客户端连接逻辑依赖最小 `NodeLinkTransport` 接口；WSS 是一个 transport 实现，协议和 session backend 不感知 Tailscale 或 socket 细节。
+它负责 Import 配置、catalog、live attachment、运行期远程目录/来源缓冲、跨节点 requestId 查询与显式重连；**不保存** Owner 的交付索引、来源游标、ACK、收据或命令状态（`access-owner-data-stateless`）。参考 Pi client，客户端连接逻辑依赖最小 `NodeLinkTransport` 接口；WSS 是一个 transport 实现，协议和 session backend 不感知 Tailscale 或 socket 细节。
 
-默认 `no-content-cache` 下不得把 prompt、回复、工具内容、diff、终端、附件或 ACP raw 写入 Access SQLite；正文重放回源 Owner。断线后只自动恢复订阅和安全查询，不自动重放副作用命令。`agent-host` 与 `node-link-client` 是平级 backend，不能互相调用。
+默认 `no-content-cache` 下不得把 prompt、回复、工具内容、diff、终端、附件或 ACP raw 写入 Access SQLite；正文重放回源 Owner。断开、撤销或来源 epoch 变化时整代丢弃内存目录与缓冲；断线后只自动恢复订阅和安全查询，不自动重放副作用命令。`agent-host` 与 `node-link-client` 是平级 backend，不能互相调用。
 
 `[现状]`（2026-10-20，`conversation-area-complete` WP5）crate 已落地并登记为 workspace 成员，依赖边界是 `core + node-link-protocol + identity-auth + acpr-wire`（`acpr-transcript` 只作为测试依赖；`scripts/check-crate-boundaries.mjs` 逐条断言）。已实现：WSS `Transport`、`node.hello`→`node.ready` 握手与 Owner 签名校验、单任务连接所有权/重连/撤销、catalog 无正文投影、`commit_receipt` → 发布 → `resource.ack` 的顺序、远程 `SessionEndpoint` 与 `SessionBackendFactory`，以及按 `node-link.attachment-transfer.v1` 的独立附件连接（`attachment` 模块：`begin`/`chunk`/`seal`/`status`/`abort`/`read`/清单，停等、有界内存、不落盘；已转发不等于已提交）。
 
@@ -400,15 +404,15 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 
 `session-file-browser` 的会话文件/Git 只读实现**不属于本 crate**：它不新增表、列或 migration，根仍来自既有 `owned_session.workspace_cwd`；原生文件句柄与 Git 子进程由 `app::session_files` 实现 `core::ports::SessionFiles`（§4.10）。本 crate 不获得任何文件系统或 Git 依赖。
 
-包含 schema、migration、`SessionStore`、`RemoteDeliveryStore`、TrustStore 持久部分、事务、容量清理、快照和 TTL。Owned content tables 与 imported delivery-index tables 必须物理或类型隔离，防止 Access 路径误写正文。
+包含 schema、migration、`SessionStore`、TrustStore 持久部分、事务、容量清理、快照和 TTL。`RemoteDeliveryStore` 与 `imported_*` 表族随 `access-owner-data-stateless` 删除（计划，见 `CORE_PORTS_AND_STORAGE.md` §11.10）；Access 不再拥有任何远程资源写路径，owned content tables 只服务本节点资源。
 
-管理表、Export/Import 与审计端口的落盘已实现（三个管理 store + 用例层写集路径），具体表设计、事务、v1 → v2 升级和验收见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7.2/§7.3/§7.4 与 §11。管理数据保持同一 SQLite 文件与 owned/imported 家族边界，不新增 crate；配置来源权威见 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md)。
+管理表、Export/Import 与审计端口的落盘已实现（三个管理 store + 用例层写集路径），具体表设计、事务、v1 → v2 升级和验收见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7.2/§7.3/§7.4 与 §11。管理数据保持同一 SQLite 文件与 owned/连接资料边界，不新增 crate；导出/导入的**授权记录**属连接与信任资料，远程资源副本仍不落盘。配置来源权威见 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md)。
 
-第一阶段采用**同一数据库文件、两族表 + 每族专属 Store 类型**的隔离方式：
+第一阶段采用**同一数据库文件、仅 owned 家族 + 连接/信任资料**的边界：
 
-- 表名以 `owned_*` 与 `imported_*` 前缀区分，两族不共享外键、不共享事务边界之外的写入路径；`imported_*` 族不包含任何正文列（prompt、回复、工具内容、diff、终端、附件、ACP raw）。
-- 端口层就是隔离面：`RemoteDeliveryStore` 只暴露 `imported_*` 的读写，Access 侧代码拿不到 `SessionStore`，因此"忘了过滤"在类型上不可表达。
-- migration 按族分开维护，允许单独重放或清理 `imported_*` 而不影响 owned 权威事件日志。
+- 表名以 `owned_*` 与连接/信任专用表区分；不再有 `imported_*` 表族（`access-owner-data-stateless` 迁移删除）。
+- 端口层就是隔离面：Access 侧代码拿不到 `SessionStore`，也没有任何远程资源写端口；远程数据只经内存端口存在，"忘了过滤"在类型上不可表达。
+- migration 版本化维护 owned 与连接资料；清理 `imported_*` 后启动门禁验证远程数据不存在（`CORE_PORTS_AND_STORAGE.md` §11.10）。
 - 只有当出现"必须靠操作系统级隔离（不同文件/不同权限）才能满足的威胁模型"时，才拆成两个数据库文件，并按 `AGENTS.md` §9 新增 ADR。
 
 它不解析 ACP、不广播 WebSocket、不决定会话状态（三态归约只在 core；本 crate 只按提交写入与读取摘要、迁移时写暂存值）、不保存明文私钥。数据库 record 与领域对象通过 mapper 转换。
@@ -650,14 +654,14 @@ Imported session 事件路径：
 Owner 已提交事件
 -> node-link-client mapper
 -> core::broker
--> RemoteDeliveryStore::commit_receipt（无正文索引）
+-> RemoteEventSource 运行期来源缓冲（不落盘、无收据）
 -> EventPublisher publish（正文仅内存）
 -> local subscribers
 ```
 
-从 cursor 补发 imported 事件时不得伪造历史 view：Access 没有持久化正文，必须按 origin cursor 向 Owner 重新获取对应事件（`resource.subscribe` 的增量重放）再交付；无法回源的区间只能以 `sync.reset_required` 让客户端重建会话视图，不允许发送"只有 digest、没有内容"的伪事件。
+从 cursor 补发 imported 事件时不得伪造历史 view：Access 没有持久化正文，必须按 origin cursor 向 Owner 重新获取对应事件（`resource.subscribe` 的增量重放 + `resource.caught_up` 屏障）再交付；无法回源的区间只能以 `sync.reset_required`/`remote_reset_required` 让客户端重建会话视图，不允许发送"只有 digest、没有内容"的伪事件。
 
-Owned 事件只有 core 可以决定何时提交。Imported 事件的业务提交权属于 Owner，Access core 只能提交交付收据，不能把它写成第二份权威 `SessionStore` 内容。
+Owned 事件只有 core 可以决定何时提交。Imported 事件的业务提交权属于 Owner；Access 不提交任何本地收据或索引，只把来源事件转入运行期有界缓冲后转发。
 
 ## 8. 错误边界
 
@@ -696,7 +700,7 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 
 ### 新增存储
 
-实现 `SessionStore`、`RemoteDeliveryStore` 等既有事务端口。内存实现服务于测试，其他本地数据库不改变 core。
+实现 `SessionStore`、连接/信任 store 与运行期远程端口。内存实现服务于测试，其他本地数据库不改变 core；不得为 Access 恢复远程进度新增持久 store。
 
 ### 暂不设计动态插件 ABI
 
@@ -739,7 +743,7 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 | acpr-wire | 值对象取值域（uuid/decimalString/timestamp/featureList/rawAcp 的正反用例）、`Nullable` 的「缺键报错 / null / 值」三态、`ExtraFields` 的未知字段值保真（含超出 u64 的整数字面量）、base64url 规范无填充口径 |
 | agent-host | fake ACP child、超时、崩溃、乱序响应；prompt 媒体/路径映射与能力/帧预算门控；真实终端子进程的分块输出/跨 UTF-8 边界/预算截断/非零退出、kill 后可读、release 后不可操作、重复操作收敛，以及会话/Agent/Daemon 关闭的进程树清理（Windows Job Object 心跳探针） |
 | node-link-client | fake Owner、attachment generation、显式重连、origin 去重、capability 收缩、uncertain |
-| storage-sqlite | migration、owned 原子提交、imported 无正文约束、TTL、容量限制 |
+| storage-sqlite | migration、owned 原子提交、远程数据不落盘白名单、TTL、容量限制 |
 | identity-auth | 设备/节点配对过期、重放、无传递信任、grant 交集和撤销 |
 | identity-keystore | 平台 keystore 可用与不可用两条路径、无可信 keystore 时失败关闭、密钥不进入日志与错误信息 |
 | server::sync | 四消息握手与 15 秒窗口（未知设备照常拿到挑战）、认证前业务消息 `4401`、来源绑定一致/不一致/缺席与非 `https` 四种情形；认证前固定上限（首条 hello 5 秒与 32 KiB、单节点并发 256）；单设备替换 `4411` 与撤销传播 `4410`；心跳与静默超时；出站账本双上限与被拒投递不消耗序号；cursor 四种 `reason`、序号域上限；增量重放排序与实时事件不越屏障、权限空洞；快照三类资源与 `chunkCount`、按原始帧字节复算的摘要；ACK 单调与恢复位置；两条配对端点的原子校验、幂等、401 收敛、四个安全头与固定限流。**尚未覆盖**：§11 业务命令面的执行与终态投递（未接线）与真实 WSS 端到端用例（属 WP8） |

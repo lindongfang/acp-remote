@@ -526,10 +526,10 @@ Agent 可以通过 ACP 的 `terminal/create`/`output`/`wait_for_exit`/`kill`/`re
 ### 13.4 客户端与 Access Node 数据最小化
 
 - 第一阶段固定为 `no-content-cache`：Access Node 和受其服务的远程客户端默认不持久化会话正文，只允许有界内存转发。
-- Access Node 可以把 imported 资源交付给它自己的 Sync 客户端（浏览器 PWA），但只允许按 `SYNC_PROTOCOL.md` 的 `resource.remote-origin.v1` 转发：不改写 ACP 语义与 `acp.rawJson`、不缓存正文、不扩张 capability、不改会话状态；快照只含元数据，正文历史一律在线回源 Owner，离线时返回 `resource.remote_unavailable` 并置 `origin.online=false`。
-- Access Node 可持久化 import、owner/origin、cursor/ACK、requestId、命令终态引用、event type/digest、local sequence 映射，以及**不含内容的审计元数据**（`SECURITY_DESIGN.md` §14.2 的动作类别、时间、actor、目标 ID 与摘要）；上述元数据一律不得包含可还原 prompt、回复、diff、终端、附件或 ACP raw 的内容。
+- Access Node 可以把 imported 资源交付给它自己的 Sync 客户端（浏览器 PWA），但只允许按 `SYNC_PROTOCOL.md` §9.6–§9.7 的 `resource.remote-origin.v1`/`resource.stateless-origin.v1` 转发：不改写 ACP 语义与 `acp.rawJson`、不缓存正文、不扩张 capability、不改会话状态；快照只含元数据，正文历史一律在线回源 Owner，离线时返回 `resource.remote_unavailable` 并置 `origin.online=false`。运行期 ACK 只表示当前连接的流控与处理进度，不是可恢复索引。
+- Access Node **不得持久化** Owner 的 import/来源引用、cursor/ACK、requestId、命令终态引用、event type/digest 或 local sequence 映射，也不得持久化任何可还原 prompt、回复、diff、终端、附件或 ACP raw 的内容。允许保留的只有连接与信任资料（节点/设备身份、公钥指纹、地址与协议配置、本机信任/撤销决定、连接重试配置）以及摘要不含远程内容的连接身份审计（`SECURITY_DESIGN.md` §14.2 的动作类别、时间、actor、目标节点 ID 与固定结果类别）。
 向第三方客户端交付正文必须被视为显式数据披露
-- 撤销设备或节点后 Owner 不再提供数据，Access 删除上述索引并清空内存内容。
+- 撤销设备或节点后 Owner 不再提供数据，Access 清除该来源的运行期模型与内存内容（不存在需要删除的持久索引）。
 - 客户端收到自己被撤销或用户执行“清除此设备”时，应删除缓存和 device key；浏览器能力不足时明确说明残留风险。
 - 未来启用加密离线正文缓存时，必须新增协商 feature、Owner 明示授权、容量/TTL/撤销提示和独立 ADR；Owner 仍不得声称能远程可靠擦除已有副本。
 - 与 Daemon 同包发布的 PWA 静态资源属 §3 的 `public-artifact` 类别：根路径静态面只交付这些公开构建产物（入口文档与前端资源），不交付任何会话内容、凭据或用户数据，因此未认证的请求也能取到它。同包发布、构建版本可检查与发布构建缺产物即拒绝启动见 §16.3。
