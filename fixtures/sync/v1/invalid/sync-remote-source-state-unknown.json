@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.remote_source_state",
+  "messageId": "ac83e4c9-a4fb-4bd5-a73a-cf5b8a9eb2d7",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "63",
+  "body": {
+    "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+    "state": "degraded"
+  }
+}

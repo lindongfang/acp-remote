@@ -1,19 +1,26 @@
 /**
- * `schemas/sync/v1/sync.schema.json` 的严格 TypeScript 镜像：订阅、快照与 ACK。
+ * `schemas/sync/v1/sync.schema.json` 的严格 TypeScript 镜像：订阅、快照、ACK 与远程来源流。
  *
  * 快照资源词表按 `design.md` D1 收窄为 `sessions`/`workspaces`/`agents` 三类**清单**资源；
  * 六类会话明细资源（`messages`/`turns`/`pending_interactions`/`config_options`/`capabilities`/
  * `history`）**不进快照**，其元素形状仍由下面的 `SnapshotItem*` 定义供 `session.read` 结果复用。
+ *
+ * `sync.remote_*` 是 `resource.stateless-origin.v1` 的加性帧族（`docs/SYNC_PROTOCOL.md` §9.7）：
+ * 它直接以 Owner 的 `originCursor` 订阅与 ACK，**不**分配 Access 本机序号。本文件只镜像 wire 形状；
+ * 订阅状态机、重建缓冲与 persistence 边界属于 `src/sync-client/`。
  */
 
 import type {
   AgentCatalogEntry,
   AgentContentBlock,
+  Base64Url32,
   ConfigOptionView,
   Cursor,
   DecimalString,
+  OriginCursor,
   PublicError,
   RawAcp,
+  SessionRef,
   SessionSummary,
   Timestamp,
   Uuid,
@@ -209,6 +216,126 @@ export interface SyncAck extends PostAuthEnvelope {
   readonly body: { readonly cursor: Cursor };
 }
 
+// ── 远程来源流（`resource.stateless-origin.v1`，§9.7） ──────────────────────
+//
+// 共享形状 `originCursor`/`sessionRef`/`messageCoverage` 的镜像在 `./common`；本模块只镜像
+// `sync.schema.json` 自己的 `$defs`。
+
+/** `$defs.remoteResetRequired.body.reason`：复用 `reset_required` 词表，但不含 `initial_sync`。 */
+export type RemoteResetReason = "epoch_mismatch" | "cursor_expired" | "cache_incompatible";
+
+/** `$defs.remoteSourceState.body.state`。 */
+export type RemoteSourceStateKind = "online" | "offline" | "revoked";
+
+/**
+ * `$defs.remoteEvent` 的 `event.payload`：与 Node Link `resource.event.payload` 同义。
+ *
+ * schema 用 `anyOf` 要求 `view`/`acp` **至少出现一个**，这里用联合表达同一约束：`view` 是开放视图
+ * （未登记字段原样保留），`acp` 是逐字保留的 ACP 原文。`payload` 内部取值域归 `projectView()` 与
+ * 降级路径判定，本层只描述形状。
+ */
+export type RemoteEventPayload =
+  | { readonly view: Record<string, unknown>; readonly acp?: RawAcp }
+  | { readonly view?: Record<string, unknown>; readonly acp: RawAcp };
+
+/** `$defs.remoteEvent` 的 `event`：**不带** Access 的 `globalSequence`/`sessionSequence`。 */
+export interface RemoteEventItem {
+  readonly originEventId: Uuid;
+  readonly originEpoch: Uuid;
+  readonly originSequence: DecimalString;
+  readonly sessionRef: SessionRef;
+  /** 与 `resource.event.eventType` 同一形状：`^[a-z0-9_.-]{1,128}$`。 */
+  readonly eventType: string;
+  readonly payloadDigest: Base64Url32;
+  readonly createdAt: Timestamp;
+  readonly payload: RemoteEventPayload;
+}
+
+/** `$defs.remoteSubscribe`：`cursor` 为 `null` 表示首次重建，非空表示从来源位置增量重放。 */
+export interface SyncRemoteSubscribe extends PostAuthEnvelope {
+  readonly type: "sync.remote_subscribe";
+  readonly body: {
+    readonly subscriptionId: Uuid;
+    readonly sessionRef: SessionRef;
+    readonly cursor: OriginCursor | null;
+  };
+}
+
+/** `$defs.remoteEvent`。 */
+export interface SyncRemoteEvent extends PostAuthEnvelope {
+  readonly type: "sync.remote_event";
+  readonly body: {
+    readonly subscriptionId: Uuid;
+    readonly event: RemoteEventItem;
+  };
+}
+
+/** `$defs.remoteCaughtUp`：Owner 已完成来源重放屏障，此后才是实时事件。 */
+export interface SyncRemoteCaughtUp extends PostAuthEnvelope {
+  readonly type: "sync.remote_caught_up";
+  readonly body: {
+    readonly subscriptionId: Uuid;
+    readonly cursor: OriginCursor;
+  };
+}
+
+/** `$defs.remoteAck`：仅本次连接该订阅的连续处理进度，不落盘、不表示可恢复索引。 */
+export interface SyncRemoteAck extends PostAuthEnvelope {
+  readonly type: "sync.remote_ack";
+  readonly body: {
+    readonly subscriptionId: Uuid;
+    readonly cursor: OriginCursor;
+  };
+}
+
+/**
+ * `$defs.remoteResetRequired`：客户端必须回源 `session.read` 重建。
+ *
+ * `cursor` 只在 Owner 已验证有效 head 时出现，否则为 `null`；`cache_incompatible` 只能由这一帧
+ * 表达，`sync.cursor_invalid` 的 `details.reason` 没有该取值。
+ */
+export interface SyncRemoteResetRequired extends PostAuthEnvelope {
+  readonly type: "sync.remote_reset_required";
+  readonly body: {
+    readonly subscriptionId: Uuid;
+    readonly reason: RemoteResetReason;
+    readonly cursor: OriginCursor | null;
+  };
+}
+
+/** `$defs.remoteUnsubscribe`：取消本连接上的订阅，不改变 Owner 侧持久状态。 */
+export interface SyncRemoteUnsubscribe extends PostAuthEnvelope {
+  readonly type: "sync.remote_unsubscribe";
+  readonly body: { readonly subscriptionId: Uuid };
+}
+
+/** `$defs.remoteUnavailable`：断线、撤销与不支持分别复用既有错误码，不新造词表。 */
+export interface SyncRemoteUnavailable extends PostAuthEnvelope {
+  readonly type: "sync.remote_unavailable";
+  readonly body: {
+    readonly subscriptionId: Uuid;
+    readonly error: PublicError;
+  };
+}
+
+/** `$defs.remoteCatalogChanged`：来源清单失效，客户端重新查询，不携带旧资源副本。 */
+export interface SyncRemoteCatalogChanged extends PostAuthEnvelope {
+  readonly type: "sync.remote_catalog_changed";
+  readonly body: {
+    readonly ownerNodeId: Uuid;
+    readonly revision: DecimalString;
+  };
+}
+
+/** `$defs.remoteSourceState`：来源连接事实，不是 owned 业务事件，只存在于连接期。 */
+export interface SyncRemoteSourceState extends PostAuthEnvelope {
+  readonly type: "sync.remote_source_state";
+  readonly body: {
+    readonly ownerNodeId: Uuid;
+    readonly state: RemoteSourceStateKind;
+  };
+}
+
 /** `sync.schema.json` 的顶层 `oneOf`。 */
 export type SyncMessage =
   | SyncSubscribe
@@ -218,4 +345,13 @@ export type SyncMessage =
   | SyncSnapshotBegin
   | SyncSnapshotChunk
   | SyncSnapshotEnd
-  | SyncAck;
+  | SyncAck
+  | SyncRemoteSubscribe
+  | SyncRemoteEvent
+  | SyncRemoteCaughtUp
+  | SyncRemoteAck
+  | SyncRemoteResetRequired
+  | SyncRemoteUnsubscribe
+  | SyncRemoteUnavailable
+  | SyncRemoteCatalogChanged
+  | SyncRemoteSourceState;

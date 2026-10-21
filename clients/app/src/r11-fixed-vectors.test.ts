@@ -49,7 +49,7 @@ import { encodeNulJoinedUtf8, encodeTranscript, encodeU16be, encodeUtf8, encodeU
 import type { TranscriptField } from "./platform/transcript";
 import { openDeviceIdentityStore } from "./platform/secure-storage.web";
 import type { DeviceIdentity, DeviceIdentityPort } from "./platform/secure-storage";
-import { createVolatileImportedContent, openLocalCache } from "./platform/local-cache.web";
+import { openLocalCache } from "./platform/local-cache.web";
 import { openLifecycle } from "./platform/lifecycle.web";
 import { openDownloadPort } from "./platform/download.web";
 import type { PlatformPorts } from "./platform";
@@ -295,7 +295,6 @@ async function setup(input: HandshakeInput): Promise<Harness> {
   const platform: PlatformPorts = {
     deviceIdentity: openDeviceIdentityStore(),
     localCache: openLocalCache(),
-    importedContent: createVolatileImportedContent(),
     lifecycle: openLifecycle(),
     download: openDownloadPort(),
   };

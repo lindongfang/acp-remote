@@ -33,8 +33,9 @@ use node_link_protocol::handshake::NodeHello;
 /// `typed-media`/`pending-interactions`/`remote-history` 的门控点都在 `session.read`；该命令已在
 /// Owner 侧接线（共享投影 + core 用例），因此这三条可以如实宣告。Access 侧对这些能力的使用仍由
 /// `node-link-client` 与 Sync 的 imported 读取路径决定。
-pub const SUPPORTED_FEATURES: [&str; 9] = [
+pub const SUPPORTED_FEATURES: [&str; 10] = [
     "node-link.core.v1",
+    "resource.stateless-origin.v1",
     // §11.4/§12.3：会话主状态三态合同。与 Sync 的 `core.session-activity.v1` 同一取值集合。
     "core.session-activity.v1",
     "node-link.raw-acp.v1",

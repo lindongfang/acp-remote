@@ -23,8 +23,8 @@ use acp_core::model::{
     SessionId, Timestamp as CoreTimestamp,
 };
 use acp_core::ports::{
-    HistoryInclude, HistoryPage, HistoryQuery, ImportedRead, ImportedReadQuery, MessageCursor,
-    OwnedEventRecord, ReplayLimit,
+    HistoryInclude, HistoryPage, HistoryQuery, MessageCursor, OriginReadPage, OwnedEventRecord,
+    RemoteHistoryRecord, RemoteReadQuery, RemoteReadResult, ReplayLimit,
 };
 use acp_core::use_cases::UseCases;
 use async_trait::async_trait;
@@ -87,6 +87,11 @@ pub(crate) struct SessionReadRequest {
     pub negotiate_acp: bool,
     /// `core.file-diff.v1` 的协商结果（Node Link 没有对应 feature，恒为 `true`）。
     pub negotiate_file_diff: bool,
+    /// `core.local-catalog.v1` 的协商结果（摘要投影里 `workspace` 键的三态）。
+    pub catalog: bool,
+    /// `resource.stateless-origin.v1` 的协商结果：只有协商后才允许解析远程来源，并在结果里带
+    /// `readCursor`/`sessionSummary`/`messageCoverage`（`design.md` D4）。
+    pub stateless_origin: bool,
 }
 
 /// 共享投影的失败分类：两个适配器各自映射成自己的 wire 错误码。
@@ -96,15 +101,18 @@ pub(crate) enum SessionReadFault {
     CursorExpired,
     TooLarge(&'static str),
     Internal(&'static str),
+    /// 请求的资源在远程读取面上无法表达（`capability.unsupported_by_broker`），不静默省略。
+    Unsupported(&'static str),
     Port(PortError),
 }
 
-/// `session.read` 的完成结果：owned 会话由本机事件日志投影；imported 会话是 Owner 结果的原文，
-/// 由调用方按本地 feature 协商做最后一道门控（Access 侧不解释正文）。
+/// `session.read` 的完成结果：owned 会话由本机事件日志投影；远程会话由 Owner 在线回源的结果投影
+/// （`design.md` D4），两者都是**本地** wire 形状，只有远程路径带读取覆盖字段。
+#[allow(clippy::large_enum_variant)] // owned 结果与 wire 形状一一对应；装箱只为尺寸，不改变读面语义。
 #[derive(Debug)]
 pub(crate) enum SessionReadOutcome {
     Owned(sync_protocol::command::SessionReadResult),
-    Imported(ImportedRead),
+    Remote(RemoteReadResult),
 }
 
 /// `session.read` 依赖的用例读面。
@@ -119,19 +127,34 @@ pub(crate) trait SessionReadSource: Send + Sync {
         query: HistoryQuery,
     ) -> Result<HistoryPage, PortError>;
 
+    /// Owner 侧原子读取：页、来源位置 R 与逐消息覆盖来自同一只读事务（`design.md` D4）。
+    /// 默认实现显式不支持，避免没有来源位置的替身伪造覆盖。
+    async fn read_session_origin(
+        &self,
+        _actor: &Actor,
+        _query: HistoryQuery,
+    ) -> Result<OriginReadPage, PortError> {
+        Err(PortError::Unavailable(
+            acp_core::model::UnavailableKind::BackendUnsupported,
+        ))
+    }
+
     async fn effective_interactions(
         &self,
         actor: &Actor,
         reference: &acp_core::model::SessionReference,
     ) -> Result<Vec<CoreEffectiveInteraction>, PortError>;
 
-    /// imported 会话的在线回源；默认没有 imported 索引（测试替身与 Node Link 的 Owner 面）。
-    async fn read_imported(
+    /// 远程会话的在线回源（`RemoteSourceReads`，不再经过旧的 `RemoteSessionReads`）。
+    ///
+    /// `Ok(None)` = 当前运行期目录里没有该标识的远程会话；默认实现（测试替身与 Owner 面）恒为 `None`，
+    /// 因此本机没有远程运行期时行为与以前逐字相同。
+    async fn read_remote(
         &self,
         _actor: &Actor,
         _session: &SessionId,
-        _query: ImportedReadQuery,
-    ) -> Result<Option<ImportedRead>, PortError> {
+        _query: RemoteReadQuery,
+    ) -> Result<Option<RemoteReadResult>, PortError> {
         Ok(None)
     }
 }
@@ -146,6 +169,14 @@ impl SessionReadSource for UseCases {
         UseCases::read_session(self, actor, query).await
     }
 
+    async fn read_session_origin(
+        &self,
+        actor: &Actor,
+        query: HistoryQuery,
+    ) -> Result<OriginReadPage, PortError> {
+        UseCases::read_session_origin(self, actor, query).await
+    }
+
     async fn effective_interactions(
         &self,
         actor: &Actor,
@@ -154,13 +185,48 @@ impl SessionReadSource for UseCases {
         UseCases::effective_interactions(self, actor, reference).await
     }
 
-    async fn read_imported(
+    /// 按 `SessionId` 解析唯一的远程来源，再走用例面的 `read_remote_source`。
+    ///
+    /// 解析走 [`UseCases::sync_visible_sessions`]：授权判定、运行期目录与来源在线状态都由 core 给出，
+    /// 本层不建第二条可见性路径。多个 Owner 复用同一 `SessionId` 时明确拒绝，不挑选其中任意一条。
+    async fn read_remote(
         &self,
         actor: &Actor,
         session: &SessionId,
-        query: ImportedReadQuery,
-    ) -> Result<Option<ImportedRead>, PortError> {
-        UseCases::read_imported_session(self, actor, session, query).await
+        query: RemoteReadQuery,
+    ) -> Result<Option<RemoteReadResult>, PortError> {
+        let summaries = UseCases::sync_visible_sessions(
+            self,
+            actor,
+            acp_core::use_cases::SyncSessionQuery {
+                remote: Some(acp_core::use_cases::RemoteSessionQuery::default()),
+                ..acp_core::use_cases::SyncSessionQuery::default()
+            },
+            |_remote: &acp_core::model::RemoteSessionRef| true,
+        )
+        .await?;
+        let mut matches = summaries.iter().filter(|summary| {
+            summary.session_id() == session
+                && matches!(
+                    summary.origin(),
+                    acp_core::model::ResourceOrigin::Remote { .. }
+                )
+        });
+        let Some(summary) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(PortError::InvalidRequest(
+                "session id is ambiguous across remote owners",
+            ));
+        }
+        let acp_core::model::ResourceOrigin::Remote { owner_node_id, .. } = summary.origin() else {
+            return Ok(None);
+        };
+        let remote = acp_core::model::RemoteSessionRef::new(owner_node_id.clone(), session.clone());
+        UseCases::read_remote_source(self, actor, &remote, query)
+            .await
+            .map(Some)
     }
 }
 
@@ -174,6 +240,14 @@ impl<T: SessionReadSource> SessionReadSource for Arc<T> {
         T::read_session(self.as_ref(), actor, query).await
     }
 
+    async fn read_session_origin(
+        &self,
+        actor: &Actor,
+        query: HistoryQuery,
+    ) -> Result<OriginReadPage, PortError> {
+        T::read_session_origin(self.as_ref(), actor, query).await
+    }
+
     async fn effective_interactions(
         &self,
         actor: &Actor,
@@ -182,20 +256,22 @@ impl<T: SessionReadSource> SessionReadSource for Arc<T> {
         T::effective_interactions(self.as_ref(), actor, reference).await
     }
 
-    async fn read_imported(
+    async fn read_remote(
         &self,
         actor: &Actor,
         session: &SessionId,
-        query: ImportedReadQuery,
-    ) -> Result<Option<ImportedRead>, PortError> {
-        T::read_imported(self.as_ref(), actor, session, query).await
+        query: RemoteReadQuery,
+    ) -> Result<Option<RemoteReadResult>, PortError> {
+        T::read_remote(self.as_ref(), actor, session, query).await
     }
 }
 
 /// 共享投影入口：调用方完成授权、feature 门控与参数形状校验后调用。
 ///
-/// owned 会话走本机事件日志；`NotFound` 时再问 imported 索引（与 `session_files_root` 的判定同序）——
-/// 命中则把 Owner 的完成结果原文原样返回，未命中才把 `NotFound` 交回调用方。
+/// owned 会话走本机事件日志；`NotFound` 且本次连接协商了 `resource.stateless-origin.v1` 时再向
+/// 运行期远程目录解析来源并回源（[`SessionReadSource::read_remote`]）——命中则交回
+/// [`SessionReadOutcome::Remote`]，未命中才把 `NotFound` 交回调用方。未协商该 feature 的连接**不**解析
+/// 远程来源：远程会话对它不可见，`session.read` 与以前一样回 `session.not_found`。
 pub(crate) async fn read_session<S: SessionReadSource>(
     core: &S,
     actor: &Actor,
@@ -207,47 +283,59 @@ pub(crate) async fn read_session<S: SessionReadSource>(
     let before_history = request.before_history;
     let before_messages = request.before_messages.clone();
     let typed_media = request.typed_media;
-    let owned = core
-        .read_session(
-            actor,
-            HistoryQuery {
-                session: session_id.clone(),
-                include,
-                after: None,
-                before_history,
-                before_messages: before_messages.clone(),
-                messages_limit: ReplayLimit::new(if include.messages {
-                    MAX_PAGE_MESSAGES
-                } else {
-                    0
-                }),
-                limit: ReplayLimit::new(page_limit),
-            },
-        )
-        .await;
+    let remote_query = RemoteReadQuery {
+        include,
+        before_history,
+        before_messages: before_messages.clone(),
+        messages_limit: ReplayLimit::new(if include.messages {
+            MAX_PAGE_MESSAGES
+        } else {
+            0
+        }),
+        limit: ReplayLimit::new(page_limit),
+    };
+    let history_query = HistoryQuery {
+        session: session_id.clone(),
+        include,
+        after: None,
+        before_history,
+        before_messages: before_messages.clone(),
+        messages_limit: ReplayLimit::new(if include.messages {
+            MAX_PAGE_MESSAGES
+        } else {
+            0
+        }),
+        limit: ReplayLimit::new(page_limit),
+    };
+    // Owner 侧原子读取：协商无持久中转后，结果必须与 R/覆盖同源；旧连接保持原有读面。
+    let mut origin_meta = None;
+    let owned = if request.stateless_origin {
+        match core.read_session_origin(actor, history_query).await {
+            Ok(origin) => {
+                origin_meta = Some((
+                    origin.read_cursor,
+                    origin.coverage,
+                    origin.page.session.clone(),
+                ));
+                Ok(origin.page)
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        core.read_session(actor, history_query).await
+    };
     let mut batch = match owned {
         Ok(batch) => batch,
         Err(PortError::NotFound(_)) => {
-            let imported = core
-                .read_imported(
-                    actor,
-                    &session_id,
-                    ImportedReadQuery {
-                        include,
-                        before_history,
-                        before_messages,
-                        messages_limit: ReplayLimit::new(if include.messages {
-                            MAX_PAGE_MESSAGES
-                        } else {
-                            0
-                        }),
-                        limit: ReplayLimit::new(page_limit),
-                    },
-                )
-                .await
-                .map_err(SessionReadFault::Port)?;
-            return match imported {
-                Some(page) => Ok(SessionReadOutcome::Imported(page)),
+            let remote = if request.stateless_origin {
+                core.read_remote(actor, &session_id, remote_query)
+                    .await
+                    .map_err(SessionReadFault::Port)?
+            } else {
+                None
+            };
+            return match remote {
+                Some(page) => Ok(SessionReadOutcome::Remote(page)),
                 None => Err(SessionReadFault::Port(PortError::NotFound(
                     acp_core::model::EntityRef::Session(session_id),
                 ))),
@@ -267,43 +355,46 @@ pub(crate) async fn read_session<S: SessionReadSource>(
     });
     let mut merger = MessageMerger::new(cursor.clone());
     let mut scanned = 0_u64;
-    let mut complete = false;
-    loop {
-        if include.messages {
-            for record in &batch.events {
-                merger.absorb(record);
+    let mut complete = request.stateless_origin;
+    // 原子读取（R + 覆盖）不能跨多个事务拼页：stateless-origin 只返回本次页，由客户端按覆盖合并。
+    if !request.stateless_origin {
+        loop {
+            if include.messages {
+                for record in &batch.events {
+                    merger.absorb(record);
+                }
+                scanned += batch.events.len() as u64;
             }
-            scanned += batch.events.len() as u64;
-        }
-        let Some(next) = batch.next.clone() else {
-            complete = true;
-            break;
-        };
-        if !include.messages {
-            complete = true;
-            break;
-        }
-        if scanned >= MAX_SCAN_EVENTS {
-            break;
-        }
-        batch = core
-            .read_session(
-                actor,
-                HistoryQuery {
-                    session: session_id.clone(),
-                    include: HistoryInclude {
-                        messages: true,
-                        ..HistoryInclude::default()
+            let Some(next) = batch.next.clone() else {
+                complete = true;
+                break;
+            };
+            if !include.messages {
+                complete = true;
+                break;
+            }
+            if scanned >= MAX_SCAN_EVENTS {
+                break;
+            }
+            batch = core
+                .read_session(
+                    actor,
+                    HistoryQuery {
+                        session: session_id.clone(),
+                        include: HistoryInclude {
+                            messages: true,
+                            ..HistoryInclude::default()
+                        },
+                        after: Some(next),
+                        before_history: None,
+                        before_messages: None,
+                        messages_limit: ReplayLimit::new(0),
+                        limit: ReplayLimit::new(SCAN_BATCH_EVENTS),
                     },
-                    after: Some(next),
-                    before_history: None,
-                    before_messages: None,
-                    messages_limit: ReplayLimit::new(0),
-                    limit: ReplayLimit::new(SCAN_BATCH_EVENTS),
-                },
-            )
-            .await
-            .map_err(SessionReadFault::Port)?;
+                )
+                .await
+                .map_err(SessionReadFault::Port)?;
+        }
     }
     if !complete {
         debug!(
@@ -458,6 +549,38 @@ pub(crate) async fn read_session<S: SessionReadSource>(
     } else {
         None
     };
+    let (read_cursor, session_summary, message_coverage) = match origin_meta {
+        Some((cursor, coverage, summary)) => {
+            let read_cursor = wire_origin_cursor(&cursor)
+                .ok_or(SessionReadFault::Internal("the read cursor is invalid"))?;
+            let session_summary =
+                crate::sync::command::query::wire_session(&summary, request.catalog).ok_or(
+                    SessionReadFault::Internal("the session summary cannot be projected"),
+                )?;
+            let message_coverage = coverage
+                .iter()
+                .map(|entry| {
+                    Some(sync_protocol::common::MessageCoverage {
+                        message_id: Uuid::parse(entry.message_id.as_str()).ok()?,
+                        through: wire_origin_cursor(&entry.through)?,
+                        last_delta_index: match entry.last_delta_index {
+                            Some(index) => Nullable::value(decimal(&index.to_string())?),
+                            None => Nullable::null(),
+                        },
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+                .ok_or(SessionReadFault::Internal(
+                    "a message coverage entry cannot be projected",
+                ))?;
+            (
+                Some(read_cursor),
+                Some(session_summary),
+                Some(message_coverage),
+            )
+        }
+        None => (None, None, None),
+    };
     Ok(SessionReadOutcome::Owned(
         sync_protocol::command::SessionReadResult {
             session_id: wire_session_id,
@@ -471,71 +594,161 @@ pub(crate) async fn read_session<S: SessionReadSource>(
             },
             has_earlier: page.has_earlier,
             history_has_earlier: include.history.then_some(history_has_earlier),
+            read_cursor,
+            session_summary,
+            message_coverage,
         },
     ))
 }
 
-/// 把 Owner 的 `session.read` 结果原文投影成本地 wire 结果：只做**本地 feature 门控**，不重新解释正文。
+/// 把远程来源的一页权威读取投影成本地 wire `sessionReadResult`（`design.md` D4）。
 ///
-/// 未协商 `core.typed-media.v1`/`core.raw-payload.v1`/`core.file-diff.v1` 时，按与 owned 投影完全相同的
-/// 规则去键/降级（`gate_typed_media`/`degrade_blocks`/`gate_file_diff`）；请求里没有的 include 一律清空，
-/// 保证 Access 的响应不会因为 Owner 协商了更多 feature 而向旧客户端泄露新字段。
-pub(crate) fn project_imported_read(
-    page: ImportedRead,
+/// 与 owned 投影共用同一套门控（`core.typed-media.v1`/`core.raw-payload.v1`/`core.file-diff.v1`），差别只有
+/// 三点，且都是该 feature 的合同要求：
+///
+/// 1. 结果另带 `readCursor`、`sessionSummary` 与逐消息 `messageCoverage`（未协商时调用方根本不会走到这里）；
+/// 2. `history` 条目的 `sessionSequence` 是 **Owner 的来源会话内序号**（原样转发），不是 Access 本地序号；
+/// 3. 页标记取自同一次 Owner 读取（`messages_has_earlier`/`history_has_earlier`），本层不重新推断。
+///
+/// 远程读取面拿不到配置项与有效交互（Owner 的 `session.read` 覆盖字段不含它们）：请求了这些 include 时
+/// 显式回 `capability.unsupported_by_broker`，绝不静默省略成「看起来完整」的空数组。
+pub(crate) fn project_remote_read(
+    page: RemoteReadResult,
     session: &SessionId,
-    include: HistoryInclude,
-    typed_media: bool,
-    negotiate_acp: bool,
-    negotiate_file_diff: bool,
+    request: &SessionReadRequest,
 ) -> Result<sync_protocol::command::SessionReadResult, SessionReadFault> {
-    let mut result: sync_protocol::command::SessionReadResult =
-        serde_json::from_str(page.document.as_str()).map_err(|_| {
-            SessionReadFault::Internal("the owner returned a malformed session.read result")
-        })?;
-    if result.session_id.as_str() != session.as_str() {
-        return Err(SessionReadFault::Internal(
-            "the owner returned a result for another session",
+    let include = request.include;
+    if include.turns || include.capabilities {
+        return Err(SessionReadFault::Unsupported(
+            "the remote read surface cannot express turns or capabilities",
         ));
     }
-    if !include.messages {
-        result.resources.messages = None;
-    } else if let Some(messages) = result.resources.messages.as_mut() {
-        for message in messages {
-            if !typed_media {
-                message.channel = None;
-                message.partial = None;
-                if let Ok(mut value) = serde_json::to_value(&message.content) {
-                    degrade_blocks(&mut value);
-                    if let Ok(degraded) = serde_json::from_value(value) {
-                        message.content = degraded;
-                    }
-                }
-            }
-        }
+    if include.pending_interactions {
+        return Err(SessionReadFault::Unsupported(
+            "the remote read surface does not return pending interactions yet",
+        ));
     }
-    if !include.pending_interactions {
-        result.resources.pending_interactions = None;
+    if include.config_options {
+        return Err(SessionReadFault::Unsupported(
+            "the remote read surface does not return config options yet",
+        ));
     }
-    if !include.config_options {
-        result.resources.config_options = None;
+    if page.summary.session_id() != session {
+        return Err(SessionReadFault::Internal(
+            "the source returned a result for another session",
+        ));
     }
-    result.resources.turns = None;
-    result.resources.capabilities = None;
-    if !include.history {
-        result.resources.history = None;
-        result.history_has_earlier = None;
-    } else if let Some(history) = result.resources.history.as_mut() {
-        for item in history {
-            let view = gate_file_diff(item.event_type.as_str(), &item.view, negotiate_file_diff)
-                .unwrap_or_else(|| item.view.clone());
-            let view = gate_typed_media(&view, typed_media).unwrap_or(view);
-            item.view = view;
-            if !negotiate_acp {
-                item.acp = None;
-            }
-        }
-    }
-    Ok(result)
+    let wire_session_id = Uuid::parse(session.as_str())
+        .map_err(|_| SessionReadFault::Schema("sessionId is not a uuid"))?;
+    let messages = if include.messages {
+        Some(
+            page.messages
+                .iter()
+                .map(|record| Message::from_record(record, request.typed_media))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(SessionReadFault::Internal("a message cannot be projected"))?
+                .iter()
+                .map(|message| message.to_wire(&wire_session_id))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(SessionReadFault::Internal("a message cannot be projected"))?,
+        )
+    } else {
+        None
+    };
+    let history = if include.history {
+        Some(
+            page.history
+                .iter()
+                .map(|record| {
+                    wire_remote_history_item(
+                        record,
+                        request.negotiate_acp,
+                        request.negotiate_file_diff,
+                        request.typed_media,
+                    )
+                })
+                .collect::<Option<Vec<_>>>()
+                .ok_or(SessionReadFault::Internal(
+                    "a history entry cannot be projected",
+                ))?,
+        )
+    } else {
+        None
+    };
+    let coverage = page
+        .coverage
+        .iter()
+        .map(|entry| {
+            Some(sync_protocol::common::MessageCoverage {
+                message_id: Uuid::parse(entry.message_id.as_str()).ok()?,
+                through: wire_origin_cursor(&entry.through)?,
+                last_delta_index: match entry.last_delta_index {
+                    Some(index) => Nullable::value(decimal(&index.to_string())?),
+                    None => Nullable::null(),
+                },
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(SessionReadFault::Internal(
+            "a message coverage entry cannot be projected",
+        ))?;
+    let summary = crate::sync::command::query::wire_session(&page.summary, request.catalog).ok_or(
+        SessionReadFault::Internal("the remote session summary cannot be projected"),
+    )?;
+    let read_cursor = wire_origin_cursor(&page.read_cursor)
+        .ok_or(SessionReadFault::Internal("the read cursor is invalid"))?;
+    Ok(sync_protocol::command::SessionReadResult {
+        session_id: wire_session_id,
+        resources: sync_protocol::command::SessionReadResources {
+            messages,
+            turns: None,
+            pending_interactions: None,
+            config_options: None,
+            capabilities: None,
+            history,
+        },
+        has_earlier: page.messages_has_earlier,
+        history_has_earlier: include.history.then_some(page.history_has_earlier),
+        read_cursor: Some(read_cursor),
+        session_summary: Some(summary),
+        message_coverage: Some(coverage),
+    })
+}
+
+/// core 的来源游标 → wire `originCursor`（十进制序号）。
+pub(crate) fn wire_origin_cursor(
+    cursor: &acp_core::model::OriginCursor,
+) -> Option<sync_protocol::common::OriginCursor> {
+    Some(sync_protocol::common::OriginCursor {
+        origin_epoch: Uuid::parse(cursor.origin_epoch.as_str()).ok()?,
+        origin_sequence: decimal(&cursor.origin_sequence.get().to_string())?,
+    })
+}
+
+/// 一条远程历史条目 → wire `snapshotItem.history`：`sessionSequence` 取 Owner 的来源会话内序号，
+/// 其余门控与 owned 路径逐条相同。
+fn wire_remote_history_item(
+    record: &RemoteHistoryRecord,
+    negotiate_acp: bool,
+    negotiate_file_diff: bool,
+    negotiate_typed_media: bool,
+) -> Option<SnapshotItemHistory> {
+    let view = RawObject::parse(record.payload.view.as_str()).ok()?;
+    let view =
+        gate_file_diff(record.event_type.as_str(), &view, negotiate_file_diff).unwrap_or(view);
+    let view = gate_typed_media(&view, negotiate_typed_media).unwrap_or(view);
+    Some(SnapshotItemHistory {
+        event_id: Uuid::parse(record.origin.origin_event_id.as_str()).ok()?,
+        event_type: EventType::parse(record.event_type.as_str()).ok()?,
+        session_sequence: decimal(&record.origin_sequence.get().to_string())?,
+        created_at: Timestamp::parse(record.created_at.as_str()).ok()?,
+        view,
+        acp: if negotiate_acp {
+            wire_raw_acp(record.payload.acp.as_ref())?
+        } else {
+            None
+        },
+    })
 }
 
 /// 十进制串（序号/版本/长度在 wire 上的形状）。
@@ -1292,134 +1505,4 @@ fn scan_value(bytes: &[u8], start: usize) -> Option<usize> {
         }
     }
     if depth == 0 { Some(cursor) } else { None }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use acp_core::model::JsonValueText;
-
-    const SESSION: &str = "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5";
-
-    /// Access 侧 imported 结果只做本地 feature 门控：未协商 typed-media 时消息的 `channel`/`partial`
-    /// 与 `audio_ref` 必须消失；请求未包含的资源必须清空；其余字段逐字保留。
-    #[test]
-    fn imported_read_is_gated_to_the_local_negotiation() {
-        let document = format!(
-            r#"{{"sessionId":"{SESSION}","resources":{{"messages":[{{"messageId":"5d5ebeeb-eea9-453f-9e66-363c86cbd83e","sessionId":"{SESSION}","role":"agent","content":[{{"type":"text","text":"hi"}},{{"type":"audio_ref","mimeType":"audio/wav","byteLength":"3","displayState":"available"}}],"status":"completed","createdAt":"2026-01-01T00:00:00.000Z","turnId":null,"channel":"reply","partial":{{"state":"completed","reason":null}}}}],"pending_interactions":[],"config_options":[]}},"hasEarlier":false,"historyHasEarlier":false}}"#
-        );
-        let include = HistoryInclude {
-            messages: true,
-            ..HistoryInclude::default()
-        };
-        let result = project_imported_read(
-            ImportedRead {
-                document: JsonValueText::new(&document).expect("json"),
-            },
-            &SessionId::new(SESSION).expect("session"),
-            include,
-            false,
-            false,
-            true,
-        )
-        .expect("projection");
-        let resources = result.resources;
-        let messages = resources.messages.expect("messages");
-        assert_eq!(messages[0].channel, None);
-        assert_eq!(messages[0].partial, None);
-        assert_eq!(
-            messages[0].content.len(),
-            1,
-            "未协商 typed-media 时媒体块应被移除"
-        );
-        assert!(matches!(
-            messages[0].content[0],
-            AgentContentBlock::Text { .. }
-        ));
-        assert!(resources.pending_interactions.is_none());
-        assert!(resources.config_options.is_none());
-        assert!(resources.history.is_none());
-        assert_eq!(result.history_has_earlier, None);
-    }
-
-    #[test]
-    fn imported_read_rejects_a_result_for_another_session() {
-        let document = r#"{"sessionId":"00000000-0000-4000-8000-000000000001","resources":{},"hasEarlier":false}"#;
-        let error = project_imported_read(
-            ImportedRead {
-                document: JsonValueText::new(document).expect("json"),
-            },
-            &SessionId::new(SESSION).expect("session"),
-            HistoryInclude::default(),
-            true,
-            true,
-            true,
-        );
-        assert!(error.is_err());
-    }
-
-    /// 本机没有该会话（`NotFound`）时，imported 回源的 `OwnerOffline` 必须原样上抛给
-    /// `SessionReadFault::Port`，由协议适配器映射成 `resource.remote_unavailable`；不能被误当成
-    /// `session.not_found`，也不能吞成空页。
-    struct OfflineImported;
-
-    #[async_trait]
-    impl SessionReadSource for OfflineImported {
-        async fn read_session(
-            &self,
-            _actor: &Actor,
-            _query: HistoryQuery,
-        ) -> Result<HistoryPage, PortError> {
-            Err(PortError::NotFound(acp_core::model::EntityRef::Session(
-                SessionId::new(SESSION).expect("session"),
-            )))
-        }
-
-        async fn effective_interactions(
-            &self,
-            _actor: &Actor,
-            _reference: &acp_core::model::SessionReference,
-        ) -> Result<Vec<CoreEffectiveInteraction>, PortError> {
-            Ok(Vec::new())
-        }
-
-        async fn read_imported(
-            &self,
-            _actor: &Actor,
-            _session: &SessionId,
-            _query: ImportedReadQuery,
-        ) -> Result<Option<ImportedRead>, PortError> {
-            Err(PortError::Unavailable(
-                acp_core::model::UnavailableKind::OwnerOffline,
-            ))
-        }
-    }
-
-    #[tokio::test]
-    async fn imported_owner_offline_is_forwarded_without_becoming_not_found() {
-        let session = SessionId::new(SESSION).expect("session");
-        let request = SessionReadRequest {
-            session,
-            include: HistoryInclude {
-                messages: true,
-                ..HistoryInclude::default()
-            },
-            before_history: None,
-            before_messages: None,
-            page_limit: DEFAULT_PAGE_MESSAGES,
-            typed_media: false,
-            negotiate_acp: false,
-            negotiate_file_diff: false,
-        };
-        let actor = Actor::LocalCli;
-        let error = read_session(&OfflineImported, &actor, request)
-            .await
-            .expect_err("Owner 离线时不能返回页面");
-        match error {
-            SessionReadFault::Port(PortError::Unavailable(
-                acp_core::model::UnavailableKind::OwnerOffline,
-            )) => {}
-            other => panic!("expected OwnerOffline port error, got {other:?}"),
-        }
-    }
 }

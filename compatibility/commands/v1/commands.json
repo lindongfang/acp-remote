@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-10-19",
+  "revision": "2026-10-21",
   "commands": [
     { "name": "session.list", "kind": "query", "scope": "session.list", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "session.read", "kind": "query", "scope": "session.read", "transport": ["sync", "node_link"], "delivery": "mvp" },

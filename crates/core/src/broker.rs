@@ -15,9 +15,9 @@
 //! # 顺序（§6.1/§6.2，不可交换）
 //!
 //! - owned：`EventSink` → 组装 [`OwnedCommit`] → `SessionStore::commit` → `EventPublisher::publish`。
-//! - imported：组装 [`DeliveryReceipt`] → `RemoteDeliveryStore::commit_receipt` → 发布（正文只在内存）。
 //!
-//! 两条路径都只在写成功之后才发布；`commit` 返回 `Unavailable` 时的事件一律不发布（§6.9）。
+//! 只在写成功之后才发布；`commit` 返回 `Unavailable` 时的事件一律不发布（§6.9）。远程来源事件不进入
+//! 本机事件日志，也不经过本 broker（Access 只在运行期转发，见 `design.md` D2/D3）。
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -33,27 +33,26 @@ use crate::derive::{
 use crate::model::{
     AcpRaw, Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand, CommandKind,
     CommandPayload, CommandReceipt, CommandRecord, CommandResult, CommandStatus,
-    CommandTerminalRecord, CommittedDelivery, CommittedEvent, ConfigOptionId, ConfigValue,
-    ConflictKind, CreateSessionRequest, Digest, EffectiveInteraction, ElicitationAction,
-    ElicitationValues, EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType,
-    GlobalCursor, InteractionId, InteractionKind, InteractionResolution, LocalCursor, MemberValue,
-    MessageId, ModeId, ModeRef, OriginEpoch, OriginEventRef, OwnedSessionRef, PendingEvent,
-    PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
-    PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
-    ResourceOrigin, ResumeSessionRequest, Sequence, SessionActivity, SessionId,
-    SessionRecoveryRecord, SessionReference, SessionState, SessionSummary, StoredPolicy, Timestamp,
-    TurnId, TurnState, UnavailableKind, Version, ViewJson, WorkspaceRef,
-    decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
-    object_members as json_members, top_level_member,
+    CommandTerminalRecord, CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind,
+    CreateSessionRequest, Digest, EffectiveInteraction, ElicitationAction, ElicitationValues,
+    EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType, GlobalCursor,
+    InteractionId, InteractionKind, InteractionResolution, MemberValue, MessageId, ModeId, ModeRef,
+    OriginEpoch, OwnedSessionRef, PendingEvent, PendingInteraction, PermissionDecision,
+    PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock, PromptRequest,
+    PublicError, RequestId, Resolution, ResourceOrigin, ResumeSessionRequest, Sequence,
+    SessionActivity, SessionId, SessionRecoveryRecord, SessionReference, SessionState,
+    SessionSummary, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
+    WorkspaceRef, decode_json_string as json_string, encode_json_string as json_text,
+    insert_string_member_front, object_members as json_members, top_level_member,
 };
 use crate::ports::{
-    AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
-    EventSink, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord,
-    InteractionAuthority, InteractionResolved, ModeChange, NewTurn, OwnedCommit,
-    PendingInteractionWrite, PreparedSessionCreate, ReadView, ReceiptOutcome, RemoteDeliveryStore,
-    ReplayBatch, ReplayLimit, SessionActivityFacts, SessionBackendFactory, SessionCreateAdmission,
-    SessionEndpoint, SessionQuery, SessionStore, SessionUpdate, SettledSession, StateChange,
-    SubmissionBinding, TrustStore, TurnChange, TurnUpdate,
+    AuditStore, Clock, CommitOutcome, EventPublisher, EventSink, HistoryInclude, HistoryPage,
+    HistoryQuery, IdGenerator, IdempotencyRecord, InteractionAuthority, InteractionResolved,
+    ModeChange, NewTurn, OriginReadPage, OwnedCommit, PendingInteractionWrite,
+    PreparedSessionCreate, ReadView, ReplayBatch, ReplayLimit, SessionActivityFacts,
+    SessionBackendFactory, SessionCreateAdmission, SessionEndpoint, SessionQuery, SessionStore,
+    SessionUpdate, SettledSession, StateChange, SubmissionBinding, TrustStore, TurnChange,
+    TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -258,7 +257,6 @@ impl Default for BrokerConfig {
 /// broker 的全部出站依赖。
 pub struct BrokerDeps {
     pub store: Arc<dyn SessionStore>,
-    pub deliveries: Arc<dyn RemoteDeliveryStore>,
     pub backends: Arc<dyn SessionBackendFactory>,
     /// 节点信任记录：Node Link 准入需要「该 Access 信任行已配对且未撤销」的持久事实。
     pub trust: Arc<dyn TrustStore>,
@@ -468,7 +466,7 @@ struct HeldTurn {
     rounds: u32,
 }
 
-/// 一个会话的运行时状态（owned 与 imported 各一份，键见 [`Broker::slot_key`]）。
+/// 一个会话的运行时状态（owned 与远程各一份，键见 [`Broker::slot_key`]）。
 struct Slot {
     /// §6.3 的每会话串行门：命令处理、事件落盘与派发都在它内部完成。
     gate: Gate,
@@ -733,7 +731,7 @@ impl Broker {
         self.deps.clock.now()
     }
 
-    /// 会话槽位键。用文本键而不是 `HashMap<SessionId, _>`，是为了让 owned 与 imported 的同一
+    /// 会话槽位键。用文本键而不是 `HashMap<SessionId, _>`，是为了让 owned 与远程来源的同一
     /// `SessionId` 不共享串行队列（来自不同 Owner 的同一 id 不是同一个会话，`NODE_LINK_PROTOCOL.md` §7）。
     fn slot_key(reference: &SessionReference) -> String {
         match reference {
@@ -2819,6 +2817,19 @@ impl Broker {
         self.deps.store.read_view().await?.read_session(query).await
     }
 
+    /// 带来源位置的会话读（`design.md` D4）：页、R 与逐消息覆盖来自同一只读视图/事务。
+    pub async fn read_session_origin(
+        &self,
+        query: HistoryQuery,
+    ) -> Result<OriginReadPage, PortError> {
+        self.deps
+            .store
+            .read_view()
+            .await?
+            .read_session_origin(query)
+            .await
+    }
+
     pub async fn retention_window(
         &self,
         session: &SessionId,
@@ -2832,62 +2843,6 @@ impl Broker {
         request: &RequestId,
     ) -> Result<Option<CommandRecord>, PortError> {
         self.deps.store.find_request(request, actor).await
-    }
-
-    /// imported 会话的本地重放（只含无正文索引，`NODE_LINK_PROTOCOL.md` §6）。
-    pub async fn remote_replay(
-        &self,
-        after: Option<LocalCursor>,
-        limit: ReplayLimit,
-    ) -> Result<Vec<DeliveryIndexEntry>, PortError> {
-        self.deps.deliveries.local_replay(after, limit).await
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // imported 提交与发布（§6.2）
-    // -----------------------------------------------------------------------------------------
-
-    /// 一条 imported 事件：先 `commit_receipt`（无正文索引），成功后才发布；正文只在内存里转发。
-    ///
-    /// 返回 `true` 表示本次是新行（已发布），`false` 表示同一 `origin_event_id` 的重复投递
-    /// （不新增 `local_sequence`，也不重复发布）。
-    pub async fn deliver_imported(
-        &self,
-        session: RemoteSessionRef,
-        origin: OriginEventRef,
-        origin_sequence: Sequence,
-        event_type: EventType,
-        payload_digest: Digest,
-        payload: Option<EventPayload>,
-    ) -> Result<bool, PortError> {
-        let reference = SessionReference::Remote(session.clone());
-        let slot = self.slot(&reference);
-        let _guard = slot.gate.guard().await;
-        let at = self.now();
-        let receipt = DeliveryReceipt {
-            session: session.clone(),
-            origin: origin.clone(),
-            origin_sequence,
-            event_type: event_type.clone(),
-            payload_digest: payload_digest.clone(),
-            at: at.clone(),
-        };
-        let outcome: ReceiptOutcome = self.deps.deliveries.commit_receipt(receipt).await?;
-        if outcome.duplicate {
-            return Ok(false);
-        }
-        self.deps.publisher.publish(CommittedDelivery::Imported {
-            session,
-            origin,
-            origin_sequence,
-            local_sequence: outcome.local_sequence,
-            event_type,
-            payload_digest,
-            // 与 `DeliveryReceipt.at` 是同一次取值的两个投影（见该字段的口径注释）。
-            created_at: at,
-            payload,
-        });
-        Ok(true)
     }
 
     // -----------------------------------------------------------------------------------------
@@ -4628,9 +4583,7 @@ impl Broker {
 
     fn publish(&self, events: &[CommittedEvent]) {
         for event in events {
-            self.deps
-                .publisher
-                .publish(CommittedDelivery::Owned(event.clone()));
+            self.deps.publisher.publish(event.clone());
         }
     }
 
@@ -5608,13 +5561,12 @@ pub(crate) mod test_support {
         SessionSummary, Turn, WorkspaceRef,
     };
     use crate::ports::{
-        AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
-        DeviceWrite, ExpiryWrite, IdempotentReplay, ImportedSessionQuery, ImportedSessionRecord,
-        LocalConfigStore, NodeConnectedWrite, NodeLinkSlice, NodeRevocation, NodeWrite,
-        OwnedEventRecord, PairingClaimOutcome, PairingClaimWrite, PairingConsumption,
-        PairingSettlementWrite, PairingWrite, PendingInteractionOrigin, PruneReport,
-        RemoteCommandRef, RetentionPolicy, SessionQuery, StoreHealth, SyncEventRecord,
-        SyncReplaySlice, TrustRecordRef, TrustStore, TurnAccepted,
+        AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation, DeviceWrite,
+        ExpiryWrite, IdempotentReplay, LocalConfigStore, NodeConnectedWrite, NodeLinkSlice,
+        NodeRevocation, NodeWrite, OwnedEventRecord, PairingClaimOutcome, PairingClaimWrite,
+        PairingConsumption, PairingSettlementWrite, PairingWrite, PendingInteractionOrigin,
+        PruneReport, RetentionPolicy, SessionQuery, StoreHealth, SyncEventRecord, SyncReplaySlice,
+        TrustRecordRef, TrustStore, TurnAccepted,
     };
 
     pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -5735,7 +5687,6 @@ pub(crate) mod test_support {
         pub(crate) prompts: AtomicUsize,
         pub(crate) prompt_trace: Mutex<Vec<String>>,
         pub(crate) published: Mutex<Vec<Published>>,
-        pub(crate) receipts: Mutex<Vec<DeliveryReceipt>>,
         pub(crate) script: Mutex<VecDeque<Script>>,
         pub(crate) audits: Mutex<Vec<AuditRecord>>,
         pub(crate) batches: Mutex<Vec<BatchRecord>>,
@@ -5748,8 +5699,6 @@ pub(crate) mod test_support {
         pub(crate) workspaces: Mutex<Vec<DirectoryRecord>>,
         /// 管理写集实际携带的审计动作（断言「审计随写集提交」而不是事后补写）。
         pub(crate) write_audits: Mutex<Vec<AuditAction>>,
-        pub(crate) imported_sessions: Mutex<Vec<ImportedSessionRecord>>,
-        pub(crate) acked: Mutex<Vec<OriginCursor>>,
         pub(crate) attachments: Mutex<Vec<AttachmentRef>>,
         /// 配对行：`settle_pairing` 的目标族由它读出（§11.6 第 2 条）。
         pub(crate) pairings: Mutex<Vec<PairingRecord>>,
@@ -5931,7 +5880,7 @@ pub(crate) mod test_support {
 
     /// 一次发布：`store_had_it` 断言「先提交后发布」（§6.1/§6.2）。
     pub(crate) struct Published {
-        pub(crate) delivery: CommittedDelivery,
+        pub(crate) event: CommittedEvent,
         pub(crate) store_had_it: bool,
     }
 
@@ -6013,10 +5962,10 @@ pub(crate) mod test_support {
             lock(&self.published).len()
         }
 
-        pub(crate) fn published(&self) -> Vec<CommittedDelivery> {
+        pub(crate) fn published(&self) -> Vec<CommittedEvent> {
             lock(&self.published)
                 .iter()
-                .map(|item| item.delivery.clone())
+                .map(|item| item.event.clone())
                 .collect()
         }
 
@@ -6085,10 +6034,6 @@ pub(crate) mod test_support {
                 })
                 .cloned()
                 .collect()
-        }
-
-        pub(crate) fn receipts(&self) -> Vec<DeliveryReceipt> {
-            lock(&self.receipts).clone()
         }
 
         pub(crate) fn audits(&self) -> Vec<AuditRecord> {
@@ -6272,18 +6217,13 @@ pub(crate) mod test_support {
     }
 
     impl EventPublisher for TestPublisher {
-        fn publish(&self, delivery: CommittedDelivery) {
-            let store_had_it = match &delivery {
-                CommittedDelivery::Owned(event) => lock(&self.world.state)
-                    .events
-                    .iter()
-                    .any(|stored| stored.id == event.id),
-                CommittedDelivery::Imported { origin, .. } => lock(&self.world.receipts)
-                    .iter()
-                    .any(|receipt| receipt.origin.origin_event_id == origin.origin_event_id),
-            };
+        fn publish(&self, event: CommittedEvent) {
+            let store_had_it = lock(&self.world.state)
+                .events
+                .iter()
+                .any(|stored| stored.id == event.id);
             lock(&self.world.published).push(Published {
-                delivery,
+                event,
                 store_had_it,
             });
         }
@@ -7208,7 +7148,6 @@ pub(crate) mod test_support {
                 read_only: false,
                 user_version: 1,
                 owned_schema_version: 1,
-                imported_schema_version: 1,
                 server_epoch: server_epoch_of(999),
             })
         }
@@ -7235,19 +7174,16 @@ pub(crate) mod test_support {
                 .map(|cursor| cursor.global_sequence.get())
                 .unwrap_or(0);
             let head = head_cursor(state.head);
-            let events: Vec<CommittedDelivery> = state
+            let events: Vec<CommittedEvent> = state
                 .events
                 .iter()
                 .filter(|event| event.global_sequence.get() > from)
                 .take(limit.events() as usize)
-                .map(|event| CommittedDelivery::Owned(event.clone()))
+                .cloned()
                 .collect();
-            let next = events.last().map(|delivery| match delivery {
-                CommittedDelivery::Owned(event) => head_cursor(event.global_sequence.get()),
-                CommittedDelivery::Imported { local_sequence, .. } => {
-                    head_cursor(local_sequence.get())
-                }
-            });
+            let next = events
+                .last()
+                .map(|event| head_cursor(event.global_sequence.get()));
             Ok(ReplayBatch {
                 events,
                 head,
@@ -7441,6 +7377,13 @@ pub(crate) mod test_support {
             Ok(SyncReplaySlice { events, head })
         }
 
+        async fn read_session_origin(
+            &self,
+            _query: HistoryQuery,
+        ) -> Result<OriginReadPage, PortError> {
+            Err(PortError::Unavailable(UnavailableKind::BackendUnsupported))
+        }
+
         async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError> {
             let state = lock(&self.world.state);
             let Some(session) = state.sessions.get(query.session.as_str()) else {
@@ -7541,129 +7484,6 @@ pub(crate) mod test_support {
                 head: head_cursor(state.head),
                 next: None,
             })
-        }
-    }
-
-    pub(crate) struct FakeDeliveries {
-        pub(crate) world: Arc<FakeWorld>,
-    }
-
-    #[async_trait]
-    impl RemoteDeliveryStore for FakeDeliveries {
-        async fn commit_receipt(
-            &self,
-            receipt: DeliveryReceipt,
-        ) -> Result<ReceiptOutcome, PortError> {
-            let mut receipts = lock(&self.world.receipts);
-            if let Some(index) = receipts
-                .iter()
-                .position(|stored| stored.origin.origin_event_id == receipt.origin.origin_event_id)
-            {
-                return Ok(ReceiptOutcome {
-                    local_sequence: LocalCursor::new(index as u64 + 1),
-                    duplicate: true,
-                });
-            }
-            receipts.push(receipt);
-            Ok(ReceiptOutcome {
-                local_sequence: LocalCursor::new(receipts.len() as u64),
-                duplicate: false,
-            })
-        }
-
-        async fn local_replay(
-            &self,
-            after: Option<LocalCursor>,
-            limit: ReplayLimit,
-        ) -> Result<Vec<DeliveryIndexEntry>, PortError> {
-            let from = after.map(|cursor| cursor.get()).unwrap_or(0);
-            Ok(lock(&self.world.receipts)
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| (*index as u64 + 1) > from)
-                .take(limit.events() as usize)
-                .map(|(index, receipt)| DeliveryIndexEntry {
-                    session: receipt.session.clone(),
-                    origin: receipt.origin.clone(),
-                    origin_sequence: receipt.origin_sequence,
-                    local_sequence: LocalCursor::new(index as u64 + 1),
-                    event_type: receipt.event_type.clone(),
-                    payload_digest: receipt.payload_digest.clone(),
-                    received_at: receipt.at.clone(),
-                })
-                .collect())
-        }
-
-        async fn ack(
-            &self,
-            _session: &RemoteSessionRef,
-            cursor: OriginCursor,
-            _at: Timestamp,
-        ) -> Result<AckOutcome, PortError> {
-            let mut acked = lock(&self.world.acked);
-            let known = acked.last().cloned();
-            let applied = known
-                .as_ref()
-                .map(|previous| cursor.origin_sequence > previous.origin_sequence)
-                .unwrap_or(true);
-            if applied {
-                acked.push(cursor.clone());
-            }
-            Ok(AckOutcome {
-                applied,
-                cursor: known.or(Some(cursor)),
-            })
-        }
-
-        async fn load_ack(
-            &self,
-            _session: &RemoteSessionRef,
-        ) -> Result<Option<OriginCursor>, PortError> {
-            Ok(lock(&self.world.acked).last().cloned())
-        }
-
-        async fn upsert_session(
-            &self,
-            record: ImportedSessionRecord,
-            _at: Timestamp,
-        ) -> Result<(), PortError> {
-            let mut sessions = lock(&self.world.imported_sessions);
-            sessions.retain(|stored| stored.session != record.session);
-            sessions.push(record);
-            Ok(())
-        }
-
-        async fn list_sessions(
-            &self,
-            _query: ImportedSessionQuery,
-        ) -> Result<Vec<ImportedSessionRecord>, PortError> {
-            Ok(lock(&self.world.imported_sessions).clone())
-        }
-
-        async fn find_imported_session(
-            &self,
-            session: &SessionId,
-        ) -> Result<Option<ImportedSessionRecord>, PortError> {
-            Ok(lock(&self.world.imported_sessions)
-                .iter()
-                .find(|record| &record.session.session_id == session)
-                .cloned())
-        }
-
-        async fn find_remote_request(
-            &self,
-            _session: &RemoteSessionRef,
-            _request: &RequestId,
-        ) -> Result<Option<RemoteCommandRef>, PortError> {
-            Ok(None)
-        }
-
-        async fn prune(
-            &self,
-            _policy: RetentionPolicy,
-            _at: Timestamp,
-        ) -> Result<PruneReport, PortError> {
-            Ok(PruneReport::default())
         }
     }
 
@@ -8233,9 +8053,6 @@ pub(crate) mod test_support {
             let mut broker = Broker::new(
                 BrokerDeps {
                     store: store.clone(),
-                    deliveries: Arc::new(FakeDeliveries {
-                        world: world.clone(),
-                    }),
                     backends: Arc::new(FakeBackend {
                         world: world.clone(),
                     }),
@@ -8425,78 +8242,6 @@ mod tests {
         let record = harness.world.command(&harness.request(1)).expect("幂等行");
         assert_eq!(record.status(), CommandStatus::Completed);
         assert!(record.terminal_event().is_some(), "终态事件由存储层回填");
-    }
-
-    /// §6.2：imported 先 `commit_receipt` 再发布，且正文只在内存。
-    #[test]
-    fn imported_receipt_commits_before_publish_and_body_stays_in_memory() {
-        let harness = Harness::new(BrokerConfig::default());
-        let remote = RemoteSessionRef::new(
-            NodeId::new(&uuid_text(11)).expect("node"),
-            SessionId::new(&uuid_text(12)).expect("session"),
-        );
-        let origin = OriginEventRef::new(
-            NodeId::new(&uuid_text(11)).expect("node"),
-            origin_epoch_of(20),
-            EventId::new(&uuid_text(21)).expect("event"),
-        );
-        let event_type = EventType::new("agent.message.delta").expect("event type");
-        let payload = EventPayload {
-            view: json_view(r#"{"text":"secret"}"#),
-            acp: None,
-        };
-
-        let first = block_on(harness.broker.deliver_imported(
-            remote.clone(),
-            origin.clone(),
-            Sequence::new(1).expect("sequence"),
-            event_type.clone(),
-            digest('A'),
-            Some(payload.clone()),
-        ))
-        .expect("deliver");
-        assert!(first, "首次投递是新行");
-        assert_eq!(harness.world.publish_count(), 1);
-        assert!(
-            harness.world.published_after_commit(),
-            "commit_receipt 必须先于广播"
-        );
-
-        let again = block_on(harness.broker.deliver_imported(
-            remote.clone(),
-            origin,
-            Sequence::new(1).expect("sequence"),
-            event_type,
-            digest('A'),
-            Some(payload),
-        ))
-        .expect("deliver");
-        assert!(
-            !again,
-            "同一 origin_event_id 重发不新增 local_sequence、不重复发布"
-        );
-        assert_eq!(harness.world.publish_count(), 1);
-
-        // 落盘的是无正文索引：receipt 里没有 view，正文只出现在内存投递里。
-        let receipts = harness.world.receipts();
-        assert_eq!(receipts.len(), 1);
-        assert_eq!(receipts[0].payload_digest, digest('A'));
-        match &harness.world.published()[0] {
-            CommittedDelivery::Imported {
-                payload, session, ..
-            } => {
-                assert!(payload.is_some(), "正文只在内存投递");
-                assert_eq!(session, &remote);
-            }
-            CommittedDelivery::Owned(_) => panic!("imported 投递不得表达成 owned"),
-        }
-        let local =
-            block_on(harness.broker.remote_replay(None, ReplayLimit::default())).expect("replay");
-        assert_eq!(local.len(), 1);
-        assert_eq!(
-            local[0].origin.origin_event_id,
-            EventId::new(&uuid_text(21)).expect("event")
-        );
     }
 
     /// §6.3：同一会话的提交不交错；不同会话可并行（这里断言前者）。
@@ -8780,11 +8525,9 @@ mod tests {
             .world
             .published()
             .into_iter()
-            .filter_map(|delivery| match delivery {
-                CommittedDelivery::Owned(event) if event.session.as_ref() == Some(session) => {
-                    Some(event.event_type.as_str().to_owned())
-                }
-                _ => None,
+            .filter_map(|event| {
+                (event.session.as_ref() == Some(session))
+                    .then(|| event.event_type.as_str().to_owned())
             })
             .collect()
     }
@@ -8915,13 +8658,9 @@ mod tests {
             .world
             .published()
             .into_iter()
-            .filter_map(|delivery| match delivery {
-                CommittedDelivery::Owned(event)
-                    if event.session.as_ref() == Some(&prepared.session) =>
-                {
-                    Some(event.id.as_str().to_owned())
-                }
-                _ => None,
+            .filter_map(|event| {
+                (event.session.as_ref() == Some(&prepared.session))
+                    .then(|| event.id.as_str().to_owned())
             })
             .filter(|id| stored_ids.contains(id))
             .collect();
@@ -9729,10 +9468,7 @@ mod tests {
             .world
             .published()
             .into_iter()
-            .map(|delivery| match delivery {
-                CommittedDelivery::Owned(event) => event.id.as_str().to_owned(),
-                CommittedDelivery::Imported { event_type, .. } => event_type.as_str().to_owned(),
-            })
+            .map(|event| event.id.as_str().to_owned())
             .collect()
     }
 
@@ -10597,9 +10333,6 @@ mod tests {
         let broker = Arc::new(Broker::new(
             BrokerDeps {
                 store: store.clone(),
-                deliveries: Arc::new(FakeDeliveries {
-                    world: world.clone(),
-                }),
                 backends: Arc::new(FakeBackend {
                     world: world.clone(),
                 }),
@@ -10638,9 +10371,6 @@ mod tests {
         let use_cases = crate::use_cases::UseCases::new(crate::use_cases::UseCaseDeps {
             broker: broker.clone(),
             store,
-            deliveries: Arc::new(FakeDeliveries {
-                world: world.clone(),
-            }),
             trust: Arc::new(FakeTrust {
                 world: world.clone(),
             }),
@@ -11534,61 +11264,6 @@ mod tests {
             );
         }
     }
-    /// R4/R11：imported 路径保留 Owner 给出的 view 字节（不注入、不重写、不伪造）。
-    #[test]
-    fn imported_deliveries_keep_the_owner_view_bytes() {
-        let harness = Harness::new(BrokerConfig::default());
-        let remote = RemoteSessionRef::new(
-            NodeId::new(&uuid_text(11)).expect("node"),
-            SessionId::new(&uuid_text(12)).expect("session"),
-        );
-        let event_type = EventType::new("agent.message.delta").expect("event type");
-        // Owner 已注入 turnId / version：本端必须逐字节转发（payloadDigest 覆盖这些字节）。
-        let owner_view = r#"{"turnId":"11111111-2222-3333-4444-555555555555","messageId":"m1","deltaIndex":"0","text":"hi","version":"7"}"#;
-        for (index, view) in [(1_u64, owner_view), (2, r#"{"text":"no identity"}"#)].iter() {
-            let origin = OriginEventRef::new(
-                NodeId::new(&uuid_text(11)).expect("node"),
-                origin_epoch_of(20),
-                EventId::new(&uuid_text(30 + index)).expect("event"),
-            );
-            let delivered = block_on(harness.broker.deliver_imported(
-                remote.clone(),
-                origin,
-                Sequence::new(*index).expect("sequence"),
-                event_type.clone(),
-                digest('B'),
-                Some(EventPayload {
-                    view: json_view(view),
-                    acp: None,
-                }),
-            ))
-            .expect("deliver");
-            assert!(delivered, "首次投递是新行");
-        }
-        let published = harness.world.published();
-        let views: Vec<&str> = published
-            .iter()
-            .filter_map(|delivery| match delivery {
-                CommittedDelivery::Imported { payload, .. } => {
-                    payload.as_ref().map(|payload| payload.view.as_str())
-                }
-                CommittedDelivery::Owned(_) => None,
-            })
-            .collect();
-        assert_eq!(
-            views,
-            vec![owner_view, r#"{"text":"no identity"}"#],
-            "imported 正文必须原样转发：不注入、不重写、不补齐"
-        );
-        // 无正文索引只保存调用方给出的摘要（重写 view 会让摘要与正文不再一致）。
-        let receipts = harness.world.receipts();
-        assert_eq!(receipts.len(), 2);
-        assert!(
-            receipts
-                .iter()
-                .all(|receipt| receipt.payload_digest == digest('B'))
-        );
-    }
     /// D4 的降级：turn 终结后晚到的 §10.3 类型事件没有权威归属 → 不注入、不伪造（登记边界）。
     #[test]
     fn a_late_delta_after_turn_end_is_persisted_without_attribution() {
@@ -12026,14 +11701,8 @@ mod tests {
         let node_event = batch
             .events
             .iter()
-            .find_map(|delivery| match delivery {
-                CommittedDelivery::Owned(event)
-                    if event.event_type.as_str() == "agent.connected" =>
-                {
-                    Some(event.clone())
-                }
-                _ => None,
-            })
+            .find(|event| event.event_type.as_str() == "agent.connected")
+            .cloned()
             .expect("节点级事件进入 replay 流");
         assert!(node_event.session.is_none(), "R8：会话标识必须为空");
         assert!(node_event.session_sequence.is_none());

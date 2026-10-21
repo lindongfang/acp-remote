@@ -993,6 +993,11 @@ async fn git_status_merges_staged_and_worktree_and_respects_root() {
         find("staged-then-modified.txt").status(),
         GitFileStatus::Modified
     );
+    assert_eq!(find("staged-then-modified.txt").line_counts(), Some((1, 1)));
+    assert_eq!(find("added.txt").line_counts(), Some((1, 0)));
+    assert_eq!(find("deleted.txt").line_counts(), Some((0, 1)));
+    assert_eq!(find("untracked.txt").line_counts(), Some((1, 0)));
+    assert_eq!(find("binary.dat").line_counts(), None);
     assert_eq!(find("added.txt").status(), GitFileStatus::Added);
     assert_eq!(find("deleted.txt").status(), GitFileStatus::Deleted);
     assert_eq!(find("untracked.txt").status(), GitFileStatus::Untracked);
@@ -1062,12 +1067,14 @@ async fn git_status_handles_empty_head_conflicts_and_subdirectories() {
     let entry = &page.entries()[0];
     assert_eq!(entry.path().as_str(), "new.txt");
     assert_eq!(entry.status(), GitFileStatus::Untracked);
+    assert_eq!(entry.line_counts(), Some((1, 0)));
     let diff = adapter
         .git_diff(&root, &file_path("new.txt"))
         .await
         .expect("diff");
     assert_eq!(diff.base(), GitDiffBase::Empty);
     assert_eq!(diff.kind(), GitDiffKind::Text);
+    assert_eq!(diff.comparison(), Some(("", "hi\n")));
     assert!(diff.lines().iter().any(|line| line == "+hi"));
 
     // 冲突：保留冲突标识，不伪造文本差异。
@@ -1171,6 +1178,7 @@ async fn git_diff_is_text_binary_and_bounded() {
         .git_diff(&root, &file_path("text.txt"))
         .await
         .expect("text diff");
+    assert_eq!(diff.comparison(), Some(("one\ntwo\n", "one\nchanged\n")));
     assert_eq!(diff.base(), GitDiffBase::Head);
     assert_eq!(diff.kind(), GitDiffKind::Text);
     assert!(diff.lines().iter().any(|line| line == "+changed"));

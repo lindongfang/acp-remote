@@ -204,6 +204,10 @@ pub enum UnavailableKind {
 | `AuditAction` | 闭合枚举：`PairingCreated｜PairingClaimed｜PairingApproved｜PairingRejected｜PairingExpired｜DeviceAuthenticated｜DeviceAuthFailed｜DeviceRevoked｜DeviceScopesChanged｜NodePaired｜NodeAuthenticated｜NodeAuthFailed｜NodeTrustRevoked｜NodeIdentityChanged｜ExportCreated｜ExportRevoked｜ImportAdded｜ImportRemoved｜ProviderConfigured｜AuthorizationDenied｜RateLimitTriggered｜StorageIntegrityFailed` | `SECURITY_DESIGN.md` §14.2 |
 | `AuditOutcome` | enum `Success｜Denied｜Failed` | 本合同 |
 
+`[决定]`（`access-owner-data-stateless` D1）`NodeId`/`DeviceId` 及其公钥、指纹、地址与信任/撤销决定属于
+**连接资料**；由它们派生出的 Owner 会话摘要、目录、来源游标、命令状态与结果引用**不是**连接资料，不得
+持久保存。运行期目录与在线回源的纯类型接口见 §5.9。
+
 ### 3.6 后端与能力
 
 | 类型 | 形状 | 出处 |
@@ -218,6 +222,11 @@ pub enum UnavailableKind {
 | `PromptRequest` | `{ content: Vec<PromptContentBlock> }`（形状见协议 crate 的 `promptContentBlock`） | `SYNC_PROTOCOL.md` §11.5 |
 | `EndpointEvent` | `{ kind: EventKind, event_type: EventType, payload: EventPayload, turn: Option<TurnId>, causation: Option<RequestId>, at: Timestamp }`（`SessionEndpoint` 的输出流元素） | 本合同 |
 
+`[决定]`（`access-owner-data-stateless` D2/D6）`SessionSummary` 的 `ResourceOrigin::Remote` 在 Access 侧
+**只**由运行期目录组装：`owner_node_id`/`origin_epoch` 来自当前已认证连接的 Owner 目录，`online` 是连接期
+事实而不是持久字段。运行期目录不可用、来源已断开/撤销时不得把该来源表达成空清单成功；来源状态通过
+连接期通知（`sync.remote_source_state`）与 `origin.online` 表达。端口形状见 §5.9。
+
 ### 3.7 本地配置与凭据值对象
 
 | 类型 | 形状 | 出处 |
@@ -230,6 +239,10 @@ pub enum UnavailableKind {
 | `ProviderRefKind` | enum `Provider｜Mcp` | 同左 |
 | `SeedState` | `{ seeded: bool, seeded_at: Option<Timestamp> }`；`seeded = false` 时启动流程才能导入种子，且该标记与种子 profile 同一事务提交（`LocalConfigStore::mark_seeded`，§5.3） | `CONFIG_REFERENCE.md`「配置与管理状态的权威」 |
 | `SecretValue` | 不透明凭据值（私有字段）：只经端口进出，**不实现** `Debug`/`Serialize`，不得落盘、进事件、进日志或进错误消息 | `IDENTITY_AND_AUTH_CONTRACT.md` §7 |
+
+`[决定]`（`access-owner-data-stateless` D1/D2）本节的值对象只承载本机配置与凭据：远程 Owner 的会话摘要、
+目录 revision/generation、来源游标与命令状态**不得**写进这些记录或任何本地配置表。它们的运行期形状见
+§5.9，生命期止于当前认证连接。
 
 ### 3.8 会话文件与 Git 只读视图
 
@@ -251,12 +264,12 @@ pub enum UnavailableKind {
 | `FileReadPurpose` | enum `Preview｜Download`（wire `preview/download`） | 同上 |
 | `SessionFileChunk` | `{ path, kind, size_bytes, version, offset, data: Vec<u8>, eof, preview_truncated }`；`data.len() ≤ 32 KiB` 且 `offset + data.len() ≤ size_bytes` | 同上 |
 | `GitFileStatus` | enum `Added｜Modified｜Deleted｜Renamed｜Untracked`（wire `added/modified/deleted/renamed/untracked`） | 同上 |
-| `GitStatusEntry` | `{ path, status, previous_path: Option<SessionFilePath>, conflicted: bool, binary: bool }`；`previous_path` 只允许与 `Renamed` 同时出现 | 同上 |
+| `GitStatusEntry` | `{ path, status, previous_path: Option<SessionFilePath>, conflicted: bool, binary: bool, line_counts: Option<(u32, u32)> }`；`previous_path` 只允许与 `Renamed` 同时出现；`line_counts` 为相对 HEAD 的（新增行数，删除行数），空基准按全量新增，二进制/冲突/无法完整统计时为 `None` | 同上 |
 | `GitStatusPage` | `{ git_state: GitState, entries: Vec<GitStatusEntry>(≤128), next: Option<SessionPageToken> }` | 同上 |
 | `GitDiffBase` | enum `Head｜Empty`（无 HEAD 时为空基准） | 同上 |
 | `GitDiffKind` | enum `Text｜Binary｜Conflict` | 同上 |
 | `GitDiffUnavailableReason` | enum `NotRepository｜GitUnavailable｜TooLarge` | 同上 |
-| `GitDiff` | `{ path, base, kind, lines: Vec<String>, unavailable: Option<GitDiffUnavailableReason>, truncated: bool }`；`lines ≤ 400` 行、合计 ≤64 KiB、单行 ≤4096 字符；`unavailable.is_some()` 时 `lines` 必须为空 | 同上 |
+| `GitDiff` | `{ path, base, kind, lines: Vec<String>, unavailable: Option<GitDiffUnavailableReason>, truncated: bool, comparison: Option<(String, String)> }`；`lines ≤ 400` 行、合计 ≤64 KiB、单行 ≤4096 字符；`unavailable.is_some()` 时 `lines` 必须为空。`comparison` 为（HEAD 原文，工作文件原文），仅成功文本结果可附，每侧 UTF-8 ≤64 KiB，必须完整，空侧表示新增/删除，不持久化；`truncated` 只描述补丁行 | 同上 |
 
 固定 v1 常量（`SYNC_PROTOCOL.md` §14）：`SESSION_FILE_PAGE_LIMIT = 128`、`SESSION_FILE_PATH_MAX_CHARS = 4096`、`SESSION_FILE_CHUNK_MAX_BYTES = 32 KiB`、`SESSION_FILE_TEXT_PREVIEW_MAX_BYTES = 256 KiB`、`SESSION_FILE_IMAGE_PREVIEW_MAX_BYTES = 4 MiB`、`SESSION_FILE_DOWNLOAD_MAX_BYTES = 64 MiB`、`GIT_DIFF_MAX_LINES = 400`、`GIT_DIFF_MAX_BYTES = 64 KiB`、`GIT_DIFF_LINE_MAX_CHARS = 4096`。
 
@@ -279,7 +292,8 @@ pub enum UnavailableKind {
 | `PairingMaintenance` | `pairings(actor) -> Vec<PairingRecord>`、`expire_pairings(actor) -> u64`、`expire_pairings_by_id(actor, &[PairingId]) -> u64` | `app::daemon`（启动恢复与周期维护，`Actor::LocalCli`；`pairings` 只读、`expire_pairings_by_id` 只终结未确认标识） |
 | `NodeLinkHandshake` | `node_link_handshake_view(accessNodeId) -> NodeLinkHandshakeView`、`record_node_link_auth(accessNodeId, AuditAction, AuditOutcome) -> ()`、`record_node_connected(accessNodeId) -> ()` | `server::node_link`（及未来 `server::sync` 的同形入口） |
 | `SyncDeviceHandshake` | `sync_device_handshake_view(deviceId) -> SyncDeviceHandshakeView`、`record_device_connected(deviceId) -> ()`、`record_device_auth_failure(deviceId) -> ()` | `server::sync` |
-| `SyncSnapshotQueries` | `sync_visible_sessions(actor, SyncSessionQuery, owner_reachable) -> Vec<SessionSummary>`、`sync_workspace_catalog(actor) -> Vec<WorkspaceCatalogEntry>`（快照的 `workspaces` 资源：每条都带目录标识与规范化路径；`core.workspace-path.v1` 已撤销，没有协商参数） | `server::sync`（快照的 `sessions`/`workspaces` 资源） |
+| `SyncSnapshotQueries` | `sync_visible_sessions(actor, SyncSessionQuery, owner_reachable) -> Vec<SessionSummary>`（远程部分来自运行期目录，见 §5.9；`owner_reachable` 为保留的装配参数，不再决定在线状态）、`sync_workspace_catalog(actor) -> Vec<WorkspaceCatalogEntry>`（快照的 `workspaces` 资源：每条都带目录标识与规范化路径；`core.workspace-path.v1` 已撤销，没有协商参数） | `server::sync`（快照的 `sessions`/`workspaces` 资源） |
+| `RemoteSessionQueries` | `read_imported_session(actor, &SessionId, ImportedReadQuery) -> Option<ImportedRead>`（旧 wire 原文路径；先经运行期目录校验来源身份/在线）、`read_remote_source(actor, &RemoteSessionRef, RemoteReadQuery) -> RemoteReadResult`（D4 的类型化回源，含 `readCursor`/`messageCoverage`）、`remote_command_status(actor, RemoteCommandTarget, RequestId) -> RemoteCommandLookup`（D5：按原 requestId 直接向 Owner 查询，不读本地请求表） | `server::sync`、`server::node_link`（旧入口保留到 WP4 切换） |
 | `WorkspaceBrowse` | `workspace_browse(actor, Option<&str>) -> WorkspaceBrowse`（`workspace.browse`：`None` = 根列表；条目只含名称、绝对路径与是否已登记，按名称升序、单层上限 128 并置截断标记；受 feature `core.workspace-browse.v1` 门控，门控在适配层） | `server::sync` |
 | `SessionFilesQueries` | `list_session_files(actor, &SessionId, &str, bool, Option<&str>) -> SessionFilePage`、`read_session_file(actor, &SessionId, &str, FileReadPurpose, u64, Option<&str>) -> SessionFileChunk`、`session_git_status(actor, &SessionId, Option<&str>) -> GitStatusPage`、`session_git_diff(actor, &SessionId, &str) -> GitDiff`（授权 → 来源 → 实际 cwd → 形状 → `SessionFiles` 端口；imported 在端口前拒绝，查询无终态/无事件） | `server::sync`（feature 门控在适配层） |
 
@@ -305,7 +319,7 @@ pub enum UnavailableKind {
 - `record_device_connected(device_id)`：认证**成功**的收尾写集（`SYNC_PROTOCOL.md` §8.4；`SECURITY_DESIGN.md` §14.2 的 `device.authenticated`）——把该设备的 `last_seen_at` 推进到本次时间，并把该设备的 `device.authenticated` 成功行在**同一事务**提交（`WriteContext` 同时携带两者，§11.2 第 6 条）。本入口没有 `actor` 参数：归因由 `device_id` 唯一确定，审计行的 actor 取 `Actor::Device { device: 该 id }`（设备不再有授权集合，因此没有 scopes 可归因，也不得取对端自报值）。`last_seen_at` 的**只前进**三分支（旧值为空 → 写入新值、新值为空 → 保留旧值、两者非空取较大者）与「`revoked` 记录不得复活」都由存储层的 `put_device`/`upsert_device` 判定，本层只读出既有行、置 `Some(now)` 并把**其余每一列原样写回**（不得用 `None` 抹掉已存值），也不预先判定撤销。**设备行不存在 → `NotFound(EntityRef::Device)` 且零写入**（`DeviceWrite` 携带的是整行，编造一行等于伪造信任）。`owned_device.last_seen_at` 的**唯一生产者是本入口**——首次认证（有待消费配对）也必须经它推进。
 - `record_device_auth_failure(device_id)`：认证**失败**的留痕（`SECURITY_DESIGN.md` §14.2 的 `device.auth_failed`；`SYNC_PROTOCOL.md` §8 的握手失败路径）。动作**恒为** `AuditAction::DeviceAuthFailed`（不接受动作参数，因此结构上写不出别的动作）、目标恒为 `Device(device_id)`、结果恒为 `AuditOutcome::Failed`，`via_node`/`local_principal_ref`/`detail_digest` 均为空（细分失败原因只进结构化日志，§14.1/§14.2 的 no-content 取舍）。**已知设备**与**未知设备**写出**形状相同**的审计行（都只按 `device_id` 归因，不带任何授权集合），**不得返回 `NotFound`**——未配对设备发起握手并失败是最常见的失败场景，正是本入口存在的主要理由，而「未知 → 错误 / 已知 → 成功」的响应差异会变成设备存在性预言机（这条与 `record_device_connected` 刻意不同：那个入口的整行写集要求行存在）。两种情形都返回 `Ok(())` 且各写一行形状相同的审计。本入口没有关联状态变更，故直接用 `AuditStore::append` 追加、不新增端口方法（§11.2 第 6 条的后半句）；成功路径的 `device.authenticated` 由 `record_device_connected` 承担，两者**不得互相替代**。
 
-`[决定]`（2026-10-14，同一变更）`SyncSnapshotQueries` 的 `sync_visible_sessions(actor, query, owner_reachable)` 一处（另一端是 `sync_workspace_catalog`，见本节的目录资源条）：Sync 快照 `sessions` 资源的来源（`SYNC_PROTOCOL.md` §9.6；spec `sync-event-delivery`「设备可见的会话清单范围」）。它先按 `session.list` 走 `Broker::authorize`——与 `list_sessions` **逐字同口径**（同一命令名、同一 broker 判定、同一 `authorization.scope_denied`；未授权时不读会话/索引存储、也不返回任何会话）；通过后取自有会话（`SessionStore::list`，条目的 `workspace` 取自该行**持久化**的 `workspace_alias`，不得按 `workspace_cwd` 反查），并在 `include_imported` 为真时追加已导入行（`RemoteDeliveryStore::list_sessions`，投影成**同一形状**的 `SessionSummary`，不得另造字段）。`SyncSessionQuery` 的三个字段各承载一件**调用方**的判定：`owned`/`imported` 是两侧各自的过滤/分页（按各自存储的既有语义原样透传），`include_imported` 是 feature `resource.remote-origin.v1` 的**协商结果**（core 不读 feature 表、也不缓存它）——为假时一行 imported 摘要都不得出现，连空占位也不给（`Default` 因此取 `false`）。顺序是自有在前、已导入在后，本层不重排（`SessionSummary` 没有排序语义字段）。`owner_reachable` 是调用方给出的 Owner 可达性**运行时事实**（投影 imported 条目的 `origin.online`），core 不缓存也不推断该状态（`MODULE_ARCHITECTURE.md` §4.1：可达性变化经 `EventPublisher` 暴露），闭包要求 `Send + Sync`。合并必须发生在 core：授权只在 core 判定、`server` 不得代替 core 判定（本节开头的 `[决定]`），适配层分别取行再自行拼接会形成第二条可见性判定路径。
+`[决定]`（2026-10-14，同一变更；2026-10-21，`access-owner-data-stateless` WP2 改写来源）`SyncSnapshotQueries` 的 `sync_visible_sessions(actor, query, owner_reachable)` 一处（另一端是 `sync_workspace_catalog`，见本节的目录资源条）：Sync 快照 `sessions` 资源的来源（`SYNC_PROTOCOL.md` §9.6；spec `sync-event-delivery`「设备可见的会话清单范围」、`stateless-access`「远程数据只用于当前在线处理」）。它先按 `session.list` 走 `Broker::authorize`——与 `list_sessions` **逐字同口径**（同一命令名、同一 broker 判定、同一 `authorization.scope_denied`；未授权时不读会话/目录、也不返回任何会话）；通过后取自有会话（`SessionStore::list`，条目的 `workspace` 取自该行**持久化**的 `workspace_alias`，不得按 `workspace_cwd` 反查），并在 `include_imported` 为真时向 §5.9 的 `RemoteRuntimeDirectory::list` 取当前已认证连接期的远程条目，原样纳入其已在目录中组装好的 `SessionSummary`。**远程条目不再来自 `RemoteDeliveryStore::list_sessions`**：持久 imported 索引在本用例里一次都不读；`SyncSessionQuery` 的 `owned`/`imported` 只分别收窄自有列表与运行期目录结果，`include_imported` 是 feature `resource.remote-origin.v1` 的**协商结果**（core 不读 feature 表、也不缓存它）——为假时一行远程摘要都不得出现，连空占位也不给（`Default` 因此取 `false`）。顺序是自有在前、远程在后，本层不重排（`SessionSummary` 没有排序语义字段）。`owner_reachable` 是**保留的装配兼容参数**（WP4 会从 `server` 移除）：在线状态以目录条目的 `source`/`origin.online` 为唯一权威，本层不再用闭包覆盖它；目录未装配时远程部分为空，来源断开/撤销时其整代目录已被 `invalidate` 清除，因此某个不可达 Owner 不会被表达成「成功读到空清单」——来源状态经连接期通知与 `origin.online` 表达。合并必须发生在 core：授权只在 core 判定、`server` 不得代替 core 判定（本节开头的 `[决定]`），适配层分别取行再自行拼接会形成第二条可见性判定路径。
 
 `[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery` 变更 WP2）**目录浏览、目录资源与建目录开关的三条口径**（spec `sync-workspace-browse`、`sync-workspace-catalog` 与 `sync-session-create`；`design.md` D1–D4/D7）：
 
@@ -546,7 +560,14 @@ pub trait SessionStore: Send + Sync {
     async fn health(&self) -> Result<StoreHealth, PortError>;
 }
 
-#[async_trait]
+/// 一次带来源位置的会话读取（`ReadView::read_session_origin`）：页、来源位置 R 与逐消息覆盖。
+#[derive(Debug, Clone)]
+pub struct OriginReadPage {
+    pub page: HistoryPage,
+    pub read_cursor: OriginCursor,
+    pub coverage: Vec<MessageCoverage>,
+}
+
 pub trait ReadView: Send + Sync {
     async fn head(&self) -> Result<GlobalCursor, PortError>;
     async fn replay(&self, after: Option<GlobalCursor>, limit: ReplayLimit) -> Result<ReplayBatch, PortError>;
@@ -561,6 +582,8 @@ pub trait ReadView: Send + Sync {
     /// （`design.md` D4）。结构化历史条目按**会话内序号**分页（省略游标 = 最新一页；只跳过已压缩的行；
     /// 游标早于仍可读条目的下界时返回 `InvalidRequest`，不是更少的条目）。
     async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError>;
+    /// Owner 侧原子读取：页、来源位置 R 与逐消息覆盖来自同一只读事务（design D4）；无来源位置必须显式不支持。
+    async fn read_session_origin(&self, query: HistoryQuery) -> Result<OriginReadPage, PortError>;
     /// 取回一条 owned 事件的持久化正文——重放、`sync.snapshot_*` 与 `PendingInteraction.options`
     /// 补全的唯一入口（复用 core 既有 `EventPayload`/`AcpRaw`，不新增类型）。
     ///
@@ -573,29 +596,6 @@ pub trait ReadView: Send + Sync {
     async fn node_link_slice(&self, session: &SessionId, after: Option<OriginCursor>, limit: ReplayLimit) -> Result<NodeLinkSlice, PortError>;
     /// 指定会话内某条 owned 事件的正文（事件 id 与会话必须同时匹配，否则 `None`）；还原规则同 `event_payload`。
     async fn session_event_payload(&self, session: &SessionId, event: &EventId) -> Result<Option<EventPayload>, PortError>;
-}
-
-pub struct DeliveryReceipt {
-    pub session: RemoteSessionRef, pub origin: OriginEventRef, pub origin_sequence: Sequence,
-    pub event_type: EventType, pub payload_digest: Digest, pub at: Timestamp,
-}
-
-#[async_trait]
-pub trait RemoteDeliveryStore: Send + Sync {
-    async fn commit_receipt(&self, receipt: DeliveryReceipt) -> Result<ReceiptOutcome, PortError>;
-    async fn local_replay(&self, after: Option<LocalCursor>, limit: ReplayLimit) -> Result<Vec<DeliveryIndexEntry>, PortError>;
-    async fn ack(&self, session: &RemoteSessionRef, cursor: OriginCursor, at: Timestamp) -> Result<AckOutcome, PortError>;
-    async fn load_ack(&self, session: &RemoteSessionRef) -> Result<Option<OriginCursor>, PortError>;
-    async fn upsert_session(&self, record: ImportedSessionRecord, at: Timestamp) -> Result<(), PortError>;
-    async fn list_sessions(&self, query: ImportedSessionQuery) -> Result<Vec<ImportedSessionRecord>, PortError>;
-    /// `SessionId` → imported 索引行的**存在性**窄查询（`imported_session` 按 `session_id` 查一行）。
-    /// 只服务于「owned 存储里没有该会话时区分 imported 与不存在」，不用于归属或可见性判定。
-    async fn find_imported_session(&self, session: &SessionId) -> Result<Option<ImportedSessionRecord>, PortError>;
-    /// `SessionStore::find_request` 的 imported 对应物。**改名过**（原名与前者同名，会迫使每个
-    /// 同时持有两个 trait 的调用点写 UFCS）。
-    async fn find_remote_request(&self, session: &RemoteSessionRef, request: &RequestId) -> Result<Option<RemoteCommandRef>, PortError>;
-    /// 删除该 import 名下的交付索引与命令引用；**不删除审计行**（`SECURITY_DESIGN.md` §11.5 要求保留审计）。
-    async fn prune(&self, policy: RetentionPolicy, at: Timestamp) -> Result<PruneReport, PortError>;
 }
 ```
 
@@ -622,7 +622,7 @@ pub trait RemoteDeliveryStore: Send + Sync {
   - **本条不新增表列、不改 §7**：`owned_event.origin_kind`/`causation` 与 `owned_command` 的 `actor_kind`/`actor_id` 早已就位，本次只是把它们读出（`EVENT_COLUMNS` 一直在 SELECT 它们，缺的只是组装 §10.1 形状的读面）。
 - `[决定]` `retention_window` 返回该会话仍可重放的 `session_sequence` 下界/上界；broker 据此决定 `sync.reset_required`（`reason` 枚举 `initial_sync|epoch_mismatch|cursor_expired|cache_incompatible`，`SYNC_PROTOCOL.md` §9.4）；cursor 的四种拒绝原因：格式非法 → `malformed`（协议层）、`serverEpoch` 与 `meta.server_epoch` 不符 → `epoch_mismatch`、超出 `head()` → `beyond_head`、低于窗口下界 → `cursor_expired`（`SYNC_PROTOCOL.md` §9.2）。
 
-**Access 侧 imported 回源端口（2026-10-20，`conversation-area-complete` WP5E5-read）**：`RemoteSessionReads::read_imported(session, ImportedReadQuery) -> ImportedRead` 是 `session.read` 对 imported 会话的唯一读面。`ImportedRead.document` 是 Owner `session.read` 完成结果的**原文**（`SessionReadResult` 形状），core 不解释其正文；实现（`node-link-client::RemoteSession`，组合根经 `AccessManager` 注入）MUST 在 Owner 不可达时返回 `UnavailableKind::OwnerOffline`，MUST NOT 返回空历史，也 MUST NOT 把正文写入数据库、临时文件或日志。`UseCases::read_imported_session` 先按 `session.read` 授权，再按 `RemoteDeliveryStore::find_imported_session` 判定来源：不是 imported 返回 `None`，未装配端口返回 `UnavailableKind::BackendUnsupported`。
+**Access 侧 imported 回源端口（2026-10-20，`conversation-area-complete` WP5E5-read；2026-10-21，`access-owner-data-stateless` WP2 切换来源）**：`RemoteSessionReads::read_imported(session, ImportedReadQuery) -> ImportedRead` 是旧 wire 路径对 imported 会话的读面。`ImportedRead.document` 是 Owner `session.read` 完成结果的**原文**（`SessionReadResult` 形状），core 不解释其正文；实现（`node-link-client::RemoteSession`，组合根经 `AccessManager` 注入）MUST 在 Owner 不可达时返回 `UnavailableKind::OwnerOffline`，MUST NOT 返回空历史，也 MUST NOT 把正文写入数据库、临时文件或日志。`UseCases::read_imported_session` 先按 `session.read` 授权，再按 **`RemoteRuntimeDirectory::find_by_session`** 判定来源身份与在线状态（不再读 `RemoteDeliveryStore::find_imported_session`）：目录没有该标识返回 `None`；多个 Owner 复用同一 `SessionId` 明确拒绝；离线/撤销返回 `Unavailable`；读取期间代际改变则丢弃结果。未装配端口返回 `UnavailableKind::BackendUnsupported`。D4 的类型化回源（含 `readCursor`/`messageCoverage`）走 §5.9 的 `RemoteSourceReads`。
 
 ### 5.3 信任、Export、审计与附件
 
@@ -714,7 +714,7 @@ pub struct EventSink(Arc<dyn Fn(EndpointEvent) + Send + Sync>);
 /// `Broker::commit_node_event`。
 #[derive(Clone)]
 pub struct NodeEventSink(Arc<dyn Fn(EndpointEvent) + Send + Sync>);
-pub trait EventPublisher: Send + Sync { fn publish(&self, delivery: CommittedDelivery); }
+pub trait EventPublisher: Send + Sync { fn publish(&self, event: CommittedEvent); }
 pub trait Clock: Send + Sync { fn now(&self) -> Timestamp; }
 
 pub trait IdGenerator: Send + Sync {
@@ -787,7 +787,7 @@ pub trait DirectoryCreator: Send + Sync {
 - **根**：`root` 是用例层从 `SessionStore::load_recovery().workspace_cwd` 取得的规范化绝对路径；实现 MUST NOT 按 workspace 别名反查、猜测或回退其它目录。`SessionFilePath` 已拒绝绝对/父引用/`.git` 等不安全形状，实现仍以实际打开的对象验证根边界（D3）。
 - **内存生命周期**：`open_content` 建立连接绑定、内存有界的只读快照；`read_content` 只按同一 `ContentVersion` 续读；`release_content` 在连接断开、取消、设备撤销与 60 秒空闲到期时释放。每连接最多一个快照、每节点最多两个；不写临时正文文件，不把快照版本当 bearer。
 - **预算**：单块 32 KiB、文本预览 256 KiB、图片预览 4 MiB、下载 64 MiB（§3.8 的常量 / `SYNC_PROTOCOL.md` §14）。预算按 `purpose` 分开：预览只受预览预算约束，原文件更大时如实返回 `size_bytes` 并置 `preview_truncated`，**不因超过 64 MiB 而拒绝预览**；只有 `download` 在 `size_bytes > 64 MiB` 时明确失败，不截断冒充完整。这条失败必须是**可识别**的：`open_content` MUST 返回 `PortError::InvalidRequest(core::model::RESULT_TOO_LARGE)`（文本 `resource.result_too_large`），服务端据此映射为同名 wire 错误码；不得落进通用形状错误。
-- **会话来源**：四条查询的 imported 判定不能只看 `SessionStore::load`——真实 imported 会话只存在 `imported_session` 索引里。`load` 返回 `None` 后再按 `RemoteDeliveryStore::find_imported_session` 查一次：命中即 `capability.unsupported_by_broker`（发生在任何文件/Git 端口调用之前），仍未命中才是 `session.not_found`。
+- **会话来源**：四条查询的 imported 判定不能只看 `SessionStore::load`——远程会话只存在于当前运行期目录里。`load` 返回 `None` 后再按 **`RemoteRuntimeDirectory::find_by_session`** 查一次：命中即 `capability.unsupported_by_broker`（发生在任何文件/Git 端口调用之前），仍未命中才是 `session.not_found`。不得回退到本机文件路径或持久 imported 索引。
 - **Git**：只读；实现不得运行仓库配置指定的 external diff/textconv/hook/fsmonitor/pager，也不修改索引或工作树。非仓库与 Git 缺失分别是 `git_state = not_repository` 与 `unavailable` 的成功状态。
 - **无副作用**：端口实现不写会话状态、登记表、缓存或审计；查询不产生命令终态事件。
 
@@ -949,6 +949,203 @@ pub trait InteractionAuthority: Send + Sync {
   竞态失败（另一设备抢先解析、窗口内失效、后端写失败）必须落一条 `command.failed` 终态，而不是把命令
   留在 `accepted`。
 
+### 5.9 远程运行期目录与在线回源
+
+`[决定]`（2026-10-21，`access-owner-data-stateless` WP2）**远程资源只存在于已认证连接期**：
+Access 不持久保存 Owner 的会话摘要、目录、来源游标、命令状态或结果引用。以下端口由 `node-link-client`
+提供有界内存实现、由组合根装配；core 只定义纯类型接口，不实现内存结构。断开、撤销或 Owner epoch
+改变时实现必须调用 `invalidate` 整代清除，并让未完成读取以 `Unavailable` 结束；所有类型只在
+`crate::model`/`crate::ports` 内建模，不使用 `serde_json::Value`。
+
+```rust
+pub enum RemoteSourceState {
+    Online,
+    Offline,
+    Revoked,
+}
+
+pub struct RemoteGeneration(u64);
+
+pub struct RemoteCatalogRevision(u64);
+
+pub struct RemoteSessionEntry {
+    pub summary: SessionSummary,
+    pub generation: RemoteGeneration,
+    pub source: RemoteSourceState,
+}
+
+pub struct RemoteDirectorySnapshot {
+    pub owner_node_id: NodeId,
+    pub generation: RemoteGeneration,
+    pub revision: RemoteCatalogRevision,
+    pub source: RemoteSourceState,
+    pub sessions: Vec<RemoteSessionEntry>,
+}
+
+#[async_trait]
+pub trait RemoteRuntimeDirectory: Send + Sync {
+    async fn list(&self) -> Result<Vec<RemoteSessionEntry>, PortError>;
+    async fn snapshot(&self, owner: &NodeId) -> Result<Option<RemoteDirectorySnapshot>, PortError>;
+    async fn lookup(&self, session: &RemoteSessionRef) -> Result<Option<RemoteSessionEntry>, PortError>;
+    async fn find_by_session(&self, session: &SessionId) -> Result<Vec<RemoteSessionEntry>, PortError>;
+    async fn owner_state(&self, owner: &NodeId) -> Result<RemoteSourceState, PortError>;
+    async fn generation(&self, owner: &NodeId) -> Result<Option<RemoteGeneration>, PortError>;
+    async fn invalidate(&self, owner: &NodeId, generation: RemoteGeneration) -> Result<(), PortError>;
+}
+
+pub struct MessageCoverage {
+    pub message_id: MessageId,
+    pub through: OriginCursor,
+    pub last_delta_index: Option<u64>,
+}
+
+pub struct RemoteHistoryRecord {
+    pub origin: OriginEventRef,
+    pub origin_sequence: Sequence,
+    pub event_type: EventType,
+    pub payload: EventPayload,
+    pub created_at: Timestamp,
+}
+
+pub struct RemoteReadResult {
+    pub summary: SessionSummary,
+    pub read_cursor: OriginCursor,
+    pub messages: Vec<MessageRecord>,
+    pub history: Vec<RemoteHistoryRecord>,
+    pub coverage: Vec<MessageCoverage>,
+    pub messages_has_earlier: bool,
+    pub history_has_earlier: bool,
+}
+
+pub struct RemoteReadQuery {
+    pub include: HistoryInclude,
+    pub before_history: Option<Sequence>,
+    pub before_messages: Option<MessageCursor>,
+    pub messages_limit: ReplayLimit,
+    pub limit: ReplayLimit,
+}
+
+pub struct RemoteSourceBarrier {
+    pub cursor: OriginCursor,
+    pub generation: RemoteGeneration,
+}
+
+#[async_trait]
+pub trait RemoteSourceReads: Send + Sync {
+    async fn read(&self, session: &RemoteSessionRef, generation: RemoteGeneration, query: RemoteReadQuery) -> Result<RemoteReadResult, PortError>;
+    async fn replay_barrier(&self, session: &RemoteSessionRef, generation: RemoteGeneration, after: Option<OriginCursor>) -> Result<RemoteSourceBarrier, PortError>;
+}
+
+pub struct RemoteCommandTarget {
+    pub owner_node_id: NodeId,
+    pub session_id: Option<SessionId>,
+}
+
+pub struct RemoteCommandRecord {
+    pub target: RemoteCommandTarget,
+    pub request: RequestId,
+    pub status: CommandStatus,
+    pub accepted_at: Option<Timestamp>,
+    pub terminal_at: Option<Timestamp>,
+    pub result: Option<CommandResult>,
+    pub error: Option<PublicError>,
+}
+
+pub enum RemoteCommandLookup {
+    Accepted(RemoteCommandRecord),
+    Terminal(RemoteCommandRecord),
+    NotFound,
+    Uncertain(RemoteCommandRecord),
+}
+
+#[async_trait]
+pub trait RemoteCommandStatus: Send + Sync {
+    async fn query(&self, target: &RemoteCommandTarget, request: &RequestId) -> Result<RemoteCommandLookup, PortError>;
+}
+
+pub enum RemoteStreamResetReason {
+    EpochMismatch,
+    CursorExpired,
+    CacheIncompatible,
+}
+
+pub struct RemoteStreamEvent {
+    pub owner_node_id: NodeId,
+    pub session_id: SessionId,
+    pub origin_event_id: EventId,
+    pub origin_epoch: OriginEpoch,
+    pub origin_sequence: Sequence,
+    pub event_type: EventType,
+    pub payload_digest: Digest,
+    pub created_at: Timestamp,
+    pub payload: EventPayload,
+}
+
+pub enum RemoteStreamItem {
+    Event(RemoteStreamEvent),
+    CaughtUp(RemoteSourceBarrier),
+    Reset {
+        reason: RemoteStreamResetReason,
+        cursor: Option<OriginCursor>,
+    },
+    Unavailable(PublicError),
+}
+
+pub enum RemoteSourceNotice {
+    CatalogChanged {
+        owner_node_id: NodeId,
+        revision: RemoteCatalogRevision,
+    },
+    State {
+        owner_node_id: NodeId,
+        state: RemoteSourceState,
+    },
+}
+
+#[async_trait]
+pub trait RemoteStreamReceiver: Send {
+    async fn next(&mut self) -> Option<RemoteStreamItem>;
+}
+
+#[async_trait]
+pub trait RemoteNoticeReceiver: Send {
+    async fn next(&mut self) -> Option<RemoteSourceNotice>;
+}
+
+#[async_trait]
+pub trait RemoteEventStream: Send + Sync {
+    async fn subscribe(&self, session: &RemoteSessionRef, generation: RemoteGeneration, after: Option<OriginCursor>) -> Result<Box<dyn RemoteStreamReceiver>, PortError>;
+    async fn unsubscribe(&self, session: &RemoteSessionRef, generation: RemoteGeneration);
+    async fn notices(&self) -> Result<Box<dyn RemoteNoticeReceiver>, PortError>;
+}
+```
+
+约束：
+
+- **生命期**：四个 trait 都只服务当前已认证连接。连接断开、信任撤销或 Owner epoch 改变时，实现取消该来源
+  的读写任务并让未完成调用以 `Unavailable` 结束；目录与结果不写数据库、临时文件或日志，也不跨重启恢复。
+- **有界**：目录、快照与回源页沿用协议已有的目录/帧/队列/超时限额，不新增无界缓存；慢客户端不得阻塞
+  其他来源。超出协议限额按既有 `result_too_large`/backpressure 失败关闭，不静默扩容。
+- **来源一致性**：`RemoteSessionEntry.summary` 必须是 `ResourceOrigin::Remote`，`online` 必须与 `source`
+  一致；core 在 `sync_visible_sessions` 与回源读取前校验，不一致按 `Corrupt` 失败关闭。不同 Owner 的
+  同名 `SessionId` 不是同一会话：`find_by_session` 的多条命中由 core 明确拒绝，不得挑选任意一条。
+- **generation**：`invalidate(owner, generation)` 只在代际与当前值相等时清除，旧连接的迟到失效不得误删
+  新连接建立的目录。回源读取结果在返回 core 前/后都要与当前代际比对；跨代结果丢弃并返回
+  `Unavailable(OwnerOffline)`。
+- **D4 读取边界**：`RemoteReadResult.read_cursor` 与该次 `summary.origin.origin_epoch` 必须一致；
+  `coverage[*].through` 必须全部等于 `read_cursor`；`coverage` 只能覆盖本次返回的消息，每条消息至多一项，
+  且**每条返回消息必须恰有一项**（漏报按 `Corrupt` 失败关闭，否则客户端会把已返回的正文再拼一次）。
+  `UseCases` 暴露纯函数 `validate_remote_read_result`、`classify_covered_event`、`decide_remote_page`
+  供适配器与客户端测试共用合并判定：覆盖窗口内的事件不再拼接，未返回消息与覆盖之后的增量必须保留，旧页
+  不得回滚新内容（同一 `through` 下 `lastDeltaIndex` 更少、或当前已拼入增量而新页为 `null`，都算更旧），
+  epoch 不同只能 reset/重建。
+- **D5 命令**：`RemoteCommandStatus` 按原 `(target, requestId)` 直接查询 Owner；`NotFound` 与
+  `Uncertain` 是结果分类，Owner 不可达是 `Unavailable`。core 不写本地请求表、不去重、不换号；同一
+  `requestId` 的幂等与参数冲突完全由 Owner 判定。`session_id = None` 仅用于尚未建成会话的
+  `session.create`，其余操作必须先经运行期目录校验该会话属于 `owner_node_id`；目录条目本身损坏
+  （摘要不是远程来源）按 `Corrupt` 失败关闭，不得折叠成 `NotFound`。
+- **旧端口**：`RemoteDeliveryStore`/`RemoteSessionReads` 已在 v14 迁移中删除，core 不再从任何持久存储读取远程清单、来源身份或命令状态。
+
 ## 6. Broker 的顺序与事务契约
 
 1. owned：`EventSink` → broker 组装 `OwnedCommit` → `SessionStore::commit` → `EventPublisher::publish`（顺序不可交换）。
@@ -1029,7 +1226,7 @@ pub trait InteractionAuthority: Send + Sync {
     - 撤销：设备/节点撤销在事务内把相关 `receiving` 传输置为 `aborted` 并拒绝后续块/读取；已提交附件不因撤销被删除，按消息保留策略处理。
     - 失败：磁盘满、摘要不符、预算耗尽都不得留下「可被 prompt 引用的半成品」；失败关闭路径与 §8 一致。
 
-## 7. `storage-sqlite` v13 表结构（`imported_*` 家族为 v5）
+## 7. `storage-sqlite` v14 表结构（仅 owned 家族与连接资料）
 
 ### 7.1 文件、PRAGMA、连接与权限
 
@@ -1044,14 +1241,14 @@ pub trait InteractionAuthority: Send + Sync {
 
 ### 7.2 Migration
 
-- `[决定]` `PRAGMA user_version` = 文件格式版本（上一版为 v12 = 12；当前 **v13 = 13**）；`meta` 保存两族 schema 版本：`owned_schema_version`（当前 13；旧文档的「`owned_schema_version` 当前 12」已被本段取代）、`imported_schema_version`（当前 5）。三个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`/`IMPORTED_SCHEMA_VERSION`。
+- `[决定]` `PRAGMA user_version` = 文件格式版本（上一版为 v13 = 13；当前 **v14 = 14**）；`meta` 只保存 `owned_schema_version`（当前 14）。两个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`；Access 不再有 imported schema 版本键。
 - `[决定]` 两族 migration 分开维护；单事务、可重复执行、失败整体回滚；文件格式版本**或**任一表结构版本高于本二进制已知版本 → 拒绝启动，不降级写入。
 - `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 13` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库依次走 v2…v13 段，v2 库走 v3…v13 段，…，v12 库只走 v13 段）；`user_version = 13` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL（三态 `owned_session`、`owned_interaction` 的 `confirmed_at`/`turn_id` 与 v12 的五张表）建成 v13 形状（此时 `user_version` 是 0，不能只按版本号判断）。每段各自带 `file_version < N` 的守卫，因此「文件格式已比该段新、但仍低于最新版」的库不会重跑那一段。
 - `[决定]` v1 → v2 升级步骤（顺序固定，都在同一事务内）：
   1. 执行 §7.3/§7.4 的 DDL 常量：`CREATE ... IF NOT EXISTS` 建出新增的管理表与 `imported_import_export`，既有表不动；
   2. `owned_audit` 与 `imported_audit` 走 **12-step 表重建**（SQLite 不能修改既有 CHECK）：新建带完整 `action` CHECK 的表 → 按列拷贝**全部行（含 `audit_id`）** → `DROP` 旧表 → `RENAME` → 重建索引；之后按升级前的 `sqlite_sequence` 回填序列，**AUTOINCREMENT 不得回退**（审计有 365 天 TTL，尾部行被清理后 `seq` 会领先于 `max(audit_id)`）；
   3. `imported_import` 重建：去掉 `export_id` 与 `UNIQUE (owner_node_id, export_id)`，新增 `grants_json`；原行的 `(owner_node_id, export_id)` 与 `created_at` 迁为一条 `imported_import_export` 关联行（`added_at` = 原 `created_at`）。旧行**没有可信的 grants 来源**，因此 `grants_json` 一律写 `'[]'`——**不得凭空补齐或默认放权**，这类 Import 保持不可用，等本地重新授权；
-  4. 本段**不单独落盘版本**：`meta.owned_schema_version`/`meta.imported_schema_version` 与 `PRAGMA user_version` 都由同一事务内紧随其后的升级段在**全部**段结束后统一按当前常量写入（本次为 `'13'`/`'5'` 与 `13`，见下面几条），因此不存在「已写 v2 版本号、表仍是 v1 形状」的中间落盘。
+  4. 本段**不单独落盘版本**：`meta.owned_schema_version` 与 `PRAGMA user_version` 都由同一事务内紧随其后的升级段在**全部**段结束后统一按当前常量写入（本次为 `'14'` 与 `14`，见下面几条），因此不存在「已写 v2 版本号、表仍是 v1 形状」的中间落盘。
 - `[决定]` **v2 → v3 升级步骤**（与 v2 段在同一事务内、顺序在后）：两张审计表同样走 12-step 表重建，**列集合与列顺序逐字不变**，只扩宽 CHECK——`actor_kind` 增 `'pairing_claimant'`（配对认领方的审计归因）、`action` 增 `'node.authenticated'`/`'node.auth_failed'`（节点握手留痕）；之后按本次升级前的 `sqlite_sequence` 回填序列（两段重建各自 `DROP` 过审计表，因此序列只在**全部**重建结束后回填一次）；版本键与 `PRAGMA user_version` 的落盘不在本段，见下一条。`owned_command` **不重建**：认领方永不提交命令，它的 `actor_kind` CHECK 保持 `('device','node','cli')`（design D12）——因此 v3 库上两张审计表接受四值、`owned_command` 只接受三值。
 - `[决定]` **v3 → v4 升级步骤**（与 v2/v3 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_node` 在**列清单末尾**追加一列 `export_ids_json TEXT NOT NULL DEFAULT '[]'`，用 `ALTER TABLE owned_node ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK，见 §11.8），`NOT NULL` 由默认值满足，因此既有行得到 `'[]'`（**不得默认放权**，§11.8）；`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 28）。版本键与 `PRAGMA user_version` 的落盘不在本段，见下一条。
 - `[决定]` **v4 → v5 升级步骤**（与 v2/v3/v4 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加两列 `agent_session_id TEXT` 与 `workspace_cwd TEXT`，用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK）；两列都可空、**无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有可用于恢复的标识或目录」，`MUST NOT` 被任何读取路径补全、推导或替换为别名解析结果（`NOT NULL DEFAULT ''` 做不到这一点：空串无法与「未取得」区分，会让「可恢复」判定被默认值蒙蔽），§9 判据 28 逐行断言。`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'13'`、`PRAGMA user_version` 置为 `13`，`meta.imported_schema_version` 置为 `'5'`（见 v12 → v13 段）。
@@ -1065,6 +1262,7 @@ pub trait InteractionAuthority: Send + Sync {
      - 映射值是**暂存值**，不是权威摘要：迁移不发布摘要、不广播事件；开放业务接入前的启动恢复用 `SessionActivity::reduce` 按有效交互与未结束 turn 重算（§6 第 16 条），旧标签不得覆盖重算结果，也不得据此伪造任务结果。
   3. 归一化 `imported_session.state` 的旧七态（imported 表没有 CHECK，因此只改值、不重建、不加正文列）：`queued`/`running` → `running`、`waiting_input`/`waiting_permission` → `pending`、`failed`/`closed` → `idle`，只作用于这七个旧取值。
   4. 版本只在三件事全部成功后统一落盘（与其它段同一事务）：`meta.owned_schema_version = '13'`、`meta.imported_schema_version = '5'`、`PRAGMA user_version = 13`。失败整体回滚，重开可重试；`sqlite_sequence`、既有索引、外键与事件/审计字节保持不变（§9 判据 37）。
+- `[决定]` **v13 → v14 升级步骤**（`access-owner-data-stateless`；与既有段同一事务、顺序最后）：按外键顺序 `DROP TABLE IF EXISTS imported_delivery_index` → `imported_command_ref` → `imported_session` → `imported_audit` → `imported_import_export` → `imported_import`；删除前按明确来源谓词清理 `owned_command` 与 `owned_audit` 中可辨认的远程代理记录（只命中属于旧 imported 会话、且不属于 `owned_session` 的记录），归属无法安全判定时整段失败且不写入版本；删除 `meta.imported_schema_version`；最终写入 `meta.owned_schema_version = '14'` 与 `PRAGMA user_version = 14`。owned 会话/事件/序列/epoch/幂等/信任与既有 owned 审计不删除。
 - `[决定]` **目录归属的读取投影**（`design.md` D1/D6）：`SessionSummary.workspace` 取自 `owned_session.workspace_alias`，展示名由 `storage-sqlite` 在同一条读查询里 `LEFT JOIN owned_workspace ON w.alias = s.workspace_alias` 取得；**关联不上时回退为别名本身**（目录被删除不丢分组，也不让规范化路径进入摘要——路径只出现在快照的 `workspaces` 条目上，§11.1）。该 JOIN 留在 `storage-sqlite` 内部（它同时拥有两张表），**不上浮到 core**。实现 `MUST NOT` 存在任何「按 `owned_session.workspace_cwd` 反查别名」的查询——`NULL` 就是未分组，这是「别名重指向后既有会话归属不漂移」的前提。
 - `[决定]` 保留不变量：`server_epoch`、会话 `origin_epoch` 与事件 `global_sequence`/`session_sequence`、`requestId` 与幂等行、命令终态、全部既有审计都逐行保留，**不得重新编号**。管理表初始为空；profile 种子与「已初始化」标记在同一事务里提交（`LocalConfigStore::mark_seeded`，§5.3），不从聊天或审计内容推断信任。
 - `[决定]` 管理表纳入 §7.5 的容量度量（TEXT 列 + 附件字节）与清理顺序；撤销 tombstone 不因容量压力被删除，空间不足时拒绝新写入而不是删活动信任或未到期审计。
@@ -1396,90 +1594,9 @@ CREATE TABLE IF NOT EXISTS owned_directory (
 - `[决定]`（`pwa-conversation-ui` WP2）**会话历史读复用本节的 `owned_event_session` 唯一索引，本次不改 §7**：按 `session_sequence` 取一页条目走的就是这个索引（`session_id = ? AND session_sequence < ?` + 反向扫描即可），因此不需要新增索引、不需要 migration，本节 DDL 与本轮之前的字节完全相同。查询形状与「一次取行连正文」的要求见 §5.2 的对应 `[决定]`。
 - `[决定]` `payload_digest` 必须等于对 `payload_json` 施 **ACPR-CJ1**（`SYNC_PROTOCOL.md` §3.3）后的 SHA-256（§9 判据 9）。**前像不是库里那串字节**：`payload_json` 按 §9 判据 16 原样保留调用方字节（不重排键），因此摘要必须由写入方**先规范化再哈希**；唯一写入者是存储层，`payload_digest` 由存储层用共享实现 `acpr-wire` 的 ACPR-CJ1 从 `payload_json` 重算，**不接受调用方提供**（否则一个非法摘要会被落库，跨节点复算与 imported 去重都会失配）。`acpr-wire` 的实现必须与 `scripts/check-contract-assets.mjs` 的参考实现在同一批 fixture 上逐值一致。
 
-### 7.4 `imported_*` 表（无正文）
+### 7.4 远程资源表（v14 起不存在）
 
-```sql
-CREATE TABLE IF NOT EXISTS imported_session (
-  owner_node_id  TEXT NOT NULL,
-  session_id     TEXT NOT NULL,
-  title          TEXT,
-  agent_id       TEXT, agent_name TEXT,
-  state          TEXT,
-  version        INTEGER,
-  created_at     TEXT,
-  last_origin_epoch   TEXT,
-  last_origin_sequence INTEGER,
-  acked_origin_epoch  TEXT,
-  acked_origin_sequence INTEGER,
-  next_local_sequence INTEGER NOT NULL DEFAULT 1,
-  attachment_id TEXT,
-  attachment_generation INTEGER,
-  updated_at     TEXT NOT NULL,
-  PRIMARY KEY (owner_node_id, session_id)
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS imported_delivery_index (
-  owner_node_id   TEXT NOT NULL,
-  session_id      TEXT NOT NULL,
-  origin_event_id TEXT NOT NULL,
-  origin_epoch    TEXT NOT NULL,
-  origin_sequence INTEGER NOT NULL,
-  local_sequence  INTEGER NOT NULL,
-  event_type      TEXT NOT NULL,
-  payload_digest  TEXT NOT NULL,
-  received_at     TEXT NOT NULL,
-  PRIMARY KEY (owner_node_id, session_id, origin_event_id),
-  UNIQUE (owner_node_id, session_id, local_sequence),
-  UNIQUE (owner_node_id, session_id, origin_epoch, origin_sequence),
-  FOREIGN KEY (owner_node_id, session_id)
-    REFERENCES imported_session(owner_node_id, session_id) ON DELETE CASCADE
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS imported_command_ref (
-  owner_node_id  TEXT NOT NULL, session_id TEXT NOT NULL,
-  request_id     TEXT NOT NULL,
-  command        TEXT NOT NULL,
-  status         TEXT NOT NULL CHECK (status IN ('accepted','completed','failed','rejected','uncertain')),
-  accepted_at    TEXT,
-  terminal_at    TEXT, terminal_event_id TEXT,
-  error_code     TEXT, retryable INTEGER,
-  PRIMARY KEY (owner_node_id, session_id, request_id),
-  CHECK (status = 'rejected' OR accepted_at IS NOT NULL),
-  FOREIGN KEY (owner_node_id, session_id)
-    REFERENCES imported_session(owner_node_id, session_id) ON DELETE CASCADE
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS imported_audit (
-  audit_id     INTEGER PRIMARY KEY AUTOINCREMENT,
-  at           TEXT NOT NULL,
-  action       TEXT NOT NULL CHECK (action IN (
-                 'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
-                 'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
-                 'node.paired','node.authenticated','node.auth_failed','node.trust_revoked','node.identity_changed',
-                 'export.created','export.revoked','import.added','import.removed','provider.configured',
-                 'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
-  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli','pairing_claimant')),
-  actor_id     TEXT NOT NULL,
-  owner_node_id TEXT, export_id TEXT, session_id TEXT,
-  request_id   TEXT,
-  local_principal_ref TEXT,
-  target_kind  TEXT NOT NULL, target_id TEXT NOT NULL,
-  outcome      TEXT NOT NULL CHECK (outcome IN ('success','denied','failed')),
-  detail_digest TEXT
-) STRICT;
-CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
-```
-
-约束与由来（含本轮修订）：
-
-- 字段集合 = `NODE_LINK_PROTOCOL.md` §6 的无正文索引 + cursor/ACK/requestId/命令终态引用/local sequence 映射；`imported_session` 只承载 `session.list`/快照所需的摘要元数据（`SYNC_PROTOCOL.md` §9.6 的「快照只含元数据」）。
-- `[决定]` 白名单归属：`imported_import` → import 配置与 owner/origin 引用；`imported_session` → cursor/ACK、local sequence 映射、摘要元数据、当前连接的 attachment 凭据；`imported_delivery_index` → owner/origin 引用、event type/digest、local sequence 映射；`imported_command_ref` → requestId 与命令终态引用；`imported_audit` → 不含内容的审计元数据（已确认：`SECURITY_DESIGN.md` §13.4 的白名单已显式加入该项）。
-- `[决定]` `imported_*` 禁止出现正文语义列；机器检查用**黄金列清单**逐表比对（§9.6），而不是子串黑名单（子串黑名单会被 `snapshot_json` 之类的新列绕过）。
-- `[决定]` `imported_delivery_index`/`imported_command_ref` 对 `imported_session` 建复合外键：会话行不存在时 `commit_receipt` 返回 `PortError::NotFound`，不得静默推进 `next_local_sequence`。
-- `[决定]` `attachment_id`/`attachment_generation` 断开即清空；`owner_server_epoch` 变化时清空该 import 的交付索引（对方重建了事件库，cursor 失效）。
-- `[决定]` `upsert_session`/`commit_receipt` 只按 `(owner_node_id, session_id)` 定位；v11 之后不存在 Import/Export 归属表。
-- `[决定]` Export/Import 整族已删除，v11 迁移移除对应表与 `drop_import`。
-
+v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_index`/`imported_command_ref`/`imported_audit`）。Access 只保存连接与信任资料及本节点 owned 资源；远程目录、摘要、正文、游标、ACK、命令状态与请求引用只在已认证连接期存在。迁移在开始监听前删除旧表并清理可辨认的远程代理审计/命令记录（§7.2 的 v14 段与 §11.10），任何新表、替代表或持久视图都不得承载上述数据。
 
 ### 7.5 保留、清理与容量
 
@@ -1494,15 +1611,15 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 | `storage.attachment_dir` | `<data_dir>/attachments` | 附件字节目录（`[决定]` 新增键，权限同数据库目录） |
 | `storage.attachment_max_file_bytes` | 20 MiB | 单附件上限，超出显式拒绝 |
 | `storage.attachment_max_total_bytes` | 1 GiB | 附件总量，超出按 `last_used_at` LRU 清理 |
-| `storage.audit_retention_days` | 365 | 审计保留期（已确认）；到期后按 `at` 清理 `owned_audit`/`imported_audit`。容量压力下审计排在清理顺序**最后**（先清 delta → 正文/状态事件 → 已压缩批次 → 附件，再考虑审计），超限时宁可拒绝新写入也不静默丢证据 |
+| `storage.audit_retention_days` | 365 | 审计保留期（已确认）；到期后按 `at` 清理 `owned_audit`。容量压力下审计排在清理顺序**最后**（先清 delta → 正文/状态事件 → 已压缩批次 → 附件，再考虑审计），超限时宁可拒绝新写入也不静默丢证据 |
 
-`[决定]` 清理顺序：① 过期 delta → ② 过期正文/结构化/状态事件 → ②′ **终态交互行**（`owned_interaction.state <> 'pending'`，含已失效的 `expired` 行）→ ③ 该会话最旧的已压缩 delta 批次 → ④″ **闲置清单与传输**（`open`/`sealed` 超过 24 小时的清单、`receiving` 超过 24 小时的传输）→ ④ 附件 LRU → ④′ 按引用 GC（无会话绑定/媒体引用/活跃清单且 `last_used_at` 早于 24 小时）→ ⑤ 到期的审计（`storage.audit_retention_days`，365 天；`owned_audit` 与 `imported_audit` 都要清）→ ⑥ 仍超限则拒绝新写入（`PortError::Unavailable(StorageFull)`），不静默丢弃、不继续广播。TTL 清理（①②②′④″⑤）由 `prune` 驱动；容量清理（②′③④）只在超限时触发。④″ 必须排在 ④/④′ 之前，否则已过期清单的条目会在本轮继续把附件挡在 GC 根之外。
+`[决定]` 清理顺序：① 过期 delta → ② 过期正文/结构化/状态事件 → ②′ **终态交互行**（`owned_interaction.state <> 'pending'`，含已失效的 `expired` 行）→ ③ 该会话最旧的已压缩 delta 批次 → ④″ **闲置清单与传输**（`open`/`sealed` 超过 24 小时的清单、`receiving` 超过 24 小时的传输）→ ④ 附件 LRU → ④′ 按引用 GC（无会话绑定/媒体引用/活跃清单且 `last_used_at` 早于 24 小时）→ ⑤ 到期的审计（`storage.audit_retention_days`，365 天；`owned_audit` 到期清理）→ ⑥ 仍超限则拒绝新写入（`PortError::Unavailable(StorageFull)`），不静默丢弃、不继续广播。TTL 清理（①②②′④″⑤）由 `prune` 驱动；容量清理（②′③④）只在超限时触发。④″ 必须排在 ④/④′ 之前，否则已过期清单的条目会在本轮继续把附件挡在 GC 根之外。
 
 `[决定]` 消息保留期与附件的关联清理：`prune` 删除过期消息后，删除「不再被任何 `owned_media_ref` 引用、且附件的**最近一次使用**（`owned_attachment.last_used_at`）已早于正文保留窗口」的 `owned_attachment_link` 行。判定不按 `created_at`：内容寻址去重让旧字节复用同一个附件行并在行上保留**首次**上传的 `created_at`，按它判定会把「今天重发 90 天前的同一文件」刚建立的链接在下一轮清理里删掉（随后 `read_chunk` 失去授权、内容被 ④′ 回收）。因此 `bind_submission` 与 `AttachmentStore::link` 在建立链接时把该附件的 `last_used_at` 刷新为绑定时刻，保留期从最近一次绑定起算。附件因此随所属消息的保留期结束而失去会话绑定，随后由 ④′ 在闲置窗口后回收；仍被保留消息引用（或仍在保存期内）的内容不受影响。附件行被任一清理删除时，指向它的已封存传输在同一事务内置为 `expired` 并清空 `sealed_sha256`（CHECK 要求两列同有同无），不会出现「传输显示 sealed 但读不出附件」。
 
 `[决定]`（2026-09-23）**清理任务的驱动者与周期**（此前只写了“由 `prune` 驱动”，没写谁调、多久调一次，等于默认永不执行）：
 
-1. 组合根在取得单实例锁、migration 完成**之后**、开始监听**之前**先执行一次初清理：`SessionStore::prune` + `RemoteDeliveryStore::prune`，加上配对内存态的重启恢复（`Authority::reset_memory` → `UseCases::pairings` → `Authority::unrecoverable_after_restart` → `UseCases::expire_pairings_by_id`，见 §11.6 第 6 条）、`TrustStore::expire_pairings`（§11.6）与 `AttachmentStore::sweep_orphans(启动时刻, 1000)`（§6 第 18 条）。
+1. 组合根在取得单实例锁、migration 完成**之后**、开始监听**之前**先执行一次初清理：`SessionStore::prune` + `SqliteStore::run_startup_gate`（v14 远程数据清理与 WAL/自由页收尾），加上配对内存态的重启恢复（`Authority::reset_memory` → `UseCases::pairings` → `Authority::unrecoverable_after_restart` → `UseCases::expire_pairings_by_id`，见 §11.6 第 6 条）、`TrustStore::expire_pairings`（§11.6）与 `AttachmentStore::sweep_orphans(启动时刻, 1000)`（§6 第 18 条）。
 2. 启动之后按**固定 60 s**周期重复同一批调用（固定 v1 常量，不给配置键：这是保证保留策略真的生效，不是可调业务参数）。
 3. 周期任务与写入共用同一个写连接（§7.1 的单写连接），必须**分批并让出**：单次 `prune` 到上限即返回，不得抦住写事务阻塞会话提交；一轮超时或出错只记结构化日志，不中断 daemon。
 4. 关闭顺序（以 `SECURITY_DESIGN.md` §12.1 为准）：**停接入层**（不再接受新连接，并排空**其余**在途连接，最坏仍受宽限上限约束；发出该 `daemon.stop` 的那条连接不计入——服务端在写回响应后自行结束它）→ **取消周期任务与信号监听**（必须先于停止 Agent）→ 停 Agent 进程 → 最后做一次 `wal_checkpoint(TRUNCATE)` 并清理 endpoint/释放单实例锁。周期任务的取消位置是为了让它们在存储关闭前停止写入，不是「先于接入层」。
@@ -1789,3 +1906,9 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 ### 11.9 workspace 解析（并入 §5.1/§3.6）
 
 `[已并入]` `ResolvedWorkspace` 的形状在 §3.6，解析时机、校验、失败分类、别名命名空间与路径下发口径在 §5.1。保留的设计理由：**alias → 实际路径的解析归 core，不属于任何后端**——`agent-host`/`node-link-client` 都拿不到 `owned_workspace`（`MODULE_ARCHITECTURE.md` §5 矩阵：后端只依赖 `core` + 协议 crate）。路径的边界口径（`SECURITY_DESIGN.md` §12.3、`SYNC_PROTOCOL.md` §9.4 与 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)）是：**已登记**目录的规范化路径只在客户端协商了 feature `core.workspace-path.v1` 时随 Sync 快照的 `workspaces` 条目下发给已认证设备（取值剥掉平台 verbatim 前缀），**客户端自己提交的目录不得被回显**，而日志、审计、错误 `details`、事件载荷与会话摘要仍一律不含路径。UNC/网络路径允许解析但不改变授权模型；其结构化告警落在 `server` 层（core 不引入日志依赖）。
+
+### 11.10 旧远程持久对象清理（`access-owner-data-stateless`，已落地）
+
+运行期远程来源端口的最终定义在 §5.9（`RemoteRuntimeDirectory`、`RemoteSourceReads`、`RemoteCommandStatus` 及其值对象，代码在 `crates/core/src/ports.rs`）；本小节不重复端口形状。
+
+v14 迁移已删除 `imported_delivery_index`/`imported_command_ref`/`imported_session`/`imported_audit` 及更早的 `imported_import*` 表，并按 §7.2 的来源谓词清理可辨认的远程代理 `owned_command`/`owned_audit` 记录。清理后启动门禁（`SqliteStore::run_startup_gate`）验证远程家族不存在、owned 事件/epoch/幂等与节点信任逐项保留，并完成 WAL/自由页收尾；失败则不开始监听，重开可安全重试。

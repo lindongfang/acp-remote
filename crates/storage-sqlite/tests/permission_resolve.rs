@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
     Actor, AgentId, AgentRef, AgentSessionId, ClientCommand, CommandKind, CommandPayload,
-    CommandReceipt, CommittedDelivery, ConfigOption, ConfigOptionId, ConfigValue,
+    CommandReceipt, CommittedEvent, ConfigOption, ConfigOptionId, ConfigValue,
     CreateSessionRequest, DeviceId, Digest, EventKind, EventOrigin, EventPayload, EventType,
     InteractionId, InteractionKind, InteractionResolution, MessageId, ModeId, ModeState,
     OriginEpoch, PairingId, PendingEvent, PendingInteraction, PortError, PromptRequest, RequestId,
@@ -105,12 +105,12 @@ impl IdGenerator for Ids {
 
 #[derive(Default)]
 struct Published {
-    seen: std::sync::Mutex<Vec<CommittedDelivery>>,
+    seen: std::sync::Mutex<Vec<CommittedEvent>>,
 }
 
 impl EventPublisher for Published {
-    fn publish(&self, delivery: CommittedDelivery) {
-        self.seen.lock().expect("published").push(delivery);
+    fn publish(&self, event: CommittedEvent) {
+        self.seen.lock().expect("published").push(event);
     }
 }
 
@@ -382,7 +382,6 @@ async fn harness(dir: &std::path::Path) -> Harness {
     let broker = Broker::new(
         BrokerDeps {
             store: store.clone(),
-            deliveries: store.clone(),
             backends: endpoints.clone(),
             trust: store.clone(),
             publisher: published.clone(),

@@ -71,6 +71,7 @@ export interface GitChangesView {
 
 /** Git 差异的只读视图（`session.git.diff` 的 completed 结果）。 */
 export interface GitDiffView {
+  readonly comparison?: {readonly before: string; readonly after: string};
   readonly path: string;
   readonly base: GitDiffBase;
   readonly kind: GitDiffKind;

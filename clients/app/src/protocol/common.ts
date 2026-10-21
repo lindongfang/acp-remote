@@ -101,6 +101,35 @@ export interface Cursor {
 }
 
 /**
+ * `$defs.originCursor`：Owner 来源日志的位置（`docs/SYNC_PROTOCOL.md` §9.7）。
+ *
+ * 它是**来源**的序号域，与 [`Cursor`] 的 Access 本机序号互不翻译、互不钳制：远程流的订阅、
+ * 屏障与 ACK 只使用 `(originEpoch, originSequence)`。
+ */
+export interface OriginCursor {
+  readonly originEpoch: Uuid;
+  readonly originSequence: DecimalString;
+}
+
+/** `$defs.sessionRef`：`(ownerNodeId, sessionId)` 共同构成来源命名空间，去重键必须带上它。 */
+export interface SessionRef {
+  readonly ownerNodeId: Uuid;
+  readonly sessionId: Uuid;
+}
+
+/**
+ * `$defs.messageCoverage`：`session.read` 对单条消息的覆盖声明（`docs/SYNC_PROTOCOL.md` §11.5）。
+ *
+ * `through` 是同次读取原子捕获的来源位置 R；`lastDeltaIndex` 是该消息在所返回完整内容中已覆盖的
+ * 最后一个**连续**增量索引，无增量时为 `null`。逐条消息独立合并，不能据此声明整页是同一快照。
+ */
+export interface MessageCoverage {
+  readonly messageId: Uuid;
+  readonly through: OriginCursor;
+  readonly lastDeltaIndex: DecimalString | null;
+}
+
+/**
  * `$defs.publicError`：`details` 是 schema 里明确的**开放对象**（`{"type":"object"}`），
  * 因此这里保留 `Record<string, unknown>` 而不是精确接口。
  */

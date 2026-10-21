@@ -524,6 +524,7 @@ pub struct GitStatusEntry {
     previous_path: Option<SessionFilePath>,
     conflicted: bool,
     binary: bool,
+    line_counts: Option<(u32, u32)>,
 }
 
 impl GitStatusEntry {
@@ -544,7 +545,22 @@ impl GitStatusEntry {
             previous_path,
             conflicted,
             binary,
+            line_counts: None,
         })
+    }
+
+    /// Counts are available only for complete, non-conflicting text comparisons.
+    pub fn with_line_counts(mut self, counts: Option<(u32, u32)>) -> Self {
+        self.line_counts = if self.binary || self.conflicted {
+            None
+        } else {
+            counts
+        };
+        self
+    }
+
+    pub fn line_counts(&self) -> Option<(u32, u32)> {
+        self.line_counts
     }
 
     pub fn path(&self) -> &SessionFilePath {
@@ -619,6 +635,7 @@ pub struct GitDiff {
     lines: Vec<String>,
     unavailable: Option<GitDiffUnavailableReason>,
     truncated: bool,
+    comparison: Option<(String, String)>,
 }
 
 impl GitDiff {
@@ -659,7 +676,25 @@ impl GitDiff {
             lines,
             unavailable,
             truncated,
+            comparison: None,
         })
+    }
+
+    pub fn with_comparison(mut self, before: String, after: String) -> Self {
+        if self.kind == GitDiffKind::Text
+            && self.unavailable.is_none()
+            && before.len() <= GIT_DIFF_MAX_BYTES
+            && after.len() <= GIT_DIFF_MAX_BYTES
+        {
+            self.comparison = Some((before, after));
+        }
+        self
+    }
+
+    pub fn comparison(&self) -> Option<(&str, &str)> {
+        self.comparison
+            .as_ref()
+            .map(|(before, after)| (before.as_str(), after.as_str()))
     }
 
     pub fn path(&self) -> &SessionFilePath {

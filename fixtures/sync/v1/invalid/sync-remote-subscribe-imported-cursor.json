@@ -1,0 +1,18 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.remote_subscribe",
+  "messageId": "6e4fa085-c0b7-4d91-a3f6-8b1d4c5a7e93",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "59",
+  "body": {
+    "subscriptionId": "1b2c3d4e-5f60-4b71-8d82-9fa0b1c2d3e4",
+    "sessionRef": {
+      "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+      "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
+    },
+    "cursor": {
+      "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
+      "globalSequence": "2280"
+    }
+  }
+}

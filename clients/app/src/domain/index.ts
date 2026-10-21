@@ -110,6 +110,7 @@ export {
   positionOf,
   recordFromEvent,
   recordFromHistoryItem,
+  recordFromRemoteEvent,
   recordGroupOf,
   viewText,
 } from "./timeline";

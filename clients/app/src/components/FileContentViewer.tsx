@@ -22,12 +22,15 @@
  * 没有该能力时显式说明「当前平台不支持图片预览」，绝不退化为 data URL 或远端地址。
  */
 
-import { createElement, useEffect, useRef, useState } from "react";
+import { createElement, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import type { FileContentState, FilePreviewContent, SessionFileDownloadState } from "../features";
 import { FILE_SOURCE_LABELS } from "../features";
 import type { GitDiffView } from "../domain/session-files";
+import { GitChangeMarkers } from "./GitChangeMarkers";
+import { GitFileComparison } from "./GitFileComparison";
+import { FileCodeText } from "./CodeBlock";
 import type { Palette } from "./theme";
 import { Pressable, ScrollView, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
 
@@ -60,7 +63,7 @@ function buildStyles(colors: Palette) {
       flexBasis: 0,
       minHeight: 0,
       width: "100%",
-      backgroundColor: colors.panel,
+      backgroundColor: colors.bg,
     },
     viewerScroll: {
       flexGrow: 1,
@@ -70,10 +73,11 @@ function buildStyles(colors: Palette) {
     head: {
       flexDirection: "row",
       flexWrap: "wrap",
-      alignItems: "baseline",
-      gap: spacing.sm,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
+      alignItems: "center",
+      gap: 10,
+      paddingVertical: 10,
+      paddingHorizontal: 20,
+      backgroundColor: colors.panel,
       borderBottomWidth: 1,
       borderBottomColor: colors.line,
     },
@@ -87,10 +91,12 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.xs,
     },
     path: {
+      flex: 1,
+      minWidth: 0,
       flexShrink: 1,
       color: colors.ink,
       fontFamily: fontFamily.mono,
-      fontSize: fontSize.sm,
+      fontSize: 13,
     },
     spacer: {
       flexGrow: 1,
@@ -109,17 +115,17 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.sm,
     },
     body: {
-      flexGrow: 1,
-      flexShrink: 1,
-      flexBasis: 0,
-      minHeight: 0,
-      gap: spacing.sm,
-      padding: spacing.md,
+      flexShrink: 0,
+      gap: 12,
+      width: "100%",
+      maxWidth: 920,
+      alignSelf: "center",
+
     },
     note: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
+      fontSize: 11,
     },
     warning: {
       paddingVertical: spacing.xs,
@@ -163,16 +169,17 @@ function buildStyles(colors: Palette) {
     diff: {
       borderWidth: 1,
       borderColor: colors.line,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
+      borderRadius: 10,
+      backgroundColor: colors.panel,
       overflow: "hidden",
     },
     diffLine: {
-      paddingVertical: 1,
-      paddingHorizontal: spacing.sm,
+      paddingVertical: 2,
+      paddingHorizontal: 12,
       color: colors.ink2,
       fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
+      fontSize: 12.5,
+      lineHeight: 21.25,
     },
     diffAdded: {
       color: colors.ok,
@@ -186,12 +193,14 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
     },
     diffHunk: {
-      color: colors.accent,
-      backgroundColor: colors.accentSoft,
+      color: colors.ink3,
+      backgroundColor: colors.panel2,
+      paddingVertical: 5,
     },
     diffHeader: {
       color: colors.ink3,
-      backgroundColor: colors.line2,
+      backgroundColor: colors.panel2,
+      paddingVertical: 5,
     },
     record: {
       gap: spacing.xs,
@@ -208,6 +217,17 @@ function buildStyles(colors: Palette) {
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
 /** 已登记的二进制下载 MIME（下载文件名只取安全 basename）。 */
+function fileHighlightLanguage(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return ["ts","tsx","js","jsx","rs","json","toml","yaml","yml"].includes(ext) ? ext : "";
+}
+
+function fileLanguage(path: string): string {
+  const languages: Readonly<Record<string,string>> = {ts:"TypeScript",tsx:"TypeScript",js:"JavaScript",jsx:"JavaScript",rs:"Rust",json:"JSON",toml:"TOML",yaml:"YAML",yml:"YAML",md:"Markdown",txt:"Text"};
+  const label = languages[path.split(".").pop()?.toLowerCase() ?? ""];
+  return label === undefined ? "" : label + " \u00b7 ";
+}
+
 const BINARY_MIME = "application/octet-stream";
 
 /** 图片扩展名 → MIME（只用于 Blob 的类型标签；信任的是实际 magic 校验）。 */
@@ -269,28 +289,6 @@ function decodeUtf8(bytes: Uint8Array): string | null {
 }
 
 /** Git 差异行的展示档位。 */
-type GitLineKind = "added" | "deleted" | "context" | "hunk" | "header";
-
-/** Git 差异行的展示档位（服务端下发的是已带前缀的原始行，这边不补第二个前缀）。 */
-function gitLineKindOf(line: string): GitLineKind {
-  if (line.startsWith("@@")) return "hunk";
-  if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff --git") || line.startsWith("index ")) {
-    return "header";
-  }
-  if (line.startsWith("+")) return "added";
-  if (line.startsWith("-")) return "deleted";
-  return "context";
-}
-
-const GIT_LINE_STYLE: Readonly<Record<GitLineKind, "diffAdded" | "diffDeleted" | "diffContext" | "diffHunk" | "diffHeader">> = {
-  added: "diffAdded",
-  deleted: "diffDeleted",
-  context: "diffContext",
-  hunk: "diffHunk",
-  header: "diffHeader",
-};
-
-/** Git 不可用原因 → 已登记文案。 */
 const GIT_UNAVAILABLE_LABELS: Readonly<Record<NonNullable<GitDiffView["unavailable"]>, string>> = {
   not_repository: "此目录不是 Git 仓库。",
   git_unavailable: "Git 不可用：未安装或无法启动。",
@@ -303,8 +301,8 @@ function GitDiffBody({ diff }: { readonly diff: GitDiffView }): ReactElement {
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
   return (
-    <View style={styles.body} dataSet={{ fileViewContent: "git_diff", gitDiffKind: diff.kind, gitDiffBase: diff.base }}>
-      <Text style={styles.note} dataSet={{ gitDiffBaseLabel: diff.base }}>
+    <View style={[styles.body,{maxWidth:"100%"}]} dataSet={{ fileViewContent: "git_diff", gitDiffKind: diff.kind, gitDiffBase: diff.base }}>
+      <Text style={[styles.note, diff.base === "head" && {display:"none"}]} dataSet={{ gitDiffBaseLabel: diff.base }}>
         {diff.base === "head" ? "相对 HEAD 与当前工作树的合并差异（不拼接暂存/未暂存补丁）。" : "新仓库（空基准）：展示文件的完整新增内容。"}
       </Text>
       {diff.kind === "binary" ? (
@@ -322,27 +320,12 @@ function GitDiffBody({ diff }: { readonly diff: GitDiffView }): ReactElement {
           {GIT_UNAVAILABLE_LABELS[diff.unavailable]}
         </Text>
       )}
-      {diff.truncated ? (
+      {diff.truncated && diff.comparison === undefined ? (
         <Text style={styles.warning} dataSet={{ gitDiffTruncated: "true" }}>
           差异超过上限，已截断；这里不把截断后的内容当作完整差异。
         </Text>
       ) : null}
-      {diff.diffLines.length === 0 ? null : (
-        <View style={styles.diff} dataSet={{ gitDiffLines: String(diff.diffLines.length) }}>
-          {diff.diffLines.map((line, index) => {
-            const kind = gitLineKindOf(line);
-            return (
-              <Text
-                key={`git-diff:${String(index)}`}
-                style={[styles.diffLine, styles[GIT_LINE_STYLE[kind]]]}
-                dataSet={{ gitDiffLineKind: kind, gitDiffHunk: kind === "hunk" ? "true" : "false" }}
-              >
-                {line}
-              </Text>
-            );
-          })}
-        </View>
-      )}
+      {diff.kind === "text" && diff.unavailable === null ? <GitFileComparison diff={diff} /> : null}
     </View>
   );
 }
@@ -350,17 +333,9 @@ function GitDiffBody({ diff }: { readonly diff: GitDiffView }): ReactElement {
 /** 文本/图片/二进制预览。 */
 function PreviewBody({
   preview,
-  onDownload,
-  onCancelDownload,
-  onReleaseDownload,
-  downloadState,
   createPreviewUrl,
 }: {
   readonly preview: FilePreviewContent;
-  readonly onDownload: FileContentViewerProps["onDownload"];
-  readonly onCancelDownload: (() => void) | undefined;
-  readonly onReleaseDownload: (() => void) | undefined;
-  readonly downloadState: SessionFileDownloadState | null;
   readonly createPreviewUrl: FileContentViewerProps["createPreviewUrl"];
 }): ReactElement {
   const theme = useTheme();
@@ -396,15 +371,11 @@ function PreviewBody({
     };
   }, [preview.fileKind, preview.bytes, mimeType]);
 
-  const download =
-    downloadState !== null && downloadState.kind !== "idle" && downloadState.path === preview.path
-      ? downloadState
-      : null;
 
   return (
     <View style={styles.body} dataSet={{ fileViewContent: "preview", previewKind: preview.fileKind }}>
       <Text style={styles.note} dataSet={{ previewSize: preview.sizeBytes }}>
-        {`${formatBytes(preview.sizeBytes)}${preview.previewTruncated ? "（预览已按上限截断）" : ""}`}
+        {`${fileLanguage(preview.path)}${formatBytes(preview.sizeBytes)} · 只读预览${preview.previewTruncated ? "（预览已按上限截断）" : ""}`}
       </Text>
       {preview.previewTruncated ? (
         <Text style={styles.warning} dataSet={{ previewTruncated: "true" }}>
@@ -446,6 +417,27 @@ function PreviewBody({
         </Text>
       ) : null}
 
+
+    </View>
+  );
+}
+
+/** 文本预览：只在 UTF-8 可解码时按纯文本呈现，否则退回二进制说明。 */
+function FileDownloadControls({ preview, onDownload, onCancelDownload, onReleaseDownload, downloadState }: {
+  readonly preview: FilePreviewContent;
+  readonly onDownload: FileContentViewerProps["onDownload"];
+  readonly onCancelDownload: FileContentViewerProps["onCancelDownload"];
+  readonly onReleaseDownload: FileContentViewerProps["onReleaseDownload"];
+  readonly downloadState: SessionFileDownloadState | null;
+}): ReactElement {
+  const theme = useTheme();
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const download =
+    downloadState !== null && downloadState.kind !== "idle" && downloadState.path === preview.path
+      ? downloadState
+      : null;
+
+  return <View dataSet={{fileDownloadToolbar:"true"}} style={{flexDirection:"row",alignItems:"center",gap:8,flexShrink:1}}>
       {download === null ? (
         onDownload === undefined ? null : (
           <Pressable
@@ -535,11 +527,9 @@ function PreviewBody({
           ) : null}
         </View>
       )}
-    </View>
-  );
+  </View>;
 }
 
-/** 文本预览：只在 UTF-8 可解码时按纯文本呈现，否则退回二进制说明。 */
 function TextPreview({ preview }: { readonly preview: FilePreviewContent }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -553,11 +543,15 @@ function TextPreview({ preview }: { readonly preview: FilePreviewContent }): Rea
     );
   }
   return (
-    <View style={styles.diff} dataSet={{ textPreview: "true" }}>
-      {/* 纯文本只经 `Text` 呈现：不解析 Markdown/HTML，不执行脚本，不加载其中的远端资源。 */}
-      <Text style={[styles.textBody, { padding: spacing.sm }]} dataSet={{ filePreviewText: "true" }}>
-        {text}
-      </Text>
+    <View style={styles.diff} dataSet={{ textPreview: "true", fileWordWrap: "false" }}>
+      {createElement("div", {style:{overflowX:"auto",maxWidth:"100%",padding:"14px 0",background:theme.colors.panel}},
+        createElement("div", {"data-file-preview-text":"true",style:{minWidth:"max-content",width:"100%"}},
+          <FileCodeText code={text} language={fileHighlightLanguage(preview.path)} renderLine={(line, index) => createElement("div", {key:index,style:{display:"flex",minWidth:0,fontFamily:fontFamily.mono,fontSize:12.5,lineHeight:"1.7"}},
+            createElement("div", {"aria-hidden":true,"data-file-line-numbers":String(index+1),style:{position:"sticky",left:0,zIndex:1,minWidth:"3.4em",flexShrink:0,padding:"0 10px 0 14px",textAlign:"right",userSelect:"none",color:theme.colors.ink3,background:theme.colors.panel2,borderRight:"1px solid "+theme.colors.line2}},String(index+1)),
+            createElement("pre", {style:{margin:0,padding:"0 16px",minWidth:0,minHeight:"1.7em",flex:1,font:"inherit",color:theme.colors.ink,whiteSpace:"pre",overflowWrap:"normal",tabSize:2}},line),
+          )} />,
+        ),
+      )}
     </View>
   );
 }
@@ -577,6 +571,14 @@ export function FileContentViewer({
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const source = content.context.source;
   const path = content.context.path;
+  const showGitMarkers = content.status === "ready" && content.content.kind === "git_diff" && content.content.diff.kind === "text";
+  const [scrollHost, setScrollHost] = useState<HTMLElement | null>(null);
+  const assignScrollHost = useCallback((node: unknown) => {
+    const handle = node as {getScrollableNode?: () => unknown} | null;
+    const resolved = handle?.getScrollableNode?.() ?? node;
+    setScrollHost(typeof HTMLElement !== "undefined" && resolved instanceof HTMLElement ? resolved : null);
+  }, []);
+
 
   return (
     <View
@@ -589,19 +591,22 @@ export function FileContentViewer({
       }}
     >
       <View style={styles.head}>
-        <Text style={styles.sourceLabel} dataSet={{ fileViewSourceLabel: source }}>
+        <Text style={[styles.sourceLabel, {fontSize:10.5,fontWeight:"600",borderRadius:5}, source === "git" && {color:theme.colors.warn,backgroundColor:theme.colors.warnSoft}]} dataSet={{ fileViewSourceLabel: source }}>
           {FILE_SOURCE_LABELS[source]}
         </Text>
         <Text style={styles.path} numberOfLines={1} dataSet={{ fileViewPathLabel: path }}>
-          {path}
+          <Text style={{color:theme.colors.ink3}}>{path.includes("/") ? path.slice(0,path.lastIndexOf("/")+1) : ""}</Text><Text style={{fontWeight:"600"}}>{path.slice(path.lastIndexOf("/")+1)}</Text>
         </Text>
-        <View style={styles.spacer} />
+        {content.status === "ready" && content.content.kind === "preview" ? <>
+          <FileDownloadControls preview={content.content} onDownload={onDownload} onCancelDownload={onCancelDownload} onReleaseDownload={onReleaseDownload} downloadState={downloadState} />
+        </> : null}
         {createElement(
           "button",
           {
             type: "button",
             "data-action": "close-file-view",
             "aria-label": "关闭文件查看",
+            title: "关闭文件查看",
             tabIndex: 0,
             onClick: onClose,
             onKeyDown: (event: KeyboardEvent) => {
@@ -611,19 +616,27 @@ export function FileContentViewer({
               }
             },
             style: {
-              padding: "6px 10px",
+              padding: "5px 9px",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              fontFamily: "inherit",
+              fontSize: 11.5,
+              whiteSpace: "nowrap",
               border: `1px solid ${theme.colors.line}`,
-              borderRadius: 6,
+              borderRadius: 8,
               background: theme.colors.panel,
-              color: theme.colors.ink,
+              color: theme.colors.ink2,
               cursor: "pointer",
             },
           },
-          "✕ 关闭文件查看",
+          createElement("svg", { width:11, height:11, viewBox:"0 0 12 12", fill:"none", stroke:"currentColor", strokeWidth:1.4, strokeLinecap:"round", "aria-hidden":true }, createElement("path", {d:"M2 2l8 8M10 2l-8 8"})),
+          "关闭",
         )}
       </View>
 
-      <ScrollView style={styles.viewerScroll} dataSet={{ fileViewScroll: "true" }}>
+      <View style={{flex:1,minHeight:0,position:"relative"}}>
+      <ScrollView ref={assignScrollHost} style={styles.viewerScroll} contentContainerStyle={{paddingTop:20,paddingHorizontal:24,paddingBottom:40,gap:12}} dataSet={{fileViewScroll:"true",fileViewScrollbar:"native"}}>
       {content.stale ? (
         <View style={styles.body} dataSet={{ fileViewStaleBanner: "true" }}>
           <Text style={styles.warning}>
@@ -668,10 +681,6 @@ export function FileContentViewer({
       {content.status === "ready" && content.content.kind === "preview" ? (
         <PreviewBody
           preview={content.content}
-          onDownload={onDownload}
-          onCancelDownload={onCancelDownload}
-          onReleaseDownload={onReleaseDownload}
-          downloadState={downloadState}
           createPreviewUrl={createPreviewUrl}
         />
       ) : null}
@@ -680,6 +689,8 @@ export function FileContentViewer({
         <GitDiffBody diff={content.content.diff} />
       ) : null}
       </ScrollView>
+      {showGitMarkers ? <GitChangeMarkers scrollHost={scrollHost} contentKey={content} /> : null}
+      </View>
     </View>
   );
 }

@@ -394,7 +394,7 @@ impl GitRunner {
             .map_err(|_| unavailable());
         }
         let (lines, over_limit) = bounded_lines(text);
-        GitDiff::try_new(
+        let diff = GitDiff::try_new(
             rel.clone(),
             base,
             GitDiffKind::Text,
@@ -402,7 +402,143 @@ impl GitRunner {
             None,
             output.truncated || over_limit,
         )
-        .map_err(|_| unavailable())
+        .map_err(|_| unavailable())?;
+        let status = detail.as_ref().map(|entry| entry.status);
+        Ok(
+            match self
+                .comparison(
+                    root,
+                    rel,
+                    &prefix,
+                    previous.as_ref(),
+                    use_empty_base,
+                    status,
+                )
+                .await
+            {
+                Some((before, after)) => diff.with_comparison(before, after),
+                None => diff,
+            },
+        )
+    }
+
+    /// Read both complete versions under the existing 64 KiB per-side budget.
+    async fn comparison(
+        &self,
+        root: &Path,
+        rel: &SessionFilePath,
+        prefix: &str,
+        previous: Option<&SessionFilePath>,
+        empty_base: bool,
+        status: Option<GitFileStatus>,
+    ) -> Option<(String, String)> {
+        let before = if empty_base || status == Some(GitFileStatus::Added) {
+            String::new()
+        } else {
+            let old = previous.unwrap_or(rel);
+            let spec = format!("HEAD:{prefix}{}", old.as_str());
+            let args = os_args(&[
+                "show",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                &spec,
+            ]);
+            let output = self
+                .run(root, &args, None, GIT_DIFF_MAX_BYTES, true)
+                .await
+                .ok()?;
+            if !output.success() || output.truncated {
+                return None;
+            }
+            String::from_utf8(output.stdout).ok()?
+        };
+        let after = if status == Some(GitFileStatus::Deleted) {
+            String::new()
+        } else {
+            let root = root.to_str()?.to_owned();
+            let path = rel.clone();
+            tokio::task::spawn_blocking(move || {
+                let secure = super::root::SecureRoot::open(&root).ok()?;
+                let resolved = secure.resolve(Some(&path)).ok()?;
+                if !resolved.metadata().is_file()
+                    || resolved.metadata().len() > GIT_DIFF_MAX_BYTES as u64
+                {
+                    return None;
+                }
+                use std::io::Read;
+                let (mut file, _) = resolved.open_file().ok()?;
+                let mut bytes = Vec::new();
+                (&mut file)
+                    .take((GIT_DIFF_MAX_BYTES + 1) as u64)
+                    .read_to_end(&mut bytes)
+                    .ok()?;
+                if super::root::FileIdentity::of(&file.metadata().ok()?) != resolved.identity() {
+                    return None;
+                }
+                resolved.verify_path_unchanged().ok()?;
+                if bytes.len() > GIT_DIFF_MAX_BYTES {
+                    return None;
+                }
+                String::from_utf8(bytes).ok()
+            })
+            .await
+            .ok()??
+        };
+        if before.contains('\0') || after.contains('\0') {
+            return None;
+        }
+        Some((before, after))
+    }
+
+    /// One bounded numstat query per page; no per-file subprocess fan-out.
+    pub(crate) async fn line_counts(
+        &self,
+        root: &Path,
+        entries: &[GitEntry],
+    ) -> Option<(bool, std::collections::HashMap<String, (u32, u32)>)> {
+        let head = self
+            .run(
+                root,
+                &os_args(&["rev-parse", "--verify", "-q", "HEAD"]),
+                None,
+                AUX_MAX_BYTES,
+                false,
+            )
+            .await
+            .ok()?;
+        if !head.success() {
+            return Some((false, std::collections::HashMap::new()));
+        }
+        let mut args = os_args(&[
+            "diff",
+            "--relative",
+            "--numstat",
+            "-z",
+            "--find-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "HEAD",
+            "--",
+        ]);
+        for entry in entries {
+            args.push(OsString::from(format!(":(literal){}", entry.path.as_str())));
+            if let Some(previous) = &entry.previous {
+                args.push(OsString::from(format!(":(literal){}", previous.as_str())));
+            }
+        }
+        if entries.is_empty() {
+            return Some((true, std::collections::HashMap::new()));
+        }
+        let output = self
+            .run(root, &args, None, AUX_MAX_BYTES, true)
+            .await
+            .ok()?;
+        if !output.success() || output.truncated {
+            return None;
+        }
+        Some((true, parse_numstat(&output.stdout)?))
     }
 
     /// 路径不在索引中（未跟踪或被忽略）→ 差异按空基准的全量新增表达。
@@ -899,4 +1035,51 @@ pub(crate) fn status_entry(entry: GitEntry, binary: bool) -> Result<GitStatusEnt
         binary,
     )
     .map_err(|_| unavailable())
+}
+
+/// NUL-delimited paths preserve tabs/newlines; rename records carry old/new path fields.
+fn parse_numstat(bytes: &[u8]) -> Option<std::collections::HashMap<String, (u32, u32)>> {
+    let mut fields = bytes.split(|byte| *byte == 0);
+    let mut counts = std::collections::HashMap::new();
+    while let Some(field) = fields.next() {
+        if field.is_empty() {
+            continue;
+        }
+        let mut parts = field.splitn(3, |byte| *byte == b'\t');
+        let added = parts.next()?;
+        let deleted = parts.next()?;
+        let name = parts.next()?;
+        let path = if name.is_empty() {
+            fields.next()?;
+            fields.next()?
+        } else {
+            name
+        };
+        if path.is_empty() {
+            return None;
+        }
+        if added == b"-" || deleted == b"-" {
+            continue;
+        }
+        let added = std::str::from_utf8(added).ok()?.parse::<u32>().ok()?;
+        let deleted = std::str::from_utf8(deleted).ok()?.parse::<u32>().ok()?;
+        let path = std::str::from_utf8(path).ok()?;
+        counts.insert(path.to_owned(), (added, deleted));
+    }
+    Some(counts)
+}
+
+#[cfg(test)]
+mod line_count_tests {
+    use super::parse_numstat;
+    #[test]
+    fn parses_paths_renames_and_binary_without_splitting_path_text() {
+        let counts =
+            parse_numstat(b"2\t3\tsrc/a\tb.ts\0-\t-\timage.png\x001\t0\t\0old\nname\0new\nname\0")
+                .expect("numstat");
+        assert_eq!(counts.get("src/a\tb.ts"), Some(&(2, 3)));
+        assert_eq!(counts.get("new\nname"), Some(&(1, 0)));
+        assert!(!counts.contains_key("image.png"));
+        assert!(parse_numstat(b"1\t2\t\0old\0").is_none());
+    }
 }

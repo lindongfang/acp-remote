@@ -34,9 +34,9 @@ use acp_core::model::{
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, CommitOutcome, EventSink, HistoryPage,
-    HistoryQuery, IdGenerator, LocalConfigStore, OwnedCommit, PruneReport, ReadView,
-    RemoteDeliveryStore, ReplayLimit, RetentionPolicy, SessionActivityFacts, SessionBackendFactory,
-    SessionEndpoint, SessionQuery, SessionStore, StoreHealth, TrustStore, TurnAccepted,
+    HistoryQuery, IdGenerator, LocalConfigStore, OwnedCommit, PruneReport, ReadView, ReplayLimit,
+    RetentionPolicy, SessionActivityFacts, SessionBackendFactory, SessionEndpoint, SessionQuery,
+    SessionStore, StoreHealth, TrustStore, TurnAccepted,
 };
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use identity_auth::{Authority, EntropySource, IdentityKeystore};
@@ -193,7 +193,6 @@ impl OwnerNode {
             rejected: Arc::clone(&rejected_commits),
             recovery_reads: Arc::clone(&recovery_reads),
         });
-        let deliveries: Arc<dyn RemoteDeliveryStore> = store.clone();
         let trust: Arc<dyn TrustStore> = store.clone();
         let audit: Arc<dyn AuditStore> = store.clone();
         let local_config: Arc<dyn LocalConfigStore> = store.clone();
@@ -227,7 +226,6 @@ impl OwnerNode {
         let broker = Arc::new(Broker::new(
             BrokerDeps {
                 store: Arc::clone(&sessions),
-                deliveries: Arc::clone(&deliveries),
                 backends,
                 trust: Arc::clone(&trust),
                 publisher,
@@ -240,7 +238,6 @@ impl OwnerNode {
         let core = Arc::new(UseCases::new(UseCaseDeps {
             broker: Arc::clone(&broker),
             store: Arc::clone(&sessions),
-            deliveries,
             trust,
             audit: Arc::clone(&audit),
             config: local_config,

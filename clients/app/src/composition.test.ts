@@ -59,7 +59,6 @@ import type {
   LocalCachePort,
   VisibilityState,
 } from "./platform";
-import { createVolatileImportedContent } from "./platform";
 import type { HostIdentityPort, PairedHostRecord } from "./sync-client";
 
 const HOST_ID = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
@@ -156,16 +155,11 @@ class MemoryLocalCache implements LocalCachePort {
 
   async putLocalSummary(input: { key: string; summary: string; nowMs: number }): Promise<void> {
     this.entries.set(input.key, {
-      kind: "local",
       key: input.key,
       summary: input.summary,
       updatedAtMs: input.nowMs,
       lastUsedAtMs: input.nowMs,
     });
-  }
-
-  async putImportedMetadata(): Promise<void> {
-    throw new Error("组合根不写 imported 元数据");
   }
 
   async get(key: string): Promise<CacheHit | null> {
@@ -178,7 +172,7 @@ class MemoryLocalCache implements LocalCachePort {
   }
 
   async stats(): Promise<CacheStats> {
-    return { localEntries: this.entries.size, localBytes: 0, importedEntries: 0, importedBytes: 0, expiredEntries: 0 };
+    return { entries: this.entries.size, bytes: 0, expiredEntries: 0 };
   }
 }
 
@@ -251,7 +245,7 @@ function cacheBackedHost(cache: MemoryLocalCache): HostIdentityPort {
   return {
     async loadPairedHost(canonicalOrigin: string): Promise<PairedHostRecord | null> {
       const hit = await cache.get(`paired-host/${canonicalOrigin}`);
-      if (hit === null || hit.entry.kind !== "local") return null;
+      if (hit === null) return null;
       const parsed = JSON.parse(hit.entry.summary) as PairedHostRecord;
       return parsed;
     },
@@ -322,7 +316,6 @@ function setup(
     platform: {
       deviceIdentity: input.deviceIdentity ?? fakeDeviceIdentity(true),
       localCache: cache,
-      importedContent: createVolatileImportedContent(),
       lifecycle,
       download: fakeDownloadPort(),
     },
@@ -1253,7 +1246,7 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
     // 写入只落在「规范化来源派生出的那一个键」上：键取错（或另写了一份额外记录）→ 变红。
     expect([...context.cache.entries.keys()]).toEqual([`paired-host/${ORIGIN}`]);
     const entry = context.cache.entries.get(`paired-host/${ORIGIN}`);
-    expect(entry?.kind === "local" ? entry.summary : null).toBe(
+    expect(entry?.summary ?? null).toBe(
       JSON.stringify({ hostId: HOST_ID, publicKeyBase64Url: APPROVED_HOST_PUBLIC_KEY }),
     );
     expect(context.composition.store.hostPanel().host).toEqual({
@@ -1334,7 +1327,7 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
 
     expect([...context.cache.entries.keys()]).toEqual([`paired-host/${ORIGIN}`]);
     const entry = context.cache.entries.get(`paired-host/${ORIGIN}`);
-    expect(entry?.kind === "local" ? entry.summary : null).toBe(
+    expect(entry?.summary ?? null).toBe(
       JSON.stringify({ hostId: HOST_ID, publicKeyBase64Url: QR_HOST_PUBLIC_KEY }),
     );
     expect(context.sockets.sockets).toHaveLength(1);
@@ -1361,7 +1354,7 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
     expect(context.cache.entries.get(key)).toEqual(before);
     await advanceUntil(context, () => context.composition.store.pairingPage().phase === "approved", "批准");
     const entry = context.cache.entries.get(key);
-    expect(entry?.kind === "local" ? entry.summary : null).toBe(
+    expect(entry?.summary ?? null).toBe(
       JSON.stringify({ hostId: HOST_ID, publicKeyBase64Url: QR_HOST_PUBLIC_KEY }),
     );
     context.composition.dispose();

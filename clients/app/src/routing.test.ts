@@ -268,7 +268,6 @@ function compositionWithoutNetwork(): Composition {
   const platform = {
     deviceIdentity: {},
     localCache: {},
-    importedContent: {},
     lifecycle: {},
   } as unknown as PlatformPorts;
   return createComposition({

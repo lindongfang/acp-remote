@@ -64,8 +64,8 @@ ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent
 
 - 向本地 Zed/CLI 暴露 `acp-remote acp-stdio`。
 - 向本地 Sync 客户端暴露本节点 owned 资源。
-- 经 Node Link 导入的资源通过 `acp_facade` 与 Sync 转发两条路径提供（转发规则见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.6“imported 资源”）。
-- 保存 import 配置、来源引用、cursor/ACK、幂等状态、无正文交付索引和本地 principal 授权。
+- 经 Node Link 导入的资源通过 `acp_facade` 与 Sync 转发两条路径提供（转发规则见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.6–§9.7）。
+- 只保存连接与信任资料（节点/设备身份、公钥指纹、地址与协议配置、本机信任/撤销决定、连接重试配置）以及节点自有的 owned 资源；**不保存** Owner 的 import 索引、来源游标、ACK、`requestId`、命令状态或任何交付收据——远程数据只在已认证连接期有界存在。
 - 将命令转发给 Owner Node，并保留 origin event/sequence。
 - 不能修改远程 Agent 凭据、扩大 workspace 或突破 Export grant。
 - 不是远程会话权威，Owner 离线时不能伪造 accepted/complete 状态。
@@ -292,7 +292,7 @@ PWA 是例外：浏览器密钥和 IndexedDB 按 Origin 隔离，一个 PWA 设�
 ### 6.4 无云模式限制
 
 - Owner Node 关机、休眠、断网或 Daemon 停止时，远程客户端/Access Node 无法控制其 Agent。
-- 默认 `no-content-cache` 下，Access Node 或客户端只能在 Owner 在线时读取会话正文；Owner 离线时只显示资源引用、连接状态和不含正文的同步元数据。
+- 默认 `no-content-cache` 下，Access Node 或客户端只能在 Owner 在线时读取会话正文；Owner 离线时只显示连接状态与显式的不可用说明，Access 不保留可展示的远程摘要/正文副本。
 - Owner Node 离线时不能可靠排队 prompt，也不能伪装为已接受。
 - 手机/PWA 后台 WebSocket 可能被操作系统挂起。
 - 在不使用 APNs/FCM 等云推送服务时，后台通知不能保证实时到达。
@@ -385,7 +385,7 @@ Daemon 立即返回接受、排队或拒绝状态；实际执行结果通过事�
 
 ## 10. 数据存储
 
-Owner Node 需要保存足以支持客户端和 Access Node 历史查看、断线恢复的数据，但不永久保存完整 ACP 原始流。Access Node 默认采用 `no-content-cache`：只持久化 import、资源来源、cursor/ACK、`requestId`、命令终态引用、事件摘要/digest 和 local sequence 映射，不持久化 prompt、回复、工具内容、diff、终端输出、附件或 ACP raw 正文。Access 收到事件后必须先提交这份无正文交付索引再向本地客户端广播；重放正文时按 origin cursor 回源 Owner。未来的加密离线正文缓存必须由独立 feature、Owner Export Policy 和 ADR 显式启用。
+Owner Node 需要保存足以支持客户端和 Access Node 历史查看、断线恢复的数据，但不永久保存完整 ACP 原始流。Access Node 采用 `no-content-cache` 且**不持久化任何 Owner 远程资源**：不保存 import 索引、资源来源、cursor/ACK、`requestId`、命令终态引用、事件摘要/digest 或 local sequence 映射，也不保存 prompt、回复、工具内容、diff、终端输出、附件或 ACP raw 正文。远程目录、来源事件与读取结果只在已认证连接期有界存在；Access 不先提交收据再广播，而是把 Owner 来源事件原样转发（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.7）。重放正文时按 origin cursor 回源 Owner。未来的加密离线正文缓存必须由独立 feature、Owner Export Policy 和 ADR 显式启用。
 
 `no-content-cache` 约束 ACP Remote Access Node 和项目自带客户端。数据一旦按 Export 授权发送给 Zed 或其他第三方 ACP Client，ACP Remote 无法保证该客户端不保存历史、日志或崩溃转储；Owner 管理员必须把允许该客户端接收内容视为一次数据披露授权，并通过受管终端策略控制第三方留存。
 
@@ -708,7 +708,7 @@ Windows 是当前 Daemon/CLI、节点配对、进程树管理和首个 Node Link
 ### 阶段三：可靠性、安全与网络完善
 
 - 浏览器/节点密钥方案与跨端加密互操作验证。
-- 重连、慢客户端、无正文交付索引损坏、进程崩溃和数据库迁移测试。
+- 重连、慢客户端、Access 不落盘检查、进程崩溃和数据库迁移测试。
 - 存储 TTL、大小限制、流式事件合并和敏感信息审计。
 - Tailscale 部署文档和可选辅助工具。
 - 多 endpoint 自动连接、局域网与可替换 HTTPS 暴露方案。

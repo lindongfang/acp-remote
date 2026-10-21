@@ -54,6 +54,8 @@ const NEW_SYNC_FEATURES = [
   "core.workspace-browse.v1",
   "core.file-diff.v1",
   "core.session-files.v1",
+  "core.session-git-stats.v1",
+    "core.session-git-compare.v1",
 ] as const;
 
 describe("feature 声明：逐层浏览 / 结构化差异两条新增 Sync feature", () => {

@@ -523,19 +523,14 @@ async fn node_scope_events_have_null_origin_columns() {
     let node_row = batch
         .events
         .iter()
-        .find(|delivery| match delivery {
-            acp_core::model::CommittedDelivery::Owned(event) => event.session.is_none(),
-            _ => false,
-        })
+        .find(|event| event.session.is_none())
         .expect("the node-scope event must take part in replay");
-    match node_row {
-        acp_core::model::CommittedDelivery::Owned(event) => {
-            assert!(event.origin_epoch.is_none());
-            assert!(event.origin_sequence.is_none());
-            assert_eq!(event.global_sequence, Sequence::new(1).expect("sequence"));
-        }
-        _ => unreachable!(),
-    }
+    assert!(node_row.origin_epoch.is_none());
+    assert!(node_row.origin_sequence.is_none());
+    assert_eq!(
+        node_row.global_sequence,
+        Sequence::new(1).expect("sequence")
+    );
     drop(view);
     store.close().await;
 }

@@ -60,7 +60,7 @@ function onlineStore(sessions: readonly SessionSummary[]): ClientStore {
 }
 
 describe("R20：imported 会话的输入在 ClientStore 生产路径上不可标记为已发送", () => {
-  it("连接在线时，imported 来源（无论来源节点是否可达）仍不可标记", () => {
+  it("连接在线且来源可达时，远程会话可以发送（本节点来源同样可以）", () => {
     const store = onlineStore([
       session({ id: REMOTE_SESSION, state: "running", origin: remoteOrigin(true) }),
       session({ id: LOCAL_SESSION, state: "running", origin: { kind: "local" } }),
@@ -71,8 +71,8 @@ describe("R20：imported 会话的输入在 ClientStore 生产路径上不可标
 
     const remotePage = store.conversationPage(REMOTE_SESSION);
     expect(remotePage).not.toBeNull();
-    // 反例：若 `sendable` 只看在线（或对 remote 来源放宽），这里会是 true → 断言变红。
-    expect(remotePage?.capabilities.canSend).toBe(false);
+    // 反例：若对远程来源一律禁止（旧 imported 口径），这里会是 false → 断言变红。
+    expect(remotePage?.capabilities.canSend).toBe(true);
 
     // 对照：本节点来源在同一连接状态下必须可发送——否则上一条是平凡通过。
     const localPage = store.conversationPage(LOCAL_SESSION);

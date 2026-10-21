@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.remote_unavailable",
+  "messageId": "bd94f5da-b50c-4ce6-b84b-da6c9ba0c3e8",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "64",
+  "body": {
+    "subscriptionId": "1b2c3d4e-5f60-4b71-8d82-9fa0b1c2d3e4"
+  }
+}

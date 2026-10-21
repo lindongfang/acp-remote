@@ -7,9 +7,7 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
-use acp_core::model::{
-    AttachmentId, NodeId, OriginCursor, OriginEpoch, PeerPublicKey, Sequence, SessionId, Timestamp,
-};
+use acp_core::model::{AttachmentId, NodeId, PeerPublicKey};
 use async_trait::async_trait;
 use identity_auth::P1363Signature;
 use node_link_protocol::attachment::{FrameBody, StatusBody, TransferState};
@@ -24,8 +22,8 @@ use node_link_client::identity::NodeIdentity;
 use node_link_client::{ClientConfig, ClientError, NodeLinkClient, TlsTrust, TransportFactory};
 
 use support::{
-    MemTransport, OwnerIdentity, OwnerIo, RecordingDeliveries, RecordingSink, accept_handshake,
-    decimal, encode_envelope, selected_features, send_challenge, uuid_text,
+    MemTransport, OwnerIdentity, OwnerIo, accept_handshake, decimal, encode_envelope,
+    selected_features, send_challenge, uuid_text,
 };
 
 const ACCESS_NODE: &str = "9f1c3a52-6a4e-4f0e-8d3c-5b2a1e0f7c11";
@@ -87,6 +85,7 @@ async fn wait_for<F: Fn() -> bool>(condition: F, what: &str) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn revocation_stops_reconnect_and_never_reopens_the_transport() {
     let owner = OwnerIdentity::new([0x31; 32], "5c6d7e8f-9012-4a3b-8c4d-5e6f708192a3");
+    let owner_node = owner.node_id.clone();
     let transport = Arc::new(MemTransport::default());
     let (client_connection, mut io) = OwnerIo::pair();
     transport.push(client_connection);
@@ -127,14 +126,8 @@ async fn revocation_stops_reconnect_and_never_reopens_the_transport() {
     });
 
     let identity = FixedIdentity::new([0x41; 32]);
-    let sink = Arc::new(RecordingSink::default());
-    let deliveries = Arc::new(RecordingDeliveries::default());
-    let client = NodeLinkClient::new(
-        transport.factory(),
-        Arc::new(identity),
-        sink.clone(),
-        deliveries,
-    );
+    let runtime = node_link_client::RemoteRuntime::new();
+    let client = NodeLinkClient::new(transport.factory(), Arc::new(identity), runtime.clone());
     let link = client
         .open(ClientConfig::new(
             owner_trust(&OwnerIdentity::new(
@@ -146,11 +139,7 @@ async fn revocation_stops_reconnect_and_never_reopens_the_transport() {
         ))
         .expect("open");
 
-    wait_for(
-        || *sink.catalogs.lock().expect("catalogs") == 1,
-        "catalog snapshot",
-    )
-    .await;
+    wait_for(|| runtime.has_directory(&owner_node), "catalog snapshot").await;
     wait_for(|| link.is_revoked(), "revocation").await;
     assert!(!link.is_online(), "a revoked link must be offline");
     owner_task.await.expect("owner task");
@@ -202,8 +191,7 @@ async fn an_auth_revoked_error_also_stops_the_link() {
     let client = NodeLinkClient::new(
         transport.factory(),
         Arc::new(FixedIdentity::new([0x42; 32])),
-        Arc::new(RecordingSink::default()),
-        Arc::new(RecordingDeliveries::default()),
+        node_link_client::RemoteRuntime::new(),
     );
     let link = client
         .open(ClientConfig::new(
@@ -245,8 +233,7 @@ fn open_link(
     let client = NodeLinkClient::new(
         transport.factory(),
         Arc::new(FixedIdentity::new(seed)),
-        Arc::new(RecordingSink::default()),
-        Arc::new(RecordingDeliveries::default()),
+        node_link_client::RemoteRuntime::new(),
     );
     client
         .open(ClientConfig::new(
@@ -573,8 +560,7 @@ async fn every_owner_link_builds_its_transport_from_its_own_config() {
     let client = NodeLinkClient::new(
         factory.clone(),
         Arc::new(FixedIdentity::new([0x4c; 32])),
-        Arc::new(RecordingSink::default()),
-        Arc::new(RecordingDeliveries::default()),
+        node_link_client::RemoteRuntime::new(),
     );
     let first_owner = OwnerIdentity::new([0x51; 32], "5c6d7e8f-9012-4a3b-8c4d-5e6f708192d1");
     let second_owner = OwnerIdentity::new([0x52; 32], "5c6d7e8f-9012-4a3b-8c4d-5e6f708192d2");
@@ -608,11 +594,9 @@ async fn every_owner_link_builds_its_transport_from_its_own_config() {
     second.shutdown().await;
 }
 
-/// 已撤销导出/旧 epoch cursor 的恢复 attach 被请求级拒绝后：连接保持可用，重连时恢复计划**跳过**
-/// 该持久化订阅——不会形成「重连 → 再 attach → 再拒绝」的循环。
+/// 无持久中转：重连后不恢复任何远程订阅（没有 attach，也不重发 command.status）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_permanently_rejected_subscription_is_not_retried_after_reconnect() {
-    const IMPORTED_SESSION: &str = "2bc8b944-2a4f-46a7-8c31-b2c40923f60b";
+async fn no_remote_subscription_is_restored_after_reconnect() {
     const OWNER_NODE: &str = "5c6d7e8f-9012-4a3b-8c4d-5e6f708192a5";
     let features = selected_features(&["node-link.command-status.v1"]);
     let owner = OwnerIdentity::new([0x33; 32], OWNER_NODE);
@@ -622,21 +606,20 @@ async fn a_permanently_rejected_subscription_is_not_retried_after_reconnect() {
     transport.push(first_connection);
     transport.push(second_connection);
     let owner_for_task = OwnerIdentity::new([0x33; 32], OWNER_NODE);
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let snapshot = || CatalogSnapshot {
+        revision: decimal(1),
+        agents: AgentEntryList::new(Vec::new()).expect("agents"),
+        directories: DirectoryEntryList::new(Vec::new()).expect("directories"),
+        sessions: CatalogSessionList::new(Vec::new()).expect("sessions"),
+    };
     let owner_task = tokio::spawn(async move {
-        let snapshot = || CatalogSnapshot {
-            revision: decimal(1),
-            agents: AgentEntryList::new(Vec::new()).expect("agents"),
-            directories: DirectoryEntryList::new(Vec::new()).expect("directories"),
-            sessions: CatalogSessionList::new(Vec::new()).expect("sessions"),
-        };
-        // 第一条连接：恢复计划里的 attach 得到请求级拒绝（不可重试）。
         let session = accept_handshake(&mut first_io, &owner_for_task, &features).await;
         let mut inbound = session.inbound_next;
-        let _ = first_io
+        let subscribe = first_io
             .recv_envelope(&session.connection_id, &mut inbound)
             .await
             .expect("catalog.subscribe");
+        assert_eq!(subscribe.message_type(), MessageType::CatalogSubscribe);
         first_io
             .send_envelope(
                 MessageType::CatalogSnapshot,
@@ -644,32 +627,24 @@ async fn a_permanently_rejected_subscription_is_not_retried_after_reconnect() {
                 &snapshot(),
             )
             .await;
-        let attach = first_io
-            .recv_envelope(&session.connection_id, &mut inbound)
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(200),
+                first_io.recv_envelope(&session.connection_id, &mut inbound),
+            )
             .await
-            .expect("startup resource.attach");
-        assert_eq!(attach.message_type(), MessageType::ResourceAttach);
-        let mut body = node_link_protocol::error::Body::new(
-            node_link_protocol::error::ErrorCode::ProtocolSequenceInvalid,
-            "the cursor is not usable for this session on this connection",
-            false,
-        )
-        .expect("error body");
-        body.correlation_id = acpr_wire::Nullable::value(attach.message_id().clone());
-        first_io
-            .send_envelope(MessageType::LinkError, &session.connection_id, &body)
-            .await;
-        // 拒绝本身不得关闭连接；随后由 Owner 断开以触发一次重连。
-        tokio::time::sleep(Duration::from_millis(100)).await;
+            .is_err(),
+            "no remote subscription may be restored from a previous connection"
+        );
         first_io.close().await;
 
-        // 第二条连接：恢复计划必须跳过被拒绝的会话（除 catalog.subscribe 外没有请求）。
         let session = accept_handshake(&mut second_io, &owner_for_task, &features).await;
         let mut inbound = session.inbound_next;
-        let _ = second_io
+        let subscribe = second_io
             .recv_envelope(&session.connection_id, &mut inbound)
             .await
             .expect("catalog.subscribe");
+        assert_eq!(subscribe.message_type(), MessageType::CatalogSubscribe);
         second_io
             .send_envelope(
                 MessageType::CatalogSnapshot,
@@ -677,49 +652,22 @@ async fn a_permanently_rejected_subscription_is_not_retried_after_reconnect() {
                 &snapshot(),
             )
             .await;
-        let retried = tokio::time::timeout(
-            Duration::from_millis(300),
-            second_io.recv_envelope(&session.connection_id, &mut inbound),
-        )
-        .await;
         assert!(
-            retried.is_err(),
-            "a permanently rejected subscription must not be retried after reconnect"
+            tokio::time::timeout(
+                Duration::from_millis(300),
+                second_io.recv_envelope(&session.connection_id, &mut inbound),
+            )
+            .await
+            .is_err(),
+            "a remote subscription must never be restored after reconnect"
         );
-        stop_rx.await.expect("stop");
     });
 
-    let at = Timestamp::new("2026-10-20T00:00:00.000Z").expect("timestamp");
-    let epoch = OriginEpoch::new("018f0000-0000-4000-8000-0000000000ee").expect("epoch");
-    let deliveries = Arc::new(RecordingDeliveries::default());
-    deliveries
-        .sessions
-        .lock()
-        .expect("sessions")
-        .push(acp_core::ports::ImportedSessionRecord {
-            session: acp_core::model::RemoteSessionRef::new(
-                NodeId::new(OWNER_NODE).expect("owner"),
-                SessionId::new(IMPORTED_SESSION).expect("session"),
-            ),
-            origin_epoch: Some(epoch.clone()),
-            title: None,
-            agent: None,
-            state: None,
-            version: None,
-            created_at: None,
-            last_origin_sequence: None,
-            acked: Some(OriginCursor::new(
-                epoch,
-                Sequence::new(7).expect("sequence"),
-            )),
-            attachment: None,
-            updated_at: at,
-        });
+    let runtime = node_link_client::RemoteRuntime::new();
     let client = NodeLinkClient::new(
         transport.factory(),
         Arc::new(FixedIdentity::new([0x43; 32])),
-        Arc::new(RecordingSink::default()),
-        deliveries,
+        runtime.clone(),
     );
     let mut config = ClientConfig::new(
         owner_trust(&owner),
@@ -731,27 +679,8 @@ async fn a_permanently_rejected_subscription_is_not_retried_after_reconnect() {
         max: Duration::from_millis(20),
     };
     let link = client.open(config).expect("open");
-    let wire = node_link_protocol::common::RemoteSessionRef {
-        owner_node_id: uuid_text(OWNER_NODE),
-        session_id: uuid_text(IMPORTED_SESSION),
-    };
-    wait_for(
-        || link.shared().subscription_rejected(&wire),
-        "the attach rejection to mark the subscription unavailable",
-    )
-    .await;
-    assert!(
-        link.is_online(),
-        "a request-level rejection must keep the connection"
-    );
+    wait_for(|| link.is_online(), "the first connection online").await;
     wait_for(|| transport.opens() >= 2, "the supervisor to reconnect").await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(
-        transport.opens(),
-        2,
-        "a rejected subscription must not cause a reconnect storm"
-    );
-    stop_tx.send(()).expect("stop owner");
     owner_task.await.expect("owner task");
     link.shutdown().await;
 }

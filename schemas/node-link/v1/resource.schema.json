@@ -29,6 +29,15 @@
     },
     {
       "$ref": "#/$defs/resourceAck"
+    },
+    {
+      "$ref": "#/$defs/resourceCaughtUp"
+    },
+    {
+      "$ref": "#/$defs/resourceResetRequired"
+    },
+    {
+      "$ref": "#/$defs/resourceUnavailable"
     }
   ],
   "$defs": {
@@ -504,6 +513,135 @@
                 },
                 "cursor": {
                   "$ref": "common.schema.json#/$defs/originCursor"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceCaughtUp": {
+      "description": "`resource.caught_up`（`resource.stateless-origin.v1`，docs/NODE_LINK_PROTOCOL.md §12.4）：Owner 已完成来源日志重放，作为明确的来源屏障。此帧之后才发送实时 `resource.event`；Access MUST NOT 用定时器推测追平。`attachmentId`/`attachmentGeneration` 必须指向当前连接上的 attachment。",
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.caught_up"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attachmentId",
+                "attachmentGeneration",
+                "cursor"
+              ],
+              "properties": {
+                "attachmentId": {
+                  "$ref": "#/$defs/attachmentId"
+                },
+                "attachmentGeneration": {
+                  "$ref": "#/$defs/attachmentGeneration"
+                },
+                "cursor": {
+                  "$ref": "common.schema.json#/$defs/originCursor"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceResetRequired": {
+      "description": "`resource.reset_required`（`resource.stateless-origin.v1`，§12.4）：Access 必须以新的 `resource.subscribe`/读取重建，不得沿用旧 generation 或旧游标继续重放。`reason` 复用 Sync §9.4 的词表子集；`cursor` 只在 Owner 已验证有效 head 时出现，否则为 `null`。本消息不新增错误码。",
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.reset_required"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attachmentId",
+                "attachmentGeneration",
+                "reason",
+                "cursor"
+              ],
+              "properties": {
+                "attachmentId": {
+                  "$ref": "#/$defs/attachmentId"
+                },
+                "attachmentGeneration": {
+                  "$ref": "#/$defs/attachmentGeneration"
+                },
+                "reason": {
+                  "enum": [
+                    "epoch_mismatch",
+                    "cursor_expired",
+                    "cache_incompatible"
+                  ]
+                },
+                "cursor": {
+                  "oneOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/originCursor"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceUnavailable": {
+      "description": "`resource.unavailable`（`resource.stateless-origin.v1`，§12.4）：来源会话当前不可继续投递。断线用 `nodelink.resource.owner_unavailable`、撤销用 `nodelink.auth.node_revoked`、快照不可用用 `nodelink.resource.snapshot_unavailable` 等既有错误码；本消息不新增词表。`attachmentId` 在无法归属当前 attachment 时为 `null`。",
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.unavailable"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attachmentId",
+                "error"
+              ],
+              "properties": {
+                "attachmentId": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/attachmentId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "$ref": "common.schema.json#/$defs/publicError"
                 }
               }
             }

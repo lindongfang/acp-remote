@@ -653,12 +653,10 @@ async fn sequences_are_dense_and_global_sequence_covers_node_events() {
         .await
         .expect("replay");
     assert_eq!(batch.events.len(), 4);
-    let has_node_event = batch.events.iter().any(|delivery| match delivery {
-        acp_core::model::CommittedDelivery::Owned(event) => {
-            event.session.is_none() && event.session_sequence.is_none()
-        }
-        _ => false,
-    });
+    let has_node_event = batch
+        .events
+        .iter()
+        .any(|event| event.session.is_none() && event.session_sequence.is_none());
     assert!(has_node_event);
     drop(view);
     store.close().await;

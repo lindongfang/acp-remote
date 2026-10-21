@@ -12,7 +12,7 @@
  */
 
 import { openPlatform } from "../index";
-import { CachePolicyError, type ImportedMetadata } from "../local-cache";
+import { CachePolicyError } from "../local-cache";
 import {
   DEVICE_PROOF_DOMAIN,
   TranscriptError,
@@ -178,33 +178,34 @@ export async function runBrowserChecks(): Promise<BrowserCheckResult[]> {
   );
   record("R11 签名可被设备公钥验证", verified, `verify=${String(verified)}`);
 
-  // ── R20：imported 正文不落盘 ─────────────────────────────────────────────
-  await platform.localCache.putImportedMetadata({
-    key: "remote-1",
-    metadata: {
-      ownerNodeId: DEVICE_PROOF_INPUT.hostId,
-      exportId: "export-1",
-      sessionId: "session-1",
-      originCursor: "1-2",
-      localSequence: "7",
-      contentDigestSha256: "a".repeat(64),
-      acks: ["1", "2"],
-    },
-    nowMs: Date.now(),
-  });
-  platform.importedContent.put("remote-1", "IMPORTED-BODY-SENTINEL");
-  const persistedImported = JSON.stringify(await platform.localCache.get("remote-1", Date.now()));
-  record(
-    "R20 imported 正文不进入持久存储",
-    !persistedImported.includes("IMPORTED-BODY-SENTINEL"),
-    "sentinel 未出现在持久层",
-  );
-  platform.importedContent.clear();
-  record(
-    "R20 imported 正文只在内存（clear 后消失）",
-    platform.importedContent.get("remote-1") === null,
-    "内存载体已清空",
-  );
+  // ── R20：远程资料没有持久入口 ────────────────────────────────────────────
+  {
+    const guarded = openPlatform().localCache;
+    const smuggled = {
+      key: "remote-1",
+      summary: "远程会话标题",
+      metadata: {
+        ownerNodeId: DEVICE_PROOF_INPUT.hostId,
+        sessionId: "session-1",
+        originCursor: "1-2",
+        acks: ["1", "2"],
+        body: "IMPORTED-BODY-SENTINEL",
+      },
+      nowMs: Date.now(),
+    } as unknown as { readonly key: string; readonly summary: string; readonly nowMs: number };
+    let rejected = false;
+    try {
+      await guarded.putLocalSummary(smuggled);
+    } catch (error) {
+      rejected = error instanceof CachePolicyError;
+    }
+    const persisted = JSON.stringify(await guarded.get("remote-1", Date.now()));
+    record(
+      "R20 远程元数据/正文没有持久入口（夹带即拒绝且未落盘）",
+      rejected && !persisted.includes("IMPORTED-BODY-SENTINEL"),
+      `rejected=${String(rejected)}`,
+    );
+  }
 
   // ── F1：domain 长度按 UTF-8 字节数判定，超限抛错而非静默截断 ─────────────
   {
@@ -225,28 +226,16 @@ export async function runBrowserChecks(): Promise<BrowserCheckResult[]> {
   // ── F2：并发缓存写入不丢条目，clear 胜出 ───────────────────────────────
   {
     const concurrent = openPlatform().localCache;
-    await concurrent.clear(); // 前面 R20 探针留下的 imported 条目会干扰计数
+    await concurrent.clear();
     await Promise.all([
       concurrent.putLocalSummary({ key: "A", summary: "并发摘要 A", nowMs: Date.now() }),
-      concurrent.putImportedMetadata({
-        key: "B",
-        metadata: {
-          ownerNodeId: DEVICE_PROOF_INPUT.hostId,
-          exportId: "export-2",
-          sessionId: "session-2",
-          originCursor: "2-3",
-          localSequence: "8",
-          contentDigestSha256: "b".repeat(64),
-          acks: [],
-        },
-        nowMs: Date.now(),
-      }),
+      concurrent.putLocalSummary({ key: "B", summary: "并发摘要 B", nowMs: Date.now() }),
     ]);
     const afterConcurrent = await concurrent.stats(Date.now());
     record(
       "F2 并发两条 put 都落盘（不丢条目）",
-      afterConcurrent.localEntries === 1 && afterConcurrent.importedEntries === 1,
-      `local=${afterConcurrent.localEntries} imported=${afterConcurrent.importedEntries}`,
+      afterConcurrent.entries === 2,
+      `entries=${afterConcurrent.entries}`,
     );
 
     await concurrent.putLocalSummary({ key: "A", summary: "清除前", nowMs: Date.now() });
@@ -257,8 +246,8 @@ export async function runBrowserChecks(): Promise<BrowserCheckResult[]> {
     const afterClear = await concurrent.stats(Date.now());
     record(
       "F2 clear 与并发 put 竞争时存储为空",
-      afterClear.localEntries === 0 && afterClear.importedEntries === 0,
-      `local=${afterClear.localEntries} imported=${afterClear.importedEntries}`,
+      afterClear.entries === 0,
+      `entries=${afterClear.entries}`,
     );
   }
 
@@ -289,29 +278,27 @@ export async function runBrowserChecks(): Promise<BrowserCheckResult[]> {
     const guarded = openPlatform().localCache;
     const smuggled = {
       key: "smuggle-1",
+      summary: "摘要",
       metadata: {
         ownerNodeId: DEVICE_PROOF_INPUT.hostId,
-        exportId: "export-3",
         sessionId: "session-3",
         originCursor: "3-4",
-        localSequence: "9",
-        contentDigestSha256: "c".repeat(64),
         acks: [],
         body: "IMPORTED-BODY-SENTINEL",
-      } as unknown as ImportedMetadata,
+      },
       nowMs: Date.now(),
-    };
+    } as unknown as { readonly key: string; readonly summary: string; readonly nowMs: number };
     let rejected = false;
     try {
-      await guarded.putImportedMetadata(smuggled);
+      await guarded.putLocalSummary(smuggled);
     } catch (error) {
       rejected = error instanceof CachePolicyError;
     }
     const afterGuard = await guarded.stats(Date.now());
     record(
-      "F4 imported 正文夹带被守门拒绝且未落盘",
-      rejected && afterGuard.importedEntries === 0,
-      `rejected=${String(rejected)} imported=${afterGuard.importedEntries}`,
+      "F4 远程元数据夹带被守门拒绝且未落盘",
+      rejected && afterGuard.entries === 0,
+      `rejected=${String(rejected)} entries=${afterGuard.entries}`,
     );
   }
 

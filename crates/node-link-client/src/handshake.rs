@@ -68,8 +68,9 @@ pub const REMOTE_HISTORY_FEATURE: &str = "node-link.remote-history.v1";
 ///
 /// 每一条都对应当前真实实现的客户端行为：附件转发（有界内存）、类型化媒体映射、有效交互读取与远程
 /// 历史分页。未实现的能力不在此列——能力协商不得虚报（`AGENTS.md` §4）。
-pub const SUPPORTED_FEATURES: [&str; 9] = [
+pub const SUPPORTED_FEATURES: [&str; 10] = [
     CORE_FEATURE,
+    "resource.stateless-origin.v1",
     SESSION_ACTIVITY_FEATURE,
     RAW_ACP_FEATURE,
     COMMAND_STATUS_FEATURE,

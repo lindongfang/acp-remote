@@ -613,6 +613,22 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
     expect(sidebar.indexOf('data-action="create-session-in-directory"')).toBeGreaterThan(
       sidebar.indexOf('data-sidebar-shown='),
     );
+    const header=sidebar.indexOf('data-sidebar-region="header"');
+    const body=sidebar.indexOf('data-sidebar-region="body"');
+    const footer=sidebar.indexOf('data-sidebar-region="footer"');
+    expect(header).toBeGreaterThan(-1);
+    expect(body).toBeGreaterThan(header);
+    expect(footer).toBeGreaterThan(body);
+    const fixedHeader=sidebar.slice(header,body);
+    const scrollBody=sidebar.slice(body,footer);
+    const fixedFooter=sidebar.slice(footer);
+    expect(fixedHeader).toContain('data-action="open-directory-list"');
+    expect(fixedHeader).toContain('data-sidebar-search="true"');
+    expect(scrollBody).toContain('data-sidebar-sessions="list"');
+    expect(scrollBody).not.toContain('data-sidebar-shown=');
+    expect(scrollBody).not.toContain('data-action="create-session-in-directory"');
+    expect(fixedFooter).toContain('data-sidebar-shown=');
+    expect(fixedFooter).toContain('data-action="create-session-in-directory"');
   });
 
   it("左栏会话行只呈现圆点、标题和时间，不附加状态词与 Agent 名", () => {

@@ -16,7 +16,7 @@
  * `secure-storage.web.ts`（平台扩展名优先），因此 `.web.ts` 里那句「从 `./secure-storage` 取
  * `DEVICE_IDENTITY_STORE`/`SecureStorageError`」在**真实 Web 产物**里会解析到 Web 实现本身，
  * 取到的是 `undefined`（同批在 `local-cache` 上实测到
- * `assertPersistableForOrigin is not a function`；单测与假主机 e2e 走另一套解析，抓不到）。
+ * `assertLocalSummary is not a function`；单测与假主机 e2e 走另一套解析，抓不到）。
  * 共享声明必须住在一个**没有平台变体**的模块里，两个实现各自从它转出。
  */
 

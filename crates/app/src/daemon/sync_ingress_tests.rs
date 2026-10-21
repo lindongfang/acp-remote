@@ -1633,26 +1633,6 @@ async fn seed_owned_session(harness: &Harness, session: &str, workspace: &Path) 
     pool.close().await;
 }
 
-/// 直接写一条 imported 会话索引行（真实 imported 会话在 owned 存储里没有行）。
-async fn seed_imported_session(harness: &Harness, session: &str) {
-    let database = harness._temp.0.join("data").join("acp-remote.sqlite3");
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", database.display()))
-        .await
-        .expect("打开测试数据库");
-    sqlx::query(
-        "INSERT INTO imported_session (owner_node_id, session_id, title, agent_id, agent_name, \
-         state, version, created_at, next_local_sequence, updated_at) \
-         VALUES (?1, ?2, '远程会话', 'codex', 'Codex', 'idle', 1, ?3, 1, ?3)",
-    )
-    .bind(uuid_text())
-    .bind(session)
-    .bind("2026-10-19T09:00:00.000Z")
-    .execute(&pool)
-    .await
-    .expect("写入 imported 会话");
-    pool.close().await;
-}
-
 /// 一条查询结果的 `status` 与 `result`（失败时返回错误码）。
 fn query_outcome(message: &Value) -> (&str, Option<&Value>, Option<&str>) {
     let body = &message["body"];
@@ -1811,7 +1791,10 @@ async fn session_file_queries_require_negotiation_before_any_io() {
     harness.stop().await;
 }
 
-/// imported 会话在任何文件/Git 端口调用之前显式拒绝（不读 Access 主机的目录）。
+/// 未知/远程会话在任何文件/Git 端口调用之前显式拒绝（不读 Access 主机的目录）。
+///
+/// 无持久中转后，Sync 面不再有 imported 索引；远程会话只存在于 Access 的运行期目录，
+/// 未绑定的会话标识一律按 `session.not_found` 失败关闭，且不触碰文件端口。
 #[tokio::test]
 async fn imported_sessions_are_rejected_before_touching_the_access_host() {
     let harness = Harness::start("files-imported").await;
@@ -1819,7 +1802,6 @@ async fn imported_sessions_are_rejected_before_touching_the_access_host() {
     let device = DeviceId::new(&uuid_text()).expect("device");
     let mut client = command_client(&harness, &origin, &device).await;
     let session = session_id_text();
-    seed_imported_session(&harness, &session).await;
 
     let list = client
         .command_with_session(
@@ -1831,7 +1813,7 @@ async fn imported_sessions_are_rejected_before_touching_the_access_host() {
         .await;
     assert_eq!(
         list["body"]["error"]["code"],
-        json!("capability.unsupported_by_broker"),
+        json!("session.not_found"),
         "{list}"
     );
     let git = client
@@ -1839,7 +1821,7 @@ async fn imported_sessions_are_rejected_before_touching_the_access_host() {
         .await;
     assert_eq!(
         git["body"]["error"]["code"],
-        json!("capability.unsupported_by_broker"),
+        json!("session.not_found"),
         "{git}"
     );
     let read = client
@@ -1852,7 +1834,7 @@ async fn imported_sessions_are_rejected_before_touching_the_access_host() {
         .await;
     assert_eq!(
         read["body"]["error"]["code"],
-        json!("capability.unsupported_by_broker"),
+        json!("session.not_found"),
         "{read}"
     );
     assert_eq!(

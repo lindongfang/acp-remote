@@ -1,6 +1,6 @@
 //! fixture 驱动：`fixtures/node-link/v1/manifest.json` 的每条 WSS 消息用例都必须按它在合同里的角色通过。
 //!
-//! 覆盖传输层与全部 29 个消息类型（`handshake`/`catalog`/`resource`/`command`/`error` 五个家族的 body）。
+//! 覆盖传输层与全部 30 个消息类型（`handshake`/`catalog`/`resource`/`command`/`error` 五个家族的 body）。
 //! 它同时证明两件事：合法消息的 body 字节**逐字节**不被信封层改动；非法消息在正确的层被拒绝。
 //! `TypedBody::decode` 的 `match` 是穷尽的——新增消息类型必然在此编译失败，不会静默漏掉。
 //!
@@ -22,7 +22,8 @@ use node_link_protocol::envelope::{
 use node_link_protocol::error;
 use node_link_protocol::handshake::{NodeChallenge, NodeHello, NodeProof, NodeReady};
 use node_link_protocol::resource::{
-    Ack, Attach, Attached, Detach, Event, SnapshotBegin, SnapshotChunk, SnapshotEnd, Subscribe,
+    Ack, Attach, Attached, CaughtUp, Detach, Event, ResetRequired, SnapshotBegin, SnapshotChunk,
+    SnapshotEnd, Subscribe, Unavailable,
 };
 
 const FIXTURE_ROOT: &str = "fixtures/node-link/v1/";
@@ -34,11 +35,16 @@ const PAIRING_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/pairing.schema.json";
 /// 这里是显式跳过，不是静默漏计：数量变化会让本断言失败。
 const TRANSPORT_FRAME_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/attachment.schema.json";
 
-const EXPECTED_VALID_MESSAGE_CASES: usize = 38;
+/// 变更 `access-owner-data-stateless`（WP1）新增 3 条合法 `resource.caught_up`/`reset_required`/
+/// `unavailable` 夹具，故由 38 变为 41。
+const EXPECTED_VALID_MESSAGE_CASES: usize = 41;
 const EXPECTED_ENVELOPE_REJECTED: usize = 1;
 /// 变更 `session-activity-three-states`（WP1）新增 1 条负例（`resource.attached` 的
 /// `sessionMeta.state` 用旧七态取值），故由 10 变为 11。
-const EXPECTED_BODY_REJECTED: usize = 11;
+/// 变更 `access-owner-data-stateless`（WP1）新增 3 条负例（`resource.caught_up` 缺
+/// `attachmentGeneration`、`resource.reset_required` 用了未登记 reason、`resource.unavailable`
+/// 缺结构化 error），故由 11 变为 14。
+const EXPECTED_BODY_REJECTED: usize = 14;
 const EXPECTED_SKIPPED_PAIRING: usize = 2;
 const EXPECTED_SKIPPED_TRANSPORT_FRAMES: usize = 24;
 
@@ -46,7 +52,7 @@ fn parse<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, String> {
     serde_json::from_str(body).map_err(|error| error.to_string())
 }
 
-/// 五个家族的类型化 body。`decode` 的 `match` 穷尽 v1 的 29 个消息类型。
+/// 五个家族的类型化 body。`decode` 的 `match` 穷尽 v1 的 30 个消息类型。
 enum TypedBody {
     NodeHello(Box<NodeHello>),
     NodeChallenge(Box<NodeChallenge>),
@@ -66,6 +72,9 @@ enum TypedBody {
     ResourceSnapshotEnd(Box<SnapshotEnd>),
     ResourceEvent(Box<Event>),
     ResourceAck(Box<Ack>),
+    ResourceCaughtUp(Box<CaughtUp>),
+    ResourceResetRequired(Box<ResetRequired>),
+    ResourceUnavailable(Box<Unavailable>),
     CommandSubmit(Box<CommandSubmit>),
     CommandAccepted(Box<CommandAccepted>),
     CommandRejected(Box<CommandRejected>),
@@ -108,6 +117,13 @@ impl TypedBody {
             }
             MessageType::ResourceEvent => TypedBody::ResourceEvent(Box::new(parse(body)?)),
             MessageType::ResourceAck => TypedBody::ResourceAck(Box::new(parse(body)?)),
+            MessageType::ResourceCaughtUp => TypedBody::ResourceCaughtUp(Box::new(parse(body)?)),
+            MessageType::ResourceResetRequired => {
+                TypedBody::ResourceResetRequired(Box::new(parse(body)?))
+            }
+            MessageType::ResourceUnavailable => {
+                TypedBody::ResourceUnavailable(Box::new(parse(body)?))
+            }
             MessageType::CommandSubmit => TypedBody::CommandSubmit(Box::new(parse(body)?)),
             MessageType::CommandAccepted => TypedBody::CommandAccepted(Box::new(parse(body)?)),
             MessageType::CommandRejected => TypedBody::CommandRejected(Box::new(parse(body)?)),
@@ -141,6 +157,9 @@ impl TypedBody {
             TypedBody::ResourceSnapshotEnd(body) => serde_json::to_string(body),
             TypedBody::ResourceEvent(body) => serde_json::to_string(body),
             TypedBody::ResourceAck(body) => serde_json::to_string(body),
+            TypedBody::ResourceCaughtUp(body) => serde_json::to_string(body),
+            TypedBody::ResourceResetRequired(body) => serde_json::to_string(body),
+            TypedBody::ResourceUnavailable(body) => serde_json::to_string(body),
             TypedBody::CommandSubmit(body) => serde_json::to_string(body),
             TypedBody::CommandAccepted(body) => serde_json::to_string(body),
             TypedBody::CommandRejected(body) => serde_json::to_string(body),

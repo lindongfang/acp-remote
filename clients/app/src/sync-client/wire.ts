@@ -30,8 +30,19 @@ import type {
   ErrorMessage,
   EventMessage,
   EventOriginKind,
+  OriginCursor,
+  SessionRef,
   SyncAck,
   SyncCaughtUp,
+  SyncRemoteAck,
+  SyncRemoteCatalogChanged,
+  SyncRemoteCaughtUp,
+  SyncRemoteEvent,
+  SyncRemoteResetRequired,
+  SyncRemoteSourceState,
+  SyncRemoteSubscribe,
+  SyncRemoteUnavailable,
+  SyncRemoteUnsubscribe,
   SyncResetRequired,
   SyncSnapshotBegin,
   SyncSnapshotChunk,
@@ -95,6 +106,17 @@ const POST_AUTH_TYPES: Record<string, true> = {
   "sync.snapshot_chunk": true,
   "sync.snapshot_end": true,
   "sync.ack": true,
+  // `resource.stateless-origin.v1` 的远程来源流（§9.7）：九条消息都只在认证后出现，信封与其余
+  // post-auth 帧逐字相同（`$defs.postAuthBase`）。
+  "sync.remote_subscribe": true,
+  "sync.remote_event": true,
+  "sync.remote_caught_up": true,
+  "sync.remote_ack": true,
+  "sync.remote_reset_required": true,
+  "sync.remote_unsubscribe": true,
+  "sync.remote_unavailable": true,
+  "sync.remote_catalog_changed": true,
+  "sync.remote_source_state": true,
   "event": true,
   "command": true,
   "command.result": true,
@@ -110,13 +132,32 @@ const PRE_AUTH_TYPES: Record<string, true> = {
   "auth.client_proof": true,
 };
 
-/** `$defs.resetRequired.reason` 与 `$defs.snapshotRequest.body.reason` 的封闭词表。 */
-const RESET_REASONS: Record<string, true> = {
-  initial_sync: true,
+/**
+ * `$defs.remoteResetRequired.body.reason`（§9.7）：复用 reset 词表，但**不含** `initial_sync`。
+ *
+ * `cache_incompatible` 只经这一帧到达客户端——`sync.cursor_invalid` 的 `details.reason` 没有该取值。
+ */
+const REMOTE_RESET_REASONS: Record<string, true> = {
   epoch_mismatch: true,
   cursor_expired: true,
   cache_incompatible: true,
 };
+
+/** `$defs.resetRequired.reason` 与 `$defs/snapshotRequest.body.reason` 的封闭词表。 */
+const RESET_REASONS: Record<string, true> = {
+  initial_sync: true,
+  ...REMOTE_RESET_REASONS,
+};
+
+/** `$defs.remoteSourceState.body.state`。 */
+const REMOTE_SOURCE_STATES: Record<string, true> = {
+  online: true,
+  offline: true,
+  revoked: true,
+};
+
+/** `$defs.remoteEvent` 的 `event.eventType`：`^[a-z0-9_.-]{1,128}$`。 */
+const REMOTE_EVENT_TYPE_PATTERN = /^[a-z0-9_.-]{1,128}$/;
 
 /** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，18 条）。 */
 const COMMAND_NAMES: Record<string, true> = {
@@ -209,6 +250,38 @@ function isTimestamp(value: unknown): value is string {
 export function isCursor(value: unknown): value is Cursor {
   if (!isObject(value)) return false;
   return isUuid(value["serverEpoch"]) && isDecimalString(value["globalSequence"]);
+}
+
+/** `$defs.originCursor`：Owner 来源位置，两个键都必填（§9.7）。 */
+function isOriginCursor(value: unknown): value is OriginCursor {
+  if (!isObject(value)) return false;
+  return isUuid(value["originEpoch"]) && isDecimalString(value["originSequence"]);
+}
+
+/** `$defs.sessionRef`：`(ownerNodeId, sessionId)` 两键都必填且是 UUID。 */
+function isSessionRef(value: unknown): value is SessionRef {
+  if (!isObject(value)) return false;
+  return isUuid(value["ownerNodeId"]) && isUuid(value["sessionId"]);
+}
+
+/**
+ * `$defs.publicError`：`{code, message, retryable, details}` 四键必填，`details` 是开放对象。
+ *
+ * 注意与 `error` 消息的 body 区分：后者另有 `correlationId`，本类型没有。
+ */
+function isPublicError(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  if (!hasKeys(value, ["code", "message", "retryable", "details"])) return false;
+  const code = value["code"];
+  const message = value["message"];
+  return (
+    isNonEmptyString(code) &&
+    ERROR_CODE_PATTERN.test(code) &&
+    typeof message === "string" &&
+    message.length <= 1024 &&
+    typeof value["retryable"] === "boolean" &&
+    isObject(value["details"])
+  );
 }
 
 /** 两个 cursor 是否逐字段相等（快照 begin/end 的 cursor 必须一致，§9.4）。 */
@@ -314,6 +387,24 @@ function decodeByType(parsed: JsonObject, type: string, body: unknown): WireDeco
       return decodeSnapshotEnd(parsed, body);
     case "sync.ack":
       return decodeAck(parsed, body);
+    case "sync.remote_subscribe":
+      return decodeRemoteSubscribe(parsed, body);
+    case "sync.remote_event":
+      return decodeRemoteEvent(parsed, body);
+    case "sync.remote_caught_up":
+      return decodeRemoteCaughtUp(parsed, body);
+    case "sync.remote_ack":
+      return decodeRemoteAck(parsed, body);
+    case "sync.remote_reset_required":
+      return decodeRemoteResetRequired(parsed, body);
+    case "sync.remote_unsubscribe":
+      return decodeRemoteUnsubscribe(parsed, body);
+    case "sync.remote_unavailable":
+      return decodeRemoteUnavailable(parsed, body);
+    case "sync.remote_catalog_changed":
+      return decodeRemoteCatalogChanged(parsed, body);
+    case "sync.remote_source_state":
+      return decodeRemoteSourceState(parsed, body);
     case "event":
       return decodeEvent(parsed, body);
     case "command":
@@ -467,6 +558,169 @@ function decodeAck(parsed: JsonObject, body: unknown): WireDecodeResult {
     if (!hasKeys(inner, ["cursor"])) return reject("missing_field", "ack 缺 cursor");
     if (!isCursor(inner["cursor"])) return reject("field_type", "ack 的 cursor 形状非法");
     return { ok: true, message: message as SyncAck };
+  });
+}
+
+/**
+ * `sync.remote_*`（§9.7）：只判必填键与基本类型。
+ *
+ * 来源语义——订阅是否存在、`originEpoch` 是否与该来源一致、`remote_ack` 是否越界、当前是否协商了
+ * `resource.stateless-origin.v1`——都属于连接状态机，不在这一层判定。
+ */
+function decodeRemoteSubscribe(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const keys = ["subscriptionId", "sessionRef", "cursor"] as const;
+    if (!hasKeys(inner, keys)) {
+      return reject("missing_field", `remote_subscribe 缺必填字段：${keys.join(",")}`);
+    }
+    if (!isUuid(inner["subscriptionId"])) return reject("field_type", "subscriptionId 不是 UUID");
+    if (!isSessionRef(inner["sessionRef"])) return reject("field_type", "sessionRef 缺 ownerNodeId/sessionId");
+    const cursor = inner["cursor"];
+    if (cursor !== null && !isOriginCursor(cursor)) {
+      return reject("field_type", "remote_subscribe 的 cursor 既非 null 也非 originCursor");
+    }
+    return { ok: true, message: message as SyncRemoteSubscribe };
+  });
+}
+
+function decodeRemoteEvent(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const keys = ["subscriptionId", "event"] as const;
+    if (!hasKeys(inner, keys)) {
+      return reject("missing_field", `remote_event 缺必填字段：${keys.join(",")}`);
+    }
+    if (!isUuid(inner["subscriptionId"])) return reject("field_type", "subscriptionId 不是 UUID");
+    const event = inner["event"];
+    if (!isObject(event)) return reject("missing_field", "remote_event 缺 event 对象");
+    const eventKeys = [
+      "originEventId",
+      "originEpoch",
+      "originSequence",
+      "sessionRef",
+      "eventType",
+      "payloadDigest",
+      "createdAt",
+      "payload",
+    ] as const;
+    if (!hasKeys(event, eventKeys)) {
+      return reject("missing_field", `remote_event.event 缺必填字段：${eventKeys.join(",")}`);
+    }
+    if (!isUuid(event["originEventId"])) return reject("field_type", "originEventId 不是 UUID");
+    if (!isUuid(event["originEpoch"])) return reject("field_type", "originEpoch 不是 UUID");
+    if (!isDecimalString(event["originSequence"])) {
+      return reject("field_type", "originSequence 不是 decimalString");
+    }
+    if (!isSessionRef(event["sessionRef"])) return reject("field_type", "event.sessionRef 形状非法");
+    const eventType = event["eventType"];
+    if (!isNonEmptyString(eventType) || !REMOTE_EVENT_TYPE_PATTERN.test(eventType)) {
+      return reject("field_type", "event.eventType 不在 `^[a-z0-9_.-]{1,128}$` 形状内");
+    }
+    if (!isNonEmptyString(event["payloadDigest"])) {
+      return reject("field_type", "event.payloadDigest 不是非空字符串");
+    }
+    if (!isTimestamp(event["createdAt"])) return reject("field_type", "event.createdAt 不是 timestamp");
+    const payload = event["payload"];
+    if (!isObject(payload)) return reject("field_type", "event.payload 不是对象");
+    const hasView = "view" in payload;
+    const hasAcp = "acp" in payload;
+    if (!hasView && !hasAcp) {
+      return reject("missing_field", "event.payload 至少要出现 view 或 acp");
+    }
+    if (hasView && !isObject(payload["view"])) return reject("field_type", "event.payload.view 不是对象");
+    if (hasAcp && !isObject(payload["acp"])) return reject("field_type", "event.payload.acp 不是对象");
+    return { ok: true, message: message as SyncRemoteEvent };
+  });
+}
+
+function decodeRemoteCaughtUp(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const keys = ["subscriptionId", "cursor"] as const;
+    if (!hasKeys(inner, keys)) {
+      return reject("missing_field", `remote_caught_up 缺必填字段：${keys.join(",")}`);
+    }
+    if (!isUuid(inner["subscriptionId"])) return reject("field_type", "subscriptionId 不是 UUID");
+    if (!isOriginCursor(inner["cursor"])) return reject("field_type", "remote_caught_up 的 cursor 形状非法");
+    return { ok: true, message: message as SyncRemoteCaughtUp };
+  });
+}
+
+function decodeRemoteAck(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const keys = ["subscriptionId", "cursor"] as const;
+    if (!hasKeys(inner, keys)) {
+      return reject("missing_field", `remote_ack 缺必填字段：${keys.join(",")}`);
+    }
+    if (!isUuid(inner["subscriptionId"])) return reject("field_type", "subscriptionId 不是 UUID");
+    if (!isOriginCursor(inner["cursor"])) return reject("field_type", "remote_ack 的 cursor 形状非法");
+    return { ok: true, message: message as SyncRemoteAck };
+  });
+}
+
+function decodeRemoteResetRequired(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const keys = ["subscriptionId", "reason", "cursor"] as const;
+    if (!hasKeys(inner, keys)) {
+      return reject("missing_field", `remote_reset_required 缺必填字段：${keys.join(",")}`);
+    }
+    if (!isUuid(inner["subscriptionId"])) return reject("field_type", "subscriptionId 不是 UUID");
+    const reason = inner["reason"];
+    if (!isNonEmptyString(reason) || !(reason in REMOTE_RESET_REASONS)) {
+      return reject("field_type", "remote_reset_required 的 reason 不在封闭词表内");
+    }
+    const cursor = inner["cursor"];
+    if (cursor !== null && !isOriginCursor(cursor)) {
+      return reject("field_type", "remote_reset_required 的 cursor 既非 null 也非 originCursor");
+    }
+    return { ok: true, message: message as SyncRemoteResetRequired };
+  });
+}
+
+function decodeRemoteUnsubscribe(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    if (!hasKeys(inner, ["subscriptionId"])) {
+      return reject("missing_field", "remote_unsubscribe 缺 subscriptionId");
+    }
+    if (!isUuid(inner["subscriptionId"])) return reject("field_type", "subscriptionId 不是 UUID");
+    return { ok: true, message: message as SyncRemoteUnsubscribe };
+  });
+}
+
+function decodeRemoteUnavailable(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const keys = ["subscriptionId", "error"] as const;
+    if (!hasKeys(inner, keys)) {
+      return reject("missing_field", `remote_unavailable 缺必填字段：${keys.join(",")}`);
+    }
+    if (!isUuid(inner["subscriptionId"])) return reject("field_type", "subscriptionId 不是 UUID");
+    if (!isPublicError(inner["error"])) return reject("field_type", "remote_unavailable 缺结构化 publicError");
+    return { ok: true, message: message as SyncRemoteUnavailable };
+  });
+}
+
+function decodeRemoteCatalogChanged(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const keys = ["ownerNodeId", "revision"] as const;
+    if (!hasKeys(inner, keys)) {
+      return reject("missing_field", `remote_catalog_changed 缺必填字段：${keys.join(",")}`);
+    }
+    if (!isUuid(inner["ownerNodeId"])) return reject("field_type", "ownerNodeId 不是 UUID");
+    if (!isDecimalString(inner["revision"])) return reject("field_type", "revision 不是 decimalString");
+    return { ok: true, message: message as SyncRemoteCatalogChanged };
+  });
+}
+
+function decodeRemoteSourceState(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const keys = ["ownerNodeId", "state"] as const;
+    if (!hasKeys(inner, keys)) {
+      return reject("missing_field", `remote_source_state 缺必填字段：${keys.join(",")}`);
+    }
+    if (!isUuid(inner["ownerNodeId"])) return reject("field_type", "ownerNodeId 不是 UUID");
+    const state = inner["state"];
+    if (!isNonEmptyString(state) || !(state in REMOTE_SOURCE_STATES)) {
+      return reject("field_type", "remote_source_state 的 state 不在封闭词表内");
+    }
+    return { ok: true, message: message as SyncRemoteSourceState };
   });
 }
 

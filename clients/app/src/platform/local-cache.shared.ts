@@ -1,5 +1,5 @@
 /**
- * 本地缓存与生命周期端口的**声明**（R20 平台侧）。
+ * 本地缓存与生命周期端口的**声明**（平台侧）。
  *
  * 归属 WP5b。本模块只有接口、固定常量与**纯策略**（LRU/TTL/配额），不触碰任何平台 API——
  * IndexedDB 只在 `local-cache.web.ts`，`document`/`window` 只在 `lifecycle.web.ts`。
@@ -7,19 +7,15 @@
  * **为什么共享声明住在这个名字里**：Metro 在 Web 平台把 `./local-cache` 解析到
  * `local-cache.web.ts`（平台扩展名优先），因此 `.web.ts` 与 `index.ts` 里那句「从 `./local-cache`
  * 取共享符号」在**真实 Web 产物**里会解析到 Web 实现本身，取到的值是 `undefined`
- * （实测：配对写缓存时报 `assertPersistableForOrigin is not a function`；单测与假主机 e2e 都走
+ * （实测：配对写缓存时报 `assertLocalSummary is not a function`；单测与假主机 e2e 都走
  * 另一套解析，抓不到）。共享声明必须住在一个**没有平台变体**的模块里，两个实现各自从它转出。
  *
- * ## R20 的核心：imported 资源正文不落盘
+ * ## 只保留本节点自有资源的摘要
  *
- * 缓存端口按**来源**分流，而不是靠调用方自觉：
- *
- * - `local` —— 本节点自有资源。允许缓存**精简摘要**，受固定容量与 TTL 约束；
- * - `remote`（imported）—— 只允许**无正文元数据**，正文一律拒绝进入持久存储。
- *
- * 因此导入侧没有「写正文」的入口：`LocalCachePort` 只暴露无正文的元数据读写，
- * 正文只能进 `VolatileImportedContent`——它**只能**由 `local-cache.web.ts` 用内存 Map 实现，
- * 页面与 feature 拿不到任何「持久化 imported 正文」的路径。
+ * 远程资源、正文、标题、来源游标、ACK 与命令状态都只在运行期内存中存在，**没有**任何持久化
+ * 入口（`docs/FRONTEND_DESIGN.md` §7、`design.md` D1）。缓存端口因此只接受本节点自有会话的
+ * 精简摘要文本，并按固定容量与 TTL 淘汰；本机设备身份与已配对主机记录使用各自的平台端口，
+ * 不混入摘要配额。
  */
 
 /** 节点自有会话摘要缓存的固定上限（`docs/FRONTEND_DESIGN.md` §7）。 */
@@ -29,66 +25,17 @@ export const SUMMARY_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 export const SUMMARY_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * imported 元数据的固定上限。
+ * 一条可持久化的缓存条目。
  *
- * `docs/FRONTEND_DESIGN.md` §7 要求 imported 元数据「也必须有容量与清理边界，
- * 不得以『不占正文配额』为由无限增长」。这里取 2 MiB：远小于正文配额，
- * 因为元数据条目只含标识、cursor、digest 与序号映射。
+ * 形状本身就把「远程正文落盘」变成不可能构造的值：没有 `origin`/`kind` 分支，也没有任何
+ * 正文、游标或命令字段。
  */
-export const IMPORTED_METADATA_MAX_BYTES = 2 * 1024 * 1024;
-
-/** imported 元数据的存活期：7 天。 */
-export const IMPORTED_METADATA_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-/**
- * 一条待缓存条目的来源。
- *
- * `imported` 是**判别式**而不是布尔：调用方无法用 `isLocal: true` 这类可同时成立的组合
- * 把 imported 正文混进本节点配额（`AGENTS.md` §6 的「不使用可能产生非法组合的一组布尔值」）。
- */
-export type CacheOrigin = { readonly kind: "local" } | { readonly kind: "imported" };
-
-/**
- * 可持久化的缓存条目。
- *
- * **正文绝不在本类型上**：`summary` 是精简摘要文本（节点自有资源专用），
- * imported 条目只能是 `metadata`。这个形状本身就把「imported 正文落盘」变成不可能构造的值。
- *
- * `kind` 放在**顶层**而不是嵌进 `origin`：判别式联合要求判别字段位于被判别层，
- * 嵌套一层会让窄化失效（`AGENTS.md` §8 的「优先使用具体类型」同理）。
- */
-export type CacheEntry =
-  | {
-      readonly kind: "local";
-      readonly key: string;
-      readonly summary: string;
-      readonly updatedAtMs: number;
-      readonly lastUsedAtMs: number;
-    }
-  | {
-      readonly kind: "imported";
-      readonly key: string;
-      /** 无正文元数据：owner/export/session 标识、cursor、digest、序号映射。 */
-      readonly metadata: ImportedMetadata;
-      readonly updatedAtMs: number;
-      readonly lastUsedAtMs: number;
-    };
-
-/**
- * imported 资源的**无正文**元数据（`docs/FRONTEND_DESIGN.md` §7 的允许清单）。
- *
- * 这里的 `contentDigestSha256` 是**密码学摘要**，不是会话摘要/标题/消息预览/内容摘录——
- * 后三者只能留在内存（{@link VolatileImportedContent}）。
- */
-export interface ImportedMetadata {
-  readonly ownerNodeId: string;
-  readonly exportId: string;
-  readonly sessionId: string;
-  readonly originCursor: string;
-  readonly localSequence: string;
-  /** 事件的 SHA-256 digest（hex），用于完整性核对。 */
-  readonly contentDigestSha256: string;
-  readonly acks: readonly string[];
+export interface CacheEntry {
+  readonly key: string;
+  /** 精简摘要文本（只用于本节点自有会话）。 */
+  readonly summary: string;
+  readonly updatedAtMs: number;
+  readonly lastUsedAtMs: number;
 }
 
 /** 缓存读命中的条目。 */
@@ -98,38 +45,12 @@ export interface CacheHit {
   readonly remainingTtlMs: number;
 }
 
-/**
- * imported 正文的**内存**载体。
- *
- * 它没有持久化实现：值只在内存 Map 里，页面刷新即消失，重连后必须重新获取
- * （R20 场景 1「该正文不进入任何持久浏览器存储，重连后必须重新获取」）。
- */
-export interface VolatileImportedContent {
-  /** 写入一条 imported 正文（仅内存）。 */
-  put(key: string, content: string): void;
-  /** 读取；不存在时 `null`。 */
-  get(key: string): string | null;
-  /** 丢弃（会话切换、dispose 时调用）。 */
-  drop(key: string): void;
-  /** 丢弃全部。 */
-  clear(): void;
-  /** 当前持有的键，供诊断。 */
-  keys(): readonly string[];
-}
-
 /** 持久缓存端口。 */
 export interface LocalCachePort {
-  /** 写入一条本地摘要条目；超容量时按 LRU 淘汰到配额以内。 */
+  /** 写入一条本机摘要条目；超容量时按 LRU 淘汰到配额以内。 */
   putLocalSummary(input: {
     readonly key: string;
     readonly summary: string;
-    readonly nowMs: number;
-  }): Promise<void>;
-
-  /** 写入一条 imported 无正文元数据。 */
-  putImportedMetadata(input: {
-    readonly key: string;
-    readonly metadata: ImportedMetadata;
     readonly nowMs: number;
   }): Promise<void>;
 
@@ -143,19 +64,16 @@ export interface LocalCachePort {
   stats(nowMs: number): Promise<CacheStats>;
 }
 
-/** 缓存诊断。 */
+/** 缓存诊断（只统计本机摘要；远程资源不在持久层，因此没有对应计数）。 */
 export interface CacheStats {
-  readonly localEntries: number;
-  readonly localBytes: number;
-  readonly importedEntries: number;
-  readonly importedBytes: number;
+  readonly entries: number;
+  readonly bytes: number;
   readonly expiredEntries: number;
 }
 
 /** 一条条目的字节估算（UTF-8 长度；用于配额判定）。 */
 export function estimateEntryBytes(entry: CacheEntry): number {
-  const text = entry.kind === "local" ? entry.summary : JSON.stringify(entry.metadata);
-  return new TextEncoder().encode(text).length + entry.key.length;
+  return new TextEncoder().encode(entry.summary).length + entry.key.length;
 }
 
 /**
@@ -202,52 +120,21 @@ export function evictToFit(input: {
   return { kept, evicted };
 }
 
-/** `ImportedMetadata` 的允许清单：落在持久层的 imported 记录只准有这些字段。 */
-const IMPORTED_METADATA_FIELDS: readonly string[] = [
-  "ownerNodeId",
-  "exportId",
-  "sessionId",
-  "originCursor",
-  "localSequence",
-  "contentDigestSha256",
-  "acks",
-];
-
 /**
- * R20 的**唯一**落盘守门函数：给定来源，校验该来源允许进入持久存储的内容形状。
+ * 持久层的**唯一**落盘守门：本机摘要之外的一切形状都拒绝。
  *
- * 这是一次显式的**运行期**判别，而不是注释里的约定：任何想把 imported 内容写进持久层的
- * 调用路径都必须先过这里。结构化 TypeScript 类型允许**更宽**的对象经变量流入
- * （多余字段不被类型检查拦下），因此守门不能只靠类型：imported 分支在运行期拒绝
- * (a) 携带正文 `summary`，(b) `metadata` 里出现任何 `ImportedMetadata` 允许清单之外的字段
- * （例如 `{ ...metadata, body }`）。这正对应 `docs/FRONTEND_DESIGN.md` §7 的「允许清单」。
+ * 结构类型允许更宽的对象经变量流入（多余字段不被类型检查拦下），因此守门必须在运行期
+ * 拒绝 `metadata` 以及任何非摘要内容，避免一次错误的调用把远程资料写进摘要缓存。
  */
-export function assertPersistableForOrigin(
-  origin: CacheOrigin,
-  content: { readonly summary?: string; readonly metadata?: ImportedMetadata },
-): void {
-  if (origin.kind === "imported") {
-    if (content.summary !== undefined) {
-      throw new CachePolicyError(
-        "content_not_allowed",
-        "imported 资源正文 MUST NOT 写入任何持久浏览器存储（R20）",
-      );
-    }
-    if (content.metadata === undefined || content.metadata === null || typeof content.metadata !== "object") {
-      throw new CachePolicyError("content_not_allowed", "imported 持久条目必须携带无正文元数据");
-    }
-    for (const field of Object.keys(content.metadata)) {
-      if (!IMPORTED_METADATA_FIELDS.includes(field)) {
-        throw new CachePolicyError(
-          "content_not_allowed",
-          `imported 持久元数据只允许允许清单内的字段，收到：${field}`,
-        );
-      }
-    }
-    return;
-  }
+export function assertLocalSummary(content: {
+  readonly summary?: string;
+  readonly metadata?: unknown;
+}): void {
   if (content.metadata !== undefined) {
-    throw new CachePolicyError("content_not_allowed", "本节点自有条目不得使用 imported 元数据形状");
+    throw new CachePolicyError(
+      "content_not_allowed",
+      "持久缓存只接受本机会话摘要；来源节点资料、游标与命令状态都不得落盘。",
+    );
   }
 }
 

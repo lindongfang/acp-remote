@@ -162,7 +162,7 @@ export function emptyGitChanges(): GitChangesSourceState {
 /** 空的来源集合。 */
 export function emptySources(): SessionFilesSourcesState {
   return {
-    all: { hideIgnored: false, directories: new Map(), unsupported: null },
+    all: { hideIgnored: true, directories: new Map(), unsupported: null },
     git: emptyGitChanges(),
   };
 }

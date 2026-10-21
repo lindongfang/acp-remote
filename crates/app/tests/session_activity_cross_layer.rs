@@ -801,8 +801,8 @@ fn a_v12_database_keeps_its_old_session_updated_payload_readable_after_upgrade()
             .expect("v12 库必须升级到当前版本");
         assert_eq!(
             upgraded.metadata().owned_schema_version,
-            13,
-            "升级必须把 owned schema 推进到 v13"
+            14,
+            "升级必须把 owned schema 推进到 v14"
         );
 
         // 当前摘要：只有三态，且不被旧事件里的 `waiting_permission` 覆盖。
@@ -836,12 +836,8 @@ fn a_v12_database_keeps_its_old_session_updated_payload_readable_after_upgrade()
         let replayed = batch
             .events
             .iter()
-            .find_map(|delivery| match delivery {
-                acp_core::model::CommittedDelivery::Owned(event) if event.id == event_id => {
-                    Some(event.clone())
-                }
-                _ => None,
-            })
+            .find(|event| event.id == event_id)
+            .cloned()
             .expect("旧 session.updated 必须出现在重放里");
         assert_eq!(
             (
@@ -890,7 +886,7 @@ fn a_v12_database_keeps_its_old_session_updated_payload_readable_after_upgrade()
             .fetch_one(&mut raw)
             .await
             .expect("读 user_version");
-        assert_eq!(user_version, 13, "升级后的文件格式版本必须是 13");
+        assert_eq!(user_version, 14, "升级后的文件格式版本必须是 14");
         let _ = raw.close().await;
 
         let _ = upgraded.close().await;

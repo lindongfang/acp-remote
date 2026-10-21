@@ -62,9 +62,12 @@ export interface VolatileMessageState {
   readonly partial: PartialResultView | null;
 }
 
-/** 易失正文：按到达次序拼接各次增量。 */
+/** 易失正文：按 `deltaIndex` 数值升序拼接（来源重放可能乱序到达）。 */
 export function volatileText(state: VolatileMessageState): string {
-  return [...state.deltas.values()].join("");
+  return [...state.deltas.entries()]
+    .sort((a, b) => (BigInt(a[0]) < BigInt(b[0]) ? -1 : 1))
+    .map(([, text]) => text)
+    .join("");
 }
 
 /**

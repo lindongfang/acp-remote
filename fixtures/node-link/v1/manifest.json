@@ -405,6 +405,39 @@
       "schema": "../../../schemas/node-link/v1/attachment.schema.json",
       "valid": false,
       "expectedKeyword": "required"
+    },
+    {
+      "fixture": "valid/resource-caught-up.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-reset-required.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-unavailable.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/resource-caught-up-without-generation.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/resource-reset-required-unknown-reason.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/resource-unavailable-without-error.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
     }
   ],
   "transcriptVectors": [

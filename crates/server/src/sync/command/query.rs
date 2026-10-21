@@ -26,8 +26,8 @@ use std::sync::Arc;
 
 use acp_core::broker::Broker;
 use acp_core::model::{
-    Actor, CommandRecord, FileReadPurpose as CoreFileReadPurpose, GitDiff as CoreGitDiff,
-    GitDiffBase as CoreGitDiffBase, GitDiffKind as CoreGitDiffKind,
+    Actor, CommandRecord, CommandStatus, FileReadPurpose as CoreFileReadPurpose,
+    GitDiff as CoreGitDiff, GitDiffBase as CoreGitDiffBase, GitDiffKind as CoreGitDiffKind,
     GitDiffUnavailableReason as CoreGitDiffUnavailable, GitFileStatus as CoreGitFileStatus,
     GitState as CoreGitState, GitStatusPage, MessageId, ModeRef as CoreModeRef, OwnedSessionRef,
     RemoteSessionRef, ResourceOrigin, Sequence, SessionFileChunk, SessionFileContentKind,
@@ -39,11 +39,12 @@ use acp_core::ports::{HistoryInclude, MessageCursor};
 use acp_core::use_cases::{ModeListing, SyncSessionQuery, UseCases};
 use base64::Engine as _;
 use sync_protocol::command::{
-    Command, CommandResultPayload, CommandStatus as WireCommandStatus, CommandStatusRecord,
-    ConfigListResult, ContentVersion as WireContentVersion, FileReadPurpose as WireFileReadPurpose,
-    GitDiffBase as WireGitDiffBase, GitDiffKind as WireGitDiffKind,
-    GitDiffUnavailableReason as WireGitDiffUnavailable, GitFileStatus as WireGitFileStatus,
-    GitState as WireGitState, GitStatusEntry as WireGitStatusEntry, IncludeList, SessionFileData,
+    Command, CommandResultPayload, CommandState, CommandStatus as WireCommandStatus,
+    CommandStatusRecord, ConfigListResult, ContentVersion as WireContentVersion,
+    FileReadPurpose as WireFileReadPurpose, GitDiffBase as WireGitDiffBase,
+    GitDiffKind as WireGitDiffKind, GitDiffUnavailableReason as WireGitDiffUnavailable,
+    GitFileStatus as WireGitFileStatus, GitState as WireGitState,
+    GitStatusEntry as WireGitStatusEntry, IncludeList, SessionFileData,
     SessionFileEntry as WireSessionFileEntry, SessionFilesList, SessionFilesListResult,
     SessionFilesPath, SessionFilesRead, SessionFilesReadResult, SessionGitDiff,
     SessionGitDiffResult, SessionGitStatus, SessionGitStatusResult, SessionListResult,
@@ -64,6 +65,7 @@ use crate::session_read::{
 #[cfg(test)]
 use crate::session_read::{Message, MessageMerger, needs_older_agents};
 use crate::sync::event::{FILE_DIFF_FEATURE, RAW_PAYLOAD_FEATURE, TYPED_MEDIA_FEATURE};
+use crate::sync::remote::STATELESS_ORIGIN_FEATURE;
 use crate::sync::snapshot::{LOCAL_CATALOG_FEATURE, REMOTE_ORIGIN_FEATURE};
 use crate::sync::subscribe::cursor::CursorFault;
 use crate::sync::subscribe::{NegotiatedFeatures, OwnerReachability};
@@ -182,7 +184,7 @@ pub async fn session_list(
 ) -> Result<CommandResultPayload, Rejection> {
     let include_imported = features.contains(REMOTE_ORIGIN_FEATURE);
     let query = SyncSessionQuery {
-        include_imported,
+        remote: include_imported.then(acp_core::use_cases::RemoteSessionQuery::default),
         ..SyncSessionQuery::default()
     };
     let summaries = core
@@ -281,25 +283,22 @@ pub async fn session_read<C: SessionReadSource>(
         typed_media: features.contains(TYPED_MEDIA_FEATURE),
         negotiate_acp: features.contains(RAW_PAYLOAD_FEATURE),
         negotiate_file_diff: features.contains(FILE_DIFF_FEATURE),
+        catalog: features.contains(LOCAL_CATALOG_FEATURE),
+        // 远程来源解析与读取覆盖字段都只在协商后启用（§9.7）：未协商的连接连来源解析都不做，
+        // 远程会话对它仍然不可见。
+        stateless_origin: features.contains(STATELESS_ORIGIN_FEATURE),
     };
-    match crate::session_read::read_session(core, actor, request)
+    match crate::session_read::read_session(core, actor, request.clone())
         .await
         .map_err(session_read_fault)?
     {
         crate::session_read::SessionReadOutcome::Owned(result) => {
             Ok(CommandResultPayload::SessionRead(result))
         }
-        crate::session_read::SessionReadOutcome::Imported(page) => {
-            crate::session_read::project_imported_read(
-                page,
-                &session_id,
-                include,
-                features.contains(TYPED_MEDIA_FEATURE),
-                features.contains(RAW_PAYLOAD_FEATURE),
-                features.contains(FILE_DIFF_FEATURE),
-            )
-            .map(CommandResultPayload::SessionRead)
-            .map_err(session_read_fault)
+        crate::session_read::SessionReadOutcome::Remote(page) => {
+            crate::session_read::project_remote_read(page, &session_id, &request)
+                .map(CommandResultPayload::SessionRead)
+                .map_err(session_read_fault)
         }
     }
 }
@@ -314,6 +313,9 @@ fn session_read_fault(fault: crate::session_read::SessionReadFault) -> Rejection
             Rejection::Code(ErrorCode::ResourceResultTooLarge, text)
         }
         SessionReadFault::Internal(text) => Rejection::Code(ErrorCode::InternalUnavailable, text),
+        SessionReadFault::Unsupported(text) => {
+            Rejection::Code(ErrorCode::CapabilityUnsupportedByBroker, text)
+        }
         SessionReadFault::Port(error) => port_rejection(&error),
     }
 }
@@ -322,29 +324,119 @@ fn session_read_fault(fault: crate::session_read::SessionReadFault) -> Rejection
 ///
 /// 目标不存在或**对本设备不可见**时一律 `command.not_found`（§11.4：避免权限侧信道）。可见性由 core 的
 /// `find_request(request, actor)` 给出——它按 `(actor, requestId)` 查，永远只返回该 actor 自己的请求。
+///
+/// 协商 `resource.stateless-origin.v1` 后，`payload.remoteTarget` 决定这条查询去**哪个来源**：
+/// - 携带 `remoteTarget` → 经 [`UseCases::remote_command_status`] 直接向原 Owner 查询，**不**读本地请求
+///   表（Access 没有远程命令记录，也从不推断「本地查不到 = 没执行」）；`sessionId = null` 只用于尚未建成
+///   会话的 `session.create`；
+/// - 未协商该 feature 却携带 `remoteTarget` → `protocol.schema_invalid`（封闭字段门控，不静默忽略）；
+/// - 缺席 → 保留 owned 行为（本地请求表）。
 pub async fn command_status(
     core: &Arc<UseCases>,
     actor: &Actor,
     payload: WireCommandStatus,
+    features: &NegotiatedFeatures,
 ) -> Result<CommandResultPayload, Rejection> {
     let Some(target) = core_request_id(&payload.target_request_id) else {
         return Err(Rejection::Schema("targetRequestId is not a request id"));
     };
-    let record = core
-        .command_status(actor, target)
+    let Some(remote_target) = payload.remote_target.as_ref() else {
+        let record = core
+            .command_status(actor, target)
+            .await
+            .map_err(|error| port_rejection(&error))?;
+        let Some(record) = record else {
+            return Err(Rejection::Code(
+                ErrorCode::CommandNotFound,
+                "the request is not known to this device",
+            ));
+        };
+        let wire = wire_status_record(&record).ok_or(Rejection::Code(
+            ErrorCode::InternalUnavailable,
+            "the command record cannot be projected",
+        ))?;
+        return Ok(CommandResultPayload::CommandStatus(wire));
+    };
+    if !features.contains(STATELESS_ORIGIN_FEATURE) {
+        return Err(Rejection::Schema(
+            "remoteTarget requires the stateless-origin feature",
+        ));
+    }
+    let owner = acp_core::model::NodeId::new(remote_target.owner_node_id.as_str())
+        .map_err(|_| Rejection::Schema("remoteTarget.ownerNodeId is not a node id"))?;
+    let session = match remote_target.session_id.as_ref() {
+        Some(session) => Some(
+            SessionId::new(session.as_str())
+                .map_err(|_| Rejection::Schema("remoteTarget.sessionId is not a session id"))?,
+        ),
+        None => None,
+    };
+    let lookup = core
+        .remote_command_status(
+            actor,
+            acp_core::ports::RemoteCommandTarget {
+                owner_node_id: owner,
+                session_id: session,
+            },
+            target,
+        )
         .await
         .map_err(|error| port_rejection(&error))?;
-    let Some(record) = record else {
-        return Err(Rejection::Code(
+    match lookup {
+        acp_core::ports::RemoteCommandLookup::NotFound => Err(Rejection::Code(
             ErrorCode::CommandNotFound,
-            "the request is not known to this device",
-        ));
-    };
-    let wire = wire_status_record(&record).ok_or(Rejection::Code(
-        ErrorCode::InternalUnavailable,
-        "the command record cannot be projected",
-    ))?;
-    Ok(CommandResultPayload::CommandStatus(wire))
+            "the request is not known to the owner node",
+        )),
+        acp_core::ports::RemoteCommandLookup::Accepted(record)
+        | acp_core::ports::RemoteCommandLookup::Terminal(record)
+        | acp_core::ports::RemoteCommandLookup::Uncertain(record) => {
+            let wire = wire_remote_status_record(&record).ok_or(Rejection::Code(
+                ErrorCode::InternalUnavailable,
+                "the command record cannot be projected",
+            ))?;
+            Ok(CommandResultPayload::CommandStatus(wire))
+        }
+    }
+}
+
+/// 远程命令记录 → wire `commandStatusRecord`（与 owned 记录同形；状态词表由 core 枚举决定）。
+fn wire_remote_status_record(
+    record: &acp_core::ports::RemoteCommandRecord,
+) -> Option<CommandStatusRecord> {
+    Some(CommandStatusRecord {
+        target_request_id: Uuid::parse(record.request.as_str()).ok()?,
+        state: wire_command_state(record.status),
+        accepted_at: match record.accepted_at.as_ref() {
+            Some(at) => Nullable::value(Timestamp::parse(at.as_str()).ok()?),
+            None => Nullable::null(),
+        },
+        terminal_at: match record.terminal_at.as_ref() {
+            Some(at) => Nullable::value(Timestamp::parse(at.as_str()).ok()?),
+            None => Nullable::null(),
+        },
+        // Owner 的记录只有终态结果，没有「终态事件标识」；wire 上该键 required 且可 `null`，
+        // 这里如实给 `null`（不伪造一个事件 id）。
+        terminal_event_id: Nullable::null(),
+        result: match record.result.as_ref() {
+            Some(result) => Nullable::value(RawObject::parse(result.as_str()).ok()?),
+            None => Nullable::null(),
+        },
+        error: match record.error.as_ref() {
+            Some(error) => Nullable::value(wire_public_error(error)?),
+            None => Nullable::null(),
+        },
+    })
+}
+
+/// core 的命令状态 → wire `commandStatusRecord.state` 词表。
+fn wire_command_state(status: CommandStatus) -> CommandState {
+    match status {
+        CommandStatus::Accepted => CommandState::Accepted,
+        CommandStatus::Completed => CommandState::Completed,
+        CommandStatus::Failed => CommandState::Failed,
+        CommandStatus::Rejected => CommandState::Rejected,
+        CommandStatus::Uncertain => CommandState::Uncertain,
+    }
 }
 
 /// `session.mode.list`：`ModeState`（`currentModeId` + `availableModes` + `version`）。
@@ -580,10 +672,11 @@ pub async fn session_git_status(
         )
         .await
         .map_err(|error| port_rejection(&error))?;
-    let result = wire_git_status_page(&page).ok_or(Rejection::Code(
-        ErrorCode::InternalUnavailable,
-        "a git status entry cannot be projected",
-    ))?;
+    let result = wire_git_status_page(&page, features.contains("core.session-git-stats.v1"))
+        .ok_or(Rejection::Code(
+            ErrorCode::InternalUnavailable,
+            "a git status entry cannot be projected",
+        ))?;
     Ok(CommandResultPayload::SessionGitStatus(result))
 }
 
@@ -601,10 +694,13 @@ pub async fn session_git_diff(
         .session_git_diff(actor, &session, payload.path.as_str())
         .await
         .map_err(|error| port_rejection(&error))?;
-    let result = wire_git_diff(&diff).ok_or(Rejection::Code(
+    let mut result = wire_git_diff(&diff).ok_or(Rejection::Code(
         ErrorCode::InternalUnavailable,
         "a git diff cannot be projected",
     ))?;
+    if !features.contains("core.session-git-compare.v1") {
+        result.comparison = None;
+    }
     Ok(CommandResultPayload::SessionGitDiff(result))
 }
 
@@ -677,7 +773,10 @@ pub(super) fn wire_session_file_chunk(chunk: &SessionFileChunk) -> Option<Sessio
 }
 
 /// core 的 Git 状态页 → wire `sessionGitStatusResult`。
-fn wire_git_status_page(page: &GitStatusPage) -> Option<SessionGitStatusResult> {
+fn wire_git_status_page(
+    page: &GitStatusPage,
+    include_counts: bool,
+) -> Option<SessionGitStatusResult> {
     let entries = page
         .entries()
         .iter()
@@ -697,6 +796,14 @@ fn wire_git_status_page(page: &GitStatusPage) -> Option<SessionGitStatusResult> 
                 },
                 conflicted: entry.conflicted(),
                 binary: entry.binary(),
+                added_lines: entry
+                    .line_counts()
+                    .filter(|_| include_counts)
+                    .map(|counts| counts.0),
+                deleted_lines: entry
+                    .line_counts()
+                    .filter(|_| include_counts)
+                    .map(|counts| counts.1),
             })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -733,6 +840,13 @@ fn wire_git_diff(diff: &CoreGitDiff) -> Option<SessionGitDiffResult> {
             CoreGitDiffKind::Text => WireGitDiffKind::Text,
             CoreGitDiffKind::Binary => WireGitDiffKind::Binary,
             CoreGitDiffKind::Conflict => WireGitDiffKind::Conflict,
+        },
+        comparison: match diff.comparison() {
+            Some((before, after)) => Some(sync_protocol::command::GitFileComparison {
+                before: Text::<65536>::parse(before).ok()?,
+                after: Text::<65536>::parse(after).ok()?,
+            }),
+            None => None,
         },
         diff_lines,
         unavailable: diff.unavailable().map(|reason| match reason {
@@ -810,7 +924,7 @@ fn decimal(text: &str) -> Option<DecimalString> {
 /// 拿不到它的私有函数，因为它只在快照模块内可见）。`catalog`（`core.local-catalog.v1` 的协商结果）决定
 /// `workspace` 键的三态：未协商时**缺席**（schema 是 `additionalProperties: false`，发 `null` 会让未协商
 /// 的客户端拒绝整条摘要）；协商时键在场，`null` = 未分组。
-pub(super) fn wire_session(
+pub(crate) fn wire_session(
     summary: &acp_core::model::SessionSummary,
     catalog: bool,
 ) -> Option<WireSessionSummary> {
@@ -1044,6 +1158,21 @@ mod tests {
         assert!(!wire.preview_truncated);
     }
 
+    #[test]
+    fn git_line_counts_require_negotiated_feature() {
+        let entry =
+            CoreStatusEntry::try_new(path("a.rs"), CoreStatus::Modified, None, false, false)
+                .expect("entry")
+                .with_line_counts(Some((12, 3)));
+        let page = CoreStatusPage::try_new(CoreState::Available, vec![entry], None).expect("page");
+        let old = wire_git_status_page(&page, false).expect("old client");
+        assert_eq!(old.entries[0].added_lines, None);
+        assert_eq!(old.entries[0].deleted_lines, None);
+        let new = wire_git_status_page(&page, true).expect("new client");
+        assert_eq!(new.entries[0].added_lines, Some(12));
+        assert_eq!(new.entries[0].deleted_lines, Some(3));
+    }
+
     /// `session.git.status`：改名带旧路径，冲突/二进制是显式标记；非仓库是成功结果里的状态。
     #[test]
     fn git_status_page_projects_explicit_states() {
@@ -1058,7 +1187,7 @@ mod tests {
             .expect("entry"),
         ];
         let page = CoreStatusPage::try_new(CoreState::NotRepository, entries, None).expect("page");
-        let wire = wire_git_status_page(&page).expect("projection");
+        let wire = wire_git_status_page(&page, false).expect("projection");
         assert_eq!(
             serde_json::to_value(&wire).expect("json"),
             serde_json::json!({

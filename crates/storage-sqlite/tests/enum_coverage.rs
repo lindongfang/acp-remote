@@ -181,7 +181,7 @@ async fn ddl_enum_lists_match_the_core_enums() {
     store.close().await;
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
-    let cases: [(&str, &str, Vec<String>); 27] = [
+    let cases: [(&str, &str, Vec<String>); 24] = [
         (
             "owned_session",
             "state",
@@ -249,22 +249,7 @@ async fn ddl_enum_lists_match_the_core_enums() {
             tokens(AuditOutcome::ALL, AuditOutcome::as_str),
         ),
         (
-            "imported_command_ref",
-            "status",
-            tokens(CommandStatus::ALL, CommandStatus::as_str),
-        ),
-        (
-            "imported_audit",
-            "action",
-            tokens(AuditAction::ALL, AuditAction::as_str),
-        ),
-        (
             "owned_audit",
-            "actor_kind",
-            tokens(ActorKind::ALL, ActorKind::as_str),
-        ),
-        (
-            "imported_audit",
             "actor_kind",
             tokens(ActorKind::ALL, ActorKind::as_str),
         ),

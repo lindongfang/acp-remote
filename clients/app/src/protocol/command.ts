@@ -15,7 +15,9 @@
 import type {
   ConfigOptionView,
   DecimalString,
+  MessageCoverage,
   ModeState,
+  OriginCursor,
   PromptContentBlock,
   PublicError,
   SessionSummary,
@@ -329,12 +331,27 @@ export interface ElicitationRespondCommand extends CommandEnvelope {
   };
 }
 
+/**
+ * `$defs.remoteTarget`：远程命令/查询的来源定位（`resource.stateless-origin.v1`，§9.7/§11.4）。
+ *
+ * `sessionId` 为 `null` 只用于尚未建成会话的 `session.create`；其他会话操作必须给出原来源会话。
+ * 该键只在 feature 协商后出现，未协商的连接 MUST NOT 发送它。
+ */
+export interface RemoteTarget {
+  readonly ownerNodeId: Uuid;
+  readonly sessionId: Uuid | null;
+}
+
 /** `$defs.commandStatus`：用稳定 `requestId` 查终态，不生成新标识。 */
 export interface CommandStatusCommand extends CommandEnvelope {
   readonly body: {
     readonly requestId: Uuid;
     readonly command: "command.status";
-    readonly payload: { readonly targetRequestId: Uuid };
+    readonly payload: {
+      readonly targetRequestId: Uuid;
+      /** 协商 `resource.stateless-origin.v1` 后必填：直接向原 Owner 查询，不凭本地记录判断。 */
+      readonly remoteTarget?: RemoteTarget;
+    };
   };
 }
 
@@ -375,6 +392,10 @@ export interface SessionListResult {
  *
  * `historyHasEarlier` 是可选布尔值，**只**描述 `resources.history` 这一页之前是否仍有更早
  * 条目（对应的续取游标是最早一条的 `sessionSequence`）。两者各自分页、互不影响（D2）。
+ *
+ * `readCursor`/`sessionSummary`/`messageCoverage` 是 `resource.stateless-origin.v1` 的加性字段
+ * （§9.7/§11.5）：协商后由 Owner 在**同一次**只读事务里原子取得；未协商时三者一起缺席，页边界
+ * 与既有字段逐字不变。
  */
 export interface SessionReadResult {
   readonly sessionId: Uuid;
@@ -390,6 +411,12 @@ export interface SessionReadResult {
   };
   readonly hasEarlier: boolean;
   readonly historyHasEarlier?: boolean;
+  /** 本次读取原子捕获的来源位置 R，只描述这一页的读取边界。 */
+  readonly readCursor?: OriginCursor;
+  /** 与 `readCursor` 同次读取取得的完整会话摘要，用于防止清单与来源屏障之间的竞态。 */
+  readonly sessionSummary?: SessionSummary;
+  /** 每条返回消息恰有一项；`through` 等于 `readCursor`。 */
+  readonly messageCoverage?: readonly MessageCoverage[];
 }
 
 /** `$defs.configListResult`。 */

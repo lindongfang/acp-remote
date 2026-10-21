@@ -34,6 +34,7 @@ import type {
   ToolDetailPart,
 } from "../protocol/event";
 import type { SnapshotItemHistory } from "../protocol/sync";
+import type { RemoteEventItem } from "../protocol/sync";
 import type { InteractionAvailability } from "./interaction";
 
 /** 结构化来源：本连接的实时事件，或按会话读取的历史条目。 */
@@ -42,6 +43,13 @@ export type StructuredSource = "realtime" | "history";
 /** 归一后的结构化记录：两种来源在卡片/降级判定眼里完全同形。 */
 export interface StructuredRecord {
   readonly source: StructuredSource;
+  /**
+   * 来源 Owner 节点；本节点自有记录为 `null`。
+   *
+   * 远程去重键必须绑定来源节点：不同 Owner 的 `eventId` 属于不同命名空间，只按裸 `eventId`
+   * 合并会把两个来源的同一标识当成一条（`design.md` D3 的来源命名空间要求）。
+   */
+  readonly ownerNodeId: string | null;
   readonly eventId: string;
   readonly eventType: string;
   readonly sessionId: string | null;
@@ -60,6 +68,7 @@ export interface StructuredRecord {
 export function recordFromEvent(event: EventMessage): StructuredRecord {
   return {
     source: "realtime",
+    ownerNodeId: null,
     eventId: event.body.eventId,
     eventType: event.body.eventType,
     sessionId: event.body.sessionId,
@@ -78,9 +87,14 @@ export function recordFromEvent(event: EventMessage): StructuredRecord {
  * `sessionId` 由调用方从**结果**给出：`snapshotItem.history` 自己没有这个字段（整页都属于同
  * 一次 `session.read`），因此它不是「缺失」，而是「页级信息」。
  */
-export function recordFromHistoryItem(item: SnapshotItemHistory, sessionId: string): StructuredRecord {
+export function recordFromHistoryItem(
+  item: SnapshotItemHistory,
+  sessionId: string,
+  ownerNodeId: string | null = null,
+): StructuredRecord {
   return {
     source: "history",
+    ownerNodeId,
     eventId: item.eventId,
     eventType: item.eventType,
     sessionId,
@@ -90,6 +104,29 @@ export function recordFromHistoryItem(item: SnapshotItemHistory, sessionId: stri
     originKind: null,
     view: item.view,
     ...(item.acp === undefined ? {} : { acp: item.acp }),
+  };
+}
+
+/**
+ * 来源事件 → 结构化记录（`sync.remote_event`，§9.7）。
+ *
+ * 远程事件**没有** Access 的全局/会话投递序号；这里的 `sessionSequence` 直接使用 Owner 的
+ * `originSequence`，只用于在时间线上稳定排序与历史去重，**不是** Access 本机序号，也从不参与
+ * 本机 ACK/游标。`ownerNodeId` 是来源命名空间的一部分，清理某来源的展示数据时按它筛选。
+ */
+export function recordFromRemoteEvent(event: RemoteEventItem): StructuredRecord {
+  return {
+    source: "realtime",
+    ownerNodeId: event.sessionRef.ownerNodeId,
+    eventId: event.originEventId,
+    eventType: event.eventType,
+    sessionId: event.sessionRef.sessionId,
+    createdAt: event.createdAt,
+    sessionSequence: event.originSequence,
+    globalSequence: null,
+    originKind: "node",
+    view: event.payload.view ?? {},
+    ...(event.payload.acp === undefined ? {} : { acp: event.payload.acp }),
   };
 }
 

@@ -52,6 +52,7 @@ pub mod command;
 pub mod conn;
 pub mod event;
 pub mod pairing;
+pub mod remote;
 pub mod router;
 pub mod snapshot;
 pub mod subscribe;

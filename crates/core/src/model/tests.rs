@@ -1317,38 +1317,6 @@ fn committed_event_and_delivery_keep_session_sequences_consistent() {
         Err(InvalidValue::Field)
     );
 
-    let owner = NodeId::from_str(UUID_C).expect("node");
-    let remote = RemoteSessionRef::new(owner.clone(), session_id());
-    let delivery = CommittedDelivery::Imported {
-        session: remote,
-        origin: OriginEventRef::new(owner, epoch, EventId::from_str(UUID_B).expect("event id")),
-        origin_sequence: sequence,
-        local_sequence: LocalCursor::from(1),
-        event_type: EventType::new("agent.message.delta").expect("event type"),
-        payload_digest: digest(),
-        created_at: ts("2026-09-17T12:10:00.123Z"),
-        payload: Some(EventPayload::new(view(r#"{"text":"x"}"#), None)),
-    };
-    delivery.validate().expect("imported delivery");
-
-    // origin 必须属于该会话的 Owner。
-    let foreign = CommittedDelivery::Imported {
-        session: RemoteSessionRef::new(NodeId::from_str(UUID_A).expect("node"), session_id()),
-        origin: OriginEventRef::new(
-            NodeId::from_str(UUID_B).expect("node"),
-            OriginEpoch::from_str(UUID_C).expect("epoch"),
-            EventId::from_str(UUID_B).expect("event id"),
-        ),
-        origin_sequence: sequence,
-        local_sequence: LocalCursor::from(1),
-        event_type: EventType::new("agent.message.delta").expect("event type"),
-        payload_digest: digest(),
-        created_at: ts("2026-09-17T12:10:00.123Z"),
-        payload: None,
-    };
-    assert_eq!(foreign.validate(), Err(InvalidValue::Field));
-    assert!(CommittedDelivery::Owned(event).validate().is_ok());
-
     let endpoint = EndpointEvent::view_only(
         EventKind::Structured,
         EventType::new("session.created").expect("event type"),

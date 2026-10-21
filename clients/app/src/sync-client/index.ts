@@ -115,8 +115,18 @@ export {
   toLoadedPage,
 } from "./paging";
 export type { HistoryCursor, LoadedHistoryPage, LoadedPage, PageRequest, ReadCursor } from "./paging";
+export {
+  EMPTY_REMOTE_COVERAGE,
+  advanceOriginCursor,
+  compareOriginCursors,
+  coverageAllowsReplace,
+  coverageFromRead,
+  isDeltaCovered,
+  isEventCovered,
+  mergeRemoteCoverage,
+  pruneCoveredDeltas,
+} from "./remote-merge";
+export type { RemoteCoverageMap, RemoteMessageCoverage } from "./remote-merge";
 
-// ── Agent 覆盖层与 imported 落盘分流 ────────────────────────────────────────
+// ── Agent 覆盖层 ───────────────────────────────────────────────────────────
 export { AgentConnectionOverlayStore, overlayFromEvent } from "./agent-overlay";
-export type { ContentKind, ContentRoute, SessionOrigin } from "./imported-content";
-export { mayMarkInputAsSent, routeContent } from "./imported-content";

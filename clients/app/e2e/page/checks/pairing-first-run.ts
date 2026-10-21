@@ -129,7 +129,7 @@ function phaseOf(container: HTMLElement): string | null {
 /** 本地缓存里那条已配对主机记录的摘要；没落盘（或不是本地记录）返回 `null`。 */
 async function storedPairedHost(): Promise<string | null> {
   const hit = await openPlatform().localCache.get(`${PAIRED_HOST_KEY_PREFIX}${CANONICAL_ORIGIN}`, Date.now());
-  return hit !== null && hit.entry.kind === "local" ? hit.entry.summary : null;
+  return hit !== null ? hit.entry.summary : null;
 }
 
 /**

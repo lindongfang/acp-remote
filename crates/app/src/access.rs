@@ -7,8 +7,7 @@
 //!    公钥验签；观察到 `approved` 且身份与本机/邀请一致后，才把 Owner 信任记录写入 `TrustStore`。
 //! 2. **出站连接**：启动时按 `kind = Owner`、`state = Paired` 的记录逐个建立 [`OwnerLink`]
 //!    （`node-link-client` 的 supervisor 自有重连与撤销语义）；链路建立后的 catalog/import 注册由
-//!    `node-link-client` 的 `ImportedSink`（[`node_link_client::delivery::DeliveryBridge`]）完成——
-//!    即「先提交无正文收据，再发布，最后 ACK」。
+//!    `node-link-client` 的运行期目录（`RemoteRuntime`）完成；不落收据、不写 ACK。
 //! 3. **路由**：远程 `SessionEndpoint` 按「当前活着的 link」惰性构造（[`AccessManager::endpoint`]），
 //!    附件转发走独立认证连接（[`AccessManager::open_attachment`]）。撤销（`node.revoke`）先移除 link
 //!    再 `shutdown`，因此**路由失效是移除的必然结果**，不存在需要单独清理的旁表。
@@ -24,30 +23,19 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use acp_core::broker::Broker;
 use acp_core::model::{
     Actor, NodeId, NodeKind, NodeRecord, NodeState, Nonce, PeerIdentity, PeerPublicKey, PortError,
     RemoteSessionRef, Timestamp, UnavailableKind,
 };
-use acp_core::ports::{
-    Clock, ImportedRead, ImportedReadQuery, RemoteDeliveryStore, RemoteSessionReads,
-    SessionEndpoint,
-};
+use acp_core::ports::{Clock, SessionEndpoint};
 use acp_core::use_cases::UseCases;
 use identity_auth::EntropySource;
-use node_link_client::delivery::DeliveryBridge;
-use node_link_client::link::ImportedSink;
 use node_link_client::pairing::{self, ClaimSession, StatusOutcome};
 use node_link_client::{
     AttachmentForwarder, ClientConfig, ClientError, KeystoreIdentity, NodeIdentity as LinkIdentity,
     NodeLinkClient, OwnerLink, OwnerTrust, PairingTicket, WssTransportFactory,
 };
-use node_link_protocol::catalog::CatalogSnapshot;
-use node_link_protocol::common::{
-    OriginCursor, RemoteSessionRef as WireRemoteSessionRef, SessionMeta,
-};
 use node_link_protocol::pairing::PairingStatus;
-use node_link_protocol::resource::Event as NodeLinkEvent;
 use serde_json::Value;
 use server::local_admin::{
     AccessPairing, AdminError, DaemonLink, DaemonLinkState, JsonObject, LocalErrorCode,
@@ -107,69 +95,17 @@ pub struct AccessDeps {
     pub identity: NodeIdentity,
     pub keystore: Arc<dyn identity_auth::IdentityKeystore>,
     pub core: Arc<UseCases>,
-    pub broker: Arc<Broker>,
-    pub deliveries: Arc<dyn RemoteDeliveryStore>,
+    pub runtime: Arc<node_link_client::RemoteRuntime>,
     pub clock: Arc<dyn Clock>,
     pub entropy: Arc<dyn EntropySource>,
     /// `[node] name`：claim 时作为 `nodeName`。
     pub node_name: Option<String>,
 }
 
-/// Node Link 入站事件的消费者：无正文收据/索引仍由 [`DeliveryBridge`] 完成，本类型只补一件
-/// `DeliveryBridge` 职责之外的事实——**Owner 撤回信任时把本地信任行落成撤销终态**。
-///
-/// 为什么不能留给 supervisor：`OwnerLink` 只负责「停止重连」，它不拥有持久化信任。若这里不写库，
-/// Access 重启后 `start_persisted` 会把状态仍是 `paired` 的 Owner 重新连上；Owner 会再次拒绝，但本地
-/// 状态与事实不符（并且 `node.list` 会显示 `paired`）。
-struct AccessImportedSink {
-    bridge: Arc<DeliveryBridge>,
-    core: Arc<UseCases>,
-}
-
-#[async_trait::async_trait]
-impl ImportedSink for AccessImportedSink {
-    async fn event(
-        &self,
-        owner: &NodeId,
-        event: &NodeLinkEvent,
-    ) -> Result<Option<OriginCursor>, PortError> {
-        self.bridge.event(owner, event).await
-    }
-
-    async fn catalog(&self, owner: &NodeId, snapshot: &CatalogSnapshot) -> Result<(), PortError> {
-        self.bridge.catalog(owner, snapshot).await
-    }
-
-    async fn session_meta(
-        &self,
-        owner: &NodeId,
-        session: &WireRemoteSessionRef,
-        meta: &SessionMeta,
-    ) -> Result<(), PortError> {
-        self.bridge.session_meta(owner, session, meta).await
-    }
-
-    async fn revoked(
-        &self,
-        owner: &NodeId,
-        _revoked_at: Option<&Timestamp>,
-    ) -> Result<(), PortError> {
-        // 撤销是终态，重复写入是幂等的（`TrustStore::revoke_node` 的终态语义）。
-        // 归因用 `LocalCli`：这是本机记录一条从 Owner 收到的信任事实，不是对端命令。
-        self.core.revoke_node(&Actor::LocalCli, owner).await?;
-        tracing::info!(
-            event = "daemon.access_owner_revoked_local",
-            node = %owner.as_str(),
-            "本地信任行已标记为撤销：该 Owner 不再进入启动重连计划"
-        );
-        Ok(())
-    }
-}
-
 /// Access 侧出站运行时。
 pub struct AccessManager {
     core: Arc<UseCases>,
-    deliveries: Arc<dyn RemoteDeliveryStore>,
+    runtime: Arc<node_link_client::RemoteRuntime>,
     clock: Arc<dyn Clock>,
     identity: Arc<dyn LinkIdentity>,
     client: NodeLinkClient,
@@ -204,23 +140,19 @@ impl AccessManager {
             Arc::clone(&deps.keystore),
             deps.identity.key().clone(),
         ));
-        let sink = Arc::new(AccessImportedSink {
-            bridge: Arc::new(DeliveryBridge::new(
-                Arc::clone(&deps.broker),
-                Arc::clone(&deps.deliveries),
-                Arc::clone(&deps.clock),
-            )),
-            core: Arc::clone(&deps.core),
-        });
+        let runtime = deps.runtime;
+        // 信任撤销的本地落库缝：运行期只负责清除数据，持久信任仍由 core 写。
+        runtime.set_trust_revocation(Arc::new(AccessRevocations {
+            core: Arc::downgrade(&deps.core),
+        }));
         let client = NodeLinkClient::new(
             Arc::new(WssTransportFactory),
             Arc::clone(&identity),
-            sink,
-            Arc::clone(&deps.deliveries),
+            Arc::clone(&runtime),
         );
         Ok(Self {
             core: deps.core,
-            deliveries: deps.deliveries,
+            runtime,
             clock: deps.clock,
             identity,
             client,
@@ -230,6 +162,11 @@ impl AccessManager {
             links: Mutex::new(BTreeMap::new()),
             claims: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    /// 运行期远程目录/回源/命令查询（组合根把它接线到 `UseCases`）。
+    pub fn runtime(&self) -> Arc<node_link_client::RemoteRuntime> {
+        Arc::clone(&self.runtime)
     }
 
     /// 启动时按持久化 Owner 信任建立连接（失败只记录，不阻止启动：supervisor 会继续重连）。
@@ -340,9 +277,7 @@ impl AccessManager {
         if link.is_revoked() {
             return None;
         }
-        Some(Arc::new(
-            link.session(remote.clone(), Arc::clone(&self.deliveries)),
-        ))
+        Some(Arc::new(link.session(remote.clone())))
     }
 
     /// 远程附件转发（独立认证连接；每次调用一条，用完即关）。
@@ -365,6 +300,7 @@ impl AccessManager {
         let link = lock(&self.links).remove(node.as_str());
         if let Some(link) = link {
             link.shutdown().await;
+            let _ = self.runtime.revoked(node).await;
             tracing::info!(
                 event = "daemon.access_link_revoked",
                 node = %node.as_str(),
@@ -813,29 +749,20 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// 运行期撤销通知的持久化落点。
+struct AccessRevocations {
+    /// `Weak`：运行期挂在 `UseCases` 的端口上，强引用会形成 `UseCases -> runtime -> revocations -> UseCases`
+    /// 的环，关闭时存储无法独占（`StoreStillShared`）。
+    core: std::sync::Weak<UseCases>,
+}
+
 #[async_trait::async_trait]
-impl RemoteSessionReads for AccessManager {
-    /// imported 会话的 `session.read` 回源（`NODE_LINK_PROTOCOL.md` §12.10）。
-    ///
-    /// 路由只来自当前活着的 link：Owner 被撤销或从未连接时返回 [`UnavailableKind::OwnerOffline`]，
-    /// 由 Sync 适配器映射成 `resource.remote_unavailable`，**不**返回空历史或 `session.not_found`。
-    /// 正文只在这次调用的栈上存在；本实现不写数据库、临时文件或日志。
-    async fn read_imported(
-        &self,
-        session: &RemoteSessionRef,
-        query: ImportedReadQuery,
-    ) -> Result<ImportedRead, PortError> {
-        let link = lock(&self.links)
-            .get(session.owner_node_id.as_str())
-            .cloned();
-        let Some(link) = link else {
-            return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
-        };
-        if link.is_revoked() || !link.is_online() {
-            return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
-        }
-        link.session(session.clone(), Arc::clone(&self.deliveries))
-            .read_page(query)
-            .await
+impl node_link_client::runtime::TrustRevocation for AccessRevocations {
+    async fn revoked(&self, owner: &NodeId) -> Result<(), PortError> {
+        let core = self
+            .core
+            .upgrade()
+            .ok_or(PortError::Unavailable(UnavailableKind::OwnerOffline))?;
+        core.revoke_node(&Actor::LocalCli, owner).await
     }
 }

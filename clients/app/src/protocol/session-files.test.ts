@@ -178,3 +178,18 @@ describe("session-files：非法结果显式拒绝", () => {
     ).toBe(false);
   });
 });
+
+describe("Git line counts", () => {
+  it("preserves paired counts from the shared fixture and rejects partial/invalid counts", () => {
+    const body = bodyOf("command-result-session-git-status-completed.json") as {result: {entries: Record<string,unknown>[]}};
+    const result = body.result;
+    const decoded = decodeSessionFilesResult("session.git.status", result);
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) expect(decoded.value.entries[0]).toMatchObject({addedLines:12,deletedLines:3});
+    const first = result.entries[0];
+    for (const patch of [{deletedLines:undefined},{addedLines:-1},{addedLines:0.5},{addedLines:4294967296},{addedLines:null},{binary:true},{conflicted:true}]) {
+      expect(decodeSessionFilesResult("session.git.status", {...result,entries:[{...first,...patch}]}).ok).toBe(false);
+    }
+    expect(decodeSessionFilesResult("session.git.status", {...result,entries:[{...first,addedLines:0,deletedLines:0}]}).ok).toBe(true);
+  });
+});

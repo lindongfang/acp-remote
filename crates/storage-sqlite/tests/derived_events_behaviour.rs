@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex};
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
-    AcpRaw, AgentId, AgentRef, AgentSessionId, CommittedDelivery, CreateSessionRequest, Digest,
+    AcpRaw, AgentId, AgentRef, AgentSessionId, CommittedEvent, CreateSessionRequest, Digest,
     EndpointEvent, EventKind, EventPayload, EventType, InteractionId, MessageId, OriginEpoch,
     PairingId, PortError, RequestId, SessionId, SessionReference, SessionSnapshot, SessionState,
     Timestamp, TurnId, ViewJson,
@@ -143,15 +143,15 @@ impl IdGenerator for SeqIds {
 /// 发布记录器（§5.4）：记录已提交的投递，供「先提交后发布」类的观察（本文件只做存在性断言）。
 #[derive(Default)]
 struct Recorder {
-    published: Mutex<Vec<CommittedDelivery>>,
+    published: Mutex<Vec<CommittedEvent>>,
 }
 
 impl acp_core::ports::EventPublisher for Recorder {
-    fn publish(&self, delivery: CommittedDelivery) {
+    fn publish(&self, event: CommittedEvent) {
         self.published
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(delivery);
+            .push(event);
     }
 }
 
@@ -261,13 +261,11 @@ impl Fixture {
                 .expect("登记工作目录根");
         }
         let stored: Arc<dyn SessionStore> = store.clone();
-        let deliveries: Arc<dyn acp_core::ports::RemoteDeliveryStore> = store.clone();
         let trust: Arc<dyn acp_core::ports::TrustStore> = store.clone();
         let audit: Arc<dyn acp_core::ports::AuditStore> = store.clone();
         let broker = Arc::new(Broker::new(
             BrokerDeps {
                 store: stored,
-                deliveries,
                 backends: Arc::new(UntouchedBackends),
                 trust,
                 publisher: Arc::new(Recorder::default()),
@@ -315,10 +313,7 @@ impl Fixture {
             .await
             .expect("重放");
         let mut out = Vec::new();
-        for delivery in batch.events {
-            let CommittedDelivery::Owned(event) = delivery else {
-                continue;
-            };
+        for event in batch.events {
             if event.session.as_ref() != Some(&self.session)
                 || event.event_type.as_str() != event_type
             {
@@ -1293,12 +1288,7 @@ async fn node_level_events_land_without_session_identity() {
     let node_events: Vec<_> = batch
         .events
         .iter()
-        .filter_map(|delivery| match delivery {
-            CommittedDelivery::Owned(event) if event.event_type.as_str().starts_with("agent.") => {
-                Some(event)
-            }
-            _ => None,
-        })
+        .filter(|event| event.event_type.as_str().starts_with("agent."))
         .collect();
     assert_eq!(node_events.len(), 2, "R8：两条节点级事件都进重放流");
     for event in node_events {

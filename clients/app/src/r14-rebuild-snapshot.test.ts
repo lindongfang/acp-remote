@@ -30,7 +30,7 @@ import { encodeNulJoinedUtf8, encodeTranscript, encodeU16be, encodeUtf8, encodeU
 
 /** `host-challenge` 的 domain（§6.3）。 */
 const HOST_CHALLENGE_DOMAIN = "acp-remote/host-challenge/v1";
-import { createVolatileImportedContent, openLocalCache } from "./platform/local-cache.web";
+import { openLocalCache } from "./platform/local-cache.web";
 import { openLifecycle } from "./platform/lifecycle.web";
 import { openDownloadPort } from "./platform/download.web";
 import type { PlatformPorts } from "./platform";
@@ -132,7 +132,6 @@ async function setupPaired(hostKey: HostKey): Promise<Harness> {
       },
     },
     localCache: openLocalCache(),
-    importedContent: createVolatileImportedContent(),
     lifecycle: openLifecycle(),
     download: openDownloadPort(),
   };

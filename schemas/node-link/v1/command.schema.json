@@ -401,6 +401,9 @@
               "properties": {
                 "targetRequestId": {
                   "$ref": "#/$defs/requestId"
+                },
+                "remoteTarget": {
+                  "$ref": "#/$defs/remoteTarget"
                 }
               }
             }
@@ -1182,6 +1185,30 @@
       ],
       "unevaluatedProperties": false
     },
+    "remoteTarget": {
+      "description": "远程查询的来源定位（`resource.stateless-origin.v1`，docs/NODE_LINK_PROTOCOL.md §12.5/§12.7）：直接指向原 Owner 与其会话，不能凭 Access 本地记录判断。`sessionId` 为 `null` 只用于尚未建成会话的 `session.create`。该键只在 feature 协商后出现；未协商的连接 MUST NOT 发送它。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ownerNodeId",
+        "sessionId"
+      ],
+      "properties": {
+        "ownerNodeId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "sessionId": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "commandStatus": {
       "allOf": [
         {
@@ -1202,6 +1229,9 @@
               "properties": {
                 "targetRequestId": {
                   "$ref": "#/$defs/requestId"
+                },
+                "remoteTarget": {
+                  "$ref": "#/$defs/remoteTarget"
                 }
               }
             }
@@ -1209,6 +1239,44 @@
         }
       ],
       "unevaluatedProperties": false
+    },
+    "sessionReadResult": {
+      "description": "`session.read` 的 `completed` 结果在 `resource.stateless-origin.v1` 下的加性形状（docs/NODE_LINK_PROTOCOL.md §12.7）：`readCursor` 为本次只读事务原子捕获的来源位置 R，`sessionSummary` 为该时刻的完整摘要，`messageCoverage` 为每条已返回消息恰一项的覆盖声明。Node Link 的 `command.terminal.terminal.result` 仍是开放对象，Access 逐字节转发；本定义是其机器形状，供客户端按 `(来源, messageId)` 合并覆盖。未协商该 feature 时三个键缺席，既有结果形状逐字不变。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "resources",
+        "hasEarlier"
+      ],
+      "properties": {
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "resources": {
+          "type": "object",
+          "description": "与 Sync §11.5 的 resources 同名同形；只承载本次返回的明细，不构成整段历史的快照承诺。"
+        },
+        "hasEarlier": {
+          "type": "boolean"
+        },
+        "historyHasEarlier": {
+          "type": "boolean"
+        },
+        "readCursor": {
+          "$ref": "common.schema.json#/$defs/originCursor"
+        },
+        "sessionSummary": {
+          "type": "object",
+          "description": "该次读取时刻的完整会话摘要，与 Sync `SYNC_PROTOCOL.md` §10.3 的 `SessionSummary` 同形（`sessionId`/`title`/`agent`/`state`/`origin`/`currentMode`/`version`/`createdAt`/`updatedAt`）；Node Link 的 catalog 仍只承载无标题的 `catalogSession`，本字段用于读取时原子取得权威摘要，避免清单与来源屏障之间竞态回滚标题。"
+        },
+        "messageCoverage": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/messageCoverage"
+          }
+        }
+      }
     }
   }
 }

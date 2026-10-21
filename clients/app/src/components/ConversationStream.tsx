@@ -677,6 +677,7 @@ function buildStyles(colors: Palette) {
     },
     // 三栏的列宽就是原型的 `300 / 1fr / 360`：两侧用 `flexBasis` 定宽（RN 没有 grid），中栏吃掉余量。
     sessionsColumn: {
+      overflow: "hidden",
       flexBasis: 300,
       flexGrow: 0,
       // 宽屏但视口不足时允许两侧收缩：固定 300 + 360 在 720–900 区间会把中栏压成几十像素，
@@ -743,13 +744,19 @@ function buildStyles(colors: Palette) {
       display: "none",
     },
     sidebar: {
+      overflow: "hidden",
       flexGrow: 1,
       flexShrink: 1,
       flexBasis: 0,
       minHeight: 0,
       gap: 0,
     },
+    sidebarFixed: {
+      flexShrink: 0,
+      backgroundColor: colors.panel,
+    },
     sidebarHead: {
+      flexShrink: 0,
       gap: 0,
       paddingVertical: 16,
       paddingHorizontal: 16,
@@ -1142,6 +1149,7 @@ function Sidebar({
   const directory = model.directory;
   return (
     <View style={styles.sidebar} dataSet={{ conversationSidebar: "true" }}>
+      <View style={styles.sidebarFixed} dataSet={{sidebarRegion:"header"}}>
       {/* 没有目录归属：说明它，而不是把左栏藏起来（中栏照常呈现）。 */}
       {model.notice === null ? null : (
         <Text style={styles.note} dataSet={{ sidebarNotice: "no_directory" }}>
@@ -1198,7 +1206,8 @@ function Sidebar({
         </View>
       )}
 
-      <ScrollView style={styles.columnScroll} dataSet={{ conversationScroll: "sessions" }}>
+      </View>
+      <ScrollView style={styles.columnScroll} contentContainerStyle={{flexGrow:0}} dataSet={{ conversationScroll: "sessions", sidebarRegion:"body" }}>
       {directory === null || model.rows.length === 0 ? null : (
         <View role="list" style={styles.sidebarList} dataSet={{ sidebarSessions: "list" }}>
           {model.rows.map((row, index) => {
@@ -1231,6 +1240,7 @@ function Sidebar({
       )}
 
       </ScrollView>
+      <View style={styles.sidebarFixed} dataSet={{sidebarRegion:"footer"}}>
       {directory === null || onPageChange === undefined ? null : (
         <View style={styles.sidebarPager} dataSet={{ sidebarShown: String(model.shown), sidebarTotal: String(model.total) }}>
           <Pager
@@ -1257,6 +1267,7 @@ function Sidebar({
           </Pressable>
         </View>
       )}
+      </View>
     </View>
   );
 }
@@ -2031,18 +2042,16 @@ export function ConversationStream({
             }
             dataSet={{ conversationColumn: "files" }}
           >
-            <ScrollView
-              ref={assignFilesScrollRef}
-              style={styles.columnScroll}
-              contentContainerStyle={styles.columnScrollBody}
-              dataSet={{ conversationScroll: "files" }}
-            >
+            <View style={styles.columnScroll}>
               {activeFilesPanel === null ? (
+                <ScrollView style={styles.columnScroll} dataSet={{conversationScroll:"files"}}>
                 <Text style={styles.note} dataSet={{ filesPanelUnavailable: "true" }}>
                   文件栏尚未接入文件查询；会话改动只在对话时间线呈现。
                 </Text>
+                </ScrollView>
               ) : (
                 <SessionFilesPanel
+                  onScrollRef={assignFilesScrollRef}
                   model={activeFilesPanel}
                   onOpenFile={onOpenFile === undefined ? undefined : (source, path) => {
                     captureOpenFileScroll();
@@ -2055,7 +2064,7 @@ export function ConversationStream({
                   onLoadMoreGitChanges={onLoadMoreGitChanges}
                 />
               )}
-            </ScrollView>
+            </View>
           </View>
         </View>
 

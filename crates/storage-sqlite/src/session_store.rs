@@ -1,12 +1,12 @@
-//! `SessionStore` / `ReadView` / `RemoteDeliveryStore` / `AttachmentStore` 的 SQLite 实现。
+//! `SessionStore` / `ReadView` / `AttachmentStore` 的 SQLite 实现。
 //!
 //! 权威是 `docs/CORE_PORTS_AND_STORAGE.md`：§5.2 的端口形状、§6 的事务契约、§7 的表结构与 PRAGMA、
 //! §7.5 的保留/清理/容量、§9 的验收判据。三条硬规则贯穿本文件：
 //!
 //! - **单写入口**：owned 家族只有 `SessionStore::commit` 会写 `owned_*`（状态 + turn + 事件 + 幂等记录 +
-//!   命令终态在**同一事务**内），imported 家族只有 `RemoteDeliveryStore::commit_receipt` 会写交付索引；
-//!   没有可分别调用的 repository/journal/deduper（`MODULE_ARCHITECTURE.md` §4.1）。
-//! - **无正文**：`imported_*` 只写 §7.4 冻结的索引列，绝不写 prompt/回复/diff/终端/ACP raw。
+//!   命令终态在**同一事务**内）；没有可分别调用的 repository/journal/deduper
+//!   （`MODULE_ARCHITECTURE.md` §4.1）。远程资源没有持久族：本 crate 不保存任何 Owner 正文、摘要、
+//!   游标或命令引用。
 //! - **不读系统时间**：所有时间来自参数（§2）；保留窗口的算术用 [`crate::migrate::window`] 的纯函数。
 //!
 //! 读列一律用显式列名（`row.try_get("列名")`），因此 Rust 侧字段顺序与表结构解耦；不用
@@ -25,24 +25,21 @@ use tokio::sync::Mutex;
 use acp_core::broker::HISTORY_ENTRY_EVENT_TYPES;
 use acp_core::model::{
     AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
-    AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedDelivery, CommittedEvent,
-    ConflictKind, DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind, EventOrigin,
-    EventPayload, GlobalCursor, InteractionId, InteractionOption, InteractionResolution,
-    LocalCursor, MediaKind, MediaReference, MessageChannel, MessageId, MessageRecord, MessageState,
-    ModeId, ModeRef, NodeId, OriginCursor, OriginEpoch, OriginEventRef, PartialReason,
-    PartialResult, PendingInteraction, PortError, PublicError, RawUnavailableReason,
-    RemoteSessionRef, RequestId, ResourceOrigin, Sequence, ServerEpoch, Session, SessionId,
-    SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary, StoredPolicy, Timestamp,
-    Turn, TurnId, UnavailableKind, Version, ViewJson, WorkspaceRef,
+    AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedEvent, ConflictKind,
+    DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind, EventOrigin, EventPayload,
+    GlobalCursor, InteractionId, InteractionOption, InteractionResolution, MediaKind,
+    MediaReference, MessageChannel, MessageId, MessageRecord, MessageState, ModeId, ModeRef,
+    NodeId, OriginCursor, OriginEpoch, PartialReason, PartialResult, PendingInteraction, PortError,
+    PublicError, RawUnavailableReason, RequestId, ResourceOrigin, Sequence, ServerEpoch, Session,
+    SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary, StoredPolicy,
+    Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson, WorkspaceRef,
 };
 use acp_core::ports::{
-    AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
-    HistoryPage, HistoryQuery, IdempotentReplay, ImportedSessionQuery, ImportedSessionRecord,
+    AttachmentRef, AttachmentStore, CommitOutcome, HistoryPage, HistoryQuery, IdempotentReplay,
     ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord, PendingInteractionOrigin,
-    PruneReport, ReadView, ReceiptOutcome, RemoteCommandRef, RemoteDeliveryStore, ReplayBatch,
-    ReplayLimit, ResetReason, RetentionPolicy, SessionActivityFacts, SessionAttachment,
-    SessionQuery, SessionStore, SettledSession, StateChange, StoreHealth, SubmissionBinding,
-    SyncEventRecord, SyncReplaySlice, TurnChange, TurnUpdate,
+    PruneReport, ReadView, ReplayBatch, ReplayLimit, ResetReason, RetentionPolicy,
+    SessionActivityFacts, SessionQuery, SessionStore, SettledSession, StateChange, StoreHealth,
+    SubmissionBinding, SyncEventRecord, SyncReplaySlice, TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
@@ -164,6 +161,57 @@ impl SqliteStore {
         })
     }
 
+    /// §7.2 的启动清理门禁（`access-owner-data-stateless`）：迁移成功之后、开始监听之前调用一次。
+    ///
+    /// 1. `wal_checkpoint(TRUNCATE)`：把迁移写入的 WAL 归并回主库，并清空 WAL 文件；
+    /// 2. `secure_delete = ON` + `VACUUM`：重写数据库、丢弃自由页里被删除的旧页副本；
+    /// 3. 写入 `meta.startup_cleanup_version = FILE_FORMAT_VERSION`；
+    /// 4. 再次 checkpoint/truncate，使完成标记本身不留在 WAL 里。
+    ///
+    /// **可重试且幂等**：完成标记只在三步都成功后才写；失败时标记缺失，下一次启动会重新执行。
+    /// 已标记当前版本时直接返回 `false`，**不**重写数据库——重复打开不改变结构或数据。
+    /// 返回 `true` 表示本次确实执行了重写。
+    pub async fn run_startup_gate(&self) -> Result<bool, StorageError> {
+        if !self.integrity_ok {
+            return Err(StorageError::FailClosed(
+                "startup cleanup refused on a store that failed its integrity check",
+            ));
+        }
+        let completed =
+            migrate::read_meta_row(&self.pools.write, migrate::META_STARTUP_CLEANUP_VERSION)
+                .await?
+                .and_then(|value| value.parse::<i64>().ok())
+                .is_some_and(|version| version >= migrate::FILE_FORMAT_VERSION);
+        if completed {
+            return Ok(false);
+        }
+        let mut write = self.pools.write.acquire().await.db()?;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&mut *write)
+            .await
+            .db()?;
+        sqlx::query("PRAGMA secure_delete = ON")
+            .execute(&mut *write)
+            .await
+            .db()?;
+        sqlx::query("VACUUM").execute(&mut *write).await.db()?;
+        sqlx::query(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(migrate::META_STARTUP_CLEANUP_VERSION)
+        .bind(migrate::FILE_FORMAT_VERSION.to_string())
+        .execute(&mut *write)
+        .await
+        .db()?;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&mut *write)
+            .await
+            .db()?;
+        drop(write);
+        Ok(true)
+    }
+
     /// 库级事实（§7.2 的 `meta`）。
     pub fn metadata(&self) -> &StoreMetadata {
         &self.meta
@@ -182,7 +230,7 @@ impl SqliteStore {
         })
     }
 
-    /// §7.1 失败关闭门：写路径的第一道检查（管理写集与 owned/imported 写路径共用）。
+    /// §7.1 失败关闭门：写路径的第一道检查（管理写集与 owned 写路径共用）。
     pub(crate) fn writable(&self) -> Result<(), PortError> {
         if self.integrity_ok {
             Ok(())
@@ -198,7 +246,7 @@ impl SqliteStore {
         &self.measure_sql
     }
 
-    /// §7.5 的保留窗口与容量上限（管理写集与 owned/imported 写路径共用同一份策略）。
+    /// §7.5 的保留窗口与容量上限（管理写集与 owned 写路径共用同一份策略）。
     pub(crate) fn window(&self) -> RetentionPolicy {
         RetentionPolicy {
             transcript_retention_days: self.config.transcript_retention_days,
@@ -323,14 +371,6 @@ fn parse_version(value: i64, column: &'static str) -> Result<Version, StorageErr
         expected: "non-negative version",
     })?;
     Ok(Version::new(value))
-}
-
-fn cursor(value: i64, column: &'static str) -> Result<LocalCursor, StorageError> {
-    let value = u64::try_from(value).map_err(|_| StorageError::ColumnValue {
-        column,
-        expected: "non-negative local cursor",
-    })?;
-    Ok(LocalCursor::new(value))
 }
 
 /// §7.3：`payload_digest` 与 ACP 原文摘要都是 32 字节 SHA-256 的规范 base64url（`Digest`）。
@@ -908,12 +948,6 @@ fn command_record_from_row(row: &SqliteRow) -> Result<CommandRecord, StorageErro
 const TURN_COLUMNS: &str =
     "turn_id, session_id, state, queue_index, causation, started_at, ended_at";
 const INTERACTION_COLUMNS: &str = "interaction_id, kind, session_id, created_at";
-const IMPORTED_SESSION_COLUMNS: &str = "owner_node_id, session_id, title, agent_id, \
-     agent_name, state, version, created_at, last_origin_epoch, last_origin_sequence, \
-     acked_origin_epoch, acked_origin_sequence, attachment_id, attachment_generation, updated_at";
-const DELIVERY_INDEX_COLUMNS: &str = "owner_node_id, session_id, origin_event_id, \
-     origin_epoch, origin_sequence, local_sequence, event_type, payload_digest, received_at";
-
 const INSERT_EVENT: &str = "INSERT INTO owned_event (global_sequence, session_id, session_sequence, \
      origin_epoch, origin_sequence, event_id, turn_id, event_type, kind, policy, origin_kind, \
      causation, payload_json, payload_digest, acp_media_type, acp_raw_json, acp_byte_length, \
@@ -925,15 +959,10 @@ const INSERT_COMMAND: &str = "INSERT INTO owned_command (actor_kind, actor_id, r
      terminal_at, terminal_event_id, result_json, error_code, error_message, error_details_json, \
      retryable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-/// §7.5 的容量度量：`SUM(length(payload_json)) + SUM(length(acp_raw_json)) +
-/// SUM(owned_attachment.byte_length)`（不含 WAL/freelist）。
-/// §7.5 的容量度量：`owned_*` 与 `imported_*` **两张族所有 TEXT 列**的 `length()` 之和，
-/// 加上 `owned_attachment.byte_length` 之和（不含 WAL/freelist）。
+/// §7.5 的容量度量：`owned_*` **所有 TEXT 列**的 `length()` 之和，加上
+/// `owned_attachment.byte_length` 之和（不含 WAL/freelist）。
 ///
-/// 列清单在运行时从 `pragma_table_info` 取（只取 `type = 'TEXT'`），因此新增列自动计入：
-/// Access-only 节点上 `owned_*` 恒为空，漏掉 `imported_*` 会让度量恒为 0，`RemoteDispatch::prune`
-/// 的循环随即退出、`imported_*` 永不回收。
-/// §7.5 的容量度量：事件正文（`payload_json` + `acp_raw_json`）之和 + `owned_attachment.byte_length` 之和。
+/// 列清单在运行时从 `pragma_table_info` 取（只取 `type = 'TEXT'`），因此新增列自动计入。
 ///
 /// 与 `StoreHealth::total_bytes` 同口径：容量测试的预算从该字段派生，不再各自实现一份度量。
 async fn build_measure_sql(ex: &mut SqliteConnection) -> Result<String, StorageError> {
@@ -1092,7 +1121,6 @@ async fn read_metadata(pool: &SqlitePool) -> Result<StoreMetadata, StorageError>
     Ok(StoreMetadata {
         server_epoch,
         owned_schema_version: migrate::OWNED_SCHEMA_VERSION,
-        imported_schema_version: migrate::IMPORTED_SCHEMA_VERSION,
         created_at,
         last_prune_at,
     })
@@ -1537,7 +1565,7 @@ impl SqliteStore {
                 let event_id_text = new_uuid();
                 // §7.3/§9.9：`payload_digest` 是**对 `payload_json` 施 ACPR-CJ1 后的** SHA-256，
                 // 不是对库内原始字节取摘要——`payload_json` 按 §9.16 原样保留调用方字节（键序、
-                // 未知字段都不重排），所以只有规范化之后两边才算得一致（跨节点复算、imported 去重都依赖它）。
+                // 未知字段都不重排），所以只有规范化之后两边才算得一致（跨节点复算依赖它）。
                 let canonical = acpr_wire::cj1::canonicalize(pending.payload.view.as_str())
                     .map_err(|error| PortError::InvalidRequest(cj1_message(&error)))?;
                 let payload_digest = digest_text(canonical.as_bytes())?;
@@ -3470,13 +3498,7 @@ impl SessionStore for SqliteStore {
         files.extend(unreferenced);
         // ⑤ 到期审计
         let audit_threshold = threshold(&at, policy.audit_retention_days)?;
-        sweep.audit = sqlx::query("DELETE FROM imported_audit WHERE at <= ?1")
-            .bind(audit_threshold.as_str())
-            .execute(&mut *tx)
-            .await
-            .db()?
-            .rows_affected();
-        sweep.audit += sqlx::query("DELETE FROM owned_audit WHERE at <= ?1")
+        sweep.audit = sqlx::query("DELETE FROM owned_audit WHERE at <= ?1")
             .bind(audit_threshold.as_str())
             .execute(&mut *tx)
             .await
@@ -3522,7 +3544,6 @@ impl SessionStore for SqliteStore {
             read_only: !self.integrity_ok,
             user_version: u32::try_from(user_version).unwrap_or(0),
             owned_schema_version: u32::try_from(self.meta.owned_schema_version).unwrap_or(0),
-            imported_schema_version: u32::try_from(self.meta.imported_schema_version).unwrap_or(0),
             server_epoch: self.server_epoch()?,
         })
     }
@@ -3615,6 +3636,340 @@ fn history_entry_predicate() -> String {
     predicate
 }
 
+async fn read_session_locked(
+    view: &SqlReadView,
+    guard: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    query: HistoryQuery,
+) -> Result<HistoryPage, PortError> {
+    let head = head_of(&mut *guard).await?;
+    let row = sqlx::query(&format!(
+        "SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM} WHERE s.session_id = ?1"
+    ))
+    .bind(query.session.as_str())
+    .fetch_optional(&mut **guard)
+    .await
+    .db()?;
+    let summary = match row {
+        Some(row) => session_summary_from_row(&row)?,
+        None => {
+            return Err(PortError::NotFound(EntityRef::Session(
+                query.session.clone(),
+            )));
+        }
+    };
+    let from = query
+        .after
+        .as_ref()
+        .map_or(0, |cursor| cursor.global_sequence.get());
+    let from = storable(from)?;
+    let fetch = i64::from(query.limit.events()) + 1;
+    // `messages` 是 `messages` 面的原料开关（§11.5 的 `include`）：开启时给出该会话 `after` 之后的
+    // 一页事件**连同持久化正文**——正文与定位来自同一条行（`EVENT_COLUMNS`），不逐条回查。
+    let events = if query.include.messages {
+        let rows = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM owned_event WHERE session_id = ?1 \
+             AND global_sequence > ?2 AND compacted_into IS NULL \
+             ORDER BY global_sequence ASC LIMIT ?3"
+        ))
+        .bind(query.session.as_str())
+        .bind(from)
+        .bind(fetch)
+        .fetch_all(&mut **guard)
+        .await
+        .db()?;
+        let mut events = Vec::with_capacity(rows.len().min(query.limit.events() as usize));
+        for (index, row) in rows.iter().enumerate() {
+            if index as u32 >= query.limit.events() {
+                break;
+            }
+            events.push(owned_event_from_row(row)?);
+        }
+        events
+    } else {
+        Vec::new()
+    };
+    // 结构化历史条目（§11.5 的 `history` 取值，`design.md` D2/D4）：**一条查询**按会话内序号取行，
+    // 同一行里一并取出视图与 ACP 两列，因此不存在逐条取正文的 N+1。
+    //
+    // 条目集合不是「该会话所有可读事件」：`SYNC_PROTOCOL.md` §10.2.1 的 17 类之外的事件（承载消息
+    // 正文的增量与收尾、摘要/仪表类、命令终态类、连接与审计类）都不产生条目。谓词因此写在**本条
+    // 语句内**——它与 `limit + 1` 的多取、页标记出自同一次计数，事后过滤会让客户端拿到空页或短页
+    // 却被告知「更早还有条目」，而它按「上一页最早条目的会话内序号」续读时没有游标可用。
+    //
+    // 分页走已有的唯一索引 `owned_event_session(session_id, session_sequence)`：降序取 `limit + 1`
+    // 条再翻回升序，于是「省略游标 = 最新一页」与「带游标 = 紧接该游标之前的一页」共用一条语句，
+    // 多取到的那一条即页标记。`session_sequence IS NOT NULL` 是**写入端不变量**的显式复述：会话级
+    // 提交总为 `session_sequence` 绑定 `Some`（§9 判据 17），缺列的行（外部改写）不能被编一个序号
+    // 当作条目——schema 层并未强制这一点（§7.3 的成对 CHECK 只约束非会话行，且 SQLite 的 UNIQUE
+    // 视 NULL 互不相等）。
+    let before = query.before_history.as_ref().map(|cursor| cursor.get());
+    let bound = before.map(storable).transpose()?;
+    let (history, history_has_earlier) = if query.include.history {
+        let entries = history_entry_predicate();
+        let rows = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM owned_event WHERE session_id = ?1 \
+             AND compacted_into IS NULL AND session_sequence IS NOT NULL AND {entries} \
+             AND (?2 IS NULL OR session_sequence < ?2) \
+             ORDER BY session_sequence DESC LIMIT ?3"
+        ))
+        .bind(query.session.as_str())
+        .bind(bound)
+        .bind(fetch)
+        .fetch_all(&mut **guard)
+        .await
+        .db()?;
+        let has_earlier = rows.len() as u32 > query.limit.events();
+        let mut history = Vec::with_capacity(rows.len().min(query.limit.events() as usize));
+        for row in rows.iter().take(query.limit.events() as usize) {
+            history.push(owned_event_from_row(row)?);
+        }
+        history.reverse();
+        // 空页 + 游标：要么游标正好指向仍可读的最早一条（合法，页标记为假、不返回占位），要么它落在
+        // 已按保留策略压缩/清理的区间——后者必须显式报保留期类错误，不得静默返回空页让调用方误以为
+        // 已到最早一条（§11.5 的「保留窗口之前显式不可读」）。非空页已经证明游标高于该下界。下界也
+        // 只按条目集合算（游标只可能来自上一页的条目）：非条目事件在游标之下不构成「仍可读的条目」。
+        if let Some(before) = before
+            && !has_earlier
+            && history.is_empty()
+        {
+            let low: Option<i64> = sqlx::query_scalar(&format!(
+                "SELECT MIN(session_sequence) FROM owned_event WHERE session_id = ?1 \
+                 AND compacted_into IS NULL AND session_sequence IS NOT NULL AND {entries}",
+            ))
+            .bind(query.session.as_str())
+            .fetch_one(&mut **guard)
+            .await
+            .db()?;
+            let expired = match low {
+                Some(value) => {
+                    before
+                        < u64::try_from(value).map_err(|_| {
+                            StorageError::Corrupt("session_sequence window bound is negative")
+                        })?
+                }
+                // 可读窗口内一条都没有：任何游标都指向已不可读的区间。
+                None => true,
+            };
+            if expired {
+                return Err(PortError::InvalidRequest(
+                    "history cursor precedes the retained window",
+                ));
+            }
+        }
+        (history, has_earlier)
+    } else {
+        (Vec::new(), false)
+    };
+    // 消息正文页（`owned_message` 的权威正文）：按 `(created_at, message_id)` 复合游标取**一页**，
+    // 而不是整段会话历史。`messages_limit = 0` 或未开 `include.messages` 时完全不查这两张表。
+    let (messages, messages_has_earlier) = if query.include.messages
+        && query.messages_limit.events() > 0
+    {
+        let page_size = query.messages_limit.events();
+        let fetch = i64::from(page_size) + 1;
+        let (before_created, before_id) = match &query.before_messages {
+            Some(cursor) => (
+                Some(cursor.created_at.as_str().to_owned()),
+                Some(cursor.message_id.as_str().to_owned()),
+            ),
+            None => (None, None),
+        };
+        let rows = sqlx::query(
+            "SELECT message_id, session_id, turn_id, channel, state, content_json, \
+                        partial_reason, created_at, updated_at \
+                 FROM owned_message WHERE session_id = ?1 \
+                 AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND message_id < ?3)) \
+                 ORDER BY created_at DESC, message_id DESC LIMIT ?4",
+        )
+        .bind(query.session.as_str())
+        .bind(before_created.as_deref())
+        .bind(before_id.as_deref())
+        .bind(fetch)
+        .fetch_all(&mut **guard)
+        .await
+        .db()?;
+        let has_earlier = rows.len() as u32 > page_size;
+        let mut rows = rows;
+        rows.truncate(page_size as usize);
+        // 取的时候按倒序（最新一页），返回给调用方时翻回升序。
+        rows.reverse();
+        let ids: Vec<String> = rows
+            .iter()
+            .map(|row| text(row, "message_id"))
+            .collect::<Result<_, _>>()?;
+        // media 只查本页消息（`IN (…)` 的占位符数量 = 本页消息数，必然有界）。
+        let media_rows = if ids.is_empty() {
+            Vec::new()
+        } else {
+            let placeholders = vec!["?"; ids.len()].join(", ");
+            let sql = format!(
+                "SELECT r.message_id, r.position, r.attachment_id, r.kind, a.media_type, \
+                            a.byte_length, a.sha256 \
+                     FROM owned_media_ref r \
+                     JOIN owned_attachment a ON a.attachment_id = r.attachment_id \
+                     WHERE r.message_id IN ({placeholders}) \
+                     ORDER BY r.message_id ASC, r.position ASC"
+            );
+            let mut media_query = sqlx::query(&sql);
+            for id in &ids {
+                media_query = media_query.bind(id);
+            }
+            media_query.fetch_all(&mut **guard).await.db()?
+        };
+        let mut by_message: std::collections::HashMap<String, Vec<MediaReference>> =
+            std::collections::HashMap::new();
+        for row in &media_rows {
+            let message_id = text(row, "message_id")?;
+            let kind: MediaKind =
+                text(row, "kind")?
+                    .parse()
+                    .map_err(|_| StorageError::ColumnValue {
+                        column: "owned_media_ref.kind",
+                        expected: "image|audio|file",
+                    })?;
+            let reference = MediaReference::try_new(
+                decode(
+                    &text(row, "attachment_id")?,
+                    "owned_media_ref.attachment_id",
+                )?,
+                query.session.clone(),
+                kind,
+                &text(row, "media_type")?,
+                u64::try_from(int(row, "byte_length")?).unwrap_or(0),
+                decode(&text(row, "sha256")?, "owned_attachment.sha256")?,
+                None,
+                acp_core::model::MediaAvailability::Available,
+            )
+            .map_err(|_| PortError::Corrupt("stored media reference is invalid"))?;
+            by_message.entry(message_id).or_default().push(reference);
+        }
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let message_id_text = text(row, "message_id")?;
+            let channel: MessageChannel =
+                text(row, "channel")?
+                    .parse()
+                    .map_err(|_| StorageError::ColumnValue {
+                        column: "owned_message.channel",
+                        expected: "reply|thought",
+                    })?;
+            let state: MessageState =
+                text(row, "state")?
+                    .parse()
+                    .map_err(|_| StorageError::ColumnValue {
+                        column: "owned_message.state",
+                        expected: "partial|completed|failed|cancelled",
+                    })?;
+            let reason: Option<PartialReason> = match opt_text(row, "partial_reason")? {
+                Some(text) => Some(text.parse().map_err(|_| StorageError::ColumnValue {
+                    column: "owned_message.partial_reason",
+                    expected: "agent_stopped|agent_failed|turn_cancelled|connection_lost|retention_expired",
+                })?),
+                None => None,
+            };
+            messages.push(
+                MessageRecord::try_new(
+                    decode(&message_id_text, "owned_message.message_id")?,
+                    query.session.clone(),
+                    decode_opt(opt_text(row, "turn_id")?, "owned_message.turn_id")?,
+                    channel,
+                    PartialResult::try_new(state, reason)
+                        .map_err(|_| PortError::Corrupt("stored message result is invalid"))?,
+                    acp_core::model::JsonValueText::new(&text(row, "content_json")?)
+                        .map_err(|_| PortError::Corrupt("stored message content is not json"))?,
+                    by_message.remove(&message_id_text).unwrap_or_default(),
+                    decode(&text(row, "created_at")?, "owned_message.created_at")?,
+                    decode(&text(row, "updated_at")?, "owned_message.updated_at")?,
+                )
+                .map_err(|_| PortError::Corrupt("stored message is invalid"))?,
+            );
+        }
+        (messages, has_earlier)
+    } else {
+        (Vec::new(), false)
+    };
+    let turns = if query.include.turns {
+        let rows = sqlx::query(&format!(
+            "SELECT {TURN_COLUMNS} FROM owned_turn WHERE session_id = ?1 ORDER BY queue_index ASC"
+        ))
+        .bind(query.session.as_str())
+        .fetch_all(&mut **guard)
+        .await
+        .db()?;
+        let mut turns = Vec::with_capacity(rows.len());
+        for row in &rows {
+            turns.push(turn_from_row(row)?);
+        }
+        turns
+    } else {
+        Vec::new()
+    };
+    let interactions = if query.include.pending_interactions {
+        let rows = sqlx::query(&format!(
+            "SELECT {INTERACTION_COLUMNS} FROM owned_interaction WHERE session_id = ?1 \
+             AND state = 'pending' AND invalidated_at IS NULL \
+             ORDER BY created_at ASC, interaction_id ASC"
+        ))
+        .bind(query.session.as_str())
+        .fetch_all(&mut **guard)
+        .await
+        .db()?;
+        let mut interactions = Vec::with_capacity(rows.len());
+        for row in &rows {
+            // §7.3 的 `owned_interaction` 没有 options 列（列集合是冻结的）：候选项由
+            // `request_event` 指向的交互事件 payload 承载，因此持久层只投影元数据。
+            interactions.push(
+                PendingInteraction::try_new(
+                    decode(
+                        &text(row, "interaction_id")?,
+                        "owned_interaction.interaction_id",
+                    )?,
+                    decode(&text(row, "kind")?, "owned_interaction.kind")?,
+                    decode(&text(row, "session_id")?, "owned_interaction.session_id")?,
+                    decode(&text(row, "created_at")?, "owned_interaction.created_at")?,
+                    Vec::<InteractionOption>::new(),
+                )
+                .map_err(|_| StorageError::ColumnValue {
+                    column: "owned_interaction",
+                    expected: "pending interaction metadata",
+                })?,
+            );
+        }
+        interactions
+    } else {
+        Vec::new()
+    };
+    let next = if events.len() as u32 == query.limit.events()
+        && let Some(last) = events.last()
+    {
+        if last.event.global_sequence.get() < head.global_sequence.get() {
+            Some(GlobalCursor::new(
+                view.server_epoch.clone(),
+                last.event.global_sequence,
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Ok(HistoryPage {
+        session: summary,
+        events,
+        history,
+        history_has_earlier,
+        messages,
+        messages_has_earlier,
+        turns,
+        interactions,
+        // 活体数据由用例层合并（`HistoryPage` 的文档注释）：持久层不保存 config/capabilities。
+        config: Vec::new(),
+        capabilities: None,
+        head,
+        next,
+    })
+}
+
 #[async_trait]
 impl ReadView for SqlReadView {
     async fn head(&self) -> Result<GlobalCursor, PortError> {
@@ -3656,11 +4011,10 @@ impl ReadView for SqlReadView {
                 // 还有更多：续读游标停在本批最后一条。
                 break;
             }
-            events.push(CommittedDelivery::Owned(event_from_row(row)?));
+            events.push(event_from_row(row)?);
         }
         if rows.len() as u32 > limit.events()
-            && let Some(last) = events.last()
-            && let CommittedDelivery::Owned(event) = last
+            && let Some(event) = events.last()
         {
             next = Some(GlobalCursor::new(
                 self.server_epoch.clone(),
@@ -3872,939 +4226,107 @@ impl ReadView for SqlReadView {
 
     async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError> {
         let mut guard = self.tx.lock().await;
-        let head = head_of(&mut guard).await?;
-        let row = sqlx::query(&format!(
-            "SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM} WHERE s.session_id = ?1"
-        ))
-        .bind(query.session.as_str())
-        .fetch_optional(&mut **guard)
-        .await
-        .db()?;
-        let summary = match row {
-            Some(row) => session_summary_from_row(&row)?,
-            None => {
-                return Err(PortError::NotFound(EntityRef::Session(
-                    query.session.clone(),
-                )));
-            }
-        };
-        let from = query
-            .after
-            .as_ref()
-            .map_or(0, |cursor| cursor.global_sequence.get());
-        let from = storable(from)?;
-        let fetch = i64::from(query.limit.events()) + 1;
-        // `messages` 是 `messages` 面的原料开关（§11.5 的 `include`）：开启时给出该会话 `after` 之后的
-        // 一页事件**连同持久化正文**——正文与定位来自同一条行（`EVENT_COLUMNS`），不逐条回查。
-        let events = if query.include.messages {
-            let rows = sqlx::query(&format!(
-                "SELECT {EVENT_COLUMNS} FROM owned_event WHERE session_id = ?1 \
-                 AND global_sequence > ?2 AND compacted_into IS NULL \
-                 ORDER BY global_sequence ASC LIMIT ?3"
-            ))
-            .bind(query.session.as_str())
-            .bind(from)
-            .bind(fetch)
-            .fetch_all(&mut **guard)
-            .await
-            .db()?;
-            let mut events = Vec::with_capacity(rows.len().min(query.limit.events() as usize));
-            for (index, row) in rows.iter().enumerate() {
-                if index as u32 >= query.limit.events() {
-                    break;
-                }
-                events.push(owned_event_from_row(row)?);
-            }
-            events
-        } else {
-            Vec::new()
-        };
-        // 结构化历史条目（§11.5 的 `history` 取值，`design.md` D2/D4）：**一条查询**按会话内序号取行，
-        // 同一行里一并取出视图与 ACP 两列，因此不存在逐条取正文的 N+1。
-        //
-        // 条目集合不是「该会话所有可读事件」：`SYNC_PROTOCOL.md` §10.2.1 的 17 类之外的事件（承载消息
-        // 正文的增量与收尾、摘要/仪表类、命令终态类、连接与审计类）都不产生条目。谓词因此写在**本条
-        // 语句内**——它与 `limit + 1` 的多取、页标记出自同一次计数，事后过滤会让客户端拿到空页或短页
-        // 却被告知「更早还有条目」，而它按「上一页最早条目的会话内序号」续读时没有游标可用。
-        //
-        // 分页走已有的唯一索引 `owned_event_session(session_id, session_sequence)`：降序取 `limit + 1`
-        // 条再翻回升序，于是「省略游标 = 最新一页」与「带游标 = 紧接该游标之前的一页」共用一条语句，
-        // 多取到的那一条即页标记。`session_sequence IS NOT NULL` 是**写入端不变量**的显式复述：会话级
-        // 提交总为 `session_sequence` 绑定 `Some`（§9 判据 17），缺列的行（外部改写）不能被编一个序号
-        // 当作条目——schema 层并未强制这一点（§7.3 的成对 CHECK 只约束非会话行，且 SQLite 的 UNIQUE
-        // 视 NULL 互不相等）。
-        let before = query.before_history.as_ref().map(|cursor| cursor.get());
-        let bound = before.map(storable).transpose()?;
-        let (history, history_has_earlier) = if query.include.history {
-            let entries = history_entry_predicate();
-            let rows = sqlx::query(&format!(
-                "SELECT {EVENT_COLUMNS} FROM owned_event WHERE session_id = ?1 \
-                 AND compacted_into IS NULL AND session_sequence IS NOT NULL AND {entries} \
-                 AND (?2 IS NULL OR session_sequence < ?2) \
-                 ORDER BY session_sequence DESC LIMIT ?3"
-            ))
-            .bind(query.session.as_str())
-            .bind(bound)
-            .bind(fetch)
-            .fetch_all(&mut **guard)
-            .await
-            .db()?;
-            let has_earlier = rows.len() as u32 > query.limit.events();
-            let mut history = Vec::with_capacity(rows.len().min(query.limit.events() as usize));
-            for row in rows.iter().take(query.limit.events() as usize) {
-                history.push(owned_event_from_row(row)?);
-            }
-            history.reverse();
-            // 空页 + 游标：要么游标正好指向仍可读的最早一条（合法，页标记为假、不返回占位），要么它落在
-            // 已按保留策略压缩/清理的区间——后者必须显式报保留期类错误，不得静默返回空页让调用方误以为
-            // 已到最早一条（§11.5 的「保留窗口之前显式不可读」）。非空页已经证明游标高于该下界。下界也
-            // 只按条目集合算（游标只可能来自上一页的条目）：非条目事件在游标之下不构成「仍可读的条目」。
-            if let Some(before) = before
-                && !has_earlier
-                && history.is_empty()
-            {
-                let low: Option<i64> = sqlx::query_scalar(&format!(
-                    "SELECT MIN(session_sequence) FROM owned_event WHERE session_id = ?1 \
-                     AND compacted_into IS NULL AND session_sequence IS NOT NULL AND {entries}",
-                ))
-                .bind(query.session.as_str())
-                .fetch_one(&mut **guard)
-                .await
-                .db()?;
-                let expired = match low {
-                    Some(value) => {
-                        before
-                            < u64::try_from(value).map_err(|_| {
-                                StorageError::Corrupt("session_sequence window bound is negative")
-                            })?
-                    }
-                    // 可读窗口内一条都没有：任何游标都指向已不可读的区间。
-                    None => true,
-                };
-                if expired {
-                    return Err(PortError::InvalidRequest(
-                        "history cursor precedes the retained window",
-                    ));
-                }
-            }
-            (history, has_earlier)
-        } else {
-            (Vec::new(), false)
-        };
-        // 消息正文页（`owned_message` 的权威正文）：按 `(created_at, message_id)` 复合游标取**一页**，
-        // 而不是整段会话历史。`messages_limit = 0` 或未开 `include.messages` 时完全不查这两张表。
-        let (messages, messages_has_earlier) = if query.include.messages
-            && query.messages_limit.events() > 0
-        {
-            let page_size = query.messages_limit.events();
-            let fetch = i64::from(page_size) + 1;
-            let (before_created, before_id) = match &query.before_messages {
-                Some(cursor) => (
-                    Some(cursor.created_at.as_str().to_owned()),
-                    Some(cursor.message_id.as_str().to_owned()),
-                ),
-                None => (None, None),
-            };
-            let rows = sqlx::query(
-                "SELECT message_id, session_id, turn_id, channel, state, content_json, \
-                            partial_reason, created_at, updated_at \
-                     FROM owned_message WHERE session_id = ?1 \
-                     AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND message_id < ?3)) \
-                     ORDER BY created_at DESC, message_id DESC LIMIT ?4",
-            )
-            .bind(query.session.as_str())
-            .bind(before_created.as_deref())
-            .bind(before_id.as_deref())
-            .bind(fetch)
-            .fetch_all(&mut **guard)
-            .await
-            .db()?;
-            let has_earlier = rows.len() as u32 > page_size;
-            let mut rows = rows;
-            rows.truncate(page_size as usize);
-            // 取的时候按倒序（最新一页），返回给调用方时翻回升序。
-            rows.reverse();
-            let ids: Vec<String> = rows
-                .iter()
-                .map(|row| text(row, "message_id"))
-                .collect::<Result<_, _>>()?;
-            // media 只查本页消息（`IN (…)` 的占位符数量 = 本页消息数，必然有界）。
-            let media_rows = if ids.is_empty() {
-                Vec::new()
-            } else {
-                let placeholders = vec!["?"; ids.len()].join(", ");
-                let sql = format!(
-                    "SELECT r.message_id, r.position, r.attachment_id, r.kind, a.media_type, \
-                                a.byte_length, a.sha256 \
-                         FROM owned_media_ref r \
-                         JOIN owned_attachment a ON a.attachment_id = r.attachment_id \
-                         WHERE r.message_id IN ({placeholders}) \
-                         ORDER BY r.message_id ASC, r.position ASC"
-                );
-                let mut media_query = sqlx::query(&sql);
-                for id in &ids {
-                    media_query = media_query.bind(id);
-                }
-                media_query.fetch_all(&mut **guard).await.db()?
-            };
-            let mut by_message: std::collections::HashMap<String, Vec<MediaReference>> =
-                std::collections::HashMap::new();
-            for row in &media_rows {
-                let message_id = text(row, "message_id")?;
-                let kind: MediaKind =
-                    text(row, "kind")?
-                        .parse()
-                        .map_err(|_| StorageError::ColumnValue {
-                            column: "owned_media_ref.kind",
-                            expected: "image|audio|file",
-                        })?;
-                let reference = MediaReference::try_new(
-                    decode(
-                        &text(row, "attachment_id")?,
-                        "owned_media_ref.attachment_id",
-                    )?,
-                    query.session.clone(),
-                    kind,
-                    &text(row, "media_type")?,
-                    u64::try_from(int(row, "byte_length")?).unwrap_or(0),
-                    decode(&text(row, "sha256")?, "owned_attachment.sha256")?,
-                    None,
-                    acp_core::model::MediaAvailability::Available,
-                )
-                .map_err(|_| PortError::Corrupt("stored media reference is invalid"))?;
-                by_message.entry(message_id).or_default().push(reference);
-            }
-            let mut messages = Vec::with_capacity(rows.len());
-            for row in &rows {
-                let message_id_text = text(row, "message_id")?;
-                let channel: MessageChannel =
-                    text(row, "channel")?
-                        .parse()
-                        .map_err(|_| StorageError::ColumnValue {
-                            column: "owned_message.channel",
-                            expected: "reply|thought",
-                        })?;
-                let state: MessageState =
-                    text(row, "state")?
-                        .parse()
-                        .map_err(|_| StorageError::ColumnValue {
-                            column: "owned_message.state",
-                            expected: "partial|completed|failed|cancelled",
-                        })?;
-                let reason: Option<PartialReason> = match opt_text(row, "partial_reason")? {
-                    Some(text) => Some(text.parse().map_err(|_| StorageError::ColumnValue {
-                        column: "owned_message.partial_reason",
-                        expected: "agent_stopped|agent_failed|turn_cancelled|connection_lost|retention_expired",
-                    })?),
-                    None => None,
-                };
-                messages.push(
-                    MessageRecord::try_new(
-                        decode(&message_id_text, "owned_message.message_id")?,
-                        query.session.clone(),
-                        decode_opt(opt_text(row, "turn_id")?, "owned_message.turn_id")?,
-                        channel,
-                        PartialResult::try_new(state, reason)
-                            .map_err(|_| PortError::Corrupt("stored message result is invalid"))?,
-                        acp_core::model::JsonValueText::new(&text(row, "content_json")?).map_err(
-                            |_| PortError::Corrupt("stored message content is not json"),
-                        )?,
-                        by_message.remove(&message_id_text).unwrap_or_default(),
-                        decode(&text(row, "created_at")?, "owned_message.created_at")?,
-                        decode(&text(row, "updated_at")?, "owned_message.updated_at")?,
-                    )
-                    .map_err(|_| PortError::Corrupt("stored message is invalid"))?,
-                );
-            }
-            (messages, has_earlier)
-        } else {
-            (Vec::new(), false)
-        };
-        let turns = if query.include.turns {
-            let rows = sqlx::query(&format!(
-                "SELECT {TURN_COLUMNS} FROM owned_turn WHERE session_id = ?1 ORDER BY queue_index ASC"
-            ))
-            .bind(query.session.as_str())
-            .fetch_all(&mut **guard)
-            .await.db()?;
-            let mut turns = Vec::with_capacity(rows.len());
-            for row in &rows {
-                turns.push(turn_from_row(row)?);
-            }
-            turns
-        } else {
-            Vec::new()
-        };
-        let interactions = if query.include.pending_interactions {
-            let rows = sqlx::query(&format!(
-                "SELECT {INTERACTION_COLUMNS} FROM owned_interaction WHERE session_id = ?1 \
-                 AND state = 'pending' AND invalidated_at IS NULL \
-                 ORDER BY created_at ASC, interaction_id ASC"
-            ))
-            .bind(query.session.as_str())
-            .fetch_all(&mut **guard)
-            .await
-            .db()?;
-            let mut interactions = Vec::with_capacity(rows.len());
-            for row in &rows {
-                // §7.3 的 `owned_interaction` 没有 options 列（列集合是冻结的）：候选项由
-                // `request_event` 指向的交互事件 payload 承载，因此持久层只投影元数据。
-                interactions.push(
-                    PendingInteraction::try_new(
-                        decode(
-                            &text(row, "interaction_id")?,
-                            "owned_interaction.interaction_id",
-                        )?,
-                        decode(&text(row, "kind")?, "owned_interaction.kind")?,
-                        decode(&text(row, "session_id")?, "owned_interaction.session_id")?,
-                        decode(&text(row, "created_at")?, "owned_interaction.created_at")?,
-                        Vec::<InteractionOption>::new(),
-                    )
-                    .map_err(|_| StorageError::ColumnValue {
-                        column: "owned_interaction",
-                        expected: "pending interaction metadata",
-                    })?,
-                );
-            }
-            interactions
-        } else {
-            Vec::new()
-        };
-        let next = if events.len() as u32 == query.limit.events()
-            && let Some(last) = events.last()
-        {
-            if last.event.global_sequence.get() < head.global_sequence.get() {
-                Some(GlobalCursor::new(
-                    self.server_epoch.clone(),
-                    last.event.global_sequence,
-                ))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        Ok(HistoryPage {
-            session: summary,
-            events,
-            history,
-            history_has_earlier,
-            messages,
-            messages_has_earlier,
-            turns,
-            interactions,
-            // 活体数据由用例层合并（`HistoryPage` 的文档注释）：持久层不保存 config/capabilities。
-            config: Vec::new(),
-            capabilities: None,
-            head,
-            next,
+        read_session_locked(self, &mut guard, query).await
+    }
+
+    async fn read_session_origin(
+        &self,
+        query: HistoryQuery,
+    ) -> Result<acp_core::ports::OriginReadPage, PortError> {
+        let mut guard = self.tx.lock().await;
+        // R 必须在同一事务内捕获：页数据、来源位置与覆盖都来自这一个只读快照。
+        let page = read_session_locked(self, &mut guard, query.clone()).await?;
+        let (read_cursor, coverage) = session_coverage(&mut guard, &query, &page.messages).await?;
+        Ok(acp_core::ports::OriginReadPage {
+            page,
+            read_cursor,
+            coverage,
         })
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// RemoteDeliveryStore：imported 家族的唯一写入口，且**无正文**（§7.4）
-// ---------------------------------------------------------------------------------------------
-
-#[async_trait]
-impl RemoteDeliveryStore for SqliteStore {
-    async fn commit_receipt(&self, receipt: DeliveryReceipt) -> Result<ReceiptOutcome, PortError> {
-        self.writable()?;
-        let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
-        let session = &receipt.session;
-        let next: Option<i64> = sqlx::query_scalar(
-            "SELECT next_local_sequence FROM imported_session \
-             WHERE owner_node_id = ?1 AND session_id = ?2",
-        )
-        .bind(session.owner_node_id.as_str())
-        .bind(session.session_id.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .db()?;
-        let session_next = next
-            .ok_or_else(|| PortError::NotFound(EntityRef::Session(session.session_id.clone())))?;
-
-        // §9.5：同一 `origin_event_id` 重发只产生一行、不新增 `local_sequence`。
-        let duplicate: Option<i64> = sqlx::query_scalar(
-            "SELECT local_sequence FROM imported_delivery_index \
-             WHERE owner_node_id = ?1 AND session_id = ?2 AND origin_event_id = ?3",
-        )
-        .bind(session.owner_node_id.as_str())
-        .bind(session.session_id.as_str())
-        .bind(receipt.origin.origin_event_id.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .db()?;
-        if let Some(local) = duplicate {
-            return Ok(ReceiptOutcome {
-                local_sequence: cursor(local, "imported_delivery_index.local_sequence")?,
-                duplicate: true,
-            });
-        }
-
-        // `local_sequence` 是**全库单调**的投递序号：`local_replay(after)` 只有一个游标参数，
-        // 因此序号必须跨会话可比。分配时取「全库最大值 + 1」，同时把该会话的
-        // `next_local_sequence` 推进到同一水位（§7.4 的列语义保持一致）。
-        let global_next: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(local_sequence), 0) + 1 FROM imported_delivery_index",
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .db()?;
-        let allocated = global_next.max(session_next);
-        sqlx::query(
-            "INSERT INTO imported_delivery_index (owner_node_id, session_id, \
-             origin_event_id, origin_epoch, origin_sequence, local_sequence, event_type, \
-             payload_digest, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        )
-        .bind(session.owner_node_id.as_str())
-        .bind(session.session_id.as_str())
-        .bind(receipt.origin.origin_event_id.as_str())
-        .bind(receipt.origin.origin_epoch.as_str())
-        .bind(storable(receipt.origin_sequence.get())?)
-        .bind(allocated)
-        .bind(receipt.event_type.as_str())
-        .bind(receipt.payload_digest.as_str())
-        .bind(receipt.at.as_str())
-        .execute(&mut *tx)
-        .await
-        .db()?;
-        sqlx::query(
-            "UPDATE imported_session SET next_local_sequence = ?1, last_origin_epoch = ?2, \
-             last_origin_sequence = CASE WHEN last_origin_sequence IS NULL OR \
-             last_origin_sequence < ?3 THEN ?3 ELSE last_origin_sequence END, updated_at = ?4 \
-             WHERE owner_node_id = ?5 AND session_id = ?6",
-        )
-        .bind(allocated + 1)
-        .bind(receipt.origin.origin_epoch.as_str())
-        .bind(storable(receipt.origin_sequence.get())?)
-        .bind(receipt.at.as_str())
-        .bind(session.owner_node_id.as_str())
-        .bind(session.session_id.as_str())
-        .execute(&mut *tx)
-        .await
-        .db()?;
-        tx.commit().await.db()?;
-        Ok(ReceiptOutcome {
-            local_sequence: cursor(allocated, "imported_delivery_index.local_sequence")?,
-            duplicate: false,
-        })
-    }
-
-    async fn local_replay(
-        &self,
-        after: Option<LocalCursor>,
-        limit: ReplayLimit,
-    ) -> Result<Vec<DeliveryIndexEntry>, PortError> {
-        let from = after.map_or(0, |cursor| cursor.get());
-        let rows = sqlx::query(&format!(
-            "SELECT {DELIVERY_INDEX_COLUMNS} FROM imported_delivery_index \
-             WHERE local_sequence > ?1 ORDER BY local_sequence ASC LIMIT ?2"
-        ))
-        .bind(i64::try_from(from).unwrap_or(i64::MAX))
-        .bind(i64::from(limit.events()))
-        .fetch_all(&self.pools.read)
-        .await
-        .db()?;
-        let mut entries = Vec::with_capacity(rows.len());
-        for row in &rows {
-            entries.push(delivery_index_from_row(row)?);
-        }
-        Ok(entries)
-    }
-
-    async fn ack(
-        &self,
-        session: &RemoteSessionRef,
-        cursor_value: OriginCursor,
-        at: Timestamp,
-    ) -> Result<AckOutcome, PortError> {
-        self.writable()?;
-        let affected = sqlx::query(
-            "UPDATE imported_session SET acked_origin_epoch = ?1, acked_origin_sequence = ?2, \
-             updated_at = ?3 WHERE owner_node_id = ?4 AND session_id = ?5 \
-             AND (acked_origin_epoch IS NULL OR acked_origin_epoch <> ?1 \
-                  OR acked_origin_sequence IS NULL OR acked_origin_sequence < ?2)",
-        )
-        .bind(cursor_value.origin_epoch.as_str())
-        .bind(storable(cursor_value.origin_sequence.get())?)
-        .bind(at.as_str())
-        .bind(session.owner_node_id.as_str())
-        .bind(session.session_id.as_str())
-        .execute(&self.pools.write)
-        .await
-        .db()?
-        .rows_affected();
-        if affected > 0 {
-            return Ok(AckOutcome {
-                applied: true,
-                cursor: Some(cursor_value),
-            });
-        }
-        // 回退请求（或会话不存在）：保持既有游标。
-        let existing = self.load_ack(session).await?;
-        if existing.is_none() {
-            let present: Option<i64> = sqlx::query_scalar(
-                "SELECT 1 FROM imported_session WHERE owner_node_id = ?1 \
-                 AND session_id = ?2",
-            )
-            .bind(session.owner_node_id.as_str())
-            .bind(session.session_id.as_str())
-            .fetch_optional(&self.pools.read)
-            .await
-            .db()?;
-            if present.is_none() {
-                return Err(PortError::NotFound(EntityRef::Session(
-                    session.session_id.clone(),
-                )));
-            }
-        }
-        Ok(AckOutcome {
-            applied: false,
-            cursor: existing,
-        })
-    }
-
-    async fn load_ack(
-        &self,
-        session: &RemoteSessionRef,
-    ) -> Result<Option<OriginCursor>, PortError> {
-        let row = sqlx::query(
-            "SELECT acked_origin_epoch, acked_origin_sequence FROM imported_session \
-             WHERE owner_node_id = ?1 AND session_id = ?2",
-        )
-        .bind(session.owner_node_id.as_str())
-        .bind(session.session_id.as_str())
-        .fetch_optional(&self.pools.read)
-        .await
-        .db()?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        match (
-            opt_text(&row, "acked_origin_epoch")?,
-            opt_int(&row, "acked_origin_sequence")?,
-        ) {
-            (Some(epoch), Some(sequence)) => Ok(Some(OriginCursor::new(
-                decode(&epoch, "imported_session.acked_origin_epoch")?,
-                sequence_from(sequence, "imported_session.acked_origin_sequence")?,
-            ))),
-            _ => Ok(None),
-        }
-    }
-
-    async fn upsert_session(
-        &self,
-        record: ImportedSessionRecord,
-        at: Timestamp,
-    ) -> Result<(), PortError> {
-        self.writable()?;
-        let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
-        let session = &record.session;
-        let stored_epoch: Option<String> = sqlx::query_scalar(
-            "SELECT last_origin_epoch FROM imported_session \
-             WHERE owner_node_id = ?1 AND session_id = ?2",
-        )
-        .bind(session.owner_node_id.as_str())
-        .bind(session.session_id.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .db()?;
-        let (agent_id, agent_name) = match &record.agent {
-            Some(agent) => (
-                Some(agent.agent_id().as_str().to_owned()),
-                Some(agent.name().to_owned()),
-            ),
-            None => (None, None),
-        };
-        sqlx::query(
-            "INSERT INTO imported_session (owner_node_id, session_id, title, agent_id, \
-             agent_name, state, version, created_at, last_origin_epoch, last_origin_sequence, \
-             acked_origin_epoch, acked_origin_sequence, next_local_sequence, attachment_id, \
-             attachment_generation, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, ?14, ?15) \
-             ON CONFLICT(owner_node_id, session_id) DO UPDATE SET \
-             title = excluded.title, agent_id = excluded.agent_id, agent_name = excluded.agent_name, \
-             state = excluded.state, version = excluded.version, created_at = excluded.created_at, \
-             last_origin_epoch = excluded.last_origin_epoch, \
-             last_origin_sequence = excluded.last_origin_sequence, \
-             acked_origin_epoch = excluded.acked_origin_epoch, \
-             acked_origin_sequence = excluded.acked_origin_sequence, \
-             attachment_id = excluded.attachment_id, \
-             attachment_generation = excluded.attachment_generation, \
-             updated_at = excluded.updated_at",
-        )
-        .bind(session.owner_node_id.as_str())
-        .bind(session.session_id.as_str())
-        .bind(record.title.as_deref())
-        .bind(agent_id)
-        .bind(agent_name)
-        .bind(record.state.map(|state| state.as_str()))
-        .bind(
-            record
-                .version
-                .map(|value| storable(value.get()))
-                .transpose()?,
-        )
-        .bind(record.created_at.as_ref().map(Timestamp::as_str))
-        .bind(record.origin_epoch.as_ref().map(OriginEpoch::as_str))
-        .bind(
-            record
-                .last_origin_sequence
-                .map(|value| storable(value.get()))
-                .transpose()?,
-        )
-        .bind(record.acked.as_ref().map(|cursor| cursor.origin_epoch.as_str()))
-        .bind(
-            record
-                .acked
-                .as_ref()
-                .map(|cursor| storable(cursor.origin_sequence.get()))
-                .transpose()?,
-        )
-        .bind(record.attachment.as_ref().map(|value| value.id.as_str()))
-        .bind(
-            record
-                .attachment
-                .as_ref()
-                .map(|value| storable(value.generation.get()))
-                .transpose()?,
-        )
-        .bind(at.as_str())
-        .execute(&mut *tx)
-        .await.db()?;
-
-        // §7.4：owner 的 epoch 变了说明对方重建了事件库，该会话的 cursor 全部失效。
-        if let Some(stored) = stored_epoch
-            && record
-                .origin_epoch
-                .as_ref()
-                .is_some_and(|epoch| epoch.as_str() != stored)
-        {
-            sqlx::query(
-                "DELETE FROM imported_delivery_index WHERE owner_node_id = ?1 \
-                 AND session_id = ?2",
-            )
-            .bind(session.owner_node_id.as_str())
-            .bind(session.session_id.as_str())
-            .execute(&mut *tx)
-            .await
-            .db()?;
-            sqlx::query(
-                "UPDATE imported_session SET acked_origin_epoch = NULL, \
-                 acked_origin_sequence = NULL WHERE owner_node_id = ?1 \
-                 AND session_id = ?2",
-            )
-            .bind(session.owner_node_id.as_str())
-            .bind(session.session_id.as_str())
-            .execute(&mut *tx)
-            .await
-            .db()?;
-        }
-        tx.commit().await.db()?;
-        Ok(())
-    }
-
-    async fn list_sessions(
-        &self,
-        query: ImportedSessionQuery,
-    ) -> Result<Vec<ImportedSessionRecord>, PortError> {
-        if query.only.as_ref().is_some_and(|list| list.is_empty()) {
-            return Ok(Vec::new());
-        }
-        if query.limit == Some(0) {
-            return Ok(Vec::new());
-        }
-        // `only` 是按主键的精确匹配：逐个取回，再统一截断到 `limit`。
-        if let Some(only) = &query.only {
-            let mut records = Vec::with_capacity(only.len());
-            for reference in only {
-                let row = sqlx::query(&format!(
-                    "SELECT {IMPORTED_SESSION_COLUMNS} FROM imported_session \
-                     WHERE owner_node_id = ?1 AND session_id = ?2"
-                ))
-                .bind(reference.owner_node_id.as_str())
-                .bind(reference.session_id.as_str())
-                .fetch_optional(&self.pools.read)
-                .await
-                .db()?;
-                if let Some(row) = row {
-                    records.push(imported_session_from_row(&row)?);
-                }
-                if query
-                    .limit
-                    .is_some_and(|limit| records.len() >= limit as usize)
-                {
-                    break;
-                }
-            }
-            return Ok(records);
-        }
-        let mut sql = format!("SELECT {IMPORTED_SESSION_COLUMNS} FROM imported_session");
-        sql.push_str(" ORDER BY updated_at DESC, owner_node_id ASC, session_id ASC");
-        if let Some(limit) = query.limit {
-            sql.push_str(&format!(" LIMIT {limit}"));
-        }
-        let rows = sqlx::query(&sql).fetch_all(&self.pools.read).await.db()?;
-        let mut records = Vec::with_capacity(rows.len());
-        for row in &rows {
-            records.push(imported_session_from_row(row)?);
-        }
-        Ok(records)
-    }
-
-    async fn find_imported_session(
-        &self,
-        session: &SessionId,
-    ) -> Result<Option<ImportedSessionRecord>, PortError> {
-        // 主键是 `(owner_node_id, session_id)`：这里只回答存在性，取任意一条匹配行（稳定按主键排序）。
-        let row = sqlx::query(&format!(
-            "SELECT {IMPORTED_SESSION_COLUMNS} FROM imported_session \
-             WHERE session_id = ?1 ORDER BY owner_node_id ASC LIMIT 1"
-        ))
-        .bind(session.as_str())
-        .fetch_optional(&self.pools.read)
-        .await
-        .db()?;
-        Ok(row.as_ref().map(imported_session_from_row).transpose()?)
-    }
-
-    async fn find_remote_request(
-        &self,
-        session: &RemoteSessionRef,
-        request: &RequestId,
-    ) -> Result<Option<RemoteCommandRef>, PortError> {
-        let row = sqlx::query(
-            "SELECT request_id, command, status, accepted_at, terminal_at, terminal_event_id, \
-             error_code, retryable FROM imported_command_ref \
-             WHERE owner_node_id = ?1 AND session_id = ?2 AND request_id = ?3",
-        )
-        .bind(session.owner_node_id.as_str())
-        .bind(session.session_id.as_str())
-        .bind(request.as_str())
-        .fetch_optional(&self.pools.read)
-        .await
-        .db()?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        Ok(Some(remote_command_from_row(&row)?))
-    }
-
-    /// §7.5 的容量清理对 imported 家族的对应物：交付索引与命令引用是**索引元数据**（无正文），
-    /// 没有按内容的 TTL；超限时按 `local_sequence` 从最旧开始删（删除后客户端会收到
-    /// `cursor_expired` 并重建快照），仍超限则报告 `still_over_limit`。
-    async fn prune(
-        &self,
-        policy: RetentionPolicy,
-        at: Timestamp,
-    ) -> Result<PruneReport, PortError> {
-        self.writable()?;
-        let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
-        // ⑤ TTL：到期审计（与 `SessionStore::prune` 同一步骤）。**不**受容量是否超限影响——它由
-        // `prune` 驱动，提前返回会让 Access-only 节点的 `imported_audit` 永远不清。
-        let audit_threshold = threshold(&at, policy.audit_retention_days)?;
-        let removed_audit = sqlx::query("DELETE FROM imported_audit WHERE at <= ?1")
-            .bind(audit_threshold.as_str())
-            .execute(&mut *tx)
+/// Owner 侧读取的来源位置与逐消息连续覆盖（与 `read_session_locked` 共用同一事务）。
+///
+/// R = 会话当前 head（`session_sequence`），epoch 取 `owned_session.origin_epoch`。每条返回消息的
+/// `lastDeltaIndex` 是**从 0 开始连续存在**的最后一个 `agent.message.delta` 索引；没有 delta 行时为
+/// `None`（页面没有拼入任何增量）。已压缩的 delta 不在可读窗口内，不能据此声称覆盖。
+async fn session_coverage(
+    guard: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    query: &HistoryQuery,
+    messages: &[acp_core::model::MessageRecord],
+) -> Result<
+    (
+        acp_core::model::OriginCursor,
+        Vec<acp_core::ports::MessageCoverage>,
+    ),
+    PortError,
+> {
+    let epoch: String =
+        sqlx::query_scalar("SELECT origin_epoch FROM owned_session WHERE session_id = ?1")
+            .bind(query.session.as_str())
+            .fetch_optional(&mut **guard)
             .await
             .db()?
-            .rows_affected();
-        // 容量：只在超限时按 `local_sequence` 升序回收交付索引（阈值以下时循环体不执行）。
-        let mut removed = 0_u64;
-        while measure_total(&mut tx, &self.measure_sql).await? > policy.max_total_size_bytes {
-            let rows = sqlx::query(
-                "SELECT rowid AS row_id FROM imported_delivery_index \
-                 ORDER BY local_sequence ASC LIMIT 64",
-            )
-            .fetch_all(&mut *tx)
-            .await
-            .db()?;
-            if rows.is_empty() {
-                break;
-            }
-            for row in rows {
-                let row_id = int(&row, "row_id")?;
-                removed += sqlx::query("DELETE FROM imported_delivery_index WHERE rowid = ?1")
-                    .bind(row_id)
-                    .execute(&mut *tx)
-                    .await
-                    .db()?
-                    .rows_affected();
-            }
-        }
-        let still_over_limit =
-            measure_total(&mut tx, &self.measure_sql).await? > policy.max_total_size_bytes;
-        sqlx::query("UPDATE meta SET value = ?1 WHERE key = 'last_prune_at'")
-            .bind(at.as_str())
-            .execute(&mut *tx)
-            .await
-            .db()?;
-        tx.commit().await.db()?;
-        Ok(PruneReport {
-            removed_events: removed,
-            removed_audit,
-            still_over_limit,
-            ..PruneReport::default()
-        })
+            .ok_or_else(|| PortError::NotFound(EntityRef::Session(query.session.clone())))?;
+    let head: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(session_sequence) FROM owned_event WHERE session_id = ?1 AND session_sequence IS NOT NULL",
+    )
+    .bind(query.session.as_str())
+    .fetch_one(&mut **guard)
+    .await
+    .db()?;
+    let sequence = u64::try_from(head.unwrap_or(0))
+        .ok()
+        .and_then(|value| acp_core::model::Sequence::new(value).ok())
+        .ok_or_else(|| PortError::Corrupt("stored session sequence is out of range"))?;
+    let read_cursor =
+        acp_core::model::OriginCursor::new(decode(&epoch, "owned_session.origin_epoch")?, sequence);
+    if messages.is_empty() {
+        return Ok((read_cursor, Vec::new()));
     }
-}
-
-fn sequence_from(value: i64, column: &'static str) -> Result<Sequence, StorageError> {
-    sequence(value, column)
-}
-
-fn delivery_index_from_row(row: &SqliteRow) -> Result<DeliveryIndexEntry, StorageError> {
-    Ok(DeliveryIndexEntry {
-        session: RemoteSessionRef::new(
-            decode(
-                &text(row, "owner_node_id")?,
-                "imported_delivery_index.owner_node_id",
-            )?,
-            decode(
-                &text(row, "session_id")?,
-                "imported_delivery_index.session_id",
-            )?,
-        ),
-        origin: OriginEventRef::new(
-            decode(
-                &text(row, "owner_node_id")?,
-                "imported_delivery_index.owner_node_id",
-            )?,
-            decode(
-                &text(row, "origin_epoch")?,
-                "imported_delivery_index.origin_epoch",
-            )?,
-            decode(
-                &text(row, "origin_event_id")?,
-                "imported_delivery_index.origin_event_id",
-            )?,
-        ),
-        origin_sequence: sequence(
-            int(row, "origin_sequence")?,
-            "imported_delivery_index.origin_sequence",
-        )?,
-        local_sequence: cursor(
-            int(row, "local_sequence")?,
-            "imported_delivery_index.local_sequence",
-        )?,
-        event_type: decode(
-            &text(row, "event_type")?,
-            "imported_delivery_index.event_type",
-        )?,
-        payload_digest: decode(
-            &text(row, "payload_digest")?,
-            "imported_delivery_index.payload_digest",
-        )?,
-        received_at: decode(
-            &text(row, "received_at")?,
-            "imported_delivery_index.received_at",
-        )?,
-    })
-}
-
-fn imported_session_from_row(row: &SqliteRow) -> Result<ImportedSessionRecord, StorageError> {
-    let owner_node_id = decode(
-        &text(row, "owner_node_id")?,
-        "imported_session.owner_node_id",
-    )?;
-    let session_id = decode(&text(row, "session_id")?, "imported_session.session_id")?;
-    let agent = match (opt_text(row, "agent_id")?, opt_text(row, "agent_name")?) {
-        (Some(id), Some(name)) => {
-            let id = AgentId::new(&id).map_err(|_| StorageError::ColumnValue {
-                column: "imported_session.agent_id",
-                expected: "agent id",
-            })?;
-            Some(
-                AgentRef::try_new(id, &name).map_err(|_| StorageError::ColumnValue {
-                    column: "imported_session.agent_name",
-                    expected: "agent name",
-                })?,
-            )
+    // 取会话内全部可读 delta 行；`payload_json` 是 view 原文，JSON1 只用于定位，不改写正文。
+    let rows = sqlx::query(
+        "SELECT json_extract(payload_json, '$.messageId') AS mid, \
+                CAST(json_extract(payload_json, '$.deltaIndex') AS INTEGER) AS idx \
+           FROM owned_event \
+          WHERE session_id = ?1 AND event_type = 'agent.message.delta' \
+            AND session_sequence IS NOT NULL AND compacted_into IS NULL \
+            AND json_extract(payload_json, '$.messageId') IS NOT NULL \
+            AND json_extract(payload_json, '$.deltaIndex') IS NOT NULL \
+          ORDER BY session_sequence ASC",
+    )
+    .bind(query.session.as_str())
+    .fetch_all(&mut **guard)
+    .await
+    .db()?;
+    let mut indexes: std::collections::BTreeMap<String, std::collections::BTreeSet<u64>> =
+        std::collections::BTreeMap::new();
+    for row in &rows {
+        let mid: String = row.try_get("mid").db()?;
+        let idx: i64 = row.try_get("idx").db()?;
+        let idx =
+            u64::try_from(idx).map_err(|_| PortError::Corrupt("stored delta index is negative"))?;
+        indexes.entry(mid).or_default().insert(idx);
+    }
+    let mut coverage = Vec::with_capacity(messages.len());
+    for message in messages {
+        let mut last = None;
+        if let Some(values) = indexes.get(message.message.as_str()) {
+            for expected in 0..=values.len() as u64 {
+                if values.contains(&expected) {
+                    last = Some(expected);
+                } else {
+                    break;
+                }
+            }
         }
-        _ => None,
-    };
-    let last_origin_sequence = match opt_int(row, "last_origin_sequence")? {
-        Some(value) => Some(sequence(value, "imported_session.last_origin_sequence")?),
-        None => None,
-    };
-    let acked = match (
-        opt_text(row, "acked_origin_epoch")?,
-        opt_int(row, "acked_origin_sequence")?,
-    ) {
-        (Some(epoch), Some(sequence)) => Some(OriginCursor::new(
-            decode(&epoch, "imported_session.acked_origin_epoch")?,
-            sequence_from(sequence, "imported_session.acked_origin_sequence")?,
-        )),
-        _ => None,
-    };
-    let attachment = match (
-        opt_text(row, "attachment_id")?,
-        opt_int(row, "attachment_generation")?,
-    ) {
-        (Some(id), Some(generation)) => Some(SessionAttachment {
-            id: decode(&id, "imported_session.attachment_id")?,
-            generation: AttachmentGeneration::new(u64::try_from(generation).unwrap_or(0)),
-        }),
-        _ => None,
-    };
-    Ok(ImportedSessionRecord {
-        session: RemoteSessionRef::new(owner_node_id, session_id),
-        origin_epoch: decode_opt(
-            opt_text(row, "last_origin_epoch")?,
-            "imported_session.last_origin_epoch",
-        )?,
-        title: opt_text(row, "title")?,
-        agent,
-        state: decode_opt(opt_text(row, "state")?, "imported_session.state")?,
-        version: match opt_int(row, "version")? {
-            Some(value) => Some(parse_version(value, "imported_session.version")?),
-            None => None,
-        },
-        created_at: decode_opt(opt_text(row, "created_at")?, "imported_session.created_at")?,
-        last_origin_sequence,
-        acked,
-        attachment,
-        updated_at: decode(&text(row, "updated_at")?, "imported_session.updated_at")?,
-    })
-}
-
-fn remote_command_from_row(row: &SqliteRow) -> Result<RemoteCommandRef, StorageError> {
-    // §7.4：imported 家族不存正文，`error_message`/`details` 不在表里（黄金列清单），因此这里只还原
-    // 错误码与可重试标志；完整错误由 Access 在线向 Owner 回源。
-    let error = match opt_text(row, "error_code")? {
-        Some(code) => Some(
-            PublicError::try_new(
-                &code,
-                "",
-                opt_flag(row, "retryable")?.unwrap_or(false),
-                ViewJson::empty_object(),
-            )
-            .map_err(|_| StorageError::ColumnValue {
-                column: "imported_command_ref.error_code",
-                expected: "error code",
-            })?,
-        ),
-        None => None,
-    };
-    Ok(RemoteCommandRef {
-        request: decode(&text(row, "request_id")?, "imported_command_ref.request_id")?,
-        command: text(row, "command")?,
-        status: decode(&text(row, "status")?, "imported_command_ref.status")?,
-        accepted_at: decode_opt(
-            opt_text(row, "accepted_at")?,
-            "imported_command_ref.accepted_at",
-        )?,
-        terminal_at: decode_opt(
-            opt_text(row, "terminal_at")?,
-            "imported_command_ref.terminal_at",
-        )?,
-        terminal_event: decode_opt(
-            opt_text(row, "terminal_event_id")?,
-            "imported_command_ref.terminal_event_id",
-        )?,
-        error,
-    })
+        coverage.push(acp_core::ports::MessageCoverage {
+            message_id: message.message.clone(),
+            through: read_cursor.clone(),
+            last_delta_index: last,
+        });
+    }
+    Ok((read_cursor, coverage))
 }
 
 // ---------------------------------------------------------------------------------------------

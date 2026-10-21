@@ -18,9 +18,10 @@
  * 这正是 spec 场景「重建快照时不破坏已完成状态」的结构性保证。
  */
 
-import type { CommandMessage, Cursor, Uuid } from "../protocol";
+import type { CommandMessage, Cursor, OriginCursor, SessionRef, Uuid } from "../protocol";
 import { SyncConnection, type AuthenticatedInfo, type ClientBlockCause, type SyncClientEvent } from "./connection";
 import { compareCursors } from "./connection";
+import { advanceOriginCursor } from "./remote-merge";
 import { EventLedger } from "./dedupe";
 import { SnapshotStaging } from "./snapshot";
 import type { VerifiedSnapshot } from "./snapshot";
@@ -97,6 +98,28 @@ export interface SyncClientOptions {
 }
 
 /**
+ * 一个来源会话的运行期状态（`design.md` D3/D4）。
+ *
+ * 它**只活在当前进程**：`cursor` 是最后连续处理位置 C，仅用于回源重放衔接与去重；页面刷新后
+ * 它随实例一起消失，下一次打开会话从 `null` 订阅并先回源读取重建。`seen` 是当前运行期的来源
+ * 事件去重窗口——跨连接保留，避免切换窗口里的重投把同一条事件拼接两次。
+ */
+interface RemoteRuntime {
+  readonly sessionRef: SessionRef;
+  /** 用户/页面仍希望保持订阅（切换会话或断线时只置假，不丢已处理位置）。 */
+  wanted: boolean;
+  /** 当前连接上的订阅 ID；连接关闭或订阅被替换后为 `null`。 */
+  subscriptionId: Uuid | null;
+  cursor: OriginCursor | null;
+  caughtUp: boolean;
+  readonly seen: Set<string>;
+  readonly seenOrder: string[];
+}
+
+/** 来源事件去重窗口大小（与去重账本同量级，避免长时间打开会话无界增长）。 */
+const REMOTE_SEEN_LIMIT = 2000;
+
+/**
  * 同步客户端门面。
  *
  * 一个实例覆盖整个应用生命周期：连接断开后由 `src/state/` 的状态机决定何时重新调用
@@ -114,6 +137,8 @@ export class SyncClient {
   #snapshotRefreshCaughtUp = false;
   /** 跨连接复用的去重账本；服务端 epoch 变化时丢弃（必须重建快照）。 */
   #ledger: EventLedger | null = null;
+  /** 来源会话的运行期订阅与连续位置（不落盘；键为 `owner|session`）。 */
+  readonly #remote = new Map<string, RemoteRuntime>();
   /** 阻断后停止自动重连；`src/state/` 显式解除前不再接受 `connect()`。 */
   #blocked: ClientBlockCause | null = null;
   /**
@@ -214,6 +239,104 @@ export class SyncClient {
     this.#connection?.close();
     this.#connection = null;
     this.#snapshotRefreshInFlight = false;
+    // 连接级订阅随 socket 失效；运行期连续位置与去重窗口保留，供重连后从 C 继续。
+    for (const runtime of this.#remote.values()) {
+      runtime.subscriptionId = null;
+      runtime.caughtUp = false;
+    }
+  }
+
+  /**
+   * 为一条来源会话开启（或刷新）订阅（§9.7）。
+   *
+   * 每次调用都生成新的 `subscriptionId`：同一条连接上重新订阅必须让旧 ID 的迟到帧失效。
+   * 若当前运行期仍持有最后连续位置 C，就用它请求来源增量重放；否则用 `null` 走首次重建。
+   * **读取重建由消费方另行发起**——本方法只负责订阅，不把 C 当成完整视图的替代。
+   */
+  subscribeRemote(sessionRef: SessionRef): void {
+    const key = this.#remoteKey(sessionRef);
+    let runtime = this.#remote.get(key);
+    if (runtime === undefined) {
+      runtime = {
+        sessionRef,
+        wanted: true,
+        subscriptionId: null,
+        cursor: null,
+        caughtUp: false,
+        seen: new Set(),
+        seenOrder: [],
+      };
+      this.#remote.set(key, runtime);
+    }
+    runtime.wanted = true;
+    this.#sendRemoteSubscribe(runtime);
+  }
+
+  /** 取消订阅但保留运行期位置：再次打开同一会话仍可从 C 衔接（只用于回源重放，不是恢复视图）。 */
+  unsubscribeRemote(sessionRef: SessionRef): void {
+    const runtime = this.#remote.get(this.#remoteKey(sessionRef));
+    if (runtime === undefined) return;
+    runtime.wanted = false;
+    const subscriptionId = runtime.subscriptionId;
+    runtime.subscriptionId = null;
+    runtime.caughtUp = false;
+    if (subscriptionId !== null) this.#connection?.sendRemoteUnsubscribe(subscriptionId);
+  }
+
+  /** 当前运行期保存的最后连续来源位置（诊断与测试用；不提供任何持久化入口）。 */
+  remoteCursor(sessionRef: SessionRef): OriginCursor | null {
+    return this.#remote.get(this.#remoteKey(sessionRef))?.cursor ?? null;
+  }
+
+  #remoteKey(sessionRef: SessionRef): string {
+    return `${sessionRef.ownerNodeId}|${sessionRef.sessionId}`;
+  }
+
+  /** 在当前连接上发一条新订阅；没有已认证连接时只保留 `wanted`，认证后统一重发。 */
+  #sendRemoteSubscribe(runtime: RemoteRuntime): void {
+    const connection = this.#connection;
+    if (connection === null || connection.closed || this.connectionId === null) return;
+    const previous = runtime.subscriptionId;
+    if (previous !== null) connection.sendRemoteUnsubscribe(previous);
+    const subscriptionId = this.#options.random.uuid();
+    const sent = connection.sendRemoteSubscribe({
+      subscriptionId,
+      sessionRef: runtime.sessionRef,
+      cursor: runtime.cursor,
+    });
+    if (!sent) return;
+    runtime.subscriptionId = subscriptionId;
+    runtime.caughtUp = false;
+    this.#options.onEvent({
+      kind: "remote_subscribing",
+      sessionRef: runtime.sessionRef,
+      subscriptionId,
+      cursor: runtime.cursor,
+    });
+  }
+
+  /** 认证后的统一重发：只重发仍被期望的订阅，且每条都换新 ID。 */
+  #resubscribeRemote(): void {
+    for (const runtime of this.#remote.values()) {
+      if (!runtime.wanted) continue;
+      this.#sendRemoteSubscribe(runtime);
+    }
+  }
+
+  #remoteRuntimeOf(sessionRef: SessionRef): RemoteRuntime | undefined {
+    return this.#remote.get(this.#remoteKey(sessionRef));
+  }
+
+  /** 来源事件去重的有界窗口：返回 `true` 表示首次见到。 */
+  #markRemoteSeen(runtime: RemoteRuntime, originEventId: string): boolean {
+    if (runtime.seen.has(originEventId)) return false;
+    runtime.seen.add(originEventId);
+    runtime.seenOrder.push(originEventId);
+    if (runtime.seenOrder.length > REMOTE_SEEN_LIMIT) {
+      const evicted = runtime.seenOrder.shift();
+      if (evicted !== undefined) runtime.seen.delete(evicted);
+    }
+    return true;
   }
 
   /** 同连接刷新资源清单；合并在途请求，断线后保留刷新意图。 */
@@ -336,6 +459,53 @@ export class SyncClient {
   }
 
   #onConnectionEvent(event: SyncClientEvent): void {
+    if (event.kind === "authenticated") {
+      // 认证完成：把仍被期望的订阅全部重发（每条换新 subscriptionId），并让消费方回源读取重建。
+      this.#resubscribeRemote();
+    }
+    if (event.kind === "closed" || event.kind === "blocked") {
+      for (const runtime of this.#remote.values()) {
+        runtime.subscriptionId = null;
+        runtime.caughtUp = false;
+      }
+    }
+    if (event.kind === "remote_event") {
+      const runtime = this.#remoteRuntimeOf(event.sessionRef);
+      if (runtime === undefined || !runtime.wanted || runtime.subscriptionId !== event.subscriptionId) return;
+      if (!this.#markRemoteSeen(runtime, event.event.originEventId)) return;
+      runtime.cursor = advanceOriginCursor(runtime.cursor, {
+        originEpoch: event.event.originEpoch,
+        originSequence: event.event.originSequence,
+      });
+    }
+    if (event.kind === "remote_caught_up") {
+      const runtime = this.#remoteRuntimeOf(event.sessionRef);
+      if (runtime === undefined || runtime.subscriptionId !== event.subscriptionId) return;
+      runtime.cursor = advanceOriginCursor(runtime.cursor, event.cursor);
+      runtime.caughtUp = true;
+    }
+    if (event.kind === "remote_reset_required") {
+      const runtime = this.#remoteRuntimeOf(event.sessionRef);
+      if (runtime === undefined || runtime.subscriptionId !== event.subscriptionId) return;
+      // 重置意味着此前的位置不再可恢复：C 必须丢掉，去重窗口也随来源重置清空。
+      // （同一来源重置后可能重放相同标识的新内容；旧窗口会把它们误判成重复。）
+      runtime.cursor = null;
+      runtime.caughtUp = false;
+      runtime.seen.clear();
+      runtime.seenOrder.length = 0;
+    }
+    if (event.kind === "remote_unavailable") {
+      const runtime = this.#remoteRuntimeOf(event.sessionRef);
+      if (runtime === undefined || runtime.subscriptionId !== event.subscriptionId) return;
+      runtime.subscriptionId = null;
+      runtime.caughtUp = false;
+    }
+    if (event.kind === "remote_unsubscribed") {
+      const runtime = this.#remoteRuntimeOf(event.sessionRef);
+      if (runtime === undefined || runtime.subscriptionId !== event.subscriptionId) return;
+      runtime.subscriptionId = null;
+      runtime.caughtUp = false;
+    }
     if (event.kind === "snapshot_verified") {
       // 只有验证通过**且**账本已采纳其屏障才替换；失败或被拒的路径根本不会走到这里。
       if (this.#isAdoptableBarrier(event.snapshot.cursor)) {
