@@ -22,6 +22,7 @@
  * （`docs/FRONTEND_DESIGN.md` §3 的分层口径，与 `SessionRow` 一致）。
  */
 
+import { createElement } from "react";
 import type { ReactElement } from "react";
 import type { TextStyle } from "react-native";
 import hljs from "highlight.js/lib/core";
@@ -30,6 +31,7 @@ import css from "highlight.js/lib/languages/css";
 import diff from "highlight.js/lib/languages/diff";
 import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
+import ini from "highlight.js/lib/languages/ini";
 import markdown from "highlight.js/lib/languages/markdown";
 import python from "highlight.js/lib/languages/python";
 import rust from "highlight.js/lib/languages/rust";
@@ -63,6 +65,7 @@ hljs.registerLanguage("css", css);
 hljs.registerLanguage("diff", diff);
 hljs.registerLanguage("javascript", javascript);
 hljs.registerLanguage("json", json);
+hljs.registerLanguage("toml", ini);
 hljs.registerLanguage("markdown", markdown);
 hljs.registerLanguage("python", python);
 hljs.registerLanguage("rust", rust);
@@ -421,4 +424,13 @@ export function CodeBlock({ code, language, index, onCopy }: CodeBlockProps): Re
       </View>
     </View>
   );
+}
+
+/** Safe text and vector rendering shared by the file preview. */
+export function FileCodeText({ code, language, renderLine }: { readonly code: string; readonly language: string; readonly renderLine?: (content: ReactElement, index: number) => ReactElement }): ReactElement {
+  const theme = useTheme();
+  const runs = highlightRuns(code, language);
+  const renderRuns = (parts: readonly CodeRun[]): ReactElement => <>{parts.map((run, index) => createElement("span", {key:index,style:run.family === null ? undefined : {color:theme.colors[run.family]}},run.text))}</>;
+  if (renderLine !== undefined) return <>{toLines(runs).map((line,index) => renderLine(renderRuns(line),index))}</>;
+  return <>{runs.map((run, index) => createElement("span", { key:index, style:run.family === null ? undefined : { color:theme.colors[run.family] } }, run.text))}</>;
 }

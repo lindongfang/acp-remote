@@ -248,15 +248,30 @@ impl SessionFiles for NativeSessionFiles {
         } else {
             None
         };
+        let stats = self.git.line_counts(Path::new(&root_text), &selected).await;
         let page_entries = {
             let root_text = root_text.clone();
             tokio::task::spawn_blocking(move || -> Result<Vec<GitStatusEntry>, PortError> {
                 let secure = SecureRoot::open(&root_text)?;
+                let mut read_budget = 8 * 1024 * 1024;
                 selected
                     .into_iter()
                     .map(|entry| {
                         let binary = content::looks_binary(&secure, &entry.path);
-                        git::status_entry(entry, binary)
+                        let counts = if binary || entry.conflicted {
+                            None
+                        } else if let Some((has_head, counts)) = &stats {
+                            if !has_head
+                                || entry.status == acp_core::model::GitFileStatus::Untracked
+                            {
+                                count_added_lines(&secure, &entry.path, &mut read_budget)
+                            } else {
+                                counts.get(entry.path.as_str()).copied()
+                            }
+                        } else {
+                            None
+                        };
+                        git::status_entry(entry, binary).map(|entry| entry.with_line_counts(counts))
                     })
                     .collect()
             })
@@ -323,4 +338,25 @@ fn status_signature(entries: &[git::GitEntry]) -> String {
         hasher.update([0, u8::from(entry.conflicted)]);
     }
     list::hex_prefix(&hasher.finalize())
+}
+
+/// Bound empty-base reads across the page; never cache file content for statistics.
+fn count_added_lines(
+    secure: &SecureRoot,
+    path: &SessionFilePath,
+    budget: &mut usize,
+) -> Option<(u32, u32)> {
+    let resolved = secure.resolve(Some(path)).ok()?;
+    let size = usize::try_from(resolved.metadata().len()).ok()?;
+    if size > *budget {
+        return None;
+    }
+    let bytes = resolved.read_head(size.checked_add(1)?).ok()?;
+    *budget = budget.saturating_sub(bytes.len());
+    if bytes.len() != size || bytes.contains(&0) || std::str::from_utf8(&bytes).is_err() {
+        return None;
+    }
+    let lines = bytes.iter().filter(|byte| **byte == b'\n').count()
+        + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n"));
+    Some((u32::try_from(lines).ok()?, 0))
 }

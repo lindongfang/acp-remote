@@ -1212,8 +1212,45 @@
         },
         "binary": {
           "type": "boolean"
+        },
+        "addedLines": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "deletedLines": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
         }
-      }
+      },
+      "dependentRequired": {
+        "addedLines": [
+          "deletedLines"
+        ],
+        "deletedLines": [
+          "addedLines"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "addedLines"
+            ]
+          },
+          "then": {
+            "properties": {
+              "binary": {
+                "const": false
+              },
+              "conflicted": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
     },
     "sessionGitStatusResult": {
       "description": "`session.git.status` 的 completed 结果。每页最多 128 项（§14），`next` 为续读位置。",
@@ -1326,6 +1363,24 @@
         },
         "truncated": {
           "type": "boolean"
+        },
+        "comparison": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before",
+            "after"
+          ],
+          "properties": {
+            "before": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "after": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          }
         }
       }
     },

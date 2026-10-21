@@ -1230,7 +1230,7 @@
     chatScenario:"running", ctx:"mid", permSet:{},
     session:"s1", shown:15, left:true, right:true, selFile:"src/auth/session.ts",
     /* 文件栏：来源、展开状态与中栏只读查看。默认「全部文件」。 */
-    fileSource:"all", dirOpen:{}, hideIgnored:false, viewFile:null,
+    fileSource:"all", dirOpen:{}, hideIgnored:true, viewFile:null,
     modelSel:{}, modeSel:{}, openPick:null, open:{}, keys:[],
     agents:[{ id:"codex", state:"running", desc:"当前 turn：正在调整空闲超时" },
              { id:"omp",   state:"idle",    desc:"14:28 用于跑测试，之后断开" }],
@@ -2216,7 +2216,6 @@
       '<div class="fsources" role="tablist" aria-label="文件来源">'+tabs+'</div>'+
       '<div class="ftoolbar">'+parts.toolbar+'</div>'+
       (online ? "" : '<div class="fnotice" style="margin:0 10px 8px">当前不在线：已加载的文件与 Git 结果可能不是最新的。</div>')+
-      (A.fileSource==="git" ? '<div class="fnotice" style="margin:0 10px 8px">范围是整个会话工作目录的未提交修改，可能包含人工操作或其他会话的修改。</div>' : "")+
       '<div class="fscroll">'+parts.body+'</div></div>';
   }
 

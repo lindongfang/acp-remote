@@ -4311,6 +4311,7 @@ export class ClientStore {
       path: decoded.value.path,
       base: decoded.value.base,
       kind: decoded.value.kind,
+      ...(decoded.value.comparison === undefined ? {} : {comparison:decoded.value.comparison}),
       diffLines: decoded.value.diffLines ?? [],
       unavailable: decoded.value.unavailable ?? null,
       truncated: decoded.value.truncated,

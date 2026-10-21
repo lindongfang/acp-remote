@@ -787,3 +787,7 @@ node bin/archify.mjs visual-check <repo>/docs/diagrams/acp-remote-modules.html -
 - Pi 当前将 session engine、wire protocol、client、server 和 SQLite backend 分开，并保持 protocol transport-neutral：<https://github.com/earendil-works/pi/tree/main/packages>
 - Pi protocol/client/server 对 routed envelope、logical server identity、session attachment 和 transport abstraction 的说明：<https://github.com/earendil-works/pi/tree/main/packages/protocol>
 - Oh My Pi 将 AI、Agent Core、Coding Agent、TUI 和 native 能力拆分，并从 interactive、RPC、SDK、ACP 等入口复用同一引擎：<https://github.com/dankalish/oh-my-pi>
+
+Git status line counts: `app::session_files` performs one bounded numstat query per page and bounded empty-base reads (8 MiB total per page). `core::model::GitStatusEntry::line_counts` carries only optional added/deleted counts; no content storage changes. `server::sync` projects `addedLines`/`deletedLines` only after `core.session-git-stats.v1` negotiation. Wire semantics: [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) ?11.5; value shape: [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) ?3.
+
+Git full comparison: `app::session_files` reads bounded complete HEAD/worktree UTF-8 texts (64 KiB per side) using the managed Git runner and secure root handles. `core::model::GitDiff::comparison` carries only request-local values; `server::sync` exposes them only after `core.session-git-compare.v1` negotiation. No storage changes.

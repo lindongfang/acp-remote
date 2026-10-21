@@ -9,7 +9,7 @@
  * 「该不该降级」：
  *
  * - **全部文件**：逐层展开目录。根层始终加载；子目录第一次展开时由 {@link DirectoryLevel} 触发
- *   `onLoadMoreAllFiles(path)`。忽略开关默认关闭（即显示被忽略项），`.git` 条目在这里**再过滤
+ *   `onLoadMoreAllFiles(path)`。忽略开关默认开启（即隐藏被忽略项），`.git` 条目在这里**再过滤
  *   一次**——服务端已经隐藏，但「`.git` 永不出现」不能只依赖上游一道防线。
  * - **Git 变更**：staged/unstaged/untracked 都只是 `status` 的不同取值，统一按文件列出；非仓库、
  *   Git 不可用、冲突、二进制与截断都各自有显式说明，不用空列表冒充干净仓库。范围是整个会话
@@ -25,17 +25,19 @@
  * 展开状态。
  */
 
-import { useEffect, useState } from "react";
+import { createElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import type { FileSource, SessionFilesPanelModel } from "../features/session-files";
 import { FILE_SOURCES, FILE_SOURCE_LABELS } from "../features/session-files";
 import type { GitStatusEntry } from "../protocol/session-files";
+import { FileTypeIcon as FileEntryIcon } from "./FileTypeIcon";
 import type { Palette } from "./theme";
-import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import { Pressable, ScrollView, StyleSheet, Text, View, webStyle, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
 
 export interface SessionFilesPanelProps {
   readonly model: SessionFilesPanelModel;
+  readonly onScrollRef?: ((node: unknown) => void) | undefined;
   /** 打开文件内容（来源 + 根内相对路径）。缺省时条目不可打开。 */
   readonly onOpenFile?: ((source: FileSource, path: string) => void) | undefined;
   /** 切换来源；缺省时选项不可点（不是点了没反应的按钮）。 */
@@ -54,18 +56,20 @@ export interface SessionFilesPanelProps {
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
     panel: {
-      gap: spacing.sm,
-      paddingVertical: spacing.md,
-      paddingHorizontal: spacing.sm,
+      flex: 1,
+      minHeight: 0,
+      overflow: "hidden",
+      gap: 0,
+      paddingTop: 12,
+      paddingHorizontal: 0,
       backgroundColor: colors.panel2,
     },
     head: {
       flexDirection: "row",
-      alignItems: "baseline",
+      alignItems: "center",
       gap: spacing.sm,
-      paddingBottom: spacing.sm,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.line,
+      paddingBottom: 10,
+      marginHorizontal: 12,
     },
     title: {
       color: colors.ink,
@@ -78,26 +82,30 @@ function buildStyles(colors: Palette) {
     },
     sources: {
       flexDirection: "row",
-      borderBottomWidth: 1,
-      borderBottomColor: colors.line,
+      gap: 2,
+      marginHorizontal: 10,
+      padding: 2,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: 10,
+      backgroundColor: colors.panel,
     },
     sourceOption: {
       flex: 1,
       alignItems: "center",
-      paddingVertical: spacing.sm,
-      borderBottomWidth: 2,
-      borderBottomColor: "transparent",
+      paddingVertical: 6,
+      borderRadius: 7,
     },
     sourceOptionSelected: {
-      borderBottomColor: colors.accent,
+      backgroundColor: colors.accentSoft,
     },
     sourceText: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
+      fontSize: 12,
     },
     sourceTextSelected: {
-      color: colors.ink,
+      color: colors.accent,
       fontWeight: "600",
     },
     action: {
@@ -140,10 +148,10 @@ function buildStyles(colors: Palette) {
       minWidth: 0,
     },
     treeChildren: {
-      marginLeft: 12,
-      paddingLeft: 12,
+      marginLeft: 22,
+      paddingLeft: 2,
       borderLeftWidth: 1,
-      borderLeftColor: colors.line,
+      borderLeftColor: colors.line2,
     },
     positiveName: { color: colors.ok },
     negativeName: { color: colors.danger },
@@ -153,27 +161,32 @@ function buildStyles(colors: Palette) {
     directoryRow: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 6,
-      minHeight: 32,
-      paddingHorizontal: 6,
+      gap: 7,
+      minHeight: 30,
+      paddingHorizontal: 10,
     },
     entry: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 6,
-      minHeight: 32,
-      paddingHorizontal: 6,
-      paddingLeft: 22,
+      gap: 7,
+      minHeight: 30,
+      paddingHorizontal: 10,
+    },
+    directoryName: {
+      color: colors.ink2,
+      fontWeight: "500",
     },
     entryRestricted: {
       opacity: 0.7,
       flexWrap: "wrap",
     },
     entryName: {
+      flex: 1,
+      minWidth: 0,
       flexShrink: 1,
       color: colors.ink,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
+      fontSize: 13,
     },
     chip: {
       paddingHorizontal: spacing.sm,
@@ -195,19 +208,20 @@ function buildStyles(colors: Palette) {
     },
     changedFileSelected: {
       backgroundColor: colors.accentSoft,
+      ...webStyle({boxShadow: `inset 2px 0 0 ${colors.accent}`}),
     },
     selectablePath: {
       flex: 1,
       minWidth: 0,
       justifyContent: "center",
-      minHeight: 32,
+      minHeight: 30,
     },
     path: {
       minWidth: 0,
       flexShrink: 1,
       color: colors.ink,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
+      fontSize: 13,
     },
     hidden: {
       display: "none",
@@ -223,11 +237,6 @@ function buildStyles(colors: Palette) {
       textAlign: "center",
       fontFamily: fontFamily.mono,
       fontSize: fontSize.sm,
-    },
-    chevron: {
-      width: 10,
-      fontSize: fontSize.xs,
-      color: colors.ink3,
     },
     entryButton: {
       alignSelf: "flex-start",
@@ -301,9 +310,9 @@ function DirectoryLevel({
 
   // 展开的子目录第一次渲染时没有缓存：由这里触发第一页（组件渲染不产生副作用）。
   useEffect(() => {
-    if (!open || directory !== undefined || onLoadMore === undefined) return;
+    if (model.selectedSource !== "all" || !open || directory !== undefined || onLoadMore === undefined) return;
     onLoadMore(path);
-  }, [open, directory, onLoadMore, path]);
+  }, [model.selectedSource, open, directory, onLoadMore, path]);
 
   if (!open) return null;
 
@@ -318,7 +327,7 @@ function DirectoryLevel({
           正在加载这一层…
         </Text>
       ) : null}
-      {directory?.loading === true ? (
+      {directory?.loading === true && entries.length === 0 ? (
         <Text style={styles.note} dataSet={{ fileDirectoryLoading: "true" }}>
           正在加载这一层…
         </Text>
@@ -371,8 +380,7 @@ function DirectoryLevel({
                   } else onToggleDirectory(directoryPath);
                 }}
               >
-                <Text style={styles.chevron}>{isOpen ? "▾" : "▸"}</Text>
-                <FileEntryIcon directory /><Text numberOfLines={1} style={styles.entryName}>{label}</Text>
+                <FileEntryIcon directory /><Text numberOfLines={1} style={[styles.entryName, styles.directoryName, isOpen && {color:theme.colors.ink}]}>{label}</Text>
               </Pressable>
               <View style={styles.treeChildren}><DirectoryLevel
                 path={directoryPath}
@@ -491,9 +499,7 @@ function GitChanges({
 
   return (
     <View style={styles.list} dataSet={{ gitChanges: git.entries.length === 0 ? "empty" : "list", gitEntryCount: String(git.entries.length) }}>
-      <Text style={styles.notice} dataSet={{ gitScopeNotice: "true" }}>
-        范围是整个会话工作目录的未提交修改（含已暂存、未暂存与未跟踪文件），可能包含人工或其他会话的改动。
-      </Text>
+
       {git.error === null ? null : (
         <Text style={styles.error} dataSet={{ gitError: git.error.code }}>
           {`刷新失败，下面保留上次成功的结果：${git.error.message}`}
@@ -546,7 +552,12 @@ function GitChanges({
               <Text numberOfLines={1} style={[styles.path, { flex: 1 }, nameStyle]}>{label}</Text>
             )}
             <View style={styles.rowMeta}>
+            {entry.addedLines !== undefined && entry.deletedLines !== undefined && !entry.binary && !entry.conflicted ? <>
+              {entry.addedLines > 0 ? <Text dataSet={{gitAddedLines:String(entry.addedLines)}} style={{fontFamily:fontFamily.mono,fontSize:11,color:theme.colors.ok,backgroundColor:theme.colors.okSoft,borderRadius:4,paddingHorizontal:5}}>+{entry.addedLines}</Text> : null}
+              {entry.deletedLines > 0 ? <Text dataSet={{gitDeletedLines:String(entry.deletedLines)}} style={{fontFamily:fontFamily.mono,fontSize:11,color:theme.colors.danger,backgroundColor:theme.colors.dangerSoft,borderRadius:4,paddingHorizontal:5}}>{"\u2212"}{entry.deletedLines}</Text> : null}
+            </> : <>
             {appearance === "neutral" ? <Text style={styles.note}>{GIT_STATUS_LABELS[entry.status]}</Text> : <Text style={[styles.marker, nameStyle]} dataSet={{ fileChangeMarker: appearance }}>{appearance === "negative" ? "-" : "+"}</Text>}
+            </>}
             {entry.previousPath === undefined ? null : (
               <Text style={[styles.note, styles.hidden]} dataSet={{ gitPreviousPath: entry.previousPath }}>
                 {`旧路径：${entry.previousPath}`}
@@ -586,10 +597,17 @@ export function SessionFilesPanel({
   onToggleHideIgnored,
   onLoadMoreAllFiles,
   onLoadMoreGitChanges,
+  onScrollRef,
 }: SessionFilesPanelProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const scroll = useRef<{ scrollTo?: (options: { y: number; animated: boolean }) => void } | null>(null);
+  const offsets = useRef(new Map<string, number>());
+  const scrollKey = model.sessionId + ":" + model.selectedSource;
+  useLayoutEffect(() => {
+    scroll.current?.scrollTo?.({ y: offsets.current.get(scrollKey) ?? 0, animated: false });
+  }, [scrollKey]);
   const root = model.all.directories.get("");
   const gitState = root?.gitState ?? null;
   const ignoreDisabledReason =
@@ -619,25 +637,25 @@ export function SessionFilesPanel({
 
   return (
     <View style={styles.panel} dataSet={{ filesPanel: "true", fileSource: model.selectedSource }}>
+      <View dataSet={{filesPanelHeader:"true"}} style={{flexShrink:0,paddingBottom:8}}>
       <View style={styles.head}>
-        <Text style={styles.title} dataSet={{ filesPanelTitle: "true" }}>
-          文件
-        </Text>
+        <View style={{gap:2,minWidth:0,flexShrink:1}}><Text style={styles.title} dataSet={{filesPanelTitle:"true"}}>{"文件"}</Text><Text style={{fontSize:11,color:theme.colors.ink3}}>{"本会话工作目录"}</Text></View>
         <View style={styles.headSpacer} />
         {onRefresh === undefined ? null : (
           <Pressable
             role="button"
-            style={model.refreshState.kind !== "available" ? [styles.action, styles.actionDisabled] : styles.action}
+            aria-label={"刷新文件"}
+            style={{ width:28, height:28, alignItems:"center", justifyContent:"center", borderRadius:8 }}
             dataSet={{ action: "refresh-files", refreshDisabled: String(model.refreshState.kind !== "available") }}
             disabled={model.refreshState.kind !== "available"}
             onPress={onRefresh}
           >
-            <Text style={styles.actionText}>{model.refreshState.kind === "loading" ? "刷新中…" : "刷新"}</Text>
+            {createElement("svg",{width:15,height:15,viewBox:"0 0 16 16",fill:"none",stroke:theme.colors.ink3,strokeWidth:1.4,strokeLinecap:"round",strokeLinejoin:"round","aria-hidden":true},createElement("path",{d:"M13 6.5A5.2 5.2 0 1 0 13.2 9M13 3v3.5H9.5"}))}
           </Pressable>
         )}
       </View>
 
-      {model.refreshState.kind === "unavailable" ? <Text style={styles.note} dataSet={{ fileRefreshUnavailable: "true" }}>{model.refreshState.reason}</Text> : null}
+
       <View style={styles.sources} dataSet={{ fileSources: "true" }}>
         {FILE_SOURCES.map((source) => {
           const selected = source === model.selectedSource;
@@ -664,25 +682,22 @@ export function SessionFilesPanel({
         })}
       </View>
 
-      {model.connectionOnline ? null : (
-        <Text style={styles.notice} dataSet={{ filesOffline: "true" }}>
-          当前不在线：已加载的文件与 Git 结果可能不是最新的。
-        </Text>
-      )}
-
-      {model.selectedSource === "all" ? (
-        <View style={styles.list}>
-          {model.allNotice === null ? null : (
-            <Text style={styles.notice} dataSet={{ filesAllNotice: "true" }}>
-              {model.allNotice}
-            </Text>
-          )}
+      </View>
+      <ScrollView ref={(node) => { scroll.current = node; onScrollRef?.(node); }}
+        style={{flex:1,minHeight:0,...webStyle({scrollbarGutter:"stable"})}}
+        contentContainerStyle={{paddingBottom:16}}
+        scrollEventThrottle={16}
+        onScroll={(event) => { offsets.current.set(scrollKey,event.nativeEvent.contentOffset.y); }}
+        dataSet={{conversationScroll:"files",filesPanelBody:"true"}}>
+      <View style={{height:34,flexShrink:0,justifyContent:"center"}} dataSet={{filesPanelToolbar:"true"}}>
+        <View style={model.selectedSource === "all" ? undefined : styles.hidden}>
           {onToggleHideIgnored === undefined ? null : (
             <Pressable
               role="button"
               style={
-                ignoreDisabledReason === null ? styles.action : [styles.action, styles.actionDisabled]
+                [{ flexDirection:"row", alignItems:"center", gap:8, paddingVertical:5, marginHorizontal:10 }, ignoreDisabledReason !== null && styles.actionDisabled]
               }
+              aria-checked={model.all.hideIgnored}
               dataSet={{
                 action: "toggle-hide-ignored",
                 hideIgnored: String(model.all.hideIgnored),
@@ -691,14 +706,30 @@ export function SessionFilesPanel({
               disabled={ignoreDisabledReason !== null}
               onPress={onToggleHideIgnored}
             >
-              <Text style={styles.actionText}>
-                {model.all.hideIgnored ? "显示忽略文件" : "隐藏忽略文件"}
-              </Text>
+              <View style={{width:26,height:15,borderRadius:99,backgroundColor:model.all.hideIgnored ? theme.colors.accent : theme.colors.line}}><View style={{position:"absolute",top:2,left:model.all.hideIgnored ? 13 : 2,width:11,height:11,borderRadius:99,backgroundColor:theme.colors.panel}} /></View><Text style={styles.actionText}>{"隐藏忽略文件"}</Text>
             </Pressable>
+          )}
+
+        </View>
+        <View style={model.selectedSource === "git" ? undefined : styles.hidden}><View style={{flexDirection:"row",alignItems:"center",gap:9,marginHorizontal:10,paddingBottom:8}} dataSet={{gitLegend:"true"}}><View style={{width:6,height:6,borderRadius:3,backgroundColor:theme.colors.ok}} /><Text style={{fontSize:11,color:theme.colors.ink2}}>{"新增"}</Text><View style={{width:6,height:6,borderRadius:3,backgroundColor:theme.colors.danger}} /><Text style={{fontSize:11,color:theme.colors.ink2}}>{"删除"}</Text></View></View>
+      </View>
+
+      {model.refreshState.kind === "unavailable" ? <Text style={styles.note} dataSet={{ fileRefreshUnavailable: "true" }}>{model.refreshState.reason}</Text> : null}
+      {model.connectionOnline ? null : (
+        <Text style={styles.notice} dataSet={{ filesOffline: "true" }}>
+          当前不在线：已加载的文件与 Git 结果可能不是最新的。
+        </Text>
+      )}
+
+      <View style={model.selectedSource === "all" ? styles.list : [styles.list, styles.hidden]}>
+          {model.allNotice === null ? null : (
+            <Text style={styles.notice} dataSet={{ filesAllNotice: "true" }}>
+              {model.allNotice}
+            </Text>
           )}
           {ignoreDisabledReason === null ? (
             <Text style={[styles.note, styles.hidden]} dataSet={{ ignoreToggleScope: "true" }}>
-              默认显示隐藏与被 Git 忽略的文件；`.git` 管理条目始终隐藏。
+              默认隐藏被 Git 忽略的文件；关闭开关后可显示，`.git` 管理条目始终隐藏。
             </Text>
           ) : (
             <Text style={styles.note} dataSet={{ ignoreToggleDisabledNote: "true" }}>
@@ -724,37 +755,16 @@ export function SessionFilesPanel({
             />
           ) : null}
         </View>
-      ) : null}
 
-      {model.selectedSource === "git" ? (
+      <View style={model.selectedSource === "git" ? undefined : styles.hidden}>
         <GitChanges model={model} onOpenFile={onOpenFile} onLoadMore={onLoadMoreGitChanges} />
-      ) : null}
+      </View>
+      </ScrollView>
     </View>
   );
 }
 
 /** 文件夹与文件使用不同轮廓，避免依赖系统表情字体。 */
-function FileEntryIcon({ directory = false, path = "" }: { readonly directory?: boolean; readonly path?: string }): ReactElement {
-  const { colors } = useTheme();
-  const extension = path.split(".").pop()?.toLowerCase();
-  const code = extension !== undefined && ["ts", "tsx", "js", "jsx", "rs", "json"].includes(extension);
-  const document = extension === "md" || extension === "txt";
-  const glyph = code ? (extension === "json" ? "{}" : "‹›") : "≡";
-  if (!directory) return <View aria-hidden={true} dataSet={{ fileIcon: "file", fileIconType: code ? "code" : document ? "document" : "file" }}
-    style={{ width: 16, height: 18, alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-    {code || document ? <Text style={{ fontFamily: fontFamily.mono, fontSize: code ? 13 : 16, color: colors.ink3 }}>{glyph}</Text> :
-      <View style={{ width: 11, height: 14, borderWidth: 1, borderColor: colors.ink3, borderRadius: 2 }}>
-        <View style={{ position: "absolute", top: 3, right: 2, width: 4, borderTopWidth: 1, borderTopColor: colors.ink3 }} />
-      </View>}
-  </View>;
-  return <View aria-hidden={true} dataSet={{ fileIcon: directory ? "folder" : "file" }} style={{
-    width: 16, height: 12, marginTop: 3, flexShrink: 0,
-    borderWidth: 1.5, borderColor: colors.ink3, borderRadius: 3,
-  }}>{directory ? <View style={{ position: "absolute", top: -4, left: -1, width: 8, height: 4,
-    borderWidth: 1, borderBottomWidth: 0, borderColor: colors.ink3, borderTopLeftRadius: 2, borderTopRightRadius: 2 }} /> : null}</View>;
-}
-
-/** 只按可靠相对路径建目录；未知或根外路径保持独立，不猜测归属。 */
 function ChangeTree<T>({ items, pathOf, renderItem, prefix = "" }: {
   readonly items: readonly T[];
   readonly pathOf: (item: T) => string | null;
@@ -763,7 +773,7 @@ function ChangeTree<T>({ items, pathOf, renderItem, prefix = "" }: {
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
   const directories = new Map<string, T[]>();
   const leaves: T[] = [];
   for (const item of items) {
@@ -788,12 +798,11 @@ function ChangeTree<T>({ items, pathOf, renderItem, prefix = "" }: {
         label += "/" + next;
         path += next + "/";
       }
-      const open = !collapsed.has(path);
+      const open = opened.has(path);
       return <View key={path}>
         <Pressable role="button" aria-label={(open ? "收起目录 " : "展开目录 ") + label} aria-expanded={open}
           style={styles.directoryRow} dataSet={{ fileDirectoryRow: path, fileDirectoryExpanded: String(open) }}
-          onPress={() => setCollapsed(previous => { const next = new Set(previous); if (open) next.add(path); else next.delete(path); return next; })}>
-          <Text style={styles.chevron}>{open ? "▾" : "▸"}</Text><FileEntryIcon directory /><Text numberOfLines={1} style={styles.entryName}>{label}</Text>
+          onPress={() => setOpened(previous => { const next = new Set(previous); if (open) next.delete(path); else next.add(path); return next; })}><FileEntryIcon directory /><Text numberOfLines={1} style={[styles.entryName, styles.directoryName, open && {color:theme.colors.ink}]}>{label}</Text><Text style={{minWidth:18,textAlign:"right",fontFamily:fontFamily.mono,fontSize:11,color:theme.colors.ink3}}>{children.length}</Text>
         </Pressable>
         <View style={open ? styles.treeChildren : [styles.treeChildren, styles.hidden]}>
           <ChangeTree items={children} pathOf={pathOf} renderItem={renderItem} prefix={path} />

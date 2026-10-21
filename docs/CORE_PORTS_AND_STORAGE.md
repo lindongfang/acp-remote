@@ -251,12 +251,12 @@ pub enum UnavailableKind {
 | `FileReadPurpose` | enum `Preview｜Download`（wire `preview/download`） | 同上 |
 | `SessionFileChunk` | `{ path, kind, size_bytes, version, offset, data: Vec<u8>, eof, preview_truncated }`；`data.len() ≤ 32 KiB` 且 `offset + data.len() ≤ size_bytes` | 同上 |
 | `GitFileStatus` | enum `Added｜Modified｜Deleted｜Renamed｜Untracked`（wire `added/modified/deleted/renamed/untracked`） | 同上 |
-| `GitStatusEntry` | `{ path, status, previous_path: Option<SessionFilePath>, conflicted: bool, binary: bool }`；`previous_path` 只允许与 `Renamed` 同时出现 | 同上 |
+| `GitStatusEntry` | `{ path, status, previous_path: Option<SessionFilePath>, conflicted: bool, binary: bool, line_counts: Option<(u32, u32)> }`；`previous_path` 只允许与 `Renamed` 同时出现；`line_counts` 为相对 HEAD 的（新增行数，删除行数），空基准按全量新增，二进制/冲突/无法完整统计时为 `None` | 同上 |
 | `GitStatusPage` | `{ git_state: GitState, entries: Vec<GitStatusEntry>(≤128), next: Option<SessionPageToken> }` | 同上 |
 | `GitDiffBase` | enum `Head｜Empty`（无 HEAD 时为空基准） | 同上 |
 | `GitDiffKind` | enum `Text｜Binary｜Conflict` | 同上 |
 | `GitDiffUnavailableReason` | enum `NotRepository｜GitUnavailable｜TooLarge` | 同上 |
-| `GitDiff` | `{ path, base, kind, lines: Vec<String>, unavailable: Option<GitDiffUnavailableReason>, truncated: bool }`；`lines ≤ 400` 行、合计 ≤64 KiB、单行 ≤4096 字符；`unavailable.is_some()` 时 `lines` 必须为空 | 同上 |
+| `GitDiff` | `{ path, base, kind, lines: Vec<String>, unavailable: Option<GitDiffUnavailableReason>, truncated: bool, comparison: Option<(String, String)> }`；`lines ≤ 400` 行、合计 ≤64 KiB、单行 ≤4096 字符；`unavailable.is_some()` 时 `lines` 必须为空。`comparison` 为（HEAD 原文，工作文件原文），仅成功文本结果可附，每侧 UTF-8 ≤64 KiB，必须完整，空侧表示新增/删除，不持久化；`truncated` 只描述补丁行 | 同上 |
 
 固定 v1 常量（`SYNC_PROTOCOL.md` §14）：`SESSION_FILE_PAGE_LIMIT = 128`、`SESSION_FILE_PATH_MAX_CHARS = 4096`、`SESSION_FILE_CHUNK_MAX_BYTES = 32 KiB`、`SESSION_FILE_TEXT_PREVIEW_MAX_BYTES = 256 KiB`、`SESSION_FILE_IMAGE_PREVIEW_MAX_BYTES = 4 MiB`、`SESSION_FILE_DOWNLOAD_MAX_BYTES = 64 MiB`、`GIT_DIFF_MAX_LINES = 400`、`GIT_DIFF_MAX_BYTES = 64 KiB`、`GIT_DIFF_LINE_MAX_CHARS = 4096`。
 

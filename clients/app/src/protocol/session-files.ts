@@ -147,6 +147,8 @@ export interface GitStatusEntry {
   readonly previousPath?: SessionRelativePath;
   readonly conflicted: boolean;
   readonly binary: boolean;
+  readonly addedLines?: number;
+  readonly deletedLines?: number;
 }
 
 /** `$defs.sessionGitStatusResult`。 */
@@ -184,6 +186,7 @@ export interface SessionGitDiffResult {
   readonly diffLines?: readonly string[];
   readonly unavailable?: GitDiffUnavailableReason;
   readonly truncated: boolean;
+  readonly comparison?: {readonly before: string; readonly after: string};
 }
 
 export type SessionFilesCommand =
@@ -487,22 +490,31 @@ function decodeFileEntry(value: unknown): SessionFilesDecodeResult<SessionFileEn
 
 function decodeGitStatusEntry(value: unknown): SessionFilesDecodeResult<GitStatusEntry> {
   if (!isRecord(value)) return rejected("not_an_object", "git entry 不是对象");
-  const keyProblem = exactKeys(value, ["path", "status", "conflicted", "binary"], ["previousPath"]);
+  const keyProblem = exactKeys(value, ["path", "status", "conflicted", "binary"], ["previousPath", "addedLines", "deletedLines"]);
   if (keyProblem !== null) return keyRejected(keyProblem);
   if (!isSessionRelativePath(value["path"])) return rejected("invalid_path", "git 条目 path 不是根内相对路径");
   const status = enumValue(GIT_FILE_STATUSES, value["status"]);
   if (status === null) return rejected("invalid_enum", "git 条目 status 不在封闭词表内");
   if (typeof value["conflicted"] !== "boolean") return rejected("field_type", "conflicted 不是布尔");
   if (typeof value["binary"] !== "boolean") return rejected("field_type", "binary 不是布尔");
+  const addedLines = value["addedLines"];
+  const deletedLines = value["deletedLines"];
+  const validCount = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 4294967295;
+  if ((addedLines !== undefined || deletedLines !== undefined) &&
+      (!validCount(addedLines) || !validCount(deletedLines) || value["binary"] || value["conflicted"])) {
+    return rejected("field_type", "invalid Git line counts");
+  }
+  const counts = addedLines === undefined ? {} : { addedLines: addedLines as number, deletedLines: deletedLines as number };
   const previousPath = value["previousPath"];
   if (previousPath === undefined) {
-    return decoded({ path: value["path"], status, conflicted: value["conflicted"], binary: value["binary"] });
+    return decoded({ ...counts, path: value["path"], status, conflicted: value["conflicted"], binary: value["binary"] });
   }
   if (!isSessionRelativePath(previousPath)) return rejected("invalid_path", "previousPath 不是根内相对路径");
   return decoded({
     path: value["path"],
     status,
     previousPath,
+    ...counts,
     conflicted: value["conflicted"],
     binary: value["binary"],
   });
@@ -590,7 +602,7 @@ function decodeGitStatusResult(value: unknown): SessionFilesDecodeResult<Session
 
 function decodeGitDiffResult(value: unknown): SessionFilesDecodeResult<SessionGitDiffResult> {
   if (!isRecord(value)) return rejected("not_an_object", "git diff result 不是对象");
-  const keyProblem = exactKeys(value, ["path", "base", "kind", "truncated"], ["diffLines", "unavailable"]);
+  const keyProblem = exactKeys(value, ["path", "base", "kind", "truncated"], ["diffLines", "unavailable", "comparison"]);
   if (keyProblem !== null) return keyRejected(keyProblem);
   if (!isSessionRelativePath(value["path"])) return rejected("invalid_path", "结果 path 非法");
   const base = enumValue(GIT_DIFF_BASES, value["base"]);
@@ -621,11 +633,18 @@ function decodeGitDiffResult(value: unknown): SessionFilesDecodeResult<SessionGi
     if (reason === null) return rejected("invalid_enum", "unavailable 不在封闭词表内");
     unavailable = reason;
   }
+  const comparison = value["comparison"];
+  if (comparison !== undefined && (!isRecord(comparison) || exactKeys(comparison,["before","after"],[]) !== null ||
+      typeof comparison["before"] !== "string" || typeof comparison["after"] !== "string" ||
+      new TextEncoder().encode(comparison["before"]).length > 65536 || new TextEncoder().encode(comparison["after"]).length > 65536 || kind !== "text" || unavailable !== undefined)) {
+    return rejected("field_type", "invalid complete Git comparison");
+  }
   return decoded({
     path: value["path"],
     base,
     kind,
     truncated: value["truncated"],
+    ...(comparison === undefined ? {} : {comparison: comparison as {before:string;after:string}}),
     ...(diffLines === undefined ? {} : { diffLines }),
     ...(unavailable === undefined ? {} : { unavailable }),
   });

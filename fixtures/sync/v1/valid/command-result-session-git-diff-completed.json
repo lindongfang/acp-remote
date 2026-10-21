@@ -20,7 +20,11 @@
         "+    run();",
         " }"
       ],
-      "truncated": false
+      "truncated": false,
+      "comparison": {
+        "before": "fn main() {\n}\n",
+        "after": "fn main() {\n    run();\n}\n"
+      }
     },
     "error": null
   }

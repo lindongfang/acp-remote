@@ -404,7 +404,7 @@ describe("文件栏：全部文件分页与失败保留", () => {
 
     store.toggleHideIgnored(ONLINE_SESSION_ID);
     const toggled = lastCommand(gateway);
-    expect(toggled.body.command === "session.files.list" ? toggled.body.payload.hideIgnored : null).toBe(true);
+    expect(toggled.body.command === "session.files.list" ? toggled.body.payload.hideIgnored : null).toBe(false);
   });
 });
 
@@ -701,7 +701,7 @@ describe("文件栏：层级浏览首屏入口", () => {
     const firstPage = lastCommand(gateway);
     if (firstPage.body.command !== "session.files.list") throw new Error("不是 session.files.list");
     expect(firstPage.body.payload.path).toBe("src");
-    expect(firstPage.body.payload.hideIgnored).toBe(false);
+    expect(firstPage.body.payload.hideIgnored).toBe(true);
     expect(firstPage.body.payload.after).toBeUndefined();
     expect(store.sessionFilesPage(ONLINE_SESSION_ID).all.directories.get("src")?.loading).toBe(true);
 

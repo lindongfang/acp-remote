@@ -580,10 +580,11 @@ pub async fn session_git_status(
         )
         .await
         .map_err(|error| port_rejection(&error))?;
-    let result = wire_git_status_page(&page).ok_or(Rejection::Code(
-        ErrorCode::InternalUnavailable,
-        "a git status entry cannot be projected",
-    ))?;
+    let result = wire_git_status_page(&page, features.contains("core.session-git-stats.v1"))
+        .ok_or(Rejection::Code(
+            ErrorCode::InternalUnavailable,
+            "a git status entry cannot be projected",
+        ))?;
     Ok(CommandResultPayload::SessionGitStatus(result))
 }
 
@@ -601,10 +602,13 @@ pub async fn session_git_diff(
         .session_git_diff(actor, &session, payload.path.as_str())
         .await
         .map_err(|error| port_rejection(&error))?;
-    let result = wire_git_diff(&diff).ok_or(Rejection::Code(
+    let mut result = wire_git_diff(&diff).ok_or(Rejection::Code(
         ErrorCode::InternalUnavailable,
         "a git diff cannot be projected",
     ))?;
+    if !features.contains("core.session-git-compare.v1") {
+        result.comparison = None;
+    }
     Ok(CommandResultPayload::SessionGitDiff(result))
 }
 
@@ -677,7 +681,10 @@ pub(super) fn wire_session_file_chunk(chunk: &SessionFileChunk) -> Option<Sessio
 }
 
 /// core 的 Git 状态页 → wire `sessionGitStatusResult`。
-fn wire_git_status_page(page: &GitStatusPage) -> Option<SessionGitStatusResult> {
+fn wire_git_status_page(
+    page: &GitStatusPage,
+    include_counts: bool,
+) -> Option<SessionGitStatusResult> {
     let entries = page
         .entries()
         .iter()
@@ -697,6 +704,14 @@ fn wire_git_status_page(page: &GitStatusPage) -> Option<SessionGitStatusResult> 
                 },
                 conflicted: entry.conflicted(),
                 binary: entry.binary(),
+                added_lines: entry
+                    .line_counts()
+                    .filter(|_| include_counts)
+                    .map(|counts| counts.0),
+                deleted_lines: entry
+                    .line_counts()
+                    .filter(|_| include_counts)
+                    .map(|counts| counts.1),
             })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -733,6 +748,13 @@ fn wire_git_diff(diff: &CoreGitDiff) -> Option<SessionGitDiffResult> {
             CoreGitDiffKind::Text => WireGitDiffKind::Text,
             CoreGitDiffKind::Binary => WireGitDiffKind::Binary,
             CoreGitDiffKind::Conflict => WireGitDiffKind::Conflict,
+        },
+        comparison: match diff.comparison() {
+            Some((before, after)) => Some(sync_protocol::command::GitFileComparison {
+                before: Text::<65536>::parse(before).ok()?,
+                after: Text::<65536>::parse(after).ok()?,
+            }),
+            None => None,
         },
         diff_lines,
         unavailable: diff.unavailable().map(|reason| match reason {
@@ -1044,6 +1066,21 @@ mod tests {
         assert!(!wire.preview_truncated);
     }
 
+    #[test]
+    fn git_line_counts_require_negotiated_feature() {
+        let entry =
+            CoreStatusEntry::try_new(path("a.rs"), CoreStatus::Modified, None, false, false)
+                .expect("entry")
+                .with_line_counts(Some((12, 3)));
+        let page = CoreStatusPage::try_new(CoreState::Available, vec![entry], None).expect("page");
+        let old = wire_git_status_page(&page, false).expect("old client");
+        assert_eq!(old.entries[0].added_lines, None);
+        assert_eq!(old.entries[0].deleted_lines, None);
+        let new = wire_git_status_page(&page, true).expect("new client");
+        assert_eq!(new.entries[0].added_lines, Some(12));
+        assert_eq!(new.entries[0].deleted_lines, Some(3));
+    }
+
     /// `session.git.status`：改名带旧路径，冲突/二进制是显式标记；非仓库是成功结果里的状态。
     #[test]
     fn git_status_page_projects_explicit_states() {
@@ -1058,7 +1095,7 @@ mod tests {
             .expect("entry"),
         ];
         let page = CoreStatusPage::try_new(CoreState::NotRepository, entries, None).expect("page");
-        let wire = wire_git_status_page(&page).expect("projection");
+        let wire = wire_git_status_page(&page, false).expect("projection");
         assert_eq!(
             serde_json::to_value(&wire).expect("json"),
             serde_json::json!({

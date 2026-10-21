@@ -17,14 +17,18 @@
           "path": "src/main.rs",
           "status": "modified",
           "conflicted": false,
-          "binary": false
+          "binary": false,
+          "addedLines": 12,
+          "deletedLines": 3
         },
         {
           "path": "src/renamed.rs",
           "status": "renamed",
           "previousPath": "src/old.rs",
           "conflicted": false,
-          "binary": false
+          "binary": false,
+          "addedLines": 0,
+          "deletedLines": 0
         },
         {
           "path": "assets/logo.bin",

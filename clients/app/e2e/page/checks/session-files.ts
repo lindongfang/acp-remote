@@ -282,7 +282,7 @@ const checks: readonly Check[] = [
           await waitFor(() => commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.files.list") !== null,
             "点击刷新真正发出目录查询");
           const body = commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.files.list");
-          expectEqual(body?.["payload"], { path: "", hideIgnored: false }, "刷新只读根目录，不重载聊天消息");
+          expectEqual(body?.["payload"], { path: "", hideIgnored: true }, "刷新只读根目录，不重载聊天消息");
           expectEqual(
             commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.read"),
             null,
@@ -368,14 +368,7 @@ const checks: readonly Check[] = [
           const container = mounted.container;
           await selectSource(container, "git");
           await waitFor(() => query(container, '[data-git-entry="src/app.ts"]') !== null, "Git 状态加载");
-          expectThat(
-            textOf(query(container, "[data-git-scope-notice]")).includes("整个会话工作目录"),
-            "Git 范围必须说明是整个工作目录",
-          );
-          expectThat(
-            textOf(query(container, "[data-git-scope-notice]")).includes("人工或其他会话"),
-            "Git 范围必须说明可能包含人工与其他会话的修改",
-          );
+          expectEqual(query(container, "[data-git-scope-notice]"), null, "Git 顶部不显示额外范围说明");
           expectEqual(
             query(container, '[data-git-entry="src/app.ts"]')?.getAttribute("data-git-status"),
             "modified",
@@ -391,18 +384,19 @@ const checks: readonly Check[] = [
           );
           click(query(container, '[data-action="open-git-file"][data-file-path="src/app.ts"]'), "打开 Git 差异");
           await waitFor(() => query(container, '[data-file-view-content="git_diff"]') !== null, "差异查看器");
+          await waitFor(() => query(container, '[data-git-change-marker]') !== null, "原生文件容器右侧显示改动标记");
           expectEqual(
-            queryAll(container, "[data-git-diff-hunk]").filter((node) => node.getAttribute("data-git-diff-hunk") === "true").length,
-            1,
-            "hunk 头保留且只出现一次",
+            queryAll(container, "[data-comparison-horizontal-scroll]").length,
+            2,
+            "固定双栏各有独立横向正文滚动区域",
           );
           expectEqual(
-            queryAll(container, '[data-git-diff-line-kind="added"]').length,
+            queryAll(container, '[data-comparison-side="after"][data-comparison-changed="true"]').length,
             1,
             "新增行逐行呈现",
           );
           expectEqual(
-            queryAll(container, '[data-git-diff-line-kind="deleted"]').length,
+            queryAll(container, '[data-comparison-side="before"][data-comparison-changed="true"]').length,
             1,
             "删除行逐行呈现",
           );
@@ -413,7 +407,7 @@ const checks: readonly Check[] = [
           click(query(container, '[data-action="open-git-file"][data-file-path="src/old.ts"]'), "打开已删除文件的差异");
           await waitFor(() => query(container, '[data-file-view-content="git_diff"]') !== null, "删除文件差异查看器");
           expectThat(
-            queryAll(container, '[data-git-diff-line-kind="deleted"]').length >= 1,
+            queryAll(container, '[data-comparison-side="before"][data-comparison-changed="true"]').length >= 1,
             "删除文件必须呈现删除行",
           );
           click(query(container, '[data-action="close-file-view"]'), "关闭删除文件差异");

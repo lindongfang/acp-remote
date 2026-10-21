@@ -85,6 +85,18 @@
           "required": false
         },
         {
+          "id": "core.session-git-stats.v1",
+          "description": "Optional addedLines/deletedLines on session.git.status entries; requires core.session-files.v1.",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.session-git-compare.v1",
+          "description": "Complete bounded HEAD/worktree text in session.git.diff comparison; requires core.session-files.v1.",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
           "id": "core.attachment-transfer.v1",
           "description": "独立已认证附件 WSS 连接（§3.4）：`attachment.begin`/`chunk`/`chunk_ack`/`seal`/`sealed`/`status`/`abort`/`read`/`read_chunk`/`manifest_begin`/`manifest_page`/`manifest_sealed`/`error` 帧族；32 KiB 单块、十进制字符串偏移、每传输一块未确认、单设备 2/单节点 8 个活动传输；未协商时新帧族与 `attachment_ref` 必须缺席",
           "delivery": "mvp",

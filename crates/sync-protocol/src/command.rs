@@ -812,7 +812,7 @@ pub struct SessionGitStatus {
 }
 
 /// `gitStatusEntry`：相对 HEAD 与工作树合并后的一个文件。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GitStatusEntry {
     pub path: SessionRelativePath,
@@ -826,6 +826,68 @@ pub struct GitStatusEntry {
     pub previous_path: Option<SessionRelativePath>,
     pub conflicted: bool,
     pub binary: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub added_lines: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub deleted_lines: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GitStatusEntryFields {
+    pub path: SessionRelativePath,
+    pub status: GitFileStatus,
+    #[serde(
+        rename = "previousPath",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub previous_path: Option<SessionRelativePath>,
+    pub conflicted: bool,
+    pub binary: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub added_lines: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub deleted_lines: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for GitStatusEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let fields = GitStatusEntryFields::deserialize(deserializer)?;
+        if fields.added_lines.is_some() != fields.deleted_lines.is_some()
+            || ((fields.binary || fields.conflicted) && fields.added_lines.is_some())
+        {
+            return Err(D::Error::custom(
+                "Git line counts must be paired and describe non-conflicting text",
+            ));
+        }
+        Ok(Self {
+            path: fields.path,
+            status: fields.status,
+            previous_path: fields.previous_path,
+            conflicted: fields.conflicted,
+            binary: fields.binary,
+            added_lines: fields.added_lines,
+            deleted_lines: fields.deleted_lines,
+        })
+    }
 }
 
 /// `sessionGitStatusResult`：`session.git.status` 的 completed 结果。
@@ -849,6 +911,14 @@ pub struct SessionGitDiff {
     pub path: SessionRelativePath,
 }
 
+/// Complete before/after text; empty sides represent additions/deletions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitFileComparison {
+    pub before: Text<65536>,
+    pub after: Text<65536>,
+}
+
 /// `sessionGitDiffResult`：`session.git.diff` 的 completed 结果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -870,6 +940,12 @@ pub struct SessionGitDiffResult {
     )]
     pub unavailable: Option<GitDiffUnavailableReason>,
     pub truncated: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub comparison: Option<GitFileComparison>,
 }
 
 /// `sessionCreate`（`command.schema.json#/$defs/sessionCreate`）的 `payload`。
