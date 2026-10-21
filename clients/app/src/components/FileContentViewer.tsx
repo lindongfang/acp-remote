@@ -657,7 +657,6 @@ export function FileContentViewer({
 
       {content.status === "loading" ? (
         <View style={styles.body} dataSet={{ fileViewLoading: "true" }}>
-          <Text style={styles.note}>正在读取文件…</Text>
         </View>
       ) : null}
 

@@ -66,6 +66,8 @@ export const Pressable: typeof ReactNative.Pressable = ReactNativeWeb.Pressable;
 export const ScrollView: typeof ReactNative.ScrollView = ReactNativeWeb.ScrollView;
 export const TextInput: typeof ReactNative.TextInput = ReactNativeWeb.TextInput;
 export const StyleSheet: typeof ReactNative.StyleSheet = ReactNativeWeb.StyleSheet;
+export const Animated: typeof ReactNative.Animated = ReactNativeWeb.Animated;
+export const Easing: typeof ReactNative.Easing = ReactNativeWeb.Easing;
 export const useWindowDimensions: typeof ReactNative.useWindowDimensions =
   ReactNativeWeb.useWindowDimensions;
 

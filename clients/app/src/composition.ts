@@ -1605,6 +1605,7 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
       // 连接层会立即补发一条 ping，并从那一刻重新获得完整宽限。
       if (event.kind === "visibility") {
         sync?.setProbeVisible(event.state === "visible");
+        if (event.state === "visible") store.refreshActiveSessionFiles();
         return;
       }
       // `pagehide` 断开连接：未完成的暂存快照随之丢弃（§9.4），恢复路径交给下次连接；

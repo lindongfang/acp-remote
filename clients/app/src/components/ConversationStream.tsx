@@ -203,6 +203,7 @@ export interface ConversationStreamProps {
   readonly onSelectFileSource?: ((source: FileSource) => void) | undefined;
   /** 手动刷新当前来源。 */
   readonly onRefreshFiles?: (() => void) | undefined;
+  readonly onExpandedFileDirectoriesChange?: ((paths: readonly string[]) => void) | undefined;
   /** 切换「隐藏忽略文件」。 */
   readonly onToggleHideIgnored?: (() => void) | undefined;
   /** 展开/分页加载某一层目录。 */
@@ -966,7 +967,7 @@ function PagingButton({
   marker,
   action,
   label,
-  disabled,
+  disabled: requestedDisabled,
   loading,
   onPress,
 }: {
@@ -980,6 +981,7 @@ function PagingButton({
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
+  const disabled = requestedDisabled || loading;
   return (
     <Pressable
       role="button"
@@ -991,7 +993,7 @@ function PagingButton({
       }}
     >
       <Text style={disabled ? [styles.pagingText, styles.pagingTextDisabled] : styles.pagingText}>
-        {loading ? "正在加载……" : label}
+        {label}
       </Text>
     </Pressable>
   );
@@ -1111,13 +1113,6 @@ function Sidebar({
   return (
     <View style={styles.sidebar} dataSet={{ conversationSidebar: "true" }}>
       <View style={styles.sidebarFixed} dataSet={{sidebarRegion:"header"}}>
-      {/* 没有目录归属：说明它，而不是把左栏藏起来（中栏照常呈现）。 */}
-      {model.notice === null ? null : (
-        <Text style={styles.note} dataSet={{ sidebarNotice: "no_directory" }}>
-          {model.notice}
-        </Text>
-      )}
-
       {directory === null ? null : (
         <View style={styles.sidebarHead} dataSet={{ sidebarDirectory: directory.directoryId }}>
           {/* 返回目录列表，目录名独占下一行。 */}
@@ -1299,6 +1294,7 @@ export function ConversationStream({
   filesPanel,
   onSelectFileSource,
   onRefreshFiles,
+  onExpandedFileDirectoriesChange,
   onToggleHideIgnored,
   onLoadMoreAllFiles,
   onLoadMoreGitChanges,
@@ -2022,9 +2018,7 @@ export function ConversationStream({
             <View style={styles.columnScroll}>
               {activeFilesPanel === null ? (
                 <ScrollView style={styles.columnScroll} dataSet={{conversationScroll:"files"}}>
-                <Text style={styles.note} dataSet={{ filesPanelUnavailable: "true" }}>
-                  文件栏尚未接入文件查询；会话改动只在对话时间线呈现。
-                </Text>
+                <View dataSet={{ filesPanelUnavailable: "true" }} />
                 </ScrollView>
               ) : (
                 <SessionFilesPanel
@@ -2036,6 +2030,7 @@ export function ConversationStream({
                   }}
                   onSelectSource={onSelectFileSource}
                   onRefresh={onRefreshFiles}
+                  onExpandedDirectoriesChange={onExpandedFileDirectoriesChange}
                   onToggleHideIgnored={onToggleHideIgnored}
                   onLoadMoreAllFiles={onLoadMoreAllFiles}
                   onLoadMoreGitChanges={onLoadMoreGitChanges}

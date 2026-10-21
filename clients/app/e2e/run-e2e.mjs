@@ -330,12 +330,13 @@ function connectCdp(webSocketDebuggerUrl) {
           params: { expression, awaitPromise: true, returnByValue: true },
         }),
       );
+      let timeout;
       return Promise.race([
         promise,
         new Promise((_resolveTimeout, rejectTimeout) =>
-          setTimeout(() => rejectTimeout(new Error("CDP 求值超时")), 180_000),
+          timeout = setTimeout(() => rejectTimeout(new Error("CDP 求值超时")), 180_000),
         ),
-      ]);
+      ]).finally(() => clearTimeout(timeout));
     },
   };
 }
@@ -467,7 +468,7 @@ async function main() {
                   "bundle 已执行，但 window.__pageErrors 不是数组（实际 " +
                   String(window.__pageErrors) + "）。");
               }
-              return await window.__tp4.runChecks();
+              return await window.__tp4.runChecks(${JSON.stringify(process.env.E2E_CHECK_PREFIX ?? "")});
             }
             if (Date.now() >= deadline) break;
             await new Promise((r) => setTimeout(r, ${READY_POLL_INTERVAL_MS}));

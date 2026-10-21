@@ -158,7 +158,18 @@ export default function SessionRoute(): ReactElement {
   if (store === null || state === null || sessionId === null) return <RuntimeUnavailable route="session" />;
 
   const model = store.conversationPage(sessionId);
+  const thread = state.threads.get(sessionId);
+  const remote = state.remoteSessions.get(sessionId);
+  // 摘要先于正文到达时，不展示尚未就绪的会话头、分页与配置占位文案。
+  // 首次读取失败仍交给正常页面呈现错误，不能一直留在空白等待态。
+  if (model !== null && thread?.page == null && thread?.pagingError == null && remote?.error == null &&
+      remote?.sourceState !== "offline" && remote?.sourceState !== "revoked") {
+    return <View style={theme.dark ? STYLES.dark.page : STYLES.light.page} />;
+  }
   if (model === null) {
+    if (state.resources === null) {
+      return <View style={theme.dark ? STYLES.dark.page : STYLES.light.page} />;
+    }
     return (
       <View role="main" style={theme.dark ? STYLES.dark.page : STYLES.light.page}>
         <section data-route="session" data-session-id={sessionId} data-session-state="unknown">
@@ -300,6 +311,9 @@ export default function SessionRoute(): ReactElement {
         }}
         onRefreshFiles={() => {
           store.refreshFiles(sessionId);
+        }}
+        onExpandedFileDirectoriesChange={(paths) => {
+          store.setExpandedFileDirectories(sessionId, paths);
         }}
         onToggleHideIgnored={() => {
           store.toggleHideIgnored(sessionId);

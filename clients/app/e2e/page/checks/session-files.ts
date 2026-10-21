@@ -278,10 +278,24 @@ const checks: readonly Check[] = [
           await waitFor(() => query(container, '[data-action="refresh-files"][data-refresh-disabled="false"]') !== null,
             "目录加载完成后刷新可点击");
           const sentBefore = mounted.host?.sent.length ?? 0;
+          mounted.host?.holdCommand("session.files.list");
           click(query(container, '[data-action="refresh-files"]'), "刷新全部文件");
           await waitFor(() => commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.files.list") !== null,
             "点击刷新真正发出目录查询");
           const body = commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.files.list");
+          await waitFor(() => query(container, '[data-refresh-feedback="loading"]') !== null, "刷新按钮忙碌高亮");
+          expectEqual(query(container, '[data-action="refresh-files"]')?.getAttribute("aria-disabled"), "true", "刷新期间禁重复点击");
+          expectThat(query(container, '[data-file-entry="README.md"]') !== null, "刷新期间保留旧列表");
+          mounted.host?.releaseHeldCommand("session.files.list");
+          mounted.host?.completeHeldCommand("session.files.list", { result: filesResult("session.files.list", SESSION_ALPHA, { path: "", hideIgnored: true }) });
+          await waitFor(() => query(container, '[data-refresh-feedback="success"]') !== null, "全部成功显示勾号");
+          const visibleBefore = mounted.host?.sent.length ?? 0;
+          mounted.host?.holdCommand("session.files.list");
+          document.dispatchEvent(new Event("visibilitychange"));
+          await waitFor(() => commandBody(mounted.host?.sent.slice(visibleBefore) ?? [], "session.files.list") !== null,
+            "平台前台恢复事件接线触发文件刷新");
+          mounted.host?.releaseHeldCommand("session.files.list");
+          mounted.host?.completeHeldCommand("session.files.list", { result: filesResult("session.files.list", SESSION_ALPHA, { path: "", hideIgnored: true }) });
           expectEqual(body?.["payload"], { path: "", hideIgnored: true }, "刷新只读根目录，不重载聊天消息");
           expectEqual(
             commandBody(mounted.host?.sent.slice(sentBefore) ?? [], "session.read"),
@@ -424,8 +438,8 @@ const checks: readonly Check[] = [
           await selectSource(container, "git");
           await waitFor(() => query(container, '[data-git-state="not_repository"]') !== null, "非仓库说明");
           expectThat(
-            textOf(query(container, '[data-git-state="not_repository"]')).includes("此目录不是 Git 仓库"),
-            "非仓库必须显示明确文案",
+            query(container, '[data-git-state="not_repository"]')?.getAttribute("aria-label") === "此目录不是 Git 仓库",
+            "非仓库保留明确状态标签，不显示说明段落",
           );
           expectEqual(
             query(container, '[data-file-source-option="git"]')?.getAttribute("data-file-source-selected"),
@@ -665,6 +679,11 @@ const checks: readonly Check[] = [
           // Git 来源同样在关闭后把焦点还给触发行。
           await selectSource(container, "git");
           await waitFor(() => query(container, '[data-git-entry="src/app.ts"]') !== null, "Git 行加载");
+          const gitDirectory = query(container, '[data-git-changes] [data-file-directory-row="src/"]');
+          if (gitDirectory?.getAttribute("aria-expanded") !== "true") {
+            click(gitDirectory, "展开 Git 文件所在目录");
+            await waitFor(() => gitDirectory?.getAttribute("aria-expanded") === "true", "Git 文件行实际可见");
+          }
           click(query(container, '[data-action="open-git-file"][data-file-path="src/app.ts"]'), "从 Git 打开");
           await waitFor(() => query(container, '[data-file-view-content="git_diff"]') !== null, "Git 差异查看器");
           click(query(container, '[data-action="close-file-view"]'), "关闭 Git 差异");

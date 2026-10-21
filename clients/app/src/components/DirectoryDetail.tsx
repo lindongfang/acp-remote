@@ -342,9 +342,7 @@ export function DirectoryDetail({
     return (
       <View style={styles.root} dataSet={{ route: "dir-detail" }}>
         {back}
-        <Text style={styles.waiting} dataSet={{ directoryDetailState: "loading" }}>
-          尚未收到第一份快照，正在等待同步……
-        </Text>
+        <View dataSet={{ directoryDetailState: "loading" }} />
       </View>
     );
   }

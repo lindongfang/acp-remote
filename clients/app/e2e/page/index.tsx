@@ -98,8 +98,8 @@ const ALL_CHECKS = [
 
 declare global {
   interface Window {
-    __tp4: { readonly runChecks: () => Promise<CheckResult[]> };
+    __tp4: { readonly runChecks: (namePrefix?: string) => Promise<CheckResult[]> };
   }
 }
 
-window.__tp4 = { runChecks: () => runChecks(ALL_CHECKS) };
+window.__tp4 = { runChecks: (namePrefix = "") => runChecks(ALL_CHECKS.filter(check => check.name.startsWith(namePrefix))) };

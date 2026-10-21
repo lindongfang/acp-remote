@@ -664,14 +664,15 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
     expect(midBefore).toContain('data-timeline="entries"');
   });
 
-  it("没有目录归属时说明它，而不是隐藏左栏；中栏照常", () => {
+  it.each([null, "99999999-9999-4999-8999-999999999999"])("目录上下文不可用时左栏留空，不显示说明；中栏照常（%s）", (directoryId) => {
     const { store } = onlineStore({
-      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, title: "没有目录", directoryId: null })] }),
+      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, title: "没有目录", directoryId })] }),
     });
     const html = renderPage(pageOf(store));
 
-    expect(html).toContain('data-sidebar-notice="no_directory"');
-    expect(html).toContain("没有目录归属");
+    expect(html).not.toContain('data-sidebar-notice="no_directory"');
+    expect(html).not.toContain("没有目录归属");
+    expect(html).not.toContain("列不出目录上下文");
     expect(html).not.toContain("data-sidebar-directory=");
     expect(html).not.toContain('data-action="create-session-in-directory"');
     expect(html).toContain('data-conversation-column="timeline"');

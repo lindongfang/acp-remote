@@ -15,7 +15,7 @@
  * ## 刷新协调
  *
  * 进入来源视图、用户手动刷新、当前会话 `file.changed` 三类触发都在 `ClientStore` 里收敛：
- * 突发事件先合并到一个短退避定时器，限流错误按 `retryAfterMs` 再退避；失败只记 `error`，
+ * 进入、切换、手动、重连和恢复前台触发读取；限流错误按 `retryAfterMs` 退避；失败只记 `error`，
  * 不清空已成功加载的条目。这里不装任何磁盘 watcher，也不把正文写进持久缓存。
  *
  * ## 不拥有上层状态
@@ -53,8 +53,6 @@ export const FILE_PREVIEW_BUDGET_BYTES = 256 * 1024;
  */
 export const FILE_IMAGE_PREVIEW_BUDGET_BYTES = 4 * 1024 * 1024;
 
-/** 突发事件合并窗口：窗口内的多次 `file.changed` 只触发一次来源刷新。 */
-export const FILE_REFRESH_DEBOUNCE_MS = 150;
 
 /** 限流退避上限：服务端给出的 `retryAfterMs` 超过它时按上限等待，避免无限期沉默。 */
 export const FILE_REFRESH_MAX_RETRY_MS = 30_000;
@@ -142,6 +140,7 @@ export type FileContentState =
 
 /** 文件栏状态。 */
 export interface SessionFilesState {
+  readonly refreshResults?: ReadonlyMap<string, { readonly id: number; readonly outcome: "success" | "failed" }>;
   readonly selectedSources: ReadonlyMap<Uuid, FileSource>;
   readonly sources: ReadonlyMap<Uuid, SessionFilesSourcesState>;
   readonly content: FileContentState;
@@ -199,6 +198,7 @@ export function sourceUnsupportedNotice(reason: FileSourceUnsupportedReason | nu
 
 /** 文件栏 view model（组件消费的唯一形状）。 */
 export interface SessionFilesPanelModel {
+  readonly refreshResult?: { readonly id: number; readonly outcome: "success" | "failed" } | undefined;
   readonly refreshState: { readonly kind: "available" | "loading" } | { readonly kind: "unavailable"; readonly reason: string };
   readonly sessionId: Uuid;
   readonly selectedSource: FileSource;
@@ -226,6 +226,7 @@ export function buildSessionFilesPanelModel(input: {
     : [...sources.all.directories.values()].some(directory => directory.loading);
   return {
     refreshState: unavailable !== null ? { kind: "unavailable", reason: unavailable } : { kind: loading ? "loading" : "available" },
+    refreshResult: input.state.refreshResults?.get(`${input.sessionId}|${selectedSource}`),
     sessionId: input.sessionId,
     selectedSource,
     all: sources.all,

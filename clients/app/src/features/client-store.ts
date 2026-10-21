@@ -138,7 +138,6 @@ import {
 import {
   FILE_IMAGE_PREVIEW_BUDGET_BYTES,
   FILE_PREVIEW_BUDGET_BYTES,
-  FILE_REFRESH_DEBOUNCE_MS,
   FILE_REFRESH_MAX_RETRY_MS,
   buildSessionFilesPanelModel,
   emptyAllFilesDirectory,
@@ -1312,6 +1311,7 @@ export interface ClientStoreOptions {
 
 /** 一条在途的文件栏查询（请求代次与返回上下文在结果到达时逐项核对）。 */
 interface PendingFileQuery {
+  readonly refreshId?: number;
   readonly requestId: Uuid;
   readonly kind: "list" | "read" | "git_status" | "git_diff";
   readonly sessionId: Uuid;
@@ -1370,6 +1370,10 @@ export class ClientStore {
   readonly #schedule: ((delayMs: number, task: () => void) => () => void) | null;
   /** 在途的文件栏查询（含请求代次与返回上下文）。 */
   readonly #pendingFileQueries = new Map<Uuid, PendingFileQuery>();
+  readonly #expandedFileDirectories = new Map<Uuid, readonly string[]>();
+  readonly #fileRefreshRounds = new Map<string, { id: number; remaining: number; failed: boolean }>();
+  #fileRefreshId = 0;
+  #activeFileRefreshNeeded = false;
   /** 突发事件合并/限流退避定时器；键为 `<sessionId>|<source>`。 */
   readonly #fileRefreshTimers = new Map<string, () => void>();
   /** 已排队但在飞的刷新：一次只允许一个同来源查询。 */
@@ -1475,6 +1479,7 @@ export class ClientStore {
    * `resources`——§9.4 要求验证失败时保留上一次已完成的状态。
    */
   apply(event: SyncClientEvent): void {
+    const wasOnline = this.#state.connection.state === "online";
     // 新连接上的结果查询重新计数：同一条标题命令每次重连后都会再查一次原请求。
     if (event.kind === "authenticated") this.#titleStatusQueries.clear();
     const reduced = this.#reduce(event);
@@ -1489,6 +1494,10 @@ export class ClientStore {
     const settled = this.#settleTitleCommits(next);
     if (settled === this.#state) return;
     this.#commit(settled);
+    if (!wasOnline && this.#state.connection.state === "online" && this.#activeConversationSession !== null) {
+      this.#activeFileRefreshNeeded = true;
+    }
+    this.#drainActiveFileRefresh();
     this.#drainQueuedFileRefreshes();
     this.#drainQueuedMessageRefreshes();
     if (event.kind === "authenticated") {
@@ -1899,7 +1908,7 @@ export class ClientStore {
     // 6) 消息通道：流式增量累加成**易失**正文，完成标记只改「增量流结束」，压缩事件作废轮次。
     next = this.#withMessageLane(next, record);
 
-    // 7) 文件栏：当前会话的 `file.changed` 只触发来源刷新与「过时」标记，不取消 Agent，
+    // 7) 文件栏：当前会话的 `file.changed` 只触发正文「过时」标记，不取消 Agent，
     //    也不擅自用新内容覆盖正在阅读的视图（design D6）。
     if (record.eventType === "file.changed" && record.sessionId !== null) {
       next = this.#withFileChangedEvent(next, record);
@@ -4083,6 +4092,13 @@ export class ClientStore {
    * 可归因原会话的提示，不跳回、不恢复草稿。切回原会话时总是只读当前标题。
    */
   leaveConversationSession(sessionId: Uuid): void {
+    if (this.#activeConversationSession === sessionId) {
+      const remote = remoteRefOf(this.#state, sessionId);
+      if (remote !== null) this.#sync.unsubscribeRemote(remote);
+      this.#activeConversationSession = null;
+      this.#activeFileRefreshNeeded = false;
+      this.#expandedFileDirectories.delete(sessionId);
+    }
     const editor = this.#state.titleEditor;
     if (editor.sessionId !== sessionId) return;
     if (editor.phase === "editing" || editor.phase === "editing-error") {
@@ -4570,6 +4586,8 @@ export class ClientStore {
     if (this.#activeConversationSession === sessionId) return;
     const previous = this.#activeConversationSession;
     this.#activeConversationSession = sessionId;
+    this.#activeFileRefreshNeeded = true;
+    this.#drainActiveFileRefresh();
     const content = this.#state.sessionFiles.content;
     if (content.kind === "file" && content.context.sessionId !== sessionId) {
       const generation = this.#state.sessionFiles.generation + 1;
@@ -4600,6 +4618,24 @@ export class ClientStore {
   }
 
   /** 手动刷新当前来源：只发对应来源的目录/Git 查询。 */
+  setExpandedFileDirectories(sessionId: Uuid, paths: readonly string[]): void {
+    this.#expandedFileDirectories.set(sessionId, [...new Set(paths)]);
+  }
+
+  /** 由平台生命周期端口通知恢复前台，不直接依赖 document/window。 */
+  refreshActiveSessionFiles(): void {
+    this.#activeFileRefreshNeeded = true;
+    this.#drainActiveFileRefresh();
+  }
+
+  #drainActiveFileRefresh(): void {
+    const sessionId = this.#activeConversationSession;
+    if (!this.#activeFileRefreshNeeded || sessionId === null || this.#state.connection.state !== "online" ||
+        this.#state.resources === null || this.#findSession(sessionId) === undefined) return;
+    this.#activeFileRefreshNeeded = false;
+    this.refreshFiles(sessionId);
+  }
+
   refreshFiles(sessionId: Uuid): void {
     this.#activeConversationSession = sessionId;
     const source = selectedSourceOf(this.#state.sessionFiles, sessionId);
@@ -4624,6 +4660,7 @@ export class ClientStore {
    * 没有下一页（含已到末尾）才不派发。`after: undefined` 即第一页。
    */
   loadMoreAllFiles(sessionId: Uuid, path: string): void {
+    if (this.#fileRefreshRounds.has(this.#fileKey(sessionId, "all"))) return;
     // 旧主机/远程导入会话没有本机目录可枚举：即使调用方拿到一个路径也不派发。
     if (this.#fileSourceUnsupported(sessionId) !== null) return;
     const directory = sourcesOf(this.#state.sessionFiles, sessionId).all.directories.get(path);
@@ -4637,6 +4674,7 @@ export class ClientStore {
 
   /** 继续加载「Git 变更」的下一页。 */
   loadMoreGitChanges(sessionId: Uuid): void {
+    if (this.#fileRefreshRounds.has(this.#fileKey(sessionId, "git"))) return;
     const git = sourcesOf(this.#state.sessionFiles, sessionId).git;
     if (git.unsupported !== null || git.next === null || git.loading) return;
     this.#dispatchGitStatus(sessionId, git.next, true);
@@ -5048,6 +5086,7 @@ export class ClientStore {
 
   /** 丢弃某个来源的在途列表/状态查询（过滤口径或可用性变化后旧结果不再有效）。 */
   #dropPendingSourceQueries(sessionId: Uuid, source: FileSource): void {
+    this.#fileRefreshRounds.delete(this.#fileKey(sessionId, source));
     for (const [requestId, pending] of this.#pendingFileQueries) {
       if (pending.sessionId !== sessionId || pending.source !== source) continue;
       if (pending.kind === "list" || pending.kind === "git_status") {
@@ -5064,6 +5103,7 @@ export class ClientStore {
    */
   #resetFileQueries(): void {
     this.#pendingFileQueries.clear();
+    this.#fileRefreshRounds.clear();
     for (const cancel of this.#fileRefreshTimers.values()) cancel();
     this.#fileRefreshTimers.clear();
     this.#fileRefreshQueued.clear();
@@ -5167,8 +5207,12 @@ export class ClientStore {
       return;
     }
     if (source === "all") {
-      this.#dispatchAllFilesPage(sessionId, "", undefined, false);
+      const paths = ["", ...(this.#expandedFileDirectories.get(sessionId) ?? [])
+        .filter(path => path !== "" && sources.all.directories.has(path))];
+      this.#fileRefreshRounds.set(key, { id: ++this.#fileRefreshId, remaining: paths.length, failed: false });
+      for (const path of paths) this.#dispatchAllFilesPage(sessionId, path, undefined, false);
     } else {
+      this.#fileRefreshRounds.set(key, { id: ++this.#fileRefreshId, remaining: 1, failed: false });
       this.#dispatchGitStatus(sessionId, undefined, false);
     }
   }
@@ -5343,7 +5387,10 @@ export class ClientStore {
   #dispatchFileCommand(body: CommandBody, pending: PendingFileQuery): boolean {
     const connectionId = this.#identity.connectionId;
     if (connectionId === null) return false;
-    this.#pendingFileQueries.set(body.requestId, pending);
+    const round = this.#fileRefreshRounds.get(this.#fileKey(pending.sessionId, pending.source));
+    this.#pendingFileQueries.set(body.requestId,
+      round !== undefined && (pending.kind === "list" || pending.kind === "git_status")
+        ? { ...pending, refreshId: round.id } : pending);
     this.#sync.dispatch({
       protocolVersion: 1,
       type: "command",
@@ -5399,14 +5446,14 @@ export class ClientStore {
       if (pending.kind === "list" || pending.kind === "git_status") {
         this.#scheduleRateLimitRetry(pending.sessionId, pending.source, error);
       }
-      return afterFailure;
+      return this.#finishFileRefresh(afterFailure, pending);
     }
 
     switch (pending.kind) {
       case "list":
-        return this.#applyAllFilesPage(state, pending, result.body.result);
+        return this.#finishFileRefresh(this.#applyAllFilesPage(state, pending, result.body.result), pending);
       case "git_status":
-        return this.#applyGitStatusPage(state, pending, result.body.result);
+        return this.#finishFileRefresh(this.#applyGitStatusPage(state, pending, result.body.result), pending);
       case "read":
         return this.#applyFilePreviewChunk(state, pending, result.body.result);
       case "git_diff":
@@ -5415,6 +5462,22 @@ export class ClientStore {
   }
 
   /** 失败统一落到来源或当前内容；来源失败不清空已成功加载的条目。 */
+  #finishFileRefresh(state: ClientState, pending: PendingFileQuery): ClientState {
+    const key = this.#fileKey(pending.sessionId, pending.source);
+    const round = this.#fileRefreshRounds.get(key);
+    if (pending.refreshId === undefined || round === undefined || round.id !== pending.refreshId) return state;
+    const sources = sourcesOf(state.sessionFiles, pending.sessionId);
+    round.failed ||= pending.source === "all"
+      ? sources.all.directories.get(pending.path ?? "")?.error != null
+      : sources.git.error !== null || sources.git.gitState === "unavailable";
+    round.remaining -= 1;
+    if (round.remaining > 0) return state;
+    this.#fileRefreshRounds.delete(key);
+    const refreshResults = new Map(state.sessionFiles.refreshResults);
+    refreshResults.set(key, { id: round.id, outcome: round.failed ? "failed" : "success" });
+    return { ...state, sessionFiles: { ...state.sessionFiles, refreshResults } };
+  }
+
   #applyFileQueryFailure(state: ClientState, pending: PendingFileQuery, error: PublicError): ClientState {
     if (pending.kind === "read" || pending.kind === "git_diff") {
       return this.#withFileContent(state, {
@@ -5648,7 +5711,7 @@ export class ClientStore {
   }
 
   /**
-   * 当前会话的 `file.changed`：只标「过时」并按来源排一次合并刷新，不覆盖正在阅读的内容。
+   * 当前会话的 `file.changed`：只标正文「过时」，不刷新列表或覆盖正在阅读的内容。
    */
   #withFileChangedEvent(state: ClientState, record: StructuredRecord): ClientState {
     const sessionId = record.sessionId;
@@ -5666,13 +5729,6 @@ export class ClientStore {
       }
     }
 
-    const source = selectedSourceOf(state.sessionFiles, sessionId);
-    const sources = sourcesOf(state.sessionFiles, sessionId);
-    const loaded = source === "all" ? sources.all.directories.size > 0 : sources.git.gitState !== null;
-    if (!loaded) return next;
-    const unsupported = this.#fileSourceUnsupported(sessionId);
-    if (unsupported !== null) return next;
-    this.#scheduleFileRefresh(sessionId, source, FILE_REFRESH_DEBOUNCE_MS);
     return next;
   }
 
