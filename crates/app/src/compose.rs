@@ -370,12 +370,13 @@ impl Composition {
     /// 同时把同一实例接成 core 的 imported 读取端口：`session.read` 回源的唯一实现就在
     /// `AccessManager`（它持有活的 Owner link），组合根只做接线，不参与正文处理。
     pub fn with_access(mut self, access: Arc<crate::access::AccessManager>) -> Self {
-        // 三个运行期远程面共用同一个 `RemoteRuntime` 实例：目录、回源读取与命令查询必须
-        // 看到同一份代际/连接事实。
+        // 四个运行期远程面共用同一个 `RemoteRuntime` 实例：目录、回源读取、命令查询与标题转发必须
+        // 看到同一份代际/连接事实。Access 只转发 `session.title.set`，不写标题/命令/收据（D3）。
         self.use_cases
             .set_remote_runtime_directory(access.runtime());
         self.use_cases.set_remote_source_reads(access.runtime());
         self.use_cases.set_remote_command_status(access.runtime());
+        self.use_cases.set_remote_title_write(access.runtime());
         self.access = Some(access);
         self
     }

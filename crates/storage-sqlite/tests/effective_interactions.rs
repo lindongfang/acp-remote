@@ -192,6 +192,7 @@ fn resolution_commit(
             state: None,
             mode: ModeChange::Unchanged,
             title: None,
+            custom_title: None,
             confirmation: None,
             interaction: Some(InteractionResolved {
                 interaction: interaction.clone(),
@@ -223,6 +224,7 @@ fn confirmation_commit(interaction: &InteractionId, session: &SessionId, hour: u
             state: None,
             mode: ModeChange::Unchanged,
             title: None,
+            custom_title: None,
             confirmation: Some(interaction.clone()),
             interaction: None,
             agent_session_id: None,
@@ -731,6 +733,7 @@ async fn invalidated_requests_disappear_from_every_pending_reader() {
             state: None,
             mode: ModeChange::Unchanged,
             title: None,
+            custom_title: None,
             confirmation: None,
             interaction: Some(InteractionResolved {
                 request_version: None,

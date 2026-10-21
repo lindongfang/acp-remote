@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "type": "command.rejected",
+  "messageId": "d2f7a095-6b31-4c84-9e07-1a4c8b2f5d63",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "12",
+  "body": {
+    "requestId": "c71a4e58-9d02-4b83-b6f5-3e0c8a2d7f19",
+    "command": "session.title.set",
+    "error": {
+      "code": "nodelink.protocol.feature_required",
+      "message": "Required feature was not negotiated.",
+      "retryable": false,
+      "details": {
+        "features": ["core.session-title.v1"]
+      }
+    }
+  }
+}

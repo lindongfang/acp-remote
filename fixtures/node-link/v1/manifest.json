@@ -438,6 +438,68 @@
       "schema": "../../../schemas/node-link/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "required"
+    },
+    {
+      "fixture": "valid/command-submit-session-title-set.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-submit-session-title-set-single-char.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-submit-session-title-set-max-scalars.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-rejected-session-title-feature-required.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-submit-session-title-set-empty.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "minLength"
+    },
+    {
+      "fixture": "invalid/command-submit-session-title-set-blank.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "invalid/command-submit-session-title-set-too-long.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "maxLength"
+    },
+    {
+      "fixture": "invalid/command-submit-session-title-set-null.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
+    },
+    {
+      "fixture": "invalid/command-submit-session-title-set-missing-title.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/command-submit-session-title-set-unknown-key.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/command-submit-session-title-set-expected-version.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
     }
   ],
   "transcriptVectors": [

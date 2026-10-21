@@ -41,9 +41,10 @@ use crate::model::{
     PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock, PromptRequest,
     PublicError, RequestId, Resolution, ResourceOrigin, ResumeSessionRequest, Sequence,
     SessionActivity, SessionId, SessionRecoveryRecord, SessionReference, SessionState,
-    SessionSummary, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
-    WorkspaceRef, decode_json_string as json_string, encode_json_string as json_text,
-    insert_string_member_front, object_members as json_members, top_level_member,
+    SessionSummary, SessionTitle, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind,
+    Version, ViewJson, WorkspaceRef, decode_json_string as json_string,
+    encode_json_string as json_text, insert_string_member_front, object_members as json_members,
+    top_level_member,
 };
 use crate::ports::{
     AuditStore, Clock, CommitOutcome, EventPublisher, EventSink, HistoryInclude, HistoryPage,
@@ -112,6 +113,7 @@ pub fn command_name(payload: &CommandPayload) -> &'static str {
         CommandPayload::ModeSet { .. } => "session.mode.set",
         CommandPayload::ConfigSet { .. } => "session.config.set",
         CommandPayload::PermissionResolve { .. } => "permission.resolve",
+        CommandPayload::TitleSet { .. } => "session.title.set",
     }
 }
 
@@ -1026,6 +1028,9 @@ impl Broker {
                 )
                 .await
             }
+            CommandPayload::TitleSet { title } => {
+                self.submit_title_set(actor, command, title).await
+            }
             // 查询命令不在此派发：结果由 §4 的查询入口（`list_sessions`/`read_session`/
             // `command_status`/`config_options`）返回 core 类型，由适配器投影到 wire（core 不做 JSON
             // 序列化）。这里只确认"已接受、无副作用"。
@@ -1135,13 +1140,14 @@ impl Broker {
             None
         } else {
             events.push(
-                self.session_updated_event(&session, state, &at, None)
+                self.session_updated_event(&session, state, &at, None, None)
                     .await?,
             );
             Some(StateChange::Update(SessionUpdate {
                 state: Some(state),
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 interaction: None,
                 confirmation: None,
                 agent_session_id: None,
@@ -1295,6 +1301,7 @@ impl Broker {
                     state: None,
                     mode: ModeChange::Set(mode_ref(mode)?),
                     title: None,
+                    custom_title: None,
                     interaction: None,
                     confirmation: None,
                     agent_session_id: None,
@@ -1377,6 +1384,7 @@ impl Broker {
                     state: None,
                     mode: ModeChange::Unchanged,
                     title: None,
+                    custom_title: None,
                     interaction: None,
                     confirmation: None,
                     agent_session_id: None,
@@ -1404,6 +1412,126 @@ impl Broker {
             request: command.request.clone(),
             turn: None,
         })
+    }
+
+    /// `session.title.set`（`design.md` D2）：Owner 元数据 mutation 的**单事务**管道。
+    ///
+    /// 顺序：slot gate → 幂等查询 → 读会话行 → 一次 `OwnedCommit`。
+    ///
+    /// - **不依赖 Agent**：不调 `SessionEndpoint`、不建 turn、不看 active turn，因此 `idle`/`running`/
+    ///   `pending` 任一状态都能执行。
+    /// - **相同值不重复改业务状态**：已有相同自定义标题时不写 `custom_title`、不递增 `version`、不追加
+    ///   `session.updated`，但仍在**同一事务**里落幂等行与 `command.completed` 终态（终态必须明确）。
+    /// - **首次写入即使是 Agent 原文也确立覆盖值**：只要 `custom_title` 与本次值不同（含 `None`），
+    ///   就写入并让有效标题切到自定义值。
+    /// - 状态写入、版本推进、完整 `session.updated`（有效标题）与命令终态在**一次事务**内完成，
+    ///   先提交再广播（提交返回后才 `publish`）。
+    ///
+    /// `expectedVersion` 恒为 `None`（`ClientCommand::validate` 已按 payload 规则强制）：并发写按 Owner
+    /// 提交顺序后写生效。
+    pub(crate) async fn submit_title_set(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        title: &SessionTitle,
+    ) -> Result<CommandReceipt, PortError> {
+        let Some(session) = command.session.clone() else {
+            return self.reject(
+                "command.unsupported",
+                "session.title.set 必须带 sessionId",
+                false,
+            );
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        if let Some(receipt) = self.idempotency(actor, command).await? {
+            return Ok(receipt);
+        }
+        let Some(snapshot) = self.deps.store.load(&session).await? else {
+            return self.reject("session.not_found", "会话不存在", false);
+        };
+        let at = self.now();
+        let mut events = Vec::with_capacity(2);
+        let state = if snapshot.session.custom_title() == Some(title.as_str()) {
+            None
+        } else {
+            // 完整摘要投影的是**提交后**的有效标题；本提交只改自定义列，Agent 标题原样保留。
+            events.push(
+                self.session_updated_event(
+                    &session,
+                    snapshot.session.state(),
+                    &at,
+                    None,
+                    Some(Some(title.as_str())),
+                )
+                .await?,
+            );
+            Some(StateChange::Update(SessionUpdate {
+                state: None,
+                mode: ModeChange::Unchanged,
+                // `title` 是两层可选，三态里 `None` 就是「不改 Agent 标题」。
+                title: None,
+                custom_title: Some(title.clone()),
+                interaction: None,
+                confirmation: None,
+                agent_session_id: None,
+                workspace_cwd: None,
+                workspace_directory_id: None,
+            }))
+        };
+        events.push(pending_event(
+            "command.completed",
+            EventKind::Structured,
+            view_command_completed(&command.request, None)?,
+            None,
+            Some(command.request.clone()),
+            StoredPolicy::Durable,
+            Some(actor),
+        )?);
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state,
+            turns: Vec::new(),
+            events,
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: command.request.clone(),
+                command: command.command.clone(),
+                kind: command.kind,
+                session: Some(session.clone()),
+                expected_version: None,
+                request_fingerprint: command.request_fingerprint.clone(),
+                accepted_at: at.clone(),
+            }),
+            command_terminal: Some(CommandTerminalRecord::try_new(
+                CommandStatus::Completed,
+                Some(at.clone()),
+                None,
+                None,
+                None,
+            )?),
+            origin_epoch: None,
+        };
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                // 幂等竞态（另一路径已用同一键落盘）：不二次修改，返回受理态，终态由持久记录给出。
+                if outcome.replayed.is_none() {
+                    self.publish(&outcome.appended);
+                }
+                Ok(CommandReceipt::Accepted {
+                    request: command.request.clone(),
+                    turn: None,
+                })
+            }
+            Err(PortError::Unavailable(_)) => {
+                Ok(self.reject("internal.unavailable", "命令未落盘，未产生任何副作用", true)?)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn submit_permission_resolve(
@@ -1860,7 +1988,7 @@ impl Broker {
         let changed = self.current_state(session).await? != Some(state);
         if changed {
             events.push(
-                self.session_updated_event(session, state, &at, None)
+                self.session_updated_event(session, state, &at, None, None)
                     .await?,
             );
         }
@@ -1869,6 +1997,7 @@ impl Broker {
             state: changed.then_some(state),
             mode: ModeChange::Unchanged,
             title: None,
+            custom_title: None,
             interaction: None,
             confirmation: Some(interaction.clone()),
             agent_session_id: None,
@@ -1930,7 +2059,9 @@ impl Broker {
         if self.current_state(session).await? == Some(state) {
             return Ok(());
         }
-        let event = self.session_updated_event(session, state, at, None).await?;
+        let event = self
+            .session_updated_event(session, state, at, None, None)
+            .await?;
         let commit = OwnedCommit {
             session: Some(session.clone()),
             at: at.clone(),
@@ -1939,6 +2070,7 @@ impl Broker {
                 state: Some(state),
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 interaction: None,
                 confirmation: None,
                 agent_session_id: None,
@@ -1962,12 +2094,17 @@ impl Broker {
     ///
     /// `version` 取本次提交将写入的版本（当前 + 1，因为状态变化总带一次 `SessionUpdate`），并由
     /// [`Self::finalize_owned_views`] 的嵌套注入与 `CommitOutcome.version` 做漂移检查。
+    /// 同一提交可能同时写标题列：`session.updated` 投影的是提交后的完整摘要，不能用提交前的行。
+    /// 两个覆盖参数各对应一列（`agent_title` = Agent 标题的两层可选，`custom_title` = 自定义标题的
+    /// 「不改 / 写入」），有效标题由本函数按「自定义优先、否则 Agent」重新投影——存储层读到的摘要
+    /// 已经投影过有效值，因此只有覆盖时必须回读两列才能算对。
     async fn session_updated_event(
         &self,
         session: &SessionId,
         state: SessionState,
         at: &Timestamp,
-        title: Option<Option<&str>>,
+        agent_title: Option<Option<&str>>,
+        custom_title: Option<Option<&str>>,
     ) -> Result<PendingEvent, PortError> {
         let mut summaries = self
             .deps
@@ -1981,13 +2118,26 @@ impl Broker {
         let summary = summaries
             .pop()
             .ok_or_else(|| PortError::NotFound(EntityRef::Session(session.clone())))?;
-        // 同一提交可能同时写标题：`session.updated` 投影的是提交后的完整摘要，不能用提交前的行。
-        let summary = match title {
-            Some(title) => summary
-                .with_title(title.map(str::to_owned))
-                .map_err(PortError::from)?,
-            None => summary,
-        };
+        let summary =
+            match (agent_title, custom_title) {
+                (None, None) => summary,
+                (agent, custom) => {
+                    // 任一列被覆盖都要知道**另一列**的提交后取值：摘要只带有效标题，反推不出来。
+                    let snapshot =
+                        self.deps.store.load(session).await?.ok_or_else(|| {
+                            PortError::NotFound(EntityRef::Session(session.clone()))
+                        })?;
+                    let agent = agent
+                        .map(|title| title.map(str::to_owned))
+                        .unwrap_or_else(|| snapshot.session.title().map(str::to_owned));
+                    let custom = custom
+                        .map(|title| title.map(str::to_owned))
+                        .unwrap_or_else(|| snapshot.session.custom_title().map(str::to_owned));
+                    summary
+                        .with_effective_title(custom.or(agent))
+                        .map_err(PortError::from)?
+                }
+            };
         let version = summary
             .version()
             .get()
@@ -2068,6 +2218,7 @@ impl Broker {
             state: None,
             mode: ModeChange::Unchanged,
             title: None,
+            custom_title: None,
             interaction: Some(InteractionResolved {
                 interaction: interaction.clone(),
                 resolution: resolution.clone(),
@@ -2931,7 +3082,7 @@ impl Broker {
         let changed = self.current_state(session).await? != Some(next_state);
         if changed {
             events.push(
-                self.session_updated_event(session, next_state, &at, None)
+                self.session_updated_event(session, next_state, &at, None, None)
                     .await?,
             );
         }
@@ -2940,6 +3091,7 @@ impl Broker {
                 state: Some(next_state),
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 interaction: None,
                 confirmation: None,
                 agent_session_id: None,
@@ -3316,6 +3468,7 @@ impl Broker {
                         next,
                         &at,
                         title_update.as_ref().map(|title| title.as_deref()),
+                        None,
                     )
                     .await?,
                 );
@@ -3330,6 +3483,7 @@ impl Broker {
                 state: session_state,
                 mode: ModeChange::Unchanged,
                 title: title_update,
+                custom_title: None,
                 interaction: None,
                 confirmation: None,
                 agent_session_id: None,
@@ -3486,13 +3640,14 @@ impl Broker {
             None
         } else {
             events.push(
-                self.session_updated_event(session, next_state, &at, None)
+                self.session_updated_event(session, next_state, &at, None, None)
                     .await?,
             );
             Some(StateChange::Update(SessionUpdate {
                 state: Some(next_state),
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 interaction: None,
                 confirmation: None,
                 agent_session_id: None,
@@ -3579,6 +3734,7 @@ impl Broker {
                 state: Some(next_state),
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 interaction: None,
                 confirmation: None,
                 agent_session_id: None,
@@ -3590,7 +3746,7 @@ impl Broker {
         };
         if changed {
             events.push(
-                self.session_updated_event(session, next_state, &at, None)
+                self.session_updated_event(session, next_state, &at, None, None)
                     .await?,
             );
         }
@@ -3696,7 +3852,7 @@ impl Broker {
         let changed = self.current_state(session).await? != Some(next_state);
         if changed {
             events.push(
-                self.session_updated_event(session, next_state, &at, None)
+                self.session_updated_event(session, next_state, &at, None, None)
                     .await?,
             );
         }
@@ -3705,6 +3861,7 @@ impl Broker {
                 state: Some(next_state),
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 interaction: None,
                 confirmation: None,
                 agent_session_id: None,
@@ -4046,13 +4203,14 @@ impl Broker {
                 let next_state = self.state_after(&facts, -expired, -1, false);
                 if self.current_state(session_id).await? != Some(next_state) {
                     activity_event = Some(
-                        self.session_updated_event(session_id, next_state, &at, None)
+                        self.session_updated_event(session_id, next_state, &at, None, None)
                             .await?,
                     );
                     state = Some(StateChange::Update(SessionUpdate {
                         state: Some(next_state),
                         mode: ModeChange::Unchanged,
                         title: None,
+                        custom_title: None,
                         interaction: None,
                         confirmation: None,
                         agent_session_id: None,
@@ -6382,6 +6540,7 @@ pub(crate) mod test_support {
                         session_id.clone(),
                         OwnedSessionRef::new(session_id.clone()),
                         new.title.clone(),
+                        None,
                         new.agent.clone(),
                         SessionState::Idle,
                         ResourceOrigin::Local,
@@ -6425,6 +6584,7 @@ pub(crate) mod test_support {
                         session_id.clone(),
                         OwnedSessionRef::new(session_id.clone()),
                         settled.title.clone(),
+                        None,
                         settled.agent.clone(),
                         SessionState::Idle,
                         ResourceOrigin::Local,
@@ -6513,10 +6673,16 @@ pub(crate) mod test_support {
                         Some(None) => None,
                         Some(Some(text)) => Some(text.clone()),
                     };
+                    // `custom_title` 是另一列：`None` = 不改（**不是**清空），写入后只能再次改名。
+                    let custom_title = match &update.custom_title {
+                        None => current.custom_title_value().cloned(),
+                        Some(text) => Some(text.clone()),
+                    };
                     let updated = Session::try_new(
                         current.id().clone(),
                         current.reference().clone(),
                         title,
+                        custom_title,
                         current.agent().clone(),
                         next_state,
                         current.origin().clone(),
@@ -6749,7 +6915,15 @@ pub(crate) mod test_support {
             }
             // 终态提交：按同一批次 `command.*` 事件的 causation 定位命令行（`ports::OwnedCommit`
             // 的文档约定），`terminal_event_id` 取该批次最后一条事件的 id。
-            if let Some(terminal) = commit.command_terminal.clone() {
+            //
+            // **接受与终态同批**（`session.title.set`）：行由本次提交自己写，因此不定位既有行
+            // （`storage-sqlite` 同口径），`terminal_event_id` 直接取批次里那条终态事件。
+            let combined_terminal = commit.idempotency.is_some();
+            if let Some(terminal) = commit
+                .command_terminal
+                .clone()
+                .filter(|_| !combined_terminal)
+            {
                 let request = commit
                     .events
                     .iter()
@@ -6824,7 +6998,33 @@ pub(crate) mod test_support {
             }
             // 接受提交：写幂等行（status = accepted）。§6 第 20 条：装配方不知道目标会话的命令
             // （`session.create`）用本次事务刚创建的会话回填——终态块与启动恢复靠它定位该行。
+            //
+            // **接受与终态同批**（`session.title.set`）：行一次写成终态，`terminal_event_id` 取批次里
+            // `causation = requestId` 的终态事件，不先写 `accepted` 再改（真存储同一事务同口径）。
             if let Some(record) = commit.idempotency.clone() {
+                let terminal = commit
+                    .command_terminal
+                    .as_ref()
+                    .filter(|_| combined_terminal);
+                let terminal_event = match terminal {
+                    Some(_) => {
+                        let position = commit.events.iter().position(|event| {
+                            event.causation.as_ref() == Some(&record.request)
+                                && matches!(
+                                    event.event_type.as_str(),
+                                    "command.completed" | "command.failed" | "command.uncertain"
+                                )
+                        });
+                        // `commit.events` 与 `appended` 同序：事件 id 只存在于存储层，下标直接对应。
+                        let position = position.ok_or(PortError::InvalidRequest(
+                            "接受与终态同批时必须带该请求的终态事件",
+                        ))?;
+                        Some(appended.get(position).map(|event| event.id.clone()).ok_or(
+                            PortError::InvalidRequest("接受与终态同批时必须带该请求的终态事件"),
+                        )?)
+                    }
+                    None => None,
+                };
                 let command = CommandRecord::try_new(
                     commit.session.clone().or_else(|| created.clone()),
                     record.request.clone(),
@@ -6832,11 +7032,11 @@ pub(crate) mod test_support {
                     record.kind,
                     record.actor.clone(),
                     Some(record.accepted_at.clone()),
-                    CommandStatus::Accepted,
-                    None,
-                    None,
-                    None,
-                    None,
+                    terminal.map_or(CommandStatus::Accepted, |terminal| terminal.status()),
+                    terminal.and_then(|terminal| terminal.terminal_at().cloned()),
+                    terminal_event,
+                    terminal.and_then(|terminal| terminal.result().cloned()),
+                    terminal.and_then(|terminal| terminal.error().cloned()),
                     record.expected_version,
                     record.request_fingerprint.clone(),
                 )?;
@@ -8081,6 +8281,7 @@ pub(crate) mod test_support {
                 session.clone(),
                 OwnedSessionRef::new(session.clone()),
                 None,
+                None,
                 agent,
                 SessionState::Idle,
                 ResourceOrigin::Local,
@@ -8180,7 +8381,7 @@ mod tests {
         AcpRaw, AgentId, AgentRef, AgentSessionId, AttachmentId, AttachmentSubject,
         AttachmentSubmission, DeviceId, ElicitationSchema, EventId, InteractionKind,
         InteractionOption, ModeState, NodeId, PairingId, PendingInteraction, ResourceOrigin,
-        SubmissionId,
+        Session, SubmissionId,
     };
 
     /// 一个已认证的设备主体（§10.1 的「按诱发命令的执行者分类」断言与授权回归都用它）。
@@ -9885,6 +10086,7 @@ mod tests {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 interaction: Some(InteractionResolved {
                     interaction: interaction.clone(),
                     resolution: InteractionResolution::permission(
@@ -10358,6 +10560,7 @@ mod tests {
                 session.clone(),
                 OwnedSessionRef::new(session.clone()),
                 None,
+                None,
                 agent,
                 SessionState::Idle,
                 ResourceOrigin::Local,
@@ -10671,6 +10874,7 @@ mod tests {
                     state: Some(SessionState::Running),
                     mode: ModeChange::Unchanged,
                     title: None,
+                    custom_title: None,
                     interaction: None,
                     confirmation: None,
                     agent_session_id: None,
@@ -11093,6 +11297,7 @@ mod tests {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 interaction: None,
                 confirmation: None,
                 agent_session_id: None,
@@ -11899,6 +12104,347 @@ mod tests {
         let _ = harness.submit_prompt(1, 'I');
         let session = harness.world.session(&harness.session).expect("会话");
         assert!(session.title().is_none(), "R9：显式置空 → 未命名会话");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // `session.title.set`（`design.md` D1/D2）：自定义标题与 Agent 标题是两列
+    // -----------------------------------------------------------------------------------------
+
+    /// 一条 `session.title.set`（`expectedVersion` 缺席：Owner 按提交顺序后写生效）。
+    fn title_command(
+        actor: &Actor,
+        session: &SessionId,
+        request: &RequestId,
+        text: &str,
+        fingerprint: char,
+    ) -> ClientCommand {
+        ClientCommand {
+            actor: actor.clone(),
+            request: request.clone(),
+            command: "session.title.set".to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(session.clone()),
+            expected_version: None,
+            request_fingerprint: digest(fingerprint),
+            payload: CommandPayload::TitleSet {
+                title: SessionTitle::parse(text).expect("合法标题"),
+            },
+        }
+    }
+
+    /// 把已 seed 的会话改成给定的 **Agent** 标题（版本/其它列不变）。
+    fn seed_agent_title(harness: &Harness, title: Option<&str>) {
+        let mut state = lock(&harness.world.state);
+        let current = state
+            .sessions
+            .get(harness.session.as_str())
+            .cloned()
+            .expect("seeded session");
+        let rebuilt = Session::try_new(
+            current.id().clone(),
+            current.reference().clone(),
+            title.map(str::to_owned),
+            current.custom_title_value().cloned(),
+            current.agent().clone(),
+            current.state(),
+            current.origin().clone(),
+            current.current_mode().cloned(),
+            current.version(),
+            current.created_at().clone(),
+            current.updated_at().clone(),
+        )
+        .expect("session");
+        state
+            .sessions
+            .insert(rebuilt.id().as_str().to_owned(), rebuilt);
+    }
+
+    /// 经 sink 送一条 `session.info.changed` 并落盘（ACP 原文区分「缺席」与「显式 null」）。
+    fn send_info_changed(harness: &Harness, view: &str, acp: &str, fingerprint: char) {
+        let mut event = endpoint_event(EventKind::State, "session.info.changed", view);
+        event.payload.acp =
+            Some(AcpRaw::available("application/json", acp, digest(fingerprint)).expect("acp"));
+        harness.broker.sink(&harness.session).send(event);
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+    }
+
+    fn info_update(title: &str) -> String {
+        format!(
+            r#"{{"params":{{"update":{{"sessionUpdate":"session_info_update","title":{}}}}}}}"#,
+            json_text(title)
+        )
+    }
+
+    /// 标题命令的完整合同：一次提交写自定义列 + 版本 +1 + 完整 `session.updated` + `command.completed`；
+    /// 不建 turn、不调 `SessionEndpoint`、不改会话状态。
+    #[test]
+    fn title_set_writes_the_custom_title_and_a_full_summary_in_one_commit() {
+        let harness = Harness::new(BrokerConfig::default());
+        let actor = harness.actor();
+        let request = harness.request(1);
+        let command = title_command(&actor, &harness.session, &request, "我的会话", 'A');
+        let receipt = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
+        assert!(
+            matches!(receipt, CommandReceipt::Accepted { turn: None, .. }),
+            "标题命令不占用 turn：{receipt:?}"
+        );
+
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(session.custom_title(), Some("我的会话"));
+        assert_eq!(session.title(), None, "Agent 标题列必须保持未设置");
+        assert_eq!(
+            session.version(),
+            Version::from(2),
+            "一次提交只推进一格版本"
+        );
+        assert_eq!(session.state(), SessionState::Idle, "标题命令不改会话状态");
+        assert!(
+            harness.world.turns(&harness.session).is_empty(),
+            "标题命令不得创建 turn（也不启动 Agent）"
+        );
+
+        // 同一提交：完整摘要（有效标题）+ 终态，顺序即提交顺序。
+        assert_eq!(
+            harness.world.batch_types().last().map(Vec::as_slice),
+            Some(["session.updated".to_owned(), "command.completed".to_owned()].as_slice()),
+            "状态写入、版本推进、完整摘要与终态必须在**一次**提交里"
+        );
+
+        let events = harness.world.events(&harness.session);
+        let updated = events
+            .iter()
+            .find(|event| event.event_type.as_str() == "session.updated")
+            .expect("session.updated");
+        let payload = lock(&harness.world.state)
+            .event_payloads
+            .get(updated.id.as_str())
+            .cloned()
+            .expect("正文");
+        assert!(
+            payload.view.as_str().contains(r#""title":"我的会话""#),
+            "摘要必须投影提交后的有效标题：{}",
+            payload.view.as_str()
+        );
+        assert!(
+            payload.view.as_str().contains(r#""version":"2""#),
+            "摘要必须是提交后的完整会话：{}",
+            payload.view.as_str()
+        );
+
+        let record = harness.world.command(&request).expect("命令行");
+        assert_eq!(
+            record.status(),
+            CommandStatus::Completed,
+            "终态必须明确完成"
+        );
+        let completed = events
+            .iter()
+            .find(|event| event.event_type.as_str() == "command.completed")
+            .expect("command.completed");
+        assert_eq!(
+            record.terminal_event(),
+            Some(&completed.id),
+            "终态事件标识必须回填到命令行"
+        );
+    }
+
+    /// 已有相同覆盖值：不改版本、不追加 `session.updated`，但命令仍在同一事务里明确完成。
+    #[test]
+    fn an_identical_title_completes_without_touching_the_session() {
+        let harness = Harness::new(BrokerConfig::default());
+        let actor = harness.actor();
+        let first = title_command(&actor, &harness.session, &harness.request(1), "同文", 'B');
+        block_on(harness.broker.submit_mutation(&actor, &first)).expect("首次");
+        let after_first = harness.world.events(&harness.session).len();
+
+        let second_request = harness.request(2);
+        let second = title_command(&actor, &harness.session, &second_request, "同文", 'C');
+        let receipt = block_on(harness.broker.submit_mutation(&actor, &second)).expect("同值重提");
+        assert!(matches!(
+            receipt,
+            CommandReceipt::Accepted { turn: None, .. }
+        ));
+
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(session.version(), Version::from(2), "同值不得再涨版本");
+        assert_eq!(
+            harness.world.batch_types().last().map(Vec::as_slice),
+            Some(["command.completed".to_owned()].as_slice()),
+            "同值不得追加 session.updated"
+        );
+        assert_eq!(
+            harness.world.events(&harness.session).len(),
+            after_first + 1,
+            "同值只追加那一条终态事件"
+        );
+        let record = harness.world.command(&second_request).expect("命令行");
+        assert_eq!(
+            record.status(),
+            CommandStatus::Completed,
+            "命令仍要明确完成"
+        );
+        assert!(record.terminal_event().is_some());
+    }
+
+    /// 与 Agent 标题同文保存也**确立**覆盖：Agent 随后改名/显式置空都不影响自定义列。
+    #[test]
+    fn saving_the_agent_title_verbatim_establishes_the_override() {
+        let harness = Harness::new(BrokerConfig::default());
+        seed_agent_title(&harness, Some("排查登录"));
+        let actor = harness.actor();
+
+        let command = title_command(
+            &actor,
+            &harness.session,
+            &harness.request(1),
+            "排查登录",
+            'D',
+        );
+        block_on(harness.broker.submit_mutation(&actor, &command)).expect("同文保存");
+
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(
+            session.custom_title(),
+            Some("排查登录"),
+            "同文也必须确立覆盖值"
+        );
+        assert_eq!(session.title(), Some("排查登录"), "Agent 列原样保真");
+        assert_eq!(session.effective_title(), Some("排查登录"));
+
+        // Agent 改名：只写 Agent 列，有效标题仍是自定义值。
+        send_info_changed(
+            &harness,
+            r#"{"title":"新 Agent 名","updatedAt":"2021-01-01T00:00:00.000Z"}"#,
+            &info_update("新 Agent 名"),
+            'E',
+        );
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(session.title(), Some("新 Agent 名"));
+        assert_eq!(session.custom_title(), Some("排查登录"));
+        assert_eq!(session.effective_title(), Some("排查登录"));
+
+        // 显式 null：只清 Agent 列，自定义列不动。
+        send_info_changed(
+            &harness,
+            r#"{"title":null,"updatedAt":"2021-01-02T00:00:00.000Z"}"#,
+            r#"{"params":{"update":{"sessionUpdate":"session_info_update","title":null}}}"#,
+            'F',
+        );
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(session.title(), None, "显式 null 清 Agent 标题");
+        assert_eq!(
+            session.custom_title(),
+            Some("排查登录"),
+            "显式 null 不得清除自定义标题"
+        );
+        assert_eq!(session.effective_title(), Some("排查登录"));
+    }
+
+    /// 运行中也能改名：不排队、不占 turn、不碰 Agent。
+    #[test]
+    fn title_set_works_while_a_turn_is_running() {
+        let harness = Harness::new(BrokerConfig::default());
+        let actor = harness.actor();
+        // 「永远不结束」的 turn：脚本只发增量，不发终态。
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        let _ = harness.submit_prompt(1, 'J');
+        assert_eq!(
+            harness.world.turns(&harness.session).len(),
+            1,
+            "前置条件：prompt 已开 turn"
+        );
+        let running = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(running.state(), SessionState::Running);
+
+        let command = title_command(
+            &actor,
+            &harness.session,
+            &harness.request(2),
+            "运行中改名",
+            'G',
+        );
+        let receipt =
+            block_on(harness.broker.submit_mutation(&actor, &command)).expect("运行中改名");
+        assert!(matches!(
+            receipt,
+            CommandReceipt::Accepted { turn: None, .. }
+        ));
+
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(session.custom_title(), Some("运行中改名"));
+        assert_eq!(
+            session.state(),
+            SessionState::Running,
+            "不得打断 active turn"
+        );
+        assert_eq!(
+            harness.world.turns(&harness.session).len(),
+            1,
+            "标题命令不得再建 turn"
+        );
+    }
+
+    /// 顺序提交（无 expectedVersion）：后写生效，两次各推进一格版本。
+    #[test]
+    fn later_title_commit_wins_in_commit_order() {
+        let harness = Harness::new(BrokerConfig::default());
+        let actor = harness.actor();
+        for (index, text) in [(1_u64, "第一次"), (2, "第二次")] {
+            let command =
+                title_command(&actor, &harness.session, &harness.request(index), text, 'H');
+            block_on(harness.broker.submit_mutation(&actor, &command)).expect("提交");
+        }
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(
+            session.custom_title(),
+            Some("第二次"),
+            "没有版本冲突确认：按提交顺序后写生效"
+        );
+        assert_eq!(session.version(), Version::from(3));
+    }
+
+    /// 同一 requestId 重试不重复修改：版本、事件、命令行都停在首次结果上。
+    #[test]
+    fn a_duplicate_title_request_is_replayed_without_a_second_modification() {
+        let harness = Harness::new(BrokerConfig::default());
+        let actor = harness.actor();
+        let command = title_command(
+            &actor,
+            &harness.session,
+            &harness.request(1),
+            "只写一次",
+            'I',
+        );
+        block_on(harness.broker.submit_mutation(&actor, &command)).expect("首次");
+        let events = harness.world.events(&harness.session).len();
+        let batches = harness.world.batch_types().len();
+
+        let replay = block_on(harness.broker.submit_mutation(&actor, &command)).expect("重放");
+        assert!(matches!(
+            replay,
+            CommandReceipt::Accepted { turn: None, .. }
+        ));
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(session.version(), Version::from(2), "重放不得再涨版本");
+        assert_eq!(session.custom_title(), Some("只写一次"));
+        assert_eq!(harness.world.events(&harness.session).len(), events);
+        assert_eq!(
+            harness.world.batch_types().len(),
+            batches,
+            "重放不得再追加提交"
+        );
+        assert_eq!(
+            harness
+                .world
+                .command(&harness.request(1))
+                .expect("命令行")
+                .status(),
+            CommandStatus::Completed
+        );
     }
 
     // -----------------------------------------------------------------------------------------

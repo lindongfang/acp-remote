@@ -5,7 +5,7 @@
 //! [`crate::envelope`] 承载；本模块只承载 `body`，与 `auth`/`control`/`error` 三个家族一致。
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它
-//! `transport` 含 `sync` 的 18 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
+//! `transport` 含 `sync` 的 19 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
 //! 按 `command.unsupported` 拒绝）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
@@ -47,7 +47,7 @@ pub type RequestId = Uuid;
 
 /// `commandName`（`command.schema.json#/$defs/commandName`）。
 ///
-/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 18 条命令，顺序
+/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 19 条命令，顺序
 /// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.resume` 的结果）。
 ///
 /// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧是
@@ -94,11 +94,13 @@ pub enum CommandName {
     SessionGitStatus,
     /// `session.git.diff`
     SessionGitDiff,
+    /// `session.title.set`（feature `core.session-title.v1`）：Owner 元数据命令。
+    SessionTitleSet,
 }
 
 impl CommandName {
     /// 与 `compatibility/commands/v1/commands.json` 的 sync 子集逐条相等，顺序一致。
-    pub const ALL: [CommandName; 18] = [
+    pub const ALL: [CommandName; 19] = [
         CommandName::SessionList,
         CommandName::SessionRead,
         CommandName::CommandStatus,
@@ -117,6 +119,7 @@ impl CommandName {
         CommandName::SessionFilesRead,
         CommandName::SessionGitStatus,
         CommandName::SessionGitDiff,
+        CommandName::SessionTitleSet,
     ];
 
     /// 查询命令（`docs/SYNC_PROTOCOL.md` §11.5 的"类别"列）：不进入异步队列，`command.result` 的
@@ -180,6 +183,7 @@ impl CommandName {
             CommandName::SessionFilesRead => "session.files.read",
             CommandName::SessionGitStatus => "session.git.status",
             CommandName::SessionGitDiff => "session.git.diff",
+            CommandName::SessionTitleSet => "session.title.set",
         }
     }
 }
@@ -1519,6 +1523,82 @@ pub struct CommandStatus {
     pub remote_target: Option<RemoteTarget>,
 }
 
+/// `session.title.set.payload.title`（`command.schema.json#/$defs/sessionTitle`）：用户为会话设置的
+/// 自定义标题。
+///
+/// 规则：输入是 1..=512 个 Unicode 标量值、且至少含一个非空白字符；**保存值是去除首尾空白后的
+/// 文本**（trim 只发生在边缘：不截断、不改写中间内容，也不把纯空白当作有效标题）。
+///
+/// 长度按**原始 wire 字符串**（trim 前的输入）计，与 schema 的 `minLength: 1`/`maxLength: 512`
+/// 同口径：输入 1..=512 个标量值才合法，超长按输入计、不截断；保存值是 trim 后的文本，trim 后
+/// 为空则拒绝。计数用 `chars()`（Unicode 标量值）：既不是字节数，也不是 UTF-16 code unit 数（辅助
+/// 平面字符在 UTF-16 里占两个单元，用它计数会把合法的 512 字符标题误判成超长）。
+///
+/// 该命令是 **Owner 元数据**：不依赖 Agent 的重命名能力、不启动 Agent、不占用 active turn；
+/// 没有清除/恢复命令（显式 `null` 清空不被接受——它连字符串形状都不满足）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTitle(String);
+
+impl SessionTitle {
+    /// 标题允许的最大 Unicode 标量值个数（`docs/SYNC_PROTOCOL.md` §11.5）。
+    pub const MAX_SCALARS: usize = 512;
+
+    /// 校验并构造：长度按输入（trim 前）计；trim 后为空则拒绝。
+    ///
+    /// wire 值对象**保真原文**（不在这里改写字面量），因此类型化 body 的往返不会改变字段。
+    /// 保存值的 trim 由 core 的 `SessionTitle::parse` 在受理时完成。
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        let length = text.chars().count();
+        if length == 0 || length > Self::MAX_SCALARS {
+            return Err(ValueError::TextLength {
+                min: 1,
+                max: Self::MAX_SCALARS,
+                actual: length,
+            });
+        }
+        if text.trim().is_empty() {
+            return Err(ValueError::Pattern {
+                field: "title",
+                value: text.to_owned(),
+            });
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    /// wire 原文（可能带首尾空白；受理时应使用 [`Self::trimmed`]）。
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// 受理时应保存的文本（首尾空白已去除）。
+    pub fn trimmed(&self) -> &str {
+        self.0.trim()
+    }
+}
+
+impl Serialize for SessionTitle {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionTitle {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(DeError::custom)
+    }
+}
+
+/// `sessionTitleSet`（`command.schema.json#/$defs/sessionTitleSet`）的 `payload`：`{ title }`。
+///
+/// 只有一个键：`expectedVersion` 不在本命令的 body 上（它按 Owner 的提交顺序后写生效），未知键由
+/// `additionalProperties: false` 拒绝。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionTitleSet {
+    pub title: SessionTitle,
+}
+
 /// `command`（`command.schema.json#/$defs/command`）`body` 的 `payload`（该 def 的 `body.oneOf`）。
 ///
 /// 变体顺序与 schema 的 `oneOf` 顺序一致。payload 里没有自己的判别字段，所以本枚举**没有**
@@ -1564,6 +1644,8 @@ pub enum CommandPayload {
     SessionGitStatus(SessionGitStatus),
     /// `session.git.diff` 的 payload。
     SessionGitDiff(SessionGitDiff),
+    /// `session.title.set` 的 payload。
+    SessionTitleSet(SessionTitleSet),
 }
 
 impl CommandPayload {
@@ -1652,6 +1734,11 @@ impl CommandPayload {
                 parse_payload(payload, "{ path }（sessionGitDiff 的 payload）")
                     .map(CommandPayload::SessionGitDiff)
             }
+            CommandName::SessionTitleSet => parse_payload(
+                payload,
+                "{ title: 1..=512 个标量值（trim 后非空） }（sessionTitleSet 的 payload）",
+            )
+            .map(CommandPayload::SessionTitleSet),
         }
     }
 }
@@ -2167,17 +2254,26 @@ impl CommandResult {
                     )?;
                 }
             }
-            CommandState::Failed | CommandState::Uncertain => {
+            CommandState::Failed => {
                 require_value(
                     self.accepted_at.as_ref(),
                     "acceptedAt",
-                    "status=failed/uncertain 时必须是时间戳",
+                    "status=failed 时必须是时间戳",
                 )?;
                 require_value(
                     self.terminal_event_id.as_ref(),
                     "terminalEventId",
-                    "status=failed/uncertain 时必须给出 eventId",
+                    "status=failed 时必须给出 eventId",
                 )?;
+            }
+            CommandState::Uncertain => {
+                require_value(
+                    self.accepted_at.as_ref(),
+                    "acceptedAt",
+                    "status=uncertain 时必须是时间戳",
+                )?;
+                // Access 代理的 imported 命令可能只拿到「结果未知」而没有 Owner 终态事件；
+                // `terminalEventId` 因此允许为 null（有终态事件时必须原样透传，见 SYNC §11.2）。
             }
             CommandState::Rejected => {
                 require_null(
@@ -2279,7 +2375,7 @@ mod tests {
 
     #[test]
     fn command_name_covers_the_sync_subset_and_round_trips() {
-        assert_eq!(CommandName::ALL.len(), 18, "sync 子集是 18 条命令");
+        assert_eq!(CommandName::ALL.len(), 19, "sync 子集是 19 条命令");
         assert!(
             CommandName::ALL
                 .iter()
@@ -2314,6 +2410,137 @@ mod tests {
         );
         assert!(!CommandName::WorkspaceBrowse.requires_expected_version());
         assert_eq!(CommandName::WorkspaceBrowse.as_str(), "workspace.browse");
+    }
+
+    /// `session.title.set`：Owner 元数据 mutation——payload 只有一个 `title`，长度按 wire 原文的 Unicode
+    /// 标量值计（trim 前），保存值是 trim 后的文本；不携带 `expectedVersion`，也不启动 Agent。
+    #[test]
+    fn session_title_set_normalizes_the_title_and_rejects_invalid_input() {
+        assert_eq!(
+            CommandName::from_str("session.title.set"),
+            Ok(CommandName::SessionTitleSet)
+        );
+        assert_eq!(CommandName::ALL[18], CommandName::SessionTitleSet);
+        assert!(
+            !CommandName::SessionTitleSet.is_query(),
+            "标题写入是 mutation：completed 必须带 command terminal event id"
+        );
+        assert!(CommandName::SessionTitleSet.requires_session_id());
+        assert!(
+            !CommandName::SessionTitleSet.requires_expected_version(),
+            "标题按 Owner 提交顺序后写生效，body 不得携带 expectedVersion"
+        );
+
+        // wire 保真原文；受理时的保存值由 core 去首尾空白，中间内容逐字保留。
+        let command: Command = serde_json::from_str(&body(
+            "session.title.set",
+            &format!(r#""sessionId":"{SESSION}","#),
+            r#"{"title":"  排查 登录失败  "}"#,
+        ))
+        .expect("合法标题必须接受");
+        let CommandPayload::SessionTitleSet(set) = &command.payload else {
+            panic!("payload 必须是 SessionTitleSet");
+        };
+        assert_eq!(set.title.as_str(), "  排查 登录失败  ");
+        assert_eq!(set.title.trimmed(), "排查 登录失败");
+        assert!(
+            serde_json::to_string(&command)
+                .expect("可序列化")
+                .contains(r#""title":"  排查 登录失败  ""#),
+            "wire 编码保真原文，不在 DTO 层改写字段"
+        );
+
+        // 边界：恰好 512 个标量值接受、513 个拒绝。辅助平面字符按**一个**标量值计（UTF-16 里占两个
+        // 单元，用 code unit 计数会把合法标题误判成超长）。
+        let max = "😀".repeat(SessionTitle::MAX_SCALARS);
+        assert_eq!(
+            SessionTitle::parse(&max)
+                .expect("512 个标量值必须接受")
+                .as_str(),
+            max
+        );
+        assert_eq!(
+            SessionTitle::parse(&"😀".repeat(SessionTitle::MAX_SCALARS + 1)),
+            Err(ValueError::TextLength {
+                min: 1,
+                max: SessionTitle::MAX_SCALARS,
+                actual: SessionTitle::MAX_SCALARS + 1,
+            })
+        );
+        assert_eq!(
+            SessionTitle::parse(""),
+            Err(ValueError::TextLength {
+                min: 1,
+                max: SessionTitle::MAX_SCALARS,
+                actual: 0,
+            })
+        );
+        assert!(
+            matches!(
+                SessionTitle::parse(" \t\n "),
+                Err(ValueError::Pattern { field: "title", .. })
+            ),
+            "纯空白不是有效标题"
+        );
+        assert!(
+            SessionTitle::parse(" x ").expect("单字符标题").trimmed() == "x",
+            "trim 后的单字符标题被接受（wire 原文仍保真）"
+        );
+
+        let extra = format!(r#""sessionId":"{SESSION}","#);
+        assert!(
+            serde_json::from_str::<Command>(&body(
+                "session.title.set",
+                &extra,
+                r#"{"title":null}"#,
+            ))
+            .is_err(),
+            "null 不是合法标题（没有清除命令）"
+        );
+        assert!(
+            serde_json::from_str::<Command>(&body("session.title.set", &extra, r#"{}"#)).is_err(),
+            "title 是必需键"
+        );
+        assert!(
+            serde_json::from_str::<Command>(&body(
+                "session.title.set",
+                &extra,
+                r#"{"title":"a","modeId":"default"}"#,
+            ))
+            .is_err(),
+            "payload 是 closed object：未知键必须拒绝"
+        );
+        assert!(
+            serde_json::from_str::<Command>(&body(
+                "session.title.set",
+                &format!(r#""sessionId":"{SESSION}","expectedVersion":"7","#),
+                r#"{"title":"a"}"#,
+            ))
+            .is_err(),
+            "body 不得携带 expectedVersion"
+        );
+        assert!(
+            serde_json::from_str::<Command>(&body("session.title.set", "", r#"{"title":"a"}"#))
+                .is_err(),
+            "会话范围命令必须携带 sessionId"
+        );
+    }
+
+    /// Access 代理的 imported 命令可能只拿到「结果未知」而没有 Owner 终态事件：`uncertain` 允许
+    /// `terminalEventId = null`；`failed` 仍必须给出 eventId。
+    #[test]
+    fn uncertain_may_omit_the_terminal_event_but_failed_may_not() {
+        let result = |status: &str, terminal: &str| {
+            format!(
+                r#"{{"requestId":"{REQUEST}","command":"session.title.set","status":"{status}","acceptedAt":"2026-09-17T12:12:00.000Z","terminalEventId":{terminal},"result":null,"error":null}}"#
+            )
+        };
+        serde_json::from_str::<CommandResult>(&result("uncertain", "null"))
+            .expect("uncertain 允许没有 Owner 终态事件");
+        assert!(
+            serde_json::from_str::<CommandResult>(&result("failed", "null")).is_err(),
+            "failed 必须给出终态事件标识"
+        );
     }
 
     #[test]

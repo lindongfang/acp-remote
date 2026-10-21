@@ -21,18 +21,19 @@ use crate::broker::{Broker, Denied, command_name};
 use crate::model::{
     Actor, AgentDescriptor, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
     AttachmentSubject, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, ClientCommand,
-    CommandKind, CommandReceipt, CommandRecord, CommandResult, CommandStatus, ConfigOption,
-    ConfigOptionId, ConfigValue, ConflictKind, ContentVersion, CreateSessionRequest, DeviceId,
-    DeviceRecord, Digest, DirectoryId, DirectoryRecord, EffectiveInteraction, ElicitationAction,
-    ElicitationValues, EntityRef, EventId, EventPayload, EventType, FileReadPurpose, GitDiff,
-    GitStatusPage, GlobalCursor, InteractionId, InteractionResolution, MessageId, ModeId,
-    ModeState, NodeId, NodeKind, NodeRecord, NodeState, OriginCursor, OriginEpoch, OwnedSessionRef,
-    PairingClaim, PairingId, PairingRecord, PairingSettlement, PairingState, PairingTarget,
-    PeerIdentity, PeerPublicKey, PendingInteraction, PortError, PromptContentBlock, PublicError,
-    RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace, ResourceOrigin, Sequence,
-    SessionFileChunk, SessionFilePage, SessionFilePath, SessionId, SessionListPath,
-    SessionPageToken, SessionReference, SessionSummary, SubmissionId, Timestamp, UnavailableKind,
-    Version, WorkspaceCatalogEntry, WorkspaceRef, WorkspaceSource,
+    CommandKind, CommandPayload, CommandReceipt, CommandRecord, CommandResult, CommandStatus,
+    ConfigOption, ConfigOptionId, ConfigValue, ConflictKind, ContentVersion, CreateSessionRequest,
+    DeviceId, DeviceRecord, Digest, DirectoryId, DirectoryRecord, EffectiveInteraction,
+    ElicitationAction, ElicitationValues, EntityRef, EventId, EventPayload, EventType,
+    FileReadPurpose, GitDiff, GitStatusPage, GlobalCursor, InteractionId, InteractionResolution,
+    MessageId, ModeId, ModeState, NodeId, NodeKind, NodeRecord, NodeState, OriginCursor,
+    OriginEpoch, OwnedSessionRef, PairingClaim, PairingId, PairingRecord, PairingSettlement,
+    PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, PortError,
+    PromptContentBlock, PublicError, RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace,
+    ResourceOrigin, Sequence, SessionFileChunk, SessionFilePage, SessionFilePath, SessionId,
+    SessionListPath, SessionPageToken, SessionReference, SessionSummary, SessionTitle,
+    SubmissionId, Timestamp, UnavailableKind, Version, WorkspaceCatalogEntry, WorkspaceRef,
+    WorkspaceSource,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditQuery, AuditStore,
@@ -40,12 +41,12 @@ use crate::ports::{
     ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore, MessageCoverage,
     NodeConnectedWrite, NodeRevocation, NodeWrite, OriginReadPage, PairingClaimOutcome,
     PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
-    PruneReport, RemoteCommandLookup, RemoteCommandStatus, RemoteCommandTarget, RemoteReadQuery,
-    RemoteReadResult, RemoteRuntimeDirectory, RemoteSessionEntry, RemoteSourceReads,
-    RemoteSourceState, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
-    SessionCreateAdmission, SessionFiles, SessionQuery, SessionStore, StoreHealth,
-    SubmissionBinding, SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceMkdirAdmission,
-    WorkspaceMkdirExecution, WriteContext,
+    PruneReport, RemoteCommandLookup, RemoteCommandRecord, RemoteCommandStatus,
+    RemoteCommandTarget, RemoteReadQuery, RemoteReadResult, RemoteRuntimeDirectory,
+    RemoteSessionEntry, RemoteSourceReads, RemoteSourceState, RemoteTitleWrite, ReplayBatch,
+    ReplayLimit, RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionFiles, SessionQuery,
+    SessionStore, StoreHealth, SubmissionBinding, SyncReplaySlice, TrustRecordRef, TrustStore,
+    WorkspaceMkdirAdmission, WorkspaceMkdirExecution, WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -288,6 +289,9 @@ pub struct UseCases {
     remote_sources: std::sync::OnceLock<Arc<dyn RemoteSourceReads>>,
     /// Owner 远程命令状态查询（`design.md` D5）。默认未装配：显式 `BackendUnsupported`。
     remote_commands: std::sync::OnceLock<Arc<dyn RemoteCommandStatus>>,
+    /// 向 Owner 转发 `session.title.set` 的窄端口（`design.md` D2/D3）。默认未装配：显式
+    /// `BackendUnsupported`，不把远程标题的修改留在本机。
+    remote_titles: std::sync::OnceLock<Arc<dyn RemoteTitleWrite>>,
 }
 
 /// [`UseCases`] 的依赖。
@@ -322,6 +326,7 @@ impl UseCases {
             remote_directory: std::sync::OnceLock::new(),
             remote_sources: std::sync::OnceLock::new(),
             remote_commands: std::sync::OnceLock::new(),
+            remote_titles: std::sync::OnceLock::new(),
         }
     }
 
@@ -341,6 +346,12 @@ impl UseCases {
     /// 接线 Owner 远程命令状态查询（`design.md` D5）。重复接线返回 `false` 且保留首次实现。
     pub fn set_remote_command_status(&self, commands: Arc<dyn RemoteCommandStatus>) -> bool {
         self.remote_commands.set(commands).is_ok()
+    }
+
+    /// 接线向 Owner 转发 `session.title.set` 的窄端口（`design.md` D3）。重复接线返回 `false` 且保留
+    /// 首次实现：同一进程里的远程写面必须只有一份，否则「迟到结果按代际丢弃」会出现两套代际。
+    pub fn set_remote_title_write(&self, titles: Arc<dyn RemoteTitleWrite>) -> bool {
+        self.remote_titles.set(titles).is_ok()
     }
 
     /// 注入分块附件端口（组合根装配 `storage-sqlite` 的实现）。
@@ -1341,6 +1352,92 @@ impl UseCases {
             self.ensure_current_generation(entry).await?;
         }
         Ok(outcome)
+    }
+
+    /// `session.title.set`（本地 **owned** 会话；`design.md` D2）。
+    ///
+    /// 与其它 mutation 同一口径：先 `ClientCommand::validate`，再走 `Broker::authorize`
+    /// （命令名 `session.title.set`），最后是幂等 + 单事务写入。命令不碰 Agent、不建 turn。
+    pub async fn set_session_title(
+        &self,
+        actor: &Actor,
+        command: ClientCommand,
+    ) -> Result<CommandReceipt, PortError> {
+        command.validate().map_err(PortError::from)?;
+        let CommandPayload::TitleSet { title } = &command.payload else {
+            return Err(PortError::InvalidRequest(
+                "session.title.set 需要 TitleSet 载荷",
+            ));
+        };
+        self.broker
+            .authorize(
+                actor,
+                "session.title.set",
+                command.session.as_ref(),
+                &command.request,
+            )
+            .await
+            .map_err(Denied::into_port_error)?;
+        self.broker.submit_title_set(actor, &command, title).await
+    }
+
+    /// `session.title.set`（**imported** 会话：纯在线转发给 Owner；`design.md` D3）。
+    ///
+    /// 四步：
+    /// 1. 授权（与本地入口同一命令名）；
+    /// 2. 运行期目录按 `SessionId` 定位**唯一**来源（0 条 → `NotFound`，多条 → 明确拒绝，不挑一个）；
+    /// 3. 来源必须在线（`Unavailable`，绝不当成「不存在」）；
+    /// 4. 用**调用方给出的 requestId** 交给 [`RemoteTitleWrite`]，结果按代际复核后才返回。
+    ///
+    /// 本入口**不写**任何本地标题、命令行、收据或索引：Access 不是远程标题的第二权威；结果丢失只能由
+    /// 客户端用原 `requestId` 走 [`UseCases::remote_command_status`] 回源。
+    pub async fn submit_remote_session_title(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        request: RequestId,
+        title: SessionTitle,
+    ) -> Result<RemoteCommandRecord, PortError> {
+        let audit_request = self.ids.request_id();
+        self.broker
+            .authorize(actor, "session.title.set", Some(session), &audit_request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let Some(directory) = self.remote_directory.get() else {
+            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        };
+        let entries = directory
+            .find_by_session(session)
+            .await?
+            .into_iter()
+            .map(|entry| remote_reference(&entry).map(|remote| (entry, remote)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut matched = entries
+            .into_iter()
+            .filter(|(_, remote)| &remote.session_id == session);
+        let Some((entry, remote)) = matched.next() else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        };
+        if matched.next().is_some() {
+            // 跨 Owner 的同名会话不是同一条：不得挑其中任意一条（与 `session_read` 同口径）。
+            return Err(PortError::InvalidRequest(
+                "session id is ambiguous across remote owners",
+            ));
+        }
+        require_online_entry(&entry, &remote)?;
+        let Some(titles) = self.remote_titles.get() else {
+            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        };
+        let record = titles
+            .set_title(&remote, entry.generation, &request, &title)
+            .await?;
+        // 迟到结果：写出期间代际已经变了（断线/撤销/重连）就不认这次成功。结果本就未知的记录
+        // 原样返回，由 Sync 层投影成 `uncertain`（客户端用原 requestId 回源）；折叠成
+        // `OwnerOffline` 会让对端误以为没有副作用。
+        if record.status != CommandStatus::Uncertain {
+            self.ensure_current_generation(&entry).await?;
+        }
+        Ok(record)
     }
 
     /// 远端目录投影（§4 的 `RemoteCatalogQueries`）：本节点的 Agent 目录。
@@ -3252,6 +3349,7 @@ mod tests {
                 session.clone(),
                 OwnedSessionRef::new(session.clone()),
                 None,
+                None,
                 agent,
                 crate::model::SessionState::Idle,
                 ResourceOrigin::Local,
@@ -3847,6 +3945,7 @@ mod tests {
                 owned.clone(),
                 OwnedSessionRef::new(owned.clone()),
                 None,
+                None,
                 agent,
                 crate::model::SessionState::Running,
                 ResourceOrigin::Local,
@@ -4362,6 +4461,7 @@ mod tests {
             status: CommandStatus::Accepted,
             accepted_at: Some(ts(1)),
             terminal_at: None,
+            terminal_event_id: None,
             result: None,
             error: None,
         };
@@ -4440,6 +4540,7 @@ mod tests {
                 status: CommandStatus::Accepted,
                 accepted_at: Some(ts(1)),
                 terminal_at: None,
+                terminal_event_id: None,
                 result: None,
                 error: None,
             });
@@ -4520,6 +4621,7 @@ mod tests {
             status: CommandStatus::Uncertain,
             accepted_at: Some(ts(1)),
             terminal_at: Some(ts(2)),
+            terminal_event_id: None,
             result: None,
             error: None,
         };

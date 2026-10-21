@@ -5,8 +5,9 @@
 //! 承载；本模块只承载 body，与 handshake/catalog/resource/error 四个家族一致。
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它 `transport`
-//! 含 `node_link` 的 13 条命令的镜像（顺序与该 registry 一致，即两个面共有的 12 条之后多出只经
-//! Node Link 接受的 `session.resume`；Sync 面共接受 14 条，比本镜像多出只走 Sync 的 `workspace.browse` / `workspace.mkdir`；
+//! 含 `node_link` 的 14 条命令的镜像（顺序与该 registry 一致，即两个面共有的 13 条之后多出只经
+//! Node Link 接受的 `session.resume`；Sync 面共接受 19 条，比本镜像多出只走 Sync 的 `workspace.browse`、
+//! `workspace.mkdir` 与四条 `session.files.*`/`session.git.*` 查询；
 //! `session.create` 两个面同名，但 payload 不同——本面是 `{ agentId, directoryId }`，Sync 面是
 //! `{ agentId, directoryId 或 workspacePath（恰好一个） }`，见 `docs/SYNC_PROTOCOL.md` §11.5）。
 //!
@@ -51,8 +52,8 @@ pub type RequestId = Uuid;
 
 /// `commandName`（`command.schema.json#/$defs/commandName`）。
 ///
-/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `node_link` 的 13 条命令，顺序
-/// 与该 registry 一致（也是 `docs/NODE_LINK_PROTOCOL.md` §12.5 引用的那 13 个命令名）。
+/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `node_link` 的 14 条命令，顺序
+/// 与该 registry 一致（也是 `docs/NODE_LINK_PROTOCOL.md` §12.5 引用的那 14 个命令名）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandName {
     /// `session.list`
@@ -81,11 +82,13 @@ pub enum CommandName {
     SessionCreate,
     /// `session.resume`
     SessionResume,
+    /// `session.title.set`（feature `core.session-title.v1`）：Owner 元数据命令，Access 只转发。
+    SessionTitleSet,
 }
 
 impl CommandName {
     /// 与 `compatibility/commands/v1/commands.json` 的 node_link 子集逐条相等，顺序一致。
-    pub const ALL: [CommandName; 13] = [
+    pub const ALL: [CommandName; 14] = [
         CommandName::SessionList,
         CommandName::SessionRead,
         CommandName::CommandStatus,
@@ -99,11 +102,12 @@ impl CommandName {
         CommandName::PermissionResolve,
         CommandName::SessionCreate,
         CommandName::SessionResume,
+        CommandName::SessionTitleSet,
     ];
 
     /// body 顶层是否**必须**携带 `sessionRef`/`attachmentId`/`attachmentGeneration`。
     ///
-    /// 十三个 `submit*` def 把这三个字段绑成一组：会话范围命令三者都必须是 `$ref` 指向的非 `null` 值，
+    /// 十四个 `submit*` def 把这三个字段绑成一组：会话范围命令三者都必须是 `$ref` 指向的非 `null` 值，
     /// 其余命令（`session.list`、`command.status`、`session.create`）三者都必须显式为 `null`
     /// （§12.5："在不适用时显式写 `null`，不用省略代替"）。
     pub fn requires_session_attachment(self) -> bool {
@@ -137,6 +141,7 @@ impl CommandName {
             CommandName::PermissionResolve => "permission.resolve",
             CommandName::SessionCreate => "session.create",
             CommandName::SessionResume => "session.resume",
+            CommandName::SessionTitleSet => "session.title.set",
         }
     }
 }
@@ -820,7 +825,77 @@ pub struct SessionCreate {
 #[serde(deny_unknown_fields)]
 pub struct SessionResume {}
 
-/// `commandSubmit.body.payload`（`command.schema.json#/$defs/commandSubmit` 的 `body.oneOf` 13 个分支）。
+/// `session.title.set.payload.title`（`command.schema.json#/$defs/sessionTitle`）：用户设置的自定义
+/// 标题。
+///
+/// 与 Sync 面的同名值对象逐条同义（`docs/NODE_LINK_PROTOCOL.md` §12.7）：输入（trim 前）1..=512 个
+/// Unicode 标量值、至少含一个非空白字符，**保存值是 trim 后的文本**，trim 后为空则拒绝。长度按原始
+/// wire 字符串计（schema 的 `minLength`/`maxLength` 同口径），超长不截断；计数用 `chars()` 而不是
+/// UTF-16 code unit 数。Access 只用它转发命令，不回源持久化标题——唯一权威是 Owner。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTitle(String);
+
+impl SessionTitle {
+    /// 标题允许的最大 Unicode 标量值个数（`docs/NODE_LINK_PROTOCOL.md` §12.7）。
+    pub const MAX_SCALARS: usize = 512;
+
+    /// 校验并构造：长度按输入（trim 前）计；trim 后为空则拒绝。
+    ///
+    /// wire 值对象**保真原文**（不在这里改写字面量），因此类型化 body 的往返不会改变字段。
+    /// 保存值的 trim 由 core 的 `SessionTitle::parse` 在受理时完成。
+    pub fn parse(text: &str) -> Result<Self, ValueError> {
+        let length = text.chars().count();
+        if length == 0 || length > Self::MAX_SCALARS {
+            return Err(ValueError::TextLength {
+                min: 1,
+                max: Self::MAX_SCALARS,
+                actual: length,
+            });
+        }
+        if text.trim().is_empty() {
+            return Err(ValueError::Pattern {
+                field: "title",
+                value: text.to_owned(),
+            });
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    /// wire 原文（可能带首尾空白；受理时应使用 [`Self::trimmed`]）。
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// 受理时应保存的文本（首尾空白已去除）。
+    pub fn trimmed(&self) -> &str {
+        self.0.trim()
+    }
+}
+
+impl Serialize for SessionTitle {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionTitle {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(DeError::custom)
+    }
+}
+
+/// `session.title.set` 的 `payload`（`command.schema.json#/$defs/submitSessionTitleSet`）：`{ title }`。
+///
+/// 只有一个键：`expectedVersion` 不在本命令的 payload 上（body 的 `expectedVersion` 必须显式为
+/// `null`，按 Owner 提交顺序后写生效），未知键由 `additionalProperties: false` 拒绝。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionTitleSet {
+    pub title: SessionTitle,
+}
+
+/// `commandSubmit.body.payload`（`command.schema.json#/$defs/commandSubmit` 的 `body.oneOf` 14 个分支）。
 ///
 /// 变体顺序与 schema 的 `oneOf` 顺序一致（也就是 [`CommandName::ALL`] 的顺序）。payload 里没有自己的
 /// 判别字段，所以本枚举**没有** `Deserialize`：判别只能由 [`CommandSubmit::command`] 给出，见
@@ -857,6 +932,8 @@ pub enum CommandPayload {
     SessionCreate(SessionCreate),
     /// `session.resume` 的 payload。
     SessionResume(SessionResume),
+    /// `session.title.set` 的 payload。
+    SessionTitleSet(SessionTitleSet),
 }
 
 impl CommandPayload {
@@ -876,6 +953,7 @@ impl CommandPayload {
             CommandPayload::PermissionResolve(_) => CommandName::PermissionResolve,
             CommandPayload::SessionCreate(_) => CommandName::SessionCreate,
             CommandPayload::SessionResume(_) => CommandName::SessionResume,
+            CommandPayload::SessionTitleSet(_) => CommandName::SessionTitleSet,
         }
     }
 
@@ -944,6 +1022,11 @@ impl CommandPayload {
                 parse_payload(payload, "空 object（sessionResume 的 payload）")
                     .map(CommandPayload::SessionResume)
             }
+            CommandName::SessionTitleSet => parse_payload(
+                payload,
+                "{ title: 1..=512 个标量值（trim 后非空） }（sessionTitleSet 的 payload）",
+            )
+            .map(CommandPayload::SessionTitleSet),
         }
     }
 }
@@ -1485,7 +1568,7 @@ mod tests {
 
     #[test]
     fn session_resume_is_the_thirteenth_command_and_round_trips() {
-        assert_eq!(CommandName::ALL.len(), 13);
+        assert_eq!(CommandName::ALL.len(), 14);
         assert_eq!(CommandName::ALL[12], CommandName::SessionResume);
         assert_eq!(CommandName::SessionResume.as_str(), "session.resume");
         assert_eq!(
@@ -1563,6 +1646,109 @@ mod tests {
                 .is_err(),
             "session.resume 的 completed 结果必须是 sessionResumeResult"
         );
+    }
+
+    #[test]
+    fn session_title_set_forwards_a_trimmed_title_and_rejects_invalid_input() {
+        assert_eq!(
+            "session.title.set".parse::<CommandName>().expect("可解析"),
+            CommandName::SessionTitleSet
+        );
+        assert_eq!(CommandName::ALL[13], CommandName::SessionTitleSet);
+        assert_eq!(CommandName::SessionTitleSet.as_str(), "session.title.set");
+        // 会话范围命令：三个 attachment 字段必须非 `null`，`expectedVersion` 必须为 `null`。
+        assert!(CommandName::SessionTitleSet.requires_session_attachment());
+        assert!(!CommandName::SessionTitleSet.requires_expected_version());
+
+        // 合法标题：wire 保真原文，受理时的保存值由 core 去首尾空白（Access 只转发，不回源持久化）。
+        let submit = submit_with(|value| {
+            value["command"] = serde_json::json!("session.title.set");
+            value["payload"] = serde_json::json!({ "title": "  排查 登录失败  " });
+        })
+        .expect("合法标题必须被接受");
+        assert_eq!(submit.command, CommandName::SessionTitleSet);
+        let CommandPayload::SessionTitleSet(set) = &submit.payload else {
+            panic!("payload 必须是 SessionTitleSet");
+        };
+        assert_eq!(set.title.as_str(), "  排查 登录失败  ");
+        assert_eq!(set.title.trimmed(), "排查 登录失败");
+        let encoded = serde_json::to_string(&submit).expect("可序列化");
+        assert!(
+            encoded.contains(r#"{"title":"  排查 登录失败  "}"#),
+            "wire 编码保真原文，不在 DTO 层改写字段：{encoded}"
+        );
+
+        // 边界：512 个标量值接受、513 个拒绝；辅助平面字符按一个标量值计。
+        let max = "😀".repeat(SessionTitle::MAX_SCALARS);
+        assert_eq!(
+            SessionTitle::parse(&max)
+                .expect("512 个标量值必须接受")
+                .as_str(),
+            max
+        );
+        assert_eq!(
+            SessionTitle::parse(&"😀".repeat(SessionTitle::MAX_SCALARS + 1)),
+            Err(ValueError::TextLength {
+                min: 1,
+                max: SessionTitle::MAX_SCALARS,
+                actual: SessionTitle::MAX_SCALARS + 1,
+            })
+        );
+        assert_eq!(
+            SessionTitle::parse(""),
+            Err(ValueError::TextLength {
+                min: 1,
+                max: SessionTitle::MAX_SCALARS,
+                actual: 0,
+            })
+        );
+        assert!(
+            matches!(
+                SessionTitle::parse(" \t\n "),
+                Err(ValueError::Pattern { field: "title", .. })
+            ),
+            "纯空白不是有效标题"
+        );
+
+        for (label, edit) in [
+            (
+                "title 为 null",
+                Box::new(|value: &mut serde_json::Value| {
+                    value["payload"] = serde_json::json!({ "title": null });
+                }) as Box<dyn FnOnce(&mut serde_json::Value)>,
+            ),
+            (
+                "缺 title",
+                Box::new(|value: &mut serde_json::Value| {
+                    value["payload"] = serde_json::json!({});
+                }),
+            ),
+            (
+                "payload 出现未知键",
+                Box::new(|value: &mut serde_json::Value| {
+                    value["payload"] = serde_json::json!({ "title": "a", "modeId": "default" });
+                }),
+            ),
+            (
+                "expectedVersion 非 null",
+                Box::new(|value: &mut serde_json::Value| {
+                    value["expectedVersion"] = serde_json::json!("7");
+                }),
+            ),
+            (
+                "sessionRef 为 null",
+                Box::new(|value: &mut serde_json::Value| {
+                    value["sessionRef"] = serde_json::Value::Null;
+                }),
+            ),
+        ] {
+            let result = submit_with(move |value| {
+                value["command"] = serde_json::json!("session.title.set");
+                value["payload"] = serde_json::json!({ "title": "a" });
+                edit(value);
+            });
+            assert!(result.is_err(), "{label}：必须被拒绝，不能退回开放对象");
+        }
     }
 }
 

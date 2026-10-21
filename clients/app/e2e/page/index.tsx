@@ -15,6 +15,7 @@ import { CONVERSATION_CONTENT_CHECKS } from "./checks/conversation-content";
 import { CONVERSATION_LAYOUT_CHECKS } from "./checks/conversation-layout";
 import { CONVERSATION_TOOL_DETAIL_CHECKS } from "./checks/conversation-tool-detail";
 import { SESSION_FILES_CHECKS } from "./checks/session-files";
+import { SESSION_TITLE_CHECKS } from "./checks/session-title";
 import { FRAME_ACCEPTANCE_CHECKS } from "./checks/frame-acceptance";
 import { PAIRING_FIRST_RUN_CHECKS } from "./checks/pairing-first-run";
 import { PAIRING_KIND_CHECKS } from "./checks/pairing-kinds";
@@ -89,6 +90,7 @@ const ALL_CHECKS = [
   ...CONVERSATION_LAYOUT_CHECKS,
   ...CONVERSATION_TOOL_DETAIL_CHECKS,
   ...SESSION_FILES_CHECKS,
+  ...SESSION_TITLE_CHECKS,
   ...FRAME_ACCEPTANCE_CHECKS,
   ...PAIRING_FIRST_RUN_CHECKS,
   ...PAIRING_KIND_CHECKS,

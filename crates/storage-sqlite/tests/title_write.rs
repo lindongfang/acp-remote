@@ -15,11 +15,13 @@
 mod support;
 
 use acp_core::model::{
-    AgentRef, EventKind, EventOrigin, EventPayload, EventType, ModeId, ModeRef, OriginEpoch,
-    PendingEvent, SessionId, SessionState, StoredPolicy, Timestamp, Version, ViewJson,
+    Actor, AgentRef, CommandStatus, CommandTerminalRecord, DeviceId, Digest, EventKind,
+    EventOrigin, EventPayload, EventType, ModeId, ModeRef, OriginEpoch, PendingEvent, RequestId,
+    SessionId, SessionState, SessionTitle, StoredPolicy, Timestamp, Version, ViewJson,
 };
 use acp_core::ports::{
-    ModeChange, NewSession, OwnedCommit, SessionStore, SessionUpdate, StateChange,
+    IdempotencyRecord, ModeChange, NewSession, OwnedCommit, SessionQuery, SessionStore,
+    SessionUpdate, StateChange,
 };
 use storage_sqlite::migrate::StorageConfig;
 use storage_sqlite::session_store::SqliteStore;
@@ -110,6 +112,7 @@ fn update(
 /// 会话的全部窄写列 + 版本 + 更新时间（逐条断言的读面）。
 struct Row {
     title: Option<String>,
+    custom_title: Option<String>,
     agent_session_id: Option<String>,
     workspace_cwd: Option<String>,
     state: String,
@@ -124,7 +127,7 @@ async fn row(dir: &std::path::Path, session: &SessionId) -> Row {
     let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
     let pool = raw_pool(&path).await;
     let record = sqlx::query(
-        "SELECT title, agent_session_id, workspace_cwd, state, current_mode_id, \
+        "SELECT title, custom_title, agent_session_id, workspace_cwd, state, current_mode_id, \
          current_mode_name, workspace_directory_id, version, updated_at \
          FROM owned_session WHERE session_id = ?1",
     )
@@ -134,6 +137,8 @@ async fn row(dir: &std::path::Path, session: &SessionId) -> Row {
     .expect("读会话说");
     let row = Row {
         title: sqlx::Row::try_get::<Option<String>, _>(&record, "title").expect("title"),
+        custom_title: sqlx::Row::try_get::<Option<String>, _>(&record, "custom_title")
+            .expect("custom_title"),
         agent_session_id: sqlx::Row::try_get::<Option<String>, _>(&record, "agent_session_id")
             .expect("agent_session_id"),
         workspace_cwd: sqlx::Row::try_get::<Option<String>, _>(&record, "workspace_cwd")
@@ -172,6 +177,7 @@ fn session_update_with(
             ModeRef::try_new(ModeId::new("code").expect("mode id"), "Code").expect("mode ref"),
         ),
         title,
+        custom_title: None,
         confirmation: None,
         agent_session_id: agent_session_id
             .map(|id| acp_core::model::AgentSessionId::new(id).expect("agent session id")),
@@ -372,6 +378,7 @@ async fn clearing_a_title_with_a_mode_change_writes_both_columns() {
                         .expect("mode ref"),
                 ),
                 title: Some(None),
+                custom_title: None,
                 confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,
@@ -391,4 +398,291 @@ async fn clearing_a_title_with_a_mode_change_writes_both_columns() {
     assert_eq!(row.version, 2);
     assert_eq!(row.updated_at, at(3).as_str());
     store.close().await;
+}
+
+// -----------------------------------------------------------------------------------------------
+// `custom-session-title`：`custom_title` 是与 Agent 标题**互不覆盖**的另一列
+// -----------------------------------------------------------------------------------------------
+
+/// 自定义标题的窄写提交（`SessionUpdate.custom_title`；`None` = 不改该列）。
+fn custom_update(session: &SessionId, at: Timestamp, custom_title: Option<&str>) -> OwnedCommit {
+    update(
+        session,
+        at,
+        None,
+        Some(StateChange::Update(SessionUpdate {
+            state: None,
+            mode: ModeChange::Unchanged,
+            title: None,
+            custom_title: custom_title.map(|text| SessionTitle::parse(text).expect("title")),
+            confirmation: None,
+            interaction: None,
+            agent_session_id: None,
+            workspace_cwd: None,
+            workspace_directory_id: None,
+        })),
+        Vec::new(),
+    )
+}
+
+/// Agent 通知与用户改名各写各的列：改名/显式清空 Agent 标题都不碰 `custom_title`，摘要只下发有效值。
+#[tokio::test]
+async fn agent_updates_and_clears_never_touch_the_custom_title() {
+    let dir = temp_dir("title-write-custom-priority");
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at(0))
+        .await
+        .expect("open store");
+    let created = store
+        .commit(create_session(Some("Agent 原文")))
+        .await
+        .expect("create");
+    let session = created.session_id.clone().expect("session id");
+
+    let outcome = store
+        .commit(custom_update(&session, at(1), Some("我的标题")))
+        .await
+        .expect("写入自定义标题");
+    assert_eq!(outcome.version, Version::new(2));
+    let loaded = store.load(&session).await.expect("load").expect("session");
+    assert_eq!(
+        loaded.session.title(),
+        Some("Agent 原文"),
+        "Agent 列原样保真"
+    );
+    assert_eq!(loaded.session.custom_title(), Some("我的标题"));
+    assert_eq!(loaded.session.effective_title(), Some("我的标题"));
+    assert_eq!(
+        store
+            .list(SessionQuery {
+                only: Some(vec![session.clone()]),
+                states: Vec::new(),
+                limit: Some(1),
+            })
+            .await
+            .expect("list")[0]
+            .title(),
+        Some("我的标题"),
+        "摘要只下发有效标题（自定义优先）"
+    );
+
+    // Agent 改名：只写 Agent 列。
+    store
+        .commit(update(
+            &session,
+            at(2),
+            None,
+            Some(StateChange::Update(session_update(Some(Some(
+                "Agent 改名".to_owned(),
+            ))))),
+            Vec::new(),
+        ))
+        .await
+        .expect("Agent 改名");
+    let stored = row(&dir, &session).await;
+    assert_eq!(stored.title.as_deref(), Some("Agent 改名"));
+    assert_eq!(stored.custom_title.as_deref(), Some("我的标题"));
+
+    // Agent 显式置空：只清 Agent 列，自定义值仍在，摘要仍是自定义标题。
+    store
+        .commit(update(
+            &session,
+            at(3),
+            None,
+            Some(StateChange::Update(session_update(Some(None)))),
+            Vec::new(),
+        ))
+        .await
+        .expect("Agent 显式置空");
+    let stored = row(&dir, &session).await;
+    assert_eq!(stored.title, None, "显式置空写 NULL");
+    assert_eq!(
+        stored.custom_title.as_deref(),
+        Some("我的标题"),
+        "清空 Agent 标题不得清除自定义标题"
+    );
+    let loaded = store.load(&session).await.expect("load").expect("session");
+    assert_eq!(loaded.session.effective_title(), Some("我的标题"));
+
+    // `custom_title: None` = 不改该列（没有清除/恢复语义）。
+    store
+        .commit(custom_update(&session, at(4), None))
+        .await
+        .expect("不改自定义标题");
+    assert_eq!(
+        row(&dir, &session).await.custom_title.as_deref(),
+        Some("我的标题")
+    );
+    store.close().await;
+}
+
+/// 没有任何标题的会话：摘要 `title` 是 `None`（未命名），两列都是 `NULL`。
+#[tokio::test]
+async fn a_session_without_any_title_is_unnamed() {
+    let dir = temp_dir("title-write-unnamed");
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at(0))
+        .await
+        .expect("open store");
+    let created = store.commit(create_session(None)).await.expect("create");
+    let session = created.session_id.clone().expect("session id");
+
+    let loaded = store.load(&session).await.expect("load").expect("session");
+    assert_eq!(loaded.session.title(), None);
+    assert_eq!(loaded.session.custom_title(), None);
+    assert_eq!(loaded.session.effective_title(), None);
+    assert_eq!(
+        store
+            .list(SessionQuery {
+                only: Some(vec![session.clone()]),
+                states: Vec::new(),
+                limit: Some(1),
+            })
+            .await
+            .expect("list")[0]
+            .title(),
+        None,
+        "未命名会话的摘要 title 必须是 null，不得填空串"
+    );
+    store.close().await;
+}
+
+/// **受理与终态同批**（`OwnedCommit.idempotency` + `command_terminal` 同时为 `Some`）：
+/// 一次事务写成终态行 + 事件 + 状态，`terminal_event_id` 回填为同批那条终态事件。
+#[tokio::test]
+async fn acceptance_and_terminal_can_be_settled_in_one_commit() {
+    const REQUEST: &str = "9a9a9a9a-9a9a-4a9a-8a9a-9a9a9a9a9a9a";
+    let dir = temp_dir("title-write-inline-terminal");
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at(0))
+        .await
+        .expect("open store");
+    let created = store
+        .commit(create_session(Some("Agent")))
+        .await
+        .expect("create");
+    let session = created.session_id.clone().expect("session id");
+    let actor = Actor::Device {
+        device: DeviceId::new("5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a").expect("device id"),
+    };
+    let request = RequestId::new(REQUEST).expect("request id");
+    let fingerprint = Digest::new(&support::digest_text("session.title.set")).expect("fingerprint");
+
+    let inline = |causation: &RequestId| OwnedCommit {
+        session: Some(session.clone()),
+        at: at(1),
+        expected_version: None,
+        state: Some(StateChange::Update(SessionUpdate {
+            state: None,
+            mode: ModeChange::Unchanged,
+            title: None,
+            custom_title: Some(SessionTitle::parse("同批标题").expect("title")),
+            confirmation: None,
+            interaction: None,
+            agent_session_id: None,
+            workspace_cwd: None,
+            workspace_directory_id: None,
+        })),
+        turns: Vec::new(),
+        events: vec![PendingEvent::new(
+            EventKind::Structured,
+            EventType::new("command.completed").expect("event type"),
+            StoredPolicy::Durable,
+            EventPayload::new(
+                ViewJson::new(r#"{"status":"completed"}"#).expect("view json"),
+                None,
+            ),
+            EventOrigin::Device,
+            None,
+            Some(causation.clone()),
+        )],
+        interactions: Vec::new(),
+        compacted: Vec::new(),
+        idempotency: Some(IdempotencyRecord {
+            actor: actor.clone(),
+            request: request.clone(),
+            command: "session.title.set".to_owned(),
+            kind: acp_core::model::CommandKind::Mutation,
+            session: Some(session.clone()),
+            expected_version: None,
+            request_fingerprint: fingerprint.clone(),
+            accepted_at: at(1),
+        }),
+        command_terminal: Some(
+            CommandTerminalRecord::try_new(CommandStatus::Completed, Some(at(1)), None, None, None)
+                .expect("terminal record"),
+        ),
+        origin_epoch: None,
+    };
+
+    // causation 不属于本次受理的 requestId → 整事务拒绝，零写入。
+    let mismatched_request =
+        RequestId::new("8b8b8b8b-8b8b-4b8b-8b8b-8b8b8b8b8b8b").expect("other request");
+    let mismatched = store.commit(inline(&mismatched_request)).await;
+    assert!(
+        matches!(
+            mismatched,
+            Err(acp_core::model::PortError::InvalidRequest(_))
+        ),
+        "终态事件必须属于本次受理的 requestId：{mismatched:?}"
+    );
+
+    let outcome = store
+        .commit(inline(&request))
+        .await
+        .expect("受理与终态同批必须成功");
+    assert_eq!(outcome.version, Version::new(2));
+    let terminal_event = outcome
+        .appended
+        .iter()
+        .find(|event| event.event_type.as_str() == "command.completed")
+        .expect("终态事件")
+        .id
+        .clone();
+
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    let pool = raw_pool(&path).await;
+    let row =
+        sqlx::query("SELECT status, terminal_event_id FROM owned_command WHERE request_id = ?1")
+            .bind(REQUEST)
+            .fetch_one(&pool)
+            .await
+            .expect("命令行");
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&row, "status").expect("status"),
+        "completed",
+        "一次提交就写成终态（不得停在 accepted）"
+    );
+    assert_eq!(
+        sqlx::Row::try_get::<Option<String>, _>(&row, "terminal_event_id")
+            .expect("terminal_event_id")
+            .as_deref(),
+        Some(terminal_event.as_str()),
+        "terminal_event_id 必须回填为同批那条终态事件"
+    );
+    let commands = ints(&pool, "SELECT COUNT(*) FROM owned_command").await;
+    let events = ints(&pool, "SELECT COUNT(*) FROM owned_event").await;
+    pool.close().await;
+
+    // 同一 requestId 重放：不重复修改、不追加事件。
+    let replay = store.commit(inline(&request)).await.expect("重放必须成功");
+    assert!(replay.replayed.is_some(), "重放必须回报既有记录");
+    assert!(replay.appended.is_empty(), "重放不得追加事件");
+    assert_eq!(replay.version, Version::new(2), "重放不得再涨版本");
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        ints(&pool, "SELECT COUNT(*) FROM owned_command").await,
+        commands
+    );
+    assert_eq!(
+        ints(&pool, "SELECT COUNT(*) FROM owned_event").await,
+        events
+    );
+    pool.close().await;
+    store.close().await;
+}
+
+/// 单值查询（测试读面）：失败即 panic，消息带 SQL。
+async fn ints(pool: &sqlx::SqlitePool, sql: &str) -> Vec<i64> {
+    sqlx::query_scalar(sql)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|error| panic!("{sql}: {error}"))
 }

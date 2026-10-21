@@ -22,7 +22,7 @@ use identity_auth::{CanonicalOrigin, ConnectionBinding, CredentialStatus, Featur
 use sync_protocol::auth::ClientHello;
 use sync_protocol::common::{FeatureId, FeatureList as WireFeatureList};
 
-/// 本切片实现的 Sync feature（`features.json` 的 `sync` 子集里 `delivery = mvp` 中已完整接线的十七
+/// 本切片实现的 Sync feature（`features.json` 的 `sync` 子集里 `delivery = mvp` 中已完整接线的二十一
 /// 条，§5.2）。
 ///
 /// 必需集合 = [`REQUIRED_FEATURES`] ∪ 对端 `requiredFeatures`。v1 baseline 里只有
@@ -34,7 +34,7 @@ use sync_protocol::common::{FeatureId, FeatureList as WireFeatureList};
 /// 协商是**交集**（见 [`negotiate_features`]），因此这里漏登记一条 feature 会让它**静默失效**：客户端
 /// 声明了却被交集丢掉，服务端随后的门控（快照的 `path` 键、`workspace.browse`、`file.changed` 的
 /// 差异行）一律按「未协商」处置。新增 feature 时必须同时把它加进本表。
-pub const SUPPORTED_FEATURES: [&str; 20] = [
+pub const SUPPORTED_FEATURES: [&str; 21] = [
     // §10.2：会话主状态三态合同（`idle`/`running`/`pending`）。两端都必须选中，否则摘要词表可能不一致。
     "core.session-activity.v1",
     "resource.stateless-origin.v1",
@@ -62,11 +62,21 @@ pub const SUPPORTED_FEATURES: [&str; 20] = [
     // §3.4：独立附件连接的帧族与门控（`sync::attachments`）。组合根注册 `/sync/v1/attachments`
     // 后才把本表（或它的子集）传给连接；未注册端点时用 [`feature_list_without`] 去掉它。
     "core.attachment-transfer.v1",
+    // §11.5：`session.title.set`（Owner 元数据 mutation；Sync 与 Node Link 共享同一 ID）。宣告即承诺
+    // 真实接线——命令面在 `sync::command::CommandRoute::on_session_title` 里按 feature 门控，未协商
+    // 时回 `protocol.feature_required`，因此只有真实路由存在时才登记。
+    "core.session-title.v1",
 ];
 // `core.remote-history.v1` **不在此表**：imported 会话的历史回源需要 Access 侧的正文路径
 // （`node-link-client`）。宣告它会让客户端对一个当前必然失败的读取路径保留入口——能力协商不得
 // 虚报（`AGENTS.md` §4）。WP5 接线后把它加进本表并补一条「imported 会话 history 走 Owner 回源」的
 // 用例。
+
+/// registry 里 `delivery = mvp` 但 Sync 面**尚未接线**、因此不宣告的 feature。
+///
+/// 显式差异而不是静默漏项：`supported_features_match_the_registry_mvp_subset` 用「mvp 减去本表」与
+/// [`SUPPORTED_FEATURES`] 逐条比对，任何既没宣告、也没登记为 deferred 的 mvp feature 都会让用例失败。
+pub const DEFERRED_FEATURES: [&str; 1] = ["core.remote-history.v1"];
 
 /// 每次协商都必须选中的 feature（`features.json` 里 `required: true` 的 Sync 条目，§5.2）。
 ///
@@ -319,5 +329,73 @@ mod tests {
             fault,
             NegotiationFault::FeaturesMissing(vec!["core.session-activity.v1".to_owned()])
         );
+    }
+
+    /// 仓库根下的路径（集成测试的 cwd 不保证是仓库根）。
+    fn repo_path(relative: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join(relative)
+    }
+
+    /// 宣告集合必须与 registry 的 `sync` 子集逐条相等（减去显式 deferred 的那一条）。
+    ///
+    /// 词表的唯一机器来源是 `compatibility/features/v1/features.json`：这里同时挡住「宣告了 registry
+    /// 之外的 ID」「漏掉一条 mvp」「把 post_mvp 当成 mvp」与「required 集合漂移」四种偏差——能力协商
+    /// 不得虚报，也不得静默漏项（`AGENTS.md` §4）。
+    #[test]
+    fn supported_features_match_the_registry_mvp_subset() {
+        let registry =
+            std::fs::read_to_string(repo_path("compatibility/features/v1/features.json"))
+                .expect("features.json 必须存在");
+        let registry: serde_json::Value = serde_json::from_str(&registry).expect("features.json");
+        let entries = registry["protocols"]["sync"]["features"]
+            .as_array()
+            .expect("sync.features");
+        let mvp: Vec<String> = entries
+            .iter()
+            .filter(|entry| entry["delivery"].as_str() == Some("mvp"))
+            .map(|entry| entry["id"].as_str().expect("feature id").to_owned())
+            .collect();
+        let mut expected: Vec<String> = mvp
+            .iter()
+            .filter(|id| !DEFERRED_FEATURES.contains(&id.as_str()))
+            .cloned()
+            .collect();
+        let mut declared: Vec<String> = SUPPORTED_FEATURES
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect();
+        excluded(&mut expected);
+        excluded(&mut declared);
+        assert_eq!(declared, expected);
+        // deferred 必须真的是 registry 的 mvp，且不得同时出现在宣告集合里。
+        for id in DEFERRED_FEATURES {
+            assert!(
+                mvp.iter().any(|mvp| mvp == id),
+                "{id} is not an mvp feature"
+            );
+            assert!(
+                !SUPPORTED_FEATURES.contains(&id),
+                "{id} cannot be both declared and deferred"
+            );
+        }
+        // registry 里 `required: true` 的条目必须正好是本端必需集合（顺序无关）。
+        let mut registry_required: Vec<&str> = entries
+            .iter()
+            .filter(|entry| entry["required"].as_bool() == Some(true))
+            .map(|entry| entry["id"].as_str().expect("id"))
+            .collect();
+        registry_required.sort();
+        let mut expected_required = REQUIRED_FEATURES.to_vec();
+        expected_required.sort();
+        assert_eq!(registry_required, expected_required);
+    }
+
+    /// 排序去重，使比较只看集合语义（登记顺序是 §5.2 的表格顺序，不是字典序）。
+    fn excluded(features: &mut Vec<String>) {
+        features.sort();
+        features.dedup();
     }
 }

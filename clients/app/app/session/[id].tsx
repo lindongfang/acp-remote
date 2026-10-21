@@ -148,6 +148,11 @@ export default function SessionRoute(): ReactElement {
     if (store === null || sessionId === null) return;
     store.setActiveConversationSession(sessionId);
     store.loadSession(sessionId);
+    // 离开本会话（切换/返回目录/卸载）时先尝试提交原会话的标题编辑，再放弃未保存输入；
+    // 已发出的命令按原 requestId 继续归属，迟到结果不会写进新会话。
+    return () => {
+      store.leaveConversationSession(sessionId);
+    };
   }, [store, sessionId]);
 
   if (store === null || state === null || sessionId === null) return <RuntimeUnavailable route="session" />;
@@ -238,6 +243,20 @@ export default function SessionRoute(): ReactElement {
         onOpenDiagnostics={(eventId) => {
           store.openDiagnostics(eventId);
         }}
+        // 顶部标题：双击进入原地编辑；Enter/失焦提交、Escape 取消；判定与草稿都在仓库里。
+        titleEditor={store.titleEditorView(sessionId)}
+        onStartTitleEdit={() => {
+          store.beginTitleEdit(sessionId);
+        }}
+        onTitleDraftChange={(draft) => {
+          store.setTitleDraft(sessionId, draft);
+        }}
+        onCommitTitle={(reason) => {
+          store.commitTitleEdit(sessionId, reason);
+        }}
+        onCancelTitleEdit={() => {
+          store.cancelTitleEdit(sessionId);
+        }}
         // 草稿只在内存（imported 会话也不落盘），提交时把当前草稿交给仓库。
         onDraftChange={(text) => {
           store.setDraft(sessionId, text);
@@ -308,9 +327,14 @@ export default function SessionRoute(): ReactElement {
         createPreviewUrl={createPreviewUrl}
         // 左栏：返回目录列表、同目录会话、目录内搜索、分页与新建。
         onOpenDirectoryList={() => {
+          store.leaveConversationSession(sessionId);
           router.push("/");
         }}
         onOpenSession={(otherSessionId) => {
+          // 点当前会话不是导航：不打断正在进行的编辑。
+          if (otherSessionId === sessionId) return;
+          // 先为原会话尝试提交（不等待网络结果），再正常导航；不把草稿带到新会话。
+          store.leaveConversationSession(sessionId);
           router.push(`/session/${encodeURIComponent(otherSessionId)}`);
         }}
         onSidebarQueryChange={(query) => {

@@ -51,7 +51,7 @@ pub enum CommandFamily {
     Observe,
     /// `session.prompt`、`session.cancel`、`elicitation.respond`。
     Interact,
-    /// `session.mode.set`、`session.config.set`。
+    /// `session.mode.set`、`session.config.set`、`session.title.set`。
     ConfigureSession,
     /// `permission.resolve`。
     Approve,
@@ -89,9 +89,11 @@ impl CommandFamily {
             CommandName::SessionPrompt
             | CommandName::SessionCancel
             | CommandName::ElicitationRespond => CommandFamily::Interact,
-            CommandName::SessionModeSet | CommandName::SessionConfigSet => {
-                CommandFamily::ConfigureSession
-            }
+            // `session.title.set` 与两条会话配置 mutation 同族：它们都改会话元数据、都不是高频查询，
+            // 因此共用一份额度，不另立第七个族。
+            CommandName::SessionModeSet
+            | CommandName::SessionConfigSet
+            | CommandName::SessionTitleSet => CommandFamily::ConfigureSession,
             CommandName::PermissionResolve => CommandFamily::Approve,
             CommandName::SessionCreate => CommandFamily::CreateSession,
             CommandName::WorkspaceMkdir => CommandFamily::CreateDirectory,
@@ -200,4 +202,43 @@ fn evict_idle(
 /// 锁中毒时取回内层数据而不是 panic。
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    /// registry（`CommandName::ALL`，与 `commands.json` 的 sync 子集逐条相等）里的每条命令都必须落进
+    /// 一个**已登记**的族，且每个族至少覆盖一条命令。
+    ///
+    /// 穷尽性由 `CommandFamily::of` 的 `match` 保证（新增命令名而不归类即编译失败）；本用例补的是
+    /// 「族本身都还在用」——否则 `ALL` 会慢慢长出一批永不命中的族，限流键空间与文档就会偏离。
+    #[test]
+    fn every_registry_command_is_covered_by_exactly_one_family() {
+        let mut covered = BTreeSet::new();
+        for command in CommandName::ALL {
+            let family = CommandFamily::of(command);
+            assert!(
+                CommandFamily::ALL.contains(&family),
+                "{command:?} maps to an unregistered family {family:?}"
+            );
+            covered.insert(family);
+        }
+        assert_eq!(
+            covered.len(),
+            CommandFamily::ALL.len(),
+            "every family must cover at least one registry command"
+        );
+    }
+
+    /// `session.title.set` 与两条会话配置 mutation 同族（§14：按命令族分账，不新增族）。
+    #[test]
+    fn title_set_shares_the_configure_session_family() {
+        assert_eq!(
+            CommandFamily::of(CommandName::SessionTitleSet),
+            CommandFamily::ConfigureSession
+        );
+    }
 }

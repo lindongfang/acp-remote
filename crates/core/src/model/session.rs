@@ -139,12 +139,46 @@ impl TurnState {
     }
 }
 
+/// 用户设置的自定义标题（`session.title.set`；`design.md` D1/D2）。
+///
+/// 规则：输入 1..=512 个 Unicode 标量值、且至少含一个非空白字符；**保存值是去除首尾空白后的文本**
+/// （trim 只发生在边缘：不截断、不改写中间内容）。长度按**输入**的标量值计，与 wire schema 的
+/// `minLength`/`maxLength` 同口径——trim 只会变短，因此「保存值 1..=512」自动成立。
+///
+/// 它是 core 自己的值对象：wire crate（`sync-protocol`/`node-link-protocol`）各有自己的同名类型，
+/// core 不从任何 wire DTO 借用（`AGENTS.md` §5）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SessionTitle(String);
+
+impl SessionTitle {
+    /// 标题允许的最大 Unicode 标量值个数。
+    pub const MAX_SCALARS: usize = 512;
+
+    /// 校验并构造；保存值是 trim 后的文本。
+    pub fn parse(text: &str) -> Result<Self, InvalidValue> {
+        require_bounded(text, 1, Self::MAX_SCALARS)?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(InvalidValue::Field);
+        }
+        Ok(Self(trimmed.to_owned()))
+    }
+
+    /// trim 之后的标题文本。
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// 会话聚合。字段私有：状态只能经 [`Session::transition`] 前进。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     id: SessionId,
     reference: OwnedSessionRef,
+    /// Agent 提供的标题（`session_info_update` 的唯一投影目标）。**不**受自定义标题影响。
     title: Option<String>,
+    /// 用户显式设置的自定义标题（`session.title.set`）。`None` = 从未设置过。
+    custom_title: Option<SessionTitle>,
     agent: AgentRef,
     state: SessionState,
     origin: ResourceOrigin,
@@ -155,12 +189,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// 构造。`title` 上限 512 字符；`reference` 必须指向本 id。
+    /// 构造。`title`（Agent 标题）上限 512 字符；`custom_title` 由 [`SessionTitle`] 自己保证已 trim
+    /// 且 1..=512；`reference` 必须指向本 id。
     #[allow(clippy::too_many_arguments)] // §3.3 冻结的记录形状，不为此引入 builder
     pub fn try_new(
         id: SessionId,
         reference: OwnedSessionRef,
         title: Option<String>,
+        custom_title: Option<SessionTitle>,
         agent: AgentRef,
         state: SessionState,
         origin: ResourceOrigin,
@@ -179,6 +215,7 @@ impl Session {
             id,
             reference,
             title,
+            custom_title,
             agent,
             state,
             origin,
@@ -199,9 +236,30 @@ impl Session {
         &self.reference
     }
 
-    /// 标题。
+    /// **Agent 标题**（`owned_session.title`）。自定义标题不会改变它，Agent 通知也不会改变
+    /// [`Session::custom_title`]。
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    /// 用户设置的自定义标题（`owned_session.custom_title`）；`None` = 从未设置。
+    pub fn custom_title(&self) -> Option<&str> {
+        self.custom_title.as_ref().map(SessionTitle::as_str)
+    }
+
+    /// 自定义标题的**值对象**：只给 crate 内的提交替身用（测试在 `#[cfg(test)]` 里，因此本方法也只在
+    /// 测试构建存在——`Option<&str>` 复制后再 `parse` 等于给已验证的值再造第二套规则）。
+    #[cfg(test)]
+    pub(crate) fn custom_title_value(&self) -> Option<&SessionTitle> {
+        self.custom_title.as_ref()
+    }
+
+    /// **有效标题**：自定义标题优先，否则 Agent 标题，否则未命名（`None`）。
+    ///
+    /// 客户端看到的 `SessionSummary.title` 与 `session.updated` 的摘要都取这个值（`design.md` D1）；
+    /// 两个来源各自保真，只有投影是单值的。
+    pub fn effective_title(&self) -> Option<&str> {
+        self.custom_title().or(self.title.as_deref())
     }
 
     /// Agent 引用。
@@ -256,7 +314,9 @@ impl Session {
     pub fn summary(&self, workspace: Option<WorkspaceRef>) -> SessionSummary {
         SessionSummary {
             session_id: self.id.clone(),
-            title: self.title.clone(),
+            // 摘要只有一个 `title`：它投影**有效标题**（自定义优先、否则 Agent 标题、否则未命名），
+            // 不新增 wire 字段（`design.md` D1 的旧客户端兼容取舍）。
+            title: self.effective_title().map(str::to_owned),
             agent: self.agent.clone(),
             state: self.state,
             origin: self.origin.clone(),
@@ -372,8 +432,14 @@ impl SessionSummary {
         self.workspace.as_ref()
     }
 
-    /// 同一提交内的标题覆盖：`session.updated` 必须投影**提交后**的完整摘要，不能回读提交前的行。
-    pub(crate) fn with_title(mut self, title: Option<String>) -> Result<Self, InvalidValue> {
+    /// 同一提交内的**有效标题**覆盖：`session.updated` 必须投影**提交后**的完整摘要，不能回读提交前的行。
+    ///
+    /// 调用方已经按「自定义优先、否则 Agent 标题」算好有效值（[`Session::effective_title`] 同一口径）；
+    /// 本方法只把它放进投影，不区分来源——摘要本来就不携带来源。
+    pub(crate) fn with_effective_title(
+        mut self,
+        title: Option<String>,
+    ) -> Result<Self, InvalidValue> {
         if let Some(title) = &title {
             require_bounded(title, 0, 512)?;
         }
@@ -746,7 +812,8 @@ fn check_prompt_len(len: usize) -> Result<(), InvalidValue> {
 
 /// 命令 payload：按命令名一对一（§3.3）。`session.create` 与 `session.resume` 都不在其中——它们
 /// 分别经 [`super::CreateSessionRequest`] 与 Node Link 的 `session.create`/`session.resume` 专用路径
-/// 进入（§12.7）。
+/// 进入（§12.7）。`TitleSet` 是 Owner 元数据命令的 core 侧值对象：wire crate 各有自己的同名类型，
+/// 由适配层映射，core 不依赖任何 wire DTO。
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandPayload {
     SessionList {},
@@ -780,6 +847,14 @@ pub enum CommandPayload {
         action: ElicitationAction,
         values: ElicitationValues,
     },
+    /// `session.title.set`（feature `core.session-title.v1`）：Owner 元数据 mutation。
+    ///
+    /// 不依赖 Agent 命名能力、不启动 Agent、不占用 active turn，`idle`/`running`/`pending` 任一状态都可
+    /// 执行；`expectedVersion` 必须缺席（按 Owner 提交顺序后写生效，`design.md` D2）。载荷已经过
+    /// [`SessionTitle::parse`]，因此这里不重复校验文本形状。
+    TitleSet {
+        title: SessionTitle,
+    },
     /// `workspace.browse`（Sync 面）：逐层浏览本机目录。`path` 是请求的父路径**原文**（绝对路径），
     /// `None` = 请求本机的根列表。形状校验（绝对、无 `..`）、存在性与目录性判定由
     /// [`crate::use_cases::UseCases::workspace_browse`] 完成——本变体只承载请求形状，不做任何文件系统
@@ -804,7 +879,8 @@ impl CommandPayload {
             | Self::ModeSet { .. }
             | Self::ConfigSet { .. }
             | Self::PermissionResolve { .. }
-            | Self::ElicitationRespond { .. } => CommandKind::Mutation,
+            | Self::ElicitationRespond { .. }
+            | Self::TitleSet { .. } => CommandKind::Mutation,
         }
     }
 
@@ -844,13 +920,16 @@ impl CommandPayload {
                 None => Ok(()),
                 Some(path) => require_bounded(path, 1, 4096),
             },
+            // `TitleSet` 的标题已在 [`SessionTitle::parse`] 校验（trim 后 1..=512）；这里不再有第二套文本
+            // 规则，也不接受 `null`（变体本身就没有 None 分支）。
             Self::SessionList {}
             | Self::CommandStatus { .. }
             | Self::ModeList {}
             | Self::ConfigList {}
             | Self::Cancel { .. }
             | Self::ModeSet { .. }
-            | Self::ConfigSet { .. } => Ok(()),
+            | Self::ConfigSet { .. }
+            | Self::TitleSet { .. } => Ok(()),
         }
     }
 }

@@ -153,6 +153,11 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-result-session-title-uncertain.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/command-result-session-create-completed.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
@@ -1542,6 +1547,68 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "required"
+    },
+    {
+      "fixture": "valid/command-session-title-set.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-session-title-set-single-char.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-session-title-set-max-scalars.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-title-set-feature-required.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/session-summary-custom-title.json",
+      "schema": "../../../schemas/sync/v1/common.schema.json",
+      "schemaPointer": "#/$defs/sessionSummary",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-session-title-set-empty.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "minLength"
+    },
+    {
+      "fixture": "invalid/command-session-title-set-blank.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
+    },
+    {
+      "fixture": "invalid/command-session-title-set-too-long.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "maxLength"
+    },
+    {
+      "fixture": "invalid/command-session-title-set-null.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
+    },
+    {
+      "fixture": "invalid/command-session-title-set-missing-title.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/command-session-title-set-expected-version.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
     }
   ],
   "deviceQrVectors": [

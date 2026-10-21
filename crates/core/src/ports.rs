@@ -32,8 +32,8 @@ use crate::model::{
     PendingEvent, PendingInteraction, PortError, PromptRequest, PublicError, RemoteSessionRef,
     RequestId, ResumeSessionRequest, SealedAttachment, Sequence, ServerEpoch, SessionFileChunk,
     SessionFilePage, SessionFilePath, SessionId, SessionPageToken, SessionRecoveryRecord,
-    SessionReference, SessionSnapshot, SessionState, SessionSummary, SubmissionId, Timestamp, Turn,
-    TurnId, TurnState, UnavailableKind, Version,
+    SessionReference, SessionSnapshot, SessionState, SessionSummary, SessionTitle, SubmissionId,
+    Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -279,8 +279,15 @@ pub struct SessionUpdate {
     /// - `Some(Some(text))` = 写入该标题（上限 512 字符，与 `Session::title` 同一约束）。
     ///
     /// 唯一来源是 Agent 的 `session_info_update` 通知经 broker 投影的 `session.info.changed`
-    /// （`design.md` D7）：不存在客户端发起的重命名命令，也没有绕过该通知直接写标题的路径。
+    /// （`design.md` D7）以及 `session.create` 的创建提交流程。**只**写 Agent 标题列，自定义标题
+    /// （[`SessionUpdate::custom_title`]）与它互不覆盖。
     pub title: Option<Option<String>>,
+    /// `owned_session.custom_title`：用户显式设置的自定义标题（`design.md` D1/D2）。
+    ///
+    /// `None` = 不改该列（**不是**清空：合同没有清除/恢复语义，一旦写入就只能再次改名）；
+    /// `Some(title)` = 写入 trim 后的标题值。唯一写入方是 `session.title.set` 的
+    /// [`crate::broker::Broker`] 管道；Agent 通知永远不碰这一列。
+    pub custom_title: Option<SessionTitle>,
     pub mode: ModeChange,
     /// 一次交互解析：由存储层用**条件更新**实现 first-writer-wins（§5.2、§6.7）。
     ///
@@ -413,8 +420,14 @@ pub struct OwnedCommit {
     pub compacted: Vec<GlobalCursor>,
     /// 含指纹与 `expected_version`。
     pub idempotency: Option<IdempotencyRecord>,
-    /// 命令终态。**接受提交**（`idempotency` 为 `Some`）时本字段为 `None`——`CommandTerminalRecord`
+    /// 命令终态。**接受提交**（`idempotency` 为 `Some`）通常本字段为 `None`——`CommandTerminalRecord`
     /// 只能表达终止态（§3.3），accepted 行的 `status`/`accepted_at` 由 `idempotency` 决定。
+    ///
+    /// **同一提交既是接受也是终态**（`session.title.set`，`design.md` D2）：`idempotency` 与
+    /// `command_terminal` 同时为 `Some` 时，存储层在**同一事务**里写幂等行（`status` 直接取终态）、
+    /// 该批次的 `session.updated`/`command.completed` 事件，并把 `terminal_event` 回填为批次里
+    /// `causation = requestId` 的那条终态事件；不再定位既有 `accepted` 行（本次提交才建它）。
+    /// 这种形状要求批次里**必须**有该请求的终态事件，否则整事务 `InvalidRequest`。
     ///
     /// **终态提交**（本字段为 `Some`）不含 `requestId`，因此存储层用同一批次里 `command.*`
     /// 终态事件的 `causation` 定位 `owned_command` 行；`terminal_event` 由存储层回填为该事件的
@@ -2047,6 +2060,12 @@ pub struct RemoteCommandRecord {
     pub status: CommandStatus,
     pub accepted_at: Option<Timestamp>,
     pub terminal_at: Option<Timestamp>,
+    /// Owner 为这条命令落盘的**终态事件标识**（`terminalEventId`）；`accepted` 恒为 `None`。
+    ///
+    /// 它是 Owner 的事件标识，不是 Access 本地序号：Access 只把它原样投影成 wire 的
+    /// `terminalEventId`（`SYNC_PROTOCOL.md` §11.2），**不**据此伪造本地事件或落盘任何索引进而
+    /// 声称「可本地恢复」。
+    pub terminal_event_id: Option<EventId>,
     pub result: Option<CommandResult>,
     pub error: Option<PublicError>,
 }
@@ -2082,4 +2101,32 @@ pub trait RemoteCommandStatus: Send + Sync {
         target: &RemoteCommandTarget,
         request: &RequestId,
     ) -> Result<RemoteCommandLookup, PortError>;
+}
+
+/// Access 侧向 Owner 提交 `session.title.set` 的窄端口（`design.md` D2/D3；spec
+/// `session-custom-title`「imported 会话修改」）。
+///
+/// **同一 requestId**：调用方给出、实现原样使用——不换号、不自动重发；结果丢失只能由客户端用原
+/// `requestId` 走 `command.status`（[`RemoteCommandStatus`]）回源。
+///
+/// **不落盘**：实现只在已认证连接期持有运行期事实，标题、命令状态、收据与请求引用一律不写数据库、
+/// 临时文件或日志；Access 不是远程标题的第二权威。
+///
+/// **代际**：调用方传入目录条目的 `generation`；实现必须在连接断开/撤销/代际变化后丢弃迟到的
+/// **成功**结果，不得把跨代结果当作本次成功。若帧已写出但结果无法确认（断线、超时、提交后代际
+/// 变化），实现返回 `status = Uncertain` 的记录而不是错误——它不声称成功或失败，调用方据此保留
+/// 原 `requestId` 供客户端回源；只有确定没有发出副作用时才返回
+/// [`PortError::Unavailable`]（`OwnerOffline`/`RemoteUnavailable`）。
+///
+/// 返回 Owner 的当前记录：Owner 已给出终态时是终态记录（`terminal_event_id` 可缺），否则是
+/// `accepted` 记录，结果未知时是 `Uncertain` 记录（`terminal_at`/`terminal_event_id` 均为 `None`）。
+#[async_trait]
+pub trait RemoteTitleWrite: Send + Sync {
+    async fn set_title(
+        &self,
+        session: &RemoteSessionRef,
+        generation: RemoteGeneration,
+        request: &RequestId,
+        title: &SessionTitle,
+    ) -> Result<RemoteCommandRecord, PortError>;
 }

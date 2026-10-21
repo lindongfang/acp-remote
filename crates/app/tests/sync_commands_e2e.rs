@@ -35,6 +35,8 @@ fn supported_features() -> Vec<&'static str> {
         "core.session-history.v1",
         "core.event-origin.v1",
         "core.session-activity.v1",
+        // `session.title.set` 的门控：真实端点要求它在 `auth.client_hello` 里出现（§11.5）。
+        "core.session-title.v1",
     ]
 }
 
@@ -182,15 +184,15 @@ async fn pair_and_approve(host: &HostNode, device: &Device) -> Value {
 
 /// 配对并完成四消息握手；返回（已认证的）客户端。
 async fn connect_authenticated(host: &HostNode, device: &Device) -> SyncClient {
+    connect_with_features(host, device, &supported_features()).await
+}
+
+/// 同上，但由调用方给出 `auth.client_hello.supportedFeatures`（feature 门控用例需要一条「没协商」的连接）。
+async fn connect_with_features(host: &HostNode, device: &Device, features: &[&str]) -> SyncClient {
     let mut client = SyncClient::connect_plain(host.addr(), host.host_name(), &host.origin()).await;
     client.step("四消息握手");
     let authenticated = client
-        .authenticate(
-            &host.host_id(),
-            &device.key,
-            &supported_features(),
-            &device.client_nonce,
-        )
+        .authenticate(&host.host_id(), &device.key, features, &device.client_nonce)
         .await;
     assert_eq!(
         authenticated["type"],
@@ -1955,6 +1957,356 @@ async fn a_window_event_overflow_closes_the_backend_and_ends_the_create_as_uncer
     assert_eq!(record.3.as_deref(), Some("command.uncertain"), "{record:?}");
     // ⑤ 超限发生在**执行之后**的结算路径上：创建本身只被派发一次。
     assert_eq!(host.script().create_calls(), 1);
+
+    host.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// `session.title.set`（Owner 元数据命令；变更 `custom-session-title` 任务 2.2）
+// ---------------------------------------------------------------------------------------------
+
+/// 直接读库：某会话全部事件的 `(eventId, eventType, payloadJson)`（按会话内序号升序）。
+async fn stored_events(host: &HostNode, session_id: &str) -> Vec<(String, String, String)> {
+    let mut connection = raw_connection(host).await;
+    let rows = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT event_id, event_type, payload_json FROM owned_event \
+         WHERE session_id = ?1 ORDER BY session_sequence ASC",
+    )
+    .bind(session_id)
+    .fetch_all(&mut connection)
+    .await
+    .expect("读 owned_event");
+    drop(connection);
+    rows
+}
+
+/// 直接读库：该会话的 `(title, custom_title)` 两列。
+async fn stored_session_titles(
+    host: &HostNode,
+    session_id: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    let mut connection = raw_connection(host).await;
+    let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT title, custom_title FROM owned_session WHERE session_id = ?1",
+    )
+    .bind(session_id)
+    .fetch_optional(&mut connection)
+    .await
+    .expect("读 owned_session.title/custom_title");
+    drop(connection);
+    row
+}
+
+/// `session.title.set` 的完成判据：一次提交即终态（`completed`）、`terminalEventId` 指向该请求的
+/// `command.completed`、`acceptedAt` 非空，并落盘 **trim 后**的自定义标题与带有效标题的
+/// `session.updated`。
+///
+/// 变红点：①回复先 `accepted` 再等观察者（本命令在同一事务里写终态，回 `accepted` 就是多绕一圈）；
+/// ②`terminalEventId` 为 null 或指向别的请求；③保存值带首尾空白；④`session.updated` 摘要仍是
+/// Agent 标题（或没有这条事件）。
+#[tokio::test]
+async fn a_title_set_completes_in_the_accepting_transaction() {
+    let host = HostNode::start("sync-cmd-title", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.title.set");
+    client
+        .command(
+            &request,
+            "session.title.set",
+            Some(&session),
+            json!({ "title": "  排查登录  " }),
+        )
+        .await;
+    let terminal = client.expect_command_result(&request).await;
+
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    assert!(
+        terminal["acceptedAt"].is_string(),
+        "终态必须带首次接受时间：{terminal}"
+    );
+    assert_eq!(terminal["result"], Value::Null, "{terminal}");
+    assert_eq!(terminal["error"], Value::Null, "{terminal}");
+    let terminal_event = terminal["terminalEventId"]
+        .as_str()
+        .expect("终态必须带 terminalEventId")
+        .to_owned();
+
+    // 落库：自定义标题是 trim 后的文本；Agent 标题列未被这条命令改写。
+    let (agent_title, custom_title) = stored_session_titles(&host, &session)
+        .await
+        .expect("会话行必须存在");
+    assert_eq!(
+        custom_title.as_deref(),
+        Some("排查登录"),
+        "{custom_title:?}"
+    );
+    assert_eq!(agent_title, None, "Agent 标题列不受用户命令影响");
+
+    // 摘要（`session.list` 的权威来源）投影有效标题。
+    let summaries = host
+        .core()
+        .list_sessions(
+            &acp_core::model::Actor::LocalCli,
+            acp_core::ports::SessionQuery {
+                only: Some(vec![
+                    acp_core::model::SessionId::new(&session).expect("session id"),
+                ]),
+                states: Vec::new(),
+                limit: Some(1),
+            },
+        )
+        .await
+        .expect("列出会话");
+    assert_eq!(
+        summaries.first().and_then(|summary| summary.title()),
+        Some("排查登录")
+    );
+
+    // 事件：终态事件就是该请求的 `command.completed`；`session.updated` 摘要带有效标题。
+    let events = stored_events(&host, &session).await;
+    let completed = events
+        .iter()
+        .find(|(id, _, _)| id == &terminal_event)
+        .unwrap_or_else(|| panic!("terminalEventId 必须指向本机会话事件：{events:?}"));
+    assert_eq!(completed.1, "command.completed");
+    let updated: Vec<&(String, String, String)> = events
+        .iter()
+        .filter(|(_, event_type, _)| event_type == "session.updated")
+        .collect();
+    assert!(
+        updated.iter().any(|(_, _, payload)| {
+            let payload: Value = serde_json::from_str(payload).expect("事件载荷");
+            payload["session"]["title"] == json!("排查登录")
+        }),
+        "`session.updated` 必须携带有效标题：{events:?}"
+    );
+
+    host.stop().await;
+}
+
+/// 同一 `requestId` 重发同一载荷：回**首次**终态与同一个 `terminalEventId`，且不产生第二次标题写入
+/// （事件条数不变、版本不重复推进）。
+#[tokio::test]
+async fn resending_a_title_request_returns_the_first_terminal_without_a_second_update() {
+    let host = HostNode::start("sync-cmd-title-replay", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.title.set");
+    client
+        .command(
+            &request,
+            "session.title.set",
+            Some(&session),
+            json!({ "title": "固定标题" }),
+        )
+        .await;
+    let first = client.expect_command_result(&request).await;
+    assert_eq!(first["status"], json!("completed"), "{first}");
+    let version_after_first = host
+        .core()
+        .list_sessions(
+            &acp_core::model::Actor::LocalCli,
+            acp_core::ports::SessionQuery {
+                only: Some(vec![
+                    acp_core::model::SessionId::new(&session).expect("session id"),
+                ]),
+                states: Vec::new(),
+                limit: Some(1),
+            },
+        )
+        .await
+        .expect("列出会话")
+        .first()
+        .map(|summary| summary.version().get())
+        .expect("会话摘要");
+    let events_after_first = stored_events(&host, &session).await.len();
+
+    client.step("重放同一 requestId");
+    client
+        .command(
+            &request,
+            "session.title.set",
+            Some(&session),
+            json!({ "title": "固定标题" }),
+        )
+        .await;
+    let replay = client.expect_command_result(&request).await;
+    assert_eq!(replay["status"], json!("completed"), "{replay}");
+    assert_eq!(
+        replay["terminalEventId"], first["terminalEventId"],
+        "重放必须给出原 terminal event id：{replay}"
+    );
+    assert_eq!(
+        stored_events(&host, &session).await.len(),
+        events_after_first,
+        "重放不得追加任何事件"
+    );
+    let version_after_replay = host
+        .core()
+        .list_sessions(
+            &acp_core::model::Actor::LocalCli,
+            acp_core::ports::SessionQuery {
+                only: Some(vec![
+                    acp_core::model::SessionId::new(&session).expect("session id"),
+                ]),
+                states: Vec::new(),
+                limit: Some(1),
+            },
+        )
+        .await
+        .expect("列出会话")
+        .first()
+        .map(|summary| summary.version().get())
+        .expect("会话摘要");
+    assert_eq!(
+        version_after_replay, version_after_first,
+        "重放不得再次推进版本"
+    );
+
+    host.stop().await;
+}
+
+/// 同一 `requestId` 换一个标题 = 参数冲突：明确拒绝（`command.idempotency_conflict`），不改标题、
+/// 不追加事件。这是「同号换参」与「同号重试」的分界。
+#[tokio::test]
+async fn the_same_request_id_with_a_different_title_is_an_idempotency_conflict() {
+    let host = HostNode::start("sync-cmd-title-conflict", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.title.set");
+    client
+        .command(
+            &request,
+            "session.title.set",
+            Some(&session),
+            json!({ "title": "第一版" }),
+        )
+        .await;
+    let first = client.expect_command_result(&request).await;
+    assert_eq!(first["status"], json!("completed"), "{first}");
+    let events_after_first = stored_events(&host, &session).await.len();
+
+    client.step("同号换参");
+    client
+        .command(
+            &request,
+            "session.title.set",
+            Some(&session),
+            json!({ "title": "第二版" }),
+        )
+        .await;
+    let conflict = client.expect_command_result(&request).await;
+    assert_eq!(conflict["status"], json!("rejected"), "{conflict}");
+    assert_eq!(
+        conflict["error"]["code"],
+        json!("command.idempotency_conflict"),
+        "{conflict}"
+    );
+    let (_, custom_title) = stored_session_titles(&host, &session)
+        .await
+        .expect("会话行必须存在");
+    assert_eq!(custom_title.as_deref(), Some("第一版"), "冲突不得改写标题");
+    assert_eq!(
+        stored_events(&host, &session).await.len(),
+        events_after_first,
+        "冲突不得追加事件"
+    );
+
+    host.stop().await;
+}
+
+/// 未协商 `core.session-title.v1` 的连接发这条命令：`rejected` + `protocol.feature_required`
+/// （`details.features` 给出缺的那一条），且**零写入**（自定义标题仍为 NULL、事件条数不变）。
+#[tokio::test]
+async fn an_unnegotiated_session_title_feature_is_rejected_without_a_write() {
+    let host = HostNode::start("sync-cmd-title-feature", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let features: Vec<&str> = supported_features()
+        .into_iter()
+        .filter(|feature| *feature != "core.session-title.v1")
+        .collect();
+    let mut client = connect_with_features(&host, &device, &features).await;
+    let events_before = stored_events(&host, &session).await.len();
+
+    let request = uuid_text();
+    client.step("未协商 feature 的 session.title.set");
+    client
+        .command(
+            &request,
+            "session.title.set",
+            Some(&session),
+            json!({ "title": "不该落盘" }),
+        )
+        .await;
+    let rejected = client.expect_command_result(&request).await;
+    assert_eq!(rejected["status"], json!("rejected"), "{rejected}");
+    assert_eq!(
+        rejected["error"]["code"],
+        json!("protocol.feature_required"),
+        "{rejected}"
+    );
+    assert_eq!(
+        rejected["error"]["details"]["features"],
+        json!(["core.session-title.v1"]),
+        "{rejected}"
+    );
+    let (_, custom_title) = stored_session_titles(&host, &session)
+        .await
+        .expect("会话行必须存在");
+    assert_eq!(custom_title, None, "未协商时不得写入自定义标题");
+    assert_eq!(
+        stored_events(&host, &session).await.len(),
+        events_before,
+        "未协商时不得追加事件"
+    );
+    assert!(
+        stored_command(&host, &request).await.is_none(),
+        "未协商的请求不得留下命令记录"
+    );
+
+    host.stop().await;
+}
+
+/// 不存在的会话：`session.not_found`（本机 owned 与远程 imported 都不是）。
+#[tokio::test]
+async fn a_title_set_for_an_unknown_session_is_not_found() {
+    let host = HostNode::start("sync-cmd-title-missing", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("未知会话的 session.title.set");
+    client
+        .command(
+            &request,
+            "session.title.set",
+            Some("0f7e1d0a-76f8-4a3f-8c37-6c4e1d3b9a52"),
+            json!({ "title": "无处安放" }),
+        )
+        .await;
+    let rejected = client.expect_command_result(&request).await;
+    assert_eq!(rejected["status"], json!("rejected"), "{rejected}");
+    assert_eq!(
+        rejected["error"]["code"],
+        json!("session.not_found"),
+        "{rejected}"
+    );
 
     host.stop().await;
 }

@@ -25,14 +25,15 @@ use tokio::sync::Mutex;
 use acp_core::broker::HISTORY_ENTRY_EVENT_TYPES;
 use acp_core::model::{
     AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
-    AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedEvent, ConflictKind,
-    DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind, EventOrigin, EventPayload,
-    GlobalCursor, InteractionId, InteractionOption, InteractionResolution, MediaKind,
-    MediaReference, MessageChannel, MessageId, MessageRecord, MessageState, ModeId, ModeRef,
-    NodeId, OriginCursor, OriginEpoch, PartialReason, PartialResult, PendingInteraction, PortError,
-    PublicError, RawUnavailableReason, RequestId, ResourceOrigin, Sequence, ServerEpoch, Session,
-    SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary, StoredPolicy,
-    Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson, WorkspaceRef,
+    AttachmentId, CommandRecord, CommandResult, CommandStatus, CommandTerminalRecord,
+    CommittedEvent, ConflictKind, DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind,
+    EventOrigin, EventPayload, GlobalCursor, InteractionId, InteractionOption,
+    InteractionResolution, MediaKind, MediaReference, MessageChannel, MessageId, MessageRecord,
+    MessageState, ModeId, ModeRef, NodeId, OriginCursor, OriginEpoch, PartialReason, PartialResult,
+    PendingInteraction, PortError, PublicError, RawUnavailableReason, RequestId, ResourceOrigin,
+    Sequence, ServerEpoch, Session, SessionId, SessionRecoveryRecord, SessionSnapshot,
+    SessionState, SessionSummary, SessionTitle, StoredPolicy, Timestamp, Turn, TurnId,
+    UnavailableKind, Version, ViewJson, WorkspaceRef,
 };
 use acp_core::ports::{
     AttachmentRef, AttachmentStore, CommitOutcome, HistoryPage, HistoryQuery, IdempotentReplay,
@@ -52,17 +53,21 @@ const EVENT_COLUMNS: &str = "global_sequence, session_id, session_sequence, orig
      acp_raw_unavailable_reason, created_at, expires_at, compacted_into";
 
 /// `owned_session` 的读列（`load` 的 `Session` 聚合：不带目录归属）。
-const SESSION_COLUMNS: &str = "session_id, title, agent_id, agent_name, state, origin_epoch, \
-     current_mode_id, current_mode_name, version, created_at, updated_at";
+///
+/// 两个标题列**都要读**：`title` 是 Agent 标题，`custom_title` 是用户覆盖值，有效标题由
+/// [`Session::effective_title`] 在内存里投影（§5.2 的 `SessionUpdate` 两列语义）。
+const SESSION_COLUMNS: &str = "session_id, title, custom_title, agent_id, agent_name, state, \
+     origin_epoch, current_mode_id, current_mode_name, version, created_at, updated_at";
 
 /// 返回 [`SessionSummary`] 的三条读路径（`list`/`read_session`/`node_link_slice`）的读列：
 /// `SESSION_COLUMNS` 加上**持久化的目录标识**。
 ///
 /// 归属的唯一来源是 `owned_session.workspace_directory_id`；`MUST NOT` 按 `workspace_cwd` 反查目录表
-/// ——`NULL` 就是未分组（`design.md` D1/D6）。
-const SESSION_SUMMARY_COLUMNS: &str = "s.session_id, s.title, s.agent_id, s.agent_name, s.state, \
-     s.origin_epoch, s.current_mode_id, s.current_mode_name, s.version, s.created_at, \
-     s.updated_at, s.workspace_directory_id";
+/// ——`NULL` 就是未分组（`design.md` D1/D6）。摘要的 `title` 是**有效标题**（自定义优先、否则 Agent
+/// 标题），由 [`session_summary_from_row`] 从这两列现算。
+const SESSION_SUMMARY_COLUMNS: &str = "s.session_id, s.title, s.custom_title, s.agent_id, \
+     s.agent_name, s.state, s.origin_epoch, s.current_mode_id, s.current_mode_name, s.version, \
+     s.created_at, s.updated_at, s.workspace_directory_id";
 
 /// [`SESSION_SUMMARY_COLUMNS`] 的 FROM 子句。
 const SESSION_SUMMARY_FROM: &str = "owned_session s";
@@ -540,10 +545,36 @@ fn workspace_from_row(row: &SqliteRow) -> Result<Option<WorkspaceRef>, StorageEr
     Ok(Some(WorkspaceRef::new(directory_id)))
 }
 
+/// `owned_session.custom_title` 的读列（`load` 的 `Session` 聚合）。
+///
+/// 列里只允许出现 [`SessionTitle::parse`] 的输出（已 trim、1..=512 个标量值）：别的形状说明这一列
+/// 被绕过端口写过，按列值损坏失败关闭，不在这里「顺手修一下」。
+fn custom_title_from_row(row: &SqliteRow) -> Result<Option<SessionTitle>, StorageError> {
+    let Some(stored) = opt_text(row, "custom_title")? else {
+        return Ok(None);
+    };
+    let title = SessionTitle::parse(&stored).map_err(|_| StorageError::ColumnValue {
+        column: "owned_session.custom_title",
+        expected: "trimmed 1..=512 scalar title",
+    })?;
+    Ok(Some(title))
+}
+
+/// 摘要投影的**有效标题**：`custom_title` 优先，否则 Agent 标题 `title`，否则 `None`（未命名）。
+///
+/// 两个来源各自保真存在两列里，只有这个投影是单值的（`design.md` D1）；不新增 wire 字段。
+fn effective_title(row: &SqliteRow) -> Result<Option<String>, StorageError> {
+    match custom_title_from_row(row)? {
+        Some(title) => Ok(Some(title.as_str().to_owned())),
+        None => opt_text(row, "title"),
+    }
+}
+
 fn session_summary_from_row(row: &SqliteRow) -> Result<SessionSummary, StorageError> {
     let summary = SessionSummary::try_new(
         decode(&text(row, "session_id")?, "owned_session.session_id")?,
-        opt_text(row, "title")?,
+        // 摘要只下发**有效标题**：自定义标题优先，否则 Agent 标题（`design.md` D1）。
+        effective_title(row)?,
         agent_from_row(row)?,
         decode(&text(row, "state")?, "owned_session.state")?,
         ResourceOrigin::Local,
@@ -566,6 +597,7 @@ fn session_from_row(row: &SqliteRow) -> Result<Session, StorageError> {
         id.clone(),
         acp_core::model::OwnedSessionRef::new(id),
         opt_text(row, "title")?,
+        custom_title_from_row(row)?,
         agent_from_row(row)?,
         decode(&text(row, "state")?, "owned_session.state")?,
         ResourceOrigin::Local,
@@ -1275,8 +1307,16 @@ impl SqliteStore {
         // ② 其它带会话的终态提交（`session.resume`、prompt 等）：`(session_id, request_id)`；
         // ③ `session` 为 `None`（`session.create` 的失败终态、启动恢复）：`request_id + session_id IS NULL`。
         // ②③ 命中多行即整事务 `InvalidRequest`（同一 `requestId` 在多条 actor 下各有一行，不猜）。
+        //
+        // 第四条形状——**受理与终态同批**（`session.title.set`，§5.2 的 `OwnedCommit` 合同）：本次提交
+        // 自己写幂等行（一次就写成终态），因此不定位既有行；`Inline` 的 requestId 只用来在事件块里认出
+        // 「这条终态事件属于本请求」，把它的 `event_id` 回填进命令行。
+        enum TerminalTarget {
+            Locate(RequestId),
+            Inline(RequestId),
+        }
         let settlement = matches!(&commit.state, Some(StateChange::SettleCreate(_)));
-        let terminal_request = match (&commit.idempotency, &commit.command_terminal) {
+        let terminal_target = match (&commit.idempotency, &commit.command_terminal) {
             (None, Some(_)) => {
                 let request =
                     terminal_request_of(&commit.events).ok_or(PortError::InvalidRequest(
@@ -1339,9 +1379,29 @@ impl SqliteStore {
                         replayed: Some(IdempotentReplay { record }),
                     });
                 }
-                Some(request)
+                Some(TerminalTarget::Locate(request))
+            }
+            (Some(idem), Some(_)) => {
+                // 受理与终态同批：终态事件必须属于**这一次**受理的 requestId，否则整事务拒绝
+                // （否则命令行会挂上别的请求的事件标识）。
+                let request =
+                    terminal_request_of(&commit.events).ok_or(PortError::InvalidRequest(
+                        "a command terminal requires its terminal event with causation = requestId",
+                    ))?;
+                if request != idem.request {
+                    return Err(PortError::InvalidRequest(
+                        "an inline acceptance terminal must settle its own request id",
+                    ));
+                }
+                Some(TerminalTarget::Inline(request))
             }
             _ => None,
+        };
+        let terminal_request = match &terminal_target {
+            Some(TerminalTarget::Locate(request) | TerminalTarget::Inline(request)) => {
+                Some(request.clone())
+            }
+            None => None,
         };
 
         // ---- 会话状态与版本
@@ -1439,8 +1499,9 @@ impl SqliteStore {
                          workspace_cwd = CASE WHEN ?3 IS NULL THEN workspace_cwd ELSE ?3 END, \
                          workspace_directory_id = CASE WHEN ?4 IS NULL THEN workspace_directory_id ELSE ?4 END, \
                          title = CASE WHEN ?6 THEN NULL WHEN ?5 IS NULL THEN title ELSE ?5 END, \
-                         version = version + 1, updated_at = ?7 \
-                         WHERE session_id = ?8 RETURNING version"
+                         custom_title = CASE WHEN ?7 IS NULL THEN custom_title ELSE ?7 END, \
+                         version = version + 1, updated_at = ?8 \
+                         WHERE session_id = ?9 RETURNING version"
                     }
                     ModeChange::Set(_) => {
                         "UPDATE owned_session SET \
@@ -1449,9 +1510,10 @@ impl SqliteStore {
                          workspace_cwd = CASE WHEN ?5 IS NULL THEN workspace_cwd ELSE ?5 END, \
                          workspace_directory_id = CASE WHEN ?6 IS NULL THEN workspace_directory_id ELSE ?6 END, \
                          title = CASE WHEN ?8 THEN NULL WHEN ?7 IS NULL THEN title ELSE ?7 END, \
-                         version = version + 1, updated_at = ?9, \
+                         custom_title = CASE WHEN ?9 IS NULL THEN custom_title ELSE ?9 END, \
+                         version = version + 1, updated_at = ?10, \
                          current_mode_id = ?2, current_mode_name = ?3 \
-                         WHERE session_id = ?10 RETURNING version"
+                         WHERE session_id = ?11 RETURNING version"
                     }
                 };
                 let mut query = sqlx::query_scalar::<_, i64>(statement).bind(state);
@@ -1468,10 +1530,14 @@ impl SqliteStore {
                 // 「不改」编码成「哨兵 = 0 且值为 NULL」、把「置空」编码成「哨兵 = 1」：一个 `CASE` 同时
                 // 表达三态，与其余列共用**同一条**语句，因此 `version = version + 1`、`updated_at` 与同一
                 // 提交里的其它列一律照写（§5.2/§6 第 21 条）。
+                //
+                // `custom_title` 是**另一列**且只有两层可选：`None` = 不改（合同没有清除/恢复语义），
+                // `Some(title)` = 写入 trim 后的文本。它不走哨兵，Agent 的 `title` 置空也碰不到它。
                 let clear_title = i64::from(matches!(update.title, Some(None)));
                 let query = query
                     .bind(update.title.clone().flatten())
                     .bind(clear_title)
+                    .bind(update.custom_title.as_ref().map(SessionTitle::as_str))
                     .bind(commit.at.as_str())
                     .bind(session.as_str());
                 let new_version: Option<i64> = query.fetch_optional(&mut *tx).await.db()?;
@@ -1759,15 +1825,28 @@ impl SqliteStore {
                 },
                 _ => idem.clone(),
             };
-            write_command(&mut tx, &idem, commit.command_terminal.as_ref()).await?;
+            // 受理与终态同批时**一次写成终态**：`terminal_event_id` 只在本事务的事件块里分配过，这里回填，
+            // 不再走第二次提交（否则重放窗口里会看到 `accepted` 行，违反「终态必须明确完成」）。
+            let terminal = match (&terminal_target, commit.command_terminal.as_ref()) {
+                (Some(TerminalTarget::Inline(_)), Some(terminal)) => {
+                    let event = terminal_event_id.clone().ok_or(PortError::InvalidRequest(
+                        "an inline acceptance terminal requires its terminal event",
+                    ))?;
+                    Some(CommandTerminalRecord::try_new(
+                        terminal.status(),
+                        terminal.terminal_at().cloned(),
+                        Some(event),
+                        terminal.result().cloned(),
+                        terminal.error().cloned(),
+                    )?)
+                }
+                _ => None,
+            };
+            write_command(&mut tx, &idem, terminal.as_ref()).await?;
         }
-        if let Some(request) = &terminal_request {
-            let terminal = commit
-                .command_terminal
-                .as_ref()
-                .ok_or(PortError::InvalidRequest(
-                    "a command terminal record is required",
-                ))?;
+        if let (Some(TerminalTarget::Locate(request)), Some(terminal)) =
+            (&terminal_target, commit.command_terminal.as_ref())
+        {
             let event = terminal_event_id.as_ref().ok_or(PortError::InvalidRequest(
                 "the terminal chunk must contain its command terminal event",
             ))?;

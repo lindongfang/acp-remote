@@ -292,7 +292,8 @@ export const SUPPORTED_FEATURES = [
   "core.workspace-mkdir.v1",
   "core.session-files.v1",
   "core.session-git-stats.v1",
-    "core.session-git-compare.v1",
+  "core.session-git-compare.v1",
+  "core.session-title.v1",
   "core.attachment-transfer.v1",
   "core.typed-media.v1",
   "core.pending-interactions.v1",
@@ -328,6 +329,9 @@ export const PENDING_INTERACTIONS_FEATURE = "core.pending-interactions.v1";
 
 /** 远程结构化历史回源（§9.6/§11.5）。 */
 export const REMOTE_HISTORY_FEATURE = "core.remote-history.v1";
+
+/** Owner 元数据命令 `session.title.set`（§11.5）；未协商时入口明确不可用。 */
+export const SESSION_TITLE_FEATURE = "core.session-title.v1";
 
 /** 附件传输（§3.4）。与 `src/protocol/attachment.ts` 的常量同值，只在这里导出便于消费方取用。 */
 export { ATTACHMENT_FEATURE } from "../protocol";

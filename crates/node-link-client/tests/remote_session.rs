@@ -22,7 +22,7 @@ use support::{
     MemTransport, OwnerIdentity, OwnerIo, accept_handshake, decimal, selected_features, uuid_text,
 };
 
-use acp_core::model::{NodeId, PeerPublicKey};
+use acp_core::model::{NodeId, PeerPublicKey, SessionTitle};
 use async_trait::async_trait;
 use identity_auth::P1363Signature;
 
@@ -1685,6 +1685,349 @@ async fn a_stale_generation_subscribe_rejection_re_attaches_before_resubscribing
     assert!(link.is_online(), "可重试拒绝不得关闭连接");
     assert_eq!(mem.opens(), 1, "可重试拒绝不得触发重连");
     stop_tx.send(()).expect("stop owner");
+    owner_task.await.expect("owner task");
+    link.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// `session.title.set`（`RemoteTitleWrite`；变更 `custom-session-title` 任务 2.2）
+// ---------------------------------------------------------------------------------------------
+
+/// 打开一个到固定 Owner 的客户端，同时把内部 `RemoteRuntime` 交给调用方（目录/代际的观测口）。
+fn open_client_with_runtime(
+    mem: &Arc<MemTransport>,
+    seed: [u8; 32],
+) -> (
+    Arc<node_link_client::OwnerLink>,
+    Arc<node_link_client::RemoteRuntime>,
+) {
+    let runtime = node_link_client::RemoteRuntime::new();
+    let client = NodeLinkClient::new(
+        mem.factory(),
+        Arc::new(FixedIdentity::new(seed)),
+        Arc::clone(&runtime),
+    );
+    let link = client
+        .open(ClientConfig::new(
+            owner_trust(&ownership()),
+            "wss://owner.test/node-link/v1",
+            TlsTrust::PlaintextDev,
+        ))
+        .expect("open");
+    (link, runtime)
+}
+
+/// 等来源目录上线并返回当前代际（标题转发的代际复核输入）。
+async fn wait_generation(
+    runtime: &node_link_client::RemoteRuntime,
+    owner: &NodeId,
+) -> acp_core::ports::RemoteGeneration {
+    use acp_core::ports::RemoteRuntimeDirectory as _;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(snapshot) = runtime.snapshot(owner).await.expect("目录快照") {
+            return snapshot.generation;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "运行期目录没有在期限内上线"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+fn title(text: &str) -> SessionTitle {
+    SessionTitle::parse(text).expect("标题合法")
+}
+
+/// 已协商 `core.session-title.v1`：上行 `requestId` 原样保留、payload 是 `{ title }`、`expectedVersion`
+/// 为 null，终态里的 `terminalEventId` 原样进入 `RemoteCommandRecord`。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_title_keeps_the_callers_request_id_and_forwards_the_owner_terminal() {
+    use acp_core::model::CommandStatus;
+    use acp_core::ports::RemoteTitleWrite as _;
+    use node_link_protocol::command::Terminal;
+
+    let owner_identity = ownership();
+    let mem = Arc::new(MemTransport::default());
+    let (client_connection, mut io) = OwnerIo::pair();
+    mem.push(client_connection);
+    let request_id = "dddddddd-eeee-4fff-8aaa-bbbbbbbbbbbb";
+    let terminal_event = uuid_text("e1e2e3e4-e5e6-4e7e-8e9f-e0e1e2e3e4e5");
+    let owner_terminal_event = terminal_event.clone();
+
+    let owner_task = tokio::spawn(async move {
+        let session = accept_handshake(
+            &mut io,
+            &owner_identity,
+            &selected_features(&["core.session-title.v1"]),
+        )
+        .await;
+        let mut inbound = session.inbound_next;
+        let _ = io
+            .recv_envelope(&session.connection_id, &mut inbound)
+            .await
+            .expect("catalog.subscribe");
+        // 标题命令是 session-scoped：必须先 attach 取得票证。
+        let envelope = io
+            .recv_envelope(&session.connection_id, &mut inbound)
+            .await
+            .expect("resource.attach");
+        assert_eq!(envelope.message_type(), MessageType::ResourceAttach);
+        reply_attached(&mut io, &session.connection_id).await;
+
+        let submit = recv_submit(&mut io, &session.connection_id, &mut inbound).await;
+        assert_eq!(
+            submit.command,
+            node_link_protocol::command::CommandName::SessionTitleSet
+        );
+        assert_eq!(
+            submit.request_id.as_str(),
+            request_id,
+            "requestId 必须原样上行"
+        );
+        assert!(
+            submit.expected_version.is_null(),
+            "session.title.set 不接受 expectedVersion"
+        );
+        match &submit.payload {
+            node_link_protocol::command::CommandPayload::SessionTitleSet(payload) => {
+                assert_eq!(payload.title.as_str(), "我的标题");
+            }
+            other => panic!("payload 形状不符：{other:?}"),
+        }
+        let terminal = node_link_protocol::command::CommandTerminal {
+            request_id: submit.request_id.clone(),
+            command: node_link_protocol::command::CommandName::SessionTitleSet,
+            terminal: Terminal {
+                status: TerminalStatus::Completed,
+                terminal_at: Timestamp::parse("2026-10-20T00:00:02.000Z").expect("时间戳"),
+                terminal_event_id: acpr_wire::Nullable::value(owner_terminal_event.clone()),
+                result: acpr_wire::Nullable::value(
+                    node_link_protocol::command::CommandResultPayload::Object(
+                        node_link_protocol::common::RawObject::empty(),
+                    ),
+                ),
+                error: acpr_wire::Nullable::null(),
+            },
+        };
+        io.send_envelope(
+            MessageType::CommandTerminal,
+            &session.connection_id,
+            &terminal,
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    });
+
+    let (link, runtime) = open_client_with_runtime(&mem, [0x65; 32]);
+    wait_online(&link).await;
+    let owner = NodeId::new(OWNER_NODE).expect("owner");
+    let generation = wait_generation(&runtime, &owner).await;
+
+    let record = runtime
+        .set_title(
+            &remote(),
+            generation,
+            &request(request_id),
+            &title("我的标题"),
+        )
+        .await
+        .expect("标题命令必须在一次往返里完成");
+    assert_eq!(record.status, CommandStatus::Completed);
+    assert_eq!(record.request.as_str(), request_id);
+    assert_eq!(
+        record.terminal_event_id.as_ref().map(|id| id.as_str()),
+        Some(terminal_event.as_str()),
+        "Owner 的 terminalEventId 必须原样进入记录"
+    );
+    assert!(
+        record.accepted_at.is_none(),
+        "command.terminal 不携带接受时间，不得拿本地时钟冒充"
+    );
+    assert_eq!(record.target.owner_node_id.as_str(), OWNER_NODE);
+    assert_eq!(
+        record.target.session_id.as_ref().map(|id| id.as_str()),
+        Some(SESSION)
+    );
+
+    owner_task.await.expect("owner task");
+    link.shutdown().await;
+}
+
+/// 帧已发出但 Owner 在终态前断开：结果必须是 `uncertain` 记录（保留原 requestId 供回查），
+/// 不能报成确定失败，也不能自动重发副作用命令。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_title_terminal_is_uncertain_and_never_retried() {
+    use acp_core::model::CommandStatus;
+    use acp_core::ports::RemoteTitleWrite as _;
+
+    let owner_identity = ownership();
+    let mem = Arc::new(MemTransport::default());
+    let (client_connection, mut io) = OwnerIo::pair();
+    mem.push(client_connection);
+    let request_id = "eeeeeeee-ffff-4aaa-8bbb-cccccccccccc";
+
+    let owner_task = tokio::spawn(async move {
+        let session = accept_handshake(
+            &mut io,
+            &owner_identity,
+            &selected_features(&["core.session-title.v1"]),
+        )
+        .await;
+        let mut inbound = session.inbound_next;
+        let _ = io
+            .recv_envelope(&session.connection_id, &mut inbound)
+            .await
+            .expect("catalog.subscribe");
+        let attach = io
+            .recv_envelope(&session.connection_id, &mut inbound)
+            .await
+            .expect("resource.attach");
+        assert_eq!(attach.message_type(), MessageType::ResourceAttach);
+        reply_attached(&mut io, &session.connection_id).await;
+        let submit = recv_submit(&mut io, &session.connection_id, &mut inbound).await;
+        assert_eq!(
+            submit.command,
+            node_link_protocol::command::CommandName::SessionTitleSet
+        );
+        // 收下命令后直接断开：Owner 可能已经提交，但客户端拿不到终态。
+        io.close().await;
+    });
+
+    let (link, runtime) = open_client_with_runtime(&mem, [0x64; 32]);
+    wait_online(&link).await;
+    let owner = NodeId::new(OWNER_NODE).expect("owner");
+    let generation = wait_generation(&runtime, &owner).await;
+    let record = runtime
+        .set_title(
+            &remote(),
+            generation,
+            &request(request_id),
+            &title("丢失结果"),
+        )
+        .await
+        .expect("结果未知必须投影成 uncertain 记录");
+    assert_eq!(record.status, CommandStatus::Uncertain);
+    assert!(record.terminal_event_id.is_none());
+    assert!(record.accepted_at.is_none());
+
+    owner_task.await.expect("owner task");
+    link.shutdown().await;
+}
+
+/// 未协商 `core.session-title.v1`：显式 `capability.unsupported_by_broker`，且**不发**任何命令帧
+/// （连 `resource.attach` 都不发生）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_title_without_the_negotiated_feature_is_unsupported_and_side_effect_free() {
+    use acp_core::ports::RemoteTitleWrite as _;
+
+    let owner_identity = ownership();
+    let mem = Arc::new(MemTransport::default());
+    let (client_connection, mut io) = OwnerIo::pair();
+    mem.push(client_connection);
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+
+    let owner_task = tokio::spawn(async move {
+        let session = accept_handshake(
+            &mut io,
+            &owner_identity,
+            &selected_features(&["node-link.command-status.v1"]),
+        )
+        .await;
+        let mut inbound = session.inbound_next;
+        let _ = io
+            .recv_envelope(&session.connection_id, &mut inbound)
+            .await
+            .expect("catalog.subscribe");
+        // 断言窗口内没有任何命令帧：超时即证明「未协商时不发副作用命令」。
+        let next = tokio::time::timeout(std::time::Duration::from_millis(150), io.recv()).await;
+        assert!(next.is_err(), "未协商 feature 时不得上行任何命令：{next:?}");
+        let _ = done_rx.await;
+    });
+
+    let (link, runtime) = open_client_with_runtime(&mem, [0x66; 32]);
+    wait_online(&link).await;
+    let owner = NodeId::new(OWNER_NODE).expect("owner");
+    let generation = wait_generation(&runtime, &owner).await;
+
+    let error = runtime
+        .set_title(
+            &remote(),
+            generation,
+            &request("eeeeeeee-ffff-4aaa-8bbb-cccccccccccc"),
+            &title("不会发出"),
+        )
+        .await
+        .expect_err("未协商 feature 必须显式失败");
+    assert!(
+        matches!(
+            error,
+            acp_core::model::PortError::InvalidRequest("capability.unsupported_by_broker")
+        ),
+        "unsupported must stay distinguishable from a missing session: {error:?}"
+    );
+
+    let _ = done_tx.send(());
+    owner_task.await.expect("owner task");
+    link.shutdown().await;
+}
+
+/// 代际复核：目录已推进到新代（断线/重连语义）时，持旧代的调用在**发出之前**就被拒绝。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_title_with_a_stale_generation_is_rejected_before_any_frame() {
+    use acp_core::ports::RemoteTitleWrite as _;
+
+    let owner_identity = ownership();
+    let mem = Arc::new(MemTransport::default());
+    let (client_connection, mut io) = OwnerIo::pair();
+    mem.push(client_connection);
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+
+    let owner_task = tokio::spawn(async move {
+        let session = accept_handshake(
+            &mut io,
+            &owner_identity,
+            &selected_features(&["core.session-title.v1"]),
+        )
+        .await;
+        let mut inbound = session.inbound_next;
+        let _ = io
+            .recv_envelope(&session.connection_id, &mut inbound)
+            .await
+            .expect("catalog.subscribe");
+        let next = tokio::time::timeout(std::time::Duration::from_millis(150), io.recv()).await;
+        assert!(next.is_err(), "跨代调用不得上行任何帧：{next:?}");
+        let _ = done_rx.await;
+    });
+
+    let (link, runtime) = open_client_with_runtime(&mem, [0x67; 32]);
+    wait_online(&link).await;
+    let owner = NodeId::new(OWNER_NODE).expect("owner");
+    let stale = wait_generation(&runtime, &owner).await;
+    // 推进一代并让它重新在线：目录换了代，但连接句柄仍是同一个（模拟「迟到的调用」）。
+    let current = runtime.begin(&owner);
+    assert_ne!(current, stale);
+    runtime.online(&owner, current, Arc::clone(link.shared()));
+
+    let error = runtime
+        .set_title(
+            &remote(),
+            stale,
+            &request("ffffffff-aaaa-4bbb-8ccc-dddddddddddd"),
+            &title("迟到"),
+        )
+        .await
+        .expect_err("旧代际必须被拒绝");
+    assert!(
+        matches!(
+            error,
+            acp_core::model::PortError::Unavailable(acp_core::model::UnavailableKind::OwnerOffline)
+        ),
+        "stale generation must read as an offline source: {error:?}"
+    );
+
+    let _ = done_tx.send(());
     owner_task.await.expect("owner task");
     link.shutdown().await;
 }

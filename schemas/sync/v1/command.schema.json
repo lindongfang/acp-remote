@@ -34,7 +34,8 @@
         "session.files.list",
         "session.files.read",
         "session.git.status",
-        "session.git.diff"
+        "session.git.diff",
+        "session.title.set"
       ]
     },
     "command": {
@@ -119,6 +120,9 @@
             },
             {
               "$ref": "#/$defs/sessionGitDiff"
+            },
+            {
+              "$ref": "#/$defs/sessionTitleSet"
             }
           ]
         }
@@ -1414,6 +1418,47 @@
         }
       }
     },
+    "sessionTitle": {
+      "description": "`session.title.set` 的自定义标题原文（1..=512 个 Unicode 标量值）。`minLength`/`maxLength` 是 wire 层的近似约束，`pattern` 拒绝纯空白；「标量值计数 + 去除首尾空白后不得为空」由 Rust codec（`sync_protocol::command::SessionTitle`）按实际 scalar 语义强制——JSON Schema 的 `maxLength` 按码点计数，不得用 JS 的 UTF-16 长度代入。客户端发送前自行 trim；服务端保存 trim 后的值，不截断、不接受 `null`。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "\\S"
+    },
+    "sessionTitleSet": {
+      "description": "Owner 元数据命令 `session.title.set`（feature `core.session-title.v1`）：只允许 `title` 一个键，`expectedVersion` 不在本命令的 body 上（提交顺序即生效顺序）。不依赖 Agent 的 `session/update` 或重命名能力，不启动 Agent、不占用 active turn，`idle`/`running`/`pending` 任一状态都可执行；没有清除/恢复命令。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
+      "properties": {
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.title.set"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title"
+          ],
+          "properties": {
+            "title": {
+              "$ref": "#/$defs/sessionTitle"
+            }
+          }
+        }
+      }
+    },
     "commandStatusRecord": {
       "type": "object",
       "required": [
@@ -1877,7 +1922,8 @@
                       "session.mode.set",
                       "session.config.set",
                       "permission.resolve",
-                      "session.create"
+                      "session.create",
+                      "session.title.set"
                     ]
                   },
                   "status": {
@@ -1926,10 +1972,7 @@
               "if": {
                 "properties": {
                   "status": {
-                    "enum": [
-                      "failed",
-                      "uncertain"
-                    ]
+                    "const": "failed"
                   }
                 },
                 "required": [
@@ -1943,6 +1986,25 @@
                   },
                   "terminalEventId": {
                     "$ref": "common.schema.json#/$defs/uuid"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "uncertain"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "acceptedAt": {
+                    "$ref": "common.schema.json#/$defs/timestamp"
                   }
                 }
               }
@@ -1994,6 +2056,30 @@
                 "properties": {
                   "result": {
                     "$ref": "#/$defs/workspaceMkdirResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "accepted",
+                      "completed",
+                      "failed",
+                      "uncertain"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "acceptedAt": {
+                    "$ref": "common.schema.json#/$defs/timestamp"
                   }
                 }
               }

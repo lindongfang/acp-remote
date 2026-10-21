@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "c0a7f4d2-6e19-4b83-9d52-3f8e1a6c0b47",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "108",
+  "body": {
+    "requestId": "7c3e0b5a-9d18-4f62-8a05-2b4d7e1c9f36",
+    "command": "session.title.set",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "payload": {
+      "title": "   \t  "
+    }
+  }
+}

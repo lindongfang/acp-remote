@@ -17,10 +17,11 @@
  *
  * ## 判定不在本组件里
  *
- * 输入区能不能提交、编辑框是否只读、模型能不能切、差异行有没有、左栏列哪些会话，全部由
- * `ConversationPageModel` 里的判别值决定（`src/features/**` 与 `src/domain/**` 的纯函数）。
- * 本组件只做两件事：按模型渲染、把交互原样上抛。唯一落在组件里的判定是**可见带测量**（跳转入口）
- * ——它读的是滚动位置这种只属于渲染现场的事实，与数据判定无关。
+ * 输入区能不能提交、编辑框是否只读、模型能不能切、差异行有没有、左栏列哪些会话，以及顶部标题
+ * 是否处于编辑/提交/失败，全部由 `ConversationPageModel` / `titleEditorView` 里的判别值决定
+ * （`src/features/**` 与 `src/domain/**` 的纯函数）。本组件只做两件事：按模型渲染、把交互原样
+ * 上抛。唯一落在组件里的判定是**可见带测量**（跳转入口）与**双击时间窗/宿主按键形态**
+ * ——前者读滚动位置，后者是渲染现场的事件语义（PWA 没有统一的 `dblclick`），都不改变数据判定。
  *
  * ## 跳转入口与「短暂高亮」
  *
@@ -45,6 +46,8 @@ import {
 } from "../features/conversation-model";
 import type { ConversationPageModel, ConversationSecondaryView, ConversationSidebarModel } from "../features/conversation-model";
 import type { HostPanelModel } from "../features/host-panel-model";
+import type { SessionTitleCommitReason, SessionTitleEditorView } from "../features/session-title-editor";
+import { isSessionTitleDoubleClick, sessionTitleKeyAction } from "../features/session-title-editor";
 import { ConversationComposer } from "./ConversationComposer";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { ConversationColumnResizer } from "./ConversationColumnResizer";
@@ -58,7 +61,7 @@ import { Pager } from "./Pager";
 import { SegmentControl } from "./SegmentControl";
 import { SessionRow } from "./SessionRow";
 import { StatusPill } from "./StatusPill";
-import type { Palette } from "./theme";
+import type { Palette, TextInputProps } from "./theme";
 import {
   Pressable,
   ScrollView,
@@ -169,6 +172,21 @@ export interface ConversationStreamProps {
   readonly onSidebarPageChange?: ((pageInput: string) => void) | undefined;
   /** 左栏底部的「⊕ 新建会话」：在该目录内创建会话。 */
   readonly onCreateSession?: ((directoryId: string) => void) | undefined;
+  /**
+   * 顶部标题编辑视图（`store.titleEditorView(sessionId)`）。
+   *
+   * 只有双击、提交中/失败或一条可归因提示时才非空；`null` 表示标题只是普通文本。
+   * 标题值本身在 `model.header.title`（服务端下发的有效标题），这里只带编辑现场。
+   */
+  readonly titleEditor?: SessionTitleEditorView | null | undefined;
+  /** 双击标题：进入原地编辑（组件只按两次点击的时间窗判定，不依赖 dblclick 事件）。 */
+  readonly onStartTitleEdit?: (() => void) | undefined;
+  /** 编辑框文字变化。 */
+  readonly onTitleDraftChange?: ((draft: string) => void) | undefined;
+  /** Enter 或失焦保存（仓库保证一次意图只派发一个 `requestId`）。 */
+  readonly onCommitTitle?: ((reason: SessionTitleCommitReason) => void) | undefined;
+  /** Escape 取消编辑。 */
+  readonly onCancelTitleEdit?: (() => void) | undefined;
   /**
    * 主机与连接面板模型：会话头的 Agent 胶囊**沿用同一份**连接事件覆盖层
    * （`agents` 列表本体来自快照，连接状态是可选覆盖层；覆盖层缺席时每行是「状态未知」）。
@@ -422,6 +440,38 @@ function buildStyles(colors: Palette) {
       // 原型会话标题 15.5px：比正文大一档但不超过 17（`fontSize.lg`），取 md + 1.5。
       fontSize: fontSize.md + 1.5,
       fontWeight: "600",
+    },
+    // 双击命中区与文本同样式：没有额外的编辑按钮/铅笔图标，只有一个可双击的标题。
+    titleHit: {
+      flexShrink: 1,
+      minWidth: 0,
+    },
+    titleInput: {
+      flexShrink: 1,
+      minWidth: 120,
+      maxWidth: 360,
+      color: colors.ink,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.md + 1.5,
+      fontWeight: "600",
+      paddingVertical: spacing.xs,
+      paddingHorizontal: spacing.sm,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      borderRadius: radius.sm,
+      backgroundColor: colors.panel2,
+    },
+    titleError: {
+      color: colors.danger,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+      marginTop: spacing.xs,
+    },
+    titleNotice: {
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+      marginTop: spacing.xs,
     },
     agent: {
       flexShrink: 1,
@@ -1240,6 +1290,11 @@ export function ConversationStream({
   onSidebarQueryChange,
   onSidebarPageChange,
   onCreateSession,
+  titleEditor,
+  onStartTitleEdit,
+  onTitleDraftChange,
+  onCommitTitle,
+  onCancelTitleEdit,
   hostPanel,
   filesPanel,
   onSelectFileSource,
@@ -1314,6 +1369,45 @@ export function ConversationStream({
   const answerableCount = model.interactions.filter(
     (interaction) => interaction.availability.kind === "answerable",
   ).length;
+
+  // ── 会话标题的原地编辑（`design.md` D4） ───────────────────────────────────
+  const titleView = titleEditor ?? null;
+  const titleEditing = titleView !== null && titleView.phase !== "viewing";
+  /** 上一次单击标题的时刻：双击只按时间窗判定，PWA/触屏不依赖浏览器 `dblclick`。 */
+  const titleClickAt = useRef<number | null>(null);
+  /** Escape 之后的 blur 被抑制一次；否则取消会被失焦保存覆盖。 */
+  const suppressTitleBlur = useRef(false);
+  const handleTitlePress = (): void => {
+    if (titleEditing) return;
+    const now = Date.now();
+    const doubleClick = isSessionTitleDoubleClick(titleClickAt.current, now);
+    titleClickAt.current = doubleClick ? null : now;
+    if (!doubleClick) return;
+    suppressTitleBlur.current = false;
+    onStartTitleEdit?.();
+  };
+  const handleTitleKeyPress: NonNullable<TextInputProps["onKeyPress"]> = (event) => {
+    // RNW 把宿主 `keydown` 交给 `onKeyPress`：composition/229 期间 Enter 属于组词，不提交。
+    const native = event.nativeEvent as { readonly key?: string; readonly isComposing?: boolean; readonly keyCode?: number };
+    const action = sessionTitleKeyAction(native);
+    if (action === "ignore") return;
+    event.preventDefault();
+    if (action === "cancel") {
+      suppressTitleBlur.current = true;
+      onCancelTitleEdit?.();
+      return;
+    }
+    onCommitTitle?.("enter");
+  };
+  const handleTitleBlur = (): void => {
+    if (suppressTitleBlur.current) {
+      suppressTitleBlur.current = false;
+      return;
+    }
+    // 提交中不再接受第二个保存意图（Enter 紧随其后的失焦因此不会派发第二条命令）。
+    if (titleView?.submitting === true) return;
+    onCommitTitle?.("blur");
+  };
 
   // ── 滚动跟随与阅读锚点（spec「流式阅读保持位置」）────────────────────────────
   const sessionId = model.header.sessionId;
@@ -1666,9 +1760,35 @@ export function ConversationStream({
               dataSet={{ sessionHeader: model.header.sessionId, sessionHeaderLayout: "single-line" }}
             >
               <View style={styles.headerRow}>
-                <Text style={styles.title} numberOfLines={1} dataSet={{ sessionTitle: "true" }}>
-                  {model.header.title}
-                </Text>
+                {titleView !== null && titleView.phase !== "viewing" ? (
+                  // 原地输入：输入框为空，当前有效标题只作为灰色占位（占位不是真实输入）。
+                  // 不输入直接确认 = 保留旧标题；提交中保留输入框但不再可编辑。
+                  <TextInput
+                    value={titleView.draft}
+                    placeholder={titleView.placeholder}
+                    placeholderTextColor={theme.colors.ink3}
+                    editable={!titleView.submitting}
+                    autoFocus
+                    style={styles.titleInput}
+                    dataSet={{ sessionTitleInput: "true", sessionTitlePhase: titleView.phase }}
+                    onChangeText={(text: string) => {
+                      onTitleDraftChange?.(text);
+                    }}
+                    onKeyPress={handleTitleKeyPress}
+                    onBlur={handleTitleBlur}
+                  />
+                ) : (
+                  // 唯一入口是双击这段标题：没有编辑按钮、铅笔图标或恢复 Agent 标题的操作。
+                  <Pressable
+                    style={styles.titleHit}
+                    dataSet={{ sessionTitleEntry: "double-click" }}
+                    onPress={handleTitlePress}
+                  >
+                    <Text style={styles.title} numberOfLines={1} dataSet={{ sessionTitle: "true" }}>
+                      {model.header.title}
+                    </Text>
+                  </Pressable>
+                )}
                 {model.header.state === null ? (
                   // 摘要尚未取得：说明「未知」，MUST NOT 编造空闲（更没有旧七态的关闭）。
                   <Text style={styles.agent} dataSet={{ sessionState: "unknown" }}>
@@ -1683,6 +1803,18 @@ export function ConversationStream({
                 <View style={styles.headerSpacer} />
                 {hostPanel === null || hostPanel === undefined ? null : <AgentChip panel={hostPanel} />}
               </View>
+              {/* 失败/不可用原因就在会话头内：仍在当前页时保留输入并显示原因；离页后只留下
+                  可归因原会话的提示，不跳回也不恢复草稿。 */}
+              {titleView !== null && titleView.error !== null ? (
+                <Text style={styles.titleError} dataSet={{ sessionTitleError: "true" }}>
+                  {titleView.error}
+                </Text>
+              ) : null}
+              {titleView !== null && titleView.notice !== null ? (
+                <Text style={styles.titleNotice} dataSet={{ sessionTitleNotice: "true" }}>
+                  {titleView.notice}
+                </Text>
+              ) : null}
             </View>
 
             {/* 中间互斥查看区：文件打开时它占据时间线的位置；时间线/输入区仍在 DOM（隐藏）。 */}

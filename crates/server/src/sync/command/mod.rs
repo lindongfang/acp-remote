@@ -65,9 +65,10 @@ use acp_core::model::{
     ElicitationAction as CoreElicitationAction, ElicitationValues, InteractionId, ModeId,
     PortError, PromptContentBlock, PublicError as CorePublicError, RESULT_TOO_LARGE,
     ReadInclude as CoreReadInclude, RequestId as CoreRequestId, SessionFilePath, SessionId,
-    SubmissionId, Timestamp as CoreTimestamp, TurnId, UnavailableKind, Version, WorkspaceSource,
+    SessionTitle, SubmissionId, Timestamp as CoreTimestamp, TurnId, UnavailableKind, Version,
+    WorkspaceSource,
 };
-use acp_core::ports::SessionFiles;
+use acp_core::ports::{RemoteCommandRecord, SessionFiles, SessionQuery};
 use acp_core::use_cases::UseCases;
 use identity_auth::Authority;
 use sha2::Digest as _;
@@ -110,6 +111,11 @@ pub const WORKSPACE_MKDIR_FEATURE: &str = "core.workspace-mkdir.v1";
 /// 会话文件与 Git 只读查询的能力 ID（§11.5）。`session.files.*`/`session.git.*` 的门控在用例调用与
 /// 任何文件/Git I/O 之前；宣告该 feature 的前提是真实路由与连接期内容版本释放已接线。
 pub const SESSION_FILES_FEATURE: &str = "core.session-files.v1";
+/// `session.title.set` 的 feature（`compatibility/features/v1/features.json` 的 sync 子集）。
+///
+/// 未协商时服务端 MUST NOT 静默接受（§11.5 的 `protocol.feature_required` + `details.features`）：
+/// 这条命令会改写会话元数据，旧连接不得因为「命令名恰好能解码」而获得写权限。
+pub const SESSION_TITLE_FEATURE: &str = "core.session-title.v1";
 
 /// 单条命令结果的**信封**开销上界（字节）。
 ///
@@ -229,7 +235,8 @@ fn wire_command_state(status: acp_core::model::CommandStatus) -> CommandState {
         CommandStatus::Completed => CommandState::Completed,
         CommandStatus::Failed => CommandState::Failed,
         CommandStatus::Uncertain => CommandState::Uncertain,
-        CommandStatus::Rejected | CommandStatus::Accepted => CommandState::Rejected,
+        CommandStatus::Accepted => CommandState::Accepted,
+        CommandStatus::Rejected => CommandState::Rejected,
     }
 }
 
@@ -918,6 +925,12 @@ impl CommandRoute {
         if command.command == CommandName::WorkspaceMkdir {
             return self.on_workspace_mkdir(handle, &actor, command).await;
         }
+        // `session.title.set` 的目标可能是 owned（本机写入）或 imported（纯在线转发给 Owner）。两条
+        // 路径的入口不同（`set_session_title` / `submit_remote_session_title`），因此在这里分流，
+        // 而不是让 generic mutation 管道把它当成「会话不存在」。
+        if command.command == CommandName::SessionTitleSet {
+            return self.on_session_title(handle, &actor, command).await;
+        }
         let Some(payload) = core_payload(&command.payload).ok() else {
             self.deny(
                 handle,
@@ -1293,6 +1306,215 @@ impl CommandRoute {
         self.watch_terminal(handle, &command, actor);
         permit.send(execution);
         RouteOutcome::Claimed
+    }
+
+    /// `session.title.set`（`design.md` D2/D3；spec `session-custom-title`）。
+    ///
+    /// 目标会话的归属决定入口，**两者只走一条**：
+    ///
+    /// - **本机 owned**：`UseCases::set_session_title` —— 唯一权威是本机。core 在同一事务里写标题、
+    ///   推进版本、写完整 `session.updated` 与命令终态，并先提交后广播；重复 `requestId` 由 core 的
+    ///   幂等行去重（同键重发回同一终态、不重复修改）。
+    /// - **imported（不是本机 owned）**：`UseCases::submit_remote_session_title` —— 纯在线转发给 Owner，
+    ///   本层只把 Owner 返回的当前记录投影成 `command.result`。**不写** `owned_command`、**不**追加
+    ///   本地事件、**不**缓存标题：Access 不是远程标题的第二权威；结果丢失只能由客户端用原
+    ///   `requestId` + `command.status.remoteTarget` 回源。
+    /// - **两者都不是**：`session.not_found`。
+    ///
+    /// 顺序与其余 mutation 一致：feature 门控 → 形状/指纹/requestId → 归属判定 → core 调用 → 回复。
+    /// 门控在任何存储读取之前（未协商的连接连一次会话行都读不到）。
+    async fn on_session_title(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        command: Command,
+    ) -> RouteOutcome {
+        if !self.features(handle).contains(SESSION_TITLE_FEATURE) {
+            let Some(error) = public_error(
+                ErrorCode::ProtocolFeatureRequired,
+                "the client did not negotiate the session-title feature",
+                details_object(&serde_json::json!({ "features": [SESSION_TITLE_FEATURE] })),
+            ) else {
+                return self.encoding_fault(handle);
+            };
+            self.send_rejected(handle, &command, error);
+            return RouteOutcome::Claimed;
+        }
+        let CommandPayload::SessionTitleSet(payload) = &command.payload else {
+            self.deny(
+                handle,
+                &command,
+                "the payload does not match the command",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        // 合同明文：`session.title.set` 不接受 `expectedVersion`（按 Owner 提交顺序后写生效）。
+        if command.expected_version.is_some() {
+            self.deny(
+                handle,
+                &command,
+                "session.title.set does not take expectedVersion",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        }
+        let Some(session) = command
+            .session_id
+            .as_ref()
+            .and_then(|session| SessionId::new(session.as_str()).ok())
+        else {
+            self.deny(
+                handle,
+                &command,
+                "session.title.set requires a sessionId",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let Some(fingerprint) = payload_fingerprint(&command.payload) else {
+            return self.encoding_fault(handle);
+        };
+        let Some(request_id) = core_request_id(&command.request_id) else {
+            return self.encoding_fault(handle);
+        };
+        let Ok(title) = SessionTitle::parse(payload.title.as_str()) else {
+            self.deny(
+                handle,
+                &command,
+                "the title is not within bounds",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        // 归属判定：按 `SessionQuery::only` 只取这一行（不是全表扫描，也不建第二条可见性路径——授权
+        // 仍由 core 的 `session.list` 判定）。`owned_session` 里存在即 owned；imported 会话在本机没有行。
+        let owned = match self
+            .core
+            .list_sessions(
+                actor,
+                SessionQuery {
+                    only: Some(vec![session.clone()]),
+                    states: Vec::new(),
+                    limit: Some(1),
+                },
+            )
+            .await
+        {
+            Ok(rows) => !rows.is_empty(),
+            Err(error) => return self.reject_port_error(handle, &command, &error),
+        };
+        if !owned {
+            // Access 侧受理这条转发的时刻：在**发出请求之前**取，作为 Owner 终态不携带
+            // `acceptedAt` 时的代理值（见 `send_remote_record`）；不能用回包时刻冒充受理时刻。
+            let accepted_at = self.authority.now();
+            match self
+                .core
+                .submit_remote_session_title(actor, &session, request_id, title)
+                .await
+            {
+                Ok(record) => {
+                    self.send_remote_record(handle, &command, &record, accepted_at.as_str())
+                }
+                // 本机没有这个会话；远程目录里也没有（或本进程根本没有远程写面：只服务 Owner 角色时
+                // 不存在 imported 会话）。两个入口都给不出结果 ⇒ `session.not_found`。
+                Err(PortError::NotFound(_))
+                | Err(PortError::Unavailable(UnavailableKind::BackendUnsupported)) => {
+                    let Some(error) = public_error(
+                        ErrorCode::SessionNotFound,
+                        "the referenced session is not available",
+                        RawObject::empty(),
+                    ) else {
+                        return self.encoding_fault(handle);
+                    };
+                    self.send_rejected(handle, &command, error);
+                }
+                // Owner 明确拒绝（例如没有协商 `core.session-title.v1`）→ 走既有的端口错误映射
+                // （`capability.unsupported_by_broker` / `resource.remote_unavailable`），不伪装成功。
+                Err(error) => return self.reject_port_error(handle, &command, &error),
+            }
+            return RouteOutcome::Claimed;
+        }
+        let client_command = ClientCommand {
+            actor: actor.clone(),
+            request: request_id.clone(),
+            command: command.command.as_str().to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(session),
+            expected_version: None,
+            request_fingerprint: fingerprint,
+            payload: CorePayload::TitleSet { title },
+        };
+        let receipt = match self.core.set_session_title(actor, client_command).await {
+            Ok(receipt) => receipt,
+            Err(error) => return self.reject_port_error(handle, &command, &error),
+        };
+        let turn = match receipt {
+            CommandReceipt::Rejected { error } => {
+                let Some(error) = wire_public_error(&error) else {
+                    return self.encoding_fault(handle);
+                };
+                self.send_rejected(handle, &command, error);
+                return RouteOutcome::Claimed;
+            }
+            CommandReceipt::Accepted { turn, .. } => turn,
+        };
+        // 与其余 mutation 同口径：按 `(actor, requestId)` 读回持久记录。`session.title.set` 的写入与
+        // 终态在**同一事务**完成，因此首次提交读到的一般就是终态；同键重放也走同一条路径。
+        match self.broker.command_status(actor, &request_id).await {
+            Ok(Some(record)) if record.status().is_terminal() => {
+                self.send_record_terminal(handle, &command.request_id, command.command, &record);
+            }
+            Ok(Some(record)) => {
+                self.send_accepted(handle, &command, turn, record.accepted_at());
+                self.watch_terminal(handle, &command, actor);
+            }
+            Ok(None) | Err(_) => {
+                self.encoding_fault(handle);
+            }
+        }
+        RouteOutcome::Claimed
+    }
+
+    /// 端口错误 → `command.result(rejected)`（与 generic mutation 路径同一映射与同一 `details` 取值）。
+    fn reject_port_error(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        error: &PortError,
+    ) -> RouteOutcome {
+        let (code, text, details) = port_rejection(error).into_parts();
+        let Some(error) = public_error(code, text, details) else {
+            return self.encoding_fault(handle);
+        };
+        self.send_rejected(handle, command, error);
+        RouteOutcome::Claimed
+    }
+
+    /// Owner 为一条 **imported** 命令返回的记录 → `command.result`（`design.md` D3）。
+    ///
+    /// 只做透明投影：
+    /// - `accepted`：`terminalEventId`/`result` 均为 `null`（Owner 尚未终结）；
+    /// - 终态：status、Owner 的 `terminalEventId`、result/error 原样；
+    /// - `acceptedAt` 取 Owner 记录里的值。`command.terminal` 不携带接受时间，因此 Owner 直接给终态时
+    ///   本字段只能是 `null`——这是「Access 不伪造本地事实」的直接结果，不拿本地时钟冒充 Owner 的时间。
+    ///
+    /// 本实现**不**写 `command_log`：远程请求标识不进入任何本地日志（`RemoteTitleWrite` 的合同）。
+    fn send_remote_record(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        record: &RemoteCommandRecord,
+        forwarded_at: &str,
+    ) {
+        // 远程记录的 `acceptedAt` 是 Owner 的受理时间，但 Node Link 的 `command.terminal` 不携带它。
+        // `forwarded_at` 是 Access **发出转发之前**记下的受理时刻；Owner 未给出受理时间时用它补齐，
+        // 否则 Sync 的 `command.result` 形状会被客户端拒绝。它不写回 Owner 记录。
+        let Some(result) = remote_result(command, record, Some(forwarded_at)) else {
+            self.encoding_fault(handle);
+            return;
+        };
+        self.send_result(handle, &result, "remote");
     }
 
     /// `session.create`（§11.5 的 Sync 面形状：payload 的目录来源是 `workspaceAlias` 或客户端提供的
@@ -2116,6 +2338,55 @@ fn error_body(
     Some(body)
 }
 
+/// Owner 的远程记录 → wire `command.result`（`design.md` D3 的透明投影；Access 不重算任何字段）。
+///
+/// 三处不能省：
+/// - `accepted` 的 `terminalEventId` 与 `result` 恒为 `null`（Owner 尚未终结）；
+/// - 终态的 `terminalEventId` 是 **Owner** 的事件标识，不是本机事件（Access 不得伪造本地序号）；
+/// - `acceptedAt` 优先用 Owner 记录给出的受理时间；Node Link 的 `command.terminal` 不携带它时，
+///   用调用方给出的 Access 侧受理时刻补齐（Sync 只允许 `rejected` 为 `null`）。
+fn remote_result(
+    command: &Command,
+    record: &RemoteCommandRecord,
+    fallback_accepted_at: Option<&str>,
+) -> Option<CommandResult> {
+    let accepted_at = match record.accepted_at.as_ref() {
+        Some(at) => Nullable::value(wire_timestamp(at.as_str())?),
+        // Sync §11.2：只有 `rejected` 允许 `acceptedAt = null`。远程终态不携带 Owner 的受理时间时，
+        // 用 Access 侧受理这次转发的时刻补齐（见 `send_remote_record`），不伪造 Owner 事实。
+        None if !matches!(record.status, acp_core::model::CommandStatus::Rejected) => {
+            match fallback_accepted_at {
+                Some(stamp) => Nullable::value(wire_timestamp(stamp)?),
+                None => Nullable::null(),
+            }
+        }
+        None => Nullable::null(),
+    };
+    let terminal_event_id = match record.terminal_event_id.as_ref() {
+        Some(event) => Nullable::value(Uuid::parse(event.as_str()).ok()?),
+        None => Nullable::null(),
+    };
+    let result = match record.result.as_ref() {
+        Some(result) => Nullable::value(CommandResultPayload::Object(
+            RawObject::parse(result.as_str()).ok()?,
+        )),
+        None => Nullable::null(),
+    };
+    let error = match record.error.as_ref() {
+        Some(error) => Nullable::value(wire_public_error(error)?),
+        None => Nullable::null(),
+    };
+    Some(CommandResult {
+        request_id: command.request_id.clone(),
+        command: command.command,
+        status: wire_command_state(record.status),
+        accepted_at,
+        terminal_event_id,
+        result,
+        error,
+    })
+}
+
 /// core 的 `PublicError` → wire 的 `PublicError`。
 ///
 /// core 的错误码是开放字符串（它的词表比 Sync 的 36 个更宽，且能携带 `nodelink.*` 之类的细分），wire 的
@@ -2192,6 +2463,11 @@ pub(crate) fn port_rejection(error: &PortError) -> Rejection {
         PortError::InvalidRequest(RESULT_TOO_LARGE) => Rejection::Code(
             ErrorCode::ResourceResultTooLarge,
             "the file exceeds the download budget",
+        ),
+        // 远程标题重放换了参数：Owner 明确拒绝为幂等冲突，不能被折叠成可重试的本机故障。
+        PortError::Conflict(ConflictKind::IdempotencyConflict) => Rejection::Code(
+            ErrorCode::CommandIdempotencyConflict,
+            "the requestId was already used for a different command payload",
         ),
         PortError::InvalidRequest(reason) => Rejection::Schema(schema_hint(reason)),
         // Owner 不在线（imported 会话回源）：显式「现在读不到」，不是 `session.not_found` 或空历史。
@@ -2346,6 +2622,12 @@ fn core_payload(payload: &CommandPayload) -> Result<CorePayload, &'static str> {
         CommandPayload::SessionCreate(_) => {
             return Err("session.create does not use CommandPayload");
         }
+        // `session.title.set` 的标题在 wire 层已按 1..=512 个标量值校验，core 的值对象是同一规则的
+        // 唯一实现：这里只做类型映射（trim 由 `SessionTitle::parse` 完成，保存值即 trim 后的文本）。
+        CommandPayload::SessionTitleSet(set) => CorePayload::TitleSet {
+            title: SessionTitle::parse(set.title.as_str())
+                .map_err(|_| "the title is not within bounds")?,
+        },
         CommandPayload::SessionFilesList(_)
         | CommandPayload::SessionFilesRead(_)
         | CommandPayload::SessionGitStatus(_)
@@ -2756,5 +3038,109 @@ mod tests {
                 acp_core::model::UnavailableKind::IoError,
             ))
         }
+    }
+
+    /// 远程（Access 侧）`session.title.set` 的记录投影：`accepted` 与终态两种形状都只做透明转发。
+    ///
+    /// 变红点：①`accepted` 带上终态事件或结果（伪造「已完成」）；②终态的 `terminalEventId` 被换成
+    /// `null` 或本机序号；③终态 `failed` 不携带 Owner 的 error；④`acceptedAt` 被本地时钟补出来。
+    #[test]
+    fn a_remote_title_record_projects_accepted_and_terminal_without_local_facts() {
+        use acp_core::ports::RemoteCommandTarget;
+
+        let body = r#"{
+            "requestId": "0b7f5c1e-2a4d-4e6f-8a11-c3d5e7f90123",
+            "command": "session.title.set",
+            "sessionId": "1c8e6d2f-3b5e-4f70-9b22-d4e6f8031245",
+            "payload": { "title": "标题" }
+        }"#;
+        let command: Command = serde_json::from_str(body).expect("合法 command body");
+        let target = RemoteCommandTarget {
+            owner_node_id: acp_core::model::NodeId::new("3d9f7e30-4c6f-4182-ac33-e5f709142356")
+                .expect("owner id"),
+            session_id: Some(
+                acp_core::model::SessionId::new("1c8e6d2f-3b5e-4f70-9b22-d4e6f8031245")
+                    .expect("session id"),
+            ),
+        };
+        let record = |status: acp_core::model::CommandStatus,
+                      accepted_at: Option<CoreTimestamp>,
+                      terminal_at: Option<CoreTimestamp>,
+                      terminal_event_id: Option<acp_core::model::EventId>,
+                      result: Option<acp_core::model::CommandResult>,
+                      error: Option<CorePublicError>| {
+            RemoteCommandRecord {
+                target: target.clone(),
+                request: CoreRequestId::new("0b7f5c1e-2a4d-4e6f-8a11-c3d5e7f90123")
+                    .expect("request"),
+                status,
+                accepted_at,
+                terminal_at,
+                terminal_event_id,
+                result,
+                error,
+            }
+        };
+
+        // ① Owner 只回了 accepted：终态字段一律为 null。
+        let accepted = remote_result(
+            &command,
+            &record(
+                acp_core::model::CommandStatus::Accepted,
+                Some(CoreTimestamp::new("2026-10-21T00:00:01.000Z").expect("时间戳")),
+                None,
+                None,
+                None,
+                None,
+            ),
+            Some("2026-10-21T00:00:01.000Z"),
+        )
+        .expect("accepted 记录可投影");
+        assert_eq!(accepted.status, CommandState::Accepted);
+        assert_eq!(accepted.request_id.as_str(), command.request_id.as_str());
+        assert_eq!(accepted.command, CommandName::SessionTitleSet);
+        assert!(accepted.accepted_at.as_ref().is_some());
+        assert!(accepted.terminal_event_id.as_ref().is_none());
+        assert!(accepted.result.as_ref().is_none());
+        assert!(accepted.error.as_ref().is_none());
+
+        // ② Owner 的终态：terminalEventId 原样透传，error 按 Owner 的记录投影。
+        let terminal_event = "4e0a8f41-5d70-4293-bd44-f6081a253467";
+        let failed = remote_result(
+            &command,
+            &record(
+                acp_core::model::CommandStatus::Failed,
+                None,
+                Some(CoreTimestamp::new("2026-10-21T00:00:02.000Z").expect("时间戳")),
+                Some(acp_core::model::EventId::new(terminal_event).expect("event id")),
+                None,
+                Some(
+                    acp_core::model::PublicError::coded(
+                        "internal.unavailable",
+                        "the owner cannot serve the command",
+                        false,
+                    )
+                    .expect("错误码"),
+                ),
+            ),
+            Some("2026-10-21T00:00:02.000Z"),
+        )
+        .expect("终态记录可投影");
+        assert_eq!(failed.status, CommandState::Failed);
+        assert_eq!(
+            failed
+                .terminal_event_id
+                .as_ref()
+                .map(|event| event.as_str()),
+            Some(terminal_event)
+        );
+        assert!(
+            failed.accepted_at.as_ref().is_some(),
+            "非 rejected 的 command.result 必须带 acceptedAt；Owner 终态缺该字段时由 Access 受理时刻补齐"
+        );
+        assert_eq!(
+            failed.error.as_ref().map(|error| error.code.as_str()),
+            Some("internal.unavailable")
+        );
     }
 }

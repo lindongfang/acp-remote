@@ -2,6 +2,7 @@
 
 > 状态：编码前契约（Draft）  
 > ACP wire 版本：1  
+> 修订记录（2026-10-21，custom-session-title（合同与实现））：§5 的 `update.session_info_update` 说明改写为只描述 **Agent 侧**标题投影，并声明 `session.title.set` 是非 ACP 的 Broker 元数据命令（feature `core.session-title.v1`，不宣告 Agent capability、不改写 ACP 原文）；**取代**旧条款「标题唯一来源是该判别子、不存在客户端重命名命令」。矩阵字段与机器矩阵不变；`session.title.set` 与 `custom_title` 持久化已接线。  
 > 修订记录（2026-09-18）：新增 §6 `acp_facade` 的 `session/new` 映射与错误映射；`elicitation/create` 的 capability 占位符改为 `clientCapabilities.elicitation.form`；新增 `meta_fields_byte_exact`、`extension_method_explicit_unsupported` 两个不变量，未知判别子改为 `visible_degradation`；capability 路径改为可校验的字面量；`content.resource_link` 的 gate 由 `embeddedContext` 改为 `null`（上游把它列为 baseline，不是 opt-in）；补齐 Sync/Node Link 的 `elicitation.respond` 动作集到 ACP 的 `accept`/`decline`/`cancel`（此前缺 `decline`，会让 Access 节点上的上游客户端无法表达"拒绝"）。  
 > 修订记录（2026-10-17）：`tool_content.diff` 的第一阶段交付由「行级差异统计 + 相对化展示路径」扩为「统计 + 相对化路径 + **有界**结构化逐行差异」——逐行差异在客户端协商 `core.file-diff.v1` 时随 `file.changed` 视图出现，受固定的行数与字节上限约束，超限时只带统计并显式标记差异行未下发（见 §5 第 4 条）；该行的 `delivery` 仍为 `mvp`、`layers.pwa` 仍为 `view_only`（机器矩阵相应条目只更新其 `revision` 元信息，其余字段不变）。  
 > 修订记录（2026-10-19，`conversation-area-complete` WP1，合同先行、实现待后续工作包）：`content.audio`/`content.resource` 与 `cap.agent.prompt_audio`/`cap.agent.prompt_embedded_context` 的 `delivery` 提升为 `conditional_mvp`（`sync=event`、`pwa=view_only`、`facade=advertise_if_end_to_end`），对应类型化媒体与附件输入；`cap.client.terminal` 与五个 `terminal/*` 方法提升为 `mvp`（`broker=local_service`、`sync=event`、`pwa=view_only`、`facade=advertise_if_end_to_end`），对应真实 ACP 终端服务。`content.resource_link` 保持 `post_mvp`；本轮不改 wire 形状与矩阵结构，§5 的门槛文字同步为「协商后启用」。  
@@ -186,7 +187,7 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 6. capability 未宣告、已宣告但 Broker 不支持、Broker 支持但 PWA 不支持三种路径可区分；
 7. `acp-facade` 只宣告经端到端测试证明的能力。
 
-`update.session_info_update` 的 `delivery = mvp`，首阶段即交付会话标题的单向更新：标题的唯一来源是该判别子投影出的 `session.info.changed`，更新方向为 Agent → 会话摘要，`sync` 层不提供任何客户端发起的重命名命令（命令目录中不存在该命令，`sync = event` 只承载 Agent 通知的投影）。字段语义与「无客户端重命名入口」的表述见 `SYNC_PROTOCOL.md` §10.3。
+`update.session_info_update` 的 `delivery = mvp`，它交付的是**Agent 侧**会话标题的投影：该判别子仍投影成 `session.info.changed`，更新方向为 Agent → 会话的 Agent 标题列，`sync = event` 只承载这条 Agent 通知。用户自定义标题**不是** ACP 能力：ACP Remote 新增的 `session.title.set` 是 **Broker 元数据命令**（feature `core.session-title.v1`），不映射任何 ACP 方法、不宣告任何 Agent capability、不依赖 Agent 提供重命名、也不改写 ACP 原文（`acp.rawJson` 逐字节保真，`session.info.changed` 的 Agent 投影保持原意）。有效标题由 Owner 投影成一处的 `SessionSummary.title`（自定义优先 → Agent 标题 → 未命名），见 `SYNC_PROTOCOL.md` §10.3 与 §11.5。
 
 `session/list`、`session/delete`、`session/close`、完整 config option 与文件服务可以排在后续阶段（`delivery=post_mvp`，按 §3.4 必须 `facade=not_advertised` 且不得通过 `sync`/`pwa` 宣告），但必须由矩阵驱动明确拒绝，不能被成功响应、空响应或普通文本替代。
 

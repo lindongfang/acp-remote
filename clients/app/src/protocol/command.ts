@@ -1,5 +1,5 @@
 /**
- * `schemas/sync/v1/command.schema.json` 的严格 TypeScript 镜像：13 条 Sync 面命令与结果。
+ * `schemas/sync/v1/command.schema.json` 的严格 TypeScript 镜像：19 条 Sync 面命令与结果。
  *
  * `session.read` 的 `before`/`limit`/`beforeHistory`/`include` 里的 `history` **只**在 Sync
  * 传输面生效（`design.md` D3、D11）；Node Link 面的同名命令不含这些键。`session.create` 的
@@ -44,13 +44,14 @@ import type {
 } from "./session-files";
 
 /**
- * `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（当前 18 条，与
+ * `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（当前 19 条，与
  * `compatibility/commands/v1/commands.json` 里 `transport` 含 `sync` 的条目一一对应）。
  * 四条 `session.files.*` / `session.git.*` 的严格形状与解码见 `./session-files`。
  */
 export type CommandName =
   | "session.list"
   | "session.read"
+  | "session.title.set"
   | "command.status"
   | "session.mode.list"
   | "session.config.list"
@@ -332,6 +333,23 @@ export interface ElicitationRespondCommand extends CommandEnvelope {
 }
 
 /**
+ * `$defs.sessionTitleSet`：Owner 元数据命令（feature `core.session-title.v1`）。
+ *
+ * `payload` 是 closed object `{ title: string }`：只允许 `title` 一个键，`expectedVersion`
+ * **不在**本命令的 body 上（提交顺序即生效顺序）。输入按 trim 前计 1..=512 个 Unicode
+ * 标量值，保存值是 trim 后的文本；trim 后为空、超长、`null` 清空都由服务端拒绝，客户端
+ * MUST NOT 截断或自动补一个值。没有清除/恢复 Agent 标题的对应命令。
+ */
+export interface SessionTitleSetCommand extends CommandEnvelope {
+  readonly body: {
+    readonly requestId: Uuid;
+    readonly command: "session.title.set";
+    readonly sessionId: Uuid;
+    readonly payload: { readonly title: string };
+  };
+}
+
+/**
  * `$defs.remoteTarget`：远程命令/查询的来源定位（`resource.stateless-origin.v1`，§9.7/§11.4）。
  *
  * `sessionId` 为 `null` 只用于尚未建成会话的 `session.create`；其他会话操作必须给出原来源会话。
@@ -362,6 +380,7 @@ export type CommandBody =
   | WorkspaceMkdirCommand["body"]
   | WorkspaceBrowseCommand["body"]
   | SessionReadCommand["body"]
+  | SessionTitleSetCommand["body"]
   | SessionPromptCommand["body"]
   | SessionCancelCommand["body"]
   | ConfigListCommand["body"]

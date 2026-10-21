@@ -59,7 +59,8 @@
         "session.config.set",
         "permission.resolve",
         "session.create",
-        "session.resume"
+        "session.resume",
+        "session.title.set"
       ],
       "description": "唯一来源是 compatibility/commands/v1/commands.json；顺序与 transport 含 node_link 的命令集合一致。"
     },
@@ -118,6 +119,13 @@
           "type": "boolean"
         }
       ]
+    },
+    "sessionTitle": {
+      "description": "`session.title.set` 的自定义标题原文（1..=512 个 Unicode 标量值）。`minLength`/`maxLength` 是 wire 层的近似约束，`pattern` 拒绝纯空白；「标量值计数 + 去除首尾空白后不得为空」由 Rust codec（`node_link_protocol::command::SessionTitle`）按实际 scalar 语义强制——JSON Schema 的 `maxLength` 按码点计数，不得用 JS 的 UTF-16 长度代入。Access 只转发该值，Owner 保存 trim 后的值，不截断、不接受 `null`。",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "\\S"
     },
     "submitBase": {
       "type": "object",
@@ -247,6 +255,9 @@
                 },
                 {
                   "$ref": "#/$defs/submitSessionResume"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionTitleSet"
                 }
               ]
             }
@@ -868,6 +879,47 @@
               "additionalProperties": false,
               "maxProperties": 0,
               "description": "session.resume 的 payload 必须是空对象：恢复所需的 Agent、ACP 会话标识与创建时目录取自 Owner 自身的持久化记录。出现任何键时返回 command.rejected + nodelink.command.unsupported_field，且不得启动 Agent 进程或部分应用参数。"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionTitleSet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.title.set"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title"
+              ],
+              "description": "Owner 元数据命令（feature `core.session-title.v1`）：只允许 `title` 一个键。不依赖 Agent 的 session/update 或重命名能力，不启动 Agent、不占用 active turn；没有清除/恢复命令。",
+              "properties": {
+                "title": {
+                  "$ref": "#/$defs/sessionTitle"
+                }
+              }
             }
           }
         }

@@ -70,7 +70,7 @@ use acp_core::model::{
     ConfigOptionId, ConfigValue as CoreConfigValue, CreateSessionRequest, Digest, DirectoryId,
     ElicitationAction as CoreElicitationAction, ElicitationValues, EntityRef, InteractionId,
     MessageId, ModeId, NodeId, PortError, PromptContentBlock, ReadInclude,
-    RequestId as CoreRequestId, ResourceOrigin, Sequence, SessionId, SubmissionId,
+    RequestId as CoreRequestId, ResourceOrigin, Sequence, SessionId, SessionTitle, SubmissionId,
     Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
 };
 use acp_core::ports::{
@@ -122,6 +122,12 @@ const TYPED_MEDIA_FEATURE: &str = "node-link.typed-media.v1";
 
 /// ACP 原文随事件/历史下发的 feature（§11.3）。
 const RAW_ACP_FEATURE: &str = "node-link.raw-acp.v1";
+
+/// `session.title.set` 的 feature（与 Sync 面共用同一 ID，§12.7）。
+///
+/// 未协商时本命令一律回 `nodelink.protocol.feature_required`（`details.features` 给出缺的那条）：
+/// 它改写 Owner 的会话元数据，旧连接不得仅因为命令名可解码就获得写权限。
+const SESSION_TITLE_FEATURE: &str = "core.session-title.v1";
 
 /// 命令限流的窗口（§2.5 的固定 1 分钟）。
 pub const COMMAND_WINDOW: Duration = Duration::from_secs(60);
@@ -415,6 +421,12 @@ impl CommandRoute {
         submit: &CommandSubmit,
         command: CommandName,
     ) -> RouteOutcome {
+        // feature 门控先于任何 sessionRef 解析与 attachment 查找（未协商时连一条路由事实都不碰）。
+        if command == CommandName::SessionTitleSet
+            && !negotiated(self, handle, SESSION_TITLE_FEATURE)
+        {
+            return self.reject_feature_required(handle, command, &submit.request_id);
+        }
         let target = match command.requires_session_attachment() {
             true => match self.session_target(handle, message, submit) {
                 Ok(target) => Some(target),
@@ -1762,6 +1774,33 @@ impl CommandRoute {
         )
     }
 
+    /// 未协商某条命令所需的 feature：`nodelink.protocol.feature_required` + `details.features`
+    /// （§11.3/§12.2；与 WP1 fixture `command-rejected-session-title-feature-required.json` 同形）。
+    ///
+    /// `details.features` 只含**这一次**请求缺的那一条，不把整张表塞进去（客户端据此知道该补哪条）。
+    fn reject_feature_required(
+        &self,
+        handle: &ConnectionHandle,
+        command: CommandName,
+        request: &Uuid,
+    ) -> RouteOutcome {
+        let code = ErrorCode::ProtocolFeatureRequired;
+        let error = PublicError {
+            code,
+            message: Text::parse("Required feature was not negotiated.")
+                .expect("固定文本在长度上限内"),
+            retryable: code.default_retryable(),
+            details: RawObject::empty(),
+        };
+        self.send_rejected(
+            handle,
+            command,
+            request,
+            &error,
+            details_object(&serde_json::json!({ "features": [SESSION_TITLE_FEATURE] })),
+        )
+    }
+
     /// 端口错误 → 协议响应：越权回 `export.not_granted`，未知会话/Export 回 `export.not_found`，
     /// 其余按 wire 错误码表映射（映射不到的只进结构化日志，不冒充 wire 码）。
     fn port_fault(
@@ -3004,6 +3043,12 @@ fn core_payload(command: CommandName, submit: &CommandSubmit) -> Result<CorePayl
         WirePayload::SessionCreate(_) => {
             return Err("session.create is dispatched by its own handler");
         }
+        // `session.title.set`（§12.7）：wire 的标题已按 1..=512 个标量值校验，core 的 `SessionTitle`
+        // 是同一规则的唯一实现；这里只做类型映射（保存值即 trim 后的文本）。
+        WirePayload::SessionTitleSet(set) => CorePayload::TitleSet {
+            title: SessionTitle::parse(set.title.as_str())
+                .map_err(|_| "the title is not within bounds")?,
+        },
         // 与 `session.create` 同形（Path A）：`session.resume` 没有 core payload 变体，
         // 它的 `accepted` 行与幂等行由 core 的 `resume_session` 自建，因此本函数不映射它。
         WirePayload::SessionResume(_) => {

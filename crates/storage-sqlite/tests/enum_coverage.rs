@@ -372,6 +372,7 @@ async fn elicitation_decline_round_trips() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 title: None,
+                custom_title: None,
                 confirmation: None,
                 agent_session_id: None,
                 workspace_cwd: None,

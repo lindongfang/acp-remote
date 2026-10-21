@@ -64,11 +64,17 @@ pub const PENDING_INTERACTIONS_FEATURE: &str = "node-link.pending-interactions.v
 /// `node-link.remote-history.v1`。
 pub const REMOTE_HISTORY_FEATURE: &str = "node-link.remote-history.v1";
 
+/// `core.session-title.v1`：Owner 元数据命令 `session.title.set` 与有效标题投影。
+///
+/// 与 Sync 面共用同一 ID（`compatibility/features/v1/features.json`）。Access 只在已协商的连接上转发
+/// 该命令；未协商时 `RemoteTitleWrite` 显式不可用（不落盘、不排队）。
+pub const SESSION_TITLE_FEATURE: &str = "core.session-title.v1";
+
 /// 本 crate 声明的 `supportedFeatures`（顺序无关；`FeatureList` 会排序）。
 ///
 /// 每一条都对应当前真实实现的客户端行为：附件转发（有界内存）、类型化媒体映射、有效交互读取与远程
 /// 历史分页。未实现的能力不在此列——能力协商不得虚报（`AGENTS.md` §4）。
-pub const SUPPORTED_FEATURES: [&str; 10] = [
+pub const SUPPORTED_FEATURES: [&str; 11] = [
     CORE_FEATURE,
     "resource.stateless-origin.v1",
     SESSION_ACTIVITY_FEATURE,
@@ -79,6 +85,9 @@ pub const SUPPORTED_FEATURES: [&str; 10] = [
     TYPED_MEDIA_FEATURE,
     PENDING_INTERACTIONS_FEATURE,
     REMOTE_HISTORY_FEATURE,
+    // `core.session-title.v1`：Access 只转发 `session.title.set`、不保存标题或命令状态
+    // （`MODULE_ARCHITECTURE.md` 的 stateless-access 取舍）。未选中时 `RemoteTitleWrite` 显式不可用。
+    SESSION_TITLE_FEATURE,
 ];
 
 /// 没有这些 feature 就没有可用的业务语义（§11：Owner 未选中时必须中止）。

@@ -131,6 +131,12 @@
           "description": "会话主状态三态合同（§10.2）：`sessionSummary.state` 只有 `idle`/`running`/`pending` 三个取值——存在有效未解决交互时为 `pending`，否则存在未结束任务（含已接受的排队任务）时为 `running`，否则为 `idle`；create/read/list/快照/事件视图与 Node Link 的 `sessionMeta`、catalog 会话共用同一取值集合。排队、等待原因与任务/命令结果不属于本 feature；旧七态只允许作为历史事件 `view` 的原文出现。required=true：双方必须选中，缺失时服务端返回 `protocol.feature_required`、客户端停止同步，选中前不得收发任何三态摘要、快照或事件载荷",
           "delivery": "mvp",
           "required": true
+        },
+        {
+          "id": "core.session-title.v1",
+          "description": "Owner 元数据命令 `session.title.set`（§11.5 的 closed payload `{ title: string }`）与有效标题投影：标题由 Owner 持久化（自定义标题优先，否则 Agent 标题），`SessionSummary.title` 始终下发有效值、不新增 `customTitle` 键；Access 不回源持久化标题，未协商时命令返回 `protocol.feature_required`",
+          "delivery": "mvp",
+          "required": false
         }
       ]
     },
@@ -202,6 +208,12 @@
           "description": "跨节点会话主状态三态合同（§11.4/§12.3/§12.4）：`sessionMeta.state` 与 catalog `sessions[].state` 只有 `idle`/`running`/`pending`，与 Sync `sessionSummary.state` 同一取值集合——有效未解决交互优先为 `pending`，其次未结束任务（含排队）为 `running`，否则 `idle`；排队、等待原因与任务结果不经本 feature。旧七态只允许作为 `resource.event.payload.view` 的历史原文出现。required=true：双方必须选中，缺失时 Owner 返回 `nodelink.protocol.feature_required`、Access 停止业务同步，选中前不得收发任何三态元数据或事件",
           "delivery": "mvp",
           "required": true
+        },
+        {
+          "id": "core.session-title.v1",
+          "description": "跨节点 Owner 元数据命令 `command.submit{command:\"session.title.set\"}`（§12.7 的 closed payload `{ title: string }`）与有效标题投影：标题由 Owner 持久化（自定义标题优先，否则 Agent 标题），`sessionMeta`/catalog 与 `session.read` 的 `sessionSummary` 始终下发有效值、不新增 `customTitle` 键；Access 只转发命令、不回源保存标题或命令状态，`command.status` 的 `remoteTarget` 直接回源 Owner，未协商时 Owner 返回 `nodelink.protocol.feature_required`",
+          "delivery": "mvp",
+          "required": false
         }
       ]
     }

@@ -20,7 +20,8 @@
     { "name": "session.files.read", "kind": "query", "scope": "session.files.read", "transport": ["sync"], "delivery": "mvp" },
     { "name": "session.git.status", "kind": "query", "scope": "session.git.status", "transport": ["sync"], "delivery": "mvp" },
     { "name": "session.git.diff", "kind": "query", "scope": "session.git.diff", "transport": ["sync"], "delivery": "mvp" },
-    { "name": "session.resume", "kind": "mutation", "scope": "session.resume", "transport": ["node_link"], "delivery": "conditional_mvp" }
+    { "name": "session.resume", "kind": "mutation", "scope": "session.resume", "transport": ["node_link"], "delivery": "conditional_mvp" },
+    { "name": "session.title.set", "kind": "mutation", "scope": "session.title.set", "transport": ["sync", "node_link"], "delivery": "mvp" }
   ],
   "localCapabilities": [
     "local.agent.configure",
