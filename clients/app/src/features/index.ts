@@ -62,11 +62,27 @@ export type {
   ClientState,
   ClientStoreOptions,
   CommandOutcome,
+  ConnectionCloseRecord,
   ConversationThreadState,
   CreateOutcome,
+  ReconnectProgress,
 } from "./client-store";
 export { ClientStore, initialClientState } from "./client-store";
 export { ClientStoreProvider, useClientState, useClientStore } from "./runtime";
+
+// ── 连接问题（顶栏只分在线/离线，阻断原因由弹层承担）────────────────────────
+export type {
+  ConnectionAvailability,
+  ConnectionProblemAction,
+  ConnectionProblemInput,
+  ConnectionProblemKind,
+  ConnectionProblemModel,
+} from "./connection-problem";
+export {
+  buildConnectionProblem,
+  networkAvailabilityOf,
+  shouldShowConnectionProblem,
+} from "./connection-problem";
 
 // ── 呈现覆盖（D5：由客户端自持）─────────────────────────────────────────────
 export type { PresentationRoute } from "./presentation-coverage";
@@ -119,7 +135,6 @@ export { buildConversationSettingsModel, modelConfigOption } from "./conversatio
 
 // ── R15 目录 ────────────────────────────────────────────────────────────────
 export type {
-  DirectoryContentOrigin,
   DirectoryCountsModel,
   DirectoryDetailModel,
   DirectoryFilter,
@@ -128,7 +143,6 @@ export type {
   SessionRowModel,
 } from "./directory-model";
 export {
-  CONTENT_ORIGIN_LABELS,
   DIRECTORY_DETAIL_PAGE_SIZE,
   DIRECTORY_EMPTY_COPY,
   buildDirectoryDetailModel,

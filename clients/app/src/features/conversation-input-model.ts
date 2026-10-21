@@ -11,8 +11,9 @@
  *    未确认前 MUST NOT 呈现为空闲。
  * 3. **输入可用性与会话主状态无关**：`idle`/`running`/`pending` 都不推导只读，也不存在
  *    「会话已关闭所以只读」的分支。三态都允许编辑草稿；`in_progress`（轮次执行中或提交等待
- *    终态）与 `unavailable`（来源离线、imported 来源、附件能力未协商等）只是当前不能提交，
- *    并各自给出**当前实际原因**（`blockedBy` + 一句话说明）。提交闸门在
+ *    终态）与 `unavailable`（设备离线、来源离线、imported 来源、附件能力未协商等）只是当前不能提交，
+ *    并各自给出**当前实际原因**（`blockedBy` + 一句话说明）。设备离线时说明交给连接问题弹层，
+ *    输入区只关闭提交闸门、不重复原因文案。提交闸门在
  *    `ClientStore.submitPrompt` 里再拦一次（不派发命令），不靠组件记得禁用。
  *
  * ## 草稿与附件
@@ -36,7 +37,9 @@ export type ConversationInputState = "editable" | "in_progress" | "unavailable";
 
 /** 当前不可提交的**实际原因**（`editable` 时为 `null`）。每条都来自当前事实，不来自主状态。 */
 export type ConversationInputBlock =
-  /** 连接不可用（本机未连上或来源节点离线）。 */
+  /** 设备与电脑的连接不可用（未连上/已断开）。提交闸门关闭，但不额外堆一句原因文案。 */
+  | "connection_offline"
+  /** 设备连接在线，但来源节点离线（imported 会话）。 */
   | "source_offline"
   /** 上一次提交还在等服务端终态。 */
   | "submission_in_flight"
@@ -74,7 +77,7 @@ export interface ConversationInputModel {
   readonly draft: string;
   /** 能否提交（唯一决定提交按钮可用性的字段）。 */
   readonly canSubmit: boolean;
-  /** 不可提交的一句话说明；可提交时为 `null`。 */
+  /** 不可提交的说明；可提交时为 `null`（设备离线也交给连接问题弹层，这里同样为 `null`）。 */
   readonly disabledReason: string | null;
   /** 当前连接是否协商到附件传输。 */
   readonly attachmentsSupported: boolean;
@@ -137,7 +140,8 @@ function blockOf(input: {
   readonly attachmentsNegotiated: boolean;
   readonly attachments: AttachmentBatchModel;
 }): ConversationInputBlock | null {
-  if (!input.connectionOnline || !input.originOnline) return "source_offline";
+  if (!input.connectionOnline) return "connection_offline";
+  if (!input.originOnline) return "source_offline";
   if (input.awaitingTerminal) return "submission_in_flight";
   if (input.turnInProgress) return "turn_in_progress";
   // 已选了附件、却没协商到附件传输：整条不能发（不得静默删掉附件只发文本）。
@@ -150,10 +154,13 @@ function blockOf(input: {
 }
 
 /** 原因的界面说明（每条都描述**当前事实**，不引用会话主状态）。 */
-function blockText(block: ConversationInputBlock, attachments: AttachmentBatchModel): string {
+function blockText(block: ConversationInputBlock, attachments: AttachmentBatchModel): string | null {
   switch (block) {
+    case "connection_offline":
+      // 设备离线已经由连接问题弹层完整说明；输入区不再重复一句「连接不可用」。
+      return null;
     case "source_offline":
-      return "连接不可用或来源节点离线，不能提交";
+      return "来源节点离线，不能提交";
     case "submission_in_flight":
       return "消息已提交，等待服务端确认后才能继续发送";
     case "turn_in_progress":

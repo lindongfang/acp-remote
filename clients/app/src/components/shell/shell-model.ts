@@ -4,79 +4,34 @@
  * ## 为什么判定在这里而不在组件里
  *
  * 外壳要回答的问题只有三个：**要不要呈现全局顶栏**（路由判定）、**连接状态该怎么表达**
- * （胶囊档位与短词）、**这一页是不是明文托管**（开发模式横幅与徽标）。三者都是「输入 → 输出」的
- * 纯函数，因此全部落在本文件：组件只渲染模型，测试与浏览器用例断言的都是同一份判定。
+ * （胶囊只分在线/离线两档；阻断原因交给连接问题弹层）、**这一页是不是明文托管**（开发模式
+ * 横幅与徽标）。三者都是「输入 → 输出」的纯函数，因此全部落在本文件：组件只渲染模型，
+ * 测试与浏览器用例断言的都是同一份判定。
  *
  * ## 判据只有一处
  *
- * 顶栏判据是 `usePathname()` 的取值（配对入口隐藏），**不**由各路由自己声明；连接状态只由胶囊
- * 表达（`spec` 的「连接状态 MUST 只由设备胶囊这一个控件表达」），因此这里不产出第二个状态徽标
- * 需要的任何东西。
+ * 顶栏判据是 `usePathname()` 的取值（配对入口隐藏），**不**由各路由自己声明；连接状态在胶囊
+ * 里只表达网络可用性（在线/离线），不产出第二个状态徽标，也不在胶囊里塞阻断原因短词。
  */
 
-import { CONNECTION_STATE_LABELS } from "../../features/host-panel-model";
+import { networkAvailabilityOf } from "../../features/connection-problem";
+import type { ConnectionAvailability } from "../../features/connection-problem";
 import type { ConnectionStateName } from "../../state";
 
 /** 胶囊圆点的三档：正常 / 需要注意 / 阻断。 */
 export type CapsuleTone = "ok" | "warn" | "danger";
 
-/** 连接健康（不追加短词）的状态。 */
-type HealthyState = "online" | "connecting" | "authenticating" | "replaying";
-
-function isHealthyState(state: ConnectionStateName): state is HealthyState {
-  return state === "online" || state === "connecting" || state === "authenticating" || state === "replaying";
-}
-
-/**
- * 连接状态 → 胶囊档位。
- *
- * 只有连接**确实不健康**的状态才升级：握手与追平阶段仍是在线路径（原型把 online 与 syncing
- * 合并成一个正常态），因此它们不追加短词（`spec` 的第一个场景）。`unpaired` 按原型的口径算阻断
- * ——那时没有任何连接可用，胶囊就是「还没配对」的入口。
- */
-const TONE_BY_STATE: Readonly<Record<ConnectionStateName, CapsuleTone>> = {
-  online: "ok",
-  connecting: "ok",
-  authenticating: "ok",
-  replaying: "ok",
-  pairing: "warn",
-  // 离线没有任何可用连接：与阻断态同档呈现红色；「正在重连」仍在尝试，保持需要注意的黄色。
-  disconnected: "danger",
-  reconnecting: "warn",
-  unpaired: "danger",
-  revoked: "danger",
-  incompatible: "danger",
-  identity_changed: "danger",
-  replaced: "danger",
-};
-
-/**
- * 需要注意与阻断态在胶囊里追加的短词：口径取自原型 `CONN` 表的 `chip` 字段
- * （「正在重连」「离线」「已被移除」「密钥已变化」「版本不兼容」「已在别处接管」「未配对」）。
- * 键集合由类型保证完整——少一个非健康状态就编译不过。
- */
-const SHORT_WORD_BY_STATE: Readonly<Record<Exclude<ConnectionStateName, HealthyState>, string>> = {
-  pairing: "配对中",
-  disconnected: "离线",
-  reconnecting: "正在重连",
-  unpaired: "未配对",
-  revoked: "已被移除",
-  incompatible: "版本不兼容",
-  identity_changed: "密钥已变化",
-  replaced: "已在别处接管",
-};
-
 /** 设备胶囊的呈现模型。 */
 export interface DeviceCapsuleModel {
   /** 连接状态机的当前状态；`null` = 组合根尚未装配，状态未知。 */
   readonly state: ConnectionStateName | null;
+  /** 机器可读的网络可用性：在线 / 离线；尚未认证或状态未知时为 `null`。 */
+  readonly availability: ConnectionAvailability | null;
   readonly tone: CapsuleTone;
   /** 胶囊上的标识：主机的 host 段，或一个明确的「未知主机」。 */
   readonly deviceLabel: string;
-  /** 完整连接状态文案（`aria-label`；短词只是它的浓缩）。 */
+  /** 完整状态文案（`aria-label`）：已认证后只有「在线」「离线」两档。 */
   readonly statusLabel: string;
-  /** 需要注意与阻断态追加的短词；健康态为 `null`。 */
-  readonly shortWord: string | null;
 }
 
 /** 外壳的呈现模型。 */
@@ -111,6 +66,22 @@ function normalizePath(pathname: string | null): string | null {
 export function isPairingPath(pathname: string | null): boolean {
   const normalized = normalizePath(pathname);
   return normalized !== null && PAIRING_PATHS[normalized] === true;
+}
+
+/** 业务路由的形态：根目录页、目录详情页与会话页。 */
+const BUSINESS_PATH = /^\/(?:dir|session)(?:\/|$)/;
+
+/**
+ * 路径是否需要「已认证」才能呈现：目录页（`/`）、目录详情（`/dir/...`）与会话页
+ * （`/session/...`）。
+ *
+ * 配对入口与主机页**不**在其中：配对本身就是认证之前的流程，主机页是连接面板本身
+ * （它要能在首屏认证失败时被用户看到）。首屏认证闸门与连接问题弹层都用这一条判据。
+ */
+export function isBusinessPath(pathname: string | null): boolean {
+  const normalized = normalizePath(pathname);
+  if (normalized === null) return false;
+  return normalized === "/" || BUSINESS_PATH.test(normalized);
 }
 
 /** 对话路由的形态：`/session/<id>`，会话标识恰好一段。 */
@@ -155,27 +126,41 @@ export function deviceLabelOf(address: string | null): string {
 /** 连接状态未知（组合根尚未装配）时的胶囊。 */
 const UNKNOWN_CAPSULE: DeviceCapsuleModel = {
   state: null,
+  availability: null,
   tone: "warn",
   deviceLabel: "未知主机",
   statusLabel: "连接状态未知",
-  shortWord: "状态未知",
 };
 
-/** 构造设备胶囊模型。 */
+/**
+ * 构造设备胶囊模型。
+ *
+ * 已认证后只分**在线 / 离线**两档：阻断原因、重连次数与下一步动作都由连接问题弹层表达，
+ * 胶囊不再追加「正在重连 / 已被移除 / 版本不兼容 …」这类短词——同一个状态两处判据必然漂移。
+ * 尚未认证（握手/配对）时给「状态未知」这一档，不谎称在线或离线。
+ */
 export function buildDeviceCapsule(input: {
   readonly state: ConnectionStateName | null;
   readonly hostAddress: string | null;
+  /** 本次页面是否已经成功认证过；重连中的重新认证仍按离线呈现。 */
+  readonly hasAuthenticated?: boolean;
 }): DeviceCapsuleModel {
   const deviceLabel = deviceLabelOf(input.hostAddress);
   if (input.state === null) return { ...UNKNOWN_CAPSULE, deviceLabel };
-  const tone = TONE_BY_STATE[input.state];
-  return {
-    state: input.state,
-    tone,
-    deviceLabel,
-    statusLabel: CONNECTION_STATE_LABELS[input.state],
-    shortWord: isHealthyState(input.state) ? null : SHORT_WORD_BY_STATE[input.state],
-  };
+  const availability = networkAvailabilityOf(input.state, input.hasAuthenticated === true);
+  if (availability === null) {
+    return {
+      state: input.state,
+      availability: null,
+      tone: "warn",
+      deviceLabel,
+      statusLabel: "连接状态未知",
+    };
+  }
+  if (availability === "online") {
+    return { state: input.state, availability, tone: "ok", deviceLabel, statusLabel: "在线" };
+  }
+  return { state: input.state, availability, tone: "danger", deviceLabel, statusLabel: "离线" };
 }
 
 /** 构造外壳模型。 */
@@ -183,12 +168,17 @@ export function buildShellModel(input: {
   readonly pathname: string | null;
   readonly connectionState: ConnectionStateName | null;
   readonly hostAddress: string | null;
+  readonly hasAuthenticated?: boolean;
   readonly secureContext: boolean;
 }): ShellModel {
   return {
     topBarVisible: showsGlobalTopBar(input.pathname),
     insecure: !input.secureContext,
     contentFill: isConversationPath(input.pathname),
-    capsule: buildDeviceCapsule({ state: input.connectionState, hostAddress: input.hostAddress }),
+    capsule: buildDeviceCapsule({
+      state: input.connectionState,
+      hostAddress: input.hostAddress,
+      ...(input.hasAuthenticated === undefined ? {} : { hasAuthenticated: input.hasAuthenticated }),
+    }),
   };
 }

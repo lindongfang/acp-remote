@@ -767,7 +767,6 @@ describe("R14/R11：真实 digestPort 参与快照校验（既有测试全部用
       // 因此「未入仓」只能由 digest 判定失败解释）。
       await settle();
       expect(harness.store.state.resources).toBeNull();
-      expect(harness.store.state.lastSyncedAtMs).toBeNull();
 
 
 

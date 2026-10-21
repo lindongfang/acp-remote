@@ -1405,6 +1405,8 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
   let unsubscribeLifecycle: (() => void) | null = null;
   let reconnectCancel: CancelTimer | null = null;
   let reconnectAttempts = 0;
+  /** 正在发起一次连接：状态提交触发的 `scheduleReconnect` 不得再排一条。 */
+  let reconnectInFlight = false;
   let disposed = false;
 
   /**
@@ -1427,13 +1429,18 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
 
   /** 状态机允许连接且当前没有在途连接时，按有界退避安排一次 `connect()`。 */
   function scheduleReconnect(): void {
-    if (reconnectCancel !== null || !shouldConnect()) return;
+    if (reconnectInFlight || reconnectCancel !== null || !shouldConnect()) return;
     const delay = Math.min(RECONNECT.baseDelayMs * 2 ** reconnectAttempts, RECONNECT.maxDelayMs);
     reconnectAttempts += 1;
+    // 先登记取消句柄再提交进度：`noteReconnectScheduled` 会触发 store 订阅，若此时
+    // `reconnectCancel` 仍为 null，订阅里的 `scheduleReconnect` 会再排一条并递归。
     reconnectCancel = clock.schedule(delay, () => {
       reconnectCancel = null;
       connectOnce();
     });
+    // 把「第几次、何时再试」交给 store：这是诊断面板唯一的进度来源，也避免消费方自己
+    // 复算退避公式后与这里分叉。记录的是**本次已安排**的尝试，因此用自增后的次数与到期时刻。
+    store.noteReconnectScheduled(reconnectAttempts, clock.now() + delay);
   }
 
   /**
@@ -1445,11 +1452,17 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
    */
   function connectOnce(): void {
     if (!shouldConnect()) return;
+    reconnectInFlight = true;
     try {
+      // 真正要发起连接了：清掉「等待重试」的展示态，随后认证/在线会再推进进度。
+      // 这次提交也会触发 store 订阅，因此必须先置 `reconnectInFlight`，避免又排一条。
+      store.noteReconnectAttemptStarted();
       sync?.connect();
     } catch {
       const cause = sync?.blocked ?? null;
       if (cause !== null) store.noteConnectionBlocked(cause);
+    } finally {
+      reconnectInFlight = false;
     }
   }
 
@@ -1566,7 +1579,10 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
         }
         if (event.kind === "closed" || event.kind === "blocked") attachments?.stop();
         // 追平完成才算真有进展：据此重置退避预算，与 `connection.ts` 的缺口预算同一口径。
-        if (event.kind === "online") reconnectAttempts = 0;
+        if (event.kind === "online") {
+          reconnectAttempts = 0;
+          store.clearReconnectProgress();
+        }
         scheduleReconnect();
       },
     });
@@ -1585,6 +1601,12 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
 
     unsubscribeStore = store.subscribe(scheduleReconnect);
     unsubscribeLifecycle = platform.lifecycle.subscribe((event: LifecycleEvent) => {
+      // 后台标签页不探测：浏览器会节流定时器，且「页面挂起」不等于连接失效。恢复可见时
+      // 连接层会立即补发一条 ping，并从那一刻重新获得完整宽限。
+      if (event.kind === "visibility") {
+        sync?.setProbeVisible(event.state === "visible");
+        return;
+      }
       // `pagehide` 断开连接：未完成的暂存快照随之丢弃（§9.4），恢复路径交给下次连接；
       // 附件连接一并关闭，进行中的传输由服务端按闲置策略清理（不做刷新续传）。
       if (event.kind === "pagehide") {
@@ -1592,6 +1614,9 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
         attachments?.stop();
       }
     });
+    // 订阅时不会重放当前值：装配后必须显式对齐一次，否则「挂载时页面已隐藏」的场景会
+    // 仍按默认可见探测（只有之后发生切换才会纠正）。
+    sync.setProbeVisible(platform.lifecycle.currentVisibility() === "visible");
     assembledHost = { hostId: record.hostId, canonicalOrigin };
   }
 

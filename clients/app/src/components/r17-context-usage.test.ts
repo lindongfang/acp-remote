@@ -31,7 +31,6 @@ const HEADER = {
   agentName: "Claude",
   state: "running" as const,
   directoryId: "work-api",
-  originOfflineLabel: null,
 };
 
 /** 会话明细：两条消息，只用来让模型有内容可渲染。 */
@@ -162,7 +161,6 @@ describe("R17 未上报不影响其它交互", () => {
     });
 
     const model = store.conversationPage(HEADER.sessionId);
-    expect(model?.header.originOfflineLabel).not.toBeNull();
     // 反例：若离线也允许标记已发送，这里会变成 true，断言变红。
     expect(model?.capabilities.canSend).toBe(false);
   });

@@ -40,7 +40,6 @@ import {
   fontSize,
   fontWeight,
   palettes,
-  radius,
   spacing,
   useTheme,
 } from "./theme";
@@ -177,16 +176,6 @@ function buildStyles(colors: Palette) {
       fontSize: 12.5,
       lineHeight: 20,
     },
-    offline: {
-      color: colors.danger,
-      backgroundColor: colors.dangerSoft,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-      lineHeight: 17.6,
-      paddingVertical: 2,
-      paddingHorizontal: spacing.xs,
-      borderRadius: radius.sm,
-    },
     // 紧凑行的状态词不占固定 70px（左栏只有 300px，标题才是主体）。
     stateWordCompact: {
       width: "auto",
@@ -217,7 +206,7 @@ const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.
  *
  * - `default`：目录页与目录详情页的五字段行（原型 `.row`）；
  * - `compact`：对话页左栏的紧凑行（原型 `.srow`）——只有状态圆点、标题、状态词与相对时间，
- *   不渲染 Agent 名、来源离线标注与行底边。目录页的既有断言不因这一档改变。
+ *   不渲染 Agent 名与行底边。目录页的既有断言不因这一档改变。
  */
 export type SessionRowVariant = "default" | "compact";
 
@@ -288,11 +277,6 @@ export function SessionRow({ session, onOpen, variant = "default", ordinal }: Se
           </Text>
         )}
       </Pressable>
-      {compact || session.originOfflineLabel === null ? null : (
-        <Text style={styles.offline} dataSet={{ originOffline: "true" }}>
-          {session.originOfflineLabel}
-        </Text>
-      )}
       <Text
         style={compact ? [styles.time, styles.timeCompact] : styles.time}
         dataSet={{ sessionUpdatedAt: session.updatedAt }}

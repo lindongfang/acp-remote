@@ -71,8 +71,6 @@ function page(input: {
   // 补成具体值再传：`exactOptionalPropertyTypes` 下不能把 `undefined` 显式赋给可选属性。
   return buildDirectoryPageModel({
     resources: resources({ sessions: input.sessions, workspaces: input.workspaces ?? WORKSPACES }),
-    connection: "online",
-    lastSyncedAtMs: 1_700_000_000_000,
     query: input.query ?? "",
     filter: input.filter ?? "all",
   });
@@ -86,7 +84,6 @@ function detail(input: {
 }): DirectoryDetailModel {
   return buildDirectoryDetailModel({
     resources: resources({ sessions: input.sessions, workspaces: input.workspaces ?? WORKSPACES }),
-    connection: "online",
     directoryId: input.directoryId,
     ownerLabelOf: () => "工作站",
     nowMs: 1_700_000_000_000,
@@ -213,9 +210,11 @@ describe("目录页最近活动时间：该目录下 updatedAt 的最大值", ()
 });
 
 describe("目录页 no_match 分支", () => {
-  it("非空查询无命中时出现，且带上来源信息", () => {
+  it("非空查询无命中时出现，且不携带来源信息", () => {
     const model = page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "查无此项" });
-    expect(model).toMatchObject({ kind: "no_match", contentOrigin: "live", lastSyncedAtMs: 1_700_000_000_000 });
+    expect(model.kind).toBe("no_match");
+    expect("contentOrigin" in model).toBe(false);
+    expect("lastSyncedAtMs" in model).toBe(false);
   });
 
   it("非默认筛选无命中时出现", () => {
@@ -229,20 +228,10 @@ describe("目录页 no_match 分支", () => {
     expect(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "", filter: "all" }).kind).toBe("ready");
   });
 
-  it("断连时照常给出同样的匹配结果，只改来源标注", () => {
-    const offline = buildDirectoryPageModel({
-      resources: resources({ sessions: DIR_SESSIONS, workspaces: DIRS }),
-      connection: "disconnected",
-      lastSyncedAtMs: 1_700_000_000_000,
-      query: "查无此项",
-    });
-    expect(offline).toMatchObject({ kind: "no_match", contentOrigin: "last_sync" });
-  });
-
   it("不冒充两种既有空态：无快照仍是 loading，无目录/无会话仍是各自的 empty", () => {
     // 反例：若 no_match 抢占了这些情形，用户会把「还没来得及同步」看成「查不到」。
     expect(
-      buildDirectoryPageModel({ resources: null, connection: "online", lastSyncedAtMs: null, query: "任意" }).kind,
+      buildDirectoryPageModel({ resources: null, query: "任意" }).kind,
     ).toBe("loading");
     expect(page({ sessions: [], workspaces: [], query: "任意" })).toMatchObject({
       kind: "empty",

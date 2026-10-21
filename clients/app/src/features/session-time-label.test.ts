@@ -114,7 +114,6 @@ describe("三处（目录页 / 详情页 / 对话页左栏）共用同一个相�
     ];
     const model = buildDirectoryDetailModel({
       resources: resources({ sessions }),
-      connection: "online",
       directoryId: "work-api",
       ownerLabelOf: () => "工作站",
       nowMs: AT_MS + 30_000,

@@ -295,6 +295,8 @@ function setup(
   } = {},
 ): Harness {
   const sockets = new FakeSocketFactory();
+  // 组合根会按可见性打开探活；这些用例推进假时钟但不关心探活，自动回 pong 避免 3 秒超时。
+  sockets.autoPong = true;
   const cache = new MemoryLocalCache();
   const lifecycle = new FakeLifecycle();
   const clock = new FakeClock(1_700_000_000_000);

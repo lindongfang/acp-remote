@@ -325,8 +325,6 @@ export default function SessionRoute(): ReactElement {
         }}
         // 会话头的 Agent 胶囊沿用主机面板的同一份连接事件覆盖层（覆盖层缺席即「状态未知」）。
         hostPanel={store.hostPanel()}
-        connectionState={state.connection.state}
-        lastSyncedAtMs={state.lastSyncedAtMs}
         // 复制：走剪贴板 API，结果用全局提示说明（失败不假装成功）。
         onCopyCode={(code) => {
           const clipboard: Clipboard | undefined = globalThis.navigator?.clipboard;

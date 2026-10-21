@@ -6,11 +6,10 @@
  * 路径」（原型 `viewDirDetail` 的 `.pagehead`），底栏左侧是「⊕ 新建」、右侧是
  * 翻页（`design.md` D4）。
  *
- * ## 来源标注只在断连时出现
+ * ## 不呈现内容来源与同步时间
  *
- * 在线（`contentOrigin === "live"`）时页头之后直接是会话列表，原型没有来源行；断连时按原型的
- * `notice.danger` 条给出「内容来自上次同步」与该次同步时刻（`pwa-web-client` 的断连标注要求）。
- * `data-content-origin` 始终留在根节点上，可见文案只在 `last_sync` 时出现。
+ * 断连时页面仍照常渲染快照内容，但不再画任何「内容来自上次同步」或同步时刻的标注；
+ * 连接状态只由共享外壳的设备胶囊表达。
  *
  * ## 两种「空」互不冒充
  *
@@ -61,7 +60,6 @@ import type { ReactElement } from "react";
 import { useEffect, useRef } from "react";
 
 import type { DirectoryDetailModel } from "../features/directory-model";
-import { CONTENT_ORIGIN_LABELS } from "../features/directory-model";
 import { Pager } from "./Pager";
 import { SessionRow } from "./SessionRow";
 import type { Palette } from "./theme";
@@ -89,21 +87,8 @@ export interface DirectoryDetailProps {
   readonly onCreateSession: () => void;
   /** 页码提交（输入框里的**原文**，只在回车与失焦时调用）：纠正全在 feature 层，组件只上抛。 */
   readonly onPageChange: (requested: string) => void;
-  /** 上次成功同步的时刻（epoch 毫秒）；断连时标注用。缺省 `null` = 没有可标注的时间。 */
-  readonly lastSyncedAtMs?: number | null;
   /** 可用宽度（像素）；缺省取 `useWindowDimensions()`。渲染测试据此注入窄/宽两档。 */
   readonly availableWidth?: number;
-}
-
-/**
- * 同步时刻的展示形式：`YYYY-MM-DD HH:MM UTC`。
- *
- * 按 UTC 固定位置切片，不走本地时区：同一份输入必须渲染出同一段文本，否则组件测试的断言
- * 会随 CI 与开发机的时区漂移。原始毫秒数同时经 `dataSet` 原样进入 DOM，需要精确值时从属性取。
- */
-function formatSyncedAt(lastSyncedAtMs: number): string {
-  const iso = new Date(lastSyncedAtMs).toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
 
 /**
@@ -218,38 +203,6 @@ function buildStyles(colors: Palette) {
       // 等宽值行取 500（原型 `.drow .dpath` 的 `font-weight:500`，见 `theme.ts` 的 `fontWeight.value`）。
       fontWeight: fontWeight.value,
     },
-    originNotice: {
-      flexDirection: "row",
-      alignItems: "flex-start",
-      gap: 10,
-      paddingVertical: 12,
-      paddingHorizontal: 14,
-      borderRadius: radius.md,
-      backgroundColor: colors.dangerSoft,
-    },
-    originNoticeGlyph: {
-      color: colors.danger,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.md,
-      lineHeight: 20.8,
-    },
-    originNoticeBody: {
-      flexShrink: 1,
-      minWidth: 0,
-      gap: 2,
-    },
-    originNoticeText: {
-      color: colors.danger,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      lineHeight: 20.8,
-    },
-    syncedAt: {
-      color: colors.danger,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
-      lineHeight: 17.6,
-    },
     // 原型详情页的会话行直接铺在页面上，外面不再套一层带边框的卡片。
     list: {
       flexDirection: "column",
@@ -352,7 +305,6 @@ export function DirectoryDetail({
   onOpenSession,
   onCreateSession,
   onPageChange,
-  lastSyncedAtMs = null,
   availableWidth,
 }: DirectoryDetailProps): ReactElement {
   const theme = useTheme();
@@ -414,7 +366,6 @@ export function DirectoryDetail({
   }
 
   const directory = model.directory;
-  const syncedAtMs = model.contentOrigin === "last_sync" ? lastSyncedAtMs : null;
 
   // 页头：返回 / 标题 + 会话数芯片 / 路径。目录标识不呈现（它只是路由与命令引用的内部标识）。
   const head = (
@@ -441,30 +392,9 @@ export function DirectoryDetail({
   return (
     <View
       style={styles.root}
-      dataSet={{ route: "dir-detail", directoryId: directory.directoryId, contentOrigin: model.contentOrigin }}
+      dataSet={{ route: "dir-detail", directoryId: directory.directoryId }}
     >
       {head}
-
-      {/* 原型只在断连时给提示条；在线（`live`）时页面直接从页头进入会话列表。
-          `data-content-origin` 仍留在根节点上，供客户端与 e2e 读取来源判定。 */}
-      {model.contentOrigin === "last_sync" ? (
-        <View style={styles.originNotice} dataSet={{ originNotice: "last_sync" }}>
-          <Text style={styles.originNoticeGlyph} aria-hidden={true}>
-            ⚠
-          </Text>
-          <View style={styles.originNoticeBody}>
-            <Text style={styles.originNoticeText}>
-              {CONTENT_ORIGIN_LABELS.last_sync}
-            </Text>
-            {/* 从未成功同步过（`lastSyncedAtMs` 为 null）时不呈现任何同步时间。 */}
-            {syncedAtMs === null ? null : (
-              <Text style={styles.syncedAt} dataSet={{ syncedAt: String(syncedAtMs) }}>
-                {`已同步 ${formatSyncedAt(syncedAtMs)}`}
-              </Text>
-            )}
-          </View>
-        </View>
-      ) : null}
 
       {model.sessions.length > 0 ? (
         // 列表语义用 role 补回：容器的 `list` 渲染成 `<ul>`、`SessionRow` 的 `listitem` 渲染成 `<li>`。

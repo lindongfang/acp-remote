@@ -12,6 +12,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   DECLARED_SUBPROTOCOLS,
+  LIVENESS_PROBE_INTERVAL_MS,
+  LIVENESS_TIMEOUT_MS,
   REQUIRED_FEATURES,
   SYNC_WS_SUBPROTOCOL,
   SyncConnection,
@@ -20,6 +22,7 @@ import {
   sortedFeatures,
 } from "./connection";
 import type { ClientBlockCause, SyncClientEvent } from "./connection";
+import { CLOSE } from "./blocking";
 import type { Cursor } from "../protocol";
 import { EventLedger } from "./dedupe";
 import { SnapshotStaging } from "./snapshot";
@@ -33,6 +36,7 @@ import {
   fakeDigest,
   makeAuthenticated,
   makeChallenge,
+  makeCommandResult,
   makeEvent,
   waitUntil,
   type Harness,
@@ -352,6 +356,8 @@ describe("R11/R12：subscribe 与重放追平", () => {
   it("scope 过滤造成的序号空洞不判丢失：直接呈现并推进水位，不重订阅", async () => {
     const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
     await completeHandshake(context);
+    // 本用例的计时器断言只关心缺口重订阅：先关掉存活探测，避免它的常驻定时器混入计数。
+    context.connection.setProbeVisible(false);
     // §9.2：2/3/4 因权限过滤对本设备不可见，下一条可见事件是 5。
     context.sockets.latest.deliver(makeEvent({ globalSequence: "5", eventId: eventIdFor("5") }));
 
@@ -383,6 +389,8 @@ describe("§9.3 判别力：重放 + 屏障 + scope 空洞", () => {
       withheld: new Set(["9"]),
     });
     await completeHandshake(context);
+    // 本用例用 `pendingTimers` 判别缺口重订阅是否存在：关掉存活探测，保持计时器计数只反映它。
+    context.connection.setProbeVisible(false);
     server.drain();
 
     // (1) 服务端实际投递的 5/6/7 全部呈现：不存在「已投递但被丢弃」的事件。
@@ -440,6 +448,8 @@ describe("§9.3 判别力：重放 + 屏障 + scope 空洞", () => {
       withheld: new Set(["10", "11", "12", "13", "14", "15"]),
     });
     await completeHandshake(context);
+    // 本用例推进假时钟来验证退避：关闭存活探测，否则计时器计数与推进都会混入探测定时器。
+    context.connection.setProbeVisible(false);
     server.drain();
     expect(presentedSequences(context)).toEqual(["5", "6", "7"]);
     expect(context.connection.ackedCursor?.globalSequence).toBe("15");
@@ -485,6 +495,8 @@ describe("§9.3 判别力：重放 + 屏障 + scope 空洞", () => {
       withheld: new Set(["10", "11", "12", "13", "14", "15"]),
     });
     await completeHandshake(context);
+    // 同样推进假时钟：只保留缺口重订阅的定时器。
+    context.connection.setProbeVisible(false);
     server.drain();
 
     // 连续 6 条漏投事件把预算走完。
@@ -553,6 +565,7 @@ describe("CRITICAL-3：出站序号从 1 严格递增", () => {
   it("同连接内连续 ACK 与 subscribe 的序号不重复、不回退", async () => {
     const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
     await completeHandshake(context);
+    context.connection.setProbeVisible(true);
     context.sockets.latest.deliver(makeEvent({ globalSequence: "2", eventId: "aaaaaaaa-0000-4000-8000-000000000002" }));
     context.sockets.latest.deliver(makeEvent({ globalSequence: "3", eventId: "aaaaaaaa-0000-4000-8000-000000000003" }));
     context.sockets.latest.deliver({
@@ -567,8 +580,10 @@ describe("CRITICAL-3：出站序号从 1 严格递增", () => {
     const sequences = context.sockets.latest.sent
       .filter((message) => message.parsed["connectionId"] !== undefined)
       .map((message) => message.parsed["connectionSequence"]);
+    // 认证成功后立即发出的存活探测 ping 也消耗一个客户端方向序号（subscribe=1、ping=2、
+    // 两条 ACK=3/4、ping 的 pong=5）。
     // 反例：若 ACK 恒为 "0" 或 subscribe 抄服务端序号 → 断言变红。
-    expect(sequences).toEqual(["1", "2", "3", "4"]);
+    expect(sequences).toEqual(["1", "2", "3", "4", "5"]);
   });
 });
 
@@ -834,5 +849,237 @@ describe("连接契约：必需 feature 的覆盖判定（§5.2）", () => {
       code: 4406,
       reason: "required_features_missing",
     });
+  });
+});
+// ── 应用层存活探测（§13） ─────────────────────────────────────────────────────
+
+/** 本连接已发出的全部 `control.ping`（按发送序）。 */
+function livenessPings(context: Harness): Record<string, unknown>[] {
+  return context.sockets.latest.sent
+    .filter((message) => message.parsed["type"] === "control.ping")
+    .map((message) => message.parsed);
+}
+
+/** ping 的 nonce（`body.nonce`）。 */
+function nonceOf(ping: Record<string, unknown>): string {
+  return (ping["body"] as { readonly nonce: string }).nonce;
+}
+
+/** 一条与服务端形状一致的 `control.pong`。 */
+function pongFor(nonce: string, sequence = 1): Record<string, unknown> {
+  return {
+    protocolVersion: 1,
+    type: "control.pong",
+    messageId: `eeeeeeee-1111-4111-8111-${String(sequence).padStart(12, "0")}`,
+    connectionId: CONNECTION_ID,
+    connectionSequence: "1",
+    body: { nonce },
+  };
+}
+
+/** 确认当前所有待确认的 ping（每个 nonce 回一条 pong；重复清理是无害的）。 */
+function acknowledgeAllPings(context: Harness): void {
+  for (const [index, ping] of livenessPings(context).entries()) {
+    context.sockets.latest.deliver(pongFor(nonceOf(ping), index + 1));
+  }
+}
+
+describe("应用层存活探测：认证后按秒发 ping", () => {
+  it("认证成功后立即发第一条，此后每 1000ms 一条，nonce 为 22 字符无填充 base64url", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.connection.setProbeVisible(true);
+
+    const first = livenessPings(context)[0];
+    expect(first).toBeDefined();
+    expect(first?.["protocolVersion"]).toBe(1);
+    expect(first?.["connectionId"]).toBe(CONNECTION_ID);
+    // subscribe 占 1，首条 ping 是客户端方向的第 2 个序号。
+    expect(first?.["connectionSequence"]).toBe("2");
+    expect(first?.["body"]).toEqual({ nonce: expect.any(String) });
+    const firstNonce = nonceOf(first as Record<string, unknown>);
+    expect(firstNonce).toMatch(/^[A-Za-z0-9_-]{22}$/);
+
+    context.clock.advanceBy(LIVENESS_PROBE_INTERVAL_MS);
+    expect(livenessPings(context)).toHaveLength(2);
+    context.clock.advanceBy(LIVENESS_PROBE_INTERVAL_MS);
+    expect(livenessPings(context)).toHaveLength(3);
+
+    // 每条 ping 的 nonce 都是新的：复用 nonce 会让迟到的 pong 顶替后一条的确认。
+    const nonces = livenessPings(context).map(nonceOf);
+    expect(new Set(nonces).size).toBe(nonces.length);
+  });
+
+  it("匹配的 pong 清除对应 ping：持续应答时连接保持打开", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.connection.setProbeVisible(true);
+    acknowledgeAllPings(context);
+
+    for (let tick = 0; tick < 6; tick += 1) {
+      context.clock.advanceBy(LIVENESS_PROBE_INTERVAL_MS);
+      acknowledgeAllPings(context);
+    }
+
+    expect(livenessPings(context)).toHaveLength(7);
+    // 反例：若 pong 不被匹配到待确认表，3 秒后这里会有 closed → 断言变红。
+    expect(context.events.some((event) => event.kind === "closed")).toBe(false);
+  });
+
+  it("不请自来的 pong 被忽略：它不能为任何真实 ping 续命", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.connection.setProbeVisible(true);
+    context.sockets.latest.deliver(pongFor("A".repeat(22)));
+
+    context.clock.advanceBy(LIVENESS_TIMEOUT_MS);
+
+    const closed = context.events.filter((event) => event.kind === "closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({ code: CLOSE.serverUnavailable, detail: "liveness_timeout" });
+  });
+
+  it("业务事件、服务端 ping 与命令结果都不清除待确认 ping（不重置存活判定）", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.connection.setProbeVisible(true);
+    const before = livenessPings(context).length;
+
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "1", eventId: eventIdFor("1") }));
+    context.sockets.latest.deliver(caughtUp("1"));
+    // 服务端发起的 ping：客户端只回 pong，不能用它证明客户端→服务端方向也通。
+    context.sockets.latest.deliver({
+      protocolVersion: 1,
+      type: "control.ping",
+      messageId: "eeeeeeee-1111-4111-8111-000000000002",
+      connectionId: CONNECTION_ID,
+      connectionSequence: "1",
+      body: { nonce: "B".repeat(22) },
+    });
+    context.sockets.latest.deliver(
+      makeCommandResult({ requestId: "4c4dafda-dd98-442e-8d55-252b75bac72d", status: "accepted" }),
+    );
+
+    expect(livenessPings(context)).toHaveLength(before);
+    context.clock.advanceBy(LIVENESS_TIMEOUT_MS);
+    expect(context.events.filter((event) => event.kind === "closed")).toHaveLength(1);
+  });
+
+  it("3 秒没有匹配 pong：恰好一条可重试 closed（liveness_timeout），socket 关闭回调不再补发", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.connection.setProbeVisible(true);
+
+    // 假时钟按整秒步进：每一拍检查一次最早 ping 的年龄（1000 → 2000 → 3000ms）。
+    context.clock.advanceBy(LIVENESS_PROBE_INTERVAL_MS);
+    context.clock.advanceBy(LIVENESS_PROBE_INTERVAL_MS);
+    expect(context.events.some((event) => event.kind === "closed")).toBe(false);
+
+    context.clock.advanceBy(LIVENESS_PROBE_INTERVAL_MS);
+    const closed = context.events.filter((event) => event.kind === "closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toEqual({
+      kind: "closed",
+      code: CLOSE.serverUnavailable,
+      retryable: true,
+      detail: "liveness_timeout",
+    });
+    // 连接在本地被终止：不是靠 socket 的远端关闭事件。
+    expect(context.sockets.latest.closedWith).toEqual({ code: CLOSE.serverUnavailable, reason: "liveness_timeout" });
+    expect(context.clock.pendingTimers).toBe(0);
+
+    // 内核随后投递的关闭事件不得再产生第二条 `closed`。
+    context.sockets.latest.serverClose(CLOSE.serverUnavailable, "service_unavailable");
+    expect(context.events.filter((event) => event.kind === "closed")).toHaveLength(1);
+  });
+});
+
+describe("应用层存活探测：可见性", () => {
+  it("隐藏时取消计时器并清空待确认 ping：长时间后台不判超时、不再发 ping", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.connection.setProbeVisible(true);
+    const before = livenessPings(context).length;
+
+    context.connection.setProbeVisible(false);
+    expect(context.clock.pendingTimers).toBe(0);
+    context.clock.advanceBy(10_000);
+
+    expect(livenessPings(context)).toHaveLength(before);
+    expect(context.events.some((event) => event.kind === "closed")).toBe(false);
+  });
+
+  it("恢复可见立即补发 ping，并从那一刻重新获得完整 3 秒宽限", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.connection.setProbeVisible(true);
+    context.connection.setProbeVisible(false);
+    context.clock.advanceBy(10_000);
+    const before = livenessPings(context).length;
+
+    context.connection.setProbeVisible(true);
+    // 「立即」：不推进时钟就已经有一条新 ping。
+    expect(livenessPings(context)).toHaveLength(before + 1);
+
+    context.clock.advanceBy(LIVENESS_PROBE_INTERVAL_MS);
+    context.clock.advanceBy(LIVENESS_PROBE_INTERVAL_MS);
+    expect(context.events.some((event) => event.kind === "closed")).toBe(false);
+
+    context.clock.advanceBy(LIVENESS_PROBE_INTERVAL_MS);
+    expect(context.events.filter((event) => event.kind === "closed")).toHaveLength(1);
+  });
+
+  it("认证前与关闭后设置可见性都是安全的空操作", async () => {
+    const context = setup();
+    expect(() => context.connection.setProbeVisible(false)).not.toThrow();
+    expect(() => context.connection.setProbeVisible(true)).not.toThrow();
+    context.connection.close();
+    expect(() => context.connection.setProbeVisible(true)).not.toThrow();
+    context.clock.advanceBy(5_000);
+    expect(livenessPings(context)).toHaveLength(0);
+  });
+});
+
+describe("应用层存活探测：关闭与阻断", () => {
+  it("主动 close 取消探测定时器，不再发 ping，也不产生 closed 事件", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.connection.setProbeVisible(true);
+    const before = livenessPings(context).length;
+
+    context.connection.close();
+    expect(context.clock.pendingTimers).toBe(0);
+    context.clock.advanceBy(5_000);
+
+    expect(livenessPings(context)).toHaveLength(before);
+    expect(context.events.some((event) => event.kind === "closed")).toBe(false);
+  });
+
+  it("阻断态取消探测定时器：不探测、不超时，只有 blocked", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.connection.setProbeVisible(true);
+    const before = livenessPings(context).length;
+
+    context.sockets.latest.deliver({
+      protocolVersion: 1,
+      type: "error",
+      messageId: "dddddddd-1111-4111-8111-000000000003",
+      connectionId: CONNECTION_ID,
+      connectionSequence: "1",
+      body: {
+        code: "auth.device_revoked",
+        message: "设备已撤销",
+        retryable: false,
+        correlationId: null,
+        details: {},
+      },
+    });
+    expect(context.clock.pendingTimers).toBe(0);
+    context.clock.advanceBy(5_000);
+
+    expect(livenessPings(context)).toHaveLength(before);
+    expect(context.events.some((event) => event.kind === "closed")).toBe(false);
+    expect(context.events.filter((event) => event.kind === "blocked")).toHaveLength(1);
   });
 });

@@ -575,51 +575,51 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-17 详情页的同步时刻：在线时不标注，断连后标注那次快照的时刻，从未同步时一个都不标",
+    name: "R15-17 详情页不呈现内容来源与同步时刻（在线与断连都如此）",
     async run() {
       const mounted = await mountScenario(baseScenario());
       try {
         await waitForDirectoryDetail(mounted.container);
+        // 页面正文没有来源标注条或同步时刻；连接状态只由共享外壳的设备胶囊表达。
         expectThat(
-          query(mounted.container, '[data-content-origin="live"]') !== null,
-          "在线时来源标注必须是「本次同步」",
+          query(mounted.container, "[data-content-origin]") === null,
+          "详情页不得呈现内容来源机器属性",
         );
         expectThat(
-          query(mounted.container, '[data-origin-notice="last_sync"]') === null,
-          "在线时不得呈现断连提示条",
+          query(mounted.container, "[data-origin-notice]") === null,
+          "详情页不得呈现来源提示条",
         );
-        expectAbsent(domText(mounted.container), "内容来自本次同步", "在线时不得呈现来源提示行");
         expectThat(
           query(mounted.container, "[data-synced-at]") === null,
-          "内容来自本次同步时不得标注「已同步 …」时刻",
+          "详情页不得呈现同步时刻机器属性",
         );
+        expectAbsent(domText(mounted.container), "内容来自", "详情页不得呈现内容来源文案");
+        expectAbsent(domText(mounted.container), "已同步", "详情页不得呈现同步时刻文案");
 
         mounted.host?.drop();
         await waitFor(
-          () => query(mounted.container, '[data-content-origin="last_sync"]') !== null,
-          "断连后详情页标注 last_sync",
+          () => query(document, '[data-capsule-availability="offline"]') !== null,
+          "断连后设备胶囊报告离线",
         );
-        await waitFor(
-          () => query(mounted.container, '[data-origin-notice="last_sync"]') !== null,
-          "断连后详情页呈现来源提示条",
+        // 断连后依然不出现任何来源条/同步时刻。
+        expectThat(
+          query(mounted.container, "[data-content-origin]") === null,
+          "断连后详情页不得呈现内容来源机器属性",
         );
         expectThat(
-          domText(mounted.container).includes("内容来自上次同步"),
-          "断连提示条要说明内容来自上次同步",
+          query(mounted.container, "[data-origin-notice]") === null,
+          "断连后详情页不得呈现来源提示条",
         );
-        await waitFor(
-          () => query(mounted.container, "[data-synced-at]") !== null,
-          "断连后标注上次同步时刻",
-        );
-        const epochMs = query(mounted.container, "[data-synced-at]")?.getAttribute("data-synced-at") ?? "";
         expectThat(
-          /^\d{13}$/.test(epochMs) && Number(epochMs) > 0,
-          `同步时刻应是快照替换时的 epoch 毫秒，实际 ${JSON.stringify(epochMs)}`,
+          query(mounted.container, "[data-synced-at]") === null,
+          "断连后详情页不得呈现同步时刻机器属性",
         );
-        expectEqual(
-          textOf(query(mounted.container, "[data-synced-at]")),
-          `已同步 ${new Date(Number(epochMs)).toISOString().slice(0, 16).replace("T", " ")} UTC`,
-          "同步时刻的展示文本（与目录页同一套文案）",
+        expectAbsent(domText(mounted.container), "内容来自", "断连后不得呈现内容来源文案");
+        expectAbsent(domText(mounted.container), "已同步", "断连后不得呈现同步时刻文案");
+        // 反例：断连后不再渲染会话行 → 这里会变成空列表。
+        expectThat(
+          queryAll(mounted.container, "[data-session-id]").length > 0,
+          "断连后详情页仍然呈现会话行",
         );
       } finally {
         await mounted.unmount();
@@ -637,6 +637,7 @@ const checks: readonly Check[] = [
           query(container, "[data-synced-at]") === null,
           "从未成功替换过快照时不得呈现任何同步时刻",
         );
+        expectAbsent(domText(container), "已同步", "从未同步过的详情页不该出现「已同步」文案");
       });
     },
   },
@@ -1013,7 +1014,7 @@ function detailFactsOf(container: HTMLElement): DetailFacts {
   for (const node of [container, ...queryAll(container, "*")]) {
     for (const name of node.getAttributeNames()) {
       if (!name.startsWith("data-")) continue;
-      const value = name === "data-synced-at" ? "<epoch>" : (node.getAttribute(name) ?? "");
+      const value = node.getAttribute(name) ?? "";
       entries.push(`${name}=${value}`);
     }
   }

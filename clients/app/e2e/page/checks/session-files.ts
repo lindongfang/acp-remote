@@ -304,8 +304,8 @@ const checks: readonly Check[] = [
           await selectSource(container, "all");
           await waitFor(() => query(container, '[data-file-entry="README.md"]') !== null, "根层加载");
 
-          // 默认显示被忽略项；`.git` 永不出现（主机不会下发，界面也不得虚构）。
-          expectThat(query(container, '[data-file-entry="debug.log"]') !== null, "忽略项默认可见");
+          // 默认隐藏被忽略项；关闭「隐藏忽略文件」后才显示。`.git` 永不出现（主机不会下发，界面也不得虚构）。
+          expectEqual(query(container, '[data-file-entry="debug.log"]'), null, "忽略项默认隐藏");
           // `.git` 的说明文字可以出现；可点击的 `.git` 条目本身不能出现。
           expectEqual(query(container, '[data-file-entry=".git"]'), null, "不得出现 .git 条目");
           expectThat(
@@ -329,11 +329,11 @@ const checks: readonly Check[] = [
             "目录标记为展开",
           );
 
-          // 忽略开关：切到隐藏后刷新当前目录；切回后恢复。
+          // 忽略开关：关闭隐藏后显示被忽略项；再打开后重新隐藏。
+          click(query(container, '[data-action="toggle-hide-ignored"]'), "显示忽略文件");
+          await waitFor(() => query(container, '[data-file-entry="debug.log"]') !== null, "忽略项显示");
           click(query(container, '[data-action="toggle-hide-ignored"]'), "隐藏忽略文件");
-          await waitFor(() => query(container, '[data-file-entry="debug.log"]') === null, "忽略项被隐藏");
-          click(query(container, '[data-action="toggle-hide-ignored"]'), "恢复忽略文件");
-          await waitFor(() => query(container, '[data-file-entry="debug.log"]') !== null, "忽略项恢复");
+          await waitFor(() => query(container, '[data-file-entry="debug.log"]') === null, "忽略项重新隐藏");
         },
       );
     },

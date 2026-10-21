@@ -389,7 +389,8 @@ const checks: readonly Check[] = [
             0,
             "本机取不到结构化历史时不得凭空出现结构化卡片",
           );
-          expectThat(query(container, "[data-origin-offline]") !== null, "来源离线必须在会话头标注");
+          // 来源离线不再在会话头标注（该标注已移除）；功能性原因由输入区说明。
+          expectEqual(query(container, "[data-origin-offline]"), null, "会话头不得再呈现来源离线标注");
 
           // 输入：草稿只在内存、发送入口禁用，且**不是**「已发送」。
           expectEqual(
@@ -402,8 +403,8 @@ const checks: readonly Check[] = [
             "草稿必须标注为只在内存、尚未提交",
           );
           expectThat(
-            textOf(query(container, "[data-submit-unavailable]")).includes("来源为其它节点"),
-            "不可提交时必须说明是来源为其它节点",
+            textOf(query(container, "[data-submit-unavailable]")).includes("来源节点离线"),
+            "不可提交时必须说明来源节点离线",
           );
           const submit = query(container, 'button[data-action="submit-prompt"]');
           expectEqual(submit?.hasAttribute("disabled") ?? false, true, "来源为其它节点的会话不得可提交");

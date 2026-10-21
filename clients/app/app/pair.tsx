@@ -104,6 +104,16 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
   const page = store?.pairingPage() ?? null;
   const approvedSync = page !== null && page.phase === "approved" && page.kind === "sync";
 
+  // 已经配对过的浏览器再次打开设备配对页（`/pair`）：直接回目录页，不在配对入口上重来一遍。
+  // 例外是**已批准**的过渡：那时页面正在播「配对成功」，由下面那条定时跳转负责（kind 也限定
+  // 在 `sync`，`/node-link/pair` 的节点资料展示不受影响）。
+  useEffect(() => {
+    if (kind !== "sync") return;
+    if (state === null || state.host === null) return;
+    if (approvedSync) return;
+    router.replace("/");
+  }, [kind, state, approvedSync, router]);
+
   // 审批通过后自动进目录（design D4）：不等连接进入 online，也不要求用户再点一次。
   // 阶段变化或卸载时清理，避免离开页面后仍发生一次导航。
   useEffect(() => {

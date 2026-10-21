@@ -37,7 +37,6 @@ import {
   click,
   expectEqual,
   expectThat,
-  mountRoute,
   mountScenario,
   query,
   waitFor,
@@ -123,9 +122,9 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "UI-SHELL-2 配对路由不呈现全局顶栏：同一份外壳换到根路径就呈现（差分判据）",
+    name: "UI-SHELL-2 未配对时配对路由不呈现全局顶栏与设备胶囊",
     async run() {
-      await withShell(baseScenario({ route: PAIR_ROUTE }), async ({ container }) => {
+      await withShell(baseScenario({ seedPaired: false, route: PAIR_ROUTE }), async ({ container }) => {
         await waitFor(() => query(container, '[data-shell="root"]') !== null, "外壳本体渲染出来");
         expectEqual(query(container, '[data-shell-top-bar="visible"]'), null, "配对路由的全局顶栏锚点");
         expectEqual(query(container, "[data-device-capsule]"), null, "配对路由的设备胶囊");
@@ -133,24 +132,16 @@ const checks: readonly Check[] = [
           query(container, '[data-shell-content="true"]') !== null,
           "配对路由仍渲染路由内容区（只是没有全局顶栏）",
         );
-
-        // 差分：把当前路径换成根路径，同一个外壳实例立刻呈现顶栏与胶囊。
-        mountRoute(DIRS_ROUTE);
-        await waitFor(
-          () => query(container, '[data-shell-top-bar="visible"]') !== null,
-          "换到根路径后顶栏出现",
-        );
-        expectThat(query(container, "[data-device-capsule]") !== null, "换到根路径后胶囊出现");
       });
     },
   },
   {
-    name: "UI-SHELL-3 配对页渲染进共享外壳但不绘制页头：顶栏缺席、页内锚点始终不存在，根路径顶栏出现",
+    name: "UI-SHELL-3 配对页渲染进共享外壳但不绘制页头：顶栏缺席、页内锚点不存在",
     async run() {
       // 配对内容只从地址片段进入；先把片段清掉，避免前面用例遗留在地址栏里的内容被本页读走。
       globalThis.location.hash = "";
       await withShell(
-        baseScenario({ route: PAIR_ROUTE, extraRoutes: [DIRS_ROUTE] }),
+        baseScenario({ seedPaired: false, route: PAIR_ROUTE }),
         async ({ container }) => {
           // 内容区走路由替身的出口：等的是真实配对页（`data-pairing-entry` 锚点），而不是
           // `[data-route="pair"]`——store 未装配时的 `RuntimeUnavailable` 占位也带后者。
@@ -165,7 +156,6 @@ const checks: readonly Check[] = [
 
           // (b) 配对页不再绘制任何自己的外壳：没有页头、没有返回入口。无片段时它显示
           // 配对码输入（S0），因此输入格是**应当存在**的内容，而不是页内导航/凭据输入。
-          // 这些锚点不是「换一页才消失」的——下面换到根路径后仍要断言它们始终不存在。
           expectEqual(
             query(container, '[data-route-header="pair"]'),
             null,
@@ -180,23 +170,27 @@ const checks: readonly Check[] = [
             query(container, '[data-pairing-code-entry="true"]') !== null,
             "无片段的配对页必须显示配对码输入（S0）",
           );
-
-          // 差分：换到根路径，全局顶栏必须出现——这才证明「顶栏缺席」是配对路径的外壳例外，
-          // 而不是整个外壳都没渲染。
-          mountRoute(DIRS_ROUTE);
-          await waitFor(
-            () => query(container, '[data-shell-top-bar="visible"]') !== null,
-            "换到根路径后全局顶栏出现",
-          );
-          expectThat(query(container, "[data-device-capsule]") !== null, "换到根路径后胶囊出现");
-          expectEqual(
-            query(container, '[data-route-header="pair"]'),
-            null,
-            "换到根路径后配对页头锚点仍不存在",
-          );
         },
         createElement(Stack),
       );
+    },
+  },
+  {
+    name: "UI-SHELL-4 已配对设备打开 /pair 自动回目录，顶栏与胶囊出现",
+    async run() {
+      await withShell(baseScenario({ route: PAIR_ROUTE, extraRoutes: [DIRS_ROUTE] }), async ({ container }) => {
+        await waitFor(() => currentPath() === "/", "已配对设备打开 /pair 后被送回根路径");
+        await waitFor(
+          () => query(container, '[data-shell-top-bar="visible"]') !== null,
+          "回到根路径后全局顶栏出现",
+        );
+        expectThat(query(container, "[data-device-capsule]") !== null, "回到根路径后设备胶囊出现");
+        expectEqual(
+          query(container, '[data-shell-content="true"] [data-pairing-entry="true"]'),
+          null,
+          "不得继续呈现配对页",
+        );
+      });
     },
   },
 ];

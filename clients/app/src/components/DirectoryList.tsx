@@ -51,8 +51,6 @@
  * - **折叠**：每个目录项**各自**的局部状态，翻转一个目录标识不影响其它目录项。
  * - **排序与分页**：feature 层按「该目录最近一次会话时间」倒序排好并每页切 5 个；组件只在列表底部
  *   渲染固定翻页控件（`onPageChange` 缺省时不渲染）。页码纠正与草稿状态由共享 `Pager` 负责。
- * - **同步时间**：`lastSyncedAtMs` 非 `null` 才画；从未成功替换过快照时为 `null`，
- *   此时绝不编造时刻（spec「从未成功同步」MUST NOT）。
  *
  * 组件是纯函数：所有判定与数据来自 props 里的视图模型，交互一律回调上抛，不 import store。
  */
@@ -552,7 +550,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
 
   return (
     <View style={styles.page} dataSet={{ route: "dirs" }}>
-      {/* 内容来源：断连时必须看得出这些内容来自上次同步。 */}
+      {/* 工具条：搜索、筛选与右上角创建入口在所有状态下保持可用。 */}
       {searchField === null && onFilterChange === undefined && toolbarCreate === null ? null : (
         <View style={styles.toolbar} dataSet={{ directoryToolbar: "true" }}>
           {searchField}
@@ -574,7 +572,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
         contentContainerStyle={styles.scrollBody}
         dataSet={{ directoryScroller: "true" }}
       >
-        <View style={styles.content} dataSet={{ directoryContent: "true", contentOrigin: model.contentOrigin, ...(model.lastSyncedAtMs === null ? {} : { syncedAt: String(model.lastSyncedAtMs) }) }}>
+        <View style={styles.content} dataSet={{ directoryContent: "true" }}>
 
         {model.kind === "empty" ? (
           <>

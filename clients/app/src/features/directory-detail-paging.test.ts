@@ -48,7 +48,6 @@ function detail(input: {
 }): DirectoryDetailModel {
   return buildDirectoryDetailModel({
     resources: resources({ sessions: input.sessions, workspaces: input.workspaces ?? WORKSPACES }),
-    connection: "online",
     directoryId: input.directoryId ?? "work-api",
     ownerLabelOf: () => "工作站",
     nowMs: NOW_MS,

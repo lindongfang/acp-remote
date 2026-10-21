@@ -138,8 +138,6 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
     const single = [{ directoryId: "notes", path: "/home/dev/notes" }] as const satisfies readonly WorkspaceCatalogEntry[];
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: single, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     if (model.kind !== "empty") throw new Error(`期望 empty，实际是 ${model.kind}`);
 
@@ -152,8 +150,6 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
   it("同名目录才给消歧尾段：取路径里与展示名不同的那一段（父目录段）", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: WORKSPACES_WITH_PATHS, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     if (model.kind !== "empty") throw new Error(`期望 empty，实际是 ${model.kind}`);
 
@@ -175,8 +171,6 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
   it("路径始终在场：同名目录的 path 与消歧段都逐字来自快照", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: WORKSPACES, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     if (model.kind !== "empty") throw new Error(`期望 empty，实际是 ${model.kind}`);
 
@@ -191,8 +185,6 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
   it("同名目录不被合并：两个目录标识各自成项", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: SESSIONS, workspaces: WORKSPACES, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
     });
 
     expect(model.kind).toBe("ready");
@@ -205,8 +197,6 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
   it("三项汇总由会话摘要得出：断连时仍然给出", () => {
     const offline = buildDirectoryPageModel({
       resources: { sessions: SESSIONS, workspaces: WORKSPACES, agents: [] },
-      connection: "disconnected",
-      lastSyncedAtMs: 1_700_000_000_000,
     });
 
     expect(offline.kind).toBe("ready");
@@ -214,8 +204,8 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
     const workApi = offline.directories.find((item) => item.directoryId === "work-api");
     // 两条会话属于 work-api：一条 running（运行中 1）、一条 pending（待处理 1）。
     expect(workApi?.counts).toEqual({ total: 2, active: 1, pending: 1 });
-    // 反例：断连时不给出汇总（而不是给 0），这里会变 null，断言变红。
-    expect(offline.contentOrigin).toBe("last_sync");
+    // 反例：把来源标注加回模型时这里会命中真实字段。
+    expect("contentOrigin" in offline).toBe(false);
   });
 });
 
@@ -223,8 +213,6 @@ describe("R15 两种空态可区分", () => {
   it("一个目录都没有 → no_directories，且不携带任何目录项", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: [], agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     expect(model).toMatchObject({ kind: "empty", empty: "no_directories", directories: [] });
   });
@@ -232,8 +220,6 @@ describe("R15 两种空态可区分", () => {
   it("目录存在但都没有会话 → directories_without_sessions（与上一种不是同一态），且列出各目录的零汇总行", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: WORKSPACES, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     expect(model).toMatchObject({ kind: "empty", empty: "directories_without_sessions" });
     if (model.kind !== "empty") return;
@@ -252,8 +238,6 @@ describe("R15 两种空态可区分", () => {
   it("空态列出的目录项与列表页其余项同一套键（含路径与消歧段）", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: WORKSPACES_WITH_PATHS, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     if (model.kind !== "empty") throw new Error(`期望 empty，实际是 ${model.kind}`);
 
@@ -274,8 +258,6 @@ describe("R15 两种空态可区分", () => {
     // 对照：同一份目录集在 ready 支下也给出同样的展示名与消歧段（空态不是另一套口径）。
     const withSessions = buildDirectoryPageModel({
       resources: { sessions: SESSIONS, workspaces: WORKSPACES, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     if (withSessions.kind !== "ready") throw new Error(`期望 ready，实际是 ${withSessions.kind}`);
     expect(withSessions.directories.map((row) => row.displayName)).toEqual(["api", "api", "notes"]);
@@ -284,7 +266,7 @@ describe("R15 两种空态可区分", () => {
 
   it("从未同步过 → loading，不冒充任何一种空态", () => {
     // 反例：若把「无快照」当成「没有目录」，这里会变成 empty，断言变红。
-    expect(buildDirectoryPageModel({ resources: null, connection: "online", lastSyncedAtMs: null })).toEqual({ kind: "loading" });
+    expect(buildDirectoryPageModel({ resources: null })).toEqual({ kind: "loading" });
   });
 });
 
@@ -328,7 +310,6 @@ describe("R15 目录详情", () => {
   it("只列出该目录标识下的会话；标识不在快照里是第三种呈现", () => {
     const detail = buildDirectoryDetailModel({
       resources: { sessions: SESSIONS, workspaces: WORKSPACES, agents: [] },
-      connection: "online",
       directoryId: "work-api",
       ownerLabelOf: () => "工作站",
       nowMs: 1_700_000_000_000,
@@ -344,7 +325,6 @@ describe("R15 目录详情", () => {
     expect(
       buildDirectoryDetailModel({
         resources: { sessions: SESSIONS, workspaces: WORKSPACES, agents: [] },
-        connection: "online",
         directoryId: "not-there",
         ownerLabelOf: () => "工作站",
         nowMs: 1_700_000_000_000,
@@ -440,8 +420,6 @@ describe("R15 目录页：按最近会话时间排序 + 每页 5 个目录", () 
     const { workspaces, sessions } = sevenDirectories();
     const model = buildDirectoryPageModel({
       resources: { sessions, workspaces, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
     });
     expect(model.kind).toBe("ready");
     if (model.kind !== "ready") return;
@@ -456,8 +434,6 @@ describe("R15 目录页：按最近会话时间排序 + 每页 5 个目录", () 
 
     const second = buildDirectoryPageModel({
       resources: { sessions, workspaces, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
       pageInput: "2",
     });
     expect(second.kind).toBe("ready");
@@ -473,8 +449,6 @@ describe("R15 目录页：按最近会话时间排序 + 每页 5 个目录", () 
     ] as const satisfies readonly WorkspaceCatalogEntry[];
     const model = buildDirectoryPageModel({
       resources: { sessions, workspaces: withEmpty, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
       pageInput: "99",
     });
     expect(model.kind).toBe("ready");
@@ -490,8 +464,6 @@ describe("R15 目录页：按最近会话时间排序 + 每页 5 个目录", () 
     }));
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces, agents: [] },
-      connection: "online",
-      lastSyncedAtMs: null,
       pageInput: "2",
     });
     expect(model.kind).toBe("empty");

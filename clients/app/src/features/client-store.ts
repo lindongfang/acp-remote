@@ -406,16 +406,35 @@ export interface RemoteSessionRuntime {
   readonly generation: number;
 }
 
+/** 最近一次连接关闭/阻断的事实（诊断与连接问题弹层的数据来源）。 */
+export interface ConnectionCloseRecord {
+  readonly code: number;
+  readonly reason: string | null;
+  /** 收到关闭事件的时刻（仓库时钟）。 */
+  readonly atMs: number;
+}
+
+/** 自动重连的进度（由组合根的退避安排写入；只是呈现用的事实，不参与连接状态机）。 */
+export interface ReconnectProgress {
+  readonly attempts: number;
+  readonly nextRetryAtMs: number | null;
+}
+
 /** 客户端状态（不可变快照）。 */
 export interface ClientState {
   readonly connection: ConnectionMachineState;
+  /** 本设备当前这次会话是否已经成功认证过（`auth.authenticated` 至少到达过一次）。 */
+  readonly hasAuthenticated: boolean;
+  /** 最近一次 `closed`/`blocked` 的关闭码与原因；从未关闭为 `null`。 */
+  readonly lastClose: ConnectionCloseRecord | null;
+  /** 自动重连的尝试次数与下次重试时刻；未安排重连时次数为 0。 */
+  readonly reconnect: ReconnectProgress;
   /** 本设备标识（`auth.authenticated.deviceId`）；未认证为 `null`。 */
   readonly deviceId: string | null;
   /** 服务端本次协商选中的 feature（决定 `history` include 要不要带）。 */
   readonly selectedFeatures: readonly string[];
   /** 最后一次**验证通过并完成替换**的快照资源；断连时仍是目录页的唯一数据来源。 */
   readonly resources: StagedResources | null;
-  readonly lastSyncedAtMs: number | null;
   /**
    * 来源 Owner 的运行期状态与代数（内存；不落盘）。
    *
@@ -526,10 +545,12 @@ export interface ClientState {
 export function initialClientState(): ClientState {
   return {
     connection: initialConnectionState(),
+    hasAuthenticated: false,
+    lastClose: null,
+    reconnect: { attempts: 0, nextRetryAtMs: null },
     deviceId: null,
     selectedFeatures: [],
     resources: null,
-    lastSyncedAtMs: null,
     remoteSources: new Map(),
     remoteSessions: new Map(),
     overlay: [],
@@ -978,15 +999,6 @@ function titleOf(summary: SessionSummary | undefined): string {
   return title === undefined || title === null || title.length === 0 ? "未命名会话" : title;
 }
 
-/** imported 会话来源离线时的标注（R20：只显示元数据）。 */
-function originOfflineLabelOf(
-  summary: SessionSummary | undefined,
-  ownerLabelOf: (ownerNodeId: string) => string,
-): string | null {
-  if (summary?.origin.kind !== "remote" || summary.origin.online) return null;
-  return `来源「${ownerLabelOf(summary.origin.ownerNodeId)}」当前离线`;
-}
-
 /** 命令失败的说明（结构化：码 + 消息 + 可重试）。 */
 function describeCommandFailure(result: CommandResultMessage): string {
   const error = result.body.error;
@@ -1368,6 +1380,37 @@ export class ClientStore {
     return this.#state;
   }
 
+  /** 自动重连进度（链接器只读；写入走下面三个方法）。 */
+  get reconnect(): ReconnectProgress {
+    return this.#state.reconnect;
+  }
+
+  /**
+   * 组合根安排了一次退避重连。
+   *
+   * 这些事实只用于呈现（「已重试 N 次，M 秒后重试」），不参与连接状态机：连接状态仍然只由
+   * `connection` 一个值表达。
+   */
+  noteReconnectScheduled(attempts: number, nextRetryAtMs: number): void {
+    const current = this.#state.reconnect;
+    if (current.attempts === attempts && current.nextRetryAtMs === nextRetryAtMs) return;
+    this.#commit({ ...this.#state, reconnect: { attempts, nextRetryAtMs } });
+  }
+
+  /** 下一次尝试已经开始：清掉「下次重试时刻」，保留已尝试次数。 */
+  noteReconnectAttemptStarted(): void {
+    const current = this.#state.reconnect;
+    if (current.nextRetryAtMs === null) return;
+    this.#commit({ ...this.#state, reconnect: { attempts: current.attempts, nextRetryAtMs: null } });
+  }
+
+  /** 连接已恢复（或不需要再重连）：进度归零。 */
+  clearReconnectProgress(): void {
+    const current = this.#state.reconnect;
+    if (current.attempts === 0 && current.nextRetryAtMs === null) return;
+    this.#commit({ ...this.#state, reconnect: { attempts: 0, nextRetryAtMs: null } });
+  }
+
   /** 订阅状态变化（React 的 `useSyncExternalStore` 与页面共用这一入口）。 */
   subscribe(listener: Listener): () => void {
     this.#listeners.add(listener);
@@ -1445,6 +1488,7 @@ export class ClientStore {
       case "authenticated":
         return {
           ...this.#state,
+          hasAuthenticated: true,
           deviceId: event.info.deviceId,
           selectedFeatures: [...(event.selectedFeatures ?? [])],
         };
@@ -1461,11 +1505,25 @@ export class ClientStore {
       case "online":
         return this.#withConnection({ kind: "caught_up" });
       case "closed":
-        return clearAllRemoteData(this.#withConnection({ kind: "connection_closed", retryable: event.retryable }));
+        return clearAllRemoteData({
+          ...this.#withConnection({ kind: "connection_closed", retryable: event.retryable }),
+          lastClose: {
+            code: event.code,
+            reason: event.detail ?? null,
+            atMs: this.#now(),
+          },
+        });
       case "blocked":
-        return clearAllRemoteData(this.#withConnection({ kind: "blocked", cause: event.cause }));
+        return clearAllRemoteData({
+          ...this.#withConnection({ kind: "blocked", cause: event.cause }),
+          lastClose: {
+            code: event.code,
+            reason: event.reason ?? event.cause,
+            atMs: this.#now(),
+          },
+        });
       case "snapshot_verified":
-        return { ...this.#state, resources: event.snapshot.resources, lastSyncedAtMs: this.#now() };
+        return { ...this.#state, resources: event.snapshot.resources };
       case "event":
         return this.#withEvent(event.event);
       case "command_result":
@@ -2263,8 +2321,6 @@ export class ClientStore {
   directoryPage(): DirectoryPageModel {
     return buildDirectoryPageModel({
       resources: this.#state.resources,
-      connection: this.#state.connection.state,
-      lastSyncedAtMs: this.#state.lastSyncedAtMs,
       query: this.#state.directoryQuery,
       filter: this.#state.directoryFilter,
       pageInput: this.#state.directoryListPage,
@@ -2284,7 +2340,6 @@ export class ClientStore {
   directoryDetail(directoryId: string, nowMs?: number): DirectoryDetailModel {
     return buildDirectoryDetailModel({
       resources: this.#state.resources,
-      connection: this.#state.connection.state,
       directoryId,
       ownerLabelOf: this.#ownerLabelOf,
       nowMs: nowMs ?? this.#now(),
@@ -2381,7 +2436,6 @@ export class ClientStore {
           agentName: "",
           state: null,
           directoryId: null,
-          originOfflineLabel: error?.message ?? "来源节点当前不可用。",
         },
         page: null,
         usage: null,
@@ -2422,12 +2476,6 @@ export class ClientStore {
       // 没有摘要时是「未知」，不是空闲：MUST NOT 编造主状态。
       state: summary?.state ?? null,
       directoryId: summary?.workspace?.directoryId ?? null,
-      originOfflineLabel:
-        remoteOrigin === null
-          ? originOfflineLabelOf(summary, this.#ownerLabelOf)
-          : !remoteReady
-            ? runtime?.error?.message ?? "正在从来源重建会话，完成后才呈现内容。"
-            : originOfflineLabelOf(summary, this.#ownerLabelOf),
     };
     const connectionOnline = this.#state.connection.state === "online";
 

@@ -172,7 +172,7 @@ async function pageFlow(config) {
   };
   const snapshot = () => {
     const hooks = qa(
-      '[data-session-state], [data-pending-jump-bar], [data-content-origin], [data-connection-strip-state], ' +
+      '[data-session-state], [data-pending-jump-bar], [data-capsule-availability], ' +
         '[data-composer], [data-turn-state], [data-submission], [data-directory-count], [role="alert"]',
     )
       .slice(-40)
@@ -459,21 +459,32 @@ async function pageFlow(config) {
   const live = window.__acprSockets.filter((socket) => socket.readyState === 1);
   if (live.length === 0) fail('no live WebSocket to disconnect');
   live.forEach((socket) => socket.close(1000, 'e2e_client_disconnect'));
-  await wait(() => q('[data-content-origin="last_sync"]'), 'stale-content strip while disconnected', 10000);
-  const stripState = q('[data-connection-strip-state]')?.getAttribute('data-connection-strip-state');
-  if (stripState === undefined || stripState === 'online') {
-    fail('connection strip did not report a non-online state');
+  await wait(
+    () => q('[data-capsule-availability="offline"]'),
+    'device capsule reports offline while disconnected',
+    10000,
+  );
+  // 内容来源条与同步时刻已移除：页面不得再出现这两个机器锚点，连接状态只由设备胶囊表达。
+  if (q('[data-content-origin]') || q('[data-connection-strip-state]') || q('[data-synced-at]')) {
+    fail('content-origin / sync-time markers must not be rendered');
   }
   if (headerState() !== 'running') {
     fail('last confirmed state was not preserved across the disconnect: ' + String(headerState()));
   }
   await wait(() => window.__acprSockets.length > socketsBefore, 'new socket after reconnect', 30000);
-  await wait(() => q('[data-content-origin="last_sync"]') === null, 'connection is online again', 30000);
+  await wait(
+    () => q('[data-capsule-availability="online"]'),
+    'device capsule reports online after reconnect',
+    30000,
+  );
+  if (q('[data-content-origin]') || q('[data-connection-strip-state]') || q('[data-synced-at]')) {
+    fail('content-origin / sync-time markers must not be rendered after reconnect');
+  }
   await wait(() => headerState() === 'idle', 'state re-converged after reconnect', 30000);
   await wait(
     () => document.body.innerText.includes('disconnect-done'),
     'events that happened while disconnected were replayed',
   );
 
-  return { sessionId, stripState };
+  return { sessionId };
 }

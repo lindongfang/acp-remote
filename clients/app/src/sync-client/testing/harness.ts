@@ -46,6 +46,11 @@ export class FakeSocket implements SocketPort {
   readonly sent: SentMessage[] = [];
   closedWith: { readonly code: number; readonly reason: string } | null = null;
   /**
+   * 自动回 `control.pong`。缺省关闭：存活探测测试需要自己控制何时回应；组合根等
+   * 「不关心探活、但会推进假时钟」的测试把它打开，避免每条连接都在 3 秒后超时。
+   */
+  autoPong = false;
+  /**
    * 服务端在升级握手里选中的子协议：缺省取客户端声明的第一条（合规服务端的行为）。
    *
    * 它是**可写的**，因为「服务端没选中」正是要证伪的情形：测试把它设成 `""`（或别的值），
@@ -61,7 +66,21 @@ export class FakeSocket implements SocketPort {
   }
 
   send(text: string): void {
-    this.sent.push({ text, parsed: JSON.parse(text) as Record<string, unknown> });
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    this.sent.push({ text, parsed });
+    if (!this.autoPong || parsed["type"] !== "control.ping") return;
+    const body = parsed["body"];
+    if (body === null || typeof body !== "object") return;
+    const nonce = (body as Record<string, unknown>)["nonce"];
+    if (typeof nonce !== "string") return;
+    this.deliver({
+      protocolVersion: parsed["protocolVersion"],
+      type: "control.pong",
+      messageId: "00000000-0000-4000-8000-000000000000",
+      connectionId: parsed["connectionId"],
+      connectionSequence: "1",
+      body: { nonce },
+    });
   }
 
   close(code: number, reason: string): void {
@@ -102,6 +121,8 @@ export class FakeSocket implements SocketPort {
 export class FakeSocketFactory {
   readonly sockets: FakeSocket[] = [];
   readonly urls: string[] = [];
+  /** 新 socket 是否自动回 pong；在 `open` 之前设置。 */
+  autoPong = false;
   /**
    * 每次 `openSocket` 收到的**声明子协议列表**（原样记录，缺席即 `undefined`）。
    *
@@ -116,6 +137,7 @@ export class FakeSocketFactory {
     this.protocols.push(input.protocols);
     // 合规服务端会选中客户端声明的第一条（§3.1 的 v1 只声明一条）；测试可改写它。
     const socket = new FakeSocket(input.handlers, input.protocols?.[0] ?? "");
+    socket.autoPong = this.autoPong;
     this.sockets.push(socket);
     return socket;
   };

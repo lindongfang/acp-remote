@@ -40,7 +40,6 @@ const NARROW_WIDTH = 375;
 function renderDetail(
   model: DirectoryDetailModel,
   options: {
-    readonly lastSyncedAtMs?: number | null;
     readonly availableWidth?: number;
   } = {},
 ): string {
@@ -51,7 +50,6 @@ function renderDetail(
       onOpenSession: () => undefined,
       onCreateSession: () => undefined,
       onPageChange: () => undefined,
-      lastSyncedAtMs: options.lastSyncedAtMs ?? null,
       availableWidth: options.availableWidth ?? WIDE_WIDTH,
     }),
   );
@@ -186,7 +184,7 @@ describe("R15 目录详情：两种「空」互不冒充", () => {
 
   it("从未同步过：呈现等待同步，不冒充任何一种空态，也不呈现同步时间", () => {
     const { store } = storeWith({ resources: null });
-    const html = renderDetail(store.directoryDetail("work-api"), { lastSyncedAtMs: null });
+    const html = renderDetail(store.directoryDetail("work-api"));
 
     expect(html).toContain('data-directory-detail-state="loading"');
     expect(html).not.toContain("data-directory-sessions");
@@ -322,50 +320,32 @@ describe("R15 目录详情：平铺 + 每页 10 条 + 翻页", () => {
   });
 });
 
-describe("R15 目录详情：断连时标注上次同步时刻", () => {
-  /** 断连（内容来自上次同步）的详情模型。 */
-  function offlineModel(connection: "disconnected" | "online"): DirectoryDetailModel {
+describe("R15 目录详情：不呈现内容来源与同步时间", () => {
+  /** 与连接状态无关的详情模型：断连时页面仍照常渲染快照内容。 */
+  function detailModel(): DirectoryDetailModel {
     return buildDirectoryDetailModel({
       resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }),
-      connection,
       directoryId: "work-api",
       ownerLabelOf: () => "另一台电脑",
       nowMs: 1_700_000_000_000,
     });
   }
 
-  it("内容来自上次同步时，在来源标注旁给出同步时刻", () => {
-    const model = offlineModel("disconnected");
+  it("断连时也没有来源标注条、同步时刻或来源机器属性", () => {
+    const model = detailModel();
     expect(model.kind).toBe("ready");
     if (model.kind !== "ready") return;
-    // 断连（含未配对）时内容来源必须是「上次同步」。
-    expect(model.contentOrigin).toBe("last_sync");
+    expect("contentOrigin" in model).toBe(false);
 
-    const html = renderDetail(model, { lastSyncedAtMs: 1_700_000_000_000 });
-    expect(html).toContain('data-content-origin="last_sync"');
-    expect(html).toContain('data-origin-notice="last_sync"');
-    expect(html).toContain("内容来自上次同步，当前未连接");
-    expect(html).toContain("已同步 2023-11-14 22:13 UTC");
-    expect(html).toContain('data-synced-at="1700000000000"');
-  });
-
-  it("对照：在线（本次同步）时不呈现同步时刻，也不呈现来源提示条", () => {
-    const html = renderDetail(offlineModel("online"), { lastSyncedAtMs: 1_700_000_000_000 });
-
-    expect(html).toContain('data-content-origin="live"');
-    // 原型在线时页头之后直接是会话列表；「内容来自本次同步」不是可见文案。
-    expect(html).not.toContain("内容来自本次同步");
-    expect(html).not.toContain('data-origin-notice');
-    expect(html).not.toContain("已同步");
+    const html = renderDetail(model);
+    expect(html).not.toContain("data-content-origin");
+    expect(html).not.toContain("data-origin-notice");
     expect(html).not.toContain("data-synced-at");
-  });
-
-  it("从未成功替换过快照：即使来源标记是 last_sync，也不呈现任何同步时间", () => {
-    const html = renderDetail(offlineModel("disconnected"), { lastSyncedAtMs: null });
-
-    expect(html).toContain('data-content-origin="last_sync"');
+    expect(html).not.toContain("内容来自上次同步");
     expect(html).not.toContain("已同步");
-    expect(html).not.toContain("data-synced-at");
+    // 页面内容本身照常呈现。
+    expect(html).toContain('data-directory-sessions="list"');
+    expect(textContentOf(html)).toContain("2 个会话");
   });
 });
 
@@ -376,11 +356,9 @@ describe("R15 目录详情：按设备宽度自适应，且信息集合相同", 
     });
     const model = store.directoryDetail("work-api");
     const narrow = renderDetail(model, {
-      lastSyncedAtMs: store.state.lastSyncedAtMs,
       availableWidth: NARROW_WIDTH,
     });
     const wide = renderDetail(model, {
-      lastSyncedAtMs: store.state.lastSyncedAtMs,
       availableWidth: WIDE_WIDTH,
     });
 
@@ -424,19 +402,21 @@ describe("R15 目录详情：创建入口", () => {
 });
 
 describe("R15 目录详情：既有 data-* 与列表语义逐一保留", () => {
-  it("一条带标题的会话 + 一条来源离线的会话渲染出全部既有标记", () => {
+  it("一条带标题的会话 + 一条来源离线的会话渲染出其余既有标记", () => {
     const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
     const html = renderDetail(store.directoryDetail("work-api"));
 
     expect(html).toContain('data-route="dir-detail"');
     expect(html).toContain('data-directory-id="work-api"');
     expect(html).toContain('data-directory-display-name="api"');
-    expect(html).toContain('data-content-origin="last_sync"');
+    expect(html).not.toContain('data-content-origin');
     expect(html).toContain('data-directory-sessions="list"');
     expect(html).toContain('data-session-id="dddddddd-0000-4000-8000-000000000001"');
     expect(html).toContain('data-session-title="true"');
     expect(html).toContain('data-session-agent="true"');
-    expect(html).toContain('data-origin-offline="true"');
+    // 来源离线不再有行内标注（功能原因由输入区/文件栏各自承担）。
+    expect(html).not.toContain('data-origin-offline="true"');
+    expect(html).not.toContain("当前离线");
     expect(html).toContain('data-action="open-session"');
     expect(html).toContain('data-action="open-create-sheet"');
     // 创建入口不再按权限门控：ready 态既不呈现「不可用」标记，也不呈现权限文案。
