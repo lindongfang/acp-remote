@@ -560,9 +560,7 @@ export function DirectoryPicker({
 
               {/* 当前层的子目录。加载中、失败、空层与截断是四种**可区分**的呈现。 */}
               {browser.status === "loading" || browser.status === "idle" ? (
-                <Text style={styles.emptyLine} dataSet={{ browseState: "loading" }}>
-                  正在读取这一层的目录……
-                </Text>
+                <View dataSet={{ browseState: "loading" }} />
               ) : browser.status === "failed" ? (
                 <Text
                   role="alert"

@@ -351,6 +351,7 @@ describe("文件栏：会话改动不进文件栏", () => {
       "content",
       "git",
       "gitNotice",
+      "refreshResult",
       "refreshState",
       "selectedSource",
       "sessionId",
@@ -493,7 +494,7 @@ describe("文件栏：刷新合并、限流与不持续监听", () => {
     expect(refresh.body.command).toBe("session.git.status");
   });
 
-  it("注入定时端口后，突发事件合并为一次刷新，限流错误按 retryAfterMs 再排期", () => {
+  it("注入定时端口后，文件事件仍不刷新；手动刷新限流按 retryAfterMs 再排期", () => {
     const scheduler = fakeScheduler();
     const snapshot = storeWith({
       resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID })] }),
@@ -555,8 +556,10 @@ describe("文件栏：刷新合并、限流与不持续监听", () => {
         }),
       });
     }
-    expect(scheduler.delays).toEqual([150]);
+    expect(scheduler.delays).toEqual([]);
     scheduler.runAll();
+    expect(gateway.dispatches).toHaveLength(1);
+    store.refreshFiles(ONLINE_SESSION_ID);
     expect(gateway.dispatches).toHaveLength(2);
 
     const refresh = gateway.dispatches[1];
@@ -570,7 +573,7 @@ describe("文件栏：刷新合并、限流与不持续监听", () => {
         details: { retryAfterMs: 500 },
       }),
     });
-    expect(scheduler.delays).toEqual([150, 500]);
+    expect(scheduler.delays).toEqual([500]);
   });
 });
 
@@ -798,6 +801,89 @@ describe("文件栏：来源默认与旧值归一", () => {
 });
 
 describe("文件栏：手动刷新只发对应查询", () => {
+  it("刷新根目录和已展开子目录第一页，整轮部分失败不报成功且保留旧条目", () => {
+    const { store, gateway } = fileStore();
+    for (const path of ["", "src", "closed"]) {
+      store.loadMoreAllFiles(ONLINE_SESSION_ID, path);
+      const request = lastCommand(gateway);
+      store.apply({ kind: "command_result", result: commandResult(request.body.requestId, "session.files.list",
+        listResult({ path, entries: [{ path: path === "" ? "README.md" : `${path}/old.ts`, name: path === "" ? "README.md" : "old.ts", kind: "file", openable: true }], next: "old-next" })) });
+    }
+    store.setExpandedFileDirectories(ONLINE_SESSION_ID, ["src"]);
+    const before = gateway.dispatches.length;
+    store.refreshFiles(ONLINE_SESSION_ID);
+    const requests = gateway.dispatches.slice(before);
+    expect(requests.map(request => request.body.command === "session.files.list" ? request.body.payload.path : null)).toEqual(["", "src"]);
+    for (const request of requests) {
+      expect(request.body.command === "session.files.list" ? request.body.payload.after : "wrong command").toBeUndefined();
+    }
+    const root = requests[0]!;
+    const child = requests[1]!;
+    store.apply({ kind: "command_result", result: commandResult(root.body.requestId, "session.files.list", listResult({ entries: [] })) });
+    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshState.kind).toBe("loading");
+    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshResult).toBeUndefined();
+    store.apply({ kind: "command_result", result: commandResult(child.body.requestId, "session.files.list", null,
+      { code: "resource.result_too_large", message: "子目录读取失败", retryable: true, details: {} }) });
+    const panel = store.sessionFilesPage(ONLINE_SESSION_ID);
+    expect(panel.refreshState.kind).toBe("available");
+    expect(panel.refreshResult?.outcome).toBe("failed");
+    expect(panel.all.directories.get("src")?.entries[0]?.path).toBe("src/old.ts");
+    expect(panel.all.directories.get("closed")?.next).toBe("old-next");
+    store.refreshFiles(ONLINE_SESSION_ID);
+    for (const request of gateway.dispatches.slice(-2)) {
+      const path = request.body.command === "session.files.list" ? request.body.payload.path : "";
+      store.apply({ kind: "command_result", result: commandResult(request.body.requestId, "session.files.list", listResult({ path, entries: [] })) });
+    }
+    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshResult?.outcome).toBe("success");
+    expect(store.sessionFilesPage(ONLINE_SESSION_ID).all.directories.get("src")?.next).toBeNull();
+  });
+
+  it("重新进入和恢复前台会刷新；离开后前台恢复不查询旧会话", () => {
+    const { store, gateway } = fileStore();
+    store.setActiveConversationSession(ONLINE_SESSION_ID);
+    expect(lastCommand(gateway).body.command).toBe("session.files.list");
+    const first = lastCommand(gateway);
+    store.apply({ kind: "command_result", result: commandResult(first.body.requestId, "session.files.list", listResult({ entries: [] })) });
+    const count = gateway.dispatches.length;
+    store.refreshActiveSessionFiles();
+    expect(gateway.dispatches).toHaveLength(count + 1);
+    const second = lastCommand(gateway);
+    store.apply({ kind: "command_result", result: commandResult(second.body.requestId, "session.files.list", listResult({ entries: [] })) });
+    store.leaveConversationSession(ONLINE_SESSION_ID);
+    const leftCount = gateway.dispatches.length;
+    store.refreshActiveSessionFiles();
+    expect(gateway.dispatches).toHaveLength(leftCount);
+    store.setActiveConversationSession(ONLINE_SESSION_ID);
+    expect(gateway.dispatches).toHaveLength(leftCount + 1);
+  });
+
+  it("离开远程会话取消订阅，切换后不遗留旧会话订阅", () => {
+    const remoteId = OTHER_SESSION_ID;
+    const { store, gateway } = onlineStore({ features: [SESSION_FILES_FEATURE], resources: resources({ sessions: [session({
+      id: remoteId, origin: { kind: "remote", ownerNodeId: "bbbbbbbb-0000-4000-8000-000000000001", exportId: "export-1", originEpoch: "cccccccc-0000-4000-8000-000000000001", online: true },
+    })] }) });
+    const removed: string[] = [];
+    gateway.unsubscribeRemote = ref => { removed.push(ref.sessionId); };
+    store.setActiveConversationSession(remoteId);
+    store.leaveConversationSession(remoteId);
+    expect(removed).toEqual([remoteId]);
+  });
+
+  it("在线恢复自动刷新当前来源；旧连接响应不会完成新轮次", () => {
+    const { store, gateway } = fileStore();
+    store.setActiveConversationSession(ONLINE_SESSION_ID);
+    const old = lastCommand(gateway);
+    store.apply({ kind: "closed", code: 4500, retryable: true });
+    store.apply({ kind: "authenticating" });
+    store.apply({ kind: "replaying", cursor: null });
+    store.apply({ kind: "online", cursor: { serverEpoch: "00384a03-bc90-4095-b65d-82fb8cc47e13", globalSequence: "10" } });
+    const resumed = lastCommand(gateway);
+    expect(resumed.body.requestId).not.toBe(old.body.requestId);
+    store.apply({ kind: "command_result", result: commandResult(old.body.requestId, "session.files.list", listResult({ entries: [] })) });
+    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshState.kind).toBe("loading");
+    store.apply({ kind: "command_result", result: commandResult(resumed.body.requestId, "session.files.list", listResult({ entries: [] })) });
+    expect(store.sessionFilesPage(ONLINE_SESSION_ID).refreshResult?.outcome).toBe("success");
+  });
   it("离线时刷新不可用并说明原因", () => {
     const { store } = fileStore();
     store.apply({ kind: "closed", code: 4500, retryable: true });

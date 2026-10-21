@@ -412,8 +412,6 @@ export function ShellView(props: ShellViewProps): ReactElement {
   const tone = props.model.capsule.tone;
   const capsuleBorderStyle =
     tone === "warn" ? styles.capsuleBorderWarn : tone === "danger" ? styles.capsuleBorderDanger : null;
-  const toneTextStyle =
-    tone === "warn" ? styles.toneTextWarn : tone === "danger" ? styles.toneTextDanger : styles.toneTextOk;
   const dotStyle = tone === "warn" ? styles.dotWarn : tone === "danger" ? styles.dotDanger : styles.dotOk;
   const scrimTransition = props.reducedMotion ? styles.noMotion : styles.scrimMotion;
   const drawerTransition = props.reducedMotion ? styles.noMotion : styles.drawerMotion;
@@ -452,7 +450,7 @@ export function ShellView(props: ShellViewProps): ReactElement {
             onPress={props.onOpenHosts}
           >
             <View style={[styles.dot, dotStyle]} />
-            <Text numberOfLines={1} style={[styles.capsuleLabel, toneTextStyle]} dataSet={{ capsuleDevice: "true" }}>
+            <Text numberOfLines={1} style={[styles.capsuleLabel, styles.toneTextOk]} dataSet={{ capsuleDevice: "true" }}>
               {props.model.capsule.deviceLabel}
             </Text>
             <View style={styles.capsuleCaret} />

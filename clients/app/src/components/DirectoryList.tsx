@@ -388,9 +388,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
             {createEntry}
           </View>
         )}
-        <Text style={styles.loading} dataSet={{ directoryState: "loading" }}>
-          尚未收到第一份快照，正在等待同步……
-        </Text>
+        <View dataSet={{ directoryState: "loading" }} />
       </View>
     );
   }

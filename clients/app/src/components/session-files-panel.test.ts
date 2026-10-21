@@ -11,6 +11,23 @@ function base(): SessionFilesPanelModel {
 }
 
 describe("文件栏的目录与状态展示", () => {
+  it("首次读取、刷新与空结果不显示占位说明", () => {
+    const model = base();
+    for (const loading of [true, false]) {
+      const directories = new Map(model.all.directories);
+      directories.set("", { path: "", entries: [], next: null, gitState: "available", loading, error: null });
+      for (const selectedSource of ["all", "git"] as const) {
+        const html = renderToStaticMarkup(createElement(SessionFilesPanel, { model: {
+          ...model, selectedSource, allNotice: null, gitNotice: null,
+          all: { ...model.all, directories },
+          git: { ...model.git, gitState: "available", loading, entries: [] },
+        } }));
+        for (const text of ["这一层没有可显示的条目", "没有 Git 变更", "正在加载", "正在读取"]) {
+          expect(html).not.toContain(text);
+        }
+      }
+    }
+  });
   it("全部文件只压缩已完整加载的单分支目录", () => {
     const model = base();
     const directories = new Map(model.all.directories);
@@ -61,9 +78,8 @@ describe("文件栏的目录与状态展示", () => {
     } }));
     expect(offline).not.toContain("data-files-offline");
     expect(offline).not.toContain("已加载的文件与 Git 结果可能不是最新的");
-    // 功能性原因仍呈现：刷新不可用是操作反馈，不是内容来源标注。
-    expect(offline).toContain('data-file-refresh-unavailable="true"');
-    expect(offline).toContain("当前不在线，无法刷新。");
+    expect(offline).not.toContain('data-file-refresh-unavailable="true"');
+    expect(offline).not.toContain("当前不在线，无法刷新。");
   });
 
   it("只有全部文件与 Git 变更两个来源，没有会话变更选项或专属记录入口", () => {

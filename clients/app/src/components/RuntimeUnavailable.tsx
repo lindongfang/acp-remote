@@ -58,14 +58,12 @@ function buildStyles(colors: Palette) {
 
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
-/** 初始化期间使用普通状态提示，不将正常的本地读取呈现为错误。 */
+/** 初始化期间仅保留主题底色，避免刷新时闪现过渡文案。 */
 export function RuntimeLoading(): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   return (
-    <View role="status" style={styles.loading} dataSet={{ runtime: "loading" }}>
-      <Text style={styles.body}>正在加载…</Text>
-    </View>
+    <View style={styles.loading} dataSet={{ runtime: "loading" }} />
   );
 }
 

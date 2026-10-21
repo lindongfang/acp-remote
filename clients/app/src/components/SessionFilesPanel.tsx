@@ -27,6 +27,8 @@
 
 import { createElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
+import { Animated, Easing } from "./theme";
+import { useReducedMotion } from "./shell/reduced-motion";
 
 import type { FileSource, SessionFilesPanelModel } from "../features/session-files";
 import { FILE_SOURCES, FILE_SOURCE_LABELS } from "../features/session-files";
@@ -44,6 +46,7 @@ export interface SessionFilesPanelProps {
   readonly onSelectSource?: ((source: FileSource) => void) | undefined;
   /** 手动刷新当前来源。 */
   readonly onRefresh?: (() => void) | undefined;
+  readonly onExpandedDirectoriesChange?: ((paths: readonly string[]) => void) | undefined;
   /** 切换「隐藏忽略文件」。 */
   readonly onToggleHideIgnored?: (() => void) | undefined;
   /** 加载某一层目录的下一页（首次展开也走它）。 */
@@ -299,7 +302,7 @@ function DirectoryLevel({
   readonly depth: number;
   readonly model: SessionFilesPanelModel;
   readonly expanded: ReadonlySet<string>;
-  readonly onToggleDirectory: (path: string) => void;
+  readonly onToggleDirectory: (paths: readonly string[]) => void;
   readonly onOpenFile: ((source: FileSource, path: string) => void) | undefined;
   readonly onLoadMore: ((path: string) => void) | undefined;
 }): ReactElement | null {
@@ -323,14 +326,10 @@ function DirectoryLevel({
   return (
     <View style={styles.directory} dataSet={{ fileDirectory: path === "" ? "root" : path, fileDepth: String(depth) }}>
       {directory === undefined ? (
-        <Text style={styles.note} dataSet={{ fileDirectoryLoading: "true" }}>
-          正在加载这一层…
-        </Text>
+        <View dataSet={{ fileDirectoryLoading: "true" }} />
       ) : null}
       {directory?.loading === true && entries.length === 0 ? (
-        <Text style={styles.note} dataSet={{ fileDirectoryLoading: "true" }}>
-          正在加载这一层…
-        </Text>
+        <View dataSet={{ fileDirectoryLoading: "true" }} />
       ) : null}
       {directory?.error == null ? null : (
         <Text style={styles.error} dataSet={{ fileListError: directory.error.code }}>
@@ -338,9 +337,7 @@ function DirectoryLevel({
         </Text>
       )}
       {entries.length === 0 && directory !== undefined && directory.loading === false && directory.error === null ? (
-        <Text style={styles.note} dataSet={{ fileDirectoryEmpty: "true" }}>
-          这一层没有可显示的条目。
-        </Text>
+        <View dataSet={{ fileDirectoryEmpty: "true" }} />
       ) : null}
       {entries.map((entry) => {
         const rowKey = `all:${entry.path}`;
@@ -374,11 +371,7 @@ function DirectoryLevel({
                   fileDirectoryExpanded: String(isOpen),
                   action: "toggle-directory",
                 }}
-                onPress={() => {
-                  if (isOpen) {
-                    for (const path of chain) if (expanded.has(path)) onToggleDirectory(path);
-                  } else onToggleDirectory(directoryPath);
-                }}
+                onPress={() => onToggleDirectory(chain)}
               >
                 <FileEntryIcon directory /><Text numberOfLines={1} style={[styles.entryName, styles.directoryName, isOpen && {color:theme.colors.ink}]}>{label}</Text>
               </Pressable>
@@ -470,16 +463,12 @@ function GitChanges({
 
   if (model.gitNotice !== null) {
     return (
-      <Text style={styles.notice} dataSet={{ gitNotice: git.unsupported ?? "unsupported" }}>
-        {model.gitNotice}
-      </Text>
+      <View accessibilityLabel={model.gitNotice} dataSet={{ gitNotice: git.unsupported ?? "unsupported" }} />
     );
   }
   if (git.gitState === "not_repository") {
     return (
-      <Text style={styles.notice} dataSet={{ gitState: "not_repository" }}>
-        此目录不是 Git 仓库。选项保留，但这里没有可展示的未提交改动。
-      </Text>
+      <View accessibilityLabel="此目录不是 Git 仓库" dataSet={{ gitState: "not_repository" }} />
     );
   }
   if (git.gitState === "unavailable") {
@@ -506,14 +495,10 @@ function GitChanges({
         </Text>
       )}
       {git.loading && git.entries.length === 0 ? (
-        <Text style={styles.note} dataSet={{ gitLoading: "true" }}>
-          正在读取 Git 变更…
-        </Text>
+        <View dataSet={{ gitLoading: "true" }} />
       ) : null}
       {git.gitState === "available" && git.entries.length === 0 && !git.loading ? (
-        <Text style={styles.note} dataSet={{ gitEmpty: "true" }}>
-          没有 Git 变更。干净仓库不是「不可用」。
-        </Text>
+        <View dataSet={{ gitEmpty: "true" }} />
       ) : null}
       <ChangeTree items={git.entries} pathOf={(entry) => entry.path} renderItem={(entry) => {
         // 删除文件也能打开：`session.git.diff` 以 HEAD 为基准返回删除行。
@@ -589,11 +574,52 @@ function GitChanges({
 }
 
 /** 「文件」右栏。 */
+export function toggleFileDirectoryChain(expanded: ReadonlySet<string>, chain: readonly string[]): ReadonlySet<string> {
+  const next = new Set(expanded);
+  if (chain.some(path => expanded.has(path))) {
+    for (const path of expanded) {
+      if (chain.some(parent => path === parent || path.startsWith(parent + "/"))) next.delete(path);
+    }
+  } else {
+    for (const path of chain) next.add(path);
+  }
+  return next;
+}
+
+export function visibleExpandedDirectories(model: SessionFilesPanelModel, expanded: ReadonlySet<string>): readonly string[] {
+  const visible = new Set<string>();
+  const visited = new Set<string>();
+  const walk = (path: string): void => {
+    if (visited.has(path)) return;
+    visited.add(path);
+    for (const entry of model.all.directories.get(path)?.entries ?? []) {
+      if (entry.kind !== "directory" || isGitAdminEntry(entry.name)) continue;
+      const chain = [entry.path];
+      let target = entry.path;
+      while (true) {
+        const cached = model.all.directories.get(target);
+        if (cached === undefined || cached.loading || cached.error !== null || cached.next !== null) break;
+        const children = cached.entries.filter(child => !isGitAdminEntry(child.name));
+        const child = children[0];
+        if (children.length !== 1 || child?.kind !== "directory" || chain.includes(child.path)) break;
+        target = child.path;
+        chain.push(target);
+      }
+      if (!chain.some(candidate => expanded.has(candidate))) continue;
+      for (const candidate of chain) visible.add(candidate);
+      walk(target);
+    }
+  };
+  walk("");
+  return [...visible].sort();
+}
+
 export function SessionFilesPanel({
   model,
   onOpenFile,
   onSelectSource,
   onRefresh,
+  onExpandedDirectoriesChange,
   onToggleHideIgnored,
   onLoadMoreAllFiles,
   onLoadMoreGitChanges,
@@ -601,7 +627,46 @@ export function SessionFilesPanel({
 }: SessionFilesPanelProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const [expansion, setExpansion] = useState<{ sessionId: string; paths: ReadonlySet<string> }>(() => ({ sessionId: model.sessionId, paths: new Set() }));
+  const expanded = expansion.sessionId === model.sessionId ? expansion.paths : new Set<string>();
+  const expandedCallback = useRef(onExpandedDirectoriesChange);
+  expandedCallback.current = onExpandedDirectoriesChange;
+  const expandedKey = JSON.stringify(visibleExpandedDirectories(model, expanded));
+  useEffect(() => {
+    expandedCallback.current?.(JSON.parse(expandedKey) as string[]);
+  }, [model.sessionId, expandedKey]);
+
+  const reducedMotion = useReducedMotion();
+  const rotation = useRef(new Animated.Value(0)).current;
+  const refreshing = model.refreshState.kind === "loading";
+  const [successKey, setSuccessKey] = useState<string | null>(null);
+  const feedbackContext = model.sessionId + ":" + model.selectedSource;
+  const resultId = model.refreshResult?.id;
+  const resultOutcome = model.refreshResult?.outcome;
+  const lastResult = useRef({ context: feedbackContext, id: resultId });
+  useEffect(() => {
+    setSuccessKey(null);
+    if (lastResult.current.context !== feedbackContext) {
+      lastResult.current = { context: feedbackContext, id: resultId };
+      return;
+    }
+    if (refreshing || lastResult.current.id === resultId) return;
+    lastResult.current = { context: feedbackContext, id: resultId };
+    if (resultOutcome !== "success") return;
+    setSuccessKey(feedbackContext);
+    const timer = setTimeout(() => setSuccessKey(null), 900);
+    return () => clearTimeout(timer);
+  }, [feedbackContext, refreshing, resultId, resultOutcome]);
+  useEffect(() => {
+    rotation.setValue(0);
+    if (!refreshing || reducedMotion) return;
+    const animation = Animated.loop(Animated.timing(rotation, {
+      toValue: 1, duration: 800, easing: Easing.linear, useNativeDriver: false,
+    }));
+    animation.start();
+    return () => animation.stop();
+  }, [feedbackContext, refreshing, reducedMotion, rotation]);
+  const refreshSucceeded = successKey === feedbackContext && !refreshing;
   const scroll = useRef<{ scrollTo?: (options: { y: number; animated: boolean }) => void } | null>(null);
   const offsets = useRef(new Map<string, number>());
   const scrollKey = model.sessionId + ":" + model.selectedSource;
@@ -639,18 +704,22 @@ export function SessionFilesPanel({
     <View style={styles.panel} dataSet={{ filesPanel: "true", fileSource: model.selectedSource }}>
       <View dataSet={{filesPanelHeader:"true"}} style={{flexShrink:0,paddingBottom:8}}>
       <View style={styles.head}>
-        <View style={{gap:2,minWidth:0,flexShrink:1}}><Text style={styles.title} dataSet={{filesPanelTitle:"true"}}>{"文件"}</Text><Text style={{fontSize:11,color:theme.colors.ink3}}>{"本会话工作目录"}</Text></View>
+        <View style={{gap:2,minWidth:0,flexShrink:1}}><Text style={styles.title} dataSet={{filesPanelTitle:"true"}}>{"文件"}</Text></View>
         <View style={styles.headSpacer} />
         {onRefresh === undefined ? null : (
           <Pressable
             role="button"
             aria-label={"刷新文件"}
-            style={{ width:28, height:28, alignItems:"center", justifyContent:"center", borderRadius:8 }}
-            dataSet={{ action: "refresh-files", refreshDisabled: String(model.refreshState.kind !== "available") }}
+            accessibilityHint={model.refreshState.kind === "unavailable" ? model.refreshState.reason : undefined}
+            style={{ width:28, height:28, alignItems:"center", justifyContent:"center", borderRadius:8, backgroundColor: refreshing || refreshSucceeded ? theme.colors.accentSoft : "transparent" }}
+            aria-busy={refreshing}
+            dataSet={{ action: "refresh-files", refreshDisabled: String(model.refreshState.kind !== "available"), refreshFeedback: refreshing ? "loading" : refreshSucceeded ? "success" : "idle" }}
             disabled={model.refreshState.kind !== "available"}
             onPress={onRefresh}
           >
-            {createElement("svg",{width:15,height:15,viewBox:"0 0 16 16",fill:"none",stroke:theme.colors.ink3,strokeWidth:1.4,strokeLinecap:"round",strokeLinejoin:"round","aria-hidden":true},createElement("path",{d:"M13 6.5A5.2 5.2 0 1 0 13.2 9M13 3v3.5H9.5"}))}
+            <Animated.View style={{ transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }] }}>
+              {createElement("svg",{width:17,height:17,viewBox:"0 0 16 16",fill:"none",stroke:refreshing || refreshSucceeded ? theme.colors.accent : theme.colors.ink3,strokeWidth:1.6,strokeLinecap:"round",strokeLinejoin:"round","aria-hidden":true},createElement("path",{d:refreshSucceeded ? "M3 8l3 3 7-7" : "M13 6.5A5.2 5.2 0 1 0 13.2 9M13 3v3.5H9.5"}))}
+            </Animated.View>
           </Pressable>
         )}
       </View>
@@ -714,22 +783,17 @@ export function SessionFilesPanel({
         <View style={model.selectedSource === "git" ? undefined : styles.hidden}><View style={{flexDirection:"row",alignItems:"center",gap:9,marginHorizontal:10,paddingBottom:8}} dataSet={{gitLegend:"true"}}><View style={{width:6,height:6,borderRadius:3,backgroundColor:theme.colors.ok}} /><Text style={{fontSize:11,color:theme.colors.ink2}}>{"新增"}</Text><View style={{width:6,height:6,borderRadius:3,backgroundColor:theme.colors.danger}} /><Text style={{fontSize:11,color:theme.colors.ink2}}>{"删除"}</Text></View></View>
       </View>
 
-      {model.refreshState.kind === "unavailable" ? <Text style={styles.note} dataSet={{ fileRefreshUnavailable: "true" }}>{model.refreshState.reason}</Text> : null}
 
       <View style={model.selectedSource === "all" ? styles.list : [styles.list, styles.hidden]}>
           {model.allNotice === null ? null : (
-            <Text style={styles.notice} dataSet={{ filesAllNotice: "true" }}>
-              {model.allNotice}
-            </Text>
+            <View accessibilityLabel={model.allNotice} dataSet={{ filesAllNotice: "true" }} />
           )}
           {ignoreDisabledReason === null ? (
             <Text style={[styles.note, styles.hidden]} dataSet={{ ignoreToggleScope: "true" }}>
               默认隐藏被 Git 忽略的文件；关闭开关后可显示，`.git` 管理条目始终隐藏。
             </Text>
           ) : (
-            <Text style={styles.note} dataSet={{ ignoreToggleDisabledNote: "true" }}>
-              {ignoreDisabledReason}
-            </Text>
+            <View dataSet={{ ignoreToggleDisabledNote: "true" }} />
           )}
           {model.allNotice === null ? (
             <DirectoryLevel
@@ -737,14 +801,12 @@ export function SessionFilesPanel({
               depth={0}
               model={model}
               expanded={expanded}
-              onToggleDirectory={(path) => {
-              setExpanded((current) => {
-                const next = new Set(current);
-                if (next.has(path)) next.delete(path);
-                else next.add(path);
-                return next;
-              });
-            }}
+              onToggleDirectory={(chain) => {
+                setExpansion((current) => ({
+                  sessionId: model.sessionId,
+                  paths: toggleFileDirectoryChain(current.sessionId === model.sessionId ? current.paths : new Set(), chain),
+                }));
+              }}
               onOpenFile={onOpenFile}
               onLoadMore={onLoadMoreAllFiles}
             />

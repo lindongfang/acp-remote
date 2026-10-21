@@ -276,9 +276,7 @@ function AttachmentMediaBody({
         <Text style={styles.caption}>
           {`这条 ${block.kind === "image" ? "图片" : "音频"}内容没有随消息下发嵌入字节，只有外部地址。`}
         </Text>
-      ) : source === undefined || source.kind === "loading" ? (
-        <Text style={styles.caption}>正在通过已认证的附件连接读取…</Text>
-      ) : source.kind === "failed" ? (
+      ) : source === undefined || source.kind === "loading" ? null : source.kind === "failed" ? (
         <Text style={styles.failed}>{`读取失败：${source.detail}`}</Text>
       ) : block.kind === "image" ? (
         <img
