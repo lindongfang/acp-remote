@@ -186,7 +186,13 @@ export default function SessionRoute(): ReactElement {
     const thread = state.threads.get(sessionId);
     if (thread?.page != null) return;
     // 首屏读取尚未返回：等它的权威失败（或成功页）再判定，不能按「还没到」跳走。
-    if (thread?.pagingError == null) return;
+    // 只有 `session.not_found` 才是「权威不存在」；服务失败/离线只显示真实状态。
+    if (
+      thread?.pagingError == null ||
+      !thread.pagingError.startsWith("session.not_found")
+    ) {
+      return;
+    }
     if (state.resources.sessions.some((summary) => summary.sessionId === sessionId)) return;
     router.replace("/");
   }, [store, state, sessionId, router]);
