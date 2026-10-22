@@ -137,7 +137,7 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 
 ### 3.7 Web 新建会话的准备与首次提交（计划，`web-session-preparation`，尚未实现）
 
-Web/PWA 的「新建会话」在产品上分成两段：**准备**（临时）与**首发**（正式）。本节的合同已冻结在 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9 与 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11/§12，wire 资产在 `schemas/sync/v1/` 与 `fixtures/sync/v1/`；实现按工作包推进，落地前不得对外宣称已支持。
+Web/PWA 的「新建会话」在产品上分成两段：**准备**（临时）与**首发**（正式）。本节的合同已冻结在 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9 与 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11/§7.3，wire 资产在 `schemas/sync/v1/` 与 `fixtures/sync/v1/`；实现按工作包推进，落地前不得对外宣称已支持。
 
 - **临时准备**：Owner 先分配**最终** `sessionId` 并签发准备凭据（`acp-remote/session-preparation/v1`），允许为它在 Agent 侧建立临时端点以取得**真实的**模式与配置。准备阶段 ACP Remote MUST NOT 持久化会话记录、目录登记、owned 命令或事件：准备不进入目录/快照、不被其他设备看到，也不产生正式恢复承诺。临时资源只存在运行期，计入节点容量（[`CONFIG_REFERENCE.md`](./CONFIG_REFERENCE.md) §4）。
 - **固定标识与地址**：`sessionId` 在准备时就确定，页面地址 `/session/<id>` 在整条流程中保持不变；首次提交成功后不换 ID、不跳转、不重建页面，快照随后让同一地址读到正式内容。
@@ -444,7 +444,7 @@ Owner Node 需要保存足以支持客户端和 Access Node 历史查看、断�
 - 终端完整输出：限制 head/tail 和总大小。
 - 大型 diff：压缩并限制容量。
 - 图片、音频与文件：已提交附件使用内容寻址存储，随所属消息保留与清理；不设附件数量/大小产品额度，但受分块、并发、速率、磁盘与库容量保护。未提交上传按 24 小时闲置清理；远程附件正文只由 Owner 保存，Access 不落盘。
-- 准备阶段的临时资源：运行期准备目录、租约/资源代、准备凭据与临时端点都不写 SQLite，也不进快照、事件或命令历史（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11）。首次受理事务才写入正式记录（`owned_first_submission` 的计划 DDL 见该文档 §12）：完整首条输入、稳定消息身份与派发阶段随会话保留；即使首条尚未派发，它也是正式记录，不随未提交上传的 24 小时 TTL 清除。存储整体重建后旧准备凭据失效（`preparation.store_rebuilt`），客户端不得凭旧材料恢复。
+- 准备阶段的临时资源：运行期准备目录、租约/资源代、准备凭据与临时端点都不写 SQLite，也不进快照、事件或命令历史（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11）。首次受理事务才写入正式记录（`owned_first_submission` 的 DDL 见该文档 §7.3）：完整首条输入、稳定消息身份与派发阶段随会话保留；即使首条尚未派发，它也是正式记录，不随未提交上传的 24 小时 TTL 清除。存储整体重建后旧准备凭据失效（`preparation.store_rebuilt`），客户端不得凭旧材料恢复。
 
 ### 10.4 保留策略默认值
 

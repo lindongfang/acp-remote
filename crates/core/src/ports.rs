@@ -21,20 +21,25 @@ use async_trait::async_trait;
 use crate::model::{
     Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId, AttachmentGeneration,
     AttachmentId, AttachmentSubject, AttachmentSubmission, AttachmentTransfer, AuditAction,
-    AuditOutcome, AuditRecord, CapabilitySet, CommandKind, CommandRecord, CommandResult,
-    CommandStatus, CommandTerminalRecord, CommittedEvent, ConfigOption, ConfigOptionId,
-    ConfigValue, ConnectionId, ContentSnapshot, ContentVersion, CreateSessionRequest, DeviceId,
-    DeviceRecord, Digest, DirectoryId, DirectoryRecord, EffectiveInteraction, EndpointEvent,
-    EntityRef, EventId, EventOrigin, EventPayload, EventType, FileReadPurpose, GitDiff,
-    GitStatusPage, GlobalCursor, InteractionId, InteractionResolution, LocalActivity, MessageId,
-    MessageRecord, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor,
-    OriginEpoch, OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord,
-    PairingSettlement, PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError,
-    PromptRequest, PublicError, RemoteSessionRef, RequestId, ResourceGeneration,
-    ResumeSessionRequest, SealedAttachment, Sequence, ServerEpoch, SessionFileChunk,
-    SessionFilePage, SessionFilePath, SessionId, SessionPageToken, SessionRecoveryRecord,
-    SessionReference, SessionSnapshot, SessionState, SessionSummary, SessionTitle, SubmissionId,
-    Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
+    AuditOutcome, AuditRecord, CapabilitySet, ClaimedAttachment, CommandKind, CommandRecord,
+    CommandResult, CommandStatus, CommandTerminalRecord, CommittedEvent, ConfigOption,
+    ConfigOptionId, ConfigValue, ConnectionId, ContentSnapshot, ContentVersion,
+    CreateSessionRequest, DeviceId, DeviceRecord, Digest, DirectoryId, DirectoryRecord,
+    DispatchAdmission, DispatchFence, EffectiveInteraction, EndpointEvent, EntityRef, EventId,
+    EventOrigin, EventPayload, EventType, FileReadPurpose, FirstSubmissionAdmission,
+    FirstSubmissionConvergence, FirstSubmissionRecord, FirstSubmissionSettlement,
+    FirstSubmissionWrite, FirstUserMessage, GitDiff, GitStatusPage, GlobalCursor, InteractionId,
+    InteractionResolution, LocalActivity, MessageId, MessageRecord, ModeId, ModeRef, ModeState,
+    NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch, OriginEventRef, PairingClaim,
+    PairingId, PairingPeer, PairingRecord, PairingSettlement, PeerIdentity, PeerPublicKey,
+    PendingEvent, PendingInteraction, PortError, PromptRequest, PublicError, RemoteSessionRef,
+    RequestId, ResourceGeneration, ResumeSessionRequest, SealedAttachment, Sequence, ServerEpoch,
+    SessionFileChunk, SessionFilePage, SessionFilePath, SessionId, SessionPageToken,
+    SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState, SessionSummary,
+    SessionTitle, StagedAbortReason, StagedChunk, StagedChunkOutcome, StagedClaim,
+    StagedManifestBegin, StagedManifestPage, StagedManifestSeal, StagedManifestState, StagedSeal,
+    StagedSealOutcome, StagedTransferBegin, StagedTransferState, SubmissionId, Timestamp, Turn,
+    TurnId, TurnState, UnavailableKind, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -2307,4 +2312,108 @@ pub trait SessionRelease: Send + Sync {
 pub trait LifecycleQuery: Send + Sync {
     async fn local_activity(&self, session: SessionId) -> Result<LocalActivity, PortError>;
     async fn snapshot(&self) -> Result<Vec<SessionSummary>, PortError>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// §5.11 首条提交与准备附件暂存
+// ---------------------------------------------------------------------------------------------
+
+/// 首次提交的原子持久入口（`design.md` D7/D8）。
+///
+/// `commit_first_submission` 在**同一事务**里写正式会话、完整首条输入、稳定消息/请求身份、命令受理、
+/// turn、首条关联与附件正式引用，阶段固定为 `saved_not_dispatched`。任一步失败全回滚，不派发、不留
+/// 部分提交。`begin_dispatch` 是唯一把阶段推进到 `dispatch_started` 的入口，且必须在调用 Agent
+/// **之前**提交。
+#[async_trait]
+pub trait FirstSubmission: Send + Sync {
+    /// 首次受理。`write.session` 必须是由准备凭据证明的 Owner 分配 ID；重复调用返回
+    /// [`FirstSubmissionAdmission::AlreadyCommitted`]，不重建准备、不追加首条、不重传附件。
+    async fn commit_first_submission(
+        &self,
+        write: FirstSubmissionWrite,
+    ) -> Result<FirstSubmissionAdmission, PortError>;
+
+    /// 读阶段与关联（`command.status` 投影、`restore` 的 committed、显式继续的准入都只读这里）。
+    async fn first_submission(
+        &self,
+        session: SessionId,
+    ) -> Result<Option<FirstSubmissionRecord>, PortError>;
+
+    /// 持久首条用户消息（`owned_message` 的 user 通道）：**不需要** Agent 回显即可完整读取。
+    async fn first_user_message(
+        &self,
+        session: SessionId,
+    ) -> Result<Option<FirstUserMessage>, PortError>;
+
+    /// 派发围栏：仅在阶段可证明未派发、且继续引用合法时 CAS 到 `dispatch_started` 并固定 Agent
+    /// 会话标识/资源代/本次 requestId。并发继续最多一个 `Granted`。
+    async fn begin_dispatch(&self, fence: DispatchFence) -> Result<DispatchAdmission, PortError>;
+
+    /// 写本次尝试的终态。`dispatch_started` 之后无法确认结果一律 `uncertain`，绝不自动重派；
+    /// 可证明未派发时的 `failed` 保留正文并等待显式继续。
+    async fn settle_first_submission(
+        &self,
+        settlement: FirstSubmissionSettlement,
+    ) -> Result<FirstSubmissionRecord, PortError>;
+
+    /// 启动收敛：只收敛到可证明的事实，不自动派发、不自动新建 Agent 身份。
+    async fn converge_first_submission(
+        &self,
+        session: SessionId,
+        at: Timestamp,
+    ) -> Result<FirstSubmissionConvergence, PortError>;
+}
+
+/// 准备附件暂存（`design.md` D6.4）。
+///
+/// 只维护运行期传输/清单元数据与 Owner 私有内容区中的字节，**不写**带 `owned_session` 外键的行；
+/// 分块接收、流式摘要、封存后不可变、24 小时/启动回收与配额复用既有预算。`claim` 只核验已封存事实并
+/// 原子认领元数据，不再次上传、不复制或全量重哈希。
+#[async_trait]
+pub trait PreparationAttachmentStaging: Send + Sync {
+    /// 开始/重绑一次运行期传输：同 transferId 同声明返回原状态（保留偏移），不同声明冲突。
+    async fn begin(&self, begin: StagedTransferBegin) -> Result<StagedTransferState, PortError>;
+
+    /// 按期望偏移追加一块（重复同内容返回 `Duplicate`，不同内容返回 `ChunkConflict`）。
+    async fn append(&self, chunk: StagedChunk) -> Result<StagedChunkOutcome, PortError>;
+
+    /// 校验长度与流式 SHA-256 后封存；封存后字节不可变。
+    async fn seal(&self, seal: StagedSeal) -> Result<StagedSealOutcome, PortError>;
+
+    /// 运行期传输状态。
+    async fn status(
+        &self,
+        transfer: AttachmentId,
+    ) -> Result<Option<StagedTransferState>, PortError>;
+
+    /// 取消一次仍在接收/已封存但未认领的传输（只清运行期元数据与未认领字节）。
+    async fn abort(
+        &self,
+        transfer: AttachmentId,
+        reason: StagedAbortReason,
+    ) -> Result<(), PortError>;
+
+    /// 开始登记一份准备清单。
+    async fn begin_manifest(
+        &self,
+        begin: StagedManifestBegin,
+    ) -> Result<StagedManifestState, PortError>;
+
+    /// 追加一页清单（顺序登记；同页重放幂等）。
+    async fn append_manifest_page(
+        &self,
+        page: StagedManifestPage,
+    ) -> Result<StagedManifestState, PortError>;
+
+    /// 封存清单：所有项已封存、同一绑定/主体、数量一致。
+    async fn seal_manifest(
+        &self,
+        seal: StagedManifestSeal,
+    ) -> Result<StagedManifestState, PortError>;
+
+    /// 首次提交认领：返回已封存事实并清除运行期清单元数据。
+    async fn claim(&self, claim: StagedClaim) -> Result<Vec<ClaimedAttachment>, PortError>;
+
+    /// 24 小时/启动清理：回收无引用的孤儿字节；活动传输与冻结待认领内容不得被误删。
+    async fn release_orphans(&self, before: Timestamp) -> Result<usize, PortError>;
 }

@@ -2,6 +2,8 @@
 
 > 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 已落地的路径是切片 4 的 `transport::local` + `local_admin`、切片 5 的 `transport::net` + `node_link`、`sync-server-connection` 的 `sync`（认证、订阅、投递、快照与配对 HTTP）与 `sync-server-commands` 的业务命令面，以及 `sync-ui-hosting` 在 `transport::net` 上的根路径静态托管（见 §4.9），`acp_facade` 仍待后续切片；`app` 已按切片 4/5/本变更接线，见 §3 `[现状]` 与 `README.md` 的 crate 表）
 > 版本：0.5
+> 修订记录（2026-10-22，`web-session-preparation` WP2 已实现）：`core` 新增准备运行期目录 `PreparationDirectory`（`allocated → preparing → ready → released`、30 秒租约/10 秒续租、资源代、容量经既有 `CapacityAdmission`；纯运行期，不落库/不发事件）与首条提交/派发围栏/回显关联的纯类型；`storage-sqlite` 实现 `FirstSubmission`（同一 `BEGIN IMMEDIATE` 写会话、`owned_message` 的 `user` 首条消息、命令受理、turn、`owned_first_submission` 与附件引用）与 `PreparationAttachmentStaging`（无数据库行、私有暂存区、流式摘要、封存不可变、24 小时/启动回收），schema 推进到 **v16**。`server`/`app` 的控制面接线仍属 WP5；未协商的新入口继续禁用。
+
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§4.1 新增一条 `[决定]`——有效标题优先级只在 core，`owned_session.title` 保留 Agent 标题、新增可空列 `custom_title`（v15 migration），`session.title.set` 经 `SessionStore::commit` 一次事务写入；客户端改名禁令与「标题仅由 Agent 更新」的旧口径由本变更取代（原文见 SYNC_PROTOCOL §10.3 与 ACP_COMPATIBILITY_MATRIX §5）。不变量与依赖矩阵未变，持久化与命令接线已落地。
 > 修订记录（2026-10-19，`conversation-area-complete` WP1 合同 + WP2 实现）：§4.1 的价值对象、`AttachmentTransferStore`/`InteractionAuthority` 与 §4.7 的消息/清单/临时传输表已由 WP2 落地（版本化 migration 到 v12）；§4.3/§4.4 的独立附件帧编解码、§4.5 的媒体投影、§4.6 的 Access 转发与 §4.9 的附件端点仍属后续工作包。crate 边界与依赖矩阵未变。
 > 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery` WP2）：§4.1 的 out-port 摘要新增 `DirectoryBrowser`（`workspace.browse` 的逐层目录列举）、入站能力新增 `WorkspaceBrowse / SyncSnapshotQueries`，并新增一条 `[决定]` 收口「已登记目录的路径边界 + 目录浏览 + 建目录开关」三条职责（[ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)）；`file.changed` 的行级统计与结构化差异行同源派生也记入 §4.1 的事件 view 分工。§4.9 新增一条 `[决定]`：Sync 面的三处 feature 门控（浏览命令、`workspaces` 的路径键、`file.changed` 的差异行）是投递层的唯一判定点，core 不读 feature 表。crate 边界与依赖矩阵**未变**。
@@ -230,6 +232,7 @@ Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord 
 - ID 使用 newtype；状态转换由领域方法验证，adapter 不能直接修改状态字段。
 - Owned 与 imported session 必须在类型或 `ResourceOrigin` 上可区分，禁止依靠 nullable `ownerNodeId` 猜测持久化规则。
 - `core::broker` 实现每会话串行、active turn、授权调用点、幂等、permission first-writer-wins、模型切换时机和先提交后发布。
+- `[决定]`（`web-session-preparation` WP2 已实现）**准备与正式会话是三个事实**：准备目录、临时资源代与租约只在 `core::preparation` 的运行时内存中，不写 owned 行/命令收据/事件；首次受理由 `FirstSubmission` 在同一事务写 `owned_first_submission`（`saved_not_dispatched`），派发围栏是唯一把阶段推进到 `dispatch_started` 的入口，启动收敛只把可证明未派发记为失败等待显式继续、把可能已派发记为 `uncertain`，绝不自动重派。首条用户消息写入 `owned_message` 的 `user` 通道，不依赖 Agent 回显；回显只按派发上下文（首条/用户消息/请求 + Agent 身份/资源代）关联，不以文本或 Agent messageId 匹配。释放成功或首次提交成功的条目立即从目录移除，只保留 `PREPARATION_RELEASED_TOMBSTONES` 条有界释放事实，因此目录不随进程运行无限增长。
 - `[决定]`（`session-activity-three-states`，WP2 已实现）**会话主状态只有 `idle|running|pending`**，取值只由 `SessionActivity::reduce(pending, unfinished_turns)` 决定：有效未解决交互（含已仲裁未确认）优先 → `pending`；否则未结束 turn（`queued`/`running`/`waiting_*`，含已派发但停止未确认的占位）→ `running`；否则 `idle`。`TurnState`/`CommandStatus` 词表不变；失败/取消一个 turn 不终结会话，后续排队继续。`session.updated` 由 core 在状态变化时生成（携带完整摘要与嵌套 `session.version`），每次提交最多一条，仲裁/确认/turn 终态/恢复都不得各自另发。应答的 first-writer-wins 只写 `resolved_at`，端点确认（`SessionUpdate.confirmation`）才写 `confirmed_at`；`agent-host` 现在把「字节已写入并 flush 到 Agent stdin」作为 `prompt` 与交互应答的成功条件，core 在适配器成功返回后经 `Broker::confirm_interaction` 原子写 `confirmed_at` 与摘要，失败或写未确认时保持待处理并在重启恢复统一失效。
 - `[决定]` 启动恢复重水化持久队列：`SessionStore::queued_turns` 给出遗留排队项（`owned_turn` 不含 prompt 正文，**不得**重放 Agent 副作用），内存队列为空时显式终结为 `failed` 并由 `unsettled_commands` 把 `accepted` 命令结算为 `uncertain`；`sessions_with_pending_activity` 补齐仍需重算摘要的会话。`uncertain` 命令与无法确认停止的执行不自动重试。
 - 事件 view 的职责分工（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条）：适配器负责 ACP 派生投影（`block`/`title`/`options`/`deltaIndex` 等，它持有 ACP DTO），`core::broker` 在提交前补 `SYNC_PROTOCOL.md` §10.3 要求的身份与会话版本字段（`turnId`、`version`）并在存储返回后比对版本；两侧不得互相替代，也不得在 broker 的公共领域视图里重建 ACP 语义。同一分工下，`file.changed` 的**行级差异统计与结构化差异行**（新增/删除/上下文，feature `core.file-diff.v1`）都由 `core::broker` 从**同一次**类型化 Diff 派生，受 `SYNC_PROTOCOL.md` §14 的固定行数/字节/单行上限约束，超限时只带统计并以已登记原因标记差异行未下发；未协商该 feature 的连接由投递层去掉该键。
@@ -439,6 +442,8 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 
 `[决定]`（2026-10-19，`conversation-area-complete` WP2 已实现）分块附件、封存清单、消息通道/部分结果与媒体引用的落盘由本 crate 拥有（`CORE_PORTS_AND_STORAGE.md` §5.8/§7.3/§7.6）：临时传输、清单、`owned_message`、`owned_media_ref` 与交互版本列都经**版本化 migration** 追加（v12 引入，当前 v13），`imported_*` 家族不新增任何正文列。
 
+`[决定]`（2026-10-22，`web-session-preparation` WP2 已实现）本 crate 新增 `owned_first_submission`（v16）：会话主键、首条/用户消息唯一、完整输入与摘要、阶段/`ever_dispatched`、当前请求/终态；`owned_message.channel` 扩到 `user`（12-step 重建）。准备附件暂存的元数据只在内存、字节在 `<attachment_dir>/.preparation/`（无 `owned_session` 外键行），首次提交只把已封存字节 `rename` 到正式内容寻址路径并写引用行；受理事务回滚时只把**本次认领真的** `rename` 过的字节移回封存路径（正式路径上更早会话已提交的同内容字节不动；同页同 ID 可原样重试），提交成功后清除该清单的运行期记录；启动/24 小时回收孤儿。旧会话不回填、不被识别成准备。
+
 `[决定]`（2026-10-20，`session-activity-three-states` WP2 已实现）本 crate 是会话三态摘要的**持久化守卫**：`owned_session.state` 的 CHECK 只接受 `idle|running|pending`，没有 `closed_at`；`owned_interaction` 增 `confirmed_at` 与 `turn_id`（`turn_id` 由创建事件回填）。迁移到 **v13 / imported v5**：旧 `owned_session` 走 12-step 重建（旧七态写迁移暂存值 `idle`/`running`/`pending`，随后由启动恢复按 `SessionActivity::reduce` 重算），旧 `resolved` 交互回填 `confirmed_at = resolved_at`，`imported_session.state` 只做值归一化；结构变化、回填与版本落盘同一事务、失败整体回滚。新增读缝 `session_activity`（有效未解决交互含「已仲裁未确认」、按 `turn_id` 分组、未结束 turn 数）、`queued_turns`（持久队列）与 `sessions_with_pending_activity`（恢复候选）供 core 重水化队列与重算摘要。`SessionUpdate.confirmation` 与 `session_activity` 的读口径见 `CORE_PORTS_AND_STORAGE.md` §5.2/§6；适配器侧的确认调用（Agent 明确处理结果 → `Broker::confirm_interaction`）属 **WP3**，本 crate 只提供落盘与读缝。
 
 `owned_session.version` 的递增规则（含 `StateChange` 的提交 +1，否则不变）由本 crate 在提交事务内实现，是唯一权威；core 只按同一规则推导 view 的 `version` 并在提交后与之比对（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条），双方不一致时 core 失败关闭（`PortError::Corrupt`）而不能静默采用任一方。
@@ -589,13 +594,13 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 `sync-protocol` 与 `node-link-protocol` 正常依赖它，字段级校验与开放对象保真因此只有一份实现；协议 crate 之间仍然互不依赖。
 
-### 4.14 准备式新建的职责划分（计划，`web-session-preparation`；实现待 WP2–WP7）
+### 4.14 准备式新建的职责划分（`web-session-preparation`；WP2 已实现，WP3–WP7 待接线）
 
-> **本节是计划边界，不是现状。** 准备控制面、首条原子提交、临时端点与附件暂存都尚未接线；合同已冻结在 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9 与 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11/§12。落地前不得在握手中宣告 `core.session-preparation.v1`，也不得注册需要它的入口。
+> **本节的 core/storage 部分已实现（WP2）。** `PreparationDirectory`、`FirstSubmission` 与 `PreparationAttachmentStaging` 已落地，合同见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §3.9/§3.10/§5.11 与 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9。准备凭据（WP3）、临时端点（WP4）与控制面/组合根（WP5）尚未接线；在组合根确认端口与 feature 齐备前，握手仍不得宣告 `core.session-preparation.v1`。
 
-- **core**：拥有准备生命周期与首次提交的业务规则（ID 分配后的归属、可继续/不可继续的判定、派发阶段 CAS、普通重启与存储重建的区分），并以**纯端口**表达两个写入口（CORE §5.11 的 `rust-planned` 块）：`FirstSubmission`（同一事务写正式会话/完整首条输入/稳定身份/附件正式引用，另提供读投影、派发围栏与终态写入）与 `PreparationAttachmentStaging`（运行期传输/清单 + Owner 私有内容区，无 `owned_session` 外键行，认领不复制全文）。core 仍不依赖 Tokio、文件系统、wire DTO、SQLite 或任何 Agent；新增端口**不改变** core 的直接依赖集合。
+- **core**：拥有准备生命周期与首次提交的业务规则（ID 分配后的归属、可继续/不可继续的判定、派发阶段 CAS、普通重启与存储重建的区分），并以**纯端口**表达两个写入口（CORE §5.11 的常规 rust 块）：`FirstSubmission`（同一事务写正式会话/完整首条输入/稳定身份/附件正式引用，另提供读投影、派发围栏与终态写入）与 `PreparationAttachmentStaging`（运行期传输/清单 + Owner 私有内容区，无 `owned_session` 外键行，认领不复制全文）。core 仍不依赖 Tokio、文件系统、wire DTO、SQLite 或任何 Agent；新增端口**不改变** core 的直接依赖集合。
 - **agent-host**：为准备 ID 管理**临时**端点——真实模式/配置读取、资源代隔离、旧代迟到请求拒绝、单会话关闭与完整进程树清理；临时端点不要求 `SessionStore` 已有行，也不得写会话 store。首条正式提交后由组合根/`server` 把端点转移给正式会话；没有临时端点时不得伪装「可发送」。
-- **storage-sqlite**：实现暂存端口（运行期元数据 + 同一受管内容区、流式摘要、封存后不可变、24 小时与启动回收、配额）与首条提交事务/读投影。首次受理与附件正式引用在同一事务；准备阶段不写行。计划表 `owned_first_submission` 的 DDL 见 CORE §12，v16 migration 落地后才允许把它移入 §7 并删除计划小节。
+- **storage-sqlite**：实现暂存端口（运行期元数据 + 同一受管内容区、流式摘要、封存后不可变、24 小时与启动回收、配额）与首条提交事务/读投影。首次受理与附件正式引用在同一事务；准备阶段不写行。`owned_first_submission` 的 DDL 已随 v16 migration 进入 CORE §7；旧会话不回填。
 - **server::sync**：独立承接准备控制帧（`session.preparation`/`session.preparation.result`）、Sync-only mutation `session.start`、附件准备 target 与 `command.status` 的 `preparation` 投影；只调用 core 用例，认证/feature 门控先于任何存储或 Agent 调用，不调用 Node Link 或 `local_admin` 等同级适配器。Node Link 适配器不转发任何准备帧或字段。
 - **identity-auth / identity-keystore**：准备凭据的专用签名/验签（domain `acp-remote/session-preparation/v1`）是纯状态机能力，密钥只经既有 keystore 端口使用（[`IDENTITY_AND_AUTH_CONTRACT.md`](./IDENTITY_AND_AUTH_CONTRACT.md) §6.4）。
 - **app**：装配端口、注入 `Clock`、持有临时资源的所有权/取消与关闭顺序（临时端点先于 Host/Store 关闭），并保证启动时不自动派发首条。

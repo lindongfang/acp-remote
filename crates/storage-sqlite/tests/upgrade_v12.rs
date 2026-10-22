@@ -22,8 +22,8 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         .expect("open");
     store.close().await;
 
-    assert_eq!(FILE_FORMAT_VERSION, 15);
-    assert_eq!(OWNED_SCHEMA_VERSION, 15);
+    assert_eq!(FILE_FORMAT_VERSION, 16);
+    assert_eq!(OWNED_SCHEMA_VERSION, 16);
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
     let version: i64 = sqlx::query_scalar("PRAGMA user_version")
@@ -32,7 +32,7 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         .expect("user_version");
     assert_eq!(version, FILE_FORMAT_VERSION);
     let meta = meta_rows(&pool).await;
-    assert!(meta.contains(&("owned_schema_version".to_owned(), "15".to_owned())));
+    assert!(meta.contains(&("owned_schema_version".to_owned(), "16".to_owned())));
 
     for table in [
         "owned_attachment_transfer",

@@ -88,9 +88,9 @@ _Avoid_: 在线状态、登录态、订阅
 一次会话运行资源建立或恢复的代号；回收、关闭失败与重新恢复都会换新代，用来拒绝旧代事件或旧命令结果绑定到新资源。
 _Avoid_: 会话版本、进程号、连接代
 
-### 准备与首次提交（合同已冻结；实现尚未落地）
+### 准备与首次提交（合同已冻结；核心/存储已落地，入口未开放）
 
-自 2026-10-22（`web-session-preparation` WP1）起，feature `core.session-preparation.v1`、准备控制帧、`session.start`、准备凭据与端口/DDL 合同已冻结（见 `docs/SYNC_PROTOCOL.md` §11.9、`docs/CORE_PORTS_AND_STORAGE.md` §5.11/§12）；实现待 WP2–WP8。下列用语只描述该合同，不代表已在运行的入口。
+自 2026-10-22（`web-session-preparation` WP1）起，feature `core.session-preparation.v1`、准备控制帧、`session.start`、准备凭据与端口/DDL 合同已冻结（见 `docs/SYNC_PROTOCOL.md` §11.9、`docs/CORE_PORTS_AND_STORAGE.md` §5.11/§7.3）；核心与存储已在 WP2 落地，服务端与前端接线待 WP5/WP7。下列用语描述合同与已落地的存储行为，不代表新入口已对外可用。
 
 **准备（preparation）**：
 Web 新建会话在首条消息提交前的**临时**阶段：节点已分配最终 `sessionId`、可以建立临时 Agent 端点取得真实模式与配置，但尚未持久化会话记录；准备不进入目录、快照或命令历史。
