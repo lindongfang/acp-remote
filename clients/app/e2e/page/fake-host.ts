@@ -38,6 +38,7 @@ import {
   LOCAL_SESSION_LIFECYCLE_FEATURE,
   REQUIRED_FEATURES,
   SESSION_HISTORY_FEATURE,
+  SESSION_PREPARATION_FEATURE,
   SESSION_TITLE_FEATURE,
   sortedFeatures,
 } from "../../src/sync-client";
@@ -218,12 +219,36 @@ export interface FakeHostOptions {
    */
   readonly holdCommands?: readonly string[] | undefined;
   /**
+   * 指定命令的失败结果（返回 `null` 表示正常应答）。
+   *
+   * `session.read` 永不扣留，因此「未知会话」这类失败只能由这里表达：失败的读取结果是页面
+   * 获得权威「不存在」结论的唯一来源。
+   */
+  readonly commandFailure?:
+    | ((command: string, sessionId: string) => Record<string, unknown> | null)
+    | undefined;
+  /**
    * 是否在握手时**选中** `core.local-session-lifecycle.v1`。
    *
    * 缺省 `false`：既有用例的旧 peer 路径保持不变（不协商就不发查看/恢复帧，也不显示本机活跃）。
    * 新用例显式打开它，假主机才应答 `session.view` 并按本机摘要完成 `session.resume`。
    */
   readonly selectLocalLifecycle?: boolean | undefined;
+  /**
+   * 是否在握手时**选中** `core.session-preparation.v1`。
+   *
+   * 缺省 `false` 保持旧 peer 路径（入口明确不可用，一条准备帧都不发）。打开后，准备控制帧由
+   * {@link FakeHostOptions.preparationResult} 应答。
+   */
+  readonly selectPreparation?: boolean | undefined;
+  /**
+   * `session.preparation` 的应答体（返回 `null` 表示故意不应答，用例观察「没有终态」）。
+   *
+   * 返回的对象按 `session.preparation.result` 原样投递，wire 解码与仓库归并都是生产代码。
+   */
+  readonly preparationResult?:
+    | ((body: Record<string, unknown>) => Record<string, unknown> | null)
+    | undefined;
 }
 
 /** 已配对主机记录（写进本地缓存的那一份，只含公开材料）。 */
@@ -558,6 +583,24 @@ export class FakeHost {
       return;
     }
 
+    const preparation = bodyOf(message, "session.preparation");
+    if (preparation !== null) {
+      const result = this.options.preparationResult?.(preparation);
+      if (result !== null && result !== undefined) {
+        this.#deliver(
+          JSON.stringify({
+            protocolVersion: 1,
+            type: "session.preparation.result",
+            messageId: crypto.randomUUID(),
+            connectionId: CONNECTION_ID,
+            connectionSequence: "1",
+            body: result,
+          }),
+        );
+      }
+      return;
+    }
+
     const command = bodyOf(message, "command");
     if (command !== null) {
       const frame: CommandFrame = {
@@ -599,10 +642,11 @@ export class FakeHost {
 
   async #onClientHello(hello: { readonly deviceId: string; readonly clientNonce: string }): Promise<void> {
     const serverNonce = crypto.getRandomValues(new Uint8Array(32)) as Uint8Array<ArrayBuffer>;
-    const selectedFeatures =
-      this.options.selectLocalLifecycle === true
-        ? [...SERVER_SELECTED_FEATURES, LOCAL_SESSION_LIFECYCLE_FEATURE]
-        : SERVER_SELECTED_FEATURES;
+    const selectedFeatures = [
+      ...SERVER_SELECTED_FEATURES,
+      ...(this.options.selectLocalLifecycle === true ? [LOCAL_SESSION_LIFECYCLE_FEATURE] : []),
+      ...(this.options.selectPreparation === true ? [SESSION_PREPARATION_FEATURE] : []),
+    ];
     const transcript = encodeTranscript(HOST_CHALLENGE_DOMAIN, [
       { tag: HOST_CHALLENGE_TAG.protocolVersion, bytes: encodeU16be(1) },
       { tag: HOST_CHALLENGE_TAG.hostId, bytes: encodeUuid16(this.identity.hostId) },
@@ -744,6 +788,16 @@ export class FakeHost {
   }
 
   #sendCommandResult(command: CommandFrame): void {
+    const failure = this.options.commandFailure?.(command.command, command.sessionId) ?? null;
+    if (failure !== null) {
+      this.#deliverResult(command, {
+        status: "failed",
+        result: null,
+        acceptedAt: ACCEPTED_AT,
+        error: failure,
+      });
+      return;
+    }
     const isFilesQuery = command.command.startsWith("session.files.") || command.command.startsWith("session.git.");
     const filesResult = this.options.filesResult;
     const resumeSummary = this.options.sessions.find(
@@ -808,7 +862,7 @@ export class FakeHost {
     command: CommandFrame,
     fields: {
       readonly status: string;
-      readonly result: Record<string, unknown>;
+      readonly result: Record<string, unknown> | null;
       readonly acceptedAt: string | null;
       readonly error: Record<string, unknown> | null;
     },

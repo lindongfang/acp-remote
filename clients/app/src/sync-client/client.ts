@@ -18,7 +18,7 @@
  * 这正是 spec 场景「重建快照时不破坏已完成状态」的结构性保证。
  */
 
-import type { CommandMessage, Cursor, OriginCursor, SessionRef, Uuid } from "../protocol";
+import type { CommandMessage, Cursor, OriginCursor, SessionPreparationBody, SessionRef, Uuid } from "../protocol";
 import { SyncConnection, type AuthenticatedInfo, type ClientBlockCause, type SyncClientEvent } from "./connection";
 import { compareCursors } from "./connection";
 import { advanceOriginCursor } from "./remote-merge";
@@ -410,6 +410,17 @@ export class SyncClient {
    */
   setSessionView(input: { readonly sessionId: Uuid | null; readonly viewVersion: number }): boolean {
     return this.#connection?.sendSessionView(input) ?? false;
+  }
+
+  /**
+   * 发送一条准备控制帧（`session.preparation`，§11.9）。
+   *
+   * 返回 `false` 表示没有已认证连接或该帧未发出（与 {@link setSessionView} 同一口径）：
+   * 调用方据此把这次操作标为未发出，而不是伪造一个「看起来已经在分配」的状态。
+   * 操作去重（`operationId`）仍由服务端与 feature 层各自持有。
+   */
+  dispatchPreparation(body: SessionPreparationBody): boolean {
+    return this.#connection?.sendPreparation(body) ?? false;
   }
 
   /** 某条命令的派发登记。 */

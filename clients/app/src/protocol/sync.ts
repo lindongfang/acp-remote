@@ -506,8 +506,18 @@ export type PreparationOutcome =
   | { readonly status: "released" }
   | { readonly status: "failed"; readonly error: PublicError };
 
+/**
+ * 结果信封：`operationId`/`action`/`sessionId` 在**每个** status 分支上恒在（schema 的必填集合）。
+ *
+ * 与请求侧的 {@link WithPreparationEnvelope} 分开：`allocate` 请求没有 `sessionId`（由 Owner 分配
+ * 后回显），因此不能共用一个信封。
+ */
+type WithPreparationResultEnvelope<T> = T extends unknown
+  ? T & { readonly operationId: Uuid; readonly action: PreparationAction; readonly sessionId: Uuid }
+  : never;
+
 /** `$defs.sessionPreparationResult.body`：回显字段 + 该 status 的闭合结果。 */
-export type PreparationResultBody = WithPreparationEnvelope<PreparationOutcome>;
+export type PreparationResultBody = WithPreparationResultEnvelope<PreparationOutcome>;
 
 /** `$defs.sessionPreparationResult`：`operationId`/`action`/`sessionId` 逐字回显 + 闭合结果。 */
 export interface SyncSessionPreparationResult extends PostAuthEnvelope {

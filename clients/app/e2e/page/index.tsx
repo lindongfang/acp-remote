@@ -7,6 +7,7 @@
 import { R15_CHECKS } from "./checks/r15-directory";
 import { R15_DETAIL_CHECKS } from "./checks/r15-directory-detail";
 import { R16_CHECKS } from "./checks/r16-create";
+import { SESSION_PREPARATION_CHECKS } from "./checks/session-preparation";
 import { R18_CHECKS } from "./checks/r18-degradation";
 import { COMPOSITION_CHECKS } from "./checks/composition-root";
 import { CONVERSATION_TIMELINE_CHECKS } from "./checks/conversation-timeline";
@@ -65,6 +66,11 @@ import type { CheckResult } from "./support";
  * 布局检查排在内容检查之后：它依赖 `support.tsx` 的 `HarnessLayout` 与 `app/_layout.tsx` 同构
  * （真实 `Shell`）。只挂 `Stack` 时对话页拿不到视口高度，三栏独立滚动在浏览器里无从成立。
  *
+ * 会话准备的页面用例（`session-preparation.ts`）紧接 R16：R16 断言「新建入口只发 allocate」，
+ * 它们接着走完准备页本身（面板、刷新恢复、陌生地址、未协商降级、首条提交与三条 D6 收口）。
+ * 两者都从「已配对 + 真实握手」出发，中间不需要别的检查集铺垫；放在 R18 之前是为了让
+ * 「新建会话」这一条产品路径的输出连成一段。
+ *
  * 帧受理面（`frame-acceptance.ts`）排在**各需求用例的最后一段**（配对用例之前）：它验的是
  * 解码边界的受理面——`origin.kind = "node"` 的协议合法事件进了账本、被页面呈现、游标继续前进。
  * 为此它自带场景（已配对起点 + 真实握手 + 真实路由，自己挂、自己卸），既不占用
@@ -88,6 +94,7 @@ const ALL_CHECKS = [
   ...R15_CHECKS,
   ...R15_DETAIL_CHECKS,
   ...R16_CHECKS,
+  ...SESSION_PREPARATION_CHECKS,
   ...R18_CHECKS,
   ...CONVERSATION_TIMELINE_CHECKS,
   ...CONVERSATION_INTERACTION_CHECKS,

@@ -188,6 +188,10 @@ export function recordingGateway(input: {
     dispatch(command: CommandMessage) {
       dispatches.push(command);
     },
+    sendPreparation() {
+      // 记账网关默认不接准备控制面：用例需要它时自己替换这个方法（见准备流程用例）。
+      return false;
+    },
     setSessionView(input) {
       views.push({ sessionId: input.sessionId, viewVersion: input.viewVersion });
       return true;
@@ -228,6 +232,8 @@ export function storeWith(input: {
       },
     },
     now: input.now ?? (() => 1_700_000_000_000),
+    // 生产组合根总是注入这个端口；测试仓库缺省给同一形状，避免「入口不可用」把无关用例带红。
+    preparationTabNonce: () => TEST_TAB_NONCE,
     // `??` 会把「显式传 null（未连接）」当成缺省，因此这里区分 undefined 与 null。
     identity: { connectionId: input.connectionId === undefined ? "2de54db7-74ae-4c21-88e3-05df0dc2e637" : input.connectionId },
     ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
@@ -304,6 +310,9 @@ export const TEST_DEVICE_ID = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
 
 /** 测试用的服务端 epoch。 */
 export const TEST_SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
+
+/** 测试用的准备标签页 nonce（32 字节 base64url；与生产组合根注入的端口同形）。 */
+export const TEST_TAB_NONCE = "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8";
 
 /**
  * 已认证、已在线、并（可选）协商到若干 feature 的仓库。

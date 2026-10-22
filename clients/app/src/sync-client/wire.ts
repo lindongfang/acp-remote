@@ -46,6 +46,8 @@ import type {
   SyncResetRequired,
   SyncSessionView,
   SyncSessionViewResult,
+  SyncSessionPreparation,
+  SyncSessionPreparationResult,
   SyncSnapshotBegin,
   SyncSnapshotChunk,
   SyncSnapshotEnd,
@@ -112,6 +114,10 @@ const POST_AUTH_TYPES: Record<string, true> = {
   // `core.local-session-lifecycle.v1` 的查看控制帧（§11.8）：只在已认证连接上合法。
   "session.view": true,
   "session.view.result": true,
+  // `core.session-preparation.v1` 的准备控制面（§11.9）：只在已认证连接上合法，未协商该 feature
+  // 的连接既不发送也不接收它们。
+  "session.preparation": true,
+  "session.preparation.result": true,
   // `resource.stateless-origin.v1` 的远程来源流（§9.7）：九条消息都只在认证后出现，信封与其余
   // post-auth 帧逐字相同（`$defs.postAuthBase`）。
   "sync.remote_subscribe": true,
@@ -165,8 +171,11 @@ const REMOTE_SOURCE_STATES: Record<string, true> = {
 /** `$defs.remoteEvent` 的 `event.eventType`：`^[a-z0-9_.-]{1,128}$`。 */
 const REMOTE_EVENT_TYPE_PATTERN = /^[a-z0-9_.-]{1,128}$/;
 
-/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，20 条）。 */
+/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，21 条）。 */
 const COMMAND_NAMES: Record<string, true> = {
+  // `session.start`（`core.session-preparation.v1`，§11.9）是 Sync-only 的首条提交 mutation：
+  // `kind: initial` 保存并派发首条，`kind: continue` 只做显式继续。
+  "session.start": true,
   "session.list": true,
   "session.read": true,
   "session.title.set": true,
@@ -225,6 +234,103 @@ const EVENT_ORIGIN_KINDS: Record<EventOriginKind, true> = {
 
 /** `event.body.eventType` 是开放字符串（未知类型走降级卡片），但必须非空。 */
 const EVENT_TYPE_PATTERN = /^[a-z]+(\.[a-z_]+)+$/;
+
+/** `$defs.preparationAction` 的闭合词表（§11.9）。 */
+const PREPARATION_ACTIONS: Record<string, true> = {
+  allocate: true,
+  restore: true,
+  configure: true,
+  renew: true,
+  release: true,
+};
+
+/** `$defs.sessionPreparationResult.body.status` 的闭合五态。 */
+const PREPARATION_RESULT_STATUSES: Record<string, true> = {
+  ready: true,
+  committed: true,
+  stale: true,
+  released: true,
+  failed: true,
+};
+
+/** `session.preparation.result.body.reason`（`status = "stale"`）的闭合词表。 */
+const PREPARATION_STALE_REASONS: Record<string, true> = {
+  runtime_epoch_mismatch: true,
+  generation_mismatch: true,
+  released: true,
+};
+
+/**
+ * `$defs.preparationReceiptClaims` 的闭合键集合（字段顺序即 transcript tag 顺序）。
+ *
+ * 与 `src/protocol/attachment.ts` 的同一份集合逐项相同；这一层只判 **wire 形状**：
+ * 签名有效性由 Owner 用专用 transcript domain 判定，客户端不验签、也不把它当登录凭证。
+ */
+const PREPARATION_RECEIPT_CLAIM_KEYS = [
+  "version",
+  "ownerNodeId",
+  "storeEpoch",
+  "origin",
+  "deviceId",
+  "tabNonce",
+  "sessionId",
+  "agentId",
+  "normalizedWorkspacePath",
+  "workspaceSource",
+] as const;
+
+/** 32 字节无填充 base64url 的字符数；64 字节 P1363 签名的字符数。 */
+const BASE64URL_32_CHARS = 43;
+const BASE64URL_64_CHARS = 86;
+const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/** `$defs.positiveDecimalString`：无前导零且大于零（`generation` 的 1..=2^63−1）。 */
+function isPositiveDecimalString(value: unknown): value is string {
+  return isDecimalString(value) && value !== "0";
+}
+
+function isBase64UrlOfLength(value: unknown, length: number): value is string {
+  return typeof value === "string" && value.length === length && BASE64URL_PATTERN.test(value);
+}
+
+/** `$defs.preparationReceipt`：闭合 claims + 64 字节 P1363 签名（只判形状）。 */
+function isPreparationReceipt(value: unknown): boolean {
+  if (!isObject(value) || !hasExactKeys(value, ["claims", "signature"])) return false;
+  const claims = value["claims"];
+  if (!isObject(claims) || !hasExactKeys(claims, PREPARATION_RECEIPT_CLAIM_KEYS)) return false;
+  if (claims["version"] !== 1) return false;
+  for (const key of ["ownerNodeId", "storeEpoch", "deviceId", "sessionId"] as const) {
+    if (!isUuid(claims[key])) return false;
+  }
+  const origin = claims["origin"];
+  if (!isNonEmptyString(origin) || origin.length > 255) return false;
+  if (!isBase64UrlOfLength(claims["tabNonce"], BASE64URL_32_CHARS)) return false;
+  const agentId = claims["agentId"];
+  if (!isNonEmptyString(agentId) || agentId.length > 128) return false;
+  const workspacePath = claims["normalizedWorkspacePath"];
+  if (!isNonEmptyString(workspacePath) || workspacePath.length > 4096) return false;
+  const source = claims["workspaceSource"];
+  if (source !== "directoryId" && source !== "workspacePath") return false;
+  return isBase64UrlOfLength(value["signature"], BASE64URL_64_CHARS);
+}
+
+/** `$defs.preparationWorkspaceRef`：`directoryId` / `workspacePath` **恰好一个**。 */
+function isPreparationWorkspaceRef(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const hasDirectory = Object.hasOwn(value, "directoryId");
+  const hasPath = Object.hasOwn(value, "workspacePath");
+  if (hasDirectory === hasPath) return false;
+  if (hasDirectory) {
+    return hasExactKeys(value, ["directoryId"]) && isNonEmptyString(value["directoryId"]);
+  }
+  const path = value["workspacePath"];
+  return hasExactKeys(value, ["workspacePath"]) && isNonEmptyString(path) && path.length <= 4096;
+}
+
+/** 只允许封闭对象的**这些键**（`additionalProperties: false`，但没有"恰好"要求）。 */
+function hasOnlyKeys(value: JsonObject, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
 
 function reject(reason: WireRejectReason, detail: string): WireRejected {
   return { ok: false, reason, detail };
@@ -399,6 +505,10 @@ function decodeByType(parsed: JsonObject, type: string, body: unknown): WireDeco
       return decodeSessionView(parsed, body);
     case "session.view.result":
       return decodeSessionViewResult(parsed, body);
+    case "session.preparation":
+      return decodeSessionPreparation(parsed, body);
+    case "session.preparation.result":
+      return decodeSessionPreparationResult(parsed, body);
     case "sync.remote_subscribe":
       return decodeRemoteSubscribe(parsed, body);
     case "sync.remote_event":
@@ -641,6 +751,221 @@ function decodeSessionViewResult(parsed: JsonObject, body: unknown): WireDecodeR
       return reject("field_type", "stale 的 leaseExpiresAt 必须为 null");
     }
     return { ok: true, message: message as SyncSessionViewResult };
+  });
+}
+
+/** `$defs.preparationConfigSelection`：1..=64 项的 `string | boolean` 表（值不做进一步解释）。 */
+function isConfigSelection(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length === 0 || keys.length > 64) return false;
+  return keys.every((key) => typeof value[key] === "string" || typeof value[key] === "boolean");
+}
+
+/**
+ * `session.preparation`（§11.9）：准备控制请求。
+ *
+ * 五个 action 各自闭合：`allocate` 只带 Agent/目录与标签页归属（**不得**带 `sessionId`，正式 ID
+ * 由 Owner 分配）；`restore`/`configure`/`renew`/`release` 都带 `sessionId` 与凭据，
+ * `configure` 另需资源代与至少一个待应用的值。这一层只判**分支形状**；租约、容量与业务结果
+ * 归服务端与 feature 层。
+ */
+function decodeSessionPreparation(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    if (!hasKeys(inner, ["operationId", "action"])) {
+      return reject("missing_field", "session.preparation 缺 operationId/action");
+    }
+    if (!isUuid(inner["operationId"])) return reject("field_type", "operationId 不是 UUID");
+    const action = inner["action"];
+    if (!isNonEmptyString(action) || !Object.hasOwn(PREPARATION_ACTIONS, action)) {
+      return reject("field_type", "preparation action 不在封闭词表内");
+    }
+    if (action === "allocate") {
+      const allowed = ["operationId", "action", "agentId", "workspace", "tabNonce"] as const;
+      if (!hasExactKeys(inner, allowed)) {
+        return reject("field_type", "allocate 只允许 operationId/action/agentId/workspace/tabNonce");
+      }
+      const agentId = inner["agentId"];
+      if (!isNonEmptyString(agentId) || agentId.length > 128) {
+        return reject("field_type", "allocate.agentId 长度必须在 1..=128");
+      }
+      if (!isPreparationWorkspaceRef(inner["workspace"])) {
+        return reject("field_type", "allocate.workspace 必须是 directoryId/workspacePath 之一");
+      }
+      if (!isBase64UrlOfLength(inner["tabNonce"], BASE64URL_32_CHARS)) {
+        return reject("field_type", "allocate.tabNonce 必须是 32 字节 base64url");
+      }
+      return { ok: true, message: message as SyncSessionPreparation };
+    }
+    if (!hasKeys(inner, ["sessionId", "receipt"])) {
+      return reject("missing_field", `${action} 缺 sessionId/receipt`);
+    }
+    if (!isUuid(inner["sessionId"])) return reject("field_type", "sessionId 不是 UUID");
+    if (!isPreparationReceipt(inner["receipt"])) return reject("field_type", "receipt 形状非法");
+    if (action === "restore") {
+      const allowed = [
+        "operationId",
+        "action",
+        "sessionId",
+        "receipt",
+        "knownRuntimeEpoch",
+        "knownGeneration",
+      ] as const;
+      if (!hasOnlyKeys(inner, allowed)) return reject("field_type", "restore 出现未登记字段");
+      const knownEpoch = inner["knownRuntimeEpoch"];
+      if (knownEpoch !== undefined && !isUuid(knownEpoch)) {
+        return reject("field_type", "restore.knownRuntimeEpoch 不是 UUID");
+      }
+      const knownGeneration = inner["knownGeneration"];
+      if (knownGeneration !== undefined && !isPositiveDecimalString(knownGeneration)) {
+        return reject("field_type", "restore.knownGeneration 不是正十进制字符串");
+      }
+      return { ok: true, message: message as SyncSessionPreparation };
+    }
+    if (!hasKeys(inner, ["runtimeEpoch", "generation"])) {
+      return reject("missing_field", `${action} 缺 runtimeEpoch/generation`);
+    }
+    if (!isUuid(inner["runtimeEpoch"])) return reject("field_type", "runtimeEpoch 不是 UUID");
+    if (!isPositiveDecimalString(inner["generation"])) {
+      return reject("field_type", "generation 不是正十进制字符串");
+    }
+    if (action === "configure") {
+      const allowed = [
+        "operationId",
+        "action",
+        "sessionId",
+        "receipt",
+        "runtimeEpoch",
+        "generation",
+        "mode",
+        "configOptions",
+      ] as const;
+      if (!hasOnlyKeys(inner, allowed)) return reject("field_type", "configure 出现未登记字段");
+      const hasMode = Object.hasOwn(inner, "mode");
+      const hasConfig = Object.hasOwn(inner, "configOptions");
+      if (!hasMode && !hasConfig) {
+        return reject("missing_field", "configure 至少要给出 mode 或 configOptions");
+      }
+      if (hasMode) {
+        const mode = inner["mode"];
+        if (!isNonEmptyString(mode) || mode.length > 256) {
+          return reject("field_type", "configure.mode 长度必须在 1..=256");
+        }
+      }
+      if (hasConfig && !isConfigSelection(inner["configOptions"])) {
+        return reject("field_type", "configure.configOptions 必须是 1..=64 项的 string/boolean 表");
+      }
+      return { ok: true, message: message as SyncSessionPreparation };
+    }
+    const allowed = [
+      "operationId",
+      "action",
+      "sessionId",
+      "receipt",
+      "runtimeEpoch",
+      "generation",
+    ] as const;
+    if (!hasExactKeys(inner, allowed)) {
+      return reject(
+        "field_type",
+        `${action} 只允许 operationId/action/sessionId/receipt/runtimeEpoch/generation`,
+      );
+    }
+    return { ok: true, message: message as SyncSessionPreparation };
+  });
+}
+
+/**
+ * `session.preparation.result`（§11.9）：闭合的 `status` 判别联合。
+ *
+ * 每个分支的键集合都**恰定**：`committed` 不带临时代/租约/配置/凭据，`released` 不带任何额外
+ * 字段。这一层不把 `committed` 当成功终态，也不推断派发结果。
+ */
+function decodeSessionPreparationResult(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const base = ["operationId", "action", "sessionId", "status"] as const;
+    if (!hasKeys(inner, base)) {
+      return reject("missing_field", `session.preparation.result 缺必填字段：${base.join(",")}`);
+    }
+    if (!isUuid(inner["operationId"])) return reject("field_type", "operationId 不是 UUID");
+    const action = inner["action"];
+    if (!isNonEmptyString(action) || !Object.hasOwn(PREPARATION_ACTIONS, action)) {
+      return reject("field_type", "preparation result 的 action 不在封闭词表内");
+    }
+    if (!isUuid(inner["sessionId"])) return reject("field_type", "sessionId 不是 UUID");
+    const status = inner["status"];
+    if (!isNonEmptyString(status) || !Object.hasOwn(PREPARATION_RESULT_STATUSES, status)) {
+      return reject("field_type", "preparation status 不在封闭词表内");
+    }
+    switch (status) {
+      case "ready": {
+        const keys = [
+          ...base,
+          "receipt",
+          "runtimeEpoch",
+          "generation",
+          "modes",
+          "configOptions",
+          "leaseExpiresAt",
+        ] as const;
+        if (!hasExactKeys(inner, keys)) return reject("field_type", `ready 只允许 ${keys.join(",")}`);
+        if (!isPreparationReceipt(inner["receipt"])) return reject("field_type", "ready.receipt 形状非法");
+        if (!isUuid(inner["runtimeEpoch"])) return reject("field_type", "ready.runtimeEpoch 不是 UUID");
+        if (!isPositiveDecimalString(inner["generation"])) {
+          return reject("field_type", "ready.generation 不是正十进制字符串");
+        }
+        const modes = inner["modes"];
+        if (!Array.isArray(modes)) return reject("field_type", "ready.modes 不是数组");
+        for (const mode of modes) {
+          if (!isObject(mode) || !isNonEmptyString(mode["modeId"]) || typeof mode["displayName"] !== "string") {
+            return reject("field_type", "ready.modes 的元素必须是 modeRef");
+          }
+        }
+        const configOptions = inner["configOptions"];
+        if (!Array.isArray(configOptions)) return reject("field_type", "ready.configOptions 不是数组");
+        for (const option of configOptions) {
+          if (!isObject(option) || !isNonEmptyString(option["id"])) {
+            return reject("field_type", "ready.configOptions 的元素必须带 id");
+          }
+        }
+        if (!isTimestamp(inner["leaseExpiresAt"])) {
+          return reject("field_type", "ready.leaseExpiresAt 不是 timestamp");
+        }
+        return { ok: true, message: message as SyncSessionPreparationResult };
+      }
+      case "committed": {
+        const keys = [...base, "firstSubmissionId", "firstRequestId", "currentRequestId", "firstMessageId"] as const;
+        if (!hasExactKeys(inner, keys)) {
+          return reject("field_type", `committed 只允许 ${keys.join(",")}`);
+        }
+        for (const key of ["firstSubmissionId", "firstRequestId", "currentRequestId", "firstMessageId"] as const) {
+          if (!isUuid(inner[key])) return reject("field_type", `committed.${key} 不是 UUID`);
+        }
+        return { ok: true, message: message as SyncSessionPreparationResult };
+      }
+      case "stale": {
+        const keys = [...base, "reason"] as const;
+        if (!hasExactKeys(inner, keys)) return reject("field_type", "stale 只允许 reason");
+        const reason = inner["reason"];
+        if (!isNonEmptyString(reason) || !Object.hasOwn(PREPARATION_STALE_REASONS, reason)) {
+          return reject("field_type", "stale.reason 不在封闭词表内");
+        }
+        return { ok: true, message: message as SyncSessionPreparationResult };
+      }
+      case "released": {
+        if (!hasExactKeys(inner, base)) return reject("field_type", "released 不带额外字段");
+        return { ok: true, message: message as SyncSessionPreparationResult };
+      }
+      case "failed": {
+        const keys = [...base, "error"] as const;
+        if (!hasExactKeys(inner, keys)) return reject("field_type", "failed 只允许 error");
+        if (!isPublicError(inner["error"])) return reject("field_type", "failed.error 必须是 publicError");
+        return { ok: true, message: message as SyncSessionPreparationResult };
+      }
+      default:
+        // 不可达：上面的封闭词表已经拦住了第五个以外的取值。
+        return reject("field_type", "preparation status 未登记");
+    }
   });
 }
 

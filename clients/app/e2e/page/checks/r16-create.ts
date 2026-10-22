@@ -1,18 +1,24 @@
 /**
- * R16 会话创建的浏览器级验证。
+ * R16 新建会话入口的浏览器级验证。
+ *
+ * ## 入口是 prepare（`session.preparation` 的 `allocate`），不是旧 `session.create`
+ *
+ * 生产的新建入口已改为「后端分配最终 ID → 进入 `/session/<id>` 的准备页」：点击提交走
+ * `ClientStore.beginPreparation`（`buildAllocateBody`），正文与附件在首条发送之后才产生。因此本文件
+ * 抓的是 `FakeHost.sent` 里那条 **`session.preparation` 帧原文**，并显式断言**没有**
+ * `session.create`——旧创建路径还在仓库里（旧会话、Zed/Node Link 与既有单测仍用它），但它不得
+ * 从页面入口被发出。
  *
  * ## 断言的是字节，不是模型对象
  *
- * `src/features/create-session-model.ts` 的 `assertCreateSessionRefs` 只校验**本模块内部**
- * 构造出来的对象；它拦不住「命令信封里多带了一个字段」。因此本文件抓的是
- * `FakeHost.sent` 里那条**帧原文**：点击真实的提交按钮 → 真实的
- * `ClientStore.submitCreateSession` → 真实的 `buildCreateSessionCommand` → 真实的 socket `send`，
- * 再对那串 JSON 文本做断言。
+ * `src/features/create-session-model.ts` 只校验**本模块内部**构造出来的对象；它拦不住「命令信封里
+ * 多带了一个字段」。因此这里逐层读帧原文：真实按钮 → 真实 `ClientStore.beginPreparation` →
+ * 真实 `buildAllocateBody` → 真实 socket `send`。
  *
  * ## 负向为主
  *
- * - 载荷键集必须**恰好**是规范允许的三类之一：`{agentId, directoryId}`、
- *   `{agentId, workspacePath}`、`{agentId, workspacePath, createIfMissing}`；
+ * - `allocate` 只允许 `{operationId, action, agentId, workspace, tabNonce}`：正式 `sessionId`
+ *   由 Owner 分配，客户端不得指定；`workspace` 恰好是 `{directoryId}` 或 `{workspacePath}` 之一；
  * - 帧原文里不得出现 MCP、凭据类字段名或值；
  * - **目录不由用户手工输入**：弹层里没有目录输入框，路径逐字来自服务端（快照或浏览结果）；
  * - **目录标识不出现在界面文本里**（只作 `data-*` 机器标识与路由参数）；
@@ -20,7 +26,8 @@
  * - **不能浏览的原因分岔**：「还没连上主机」与「已连上却没协商到该能力」是两条文案与两个锚点取值，
  *   未协商 MUST NOT 被写成「服务端没有提供该能力」（未认证起点没有快照，`selectedFeatures` 为空
  *   只是「还没协商」）；
- * - **入口不再有权限维度**：认证与否都不改变它——把门控加回来即红。
+ * - **入口不再有权限维度**：认证与否都不改变它——把门控加回来即红；
+ * - **未协商准备能力时入口明确禁用**（见 `session-preparation.ts` 的用例）。
  *
  * ## 目录浏览的两条场景
  *
@@ -29,7 +36,7 @@
  * - 「服务端不支持浏览」那一条走的是**完全真实**的链路（真实握手 → 真实快照 → 真实组件）；
  * - 「支持浏览」那一条由用例注入一次协商结果（`store.apply` 一条 `authenticated`），浏览结果则经
  *   `FakeHost.completeHeldCommand` 从**真实 socket** 投递（wire 解码、结果归并、渲染都走生产代码）。
- *   目的是把「逐层选定 / 已登记标注 / 新建一层目录 → createIfMissing」这三条规格场景在浏览器里钉住。
+ *   目的是把「逐层选定 / 已登记标注 / 新建一层目录后按路径分配」这三条规格场景在浏览器里钉住。
  */
 
 import { createElement } from "react";
@@ -37,6 +44,7 @@ import { createRoot } from "react-dom/client";
 
 import { CreateSessionSheet } from "../../../src/components";
 import { WORKSPACE_BROWSE_FEATURE } from "../../../src/features/create-session-model";
+import { SESSION_PREPARATION_FEATURE } from "../../../src/features/preparation-model";
 
 import {
   AGENTS,
@@ -44,15 +52,19 @@ import {
   DIRECTORY_ID_BETA,
   DIRECTORY_PATH_ALPHA,
   DIRS_ROUTE,
+  PREPARED_SESSION_ID,
   SESSION_ALPHA,
   WORKSPACES_WITH_PATHS,
   dirRoute,
+  preparationReceipt,
+  readyPreparationResult,
   sessionsForBothDirectories,
   sessionRoute,
 } from "../fixtures";
 import {
   CANONICAL_ORIGIN,
   DEVICE_ID,
+  HOST_ID,
   PERMISSION_GATE_VOCABULARY,
   click,
   domText,
@@ -67,7 +79,17 @@ import {
   waitFor,
 } from "../support";
 import type { Check, Mounted, ScenarioOptions } from "../support";
+import { currentPath } from "../router-stub";
 import { typeIntoInput } from "./r15-directory";
+
+/**
+ * 本场景的准备凭据：绑定当前已配对节点/来源/设备（假主机只保存/回传，验签在 Owner）。
+ */
+const PREPARATION_RECEIPT = preparationReceipt({
+  ownerNodeId: HOST_ID,
+  origin: CANONICAL_ORIGIN,
+  deviceId: DEVICE_ID,
+});
 
 /** 创建弹层覆盖目录页、目录详情页与对话页；设备方向已无权限维度。 */
 function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions {
@@ -81,6 +103,9 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
     deliverSnapshot: true,
     barrierGlobalSequence: "10",
     events: [],
+    selectPreparation: true,
+    preparationResult: (body) => readyPreparationResult(body, PREPARATION_RECEIPT),
+    extraRoutes: [sessionRoute(PREPARED_SESSION_ID)],
     readResult: () => ({ sessionId: "", resources: { messages: [] }, hasEarlier: false }),
     route: dirRoute(DIRECTORY_ID_ALPHA),
     ...overrides,
@@ -104,7 +129,7 @@ async function openSheetWithAgent(
   click(query(container, '[data-action="open-create-sheet"]'), "新建会话入口");
   await waitFor(() => query(container, "[data-create-sheet]") !== null, "创建弹层打开");
   const disabledBeforeSelect =
-    query(container, '[data-action="submit-create"]')?.hasAttribute("disabled") ?? false;
+    query(container, '[data-action="submit-create"]')?.getAttribute("aria-disabled") === "true";
   click(query(container, `button[data-agent-id="${agentId}"]`), `Agent 选项 ${agentId}`);
   await waitFor(
     () => query(container, `button[data-agent-id="${agentId}"]`)?.getAttribute("data-selected") === "true",
@@ -136,21 +161,22 @@ function createFrame(sent: readonly string[]): string | null {
 }
 
 /**
- * 出站 `session.create` 帧里的 `payload`，逐层收窄后按记录返回；形状不符返回 `null`。
+ * 出站 `session.preparation` 请求里 `action: "allocate"` 的 body；没发出去返回 `null`。
  *
- * 为什么返回原样的键值、而不是给载荷下一句 `{ directoryId: string }` 之类的断言：本文件的
- * 断言要证明的正是**实际发出的那个对象**有哪些键、值是什么；先把形状断言一遍再读，读到的只会
- * 是那句断言的回声。这里只逐层确认「是对象、不是数组」（`null` 由调用点断言）。
+ * 返回原样的键值，而不是先套一句 `{ directoryId: string }` 之类的断言：本文件要证明的正是
+ * **实际发出的那个对象**有哪些键、值是什么；先把形状断言一遍再读，读到的只会是那句断言的回声。
  */
-function createPayloadOf(sent: readonly string[]): Record<string, unknown> | null {
-  const frame = createFrame(sent);
-  if (frame === null) return null;
-  const body = frameBody(frame);
-  if (body === null) return null;
-  const payload: unknown = body["payload"];
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
-  // 到这里「是对象、非数组」已逐层查过，缺的只是索引签名：按记录读键值，键名由断言把关。
-  return payload as Record<string, unknown>;
+function allocateBodyOf(sent: readonly string[]): Record<string, unknown> | null {
+  for (const text of sent) {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
+    // 形状已确证，这里只补索引签名读帧类型。
+    const frame = parsed as Record<string, unknown>;
+    if (frame["type"] !== "session.preparation") continue;
+    const body = frameBody(text);
+    if (body !== null && body["action"] === "allocate") return body;
+  }
+  return null;
 }
 
 /** 出站 `workspace.browse` 帧的请求路径（按发送顺序）。 */
@@ -233,7 +259,15 @@ function negotiateBrowse(mounted: Mounted): void {
       heartbeatIntervalMs: 30000,
       limits: { maxMessageBytes: 1048576, maxPromptBytes: 262144, maxReplayEventsPerBatch: 500 },
     },
-    selectedFeatures: ["core.command-status.v1", "core.event-ack.v1", WORKSPACE_BROWSE_FEATURE, "core.workspace-mkdir.v1"],
+    // 这次注入只**追加**浏览能力：准备能力是新建入口本身的前提，漏掉它会让入口整块变成
+    // 「服务端未协商会话准备能力」，本用例验到的就不是目录选择而是另一个禁用态。
+    selectedFeatures: [
+      "core.command-status.v1",
+      "core.event-ack.v1",
+      SESSION_PREPARATION_FEATURE,
+      WORKSPACE_BROWSE_FEATURE,
+      "core.workspace-mkdir.v1",
+    ],
   });
   expectEqual(
     store.state.selectedFeatures.includes(WORKSPACE_BROWSE_FEATURE),
@@ -244,18 +278,32 @@ function negotiateBrowse(mounted: Mounted): void {
 
 const checks: readonly Check[] = [
   ...[DIRS_ROUTE, dirRoute(DIRECTORY_ID_ALPHA), sessionRoute(SESSION_ALPHA)].map((route): Check => ({
-    name: `R16 创建成功后自动进入新会话（${route.path}）`,
+    name: `R16 新建入口只分配准备并进入同 ID 准备页（${route.path}）`,
     async run() {
-      const sessionId = "dddddddd-0000-4000-8000-0000000000ff";
-      const mounted = await mountScenario(baseScenario({
-        route,
-        extraRoutes: [sessionRoute(sessionId)],
-        holdCommands: ["session.create"],
-      }));
+      const mounted = await mountScenario(
+        baseScenario({
+          route,
+          extraRoutes: [
+            dirRoute(DIRECTORY_ID_ALPHA),
+            sessionRoute(SESSION_ALPHA),
+            sessionRoute(PREPARED_SESSION_ID),
+          ],
+        }),
+      );
+      const sent = (): readonly string[] => mounted.host?.sent ?? [];
       try {
         if (route.path === "/") {
-          await waitFor(() => query(mounted.container, '[data-action="create-session"]') !== null, "目录卡片");
-          click(query(mounted.container, '[data-action="create-session"]'), "目录内新建");
+          await waitFor(
+            () => query(mounted.container, `[data-directory-id="${DIRECTORY_ID_ALPHA}"]`) !== null,
+            "目录卡片",
+          );
+          click(
+            query(
+              query(mounted.container, `[data-directory-id="${DIRECTORY_ID_ALPHA}"]`),
+              '[data-action="create-session"]',
+            ),
+            "目录内新建（alpha）",
+          );
           await waitFor(() => query(mounted.container, '[data-create-sheet]') !== null, "创建弹层");
           click(query(mounted.container, 'button[data-agent-id="codex-a"]'), "选择 Agent");
         } else if (route.path.startsWith("/session/")) {
@@ -266,32 +314,60 @@ const checks: readonly Check[] = [
         } else {
           await openSheetWithAgent(mounted.container, "codex-a");
         }
-        await waitFor(() => !query(mounted.container, '[data-action="submit-create"]')?.hasAttribute("disabled"), "允许提交");
+        await waitFor(
+          () => query(mounted.container, '[data-action="submit-create"]')?.getAttribute("aria-disabled") !== "true",
+          "允许提交",
+        );
         click(query(mounted.container, '[data-action="submit-create"]'), "创建会话");
-        await waitFor(() => createFrame(mounted.host?.sent ?? []) !== null, "创建命令已发送");
-        expectThat(mounted.host?.completeHeldCommand("session.create", { status: "accepted" }) === true, "确认受理");
-        await waitFor(() => query(mounted.container, '[data-create-submission="accepted"]') !== null, "等待终态期间保留弹层");
-        expectThat(query(mounted.container, `[data-session-id="${sessionId}"]`) === null, "仅受理时不得跳转到新会话");
-        expectThat(mounted.host?.completeHeldCommand("session.create", { result: { sessionId } }) === true, "确认创建成功");
-        await waitFor(() => query(mounted.container, `[data-session-id="${sessionId}"]`) !== null, "进入返回的新会话");
-        expectThat(query(mounted.container, '[data-create-sheet]') === null, "导航后弹层已关闭");
-        expectEqual(mounted.composition?.store.createEntry(DIRECTORY_ID_ALPHA).submission.kind, "idle", "上次成功结果已解除弹层关联");
+        await waitFor(() => allocateBodyOf(sent()) !== null, "准备分配已发出");
+
+        // 分配请求只带 Agent/目录/标签页归属；正式 ID 由 Owner 分配。
+        const allocate = allocateBodyOf(sent());
+        expectThat(allocate !== null, "点击提交后必须发出 allocate");
+        expectEqual(
+          Object.keys(allocate).sort(),
+          ["action", "agentId", "operationId", "tabNonce", "workspace"],
+          "allocate 的键集合必须闭合",
+        );
+        expectEqual(allocate["agentId"], "codex-a", "allocate 的 Agent 引用");
+        expectEqual(allocate["workspace"], { directoryId: DIRECTORY_ID_ALPHA }, "目录引用用已登记标识");
+        expectAbsent(JSON.stringify(allocate), "sessionId", "分配请求不得由客户端指定正式 ID");
+        expectEqual(createFrame(sent()), null, "新入口不得发送 session.create");
+
+        // 页面进入后端分配的准备页：同一 URL、准备形态，弹层关闭。
+        await waitFor(() => currentPath() === `/session/${PREPARED_SESSION_ID}`, "进入后端分配的同一 ID");
+        await waitFor(
+          () => query(mounted.container, "[data-preparation-title]") !== null,
+          "准备页渲染",
+        );
+        expectEqual(
+          textOf(query(mounted.container, "[data-preparation-title]")),
+          "新会话（准备中）",
+          "准备页带着后端分配的 ID（路由即该 ID）",
+        );
+        expectEqual(query(mounted.container, "[data-create-sheet]"), null, "导航后弹层已关闭");
+        // 首条之前不写会话行：目录/快照里没有这个 ID。
+        expectEqual(
+          mounted.composition?.store.state.resources?.sessions.some((item) => item.sessionId === PREPARED_SESSION_ID) ?? false,
+          false,
+          "准备不进入会话清单",
+        );
       } finally {
         await mounted.unmount();
       }
     },
   })),
   {
-    name: "R16-1 目录已知的入口：目录/路径两行逐字来自服务端，载荷恰好是 agentId 与 directoryId",
+    name: "R16-1 目录已知的入口：目录/路径两行逐字来自服务端，allocate 恰好带 agentId 与 directoryId",
     async run() {
       const mounted = await mountScenario(baseScenario());
       try {
         const { sheet, disabledBeforeSelect } = await openSheetWithAgent(mounted.container, "codex-a");
         expectEqual(disabledBeforeSelect, false, "已自动选中默认 Agent，提交按钮可点");
         expectEqual(
-          query(mounted.container, '[data-action="submit-create"]')?.hasAttribute("disabled") ?? true,
-          false,
-          "选中 Agent 后提交按钮应可点",
+          query(mounted.container, '[data-action="submit-create"]')?.getAttribute("aria-disabled"),
+          null,
+          "选中 Agent 后提交按钮应可点（Pressable 可用时不写 aria-disabled）",
         );
 
         // 目录块是「已知目录」那一形态：展示名与路径各一行，路径逐字是快照下发的那一份。
@@ -312,24 +388,25 @@ const checks: readonly Check[] = [
         expectEqual(queryAll(sheet, "input").length, 0, "弹层不得呈现目录输入框");
 
         click(query(mounted.container, '[data-action="submit-create"]'), "提交创建");
-        await waitFor(() => createFrame(mounted.host?.sent ?? []) !== null, "发出 session.create 帧");
-        const frame = createFrame(mounted.host?.sent ?? []);
-        expectThat(frame !== null, "点击提交后必须真的发出一帧 session.create");
+        await waitFor(() => allocateBodyOf(mounted.host?.sent ?? []) !== null, "发出 allocate 帧");
+        const allocate = allocateBodyOf(mounted.host?.sent ?? []);
+        expectThat(allocate !== null, "点击提交后必须真的发出一帧 session.preparation 的 allocate");
 
-        const payload = createPayloadOf(mounted.host?.sent ?? []);
-        expectThat(payload !== null, "session.create 帧里必须带一个对象载荷");
         expectEqual(
-          Object.keys(payload).sort(),
-          ["agentId", "directoryId"],
-          "目录已知时载荷的键集必须恰好是两个引用",
+          Object.keys(allocate).sort(),
+          ["action", "agentId", "operationId", "tabNonce", "workspace"],
+          "目录已知时分配请求的键集必须闭合",
         );
-        expectEqual(payload["directoryId"], DIRECTORY_ID_ALPHA, "载荷里的目录引用");
-        expectEqual(payload["agentId"], "codex-a", "载荷里的 Agent 引用");
+        expectEqual(allocate["workspace"], { directoryId: DIRECTORY_ID_ALPHA }, "工作目录引用恰好一个标识");
+        expectEqual(allocate["agentId"], "codex-a", "载荷里的 Agent 引用");
+        expectAbsent(JSON.stringify(allocate), "sessionId", "分配请求不得由客户端指定正式 ID");
+        expectEqual(createFrame(mounted.host?.sent ?? []), null, "新入口不得发送 session.create");
 
         // MUST NOT：帧**原文**里不得携带 Provider/MCP 凭据，也不得凭空多带一条宿主路径。
-        expectNone(frame ?? "", FORBIDDEN_IN_PAYLOAD, "session.create 帧里出现了越界字段名");
-        expectAbsent(frame ?? "", "D:", "session.create 帧里出现了本机盘符路径");
-        expectAbsent(frame ?? "", "secret", "session.create 帧里出现了敏感片段");
+        const frame = JSON.stringify(allocate);
+        expectNone(frame, FORBIDDEN_IN_PAYLOAD, "allocate 帧里出现了越界字段名");
+        expectAbsent(frame, "D:", "allocate 帧里出现了本机盘符路径");
+        expectAbsent(frame, "secret", "allocate 帧里出现了敏感片段");
       } finally {
         await mounted.unmount();
       }
@@ -372,10 +449,12 @@ const checks: readonly Check[] = [
         const mounted = await mountScenario(baseScenario({ authenticate }));
         try {
           // 取模型前必须先等**该场景的握手真的走到那一步**，否则读到的可能只是「什么都还没发生」。
+          // 认证起点还要等到在线：`createEntry` 的准备可用性在「还没连上」与「已连上却没协商到」
+          // 之间分文案，入口的禁用状态也只在前者下由连接造成（与本用例的门控主题无关）。
           if (authenticate) {
             await waitFor(
-              () => mounted.composition?.store.state.deviceId !== null,
-              "认证事实（deviceId）已写入 store",
+              () => mounted.composition?.store.state.connection.state === "online",
+              "认证并追平（在线）",
             );
           } else {
             await waitFor(
@@ -415,7 +494,7 @@ const checks: readonly Check[] = [
           const permissionMarkers = queryAll(host, "[data-create-permission]").length;
           const effectNote = textOf(query(host, "[data-create-note]"));
           const inputs = queryAll(host, "input").length;
-          const disabledWithoutAgent = buttonWithoutAgent.hasAttribute("disabled");
+          const disabledWithoutAgent = buttonWithoutAgent.getAttribute("aria-disabled") === "true";
 
           // 认证起点有快照 → 目录块是「已知目录」那一形态、目录已经定下来，因此选中 Agent 之后必须
           // 可点：这就是「入口不因权限/认证不可用」的可观察形式。
@@ -426,7 +505,7 @@ const checks: readonly Check[] = [
           if (authenticate) {
             render("codex-a");
             await waitFor(
-              () => (submitButton()?.hasAttribute("disabled") ?? true) === false,
+              () => submitButton()?.getAttribute("aria-disabled") !== "true",
               `${label}：选中 Agent 后提交按钮必须可点`,
             );
           } else {
@@ -571,23 +650,30 @@ const checks: readonly Check[] = [
           "Agent 被选中",
         );
         click(query(mounted.container, '[data-action="submit-create"]'), "提交创建");
-        await waitFor(() => createFrame(mounted.host?.sent ?? []) !== null, "发出 session.create 帧");
-        const payload = createPayloadOf(mounted.host?.sent ?? []);
-        expectThat(payload !== null, "session.create 帧里必须带一个对象载荷");
+        await waitFor(() => allocateBodyOf(mounted.host?.sent ?? []) !== null, "发出 allocate 帧");
+        const allocate = allocateBodyOf(mounted.host?.sent ?? []);
+        expectThat(allocate !== null, "点击提交后必须发出 allocate");
         expectEqual(
-          Object.keys(payload).sort(),
-          ["agentId", "directoryId"],
-          "从已登记目录选出来的目录引用走标识，键集恰好两个",
+          Object.keys(allocate).sort(),
+          ["action", "agentId", "operationId", "tabNonce", "workspace"],
+          "分配请求的键集必须闭合",
         );
-        expectEqual(payload["directoryId"], DIRECTORY_ID_BETA, "载荷里的目录引用是选中的那一项");
-        expectNone(createFrame(mounted.host?.sent ?? []) ?? "", FORBIDDEN_IN_PAYLOAD, "帧里出现了越界字段名");
+        expectEqual(
+          allocate["workspace"],
+          { directoryId: DIRECTORY_ID_BETA },
+          "从已登记目录选出来的引用走标识，且只有这一个键",
+        );
+        expectEqual(allocate["agentId"], "codex-a", "分配请求里的 Agent 引用");
+        expectAbsent(JSON.stringify(allocate), "sessionId", "分配请求不得指定正式 ID");
+        expectNone(JSON.stringify(allocate), FORBIDDEN_IN_PAYLOAD, "帧里出现了越界字段名");
+        expectEqual(createFrame(mounted.host?.sent ?? []), null, "新入口不得发送 session.create");
       } finally {
         await mounted.unmount();
       }
     },
   },
   {
-    name: "R16-5 协商到浏览能力：逐层选定、已登记标注、新建一层目录 → 载荷恰好三个键",
+    name: "R16-5 协商到浏览能力：逐层选定、已登记标注、新建一层目录 → allocate 的 workspace 是选定路径",
     async run() {
       const mounted = await mountScenario(
         baseScenario({ route: DIRS_ROUTE, holdCommands: ["workspace.browse", "workspace.mkdir"] }),
@@ -595,6 +681,12 @@ const checks: readonly Check[] = [
       const sent = (): readonly string[] => mounted.host?.sent ?? [];
       try {
         await waitFor(() => query(mounted.container, '[data-action="create-session-browse"]') !== null, "目录页渲染");
+        // 顶部入口的「提交」在准备能力未协商/未连上时是禁用的；本用例要验的是**目录**这一层
+        // 的空选校验，因此先等连接真正在线（否则点击被禁用态吃掉，行内校验永远不出现）。
+        await waitFor(
+          () => mounted.composition?.store.state.connection.state === "online",
+          "连接已到在线",
+        );
         // 目录浏览要在浏览器里被验，就得先把它协商出来（假主机只协商两条必需 feature）。
         negotiateBrowse(mounted);
 
@@ -603,6 +695,7 @@ const checks: readonly Check[] = [
         click(query(mounted.container, '[data-action="submit-create"]'), "未选目录时提交");
         await waitFor(() => query(mounted.container, '[data-directory-required="true"]')?.textContent === "未选择目录", "目录行标记未选目录");
         expectEqual(createFrame(sent()), null, "未选目录不派发创建请求");
+        expectEqual(allocateBodyOf(sent()), null, "未选目录也不派发分配");
         click(query(mounted.container, '[data-action="open-directory-picker"]'), "选择文件夹");
         await waitFor(() => query(mounted.container, '[data-directory-picker="open"]') !== null, "选择器打开");
 
@@ -627,8 +720,8 @@ const checks: readonly Check[] = [
           "根层不可选，但仍呈现该控件",
         );
         expectEqual(
-          query(mounted.container, '[data-action="confirm-directory"]')?.hasAttribute("disabled") ?? false,
-          true,
+          query(mounted.container, '[data-action="confirm-directory"]')?.getAttribute("aria-disabled"),
+          "true",
           "根列表本身不是目录，「选择此文件夹」应禁用",
         );
 
@@ -688,6 +781,7 @@ const checks: readonly Check[] = [
         await waitFor(() => sent().some((frame) => frame.includes('"command":"workspace.mkdir"')), "发出独立新建请求");
         expectThat(query(mounted.container, '[data-directory-picker]') !== null, "新建时选择器保持打开");
         expectEqual(createFrame(sent()), null, "新建文件夹不得创建会话");
+        expectEqual(allocateBodyOf(sent()), null, "新建文件夹不得分配准备");
         mounted.host?.completeHeldCommand("workspace.mkdir", { result: { created: true } });
         await waitForBrowseRequest(sent, 4);
         mounted.host?.completeHeldCommand("workspace.browse", {
@@ -708,19 +802,21 @@ const checks: readonly Check[] = [
           "Agent 被选中",
         );
         click(query(mounted.container, '[data-action="submit-create"]'), "提交创建");
-        await waitFor(() => createFrame(sent()) !== null, "发出 session.create 帧");
-        const payload = createPayloadOf(sent());
-        expectThat(payload !== null, "session.create 帧里必须带一个对象载荷");
-        // 三键：目录引用走路径那一支，并显式带上「不存在则先创建」。
+        await waitFor(() => allocateBodyOf(sent()) !== null, "发出 allocate 帧");
+        const allocate = allocateBodyOf(sent());
+        expectThat(allocate !== null, "点击提交后必须发出 allocate");
         expectEqual(
-          Object.keys(payload).sort(),
-          ["agentId", "workspacePath"],
-          "已建好目录不再请求延迟创建",
+          Object.keys(allocate).sort(),
+          ["action", "agentId", "operationId", "tabNonce", "workspace"],
+          "分配请求的键集必须闭合",
         );
-        expectEqual(payload["workspacePath"], "D:\\work\\api", "载荷里的路径是选定的那一层");
-        expectEqual(payload["createIfMissing"], undefined, "已建好的目录不再请求延迟创建");
-        expectEqual(payload["agentId"], "codex-a", "载荷里的 Agent 引用");
-        expectNone(createFrame(sent()) ?? "", FORBIDDEN_IN_PAYLOAD, "帧里出现了越界字段名");
+        // 目录引用走路径那一支；准备阶段没有「延迟创建」这个载荷字段（目录已由浏览/新建确定）。
+        expectEqual(allocate["workspace"], { workspacePath: "D:\\work\\api" }, "工作目录是选定的那一层");
+        expectEqual(allocate["createIfMissing"], undefined, "准备分配没有 createIfMissing 字段");
+        expectEqual(allocate["agentId"], "codex-a", "分配请求里的 Agent 引用");
+        expectAbsent(JSON.stringify(allocate), "sessionId", "分配请求不得指定正式 ID");
+        expectNone(JSON.stringify(allocate), FORBIDDEN_IN_PAYLOAD, "帧里出现了越界字段名");
+        expectEqual(createFrame(sent()), null, "新入口不得发送 session.create");
       } finally {
         await mounted.unmount();
       }

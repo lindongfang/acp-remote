@@ -39,7 +39,9 @@ import type {
   SyncRemoteUnavailable,
   SyncRemoteUnsubscribe,
   SyncResetRequired,
+  SyncSessionPreparationResult,
   SyncSessionViewResult,
+  SessionPreparationBody,
   SyncSnapshotBegin,
   SyncSnapshotChunk,
   SyncSnapshotEnd,
@@ -205,6 +207,13 @@ export type SyncClientEvent =
    * 不得恢复查看状态，也不得重新添加查看者。
    */
   | { readonly kind: "session_view_result"; readonly result: SyncSessionViewResult }
+  /**
+   * `session.preparation.result`（`core.session-preparation.v1`，§11.9）。
+   *
+   * 临时控制面的应答：消费方按 `connectionId`/`operationId` 判定是否仍对应最新一次操作
+   * （迟到的旧代结果不得覆盖新页面）。它**不是** owned 业务事件，也没有收据。
+   */
+  | { readonly kind: "session_preparation_result"; readonly result: SyncSessionPreparationResult }
   /** 一条重复事件被丢弃（诊断用，**不**触发任何副作用）。 */
   | { readonly kind: "duplicate_dropped"; readonly eventId: Uuid }
   /**
@@ -294,6 +303,7 @@ export const SUPPORTED_FEATURES = [
   "core.file-diff.v1",
   "core.local-catalog.v1",
   "core.session-create.v1",
+  "core.session-preparation.v1",
   "core.session-history.v1",
   "core.snapshot.v1",
   "core.workspace-browse.v1",
@@ -354,6 +364,14 @@ export const SESSION_TITLE_FEATURE = "core.session-title.v1";
 /** 附件传输（§3.4）。与 `src/protocol/attachment.ts` 的常量同值，只在这里导出便于消费方取用。 */
 export { ATTACHMENT_FEATURE } from "../protocol";
 
+/**
+ * 会话准备（`core.session-preparation.v1`，§11.9）。
+ *
+ * 客户端**声明**它，但只在服务端选中后才发送 `session.preparation` / `session.start`：
+ * 未选中时新建入口明确禁用并说明原因，绝不退回旧 `session.create` 偷偷持久化
+ * （spec「兼容边界与旧会话不变」）。
+ */
+export const SESSION_PREPARATION_FEATURE = "core.session-preparation.v1";
 /** 一条连接的构造输入（端口由组合根注入）。 */
 export interface SyncConnectionOptions {
   readonly hostId: Uuid;
@@ -702,6 +720,14 @@ export class SyncConnection {
       case "session.view.result":
         // 查看应答只交给消费方；本层不猜它是否仍对应最新选择（版本/连接代属于 feature 层）。
         this.#onEvent({ kind: "session_view_result", result: message });
+        return;
+      case "session.preparation.result":
+        // 准备应答同样只交给消费方：`operationId` 是否仍对应当前操作属于 feature 层。
+        this.#onEvent({ kind: "session_preparation_result", result: message });
+        return;
+      case "session.preparation":
+        // 服务端不会向客户端发起准备请求：形状合法但角色是错的。
+        this.#onEvent({ kind: "rejected", reason: "unexpected_type", detail: message.type });
         return;
       case "session.view":
         // 服务端不会向客户端发起查看声明：形状合法但角色是错的。
@@ -1333,6 +1359,25 @@ export class SyncConnection {
       connectionId: this.#requireConnectionId(),
       connectionSequence: this.#nextOutboundSequence(),
       body: { sessionId: input.sessionId, viewVersion: input.viewVersion },
+    });
+    return true;
+  }
+
+  /**
+   * 发送一条准备控制帧（`session.preparation`，§11.9）。
+   *
+   * 只在**已认证**连接上发送并返回 `true`：认证前的信封没有 `connectionId`，服务端也无从绑定
+   * 设备与凭据。调用方（feature 层）负责只在协商了 `core.session-preparation.v1` 时调用它。
+   */
+  sendPreparation(body: SessionPreparationBody): boolean {
+    if (this.#closed || this.#authenticated === null) return false;
+    this.#send({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "session.preparation",
+      messageId: this.#random.uuid(),
+      connectionId: this.#requireConnectionId(),
+      connectionSequence: this.#nextOutboundSequence(),
+      body,
     });
     return true;
   }

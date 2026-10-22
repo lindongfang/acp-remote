@@ -676,6 +676,12 @@ export interface CreateSessionEntryModel {
   readonly submission: CreateSubmissionModel;
   /** 终态判定：结果不确定时为真，页面据此保留显眼提示直到用户处理。 */
   readonly uncertainRequiresUserAction: boolean;
+  /**
+   * 会话准备能力的可用性（`core.session-preparation.v1`）。
+   *
+   * 未协商时入口**明确不可用**并给出原因：MUST NOT 退回旧 `session.create` 偷偷持久化。
+   */
+  readonly preparation: { readonly available: boolean; readonly reason: string | null };
 }
 
 /** 构造创建弹层模型的输入（全部来自快照、浏览状态与命令记录）。 */
@@ -705,6 +711,11 @@ export interface CreateSessionEntryInput {
    * （{@link BrowseUnavailableReason}：未 `online` 时本机还不知道服务端支持什么）。
    */
   readonly connectionOnline: boolean;
+  /**
+   * 准备能力的可用性（由仓库按协商结果给出）。缺省视为可用——既有纯模型用例不必逐条补参数，
+   * 但仓库**总是**显式传入，因此未协商的降级在真实链路里不会被这里漏掉。
+   */
+  readonly preparation?: { readonly available: boolean; readonly reason: string | null } | undefined;
 }
 
 /** 目录块旁的分支提示（四类，见文件头）。 */
@@ -770,6 +781,7 @@ export function buildCreateSessionEntryModel(input: CreateSessionEntryInput): Cr
     agents: input.agents,
     submission,
     uncertainRequiresUserAction: submission.kind === "uncertain",
+    preparation: input.preparation ?? { available: true, reason: null },
   };
 }
 

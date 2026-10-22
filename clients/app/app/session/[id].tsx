@@ -32,7 +32,14 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactElement } from "react";
 
-import { ConversationStream, CreateSessionSheet, DiagnosticsDrawer, RuntimeUnavailable } from "../../src/components";
+import {
+  ConversationStream,
+  CreateSessionSheet,
+  DiagnosticsDrawer,
+  PreparationPanel,
+  PreparationStatusBanner,
+  RuntimeUnavailable,
+} from "../../src/components";
 import type { ConversationSecondaryView, FilePreviewArtifact } from "../../src/components";
 import { toastStore } from "../../src/components/shell/toast";
 import type { Palette } from "../../src/components/theme";
@@ -147,17 +154,128 @@ export default function SessionRoute(): ReactElement {
     setFileReturnView(null);
     if (store === null || sessionId === null) return;
     store.setActiveConversationSession(sessionId);
-    store.loadSession(sessionId);
+    // 本标签页有合法准备时按准备页呈现；没有则按正式会话处理（未知 URL 只在权威不存在后回目录）。
+    // 正式读取**只**在没有准备时开始；受理/`committed` 之后的读取由仓库的转换副作用发起
+    // （`#enterFormalSession`），挂载本身不能替准备页伪造一个线程条目。
+    let cancelled = false;
+    void store.openPreparationSession(sessionId).then((hasPreparation) => {
+      if (cancelled || hasPreparation) return;
+      store.loadSession(sessionId);
+    });
     // 离开本会话（切换/返回目录/卸载）时先尝试提交原会话的标题编辑，再放弃未保存输入；
     // 已发出的命令按原 requestId 继续归属，迟到结果不会写进新会话。
     return () => {
+      cancelled = true;
       store.leaveConversationSession(sessionId);
     };
   }, [store, sessionId]);
 
+  /**
+   * 陌生 URL 回目录：只有**权威结论**是「不存在」才 `replace`，不留失效历史条目。
+   *
+   * 「存在」的判据必须是权威读取页（`threads.page`），不能用 `conversationPage`——读取派发本身
+   * 就会建立线程条目，用它会永远认为会话存在，回目录分支永远不可达。
+   *
+   * 必须排除的误判来源：连接不在 online（离线/认证未完成）、快照尚未就绪、本标签页的准备
+   * 仍在恢复或是准备页、会话其实在快照里、以及读取尚未给出权威失败结论。
+   */
+  useEffect(() => {
+    if (store === null || state === null || sessionId === null) return;
+    if (state.connection.state !== "online" || state.resources === null) return;
+    if (store.preparationRestoring(sessionId) || store.preparationPage(sessionId) !== null) return;
+    const thread = state.threads.get(sessionId);
+    if (thread?.page != null) return;
+    // 首屏读取尚未返回：等它的权威失败（或成功页）再判定，不能按「还没到」跳走。
+    if (thread?.pagingError == null) return;
+    if (state.resources.sessions.some((summary) => summary.sessionId === sessionId)) return;
+    router.replace("/");
+  }, [store, state, sessionId, router]);
+
+  /**
+   * 旧准备材料整体失效（`preparation.store_rebuilt`）：仓库已丢弃 receipt，页面回目录重新开始。
+   * 不在渲染期导航，也不伪造一个可继续点击的准备页。
+   */
+  useEffect(() => {
+    if (store === null || sessionId === null) return;
+    const preparation = store.preparationPage(sessionId);
+    if (preparation === null || !preparation.restartRequired) return;
+    store.leavePreparation(sessionId);
+    router.replace("/");
+  }, [store, state, sessionId, router]);
+
   if (store === null || state === null || sessionId === null) return <RuntimeUnavailable route="session" />;
 
   const model = store.conversationPage(sessionId);
+  const preparation = store.preparationPage(sessionId);
+  // 准备页复用同一路由与同一页面实例：`phase` 是唯一判据。受理/`committed` 之后才改读正式状态；
+  // 此前即使读取派发已经建了线程条目，也不能把准备页替换掉（准备才是这一阶段的事实）。
+  if (preparation !== null && preparation.phase !== "accepted" && preparation.phase !== "committed") {
+    return (
+      <PreparationPanel
+        model={preparation}
+        agents={store.agentCatalog()}
+        directories={store.registeredDirectories()}
+        onDraftChange={(text) => {
+          store.setPreparationDraft(sessionId, text);
+        }}
+        onSubmit={() => {
+          const outcome = store.submitPreparation(sessionId, preparation.text);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
+        onSelectMode={(modeId) => {
+          const outcome = store.selectPreparationMode(sessionId, modeId);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
+        onSelectConfig={(configId, value) => {
+          const outcome = store.setPreparationConfigValue(sessionId, configId, value);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
+        onSelectAgent={(agentId) => {
+          void store.changePreparationAgent(sessionId, agentId).then((outcome) => {
+            if (!outcome.ok) {
+              toastStore.show(outcome.reason);
+              return;
+            }
+            // 后端分配了新 ID：旧响应按旧会话键归并，不会覆盖新页面。
+            router.replace(`/session/${encodeURIComponent(outcome.sessionId)}`);
+          });
+        }}
+        onSelectDirectory={(directoryId) => {
+          const directory = store.registeredDirectories().find((item) => item.directoryId === directoryId);
+          if (directory === undefined) return;
+          void store
+            .changePreparationWorkspace(sessionId, { directoryId, path: directory.path })
+            .then((outcome) => {
+              if (!outcome.ok) {
+                toastStore.show(outcome.reason);
+                return;
+              }
+              router.replace(`/session/${encodeURIComponent(outcome.sessionId)}`);
+            });
+        }}
+        onPickAttachment={(kind) => {
+          void store.pickAttachments(sessionId, kind).then((outcome) => {
+            if (!outcome.ok) toastStore.show(outcome.reason);
+          });
+        }}
+        onRemoveAttachment={(localId) => {
+          store.removeAttachment(sessionId, localId);
+        }}
+        onRetryAttachments={() => {
+          const outcome = store.retryAttachments(sessionId);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
+        onRetry={() => {
+          const outcome = store.retryPreparation(sessionId);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
+        onLeave={() => {
+          store.leavePreparation(sessionId);
+          router.replace("/");
+        }}
+      />
+    );
+  }
   const thread = state.threads.get(sessionId);
   const remote = state.remoteSessions.get(sessionId);
   // 摘要先于正文到达时，不展示尚未就绪的会话头、分页与配置占位文案。
@@ -241,6 +359,16 @@ export default function SessionRoute(): ReactElement {
 
   return (
     <View role="main" style={theme.dark ? STYLES.dark.page : STYLES.light.page}>
+      {/* 首条已保存后的状态条：不确定/失败显眼保留，不自动消失、不自动重发。 */}
+      {preparation === null ? null : (
+        <PreparationStatusBanner
+          model={preparation}
+          onVerify={() => {
+            const outcome = store.retryPreparation(sessionId);
+            if (!outcome.ok) toastStore.show(outcome.reason);
+          }}
+        />
+      )}
       <ConversationStream
         model={model}
         // 两套翻页：消息一页、结构化历史一页（各自续取自己的游标，互不影响）。
@@ -466,25 +594,26 @@ export default function SessionRoute(): ReactElement {
       {sheetDirectoryId === null ? null : (
         <CreateSessionSheet
           model={store.createEntry(sheetDirectoryId)}
-          onCreated={(createdSessionId) => {
-            store.closeCreateSheet();
-            router.push(`/session/${encodeURIComponent(createdSessionId)}`);
-          }}
           selectedAgentId={agentId}
           submitIssue={createIssue}
           onSelectAgent={(next) => {
             setCreateIssue(null);
             setAgentId(next);
           }}
-          onSubmit={(input) => {
-            // 目录标识由本页给出（页面用的那个目录上下文），载荷里的其余键原样上抛。
-            const outcome = store.submitCreateSession({ ...input, directoryId: sheetDirectoryId });
-            if (!outcome.ok) {
-              setCreateIssue(outcome.reason);
-              setAgentId(null);
-            } else {
-              setCreateIssue(null);
-            }
+          onSubmit={({ agentId: selected, directoryPath }) => {
+            // 目录标识由本页给出；入口只做 prepare → allocate，首条发送前不保存会话。
+            void store
+              .beginPreparation({ directoryId: sheetDirectoryId, agentId: selected, directoryPath })
+              .then((outcome) => {
+                if (!outcome.ok) {
+                  setCreateIssue(outcome.reason);
+                  setAgentId(null);
+                  return;
+                }
+                setCreateIssue(null);
+                store.closeCreateSheet();
+                router.push(`/session/${encodeURIComponent(outcome.sessionId)}`);
+              });
           }}
           onDismissUncertain={() => {
             const requestId = state.createRequestIds.get(sheetDirectoryId);

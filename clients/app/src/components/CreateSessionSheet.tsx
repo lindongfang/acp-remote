@@ -554,7 +554,9 @@ export function CreateSessionSheet({
 
   // 缺少目录通过点击后的行内校验反馈；不派发创建请求。
   const directorySelected = directory.kind === "known" || selection !== null;
-  const disabled = selectedAgentId === null || !isSubmissionAvailable(model.submission);
+  // 准备能力未协商/未连上时入口**明确不可用**：既不禁用却偷偷走旧 `session.create`，也不静默失败。
+  const disabled =
+    selectedAgentId === null || !model.preparation.available || !isSubmissionAvailable(model.submission);
   useEffect(() => {
     if (directorySelected) setDirectoryRequired(false);
   }, [directorySelected]);
@@ -707,6 +709,11 @@ export function CreateSessionSheet({
       {submitIssue === null ? null : (
         <View role="alert" style={styles.failure} dataSet={{ createSubmitIssue: "true" }}>
           <Text style={styles.failureText}>{submitIssue}</Text>
+        </View>
+      )}
+      {model.preparation.available ? null : (
+        <View role="alert" style={styles.failure} dataSet={{ createUnavailable: "true" }}>
+          <Text style={styles.failureText}>{model.preparation.reason ?? "当前不能新建会话"}</Text>
         </View>
       )}
       <Submission submission={model.submission} onDismissUncertain={onDismissUncertain} />

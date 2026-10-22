@@ -429,3 +429,65 @@ describe("base64url 编解码", () => {
     expect(bytesEqual(new Uint8Array([1, 2]), new Uint8Array([1, 2, 3]))).toBe(false);
   });
 });
+describe("准备控制帧：闭合词表不接受原型键", () => {
+  const TAB_NONCE = "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8";
+  const SESSION_ID = "6f1c2d3e-4a5b-4c6d-8e7f-901122334455";
+
+  function preparation(body: Record<string, unknown>): string {
+    return JSON.stringify({
+      protocolVersion: 1,
+      type: "session.preparation",
+      messageId: "9f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f",
+      connectionId: CONNECTION_ID,
+      connectionSequence: "12",
+      body,
+    });
+  }
+
+  function preparationResult(body: Record<string, unknown>): string {
+    return JSON.stringify({
+      protocolVersion: 1,
+      type: "session.preparation.result",
+      messageId: "9f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e60",
+      connectionId: CONNECTION_ID,
+      connectionSequence: "13",
+      body,
+    });
+  }
+
+  it("合法 allocate 被接受（对照：拒绝不是因为别的字段）", () => {
+    const decoded = decodeWireMessage(preparation({
+      operationId: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      action: "allocate",
+      agentId: "codex-a",
+      workspace: { directoryId: "work-api" },
+      tabNonce: TAB_NONCE,
+    }));
+    expect(decoded.ok).toBe(true);
+  });
+
+  it("action 为原型键（constructor/toString）按 field_type 拒绝", () => {
+    for (const action of ["constructor", "toString", "__proto__"]) {
+      const decoded = decodeWireMessage(preparation({
+        operationId: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+        action,
+        agentId: "codex-a",
+        workspace: { directoryId: "work-api" },
+        tabNonce: TAB_NONCE,
+      }));
+      expect(decoded).toMatchObject({ ok: false, reason: "field_type" });
+    }
+  });
+
+  it("结果 status 与 stale.reason 的原型键同样被拒", () => {
+    const base = {
+      operationId: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      action: "renew",
+      sessionId: SESSION_ID,
+    };
+    expect(decodeWireMessage(preparationResult({ ...base, status: "constructor" })))
+      .toMatchObject({ ok: false, reason: "field_type" });
+    expect(decodeWireMessage(preparationResult({ ...base, status: "stale", reason: "toString" })))
+      .toMatchObject({ ok: false, reason: "field_type" });
+  });
+});
