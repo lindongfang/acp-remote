@@ -368,6 +368,25 @@ impl PreparationDirectory {
     }
 
     /// 回收已过租约且未冻结的准备：容量确认释放后保留有界 tombstone；失败继续占位。
+    /// 当前已过期且未冻结的条目。组合根据此先释放真实 Agent 端点，再经 [`Self::release`]
+    /// 交还容量；不直接在目录里删条目，避免端点仍活着却丢失归属。
+    pub fn expired(&self, now: Timestamp) -> Vec<(SessionId, ResourceGeneration)> {
+        let state = lock(&self.state);
+        state
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                !entry.frozen
+                    && !entry.releasing
+                    && entry
+                        .lease_expires_at
+                        .as_ref()
+                        .is_some_and(|expires| now >= *expires)
+            })
+            .map(|(session, entry)| (session.clone(), entry.generation))
+            .collect()
+    }
+
     pub async fn sweep_expired(&self, now: Timestamp) -> usize {
         let expired: Vec<(SessionId, ResourceGeneration)> = {
             let state = lock(&self.state);
@@ -533,7 +552,8 @@ impl PreparationDirectory {
                 )),
             };
         }
-        if self.capacity.reserve(session.clone(), now.clone()).await? == Admission::CapacityExceeded {
+        if self.capacity.reserve(session.clone(), now.clone()).await? == Admission::CapacityExceeded
+        {
             return Ok(AllocatePreparationOutcome::CapacityExceeded);
         }
         let Some(expires_at) = now.checked_add_millis(PREPARATION_LEASE_MS) else {
@@ -576,10 +596,9 @@ impl PreparationDirectory {
             }
         };
         let state = lock(&self.state);
-        let entry = state
-            .entries
-            .get(session)
-            .ok_or(PortError::Corrupt("preparation entry vanished after insert"))?;
+        let entry = state.entries.get(session).ok_or(PortError::Corrupt(
+            "preparation entry vanished after insert",
+        ))?;
         let view = self.view_of(session, entry);
         debug_assert_eq!(view.generation, generation);
         Ok(AllocatePreparationOutcome::Allocated(view))

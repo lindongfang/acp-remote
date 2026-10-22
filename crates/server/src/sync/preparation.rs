@@ -25,15 +25,15 @@
 //! 组合根以 [`PreparationEndpoints`] 注入），也不调用平级 adapter。
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use acp_core::model::{
     Actor, AgentId, AgentRef, AllocatePreparation, AllocatePreparationOutcome, ConfigOption,
-    ConfigOptionId, ConfigValue, DeviceId, Digest, FirstSubmissionId, FirstSubmissionRecord, ModeId,
-    ModeState, NodeId, Nonce, PortError, PreparationDecision, PreparationFailureReason,
+    ConfigOptionId, ConfigValue, DeviceId, Digest, FirstSubmissionId, FirstSubmissionRecord,
+    ModeId, ModeState, NodeId, Nonce, PortError, PreparationDecision, PreparationFailureReason,
     PreparationOwner, PreparationReleaseOutcome, PreparationStaleReason, PreparationState,
-    PreparationView, ResourceGeneration, ResolvedWorkspace, RuntimeEpoch, ServerEpoch, SessionId,
+    PreparationView, ResolvedWorkspace, ResourceGeneration, RuntimeEpoch, ServerEpoch, SessionId,
     Timestamp, UnavailableKind,
 };
 use acp_core::ports::{FirstSubmission, PreparationAttachmentStaging};
@@ -226,6 +226,8 @@ pub struct PreparationOptions {
     pub modes: ModeState,
     /// 配置项。
     pub config: Vec<ConfigOption>,
+    /// 是否存在被 Agent 拒绝的草稿选择（`true` 时不得派发首条：保留选择并阻止发送，`design.md` D4）。
+    pub blocks_dispatch: bool,
 }
 
 /// 临时端点的释放结果。`Failed`/`Uncertain` **保留**容量占位（关闭失败/未知照旧占位）。
@@ -254,8 +256,24 @@ pub trait PreparationEndpoints: Send + Sync {
         request: PreparationConfigure,
     ) -> Result<PreparationOptions, PortError>;
 
+    /// 把已建立的准备端点转正为正式所有权，返回同一端点用于首次派发（`design.md` D1）。
+    ///
+    /// 只认精确资源代：旧代句柄、已释放句柄与「目录里没有该代」都必须显式失败，不能转正另一份资源。
+    /// 调用方在失败时负责 `abort_submission` / 结算，**不**自动重派。
+    async fn claim(
+        &self,
+        session: SessionId,
+        generation: u64,
+    ) -> Result<Arc<dyn acp_core::ports::SessionEndpoint>, PortError>;
+
     /// 按精确资源代释放临时端点。
     async fn release(&self, session: SessionId, generation: u64) -> EndpointRelease;
+
+    /// 关闭序列：释放仍持有的全部临时端点（组合根在关闭 Agent 宿主**之前**调用）。
+    ///
+    /// 释放失败不返回值（关闭路径已经在收尾），但实现**不得**伪造成释放成功：失败的名字/数量由实现
+    /// 自己记日志。它不接受参数，因此不会误关某个仍然活着的正式会话以外的东西。
+    async fn release_all(&self);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -388,7 +406,10 @@ impl Preparations {
 
     /// 该会话的正式受理投影（`restore`/`configure`/`renew`/`release` 的 committed 分支）。
     pub async fn committed(&self, session: &SessionId) -> Result<Option<Committed>, PortError> {
-        let record = self.first_submission.first_submission(session.clone()).await?;
+        let record = self
+            .first_submission
+            .first_submission(session.clone())
+            .await?;
         Ok(record.and_then(committed_of))
     }
 
@@ -413,7 +434,7 @@ impl Preparations {
             CredentialStatus::Revoked => return Err(ReceiptReject::Auth(AuthReject::Revoked)),
             CredentialStatus::Unknown => return Err(ReceiptReject::Auth(AuthReject::Unknown)),
             CredentialStatus::ScopeReduced => {
-                return Err(ReceiptReject::Auth(AuthReject::ReauthenticationRequired))
+                return Err(ReceiptReject::Auth(AuthReject::ReauthenticationRequired));
             }
         }
         let origin = origin.ok_or(ReceiptReject::Auth(AuthReject::OriginMismatch))?;
@@ -426,7 +447,9 @@ impl Preparations {
             .node_public_key()
             .await
             .map_err(|_| ReceiptReject::Unavailable)?;
-        let expected = expectation_of(receipt.claims());
+        // 期望值必须来自**当前**持久事实，不能由 receipt 自证：owner/storeEpoch 取自刚读到的
+        // 信任快照，否则旧存储代或别的节点的 receipt 会被当成有效。
+        let expected = expectation_of(receipt.claims(), &snapshot);
         let authenticated = Authenticated {
             fact: IdentityFact::Device {
                 device: device.clone(),
@@ -541,7 +564,9 @@ impl Preparations {
             },
         };
         let receipt = self.trust.sign(&claims).await?;
-        wire_receipt(&receipt).ok_or(PortError::Corrupt("preparation receipt cannot be projected"))
+        wire_receipt(&receipt).ok_or(PortError::Corrupt(
+            "preparation receipt cannot be projected",
+        ))
     }
 }
 
@@ -584,10 +609,10 @@ fn claims_digest(claims: &PreparationClaims) -> Option<Digest> {
 }
 
 /// `PreparationExpectation` 与已验证 claims 一致（verify 已在内部逐项比较）。
-fn expectation_of(claims: &PreparationClaims) -> PreparationExpectation {
+fn expectation_of(claims: &PreparationClaims, snapshot: &TrustSnapshot) -> PreparationExpectation {
     PreparationExpectation {
-        owner_node_id: claims.owner_node_id.clone(),
-        store_epoch: claims.store_epoch.clone(),
+        owner_node_id: snapshot.local_node.clone(),
+        store_epoch: snapshot.server_epoch.clone(),
         session_id: claims.session_id.clone(),
         tab_nonce: claims.tab_nonce.clone(),
         agent_id: claims.agent_id.clone(),
@@ -616,7 +641,7 @@ fn identity_claims(
         owner_node_id: NodeId::new(claims.owner_node_id.as_str()).ok()?,
         store_epoch: ServerEpoch::new(claims.store_epoch.as_str()).ok()?,
         origin: CanonicalOrigin::parse(claims.origin.as_str()).ok()?,
-        tab_nonce: Nonce::new(claims.tab_nonce.as_str()).ok()?,
+        tab_nonce: Nonce::new(&base64url_text(&claims.tab_nonce)).ok()?,
         session_id: SessionId::new(claims.session_id.as_str()).ok()?,
         agent_id: AgentId::new(claims.agent_id.as_str()).ok()?,
         normalized_workspace_path: NormalizedWorkspacePath::parse(
@@ -632,6 +657,12 @@ fn identity_claims(
             }
         },
     })
+}
+
+/// 无填充 base64url 编码（wire 的 `Base64Url<32>` 没有文本访问器，而 core 的 `Nonce` 只接受文本）。
+fn base64url_text<const BYTES: usize>(value: &Base64Url<BYTES>) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes())
 }
 
 /// `identity-auth` receipt → wire receipt。
@@ -705,6 +736,11 @@ impl ControlError {
             close: Some(close),
         }
     }
+
+    /// 拆成命令拒绝可用的三元组（`session.start` 的载荷校验与运行期检查共用）。
+    pub(crate) fn into_parts(self) -> (ErrorCode, &'static str, RawObject) {
+        (self.code, self.message, self.details)
+    }
 }
 
 /// core 端口错误 → 帧级拒绝（复用 `sync::command` 的登记映射，不另立一套分类）。
@@ -757,6 +793,25 @@ fn receipt_control_error(reject: ReceiptReject) -> ControlError {
             RawObject::empty(),
         ),
     }
+}
+
+/// 凭据拒绝 → 命令拒绝的三元组（`session.start` 复用同一套错误码与文案，不另立分类）。
+pub(crate) fn receipt_rejection(reject: ReceiptReject) -> (ErrorCode, &'static str, RawObject) {
+    let error = receipt_control_error(reject);
+    (error.code, error.message, error.details)
+}
+
+/// 运行期过代 → `preparation.stale`（`details.reason` 是唯一登记字段）。
+pub(crate) fn stale_rejection(
+    reason: PreparationStaleReason,
+) -> (ErrorCode, &'static str, RawObject) {
+    let details = RawObject::parse(&format!(r#"{{"reason":"{}"}}"#, reason.as_str()))
+        .unwrap_or_else(|_| RawObject::empty());
+    (
+        ErrorCode::PreparationStale,
+        "the preparation resource is not current any more",
+        details,
+    )
 }
 
 /// 闭合结果里的 `failed` 错误（retryable 取错误码的登记值）。
@@ -1223,15 +1278,17 @@ impl PreparationRoute {
         message: &'static str,
         details: RawObject,
     ) -> Result<SessionPreparationResult, ControlError> {
-        Self::answer(request, session, failed_outcome(code, message, details).ok_or_else(
-            || {
+        Self::answer(
+            request,
+            session,
+            failed_outcome(code, message, details).ok_or_else(|| {
                 ControlError::new(
                     ErrorCode::InternalUnavailable,
                     "the preparation result cannot be projected",
                     RawObject::empty(),
                 )
-            },
-        )?)
+            })?,
+        )
         .ok_or_else(|| {
             ControlError::new(
                 ErrorCode::InternalUnavailable,
@@ -1327,8 +1384,8 @@ impl PreparationRoute {
         };
         let source = match workspace {
             sync_protocol::sync::PreparationWorkspaceRef::Directory { directory_id } => {
-                let directory = acp_core::model::DirectoryId::new(directory_id.as_str())
-                    .map_err(|_| {
+                let directory =
+                    acp_core::model::DirectoryId::new(directory_id.as_str()).map_err(|_| {
                         ControlError::new(
                             ErrorCode::ProtocolSchemaInvalid,
                             "the directoryId is not a directory id",
@@ -1366,7 +1423,7 @@ impl PreparationRoute {
         })?;
         let owner = PreparationOwner::new(
             handle.device_id().clone(),
-            Nonce::new(tab_nonce.as_str()).map_err(|_| {
+            Nonce::new(&base64url_text(tab_nonce)).map_err(|_| {
                 ControlError::new(
                     ErrorCode::ProtocolSchemaInvalid,
                     "the tabNonce is not a 32-byte nonce",
@@ -1422,10 +1479,10 @@ impl PreparationRoute {
                 return Self::failed_result(request, &view.session, code, message, details);
             }
         };
-        let decision = self
-            .preparations
-            .directory()
-            .mark_ready(&view.session, view.generation, now);
+        let decision =
+            self.preparations
+                .directory()
+                .mark_ready(&view.session, view.generation, now);
         let view = ready_view(decision).ok_or_else(|| {
             ControlError::new(
                 ErrorCode::InternalUnavailable,
@@ -1450,6 +1507,36 @@ impl PreparationRoute {
         Self::ready_result(request, &view, &receipt, &options)
     }
 
+    /// 校验 receipt；storeEpoch 失效按 D3.1 返回 `failed` 结果，而不是认证/协议 error 帧。
+    async fn verified_or_failed(
+        &self,
+        handle: &ConnectionHandle,
+        request: &SessionPreparation,
+        session: &SessionId,
+        receipt: &sync_protocol::common::PreparationReceipt,
+    ) -> Result<Result<Verified, SessionPreparationResult>, ControlError> {
+        match self
+            .preparations
+            .verify(
+                handle.device_id(),
+                handle.canonical_origin(),
+                receipt,
+                session,
+            )
+            .await
+        {
+            Ok(verified) => Ok(Ok(verified)),
+            Err(ReceiptReject::StoreRebuilt) => Ok(Err(Self::failed_result(
+                request,
+                session,
+                ErrorCode::PreparationStoreRebuilt,
+                "the persistent store was rebuilt; the preparation receipt is no longer valid",
+                RawObject::empty(),
+            )?)),
+            Err(error) => Err(receipt_control_error(error)),
+        }
+    }
+
     async fn restore(
         &self,
         handle: &ConnectionHandle,
@@ -1458,16 +1545,13 @@ impl PreparationRoute {
         receipt: &sync_protocol::common::PreparationReceipt,
     ) -> Result<SessionPreparationResult, ControlError> {
         let session = request_session(request)?;
-        let verified = self
-            .preparations
-            .verify(
-                handle.device_id(),
-                handle.canonical_origin(),
-                receipt,
-                &session,
-            )
-            .await
-            .map_err(receipt_control_error)?;
+        let verified = match self
+            .verified_or_failed(handle, request, &session, receipt)
+            .await?
+        {
+            Ok(verified) => verified,
+            Err(result) => return Ok(result),
+        };
         if let Some(committed) = self
             .preparations
             .committed(&session)
@@ -1477,22 +1561,22 @@ impl PreparationRoute {
             return Self::committed_result(request, &session, &committed);
         }
         // 从已核验 claims 重建同一 ID 的准备资源（有效 receipt 的 restore 永不返回 stale）。
-        let workspace = ResolvedWorkspace::at_path(verified.workspace_path.clone()).map_err(|_| {
-            ControlError::new(
-                ErrorCode::AttachmentBindingMismatch,
-                "the preparation receipt workspace is not usable",
-                RawObject::empty(),
-            )
-        })?;
-        let agent = AgentRef::try_new(verified.agent.clone(), verified.agent.as_str()).map_err(
-            |_| {
+        let workspace =
+            ResolvedWorkspace::at_path(verified.workspace_path.clone()).map_err(|_| {
+                ControlError::new(
+                    ErrorCode::AttachmentBindingMismatch,
+                    "the preparation receipt workspace is not usable",
+                    RawObject::empty(),
+                )
+            })?;
+        let agent =
+            AgentRef::try_new(verified.agent.clone(), verified.agent.as_str()).map_err(|_| {
                 ControlError::new(
                     ErrorCode::AttachmentBindingMismatch,
                     "the preparation receipt agent is not usable",
                     RawObject::empty(),
                 )
-            },
-        )?;
+            })?;
         let owner = PreparationOwner::new(verified.device.clone(), verified.tab_nonce.clone());
         let now = self.preparations.now();
         let allocated = self
@@ -1545,10 +1629,10 @@ impl PreparationRoute {
                 return Self::failed_result(request, &view.session, code, message, details);
             }
         };
-        let decision = self
-            .preparations
-            .directory()
-            .mark_ready(&view.session, view.generation, now);
+        let decision =
+            self.preparations
+                .directory()
+                .mark_ready(&view.session, view.generation, now);
         let view = ready_view(decision).ok_or_else(|| {
             ControlError::new(
                 ErrorCode::InternalUnavailable,
@@ -1586,16 +1670,13 @@ impl PreparationRoute {
         config_options: &Option<sync_protocol::command::PreparationConfigSelection>,
     ) -> Result<SessionPreparationResult, ControlError> {
         let session = request_session(request)?;
-        let verified = self
-            .preparations
-            .verify(
-                handle.device_id(),
-                handle.canonical_origin(),
-                receipt,
-                &session,
-            )
-            .await
-            .map_err(receipt_control_error)?;
+        let verified = match self
+            .verified_or_failed(handle, request, &session, receipt)
+            .await?
+        {
+            Ok(verified) => verified,
+            Err(result) => return Ok(result),
+        };
         if let Some(committed) = self
             .preparations
             .committed(&session)
@@ -1606,12 +1687,10 @@ impl PreparationRoute {
         }
         let target_epoch = parse_epoch(runtime_epoch)?;
         let target_generation = parse_generation(generation)?;
-        let view = match self.preparations.runtime(
-            &session,
-            &target_epoch,
-            target_generation,
-            true,
-        ) {
+        let view = match self
+            .preparations
+            .runtime(&session, &target_epoch, target_generation, true)
+        {
             RuntimeCheck::Ready(view) => {
                 if !self.preparations.matches_runtime(&verified, &view) {
                     return Self::failed_result(
@@ -1650,10 +1729,10 @@ impl PreparationRoute {
                 return Self::failed_result(request, &view.session, code, message, details);
             }
         };
-        let decision = self
-            .preparations
-            .directory()
-            .mark_ready(&view.session, view.generation, now);
+        let decision =
+            self.preparations
+                .directory()
+                .mark_ready(&view.session, view.generation, now);
         let view = ready_view(decision).ok_or_else(|| {
             ControlError::new(
                 ErrorCode::InternalUnavailable,
@@ -1688,16 +1767,13 @@ impl PreparationRoute {
         generation: &sync_protocol::common::PositiveDecimalString,
     ) -> Result<SessionPreparationResult, ControlError> {
         let session = request_session(request)?;
-        let verified = self
-            .preparations
-            .verify(
-                handle.device_id(),
-                handle.canonical_origin(),
-                receipt,
-                &session,
-            )
-            .await
-            .map_err(receipt_control_error)?;
+        let verified = match self
+            .verified_or_failed(handle, request, &session, receipt)
+            .await?
+        {
+            Ok(verified) => verified,
+            Err(result) => return Ok(result),
+        };
         if let Some(committed) = self
             .preparations
             .committed(&session)
@@ -1708,12 +1784,10 @@ impl PreparationRoute {
         }
         let target_epoch = parse_epoch(runtime_epoch)?;
         let target_generation = parse_generation(generation)?;
-        if let RuntimeCheck::Ready(view) = self.preparations.runtime(
-            &session,
-            &target_epoch,
-            target_generation,
-            false,
-        ) {
+        if let RuntimeCheck::Ready(view) =
+            self.preparations
+                .runtime(&session, &target_epoch, target_generation, false)
+        {
             if !self.preparations.matches_runtime(&verified, &view) {
                 return Self::failed_result(
                     request,
@@ -1732,10 +1806,10 @@ impl PreparationRoute {
         let view = match decision {
             PreparationDecision::Ready(view) => view,
             PreparationDecision::Stale(reason) => {
-                return Self::stale_result(request, &session, reason)
+                return Self::stale_result(request, &session, reason);
             }
             PreparationDecision::Released | PreparationDecision::Unknown => {
-                return Self::stale_result(request, &session, PreparationStaleReason::Released)
+                return Self::stale_result(request, &session, PreparationStaleReason::Released);
             }
         };
         // ready 结果必须带 Agent 确认过的真实选项：这里只读，不应用任何选择。
@@ -1782,16 +1856,13 @@ impl PreparationRoute {
         generation: &sync_protocol::common::PositiveDecimalString,
     ) -> Result<SessionPreparationResult, ControlError> {
         let session = request_session(request)?;
-        let verified = self
-            .preparations
-            .verify(
-                handle.device_id(),
-                handle.canonical_origin(),
-                receipt,
-                &session,
-            )
-            .await
-            .map_err(receipt_control_error)?;
+        let verified = match self
+            .verified_or_failed(handle, request, &session, receipt)
+            .await?
+        {
+            Ok(verified) => verified,
+            Err(result) => return Ok(result),
+        };
         if let Some(committed) = self
             .preparations
             .committed(&session)
@@ -1811,13 +1882,15 @@ impl PreparationRoute {
         }
         let Some(view) = self.preparations.directory().view(&session) else {
             // 同一运行期内已释放：幂等成功（不宣告 ID 已正式提交）。
-            return Self::answer(request, &session, PreparationOutcome::Released).ok_or_else(|| {
-                ControlError::new(
-                    ErrorCode::InternalUnavailable,
-                    "the preparation result cannot be projected",
-                    RawObject::empty(),
-                )
-            });
+            return Self::answer(request, &session, PreparationOutcome::Released).ok_or_else(
+                || {
+                    ControlError::new(
+                        ErrorCode::InternalUnavailable,
+                        "the preparation result cannot be projected",
+                        RawObject::empty(),
+                    )
+                },
+            );
         };
         if view.generation != target_generation {
             return Self::stale_result(
@@ -1991,7 +2064,7 @@ fn ready_outcome(
     })
 }
 
-fn parse_epoch(value: &Uuid) -> Result<RuntimeEpoch, ControlError> {
+pub(crate) fn parse_epoch(value: &Uuid) -> Result<RuntimeEpoch, ControlError> {
     RuntimeEpoch::new(value.as_str()).map_err(|_| {
         ControlError::new(
             ErrorCode::ProtocolSchemaInvalid,
@@ -2001,7 +2074,7 @@ fn parse_epoch(value: &Uuid) -> Result<RuntimeEpoch, ControlError> {
     })
 }
 
-fn parse_generation(
+pub(crate) fn parse_generation(
     value: &sync_protocol::common::PositiveDecimalString,
 ) -> Result<ResourceGeneration, ControlError> {
     value
@@ -2017,7 +2090,7 @@ fn parse_generation(
         })
 }
 
-fn selection_input(
+pub(crate) fn selection_input(
     mode: &Option<NonEmptyText<256>>,
     config_options: &Option<sync_protocol::command::PreparationConfigSelection>,
 ) -> Result<PreparationSelectionInput, ControlError> {
@@ -2043,13 +2116,15 @@ fn selection_input(
             })?;
             let value = match value {
                 WireConfigValue::Boolean(flag) => ConfigValue::boolean(*flag),
-                WireConfigValue::Text(text) => ConfigValue::select(text.as_str()).map_err(|_| {
-                    ControlError::new(
-                        ErrorCode::ProtocolSchemaInvalid,
-                        "a config option value is out of range",
-                        RawObject::empty(),
-                    )
-                })?,
+                WireConfigValue::Text(text) => {
+                    ConfigValue::select(text.as_str()).map_err(|_| {
+                        ControlError::new(
+                            ErrorCode::ProtocolSchemaInvalid,
+                            "a config option value is out of range",
+                            RawObject::empty(),
+                        )
+                    })?
+                }
             };
             config.push((id, value));
         }

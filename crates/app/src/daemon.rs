@@ -732,6 +732,8 @@ fn spawn_maintenance(
     let policy = composition.retention_policy();
     let clock = Arc::clone(composition.clock());
     let attachments = composition.attachments();
+    let preparations = Arc::clone(composition.preparations());
+    let preparation_endpoints = Arc::clone(composition.preparation_endpoints());
     tasks.spawn("maintenance", cancel, async move {
         let mut next = tokio::time::Instant::now();
         let mut startup = true;
@@ -749,6 +751,7 @@ fn spawn_maintenance(
                 &policy,
                 &clock,
                 attachments.as_ref(),
+                Some((preparations.as_ref(), &preparation_endpoints)),
                 if startup { "startup" } else { "periodic" },
             )
             .await;
@@ -765,6 +768,10 @@ async fn maintenance_tick(
     policy: &acp_core::ports::RetentionPolicy,
     clock: &Arc<dyn acp_core::ports::Clock>,
     attachments: &SqliteStore,
+    preparations: Option<(
+        &server::sync::preparation::Preparations,
+        &Arc<dyn server::sync::preparation::PreparationEndpoints>,
+    )>,
     reason: &'static str,
 ) {
     let actor = Actor::LocalCli;
@@ -819,12 +826,32 @@ async fn maintenance_tick(
             0
         }
     };
+    // 准备租约：先释放真实临时端点，确认后才能交还容量；失败/不确定保持占位。
+    let mut reclaimed_preparations = 0usize;
+    if let Some((preparations, endpoints)) = preparations {
+        let now = clock.now();
+        for (session, generation) in preparations.directory().expired(now.clone()) {
+            if matches!(
+                endpoints.release(session.clone(), generation.get()).await,
+                server::sync::preparation::EndpointRelease::Released
+            ) && matches!(
+                preparations
+                    .directory()
+                    .release(&session, generation, now.clone())
+                    .await,
+                acp_core::model::PreparationReleaseOutcome::Released
+            ) {
+                reclaimed_preparations += 1;
+            }
+        }
+    }
     tracing::info!(
         event = "daemon.maintenance",
         reason,
         removed_events,
         expired_pairings,
         swept_orphans,
+        reclaimed_preparations,
         still_over_limit,
         "周期清理完成"
     );
@@ -1269,7 +1296,20 @@ pub fn register_sync_paths(
         remote,
         event_queue,
         None,
+        None,
     )
+}
+
+/// 准备控制/首次提交面的接线件（`core.session-preparation.v1`）。
+///
+/// 两个零件必须一起提供：`preparations` 是凭据验证/运行期目录/首条读面，`endpoints` 是临时端点
+/// 建立、设置复核与所有权转移。缺一就不宣告 feature，也不注册控制帧路由。
+#[derive(Clone)]
+pub struct PreparationPorts {
+    /// 准备面的共享服务（控制帧、附件准备目标与 `session.start` 共用）。
+    pub preparations: Arc<server::sync::preparation::Preparations>,
+    /// 准备端点窄面（组合根的 `agent-host` 适配器）。
+    pub endpoints: Arc<dyn server::sync::preparation::PreparationEndpoints>,
 }
 
 /// 同 [`register_sync_paths`]，但把本机生命周期接线一并交给命令面/订阅面/查看控制帧。
@@ -1293,6 +1333,7 @@ pub fn register_sync_paths_with_lifecycle(
         Arc<acp_core::use_cases::LocalSessionLifecycle>,
         Arc<dyn Clock>,
     )>,
+    preparation: Option<PreparationPorts>,
 ) -> Result<SyncIngress, NetworkError> {
     let registry = SyncConnectionRegistry::new();
     let lifecycle_visible = lifecycle.is_some();
@@ -1310,7 +1351,7 @@ pub fn register_sync_paths_with_lifecycle(
     let subscribe = Arc::new(subscribe);
     // 命令面（`command`）：`SyncConn` 只有一个路由槽，因此两者由 `SyncRoutes` 按序组合（订阅面在前）；
     // `on_authenticated` 由组合件转发给两者，本次协商出的 feature 因此同时到达订阅面与命令面的门控。
-    let command = Arc::new(SyncCommandRoute::new(
+    let mut command_route = SyncCommandRoute::new(
         Arc::clone(core),
         Arc::clone(broker),
         Arc::clone(authority),
@@ -1320,11 +1361,24 @@ pub fn register_sync_paths_with_lifecycle(
         lifecycle
             .as_ref()
             .map(|(lifecycle, _)| Arc::clone(lifecycle)),
-    ));
+    );
+    if let Some(ports) = preparation.as_ref() {
+        command_route = command_route.with_preparation(
+            Arc::clone(&ports.preparations),
+            Arc::clone(&ports.endpoints),
+        );
+    }
+    let command = Arc::new(command_route);
     let mut parts: Vec<Arc<dyn SyncMessageRoute>> = vec![
         Arc::clone(&subscribe) as Arc<dyn SyncMessageRoute>,
         Arc::clone(&command) as Arc<dyn SyncMessageRoute>,
     ];
+    if let Some(ports) = preparation.as_ref() {
+        parts.push(Arc::new(server::sync::preparation::PreparationRoute::new(
+            Arc::clone(&ports.preparations),
+            Arc::clone(&ports.endpoints),
+        )) as Arc<dyn SyncMessageRoute>);
+    }
     if let Some((lifecycle, clock)) = lifecycle {
         parts.push(Arc::new(server::sync::local_lifecycle::ViewRoute::new(
             Arc::clone(core),
@@ -1351,7 +1405,12 @@ pub fn register_sync_paths_with_lifecycle(
             path: "/sync/v1".to_owned(),
         }));
     };
-    let attachment_service = SyncAttachmentService::from_core(core);
+    let attachment_service = match preparation.as_ref() {
+        Some(ports) => {
+            SyncAttachmentService::from_core_with_preparation(core, Arc::clone(&ports.preparations))
+        }
+        None => SyncAttachmentService::from_core(core),
+    };
     let mut supported = if attachment_service.is_some() {
         server::sync::conn::feature_list()
     } else {
@@ -1362,6 +1421,18 @@ pub fn register_sync_paths_with_lifecycle(
         supported.retain(|feature| {
             feature.as_str() != server::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE
         });
+    }
+    match preparation.is_some() {
+        true => {
+            if !supported
+                .iter()
+                .any(|feature| feature.as_str() == server::sync::preparation::PREPARATION_FEATURE)
+            {
+                supported.push(server::sync::preparation::PREPARATION_FEATURE.to_owned());
+            }
+        }
+        false => supported
+            .retain(|feature| feature.as_str() != server::sync::preparation::PREPARATION_FEATURE),
     }
     let conn = Arc::new(
         SyncConn::new(
@@ -1539,6 +1610,10 @@ impl NetIngress {
                 Arc::clone(composition.lifecycle()),
                 Arc::clone(composition.clock()) as Arc<dyn Clock>,
             )),
+            Some(PreparationPorts {
+                preparations: Arc::clone(composition.preparations()),
+                endpoints: Arc::clone(composition.preparation_endpoints()),
+            }),
         )?;
         // 静态面（`design.md` D1/D2/D3）：第三类端点，注册在**全部协议端点之后**（`tasks.md` 3.1 的装配
         // 要求）。注意「协议端点优先」**不**由这个顺序保证，而是由 `server` 侧的结构保证：协议端点是精确
@@ -1850,6 +1925,20 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
             event = "daemon.recovered_unsettled",
             commands = recovered,
             "启动恢复终结了未决命令（不确定终态，未重放副作用）"
+        );
+    }
+    // `web-session-preparation` D8：首条提交的启动收敛——可证明未派发的失败保留正文、等待显式继续；
+    // 可能已派发的记 `uncertain`。**绝不**自动派发或自动消费持久输入。
+    let converged = composition
+        .use_cases()
+        .converge_first_submissions(composition.clock().now())
+        .await
+        .map_err(|error| DaemonError::Compose(ComposeError::Port(error)))?;
+    if converged > 0 {
+        tracing::warn!(
+            event = "daemon.converged_first_submissions",
+            sessions = converged,
+            "启动收敛了首次提交（未自动派发；等待用户显式继续）"
         );
     }
     // 出站连接在启动恢复之后才开始：imported 事件要等本机状态一致后再落索引。

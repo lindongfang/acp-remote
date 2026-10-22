@@ -801,8 +801,8 @@ fn a_v12_database_keeps_its_old_session_updated_payload_readable_after_upgrade()
             .expect("v12 库必须升级到当前版本");
         assert_eq!(
             upgraded.metadata().owned_schema_version,
-            15,
-            "升级必须把 owned schema 推进到 v15"
+            16,
+            "升级必须把 owned schema 推进到当前版本 v16"
         );
 
         // 当前摘要：只有三态，且不被旧事件里的 `waiting_permission` 覆盖。
@@ -886,7 +886,7 @@ fn a_v12_database_keeps_its_old_session_updated_payload_readable_after_upgrade()
             .fetch_one(&mut raw)
             .await
             .expect("读 user_version");
-        assert_eq!(user_version, 15, "升级后的文件格式版本必须是 15");
+        assert_eq!(user_version, 16, "升级后的文件格式版本必须是 16");
         let _ = raw.close().await;
 
         let _ = upgraded.close().await;

@@ -24,22 +24,21 @@
 //! DTO；不 import `storage-sqlite`、不调用 `server::node_link`。
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use acp_core::model::{
     Actor, AttachmentId, AttachmentSubject, ConnectionId, Digest, ImmutableFileMetadata, PortError,
-    PreparationBinding, ResourceGeneration, RuntimeEpoch, SessionId, StagedAbortReason, StagedChunk,
-    StagedManifestBegin, StagedManifestPage, StagedManifestSeal, StagedSeal, StagedSealOutcome,
-    StagedTransferBegin, StagedTransferState, SubmissionId, Timestamp, UnavailableKind,
+    PreparationBinding, ResourceGeneration, RuntimeEpoch, SessionId, StagedAbortReason,
+    StagedChunk, StagedManifestBegin, StagedManifestPage, StagedManifestSeal, StagedSeal,
+    StagedSealOutcome, StagedTransferBegin, StagedTransferState, SubmissionId, Timestamp,
+    UnavailableKind,
 };
 use acp_core::use_cases::UseCases;
 use sync_protocol::attachment::{
     AbortReason as WireAbortReason, BeginBody, Direction, ErrorBody, Frame, FrameBody, FrameType,
     ManifestBeginBody, ManifestSealedBody, ReadChunkBody, SealedBody, StatusBody, TransferState,
 };
-use sync_protocol::common::{
-    DecimalString, Nullable, RawObject, Timestamp as WireTimestamp, Uuid,
-};
+use sync_protocol::common::{DecimalString, Nullable, RawObject, Timestamp as WireTimestamp, Uuid};
 use sync_protocol::error::ErrorCode;
 use tracing::{debug, warn};
 
@@ -181,7 +180,9 @@ impl AttachmentService {
     }
 
     fn preparation_negotiated(features: &[String]) -> bool {
-        features.iter().any(|feature| feature == PREPARATION_FEATURE)
+        features
+            .iter()
+            .any(|feature| feature == PREPARATION_FEATURE)
     }
 
     /// 释放本连接预留的准备活动传输槽位（不断言传输已经结束；元数据留给重绑/过期清理）。
@@ -292,16 +293,17 @@ impl AttachmentRoute for AttachmentService {
         let negotiated = Self::preparation_negotiated(features);
         match &frame.body {
             FrameBody::Begin(BeginBody::Preparation(body)) => {
-                return self
-                    .preparation_begin(session, negotiated, body)
-                    .await;
+                return self.preparation_begin(session, negotiated, body).await;
             }
             FrameBody::ManifestBegin(ManifestBeginBody::Preparation(body)) => {
                 return self
                     .preparation_manifest_begin(session, negotiated, body)
                     .await;
             }
-            FrameBody::Chunk(_) | FrameBody::Seal(_) | FrameBody::Status(_) | FrameBody::Abort(_) => {
+            FrameBody::Chunk(_)
+            | FrameBody::Seal(_)
+            | FrameBody::Status(_)
+            | FrameBody::Abort(_) => {
                 if negotiated {
                     if let Some(preparations) = self.preparations.as_ref() {
                         match self
@@ -414,10 +416,7 @@ impl AttachmentService {
                 ),
             );
         };
-        if let Err(fault) = self
-            .begin_staging(session, preparations, body)
-            .await
-        {
+        if let Err(fault) = self.begin_staging(session, preparations, body).await {
             return finish_fault(session, fault);
         }
         AttachmentOutcome::Claimed
@@ -470,7 +469,7 @@ impl AttachmentService {
             claims_digest: verified.claims_digest.clone(),
         };
         let existing = staging
-            .status(&transfer)
+            .status(attachment_id(&transfer))
             .await
             .map_err(|error| staging_fault(target.clone(), &error))?;
         let reserved = if existing.is_none() {
@@ -493,7 +492,7 @@ impl AttachmentService {
         };
         let begun = staging
             .begin(StagedTransferBegin {
-                transfer: transfer.clone(),
+                transfer: attachment_id(&transfer),
                 binding,
                 subject: AttachmentSubject::Device(session.device_id().clone()),
                 connection: connection_id(session),
@@ -543,7 +542,10 @@ impl AttachmentService {
             .await
         {
             Ok(Some(reply)) => {
-                if session.send_attachment(&FrameBody::ManifestSealed(reply)).is_err() {
+                if session
+                    .send_attachment(&FrameBody::ManifestSealed(reply))
+                    .is_err()
+                {
                     debug!(
                         event = "sync.preparation_manifest_reply_dropped",
                         connection_id = session.connection_id().as_str(),
@@ -613,7 +615,10 @@ impl AttachmentService {
             .await
             .map_err(|error| staging_fault(target.clone(), &error))?;
         let previous = self.manifest(&submission);
-        let sealed = match previous.as_ref().and_then(|manifest| manifest.sealed.clone()) {
+        let sealed = match previous
+            .as_ref()
+            .and_then(|manifest| manifest.sealed.clone())
+        {
             Some(reply) => Some(reply),
             None => match state.sealed_digest.as_ref() {
                 Some(digest) => Some(ManifestSealedBody {
@@ -677,7 +682,7 @@ impl AttachmentService {
             return Ok(false);
         };
         let Some(state) = staging
-            .status(&attachment_id(&transfer))
+            .status(attachment_id(&transfer))
             .await
             .map_err(|error| staging_fault(target.clone(), &error))?
         else {
@@ -689,7 +694,7 @@ impl AttachmentService {
             FrameBody::Chunk(body) => {
                 let offset = decimal(&body.offset).map_err(|_| {
                     fault(
-                        target,
+                        target.clone(),
                         ErrorCode::ProtocolSchemaInvalid,
                         "offset is not a supported decimal",
                         RawObject::empty(),
@@ -725,20 +730,20 @@ impl AttachmentService {
                         })
                     }
                     acp_core::model::StagedChunkOutcome::OffsetMismatch { expected, actual } => {
-                        return Err(offset_fault(target, expected, actual))
+                        return Err(offset_fault(target, expected, actual));
                     }
                     acp_core::model::StagedChunkOutcome::ChunkConflict { offset } => {
-                        return Err(chunk_conflict_fault(target, offset))
+                        return Err(chunk_conflict_fault(target.clone(), offset));
                     }
                     acp_core::model::StagedChunkOutcome::ConnectionMismatch => {
-                        return Err(binding_fault(target))
+                        return Err(binding_fault(target.clone()));
                     }
                 })
             }
             FrameBody::Seal(body) => {
                 let length = decimal(&body.length).map_err(|_| {
                     fault(
-                        target,
+                        target.clone(),
                         ErrorCode::ProtocolSchemaInvalid,
                         "length is not a supported decimal",
                         RawObject::empty(),
@@ -746,7 +751,7 @@ impl AttachmentService {
                 })?;
                 let sha256 = wire_digest(&body.sha256).map_err(|_| {
                     fault(
-                        target,
+                        target.clone(),
                         ErrorCode::ProtocolSchemaInvalid,
                         "sha256 is not a canonical digest",
                         RawObject::empty(),
@@ -768,20 +773,22 @@ impl AttachmentService {
                     }
                     StagedSealOutcome::DigestMismatch => {
                         return Err(fault(
-                            target,
+                            target.clone(),
                             ErrorCode::AttachmentDigestMismatch,
                             "the length or digest does not match the received bytes",
                             RawObject::empty(),
-                        ))
+                        ));
                     }
-                    StagedSealOutcome::ConnectionMismatch => return Err(binding_fault(target)),
+                    StagedSealOutcome::ConnectionMismatch => {
+                        return Err(binding_fault(target.clone()));
+                    }
                 };
                 self.release_preparation_transfer(transfer.as_str());
                 Some(FrameBody::Sealed(SealedBody {
                     transfer_id: transfer.clone(),
                     attachment_id: uuid(&facts.attachment).ok_or_else(|| {
                         fault(
-                            target,
+                            target.clone(),
                             ErrorCode::InternalUnavailable,
                             "the attachment id cannot be projected",
                             RawObject::empty(),
@@ -790,7 +797,7 @@ impl AttachmentService {
                     length: decimal_string(facts.length),
                     sha256: base64url(&facts.sha256).ok_or_else(|| {
                         fault(
-                            target,
+                            target.clone(),
                             ErrorCode::InternalUnavailable,
                             "the digest cannot be projected",
                             RawObject::empty(),
@@ -798,7 +805,7 @@ impl AttachmentService {
                     })?,
                     sealed_at: wire_timestamp(&facts.sealed_at).ok_or_else(|| {
                         fault(
-                            target,
+                            target.clone(),
                             ErrorCode::InternalUnavailable,
                             "the seal timestamp cannot be projected",
                             RawObject::empty(),
@@ -884,12 +891,9 @@ impl AttachmentService {
         {
             return Err(already_committed_fault(target, &draft.session));
         }
-        if let RuntimeCheck::Stale(reason) = preparations.runtime(
-            &draft.session,
-            &draft.runtime_epoch,
-            draft.generation,
-            true,
-        ) {
+        if let RuntimeCheck::Stale(reason) =
+            preparations.runtime(&draft.session, &draft.runtime_epoch, draft.generation, true)
+        {
             return Err(stale_fault(target, reason));
         }
         let Some(staging) = preparations.staging() else {
@@ -921,7 +925,7 @@ impl AttachmentService {
             FrameBody::ManifestSealed(body) => {
                 let provided = wire_digest(&body.manifest_digest).map_err(|_| {
                     fault(
-                        target,
+                        target.clone(),
                         ErrorCode::ProtocolSchemaInvalid,
                         "manifestDigest is not a canonical digest",
                         RawObject::empty(),
@@ -930,7 +934,10 @@ impl AttachmentService {
                 if let Some(sealed) = draft.sealed.clone() {
                     // 已封存：原样回原 `manifest_sealed`；换了摘要则是标识复用。
                     if sealed.manifest_digest == body.manifest_digest {
-                        if session.send_attachment(&FrameBody::ManifestSealed(sealed)).is_err() {
+                        if session
+                            .send_attachment(&FrameBody::ManifestSealed(sealed))
+                            .is_err()
+                        {
                             debug!(
                                 event = "sync.preparation_manifest_reply_dropped",
                                 connection_id = session.connection_id().as_str(),
@@ -940,7 +947,7 @@ impl AttachmentService {
                         return Ok(true);
                     }
                     return Err(fault(
-                        target,
+                        target.clone(),
                         ErrorCode::AttachmentSealed,
                         "the preparation manifest is already sealed",
                         RawObject::empty(),
@@ -948,7 +955,7 @@ impl AttachmentService {
                 }
                 if !draft.final_seen {
                     return Err(fault(
-                        target,
+                        target.clone(),
                         ErrorCode::ProtocolSchemaInvalid,
                         "the manifest has no final page",
                         RawObject::empty(),
@@ -976,10 +983,10 @@ impl AttachmentService {
                     .map_err(|error| staging_fault(target.clone(), &error))?;
                 let reply = ManifestSealedBody {
                     submission_id: submission.clone(),
-                    attachment_count: decimal_string(draft.registered.len() as u64),
+                    attachment_count: decimal_string(draft.count as u64),
                     manifest_digest: base64url(&computed).ok_or_else(|| {
                         fault(
-                            target,
+                            target.clone(),
                             ErrorCode::InternalUnavailable,
                             "the manifest digest cannot be projected",
                             RawObject::empty(),
@@ -998,7 +1005,10 @@ impl AttachmentService {
                 updated.registered = state.registered;
                 updated.sealed = Some(reply.clone());
                 self.remember_manifest(&submission, updated);
-                if session.send_attachment(&FrameBody::ManifestSealed(reply)).is_err() {
+                if session
+                    .send_attachment(&FrameBody::ManifestSealed(reply))
+                    .is_err()
+                {
                     debug!(
                         event = "sync.preparation_manifest_reply_dropped",
                         connection_id = session.connection_id().as_str(),
@@ -1071,7 +1081,12 @@ struct PrepFault {
     close: Option<(u16, &'static str)>,
 }
 
-fn fault(target: ErrorTarget, code: ErrorCode, message: &'static str, details: RawObject) -> PrepFault {
+fn fault(
+    target: ErrorTarget,
+    code: ErrorCode,
+    message: &'static str,
+    details: RawObject,
+) -> PrepFault {
     PrepFault {
         target,
         code,
@@ -1105,18 +1120,12 @@ fn already_committed_fault(target: ErrorTarget, session: &SessionId) -> PrepFaul
         target,
         ErrorCode::PreparationAlreadyCommitted,
         "the first message was already accepted for this preparation",
-        RawObject::parse(&format!(
-            r#"{{"sessionId":"{}"}}"#,
-            session.as_str()
-        ))
-        .unwrap_or_else(|_| RawObject::empty()),
+        RawObject::parse(&format!(r#"{{"sessionId":"{}"}}"#, session.as_str()))
+            .unwrap_or_else(|_| RawObject::empty()),
     )
 }
 
-fn stale_fault(
-    target: ErrorTarget,
-    reason: acp_core::model::PreparationStaleReason,
-) -> PrepFault {
+fn stale_fault(target: ErrorTarget, reason: acp_core::model::PreparationStaleReason) -> PrepFault {
     fault(
         target,
         ErrorCode::PreparationStale,
@@ -1326,12 +1335,9 @@ async fn verify_target(
             .unwrap_or_else(|_| RawObject::empty()),
         ));
     }
-    if let RuntimeCheck::Stale(reason) = preparations.runtime(
-        &verified.session,
-        &runtime_epoch,
-        generation,
-        true,
-    ) {
+    if let RuntimeCheck::Stale(reason) =
+        preparations.runtime(&verified.session, &runtime_epoch, generation, true)
+    {
         return Err(stale_fault(error_target.clone(), reason));
     }
     Ok((verified, runtime_epoch, generation))

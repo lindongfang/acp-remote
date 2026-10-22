@@ -8,15 +8,13 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use acp_core::model::{
-    AttachmentId, DeviceId, InteractionId, MessageId, NodeId, OriginEpoch, PairingId, PortError,
-    RequestId, SessionId, SubmissionId, Timestamp, TurnId,
-};
-use acp_core::ports::{
-    AttachmentChunk, AttachmentRead, AttachmentTransferStore, ChunkOutcome, Clock, IdGenerator,
-    SubmissionBegin, SubmissionPage, SubmissionProgress, SubmissionSeal, TransferBegin, TransferChunk,
-    TransferSeal,
+    AttachmentId, DeviceId, NodeId, PortError, SessionId, SubmissionId, Timestamp,
 };
 use acp_core::model::{AttachmentSubmission, AttachmentTransfer, SealedAttachment};
+use acp_core::ports::{
+    AttachmentChunk, AttachmentRead, AttachmentTransferStore, ChunkOutcome, Clock, SubmissionBegin,
+    SubmissionPage, SubmissionProgress, SubmissionSeal, TransferBegin, TransferChunk, TransferSeal,
+};
 use sync_protocol::attachment::{
     BeginBody, DeviceSubject, FixedChunkSize, Frame, FrameBody, ManifestBeginBody,
     PreparationAttachmentTarget, PreparationBeginBody, PreparationManifestBeginBody,
@@ -27,11 +25,11 @@ use sync_protocol::error::ErrorCode;
 
 use super::*;
 use crate::sync::conn::limits::{SessionLimits, SyncConfig};
-use crate::sync::preparation::tests::{
-    canonical_origin, committed_record, fixture, handle, ready_preparation, sign_receipt, Fixture,
-    AGENT, DEVICE, RUNTIME, TAB,
-};
 use crate::sync::conn::registry::Outbound;
+use crate::sync::preparation::tests::{
+    AGENT, DEVICE, Fixture, RUNTIME, TAB, canonical_origin, committed_record, fixture, handle,
+    ready_preparation, sign_receipt,
+};
 
 // ---------------------------------------------------------------------------------------------
 // 正式引擎的不可达替身（准备用例不应触碰正式存储）
@@ -109,34 +107,8 @@ impl Clock for FixedClock {
     }
 }
 
-struct TestIds;
-
 fn fresh() -> String {
     uuid::Uuid::new_v4().to_string()
-}
-
-impl IdGenerator for TestIds {
-    fn session_id(&self) -> SessionId {
-        SessionId::new(&fresh()).expect("session id")
-    }
-    fn turn_id(&self) -> TurnId {
-        TurnId::new(&fresh()).expect("turn id")
-    }
-    fn interaction_id(&self) -> InteractionId {
-        InteractionId::new(&fresh()).expect("interaction id")
-    }
-    fn pairing_id(&self) -> PairingId {
-        PairingId::new(&fresh()).expect("pairing id")
-    }
-    fn message_id(&self) -> MessageId {
-        MessageId::new(&fresh()).expect("message id")
-    }
-    fn origin_epoch(&self) -> OriginEpoch {
-        OriginEpoch::new(&fresh()).expect("origin epoch")
-    }
-    fn request_id(&self) -> RequestId {
-        RequestId::new(&fresh()).expect("request id")
-    }
 }
 
 fn uuid(text: &str) -> Uuid {
@@ -151,7 +123,10 @@ fn service(fixture: &Fixture) -> Arc<AttachmentService> {
 }
 
 fn features() -> Vec<String> {
-    vec![ATTACHMENT_FEATURE.to_owned(), PREPARATION_FEATURE.to_owned()]
+    vec![
+        ATTACHMENT_FEATURE.to_owned(),
+        PREPARATION_FEATURE.to_owned(),
+    ]
 }
 
 fn attachment_features() -> Vec<String> {
@@ -211,7 +186,12 @@ fn chunk_frame(handle: &ConnectionHandle, transfer: &Uuid, offset: u64, length: 
     )
 }
 
-fn seal_frame(handle: &ConnectionHandle, transfer: &Uuid, length: u64, sha: Base64Url<32>) -> Frame {
+fn seal_frame(
+    handle: &ConnectionHandle,
+    transfer: &Uuid,
+    length: u64,
+    sha: Base64Url<32>,
+) -> Frame {
     Frame::new(
         uuid(&fresh()),
         handle.connection_id().clone(),
@@ -290,7 +270,11 @@ async fn preparation_begin_without_the_feature_is_rejected_before_staging() {
     let frame = begin_frame(
         &handle,
         &transfer,
-        target(&fixture, &session, sign_receipt(&fixture, &session, TAB, AGENT)),
+        target(
+            &fixture,
+            &session,
+            sign_receipt(&fixture, &session, TAB, AGENT),
+        ),
         &subject_of(DEVICE),
         4,
         "note.txt",
@@ -302,7 +286,10 @@ async fn preparation_begin_without_the_feature_is_rejected_before_staging() {
     let frames = drain(&mut receiver);
     let error = error_of(&frames);
     assert_eq!(error.code, ErrorCode::ProtocolFeatureRequired);
-    assert_eq!(error.transfer_id.as_ref().map(Uuid::as_str), Some(transfer.as_str()));
+    assert_eq!(
+        error.transfer_id.as_ref().map(Uuid::as_str),
+        Some(transfer.as_str())
+    );
     assert_eq!(fixture.staging.transfer_count(), 0);
 }
 
@@ -311,10 +298,10 @@ async fn preparation_begin_requires_the_authenticated_device_and_binding() {
     let fixture = fixture();
     let (session, _view) = ready_preparation(&fixture).await;
     let receipt = sign_receipt(&fixture, &session, TAB, AGENT);
-    let (handle, mut receiver) = handle(DEVICE);
+    let (connection, mut receiver) = handle(DEVICE);
     // subject 声明与连接身份不一致：binding_mismatch，且不触碰暂存。
     let frame = begin_frame(
-        &handle,
+        &connection,
         &uuid(&fresh()),
         target(&fixture, &session, receipt),
         &subject_of("9c8f6b1d-7a35-4f0b-9b6a-2f6d5c4e3b1a"),
@@ -322,7 +309,7 @@ async fn preparation_begin_requires_the_authenticated_device_and_binding() {
         "note.txt",
     );
     service(&fixture)
-        .route(&handle, &features(), &frame)
+        .route(&connection, &features(), &frame)
         .await;
     let frames = drain(&mut receiver);
     assert_eq!(error_of(&frames).code, ErrorCode::AttachmentBindingMismatch);
@@ -355,14 +342,16 @@ async fn preparation_begin_after_commit_reports_session_id() {
     let frame = begin_frame(
         &handle,
         &transfer,
-        target(&fixture, &session, sign_receipt(&fixture, &session, TAB, AGENT)),
+        target(
+            &fixture,
+            &session,
+            sign_receipt(&fixture, &session, TAB, AGENT),
+        ),
         &subject_of(DEVICE),
         4,
         "note.txt",
     );
-    service(&fixture)
-        .route(&handle, &features(), &frame)
-        .await;
+    service(&fixture).route(&handle, &features(), &frame).await;
     let frames = drain(&mut receiver);
     let error = error_of(&frames);
     assert_eq!(error.code, ErrorCode::PreparationAlreadyCommitted);
@@ -372,7 +361,10 @@ async fn preparation_begin_after_commit_reports_session_id() {
         Some(transfer.as_str())
     );
     let details = error.details.get();
-    assert!(details.contains(session.as_str()), "details must locate the session: {details}");
+    assert!(
+        details.contains(session.as_str()),
+        "details must locate the session: {details}"
+    );
     assert_eq!(fixture.staging.transfer_count(), 0);
 }
 
@@ -395,9 +387,7 @@ async fn preparation_begin_stale_on_runtime_epoch_mismatch() {
         4,
         "note.txt",
     );
-    service(&fixture)
-        .route(&handle, &features(), &frame)
-        .await;
+    service(&fixture).route(&handle, &features(), &frame).await;
     let frames = drain(&mut receiver);
     let error = error_of(&frames);
     assert_eq!(error.code, ErrorCode::PreparationStale);
@@ -489,7 +479,11 @@ async fn seal_is_idempotent_and_status_reads_the_staged_state() {
     let begin = begin_frame(
         &handle,
         &transfer,
-        target(&fixture, &session, sign_receipt(&fixture, &session, TAB, AGENT)),
+        target(
+            &fixture,
+            &session,
+            sign_receipt(&fixture, &session, TAB, AGENT),
+        ),
         &subject_of(DEVICE),
         4,
         "note.txt",
@@ -545,7 +539,10 @@ async fn seal_is_idempotent_and_status_reads_the_staged_state() {
             _ => None,
         })
         .expect("status");
-    assert_eq!(status.state, sync_protocol::attachment::TransferState::Sealed);
+    assert_eq!(
+        status.state,
+        sync_protocol::attachment::TransferState::Sealed
+    );
 }
 
 #[tokio::test]
@@ -557,7 +554,11 @@ async fn manifest_errors_carry_the_submission_id() {
     let frame = manifest_begin_frame(
         &handle,
         &submission,
-        target(&fixture, &session, sign_receipt(&fixture, &session, TAB, AGENT)),
+        target(
+            &fixture,
+            &session,
+            sign_receipt(&fixture, &session, TAB, AGENT),
+        ),
         &subject_of(DEVICE),
         1,
     );
@@ -567,7 +568,10 @@ async fn manifest_errors_carry_the_submission_id() {
     let frames = drain(&mut receiver);
     let error = error_of(&frames);
     assert_eq!(error.code, ErrorCode::ProtocolFeatureRequired);
-    assert!(error.transfer_id.is_null(), "manifest errors must not carry transferId");
+    assert!(
+        error.transfer_id.is_null(),
+        "manifest errors must not carry transferId"
+    );
     assert_eq!(
         error.submission_id.as_ref().map(Uuid::as_str),
         Some(submission.as_str())
@@ -583,14 +587,16 @@ async fn preparation_read_is_not_extended_to_staged_transfers() {
     let begin = begin_frame(
         &handle,
         &transfer,
-        target(&fixture, &session, sign_receipt(&fixture, &session, TAB, AGENT)),
+        target(
+            &fixture,
+            &session,
+            sign_receipt(&fixture, &session, TAB, AGENT),
+        ),
         &subject_of(DEVICE),
         4,
         "note.txt",
     );
-    service(&fixture)
-        .route(&handle, &features(), &begin)
-        .await;
+    service(&fixture).route(&handle, &features(), &begin).await;
     let _ = drain(&mut receiver);
     let read = Frame::new(
         uuid(&fresh()),
@@ -606,7 +612,10 @@ async fn preparation_read_is_not_extended_to_staged_transfers() {
     service(&fixture).route(&handle, &features(), &read).await;
     // `read` 仍走正式读取面：尚未转正的附件是 `attachment.transfer_not_found`（不泄露暂存内容）。
     let frames = drain(&mut receiver);
-    assert_eq!(error_of(&frames).code, ErrorCode::AttachmentTransferNotFound);
+    assert_eq!(
+        error_of(&frames).code,
+        ErrorCode::AttachmentTransferNotFound
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -622,25 +631,22 @@ async fn formal_negotiation_gate_is_unchanged() {
         uuid(&fresh()),
         handle.connection_id().clone(),
         DecimalString::parse("1").expect("sequence"),
-        FrameBody::Begin(BeginBody::Owned(sync_protocol::attachment::OwnedBeginBody {
-            transfer_id: uuid(&fresh()),
-            session_id: uuid(&fresh()),
-            subject: DeviceSubject::new(subject_of(DEVICE)),
-            total_length: DecimalString::parse("4").expect("length"),
-            chunk_size: FixedChunkSize::new(32768).expect("chunk size"),
-            media_type: NonEmptyText::<255>::parse("text/plain").expect("media type"),
-            file_name: NonEmptyText::<255>::parse("note.txt").expect("file name"),
-        })),
+        FrameBody::Begin(BeginBody::Owned(
+            sync_protocol::attachment::OwnedBeginBody {
+                transfer_id: uuid(&fresh()),
+                session_id: uuid(&fresh()),
+                subject: DeviceSubject::new(subject_of(DEVICE)),
+                total_length: DecimalString::parse("4").expect("length"),
+                chunk_size: FixedChunkSize::new(32768).expect("chunk size"),
+                media_type: NonEmptyText::<255>::parse("text/plain").expect("media type"),
+                file_name: NonEmptyText::<255>::parse("note.txt").expect("file name"),
+            },
+        )),
     );
-    let outcome = service(&fixture())
-        .route(&handle, &[], &frame)
-        .await;
+    let outcome = service(&fixture()).route(&handle, &[], &frame).await;
     assert_eq!(
         outcome,
-        AttachmentOutcome::Close(
-            close::PROTOCOL,
-            "attachment feature was not negotiated"
-        )
+        AttachmentOutcome::Close(close::PROTOCOL, "attachment feature was not negotiated")
     );
     let frames = drain(&mut receiver);
     assert_eq!(

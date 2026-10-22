@@ -8,27 +8,24 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use acp_core::model::{
-    Admission, AgentId, AgentRef, AttachmentId, AttachmentSubject, ClaimedAttachment, ConfigOption,
-    ConnectionId, DeviceId, Digest, FirstSubmissionAdmission, FirstSubmissionConvergence,
-    FirstSubmissionRecord, FirstSubmissionSettlement, FirstSubmissionWrite, FirstSubmissionId,
-    FirstUserMessage,
-    ModeRef, ModeState, NodeId, PortError, PreparationBinding, PreparationOwner, PreparationView,
-    ResourceGeneration, RuntimeEpoch, SealedFacts, SessionId, StagedAbortReason, StagedChunk,
-    StagedChunkOutcome, StagedClaim, StagedManifestBegin, StagedManifestPage, StagedManifestSeal,
-    StagedManifestState, StagedSeal, StagedSealOutcome, StagedTransferBegin, StagedTransferState,
-    SubmissionId, Timestamp, UnavailableKind, ViewJson,
+    AgentId, AgentRef, AttachmentId, AttachmentSubject, ClaimedAttachment, ConfigOption,
+    ConnectionId, DeviceId, Digest, DispatchAdmission, DispatchFence, FirstSubmissionAdmission,
+    FirstSubmissionConvergence, FirstSubmissionId, FirstSubmissionRecord,
+    FirstSubmissionSettlement, FirstSubmissionWrite, FirstUserMessage, ModeRef, ModeState, NodeId,
+    PortError, PreparationBinding, PreparationOwner, PreparationView, ResourceGeneration,
+    RuntimeEpoch, SealedFacts, SessionId, StagedAbortReason, StagedChunk, StagedChunkOutcome,
+    StagedClaim, StagedManifestBegin, StagedManifestPage, StagedManifestSeal, StagedManifestState,
+    StagedSeal, StagedSealOutcome, StagedTransferBegin, StagedTransferState, SubmissionId,
+    Timestamp, UnavailableKind, ViewJson,
 };
 use acp_core::ports::{
-    CapacityAdmission, DispatchAdmission, DispatchFence, FirstSubmission,
-    PreparationAttachmentStaging, ReclaimCandidate,
+    Admission, CapacityAdmission, FirstSubmission, PreparationAttachmentStaging, ReclaimCandidate,
 };
 use async_trait::async_trait;
 use identity_auth::{CanonicalOrigin, CredentialStatus, P1363Signature, PreparationReceipt};
 use p256::ecdsa::signature::Signer as _;
-use sync_protocol::common::{
-    Base64Url, ConnectionFields, NonEmptyText, PositiveDecimalString, Uuid,
-};
-use sync_protocol::envelope::{encode_body, Envelope, MessageType};
+use sync_protocol::common::{Base64Url, DecimalString, NonEmptyText, PositiveDecimalString, Uuid};
+use sync_protocol::envelope::{ConnectionFields, Envelope, MessageType, encode_body};
 
 use super::*;
 use crate::sync::conn::limits::{SessionLimits, SyncConfig};
@@ -106,11 +103,7 @@ pub(crate) struct TestCapacity {
 
 #[async_trait]
 impl CapacityAdmission for TestCapacity {
-    async fn reserve(
-        &self,
-        _session: SessionId,
-        _now: Timestamp,
-    ) -> Result<Admission, PortError> {
+    async fn reserve(&self, _session: SessionId, _now: Timestamp) -> Result<Admission, PortError> {
         if *self.full.lock().expect("lock") {
             Ok(Admission::CapacityExceeded)
         } else {
@@ -166,8 +159,8 @@ impl TestTrust {
     pub(crate) fn sign_sync(&self, claims: &PreparationClaims) -> PreparationReceipt {
         let transcript = claims.transcript().expect("claims assemble");
         let signature: p256::ecdsa::Signature = self.signing.sign(&transcript);
-        let signature = P1363Signature::try_from_bytes(signature.to_bytes().as_slice())
-            .expect("signature");
+        let signature =
+            P1363Signature::try_from_bytes(signature.to_bytes().as_slice()).expect("signature");
         PreparationReceipt::new(claims.clone(), signature)
     }
 
@@ -179,7 +172,9 @@ impl TestTrust {
 #[async_trait]
 impl PreparationTrust for TestTrust {
     async fn snapshot(&self, device: &DeviceId) -> Result<TrustSnapshot, PortError> {
-        let credential = if device.as_str() == DEVICE {
+        // `OTHER_DEVICE` 也是已认证设备：跨设备用例应走到 receipt 绑定校验，而不是提前以
+        // `auth.device_unknown` 结束；撤销/未知仍由 `credential` 的显式取值覆盖。
+        let credential = if device.as_str() == DEVICE || device.as_str() == OTHER_DEVICE {
             *self.credential.lock().expect("lock")
         } else {
             CredentialStatus::Unknown
@@ -318,7 +313,11 @@ impl TestStaging {
         self.transfers.lock().expect("lock").len()
     }
 
-    fn manifest_view(&self, submission: &SubmissionId, record: &FakeManifest) -> StagedManifestState {
+    fn manifest_view(
+        &self,
+        submission: &SubmissionId,
+        record: &FakeManifest,
+    ) -> StagedManifestState {
         StagedManifestState {
             submission: submission.clone(),
             count: record.count,
@@ -330,10 +329,7 @@ impl TestStaging {
 
 #[async_trait]
 impl PreparationAttachmentStaging for TestStaging {
-    async fn begin(
-        &self,
-        begin: StagedTransferBegin,
-    ) -> Result<StagedTransferState, PortError> {
+    async fn begin(&self, begin: StagedTransferBegin) -> Result<StagedTransferState, PortError> {
         let mut transfers = self.transfers.lock().expect("lock");
         if let Some(existing) = transfers.get_mut(&begin.transfer) {
             let same = existing.binding == begin.binding
@@ -366,9 +362,11 @@ impl PreparationAttachmentStaging for TestStaging {
 
     async fn append(&self, chunk: StagedChunk) -> Result<StagedChunkOutcome, PortError> {
         let mut transfers = self.transfers.lock().expect("lock");
-        let record = transfers
-            .get_mut(&chunk.transfer)
-            .ok_or_else(|| PortError::NotFound(acp_core::model::EntityRef::Attachment(chunk.transfer.clone())))?;
+        let record = transfers.get_mut(&chunk.transfer).ok_or_else(|| {
+            PortError::NotFound(acp_core::model::EntityRef::Attachment(
+                chunk.transfer.clone(),
+            ))
+        })?;
         if record.connection != chunk.connection {
             return Ok(StagedChunkOutcome::ConnectionMismatch);
         }
@@ -399,9 +397,11 @@ impl PreparationAttachmentStaging for TestStaging {
 
     async fn seal(&self, seal: StagedSeal) -> Result<StagedSealOutcome, PortError> {
         let mut transfers = self.transfers.lock().expect("lock");
-        let record = transfers
-            .get_mut(&seal.transfer)
-            .ok_or_else(|| PortError::NotFound(acp_core::model::EntityRef::Attachment(seal.transfer.clone())))?;
+        let record = transfers.get_mut(&seal.transfer).ok_or_else(|| {
+            PortError::NotFound(acp_core::model::EntityRef::Attachment(
+                seal.transfer.clone(),
+            ))
+        })?;
         if record.connection != seal.connection {
             return Ok(StagedSealOutcome::ConnectionMismatch);
         }
@@ -434,7 +434,9 @@ impl PreparationAttachmentStaging for TestStaging {
         transfer: AttachmentId,
     ) -> Result<Option<StagedTransferState>, PortError> {
         let transfers = self.transfers.lock().expect("lock");
-        Ok(transfers.get(&transfer).map(|record| self.view(&transfer, record)))
+        Ok(transfers
+            .get(&transfer)
+            .map(|record| self.view(&transfer, record)))
     }
 
     async fn abort(
@@ -481,9 +483,11 @@ impl PreparationAttachmentStaging for TestStaging {
         page: StagedManifestPage,
     ) -> Result<StagedManifestState, PortError> {
         let mut manifests = self.manifests.lock().expect("lock");
-        let manifest = manifests
-            .get_mut(&page.submission)
-            .ok_or_else(|| PortError::NotFound(acp_core::model::EntityRef::Submission(page.submission.clone())))?;
+        let manifest = manifests.get_mut(&page.submission).ok_or_else(|| {
+            PortError::NotFound(acp_core::model::EntityRef::Submission(
+                page.submission.clone(),
+            ))
+        })?;
         if manifest.connection != page.connection {
             return Err(PortError::Conflict(
                 acp_core::model::ConflictKind::AlreadyExists,
@@ -491,9 +495,9 @@ impl PreparationAttachmentStaging for TestStaging {
         }
         let transfers = self.transfers.lock().expect("lock");
         for transfer in &page.transfers {
-            let record = transfers
-                .get(transfer)
-                .ok_or_else(|| PortError::NotFound(acp_core::model::EntityRef::Attachment(transfer.clone())))?;
+            let record = transfers.get(transfer).ok_or_else(|| {
+                PortError::NotFound(acp_core::model::EntityRef::Attachment(transfer.clone()))
+            })?;
             if record.binding != manifest.binding
                 || record.subject != manifest.subject
                 || record.sealed.is_none()
@@ -512,9 +516,11 @@ impl PreparationAttachmentStaging for TestStaging {
         seal: StagedManifestSeal,
     ) -> Result<StagedManifestState, PortError> {
         let mut manifests = self.manifests.lock().expect("lock");
-        let manifest = manifests
-            .get_mut(&seal.submission)
-            .ok_or_else(|| PortError::NotFound(acp_core::model::EntityRef::Submission(seal.submission.clone())))?;
+        let manifest = manifests.get_mut(&seal.submission).ok_or_else(|| {
+            PortError::NotFound(acp_core::model::EntityRef::Submission(
+                seal.submission.clone(),
+            ))
+        })?;
         if manifest.connection != seal.connection {
             return Err(PortError::Conflict(
                 acp_core::model::ConflictKind::AlreadyExists,
@@ -561,37 +567,40 @@ impl TestHost {
             options: Mutex::new(PreparationOptions {
                 modes: ModeState::new(
                     None,
-                    vec![ModeRef::try_new(
-                        acp_core::model::ModeId::new("default").expect("mode"),
-                        "Default",
-                    )
-                    .expect("mode ref")],
+                    vec![
+                        ModeRef::try_new(
+                            acp_core::model::ModeId::new("default").expect("mode"),
+                            "Default",
+                        )
+                        .expect("mode ref"),
+                    ],
                 ),
-                config: vec![ConfigOption::try_new(
-                    acp_core::model::ConfigOptionId::new("model").expect("id"),
-                    "Model",
-                    None,
-                    None,
-                    acp_core::model::ConfigOptionKind::Select,
-                    acp_core::model::ConfigValue::select("gpt-5").expect("value"),
-                    vec![acp_core::model::ConfigOptionEntry::try_new(
-                        acp_core::model::SelectValue::new("gpt-5").expect("select"),
-                        "GPT-5",
+                config: vec![
+                    ConfigOption::try_new(
+                        acp_core::model::ConfigOptionId::new("model").expect("id"),
+                        "Model",
                         None,
+                        None,
+                        acp_core::model::ConfigOptionKind::Select,
+                        acp_core::model::ConfigValue::select("gpt-5").expect("value"),
+                        vec![
+                            acp_core::model::ConfigOptionEntry::try_new(
+                                acp_core::model::SelectValue::new("gpt-5").expect("select"),
+                                "GPT-5",
+                                None,
+                            )
+                            .expect("entry"),
+                        ],
                     )
-                    .expect("entry")],
-                )
-                .expect("config")],
+                    .expect("config"),
+                ],
+                blocks_dispatch: false,
             }),
         }
     }
 
     fn establish_calls(&self) -> u32 {
         *self.establish_calls.lock().expect("lock")
-    }
-
-    fn set_release(&self, outcome: EndpointRelease) {
-        *self.release_outcome.lock().expect("lock") = outcome;
     }
 
     fn release_calls(&self) -> u32 {
@@ -621,6 +630,19 @@ impl PreparationEndpoints for TestHost {
         *self.release_calls.lock().expect("lock") += 1;
         *self.release_outcome.lock().expect("lock")
     }
+
+    async fn claim(
+        &self,
+        _session: SessionId,
+        _generation: u64,
+    ) -> Result<Arc<dyn acp_core::ports::SessionEndpoint>, PortError> {
+        // 控制面用例不走首次派发：claim 只证明「未建立端点时显式失败」。
+        Err(PortError::Unavailable(
+            UnavailableKind::SessionNotEstablished,
+        ))
+    }
+
+    async fn release_all(&self) {}
 }
 
 pub(crate) struct Fixture {
@@ -634,9 +656,7 @@ pub(crate) struct Fixture {
 }
 
 pub(crate) fn fixture() -> Fixture {
-    let workspace = std::env::temp_dir()
-        .to_string_lossy()
-        .into_owned();
+    let workspace = std::env::temp_dir().to_string_lossy().into_owned();
     let trust = Arc::new(TestTrust::new(&workspace));
     let capacity = Arc::new(TestCapacity {
         full: Mutex::new(false),
@@ -668,7 +688,9 @@ pub(crate) fn fixture() -> Fixture {
     }
 }
 
-pub(crate) fn handle(device: &str) -> (Arc<ConnectionHandle>, tokio::sync::mpsc::Receiver<Outbound>) {
+pub(crate) fn handle(
+    device: &str,
+) -> (Arc<ConnectionHandle>, tokio::sync::mpsc::Receiver<Outbound>) {
     ConnectionHandle::new(
         uuid(&fresh()),
         NodeId::new(NODE).expect("node"),
@@ -713,10 +735,7 @@ pub(crate) fn sign_receipt_with(
 }
 
 pub(crate) async fn ready_preparation(fixture: &Fixture) -> (SessionId, PreparationView) {
-    let owner = PreparationOwner::new(
-        DeviceId::new(DEVICE).expect("device"),
-        nonce(TAB),
-    );
+    let owner = PreparationOwner::new(DeviceId::new(DEVICE).expect("device"), nonce(TAB));
     let allocated = fixture
         .directory
         .allocate(
@@ -795,7 +814,11 @@ fn allocate_request(operation: &Uuid) -> SessionPreparation {
     )
 }
 
-fn restore_request(operation: &Uuid, session: &SessionId, receipt: sync_protocol::common::PreparationReceipt) -> SessionPreparation {
+fn restore_request(
+    operation: &Uuid,
+    session: &SessionId,
+    receipt: sync_protocol::common::PreparationReceipt,
+) -> SessionPreparation {
     SessionPreparation::new(
         operation.clone(),
         sync_protocol::sync::PreparationAction::Restore,
@@ -864,7 +887,10 @@ async fn device_revoked_is_refused_before_any_preparation_action() {
     let body: sync_protocol::error::Body =
         serde_json::from_str(envelope.body().get()).expect("error body");
     assert_eq!(body.code, ErrorCode::AuthDeviceRevoked);
-    assert_eq!(handle.close_request().map(|(code, _)| code), Some(close::REVOKED));
+    assert_eq!(
+        handle.close_request().map(|(code, _)| code),
+        Some(close::REVOKED)
+    );
     assert_eq!(fixture.host.establish_calls(), 0);
 }
 
@@ -881,7 +907,10 @@ async fn allocate_uses_owner_allocated_id_and_returns_ready() {
     let result: SessionPreparationResult =
         serde_json::from_str(envelope.body().get()).expect("result");
     assert_eq!(result.operation_id, request.operation_id);
-    assert_eq!(result.action, sync_protocol::sync::PreparationAction::Allocate);
+    assert_eq!(
+        result.action,
+        sync_protocol::sync::PreparationAction::Allocate
+    );
     match result.outcome {
         PreparationOutcome::Ready {
             runtime_epoch,
@@ -895,7 +924,12 @@ async fn allocate_uses_owner_allocated_id_and_returns_ready() {
         }
         other => panic!("expected ready, got {other:?}"),
     }
-    assert!(fixture.directory.view(&SessionId::new(result.session_id.as_str()).expect("session")).is_some());
+    assert!(
+        fixture
+            .directory
+            .view(&SessionId::new(result.session_id.as_str()).expect("session"))
+            .is_some()
+    );
     assert_eq!(fixture.host.establish_calls(), 1);
 }
 
@@ -947,7 +981,11 @@ async fn same_operation_same_parameters_is_idempotent() {
     )
     .expect("result");
     assert_eq!(first, second);
-    assert_eq!(fixture.host.establish_calls(), 1, "the second frame must not establish again");
+    assert_eq!(
+        fixture.host.establish_calls(),
+        1,
+        "the second frame must not establish again"
+    );
 }
 
 #[tokio::test]
@@ -957,7 +995,9 @@ async fn same_operation_different_parameters_is_rejected() {
     let (handle, mut receiver) = handle(DEVICE);
     route.on_authenticated(&handle, &[PREPARATION_FEATURE.to_owned()]);
     let operation = uuid(&fresh());
-    route.route(&handle, &envelope(&allocate_request(&operation))).await;
+    route
+        .route(&handle, &envelope(&allocate_request(&operation)))
+        .await;
     let mut reconfigured = allocate_request(&operation);
     reconfigured.detail = PreparationRequestDetail::Allocate {
         agent_id: NonEmptyText::<128>::parse("other").expect("agent"),
@@ -987,15 +1027,18 @@ async fn restore_rejects_tampered_and_cross_device_receipts() {
     let mut receipt = sign_receipt(&fixture, &session, TAB, AGENT);
     receipt.claims.session_id = uuid(&fresh());
 
-    let (handle, mut receiver) = handle(DEVICE);
-    route.on_authenticated(&handle, &[PREPARATION_FEATURE.to_owned()]);
+    let (connection, mut receiver) = handle(DEVICE);
+    route.on_authenticated(&connection, &[PREPARATION_FEATURE.to_owned()]);
     route
-        .route(&handle, &envelope(&restore_request(&uuid(&fresh()), &session, receipt)))
+        .route(
+            &connection,
+            &envelope(&restore_request(&uuid(&fresh()), &session, receipt)),
+        )
         .await;
     let sent = receiver.try_recv().expect("binding error");
-    let envelope = Envelope::decode(&sent.text).expect("envelope");
+    let received = Envelope::decode(&sent.text).expect("envelope");
     let body: sync_protocol::error::Body =
-        serde_json::from_str(envelope.body().get()).expect("error body");
+        serde_json::from_str(received.body().get()).expect("error body");
     assert_eq!(body.code, ErrorCode::AttachmentBindingMismatch);
 
     // 另一台设备的连接使用同一份 receipt：绑定不符（不泄露是哪一项失败）。
@@ -1003,12 +1046,15 @@ async fn restore_rejects_tampered_and_cross_device_receipts() {
     let (other, mut other_receiver) = handle(OTHER_DEVICE);
     route.on_authenticated(&other, &[PREPARATION_FEATURE.to_owned()]);
     route
-        .route(&other, &envelope(&restore_request(&uuid(&fresh()), &session, receipt)))
+        .route(
+            &other,
+            &envelope(&restore_request(&uuid(&fresh()), &session, receipt)),
+        )
         .await;
     let sent = other_receiver.try_recv().expect("binding error");
-    let envelope = Envelope::decode(&sent.text).expect("envelope");
+    let received = Envelope::decode(&sent.text).expect("envelope");
     let body: sync_protocol::error::Body =
-        serde_json::from_str(envelope.body().get()).expect("error body");
+        serde_json::from_str(received.body().get()).expect("error body");
     assert_eq!(body.code, ErrorCode::AttachmentBindingMismatch);
 }
 
@@ -1017,13 +1063,7 @@ async fn restore_after_store_rebuild_is_not_retryable() {
     let fixture = fixture();
     let route = PreparationRoute::new(fixture.preparations.clone(), fixture.host.clone());
     let (session, _view) = ready_preparation(&fixture).await;
-    let receipt = sign_receipt_with(
-        &fixture,
-        &session,
-        TAB,
-        AGENT,
-        fixture.trust.workspace(),
-    );
+    let receipt = sign_receipt_with(&fixture, &session, TAB, AGENT, fixture.trust.workspace());
     // 篡改 storeEpoch：签名覆盖它，因此必须重签一份「另一存储代」的合法 claim 才能走到 store_rebuilt。
     let mut claims = PreparationClaims {
         device_id: DeviceId::new(DEVICE).expect("device"),
@@ -1045,15 +1085,23 @@ async fn restore_after_store_rebuild_is_not_retryable() {
     let (handle, mut receiver) = handle(DEVICE);
     route.on_authenticated(&handle, &[PREPARATION_FEATURE.to_owned()]);
     route
-        .route(&handle, &envelope(&restore_request(&uuid(&fresh()), &session, rebuilt)))
+        .route(
+            &handle,
+            &envelope(&restore_request(&uuid(&fresh()), &session, rebuilt)),
+        )
         .await;
     let sent = receiver.try_recv().expect("store rebuilt");
     let envelope = Envelope::decode(&sent.text).expect("envelope");
-    let body: sync_protocol::error::Body =
-        serde_json::from_str(envelope.body().get()).expect("error body");
-    assert_eq!(body.code, ErrorCode::PreparationStoreRebuilt);
-    assert!(!body.retryable);
-    assert_eq!(body.details.get(), "{}");
+    // storeEpoch 失效是准备结果的 `failed` 分支（D3.1），不是认证/协议 error 帧。
+    let result: SessionPreparationResult =
+        serde_json::from_str(envelope.body().get()).expect("result");
+    match result.outcome {
+        PreparationOutcome::Failed { error } => {
+            assert_eq!(error.code, ErrorCode::PreparationStoreRebuilt);
+            assert!(!error.retryable);
+        }
+        other => panic!("expected failed store_rebuilt, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1068,14 +1116,23 @@ async fn committed_takes_precedence_over_stale_generation() {
     route
         .route(
             &handle,
-            &envelope(&configure_request(&uuid(&fresh()), &session, receipt, "99", None)),
+            &envelope(&configure_request(
+                &uuid(&fresh()),
+                &session,
+                receipt,
+                "99",
+                Some("plan"),
+            )),
         )
         .await;
     let sent = receiver.try_recv().expect("result");
     let envelope = Envelope::decode(&sent.text).expect("envelope");
     let result: SessionPreparationResult =
         serde_json::from_str(envelope.body().get()).expect("result");
-    assert!(matches!(result.outcome, PreparationOutcome::Committed { .. }));
+    assert!(matches!(
+        result.outcome,
+        PreparationOutcome::Committed { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1089,7 +1146,13 @@ async fn generation_mismatch_is_stale() {
     route
         .route(
             &handle,
-            &envelope(&configure_request(&uuid(&fresh()), &session, receipt, "99", None)),
+            &envelope(&configure_request(
+                &uuid(&fresh()),
+                &session,
+                receipt,
+                "99",
+                Some("plan"),
+            )),
         )
         .await;
     let sent = receiver.try_recv().expect("result");
@@ -1129,7 +1192,10 @@ async fn release_after_commit_is_committed_and_does_not_touch_the_endpoint() {
     let envelope = Envelope::decode(&sent.text).expect("envelope");
     let result: SessionPreparationResult =
         serde_json::from_str(envelope.body().get()).expect("result");
-    assert!(matches!(result.outcome, PreparationOutcome::Committed { .. }));
+    assert!(matches!(
+        result.outcome,
+        PreparationOutcome::Committed { .. }
+    ));
     assert_eq!(fixture.host.release_calls(), 0);
     assert!(fixture.directory.view(&session).is_some());
 }
@@ -1155,8 +1221,12 @@ async fn release_is_idempotent_and_reports_released() {
     };
     let (handle, mut receiver) = handle(DEVICE);
     route.on_authenticated(&handle, &[PREPARATION_FEATURE.to_owned()]);
-    route.route(&handle, &envelope(&request(uuid(&fresh())))).await;
-    route.route(&handle, &envelope(&request(uuid(&fresh())))).await;
+    route
+        .route(&handle, &envelope(&request(uuid(&fresh()))))
+        .await;
+    route
+        .route(&handle, &envelope(&request(uuid(&fresh()))))
+        .await;
     for _ in 0..2 {
         let sent = receiver.try_recv().expect("result");
         let envelope = Envelope::decode(&sent.text).expect("envelope");

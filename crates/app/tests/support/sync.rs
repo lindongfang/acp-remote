@@ -1600,6 +1600,7 @@ impl HostNode {
                 Arc::clone(&lifecycle),
                 Arc::clone(&clock) as Arc<dyn acp_core::ports::Clock>,
             )),
+            None,
         )
         .expect("注册 Sync path");
         let addr = listener.local_addrs()[0];

@@ -38,16 +38,16 @@ use crate::model::{
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditQuery, AuditStore,
     Clock, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryCreator, DirectoryListing,
-    ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore, MessageCoverage,
-    NodeConnectedWrite, NodeRevocation, NodeWrite, OriginReadPage, PairingClaimOutcome,
-    PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
-    PruneReport, RemoteCommandLookup, RemoteCommandRecord, RemoteCommandStatus, FirstSubmission,
-    PreparationAttachmentStaging,
-    RemoteCommandTarget, RemoteReadQuery, RemoteReadResult, RemoteRuntimeDirectory,
-    RemoteSessionEntry, RemoteSourceReads, RemoteSourceState, RemoteTitleWrite, ReplayBatch,
-    ReplayLimit, RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionFiles, SessionQuery,
-    SessionStore, StoreHealth, SubmissionBinding, SyncReplaySlice, TrustRecordRef, TrustStore,
-    WorkspaceMkdirAdmission, WorkspaceMkdirExecution, WriteContext,
+    ExpiryWrite, FirstSubmission, HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore,
+    MessageCoverage, NodeConnectedWrite, NodeRevocation, NodeWrite, OriginReadPage,
+    PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
+    PairingWrite, PendingAudit, PreparationAttachmentStaging, PruneReport, RemoteCommandLookup,
+    RemoteCommandRecord, RemoteCommandStatus, RemoteCommandTarget, RemoteReadQuery,
+    RemoteReadResult, RemoteRuntimeDirectory, RemoteSessionEntry, RemoteSourceReads,
+    RemoteSourceState, RemoteTitleWrite, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
+    SessionCreateAdmission, SessionFiles, SessionQuery, SessionStore, StoreHealth,
+    SubmissionBinding, SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceMkdirAdmission,
+    WorkspaceMkdirExecution, WriteContext,
 };
 
 /// §4 的 `LocalSessionLifecycle` 用例面（`docs/CORE_PORTS_AND_STORAGE.md` §5.10）。
@@ -442,10 +442,7 @@ impl UseCases {
     }
 
     /// 接线准备附件暂存端口（与首次提交事务共用同一个存储实例）。
-    pub fn with_preparation_staging(
-        self,
-        staging: Arc<dyn PreparationAttachmentStaging>,
-    ) -> Self {
+    pub fn with_preparation_staging(self, staging: Arc<dyn PreparationAttachmentStaging>) -> Self {
         Self {
             staging: Some(staging),
             ..self
@@ -468,17 +465,17 @@ impl UseCases {
     }
 
     /// `session.start`（`kind: initial`）：委托 broker 的受理/围栏/派发管线。
-    #[allow(clippy::too_many_arguments)] // 与 broker 的受理输入一一对应，收进结构体会藏起语义
+    ///
+    /// 请求身份（`request`/`fingerprint`）随 [`crate::broker::FirstSubmissionStart`] 传入：适配层已按
+    /// wire 原文算好摘要，core 不重新构造第二份 payload。
     pub async fn start_first_submission(
         &self,
         actor: &Actor,
-        command: ClientCommand,
         start: crate::broker::FirstSubmissionStart,
         endpoint: Arc<dyn crate::ports::SessionEndpoint>,
     ) -> Result<CommandReceipt, PortError> {
-        command.validate().map_err(PortError::from)?;
         self.broker
-            .start_first_submission(actor, &command, start, endpoint)
+            .start_first_submission(actor, start, endpoint)
             .await
     }
 
@@ -486,13 +483,9 @@ impl UseCases {
     pub async fn continue_first_submission(
         &self,
         actor: &Actor,
-        command: ClientCommand,
         request: crate::broker::FirstSubmissionContinue,
     ) -> Result<CommandReceipt, PortError> {
-        command.validate().map_err(PortError::from)?;
-        self.broker
-            .continue_first_submission(actor, &command, request)
-            .await
+        self.broker.continue_first_submission(actor, request).await
     }
 
     /// 首条提交的只读投影（`restore` 的 committed、`command.status` 的协商投影、继续准入）。
@@ -501,6 +494,14 @@ impl UseCases {
         session: &SessionId,
     ) -> Result<Option<crate::model::FirstSubmissionRecord>, PortError> {
         self.broker.first_submission_record(session).await
+    }
+
+    /// 显式继续在端点/配置复核阶段失败时写该次尝试的 failed 终态（正文与首条身份不变）。
+    pub async fn settle_first_submission(
+        &self,
+        settlement: crate::model::FirstSubmissionSettlement,
+    ) -> Result<crate::model::FirstSubmissionRecord, PortError> {
+        self.broker.settle_first_submission(settlement).await
     }
 
     /// 持久首条用户消息（`owned_message.channel = 'user'`）：无需 Agent 回显即可读取。
@@ -550,9 +551,7 @@ impl UseCases {
         match source {
             PreparationWorkspaceSource::Directory(directory_id) => {
                 let record = self.config.directory(&directory_id).await?.ok_or(
-                    PortError::InvalidRequest(
-                        "workspace directory is not registered on this node",
-                    ),
+                    PortError::InvalidRequest("workspace directory is not registered on this node"),
                 )?;
                 Ok(PreparationWorkspace {
                     workspace: resolve_workspace(&directory_id, record.canonical_path())?,
