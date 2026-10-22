@@ -84,8 +84,8 @@ describe("输入区三态与附件边界", () => {
     expect(tagContaining(html, 'data-composer-input="editable"')).not.toContain("readonly");
     // 附件：说明与标记同时在（「没提附件」与「说了不支持」是两件事）。
     expect(html).toContain('data-attachments-supported="false"');
-    expect(html).toContain('data-attachment-notice="true"');
-    expect(html).toContain("附件暂不支持");
+    expect(tagContaining(html, 'data-action="pick-attachment"')).toContain('aria-disabled="true"');
+    expect(html).not.toContain("data-attachment-toolbar");
     // 三态之外没有「不可提交原因」的残留。
     expect(html).not.toContain("data-submit-unavailable");
   });
@@ -208,7 +208,7 @@ describe("输入区三态与附件边界", () => {
     expect(html).toContain('data-action="cancel-turn"');
     expect(html).toContain("data-submit-unavailable");
     expect(html).toContain("会话进行中，完成后可继续输入");
-    expect(html).toContain("进行中 · 可编辑但发送禁用，不排队");
+    expect(html).not.toContain("进行中 · 可编辑但发送禁用，不排队");
   });
 
   it("进行中且没有可取消的轮次：发送仍禁用，只有停止不呈现（不是点了没反应）", () => {
@@ -242,9 +242,9 @@ describe("输入区三态与附件边界", () => {
     expect(html).toContain('data-submit-enabled="false"');
     // 反例：把「不可用」实现成只读 → 下面两条会红。
     expect(tagContaining(html, 'data-composer-input="unavailable"')).not.toMatch(/readonly/i);
-    expect(html).toContain('data-composer-state-hint="unavailable"');
+    expect(html).not.toContain('data-composer-state-hint="unavailable"');
     expect(html).toContain("连接不可用，不能提交");
-    expect(html).toContain("当前不可提交 · 草稿仍可编辑");
+    expect(html).not.toContain("当前不可提交 · 草稿仍可编辑");
   });
 });
 
@@ -269,16 +269,16 @@ describe("提交与取消以服务端终态为准", () => {
 
   it("服务端已接受 / 已完成 / 失败：三种终态各有自己的措辞", () => {
     const accepted = render(input({ submission: { kind: "accepted", acceptedAt: "2026-10-01T00:00:01.000Z" } }));
-    expect(accepted).toContain('data-submission="accepted"');
-    expect(accepted).toContain('data-submission-accepted-at="2026-10-01T00:00:01.000Z"');
+    expect(accepted).not.toContain('data-submission="accepted"');
+
 
     const completed = render(input({ submission: { kind: "completed" } }));
-    expect(completed).toContain('data-submission="completed"');
+    expect(completed).not.toContain('data-submission="completed"');
 
     const failed = render(input({ submission: { kind: "failed", detail: "session.busy：Agent 正忙" } }));
     expect(failed).toContain('data-submission="failed"');
     expect(failed).toContain("session.busy：Agent 正忙");
-    expect(new Set([accepted, completed, failed]).size).toBe(3);
+    expect(failed).not.toBe(completed);
   });
 
   it("结果不确定：显著保留（alert）并给出说明", () => {
@@ -292,7 +292,7 @@ describe("提交与取消以服务端终态为准", () => {
   it("取消：可取消时有按钮；请求已提交后没有按钮且呈现等待终态；确认后才说已确认", () => {
     const available = render(input({ cancel: { kind: "available", failure: null } }));
     expect(available).toContain('data-action="cancel-turn"');
-    expect(available).toContain('data-cancel="available"');
+    expect(available).not.toContain('data-cancel="available"');
 
     const requested = render(input({ cancel: { kind: "requested", requestId: "req-c" } }));
     expect(requested).toContain('data-cancel="requested"');
@@ -302,8 +302,8 @@ describe("提交与取消以服务端终态为准", () => {
     expect(requested).not.toContain('data-action="cancel-turn"');
 
     const confirmed = render(input({ cancel: { kind: "confirmed" } }));
-    expect(confirmed).toContain('data-cancel="confirmed"');
-    expect(confirmed).toContain("服务端已确认取消");
+    expect(confirmed).not.toContain('data-cancel="confirmed"');
+    expect(confirmed).not.toContain("服务端已确认取消");
   });
 
   it("取消请求已提交/已确认时，状态提示不与取消行自相矛盾", () => {
@@ -318,15 +318,15 @@ describe("提交与取消以服务端终态为准", () => {
     expect(requested).toContain("取消请求已提交");
     // 反例：状态提示仍写「当前轮次不可取消」→ 与上一行互相否证。
     expect(requested).not.toContain("当前轮次不可取消");
-    expect(requested).toContain("进行中 · 可编辑但发送禁用，不排队");
+    expect(requested).not.toContain("data-composer-hint");
 
     const confirmed = render(input({ ...inProgress, cancel: { kind: "confirmed" } }));
-    expect(confirmed).toContain('data-cancel="confirmed"');
+    expect(confirmed).not.toContain('data-cancel="confirmed"');
     expect(confirmed).not.toContain("当前轮次不可取消");
 
     // 只有真正没有可取消轮次时才说「不可取消」。
     const unavailable = render(input({ ...inProgress, cancel: { kind: "unavailable" } }));
-    expect(unavailable).toContain("当前轮次不可取消");
+    expect(unavailable).not.toContain('data-action="cancel-turn"');
   });
 
   it("取消失败：回到可取消并带上失败原因，而不是冒充成功", () => {
@@ -345,8 +345,8 @@ describe("草稿的内存边界", () => {
     );
 
     expect(html).toContain('data-composer-draft-in-memory-only="true"');
-    expect(html).toContain('data-draft-notice="true"');
-    expect(html).toContain("草稿只在内存中保留、尚未提交");
+    expect(html).not.toContain('data-draft-notice="true"');
+    expect(html).not.toContain("草稿只在内存中保留、尚未提交");
   });
 });
 

@@ -962,42 +962,7 @@ function buildStyles(colors: Palette) {
 
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
-/** 翻页入口（消息与历史各一个，锚点分别为 `data-paging` / `data-history-paging`）。 */
-function PagingButton({
-  marker,
-  action,
-  label,
-  disabled: requestedDisabled,
-  loading,
-  onPress,
-}: {
-  readonly marker: "paging" | "historyPaging";
-  readonly action: "load-earlier" | "load-earlier-history";
-  readonly label: string;
-  readonly disabled: boolean;
-  readonly loading: boolean;
-  readonly onPress: (() => void) | undefined;
-}): ReactElement {
-  const theme = useTheme();
-  const styles = theme.dark ? STYLES.dark : STYLES.light;
 
-  const disabled = requestedDisabled || loading;
-  return (
-    <Pressable
-      role="button"
-      disabled={disabled || onPress === undefined}
-      style={disabled || onPress === undefined ? [styles.pagingButton, styles.pagingButtonDisabled] : styles.pagingButton}
-      dataSet={{ [marker]: "earlier", action, pagingDisabled: String(disabled) }}
-      onPress={() => {
-        onPress?.();
-      }}
-    >
-      <Text style={disabled ? [styles.pagingText, styles.pagingTextDisabled] : styles.pagingText}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
 
 /**
  * 会话头的 Agent 胶囊（原型 `.agentchip`）。
@@ -1248,9 +1213,7 @@ function userInputNodes(host: HTMLElement, ids: readonly string[]): readonly HTM
 /** 对话页正文。 */
 export function ConversationStream({
   model,
-  onLoadEarlier,
   onOpenDiagnostics,
-  onLoadEarlierHistory,
   onDraftChange,
   onSubmitPrompt,
   onCancelTurn,
@@ -1331,7 +1294,6 @@ export function ConversationStream({
   const singleColumn = !wide && hiddenColumns.length > 0;
   // 时间线的文件改动条目复用逐条改动的诊断投影（原文可用性/事件视图都在那里）。
   const changeDiagnostics = new Map(model.fileChanges.map((change) => [change.changeId, change.diagnostics]));
-  const paging = model.paging;
   const history = model.timeline.structuredHistory;
   const sidebar = model.sidebar;
   const activeFilesPanel = filesPanel ?? null;
@@ -1855,62 +1817,6 @@ export function ConversationStream({
                 </Pressable>
               </View>
             )}
-
-            <View style={styles.toolbar}>
-              <View style={styles.paging} dataSet={{ pagingGroup: "messages" }}>
-                <PagingButton
-                  marker="paging"
-                  action="load-earlier"
-                  label="加载更早的消息"
-                  disabled={!model.capabilities.canLoadEarlier}
-                  loading={paging.loading}
-                  onPress={() => {
-                    captureAnchor();
-                    onLoadEarlier();
-                  }}
-                />
-                {paging.hasEarlier ? (
-                  <Text style={styles.note} dataSet={{ pagingPageSize: String(model.messages.length) }}>
-                    {`本页 ${String(model.messages.length)} 条消息。`}
-                  </Text>
-                ) : (
-                  <Text style={styles.note} dataSet={{ paging: "earlier-exhausted" }}>
-                    已经是最早的消息。
-                  </Text>
-                )}
-                {paging.error === null ? null : (
-                  <Text style={styles.note} dataSet={{ pagingError: "true" }}>
-                    {paging.error}
-                  </Text>
-                )}
-              </View>
-
-              {/* 结构化历史与消息是两套独立分页（D2）：这里只描述历史那一页。 */}
-              {history.state === "available" && onLoadEarlierHistory !== undefined ? (
-                <View style={styles.paging} dataSet={{ pagingGroup: "history" }}>
-                  <PagingButton
-                    marker="historyPaging"
-                    action="load-earlier-history"
-                    label="加载更早的结构化条目"
-                    disabled={!paging.hasEarlierHistory || paging.loadingHistory}
-                    loading={paging.loadingHistory}
-                    onPress={() => {
-                      captureAnchor();
-                      onLoadEarlierHistory();
-                    }}
-                  />
-                  {paging.hasEarlierHistory ? (
-                    <Text style={styles.note} dataSet={{ historyPagingRemaining: "true" }}>
-                      还有更早的结构化条目。
-                    </Text>
-                  ) : (
-                    <Text style={styles.note} dataSet={{ historyPaging: "earlier-exhausted" }}>
-                      已经是最早的结构化条目。
-                    </Text>
-                  )}
-                </View>
-              ) : null}
-            </View>
 
             {/* 结构化历史不可用必须有明确说明，且不可用 ≠ 「这个会话没有结构化内容」（D11）。 */}
             {history.notice === null ? null : (

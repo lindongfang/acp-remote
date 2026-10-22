@@ -106,25 +106,7 @@ export interface ConversationComposerProps {
   readonly onRemovePathRef?: ((path: string) => void) | undefined;
 }
 
-/** 输入区的状态文案：三态措辞互不相同，且都不暗示只读。 */
-const STATE_LABELS: Readonly<Record<ConversationInputModel["state"], string>> = {
-  editable: "可输入",
-  in_progress: "进行中",
-  unavailable: "当前不可用",
-};
-
-/** 输入框的占位文案：不可提交时仍可编辑草稿（原因在下方单独说明）。 */
-const STATE_PLACEHOLDERS: Readonly<Record<ConversationInputModel["state"], string>> = {
-  editable: "给 Agent 发消息：可附带图片、文件、已有音频或工作目录路径",
-  in_progress: "进行中：可以继续编辑下一条草稿，完成后才能发送",
-  unavailable: "当前不可提交：草稿仍可编辑，原因见下方",
-};
-
-/** 提示行里的状态补充；`editable` 不需要额外措辞。 */
-const STATE_HINTS: Readonly<Partial<Record<ConversationInputModel["state"], string>>> = {
-  in_progress: "进行中 · 可编辑但发送禁用，不排队",
-  unavailable: "当前不可提交 · 草稿仍可编辑",
-};
+const STATE_PLACEHOLDERS = { editable: "输入消息…", in_progress: "编辑下一条消息…", unavailable: "当前无法发送，仍可编辑草稿…" };
 
 /** 附件状态的展示文案（每种状态一句，互不混用）。 */
 const ATTACHMENT_STATUS_LABELS: Readonly<Record<DraftAttachment["status"], string>> = {
@@ -641,43 +623,18 @@ export function ConversationComposer({
   onRemoveAttachment,
   onRetryAttachments,
   onCancelAttachmentUpload,
-  onAddPathRef,
   onRemovePathRef,
 }: ConversationComposerProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   // 三态都允许编辑草稿：`in_progress` 与 `unavailable` 只关掉提交闸门，不关输入框。
-  const warning = contextWarningOf(usage);
-  const [pathDraft, setPathDraft] = useState("");
-  const [pathIssue, setPathIssue] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const attachments = input.attachments.attachments;
   const hasUnsent = input.draft.trim().length > 0 || attachments.length > 0 || input.pathRefs.length > 0;
-  // 进行中的提示随「停止」是否可用变化：没有可取消的轮次时不能暗示有一个停止按钮。
-  // 只有 `unavailable` 才说「不可取消」：`requested`/`confirmed` 是在等终态/已确认，
-  // 取消行自己给出精确措辞，这里回落通用提示，避免与「取消请求已提交」自相矛盾。
-  const stateHint =
-    input.state === "in_progress" && input.cancel.kind === "unavailable"
-      ? "进行中 · 可编辑但发送禁用，当前轮次不可取消"
-      : STATE_HINTS[input.state];
   // 提交闸门只有这一处：模型的 `canSubmit`（执行中 / 连接离线 / imported 来源 / 附件未就绪都在
   // 模型里变成假）加上「有可提交内容」与「回调已接线」。可提交内容与仓库 `submitPrompt` 同源：
   // 文字、附件、路径引用三者有任一非空即可——纯附件消息不能被 UI 单独挡死。
   const submittable = input.canSubmit && hasUnsent;
-
-  // 粘贴图片/文件：只在剪贴板里真的有文件时拦截，普通文本粘贴不受影响。
-  useEffect(() => {
-    if (onPasteAttachments === undefined || typeof document === "undefined") return;
-    const handler = (event: Event): void => {
-      const data = (event as ClipboardEvent).clipboardData;
-      if (data === null || data.files.length === 0) return;
-      event.preventDefault();
-      onPasteAttachments(event);
-    };
-    document.addEventListener("paste", handler);
-    return () => {
-      document.removeEventListener("paste", handler);
-    };
-  }, [onPasteAttachments]);
 
   // 有未发送内容时才提示：刷新/关闭后不恢复（不承诺草稿与上传续传）。
   useEffect(() => {
@@ -704,28 +661,16 @@ export function ConversationComposer({
     onSubmit?.(input.draft);
   };
 
-  /** 添加路径引用：拒绝原因由页面/仓库给出，组件只呈现它。 */
-  const addPathRef = (): void => {
-    if (onAddPathRef === undefined) return;
-    const issue = onAddPathRef(pathDraft);
-    if (issue === null) {
-      setPathDraft("");
-      setPathIssue(null);
-    } else {
-      setPathIssue(issue);
-    }
-  };
-
   return (
     <View style={styles.composer} dataSet={{ composer: input.state, composerDraftInMemoryOnly: String(input.draftInMemoryOnly) }}>
-      {/* 接近上限的告警条：只有已上报且达到阈值才出现（未上报 / 零窗口不推算占比）。 */}
-      {warning === null ? null : (
-        <Text role="alert" style={styles.warnBar} dataSet={{ contextWarning: "true" }}>
-          {warning}
-        </Text>
-      )}
-
       <View style={styles.bar} dataSet={{ composerBar: "true" }}>
+        <Pressable role="button" aria-label={input.attachmentsSupported ? "添加文件" : `添加文件不可用：${input.attachmentNotice}`}
+          disabled={!input.attachmentsSupported || onPickAttachment === undefined}
+          style={[styles.attachmentButton, { marginRight: "auto", paddingVertical: 6 }]}
+          dataSet={{ action: "pick-attachment", attachmentKind: "file", attachmentsSupported: String(input.attachmentsSupported) }}
+          onPress={() => onPickAttachment?.("file")}>
+          <Text style={styles.attachmentButtonText}>＋ 添加</Text>
+        </Pressable>
         {/* 上下文胶囊 + 明细（未上报时不给数字）；未上报不影响任何交互。 */}
         {usage === null || usage === undefined ? null : <ContextUsageBar usage={usage} />}
         {/* 模型 / 模式胶囊与弹层。 */}
@@ -737,30 +682,6 @@ export function ConversationComposer({
           />
         )}
       </View>
-
-      {/* 附件入口：只有端到端协商到附件能力且回调接线时才出现（否则只留一句显式说明）。 */}
-      {!input.attachmentsSupported || onPickAttachment === undefined ? null : (
-        <View style={styles.attachmentBar} dataSet={{ attachmentToolbar: "true" }}>
-          {(["image", "file", "audio"] as const).map((kind) => (
-            <Pressable
-              key={kind}
-              role="button"
-              style={styles.attachmentButton}
-              dataSet={{ action: "pick-attachment", attachmentKind: kind }}
-              onPress={() => {
-                onPickAttachment(kind);
-              }}
-            >
-              <Text style={styles.attachmentButtonText}>{`＋ ${ATTACHMENT_KIND_LABELS[kind]}`}</Text>
-            </Pressable>
-          ))}
-          {onPasteAttachments === undefined ? null : (
-            <Text style={styles.attachmentMeta} dataSet={{ attachmentPasteHint: "true" }}>
-              可直接粘贴剪贴板里的图片或文件
-            </Text>
-          )}
-        </View>
-      )}
 
       <AttachmentList
         attachments={attachments}
@@ -793,48 +714,27 @@ export function ConversationComposer({
         </View>
       )}
 
-      {!input.attachmentsSupported || onAddPathRef === undefined ? null : (
-        <View style={styles.attachmentBar} dataSet={{ pathRefForm: "true" }}>
-          <Text style={styles.attachmentMeta}>引用工作目录内的相对路径：</Text>
-          <TextInput
-            value={pathDraft}
-            placeholder="例如 src/main.ts"
-            style={styles.pathInput}
-            dataSet={{ pathRefInput: "true" }}
-            onChangeText={(text: string) => {
-              setPathDraft(text);
-              setPathIssue(null);
-            }}
-            onKeyPress={(event) => {
-              const native = event.nativeEvent as { readonly key?: string };
-              if (native.key !== "Enter") return;
-              event.preventDefault();
-              addPathRef();
-            }}
-          />
-          <Pressable
-            role="button"
-            style={styles.attachmentButton}
-            dataSet={{ action: "add-path-ref" }}
-            onPress={addPathRef}
-          >
-            <Text style={styles.attachmentButtonText}>添加路径</Text>
-          </Pressable>
-          {pathIssue === null ? null : (
-            <Text style={styles.attachmentFailure} dataSet={{ pathRefError: "true" }}>
-              {pathIssue}
-            </Text>
-          )}
-        </View>
-      )}
-
-      {hasUnsent ? (
-        <Text style={styles.hintWarn} dataSet={{ unsentWarning: "true" }}>
-          有未发送内容：刷新或关闭页面会丢弃草稿与文件选择，不提供恢复或续传。
-        </Text>
-      ) : null}
-
-      <View style={styles.inputRow}>
+      <div data-composer-drop-zone="true"
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          const enabled = input.attachmentsSupported && onPasteAttachments !== undefined;
+          event.dataTransfer.dropEffect = enabled ? "copy" : "none";
+          setDragging(enabled);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+        }}
+        onDrop={(event) => {
+          event.preventDefault(); setDragging(false);
+          if (!input.attachmentsSupported || onPasteAttachments === undefined || event.dataTransfer.files.length === 0) return;
+          onPasteAttachments(event.nativeEvent);
+        }}
+        onPaste={(event) => {
+          if (!input.attachmentsSupported || onPasteAttachments === undefined || event.clipboardData.files.length === 0) return;
+          event.preventDefault(); onPasteAttachments(event.nativeEvent);
+        }}>
+      <View style={[styles.inputRow, dragging ? { borderColor: palettes[theme.dark ? "dark" : "light"].accent } : {}]}>
         <TextInput
           value={input.draft}
           multiline
@@ -872,10 +772,12 @@ export function ConversationComposer({
               onCancel?.();
             }}
           >
-            <Text style={styles.stopText}>■ 停止（取消当前轮次）</Text>
+            <Text style={styles.stopText}>■ 停止</Text>
           </Pressable>
         ) : null}
       </View>
+
+      </div>
 
       {input.canSubmit ? null : (
         <Text style={styles.note} dataSet={{ submitUnavailable: "true" }}>
@@ -883,38 +785,10 @@ export function ConversationComposer({
         </Text>
       )}
 
-      {/* 提示行：按键口径与状态补充（原型 `.hint`）。 */}
-      <View style={styles.hintRow} dataSet={{ composerHint: "true" }}>
-        <Text style={styles.hint} dataSet={{ composerState: input.state }}>
-          {STATE_LABELS[input.state]}
-        </Text>
-        {/* 附件/路径能力的显式说明：始终渲染，不因状态改变（支持与不支持都说清楚）。 */}
-        <Text style={styles.hint} dataSet={{ attachmentsSupported: String(input.attachmentsSupported), attachmentNotice: "true" }}>
-          {input.attachmentNotice}
-        </Text>
-        <Text style={styles.hint} dataSet={{ composerKeys: "enter-submits" }}>
-          <Text style={styles.kbd}>Enter</Text> 发送 · <Text style={styles.kbd}>Shift</Text>+
-          <Text style={styles.kbd}>Enter</Text> 换行
-        </Text>
-        {stateHint === undefined ? null : (
-          <Text
-            style={styles.hintWarn}
-            dataSet={{ composerStateHint: input.state }}
-          >
-            {stateHint}
-          </Text>
-        )}
-      </View>
-
-      <SubmissionLine submission={input.submission} />
+      {["failed", "uncertain", "pending_confirmation"].includes(input.submission.kind) ? <SubmissionLine submission={input.submission} /> : null}
       {/* 没有可取消轮次时不占一行：原型也没有这条静息文案，窄高度下它会挤掉时间线。 */}
-      {input.cancel.kind === "unavailable" ? null : <CancelLine cancel={input.cancel} />}
+      {input.cancel.kind === "requested" || (input.cancel.kind === "available" && input.cancel.failure !== null) ? <CancelLine cancel={input.cancel} /> : null}
 
-      {input.draftNotice === null ? null : (
-        <Text style={styles.note} dataSet={{ draftNotice: "true" }}>
-          {input.draftNotice}
-        </Text>
-      )}
     </View>
   );
 }

@@ -22,6 +22,7 @@ import { PAIRING_KIND_CHECKS } from "./checks/pairing-kinds";
 import { UI_SHELL_CHECKS } from "./checks/ui-shell";
 import { UI_STYLESHEET_CHECKS } from "./checks/ui-stylesheet";
 import { runChecks } from "./support";
+import { COMPOSER_FILE_CHECKS } from "./checks/composer-files";
 import type { CheckResult } from "./support";
 
 /**
@@ -77,6 +78,7 @@ import type { CheckResult } from "./support";
  * 而它验的是「打开 node-link 二维码落在可用入口」与「两类内容喂错入口都明确失败」。
  */
 const ALL_CHECKS = [
+  ...COMPOSER_FILE_CHECKS,
   ...UI_STYLESHEET_CHECKS,
   ...UI_SHELL_CHECKS,
   ...COMPOSITION_CHECKS,

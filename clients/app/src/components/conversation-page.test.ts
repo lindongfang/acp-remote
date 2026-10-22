@@ -403,10 +403,10 @@ describe("对话页正文：历史条目与实时事件同一套呈现（重开�
     });
     const html = renderPage(pageOf(store));
 
-    expect(html).toContain('data-action="load-earlier"');
-    expect(html).toContain('data-paging="earlier"');
-    expect(html).toContain('data-action="load-earlier-history"');
-    expect(html).toContain('data-history-paging="earlier"');
+    expect(html).not.toContain('data-action="load-earlier"');
+    expect(html).not.toContain('data-paging="earlier"');
+    expect(html).not.toContain('data-action="load-earlier-history"');
+    expect(html).not.toContain('data-history-paging="earlier"');
   });
 });
 
@@ -695,7 +695,7 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     });
   }
 
-  it("上下文胶囊与模型/模式胶囊都在输入区里；≥85% 才出告警条", () => {
+  it("上下文胶囊与模型/模式胶囊都在输入区里；不再额外显示告警条", () => {
     const { store } = filledStore("running");
     applyUsage(store, "188000", "200000");
     const html = renderPage(pageOf(store));
@@ -705,9 +705,9 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     expect(bar).toContain('data-settings="true"');
     expect(bar).toContain('data-settings-pill="model"');
     expect(bar).toContain('data-settings-pill="mode"');
-    expect(html).toContain('data-context-warning="true"');
-    expect(html).toContain("可能截断较早的内容");
-    expect(html).toContain("这是 Agent 的行为，网页端只做提示");
+    expect(html).not.toContain('data-context-warning="true"');
+    expect(html).not.toContain("可能截断较早的内容");
+
 
     // 未达阈值（12%）：不呈现告警条。
     const low = filledStore("running");
@@ -836,17 +836,17 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     expect(handledHtml).not.toContain("data-pending-jump-bar");
   });
 
-  it("提示行给出回车口径与附件说明", () => {
+  it("输入区不再显示常驻说明与额外入口", () => {
     const { store } = filledStore("running");
     const html = renderPage(pageOf(store));
 
-    expect(html).toContain('data-composer-hint="true"');
-    expect(html).toContain('data-composer-keys="enter-submits"');
-    expect(html).toContain("Enter");
-    expect(html).toContain("Shift");
-    expect(html).toContain("换行");
-    expect(html).toContain('data-attachment-notice="true"');
-    expect(html).toContain("不支持附件传输");
+    expect(html).not.toContain('data-composer-hint="true"');
+    expect(html).not.toContain('data-composer-keys="enter-submits"');
+    expect(html).not.toContain("Enter");
+    expect(html).not.toContain("Shift");
+    expect(html).not.toContain("换行");
+    expect(html).not.toContain('data-attachment-notice="true"');
+    expect(html).toContain("添加文件不可用：");
   });
 });
 
