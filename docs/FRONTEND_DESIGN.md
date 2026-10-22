@@ -144,6 +144,7 @@ clients/
    │     ├─ secure-storage.native.ts
    │     ├─ local-cache.web.ts
    │     ├─ local-cache.native.ts
+   │     ├─ preparation-draft.web.ts
    │     ├─ lifecycle.web.ts
    │     └─ lifecycle.native.ts
    └─ public/
@@ -394,8 +395,15 @@ PWA 首个版本只持久化连接和恢复所需的最小数据：
 规则：
 
 - imported 资源遵守 `no-content-cache` 且**不持久化任何远程资料**：不得把会话摘要、标题、prompt、回复、工具内容、diff、终端、附件、ACP raw、Owner cursor/ACK、命令状态或事件 digest 写入 IndexedDB、Cache Storage 或其他持久浏览器存储。来源游标与重建缓冲只在本次连接内存中存在。
-- 上传中的选择项、媒体缓冲与 Blob URL 只存在于页面内存：关闭/刷新即丢弃，不写入 IndexedDB、Cache Storage、Service Worker 或任何持久草稿；已提交附件由 Owner 保存，页面只按需经已认证分块连接读取并即时撤销 Blob URL。
-- **准备草稿的窄例外（计划，`web-session-preparation`，尚未实现）**：只有「本机准备中、尚未首次提交」的页面可以持久化草稿，用于刷新/崩溃后恢复文字、非默认模式/配置选择与附件选择。它按标签页隔离（键含 `tabNonce` 与准备 `sessionId`），容量有上限、版本化，首次提交受理成功、主动离开或更换 Agent/目录时删除；不得包含 Provider/MCP 凭据、设备密钥或任何认证材料，也不得扩展到 imported/远程会话、已提交会话或 Owner 未确认的 ID。实现前本节的默认规则不变；实现后这条仍是唯一例外，不得借此缓存会话正文。
+- 普通会话/imported 上传中的选择项、媒体缓冲与 Blob URL 只存在于页面内存：关闭/刷新即丢弃，不写入 IndexedDB、Cache Storage、Service Worker 或任何持久草稿；已提交附件由 Owner 保存，页面只按需经已认证分块连接读取并即时撤销 Blob URL。唯一例外是本机准备中、尚未首次提交的准备草稿（下一条）。
+- **准备草稿的窄例外（`web-session-preparation` WP6，已实现）**：只有「本机准备中、尚未首次提交」的页面可以持久化草稿，用于刷新/崩溃后恢复文字、精确模式/配置选择、工作目录引用、准备凭据、附件字节与未确认的 `requestId`。实现是独立的平台端口 `PreparationDraftPort`（`clients/app/src/platform/preparation-draft.shared.ts` 声明、`preparation-draft.web.ts` 提供 Web 适配器），页面与 feature 只经端口调用，不直接触碰 IndexedDB/sessionStorage。
+  - **分区与版本**：IndexedDB 专库 `acp-remote-preparation-v1` 含 `drafts`/`chunks`/`ownership` 三个对象存储；草稿键为 `canonical origin + ownerNodeId + deviceId + tabSlotId + sessionId`，记录版本为 1，每次保存把 `revision` 加 1。sessionStorage 只保存非敏感定位（来源/节点/设备/标签页/会话/文档实例），不保存凭据、正文、配置或附件字节。
+  - **敏感信息边界**：运行期精确键守门拒绝私钥、配对码/配对秘密、Provider/MCP 凭据、imported 内容与任何未知字段；`configOptions` 只允许字符串/布尔值。摘要缓存与 imported 缓存规则不变，本端口不接收普通正式会话草稿或远程正文。
+  - **附件与原子替换**：附件按 128 KiB `Uint8Array` 分块保存（不保存 `File` 句柄或 Blob URL），恢复后可按区间读取或整体预览。每次保存先在新 `storageId` 下写完全部分块，再在单个 IndexedDB 读写事务中比较 `expectedRevision` 并提交记录；旧版本在新版本提交前保持可读，提交后才清理旧分块。任何一项失败都整体不提交，不截断、不改走服务端上传。
+  - **配额与限制**：不设附件数量/单个大小/消息总大小的产品额度；只受浏览器配额约束。写入前用 `navigator.storage.estimate()`（可注入）预检，写入失败把 `QuotaExceededError` 映射为带逐项 `itemLocalIds` 的明确错误。当前实现只固定两个技术常量：分块 128 KiB、孤儿窗口 24 小时；它们不是产品额度。
+  - **标签页与生命周期**：`tabSlotId` 归属握手区分刷新（`reload` 可沿同标签页定位接管）、复制/opener（普通导航一律不恢复、不接管）与 BFCache（同一文档实例继续持有）。可见性隐藏/冻结只更新归属心跳，绝不删除草稿。主动导航、换 Agent 或目录先写逻辑删除墓碑（保留版本号阻止迟到写复活），再清正文/分块；`releaseTab` 清掉本标签页定位。`cleanupOrphans` 以 24 小时窗口回收无人持有的活跃孤儿草稿、残留分块与过期归属；仍由活标签页（心跳在窗口内）持有的草稿不删。逻辑删除墓碑只含版本与原因，保留以拒绝删除前的迟到写，不按正文草稿窗口物理删除（否则迟到的首次保存可能复活内容）。
+  - **受理后的恢复记录**：只有在权威 `accepted` 且读取验证完整消息后，调用方才调用 `markAccepted` 清除正文与 Blob，记录转为只含请求关联（`requestId`、首条提交/消息标识）的恢复记录；命令终结后由 `completeRequest` 删除。保存响应丢失时保留完整草稿与 `pendingRequestId`，先查原请求，不得直接清理。
+  - **明确的限制**：浏览器无法保证异常关闭/崩溃时执行清理回调，脚本被关闭时可能留下不可恢复的残留；这些残留只能由 24 小时孤儿清理回收，不能冒充可靠关闭通知。站点数据被清除时草稿随之丢失，按草稿丢失处理；若设备密钥同时丢失，仍按本节后续规则重新配对。
 - 对当前节点本地拥有的资源，只有节点本地策略显式允许时才缓存精简历史；缓存不是权威数据，重连后以 Daemon 快照和事件日志校正。
 - 敏感字段不得因方便调试而进入普通浏览器存储。
 - 必须设置大小上限、版本和迁移策略：v1 的固定值为本节点自有资源摘要缓存上限 **8 MiB**、TTL **30 天**、超出时按 LRU 淘汰。这些是固定常量，不是可由用户放宽的配置项。

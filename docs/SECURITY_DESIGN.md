@@ -414,7 +414,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 - Device private `CryptoKey` 只在 IndexedDB 中以不可导出形式保存。
 - imported resource 的会话正文、ACP raw、终端和 diff 不得持久化；对 Owner 本地资源未来允许的缓存仍按敏感内容设置容量、版本和清理策略。
 - `localStorage` 不保存私钥、pairing secret、完整 prompt 或可恢复认证材料。
-- **准备草稿（计划，`web-session-preparation`，尚未实现）**：唯一允许的客户端正文留存是「本机准备中、尚未首次提交」的标签页草稿（[`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §7）。它 MUST 按标签页隔离、有版本与容量上限、首次提交受理或主动离开即删除，MUST NOT 含 Provider/MCP 凭据、设备密钥、认证材料或续传令牌，也不得扩展到 imported/远程会话与已提交会话；站点数据被清理时草稿随之丢失，按草稿丢失处理；设备密钥同时丢失时仍按本节下一条重新配对。
+- **准备草稿（`web-session-preparation` WP6，已实现）**：唯一允许的客户端正文留存是「本机准备中、尚未首次提交」的标签页草稿（[`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §7）。它由专用平台端口 `PreparationDraftPort` 实现，使用独立 IndexedDB 数据库 `acp-remote-preparation-v1`（`drafts`/`chunks`/`ownership`），按 `canonical origin + ownerNodeId + deviceId + tabSlotId + sessionId` 分区；sessionStorage 只保存非敏感标签页定位。草稿 MUST NOT 含 Provider/MCP 凭据、设备密钥、配对码/配对秘密、认证材料、续传令牌或 imported 内容；运行期精确键守门拒绝任何未知字段，配置值只接受字符串/布尔值。附件以 128 KiB 分块保存为字节，不保存 `File` 句柄或 Blob URL。每次保存先写完新版本分块，再在单个 IndexedDB 读写事务里比较版本并提交，旧版本在提交前保持可读；迟到写看到墓碑即失败。配额失败逐项返回 `itemLocalIds`，不得截断、静默删附件或改走服务端上传；实现不设产品级附件数量/大小上限，只受浏览器配额约束。可见性隐藏/冻结只更新归属心跳；主动离开、更换 Agent/目录先写逻辑删除墓碑再清字节；无人持有的活跃残留以 24 小时孤儿窗口回收，活标签页持有的草稿不删；墓碑只含版本/原因并保留以阻止迟到写，不承载正文。只有在权威 `accepted` 且读取验证完整消息后才清除正文/Blob，并保留未终结请求关联直至命令终结。站点数据被清理时草稿随之丢失，按草稿丢失处理；设备密钥同时丢失时仍按本节下一条重新配对。本例外不放宽 imported/no-content-cache 或摘要缓存规则。
 - `navigator.storage.persist()` 被拒绝不降低认证，数据被清理后要求重新配对。
 
 ## 12. Daemon、Agent 与 Workspace
@@ -566,7 +566,7 @@ Agent 可以通过 ACP 的 `terminal/create`/`output`/`wait_for_exit`/`kill`/`re
 向第三方客户端交付正文必须被视为显式数据披露
 - 撤销设备或节点后 Owner 不再提供数据，Access 清除该来源的运行期模型与内存内容（不存在需要删除的持久索引）。
 - 客户端收到自己被撤销或用户执行“清除此设备”时，应删除缓存和 device key；浏览器能力不足时明确说明残留风险。
-- **准备材料的数据最小化（计划，`web-session-preparation`，尚未实现）**：准备凭据只在浏览器内随准备草稿持有（窄例外见 §11.4），不写日志、不进 URL、不进入普通 SQLite 字段；Owner 侧对准备阶段**不落任何行**——准备目录/租约/资源代与暂存传输都是运行期状态，正式记录只由首次受理事务产生（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §12）。Access Node 不接触准备凭据：它既不签发、不验证，也不缓存，准备帧只在 Sync 面由 Owner 处理。
+- **准备材料的数据最小化（浏览器侧已实现；Owner 侧仍按计划）**：准备凭据只在浏览器内随准备草稿持有（窄例外与实现边界见 §11.4），不写日志、不进 URL、不进入普通 SQLite 字段；Owner 侧对准备阶段**不落任何行**（待 WP2–WP5 落地）——准备目录/租约/资源代与暂存传输都是运行期状态，正式记录只由首次受理事务产生（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §12）。Access Node 不接触准备凭据：它既不签发、不验证，也不缓存，准备帧只在 Sync 面由 Owner 处理。
 - 未来启用加密离线正文缓存时，必须新增协商 feature、Owner 明示授权、容量/TTL/撤销提示和独立 ADR；Owner 仍不得声称能远程可靠擦除已有副本。
 - 与 Daemon 同包发布的 PWA 静态资源属 §3 的 `public-artifact` 类别：根路径静态面只交付这些公开构建产物（入口文档与前端资源），不交付任何会话内容、凭据或用户数据，因此未认证的请求也能取到它。同包发布、构建版本可检查与发布构建缺产物即拒绝启动见 §16.3。
 
