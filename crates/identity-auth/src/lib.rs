@@ -9,9 +9,9 @@
 //! - **transcript 只有一份实现**：domain 与 field tag 表来自 `sync-protocol` / `node-link-protocol`
 //!   的 `DOMAINS`，编解码来自叶子 crate `acpr-transcript`；本 crate 不复制常量、不手拼字节。
 //!
-//! 模块划分：`types`（值对象与事实）、`transcript`（10 个 domain 的输入与编解码/验签/HMAC 入口）、
+//! 模块划分：`types`（值对象与事实）、`transcript`（11 个 domain 的输入与编解码/验签/HMAC 入口）、
 //! `pairing`（配对状态机）、`pairing_code`（网页入口配对码的派生与编解码）、
-//! `handshake`（逐连接挑战-证明）、
+//! `handshake`（逐连接挑战-证明）、`preparation`（准备凭据的专用签发/验证与绑定校验）、
 //! `port`（keystore 与熵源端口）、`state`（内存态：配对 secret、配对码与扫码凭据反查、挑战缓存、
 //! 失败计数）。
 
@@ -21,6 +21,7 @@ pub mod handshake;
 pub mod pairing;
 pub mod pairing_code;
 pub mod port;
+pub mod preparation;
 mod state;
 pub mod transcript;
 pub mod types;
@@ -29,9 +30,9 @@ pub mod types;
 // 只依赖本 crate 就能写出 `IdentityKeystore`，而不需要为了签名类型反向依赖 `core`
 // （`docs/MODULE_ARCHITECTURE.md` §5 的依赖矩阵不允许 `identity-keystore -> core`）。
 pub use acp_core::model::{
-    AuditAction, DeviceId, Digest, Fingerprint, InvalidValue, NodeId, NodeKind, Nonce,
+    AgentId, AuditAction, DeviceId, Digest, Fingerprint, InvalidValue, NodeId, NodeKind, Nonce,
     PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement, PairingState,
-    PairingTarget, PeerIdentity, PeerPublicKey, Timestamp,
+    PairingTarget, PeerIdentity, PeerPublicKey, ServerEpoch, SessionId, Timestamp,
 };
 
 pub use authority::Authority;
@@ -44,18 +45,22 @@ pub use port::{
     EntropyError, EntropySource, IdentityKeystore, KeyHandle, KeyPurpose, KeystoreError,
     SecretBytes, SecretPurpose,
 };
+pub use preparation::{
+    PreparationAdmission, PreparationBinding, PreparationError, PreparationExpectation,
+    PreparationReceipt, verify_preparation_receipt,
+};
 pub use state::MAX_CHALLENGES;
 pub use transcript::{
     FeatureList, NodeLinkChallenge, NodeLinkPairingOwnerProof, NodeLinkPairingProof,
-    NodeLinkPairingStatus, NodeLinkProof, SyncDeviceProof, SyncHostChallenge, SyncPairingHostProof,
-    SyncPairingProof, SyncPairingStatus, timestamp_from_unix_seconds,
+    NodeLinkPairingStatus, NodeLinkProof, PreparationClaims, SyncDeviceProof, SyncHostChallenge,
+    SyncPairingHostProof, SyncPairingProof, SyncPairingStatus, timestamp_from_unix_seconds,
 };
 pub use types::{
     Authenticated, CHALLENGE_TTL_SECONDS, CanonicalOrigin, ChallengeId, ClaimFailureClass,
     ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection, ClaimedPairing, ClientKind,
     Completion, ConnectionBinding, ConnectionKind, CredentialStatus, HandshakeFailure,
-    HandshakeFailureClass, IdentityFact, NodeEndpoint, P1363Signature, PAIRING_MAX_FAILURES,
-    PAIRING_MAX_SECONDS, PROTOCOL_VERSION, PairingDecision, PairingDraft, PairingProof,
-    PairingQrLookup, PairingRequestId, PairingRequestMaterial, PairingSecret, PairingSpec,
-    PairingStatusView, PeerTrust, QrToken,
+    HandshakeFailureClass, IdentityFact, NodeEndpoint, NormalizedWorkspacePath, P1363Signature,
+    PAIRING_MAX_FAILURES, PAIRING_MAX_SECONDS, PROTOCOL_VERSION, PairingDecision, PairingDraft,
+    PairingProof, PairingQrLookup, PairingRequestId, PairingRequestMaterial, PairingSecret,
+    PairingSpec, PairingStatusView, PeerTrust, PreparationWorkspaceSource, QrToken,
 };

@@ -12,8 +12,11 @@ mod support;
 use std::sync::Arc;
 
 use identity_auth::{
-    CanonicalOrigin, ChallengeId, DeviceId, FeatureList, IdentityKeystore, KeyHandle, KeyPurpose,
-    KeystoreError, NodeId, Nonce, SecretBytes, SecretPurpose, SyncHostChallenge,
+    AgentId, Authenticated, CanonicalOrigin, ChallengeId, ConnectionBinding, CredentialStatus,
+    DeviceId, FeatureList, IdentityFact, IdentityKeystore, KeyHandle, KeyPurpose, KeystoreError,
+    NodeId, Nonce, NormalizedWorkspacePath, PreparationClaims, PreparationExpectation,
+    PreparationReceipt, PreparationWorkspaceSource, SecretBytes, SecretPurpose, ServerEpoch,
+    SessionId, SyncHostChallenge, verify_preparation_receipt,
 };
 use identity_keystore::entry::EntryPurpose;
 use identity_keystore::store::Availability;
@@ -512,5 +515,74 @@ fn signature_is_p1363_and_verifies_with_the_entry_public_key() {
             input.verify(&public_key, &signature).is_ok(),
             "签名必须能用条目公钥验证"
         );
+    });
+}
+
+/// WP3 任务 3.1：keystore 端口签出的准备凭据必须能被 `identity-auth` 的专用验证入口接受。
+///
+/// 这是「私钥只经端口、没有第二条签名路径」的可执行证据：签名输入是按登记表装配的
+/// `session-preparation` transcript，公钥来自同一条目，验证走绑定 + 签名的完整入口。
+#[test]
+fn node_identity_port_signs_the_preparation_domain_verifiably() {
+    if !identity_keystore::platform_supported() {
+        // 非 Windows 平台没有包裹后端；所有入口失败关闭的行为由 `fail_closed.rs` 覆盖。
+        return;
+    }
+    let root = TempRoot::new("preparation-receipt");
+    let entropy = FixedEntropy::new();
+    let store = keystore(&root, &entropy);
+    block_on(async {
+        let handle = store
+            .generate(KeyPurpose::NodeIdentity, "primary")
+            .await
+            .expect("Windows 上生成必须成功");
+        let public_key = store.public_key(&handle).await.expect("公钥必须可读");
+
+        let claims = PreparationClaims {
+            device_id: DeviceId::new(DEVICE).expect("规范 DeviceId"),
+            owner_node_id: NodeId::new(HOST).expect("规范 NodeId"),
+            store_epoch: ServerEpoch::new("9c6a1e34-5b7d-4f2a-9d18-6e0b2c3d4e5f")
+                .expect("规范 storeEpoch"),
+            origin: CanonicalOrigin::parse("https://pc.example.test").expect("规范 origin"),
+            tab_nonce: Nonce::new("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE")
+                .expect("规范 nonce"),
+            session_id: SessionId::new("6f1c2d3e-4a5b-4c6d-8e7f-901122334455")
+                .expect("规范 sessionId"),
+            agent_id: AgentId::new("codex").expect("规范 agentId"),
+            normalized_workspace_path: NormalizedWorkspacePath::parse("D:\\Projects\\acp-remote")
+                .expect("规范路径"),
+            workspace_source: PreparationWorkspaceSource::WorkspacePath,
+        };
+        let transcript = claims.transcript().expect("装配必须成功");
+        let signature = store
+            .sign(&handle, &transcript)
+            .await
+            .expect("端口签名必须成功");
+        let receipt = PreparationReceipt::new(claims.clone(), signature);
+
+        let authenticated = Authenticated {
+            fact: IdentityFact::Device {
+                device: claims.device_id.clone(),
+            },
+            credential: CredentialStatus::Active,
+            connection: ConnectionBinding {
+                host: "pc.example.test".to_owned(),
+                canonical_origin: Some(claims.origin.clone()),
+                endpoint: None,
+            },
+        };
+        let expected = PreparationExpectation {
+            owner_node_id: claims.owner_node_id.clone(),
+            store_epoch: claims.store_epoch.clone(),
+            session_id: claims.session_id.clone(),
+            tab_nonce: claims.tab_nonce.clone(),
+            agent_id: claims.agent_id.clone(),
+            normalized_workspace_path: claims.normalized_workspace_path.clone(),
+            workspace_source: claims.workspace_source,
+        };
+        let admission =
+            verify_preparation_receipt(&authenticated, &public_key, &receipt, &expected)
+                .expect("端口签名必须能被专用验证入口接受");
+        assert_eq!(admission.session_id(), &claims.session_id);
     });
 }

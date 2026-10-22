@@ -1,4 +1,4 @@
-//! [PV3] / 任务 2.4：10 个已登记 domain 的固定向量逐字节重算、验签、HMAC 与畸形输入负例。
+//! [PV3] / 任务 2.4：11 个已登记 domain 的固定向量逐字节重算、验签、HMAC 与畸形输入负例。
 //!
 //! 这些用例是合同 §3 第 5 条要求的**常驻回归测试**：向量来自 `fixtures/{sync,node-link}/v1/transcripts/`，
 //! 装配只经协议 crate 的表（`design.md` D2），因此「表写错」「字段顺序写错」「宽度写错」都会在这里红。
@@ -12,8 +12,11 @@ use identity_auth::transcript::{
     SyncPairingStatus,
 };
 use identity_auth::{
-    CanonicalOrigin, ChallengeId, ClientKind, FeatureList, P1363Signature, PairingProof,
-    PairingRequestId, PairingSecret,
+    AgentId, Authenticated, CanonicalOrigin, ChallengeId, ClientKind, ConnectionBinding,
+    CredentialStatus, FeatureList, IdentityFact, NormalizedWorkspacePath, P1363Signature,
+    PairingProof, PairingRequestId, PairingSecret, PreparationClaims, PreparationExpectation,
+    PreparationReceipt, PreparationWorkspaceSource, ServerEpoch, SessionId,
+    verify_preparation_receipt,
 };
 use serde_json::Value;
 
@@ -30,6 +33,7 @@ const SYNC_VECTORS: &[&str] = &[
     vector!("sync/v1/transcripts/pairing-status.json"),
     vector!("sync/v1/transcripts/host-challenge.json"),
     vector!("sync/v1/transcripts/device-proof.json"),
+    vector!("sync/v1/transcripts/session-preparation.json"),
 ];
 
 const NODE_LINK_VECTORS: &[&str] = &[
@@ -127,13 +131,49 @@ fn connection_id_of(input: &Value) -> ChallengeId {
     ChallengeId::parse(&uuid_of(input, "connectionId")).expect("规范 connectionId")
 }
 
-/// 10 个 domain 的输入结构（每个分支只出现一次，装配与校验都在这里分发）。
+/// 固定向量对应的「当前连接已认证设备」事实（准备凭据验证入口的输入）。
+fn preparation_authenticated(input: &Value) -> Authenticated {
+    let origin =
+        CanonicalOrigin::parse(&text_of(input, "origin")).expect("固定向量的 origin 必须规范");
+    Authenticated {
+        fact: IdentityFact::Device {
+            device: support::device(&uuid_of(input, "deviceId")),
+        },
+        credential: CredentialStatus::Active,
+        connection: ConnectionBinding {
+            host: origin.authority().to_owned(),
+            canonical_origin: Some(origin),
+            endpoint: None,
+        },
+    }
+}
+
+/// 固定向量对应的期望绑定（与 vector claims 相同 = 正常路径）。
+fn preparation_expectation(input: &Value) -> PreparationExpectation {
+    PreparationExpectation {
+        owner_node_id: support::node(&uuid_of(input, "ownerNodeId")),
+        store_epoch: ServerEpoch::new(&uuid_of(input, "storeEpoch")).expect("规范 storeEpoch"),
+        session_id: SessionId::new(&uuid_of(input, "sessionId")).expect("规范 sessionId"),
+        tab_nonce: nonce_of(input, "tabNonceHex"),
+        agent_id: AgentId::new(&text_of(input, "agentId")).expect("规范 agentId"),
+        normalized_workspace_path: NormalizedWorkspacePath::parse(&text_of(
+            input,
+            "normalizedWorkspacePath",
+        ))
+        .expect("规范 workspace path"),
+        workspace_source: PreparationWorkspaceSource::parse(&text_of(input, "workspaceSource"))
+            .expect("规范 workspaceSource"),
+    }
+}
+
+/// 11 个 domain 的输入结构（每个分支只出现一次，装配与校验都在这里分发）。
 enum Vector {
     SyncPairingProof(SyncPairingProof),
     SyncPairingHostProof(SyncPairingHostProof),
     SyncPairingStatus(SyncPairingStatus),
     SyncHostChallenge(SyncHostChallenge),
     SyncDeviceProof(SyncDeviceProof),
+    Preparation(PreparationClaims),
     NodeLinkPairingProof(NodeLinkPairingProof),
     NodeLinkPairingOwnerProof(NodeLinkPairingOwnerProof),
     NodeLinkPairingStatus(NodeLinkPairingStatus),
@@ -195,6 +235,27 @@ impl Vector {
                 server_nonce: nonce_of(input, "serverNonceHex"),
                 connection_id: connection_id_of(input),
                 negotiated_features: features_of(input, "negotiatedFeatures"),
+            }),
+            "acp-remote/session-preparation/v1" => Self::Preparation(PreparationClaims {
+                device_id: support::device(&uuid_of(input, "deviceId")),
+                owner_node_id: support::node(&uuid_of(input, "ownerNodeId")),
+                store_epoch: ServerEpoch::new(&uuid_of(input, "storeEpoch"))
+                    .expect("规范 storeEpoch"),
+                origin: CanonicalOrigin::parse(&text_of(input, "origin"))
+                    .expect("固定向量的 origin 必须规范"),
+                tab_nonce: nonce_of(input, "tabNonceHex"),
+                session_id: SessionId::new(&uuid_of(input, "sessionId")).expect("规范 sessionId"),
+                agent_id: AgentId::new(&text_of(input, "agentId")).expect("规范 agentId"),
+                normalized_workspace_path: NormalizedWorkspacePath::parse(&text_of(
+                    input,
+                    "normalizedWorkspacePath",
+                ))
+                .expect("规范 workspace path"),
+                workspace_source: PreparationWorkspaceSource::parse(&text_of(
+                    input,
+                    "workspaceSource",
+                ))
+                .expect("规范 workspaceSource"),
             }),
             "acp-remote/node-link-pairing-proof/v1" => {
                 Self::NodeLinkPairingProof(NodeLinkPairingProof {
@@ -261,6 +322,7 @@ impl Vector {
             Self::SyncPairingStatus(input) => input.transcript(),
             Self::SyncHostChallenge(input) => input.transcript(),
             Self::SyncDeviceProof(input) => input.transcript(),
+            Self::Preparation(input) => input.transcript(),
             Self::NodeLinkPairingProof(input) => input.transcript(),
             Self::NodeLinkPairingOwnerProof(input) => input.transcript(),
             Self::NodeLinkPairingStatus(input) => input.transcript(),
@@ -307,7 +369,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     text
 }
 
-/// 逐字节重算 + 摘要 + HMAC/验签：10 个向量共用一条断言路径。
+/// 逐字节重算 + 摘要 + HMAC/验签：11 个向量共用一条断言路径。
 fn assert_vector(document: &Value) {
     let domain = document["domain"].as_str().expect("向量必须有 domain");
     let input = &document["input"];
@@ -359,18 +421,41 @@ fn assert_vector(document: &Value) {
                 .expect("签名向量必须有 publicKey"),
         );
         let signature = P1363Signature::try_from_base64url(signature).expect("64 字节 P1363");
-        assert_eq!(
-            vector.verify_signature(&public_key, &signature),
-            Some(true),
-            "{domain}: 固定向量的签名必须验证通过"
-        );
-        // 换一把公钥（同曲线、合法点）必须不通过。
-        let other = FakePublicKey::other();
-        assert_eq!(
-            vector.verify_signature(&other, &signature),
-            Some(false),
-            "{domain}: 换一把公钥必须验证失败"
-        );
+        if let Vector::Preparation(claims) = &vector {
+            // 准备凭据的验签入口同时做绑定校验（design D3.1 的固定顺序），因此这里按完整入口走，
+            // 而不是绕过绑定去调一个「只验签」的旁路 API。
+            let receipt = PreparationReceipt::new(claims.clone(), signature);
+            let authenticated = preparation_authenticated(input);
+            let expectation = preparation_expectation(input);
+            assert!(
+                verify_preparation_receipt(&authenticated, &public_key, &receipt, &expectation)
+                    .is_ok(),
+                "{domain}: 固定向量的签名与绑定必须验证通过"
+            );
+            assert!(
+                verify_preparation_receipt(
+                    &authenticated,
+                    &FakePublicKey::other(),
+                    &receipt,
+                    &expectation
+                )
+                .is_err(),
+                "{domain}: 换一把公钥必须验证失败"
+            );
+        } else {
+            assert_eq!(
+                vector.verify_signature(&public_key, &signature),
+                Some(true),
+                "{domain}: 固定向量的签名必须验证通过"
+            );
+            // 换一把公钥（同曲线、合法点）必须不通过。
+            let other = FakePublicKey::other();
+            assert_eq!(
+                vector.verify_signature(&other, &signature),
+                Some(false),
+                "{domain}: 换一把公钥必须验证失败"
+            );
+        }
     }
 }
 
@@ -404,7 +489,7 @@ fn node_link_fixed_vectors_round_trip() {
 
 #[test]
 fn registry_and_fixture_domains_agree() {
-    // 10 个向量必须覆盖 10 个已登记 domain（少一个就说明向量或表有一侧缺项）。
+    // 11 个向量必须覆盖 11 个已登记 domain（少一个就说明向量或表有一侧缺项）。
     let mut domains: Vec<String> = SYNC_VECTORS
         .iter()
         .chain(NODE_LINK_VECTORS.iter())
@@ -412,7 +497,7 @@ fn registry_and_fixture_domains_agree() {
         .collect();
     domains.sort();
     domains.dedup();
-    assert_eq!(domains.len(), 10, "固定向量必须覆盖全部 10 个 domain");
+    assert_eq!(domains.len(), 11, "固定向量必须覆盖全部 11 个 domain");
 }
 
 #[test]
