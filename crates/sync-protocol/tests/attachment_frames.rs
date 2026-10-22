@@ -55,8 +55,8 @@ fn every_manifest_case_behaves_as_declared() {
     let cases = manifest_cases();
     let valid = cases.iter().filter(|case| case.valid).count();
     let invalid = cases.len() - valid;
-    assert_eq!(valid, 17, "合法附件帧用例数变化");
-    assert_eq!(invalid, 7, "非法附件帧用例数变化");
+    assert_eq!(valid, 24, "合法附件帧用例数变化");
+    assert_eq!(invalid, 9, "非法附件帧用例数变化");
 
     for case in &cases {
         let text = fixture_text(&case.fixture);
@@ -186,10 +186,13 @@ fn subject_kind_is_protocol_specific() {
     // Sync 面只接受 `device`；同一份正例换成 `node` 是跨主体冒用（manifest 的负例已覆盖）。
     let text = fixture_text("attachment/valid/begin.json");
     let frame = Frame::decode(&text).expect("begin");
-    let FrameBody::Begin(BeginBody { subject, .. }) = frame.body else {
+    let FrameBody::Begin(BeginBody::Owned(body)) = frame.body else {
         panic!("begin 帧的 body 分类错误");
     };
-    assert_eq!(subject.id.as_str(), "7c1a2b3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+    assert_eq!(
+        body.subject.id.as_str(),
+        "7c1a2b3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+    );
     let node_subject = text.replace(
         r#"{ "kind": "device", "id": "7c1a2b3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d" }"#,
         r#"{ "kind": "node", "id": "7c1a2b3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d" }"#,

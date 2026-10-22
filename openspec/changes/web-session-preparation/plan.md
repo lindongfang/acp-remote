@@ -11,27 +11,27 @@
 
 | ID | Goal / Scenarios | Dependencies | Agent | Write Scope | Deliverable | Verify |
 | --- | --- | --- | --- | --- | --- | --- |
-| WP1 | D1–D9 合同冻结；feature/帧/start/retry/证明/首条DDL/浏览器边界一致 | none（基线前提另见上文） | wp-coder | `compatibility/`、`schemas/sync/v1/`、`fixtures/sync/v1/`、`crates/sync-protocol/`、`clients/app/src/protocol/`；`docs/INITIAL_DESIGN.md`、`docs/FRONTEND_DESIGN.md`、`docs/SYNC_PROTOCOL.md`、`docs/CORE_PORTS_AND_STORAGE.md`、`docs/MODULE_ARCHITECTURE.md`、`docs/SECURITY_DESIGN.md`、`docs/IDENTITY_AND_AUTH_CONTRACT.md`、`docs/CONFIG_REFERENCE.md`、`docs/ACP_COMPATIBILITY_MATRIX.md`、`docs/adr/0014-web-session-preparation-before-first-message.md`、`GLOSSARY.md` | patch + 共享fixture、固定签名向量、端口/DDL合同与兼容表；无虚假实现声明 | PV1、PV2（未落地的合同漂移项诚实记录） |
-| WP2 | 准备目录、首条原子受理、正文/附件保留、派发围栏/继续及旧库升级 | contract:WP1 | wp-coder | `crates/core/`、`crates/storage-sqlite/`；`docs/CORE_PORTS_AND_STORAGE.md`、`docs/MODULE_ARCHITECTURE.md` | patch + 无准备落盘/事务故障/回显去重/崩溃窗口/旧库升级测试；本包维护端口与DDL现状 | PV3、PV1 |
+| WP1 | D1–D9 合同冻结；feature/帧/start+continue/证明/首条DDL/暂存端口/浏览器边界一致 | none（基线前提另见上文） | wp-coder | `compatibility/`、`schemas/sync/v1/`、`schemas/transcripts/transcripts.schema.json`（仅放宽 tag 上限）、`fixtures/sync/v1/`、`crates/sync-protocol/`、`clients/app/src/protocol/`、`scripts/check-contract-assets.mjs`；`docs/INITIAL_DESIGN.md`、`docs/FRONTEND_DESIGN.md`、`docs/SYNC_PROTOCOL.md`、`docs/CORE_PORTS_AND_STORAGE.md`、`docs/MODULE_ARCHITECTURE.md`、`docs/SECURITY_DESIGN.md`、`docs/IDENTITY_AND_AUTH_CONTRACT.md`、`docs/CONFIG_REFERENCE.md`、`docs/ACP_COMPATIBILITY_MATRIX.md`、`docs/adr/0014-web-session-preparation-before-first-message.md`、`GLOSSARY.md`、`README.md`（仅 sync-protocol 状态计数） | patch + 共享fixture、固定签名向量、端口/DDL合同与兼容表；新端口写 §5.11 `rust-planned`、新表 DDL 写独立顶层 `sql-planned` 小节（不进 §7）；无虚假实现声明 | PV1、PV2（PV1 保持全绿；未落地项用计划围栏标注） |
+| WP2 | 准备目录、首条原子受理、正文/附件保留、准备附件暂存端口、派发围栏/继续及旧库升级 | contract:WP1 | wp-coder | `crates/core/`、`crates/storage-sqlite/`、`scripts/check-contract-drift.mjs`；`docs/CORE_PORTS_AND_STORAGE.md`、`docs/MODULE_ARCHITECTURE.md` | patch + 无准备落盘/事务故障/回显去重/崩溃窗口/旧库升级/暂存无DB行与24h回收测试；v16 migration 后把计划DDL移入 §7、把已实现的暂存/首条端口从 §5.11 `rust-planned` 移入常规 §5 块、删除计划小节并更新 drift 版本断言 | PV3、PV1 |
 | WP3 | 专用准备证明签发/验签，节点/设备/来源/上下文绑定与撤销 | contract:WP1 | wp-coder | `crates/identity-auth/`、`crates/identity-keystore/`；`docs/IDENTITY_AND_AUTH_CONTRACT.md`、`docs/SECURITY_DESIGN.md` | patch + 固定向量、篡改/跨身份/跨域/重启验证与无任意签名入口测试 | PV4、PV1 |
 | WP4 | Agent 临时端点、真实模式配置、资源代/容量/释放与首条转移 | contract:WP1；code:WP2 | wp-coder | `crates/agent-host/`；`docs/MODULE_ARCHITECTURE.md`、`docs/ACP_COMPATIBILITY_MATRIX.md` | patch + 真实stdio fake场景、旧代迟到/关闭失败/进程树测试；不写会话store | PV5、PV3 |
 | WP5 | Sync 控制面/首次提交/附件暂存，组合根/启动收敛/关闭装配 | code:WP2,WP3,WP4 | wp-coder | `crates/server/`、`crates/app/src/`；`crates/app/tests/support/sync.rs`、`crates/app/tests/sync_commands_e2e.rs`；`docs/SYNC_PROTOCOL.md`、`docs/CONFIG_REFERENCE.md` | patch + 认证/共享fixture/新旧客户端/首条API跨层测试；feature仅在装配齐备后宣告 | PV6、PV1–PV5 |
 | WP6 | 浏览器独立准备草稿存储与标签页所有权；刷新/离开/附件完整恢复 | contract:WP1 | wp-coder | `clients/app/src/platform/`、`clients/app/src/domain/`、`clients/app/src/attachments/`；`docs/FRONTEND_DESIGN.md`、`docs/SECURITY_DESIGN.md` | patch + Blob/配额/版本/晚写/duplicate tab/后台与清理测试；不扩摘要/imported缓存 | PV7、PV1 |
-| WP7 | 新建/配置/首条页面状态机，固定URL、换Agent/目录、未知URL回目录 | code:WP5,WP6 | wp-coder | `clients/app/src/features/`、`clients/app/src/sync-client/`、`clients/app/src/composition.ts`、`clients/app/app/`、`clients/app/src/components/`、`clients/app/e2e/page/`；`docs/FRONTEND_DESIGN.md` | patch + feature/page真实调用链测试，未协商显式降级，旧会话不改 | PV7、PV6 |
+| WP7 | 新建/配置/首条页面状态机，固定URL、换Agent/目录、未知URL回目录 | code:WP5,WP6 | wp-coder | `clients/app/src/features/`、`clients/app/src/sync-client/`、`clients/app/src/composition.ts`、`clients/app/app/`、`clients/app/src/components/`、`clients/app/e2e/page/`；`docs/FRONTEND_DESIGN.md` | patch + feature/page真实调用链测试，未协商显式降级，旧会话不改；`clients/app/src/sync-client/wire.ts` 的封闭命令/帧词表必须同步登记 `session.start`、`session.preparation`、`session.preparation.result`（WP1 只交付 protocol 层） | PV7、PV6、PV1 |
 | WP8 | 真实Codex/Web隔离E2E、故障矩阵、文档状态收口 | code:WP5,WP7 | wp-tester | `crates/app/tests/session_preparation.rs`、`crates/app/tests/session_preparation_browser.rs`、`clients/app/e2e/session-preparation-live.mjs`、`scripts/probe-session-preparation.mjs`、`docs/evidence/session-preparation.md`、`docs/SESSION_LIFECYCLE_DISCUSSION.md`；本变更 `tasks.md` 验收证据链接 | patch + 可重跑探针/浏览器与跨层测试/脱敏证据，未执行保留未完成 | PV8、PV9 |
 
 WP1 后可同批派发 WP2、WP3、WP6；WP4 真实依赖 WP2 的端口类型而非只依赖文档，不能提前造另一套。WP5 等待后端包，WP7 等待服务与平台，WP8 最后收口。
 
 包内测试和对应文档随本包交付，不留给 WP8 首次验证。现有未提交的错误分类修复不是本变更实现；不把它作为旧会话迁移任务。若合同实施需要改新增列表外的机器校验脚本或清单，先更新写范围与合入次序，不静默扩包。
 
-用户已选定方案A。D3.1与D6.1–D6.4中的闭合结果、准备target字段、跨连接验证顺序、error相关字段、两新增错误及单次上传/无全文件复制要求是本轮已定合同；WP1负责将其编码到唯一机器定义与fixture，不再推迟选择上传通道或committed语义。本轮不增加consumed/ID消费墓碑，也不新增正式会话删除或独立首条关联清理路径。
+用户已选定方案A。D3.1与D6.1–D6.4中的闭合结果、准备target字段、跨连接验证顺序、error相关字段、三新增错误（`preparation.stale`/`preparation.already_committed`/`preparation.store_rebuilt`）及单次上传/无全文件复制要求是本轮已定合同；WP1负责将其编码到唯一机器定义与fixture，不再推迟选择上传通道或committed语义。本轮不增加consumed/ID消费墓碑，也不新增正式会话删除或独立首条关联清理路径。
 
 ## Merge Order
 
 | Order | Work Package | Reason | Re-verify After Merge |
 | --- | --- | --- | --- |
-| 1 | WP1 | 先冻结唯一合同；准备签名与首条模式不能边编码边猜 | PV1、PV2；未实现漂移项记录，不宣称最终全绿 |
-| 2 | WP2 | core/storage先实现；与WP1重叠CORE_PORTS、MODULE文档 | PV3、PV1；对照WP1端口和DDL |
+| 1 | WP1 | 先冻结唯一合同；准备签名与首条模式不能边编码边猜 | PV1、PV2；合同用 `rust-planned`/`sql-planned` 围栏冻结，PV1 保持全绿，不宣称已实现 |
+| 2 | WP2 | core/storage先实现；与WP1重叠CORE_PORTS、MODULE文档；v16 migration 需同步 drift 版本断言 | PV3、PV1；计划 DDL 移入 §7 并删除计划小节后 drift 仍绿 |
 | 3 | WP3 | 验签/签名实现；与WP1重叠IDENTITY、SECURITY | PV4、PV1 |
 | 4 | WP4 | 依赖WP2；与WP1/WP2重叠MODULE，与WP1重叠ACP矩阵说明 | PV5、PV3、PV1 |
 | 5 | WP5 | 装配后端；与WP1重叠SYNC/CONFIG，消费WP2/WP3/WP4 | PV6及PV1–PV5 |
@@ -39,7 +39,7 @@ WP1 后可同批派发 WP2、WP3、WP6；WP4 真实依赖 WP2 的端口类型而
 | 7 | WP7 | 与WP1/WP6重叠FRONTEND，其他代码写范围与后端/平台无重叠 | PV7、PV6、PV1 |
 | 8 | WP8 | 独占新增E2E/证据和讨论记录，无其他包写这些新测试文件 | PV8、PV9 |
 
-已登记全部重叠：CORE_PORTS(WP1→WP2)、MODULE(WP1→WP2→WP4)、IDENTITY(WP1→WP3)、SECURITY(WP1→WP3→WP6)、ACP矩阵(WP1→WP4)、SYNC/CONFIG(WP1→WP5)、FRONTEND(WP1→WP6→WP7)。后合入包须基于已合入文件重新产最终 patch 并重跑对应验证，不能用旧上下文强贴文档。
+已登记全部重叠：CORE_PORTS(WP1→WP2)、MODULE(WP1→WP2→WP4)、IDENTITY(WP1→WP3)、SECURITY(WP1→WP3→WP6)、ACP矩阵(WP1→WP4)、SYNC/CONFIG(WP1→WP5)、FRONTEND(WP1→WP6→WP7)。脚本重叠另登记：`scripts/check-contract-assets.mjs` 由 WP1 扩展帧族登记，`scripts/check-contract-drift.mjs` 由 WP2 随 v16 更新版本断言；两者无其他包写入。`schemas/transcripts/transcripts.schema.json` 的 tag 上限由 WP1 从 16 放宽到 32（新 domain 使用 17–25），同样无其他包写入。后合入包须基于已合入文件重新产最终 patch 并重跑对应验证，不能用旧上下文强贴文档。
 
 ## Project Verify
 

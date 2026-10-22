@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "type": "attachment.error",
+  "messageId": "6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "20",
+  "body": {
+    "code": "preparation.already_committed",
+    "message": "the first submission of this session has already been accepted",
+    "retryable": false,
+    "transferId": "9b2f4c1d-6a3e-4f57-8b21-0c4d5e6f7a89",
+    "details": {
+      "sessionId": "6f1c2d3e-4a5b-4c6d-8e7f-901122334455"
+    }
+  }
+}

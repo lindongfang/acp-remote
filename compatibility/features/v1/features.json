@@ -143,6 +143,12 @@
           "description": "本机会话生命周期投影与激活（§9.8/§10.2/§11.5/§11.8）：门控 Sync 面 `session.resume`、查看控制帧 `session.view`/`session.view.result`、owned 摘要的可选 `localActivity`（`idle`/`active`/`pending`）与持久事件 `session.activity.changed`；未协商时该命令回 `command.unsupported`、该字段与事件缺席、查看控制帧被拒。只在 owned 路径交付，Node Link 不登记该 feature、不转发新字段或新事件",
           "delivery": "mvp",
           "required": false
+        },
+        {
+          "id": "core.session-preparation.v1",
+          "description": "首条消息提交前的临时会话准备（§11.9）：准备控制帧 `session.preparation`/`session.preparation.result`（闭合 action `allocate`/`restore`/`configure`/`renew`/`release`）、Sync-only mutation `session.start`（`kind: initial` 携带准备凭据与首条输入，`kind: continue` 执行显式继续）、`command.status` 的 `preparation` 投影（`stage`/`firstSubmissionId`/`firstRequestId`/`currentRequestId`/`everDispatched`/`canContinue`）与 §3.4 的附件 `target: preparation` 分支；准备资源只存在于运行期，正式记录只由首次提交事务产生。只在 Sync 登记，Node Link 不登记该 feature、不转发任何准备帧或字段",
+          "delivery": "conditional_mvp",
+          "required": false
         }
       ]
     },

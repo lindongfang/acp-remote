@@ -7,7 +7,7 @@
 use acpr_transcript::table::{DomainSpec, FieldSpec, FieldType, Proof};
 
 /// docs/SYNC_PROTOCOL.md §6.3 的登记表，顺序与 registry 一致。
-pub const DOMAINS: [DomainSpec; 5] = [
+pub const DOMAINS: [DomainSpec; 6] = [
     DomainSpec {
         domain: "acp-remote/pairing-proof/v1",
         proof: Proof::Hmac,
@@ -245,6 +245,62 @@ pub const DOMAINS: [DomainSpec; 5] = [
                 tag: 12,
                 name: "negotiatedFeatures",
                 ty: FieldType::NulJoined,
+            },
+        ],
+    },
+    DomainSpec {
+        domain: "acp-remote/session-preparation/v1",
+        proof: Proof::Signature,
+        fields: &[
+            FieldSpec {
+                tag: 1,
+                name: "protocolVersion",
+                ty: FieldType::U16be,
+            },
+            FieldSpec {
+                tag: 3,
+                name: "deviceId",
+                ty: FieldType::Uuid16,
+            },
+            FieldSpec {
+                tag: 17,
+                name: "ownerNodeId",
+                ty: FieldType::Uuid16,
+            },
+            FieldSpec {
+                tag: 18,
+                name: "storeEpoch",
+                ty: FieldType::Uuid16,
+            },
+            FieldSpec {
+                tag: 19,
+                name: "origin",
+                ty: FieldType::Utf8,
+            },
+            FieldSpec {
+                tag: 20,
+                name: "tabNonce",
+                ty: FieldType::Bytes32,
+            },
+            FieldSpec {
+                tag: 21,
+                name: "sessionId",
+                ty: FieldType::Uuid16,
+            },
+            FieldSpec {
+                tag: 22,
+                name: "agentId",
+                ty: FieldType::Utf8,
+            },
+            FieldSpec {
+                tag: 23,
+                name: "normalizedWorkspacePath",
+                ty: FieldType::Utf8,
+            },
+            FieldSpec {
+                tag: 24,
+                name: "workspaceSource",
+                ty: FieldType::Utf8,
             },
         ],
     },

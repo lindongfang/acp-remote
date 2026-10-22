@@ -589,6 +589,18 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 `sync-protocol` 与 `node-link-protocol` 正常依赖它，字段级校验与开放对象保真因此只有一份实现；协议 crate 之间仍然互不依赖。
 
+### 4.14 准备式新建的职责划分（计划，`web-session-preparation`；实现待 WP2–WP7）
+
+> **本节是计划边界，不是现状。** 准备控制面、首条原子提交、临时端点与附件暂存都尚未接线；合同已冻结在 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9 与 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11/§12。落地前不得在握手中宣告 `core.session-preparation.v1`，也不得注册需要它的入口。
+
+- **core**：拥有准备生命周期与首次提交的业务规则（ID 分配后的归属、可继续/不可继续的判定、派发阶段 CAS、普通重启与存储重建的区分），并以**纯端口**表达两个写入口（CORE §5.11 的 `rust-planned` 块）：`FirstSubmission`（同一事务写正式会话/完整首条输入/稳定身份/附件正式引用，另提供读投影、派发围栏与终态写入）与 `PreparationAttachmentStaging`（运行期传输/清单 + Owner 私有内容区，无 `owned_session` 外键行，认领不复制全文）。core 仍不依赖 Tokio、文件系统、wire DTO、SQLite 或任何 Agent；新增端口**不改变** core 的直接依赖集合。
+- **agent-host**：为准备 ID 管理**临时**端点——真实模式/配置读取、资源代隔离、旧代迟到请求拒绝、单会话关闭与完整进程树清理；临时端点不要求 `SessionStore` 已有行，也不得写会话 store。首条正式提交后由组合根/`server` 把端点转移给正式会话；没有临时端点时不得伪装「可发送」。
+- **storage-sqlite**：实现暂存端口（运行期元数据 + 同一受管内容区、流式摘要、封存后不可变、24 小时与启动回收、配额）与首条提交事务/读投影。首次受理与附件正式引用在同一事务；准备阶段不写行。计划表 `owned_first_submission` 的 DDL 见 CORE §12，v16 migration 落地后才允许把它移入 §7 并删除计划小节。
+- **server::sync**：独立承接准备控制帧（`session.preparation`/`session.preparation.result`）、Sync-only mutation `session.start`、附件准备 target 与 `command.status` 的 `preparation` 投影；只调用 core 用例，认证/feature 门控先于任何存储或 Agent 调用，不调用 Node Link 或 `local_admin` 等同级适配器。Node Link 适配器不转发任何准备帧或字段。
+- **identity-auth / identity-keystore**：准备凭据的专用签名/验签（domain `acp-remote/session-preparation/v1`）是纯状态机能力，密钥只经既有 keystore 端口使用（[`IDENTITY_AND_AUTH_CONTRACT.md`](./IDENTITY_AND_AUTH_CONTRACT.md) §6.4）。
+- **app**：装配端口、注入 `Clock`、持有临时资源的所有权/取消与关闭顺序（临时端点先于 Host/Store 关闭），并保证启动时不自动派发首条。
+- **依赖方向不变**：准备能力不新增 crate，也不建立 `server → storage-sqlite`、`agent-host → storage-sqlite` 之类的横向边；跨模块协作一律经组合根注入的 core 端口。
+
 ## 5. 依赖矩阵
 `✓` 表示允许直接依赖：
 
@@ -767,7 +779,7 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 |---|---|
 | core | 状态转换、值对象、每会话串行、幂等、事务提交、owned/imported 分流和 fake ports |
 | acp-protocol | 官方 fixture、未知字段往返保真、扩展 payload、版本兼容 |
-| sync-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算、恶意输入；v1 信封（body 字节保真、认证阶段连接字段规则、未知 `type`/字段拒绝）；**合同声明 29 个消息类型与 35 个事件视图**（crate 当前覆盖 27 个消息类型与 34 个视图——`session.view`/`session.view.result`、视图 `session.activity.changed` 与新错误码 `session.capacity_exceeded` 的镜像与用例**待 WP4**，三条漂移门禁因此在镜像落地前会红，属合同先行的预期未完成态）的字段级边界、fixture 覆盖与类型化 body 往返；视图夹具按 `viewDef` 投影到同一 event 类型；配对 HTTPS 载荷（设备短二维码 q2 的 65 字节布局/旧 `#data=` 拒绝/共享向量、claim/status、配对码 lookup 与 qr-lookup 的常量与宽度、`canonicalOrigin` 的 origin 形状、approved 与 device/host 的对应关系）；三个漂移门禁（`type` 常量与 schema union 同源抽取、错误码与 registry 的 `(code, retryable)` 逐条相等、`views::VIEW_TYPES` 与 `event-views.schema.json` 的 `$defs` 逐条相等） |
+| sync-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算、恶意输入；v1 信封（body 字节保真、认证阶段连接字段规则、未知 `type`/字段拒绝）；**合同声明 31 个消息类型与 35 个事件视图**（crate 已镜像 31 个消息类型、35 个视图与 54 个错误码，含 `session.view`/`session.view.result`、`session.preparation`/`session.preparation.result`、视图 `session.activity.changed` 与 `preparation.*`；`core.session-preparation.v1` 的**服务端处理**与真实设置接线仍待 WP2–WP5，不因 crate 镜像就宣称已实现）的字段级边界、fixture 覆盖与类型化 body 往返；视图夹具按 `viewDef` 投影到同一 event 类型；配对 HTTPS 载荷（设备短二维码 q2 的 65 字节布局/旧 `#data=` 拒绝/共享向量、claim/status、配对码 lookup 与 qr-lookup 的常量与宽度、`canonicalOrigin` 的 origin 形状、approved 与 device/host 的对应关系）；三个漂移门禁（`type` 常量与 schema union 同源抽取、错误码与 registry 的 `(code, retryable)` 逐条相等、`views::VIEW_TYPES` 与 `event-views.schema.json` 的 `$defs` 逐条相等） |
 | node-link-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算；v1 信封与全部 29 个消息类型（连接字段规则、body 字节保真、类型化 body 往返、非法 body 分层拒绝）；配对 HTTPS 载荷；grant 词表与 `commands.json`、错误码与 registry、`MessageType` 与 schema union 三个漂移门禁 |
 | acpr-transcript | 长度前缀编解码往返、字段乱序/重复/缺字段拒绝、magic 与 `codecVersion` 校验；表驱动层的字段数量、tag 成员与定长宽度校验 |
 | acpr-wire | 值对象取值域（uuid/decimalString/timestamp/featureList/rawAcp 的正反用例）、`Nullable` 的「缺键报错 / null / 值」三态、`ExtraFields` 的未知字段值保真（含超出 u64 的整数字面量）、base64url 规范无填充口径 |

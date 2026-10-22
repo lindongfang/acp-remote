@@ -22,8 +22,8 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{
-    Base64Url, BoundedU64, DecimalString, NonEmptyText, Nullable, ProtocolVersionV1, RawObject,
-    Text, Timestamp, Uuid, ValueError,
+    Base64Url, BoundedU64, DecimalString, NonEmptyText, Nullable, PositiveDecimalString,
+    PreparationReceipt, ProtocolVersionV1, RawObject, Text, Timestamp, Uuid, ValueError,
 };
 use crate::error::ErrorCode;
 
@@ -267,10 +267,25 @@ impl<'de> Deserialize<'de> for ChunkData {
     }
 }
 
-/// `attachment.begin` 的 body。
+/// `attachment.begin` 的 body：正式上传（顶层 `sessionId`）与准备上传（`target`）**二选一**。
+///
+/// 两个分支各自闭合（`deny_unknown_fields`），因此「同时给出 `sessionId` 与 `target`」「`target.kind`
+/// 取正式值」都是解码期错误，不存在「一个分支的字段被另一个分支当未来字段忽略」的路径。准备分支
+/// 还要求连接已协商 `core.session-preparation.v1`——门控在服务端，形状在这里。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // wire 联合本身即分支形状；装箱会改变跨 crate 的解码 API。
+pub enum BeginBody {
+    /// 正式上传：`sessionId` 指向已有 owned 会话（旧分支，形状逐字不变）。
+    Owned(OwnedBeginBody),
+    /// 准备上传：闭合 `target`，不带顶层 `sessionId`。
+    Preparation(PreparationBeginBody),
+}
+
+/// 正式上传分支的 body。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BeginBody {
+pub struct OwnedBeginBody {
     #[serde(rename = "transferId")]
     pub transfer_id: Uuid,
     #[serde(rename = "sessionId")]
@@ -284,6 +299,72 @@ pub struct BeginBody {
     pub media_type: NonEmptyText<255>,
     #[serde(rename = "fileName")]
     pub file_name: NonEmptyText<255>,
+}
+
+/// 准备上传分支的 body（除 `target` 外与旧分支同形）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparationBeginBody {
+    #[serde(rename = "transferId")]
+    pub transfer_id: Uuid,
+    pub target: PreparationAttachmentTarget,
+    pub subject: DeviceSubject,
+    #[serde(rename = "totalLength")]
+    pub total_length: DecimalString,
+    #[serde(rename = "chunkSize")]
+    pub chunk_size: FixedChunkSize,
+    #[serde(rename = "mediaType")]
+    pub media_type: NonEmptyText<255>,
+    #[serde(rename = "fileName")]
+    pub file_name: NonEmptyText<255>,
+}
+
+/// `attachment.schema.json#/$defs/preparationAttachmentTarget`（design D6.1）。
+///
+/// `sessionId` 是签发准备凭据的 ID，`receipt` 是完整 claims+signature（不是业务 connectionId 或登录
+/// token），`runtimeEpoch` 是本节点当前准备运行期标识，`generation` 是 `1..=2^63−1` 的十进制字符串。
+/// target 与顶层 `sessionId` 互斥由 [`BeginBody`]/[`ManifestBeginBody`] 的两个闭合分支保证。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparationAttachmentTarget {
+    /// 恒为 `"preparation"`。
+    #[serde(rename = "kind")]
+    pub kind: PreparationTargetKind,
+    #[serde(rename = "sessionId")]
+    pub session_id: Uuid,
+    pub receipt: PreparationReceipt,
+    #[serde(rename = "runtimeEpoch")]
+    pub runtime_epoch: Uuid,
+    pub generation: PositiveDecimalString,
+}
+
+/// `target.kind` 的唯一合法取值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparationTargetKind;
+
+impl PreparationTargetKind {
+    /// wire 取值。
+    pub const VALUE: &'static str = "preparation";
+}
+
+impl Serialize for PreparationTargetKind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(Self::VALUE)
+    }
+}
+
+impl<'de> Deserialize<'de> for PreparationTargetKind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        if text != Self::VALUE {
+            // `formal`/`owned` 之类的取值不是「另一种 target」，而是想绕过旧分支：显式拒绝。
+            return Err(DeError::custom(ValueError::Enumerated {
+                field: "target.kind",
+                value: text,
+            }));
+        }
+        Ok(Self)
+    }
 }
 
 /// `attachment.chunk` 的 body。
@@ -414,14 +495,39 @@ pub struct ReadChunkBody {
     pub eof: bool,
 }
 
-/// `attachment.manifest_begin` 的 body。
+/// `attachment.manifest_begin` 的 body：正式会话清单（顶层 `sessionId`）与准备清单（`target`）
+/// **二选一**，两个分支各自闭合。`submissionId` 是**附件清单**标识（不是首条提交的
+/// `firstSubmissionId`），`session.start` 的 `kind: initial` 用它认领清单。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // wire 联合本身即分支形状；装箱会改变跨 crate 的解码 API。
+pub enum ManifestBeginBody {
+    /// 正式会话清单。
+    Owned(OwnedManifestBeginBody),
+    /// 准备清单。
+    Preparation(PreparationManifestBeginBody),
+}
+
+/// 正式会话清单分支的 body。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ManifestBeginBody {
+pub struct OwnedManifestBeginBody {
     #[serde(rename = "submissionId")]
     pub submission_id: Uuid,
     #[serde(rename = "sessionId")]
     pub session_id: Uuid,
+    pub subject: DeviceSubject,
+    #[serde(rename = "attachmentCount")]
+    pub attachment_count: DecimalString,
+}
+
+/// 准备清单分支的 body。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparationManifestBeginBody {
+    #[serde(rename = "submissionId")]
+    pub submission_id: Uuid,
+    pub target: PreparationAttachmentTarget,
     pub subject: DeviceSubject,
     #[serde(rename = "attachmentCount")]
     pub attachment_count: DecimalString,
@@ -515,6 +621,14 @@ pub struct ErrorBody {
     pub retryable: bool,
     #[serde(rename = "transferId")]
     pub transfer_id: Nullable<Uuid>,
+    /// 可选：只允许在协商 `core.session-preparation.v1` 的连接上出现。**清单错误必带它且
+    /// `transferId` 为 `null`**；传输错误带 `transferId`。无法安全识别标识时两边都省略/置 `null`。
+    #[serde(
+        rename = "submissionId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub submission_id: Option<Uuid>,
     pub details: RawObject,
 }
 
@@ -529,6 +643,7 @@ impl ErrorBody {
             }),
             retryable: code.default_retryable(),
             transfer_id: Nullable::null(),
+            submission_id: None,
             details: RawObject::empty(),
         }
     }
@@ -536,6 +651,14 @@ impl ErrorBody {
     /// 带传输标识与已登记 `details`。
     pub fn with_transfer(mut self, transfer: Uuid, details: RawObject) -> Self {
         self.transfer_id = Nullable::value(transfer);
+        self.details = details;
+        self
+    }
+
+    /// 清单错误：`submissionId` 必带，`transferId` 必须为 `null`（design D6.1/D6.3）。
+    pub fn with_submission(mut self, submission: Uuid, details: RawObject) -> Self {
+        self.transfer_id = Nullable::null();
+        self.submission_id = Some(submission);
         self.details = details;
         self
     }

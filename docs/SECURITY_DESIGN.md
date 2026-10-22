@@ -352,6 +352,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `session.git.diff` | query | mvp |
 | `session.resume` | mutation | conditional_mvp（Node Link 与 Sync 共用命令名；Sync 侧仅在协商 `core.local-session-lifecycle.v1` 后开放，payload `{}`、结果 `{ sessionId, session }` 不带 `remoteSessionRef`） |
 | `session.title.set` | mutation | mvp（feature `core.session-title.v1`；Owner 元数据，非 ACP capability） |
+| `session.start` | mutation | conditional_mvp（feature `core.session-preparation.v1`；Sync-only 首次提交与显式继续。`envelope.sessionId` 必须是准备凭据证明的 ID 或已存在的正式会话，`payload` 是 `kind` 闭合判别联合；不进入 Node Link，也不改变 ACP `session/new` 与旧 `session.create`） |
 
 仍由各层独立执行的下界：schema/长度/频率限制、会话状态机、幂等键、连接上限，以及本地管理入口的 OS 用户边界。
 
@@ -412,6 +413,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 - Device private `CryptoKey` 只在 IndexedDB 中以不可导出形式保存。
 - imported resource 的会话正文、ACP raw、终端和 diff 不得持久化；对 Owner 本地资源未来允许的缓存仍按敏感内容设置容量、版本和清理策略。
 - `localStorage` 不保存私钥、pairing secret、完整 prompt 或可恢复认证材料。
+- **准备草稿（计划，`web-session-preparation`，尚未实现）**：唯一允许的客户端正文留存是「本机准备中、尚未首次提交」的标签页草稿（[`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §7）。它 MUST 按标签页隔离、有版本与容量上限、首次提交受理或主动离开即删除，MUST NOT 含 Provider/MCP 凭据、设备密钥、认证材料或续传令牌，也不得扩展到 imported/远程会话与已提交会话；站点数据被清理时草稿随之丢失，按草稿丢失处理；设备密钥同时丢失时仍按本节下一条重新配对。
 - `navigator.storage.persist()` 被拒绝不降低认证，数据被清理后要求重新配对。
 
 ## 12. Daemon、Agent 与 Workspace
@@ -511,6 +513,18 @@ Agent 可以通过 ACP 的 `terminal/create`/`output`/`wait_for_exit`/`kill`/`re
 - **输入与错误边界**：控制帧受 schema、字段数、单帧大小、`viewVersion` 范围（0..=`2^53−1`）、会话归属与频率（120 帧/分钟，独立于业务命令）校验，且门控先于任何存储或 Agent 调用；拒绝使用既有 `protocol.schema_invalid`/`protocol.type_unsupported`/`resource.rate_limited`/`session.not_found`，容量拒绝用 `session.capacity_exceeded`（`retryable = true`）。错误与日志不含密钥、正文、路径或任意会话内容。
 - **配置边界**：显式 `sessions.idle_timeout_ms = 0` 只关闭按时间回收，容量保护仍然生效；`sessions.max_active_sessions` 必须是正整数（无「无限」取值），运行期调低上限不强杀受保护会话，只拒绝新增直到计数回落（`CONFIG_REFERENCE.md` §4）。
 
+### 12.8 准备凭据与临时资源（计划，`web-session-preparation` WP1 合同；实现待 WP2–WP5）
+
+准备凭据让 Owner 证明「某个 `sessionId` 是我分配的、并绑定到这个设备/标签页/Agent/目录」，它**不是**一种新的认证方式：
+
+- **不是 bearer token**：receipt 不替代每条 WSS 的 challenge-response，不授予 scope，不带来跨设备/跨会话访问，不读取其他标签页草稿或任意目录，也不能恢复已提交会话或旧存储代。任何把 receipt 当作登录凭证、缓存成长期凭据或写进 URL 的做法都违反本节。
+- **签名与验证边界**：claims 是闭合的 10 个字段（`version`/`ownerNodeId`/`storeEpoch`/`origin`/`deviceId`/`tabNonce`/`sessionId`/`agentId`/`normalizedWorkspacePath`/`workspaceSource`，[`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §6.3），签名域是专用 transcript `acp-remote/session-preparation/v1`（P-256 P1363 64 字节 + 无填充 base64url）。签发与验签只经 `identity-auth` 的专用纯类型入口，密钥只由 `identity-keystore` 的平台端口使用；不新增「任意字节签名」入口，也不复用设备认证的签名域。
+- **绑定与拒绝**：`storeEpoch` 取持久 `meta.server_epoch`（正常重启不变，整库重建时改变），`origin` 是 canonical origin，`tabNonce` 是 32 字节随机标签页归属（不进入 URL）。伪造签名、跨设备/跨会话/跨标签页、`subject` 与连接不符、同 ID 不同声明、附件连接未重绑、混用正式与准备资源，统一返回 `attachment.binding_mismatch` / `{}`，不泄露目标存在性，也不指出哪个签名字段失败。
+- **验证顺序与撤销优先级**：当前连接的认证与设备撤销 MUST 先于任何凭据读取或临时资源访问；认证失败/已撤销不返回业务错误，也不回显目标。之后才验签与 claims 绑定，再查首条持久受理，最后核对运行期资源代/租约与目录/Agent 现状。已撤销设备立即中止其准备控制帧、附件准备上传与临时端点（附件连接按 `4410` 关闭）。
+- **存储重建**：receipt 的 `storeEpoch` 与当前持久值不一致时返回不可重试的 `preparation.store_rebuilt`（`details: {}`），客户端丢弃 receipt 并认证后回目录重新分配；不得重放旧 receipt、不得沿用旧临时端点，也不得把这种情况报成 `preparation.stale`。
+- **临时资源与孤儿清理**：准备目录、租约、资源代、临时端点与暂存传输只存在于运行期（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11）；不写带 `owned_session` 外键的行，不产生正式会话/命令/事件。临时资源计入 `sessions.max_active_sessions` 容量，租约 30 秒、可见页面每 10 秒续租（[`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §14）。未封存或已封存待认领的暂存字节由启动回收与 24 小时闲置回收清理；活动传输与已受理消息引用的字节不得被误删。回收只删除无引用孤儿，且不写日志正文、路径或摘要之外的敏感字段。
+- **不重传、不复制**：首次提交只认领已封存字节的元数据与引用（design D6.4）；转正不得再次全量上传、复制文件或重新计算整份摘要。必要的存在性/权限复核不在此限。
+
 ## 13. 持久化与本地数据保护
 
 ### 13.1 第一阶段静态数据决策
@@ -548,6 +562,7 @@ Agent 可以通过 ACP 的 `terminal/create`/`output`/`wait_for_exit`/`kill`/`re
 向第三方客户端交付正文必须被视为显式数据披露
 - 撤销设备或节点后 Owner 不再提供数据，Access 清除该来源的运行期模型与内存内容（不存在需要删除的持久索引）。
 - 客户端收到自己被撤销或用户执行“清除此设备”时，应删除缓存和 device key；浏览器能力不足时明确说明残留风险。
+- **准备材料的数据最小化（计划，`web-session-preparation`，尚未实现）**：准备凭据只在浏览器内随准备草稿持有（窄例外见 §11.4），不写日志、不进 URL、不进入普通 SQLite 字段；Owner 侧对准备阶段**不落任何行**——准备目录/租约/资源代与暂存传输都是运行期状态，正式记录只由首次受理事务产生（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §12）。Access Node 不接触准备凭据：它既不签发、不验证，也不缓存，准备帧只在 Sync 面由 Owner 处理。
 - 未来启用加密离线正文缓存时，必须新增协商 feature、Owner 明示授权、容量/TTL/撤销提示和独立 ADR；Owner 仍不得声称能远程可靠擦除已有副本。
 - 与 Daemon 同包发布的 PWA 静态资源属 §3 的 `public-artifact` 类别：根路径静态面只交付这些公开构建产物（入口文档与前端资源），不交付任何会话内容、凭据或用户数据，因此未认证的请求也能取到它。同包发布、构建版本可检查与发布构建缺产物即拒绝启动见 §16.3。
 

@@ -57,8 +57,8 @@
         "tag": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 16,
-          "description": "协议内全局 fieldTag 编号（Sync 见 docs/SYNC_PROTOCOL.md §6.3，Node Link 见 docs/NODE_LINK_PROTOCOL.md §9.3）。两套协议编号含义不同。"
+          "maximum": 32,
+          "description": "协议内全局 fieldTag 编号（Sync 见 docs/SYNC_PROTOCOL.md §6.3，Node Link 见 docs/NODE_LINK_PROTOCOL.md §9.3）。两套协议编号含义不同。Sync 的 17–24 自 `core.session-preparation.v1` 起分配给准备凭据（`acp-remote/session-preparation/v1`）；tag 在同一协议内跨 domain 复用必须保持名称与编码不变。"
         },
         "name": {
           "type": "string",

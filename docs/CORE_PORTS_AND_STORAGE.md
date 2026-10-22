@@ -42,6 +42,8 @@
 > 版本：0.25（2026-10-22，`session-activation-lifecycle` 变更 **WP1（合同先行，实现待 WP2/WP3/WP4）**：**本机生命周期的纯类型与端口**——§3.3 新增 `LocalActivity`（`Idle｜Active｜Pending`，唯一归约）、`ResourceGeneration` 与 `ViewLease`（纯运行期，**不新增持久表**）；§4 新增 `LocalSessionLifecycle` 用例族（激活/合并、查看声明与续租、容量准入与候选选择、逐会话释放确认、当前生命周期查询），时钟经既有 `Clock` 端口注入；§5 新增 **§5.10** 的计划端口（用 `rust-planned` 围栏，避免 §5 的常规 rust 块把它当成已实现形状）；§6 新增第 **23** 条：`session.activity.changed` 先持久化后发布、启动收敛不信旧 ready、查看者/租约不持久化、owned 当前查询与快照读同一代目录、激活与回收不交错、`uncertain` 不自动重派；§7 明确**不改 DDL**（`owned_*` 家族与 migration 未变），运行期目录不落盘，若实现阶段确需列变更必须版本化迁移 + 旧库升级测试；§9 新增判据 40–42。**§5 的既有 rust 块、§7 的 SQL 块与漂移门禁逐条不变**）
 
 
+> 版本：0.26（2026-10-22，`web-session-preparation` 变更 **WP1（合同先行，实现待 WP2–WP7）**：**首条提交与准备附件的合同冻结**——§5 新增 **§5.11** 计划端口（`FirstSubmission`、`PreparationAttachmentStaging` 及全部纯类型，`rust-planned` 围栏）；新增顶层 **§12** 用 `sql-planned` 围栏冻结 `owned_first_submission` 的 DDL（`session_id` 主键、`first_submission_id`/`user_message_id` 唯一、完整输入与摘要、阶段与 `ever_dispatched`、当前请求/结果），**不**写进 §7；§7 的 DDL 与 v15 版本断言逐字未变。配套 wire 合同（feature `core.session-preparation.v1`、准备控制帧、`session.start`、三个 `preparation.*` 错误码、`acp-remote/session-preparation/v1` 签名域、附件准备 target）见 `SYNC_PROTOCOL.md` §3.4/§6.3/§11.5/§11.9/§12.2。WP2 以 v16 落地后把计划 DDL 移入 §7、把已实现的端口移入 §5 常规块并删除 §5.11/§12 的计划小节。
+
 ## 1. 范围与非目标
 
 范围：core 的值对象/用例/端口/错误类型、broker 的提交与发布契约、`storage-sqlite` 的 PRAGMA/文件布局/migration/表结构/索引/保留与容量/崩溃恢复、以及实现该合同的验收判据。
@@ -1285,6 +1287,250 @@ pub enum ReleaseOutcome {
 - **适配器边界**：`agent-host` 提供有语义的单会话释放并执行真实 ACP close（§4 的「Agent 托管」）；`server::sync` 声明/续租/释放查看者，认证撤销与断开时主动通知；`app` 只负责扫描调度、任务所有权与关闭顺序，不做回收业务判断。
 - **不落盘**：本节的目录、租约、资源代都不进 `storage-sqlite`，不需要 migration（§7）。
 
+### 5.11 首条提交与准备附件暂存端口（计划，WP2 实施）
+
+> **实现状态：尚未实现。** 本节用 `rust-planned` 围栏声明目标形状（`scripts/check-contract-drift.mjs` 的 §5 常规块扫描**不**包含它；落地后由 WP2 把已实现的部分移入 §5 的常规 rust 块，与 `ports.rs` 逐条对齐）。core 仍不得依赖 Tokio、SQLite、文件系统、wire DTO 或具体 Agent；时间由既有 `Clock` 注入，输入保真只经 §3 的 rawJson 载体，不把 ACP DTO 或 wire JSON 解析器引入 core。
+
+```rust-planned
+/// 首次提交的原子持久入口（design D7/D8）。一次调用在**同一事务**里写正式会话、完整首条输入、
+/// 稳定消息/请求身份、派发阶段与附件正式引用；任一步失败全回滚，不派发、不留部分提交。
+#[async_trait]
+pub trait FirstSubmission: Send + Sync {
+    /// 首次受理。`session` 必须是由准备凭据证明的 ID；`first_submission_id` 由服务端生成，
+    /// 与 `session` 一对一（唯一约束）。重复调用返回 `AlreadyCommitted`，不重建、不追加首条。
+    async fn commit_first_submission(&self, write: FirstSubmissionWrite) -> Result<FirstSubmissionAdmission, PortError>;
+    /// 读阶段与关联（`command.status` 投影、`restore` 的 committed、显式继续的准入都只读这里）。
+    async fn first_submission(&self, session: SessionId) -> Result<Option<FirstSubmissionRecord>, PortError>;
+    /// 派发围栏：仅当阶段是 `SavedNotDispatched` 时 CAS 到 `DispatchStarted` 并固定 Agent 会话标识。
+    /// 并发继续最多一个成功；其余返回 `NotEligible`（映射 `command.idempotency_conflict`）。
+    async fn begin_dispatch(&self, fence: DispatchFence) -> Result<DispatchAdmission, PortError>;
+    /// 写本次尝试的终态；`dispatch_started` 之后无法确认结果一律 `Uncertain`，绝不自动重派。
+    async fn settle_first_submission(&self, settlement: FirstSubmissionSettlement) -> Result<FirstSubmissionRecord, PortError>;
+}
+
+/// 准备附件暂存（design D6.4）：只维护运行期传输/清单元数据与 Owner 私有内容区中的字节，
+/// **不写**带 `owned_session` 外键的行；分块流式摘要、封存不可变、24 小时与启动回收、配额复用既有预算。
+#[async_trait]
+pub trait PreparationAttachmentStaging: Send + Sync {
+    async fn begin(&self, begin: StagedTransferBegin) -> Result<StagedTransferState, PortError>;
+    async fn append(&self, chunk: StagedChunk) -> Result<StagedChunkOutcome, PortError>;
+    async fn seal(&self, seal: StagedSeal) -> Result<StagedSealOutcome, PortError>;
+    async fn status(&self, transfer: TransferId) -> Result<Option<StagedTransferState>, PortError>;
+    async fn abort(&self, transfer: TransferId, reason: StagedAbortReason) -> Result<(), PortError>;
+    async fn begin_manifest(&self, begin: StagedManifestBegin) -> Result<StagedManifestState, PortError>;
+    async fn append_manifest_page(&self, page: StagedManifestPage) -> Result<Option<StagedManifestState>, PortError>;
+    async fn seal_manifest(&self, seal: StagedManifestSeal) -> Result<StagedManifestState, PortError>;
+    /// 首次提交认领：只核验已封存事实并原子认领元数据，不再次上传、不复制或全量重哈希。
+    async fn claim(&self, claim: StagedClaim) -> Result<Vec<ClaimedAttachment>, PortError>;
+    /// 24 小时/启动清理：回收无引用的孤儿字节；活动传输与冻结待认领内容不得被误删。
+    async fn release_orphans(&self, before: Timestamp) -> Result<usize, PortError>;
+}
+
+// —— 纯类型：上面两个端口的输入/输出形状（最小字段 + 不变量）——
+
+/// 首条提交写集。`content` 是**有序**完整输入；`manifest` 是准备附件清单（已封存）。
+pub struct FirstSubmissionWrite {
+    pub actor: Actor,
+    pub session: SessionId,
+    pub directory: Option<DirectoryId>,
+    pub agent: AgentProfileId,
+    pub workspace_cwd: PathFingerprint,
+    pub content: Vec<PromptContentBlock>,
+    pub raw_json: RawJson,
+    pub digest: Digest,
+    pub mode: Option<ModeId>,
+    pub config_options: Vec<ConfigSelection>,
+    pub manifest: Option<SubmissionManifest>,
+    pub request_id: RequestId,
+}
+
+/// 首次受理结果：受理只产生正式记录与 `SavedNotDispatched`，**不**派发。
+pub enum FirstSubmissionAdmission {
+    Accepted(FirstSubmissionRecord),
+    /// 同 ID 已被受理：返回既有记录，不重建准备、不追加首条、不重传附件。
+    AlreadyCommitted(FirstSubmissionRecord),
+}
+
+/// 持久首条关联的只读投影（`owned_first_submission` 的行语义，见 §12）。
+pub struct FirstSubmissionRecord {
+    pub session: SessionId,
+    pub first_submission_id: Uuid,
+    pub user_message_id: Uuid,
+    pub first_request_id: RequestId,
+    pub current_request_id: RequestId,
+    pub stage: FirstSubmissionStage,
+    pub ever_dispatched: bool,
+    pub agent_session: Option<AgentSessionId>,
+    pub resource_generation: Option<ResourceGeneration>,
+    pub terminal: Option<RequestTerminal>,
+}
+
+pub enum FirstSubmissionStage {
+    /// 正式记录存在且可证明未派发；客户端可显式继续。
+    SavedNotDispatched,
+    /// 已提交派发围栏：可能已派发，崩溃后保守 `uncertain`，不再自动重发。
+    DispatchStarted,
+    /// 首个命令已有终态。
+    Terminal,
+}
+
+/// 派发围栏：在真正调用 Agent 之前提交；`retry_of` 只在显式继续时出现。
+pub struct DispatchFence {
+    pub session: SessionId,
+    pub first_submission_id: Uuid,
+    pub request_id: RequestId,
+    pub retry_of: Option<RequestId>,
+    pub agent_session: AgentSessionId,
+    pub resource_generation: ResourceGeneration,
+    pub now: Timestamp,
+}
+
+pub enum DispatchAdmission {
+    /// 本次尝试取得唯一派发权。
+    Granted,
+    /// 阶段不允许（已派发、已终态或不可证明未派发）：映射 `command.idempotency_conflict`/`command.uncertain`。
+    NotEligible,
+}
+
+pub struct FirstSubmissionSettlement {
+    pub session: SessionId,
+    pub request_id: RequestId,
+    pub outcome: RequestOutcome,
+    pub error: Option<PublicError>,
+    pub now: Timestamp,
+}
+
+pub enum RequestOutcome {
+    Completed,
+    Failed,
+    Uncertain,
+}
+
+pub struct RequestTerminal {
+    pub request_id: RequestId,
+    pub outcome: RequestOutcome,
+    pub at: Timestamp,
+}
+
+/// 暂存传输的目标：正式 owned 会话或准备（含凭据 claims 与运行期资源代）。
+pub enum StagedTarget {
+    Owned { session: SessionId },
+    Preparation(PreparationBinding),
+}
+
+/// 由**已核验**运行期传输记录恢复的绑定：身份来自连接，不来自请求字段。
+pub struct PreparationBinding {
+    pub device: DeviceId,
+    pub session: SessionId,
+    pub tab_nonce: TabNonce,
+    pub runtime_epoch: RuntimeEpoch,
+    pub generation: ResourceGeneration,
+    pub claims_digest: Digest,
+}
+
+pub struct StagedTransferBegin {
+    pub transfer: TransferId,
+    pub target: StagedTarget,
+    pub subject: SubjectId,
+    pub total_length: u64,
+    pub immutable: ImmutableFileMetadata,
+}
+
+pub struct StagedTransferState {
+    pub transfer: TransferId,
+    pub target: StagedTarget,
+    pub received: u64,
+    pub sealed: Option<SealedFacts>,
+    pub bound_connection: ConnectionId,
+}
+
+pub struct StagedChunk {
+    pub transfer: TransferId,
+    pub offset: u64,
+    pub bytes: Bytes,
+}
+
+pub enum StagedChunkOutcome {
+    Accepted { next_offset: u64 },
+    Duplicate { next_offset: u64 },
+    OffsetMismatch { expected: u64, actual: u64 },
+    ChunkConflict { offset: u64 },
+    /// 未重绑/跨连接：映射 `attachment.binding_mismatch`。
+    ConnectionMismatch,
+}
+
+pub struct StagedSeal {
+    pub transfer: TransferId,
+    pub length: u64,
+    pub sha256: Digest,
+}
+
+pub enum StagedSealOutcome {
+    Sealed(SealedFacts),
+    /// 重复封存相同内容幂等返回原事实；不同内容返回冲突。
+    AlreadySealed(SealedFacts),
+    DigestMismatch,
+}
+
+pub struct SealedFacts {
+    pub attachment: AttachmentId,
+    pub length: u64,
+    pub sha256: Digest,
+    pub sealed_at: Timestamp,
+}
+
+pub enum StagedAbortReason {
+    ClientCancelled,
+    BudgetExceeded,
+    Revoked,
+    DigestMismatch,
+}
+
+pub struct StagedManifestBegin {
+    pub submission: SubmissionId,
+    pub target: StagedTarget,
+    pub subject: SubjectId,
+    pub count: u32,
+}
+
+pub struct StagedManifestPage {
+    pub submission: SubmissionId,
+    pub transfers: Vec<TransferId>,
+    pub final_page: bool,
+}
+
+pub struct StagedManifestSeal {
+    pub submission: SubmissionId,
+}
+
+pub struct StagedManifestState {
+    pub submission: SubmissionId,
+    pub count: u32,
+    pub sealed_digest: Option<Digest>,
+}
+
+pub struct StagedClaim {
+    pub session: SessionId,
+    pub submission: SubmissionId,
+    pub runtime_epoch: RuntimeEpoch,
+    pub generation: ResourceGeneration,
+}
+
+pub struct ClaimedAttachment {
+    pub attachment: AttachmentId,
+    pub length: u64,
+    pub sha256: Digest,
+}
+```
+
+- **纯类型**：以上全部只含 §3 的值对象与枚举；`Bytes` 是 Owner 私有内容区的字节句柄，不是路径或平台类型。字段以本块为准，最小不变量：
+  - **受理 ≠ 派发**：`commit_first_submission` 只写 `SavedNotDispatched`；`begin_dispatch` 是唯一把阶段推进到 `DispatchStarted` 的入口，且必须在调用 Agent **之前**提交。`AlreadyCommitted` 不得重建准备、不得追加首条、不得重传附件。
+  - **`first_submission_id` 由服务端生成**：与 `session` 一对一（§12 的唯一列），不等于准备附件清单的 `submission`，也不等于 `user_message_id`。
+  - **派发上下文固定**：`DispatchFence` 把本次尝试的 `request_id`/`retry_of`/Agent 会话标识/资源代一起固定；此后不得再换 Agent 身份补发。`RequestOutcome::Uncertain` 是终态，不会自动重派。
+  - **暂存无 owned 外键行**：`PreparationAttachmentStaging` 不写 `owned_session` 引用；`claim` 只在同会话串行门下、核验已封存事实后原子认领，不复制、不全量重哈希（允许存在性/权限等必要复核）。
+  - **连接绑定**：`StagedTransferState.bound_connection` 是重绑的唯一事实；旧连接迟到帧返回 `ConnectionMismatch`，不同时允许两个连接修改同一传输。
+  - **回收边界**：`release_orphans` 只回收无引用的孤儿，活动传输与「已封存待认领」不得被误删；已受理消息引用的字节按已提交内容保留。
+
 ## 6. Broker 的顺序与事务契约
 
 1. owned：`EventSink` → broker 组装 `OwnedCommit` → `SessionStore::commit` → `EventPublisher::publish`（顺序不可交换）。
@@ -2065,3 +2311,46 @@ v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_ind
 运行期远程来源端口的最终定义在 §5.9（`RemoteRuntimeDirectory`、`RemoteSourceReads`、`RemoteCommandStatus` 及其值对象，代码在 `crates/core/src/ports.rs`）；本小节不重复端口形状。
 
 v14 迁移已删除 `imported_delivery_index`/`imported_command_ref`/`imported_session`/`imported_audit` 及更早的 `imported_import*` 表，并按 §7.2 的来源谓词清理可辨认的远程代理 `owned_command`/`owned_audit` 记录。清理后启动门禁（`SqliteStore::run_startup_gate`）验证远程家族不存在、owned 事件/epoch/幂等与节点信任逐项保留，并完成 WAL/自由页收尾；失败则不开始监听，重开可安全重试。
+
+## 12. 计划中的首条提交表（`sql-planned`，WP2 以 v16 实施）
+
+> **实现状态：尚未实现。** 本节是 `owned_first_submission` 的**计划 DDL**，用 `sql-planned` 围栏冻结形状；`scripts/check-contract-drift.mjs` 只把 §7 的常规 ```sql 块与 `crates/storage-sqlite/src/migrate.rs` 的 `OWNED_SCHEMA_V1` 逐条比对，因此**不得**把本块先写进 §7（那会立刻报红）。WP2 以 **v16** migration 落地后：把本块移入 §7.3、删除本节、把 `scripts/check-contract-drift.mjs` 的 `v15 = 15` 版本断言改为 v16，并保持 §7 常规 sql 块恰好一个。
+
+```sql-planned
+CREATE TABLE IF NOT EXISTS owned_first_submission (
+  session_id          TEXT PRIMARY KEY REFERENCES owned_session(session_id) ON DELETE RESTRICT,
+  first_submission_id TEXT NOT NULL UNIQUE,
+  user_message_id     TEXT NOT NULL UNIQUE,
+  first_request_id    TEXT NOT NULL,
+  current_request_id  TEXT NOT NULL,
+  actor_kind          TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_id            TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  input_json          TEXT NOT NULL,
+  input_digest        TEXT NOT NULL,
+  mode_id             TEXT,
+  config_json         TEXT NOT NULL,
+  stage               TEXT NOT NULL CHECK (stage IN ('saved_not_dispatched','dispatch_started','terminal')),
+  ever_dispatched     INTEGER NOT NULL DEFAULT 0 CHECK (ever_dispatched IN (0,1)),
+  agent_session_id    TEXT,
+  resource_epoch      TEXT,
+  terminal_outcome    TEXT CHECK (terminal_outcome IN ('completed','failed','uncertain')),
+  terminal_at         TEXT,
+  error_code          TEXT, error_message TEXT, error_details_json TEXT, retryable INTEGER,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  CHECK (stage = 'saved_not_dispatched' OR agent_session_id IS NOT NULL),
+  CHECK (stage <> 'terminal' OR terminal_outcome IS NOT NULL),
+  CHECK (ever_dispatched = 0 OR stage <> 'saved_not_dispatched'),
+  CHECK (stage <> 'dispatch_started' OR ever_dispatched = 1),
+  CHECK (terminal_outcome IS NULL OR terminal_outcome = 'completed' OR error_code IS NOT NULL)
+) STRICT;
+```
+
+- **一会话一条**：`session_id` 是主键，`first_submission_id` 与 `user_message_id` 各自唯一——`first_submission_id` 由服务端在首次受理事务生成，是「显式继续」与 `command.status` 投影的关联键；它不等于准备附件清单的 `submissionId`，也不等于持久用户消息身份 `user_message_id`。
+- **不新增消费墓碑**：本表不登记「已消费 ID」或删除墓碑，也不提供删除/清理首条关联的路径；本轮不新增正式会话删除路径。正式记录即使尚未派发也按已提交消息保留，不随未提交上传 TTL 清除。
+- **不回溯旧会话**：v16 只建表，不回填历史会话、不扫描空正文改状态；旧会话没有本表行，`preparation` 投影因此缺席，也永远不得据 `agent_session_id = NULL` 推断可重新准备。
+- **阶段唯一性与 CAS**：`stage` 只在同会话串行门内的条件更新中前进（`saved_not_dispatched → dispatch_started → terminal`）；`ever_dispatched` 一旦为 1 不再回落，`stage = 'dispatch_started'` 与 `ever_dispatched = 1` 必须同时成立。`agent_session_id`/`resource_epoch` 在写 `dispatch_started` 的同一次提交中固定，之后不得换 Agent 身份。
+- **完整输入**：`input_json` 保存有序完整首条输入（原文保真经既有 rawJson 载体），`input_digest` 是它的内容摘要；`config_json` 是本次已确认的选择。**不**保存 Provider/MCP 凭据、准备凭据、浏览器草稿或附件字节。
+- **回显关联**：首条用户消息只留一份（`user_message_id`）；Agent 回显按派发尝试上下文（`firstSubmissionId`/`user_message_id`/`request_id` + 固定 Agent 身份/资源代）关联为该消息的补充，不覆盖已保存原文，也不以相同文本或 Agent `messageId` 作为匹配依据。
+- **保留与约束**：`owned_session` 的删除被 `ON DELETE RESTRICT` 挡住，避免一条已受理的首条提交被级联删除；磁盘不足时按既有失败关闭拒绝写入，不删已受理记录腾空间。

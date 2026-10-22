@@ -65,6 +65,8 @@
 - `[决定]` 这些约束必须固化为**常驻回归测试**，而不是停留在探针记录：用 `fixtures/sync/v1/transcripts/` 与 `fixtures/node-link/v1/transcripts/` 的固定向量重算 transcript、验签与 HMAC，并跑畸形输入负例（transcript 结构错误、非法公钥）。探针在 `sha2`/`base64` 升版后没有重跑，因此这批测试是它唯一的替代证据。
 - `[决定]` 私钥、keystore 材料与 pairing secret 明文不得出现在 `core::model`、SQLite、日志、错误、测试快照或协议载荷里（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §13.1/§14.1）。公钥与指纹是非秘密认证材料，可以落库与展示。
 
+- `[决定]`（2026-10-22，`web-session-preparation` WP1 合同，**计划/待实现**）**准备凭据复用节点身份密钥，但使用专用 domain**：`acp-remote/session-preparation/v1` 的 transcript 由与 `hostProof` 相同的 `KeyPurpose::NodeIdentity` 密钥签名（不新增 key purpose、不复制或派生密钥），字段集合与 tag 见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §6.3。它只证明「该 `sessionId` 由本节点分配并绑定到该设备/标签页/Agent/目录」，**不是**登录凭证，也不产生任何授权事实（§6.4）。
+
 ## 4. 配对状态机
 
 ### 4.1 状态与转移
@@ -435,6 +437,17 @@ proof」的连接上会永不消费，因此内存上界必须与真实并发连
 - 授权集合缩减（节点方向的 grant）立即作用于后续命令；高风险缩减主动关闭连接并要求重新认证。
 - Node identity 变化（指纹/公钥不一致）进入 `identity_changed`，**不得**自动接受；只有按协议重新配对才能恢复（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.4）。
 - 第一阶段不存在传递信任：Owner 信任 Access Node 不代表信任其下游设备或其他节点。
+
+### 6.4 准备凭据的专用签名与验证边界（计划，`web-session-preparation` WP3 实现）
+
+准备凭据（`receipt`）是**归属证明**，不是认证凭证或授权输入（[`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §12.8）。`identity-auth` 只拥有它的**纯签名/验签**边界：
+
+- **专用 transcript domain**：`acp-remote/session-preparation/v1`，字段顺序与 tag 固定为 `1`(protocolVersion)、`3`(deviceId)、`17`(ownerNodeId)、`18`(storeEpoch)、`19`(origin)、`20`(tabNonce，32 字节)、`21`(sessionId)、`22`(agentId)、`23`(normalizedWorkspacePath)、`24`(workspaceSource)，机器登记在 `compatibility/transcripts/v1/transcripts.json`，wire 说明见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §6.3。它不是普通 JSON 签名，也不复用 device-proof/host-challenge 的 domain；跨 domain 重放必须验签失败。
+- **纯函数、无任意签名入口**：入口只接受**已解析的纯字段**或已编码 transcript 字节，返回「验证通过的绑定事实」或明确的失败分类；不暴露「签任意字节」「按调用方给的 domain 签名」的能力，也不接受 wire DTO（`sync-protocol` 的类型不进入本 crate）。编码由协议边界完成，本 crate 只做曲线级校验与验签。
+- **密钥只经 keystore 端口**：签名只走 §7 的 `IdentityKeystore::sign(KeyPurpose::NodeIdentity, transcript)`；`identity-auth` 不持有私钥、不实现平台存储、不新增 key purpose。验签使用 `core::model::PeerPublicKey` 的值对象（构造期已完成点校验与长度断言），只接受 64 字节 P1363 与无填充 base64url，拒绝 DER、带填充与非字母表字符。
+- **不是认证事实，也不产生授权**：验签成功只说明 claims 与签名一致；它不把连接标记为已认证、不写 `Actor`、不替代 §5 的握手，也不让 core 跳过命令检查。调用方必须先用**当前连接**的已认证身份与最新设备记录核对 `deviceId`/`origin`，再比对 claims 的 `ownerNodeId`/`storeEpoch`/`sessionId`/`tabNonce`/`agentId`/`normalizedWorkspacePath`；任一不符都是 `binding_mismatch`（不回显具体字段）。
+- **撤销与身份变化的优先级**：设备撤销以最新持久记录为准，MUST 先于验签与任何临时资源读取；已撤销即终止（不返回业务错误、不泄露目标是否存在）。节点身份材料变化（指纹/公钥不一致）按 §6.3 进入 `identity_changed`，**不得**用新密钥静默重签成同一 `sessionId` 的新凭据。`storeEpoch` 与当前持久值不一致时验签可以通过，但业务侧统一映射 `preparation.store_rebuilt`（不可重试），不得归入 `preparation.stale`。
+- **固定向量与负例**：`fixtures/sync/v1/transcripts/session-preparation.json` 必须能由机器表从 `input` 重编码并逐字节等于固定 transcript 与签名；负例至少覆盖篡改 claims（跨设备/跨会话/跨标签页/改 `origin`/改 `agentId`/改目录）、跨 domain 验签、压缩点/错误长度/带填充 base64url。没有这些证据不得宣称签署与验证已互操作。
 
 ## 7. `identity-keystore` 端口（已定型）
 

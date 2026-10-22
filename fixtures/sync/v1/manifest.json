@@ -1696,6 +1696,133 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "valid/command-session-start-initial.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-session-start-continue.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-start-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-command-status-preparation.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-session-preparation-allocate.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/sync-session-preparation-allocate-with-session-id.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "not"
+    },
+    {
+      "fixture": "valid/sync-session-preparation-result-ready.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-session-preparation-result-committed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-session-preparation-result-stale.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-session-preparation-result-released.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-session-preparation-result-failed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/begin-preparation.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/manifest-begin-preparation.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-preparation-stale.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-preparation-already-committed.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-preparation-binding-mismatch.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-preparation-rebind-required.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "attachment/valid/error-preparation-feature-required.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-session-start-continue-with-content.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/command-session-start-initial-with-first-submission-id.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/sync-session-preparation-result-committed-with-lease.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "unevaluatedProperties"
+    },
+    {
+      "fixture": "invalid/sync-session-preparation-result-stale-with-receipt.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "unevaluatedProperties"
+    },
+    {
+      "fixture": "attachment/invalid/begin-formal-and-preparation.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "oneOf"
+    },
+    {
+      "fixture": "attachment/invalid/begin-preparation-target-formal-kind.json",
+      "schema": "../../../schemas/sync/v1/attachment.schema.json",
+      "valid": false,
+      "expectedKeyword": "const"
     }
   ],
   "deviceQrVectors": [
@@ -1707,6 +1834,7 @@
     "transcripts/pairing-host-proof.json",
     "transcripts/pairing-status.json",
     "transcripts/device-proof.json",
+    "transcripts/session-preparation.json",
     "transcripts/invalid/bad-codec-version.json",
     "transcripts/invalid/bad-magic.json",
     "transcripts/invalid/duplicate-tag.json",

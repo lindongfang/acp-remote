@@ -4,19 +4,19 @@
 
 ## 1. WP1 — 冻结合同与共享资产
 
-- [ ] 1.1 对照 proposal、三份spec及design确认全部产品规则与前置生命周期基线，检视plan所有写范围/合入重叠；完成判据：独立reviewer给出无未闭环重大问题的规划检视，记录基线与证据，不覆盖用户修改。
-- [ ] 1.2 按D3.1/D6.1–D6.3登记feature、含committed的闭合结果、附件begin/manifest_begin准备target与error.submissionId、两新增错误码和start载荷，保持旧格式；完成判据：共享fixture覆盖跨连接重绑/过代/已提交竞争及每种非法字段组合，机器门禁与Rust/TS合同测试通过（PV1、PV2）。
-- [ ] 1.3 冻结准备证明的完整字段、storeEpoch、专用签名domain/tag及正常重启/重建存储/篡改/跨设备向量；完成判据：机器表能重编码固定transcript，未加入普通JSON签名或任意字节签名入口（PV1、PV2）。
-- [ ] 1.4 冻结core纯端口/事务写集、初始提交关联DDL/保留/升级、派发上下文和Agent回显投影；完成判据：CORE_PORTS与MODULE一致，首条/附件/回显/继续可断言，不增加删除正式会话、独立清理首条关联、consumed结果或删除墓碑，漂移未落地项明确记录。
-- [ ] 1.5 同步产品、前端、安全、认证、Sync、配置/ACP说明与ADR-0014，明确准备草稿及owned请求关联存储的窄例外；完成判据：权威文档按proposal清单一致且文档门禁通过，未实现能力仍用计划措辞（PV1）。
+- [x] 1.1 对照 proposal、三份spec及design确认全部产品规则与前置生命周期基线，检视plan所有写范围/合入重叠；完成判据：独立reviewer给出无未闭环重大问题的规划检视，记录基线与证据，不覆盖用户修改。
+- [x] 1.2 按D3.1/D6.1–D6.3/D8.1登记feature、控制帧族、含committed与store_rebuilt的闭合结果、附件begin/manifest_begin准备target与error.submissionId、三新增错误码（`preparation.stale`/`preparation.already_committed`/`preparation.store_rebuilt`），以及`session.start`的`initial`/`continue`判别载荷，保持旧格式；完成判据：共享fixture覆盖跨连接重绑/过代/已提交竞争/continue幂等与每种非法字段组合，新帧族在`scripts/check-contract-assets.mjs`完成登记，机器门禁与Rust/TS合同测试通过（PV1、PV2）。
+- [x] 1.3 冻结准备证明的完整字段、storeEpoch、专用签名domain/tag及正常重启/重建存储/篡改/跨设备向量；完成判据：机器表能重编码固定transcript，未加入普通JSON签名或任意字节签名入口（PV1、PV2）。
+- [x] 1.4 冻结core纯端口/事务写集、准备附件暂存端口、初始提交关联DDL/保留/升级、派发上下文和Agent回显投影；完成判据：新端口写CORE_PORTS §5.11 `rust-planned`、新表DDL写独立顶层`sql-planned`小节且§7保持现状，CORE_PORTS与MODULE一致，首条/附件/回显/继续可断言，不增加删除正式会话、独立清理首条关联、consumed结果或删除墓碑，漂移未落地项明确记录。
+- [x] 1.5 同步产品、前端、安全、认证、Sync、配置/ACP说明与ADR-0014，明确准备草稿及owned请求关联存储的窄例外；完成判据：权威文档按proposal清单一致且文档门禁通过，未实现能力仍用计划措辞（PV1）。
 
 ## 2. WP2 — 核心与owned持久化
 
 - [ ] 2.1 实现Owner ID分配、运行期准备目录/资源代、同节点容量与首次受理转移，不把准备写store；完成判据：无准备行/目录/收据、租约/容量/释放失败与并发转移测试通过，端口纯度不变（PV3、PV1）。
-- [ ] 2.2 实现正式会话、完整首条输入、稳定消息身份、命令/任务/阶段及附件有效引用的原子提交；完成判据：逐步故障注入不部分提交或派发，重复准备恢复返回committed与正确请求关联，不重新建准备，且不新增ID消费表（PV3）。
+- [ ] 2.2 实现正式会话、完整首条输入、稳定消息身份、命令/任务/阶段及附件有效引用的原子提交，并实现准备附件暂存端口（无owned_session行、流式摘要、封存不可变、24小时/启动回收、配额）；完成判据：逐步故障注入不部分提交或派发，重复准备恢复返回committed与正确请求关联，不重新建准备，暂存无DB行且重启后未受理上传可回收，不新增ID消费表（PV3）。
 - [ ] 2.3 实现dispatch_started持久围栏、单次派发CAS与失败后的显式继续规则；完成判据：同requestId只读原结果、新继续请求不新增首条、并发最多一次派发，所有崩溃窗口与uncertain不重发测试通过（PV3）。
 - [ ] 2.4 实现首次用户消息可直接查询与基于派发上下文的回显关联；完成判据：无回显仍完整可读、异messageId回显不重复、异内容/迟到事件不覆盖原文、第二条相同文字不误吞（PV3）。
-- [ ] 2.5 提供owned版本化migration、旧库/外键/回滚/第二次打开测试，维护本包CORE_PORTS/MODULE现状及附件引用保留说明；完成判据：旧会话不回填、不被识别成准备，Access白名单不扩大，升级与合同漂移测试通过（PV3、PV1）。
+- [ ] 2.5 提供owned版本化migration（v16）、旧库/外键/回滚/第二次打开测试，把计划DDL移入§7、把已实现的暂存/首条端口从§5.11 `rust-planned`移入常规§5块并删除计划小节、更新`scripts/check-contract-drift.mjs`版本断言，维护本包CORE_PORTS/MODULE现状及附件引用保留说明；完成判据：旧会话不回填、不被识别成准备，Access白名单不扩大，升级与合同漂移测试通过（PV3、PV1）。
 
 ## 3. WP3 — 准备凭据与身份边界
 

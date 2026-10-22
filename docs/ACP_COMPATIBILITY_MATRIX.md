@@ -214,6 +214,16 @@ agent→client 的 `terminal/*` 服务方法**不在**上述 `post_mvp` 集合�
 
 上游固定快照把 `ContentBlock::Text` 与 `ContentBlock::ResourceLink` 列为 baseline prompt 能力，只有 `image`、`audio`、`embeddedContext` 三个 opt-in 开关；因此矩阵里 `content.resource_link` 的 `capability` 是 `null`（它没有 gate），而 `content.resource`（`ContentBlock::Resource`）才由 `agentCapabilities.promptCapabilities.embeddedContext` 门控。`content.resource_link` 的 `delivery = post_mvp` 描述的是 ACP Remote 自己的输入路径（v1 仍不发送 resource link；用户文件经 `attachment_ref` 上传，见 `SYNC_PROTOCOL.md` §11.5），不是声称 Agent 侧缺少该能力；无论哪个阶段，收到该 content block 都必须保留或明确拒绝，不得静默丢弃。`image`/`audio`/`resource` 的协商由附件传输与类型化媒体 feature 共同门控：未宣告 Agent 能力时整条消息明确拒绝，不自动转文本或改发路径。
 
+### 5.1 Web 新建准备不引入 ACP 方法（计划，`web-session-preparation`，尚未实现）
+
+Web/PWA 的「准备 → 首次提交」是 **Sync 客户端路径**，不新增、不改写任何 ACP 方法或能力：
+
+- **矩阵不变**：`compatibility/acp/v1/matrix.json` 不新增条目、不改变现有行的 `layers`/`delivery`/`capability`。准备凭据、`session.preparation`、`session.start` 与附件准备目标都属于 Sync/Node Link 之外的客户端侧控制面（机器定义在 `schemas/sync/v1/`），不是 ACP `session/new` 的替代或扩展。
+- **旧路径逐字不变**：`session/new`（Owner/Daemon 侧由 `agent-host` 建立真实会话）、`session/resume` 与 Sync 的 `session.create` 的语义、参数与错误映射都不因准备而改变。`session.create` 仍是「立即持久化」的入口；未协商 `core.session-preparation.v1` 的客户端不得退化为它来代替准备式新建。
+- **提交前的临时端点**：准备阶段允许 `agent-host` 为同一个最终 `sessionId` 建立**临时**端点，只用于取得真实模式/配置；它不写会话 store、不出现 ACP 方法投影、也不宣告额外能力。Agent 未宣告的能力仍按本矩阵显式不支持，临时端点不能用来「试出」未宣告能力。
+- **首条与运行期**：首条用户输入在准备阶段只是客户端草稿；正式 `session.start` 的事务提交先于任何 `session/prompt` 派发。因此 ACP 侧观察到的始终是「一个已存在的会话收到一次 prompt」，不存在「首条消息之前就自动 prompt」或隐藏消息。
+- **可测试性**：本变更不增加 ACP fixture；验证集中在 Sync 合同（共享 fixture、`sync-protocol` 与 TS 解码器）与 WP4 的真实 stdio fake 场景。
+
 ## 6. `acp_facade` 的 `session/new` 映射与错误映射
 
 Access Node 的 `server::acp_facade` 把本地 ACP Client（Zed）的 `session/new` 映射为 Node Link 的 `command.submit{command:"session.create"}`（`NODE_LINK_PROTOCOL.md` §12.7）。参数派生规则固定如下：
