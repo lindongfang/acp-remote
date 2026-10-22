@@ -187,10 +187,19 @@ impl TemporaryEndpoint {
                 unavailable_config.push(choice.id.clone());
                 continue;
             }
-            self.endpoint
+            match self
+                .endpoint
                 .set_config(&choice.id, choice.value.clone())
-                .await?;
-            applied_config.push(choice.id.clone());
+                .await
+            {
+                Ok(()) => applied_config.push(choice.id.clone()),
+                // Agent 明确拒绝某个配置项不等同于整个准备帧无效：保留为不可用，
+                // 由界面显式呈现并阻止派发（design D4）。
+                Err(PortError::InvalidRequest(_)) => {
+                    unavailable_config.push(choice.id.clone());
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         // 4. 以 Agent 确认后的状态为准重读（`set_mode`/`set_config` 已更新当前值）。

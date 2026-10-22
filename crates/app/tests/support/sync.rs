@@ -23,8 +23,15 @@ use std::time::Duration;
 
 use super::TempRoot;
 use acp_core::broker::Broker;
-use acp_core::model::PortError;
-use acp_core::ports::SessionBackendFactory;
+use acp_core::model::{
+    DispatchAdmission, DispatchFence, FirstSubmissionAdmission, FirstSubmissionConvergence,
+    FirstSubmissionRecord, FirstSubmissionSettlement, FirstSubmissionWrite, FirstUserMessage,
+    ModeId, ModeRef, ModeState, PortError,
+};
+use acp_core::ports::{
+    AttachmentTransferStore, CapacityAdmission, FirstSubmission, PreparationAttachmentStaging,
+    SessionBackendFactory,
+};
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use base64::Engine as _;
 use identity_auth::{
@@ -224,7 +231,19 @@ impl SyncClient {
     /// 明文连接并完成 WebSocket 升级（`dev_mode.allow_plaintext` 的轮次）。
     pub async fn connect_plain(addr: SocketAddr, host: &str, origin: &str) -> Self {
         let stream = TcpStream::connect(addr).await.expect("连接 loopback");
-        Self::upgrade(Box::new(stream), host, origin).await
+        Self::upgrade(Box::new(stream), server::sync::conn::WS_PATH, host, origin).await
+    }
+
+    /// 同 [`SyncClient::connect_plain`]，但升级到指定 path（独立附件连接
+    /// `/sync/v1/attachments`；帧族与业务连接不同，握手/信封规则相同）。
+    pub async fn connect_plain_path(
+        addr: SocketAddr,
+        path: &str,
+        host: &str,
+        origin: &str,
+    ) -> Self {
+        let stream = TcpStream::connect(addr).await.expect("连接 loopback");
+        Self::upgrade(Box::new(stream), path, host, origin).await
     }
 
     /// TLS 连接并升级（`tls.mode = "direct"` 的轮次）。
@@ -246,16 +265,16 @@ impl SyncClient {
             .await
             .expect("TLS 握手超时")
             .expect("TLS 握手");
-        Self::upgrade(Box::new(stream), host, origin).await
+        Self::upgrade(Box::new(stream), server::sync::conn::WS_PATH, host, origin).await
     }
 
-    async fn upgrade(mut stream: Box<dyn Stream>, host: &str, origin: &str) -> Self {
+    async fn upgrade(mut stream: Box<dyn Stream>, path: &str, host: &str, origin: &str) -> Self {
         let key = base64::engine::general_purpose::STANDARD.encode([0x2a_u8; 16]);
         let request = format!(
             "GET {} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
              Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\
              Sec-WebSocket-Protocol: {}\r\nOrigin: {origin}\r\n\r\n",
-            server::sync::conn::WS_PATH,
+            path,
             server::sync::conn::WS_SUBPROTOCOL,
         );
         tokio::time::timeout(IO_TIMEOUT, stream.write_all(request.as_bytes()))
@@ -296,6 +315,16 @@ impl SyncClient {
 
     /// 尝试升级：`Err(升级响应头)` 表示被接入层拒绝（非 101）。
     pub async fn try_upgrade(addr: SocketAddr, host: &str, origin: &str) -> Result<Self, String> {
+        Self::try_upgrade_path(addr, server::sync::conn::WS_PATH, host, origin).await
+    }
+
+    /// 同 [`SyncClient::try_upgrade`]，但可以指定 path（例如确认附件端点是否存在）。
+    pub async fn try_upgrade_path(
+        addr: SocketAddr,
+        path: &str,
+        host: &str,
+        origin: &str,
+    ) -> Result<Self, String> {
         let stream = TcpStream::connect(addr).await.expect("连接 loopback");
         let mut stream: Box<dyn Stream> = Box::new(stream);
         let key = base64::engine::general_purpose::STANDARD.encode([0x2a_u8; 16]);
@@ -303,7 +332,7 @@ impl SyncClient {
             "GET {} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
              Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\
              Sec-WebSocket-Protocol: {}\r\nOrigin: {origin}\r\n\r\n",
-            server::sync::conn::WS_PATH,
+            path,
             server::sync::conn::WS_SUBPROTOCOL,
         );
         tokio::time::timeout(IO_TIMEOUT, stream.write_all(request.as_bytes()))
@@ -809,10 +838,16 @@ impl SyncClient {
     async fn fill(&mut self, needed: usize) -> Option<()> {
         while self.buffer.len() < needed {
             let mut chunk = [0u8; 16 * 1024];
-            let read = tokio::time::timeout(MESSAGE_TIMEOUT, self.stream.read(&mut chunk))
-                .await
-                .expect("读帧超时")
-                .expect("读帧");
+            let read =
+                match tokio::time::timeout(MESSAGE_TIMEOUT, self.stream.read(&mut chunk)).await {
+                    Ok(read) => read.expect("读帧"),
+                    Err(_) => panic!(
+                        "步骤「{}」读帧超时：缓冲 {} 字节，仍需 {} 字节",
+                        self.step,
+                        self.buffer.len(),
+                        needed
+                    ),
+                };
             if read == 0 {
                 return None;
             }
@@ -885,6 +920,13 @@ pub struct HostNode {
     parked: Arc<ParkedEvents>,
     /// 脚本化后端的行为脚本（失败注入、窗口期事件注入与后端调用计数）。
     script: Arc<ScriptedScript>,
+    /// 准备控制/首次提交面（`core.session-preparation.v1`）：与生产组合根同一形状（真实运行期目录、
+    /// 真实凭据验签、真实首条事务与暂存端口），只有临时 Agent 端点与首条端口的故障注入是替身。
+    preparations: Arc<server::sync::preparation::Preparations>,
+    /// 准备端点替身（建立/释放的观测口）。
+    preparation_endpoints: Arc<ScriptedPreparationEndpoints>,
+    /// 首次提交端口的故障注入装饰器（「保存前」与「保存后、派发前」两个窗口）。
+    first_submission_faults: Arc<FirstSubmissionFaults>,
     /// 宿主名（`daemon.public_origin` 的 authority）。
     host_name: String,
     shutdown: server::transport::net::ShutdownHandle,
@@ -970,6 +1012,18 @@ pub struct ScriptedScript {
     release_outcome: std::sync::Mutex<Option<acp_core::ports::ReleaseOutcome>>,
     /// 释放调用次数（「回收确实被请求过」的观测口）。
     releases: std::sync::atomic::AtomicUsize,
+    /// 准备端点派发（`prompt_with_context`）的失败类别：`SessionNotEstablished` = 可证明未发出
+    /// （首条 `failed`），其余取值 = 说不清（首条 `uncertain`）。`None` = 正常派发。
+    prepared_prompt_failure: std::sync::Mutex<Option<acp_core::model::UnavailableKind>>,
+    /// 准备端点**不**携带 Agent 会话标识：首次受理成功、但可证明无法派发（D8 的失败围栏）。
+    prepared_without_agent_session: std::sync::atomic::AtomicBool,
+    /// 首次派发时 Agent 回显的用户输入标识；`None` = 不回显。回显按 `associate_user_echo` 判定，
+    /// 可证明与已保存首条一致时不产出第二条用户消息事件（与 agent-host mapper 同一条规则）。
+    prepared_echo: std::sync::Mutex<Option<String>>,
+    /// 普通 prompt 的用户输入回显标识；`None` = 不回显（既有用例的 2 条脚本事件因此不变）。
+    plain_echo: std::sync::Mutex<Option<String>>,
+    /// 被 `associate_user_echo` 判定为重复并抑制的回显次数（用例证明「确实评估过回显」）。
+    duplicate_echoes: std::sync::atomic::AtomicUsize,
 }
 
 impl ScriptedScript {
@@ -1067,6 +1121,83 @@ impl ScriptedScript {
     /// 逐会话释放被调用的次数。
     pub fn release_calls(&self) -> usize {
         self.releases.load(Ordering::SeqCst)
+    }
+
+    /// 让准备端点此后的 `prompt_with_context` 以该类别失败。
+    ///
+    /// `SessionNotEstablished` = 派发围栏已提交但可证明请求未发出（首条 `failed`，可显式继续）；
+    /// 其余取值 = 说不清（首条 `uncertain`，绝不再派发）。
+    pub fn fail_prepared_prompt(&self, kind: acp_core::model::UnavailableKind) {
+        *self
+            .prepared_prompt_failure
+            .lock()
+            .expect("用例内互斥量不会中毒") = Some(kind);
+    }
+
+    /// 恢复准备端点的正常派发（显式继续的端点必须真的可用）。
+    pub fn succeed_prepared_prompt(&self) {
+        *self
+            .prepared_prompt_failure
+            .lock()
+            .expect("用例内互斥量不会中毒") = None;
+    }
+
+    fn prepared_prompt_failure(&self) -> Option<acp_core::model::UnavailableKind> {
+        *self
+            .prepared_prompt_failure
+            .lock()
+            .expect("用例内互斥量不会中毒")
+    }
+
+    /// 让准备端点报告不了 Agent 会话标识（`establish` 时不带标识）：首次受理可成功，但派发围栏
+    /// 之前就能证明「不能派发」。默认 `false`（正常携带标识）。
+    pub fn prepared_without_agent_session(&self) {
+        self.prepared_without_agent_session
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// 恢复「准备端点携带 Agent 会话标识」。
+    pub fn prepared_with_agent_session(&self) {
+        self.prepared_without_agent_session
+            .store(false, Ordering::SeqCst);
+    }
+
+    fn prepared_has_agent_session(&self) -> bool {
+        !self.prepared_without_agent_session.load(Ordering::SeqCst)
+    }
+
+    /// 首次派发时回一条用户输入回显（消息标识由 `message` 给出，内容与首条文本一致）。
+    ///
+    /// 适配器按 `associate_user_echo` 判定：七个固定字段取自本次派发上下文、内容摘要与首条输入一致
+    /// ⇒ `Duplicate`，于是**不产出**第二条用户输入事件（与 `agent-host` 的 mapper 同一条规则）。
+    /// 真实 Codex 上的同一条路径由 WP8 8.2 的真实浏览器/Agent 验收覆盖。
+    pub fn echo_first_attempt(&self, message: &str) {
+        *self.prepared_echo.lock().expect("用例内互斥量不会中毒") = Some(message.to_owned());
+    }
+
+    fn prepared_echo(&self) -> Option<String> {
+        self.prepared_echo
+            .lock()
+            .expect("用例内互斥量不会中毒")
+            .clone()
+    }
+
+    /// 普通 prompt（`session.prompt`，无派发上下文）回一条用户输入回显：Agent 侧给这条消息自己的
+    /// 标识，因此它是一条**新**身份的用户消息（第二次有意发送相同文字不被吞并）。
+    pub fn echo_plain_prompt(&self, message: &str) {
+        *self.plain_echo.lock().expect("用例内互斥量不会中毒") = Some(message.to_owned());
+    }
+
+    fn plain_echo(&self) -> Option<String> {
+        self.plain_echo
+            .lock()
+            .expect("用例内互斥量不会中毒")
+            .clone()
+    }
+
+    /// 被关联规则判定为重复、因而没有产出事件的上行回显次数。
+    pub fn duplicate_echoes(&self) -> usize {
+        self.duplicate_echoes.load(Ordering::SeqCst)
     }
 }
 
@@ -1205,6 +1336,40 @@ fn scripted_events(marker: &str) -> Vec<acp_core::model::EndpointEvent> {
     ]
 }
 
+/// 把 `event` 插到 `turn.completed` 之类终态事件**之前**（`scripted_events` 的末条是 turn 终态）。
+fn insert_before_terminal(
+    events: &mut Vec<acp_core::model::EndpointEvent>,
+    event: acp_core::model::EndpointEvent,
+) {
+    let index = events.len().saturating_sub(1);
+    events.insert(index, event);
+}
+
+/// 脚本：一条用户输入回显（`user.message.delta`）。`message` 是 Agent 给这条回显的标识
+/// （不参与首条关联判定，只用于展示身份）。
+///
+/// 事件的 `turn` 必须留空：真实 `agent-host` 的 mapper 不把 turn 写进事件（`EndpointEvent::turn`
+/// 恒为 `None`，core 用自己分配的 turn 兜底归属）。替身自行编造的 turn 不在 `owned_turn` 里，
+/// 落盘时会撞 `owned_event.turn_id` 的外键——那不是被测行为，而是替身形状不对。
+fn scripted_user_echo(message: &str, text: &str) -> acp_core::model::EndpointEvent {
+    use acp_core::model::{EndpointEvent, EventKind, EventPayload, EventType, Timestamp, ViewJson};
+    let at = Timestamp::new("2026-10-14T10:00:00.000Z").expect("规范时间戳");
+    let view = serde_json::json!({
+        "messageId": message,
+        "deltaIndex": "0",
+        "text": text,
+    })
+    .to_string();
+    EndpointEvent::new(
+        EventKind::Delta,
+        EventType::new("user.message.delta").expect("合法事件类型"),
+        EventPayload::new(ViewJson::new(&view).expect("view 是 JSON object"), None),
+        None,
+        None,
+        at,
+    )
+}
+
 /// 脚本化 `create` 建立的 ACP 会话标识（可预测：与 `support::owner` 同款）。
 ///
 /// **它必须非空**：ACP 会话标识是恢复流程（`session.resume`）的输入，而它由 `session.create` 的**落账
@@ -1315,10 +1480,74 @@ impl acp_core::ports::SessionEndpoint for ScriptedEndpoint {
     ) -> Result<acp_core::ports::TurnAccepted, PortError> {
         self.script.prompts.fetch_add(1, Ordering::SeqCst);
         let marker = prompt_marker(&request);
-        self.parked.park(&marker, scripted_events(&marker));
-        Ok(acp_core::ports::TurnAccepted {
-            turn: acp_core::model::TurnId::new(&uuid_text()).expect("turn id 是规范 uuid 文本"),
-        })
+        let turn = acp_core::model::TurnId::new(&uuid_text()).expect("turn id 是规范 uuid 文本");
+        let mut events = scripted_events(&marker);
+        // 普通 prompt 没有派发上下文：Agent 回显带自己的消息标识，是一条**新**身份的用户消息
+        // （第二次有意发送相同文字因此不被合并）。既有用例不设置它，脚本事件数保持 2 条。
+        //
+        // 回显必须排在 turn 终态**之前**：真实 Agent 先回显输入再结束 turn；若排在终态之后，core
+        // 已经没有「在跑的 turn」可以归属它，事件会失去 turnId（读取面因此无法把用户输入折叠成消息）。
+        if let Some(message) = self.script.plain_echo() {
+            insert_before_terminal(&mut events, scripted_user_echo(&message, &marker));
+        }
+        self.parked.park(&marker, events);
+        Ok(acp_core::ports::TurnAccepted { turn })
+    }
+
+    /// 首次派发：带本次派发上下文。可证明重复的上行回显按 `associate_user_echo` 抑制——这与
+    /// `agent-host` 的 mapper 调用的是同一条 core 规则（真实 Agent 验收见 8.2）。
+    async fn prompt_with_context(
+        &self,
+        request: acp_core::model::PromptRequest,
+        at: acp_core::model::Timestamp,
+        context: Option<acp_core::model::DispatchContext>,
+    ) -> Result<acp_core::ports::TurnAccepted, PortError> {
+        self.script.prompts.fetch_add(1, Ordering::SeqCst);
+        if let Some(kind) = self.script.prepared_prompt_failure() {
+            return Err(PortError::Unavailable(kind));
+        }
+        let marker = prompt_marker(&request);
+        let turn = acp_core::model::TurnId::new(&uuid_text()).expect("turn id 是规范 uuid 文本");
+        let mut events = scripted_events(&marker);
+        if let Some(message) = self.script.prepared_echo() {
+            let duplicate = context.as_ref().is_some_and(|context| {
+                use acp_core::model::{
+                    EchoAssociation, JsonValueText, MessageId, UserEchoEvent, UserEchoLink,
+                    associate_user_echo,
+                };
+                let echo = UserEchoEvent {
+                    link: Some(UserEchoLink {
+                        session: context.session.clone(),
+                        first_submission: context.first_submission.clone(),
+                        user_message: context.user_message.clone(),
+                        request: context.request.clone(),
+                        agent: context.agent.clone(),
+                        agent_session: context.agent_session.clone(),
+                        resource_generation: context.resource_generation,
+                    }),
+                    agent_message: MessageId::new(&message).ok(),
+                    content: JsonValueText::new(&format!(
+                        r#"[{{"type":"text","text":"{marker}"}}]"#
+                    ))
+                    .expect("回显原文是 JSON 数组"),
+                    // 与首条保存时的输入摘要同值：可证明「Agent 回显的正是已保存的那条正文」。
+                    content_digest: context.input_digest.clone(),
+                };
+                match associate_user_echo(Some(context), &echo) {
+                    EchoAssociation::Duplicate { .. } => {
+                        self.script.duplicate_echoes.fetch_add(1, Ordering::SeqCst);
+                        true
+                    }
+                    EchoAssociation::Differs { .. } | EchoAssociation::Unattributed => false,
+                }
+            });
+            if !duplicate {
+                insert_before_terminal(&mut events, scripted_user_echo(&message, &marker));
+            }
+        }
+        self.parked.park(&marker, events);
+        let _ = at;
+        Ok(acp_core::ports::TurnAccepted { turn })
     }
 
     async fn validate_prompt(
@@ -1553,21 +1782,52 @@ impl HostNode {
         );
         // 与组合根同一形状：同一个原生端口同时交给用例面与 Sync 命令面（连接级版本释放需要它）。
         let session_files = Arc::new(app::session_files::NativeSessionFiles::new());
-        let core = Arc::new(
-            UseCases::new(UseCaseDeps {
-                broker: Arc::clone(&broker),
-                store: sessions,
-                trust,
-                audit: Arc::clone(&audit),
-                config: local_config,
-                attachments,
-                catalog,
-                clock: Arc::clone(&clock),
-                ids: Arc::clone(&ids),
-            })
-            .with_session_files(
-                Arc::clone(&session_files) as Arc<dyn acp_core::ports::SessionFiles>
-            ),
+        // 准备运行期目录与首次提交/暂存端口（`core.session-preparation.v1`）：与生产组合根同一形状，
+        // 目录只活在内存、容量与创建/恢复共用同一本账；首条端口套一层可注入故障的装饰器（用例显式
+        // 布防，平时逐个委托）。暂存与首条事务共用同一个 `SqliteStore` 实例。
+        let attachment_transfers: Arc<dyn AttachmentTransferStore> = store.clone();
+        let first_submission_faults = FirstSubmissionFaults::new(Arc::clone(&store));
+        let first_submission_port: Arc<dyn FirstSubmission> = first_submission_faults.clone();
+        let preparation_staging: Arc<dyn PreparationAttachmentStaging> = store.clone();
+        let preparations_directory = Arc::new(acp_core::preparation::PreparationDirectory::new(
+            Arc::clone(&ids),
+            Arc::clone(&lifecycle) as Arc<dyn CapacityAdmission>,
+            acp_core::model::RuntimeEpoch::new(&uuid_text()).expect("runtime epoch"),
+        ));
+        let core =
+            Arc::new(
+                UseCases::new(UseCaseDeps {
+                    broker: Arc::clone(&broker),
+                    store: sessions,
+                    trust,
+                    audit: Arc::clone(&audit),
+                    config: local_config,
+                    attachments,
+                    catalog,
+                    clock: Arc::clone(&clock),
+                    ids: Arc::clone(&ids),
+                })
+                .with_session_files(
+                    Arc::clone(&session_files) as Arc<dyn acp_core::ports::SessionFiles>
+                )
+                .with_attachment_transfers(attachment_transfers)
+                .with_preparations(Arc::clone(&preparations_directory))
+                .with_first_submission(Arc::clone(&first_submission_port))
+                .with_preparation_staging(Arc::clone(&preparation_staging)),
+            );
+        let preparations = Arc::new(server::sync::preparation::Preparations::new(
+            Arc::new(server::sync::preparation::CorePreparationTrust::new(
+                Arc::clone(&core),
+                Arc::clone(&authority),
+            )),
+            Arc::clone(&preparations_directory),
+            first_submission_port,
+            Some(preparation_staging),
+        ));
+        let preparation_endpoints = ScriptedPreparationEndpoints::new(
+            Arc::clone(&broker),
+            Arc::clone(&parked),
+            Arc::clone(&script),
         );
 
         // —— 网络接入面：与组合根同一批装配点（含 Sync 的 path 注册与实时扇出）——
@@ -1600,7 +1860,11 @@ impl HostNode {
                 Arc::clone(&lifecycle),
                 Arc::clone(&clock) as Arc<dyn acp_core::ports::Clock>,
             )),
-            None,
+            Some(app::daemon::PreparationPorts {
+                preparations: Arc::clone(&preparations),
+                endpoints: Arc::clone(&preparation_endpoints)
+                    as Arc<dyn server::sync::preparation::PreparationEndpoints>,
+            }),
         )
         .expect("注册 Sync path");
         let addr = listener.local_addrs()[0];
@@ -1711,6 +1975,9 @@ impl HostNode {
             sync_registry,
             parked,
             script,
+            preparations,
+            preparation_endpoints,
+            first_submission_faults,
             host_name,
             shutdown,
             tasks,
@@ -1758,6 +2025,29 @@ impl HostNode {
         &self.core
     }
 
+    /// 生产启动序列（`app::daemon` 在取锁、开始监听**之前**的两步，顺序不可交换）：
+    /// `recover_unsettled` → `converge_first_submissions`。
+    ///
+    /// 重启类用例必须按这个顺序驱动。只调后一步测的是测试自己编的顺序：首条提交的崩溃记录同样是
+    /// 「`accepted` 且无终态」的 mutation，恢复若抢先把它结算成 `uncertain`，随后的收敛会在同一命令上
+    /// 得到 `Conflict(Consumed)` 并中止启动——只有真实顺序会暴露这一点。
+    pub async fn startup_sequence(&self) -> (usize, usize) {
+        let recovered = self
+            .core()
+            .recover_unsettled(
+                &acp_core::model::Actor::LocalCli,
+                acp_core::ports::ReplayLimit::default(),
+            )
+            .await
+            .expect("启动恢复必须完成（不得中止）");
+        let converged = self
+            .core()
+            .converge_first_submissions(self.clock().now())
+            .await
+            .expect("启动收敛必须完成（不得中止）");
+        (recovered, converged)
+    }
+
     /// 真实 broker（提交节点级事件与读重放窗口）。
     pub fn broker(&self) -> &Arc<Broker> {
         &self.broker
@@ -1778,9 +2068,24 @@ impl HostNode {
         &self.parked
     }
 
-    /// 脚本化后端的行为脚本（失败注入、窗口期事件注入、后端调用计数）。
+    /// 脚本化后端的行为脚本（失败注入、窗口期事件注入与后端调用计数）。
     pub fn script(&self) -> &Arc<ScriptedScript> {
         &self.script
+    }
+
+    /// 准备控制/首次提交面（`session.preparation`/`session.start` 共用的真实服务）。
+    pub fn preparations(&self) -> &Arc<server::sync::preparation::Preparations> {
+        &self.preparations
+    }
+
+    /// 准备端点替身（建立/释放次数）。
+    pub fn preparation_endpoints(&self) -> &Arc<ScriptedPreparationEndpoints> {
+        &self.preparation_endpoints
+    }
+
+    /// 首条端口的故障注入装饰器（「保存前」「保存后、派发前」两个窗口）。
+    pub fn first_submission_faults(&self) -> &Arc<FirstSubmissionFaults> {
+        &self.first_submission_faults
     }
 
     /// 真实身份状态机（配对码/secret 的内存态观测口：`has_secret`、`consume_pairing_code`）。
@@ -1911,12 +2216,23 @@ impl HostNode {
             sync_registry,
             parked,
             script,
+            preparations,
+            preparation_endpoints,
+            first_submission_faults,
             host_name: _,
             shutdown,
             tasks,
             _temp,
         } = self;
-        let _ = (&store, &sync_registry, &parked, &script, &lifecycle, &clock);
+        let _ = (
+            &store,
+            &sync_registry,
+            &parked,
+            &script,
+            &lifecycle,
+            &clock,
+            &first_submission_faults,
+        );
         shutdown.trigger();
         for (name, mut handle) in tasks {
             match tokio::time::timeout(Duration::from_secs(10), &mut handle).await {
@@ -1930,13 +2246,25 @@ impl HostNode {
             }
         }
         drop(router);
+        // 生产关闭顺序：先释放临时端点，再放开准备服务，最后关闭存储（临时端口不持有存储）。
+        drop(preparation_endpoints);
+        drop(preparations);
         drop(core);
         drop(broker);
         drop(authority);
-        drop(store);
+        drop(first_submission_faults);
         drop(parked);
         drop(script);
         drop(sync_registry);
+        drop(lifecycle);
+        drop(clock);
+        // 存储最后关闭，且是**真的**关闭：`Arc` 全部落地后 `close()` 会 checkpoint 并关掉两个连接池。
+        // 只 drop `Arc` 不够——sqlx 的连接关闭是后台的，Windows 上句柄还没释放，测试随后「重建存储」
+        // （删除库文件）会拿到 sharing violation，于是新进程连上的仍是旧库（storeEpoch 没变）。
+        match Arc::try_unwrap(store) {
+            Ok(store) => store.close().await,
+            Err(store) => drop(store),
+        }
         drop(root);
     }
 }
@@ -1956,5 +2284,287 @@ impl ScriptedEndpoint {
             script,
             agent_session_id,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 准备面（`core.session-preparation.v1`）的测试装配件
+// ---------------------------------------------------------------------------------------------
+
+/// 首次提交端口的**可注入故障装饰器**：真实 SQLite 事务照常执行，只在用例显式布防的下一次调用上
+/// 失败。两个窗口与其语义：
+///
+/// - [`Self::fail_next_commit`]：受理事务开始前失败——「保存前」，必须零行、零派发；
+/// - [`Self::fail_next_begin_dispatch`]：受理已提交、派发围栏未提交——「保存后、派发前」的崩溃窗口，
+///   正式行与完整首条正文都在，命令仍是 accepted（等待显式继续），绝不自动重派。
+///
+/// 只替换端口，不替换存储：`HostNode::store()` 仍直连同一个 `SqliteStore` 做独立读库断言。
+pub struct FirstSubmissionFaults {
+    inner: Arc<SqliteStore>,
+    fail_commit: std::sync::atomic::AtomicBool,
+    fail_begin_dispatch: std::sync::atomic::AtomicBool,
+    commits: std::sync::atomic::AtomicUsize,
+    dispatches: std::sync::atomic::AtomicUsize,
+}
+
+impl FirstSubmissionFaults {
+    fn new(inner: Arc<SqliteStore>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            fail_commit: std::sync::atomic::AtomicBool::new(false),
+            fail_begin_dispatch: std::sync::atomic::AtomicBool::new(false),
+            commits: std::sync::atomic::AtomicUsize::new(0),
+            dispatches: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    /// 下一次 `commit_first_submission` 失败（一次性的；重试因此可以直接验证「失败后同 ID 可重试」）。
+    pub fn fail_next_commit(&self) {
+        self.fail_commit.store(true, Ordering::SeqCst);
+    }
+
+    /// 下一次 `begin_dispatch` 失败（一次性的；之后的显式继续可以成功）。
+    pub fn fail_next_begin_dispatch(&self) {
+        self.fail_begin_dispatch.store(true, Ordering::SeqCst);
+    }
+
+    /// 受理事务被尝试的次数（含被注入失败的那次）。
+    pub fn commit_calls(&self) -> usize {
+        self.commits.load(Ordering::SeqCst)
+    }
+
+    /// 派发围栏被尝试的次数。
+    pub fn dispatch_calls(&self) -> usize {
+        self.dispatches.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl FirstSubmission for FirstSubmissionFaults {
+    async fn commit_first_submission(
+        &self,
+        write: FirstSubmissionWrite,
+    ) -> Result<FirstSubmissionAdmission, PortError> {
+        self.commits.fetch_add(1, Ordering::SeqCst);
+        if self.fail_commit.swap(false, Ordering::SeqCst) {
+            return Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::StorageFull,
+            ));
+        }
+        self.inner.commit_first_submission(write).await
+    }
+
+    async fn first_submission(
+        &self,
+        session: acp_core::model::SessionId,
+    ) -> Result<Option<FirstSubmissionRecord>, PortError> {
+        self.inner.first_submission(session).await
+    }
+
+    async fn first_user_message(
+        &self,
+        session: acp_core::model::SessionId,
+    ) -> Result<Option<FirstUserMessage>, PortError> {
+        self.inner.first_user_message(session).await
+    }
+
+    async fn begin_dispatch(&self, fence: DispatchFence) -> Result<DispatchAdmission, PortError> {
+        self.dispatches.fetch_add(1, Ordering::SeqCst);
+        if self.fail_begin_dispatch.swap(false, Ordering::SeqCst) {
+            return Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::IoError,
+            ));
+        }
+        self.inner.begin_dispatch(fence).await
+    }
+
+    async fn settle_first_submission(
+        &self,
+        settlement: FirstSubmissionSettlement,
+    ) -> Result<FirstSubmissionRecord, PortError> {
+        self.inner.settle_first_submission(settlement).await
+    }
+
+    async fn converge_first_submission(
+        &self,
+        session: acp_core::model::SessionId,
+        at: acp_core::model::Timestamp,
+    ) -> Result<FirstSubmissionConvergence, PortError> {
+        self.inner.converge_first_submission(session, at).await
+    }
+}
+
+/// 准备端点的**替身**：真实 `Preparations`/运行期目录/凭据验证照常工作，这里只替换「临时 Agent
+/// 端点」本身（真实实现是 `agent-host` 的 `TemporaryEndpoint`）。
+///
+/// 与生产 `HostPreparationEndpoints` 同形：同一会话同一资源代复用端点、换代先释放旧代、`claim` 只认
+/// 精确代。端点的事件 sink 取真实 `Broker::sink(session)`（生产里由 `transfer_preparation` 完成等价
+/// 的重绑），因此首条派发的事件走与正式会话完全相同的提交路径。
+pub struct ScriptedPreparationEndpoints {
+    broker: Arc<Broker>,
+    parked: Arc<ParkedEvents>,
+    script: Arc<ScriptedScript>,
+    entries: std::sync::Mutex<std::collections::HashMap<String, PreparedEntry>>,
+    establishes: std::sync::atomic::AtomicUsize,
+    releases: std::sync::atomic::AtomicUsize,
+}
+
+struct PreparedEntry {
+    generation: u64,
+    endpoint: Arc<ScriptedEndpoint>,
+}
+
+impl ScriptedPreparationEndpoints {
+    fn new(
+        broker: Arc<Broker>,
+        parked: Arc<ParkedEvents>,
+        script: Arc<ScriptedScript>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            broker,
+            parked,
+            script,
+            entries: std::sync::Mutex::new(std::collections::HashMap::new()),
+            establishes: std::sync::atomic::AtomicUsize::new(0),
+            releases: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    /// 建立（或复用）临时端点的次数。
+    pub fn establish_calls(&self) -> usize {
+        self.establishes.load(Ordering::SeqCst)
+    }
+
+    /// 按精确代释放临时端点的次数。
+    pub fn release_calls(&self) -> usize {
+        self.releases.load(Ordering::SeqCst)
+    }
+}
+
+/// 替身端点「Agent 确认过的真实设置」：两种可选模式，当前模式随草稿选择变化。
+fn scripted_preparation_options(
+    selection: &server::sync::preparation::PreparationSelectionInput,
+) -> server::sync::preparation::PreparationOptions {
+    let default =
+        ModeRef::try_new(ModeId::new("default").expect("mode id"), "Default").expect("mode ref");
+    let plan = ModeRef::try_new(ModeId::new("plan").expect("mode id"), "Plan").expect("mode ref");
+    let selected_plan = selection
+        .mode
+        .as_ref()
+        .is_some_and(|mode| mode.as_str() == "plan");
+    server::sync::preparation::PreparationOptions {
+        modes: ModeState::new(
+            Some(if selected_plan {
+                plan.clone()
+            } else {
+                default.clone()
+            }),
+            vec![default, plan],
+        ),
+        config: Vec::new(),
+        blocks_dispatch: false,
+    }
+}
+
+#[async_trait::async_trait]
+impl server::sync::preparation::PreparationEndpoints for ScriptedPreparationEndpoints {
+    async fn establish(
+        &self,
+        request: server::sync::preparation::PreparationEstablish,
+    ) -> Result<server::sync::preparation::PreparationOptions, PortError> {
+        let key = request.session.as_str().to_owned();
+        let mut entries = self.entries.lock().expect("用例内互斥量不会中毒");
+        if let Some(existing) = entries.get(&key) {
+            if existing.generation == request.generation {
+                return Ok(scripted_preparation_options(&request.selection));
+            }
+            // 换代：旧代必须真的释放（与生产实现同一条规则），否则会留下第二个 Agent 会话。
+            entries.remove(&key);
+            self.releases.fetch_add(1, Ordering::SeqCst);
+        }
+        let agent_session = self.script.prepared_has_agent_session().then(|| {
+            acp_core::model::AgentSessionId::new(&format!("acp-{}", &request.session.as_str()[..8]))
+                .expect("会话标识非空、无 NUL、长度合规")
+        });
+        let sink = self.broker.sink(&request.session);
+        let endpoint = Arc::new(ScriptedEndpoint::attach(
+            sink,
+            Arc::clone(&self.parked),
+            Arc::clone(&self.script),
+            agent_session,
+        ));
+        entries.insert(
+            key,
+            PreparedEntry {
+                generation: request.generation,
+                endpoint,
+            },
+        );
+        self.establishes.fetch_add(1, Ordering::SeqCst);
+        Ok(scripted_preparation_options(&request.selection))
+    }
+
+    async fn configure(
+        &self,
+        request: server::sync::preparation::PreparationConfigure,
+    ) -> Result<server::sync::preparation::PreparationOptions, PortError> {
+        let entries = self.entries.lock().expect("用例内互斥量不会中毒");
+        match entries.get(request.session.as_str()) {
+            Some(entry) if entry.generation == request.generation => {
+                Ok(scripted_preparation_options(&request.selection))
+            }
+            _ => Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::SessionNotEstablished,
+            )),
+        }
+    }
+
+    async fn claim(
+        &self,
+        session: acp_core::model::SessionId,
+        generation: u64,
+    ) -> Result<Arc<dyn acp_core::ports::SessionEndpoint>, PortError> {
+        let entries = self.entries.lock().expect("用例内互斥量不会中毒");
+        match entries.get(session.as_str()) {
+            Some(entry) if entry.generation == generation => {
+                Ok(Arc::clone(&entry.endpoint) as Arc<dyn acp_core::ports::SessionEndpoint>)
+            }
+            _ => Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::SessionNotEstablished,
+            )),
+        }
+    }
+
+    async fn release(
+        &self,
+        session: acp_core::model::SessionId,
+        generation: u64,
+    ) -> server::sync::preparation::EndpointRelease {
+        let mut entries = self.entries.lock().expect("用例内互斥量不会中毒");
+        match entries.get(session.as_str()) {
+            Some(entry) if entry.generation == generation => {
+                entries.remove(session.as_str());
+                self.releases.fetch_add(1, Ordering::SeqCst);
+                match self.script.release_outcome() {
+                    acp_core::ports::ReleaseOutcome::Released => {
+                        server::sync::preparation::EndpointRelease::Released
+                    }
+                    acp_core::ports::ReleaseOutcome::Failed => {
+                        server::sync::preparation::EndpointRelease::Failed
+                    }
+                    acp_core::ports::ReleaseOutcome::Uncertain => {
+                        server::sync::preparation::EndpointRelease::Uncertain
+                    }
+                }
+            }
+            // 没有该代：幂等（与生产实现「已确认释放 ⇒ Released」同口径）。
+            _ => server::sync::preparation::EndpointRelease::Released,
+        }
+    }
+
+    async fn release_all(&self) {
+        let mut entries = self.entries.lock().expect("用例内互斥量不会中毒");
+        self.releases.fetch_add(entries.len(), Ordering::SeqCst);
+        entries.clear();
     }
 }

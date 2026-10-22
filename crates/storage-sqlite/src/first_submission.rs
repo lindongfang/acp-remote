@@ -1164,9 +1164,14 @@ impl FirstSubmission for SqliteStore {
                 .db()?;
             }
         }
+        // 跨越派发边界即开启**新尝试**：`terminal_*`/错误列描述的是「当前尝试」的终态，上一次
+        // （failed）尝试的取值必须在同一事务里清掉。留着它会让本次尝试的结算被误判为「已终态」，
+        // 命令永远停在 accepted（D8.1：每次继续都是新的 requestId，其终态由 own 记录提供）。
         let affected = sqlx::query(
             "UPDATE owned_first_submission SET stage = 'dispatch_started', ever_dispatched = 1, \
-             current_request_id = ?1, agent_session_id = ?2, resource_epoch = ?3, updated_at = ?4 \
+             current_request_id = ?1, agent_session_id = ?2, resource_epoch = ?3, updated_at = ?4, \
+             terminal_outcome = NULL, terminal_at = NULL, error_code = NULL, \
+             error_message = NULL, error_details_json = NULL, retryable = NULL \
              WHERE session_id = ?5 AND first_submission_id = ?6 \
              AND stage = 'saved_not_dispatched' AND ever_dispatched = 0",
         )
@@ -1221,7 +1226,12 @@ impl FirstSubmission for SqliteStore {
         let record = record_from_row(&row)?;
         // §11.2/D8：同一 requestId 重放只读原终态——无论终态是派发后的 `terminal` 还是可证明未派发的
         // 失败，都不再追加事件、不改 `current_request_id`。
+        //
+        // `DispatchStarted` 不算「原终态」：那一列记录的是**上一次**尝试的终态（继续的前提就是它
+        // failed），新尝试的 requestId 已由派发围栏写入 `current_request_id`。若在这里提前返回，
+        // 这次尝试永远拿不到自己的命令终态（客户端只能等到观察预算耗尽）。
         if record.current_request_id == settlement.request_id
+            && record.stage != FirstSubmissionStage::DispatchStarted
             && (record.stage == FirstSubmissionStage::Terminal || record.terminal.is_some())
         {
             return Ok(record);

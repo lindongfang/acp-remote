@@ -606,6 +606,145 @@ async fn dispatch_fence_is_cas_and_continue_needs_a_failed_attempt() {
     store.close().await;
 }
 
+/// §6 第 16 条 + D8：`unsettled_commands` 不返回首条提交尝试的命令——那是 `converge_first_submission`
+/// 的独占结算对象。
+///
+/// 两条 writer 必须分工：恢复结算普通 `accepted` mutation，收敛结算首个/当前首条尝试。恢复若抢先把它
+/// 写成 `uncertain`，收敛再结算同一条命令会得到 `Conflict(Consumed)`，启动因此中止。排除必须按
+/// `(actor, requestId)` 精确匹配——同一会话上的普通 mutation 仍要交给启动恢复。
+///
+/// 变红点：把首条 `session.start` 也列进恢复 ⇒ `unsettled` 非空；排除写成「同会话一律不返回」⇒
+/// 对照的普通 mutation 消失；收敛不再写终态 ⇒ 命令停在 `accepted`。
+#[tokio::test]
+async fn unsettled_commands_leaves_first_submission_attempts_to_convergence() {
+    use acp_core::model::{CommandKind, CommandStatus};
+    use acp_core::ports::{IdempotencyRecord, OwnedCommit, ReplayLimit, SessionStore};
+
+    let dir = temp_dir("unsettled-first-submission");
+    let store = open(&dir).await;
+    let write = submission_write(5, "saved before dispatch");
+    let session_id = write.session.clone();
+    let first_request = write.request_id.clone();
+    let actor = Actor::Device {
+        device: device(900),
+    };
+    store.commit_first_submission(write).await.expect("commit");
+
+    // 崩溃窗口的形状：`session.start` 已受理、没有终态事件。
+    let accepted = store
+        .find_request(&first_request, &actor)
+        .await
+        .expect("find")
+        .expect("受理行必须落盘");
+    assert_eq!(accepted.status(), CommandStatus::Accepted);
+    assert!(accepted.terminal_event().is_none());
+
+    // 对照：同一会话上一条普通 mutation 仍在启动恢复的输入里。
+    let other_request = request(7000);
+    store
+        .commit(OwnedCommit {
+            session: Some(session_id.clone()),
+            at: later(1),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: other_request.clone(),
+                command: "session.prompt".to_owned(),
+                kind: CommandKind::Mutation,
+                session: Some(session_id.clone()),
+                expected_version: None,
+                request_fingerprint: Digest::new(&digest_text("other-request")).expect("digest"),
+                accepted_at: later(2),
+            }),
+            command_terminal: None,
+            origin_epoch: None,
+        })
+        .await
+        .expect("accept a plain mutation");
+
+    let unsettled = store
+        .unsettled_commands(ReplayLimit::new(16))
+        .await
+        .expect("unsettled");
+    assert_eq!(
+        unsettled
+            .iter()
+            .map(|row| row.request().as_str())
+            .collect::<Vec<_>>(),
+        vec![other_request.as_str()],
+        "只有首条尝试被排除；普通 accepted mutation 仍交给启动恢复"
+    );
+
+    // 收敛是唯一结算者：写 failed、保留可继续的阶段，命令不再停留在 accepted。
+    let convergence = store
+        .converge_first_submission(session_id.clone(), later(3))
+        .await
+        .expect("converge");
+    let FirstSubmissionConvergence::ProvablyNotDispatched(record) = convergence else {
+        panic!("保存后崩溃必须收敛为可证明未派发");
+    };
+    assert_eq!(record.stage, FirstSubmissionStage::SavedNotDispatched);
+    let settled = store
+        .find_request(&first_request, &actor)
+        .await
+        .expect("find")
+        .expect("受理行仍存在");
+    assert_eq!(settled.status(), CommandStatus::Failed);
+    assert_eq!(
+        settled.error().map(|error| error.code()),
+        Some("internal.unavailable")
+    );
+    assert!(settled.terminal_event().is_some());
+
+    // 显式继续跨越派发围栏后，当前尝试同样是一条 `accepted` 且无终态的命令：它也必须留在启动
+    // 恢复之外（排除按 `current_request_id` 也要命中，不能只认首个请求）。
+    let continue_request = request(7100);
+    assert_eq!(
+        store
+            .begin_dispatch(DispatchFence {
+                session: session_id.clone(),
+                first_submission_id: record.first_submission_id.clone(),
+                actor: actor.clone(),
+                request_id: continue_request.clone(),
+                retry_of: Some(first_request.clone()),
+                request_fingerprint: Digest::new(&digest_text("continue-request")).expect("digest"),
+                agent_session: acp_core::model::AgentSessionId::new("agent-session")
+                    .expect("agent session"),
+                resource_generation: ResourceGeneration::new(1),
+                at: later(4),
+            })
+            .await
+            .expect("dispatch the continue"),
+        DispatchAdmission::Granted
+    );
+    let dispatched = store
+        .find_request(&continue_request, &actor)
+        .await
+        .expect("find")
+        .expect("继续尝试的受理行必须落盘");
+    assert_eq!(dispatched.status(), CommandStatus::Accepted);
+    assert!(dispatched.terminal_event().is_none());
+    let unsettled = store
+        .unsettled_commands(ReplayLimit::new(16))
+        .await
+        .expect("unsettled");
+    assert_eq!(
+        unsettled
+            .iter()
+            .map(|row| row.request().as_str())
+            .collect::<Vec<_>>(),
+        vec![other_request.as_str()],
+        "当前尝试（current_request_id）同样归收敛结算，恢复不得看到它"
+    );
+
+    store.close().await;
+}
+
 #[tokio::test]
 async fn crash_windows_converge_without_automatic_dispatch() {
     let dir = temp_dir("crash-convergence");

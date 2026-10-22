@@ -1545,23 +1545,30 @@ impl Broker {
                 false,
             );
         }
-        // 跨越过派发边界：不重建、不派发（不是 failed）。
-        if record.ever_dispatched || record.stage == FirstSubmissionStage::DispatchStarted {
-            return self.reject(
-                "command.uncertain",
-                "首次提交已进入可能派发阶段，不能自动重发",
-                false,
-            );
-        }
-        // 成功终态：原首次结果权威。
+        // D8.1 顺序：成功终态 → 可能已派发 → 仅失败且可证明未派发才允许继续。
+        // 成功终态：原首次结果权威（先于「可能已派发」判定）。
         if record
             .terminal
             .as_ref()
-            .is_some_and(|terminal| terminal.outcome != crate::model::RequestOutcome::Failed)
+            .is_some_and(|terminal| terminal.outcome == crate::model::RequestOutcome::Completed)
         {
             return self.reject(
                 "command.idempotency_conflict",
                 "首次提交已有成功终态",
+                false,
+            );
+        }
+        // 跨越过派发边界或首个命令说不清：不重建、不派发（不是 failed）。
+        if record.ever_dispatched
+            || record.stage == FirstSubmissionStage::DispatchStarted
+            || record
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| terminal.outcome == crate::model::RequestOutcome::Uncertain)
+        {
+            return self.reject(
+                "command.uncertain",
+                "首次提交已进入可能派发阶段，不能自动重发",
                 false,
             );
         }

@@ -3514,6 +3514,12 @@ impl SessionStore for SqliteStore {
     /// §5.2：该会话**仍可重放**的 `session_sequence` 下界/上界；没有可重放行时返回 `None`。
     /// §6 第 16 条：启动恢复要重新确认的命令行——`status = 'accepted'`、尚未拿到终态事件的
     /// **mutation** 行，按 `accepted_at` 升序（走 §7.3 的 `owned_command_status` 索引）。
+    ///
+    /// **首条提交的命令不在这里**（`design.md` D8）：`owned_first_submission` 的首个/当前请求同样是
+    /// `accepted` 且没有终态，但它的结算归 `converge_first_submission` 独占。两边都写会让先跑的
+    /// `recover_unsettled` 把它写成 `uncertain`，随后的收敛再结算同一条命令时得到
+    /// `Conflict(Consumed)`，启动直接中止。只排除该 `(actor, requestId)` 对——普通 mutation 仍照旧
+    /// 暴露给启动恢复。
     async fn unsettled_commands(
         &self,
         limit: ReplayLimit,
@@ -3521,6 +3527,11 @@ impl SessionStore for SqliteStore {
         let rows = sqlx::query(&format!(
             "SELECT {COMMAND_COLUMNS} FROM owned_command \
              WHERE status = 'accepted' AND terminal_event_id IS NULL AND kind = 'mutation' \
+             AND NOT EXISTS (SELECT 1 FROM owned_first_submission f \
+             WHERE f.actor_kind = owned_command.actor_kind \
+             AND f.actor_id = owned_command.actor_id \
+             AND (f.first_request_id = owned_command.request_id \
+             OR f.current_request_id = owned_command.request_id)) \
              ORDER BY accepted_at ASC, request_id ASC LIMIT ?1"
         ))
         .bind(i64::from(limit.events()))

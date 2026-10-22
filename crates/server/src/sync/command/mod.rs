@@ -2700,35 +2700,48 @@ impl CommandRoute {
             ));
         }
         // D8.1 顺序：成功终态 → 可能已派发 → 仅失败且可证明未派发才允许继续。
-        if let Some(terminal) = record.terminal.as_ref() {
-            if terminal.outcome != RequestOutcome::Failed {
-                return Err((
-                    ErrorCode::CommandIdempotencyConflict,
-                    "the first submission already has a terminal result",
-                    RawObject::empty(),
-                ));
-            }
-            if terminal.request_id.as_str() != retry_of_request_id.as_str() {
-                return Err((
-                    ErrorCode::CommandIdempotencyConflict,
-                    "retryOfRequestId is not the failed attempt of this session",
-                    RawObject::empty(),
-                ));
-            }
-        } else if !(record.ever_dispatched || record.stage == FirstSubmissionStage::DispatchStarted)
+        if record
+            .terminal
+            .as_ref()
+            .is_some_and(|terminal| terminal.outcome == RequestOutcome::Completed)
         {
             return Err((
                 ErrorCode::CommandIdempotencyConflict,
-                "only a provably-not-dispatched failure can be continued",
+                "the first submission already has a terminal result",
                 RawObject::empty(),
             ));
         }
-        if record.ever_dispatched || record.stage == FirstSubmissionStage::DispatchStarted {
+        // `uncertain` 不是 failed：说不清是否已发出，不得重建、不得派发（D8.1）。
+        if record.ever_dispatched
+            || record.stage == FirstSubmissionStage::DispatchStarted
+            || record
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| terminal.outcome == RequestOutcome::Uncertain)
+        {
             return Err((
                 ErrorCode::CommandUncertain,
                 "the first submission may already have been dispatched",
                 RawObject::empty(),
             ));
+        }
+        match record.terminal.as_ref() {
+            Some(terminal) if terminal.outcome == RequestOutcome::Failed => {
+                if terminal.request_id.as_str() != retry_of_request_id.as_str() {
+                    return Err((
+                        ErrorCode::CommandIdempotencyConflict,
+                        "retryOfRequestId is not the failed attempt of this session",
+                        RawObject::empty(),
+                    ));
+                }
+            }
+            _ => {
+                return Err((
+                    ErrorCode::CommandIdempotencyConflict,
+                    "only a provably-not-dispatched failure can be continued",
+                    RawObject::empty(),
+                ));
+            }
         }
         if record.current_request_id.as_str() != retry_of_request_id.as_str() {
             return Err((

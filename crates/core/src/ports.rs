@@ -832,6 +832,10 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<Option<SessionRecoveryRecord>, PortError>;
 
     /// 启动恢复用（§6 第 16 条）：仍为 `accepted` 且没有终态事件的 mutation 命令，最多 `limit` 条。
+    ///
+    /// **不含**首条提交的尝试命令（`owned_first_submission` 的 `first_request_id`/`current_request_id`
+    /// 对应的 `(actor, requestId)`）：那两类命令的唯一结算者是 `converge_first_submission`（D8）。
+    /// 两边都写会让启动先写成 `uncertain`、收敛再结算时 `Conflict(Consumed)`，从而中止启动。
     async fn unsettled_commands(&self, limit: ReplayLimit)
     -> Result<Vec<CommandRecord>, PortError>;
 
