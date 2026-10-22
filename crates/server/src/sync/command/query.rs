@@ -1014,7 +1014,7 @@ fn wire_session_state(state: CoreSessionState) -> WireSessionState {
 }
 
 /// core 的 `ModeRef` → wire `modeRef`。
-fn wire_mode_ref(mode: &CoreModeRef) -> Option<WireModeRef> {
+pub(crate) fn wire_mode_ref(mode: &CoreModeRef) -> Option<WireModeRef> {
     Some(WireModeRef {
         mode_id: NonEmptyText::<256>::parse(mode.mode_id().as_str()).ok()?,
         display_name: NonEmptyText::<256>::parse(mode.display_name()).ok()?,

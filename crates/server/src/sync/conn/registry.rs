@@ -25,6 +25,7 @@ use std::time::Instant;
 
 use acp_core::model::{DeviceId, NodeId};
 use acp_core::ports::IdGenerator;
+use identity_auth::CanonicalOrigin;
 use serde::Serialize;
 use sync_protocol::common::{DecimalString, Uuid};
 use sync_protocol::envelope::{ConnectionFields, Envelope, MessageType, encode_body};
@@ -92,6 +93,12 @@ pub struct ConnectionHandle {
     host_id: NodeId,
     device_id: DeviceId,
     client_ip: IpAddr,
+    /// 本次连接已校验的 canonical origin（设备侧；`None` = 升级请求没有 `Origin` 头）。
+    ///
+    /// 握手用它比对设备绑定（`sync::conn::handshake::connection_binding`）；准备凭据的校验还需要在
+    /// 业务阶段再次逐字比较 `claims.origin`，因此把**握手已经解析成功的那一份**留在句柄上，而不是
+    /// 在业务阶段从配对记录重新推断（那会变成第二份来源）。
+    canonical_origin: Option<CanonicalOrigin>,
     limits: SessionLimits,
     ids: Arc<dyn IdGenerator>,
     outbound: mpsc::Sender<Outbound>,
@@ -123,6 +130,7 @@ impl ConnectionHandle {
         host_id: NodeId,
         device_id: DeviceId,
         client_ip: IpAddr,
+        canonical_origin: Option<CanonicalOrigin>,
         limits: SessionLimits,
         ids: Arc<dyn IdGenerator>,
     ) -> (Arc<Self>, mpsc::Receiver<Outbound>) {
@@ -132,6 +140,7 @@ impl ConnectionHandle {
             host_id,
             device_id,
             client_ip,
+            canonical_origin,
             limits,
             ids,
             outbound,
@@ -157,6 +166,13 @@ impl ConnectionHandle {
     /// 对端设备标识。
     pub fn device_id(&self) -> &DeviceId {
         &self.device_id
+    }
+
+    /// 本次连接已校验的 canonical origin（`None` = 升级请求没有 `Origin` 头）。
+    ///
+    /// 只服务需要把「连接来源」与签名 claims 逐字比较的入口（准备凭据）；业务命令的授权不读它。
+    pub fn canonical_origin(&self) -> Option<&CanonicalOrigin> {
+        self.canonical_origin.as_ref()
     }
 
     /// 对端地址（限流与日志用；不可信来源的转发头已在接入层被忽略）。
@@ -577,6 +593,7 @@ mod tests {
             NodeId::new(&fresh()).expect("host id"),
             device.clone(),
             IpAddr::from([127, 0, 0, 1]),
+            None,
             SessionLimits::negotiate(&SyncConfig::default()),
             Arc::new(TestIds),
         )

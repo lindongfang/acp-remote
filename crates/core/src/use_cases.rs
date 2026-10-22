@@ -41,7 +41,8 @@ use crate::ports::{
     ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore, MessageCoverage,
     NodeConnectedWrite, NodeRevocation, NodeWrite, OriginReadPage, PairingClaimOutcome,
     PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
-    PruneReport, RemoteCommandLookup, RemoteCommandRecord, RemoteCommandStatus,
+    PruneReport, RemoteCommandLookup, RemoteCommandRecord, RemoteCommandStatus, FirstSubmission,
+    PreparationAttachmentStaging,
     RemoteCommandTarget, RemoteReadQuery, RemoteReadResult, RemoteRuntimeDirectory,
     RemoteSessionEntry, RemoteSourceReads, RemoteSourceState, RemoteTitleWrite, ReplayBatch,
     ReplayLimit, RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionFiles, SessionQuery,
@@ -64,6 +65,23 @@ pub use crate::lifecycle::{
 pub struct ModeListing {
     pub state: ModeState,
     pub version: Version,
+}
+
+/// 准备 `allocate` 的目录来源（`web-session-preparation` D3：`directoryId` 与 `workspacePath` 二选一）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparationWorkspaceSource {
+    /// 本机已登记的目录标识。
+    Directory(DirectoryId),
+    /// 客户端提交的绝对路径（形状与文件系统校验在解析路径里，顺序与 `session.create` 一致）。
+    Path(String),
+}
+
+/// 已解析的准备目录：规范化路径 + 来源（来源只进凭据 claims，不参与路径比较）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparationWorkspace {
+    pub workspace: ResolvedWorkspace,
+    /// `true` = 由 `directoryId` 解析；`false` = 由客户端绝对路径解析。
+    pub from_directory: bool,
 }
 
 /// 配对通道的只读视图（claim/status HTTP 端点；design D12 的 seam 补全）。
@@ -302,6 +320,13 @@ pub struct UseCases {
     /// 向 Owner 转发 `session.title.set` 的窄端口（`design.md` D2/D3）。默认未装配：显式
     /// `BackendUnsupported`，不把远程标题的修改留在本机。
     remote_titles: std::sync::OnceLock<Arc<dyn RemoteTitleWrite>>,
+    /// 准备运行期目录（`web-session-preparation` D1/D3）：会话 ID 的分配权威、资源代/租约与容量预占。
+    /// `None` = 组合根没有装配准备能力（`session.preparation` 不注册、feature 不宣告）。
+    preparations: Option<Arc<crate::preparation::PreparationDirectory>>,
+    /// 首次提交的持久入口（D7/D8）：`session.start` 的受理/围栏/结算与 committed 投影的唯一读面。
+    first_submission: Option<Arc<dyn FirstSubmission>>,
+    /// 准备附件暂存（D6.4）：运行期传输/清单 + Owner 私有内容区，不写 `owned_session` 外键行。
+    staging: Option<Arc<dyn PreparationAttachmentStaging>>,
 }
 
 /// [`UseCases`] 的依赖。
@@ -337,6 +362,9 @@ impl UseCases {
             remote_sources: std::sync::OnceLock::new(),
             remote_commands: std::sync::OnceLock::new(),
             remote_titles: std::sync::OnceLock::new(),
+            preparations: None,
+            first_submission: None,
+            staging: None,
         }
     }
 
@@ -391,6 +419,151 @@ impl UseCases {
     /// 与 [`UseCases::with_directory_browser`] 同款：消耗 `self` 并返回它，保证装配只发生一次。
     pub fn with_session_files(self, files: Arc<dyn SessionFiles>) -> Self {
         Self { files, ..self }
+    }
+
+    /// 接线准备运行期目录（组合根装配一次；`None` 保持准备能力不可用）。
+    pub fn with_preparations(
+        self,
+        preparations: Arc<crate::preparation::PreparationDirectory>,
+    ) -> Self {
+        Self {
+            preparations: Some(preparations),
+            ..self
+        }
+    }
+
+    /// 接线首次提交的持久端口。同一实例也装进 broker（`session.start` 的受理/围栏/结算都经它）。
+    pub fn with_first_submission(self, first: Arc<dyn FirstSubmission>) -> Self {
+        let _ = self.broker.set_first_submission(Arc::clone(&first));
+        Self {
+            first_submission: Some(first),
+            ..self
+        }
+    }
+
+    /// 接线准备附件暂存端口（与首次提交事务共用同一个存储实例）。
+    pub fn with_preparation_staging(
+        self,
+        staging: Arc<dyn PreparationAttachmentStaging>,
+    ) -> Self {
+        Self {
+            staging: Some(staging),
+            ..self
+        }
+    }
+
+    /// 准备运行期目录（`None` = 本进程没有装配准备能力）。
+    pub fn preparations(&self) -> Option<&Arc<crate::preparation::PreparationDirectory>> {
+        self.preparations.as_ref()
+    }
+
+    /// 首次提交的持久端口（`None` = 未接线；`restore` 的 committed 分支因此显式不可用）。
+    pub fn first_submission_store(&self) -> Option<&Arc<dyn FirstSubmission>> {
+        self.first_submission.as_ref()
+    }
+
+    /// 准备附件暂存端口（`None` = 未接线；附件准备目标显式拒绝）。
+    pub fn preparation_staging(&self) -> Option<&Arc<dyn PreparationAttachmentStaging>> {
+        self.staging.as_ref()
+    }
+
+    /// `session.start`（`kind: initial`）：委托 broker 的受理/围栏/派发管线。
+    #[allow(clippy::too_many_arguments)] // 与 broker 的受理输入一一对应，收进结构体会藏起语义
+    pub async fn start_first_submission(
+        &self,
+        actor: &Actor,
+        command: ClientCommand,
+        start: crate::broker::FirstSubmissionStart,
+        endpoint: Arc<dyn crate::ports::SessionEndpoint>,
+    ) -> Result<CommandReceipt, PortError> {
+        command.validate().map_err(PortError::from)?;
+        self.broker
+            .start_first_submission(actor, &command, start, endpoint)
+            .await
+    }
+
+    /// `session.start`（`kind: continue`）：显式继续一次可证明未派发的失败。
+    pub async fn continue_first_submission(
+        &self,
+        actor: &Actor,
+        command: ClientCommand,
+        request: crate::broker::FirstSubmissionContinue,
+    ) -> Result<CommandReceipt, PortError> {
+        command.validate().map_err(PortError::from)?;
+        self.broker
+            .continue_first_submission(actor, &command, request)
+            .await
+    }
+
+    /// 首条提交的只读投影（`restore` 的 committed、`command.status` 的协商投影、继续准入）。
+    pub async fn first_submission(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<crate::model::FirstSubmissionRecord>, PortError> {
+        self.broker.first_submission_record(session).await
+    }
+
+    /// 持久首条用户消息（`owned_message.channel = 'user'`）：无需 Agent 回显即可读取。
+    pub async fn first_user_message(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<crate::model::FirstUserMessage>, PortError> {
+        self.broker.first_user_message(session).await
+    }
+
+    /// 启动收敛：遍历本机 owned 会话，把首条提交收敛到可证明的事实（**绝不**自动派发）。
+    ///
+    /// 返回实际收敛的会话数（`NotPreparation` 不计）。没有接线首次提交端口的进程是空操作。
+    pub async fn converge_first_submissions(&self, at: Timestamp) -> Result<usize, PortError> {
+        if self.first_submission.is_none() {
+            return Ok(0);
+        }
+        let sessions = self
+            .list_sessions(&Actor::LocalCli, SessionQuery::default())
+            .await?;
+        let mut converged = 0;
+        for summary in sessions {
+            match self
+                .broker
+                .converge_first_submission(summary.session_id(), at.clone())
+                .await?
+            {
+                crate::model::FirstSubmissionConvergence::NotPreparation => {}
+                _ => converged += 1,
+            }
+        }
+        Ok(converged)
+    }
+
+    /// 准备阶段的目录解析（`session.preparation` 的 `allocate`）：已登记目录或客户端绝对路径。
+    ///
+    /// 与 `session.create` 共用同一套形状校验与失败分类（先形状、后 IO）；不查/不登记别名之外的任何
+    /// 持久会话事实。
+    pub async fn resolve_preparation_workspace(
+        &self,
+        actor: &Actor,
+        source: PreparationWorkspaceSource,
+    ) -> Result<PreparationWorkspace, PortError> {
+        if matches!(actor, Actor::PairingClaimant { .. }) {
+            return Err(PortError::InvalidRequest("authorization.scope_denied"));
+        }
+        match source {
+            PreparationWorkspaceSource::Directory(directory_id) => {
+                let record = self.config.directory(&directory_id).await?.ok_or(
+                    PortError::InvalidRequest(
+                        "workspace directory is not registered on this node",
+                    ),
+                )?;
+                Ok(PreparationWorkspace {
+                    workspace: resolve_workspace(&directory_id, record.canonical_path())?,
+                    from_directory: true,
+                })
+            }
+            PreparationWorkspaceSource::Path(path) => Ok(PreparationWorkspace {
+                workspace: resolve_client_workspace(&path)?,
+                from_directory: false,
+            }),
+        }
     }
 
     /// Persist acceptance before touching the filesystem. Only the first caller receives a ticket.

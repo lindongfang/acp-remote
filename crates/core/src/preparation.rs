@@ -505,6 +505,85 @@ impl PreparationDirectory {
             .get(session)
             .map(|entry| entry.generation)
     }
+
+    /// `restore` 的**重建**路径：同一 `session` 在本运行期没有条目时，按调用方给出的已核验输入重新插入
+    /// 并预占容量（`design.md` D3.1：有效凭据的 `restore` 永不返回 `stale`；资源可重建时返回 `ready`）。
+    ///
+    /// 只在凭据已通过认证/签名/claims 绑定之后调用——`session` 必须是由准备凭据证明的 Owner 分配标识，
+    /// 本方法**不**从客户端自报值取 ID，也不产生正式会话行。已存在条目时返回当前资源（与
+    /// [`PreparationDirectory::restore`] 同语义），因此并发 restore 不会插入第二条。
+    ///
+    /// 已释放的会话再次重建得到新的资源代（与 [`PreparationDirectory::restore`] 的租约到期路径一致），
+    /// 释放 tombstone 保留：旧代操作仍得到 `stale(released)`，不会误打到新代上。
+    pub async fn restore_or_recreate(
+        &self,
+        session: &SessionId,
+        request: AllocatePreparation,
+        now: Timestamp,
+    ) -> Result<AllocatePreparationOutcome, PortError> {
+        if self.view(session).is_some() {
+            return match self.restore(session, &request.owner, now.clone()) {
+                PreparationDecision::Ready(view) => Ok(AllocatePreparationOutcome::Allocated(view)),
+                // 同 ID 属于另一个设备/标签页：凭据绑定已核验过，走到这里说明调用方拿错了条目。
+                PreparationDecision::Stale(_) | PreparationDecision::Released => Err(
+                    PortError::InvalidRequest("the preparation belongs to another owner"),
+                ),
+                PreparationDecision::Unknown => Err(PortError::Corrupt(
+                    "preparation entry vanished during restore",
+                )),
+            };
+        }
+        if self.capacity.reserve(session.clone(), now.clone()).await? == Admission::CapacityExceeded {
+            return Ok(AllocatePreparationOutcome::CapacityExceeded);
+        }
+        let Some(expires_at) = now.checked_add_millis(PREPARATION_LEASE_MS) else {
+            let _ = self
+                .capacity
+                .release(session.clone(), ResourceGeneration::new(0), now)
+                .await;
+            return Err(PortError::InvalidRequest(
+                "preparation lease expiry is outside the supported window",
+            ));
+        };
+        let generation = {
+            let mut state = lock(&self.state);
+            // 并发 restore：另一个调用已插入同一条目时使用它的资源代，不覆盖。
+            if let Some(entry) = state.entries.get(session) {
+                entry.generation
+            } else {
+                let generation = state
+                    .released_generation(session)
+                    .map(|previous| previous.checked_next())
+                    .unwrap_or(Some(ResourceGeneration::new(1)))
+                    .ok_or(PortError::Corrupt("preparation generation is exhausted"))?;
+                state.entries.insert(
+                    session.clone(),
+                    Entry {
+                        generation,
+                        capacity_generation: ResourceGeneration::new(0),
+                        state: PreparationState::Preparing,
+                        failure: None,
+                        agent: request.agent,
+                        directory: request.directory,
+                        owner: request.owner,
+                        lease_expires_at: Some(expires_at),
+                        frozen: false,
+                        releasing: false,
+                        updated_at: now,
+                    },
+                );
+                generation
+            }
+        };
+        let state = lock(&self.state);
+        let entry = state
+            .entries
+            .get(session)
+            .ok_or(PortError::Corrupt("preparation entry vanished after insert"))?;
+        let view = self.view_of(session, entry);
+        debug_assert_eq!(view.generation, generation);
+        Ok(AllocatePreparationOutcome::Allocated(view))
+    }
 }
 
 /// 纯 `CapacityAdmission` 适配：准备目录自己只消费 `reserve`/`release`。

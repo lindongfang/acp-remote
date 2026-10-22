@@ -260,6 +260,10 @@ fn to_request(frame: &Frame) -> Result<Option<Request>, Outcome> {
 }
 
 fn begin_request(body: &BeginBody) -> Result<BeginRequest, Outcome> {
+    // Node Link 没有 `core.session-preparation.v1`：准备目标不是本协议的合法形状（不静默当成正式上传）。
+    let BeginBody::Owned(body) = body else {
+        return Err(Outcome::Invalid);
+    };
     Ok(BeginRequest {
         transfer: attachment_id(&body.transfer_id),
         session: session_id(&body.session_id)?,
@@ -272,6 +276,9 @@ fn begin_request(body: &BeginBody) -> Result<BeginRequest, Outcome> {
 }
 
 fn manifest_begin(body: &ManifestBeginBody) -> Result<Request, Outcome> {
+    let ManifestBeginBody::Owned(body) = body else {
+        return Err(Outcome::Invalid);
+    };
     Ok(Request::ManifestBegin {
         submission: submission_id(&body.submission_id),
         session: session_id(&body.session_id)?,
@@ -558,16 +565,18 @@ mod tests {
     #[test]
     fn begin_maps_to_a_node_subject() {
         let subject = uuid();
-        let frame = frame(FrameBody::Begin(BeginBody {
-            transfer_id: uuid(),
-            session_id: uuid(),
-            subject: NodeSubject::new(subject.clone()),
-            total_length: DecimalString::parse("4").expect("length"),
-            chunk_size: node_link_protocol::attachment::FixedChunkSize::new(32768)
-                .expect("chunk size"),
-            media_type: NonEmptyText::<255>::parse("text/plain").expect("media type"),
-            file_name: NonEmptyText::<255>::parse("note.txt").expect("file name"),
-        }));
+        let frame = frame(FrameBody::Begin(BeginBody::Owned(
+            node_link_protocol::attachment::OwnedBeginBody {
+                transfer_id: uuid(),
+                session_id: uuid(),
+                subject: NodeSubject::new(subject.clone()),
+                total_length: DecimalString::parse("4").expect("length"),
+                chunk_size: node_link_protocol::attachment::FixedChunkSize::new(32768)
+                    .expect("chunk size"),
+                media_type: NonEmptyText::<255>::parse("text/plain").expect("media type"),
+                file_name: NonEmptyText::<255>::parse("note.txt").expect("file name"),
+            },
+        )));
         match to_request(&frame)
             .expect("decoded request")
             .expect("request")
