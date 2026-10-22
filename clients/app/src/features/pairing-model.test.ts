@@ -306,6 +306,7 @@ function storeWithPairing(pairing: PairingWiring | undefined): ClientStore {
       refreshSnapshot: () => undefined,
       authenticatedInfo: null,
       dispatch: () => undefined,
+      setSessionView: () => true,
       subscribeRemote: () => undefined,
       unsubscribeRemote: () => undefined,
     },

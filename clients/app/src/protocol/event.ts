@@ -83,6 +83,7 @@ export interface EventMessage {
 export type EventType =
   | "session.created"
   | "session.updated"
+  | "session.activity.changed"
   | "session.info.changed"
   | "session.config.changed"
   | "session.mode.changed"
@@ -140,6 +141,14 @@ export type OpenView = Record<string, unknown>;
 /** `$defs.session.created` / `$defs.session.updated`。 */
 export type SessionCreatedView = { readonly session: SessionSummary } & OpenView;
 export type SessionUpdatedView = { readonly session: SessionSummary } & OpenView;
+
+/**
+ * `$defs.session.activity.changed`（`core.local-session-lifecycle.v1`）：本机活跃程度**实际变化**
+ * 时才写的事件，`session` 是变化后的完整摘要（含可选 `localActivity`）。
+ *
+ * 它只在本机 owned 路径投递、先持久化后发布；重放它不得被解释成「重启后资源仍然存活」。
+ */
+export type SessionActivityChangedView = { readonly session: SessionSummary } & OpenView;
 
 /** `$defs.session.info.changed`：标题单向由 Agent 通知写入（`design.md` D7）。 */
 export type SessionInfoChangedView = {
@@ -414,6 +423,7 @@ export type DeviceRevokedView = {
 export interface EventViewByType {
   readonly "session.created": SessionCreatedView;
   readonly "session.updated": SessionUpdatedView;
+  readonly "session.activity.changed": SessionActivityChangedView;
   readonly "session.info.changed": SessionInfoChangedView;
   readonly "session.config.changed": SessionConfigChangedView;
   readonly "session.mode.changed": SessionModeChangedView;
@@ -478,6 +488,7 @@ export function projectView(
 export const KNOWN_EVENT_TYPES: readonly EventType[] = [
   "session.created",
   "session.updated",
+  "session.activity.changed",
   "session.info.changed",
   "session.config.changed",
   "session.mode.changed",

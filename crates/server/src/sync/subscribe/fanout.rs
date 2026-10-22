@@ -154,7 +154,7 @@ async fn deliver_owned<E: EventReader>(
             // 且服务端 MUST NOT 因客户端版本伪造或降级 `kind`。
             continue;
         }
-        match crate::sync::event::frame(&record, &subscribe.features(target)) {
+        match subscribe.frame_event(target, actor, &record).await {
             Ok(body) => {
                 if target.send(MessageType::Event, &body).is_err() {
                     // 高水位或连接已结束：事件已持久化，客户端重连后凭 cursor 重放补齐（§14）。

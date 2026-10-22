@@ -8,7 +8,7 @@
  * 因此断连时目录页仍可渲染（数据来自快照）。
  */
 
-import type { SessionSummary, Timestamp, Uuid } from "../protocol/common";
+import type { LocalActivity, SessionSummary, Timestamp, Uuid } from "../protocol/common";
 
 /** 会话的稳定标识（wire 上的 `sessionId`）。 */
 export type SessionId = Uuid;
@@ -20,6 +20,27 @@ export type SessionId = Uuid;
  * `running`；其余 → `idle`。排队细节、等待原因与任务结果由会话内容另行表达，不属于这里。
  */
 export type SessionStateView = "idle" | "running" | "pending";
+
+/**
+ * 协商 `core.local-session-lifecycle.v1` 后 owned 会话的**本机**活跃程度（视图层同名取值域）。
+ *
+ * `idle` / `active` / `pending` 只表达资源与交互事实，不是任务结果；任务执行、排队与等待原因
+ * 仍由时间线与会话内容独立表达。
+ */
+export type LocalActivityView = LocalActivity;
+
+/**
+ * 会话主状态的**唯一**判定结果。
+ *
+ * - `local`：协商后的 owned 会话，主标签用本机活跃程度；
+ * - `task`：旧合同 / imported 会话，保持任务三态。
+ *
+ * 两个分支互斥，组件因此无法同时读两套词表；`null`（摘要未取得）由调用方单独表达，
+ * MUST NOT 落进任何一支冒充「空闲」。
+ */
+export type SessionMainActivityView =
+  | { readonly kind: "local"; readonly value: LocalActivityView }
+  | { readonly kind: "task"; readonly value: SessionStateView };
 
 /**
  * 会话标题：`SessionSummary.title` 是服务端合并后的**有效值**（自定义标题优先 → Agent
@@ -48,6 +69,13 @@ export interface SessionSummaryView {
   readonly agentName: string;
   readonly agentId: string;
   readonly state: SessionStateView;
+  /**
+   * 协商后的 owned 会话的主状态来源；`null` = 本机活跃程度不适用（未协商 / imported /
+   * 服务端未提供该字段）。此时主状态回落任务三态（`state`）。
+   */
+  readonly localActivity: LocalActivityView | null;
+  /** 由上面两者推出的主状态（`state` 仍是任务事实，不被替换）。 */
+  readonly activity: SessionMainActivityView;
   readonly origin: SessionOriginView;
   /** 目录归属：目录标识或 `null`（未登记目录的会话不归入任何目录项）；标识不进界面文本。 */
   readonly directoryId: string | null;
@@ -64,7 +92,9 @@ export interface SessionSummaryView {
 export function buildSessionSummaryView(
   summary: SessionSummary,
   ownerLabel: string,
+  options: { readonly localLifecycleNegotiated?: boolean } = {},
 ): SessionSummaryView {
+  const localActivity = localActivityOf(summary, options.localLifecycleNegotiated === true);
   return {
     id: summary.sessionId,
     title:
@@ -74,6 +104,8 @@ export function buildSessionSummaryView(
     agentName: summary.agent.name,
     agentId: summary.agent.agentId,
     state: summary.state,
+    localActivity,
+    activity: mainActivityOf(summary.state, localActivity),
     origin:
       summary.origin.kind === "local"
         ? { kind: "local" }
@@ -82,4 +114,31 @@ export function buildSessionSummaryView(
     updatedAt: summary.updatedAt,
     createdAt: summary.createdAt,
   };
+}
+
+/**
+ * 本机活跃程度的**唯一**可采信判定。
+ *
+ * 三重门：连接协商了该 feature、摘要是 owned、字段取值在封闭词表内。任一不成立都返回 `null`
+ * ——旧 peer 的字段（如果有）与 imported 摘要一律不进入主状态；`null` 时回落任务三态。
+ */
+export function localActivityOf(
+  summary: SessionSummary,
+  negotiated: boolean,
+): LocalActivityView | null {
+  if (!negotiated) return null;
+  if (summary.origin.kind !== "local") return null;
+  const value = summary.localActivity;
+  if (value === "idle" || value === "active" || value === "pending") return value;
+  return null;
+}
+
+/** 由任务事实与本机活跃程度推出主状态。 */
+export function mainActivityOf(
+  state: SessionStateView,
+  localActivity: LocalActivityView | null,
+): SessionMainActivityView {
+  return localActivity === null
+    ? { kind: "task", value: state }
+    : { kind: "local", value: localActivity };
 }

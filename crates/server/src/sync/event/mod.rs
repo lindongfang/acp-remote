@@ -44,14 +44,16 @@
 //! 本模块这一条（`docs/MODULE_ARCHITECTURE.md` §5 的矩阵是 crate 粒度的）。
 
 use acp_core::ports::SyncEventRecord;
-use sync_protocol::common::ValueError;
+use sync_protocol::common::{LocalActivity, RawObject, ValueError};
 use sync_protocol::event::Body;
 use sync_protocol::views;
 use tracing::{debug, warn};
 
 use crate::sync::conn::{ConnectionHandle, SendFault};
+use crate::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE;
 use crate::sync::subscribe::NegotiatedFeatures;
 use crate::sync::subscribe::event::{EVENT_ORIGIN_FEATURE, EventFrameFault, event_body};
+use acp_core::use_cases::LOCAL_ACTIVITY_EVENT;
 
 /// `acp.raw-payload.v1`：客户端声明可处理事件里的 ACP 原文容器（§5.2 的 feature 表）。
 ///
@@ -166,7 +168,15 @@ pub fn project(record: &SyncEventRecord) -> ViewShape {
 pub fn frame(
     record: &SyncEventRecord,
     features: &NegotiatedFeatures,
+    local_activity: Option<LocalActivity>,
 ) -> Result<Body, EventFrameFault> {
+    // `session.activity.changed` 是本 feature 的新事件类型：未协商的连接 MUST NOT 收到它（§9.8）。
+    // 它不是「未知类型降级」——对未协商连接整条不投递，因此在这里显式失败关闭而不是照发。
+    if record.event.event_type.as_str() == LOCAL_ACTIVITY_EVENT
+        && !features.contains(LOCAL_LIFECYCLE_FEATURE)
+    {
+        return Err(EventFrameFault::LifecycleNotNegotiated);
+    }
     let mut body = event_body(record, features.contains(EVENT_ORIGIN_FEATURE))?;
     if !features.contains(RAW_PAYLOAD_FEATURE) {
         body.payload.acp = None;
@@ -182,7 +192,30 @@ pub fn frame(
     {
         body.payload.view = view;
     }
+    // owned 摘要的 `localActivity`：core 的持久视图不带协商结果（它不知道连接），因此由投递层在
+    // 协商后的 `session.created`/`session.updated`/`session.activity.changed` 视图上补键。键**只增不
+    // 改**：core 已经写出的值原样保留，绝不出现两个来源。
+    if let Some(activity) = local_activity {
+        if matches!(
+            record.event.event_type.as_str(),
+            "session.created" | "session.updated" | LOCAL_ACTIVITY_EVENT
+        ) {
+            if let Some(view) = inject_local_activity(&body.payload.view, activity) {
+                body.payload.view = view;
+            }
+        }
+    }
     Ok(body)
+}
+
+/// 在 `view.session` 对象上补 `localActivity`（仅在缺席时写入）。
+fn inject_local_activity(view: &RawObject, activity: LocalActivity) -> Option<RawObject> {
+    let mut value: serde_json::Value = serde_json::from_str(view.get()).ok()?;
+    let session = value.get_mut("session")?.as_object_mut()?;
+    session
+        .entry("localActivity")
+        .or_insert_with(|| serde_json::Value::String(activity.as_str().to_owned()));
+    RawObject::parse(&serde_json::to_string(&value).ok()?).ok()
 }
 
 /// 一条事件投递给一条连接的结论（调用方只按它决定控制流，不自己判高水位）。
@@ -233,7 +266,7 @@ pub fn deliver(
             "the event type is outside the v1 registry; the event is degraded, not dropped"
         ),
     }
-    match frame(record, features) {
+    match frame(record, features, None) {
         Err(fault) => {
             warn!(
                 event = "sync.event_unassemblable",

@@ -38,8 +38,8 @@ import {
 } from "./ConversationStream";
 import type { ConversationPageModel } from "../features/conversation-model";
 import type { ClientStore } from "../features/client-store";
-import type { SessionSummary } from "../protocol";
-import { SESSION_HISTORY_FEATURE } from "../sync-client";
+import type { CommandResultMessage, ErrorCode, SessionSummary } from "../protocol";
+import { LOCAL_SESSION_LIFECYCLE_FEATURE, SESSION_HISTORY_FEATURE } from "../sync-client";
 import {
   ONLINE_SESSION_ID,
   WORKSPACES,
@@ -377,7 +377,7 @@ describe("对话页正文：历史条目与实时事件同一套呈现（重开�
     expect(html).toContain("未协商 core.session-history.v1");
   });
 
-  it("两套翻页各自有入口（消息与结构化历史互不影响）", () => {
+  it("历史读取不再显示顶部翻页工具栏", () => {
     const { store, gateway } = onlineStore({
       resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "idle" })] }),
       features: [SESSION_HISTORY_FEATURE],
@@ -923,6 +923,80 @@ describe("对话页：流式阅读保持位置", () => {
 
     expect(html).toContain('data-scroll-follow="true"');
     expect(html).not.toContain('data-action="scroll-to-bottom"');
+  });
+});
+
+describe("对话页：激活失败的显式重试入口", () => {
+  /** 一条 `session.resume` 的终态结果（页面只据 `retryable` 呈现重试入口）。 */
+  function resumeOutcome(input: {
+    readonly requestId: string;
+    readonly status: "failed" | "rejected" | "uncertain";
+    readonly code: ErrorCode | null;
+  }): CommandResultMessage {
+    return {
+      protocolVersion: 1,
+      type: "command.result",
+      messageId: "bbbbbbbb-1111-4111-8111-0000000000fd",
+      connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+      connectionSequence: "1",
+      body: {
+        requestId: input.requestId,
+        command: "session.resume",
+        status: input.status,
+        acceptedAt: "2026-10-01T00:00:01.000Z",
+        terminalEventId: null,
+        result: null,
+        // 错误自身的 `retryable` 不参与入口判定：类别才是判据。
+        error:
+          input.code === null
+            ? null
+            : { code: input.code, message: "假主机的明确错误", retryable: true, details: {} },
+      },
+    };
+  }
+
+  /** 一条 owned 会话 + 协商了本机生命周期的仓库（进入即派发一次 resume）。 */
+  function activationStore(): StoreFixture {
+    const fixture = onlineStore({
+      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "idle", localActivity: "active" })] }),
+      features: [LOCAL_SESSION_LIFECYCLE_FEATURE],
+    });
+    fixture.store.setActiveConversationSession(ONLINE_SESSION_ID);
+    return fixture;
+  }
+
+  it("uncertain 也显示重试入口（重试走 command.status 核实，不换号重派）", () => {
+    const { store, gateway } = activationStore();
+    const resume = lastDispatch(gateway).body;
+    if (resume.command !== "session.resume") throw new Error("不是 session.resume");
+    store.apply({
+      kind: "command_result",
+      result: resumeOutcome({ requestId: resume.requestId, status: "uncertain", code: null }),
+    });
+
+    const html = renderPage(pageOf(store), { onRetryActivation: () => undefined });
+    expect(html).toContain('data-session-activation="failed"');
+    expect(html).toContain("不确定");
+    expect(html).toContain('data-action="retry-activation"');
+  });
+
+  it("Agent 不支持恢复这类明确不可重试的失败不显示重试入口", () => {
+    const { store, gateway } = activationStore();
+    const resume = lastDispatch(gateway).body;
+    if (resume.command !== "session.resume") throw new Error("不是 session.resume");
+    store.apply({
+      kind: "command_result",
+      result: resumeOutcome({
+        requestId: resume.requestId,
+        status: "rejected",
+        code: "capability.unsupported_by_agent",
+      }),
+    });
+
+    const model = pageOf(store);
+    expect(model.header.activation).toMatchObject({ kind: "failed", retryable: false });
+    const html = renderPage(model, { onRetryActivation: () => undefined });
+    expect(html).not.toContain('data-action="retry-activation"');
   });
 });
 

@@ -617,6 +617,68 @@ impl<'de> Deserialize<'de> for SessionState {
     }
 }
 
+/// `common.schema.json#/$defs/localActivity`：owned 会话的本机活跃程度
+/// （`core.local-session-lifecycle.v1`，`docs/SYNC_PROTOCOL.md` §9.8）。
+///
+/// 它**不是**任务状态（[`SessionState`] 才是）：只由所属节点的当前运行期事实归约，并且只在协商了
+/// 该 feature 的连接上、对 owned 摘要出现。未协商与 imported 摘要都不得携带该键（不是 `null`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LocalActivity {
+    Idle,
+    Active,
+    Pending,
+}
+
+impl LocalActivity {
+    /// schema 的 `enum` 顺序。
+    pub const ALL: [LocalActivity; 3] = [
+        LocalActivity::Idle,
+        LocalActivity::Active,
+        LocalActivity::Pending,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LocalActivity::Idle => "idle",
+            LocalActivity::Active => "active",
+            LocalActivity::Pending => "pending",
+        }
+    }
+}
+
+impl std::fmt::Display for LocalActivity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for LocalActivity {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        LocalActivity::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "localActivity",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for LocalActivity {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for LocalActivity {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        std::str::FromStr::from_str(&text).map_err(DeError::custom)
+    }
+}
+
 /// `common.schema.json#/$defs/workspaceRef`：已记录目录的**引用**（会话摘要用）。
 ///
 /// wire 上只有不透明目录标识。规范化路径**不在**这里重复：它只出现在快照 `workspaces` 资源的条目上
@@ -664,6 +726,16 @@ pub struct SessionSummary {
     pub title: Nullable<Text<512>>,
     pub agent: SessionAgentRef,
     pub state: SessionState,
+    /// 本机活跃程度（`core.local-session-lifecycle.v1`），三态：`None` = 键**缺席**（未协商该
+    /// feature，或该摘要属于 imported 会话）；`Some(..)` = 键在场。它不可为 `null`，因此用
+    /// [`deserialize_optional_non_null`] 而不是可空包装。
+    #[serde(
+        rename = "localActivity",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub local_activity: Option<LocalActivity>,
     pub origin: OriginBlock,
     #[serde(rename = "currentMode")]
     pub current_mode: Nullable<ModeRef>,

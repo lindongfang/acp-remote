@@ -28,9 +28,9 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// （`diffLines` 结构化差异行、`diffUnavailable` 不可用标记），故为 42。
 /// `conversation-area-complete`（WP1）追加一条 `agent.message.completed` 合法视图夹具
 /// （类型化 `channel`/`partial`），故为 43。
-const EXPECTED_VIEW_CASES: usize = 43;
+const EXPECTED_VIEW_CASES: usize = 44;
 /// 被夹具覆盖的**不同** event 类型数，等于 `event-views.schema.json` 的 `$defs` 条目数。
-const EXPECTED_DISTINCT_VIEWS: usize = 34;
+const EXPECTED_DISTINCT_VIEWS: usize = 35;
 
 #[test]
 fn every_view_fixture_projects_onto_its_declared_event_type() {

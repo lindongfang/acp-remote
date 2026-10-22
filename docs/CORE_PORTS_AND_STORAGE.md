@@ -39,6 +39,9 @@
 
 > 版本：0.24（2026-10-21，`custom-session-title` 变更 WP2b：**Owner 两类标题与原子标题命令**——§3.3 `Session` 增 `custom_title: Option<SessionTitle>`（Agent 标题仍是 `title`，有效标题 = 自定义优先否则 Agent 否则未命名）、新增 `SessionTitle` 值对象（trim 后 1..=512 标量值）、`SessionSummary.title` 只下发有效值、`CommandPayload` 增 `TitleSet{title}`；§5.2 `SessionUpdate` 增 `custom_title`（两层：`None` = 不改、`Some` = 写入，无清除/恢复语义），并声明 `OwnedCommit.idempotency` 与 `command_terminal` 可同为 `Some`（受理与终态同批、一次事务写成终态并回填 `terminal_event_id`）；§5.9 `RemoteCommandRecord` 增 `terminal_event_id`，新增 `RemoteTitleWrite`（Access 只转发、不落盘）；§7 升级到 **v15**：`owned_session` 末尾追加可空 `custom_title TEXT`（v14 → v15 只 `ALTER TABLE ADD COLUMN`，旧行 `NULL`），新建库与升级库列顺序逐项相等）
 
+> 版本：0.25（2026-10-22，`session-activation-lifecycle` 变更 **WP1（合同先行，实现待 WP2/WP3/WP4）**：**本机生命周期的纯类型与端口**——§3.3 新增 `LocalActivity`（`Idle｜Active｜Pending`，唯一归约）、`ResourceGeneration` 与 `ViewLease`（纯运行期，**不新增持久表**）；§4 新增 `LocalSessionLifecycle` 用例族（激活/合并、查看声明与续租、容量准入与候选选择、逐会话释放确认、当前生命周期查询），时钟经既有 `Clock` 端口注入；§5 新增 **§5.10** 的计划端口（用 `rust-planned` 围栏，避免 §5 的常规 rust 块把它当成已实现形状）；§6 新增第 **23** 条：`session.activity.changed` 先持久化后发布、启动收敛不信旧 ready、查看者/租约不持久化、owned 当前查询与快照读同一代目录、激活与回收不交错、`uncertain` 不自动重派；§7 明确**不改 DDL**（`owned_*` 家族与 migration 未变），运行期目录不落盘，若实现阶段确需列变更必须版本化迁移 + 旧库升级测试；§9 新增判据 40–42。**§5 的既有 rust 块、§7 的 SQL 块与漂移门禁逐条不变**）
+
+
 ## 1. 范围与非目标
 
 范围：core 的值对象/用例/端口/错误类型、broker 的提交与发布契约、`storage-sqlite` 的 PRAGMA/文件布局/migration/表结构/索引/保留与容量/崩溃恢复、以及实现该合同的验收判据。
@@ -128,6 +131,9 @@ pub enum UnavailableKind {
 | `SessionSnapshot` | `Session` + `origin_epoch: OriginEpoch` + `head: GlobalCursor` | 本合同（供 `commit`/`load` 返回） |
 | `SessionState` | enum `Idle｜Running｜Pending`——**只有活跃程度，没有终态**。`TurnState`（`Queued｜Running｜WaitingInput｜WaitingPermission｜Completed｜Failed｜Cancelled`）与 `CommandStatus`（`Accepted｜Completed｜Failed｜Rejected｜Uncertain`）词表**不因本收敛而改变**：任务失败/取消与命令结果仍如实保留，只是不再把会话压成 `Failed`/`Closed` | `common.schema.json#/$defs/sessionSummary` |
 | `SessionActivity` | 零大小类型 + 唯一归约函数 `SessionActivity::reduce(pending: bool, unfinished_turns: bool) -> SessionState`：`pending` 优先 → `Pending`；否则 `unfinished_turns` → `Running`；否则 `Idle`。辅助判定 `SessionActivity::turn_is_unfinished(turn: TurnState) -> bool` = `!turn.is_terminal()`（`queued`/`running`/`waiting_*` 都算未结束）。所有写入方（broker、存储层恢复/失效路径）只按此函数取值，不得各自维护转换表；有效未解决交互的细节留在 `SessionActivityFacts`（§5.2），等待原因留在有效交互上，不新增互斥的单值原因字段 | `crates/core/src/model/session.rs`（`session-activity` D1） |
+| `LocalActivity` | enum `Idle｜Active｜Pending`——**本机展示**的活跃程度（`core.local-session-lifecycle.v1`，`SYNC_PROTOCOL.md` §9.8），与 `SessionState` 是两个维度：`Pending` 优先（有效未解决交互）；否则未结束任务（含排队）、已确认 ready 的运行资源、或从 ready 开始回收但**尚未确认释放**的资源 → `Active`；否则 `Idle`。首次 activating 不提前变 `Active`；`uncertain`/关闭失败/回收中保持 `Active` 与容量占位，只有确认释放后才转 `Idle`。纯类型，不含时间与 I/O；`SYNC_PROTOCOL.md` §9.8 与 `common.schema.json#/$defs/localActivity` 同义 | 本合同（§6 第 23 条） |
+| `ResourceGeneration` | newtype over `u64`，**会话运行的资源代**：每次成功建立/恢复会话运行资源时自增，回收、关闭失败或重新恢复都会换新代。用途是隔离迟到事件与旧命令结果——旧代的事件/收口结果不得绑定到新代资源。只在运行期目录内存在，**不落库、不进快照** | 本合同（§5.10） |
+| `ViewLease` | `{ connection: ConnectionId, session: SessionId, view_version: u64, expires_at: Timestamp }`——**查看租约**：某个已认证连接当前正在查看某会话的声明与到期时刻。每连接最多一个当前查看者；同一 `view_version` 的重试幂等，过期版本不复活。租约只存在于内存，断开/撤销/连接被替换时立即清除，不持久化、不进快照或事件 | 本合同（`SYNC_PROTOCOL.md` §11.8） |
 | `ModeState` | `{ current_mode: Option<ModeRef>, available: Vec<ModeRef> }`——`session.mode.list` 的端口侧形状；`version` 属于会话（用例层补），不在本类型里 | `SYNC_PROTOCOL.md` §11.5/§10.2 |
 | `TurnId`/`Turn` | `Turn { id, session: SessionId, state: TurnState, queue_index: u32, causation: Option<RequestId>, started_at/ended_at }` | `SYNC_PROTOCOL.md` §11.6 |
 | `TurnState` | enum `Queued｜Running｜WaitingInput｜WaitingPermission｜Completed｜Failed｜Cancelled` | 同上 |
@@ -284,6 +290,7 @@ pub enum UnavailableKind {
 |---|---|---|
 | `SessionCommands` | `submit_command(actor, ClientCommand) -> CommandReceipt` | `server::sync`、`server::node_link`、`server::acp_facade` |
 | `SessionLifecycle` | `create_session(actor, RequestId, Digest, CreateSessionRequest, Option<WorkspaceSource>) -> SessionCreateAdmission`、`settle_session_create(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool`、`resume_session(actor, RequestId, Digest, SessionId) -> SessionId`、`settle_session_resume(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool` | `server::node_link`（§6 第 20 条；`resume_session`/`settle_session_resume` 见 §5.1） |
+| `LocalSessionLifecycle`（计划，WP2 实施；用例面**恰好由 §5.10 的五个端口组合**：`SessionActivation`/`ViewRegistry`/`CapacityAdmission`/`SessionRelease`/`LifecycleQuery`，方法名与签名以 §5.10 为唯一权威） | 每个入口先取 `actor`，再委托同名端口方法：`activate_session(actor, ActivationRequest) -> ActivationAdmission`（→ `SessionActivation::activate`；同会话并发激活合并为一次建立，先查幂等记录，再判 ready 复用或启动恢复）、`settle_session(actor, SessionId, ResourceGeneration, ActivationOutcome)`（→ `SessionActivation::settle`）、`declare_view(actor, ConnectionId, Option<SessionId>, view_version, now) -> ViewDecision`（→ `ViewRegistry::declare`）、`renew_view(actor, ConnectionId, view_version, now) -> ViewDecision`（→ `ViewRegistry::renew`）、`release_view(actor, ConnectionId, now)`（→ `ViewRegistry::release`；离页/断开/撤销）、`reserve_capacity(actor, SessionId, now) -> Admission`（→ `CapacityAdmission::reserve`）、`release_capacity(actor, SessionId, ResourceGeneration, now)`（→ `CapacityAdmission::release`）、`reclaim_candidate(actor, now) -> Option<ReclaimCandidate>`（→ `CapacityAdmission::reclaim_candidate`；满额时的安全候选，**没有候选就是 `None`**）、`release_session(actor, SessionId, ResourceGeneration, now) -> ReleaseOutcome`（→ `SessionRelease::release_session`；只有 `Released` 交还名额）、`current_activity(actor, SessionId) -> LocalActivity`（→ `LifecycleQuery::local_activity`）、`lifecycle_snapshot(actor) -> Vec<SessionSummary>`（→ `LifecycleQuery::snapshot`；owned 当前查询，与快照同一代目录） | `server::sync`（激活命令、查看控制帧、快照/事件投影）；`app::daemon` 只按返回的候选与配置驱动回收，不做业务判断 |
 | `SessionQueries` | `list_sessions(actor, SessionQuery) -> Vec<SessionSummary>`、`read_session(actor, ReadQuery) -> HistoryPage` | 同上 |
 | `ConfigCommands` | `set_mode(actor, SessionReference, ModeId) -> Version`、`set_config(actor, SessionReference, ConfigOptionId, ConfigValue) -> Version` | 同上 |
 | `PermissionCommands` | `resolve_interaction(actor, SessionReference, InteractionId, InteractionResolution) -> Resolution` | 同上 |
@@ -1156,6 +1163,128 @@ pub trait RemoteEventStream: Send + Sync {
   （摘要不是远程来源）按 `Corrupt` 失败关闭，不得折叠成 `NotFound`。
 - **旧端口**：`RemoteDeliveryStore`/`RemoteSessionReads` 已在 v14 迁移中删除，core 不再从任何持久存储读取远程清单、来源身份或命令状态。
 
+### 5.10 本机生命周期端口（计划，WP2 实施）
+
+> **实现状态：尚未实现。** 本节用 `rust-planned` 围栏声明目标形状（`scripts/check-contract-drift.mjs` 不把它当作已实现签名；实现落地后可直接移入 §5 的常规 rust 块）。core 仍不得依赖 Tokio、SQLite、文件系统、wire DTO 或具体 Agent；时间一律由既有 `Clock` 端口注入，租约与资源代只存在于内存。
+
+```rust-planned
+/// 激活/恢复的合并入口：同一会话的并发激活共享一次建立过程。
+#[async_trait]
+pub trait SessionActivation: Send + Sync {
+    /// 先查稳定 requestId 的持久记录，再判 ready 复用或启动恢复；`uncertain` 不自动换号重派。
+    async fn activate(&self, request: ActivationRequest) -> Result<ActivationAdmission, PortError>;
+    /// 完成一次激活：成功才把资源代置为 ready；`Failed`（可证明未建立）释放容量预占并收敛为 `Idle`，
+    /// `Uncertain` 保留占位与 `Active` 事实。
+    async fn settle(&self, session: SessionId, generation: ResourceGeneration, outcome: ActivationOutcome) -> Result<(), PortError>;
+}
+
+/// 查看声明、续租与释放。每连接最多一个当前查看者，租约不持久化。
+#[async_trait]
+pub trait ViewRegistry: Send + Sync {
+    async fn declare(&self, connection: ConnectionId, session: Option<SessionId>, view_version: u64, now: Timestamp) -> Result<ViewDecision, PortError>;
+    async fn renew(&self, connection: ConnectionId, view_version: u64, now: Timestamp) -> Result<ViewDecision, PortError>;
+    async fn release(&self, connection: ConnectionId, now: Timestamp) -> Result<(), PortError>;
+    async fn viewers(&self, session: SessionId, now: Timestamp) -> Result<Vec<ConnectionId>, PortError>;
+}
+
+/// 容量准入与安全候选选择：创建与恢复共用，预占也计入上限。
+#[async_trait]
+pub trait CapacityAdmission: Send + Sync {
+    async fn reserve(&self, session: SessionId, now: Timestamp) -> Result<Admission, PortError>;
+    async fn release(&self, session: SessionId, generation: ResourceGeneration, now: Timestamp) -> Result<(), PortError>;
+    /// 只在「未受保护」的候选中选最久未使用者；同一时刻以稳定会话标识打破并列。
+    async fn reclaim_candidate(&self, now: Timestamp) -> Result<Option<ReclaimCandidate>, PortError>;
+}
+
+/// 逐会话释放确认：只有适配器确认真实释放后才能交还名额。
+#[async_trait]
+pub trait SessionRelease: Send + Sync {
+    async fn release_session(&self, session: SessionId, generation: ResourceGeneration, now: Timestamp) -> Result<ReleaseOutcome, PortError>;
+}
+
+/// 当前生命周期的只读查询：owned 当前查询与快照必须读同一代目录。
+#[async_trait]
+pub trait LifecycleQuery: Send + Sync {
+    async fn local_activity(&self, session: SessionId) -> Result<LocalActivity, PortError>;
+    async fn snapshot(&self) -> Result<Vec<SessionSummary>, PortError>;
+}
+
+// —— 纯类型：上面五个端口的输入/输出形状（最小字段 + 不变量）——
+
+/// 激活请求。四个字段都是稳定值：同一 `(actor, request_id)` 的重试必须逐字相同，
+/// 指纹不一致即 `command.idempotency_conflict`；激活路径不得自造 requestId 或指纹。
+pub struct ActivationRequest {
+    pub actor: Actor,
+    pub request_id: RequestId,
+    pub request_fingerprint: Digest,
+    pub session: SessionId,
+}
+
+/// 受理三态，互斥。受理 ≠ 建立成功：`Prepared`/`InFlight` 之后仍要 `settle`。
+pub enum ActivationAdmission {
+    /// 本次调用获得建立权：容量名额已预占，仍须 `settle` 收口。
+    Prepared,
+    /// 同会话已有激活在建立中：不重复启动后端，等同一份终态。
+    InFlight,
+    /// 已有持久终态（幂等重试，或先前调用已收口）：原样返回记录，不再派发、不新建资源代。
+    Settled(CommandRecord),
+}
+
+/// 建立结果三态。只有 `Ready` 让资源代进入 ready；`Uncertain` 保留容量占位与 `LocalActivity::Active`
+/// （外部资源可能存在）；`Failed` 表示可证明没有建立资源：实现释放预占并把本机展示收敛为 `Idle`。
+pub enum ActivationOutcome {
+    Ready,
+    /// 可证明未建立（能力不支持、身份丢失等）：释放预占，展示收敛为 `Idle`。
+    Failed { error: PublicError },
+    /// 结果不确定（超时、连接中断、进程状态未知）：保留占位与 `Active`，须经释放确认才收敛。
+    Uncertain { error: PublicError },
+}
+
+/// 查看声明/续租的判定：`Accepted` 必须给出未来时刻，`Stale` 必须没有租期。
+pub enum ViewStatus {
+    Accepted,
+    Stale,
+}
+
+pub struct ViewDecision {
+    pub status: ViewStatus,
+    /// 只有 `Accepted` 才为 `Some`，且必须晚于调用方的 `now`。
+    pub lease_expires_at: Option<Timestamp>,
+}
+
+/// 容量准入：只有 `Reserved` 占住名额；`CapacityExceeded` 映射 `session.capacity_exceeded`（retryable）。
+pub enum Admission {
+    Reserved,
+    CapacityExceeded,
+}
+
+/// 安全回收候选。「没有安全候选」是 `None`，不是空占位、哨兵会话或「随便挑一个」。
+pub struct ReclaimCandidate {
+    pub session: SessionId,
+    /// 该会话最后一次仍受保护（查看租约/未结束任务/有效交互）的时刻；回收按此值最久优先。
+    pub last_protected_at: Timestamp,
+}
+
+/// 逐会话释放确认：只有 `Released` 交还名额；`Failed`/`Uncertain` 继续占位并保持 `Active`。
+pub enum ReleaseOutcome {
+    Released,
+    Failed,
+    Uncertain,
+}
+```
+
+- **纯类型**：`ActivationRequest`/`ActivationAdmission`/`ActivationOutcome`/`ViewDecision`/`Admission`/`ReclaimCandidate`/`ReleaseOutcome` 都只含 §3 的值对象与枚举（`ResourceGeneration`、`ViewLease`、`LocalActivity`、`Timestamp`、`SessionId`），不得出现 wire/DB/进程类型。字段与变体以 `rust-planned` 块为准，最小不变量如下：
+  - **`ActivationRequest`**：`request_id`/`request_fingerprint`/`session`/`actor` 四者都是稳定输入——重试逐字复用，core 不得自造（否则一次重试会得到第二个幂等键，§6 第 6/20 条）。
+  - **`ActivationAdmission`**：三态互斥，且**受理不是建立成功**。`Prepared` 已预占名额但仍须 `settle`；`InFlight` 表示本次不启动后端、等同一份终态；`Settled(CommandRecord)` 只装**终态**记录（`completed`/`failed`/`rejected`/`uncertain`），`accepted` 不得出现在这里（那是 `Prepared`/`InFlight`）。
+  - **`ActivationOutcome`**：只有 `Ready` 让资源代就绪。`Failed` 表示适配器**可证明**没有建立资源（能力不支持、原身份不存在等）：实现 MUST 释放容量预占并把 `localActivity` 收敛为 `Idle`，同时如实报告失败、保留历史——不得用「新建会话」伪装成功。`Uncertain` 表示无法证明外部资源是否存在（超时、连接中断、进程状态未知）：实现 MUST 保留容量占位与 `Active` 事实，只有经 `SessionRelease::release_session` 确认释放后才能收敛。说不清的一律用 `Uncertain`，MUST NOT 用 `Failed` 冒充已释放。`settle` 对同一 `(session, generation)` 重复调用是幂等无操作（历史重试与崩溃恢复都会重放它）。
+  - **`ViewDecision`**：`Accepted` 的 `lease_expires_at` 必须晚于调用方的 `now`；`Stale` 必须为 `None`。判定口径与 `SYNC_PROTOCOL.md` §11.8 逐条一致：同版本同载荷幂等接受；同版本但载荷已变化（含 `Some(A)`→`None`、`A`→`B`）与低于版本的离页都回 `Stale`，且 `Stale` 既不替换现有查看者/租期，也不建立或刷新查看保护。
+  - **`Admission`**：只有 `Reserved` 占住名额；`CapacityExceeded` 不建立任何资源、不产生会话行，由适配层映射为 `session.capacity_exceeded`（`retryable = true`）。
+  - **`ReclaimCandidate`**：「没有安全候选」是 `None`——不得用空 `SessionId`、哨兵值或「随便挑一个受保护会话」占位。`last_protected_at` 是最后一次仍受保护的时刻，`reclaim_candidate` 只在该值最久的**未受保护**会话里选，并列按稳定会话标识打破。
+  - **`ReleaseOutcome`**：只有 `Released` 交还名额并允许 `Active → Idle`；`Failed`/`Uncertain` 继续占位、保持 `Active`，不得因「已经调用过释放」就提前放出名额。
+- **固定锁顺序**：每会话既有串行门 → 节点容量准入；全局只短暂预占/确认名额，**不得**持全局锁等待 Agent I/O。关闭中/结果不确定的资源仍占位，禁止恢复与回收交错产生两个绑定。
+- **适配器边界**：`agent-host` 提供有语义的单会话释放并执行真实 ACP close（§4 的「Agent 托管」）；`server::sync` 声明/续租/释放查看者，认证撤销与断开时主动通知；`app` 只负责扫描调度、任务所有权与关闭顺序，不做回收业务判断。
+- **不落盘**：本节的目录、租约、资源代都不进 `storage-sqlite`，不需要 migration（§7）。
+
 ## 6. Broker 的顺序与事务契约
 
 1. owned：`EventSink` → broker 组装 `OwnedCommit` → `SessionStore::commit` → `EventPublisher::publish`（顺序不可交换）。
@@ -1235,6 +1364,14 @@ pub trait RemoteEventStream: Send + Sync {
       维护不会误删活跃上传。成功绑定后清单行立即删除，未绑定清单最多保留 24 小时。
     - 撤销：设备/节点撤销在事务内把相关 `receiving` 传输置为 `aborted` 并拒绝后续块/读取；已提交附件不因撤销被删除，按消息保留策略处理。
     - 失败：磁盘满、摘要不符、预算耗尽都不得留下「可被 prompt 引用的半成品」；失败关闭路径与 §8 一致。
+23. `[决定]` **本机生命周期的归约、事件与收敛**（`session-activation-lifecycle` 的合同；实现待 WP2，端口见 §5.10）：
+    - **归约唯一**：`LocalActivity` 只由 §3.3 的规则归约（有效交互优先 `Pending` → 未结束任务/ready 资源/回收未确认 `Active` → 否则 `Idle`）。首次 activating 不提前显示 `Active`；失败不覆盖真实任务或交互；`uncertain`、关闭失败与回收中保持 `Active` 与容量占位，**只有确认资源释放后**才转 `Idle`。
+    - **先持久化后发布**：生命周期变化写 owned 持久事件 `session.activity.changed`（`view = { session }`，完整摘要），与该次状态变化在**同一次 `commit`** 内落盘，落盘成功后才经 `EventPublisher` 广播；`commit` 失败不得广播。事件保存当时事实，不作为重启后资源仍存活的凭据。
+    - **启动收敛**：组合根在开始监听前完成既有 uncertain/任务恢复，确认旧进程停止并清空**所有**运行资源、资源代与查看租约；随后为「曾发布 `Active` 但现已失效」的 owned 会话提交一次收敛事件（`localActivity` 变为真实值）。旧历史里的 `Active` MUST NOT 被当作资源已恢复；重放与快照沿既有屏障与去重规则收敛。
+    - **owned 当前查询与快照同代**：`localActivity`、快照 `sessions` 与 `session.read` 的摘要必须读**同一代**运行期目录与任务事实；不得把租约、查看者、资源代或进程句柄写入任何快照、事件或 wire 字段。
+    - **不交错**：激活与回收由每会话串行门互斥；关闭中/结果不确定的资源保留容量占位，禁止「回收未确认时又启动恢复」产生两个绑定。容量驱逐只选未受保护（无查看者、无未结束/排队任务、无有效交互、无停止未确认执行）的候选，`sessions.idle_timeout_ms = 0` 只关闭按时间回收，不关闭容量策略。
+    - **命令合并**：同一会话的并发激活共享一次建立过程；先查稳定 `requestId` 的持久记录，再判 ready 复用或启动恢复。旧命令重试返回历史结果**不**等于当前资源 ready；`uncertain` 的恢复不得换号自动重试，必须先核实状态。查看者只按最新声明集合计算，不因旧命令结果重新添加。
+    - **不持久化**：查看者、租约与资源代只存在于运行期（§5.10），不新增表、不新增列；`session.activity.changed` 复用既有 owned 事件表。
 
 ## 7. `storage-sqlite` v15 表结构（仅 owned 家族与连接资料）
 
@@ -1242,6 +1379,7 @@ pub trait RemoteEventStream: Send + Sync {
 
 - 单文件 `<data_dir>/acp-remote.sqlite3`；附件目录 `<data_dir>/attachments`（`[决定]` 新增配置键 `storage.attachment_dir`，默认 `<data_dir>/attachments`，语义与权限同数据库目录）。
 - `[决定]` `session-file-browser` **不新增持久字段、表或 migration**：会话文件的根仍取既有 `owned_session.workspace_cwd`（§3.6 的窄读取），枚举/内容/Git 结果只在内存与 wire 中存在；不保存内容快照、文件正文、Git 差异或翻页位置。查询不改变 `owned_*`/`imported_*` 的任何行，也不推进 `global_sequence`。
+- `[决定]` `session-activation-lifecycle` **本阶段不改 DDL**（当前仍为 **v15 = 15**）：本机生命周期的资源代、查看租约、当前活跃目录都是运行期状态（§5.10、§6 第 23 条），`session.activity.changed` 复用既有 `owned_event` 表与既有列，`localActivity` 是投影而非新列。**若实现阶段确需新增列**（例如为区分任务/资源事实而必须持久化新事实），必须先在本节登记版本化 migration、提供旧库升级测试并同步 §7.2 的版本常量与 §9 判据；禁止只加列不改门禁，也禁止把租约、查看者或进程句柄写进任何持久表。
 - `[决定]` 启动设置：`journal_mode = WAL`、`synchronous = FULL`、`foreign_keys = ON`、`busy_timeout = 5000`、`wal_autocheckpoint = 1000`。
 - `[决定]` 连接模型：1 个写连接（串行化写事务）＋ N 个只读连接；`read_view()` 打开一个显式只读事务（`BEGIN`）供快照使用。
 - `[决定]` 权限：Unix 目录 `0700`、数据库/WAL/`-shm`/附件 `0600`；启动时检查，正式模式失败关闭（`SECURITY_DESIGN.md` §13.2）。
@@ -1724,6 +1862,9 @@ v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_ind
 37. **三态归约**（§3.3/§5.2/§6 第 7/13/16 条）：`SessionActivity::reduce` 是唯一取值来源；有有效未解决交互 → `pending`（含已仲裁未确认）；无交互但有未结束 turn（`queued`/`running`/`waiting_*`）或「已派发但停止未确认」的占位 → `running`；否则 `idle`。失败/取消一个 turn 后会话不再进入终态，后续排队 turn 继续推进；状态未变的提交不重复生成 `session.updated`，变化时摘要事件与 `session.updated` 同一次提交且 `session.updated` 携带完整摘要与嵌套 `session.version`。
 38. **持久队列恢复（§6 第 16 条/§4）**：`queued_turns` 按 `queue_index` 升序返回遗留排队项；重启后在内存队列为空且无在跑 turn 时，遗留项被显式终结为 `failed`（不静默删除）、`accepted` 命令结算为 `uncertain`，随后 FIFO 从后续项继续；`sessions_with_pending_activity` 返回仍有未结束 turn 或有效交互的会话（含刚被失效清空的会话在失效前的快照路径）；`uncertain` 命令与无法确认停止的执行**不**自动重试、不重放 Agent 副作用，后者保留占位、不提前 `idle`。
 39. **`session.updated` 的唯一来源（§6）**：事件由 core 在状态变化时生成，一次提交最多一条；确认、仲裁、turn 终态与恢复路径都不得各自另发一条；payload 的 `session.version` 等于 `CommitOutcome.version`，漂移 → 失败关闭（§6 第 19 条）。
+40. **本机生命周期归约与查看租约（计划，WP2 实现）**（§3.3/§5.10/§6 第 23 条）：① 假时钟下，纯 `session.view` 查看者让会话在保留期内保持 `Active` 且不启动 Agent；② 离页、断网、撤销与租约到期分别移除查看者，`control.ping` 不续租；③ 最后保护条件解除后才开始计时，重新出现保护条件即取消原计时、再次解除后从头计时；④ 未结束/排队任务、有效待处理交互与「停止未确认」都阻止回收；⑤ 同版本重试幂等、旧版本不复活、切换会话只替换同一连接的查看者。
+41. **容量准入与安全候选（计划，WP2 实现）**（§5.10/§6 第 23 条）：① 创建与恢复共用准入，预占计入上限；可证明未建立的激活失败释放预占，结果不确定的激活不丢占位；② 满额时只在未受保护候选中选最久未使用者，同一时刻以稳定会话标识打破并列；③ 所有候选均受保护时返回明确容量拒绝（映射 `session.capacity_exceeded`），不中断受保护会话；④ `sessions.idle_timeout_ms = 0` 仍执行容量策略；运行期调低上限不强杀受保护会话，只拒绝新增直到计数回落。
+42. **生命周期事件的提交与启动收敛（计划，WP2 实现）**（§6 第 23 条）：① `session.activity.changed` 与该次状态变化同一次 `commit` 落盘，落盘失败不广播；② 重启后不把旧事件里的 `Active` 当作资源已恢复：启动收敛完成前不开放入站查询/订阅，收敛事件在旧进程资源与租约清空后提交；③ owned 当前查询、快照 `sessions` 与 `session.read` 摘要来自同一代运行期目录，租约/查看者/资源代不出现在任何快照、事件或 wire 字段；④ 关闭中或结果不确定的资源保持 `Active` 与容量占位，直到适配器确认释放。
 
 ## 10. 未决项
 

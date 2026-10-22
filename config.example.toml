@@ -60,8 +60,11 @@ max_replay_events_per_batch = 500
 # queue：同一会话忙时排队；reject_busy：直接返回 session.busy。
 queue_policy = "queue"
 max_queued_turns = 16
-# 0 = 不因空闲关闭会话。
-idle_timeout_ms = 0
+# 无人查看、无任务/交互且资源已释放确认后的保留期（毫秒），缺省 30 分钟。
+# 显式 0 只关闭按时间回收；容量保护（max_active_sessions）仍然生效。
+idle_timeout_ms = 1800000
+# 本机所有 Agent 合计可同时占用运行资源的 owned 会话上限（正整数，没有“无限”取值）。
+max_active_sessions = 50
 
 [storage]
 transcript_retention_days = 90

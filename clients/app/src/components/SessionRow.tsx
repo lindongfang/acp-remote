@@ -27,9 +27,9 @@
 import type { ReactElement } from "react";
 import type { ViewStyle } from "react-native";
 
-import type { SessionStateView } from "../domain/session-summary";
+import type { LocalActivityView, SessionStateView } from "../domain/session-summary";
 import type { SessionRowModel } from "../features/directory-model";
-import { SESSION_STATE_LABEL } from "./StatusPill";
+import { SESSION_ACTIVITY_LABEL, SESSION_STATE_LABEL } from "./StatusPill";
 import type { ColorToken, Palette } from "./theme";
 import {
   Pressable,
@@ -77,6 +77,25 @@ const DOT_STYLE_KEY_BY_STATE: Record<SessionStateView, DotStyleKey> = {
   idle: "dotIdle",
   running: "dotRunning",
   pending: "dotPending",
+};
+
+/** 本机活跃程度 → 圆点样式键（语义相同的档共用一套 token）。 */
+const DOT_STYLE_KEY_BY_ACTIVITY: Record<LocalActivityView, DotStyleKey> = {
+  idle: "dotIdle",
+  active: "dotRunning",
+  pending: "dotPending",
+};
+
+/**
+ * 本机活跃程度 → 是否追加状态词。
+ *
+ * 只有「待处理」需要文字（有请求在等自己处理）；`活跃` 与 `空闲` 只留圆点，避免把资源保留期
+ * 画成一个新的任务状态。
+ */
+const ACTIVITY_NEEDS_STATE_WORD: Readonly<Record<LocalActivityView, true | undefined>> = {
+  pending: true,
+  idle: undefined,
+  active: undefined,
 };
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
@@ -224,6 +243,13 @@ export function SessionRow({ session, onOpen, variant = "default", ordinal }: Se
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const compact = variant === "compact";
+  const main = session.activity;
+  const needsStateWord = main.kind === "local"
+    ? ACTIVITY_NEEDS_STATE_WORD[main.value] === true
+    : NEEDS_STATE_WORD[main.value] === true;
+  const stateWord = main.kind === "local"
+    ? SESSION_ACTIVITY_LABEL[main.value]
+    : SESSION_STATE_LABEL[main.value];
 
   return (
     // 根节点带 `role="listitem"`：RNW 会渲染成 `<li>`，调用方的列表容器必须标 `role="list"`
@@ -247,9 +273,25 @@ export function SessionRow({ session, onOpen, variant = "default", ordinal }: Se
         {/* 状态圆点：颜色按状态取；`data-session-state` 是**状态标识**（机器证据），不是文案。
             `accessibilityLabel` 与原型圆点上的 `title` 同一口径（给出状态标识）。 */}
         <View
-          style={[styles.dot, styles[DOT_STYLE_KEY_BY_STATE[session.state]]]}
-          accessibilityLabel={session.state}
-          dataSet={{ sessionState: session.state }}
+          style={[
+            styles.dot,
+            styles[
+              session.activity.kind === "local"
+                ? DOT_STYLE_KEY_BY_ACTIVITY[session.activity.value]
+                : DOT_STYLE_KEY_BY_STATE[session.activity.value]
+            ],
+          ]}
+          accessibilityLabel={
+            session.activity.kind === "local" ? SESSION_ACTIVITY_LABEL[session.activity.value] : session.activity.value
+          }
+          dataSet={{
+            // 任务事实与主状态各留一份机器证据：旧合同/imported 时两者取值相同。
+            sessionState: session.state,
+            sessionStateSource: session.activity.kind,
+            ...(session.activity.kind === "local"
+              ? { sessionActivity: session.activity.value }
+              : {}),
+          }}
         />
         <Text
           style={compact ? [styles.title, styles.titleCompact] : styles.title}
@@ -262,12 +304,17 @@ export function SessionRow({ session, onOpen, variant = "default", ordinal }: Se
         </Text>
         {/* 状态词只补「有请求在等」：词表来自 `StatusPill` 的同一份，但这里按原型画成纯文字
             （`.stword`），不是带底色的胶囊。 */}
-        {!compact && NEEDS_STATE_WORD[session.state] === true ? (
+        {!compact && needsStateWord ? (
           <Text
             style={compact ? [styles.stateWord, styles.stateWordCompact] : styles.stateWord}
-            dataSet={{ sessionState: session.state }}
+            dataSet={{
+              sessionState: session.state,
+              ...(session.activity.kind === "local"
+                ? { sessionActivity: session.activity.value }
+                : {}),
+            }}
           >
-            {SESSION_STATE_LABEL[session.state]}
+            {stateWord}
           </Text>
         ) : null}
         {/* 紧凑行按原型 `.srow` 只保留四项：Agent 名不在行上（它就是用户要求去掉的那一列）。 */}

@@ -15,7 +15,7 @@
       "$ref": "common.schema.json#/$defs/uuid"
     },
     "commandName": {
-      "description": "唯一来源是 compatibility/commands/v1/commands.json；本枚举只含 transport 含 sync 的命令。session.resume 只经 Node Link 接受，不在本枚举里。",
+      "description": "唯一来源是 compatibility/commands/v1/commands.json；本枚举只含 transport 含 sync 的命令。`session.resume` 自 `session-activation-lifecycle` 起也经 Sync 接受，但只在协商 `core.local-session-lifecycle.v1` 后开放（§11.5/§11.8）；未协商时按 `command.unsupported` 拒绝。",
       "enum": [
         "session.list",
         "session.read",
@@ -35,6 +35,7 @@
         "session.files.read",
         "session.git.status",
         "session.git.diff",
+        "session.resume",
         "session.title.set"
       ]
     },
@@ -120,6 +121,9 @@
             },
             {
               "$ref": "#/$defs/sessionGitDiff"
+            },
+            {
+              "$ref": "#/$defs/sessionResume"
             },
             {
               "$ref": "#/$defs/sessionTitleSet"
@@ -890,6 +894,23 @@
         }
       }
     },
+    "sessionResumeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "session"
+      ],
+      "description": "Sync `session.resume` 的 completed 结果（`core.local-session-lifecycle.v1`）：会话标识 + 本机当前摘要。摘要只在协商该 feature 时带 `localActivity`；本结果**不带** `remoteSessionRef`（那是 Node Link 的形状），也不带 prompt、历史或 Agent 侧标识。Node Link 的 `SessionResumeResult` 不变。",
+      "properties": {
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "session": {
+          "$ref": "common.schema.json#/$defs/sessionSummary"
+        }
+      }
+    },
     "workspaceBrowseResult": {
       "description": "`workspace.browse` 的 completed 结果：回显请求的父路径（`null` = 根列表）、该层的直接子目录与截断标记。`entries` 只含子目录，MUST NOT 含文件条目与任何文件内容、大小、时间戳或权限；条目按名称以确定顺序排列。单层条目数上限是固定 v1 常量（`docs/SYNC_PROTOCOL.md` §14，128），超过上限时只返回上限内的条目并把 `truncated` 置真——不得静默丢弃、不得整次失败。",
       "type": "object",
@@ -1418,6 +1439,33 @@
         }
       }
     },
+    "sessionResume": {
+      "description": "Sync 面的 `session.resume`（`core.local-session-lifecycle.v1`，docs/SYNC_PROTOCOL.md §11.5/§11.8）：本机激活已存在会话、恢复同一 Agent 会话身份与工作目录。会话引用在 body 顶层 `sessionId`，payload 固定为 `{}`（closed；出现任何键按 `protocol.schema_invalid` 拒绝）；不接受 `expectedVersion`、目录、prompt 或历史正文。它是 mutation：先持久受理、再执行、最后落终态（`completed { sessionId, session }`，不附 `remoteSessionRef`）；同 `requestId` 重发返回首次结果，不同参数报 `command.idempotency_conflict`。未协商该 feature 时返回 `command.unsupported`；Agent 未宣告 `sessionCapabilities.resume` 返回 `capability.unsupported_by_agent`；无安全候选可回收的容量拒绝返回 `session.capacity_exceeded`；说不清结果时进入 `command.uncertain` 且不得自动换 `requestId` 重派。MUST NOT 用 `protocol.schema_invalid` 表达上述恢复失败。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
+      "properties": {
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.resume"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Sync owned 载荷固定为空对象：会话引用在 body 顶层，恢复参数只来自本机持久记录，客户端不能指定 Agent、目录、历史或 prompt。"
+        }
+      }
+    },
     "sessionTitle": {
       "description": "`session.title.set` 的自定义标题原文（1..=512 个 Unicode 标量值）。`minLength`/`maxLength` 是 wire 层的近似约束，`pattern` 拒绝纯空白；「标量值计数 + 去除首尾空白后不得为空」由 Rust codec（`sync_protocol::command::SessionTitle`）按实际 scalar 语义强制——JSON Schema 的 `maxLength` 按码点计数，不得用 JS 的 UTF-16 长度代入。客户端发送前自行 trim；服务端保存 trim 后的值，不截断、不接受 `null`。",
       "type": "string",
@@ -1689,6 +1737,29 @@
                 "properties": {
                   "result": {
                     "$ref": "#/$defs/sessionCreateResult"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": {
+                    "const": "session.resume"
+                  },
+                  "status": {
+                    "const": "completed"
+                  }
+                },
+                "required": [
+                  "command",
+                  "status"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "result": {
+                    "$ref": "#/$defs/sessionResumeResult"
                   }
                 }
               }

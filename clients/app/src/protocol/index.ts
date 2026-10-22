@@ -34,6 +34,7 @@ export type * from "./node-link";
 
 // 纯计算 + 编译期常量：无 Node 依赖，浏览器与 `src/domain/` 都可安全消费。
 export { projectView, isKnownEventType, KNOWN_EVENT_TYPES, KNOWN_EVENT_TYPE_COUNT } from "./event";
+export { isLocalActivity } from "./common";
 export {
   SESSION_FILES_COMMANDS,
   SESSION_FILES_FEATURE,

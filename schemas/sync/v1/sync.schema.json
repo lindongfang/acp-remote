@@ -19,7 +19,9 @@
     { "$ref": "#/$defs/remoteUnsubscribe" },
     { "$ref": "#/$defs/remoteUnavailable" },
     { "$ref": "#/$defs/remoteCatalogChanged" },
-    { "$ref": "#/$defs/remoteSourceState" }
+    { "$ref": "#/$defs/remoteSourceState" },
+    { "$ref": "#/$defs/sessionView" },
+    { "$ref": "#/$defs/sessionViewResult" }
   ],
   "$defs": {
     "postAuthBase": {
@@ -489,6 +491,97 @@
         }
       ],
       "unevaluatedProperties": false
+    },
+    "sessionView": {
+      "description": "`session.view`（`core.local-session-lifecycle.v1`，docs/SYNC_PROTOCOL.md §11.8）：已认证连接声明自己当前**查看**哪个会话，或声明离开（`sessionId: null`）。它只更新运行期的查看者与租约，**不**启动 Agent、不写事件、不改变会话状态；激活必须另行派发 `session.resume`。同一连接最多一个当前查看者，声明新会话即替换旧会话；`viewVersion` 由客户端单调递增，同版本同载荷的重试幂等，低于当前版本的声明被忽略且不得复活旧页面。**同版本不同选择**（`viewVersion` 等于当前值、`sessionId` 不同）按 `stale` 处理：不替换现有查看者、不重置租期，帧形状合法因此也**不是** `protocol.schema_invalid`；客户端改变选择（`A → B`、`A → null`、`null → A`）必须递增版本，服务端不得以「最后到达者胜」兜底。低于当前版本的 `sessionId: null` 声明同样被忽略并回 `stale`（MUST NOT 清除现有查看者）；离页必须使用更高的 `viewVersion`。只在协商该 feature 的连接上合法；未协商时收到本帧按 `protocol.type_unsupported` 拒绝。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "session.view" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sessionId", "viewVersion"],
+              "properties": {
+                "sessionId": {
+                  "oneOf": [
+                    { "$ref": "common.schema.json#/$defs/uuid" },
+                    { "type": "null" }
+                  ]
+                },
+                "viewVersion": { "$ref": "#/$defs/viewVersion" }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "sessionViewResult": {
+      "description": "`session.view.result`（docs/SYNC_PROTOCOL.md §11.8）：服务端对同一个 `viewVersion` 的应答。`accepted` 表示该视图声明已生效并重新开始租期，必须给出**未来**的 `leaseExpiresAt`；`stale` 表示该版本已过期（或已被更新的声明替换，或同版本上出现了不同选择），`leaseExpiresAt` 必须为 `null`，客户端不得据此恢复查看状态。`sessionId` 允许 UUID 或 `null`，并逐字回显被应答的那个声明——离页声明（请求 `sessionId: null`）的应答因此是 `sessionId: null`，客户端 MUST NOT 把它当成「正在查看空会话」。租期 30 秒、页面每 10 秒续租；普通 `control.ping` 不续租。租约只存在于连接期，断开、认证撤销或设备被替换时立即清除，不持久化。",
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "session.view.result" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sessionId", "viewVersion", "status", "leaseExpiresAt"],
+              "properties": {
+                "sessionId": {
+                  "oneOf": [
+                    { "$ref": "common.schema.json#/$defs/uuid" },
+                    { "type": "null" }
+                  ]
+                },
+                "viewVersion": { "$ref": "#/$defs/viewVersion" },
+                "status": { "enum": ["accepted", "stale"] },
+                "leaseExpiresAt": {
+                  "oneOf": [
+                    { "$ref": "common.schema.json#/$defs/timestamp" },
+                    { "type": "null" }
+                  ]
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": { "status": { "const": "accepted" } },
+                    "required": ["status"]
+                  },
+                  "then": {
+                    "properties": {
+                      "leaseExpiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": { "status": { "const": "stale" } },
+                    "required": ["status"]
+                  },
+                  "then": {
+                    "properties": {
+                      "leaseExpiresAt": { "type": "null" }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "viewVersion": {
+      "description": "查看声明的单调版本（固定 v1 常量域）：客户端从 0 开始自增，取值是结构性整数（与 `chunkCount` 同类），上界 `2^53−1` 使 JavaScript 与 Rust 都能精确表示。服务端只按服务端时钟判定租期，客户端时钟不参与。",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
     },
     "snapshotResource": {
       "description": "sync.snapshot_chunk.resource 的封闭词表：快照只承载 sessions/workspaces/agents 三类清单资源。六类 session-scoped 明细资源 messages/turns/pending_interactions/config_options/capabilities/history 一律不进快照，无论会话的 origin.kind 是 local 还是 remote（docs/SYNC_PROTOCOL.md §9.4，design D1）；除 `pending_interactions` 改用 `media.schema.json#/$defs/effectiveInteraction` 外，它们的元素形状仍由下面的 snapshotItem.* 定义，供 session.read 的结果复用（command.schema.json#/$defs/sessionReadResult.resources）。本枚举的取值与 crates/sync-protocol 的 sync::SnapshotResource::ALL 逐条同序，由 tests/schema_drift.rs::snapshot_resources_match_schema_enum 双向门禁。",

@@ -100,6 +100,7 @@ function recordingGateway(resources: StagedResources): RecordingGateway {
     dispatch(command: CommandMessage) {
       dispatches.push(command);
     },
+    setSessionView: () => true,
     subscribeRemote: () => undefined,
     unsubscribeRemote: () => undefined,
   };

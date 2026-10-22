@@ -1308,6 +1308,10 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     dispatch(command): void {
       sync?.dispatch(command);
     },
+    setSessionView(input): boolean {
+      // 未装配/未认证时返回 `false`：store 保留声明状态但不把它当作已生效。
+      return sync?.setSessionView(input) ?? false;
+    },
     subscribeRemote(sessionRef): void {
       sync?.subscribeRemote(sessionRef);
     },
@@ -1605,12 +1609,17 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
       // 连接层会立即补发一条 ping，并从那一刻重新获得完整宽限。
       if (event.kind === "visibility") {
         sync?.setProbeVisible(event.state === "visible");
+        // 本机生命周期：可见时立即重新声明并激活当前会话；隐藏时立即停续租并声明离开。
+        // 平台事件只经由这一处进入 feature 层（页面不直连 DOM）。
+        store.applyLifecycle({ kind: "visibility", state: event.state });
         if (event.state === "visible") store.refreshActiveSessionFiles();
         return;
       }
       // `pagehide` 断开连接：未完成的暂存快照随之丢弃（§9.4），恢复路径交给下次连接；
       // 附件连接一并关闭，进行中的传输由服务端按闲置策略清理（不做刷新续传）。
       if (event.kind === "pagehide") {
+        // 先声明离开（离页租约立即失效），再断开；`applyLifecycle` 自己会停掉续租计时器。
+        store.applyLifecycle({ kind: "pagehide" });
         sync?.disconnect();
         attachments?.stop();
       }
@@ -1618,6 +1627,7 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     // 订阅时不会重放当前值：装配后必须显式对齐一次，否则「挂载时页面已隐藏」的场景会
     // 仍按默认可见探测（只有之后发生切换才会纠正）。
     sync.setProbeVisible(platform.lifecycle.currentVisibility() === "visible");
+    store.applyLifecycle({ kind: "visibility", state: platform.lifecycle.currentVisibility() });
     assembledHost = { hostId: record.hostId, canonicalOrigin };
   }
 

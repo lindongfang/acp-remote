@@ -22,8 +22,15 @@ export type {
   SessionStateView,
   SessionOriginView,
   SessionTitle,
+  LocalActivityView,
+  SessionMainActivityView,
 } from "./session-summary";
-export { buildSessionSummaryView, UNTITLED_SESSION_LABEL } from "./session-summary";
+export {
+  buildSessionSummaryView,
+  localActivityOf,
+  mainActivityOf,
+  UNTITLED_SESSION_LABEL,
+} from "./session-summary";
 
 export type {
   AgentCatalogView,

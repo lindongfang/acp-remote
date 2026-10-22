@@ -30,6 +30,7 @@ use crate::derive::{
     self, FILE_CHANGE_DEDUP_CAPACITY, TitleIntent, file_change_event, file_changed_view,
     title_intent,
 };
+use crate::lifecycle::{ActivationPlan, LocalSessionLifecycle};
 use crate::model::{
     AcpRaw, Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand, CommandKind,
     CommandPayload, CommandReceipt, CommandRecord, CommandResult, CommandStatus,
@@ -39,17 +40,17 @@ use crate::model::{
     InteractionId, InteractionKind, InteractionResolution, MemberValue, MessageId, ModeId, ModeRef,
     OriginEpoch, OwnedSessionRef, PendingEvent, PendingInteraction, PermissionDecision,
     PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock, PromptRequest,
-    PublicError, RequestId, Resolution, ResourceOrigin, ResumeSessionRequest, Sequence,
-    SessionActivity, SessionId, SessionRecoveryRecord, SessionReference, SessionState,
+    PublicError, RequestId, Resolution, ResourceGeneration, ResourceOrigin, ResumeSessionRequest,
+    Sequence, SessionActivity, SessionId, SessionRecoveryRecord, SessionReference, SessionState,
     SessionSummary, SessionTitle, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind,
     Version, ViewJson, WorkspaceRef, decode_json_string as json_string,
     encode_json_string as json_text, insert_string_member_front, object_members as json_members,
     top_level_member,
 };
 use crate::ports::{
-    AuditStore, Clock, CommitOutcome, EventPublisher, EventSink, HistoryInclude, HistoryPage,
-    HistoryQuery, IdGenerator, IdempotencyRecord, InteractionAuthority, InteractionResolved,
-    ModeChange, NewTurn, OriginReadPage, OwnedCommit, PendingInteractionWrite,
+    ActivationOutcome, AuditStore, Clock, CommitOutcome, EventPublisher, EventSink, HistoryInclude,
+    HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord, InteractionAuthority,
+    InteractionResolved, ModeChange, NewTurn, OriginReadPage, OwnedCommit, PendingInteractionWrite,
     PreparedSessionCreate, ReadView, ReplayBatch, ReplayLimit, SessionActivityFacts,
     SessionBackendFactory, SessionCreateAdmission, SessionEndpoint, SessionQuery, SessionStore,
     SessionUpdate, SettledSession, StateChange, SubmissionBinding, TrustStore, TurnChange,
@@ -254,6 +255,32 @@ impl Default for BrokerConfig {
             persist_deltas: false,
         }
     }
+}
+
+/// `session.resume` 受理-only 提交的结果（[`Broker::admit_session_resume`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // `Settled` 承载完整持久记录（与 `ActivationAdmission` 同形）
+pub enum ResumeAdmission {
+    /// 本次调用写入了 `accepted` 幂等行。
+    Prepared,
+    /// 同 `(actor, requestId)` 已有 `accepted` 行：并发或重试，不得再次派发。
+    InFlight,
+    /// 已有终态记录：原样回放首次结果。
+    Settled(CommandRecord),
+}
+
+/// 一次 `session.resume` 的**执行事实**（[`Broker::resume_session_with_execution`]）。
+///
+/// `established == false` 表示这次调用只命中了既有幂等记录（同键重试/并发重发），**没有**调用
+/// 后端恢复。适配层据此区分「本次真的建立了资源」与「回放一条旧受理」：后者不得 settle `Ready`，
+/// 也不得写 `completed`（那会把一条仍在进行/已由别人完成的操作伪造成本次的成功）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeExecution {
+    pub session: SessionId,
+    /// 本次调用是否执行了后端恢复（唯一可能 spawn 的副作用）。
+    pub established: bool,
+    /// 该命令**首次**落盘的接受时间（幂等重放时取记录里的值，不换成现场时钟）。
+    pub accepted_at: Option<Timestamp>,
 }
 
 /// broker 的全部出站依赖。
@@ -685,7 +712,19 @@ pub struct Broker {
     /// 有效待处理交互端口（§5.8）：服务协商 `core.pending-interactions.v1` 的读-校验-原子胜出路径。
     /// 未注入时该路径显式不可用（旧 peer 的按 id 解析路径不受影响）。
     interactions: Option<Arc<dyn InteractionAuthority>>,
+    /// 本机生命周期的容量准入（`session-activation-lifecycle`）：`session.create` 在**分配 `SessionId`
+    /// 之后、调用后端之前**预占名额，与 `session.resume` 共用同一本账。`None` = 组合根未接线（受控
+    /// 路径测试），创建行为与接线前完全一致（不做容量准入）。
+    lifecycle: std::sync::OnceLock<Arc<LocalSessionLifecycle>>,
 }
+
+/// `PortError::InvalidRequest` 的哨兵：`session.create` 没有可用容量。
+///
+/// `PortError` 是闭合枚举、没有容量变体，而 `session.capacity_exceeded` 是 wire 码（§11.5/§11.6）：
+/// 与 `authorization.scope_denied`/`capability.unsupported_by_broker` 同一手法——core 只用可识别文本
+/// 表达成因，由 Sync 适配层（`server::sync::command::port_rejection`）映射成明确错误码，不折叠成
+/// schema 错误，也不改公共错误枚举。
+pub const SESSION_CAPACITY_EXCEEDED: &str = "session.capacity_exceeded";
 
 /// 窗口期状态：落账提交（[`StateChange::SettleCreate`]）的全部输入，外加会话行的两个时间戳来源。
 #[derive(Clone)]
@@ -697,6 +736,10 @@ struct PreparedCreate {
     at: Timestamp,
     /// 该会话的 origin epoch（core 在受理之后分配，落账提交随行落盘）。
     epoch: OriginEpoch,
+    /// `session.create` 预占的容量名额（资源代）。`None` = 组合根没有接线本机生命周期（不做容量
+    /// 准入）；`Some` = 名额已预占，落账提交成功后必须 `settle` 为 `Ready`，让后续 `session.resume`
+    /// 复用资源而不是再启动一次后端。
+    generation: Option<ResourceGeneration>,
 }
 
 /// 窗口期（会话行落账之前）事件队列的上限（§6 第 20 条）。
@@ -716,7 +759,14 @@ impl Broker {
             slots: Mutex::new(HashMap::new()),
             prepared: Mutex::new(HashMap::new()),
             interactions: None,
+            lifecycle: std::sync::OnceLock::new(),
         }
+    }
+
+    /// 注入本机生命周期（组合根在装配时调用一次）：`session.create` 从此与 `session.resume` 共用
+    /// 容量准入。重复注入保留首次实现（返回 `false`），避免两个目录各自记账。
+    pub fn set_lifecycle(&self, lifecycle: Arc<LocalSessionLifecycle>) -> bool {
+        self.lifecycle.set(lifecycle).is_ok()
     }
 
     /// 注入有效待处理交互端口（组合根在装配时调用；见 [`InteractionAuthority`]）。
@@ -2452,6 +2502,22 @@ impl Broker {
         self.authorize(actor, "session.create", None, request)
             .await
             .map_err(Denied::into_port_error)?;
+        // ⓪ 幂等键先于容量准入：已完成/窗口期的同键重发必须回首次结果，**不得**因为一次新的
+        //    `SessionId` 分配撞上已满的容量而被误报 `session.capacity_exceeded`。判据与
+        //    `commit_owned` 的 §5.2 同形（`session` 为 `None` = 受理期不知道目标会话，不参与比对）。
+        if let Some(existing) = self.deps.store.find_request(request, actor).await? {
+            let same = existing.command() == "session.create"
+                && existing.kind() == CommandKind::Mutation
+                && existing.expected_version().is_none()
+                && existing.request_fingerprint() == request_fingerprint;
+            if !same {
+                return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
+            }
+            return Ok(match existing.status() {
+                CommandStatus::Accepted => SessionCreateAdmission::InFlight,
+                _ => SessionCreateAdmission::Settled(Box::new(existing)),
+            });
+        }
         // ① 受理之前把**可能失败**的本地步骤全部做完：受理一旦落盘，再出现本地失败就会留下一条
         //    `accepted` 行（既无终态也无资源），那正是本变更要消灭的形状。
         let workspace_cwd = create
@@ -2461,6 +2527,28 @@ impl Broker {
         let workspace = check_workspace_ownership(&create, ownership)?;
         let at = self.now();
         let session = self.deps.ids.session_id();
+        // ①（容量）与 `session.resume` 共用同一本账：会话标识已经分配、**后端尚未启动**，此刻预占。
+        //     创建失败必须把名额交还（`release_capacity`），成功则在落账提交后 settle 为 ready。
+        let generation = match self.lifecycle.get() {
+            None => None,
+            Some(lifecycle) => match lifecycle
+                .begin_created_session(actor, session.clone(), at.clone())
+                .await?
+            {
+                ActivationPlan::Establish { generation }
+                | ActivationPlan::Reused { generation } => Some(generation),
+                ActivationPlan::CapacityExceeded => {
+                    return Err(PortError::InvalidRequest(SESSION_CAPACITY_EXCEEDED));
+                }
+                // 新建会话的标识由 core 现分配，不可能与在建立/回收中的同一会话相撞；撞上就是
+                // 标识生成器违背了唯一性契约，失败关闭（不猜、不冒领别人的名额）。
+                ActivationPlan::InFlight | ActivationPlan::Settled(_) => {
+                    return Err(PortError::InvalidRequest(
+                        "session.create allocated an id that is already activating",
+                    ));
+                }
+            },
+        };
         let settled = SettledSession {
             session: session.clone(),
             title: None,
@@ -2503,10 +2591,21 @@ impl Broker {
             command_terminal: None,
             origin_epoch: None,
         };
-        let outcome = self.commit_owned(commit).await?;
+        let outcome = match self.commit_owned(commit).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // 受理没落盘 = 本次不会建会话：预占必须交还，否则每次失败都吃掉一个名额。
+                self.release_create_capacity(actor, &session, generation)
+                    .await;
+                return Err(error);
+            }
+        };
         if let Some(replayed) = outcome.replayed {
             // 同键：既有持久记录就是首次结果。仍是 `accepted` ⇒ **窗口期重发**（并发或重试）：回受理态、
             // 不派发第二次创建、不碰首次记录；已终结 ⇒ 回首次终态。两者都不再打开后端端点。
+            // 本次也没有建立会话，因此预占的名额必须交还（首次调用的名额由它自己持有）。
+            self.release_create_capacity(actor, &session, generation)
+                .await;
             return Ok(match replayed.record.status() {
                 CommandStatus::Accepted => SessionCreateAdmission::InFlight,
                 _ => SessionCreateAdmission::Settled(Box::new(replayed.record)),
@@ -2524,6 +2623,9 @@ impl Broker {
                     //    窗口期队列里的事件随失败一起作废：那个会话不会存在，它们没有归属。
                     slot.release_unaccounted();
                     slot.take_pending();
+                    // 可证明没有建立外部资源：交还预占名额（`settle(Failed)` 需要会话行，此刻还没有）。
+                    self.release_create_capacity(actor, &session, generation)
+                        .await;
                     self.commit_create_failure(actor, request, &error).await;
                     return Err(error);
                 }
@@ -2542,16 +2644,120 @@ impl Broker {
         };
         lock(&self.prepared).insert(
             prepared_key(actor, request),
-            PreparedCreate { settled, at, epoch },
+            PreparedCreate {
+                settled,
+                at,
+                epoch,
+                generation,
+            },
         );
         Ok(SessionCreateAdmission::Prepared(Box::new(prepared)))
     }
 
+    /// 交还 `session.create` 的容量预占（只用于**可证明不会建立会话**的路径）。
+    ///
+    /// 未接线生命周期（`None`）或该代已被其它路径收口时是 no-op。`release_capacity` 只接受
+    /// `Inactive`/未确认的 `Activating`：`Ready`/`Reclaiming` 必须走释放确认，因此这里不会把已建立的
+    /// 资源名额悄悄放掉。
+    async fn release_create_capacity(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        generation: Option<ResourceGeneration>,
+    ) {
+        let (Some(lifecycle), Some(generation)) = (self.lifecycle.get(), generation) else {
+            return;
+        };
+        if let Err(error) = lifecycle
+            .release_capacity(actor, session.clone(), generation, self.now())
+            .await
+        {
+            // core 不依赖日志设施：这里保留结构化事实的唯一出口是名值对本身（调用方可按名检索）。
+            let _ = (
+                "core.session_create_capacity_release_failed",
+                session.as_str(),
+                error,
+            );
+        }
+    }
+
+    /// `session.resume` 的**受理-only**提交：只持久化 `accepted` 幂等行，不做任何后端工作。
+    ///
+    /// 这是 Sync 本机生命周期路径的准入点（`core.local-session-lifecycle.v1`）：适配层先用
+    /// [`crate::lifecycle::LocalSessionLifecycle::activate_session`] 判定「ready 复用 / 建立 / 合并 /
+    /// 容量」，再按判定落一条受理记录。ready 复用与并发合并都必须有合法的受理行，却都**不得**触碰
+    /// Agent；把受理与恢复拆开是这两条唯一可行的实现方式。`resume_session` 保持原语义不变。
+    ///
+    /// 返回值与 [`ActivationAdmission`](crate::ports::ActivationAdmission) 同形：
+    ///
+    /// - [`ResumeAdmission::Prepared`]：本次调用写入了 `accepted` 行；
+    /// - [`ResumeAdmission::InFlight`]：同 `(actor, requestId)` 已有 `accepted` 行（并发或重试）；
+    /// - [`ResumeAdmission::Settled`]：已有**终态**记录，调用方原样回放，不再执行任何工作。
+    ///
+    /// 同键但命令/指纹/目标会话不同 → `command.idempotency_conflict`（与 `resume_session` 同判据）。
+    pub async fn admit_session_resume(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        session: &SessionId,
+    ) -> Result<ResumeAdmission, PortError> {
+        self.authorize(actor, "session.resume", Some(session), request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        if let Some(record) = self.deps.store.find_request(request, actor).await? {
+            if record.command() != "session.resume"
+                || record.request_fingerprint() != request_fingerprint
+                || record.session() != Some(session)
+            {
+                return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
+            }
+            return Ok(if record.status().is_terminal() {
+                ResumeAdmission::Settled(record)
+            } else {
+                ResumeAdmission::InFlight
+            });
+        }
+        let at = self.now();
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: request.clone(),
+                command: "session.resume".to_owned(),
+                kind: CommandKind::Mutation,
+                session: Some(session.clone()),
+                expected_version: None,
+                request_fingerprint: request_fingerprint.clone(),
+                accepted_at: at,
+            }),
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = self.commit_owned(commit).await?;
+        Ok(if outcome.replayed.is_some() {
+            ResumeAdmission::InFlight
+        } else {
+            ResumeAdmission::Prepared
+        })
+    }
+
     /// `session.resume`（§5.1、§12.7）：进程不在的 owned 会话的恢复入口。
     ///
-    /// 顺序（**授权先于一切本机读取**）：① 授权 → ② `SessionStore::load_recovery` 窄读取 →
-    /// ③ 请求构造与 cwd 复校验（对象是持久化原文）→ ④ `SessionBackendFactory::resume`（唯一可能
-    /// spawn 的副作用）→ ⑤ 返回 `SessionId`（会话重新可交互），**不**投影、**不**写终态。
+    /// 顺序（**授权先于一切本机读取**）：① 授权 → ② 同键幂等记录检查（已有记录即回放，不再触碰
+    /// 后端；这是「同键重试不得二次恢复」的入口）→ ③ `SessionStore::load_recovery` 窄读取 →
+    /// ④ 请求构造与 cwd 复校验（对象是持久化原文）→ ⑤ `SessionBackendFactory::resume`（唯一可能
+    /// spawn 的副作用）→ ⑥ 返回本会话与**本次是否真的执行了恢复**，**不**投影、**不**写终态。
+    ///
+    /// [`Broker::resume_session`] 是只关心会话标识的兼容入口；需要区分「建立」与「幂等回放」的
+    /// 适配层必须调用本方法，否则会把一条旧受理误报成本次建立成功。
     ///
     /// `accepted` 行与幂等行由本方法**自建**，提交点与 `session.create` 相同（先回 accepted、再做
     /// 工作）：`session.resume` 没有 `CommandPayload` 变体，也不走通用 mutation 管线（否则终态会被
@@ -2569,17 +2775,49 @@ impl Broker {
         request_fingerprint: &Digest,
         session: &SessionId,
     ) -> Result<SessionId, PortError> {
+        Ok(self
+            .resume_session_with_execution(actor, request, request_fingerprint, session)
+            .await?
+            .session)
+    }
+
+    /// 同 [`Broker::resume_session`]，并报告本次是否真的执行了后端恢复（见 [`ResumeExecution`]）。
+    pub async fn resume_session_with_execution(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        session: &SessionId,
+    ) -> Result<ResumeExecution, PortError> {
         self.authorize(actor, "session.resume", Some(session), request)
             .await
             .map_err(Denied::into_port_error)?;
-        // ②：两列 `NULL`（或会话行不存在）= 没有可用于恢复的数据 = 对本次操作不支持，不启动进程。
+        // ②：同键已有记录 = 首次调用的结果。这里不读恢复数据、不启动后端：没有恢复数据的会话仍可能
+        // 有一条正在进行的合法受理，把它误报成「不支持」会掩盖首次调用的真实结局。
+        if let Some(existing) = self.deps.store.find_request(request, actor).await? {
+            let same = existing.command() == "session.resume"
+                && existing.kind() == CommandKind::Mutation
+                && existing.session() == Some(session)
+                && existing.expected_version().is_none()
+                && existing.request_fingerprint() == request_fingerprint;
+            if !same {
+                return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
+            }
+            return Ok(ResumeExecution {
+                session: session.clone(),
+                established: false,
+                accepted_at: existing.accepted_at().cloned(),
+            });
+        }
+        // ③：两列 `NULL`（或会话行不存在）= 没有可用于恢复的数据 = 对本次操作不支持，不启动进程。
         let Some(record) = self.deps.store.load_recovery(session).await? else {
             return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
         };
-        // ③：请求全部来自持久化记录；cwd 在这里重新校验（「它曾经合法」不是跳过理由）。
+        // ④：请求全部来自持久化记录；cwd 在这里重新校验（「它曾经合法」不是跳过理由）。
         let resume = resume_request(record)?;
         revalidate_resume_workspace(&resume.workspace_cwd)?;
         let at = self.now();
+        let accepted_at = at.clone();
         let commit = OwnedCommit {
             session: Some(session.clone()),
             at: at.clone(),
@@ -2604,11 +2842,15 @@ impl Broker {
             origin_epoch: None,
         };
         let outcome = self.commit_owned(commit).await?;
-        if outcome.replayed.is_some() {
+        if let Some(replayed) = outcome.replayed {
             // 同键重试（或并发重复）：首次结果已存在，副作用只发生一次、不重复 spawn。
-            return Ok(session.clone());
+            return Ok(ResumeExecution {
+                session: session.clone(),
+                established: false,
+                accepted_at: replayed.record.accepted_at().cloned(),
+            });
         }
-        // ④：唯一副作用（可能拉起 Agent 子进程）。
+        // ⑤：唯一副作用（可能拉起 Agent 子进程）。
         let slot = self.owned_slot(session);
         let sink = self.sink(session);
         let endpoint: Arc<dyn SessionEndpoint> = self
@@ -2618,7 +2860,11 @@ impl Broker {
             .await?
             .into();
         *lock(&slot.endpoint) = Some(endpoint);
-        Ok(session.clone())
+        Ok(ResumeExecution {
+            session: session.clone(),
+            established: true,
+            accepted_at: Some(accepted_at),
+        })
     }
 
     /// `session.create` 的**落账提交**（§6 第 20 条、§12.7）。返回本次是否真的写入了终态。
@@ -2723,6 +2969,26 @@ impl Broker {
                 slot.release_unaccounted();
                 self.flush_locked(&slot, &session).await?;
                 lock(&self.prepared).remove(&key);
+                // 会话行已经落盘：容量预占正式转为 ready（与 `session.resume` 的成功收口同形）。
+                // 此后同会话的 `session.resume` 命中 ready 复用，不会再启动一次后端。
+                if let (Some(lifecycle), Some(generation)) =
+                    (self.lifecycle.get(), prepared.generation)
+                    && let Err(error) = lifecycle
+                        .settle_session(
+                            actor,
+                            session.clone(),
+                            generation,
+                            ActivationOutcome::Ready,
+                        )
+                        .await
+                {
+                    // core 不依赖日志设施：保留可检索的失败事实（会话行已落账，命令终态不受影响）。
+                    let _ = (
+                        "core.session_create_lifecycle_settle_failed",
+                        session.as_str(),
+                        error,
+                    );
+                }
                 Ok(true)
             }
             Err(PortError::Unavailable(_)) => Ok(false),
@@ -5069,6 +5335,9 @@ fn permission_kind(kind: &str) -> Option<PermissionDecisionKind> {
 const DAEMON_EVENT_TYPES: &[&str] = &[
     "device.revoked",
     "session.origin.online_changed",
+    // 本机生命周期投影（`session-activation-lifecycle`）：由 Daemon 自身在资源代就绪、释放确认与启动
+    // 收敛时产生，不存在诱发命令（`SYNC_PROTOCOL.md` §9.8、`CORE_PORTS_AND_STORAGE.md` §6 第 23 条）。
+    "session.activity.changed",
     "session.updated",
     "storage.integrity_failed",
 ];
@@ -5327,6 +5596,18 @@ fn view_session_summary(
     version: &Version,
     at: &Timestamp,
 ) -> Result<ViewJson, PortError> {
+    session_summary_view(summary, state, version, at, None)
+}
+
+/// [`view_session_summary`] 的完整形状：`localActivity` 只在**协商后的 owned 投影**里出现
+/// （`session.activity.changed` 的持久视图与协商连接的摘要投影共用），`None` 表示不带该键。
+pub(crate) fn session_summary_view(
+    summary: &SessionSummary,
+    state: SessionState,
+    version: &Version,
+    at: &Timestamp,
+    local_activity: Option<crate::model::LocalActivity>,
+) -> Result<ViewJson, PortError> {
     let title = summary
         .title()
         .map(json_text)
@@ -5359,8 +5640,12 @@ fn view_session_summary(
         ),
         None => "null".to_owned(),
     };
+    let local_activity = match local_activity {
+        Some(activity) => format!(r#","localActivity":"{}""#, activity.as_str()),
+        None => String::new(),
+    };
     view(format!(
-        r#"{{"session":{{"sessionId":"{}","title":{title},"agent":{{"agentId":"{}","name":{}}},"state":"{}","origin":{origin},"currentMode":{current_mode},"version":"{}","createdAt":"{}","updatedAt":"{}","workspace":{workspace}}}}}"#,
+        r#"{{"session":{{"sessionId":"{}","title":{title},"agent":{{"agentId":"{}","name":{}}},"state":"{}"{local_activity},"origin":{origin},"currentMode":{current_mode},"version":"{}","createdAt":"{}","updatedAt":"{}","workspace":{workspace}}}}}"#,
         summary.session_id().as_str(),
         agent.agent_id().as_str(),
         json_text(agent.name()),
@@ -5667,7 +5952,7 @@ fn ensure_nested_session_version(view: &ViewJson, value: &str) -> Result<ViewJso
 }
 
 #[allow(clippy::too_many_arguments)] // 事件组装的完整形状（含 §10.1 的 origin 判定）
-fn pending_event(
+pub(crate) fn pending_event(
     event_type: &str,
     kind: EventKind,
     view: ViewJson,

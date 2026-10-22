@@ -84,8 +84,8 @@ fn the_command_catalog_row_matches_the_wire_contract() {
     );
     assert_eq!(
         row["transport"],
-        serde_json::json!(["node_link"]),
-        "session.resume 只经 Node Link 接受（不得出现在 sync transport 上）"
+        serde_json::json!(["sync", "node_link"]),
+        "session.resume 同时登记 Sync 与 Node Link 两个传输面（Sync 面只在协商 core.local-session-lifecycle.v1 后开放）"
     );
     assert_eq!(row["delivery"], Value::String("conditional_mvp".to_owned()));
 

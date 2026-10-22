@@ -2,6 +2,7 @@
 
 > 状态：编码前契约（Draft）  
 > ACP wire 版本：1  
+> 修订记录（2026-10-22，`session-activation-lifecycle` WP1，**合同先行；实现待 WP3/WP4，真实能力门槛见 WP0**）：`method.session_close` 与 `cap.agent.session_close` 的 `delivery` 由 `post_mvp` 提升为 **`conditional_mvp`**，能力条件仍是 `agentCapabilities.sessionCapabilities.close`；`broker` 由 `explicit_unsupported` 改为 `project_and_preserve`，`sync`/`pwa` 保持 `explicit_unsupported`，`facade` 保持 `not_advertised`（机器矩阵同步）。§5 把 `session/close` 移出 `post_mvp` 集合并写明清空条件：只有 Agent 宣告 `sessionCapabilities.close` 时 Owner 才发送，回收必须确认真实释放，否则保留资源与名额；未宣告时显式不支持。同时澄清：Sync 的自动激活走业务命令 `session.resume`（feature `core.local-session-lifecycle.v1`），**不**等于把 ACP `session/resume` 方法暴露给 Sync 层；该方法的 `layers.sync` 仍为 `explicit_unsupported`。  
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§5 的 `update.session_info_update` 说明改写为只描述 **Agent 侧**标题投影，并声明 `session.title.set` 是非 ACP 的 Broker 元数据命令（feature `core.session-title.v1`，不宣告 Agent capability、不改写 ACP 原文）；**取代**旧条款「标题唯一来源是该判别子、不存在客户端重命名命令」。矩阵字段与机器矩阵不变；`session.title.set` 与 `custom_title` 持久化已接线。  
 > 修订记录（2026-09-18）：新增 §6 `acp_facade` 的 `session/new` 映射与错误映射；`elicitation/create` 的 capability 占位符改为 `clientCapabilities.elicitation.form`；新增 `meta_fields_byte_exact`、`extension_method_explicit_unsupported` 两个不变量，未知判别子改为 `visible_degradation`；capability 路径改为可校验的字面量；`content.resource_link` 的 gate 由 `embeddedContext` 改为 `null`（上游把它列为 baseline，不是 opt-in）；补齐 Sync/Node Link 的 `elicitation.respond` 动作集到 ACP 的 `accept`/`decline`/`cancel`（此前缺 `decline`，会让 Access 节点上的上游客户端无法表达"拒绝"）。  
 > 修订记录（2026-10-17）：`tool_content.diff` 的第一阶段交付由「行级差异统计 + 相对化展示路径」扩为「统计 + 相对化路径 + **有界**结构化逐行差异」——逐行差异在客户端协商 `core.file-diff.v1` 时随 `file.changed` 视图出现，受固定的行数与字节上限约束，超限时只带统计并显式标记差异行未下发（见 §5 第 4 条）；该行的 `delivery` 仍为 `mvp`、`layers.pwa` 仍为 `view_only`（机器矩阵相应条目只更新其 `revision` 元信息，其余字段不变）。  
@@ -189,7 +190,11 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 
 `update.session_info_update` 的 `delivery = mvp`，它交付的是**Agent 侧**会话标题的投影：该判别子仍投影成 `session.info.changed`，更新方向为 Agent → 会话的 Agent 标题列，`sync = event` 只承载这条 Agent 通知。用户自定义标题**不是** ACP 能力：ACP Remote 新增的 `session.title.set` 是 **Broker 元数据命令**（feature `core.session-title.v1`），不映射任何 ACP 方法、不宣告任何 Agent capability、不依赖 Agent 提供重命名、也不改写 ACP 原文（`acp.rawJson` 逐字节保真，`session.info.changed` 的 Agent 投影保持原意）。有效标题由 Owner 投影成一处的 `SessionSummary.title`（自定义优先 → Agent 标题 → 未命名），见 `SYNC_PROTOCOL.md` §10.3 与 §11.5。
 
-`session/list`、`session/delete`、`session/close`、完整 config option 与文件服务可以排在后续阶段（`delivery=post_mvp`，按 §3.4 必须 `facade=not_advertised` 且不得通过 `sync`/`pwa` 宣告），但必须由矩阵驱动明确拒绝，不能被成功响应、空响应或普通文本替代。
+`session/list`、`session/delete`、完整 config option 与文件服务可以排在后续阶段（`delivery=post_mvp`，按 §3.4 必须 `facade=not_advertised` 且不得通过 `sync`/`pwa` 宣告），但必须由矩阵驱动明确拒绝，不能被成功响应、空响应或普通文本替代。
+
+`session/close` **不再属于**上述 `post_mvp` 集合：`method.session_close` 与 `cap.agent.session_close` 的 `delivery` 为 `conditional_mvp`，启用条件是 Agent 经 `initialize` 宣告 `agentCapabilities.sessionCapabilities.close`，`broker` 层为 `project_and_preserve`（core 记录释放事实、保留 ACP 原文），`sync`/`pwa` 仍为 `explicit_unsupported`、`facade` 仍为 `not_advertised`——Sync/PWA 没有「关闭会话」的用户入口，关闭是本机资源回收的内部动作。未宣告能力时 Owner MUST NOT 发送 `session/close`，必须显式报告不支持并**保留**运行资源与容量名额；宣告后仍必须以 Agent 侧真实释放为成功的判据（本地端点置关闭不算成功）。该路径的实测能力与释放证据由变更 `session-activation-lifecycle` 的 WP0 探针提供，探针不支持时按该变更 design D1 阻断后续实现，不得把降级写成已支持。
+
+`session/resume` 的自动激活入口在 Sync 面表现为**业务命令** `session.resume`（feature `core.local-session-lifecycle.v1`，见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5/§11.8），而不是把 ACP 方法直接暴露给 Sync 层：矩阵 `method.session_resume` 的 `layers.sync`/`layers.pwa` 仍为 `explicit_unsupported`（Sync 不接受 ACP 方法名与 ACP 参数），`facade` 仍为 `not_advertised`。ACP 请求本身只由 Owner/Daemon 侧的 `agent-host` 在能力宣告后发出。
 
 agent→client 的 `terminal/*` 服务方法**不在**上述 `post_mvp` 集合：五个方法与 `cap.client.terminal` 在本矩阵中为 `delivery = mvp`（`broker=local_service`、`sync=event`、`pwa=view_only`、`facade=advertise_if_end_to_end`），由 `agent-host` 的终端服务所有者实现真实 create/output/wait_for_exit/kill/release，并只在与完整服务接线后才宣告。PWA 只展示命令、输出与退出结果，不提供用户手动输入的交互终端。
 

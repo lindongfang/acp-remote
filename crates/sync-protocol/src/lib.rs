@@ -1,6 +1,6 @@
 //! ACP Remote 客户端同步线的 wire 合同（`docs/SYNC_PROTOCOL.md`）。
 //!
-//! v1 的 27 个消息类型、34 个事件视图定义与配对 HTTPS 载荷全部落地：§6.3 的 transcript domain/tag 表
+//! v1 的 29 个消息类型、35 个事件视图定义与配对 HTTPS 载荷全部落地：§6.3 的 transcript domain/tag 表
 //! （`domains`）、v1 信封与消息类型分派（`envelope`）、六个家族的 body——`auth`、`sync`（含 9 个
 //! `sync.remote_*` 来源流消息，见 §9.7）、`control`、`error`、`event`、`command`——`event.payload.view`
 //! 的类型化投影（`views`），以及设备短二维码的 `q2` 载荷与地址编解码（`device_qr`）、

@@ -78,8 +78,8 @@ describe("D8 明细现取与复合游标翻页", () => {
     // 反例：首屏就带游标，这里会出现 before，断言变红。
     // include 里多了两样：配置项（模型/模式的可选项）与待处理交互（读回的待处理项要能呈现为
     // 不可操作并说明原因）；结构化历史只在协商到 feature 时才带，本用例的仓库没协商。
-    expect(body.payload).toEqual({ include: ["messages", "config_options"] });
-    expect(Object.keys(body.payload).sort()).toEqual(["include"]);
+    expect(body.payload).toEqual({ include: ["messages", "config_options"], limit: 10 });
+    expect(Object.keys(body.payload).sort()).toEqual(["include", "limit"]);
   });
 
   it("向上翻页带的是上一页最早一条的 (createdAt, messageId) 复合游标", () => {
@@ -90,12 +90,14 @@ describe("D8 明细现取与复合游标翻页", () => {
 
     store.loadEarlier(SESSION_ID);
 
+    store.loadEarlier(SESSION_ID); // 连续滚动事件不能重复派发同一页。
     expect(gateway.dispatches).toHaveLength(2);
     const body = lastReadCommand(gateway.dispatches).body;
     if (body.command !== "session.read") throw new Error("命令不是 session.read");
     // 反例：用最新一条（m-3）当游标，这里会变成 00:00:03，断言变红。
     expect(body.payload).toEqual({
       include: ["messages"],
+      limit: 10,
       before: { createdAt: "2026-10-01T00:00:02.000Z", messageId: "m-2" },
     });
     // 复合游标两键都必须在（单字段游标按协议拒绝）。
@@ -116,6 +118,8 @@ describe("D8 明细现取与复合游标翻页", () => {
     expect(model?.messages.map((item) => item.id)).toEqual(["m-1", "m-2", "m-3"]);
     expect(model?.paging.hasEarlier).toBe(false);
     expect(model?.paging.nextBefore).toBeNull();
+    store.loadEarlier(SESSION_ID);
+    expect(gateway.dispatches).toHaveLength(2);
   });
 
   it("相邻两页重叠（同一 messageId 出现两次）时抛错而不是静默拼接", () => {

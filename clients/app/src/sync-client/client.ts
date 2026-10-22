@@ -402,6 +402,16 @@ export class SyncClient {
     return record;
   }
 
+  /**
+   * 在当前连接上声明查看选择（`session.view`，§11.8）。
+   *
+   * 返回 `false` 表示没有已认证连接或该帧未发出；调用方据此保留声明状态为「未生效」，
+   * 而不是假装已被服务端接受。`viewVersion` 的单调性由 feature 层维护。
+   */
+  setSessionView(input: { readonly sessionId: Uuid | null; readonly viewVersion: number }): boolean {
+    return this.#connection?.sendSessionView(input) ?? false;
+  }
+
   /** 某条命令的派发登记。 */
   dispatchRecord(requestId: Uuid): DispatchRecord | null {
     return this.#dispatch.get(requestId) ?? null;

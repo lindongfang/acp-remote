@@ -106,6 +106,14 @@ export interface SessionRowModel {
   readonly title: string;
   readonly agentName: string;
   readonly state: SessionSummaryView["state"];
+  /**
+   * 主状态（协商后的本机活跃程度或任务三态）；组件按它取状态词与圆点。
+   *
+   * `state` 仍是任务事实，二者不互相替换。
+   */
+  readonly activity: SessionSummaryView["activity"];
+  /** 本机活跃程度；`null` 时主状态就是任务三态。 */
+  readonly localActivity: SessionSummaryView["localActivity"];
   readonly directoryId: string | null;
   readonly updatedAt: string;
   /** 相对文案（刚刚 / N 分钟前 / 年月日），时钟经输入注入。 */
@@ -366,8 +374,10 @@ export function filterSessionsForDirectory(input: {
   const needle = input.query.trim().toLowerCase();
   const nameMatches = needle.length === 0 || input.displayName.toLowerCase().includes(needle);
   return input.rows.filter((row) => {
-    if (input.filter === "running" && row.state !== "running") return false;
-    if (input.filter === "pending" && row.state !== "pending") return false;
+    // 筛选与行上的主状态同源：协商后按本机活跃程度，旧合同/imported 仍按任务三态。
+    const activity = row.activity.value;
+    if (input.filter === "running" && activity !== "running" && activity !== "active") return false;
+    if (input.filter === "pending" && activity !== "pending") return false;
     if (nameMatches) return true;
     return row.title.toLowerCase().includes(needle);
   });
@@ -412,10 +422,16 @@ export function buildDirectoryPageModel(input: {
   readonly filter?: DirectoryFilter;
   /** 页码输入框里的原文（提交时已纠正）；缺省第一页。 */
   readonly pageInput?: string;
+  /** 连接是否协商了 `core.local-session-lifecycle.v1`（决定主状态词表与计数口径）。 */
+  readonly localLifecycleNegotiated?: boolean;
 }): DirectoryPageModel {
   if (input.resources === null) return { kind: "loading" };
 
-  const list: DirectoryListState = buildDirectoryViews(input.resources.workspaces, input.resources.sessions);
+  const list: DirectoryListState = buildDirectoryViews(input.resources.workspaces, input.resources.sessions, {
+    ...(input.localLifecycleNegotiated === undefined
+      ? {}
+      : { localLifecycleNegotiated: input.localLifecycleNegotiated }),
+  });
   // 同名判定与展示名都按**整份快照**算（不是按筛选后的子集）：它们都是数据的性质，
   // 不因为用户敲了一个查询词就变——否则消歧段会时有时无。
   const names = directoryNamesOf(input.resources.workspaces);
@@ -469,6 +485,8 @@ function toSessionRow(summary: SessionSummaryView, nowMs: number): SessionRowMod
     title: summary.title.kind === "titled" ? summary.title.text : UNTITLED_SESSION_LABEL,
     agentName: summary.agentName,
     state: summary.state,
+    activity: summary.activity,
+    localActivity: summary.localActivity,
     directoryId: summary.directoryId,
     updatedAt: summary.updatedAt,
     updatedAtLabel: formatRelativeTime(summary.updatedAt, nowMs),
@@ -491,6 +509,8 @@ export function buildSessionRowsByDirectoryId(input: {
   readonly resources: StagedResources | null;
   readonly ownerLabelOf: (ownerNodeId: string) => string;
   readonly nowMs: number;
+  /** 连接是否协商了本机生命周期（决定主状态词表）。 */
+  readonly localLifecycleNegotiated?: boolean;
 }): ReadonlyMap<string, readonly SessionRowModel[]> {
   const byDirectoryId = new Map<string, SessionRowModel[]>();
   if (input.resources === null) return byDirectoryId;
@@ -501,7 +521,14 @@ export function buildSessionRowsByDirectoryId(input: {
     if (directoryId === undefined || !registered.has(directoryId)) continue;
     const origin = summary.origin;
     const ownerLabel = origin.kind === "remote" ? input.ownerLabelOf(origin.ownerNodeId) : "";
-    const row = toSessionRow(buildSessionSummaryView(summary, ownerLabel), input.nowMs);
+    const row = toSessionRow(
+      buildSessionSummaryView(summary, ownerLabel, {
+        ...(input.localLifecycleNegotiated === undefined
+          ? {}
+          : { localLifecycleNegotiated: input.localLifecycleNegotiated }),
+      }),
+      input.nowMs,
+    );
     const bucket = byDirectoryId.get(directoryId);
     if (bucket === undefined) byDirectoryId.set(directoryId, [row]);
     else bucket.push(row);
@@ -564,10 +591,16 @@ export function buildDirectoryDetailModel(input: {
   readonly ownerLabelOf: (ownerNodeId: string) => string;
   readonly nowMs: number;
   readonly pageInput?: string;
+  /** 连接是否协商了 `core.local-session-lifecycle.v1`（决定主状态词表与计数口径）。 */
+  readonly localLifecycleNegotiated?: boolean;
 }): DirectoryDetailModel {
   if (input.resources === null) return { kind: "loading" };
 
-  const list = buildDirectoryViews(input.resources.workspaces, input.resources.sessions);
+  const list = buildDirectoryViews(input.resources.workspaces, input.resources.sessions, {
+    ...(input.localLifecycleNegotiated === undefined
+      ? {}
+      : { localLifecycleNegotiated: input.localLifecycleNegotiated }),
+  });
   // 最近活动时间与列表页同一份口径：该目录下会话 `updatedAt` 的最大值，没有会话即 `null`
   // （「目录存在但没有任何会话」这一支也算出 `null`，与空态下列出的零汇总项一致）。
   const latestActivityAt = latestActivityByDirectoryId(input.resources.sessions).get(input.directoryId) ?? null;
@@ -589,6 +622,9 @@ export function buildDirectoryDetailModel(input: {
       resources: input.resources,
       ownerLabelOf: input.ownerLabelOf,
       nowMs: input.nowMs,
+      ...(input.localLifecycleNegotiated === undefined
+        ? {}
+        : { localLifecycleNegotiated: input.localLifecycleNegotiated }),
     }).get(input.directoryId) ?? [];
   const total = rows.length;
 

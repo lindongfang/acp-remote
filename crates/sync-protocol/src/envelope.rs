@@ -47,6 +47,10 @@ pub enum MessageType {
     Event,
     Command,
     CommandResult,
+    /// `session.view`（`core.local-session-lifecycle.v1`，§11.8）：连接期查看声明。
+    SessionView,
+    /// `session.view.result`：服务端对同一个 `viewVersion` 的应答。
+    SessionViewResult,
 }
 
 /// 消息类型在认证前后的归属，决定信封是否必须携带连接字段。
@@ -62,7 +66,7 @@ pub enum AuthState {
 
 impl MessageType {
     /// 与 schema 的 `type` 常量逐条相等的完整集合，顺序即 `docs/SYNC_PROTOCOL.md` §4 的家族顺序。
-    pub const ALL: [MessageType; 27] = [
+    pub const ALL: [MessageType; 29] = [
         MessageType::AuthClientHello,
         MessageType::AuthServerChallenge,
         MessageType::AuthClientProof,
@@ -90,6 +94,8 @@ impl MessageType {
         MessageType::Event,
         MessageType::Command,
         MessageType::CommandResult,
+        MessageType::SessionView,
+        MessageType::SessionViewResult,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -121,6 +127,8 @@ impl MessageType {
             MessageType::Event => "event",
             MessageType::Command => "command",
             MessageType::CommandResult => "command.result",
+            MessageType::SessionView => "session.view",
+            MessageType::SessionViewResult => "session.view.result",
         }
     }
 

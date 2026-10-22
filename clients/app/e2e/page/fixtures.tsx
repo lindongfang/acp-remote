@@ -99,6 +99,8 @@ export function sessionSummary(input: {
    * `structuredHistoryAvailability` 与 `conversationCapabilities`）。
    */
   readonly origin?: SessionSummary["origin"];
+  /** 可选的本机活跃程度（只在协商 `core.local-session-lifecycle.v1` 的用例里给出）。 */
+  readonly localActivity?: SessionSummary["localActivity"];
 }): SessionSummary {
   const at = input.updatedAt ?? "2026-10-01T00:00:00.000Z";
   return {
@@ -106,6 +108,7 @@ export function sessionSummary(input: {
     title: input.title ?? `会话 ${input.id.slice(-2)}`,
     agent: { agentId: "codex-a", name: "codex" },
     state: input.state,
+    ...(input.localActivity === undefined ? {} : { localActivity: input.localActivity }),
     origin: input.origin ?? { kind: "local" },
     currentMode: null,
     version: "1",

@@ -49,6 +49,16 @@ use crate::ports::{
     WorkspaceMkdirAdmission, WorkspaceMkdirExecution, WriteContext,
 };
 
+/// §4 的 `LocalSessionLifecycle` 用例面（`docs/CORE_PORTS_AND_STORAGE.md` §5.10）。
+///
+/// 实现与 §5.10 的五个端口同名同签名；组合根持有本类型并在启动收敛后接线（`server::sync` 只经它读
+/// 归约与驱动激活，`app` 只消费候选与释放结果）。
+pub use crate::broker::{ResumeAdmission, ResumeExecution};
+pub use crate::lifecycle::{
+    ActivationPlan, LOCAL_ACTIVITY_EVENT, LifecycleConfig, LifecycleFailure, LocalSessionLifecycle,
+    LocalSessionView, VIEW_LEASE_MS,
+};
+
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModeListing {
@@ -710,8 +720,40 @@ impl UseCases {
         request_fingerprint: Digest,
         session: SessionId,
     ) -> Result<SessionId, PortError> {
+        Ok(self
+            .resume_session_with_execution(actor, request_id, request_fingerprint, session)
+            .await?
+            .session)
+    }
+
+    /// 同 [`UseCases::resume_session`]，并报告本次是否真的执行了后端恢复。
+    ///
+    /// Sync 的激活路径必须用它：命中既有 `accepted` 行时 `established` 为 `false`，调用方据此
+    /// **不得** settle `Ready` 或写 `completed`（那会把一条旧受理伪造成本次建立成功）。
+    pub async fn resume_session_with_execution(
+        &self,
+        actor: &Actor,
+        request_id: RequestId,
+        request_fingerprint: Digest,
+        session: SessionId,
+    ) -> Result<ResumeExecution, PortError> {
         self.broker
-            .resume_session(actor, &request_id, &request_fingerprint, &session)
+            .resume_session_with_execution(actor, &request_id, &request_fingerprint, &session)
+            .await
+    }
+
+    /// `session.resume` 的**受理-only**入口（Sync 本机生命周期路径）：只持久化 `accepted` 幂等行，
+    /// 不触碰 Agent。ready 复用与并发合并必须先拿到合法受理记录又不得启动后端，因此走这条路径；
+    /// 建立路径仍用 [`UseCases::resume_session`]。
+    pub async fn admit_session_resume(
+        &self,
+        actor: &Actor,
+        request_id: RequestId,
+        request_fingerprint: Digest,
+        session: SessionId,
+    ) -> Result<ResumeAdmission, PortError> {
+        self.broker
+            .admit_session_resume(actor, &request_id, &request_fingerprint, &session)
             .await
     }
 
@@ -5920,6 +5962,143 @@ mod tests {
             fixture.world.command(&request).expect("终态行").status(),
             CommandStatus::Completed
         );
+    }
+
+    /// §5.1：同键重放**不得**被报告成本次建立成功。`resume_session_with_execution` 的第二次调用必须
+    /// 返回 `established = false`、不再调用后端，并给出首次落盘的 `acceptedAt`。
+    #[test]
+    fn resume_session_replay_does_not_execute_the_backend_again() {
+        let (fixture, _workspace, _) = resume_fixture("resume-replay-execution");
+        let actor = Actor::LocalCli;
+        let request = resume_request_id(9);
+        let fingerprint = digest('R');
+
+        let first = block_on(fixture.use_cases.resume_session_with_execution(
+            &actor,
+            request.clone(),
+            fingerprint.clone(),
+            fixture.session.clone(),
+        ))
+        .expect("首次恢复");
+        assert!(first.established, "首次调用必须真的执行后端");
+        assert_eq!(fixture.world.resume_requests.lock().expect("lock").len(), 1);
+        let first_accepted_at = first.accepted_at.clone().expect("首次受理时间");
+
+        let replay = block_on(fixture.use_cases.resume_session_with_execution(
+            &actor,
+            request.clone(),
+            fingerprint,
+            fixture.session.clone(),
+        ))
+        .expect("同键重放");
+        assert!(
+            !replay.established,
+            "幂等重放没有执行后端，不得被当作本次建立成功"
+        );
+        assert_eq!(
+            fixture.world.resume_requests.lock().expect("lock").len(),
+            1,
+            "重放不得再次调用后端恢复"
+        );
+        assert_eq!(
+            replay.accepted_at,
+            Some(first_accepted_at),
+            "重放的 acceptedAt 必须是首次落盘时间"
+        );
+    }
+
+    /// §6 第 20 条：容量已满时，**已完成或窗口期**的同键 `session.create` 重发必须回首次结果
+    /// （`Settled`/`InFlight`），不能被一次新的 `SessionId` 预占撞成 `session.capacity_exceeded`。
+    #[test]
+    fn create_replay_is_settled_before_capacity_is_checked() {
+        struct AlwaysReleased;
+        #[async_trait::async_trait]
+        impl crate::ports::SessionRelease for AlwaysReleased {
+            async fn release_session(
+                &self,
+                _session: SessionId,
+                _generation: crate::model::ResourceGeneration,
+                _now: crate::model::Timestamp,
+            ) -> Result<crate::ports::ReleaseOutcome, PortError> {
+                Ok(crate::ports::ReleaseOutcome::Released)
+            }
+        }
+
+        let fixture = make_fixture();
+        let actor = Actor::LocalCli;
+        let lifecycle = Arc::new(crate::lifecycle::LocalSessionLifecycle::new(
+            TestClock::new(),
+            Arc::new(FakeStore {
+                world: fixture.world.clone(),
+            }),
+            Arc::new(TestPublisher {
+                world: fixture.world.clone(),
+            }),
+            crate::lifecycle::LifecycleConfig::new(0, 1).expect("容量 1"),
+        ));
+        block_on(lifecycle.converge_on_startup()).expect("启动收敛");
+        assert!(lifecycle.set_session_release(Arc::new(AlwaysReleased)));
+        assert!(
+            fixture.use_cases.broker.set_lifecycle(lifecycle),
+            "生命周期只接线一次"
+        );
+
+        let request = create_session_request_id();
+        let fingerprint = digest('A');
+        let prepared = match block_on(fixture.use_cases.create_session(
+            &actor,
+            request.clone(),
+            fingerprint.clone(),
+            create_request(),
+            None,
+        ))
+        .expect("首次创建")
+        {
+            SessionCreateAdmission::Prepared(prepared) => prepared,
+            other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+        };
+
+        // 窗口期（容量已被本次预占）：同键重发是 InFlight，不是容量错误。
+        assert_eq!(
+            block_on(fixture.use_cases.create_session(
+                &actor,
+                request.clone(),
+                fingerprint.clone(),
+                create_request(),
+                None,
+            ))
+            .expect("窗口期重发"),
+            SessionCreateAdmission::InFlight
+        );
+
+        let result = crate::model::CommandResult::from_json_text(r#"{"sessionId":"first"}"#)
+            .expect("result object");
+        assert!(
+            block_on(fixture.use_cases.settle_session_create(
+                &actor,
+                &request,
+                CommandStatus::Completed,
+                Some(result),
+                None,
+            ))
+            .expect("settle")
+        );
+        // 落账后资源为 ready，唯一名额已占满：同键重发仍是首次终态。
+        match block_on(fixture.use_cases.create_session(
+            &actor,
+            request,
+            fingerprint,
+            create_request(),
+            None,
+        ))
+        .expect("已完成重发")
+        {
+            SessionCreateAdmission::Settled(record) => {
+                assert_eq!(record.status(), CommandStatus::Completed);
+                assert_eq!(record.session(), Some(&prepared.session));
+            }
+            other => panic!("满额时的同键重发必须回首次终态，得到 {other:?}"),
+        }
     }
 
     /// §6 第 6/20 条：`session.create` 的幂等键是 `(actor, requestId)`，**落盘**在

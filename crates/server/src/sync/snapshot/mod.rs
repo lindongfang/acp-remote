@@ -22,6 +22,8 @@
 //! ——已登记目录的规范化路径只在协商了该 feature 的连接上出现（`SECURITY_DESIGN.md` §12.3 的现行口径：
 //! 客户端自己提交的目录不被回显，本机路径的可见面只有快照的这一个键与 §11.5 的目录浏览结果）。
 
+use std::sync::Arc;
+
 use acp_core::model::{
     Actor, GlobalCursor, PortError, RemoteSessionRef, ResourceOrigin,
     SessionState as CoreSessionState, SessionSummary as CoreSessionSummary,
@@ -30,16 +32,18 @@ use acp_core::model::{
 use acp_core::use_cases::{SyncSessionQuery, UseCases};
 use sha2::{Digest as _, Sha256};
 use sync_protocol::common::{
-    AgentCatalogEntry, Base64Url, BoundedU64, Cursor, DecimalString, ModeRef as WireModeRef,
-    NonEmptyText, Nullable, OriginBlock, ProtocolVersionV1, SessionAgentRef,
-    SessionState as WireSessionState, SessionSummary as WireSessionSummary, Text, Timestamp, Uuid,
-    WorkspaceCatalogEntry as WireWorkspaceCatalogEntry, WorkspaceRef as WireWorkspaceRef,
+    AgentCatalogEntry, Base64Url, BoundedU64, Cursor, DecimalString, LocalActivity,
+    ModeRef as WireModeRef, NonEmptyText, Nullable, OriginBlock, ProtocolVersionV1,
+    SessionAgentRef, SessionState as WireSessionState, SessionSummary as WireSessionSummary, Text,
+    Timestamp, Uuid, WorkspaceCatalogEntry as WireWorkspaceCatalogEntry,
+    WorkspaceRef as WireWorkspaceRef,
 };
 use sync_protocol::envelope::MessageType;
 use sync_protocol::sync::{SnapshotBegin, SnapshotChunk, SnapshotEnd, SnapshotItems};
 use tracing::debug;
 
 use crate::sync::conn::{ConnectionHandle, SendFault};
+use crate::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE;
 use crate::sync::subscribe::NegotiatedFeatures;
 
 /// 组装一次快照所需的调用方判定（本模块不自己决定这三件事）。
@@ -52,6 +56,9 @@ pub struct SnapshotInputs<'a> {
     /// Owner 可达性（`origin.online` 的唯一来源）：运行时事实由调用方按自己的连接事实给出，core 不缓存
     /// 它（`MODULE_ARCHITECTURE.md` §4.1）。
     pub reachable: &'a (dyn Fn(&RemoteSessionRef) -> bool + Send + Sync),
+    /// 本机生命周期（`core.local-session-lifecycle.v1`）：只有组合根接线后才给出；未接线时
+    /// `localActivity` 键缺席（不是 `null`）。
+    pub lifecycle: Option<&'a Arc<acp_core::use_cases::LocalSessionLifecycle>>,
 }
 
 /// 一次快照的资源计划（`begin`/`end` 的 `chunkCount` 与实发 chunk 一一对应）。
@@ -132,9 +139,20 @@ pub async fn plan(
         .sync_visible_sessions(inputs.actor, query, inputs.reachable)
         .await?;
     let catalog_visible = inputs.features.contains(LOCAL_CATALOG_FEATURE);
+    let activities = match inputs.lifecycle {
+        Some(lifecycle) if inputs.features.contains(LOCAL_LIFECYCLE_FEATURE) => {
+            crate::sync::local_lifecycle::activity_map(lifecycle, inputs.actor, true).await?
+        }
+        _ => std::collections::HashMap::new(),
+    };
     let sessions = summaries
         .iter()
-        .map(|summary| wire_session(summary, catalog_visible))
+        .map(|summary| {
+            let activity = matches!(summary.origin(), ResourceOrigin::Local)
+                .then(|| activities.get(summary.session_id()).copied())
+                .flatten();
+            wire_session(summary, catalog_visible, activity)
+        })
         .collect::<Option<Vec<_>>>()
         .ok_or(PortError::Corrupt("session summary"))?;
     let mut chunks = vec![chunk(
@@ -296,7 +314,11 @@ fn paused(handle: &ConnectionHandle, chunks_sent: u64, fault: SendFault) -> Snap
 /// （schema 是 `additionalProperties: false`，发 `null` 会让未协商的客户端拒绝整条摘要）；协商时键在场，
 /// `null` = 未分组、`WorkspaceRef` = 归属该目录。imported 会话由 core 投影为"未分组"
 /// （`workspace() == None`），因此本层不会用本机目录集合替它猜归属（§9.6）。
-fn wire_session(summary: &CoreSessionSummary, catalog: bool) -> Option<WireSessionSummary> {
+fn wire_session(
+    summary: &CoreSessionSummary,
+    catalog: bool,
+    local_activity: Option<LocalActivity>,
+) -> Option<WireSessionSummary> {
     let agent = summary.agent();
     let workspace = if catalog {
         Some(match summary.workspace() {
@@ -319,6 +341,7 @@ fn wire_session(summary: &CoreSessionSummary, catalog: bool) -> Option<WireSessi
             name: NonEmptyText::<128>::parse(agent.name()).ok()?,
         },
         state: wire_state(summary.state()),
+        local_activity,
         origin: match summary.origin() {
             ResourceOrigin::Local => OriginBlock::Local,
             ResourceOrigin::Remote {

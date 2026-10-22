@@ -1609,6 +1609,93 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "valid/command-session-resume.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-resume-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-resume-capacity-exceeded.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-resume-unsupported.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-resume-feature-unsupported.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-resume-uncertain.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/error-session-view-auth-required.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/error-session-view-type-unsupported.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/session-summary-local-activity.json",
+      "schema": "../../../schemas/sync/v1/common.schema.json",
+      "schemaPointer": "#/$defs/sessionSummary",
+      "valid": true
+    },
+    {
+      "fixture": "valid/event-session-activity-changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true,
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.activity.changed"
+    },
+    {
+      "fixture": "valid/sync-session-view.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-session-view-result-accepted.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-session-view-result-stale.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/sync-session-view-missing-version.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/session-summary-local-activity-unknown.json",
+      "schema": "../../../schemas/sync/v1/common.schema.json",
+      "schemaPointer": "#/$defs/sessionSummary",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/command-session-resume-unknown-payload-key.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
     }
   ],
   "deviceQrVectors": [

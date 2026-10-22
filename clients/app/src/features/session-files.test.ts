@@ -979,7 +979,7 @@ describe("文件栏：普通历史分页不受影响", () => {
     store.loadSession(ONLINE_SESSION_ID);
     const first = lastCommand(gateway);
     expect(first.body.command).toBe("session.read");
-    expect(first.body.payload).toEqual({ include: ["messages", "config_options", "history"] });
+    expect(first.body.payload).toEqual({ include: ["messages", "config_options", "history"], limit: 10 });
     store.apply({
       kind: "command_result",
       result: readResult({

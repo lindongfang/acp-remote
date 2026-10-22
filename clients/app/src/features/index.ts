@@ -66,8 +66,28 @@ export type {
   ConversationThreadState,
   CreateOutcome,
   ReconnectProgress,
+  SessionLifecycleState,
 } from "./client-store";
-export { ClientStore, initialClientState } from "./client-store";
+export { ClientStore, initialClientState, initialSessionLifecycleState } from "./client-store";
+export type {
+  ActivationFailure,
+  ActivationFailureKind,
+  ActivationPhase,
+  SessionActivationState,
+  SessionActivationView,
+  SessionPageEvent,
+  SessionViewDeclaration,
+} from "./session-lifecycle";
+export {
+  ACTIVATION_INACTIVE_NOTICE,
+  ACTIVATION_PROGRESS_NOTICE,
+  ACTIVATION_UNAVAILABLE_NOTICE,
+  SESSION_LIFECYCLE_FEATURE,
+  SESSION_VIEW_RENEW_INTERVAL_MS,
+  activationViewOf,
+  classifyActivationFailure,
+  nextViewVersion,
+} from "./session-lifecycle";
 export { ClientStoreProvider, useClientState, useClientStore } from "./runtime";
 
 // ── 连接问题（顶栏只分在线/离线，阻断原因由弹层承担）────────────────────────

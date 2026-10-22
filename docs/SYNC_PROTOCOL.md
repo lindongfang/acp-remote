@@ -1,8 +1,9 @@
 # ACP Remote Sync Protocol
 
-> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 27 个消息类型——信封与消息类型分派，`auth`/`sync`（含 9 个 `sync.remote_*` 来源流消息）/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（设备短二维码 `q2` 编解码、claim、status、lookup、qr-lookup、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的既有配对 HTTP（§7.6 `qr-lookup` 待 WP2–WP4）、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。
+> 状态：wire 基线（Draft）已冻结；本合同声明 v1 的 **29 个消息类型**——信封与消息类型分派，`auth`/`sync`（含 9 个 `sync.remote_*` 来源流消息）/`control`/`error`/`event`/`command` 六个家族的 body，外加本变更新增的两个查看控制帧 `session.view`/`session.view.result`——与 **35 个事件视图定义**（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（设备短二维码 `q2` 编解码、claim、status、lookup、qr-lookup、HTTP 错误体）。**实现现状（WP4 已镜像）**：`sync-protocol` 已实现 29 个消息类型、35 个视图与 51 个错误码（含 `session.capacity_exceeded`），查看控制帧与 `session.activity.changed` 的 Rust 镜像与合同逐项相等。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的既有配对 HTTP（§7.6 `qr-lookup` 待 WP2–WP4）、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。
 > 协议版本：1  
-> 修订记录（2026-10-21，custom-session-title（合同与实现））：§5.2 登记 feature `core.session-title.v1` 并宣告（Owner 持久化、Access 转发、客户端编辑已接线）；§9.4 的快照 `sessions[].title`、§10.3 的 `session.info.changed` 行与标题来源说明改为「Agent 标题 + 自定义标题 → 有效标题」投影；§11.5 新增 mutation `session.title.set`（closed payload `{ title }`，输入按 wire 原文 1..=512 个 Unicode 标量值、保存 trim 后的文本、trim 后为空拒绝、超长不截断），命令集合更新为 20 条（Sync 枚举 19 条、Node Link 枚举 14 条）。**取代**旧条款「标题只来自 Agent 的 `session_info_update`、命令目录不存在客户端重命名命令」；Owner 的 `custom_title` 持久化与命令接线已落地。  
+> 修订记录（2026-10-22，`session-activation-lifecycle`（合同与实现））：在 §5.2 登记 `core.local-session-lifecycle.v1`（本轮不宣告）；§9.8 新增 owned 摘要可选键 `localActivity` 与持久事件 `session.activity.changed`，并规定事件只在取值实际变化时写（ready 复用仍为 `active` 不写、`idle → active` 必写、查看者增减不触发）；§11.5 让 `session.resume` 取得 Sync 面（closed payload `{}`、`completed { sessionId, session }`、feature 门控、失败分类，**服务端接线待 WP4**）；§11.8 新增查看控制帧族 `session.view`/`session.view.result`（同版本同载荷幂等、同版本不同选择与低于版本的离页都回 `stale` 且不改动查看者、`sessionId` 允许 `null` 并逐字回显、120 帧/分钟只统计客户端 → 服务端的 `session.view`、持续超限与业务命令同规则）与四项固定预算；§14 补对应上限与错误映射。合同因此声明 **29 个消息类型 / 35 个事件视图**；`sync-protocol` 的 `MessageType`/`VIEW_TYPES`/`ErrorCode` 镜像与全部服务端/适配接线**待 WP4**——在这些镜像落地前 crate 级漂移门禁会让 `cargo test --workspace` 因合同先行而红，不得据此判为回归，也不得据此宣称已实现。  
+> 修订记录（2026-10-21，custom-session-title（合同与实现））：§5.2 登记 feature `core.session-title.v1` 并宣告（Owner 持久化、Access 转发、客户端编辑已接线）；§9.4 的快照 `sessions[].title`、§10.3 的 `session.info.changed` 行与标题来源说明改为「Agent 标题 + 自定义标题 → 有效标题」投影；§11.5 新增 mutation `session.title.set`（closed payload `{ title }`，输入按 wire 原文 1..=512 个 Unicode 标量值、保存 trim 后的文本、trim 后为空拒绝、超长不截断），命令集合更新为 20 条（该修订时 Sync 枚举 19 条、Node Link 枚举 14 条；`session.resume` 于 2026-10-22 进入 Sync 面后 Sync 枚举为 20 条）。**取代**旧条款「标题只来自 Agent 的 `session_info_update`、命令目录不存在客户端重命名命令」；Owner 的 `custom_title` 持久化与命令接线已落地。  
 > 修订记录（2026-10-18，`device-pairing-qr-reference`）：**设备二维码完全替换**为 `https://<canonical-origin>/pair#q2=<payload>`——payload 是 `base64url-no-pad(0x02 || 32 字节扫码取回凭据 || 32 字节主机公钥指纹)`，共 65 字节 / 87 个 ASCII 字符；旧设备 `#data=` 完整资料格式**退出且不降级**，节点二维码与 `/node-link/pair` 不变。新增 §7.6 `POST /sync/v1/pairing/qr-lookup`（请求 `{protocolVersion:1, qrToken}`，成功返回与配对码 lookup 同形的七字段，统一 `401 pairing.qr_invalid`，独立 10 次/分钟限流，16 KiB 上限）。PWA 只保留配对码入口：打开 `q2=` 或旧 `data=` 片段只在清除片段后显示固定指引/不支持文案，不发任何配对请求（行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md)）。本轮先交付协议类型、机器合同、共享固定向量与本文；服务端取回路由、身份内存材料与 PWA/原生消费方为**计划/待实现**（WP2–WP4），原生 App 真机扫码仍是后续交付。机器资产同步：`pairing.schema.json` 增加 qr-lookup 请求/成功/失败形状、`pairing.qr_invalid` 登记到唯一错误词表、删除旧 `qrPayload`，新增 `fixtures/sync/v1/device-qr/vectors.json`（Rust/TypeScript 共享）。
 > 修订记录（2026-10-18，`pairing-code-web-entry`）：配对新增第二个入口——`POST /sync/v1/pairing/lookup` 用 8 位 Crockford 配对码一次性换回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`，之后与二维码入口共用同一套状态机、claim/status 与 transcript。§7.1 写清两个入口的关系；新增 §7.5 的 lookup wire 行为（成功即消耗、统一 `401 pairing.code_invalid`、与 claim 各自 10 次/分钟、同一组安全响应头与 `no-store`）；§7.4 的状态表补 lookup；§12.2 增加 `pairing.code_invalid`。schema、fixture 与错误词表同步；claim/status 的 wire 与 transcript 未变。
 > 修订记录（2026-10-16，`pairing-model`）：**删除两套短验证码**——§6.1/§6.3 删去 `acp-remote/pairing-sas/v1` domain 与 `pairing SAS` 字段集合；§7.2 改为两条设备侧密码学校验（用配对载荷里固定的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节相同），不再派生或展示 SAS；§7.3 的 `approved` 响应不再返回授权集合；§17 的固定向量判据去掉 SAS 重算。**删除设备权限层**——§7.0 的确认不再分配授权；§8.4 的 `auth.authenticated` 不再携带设备 scope 集合；§9.2/§9.3/§9.4 不再按设备授权过滤事件、会话与目录资源；§11.1/§11.3/§11.4/§11.5 改为「已认证即执行前提」，并把 `session.create` 的 Sync 面载荷放开为「`directoryId` 或客户端提交的绝对目录 `workspacePath`，二者取一」（Node Link 面仍只允许别名、且请求不得携带任意 Owner 路径）；§12.1 的示例错误码换掉设备 scope 拒绝；§14 的「命令族」改为服务端自持的 v1 常量（不再取自 `commands.json` 的 `packs`）；§15 的逐命令 scope 授权改为认证状态与幂等校验。**保留**：设备认证与每连接 challenge-response、撤销传播与速率上限、配对确认必须由本机用户完成、跨节点 `grant.*`/Export `scopes`/Import grants。  
@@ -261,15 +262,17 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.remote-history.v1` | 远程历史读取（§9.6/§11.5）：imported 会话的结构化历史按会话内序号独立分页、读取前重新鉴权、正文由 Owner 回源提供；不可达或超出保留期显式不可用，Access 不持久化正文 | mvp | 否 |
 | `core.session-activity.v1` | 会话主状态三态合同（§10.2）：`sessionSummary.state` 只有 `idle`/`running`/`pending`——存在有效未解决交互时为 `pending`，否则存在未结束任务（含已接受的排队任务）时为 `running`，否则为 `idle`；create/read/list/快照/`session.updated` 视图与 Node Link 的 `sessionMeta`、catalog 会话共用同一取值集合。排队、等待原因与任务/命令结果不属于本 feature；旧七态只允许作为历史事件 `view` 的原文出现 | mvp | 是 |
 | `core.session-title.v1` | Owner 元数据命令 `session.title.set`（§11.5 的 closed payload `{ title: string }`，输入按 wire 原文 1..=512 个 Unicode 标量值、保存值为 trim 后的文本）与有效标题投影：标题由 **Owner 持久化**（自定义标题优先，否则 Agent 标题，否则未命名），`SessionSummary.title` 始终下发有效值、不新增 `customTitle` 键；Access 只转发命令、不回源持久化标题或命令状态；未协商时命令返回 `protocol.feature_required`。不是 ACP 能力，不新增 ACP 方法 | mvp | 否 |
+| `core.local-session-lifecycle.v1` | 本机会话生命周期投影与激活（§9.8/§10.2/§11.5/§11.8）：门控 Sync 面 `session.resume`、查看控制帧 `session.view`/`session.view.result`、owned 摘要的可选 `localActivity`（`idle`/`active`/`pending`）与持久事件 `session.activity.changed`；未协商时该命令回 `command.unsupported`、该字段与事件缺席、查看控制帧被拒。只在 owned 路径交付，Node Link 不登记该 feature、不转发新字段或新事件 | mvp | 否 |
 
-- 本表的二十二个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`；`conditional_mvp` 表示端到端通路接线后才宣告，未接线前客户端必须按不支持降级）。
+- 本表的二十三个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`；`conditional_mvp` 表示端到端通路接线后才宣告，未接线前客户端必须按不支持降级）。
 - **必需 feature 是双向拒绝点**：`core.session-activity.v1` 要求每次协商都选中。客户端 MUST 在 `supportedFeatures` 与 `requiredFeatures` 中声明它，服务端 MUST 在 `selectedFeatures` 中返回它；任一侧缺失时连接不得进入业务阶段——服务端对未声明该 ID 的连接返回 `protocol.feature_required`（`details.features` 列出缺失的 feature ID，排序去重），客户端对未被选中的必需项停止同步并提示版本不兼容。该 feature 未选中前 MUST NOT 发送或接收三态会话摘要、快照 chunk 与事件；MUST NOT 回退到七态，也 MUST NOT 把 `pending` 折算成某个 `waiting_*`。
-- **本版服务端宣告 21 条**：`auth.server_challenge.selectedFeatures` 只返回已完整接线的 ID（二十二条减去尚未接线的 `core.remote-history.v1`）。
+- **本版服务端宣告 21 条**：`auth.server_challenge.selectedFeatures` 只返回已完整接线的 ID（二十三条减去尚未接线的 `core.remote-history.v1` 与 `core.local-session-lifecycle.v1`）。
   - `core.remote-history.v1`：远程历史需要 Access 侧的 `node-link-client` 回源路径（尚未实现）。宣告一个当前必然失败的读取路径就是能力虚报。协商前 imported 会话的 `history` 仍回 `capability.unsupported_by_broker`，客户端必须明确显示不可用而非「没有历史」。接线后（WP5）再把它加入宣告表并补回源用例。
   - `core.session-title.v1`：命令与摘要合同（`session.title.set`、有效标题投影）已接线——Owner 的 `custom_title` 持久化、命令事务、Access 转发与客户端编辑入口均按本变更实现，服务端在 `selectedFeatures` 中宣告它。
   - `resource.stateless-origin.v1`：运行期目录/来源端口、`sync.remote_*` 路由与客户端消费已接线；宣告后旧客户端据 `selectedFeatures` 缺失按「远程来源流不支持」明确降级，不回退到任何本地落盘中转。
   - `core.session-activity.v1`：三态映射、交互归约、`session.updated` 生产与持久迁移已接线；服务端在握手支持集合与必需集合中都登记它，任一侧缺失即拒绝进入业务阶段。
   - `core.attachment-transfer.v1`：连接面、帧族与引擎已实现（§3.4）；组合根装配附件传输端口时注册 `/sync/v1/attachments` 并把该 feature 纳入握手集合，未装配时不注册端点、不宣告。
+  - `core.local-session-lifecycle.v1`：本变更（`session-activation-lifecycle`）只冻结 wire、端口与配置合同；WP2–WP5 落地前服务端 MUST NOT 宣告它。未宣告时客户端按「自动激活不可用」明确降级，不发送 `session.resume` 或查看控制帧，也不期待 `localActivity`；服务端未协商该 feature 时对 `session.resume` 返回 `command.unsupported`、对查看控制帧返回 `protocol.type_unsupported`、不下发 `localActivity`、不投递 `session.activity.changed`（§5.3）。Rust 镜像已同步（WP4）：`sync-protocol` 的 `MessageType`（29 个）、`VIEW_TYPES`（35 个）与 `ErrorCode`（含 `session.capacity_exceeded`）与合同逐项相等。
 - `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 当前只有 `core.session-activity.v1` 是必需 feature。
 - 客户端发送支持列表和必需列表。
 - 服务端返回已选择的交集。
@@ -288,6 +291,7 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 - **三态合同是必需 feature，不是加性降级**：`core.session-activity.v1` 未由双方选中时连接不进入业务阶段（§5.2）。旧服务端面对新客户端：`selectedFeatures` 里没有该 ID，客户端 MUST 停止同步并提示版本不兼容，MUST NOT 按七态摘要自行折算或把 `pending` 当作某个 `waiting_*`。旧客户端面对新服务端：`auth.client_hello` 未声明该 ID，服务端 MUST 以 `protocol.feature_required` 拒绝，且 MUST NOT 向该连接下发三态摘要。
 - **远程来源流是加性 feature**：未协商 `resource.stateless-origin.v1` 时，新连接既不发送也不接收任何 `sync.remote_*` 类型、`session.read` 的 `readCursor`/`sessionSummary`/`messageCoverage` 或 `command.status.remoteTarget`；收到未协商的远程帧按 `protocol.type_unsupported` 拒绝，收到未协商的封闭字段按 `protocol.schema_invalid` 拒绝。服务端 MUST NOT 用旧的本地落盘中转来「兼容」，客户端也不得把不支持静默降级成本地缓存（§9.7）。
 - **标题写入是加性 feature**：未协商 `core.session-title.v1` 的连接提交 `session.title.set` 时，服务端在触碰会话状态之前返回 `protocol.feature_required`（`details.features` 给出缺的 ID），标题与版本都不变；客户端在 feature 未选中时禁用标题编辑入口并说明不可用，MUST NOT 冒充保存成功、MUST NOT 改为在本地改写标题。已协商连接的**读取**面不变：`SessionSummary.title` 仍是原来的 `string|null` 键与长度上限，旧客户端因此照样显示有效标题，不需要新键（§11.5）。
+- **本机生命周期是加性 feature**：未协商 `core.local-session-lifecycle.v1` 时，服务端 MUST NOT 下发 `sessionSummary.localActivity`、MUST NOT 投递 `session.activity.changed`，对该连接派发的 `session.resume` 返回 `command.unsupported`（不是 `protocol.schema_invalid`，也不是重定向到 Node Link），收到的 `session.view`/`session.view.result` 帧按 `protocol.type_unsupported` 拒绝且不建立任何查看者。客户端在 feature 未选中时不发送 `session.resume` 与查看控制帧、不把旧任务三态解释成本机活跃，并明确显示「自动激活不可用」。**Node Link 不受影响**：该 feature 不在 Node Link registry 中，`sessionMeta` 不新增 `localActivity`，`session.resume` 的 Node Link 行为、结果形状（`remoteSessionRef` + `sessionMeta`）与错误语义逐字不变。
 - **不新增 second version**：以上全部在 v1 内通过 feature 演进；提升 `protocolVersion` 才允许改变已协商字段的语义（§16）。
 
 ## 6. 密钥与二进制表示
@@ -1114,7 +1118,7 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
 - 快照（§9.4）：`sessions` chunk 恒发一个（空会话也发空数组），`workspaces`/`agents` 受 `core.local-catalog.v1` 门控（未协商不下发、不以空数组占位），`chunkCount` 与实际块数一致且取值 `1..=3`；六类会话明细资源不进快照；`snapshotDigest` 按每个 chunk 的**原始 UTF-8 文本字节**分别求 SHA-256、按 `chunkIndex` 顺序连接后再求一次 SHA-256，结果取无填充 base64url。
 - ACK（§9.5）：只前进，回退被忽略并记诊断；超过本连接已发送最高游标时回 `sync.cursor_invalid`；ACK 不推进事件库 head，服务端保存的设备 ACK 最大值不决定新连接的恢复位置。
 
-**已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的十条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 19 条 Sync 命令（含 9 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）均已接线；新增的 `session.files.list`/`session.files.read`/`session.git.status`/`session.git.diff` 已由 WP3 接到真实用例与原生端口：门控先于任何文件/Git I/O，`session.files.read` 的连接绑定内容版本随连接关闭/撤销/daemon 关闭释放，`core.session-files.v1` 因此进入服务端支持集合。命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
+**已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的十条查询命令（同步 `completed` 或 `rejected`；含 `workspace.browse`）、§11.4 的 `command.status`、以及 §11.5 的 **20 条 Sync 命令中的 20 条**（**10 条 mutation**的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）均已接线；新增的 `session.files.list`/`session.files.read`/`session.git.status`/`session.git.diff` 已由 WP3 接到真实用例与原生端口：门控先于任何文件/Git I/O，`session.files.read` 的连接绑定内容版本随连接关闭/撤销/daemon 关闭释放，`core.session-files.v1` 因此进入服务端支持集合。命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 是这一组里**唯一未接线**的一条：`schemas/sync/v1/command.schema.json` 的 `command` 枚举与 `compatibility/commands/v1/commands.json` 已按本合同登记其 Sync 面（`core.local-session-lifecycle.v1`，会话引用在 body 顶层），但服务端用例、查看端口与适配接线属 **WP4**——落地前守护进程对它回 `command.unsupported`，且该 feature 尚未被任何连接宣告（§5.2）。合同冻结 ≠ 已接线，不得据本段把它算作可用命令。
 
 **仍未落地**（与本小节相邻）：imported 事件的**回源重放**（实时腿已落地，见 §9.6 末条）；`session.read` 的三类明细资源与 imported 明细的降级见 §9.4 的说明。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
 
@@ -1149,6 +1153,18 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
 - **旧 imported 游标**：`sync.remote_subscribe.cursor` 只接受 `originCursor`（`originEpoch`/`originSequence`）或 `null`。收到 `sync.cursor`（`serverEpoch`/`globalSequence`）形状时按封闭对象在解码层以 `protocol.schema_invalid` 拒绝（§5.3），MUST NOT 翻译、钳制或改写成本地序号，也不得把它折叠成 `sync.cursor_invalid` 的任一 `reason`——`errors.json` 的 `cursor_invalid.reason` 中并没有 `cache_incompatible`。客户端需要重建时由 `sync.remote_reset_required(reason=cache_incompatible)` 驱动。
 
 `session.read` 的加性读取覆盖与 `command.status` 的 `remoteTarget` 见 §11.5/§11.4；它们同样只在本 feature 协商后出现。
+
+### 9.8 本机生命周期投影（`core.local-session-lifecycle.v1`）
+
+本 feature 为 **owned** 会话增加一个显式的本机活跃程度投影，并让「进入页面 → 恢复原上下文 → 无人查看后按保留期回收」成为可验证的协议行为。它不改变任务三态（`state` 仍是 `idle`/`running`/`pending`），也不改变 Node Link 的 `sessionMeta`。
+
+- **字段**：`sessionSummary.localActivity ∈ {idle, active, pending}`，可选键，只在**协商了本 feature 的连接**上、对**owned** 会话出现。未协商的连接 MUST NOT 收到该键（不是 `null`、不是空对象）；imported 摘要不附该键。`session.created`/`session.updated`/`session.activity.changed` 的 `view.session`、`session.list`、`session.read` 的 `sessionSummary` 与快照 `sessions` 条目共用同一个投影。
+- **归约**（唯一口径，`CORE_PORTS_AND_STORAGE.md` §3.3）：有效未解决交互优先 → `pending`；否则存在未结束任务（含排队）、已确认 ready 的运行资源、或从 ready 开始回收但**尚未确认释放**的资源 → `active`；否则 `idle`。首次 `activating` 不因预占名额提前变成 `active`；恢复中/回收中的进度独立显示，不代表此刻可发送；恢复失败不覆盖真实任务或交互事实。发送依据实际 ready、任务与既有排队策略，MUST NOT 只看 `localActivity`。
+- **事件**：生命周期**实际变化**时写一条 owned 持久事件 `session.activity.changed`（§10.2/§10.3，view 为 `{ session: SessionSummary }`），**先持久化后发布**。触发判据是投影前后的 `localActivity` 取值不同——值没变就不写，不得用「发生过一次激活/查看/回收动作」代替「值变了」：`session.resume` 命中 ready 复用、复用后归约仍是 `active` 时**不写**事件；`idle → active`（重新恢复成功、资源代就绪）**必写**；`active → idle`（确认释放且无任务/交互）同样必写。查看者增减本身不改变归约结果（归约只看有效交互、未结束任务与资源代，查看租约只影响保留期计时），因此 MUST NOT 因查看声明、离页或租约到期写该事件。事件保存的是写出时的事实，不能作为「重启后资源仍然存活」的凭据。
+- **快照与查询**：`localActivity` 只来自当前进程的真实运行期目录（资源代与任务事实；查看租约只参与保留期计时，不参与归约）。启动收敛完成前不把旧事件里的 `active` 当作资源已恢复；收敛完成后才开放入站查询与订阅。查看者与租约不持久化，也不出现在快照或事件里。
+- **范围**：只服务本机（owned）会话。Node Link 不登记该 feature、不接收 `localActivity`，也不转发 `session.activity.changed`（§5.3）。
+- **保留期与容量**：无人查看、无任务/交互的最长保留期由 `sessions.idle_timeout_ms` 决定，**缺省 1800000（30 分钟）**；显式 `0` 只关闭按时间回收，容量保护仍生效。节点容量由 `sessions.max_active_sessions` 约束（正整数，候选缺省 50，**待实测**；没有无限取值）；满额且无安全候选时以 `session.capacity_exceeded` 拒绝新激活。键名、类型与实现状态以 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §4 为唯一权威。
+- **实现状态（WP4 已落地）**：字段、事件与投影已实现；服务端只在组合根接线 `LocalSessionLifecycle` 后宣告该 feature。
 
 ## 10. Event
 
@@ -1253,6 +1269,7 @@ RawAcpV1 = {
 ```text
 session.created
 session.updated
+session.activity.changed
 session.info.changed
 session.config.changed
 session.mode.changed
@@ -1291,7 +1308,7 @@ device.revoked
 
 #### 10.2.1 哪些类型进入会话结构化历史条目
 
-`session.read` 的 `include: ["history"]`（第 11.5 节）返回的条目**复用事件的 `view` 形状**，因此这里登记的是「上面这 34 类里，哪些会产生条目」。这个集合是**时间线语义**的判断——服务器按它决定条目，不因某个客户端没有对应卡片而改变；「客户端有专用视图」的另一套集合由客户端自己维护（[FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §6）。
+`session.read` 的 `include: ["history"]`（第 11.5 节）返回的条目**复用事件的 `view` 形状**，因此这里登记的是「上面这 35 类里，哪些会产生条目」。这个集合是**时间线语义**的判断——服务器按它决定条目，不因某个客户端没有对应卡片而改变；「客户端有专用视图」的另一套集合由客户端自己维护（[FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §6）。
 
 进入历史条目的 17 类：
 
@@ -1307,12 +1324,12 @@ device.revoked
 | `session.mode.changed` | 模式切换 |
 | `session.config.changed` | 配置项变化 |
 
-不进入的 17 类，按理由分四组：
+不进入的 18 类，按理由分四组：
 
-| 不进入历史条目的事件类型（17 类） | 为什么 |
+| 不进入历史条目的事件类型（18 类） | 为什么 |
 |---|---|
 | `user.message.delta` / `agent.message.delta` / `agent.thought.delta` / `agent.message.completed` | 承载消息正文：正文的权威只在 `messages`，同一段正文有两份来源会打架；`agent.message.completed` 是收尾正文，同样不产生条目 |
-| `session.created` / `session.updated` / `session.info.changed` / `session.usage.changed` / `session.commands.changed` / `session.origin.online_changed` | 摘要与仪表类：`SessionSummary`、`ModeState`、用量与可达性标注已有专门承载，条目里再来一份只是复制 |
+| `session.created` / `session.updated` / `session.activity.changed` / `session.info.changed` / `session.usage.changed` / `session.commands.changed` / `session.origin.online_changed` | 摘要与仪表类：`SessionSummary`、`ModeState`、用量与可达性标注已有专门承载，条目里再来一份只是复制。`session.activity.changed` 承载的是本机资源活跃程度（§9.8），它不是会话时间线上的内容，也不得被当作任务或消息条目 |
 | `command.completed` / `command.failed` / `command.uncertain` | 命令终态：由 `command.result` 与 `command.status` 承担，条目里重复会让同一事实有两个来源 |
 | `agent.connected` / `agent.disconnected` / `device.revoked` / `turn.delta_compacted` | 连接与审计类：不是会话时间线上用户要读的内容 |
 
@@ -1325,6 +1342,7 @@ device.revoked
 | Event type | `view` 最低字段 |
 |---|---|
 | `session.created`, `session.updated` | `session: SessionSummary` |
+| `session.activity.changed` | `session: SessionSummary`（`core.local-session-lifecycle.v1`；协商后的 owned 摘要可带 `localActivity`）。事件在**先持久化后发布**的顺序下产生，视图保存写出当时的事实；重放它不得被解释为「重启后资源仍然存活」。只在本机 owned 路径投递，Node Link 不转发该类型 |
 | `session.info.changed` | `title: string|null`, `updatedAt: timestamp`；这是 **Agent 侧** `session_info_update` 的投影，只描述 Agent 标题，不表示有效标题已改变 |
 | `session.config.changed` | `configOptions: SessionConfigOptionView[]`, `version: decimal string` |
 | `session.mode.changed` | `currentModeId: string|null`, `version: decimal string` |
@@ -1592,6 +1610,7 @@ session.files.list
 session.files.read
 session.git.status
 session.git.diff
+session.resume
 session.title.set
 ```
 
@@ -1599,13 +1618,14 @@ Sync v1 尚未定义，或仅允许 Node 本地管理入口：
 
 ```text
 session.delete
-session.resume
 local.agent.configure
 local.device.manage
 
 local.node.rotate-key
 local.audit.export
 ```
+
+`session.resume` 自 `session-activation-lifecycle` 起同时登记 `sync` 与 `node_link` 两个传输面，但 Sync 面只在协商 `core.local-session-lifecycle.v1` 后开放；未协商时返回 `command.unsupported`。Sync 的 owned payload 固定为 `{}`（会话引用在 body 顶层），成功终态为 `completed { sessionId, session }`（`session` 是 `sessionSummary`），**不带** `remoteSessionRef`；它在 Sync 语义上是「激活/恢复本机会话」，不是远程会话导入。实现状态（WP4 已落地）：服务端处理路径、`server::sync` 的接线与 `sync-protocol` 的 `CommandName`/payload/result 镜像均已实现；未协商该 feature 时回 `command.unsupported`（Node Link 面不受影响）。Node Link 的 `session.resume` 行为、payload 与结果形状（`remoteSessionRef` + `sessionMeta`）逐字不变。
 
 `session.create` 在两个传输面同名，但前提与载荷不同。**Sync 面**以「该连接已通过设备认证」为唯一前提——设备权限层已删除，因此不再有 scope 或 grant 判定（提交方就是本机自己的设备）。payload 只允许 `agentId`、目录引用二者之一（本机已记录的目录标识 `directoryId`，或客户端提交的**绝对**目录 `workspacePath`）与一个可选的显式布尔开关 `createIfMissing`（「目录不存在则先创建」）；不接受 `templateParams`、MCP 配置或凭据字段，出现任何其它键一律 `protocol.schema_invalid`。`createIfMissing` 与 `directoryId` **互斥**（别名解析出的目录必然已存在），两者同时出现同样按 `protocol.schema_invalid` 拒绝——不解析别名、不触碰文件系统。本机按既有口径校验生效的目录来源（绝对路径、存在且为目录、以 `canonicalize` 结果为权威值）：形状非法（相对路径、含 `..`、别名未在本机登记）以参数类错误拒绝且不触碰文件系统；形式合法但无法解析（目录被删除、被换成文件、规范化失败、权限不足）以 `internal.unavailable` 拒绝；两类都不创建会话、不启动 Agent 进程、不回退到任何替代目录。开关为真且目录不存在时本机**先创建它**（连同缺失的父层）再启动 Agent，创建失败（父层不可达、无写权限、路径上已有非目录成分）同样以 `internal.unavailable` 拒绝；按它创建出的目录**不会**被登记成 workspace 别名，因此该会话的目录归属是「未分组」，已创建的目录在后续失败时也**不删除**。**Node Link 面**仍额外要求 `exportId`、Export 发布的 workspace template 与 Owner 的 `grant.remote-work`，且请求不得携带任意 Owner 路径（只允许 `directoryId`，也不接受 `createIfMissing`）。命令名与 grant 的权威映射以 `compatibility/commands/v1/commands.json` 和 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 10.2 节的表为准，本节只声明 Sync 面接受哪些命令名；第 11.5 节表首列是 Sync v1 接受的完整命令集合。
 
@@ -1669,10 +1689,10 @@ local.audit.export
 | `session.files.read` | query | 必须 | `{ path, purpose, offset, version? }`；`purpose` 为 `preview｜download`，`offset` 是规范十进制字符串，`version` 是连接期不透明标识 | `completed { path, kind, sizeBytes, version, offset, dataBase64, eof, previewTruncated }`；`kind` 为 `text｜image｜binary`，单块原始字节最多 32 KiB；版本缺失时建立快照，变化时明确要求重读 |
 | `session.git.status` | query | 必须 | `{ after? }` | `completed { gitState, entries: GitStatusEntry[], next? }`；每项含路径、状态（added/modified/deleted/renamed/untracked）、可用的旧路径及冲突/二进制标识；只覆盖会话根内文件 |
 | `session.git.diff` | query | 必须 | `{ path }` | `completed { path, base, kind, diffLines?, unavailable?, truncated }`；`base` 为 `head｜empty`，`kind` 为 `text｜binary｜conflict`；文本差异最多 400 行 / 64 KiB / 单行 4096 字符 |
-| `session.resume` | mutation | 仅 Node Link（经 `sessionRef`） | `{}` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；`accepted` 的 `result` 为 `null`，成功终态为 `completed SessionResumeResult`（`remoteSessionRef` + `sessionMeta`）；目标 Agent 未宣告 `sessionCapabilities.resume` 时以 `nodelink.command.unsupported` 失败；Sync v1 收到返回 `command.unsupported` |
+| `session.resume` | mutation | 必须（Sync 面：会话引用在 body 顶层；Node Link 面经 `sessionRef`） | Sync：`{}`——closed object，出现任何键按 `protocol.schema_invalid` 拒绝；不接受 `expectedVersion`、目录、prompt 或历史正文。受 `core.local-session-lifecycle.v1` 门控，未协商时在触碰会话状态之前返回 `command.unsupported`。Node Link：`{}`（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)） | Sync：`accepted { result: null }` → `completed { sessionId, session }`（`session` 是 `sessionSummary`，**不含** `remoteSessionRef`）；复用本机已可用资源时不再次创建或恢复 Agent 会话，但同样产生合法的受理与终态记录；Agent 未宣告 `sessionCapabilities.resume` 时以 `capability.unsupported_by_agent` 失败；无安全候选可回收的容量拒绝为 `session.capacity_exceeded`；说不清结果时为 `command.uncertain`，MUST NOT 自动换 `requestId` 重派。Node Link 结果不变（`remoteSessionRef` + `sessionMeta`，未宣告 `sessionCapabilities.resume` 时以 `nodelink.command.unsupported` 失败） |
 | `session.title.set` | mutation | 必须 | `{ title }`：closed object，只允许这一个键；输入（trim 前）是 1..=512 个 Unicode 标量值，保存值是 trim 后的文本，trim 后为空则拒绝；超长按输入计、不截断（schema 给 `minLength`/`maxLength` 与拒绝纯空白的 `pattern`；wire codec 保真原文并校验标量与空白，保存值由 core 去首尾空白），**不含** `expectedVersion` | Owner 在同一事务内写标题、推进会话版本并落完整 `session.updated` 后再回 `completed`（`result` 只是终态占位，权威摘要取同事务的 `session.updated`）；不依赖 Agent 重命名能力、不启动 Agent、不占 active turn，`idle`/`running`/`pending` 均可执行；保存值是 trim 后的文本，不截断、不接受 `null`；同一 `requestId` 重试返回首次结果，参数不同报 `command.idempotency_conflict`；未协商 `core.session-title.v1` 返回 `protocol.feature_required`，会话不存在返回 `session.not_found`；Access 只转发该命令，不落盘标题或命令状态 |
 
-本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（20 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举包含其中 `transport` 含 `sync` 的 19 条；`session.resume` 只经 Node Link 接受，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在该枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 14 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
+本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（20 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举包含其中 `transport` 含 `sync` 的全部 20 条（`session.resume` 自本变更起同时含 `sync`，但只在协商 `core.local-session-lifecycle.v1` 后开放，语义见 §11.8；其服务端接线**待 WP4**——枚举已含该名，处理路径尚未落地，落地前回 `command.unsupported`）。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 14 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
 
 `session.title.set` 是 **Owner 元数据命令**（feature `core.session-title.v1`），不是 ACP 能力：它不映射任何 ACP 方法，不要求 Agent 宣告重命名能力，也不改变 ACP 原文或 `session.info.changed` 的 Agent 投影。payload 只有一个键 `title`；`expectedVersion` 不在本命令的 body 上（按 Owner 提交顺序后写生效），出现未知键或 `expectedVersion` 按 `protocol.schema_invalid` 拒绝。校验顺序：feature 协商 → 形状与长度（输入按 wire 原文计 1..=512 个 Unicode 标量值，保存值是 trim 后的文本，trim 后为空则拒绝；超长按输入计、不截断；拒绝 `null`）→ 会话存在性与归属 → 幂等比对。重复 `requestId` 返回首次结果；相同文字也**必须**确立自定义标题（Agent 标题相同不构成「无需保存」的理由）。没有清除或恢复命令：要撤销自定义标题只能再保存一个新标题。
 
@@ -1780,6 +1800,46 @@ local.audit.export
 - **不可复活**：Daemon 重启后上游 ACP 请求已不存在的交互保持终态，MUST NOT 被迁移或重新标记为 pending；历史应答不会「补发」给 Agent。
 - **值保真**：表单整数不得先经 JavaScript number 再序列化；未知必需字段或不可表达的 ACP 类型使提交整体不可用并说明原因。`submit` 的空对象与 `null` 分别对应 ACP `content: {}` 与 `content: null`，不得互换。
 
+### 11.8 查看控制帧（`session.view` / `session.view.result`）
+
+`core.local-session-lifecycle.v1` 用一对连接期控制帧表达「这个连接现在正在看哪个会话」。它们是**运行期**控制：不启动 Agent、不写事件、不推进会话版本，也不产生命令受理或终态；激活仍必须由 `session.resume`（§11.5）完成。两者只在已认证且协商了该 feature 的连接上合法，body 都是 closed object（机器定义 `schemas/sync/v1/sync.schema.json#/$defs/sessionView` / `#/$defs/sessionViewResult`）。
+
+- **请求**：`{ sessionId: UUID|null, viewVersion: integer }`。`sessionId: null` 表示离开；非空表示当前查看该会话，替换同一连接此前的查看者（每连接最多一个）。`viewVersion` 由客户端单调递增（0..=`2^53−1`）：同版本同载荷的重试幂等，低于当前版本的声明被忽略并回 `stale`，MUST NOT 复活已离开的页面，也 MUST NOT 因迟到结果重新添加查看者。
+- **同版本、不同选择**：收到 `viewVersion` 等于当前版本、但 `sessionId` 不同的声明时按 `stale` 处理——**不**替换现有查看者、不重置租期，也**不是** `protocol.schema_invalid`（帧形状完全合法）。原因：同一版本号上出现两个不同选择说明客户端的状态机已经分叉，服务端不猜哪个更新；MUST NOT 用「最后到达的声明」兜底。客户端改变选择（含 `A → B`、`A → null`、`null → A`）MUST 递增 `viewVersion`。
+- **结果**：`{ sessionId, viewVersion, status: "accepted"|"stale", leaseExpiresAt: timestamp|null }`。`accepted` 必须给出未来时刻；`stale` 的 `leaseExpiresAt` 必须为 `null`。`sessionId` 允许 `UUID|null`（机器定义 `schemas/sync/v1/sync.schema.json#/$defs/sessionViewResult` 的 `sessionId` 是 `common.schema.json#/$defs/uuid` 或 `null`）：服务端逐字回显被应答的那个声明，离页声明的应答因此是 `sessionId: null`，客户端 MUST NOT 把它当成「正在查看空会话」。
+- **离开的应答**：`sessionId: null` 同样回 `accepted`；此时 `leaseExpiresAt` 只表示服务端清理该连接残留查看状态的时限，客户端 MUST NOT 据此认为自己仍在查看任何会话，也 MUST NOT 用它续租或恢复页面。
+- **离页也要版本**：版本低于当前的 `sessionId: null` 声明被忽略并回 `stale`，MUST NOT 清除该连接现有的查看者（否则一条迟到的离页帧会把仍在阅读的页面踢出保护）；客户端离页 MUST 使用高于当前版本的版本号，与选择切换走同一条递增规则。
+- **租约**：默认 30 秒，可见页面每 10 秒续租；时间只由服务端时钟判定，客户端时间不参与。租约到期即移除该连接对该会话的查看者；连接断开、认证撤销、同设备连接被替换时立即清除。普通 `control.ping` **不**续租——连接在线不构成无限保活。查看者与租约只存在于内存，不持久化、不进快照/事件，也不改变会话的运行资源。
+- **页面顺序**：客户端在同一连接上先声明当前选择，再派发 `session.resume`，避免「恢复成功但无人保护」的窗口；隐藏页面立即声明 `null`。恢复命令在离页后仍正常收口，但不得重新添加查看者。
+- **门控与限流**：未协商该 feature 时收到任一帧按 `protocol.type_unsupported` 拒绝，且不建立查看者。控制帧独立计数，不占用持久命令配额：**单连接 120 帧/分钟只统计客户端 → 服务端的 `session.view`**——`session.view.result` 是服务端应答，不计数，客户端也不得因收到大量 `stale` 就自行降速。超限按 `resource.rate_limited`（`details.retryAfterMs`，§14）拒绝该帧；**持续超限与业务命令同规则**：只有达到 §14 既有的连续超限阈值才以 `4429` 关闭连接，单次突发不得直接断开（否则一次抖动就会打掉整个会话连接）。`session.view` 不属于业务命令，不出现在 `commands.json` 的 `commands` 列表中，只在 `transportFrames` 登记。
+
+#### 查看控制帧族
+
+| 帧 | 方向 | body |
+|---|---|---|
+| `session.view` | 客户端 → 服务端 | `sessionId`(UUID \| null)、`viewVersion`(integer) |
+| `session.view.result` | 服务端 → 客户端 | `sessionId`(UUID \| null，逐字回显请求)、`viewVersion`(integer)、`status`(`accepted`\|`stale`)、`leaseExpiresAt`(timestamp \| null) |
+
+#### 查看控制预算
+
+| 项目 | v1 值 |
+|---|---:|
+| 查看租约 | 30000 ms |
+| 续租间隔 | 10000 ms |
+| 每连接查看者 | 1 |
+| 控制帧速率 | 120 帧/分钟 |
+
+以上四项是**固定 v1 常量**，不由 `auth.authenticated.limits` 下发，也不得通过配置放宽；`compatibility/commands/v1/commands.json` 的 `transportFrames` 与本节逐项相等。它们与 `sessions.idle_timeout_ms`（§14、`CONFIG_REFERENCE.md` §4）是两件事：前者决定「谁在查看」，后者决定「无人查看后还保留多久」。
+
+**实现状态（WP4 已落地）**：帧名、`$defs.sessionView`/`#/$defs.sessionViewResult`、预算与 fixture 已冻结，`server::sync` 的查看者注册表与 `session.view` 处理路径、`sync-protocol` 的 `MessageType` 变体与 `VIEW_TYPES` 条目均已实现；只在协商 `core.local-session-lifecycle.v1` 的连接上生效。
+
+`session.resume` 的 Sync 语义补全（与上表同一 feature）：
+
+- **激活与合并**：同一会话的并发激活共享一次建立过程（同会话一次后端恢复、单次绑定），不同设备各自仍有合法的命令受理与唯一终态。先查稳定 `requestId` 的持久记录，再判断 ready 复用或启动恢复；旧命令重试返回历史结果**不**表示当前资源 ready。已 ready 时复用，不再次创建或恢复 Agent 会话、不重放旧输入。
+- **失败分类**（MUST NOT 误报为请求 schema 错误）：未协商 feature → `command.unsupported`；会话不存在或不属于本机 → `session.not_found`；Agent 未宣告 `sessionCapabilities.resume`、或本机无恢复数据 → `capability.unsupported_by_agent`；所有占用名额的会话均受保护、没有可回收候选 → `session.capacity_exceeded`（`retryable = true`，历史仍可读）；结果无法证明 → `command.uncertain`（不自动换 `requestId` 重派，先用 `command.status` 核实）。
+- **取消、断开与撤销**：连接断开或设备撤销时取消该连接的观察者与查看声明，恢复命令本身按既有终态语义继续收口；MUST NOT 因观察者消失而伪造成功或失败。
+- **事件去重**：激活只在归约结果**取值变化**时写 `session.activity.changed`（§9.8 的判据）：命中 ready 复用、复用后仍是 `active` → **不写**；`idle → active`（重新恢复成功、资源代就绪）→ **必写**；`Uncertain` 保持 `active` 与容量占位，取值不变时不写；可证明未建立的 `Failed` 且无真实任务/交互时收敛为 `idle`（取值变化则必须写）。查看声明、离页与租约到期都不是该事件的触发条件。
+
 ## 12. Error
 
 ### 12.1 格式
@@ -1834,6 +1894,7 @@ command.uncertain
 state.version_conflict
 session.not_found
 session.busy
+session.capacity_exceeded
 interaction.already_resolved
 capability.unsupported_by_client
 capability.unsupported_by_broker
@@ -1876,6 +1937,19 @@ internal.unavailable
 未在上表列出的 code **不登记任何** `details` 字段：发送方必须送 `{}`。字段的取值域由 registry 的 `details` 片段约束：`sync.cursor_invalid.reason ∈ {malformed, epoch_mismatch, beyond_head, cursor_expired}`；`resource.remote_unavailable.reason ∈ {owner_offline}`；`protocol.feature_required.features` 是 1..64 个 feature ID 的排序去重列表（`requiredFeatures` 中未被协商的那些）；`resource.rate_limited.retryAfterMs` 是建议退避毫秒数；`state.version_conflict` 的两个版本号都是十进制字符串；`attachment.offset_mismatch` 的两个偏移与 `attachment.chunk_conflict.offset` 都是十进制字符串；`media.unavailable.reason ∈ {expired, not_found, external_uri_not_fetched}`；`interaction.unavailable.reason ∈ {expired, upstream_lost, owner_offline}`；`interaction.version_conflict` 的两个版本号同样是十进制字符串。每个登记字段都要标注 `必需` 或 `可选`，与 registry 的 `required` 逐一对应。`details` 始终是开放扩展点（接收方必须忽略未知字段，§4.2），新增字段按 §16.1 的兼容变更登记。上表与 `compatibility/errors/v1/errors.json` 的 `details` 片段逐条相等，由 `npm run check` 的 `check:errors` 断言。`resource.remote_unavailable` 只用于 `origin.kind = "remote"` 的会话正文回源失败，本节点资源不得返回该错误码。
 
 错误码可以向后兼容地增加。客户端遇到未知错误码时按 `retryable` 和 code 首段做保守处理，并展示通用错误。
+
+**本机激活与查看控制的错误映射**（`core.local-session-lifecycle.v1`，§11.8）：这些失败都有准确的既有或新增类别，MUST NOT 用 `protocol.schema_invalid`、空结果或通用文本冒充。
+
+| 情形 | code | 语义 |
+|---|---|---|
+| 连接未协商本机生命周期 | `command.unsupported`（命令面）/ `protocol.type_unsupported`（查看控制帧） | 能力不可用，不启动 Agent、不建立查看者 |
+| 会话不存在、或不属于本机 owned 路径 | `session.not_found` | 不泄露远程来源是否存在 |
+| Agent 未宣告 `sessionCapabilities.resume`，或本机没有恢复数据 | `capability.unsupported_by_agent` | 明确「不能恢复原身份」，历史仍可读，不新建会话替代 |
+| 每个占用名额的会话都受保护、没有安全回收候选 | `session.capacity_exceeded`（`retryable = true`） | 不中断受保护会话；历史与查看不受影响，客户端提示稍后重试 |
+| 已受理但无法证明结果 | `command.uncertain`（不新增类别） | 不自动换 `requestId` 重派，先用 `command.status` 核实 |
+| 查看控制帧超过 120 帧/分钟（只统计客户端 → 服务端的 `session.view`） | `resource.rate_limited`（`details.retryAfterMs`） | 只拒绝本次控制帧，不等于会话失效；持续超限按连续超限阈值以 `4429` 关闭连接 |
+
+`session.capacity_exceeded` 不登记 `details` 字段（发送方送 `{}`）；它只表示「当前没有可回收的运行资源名额」，不表示会话不存在或参数非法。
 
 ### 12.3 WebSocket Close Code
 
@@ -1936,6 +2010,10 @@ v1 默认上限：
 | 设备名称 UTF-8 长度 | 128 bytes |
 | 单批 replay event 数 | 500 |
 | 单连接的远程订阅数（`sync.remote_subscribe`，`resource.stateless-origin.v1`） | 32 |
+| 会话查看租约（`session.view`，`core.local-session-lifecycle.v1`） | 30 秒 |
+| 会话查看续租间隔（可见页面） | 10 秒 |
+| 单连接的当前查看者 | 1 |
+| 单连接查看控制帧速率（`session.view` / `session.view.result`） | 120 帧/分钟（独立于业务命令族，不占用其配额） |
 | 单连接待发送队列 | 8 MiB 或 2,000 messages，先到者触发 |
 | 认证超时 | 15 秒 |
 | 配对默认有效期 | 5 分钟 |
@@ -1975,7 +2053,7 @@ v1 默认上限：
 - 超限应在读取/分配完整 body 前尽早拒绝；未认证错误不得回显请求内容或暴露设备是否存在。
 - feature ID 只允许 `[a-z0-9.-]`，不得为空、包含连续分隔 NUL 或通过 Unicode 形成视觉混淆。
 
-- 只有 `maxMessageBytes`、`maxPromptBytes`、`maxReplayEventsPerBatch` 三项通过 `auth.authenticated.limits` 下发，服务端可以按部署情况下调；其余上限（本节的认证前固定上限、JSON nesting depth、单对象字段数、单数组元素数、设备名称长度、单连接待发送队列、认证超时、配对有效期、目录浏览的单层条目数、会话文件/ Git 状态单页条目数、根内相对路径长度、内容块/预览/下载预算、差异行的行数/合计文本/单行文本、工具详情的各部分与整体上限）都是固定 v1 常量，不得通过 `limits` 覆盖或下调。
+- 只有 `maxMessageBytes`、`maxPromptBytes`、`maxReplayEventsPerBatch` 三项通过 `auth.authenticated.limits` 下发，服务端可以按部署情况下调；其余上限（本节的认证前固定上限、JSON nesting depth、单对象字段数、单数组元素数、设备名称长度、单连接待发送队列、认证超时、配对有效期、目录浏览的单层条目数、会话文件/ Git 状态单页条目数、根内相对路径长度、内容块/预览/下载预算、差异行的行数/合计文本/单行文本、工具详情的各部分与整体上限、会话查看租约/续租间隔/每连接查看者/查看控制帧速率）都是固定 v1 常量，不得通过 `limits` 覆盖或下调。
 - **新增固定上限的取值理由**：单层条目数 128 与差异行 400 行 / 64 KiB 按单条消息 1 MiB 反推——128 条目录条目在「路径接近 4,096 字符上限、JSON 要求转义反斜杠」的最坏情形下约 0.8 MiB，400 行差异在单行不超过 4,096 字符、合计不超过 64 KiB 时转义后的体积同样留在同一条消息内；超限时两者都**显式降级**（目录浏览置 `truncated` 并只回上限内条目、差异行改为 `diffUnavailable`），而不是让请求失败或下发被截断的内容。
 - **会话文件预算的取值理由**：单块 32 KiB 的 base64url 约 43.7 KiB，远低于 1 MiB 单条消息上限，给信封与同帧其它字段留足空间；文本预览 256 KiB、图片预览 4 MiB、下载 64 MiB 分别覆盖「可滚动阅读」「可解码栅格图」「用户主动保存的常规文件」，更大的文件明确不支持完整下载。快照只在内存中、绑定连接并受 60 秒空闲与并发上限约束，因此预算与内存占用可直接对应；超过预览预算时置 `previewTruncated`，超过下载预算时返回 `resource.result_too_large`，不截断后冒充完整内容。Git 文本差异沿用 400 行 / 64 KiB / 单行 4,096 字符的既有固定上限。
 - 目录浏览的条目数上限与差异行上限都**不得**导致整次失败：前者按 §11.5 回上限内条目并置 `truncated: true`，后者按 §10.3 改为只带统计并标记 `diffUnavailable`。只有当结果整体超过单条消息上限时才回 `resource.result_too_large`（§11.5）。
@@ -1984,6 +2062,7 @@ v1 默认上限：
 - 限流所用的「命令族」是**服务端自持的 v1 常量**：每个命令名恰好属于一个族，覆盖关系由服务端测试断言；命令名的封闭词表仍以 `compatibility/commands/v1/commands.json` 为唯一来源。数值不变：单设备 120 次/分钟、窗口 1 分钟，连续超限以 `4429` 关闭连接。
 - 超过本节速率时返回 `resource.rate_limited`（`retryable = true`），并在连续超限时以 `4429` 关闭连接；客户端应遵守 `details.retryAfterMs`（存在时）退避后再重试，不得立即重发。
 - 附件正文、大型 diff 和完整终端输出不内嵌到业务消息中绕过 1 MiB 上限：附件走 §3.4 的独立已认证连接，按 32 KiB 分块、每传输最多一块未确认；其单连接发送预算与速率按附件传输族**独立**计数，不占用业务命令配额，也不因大文件拖慢事件投递。diff 与终端输出仍按本节既有预算显式降级。
+- **查看控制帧独立计数**：`session.view`/`session.view.result` 不属于业务命令族，也不产生命令终态；单连接 120 帧/分钟只统计**客户端 → 服务端的 `session.view`**（`session.view.result` 是服务端应答，不计量），额度可覆盖「每 10 秒续租 + 选择切换」并留出重试余量，超限只拒绝该帧并回 `resource.rate_limited`。持续超限与业务命令**同规则**：达到上文既有的连续超限阈值才以 `4429` 关闭连接，单次突发不断开。租约 30 秒 = 3 个续租周期，可容忍连续两次续租丢包而不误判离开；续租与租约都只存在于连接期，不因连接在线自动延长（`control.ping` 不续租）。这些数字是固定 v1 常量，见 §11.8 的预算表与 `compatibility/commands/v1/commands.json` 的 `transportFrames`。
 - 待发送队列达到高水位后先停止读取新的 replay batch；持续过慢则发送 `resource.backpressure` 并断开。
 - 断开慢客户端后由其 cursor 重放，不能丢弃 Agent 事件或阻塞其他连接。
 - rate limit 至少按 IP、device ID 和 command 分类；网络身份不能替代设备认证。
@@ -2019,6 +2098,7 @@ v1 默认上限：
 - 改变 transcript codec、算法、domain 或 field tag。
 - 引入 binary framing、压缩、或不同 Transport Profile。
 - 附件传输、类型化媒体、可恢复交互与远程历史按 §5.2 的 feature 引入；它们不要求提升 `protocolVersion`，但未协商时不得出现新帧或新封闭字段（§5.3）。
+- 本机生命周期（`core.local-session-lifecycle.v1`）同样按 feature 引入：`sessionSummary.localActivity` 是**封闭**摘要对象里的新可选键、`session.activity.changed` 是新事件类型、`session.view`/`session.view.result` 是新控制帧，因此对未协商连接必须缺席或被显式拒绝（§9.8/§11.8）；不得把 `localActivity` 扩展成新主状态、不得让 `session.activity.changed` 通过 Node Link 转发，也不得借这次扩展收紧既有 `state` 的必填性或语义（那是 §16.2 第 1 条的破坏性变更）。
 
 ### 16.3 数据迁移
 
@@ -2057,9 +2137,10 @@ node scripts/check-acp-compatibility.mjs
 - `check-contract-assets.mjs` 负责静态引用完整性与需要真正计算的绑定：`$ref` 目标存在、`$id` 在每个 asset root 内唯一、`rawJson` 的 `byteLength`/`sha256` 与文本本身一致、事件的 `payloadDigest` 与 `payload` 的 ACPR-CJ1 sha256 一致、transcript 固定向量的 SHA-256/HMAC/P1363 重算通过。transcript 向量还必须**由 `codec`/`domain`/`input` 经 `compatibility/transcripts/v1/transcripts.json` 的字段表重新编码**并与 `expected.transcriptBase64url` 逐字节一致，因此 tag 顺序、宽度或字段集合写错会让检查失败；`transcripts/invalid/` 下的负向量则断言解码器以声明的错误拒绝畸形输入。
 - `check-command-catalog.mjs` 断言命令名在 `compatibility/commands/v1/commands.json`、`schemas/sync/v1/command.schema.json`（`transport` 含 `sync` 的子集）、`schemas/node-link/v1/command.schema.json`（`transport` 含 `node_link` 的子集）、本文 §11.5 与 `SECURITY_DESIGN.md` §10.2 之间一致。
 - `check-error-registry.mjs` 断言 `compatibility/errors/v1/errors.json` 与两个协议的 `$defs.errorCode` enum、以及本文 §12.2 与 `NODE_LINK_PROTOCOL.md` §14.1 的列表一致，并拒绝任何第二处内联定义的公开错误码。
-- `check-contract-assets.mjs` 同时断言附件帧族：`compatibility/commands/v1/commands.json` 的 `transportFrames`、两个 `attachment.schema.json` 的 `$defs.frameType.enum`/`$defs.transferBudget`、本文 §3.4 与 `NODE_LINK_PROTOCOL.md` §12.9 的帧表与预算表逐项相等，且所引用的 feature ID 已在 feature registry 登记。
+- `check-contract-assets.mjs` 同时断言附件帧族：`compatibility/commands/v1/commands.json` 的 `transportFrames`、两个 `attachment.schema.json` 的 `$defs.frameType.enum`/`$defs.transferBudget`、本文 §3.4 与 `NODE_LINK_PROTOCOL.md` §12.9 的帧表与预算表逐项相等，且所引用的 feature ID 已在 feature registry 登记。`transportFrames` 按 `(protocol, feature)` 唯一：附件族之外的帧族（`session.view`/`session.view.result`）以消息 `type` 与本文 §11.8 的帧表/预算表为判据，同样逐项相等。
 
 - `manifest.deviceQrVectors` 登记的 `device-qr/vectors.json` 由 Rust `device_qr_vectors.rs` 与 TypeScript `device-qr.test.ts` **消费同一文件**：规范 65 字节布局、旧 `#data=`、未知版本、错误长度、非规范 base64url、主机公钥 SHA-256 指纹、134 字节地址与 58×29 矩阵预算都在两侧各断言一次。`valid/`/`invalid/` 中不得再出现旧设备完整资料样例；节点资产保持在 `fixtures/node-link/v1/`。
+- `core.local-session-lifecycle.v1` 的共享样例（本变更新增，机器定义见 `schemas/sync/v1`）：`command-session-resume.json`、`command-result-session-resume-completed.json`、`sync-session-view.json`、`sync-session-view-result-accepted.json`、`sync-session-view-result-stale.json`、`session-summary-local-activity.json`、`event-session-activity-changed.json`（绑定 `event-views.schema.json#/$defs/session.activity.changed`），以及负例 `sync-session-view-missing-version.json`、`session-summary-local-activity-unknown.json`、`command-session-resume-unknown-payload-key.json`。它们只描述 owned 路径；Node Link fixture 不新增该 feature 或该字段。
 
 Rust 实现必须在自己的 wire DTO（`crates/sync-protocol`）上形成独立判定：用同一份 `manifest.json` 驱动——valid 夹具必须解析成功并往返一致，invalid 夹具必须在声明的层被拒绝——`type` 常量、错误码与视图登记表另有漂移门禁与 schema/registry 逐条比对。这里不要求再引入通用 Draft 2020-12 校验器：ajv 的职责是判 schema 自洽与夹具本身合法，DTO 的职责是判实现忠实于 schema；若将来需要 Rust 侧独立复算 schema 本身，可以另加一层，但它不能替代 DTO 层。
 

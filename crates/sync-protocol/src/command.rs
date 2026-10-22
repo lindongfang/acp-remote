@@ -5,8 +5,8 @@
 //! [`crate::envelope`] 承载；本模块只承载 `body`，与 `auth`/`control`/`error` 三个家族一致。
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它
-//! `transport` 含 `sync` 的 19 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
-//! 按 `command.unsupported` 拒绝）。
+//! `transport` 含 `sync` 的 20 条命令的镜像（`session.resume` 只在协商
+//! `core.local-session-lifecycle.v1` 后由 Sync 面接受；未协商时按 `command.unsupported` 拒绝）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
 //!
@@ -47,8 +47,8 @@ pub type RequestId = Uuid;
 
 /// `commandName`（`command.schema.json#/$defs/commandName`）。
 ///
-/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 19 条命令，顺序
-/// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.resume` 的结果）。
+/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 20 条命令，顺序
+/// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列的结果）。
 ///
 /// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧是
 /// `{ agentId, directoryId | workspacePath（恰好一个）, createIfMissing? }`（`templateParams` 等
@@ -96,11 +96,16 @@ pub enum CommandName {
     SessionGitDiff,
     /// `session.title.set`（feature `core.session-title.v1`）：Owner 元数据命令。
     SessionTitleSet,
+    /// `session.resume`（feature `core.local-session-lifecycle.v1`）：本机激活/恢复 owned 会话。
+    ///
+    /// 它同时登记 `sync` 与 `node_link` 两个传输面；Sync 面只在协商该 feature 后开放（未协商时由
+    /// 命令面回 `command.unsupported`）。payload 固定为 `{}`，会话引用在 body 顶层。
+    SessionResume,
 }
 
 impl CommandName {
     /// 与 `compatibility/commands/v1/commands.json` 的 sync 子集逐条相等，顺序一致。
-    pub const ALL: [CommandName; 19] = [
+    pub const ALL: [CommandName; 20] = [
         CommandName::SessionList,
         CommandName::SessionRead,
         CommandName::CommandStatus,
@@ -119,6 +124,7 @@ impl CommandName {
         CommandName::SessionFilesRead,
         CommandName::SessionGitStatus,
         CommandName::SessionGitDiff,
+        CommandName::SessionResume,
         CommandName::SessionTitleSet,
     ];
 
@@ -183,6 +189,7 @@ impl CommandName {
             CommandName::SessionFilesRead => "session.files.read",
             CommandName::SessionGitStatus => "session.git.status",
             CommandName::SessionGitDiff => "session.git.diff",
+            CommandName::SessionResume => "session.resume",
             CommandName::SessionTitleSet => "session.title.set",
         }
     }
@@ -1599,6 +1606,27 @@ pub struct SessionTitleSet {
     pub title: SessionTitle,
 }
 
+/// `sessionResume`（`command.schema.json#/$defs/sessionResume`）的 `payload`：固定空 object。
+///
+/// Sync 面的会话引用在 body 顶层 `sessionId`；恢复所需的 Agent 标识、目录与历史都只来自本机持久记录，
+/// 客户端不能指定。任何额外键（含 `expectedVersion`）都按形状错误拒绝。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionResume {}
+
+/// `sessionResumeResult`（`command.schema.json#/$defs/sessionResumeResult`）：Sync `session.resume` 的
+/// completed 结果。
+///
+/// 与本机 `session.create` 的结果同形：会话标识 + 当前摘要。它**不带** `remoteSessionRef`（那是 Node
+/// Link 的形状），也不带 prompt、历史或 Agent 侧标识。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionResumeResult {
+    #[serde(rename = "sessionId")]
+    pub session_id: Uuid,
+    pub session: SessionSummary,
+}
+
 /// `command`（`command.schema.json#/$defs/command`）`body` 的 `payload`（该 def 的 `body.oneOf`）。
 ///
 /// 变体顺序与 schema 的 `oneOf` 顺序一致。payload 里没有自己的判别字段，所以本枚举**没有**
@@ -1646,6 +1674,8 @@ pub enum CommandPayload {
     SessionGitDiff(SessionGitDiff),
     /// `session.title.set` 的 payload。
     SessionTitleSet(SessionTitleSet),
+    /// `session.resume` 的 payload（固定 `{}`）。
+    SessionResume(SessionResume),
 }
 
 impl CommandPayload {
@@ -1739,6 +1769,10 @@ impl CommandPayload {
                 "{ title: 1..=512 个标量值（trim 后非空） }（sessionTitleSet 的 payload）",
             )
             .map(CommandPayload::SessionTitleSet),
+            CommandName::SessionResume => {
+                parse_payload(payload, "空 object（sessionResume 的 payload）")
+                    .map(CommandPayload::SessionResume)
+            }
         }
     }
 }
@@ -2044,6 +2078,8 @@ pub enum CommandResultPayload {
     SessionGitStatus(SessionGitStatusResult),
     /// `session.git.diff` 的完成结果。
     SessionGitDiff(SessionGitDiffResult),
+    /// `session.resume` 的完成结果。
+    SessionResume(Box<SessionResumeResult>),
     /// 变更命令的完成结果，或非完成态的开放结果对象（基类型 `object | null`）。
     Object(RawObject),
 }
@@ -2143,6 +2179,15 @@ impl CommandResultPayload {
                         "sessionGitDiffResult（session.git.diff 的 completed）",
                     )
                     .map(|value| Nullable::value(CommandResultPayload::SessionGitDiff(value)));
+                }
+                CommandName::SessionResume => {
+                    return parse_result::<SessionResumeResult>(
+                        result,
+                        "sessionResumeResult（session.resume 的 completed）",
+                    )
+                    .map(|value| {
+                        Nullable::value(CommandResultPayload::SessionResume(Box::new(value)))
+                    });
                 }
                 _ => {}
             }
@@ -2375,7 +2420,7 @@ mod tests {
 
     #[test]
     fn command_name_covers_the_sync_subset_and_round_trips() {
-        assert_eq!(CommandName::ALL.len(), 19, "sync 子集是 19 条命令");
+        assert_eq!(CommandName::ALL.len(), 20, "sync 子集是 20 条命令");
         assert!(
             CommandName::ALL
                 .iter()
@@ -2420,7 +2465,7 @@ mod tests {
             CommandName::from_str("session.title.set"),
             Ok(CommandName::SessionTitleSet)
         );
-        assert_eq!(CommandName::ALL[18], CommandName::SessionTitleSet);
+        assert_eq!(CommandName::ALL[19], CommandName::SessionTitleSet);
         assert!(
             !CommandName::SessionTitleSet.is_query(),
             "标题写入是 mutation：completed 必须带 command terminal event id"

@@ -201,8 +201,9 @@ fn session_load_stays_unsupported_and_resume_is_implemented() {
     );
     assert_eq!(ReExportedStatus::Implemented, MethodStatus::Implemented);
 
-    // 其余三个既有方法同样未被顺带提升（回归护栏）。
-    for method in ["session/list", "session/delete", "session/close"] {
+    // 其余两个既有方法同样未被顺带提升（回归护栏）。`session/close` 已按 WP3 提升为
+    // `ConditionalMvp`（见 `tests/session_close.rs`），因此不再属于这个集合。
+    for method in ["session/list", "session/delete"] {
         assert_eq!(
             methods::status_of(method),
             MethodStatus::NotImplemented,

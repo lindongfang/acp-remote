@@ -869,6 +869,10 @@ pub struct HostNode {
     core: Arc<UseCases>,
     /// 真实 broker。
     broker: Arc<Broker>,
+    /// 本机生命周期（与生产组合根同一实例形状：broker 的创建准入、Sync 的 resume/view、后台回收共用）。
+    lifecycle: Arc<acp_core::use_cases::LocalSessionLifecycle>,
+    /// 服务端时钟（租约/保留期用例直接读同一份时间来源）。
+    clock: Arc<dyn acp_core::ports::Clock>,
     /// 真实身份状态机。
     authority: Arc<Authority>,
     /// 真实本地管理路由（本机确认/撤销都走它）。
@@ -952,6 +956,20 @@ pub struct ScriptedScript {
     created: std::sync::Mutex<Vec<String>>,
     /// 收到 `terminate_agent` 的会话标识（窗口期超限失败关闭的观测口）。
     terminated: std::sync::Mutex<Vec<String>>,
+    /// 此后每一次 `resume` 的失败类别；`None` = 正常恢复。
+    resume_failure: std::sync::Mutex<Option<acp_core::model::UnavailableKind>>,
+    /// `resume` 返回前的模拟后端耗时（并发合并用例要制造真实的建立窗口）。
+    resume_delay: std::sync::Mutex<Option<std::time::Duration>>,
+    /// `resume` 的调用次数（「不同设备并发恢复只建立一次」「ready 复用不触发 ACP」的观测口）。
+    resumes: std::sync::atomic::AtomicUsize,
+    /// `resume` 收到的持久化 ACP 会话标识（恢复必须沿用原身份，不得新建替代会话）。
+    resumed_agent_ids: std::sync::Mutex<Vec<String>>,
+    /// `prompt` 的调用次数（「恢复不得重放旧 prompt」的观测口）。
+    prompts: std::sync::atomic::AtomicUsize,
+    /// 逐会话释放替身的返回结果；`None` = 默认 `Released`。
+    release_outcome: std::sync::Mutex<Option<acp_core::ports::ReleaseOutcome>>,
+    /// 释放调用次数（「回收确实被请求过」的观测口）。
+    releases: std::sync::atomic::AtomicUsize,
 }
 
 impl ScriptedScript {
@@ -959,6 +977,11 @@ impl ScriptedScript {
     /// （终态 `failed`），其余取值 = 说不清（终态 `uncertain`）。
     pub fn fail_create(&self, kind: acp_core::model::UnavailableKind) {
         *self.failure.lock().expect("用例内互斥量不会中毒") = Some(kind);
+    }
+
+    /// 恢复正常 `create`（失败注入后的复位；用于验证失败路径**确实交还**了容量名额）。
+    pub fn succeed_create(&self) {
+        *self.failure.lock().expect("用例内互斥量不会中毒") = None;
     }
 
     /// 让此后每一次 `create` 在**返回之前**向该会话的 sink 推 `count` 条事件。
@@ -994,6 +1017,57 @@ impl ScriptedScript {
             .expect("用例内互斥量不会中毒")
             .clone()
     }
+
+    /// 让此后每一次 `resume` 都以该类别失败。
+    pub fn fail_resume(&self, kind: acp_core::model::UnavailableKind) {
+        *self.resume_failure.lock().expect("用例内互斥量不会中毒") = Some(kind);
+    }
+
+    /// 让此后每一次 `resume` 在返回前等待 `delay`（制造真实的建立窗口，观察并发合并）。
+    pub fn delay_resume(&self, delay: std::time::Duration) {
+        *self.resume_delay.lock().expect("用例内互斥量不会中毒") = Some(delay);
+    }
+
+    fn resume_failure(&self) -> Option<acp_core::model::UnavailableKind> {
+        *self.resume_failure.lock().expect("用例内互斥量不会中毒")
+    }
+
+    fn resume_delay(&self) -> Option<std::time::Duration> {
+        *self.resume_delay.lock().expect("用例内互斥量不会中毒")
+    }
+
+    /// `resume` 已被调用几次（真实恢复的副作用计数）。
+    pub fn resume_calls(&self) -> usize {
+        self.resumes.load(Ordering::SeqCst)
+    }
+
+    /// `resume` 收到的持久化 ACP 会话标识（按调用顺序）。
+    pub fn resumed_agent_ids(&self) -> Vec<String> {
+        self.resumed_agent_ids
+            .lock()
+            .expect("用例内互斥量不会中毒")
+            .clone()
+    }
+
+    /// `prompt` 已被调用几次：恢复/重建路径**不得**重放旧 prompt。
+    pub fn prompt_calls(&self) -> usize {
+        self.prompts.load(Ordering::SeqCst)
+    }
+
+    /// 让此后每一次逐会话释放都返回该结果（默认 `Released`）。
+    pub fn set_release_outcome(&self, outcome: acp_core::ports::ReleaseOutcome) {
+        *self.release_outcome.lock().expect("用例内互斥量不会中毒") = Some(outcome);
+    }
+
+    fn release_outcome(&self) -> acp_core::ports::ReleaseOutcome {
+        (*self.release_outcome.lock().expect("用例内互斥量不会中毒"))
+            .unwrap_or(acp_core::ports::ReleaseOutcome::Released)
+    }
+
+    /// 逐会话释放被调用的次数。
+    pub fn release_calls(&self) -> usize {
+        self.releases.load(Ordering::SeqCst)
+    }
 }
 
 /// 窗口期注入的一条后端事件（`session.mode.changed`）。
@@ -1019,6 +1093,28 @@ fn window_event(index: usize) -> acp_core::model::EndpointEvent {
 struct ScriptedBackends {
     parked: Arc<ParkedEvents>,
     script: Arc<ScriptedScript>,
+}
+
+/// 生命周期的逐会话释放替身：脚本后端不持有真实进程，默认释放即成功。
+///
+/// 产品路径由 `app::compose::HostSessionRelease` 接到 `agent-host`；本 harness 只需要让
+/// 「回收 → 再次恢复」这条状态迁移可达，并允许用例把结果改成 `Failed`/`Uncertain` 来观察
+/// 「回收失败保持占位」。
+struct ScriptedRelease {
+    script: Arc<ScriptedScript>,
+}
+
+#[async_trait::async_trait]
+impl acp_core::ports::SessionRelease for ScriptedRelease {
+    async fn release_session(
+        &self,
+        _session: acp_core::model::SessionId,
+        _generation: acp_core::model::ResourceGeneration,
+        _now: acp_core::model::Timestamp,
+    ) -> Result<acp_core::ports::ReleaseOutcome, PortError> {
+        self.script.releases.fetch_add(1, Ordering::SeqCst);
+        Ok(self.script.release_outcome())
+    }
 }
 
 struct ScriptedCatalog;
@@ -1069,6 +1165,7 @@ pub const SCRIPTED_AGENT_ID: &str = "codex";
 struct ScriptedEndpoint {
     sink: acp_core::ports::EventSink,
     parked: Arc<ParkedEvents>,
+    script: Arc<ScriptedScript>,
     /// Agent 侧会话标识：真实后端（`agent-host`）从 `session/new` 的响应里取，**不编造**；这里的
     /// `create` 分支给一个由会话标识派生的可预测取值（见 [`scripted_agent_session_id`]），`open`
     /// 分支为 `None`（与 `support::owner` 同款），`resume` 带回归属方的持久化取值。
@@ -1156,6 +1253,7 @@ impl SessionBackendFactory for ScriptedBackends {
         Ok(Box::new(ScriptedEndpoint::attach(
             sink,
             Arc::clone(&self.parked),
+            Arc::clone(&self.script),
             Some(scripted_agent_session_id(session)),
         )))
     }
@@ -1168,6 +1266,7 @@ impl SessionBackendFactory for ScriptedBackends {
         Ok(Box::new(ScriptedEndpoint::attach(
             sink,
             Arc::clone(&self.parked),
+            Arc::clone(&self.script),
             None,
         )))
     }
@@ -1178,9 +1277,22 @@ impl SessionBackendFactory for ScriptedBackends {
         request: acp_core::model::ResumeSessionRequest,
         sink: acp_core::ports::EventSink,
     ) -> Result<Box<dyn acp_core::ports::SessionEndpoint>, PortError> {
+        self.script.resumes.fetch_add(1, Ordering::SeqCst);
+        self.script
+            .resumed_agent_ids
+            .lock()
+            .expect("用例内互斥量不会中毒")
+            .push(request.agent_session_id.as_str().to_owned());
+        if let Some(delay) = self.script.resume_delay() {
+            tokio::time::sleep(delay).await;
+        }
+        if let Some(kind) = self.script.resume_failure() {
+            return Err(PortError::Unavailable(kind));
+        }
         Ok(Box::new(ScriptedEndpoint::attach(
             sink,
             Arc::clone(&self.parked),
+            Arc::clone(&self.script),
             Some(request.agent_session_id.clone()),
         )))
     }
@@ -1201,6 +1313,7 @@ impl acp_core::ports::SessionEndpoint for ScriptedEndpoint {
         request: acp_core::model::PromptRequest,
         _at: acp_core::model::Timestamp,
     ) -> Result<acp_core::ports::TurnAccepted, PortError> {
+        self.script.prompts.fetch_add(1, Ordering::SeqCst);
         let marker = prompt_marker(&request);
         self.parked.park(&marker, scripted_events(&marker));
         Ok(acp_core::ports::TurnAccepted {
@@ -1312,8 +1425,45 @@ fn create_owner_only_dir(path: &std::path::Path) {
 impl HostNode {
     /// 起一个真实的本机节点：真实 SQLite + 真实 `Authority` + 真实 listener（两个 path 家族）。
     pub async fn start(label: &str, host: &str) -> Self {
+        Self::start_with_lifecycle(
+            label,
+            host,
+            acp_core::use_cases::LifecycleConfig::new(1_800_000, 50).expect("默认生命周期配置合法"),
+        )
+        .await
+    }
+
+    /// 同 [`HostNode::start`]，但指定本机生命周期配置（容量/保留期用例需要短窗口或小上限）。
+    pub async fn start_with_lifecycle(
+        label: &str,
+        host: &str,
+        lifecycle_config: acp_core::use_cases::LifecycleConfig,
+    ) -> Self {
+        Self::start_root(TempRoot::new(label), host, lifecycle_config, None).await
+    }
+
+    /// 在**已有的临时根**上启动：重启用例在同一 `data_dir` 上再起一个组合根（第一轮必须先 `stop`）。
+    ///
+    /// `seed` 固定节点身份：`EphemeralKeystore` 每个实例只活在进程内，不固定种子的话重启会得到新的
+    /// node id 与公钥，已批准设备的信任行就都失效了——那不是「同一节点的重启」。临时根的所有权留在
+    /// 调用方（`TempRoot::new` 的所有者负责删除），本实例只持借用的视图。
+    pub async fn start_in_root(
+        root: &std::path::Path,
+        host: &str,
+        lifecycle_config: acp_core::use_cases::LifecycleConfig,
+        seed: [u8; 32],
+    ) -> Self {
+        Self::start_root(TempRoot::borrowed(root), host, lifecycle_config, Some(seed)).await
+    }
+
+    /// 装配主体：临时根、宿主名、生命周期配置与（可选的）固定身份种子。
+    async fn start_root(
+        root: TempRoot,
+        host: &str,
+        lifecycle_config: acp_core::use_cases::LifecycleConfig,
+        seed: Option<[u8; 32]>,
+    ) -> Self {
         let host_name = host.to_owned();
-        let root = TempRoot::new(label);
         let data_dir = root.join("data");
         create_owner_only_dir(&data_dir);
         let config_text = format!(
@@ -1341,9 +1491,12 @@ impl HostNode {
 
         let entropy: Arc<dyn identity_auth::EntropySource> =
             Arc::new(identity_keystore::OsEntropy::new());
-        let keystore: Arc<dyn identity_auth::IdentityKeystore> = Arc::new(
-            identity_keystore::EphemeralKeystore::new(Arc::clone(&entropy)),
-        );
+        let keystore: Arc<dyn identity_auth::IdentityKeystore> = match seed {
+            Some(seed) => Arc::new(identity_keystore::EphemeralKeystore::with_seed(seed)),
+            None => Arc::new(identity_keystore::EphemeralKeystore::new(Arc::clone(
+                &entropy,
+            ))),
+        };
         let identity = app::NodeIdentity::ensure(keystore.as_ref())
             .await
             .expect("本机身份就绪");
@@ -1368,6 +1521,20 @@ impl HostNode {
         let sync_events = sync_publisher.take_receiver();
         let (publisher, event_queue) =
             app::compose::forked_publisher_with_sync(Some(sync_publisher));
+        // 本机生命周期：与生产组合根同一形状（同一存储/时钟/发布端口），在开放入站之前收敛。
+        let lifecycle = Arc::new(acp_core::use_cases::LocalSessionLifecycle::new(
+            Arc::clone(&clock),
+            Arc::clone(&sessions),
+            Arc::clone(&publisher),
+            lifecycle_config,
+        ));
+        lifecycle
+            .converge_on_startup()
+            .await
+            .expect("启动收敛必须完成");
+        lifecycle.set_session_release(Arc::new(ScriptedRelease {
+            script: Arc::clone(&script),
+        }));
         let broker = Arc::new(acp_core::broker::Broker::new(
             acp_core::broker::BrokerDeps {
                 store: Arc::clone(&sessions),
@@ -1380,6 +1547,10 @@ impl HostNode {
             },
             acp_core::broker::BrokerConfig::default(),
         ));
+        assert!(
+            broker.set_lifecycle(Arc::clone(&lifecycle)),
+            "生命周期只接线一次"
+        );
         // 与组合根同一形状：同一个原生端口同时交给用例面与 Sync 命令面（连接级版本释放需要它）。
         let session_files = Arc::new(app::session_files::NativeSessionFiles::new());
         let core = Arc::new(
@@ -1414,7 +1585,7 @@ impl HostNode {
             },
         )
         .expect("注册 Node Link path");
-        let sync = app::daemon::register_sync_paths(
+        let sync = app::daemon::register_sync_paths_with_lifecycle(
             &mut listener,
             &Arc::clone(&core),
             &Arc::clone(&authority),
@@ -1425,6 +1596,10 @@ impl HostNode {
             session_files,
             None,
             sync_events,
+            Some((
+                Arc::clone(&lifecycle),
+                Arc::clone(&clock) as Arc<dyn acp_core::ports::Clock>,
+            )),
         )
         .expect("注册 Sync path");
         let addr = listener.local_addrs()[0];
@@ -1457,6 +1632,26 @@ impl HostNode {
         ));
         // Sync 的实时扇出（真实 `fanout::dispatch`）。
         let sync_registry = Arc::clone(sync.registry());
+        // 本机会话生命周期的周期回收（与 `NetIngress::start` 同一条接线）：关闭信号即取消，
+        // `HostNode::stop` 因此能验证它不是一个遗留的游离任务。
+        tasks.push((
+            "session_lifecycle_reclaim",
+            tokio::spawn({
+                let lifecycle = Arc::clone(&lifecycle);
+                let clock = Arc::clone(&clock);
+                let signal = signal.clone();
+                async move {
+                    server::sync::local_lifecycle::reclaim_loop(
+                        lifecycle,
+                        clock,
+                        acp_core::model::Actor::LocalCli,
+                        std::time::Duration::from_secs(60),
+                        signal,
+                    )
+                    .await
+                }
+            }),
+        ));
         // Sync 命令面的终态观察者（与 `app::daemon::NetIngress::start` 同一条接线）：
         // 没有它，mutation 的 `accepted` 之后就永远收不到终态。
         let sync_command = Arc::clone(sync.command());
@@ -1507,6 +1702,8 @@ impl HostNode {
             store,
             core,
             broker,
+            lifecycle,
+            clock,
             authority,
             router,
             addr,
@@ -1563,6 +1760,16 @@ impl HostNode {
     /// 真实 broker（提交节点级事件与读重放窗口）。
     pub fn broker(&self) -> &Arc<Broker> {
         &self.broker
+    }
+
+    /// 本机生命周期（保留期/容量/查看者的观测口；与命令面共用同一实例）。
+    pub fn lifecycle(&self) -> &Arc<acp_core::use_cases::LocalSessionLifecycle> {
+        &self.lifecycle
+    }
+
+    /// 服务端时钟（与命令面/租约同一来源）。
+    pub fn clock(&self) -> &Arc<dyn acp_core::ports::Clock> {
+        &self.clock
     }
 
     /// 脚本端点暂存的事件。
@@ -1695,6 +1902,8 @@ impl HostNode {
             store,
             core,
             broker,
+            lifecycle,
+            clock,
             authority,
             router,
             addr: _,
@@ -1706,7 +1915,7 @@ impl HostNode {
             tasks,
             _temp,
         } = self;
-        let _ = (&store, &sync_registry, &parked, &script);
+        let _ = (&store, &sync_registry, &parked, &script, &lifecycle, &clock);
         shutdown.trigger();
         for (name, mut handle) in tasks {
             match tokio::time::timeout(Duration::from_secs(10), &mut handle).await {
@@ -1736,12 +1945,14 @@ impl ScriptedEndpoint {
     fn attach(
         sink: acp_core::ports::EventSink,
         parked: Arc<ParkedEvents>,
+        script: Arc<ScriptedScript>,
         agent_session_id: Option<acp_core::model::AgentSessionId>,
     ) -> Self {
         parked.attach(&sink);
         Self {
             sink,
             parked,
+            script,
             agent_session_id,
         }
     }

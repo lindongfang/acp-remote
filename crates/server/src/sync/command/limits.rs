@@ -95,7 +95,7 @@ impl CommandFamily {
             | CommandName::SessionConfigSet
             | CommandName::SessionTitleSet => CommandFamily::ConfigureSession,
             CommandName::PermissionResolve => CommandFamily::Approve,
-            CommandName::SessionCreate => CommandFamily::CreateSession,
+            CommandName::SessionCreate | CommandName::SessionResume => CommandFamily::CreateSession,
             CommandName::WorkspaceMkdir => CommandFamily::CreateDirectory,
         }
     }

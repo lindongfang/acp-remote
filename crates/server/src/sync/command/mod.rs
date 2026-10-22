@@ -34,8 +34,7 @@
 //!    网络来源身份计数（§14「网络身份不能替代设备授权」）；单次超限回可重试的 `resource.rate_limited`
 //!    （带 `details.retryAfterMs`），**连续**超限达阈值才以 `4429` 关闭该连接。
 //! 4. **封闭词表外一律 `command.unsupported` 且不在本机执行任何操作**（[`decode`]）：
-//!    `session.resume` 只经 Node Link 接受，Sync v1 收到时同样按 `command.unsupported` 拒绝
-//!    （§11.5 该行）。
+//!    未登记的命令名在解码期即被拒，本层之下没有任何 core 调用。
 //! 5. **连接期去重不落盘**（[`ConnectionState::answered`]）：查询类命令的重复提交只在本连接内去重
 //!    （§11.2「查询类命令可以只在连接期去重」），同一连接内重复 `messageId` 不产生第二次业务读取；
 //!    不同连接各自独立。
@@ -68,8 +67,10 @@ use acp_core::model::{
     SessionTitle, SubmissionId, Timestamp as CoreTimestamp, TurnId, UnavailableKind, Version,
     WorkspaceSource,
 };
-use acp_core::ports::{RemoteCommandRecord, SessionFiles, SessionQuery};
-use acp_core::use_cases::UseCases;
+use acp_core::ports::{
+    ActivationOutcome, ActivationRequest, RemoteCommandRecord, SessionFiles, SessionQuery,
+};
+use acp_core::use_cases::{ActivationPlan, LocalSessionLifecycle, ResumeAdmission, UseCases};
 use identity_auth::Authority;
 use sha2::Digest as _;
 use sync_protocol::command::{
@@ -94,6 +95,7 @@ use crate::command_log::{self, Cause, Subject, TerminalClass};
 use crate::sync::attachments::ATTACHMENT_FEATURE;
 use crate::sync::conn::registry::SendFault;
 use crate::sync::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close};
+use crate::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE;
 use crate::sync::snapshot::LOCAL_CATALOG_FEATURE;
 use crate::sync::subscribe::cursor::CursorFault;
 use crate::sync::subscribe::{NegotiatedFeatures, OwnerReachability};
@@ -134,6 +136,145 @@ pub const SESSION_TITLE_FEATURE: &str = "core.session-title.v1";
 /// **不得**放大取值「留余量」：与上限比较的是加法，常量每虚高 1 字节，就会把 body 落在
 /// `[max - 常量, max - 真实开销]` 区间里**装得下**的结果误判成 `resource.result_too_large`。
 const ENVELOPE_OVERHEAD_BYTES: u64 = 202;
+
+/// 一次 `session.resume` 失败的映射（拒绝类与终态类共用）。
+#[derive(Debug, Clone)]
+struct ResumeFailure {
+    code: ErrorCode,
+    message: &'static str,
+    retryable: bool,
+    /// `true` = 已受理但结果无法证明（终态 `uncertain`）。
+    uncertain: bool,
+}
+
+/// 同会话激活的合并门：建立者完成/失败后，**由建立者代所有等待者收口**（等待者已各自落了 `accepted`
+/// 记录），因此等待者不需要阻塞连接、也不需要自己再等一次后端。
+///
+/// 门只对**当前这一次**建立有意义（[`ResumeGateState::live`]）：`begin` 标记建立者在场、自增周期号
+/// （[`ResumeGateState::epoch`]）并清掉上一周期的结果，建立者在每个出口带着自己那一代的 `epoch`
+/// `publish` 并复位 `live`。没有活的建立者时（回收未确认、进程重启后只剩 `Activating` 的目录事实、
+/// 或结果已经发布）[`ResumeGate::register`] 一律立即回显式 `uncertain`——既不空等一个永远不会到来的
+/// 结果，也不把上一周期的 `Ok(())` 当成这次请求的 `completed`。
+///
+/// `epoch` 是必需的栅栏：建立者在 `settle_session` 之后、`publish` 之前有窗口，此时下一周期可能已经
+/// `begin` 并登记了新的等待者。`live` 只是无身份的布尔，迟到的那次 `publish` 会把新周期一起关掉，
+/// 并用自己的旧结果收口属于新周期的等待者（本该 `completed` 的 resume 被写成 `uncertain`）。因此
+/// 收口必须校验周期号，且等待者按登记时的周期入队。
+#[derive(Debug, Default)]
+struct ResumeGate {
+    state: Mutex<ResumeGateState>,
+}
+
+#[derive(Debug, Default)]
+struct ResumeGateState {
+    /// 当前建立周期的身份：每次 `begin` 自增。谁开周期谁持有它，`publish` 时出示。
+    epoch: u64,
+    /// 是否有活着的建立者会在之后 `publish`（唯一能证明「结果还会来」的事实）。
+    live: bool,
+    outcome: Option<Result<(), ResumeFailure>>,
+    /// 等待者连同**登记时的周期号**入队：旧周期的建立者只能收口自己那一代的等待者。
+    waiters: Vec<(u64, ResumeWaiter)>,
+}
+
+/// 一条等待同一会话建立结果的命令：建立者收口时用它写自己的终态。
+#[derive(Debug, Clone)]
+struct ResumeWaiter {
+    actor: Actor,
+    request_id: CoreRequestId,
+    features: NegotiatedFeatures,
+}
+
+impl ResumeGate {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// 开始一次新的建立：自增周期号、置 `live` 并清掉上一周期的结果（已有等待者保留给**它们那一代**
+    /// 的建立者收口）。返回的 `epoch` 就是建立者身份的凭据，必须原样交给自己的每次 `publish`。
+    fn begin(&self) -> u64 {
+        let mut state = lock(&self.state);
+        state.epoch = state.epoch.wrapping_add(1);
+        state.live = true;
+        state.outcome = None;
+        state.epoch
+    }
+
+    /// 登记等待者；**只有活的建立者**才可能给出本请求的结局。
+    ///
+    /// `!live` 覆盖三种情况：从未建立过（进程重启后目录里仍是 `Activating` 或回收未确认）、建立者已经
+    /// 发布结果、上一周期的结果还留在门里。三者都拿不到本请求可靠的结局，因此不得复用旧 `outcome`
+    /// （上一轮的 `Ok(())` 会被伪造成这次 `completed`），只能显式失败——客户端据此重试或查
+    /// `command.status`，不会永远停在 `accepted`。
+    fn register(&self, waiter: ResumeWaiter) -> Option<Result<(), ResumeFailure>> {
+        let mut state = lock(&self.state);
+        if !state.live {
+            return Some(Err(unconfirmed_resume_failure()));
+        }
+        if let Some(outcome) = state.outcome.clone() {
+            return Some(outcome);
+        }
+        let epoch = state.epoch;
+        state.waiters.push((epoch, waiter));
+        None
+    }
+
+    /// 发布结果并收口**本代**等待者：只在自己那一代仍是当前周期时才复位 `live` 并记录结果（此后到达
+    /// 的等待者一律 `uncertain`，迟到的结果也不覆盖已发布的事实）。
+    ///
+    /// 建立者公布结果时可能已经不是当前周期（它 `settle_session` 期间下一周期已 `begin` 并登记了新等待
+    /// 者）。此时**只**取走登记在它那一代的等待者：它们等的确实是这次建立的结果，留在这里没人会再收口，
+    /// 会把它们的请求永久钉在 `accepted`；而新周期的 `live`、结果与等待者一概不碰——那批等待者由新建立
+    /// 者用自己的结果收口，不得被旧结果顶替成 `uncertain`。
+    fn publish(&self, epoch: u64, outcome: Result<(), ResumeFailure>) -> Vec<ResumeWaiter> {
+        let mut state = lock(&self.state);
+        let mut own = Vec::new();
+        let mut rest = Vec::with_capacity(state.waiters.len());
+        for (queued, waiter) in std::mem::take(&mut state.waiters) {
+            if queued == epoch {
+                own.push(waiter);
+            } else {
+                rest.push((queued, waiter));
+            }
+        }
+        state.waiters = rest;
+        if state.epoch == epoch {
+            state.live = false;
+            if state.outcome.is_none() {
+                state.outcome = Some(outcome);
+            }
+        }
+        own
+    }
+}
+
+/// 一条显式的 `uncertain`：已受理，但结局无法证明。
+///
+/// 三处共用同一个值：没有活的建立者可等（[`ResumeGate::register`]）、建立者发现本次只是幂等重放
+/// （[`replayed_resume_settlement`]），以及同键不同语义的冲突（等待者不因别人的冲突被误判成同一失败）。
+fn unconfirmed_resume_failure() -> ResumeFailure {
+    ResumeFailure {
+        code: ErrorCode::CommandUncertain,
+        message: "the session resume outcome cannot be confirmed",
+        retryable: false,
+        uncertain: true,
+    }
+}
+
+/// 建立者发现本次**没有执行后端**（同 `requestId` 已有受理行，`established == false`）时的收口。
+///
+/// 两个决定都不许可松：激活归约必须用 `ActivationOutcome::Failed`——它是「可证明本次没有建立外部资源」
+/// 的那条语义，会**交还本代预占**并把会话收敛回 `Idle`；若就此返回，会话会永久停在 `Activating` + 已预占，
+/// 后续 `resume` 全落 `InFlight` 且名额永不归还（`Uncertain` 反而会保留占位）。持久记录与等待者则收敛为
+/// 显式 `uncertain`：本次既没建立、也没资格替别人的受理写 `completed`。
+fn replayed_resume_settlement() -> (ActivationOutcome, ResumeFailure) {
+    let failure = unconfirmed_resume_failure();
+    (
+        ActivationOutcome::Failed {
+            error: core_public_error(&failure),
+        },
+        failure,
+    )
+}
 
 /// 一条连接的命令面状态。
 #[derive(Debug, Default)]
@@ -269,6 +410,11 @@ pub struct CommandRoute {
     /// 会话文件/Git 只读端口：与 `UseCases` 内部注入的是**同一个实例**，连接关闭/换新版本时由本路由
     /// 调用 `release_content`（用例面不暴露端口，释放责任在接线层）。
     files: Arc<dyn SessionFiles>,
+    /// 本机生命周期（`core.local-session-lifecycle.v1`）：`session.resume` 的激活/复用与 owned 摘要的
+    /// `localActivity` 都经它读。`None` = 组合根没有接线（该 feature 不宣告）。
+    lifecycle: Option<Arc<LocalSessionLifecycle>>,
+    /// 同会话激活的合并门：建立者完成/失败时唤醒其它设备的等待者。
+    resume_gates: Mutex<BTreeMap<String, Arc<ResumeGate>>>,
     rate: CommandRateLimiter,
     /// 连续超限多少次即以 `4429` 关闭连接（生产路径恒为
     /// [`limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS`]，用例把它压小）。
@@ -299,6 +445,7 @@ impl CommandRoute {
         registry: Arc<ConnectionRegistry>,
         owner: Arc<dyn OwnerReachability>,
         files: Arc<dyn SessionFiles>,
+        lifecycle: Option<Arc<LocalSessionLifecycle>>,
     ) -> Self {
         let (mkdir_queue, mkdir_receiver) = mpsc::channel(MKDIR_QUEUE_CAPACITY);
         Self {
@@ -308,6 +455,8 @@ impl CommandRoute {
             registry,
             owner,
             files,
+            lifecycle,
+            resume_gates: Mutex::new(BTreeMap::new()),
             rate: CommandRateLimiter::new(limits::COMMANDS_PER_MINUTE, limits::COMMAND_WINDOW),
             consecutive_limit: limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS,
             states: Mutex::new(BTreeMap::new()),
@@ -678,10 +827,25 @@ impl CommandRoute {
         let features = self.features(handle);
         let outcome = match command.payload.clone() {
             CommandPayload::SessionList(_) => {
-                query::session_list(&self.core, &self.owner, actor, &features).await
+                query::session_list(
+                    &self.core,
+                    &self.owner,
+                    actor,
+                    &features,
+                    self.lifecycle.as_ref(),
+                )
+                .await
             }
             CommandPayload::SessionRead(payload) => {
-                query::session_read(&self.core, actor, &command, payload, &features).await
+                query::session_read(
+                    &self.core,
+                    actor,
+                    &command,
+                    payload,
+                    &features,
+                    self.lifecycle.as_ref(),
+                )
+                .await
             }
             CommandPayload::CommandStatus(payload) => {
                 query::command_status(&self.core, actor, payload, &features).await
@@ -930,6 +1094,9 @@ impl CommandRoute {
         // 而不是让 generic mutation 管道把它当成「会话不存在」。
         if command.command == CommandName::SessionTitleSet {
             return self.on_session_title(handle, &actor, command).await;
+        }
+        if command.command == CommandName::SessionResume {
+            return self.on_session_resume(handle, &actor, command).await;
         }
         let Some(payload) = core_payload(&command.payload).ok() else {
             self.deny(
@@ -1673,9 +1840,11 @@ impl CommandRoute {
         self.send_accepted(handle, &command, None, None);
         // 终态：把持久记录推进到 `completed { sessionId, session }`。摘要与 `session.list` **同源**
         // （同一个 `wire_session` 投影），因此两侧形状必然一致。
-        let catalog = self.features(handle).contains(LOCAL_CATALOG_FEATURE);
+        let features = self.features(handle);
+        let catalog = features.contains(LOCAL_CATALOG_FEATURE);
+        let lifecycle_visible = features.contains(LOCAL_LIFECYCLE_FEATURE);
         let settled = match self
-            .created_session_summary(actor, &prepared, catalog)
+            .created_session_summary(actor, &prepared, catalog, lifecycle_visible)
             .await
         {
             Some(summary) => {
@@ -1742,6 +1911,621 @@ impl CommandRoute {
         }
         self.watch_terminal(handle, &command, actor);
         RouteOutcome::Claimed
+    }
+
+    // -------------------------------------------------------------------------------------
+    // session.resume（core.local-session-lifecycle.v1）
+    // -------------------------------------------------------------------------------------
+
+    /// `session.resume` 的 Sync 面（§11.5/§11.8）。
+    ///
+    /// 顺序固定为「feature 门控 → 认证（已由 `on_command` 完成）→ owned 定位 → 生命周期准入 → 持久
+    /// 受理 → 工作 → 终态」：
+    ///
+    /// - **未协商 feature**：`command.unsupported`，不读会话行、不触碰 Agent（§5.2/§11.8）。
+    /// - **ready 复用与并发合并**：受理-only 记录由 core 的
+    ///   [`UseCases::admit_session_resume`](acp_core::use_cases::UseCases::admit_session_resume) 写入，
+    ///   **不调用** `resume_session`（那会再发一次 ACP `session/resume`）；同一会话的建立者完成后经
+    ///   [`ResumeGate`] 唤醒等待者，后者各自写自己的终态。
+    /// - **建立**：`resume_session` 先落 `accepted`、再做唯一一次后端恢复；失败按
+    ///   [`Self::resume_failure`] 分类，绝不误报 `protocol.schema_invalid`。
+    async fn on_session_resume(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        command: Command,
+    ) -> RouteOutcome {
+        if !self.features(handle).contains(LOCAL_LIFECYCLE_FEATURE) {
+            return self.reject_resume(
+                handle,
+                &command,
+                ErrorCode::CommandUnsupported,
+                "the local session lifecycle feature was not negotiated",
+            );
+        }
+        let Some(lifecycle) = self.lifecycle.clone() else {
+            return self.reject_resume(
+                handle,
+                &command,
+                ErrorCode::CommandUnsupported,
+                "the local session lifecycle is not available on this host",
+            );
+        };
+        if !matches!(command.payload, CommandPayload::SessionResume(_)) {
+            self.deny(
+                handle,
+                &command,
+                "the payload does not match the command",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        }
+        let Some(session) = command
+            .session_id
+            .as_ref()
+            .and_then(|id| acp_core::model::SessionId::new(id.as_str()).ok())
+        else {
+            self.deny(
+                handle,
+                &command,
+                "sessionId is not a session id",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        // owned 定位：本机会话列表是唯一口径；远程/导入会话一律 `session.not_found`（不泄露来源）。
+        match self
+            .core
+            .list_sessions(actor, acp_core::ports::SessionQuery::default())
+            .await
+        {
+            Ok(sessions) if sessions.iter().any(|s| s.session_id() == &session) => {}
+            Ok(_) => {
+                return self.reject_resume(
+                    handle,
+                    &command,
+                    ErrorCode::SessionNotFound,
+                    "the session is not available on this host",
+                );
+            }
+            Err(error) => {
+                return self.resume_rejected_by_port(handle, &command, &error);
+            }
+        }
+        let Some(fingerprint) = payload_fingerprint(&command.payload) else {
+            return self.encoding_fault(handle);
+        };
+        let Some(request_id) = core_request_id(&command.request_id) else {
+            return self.encoding_fault(handle);
+        };
+        let request = ActivationRequest {
+            actor: actor.clone(),
+            request_id: request_id.clone(),
+            request_fingerprint: fingerprint.clone(),
+            session: session.clone(),
+        };
+        let plan = match lifecycle.activate_session(actor, request).await {
+            Ok(plan) => plan,
+            Err(error) => return self.resume_rejected_by_port(handle, &command, &error),
+        };
+        match plan {
+            ActivationPlan::Settled(record) => {
+                self.send_record_terminal(handle, &command.request_id, command.command, &record);
+                RouteOutcome::Claimed
+            }
+            ActivationPlan::CapacityExceeded => self.reject_resume(
+                handle,
+                &command,
+                ErrorCode::SessionCapacityExceeded,
+                "no active session slot is available right now",
+            ),
+            ActivationPlan::Reused { .. } => {
+                // 资源已经 ready：只落受理与终态，**不触碰 ACP**。
+                match self
+                    .core
+                    .admit_session_resume(actor, request_id.clone(), fingerprint, session.clone())
+                    .await
+                {
+                    Ok(ResumeAdmission::Settled(record)) => {
+                        self.send_record_terminal(
+                            handle,
+                            &command.request_id,
+                            command.command,
+                            &record,
+                        );
+                    }
+                    Ok(ResumeAdmission::InFlight) => {
+                        // 同键已有受理行：回首次落盘时间，再等观察者推终态（不阻塞后续帧）。
+                        self.send_accepted_if_persisted(handle, &command, actor, &request_id)
+                            .await;
+                        self.watch_terminal(handle, &command, actor);
+                    }
+                    Ok(ResumeAdmission::Prepared) => {
+                        // 刚写入的受理行就是首次落盘时间（不用现场时钟）。
+                        self.send_accepted_if_persisted(handle, &command, actor, &request_id)
+                            .await;
+                        self.finish_resume(handle, actor, &command, &session, Ok(()))
+                            .await;
+                    }
+                    Err(error) => {
+                        return self.resume_rejected_by_port(handle, &command, &error);
+                    }
+                }
+                RouteOutcome::Claimed
+            }
+            ActivationPlan::Establish { generation } => {
+                // 建立者：开合并门 → 后端恢复一次 → 生命周期收口 → 写自己的终态 → 代等待者收口。
+                let gate = self.resume_gate(&session);
+                // 本次建立周期的身份：之后每个出口的 `publish` 都必须出示它，迟到的发布才不会把下一代
+                // 周期（别人的 `live` 与等待者）一起收口。
+                let epoch = gate.begin();
+                let result = match self
+                    .core
+                    .resume_session_with_execution(
+                        actor,
+                        request_id.clone(),
+                        fingerprint,
+                        session.clone(),
+                    )
+                    .await
+                {
+                    Ok(execution) if execution.established => {
+                        // `Broker` 已先持久化 accepted 行；在终态之前显式回一次 accepted（§11.2：
+                        // mutation 只同步接受，终态由持久事件给出），时间取首次落盘值。
+                        self.send_accepted(handle, &command, None, execution.accepted_at.as_ref());
+                        let _ = lifecycle
+                            .settle_session(
+                                actor,
+                                session.clone(),
+                                generation,
+                                ActivationOutcome::Ready,
+                            )
+                            .await;
+                        self.finish_resume(handle, actor, &command, &session, Ok(()))
+                            .await;
+                        Ok(())
+                    }
+                    Ok(_) => {
+                        // 幂等重放：同 `requestId` 已有受理行，本次**没有**执行后端，也不会再有任何
+                        // 建立者收口这条会话的资源代。就此返回会让会话永久停在 `Activating` + 已预占：
+                        // 之后每次 resume 都落 `InFlight`，名额永不归还。因此显式收口——先按「先受理、
+                        // 后终态」补发 accepted，用 `Failed` 交还本代预占，持久记录收敛为 `uncertain`，
+                        // 再把同一结果交给外层 `publish` 唤醒等待者（不写 `completed`，不碰 `Ready`）。
+                        let (activation, failure) = replayed_resume_settlement();
+                        self.send_accepted_if_persisted(handle, &command, actor, &request_id)
+                            .await;
+                        let _ = lifecycle
+                            .settle_session(actor, session.clone(), generation, activation)
+                            .await;
+                        self.finish_resume(handle, actor, &command, &session, Err(failure.clone()))
+                            .await;
+                        Err(failure)
+                    }
+                    Err(error) => {
+                        let failure = self.resume_failure(&error);
+                        if failure.code == ErrorCode::CommandIdempotencyConflict {
+                            // 同键不同语义：零副作用，回 `rejected`，不写失败终态。等待者不因这条
+                            // 冲突的请求被误判成同一失败：它们的会话仍无建立结果，收敛为 uncertain。
+                            let waiter_failure = unconfirmed_resume_failure();
+                            self.finish_resume_waiters(
+                                &session,
+                                gate.publish(epoch, Err(waiter_failure.clone())),
+                                Err(waiter_failure),
+                            )
+                            .await;
+                            return self.reject_resume(
+                                handle,
+                                &command,
+                                ErrorCode::CommandIdempotencyConflict,
+                                "the requestId was already used with different parameters",
+                            );
+                        }
+                        // `resume_session` 可能已先写下 accepted 行再失败（例如 Agent 拒绝恢复）：
+                        // 按「先受理、后终态」补发 accepted；前置检查类失败没有持久行，不发。
+                        self.send_accepted_if_persisted(handle, &command, actor, &request_id)
+                            .await;
+                        let activation = if failure.uncertain {
+                            ActivationOutcome::Uncertain {
+                                error: core_public_error(&failure),
+                            }
+                        } else {
+                            ActivationOutcome::Failed {
+                                error: core_public_error(&failure),
+                            }
+                        };
+                        let _ = lifecycle
+                            .settle_session(actor, session.clone(), generation, activation)
+                            .await;
+                        self.finish_resume(handle, actor, &command, &session, Err(failure.clone()))
+                            .await;
+                        Err(failure)
+                    }
+                };
+                // 只收口本代等待者：若期间已开启下一周期，`publish` 不动新周期的 `live` 与等待者。
+                let waiters = gate.publish(epoch, result.clone());
+                self.finish_resume_waiters(&session, waiters, result).await;
+                RouteOutcome::Claimed
+            }
+            ActivationPlan::InFlight => {
+                // 另一个请求正在建立（或回收未确认）：本请求留下自己的合法受理记录，然后登记为等待者。
+                // 门只在**活的建立者**在场时排队（登记即回 `accepted` + 终态观察，**不阻塞**连接）；
+                // 没有活的建立者（回收未确认 / 结果已发布 / 重启后只剩目录事实）时 `register` 直接回
+                // 显式 `uncertain`，本请求立即收口，绝不停在 `accepted` 等一个不会到来的结果。
+                match self
+                    .core
+                    .admit_session_resume(actor, request_id.clone(), fingerprint, session.clone())
+                    .await
+                {
+                    Ok(ResumeAdmission::Settled(record)) => {
+                        self.send_record_terminal(
+                            handle,
+                            &command.request_id,
+                            command.command,
+                            &record,
+                        );
+                        return RouteOutcome::Claimed;
+                    }
+                    Ok(ResumeAdmission::InFlight | ResumeAdmission::Prepared) => {}
+                    Err(error) => {
+                        return self.resume_rejected_by_port(handle, &command, &error);
+                    }
+                }
+                // 受理时间取**首次落盘**的记录（不是现在的时钟）；没有行时（不应发生）不发。
+                self.send_accepted_if_persisted(handle, &command, actor, &request_id)
+                    .await;
+                let gate = self.resume_gate(&session);
+                let immediate = gate.register(ResumeWaiter {
+                    actor: actor.clone(),
+                    request_id: request_id.clone(),
+                    features: self.features(handle),
+                });
+                match immediate {
+                    Some(outcome) => {
+                        // 不用再等：要么建立者已经收口（按它的结果写本请求自己的终态），要么门里没有
+                        // 活的建立者（`uncertain` 是显式失败，不伪造 completed）。
+                        self.finish_resume(handle, actor, &command, &session, outcome)
+                            .await;
+                    }
+                    None => self.watch_terminal(handle, &command, actor),
+                }
+                RouteOutcome::Claimed
+            }
+        }
+    }
+
+    /// 建立/复用完成后的终态落盘与回包。
+    ///
+    /// `Ok(())` 写 `completed { sessionId, session }`；`Err(failure)` 写 `failed`（可证明）或
+    /// `uncertain`（说不清）。回包以持久记录为唯一权威（重试与 `command.status` 因此同形）。
+    async fn finish_resume(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        command: &Command,
+        session: &acp_core::model::SessionId,
+        outcome: Result<(), ResumeFailure>,
+    ) {
+        let Some(request_id) = core_request_id(&command.request_id) else {
+            self.encoding_fault(handle);
+            return;
+        };
+        let features = self.features(handle);
+        let persisted = self
+            .settle_resume_for(actor, &request_id, &features, session, outcome.clone())
+            .await;
+        if !persisted {
+            // 落盘没成功：以持久记录为唯一事实，区分三种形状（不伪造 completed）。
+            match self.core.command_status(actor, request_id.clone()).await {
+                Ok(Some(record)) if record.status().is_terminal() => {
+                    // 已经由另一条路径收口：回首次终态。
+                    self.send_record_terminal(
+                        handle,
+                        &command.request_id,
+                        command.command,
+                        &record,
+                    );
+                }
+                Ok(Some(record)) => {
+                    // 受理行存在但终态没落盘：无法证明结果，回显式 uncertain（带首次受理时间）。
+                    debug!(
+                        event = "sync.session_resume_terminal_unsettled",
+                        connection_id = handle.connection_id().as_str(),
+                        request_id = command.request_id.as_str(),
+                        "the session.resume terminal could not be persisted"
+                    );
+                    self.send_resume_uncertain(handle, command, record.accepted_at());
+                }
+                Ok(None) => {
+                    // **没有受理行** = 本次在受理之前就失败（没有恢复数据、cwd 复校验失败、
+                    // 授权/幂等冲突）：可证明本机没有任何副作用，必须回 `rejected` + 分类错误码，
+                    // 不能借用 `command.uncertain` —— 那会让客户端以为有一条已受理、待核实的命令。
+                    let failure = match &outcome {
+                        Err(failure) => failure.clone(),
+                        Ok(()) => ResumeFailure {
+                            code: ErrorCode::InternalUnavailable,
+                            message: "the session resume outcome cannot be confirmed",
+                            retryable: true,
+                            uncertain: true,
+                        },
+                    };
+                    let code = if failure.code == ErrorCode::CommandUncertain {
+                        ErrorCode::InternalUnavailable
+                    } else {
+                        failure.code
+                    };
+                    self.reject_resume(handle, command, code, failure.message);
+                }
+                Err(_) => {
+                    // 记录读不回来：不得回 `rejected`（它断言零副作用），保持 uncertain。
+                    self.send_resume_uncertain(handle, command, None);
+                }
+            }
+            return;
+        }
+        self.reply_resume_record(handle, command, actor, &request_id)
+            .await;
+    }
+
+    /// 把一条等待者（自己的 `accepted` 记录）按建立者的结果收口；观察者随后把终态推回对端。
+    async fn finish_resume_waiters(
+        &self,
+        session: &acp_core::model::SessionId,
+        waiters: Vec<ResumeWaiter>,
+        outcome: Result<(), ResumeFailure>,
+    ) {
+        for waiter in waiters {
+            let persisted = self
+                .settle_resume_for(
+                    &waiter.actor,
+                    &waiter.request_id,
+                    &waiter.features,
+                    session,
+                    outcome.clone(),
+                )
+                .await;
+            if !persisted {
+                debug!(
+                    event = "sync.session_resume_waiter_unsettled",
+                    session_id = session.as_str(),
+                    request_id = waiter.request_id.as_str(),
+                    "a merged session.resume waiter could not be persisted"
+                );
+            }
+        }
+    }
+
+    /// 计算并写入一条 `session.resume` 的终态；返回是否真的写入了记录。
+    async fn settle_resume_for(
+        &self,
+        actor: &Actor,
+        request_id: &CoreRequestId,
+        features: &NegotiatedFeatures,
+        session: &acp_core::model::SessionId,
+        outcome: Result<(), ResumeFailure>,
+    ) -> bool {
+        let (status, result, error) = match &outcome {
+            Ok(()) => match self.resume_result(actor, session, features).await {
+                Some(projected) => {
+                    let command_result = serde_json::to_string(&projected).ok().and_then(|text| {
+                        acp_core::model::CommandResult::from_json_text(&text).ok()
+                    });
+                    (
+                        acp_core::model::CommandStatus::Completed,
+                        command_result,
+                        None,
+                    )
+                }
+                // 恢复已成功但摘要投影不出来：不能用 `failed` 撒谎，按契约收敛为 `uncertain`。
+                None => {
+                    let failure = ResumeFailure {
+                        code: ErrorCode::CommandUncertain,
+                        message: "the resumed session cannot be projected",
+                        retryable: false,
+                        uncertain: true,
+                    };
+                    (
+                        acp_core::model::CommandStatus::Uncertain,
+                        None,
+                        Some(core_public_error(&failure)),
+                    )
+                }
+            },
+            Err(failure) => (
+                if failure.uncertain {
+                    acp_core::model::CommandStatus::Uncertain
+                } else {
+                    acp_core::model::CommandStatus::Failed
+                },
+                None,
+                Some(core_public_error(failure)),
+            ),
+        };
+        matches!(
+            self.core
+                .settle_session_resume(actor, request_id, status, result, error)
+                .await,
+            Ok(true)
+        )
+    }
+
+    /// 以持久记录回包；记录不可读/未终结时回显式 `uncertain`（不伪造 completed）。
+    async fn reply_resume_record(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        actor: &Actor,
+        request_id: &CoreRequestId,
+    ) {
+        match self.core.command_status(actor, request_id.clone()).await {
+            Ok(Some(record)) if record.status().is_terminal() => {
+                self.send_record_terminal(handle, &command.request_id, command.command, &record);
+            }
+            Ok(Some(record)) => self.send_resume_uncertain(handle, command, record.accepted_at()),
+            _ => self.send_resume_uncertain(handle, command, None),
+        }
+    }
+
+    /// 一条显式的 `uncertain`：`acceptedAt` 取持久记录的首次受理时间；记录不可读时退回本机时钟。
+    fn send_resume_uncertain(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        accepted_at: Option<&CoreTimestamp>,
+    ) {
+        let Some(error) = public_error(
+            ErrorCode::CommandUncertain,
+            "the session resume outcome cannot be confirmed",
+            RawObject::empty(),
+        ) else {
+            return;
+        };
+        let stamp = match accepted_at {
+            Some(stamp) => stamp.as_str().to_owned(),
+            None => self.authority.now().as_str().to_owned(),
+        };
+        let Some(accepted_at) = wire_timestamp(&stamp) else {
+            self.encoding_fault(handle);
+            return;
+        };
+        self.send_result(
+            handle,
+            &CommandResult {
+                request_id: command.request_id.clone(),
+                command: command.command,
+                status: CommandState::Uncertain,
+                accepted_at: Nullable::value(accepted_at),
+                terminal_event_id: Nullable::null(),
+                result: Nullable::null(),
+                error: Nullable::value(error),
+            },
+            "mutation",
+        );
+    }
+
+    /// 激活成功后的 `sessionResumeResult`（摘要与 `session.list` 同源，含协商后的 `localActivity`）。
+    async fn resume_result(
+        &self,
+        actor: &Actor,
+        session: &acp_core::model::SessionId,
+        features: &NegotiatedFeatures,
+    ) -> Option<sync_protocol::command::SessionResumeResult> {
+        let summaries = self
+            .core
+            .list_sessions(actor, acp_core::ports::SessionQuery::default())
+            .await
+            .ok()?;
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.session_id() == session)?;
+        let activity = match (&self.lifecycle, features.contains(LOCAL_LIFECYCLE_FEATURE)) {
+            (Some(lifecycle), true)
+                if matches!(summary.origin(), acp_core::model::ResourceOrigin::Local) =>
+            {
+                crate::sync::local_lifecycle::activity_of(lifecycle, actor, session, true, true)
+                    .await
+            }
+            _ => None,
+        };
+        Some(sync_protocol::command::SessionResumeResult {
+            session_id: Uuid::parse(session.as_str()).ok()?,
+            session: self::query::wire_session(
+                summary,
+                features.contains(LOCAL_CATALOG_FEATURE),
+                activity,
+            )?,
+        })
+    }
+
+    fn resume_failure(&self, error: &PortError) -> ResumeFailure {
+        match error {
+            PortError::Conflict(ConflictKind::IdempotencyConflict) => ResumeFailure {
+                code: ErrorCode::CommandIdempotencyConflict,
+                message: "the requestId was already used with different parameters",
+                retryable: false,
+                uncertain: false,
+            },
+            PortError::Unavailable(UnavailableKind::BackendUnsupported) => ResumeFailure {
+                code: ErrorCode::CapabilityUnsupportedByAgent,
+                message: "the agent cannot resume this session",
+                retryable: false,
+                uncertain: false,
+            },
+            // agent-host proves the attempt established no session (including an explicit
+            // Agent refusal). Preserve that fact so retries do not get stuck querying uncertain.
+            PortError::Unavailable(UnavailableKind::SessionNotEstablished) => ResumeFailure {
+                code: ErrorCode::InternalUnavailable,
+                message: "会话恢复未成功建立：Agent 已拒绝恢复，或恢复请求未能发出；请检查 Agent 的原会话恢复数据。",
+                retryable: true,
+                uncertain: false,
+            },
+            PortError::NotFound(_) => ResumeFailure {
+                code: ErrorCode::SessionNotFound,
+                message: "the session is not available on this host",
+                retryable: false,
+                uncertain: false,
+            },
+            // 其余失败无法证明「没有建立外部资源」：按 uncertain 收口，不自动重派。
+            _ => unconfirmed_resume_failure(),
+        }
+    }
+
+    fn resume_rejected_by_port(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        error: &PortError,
+    ) -> RouteOutcome {
+        match error {
+            PortError::Conflict(ConflictKind::IdempotencyConflict) => self.reject_resume(
+                handle,
+                command,
+                ErrorCode::CommandIdempotencyConflict,
+                "the requestId was already used with different parameters",
+            ),
+            PortError::Unavailable(UnavailableKind::BackendUnsupported) => self.reject_resume(
+                handle,
+                command,
+                ErrorCode::CapabilityUnsupportedByAgent,
+                "the agent cannot resume this session",
+            ),
+            PortError::NotFound(_) => self.reject_resume(
+                handle,
+                command,
+                ErrorCode::SessionNotFound,
+                "the session is not available on this host",
+            ),
+            _ => self.reject_resume(
+                handle,
+                command,
+                ErrorCode::CommandUncertain,
+                "the session resume outcome cannot be confirmed",
+            ),
+        }
+    }
+
+    fn reject_resume(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        code: ErrorCode,
+        message: &str,
+    ) -> RouteOutcome {
+        match public_error(code, message, RawObject::empty()) {
+            Some(error) => self.send_rejected(handle, command, error),
+            None => {
+                self.encoding_fault(handle);
+            }
+        }
+        RouteOutcome::Claimed
+    }
+
+    fn resume_gate(&self, session: &acp_core::model::SessionId) -> Arc<ResumeGate> {
+        let mut gates = lock(&self.resume_gates);
+        Arc::clone(
+            gates
+                .entry(session.as_str().to_owned())
+                .or_insert_with(|| Arc::new(ResumeGate::new())),
+        )
     }
 
     /// `session.create` 失败后的回包：**以持久记录为唯一权威**。
@@ -1847,13 +2631,32 @@ impl CommandRoute {
         actor: &Actor,
         prepared: &acp_core::ports::PreparedSessionCreate,
         catalog: bool,
+        lifecycle_visible: bool,
     ) -> Option<WireSessionSummary> {
         // 取值本身不使用：窗口期列表里还没有这条会话，本调用只落实那次授权判定。
         self.core
             .list_sessions(actor, acp_core::ports::SessionQuery::default())
             .await
             .ok()?;
-        self::query::wire_session(&prepared.summary, catalog)
+        let activity = match (&self.lifecycle, lifecycle_visible) {
+            (Some(lifecycle), true)
+                if matches!(
+                    prepared.summary.origin(),
+                    acp_core::model::ResourceOrigin::Local
+                ) =>
+            {
+                crate::sync::local_lifecycle::activity_of(
+                    lifecycle,
+                    actor,
+                    prepared.summary.session_id(),
+                    true,
+                    true,
+                )
+                .await
+            }
+            _ => None,
+        };
+        self::query::wire_session(&prepared.summary, catalog, activity)
     }
 
     /// 回一条 `accepted` 的 `command.result`：`result` 与 `terminalEventId` 均为 `null`。
@@ -1901,6 +2704,26 @@ impl CommandRoute {
             },
             "mutation",
         );
+    }
+
+    /// 命令在 core 里已经留下 `accepted` 行但随后失败时，按「先受理、后终态」补发一次 accepted。
+    ///
+    /// 只在前置检查之后调用；自身不写任何记录（`command_status` 是只读查询）。没有持久行（例如
+    /// 授权/解码/会话不存在类失败）时不发 accepted——那类拒绝本来就没有受理阶段。
+    async fn send_accepted_if_persisted(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        actor: &Actor,
+        request: &acp_core::model::RequestId,
+    ) {
+        let Ok(Some(record)) = self.core.command_status(actor, request.clone()).await else {
+            return;
+        };
+        if record.status() == acp_core::model::CommandStatus::Accepted {
+            // 首次落盘时间，不换成现场时钟（§11.2 的 `acceptedAt`）。
+            self.send_accepted(handle, command, None, record.accepted_at());
+        }
     }
 
     /// 一条**已终结**的持久记录（或幂等重放）→ `command.result`（§11.2）。
@@ -1985,6 +2808,19 @@ impl CommandRoute {
                 match serde_json::from_str::<SessionCreateResult>(result.as_str()) {
                     Ok(value) => {
                         Nullable::value(CommandResultPayload::SessionCreate(Box::new(value)))
+                    }
+                    Err(_) => {
+                        self.encoding_fault(handle);
+                        return;
+                    }
+                }
+            }
+            Some(result) if name == CommandName::SessionResume => {
+                match serde_json::from_str::<sync_protocol::command::SessionResumeResult>(
+                    result.as_str(),
+                ) {
+                    Ok(value) => {
+                        Nullable::value(CommandResultPayload::SessionResume(Box::new(value)))
                     }
                     Err(_) => {
                         self.encoding_fault(handle);
@@ -2312,6 +3148,16 @@ fn details_object(value: &serde_json::Value) -> RawObject {
     RawObject::parse(&value.to_string()).unwrap_or_else(|_| RawObject::empty())
 }
 
+/// `ResumeFailure` → core 的 `PublicError`（终态落盘用）。已登记的错误码与消息必然合法；万一不合法，
+/// 落成 `internal.unavailable` 而不是 panic 或伪造成功。
+fn core_public_error(failure: &ResumeFailure) -> CorePublicError {
+    CorePublicError::coded(failure.code.as_str(), failure.message, failure.retryable)
+        .unwrap_or_else(|_| {
+            CorePublicError::coded("internal.unavailable", "internal error", true)
+                .expect("canonical error code and message")
+        })
+}
+
 /// wire 的 `PublicError`（`retryable` 取封闭错误码的登记值，不自行发明）。
 fn public_error(code: ErrorCode, message: &str, details: RawObject) -> Option<PublicError> {
     Some(PublicError {
@@ -2469,6 +3315,12 @@ pub(crate) fn port_rejection(error: &PortError) -> Rejection {
             ErrorCode::CommandIdempotencyConflict,
             "the requestId was already used for a different command payload",
         ),
+        // `session.create` 的容量准入（与 `session.resume` 共用同一本账）：这是**可重试**的明确
+        // 拒绝，不是请求形状问题，也不是「说不清」的临时故障。
+        PortError::InvalidRequest(acp_core::broker::SESSION_CAPACITY_EXCEEDED) => Rejection::Code(
+            ErrorCode::SessionCapacityExceeded,
+            "no active session slot is available right now",
+        ),
         PortError::InvalidRequest(reason) => Rejection::Schema(schema_hint(reason)),
         // Owner 不在线（imported 会话回源）：显式「现在读不到」，不是 `session.not_found` 或空历史。
         PortError::Unavailable(
@@ -2621,6 +3473,9 @@ fn core_payload(payload: &CommandPayload) -> Result<CorePayload, &'static str> {
         },
         CommandPayload::SessionCreate(_) => {
             return Err("session.create does not use CommandPayload");
+        }
+        CommandPayload::SessionResume(_) => {
+            return Err("session.resume is dispatched by its own handler");
         }
         // `session.title.set` 的标题在 wire 层已按 1..=512 个标量值校验，core 的值对象是同一规则的
         // 唯一实现：这里只做类型映射（trim 由 `SessionTitle::parse` 完成，保存值即 trim 后的文本）。
@@ -3142,5 +3997,200 @@ mod tests {
             failed.error.as_ref().map(|error| error.code.as_str()),
             Some("internal.unavailable")
         );
+    }
+
+    // -------------------------------------------------------------------------------------
+    // ResumeGate：同会话建立的合并协议（§11.5/§11.8）
+    // -------------------------------------------------------------------------------------
+
+    /// 等待者只需要「身份 + 自己那条受理记录」：门收口时用它写终态。
+    fn resume_waiter(request: &str) -> ResumeWaiter {
+        ResumeWaiter {
+            actor: Actor::LocalCli,
+            request_id: CoreRequestId::new(request).expect("request id"),
+            features: NegotiatedFeatures::new(Vec::new()),
+        }
+    }
+
+    /// 显式 `uncertain` 的形状：可证明「已受理、结局说不清」，不是 `rejected` 也不是 `completed`。
+    fn is_unconfirmed(outcome: &Result<(), ResumeFailure>) -> bool {
+        matches!(
+            outcome,
+            Err(failure) if failure.uncertain && failure.code == ErrorCode::CommandUncertain
+        )
+    }
+
+    /// 幂等重放（同 `requestId` 已有受理行、本次没有执行后端）的收口形状不得漂移：必须用
+    /// `ActivationOutcome::Failed` 交还本代预占（core 语义是「可证明本次没有建立外部资源」，会释放名额
+    /// 并把会话收敛回 `Idle`），持久记录/等待者收敛为显式 `uncertain`。
+    ///
+    /// 变红点：改回 `Ready` 或 `Uncertain`——前者伪造本次建立成功，后者永久保留占位，后续 resume 全落
+    /// `InFlight`、名额永不归还（这正是本轮修复的悬空路径）。
+    #[test]
+    fn a_replayed_establishment_settles_failed_and_reports_uncertain() {
+        let (activation, failure) = replayed_resume_settlement();
+        assert!(failure.uncertain, "重放没有执行后端，结局最多是 uncertain");
+        assert_eq!(failure.code, ErrorCode::CommandUncertain);
+        match activation {
+            ActivationOutcome::Failed { error } => {
+                assert_eq!(error.code(), "command.uncertain");
+            }
+            ActivationOutcome::Ready | ActivationOutcome::Uncertain { .. } => {
+                panic!(
+                    "幂等重放必须用 Failed 交还预占，不得 Ready（伪造成功）或 Uncertain（保留占位）"
+                );
+            }
+        }
+    }
+
+    /// 建立者在窗口内登记的等待者由它一次收口；门收口后不再留人，重放路径因此不会把名额与请求一起悬空。
+    #[test]
+    fn an_establishment_settles_every_waiter_and_leaves_no_one_queued() {
+        let gate = ResumeGate::new();
+        let epoch = gate.begin();
+        assert!(
+            gate.register(resume_waiter("6f1c2a10-0000-4000-8000-000000000001"))
+                .is_none(),
+            "活的建立者在场时等待者必须排队，由它收口"
+        );
+        assert!(
+            gate.register(resume_waiter("6f1c2a10-0000-4000-8000-000000000002"))
+                .is_none()
+        );
+        let (_, failure) = replayed_resume_settlement();
+        let waiters = gate.publish(epoch, Err(failure));
+        assert_eq!(waiters.len(), 2, "两个等待者都必须被本次建立者收口");
+        assert!(
+            lock(&gate.state).waiters.is_empty(),
+            "门里不得留下永久停在 accepted 的等待者"
+        );
+        // 迟到的重放请求（建立者已收口）：立即显式失败，不排进一扇没人会关的门。
+        let late = gate.register(resume_waiter("6f1c2a10-0000-4000-8000-000000000003"));
+        assert!(is_unconfirmed(&late.expect("收口之后不得排队")));
+        assert!(lock(&gate.state).waiters.is_empty());
+    }
+
+    /// 没有活的建立者（回收未确认 `Reclaiming` / 重启后只剩 `Activating` 的目录事实 / 从未建立）时，
+    /// `InFlight` 的等待者必须**立即**拿到显式 `uncertain`：没有人会发布结果，排队等于永远 `accepted`。
+    #[test]
+    fn a_resume_without_a_live_establishment_fails_fast_instead_of_queueing() {
+        let gate = ResumeGate::new();
+        let immediate = gate
+            .register(resume_waiter("7a2b3c40-0000-4000-8000-000000000001"))
+            .expect("没有活的建立者时必须立即收口");
+        assert!(is_unconfirmed(&immediate));
+        assert!(
+            lock(&gate.state).waiters.is_empty(),
+            "不得为不存在的建立者排队"
+        );
+
+        // 建立者在场 → 结果已发布 → 又回到 `InFlight`（例如刚进入回收未确认）：`live` 已复位，
+        // 新请求同样立即失败，而不是等一个不会再来的建立者。
+        let epoch = gate.begin();
+        gate.publish(epoch, Ok(()));
+        let after = gate
+            .register(resume_waiter("7a2b3c40-0000-4000-8000-000000000002"))
+            .expect("结果发布之后不得排队");
+        assert!(is_unconfirmed(&after));
+        assert!(lock(&gate.state).waiters.is_empty());
+    }
+
+    /// 上一周期的成功结果不得被后代消费：`live` 复位后 `register` 一律 `uncertain`，即使门里还留着
+    /// 上一轮的 `Ok(())`。晚到但同周期的等待者拿到显式失败（客户端可重试/查 `command.status`），
+    /// 绝不把别人的 `completed` 冒充成这次的。
+    #[test]
+    fn a_stale_success_is_never_replayed_as_this_requests_completion() {
+        let gate = ResumeGate::new();
+        let epoch = gate.begin();
+        assert!(
+            gate.register(resume_waiter("8b3c4d50-0000-4000-8000-000000000001"))
+                .is_none()
+        );
+        // 上一周期成功收口：结果留在门里，`live` 复位。
+        assert_eq!(gate.publish(epoch, Ok(())).len(), 1);
+        assert!(lock(&gate.state).outcome.is_some(), "旧结果确实还留在门里");
+
+        // 后代（例如会话已 `ready` 后又进入 `reclaiming`）不得拿到那份 `Ok(())`。
+        let stale = gate
+            .register(resume_waiter("8b3c4d50-0000-4000-8000-000000000002"))
+            .expect("不得排队");
+        assert!(
+            is_unconfirmed(&stale),
+            "旧周期的 completed 不得被本请求消费"
+        );
+
+        // 下一次建立用 `begin` 清掉旧结果：新周期只由新建立者收口，不继承上一周期的结论。
+        let next = gate.begin();
+        assert_ne!(next, epoch, "每个建立周期都必须有独立的身份");
+        assert!(
+            lock(&gate.state).outcome.is_none(),
+            "begin 必须清掉上一周期的结果"
+        );
+        assert!(
+            gate.register(resume_waiter("8b3c4d50-0000-4000-8000-000000000003"))
+                .is_none(),
+            "新周期里等待者由新建立者收口"
+        );
+        assert_eq!(gate.publish(next, Ok(())).len(), 1);
+    }
+
+    /// 迟到的旧周期发布不得冒充下一代：建立者 R1 在 `settle_session` 之后、`publish` 之前有窗口，
+    /// 此时 R2 已 `begin` 新周期（`live = true`）并登记了等待者 R3。若 `live` 只是无身份的布尔，
+    /// R1 的 `publish` 会把新周期一起关掉、并用自己的旧结果收口 R3——本该 `completed` 的 resume 被写成
+    /// `uncertain`。周期栅栏的要求：
+    ///
+    /// - 旧 epoch 的 `publish`：不得复位新周期的 `live`、不得把结果写进门、不得取走 R3；它只能收口
+    ///   登记在它自己那一代的等待者（留在这里没人会再收口，会永久停在 `accepted`）。
+    /// - 新 epoch 的 `publish`：正常收口 R3 并复位 `live`。
+    ///
+    /// 变红点：`publish` 忽略 epoch（旧行为）——第二次断言 `live` 仍为 `true`、R3 仍在队里，两者都会失败。
+    #[test]
+    fn a_stale_epoch_publish_cannot_close_the_current_cycle() {
+        let gate = ResumeGate::new();
+        let first = gate.begin();
+        assert!(
+            gate.register(resume_waiter("9c4d5e60-0000-4000-8000-000000000001"))
+                .is_none(),
+            "第一代的等待者由第一代建立者收口"
+        );
+
+        // R1 仍在收尾时 R2 已开启第二代并登记了 R3。
+        let second = gate.begin();
+        assert_ne!(second, first, "新周期必须拿到新的 epoch");
+        assert!(
+            gate.register(resume_waiter("9c4d5e60-0000-4000-8000-000000000002"))
+                .is_none(),
+            "新周期里的等待者同样排队"
+        );
+
+        // R1 的旧结果迟到：只收口它自己那一代，不得关掉新周期。
+        let own = gate.publish(first, Ok(()));
+        assert_eq!(own.len(), 1, "旧 epoch 只收口自己那一代的等待者");
+        assert!(
+            lock(&gate.state).live,
+            "旧 epoch 的 publish 不得复位新周期的 live"
+        );
+        assert!(
+            lock(&gate.state).outcome.is_none(),
+            "旧结果不得写进新周期（会被当成本次的结论）"
+        );
+        assert_eq!(
+            lock(&gate.state).waiters.len(),
+            1,
+            "新周期的等待者必须留给新建立者收口"
+        );
+
+        // 再迟到的同代发布不会再取走任何人。
+        assert!(gate.publish(first, Ok(())).is_empty());
+
+        // 新周期的建立者正常收口 R3 并复位 live。
+        let settled = gate.publish(second, Ok(()));
+        assert_eq!(settled.len(), 1, "新 epoch 的 publish 正常收口自己的等待者");
+        assert!(!lock(&gate.state).live, "收口之后不得再有人排队");
+        assert!(
+            matches!(lock(&gate.state).outcome, Some(Ok(()))),
+            "新周期记录的是自己的结果"
+        );
+        assert!(lock(&gate.state).waiters.is_empty());
     }
 }

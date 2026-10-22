@@ -1,5 +1,5 @@
 /**
- * `schemas/sync/v1/command.schema.json` 的严格 TypeScript 镜像：19 条 Sync 面命令与结果。
+ * `schemas/sync/v1/command.schema.json` 的严格 TypeScript 镜像：20 条 Sync 面命令与结果。
  *
  * `session.read` 的 `before`/`limit`/`beforeHistory`/`include` 里的 `history` **只**在 Sync
  * 传输面生效（`design.md` D3、D11）；Node Link 面的同名命令不含这些键。`session.create` 的
@@ -9,7 +9,9 @@
  * 「会话创建入口与载荷」）。`workspace.browse` 是只读的逐层目录列举（feature
  * `core.workspace-browse.v1` 门控，§11.5）。
  *
- * `session.resume` 只经 Node Link 接受，因此不在本镜像的 `CommandName` 里。
+ * `session.resume` 自 `session-activation-lifecycle` 起同时登记 Sync 面（feature
+ * `core.local-session-lifecycle.v1` 门控）：本机 payload 固定为 `{}`、结果不带
+ * `remoteSessionRef`；Node Link 面形状不变，仍以 `sessionRef` 引用会话。
  */
 
 import type {
@@ -44,7 +46,7 @@ import type {
 } from "./session-files";
 
 /**
- * `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（当前 19 条，与
+ * `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（当前 20 条，与
  * `compatibility/commands/v1/commands.json` 里 `transport` 含 `sync` 的条目一一对应）。
  * 四条 `session.files.*` / `session.git.*` 的严格形状与解码见 `./session-files`。
  */
@@ -64,6 +66,7 @@ export type CommandName =
   | "session.config.set"
   | "permission.resolve"
   | "session.create"
+  | "session.resume"
   | "session.files.list"
   | "session.files.read"
   | "session.git.status"
@@ -163,6 +166,23 @@ export interface SessionCreateCommand extends CommandEnvelope {
     readonly requestId: Uuid;
     readonly command: "session.create";
     readonly payload: SessionCreatePayload;
+  };
+}
+
+/**
+ * `$defs.sessionResume`（Sync 面，`docs/SYNC_PROTOCOL.md` §11.5）：激活/恢复**本机**会话。
+ *
+ * 会话引用在 `body` 顶层（`sessionId`），payload 是 closed object `{}`——不接受
+ * `expectedVersion`、目录、prompt 或历史正文；出现任何键按 `protocol.schema_invalid` 拒绝。
+ * 受 `core.local-session-lifecycle.v1` 门控，未协商时服务端在触碰会话状态之前回
+ * `command.unsupported`。
+ */
+export interface SessionResumeCommand extends CommandEnvelope {
+  readonly body: {
+    readonly requestId: Uuid;
+    readonly command: "session.resume";
+    readonly sessionId: Uuid;
+    readonly payload: Record<string, never>;
   };
 }
 
@@ -377,6 +397,7 @@ export interface CommandStatusCommand extends CommandEnvelope {
 export type CommandBody =
   | SessionListCommand["body"]
   | SessionCreateCommand["body"]
+  | SessionResumeCommand["body"]
   | WorkspaceMkdirCommand["body"]
   | WorkspaceBrowseCommand["body"]
   | SessionReadCommand["body"]
@@ -454,6 +475,15 @@ export interface SessionCreateResult {
 }
 
 /**
+ * `$defs.sessionResumeResult`：`completed { sessionId, session }`，`session` 是 `sessionSummary`
+ * 且**不含** `remoteSessionRef`（它在本机语义上是激活/恢复，不是远程导入）。
+ */
+export interface SessionResumeResult {
+  readonly sessionId: Uuid;
+  readonly session: SessionSummary;
+}
+
+/**
  * `$defs.workspaceBrowseResult`：`completed` 的结果。
  *
  * `path` **逐字回显**请求的父路径（`null` = 根列表），客户端 MUST NOT 把它当权威路径；
@@ -518,6 +548,7 @@ export type CommandResultValue =
   | SessionListResult
   | SessionReadResult
   | SessionCreateResult
+  | SessionResumeResult
   | WorkspaceMkdirResult
   | WorkspaceBrowseResult
   | ConfigListResult

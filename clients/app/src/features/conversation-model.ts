@@ -33,6 +33,7 @@ import type {
   ContextUsageView,
   InteractionView,
   MessageChannelView,
+  LocalActivityView,
   MessageView,
   PartialResultView,
   SessionReadPageView,
@@ -47,6 +48,7 @@ import type { FileChangeView, TimelineEntry } from "./conversation-timeline";
 import type { DegradedEventModel } from "./degradation-model";
 import type { SessionRowModel } from "./directory-model";
 import { buildSessionRowsByDirectoryId, correctPageNumber } from "./directory-model";
+import type { SessionActivationView } from "./session-lifecycle";
 
 /** 一次用量事件的两项计数（`$defs.session.usage.changed`）。 */
 export interface UsageReading {
@@ -108,6 +110,19 @@ export interface ConversationHeaderModel {
    * 三态词表由 `domain/session-summary.ts` 给出；这里没有第四个取值，也没有旧七态。
    */
   readonly state: SessionStateView | null;
+  /**
+   * 本机活跃程度（协商后的 owned 会话）；`null` 时主标签回落任务三态。
+   *
+   * 与 `state` 并列而不是替换它：任务执行/排队/等待原因仍读任务事实。
+   */
+  readonly localActivity?: LocalActivityView | null | undefined;
+  /**
+   * 本机激活状态（仅协商后的 owned 会话有意义）；`null`/缺席 = 不适用（旧合同/imported）。
+   *
+   * 页面据此显示「自动激活不可用 / 正在恢复 / 失败原因 + 重试」，并在 `activating` 时
+   * 保持历史可读、发送不可用。
+   */
+  readonly activation?: SessionActivationView | null | undefined;
   /** 会话所属目录的标识；只用于导航与键，MUST NOT 呈现为界面文本。 */
   readonly directoryId: string | null;
 }
@@ -315,6 +330,8 @@ export function buildConversationSidebar(input: {
   readonly pageInput: string;
   /** 相对时间的基准（D3：时钟是**输入**）。 */
   readonly nowMs: number;
+  /** 连接是否协商了本机生命周期（决定同目录会话行的主状态词表）。 */
+  readonly localLifecycleNegotiated?: boolean;
 }): ConversationSidebarModel {
   const workspace = input.workspace;
   if (workspace === null) {
@@ -363,6 +380,9 @@ export function buildConversationSidebar(input: {
       resources: input.resources,
       ownerLabelOf: input.ownerLabelOf,
       nowMs: input.nowMs,
+      ...(input.localLifecycleNegotiated === undefined
+        ? {}
+        : { localLifecycleNegotiated: input.localLifecycleNegotiated }),
     }).get(directory.directoryId) ?? [];
   const matched = rowsOfDirectory.filter((row) => needle.length === 0 || row.title.toLowerCase().includes(needle));
   const pageCount = Math.max(1, Math.ceil(matched.length / CONVERSATION_SIDEBAR_PAGE_SIZE));
@@ -496,12 +516,21 @@ export function conversationCapabilities(input: {
   /** 时间线上是否有未结束的轮次（与输入模型的 `canCancel` 同源）。 */
   readonly turnInProgress: boolean;
   readonly origin: "local" | { readonly kind: "remote"; readonly online: boolean };
+  /**
+   * 本机会话是否已确认可用。缺省 `true`（旧合同/imported）；协商后只有 `ready` 才是 `true`。
+   *
+   * 活跃标签不参与：资源未恢复时任务/交互仍可能让本机显示 `active`。
+   */
+  readonly sessionReady?: boolean;
 }): ConversationCapabilitiesModel {
   return {
     // 历史不受连接状态限制：未上报、断连都不是禁用理由。
     canViewHistory: true,
     canCancel: input.connectionOnline && input.turnInProgress,
-    canSend: input.connectionOnline && (input.origin === "local" || input.origin.online),
+    canSend:
+      input.connectionOnline &&
+      (input.origin === "local" || input.origin.online) &&
+      (input.sessionReady ?? true),
     canLoadEarlier: false,
   };
 }

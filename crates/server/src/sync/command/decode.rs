@@ -2,9 +2,9 @@
 //!
 //! 两层判定，顺序固定：
 //!
-//! 1. **命令名**：先看原始 body 的 `command` 字段。取值不在 Sync v1 的 18 条枚举里（含只经 Node Link
+//! 1. **命令名**：先看原始 body 的 `command` 字段。取值不在 Sync v1 的 20 条枚举里（含只经其它传输面
 //!    接受的 `session.resume`）即 [`Fault::Unsupported`] → `command.unsupported`。这一步刻意发生在
-//!    `Command` 解码**之前**：`CommandName` 的 `Deserialize` 会把 `session.resume` 报成形状错误，而协议
+//!    `Command` 解码**之前**：`CommandName` 的 `Deserialize` 会把未登记命令报成形状错误，而协议
 //!    要求的是 `command.unsupported`（§11.5 该行），且**不得在本机执行任何操作**——本模块在这一步之下
 //!    没有任何 core 调用，因此「拒绝」就是「什么也没做」。
 //! 2. **形状**：交给 `sync-protocol` 的 `Command` DTO（`additionalProperties: false`、`required` 与
@@ -19,7 +19,7 @@ use sync_protocol::envelope::Envelope;
 /// 一次解码的失败分类（两种对端可见的后果不同，因此不合并成一个 `bool`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fault {
-    /// 命令名不在 Sync v1 的封闭词表里（含 `session.resume`）→ `command.unsupported`。
+    /// 命令名不在 Sync v1 的封闭词表里→ `command.unsupported`。
     Unsupported,
     /// body 不符合 v1 schema → `protocol.schema_invalid`。
     Schema,

@@ -31,6 +31,7 @@ import type {
   CommandBody,
   CommandResultMessage,
   CommandResultStatus,
+  CommandStatusRecord,
   ConfigOptionView,
   ElicitationResolutionAction,
   ElicitationRespondPayload,
@@ -45,6 +46,7 @@ import type {
   SessionRef,
   SessionSummary,
   SnapshotItemHistory,
+  SyncSessionViewResult,
   SnapshotItemMessages,
   Uuid,
 } from "../protocol";
@@ -91,6 +93,7 @@ function delay(ms: number): Promise<void> {
 import {
   AgentConnectionOverlayStore,
   ATTACHMENT_FEATURE,
+  LOCAL_SESSION_LIFECYCLE_FEATURE,
   PENDING_INTERACTIONS_FEATURE,
   SESSION_HISTORY_FEATURE,
   SESSION_TITLE_FEATURE,
@@ -175,6 +178,7 @@ import {
   buildTimelineCard,
   compareTimelinePosition,
   directoryNamesOf,
+  localActivityOf,
   mediaBlocksOfDelta,
   positionOf,
   recordFromEvent,
@@ -218,6 +222,23 @@ import {
 } from "./conversation-model";
 import type { ConversationInputModel } from "./conversation-input-model";
 import { buildConversationInputModel } from "./conversation-input-model";
+import type {
+  ActivationFailure,
+  SessionActivationState,
+  SessionActivationView,
+  SessionPageEvent,
+  SessionViewDeclaration,
+} from "./session-lifecycle";
+import {
+  ACTIVATION_INACTIVE_NOTICE,
+  ACTIVATION_UNAVAILABLE_NOTICE,
+  SESSION_VIEW_RENEW_INTERVAL_MS,
+  activationViewOf,
+  canAdvanceViewVersion,
+  classifyActivationFailure,
+  isOwnedSummary,
+  nextViewVersion,
+} from "./session-lifecycle";
 import type { ConversationSettingsModel } from "./conversation-settings-model";
 import { buildConversationSettingsModel } from "./conversation-settings-model";
 import type { VolatileMessageState } from "./conversation-timeline";
@@ -440,6 +461,109 @@ export interface ReconnectProgress {
   readonly nextRetryAtMs: number | null;
 }
 
+/**
+ * 本机会话生命周期的连接期状态（`core.local-session-lifecycle.v1`）。
+ *
+ * 只活在当前进程：查看声明、租约与激活尝试都不落盘。`generation` 在每次认证成功时递增，
+ * 与 `viewVersion` 一起抑制旧连接/旧响应（迟到的 `session.view.result` 或 `session.resume`
+ * 终态不得切回旧页面、不得续租旧 viewer）。
+ */
+export interface SessionLifecycleState {
+  /** 本次连接是否协商到该 feature；未协商时不发查看/恢复帧，并明确显示自动激活不可用。 */
+  readonly negotiated: boolean;
+  /** 认证连接代：每次 `authenticated` 递增。 */
+  readonly generation: number;
+  /** 平台 adapter 报告的可见性；非浏览器缺省 `visible`。 */
+  readonly visibility: "visible" | "hidden";
+  /** 当前对话页选中的会话；离页/卸载后为 `null`。 */
+  readonly selectedSessionId: Uuid | null;
+  /** 最近一次发出的查看声明（含离页声明）。 */
+  readonly view: SessionViewDeclaration | null;
+  /** 各会话最近一次激活尝试（按会话保存，供 A/B 快切后丢弃旧结果）。 */
+  readonly activations: ReadonlyMap<Uuid, SessionActivationState>;
+  /** 最近一次被接受声明的租约到期时刻（服务端时钟；只用于诊断与呈现）。 */
+  readonly leaseExpiresAt: string | null;
+}
+
+/** 初始生命周期状态：未认证、可见、没有选择。 */
+export function initialSessionLifecycleState(): SessionLifecycleState {
+  return {
+    negotiated: false,
+    generation: 0,
+    visibility: "visible",
+    selectedSessionId: null,
+    view: null,
+    activations: new Map(),
+    leaseExpiresAt: null,
+  };
+}
+
+/** 写入一次激活尝试（按会话覆盖；返回新的只读 Map）。 */
+function withSessionActivation(
+  current: ReadonlyMap<Uuid, SessionActivationState>,
+  next: SessionActivationState,
+): ReadonlyMap<Uuid, SessionActivationState> {
+  const map = new Map(current);
+  map.set(next.sessionId, next);
+  return map;
+}
+
+/** 按 `requestId` 找回那次激活尝试；找不到即迟到的旧结果。 */
+function findActivationByRequest(
+  current: ReadonlyMap<Uuid, SessionActivationState>,
+  requestId: Uuid,
+): SessionActivationState | null {
+  for (const entry of current.values()) {
+    if (entry.requestId === requestId) return entry;
+  }
+  return null;
+}
+
+/**
+ * 终结仍在途的激活尝试（连接断开/连接代变化时）。
+ *
+ * 结果按连接核对，旧连接/旧代上的在途尝试永远等不到终态；保留它们会让页面永远停在
+ * 「正在恢复」，也会让「进入会话不重复派发」的判定把它们当成仍然有效。重新进入/重连时
+ * 重新申请即可（`session.resume` 本身对同一会话的并发激活是合并的）。
+ */
+function withoutActivating(
+  current: ReadonlyMap<Uuid, SessionActivationState>,
+): ReadonlyMap<Uuid, SessionActivationState> {
+  let removed = false;
+  const map = new Map<Uuid, SessionActivationState>();
+  for (const [sessionId, entry] of current) {
+    if (entry.phase === "activating") {
+      removed = true;
+      continue;
+    }
+    map.set(sessionId, entry);
+  }
+  return removed ? map : current;
+}
+
+/**
+ * `session.resume` 结果里的摘要核对：`sessionId` 与 `session.sessionId` 都必须指向那次尝试。
+ *
+ * `command.result` 与 `command.status` 两条路径共用同一判据——形状不符**不得**被当成成功。
+ */
+function resumedSummaryOf(result: unknown, sessionId: Uuid): SessionSummary | null {
+  const value = toResultRecord(result);
+  if (value === null || value["sessionId"] !== sessionId) return null;
+  const summary = value["session"];
+  if (summary === undefined || summary === null || typeof summary !== "object") return null;
+  const candidate = summary as SessionSummary;
+  return candidate.sessionId === sessionId ? candidate : null;
+}
+
+/** 结果形状不符的一次激活失败（与明确失败同名同义：历史仍可读，可显式重试）。 */
+function activationShapeFailure(): ActivationFailure {
+  return {
+    kind: "failed",
+    code: null,
+    message: "恢复结果形状不符，无法确认会话已可用；历史仍可阅读，可重试。",
+  };
+}
+
 /** 客户端状态（不可变快照）。 */
 export interface ClientState {
   readonly connection: ConnectionMachineState;
@@ -453,6 +577,8 @@ export interface ClientState {
   readonly deviceId: string | null;
   /** 服务端本次协商选中的 feature（决定 `history` include 要不要带）。 */
   readonly selectedFeatures: readonly string[];
+  /** 本机会话生命周期（查看声明、激活尝试、连接代与可见性）。 */
+  readonly lifecycle: SessionLifecycleState;
   /** 最后一次**验证通过并完成替换**的快照资源；断连时仍是目录页的唯一数据来源。 */
   readonly resources: StagedResources | null;
   /**
@@ -576,6 +702,7 @@ export function initialClientState(): ClientState {
     reconnect: { attempts: 0, nextRetryAtMs: null },
     deviceId: null,
     selectedFeatures: [],
+    lifecycle: initialSessionLifecycleState(),
     resources: null,
     remoteSources: new Map(),
     remoteSessions: new Map(),
@@ -946,7 +1073,13 @@ function withVersionedSummary(
  * （design D4：不能用旧标签覆盖新状态）。缺少合法状态的摘要同样不采用。
  */
 function sessionSummaryIn(event: EventMessage): SessionSummary | null {
-  if (event.body.eventType !== "session.created" && event.body.eventType !== "session.updated") return null;
+  if (
+    event.body.eventType !== "session.created" &&
+    event.body.eventType !== "session.updated" &&
+    event.body.eventType !== "session.activity.changed"
+  ) {
+    return null;
+  }
   const summary = event.body.payload.view["session"];
   if (typeof summary !== "object" || summary === null || !("sessionId" in summary)) return null;
   const candidate = summary.sessionId;
@@ -1395,6 +1528,10 @@ export class ClientStore {
   }>();
   /** 当前对话页的会话；切换时旧会话的文件读取必须作废（迟到的响应不能重新打开文件）。 */
   #activeConversationSession: Uuid | null = null;
+  /** 查看续租的计时器句柄（每条连接只有一个，离页/隐藏/断开即取消）。 */
+  #viewRenewCancel: (() => void) | null = null;
+  /** 防止 `#ensureLifecycle` 在提交与订阅回调之间递归重入。 */
+  #syncingLifecycle = false;
   /** 附件端口（组合根装配）；未装配时附件入口明确不可用。 */
   readonly #attachmentMedia: AttachmentMediaPort | null;
   readonly #attachmentTransfer: AttachmentTransferGateway | null;
@@ -1500,6 +1637,10 @@ export class ClientStore {
     this.#drainActiveFileRefresh();
     this.#drainQueuedFileRefreshes();
     this.#drainQueuedMessageRefreshes();
+    // 连接代变化或重新追平：可见的当前会话要立即重新声明并激活（§11.8 的页面顺序）。
+    // 断开/阻断时先停续租：旧连接上的计时器不得继续发帧。
+    if (event.kind === "closed" || event.kind === "blocked") this.#cancelViewRenewal();
+    if (event.kind === "online") this.#ensureLifecycle("authenticated");
     if (event.kind === "authenticated") {
       this.#drainDeferredReads();
       // 认证完成即查询上一条连接上未收束的标题命令（原 requestId，不重发）。
@@ -1508,6 +1649,8 @@ export class ClientStore {
     if (event.kind === "snapshot_verified") {
       // 快照到达后才能判定来源：补发延迟读取，并为已打开的远程会话建立订阅与重建。
       this.#drainDeferredReads();
+      // 深链首次打开时摘要可能晚于路由到达：此刻才判定它是 owned 会话并开始激活。
+      this.#ensureLifecycle("enter");
       const active = this.#activeConversationSession;
       if (active !== null) {
         const ref = remoteRefOf(this.#state, active);
@@ -1552,13 +1695,28 @@ export class ClientStore {
 
   #reduce(event: SyncClientEvent): ClientState {
     switch (event.kind) {
-      case "authenticated":
+      case "authenticated": {
+        const selectedFeatures = [...(event.selectedFeatures ?? [])];
+        // 新认证连接 = 新连接代：旧连接上的查看声明与租约一律作废（服务端也会清掉它们）。
+        // 可见性保留（页面事实），选择保留（返回前台/重连后要立即重新声明并激活）。
+        const lifecycle = this.#state.lifecycle;
         return {
           ...this.#state,
           hasAuthenticated: true,
           deviceId: event.info.deviceId,
-          selectedFeatures: [...(event.selectedFeatures ?? [])],
+          selectedFeatures,
+          lifecycle: {
+            ...lifecycle,
+            negotiated: selectedFeatures.includes(LOCAL_SESSION_LIFECYCLE_FEATURE),
+            generation: lifecycle.generation + 1,
+            view: null,
+            leaseExpiresAt: null,
+            // 旧代上的在途激活不可能再收到终态（结果按连接核对）：终结它们，让重新进入/返回
+            // 前台能按新连接重新申请，而不是永远停在「正在恢复」。
+            activations: withoutActivating(lifecycle.activations),
+          },
         };
+      }
       case "authenticating": {
         // 一条事件对应连接机的两步：开始一次连接尝试（connecting），随后 socket 打开进入认证（authenticating）。
         const started = applyConnectionEvent(this.#state.connection, {
@@ -1574,6 +1732,7 @@ export class ClientStore {
       case "closed":
         return this.#withTitleConnectionLost(clearAllRemoteData({
           ...this.#withConnection({ kind: "connection_closed", retryable: event.retryable }),
+          lifecycle: this.#withoutViewer(this.#state.lifecycle),
           lastClose: {
             code: event.code,
             reason: event.detail ?? null,
@@ -1583,6 +1742,7 @@ export class ClientStore {
       case "blocked":
         return this.#withTitleConnectionLost(clearAllRemoteData({
           ...this.#withConnection({ kind: "blocked", cause: event.cause }),
+          lifecycle: this.#withoutViewer(this.#state.lifecycle),
           lastClose: {
             code: event.code,
             reason: event.reason ?? event.cause,
@@ -1595,6 +1755,8 @@ export class ClientStore {
         return this.#withEvent(event.event);
       case "command_result":
         return this.#withCommandResult(event.result);
+      case "session_view_result":
+        return this.#withViewResult(event.result);
       case "remote_subscribing":
         return this.#withRemoteSubscribing(event);
       case "remote_event":
@@ -1616,6 +1778,443 @@ export class ClientStore {
 
   #withConnection(event: ConnectionEvent): ClientState {
     return { ...this.#state, connection: applyConnectionEvent(this.#state.connection, event) };
+  }
+
+  /**
+   * 连接离开（断开/阻断）：作废查看声明与租约，并终结不可能再收口的在途激活。
+   *
+   * 结果按连接核对，因此旧连接上的 `session.resume` 终态永远不会被接受；保留 `activating`
+   * 会让页面永远停在「正在恢复」。终结后重新连上时按选择重新申请即可。
+   */
+  #withoutViewer(lifecycle: SessionLifecycleState): SessionLifecycleState {
+    return {
+      ...lifecycle,
+      view: null,
+      leaseExpiresAt: null,
+      activations: withoutActivating(lifecycle.activations),
+    };
+  }
+
+  /**
+   * `session.view.result` 的归并。
+   *
+   * 三重核对缺一不可：**同一连接**（旧连接的迟到应答不得复活 viewer）、**同一版本**（低于当前
+   * 版本的应答是已离开/已替换的声明）、**同一选择**（离页应答 `sessionId: null` 不是「正在查看
+   * 空会话」）。`stale` 不改任何查看状态：下一次续租会带更高版本重新声明。
+   */
+  #withViewResult(result: SyncSessionViewResult): ClientState {
+    const lifecycle = this.#state.lifecycle;
+    const view = lifecycle.view;
+    const connectionId = this.#identity.connectionId;
+    if (connectionId === null || result.connectionId !== connectionId) return this.#state;
+    if (view === null) return this.#state;
+    if (result.body.viewVersion !== view.viewVersion) return this.#state;
+    if (result.body.sessionId !== view.sessionId) return this.#state;
+    if (result.body.status !== "accepted") return this.#state;
+    if (result.body.sessionId === null) return this.#state;
+    if (result.body.leaseExpiresAt === null) return this.#state;
+    if (lifecycle.leaseExpiresAt === result.body.leaseExpiresAt) return this.#state;
+    return {
+      ...this.#state,
+      lifecycle: { ...lifecycle, leaseExpiresAt: result.body.leaseExpiresAt },
+    };
+  }
+
+  /**
+   * 平台 adapter 转来的页面生命周期（可见性 / `pagehide`）。
+   *
+   * 隐藏与「即将卸载」都**立即**停止续租并声明离开；它们只改变连接期的查看状态，不清除历史、
+   * 草稿或选择——返回可见时按同一个选择重新声明并激活。重复的同值事件是幂等的。
+   */
+  applyLifecycle(event: SessionPageEvent): void {
+    const current = this.#state.lifecycle;
+    if (event.kind === "visibility" && current.visibility === event.state) return;
+    const hidden = event.kind === "pagehide" || event.state === "hidden";
+    if (hidden) {
+      this.#cancelViewRenewal();
+      // 声明必须在状态提交后发出（且只在已认证连接上）；`#declareView` 自己处理这些前提。
+      const lifecycle = { ...current, visibility: "hidden" as const };
+      if (lifecycle !== current) this.#commit({ ...this.#state, lifecycle });
+      this.#declareView(null, true);
+      return;
+    }
+    this.#commit({ ...this.#state, lifecycle: { ...current, visibility: "visible" } });
+    this.#ensureLifecycle("visible");
+  }
+
+  /** 触发一次尝试的原因（决定是否重新派发 `session.resume`）。 */
+  #ensureLifecycle(reason: "enter" | "visible" | "authenticated" | "retry"): void {
+    if (this.#syncingLifecycle) return;
+    const state = this.#state;
+    const lifecycle = state.lifecycle;
+    if (
+      !lifecycle.negotiated ||
+      state.connection.state !== "online" ||
+      this.#identity.connectionId === null ||
+      lifecycle.visibility !== "visible"
+    ) {
+      this.#cancelViewRenewal();
+      return;
+    }
+    const sessionId = lifecycle.selectedSessionId;
+    if (sessionId === null) {
+      if (lifecycle.view !== null && lifecycle.view.sessionId !== null) this.#declareView(null, true);
+      this.#cancelViewRenewal();
+      return;
+    }
+    const summary = this.#findSession(sessionId);
+    // imported 会话不在本机生命周期里：不发查看帧、不派发 resume，展示保持任务三态。
+    if (!isOwnedSummary(summary)) {
+      this.#cancelViewRenewal();
+      return;
+    }
+    this.#syncingLifecycle = true;
+    try {
+      // 只有同一连接、同一选择上的声明才可复用；进入/返回/重连/重试都必须换新版本重新声明。
+      const current = lifecycle.view;
+      const declarationCurrent =
+        current !== null &&
+        current.sessionId === sessionId &&
+        current.connectionGeneration === lifecycle.generation;
+      this.#declareView(sessionId, reason !== "enter" || !declarationCurrent);
+      // 返回可见/重连/重试必须重新申请激活（服务端对已 ready 的资源复用）；进入会话时若已有
+      // 在途激活则不重复派发。
+      this.#requestActivation(sessionId, reason !== "enter");
+      this.#scheduleViewRenewal();
+    } finally {
+      this.#syncingLifecycle = false;
+    }
+  }
+
+  /**
+   * 发出一次查看声明。
+   *
+   * 版本必须**单调递增**（同版本不同选择会被服务端当 `stale`），且只有已认证在线的连接上才发。
+   * 声明先提交、后发帧：即使 socket 同步失败，状态里也保留「已尝试的版本」，下一次续租只会更高。
+   */
+  #declareView(sessionId: Uuid | null, force: boolean): void {
+    const state = this.#state;
+    const lifecycle = state.lifecycle;
+    if (!lifecycle.negotiated) return;
+    if (state.connection.state !== "online" || this.#identity.connectionId === null) return;
+    const current = lifecycle.view;
+    if (
+      !force &&
+      current !== null &&
+      current.sessionId === sessionId &&
+      current.connectionGeneration === lifecycle.generation
+    ) {
+      return;
+    }
+    const previousVersion = current?.viewVersion ?? 0;
+    if (!canAdvanceViewVersion(previousVersion)) return;
+    const viewVersion = nextViewVersion(previousVersion);
+    const declaration: SessionViewDeclaration = {
+      sessionId,
+      viewVersion,
+      connectionGeneration: lifecycle.generation,
+      leaseExpiresAt: null,
+    };
+    this.#commit({
+      ...state,
+      lifecycle: {
+        ...lifecycle,
+        view: declaration,
+        // 离页声明不保留任何租约：应答里的 `leaseExpiresAt` 只表示清理残余查看状态的时限。
+        leaseExpiresAt: sessionId === null ? null : lifecycle.leaseExpiresAt,
+      },
+    });
+    this.#sync.setSessionView({ sessionId, viewVersion });
+  }
+
+  /**
+   * 派发一次 `session.resume`（Sync 面 payload 固定 `{}`）。
+   *
+   * 同一连接代上的在途尝试不重复派发：同一会话的并发激活由服务端合并，客户端不该用第二条请求
+   * 覆盖一个尚未收口的观察者。旧代的在途尝试已在连接断开/换代时终结，即便残留也不能当作
+   * 「仍在等待」（它永远等不到终态）。
+   *
+   * `uncertain` 的旧请求**不会**被自动重派——重新进入、返回前台、重新认证都只返回原
+   * `requestId`，不换号；重试走 {@link retrySessionActivation} 的 `command.status` 核实路径。
+   */
+  #requestActivation(sessionId: Uuid, force: boolean): Uuid | null {
+    const lifecycle = this.#state.lifecycle;
+    const existing = lifecycle.activations.get(sessionId) ?? null;
+    if (
+      !force &&
+      existing !== null &&
+      existing.phase === "activating" &&
+      existing.requestId !== null &&
+      existing.connectionGeneration === lifecycle.generation
+    ) {
+      return existing.requestId;
+    }
+    // 结果无法证明：结果未知，绝不自动换 `requestId` 重派；只有显式重试才处理。
+    if (existing?.failure?.kind === "uncertain" && existing.requestId !== null) return existing.requestId;
+    const requestId = this.#dispatchIntent({
+      sessionId,
+      build: (id): CommandBody => ({
+        requestId: id,
+        command: "session.resume",
+        sessionId,
+        payload: {},
+      }),
+      patch: (id): Partial<ClientState> => ({
+        lifecycle: {
+          ...this.#state.lifecycle,
+          activations: withSessionActivation(this.#state.lifecycle.activations, {
+            sessionId,
+            phase: "activating",
+            requestId: id,
+            connectionGeneration: this.#state.lifecycle.generation,
+            failure: null,
+          }),
+        },
+      }),
+    });
+    return requestId;
+  }
+
+  /** 取消续租计时器（离页、隐藏、断开、换选择都走这里）。 */
+  #cancelViewRenewal(): void {
+    if (this.#viewRenewCancel === null) return;
+    this.#viewRenewCancel();
+    this.#viewRenewCancel = null;
+  }
+
+  /** 可见且选中本机会话时才排续租：每条连接最多一个计时器，重复调用不会叠加。 */
+  #scheduleViewRenewal(): void {
+    if (this.#viewRenewCancel !== null) return;
+    if (this.#schedule === null) return;
+    this.#viewRenewCancel = this.#schedule(SESSION_VIEW_RENEW_INTERVAL_MS, () => {
+      this.#viewRenewCancel = null;
+      this.#renewView();
+    });
+  }
+
+  /** 续租 = 同一选择上递增版本重新声明；不派发 resume、不改变激活状态。 */
+  #renewView(): void {
+    const state = this.#state;
+    const lifecycle = state.lifecycle;
+    if (
+      !lifecycle.negotiated ||
+      state.connection.state !== "online" ||
+      lifecycle.visibility !== "visible" ||
+      this.#identity.connectionId === null
+    ) {
+      return;
+    }
+    const selected = lifecycle.selectedSessionId;
+    if (selected === null) return;
+    const view = lifecycle.view;
+    if (view === null || view.sessionId !== selected || view.connectionGeneration !== lifecycle.generation) {
+      return;
+    }
+    if (!isOwnedSummary(this.#findSession(selected))) return;
+    this.#declareView(selected, true);
+    this.#scheduleViewRenewal();
+  }
+
+  /**
+   * 显式重试激活（页面按钮）。
+   *
+   * `uncertain` 的旧请求先走 `command.status` 核实，**不**换新 `requestId` 自动重派；
+   * 其余失败直接用新请求重新申请（服务端对已 ready 的资源会复用，不重建会话）。
+   */
+  retrySessionActivation(sessionId: Uuid): CommandOutcome {
+    const lifecycle = this.#state.lifecycle;
+    if (!lifecycle.negotiated) return { ok: false, reason: ACTIVATION_UNAVAILABLE_NOTICE };
+    const summary = this.#findSession(sessionId);
+    if (!isOwnedSummary(summary)) return { ok: false, reason: "只有本机会话需要激活；远程导入会话由来源节点管理" };
+    if (this.#state.connection.state !== "online" || this.#identity.connectionId === null) return NOT_CONNECTED;
+    const existing = lifecycle.activations.get(sessionId) ?? null;
+    if (existing?.failure?.kind === "uncertain" && existing.requestId !== null) {
+      const target = existing.requestId;
+      const requestId = this.#dispatchIntent({
+        sessionId,
+        build: (id): CommandBody => ({
+          requestId: id,
+          command: "command.status",
+          payload: { targetRequestId: target },
+        }),
+      });
+      if (requestId === null) return NOT_CONNECTED;
+      return { ok: true, requestId };
+    }
+    this.#ensureLifecycle("retry");
+    const current = this.#state.lifecycle.activations.get(sessionId);
+    return current?.requestId === null || current?.requestId === undefined
+      ? { ok: false, reason: "当前无法派发恢复请求" }
+      : { ok: true, requestId: current.requestId };
+  }
+
+  /**
+   * `command.result`（`session.resume`）的归并。
+   *
+   * 旧连接上的终态不得改当前状态：先把 `connectionId` 与当前连接核对，再按 `requestId` 找到
+   * 那一次尝试。完成结果只接受「同一会话标识」的摘要——迟到的 A 结果不会把页面切回 A，也不会
+   * 为 B 续租。
+   */
+  #withActivationResult(state: ClientState, result: CommandResultMessage): ClientState {
+    if (result.body.command !== "session.resume") return state;
+    const connectionId = this.#identity.connectionId;
+    if (connectionId === null || result.connectionId !== connectionId) return state;
+    const lifecycle = state.lifecycle;
+    const entry = findActivationByRequest(lifecycle.activations, result.body.requestId);
+    if (entry === null) return state;
+    if (result.body.status === "accepted") {
+      if (entry.phase === "activating") return state;
+      return {
+        ...state,
+        lifecycle: {
+          ...lifecycle,
+          activations: withSessionActivation(lifecycle.activations, {
+            ...entry,
+            phase: "activating",
+            // 受理是在这条连接上观察到的：后续终态也按这条连接核对。
+            connectionGeneration: lifecycle.generation,
+            failure: null,
+          }),
+        },
+      };
+    }
+    if (result.body.status === "completed") {
+      const summary = resumedSummaryOf(result.body.result, entry.sessionId);
+      if (summary === null) {
+        // 形状不符不得被当成成功：保留激活尝试并给出明确失败（历史仍可读）。
+        return {
+          ...state,
+          lifecycle: {
+            ...lifecycle,
+            activations: withSessionActivation(lifecycle.activations, {
+              ...entry,
+              phase: "failed",
+              failure: activationShapeFailure(),
+            }),
+          },
+        };
+      }
+      return {
+        ...state,
+        resources: withSessionSummary(state.resources, summary),
+        lifecycle: {
+          ...lifecycle,
+          activations: withSessionActivation(lifecycle.activations, {
+            ...entry,
+            phase: "ready",
+            failure: null,
+          }),
+        },
+      };
+    }
+    const failure = classifyActivationFailure({ status: result.body.status, error: result.body.error });
+    if (failure === null) return state;
+    return {
+      ...state,
+      lifecycle: {
+        ...lifecycle,
+        activations: withSessionActivation(lifecycle.activations, {
+          ...entry,
+          phase: "failed",
+          failure,
+        }),
+      },
+    };
+  }
+
+  /** `command.status` 核实旧 `session.resume` 的结果（`uncertain` 的显式重试路径）。 */
+  #withActivationStatus(state: ClientState, record: CommandStatusRecord): ClientState {
+    const lifecycle = state.lifecycle;
+    const entry = findActivationByRequest(lifecycle.activations, record.targetRequestId);
+    if (entry === null) return state;
+    if (record.state === "completed") {
+      // 与 `#withActivationResult` 同一判据：形状不符不得打开发送门，按明确失败处理。
+      const summary = resumedSummaryOf(record.result, entry.sessionId);
+      if (summary === null) {
+        return {
+          ...state,
+          lifecycle: {
+            ...lifecycle,
+            activations: withSessionActivation(lifecycle.activations, {
+              ...entry,
+              phase: "failed",
+              failure: activationShapeFailure(),
+            }),
+          },
+        };
+      }
+      return {
+        ...state,
+        resources: withSessionSummary(state.resources, summary),
+        lifecycle: {
+          ...lifecycle,
+          activations: withSessionActivation(lifecycle.activations, {
+            ...entry,
+            phase: "ready",
+            failure: null,
+          }),
+        },
+      };
+    }
+    if (record.state === "accepted") {
+      return {
+        ...state,
+        lifecycle: {
+          ...lifecycle,
+          activations: withSessionActivation(lifecycle.activations, {
+            ...entry,
+            phase: "activating",
+            // 核实是在这条连接上做的：原请求的终态也由这条连接投递。
+            connectionGeneration: lifecycle.generation,
+            failure: null,
+          }),
+        },
+      };
+    }
+    const failure = classifyActivationFailure({ status: record.state, error: record.error });
+    if (failure === null) return state;
+    return {
+      ...state,
+      lifecycle: {
+        ...lifecycle,
+        activations: withSessionActivation(lifecycle.activations, {
+          ...entry,
+          phase: "failed",
+          failure,
+        }),
+      },
+    };
+  }
+
+  /**
+   * 本机活跃程度事件/摘要到达：`active`/`pending` 是节点确认资源可用的权威事实。
+   *
+   * 它只用于把「仍在恢复中」收敛成 `ready`（例如 `resume` 终态丢失但活动事件到了）；`idle`
+   * **不**用来撤销一次成功激活——资源释放后发送仍由下一次激活/服务端拒绝决定，不能靠事件
+   * 循环触发自动恢复。
+   */
+  #withActivityActivation(state: ClientState, summary: SessionSummary): ClientState {
+    const lifecycle = state.lifecycle;
+    if (!lifecycle.negotiated) return state;
+    if (lifecycle.selectedSessionId !== summary.sessionId) return state;
+    if (!isOwnedSummary(summary)) return state;
+    const activity = localActivityOf(summary, true);
+    if (activity !== "active" && activity !== "pending") return state;
+    const entry = lifecycle.activations.get(summary.sessionId) ?? null;
+    if (entry !== null && entry.phase === "ready") return state;
+    return {
+      ...state,
+      lifecycle: {
+        ...lifecycle,
+        activations: withSessionActivation(lifecycle.activations, {
+          sessionId: summary.sessionId,
+          phase: "ready",
+          requestId: entry?.requestId ?? null,
+          connectionGeneration: lifecycle.generation,
+          failure: null,
+        }),
+      },
+    };
   }
 
   /** 来源订阅已（重新）发出：登记运行期模型并排队一次原子读取重建。 */
@@ -1883,7 +2482,12 @@ export class ClientStore {
 
     // 2) 会话摘要（`session.created`/`session.updated`）。
     const summary = sessionSummaryIn(event);
-    if (summary !== null) next = { ...next, resources: withSessionSummary(next.resources, summary) };
+    if (summary !== null) {
+      next = { ...next, resources: withSessionSummary(next.resources, summary) };
+      // `active`/`pending` 是节点确认资源可用的权威事实：把可能已经丢失终态的「恢复中」
+      // 收敛为 ready；`idle` 不反向撤销（避免事件循环触发自动恢复）。
+      next = this.#withActivityActivation(next, summary);
+    }
 
     // 3) 来源可达性：只改 `origin.online` 这一条标注（摘要其余字段逐字段保持）。
     const online = originOnlineIn(event);
@@ -2042,6 +2646,8 @@ export class ClientStore {
     commands.set(updated.requestId, updated);
 
     let next: ClientState = { ...this.#state, commands };
+    // 本机激活的受理/终态：只改对应会话的尝试（迟到的旧连接结果在归并里被丢弃）。
+    if (result.body.command === "session.resume") next = this.#withActivationResult(next, result);
     if (result.body.command === "session.prompt") {
       const snapshot = this.#promptDrafts.get(result.body.requestId);
       if (snapshot !== undefined && (result.body.status === "rejected" || result.body.status === "failed")) {
@@ -2092,6 +2698,12 @@ export class ClientStore {
           next = { ...next, uncertainRequestIds: [...next.uncertainRequestIds, folder.requestId] };
         }
       }
+    }
+    // `session.resume` 的 `uncertain` 只走显式重试的 `command.status` 核实：终态按同一份
+    // 激活尝试归并，不换新 `requestId` 自动重派。
+    if (result.body.command === "command.status" && result.body.status === "completed" &&
+      isCommandStatusRecord(statusRecord)) {
+      next = this.#withActivationStatus(next, statusRecord);
     }
     // 结果未知的标题命令在重连后用原 `requestId` 查回；查询结果按同一份命令记录归并。
     if (result.body.command === "command.status" && result.body.status === "completed" &&
@@ -2416,6 +3028,7 @@ export class ClientStore {
       query: this.#state.directoryQuery,
       filter: this.#state.directoryFilter,
       pageInput: this.#state.directoryListPage,
+      localLifecycleNegotiated: this.#state.lifecycle.negotiated,
     });
   }
 
@@ -2436,6 +3049,7 @@ export class ClientStore {
       ownerLabelOf: this.#ownerLabelOf,
       nowMs: nowMs ?? this.#now(),
       pageInput: this.#state.directoryDetailDirectoryId === directoryId ? this.#state.directoryDetailPage : "",
+      localLifecycleNegotiated: this.#state.lifecycle.negotiated,
     });
   }
 
@@ -2452,6 +3066,7 @@ export class ClientStore {
       resources: this.#state.resources,
       ownerLabelOf: this.#ownerLabelOf,
       nowMs: nowMs ?? this.#now(),
+      localLifecycleNegotiated: this.#state.lifecycle.negotiated,
     });
   }
 
@@ -2486,6 +3101,53 @@ export class ClientStore {
       record: requestId === undefined ? null : (this.#state.commands.get(requestId) ?? null),
       connectionOnline: this.#state.connection.state === "online",
     });
+  }
+
+  /**
+   * 本机激活的呈现（仅 owned 会话）。
+   *
+   * 未协商该 feature 时给出**明确的不可用**，而不是让页面以为「没有激活这件事」；imported
+   * 会话返回 `null`（由来源节点管理，保持原任务三态合同）。
+   */
+  #activationViewOf(sessionId: Uuid, summary: SessionSummary | undefined): SessionActivationView | null {
+    if (summary === undefined || summary.origin.kind !== "local") return null;
+    const lifecycle = this.#state.lifecycle;
+    if (!lifecycle.negotiated) {
+      return { kind: "unavailable", notice: ACTIVATION_UNAVAILABLE_NOTICE };
+    }
+    const entry = lifecycle.activations.get(sessionId);
+    if (entry === undefined) return { kind: "inactive", notice: ACTIVATION_INACTIVE_NOTICE };
+    return activationViewOf({ phase: entry.phase, failure: entry.failure });
+  }
+
+  /**
+   * 发送闸门用的「会话是否已可用」判定。
+   *
+   * 未协商 / imported / 旧合同：沿用原判定（`ready: true`，由连接与任务事实把关）。
+   * 协商后的 owned 会话：只有 `ready` 才放行；恢复中/失败/尚未尝试都给出具体原因。
+   */
+  #activationReadiness(
+    sessionId: Uuid,
+    summary: SessionSummary | undefined,
+  ): { readonly ready: boolean; readonly reason: string | null } {
+    if (summary === undefined || summary.origin.kind !== "local") return { ready: true, reason: null };
+    if (!this.#state.lifecycle.negotiated) return { ready: true, reason: null };
+    const entry = this.#state.lifecycle.activations.get(sessionId);
+    const view: SessionActivationView = entry === undefined
+      ? { kind: "inactive", notice: ACTIVATION_INACTIVE_NOTICE }
+      : activationViewOf({ phase: entry.phase, failure: entry.failure });
+    switch (view.kind) {
+      case "ready":
+        return { ready: true, reason: null };
+      case "activating":
+        return { ready: false, reason: view.notice };
+      case "failed":
+        return { ready: false, reason: view.reason };
+      case "inactive":
+        return { ready: false, reason: view.notice };
+      case "unavailable":
+        return { ready: true, reason: null };
+    }
   }
 
   /**
@@ -2561,15 +3223,20 @@ export class ClientStore {
     const origin: "local" | { readonly kind: "remote"; readonly online: boolean } =
       remoteOrigin === null ? "local" : { kind: "remote", online: sourceOnline };
 
+    const localLifecycleNegotiated = this.#state.lifecycle.negotiated;
     const header: ConversationHeaderModel = {
       sessionId,
       title: titleOf(summary),
       agentName: summary?.agent.name ?? "",
       // 没有摘要时是「未知」，不是空闲：MUST NOT 编造主状态。
       state: summary?.state ?? null,
+      // 主标签：协商后的 owned 会话用本机活跃程度；旧合同/imported 保持任务三态。
+      localActivity: summary === undefined ? null : localActivityOf(summary, localLifecycleNegotiated),
+      activation: this.#activationViewOf(sessionId, summary),
       directoryId: summary?.workspace?.directoryId ?? null,
     };
     const connectionOnline = this.#state.connection.state === "online";
+    const readiness = this.#activationReadiness(sessionId, summary);
 
     // 结构化记录：实时与历史按来源 + `eventId` 去重（实时优先），再筛出本会话。
     // 来源尚未重建完成时一律不呈现，避免把部分事件误当成完整视图。
@@ -2638,6 +3305,8 @@ export class ClientStore {
       attachmentsNegotiated,
       attachments: attachmentBatch,
       pathRefs,
+      // 恢复中/失败时保留历史与草稿，但发送闸门关闭；`active` 标签本身不是发送依据。
+      sessionNotReadyReason: readiness.reason,
     });
 
     return buildConversationModel({
@@ -2673,11 +3342,13 @@ export class ClientStore {
         query: this.#state.conversationSidebarQuery,
         pageInput: this.#state.conversationSidebarPageInput,
         nowMs: nowMs ?? this.#now(),
+        localLifecycleNegotiated,
       }),
       capabilities: conversationCapabilities({
         connectionOnline,
         turnInProgress: activeTurn !== null,
         origin,
+        sessionReady: readiness.ready,
       }),
     });
   }
@@ -3714,6 +4385,8 @@ export class ClientStore {
 
   /** 向上翻页（消息）：续取游标取上一页最早一条的 `(createdAt, messageId)`。 */
   loadEarlier(sessionId: Uuid): void {
+    if (this.#pendingReads.size > 0) return;
+    if (this.#state.threads.get(sessionId)?.page?.hasEarlier !== true) return;
     const before = this.#state.threads.get(sessionId)?.page?.earliestCursor ?? null;
     if (before === null) return;
     this.#requestPage(sessionId, "earlier", { before });
@@ -4098,6 +4771,15 @@ export class ClientStore {
       this.#activeConversationSession = null;
       this.#activeFileRefreshNeeded = false;
       this.#expandedFileDirectories.delete(sessionId);
+      // 离页立即停止续租并声明离开；只清当前选择，历史与草稿保留在内存里。
+      if (this.#state.lifecycle.selectedSessionId === sessionId) {
+        this.#cancelViewRenewal();
+        this.#commit({
+          ...this.#state,
+          lifecycle: { ...this.#state.lifecycle, selectedSessionId: null },
+        });
+        this.#declareView(null, true);
+      }
     }
     const editor = this.#state.titleEditor;
     if (editor.sessionId !== sessionId) return;
@@ -4593,6 +5275,16 @@ export class ClientStore {
       const generation = this.#state.sessionFiles.generation + 1;
       this.#dropPendingContentQueries();
       this.#commit(this.#withFileContent(this.#state, { kind: "conversation" }, generation));
+    }
+    // 本机生命周期：换选择即换查看者。先提交选择，再在同一连接上「先声明查看、后派发恢复」；
+    // 旧会话的续租计时器立即停掉（旧 viewer 不得被迟到计时器重新续租）。
+    if (this.#state.lifecycle.selectedSessionId !== sessionId) {
+      this.#cancelViewRenewal();
+      this.#commit({
+        ...this.#state,
+        lifecycle: { ...this.#state.lifecycle, selectedSessionId: sessionId },
+      });
+      this.#ensureLifecycle("enter");
     }
     if (previous !== null) {
       const previousRef = remoteRefOf(this.#state, previous);
@@ -5767,9 +6459,11 @@ export class ClientStore {
         this.#pendingReads.set(requestId, { sessionId, intent, volatileAtRequest, remote, generation });
         // 与 `paging.ts` 的 `buildReadPayload` 同一形状；这里就地构造是为了让 `include`
         // 保持 `SessionReadInclude[]`（协议类型），而 `PageRequest` 声明的是更宽的 `string[]`。
-        const payload: { include: readonly SessionReadInclude[]; before?: ReadCursor; beforeHistory?: string } = {
+        const payload: { include: readonly SessionReadInclude[]; before?: ReadCursor; beforeHistory?: string; limit?: number } = {
           include: this.#includesFor(intent, remote !== null),
         };
+        // limit 按用户输入计数，服务端同时返回该范围内的回复与思考。
+        if (intent === "first" || intent === "rebuild_remote" || intent === "earlier" || intent === "refresh_messages") payload.limit = 10;
         if (cursors.before !== undefined) payload.before = cursors.before;
         if (cursors.beforeHistory !== undefined) payload.beforeHistory = cursors.beforeHistory;
         return { requestId, command: "session.read", sessionId, payload };

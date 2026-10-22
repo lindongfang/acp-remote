@@ -11,7 +11,7 @@
 import type { ReactElement } from "react";
 import type { TextStyle } from "react-native";
 
-import type { SessionStateView } from "../domain/session-summary";
+import type { LocalActivityView, SessionStateView } from "../domain/session-summary";
 import type { ColorToken, Palette } from "./theme";
 import { StyleSheet, Text, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
 
@@ -62,6 +62,39 @@ const STYLE_KEY_BY_STATE: Record<SessionStateView, ToneStyleKey> = {
   pending: "pending",
 };
 
+/**
+ * 本机活跃程度的展示词表（`core.local-session-lifecycle.v1`）。
+ *
+ * `活跃` 与任务态的 `运行中` **不是同义词**：资源已恢复但没有任务时仍是 `active`，用户据此
+ * 知道可以继续发送；任务执行、排队与等待原因仍由时间线与胶囊旁的细节表达。
+ */
+export const SESSION_ACTIVITY_LABEL: Record<LocalActivityView, string> = {
+  idle: "空闲",
+  active: "活跃",
+  pending: "待处理",
+};
+
+/** 活跃程度的字形：与任务三态共用一个视觉语言（不新增第四个符号）。 */
+const GLYPH_BY_ACTIVITY: Record<LocalActivityView, string> = {
+  idle: "○",
+  active: "●",
+  pending: "⏸",
+};
+
+/** 活跃程度的配色：语义相同的档共用同一组 token。 */
+const TONE_BY_ACTIVITY: Record<LocalActivityView, { readonly fg: ColorToken; readonly bg: ColorToken }> = {
+  idle: TONE_BY_STATE.idle,
+  active: TONE_BY_STATE.running,
+  pending: TONE_BY_STATE.pending,
+};
+
+/** 活跃程度 → 样式键（沿用任务三态的样式表）。 */
+const STYLE_KEY_BY_ACTIVITY: Record<LocalActivityView, ToneStyleKey> = {
+  idle: "idle",
+  active: "running",
+  pending: "pending",
+};
+
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
 function buildStyles(colors: Palette) {
   /** 一种状态的配色：前景色 + 底色取同一组 token（浅/深各自成立）。 */
@@ -88,7 +121,10 @@ function buildStyles(colors: Palette) {
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
 export interface StatusPillProps {
+  /** 任务三态（始终是任务事实；`localActivity` 缺席时它就是主标签）。 */
   readonly state: SessionStateView;
+  /** 协商后的本机活跃程度；非空时覆盖主标签的文案/字形，`data-session-state` 仍是任务态。 */
+  readonly localActivity?: LocalActivityView | null;
 }
 
 /**
@@ -98,22 +134,29 @@ export interface StatusPillProps {
  * 两处都不能被这块胶囊的样式改动碰到。字形（`● / ⏸ / ○`）只是文案前缀，另以
  * `data-session-state-glyph` 进 DOM；色调以 `data-session-state-tone`（底色 token）留作机器证据。
  */
-export function StatusPill({ state }: StatusPillProps): ReactElement {
+export function StatusPill({ state, localActivity }: StatusPillProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
-  const glyph = GLYPH_BY_STATE[state];
+  const local = localActivity ?? null;
+  const glyph = local === null ? GLYPH_BY_STATE[state] : GLYPH_BY_ACTIVITY[local];
+  const label = local === null ? SESSION_STATE_LABEL[state] : SESSION_ACTIVITY_LABEL[local];
+  const tone = local === null ? TONE_BY_STATE[state].bg : TONE_BY_ACTIVITY[local].bg;
+  const styleKey = local === null ? STYLE_KEY_BY_STATE[state] : STYLE_KEY_BY_ACTIVITY[local];
   return (
     <Text
-      style={[styles.pill, styles[STYLE_KEY_BY_STATE[state]]]}
+      style={[styles.pill, styles[styleKey]]}
       dataSet={{
+        // 任务事实始终在 DOM 里；本机活跃程度另有一份机器证据，二者不互相冒充。
         sessionState: state,
         sessionStateGlyph: glyph,
         // 配色的机器证据：`pending` 的底色是 `warnSoft`。
-        sessionStateTone: TONE_BY_STATE[state].bg,
+        sessionStateTone: tone,
+        sessionStateSource: local === null ? "task" : "local",
+        ...(local === null ? {} : { sessionActivity: local }),
       }}
     >
-      {`${glyph} ${SESSION_STATE_LABEL[state]}`}
+      {`${glyph} ${label}`}
     </Text>
   );
 }

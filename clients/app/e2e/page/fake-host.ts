@@ -35,6 +35,7 @@
 import type { SocketHandlers, SocketOpenInput, SocketPort } from "../../src/sync-client";
 import {
   encodeBase64Url,
+  LOCAL_SESSION_LIFECYCLE_FEATURE,
   REQUIRED_FEATURES,
   SESSION_HISTORY_FEATURE,
   SESSION_TITLE_FEATURE,
@@ -216,6 +217,13 @@ export interface FakeHostOptions {
    * （立即回 `completed` 的假主机让所有提交一发出就变「已完成」，两条 MUST NOT 都不可观测）。
    */
   readonly holdCommands?: readonly string[] | undefined;
+  /**
+   * 是否在握手时**选中** `core.local-session-lifecycle.v1`。
+   *
+   * 缺省 `false`：既有用例的旧 peer 路径保持不变（不协商就不发查看/恢复帧，也不显示本机活跃）。
+   * 新用例显式打开它，假主机才应答 `session.view` 并按本机摘要完成 `session.resume`。
+   */
+  readonly selectLocalLifecycle?: boolean | undefined;
 }
 
 /** 已配对主机记录（写进本地缓存的那一份，只含公开材料）。 */
@@ -375,6 +383,11 @@ export class FakeHost {
   #closed = false;
   /** `command.result` 的 `messageId` 计数（每条结果一帧；见 `#deliverResult`）。 */
   #resultCounter = 0;
+  /** `session.view` 的 messageId 计数（每个应答一帧）。 */
+  #viewResultCounter = 0;
+  /** 本连接上已接受的最新查看版本与选择（服务端单查看者语义）。 */
+  #viewVersion = -1;
+  #viewSessionId: string | null = null;
   /** 被扣住、尚未应答的命令帧（按发出次序；见 {@link FakeHostOptions.holdCommands}）。 */
   #held: CommandFrame[] = [];
   /** 运行期追加的扣留命令（下载用例要等预览读取完成之后才开始扣 `session.files.read`）。 */
@@ -445,6 +458,31 @@ export class FakeHost {
     return null;
   }
 
+  /**
+   * 全部 `session.view` 声明（按发送顺序）。
+   *
+   * 用例据此断言「先声明后 resume」、版本单调、隐藏时发 `null`、以及迟到的旧恢复没有续租旧
+   * viewer。返回解析后的 `body`，并按 `sent` 顺序与其它帧对齐。
+   */
+  viewFrames(): readonly { readonly sessionId: string | null; readonly viewVersion: number }[] {
+    const frames: { sessionId: string | null; viewVersion: number }[] = [];
+    for (const text of this.sent) {
+      if (this.#typeOf(text) !== "session.view") continue;
+      const parsed = JSON.parse(text) as { readonly body?: Record<string, unknown> };
+      const body = parsed.body ?? {};
+      const sessionId = body["sessionId"];
+      const viewVersion = body["viewVersion"];
+      if ((typeof sessionId !== "string" && sessionId !== null) || typeof viewVersion !== "number") continue;
+      frames.push({ sessionId, viewVersion });
+    }
+    return frames;
+  }
+
+  /** 帧类型在 `sent` 中的发送顺序（用于「先声明再派发」的严格断言）。 */
+  frameOrder(): readonly string[] {
+    return this.sent.map((text) => this.#typeOf(text)).filter((type): type is string => type !== null);
+  }
+
   #typeOf(text: string): string | null {
     const parsed: unknown = JSON.parse(text);
     if (typeof parsed !== "object" || parsed === null) return null;
@@ -485,6 +523,38 @@ export class FakeHost {
 
     if (bodyOf(message, "sync.subscribe") !== null) {
       this.#sendSnapshot();
+      return;
+    }
+
+    const view = bodyOf(message, "session.view");
+    if (view !== null) {
+      const sessionId = view["sessionId"];
+      const viewVersion = view["viewVersion"];
+      if ((typeof sessionId !== "string" && sessionId !== null) || typeof viewVersion !== "number") return;
+      // 同版本同载荷幂等；低于版本或同版本不同选择按 `stale`；更高版本替换 viewer。
+      const stale =
+        viewVersion < this.#viewVersion ||
+        (viewVersion === this.#viewVersion && sessionId !== this.#viewSessionId);
+      if (!stale) {
+        this.#viewVersion = viewVersion;
+        this.#viewSessionId = sessionId;
+      }
+      this.#viewResultCounter += 1;
+      this.#deliver(
+        JSON.stringify({
+          protocolVersion: 1,
+          type: "session.view.result",
+          messageId: `cccccccc-1111-4111-8111-${this.#viewResultCounter.toString().padStart(12, "0")}`,
+          connectionId: CONNECTION_ID,
+          connectionSequence: "1",
+          body: {
+            sessionId,
+            viewVersion,
+            status: stale ? "stale" : "accepted",
+            leaseExpiresAt: stale ? null : new Date(Date.now() + 30_000).toISOString(),
+          },
+        }),
+      );
       return;
     }
 
@@ -529,7 +599,10 @@ export class FakeHost {
 
   async #onClientHello(hello: { readonly deviceId: string; readonly clientNonce: string }): Promise<void> {
     const serverNonce = crypto.getRandomValues(new Uint8Array(32)) as Uint8Array<ArrayBuffer>;
-    const selectedFeatures = SERVER_SELECTED_FEATURES;
+    const selectedFeatures =
+      this.options.selectLocalLifecycle === true
+        ? [...SERVER_SELECTED_FEATURES, LOCAL_SESSION_LIFECYCLE_FEATURE]
+        : SERVER_SELECTED_FEATURES;
     const transcript = encodeTranscript(HOST_CHALLENGE_DOMAIN, [
       { tag: HOST_CHALLENGE_TAG.protocolVersion, bytes: encodeU16be(1) },
       { tag: HOST_CHALLENGE_TAG.hostId, bytes: encodeUuid16(this.identity.hostId) },
@@ -673,14 +746,20 @@ export class FakeHost {
   #sendCommandResult(command: CommandFrame): void {
     const isFilesQuery = command.command.startsWith("session.files.") || command.command.startsWith("session.git.");
     const filesResult = this.options.filesResult;
+    const resumeSummary = this.options.sessions.find(
+      (item): item is Record<string, unknown> =>
+        typeof item === "object" && item !== null && (item as Record<string, unknown>)["sessionId"] === command.sessionId,
+    );
     this.#deliverResult(command, {
       status: "completed",
       result:
         command.command === "session.read"
           ? this.options.readResult(command.sessionId)
-          : isFilesQuery && filesResult !== undefined
-            ? filesResult(command.command, command.sessionId, command.payload)
-            : DEFAULT_COMMAND_RESULT,
+          : command.command === "session.resume"
+            ? { sessionId: command.sessionId, session: resumeSummary ?? DEFAULT_COMMAND_RESULT }
+            : isFilesQuery && filesResult !== undefined
+              ? filesResult(command.command, command.sessionId, command.payload)
+              : DEFAULT_COMMAND_RESULT,
       acceptedAt: ACCEPTED_AT,
       error: null,
     });

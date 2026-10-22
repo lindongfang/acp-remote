@@ -140,12 +140,16 @@ pub const METHODS: &[MethodSpec] = &[
         Delivery::ConditionalMvp,
         true,
     ),
+    // `session/close` 与 `session/resume` 同口径：已有类型化请求/响应 DTO，但**条件启用**——只有
+    // Agent 经 `initialize` 宣告 `agentCapabilities.sessionCapabilities.close` 后才允许发出。门控在
+    // `agent-host` 的会话释放路径；未宣告时不得发出，由调用方报告 `BackendUnsupported`。
+    // 注意：`session/load` **不**随本项提升（它仍为 `PostMvp` 且未实现）。
     spec(
         "session/close",
         MethodDirection::ClientToAgent,
         MethodKind::Request,
-        Delivery::PostMvp,
-        false,
+        Delivery::ConditionalMvp,
+        true,
     ),
     spec(
         "session/set_mode",

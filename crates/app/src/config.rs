@@ -128,8 +128,17 @@ pub struct SessionsConfig {
     pub queue_policy: QueuePolicy,
     /// `queue` 策略下的排队上限。
     pub max_queued_turns: u32,
-    /// 会话空闲回收；`None` 表示不因空闲关闭会话（`0` 与未配置同义）。
+    /// 会话空闲回收（旧 `agent-host` 进程级扫描的输入）；`None` 表示不因空闲关闭会话（`0` 与未配置同义）。
+    ///
+    /// 注意：生命周期接线后该值**不再**交给进程级 idle sweep（它看不到查看者租约，会杀受保护会话）。
+    /// 真正的保留期由 [`SessionsConfig::lifecycle`] 读取同一个 `sessions.idle_timeout_ms`；本字段只保留
+    /// 配置解析口径（显式 `0` 仍被接受与校验），供只读诊断/兼容比较，不驱动任何关闭动作。
     pub idle_timeout: Option<Duration>,
+    /// 本机生命周期（`core.local-session-lifecycle.v1`）：保留期与容量上限的**已校验**形态。
+    ///
+    /// 与 `idle_timeout` 的分工：后者是 `agent-host` 的既有空闲回收（保持旧语义），本字段服务
+    /// `LocalSessionLifecycle`（显式 `0` 只关闭按时间回收，容量保护仍生效）。
+    pub lifecycle: acp_core::use_cases::LifecycleConfig,
 }
 
 impl Default for SessionsConfig {
@@ -138,6 +147,8 @@ impl Default for SessionsConfig {
             queue_policy: QueuePolicy::Queue,
             max_queued_turns: 16,
             idle_timeout: None,
+            lifecycle: acp_core::use_cases::LifecycleConfig::new(1_800_000, 50)
+                .expect("缺省保留期与容量是合法值"),
         }
     }
 }
@@ -905,6 +916,7 @@ struct RawSessions {
     queue_policy: Option<String>,
     max_queued_turns: Option<u64>,
     idle_timeout_ms: Option<u64>,
+    max_active_sessions: Option<u64>,
 }
 
 impl RawSessions {
@@ -927,15 +939,34 @@ impl RawSessions {
                 detail: "`sessions.max_queued_turns` 必须是 0..=4294967295 的整数".to_owned(),
             })?,
         };
-        // `0` 与未配置同义：不因空闲关闭会话（`agent-host::HostConfig` 的既有口径）。
+        // `0` 与未配置同义（旧口径）；该字段不再驱动进程级 idle sweep，只保留配置解析形状。
+        // 生命周期（下方 `lifecycle`）仍读取原始 `idle_timeout_ms`：显式 0 只关闭按时间回收。
         let idle_timeout = self
             .idle_timeout_ms
             .filter(|value| *value > 0)
             .map(Duration::from_millis);
+        // 生命周期：缺省 30 分钟保留期；显式 `0` 只关闭按时间回收（容量保护仍生效）。
+        // `max_active_sessions` 必须是正整数——`0`/超范围在解析期失败关闭，不静默降级。
+        let lifecycle_idle = self.idle_timeout_ms.unwrap_or(1_800_000);
+        let max_active = match self.max_active_sessions {
+            None => 50,
+            Some(value) => u32::try_from(value)
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| ConfigError::Invalid {
+                    detail: "`sessions.max_active_sessions` 必须是 1..=4294967295 的正整数"
+                        .to_owned(),
+                })?,
+        };
+        let lifecycle = acp_core::use_cases::LifecycleConfig::new(lifecycle_idle, max_active)
+            .map_err(|_| ConfigError::Invalid {
+                detail: "`sessions.max_active_sessions` 必须是正整数".to_owned(),
+            })?;
         Ok(SessionsConfig {
             queue_policy,
             max_queued_turns,
             idle_timeout,
+            lifecycle,
         })
     }
 }
@@ -1121,11 +1152,80 @@ mod tests {
             config.sync.max_replay_events_per_batch,
             DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH
         );
-        assert_eq!(config.sessions, SessionsConfig::default());
         assert_eq!(config.sessions.queue_policy, QueuePolicy::Queue);
         assert_eq!(config.sessions.max_queued_turns, 16);
-        assert!(config.sessions.idle_timeout.is_none());
+        assert!(
+            config.sessions.idle_timeout.is_none(),
+            "agent-host 的既有空闲回收在未配置时仍关闭"
+        );
+        assert_eq!(
+            config.sessions.lifecycle,
+            SessionsConfig::default().lifecycle
+        );
+        assert_eq!(
+            config.sessions.lifecycle.idle_timeout_ms(),
+            1_800_000,
+            "保留期默认 30 分钟"
+        );
+        assert_eq!(
+            config.sessions.lifecycle.max_active_sessions(),
+            50,
+            "容量默认候选值 50"
+        );
+        assert!(config.sessions.lifecycle.time_based_reclaim_enabled());
         assert!(config.unwired.is_empty(), "{:?}", config.unwired);
+    }
+
+    /// 显式 `0` 只关闭**按时间**回收：容量上限仍生效（两者不是同一个开关）。
+    #[test]
+    fn an_explicit_zero_idle_timeout_only_disables_time_based_reclaim() {
+        let config = parse(
+            r#"
+[sessions]
+idle_timeout_ms = 0
+"#,
+        )
+        .expect("显式 0 是合法配置");
+        assert_eq!(config.sessions.lifecycle.idle_timeout_ms(), 0);
+        assert!(
+            !config.sessions.lifecycle.time_based_reclaim_enabled(),
+            "显式 0 关闭按时间回收"
+        );
+        assert_eq!(
+            config.sessions.lifecycle.max_active_sessions(),
+            50,
+            "显式 0 不得连带关闭容量策略"
+        );
+        assert!(
+            config.sessions.idle_timeout.is_none(),
+            "agent-host 的既有空闲回收同样把 0 当作关闭"
+        );
+    }
+
+    /// `max_active_sessions` 没有「无限」取值：0、负数与非整数都在解析期失败关闭。
+    #[test]
+    fn max_active_sessions_rejects_zero_negative_and_non_integer_values() {
+        for value in ["0", "-1", "\"50\""] {
+            let error = parse(&format!(
+                r#"
+[sessions]
+max_active_sessions = {value}
+"#
+            ))
+            .expect_err(&format!("max_active_sessions = {value} 必须被拒绝"));
+            assert!(
+                matches!(error, ConfigError::Invalid { .. }),
+                "max_active_sessions = {value} 必须是配置错误：{error:?}"
+            );
+        }
+        let accepted = parse(
+            r#"
+[sessions]
+max_active_sessions = 7
+"#,
+        )
+        .expect("正整数是合法容量");
+        assert_eq!(accepted.sessions.lifecycle.max_active_sessions(), 7);
     }
 
     #[test]
@@ -1407,7 +1507,18 @@ allow_plaintext = true
         assert_eq!(config.public_origin, None);
         assert!(config.allowed_hosts.is_empty());
         assert!(config.trusted_proxies.is_empty());
-        assert_eq!(config.sessions, SessionsConfig::default());
+        assert_eq!(
+            config.sessions.queue_policy,
+            SessionsConfig::default().queue_policy
+        );
+        assert_eq!(
+            config.sessions.max_queued_turns,
+            SessionsConfig::default().max_queued_turns
+        );
+        assert_eq!(
+            config.sessions.lifecycle,
+            SessionsConfig::default().lifecycle
+        );
         assert_eq!(config.sync, SyncConfig::default());
         assert_eq!(config.storage.transcript_retention_days, 90);
         assert_eq!(config.storage.sync_event_retention_days, 7);

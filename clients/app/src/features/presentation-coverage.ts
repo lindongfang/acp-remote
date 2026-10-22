@@ -57,6 +57,8 @@ export const PRESENTATION_COVERAGE: Readonly<Record<string, PresentationRoute>> 
   // 摘要/仪表面：目录与对话头、上下文条、来源可达性标注。
   "session.created": "session_dashboard",
   "session.updated": "session_dashboard",
+  // 本机生命周期事件只改会话主状态的展示依据（摘要里的 `localActivity`），没有独立卡片。
+  "session.activity.changed": "session_dashboard",
   "session.usage.changed": "session_dashboard",
   "session.origin.online_changed": "session_dashboard",
 

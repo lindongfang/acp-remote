@@ -1,6 +1,6 @@
 //! `event.payload.view` 的类型化视图（`schemas/sync/v1/event-views.schema.json`）。
 //!
-//! 每个 `$defs` 条目对应一个公开 struct，名字是 eventType 的驼峰化；[`VIEW_TYPES`] 登记全部 34 个
+//! 每个 `$defs` 条目对应一个公开 struct，名字是 eventType 的驼峰化；[`VIEW_TYPES`] 登记全部 35 个
 //! eventType，[`project`] 按 eventType 把 `payload.view` 投影成 [`View`]。
 //!
 //! 视图是**开放对象**（schema 的 `additionalProperties: true`）：因此
@@ -916,6 +916,17 @@ pub struct SessionConfigChanged {
     pub extra: ExtraFields,
 }
 
+/// `session.activity.changed`（`event-views.schema.json#/$defs/session.activity.changed`）。
+///
+/// 携带事件发生当时**完整的** owned 会话摘要（含可选的 `localActivity`）。事件只在归约值实际变化时
+/// 写出，且只在本机 owned 路径投递（Node Link 不转发）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionActivityChanged {
+    pub session: SessionSummary,
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
 /// `session.created`（`event-views.schema.json#/$defs/session.created`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionCreated {
@@ -1246,8 +1257,8 @@ pub struct UserMessageDelta {
 /// `tests/schema_drift.rs::view_types_match_schema_defs` 逐条比较的那个顺序。
 macro_rules! view_registry {
     ($( $event_type:literal => $variant:ident($ty:ty) ),+ $(,)?) => {
-        /// 全部 34 个登记 eventType，与 `event-views.schema.json` 的 `$defs` 键集合逐条相等。
-        pub const VIEW_TYPES: [&str; 34] = [ $( $event_type ),+ ];
+        /// 全部 35 个登记 eventType，与 `event-views.schema.json` 的 `$defs` 键集合逐条相等。
+        pub const VIEW_TYPES: [&str; 35] = [ $( $event_type ),+ ];
 
         /// 投影结果：一个登记 eventType 一个变体，负载是对应的类型化视图。
         #[derive(Debug, Clone, Serialize)]
@@ -1298,6 +1309,7 @@ view_registry! {
     "file.changed" => FileChanged(FileChanged),
     "permission.requested" => PermissionRequested(PermissionRequested),
     "permission.resolved" => PermissionResolved(PermissionResolved),
+    "session.activity.changed" => SessionActivityChanged(SessionActivityChanged),
     "session.commands.changed" => SessionCommandsChanged(SessionCommandsChanged),
     "session.config.changed" => SessionConfigChanged(SessionConfigChanged),
     "session.created" => SessionCreated(SessionCreated),

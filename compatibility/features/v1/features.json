@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-10-21",
+  "revision": "2026-10-22",
   "description": "ACP Remote feature ID 机器登记 v1：Sync 与 Node Link 的封闭 feature 词表。协议文档 §5.2 / §11.3 的 feature 表、fixture 里出现的 feature ID 与本文件由 scripts/check-features.mjs 断言逐一相等；新增或删除 feature 必须先改本文件。required 表示协议要求每次协商都必须选中该 feature（产品必须支持由 delivery 表达）。",
   "protocols": {
     "sync": {
@@ -135,6 +135,12 @@
         {
           "id": "core.session-title.v1",
           "description": "Owner 元数据命令 `session.title.set`（§11.5 的 closed payload `{ title: string }`）与有效标题投影：标题由 Owner 持久化（自定义标题优先，否则 Agent 标题），`SessionSummary.title` 始终下发有效值、不新增 `customTitle` 键；Access 不回源持久化标题，未协商时命令返回 `protocol.feature_required`",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.local-session-lifecycle.v1",
+          "description": "本机会话生命周期投影与激活（§9.8/§10.2/§11.5/§11.8）：门控 Sync 面 `session.resume`、查看控制帧 `session.view`/`session.view.result`、owned 摘要的可选 `localActivity`（`idle`/`active`/`pending`）与持久事件 `session.activity.changed`；未协商时该命令回 `command.unsupported`、该字段与事件缺席、查看控制帧被拒。只在 owned 路径交付，Node Link 不登记该 feature、不转发新字段或新事件",
           "delivery": "mvp",
           "required": false
         }

@@ -16,6 +16,10 @@
 //! （`session/new` 返回错误）。`--dump-requests <path>` 把每次收到的带 `method` 的入站报文按行追加
 //! method 名，供用例断言「某个请求发过 / 没发过」。
 //!
+//! `session/close` 的四个场景：`close-error`（明确拒绝）、`close-timeout`（永不答复）、`slow-close`
+//! （延迟 300 ms 才 ack）、`close-error-terminal`（拒绝关闭，但随后的 prompt 照常走 `terminal-ok`
+//! 的终端流程——用于断言释放失败后绑定仍能服务 `terminal/*`）。
+//!
 //! `--dump-request-params <path>` 是与它**并列**的独立选项：每次收到带 `method` 的入站报文，向该文件
 //! 追加一行单行 JSON `{"method":…,"params":…}`（`params` 缺失时为 `null`），供用例断言**发出去的取值**
 //! （例如 `session/resume` 的 `params.sessionId` 与 `params.cwd` 逐字等于期望值）。
@@ -223,6 +227,10 @@ fn main() -> ExitCode {
             dump_inbound(&args, method, message.get("params"));
         }
         handle(&message, &mut state, &mut out, &args);
+    }
+    if args.scenario == "linger-after-eof" {
+        // 故意忽略 stdin EOF 继续活着：用于断言 `Supervisor::shutdown` 在 grace 到期后强制结束整棵树。
+        std::thread::sleep(std::time::Duration::from_secs(60));
     }
     ExitCode::SUCCESS
 }
@@ -584,6 +592,37 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
                     }),
                 ),
                 // `resume-ok` 与本 fake 的其它场景都是恢复成功：模式与配置项都缺失是合法响应。
+                _ => respond(out, &id, json!({})),
+            }
+        }
+        (Some("session/close"), Some(id)) => {
+            // 形状校验：`CloseSessionRequest` 的唯一必填字段是 `sessionId`。
+            let shaped = message
+                .get("params")
+                .and_then(|params| params.get("sessionId"))
+                .and_then(Value::as_str)
+                .is_some();
+            if !shaped {
+                std::process::exit(8);
+            }
+            match args.scenario.as_str() {
+                // Agent 明确拒绝关闭（资源必须保留）。`close-error-terminal` 是同一拒绝路径，但随后的
+                // prompt 会走终端流程：用于断言「关闭失败后绑定仍能服务 terminal/*」。
+                "close-error" | "close-error-terminal" => write_line(
+                    out,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32003, "message": "无法关闭会话" },
+                    }),
+                ),
+                // 永不响应：用于断言有界超时与「结果不确定」时仍保留资源。
+                "close-timeout" => {}
+                // 慢 ack：用于在关闭进行中重绑，验证迟到旧代结果不得摘除新绑定。
+                "slow-close" => {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    respond(out, &id, json!({}));
+                }
                 _ => respond(out, &id, json!({})),
             }
         }
@@ -995,6 +1034,8 @@ fn send_permission_request(state: &mut State, out: &mut impl Write, session: &st
 fn terminal_kind_for(scenario: &str) -> Option<TerminalFlowKind> {
     Some(match scenario {
         "terminal-ok" => TerminalFlowKind::Happy,
+        // 关闭被拒之后仍能建终端/读输出：断言释放失败不得把终端服务永久关死。
+        "close-error-terminal" => TerminalFlowKind::Happy,
         "terminal-exit-code" => TerminalFlowKind::NonZero,
         "terminal-big" => TerminalFlowKind::Big,
         "terminal-kill" => TerminalFlowKind::Kill,

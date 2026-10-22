@@ -677,26 +677,32 @@ async fn idle_clock_is_refreshed_by_cancel_turn() {
     let _ = std::fs::remove_file(&heartbeat);
 }
 
-/// 已关闭的会话不得阻塞空闲回收：`Endpoint::close()` 只置关闭位、不摘映射，
-/// 若把已关闭会话算作「不空闲」，只要 `by_acp` 里留着它就永远回收不掉这个 runtime（进程泄漏）。
+/// 已关闭的会话不得阻塞空闲回收：成功关闭会摘除映射并标记关闭；即便目录里留下已关闭绑定，
+/// 判据也不得把它算作「不空闲」，否则只要 `by_acp` 里留着它就永远回收不掉这个 runtime（进程泄漏）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn closed_session_does_not_block_idle_reclaim() {
-    let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "closed");
+    let (profile, dump, heartbeat) = dumping_heartbeat_profile_with(
+        "agent-1",
+        "closed",
+        &["--capabilities", r#"{"sessionCapabilities":{"close":{}}}"#],
+    );
     let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
-    let endpoint = create(
-        &host,
-        "agent-1",
-        &SessionId::new(SESSION).expect("session"),
-        &Collector::new(),
-    )
-    .await
-    .expect("create");
+    let session = SessionId::new(SESSION).expect("session");
+    let endpoint = create(&host, "agent-1", &session, &Collector::new())
+        .await
+        .expect("create");
     assert!(wait_for_heartbeat(&heartbeat, Duration::from_secs(10)).await > 0);
     assert_eq!(runtime_generation(&host, &agent), Some(1));
 
-    // 直接调 `Endpoint::close()`（不依赖 core 是否调用它）：会话映射仍留在 `by_acp` 里。
+    // 真实关闭：只有 Agent ack 后才摘除映射并标记关闭（旧映射不可再被 `open` 复用）。
     endpoint.close().await.expect("close");
+    assert!(
+        host.open(owned_ref(&session), Collector::new().sink())
+            .await
+            .is_err(),
+        "关闭成功后旧映射必须不可用"
+    );
     tokio::time::sleep(Duration::from_millis(300)).await;
     host.sweep_idle(Duration::from_millis(200)).await;
     assert_eq!(

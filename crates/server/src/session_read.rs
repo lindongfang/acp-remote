@@ -89,6 +89,9 @@ pub(crate) struct SessionReadRequest {
     pub negotiate_file_diff: bool,
     /// `core.local-catalog.v1` 的协商结果（摘要投影里 `workspace` 键的三态）。
     pub catalog: bool,
+    /// owned 摘要的 `localActivity`（协商了 `core.local-session-lifecycle.v1` 时由调用方按本机归约
+    /// 取得；未协商或远程来源时为 `None`，键因此缺席而不是写 `null`）。
+    pub local_activity: Option<sync_protocol::common::LocalActivity>,
     /// `resource.stateless-origin.v1` 的协商结果：只有协商后才允许解析远程来源，并在结果里带
     /// `readCursor`/`sessionSummary`/`messageCoverage`（`design.md` D4）。
     pub stateless_origin: bool,
@@ -553,10 +556,14 @@ pub(crate) async fn read_session<S: SessionReadSource>(
         Some((cursor, coverage, summary)) => {
             let read_cursor = wire_origin_cursor(&cursor)
                 .ok_or(SessionReadFault::Internal("the read cursor is invalid"))?;
-            let session_summary =
-                crate::sync::command::query::wire_session(&summary, request.catalog).ok_or(
-                    SessionReadFault::Internal("the session summary cannot be projected"),
-                )?;
+            let session_summary = crate::sync::command::query::wire_session(
+                &summary,
+                request.catalog,
+                request.local_activity,
+            )
+            .ok_or(SessionReadFault::Internal(
+                "the session summary cannot be projected",
+            ))?;
             let message_coverage = coverage
                 .iter()
                 .map(|entry| {
@@ -692,9 +699,10 @@ pub(crate) fn project_remote_read(
         .ok_or(SessionReadFault::Internal(
             "a message coverage entry cannot be projected",
         ))?;
-    let summary = crate::sync::command::query::wire_session(&page.summary, request.catalog).ok_or(
-        SessionReadFault::Internal("the remote session summary cannot be projected"),
-    )?;
+    let summary = crate::sync::command::query::wire_session(&page.summary, request.catalog, None)
+        .ok_or(SessionReadFault::Internal(
+        "the remote session summary cannot be projected",
+    ))?;
     let read_cursor = wire_origin_cursor(&page.read_cursor)
         .ok_or(SessionReadFault::Internal("the read cursor is invalid"))?;
     Ok(sync_protocol::command::SessionReadResult {

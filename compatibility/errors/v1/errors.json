@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-10-18",
+  "revision": "2026-10-22",
   "protocols": {
     "sync": {
       "subprotocol": "acp-remote.sync.v1.json",
@@ -33,6 +33,7 @@
         { "code": "state.version_conflict", "retryable": true, "details": { "type": "object", "required": ["currentVersion"], "additionalProperties": true, "properties": { "expectedVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" }, "currentVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" } } }, "delivery": "mvp" },
         { "code": "session.not_found", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "session.busy", "retryable": true, "details": null, "delivery": "mvp" },
+        { "code": "session.capacity_exceeded", "retryable": true, "details": null, "delivery": "mvp" },
         { "code": "interaction.already_resolved", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "capability.unsupported_by_client", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "capability.unsupported_by_broker", "retryable": false, "details": null, "delivery": "mvp" },

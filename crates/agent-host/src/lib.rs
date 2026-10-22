@@ -1,6 +1,6 @@
 //! 本机 ACP Agent 的宿主：进程监督、会话端点与目录装配。
 //!
-//! 本 crate 是 `core` 的出站适配器（`docs/MODULE_ARCHITECTURE.md` §4.5），只做三件事：
+//! 本 crate 是 `core` 的出站适配器（`docs/MODULE_ARCHITECTURE.md` §4.5），只做四件事：
 //!
 //! 1. **进程监督**（[`process::Supervisor`]）：以数组参数直接 spawn（不经 shell）、stdio 管道、
 //!    LF 分隔 JSON 分帧、request id 单调分配与 pending 注册表、固定超时、stderr 有界环形缓冲，
@@ -11,6 +11,9 @@
 //! 3. **目录与能力**（[`host::AgentHost`]）：`AgentCatalog::agents` 只做只读探测（**不启动进程**），
 //!    而 `AgentCatalog::agent_capabilities` 按设计需要真实 `initialize` 协商，因此会启动（或复用）进程，
 //!    协商结果按进程代缓存；未宣告的能力显式不支持。
+//! 4. **单会话释放**（[`host::AgentHost::release_session`]）：能力门控的 ACP `session/close`，只有 Agent
+//!    ack 后才摘除映射并报告 [`ReleaseOutcome`]；失败/超时保留真实资源与容量名额，且绝不终止共享进程。
+//!    本地已 closed 但未获 Agent 确认的绑定（重绑/进程级让出）同样按未释放处理，不交还名额。
 //!
 //! 边界纪律：
 //!
@@ -35,12 +38,16 @@ pub mod node;
 pub mod platform;
 pub mod process;
 mod prompt;
+pub mod release;
 pub mod session;
 mod terminal;
 
 pub use config::HostConfig;
 pub use error::HostError;
-pub use host::{AgentHost, runtime_generation, runtime_running, spawn_idle_sweep};
+pub use host::{
+    AgentHost, SessionResourceFacts, runtime_generation, runtime_running, spawn_idle_sweep,
+};
 pub use launch::{LaunchSpec, resolve_launch};
 pub use node::{NodeEventError, NodeEvents, PublicErrorView};
+pub use release::ReleaseOutcome;
 pub use session::{AcpSession, Endpoint};

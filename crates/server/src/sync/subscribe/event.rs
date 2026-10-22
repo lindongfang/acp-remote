@@ -220,6 +220,8 @@ pub enum EventFrameFault {
     /// 连接没有同时协商 `resource.remote-origin.v1` 与 `core.event-origin.v1`：imported 事件无法组装成
     /// 合法帧（§9.6/§10.1），必须跳过而不是伪造来源。
     FeatureNotNegotiated,
+    /// 连接没有协商 `core.local-session-lifecycle.v1`：`session.activity.changed` 不得投递（§9.8）。
+    LifecycleNotNegotiated,
 }
 
 impl std::fmt::Display for EventFrameFault {
@@ -237,6 +239,7 @@ impl std::fmt::Display for EventFrameFault {
             Self::PayloadDigest => formatter.write_str("payload.acp.sha256"),
             Self::NotImported => formatter.write_str("committed delivery"),
             Self::FeatureNotNegotiated => formatter.write_str("selected feature"),
+            Self::LifecycleNotNegotiated => formatter.write_str("localsessionlifecycle"),
         }
     }
 }
