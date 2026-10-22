@@ -4,8 +4,8 @@
 
 | 层 | 入口 | 覆盖 | 结果 |
 | --- | --- | --- | --- |
-| fake 组合根 + 真实 SQLite/网络 | `cargo test --locked -p app --test session_preparation` | E1、E5、E6、E8、E9、相同文本第二条、附件 TTL | 由 WP8.1 交付；本文件**不**转述其运行结果（本工作区没有 `target/`，不冒充执行过） |
-| 真实 Codex 隔离跨进程探针 | `scripts/probe-session-preparation.mjs` | 真实 Daemon/TLS/Sync、真实 `codex-acp`、allocate → 真实模式/配置 → 强制终止/重启 → 同 ID restore → 首条 | **已执行**（见 §3、§4）；`configure` 与首条阶段有未通过项，未写成 PASS |
+| fake 组合根 + 真实 SQLite/网络 | `cargo test --locked -p app --test session_preparation` | E1、E5、E6、E8、E9、相同文本第二条、附件 TTL | **11/11 通过**（2026-10-23 主检出；含 WP8Fix2 的真实启动顺序） |
+| 真实 Codex 隔离跨进程探针 | `scripts/probe-session-preparation.mjs` | 真实 Daemon/TLS/Sync、真实 `codex-acp`、allocate → 真实模式/配置 → 强制终止/重启 → 同 ID restore → 首条 | **已执行两次**（见 §3、§4）；configure 修复后复跑时 allocate/restart/restore 通过，`session.start` 未在探测预算内返回，首条仍未写成 PASS |
 | 真实浏览器 | `clients/app/e2e/session-preparation-live.mjs` + `crates/app/tests/session_preparation_browser.rs` | 分配 → 准备页 → 刷新恢复 → 首条提交 → 正式读取、固定 URL、无 `session.create`、>30 秒续租、陌生 ID 回目录 | 脚本与编排已交付；**未执行**（见 §5，本工作区没有可运行的 `cargo test` 入口与组合好的 Daemon+PWA） |
 
 未执行的项保持「未完成」；下面每一行结果都对应一次真实运行或明确的可重跑命令。
@@ -73,7 +73,7 @@ node scripts/probe-session-preparation.mjs \
 | 原始报告 | `D:/tmp/acpr-prep-probe-8/report.json` |
 | Agent 边界证据 | `D:/tmp/acpr-prep-probe-8/agent-evidence.ndjson`（只有 pid、方法名、参数键、prompt 长度/SHA-256/是否与提交正文逐字相同） |
 
-### 3.1 场景 ↔ 结果（真实运行）
+### 3.1 场景 ↔ 结果（第一次真实运行）
 
 | 场景 | check | 结果 | 证据 / 备注 |
 | --- | --- | --- | --- |
@@ -94,6 +94,29 @@ node scripts/probe-session-preparation.mjs \
 | E4 | `restart.no_prompt_before_first_message` / `no_formal_resume` | PASS | 重启+restore 后没有自动 prompt、没有 `session/resume` |
 | E5 | `first_message.*` | **SKIP** | `session.start` 在 30 秒内没有任何结果/错误帧（见 §4.2），探针按超时结束；没有写成通过 |
 | 附件 | `attachment.*` | 未驱动 | 见 §4.3 |
+
+### 3.2 configure 修复后的复跑（2026-10-23）
+
+第一次运行暴露 `configure` 被 `protocol.schema_invalid` 拒绝。根因有两层：
+
+1. 真实 `codex-acp` 同时把 `mode` 暴露为 `modes` 与一个 `category: "mode"` 的配置项；探针把后者也塞进
+   `configOptions`，服务端再走 `set_config_option` 时被 Agent 拒绝。
+2. `agent_host::apply_selection` 把单个配置项的 `PortError::InvalidRequest` 当成整帧失败；按 D4 应保留为
+   `unavailable` 并阻止派发。
+
+修复后（探针跳过 `category: "mode"`；配置项拒绝映射为不可用），用当前源码构建的 daemon 复跑
+`D:/tmp/acpr-prep-probe-9`：
+
+| 场景 | 结果 |
+| --- | --- |
+| 环境 / 配对 / allocate（真实模式与配置） | PASS |
+| 强制终止后 Daemon 与 Agent 进程树消失 | PASS |
+| 同 ID `restore`、新 runtimeEpoch、新适配器进程 | PASS |
+| 准备期间无 prompt / 无旧 `session/resume` | PASS |
+| `session.start` 首条 | **未验证**：探测预算内没有收到结果；外部 600s 终止后未写出报告 |
+| 浏览器层 | **未执行**（见 §5） |
+
+这次复跑没有写成通过；`session.start` 的未完成状态保留为待查项。不要用第一次运行的 report 充当复跑结果。
 
 ## 4. 未通过项与未覆盖项（不写成成功）
 

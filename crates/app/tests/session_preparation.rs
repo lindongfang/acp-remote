@@ -483,7 +483,7 @@ impl Inbox {
         client: &mut SyncClient,
         accept: impl Fn(&Value) -> bool,
     ) -> Value {
-        if let Some(index) = self.pending.iter().position(|message| accept(message)) {
+        if let Some(index) = self.pending.iter().position(&accept) {
             return self.pending.remove(index);
         }
         loop {
@@ -1718,7 +1718,7 @@ async fn e8_preparation_attachments_rebind_and_reject_the_old_connection() {
         &prepared,
         &device,
         &submission,
-        &[transfer.clone()],
+        std::slice::from_ref(&transfer),
     )
     .await;
     assert_eq!(manifest["attachmentCount"], json!("1"), "{manifest}");
@@ -1857,7 +1857,7 @@ async fn e8_attachment_targets_map_committed_stale_and_store_rebuilt() {
         &prepared,
         &device,
         &submission,
-        &[transfer.clone()],
+        std::slice::from_ref(&transfer),
     )
     .await;
     let message = "E8 committed mapping";
@@ -2012,7 +2012,7 @@ async fn e8_attachment_ttl_keeps_claimed_bytes_and_expires_idle_uploads() {
         &prepared,
         &device,
         &submission,
-        &[transfer.clone()],
+        std::slice::from_ref(&transfer),
     )
     .await;
     // 同一节点上的一个空闲、未被任何清单认领的上传（提交之前就存在）。

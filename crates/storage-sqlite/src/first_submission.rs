@@ -450,7 +450,7 @@ async fn settle_command(
 ) -> Result<(), PortError> {
     let (kind, id) = actor_columns(actor);
     match existing {
-        Some(status) if status == "accepted" => {}
+        Some("accepted") => {}
         Some(_) => return Err(PortError::Conflict(ConflictKind::Consumed)),
         None => {
             let Some(fingerprint) = request_fingerprint else {

@@ -1176,6 +1176,7 @@ async fn send(
 /// 变红点：①受理前就回包；②准备条目仍然可观察（`finish_submission` 没跑）；③派发两次；
 /// ④受理把准备名额当作「交还」而不是「转移」。
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // 同步测试锁只保护断言快照，等待点不依赖它。
 async fn an_initial_start_commits_once_dispatches_once_and_registers_the_session() {
     let start = start().await;
     let (handle, mut receiver) = start.connection();
@@ -1493,6 +1494,7 @@ async fn continue_after_the_dispatch_fence_is_uncertain() {
 
 /// 可证明未派发的失败 + 匹配的 `retryOfRequestId`：以新请求 ID 受理，正文只有一份，派发一次。
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // 同上：同步测试锁只在断言区间内持有。
 async fn continue_after_a_provable_failure_dispatches_the_first_message_once() {
     let start = start().await;
     let (handle, mut receiver) = start.connection();

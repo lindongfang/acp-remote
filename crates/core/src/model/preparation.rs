@@ -159,6 +159,9 @@ impl PreparationView {
 }
 
 /// 分配结果：容量不足是显式的（适配层映射 `session.capacity_exceeded`），不是空占位。
+// `PreparationView` 是完整运行期视图；装箱会让所有调用点/adapter 映射多一层解引用，
+// 而该枚举只存在于控制面短路径，沿用本 crate 对 wire/决策枚举的既有做法。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AllocatePreparationOutcome {
     Allocated(PreparationView),
@@ -191,6 +194,7 @@ impl std::fmt::Display for PreparationStaleReason {
 }
 
 /// 准备操作的运行期判定。
+#[allow(clippy::large_enum_variant)] // 同上：`Ready` 持有完整视图，装箱只会增加调用点噪声。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreparationDecision {
     Ready(PreparationView),

@@ -319,16 +319,14 @@ impl AttachmentRoute for AttachmentService {
                 }
             }
             FrameBody::ManifestPage(_) | FrameBody::ManifestSealed(_) => {
-                if negotiated {
-                    if let Some(preparations) = self.preparations.as_ref() {
-                        match self
-                            .preparation_manifest_control(session, preparations, frame)
-                            .await
-                        {
-                            Ok(true) => return AttachmentOutcome::Claimed,
-                            Ok(false) => {}
-                            Err(fault) => return finish_fault(session, fault),
-                        }
+                if negotiated && let Some(preparations) = self.preparations.as_ref() {
+                    match self
+                        .preparation_manifest_control(session, preparations, frame)
+                        .await
+                    {
+                        Ok(true) => return AttachmentOutcome::Claimed,
+                        Ok(false) => {}
+                        Err(fault) => return finish_fault(session, fault),
                     }
                 }
             }

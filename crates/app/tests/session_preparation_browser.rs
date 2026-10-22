@@ -171,7 +171,10 @@ fn read_json_lines(path: &Path) -> Vec<Value> {
 }
 
 fn count_type(records: &[Value], kind: &str) -> usize {
-    records.iter().filter(|record| record["type"] == json!(kind)).count()
+    records
+        .iter()
+        .filter(|record| record["type"] == json!(kind))
+        .count()
 }
 
 #[test]
@@ -291,7 +294,10 @@ fn real_browser_prepares_then_commits_across_reload() {
         eprintln!("daemon log:\n{}", daemon.log());
         eprintln!("daemon stderr:\n{}", daemon.stderr());
     }
-    assert!(status.success(), "real browser preparation acceptance failed");
+    assert!(
+        status.success(),
+        "real browser preparation acceptance failed"
+    );
 
     // ── 浏览器驱动报告 ─────────────────────────────────────────────────────────────────────
     let evidence = std::fs::read_to_string(&lifecycle_evidence).expect("browser evidence");
@@ -319,11 +325,18 @@ fn real_browser_prepares_then_commits_across_reload() {
     }
     let first_message = report["firstMessage"].as_str().expect("firstMessage");
     let selected_mode = report["selectedMode"].as_str().expect("selectedMode");
-    let selected_config = report["selectedConfig"].as_object().expect("selectedConfig");
+    let selected_config = report["selectedConfig"]
+        .as_object()
+        .expect("selectedConfig");
     let selected_config_id = selected_config["id"].as_str().expect("selectedConfig.id");
-    let selected_config_value = selected_config["value"].as_str().expect("selectedConfig.value");
+    let selected_config_value = selected_config["value"]
+        .as_str()
+        .expect("selectedConfig.value");
     assert_ne!(selected_mode, "agent", "浏览器必须选择一个非默认模式");
-    assert_ne!(selected_config_value, "medium", "浏览器必须选择一个非默认配置值");
+    assert_ne!(
+        selected_config_value, "medium",
+        "浏览器必须选择一个非默认配置值"
+    );
     let attachment_sha = report["expectedAttachmentSha256"]
         .as_str()
         .expect("expectedAttachmentSha256");
@@ -338,7 +351,9 @@ fn real_browser_prepares_then_commits_across_reload() {
         "acceptedToCompletedMs",
         "totalSubmitToCompletedMs",
     ] {
-        let value = timings[key].as_i64().unwrap_or_else(|| panic!("缺少分段耗时 {key}：{timings}"));
+        let value = timings[key]
+            .as_i64()
+            .unwrap_or_else(|| panic!("缺少分段耗时 {key}：{timings}"));
         assert!(value >= 0, "分段耗时 {key} 不能为负：{timings}");
     }
     let session_id = report["scenarios"]
@@ -370,8 +385,15 @@ fn real_browser_prepares_then_commits_across_reload() {
         0,
         "准备/首条路径 MUST NOT 退回旧正式恢复：{records:?}"
     );
-    let prompts: Vec<&Value> = records.iter().filter(|record| record["type"] == json!("prompt")).collect();
-    assert_eq!(prompts.len(), 1, "适配器必须恰好收到一次 prompt：{records:?}");
+    let prompts: Vec<&Value> = records
+        .iter()
+        .filter(|record| record["type"] == json!("prompt"))
+        .collect();
+    assert_eq!(
+        prompts.len(),
+        1,
+        "适配器必须恰好收到一次 prompt：{records:?}"
+    );
     assert_eq!(
         prompts[0]["text"].as_str().expect("prompt text"),
         first_message,

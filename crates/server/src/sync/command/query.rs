@@ -472,7 +472,7 @@ async fn preparation_projection(
     record: &CommandRecord,
 ) -> Option<SessionStartProjection> {
     let session = record.session()?;
-    let first: FirstSubmissionRecord = core.first_submission(&session).await.ok()??;
+    let first: FirstSubmissionRecord = core.first_submission(session).await.ok()??;
     if record.request() != &first.first_request_id && record.request() != &first.current_request_id
     {
         return None;

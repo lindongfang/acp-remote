@@ -2446,7 +2446,7 @@ impl CommandRoute {
             }
             CommandReceipt::Accepted { turn, .. } => turn,
         };
-        match self.broker.command_status(actor, &request_id).await {
+        match self.broker.command_status(actor, request_id).await {
             Ok(Some(record)) if record.status().is_terminal() => {
                 self.send_record_terminal(handle, &command.request_id, command.command, &record);
             }

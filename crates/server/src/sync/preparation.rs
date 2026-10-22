@@ -76,9 +76,7 @@ pub const MAX_DEDUP_ENTRIES: usize = 64;
 /// 它不修改 [`SUPPORTED_FEATURES`]：该表与 registry 的 `delivery = mvp` 子集逐条相等，而本 feature 是
 /// `conditional_mvp`，必须由组合根按端口可用性单独追加。
 pub fn feature_supported_by_build() -> bool {
-    SUPPORTED_FEATURES
-        .iter()
-        .any(|feature| *feature == PREPARATION_FEATURE)
+    SUPPORTED_FEATURES.contains(&PREPARATION_FEATURE)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -344,6 +342,7 @@ pub struct Committed {
 
 /// 运行期检查的结论。
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // `Ready` 持有完整运行期视图；装箱只会增加 adapter 噪声。
 pub enum RuntimeCheck {
     /// 资源代、租约与状态都可用于本次动作。
     Ready(PreparationView),
