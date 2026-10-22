@@ -369,6 +369,11 @@ fn ac1_the_composition_root_persists_node_level_events_without_session_identity(
         )
         .await
         .expect("组合根装配");
+        composition
+            .lifecycle()
+            .converge_on_startup()
+            .await
+            .expect("启动收敛");
 
         // 前置：接线已落地（这正是规划缺口的核心——接线缺失时这里是 false）。
         assert!(
@@ -650,6 +655,11 @@ async fn ac1_composition_with_scenario(
     )
     .await
     .expect("组合根装配");
+    composition
+        .lifecycle()
+        .converge_on_startup()
+        .await
+        .expect("启动收敛");
     // 扇出接收端交回调用方持有：消费者缺席时队列满会丢弃（`EVENT_QUEUE_CAPACITY`），本节只断言落库，
     // 但保有接收端才是组合根在生产里的形态（`daemon` 把接收端交给 `ResourceRoute`）。
     (composition, fanout)
@@ -1064,6 +1074,11 @@ fn ac1_the_agent_receives_a_stripped_cwd_while_the_persisted_cwd_stays_canonical
         )
         .await
         .expect("组合根装配");
+        composition
+            .lifecycle()
+            .converge_on_startup()
+            .await
+            .expect("启动收敛");
         // `ResolvedWorkspace` 直接给 canonical 原文：core 不重新解析，落盘与交给后端的是同一个取值。
         let agent =
             AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");

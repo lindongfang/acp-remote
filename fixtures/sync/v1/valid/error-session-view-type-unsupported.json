@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "type": "error",
+  "messageId": "aa81f377-ed9d-430e-b0a3-e3e4dfc31b60",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "113",
+  "body": {
+    "code": "protocol.type_unsupported",
+    "message": "本连接未协商 core.local-session-lifecycle.v1，session.view 不可用。",
+    "retryable": false,
+    "correlationId": "d0f5a2b8-4c16-4e73-9d21-8b3e6f0a5c97",
+    "details": {}
+  }
+}

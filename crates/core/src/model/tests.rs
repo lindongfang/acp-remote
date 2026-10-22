@@ -2270,3 +2270,85 @@ fn message_records_store_the_folded_content_as_json_text() {
     assert_eq!(record.content.as_str(), content.as_str());
     assert_eq!(record.result.reason, Some(PartialReason::TurnCancelled));
 }
+
+#[test]
+fn resource_generation_is_a_monotonic_counter() {
+    assert_eq!(ResourceGeneration::from(0).get(), 0);
+    assert_eq!(
+        ResourceGeneration::from(3).checked_next(),
+        Some(ResourceGeneration::from(4))
+    );
+    assert_eq!(ResourceGeneration::from(u64::MAX).checked_next(), None);
+}
+
+#[test]
+fn timestamp_addition_rolls_over_units_and_rejects_overflow() {
+    let base = ts("2026-12-31T23:59:59.000Z");
+    let last_millisecond = ts("2026-12-31T23:59:59.999Z");
+    // 毫秒 → 秒 → 分 → 小时 → 日 → 月 → 年 的完整进位链必须都正确。
+    assert_eq!(
+        last_millisecond
+            .checked_add_millis(1)
+            .expect("next millisecond")
+            .as_str(),
+        "2027-01-01T00:00:00.000Z"
+    );
+    assert_eq!(
+        base.checked_add_millis(86_400_000)
+            .expect("next day")
+            .as_str(),
+        "2027-01-01T23:59:59.000Z"
+    );
+    // 2028 是闰年：2 月 28 日 + 1 天 = 2 月 29 日。
+    let leap = ts("2028-02-28T12:00:00.000Z");
+    assert_eq!(
+        leap.checked_add_millis(86_400_000)
+            .expect("leap day")
+            .as_str(),
+        "2028-02-29T12:00:00.000Z"
+    );
+    // 超出 9999 年不静默回绕。
+    let last = ts("9999-12-31T23:59:59.999Z");
+    assert_eq!(last.checked_add_millis(1), None);
+}
+
+#[test]
+fn pre_epoch_timestamps_keep_signed_millisecond_arithmetic() {
+    // `Timestamp` 允许 0000–9999 年，因此 1970 之前的总毫秒是负值；把负值钳成 0 会让
+    // 1969 年的租约/保留期起点整体错位。
+    assert_eq!(ts("1970-01-01T00:00:00.000Z").epoch_millis(), 0);
+    let last_before_epoch = ts("1969-12-31T23:59:59.999Z");
+    assert_eq!(last_before_epoch.epoch_millis(), -1);
+    assert_eq!(
+        last_before_epoch
+            .checked_add_millis(1)
+            .expect("epoch")
+            .as_str(),
+        "1970-01-01T00:00:00.000Z"
+    );
+    let second_before_epoch = ts("1969-12-31T23:59:59.000Z");
+    assert_eq!(second_before_epoch.epoch_millis(), -1_000);
+    assert_eq!(
+        second_before_epoch
+            .checked_add_millis(1_000)
+            .expect("epoch")
+            .as_str(),
+        "1970-01-01T00:00:00.000Z"
+    );
+    // 负毫秒的余数必须按欧几里得除法还原，否则 -1 ms 会落到错误的日期。
+    assert_eq!(
+        second_before_epoch
+            .checked_add_millis(500)
+            .expect("half second")
+            .as_str(),
+        "1969-12-31T23:59:59.500Z"
+    );
+    // 跨年：1969 不是闰年，+365 天正好到达 epoch。
+    assert_eq!(
+        ts("1969-01-01T00:00:00.000Z")
+            .checked_add_millis(365 * 86_400_000)
+            .expect("year")
+            .as_str(),
+        "1970-01-01T00:00:00.000Z"
+    );
+}

@@ -55,6 +55,7 @@ export function session(input: {
   readonly currentMode?: SessionSummary["currentMode"];
   readonly createdAt?: string;
   readonly updatedAt?: string;
+  readonly localActivity?: SessionSummary["localActivity"];
 }): SessionSummary {
   const directoryId = input.directoryId === undefined ? "work-api" : input.directoryId;
   return {
@@ -62,6 +63,7 @@ export function session(input: {
     title: input.title === undefined ? `会话 ${input.id.slice(-4)}` : input.title,
     agent: { agentId: "claude", name: "Claude" },
     state: input.state ?? "idle",
+    ...(input.localActivity === undefined ? {} : { localActivity: input.localActivity }),
     origin: input.origin ?? { kind: "local" },
     currentMode: input.currentMode ?? null,
     version: "1",
@@ -154,6 +156,8 @@ export function resources(input: {
 /** 记账式同步网关。 */
 export interface RecordingGateway extends SyncGateway {
   readonly dispatches: CommandMessage[];
+  /** `session.view` 声明（按发出顺序）。 */
+  readonly views: { readonly sessionId: string | null; readonly viewVersion: number }[];
   snapshotRefreshes: number;
 }
 
@@ -162,6 +166,7 @@ export function recordingGateway(input: {
   readonly connectionId?: string | null;
 }): RecordingGateway {
   const dispatches: CommandMessage[] = [];
+  const views: { readonly sessionId: string | null; readonly viewVersion: number }[] = [];
   const current: CompletedSnapshot | null =
     input.resources === null
       ? null
@@ -173,6 +178,7 @@ export function recordingGateway(input: {
         };
   return {
     dispatches,
+    views,
     snapshotRefreshes: 0,
     refreshSnapshot() { this.snapshotRefreshes += 1; },
     current,
@@ -181,6 +187,10 @@ export function recordingGateway(input: {
     authenticatedInfo: null,
     dispatch(command: CommandMessage) {
       dispatches.push(command);
+    },
+    setSessionView(input) {
+      views.push({ sessionId: input.sessionId, viewVersion: input.viewVersion });
+      return true;
     },
     subscribeRemote: () => undefined,
     unsubscribeRemote: () => undefined,
@@ -306,10 +316,13 @@ export function onlineStore(input: {
   readonly features?: readonly string[];
   /** 注入的时钟；见 {@link storeWith}。 */
   readonly now?: () => number;
+  /** 续租计时器端口（用例据推进 10 秒续租）；缺省不排期。 */
+  readonly schedule?: (delayMs: number, task: () => void) => () => void;
 }): StoreFixture {
   const { store, gateway } = storeWith({
     resources: input.resources ?? resources({}),
     ...(input.now === undefined ? {} : { now: input.now }),
+    ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
   });
   // 发一次认证结果，带上服务端在 `auth.server_challenge` 里选中的 feature。
   store.apply({

@@ -130,6 +130,7 @@
         "state.version_conflict",
         "session.not_found",
         "session.busy",
+        "session.capacity_exceeded",
         "interaction.already_resolved",
         "capability.unsupported_by_client",
         "capability.unsupported_by_broker",
@@ -310,6 +311,10 @@
       "description": "会话主状态（docs/SYNC_PROTOCOL.md §10.2 的 `SessionSummary.state`）：只表达活跃程度摘要。存在有效未解决交互时为 `pending`；否则存在未结束任务（含已接受的排队任务）时为 `running`；否则为 `idle`。排队、等待原因与任务结果不属于本词表；旧七态只允许作为历史事件 `view` 的原文出现，MUST NOT 出现在任何实时摘要里。",
       "enum": ["idle", "running", "pending"]
     },
+    "localActivity": {
+      "description": "本机会话展示的活跃程度（`core.local-session-lifecycle.v1`，docs/SYNC_PROTOCOL.md §9.8/§10.2）：`pending` 优先（存在有效未解决交互）；否则存在未结束任务、已确认 ready 的运行资源、或从 ready 开始回收但尚未确认释放的资源时为 `active`；其余为 `idle`。它**不是**任务状态：不得用它推断任务结果、排队细节或可发送性，也不得把它映射进 Node Link。只在 owned 摘要、且只有协商了该 feature 的连接才出现；未协商的连接 MUST NOT 收到该键，imported 摘要不附该键。",
+      "enum": ["idle", "active", "pending"]
+    },
     "sessionSummary": {
       "type": "object",
       "additionalProperties": false,
@@ -327,6 +332,10 @@
           }
         },
         "state": { "$ref": "#/$defs/sessionState" },
+        "localActivity": {
+          "description": "可选的本机活跃程度（`core.local-session-lifecycle.v1`）：只用于 owned 会话，且只在连接协商了该 feature 时出现；未协商时该键**缺席**（不是 `null`）。它由所属节点的当前运行期事实归约，不是任务状态，也不能由客户端或页面计时器改写。imported 摘要与 Node Link 的 `sessionMeta` 都没有这个键。",
+          "$ref": "#/$defs/localActivity"
+        },
         "origin": { "$ref": "#/$defs/originBlock" },
         "currentMode": {
           "oneOf": [{ "$ref": "#/$defs/modeRef" }, { "type": "null" }]

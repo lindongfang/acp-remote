@@ -117,6 +117,13 @@ counter!(
     AttachmentGeneration
 );
 counter!(
+    /// 会话运行的**资源代**（§3.3）：每次成功建立/恢复会话运行资源时自增；回收、关闭失败或重新恢复
+    /// 都会换新代。旧代的事件/收口结果不得绑定到新代资源。
+    ///
+    /// 它只存在于运行期生命周期目录（§5.10），不落库、不进快照。
+    ResourceGeneration
+);
+counter!(
     /// Access 本地投递序号，只服务本节点客户端（`NODE_LINK_PROTOCOL.md` §6）。
     LocalCursor
 );
@@ -171,6 +178,95 @@ newtype!(
     Digest,
     check_digest
 );
+
+impl Timestamp {
+    /// 从 Unix epoch（1970-01-01T00:00:00Z）起的毫秒数。
+    ///
+    /// 构造校验只保证形状与字段范围（不校验闰日），因此 `2 月 31 日` 这类输入按日历的**前向延展**
+    /// 解释（与常见的日期归一化一致）；返回值只用于租约/保留期的加减，不冒充权威日历。
+    ///
+    /// 允许 `0000`–`9999` 年，因此 1970 年之前的时间戳得到**负值**：返回 `i64` 而不是 `u64`，
+    /// 否则 1969 年的租约/保留期起点会被静默钳成 0 并算错。
+    pub fn epoch_millis(&self) -> i64 {
+        let bytes = self.0.as_bytes();
+        let field = |from: usize, to: usize| -> i64 {
+            bytes[from..to]
+                .iter()
+                .fold(0i64, |acc, byte| acc * 10 + i64::from(byte - b'0'))
+        };
+        let year = field(0, 4);
+        let month = field(5, 7);
+        let day = field(8, 10);
+        let hour = field(11, 13);
+        let minute = field(14, 16);
+        let second = field(17, 19);
+        let millis = field(20, 23);
+        let days = days_from_civil(year, month, day);
+        days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis
+    }
+
+    /// 加 `millis` 毫秒；超出 `0000-01-01T00:00:00.000Z`..=`9999-12-31T23:59:59.999Z` 时返回 `None`
+    /// （不回绕、不截断）。
+    pub fn checked_add_millis(&self, millis: u64) -> Option<Self> {
+        let millis = i64::try_from(millis).ok()?;
+        let total = self.epoch_millis().checked_add(millis)?;
+        epoch_millis_to_timestamp(total)
+    }
+}
+
+/// 公元前 0000-03-01 起的日数 → 公历 `(年, 月, 日)`（Howard Hinnant 的 days_from_civil）。
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - if month <= 2 { 1 } else { 0 };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_prime = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// [`days_from_civil`] 的逆。
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let shifted = days + 719_468;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
+}
+
+/// 从 Unix epoch 起的毫秒数（1970 之前为负）→ 时间戳；超出 `0000`–`9999` 年返回 `None`。
+fn epoch_millis_to_timestamp(total: i64) -> Option<Timestamp> {
+    // 负值必须用欧几里得除法：截断除法会把 -1 ms 算成「前一天 + 负余数」，落回错误年份。
+    let days = total.div_euclid(86_400_000);
+    let remainder = total.rem_euclid(86_400_000);
+    let (year, month, day) = civil_from_days(days);
+    if !(0..=9999).contains(&year) {
+        return None;
+    }
+    let hour = remainder / 3_600_000;
+    let minute = (remainder / 60_000) % 60;
+    let second = (remainder / 1_000) % 60;
+    let millis = remainder % 1_000;
+    Timestamp::new(&format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
+    ))
+    .ok()
+}
 
 newtype!(
     /// 32 字节随机数的规范无填充 base64url 文本（43 字符；`clientNonce`/`serverNonce`/`requestNonce`）。

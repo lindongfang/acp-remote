@@ -2,6 +2,7 @@
 
 > 状态：编码前安全基线（Draft）  
 > 版本：0.6
+> 修订记录（2026-10-22，`session-activation-lifecycle` WP1，**合同先行；实现待 WP2–WP5**）：新增 §12.7「本机资源回收与查看租约」——查看声明只绑定**已认证且页面可见**的连接、租期 30 秒/续租 10 秒、普通心跳不续租，断开/撤销/连接被替换立即清除且**不持久化**；资源回收只有 Agent 适配器确认真实释放后才交还容量名额，关闭失败/不确定保留占位。§9.5 补「撤销即刻失效查看声明」；§10.2 的 `session.resume` 更新为双传输面（Sync 侧受 `core.local-session-lifecycle.v1` 门控，payload `{}`、结果不带 `remoteSessionRef`），并说明 `session.view` 不是业务命令；§12.2 的空闲回收行更新为缺省 30 分钟与新增容量上限的语义；§5 威胁表补「伪造查看/容量」一行。威胁模型与信任边界**未变**：没有新增设备权限、没有新的长活凭据，也不放宽路径/内容可见面。
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§10.2 的命令表登记 `session.title.set`（mutation、mvp、feature `core.session-title.v1`，Owner 元数据而非 ACP capability；只写本地会话标题列、不启动 Agent）；客户端改名禁令与「标题仅由 Agent 更新」的旧口径由本变更取代（原文见 SYNC_PROTOCOL §10.3 与 ACP_COMPATIBILITY_MATRIX §5）。威胁模型与信任边界未变；`custom_title` 持久化与命令接线已落地。
 > 日期：2026-10-17  
 > 修订记录（2026-10-18，`device-pairing-qr-reference`）：设备二维码改为短引用格式——fragment 只带版本、32 字节扫码取回凭据与 32 字节主机公钥指纹，完整资料经同源 `POST /sync/v1/pairing/qr-lookup` 取回；取回统一失败 `pairing.qr_invalid`、独立 10 次/分钟限流、16 KiB 上限，凭据只存内存且认领/拒绝/失效/过期/重启后不可用。§5.1 增补移动端「先匹配完整 SHA-256 指纹，再验证 `hostProof`」的信任链说明；威胁模型与其它边界未变。字段与端点以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.6 为唯一权威。
@@ -130,6 +131,7 @@
 | 已配对节点可完全访问本机资源 | 配对确认必须由本机用户完成；撤销即时关闭连接；审计保留 `viaNodeId` |
 | 节点循环和能力洗白 | 第一阶段单 hop；imported Agent 禁止再次导出；来源链检查 |
 | 重复 prompt/审批 | durable idempotency、Session Actor、interaction first-writer-wins |
+| 伪造查看保活或挤占会话容量 | 查看声明只接受已认证连接、绑定当前会话与单调 `viewVersion`，租期 30 秒且普通心跳不续租；断开/撤销/被替换立即清除且不持久化；容量准入由 core 判定，只有确认释放的会话才归还名额，满额且无安全候选时显式拒绝（§12.7） |
 | 慢客户端和内存耗尽 | 有界队列、消息/速率限制、断开后 cursor 重放 |
 | 磁盘耗尽和超大输出 | TTL、配额、截断标识、存储失败关闭 |
 | 附件跨会话/跨主体冒用或公开下载地址泄露 | 独立已认证连接 + 每帧会话/主体绑定 + 内容寻址读取；不使用 bearer URL；撤销立即中止 |
@@ -292,6 +294,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 ### 9.5 撤销与轮换
 
 - 撤销设备必须提交持久状态后立即关闭其 active connection。
+- 撤销、断开与同设备连接被替换必须同时清除该连接持有的**查看声明与租约**（`session.view`，`core.local-session-lifecycle.v1`）：租约只存在于内存，不因连接仍在线而继续有效，也不写入任何表；撤销后该连接既不能续租也不能声称仍在查看，受影响的会话按「无查看者」重新计时（§12.7）。
 - 配对的只有「已批准」与「已撤销」两态；撤销立即作用于后续命令并关闭连接。
 - 怀疑 Device key 泄露时撤销该设备并重新配对。
 - 怀疑 Node key 泄露时生成新 Node identity、撤销所有设备/节点信任并重新配对；不能用普通 endpoint 更新掩盖 key 变化。
@@ -347,10 +350,12 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `session.files.read` | query | mvp |
 | `session.git.status` | query | mvp |
 | `session.git.diff` | query | mvp |
-| `session.resume` | mutation | conditional_mvp（仅 Node Link） |
+| `session.resume` | mutation | conditional_mvp（Node Link 与 Sync 共用命令名；Sync 侧仅在协商 `core.local-session-lifecycle.v1` 后开放，payload `{}`、结果 `{ sessionId, session }` 不带 `remoteSessionRef`） |
 | `session.title.set` | mutation | mvp（feature `core.session-title.v1`；Owner 元数据，非 ACP capability） |
 
 仍由各层独立执行的下界：schema/长度/频率限制、会话状态机、幂等键、连接上限，以及本地管理入口的 OS 用户边界。
+
+`session.view` / `session.view.result` **不是**业务命令：它们不产生受理/终态、不进上表、也不获得命令级授权；它们只允许已认证连接更新自己的运行期查看声明，每连接一个查看者、独立 120 帧/分钟限流，未协商 `core.local-session-lifecycle.v1` 时按 `protocol.type_unsupported` 拒绝（`SYNC_PROTOCOL.md` §11.8）。`session.capacity_exceeded` 是新增的业务错误（`retryable = true`），只用于「无安全候选可回收」的激活/恢复拒绝，不得用它区分会话是否存在。
 
 ### 10.3 本地管理能力（永不远程授予）
 
@@ -435,7 +440,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 | 关闭 grace（友好终止 → 强杀） | 5 s | 必须小于 `daemon.shutdown_grace_ms`（10 s），否则 daemon 无法在自己的 grace 内收尾 |
 | 单条 ACP 消息（stdout 解析上限） | 1 MiB | 与 `SYNC_PROTOCOL.md` §14 的 `maxMessageBytes` 同值，避免同一条消息在两跳上有两个上限 |
 | stderr 环形缓冲 | 256 KiB | 有界采集：内容原样进入固定上限的环形缓冲（不做内容脱敏），**内容不进日志**，只记丢弃字节数与采集总字节数（§14.1）；需要时按上限回取；超出丢弃最旧并记一条计数，不无界缓存 |
-| 空闲回收 | 复用 `sessions.idle_timeout_ms` | `0` = 不因空闲关闭；非零时只有「无 active 会话且空闲超过该值」才关闭进程 |
+| 空闲回收 | 复用 `sessions.idle_timeout_ms` | 缺省 `1800000`（30 分钟，**合同已冻结，实现待 WP4**；落地前解析器仍为 `0`）；显式 `0` 只关闭按时间回收，**不**关闭容量保护。非零时只有「无查看者、无任务/交互且已确认释放」的会话超时才回收；容量另由 `sessions.max_active_sessions` 约束（候选默认 50，待实测），回收仍受同一「必须确认释放」约束 |
 | 单个终端保留输出 | 1 MiB（Agent 的 `outputByteLimit` 更小时取更小值） | 超出从**开头**丢弃并落在字符边界；`terminal/output` 置 `truncated`，实时 `terminal.output` 事件仍携带真实分块（每块 ≤ 8 KiB） |
 | 单条 `terminal/output` 响应 | 1 MiB（含 JSON-RPC 信封与 JSON 转义后的实际字节） | 保留正文放不进帧预算时再次从**开头**裁剪并置 `truncated`；发送失败必须回显式错误，不能悬挂 |
 | 单条 `terminal.output` 事件 / 单次读取 | 8 KiB | 远低于 1 MiB 单条消息上限；读取边界可以落在 UTF-8 多字节字符中间，由增量解码器拼接 |
@@ -495,6 +500,16 @@ Agent 可以通过 ACP 的 `terminal/create`/`output`/`wait_for_exit`/`kill`/`re
 - **输出**：stdout/stderr 分开读取、按实际接收次序合并保留；UTF-8 跨读取边界由增量解码器拼接（非法字节用替换字符消费，不静默丢弃）。保留正文受 §12.2 的固定上限与 Agent `outputByteLimit` 的较小值约束，从开头丢弃并落在字符边界；实时事件不截断。`terminal/output` 的**响应**还必须留在 ACP 单条消息上限内（按 JSON-RPC 信封与 JSON 转义后的**实际**字节计算，换行与 ANSI 序列都会膨胀），放不下时再次从开头裁剪并同样置 `truncated = true`；响应发送失败必须显式回 `-32603`（或已知的会话/进程错误），不能让 Agent 的请求悬挂。输出内容从不进日志。
 - **生命周期与进程树**：每个终端有独立的 Job Object（Windows，`KILL_ON_JOB_CLOSE`）或进程组（Unix），与 Agent 自己的 Job 分离。会话关闭、Agent 崩溃与 Daemon 关闭的顺序是：停止接受新请求 → 唤醒 `wait_for_exit` 等待者（返回明确错误，不悬挂）→ 结束整棵终端进程树 → 排空已读输出 → 结束驱动任务。同步关闭排空出的终端必须保留给随后的异步关闭，否则标准关闭路径上的「排空已读输出」会变成空操作；`create` 的关闭判定、并发上限与登记必须在同一临界区完成（先登记占位再 spawn；关闭在 spawn 期间发生时要结束刚启动的树），保证关闭不会漏掉已经 spawn 的终端。kill 只结束进程树并保留标识（之后仍可读输出与退出事实）；release 结束未退出任务并移除标识，之后所有操作都返回「未知终端」；kill 与自然退出竞争只记录一个退出事实。Unix 被信号终止时退出事实填信号名（如 `SIGKILL`），Windows 填退出码；两边都取不到时给确定性的非成功退出码。
 - **失败语义**：未知/已释放终端、会话已关闭、环境变量名不合法与启动失败分别返回可区分的 JSON-RPC 错误；响应只包含固定文案，不回显命令行、参数、环境值或路径。
+
+### 12.7 本机资源回收与查看租约（计划，`session-activation-lifecycle` WP1 合同；实现待 WP2–WP5）
+
+本机生命周期让「无人查看」成为可回收的条件，因此必须防止**伪造保活**与**挤占容量**：
+
+- **查看声明只属于当前连接**：`session.view`/`session.view.result` 只在已认证、未撤销且协商了 `core.local-session-lifecycle.v1` 的连接上合法；每连接最多一个当前查看会话，`viewVersion` 单调且同版本重试幂等，过期版本不复活旧页面。租期 30 秒、可见页面每 10 秒续租，普通 `control.ping` 与心跳不续租——连接在线不是保活理由。
+- **不持久化、不泄露**：查看者、租约与资源代只存在于内存（`CORE_PORTS_AND_STORAGE.md` §5.10），不写 SQLite、不进快照、事件、错误 `details`、日志或审计；断开、撤销与连接被替换立即清除（§9.5）。
+- **容量与释放必须真实**：容量准入按 owned 会话的真实运行资源计数（含待处理、激活中与回收中），只有 Agent 适配器确认释放（真实 ACP `session/close` 成功、端点与映射清理完成）后才交还名额。关闭超时、被拒或结果不确定保留占位并报「回收未完成」，MUST NOT 只改本地标志或展示状态就宣称释放。同 Agent 的其他会话不受影响；只有全部会话都可回收时才允许停止共享进程。
+- **输入与错误边界**：控制帧受 schema、字段数、单帧大小、`viewVersion` 范围（0..=`2^53−1`）、会话归属与频率（120 帧/分钟，独立于业务命令）校验，且门控先于任何存储或 Agent 调用；拒绝使用既有 `protocol.schema_invalid`/`protocol.type_unsupported`/`resource.rate_limited`/`session.not_found`，容量拒绝用 `session.capacity_exceeded`（`retryable = true`）。错误与日志不含密钥、正文、路径或任意会话内容。
+- **配置边界**：显式 `sessions.idle_timeout_ms = 0` 只关闭按时间回收，容量保护仍然生效；`sessions.max_active_sessions` 必须是正整数（无「无限」取值），运行期调低上限不强杀受保护会话，只拒绝新增直到计数回落（`CONFIG_REFERENCE.md` §4）。
 
 ## 13. 持久化与本地数据保护
 

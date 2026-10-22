@@ -36,7 +36,7 @@ use acp_core::model::{
     SessionState as CoreSessionState, Timestamp as CoreTimestamp,
 };
 use acp_core::ports::{HistoryInclude, MessageCursor};
-use acp_core::use_cases::{ModeListing, SyncSessionQuery, UseCases};
+use acp_core::use_cases::{LocalSessionLifecycle, ModeListing, SyncSessionQuery, UseCases};
 use base64::Engine as _;
 use sync_protocol::command::{
     Command, CommandResultPayload, CommandState, CommandStatus as WireCommandStatus,
@@ -65,6 +65,7 @@ use crate::session_read::{
 #[cfg(test)]
 use crate::session_read::{Message, MessageMerger, needs_older_agents};
 use crate::sync::event::{FILE_DIFF_FEATURE, RAW_PAYLOAD_FEATURE, TYPED_MEDIA_FEATURE};
+use crate::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE;
 use crate::sync::remote::STATELESS_ORIGIN_FEATURE;
 use crate::sync::snapshot::{LOCAL_CATALOG_FEATURE, REMOTE_ORIGIN_FEATURE};
 use crate::sync::subscribe::cursor::CursorFault;
@@ -181,6 +182,7 @@ pub async fn session_list(
     owner: &Arc<dyn OwnerReachability>,
     actor: &Actor,
     features: &NegotiatedFeatures,
+    lifecycle: Option<&Arc<LocalSessionLifecycle>>,
 ) -> Result<CommandResultPayload, Rejection> {
     let include_imported = features.contains(REMOTE_ORIGIN_FEATURE);
     let query = SyncSessionQuery {
@@ -194,9 +196,22 @@ pub async fn session_list(
         .await
         .map_err(|error| port_rejection(&error))?;
     let catalog = features.contains(LOCAL_CATALOG_FEATURE);
+    let activities = match lifecycle {
+        Some(lifecycle) if features.contains(LOCAL_LIFECYCLE_FEATURE) => {
+            crate::sync::local_lifecycle::activity_map(lifecycle, actor, true)
+                .await
+                .map_err(|error| port_rejection(&error))?
+        }
+        _ => std::collections::HashMap::new(),
+    };
     let sessions = summaries
         .iter()
-        .map(|summary| wire_session(summary, catalog))
+        .map(|summary| {
+            let activity = matches!(summary.origin(), ResourceOrigin::Local)
+                .then(|| activities.get(summary.session_id()).copied())
+                .flatten();
+            wire_session(summary, catalog, activity)
+        })
         .collect::<Option<Vec<_>>>()
         .ok_or(Rejection::Code(
             ErrorCode::InternalUnavailable,
@@ -232,6 +247,7 @@ pub async fn session_read<C: SessionReadSource>(
     command: &Command,
     payload: SessionRead,
     features: &NegotiatedFeatures,
+    lifecycle: Option<&Arc<LocalSessionLifecycle>>,
 ) -> Result<CommandResultPayload, Rejection> {
     let Some(session) = command.session_id.as_ref() else {
         return Err(Rejection::Schema("session.read requires sessionId"));
@@ -274,6 +290,13 @@ pub async fn session_read<C: SessionReadSource>(
         }),
         None => None,
     };
+    let local_activity = match lifecycle {
+        Some(lifecycle) if features.contains(LOCAL_LIFECYCLE_FEATURE) => {
+            crate::sync::local_lifecycle::activity_of(lifecycle, actor, &session_id, true, true)
+                .await
+        }
+        _ => None,
+    };
     let request = crate::session_read::SessionReadRequest {
         session: session_id.clone(),
         include,
@@ -284,6 +307,7 @@ pub async fn session_read<C: SessionReadSource>(
         negotiate_acp: features.contains(RAW_PAYLOAD_FEATURE),
         negotiate_file_diff: features.contains(FILE_DIFF_FEATURE),
         catalog: features.contains(LOCAL_CATALOG_FEATURE),
+        local_activity,
         // 远程来源解析与读取覆盖字段都只在协商后启用（§9.7）：未协商的连接连来源解析都不做，
         // 远程会话对它仍然不可见。
         stateless_origin: features.contains(STATELESS_ORIGIN_FEATURE),
@@ -927,9 +951,12 @@ fn decimal(text: &str) -> Option<DecimalString> {
 /// 拿不到它的私有函数，因为它只在快照模块内可见）。`catalog`（`core.local-catalog.v1` 的协商结果）决定
 /// `workspace` 键的三态：未协商时**缺席**（schema 是 `additionalProperties: false`，发 `null` 会让未协商
 /// 的客户端拒绝整条摘要）；协商时键在场，`null` = 未分组。
+/// `localActivity`（`core.local-session-lifecycle.v1`）只在协商后的 **owned** 摘要上出现：调用方
+/// 已经按协商结果与来源把它算成 `Some`/`None`，本层不重算归约，也不对 imported 会话补键。
 pub(crate) fn wire_session(
     summary: &acp_core::model::SessionSummary,
     catalog: bool,
+    local_activity: Option<sync_protocol::common::LocalActivity>,
 ) -> Option<WireSessionSummary> {
     let agent = summary.agent();
     let workspace = if catalog {
@@ -953,6 +980,7 @@ pub(crate) fn wire_session(
             name: NonEmptyText::<128>::parse(agent.name()).ok()?,
         },
         state: wire_session_state(summary.state()),
+        local_activity,
         origin: match summary.origin() {
             ResourceOrigin::Local => OriginBlock::Local,
             ResourceOrigin::Remote {
@@ -1635,6 +1663,61 @@ mod tests {
         .expect("summary")
     }
 
+    /// `localActivity` 的投影只由调用方按协商结果与来源决定：owned 且协商时键在场，未协商/imported
+    /// 时键**缺席**（不是 `null`——封闭 schema 会拒绝多出来的键）。
+    #[test]
+    fn local_activity_is_projected_only_on_negotiated_owned_summaries() {
+        let owned = page_session();
+        let active = wire_session(
+            &owned,
+            false,
+            Some(sync_protocol::common::LocalActivity::Active),
+        )
+        .expect("owned projection");
+        assert_eq!(
+            serde_json::to_value(&active).expect("json")["localActivity"],
+            serde_json::json!("active")
+        );
+        let unnegotiated = wire_session(&owned, false, None).expect("owned projection");
+        assert!(
+            serde_json::to_value(&unnegotiated)
+                .expect("json")
+                .get("localActivity")
+                .is_none(),
+            "未协商时 localActivity 必须整个键缺席"
+        );
+
+        // imported：摘要来源是 `Remote`，调用方不得给它算本机活跃（本层照传参投影，因此这里用
+        // `None` 断言最终 wire 形状）。
+        let created_at = CoreTimestamp::new(&second(0)).expect("timestamp");
+        let imported = SessionSummary::try_new(
+            acp_core::model::SessionId::new(&uid(2)).expect("session id"),
+            None,
+            AgentRef::try_new(AgentId::new("codex").expect("agent id"), "Codex CLI")
+                .expect("agent ref"),
+            CoreSessionState::Idle,
+            ResourceOrigin::Remote {
+                owner_node_id: acp_core::model::NodeId::new(&uid(3)).expect("owner node"),
+                origin_epoch: acp_core::model::OriginEpoch::new(&uid(4)).expect("origin epoch"),
+                online: true,
+            },
+            None,
+            Version::new(1),
+            created_at.clone(),
+            created_at,
+            None,
+        )
+        .expect("imported summary");
+        let projected = wire_session(&imported, false, None).expect("imported projection");
+        assert!(
+            serde_json::to_value(&projected)
+                .expect("json")
+                .get("localActivity")
+                .is_none(),
+            "imported 摘要不得带 localActivity"
+        );
+    }
+
     /// 修复前：补齐循环每轮都用初始页最早一条当 `before`，重复取同一页直到 `resource.result_too_large`。
     /// 这里用 450 条 Agent 正文（200 + 200 + 50 三页）驱动真正的 `session_read`：游标必须逐页前移，
     /// 合并页完整且无重复，`hasEarlier` 与真实页边界一致。
@@ -1669,6 +1752,7 @@ mod tests {
             &command,
             payload,
             &NegotiatedFeatures::new(Vec::new()),
+            None,
         )
         .await
         .expect("多页 Agent 正文不应以 resource.result_too_large 失败");

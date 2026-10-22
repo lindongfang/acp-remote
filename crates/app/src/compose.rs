@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
+use acp_core::model::ResourceGeneration;
 use acp_core::model::{
     Actor, AttachmentGeneration, AttachmentId, AuditAction, AuditOutcome, AuditRecord,
     CommittedEvent, DeviceId, EndpointEvent, EntityRef, NodeId, PortError, ServerEpoch, SessionId,
@@ -36,9 +37,10 @@ use acp_core::ports::TrustStore;
 use acp_core::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditStore, Clock,
     EventPublisher, IdGenerator, InteractionAuthority, LocalConfigStore, NodeEventSink,
-    PruneReport, RetentionPolicy, SessionBackendFactory, SessionFiles, SessionStore,
+    PruneReport, ReleaseOutcome, RetentionPolicy, SessionBackendFactory, SessionFiles,
+    SessionRelease, SessionStore,
 };
-use acp_core::use_cases::{UseCaseDeps, UseCases};
+use acp_core::use_cases::{LocalSessionLifecycle, UseCaseDeps, UseCases};
 use agent_host::{AgentHost, HostConfig, NodeEvents};
 use identity_auth::{Authority, EntropySource, IdentityKeystore, PeerPublicKey};
 use identity_keystore::{EphemeralKeystore, FileKeystore, OsEntropy};
@@ -165,6 +167,8 @@ pub struct Composition {
     /// （core 不读时钟、不设定时器，见 `crates/core/src/broker.rs` 模块头）。
     broker: Arc<Broker>,
     use_cases: Arc<UseCases>,
+    /// 本机会话生命周期（`core.local-session-lifecycle.v1`）：启动收敛、容量/保留回收与查看租约。
+    lifecycle: Arc<LocalSessionLifecycle>,
     /// 会话文件/Git 的原生只读端口（与 `UseCases` 内部注入的是同一个实例）。
     ///
     /// 用例面不暴露端口，而连接级版本释放（`CommandRoute::on_closed`）与 daemon 关闭都要拿到同一实例，
@@ -248,17 +252,7 @@ impl Composition {
         let host = Arc::new(
             AgentHost::new(
                 Arc::new(config.agents.clone()),
-                // 空闲回收复用 `sessions.idle_timeout_ms`（`CONFIG_REFERENCE.md` §4）。客户端能力按实际
-                // 接线宣告：`agent-host` 的真实终端服务（WP3）已落地，因此 `terminal = true`；其余能力
-                // （fs/elicitation/session/auth）仍由 `none()` 保持未宣告。
-                HostConfig {
-                    idle_timeout: config.sessions.idle_timeout,
-                    client_capabilities: agent_host::config::ClientCapabilities {
-                        terminal: Some(true),
-                        ..agent_host::config::ClientCapabilities::none()
-                    },
-                    ..HostConfig::default()
-                },
+                host_config(&config),
                 Arc::clone(&ids),
                 Arc::clone(&clock),
             )
@@ -273,6 +267,9 @@ impl Composition {
         );
         let backends: Arc<dyn SessionBackendFactory> = host.clone();
         let catalog: Arc<dyn AgentCatalog> = host.clone();
+        // 生命周期与 broker 共用同一个发布端口/存储/时钟：会话活动事件必须先落库再广播。
+        let lifecycle_store = Arc::clone(&session_store);
+        let lifecycle_publisher = Arc::clone(&publisher);
         let broker = Arc::new(
             Broker::new(
                 BrokerDeps {
@@ -309,6 +306,21 @@ impl Composition {
             })
             .with_session_files(Arc::clone(&session_files) as Arc<dyn SessionFiles>)
             .with_attachment_transfers(attachment_transfers),
+        );
+        let lifecycle = Arc::new(LocalSessionLifecycle::new(
+            Arc::clone(&clock),
+            lifecycle_store,
+            lifecycle_publisher,
+            config.sessions.lifecycle,
+        ));
+        lifecycle.set_session_release(Arc::new(HostSessionRelease {
+            host: Arc::clone(&host),
+        }));
+        // `session.create` 与 `session.resume` 共用同一本容量账：broker 在分配会话标识之后、启动后端
+        // 之前预占，失败交还、落账后 settle 为 ready。
+        assert!(
+            broker.set_lifecycle(Arc::clone(&lifecycle)),
+            "本机生命周期只接线一次"
         );
 
         // 节点级事件缝（`design.md` D6、`core-derived-events` R8）：把 WP4 的 `NodeEvents` 接到 WP3 的
@@ -354,6 +366,7 @@ impl Composition {
             host,
             broker,
             use_cases,
+            lifecycle,
             session_files,
             node_event_tasks,
             access: None,
@@ -422,6 +435,11 @@ impl Composition {
     /// 用例面。
     pub fn use_cases(&self) -> &Arc<UseCases> {
         &self.use_cases
+    }
+
+    /// 本机会话生命周期（组合根唯一实例；`server::sync` 与后台回收任务共用）。
+    pub fn lifecycle(&self) -> &Arc<LocalSessionLifecycle> {
+        &self.lifecycle
     }
 
     /// 会话文件/Git 的原生只读端口（与 [`Composition::use_cases`] 注入的是同一个实例）。
@@ -497,6 +515,7 @@ impl Composition {
         let Self {
             store,
             use_cases,
+            lifecycle,
             session_files,
             host,
             broker,
@@ -522,6 +541,7 @@ impl Composition {
         session_files.release_all();
         // 显式释放：`UseCases`/`Broker`/`AgentHost` 各自持有存储句柄（`Arc<dyn …>` 克隆）。
         drop(use_cases);
+        drop(lifecycle);
         drop(broker);
         drop(host);
         drop(authority);
@@ -1039,6 +1059,49 @@ pub fn forked_publisher_with_sync(
     (Arc::new(ForkedPublisher { node_link, sync }), queue)
 }
 
+/// `agent-host` 的运行配置。
+///
+/// `idle_timeout` **恒为 `None`**：旧的进程级空闲回收按 ACP 活动判定、看不到查看者租约，会把正在被
+/// 别的设备查看/恢复的受保护会话当空闲杀掉。保留期与逐会话释放由 `LocalSessionLifecycle` 负责
+/// （租约/任务/交互保护都在 core）；停整个共享进程只允许在 lifecycle 证明全部会话已释放后执行，
+/// 本切片不提供该路径。`sessions.idle_timeout_ms` 仍由 lifecycle 读取（显式 `0` 只关闭按时间回收）。
+fn host_config(_config: &Config) -> HostConfig {
+    HostConfig {
+        idle_timeout: None,
+        client_capabilities: agent_host::config::ClientCapabilities {
+            terminal: Some(true),
+            ..agent_host::config::ClientCapabilities::none()
+        },
+        ..HostConfig::default()
+    }
+}
+
+/// `SessionRelease` 的组合根适配器：把 `LocalSessionLifecycle` 的逐会话释放接到
+/// [`AgentHost::release_session_at_generation`]（真实 ACP `session/close`）。
+struct HostSessionRelease {
+    host: Arc<AgentHost>,
+}
+
+#[async_trait::async_trait]
+impl SessionRelease for HostSessionRelease {
+    async fn release_session(
+        &self,
+        session: SessionId,
+        generation: ResourceGeneration,
+        _now: Timestamp,
+    ) -> Result<ReleaseOutcome, PortError> {
+        let outcome = self
+            .host
+            .release_session_at_generation(&session, generation.get())
+            .await;
+        Ok(match outcome {
+            agent_host::release::ReleaseOutcome::Released => ReleaseOutcome::Released,
+            agent_host::release::ReleaseOutcome::Failed => ReleaseOutcome::Failed,
+            agent_host::release::ReleaseOutcome::Uncertain => ReleaseOutcome::Uncertain,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1063,6 +1126,31 @@ mod tests {
             origin_sequence: None,
             created_at: timestamp("2026-09-17T12:10:00.123Z"),
         }
+    }
+
+    /// 生命周期接线后，`sessions.idle_timeout_ms` **不再**交给旧的进程级 idle sweep：该 sweep 只看 ACP
+    /// 活动，会把正在被查看/恢复的受保护会话杀掉。配置值仍然进入 lifecycle（按时间回收仍可用）。
+    #[test]
+    fn the_legacy_idle_sweep_no_longer_receives_the_session_idle_timeout() {
+        let config =
+            Config::from_toml("[sessions]\nidle_timeout_ms = 1500\nmax_active_sessions = 7\n")
+                .expect("测试配置合法");
+        assert_eq!(
+            config.sessions.idle_timeout,
+            Some(std::time::Duration::from_millis(1500)),
+            "配置解析保持旧口径（值仍然被接受）"
+        );
+        let host = host_config(&config);
+        assert!(
+            host.idle_timeout.is_none(),
+            "旧的进程级 sweep 必须被关闭，否则会杀受保护会话"
+        );
+        assert_eq!(
+            config.sessions.lifecycle.idle_timeout_ms(),
+            1500,
+            "保留期 / 逐会话回收仍读取该值"
+        );
+        assert_eq!(config.sessions.lifecycle.max_active_sessions(), 7);
     }
 
     /// `ForkedPublisher` 必须把同一条已提交投递**同时**分叉给 Node Link 与 Sync 两路。

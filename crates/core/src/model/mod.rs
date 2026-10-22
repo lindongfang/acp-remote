@@ -134,6 +134,7 @@ mod event;
 mod identity;
 mod ids;
 mod json;
+mod lifecycle;
 mod media;
 mod scalars;
 mod session;
@@ -152,6 +153,7 @@ pub(crate) use json::{
     MemberValue, array_items, decode_json_string, encode_json_string, insert_string_member_front,
     json_object_members, object_members, top_level_member,
 };
+pub use lifecycle::*;
 pub use media::*;
 pub use scalars::*;
 pub use session::*;

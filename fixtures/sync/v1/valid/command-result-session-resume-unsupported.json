@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "16ece1cc-9555-46dc-b5cb-70b31afffa69",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "109",
+  "body": {
+    "requestId": "0f8b72fa-2199-4c81-a4ca-ee34abe98563",
+    "command": "session.resume",
+    "status": "rejected",
+    "acceptedAt": null,
+    "terminalEventId": null,
+    "result": null,
+    "error": {
+      "code": "capability.unsupported_by_agent",
+      "message": "Agent 未宣告 sessionCapabilities.resume，不能恢复原会话身份。",
+      "retryable": false,
+      "details": {}
+    }
+  }
+}

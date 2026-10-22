@@ -396,7 +396,7 @@ describe("D2 两套独立分页", () => {
     const messagePage = lastDispatch(gateway).body;
     if (messagePage.command !== "session.read") throw new Error("命令不是 session.read");
     expect(messagePage.payload.include).toEqual(["messages"]);
-    expect(Object.keys(messagePage.payload).sort()).toEqual(["before", "include"]);
+    expect(Object.keys(messagePage.payload).sort()).toEqual(["before", "include", "limit"]);
     expect(messagePage.payload.before?.messageId).toBe("m-2");
 
     store.apply({ kind: "command_result", result: readResult({ requestId: messagePage.requestId, sessionId: SESSION_ID, hasEarlier: false }) });

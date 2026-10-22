@@ -69,6 +69,7 @@ export type ErrorCode =
   | "state.version_conflict"
   | "session.not_found"
   | "session.busy"
+  | "session.capacity_exceeded"
   | "interaction.already_resolved"
   | "interaction.unavailable"
   | "interaction.version_conflict"
@@ -241,6 +242,21 @@ export interface AgentCatalogEntry {
  */
 export type SessionState = "idle" | "running" | "pending";
 
+/**
+ * `$defs.localActivity`（`core.local-session-lifecycle.v1`，`docs/SYNC_PROTOCOL.md` §9.8）。
+ *
+ * 本机活跃程度的**展示**依据，不是任务状态：`pending`（有效未解决交互）优先，其次
+ * `active`（存在未结束任务，或已确认 ready/回收未确认的运行资源），否则 `idle`。
+ * 它只在协商了该 feature 的连接上、对 owned 会话出现；未协商与 imported 摘要都没有这个键
+ * （缺席，不是 `null`）。
+ */
+export type LocalActivity = "idle" | "active" | "pending";
+
+/** 运行期守卫：`localActivity` 的封闭词表。 */
+export function isLocalActivity(value: unknown): value is LocalActivity {
+  return value === "idle" || value === "active" || value === "pending";
+}
+
 /** `$defs.sessionSummary.agent`（内嵌对象，无独立 `$defs` 条目）。 */
 export interface SessionSummaryAgent {
   readonly agentId: string;
@@ -253,6 +269,11 @@ export interface SessionSummary {
   readonly title: string | null;
   readonly agent: SessionSummaryAgent;
   readonly state: SessionState;
+  /**
+   * 可选的本机活跃程度：只在协商 `core.local-session-lifecycle.v1` 的连接上、对 owned 会话出现。
+   * 未协商时该键**缺席**（不是 `null`）；页面 MUST NOT 在未协商时把它解释成主状态。
+   */
+  readonly localActivity?: LocalActivity;
   readonly origin: OriginBlock;
   readonly currentMode: ModeRef | null;
   readonly version: DecimalString;

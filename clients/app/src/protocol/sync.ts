@@ -216,6 +216,50 @@ export interface SyncAck extends PostAuthEnvelope {
   readonly body: { readonly cursor: Cursor };
 }
 
+// ── 查看控制帧（`core.local-session-lifecycle.v1`，§11.8） ─────────────────────
+
+/**
+ * `$defs.viewVersion`：客户端单调递增的整数（0..=2^53−1）。
+ *
+ * 同版本同载荷的重试幂等；低于当前版本的声明被服务端忽略并回 `stale`。改变选择（含
+ * `A → B`、`A → null`、`null → A`）MUST 递增版本。
+ */
+export type ViewVersion = number;
+
+/**
+ * `$defs.sessionView`：已认证连接声明自己当前查看哪个会话（`sessionId: null` 表示离开）。
+ *
+ * 它只更新运行期的查看者与租约，**不**启动 Agent、不写事件、不改变会话状态；激活必须另行
+ * 派发 `session.resume`。同一连接最多一个当前查看者。
+ */
+export interface SyncSessionView extends PostAuthEnvelope {
+  readonly type: "session.view";
+  readonly body: {
+    readonly sessionId: Uuid | null;
+    readonly viewVersion: ViewVersion;
+  };
+}
+
+/** `$defs.sessionViewResult.body.status` 的封闭词表。 */
+export type SessionViewStatus = "accepted" | "stale";
+
+/**
+ * `$defs.sessionViewResult`：服务端对同一个 `viewVersion` 的应答。
+ *
+ * `accepted` 必须给出**未来**的 `leaseExpiresAt`；`stale` 的 `leaseExpiresAt` 必须为 `null`，
+ * 客户端不得据此恢复查看状态。`sessionId` 逐字回显被应答的声明，因此离页应答是 `sessionId: null`
+ * ——它**不是**「正在查看空会话」。
+ */
+export interface SyncSessionViewResult extends PostAuthEnvelope {
+  readonly type: "session.view.result";
+  readonly body: {
+    readonly sessionId: Uuid | null;
+    readonly viewVersion: ViewVersion;
+    readonly status: SessionViewStatus;
+    readonly leaseExpiresAt: Timestamp | null;
+  };
+}
+
 // ── 远程来源流（`resource.stateless-origin.v1`，§9.7） ──────────────────────
 //
 // 共享形状 `originCursor`/`sessionRef`/`messageCoverage` 的镜像在 `./common`；本模块只镜像
@@ -346,6 +390,8 @@ export type SyncMessage =
   | SyncSnapshotChunk
   | SyncSnapshotEnd
   | SyncAck
+  | SyncSessionView
+  | SyncSessionViewResult
   | SyncRemoteSubscribe
   | SyncRemoteEvent
   | SyncRemoteCaughtUp

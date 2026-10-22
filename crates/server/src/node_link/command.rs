@@ -799,6 +799,8 @@ impl CommandRoute {
             negotiate_file_diff: true,
             // Node Link 没有 `core.local-catalog.v1`；摘要投影按无该 feature 的三态处理。
             catalog: false,
+            // Node Link 不投影本机生命周期（wire 不变）。
+            local_activity: None,
             stateless_origin: has("resource.stateless-origin.v1"),
         };
         let outcome = match crate::session_read::read_session(
@@ -2910,6 +2912,8 @@ fn session_summary(
         state,
         origin,
         current_mode,
+        // Node Link 不登记本机生命周期：`localActivity` 恒缺席（§9.8）。
+        local_activity: None,
         version: node_link_protocol::common::DecimalString::parse(
             &summary.version().get().to_string(),
         )

@@ -23,14 +23,15 @@ use crate::model::{
     AttachmentId, AttachmentSubject, AttachmentSubmission, AttachmentTransfer, AuditAction,
     AuditOutcome, AuditRecord, CapabilitySet, CommandKind, CommandRecord, CommandResult,
     CommandStatus, CommandTerminalRecord, CommittedEvent, ConfigOption, ConfigOptionId,
-    ConfigValue, ContentSnapshot, ContentVersion, CreateSessionRequest, DeviceId, DeviceRecord,
-    Digest, DirectoryId, DirectoryRecord, EffectiveInteraction, EndpointEvent, EntityRef, EventId,
-    EventOrigin, EventPayload, EventType, FileReadPurpose, GitDiff, GitStatusPage, GlobalCursor,
-    InteractionId, InteractionResolution, MessageId, MessageRecord, ModeId, ModeRef, ModeState,
-    NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch, OriginEventRef, PairingClaim,
-    PairingId, PairingPeer, PairingRecord, PairingSettlement, PeerIdentity, PeerPublicKey,
-    PendingEvent, PendingInteraction, PortError, PromptRequest, PublicError, RemoteSessionRef,
-    RequestId, ResumeSessionRequest, SealedAttachment, Sequence, ServerEpoch, SessionFileChunk,
+    ConfigValue, ConnectionId, ContentSnapshot, ContentVersion, CreateSessionRequest, DeviceId,
+    DeviceRecord, Digest, DirectoryId, DirectoryRecord, EffectiveInteraction, EndpointEvent,
+    EntityRef, EventId, EventOrigin, EventPayload, EventType, FileReadPurpose, GitDiff,
+    GitStatusPage, GlobalCursor, InteractionId, InteractionResolution, LocalActivity, MessageId,
+    MessageRecord, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor,
+    OriginEpoch, OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord,
+    PairingSettlement, PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError,
+    PromptRequest, PublicError, RemoteSessionRef, RequestId, ResourceGeneration,
+    ResumeSessionRequest, SealedAttachment, Sequence, ServerEpoch, SessionFileChunk,
     SessionFilePage, SessionFilePath, SessionId, SessionPageToken, SessionRecoveryRecord,
     SessionReference, SessionSnapshot, SessionState, SessionSummary, SessionTitle, SubmissionId,
     Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
@@ -2129,4 +2130,181 @@ pub trait RemoteTitleWrite: Send + Sync {
         request: &RequestId,
         title: &SessionTitle,
     ) -> Result<RemoteCommandRecord, PortError>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// §5.10 本机生命周期端口（`session-activation-lifecycle`）
+// ---------------------------------------------------------------------------------------------
+
+/// 激活请求（`CORE_PORTS_AND_STORAGE.md` §5.10）。
+///
+/// 四个字段都是稳定输入：同一 `(actor, request_id)` 的重试必须逐字相同；指纹不一致即
+/// `command.idempotency_conflict`。激活路径**不得**自造 `request_id` 或指纹（否则一次重试会得到第二个
+/// 幂等键，§6 第 6/20 条）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivationRequest {
+    pub actor: Actor,
+    pub request_id: RequestId,
+    pub request_fingerprint: Digest,
+    pub session: SessionId,
+}
+
+/// 激活受理三态，互斥。**受理不是建立成功**：`Prepared`/`InFlight` 之后仍要
+/// [`SessionActivation::settle`] 收口。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // 契约形状：`Settled` 承载完整的 `CommandRecord`
+pub enum ActivationAdmission {
+    /// 本次调用获得建立权：容量名额已预占，资源代已分配；仍须 `settle` 收口。
+    Prepared,
+    /// 同会话已有激活在建立中（或回收尚未确认）：**不**重复启动后端，等同一份终态。
+    InFlight,
+    /// 已有**持久终态**（幂等重试，或先前调用已收口）：原样返回记录，不再派发、不新建资源代。
+    Settled(CommandRecord),
+}
+
+/// 建立结果三态。只有 `Ready` 让资源代进入 `ready`。`Failed` 表示适配器**可证明**没有建立资源：
+/// 实现释放容量预占并把 `LocalActivity` 收敛为 `Idle`；`Uncertain` 表示外部资源可能存在：保留容量
+/// 占位与 `Active` 事实，直到经 [`SessionRelease::release_session`] 确认释放。说不清的一律用
+/// `Uncertain`（`docs/CORE_PORTS_AND_STORAGE.md` §5.10）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivationOutcome {
+    Ready,
+    Failed { error: PublicError },
+    Uncertain { error: PublicError },
+}
+
+/// 查看声明/续租的判定：`Accepted` 必须给出未来时刻，`Stale` 必须没有租期（`SYNC_PROTOCOL.md` §11.8）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewStatus {
+    Accepted,
+    Stale,
+}
+
+/// 一次查看声明/续租的判定结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewDecision {
+    pub status: ViewStatus,
+    /// 只有 `Accepted` 才为 `Some`，且必须晚于调用方的 `now`。
+    pub lease_expires_at: Option<Timestamp>,
+}
+
+impl ViewDecision {
+    pub fn accepted(lease_expires_at: Timestamp) -> Self {
+        Self {
+            status: ViewStatus::Accepted,
+            lease_expires_at: Some(lease_expires_at),
+        }
+    }
+
+    pub fn stale() -> Self {
+        Self {
+            status: ViewStatus::Stale,
+            lease_expires_at: None,
+        }
+    }
+
+    pub fn is_accepted(&self) -> bool {
+        self.status == ViewStatus::Accepted
+    }
+}
+
+/// 容量准入：只有 `Reserved` 占住名额；`CapacityExceeded` 映射 `session.capacity_exceeded`（retryable）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    Reserved,
+    CapacityExceeded,
+}
+
+/// 安全回收候选。「没有安全候选」是 `None`，不是空占位、哨兵会话或「随便挑一个」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReclaimCandidate {
+    pub session: SessionId,
+    /// 该会话最后一次仍受保护（查看租约/未结束任务/有效交互）的时刻；回收按此值最久优先。
+    pub last_protected_at: Timestamp,
+}
+
+/// 逐会话释放确认：只有 `Released` 交还名额；`Failed`/`Uncertain` 继续占位并保持 `Active`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseOutcome {
+    Released,
+    Failed,
+    Uncertain,
+}
+
+/// 激活/恢复的合并入口：同一会话的并发激活共享一次建立过程。
+#[async_trait]
+pub trait SessionActivation: Send + Sync {
+    /// 先查稳定 requestId 的持久记录，再判 ready 复用或启动恢复；`uncertain` 不自动换号重派。
+    async fn activate(&self, request: ActivationRequest) -> Result<ActivationAdmission, PortError>;
+    /// 完成一次激活：成功才把资源代置为 ready；`Failed`（可证明未建立）释放容量预占并收敛为 `Idle`，
+    /// `Uncertain` 保留占位与 `Active` 事实。
+    async fn settle(
+        &self,
+        session: SessionId,
+        generation: ResourceGeneration,
+        outcome: ActivationOutcome,
+    ) -> Result<(), PortError>;
+}
+
+/// 查看声明、续租与释放。每连接最多一个当前查看者，租约不持久化。
+#[async_trait]
+pub trait ViewRegistry: Send + Sync {
+    async fn declare(
+        &self,
+        connection: ConnectionId,
+        session: Option<SessionId>,
+        view_version: u64,
+        now: Timestamp,
+    ) -> Result<ViewDecision, PortError>;
+    async fn renew(
+        &self,
+        connection: ConnectionId,
+        view_version: u64,
+        now: Timestamp,
+    ) -> Result<ViewDecision, PortError>;
+    async fn release(&self, connection: ConnectionId, now: Timestamp) -> Result<(), PortError>;
+    async fn viewers(
+        &self,
+        session: SessionId,
+        now: Timestamp,
+    ) -> Result<Vec<ConnectionId>, PortError>;
+}
+
+/// 容量准入与安全候选选择：创建与恢复共用，预占也计入上限。
+#[async_trait]
+pub trait CapacityAdmission: Send + Sync {
+    async fn reserve(&self, session: SessionId, now: Timestamp) -> Result<Admission, PortError>;
+    /// 只释放**尚未建立**资源的预占（失败回滚）。已 ready/回收中的资源必须经
+    /// [`SessionRelease::release_session`] 确认真实释放后才能交还名额；`Uncertain` 的激活同样必须先经
+    /// 释放确认（它可能已在外部建立了资源），本方法对它返回 `InvalidRequest` 而不是放掉占位。
+    async fn release(
+        &self,
+        session: SessionId,
+        generation: ResourceGeneration,
+        now: Timestamp,
+    ) -> Result<(), PortError>;
+    /// 只在「未受保护」的候选中选最久未使用者；同一时刻以稳定会话标识打破并列。
+    async fn reclaim_candidate(
+        &self,
+        now: Timestamp,
+    ) -> Result<Option<ReclaimCandidate>, PortError>;
+}
+
+/// 逐会话释放确认：只有适配器确认真实释放后才能交还名额。由 `agent-host` 实现（真实 ACP close），
+/// core 只消费结果。
+#[async_trait]
+pub trait SessionRelease: Send + Sync {
+    async fn release_session(
+        &self,
+        session: SessionId,
+        generation: ResourceGeneration,
+        now: Timestamp,
+    ) -> Result<ReleaseOutcome, PortError>;
+}
+
+/// 当前生命周期的只读查询：owned 当前查询与快照必须读同一代目录。
+#[async_trait]
+pub trait LifecycleQuery: Send + Sync {
+    async fn local_activity(&self, session: SessionId) -> Result<LocalActivity, PortError>;
+    async fn snapshot(&self) -> Result<Vec<SessionSummary>, PortError>;
 }

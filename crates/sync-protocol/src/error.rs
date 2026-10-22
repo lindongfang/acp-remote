@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{Nullable, RawObject, Text, Uuid, ValueError};
 
-/// Sync v1 的错误码（50 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
+/// Sync v1 的错误码（51 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// `protocol.invalid_json`
@@ -70,6 +70,8 @@ pub enum ErrorCode {
     SessionNotFound,
     /// `session.busy`
     SessionBusy,
+    /// `session.capacity_exceeded`（`core.local-session-lifecycle.v1`，retryable）。
+    SessionCapacityExceeded,
     /// `interaction.already_resolved`
     InteractionAlreadyResolved,
     /// `capability.unsupported_by_client`
@@ -118,7 +120,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// 与 `compatibility/errors/v1/errors.json` 的 sync 列表逐条相等。
-    pub const ALL: [ErrorCode; 50] = [
+    pub const ALL: [ErrorCode; 51] = [
         ErrorCode::ProtocolInvalidJson,
         ErrorCode::ProtocolSchemaInvalid,
         ErrorCode::ProtocolMessageTooLarge,
@@ -147,6 +149,7 @@ impl ErrorCode {
         ErrorCode::StateVersionConflict,
         ErrorCode::SessionNotFound,
         ErrorCode::SessionBusy,
+        ErrorCode::SessionCapacityExceeded,
         ErrorCode::InteractionAlreadyResolved,
         ErrorCode::CapabilityUnsupportedByClient,
         ErrorCode::CapabilityUnsupportedByBroker,
@@ -181,6 +184,7 @@ impl ErrorCode {
             ErrorCode::SyncCursorInvalid
                 | ErrorCode::StateVersionConflict
                 | ErrorCode::SessionBusy
+                | ErrorCode::SessionCapacityExceeded
                 | ErrorCode::ResourceRateLimited
                 | ErrorCode::ResourceBackpressure
                 | ErrorCode::ResourceRemoteUnavailable
@@ -221,6 +225,7 @@ impl ErrorCode {
             ErrorCode::StateVersionConflict => "state.version_conflict",
             ErrorCode::SessionNotFound => "session.not_found",
             ErrorCode::SessionBusy => "session.busy",
+            ErrorCode::SessionCapacityExceeded => "session.capacity_exceeded",
             ErrorCode::InteractionAlreadyResolved => "interaction.already_resolved",
             ErrorCode::CapabilityUnsupportedByClient => "capability.unsupported_by_client",
             ErrorCode::CapabilityUnsupportedByBroker => "capability.unsupported_by_broker",

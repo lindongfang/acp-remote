@@ -949,6 +949,122 @@ pub struct RemoteSourceState {
     pub state: RemoteSourceStatus,
 }
 
+/// `viewVersion`（`sync.schema.json#/$defs/viewVersion`）：查看声明的单调版本。
+///
+/// 客户端从 0 开始自增；取值是结构性整数，上界 `2^53−1` 使 JavaScript 与 Rust 都能精确表示。
+pub type ViewVersion = BoundedU64<0, 9_007_199_254_740_991>;
+
+/// `session.view`（`sync.schema.json#/$defs/sessionView`）的 body（§11.8）。
+///
+/// `sessionId` 为 `null` = 离页；`viewVersion` 由客户端单调递增。声明只更新运行期的查看者与租约，
+/// 不启动 Agent、不写事件、不改变会话状态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionView {
+    pub session_id: Nullable<Uuid>,
+    pub view_version: ViewVersion,
+}
+
+/// `session.view.result.status`（`sync.schema.json#/$defs/sessionViewResult`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ViewStatus {
+    /// 声明已生效并重新开始租期：必须给出**未来**的 `leaseExpiresAt`。
+    Accepted,
+    /// 该版本已过期/已被替换/同版本出现不同选择：`leaseExpiresAt` 必须为 `null`。
+    Stale,
+}
+
+impl ViewStatus {
+    pub const ALL: [ViewStatus; 2] = [ViewStatus::Accepted, ViewStatus::Stale];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ViewStatus::Accepted => "accepted",
+            ViewStatus::Stale => "stale",
+        }
+    }
+}
+
+impl std::fmt::Display for ViewStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ViewStatus {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        ViewStatus::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "status",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for ViewStatus {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ViewStatus {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        std::str::FromStr::from_str(&text).map_err(serde::de::Error::custom)
+    }
+}
+
+/// `session.view.result`（`sync.schema.json#/$defs/sessionViewResult`）的 body（§11.8）。
+///
+/// `sessionId` 逐字回显被应答的声明（离页声明因此是 `null`）；`accepted` 必须带未来的
+/// `leaseExpiresAt`，`stale` 必须为 `null`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionViewResult {
+    pub session_id: Nullable<Uuid>,
+    pub view_version: ViewVersion,
+    pub status: ViewStatus,
+    pub lease_expires_at: Nullable<Timestamp>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawSessionViewResult {
+    session_id: Nullable<Uuid>,
+    view_version: ViewVersion,
+    status: ViewStatus,
+    lease_expires_at: Nullable<Timestamp>,
+}
+
+impl<'de> Deserialize<'de> for SessionViewResult {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawSessionViewResult::deserialize(deserializer)?;
+        match raw.status {
+            ViewStatus::Accepted if raw.lease_expires_at.is_null() => {
+                return Err(serde::de::Error::custom(
+                    "status=accepted 时必须给出未来的 leaseExpiresAt",
+                ));
+            }
+            ViewStatus::Stale if !raw.lease_expires_at.is_null() => {
+                return Err(serde::de::Error::custom(
+                    "status=stale 时 leaseExpiresAt 必须为 null",
+                ));
+            }
+            _ => {}
+        }
+        Ok(Self {
+            session_id: raw.session_id,
+            view_version: raw.view_version,
+            status: raw.status,
+            lease_expires_at: raw.lease_expires_at,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

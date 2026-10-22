@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "2e79acea-302d-4b9b-a0fc-8eb4f8ccd181",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "108",
+  "body": {
+    "requestId": "2d3a0aa8-e249-44d8-805c-39763123aa9d",
+    "command": "session.resume",
+    "status": "rejected",
+    "acceptedAt": null,
+    "terminalEventId": null,
+    "result": null,
+    "error": {
+      "code": "session.capacity_exceeded",
+      "message": "所有占用名额的会话均受保护，当前没有可回收的容量。",
+      "retryable": true,
+      "details": {}
+    }
+  }
+}

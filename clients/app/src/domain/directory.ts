@@ -16,18 +16,25 @@
  */
 
 import type { SessionSummary, WorkspaceCatalogEntry } from "../protocol/common";
-import type { SessionStateView } from "./session-summary";
+import type { LocalActivityView, SessionStateView } from "./session-summary";
+import { localActivityOf } from "./session-summary";
 
 /** 目录的稳定标识：服务端下发的 `directoryId`（不含路径信息）。 */
 export type DirectoryId = string;
 
-/** 目录的会话汇总，全部由会话摘要得出。 */
+/**
+ * 目录的会话汇总，全部由会话摘要得出。
+ *
+ * `active` / `pending` 与主状态同源：协商后的 owned 会话按 `localActivity` 计入，其余按任务
+ * 三态计入（`running` → `active`、`pending` → `pending`）。**每个会话只计一次**——同一会话的
+ * 多个有效交互不会让待处理计数增加。
+ */
 export interface DirectorySessionCounts {
   /** 该目录全部会话数。 */
   readonly total: number;
-  /** `state` 为 `running` 的会话数。 */
+  /** 主状态为「活跃 / 运行中」的会话数。 */
   readonly active: number;
-  /** `state` 为 `pending` 的会话数。 */
+  /** 主状态为「待处理」的会话数。 */
   readonly pending: number;
 }
 
@@ -175,7 +182,9 @@ const IS_PENDING: Record<SessionStateView, true | undefined> = {
 export function buildDirectoryViews(
   workspaces: readonly WorkspaceCatalogEntry[],
   sessions: readonly SessionSummary[],
+  options: { readonly localLifecycleNegotiated?: boolean } = {},
 ): DirectoryListState {
+  const lifecycleNegotiated = options.localLifecycleNegotiated === true;
   if (workspaces.length === 0) {
     return { kind: "empty", empty: "no_directories" };
   }
@@ -193,9 +202,20 @@ export function buildDirectoryViews(
     const counts = countsById.get(directoryId);
     if (counts === undefined) continue;
     counts.total += 1;
-    const state = session.state as SessionStateView;
-    if (IS_ACTIVE[state] === true) counts.active += 1;
-    if (IS_PENDING[state] === true) counts.pending += 1;
+    // 每个会话只按**一个**主状态计数：本机活跃程度可用时以它为准，否则回落任务三态。
+    // 同一会话的多条有效交互不会让 `pending` 增加第二次（这里按摘要而不是按交互遍历）。
+    const localActivity: LocalActivityView | null = localActivityOf(session, lifecycleNegotiated);
+    if (localActivity === "pending") {
+      counts.pending += 1;
+    } else if (localActivity === "active") {
+      counts.active += 1;
+    } else if (localActivity === "idle") {
+      // 本机资源已确认释放且无任务/交互：既不计活跃也不计待处理。
+    } else {
+      const state = session.state as SessionStateView;
+      if (IS_ACTIVE[state] === true) counts.active += 1;
+      if (IS_PENDING[state] === true) counts.pending += 1;
+    }
   }
 
   const names = directoryNamesOf(workspaces);

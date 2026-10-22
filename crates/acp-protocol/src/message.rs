@@ -589,6 +589,62 @@ pub struct SessionResumeResponse {
     pub meta: Option<Value>,
 }
 
+/// `session/close` 请求参数。
+///
+/// `sessionId` 是上游固定快照（`schemas/acp/v1/upstream/schema.json` 的 `CloseSessionRequest`）唯一的
+/// **required** 字段：缺失或类型不符都显式失败，不用默认值补齐。发送时机由能力协商决定——只有 Agent
+/// 宣告 `agentCapabilities.sessionCapabilities.close` 后才允许发出（矩阵 `method.session_close` 的
+/// `capability`）；门控在 `agent-host`，本 crate 只做类型化编解码。
+///
+/// 本方法成功只代表 **Agent 确认释放**；本机端点与映射的清理由 `agent-host` 在收到响应后执行。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionCloseRequest {
+    /// 要关闭的 Agent 侧会话标识。
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    /// `_meta`。
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+}
+
+impl SessionCloseRequest {
+    /// 以 Agent 侧会话标识构造（`_meta` 由调用方按需设置）。
+    #[must_use]
+    pub fn new(session_id: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            meta: None,
+        }
+    }
+
+    /// 从 `session/close` 的 `params` 解码。
+    ///
+    /// 失败分类与 [`SessionResumeRequest::from_params`] 相同：缺字段是 [`AcpError::MissingField`]，
+    /// 存在但类型不符是 [`AcpError::InvalidField`]。
+    pub fn from_params(params: &Value) -> Result<Self> {
+        Ok(Self {
+            session_id: required_string(params, "sessionId")?,
+            meta: params.get("_meta").cloned(),
+        })
+    }
+}
+
+/// `session/close` 请求（含方法名与方向校验）。
+pub fn session_close_request(envelope: &Envelope) -> Result<SessionCloseRequest> {
+    SessionCloseRequest::from_params(&client_params(envelope, "session/close")?)
+}
+
+/// `session/close` 响应。
+///
+/// 上游 `CloseSessionResponse` 只有一个可选的 `_meta`：空对象是合法响应，未知字段由 [`Envelope`]
+/// 承载的原文保真，本结构只读取已知字段。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionCloseResponse {
+    /// `_meta`。
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+}
+
 /// required 字符串字段：缺失与类型不符是两种可区分的错误，且错误详情只带字段名与 JSON 值类型
 /// （不带字段取值，避免把消息正文带进日志）。
 fn required_string(params: &Value, field: &str) -> Result<String> {

@@ -420,6 +420,11 @@ export default function SessionRoute(): ReactElement {
           const outcome = store.refreshInteractions(sessionId);
           if (!outcome.ok) toastStore.show(outcome.reason);
         }}
+        onRetryActivation={() => {
+          // 显式重试：`uncertain` 先查原请求，不会自动重派未知副作用的激活。
+          const outcome = store.retrySessionActivation(sessionId);
+          if (!outcome.ok) toastStore.show(outcome.reason);
+        }}
         // 附件选择只在本地入草稿；发送后由仓库上传并在全部封存后才派发 prompt。
         onPickAttachment={(kind) => {
           void store.pickAttachments(sessionId, kind).then((outcome) => {

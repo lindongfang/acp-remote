@@ -51,6 +51,7 @@ pub mod attachments;
 pub mod command;
 pub mod conn;
 pub mod event;
+pub mod local_lifecycle;
 pub mod pairing;
 pub mod remote;
 pub mod router;

@@ -148,6 +148,8 @@ export interface ConversationStreamProps {
     | undefined;
   /** 重新取得服务端确认的当前有效请求。 */
   readonly onRefreshInteractions?: (() => void) | undefined;
+  /** 重试本机会话激活（恢复失败后由用户显式发起；不会自动重派不确定的请求）。 */
+  readonly onRetryActivation?: (() => void) | undefined;
   /** 打开平台选择器选择附件（选择阶段只在本机预览，发送后才上传）。 */
   readonly onPickAttachment?: ((kind: AttachmentKind) => void) | undefined;
   /** 粘贴事件（交给平台端口解析）。 */
@@ -473,6 +475,29 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
       marginTop: spacing.xs,
+    },
+    activationRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      marginTop: spacing.xs,
+    },
+    activationNotice: {
+      flexShrink: 1,
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+    activationError: {
+      flexShrink: 1,
+      color: colors.danger,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+    activationRetry: {
+      color: colors.accent,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
     },
     agent: {
       flexShrink: 1,
@@ -962,8 +987,6 @@ function buildStyles(colors: Palette) {
 
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
-
-
 /**
  * 会话头的 Agent 胶囊（原型 `.agentchip`）。
  *
@@ -1213,6 +1236,7 @@ function userInputNodes(host: HTMLElement, ids: readonly string[]): readonly HTM
 /** 对话页正文。 */
 export function ConversationStream({
   model,
+  onLoadEarlier,
   onOpenDiagnostics,
   onDraftChange,
   onSubmitPrompt,
@@ -1236,6 +1260,7 @@ export function ConversationStream({
   onDownloadAttachment,
   onSubmitElicitation,
   onRefreshInteractions,
+  onRetryActivation,
   onPickAttachment,
   onPasteAttachments,
   onRemoveAttachment,
@@ -1294,6 +1319,7 @@ export function ConversationStream({
   const singleColumn = !wide && hiddenColumns.length > 0;
   // 时间线的文件改动条目复用逐条改动的诊断投影（原文可用性/事件视图都在那里）。
   const changeDiagnostics = new Map(model.fileChanges.map((change) => [change.changeId, change.diagnostics]));
+  const paging = model.paging;
   const history = model.timeline.structuredHistory;
   const sidebar = model.sidebar;
   const activeFilesPanel = filesPanel ?? null;
@@ -1470,6 +1496,14 @@ export function ConversationStream({
       contentHeight: host.scrollHeight,
       viewportHeight: host.clientHeight,
     });
+    // 先保存阅读锚点，早期返回也不能跳过顶部翻页。
+    if (!next && host.scrollTop <= 96 && paging.hasEarlier && !paging.loading) {
+      followingRef.current = false;
+      setFollowing(false);
+      captureAnchor();
+      onLoadEarlier();
+      return;
+    }
     if (next === followingRef.current) {
       if (next && unseen) setUnseen(false);
       return;
@@ -1753,7 +1787,10 @@ export function ConversationStream({
                     状态未知
                   </Text>
                 ) : (
-                  <StatusPill state={model.header.state} />
+                  <StatusPill
+                    state={model.header.state}
+                    localActivity={model.header.localActivity ?? null}
+                  />
                 )}
                 <Text style={styles.agent} numberOfLines={1} dataSet={{ sessionAgent: model.header.agentName }}>
                   {model.header.agentName}
@@ -1773,6 +1810,41 @@ export function ConversationStream({
                   {titleView.notice}
                 </Text>
               ) : null}
+              {(() => {
+                const activation = model.header.activation ?? null;
+                if (activation === null || activation.kind === "ready") return null;
+                const failed = activation.kind === "failed";
+                const notice =
+                  activation.kind === "failed"
+                    ? activation.reason
+                    : activation.kind === "inactive" || activation.kind === "activating" || activation.kind === "unavailable"
+                      ? activation.notice
+                      : "";
+                return (
+                  <View style={styles.activationRow} dataSet={{ sessionActivation: activation.kind }}>
+                    <Text
+                      style={failed ? styles.activationError : styles.activationNotice}
+                      dataSet={{
+                        sessionActivationNotice: "true",
+                        ...(activation.kind === "failed" && activation.code !== null
+                          ? { sessionActivationCode: activation.code }
+                          : {}),
+                      }}
+                    >
+                      {notice}
+                    </Text>
+                    {activation.kind === "failed" && activation.retryable && onRetryActivation !== undefined ? (
+                      <Pressable
+                        role="button"
+                        onPress={() => onRetryActivation()}
+                        dataSet={{ action: "retry-activation" }}
+                      >
+                        <Text style={styles.activationRetry}>重试激活</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                );
+              })()}
             </View>
 
             {/* 中间互斥查看区：文件打开时它占据时间线的位置；时间线/输入区仍在 DOM（隐藏）。 */}

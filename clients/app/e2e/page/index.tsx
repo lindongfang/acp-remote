@@ -17,12 +17,14 @@ import { CONVERSATION_TOOL_DETAIL_CHECKS } from "./checks/conversation-tool-deta
 import { SESSION_FILES_CHECKS } from "./checks/session-files";
 import { SESSION_TITLE_CHECKS } from "./checks/session-title";
 import { FRAME_ACCEPTANCE_CHECKS } from "./checks/frame-acceptance";
+import { SESSION_ACTIVITY_PAGE_CHECKS, SESSION_LIFECYCLE_CHECKS } from "./checks/session-lifecycle";
 import { PAIRING_FIRST_RUN_CHECKS } from "./checks/pairing-first-run";
 import { PAIRING_KIND_CHECKS } from "./checks/pairing-kinds";
 import { UI_SHELL_CHECKS } from "./checks/ui-shell";
 import { UI_STYLESHEET_CHECKS } from "./checks/ui-stylesheet";
 import { runChecks } from "./support";
 import { COMPOSER_FILE_CHECKS } from "./checks/composer-files";
+import { CONVERSATION_SCROLL_PAGING_CHECKS } from "./checks/conversation-scroll-paging";
 import type { CheckResult } from "./support";
 
 /**
@@ -79,6 +81,7 @@ import type { CheckResult } from "./support";
  */
 const ALL_CHECKS = [
   ...COMPOSER_FILE_CHECKS,
+  ...CONVERSATION_SCROLL_PAGING_CHECKS,
   ...UI_STYLESHEET_CHECKS,
   ...UI_SHELL_CHECKS,
   ...COMPOSITION_CHECKS,
@@ -94,6 +97,8 @@ const ALL_CHECKS = [
   ...SESSION_FILES_CHECKS,
   ...SESSION_TITLE_CHECKS,
   ...FRAME_ACCEPTANCE_CHECKS,
+  ...SESSION_LIFECYCLE_CHECKS,
+  ...SESSION_ACTIVITY_PAGE_CHECKS,
   ...PAIRING_FIRST_RUN_CHECKS,
   ...PAIRING_KIND_CHECKS,
 ];

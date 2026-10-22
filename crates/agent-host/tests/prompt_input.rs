@@ -263,7 +263,7 @@ async fn media_resources_and_workspace_paths_map_to_native_acp_blocks() {
     assert!(!text.contains("workspace_path_ref"), "{text}");
     assert_eq!(attachments.reads(), 3, "每个附件只读取一次");
 
-    endpoint.close().await.expect("close");
+    drop(endpoint);
     host.shutdown_all().await;
 }
 
@@ -302,7 +302,7 @@ async fn unsupported_media_rejects_the_whole_prompt_before_sending() {
         "被拒绝的 prompt 一个字节都不能发给 Agent"
     );
 
-    endpoint.close().await.expect("close");
+    drop(endpoint);
     host.shutdown_all().await;
 }
 
@@ -378,6 +378,6 @@ async fn oversized_and_escaping_inputs_are_rejected_before_dispatch() {
         "三次拒绝都不得向 Agent 发出 session/prompt"
     );
 
-    endpoint.close().await.expect("close");
+    drop(endpoint);
     host.shutdown_all().await;
 }

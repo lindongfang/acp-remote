@@ -214,10 +214,20 @@ fn terminal_streams(collector: &Collector) -> (String, String) {
     (stdout, stderr)
 }
 
+/// 终端场景的 fake Agent 参数。
+///
+/// 这些测试在结尾都会走真实的 `Endpoint::close`（组合层的释放顺序：停终端 → 能力门控的
+/// `session/close` → ack 后摘除映射）。因此 fake Agent **必须**在 `initialize` 里宣告
+/// `sessionCapabilities.close`：未宣告时关闭会被按「后端不支持」明确拒绝（见
+/// `crates/agent-host/src/host.rs` 的 `release_bound_session`），这不是终端流程要断言的语义。
+const CLOSE_CAPABILITIES: &str = r#"{"sessionCapabilities":{"close":{}}}"#;
+
 fn terminal_args(scenario: &str, probe: &Path, heartbeat: Option<&Path>) -> Vec<String> {
     let mut args = vec![
         "--scenario".to_owned(),
         scenario.to_owned(),
+        "--capabilities".to_owned(),
+        CLOSE_CAPABILITIES.to_owned(),
         "--probe-file".to_owned(),
         probe.to_string_lossy().into_owned(),
     ];
@@ -296,6 +306,60 @@ async fn terminal_output_is_real_and_release_revokes_the_handle() {
     );
 
     endpoint.close().await.expect("close");
+    host.shutdown_all().await;
+}
+
+/// 释放失败（Agent 明确拒绝）后绑定必须保留，且**终端服务不能因为释放前的收口而永久关闭**：
+/// 那次收口换入的新实例必须照常完成一次真实的 `terminal/*` 流程。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_close_leaves_the_terminal_service_usable() {
+    let probe = temp_path("probe-close-refused.txt");
+    let args = terminal_args("close-error-terminal", &probe, None);
+    let host = host_with(
+        HostConfig {
+            client_capabilities: terminal_capabilities(),
+            ..HostConfig::default()
+        },
+        &args_refs(&args),
+    );
+    let collector = Collector::new();
+    let endpoint = create(&host, &session(SESSION_A), &collector).await;
+
+    // Agent 明确拒绝关闭：不得声称成功，也不得摘除映射。
+    assert!(
+        endpoint.close().await.is_err(),
+        "Agent 拒绝时单会话释放必须失败"
+    );
+
+    // 重绑把同一个终端服务移交给新绑定；它必须仍在服务（不是那个永久关闭的旧实例）。
+    let reopened = host
+        .open(endpoint.reference(), collector.sink())
+        .await
+        .expect("失败的关闭不得摘除映射");
+    reopened
+        .prompt(prompt("关闭失败后仍然可以运行命令"), support::timestamp())
+        .await
+        .expect("prompt");
+
+    assert!(
+        collector
+            .wait_for_type("turn.completed", Duration::from_secs(20))
+            .await,
+        "turn 必须完成：{:?}",
+        collector.event_types()
+    );
+    assert_no_probe_failure(&collector);
+    assert_probe(&probe, "output_after_release_rejected");
+    assert_probe(&probe, "release_after_release_rejected");
+    let (stdout, stderr) = terminal_streams(&collector);
+    assert!(
+        stdout.contains("第一段🙂第二段"),
+        "终端输出必须真实到达：{stdout:?}"
+    );
+    assert!(stderr.contains("警告"), "stderr 内容必须保留：{stderr:?}");
+
+    drop(endpoint);
+    drop(reopened);
     host.shutdown_all().await;
 }
 

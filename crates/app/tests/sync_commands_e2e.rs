@@ -10,6 +10,8 @@
 
 mod support;
 
+use std::time::Duration;
+
 use serde_json::{Value, json};
 use support::sync::{DeviceKey, HostNode, SyncClient, nonce_text, uuid_text};
 
@@ -351,6 +353,16 @@ fn ac1_digest(label: &str) -> acp_core::model::Digest {
     acp_core::model::Digest::new(&encoded).expect("32 字节摘要")
 }
 
+/// `session.resume` 的 payload 指纹：`payload_fingerprint` 对 `SessionResume {}`（序列化为 `{}`）做
+/// CJ1 规范化后取 SHA-256（空对象规范化后仍是 `{}`），再 base64url。
+fn resume_payload_digest() -> acp_core::model::Digest {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let encoded =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(b"{}"));
+    acp_core::model::Digest::new(&encoded).expect("32 字节摘要")
+}
+
 /// 本机建一条 owned 会话并**落账**（§6 第 20 条的三笔时序：受理 → 执行 → 落账；E2E 的会话来源，
 /// 不经 wire），返回会话标识文本。
 ///
@@ -359,6 +371,14 @@ fn ac1_digest(label: &str) -> acp_core::model::Digest {
 /// 终态结果原文只是形状占位：本文件不读它。
 async fn local_session(host: &HostNode) -> String {
     let request_id = acp_core::model::RequestId::new(&uuid_text()).expect("request id 规范");
+    // 恢复路径要求持久化的 workspace_cwd：没有它，`session.resume` 会按「没有恢复数据」失败。
+    // 这里给每条测试会话一个真实存在的隔离目录，和生产的 `session.create` 同形。
+    let workspace_path = host.data_dir().join("workspace");
+    std::fs::create_dir_all(&workspace_path).expect("测试工作目录");
+    let canonical = std::fs::canonicalize(&workspace_path).expect("规范化工作目录");
+    let workspace =
+        acp_core::model::ResolvedWorkspace::at_path(canonical.to_string_lossy().into_owned())
+            .expect("绝对路径工作目录");
     let prepared = match host
         .core()
         .create_session(
@@ -371,7 +391,7 @@ async fn local_session(host: &HostNode) -> String {
                     "Codex",
                 )
                 .expect("agent ref"),
-                None,
+                Some(workspace),
                 None,
                 acp_core::model::ResourceOrigin::Local,
             ),
@@ -648,14 +668,21 @@ async fn session_resume_is_unsupported_on_the_sync_face() {
     client
         .command(&request, "session.resume", Some(&session), json!({}))
         .await;
-    // `session.resume` 不在 Sync v1 的封闭词表里：拒绝发生在命令解码之前，因此回复是带
-    // `correlationId` 的 `error` 帧（§4.2/§11.5），不是 `command.result`。
-    let refused = client.expect_error().await;
+    // `session.resume` 已在 Sync 命令词表里（§11.5），但本连接没有协商
+    // `core.local-session-lifecycle.v1`：拒绝发生在**命令级门控**，回复是带 `requestId` 的
+    // `command.result`（`status = rejected`），不是解码前的 `error` 帧。
+    let refused = client.expect_command_result(&request).await;
     assert_eq!(
-        refused["body"]["code"],
+        refused["status"],
+        json!("rejected"),
+        "未协商 lifecycle 时必须命令级拒绝：{refused}"
+    );
+    assert_eq!(
+        refused["error"]["code"],
         json!("command.unsupported"),
         "{refused}"
     );
+    assert_eq!(refused["result"], Value::Null, "{refused}");
     let after = host.head().await;
     assert_eq!(
         after.global_sequence, watermark.global_sequence,
@@ -1770,7 +1797,8 @@ async fn window_events_are_stored_and_broadcast_in_arrival_order() {
         "终态给出的会话标识必须是 core 交给后端的那一个"
     );
 
-    // 收齐该会话的全部实时事件（终态那条 + 窗口期四条）。
+    // 收齐该会话的全部实时事件（终态 + 窗口期四条）。连接没有协商
+    // `core.local-session-lifecycle.v1`，因此落账后的活跃投影**不应**投递给它（§9.8）。
     drain_until(&mut client, &mut exchange, |exchange| {
         exchange
             .events
@@ -1788,7 +1816,7 @@ async fn window_events_are_stored_and_broadcast_in_arrival_order() {
     assert_eq!(
         broadcast.len(),
         windowed.len() + 1,
-        "该会话必须恰有「终态 + 窗口期四条」这么多事件：{broadcast:?}"
+        "该会话必须恰有「终态 + 窗口期四条」这么多**可投递**事件：{broadcast:?}"
     );
 
     // ① 广播：会话内序号连续，且终态事件占 1（会话行与终态在**同一次**落账提交里，窗口期事件在它
@@ -1831,7 +1859,8 @@ async fn window_events_are_stored_and_broadcast_in_arrival_order() {
         "窗口期事件必须按到达顺序广播：{broadcast:?}"
     );
 
-    // ② 落库：与广播**逐条相同**（同一条事件、同一个 eventId、同一个会话内序号、同一个顺序）。
+    // ② 落库：广播的 5 条逐条相同；落账提交后生命周期还会写一条活跃投影事件（§9.8：
+    //    `idle → active` 必写），它只对协商了本机生命周期的连接可见，因此不在上面的广播里。
     let stored = stored_session_events(&host, &session).await;
     let stored_ids: Vec<String> = stored
         .iter()
@@ -1842,13 +1871,14 @@ async fn window_events_are_stored_and_broadcast_in_arrival_order() {
         .map(|event| event["eventId"].as_str().expect("eventId").to_owned())
         .collect();
     assert_eq!(
-        stored_ids, broadcast_ids,
-        "落库 eventId 序列必须与广播序列逐条相同（落库 {stored:?}）"
+        stored_ids[..broadcast_ids.len()],
+        broadcast_ids[..],
+        "已投递事件的落库 eventId 序列必须与广播逐条相同（落库 {stored:?}）"
     );
     let stored_sequences: Vec<i64> = stored.iter().map(|(_, _, sequence)| *sequence).collect();
     assert_eq!(
         stored_sequences,
-        vec![1, 2, 3, 4, 5],
+        vec![1, 2, 3, 4, 5, 6],
         "落库的会话内序号必须连续且一条不重：{stored:?}"
     );
     let stored_types: Vec<String> = stored
@@ -1863,8 +1893,9 @@ async fn window_events_are_stored_and_broadcast_in_arrival_order() {
             "session.mode.changed".to_owned(),
             "session.mode.changed".to_owned(),
             "session.mode.changed".to_owned(),
+            "session.activity.changed".to_owned(),
         ],
-        "落库形状必须是「终态事件 + 窗口期四条」：{stored:?}"
+        "落库形状必须是「终态事件 + 窗口期四条 + 活跃投影」：{stored:?}"
     );
 
     host.stop().await;
@@ -2306,6 +2337,1076 @@ async fn a_title_set_for_an_unknown_session_is_not_found() {
         rejected["error"]["code"],
         json!("session.not_found"),
         "{rejected}"
+    );
+
+    host.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 变更② WP4 验收：本机生命周期（`core.local-session-lifecycle.v1`）的 Sync 面
+//
+// 驱动方式与上面的命令族相同：真实 listener + 真实存储/broker/生命周期实例（`support::sync`
+// 的 `HostNode` 与生产组合根同一批接线），只有 Agent 子进程是脚本后端。`session.create` 现在
+// 与 `session.resume` 共用容量准入，因此创建成功后资源代已经是 ready；要观察「建立」那条路径，
+// 用例先经组合根持有的生命周期实例做一次逐会话释放（替身释放端口恒 `Released`）。
+// ---------------------------------------------------------------------------------------------
+
+/// 本机生命周期的 feature ID（与 `server::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE` 同值；
+/// 集成测试各自成 crate，因此各自持有字面量）。
+const LIFECYCLE_FEATURE: &str = "core.local-session-lifecycle.v1";
+
+fn lifecycle_features() -> Vec<&'static str> {
+    let mut features = supported_features();
+    features.push(LIFECYCLE_FEATURE);
+    features
+}
+
+/// 协商了本机生命周期的连接（不含实时屏障）。
+async fn connect_lifecycle(host: &HostNode, device: &Device) -> SyncClient {
+    connect_with_features(host, device, &lifecycle_features()).await
+}
+
+/// 协商了本机生命周期并越过实时屏障的连接（`session.activity.changed` 只投给这类连接）。
+async fn connect_lifecycle_live(host: &HostNode, device: &Device) -> SyncClient {
+    let mut client = connect_lifecycle(host, device).await;
+    client.step("订阅并建立实时屏障（lifecycle）");
+    client.subscribe(None).await;
+    let _reset = client.expect_type("sync.reset_required").await;
+    client.snapshot_request("initial_sync").await;
+    let _snapshot = client.expect_snapshot().await;
+    let caught_up = client.expect_type("sync.caught_up").await;
+    client.ack(caught_up["body"]["cursor"].clone()).await;
+    client
+}
+
+/// 未协商本机生命周期但建立实时屏障的连接。
+async fn connect_plain_live(host: &HostNode, device: &Device) -> SyncClient {
+    let mut client = connect_with_features(host, device, &supported_features()).await;
+    client.step("订阅并建立实时屏障（未协商 lifecycle）");
+    client.subscribe(None).await;
+    let _reset = client.expect_type("sync.reset_required").await;
+    client.snapshot_request("initial_sync").await;
+    let _snapshot = client.expect_snapshot().await;
+    let caught_up = client.expect_type("sync.caught_up").await;
+    client.ack(caught_up["body"]["cursor"].clone()).await;
+    client
+}
+
+/// 经组合根持有的生命周期实例释放一个已 ready 的会话（`SessionRelease` 替身恒 `Released`）。
+async fn release_ready_session(host: &HostNode, session: &str) {
+    let actor = acp_core::model::Actor::LocalCli;
+    let id = acp_core::model::SessionId::new(session).expect("session id");
+    let generation = host
+        .lifecycle()
+        .resource_generation(&id)
+        .expect("创建成功后该会话必须已 ready（有资源代）");
+    host.lifecycle()
+        .release_session(&actor, id, generation, host.clock().now())
+        .await
+        .expect("逐会话释放");
+}
+
+/// 派发一条 `session.view` 并返回 `session.view.result` 的 body。
+async fn declare_view(client: &mut SyncClient, session: Option<&str>, version: u64) -> Value {
+    client
+        .send(
+            "session.view",
+            json!({ "sessionId": session, "viewVersion": version }),
+        )
+        .await;
+    client.expect_type("session.view.result").await["body"].clone()
+}
+
+/// `session.list` 的 `completed` 结果体（调用方从中取 `sessions`）。
+async fn list_sessions(client: &mut SyncClient) -> Value {
+    let request = uuid_text();
+    client
+        .command(&request, "session.list", None, json!({}))
+        .await;
+    let result = client.expect_command_result(&request).await;
+    assert_eq!(result["status"], json!("completed"), "{result}");
+    result
+}
+
+/// canonical 时间戳文本 → epoch 毫秒（租期幅度的断言用）。
+fn epoch_millis(text: &str) -> i64 {
+    acp_core::model::Timestamp::new(text)
+        .expect("规范时间戳")
+        .epoch_millis()
+}
+
+// ---------------------------------------------------------------------------------------------
+// session.resume（5.1）
+// ---------------------------------------------------------------------------------------------
+
+/// 5.1：`session.resume` 的「accepted → completed」形状、ready 复用与同 requestId 的幂等回放。
+///
+/// 变红点：①未先回 `accepted`；②恢复真的建立了后端资源却没反映在摘要的 `localActivity` 上；
+/// ③第二次（不同 requestId）又调了一次后端；④同 requestId 重放换了一条终态事件。
+#[tokio::test]
+async fn a_resume_is_accepted_then_completed_and_reuses_ready_resources() {
+    let host = HostNode::start("sync-life-resume", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    release_ready_session(&host, &session).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.resume（建立）");
+    client
+        .command(&request, "session.resume", Some(&session), json!({}))
+        .await;
+    let accepted = client.expect_command_result(&request).await;
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    assert_eq!(accepted["result"], Value::Null, "accepted 不得带业务结果");
+    let terminal = client.expect_command_result(&request).await;
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    let terminal_event = terminal["terminalEventId"]
+        .as_str()
+        .expect("completed 必须带 terminalEventId")
+        .to_owned();
+    assert_eq!(
+        terminal["result"]["sessionId"],
+        json!(session),
+        "{terminal}"
+    );
+    assert_eq!(
+        terminal["result"]["session"]["localActivity"],
+        json!("active"),
+        "恢复成功 ⇒ 资源代 ready ⇒ localActivity = active：{terminal}"
+    );
+    assert_eq!(
+        host.script().resume_calls(),
+        1,
+        "建立必须且只能调用一次后端"
+    );
+
+    // ready 复用：新的 requestId 命中已就绪资源，不再启动后端。
+    let second = uuid_text();
+    client.step("session.resume（ready 复用）");
+    client
+        .command(&second, "session.resume", Some(&session), json!({}))
+        .await;
+    assert_eq!(
+        client.expect_command_result(&second).await["status"],
+        json!("accepted")
+    );
+    let reused = client.expect_command_result(&second).await;
+    assert_eq!(reused["status"], json!("completed"), "{reused}");
+    assert_eq!(
+        host.script().resume_calls(),
+        1,
+        "ready 复用 MUST NOT 再次触发 ACP 恢复"
+    );
+
+    // 同 requestId 重放：回首次终态（同一条 terminal event），不产生第二次副作用。
+    client.step("session.resume（同 requestId 重放）");
+    client
+        .command(&request, "session.resume", Some(&session), json!({}))
+        .await;
+    let replay = client.expect_command_result(&request).await;
+    assert_eq!(replay["status"], json!("completed"), "{replay}");
+    assert_eq!(
+        replay["terminalEventId"],
+        json!(terminal_event),
+        "幂等重放必须回首次的终态事件：{replay}"
+    );
+    assert_eq!(host.script().resume_calls(), 1);
+
+    host.stop().await;
+}
+
+/// 5.1/§11.2：命中已存在 `accepted` 记录时，`acceptedAt` 必须是**首次落盘**时间（不得换成现在）。
+#[tokio::test]
+async fn a_replayed_resume_acceptance_reuses_the_first_accepted_at() {
+    let host = HostNode::start("sync-life-resume-accepted-at", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let request = uuid_text();
+    let actor = acp_core::model::Actor::Device {
+        device: acp_core::model::DeviceId::new(&device.id()).expect("device id 规范"),
+    };
+    let request_id = acp_core::model::RequestId::new(&request).expect("request id");
+    let session_id = acp_core::model::SessionId::new(&session).expect("session id");
+    let admitted = host
+        .core()
+        .admit_session_resume(
+            &actor,
+            request_id.clone(),
+            resume_payload_digest(),
+            session_id,
+        )
+        .await
+        .expect("受理-only 记录");
+    assert_eq!(
+        admitted,
+        acp_core::use_cases::ResumeAdmission::Prepared,
+        "预置记录必须是本次写入"
+    );
+    let first = host
+        .core()
+        .command_status(&actor, request_id)
+        .await
+        .expect("读取受理记录")
+        .expect("受理记录存在")
+        .accepted_at()
+        .cloned()
+        .expect("accepted 必须有时间")
+        .as_str()
+        .to_owned();
+
+    client.step("session.resume（已存在 accepted 记录）");
+    client
+        .command(&request, "session.resume", Some(&session), json!({}))
+        .await;
+    let accepted = client.expect_command_result(&request).await;
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    assert_eq!(
+        accepted["acceptedAt"],
+        json!(first),
+        "重放的 acceptedAt 必须是首次落盘时间：{accepted}"
+    );
+
+    host.stop().await;
+}
+
+/// 5.1：不同设备的并发恢复合并成**一次**后端建立，两个请求各自得到 completed。
+#[tokio::test]
+async fn concurrent_resumes_from_two_devices_share_one_backend_establishment() {
+    let host = HostNode::start("sync-life-resume-merge", HOST).await;
+    let first_device = Device::new();
+    let second_device = Device::new();
+    pair_and_approve(&host, &first_device).await;
+    pair_and_approve(&host, &second_device).await;
+    let session = local_session(&host).await;
+    release_ready_session(&host, &session).await;
+    // 让第一次建立停在窗口里，第二次请求因此一定看见「建立中」。
+    host.script().delay_resume(Duration::from_millis(300));
+
+    let mut first = connect_lifecycle(&host, &first_device).await;
+    let mut second = connect_lifecycle(&host, &second_device).await;
+    let first_request = uuid_text();
+    let second_request = uuid_text();
+    first
+        .command(&first_request, "session.resume", Some(&session), json!({}))
+        .await;
+    second
+        .command(&second_request, "session.resume", Some(&session), json!({}))
+        .await;
+
+    for (client, request) in [(&mut first, &first_request), (&mut second, &second_request)] {
+        let accepted = client.expect_command_result(request).await;
+        assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+        let terminal = client.expect_command_result(request).await;
+        assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+        assert_eq!(
+            terminal["result"]["sessionId"],
+            json!(session),
+            "{terminal}"
+        );
+    }
+    assert_eq!(
+        host.script().resume_calls(),
+        1,
+        "同会话的并发恢复必须共享一次建立（否则两个设备的等待者会各起一个后端）"
+    );
+
+    host.stop().await;
+}
+
+/// 5.1：同会话已有建立进行中时，后来者**立即**拿到 `accepted` 并登记终态观察——不得内联阻塞连接
+/// 等待建立者（参考 `session.create` 的受理 + 观察者形状）。
+#[tokio::test]
+async fn a_merged_resume_returns_accepted_without_blocking_on_the_establishment() {
+    let host = HostNode::start("sync-life-resume-merge-nonblocking", HOST).await;
+    let first_device = Device::new();
+    let second_device = Device::new();
+    pair_and_approve(&host, &first_device).await;
+    pair_and_approve(&host, &second_device).await;
+    let session = local_session(&host).await;
+    release_ready_session(&host, &session).await;
+    host.script().delay_resume(Duration::from_secs(3));
+
+    let mut first = connect_lifecycle(&host, &first_device).await;
+    let mut second = connect_lifecycle(&host, &second_device).await;
+    let first_request = uuid_text();
+    let second_request = uuid_text();
+    first
+        .command(&first_request, "session.resume", Some(&session), json!({}))
+        .await;
+    // 让第一个请求确实进入后端恢复（迟到的第二个请求因此看见「建立中」）。
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    second
+        .command(&second_request, "session.resume", Some(&session), json!({}))
+        .await;
+    let accepted = tokio::time::timeout(
+        Duration::from_millis(1500),
+        second.expect_command_result(&second_request),
+    )
+    .await
+    .expect("合并的请求必须立即回 accepted，不得等待建立者");
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+
+    // 两个请求最终都拿到同一个会话的 completed。
+    for (client, request) in [(&mut first, &first_request), (&mut second, &second_request)] {
+        let terminal = loop {
+            let result = client.expect_command_result(request).await;
+            if result["status"] != json!("accepted") {
+                break result;
+            }
+        };
+        assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+        assert_eq!(
+            terminal["result"]["sessionId"],
+            json!(session),
+            "{terminal}"
+        );
+    }
+    assert_eq!(host.script().resume_calls(), 1);
+
+    host.stop().await;
+}
+
+/// 5.1/5.4：容量拒绝是可重试的 `session.capacity_exceeded`，且不写会话行/事件。
+#[tokio::test]
+async fn capacity_exhaustion_rejects_create_with_a_retryable_code() {
+    let host = HostNode::start_with_lifecycle(
+        "sync-life-capacity",
+        HOST,
+        acp_core::use_cases::LifecycleConfig::new(1_800_000, 1).expect("容量 1"),
+    )
+    .await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    // 第一条会话占满唯一名额（创建成功即 ready）。
+    let occupied = local_session(&host).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+    // 让唯一候选**受保护**（当前查看者）：容量满且没有安全候选时才是显式拒绝。
+    client.step("session.view（保护占满名额的会话）");
+    let view = declare_view(&mut client, Some(&occupied), 1).await;
+    assert_eq!(view["status"], json!("accepted"), "{view}");
+
+    let watermark = host.head().await;
+    let rows_before = session_row_count(&host).await;
+    let request = uuid_text();
+    client.step("session.create（容量已满）");
+    client
+        .command(&request, "session.create", None, create_payload(&host))
+        .await;
+    let refused = client.expect_command_result(&request).await;
+    assert_eq!(
+        refused["status"],
+        json!("rejected"),
+        "容量拒绝发生在受理之前：{refused}"
+    );
+    assert_eq!(
+        refused["error"]["code"],
+        json!("session.capacity_exceeded"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["error"]["retryable"],
+        json!(true),
+        "容量拒绝必须可重试：{refused}"
+    );
+    assert_eq!(
+        session_row_count(&host).await,
+        rows_before,
+        "被容量拒绝的创建不得写会话行"
+    );
+    let after = host.head().await;
+    assert_eq!(
+        after.global_sequence, watermark.global_sequence,
+        "被容量拒绝的创建不得写事件"
+    );
+
+    host.stop().await;
+}
+
+/// 5.4：满额但有**安全候选**时先回收再准入——创建成功，而不是直接 `session.capacity_exceeded`；
+/// 回收后同键重发仍回首次终态（容量满不得掩盖幂等结果）。
+#[tokio::test]
+async fn capacity_reclaims_an_unprotected_session_before_creating() {
+    let host = HostNode::start_with_lifecycle(
+        "sync-life-capacity-reclaim",
+        HOST,
+        acp_core::use_cases::LifecycleConfig::new(0, 1).expect("容量 1"),
+    )
+    .await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let occupied = local_session(&host).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.create（满额但有安全候选）");
+    client
+        .command(&request, "session.create", None, create_payload(&host))
+        .await;
+    assert_eq!(
+        client.expect_command_result(&request).await["status"],
+        json!("accepted"),
+        "回收后准入：先回 accepted"
+    );
+    let created = client.expect_command_result(&request).await;
+    assert_eq!(created["status"], json!("completed"), "{created}");
+    let terminal_event = created["terminalEventId"].clone();
+    let occupied_id = acp_core::model::SessionId::new(&occupied).expect("session id");
+    assert_eq!(
+        host.lifecycle()
+            .current_activity(&acp_core::model::Actor::LocalCli, occupied_id)
+            .await
+            .expect("activity"),
+        acp_core::model::LocalActivity::Idle,
+        "未受保护的旧会话必须被真实释放（交还名额）"
+    );
+
+    // 新会话已占满唯一名额；同键重发仍回首次终态（幂等先于容量）。
+    client.step("session.create（满额下的同键重发）");
+    client
+        .command(&request, "session.create", None, create_payload(&host))
+        .await;
+    let replay = client.expect_command_result(&request).await;
+    assert_eq!(replay["status"], json!("completed"), "{replay}");
+    assert_eq!(
+        replay["terminalEventId"], terminal_event,
+        "满额不得把已完成的重发误报成 capacity_exceeded"
+    );
+
+    host.stop().await;
+}
+
+/// 5.1/5.4：`session.resume` 在满额但有安全候选时同样先回收再建立（不需要新 requestId）。
+#[tokio::test]
+async fn capacity_reclaims_an_unprotected_session_before_resuming() {
+    let host = HostNode::start_with_lifecycle(
+        "sync-life-capacity-reclaim-resume",
+        HOST,
+        acp_core::use_cases::LifecycleConfig::new(0, 1).expect("容量 1"),
+    )
+    .await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let target = local_session(&host).await;
+    // 目标会话没有运行资源（释放），占用名额的是另一个未受保护的会话。
+    release_ready_session(&host, &target).await;
+    let occupied = local_session(&host).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.resume（满额但有安全候选）");
+    client
+        .command(&request, "session.resume", Some(&target), json!({}))
+        .await;
+    assert_eq!(
+        client.expect_command_result(&request).await["status"],
+        json!("accepted")
+    );
+    let resumed = client.expect_command_result(&request).await;
+    assert_eq!(resumed["status"], json!("completed"), "{resumed}");
+    assert_eq!(
+        resumed["result"]["session"]["localActivity"],
+        json!("active"),
+        "{resumed}"
+    );
+    assert_eq!(host.script().resume_calls(), 1);
+    let occupied_id = acp_core::model::SessionId::new(&occupied).expect("session id");
+    assert_eq!(
+        host.lifecycle()
+            .current_activity(&acp_core::model::Actor::LocalCli, occupied_id)
+            .await
+            .expect("activity"),
+        acp_core::model::LocalActivity::Idle,
+        "恢复的容量准入也必须先释放安全候选"
+    );
+
+    host.stop().await;
+}
+
+/// 5.4：后端建立失败要**交还**预占的名额（下一次创建因此仍能被准入）。
+#[tokio::test]
+async fn a_failed_create_returns_its_capacity_slot() {
+    let host = HostNode::start_with_lifecycle(
+        "sync-life-capacity-release",
+        HOST,
+        acp_core::use_cases::LifecycleConfig::new(1_800_000, 1).expect("容量 1"),
+    )
+    .await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    host.script()
+        .fail_create(acp_core::model::UnavailableKind::SessionNotEstablished);
+    let failed_request = uuid_text();
+    client.step("session.create（后端可证明失败）");
+    client
+        .command(
+            &failed_request,
+            "session.create",
+            None,
+            create_payload(&host),
+        )
+        .await;
+    assert_eq!(
+        client.expect_command_result(&failed_request).await["status"],
+        json!("accepted")
+    );
+    let failed = client.expect_command_result(&failed_request).await;
+    assert_eq!(failed["status"], json!("failed"), "{failed}");
+
+    // 名额已交还：第二次创建（同一条连接、新的 requestId）必须被准入并完成。
+    host.script().succeed_create();
+    let request = uuid_text();
+    client.step("session.create（失败后重试）");
+    client
+        .command(&request, "session.create", None, create_payload(&host))
+        .await;
+    assert_eq!(
+        client.expect_command_result(&request).await["status"],
+        json!("accepted")
+    );
+    let completed = client.expect_command_result(&request).await;
+    assert_eq!(
+        completed["status"],
+        json!("completed"),
+        "失败路径必须释放容量，否则重试会被误判为容量已满：{completed}"
+    );
+
+    host.stop().await;
+}
+
+/// 5.1：Agent 不支持恢复 → 终态 `failed` + `capability.unsupported_by_agent`（不是 schema 错误）。
+#[tokio::test]
+async fn an_agent_without_resume_capability_fails_the_resume_terminal() {
+    let host = HostNode::start("sync-life-resume-unsupported", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    release_ready_session(&host, &session).await;
+    host.script()
+        .fail_resume(acp_core::model::UnavailableKind::BackendUnsupported);
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.resume（Agent 不支持）");
+    client
+        .command(&request, "session.resume", Some(&session), json!({}))
+        .await;
+    assert_eq!(
+        client.expect_command_result(&request).await["status"],
+        json!("accepted")
+    );
+    let terminal = client.expect_command_result(&request).await;
+    assert_eq!(terminal["status"], json!("failed"), "{terminal}");
+    assert_eq!(
+        terminal["error"]["code"],
+        json!("capability.unsupported_by_agent"),
+        "{terminal}"
+    );
+    assert_eq!(terminal["error"]["retryable"], json!(false), "{terminal}");
+
+    host.stop().await;
+}
+
+/// A definite Agent refusal must not become uncertain or permanently reserve the lifecycle slot.
+#[tokio::test]
+async fn a_definite_resume_refusal_fails_and_allows_an_explicit_new_attempt() {
+    let host = HostNode::start("sync-life-resume-refused", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    release_ready_session(&host, &session).await;
+    host.script()
+        .fail_resume(acp_core::model::UnavailableKind::SessionNotEstablished);
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    for attempt in 1..=2 {
+        let request = uuid_text();
+        client.step("session.resume（明确拒绝，不得变成 uncertain）");
+        client
+            .command(&request, "session.resume", Some(&session), json!({}))
+            .await;
+        assert_eq!(
+            client.expect_command_result(&request).await["status"],
+            json!("accepted")
+        );
+        let terminal = client.expect_command_result(&request).await;
+        assert_eq!(terminal["status"], json!("failed"), "{terminal}");
+        assert_eq!(
+            terminal["error"]["code"],
+            json!("internal.unavailable"),
+            "{terminal}"
+        );
+        assert_eq!(
+            host.script().resume_calls(),
+            attempt,
+            "explicit retry must reach the backend"
+        );
+    }
+    host.stop().await;
+}
+
+/// 5.1：**受理之前**的失败（该会话没有持久化恢复数据）必须回 `rejected` + 分类错误码，不得借用
+/// `command.uncertain`（那会让客户端以为有一条已受理、待核实的命令），也不得调用后端。
+#[tokio::test]
+async fn a_resume_without_recovery_data_is_rejected_before_acceptance() {
+    let host = HostNode::start("sync-life-resume-no-recovery", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    // 清掉恢复所需的持久化列（`agent_session_id` / `workspace_cwd` 都为 NULL = 没有恢复数据）。
+    let mut connection = raw_connection(&host).await;
+    sqlx::query(
+        "UPDATE owned_session SET agent_session_id = NULL, workspace_cwd = NULL WHERE session_id = ?1",
+    )
+    .bind(&session)
+    .execute(&mut connection)
+    .await
+    .expect("清空恢复数据");
+    drop(connection);
+    release_ready_session(&host, &session).await;
+    let watermark = host.head().await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.resume（没有恢复数据）");
+    client
+        .command(&request, "session.resume", Some(&session), json!({}))
+        .await;
+    let rejected = client.expect_command_result(&request).await;
+    assert_eq!(rejected["status"], json!("rejected"), "{rejected}");
+    assert_eq!(
+        rejected["error"]["code"],
+        json!("capability.unsupported_by_agent"),
+        "{rejected}"
+    );
+    assert_eq!(
+        rejected["acceptedAt"],
+        Value::Null,
+        "rejected 是零副作用宣告，不得带受理时间：{rejected}"
+    );
+    assert_eq!(
+        rejected["terminalEventId"],
+        Value::Null,
+        "rejected 不写终态事件：{rejected}"
+    );
+    assert_eq!(
+        host.script().resume_calls(),
+        0,
+        "没有恢复数据时不得调用后端"
+    );
+    let after = host.head().await;
+    assert_eq!(
+        after.global_sequence, watermark.global_sequence,
+        "受理前的拒绝不得写事件"
+    );
+
+    host.stop().await;
+}
+
+/// 5.1：无法证明结果 → 终态 `command.uncertain`，且同 requestId 重放只回该终态、不重派后端。
+#[tokio::test]
+async fn an_unprovable_resume_is_uncertain_and_never_redispatched() {
+    let host = HostNode::start("sync-life-resume-uncertain", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    release_ready_session(&host, &session).await;
+    host.script()
+        .fail_resume(acp_core::model::UnavailableKind::IoError);
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.resume（后端 I/O 失败）");
+    client
+        .command(&request, "session.resume", Some(&session), json!({}))
+        .await;
+    assert_eq!(
+        client.expect_command_result(&request).await["status"],
+        json!("accepted")
+    );
+    let terminal = client.expect_command_result(&request).await;
+    assert_eq!(terminal["status"], json!("uncertain"), "{terminal}");
+    assert_eq!(
+        terminal["error"]["code"],
+        json!("command.uncertain"),
+        "{terminal}"
+    );
+
+    // 重放同一 requestId：`uncertain` 是终态，回原结果，绝不换号重派。
+    client.step("session.resume（uncertain 后重放）");
+    client
+        .command(&request, "session.resume", Some(&session), json!({}))
+        .await;
+    let replay = client.expect_command_result(&request).await;
+    assert_eq!(replay["status"], json!("uncertain"), "{replay}");
+    assert_eq!(
+        replay["terminalEventId"], terminal["terminalEventId"],
+        "重放不得产生新的终态事件：{replay}"
+    );
+    assert_eq!(
+        host.script().resume_calls(),
+        1,
+        "uncertain 不得自动换号重派后端"
+    );
+
+    host.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// session.view（5.2）
+// ---------------------------------------------------------------------------------------------
+
+/// 当前可回收的保留期候选（短保留期用例用它把「查看者保护」变成可观察事实）。
+async fn retention_candidates(host: &HostNode) -> Vec<String> {
+    let actor = acp_core::model::Actor::LocalCli;
+    host.lifecycle()
+        .retention_due(&actor, host.clock().now())
+        .await
+        .expect("保留候选")
+        .into_iter()
+        .map(|candidate| candidate.session.as_str().to_owned())
+        .collect()
+}
+
+/// 5.2：未协商 lifecycle 时 `session.view` 是 `protocol.type_unsupported`，且不建立任何查看者。
+#[tokio::test]
+async fn a_view_declaration_requires_the_negotiated_feature() {
+    let host = HostNode::start("sync-life-view-gate", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    client.step("session.view（未协商）");
+    client
+        .send(
+            "session.view",
+            json!({ "sessionId": session, "viewVersion": 1 }),
+        )
+        .await;
+    let refused = client.expect_error().await;
+    assert_eq!(
+        refused["body"]["code"],
+        json!("protocol.type_unsupported"),
+        "{refused}"
+    );
+
+    host.stop().await;
+}
+
+/// 5.2：版本单调、同版本不同选择/低版本 stale、租期为 30 秒且重复声明会续租。
+#[tokio::test]
+async fn view_versions_are_monotonic_and_renew_the_thirty_second_lease() {
+    let host = HostNode::start("sync-life-view-versions", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session_a = local_session(&host).await;
+    let session_b = local_session(&host).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let before = host.clock().now().epoch_millis();
+    let first = declare_view(&mut client, Some(session_a.as_str()), 1).await;
+    assert_eq!(first["status"], json!("accepted"), "{first}");
+    assert_eq!(first["sessionId"], json!(session_a));
+    assert_eq!(first["viewVersion"], json!(1));
+    let lease = first["leaseExpiresAt"].as_str().expect("accepted 带租期");
+    let lease_span = epoch_millis(lease) - before;
+    assert!(
+        (25_000..=35_000).contains(&lease_span),
+        "查看租期必须是 30 秒量级，实际 {lease_span} ms：{first}"
+    );
+
+    // 同版本、同载荷 = 幂等续租：租期前移。
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let renewed = declare_view(&mut client, Some(session_a.as_str()), 1).await;
+    assert_eq!(renewed["status"], json!("accepted"), "{renewed}");
+    let renewed_lease = renewed["leaseExpiresAt"].as_str().expect("续租带租期");
+    assert!(
+        epoch_millis(renewed_lease) > epoch_millis(lease),
+        "同版本同载荷必须刷新租期：{first} → {renewed}"
+    );
+
+    // 更高版本可以替换选择（单连接只保留一个查看者）。
+    let switched = declare_view(&mut client, Some(session_b.as_str()), 2).await;
+    assert_eq!(switched["status"], json!("accepted"), "{switched}");
+    assert_eq!(switched["sessionId"], json!(session_b));
+
+    // 同版本、不同选择：状态机已分叉 → stale，且不改动现有查看者。
+    let divergent = declare_view(&mut client, Some(session_a.as_str()), 2).await;
+    assert_eq!(divergent["status"], json!("stale"), "{divergent}");
+    assert_eq!(divergent["leaseExpiresAt"], Value::Null, "{divergent}");
+
+    // 低版本（旧页面的迟到续租）：stale，不复活旧选择。
+    let late = declare_view(&mut client, Some(session_a.as_str()), 1).await;
+    assert_eq!(late["status"], json!("stale"), "{late}");
+    assert_eq!(late["leaseExpiresAt"], Value::Null, "{late}");
+
+    host.stop().await;
+}
+
+/// 5.2：查看控制帧独立限流（120 帧/分钟/连接），超过后回可重试的 `resource.rate_limited`。
+#[tokio::test]
+async fn view_frames_are_rate_limited_per_connection() {
+    let host = HostNode::start("sync-life-view-rate", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    client.step("发满观察帧额度");
+    for version in 1..=120u64 {
+        let result = declare_view(&mut client, None, version).await;
+        assert_eq!(result["status"], json!("accepted"), "{result}");
+    }
+    client
+        .send(
+            "session.view",
+            json!({ "sessionId": null, "viewVersion": 121 }),
+        )
+        .await;
+    let limited = client.expect_error().await;
+    assert_eq!(
+        limited["body"]["code"],
+        json!("resource.rate_limited"),
+        "{limited}"
+    );
+    assert_eq!(limited["body"]["retryable"], json!(true), "{limited}");
+    assert!(
+        limited["body"]["details"]["retryAfterMs"].is_number(),
+        "限流必须给出 retryAfterMs：{limited}"
+    );
+
+    host.stop().await;
+}
+
+/// 5.2：单连接单查看者 —— 切换选择后旧会话立刻失去保护；断开连接会释放当前查看者。
+///
+/// 用**短保留期**（150 ms）把「谁还在保护该会话」变成可观察事实：`retention_due` 只返回
+/// 无查看者、无任务/交互且已 ready 的会话。
+#[tokio::test]
+async fn switching_and_disconnecting_release_viewer_protection() {
+    let host = HostNode::start_with_lifecycle(
+        "sync-life-view-protect",
+        HOST,
+        acp_core::use_cases::LifecycleConfig::new(150, 50).expect("短保留期"),
+    )
+    .await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session_a = local_session(&host).await;
+    let session_b = local_session(&host).await;
+
+    let mut client = connect_lifecycle(&host, &device).await;
+    let viewing_a = declare_view(&mut client, Some(session_a.as_str()), 1).await;
+    assert_eq!(viewing_a["status"], json!("accepted"), "{viewing_a}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let candidates = retention_candidates(&host).await;
+    assert!(
+        !candidates.contains(&session_a),
+        "有查看者的会话不得进入保留候选：{candidates:?}"
+    );
+    assert!(
+        candidates.contains(&session_b),
+        "无查看者的 ready 会话在保留期满后必须成为候选：{candidates:?}"
+    );
+
+    // 切到 B：A 失去查看者（单连接只保留一个），B 进入保护。
+    let switched = declare_view(&mut client, Some(session_b.as_str()), 2).await;
+    assert_eq!(switched["status"], json!("accepted"), "{switched}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let candidates = retention_candidates(&host).await;
+    assert!(
+        candidates.contains(&session_a),
+        "切换选择后旧会话不再有查看者：{candidates:?}"
+    );
+    assert!(
+        !candidates.contains(&session_b),
+        "当前选择必须仍在保护：{candidates:?}"
+    );
+
+    // 断开：查看声明随连接一起释放。
+    drop(client);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while host.active_sync_connections() > 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(host.active_sync_connections(), 0, "连接必须已关闭");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let candidates = retention_candidates(&host).await;
+    assert!(
+        candidates.contains(&session_b),
+        "断开后当前查看者必须被释放：{candidates:?}"
+    );
+
+    host.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 投影与事件边界（5.3）
+// ---------------------------------------------------------------------------------------------
+
+/// 5.3：`localActivity` 只出现在协商后的 owned 摘要上；`session.activity.changed` 只投给协商连接，
+/// 未协商连接的**重放**也必须跳过它而不是失败关闭。
+#[tokio::test]
+async fn local_activity_and_its_event_are_gated_by_negotiation() {
+    let host = HostNode::start("sync-life-activity", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    // Sync 同一设备只保留一条连接；两条对比连接必须各用自己的设备，否则后连的会顶掉前一条。
+    let other = Device::new();
+    pair_and_approve(&host, &other).await;
+    let session = local_session(&host).await;
+    release_ready_session(&host, &session).await;
+
+    let mut negotiated = connect_lifecycle_live(&host, &device).await;
+    let mut plain = connect_plain_live(&host, &other).await;
+
+    // ① 摘要投影：协商连接看到键，未协商连接的键**缺席**（不是 null）。
+    let negotiated_list = list_sessions(&mut negotiated).await;
+    let entry = negotiated_list["result"]["sessions"]
+        .as_array()
+        .expect("sessions")
+        .iter()
+        .find(|entry| entry["sessionId"] == json!(session))
+        .expect("会话摘要");
+    assert_eq!(
+        entry["localActivity"],
+        json!("idle"),
+        "释放后归约是 idle：{entry}"
+    );
+    let plain_list = list_sessions(&mut plain).await;
+    let entry = plain_list["result"]["sessions"]
+        .as_array()
+        .expect("sessions")
+        .iter()
+        .find(|entry| entry["sessionId"] == json!(session))
+        .expect("会话摘要");
+    assert!(
+        entry.get("localActivity").is_none(),
+        "未协商时键必须缺席（不是 null）：{entry}"
+    );
+
+    // ② 恢复 idle → active：只有协商连接收到 `session.activity.changed`。
+    let request = uuid_text();
+    negotiated.step("session.resume（触发活跃投影）");
+    negotiated
+        .command(&request, "session.resume", Some(&session), json!({}))
+        .await;
+    let exchange = exchange_until_terminal(&mut negotiated, &request).await;
+    assert_eq!(
+        exchange.terminal()["status"],
+        json!("completed"),
+        "{:?}",
+        exchange.results
+    );
+    let activity_event = exchange
+        .events
+        .iter()
+        .find(|event| event["eventType"] == json!("session.activity.changed"))
+        .unwrap_or_else(|| panic!("协商连接必须收到活跃投影事件，实际：{:?}", exchange.events));
+    assert_eq!(
+        activity_event["payload"]["view"]["session"]["localActivity"],
+        json!("active"),
+        "{activity_event}"
+    );
+    assert_eq!(
+        activity_event["sessionId"],
+        json!(session),
+        "{activity_event}"
+    );
+
+    // ③ 未协商的实时连接：同样的时间窗里不得收到该事件类型。
+    let unexpected = plain
+        .collect(Duration::from_millis(500))
+        .await
+        .into_iter()
+        .filter(|message| {
+            message["type"] == json!("event")
+                && message["body"]["eventType"] == json!("session.activity.changed")
+        })
+        .count();
+    assert_eq!(unexpected, 0, "未协商连接 MUST NOT 收到活跃投影事件");
+
+    // ④ 未协商连接的**重放**：事件已落库，subscribe 的重放腿必须跳过它并正常到达 caught_up
+    //    （失败关闭会让客户端因为一条它不该看见的事件而无法同步）。
+    let mut replaying = connect_with_features(&host, &device, &supported_features()).await;
+    replaying.step("未协商连接订阅（重放跨过活跃投影）");
+    replaying.subscribe(None).await;
+    let _reset = replaying.expect_type("sync.reset_required").await;
+    replaying.snapshot_request("initial_sync").await;
+    let _snapshot = replaying.expect_snapshot().await;
+    let caught_up = replaying.expect_type("sync.caught_up").await;
+    assert!(
+        caught_up["body"]["cursor"].is_object(),
+        "重放必须正常收口：{caught_up}"
+    );
+
+    host.stop().await;
+}
+
+/// 5.3：`session.read` 的 owned 摘要与 `session.list` 同一口径——协商了生命周期时带
+/// `localActivity`，未协商时键缺席；远程（imported）来源的摘要保持不带该键。
+#[tokio::test]
+async fn session_read_projects_local_activity_from_the_same_directory() {
+    let host = HostNode::start("sync-life-read-activity", HOST).await;
+    let device = Device::new();
+    let other = Device::new();
+    pair_and_approve(&host, &device).await;
+    pair_and_approve(&host, &other).await;
+    let session = local_session(&host).await;
+
+    let mut negotiated_features = supported_features();
+    negotiated_features.push(LIFECYCLE_FEATURE);
+    negotiated_features.push("resource.stateless-origin.v1");
+    let mut negotiated = connect_with_features(&host, &device, &negotiated_features).await;
+
+    let request = uuid_text();
+    negotiated.step("session.read（owned + lifecycle）");
+    negotiated
+        .command(
+            &request,
+            "session.read",
+            Some(&session),
+            json!({ "include": [] }),
+        )
+        .await;
+    let read = negotiated.expect_command_result(&request).await;
+    assert_eq!(read["status"], json!("completed"), "{read}");
+    assert_eq!(
+        read["result"]["sessionSummary"]["localActivity"],
+        json!("active"),
+        "owned 摘要必须来自同一代本机目录：{read}"
+    );
+
+    let mut plain_features = supported_features();
+    plain_features.push("resource.stateless-origin.v1");
+    let mut plain = connect_with_features(&host, &other, &plain_features).await;
+    let request = uuid_text();
+    plain.step("session.read（未协商 lifecycle）");
+    plain
+        .command(
+            &request,
+            "session.read",
+            Some(&session),
+            json!({ "include": [] }),
+        )
+        .await;
+    let read = plain.expect_command_result(&request).await;
+    assert_eq!(read["status"], json!("completed"), "{read}");
+    assert!(
+        read["result"]["sessionSummary"].is_object(),
+        "协商 stateless-origin 时必须带摘要：{read}"
+    );
+    assert!(
+        read["result"]["sessionSummary"]
+            .get("localActivity")
+            .is_none(),
+        "未协商时键必须缺席（不是 null）：{read}"
     );
 
     host.stop().await;

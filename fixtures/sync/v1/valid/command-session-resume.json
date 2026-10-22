@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "2f6b9d34-7c18-4a52-9e03-1b6d8f4c2a70",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "71",
+  "body": {
+    "requestId": "8b1e6f20-3a94-4d7c-b512-6f0a9c3e8d41",
+    "command": "session.resume",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "payload": {}
+  }
+}

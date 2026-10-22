@@ -39,6 +39,7 @@ import type {
   SyncRemoteUnavailable,
   SyncRemoteUnsubscribe,
   SyncResetRequired,
+  SyncSessionViewResult,
   SyncSnapshotBegin,
   SyncSnapshotChunk,
   SyncSnapshotEnd,
@@ -197,6 +198,13 @@ export type SyncClientEvent =
   | { readonly kind: "snapshot_verified"; readonly snapshot: VerifiedSnapshot }
   /** 一条首次见到的事件（已去重）。 */
   | { readonly kind: "event"; readonly event: EventMessage }
+  /**
+   * `session.view.result`（`core.local-session-lifecycle.v1`，§11.8）。
+   *
+   * 消费方必须按 `connectionId`、`viewVersion` 与当前选择共同判定：旧连接/旧版本的应答
+   * 不得恢复查看状态，也不得重新添加查看者。
+   */
+  | { readonly kind: "session_view_result"; readonly result: SyncSessionViewResult }
   /** 一条重复事件被丢弃（诊断用，**不**触发任何副作用）。 */
   | { readonly kind: "duplicate_dropped"; readonly eventId: Uuid }
   /**
@@ -298,9 +306,19 @@ export const SUPPORTED_FEATURES = [
   "core.typed-media.v1",
   "core.pending-interactions.v1",
   "core.remote-history.v1",
+  "core.local-session-lifecycle.v1",
   "resource.remote-origin.v1",
   "resource.stateless-origin.v1",
 ] as const;
+
+/**
+ * 本机会话生命周期（查看声明 + 本机激活 + `localActivity`）。
+ *
+ * 客户端**声明**它（`SUPPORTED_FEATURES` 的一部分），但只在服务端选中后才发送查看控制帧、
+ * 派发 `session.resume` 或把摘要里的 `localActivity` 当作主状态。未选中时明确显示
+ * 「自动激活不可用」，绝不靠「发了再看反应」探测。
+ */
+export const LOCAL_SESSION_LIFECYCLE_FEATURE = "core.local-session-lifecycle.v1";
 
 /**
  * 客户端必需 feature：ACK 与命令状态查询缺失则无法满足 R13/R14；
@@ -680,6 +698,14 @@ export class SyncConnection {
         return;
       case "command.result":
         this.#onCommandResult(message);
+        return;
+      case "session.view.result":
+        // 查看应答只交给消费方；本层不猜它是否仍对应最新选择（版本/连接代属于 feature 层）。
+        this.#onEvent({ kind: "session_view_result", result: message });
+        return;
+      case "session.view":
+        // 服务端不会向客户端发起查看声明：形状合法但角色是错的。
+        this.#onEvent({ kind: "rejected", reason: "unexpected_type", detail: message.type });
         return;
       case "error":
         this.#onProtocolError(message.body.code, message.body.message);
@@ -1287,6 +1313,26 @@ export class SyncConnection {
         sessionRef: input.sessionRef,
         cursor: input.cursor,
       },
+    });
+    return true;
+  }
+
+  /**
+   * 在当前连接上声明「正在查看哪个会话」（`session.view`，§11.8）。
+   *
+   * 只更新运行期的查看者与租约，**不**启动 Agent、不写事件；激活由 `session.resume` 负责。
+   * 未认证时**不发送**并返回 `false`：认证前的信封没有 `connectionId`，服务端也无从绑定设备。
+   */
+  sendSessionView(input: { readonly sessionId: Uuid | null; readonly viewVersion: number }): boolean {
+    if (this.#closed || this.#authenticated === null) return false;
+    if (!Number.isInteger(input.viewVersion) || input.viewVersion < 0) return false;
+    this.#send({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "session.view",
+      messageId: this.#random.uuid(),
+      connectionId: this.#requireConnectionId(),
+      connectionSequence: this.#nextOutboundSequence(),
+      body: { sessionId: input.sessionId, viewVersion: input.viewVersion },
     });
     return true;
   }

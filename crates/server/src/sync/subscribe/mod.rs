@@ -70,7 +70,7 @@ use acp_core::model::{
     PortError, RemoteSessionRef, Sequence,
 };
 use acp_core::ports::ReplayLimit;
-use acp_core::use_cases::UseCases;
+use acp_core::use_cases::{LocalSessionLifecycle, UseCases};
 use serde::de::DeserializeOwned;
 use sync_protocol::common::{Cursor, Nullable, RawObject, Uuid};
 use sync_protocol::envelope::{Envelope, MessageType};
@@ -90,6 +90,15 @@ use crate::sync::subscribe::cursor::{CursorDecision, CursorFault, SubmittedCurso
 /// 这是失败关闭的取值。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NegotiatedFeatures(Vec<String>);
+
+/// 该事件类型的视图是否需要在投递时补 `localActivity`（协商了本机生命周期的连接）。
+///
+/// 只有带 `session` 摘要的 `session.created`/`session.updated` 需要读一次本机归约；
+/// `session.activity.changed` **自带** core 写出的当时事实（补键只在缺席时发生，读一次会白费），
+/// 其它事件类型既没有摘要、也不该为每条事件触发一次 `activity_of`（N+1）。
+pub(crate) fn needs_local_activity(event_type: &str) -> bool {
+    matches!(event_type, "session.created" | "session.updated")
+}
 
 impl NegotiatedFeatures {
     /// 构造（调用方给出的是 `handshake::negotiate_features` 的排序去重结果）。
@@ -145,6 +154,8 @@ pub struct SubscribeRoute {
     broker: Arc<Broker>,
     registry: Arc<ConnectionRegistry>,
     owner: Arc<dyn OwnerReachability>,
+    /// 本机生命周期（`core.local-session-lifecycle.v1`）：只有组合根接线后才给出。
+    lifecycle: Option<Arc<LocalSessionLifecycle>>,
     states: Mutex<BTreeMap<String, ConnectionState>>,
 }
 
@@ -170,8 +181,15 @@ impl SubscribeRoute {
             broker,
             registry,
             owner,
+            lifecycle: None,
             states: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// 接线本机生命周期：快照/事件的 `localActivity` 投影与 `session.activity.changed` 门控依赖它。
+    pub fn with_lifecycle(mut self, lifecycle: Arc<LocalSessionLifecycle>) -> Self {
+        self.lifecycle = Some(lifecycle);
+        self
     }
 
     // -----------------------------------------------------------------------------------------
@@ -423,6 +441,7 @@ impl SubscribeRoute {
             actor: &actor,
             features: &features,
             reachable: &reachable,
+            lifecycle: self.lifecycle.as_ref(),
         };
         let plan = match snapshot::plan(&self.core, inputs, &head).await {
             Ok(plan) => plan,
@@ -681,7 +700,7 @@ impl SubscribeRoute {
                             );
                             continue;
                         }
-                        match crate::sync::event::frame(record, &self.features(session)) {
+                        match self.frame_event(session, &actor, record).await {
                             Ok(body) => {
                                 if let Err(fault) = session.send(MessageType::Event, &body) {
                                     debug!(
@@ -696,7 +715,22 @@ impl SubscribeRoute {
                                 }
                             }
                             Err(fault) => {
-                                // 组装不出合法帧（含身份字段形状不符）：显式失败关闭。
+                                // Sync 专有事件（`session.activity.changed`）对未协商连接**整条不投递**
+                                // （§9.8）：它不是「组装不出来」，跳过即可。若在这里失败关闭，未协商的
+                                // 客户端会因一条它不该看见的事件被拒绝重放。
+                                if fault
+                                    == crate::sync::subscribe::event::EventFrameFault::LifecycleNotNegotiated
+                                {
+                                    debug!(
+                                        event = "sync.event_skipped_lifecycle",
+                                        device_id = session.device_id().as_str(),
+                                        event_id = record.event.id.as_str(),
+                                        global_sequence = record.event.global_sequence.get(),
+                                        "the connection did not negotiate core.local-session-lifecycle.v1; the lifecycle event is not delivered"
+                                    );
+                                    continue;
+                                }
+                                // 其余组装失败（含身份字段形状不符）：显式失败关闭。
                                 // 这里绝不伪造 kind/deviceId、也不跳过该条假装没看见。
                                 warn!(
                                     event = "sync.event_unassemblable",
@@ -841,6 +875,34 @@ impl SubscribeRoute {
             .get(session.connection_id().as_str())
             .map(|state| state.features.clone())
             .unwrap_or_default()
+    }
+
+    /// 一条已提交事件的出站帧（重放与实时扇出共用的唯一入口）。
+    ///
+    /// `localActivity` 的取值在这里按**本连接**的协商结果补：未协商时整条
+    /// `session.activity.changed` 不投递（[`crate::sync::event::frame`] 失败关闭），其余事件的摘要键
+    /// 缺席。取不到本机事实时按 `None`（键缺席）而不是 `idle`——不猜测归约结果。
+    pub(crate) async fn frame_event(
+        &self,
+        session: &ConnectionHandle,
+        actor: &Actor,
+        record: &acp_core::ports::SyncEventRecord,
+    ) -> Result<sync_protocol::event::Body, crate::sync::subscribe::event::EventFrameFault> {
+        let features = self.features(session);
+        let negotiated = features.contains(crate::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE);
+        // `localActivity` 只需在**摘要**事件上补键：`session.activity.changed` 自带当时事实（core 写出的
+        // 值原样保留），其余事件类型没有 `session` 摘要或不需要本机归约。按 eventType 先门控，避免为
+        // 每条事件都做一次 `activity_of`（N+1 读取）。
+        let activity = match (self.lifecycle.as_ref(), record.event.session.as_ref()) {
+            (Some(lifecycle), Some(target))
+                if negotiated && needs_local_activity(record.event.event_type.as_str()) =>
+            {
+                crate::sync::local_lifecycle::activity_of(lifecycle, actor, target, true, true)
+                    .await
+            }
+            _ => None,
+        };
+        crate::sync::event::frame(record, &features, activity)
     }
 
     /// 闭合屏障：把「已发给对端的最高游标」记下来，实时扇出从此可以投这条连接。
@@ -1129,4 +1191,27 @@ fn error_body(
 /// 锁中毒时取回内层数据而不是 panic：订阅状态表在任何 panic 之后仍要能继续服务其它连接。
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::needs_local_activity;
+
+    /// 投递层的 `activity_of` 只为带会话摘要的两类事件发生：`session.activity.changed` 自带事实，
+    /// 其余事件类型不得触发一次本机归约读取（否则每条事件都是 N+1）。
+    #[test]
+    fn local_activity_lookup_is_gated_by_event_type() {
+        for event_type in ["session.created", "session.updated"] {
+            assert!(needs_local_activity(event_type), "{event_type}");
+        }
+        for event_type in [
+            "session.activity.changed",
+            "agent.message.delta",
+            "turn.started",
+            "file.changed",
+            "session.mode.changed",
+        ] {
+            assert!(!needs_local_activity(event_type), "{event_type}");
+        }
+    }
 }

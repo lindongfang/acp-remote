@@ -50,7 +50,12 @@ export type ConversationInputBlock =
   /** 已选附件还在上传。 */
   | "attachment_uploading"
   /** 附件/路径引用被能力或失败挡住。 */
-  | "attachment_unavailable";
+  | "attachment_unavailable"
+  /**
+   * 本机会话尚未恢复（恢复中或失败）。历史与草稿都保留，但不派发 prompt：
+   * 「活跃/空闲」标签不是发送依据，只有确认可用才能发。
+   */
+  | "session_not_ready";
 
 /** 提交的呈现（终态之前只能是待确认）。 */
 export type SubmissionPresentation =
@@ -139,9 +144,12 @@ function blockOf(input: {
   readonly turnInProgress: boolean;
   readonly attachmentsNegotiated: boolean;
   readonly attachments: AttachmentBatchModel;
+  /** 本机会话尚未恢复的原因；`null` = 可以发送（旧合同/imported/已恢复）。 */
+  readonly sessionNotReadyReason: string | null;
 }): ConversationInputBlock | null {
   if (!input.connectionOnline) return "connection_offline";
   if (!input.originOnline) return "source_offline";
+  if (input.sessionNotReadyReason !== null) return "session_not_ready";
   if (input.awaitingTerminal) return "submission_in_flight";
   if (input.turnInProgress) return "turn_in_progress";
   // 已选了附件、却没协商到附件传输：整条不能发（不得静默删掉附件只发文本）。
@@ -154,7 +162,11 @@ function blockOf(input: {
 }
 
 /** 原因的界面说明（每条都描述**当前事实**，不引用会话主状态）。 */
-function blockText(block: ConversationInputBlock, attachments: AttachmentBatchModel): string | null {
+function blockText(
+  block: ConversationInputBlock,
+  attachments: AttachmentBatchModel,
+  sessionNotReadyReason: string | null,
+): string | null {
   switch (block) {
     case "connection_offline":
       // 设备离线已经由连接问题弹层完整说明；输入区不再重复一句「连接不可用」。
@@ -171,6 +183,8 @@ function blockText(block: ConversationInputBlock, attachments: AttachmentBatchMo
       return "附件正在上传：全部封存后才能提交，Agent 尚未收到任何内容";
     case "attachment_unavailable":
       return attachments.blockedReason ?? "有附件或路径引用不能提交";
+    case "session_not_ready":
+      return sessionNotReadyReason ?? "会话尚未恢复，暂时不能发送";
   }
 }
 
@@ -202,9 +216,17 @@ export function buildConversationInputModel(input: {
   readonly attachments?: AttachmentBatchModel;
   /** 已添加的工作目录路径引用。 */
   readonly pathRefs?: readonly string[];
+  /**
+   * 本机会话尚未恢复的明确原因；`null`/缺席 = 可以发送。
+   *
+   * 只有协商了本机生命周期、且会话尚未确认 `ready` 时才由调用点给出；imported 会话与旧合同
+   * 没有这一维（保持原判定）。
+   */
+  readonly sessionNotReadyReason?: string | null;
 }): ConversationInputModel {
   const submission = submissionOf(input.promptCommand);
   const attachments = input.attachments ?? EMPTY_ATTACHMENTS;
+  const sessionNotReadyReason = input.sessionNotReadyReason ?? null;
   const blockedBy = blockOf({
     connectionOnline: input.connectionOnline,
     originOnline: input.originOnline ?? true,
@@ -212,6 +234,7 @@ export function buildConversationInputModel(input: {
     turnInProgress: input.turnInProgress,
     attachmentsNegotiated: input.attachmentsNegotiated === true,
     attachments,
+    sessionNotReadyReason,
   });
   const state: ConversationInputState =
     blockedBy === null
@@ -226,7 +249,7 @@ export function buildConversationInputModel(input: {
     draft: input.draft ?? "",
     // 提交只发生在 `editable`：执行中与不可用都不派发命令。
     canSubmit: blockedBy === null,
-    disabledReason: blockedBy === null ? null : blockText(blockedBy, attachments),
+    disabledReason: blockedBy === null ? null : blockText(blockedBy, attachments, sessionNotReadyReason),
     attachmentsSupported: input.attachmentsNegotiated === true,
     attachmentNotice: attachmentNoticeOf(input.attachmentsNegotiated === true, attachments),
     attachments,

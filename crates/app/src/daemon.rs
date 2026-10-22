@@ -40,7 +40,7 @@ use acp_core::broker::Broker;
 use acp_core::model::{
     Actor, CommittedEvent, NodeId, PeerPublicKey, PortError, SessionId, SessionState, Timestamp,
 };
-use acp_core::ports::{AttachmentStore as _, SessionFiles, SessionQuery};
+use acp_core::ports::{AttachmentStore as _, Clock, SessionFiles, SessionQuery};
 use acp_core::use_cases::UseCases;
 use identity_auth::{Authority, EntropySource};
 use identity_keystore::OsEntropy;
@@ -143,6 +143,9 @@ pub enum NetworkError {
     /// 「根路径 404」，把构建期缺陷伪装成一个运行期现象（`design.md` D2 的失败关闭）。
     #[error("发布构建缺少前端产物：{0}")]
     MissingFrontendBuild(#[source] MissingFrontendBuildError),
+    /// 启动收敛失败：不开放入站（失败关闭，不把旧资源当已恢复）。
+    #[error("本机会话生命周期启动收敛失败")]
+    Lifecycle(#[source] acp_core::model::PortError),
 }
 
 impl NetworkError {
@@ -194,6 +197,7 @@ impl NetworkError {
             // 逐字给出 `MissingFrontendBuild` 的说明：它写明了下一步（先在 `clients/app` 构建前端），
             // 把它归约成一句「分类」就等于让运维拿到一个查不到动作的错误码。
             Self::MissingFrontendBuild(error) => error.to_string(),
+            Self::Lifecycle(_) => "the local session lifecycle cannot converge".to_owned(),
         }
     }
 }
@@ -754,34 +758,6 @@ fn spawn_maintenance(
     });
 }
 
-/// 会话空闲回收：`sessions.idle_timeout_ms` 非零时按 `agent-host` 的固定粒度扫描（规则本身由配置
-/// 决定）。与其它周期任务共享取消路径，关闭序列里先停它再停 Agent。
-fn spawn_agent_idle_sweep(
-    tasks: &mut OwnedTasks,
-    composition: &Composition,
-    shutdown: Arc<ShutdownSignal>,
-) {
-    let Some(idle_timeout) = composition.config().sessions.idle_timeout else {
-        return;
-    };
-    let cancel = Arc::new(Notify::new());
-    let task_cancel = Arc::clone(&cancel);
-    let host = Arc::clone(composition.host());
-    tasks.spawn("agent_idle_sweep", cancel, async move {
-        let mut ticker = tokio::time::interval(agent_host::limits::IDLE_SWEEP_INTERVAL);
-        loop {
-            tokio::select! {
-                _ = task_cancel.notified() => break,
-                _ = ticker.tick() => {}
-            }
-            if shutdown.is_requested() {
-                break;
-            }
-            host.sweep_idle(idle_timeout).await;
-        }
-    });
-}
-
 /// 一轮清理：`prune` + 配对内存/持久过期 + `sweep_orphans`（各自失败只记日志，不中断后续）。
 async fn maintenance_tick(
     core: &Arc<acp_core::use_cases::UseCases>,
@@ -1281,15 +1257,57 @@ pub fn register_sync_paths(
     remote: Option<server::sync::remote::RemotePorts>,
     event_queue: Option<tokio::sync::mpsc::Receiver<CommittedEvent>>,
 ) -> Result<SyncIngress, NetworkError> {
+    register_sync_paths_with_lifecycle(
+        listener,
+        core,
+        authority,
+        broker,
+        config,
+        public_origin,
+        owner,
+        files,
+        remote,
+        event_queue,
+        None,
+    )
+}
+
+/// 同 [`register_sync_paths`]，但把本机生命周期接线一并交给命令面/订阅面/查看控制帧。
+///
+/// `lifecycle` 是 `(LocalSessionLifecycle, Clock)`：查看租约必须与服务端时钟同源。`None` = 本组合根
+/// 没有装配本机生命周期（受控路径测试），此时 `core.local-session-lifecycle.v1` 不宣告，旧 peer 语义
+/// 完整保留。
+#[allow(clippy::too_many_arguments)] // 接线参数各自是独立持有者，收进结构体只会把装配顺序藏起来
+pub fn register_sync_paths_with_lifecycle(
+    listener: &mut NetListener,
+    core: &Arc<UseCases>,
+    authority: &Arc<Authority>,
+    broker: &Arc<Broker>,
+    config: &SyncConfig,
+    public_origin: Option<String>,
+    owner: Arc<dyn OwnerReachability>,
+    files: Arc<dyn SessionFiles>,
+    remote: Option<server::sync::remote::RemotePorts>,
+    event_queue: Option<tokio::sync::mpsc::Receiver<CommittedEvent>>,
+    lifecycle: Option<(
+        Arc<acp_core::use_cases::LocalSessionLifecycle>,
+        Arc<dyn Clock>,
+    )>,
+) -> Result<SyncIngress, NetworkError> {
     let registry = SyncConnectionRegistry::new();
+    let lifecycle_visible = lifecycle.is_some();
     // 认证后消息路由：订阅面（`sync.subscribe`/`sync.snapshot_request`/`sync.ack`）与它的事件投递腿
     // （增量重放 + 实时扇出，见 `server::sync::subscribe` 的模块文档）。
-    let subscribe = Arc::new(SubscribeRoute::new(
+    let mut subscribe = SubscribeRoute::new(
         Arc::clone(core),
         Arc::clone(broker),
         Arc::clone(&registry),
         Arc::clone(&owner),
-    ));
+    );
+    if let Some((lifecycle, _)) = lifecycle.as_ref() {
+        subscribe = subscribe.with_lifecycle(Arc::clone(lifecycle));
+    }
+    let subscribe = Arc::new(subscribe);
     // 命令面（`command`）：`SyncConn` 只有一个路由槽，因此两者由 `SyncRoutes` 按序组合（订阅面在前）；
     // `on_authenticated` 由组合件转发给两者，本次协商出的 feature 因此同时到达订阅面与命令面的门控。
     let command = Arc::new(SyncCommandRoute::new(
@@ -1299,11 +1317,21 @@ pub fn register_sync_paths(
         Arc::clone(&registry),
         owner,
         files,
+        lifecycle
+            .as_ref()
+            .map(|(lifecycle, _)| Arc::clone(lifecycle)),
     ));
     let mut parts: Vec<Arc<dyn SyncMessageRoute>> = vec![
         Arc::clone(&subscribe) as Arc<dyn SyncMessageRoute>,
         Arc::clone(&command) as Arc<dyn SyncMessageRoute>,
     ];
+    if let Some((lifecycle, clock)) = lifecycle {
+        parts.push(Arc::new(server::sync::local_lifecycle::ViewRoute::new(
+            Arc::clone(core),
+            lifecycle,
+            clock,
+        )) as Arc<dyn SyncMessageRoute>);
+    }
     if let Some(ports) = remote {
         parts.push(Arc::new(server::sync::remote::RemoteRoute::new(
             Arc::clone(&registry),
@@ -1324,11 +1352,17 @@ pub fn register_sync_paths(
         }));
     };
     let attachment_service = SyncAttachmentService::from_core(core);
-    let supported = if attachment_service.is_some() {
+    let mut supported = if attachment_service.is_some() {
         server::sync::conn::feature_list()
     } else {
         server::sync::conn::feature_list_without(server::sync::attachments::ATTACHMENT_FEATURE)
     };
+    if !lifecycle_visible {
+        // 没接线就不宣告：能力协商不得虚报（`AGENTS.md` §4）。
+        supported.retain(|feature| {
+            feature.as_str() != server::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE
+        });
+    }
     let conn = Arc::new(
         SyncConn::new(
             Arc::clone(core),
@@ -1450,6 +1484,13 @@ impl NetIngress {
         event_queue: mpsc::Receiver<CommittedEvent>,
         sync_events: Option<mpsc::Receiver<CommittedEvent>>,
     ) -> Result<Self, NetworkError> {
+        // 启动收敛先于任何入站开放（`CORE_PORTS_AND_STORAGE.md` §6 第 23 条）：不把旧事件里的
+        // `active` 当成资源仍存活，也不在收敛完成前接受查询/订阅。
+        composition
+            .lifecycle()
+            .converge_on_startup()
+            .await
+            .map_err(NetworkError::Lifecycle)?;
         let mut listener = NetListener::bind(net_config(composition.config()))
             .await
             .map_err(NetworkError::Listener)?;
@@ -1477,7 +1518,7 @@ impl NetIngress {
             inbound: NodeLinkReachability::new(Arc::clone(ingress.registry())),
             access: composition.access().cloned(),
         });
-        let sync = register_sync_paths(
+        let sync = register_sync_paths_with_lifecycle(
             &mut listener,
             &core,
             &authority,
@@ -1494,6 +1535,10 @@ impl NetIngress {
                 }
             }),
             sync_events,
+            Some((
+                Arc::clone(composition.lifecycle()),
+                Arc::clone(composition.clock()) as Arc<dyn Clock>,
+            )),
         )?;
         // 静态面（`design.md` D1/D2/D3）：第三类端点，注册在**全部协议端点之后**（`tasks.md` 3.1 的装配
         // 要求）。注意「协议端点优先」**不**由这个顺序保证，而是由 `server` 侧的结构保证：协议端点是精确
@@ -1561,6 +1606,25 @@ impl NetIngress {
         let sync_registry = Arc::clone(sync.registry());
         // Sync 命令面的终态观察者：mutation 的 `accepted` 之后，终态由它轮询持久记录后推回提交方。
         let sync_command = Arc::clone(sync.command());
+        // 本机会话生命周期的周期回收（保留期到期后逐会话释放；关闭信号即取消，无 detached task）。
+        tasks.push((
+            "session_lifecycle_reclaim",
+            tokio::spawn({
+                let lifecycle = Arc::clone(composition.lifecycle());
+                let clock = Arc::clone(composition.clock());
+                let signal = signal.clone();
+                async move {
+                    server::sync::local_lifecycle::reclaim_loop(
+                        lifecycle,
+                        clock,
+                        acp_core::model::Actor::LocalCli,
+                        std::time::Duration::from_secs(60),
+                        signal,
+                    )
+                    .await
+                }
+            }),
+        ));
         tasks.push((
             "sync_commands",
             tokio::spawn({
@@ -1892,7 +1956,8 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
 
     let mut tasks = OwnedTasks::new();
     spawn_maintenance(&mut tasks, &composition, Arc::clone(&shutdown));
-    spawn_agent_idle_sweep(&mut tasks, &composition, Arc::clone(&shutdown));
+    // 旧的进程级 idle sweep 已停用：它按 ACP 活动判定、看不到查看者租约，会杀受保护会话。保留期与
+    // 逐会话释放由 `LocalSessionLifecycle` 的 reclaim loop 负责（租约/任务/交互保护都在 core）。
     // 合并窗口：按 `storage.flush_interval_ms` 驱动 broker（`Broker` 与 `UseCases` 内是同一实例）。
     let merge_window = Arc::new(BrokerMergeWindow::new(
         Arc::clone(composition.use_cases()),

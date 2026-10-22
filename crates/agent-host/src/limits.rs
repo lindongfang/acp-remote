@@ -22,6 +22,12 @@ pub const TURN_TIMEOUT: Option<Duration> = None;
 /// 关闭 grace（友好终止 → 强杀）。必须小于 `daemon.shutdown_grace_ms`（10 s）。
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
+/// 等待 Agent ack 单会话 `session/close` 的上限。
+///
+/// 与关闭 grace 同值：single-session 释放必须**有界**，超时即按「结果不确定」返回并保留真实资源
+/// 占用（不得只置本地关闭位）。这里复用 `SECURITY_DESIGN.md` §12.2 已登记的 5 s，不发明新的产品数值。
+pub const SESSION_CLOSE_TIMEOUT: Duration = SHUTDOWN_GRACE;
+
 /// 单条 ACP 消息（stdout 分帧）的解析上限。
 ///
 /// 与 `acp-protocol::limits::MAX_MESSAGE_BYTES` 和 Sync 的 `maxMessageBytes` 同值，避免同一条消息在两跳

@@ -44,12 +44,15 @@ import type {
   SyncRemoteUnavailable,
   SyncRemoteUnsubscribe,
   SyncResetRequired,
+  SyncSessionView,
+  SyncSessionViewResult,
   SyncSnapshotBegin,
   SyncSnapshotChunk,
   SyncSnapshotEnd,
   SyncSubscribe,
   SyncWireMessage,
 } from "../protocol";
+import { isLocalActivity } from "../protocol";
 
 /** 解码失败的原因分类（供上层映射到连接状态机与诊断）。 */
 export type WireRejectReason =
@@ -106,6 +109,9 @@ const POST_AUTH_TYPES: Record<string, true> = {
   "sync.snapshot_chunk": true,
   "sync.snapshot_end": true,
   "sync.ack": true,
+  // `core.local-session-lifecycle.v1` 的查看控制帧（§11.8）：只在已认证连接上合法。
+  "session.view": true,
+  "session.view.result": true,
   // `resource.stateless-origin.v1` 的远程来源流（§9.7）：九条消息都只在认证后出现，信封与其余
   // post-auth 帧逐字相同（`$defs.postAuthBase`）。
   "sync.remote_subscribe": true,
@@ -159,7 +165,7 @@ const REMOTE_SOURCE_STATES: Record<string, true> = {
 /** `$defs.remoteEvent` 的 `event.eventType`：`^[a-z0-9_.-]{1,128}$`。 */
 const REMOTE_EVENT_TYPE_PATTERN = /^[a-z0-9_.-]{1,128}$/;
 
-/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，19 条）。 */
+/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，20 条）。 */
 const COMMAND_NAMES: Record<string, true> = {
   "session.list": true,
   "session.read": true,
@@ -176,6 +182,7 @@ const COMMAND_NAMES: Record<string, true> = {
   "session.config.set": true,
   "permission.resolve": true,
   "session.create": true,
+  "session.resume": true,
   "session.files.list": true,
   "session.files.read": true,
   "session.git.status": true,
@@ -388,6 +395,10 @@ function decodeByType(parsed: JsonObject, type: string, body: unknown): WireDeco
       return decodeSnapshotEnd(parsed, body);
     case "sync.ack":
       return decodeAck(parsed, body);
+    case "session.view":
+      return decodeSessionView(parsed, body);
+    case "session.view.result":
+      return decodeSessionViewResult(parsed, body);
     case "sync.remote_subscribe":
       return decodeRemoteSubscribe(parsed, body);
     case "sync.remote_event":
@@ -521,6 +532,11 @@ function decodeSnapshotChunk(parsed: JsonObject, body: unknown): WireDecodeResul
       if (resource === "agents" && !hasKeys(item, ["agentId", "displayName", "default"])) {
         return reject("field_type", "agents 元素缺 agentId/displayName/default");
       }
+      // `localActivity` 是可选键，但出现在摘要里就必须是封闭词表之一；未知取值（例如旧客户端
+      // 不认识的未来状态）按协议错误拒收，而不是当成某个「看起来合理」的状态呈现。
+      if (resource === "sessions" && "localActivity" in item && !isLocalActivity(item["localActivity"])) {
+        return reject("field_type", "sessions 元素的 localActivity 不在 idle/active/pending 内");
+      }
     }
     const normalized = items.map((item) => {
       if (!isObject(item)) return item;
@@ -559,6 +575,72 @@ function decodeAck(parsed: JsonObject, body: unknown): WireDecodeResult {
     if (!hasKeys(inner, ["cursor"])) return reject("missing_field", "ack 缺 cursor");
     if (!isCursor(inner["cursor"])) return reject("field_type", "ack 的 cursor 形状非法");
     return { ok: true, message: message as SyncAck };
+  });
+}
+
+/** `$defs.viewVersion`：0..=2^53−1 的整数（schema 的 `maximum`）。 */
+const MAX_VIEW_VERSION = 2 ** 53 - 1;
+
+function isViewVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_VIEW_VERSION;
+}
+
+/** 只允许封闭对象的**恰好这些键**（`additionalProperties: false` 的帧在这里硬判）。 */
+function hasExactKeys(value: JsonObject, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => key in value);
+}
+
+/**
+ * `session.view`（§11.8）：body 是 closed object，`sessionId` 为 UUID 或 `null`。
+ *
+ * 服务端不会向客户端下发这一帧；解码只用于让「角色搞错」在连接层变成明确的拒绝，而不是
+ * 一个被静默丢弃的未知类型。
+ */
+function decodeSessionView(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    if (!hasExactKeys(inner, ["sessionId", "viewVersion"])) {
+      return reject("field_type", "session.view 只允许 sessionId/viewVersion 两个键");
+    }
+    const sessionId = inner["sessionId"];
+    if (sessionId !== null && !isUuid(sessionId)) return reject("field_type", "session.view.sessionId 形状非法");
+    if (!isViewVersion(inner["viewVersion"])) {
+      return reject("field_type", "session.view.viewVersion 不是 0..=2^53-1 的整数");
+    }
+    return { ok: true, message: message as SyncSessionView };
+  });
+}
+
+/**
+ * `session.view.result`（§11.8）：`accepted` 必须带未来时刻，`stale` 必须把租约置 `null`。
+ *
+ * 两条约束在这里硬判：客户端会把 `leaseExpiresAt` 用于诊断与「声明已生效」的呈现，接受一个
+ * 缺时刻的 `accepted` 就等于把不合法应答当成成功。
+ */
+function decodeSessionViewResult(parsed: JsonObject, body: unknown): WireDecodeResult {
+  return withBody(parsed, body, (message, inner) => {
+    const keys = ["sessionId", "viewVersion", "status", "leaseExpiresAt"] as const;
+    if (!hasExactKeys(inner, keys)) {
+      return reject("field_type", `session.view.result 只允许 ${keys.join(",")}`);
+    }
+    const sessionId = inner["sessionId"];
+    if (sessionId !== null && !isUuid(sessionId)) {
+      return reject("field_type", "session.view.result.sessionId 形状非法");
+    }
+    if (!isViewVersion(inner["viewVersion"])) {
+      return reject("field_type", "session.view.result.viewVersion 不是 0..=2^53-1 的整数");
+    }
+    const status = inner["status"];
+    if (status !== "accepted" && status !== "stale") {
+      return reject("field_type", "session.view.result.status 不在 accepted/stale 内");
+    }
+    const lease = inner["leaseExpiresAt"];
+    if (status === "accepted") {
+      if (!isTimestamp(lease)) return reject("field_type", "accepted 的 leaseExpiresAt 必须是 timestamp");
+    } else if (lease !== null) {
+      return reject("field_type", "stale 的 leaseExpiresAt 必须为 null");
+    }
+    return { ok: true, message: message as SyncSessionViewResult };
   });
 }
 
@@ -787,6 +869,11 @@ function decodeEvent(parsed: JsonObject, body: unknown): WireDecodeResult {
     const payload = inner["payload"];
     if (!isObject(payload) || !hasKeys(payload, ["view"]) || !isObject(payload["view"])) {
       return reject("field_type", "payload.view 必须是对象");
+    }
+    // 摘要类事件的 `view.session.localActivity` 是可选的封闭词表：未知值不得被当成某个状态。
+    const summary = payload["view"]["session"];
+    if (isObject(summary) && "localActivity" in summary && !isLocalActivity(summary["localActivity"])) {
+      return reject("field_type", "event.view.session.localActivity 不在 idle/active/pending 内");
     }
     return { ok: true, message: message as EventMessage };
   });

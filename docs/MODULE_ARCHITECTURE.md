@@ -214,6 +214,7 @@ Event / EventType / EventKind / EventOrigin / EventPayload / AcpRaw / Persistenc
 AgentRef / AgentDescriptor / CapabilitySet / ConfigOptionId / ConfigOption / ConfigValue / ModeRef / ModeId
 AgentSessionId / ResumeSessionRequest / SessionRecoveryRecord / WorkspaceRef
 Sequence / Version / AttachmentGeneration / ServerEpoch / OriginEpoch / GlobalCursor / OriginCursor / LocalCursor / Timestamp / Digest
+LocalActivity / ResourceGeneration / ViewLease
 Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord / AuditRecord / AuditAction
 ```
 
@@ -273,6 +274,11 @@ DirectoryCreator         既有父目录下创建一层目录，独立于只读�
 DirectoryBrowser         只读的逐层目录列举（`workspace.browse` 的根列表与一层子目录，只返回名称与绝对路径）
 SessionFiles             会话工作目录内的只读文件枚举/分块读取（连接绑定内存快照）与 Git status/diff；文件系统与 Git 子进程只在出站适配器
 Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交事务内分配）
+SessionActivation        会话激活/恢复的合并入口（计划，CORE §5.10）：先查稳定 requestId，再判 ready 复用或启动恢复；同会话并发共享一次建立
+ViewRegistry             连接期查看声明、续租与释放（计划，CORE §5.10）：每连接一个查看者，租约不持久化
+CapacityAdmission        创建/恢复共用名额准入与安全候选选择（计划，CORE §5.10）；逐会话释放确认在 `SessionRelease`
+SessionRelease           逐会话释放确认（计划，CORE §5.10）：只有适配器确认真实释放后才交还名额；失败/不确定继续占位并保持 `Active`
+LifecycleQuery           当前 owned 生命周期只读投影（计划，CORE §5.10）：`localActivity` 与快照读同一代目录
 ```
 
 签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。独立 `workspace.mkdir` 由 core 拥有持久受理、一次性执行凭证、创建和无会话终态顺序；具体端口与事务见该文档 §5.2/§5.6，server 不执行文件系统写入。
@@ -309,6 +315,14 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 - **附件**：分块、封存、清单与临时清理由 `AttachmentTransferStore`（已实现）拥有；`core` 不接触文件系统或网络，字节由出站适配器提供。`prompt` 接受前复核清单封存、身份、会话、主体与能力；上传成功不等于命令受理。
 - **有效交互**：读取当前有效请求与 `requestVersion`、首个有效答案的原子胜出由 `InteractionAuthority`（已实现）拥有；失败校验不消费请求，重启后上游丢失的交互不可复活。core 不读 feature 表，协商门控仍在 `server`（§4.9）。
 
+`[决定]`（2026-10-22，`session-activation-lifecycle` WP1 合同；实现待 WP2–WP5）**本机生命周期由 core 拥有决定、适配器只报告事实**：
+
+- **core**：`LocalActivity` 的归约（有效交互 → `Pending`；未结束任务/ready 资源/回收未确认 → `Active`；否则 `Idle`）、资源代与查看租约的目录、激活/合并、容量准入与安全候选、逐会话释放确认与当前生命周期查询都在 core 的纯类型/用例面（CORE §3.3/§5.10/§6 第 23 条）。`LocalSessionLifecycle` 用例面**恰好由 §5.10 的五个端口组合而成**——`SessionActivation`（`activate`/`settle`，激活与合并）、`ViewRegistry`（`declare`/`renew`/`release`/`viewers`，查看声明与租约）、`CapacityAdmission`（`reserve`/`release`/`reclaim_candidate`，名额准入与安全候选）、`SessionRelease`（`release_session`，逐会话释放确认）、`LifecycleQuery`（`local_activity`/`snapshot`，只读投影）——方法名与签名以 §5.10 为唯一权威，不另立一套命名。core 不依赖 Tokio、文件系统、进程、wire DTO；时间由 `Clock` 端口注入。`localActivity` 是投影，**不**改变 `SessionState`、不新增任务状态、不写持久列。
+- **agent-host**：只提供「这一会话的运行资源是否真的建立/释放」的事实与有语义的单会话释放（真实 ACP `session/close`）；只有成功才能确认释放名额，关闭超时/拒绝/结果不确定仍占位（§4.5）。
+- **server::sync**：每条连接声明/续租/释放查看者，认证撤销、断开与被替换时立即通知 core 清除；feature 协商、`session.resume` 与 `session.view` 的门控、`localActivity` 的投影（未协商时去掉该键）都在适配层。Node Link 适配器不转发 `localActivity` 或 `session.activity.changed`。
+- **app**：只按配置调度保留期扫描、持有任务所有权与关闭顺序，并按 core 返回的候选驱动回收；**不做**回收业务判断，也不自行决定「哪些会话受保护」。
+- **不持久化**：查看者、租约与资源代不进数据库（§4.7/§7 无新表），重启后由启动收敛重建真实状态，不信任旧事件里的 `Active`。
+
 ### 4.2 `acp-protocol`
 
 唯一职责：描述并编解码 ACP wire protocol。
@@ -335,6 +349,7 @@ Pairing DTO（设备短二维码 q2 编解码、claim/status、配对码 lookup�
 ProtocolVersion / Feature negotiation
 Heartbeat（control.ping / control.pong）
 Connection error lifecycle（error body 与 50 个错误码，认证前后两种信封形状）
+ViewControl（计划，`core.local-session-lifecycle.v1`）：`session.view` / `session.view.result` 两个控制帧（`sync.schema.json`），查看版本、租期结果与 `stale` 语义见 SYNC §11.8；不属于业务命令，也不产生命令终态
 AttachmentTransfer（计划，`attachment.schema.json`）：独立已认证附件连接的 13 个帧与固定预算；不属于业务 `message.schema.json` 联合入口
 ```
 
@@ -383,6 +398,7 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 - **出站路径参数的形式**：发给 Agent 的 ACP 请求里的工作目录参数（今天的落点是 `session/new` 与 `session/resume` 的 `cwd`）**不带 Windows verbatim 前缀**：`\\?\` 形式去掉该前缀，`\\?\UNC\server\share` 还原为 `\\server\share`，非 Windows 平台逐字节直通。理由是把 `cwd` 当路径片段用（拼目录名、做前缀判断）的 Agent 会被 `?` 这类非法文件名字符打坏。该规则在仓库里只有一处实现——复用 `core` 的 `strip_verbatim`（`acp_core::strip_verbatim`），**不得**在 `agent-host` 内另写一份前缀判断；转换**只**作用于发往 Agent 的参数，不改写持久化取值、core 的解析结果与会话行中的目录列（代价：>260 字符的目录在个别 Agent 侧可能打不开，是如实接受的已知代价）。行为权威是 `specs/local-agent-host` 的增量（本变更 `openspec/changes/acp-cwd-path-form/specs/local-agent-host/spec.md` 的「出站 ACP 路径参数的形式」与「进程不在时的会话恢复入口与执行」）。
 - **失败路径**：启动失败、超时、取消、异常退出与乱序响应都必须有明确处理与测试（`AGENTS.md` §8 与 `docs/MODULE_ARCHITECTURE.md` §11）；正常运行路径不得 `unwrap()`/`expect()`；异步任务必须有所有者、取消路径与关闭顺序。
 - **profile 来源**：Agent profile（命令与参数）来自启动配置的 `[agent]`（`CONFIG_REFERENCE.md` §7），不写 SQLite、不读凭据；子进程环境固定为 `PATH`/`HOME`/`USERPROFILE`/`SystemRoot`/`TEMP`/`TMP`，`ACPR_*`/`ACP_REMOTE_*` 前缀静态拒绝（`SECURITY_DESIGN.md` §12.2）。
+- **逐会话释放是唯一能确认名额归还的事实来源**（计划，`session-activation-lifecycle` WP3）：`SessionEndpoint` 的关闭路径必须执行**真实** ACP `session/close`（能力门控：未宣告 `sessionCapabilities.close` 时不得发送，按显式不支持返回并保留资源与名额），随后停止本地终端、解除会话/请求映射并清理 core 缓存端点。只有适配器确认释放后 core 才能把资源代置为已释放并交还容量名额；关闭超时、拒绝、连接中断或结果不确定都必须报「回收未完成」并保留占位，MUST NOT 只置本地 closed 标志就宣称空闲。迟到事件按资源代隔离，不得绑定到新恢复的资源；同 Agent 的另一会话必须继续运行，只有在**全部**会话都可回收时才允许停止共享进程。
 - **兼容性 quirk 隔离**：差异优先表达为 capability/profile 数据，不在核心堆积 Agent 名称判断（`AGENTS.md` §6）；真实 Codex/OMP 的兼容报告是发布前产物，不是普通 CI 的硬依赖（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §7）。
 
 ### 4.6 `node-link-client`
@@ -473,6 +489,13 @@ Node Link 和 Sync attachment 必须具有 connection generation 或 attachment 
 
 `[决定]`（2026-10-19，`conversation-area-complete` WP1，计划/待实施）`server::sync` 与 `server::node_link` 各自拥有**独立附件端点**的入站适配（`/sync/v1/attachments`、`/node-link/v1/attachments`）：复用同一 listener 与各自的认证/撤销/心跳规则，在认证后按连接协商结果门控帧族；未协商、跨会话/主体、撤销与预算超限都在触碰存储或网络字节之前拒绝。附件帧只调用 `core::use_cases`（`AttachmentTransferStore`/`InteractionAuthority` 的计划入口），两个 adapter 仍不得互相调用。旧 peer 的 `message.schema.json` 与业务消息路径逐字不变。
 
+`[决定]`（2026-10-22，`session-activation-lifecycle` WP1 合同，实现待 WP4/WP5）**Sync 面的本机生命周期接线边界**：
+
+- **查看者归 `server::sync`**：每条已认证连接在连接状态里声明至多一个当前查看会话与 `viewVersion`；收到 `session.view` 后只调用 core 的查看端口（声明/续租/释放），把 `accepted`/`stale` 投影成 `session.view.result`。版本判定（同版本同载荷幂等、**同版本不同选择**与**低于版本的离页**都回 `stale`，见 `SYNC_PROTOCOL.md` §11.8）由 core 的 `ViewRegistry::declare`/`renew` 返回的 `ViewDecision` 决定，适配层 MUST NOT 自己比较版本或用「最后到达者胜」兜底。普通 `control.ping`、心跳与快照拉取都**不**续租。断开、设备撤销（`4410`）、同设备连接被替换（`4411`）与连接级错误收尾都必须走同一条释放路径，通知 core 移除该连接的查看者。
+- **门控与投影**：`core.local-session-lifecycle.v1` 未协商时，`session.resume` 在触碰会话状态之前回 `command.unsupported`，`session.view`/`session.view.result` 按 `protocol.type_unsupported` 拒绝，投递层在编码前去掉 `localActivity`（不是下发 `null`），也不投递 `session.activity.changed`。协商后在 owned 摘要、快照 `sessions` 与事件视图上统一补该键；imported 摘要不补。
+- **命令面**：`session.resume` 走 core 的 `LocalSessionLifecycle` 用例（内部即 §4.1 的五个端口：`SessionActivation::activate`/`settle` + `CapacityAdmission::reserve`/`reclaim_candidate`，见 CORE §5.10；持久受理 → 合并/复用或恢复 → 终态），结果投影为 `{ sessionId, session }`，**不带** `remoteSessionRef`；恢复失败按 `SYNC_PROTOCOL.md` §12.2 的映射给出准确类别，不得折叠成 `protocol.schema_invalid`。适配器不直接调用 `agent-host`，也不缓存会话运行状态。
+- **Node Link 不变**：`server::node_link` 不读、不转发 `localActivity` 与 `session.activity.changed`，其 `session.resume` 语义与结果形状逐字保持。
+
 ### 4.10 `app`
 
 > `[现状]`（2026-09-25 切片 4 已落地；2026-09-26 按切片 5 补充接线范围；2026-10-14 按 `sync-server-connection` 的同步面再补充）`app` 已落地：daemon 的启动/关闭序列与单实例锁（含 `instanceId`）、配置加载与首次种子导入、周期任务（清理/刷盘）装配（Node Link 重连按该变更 design 的非目标只留装配点），以及下面列出的全部 CLI 子命令与 `doctor`/`acp-stdio`。切片 5（`node-link-owner`）另把网络接入面接了进来：`server::transport::net` 的 listener 与 `server::node_link` 的三个路由（catalog/resource/command）随 Daemon 启动，关闭序列先同步停掉网络 accept 再走后续步骤；Node Link 的**出站**重连管理器仍属切片 6，`daemon.status.links` 因此恒为空。`sync-server-connection` 在此之上接线 Sync 面：`crates/app/src/daemon.rs` 的 `register_sync_paths` 注册 `/sync/v1`（WS + subprotocol 常量）与两条配对 POST（带四个安全响应头），`EventPublisher` 的 Sync 扇出分支给已协商连接投递事件，`sync.*` 三个配置键按「只下调」从 `Config::unwired` 移除并由 `sync_config` 消费，设备撤销钩子接到真实 Sync 连接注册表（`4410`）。**仍未接线**：§11 的业务命令面（`session.prompt` 等命令的执行与终态投递）、`server::acp_facade`、`node-link-client`，以及 Owner 可达性的真实出站数据源（今天 `NodeLinkReachability` 读入站注册表，是近似值，`tasks.md` WP6 任务 6.5）。二维码图形渲染按 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 的合同解读在本切片记「终端不支持」，CLI 只打印 `pairingUrl` 文本。
@@ -484,6 +507,7 @@ Node Link 和 Sync attachment 必须具有 connection generation 或 attachment 
 - 启动初清理 + 每 60 s 周期的 `prune`/`expire_pairings`/`sweep_orphans`（`CORE_PORTS_AND_STORAGE.md` §7.5）；
 - 启动时对已配对 Owner 节点的 Node Link 连接与断线指数退避重连（`NODE_LINK_PROTOCOL.md` §15）；
 - broker 的 delta 合并窗口（`storage.flush_interval_ms`；由组合根定时器枚举非终态会话并逐个驱动 `Broker::pump`，`CORE_PORTS_AND_STORAGE.md` §6 第 10 条）；
+- 本机会话生命周期扫描（计划，`session-activation-lifecycle` WP4）：按 `sessions.idle_timeout_ms` 驱动保留期回收与按 `sessions.max_active_sessions` 的容量驱逐；只消费 core 的候选与释放结果，不做业务判断，`idle_timeout_ms = 0` 时停用按时间部分；
 - 关闭顺序：停接入层（排空**其余**在途连接，最坏仍受宽限上限约束；发出该 `daemon.stop` 的那条连接不计入——服务端在写回响应后自行结束它）→ 取消周期任务与信号监听 → 停 Agent → `wal_checkpoint(TRUNCATE)` → 清理 endpoint/释放锁（与 `CORE_PORTS_AND_STORAGE.md` §7.5 第 4 条、`SECURITY_DESIGN.md` §12.1 一致）。
 
 CLI 子命令（名字的唯一来源是 `LOCAL_ADMIN_PROTOCOL.md` §5.8 的映射表；本文只列名字，不重复规则）：
@@ -505,6 +529,8 @@ doctor
 首切片**不提供** `session create`：业务命令 `session.create` 的 transport 只有 `node_link`（本地通道不承载业务命令），本地会话入口是 `acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`）；`session list` 属 `post_mvp`。理由与展开见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.8、`INITIAL_DESIGN.md` §13.3。
 
 CLI 通过 core use case 或受认证的本地管理 transport 工作，不能复制 core 业务规则。`app` 是唯一允许依赖所有具体 crate 的位置。
+
+`[决定]`（2026-10-22，`session-activation-lifecycle` WP1 合同，实现待 WP4）**本机生命周期的调度归 `app`，判断归 core**：保留期扫描与容量驱逐由组合根的周期任务按 `sessions.idle_timeout_ms` 与 `sessions.max_active_sessions` 驱动，但它只调用 core 的候选查询与释放用例，**不**自行判断「哪个会话受保护」、不直接调用 `agent-host` 的关闭、不读 feature 表。关闭顺序在既有「停接入层 → 取消周期任务 → 停 Agent → checkpoint → 释放锁」之上补一条：先停止保留期/容量扫描并等待在途回收收口，再结束 Agent 运行时；`sessions.idle_timeout_ms = 0` 只关闭按时间扫描，容量准入仍然生效。启动时先完成 core 的生命周期收敛（旧事件里的 `Active` 不得被当作资源已恢复），再开放入站查询与订阅。
 
 `session-file-browser` 的原生出站适配器由组合根装配：`app::session_files` 实现 `core::ports::SessionFiles`（文件句柄、目录枚举、Git 子进程与进程树取消），通过 `UseCases::with_session_files` 注入；它只做 I/O，不承载授权、会话选择或来源规则。`server::sync` 只调用用例并投影 wire DTO，不直接读磁盘、不启动 Git，也不调用其它入站适配器。未装配时 core 的默认实现失败关闭，不返回空成功。
 
@@ -740,7 +766,7 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 |---|---|
 | core | 状态转换、值对象、每会话串行、幂等、事务提交、owned/imported 分流和 fake ports |
 | acp-protocol | 官方 fixture、未知字段往返保真、扩展 payload、版本兼容 |
-| sync-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算、恶意输入；v1 信封（body 字节保真、认证阶段连接字段规则、未知 `type`/字段拒绝）；全部 18 个消息类型与 33 个事件视图的字段级边界、fixture 覆盖与类型化 body 往返；33 个视图夹具按 `viewDef` 投影到同一 event 类型；配对 HTTPS 载荷（设备短二维码 q2 的 65 字节布局/旧 `#data=` 拒绝/共享向量、claim/status、配对码 lookup 与 qr-lookup 的常量与宽度、`canonicalOrigin` 的 origin 形状、approved 与 device/host 的对应关系）；三个漂移门禁（`type` 常量与 schema union 同源抽取、错误码与 registry 的 `(code, retryable)` 逐条相等、`views::VIEW_TYPES` 与 `event-views.schema.json` 的 `$defs` 逐条相等） |
+| sync-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算、恶意输入；v1 信封（body 字节保真、认证阶段连接字段规则、未知 `type`/字段拒绝）；**合同声明 29 个消息类型与 35 个事件视图**（crate 当前覆盖 27 个消息类型与 34 个视图——`session.view`/`session.view.result`、视图 `session.activity.changed` 与新错误码 `session.capacity_exceeded` 的镜像与用例**待 WP4**，三条漂移门禁因此在镜像落地前会红，属合同先行的预期未完成态）的字段级边界、fixture 覆盖与类型化 body 往返；视图夹具按 `viewDef` 投影到同一 event 类型；配对 HTTPS 载荷（设备短二维码 q2 的 65 字节布局/旧 `#data=` 拒绝/共享向量、claim/status、配对码 lookup 与 qr-lookup 的常量与宽度、`canonicalOrigin` 的 origin 形状、approved 与 device/host 的对应关系）；三个漂移门禁（`type` 常量与 schema union 同源抽取、错误码与 registry 的 `(code, retryable)` 逐条相等、`views::VIEW_TYPES` 与 `event-views.schema.json` 的 `$defs` 逐条相等） |
 | node-link-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算；v1 信封与全部 29 个消息类型（连接字段规则、body 字节保真、类型化 body 往返、非法 body 分层拒绝）；配对 HTTPS 载荷；grant 词表与 `commands.json`、错误码与 registry、`MessageType` 与 schema union 三个漂移门禁 |
 | acpr-transcript | 长度前缀编解码往返、字段乱序/重复/缺字段拒绝、magic 与 `codecVersion` 校验；表驱动层的字段数量、tag 成员与定长宽度校验 |
 | acpr-wire | 值对象取值域（uuid/decimalString/timestamp/featureList/rawAcp 的正反用例）、`Nullable` 的「缺键报错 / null / 值」三态、`ExtraFields` 的未知字段值保真（含超出 u64 的整数字面量）、base64url 规范无填充口径 |

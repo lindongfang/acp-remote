@@ -27,6 +27,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use acp_core::lifecycle::LOCAL_ACTIVITY_EVENT;
 use acp_core::model::{
     AcpRaw, CommittedEvent, EntityRef, EventPayload as CoreEventPayload, InteractionKind, NodeId,
     OriginCursor as CoreOriginCursor, PortError, RawUnavailableReason, SessionId,
@@ -154,6 +155,10 @@ impl ResourceRoute {
 
     /// 把一条已持久化的 owned 事件投递给所有订阅了该会话的连接。
     async fn fan_out(&self, event: &CommittedEvent) {
+        if !node_link_forwards(event.event_type.as_str()) {
+            // Sync 专有事件（`session.activity.changed`）：不构造、不投递（§5.3）。
+            return;
+        }
         let Some(session) = event.session.clone() else {
             return;
         };
@@ -744,6 +749,10 @@ impl ResourceRoute {
         replay: &NodeLinkReplay,
     ) -> Result<(), ()> {
         for event in &replay.events {
+            if !node_link_forwards(event.event_type.as_str()) {
+                // 与实时扇出同一过滤：重放也不转发 Sync 专有事件。批次仍按未过滤的 head 收口。
+                continue;
+            }
             let Some(payload) = wire_payload(&event.payload) else {
                 warn!(
                     event = "node_link.replay_event_payload_invalid",
@@ -1008,6 +1017,16 @@ pub struct NodeLinkPublisher {
     queue: mpsc::Sender<CommittedEvent>,
 }
 
+/// Sync 专有的 owned 事件（`core.local-session-lifecycle.v1`）不得经 Node Link 转发（§5.3/§9.8/§11.8）。
+///
+/// `session.activity.changed` 只描述**本机**运行资源的活跃程度，Access 用它的 origin cursor 也读不到
+/// 任何可消费的会话内容；把它发给已配对节点既是合同外的扩展，也让远端看到一个它无法解释的事件类型。
+/// 过滤点覆盖三条投递腿：实时扇出的发布端（尽早丢弃）、扇出投递与增量重放。重放批次仍按**未过滤**的
+/// head 发 `resource.caught_up`，因此远端游标会跨过被过滤的序号段，不会反复重读同一条。
+fn node_link_forwards(event_type: &str) -> bool {
+    event_type != LOCAL_ACTIVITY_EVENT
+}
+
 impl NodeLinkPublisher {
     /// 建立「发布端 ↔ 分发循环」的通道。
     pub fn channel() -> (Self, mpsc::Receiver<CommittedEvent>) {
@@ -1020,6 +1039,10 @@ impl EventPublisher for NodeLinkPublisher {
     fn publish(&self, event: CommittedEvent) {
         if event.session.is_none() {
             // 非会话级事件（node 作用域）没有会话级 origin cursor，也不属于任何 attachment。
+            return;
+        }
+        if !node_link_forwards(event.event_type.as_str()) {
+            // Sync 专有事件：不进队列（扇出/重放两处还有同样的过滤，这里只是尽早丢弃）。
             return;
         }
         if let Err(error) = self.queue.try_send(event) {
@@ -1272,4 +1295,49 @@ fn decode<T: DeserializeOwned>(message: &Envelope) -> Option<T> {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acp_core::model::{EventId, EventType, Sequence};
+
+    fn event(event_type: &str) -> CommittedEvent {
+        CommittedEvent {
+            id: EventId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622b").expect("event id"),
+            event_type: EventType::new(event_type).expect("event type"),
+            session: Some(
+                SessionId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622c").expect("session id"),
+            ),
+            session_sequence: Some(Sequence::new(1).expect("sequence")),
+            global_sequence: Sequence::new(1).expect("sequence"),
+            origin_epoch: None,
+            origin_sequence: None,
+            created_at: acp_core::model::Timestamp::new("2026-10-22T00:00:00.000Z")
+                .expect("timestamp"),
+        }
+    }
+
+    /// §5.3/§11.8：`session.activity.changed` 是 Sync 专有投影，Node Link 三条投递腿都不得转发它。
+    #[test]
+    fn the_lifecycle_activity_event_is_never_forwarded() {
+        assert!(!node_link_forwards(LOCAL_ACTIVITY_EVENT));
+        assert!(node_link_forwards("session.updated"));
+
+        let (publisher, mut receiver) = NodeLinkPublisher::channel();
+        publisher.publish(event(LOCAL_ACTIVITY_EVENT));
+        assert!(
+            receiver.try_recv().is_err(),
+            "生命周期的活动事件不得进入 Node Link 的投递队列"
+        );
+        publisher.publish(event("session.updated"));
+        assert_eq!(
+            receiver
+                .try_recv()
+                .expect("常规会话事件照常投递")
+                .event_type
+                .as_str(),
+            "session.updated"
+        );
+    }
 }

@@ -35,6 +35,7 @@ use crate::error::HostError;
 use crate::limits;
 use crate::mapper::{self, UpdateState};
 use crate::process::Supervisor;
+use crate::release::ReleaseRefusal;
 use crate::terminal::{TerminalConfig, TerminalService};
 
 /// 已登记但尚未解析的交互。
@@ -49,7 +50,14 @@ struct PendingInteraction {
 /// 会话的内部状态（一把锁保护，锁内不做 I/O）。
 #[derive(Debug)]
 struct Inner {
+    /// 本地绑定不再接受新工作。
+    ///
+    /// 它**不是**「Agent 侧已释放」的证据：重绑/进程级回收也会置位（见 [`AcpSession::close_session`]）。
     closed: bool,
+    /// Agent 已确认释放（`session/close` 的 ack），或进程已经退出使资源随之消失。
+    ///
+    /// 只有这个位能支撑「资源与容量名额可以交还」。已 closed 但没有它的绑定只说明本层让出了这一代。
+    released: bool,
     turn_running: bool,
     /// `session/prompt` 的字节已经确认写入 Agent stdin（写确认前不算已派发）。
     turn_dispatched: bool,
@@ -67,6 +75,11 @@ pub struct AcpSession {
     reference: SessionReference,
     acp_session_id: String,
     agent_session_id: Option<AgentSessionId>,
+    /// 本绑定的资源代（同一 core 会话每次建立/恢复/重绑递增）。
+    ///
+    /// 迟到的旧代结果（尤其是关闭结果）只能作用于它自己那一代：目录摘除必须核对它，否则一次超时后
+    /// 才到达的旧 `session/close` ack 会把新恢复的绑定误删。
+    generation: u64,
     supervisor: Arc<Supervisor>,
     sink: EventSink,
     ids: Arc<dyn IdGenerator>,
@@ -98,6 +111,8 @@ pub(crate) struct SessionInit {
     pub acp_session_id: String,
     /// 同上标识的 core 形状（`None` = Agent 给的标识取不出合法值，core 因此两列都不写）。
     pub agent_session_id: Option<AgentSessionId>,
+    /// 本绑定的资源代（由组合层按 core 会话递增；重绑/恢复得到新代）。
+    pub generation: u64,
     /// 该 Agent 的进程监督者。
     pub supervisor: Arc<Supervisor>,
     /// core 的事件出口。
@@ -127,6 +142,7 @@ impl AcpSession {
             session,
             acp_session_id,
             agent_session_id,
+            generation,
             supervisor,
             sink,
             ids,
@@ -150,6 +166,7 @@ impl AcpSession {
             reference: SessionReference::Owned(OwnedSessionRef::new(session)),
             acp_session_id,
             agent_session_id,
+            generation,
             supervisor,
             sink,
             ids,
@@ -159,6 +176,7 @@ impl AcpSession {
             terminal,
             inner: Mutex::new(Inner {
                 closed: false,
+                released: false,
                 turn_running: false,
                 turn_dispatched: false,
                 cancel_requested: false,
@@ -190,16 +208,37 @@ impl AcpSession {
         self.reference.session_id()
     }
 
+    /// 本绑定的资源代（同一 core 会话每次建立/恢复/重绑递增）。
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// 距最后一次活动的时长（资源事实，只读；判定由外部驱动）。
+    #[must_use]
+    pub fn last_activity_elapsed(&self) -> Duration {
+        lock(&self.inner).last_activity.elapsed()
+    }
+
     /// 是否已经关闭。
     #[must_use]
     pub fn is_closed(&self) -> bool {
         lock(&self.inner).closed
     }
 
+    /// 是否已**确认真实释放**（Agent ack 了 `session/close`，或进程已退出使资源消失）。
+    ///
+    /// 与 [`AcpSession::is_closed`] 的区别是语义，不是程度：`closed` 也可能是「本层把这一代让给了
+    /// 新绑定」。只有本方法为真时，释放端口才可以交还容量名额。
+    #[must_use]
+    pub fn is_released(&self) -> bool {
+        lock(&self.inner).released
+    }
+
     /// 空闲回收判据：**没有进行中的 turn** 且空闲时间超过 `timeout`。
     ///
-    /// 已关闭的会话恒为假：调用方必须先把它们排除在判定之外（`AgentRuntime::is_idle` 只统计仍打开的
-    /// 会话），否则 `Endpoint::close()` 这类只置关闭位、不摘映射的路径会让 runtime 永不空闲。
+    /// 已关闭的会话恒为假：调用方必须先把它们排除在判定之外（`AgentRuntime::all_sessions_reclaimable`
+    /// 只统计仍打开的会话），否则 `Endpoint::close()` 这类已关闭绑定会让 runtime 永不空闲。
     #[must_use]
     pub fn is_idle_for(&self, timeout: Duration) -> bool {
         let inner = lock(&self.inner);
@@ -864,8 +903,9 @@ impl AcpSession {
 
     /// 用同一进程上的既有协商结果建立新的 endpoint 绑定（重开或替换 sink）。
     ///
-    /// 交互与 turn 状态**不继承**：旧绑定已经让出，未解析的交互随旧绑定作废（不代答）。
-    pub(crate) fn rebind(&self, sink: EventSink) -> Self {
+    /// 交互与 turn 状态**不继承**：旧绑定已经让出，未解析的交互随旧绑定作废（不代答）。资源代由
+    /// 调用方给出并严格递增：旧绑定随后的迟到结果（例如关闭 ack）只能作用于旧代。
+    pub(crate) fn rebind(&self, sink: EventSink, generation: u64) -> Self {
         let inner = lock(&self.inner);
         // 终端服务随 ACP 会话一起存活：新绑定接管同一实例并把事件出口指向新 sink；旧绑定拿到
         // 空替身，因此旧端点即使被关闭也不会误杀新绑定上的终端。
@@ -884,6 +924,7 @@ impl AcpSession {
             reference: self.reference.clone(),
             acp_session_id: self.acp_session_id.clone(),
             agent_session_id: self.agent_session_id.clone(),
+            generation,
             supervisor: Arc::clone(&self.supervisor),
             sink,
             ids: Arc::clone(&self.ids),
@@ -893,6 +934,7 @@ impl AcpSession {
             terminal: Mutex::new(terminal),
             inner: Mutex::new(Inner {
                 closed: false,
+                released: false,
                 turn_running: false,
                 turn_dispatched: false,
                 cancel_requested: false,
@@ -906,10 +948,42 @@ impl AcpSession {
         }
     }
 
+    /// 标记会话为已确认释放并作废未解析交互（**不**结束终端、不派发 `session/cancel`）。
+    ///
+    /// 单会话释放用它：只有 Agent ack 之后才允许把本地绑定标记为关闭并摘除映射；`session/close`
+    /// 本身已经要求 Agent 取消该会话的进行中工作，因此不再额外发 `session/cancel`。
+    /// 同时置位「已确认释放」——这是释放端口可以交还名额的唯一依据。
+    pub fn mark_closed(&self) {
+        self.mark_closed_inner(true);
+    }
+
+    /// 本地让出这一代（重绑）：置 `closed` 并作废进行中的 turn 与未解析交互，但**不**置
+    /// `released`——此时没有任何 Agent 侧的释放证据，释放端口必须继续按「占用未确认」处理
+    /// （不交还容量名额），直到真的 `session/close` ack 或进程退出。
+    pub fn mark_yielded(&self) {
+        self.mark_closed_inner(false);
+    }
+
+    fn mark_closed_inner(&self, released: bool) {
+        let mut inner = lock(&self.inner);
+        inner.closed = true;
+        // 只有 Agent ack（或进程退出）才是释放证据；本地让出不得冒充。
+        inner.released |= released;
+        // 无论是否已确认释放，迟到的旧代响应都不得再产出属于本绑定的 turn 终态事件。
+        inner.turn_running = false;
+        inner.turn_dispatched = false;
+        inner.cancel_requested = false;
+        // 未解析的交互随会话一起作废：不代答、不伪造结论，登记直接丢弃。
+        inner.interactions.clear();
+    }
+
     /// 关闭会话：先取消进行中的 turn，再让出 endpoint（进程由目录层统一回收）。
     ///
-    /// 终端进程树在这里**同步**结束（Job 句柄关闭/进程组结束是内核操作），等待者随即被唤醒；
-    /// 需要排空已读输出与 join 驱动任务的路径调用 [`AcpSession::shutdown_terminals`]。
+    /// 这是**进程级**关闭（空闲回收、Daemon 停止、运行时丢弃）与**重绑让出**的入口：它不调用 ACP
+    /// `session/close`，也不声称 Agent 侧已释放——它只置本地 `closed`，**不**置 `released`。已有确认
+    /// 的释放事实不会被它抹掉。终端进程树在这里**同步**结束（Job 句柄关闭/进程组结束是内核操作），
+    /// 等待者随即被唤醒；需要排空已读输出与 join 驱动任务的路径调用
+    /// [`AcpSession::shutdown_terminals`]。
     pub fn close_session(&self) {
         let was_running = {
             let mut inner = lock(&self.inner);
@@ -928,8 +1002,38 @@ impl AcpSession {
     }
 
     /// 关闭会话并等待终端驱动任务把已读输出交付完（有界；会话/Agent/Daemon 关闭路径使用）。
+    ///
+    /// [`TerminalService`] 的关闭标志是**永久**的：一旦调用，这个实例不再接受任何 `terminal/*`。
+    /// 因此「请求释放但 Agent 没有确认、绑定必须保留」的路径不能只靠它收口——失败后调用
+    /// [`AcpSession::restore_terminals`] 换入新实例。
     pub async fn shutdown_terminals(&self) {
         self.terminal().shutdown().await;
+    }
+
+    /// 释放未完成时恢复终端服务，让保留下来的绑定继续可用。
+    ///
+    /// 与 [`AcpSession::rebind`] 同口径：换入一个全新的 [`TerminalService`]（同一会话、同一工作目录、
+    /// 同一事件出口），已关闭的旧实例随之丢弃——它的终端进程已经在关闭顺序里结束，不会泄漏。
+    ///
+    /// 绑定若已被别的路径让出（进程级关闭/回收），这里**不再**复活终端：那一刻本层已经放弃了这一代，
+    /// 恢复只会给一个正在收敛的运行时装上新服务。
+    pub(crate) fn restore_terminals(&self) {
+        if self.is_closed() {
+            return;
+        }
+        let previous = self.terminal();
+        if !previous.is_closed() {
+            return;
+        }
+        let replacement = Arc::new(TerminalService::new(TerminalConfig {
+            session: self.session_id().clone(),
+            workspace: self.workspace.clone(),
+            clock: Arc::clone(&self.clock),
+            supervisor: Arc::clone(&self.supervisor),
+            sink: self.sink.clone(),
+            enabled: previous.is_enabled(),
+        }));
+        *lock(&self.terminal) = replacement;
     }
 
     /// 模式状态（未宣告时为空结果，不编造候选）。
@@ -1104,20 +1208,37 @@ fn config_option(value: &Value) -> Option<ConfigOption> {
 }
 
 /// `SessionEndpoint` 的包装：turn 的等待任务需要 `Arc<AcpSession>`，而 trait 方法只有 `&self`。
-#[derive(Debug)]
 pub struct Endpoint {
     session: Arc<AcpSession>,
+    /// 组合层提供的真实释放操作（停终端 → 能力门控的 `session/close` → 成功后摘除映射）。
+    release: Arc<dyn BindingControl>,
+}
+
+/// 组合层注入给端点的会话级释放操作。
+///
+/// 端点不认识进程目录，也不允许自行猜测「Agent 是否已释放」；它把关闭事实委托给唯一持有
+/// `Supervisor`、协商能力与映射的实现（`AgentHost` 的运行时）。
+#[async_trait::async_trait]
+pub(crate) trait BindingControl: Send + Sync {
+    /// 执行真实清理顺序；只有 Agent 确认后才摘除映射并标记关闭。
+    async fn release(&self, session: &AcpSession) -> Result<(), ReleaseRefusal>;
 }
 
 impl Endpoint {
     /// 构造。
-    pub(crate) fn new(session: Arc<AcpSession>) -> Self {
-        Self { session }
+    pub(crate) fn new(session: Arc<AcpSession>, release: Arc<dyn BindingControl>) -> Self {
+        Self { session, release }
     }
 
     /// 底层会话（目录层用于回收与路由）。
     pub fn session(&self) -> &Arc<AcpSession> {
         &self.session
+    }
+
+    /// 本绑定的资源代（诊断与跨层事实报告用）。
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.session.generation()
     }
 }
 
@@ -1263,9 +1384,32 @@ impl SessionEndpoint for Endpoint {
     }
 
     async fn close(&self) -> Result<(), PortError> {
-        self.session.close_session();
-        self.session.shutdown_terminals().await;
-        Ok(())
+        // 真实清理顺序由组合层执行（`BindingControl::release`）：在绑定门内停本地终端 → 能力门控下发
+        // `session/close`（有界超时）→ Agent 确认后才摘除映射并标记关闭。失败/超时保留真实资源占用
+        // （终端服务换入新实例，绑定仍可继续服务）：本端点不得只置本地 closed 位来伪装成功。
+        // 这一代若早已让出（重绑/进程级回收），关闭是幂等的：不发请求、不触碰新代绑定。
+        self.release
+            .release(&self.session)
+            .await
+            .map_err(|refusal| {
+                tracing::warn!(
+                    session = %self.session.session_id(),
+                    generation = self.session.generation(),
+                    outcome = ?refusal.outcome,
+                    error = %refusal.error,
+                    "会话释放未完成（资源仍占用）"
+                );
+                refusal.error.to_port_error()
+            })
+    }
+}
+
+impl std::fmt::Debug for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Endpoint")
+            .field("session", &self.session.session_id())
+            .field("generation", &self.session.generation())
+            .finish_non_exhaustive()
     }
 }
 

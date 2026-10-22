@@ -36,7 +36,8 @@ use crate::launch;
 use crate::limits;
 use crate::node::{self, AgentLifecycle, ExitCause, ExitMark, NodeEvents};
 use crate::process::{Inbound, Supervisor};
-use crate::session::{AcpSession, Endpoint, SessionInit};
+use crate::release::{ReleaseAction, ReleaseOutcome, ReleaseRefusal};
+use crate::session::{AcpSession, BindingControl, Endpoint, SessionInit};
 
 /// 一个 Agent 的运行时（一个进程 + 该进程上的全部会话）。
 struct AgentRuntime {
@@ -63,6 +64,13 @@ struct AgentRuntime {
     exit_mark: ExitMark,
     /// 时钟（节点级事件的时间戳）。
     clock: Arc<dyn Clock>,
+    /// 绑定变更的串行门（与 [`AgentHost::bindings`] 是同一个实例）。
+    ///
+    /// `open`/`resume` 用它串行化「读目录 → 让出旧绑定 → 登记新绑定」，逐会话释放也在**整个**关闭
+    /// 过程（判定 → 停终端 → `session/close` → 摘除映射）里持有它：否则关闭在途时 `open` 可以把同一个
+    /// core 会话重绑到新代，而旧代 ack 到达时目录里已经指向新代，留下一个指向「已被 Agent 释放的会话」
+    /// 的新绑定。
+    bindings: Arc<Mutex<()>>,
 }
 
 impl std::fmt::Debug for AgentRuntime {
@@ -82,6 +90,7 @@ impl AgentRuntime {
         agent: AgentId,
         node_events: Arc<std::sync::RwLock<NodeEvents>>,
         clock: Arc<dyn Clock>,
+        bindings: Arc<Mutex<()>>,
     ) -> Self {
         Self {
             supervisor,
@@ -95,6 +104,7 @@ impl AgentRuntime {
             lifecycle: std::sync::Mutex::new(AgentLifecycle::default()),
             exit_mark: ExitMark::new(),
             clock,
+            bindings,
         }
     }
 
@@ -153,15 +163,18 @@ impl AgentRuntime {
         lock(&self.last_activity).elapsed() >= timeout
     }
 
-    /// 该运行时是否可以按空闲超时回收。
+    /// 该运行时下的**全部会话**是否都可回收（唯一允许停止共享进程的判据）。
     ///
-    /// 没有活动会话（例如只协商过能力的进程）看进程级时钟；有会话时要求**全部**仍打开的会话都空闲
-    /// （任一会话有进行中的 turn 就不回收）。
+    /// 逐会话回收由外部（core 的生命周期目录）驱动；本层只提供事实。只有「所有仍打开的会话都空闲、
+    /// 没有进行中的 turn」且进程级时钟也超时，才允许结束这个共享进程——任一会话被查看/有任务/有交互
+    /// 时都不能以 A 的回收连带终止 B（`specs/local-agent-host/spec.md` 的「共享进程存在被查看的会话」）。
     ///
-    /// **已关闭的会话不参与判定**：`Endpoint::close()` 只置关闭位、不摘映射，而 `AcpSession::is_idle_for`
-    /// 对已关闭会话恒为假；若把它算进来，只要 `by_acp` 里留着一个已关闭会话，这个 runtime 就永远不会
-    /// 被空闲回收（进程泄漏）。会话全部关闭后同样退回进程级时钟。
-    fn is_idle(&self, timeout: Duration) -> bool {
+    /// 没有活动会话（例如只协商过能力的进程）看进程级时钟；有会话时要求**全部**仍打开的会话都空闲。
+    ///
+    /// **已关闭的会话不参与判定**：已确认释放（或进程已退出）的绑定不再占用资源，已让出给新代的绑定
+    /// 也不再是这一代的事；若把它算进「必须空闲」，只要 `by_acp` 里留着一个已关闭会话，这个 runtime
+    /// 就永远不会被空闲回收。
+    fn all_sessions_reclaimable(&self, timeout: Duration) -> bool {
         let live: Vec<Arc<AcpSession>> = self
             .sessions()
             .into_iter()
@@ -208,6 +221,138 @@ impl AgentRuntime {
         self.touch();
     }
 
+    /// 只在目录仍指向**本代**绑定时摘除映射（迟到旧代的关闭结果不得移除新绑定）。
+    ///
+    /// 返回是否真的摘除。判定同时核 `acp_session_id` 与资源代：恢复通常会带回同一个 ACP 会话标识，
+    /// 因此标识本身不足以区分两代。
+    fn remove_session_if_current(&self, session: &AcpSession) -> bool {
+        let current = lock(&self.by_acp)
+            .get(session.acp_session_id())
+            .map(|current| current.generation());
+        if current != Some(session.generation()) {
+            return false;
+        }
+        lock(&self.by_core).remove(session.session_id().as_str());
+        lock(&self.by_acp).remove(session.acp_session_id());
+        self.touch();
+        true
+    }
+
+    /// 本进程协商到的能力是否宣告了 `sessionCapabilities.close`。
+    fn supports_session_close(&self) -> bool {
+        lock(&self.capabilities)
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.supports_session_close())
+    }
+
+    /// 目录当前是否仍指向这条**具体代**的绑定。
+    fn is_current_binding(&self, session: &AcpSession) -> bool {
+        let acp_id = lock(&self.by_core)
+            .get(session.session_id().as_str())
+            .cloned();
+        acp_id.as_deref() == Some(session.acp_session_id())
+            && self
+                .session_for_acp(session.acp_session_id())
+                .is_some_and(|current| current.generation() == session.generation())
+    }
+
+    /// 逐会话的真实释放顺序（本 crate 内唯一实现）。
+    ///
+    /// **整个顺序在绑定门内完成**（与 `open`/`resume` 是同一把 `bindings` 门）：判定 → 停本地终端 →
+    /// `session/close` → 标记与摘除之间不允许任何人把同一个 core 会话重绑到新代。否则关闭在途时的
+    /// `open` 会建立一条新绑定，而旧代随后的 ack 因「代不同」不会摘除它，目录里就留下一个指向已被
+    /// Agent 释放的会话的新绑定。门的持有时间以 [`limits::SESSION_CLOSE_TIMEOUT`] 为界：一次释放会短暂
+    /// 挡住其它会话的绑定变更，这是刻意的取舍（正确性优先于那一次并发度）。
+    ///
+    /// 1. **Agent 已确认释放**（或进程已退出）⇒ 幂等成功，**不发任何请求**。
+    /// 2. 本地已 closed 但**没有**确认 ⇒ [`ReleaseAction::Yielded`]：这一代只在本地让出，Agent 侧是否
+    ///    仍占用说不清；不重发请求，也不摘除可能已指向新代的目录条目。
+    /// 3. 仍有活动映射但不是当前代 ⇒ **不发任何请求**：旧端点不得关闭新代。
+    /// 4. 进程已退出 ⇒ 资源随进程树消失：摘除本代映射并标记关闭（没有任何东西可 ack）。
+    /// 5. 未宣告 `sessionCapabilities.close` ⇒ **不发请求**，返回明确失败并保留映射与资源。
+    /// 6. 停本地终端（不再接受新的终端工作，驱动任务有界排空）。
+    /// 7. 发送有界超时的 `session/close { sessionId }`。只有 ack 成功后才标记关闭并摘除映射；
+    ///    超时/拒绝/无法解码都返回错误，映射与真实资源占用保持不变，并**换入新的终端服务**：第 6 步
+    ///    已经让旧实例永久关闭，保留绑定就必须还能继续服务 `terminal/*`。
+    ///
+    /// 本方法**不**终止共享进程：同 Agent 的其它会话可能仍在服务。
+    async fn release_bound_session(
+        &self,
+        session: &AcpSession,
+    ) -> Result<ReleaseAction, ReleaseRefusal> {
+        let _bindings = self.bindings.lock().await;
+        if session.is_released() {
+            // Agent 已确认释放（或进程已退出）：重复释放幂等，且不再发任何请求。
+            self.remove_session_if_current(session);
+            return Ok(ReleaseAction::Released);
+        }
+        if session.is_closed() {
+            if !self.supervisor.is_running() {
+                // 进程已经退出：这条已让出的绑定没有任何可释放的外部资源。
+                session.mark_closed();
+                return Ok(ReleaseAction::Released);
+            }
+            // 本地已让出（重绑/进程级回收）但没有 Agent 的释放证据：不重发请求，也不摘除目录
+            // （其中的条目可能已经指向新代）。
+            return Ok(ReleaseAction::Yielded);
+        }
+        if !self.is_current_binding(session) {
+            if !self.supervisor.is_running() {
+                // 进程已经退出：这条旧代绑定没有任何可释放的外部资源。
+                session.mark_closed();
+                return Ok(ReleaseAction::Released);
+            }
+            // 旧代端点的关闭不得作用到新代绑定（更不得发 session/close 把共享会话真关掉）。
+            return Err(ReleaseRefusal::from_error(HostError::SessionClosed));
+        }
+        if !self.supervisor.is_running() {
+            session.mark_closed();
+            self.remove_session_if_current(session);
+            return Ok(ReleaseAction::Released);
+        }
+        if !self.supports_session_close() {
+            return Err(ReleaseRefusal::from_error(
+                HostError::CapabilityNotDeclared {
+                    capability: "session/close".to_owned(),
+                },
+            ));
+        }
+        session.shutdown_terminals().await;
+        let params = match session_close_params(session.acp_session_id()) {
+            Ok(params) => params,
+            Err(error) => {
+                // 请求没有发出去：绑定保留，终端收口必须撤销（否则绑定带着一个永久关闭的服务）。
+                session.restore_terminals();
+                return Err(ReleaseRefusal::from_error(error));
+            }
+        };
+        match self
+            .supervisor
+            .request("session/close", &params, limits::SESSION_CLOSE_TIMEOUT)
+            .await
+        {
+            Ok(_) => {
+                // Agent 已确认释放：现在才允许让出本地绑定。
+                session.mark_closed();
+                self.remove_session_if_current(session);
+                Ok(ReleaseAction::Released)
+            }
+            Err(error @ (HostError::AgentExited { .. } | HostError::NotRunning)) => {
+                // 进程在关闭请求期间退出：资源随进程树消失是可观察事实，不是猜测的「已释放」。
+                tracing::warn!(error = %error, "session/close 期间 Agent 退出（资源随进程消失）");
+                session.mark_closed();
+                self.remove_session_if_current(session);
+                Ok(ReleaseAction::Released)
+            }
+            Err(error) => {
+                // 释放没发生：绑定与真实资源保持占用。终端服务已经在请求前收口，这里换入新实例，
+                // 让保留下来的绑定继续接受 `terminal/*`（与 rebind 的口径一致）。
+                session.restore_terminals();
+                Err(ReleaseRefusal::from_error(error))
+            }
+        }
+    }
+
     fn sessions(&self) -> Vec<Arc<AcpSession>> {
         lock(&self.by_acp).values().cloned().collect()
     }
@@ -231,6 +376,38 @@ impl AgentRuntime {
     }
 }
 
+#[async_trait::async_trait]
+impl BindingControl for AgentRuntime {
+    async fn release(&self, session: &AcpSession) -> Result<(), ReleaseRefusal> {
+        // 旧代端点的关闭是幂等的：无论是「已确认释放」还是「已在本地让出」，都不再发请求、不破坏新代。
+        self.release_bound_session(session).await.map(|_action| ())
+    }
+}
+
+/// 一个运行期会话的可观察事实（`AgentHost::session_resources` 的条目）。
+///
+/// 这些字段只描述**本层真的知道**的东西：不包含查看者/租约（它们在 core），也不做「应该回收」的
+/// 判断——逐会话回收的决策属于 core 的生命周期目录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionResourceFacts {
+    /// 所属 Agent。
+    pub agent: AgentId,
+    /// core 会话标识。
+    pub session: SessionId,
+    /// ACP 会话标识。
+    pub acp_session_id: String,
+    /// 绑定资源代。
+    pub generation: u64,
+    /// 本地绑定是否已关闭（**不**代表 Agent 已确认释放：重绑/回收也会置位）。
+    pub closed: bool,
+    /// 是否有进行中的 turn。
+    pub turn_running: bool,
+    /// 距最后一次活动的时长。
+    pub last_activity_ago: Duration,
+    /// 所属 Agent 进程是否仍在运行。
+    pub process_running: bool,
+}
+
 /// 实现 [`AgentCatalog`] 与 [`SessionBackendFactory`] 的本地 Agent 组合层。
 pub struct AgentHost {
     /// 启动配置声明的 Agent（唯一权威；运行期没有写入路径）。
@@ -240,6 +417,15 @@ pub struct AgentHost {
     clock: Arc<dyn Clock>,
     runtimes: Mutex<HashMap<AgentId, Arc<AgentRuntime>>>,
     generations: std::sync::Mutex<HashMap<AgentId, u64>>,
+    /// 每个 core 会话的绑定资源代（建立/恢复/重绑递增；跨进程代续增）。
+    binding_generations: std::sync::Mutex<HashMap<SessionId, u64>>,
+    /// 绑定变更与逐会话释放的串行门。
+    ///
+    /// `open` 的重绑与 `resume` 的换绑只覆盖「读目录 → 让出旧绑定 → 登记新绑定」这一小段，**不**覆盖
+    /// Agent I/O；逐会话释放则在整个关闭过程（判定 → 停终端 → `session/close` → 摘除映射）里持有它，
+    /// 因此关闭在途时不会有并发的重绑基于同一个旧绑定构造出第二个可派发端点，也不会出现「旧代 ack
+    /// 到达时目录已指向新代」的窗口。`AgentRuntime` 持有同一个实例（`Arc`），释放由此参与这把门。
+    bindings: Arc<Mutex<()>>,
     /// 关闭标志：`shutdown_all()` 先置位，此后 `ensure_runtime` 一律拒绝启动新进程。
     shutting_down: AtomicBool,
     /// 节点级 `agent.connected`/`agent.disconnected` 的交付口（组合根注入）。
@@ -278,6 +464,8 @@ impl AgentHost {
             clock,
             runtimes: Mutex::new(HashMap::new()),
             generations: std::sync::Mutex::new(HashMap::new()),
+            binding_generations: std::sync::Mutex::new(HashMap::new()),
+            bindings: Arc::new(Mutex::new(())),
             shutting_down: AtomicBool::new(false),
             node_events: Arc::new(std::sync::RwLock::new(NodeEvents::unbound())),
             attachments: std::sync::Mutex::new(None),
@@ -322,6 +510,143 @@ impl AgentHost {
 
     fn attachments(&self) -> Option<Arc<dyn AttachmentStore>> {
         lock(&self.attachments).clone()
+    }
+
+    /// 分配下一个绑定资源代（同一 core 会话严格递增；跨进程代仍单调）。
+    fn next_binding_generation(&self, session: &SessionId) -> u64 {
+        let mut generations = lock(&self.binding_generations);
+        let next = generations.entry(session.clone()).or_insert(0);
+        *next += 1;
+        *next
+    }
+
+    /// 逐会话释放端口（core 的 `SessionRelease` 适配入口）。
+    ///
+    /// 语义：`Released` 只来自 Agent 对 `session/close` 的确认（或进程已退出、资源随进程树消失）；
+    /// `Failed`/`Uncertain` 表示资源仍占用，调用方**不得**交还容量名额。本方法只释放这一条会话绑定，
+    /// 绝不终止共享进程——同 Agent 的其它会话继续可用。
+    ///
+    /// **本地已 closed 不等于已释放**：重绑与进程级回收都会把绑定标记为 closed，但那一刻没有任何
+    /// Agent 侧的确认（见 [`crate::session::AcpSession::is_released`]）。对这样的绑定本方法返回
+    /// `Failed`——真实资源可能已由新代占用，交还名额会让同一个会话被重复计入。
+    ///
+    /// 没有活动绑定时返回 `Released`：本层已经没有该会话的资源可释放（重复调用幂等）。若调用期间
+    /// 该会话被重绑/恢复成新代，返回 `Failed`——旧代端点不得对新代绑定执行破坏性关闭，调用方应针对
+    /// 新代重新判定。
+    #[must_use]
+    pub async fn release_session(&self, session: &SessionId) -> ReleaseOutcome {
+        match self.find_binding(session).await {
+            None => ReleaseOutcome::Released,
+            Some((runtime, binding)) => Self::release_binding(&runtime, &binding).await,
+        }
+    }
+
+    /// 带资源代的逐会话释放（core `SessionRelease::release_session(session, generation, now)` 的适配）。
+    ///
+    /// 只有目录里的当前绑定仍是该代时才允许发送 `session/close`；若期间已重绑/恢复成新代，返回
+    /// `Failed` 且**不触碰**新代绑定——迟到的释放请求不得关闭一个刚建立的新资源。
+    #[must_use]
+    pub async fn release_session_at_generation(
+        &self,
+        session: &SessionId,
+        generation: u64,
+    ) -> ReleaseOutcome {
+        match self.find_binding(session).await {
+            None => ReleaseOutcome::Released,
+            Some((runtime, binding)) if binding.generation() == generation => {
+                Self::release_binding(&runtime, &binding).await
+            }
+            Some((_, binding)) => {
+                tracing::warn!(
+                    session = %session,
+                    expected = generation,
+                    current = binding.generation(),
+                    "释放请求属于旧资源代（已重绑），不作用于新绑定"
+                );
+                ReleaseOutcome::Failed
+            }
+        }
+    }
+
+    /// 对一条已解析到的绑定执行释放并收敛为端口语义。
+    ///
+    /// 「已在本地让出、但没有 Agent 确认」的绑定映射成 [`ReleaseOutcome::Failed`]：资源仍可能被新代
+    /// 占用，交还名额会让同一个会话被重复计入（`SessionEndpoint::close` 对同一状态仍是幂等成功）。
+    async fn release_binding(runtime: &AgentRuntime, binding: &AcpSession) -> ReleaseOutcome {
+        match runtime.release_bound_session(binding).await {
+            Ok(action) => {
+                let outcome = action.outcome();
+                if outcome != ReleaseOutcome::Released {
+                    tracing::warn!(
+                        session = %binding.session_id(),
+                        generation = binding.generation(),
+                        "绑定已在本地让出，但没有 Agent 确认的释放（资源与名额保持占用）"
+                    );
+                }
+                outcome
+            }
+            Err(refusal) => {
+                tracing::warn!(
+                    session = %binding.session_id(),
+                    generation = binding.generation(),
+                    outcome = ?refusal.outcome,
+                    error = %refusal.error,
+                    "单会话释放未完成（资源与名额保持占用）"
+                );
+                refusal.outcome
+            }
+        }
+    }
+
+    /// 当前运行期会话的事实快照（只报告，不做回收决定）。
+    ///
+    /// 逐会话回收由 core 的生命周期目录驱动；本层只如实给出「是否仍打开、是否有进行中的 turn、
+    /// 距最后一次活动多久、所属进程是否仍在运行、绑定资源代」这些可观察事实。
+    pub async fn session_resources(&self) -> Vec<SessionResourceFacts> {
+        let runtimes: Vec<(AgentId, Arc<AgentRuntime>)> = self
+            .runtimes
+            .lock()
+            .await
+            .iter()
+            .map(|(agent, runtime)| (agent.clone(), Arc::clone(runtime)))
+            .collect();
+        let mut facts = Vec::new();
+        for (agent, runtime) in runtimes {
+            let process_running = runtime.supervisor.is_running();
+            for session in runtime.sessions() {
+                facts.push(SessionResourceFacts {
+                    agent: agent.clone(),
+                    session: session.session_id().clone(),
+                    acp_session_id: session.acp_session_id().to_owned(),
+                    generation: session.generation(),
+                    closed: session.is_closed(),
+                    turn_running: session.turn_running(),
+                    last_activity_ago: session.last_activity_elapsed(),
+                    process_running,
+                });
+            }
+        }
+        // 稳定输出（并列的回收选择由 core 用稳定 ID 决定；这里只保证报告顺序可复现）。
+        facts.sort_by(|left, right| left.session.as_str().cmp(right.session.as_str()));
+        facts
+    }
+
+    /// 在全部运行时里查一个 core 会话当前的活动绑定。
+    async fn find_binding(
+        &self,
+        session: &SessionId,
+    ) -> Option<(Arc<AgentRuntime>, Arc<AcpSession>)> {
+        let runtimes: Vec<Arc<AgentRuntime>> =
+            self.runtimes.lock().await.values().cloned().collect();
+        for runtime in runtimes {
+            let acp_id = lock(&runtime.by_core).get(session.as_str()).cloned();
+            if let Some(acp_id) = acp_id {
+                if let Some(binding) = runtime.session_for_acp(&acp_id) {
+                    return Some((runtime, binding));
+                }
+            }
+        }
+        None
     }
 
     /// 空闲回收判据（`None` = 不因空闲关闭）。
@@ -400,6 +725,7 @@ impl AgentHost {
             agent.clone(),
             Arc::clone(&self.node_events),
             Arc::clone(&self.clock),
+            Arc::clone(&self.bindings),
         ));
         // 退出上报钩子：断开事件的唯一触发点（无论哪条路径先观察到退出，钩子只被取走一次）。
         // 它在 `converge_exit` 的顺序下被调用，因此钩子里 `supervisor.is_running()` 必然已为假。
@@ -583,7 +909,8 @@ impl AgentHost {
     /// 关闭空闲超时的会话所属进程（组合根的定时任务调用）。
     ///
     /// `idle_timeout` 为零表示**不因空闲关闭**（`sessions.idle_timeout_ms = 0`），此时直接返回；
-    /// 只在「没有进行中的 turn 且空闲足够久」时才结束进程。
+    /// 只在「该 Agent 下**全部**会话都可回收」时才结束共享进程（逐会话回收由外部驱动，本层只报告
+    /// 事实：见 [`AgentHost::session_resources`]）。
     ///
     /// 判定与「移出目录」在**同一个临界区**里完成：不能留下「死 supervisor 还挂在目录里、映射仍可被
     /// `open` 复用」的窗口（Q4-1）。实际的关闭流程（最长 5 s grace）在锁外执行，不阻塞其它入口。
@@ -595,7 +922,7 @@ impl AgentHost {
             let mut runtimes = self.runtimes.lock().await;
             let idle: Vec<AgentId> = runtimes
                 .iter()
-                .filter(|(_, runtime)| runtime.is_idle(idle_timeout))
+                .filter(|(_, runtime)| runtime.all_sessions_reclaimable(idle_timeout))
                 .map(|(agent, _)| agent.clone())
                 .collect();
             let mut reclaimed = Vec::with_capacity(idle.len());
@@ -795,10 +1122,12 @@ impl SessionBackendFactory for AgentHost {
         // `session/new` 成功返回的 ACP 会话标识：core 用它落盘（§3.6）。取不出合法 `AgentSessionId`
         // （空、超过 512 字符或含 NUL）时给 `None`，由 core 决定两列都不写——**不**编造占位值。
         let agent_session_id = AgentSessionId::new(&response.session_id).ok();
+        let generation = self.next_binding_generation(session);
         let session = Arc::new(AcpSession::new(SessionInit {
             session: session.clone(),
             acp_session_id: response.session_id,
             agent_session_id,
+            generation,
             supervisor: Arc::clone(&runtime.supervisor),
             sink,
             ids: Arc::clone(&self.ids),
@@ -813,7 +1142,8 @@ impl SessionBackendFactory for AgentHost {
         runtime
             .insert_session(&session)
             .map_err(|error| error.to_port_error())?;
-        Ok(Box::new(Endpoint::new(session)))
+        let release: Arc<dyn BindingControl> = runtime;
+        Ok(Box::new(Endpoint::new(session, release)))
     }
 
     async fn open(
@@ -825,6 +1155,9 @@ impl SessionBackendFactory for AgentHost {
             // imported 会话不归本 crate（那是 Node Link 的 Access 侧语义）。
             return Err(PortError::InvalidRequest("agent-host 只处理 owned 会话"));
         };
+        // 绑定变更串行化：并发 `open` 不得各自基于同一个旧绑定造出两个可派发端点；逐会话释放也在整段
+        // 过程里持有这把门，因此「关闭在途」时这里会等释放结束，不会把同一会话重绑到新代。
+        let _bindings = self.bindings.lock().await;
         let runtimes: Vec<Arc<AgentRuntime>> =
             self.runtimes.lock().await.values().cloned().collect();
         for runtime in runtimes {
@@ -842,12 +1175,19 @@ impl SessionBackendFactory for AgentHost {
             };
             // 重开：同一个 core 会话换一个新的 endpoint 绑定。旧绑定必须先让出，避免同一会话同时
             // 存在两个会派发 turn 的 endpoint（`AGENTS.md` §4「同一会话最多一个 active turn」）。
+            // 新绑定拿到严格递增的资源代：旧端点随后的迟到关闭结果只能作用于旧代。
+            let generation = self.next_binding_generation(&owned.session_id);
+            let rebound = Arc::new(previous.rebind(sink, generation));
+            // 终端服务已转交新绑定；旧绑定只保留「关闭」状态，不能再派发任何请求。这是**本地让出**
+            // 而不是确认释放：没有 Agent 的 `session/close` ack，旧代端点随后的释放必须仍报告
+            // 「占用未确认」（不得交还容量名额）。
+            previous.mark_yielded();
             runtime.remove_session(&previous);
-            let rebound = Arc::new(previous.rebind(sink));
             runtime
                 .insert_session(&rebound)
                 .map_err(|error| error.to_port_error())?;
-            return Ok(Box::new(Endpoint::new(rebound)));
+            let release: Arc<dyn BindingControl> = runtime;
+            return Ok(Box::new(Endpoint::new(rebound, release)));
         }
         Err(PortError::InvalidRequest("没有该会话的活动 endpoint"))
     }
@@ -920,12 +1260,17 @@ impl SessionBackendFactory for AgentHost {
         };
 
         // 旧绑定先让出：成功恢复后同一 core 会话只能有一条能派发 turn 的绑定。
+        // 这一段与 `open` 共用绑定门（不覆盖上面的 Agent I/O），避免交错产生两个可派发端点；逐会话
+        // 释放同样在这把门内完成，因此释放进行中时的换绑会等它结束，而不是在旧代 ack 到达前抢先登记。
+        let bindings = self.bindings.lock().await;
         self.evict_binding(session).await;
+        let generation = self.next_binding_generation(session);
         let endpoint_session = Arc::new(AcpSession::new(SessionInit {
             session: session.clone(),
             acp_session_id: agent_session_id.as_str().to_owned(),
             // 恢复得到的端点读回的必须是**持久化**的标识（不是新会话标识，也不是占位值）。
             agent_session_id: Some(agent_session_id),
+            generation,
             supervisor: Arc::clone(&runtime.supervisor),
             sink,
             ids: Arc::clone(&self.ids),
@@ -938,11 +1283,14 @@ impl SessionBackendFactory for AgentHost {
             terminal_enabled: self.terminal_enabled(),
         }));
         if let Err(error) = runtime.insert_session(&endpoint_session) {
+            drop(bindings);
             self.discard_spawned_runtime(&agent_id, &runtime, spawned)
                 .await;
             return Err(error.to_port_error());
         }
-        Ok(Box::new(Endpoint::new(endpoint_session)))
+        drop(bindings);
+        let release: Arc<dyn BindingControl> = runtime;
+        Ok(Box::new(Endpoint::new(endpoint_session, release)))
     }
 }
 
@@ -993,6 +1341,15 @@ fn session_resume_params(
     let request = message::SessionResumeRequest::new(agent_session_id.as_str(), cwd.as_str());
     // 两个字符串字段的编码不会失败；沿用 `initialize` 对「自编码失败」的既有映射。
     serde_json::to_value(&request).map_err(|_| HostError::IdUnavailable.to_port_error())
+}
+
+/// `session/close` 的参数。
+///
+/// 唯一的必填字段 `sessionId` 逐字是该绑定协商到的 ACP 会话标识（来自 `session/new` 或持久化恢复
+/// 记录）；字段形状取自 `acp-protocol` 的类型化 DTO，本层不另抄一份。`_meta` 缺省，不会凭空出现。
+fn session_close_params(acp_session_id: &str) -> Result<Value, HostError> {
+    serde_json::to_value(message::SessionCloseRequest::new(acp_session_id))
+        .map_err(|_| HostError::IdUnavailable)
 }
 
 /// 出站路径参数的形式转换：剥掉 Windows verbatim 前缀（`acp_core::strip_verbatim`，规则只在 core 一处
@@ -1140,5 +1497,270 @@ mod tests {
             vec!["cwd", "sessionId"],
             "参数只允许这两个键：{params}"
         );
+    }
+
+    /// 关闭参数只带 `sessionId`（逐字是该绑定的 ACP 标识），不夹带 `cwd` 或任何补齐字段。
+    #[test]
+    fn close_params_carry_only_the_agent_session_id() {
+        let params = session_close_params("acp-session-1").expect("params");
+        assert_eq!(params, json!({ "sessionId": "acp-session-1" }));
+        let mut keys: Vec<&str> = params
+            .as_object()
+            .expect("对象")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["sessionId"], "参数只允许这一个键：{params}");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 释放语义：这些用例需要一条**真的在运行**的 Agent 进程（`is_current_binding` 与
+    // `supervisor.is_running()` 的判定对象），因此用同一个 fake ACP child。
+    // -----------------------------------------------------------------------------------------
+
+    use acp_core::model::Timestamp;
+
+    struct TestClock;
+
+    impl Clock for TestClock {
+        fn now(&self) -> Timestamp {
+            Timestamp::new("2026-10-21T00:00:00.000Z").expect("timestamp")
+        }
+    }
+
+    struct TestIds;
+
+    impl IdGenerator for TestIds {
+        fn session_id(&self) -> SessionId {
+            SessionId::new("00000000-0000-4000-8000-000000000001").expect("session id")
+        }
+
+        fn turn_id(&self) -> acp_core::model::TurnId {
+            acp_core::model::TurnId::new("00000000-0000-4000-8000-000000000002").expect("turn id")
+        }
+
+        fn interaction_id(&self) -> acp_core::model::InteractionId {
+            acp_core::model::InteractionId::new("00000000-0000-4000-8000-000000000003")
+                .expect("interaction id")
+        }
+
+        fn pairing_id(&self) -> acp_core::model::PairingId {
+            acp_core::model::PairingId::new("00000000-0000-4000-8000-000000000004")
+                .expect("pairing id")
+        }
+
+        fn message_id(&self) -> acp_core::model::MessageId {
+            acp_core::model::MessageId::new("00000000-0000-4000-8000-000000000005")
+                .expect("message id")
+        }
+
+        fn origin_epoch(&self) -> acp_core::model::OriginEpoch {
+            acp_core::model::OriginEpoch::new("00000000-0000-4000-8000-000000000006")
+                .expect("origin epoch")
+        }
+
+        fn request_id(&self) -> acp_core::model::RequestId {
+            acp_core::model::RequestId::new("00000000-0000-4000-8000-000000000007")
+                .expect("request id")
+        }
+    }
+
+    /// fake ACP child 的可执行文件（与 `terminal.rs` 的单测同一判据：`cargo test` 必须构建 bin 目标）。
+    fn fake_agent_binary() -> PathBuf {
+        let mut path = std::env::current_exe().expect("current exe");
+        path.pop(); // deps
+        path.pop(); // debug|release
+        let base = path.join("acpr-fake-acp-agent");
+        if base.exists() {
+            return base;
+        }
+        let exe = base.with_extension("exe");
+        assert!(
+            exe.exists(),
+            "找不到 fake ACP Agent 可执行文件（cargo test 必须构建 bin 目标）：{}",
+            exe.display()
+        );
+        exe
+    }
+
+    fn launch_spec(program: &std::path::Path) -> crate::launch::LaunchSpec {
+        let env = launch::NECESSARY_ENV
+            .iter()
+            .filter_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .map(|value| ((*name).to_owned(), value))
+            })
+            .collect();
+        crate::launch::LaunchSpec {
+            program: program.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            env,
+        }
+    }
+
+    /// 起一个只应答（什么都不做）的 fake Agent，返回运行时与一条已登记的本代绑定。
+    async fn runtime_with_binding() -> (Arc<AgentRuntime>, Arc<Supervisor>, Arc<AcpSession>) {
+        runtime_with_binding_on(Arc::new(Mutex::new(()))).await
+    }
+
+    /// 同上，但运行时与宿主共享同一把绑定门（用于覆盖 `open` 的重绑顺序）。
+    async fn runtime_with_binding_on(
+        bindings: Arc<Mutex<()>>,
+    ) -> (Arc<AgentRuntime>, Arc<Supervisor>, Arc<AcpSession>) {
+        let program = fake_agent_binary();
+        let (supervisor, _incoming) = Supervisor::start(launch_spec(&program))
+            .await
+            .expect("启动监督者");
+        let runtime = Arc::new(AgentRuntime::new(
+            Arc::clone(&supervisor),
+            1,
+            AgentId::new("agent-1").expect("id"),
+            Arc::new(std::sync::RwLock::new(NodeEvents::unbound())),
+            Arc::new(TestClock),
+            bindings,
+        ));
+        let session = Arc::new(AcpSession::new(SessionInit {
+            session: SessionId::new("11111111-1111-4111-8111-111111111111").expect("session"),
+            acp_session_id: "acp-session-1".to_owned(),
+            agent_session_id: None,
+            generation: 1,
+            supervisor: Arc::clone(&supervisor),
+            sink: EventSink::new(|_| {}),
+            ids: Arc::new(TestIds),
+            clock: Arc::new(TestClock),
+            capabilities: AgentCapabilities::default(),
+            modes: None,
+            config_options: Vec::new(),
+            workspace: std::env::temp_dir(),
+            attachments: None,
+            terminal_enabled: false,
+        }));
+        runtime.insert_session(&session).expect("登记绑定");
+        (runtime, supervisor, session)
+    }
+
+    /// 本地 closed（重绑与进程级回收走的就是这条）**不是**释放证据：释放端口必须报告未释放。
+    ///
+    /// 旧实现把「绑定已 closed」直接当成成功，于是 `release_session*` 在 closed→摘除的窗口里会把
+    /// 真实仍被占用的资源算作已释放，交还名额后同一个会话可能被重复计入。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_locally_closed_binding_reports_not_released() {
+        let (runtime, supervisor, session) = runtime_with_binding().await;
+
+        // ① 本地让出：没有 Agent 的 ack，也没有进程退出。
+        session.close_session();
+        assert!(session.is_closed() && !session.is_released());
+        assert_eq!(
+            runtime
+                .release_bound_session(&session)
+                .await
+                .expect("旧端点让出是幂等的"),
+            ReleaseAction::Yielded,
+            "本地 closed 不能变成「已确认释放」"
+        );
+        assert_eq!(
+            AgentHost::release_binding(&runtime, &session).await,
+            ReleaseOutcome::Failed,
+            "已 closed 但未确认的绑定不得交还名额"
+        );
+
+        // ② Agent 确认（或进程已退出）之后：同样的本地状态，但带确认事实 ⇒ 幂等成功。
+        session.mark_closed();
+        assert!(session.is_released());
+        assert_eq!(
+            runtime
+                .release_bound_session(&session)
+                .await
+                .expect("确认后的重复释放必须幂等"),
+            ReleaseAction::Released
+        );
+        assert_eq!(
+            AgentHost::release_binding(&runtime, &session).await,
+            ReleaseOutcome::Released
+        );
+
+        supervisor.shutdown().await;
+    }
+
+    /// `open` 先赢得绑定门：重绑把旧代标成「本地让出」，但**没有** Agent 的 `session/close` ack。
+    /// 旧代随后的释放必须仍报告「占用未确认」——不得因为本地让出被误记成 released 而交还容量名额；
+    /// 旧端点自身的关闭仍是幂等成功（组合层把 `Yielded` 映射成 `Ok`）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_binding_yielded_by_open_is_not_released() {
+        let host = AgentHost::new(
+            Arc::new(Vec::new()),
+            HostConfig::default(),
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        );
+        // 运行时与宿主共享同一把绑定门，重绑顺序与真实 `open` 完全一致。
+        let (runtime, supervisor, previous) =
+            runtime_with_binding_on(Arc::clone(&host.bindings)).await;
+        host.runtimes
+            .lock()
+            .await
+            .insert(AgentId::new("agent-1").expect("id"), Arc::clone(&runtime));
+        let session = previous.session_id().clone();
+        let old_generation = previous.generation();
+        // 真实路径里 `create` 先分配了第 1 代；这里补上同样的记账，`open` 的重绑才会拿到第 2 代。
+        assert_eq!(
+            host.next_binding_generation(&session),
+            old_generation,
+            "种子代必须与手工登记的首代一致"
+        );
+
+        let reopened = host
+            .open(
+                SessionReference::Owned(acp_core::model::OwnedSessionRef::new(session.clone())),
+                EventSink::new(|_| {}),
+            )
+            .await
+            .expect("open 已有会话");
+        assert!(previous.is_closed(), "旧代必须停止派发");
+        assert!(
+            !previous.is_released(),
+            "重绑只是本地让出：没有任何 Agent 的释放证据"
+        );
+
+        // 竞态路径：释放请求在重绑前已解析到这条旧代绑定，随后才拿到绑定门。
+        assert_eq!(
+            runtime
+                .release_bound_session(&previous)
+                .await
+                .expect("旧代让出是幂等的"),
+            ReleaseAction::Yielded,
+            "本地让出不能变成「已确认释放」"
+        );
+        assert_eq!(
+            AgentHost::release_binding(&runtime, &previous).await,
+            ReleaseOutcome::Failed,
+            "没有 session/close ack，不得交还容量名额"
+        );
+        // 对外端口同样不得报告已释放（定向到旧资源代的释放）。
+        assert_eq!(
+            host.release_session_at_generation(&session, old_generation)
+                .await,
+            ReleaseOutcome::Failed,
+            "旧资源代的释放不得报告已释放"
+        );
+
+        // 旧端点自身的关闭仍是幂等成功，且不触碰新代绑定。
+        let release = Arc::clone(&runtime) as Arc<dyn BindingControl>;
+        let old_endpoint = Endpoint::new(Arc::clone(&previous), release);
+        old_endpoint
+            .close()
+            .await
+            .expect("旧代端点的关闭是幂等成功");
+        old_endpoint.close().await.expect("重复关闭仍然幂等");
+        let current = runtime
+            .session_for_acp(previous.acp_session_id())
+            .expect("新代绑定仍须在目录里");
+        assert_eq!(current.generation(), old_generation + 1);
+        assert!(!current.is_closed() && !current.is_released());
+
+        drop(reopened);
+        supervisor.shutdown().await;
     }
 }

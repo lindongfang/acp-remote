@@ -34,6 +34,16 @@ export interface CommandGateway {
   dispatch(command: CommandMessage): void;
 }
 
+/**
+ * 查看控制面（`session.view`，`core.local-session-lifecycle.v1`）。
+ *
+ * 只有协商了该 feature 的连接才调用它；没有已认证连接时返回 `false`（调用方据此不把声明
+ * 当成已生效），而不是凭空记一条「看起来发出去了」的状态。
+ */
+export interface SessionViewGateway {
+  setSessionView(input: { readonly sessionId: string | null; readonly viewVersion: number }): boolean;
+}
+
 /** 认证结果（`deviceId` / `serverEpoch` / 限额；wire 上没有授权集合，创建入口也不依据它做任何判定）。 */
 export interface AuthenticatedGateway {
   /** 本次连接的认证结果；未认证为 `null`。 */
@@ -67,7 +77,11 @@ export interface ConnectionIdentity {
  * `SyncClient` 结构上满足它（`snapshots` 是只读属性），组合根可直接传入；
  * 测试则注入记账替身来证明「目录渲染不发任何命令」。
  */
-export type SyncGateway = SnapshotGateway & CommandGateway & AuthenticatedGateway & RemoteSourceGateway;
+export type SyncGateway = SnapshotGateway &
+  CommandGateway &
+  AuthenticatedGateway &
+  RemoteSourceGateway &
+  SessionViewGateway;
 
 /** 标识生成面（`requestId` / `messageId`）。 */
 export interface IdentifierSource {

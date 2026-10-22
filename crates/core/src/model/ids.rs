@@ -219,6 +219,12 @@ newtype!(
     check_uuid
 );
 newtype!(
+    /// 已认证连接的标识（canonical 小写 UUID 文本）。只服务运行期的查看租约（§3.3 的 `ViewLease`）：
+    /// 连接断开、撤销或被替换即失效，**不持久化、不进快照或事件**。
+    ConnectionId,
+    check_uuid
+);
+newtype!(
     /// 客户端请求标识，由 `IdGenerator` 在调用方分配；幂等键的一半（§6 第 6 条）。
     RequestId,
     check_uuid

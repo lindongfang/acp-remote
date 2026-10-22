@@ -20,6 +20,15 @@
       },
       "additionalProperties": true
     },
+    "session.activity.changed": {
+      "type": "object",
+      "description": "`core.local-session-lifecycle.v1` 的本机生命周期变化视图：携带**事件发生当时**的完整 owned 会话摘要（含可选的 `localActivity`）。只在 `localActivity` 的取值**实际变化**时写出：`session.resume` 命中 ready 复用且归约仍是 `active` 时**不写**，`idle` → `active`（重新恢复成功、资源代就绪）**必写**，`active` → `idle`（确认释放且无任务/交互）同样必写；查看声明、离页与租约到期都不改变归约结果，因此 MUST NOT 触发本事件（docs/SYNC_PROTOCOL.md §9.8）。它只在本机 owned 路径交付，Node Link 不转发；事件保存的是当时的事实，不得据此推断重启后资源仍然存活——重启后由当前生命周期查询收敛。",
+      "required": ["session"],
+      "properties": {
+        "session": { "$ref": "common.schema.json#/$defs/sessionSummary" }
+      },
+      "additionalProperties": true
+    },
     "session.info.changed": {
       "type": "object",
       "required": ["title", "updatedAt"],

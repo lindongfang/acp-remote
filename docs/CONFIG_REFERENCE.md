@@ -1,8 +1,9 @@
 # ACP Remote 配置参考
 
 > 状态：编码前基线
-> 版本：0.14
-> 日期：2026-10-18
+> 版本：0.15
+> 日期：2026-10-22
+> 修订记录（2026-10-22，0.15，`session-activation-lifecycle` WP1，**合同与实现（WP4 已接线）**）：§4 的 `sessions.idle_timeout_ms` 缺省值由 `0` 改为 **`1800000`（30 分钟）**，并新增 `sessions.max_active_sessions`（正整数，候选默认 **50**，无「无限」取值）。显式 `0` 从此只关闭**按时间**回收，不关闭容量保护；满额时优先回收无人查看、无任务/交互的最久未使用会话，没有安全候选时以 `session.capacity_exceeded` 拒绝新激活。**50 是待实测候选值**（10/25/50 档验收见 `docs/SYNC_PROTOCOL.md` §14 与变更 plan 的 PV6），测试前不得声称它是已验证的安全上限。落地前 `crates/app/src/config.rs` 与 `config.example.toml` 仍按旧默认值 `0` 解析，见 §4 的实现状态注记。
 > 修订记录（2026-10-18，0.14）：§1 的 `daemon.listen` 拆分为 `daemon.port` 与可选的 `daemon.bind`（单个 IP）；默认绑定随 TLS 模式分叉（`proxy` → loopback，`direct` → `0.0.0.0` + 尽力 `[::]`），`proxy` 模式禁止非 loopback 绑定；`daemon.public_origin` 接受 `host[:port]` 并归一化为 `https://...`，按“绑定非 loopback 且无 Host 判定来源”失败关闭；新增只读命令 `acp-remote config origin`。旧键 `daemon.listen` 会被明确拒绝。`terminal.*` 已在 0.13 删除；`sessions.*` 已接线；`node_link.*` 仍只解析不生效。
 > 修订记录（2026-10-18，0.13）：删除 `terminal.*` 配置段（§6）——仓库内没有任何消费者，终端输出截断上限不是可配置项；写 `[terminal]` 现在会按未知键启动失败。`daemon.instance_lock = "ipc"` 从「解析但不生效」改为**启动失败**，只接受 `file`。§4 的 `sessions.*` 三个键**已接线**（`queue_policy`/`max_queued_turns` 进 broker，`idle_timeout_ms` 进 `agent-host` 的空闲回收）。§3 的 `node_link.*` 仍是「只解析不生效」，留待后续统一处理。其余键名、类型与默认值未变。
 > 修订记录（2026-10-16，0.12，`pairing-model`）：§9 的 Import 说明去掉「本地客户端能做什么由设备 scope 决定」这一口径（设备权限层已删除：已认证设备即可执行本节点命令，设备方向没有授权维度），远程侧仍由 Import 的 `grants` 与 Owner 的 Export 决定。**配置键名、类型与默认值均未变**（仍以本节为唯一权威）；限流与协议上限仍是固定 v1 常量。
@@ -133,9 +134,15 @@
 |---|---|---|---|
 | `sessions.queue_policy` | enum | `"queue"` | 同一会话已有 active turn 时的新 prompt 处理：`queue` 按持久化接受顺序排队；`reject_busy` 直接返回 `session.busy`。v1 默认排队，与 `SYNC_PROTOCOL.md` §11.6 的二选一一致 |
 | `sessions.max_queued_turns` | integer | `16` | `queue` 策略下的排队上限，超出返回 `session.busy` |
-| `sessions.idle_timeout_ms` | integer | `0` | `0` 表示不因空闲关闭会话；非零时仅影响 Daemon 侧资源，不影响事件与游标 |
+| `sessions.idle_timeout_ms` | integer | `1800000` | 无人查看、无任务/交互且资源已释放确认后开始计时的保留期（30 分钟）。显式 `0` **只**关闭按时间回收，**不**关闭容量保护；非零时只影响 Daemon 侧运行资源，不影响事件、历史、游标与命令终态语义 |
+| `sessions.max_active_sessions` | integer | `50` | 本机所有 Agent 合计可同时占用运行资源的 owned 会话数上限（正整数，**没有**表示无限的取值）。`ready`/激活中/回收中，以及仍占真实运行资源的会话都计入；待处理会话计入，历史会话不计入。满额时优先回收无人查看、无任务/交互的最久未使用会话（同时间以稳定会话标识为平局规则），没有安全候选时以 `session.capacity_exceeded` 拒绝新激活 |
 
-三个键**已接线**：`queue_policy`/`max_queued_turns` 由组合根注入 broker 的 `BrokerConfig`（`crates/app/src/compose.rs`），`idle_timeout_ms` 注入 `agent-host` 的空闲回收并启动扫描任务（`crates/app/src/daemon.rs` 的 `agent_idle_sweep`）。非法取值（未知策略、超过 `u32` 的排队上限）在配置解析阶段失败关闭。
+四个键的目标语义如上，且均已接线（WP4）：`queue_policy`/`max_queued_turns` 注入 broker；`idle_timeout_ms`（缺省 1800000，显式 `0` 只关闭按时间回收）与 `max_active_sessions`（正整数，缺省候选 50）注入 `LocalSessionLifecycle`，非法值在配置解析阶段启动失败。`max_active_sessions` 的 50 仍是**待实测候选值**（PV6 的 10/25/50 档），不得声称已验证安全。
+
+- **保留期起点**：最后一个保护条件（查看者、未结束/排队任务、有效待处理交互、停止未确认的执行）消失时开始计时；任一条件重新出现即取消原计时，全部解除后从头计时。页面阅读、网络心跳、配置查询与快照拉取都不刷新它。
+- **容量回收可早于保留期**：满额且存在安全候选时提前回收最久未使用者；`idle_timeout_ms = 0` 不改变这条策略。
+- **50 是候选值**：交付前必须测量 10/25/50 个恢复会话的内存、切换耗时与回收效果（真实硬件/Agent 版本/上下文规模），实测不支持时携证据重新确认；在此之前不得把它写成已验证的安全上限，也不得把「会话数」当成内存硬上限宣传。
+- **非法取值失败关闭**：`max_active_sessions` 必须是正整数（`0`、负数、非整数一律在配置解析阶段拒绝，不退化成「无限」）；`queue_policy` 的未知取值与超过 `u32` 的排队上限同样失败关闭。
 
 ## 5. `storage`
 
@@ -179,7 +186,7 @@ codex = "C:/tools/codex-acp.exe"
 - 子进程环境在 `env_clear()` 后只注入固定的一组必要变量：`PATH`、`HOME`、`USERPROFILE`、`SystemRoot`、`TEMP`、`TMP`（宿主缺失时跳过）；不再有 `env_allowlist` 或 Provider 凭据绑定。`ACPR_*` / `ACP_REMOTE_*` 前缀永不注入。
 - Provider/MCP 凭据由 Agent 自己持有；本系统不保存、不注入、不代管。Node 私钥与 pairing secret 也不进入子进程。
 - **升级说明（v10，不可逆）**：升级会删除 `owned_agent_profile` 与 `owned_provider_ref`；Agent 不会从旧库自动搬运。若配置没有 `[agent]` 且旧库存在 profile，启动日志记录 `daemon.agents_discarded` 与条数，并提示“请在配置的 `[agent]` 中重新声明”。
-- Agent 进程的启动/短请求/关闭超时、单条 ACP 消息上限、stderr 缓冲上限、空闲回收规则都是**固定 v1 常量**（不是本文件的配置键）：见 `SECURITY_DESIGN.md` §12.2 的表；只有会话空闲回收复用本文档 §4 的 `sessions.idle_timeout_ms`。
+- Agent 进程的启动/短请求/关闭超时、单条 ACP 消息上限、stderr 缓冲上限、空闲回收规则都是**固定 v1 常量**（不是本文件的配置键）：见 `SECURITY_DESIGN.md` §12.2 的表；只有会话空闲回收复用本文档 §4 的 `sessions.idle_timeout_ms`，节点会话容量上限复用 §4 的 `sessions.max_active_sessions`。
 
 ## 8. `identity`
 

@@ -724,6 +724,61 @@ const budgetRowKeys = {
   单节点活动传输: "maxActiveTransfersPerNode",
 };
 
+// 非附件的帧族（查看控制帧）：schema 没有 `$defs.frameType`/`$defs.transferBudget`，帧名是
+// `message.schema.json` 可达的消息 `type`，预算按 §11.8 的固定表登记。两者的判据同样是「登记 ↔
+// schema ↔ 文档逐项相等」，只是表的形状不同；没有登记口径的非附件帧族一律报错，不静默跳过。
+const frameFamilies = {
+  "core.local-session-lifecycle.v1": {
+    framesHeading: "#### 查看控制帧族",
+    budgetHeading: "#### 查看控制预算",
+    budgetRows: {
+      查看租约: "viewLeaseMs",
+      续租间隔: "viewRenewalIntervalMs",
+      每连接查看者: "maxViewersPerConnection",
+      控制帧速率: "maxControlFramesPerMinute",
+    },
+  },
+};
+
+/**
+ * 从信封 `message.schema.json` 的顶层 union 出发，收集**可达**的消息 `type`（`properties.type.const`）。
+ *
+ * 只沿 `$ref`/`allOf`/`oneOf`/`anyOf` 递归，并跨文件解析 `$ref`；不遍历容器本身——`properties`/
+ * `items`/`$defs` 的内容只有在被上述关键字（或 `$ref`）明确指向时才进入。因此定义在 `$defs` 里、却没有
+ * 被顶层 union 引用到的分支**不是消息**——这正是本函数存在的理由：全树扫描会把「写进 schema 但永远
+ * 不会被选中的判别子」当成已登记消息。
+ *
+ * `state.types` 收集可达的 `type`，`state.files` 记录沿路解析到的文件（用于断言帧族 schema 自身
+ * 也被信封引用），`state.seen` 以 `文件 + JSON pointer` 去重，保证 `$ref` 环不会无限递归。
+ */
+function collectReachableMessageTypes(schemaPath, node, state) {
+  if (!node || typeof node !== "object") return state;
+  state.files.add(schemaPath);
+  if (typeof node.$ref === "string") {
+    const [filePart, fragment = ""] = node.$ref.split("#");
+    const targetPath = filePart ? resolve(dirname(schemaPath), filePart) : schemaPath;
+    const pointer = fragment ? `#${fragment}` : "#";
+    const key = `${targetPath}\u0000${pointer}`;
+    if (state.seen.has(key)) return state;
+    state.seen.add(key);
+    // 目标缺失由 inspectRefs 统一报错，这里只跳过，避免同一处缺陷报两遍。
+    if (existsSync(targetPath)) {
+      const target = resolvePointer(readJson(targetPath), pointer);
+      if (target !== undefined) collectReachableMessageTypes(targetPath, target, state);
+    }
+    return state;
+  }
+  const declared = node.properties?.type?.const;
+  if (typeof declared === "string") state.types.add(declared);
+  for (const keyword of ["allOf", "oneOf", "anyOf"]) {
+    const branches = node[keyword];
+    if (Array.isArray(branches)) {
+      for (const branch of branches) collectReachableMessageTypes(schemaPath, branch, state);
+    }
+  }
+  return state;
+}
+
 /** `heading` 之后第一张 markdown 表的行（单元格 trim、去掉分隔行）。 */
 function tableAfterHeading(text, heading) {
   const lines = text.split(/\r?\n/);
@@ -758,15 +813,20 @@ function checkTransportFrames() {
     return;
   }
 
-  const seenProtocols = new Set();
+  const seenFamilies = new Set();
   for (const entry of entries) {
     const protocol = entry?.protocol;
-    const label = `commands.json transportFrames[${protocol ?? "?"}]`;
-    if (typeof protocol !== "string" || seenProtocols.has(protocol)) {
-      errors.push(`${label}: protocol 缺失或重复`);
+    const familyId = `${protocol ?? "?"}:${entry?.feature ?? "?"}`;
+    const label = `commands.json transportFrames[${familyId}]`;
+    if (typeof protocol !== "string" || typeof entry?.feature !== "string") {
+      errors.push(`${label}: protocol/feature 缺失`);
       continue;
     }
-    seenProtocols.add(protocol);
+    if (seenFamilies.has(familyId)) {
+      errors.push(`${label}: protocol/feature 组合重复`);
+      continue;
+    }
+    seenFamilies.add(familyId);
     if (!(protocol in transportDocSources)) {
       errors.push(`${label}: 未知 protocol ${protocol}`);
       continue;
@@ -784,9 +844,72 @@ function checkTransportFrames() {
       continue;
     }
     const declaredFrames = schema.$defs?.frameType?.enum;
+    const docText = readText(transportDocSources[protocol]);
+    if (docText === undefined) continue;
+
     if (!Array.isArray(declaredFrames)) {
-      errors.push(`${label}: ${entry.schema} 缺少 $defs.frameType.enum`);
-    } else if (JSON.stringify(declaredFrames) !== JSON.stringify(entry.frames)) {
+      // 查看控制帧族：帧名必须是该 schema 可达的消息 type，预算与帧表由 §11.8 的固定表登记。
+      const family = frameFamilies[entry.feature];
+      if (!family) {
+        errors.push(`${label}: ${entry.schema} 没有 $defs.frameType，且该 feature 没有登记非附件帧族的文档口径`);
+        continue;
+      }
+      const messageSchemaPath = join(dirname(schemaPath), "message.schema.json");
+      const messageSchema = readJson(messageSchemaPath);
+      if (!messageSchema) {
+        errors.push(`${label}: 缺少信封 ${relative(root, messageSchemaPath)}，无法判定帧名是否可达`);
+        continue;
+      }
+      const reachable = collectReachableMessageTypes(messageSchemaPath, messageSchema, {
+        types: new Set(),
+        files: new Set(),
+        seen: new Set(),
+      });
+      if (!reachable.files.has(resolve(schemaPath))) {
+        errors.push(
+          `${label}: ${entry.schema} 没有被 ${relative(root, messageSchemaPath)} 的顶层 union 引用，登记的帧不可能到达客户端`,
+        );
+      }
+      const frames = Array.isArray(entry.frames) ? entry.frames : [];
+      if (frames.length === 0) {
+        errors.push(`${label}: frames 必须非空`);
+      }
+      for (const frame of frames) {
+        if (!reachable.types.has(frame)) {
+          errors.push(
+            `${label}: 帧 ${frame} 不在 ${relative(root, messageSchemaPath)} 顶层 union 的**可达**消息 type 里` +
+              `（未沿 $ref/allOf/oneOf/anyOf 引用到，或拼写不符）`,
+          );
+        }
+      }
+      const frameRows = tableAfterHeading(docText, family.framesHeading);
+      if (!frameRows) {
+        errors.push(`${label}: ${relative(root, transportDocSources[protocol])} 缺少「${family.framesHeading}」表`);
+      } else {
+        const docFrames = frameRows.slice(1).map((cells) => (cells[0] ?? "").replace(/`/g, ""));
+        if (JSON.stringify(docFrames) !== JSON.stringify(frames)) {
+          errors.push(
+            `${label}: 协议文档帧表与 commands.json frames 不一致（文档 ${docFrames.length} 行，登记 ${frames.length} 个）`,
+          );
+        }
+      }
+      const budgetRows = tableAfterHeading(docText, family.budgetHeading);
+      if (!budgetRows) {
+        errors.push(`${label}: ${relative(root, transportDocSources[protocol])} 缺少「${family.budgetHeading}」表`);
+      } else {
+        const docBudget = new Map(budgetRows.slice(1).map((cells) => [cells[0], cells[1]]));
+        for (const [rowLabel, key] of Object.entries(family.budgetRows)) {
+          const cell = docBudget.get(rowLabel);
+          const value = Number.parseInt(String(cell ?? "").replace(/[^0-9]/g, ""), 10);
+          if (!Number.isInteger(value) || value !== entry.budget?.[key]) {
+            errors.push(`${label}: 协议文档预算行「${rowLabel}」为 ${JSON.stringify(cell)}，登记为 ${entry.budget?.[key]}`);
+          }
+        }
+      }
+      continue;
+    }
+
+    if (JSON.stringify(declaredFrames) !== JSON.stringify(entry.frames)) {
       errors.push(
         `${label}: frames 与 ${entry.schema} 的 $defs.frameType.enum 不一致（登记 ${entry.frames?.length} 个，schema ${declaredFrames.length} 个）`,
       );
@@ -800,8 +923,6 @@ function checkTransportFrames() {
       }
     }
 
-    const docText = readText(transportDocSources[protocol]);
-    if (docText === undefined) continue;
     const frameRows = tableAfterHeading(docText, "#### 帧族（`attachment.*`）");
     if (!frameRows) {
       errors.push(`${label}: ${relative(root, transportDocSources[protocol])} 缺少「#### 帧族（\`attachment.*\`）」表`);
@@ -827,8 +948,10 @@ function checkTransportFrames() {
     }
   }
 
-  if (!seenProtocols.has("sync") || !seenProtocols.has("node_link")) {
-    errors.push("commands.json transportFrames 必须同时登记 sync 与 node_link 两个协议");
+  for (const protocol of ["sync", "node_link"]) {
+    if (!entries.some((entry) => entry?.protocol === protocol)) {
+      errors.push("commands.json transportFrames 必须同时登记 sync 与 node_link 两个协议");
+    }
   }
 }
 

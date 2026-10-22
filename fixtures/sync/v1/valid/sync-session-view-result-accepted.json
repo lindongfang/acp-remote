@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "type": "session.view.result",
+  "messageId": "5b8e1c47-0a92-4f36-b7d5-2c4a9e6f8d13",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "74",
+  "body": {
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "viewVersion": 4,
+    "status": "accepted",
+    "leaseExpiresAt": "2026-10-22T09:15:30.000Z"
+  }
+}

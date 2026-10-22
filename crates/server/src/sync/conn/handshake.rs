@@ -34,7 +34,7 @@ use sync_protocol::common::{FeatureId, FeatureList as WireFeatureList};
 /// 协商是**交集**（见 [`negotiate_features`]），因此这里漏登记一条 feature 会让它**静默失效**：客户端
 /// 声明了却被交集丢掉，服务端随后的门控（快照的 `path` 键、`workspace.browse`、`file.changed` 的
 /// 差异行）一律按「未协商」处置。新增 feature 时必须同时把它加进本表。
-pub const SUPPORTED_FEATURES: [&str; 21] = [
+pub const SUPPORTED_FEATURES: [&str; 22] = [
     // §10.2：会话主状态三态合同（`idle`/`running`/`pending`）。两端都必须选中，否则摘要词表可能不一致。
     "core.session-activity.v1",
     "resource.stateless-origin.v1",
@@ -66,6 +66,11 @@ pub const SUPPORTED_FEATURES: [&str; 21] = [
     // 真实接线——命令面在 `sync::command::CommandRoute::on_session_title` 里按 feature 门控，未协商
     // 时回 `protocol.feature_required`，因此只有真实路由存在时才登记。
     "core.session-title.v1",
+    // §9.8/§11.5/§11.8：本机会话生命周期（`session.resume`、查看控制帧、owned 摘要的
+    // `localActivity` 与 `session.activity.changed`）。宣告即承诺这些入口真实接线；只有组合根持有
+    // `LocalSessionLifecycle` 时才把它交进命令面/订阅面（测试组合根可以用
+    // [`feature_list_without`] 去掉它，保持旧 peer 的失败关闭方向）。
+    "core.local-session-lifecycle.v1",
 ];
 // `core.remote-history.v1` **不在此表**：imported 会话的历史回源需要 Access 侧的正文路径
 // （`node-link-client`）。宣告它会让客户端对一个当前必然失败的读取路径保留入口——能力协商不得

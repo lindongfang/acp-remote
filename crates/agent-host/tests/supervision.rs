@@ -491,6 +491,47 @@ async fn tree_terminate_while_parent_alive_stops_parent_and_grandchild() {
     let _ = std::fs::remove_file(&temp);
 }
 
+/// 关闭顺序的 grace 段：Agent 忽略 stdin EOF 时必须等满固定 grace 再强制结束整棵树，而不是无限等待。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_waits_for_grace_then_terminates_the_whole_tree() {
+    let temp = TempFile::new("acpr-agent-host-heartbeat-grace.txt");
+    let _ = std::fs::remove_file(&temp);
+    let spec = scenario_with(
+        "linger-after-eof",
+        &["--heartbeat-file", &temp.to_string_lossy()],
+    );
+    let (supervisor, _collector) = started(spec).await;
+    supervisor
+        .request("initialize", &initialize_params(), Duration::from_secs(10))
+        .await
+        .expect("initialize");
+    assert!(supervisor.is_running());
+
+    let started_at = std::time::Instant::now();
+    supervisor.shutdown().await;
+    let elapsed = started_at.elapsed();
+    assert!(
+        elapsed >= agent_host::limits::SHUTDOWN_GRACE,
+        "必须等满 grace（{}s）后才强杀，实际 {elapsed:?}",
+        agent_host::limits::SHUTDOWN_GRACE.as_secs()
+    );
+    assert!(
+        elapsed
+            < agent_host::limits::SHUTDOWN_GRACE
+                + agent_host::limits::EXIT_DRAIN_TIMEOUT
+                + Duration::from_secs(2),
+        "强杀后必须及时收敛，不得无限等待：{elapsed:?}"
+    );
+    assert!(!supervisor.is_running());
+
+    // 整棵树（含心跳子线程所在的进程）真的结束：心跳不再增长。
+    let after = std::fs::metadata(&temp).map(|meta| meta.len()).unwrap_or(0);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let later = std::fs::metadata(&temp).map(|meta| meta.len()).unwrap_or(0);
+    assert_eq!(after, later, "grace 后必须强制结束整棵进程树");
+    let _ = std::fs::remove_file(&temp);
+}
+
 /// `EndpointEvent` 的收集器在监督层用例里也必须被真的消费（防止「从未使用」告警与死积压）。
 #[allow(dead_code)]
 fn assert_event_shape(event: &EndpointEvent) {
