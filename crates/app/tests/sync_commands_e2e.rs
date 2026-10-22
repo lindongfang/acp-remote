@@ -3297,13 +3297,23 @@ async fn local_activity_and_its_event_are_gated_by_negotiation() {
     negotiated
         .command(&request, "session.resume", Some(&session), json!({}))
         .await;
-    let exchange = exchange_until_terminal(&mut negotiated, &request).await;
+    let mut exchange = exchange_until_terminal(&mut negotiated, &request).await;
     assert_eq!(
         exchange.terminal()["status"],
         json!("completed"),
         "{:?}",
         exchange.results
     );
+    // 实时扇出与终态观察者是两条独立任务：终态 `command.result` 允许先于该会话的事件帧到达
+    // （见 `drain_until` 的说明）。先等到期待的事件到齐，再断言它在场，否则本用例在较慢的
+    // CI 上会偶发假失败。
+    drain_until(&mut negotiated, &mut exchange, |exchange| {
+        exchange
+            .events
+            .iter()
+            .any(|event| event["eventType"] == json!("session.activity.changed"))
+    })
+    .await;
     let activity_event = exchange
         .events
         .iter()
