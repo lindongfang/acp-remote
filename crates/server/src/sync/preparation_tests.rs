@@ -71,7 +71,7 @@ fn signing_key() -> p256::ecdsa::SigningKey {
 // 窄替身
 // ---------------------------------------------------------------------------------------------
 
-struct TestIds;
+pub(crate) struct TestIds;
 
 impl acp_core::ports::IdGenerator for TestIds {
     fn session_id(&self) -> SessionId {
@@ -99,23 +99,45 @@ impl acp_core::ports::IdGenerator for TestIds {
 
 pub(crate) struct TestCapacity {
     full: Mutex<bool>,
+    reserves: Mutex<Vec<String>>,
+    releases: Mutex<Vec<(String, u64)>>,
+}
+
+impl TestCapacity {
+    /// 成功预占的次数（`session.start` 的资源转移必须**不**新增一次）。
+    pub(crate) fn reserve_calls(&self) -> usize {
+        self.reserves.lock().expect("lock").len()
+    }
+
+    /// 已交还的名额（准备端点释放或正式会话回收）；转移给正式会话不算交还。
+    pub(crate) fn release_calls(&self) -> usize {
+        self.releases.lock().expect("lock").len()
+    }
 }
 
 #[async_trait]
 impl CapacityAdmission for TestCapacity {
-    async fn reserve(&self, _session: SessionId, _now: Timestamp) -> Result<Admission, PortError> {
+    async fn reserve(&self, session: SessionId, _now: Timestamp) -> Result<Admission, PortError> {
         if *self.full.lock().expect("lock") {
             Ok(Admission::CapacityExceeded)
         } else {
+            self.reserves
+                .lock()
+                .expect("lock")
+                .push(session.as_str().to_owned());
             Ok(Admission::Reserved)
         }
     }
     async fn release(
         &self,
-        _session: SessionId,
-        _generation: ResourceGeneration,
+        session: SessionId,
+        generation: ResourceGeneration,
         _now: Timestamp,
     ) -> Result<(), PortError> {
+        self.releases
+            .lock()
+            .expect("lock")
+            .push((session.as_str().to_owned(), generation.get()));
         Ok(())
     }
     async fn reclaim_candidate(
@@ -215,13 +237,86 @@ impl PreparationTrust for TestTrust {
     }
 }
 
+/// 内存首条存储的可观察状态：`session.start` 的「提交过一次」「派发过一次」「只存一份首条」都由它回答。
+#[derive(Default)]
+pub(crate) struct FirstState {
+    /// 会话 → 首条关联（受理即写入，派发/结算只条件更新）。
+    pub(crate) records: BTreeMap<String, FirstSubmissionRecord>,
+    /// 会话 → 持久首条用户消息（继续的正文来源）。
+    pub(crate) messages: BTreeMap<String, FirstUserMessage>,
+    /// 持久命令行（`find_request` 的幂等事实；受理与派发围栏在同一事务写）。
+    pub(crate) commands: Vec<acp_core::model::CommandRecord>,
+    /// 受理事务次数（重复请求必须不再增加）。
+    pub(crate) commits: u32,
+    /// 跨越派发围栏的次数（阶段 CAS 只允许一次）。
+    pub(crate) dispatches: u32,
+    /// 结算写次数（继续的准备阶段失败）。
+    pub(crate) settlements: u32,
+    /// 下一次受理事务注入的失败（`None` = 正常受理）。
+    pub(crate) fail_commit: Option<UnavailableKind>,
+}
+
 pub(crate) struct TestFirst {
-    record: Mutex<Option<FirstSubmissionRecord>>,
+    state: Arc<Mutex<FirstState>>,
+}
+
+impl Default for TestFirst {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(FirstState::default())),
+        }
+    }
 }
 
 impl TestFirst {
+    /// 预置一条首条关联（等价于「存储里已有这一行」）；后续的派发/结算会条件更新同一行。
     pub(crate) fn set(&self, record: FirstSubmissionRecord) {
-        *self.record.lock().expect("lock") = Some(record);
+        self.state
+            .lock()
+            .expect("lock")
+            .records
+            .insert(record.session.as_str().to_owned(), record);
+    }
+
+    /// 共享状态（同一个实例同时接在 `Preparations` 与 `UseCases`/broker 上，与组合根一致）。
+    pub(crate) fn state(&self) -> &Arc<Mutex<FirstState>> {
+        &self.state
+    }
+
+    pub(crate) fn commits(&self) -> u32 {
+        self.state.lock().expect("lock").commits
+    }
+
+    pub(crate) fn dispatches(&self) -> u32 {
+        self.state.lock().expect("lock").dispatches
+    }
+
+    pub(crate) fn settlements(&self) -> u32 {
+        self.state.lock().expect("lock").settlements
+    }
+
+    /// 注入一次受理事务失败（原子保存失败 MUST NOT 派发）。
+    pub(crate) fn fail_next_commit(&self, kind: UnavailableKind) {
+        self.state.lock().expect("lock").fail_commit = Some(kind);
+    }
+
+    fn record_command(write: &FirstSubmissionWrite) -> acp_core::model::CommandRecord {
+        acp_core::model::CommandRecord::try_new(
+            Some(write.session.clone()),
+            write.request_id.clone(),
+            "session.start",
+            acp_core::model::CommandKind::Mutation,
+            write.actor.clone(),
+            Some(write.at.clone()),
+            acp_core::model::CommandStatus::Accepted,
+            None,
+            None,
+            None,
+            None,
+            None,
+            write.request_fingerprint.clone(),
+        )
+        .expect("accepted command row")
     }
 }
 
@@ -229,34 +324,157 @@ impl TestFirst {
 impl FirstSubmission for TestFirst {
     async fn commit_first_submission(
         &self,
-        _write: FirstSubmissionWrite,
+        write: FirstSubmissionWrite,
     ) -> Result<FirstSubmissionAdmission, PortError> {
-        Err(PortError::Unavailable(UnavailableKind::BackendUnsupported))
+        let mut state = self.state.lock().expect("lock");
+        state.commits += 1;
+        if let Some(kind) = state.fail_commit.take() {
+            return Err(PortError::Unavailable(kind));
+        }
+        if let Some(existing) = state.records.get(write.session.as_str()).cloned() {
+            return Ok(FirstSubmissionAdmission::AlreadyCommitted(existing));
+        }
+        let config = ViewJson::empty_object();
+        let record = FirstSubmissionRecord {
+            session: write.session.clone(),
+            first_submission_id: write.first_submission_id.clone(),
+            user_message_id: write.user_message_id.clone(),
+            first_request_id: write.request_id.clone(),
+            current_request_id: write.request_id.clone(),
+            stage: acp_core::model::FirstSubmissionStage::SavedNotDispatched,
+            ever_dispatched: false,
+            agent_session: None,
+            resource_generation: None,
+            mode_id: write.mode.as_ref().map(|mode| mode.mode_id().clone()),
+            config,
+            input_digest: write.input.digest().clone(),
+            terminal: None,
+        };
+        state.commands.push(TestFirst::record_command(&write));
+        state.messages.insert(
+            write.session.as_str().to_owned(),
+            FirstUserMessage {
+                session: write.session.clone(),
+                message: write.user_message_id.clone(),
+                turn: Some(write.turn.clone()),
+                content: write.input.json().clone(),
+                created_at: write.at.clone(),
+            },
+        );
+        state
+            .records
+            .insert(write.session.as_str().to_owned(), record.clone());
+        Ok(FirstSubmissionAdmission::Accepted(record))
     }
 
     async fn first_submission(
         &self,
-        _session: SessionId,
+        session: SessionId,
     ) -> Result<Option<FirstSubmissionRecord>, PortError> {
-        Ok(self.record.lock().expect("lock").clone())
+        Ok(self
+            .state
+            .lock()
+            .expect("lock")
+            .records
+            .get(session.as_str())
+            .cloned())
     }
 
     async fn first_user_message(
         &self,
-        _session: SessionId,
+        session: SessionId,
     ) -> Result<Option<FirstUserMessage>, PortError> {
-        Ok(None)
+        Ok(self
+            .state
+            .lock()
+            .expect("lock")
+            .messages
+            .get(session.as_str())
+            .cloned())
     }
 
-    async fn begin_dispatch(&self, _fence: DispatchFence) -> Result<DispatchAdmission, PortError> {
-        Err(PortError::Unavailable(UnavailableKind::BackendUnsupported))
+    async fn begin_dispatch(&self, fence: DispatchFence) -> Result<DispatchAdmission, PortError> {
+        let mut state = self.state.lock().expect("lock");
+        let Some(record) = state.records.get_mut(fence.session.as_str()) else {
+            return Ok(DispatchAdmission::NotEligible);
+        };
+        // 阶段 CAS：只有「可证明未派发」能跨越一次，之后的继续一律 NotEligible。
+        if record.ever_dispatched
+            || record.stage != acp_core::model::FirstSubmissionStage::SavedNotDispatched
+        {
+            return Ok(DispatchAdmission::NotEligible);
+        }
+        record.stage = acp_core::model::FirstSubmissionStage::DispatchStarted;
+        record.ever_dispatched = true;
+        record.current_request_id = fence.request_id.clone();
+        record.agent_session = Some(fence.agent_session.clone());
+        record.resource_generation = Some(fence.resource_generation);
+        // 与真实存储同一事务：围栏写入该次尝试的命令受理行（重放因此只读原终态）。
+        state.commands.push(
+            acp_core::model::CommandRecord::try_new(
+                Some(fence.session.clone()),
+                fence.request_id.clone(),
+                "session.start",
+                acp_core::model::CommandKind::Mutation,
+                fence.actor.clone(),
+                Some(fence.at.clone()),
+                acp_core::model::CommandStatus::Accepted,
+                None,
+                None,
+                None,
+                None,
+                None,
+                fence.request_fingerprint.clone(),
+            )
+            .expect("dispatch command row"),
+        );
+        state.dispatches += 1;
+        Ok(DispatchAdmission::Granted)
     }
 
     async fn settle_first_submission(
         &self,
-        _settlement: FirstSubmissionSettlement,
+        settlement: FirstSubmissionSettlement,
     ) -> Result<FirstSubmissionRecord, PortError> {
-        Err(PortError::Unavailable(UnavailableKind::BackendUnsupported))
+        let mut state = self.state.lock().expect("lock");
+        state.settlements += 1;
+        let Some(record) = state.records.get_mut(settlement.session.as_str()) else {
+            return Err(PortError::Unavailable(UnavailableKind::IoError));
+        };
+        record.current_request_id = settlement.request_id.clone();
+        record.terminal = Some(acp_core::model::RequestTerminal {
+            request_id: settlement.request_id.clone(),
+            outcome: settlement.outcome,
+            at: settlement.at.clone(),
+            error: settlement.error.clone(),
+        });
+        if settlement.outcome == acp_core::model::RequestOutcome::Failed && !record.ever_dispatched
+        {
+            // 「可证明未派发的失败」：阶段保持在 `saved_not_dispatched`，正文与首条身份不变。
+            record.stage = acp_core::model::FirstSubmissionStage::SavedNotDispatched;
+        } else {
+            record.stage = acp_core::model::FirstSubmissionStage::Terminal;
+        }
+        let settled = record.clone();
+        state.commands.push(
+            acp_core::model::CommandRecord::try_new(
+                Some(settlement.session.clone()),
+                settlement.request_id,
+                "session.start",
+                acp_core::model::CommandKind::Mutation,
+                settlement.actor,
+                Some(settlement.at.clone()),
+                acp_core::model::CommandStatus::Failed,
+                Some(settlement.at.clone()),
+                Some(acp_core::model::EventId::new(&fresh()).expect("terminal event")),
+                None,
+                settlement.error,
+                None,
+                settlement.request_fingerprint,
+            )
+            .expect("failed command row"),
+        );
+        Ok(settled)
     }
 
     async fn converge_first_submission(
@@ -264,7 +482,7 @@ impl FirstSubmission for TestFirst {
         _session: SessionId,
         _at: Timestamp,
     ) -> Result<FirstSubmissionConvergence, PortError> {
-        Err(PortError::Unavailable(UnavailableKind::BackendUnsupported))
+        Ok(FirstSubmissionConvergence::NotPreparation)
     }
 }
 
@@ -552,9 +770,13 @@ impl PreparationAttachmentStaging for TestStaging {
 pub(crate) struct TestHost {
     establish_calls: Mutex<u32>,
     configure_calls: Mutex<u32>,
+    claim_calls: Mutex<u32>,
     release_calls: Mutex<u32>,
+    releases: Mutex<Vec<(String, u64)>>,
     release_outcome: Mutex<EndpointRelease>,
     options: Mutex<PreparationOptions>,
+    /// `claim` 返回的端点（`None` = 该运行期没有可转正的端点，与真实实现「未建立即失败」同形）。
+    endpoint: Mutex<Option<Arc<dyn acp_core::ports::SessionEndpoint>>>,
 }
 
 impl TestHost {
@@ -562,7 +784,9 @@ impl TestHost {
         Self {
             establish_calls: Mutex::new(0),
             configure_calls: Mutex::new(0),
+            claim_calls: Mutex::new(0),
             release_calls: Mutex::new(0),
+            releases: Mutex::new(Vec::new()),
             release_outcome: Mutex::new(EndpointRelease::Released),
             options: Mutex::new(PreparationOptions {
                 modes: ModeState::new(
@@ -596,15 +820,39 @@ impl TestHost {
                 ],
                 blocks_dispatch: false,
             }),
+            endpoint: Mutex::new(None),
         }
     }
 
-    fn establish_calls(&self) -> u32 {
+    pub(crate) fn establish_calls(&self) -> u32 {
         *self.establish_calls.lock().expect("lock")
     }
 
-    fn release_calls(&self) -> u32 {
+    pub(crate) fn configure_calls(&self) -> u32 {
+        *self.configure_calls.lock().expect("lock")
+    }
+
+    pub(crate) fn claim_calls(&self) -> u32 {
+        *self.claim_calls.lock().expect("lock")
+    }
+
+    pub(crate) fn release_calls(&self) -> u32 {
         *self.release_calls.lock().expect("lock")
+    }
+
+    /// 已按资源代释放的端点（顺序即调用顺序）。
+    pub(crate) fn releases(&self) -> Vec<(String, u64)> {
+        self.releases.lock().expect("lock").clone()
+    }
+
+    /// 让 `claim` 返回这份端点（转正成功），并把它交给用例断言派发次数。
+    pub(crate) fn set_endpoint(&self, endpoint: Arc<dyn acp_core::ports::SessionEndpoint>) {
+        *self.endpoint.lock().expect("lock") = Some(endpoint);
+    }
+
+    /// 换掉 `configure`/`establish` 返回的 Agent 确认值（模拟「草稿选择不可用」）。
+    pub(crate) fn set_options(&self, options: PreparationOptions) {
+        *self.options.lock().expect("lock") = options;
     }
 }
 
@@ -626,8 +874,12 @@ impl PreparationEndpoints for TestHost {
         Ok(self.options.lock().expect("lock").clone())
     }
 
-    async fn release(&self, _session: SessionId, _generation: u64) -> EndpointRelease {
+    async fn release(&self, session: SessionId, generation: u64) -> EndpointRelease {
         *self.release_calls.lock().expect("lock") += 1;
+        self.releases
+            .lock()
+            .expect("lock")
+            .push((session.as_str().to_owned(), generation));
         *self.release_outcome.lock().expect("lock")
     }
 
@@ -636,10 +888,14 @@ impl PreparationEndpoints for TestHost {
         _session: SessionId,
         _generation: u64,
     ) -> Result<Arc<dyn acp_core::ports::SessionEndpoint>, PortError> {
-        // 控制面用例不走首次派发：claim 只证明「未建立端点时显式失败」。
-        Err(PortError::Unavailable(
-            UnavailableKind::SessionNotEstablished,
-        ))
+        *self.claim_calls.lock().expect("lock") += 1;
+        match self.endpoint.lock().expect("lock").clone() {
+            Some(endpoint) => Ok(endpoint),
+            // 未建立端点时显式失败（控制面用例只证明这一条）。
+            None => Err(PortError::Unavailable(
+                UnavailableKind::SessionNotEstablished,
+            )),
+        }
     }
 
     async fn release_all(&self) {}
@@ -660,15 +916,15 @@ pub(crate) fn fixture() -> Fixture {
     let trust = Arc::new(TestTrust::new(&workspace));
     let capacity = Arc::new(TestCapacity {
         full: Mutex::new(false),
+        reserves: Mutex::new(Vec::new()),
+        releases: Mutex::new(Vec::new()),
     });
     let directory = Arc::new(PreparationDirectory::new(
         Arc::new(TestIds),
         capacity.clone(),
         RuntimeEpoch::new(RUNTIME).expect("runtime epoch"),
     ));
-    let first = Arc::new(TestFirst {
-        record: Mutex::new(None),
-    });
+    let first = Arc::new(TestFirst::default());
     let staging = Arc::new(TestStaging::default());
     let host = Arc::new(TestHost::new());
     let preparations = Arc::new(Preparations::new(

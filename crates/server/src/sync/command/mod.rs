@@ -2883,24 +2883,33 @@ impl CommandRoute {
                 "the session has no recorded workspace",
                 RawObject::empty(),
             ))?;
-        let record = self
+        // 目录路径必须经**设备可读**的解析入口取得：`UseCases::directory` 是本机管理读面
+        // （`Actor::LocalCli` 守卫），拿它解析会让任何设备的继续都以 `authorization.scope_denied`
+        // 失败。这里用与准备 allocate 同一个解析入口（已认证设备可读、只认已登记目录）。
+        let resolved = self
             .core
-            .directory(actor, &directory)
-            .await
-            .map_err(|error| port_rejection(&error).into_parts())?
-            .ok_or((
-                ErrorCode::SessionNotFound,
-                "the session workspace is no longer registered",
-                RawObject::empty(),
-            ))?;
-        let workspace = ResolvedWorkspace::try_new(directory, record.canonical_path().to_owned())
-            .map_err(|_| {
-            (
-                ErrorCode::InternalUnavailable,
-                "the recorded workspace path is not usable",
-                RawObject::empty(),
+            .resolve_preparation_workspace(
+                actor,
+                acp_core::use_cases::PreparationWorkspaceSource::Directory(directory.clone()),
             )
-        })?;
+            .await
+            .map_err(|error| match error {
+                PortError::InvalidRequest(_) => (
+                    ErrorCode::SessionNotFound,
+                    "the session workspace is no longer registered",
+                    RawObject::empty(),
+                ),
+                other => port_rejection(&other).into_parts(),
+            })?;
+        let workspace =
+            ResolvedWorkspace::try_new(directory, resolved.workspace.canonical_path().to_owned())
+                .map_err(|_| {
+                (
+                    ErrorCode::InternalUnavailable,
+                    "the recorded workspace path is not usable",
+                    RawObject::empty(),
+                )
+            })?;
         Ok((summary.agent().clone(), workspace))
     }
 
@@ -4318,9 +4327,14 @@ fn capability_rejection(message: &'static str) -> StartRejection {
 }
 
 /// wire 的配置值 → core 值对象。
+///
+/// `select` 类型选项在 wire 上就是字符串（`{ <configId>: string }`），而 Agent 确认的当前值一律是
+/// [`CoreConfigValue::Select`]（`agent-host` 把 ACP 的 `currentValue` 投影成 select，且显式拒绝
+/// 文本取值）。因此字符串必须映射成 `select`，不能映射成 `text`——否则同一个草稿选择在准备控制帧
+/// （`selection_input` 用的就是 `select`）通过，到了 `session.start` 却永远「无法应用」。
 fn core_config_value(value: &WireConfigValue) -> Result<CoreConfigValue, StartRejection> {
     match value {
-        WireConfigValue::Text(text) => CoreConfigValue::text(text.as_str())
+        WireConfigValue::Text(text) => CoreConfigValue::select(text.as_str())
             .map_err(|_| schema_rejection("the config value is out of range")),
         WireConfigValue::Boolean(flag) => Ok(CoreConfigValue::Boolean(*flag)),
     }
@@ -4473,6 +4487,9 @@ fn payload_fingerprint(payload: &CommandPayload) -> Option<acp_core::model::Dige
     acp_core::model::Digest::new(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
         .ok()
 }
+
+#[cfg(test)]
+mod start_tests;
 
 #[cfg(test)]
 mod tests {
