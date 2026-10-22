@@ -136,6 +136,10 @@ struct State {
     prompt_seq: u64,
     /// 进行中的终端探针流程（`terminal/*` 场景）。
     terminal_flow: Option<TerminalFlow>,
+    /// `hold-set-mode` 场景中暂不响应的 `session/set_mode`：`(会话, 请求 id)`。
+    ///
+    /// 该响应在**下一次** `session/new` 应答之后写出，用于验证「旧代的迟到结果不得覆盖新代选择」。
+    held_set_mode: Option<(String, Value)>,
 }
 
 impl State {
@@ -467,7 +471,11 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
             let session_id = format!("acp-session-{}", state.session_seq);
             let mut result = serde_json::Map::new();
             result.insert("sessionId".to_owned(), json!(session_id));
-            if !args.no_modes {
+            // 重建场景：第 1 个会话有完整选项，第 2 个（重建后）两者都消失。用于验证「不可用选择
+            // 保留可见并阻止派发」，而不是静默回退默认值。
+            let rebuilt_without_options =
+                args.scenario == "rebuild-options" && state.session_seq > 1;
+            if !args.no_modes && !rebuilt_without_options {
                 result.insert(
                     "modes".to_owned(),
                     json!({
@@ -479,7 +487,7 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
                     }),
                 );
             }
-            if !args.no_config_options {
+            if !args.no_config_options && !rebuilt_without_options {
                 result.insert(
                     "configOptions".to_owned(),
                     json!([
@@ -505,6 +513,19 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
                 );
             }
             respond(out, &id, Value::Object(result));
+            // `hold-set-mode`：把旧会话暂缓的 `session/set_mode` 应答放到**这次** `session/new`
+            // 应答之后写出，制造「新代已建立、旧代结果迟到」的顺序。
+            if let Some((session, held)) = state.held_set_mode.take() {
+                respond(out, &held, json!({}));
+                notify(
+                    out,
+                    "session/update",
+                    json!({
+                        "sessionId": session,
+                        "update": { "sessionUpdate": "current_mode_update", "currentModeId": "plan" },
+                    }),
+                );
+            }
             if args.scenario == "exit-after-new" {
                 // 让 session/new 的响应先被读侧处理，再退出：之后任何写入都必须失败
                 // （用于验证写确认失败路径）。
@@ -530,6 +551,17 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
             if args.exit_on_config_write {
                 // 收到不该被发送的请求：立即退出，让「未宣告也发消息」变成可观察的失败。
                 std::process::exit(7);
+            }
+            if args.scenario == "hold-set-mode" {
+                // 暂缓应答，直到下一次 `session/new`（重建）之后才写出。
+                let session = message
+                    .get("params")
+                    .and_then(|params| params.get("sessionId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("acp-session-1")
+                    .to_owned();
+                state.held_set_mode = Some((session, id.clone()));
+                return;
             }
             respond(out, &id, json!({}));
             let session = message
@@ -713,6 +745,22 @@ fn start_prompt(state: &mut State, out: &mut impl Write, args: &Args, id: Value,
         return;
     }
     match args.scenario.as_str() {
+        "echo-user" => {
+            // 用户输入回显：mapper 必须把本次派发上下文挂到这条 `user.message.delta` 上。
+            notify(
+                out,
+                "session/update",
+                json!({
+                    "sessionId": session,
+                    "update": {
+                        "sessionUpdate": "user_message_chunk",
+                        "messageId": "user-echo-1",
+                        "content": { "type": "text", "text": "首条消息的回显" },
+                    },
+                }),
+            );
+            respond(out, &id, json!({ "stopReason": "end_turn" }));
+        }
         "crash-on-prompt" => {
             emit_chunk(out, session, "崩溃前的一小段");
             let _ = out.flush();

@@ -392,6 +392,8 @@ AttachmentTransfer（计划，`attachment.schema.json`）：独立已认证附�
 
 wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` 与公共领域 view 同时交给 core，不能只交规范化文本。优先使用一个通用 ACP 实现；Codex、OMP 差异优先表示为 capability/profile 数据。
 
+- **准备（临时）端点**（已实现，`web-session-preparation` WP4；`crates/agent-host/src/preparation.rs`）：`AgentHost::prepare` 为 core 已分配的 `SessionId` 建立真实 `session/new` 端点，**不要求 `SessionStore` 中存在行**；模式与配置只取 Agent 响应（默认值也是 Agent 的），准备期不发送任何 prompt、也不发空消息促使 Agent 写盘。`TemporaryEndpoint::apply_selection` 先读当前选项再验证/应用草稿；请求的模式/配置已不可用时保留在报告里可见并把端点标为 blocked，`transfer_preparation` 与 prompt 都被拒绝（不静默回退默认值）。`rebuild_preparation` 在新的绑定资源代下重建同一会话：已转正的绑定在**任何** `session/new` 之前被拒绝（本地可判定，不在 Agent 侧留下随后被丢弃的会话）；旧代在仍是当前映射时用能力门控的 `session/close` 真实释放（关闭被拒绝/说不清时保留映射与占用并让重建失败），旧代迟到的关闭/`set_mode`/`set_config` 结果不会摘除或改写新代；`release_preparation` 只释放目录当前指向的**精确代**，关闭被拒绝/超时/只剩旧句柄时返回未释放并保留占用，整进程关闭仍走 `shutdown_*` 的进程树与任务回收。首次提交由 `transfer_preparation` 把**同一端点**转正后直接派发，不需要第二次 `session/new`。`prompt_with_context` 携带的派发上下文只在该适配器内部用于回显关联：可证明与已保存首条逐字节一致的重复回显不再产出第二条 `user.message.delta`，内容不同/无法归属的照常下发；上下文**不**写入事件视图、不新增 wire 字段（普通 prompt 完全不出现关联行为）。本层**不读** `SessionStore`、不按 Agent 名称分支。
+
 实现前已冻结的硬约束（都不是可选优化）：
 
 - **进程树清理**：Windows 必须用 Job Object 管理 Agent 进程树，并把 `KILL_ON_JOB_CLOSE` 设在 Daemon 侧持有的 Job 上。

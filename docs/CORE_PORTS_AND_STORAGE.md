@@ -48,6 +48,8 @@
 
 > 版本：0.28（2026-10-22，`web-session-preparation` 变更 **WP2 检视修复**：终态投影与事件口径——`session.start` 的 `command.completed` 现在携带 §11.9 的六字段 `result` 并持久化 `result_json`（重放返回同一终态与 `terminal_event_id`）；结算只在首条 turn 仍非终态时写 `turn.*` 领域事件（CAS，随后写命令终态），已由 broker 收敛的 turn 不再重复终态/`ended_at`/会话版本，非 `accepted` 行按 `Conflict(Consumed)` 拒绝；终态事件与首条初始事件都按既有 `expires_at` 策略写 TTL；`FirstSubmissionRecord` 增加 `mode_id`/`config` 供显式继续复用记录的选择；受理事务回滚只把**本次认领**真的搬走的附件字节移回封存路径（不碰更早会话已提交的同内容字节）且同 ID 可重试；准备目录在释放/提交成功后移除条目，只留 `PREPARATION_RELEASED_TOMBSTONES` 条 tombstone。§7 的 DDL 与 v16 版本断言逐字未变。
 
+> 版本：0.29（2026-10-22，`web-session-preparation` 变更 **WP4**：**准备端点与派发上下文**——§5.1 的 `SessionEndpoint` 增加带默认实现的 `prompt_with_context`（`Option<DispatchContext>`，默认委托既有 `prompt`，既有实现与测试行为不变）；该次 prompt 的派发上下文只在适配器**内部**用于回显关联（构造 `UserEchoEvent` 并调用 `associate_user_echo`）：可证明与已保存首条逐字节一致的重复回显不再产出第二条 `user.message.delta`，内容不同/无法归属的照常下发；上下文**不**写入事件视图，不新增 wire 字段/ACP 方法，`payload.acp` 原文不变。`agent-host` 新增临时端点（`prepare`/`rebuild_preparation`/`transfer_preparation`/`release_preparation`）：不要求 `SessionStore` 行、真实 `session/new` 模式与配置、选项不可用阻止派发、按精确资源代释放、首次提交同一端点转正；重建前拒绝已转正的绑定（不再先建后弃），并在换入新代前用能力门控的 `session/close` 真实释放旧代；不读会话存储、不按 Agent 名称分支。
+
 ## 1. 范围与非目标
 
 范围：core 的值对象/用例/端口/错误类型、broker 的提交与发布契约、`storage-sqlite` 的 PRAGMA/文件布局/migration/表结构/索引/保留与容量/崩溃恢复、以及实现该合同的验收判据。
@@ -388,6 +390,10 @@ pub trait SessionEndpoint: Send + Sync {
     /// 实现**不得**编造占位值。
     fn agent_session_id(&self) -> Option<&AgentSessionId>;
     async fn prompt(&self, request: PromptRequest, at: Timestamp) -> Result<TurnAccepted, PortError>;
+    /// 带**本次派发上下文**的 prompt（`design.md` D7；默认实现丢弃上下文并委托 `prompt`，既有实现与
+    /// 测试因此无需改动）。上下文只属于这一次调用，用于把该次 prompt 引起的用户输入回显关联到已保存
+    /// 的首条消息；它**不**进入事件视图或任何 wire DTO。普通 prompt 传 `None`。
+    async fn prompt_with_context(&self, request: PromptRequest, at: Timestamp, context: Option<DispatchContext>) -> Result<TurnAccepted, PortError>;
     async fn validate_prompt(&self, request: &PromptRequest) -> Result<(), PortError>;
     async fn cancel(&self, turn: Option<TurnId>) -> Result<(), PortError>;
     /// 模式的只读枚举（`session.mode.list` 的唯一来源，§6 第 17 条）：候选列表来自 ACP 的
@@ -404,6 +410,7 @@ pub trait SessionEndpoint: Send + Sync {
 ```
 
 - `[决定]` 后端事件通道：`create`/`open` 接收 `EventSink`（`[决定]` 定义为 `Arc<dyn Fn(EndpointEvent) + Send + Sync>` 的包装类型，由 core 提供有界队列的发送端）；`EventSink` 的调用顺序即提交顺序，broker 按该顺序组装 `OwnedCommit`（§6 第 1/3 条）。**不**在 `SessionEndpoint` 上暴露 `next_event`，以免后端自己持有排序权。
+- `[决定]` **派发上下文只在适配器内部用于回显关联**（`web-session-preparation` WP4）：`prompt_with_context` 的 `Some(context)` 让 `agent-host` 对该次 turn 的 `user_message_chunk` 构造 `UserEchoEvent`（`link` 的七个固定字段取自上下文，内容数组与摘要由**内容块原文**按 `FirstSubmissionInput` 的 `[<block>]` 字节口径算出）并调用唯一规则 `associate_user_echo`。`Duplicate`（与已保存首条逐字节一致）⇒ 不产出 `user.message.delta`：持久首条正文是权威，回显不得再造第二条用户消息；`Differs`（内容不同）与 `Unattributed`（无上下文/原文取不到/旧资源代）⇒ 照常映射为 `user.message.delta`，不吞掉也不改写首条。上下文**不**写入 `payload.view`、不新增 wire 字段或 ACP 方法，`payload.acp` 原文不变；`None`（普通 prompt、第二条消息、旧路径）与不传上下文完全同形。已登记的事件词表没有「Agent 来源的用户输入事件」（`EndpointEvent` 不带 `EventOrigin`），所以 `Differs` 仍是用户输入事件，展示口径留给 WP5 的投影，**不得**为它发明新键或改写判别子映射。关联**不得**按相同文本或 Agent `messageId` 推导；摘要按逐字节比较，拆块/重新编码的 Agent 回显因此归入 `Differs`（宁多显示一条独立回显，也不错删内容）。
 - `[决定]` **`TurnAccepted.turn` 是适配器侧占位/审计值，不是 turn 归属的权威来源**：turn 归属一律由 core 在提交前用自己的 `TurnId`（`IdGenerator::turn_id`）定稿并写入 `owned_event.turn_id` 与事件 view 的 `turnId`（§6 第 19 条）；适配器返回的值**不得**参与归属决策、不得产生第二个 turn 行，也不得影响事件顺序（§9 判据 31）。
 - `[决定]` `read_history` 的分流：owned 由 `storage-sqlite` 从事件日志回答；imported 由 `node-link-client` 在线回源 Owner，Owner 不可达返回 `PortError::Unavailable(RemoteUnavailable)`。
 - `[决定]` **workspace 解析归 core**（§3.6 的 `CreateSessionRequest.workspace` 是 `Option<ResolvedWorkspace>`）：`UseCases::create_session(actor, requestId, requestFingerprint, request, Option<WorkspaceSource>)` 在调用 `SessionBackendFactory::create` **之前**完成 alias → 规范化绝对路径的解析与校验，后端只收到 `ResolvedWorkspace`，**不得**自己查存储、也不得按约定拼路径。`requestId` 与 `requestFingerprint` 由适配层传入（Node Link 的幂等键是 `(ownerNodeId, accessNodeId, requestId)`，指纹是 ACPR-CJ1 之后的解码 payload 摘要）：core **不得**自造 requestId 或指纹，否则同一次重试会得到第二个幂等键（§6 第 20 条）。终态由 `UseCases::settle_session_create(actor, requestId, status, result, error)` 提交（没有持久记录或记录已终结时是幂等 no-op），`completed` 的 `result` 由适配层投影（Node Link 的 `SessionCreateResult` 原文）。校验（与 `SECURITY_DESIGN.md` §12.3 同口径）：必须是绝对路径、必须存在、必须是目录；`canonicalize`（解析 symlink/junction/大小写/`.` 与 `..`）的结果作为权威值，拒绝相对路径与含 `..` 的输入。失败分类：alias 未在该 Export 中声明 → 参数类错误（`NODE_LINK_PROTOCOL.md` §12.7 的 `nodelink.export.not_granted`）；alias 已声明但**本机**解析失败（目录被删/不是目录/`canonicalize` 失败）→ `PortError::Unavailable(UnavailableKind::IoError)`，在线映射为服务端错误（`nodelink.internal.unavailable`），**不得**降级为参数错误。别名命名空间：Export 的 `workspace_aliases[].alias` 就是本机 `owned_workspace.alias`，Export 不复制路径，`export.create` 必须校验每个 alias 已存在。`canonical_path` 只出现在该调用入参里：不进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog。UNC/网络路径允许解析且不改变授权模型，是否记结构化警告由 `server` 层决定（core 不引入日志依赖）。

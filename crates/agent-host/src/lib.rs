@@ -36,6 +36,7 @@ pub mod limits;
 pub mod mapper;
 pub mod node;
 pub mod platform;
+pub mod preparation;
 pub mod process;
 mod prompt;
 pub mod release;
@@ -49,5 +50,8 @@ pub use host::{
 };
 pub use launch::{LaunchSpec, resolve_launch};
 pub use node::{NodeEventError, NodeEvents, PublicErrorView};
+pub use preparation::{
+    PreparationConfigChoice, PreparationOptions, PreparationSelection, TemporaryEndpoint,
+};
 pub use release::ReleaseOutcome;
 pub use session::{AcpSession, Endpoint};

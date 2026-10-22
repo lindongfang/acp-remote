@@ -35,6 +35,7 @@ use crate::error::HostError;
 use crate::launch;
 use crate::limits;
 use crate::node::{self, AgentLifecycle, ExitCause, ExitMark, NodeEvents};
+use crate::preparation::TemporaryEndpoint;
 use crate::process::{Inbound, Supervisor};
 use crate::release::{ReleaseAction, ReleaseOutcome, ReleaseRefusal};
 use crate::session::{AcpSession, BindingControl, Endpoint, SessionInit};
@@ -281,6 +282,30 @@ impl AgentRuntime {
         session: &AcpSession,
     ) -> Result<ReleaseAction, ReleaseRefusal> {
         let _bindings = self.bindings.lock().await;
+        self.release_locked(session).await
+    }
+
+    /// 让出**准备（临时）代**：只有尚未转正、且仍是当前映射的代才会真的发送 `session/close`。
+    ///
+    /// 重建（[`AgentHost::rebuild_preparation`]）在换入新代之前调用它。转正与关闭由同一把绑定门串行化：
+    /// 转正先到 ⇒ 这里拒绝（绝不关闭已经属于正式会话的绑定）；关闭先到 ⇒ 随后的
+    /// [`AgentHost::transfer_preparation`] 找不到映射而失败。只释放本地状态、摘掉映射会让旧 Agent 会话
+    /// 永远留在 Agent 进程里，因此这里走与逐会话释放完全相同的能力门控顺序。
+    async fn release_temporary_session(
+        &self,
+        session: &AcpSession,
+    ) -> Result<ReleaseAction, ReleaseRefusal> {
+        let _bindings = self.bindings.lock().await;
+        if !session.is_temporary() {
+            return Err(ReleaseRefusal::from_error(HostError::DuplicateSession {
+                session: session.session_id().as_str().to_owned(),
+            }));
+        }
+        self.release_locked(session).await
+    }
+
+    /// [`Self::release_bound_session`] 的绑定门内实现（判定 → 停终端 → `session/close` → 摘除映射）。
+    async fn release_locked(&self, session: &AcpSession) -> Result<ReleaseAction, ReleaseRefusal> {
         if session.is_released() {
             // Agent 已确认释放（或进程已退出）：重复释放幂等，且不再发任何请求。
             self.remove_session_if_current(session);
@@ -310,6 +335,24 @@ impl AgentRuntime {
             self.remove_session_if_current(session);
             return Ok(ReleaseAction::Released);
         }
+        let action = self.close_session_io(session).await?;
+        self.remove_session_if_current(session);
+        Ok(action)
+    }
+
+    /// 发送能力门控的 `session/close` 并收敛绑定自身的本地状态；**不**判定或摘除目录映射。
+    ///
+    /// [`Self::release_locked`] 在确认本条代仍是当前映射后调用它；尚未登记的绑定（建立后没能换入
+    /// 目录）也直接调用它，因此失败路径不会把 Agent 侧会话留在那里。调用方持有绑定门。
+    async fn close_session_io(
+        &self,
+        session: &AcpSession,
+    ) -> Result<ReleaseAction, ReleaseRefusal> {
+        if !self.supervisor.is_running() {
+            // 进程已退出：资源随进程树消失，没有任何可 ack 的外部资源。
+            session.mark_closed();
+            return Ok(ReleaseAction::Released);
+        }
         if !self.supports_session_close() {
             return Err(ReleaseRefusal::from_error(
                 HostError::CapabilityNotDeclared {
@@ -334,14 +377,12 @@ impl AgentRuntime {
             Ok(_) => {
                 // Agent 已确认释放：现在才允许让出本地绑定。
                 session.mark_closed();
-                self.remove_session_if_current(session);
                 Ok(ReleaseAction::Released)
             }
             Err(error @ (HostError::AgentExited { .. } | HostError::NotRunning)) => {
                 // 进程在关闭请求期间退出：资源随进程树消失是可观察事实，不是猜测的「已释放」。
                 tracing::warn!(error = %error, "session/close 期间 Agent 退出（资源随进程消失）");
                 session.mark_closed();
-                self.remove_session_if_current(session);
                 Ok(ReleaseAction::Released)
             }
             Err(error) => {
@@ -378,9 +419,9 @@ impl AgentRuntime {
 
 #[async_trait::async_trait]
 impl BindingControl for AgentRuntime {
-    async fn release(&self, session: &AcpSession) -> Result<(), ReleaseRefusal> {
+    async fn release(&self, session: &AcpSession) -> Result<ReleaseAction, ReleaseRefusal> {
         // 旧代端点的关闭是幂等的：无论是「已确认释放」还是「已在本地让出」，都不再发请求、不破坏新代。
-        self.release_bound_session(session).await.map(|_action| ())
+        self.release_bound_session(session).await
     }
 }
 
@@ -398,6 +439,8 @@ pub struct SessionResourceFacts {
     pub acp_session_id: String,
     /// 绑定资源代。
     pub generation: u64,
+    /// 是否是准备（临时）端点（未转正；**不**来自 `SessionStore`，没有持久行）。
+    pub temporary: bool,
     /// 本地绑定是否已关闭（**不**代表 Agent 已确认释放：重绑/回收也会置位）。
     pub closed: bool,
     /// 是否有进行中的 turn。
@@ -598,6 +641,248 @@ impl AgentHost {
         }
     }
 
+    /// 建立一条端点绑定（`session/new` + 真实模式/配置），**不**登记目录。
+    ///
+    /// `create` 与准备（临时）端点共用这一条路径：两者对 Agent 的请求完全相同——`session/new` 的响应
+    /// 就是模式和配置的唯一来源，本层不编造默认值，也不为了拿到选项而发送任何 prompt。
+    /// 调用方负责在绑定目录里登记（普通创建直接插入；准备端点在同一把绑定门下先清旧代再插入）。
+    ///
+    /// 错误映射与 `create` 一致（`to_establishment_error`）：建立入口的可证明/说不清分类只在
+    /// `session/new` 上生效，准备端点因此能复用同一终态判据。
+    async fn establish_binding(
+        &self,
+        session: &SessionId,
+        runtime: &Arc<AgentRuntime>,
+        request: CreateSessionRequest,
+        sink: EventSink,
+        temporary: bool,
+    ) -> Result<Arc<AcpSession>, PortError> {
+        let capabilities = lock(&runtime.capabilities).clone().unwrap_or_default();
+
+        let params = session_new_params(&request)?;
+        // 工作目录的规范绝对路径：终端的默认 cwd 与 prompt 路径引用的边界都用它。
+        // `session_new_params` 已经拒绝没有 workspace 的请求，这里只是把取值取出来。
+        let workspace = request
+            .workspace
+            .as_ref()
+            .map(|workspace| PathBuf::from(workspace.canonical_path()))
+            .ok_or(PortError::InvalidRequest(
+                "session/new 需要已解析的 workspace（ACP 要求 cwd）",
+            ))?;
+        let value = runtime
+            .supervisor
+            .request("session/new", &params, limits::SHORT_REQUEST_TIMEOUT)
+            .await
+            .map_err(|error| error.to_establishment_error())?;
+        let response: acp_protocol::message::NewSessionResponse = serde_json::from_value(value)
+            .map_err(|error| {
+                // 请求已发出、Agent 已答复，只是答复形状不合约定：会话**可能**已经建立，
+                // 因此这不是「可证明未产生会话」那一类。
+                HostError::MalformedResponse {
+                    method: "session/new",
+                    detail: error.to_string(),
+                }
+                .to_establishment_error()
+            })?;
+
+        // `session/new` 成功返回的 ACP 会话标识：core 用它落盘（§3.6）。取不出合法 `AgentSessionId`
+        // （空、超过 512 字符或含 NUL）时给 `None`，由 core 决定两列都不写——**不**编造占位值。
+        let agent_session_id = AgentSessionId::new(&response.session_id).ok();
+        let generation = self.next_binding_generation(session);
+        Ok(Arc::new(AcpSession::new(SessionInit {
+            session: session.clone(),
+            acp_session_id: response.session_id,
+            agent_session_id,
+            generation,
+            supervisor: Arc::clone(&runtime.supervisor),
+            sink,
+            ids: Arc::clone(&self.ids),
+            clock: Arc::clone(&self.clock),
+            temporary,
+            capabilities,
+            modes: response.modes,
+            config_options: response.config_options.unwrap_or_default(),
+            workspace,
+            attachments: self.attachments(),
+            terminal_enabled: self.terminal_enabled(),
+        })))
+    }
+
+    /// 为 core 已分配的 `SessionId` 建立**准备（临时）端点**（`design.md` D4/D9）。
+    ///
+    /// 与 [`SessionBackendFactory::create`] 的差别只在生命周期：不要求 `SessionStore` 中存在行，绑定
+    /// 只活在运行期；该端点不得派发 prompt，直到 [`AgentHost::transfer_preparation`] 转正。模式和配置
+    /// 全部来自真实 `session/new` 的响应（默认值也是 Agent 的），本层不缓存占位值。
+    ///
+    /// 同一会话已有绑定（临时或正式）时显式失败：重建走 [`AgentHost::rebuild_preparation`]，不能靠
+    /// 悄悄覆盖把旧资源留在 Agent 侧。
+    pub async fn prepare(
+        &self,
+        session: &SessionId,
+        request: CreateSessionRequest,
+        sink: EventSink,
+    ) -> Result<TemporaryEndpoint, PortError> {
+        if self.find_binding(session).await.is_some() {
+            return Err(HostError::DuplicateSession {
+                session: session.as_str().to_owned(),
+            }
+            .to_port_error());
+        }
+        let agent = request.agent.agent_id().clone();
+        let runtime = self
+            .ensure_runtime(&agent)
+            .await
+            .map_err(|error| error.to_establishment_error())?;
+        let prepared = self
+            .establish_binding(session, &runtime, request, sink, true)
+            .await?;
+        if let Err(error) = runtime.insert_session(&prepared) {
+            Self::close_unregistered_binding(&runtime, &prepared).await;
+            return Err(error.to_port_error());
+        }
+        let release: Arc<dyn BindingControl> = runtime;
+        Ok(TemporaryEndpoint::new(Endpoint::new(prepared, release)))
+    }
+
+    /// 在**新的资源代**下重建同一准备会话（恢复/重建路径）。
+    ///
+    /// 顺序固定为：先做本地可判定的拒绝（已转正的绑定不能被准备路径替换）→ 真实 `session/new` 取新代
+    /// 的真实选项 → 在旧代仍是当前映射时用能力门控的 `session/close` 释放它 → 在绑定门下登记新代。
+    /// 旧代随后的迟到结果只能作用于它自己那一代（关闭 ack 不会摘除新映射，`set_mode`/`set_config`
+    /// 在已让出的绑定上直接拒绝），不会覆盖新代的选择。
+    ///
+    /// 任何一条失败路径都必须收尾刚建立的端点：否则每次失败都会在 Agent 侧留下一个没人释放的会话。
+    /// 旧代关闭失败时**不**摘除它的映射（真实占用与容量名额保持），重建显式失败，core 仍可按旧句柄重试。
+    ///
+    /// 正式（已转正）绑定不能被准备路径替换：那是恢复（[`SessionBackendFactory::resume`]）的职责。
+    pub async fn rebuild_preparation(
+        &self,
+        session: &SessionId,
+        request: CreateSessionRequest,
+        sink: EventSink,
+    ) -> Result<TemporaryEndpoint, PortError> {
+        let agent = request.agent.agent_id().clone();
+        let runtime = self
+            .ensure_runtime(&agent)
+            .await
+            .map_err(|error| error.to_establishment_error())?;
+
+        // 已转正 ⇒ 在**任何 Agent I/O 之前**拒绝：`session/new` 一旦发出就会产生真实会话，随后只能
+        // 丢弃；这个判定是本地事实，不需要也不允许先建后弃。
+        {
+            let _bindings = self.bindings.lock().await;
+            if self
+                .find_binding(session)
+                .await
+                .is_some_and(|(_, existing)| !existing.is_temporary())
+            {
+                return Err(Self::owned_preparation_error(session));
+            }
+        }
+
+        // `session/new` 在绑定门外完成（Agent I/O 不占串行门）；旧绑定此刻仍可能服务，但准备端点
+        // 不派发 prompt，选项写入由 core 串行化。
+        let prepared = self
+            .establish_binding(session, &runtime, request, sink, true)
+            .await?;
+
+        // 释放旧代：只 `close_session()` 再摘掉映射会让 Agent 侧会话永远留在 Agent 进程里。
+        if let Some((previous_runtime, previous)) = self.find_binding(session).await {
+            match previous_runtime.release_temporary_session(&previous).await {
+                Ok(ReleaseAction::Released) => {}
+                Ok(ReleaseAction::Yielded) => {
+                    // 旧代已在本地让出、Agent 侧没有释放证据：保留占用（映射不动），重建失败。
+                    Self::close_unregistered_binding(&runtime, &prepared).await;
+                    return Err(HostError::SessionClosed.to_port_error());
+                }
+                Err(refusal) => {
+                    // 已经转正，或关闭被拒绝/说不清：旧绑定与真实资源保持占用，重建失败。
+                    Self::close_unregistered_binding(&runtime, &prepared).await;
+                    return Err(refusal.error.to_port_error());
+                }
+            }
+        }
+
+        let bindings = self.bindings.lock().await;
+        if let Err(error) = runtime.insert_session(&prepared) {
+            drop(bindings);
+            Self::close_unregistered_binding(&runtime, &prepared).await;
+            return Err(error.to_port_error());
+        }
+        drop(bindings);
+        let release: Arc<dyn BindingControl> = runtime;
+        Ok(TemporaryEndpoint::new(Endpoint::new(prepared, release)))
+    }
+
+    /// 「该会话已经是正式绑定」的拒绝（准备路径不替换已转正会话）。
+    fn owned_preparation_error(session: &SessionId) -> PortError {
+        HostError::DuplicateSession {
+            session: session.as_str().to_owned(),
+        }
+        .to_port_error()
+    }
+
+    /// 首次提交的**所有权转移**：把准备端点转成正式绑定，无需第二次 `create`/`session/new`。
+    ///
+    /// 只接受目录里仍然指向该句柄**同一代**的绑定；选项未复核对齐或存在不可用选择时拒绝（不静默
+    /// 回退默认值）。转正后同一端点即可用于首次派发（[`SessionEndpoint::prompt_with_context`]），
+    /// `agent_session_id`/模式/配置也原样沿用——它们都来自这次真实的 `session/new`。
+    pub async fn transfer_preparation(
+        &self,
+        endpoint: &TemporaryEndpoint,
+    ) -> Result<(), PortError> {
+        let _bindings = self.bindings.lock().await;
+        let Some((_, current)) = self.find_binding(endpoint.session_id()).await else {
+            return Err(HostError::UnknownSession.to_port_error());
+        };
+        if !Arc::ptr_eq(&current, endpoint.session_ref())
+            || current.generation() != endpoint.generation()
+        {
+            // 旧代句柄不得转正（新代已经存在）：这不是“没找到”，而是代不匹配。
+            return Err(HostError::SessionClosed.to_port_error());
+        }
+        current.mark_owned().map_err(|error| error.to_port_error())
+    }
+
+    /// 按**精确资源代**释放准备端点（core 的逐会话回收入口）。
+    ///
+    /// - 句柄已确认释放 ⇒ `Released`（幂等）；
+    /// - 目录里仍指向该代 ⇒ 执行真实关闭（停终端 → 能力门控的 `session/close` → 摘除映射）；
+    /// - 目录指向新代、只剩旧句柄，或根本找不到 ⇒ `Failed`：旧代**不得**关闭新绑定，也不能凭
+    ///   “没有映射”就宣称资源已释放（Agent 侧可能仍占用，容量名额保持占用）。
+    ///
+    /// `close` 被拒绝/能力未宣告/超时同样映射为 [`ReleaseOutcome::Failed`] 或 `Uncertain`，都保留占用。
+    pub async fn release_preparation(&self, endpoint: &TemporaryEndpoint) -> ReleaseOutcome {
+        if endpoint.is_released() {
+            return ReleaseOutcome::Released;
+        }
+        let Some((runtime, current)) = self.find_binding(endpoint.session_id()).await else {
+            return ReleaseOutcome::Failed;
+        };
+        if !Arc::ptr_eq(&current, endpoint.session_ref())
+            || current.generation() != endpoint.generation()
+        {
+            return ReleaseOutcome::Failed;
+        }
+        Self::release_binding(&runtime, &current).await
+    }
+
+    /// 收尾一条**未登记**的端点绑定（建立后没能换入目录）：同样走能力门控的 `session/close`。
+    ///
+    /// 这种绑定不在目录里，因此没有映射可判定/摘除；失败只记日志——调用方已经在返回自己的错误，
+    /// 不能用一个新错误覆盖它。与 `discard` 的关键区别：只作废本地状态会让 Agent 侧会话永久残留。
+    async fn close_unregistered_binding(runtime: &AgentRuntime, binding: &Arc<AcpSession>) {
+        let _bindings = runtime.bindings.lock().await;
+        if let Err(refusal) = runtime.close_session_io(binding).await {
+            tracing::warn!(
+                session = %binding.session_id(),
+                generation = binding.generation(),
+                error = %refusal.error,
+                "未能关闭未登记的准备端点（Agent 侧资源可能仍占用）"
+            );
+        }
+    }
+
     /// 当前运行期会话的事实快照（只报告，不做回收决定）。
     ///
     /// 逐会话回收由 core 的生命周期目录驱动；本层只如实给出「是否仍打开、是否有进行中的 turn、
@@ -619,6 +904,7 @@ impl AgentHost {
                     session: session.session_id().clone(),
                     acp_session_id: session.acp_session_id().to_owned(),
                     generation: session.generation(),
+                    temporary: session.is_temporary(),
                     closed: session.is_closed(),
                     turn_running: session.turn_running(),
                     last_activity_ago: session.last_activity_elapsed(),
@@ -1091,54 +1377,9 @@ impl SessionBackendFactory for AgentHost {
             .ensure_runtime(&agent)
             .await
             .map_err(|error| error.to_establishment_error())?;
-        let capabilities = lock(&runtime.capabilities).clone().unwrap_or_default();
-
-        let params = session_new_params(&request)?;
-        // 工作目录的规范绝对路径：终端的默认 cwd 与 prompt 路径引用的边界都用它。
-        // `session_new_params` 已经拒绝没有 workspace 的请求，这里只是把取值取出来。
-        let workspace = request
-            .workspace
-            .as_ref()
-            .map(|workspace| PathBuf::from(workspace.canonical_path()))
-            .ok_or(PortError::InvalidRequest(
-                "session/new 需要已解析的 workspace（ACP 要求 cwd）",
-            ))?;
-        let value = runtime
-            .supervisor
-            .request("session/new", &params, limits::SHORT_REQUEST_TIMEOUT)
-            .await
-            .map_err(|error| error.to_establishment_error())?;
-        let response: acp_protocol::message::NewSessionResponse = serde_json::from_value(value)
-            .map_err(|error| {
-                // 请求已发出、Agent 已答复，只是答复形状不合约定：会话**可能**已经建立，
-                // 因此这不是「可证明未产生会话」那一类。
-                HostError::MalformedResponse {
-                    method: "session/new",
-                    detail: error.to_string(),
-                }
-                .to_establishment_error()
-            })?;
-
-        // `session/new` 成功返回的 ACP 会话标识：core 用它落盘（§3.6）。取不出合法 `AgentSessionId`
-        // （空、超过 512 字符或含 NUL）时给 `None`，由 core 决定两列都不写——**不**编造占位值。
-        let agent_session_id = AgentSessionId::new(&response.session_id).ok();
-        let generation = self.next_binding_generation(session);
-        let session = Arc::new(AcpSession::new(SessionInit {
-            session: session.clone(),
-            acp_session_id: response.session_id,
-            agent_session_id,
-            generation,
-            supervisor: Arc::clone(&runtime.supervisor),
-            sink,
-            ids: Arc::clone(&self.ids),
-            clock: Arc::clone(&self.clock),
-            capabilities,
-            modes: response.modes,
-            config_options: response.config_options.unwrap_or_default(),
-            workspace,
-            attachments: self.attachments(),
-            terminal_enabled: self.terminal_enabled(),
-        }));
+        let session = self
+            .establish_binding(session, &runtime, request, sink, false)
+            .await?;
         runtime
             .insert_session(&session)
             .map_err(|error| error.to_port_error())?;
@@ -1173,6 +1414,12 @@ impl SessionBackendFactory for AgentHost {
             let Some(previous) = runtime.session_for_acp(&acp_id) else {
                 continue;
             };
+            // 准备（临时）端点没有 owned 行，也不能靠 `open` 绕过选项复核/所有权转移：显式拒绝。
+            if previous.is_temporary() {
+                return Err(PortError::InvalidRequest(
+                    "准备端点不能通过 open 转正（必须 transfer_preparation）",
+                ));
+            }
             // 重开：同一个 core 会话换一个新的 endpoint 绑定。旧绑定必须先让出，避免同一会话同时
             // 存在两个会派发 turn 的 endpoint（`AGENTS.md` §4「同一会话最多一个 active turn」）。
             // 新绑定拿到严格递增的资源代：旧端点随后的迟到关闭结果只能作用于旧代。
@@ -1275,6 +1522,7 @@ impl SessionBackendFactory for AgentHost {
             sink,
             ids: Arc::clone(&self.ids),
             clock: Arc::clone(&self.clock),
+            temporary: false,
             capabilities,
             modes: response.modes,
             config_options: response.config_options.unwrap_or_default(),
@@ -1630,6 +1878,7 @@ mod tests {
             sink: EventSink::new(|_| {}),
             ids: Arc::new(TestIds),
             clock: Arc::new(TestClock),
+            temporary: false,
             capabilities: AgentCapabilities::default(),
             modes: None,
             config_options: Vec::new(),

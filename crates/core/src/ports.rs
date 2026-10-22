@@ -25,21 +25,21 @@ use crate::model::{
     CommandResult, CommandStatus, CommandTerminalRecord, CommittedEvent, ConfigOption,
     ConfigOptionId, ConfigValue, ConnectionId, ContentSnapshot, ContentVersion,
     CreateSessionRequest, DeviceId, DeviceRecord, Digest, DirectoryId, DirectoryRecord,
-    DispatchAdmission, DispatchFence, EffectiveInteraction, EndpointEvent, EntityRef, EventId,
-    EventOrigin, EventPayload, EventType, FileReadPurpose, FirstSubmissionAdmission,
-    FirstSubmissionConvergence, FirstSubmissionRecord, FirstSubmissionSettlement,
-    FirstSubmissionWrite, FirstUserMessage, GitDiff, GitStatusPage, GlobalCursor, InteractionId,
-    InteractionResolution, LocalActivity, MessageId, MessageRecord, ModeId, ModeRef, ModeState,
-    NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch, OriginEventRef, PairingClaim,
-    PairingId, PairingPeer, PairingRecord, PairingSettlement, PeerIdentity, PeerPublicKey,
-    PendingEvent, PendingInteraction, PortError, PromptRequest, PublicError, RemoteSessionRef,
-    RequestId, ResourceGeneration, ResumeSessionRequest, SealedAttachment, Sequence, ServerEpoch,
-    SessionFileChunk, SessionFilePage, SessionFilePath, SessionId, SessionPageToken,
-    SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState, SessionSummary,
-    SessionTitle, StagedAbortReason, StagedChunk, StagedChunkOutcome, StagedClaim,
-    StagedManifestBegin, StagedManifestPage, StagedManifestSeal, StagedManifestState, StagedSeal,
-    StagedSealOutcome, StagedTransferBegin, StagedTransferState, SubmissionId, Timestamp, Turn,
-    TurnId, TurnState, UnavailableKind, Version,
+    DispatchAdmission, DispatchContext, DispatchFence, EffectiveInteraction, EndpointEvent,
+    EntityRef, EventId, EventOrigin, EventPayload, EventType, FileReadPurpose,
+    FirstSubmissionAdmission, FirstSubmissionConvergence, FirstSubmissionRecord,
+    FirstSubmissionSettlement, FirstSubmissionWrite, FirstUserMessage, GitDiff, GitStatusPage,
+    GlobalCursor, InteractionId, InteractionResolution, LocalActivity, MessageId, MessageRecord,
+    ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
+    OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
+    PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
+    PublicError, RemoteSessionRef, RequestId, ResourceGeneration, ResumeSessionRequest,
+    SealedAttachment, Sequence, ServerEpoch, SessionFileChunk, SessionFilePage, SessionFilePath,
+    SessionId, SessionPageToken, SessionRecoveryRecord, SessionReference, SessionSnapshot,
+    SessionState, SessionSummary, SessionTitle, StagedAbortReason, StagedChunk, StagedChunkOutcome,
+    StagedClaim, StagedManifestBegin, StagedManifestPage, StagedManifestSeal, StagedManifestState,
+    StagedSeal, StagedSealOutcome, StagedTransferBegin, StagedTransferState, SubmissionId,
+    Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -143,6 +143,27 @@ pub trait SessionEndpoint: Send + Sync {
         request: PromptRequest,
         at: Timestamp,
     ) -> Result<TurnAccepted, PortError>;
+
+    /// 带**本次派发上下文**的 prompt（`design.md` D7）。
+    ///
+    /// `context` 只属于这一次调用：它让适配器把该次 prompt 引起的用户输入回显（`user.message.delta`）
+    /// 关联到已保存的首条消息（`session`/`firstSubmission`/`userMessage`/`request`/Agent 身份/资源代/
+    /// 输入摘要），而不是按相同文本或 Agent 的 `messageId` 猜测。它**不是**持久凭据，也不进入任何
+    /// wire DTO；普通 prompt（旧路径、第二条消息）传 `None`。
+    ///
+    /// 默认实现丢弃上下文并委托 [`SessionEndpoint::prompt`]：既有实现与测试因此无需改动，也没有任何
+    /// 行为变化。需要回显关联的适配器覆盖本方法（`agent-host` 的实现把上下文随该调用的事件 sink
+    /// 交给 mapper，由适配器内部调用 `associate_user_echo`：可证明重复的回显不再产出第二条
+    /// `user.message.delta`；上下文本身**不**写入事件视图）。
+    async fn prompt_with_context(
+        &self,
+        request: PromptRequest,
+        at: Timestamp,
+        context: Option<DispatchContext>,
+    ) -> Result<TurnAccepted, PortError> {
+        let _ = context;
+        self.prompt(request, at).await
+    }
 
     /// 派发前的只读能力/帧预算预检。本地 Agent 端点据此在命令受理前拒绝不支持的媒体或
     /// 超预算的 prompt，避免「先 accepted 再 turn.failed」并丢失客户端草稿。
