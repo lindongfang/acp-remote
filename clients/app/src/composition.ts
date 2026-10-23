@@ -69,6 +69,8 @@ import type {
   TranscriptCodec,
 } from "./sync-client";
 import { ClientStore } from "./features/client-store";
+import { isSessionFilesCommandName } from "./protocol/session-files";
+import type { SessionFilesCommandBody } from "./protocol/session-files";
 import type {
   AttachmentManifestRequest,
   AttachmentManifestSealedResult,
@@ -1314,7 +1316,10 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
       return sync?.authenticatedInfo ?? null;
     },
     dispatch(command): void {
-      sync?.dispatch(command);
+      const body = command.body;
+      sync?.dispatch(isSessionFilesCommandName(body.command)
+        ? { ...command, body: store.directoryScopedFileQuery(body as SessionFilesCommandBody) }
+        : command);
     },
     sendPreparation(body): boolean {
       // 未装配/未认证时返回 `false`：store 把这次操作停在「未发出」，不伪造分配结果。

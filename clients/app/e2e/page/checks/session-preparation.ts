@@ -63,7 +63,7 @@ import {
   waitFor,
 } from "../support";
 import type { Check, Mounted, ScenarioOptions } from "../support";
-import { currentPath } from "../router-stub";
+import { currentPath, navigate } from "../router-stub";
 
 const PREPARATION_TEXT = "帮我看一下这个仓库的首条消息";
 /** 一个不存在、也没有任何本标签页准备的会话 ID。 */
@@ -243,14 +243,14 @@ async function enterPreparation(container: HTMLElement, mounted: Mounted): Promi
     "仓库里出现同一 ID 的准备",
   );
   await waitFor(
-    () => query(container, "[data-preparation-title]") !== null,
+    () => query(container, "[data-session-title]") !== null,
     "准备页渲染",
   );
 }
 
 /** 准备页的多行输入框（RNW 的 `TextInput` 渲染成 `<textarea>`）。 */
 function preparationInputOf(container: HTMLElement): HTMLTextAreaElement | null {
-  const node = query(container, "[data-preparation-input]");
+  const node = query(container, "[data-composer-input]");
   if (node instanceof HTMLTextAreaElement) return node;
   const nested = node?.querySelector("textarea") ?? null;
   return nested instanceof HTMLTextAreaElement ? nested : null;
@@ -314,7 +314,71 @@ async function seedDraft(sessionId: string, receipt: PreparationReceipt): Promis
 
 const checks: readonly Check[] = [
   {
-    name: "R16P-1 allocate 后进入同 ID 准备页：真实模式/配置可见，无会话行、无正式读取、无 session.create",
+    name: "R16P-10 新会话与旧会话可来回切换，草稿保留且新建默认复用",
+    async run() {
+      const oldId = sessionsForBothDirectories()[0]?.sessionId;
+      expectThat(oldId !== undefined, "已有会话存在");
+      if (oldId === undefined) return;
+      const mounted = await mountScenario(baseScenario({ extraRoutes: [sessionRoute(PREPARED_SESSION_ID), sessionRoute(oldId)] }));
+      try {
+        await enterPreparation(mounted.container, mounted);
+        typeIntoPreparation(mounted.container, "保留未发送文字");
+        await waitFor(() => preparationInputOf(mounted.container)?.value === "保留未发送文字", "新会话草稿");
+        expectEqual(textOf(query(mounted.container, `[data-sidebar-session="${PREPARED_SESSION_ID}"] [data-session-row-title]`)), "新会话", "新会话有左栏标题");
+        click(query(mounted.container, `[data-sidebar-session="${oldId}"] [data-action="open-session"]`), "切换旧会话");
+        await waitFor(() => currentPath() === `/session/${oldId}`, "进入旧会话");
+        await waitFor(() => query(mounted.container, `[data-sidebar-session="${PREPARED_SESSION_ID}"]`) !== null, "旧会话左栏保留新会话");
+        click(query(mounted.container, `[data-sidebar-session="${PREPARED_SESSION_ID}"] [data-action="open-session"]`), "切回新会话");
+        await waitFor(() => preparationInputOf(mounted.container)?.value === "保留未发送文字", "切回后草稿不丢失");
+        const before = preparationBodies(mounted.host?.sent ?? []).filter((body) => body["action"] === "allocate").length;
+        click(query(mounted.container, '[data-action="create-session-in-directory"]'), "复用未发送会话");
+        await settle();
+        expectEqual(currentPath(), `/session/${PREPARED_SESSION_ID}`, "默认复用当前新会话");
+        expectEqual(preparationBodies(mounted.host?.sent ?? []).filter((body) => body["action"] === "allocate").length, before, "不重复分配");
+        expectEqual(query(mounted.container, '[data-create-sheet]'), null, "复用不打开弹层");
+        expectThat(!domText(mounted.container).includes("首条消息已保存"), "没有常驻保存提示");
+      } finally { await mounted.unmount(); }
+    },
+  },
+  {
+    name: "R16P-9 新目录会话立即显示目录文件和 Git 变更，查询不依赖会话保存",
+    async run() {
+      const path = "\\\\?\\D:\\fresh\\project";
+      const receipt = { ...PREPARATION_RECEIPT, claims: { ...PREPARATION_RECEIPT.claims,
+        normalizedWorkspacePath: path, workspaceSource: "workspacePath" as const } };
+      const mounted = await mountScenario(baseScenario({ selectWorkspaceFiles: true, preparationResult: (body) => readyPreparationResult(body, receipt), filesResult: (command, _session, payload) => command === "session.files.list" ? { path: payload["path"], gitState: "available", entries: [{ path: "hello.txt", name: "hello.txt", kind: "file", openable: true }] } : { gitState: "available", entries: [{ path: "hello.txt", status: "modified", conflicted: false, binary: false }] } }));
+      try {
+        await waitFor(() => mounted.composition?.store.state.connection.state === "online", "连接在线");
+        const store = mounted.composition?.store;
+        expectThat(store !== undefined, "组合根已装配");
+        const outcome = await store.beginPreparation({ directoryId: null, agentId: "codex-a", directoryPath: path });
+        expectThat(outcome.ok, "新目录分配成功");
+        if (!outcome.ok) return;
+        navigate(`/session/${outcome.sessionId}`);
+        await waitFor(() => query(mounted.container, '[data-session-title]') !== null, "会话界面出现");
+        expectThat(textOf(query(mounted.container, '[data-conversation-sidebar]')).includes("project"), "左栏显示新目录");
+        expectEqual(textOf(query(mounted.container, '[data-sidebar-directory-path]')), "D:\\fresh\\project", "界面不显示 Windows 扩展前缀");
+        expectEqual(store.conversationPage(outcome.sessionId)?.sidebar.rows.length, 1, "只显示当前新会话，不混入旧目录会话");
+        await waitFor(() => query(mounted.container, '[data-file-row="all:hello.txt"]') !== null, "directory file visible");
+        click(query(mounted.container, '[data-file-source-option="git"]'), "Git");
+        await waitFor(() => query(mounted.container, '[data-file-row="git:hello.txt"]') !== null, "directory change visible");
+        const fileQueries = (mounted.host?.sent ?? []).map((frame) => JSON.parse(frame) as { body?: Record<string, unknown> }).map((frame) => frame.body ?? {}).filter((body) => body["command"] === "session.files.list" || body["command"] === "session.git.status");
+        expectThat(fileQueries.length >= 2, "directory queries sent immediately");
+        for (const body of fileQueries) {
+          expectEqual(body["sessionId"], undefined, "file queries do not require a session");
+          expectEqual(payloadOf(body)?.["workspace"], { workspacePath: path }, "selected directory target");
+        }
+        expectThat(!domText(mounted.container).includes("这一层加载失败"), "不显示无效查询错误");
+        click(query(mounted.container, '[data-action="create-session-in-directory"]'), "在新目录继续新建会话");
+        await settle();
+        expectEqual(query(mounted.container, '[data-create-sheet]'), null, "reuse does not open allocation sheet");
+        expectEqual(currentPath(), `/session/${outcome.sessionId}`, "reuse keeps the same conversation");
+        expectEqual(commandNames(mounted.host?.sent ?? []).filter((name) => name === "session.start").length, 0, "no automatic send");
+      } finally { await mounted.unmount(); }
+    },
+  },
+  {
+    name: "R16P-1 新建后直接进入正常会话界面，在会话输入区调整模式和模型；首条前不写会话行",
     async run() {
       const mounted = await mountScenario(baseScenario());
       const sent = (): readonly string[] => mounted.host?.sent ?? [];
@@ -337,42 +401,27 @@ const checks: readonly Check[] = [
         expectEqual(typeof allocate["tabNonce"], "string", "allocate 必须带标签页归属");
         expectAbsent(JSON.stringify(allocate), "sessionId", "allocate 不得由客户端指定正式 sessionId");
 
-        // 页面：同一 ID、准备模式、真实设置与目录。准备页的机器锚点是内层 dataSet
-        // （`View` 的裸 `data-*` 属性不会进 DOM），因此用容器作子查询根。
-        expectThat(query(mounted.container, "[data-preparation-title]") !== null, "必须呈现准备页而不是正式会话页");
+        // 直接呈现正常会话布局，设置位于会话输入区；不出现独立准备表单。
         const panel = mounted.container;
-        expectThat(query(panel, '[data-preparation-phase="ready"]') !== null, "阶段必须是 ready");
-        expectEqual(
-          textOf(query(panel, "[data-preparation-workspace]")),
-          DIRECTORY_PATH_ALPHA,
-          "目录路径逐字来自服务端",
-        );
-        // 模式与配置来自 Agent 的应答，不是页面自造的列表。
-        expectEqual(
-          queryAll(panel, '[data-action="preparation-select-mode"]').length,
-          PREPARATION_MODES.length,
-          "模式列表与 Agent 回报一致",
-        );
-        expectThat(query(panel, '[data-preparation-mode="plan"]') !== null, "呈现 plan 模式");
-        expectThat(query(panel, '[data-preparation-mode="build"]') !== null, "呈现 build 模式");
-        expectThat(query(panel, '[data-preparation-config="model"]') !== null, "呈现模型配置项");
-        expectThat(
-          query(panel, '[data-preparation-config-value="gpt-5"]') !== null,
-          "配置呈现 Agent 的当前值",
-        );
-        expectThat(query(panel, '[data-preparation-config="web"]') !== null, "呈现 boolean 配置项");
-        // 未提供的类别必须明说（不伪造空列表以外的「默认」选择）。
-        expectEqual(query(panel, '[data-preparation-modes="none"]'), null, "有模式时不得显示「未提供」");
-
-        // 首条之前：没有正式会话行、没有正式页、也没有正式读取。
+        expectThat(query(panel, '[data-session-title]') !== null, "显示正常会话头");
+        expectThat(query(panel, '[data-preparation-title]') === null, "没有独立准备页");
+        expectEqual(textOf(query(panel, '[data-session-title]')), "新会话", "使用正常新会话标题");
+        expectEqual(store.preparationPage(PREPARED_SESSION_ID)?.phase, "ready", "首条发送前内部资源已就绪");
+        expectEqual(queryAll(panel, '[data-mode-choice]').length, PREPARATION_MODES.length, "模式来自 Agent");
+        expectThat(query(panel, '[data-mode-choice="plan"]') !== null, "会话设置包含 plan 模式");
+        expectThat(query(panel, '[data-mode-choice="build"]') !== null, "会话设置包含 build 模式");
+        expectThat(query(panel, '[data-settings-section="model"]') !== null, "会话输入区包含模型选择器");
+        expectThat(query(panel, '[data-model-choice="gpt-5"]') !== null, "模型来自 Agent");
+        expectEqual(store.conversationPage(PREPARED_SESSION_ID)?.sidebar.directory?.path, DIRECTORY_PATH_ALPHA, "目录上下文来自服务端");
+        // 首条之前：已呈现正常对话界面，但没有正式会话行，也没有正式读取。
         expectEqual(store.preparationPage(PREPARED_SESSION_ID)?.phase, "ready", "仓库里是准备态");
-        expectEqual(store.conversationPage(PREPARED_SESSION_ID), null, "准备阶段没有正式对话页");
+        expectThat(store.conversationPage(PREPARED_SESSION_ID) !== null, "首条前已呈现正常对话页");
         expectEqual(
           store.state.resources?.sessions.some((item) => item.sessionId === PREPARED_SESSION_ID) ?? false,
           false,
           "准备不进入会话清单",
         );
-        expectEqual(query(mounted.container, '[data-session-state="unknown"]'), null, "不得呈现「未知会话」");
+        expectThat(query(mounted.container, '[data-session-state="unknown"]') === null, "不得呈现「未知会话」");
         expectEqual(createFrameCount(sent()), 0, "新入口不得再发 session.create");
         expectEqual(
           commandNames(sent()).filter((name) => name === "session.read").length,
@@ -383,7 +432,7 @@ const checks: readonly Check[] = [
         expectEqual(frameTypes(sent()).filter((type) => String(type).startsWith("attachment.")).length, 0, "准备阶段没有附件帧");
 
         // 切换设置：以 configure 交给临时端点，页面之后再以 Agent 的确认结果为准。
-        click(query(panel, '[data-preparation-mode="build"]'), "选择 build 模式");
+        click(query(panel, '[data-mode-choice="build"]'), "选择 build 模式");
         await waitFor(
           () => preparationBodies(sent()).some((body) => body["action"] === "configure" && body["mode"] === "build"),
           "configure 帧（mode）",
@@ -392,6 +441,13 @@ const checks: readonly Check[] = [
         expectThat(configure !== undefined, "切换模式必须发出 configure");
         expectEqual(configure["sessionId"], PREPARED_SESSION_ID, "configure 指向同一准备");
         expectThat(typeof configure["receipt"] === "object", "configure 必须回传凭据");
+        click(query(panel, '[data-settings-pill="model"]'), "打开会话模型选择器");
+        click(query(panel, '[data-model-choice="gpt-5-mini"]'), "在会话中选择模型");
+        await waitFor(
+          () => preparationBodies(sent()).some((body) => body["action"] === "configure" &&
+            (body["configOptions"] as Record<string, unknown> | undefined)?.["model"] === "gpt-5-mini"),
+          "会话模型选择交给服务端确认",
+        );
         expectEqual(createFrameCount(sent()), 0, "切换设置也不得发 session.create");
       } finally {
         await mounted.unmount();
@@ -421,7 +477,7 @@ const checks: readonly Check[] = [
       const sent = (): readonly string[] => mounted.host?.sent ?? [];
       try {
         await waitFor(
-          () => query(mounted.container, '[data-preparation-phase="ready"]') !== null,
+          () => mounted.composition?.store.preparationPage(RELOAD_SESSION_ID)?.phase === "ready",
           "恢复后回到 ready（同 ID 重建临时资源）",
         );
         expectEqual(currentPath(), `/session/${RELOAD_SESSION_ID}`, "刷新不换地址");
@@ -576,10 +632,11 @@ const checks: readonly Check[] = [
           "输入框吃下首条文字",
         );
         expectEqual(startBodies(sent()).length, 0, "点击之前不得派发首条");
+        const composerBeforeSend = query(mounted.container, "[data-composer-input]");
 
         // 双击：只允许一次执行（闸门在仓库，页面连点不应产生第二条）。
-        click(query(mounted.container, '[data-action="preparation-submit"]'), "发送首条（第一次）");
-        click(query(mounted.container, '[data-action="preparation-submit"]'), "发送首条（第二次）");
+        click(query(mounted.container, '[data-action="submit-prompt"]'), "发送首条（第一次）");
+        click(query(mounted.container, '[data-action="submit-prompt"]'), "发送首条（第二次）");
         await waitFor(() => startBodies(sent()).length >= 1, "发出 session.start");
         await settle(100);
         expectEqual(startBodies(sent()).length, 1, "双击只产生一次首条提交");
@@ -604,8 +661,8 @@ const checks: readonly Check[] = [
 
         // 已保存（请求已发出）≠ 已受理：扣住终态期间页面仍是准备页的 submitting，不显示已保存。
         expectThat(
-          query(mounted.container, '[data-preparation-input="submitting"]') !== null,
-          "提交中必须仍是准备页",
+          query(mounted.container, "[data-composer-input]") !== null && mounted.composition?.store.preparationPage(PREPARED_SESSION_ID)?.phase === "submitting",
+          "提交中保留同一会话输入框",
         );
         expectEqual(domText(mounted.container).includes("首条消息已保存"), false, "服务端确认前不得显示已保存");
         expectEqual(currentPath(), `/session/${PREPARED_SESSION_ID}`, "提交期间地址不变");
@@ -625,6 +682,8 @@ const checks: readonly Check[] = [
           "同页读取正式会话",
         );
         expectEqual(startBodies(sent()).length, 1, "受理后不重复提交");
+        expectThat(query(mounted.container, "[data-composer-input]") === composerBeforeSend,
+          "首条受理前后复用同一个会话输入框，不切换页面实例");
       } finally {
         await mounted.unmount();
       }
@@ -654,7 +713,7 @@ const checks: readonly Check[] = [
           () => preparationInputOf(mounted.container)?.value === PREPARATION_TEXT,
           "输入框吃下首条文字",
         );
-        click(query(mounted.container, '[data-action="preparation-submit"]'), "发送首条");
+        click(query(mounted.container, '[data-action="submit-prompt"]'), "发送首条");
         await waitFor(() => startBodies(sent()).length === 1, "发出 session.start");
         await waitFor(() => currentPath() === "/", "旧存储代失效后回目录重新开始");
         expectEqual(
@@ -710,7 +769,7 @@ const checks: readonly Check[] = [
           () => preparationInputOf(mounted.container)?.value === PREPARATION_TEXT,
           "输入框吃下首条文字",
         );
-        click(query(mounted.container, '[data-action="preparation-submit"]'), "发送首条");
+        click(query(mounted.container, '[data-action="submit-prompt"]'), "发送首条");
         await waitFor(() => startBodies(sent()).length === 1, "发出 session.start");
         await waitFor(
           () => preparationAction(sent(), "restore") !== undefined,
@@ -745,7 +804,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R16P-8 uncertain：不自动重发；「核实原请求」只查原 requestId",
+    name: "R16P-8 uncertain：不自动重发；页面不再有顶部状态条",
     async run() {
       const mounted = await mountScenario(baseScenario({ holdCommands: ["session.start"] }));
       const sent = (): readonly string[] => mounted.host?.sent ?? [];
@@ -756,43 +815,28 @@ const checks: readonly Check[] = [
           () => preparationInputOf(mounted.container)?.value === PREPARATION_TEXT,
           "输入框吃下首条文字",
         );
-        click(query(mounted.container, '[data-action="preparation-submit"]'), "发送首条");
+        click(query(mounted.container, '[data-action="submit-prompt"]'), "发送首条");
         await waitFor(() => startBodies(sent()).length === 1, "发出 session.start");
-        const start = startBodies(sent())[0];
-        expectThat(start !== undefined, "必须有 session.start 帧");
-        const originalRequestId = start["requestId"];
-        expectThat(typeof originalRequestId === "string", "首条请求必须带 requestId");
 
         expectThat(
           mounted.host?.completeHeldCommand("session.start", { status: "uncertain" }) === true,
           "假主机必须有一条被扣住的 session.start",
         );
         await waitFor(
-          () => query(mounted.container, "[data-preparation-uncertain]") !== null,
-          "结果不确定必须在页面显式保留",
-        );
-        expectEqual(
-          mounted.composition?.store.preparationPage(PREPARED_SESSION_ID)?.phase,
-          "uncertain",
+          () => mounted.composition?.store.preparationPage(PREPARED_SESSION_ID)?.phase === "uncertain",
           "仓库进入 uncertain",
         );
-
-        // 唯一动作：按原 requestId 查权威状态；不重发、不新建。
-        click(query(mounted.container, '[data-action="preparation-verify"]'), "核实原请求");
-        await waitFor(() => statusBodies(sent()).length === 1, "发出 command.status");
-        const status = statusBodies(sent())[0];
-        expectThat(status !== undefined, "必须有 command.status 帧");
-        const statusPayload = payloadOf(status);
-        expectThat(statusPayload !== null, "command.status 必须带 payload");
-        expectEqual(statusPayload["targetRequestId"], originalRequestId, "核实的必须是原请求");
-        await settle();
-        expectEqual(startBodies(sent()).length, 1, "核实不得重发首条");
-        expectEqual(createFrameCount(sent()), 0, "核实不得新建会话");
-        expectEqual(
-          query(mounted.container, "[data-preparation-uncertain]") !== null,
-          true,
-          "核实结果回来之前不确定状态不得自动消解",
+        // 顶部不再呈现状态条与「核实原请求」；不确定说明由输入区保留。
+        expectEqual(query(mounted.container, "[data-preparation-status]"), null, "顶部不得呈现状态条");
+        expectEqual(query(mounted.container, '[data-action="preparation-verify"]'), null, "不再提供核实入口");
+        await waitFor(
+          () => domText(mounted.container).includes("所属节点无法确认首条消息是否已派发"),
+          "输入区保留不确定说明",
         );
+        await settle();
+        expectEqual(startBodies(sent()).length, 1, "不确定不得重发首条");
+        expectEqual(createFrameCount(sent()), 0, "不确定不得新建会话");
+        expectEqual(statusBodies(sent()).length, 0, "不再自动查询原请求");
         expectEqual(currentPath(), `/session/${PREPARED_SESSION_ID}`, "不确定时地址不变");
       } finally {
         await mounted.unmount();

@@ -108,12 +108,15 @@ import {
 import type {
   PendingInteractionInput,
 } from "./interaction-model";
-import type { AllFilesDirectoryView, FileSource, GitDiffView } from "../domain/session-files";
+import type { AllFilesDirectoryView, FileSource, FileSourceUnsupportedReason, GitDiffView } from "../domain/session-files";
+import { displayDirectoryPath } from "../domain/directory";
 import {
   SESSION_FILES_FEATURE,
+  WORKSPACE_FILES_FEATURE,
   decodeSessionFilesResult,
   isSessionFilesCommandName,
 } from "../protocol/session-files";
+import type { SessionFilesCommandBody, WorkspaceFilesTarget } from "../protocol/session-files";
 import type {
   FileContentState,
   FileViewContext,
@@ -602,11 +605,29 @@ function activationShapeFailure(): ActivationFailure {
   };
 }
 
+/** 本设备已派发、尚未被权威消息回显的用户消息。 */
+export interface SentPrompt {
+  readonly requestId: Uuid;
+  readonly sessionId: Uuid;
+  readonly text: string;
+  /** 附件文件名（仅用于呈现；字节与上传状态不在这里）。 */
+  readonly attachmentNames: readonly string[];
+  readonly createdAt: string;
+}
+
 /** 客户端状态（不可变快照）。 */
 export interface ClientState {
   readonly connection: ConnectionMachineState;
   /** 本设备当前这次会话是否已经成功认证过（`auth.authenticated` 至少到达过一次）。 */
   readonly hasAuthenticated: boolean;
+  /**
+   * 本设备已经派发、但服务端/Agent 尚未回显的用户消息（按 `requestId`）。
+   *
+   * 用户消息的权威来源是 `session.read` 里的 `user.message.delta`；但 Agent 不一定回显用户输入，
+   * 正式读取也可能尚未返回。这里保留「我刚发出去的正文」，让用户立刻在时间线上看到自己的消息。
+   * 一旦读取结果或实时回显出现同文消息，视图层就不再重复呈现这一条。
+   */
+  readonly sentPrompts: ReadonlyMap<Uuid, SentPrompt>;
   /** 最近一次 `closed`/`blocked` 的关闭码与原因；从未关闭为 `null`。 */
   readonly lastClose: ConnectionCloseRecord | null;
   /** 自动重连的尝试次数与下次重试时刻；未安排重连时次数为 0。 */
@@ -743,6 +764,7 @@ export function initialClientState(): ClientState {
   return {
     connection: initialConnectionState(),
     hasAuthenticated: false,
+    sentPrompts: new Map(),
     lastClose: null,
     reconnect: { attempts: 0, nextRetryAtMs: null },
     deviceId: null,
@@ -1736,10 +1758,14 @@ export class ClientStore {
     // 下一次刷新被永久排队、来源永久停在加载中。
     const resetFiles = event.kind === "authenticated" || event.kind === "closed" || event.kind === "blocked";
     if (resetFiles) this.#resetFileQueries();
+    // 读取结果只属于发起它的连接：换连接后旧结果不会回来。留着在途表会永久挡住同一会话的
+    // 后续读取（页面只剩实时事件、看不到已保存的用户输入与历史）。
+    const droppedReads = resetFiles ? this.#resetPendingReads() : [];
     const next = resetFiles ? this.#withFileLoadingStopped(reduced) : reduced;
+    const recovered = droppedReads.length === 0 ? next : this.#withReadLoadingStopped(next, droppedReads);
     // 快照、`session.updated`、读取结果等任何归并之后都检查一次：标题命令的「completed」
     // 只有在权威摘要反映这次保存后才能退出编辑。
-    const settled = this.#settleTitleCommits(next);
+    const settled = this.#settleTitleCommits(recovered);
     if (settled === this.#state) return;
     this.#commit(settled);
     if (!wasOnline && this.#state.connection.state === "online" && this.#activeConversationSession !== null) {
@@ -2803,6 +2829,14 @@ export class ClientStore {
       if (["rejected", "failed", "completed", "uncertain"].includes(result.body.status)) {
         this.#promptDrafts.delete(result.body.requestId);
       }
+      // 明确未受理（rejected/failed）的用户消息不应继续冒充「已发送」；uncertain/completed 保留。
+      if (result.body.status === "rejected" || result.body.status === "failed") {
+        next = { ...next, sentPrompts: withoutEntry(next.sentPrompts, result.body.requestId) };
+      }
+    }
+    if (result.body.command === "session.start" &&
+      (result.body.status === "rejected" || result.body.status === "failed")) {
+      next = { ...next, sentPrompts: withoutEntry(next.sentPrompts, result.body.requestId) };
     }
     // 创建完成回复自带权威摘要；无需等待另一个 session.created 才让列表可见。
     // 只补缺失项：重投的创建结果不能覆盖之后的实时更新。
@@ -3300,6 +3334,11 @@ export class ClientStore {
    * @param nowMs 相对时间的基准；缺省读本仓库注入的时钟（{@link nowMs}）。
    */
   conversationPage(sessionId: Uuid, nowMs?: number): ConversationPageModel | null {
+    const preparation = this.preparationPage(sessionId, nowMs);
+    if (preparation !== null && preparation.phase !== "committed" &&
+        (preparation.phase !== "accepted" || this.#state.threads.get(sessionId)?.page == null)) {
+      return this.#preparationConversation(preparation, nowMs ?? this.#now());
+    }
     const thread = this.#state.threads.get(sessionId);
     const summary = this.#findSession(sessionId);
     const runtime = this.#state.remoteSessions.get(sessionId);
@@ -3401,6 +3440,7 @@ export class ClientStore {
           records,
           volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === sessionId),
           interactions,
+          sentPrompts: this.#sentPromptsOf(sessionId),
         })
       : [];
     // 降级条目与时间线**同源**：扁平列表是时间线上 `kind === "degraded"` 的投影，
@@ -3477,6 +3517,7 @@ export class ClientStore {
       sidebar: buildConversationSidebar({
         resources: this.#state.resources,
         workspace: summary?.workspace ?? null,
+        pendingRows: this.#unsentSidebarRows(summary?.workspace?.directoryId ?? null),
         sessionId,
         ownerLabelOf: this.#ownerLabelOf,
         query: this.#state.conversationSidebarQuery,
@@ -3490,6 +3531,138 @@ export class ClientStore {
         origin,
         sessionReady: readiness.ready,
       }),
+    });
+  }
+
+  /** 会话页优先复用同目录、同 Agent 且尚未提交的会话。 */
+  reusableUnsentSession(currentSessionId: Uuid): Uuid | null {
+    const current = this.#state.preparations.get(currentSessionId);
+    const summary = this.#findSession(currentSessionId);
+    const agentId = current?.agentId ?? summary?.agent.agentId;
+    const path = current?.workspace.path ?? this.#state.resources?.workspaces.find((item) =>
+      item.directoryId === summary?.workspace?.directoryId)?.path;
+    if (agentId === undefined || path === undefined) return null;
+    return [...this.#state.preparations.values()].find((session) => session.phase === "ready" &&
+      session.association === null && session.agentId === agentId &&
+      !this.#preparationSubmissions.has(session.sessionId) &&
+      displayDirectoryPath(session.workspace.path) === displayDirectoryPath(path))?.sessionId ?? null;
+  }
+
+  #unsentSidebarRows(directoryId: string | null, path?: string): readonly SessionRowModel[] {
+    const directoryPath = path ?? this.#state.resources?.workspaces.find((item) => item.directoryId === directoryId)?.path;
+    if (directoryPath === undefined) return [];
+    return [...this.#state.preparations.values()].filter((session) =>
+      !["committed", "released"].includes(session.phase) &&
+      displayDirectoryPath(session.workspace.path) === displayDirectoryPath(directoryPath)
+    ).map((session) => ({
+      id: session.sessionId, title: "新会话",
+      agentName: this.agentCatalog().find((agent) => agent.id === session.agentId)?.displayName ?? session.agentId,
+      state: "idle", activity: { kind: "task", value: "idle" }, localActivity: null,
+      directoryId, updatedAt: "", updatedAtLabel: session.association === null ? "未发送消息" : "",
+    }));
+  }
+
+  /** 首条发送前沿用正常布局；不伪造持久化会话或历史。 */
+  #preparationConversation(page: PreparationPageModel, nowMs: number): ConversationPageModel {
+    const attachmentsNegotiated = this.#state.selectedFeatures.includes(ATTACHMENT_FEATURE) &&
+      this.#attachmentTransfer !== null && this.#attachmentMedia !== null;
+    const attachments = buildAttachmentBatch({
+      attachments: page.attachments,
+      pathRefs: [],
+      capabilityOf: (): AttachmentCapability => ({ kind: "supported" }),
+    });
+    const input = buildConversationInputModel({
+      connectionOnline: this.#state.connection.state === "online",
+      originLocal: true,
+      originOnline: true,
+      turnInProgress: false,
+      canCancel: false,
+      promptCommand: null,
+      cancelCommand: null,
+      draft: page.text,
+      attachmentsNegotiated,
+      attachments,
+      pathRefs: [],
+      sessionNotReadyReason: page.input.canSend ? null : page.input.reason,
+    });
+    const settings = buildConversationSettingsModel({
+      configOptions: page.settings.configOptions.map(({ option, value }) => ({ ...option, currentValue: value })),
+      mode: null,
+      modeChange: null,
+      summaryMode: null,
+      modelSwitchCommand: null,
+      modeSwitchCommand: null,
+    });
+    const selectedMode = page.settings.modes.find((mode) => mode.modeId === page.settings.selectedMode);
+    const preparationSettings: ConversationSettingsModel = { ...settings, mode: {
+      state: page.settings.modes.length === 0 ? "unavailable" : "available",
+      currentId: page.settings.selectedMode,
+      currentName: selectedMode?.displayName ?? null,
+      choices: page.settings.modes.map((mode) => ({ id: mode.modeId, name: mode.displayName,
+        description: null, current: mode.modeId === page.settings.selectedMode })),
+      notice: page.settings.modes.length === 0 ? "该会话的 Agent 未提供模式可选项。" : null,
+      configId: null,
+    } };
+    const settingsEditable = page.phase === "ready" || page.phase === "failed";
+    // 首条派发后（`submitting`/`accepted`）Agent 的思考、工具调用与权限请求已经会经实时事件到达；
+    // 正式读取完成前也必须呈现它们，不能因为「页面还挂在准备态」就把整条时间线画成空的。
+    const records = this.#recordsOf(page.sessionId);
+    const interactions = buildInteractionViews({
+      records,
+      pending: this.#state.readResources.get(page.sessionId)?.pendingInteractions ?? [],
+      responseRequestIds: this.#state.responseRequestIds,
+      commands: this.#state.commands,
+      deviceId: this.#state.deviceId,
+      effectiveAt: new Date(nowMs).toISOString(),
+      nowMs,
+      pendingChecked: this.#state.threads.get(page.sessionId)?.interactionsRefreshed === true,
+      requestVersionRequired: this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE),
+    });
+    const entries = buildTimeline({
+      messages: [],
+      records,
+      volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === page.sessionId),
+      interactions,
+      sentPrompts: this.#sentPromptsOf(page.sessionId),
+    });
+    const degraded = entries.flatMap((entry) => (entry.kind === "degraded" ? [entry.degraded] : []));
+    return buildConversationModel({
+      header: {
+        sessionId: page.sessionId,
+        title: "新会话",
+        newSession: true,
+        agentName: this.agentCatalog().find((agent) => agent.id === page.agentId)?.displayName ?? page.agentId,
+        state: null,
+        directoryId: page.workspace.directoryId,
+      },
+      page: null,
+      usage: this.#state.usage.get(page.sessionId) ?? null,
+      degraded,
+      loadingEarlier: false,
+      pagingError: null,
+      timeline: { entries, structuredHistory: structuredHistoryAvailability({
+        origin: "local", historyFeatureNegotiated: this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE),
+      }) },
+      input: { ...input, canSubmit: page.input.canSend && input.canSubmit,
+        persistenceWarning: page.error === null ? null : page.notice },
+      settings: settingsEditable ? preparationSettings : {
+        model: { ...preparationSettings.model, state: "switching", notice: page.input.reason },
+        mode: { ...preparationSettings.mode, state: "switching", notice: page.input.reason },
+      },
+      interactions,
+      sidebar: buildConversationSidebar({
+        resources: this.#state.resources,
+        pendingRows: this.#unsentSidebarRows(page.workspace.directoryId, page.workspace.path),
+        workspace: page.workspace.directoryId === null ? null : { directoryId: page.workspace.directoryId },
+        workspacePath: page.workspace.path,
+        sessionId: page.sessionId,
+        ownerLabelOf: this.#ownerLabelOf,
+        query: this.#state.conversationSidebarQuery,
+        pageInput: this.#state.conversationSidebarPageInput,
+        nowMs,
+        localLifecycleNegotiated: this.#state.lifecycle.negotiated,
+      }),
+      capabilities: { canSend: page.input.canSend, canCancel: false, canViewHistory: false },
     });
   }
 
@@ -3648,6 +3821,19 @@ export class ClientStore {
       createSheetDirectoryId: null,
       createSheetBrowses: true,
       directoryBrowse: this.#state.folderRequest === null ? initialDirectoryBrowseState() : { ...this.#state.directoryBrowse, open: false, selection: null },
+    });
+  }
+
+  /** 当前会话目录尚未登记时，沿用 Owner 已确认的路径打开新建入口。 */
+  openCreateSheetAtPath(path: string): void {
+    this.#commit({
+      ...this.#state,
+      createSheetDirectoryId: null,
+      createSheetBrowses: true,
+      directoryBrowse: { ...initialDirectoryBrowseState(), selection: {
+        kind: "path", path, name: path.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) ?? path,
+        registered: false, willCreate: false,
+      } },
     });
   }
 
@@ -4560,6 +4746,7 @@ export class ClientStore {
     readonly directoryId: string | null;
     readonly agentId: string;
     readonly directoryPath?: string;
+    readonly reuseUnsent?: boolean;
   }): Promise<PreparationBeginOutcome> {
     const availability = this.preparationEntryAvailability();
     if (!availability.available) {
@@ -4598,6 +4785,13 @@ export class ClientStore {
     }
 
     const operationId = this.#ids.uuid();
+    if (input.reuseUnsent === true) {
+      const reusable = [...this.#state.preparations.values()].find((session) =>
+        session.agentId === input.agentId && session.phase === "ready" && session.association === null &&
+        !this.#preparationSubmissions.has(session.sessionId) &&
+        displayDirectoryPath(session.workspace.path) === displayDirectoryPath(workspace.path));
+      if (reusable !== undefined) return Promise.resolve({ ok: true, sessionId: reusable.sessionId });
+    }
     const tabNonceSource = this.#preparationTabNonce;
     if (tabNonceSource === null) {
       return Promise.resolve({ ok: false, reason: PREPARATION_NO_TAB_NONCE_NOTICE });
@@ -4801,6 +4995,15 @@ export class ClientStore {
             mode: session.selectedMode,
             configOptions: session.selectedConfig,
           }),
+        patch: (id) => ({
+          sentPrompts: withEntry(this.#state.sentPrompts, id, {
+            requestId: id,
+            sessionId,
+            text: this.#state.drafts.get(sessionId) ?? "",
+            attachmentNames: (this.#state.attachments.get(sessionId) ?? []).map((attachment) => attachment.fileName),
+            createdAt: new Date(this.#now()).toISOString(),
+          }),
+        }),
       });
       if (dispatched === null) {
         this.#updatePreparation(sessionId, (current) => ({
@@ -5535,7 +5738,12 @@ export class ClientStore {
       const session: PreparationSessionState = {
         sessionId: resultSessionId,
         agentId: pending.agentId,
-        workspace: pending.workspace,
+        workspace: { ...pending.workspace,
+          directoryId: body.receipt.claims.workspaceSource === "directoryId" ? pending.workspace.directoryId :
+            state.resources?.workspaces.find((item) => displayDirectoryPath(item.path) ===
+              displayDirectoryPath(body.receipt.claims.normalizedWorkspacePath))?.directoryId ?? null,
+          path: body.receipt.claims.normalizedWorkspacePath,
+          source: body.receipt.claims.workspaceSource },
         tabNonce: pending.tabNonce,
         receipt: body.receipt,
         runtimeEpoch: body.runtimeEpoch,
@@ -5575,6 +5783,8 @@ export class ClientStore {
         const keepPhase = session.phase === "failed" || session.phase === "uncertain";
         preparations.set(resultSessionId, {
           ...session,
+          workspace: { ...session.workspace, path: body.receipt.claims.normalizedWorkspacePath,
+            source: body.receipt.claims.workspaceSource },
           receipt: body.receipt,
           runtimeEpoch: body.runtimeEpoch,
           generation: body.generation,
@@ -6131,6 +6341,16 @@ export class ClientStore {
             mode,
             configOptions: currentSession.selectedConfig,
           }),
+        // 首条在准备态也要立刻可见；服务端受理后回显同文时由视图层去重。
+        patch: (id) => ({
+          sentPrompts: withEntry(this.#state.sentPrompts, id, {
+            requestId: id,
+            sessionId,
+            text: input.text,
+            attachmentNames: sealedAttachments.map((attachment) => attachment.fileName),
+            createdAt: new Date(this.#now()).toISOString(),
+          }),
+        }),
       });
       if (dispatched === null) throw new Error("命令通道尚未就绪");
       this.#schedulePreparationSave(sessionId);
@@ -6166,7 +6386,10 @@ export class ClientStore {
    * 一次只允许一个在途读取：两页并发返回时无法判断谁该前置谁。
    */
   loadSession(sessionId: Uuid): void {
-    if (this.#pendingReads.size > 0) return;
+    // 只拦**同一会话**的在途读取：切换会话/打开另一个会话时，旧的读取不应把新的首读永久挡掉
+    // （那会让新会话只剩实时事件、看不到已保存的用户输入与历史）。
+    const inFlight = [...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId);
+    if (inFlight) return;
     const remote = remoteRefOf(this.#state, sessionId);
     const runtime = this.#state.remoteSessions.get(sessionId);
     if (remote !== null && runtime !== undefined &&
@@ -6202,7 +6425,7 @@ export class ClientStore {
 
   /** 向上翻页（消息）：续取游标取上一页最早一条的 `(createdAt, messageId)`。 */
   loadEarlier(sessionId: Uuid): void {
-    if (this.#pendingReads.size > 0) return;
+    if ([...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId)) return;
     if (this.#state.threads.get(sessionId)?.page?.hasEarlier !== true) return;
     const before = this.#state.threads.get(sessionId)?.page?.earliestCursor ?? null;
     if (before === null) return;
@@ -6218,7 +6441,8 @@ export class ClientStore {
   loadEarlierHistory(sessionId: Uuid): void {
     if (!this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE)) return;
     const beforeHistory = this.#state.threads.get(sessionId)?.nextBeforeHistory ?? null;
-    if (beforeHistory === null || this.#pendingReads.size > 0) return;
+    if (beforeHistory === null ||
+      [...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId)) return;
     this.#requestPage(sessionId, "earlier_history", { beforeHistory });
   }
 
@@ -6236,7 +6460,9 @@ export class ClientStore {
     if (!this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE)) {
       return { ok: false, reason: "当前连接未协商 core.pending-interactions.v1，无法重新取得服务端确认的请求" };
     }
-    if (this.#pendingReads.size > 0) return { ok: false, reason: "已有一次会话读取在进行中，请等它完成" };
+    if ([...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId)) {
+      return { ok: false, reason: "已有一次会话读取在进行中，请等它完成" };
+    }
     const requestId = this.#requestPage(sessionId, "refresh_interactions");
     if (requestId === null) return NOT_CONNECTED;
     return { ok: true, requestId };
@@ -7072,9 +7298,18 @@ export class ClientStore {
    * 也不派发会话变更专属的历史刷新。
    */
   sessionFilesPage(sessionId: Uuid): SessionFilesPanelModel {
+    const reason = this.#fileSourceUnsupported(sessionId);
+    const sources = sourcesOf(this.#state.sessionFiles, sessionId);
+    const state = reason === null ? this.#state.sessionFiles : {
+      ...this.#state.sessionFiles,
+      sources: new Map(this.#state.sessionFiles.sources).set(sessionId, {
+        all: { ...sources.all, unsupported: reason },
+        git: { ...sources.git, unsupported: reason },
+      }),
+    };
     return buildSessionFilesPanelModel({
       sessionId,
-      state: this.#state.sessionFiles,
+      state,
       connectionOnline: this.#state.connection.state === "online",
     });
   }
@@ -7144,7 +7379,8 @@ export class ClientStore {
   #drainActiveFileRefresh(): void {
     const sessionId = this.#activeConversationSession;
     if (!this.#activeFileRefreshNeeded || sessionId === null || this.#state.connection.state !== "online" ||
-        this.#state.resources === null || this.#findSession(sessionId) === undefined) return;
+        this.#state.resources === null || (this.#findSession(sessionId) === undefined &&
+          !(this.#state.selectedFeatures.includes(WORKSPACE_FILES_FEATURE) && this.#workspaceFilesTarget(sessionId) !== null))) return;
     this.#activeFileRefreshNeeded = false;
     this.refreshFiles(sessionId);
   }
@@ -7551,6 +7787,14 @@ export class ClientStore {
         promptRequestIds: withEntry(this.#state.promptRequestIds, input.sessionId, id),
         drafts: withoutEntry(this.#state.drafts, input.sessionId),
         pathRefs: withoutEntry(this.#state.pathRefs, input.sessionId),
+        // 用户消息不一定被 Agent 回显：先把「我刚发的正文」放进时间线，读取/回显出现同文时再让位。
+        sentPrompts: withEntry(this.#state.sentPrompts, id, {
+          requestId: id,
+          sessionId: input.sessionId,
+          text: input.text,
+          attachmentNames: input.attachments.map((attachment) => attachment.fileName),
+          createdAt: new Date(this.#now()).toISOString(),
+        }),
       }),
     });
     if (requestId === null) return NOT_CONNECTED;
@@ -7576,9 +7820,21 @@ export class ClientStore {
    * - 未协商 `core.session-files.v1`：旧主机明确降级，**不派发**（服务端也会在 I/O 前拒绝）；
    * - 远程 imported 会话：全部文件/Git 明确暂不支持，不查询本机替代目录；已收到的对话差异仍可查看。
    */
-  #fileSourceUnsupported(sessionId: Uuid): "feature_unavailable" | "remote_imported" | null {
+  #fileSourceUnsupported(sessionId: Uuid): FileSourceUnsupportedReason | null {
     if (!this.#state.selectedFeatures.includes(SESSION_FILES_FEATURE)) return "feature_unavailable";
+    if (this.#state.preparations.has(sessionId) && this.#findSession(sessionId) === undefined &&
+        !this.#state.selectedFeatures.includes(WORKSPACE_FILES_FEATURE)) return "workspace_feature_unavailable";
     return this.#findSession(sessionId)?.origin.kind === "remote" ? "remote_imported" : null;
+  }
+
+  #workspaceFilesTarget(sessionId: Uuid): WorkspaceFilesTarget | null {
+    const preparation = this.#state.preparations.get(sessionId);
+    if (preparation !== undefined && preparation.workspace.path.length > 0) {
+      return { workspacePath: preparation.workspace.path };
+    }
+    const session = this.#findSession(sessionId);
+    if (session?.origin.kind !== "local" || session.workspace == null) return null;
+    return { directoryId: session.workspace.directoryId };
   }
 
   #cancelFileRefreshTimer(key: string): void {
@@ -7621,6 +7877,38 @@ export class ClientStore {
     this.#fileRefreshTimers.clear();
     this.#fileRefreshQueued.clear();
     this.#messageRefreshQueued.clear();
+  }
+
+  /**
+   * 丢弃旧连接上的全部在途 `session.read`（closed/blocked/authenticated）。
+   *
+   * 查询结果只属于发起它的连接：换连接后旧结果不会回来。留着这些条目会永久挡住同一会话的
+   * 后续读取（首读被跳过 → 页面只剩实时事件，看不到已保存的用户输入与历史）。被丢弃的会话
+   * 交给 `#deferredReads`，认证完成后按当前页补读。
+   */
+  #resetPendingReads(): readonly Uuid[] {
+    if (this.#pendingReads.size === 0) return [];
+    const sessionIds = new Set<Uuid>();
+    for (const pending of this.#pendingReads.values()) {
+      sessionIds.add(pending.sessionId);
+      this.#deferredReads.add(pending.sessionId);
+    }
+    this.#pendingReads.clear();
+    return [...sessionIds];
+  }
+
+  /** 读取被丢弃后复位这些会话的翻页加载标记（否则按钮/滚动会永远停在加载中）。 */
+  #withReadLoadingStopped(state: ClientState, sessionIds: readonly Uuid[]): ClientState {
+    if (sessionIds.length === 0) return state;
+    const threads = new Map(state.threads);
+    let changed = false;
+    for (const sessionId of sessionIds) {
+      const thread = threads.get(sessionId);
+      if (thread === undefined || (!thread.loadingEarlier && !thread.loadingHistory)) continue;
+      threads.set(sessionId, { ...thread, loadingEarlier: false, loadingHistory: false });
+      changed = true;
+    }
+    return changed ? { ...state, threads } : state;
   }
 
   /** 把各会话各来源的 `loading` 复位为 false（连接重置后不再有请求在为它们加载）。 */
@@ -7900,6 +8188,7 @@ export class ClientStore {
   #dispatchFileCommand(body: CommandBody, pending: PendingFileQuery): boolean {
     const connectionId = this.#identity.connectionId;
     if (connectionId === null) return false;
+    body = this.directoryScopedFileQuery(body as SessionFilesCommandBody);
     const round = this.#fileRefreshRounds.get(this.#fileKey(pending.sessionId, pending.source));
     this.#pendingFileQueries.set(body.requestId,
       round !== undefined && (pending.kind === "list" || pending.kind === "git_status")
@@ -7913,6 +8202,15 @@ export class ClientStore {
       body,
     });
     return true;
+  }
+
+  /** Shared by file previews and downloads: the view id is not part of the directory query on the wire. */
+  directoryScopedFileQuery(body: SessionFilesCommandBody): SessionFilesCommandBody {
+    if (body.sessionId === undefined || !this.#state.selectedFeatures.includes(WORKSPACE_FILES_FEATURE)) return body;
+    const workspace = this.#workspaceFilesTarget(body.sessionId);
+    if (workspace === null) return body;
+    const { sessionId: _, ...query } = body;
+    return { ...query, payload: { ...query.payload, workspace } } as SessionFilesCommandBody;
   }
 
   /** 只把错误落到**当前**文件内容（代次不匹配的旧请求不能改界面）。 */
@@ -8381,6 +8679,11 @@ export class ClientStore {
     return requestId;
   }
 
+  /** 本会话在本设备已派发、尚未被读取/回显覆盖的用户消息。 */
+  #sentPromptsOf(sessionId: Uuid): readonly SentPrompt[] {
+    return [...this.#state.sentPrompts.values()].filter((prompt) => prompt.sessionId === sessionId);
+  }
+
   /** 本会话的结构化记录（实时与历史按 `eventId` 去重，实时优先）。 */
   #recordsOf(sessionId: Uuid): readonly StructuredRecord[] {
     // 去重键绑定来源节点：不同 Owner 的同名 `eventId` 是不同事件，不能只按裸标识合并。
@@ -8457,11 +8760,11 @@ function previewBudgetError(): PublicError {
 }
 
 /** 来源暂不可用（旧主机/远程导入会话）。 */
-function unsupportedSourceError(reason: "feature_unavailable" | "remote_imported"): PublicError {
+function unsupportedSourceError(reason: FileSourceUnsupportedReason): PublicError {
   return {
     code: "capability.unsupported_by_broker",
     message:
-      reason === "remote_imported"
+      reason === "workspace_feature_unavailable" ? "请更新主机以读取目录文件和 Git 变更。" : reason === "remote_imported"
         ? "远程导入会话不支持读取本机文件或 Git 变更。"
         : "此主机未协商会话文件能力（core.session-files.v1）。",
     retryable: false,

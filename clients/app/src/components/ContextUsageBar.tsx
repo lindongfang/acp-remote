@@ -271,7 +271,8 @@ export function ContextUsageBar({ usage }: ContextUsageBarProps): ReactElement {
       >
         {known === null ? (
           <>
-            <Text style={styles.state}>{label}</Text>
+            {/* 原型只在「窗口为零」时才补一句可区分说明；从未上报就只留「—」，不把状态词堆进胶囊。 */}
+            {usage.kind === "zero_window" ? <Text style={styles.state}>{label}</Text> : null}
             {/* 占比与数值的位置以「—」表示：未上报没有数字可显示，也不用零占位。 */}
             <Text style={styles.pct}>—</Text>
             <Text style={styles.num}>上下文 — / —</Text>

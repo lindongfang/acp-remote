@@ -23,7 +23,7 @@ import type {
   PreparationDraftLoadResult,
 } from "./ports";
 import { SESSION_PREPARATION_FEATURE, PREPARATION_RENEW_INTERVAL_MS } from "./preparation-model";
-import { resources, session } from "./testing/fixtures";
+import { eventMessage, resources, session } from "./testing/fixtures";
 
 const CONNECTION_ID = "2de54db7-74ae-4c21-88e3-05df0dc2e637";
 const DEVICE_ID = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
@@ -283,6 +283,151 @@ async function allocateReady(harness: Harness, sessionId = SESSION_ID): Promise<
 }
 
 describe("会话准备：分配与同页", () => {
+  it("新目录左栏不混入已有目录，文件与 Git 按目录读取，不等待首条或正式会话", async () => {
+    const harness = preparationStore({ features: [SESSION_PREPARATION_FEATURE, "core.session-files.v1", "core.workspace-files.v1"] });
+    const begin = harness.store.beginPreparation({ directoryId: null, agentId: "codex-a", directoryPath: "D:\\fresh\\project" });
+    const allocation = harness.frames[0];
+    if (allocation === undefined) throw new Error("缺少分配请求");
+    const ready = readyResult({ operationId: allocation.operationId, sessionId: SESSION_ID, action: "allocate" });
+    if (ready.kind !== "session_preparation_result") throw new Error("错误的准备应答");
+    const receipt = { ...receiptFor(SESSION_ID), claims: { ...receiptFor(SESSION_ID).claims,
+      normalizedWorkspacePath: "D:\\fresh\\project", workspaceSource: "workspacePath" as const } };
+    harness.store.apply(preparationEvent({ ...ready.result.body, receipt }));
+    await begin;
+    expect(harness.store.conversationPage(SESSION_ID)?.sidebar).toMatchObject({
+      directory: { directoryId: null, displayName: "project", path: "D:\\fresh\\project" },
+      notice: null, rows: [{ id: SESSION_ID, title: "新会话", updatedAtLabel: "未发送消息" }], total: 1,
+    });
+    harness.store.setActiveConversationSession(SESSION_ID);
+    harness.store.loadMoreAllFiles(SESSION_ID, "");
+    harness.store.refreshFiles(SESSION_ID);
+    harness.store.selectFileSource(SESSION_ID, "git");
+    expect(harness.commands.length).toBeGreaterThan(0);
+    for (const command of harness.commands) {
+      expect(command.body).not.toHaveProperty("sessionId");
+      expect(command.body.payload).toMatchObject({ workspace: { workspacePath: "D:\\fresh\\project" } });
+    }
+    expect(harness.store.sessionFilesPage(SESSION_ID).gitNotice).toBeNull();
+
+    harness.store.apply({ kind: "snapshot_verified", snapshot: {
+      snapshotId: "8194de43-e213-423d-acf4-2e3549304566",
+      cursor: { serverEpoch: SERVER_EPOCH, globalSequence: "11" },
+      resources: resources({ workspaces: [{ directoryId: "fresh", path: "D:\\fresh\\project" }],
+        sessions: [session({ id: SESSION_ID, directoryId: "fresh" })] }),
+      chunkCount: 3, receivedChunks: 3, snapshotDigest: "kQ8x2mB7yV1cJ0nP5",
+    } });
+    expect(harness.commands.some((command) => command.body.command === "session.git.status")).toBe(true);
+    expect(harness.store.sessionFilesPage(SESSION_ID).gitNotice).toBeNull();
+  });
+
+  it("会话内复用同目录同 Agent 的未发送会话，切换后保留标题与草稿", async () => {
+    const harness = preparationStore({});
+    await allocateReady(harness);
+    harness.store.setPreparationDraft(SESSION_ID, "尚未发送");
+    const count = harness.frames.length;
+    expect(harness.store.reusableUnsentSession(SESSION_ID)).toBe(SESSION_ID);
+    harness.store.leaveConversationSession(SESSION_ID);
+    expect(harness.store.preparationPage(SESSION_ID)?.text).toBe("尚未发送");
+    expect(harness.store.conversationPage(SESSION_ID)?.sidebar.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: SESSION_ID, title: "新会话" }),
+    ]));
+    expect(await harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a", reuseUnsent: true }))
+      .toEqual({ ok: true, sessionId: SESSION_ID });
+    expect(harness.frames).toHaveLength(count);
+    const otherAgent = harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-b", reuseUnsent: true });
+    const allocation = harness.frames.at(-1);
+    if (allocation === undefined || allocation.action !== "allocate") throw new Error("缺少另一 Agent 的分配");
+    expect(allocation.agentId).toBe("codex-b");
+    expect(harness.frames).toHaveLength(count + 1);
+    const otherId = "7f1c2d3e-4a5b-4c6d-8e7f-901122334455";
+    const ready = readyResult({ operationId: allocation.operationId, sessionId: otherId, action: "allocate" });
+    if (ready.kind !== "session_preparation_result" || ready.result.body.status !== "ready") throw new Error("准备响应错误");
+    harness.store.apply(preparationEvent({ ...ready.result.body, receipt: receiptFor(otherId, "codex-b") }));
+    expect(await otherAgent).toEqual({ ok: true, sessionId: otherId });
+    expect(harness.store.conversationPage(SESSION_ID)?.sidebar.rows.filter((row) => row.id === SESSION_ID || row.id === otherId)).toHaveLength(2);
+    expect(harness.store.reusableUnsentSession(otherId)).toBe(otherId);
+  });
+
+  it("首条前提供正常对话页、目录上下文和输入模型，且不伪造正式会话", async () => {
+    const harness = preparationStore({});
+    await allocateReady(harness);
+    harness.store.setPreparationDraft(SESSION_ID, "第一条消息");
+    const page = harness.store.conversationPage(SESSION_ID);
+    expect(page?.header.title).toBe("新会话");
+    expect(page?.header.directoryId).toBe("work-api");
+    expect(page?.sidebar.directory?.path).toBe("D:\\work\\api");
+    expect(page?.settings.mode.choices.map((mode) => mode.id)).toEqual(["default", "compact"]);
+    expect(page?.input.draft).toBe("第一条消息");
+    expect(page?.input.canSubmit).toBe(true);
+    expect(page?.timeline.entries).toEqual([]);
+    expect(harness.commands).toEqual([]);
+    expect(harness.store.state.resources?.sessions.some((item) => item.sessionId === SESSION_ID)).toBe(false);
+  });
+
+  it("首条提交后立即在时间线呈现用户正文", async () => {
+    const harness = preparationStore({});
+    await allocateReady(harness);
+    harness.store.setPreparationDraft(SESSION_ID, "首条立即可见");
+    const outcome = harness.store.submitPreparation(SESSION_ID, "首条立即可见");
+    expect(outcome.ok).toBe(true);
+    await flush();
+
+    const page = harness.store.conversationPage(SESSION_ID);
+    expect(page?.timeline.entries.some(
+      (entry) => entry.kind === "message" && entry.channel === "user" && entry.message.text === "首条立即可见",
+    )).toBe(true);
+  });
+
+  it("首条派发后的思考与工具调用在正式读取前也呈现", async () => {
+    const harness = preparationStore({});
+    await allocateReady(harness);
+    harness.store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "agent.thought.delta",
+        eventId: "dddddddd-0000-4000-8000-000000000501",
+        sessionId: SESSION_ID,
+        view: { messageId: "th-live", turnId: "turn-live", deltaIndex: "0", text: "先看一下仓库" },
+      }),
+    });
+    harness.store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "tool.call.started",
+        eventId: "dddddddd-0000-4000-8000-000000000502",
+        sessionId: SESSION_ID,
+        view: { toolCallId: "tool-live", turnId: "turn-live", title: "读取 package.json", state: "in_progress" },
+      }),
+    });
+
+    const page = harness.store.conversationPage(SESSION_ID);
+    // 正式 `session.read` 还没回来：时间线仍必须呈现已经到达的思考与工具卡。
+    expect(page?.timeline.entries.some((entry) => entry.kind === "message" && entry.channel === "thought")).toBe(true);
+    expect(page?.timeline.entries.some((entry) => entry.kind === "tool_call")).toBe(true);
+  });
+
+  it("目录输入与服务端规范化路径不同，保存的草稿目录仍与服务端凭据一致", async () => {
+    let saved: PreparationDraftContent | undefined;
+    const harness = preparationStore({ drafts: fakeDrafts({ onSave: (content) => {
+      expect(content.workspace.path).toBe(content.receipt.claims.normalizedWorkspacePath);
+      expect(content.workspace.source).toBe(content.receipt.claims.workspaceSource);
+      saved = content;
+    } }) });
+    const begin = harness.store.beginPreparation({ directoryId: null, agentId: "codex-a", directoryPath: "d:/work/api/" });
+    const allocation = harness.frames[0];
+    if (allocation === undefined) throw new Error("缺少分配请求");
+    const receipt = { ...receiptFor(SESSION_ID), claims: { ...receiptFor(SESSION_ID).claims, workspaceSource: "workspacePath" as const } };
+    harness.store.apply(preparationEvent({
+      ...((readyResult({ operationId: allocation.operationId, sessionId: SESSION_ID, action: "allocate" }) as Extract<SyncClientEvent, { kind: "session_preparation_result" }>).result.body),
+      receipt,
+    }));
+    await begin;
+    await flush();
+    expect(saved?.workspace.path).toBe(receipt.claims.normalizedWorkspacePath);
+    expect(saved?.workspace.source).toBe("workspacePath");
+    expect(harness.store.preparationPage(SESSION_ID)?.notice).toBeNull();
+  });
+
   it("allocate 只带 Agent、目录与标签页归属，成功取得后端 ID，且不产生 session.create", async () => {
     const harness = preparationStore({});
     await allocateReady(harness);

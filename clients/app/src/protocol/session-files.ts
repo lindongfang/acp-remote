@@ -23,6 +23,8 @@ import { isRecord } from "./runtime";
 
 /** 协商 feature：未选中时客户端**不派发**四条查询（服务端也会在任何 I/O 前拒绝）。 */
 export const SESSION_FILES_FEATURE = "core.session-files.v1";
+export const WORKSPACE_FILES_FEATURE = "core.workspace-files.v1";
+export type WorkspaceFilesTarget = { readonly directoryId: string } | { readonly workspacePath: string };
 
 /** 四条查询的封闭命令词表。 */
 export type SessionFilesCommandName =
@@ -71,6 +73,7 @@ export interface SessionFileEntry {
 
 /** `$defs.sessionFilesList` 的 payload。 */
 export interface SessionFilesListPayload {
+  readonly workspace?: WorkspaceFilesTarget;
   readonly path: SessionFilesPath;
   readonly hideIgnored: boolean;
   readonly after?: SessionPageToken;
@@ -81,7 +84,7 @@ export interface SessionFilesListCommand extends CommandEnvelope {
   readonly body: {
     readonly requestId: Uuid;
     readonly command: "session.files.list";
-    readonly sessionId: Uuid;
+    readonly sessionId?: Uuid;
     readonly payload: SessionFilesListPayload;
   };
 }
@@ -96,6 +99,7 @@ export interface SessionFilesListResult {
 
 /** `$defs.sessionFilesRead` 的 payload。 */
 export interface SessionFilesReadPayload {
+  readonly workspace?: WorkspaceFilesTarget;
   readonly path: SessionRelativePath;
   readonly purpose: SessionFilesReadPurpose;
   readonly offset: DecimalString;
@@ -107,7 +111,7 @@ export interface SessionFilesReadCommand extends CommandEnvelope {
   readonly body: {
     readonly requestId: Uuid;
     readonly command: "session.files.read";
-    readonly sessionId: Uuid;
+    readonly sessionId?: Uuid;
     readonly payload: SessionFilesReadPayload;
   };
 }
@@ -127,6 +131,7 @@ export interface SessionFilesReadResult {
 
 /** `$defs.sessionGitStatus` 的 payload。 */
 export interface SessionGitStatusPayload {
+  readonly workspace?: WorkspaceFilesTarget;
   readonly after?: SessionPageToken;
 }
 
@@ -135,7 +140,7 @@ export interface SessionGitStatusCommand extends CommandEnvelope {
   readonly body: {
     readonly requestId: Uuid;
     readonly command: "session.git.status";
-    readonly sessionId: Uuid;
+    readonly sessionId?: Uuid;
     readonly payload: SessionGitStatusPayload;
   };
 }
@@ -160,6 +165,7 @@ export interface SessionGitStatusResult {
 
 /** `$defs.sessionGitDiff` 的 payload。 */
 export interface SessionGitDiffPayload {
+  readonly workspace?: WorkspaceFilesTarget;
   readonly path: SessionRelativePath;
 }
 
@@ -168,7 +174,7 @@ export interface SessionGitDiffCommand extends CommandEnvelope {
   readonly body: {
     readonly requestId: Uuid;
     readonly command: "session.git.diff";
-    readonly sessionId: Uuid;
+    readonly sessionId?: Uuid;
     readonly payload: SessionGitDiffPayload;
   };
 }
@@ -392,6 +398,22 @@ function enumValue<T>(table: Readonly<Record<string, T>>, value: unknown): T | n
 
 /** 解码 `command` 消息的 `body`（四条查询之一）。 */
 export function decodeSessionFilesCommandBody(value: unknown): SessionFilesDecodeResult<SessionFilesCommandBody> {
+  if (isRecord(value) && isRecord(value["payload"]) && value["payload"]["workspace"] !== undefined) {
+    const workspace = value["payload"]["workspace"];
+    if (!isRecord(workspace)) return rejected("field_type", "invalid workspace target");
+    const keys = Object.keys(workspace);
+    if (keys.length !== 1 || (keys[0] !== "directoryId" && keys[0] !== "workspacePath")) return rejected("field_type", "invalid workspace target");
+    const field = keys[0]; const root = workspace[field];
+    if (typeof root !== "string" || root.length === 0 || root.length > (field === "directoryId" ? 128 : 4096)) return rejected("field_type", "invalid workspace target");
+    if ("sessionId" in value) return rejected("field_type", "workspace and sessionId are mutually exclusive");
+    const { workspace: _, ...payload } = value["payload"];
+    const legacy = decodeSessionFilesCommandBody({ ...value, sessionId: "00000000-0000-4000-8000-000000000001", payload });
+    if (!legacy.ok) return legacy;
+    const { sessionId: __, ...body } = legacy.value;
+    // The recursive decoder validated the discriminated payload; only its independent root is restored here.
+    return decoded({ ...body, payload: { ...body.payload, workspace: field === "directoryId" ? { directoryId: root } : { workspacePath: root } } } as SessionFilesCommandBody);
+  }
+
   if (!isRecord(value)) return rejected("not_an_object", "command body 不是对象");
   const keyProblem = exactKeys(value, ["requestId", "command", "sessionId", "payload"]);
   if (keyProblem !== null) return keyRejected(keyProblem);

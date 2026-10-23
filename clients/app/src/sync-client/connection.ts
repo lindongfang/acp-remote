@@ -309,6 +309,7 @@ export const SUPPORTED_FEATURES = [
   "core.workspace-browse.v1",
   "core.workspace-mkdir.v1",
   "core.session-files.v1",
+  "core.workspace-files.v1",
   "core.session-git-stats.v1",
   "core.session-git-compare.v1",
   "core.session-title.v1",

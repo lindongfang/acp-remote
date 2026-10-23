@@ -22,6 +22,13 @@ import { localActivityOf } from "./session-summary";
 /** 目录的稳定标识：服务端下发的 `directoryId`（不含路径信息）。 */
 export type DirectoryId = string;
 
+/** 仅用于显示：Windows 的扩展路径前缀不属于用户看到的目录名；原值仍用于凭据与请求。 */
+export function displayDirectoryPath(path: string): string {
+  if (path.startsWith("\\\\?\\UNC\\")) return "\\\\" + path.slice(8);
+  if (/^\\\\\?\\[A-Za-z]:[\\/]/.test(path)) return path.slice(4);
+  return path;
+}
+
 /**
  * 目录的会话汇总，全部由会话摘要得出。
  *

@@ -1000,11 +1000,11 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
       required: string[];
       properties: { command: unknown; payload: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } };
     };
-    expect(list.required).toEqual(["requestId", "command", "sessionId", "payload"]);
+    expect(list.required).toEqual(["requestId", "command", "payload"]);
     expect(list.properties.command).toEqual({ const: "session.files.list" });
     expect(list.properties.payload.required).toEqual(["path", "hideIgnored"]);
     expect(list.properties.payload.additionalProperties).toBe(false);
-    expect(Object.keys(list.properties.payload.properties).sort()).toEqual(["after", "hideIgnored", "path"]);
+    expect(Object.keys(list.properties.payload.properties).sort()).toEqual(["after", "hideIgnored", "path", "workspace"]);
 
     const read = defsMap["sessionFilesRead"] as {
       properties: { command: unknown; payload: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } };
@@ -1012,7 +1012,7 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect(read.properties.command).toEqual({ const: "session.files.read" });
     expect(read.properties.payload.required).toEqual(["path", "purpose", "offset"]);
     expect(read.properties.payload.additionalProperties).toBe(false);
-    expect(Object.keys(read.properties.payload.properties).sort()).toEqual(["offset", "path", "purpose", "version"]);
+    expect(Object.keys(read.properties.payload.properties).sort()).toEqual(["offset", "path", "purpose", "version", "workspace"]);
     expect(defsMap["sessionFilesReadPurpose"]).toEqual({ enum: ["preview", "download"] });
 
     const gitStatus = defsMap["sessionGitStatus"] as {
@@ -1024,14 +1024,14 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect(gitStatus.properties.command).toEqual({ const: "session.git.status" });
     // 空 payload 的 `required` 键可以缺省（schema 不写 `required: []`）：两种写法都表示「无必填键」。
     expect(gitStatus.properties.payload.required ?? []).toEqual([]);
-    expect(Object.keys(gitStatus.properties.payload.properties)).toEqual(["after"]);
+    expect(Object.keys(gitStatus.properties.payload.properties)).toEqual(["after", "workspace"]);
 
     const gitDiff = defsMap["sessionGitDiff"] as {
       properties: { command: unknown; payload: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } };
     };
     expect(gitDiff.properties.command).toEqual({ const: "session.git.diff" });
     expect(gitDiff.properties.payload.required).toEqual(["path"]);
-    expect(Object.keys(gitDiff.properties.payload.properties)).toEqual(["path"]);
+    expect(Object.keys(gitDiff.properties.payload.properties)).toEqual(["path", "workspace"]);
 
     const listResult = defsMap["sessionFilesListResult"] as { required: string[]; properties: Record<string, unknown> };
     expect([...listResult.required].sort()).toEqual(["entries", "gitState", "path"]);

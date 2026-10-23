@@ -104,6 +104,39 @@ describe("D8 明细现取与复合游标翻页", () => {
     expect(Object.keys(body.payload.before ?? {}).sort()).toEqual(["createdAt", "messageId"]);
   });
 
+  it("切换会话时，另一个会话的在途读取不得挡掉当前会话的首读", () => {
+    const otherSessionId = "aaaaaaaa-0000-4000-8000-000000000002";
+    const { store, gateway } = storeWith({
+      resources: resources({
+        sessions: [session({ id: SESSION_ID, state: "running" }), session({ id: otherSessionId, state: "running" })],
+        agents: [],
+      }),
+    });
+
+    store.loadSession(SESSION_ID);
+    // 第一个读取还没有结果：此时切到另一个会话，首读仍必须派发（否则页面只剩实时事件）。
+    store.loadSession(otherSessionId);
+
+    expect(gateway.dispatches).toHaveLength(2);
+    const second = gateway.dispatches[1]?.body;
+    if (second === undefined || second.command !== "session.read") throw new Error("第二条不是 session.read");
+    expect(second.sessionId).toBe(otherSessionId);
+  });
+
+  it("旧连接上的在途读取在连接关闭后被丢弃，重新进入会话会再读", () => {
+    const { store, gateway } = storeFixture("2de54db7-74ae-4c21-88e3-05df0dc2e637");
+    store.loadSession(SESSION_ID);
+    expect(gateway.dispatches).toHaveLength(1);
+
+    store.apply({ kind: "closed", code: 1006, retryable: true });
+    store.loadSession(SESSION_ID);
+
+    expect(gateway.dispatches).toHaveLength(2);
+    const body = lastReadCommand(gateway.dispatches).body;
+    if (body.command !== "session.read") throw new Error("命令不是 session.read");
+    expect(body.sessionId).toBe(SESSION_ID);
+  });
+
   it("更早一页并入后按时间顺序排列，且 hasEarlier 随之更新", () => {
     const { store, gateway } = storeFixture("2de54db7-74ae-4c21-88e3-05df0dc2e637");
     store.loadSession(SESSION_ID);

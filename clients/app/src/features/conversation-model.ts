@@ -40,6 +40,7 @@ import type {
   SessionStateView,
 } from "../domain";
 import { buildContextUsageView, directoryNamesOf } from "../domain";
+import { displayDirectoryPath } from "../domain/directory";
 import type { WorkspaceRef } from "../protocol";
 import type { ReadCursor, StagedResources } from "../sync-client";
 import type { ConversationInputModel } from "./conversation-input-model";
@@ -101,6 +102,8 @@ export function hiddenConversationColumns(view: ConversationSecondaryView): read
 
 /** 会话头（对话页顶部）。 */
 export interface ConversationHeaderModel {
+  /** 首条发送前的新会话不伪造任务状态，也不显示「状态未知」。 */
+  readonly newSession?: boolean;
   readonly sessionId: string;
   readonly title: string;
   readonly agentName: string;
@@ -246,7 +249,7 @@ const ABSENT_SIDEBAR: ConversationSidebarModel = {
 
 /** 对话页左栏的目录上下文（由路径派生的展示名 + 逐字路径；`directoryId` 是进入详情页的入口）。 */
 export interface ConversationSidebarDirectoryModel {
-  readonly directoryId: string;
+  readonly directoryId: string | null;
   readonly displayName: string;
   /** 服务端下发的逐字路径。 */
   readonly path: string;
@@ -319,9 +322,12 @@ export interface ConversationPageModel {
  * 派生（与目录页同一份口径），路径逐字透传，不拼接、不反查。
  */
 export function buildConversationSidebar(input: {
+  readonly pendingRows?: readonly SessionRowModel[];
   readonly resources: StagedResources | null;
   /** 当前会话自己的目录引用（`SessionSummary.workspace`）；`null` = 没有目录归属。 */
   readonly workspace: WorkspaceRef | null;
+  /** 新目录尚未进入快照时，使用本次创建经服务端确认的路径显示上下文。 */
+  readonly workspacePath?: string;
   readonly sessionId: string;
   readonly ownerLabelOf: (ownerNodeId: string) => string;
   /** 左栏目录内搜索词；空串即不过滤。 */
@@ -333,7 +339,22 @@ export function buildConversationSidebar(input: {
   /** 连接是否协商了本机生命周期（决定同目录会话行的主状态词表）。 */
   readonly localLifecycleNegotiated?: boolean;
 }): ConversationSidebarModel {
-  const workspace = input.workspace;
+  const confirmedPath = input.workspacePath;
+  const pathWorkspace = confirmedPath === undefined ? undefined : input.resources?.workspaces.find((item) =>
+    displayDirectoryPath(item.path) === displayDirectoryPath(confirmedPath));
+  const workspace = pathWorkspace ?? input.workspace;
+  if (input.workspacePath !== undefined && pathWorkspace === undefined) {
+    const path = input.workspacePath;
+    const matched = (input.pendingRows ?? []).filter((row) => row.title.toLowerCase().includes(input.query.trim().toLowerCase()));
+    const pageCount = Math.max(1, Math.ceil(matched.length / CONVERSATION_SIDEBAR_PAGE_SIZE));
+    const page = correctPageNumber({ requested: input.pageInput, pageCount, fallback: 1 });
+    const rows = matched.slice((page - 1) * CONVERSATION_SIDEBAR_PAGE_SIZE, page * CONVERSATION_SIDEBAR_PAGE_SIZE);
+    return {
+      directory: { directoryId: null, path, displayName: path.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) ?? path },
+      notice: null, query: input.query, total: matched.length, shown: rows.length, page, pageCount,
+      canNextPage: page < pageCount, selectedSessionId: input.sessionId, rows,
+    };
+  }
   if (workspace === null) {
     return {
       directory: null,
@@ -383,8 +404,8 @@ export function buildConversationSidebar(input: {
       ...(input.localLifecycleNegotiated === undefined
         ? {}
         : { localLifecycleNegotiated: input.localLifecycleNegotiated }),
-    }).get(directory.directoryId) ?? [];
-  const matched = rowsOfDirectory.filter((row) => needle.length === 0 || row.title.toLowerCase().includes(needle));
+    }).get(registered.directoryId) ?? [];
+  const matched = [...(input.pendingRows ?? []).filter((pending) => !rowsOfDirectory.some((row) => row.id === pending.id)), ...rowsOfDirectory].filter((row) => needle.length === 0 || row.title.toLowerCase().includes(needle));
   const pageCount = Math.max(1, Math.ceil(matched.length / CONVERSATION_SIDEBAR_PAGE_SIZE));
   const page = correctPageNumber({ requested: input.pageInput, pageCount, fallback: 1 });
   const offset = (page - 1) * CONVERSATION_SIDEBAR_PAGE_SIZE;

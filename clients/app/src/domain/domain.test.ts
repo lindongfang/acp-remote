@@ -13,10 +13,19 @@ import { describe, expect, it } from "vitest";
 import type { AgentCatalogEntry, RawAcp, SessionSummary, WorkspaceCatalogEntry } from "../protocol/common";
 import { buildAgentCatalogView } from "./agent-catalog";
 import { buildSessionReadPageView, buildContextUsageView, contextUsageLabel } from "./conversation";
-import { buildDirectoryViews, directoryNamesOf } from "./directory";
+import { buildDirectoryViews, directoryNamesOf, displayDirectoryPath } from "./directory";
 import { buildSessionSummaryView, UNTITLED_SESSION_LABEL } from "./session-summary";
 import { buildTimelineCard, groupStructuredRecords, toolDetailOf } from "./timeline";
 import type { StructuredRecord, ToolCallTimelineCard } from "./timeline";
+
+describe("Windows 路径显示", () => {
+  it("隐藏驱动器与 UNC 的扩展前缀，其他路径保持原值", () => {
+    expect(displayDirectoryPath("\\\\?\\D:\\work\\repo")).toBe("D:\\work\\repo");
+    expect(displayDirectoryPath("\\\\?\\UNC\\server\\share\\repo")).toBe("\\\\server\\share\\repo");
+    expect(displayDirectoryPath("D:\\work\\repo")).toBe("D:\\work\\repo");
+    expect(displayDirectoryPath("/home/work/repo")).toBe("/home/work/repo");
+  });
+});
 
 /** 造一个最小合法的 `SessionSummary`。 */
 function summary(overrides: Partial<SessionSummary> & Pick<SessionSummary, "sessionId">): SessionSummary {

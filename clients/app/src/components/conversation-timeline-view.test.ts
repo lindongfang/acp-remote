@@ -406,7 +406,8 @@ describe("对话时间线：正文按不可信输入渲染", () => {
     });
     const volatileHtml = renderPage(pageOf(client));
     expect(volatileHtml).toContain('data-message-volatile="true"');
-    expect(volatileHtml).toContain('data-message-volatile-note="true"');
+    // 原型不在气泡旁堆技术说明：易失性只由机器锚点表达，不再多占一行。
+    expect(volatileHtml).not.toContain("data-message-volatile-note");
 
     client.loadSession(ONLINE_SESSION_ID);
     client.apply({
@@ -466,7 +467,7 @@ describe("对话时间线：条目形态与原型对齐", () => {
     expect(html).toContain("Agent");
   });
 
-  it("进行中的轮次带运行指示，失败的轮次是一条失败条", () => {
+  it("进行中的轮次不写文案提示，失败的轮次是一条失败条", () => {
     const { store: client } = store();
     applyEvent(client, {
       eventType: "turn.started",
@@ -486,13 +487,30 @@ describe("对话时间线：条目形态与原型对齐", () => {
     });
     const html = renderPage(pageOf(client));
 
-    expect(html).toContain('data-turn-running="true"');
-    expect(html).toContain("Agent 正在输出");
+    // 输出由实际的思考/工具/回复条目表达，不再额外写「正在输出」文案。
+    expect(html).not.toContain('data-turn-running');
+    expect(html).not.toContain("Agent 正在输出");
     expect(html).toContain('data-turn-state="failed"');
     expect(html).toContain('data-turn-failure="true"');
     expect(html).toContain('data-turn-error="session.busy"');
     expect(html).toContain('data-turn-error-retryable="true"');
     expect(html).toContain("轮次失败：Agent 进程异常退出");
+  });
+  it("完成态轮次不把内部标识当卡片展示（对齐原型）", () => {
+    const { store: client } = store();
+    applyEvent(client, {
+      eventType: "turn.completed",
+      eventId: "dddddddd-0000-4000-8000-000000000208",
+      globalSequence: "38",
+      view: { turnId: "turn-done", state: "completed" },
+    });
+    const html = renderPage(pageOf(client));
+
+    // 锚点仍在（滚动/分组依赖它），但技术标识不再作为可见卡片内容。
+    expect(html).toContain('data-timeline-card="turn"');
+    expect(html).toContain('data-turn-id="turn-done"');
+    expect(html).not.toMatch(/>\s*turn-done\s*</);
+    expect(html).not.toMatch(/>\s*轮次\s*</);
   });
 });
 

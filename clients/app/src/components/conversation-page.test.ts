@@ -965,7 +965,7 @@ describe("对话页：激活失败的显式重试入口", () => {
     return fixture;
   }
 
-  it("uncertain 也显示重试入口（重试走 command.status 核实，不换号重派）", () => {
+  it("激活失败不再占用会话头：只有标题、状态、Agent 与子 Agent", () => {
     const { store, gateway } = activationStore();
     const resume = lastDispatch(gateway).body;
     if (resume.command !== "session.resume") throw new Error("不是 session.resume");
@@ -974,13 +974,16 @@ describe("对话页：激活失败的显式重试入口", () => {
       result: resumeOutcome({ requestId: resume.requestId, status: "uncertain", code: null }),
     });
 
-    const html = renderPage(pageOf(store), { onRetryActivation: () => undefined });
-    expect(html).toContain('data-session-activation="failed"');
-    expect(html).toContain("不确定");
-    expect(html).toContain('data-action="retry-activation"');
+    const model = pageOf(store);
+    expect(model.header.activation).toMatchObject({ kind: "failed", retryable: true });
+    const html = renderPage(model);
+    // 会话头不再渲染激活原因/重试入口；原因由输入区的不可提交说明承担。
+    expect(html).not.toContain("data-session-activation");
+    expect(html).not.toContain('data-action="retry-activation"');
+    expect(html).toContain("data-session-activity");
   });
 
-  it("Agent 不支持恢复这类明确不可重试的失败不显示重试入口", () => {
+  it("Agent 不支持恢复时模型仍标记不可重试（只影响输入区原因，不影响会话头结构）", () => {
     const { store, gateway } = activationStore();
     const resume = lastDispatch(gateway).body;
     if (resume.command !== "session.resume") throw new Error("不是 session.resume");
@@ -995,7 +998,8 @@ describe("对话页：激活失败的显式重试入口", () => {
 
     const model = pageOf(store);
     expect(model.header.activation).toMatchObject({ kind: "failed", retryable: false });
-    const html = renderPage(model, { onRetryActivation: () => undefined });
+    const html = renderPage(model);
+    expect(html).not.toContain("data-session-activation");
     expect(html).not.toContain('data-action="retry-activation"');
   });
 });

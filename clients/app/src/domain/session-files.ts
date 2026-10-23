@@ -81,10 +81,11 @@ export interface GitDiffView {
 }
 
 /** 一个来源暂不可用的原因（旧主机或远程导入会话）。 */
-export type FileSourceUnsupportedReason = "feature_unavailable" | "remote_imported";
+export type FileSourceUnsupportedReason = "feature_unavailable" | "remote_imported" | "workspace_feature_unavailable";
 
 /** 不可用原因的显式文案；`null` 表示该来源可用。 */
 export const FILE_SOURCE_UNSUPPORTED_NOTICES: Readonly<Record<FileSourceUnsupportedReason, string>> = {
+  workspace_feature_unavailable: "主机未协商按目录读取文件的能力（core.workspace-files.v1），请更新主机后重试。",
   feature_unavailable: "此主机未协商会话文件能力（core.session-files.v1），全部文件与 Git 变更暂不可用。",
   remote_imported: "远程导入会话不读取本机目录；全部文件与 Git 变更暂不支持，已收到的对话差异仍可在对话中查看。",
 };

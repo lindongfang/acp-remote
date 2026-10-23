@@ -25,6 +25,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
+import { displayDirectoryPath } from "../domain/directory";
 import type { TextProps } from "react-native";
 
 import type { CreateSessionEntryModel, CreateSubmissionModel } from "../features/create-session-model";
@@ -589,7 +590,7 @@ export function CreateSessionSheet({
           <View style={styles.dirRow}>
             <Text style={styles.dirKey}>路径</Text>
             <Text numberOfLines={1} style={styles.dirPath} dataSet={{ createDirectoryPath: directory.path }}>
-              {directory.path}
+              {displayDirectoryPath(directory.path)}
             </Text>
           </View>
         </View>
@@ -629,7 +630,7 @@ export function CreateSessionSheet({
           <View style={styles.dirRow}>
             <Text style={styles.dirKey}>路径</Text>
             <Text numberOfLines={1} style={styles.dirPath} dataSet={{ createDirectoryPath: selectedPath ?? "" }}>
-              {selectedPath ?? "—"}
+              {selectedPath === null ? "—" : displayDirectoryPath(selectedPath)}
             </Text>
           </View>
           {directory.unavailable === null ? null : (

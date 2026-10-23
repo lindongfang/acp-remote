@@ -241,6 +241,7 @@ export interface FakeHostOptions {
    * {@link FakeHostOptions.preparationResult} 应答。
    */
   readonly selectPreparation?: boolean | undefined;
+  readonly selectWorkspaceFiles?: boolean | undefined;
   /**
    * `session.preparation` 的应答体（返回 `null` 表示故意不应答，用例观察「没有终态」）。
    *
@@ -646,6 +647,7 @@ export class FakeHost {
       ...SERVER_SELECTED_FEATURES,
       ...(this.options.selectLocalLifecycle === true ? [LOCAL_SESSION_LIFECYCLE_FEATURE] : []),
       ...(this.options.selectPreparation === true ? [SESSION_PREPARATION_FEATURE] : []),
+      ...(this.options.selectWorkspaceFiles === true ? ["core.workspace-files.v1"] : []),
     ];
     const transcript = encodeTranscript(HOST_CHALLENGE_DOMAIN, [
       { tag: HOST_CHALLENGE_TAG.protocolVersion, bytes: encodeU16be(1) },

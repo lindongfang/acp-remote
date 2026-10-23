@@ -337,12 +337,12 @@ const checks: readonly Check[] = [
         // 页面进入后端分配的准备页：同一 URL、准备形态，弹层关闭。
         await waitFor(() => currentPath() === `/session/${PREPARED_SESSION_ID}`, "进入后端分配的同一 ID");
         await waitFor(
-          () => query(mounted.container, "[data-preparation-title]") !== null,
+          () => query(mounted.container, "[data-session-title]") !== null,
           "准备页渲染",
         );
         expectEqual(
-          textOf(query(mounted.container, "[data-preparation-title]")),
-          "新会话（准备中）",
+          textOf(query(mounted.container, "[data-session-title]")),
+          "新会话",
           "准备页带着后端分配的 ID（路由即该 ID）",
         );
         expectEqual(query(mounted.container, "[data-create-sheet]"), null, "导航后弹层已关闭");
@@ -404,7 +404,7 @@ const checks: readonly Check[] = [
 
         // MUST NOT：帧**原文**里不得携带 Provider/MCP 凭据，也不得凭空多带一条宿主路径。
         const frame = JSON.stringify(allocate);
-        expectNone(frame, FORBIDDEN_IN_PAYLOAD, "allocate 帧里出现了越界字段名");
+        expectNone(frame, FORBIDDEN_IN_PAYLOAD.map((key) => JSON.stringify(key) + ":"), "allocate 帧里出现了越界字段名");
         expectAbsent(frame, "D:", "allocate 帧里出现了本机盘符路径");
         expectAbsent(frame, "secret", "allocate 帧里出现了敏感片段");
       } finally {
@@ -665,7 +665,7 @@ const checks: readonly Check[] = [
         );
         expectEqual(allocate["agentId"], "codex-a", "分配请求里的 Agent 引用");
         expectAbsent(JSON.stringify(allocate), "sessionId", "分配请求不得指定正式 ID");
-        expectNone(JSON.stringify(allocate), FORBIDDEN_IN_PAYLOAD, "帧里出现了越界字段名");
+        expectNone(JSON.stringify(allocate), FORBIDDEN_IN_PAYLOAD.map((key) => JSON.stringify(key) + ":"), "帧里出现了越界字段名");
         expectEqual(createFrame(mounted.host?.sent ?? []), null, "新入口不得发送 session.create");
       } finally {
         await mounted.unmount();
@@ -815,7 +815,7 @@ const checks: readonly Check[] = [
         expectEqual(allocate["createIfMissing"], undefined, "准备分配没有 createIfMissing 字段");
         expectEqual(allocate["agentId"], "codex-a", "分配请求里的 Agent 引用");
         expectAbsent(JSON.stringify(allocate), "sessionId", "分配请求不得指定正式 ID");
-        expectNone(JSON.stringify(allocate), FORBIDDEN_IN_PAYLOAD, "帧里出现了越界字段名");
+        expectNone(JSON.stringify(allocate), FORBIDDEN_IN_PAYLOAD.map((key) => JSON.stringify(key) + ":"), "帧里出现了越界字段名");
         expectEqual(createFrame(sent()), null, "新入口不得发送 session.create");
       } finally {
         await mounted.unmount();

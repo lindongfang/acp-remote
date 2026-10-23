@@ -37,6 +37,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import type { InteractionAnswer } from "../domain/interaction";
+import { displayDirectoryPath } from "../domain/directory";
 import type { AttachmentMediaView, FormInputValue } from "../domain";
 import type { AttachmentKind } from "../features/attachment-model";
 import {
@@ -148,8 +149,6 @@ export interface ConversationStreamProps {
     | undefined;
   /** 重新取得服务端确认的当前有效请求。 */
   readonly onRefreshInteractions?: (() => void) | undefined;
-  /** 重试本机会话激活（恢复失败后由用户显式发起；不会自动重派不确定的请求）。 */
-  readonly onRetryActivation?: (() => void) | undefined;
   /** 打开平台选择器选择附件（选择阶段只在本机预览，发送后才上传）。 */
   readonly onPickAttachment?: ((kind: AttachmentKind) => void) | undefined;
   /** 粘贴事件（交给平台端口解析）。 */
@@ -174,6 +173,7 @@ export interface ConversationStreamProps {
   readonly onSidebarPageChange?: ((pageInput: string) => void) | undefined;
   /** 左栏底部的「⊕ 新建会话」：在该目录内创建会话。 */
   readonly onCreateSession?: ((directoryId: string) => void) | undefined;
+  readonly onCreateSessionAtPath?: ((path: string) => void) | undefined;
   /**
    * 顶部标题编辑视图（`store.titleEditorView(sessionId)`）。
    *
@@ -463,41 +463,6 @@ function buildStyles(colors: Palette) {
       borderColor: colors.accent,
       borderRadius: radius.sm,
       backgroundColor: colors.panel2,
-    },
-    titleError: {
-      color: colors.danger,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      marginTop: spacing.xs,
-    },
-    titleNotice: {
-      color: colors.warn,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      marginTop: spacing.xs,
-    },
-    activationRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: spacing.sm,
-      marginTop: spacing.xs,
-    },
-    activationNotice: {
-      flexShrink: 1,
-      color: colors.warn,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
-    activationError: {
-      flexShrink: 1,
-      color: colors.danger,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
-    activationRetry: {
-      color: colors.accent,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
     },
     agent: {
       flexShrink: 1,
@@ -1087,6 +1052,7 @@ function Sidebar({
   onQueryChange,
   onPageChange,
   onCreateSession,
+  onCreateSessionAtPath,
 }: {
   readonly model: ConversationSidebarModel;
   readonly onOpenDirectoryList: (() => void) | undefined;
@@ -1094,6 +1060,7 @@ function Sidebar({
   readonly onQueryChange: ((query: string) => void) | undefined;
   readonly onPageChange: ((pageInput: string) => void) | undefined;
   readonly onCreateSession: ((directoryId: string) => void) | undefined;
+  readonly onCreateSessionAtPath: ((path: string) => void) | undefined;
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -1102,7 +1069,7 @@ function Sidebar({
     <View style={styles.sidebar} dataSet={{ conversationSidebar: "true" }}>
       <View style={styles.sidebarFixed} dataSet={{sidebarRegion:"header"}}>
       {directory === null ? null : (
-        <View style={styles.sidebarHead} dataSet={{ sidebarDirectory: directory.directoryId }}>
+        <View style={styles.sidebarHead} dataSet={{ sidebarDirectory: directory.directoryId ?? "unregistered" }}>
           {/* 返回目录列表，目录名独占下一行。 */}
           <View style={styles.sidebarTopRow}>
             <Pressable
@@ -1128,7 +1095,7 @@ function Sidebar({
               路径
             </Text>
             <Text style={styles.sidebarPath} numberOfLines={1} dataSet={{ sidebarDirectoryPath: directory.path }}>
-              {directory.path}
+              {displayDirectoryPath(directory.path)}
             </Text>
           </View>
 
@@ -1197,14 +1164,15 @@ function Sidebar({
       )}
 
 
-      {directory === null || onCreateSession === undefined ? null : (
+      {directory === null || (directory.directoryId === null ? onCreateSessionAtPath === undefined : onCreateSession === undefined) ? null : (
         <View style={styles.sidebarFoot}>
           <Pressable
             role="button"
             style={styles.sidebarCreate}
-            dataSet={{ action: "create-session-in-directory", directoryId: directory.directoryId }}
+            dataSet={{ action: "create-session-in-directory", directoryId: directory.directoryId ?? "unregistered" }}
             onPress={() => {
-              onCreateSession(directory.directoryId);
+              if (directory.directoryId !== null) onCreateSession?.(directory.directoryId);
+              else onCreateSessionAtPath?.(directory.path);
             }}
           >
             <Text style={styles.sidebarCreateText}>⊕ 新建会话</Text>
@@ -1260,7 +1228,6 @@ export function ConversationStream({
   onDownloadAttachment,
   onSubmitElicitation,
   onRefreshInteractions,
-  onRetryActivation,
   onPickAttachment,
   onPasteAttachments,
   onRemoveAttachment,
@@ -1273,6 +1240,7 @@ export function ConversationStream({
   onSidebarQueryChange,
   onSidebarPageChange,
   onCreateSession,
+  onCreateSessionAtPath,
   titleEditor,
   onStartTitleEdit,
   onTitleDraftChange,
@@ -1731,6 +1699,7 @@ export function ConversationStream({
                 onQueryChange={onSidebarQueryChange}
                 onPageChange={onSidebarPageChange}
                 onCreateSession={onCreateSession}
+                onCreateSessionAtPath={onCreateSessionAtPath}
               />
             </View>
           </View>
@@ -1781,7 +1750,9 @@ export function ConversationStream({
                     </Text>
                   </Pressable>
                 )}
-                {model.header.state === null ? (
+                {model.header.newSession ? (
+                  <Text style={styles.agent} dataSet={{ sessionState: "unsent" }}>未发送</Text>
+                ) : model.header.state === null ? (
                   // 摘要尚未取得：说明「未知」，MUST NOT 编造空闲（更没有旧七态的关闭）。
                   <Text style={styles.agent} dataSet={{ sessionState: "unknown" }}>
                     状态未知
@@ -1798,53 +1769,6 @@ export function ConversationStream({
                 <View style={styles.headerSpacer} />
                 {hostPanel === null || hostPanel === undefined ? null : <AgentChip panel={hostPanel} />}
               </View>
-              {/* 失败/不可用原因就在会话头内：仍在当前页时保留输入并显示原因；离页后只留下
-                  可归因原会话的提示，不跳回也不恢复草稿。 */}
-              {titleView !== null && titleView.error !== null ? (
-                <Text style={styles.titleError} dataSet={{ sessionTitleError: "true" }}>
-                  {titleView.error}
-                </Text>
-              ) : null}
-              {titleView !== null && titleView.notice !== null ? (
-                <Text style={styles.titleNotice} dataSet={{ sessionTitleNotice: "true" }}>
-                  {titleView.notice}
-                </Text>
-              ) : null}
-              {(() => {
-                const activation = model.header.activation ?? null;
-                if (activation === null || activation.kind === "ready") return null;
-                const failed = activation.kind === "failed";
-                const notice =
-                  activation.kind === "failed"
-                    ? activation.reason
-                    : activation.kind === "inactive" || activation.kind === "activating" || activation.kind === "unavailable"
-                      ? activation.notice
-                      : "";
-                return (
-                  <View style={styles.activationRow} dataSet={{ sessionActivation: activation.kind }}>
-                    <Text
-                      style={failed ? styles.activationError : styles.activationNotice}
-                      dataSet={{
-                        sessionActivationNotice: "true",
-                        ...(activation.kind === "failed" && activation.code !== null
-                          ? { sessionActivationCode: activation.code }
-                          : {}),
-                      }}
-                    >
-                      {notice}
-                    </Text>
-                    {activation.kind === "failed" && activation.retryable && onRetryActivation !== undefined ? (
-                      <Pressable
-                        role="button"
-                        onPress={() => onRetryActivation()}
-                        dataSet={{ action: "retry-activation" }}
-                      >
-                        <Text style={styles.activationRetry}>重试激活</Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-                );
-              })()}
             </View>
 
             {/* 中间互斥查看区：文件打开时它占据时间线的位置；时间线/输入区仍在 DOM（隐藏）。 */}
@@ -1903,6 +1827,7 @@ export function ConversationStream({
             <ConversationTimeline
               entries={model.timeline.entries}
               sessionId={sessionId}
+              agentName={model.header.agentName}
               onOpenDiagnostics={onOpenDiagnostics}
               onAnswerInteraction={onAnswerInteraction}
               onCopyCode={onCopyCode}

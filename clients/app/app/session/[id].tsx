@@ -36,8 +36,6 @@ import {
   ConversationStream,
   CreateSessionSheet,
   DiagnosticsDrawer,
-  PreparationPanel,
-  PreparationStatusBanner,
   RuntimeUnavailable,
 } from "../../src/components";
 import type { ConversationSecondaryView, FilePreviewArtifact } from "../../src/components";
@@ -213,80 +211,12 @@ export default function SessionRoute(): ReactElement {
 
   const model = store.conversationPage(sessionId);
   const preparation = store.preparationPage(sessionId);
-  // 准备页复用同一路由与同一页面实例：`phase` 是唯一判据。受理/`committed` 之后才改读正式状态；
-  // 此前即使读取派发已经建了线程条目，也不能把准备页替换掉（准备才是这一阶段的事实）。
-  if (preparation !== null && preparation.phase !== "accepted" && preparation.phase !== "committed") {
-    return (
-      <PreparationPanel
-        model={preparation}
-        agents={store.agentCatalog()}
-        directories={store.registeredDirectories()}
-        onDraftChange={(text) => {
-          store.setPreparationDraft(sessionId, text);
-        }}
-        onSubmit={() => {
-          const outcome = store.submitPreparation(sessionId, preparation.text);
-          if (!outcome.ok) toastStore.show(outcome.reason);
-        }}
-        onSelectMode={(modeId) => {
-          const outcome = store.selectPreparationMode(sessionId, modeId);
-          if (!outcome.ok) toastStore.show(outcome.reason);
-        }}
-        onSelectConfig={(configId, value) => {
-          const outcome = store.setPreparationConfigValue(sessionId, configId, value);
-          if (!outcome.ok) toastStore.show(outcome.reason);
-        }}
-        onSelectAgent={(agentId) => {
-          void store.changePreparationAgent(sessionId, agentId).then((outcome) => {
-            if (!outcome.ok) {
-              toastStore.show(outcome.reason);
-              return;
-            }
-            // 后端分配了新 ID：旧响应按旧会话键归并，不会覆盖新页面。
-            router.replace(`/session/${encodeURIComponent(outcome.sessionId)}`);
-          });
-        }}
-        onSelectDirectory={(directoryId) => {
-          const directory = store.registeredDirectories().find((item) => item.directoryId === directoryId);
-          if (directory === undefined) return;
-          void store
-            .changePreparationWorkspace(sessionId, { directoryId, path: directory.path })
-            .then((outcome) => {
-              if (!outcome.ok) {
-                toastStore.show(outcome.reason);
-                return;
-              }
-              router.replace(`/session/${encodeURIComponent(outcome.sessionId)}`);
-            });
-        }}
-        onPickAttachment={(kind) => {
-          void store.pickAttachments(sessionId, kind).then((outcome) => {
-            if (!outcome.ok) toastStore.show(outcome.reason);
-          });
-        }}
-        onRemoveAttachment={(localId) => {
-          store.removeAttachment(sessionId, localId);
-        }}
-        onRetryAttachments={() => {
-          const outcome = store.retryAttachments(sessionId);
-          if (!outcome.ok) toastStore.show(outcome.reason);
-        }}
-        onRetry={() => {
-          const outcome = store.retryPreparation(sessionId);
-          if (!outcome.ok) toastStore.show(outcome.reason);
-        }}
-        onLeave={() => {
-          store.leavePreparation(sessionId);
-          router.replace("/");
-        }}
-      />
-    );
-  }
+  const beforeFirstMessage = preparation !== null && preparation.phase !== "accepted" && preparation.phase !== "committed";
   const thread = state.threads.get(sessionId);
   const remote = state.remoteSessions.get(sessionId);
   // 摘要先于正文到达时，不展示尚未就绪的会话头、分页与配置占位文案。
   // 首次读取失败仍交给正常页面呈现错误，不能一直留在空白等待态。
-  if (model !== null && thread?.page == null && thread?.pagingError == null && remote?.error == null &&
+  if (preparation === null && model !== null && thread?.page == null && thread?.pagingError == null && remote?.error == null &&
       remote?.sourceState !== "offline" && remote?.sourceState !== "revoked") {
     return <View style={theme.dark ? STYLES.dark.page : STYLES.light.page} />;
   }
@@ -355,6 +285,9 @@ export default function SessionRoute(): ReactElement {
    * 不存在的目录上。
    */
   const requestedSheetDirectoryId = state.createSheetDirectoryId;
+  const selectedPath = state.directoryBrowse.selection;
+  const pathSheetOpen = state.createSheetBrowses && selectedPath?.kind === "path" &&
+    selectedPath.path === (preparation?.workspace.path ?? model.sidebar.directory?.path);
   const directoryId = model.header.directoryId;
   const sheetDirectoryId =
     directoryId !== null &&
@@ -365,16 +298,6 @@ export default function SessionRoute(): ReactElement {
 
   return (
     <View role="main" style={theme.dark ? STYLES.dark.page : STYLES.light.page}>
-      {/* 首条已保存后的状态条：不确定/失败显眼保留，不自动消失、不自动重发。 */}
-      {preparation === null ? null : (
-        <PreparationStatusBanner
-          model={preparation}
-          onVerify={() => {
-            const outcome = store.retryPreparation(sessionId);
-            if (!outcome.ok) toastStore.show(outcome.reason);
-          }}
-        />
-      )}
       <ConversationStream
         model={model}
         // 两套翻页：消息一页、结构化历史一页（各自续取自己的游标，互不影响）。
@@ -404,10 +327,14 @@ export default function SessionRoute(): ReactElement {
         }}
         // 草稿只在内存（imported 会话也不落盘），提交时把当前草稿交给仓库。
         onDraftChange={(text) => {
-          store.setDraft(sessionId, text);
+          if (beforeFirstMessage) store.setPreparationDraft(sessionId, text);
+          else store.setDraft(sessionId, text);
         }}
         onSubmitPrompt={(draft) => {
-          store.submitPrompt(sessionId, draft);
+          if (beforeFirstMessage) {
+            const outcome = store.submitPreparation(sessionId, draft);
+            if (!outcome.ok) toastStore.show(outcome.reason);
+          } else store.submitPrompt(sessionId, draft);
         }}
         onCancelTurn={() => {
           store.cancelTurn(sessionId);
@@ -422,10 +349,12 @@ export default function SessionRoute(): ReactElement {
         }}
         // `configId` 来自设置模型（配置项 id，不是取值）；`modeId` 来自模式分节。
         onSelectModel={(configId, value) => {
-          store.setConfigValue(sessionId, configId, value);
+          const outcome = beforeFirstMessage ? store.setPreparationConfigValue(sessionId, configId, value) : store.setConfigValue(sessionId, configId, value);
+          if (!outcome.ok) toastStore.show(outcome.reason);
         }}
         onSelectMode={(modeId) => {
-          store.setMode(sessionId, modeId);
+          const outcome = beforeFirstMessage ? store.selectPreparationMode(sessionId, modeId) : store.setMode(sessionId, modeId);
+          if (!outcome.ok) toastStore.show(outcome.reason);
         }}
         // 右栏每处改动的 ACP 原文诊断：展开态是页面级视图状态（按 `eventId`），
         // 入口在对话时间线的文件改动卡片里，原文按不可信文本就地呈现。
@@ -492,8 +421,23 @@ export default function SessionRoute(): ReactElement {
           store.setConversationSidebarPage(pageInput);
         }}
         onCreateSession={(directoryId) => {
+          const reusable = store.reusableUnsentSession(sessionId);
+          if (reusable !== null) {
+            if (reusable !== sessionId) router.push(`/session/${encodeURIComponent(reusable)}`);
+            return;
+          }
           setCreateIssue(null);
           store.openCreateSheet(directoryId);
+        }}
+        onCreateSessionAtPath={(path) => {
+          const reusable = store.reusableUnsentSession(sessionId);
+          if (reusable !== null) {
+            if (reusable !== sessionId) router.push(`/session/${encodeURIComponent(reusable)}`);
+            return;
+          }
+          setCreateIssue(null);
+          setAgentId(null);
+          store.openCreateSheetAtPath(path);
         }}
         // 会话头的 Agent 胶囊沿用主机面板的同一份连接事件覆盖层（覆盖层缺席即「状态未知」）。
         hostPanel={store.hostPanel()}
@@ -554,11 +498,6 @@ export default function SessionRoute(): ReactElement {
           const outcome = store.refreshInteractions(sessionId);
           if (!outcome.ok) toastStore.show(outcome.reason);
         }}
-        onRetryActivation={() => {
-          // 显式重试：`uncertain` 先查原请求，不会自动重派未知副作用的激活。
-          const outcome = store.retrySessionActivation(sessionId);
-          if (!outcome.ok) toastStore.show(outcome.reason);
-        }}
         // 附件选择只在本地入草稿；发送后由仓库上传并在全部封存后才派发 prompt。
         onPickAttachment={(kind) => {
           void store.pickAttachments(sessionId, kind).then((outcome) => {
@@ -581,7 +520,7 @@ export default function SessionRoute(): ReactElement {
           const outcome = store.cancelAttachmentUpload(sessionId);
           if (!outcome.ok) toastStore.show(outcome.reason);
         }}
-        onAddPathRef={(path) => {
+        onAddPathRef={beforeFirstMessage ? undefined : (path) => {
           const outcome = store.addPathRef(sessionId, path);
           return outcome.ok ? null : outcome.reason;
         }}
@@ -597,7 +536,7 @@ export default function SessionRoute(): ReactElement {
       {/* 左栏底部的「⊕ 新建会话」落在这里：弹层的开关是 store 的**单份**状态
           （`createSheetDirectoryId`），只有它落在本会话所属目录上时才呈现——目录页与详情页呈现的
           也是它。提交载荷原样上抛（目录里的「先建目录」那类附加键因此不必在本页重复一遍）。 */}
-      {sheetDirectoryId === null ? null : (
+      {sheetDirectoryId === null && !pathSheetOpen ? null : (
         <CreateSessionSheet
           model={store.createEntry(sheetDirectoryId)}
           selectedAgentId={agentId}
@@ -609,7 +548,7 @@ export default function SessionRoute(): ReactElement {
           onSubmit={({ agentId: selected, directoryPath }) => {
             // 目录标识由本页给出；入口只做 prepare → allocate，首条发送前不保存会话。
             void store
-              .beginPreparation({ directoryId: sheetDirectoryId, agentId: selected, directoryPath })
+              .beginPreparation({ directoryId: sheetDirectoryId, agentId: selected, directoryPath, reuseUnsent: true })
               .then((outcome) => {
                 if (!outcome.ok) {
                   setCreateIssue(outcome.reason);
@@ -622,7 +561,7 @@ export default function SessionRoute(): ReactElement {
               });
           }}
           onDismissUncertain={() => {
-            const requestId = state.createRequestIds.get(sheetDirectoryId);
+            const requestId = sheetDirectoryId === null ? undefined : state.createRequestIds.get(sheetDirectoryId);
             if (requestId !== undefined) store.dismissUncertain(requestId);
           }}
           onClose={() => {
