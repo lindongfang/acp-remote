@@ -725,11 +725,23 @@
       "description": "远程命令/查询的来源定位（`resource.stateless-origin.v1`，docs/SYNC_PROTOCOL.md §9.7/§11.4）：直接指向原 Owner 与其会话，Access 不凭本地记录判断。`sessionId` 为 `null` 只用于尚未建成会话的 `session.create`，其他会话操作必须给出原来源会话。该键只在 feature 协商后出现；未协商的连接 MUST NOT 发送它。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["ownerNodeId", "sessionId"],
+      "required": [
+        "ownerNodeId",
+        "sessionId"
+      ],
       "properties": {
-        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "ownerNodeId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
         "sessionId": {
-          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -1045,7 +1057,6 @@
       "required": [
         "requestId",
         "command",
-        "sessionId",
         "payload"
       ],
       "properties": {
@@ -1074,10 +1085,43 @@
             },
             "after": {
               "$ref": "#/$defs/sessionPageToken"
+            },
+            "workspace": {
+              "$ref": "#/$defs/workspaceFilesTarget"
             }
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "sessionId"
+          ],
+          "properties": {
+            "payload": {
+              "not": {
+                "required": [
+                  "workspace"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "sessionId"
+            ]
+          },
+          "properties": {
+            "payload": {
+              "required": [
+                "workspace"
+              ]
+            }
+          }
+        }
+      ]
     },
     "sessionFilesListResult": {
       "description": "`session.files.list` 的 completed 结果。条目按目录优先、名称 Unicode 码点、路径打破并列的确定顺序排列；每页最多 128 项（§14），`next` 为续读位置。",
@@ -1120,7 +1164,6 @@
       "required": [
         "requestId",
         "command",
-        "sessionId",
         "payload"
       ],
       "properties": {
@@ -1153,10 +1196,43 @@
             },
             "version": {
               "$ref": "#/$defs/sessionContentVersion"
+            },
+            "workspace": {
+              "$ref": "#/$defs/workspaceFilesTarget"
             }
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "sessionId"
+          ],
+          "properties": {
+            "payload": {
+              "not": {
+                "required": [
+                  "workspace"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "sessionId"
+            ]
+          },
+          "properties": {
+            "payload": {
+              "required": [
+                "workspace"
+              ]
+            }
+          }
+        }
+      ]
     },
     "sessionFilesReadResult": {
       "description": "`session.files.read` 的 completed 结果：文件类别、原始大小、内容版本、本块偏移与 base64url 数据。`eof` 与 `previewTruncated` 都是必填布尔值；单块原始字节最多 32 KiB（§14）。",
@@ -1213,7 +1289,6 @@
       "required": [
         "requestId",
         "command",
-        "sessionId",
         "payload"
       ],
       "properties": {
@@ -1232,10 +1307,43 @@
           "properties": {
             "after": {
               "$ref": "#/$defs/sessionPageToken"
+            },
+            "workspace": {
+              "$ref": "#/$defs/workspaceFilesTarget"
             }
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "sessionId"
+          ],
+          "properties": {
+            "payload": {
+              "not": {
+                "required": [
+                  "workspace"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "sessionId"
+            ]
+          },
+          "properties": {
+            "payload": {
+              "required": [
+                "workspace"
+              ]
+            }
+          }
+        }
+      ]
     },
     "gitFileStatus": {
       "enum": [
@@ -1342,7 +1450,6 @@
       "required": [
         "requestId",
         "command",
-        "sessionId",
         "payload"
       ],
       "properties": {
@@ -1364,10 +1471,43 @@
           "properties": {
             "path": {
               "$ref": "#/$defs/sessionRelativePath"
+            },
+            "workspace": {
+              "$ref": "#/$defs/workspaceFilesTarget"
             }
           }
         }
-      }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "sessionId"
+          ],
+          "properties": {
+            "payload": {
+              "not": {
+                "required": [
+                  "workspace"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "sessionId"
+            ]
+          },
+          "properties": {
+            "payload": {
+              "required": [
+                "workspace"
+              ]
+            }
+          }
+        }
+      ]
     },
     "gitDiffBase": {
       "enum": [
@@ -2244,60 +2384,128 @@
       "type": "object",
       "minProperties": 1,
       "maxProperties": 64,
-      "propertyNames": { "type": "string", "minLength": 1, "maxLength": 256 },
-      "additionalProperties": { "type": ["string", "boolean"] }
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "additionalProperties": {
+        "type": [
+          "string",
+          "boolean"
+        ]
+      }
     },
     "preparationStage": {
       "description": "首条提交阶段（design D8）：`saved_not_dispatched` 表示正式记录存在且可证明未派发；`dispatch_started` 表示已提交派发围栏（可能已派发，崩溃后保守判 uncertain）；`terminal` 表示首个命令已有终态。它不是命令状态，`committed` 也不是 `completed`。",
-      "enum": ["saved_not_dispatched", "dispatch_started", "terminal"]
+      "enum": [
+        "saved_not_dispatched",
+        "dispatch_started",
+        "terminal"
+      ]
     },
     "sessionStartInitial": {
       "description": "`session.start` 的 `kind: \"initial\"` 分支（design D3/D6.4/D8.1）：首次提交。`receipt` 是 D2 的准备凭据；`runtimeEpoch`/`generation` 固定当前运行期资源代；`content` 是**有序**完整用户输入，`attachment_ref` 只能引用同一准备清单里已封存的 `attachmentId`；`submissionId` 是准备附件清单标识（不是 `firstSubmissionId`，也不是 `firstMessageId`），只在有清单时出现。`mode`/`configOptions` 是本次重新验证并应用的选择，缺席表示沿用准备记录。MUST NOT 携带 Provider/MCP 凭据，也不带 `firstSubmissionId`——它由服务端在首次受理事务生成。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "receipt", "runtimeEpoch", "generation", "content"],
+      "required": [
+        "kind",
+        "receipt",
+        "runtimeEpoch",
+        "generation",
+        "content"
+      ],
       "properties": {
-        "kind": { "const": "initial" },
-        "receipt": { "$ref": "common.schema.json#/$defs/preparationReceipt" },
-        "runtimeEpoch": { "$ref": "common.schema.json#/$defs/uuid" },
-        "generation": { "$ref": "common.schema.json#/$defs/positiveDecimalString" },
+        "kind": {
+          "const": "initial"
+        },
+        "receipt": {
+          "$ref": "common.schema.json#/$defs/preparationReceipt"
+        },
+        "runtimeEpoch": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "generation": {
+          "$ref": "common.schema.json#/$defs/positiveDecimalString"
+        },
         "content": {
           "type": "array",
           "minItems": 1,
           "maxItems": 64,
-          "items": { "$ref": "common.schema.json#/$defs/promptContentBlock" }
+          "items": {
+            "$ref": "common.schema.json#/$defs/promptContentBlock"
+          }
         },
-        "submissionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "mode": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "configOptions": { "$ref": "#/$defs/preparationConfigSelection" }
+        "submissionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "mode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "configOptions": {
+          "$ref": "#/$defs/preparationConfigSelection"
+        }
       }
     },
     "sessionStartContinue": {
       "description": "`session.start` 的 `kind: \"continue\"` 分支（design D8.1）：对一条可证明**从未派发**的首条提交做显式继续。`firstSubmissionId` 由服务端生成并经持久终态/`command.status` 投影/`committed` 结果返回；`retryOfRequestId` 必须指向本会话一个持久终态为 `failed` 的 `session.start`。MUST NOT 携带正文、附件清单、`receipt`、`runtimeEpoch`/`generation`；使用新的 `requestId`，同 requestId 重放只返回该次尝试的原终态。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "firstSubmissionId", "retryOfRequestId"],
+      "required": [
+        "kind",
+        "firstSubmissionId",
+        "retryOfRequestId"
+      ],
       "properties": {
-        "kind": { "const": "continue" },
-        "firstSubmissionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "retryOfRequestId": { "$ref": "#/$defs/requestId" },
-        "mode": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "configOptions": { "$ref": "#/$defs/preparationConfigSelection" }
+        "kind": {
+          "const": "continue"
+        },
+        "firstSubmissionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "retryOfRequestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "mode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "configOptions": {
+          "$ref": "#/$defs/preparationConfigSelection"
+        }
       }
     },
     "sessionStart": {
       "description": "Sync-only mutation `session.start`（`core.session-preparation.v1`，docs/SYNC_PROTOCOL.md §11.9）。`envelope.sessionId` 必须是由 Owner 签发准备的 ID（`kind: initial`）或已存在的正式会话（`kind: continue`），payload 是闭合判别联合。它不进入 Node Link，也不改变 ACP `session/new` 与旧 `session.create` 的语义。`accepted` 只在首次提交事务提交后发出；`committed` 形态的准备结果不表示命令已完成，必须再查 `currentRequestId`。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["requestId", "command", "sessionId", "payload"],
+      "required": [
+        "requestId",
+        "command",
+        "sessionId",
+        "payload"
+      ],
       "properties": {
-        "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.start" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "const": "session.start"
+        },
+        "sessionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
         "payload": {
           "oneOf": [
-            { "$ref": "#/$defs/sessionStartInitial" },
-            { "$ref": "#/$defs/sessionStartContinue" }
+            {
+              "$ref": "#/$defs/sessionStartInitial"
+            },
+            {
+              "$ref": "#/$defs/sessionStartContinue"
+            }
           ]
         }
       }
@@ -2315,13 +2523,57 @@
         "canContinue"
       ],
       "properties": {
-        "stage": { "$ref": "#/$defs/preparationStage" },
-        "firstSubmissionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "firstRequestId": { "$ref": "#/$defs/requestId" },
-        "currentRequestId": { "$ref": "#/$defs/requestId" },
-        "everDispatched": { "type": "boolean" },
-        "canContinue": { "type": "boolean" }
+        "stage": {
+          "$ref": "#/$defs/preparationStage"
+        },
+        "firstSubmissionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "firstRequestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "currentRequestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "everDispatched": {
+          "type": "boolean"
+        },
+        "canContinue": {
+          "type": "boolean"
+        }
       }
+    },
+    "workspaceFilesTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "directoryId"
+          ],
+          "properties": {
+            "directoryId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "workspacePath"
+          ],
+          "properties": {
+            "workspacePath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        }
+      ]
     }
   }
 }

@@ -1,5 +1,7 @@
 # ACP Remote 安全设计
 
+目录文件/Git 查询仅对已认证设备或本地 CLI 开放，不授予 Node Link 或配对认领方；每次重新解析既有目录，禁止通过查询创建目录。沿用根内相对路径、安全打开、内容预算与连接期快照限制；内容版本绑定设备、连接、目录目标、相对路径和用途，不记录绝对路径或文件正文到错误与日志。协议边界见 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。
+
 > 状态：编码前安全基线（Draft）  
 > 版本：0.6
 > 修订记录（2026-10-22，`web-session-preparation` WP3，**identity-auth 已实现；服务端/存储接线待 WP2–WP5**）：§12.8 写回准备凭据的签名/验证实现边界——专用 domain、`Authority::sign_preparation_receipt` 与 `verify_preparation_receipt` 的固定顺序（认证/撤销 → 签名 → 绑定）、`storeEpoch` 单独的不可重试结果、逐字段绑定与跨设备/跨节点拒绝、错误脱敏与重放边界；确认 receipt 不是 bearer 凭证、不替代逐连接认证且不授予 scope。临时资源、附件暂存与服务端帧仍为计划。

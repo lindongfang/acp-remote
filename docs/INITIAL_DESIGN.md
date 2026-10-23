@@ -1,5 +1,7 @@
 # ACP Remote 初始设计文档
 
+文件列表、文件预览/下载与 Git 状态/差异属于目录，不依赖会话保存、首条消息或 Agent 生命周期。客户端进入会话界面即可读取选定本机目录；目录查询不创建目录、会话或事件。目标与兼容语义见 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。
+
 > 目录选择器补充（2026-10-18）：Windows 默认浏览不展示隐藏或系统属性目录；PWA 按名称忽略大小写、数字自然升序显示收到的目录。这些规则仅影响浏览与显示，不新增创建路径授权限制。实现边界见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.1。
 
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§8 的会话标题口径改写为「两个来源 + 有效标题投影」——登记 Owner 元数据命令 `session.title.set` 与 feature `core.session-title.v1`，有效标题 = 自定义标题优先 → 否则 Agent 标题 → 否则未命名，由 Owner 投影成既有 `SessionSummary.title`；删除「标题只由 Agent 单向更新 / 不存在客户端重命名入口」的旧条款（原文见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.3 与 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §5），明确 Access 只转发命令、不持久化标题与命令状态，且该命令不新增 ACP 方法。Owner 的 `custom_title` 持久化与命令事务已接线。  

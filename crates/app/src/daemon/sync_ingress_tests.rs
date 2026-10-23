@@ -2311,3 +2311,149 @@ async fn a_disconnected_git_query_leaves_the_repository_usable_on_windows() {
     drop(again);
     harness.stop().await;
 }
+
+#[tokio::test]
+async fn workspace_file_queries_read_real_files_without_creating_a_session() {
+    let harness = Harness::start("workspace-files-independent").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("origin");
+    let device = DeviceId::new(&uuid_text()).expect("device");
+    let mut client = command_client(&harness, &origin, &device).await;
+    let workspace = TempDir::new("workspace-files-root");
+    std::fs::create_dir_all(&workspace.0).expect("directory");
+    std::fs::write(workspace.0.join("hello.txt"), b"hello").expect("file");
+    let target = json!({ "workspacePath": workspace.0.to_string_lossy() });
+    let before = client
+        .command(&uuid_text(), "session.list", json!({}))
+        .await;
+    let list = client
+        .command(
+            &uuid_text(),
+            "session.files.list",
+            json!({ "workspace": target, "path": "", "hideIgnored": false }),
+        )
+        .await;
+    assert_eq!(list["body"]["status"], json!("completed"), "{list}");
+    assert!(
+        list["body"]["result"]["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .any(|entry| entry["name"] == "hello.txt")
+    );
+    let read = client.command(&uuid_text(), "session.files.read", json!({ "workspace": target, "path": "hello.txt", "purpose": "preview", "offset": "0" })).await;
+    assert_eq!(
+        read["body"]["result"]["dataBase64"],
+        json!("aGVsbG8"),
+        "{read}"
+    );
+    let other = TempDir::new("workspace-files-other-root");
+    std::fs::create_dir_all(&other.0).expect("other directory");
+    std::fs::write(other.0.join("hello.txt"), b"other").expect("other file");
+    let wrong_root = client.command(&uuid_text(), "session.files.read", json!({ "workspace": { "workspacePath": other.0.to_string_lossy() }, "path": "hello.txt", "purpose": "preview", "offset": "0", "version": read["body"]["result"]["version"] })).await;
+    assert_eq!(
+        wrong_root["body"]["status"],
+        json!("rejected"),
+        "content versions cannot cross directory roots: {wrong_root}"
+    );
+    let git = client
+        .command(
+            &uuid_text(),
+            "session.git.status",
+            json!({ "workspace": target }),
+        )
+        .await;
+    assert_eq!(git["body"]["status"], json!("completed"), "{git}");
+    assert_eq!(
+        git["body"]["result"]["gitState"],
+        json!("not_repository"),
+        "{git}"
+    );
+    let wrong_purpose = client.command(&uuid_text(), "session.files.read", json!({ "workspace": target, "path": "hello.txt", "purpose": "download", "offset": "0", "version": read["body"]["result"]["version"] })).await;
+    assert_eq!(
+        wrong_purpose["body"]["status"],
+        json!("rejected"),
+        "versions cannot cross purpose: {wrong_purpose}"
+    );
+    let run_git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace.0)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_git(&["init", "-q"]);
+    run_git(&["add", "hello.txt"]);
+    run_git(&["-c", "commit.gpgsign=false", "commit", "-qm", "initial"]);
+    std::fs::write(workspace.0.join("hello.txt"), b"changed\n").expect("modify file");
+    let status = client
+        .command(
+            &uuid_text(),
+            "session.git.status",
+            json!({ "workspace": target }),
+        )
+        .await;
+    assert_eq!(status["body"]["status"], json!("completed"), "{status}");
+    assert!(
+        status["body"]["result"]["entries"]
+            .as_array()
+            .expect("changes")
+            .iter()
+            .any(|entry| entry["path"] == "hello.txt")
+    );
+    let diff = client
+        .command(
+            &uuid_text(),
+            "session.git.diff",
+            json!({ "workspace": target, "path": "hello.txt" }),
+        )
+        .await;
+    assert_eq!(diff["body"]["status"], json!("completed"), "{diff}");
+    assert!(
+        diff["body"]["result"].to_string().contains("changed"),
+        "{diff}"
+    );
+    let after = client
+        .command(&uuid_text(), "session.list", json!({}))
+        .await;
+    assert_eq!(
+        before["body"]["result"], after["body"]["result"],
+        "directory queries must not create sessions"
+    );
+    drop(client);
+    let mut legacy = command_client_with_features(
+        &harness,
+        &origin,
+        &device,
+        SUPPORTED_FEATURES
+            .iter()
+            .copied()
+            .filter(|feature| *feature != "core.workspace-files.v1")
+            .collect(),
+    )
+    .await;
+    let rejected = legacy
+        .command(
+            &uuid_text(),
+            "session.files.list",
+            json!({ "workspace": target, "path": "", "hideIgnored": false }),
+        )
+        .await;
+    assert_eq!(
+        rejected["body"]["error"]["code"],
+        json!("protocol.feature_required"),
+        "{rejected}"
+    );
+    drop(legacy);
+    harness.stop().await;
+}

@@ -307,12 +307,21 @@ struct ConnectionState {
 /// 版本令牌只在建立它的连接/设备/会话/路径组合内有效，不能当作跨连接的 bearer 凭据。设备维度与连接
 /// 一一对应（连接在注册表里按设备键登记），但仍显式记录，使「跨连接/跨设备/跨会话/跨路径」四类拒绝
 /// 由同一处比较给出。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContentTarget {
+    Session(SessionId),
+    Workspace(
+        sync_protocol::command::WorkspaceFilesTarget,
+        sync_protocol::command::FileReadPurpose,
+    ),
+}
+
 #[derive(Debug, Clone)]
 struct ContentBinding {
     /// 建立快照的连接所属设备。
     device: acp_core::model::DeviceId,
     /// 该快照所属的会话。
-    session: SessionId,
+    target: ContentTarget,
     /// 根内相对路径。
     path: SessionFilePath,
     /// 不透明内容版本。
@@ -324,12 +333,12 @@ impl ContentBinding {
     fn matches(
         &self,
         device: &acp_core::model::DeviceId,
-        session: &SessionId,
+        target: &ContentTarget,
         path: &str,
         version: &str,
     ) -> bool {
         self.device == *device
-            && self.session == *session
+            && self.target == *target
             && self.path.as_str() == path
             && self.version.as_str() == version
     }
@@ -1020,7 +1029,13 @@ impl CommandRoute {
         features: &NegotiatedFeatures,
     ) -> Result<CommandResultPayload, Rejection> {
         query::require_session_files(features)?;
-        let session = query::command_session(command)?;
+        let target = match payload.workspace.as_ref() {
+            Some(workspace) => {
+                query::workspace_source(command, Some(workspace), features)?;
+                ContentTarget::Workspace(workspace.clone(), payload.purpose)
+            }
+            None => ContentTarget::Session(query::command_session(command)?),
+        };
         let requested = payload
             .version
             .as_ref()
@@ -1028,7 +1043,7 @@ impl CommandRoute {
         let path = payload.path.as_str().to_owned();
         match requested.as_deref() {
             Some(version) => {
-                if !self.content_matches(handle, &session, &path, version) {
+                if !self.content_matches(handle, &target, &path, version) {
                     debug!(
                         event = "sync.session_files_version_rejected",
                         connection_id = handle.connection_id().as_str(),
@@ -1065,7 +1080,7 @@ impl CommandRoute {
                 handle,
                 ContentBinding {
                     device: handle.device_id().clone(),
-                    session,
+                    target,
                     path: chunk.path().clone(),
                     version: chunk.version().clone(),
                 },
@@ -1083,14 +1098,14 @@ impl CommandRoute {
     fn content_matches(
         &self,
         handle: &ConnectionHandle,
-        session: &SessionId,
+        target: &ContentTarget,
         path: &str,
         version: &str,
     ) -> bool {
         lock(&self.states)
             .get(handle.connection_id().as_str())
             .and_then(|state| state.content.as_ref())
-            .is_some_and(|binding| binding.matches(handle.device_id(), session, path, version))
+            .is_some_and(|binding| binding.matches(handle.device_id(), target, path, version))
     }
 
     /// 取出并清空本连接的活动内容版本（调用方负责在适当时机释放端口快照）。
@@ -4629,7 +4644,7 @@ mod tests {
     fn binding(device: &str, session: &str, path: &str, version: &str) -> ContentBinding {
         ContentBinding {
             device: acp_core::model::DeviceId::new(device).expect("device id"),
-            session: SessionId::new(session).expect("session id"),
+            target: ContentTarget::Session(SessionId::new(session).expect("session id")),
             path: SessionFilePath::parse(path).expect("session path"),
             version: ContentVersion::parse(version).expect("content version"),
         }
@@ -4647,20 +4662,45 @@ mod tests {
         let device = acp_core::model::DeviceId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622b")
             .expect("device id");
         let session = SessionId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622c").expect("session id");
-        assert!(binding.matches(&device, &session, "src/main.rs", "version_1"));
+        assert!(binding.matches(
+            &device,
+            &ContentTarget::Session(session.clone()),
+            "src/main.rs",
+            "version_1"
+        ));
 
         // 另一个连接 = 另一台设备：同一份版本令牌不得当 bearer 使用。
         let other_device = acp_core::model::DeviceId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622d")
             .expect("device id");
-        assert!(!binding.matches(&other_device, &session, "src/main.rs", "version_1"));
+        assert!(!binding.matches(
+            &other_device,
+            &ContentTarget::Session(session.clone()),
+            "src/main.rs",
+            "version_1"
+        ));
         // 同一设备上的另一个会话。
         let other_session =
             SessionId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622e").expect("session id");
-        assert!(!binding.matches(&device, &other_session, "src/main.rs", "version_1"));
+        assert!(!binding.matches(
+            &device,
+            &ContentTarget::Session(other_session.clone()),
+            "src/main.rs",
+            "version_1"
+        ));
         // 同一会话的另一个路径。
-        assert!(!binding.matches(&device, &session, "src/lib.rs", "version_1"));
+        assert!(!binding.matches(
+            &device,
+            &ContentTarget::Session(session.clone()),
+            "src/lib.rs",
+            "version_1"
+        ));
         // 另一个版本。
-        assert!(!binding.matches(&device, &session, "src/main.rs", "version_2"));
+        assert!(!binding.matches(
+            &device,
+            &ContentTarget::Session(session.clone()),
+            "src/main.rs",
+            "version_2"
+        ));
     }
 
     /// 连接关闭路径必须把活动版本交给端口释放，而不是只从内存表里丢掉。

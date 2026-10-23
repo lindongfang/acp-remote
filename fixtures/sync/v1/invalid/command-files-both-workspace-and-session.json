@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "8b21e6d4-3c57-4a90-b6f2-1d8e4c7a0b53",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "110",
+  "body": {
+    "requestId": "2f9c4d81-7a36-4b52-8e04-6c1d9f3a5b72",
+    "command": "session.files.list",
+    "payload": {
+      "path": "",
+      "hideIgnored": false,
+      "workspace": {
+        "workspacePath": "D:\\work\\repo"
+      }
+    },
+    "sessionId": "00000000-0000-4000-8000-000000000001"
+  }
+}

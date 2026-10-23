@@ -761,10 +761,31 @@ pub struct SessionFileEntry {
     pub restricted: Option<SessionFileRestrictedReason>,
 }
 
-/// `sessionFilesList`（`command.schema.json#/$defs/sessionFilesList`）的 payload。
+/// Directory-scoped file target, independent of persisted sessions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum WorkspaceFilesTarget {
+    Directory {
+        #[serde(rename = "directoryId")]
+        directory_id: NonEmptyText<128>,
+    },
+    Path {
+        #[serde(rename = "workspacePath")]
+        workspace_path: NonEmptyText<4096>,
+    },
+}
+
+/// File enumeration payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionFilesList {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<WorkspaceFilesTarget>,
+
     pub path: SessionFilesPath,
     pub hide_ignored: bool,
     #[serde(
@@ -794,6 +815,13 @@ pub struct SessionFilesListResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionFilesRead {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<WorkspaceFilesTarget>,
+
     pub path: SessionRelativePath,
     pub purpose: FileReadPurpose,
     pub offset: DecimalString,
@@ -823,6 +851,13 @@ pub struct SessionFilesReadResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionGitStatus {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<WorkspaceFilesTarget>,
+
     #[serde(
         default,
         deserialize_with = "deserialize_optional_non_null",
@@ -928,6 +963,13 @@ pub struct SessionGitStatusResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionGitDiff {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<WorkspaceFilesTarget>,
+
     pub path: SessionRelativePath,
 }
 
@@ -2066,7 +2108,14 @@ impl Command {
         session_id_present: bool,
         expected_version_present: bool,
     ) -> Result<(), ValueError> {
-        let session_id_required = self.command.requires_session_id();
+        let workspace = match &self.payload {
+            CommandPayload::SessionFilesList(p) => p.workspace.is_some(),
+            CommandPayload::SessionFilesRead(p) => p.workspace.is_some(),
+            CommandPayload::SessionGitStatus(p) => p.workspace.is_some(),
+            CommandPayload::SessionGitDiff(p) => p.workspace.is_some(),
+            _ => false,
+        };
+        let session_id_required = self.command.requires_session_id() && !workspace;
         if session_id_required && !session_id_present {
             return Err(ValueError::Shape {
                 field: "sessionId",

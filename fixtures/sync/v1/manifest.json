@@ -1130,7 +1130,7 @@
       "fixture": "invalid/command-session-files-list-missing-session-id.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
-      "expectedKeyword": "required"
+      "expectedKeyword": "oneOf"
     },
     {
       "fixture": "invalid/command-session-git-status-expected-version.json",
@@ -1823,6 +1823,32 @@
       "schema": "../../../schemas/sync/v1/attachment.schema.json",
       "valid": false,
       "expectedKeyword": "const"
+    },
+    {
+      "fixture": "valid/command-workspace-files-list.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-workspace-files-read.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-workspace-git-status.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-workspace-git-diff.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-files-both-workspace-and-session.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "oneOf"
     }
   ],
   "deviceQrVectors": [

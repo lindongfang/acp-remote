@@ -91,6 +91,12 @@
           "required": false
         },
         {
+          "id": "core.workspace-files.v1",
+          "description": "Directory-scoped file and Git queries using payload.workspace, independent of persisted sessions; requires core.session-files.v1.",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
           "id": "core.session-git-stats.v1",
           "description": "Optional addedLines/deletedLines on session.git.status entries; requires core.session-files.v1.",
           "delivery": "mvp",

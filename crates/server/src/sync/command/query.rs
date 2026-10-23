@@ -659,6 +659,35 @@ pub(super) fn require_session_files(features: &NegotiatedFeatures) -> Result<(),
 }
 
 /// 命令信封上的 `sessionId`（四条文件/Git 查询都以它定位会话）。
+pub(super) fn workspace_source(
+    command: &Command,
+    workspace: Option<&sync_protocol::command::WorkspaceFilesTarget>,
+    features: &NegotiatedFeatures,
+) -> Result<Option<acp_core::model::WorkspaceSource>, Rejection> {
+    let Some(workspace) = workspace else {
+        return Ok(None);
+    };
+    if !features.contains("core.workspace-files.v1") {
+        return Err(Rejection::FeatureRequired("core.workspace-files.v1"));
+    }
+    if command.session_id.is_some() {
+        return Err(Rejection::Schema(
+            "workspace and sessionId are mutually exclusive",
+        ));
+    }
+    Ok(Some(match workspace {
+        sync_protocol::command::WorkspaceFilesTarget::Directory { directory_id } => {
+            acp_core::model::WorkspaceSource::Directory(
+                acp_core::model::DirectoryId::new(directory_id.as_str())
+                    .map_err(|_| Rejection::Schema("invalid directoryId"))?,
+            )
+        }
+        sync_protocol::command::WorkspaceFilesTarget::Path { workspace_path } => {
+            acp_core::model::WorkspaceSource::Path(workspace_path.as_str().to_owned())
+        }
+    }))
+}
+
 pub(super) fn command_session(command: &Command) -> Result<SessionId, Rejection> {
     let Some(session) = command.session_id.as_ref() else {
         return Err(Rejection::Schema("this command requires sessionId"));
@@ -675,17 +704,29 @@ pub async fn session_files_list(
     features: &NegotiatedFeatures,
 ) -> Result<CommandResultPayload, Rejection> {
     require_session_files(features)?;
-    let session = command_session(command)?;
-    let page = core
-        .list_session_files(
-            actor,
-            &session,
-            payload.path.as_str(),
-            payload.hide_ignored,
-            payload.after.as_ref().map(|after| after.as_str()),
-        )
-        .await
-        .map_err(|error| port_rejection(&error))?;
+    let page = match workspace_source(command, payload.workspace.as_ref(), features)? {
+        Some(workspace) => {
+            core.list_workspace_files(
+                actor,
+                workspace,
+                payload.path.as_str(),
+                payload.hide_ignored,
+                payload.after.as_ref().map(|p| p.as_str()),
+            )
+            .await
+        }
+        None => {
+            core.list_session_files(
+                actor,
+                &command_session(command)?,
+                payload.path.as_str(),
+                payload.hide_ignored,
+                payload.after.as_ref().map(|p| p.as_str()),
+            )
+            .await
+        }
+    }
+    .map_err(|error| port_rejection(&error))?;
     let result = wire_session_file_page(&page, payload.path).ok_or(Rejection::Code(
         ErrorCode::InternalUnavailable,
         "a session file entry cannot be projected",
@@ -705,7 +746,7 @@ pub async fn session_files_read(
     features: &NegotiatedFeatures,
 ) -> Result<SessionFileChunk, Rejection> {
     require_session_files(features)?;
-    let session = command_session(command)?;
+
     let purpose = match payload.purpose {
         WireFileReadPurpose::Preview => CoreFileReadPurpose::Preview,
         WireFileReadPurpose::Download => CoreFileReadPurpose::Download,
@@ -717,15 +758,30 @@ pub async fn session_files_read(
         .parse::<u64>()
         .map_err(|_| Rejection::Schema("offset is not a decimal byte offset"))?;
     let version = payload.version.as_ref().map(|version| version.as_str());
-    core.read_session_file(
-        actor,
-        &session,
-        payload.path.as_str(),
-        purpose,
-        offset,
-        version,
-    )
-    .await
+    match workspace_source(command, payload.workspace.as_ref(), features)? {
+        Some(workspace) => {
+            core.read_workspace_file(
+                actor,
+                workspace,
+                payload.path.as_str(),
+                purpose,
+                offset,
+                version,
+            )
+            .await
+        }
+        None => {
+            core.read_session_file(
+                actor,
+                &command_session(command)?,
+                payload.path.as_str(),
+                purpose,
+                offset,
+                version,
+            )
+            .await
+        }
+    }
     .map_err(|error| port_rejection(&error))
 }
 
@@ -738,15 +794,21 @@ pub async fn session_git_status(
     features: &NegotiatedFeatures,
 ) -> Result<CommandResultPayload, Rejection> {
     require_session_files(features)?;
-    let session = command_session(command)?;
-    let page = core
-        .session_git_status(
-            actor,
-            &session,
-            payload.after.as_ref().map(|after| after.as_str()),
-        )
-        .await
-        .map_err(|error| port_rejection(&error))?;
+    let page = match workspace_source(command, payload.workspace.as_ref(), features)? {
+        Some(workspace) => {
+            core.workspace_git_status(actor, workspace, payload.after.as_ref().map(|p| p.as_str()))
+                .await
+        }
+        None => {
+            core.session_git_status(
+                actor,
+                &command_session(command)?,
+                payload.after.as_ref().map(|p| p.as_str()),
+            )
+            .await
+        }
+    }
+    .map_err(|error| port_rejection(&error))?;
     let result = wire_git_status_page(&page, features.contains("core.session-git-stats.v1"))
         .ok_or(Rejection::Code(
             ErrorCode::InternalUnavailable,
@@ -764,11 +826,17 @@ pub async fn session_git_diff(
     features: &NegotiatedFeatures,
 ) -> Result<CommandResultPayload, Rejection> {
     require_session_files(features)?;
-    let session = command_session(command)?;
-    let diff = core
-        .session_git_diff(actor, &session, payload.path.as_str())
-        .await
-        .map_err(|error| port_rejection(&error))?;
+    let diff = match workspace_source(command, payload.workspace.as_ref(), features)? {
+        Some(workspace) => {
+            core.workspace_git_diff(actor, workspace, payload.path.as_str())
+                .await
+        }
+        None => {
+            core.session_git_diff(actor, &command_session(command)?, payload.path.as_str())
+                .await
+        }
+    }
+    .map_err(|error| port_rejection(&error))?;
     let mut result = wire_git_diff(&diff).ok_or(Rejection::Code(
         ErrorCode::InternalUnavailable,
         "a git diff cannot be projected",

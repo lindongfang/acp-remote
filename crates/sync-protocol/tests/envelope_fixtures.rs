@@ -38,7 +38,7 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// 变为 116。
 /// 变更 `access-owner-data-stateless`（WP1）新增 10 条合法 `sync.remote_*` 来源流夹具与 2 条
 /// 带 `resource.stateless-origin.v1` 加性字段的 `command`/`command.result` 夹具，故由 116 变为 128。
-const EXPECTED_VALID_MESSAGE_CASES: usize = 155;
+const EXPECTED_VALID_MESSAGE_CASES: usize = 159;
 /// 同一集合中 `valid: false` 且由**信封层**拒绝的用例数（`every_manifest_case_behaves_as_declared`
 /// 只显式登记 `invalid/ping-without-connection.json` 与 `invalid/sequence-is-number.json` 两条，
 /// 其余非法 WSS 用例都落在 body 类型化层）。
@@ -56,7 +56,7 @@ const EXPECTED_ENVELOPE_REJECTED: usize = 2;
 /// 旧 imported 游标、未协商额外键、Access 序号混入、ACK 带 `sessionRef`、十进制 `revision` 写成数字、
 /// 未登记来源状态、缺结构化 error、`remoteTarget` 缺 `sessionId`、`readCursor` 缺 `originEpoch`），
 /// 故由 56 变为 66。
-const EXPECTED_BODY_REJECTED: usize = 79;
+const EXPECTED_BODY_REJECTED: usize = 80;
 /// 非 WSS 的 HTTPS 载荷（配对）用例数；它们由 `tests/pairing_fixtures.rs` 覆盖。
 /// 变更 `pairing-code-web-entry`（WP1）新增 lookup 的 2 条正例与 6 条负例，故由 5 变为 13。
 /// 变更 `device-pairing-qr-reference`（WP1）新增 qr-lookup 的 3 条正例与 3 条负例、并移除旧
