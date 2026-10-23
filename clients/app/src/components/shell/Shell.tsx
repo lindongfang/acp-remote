@@ -17,7 +17,8 @@
  * ## 首屏认证闸门与连接问题
  *
  * 业务路由（`/`、`/dir/...`、`/session/...`）在本次会话尚未认证时只呈现 `AuthTransition`：
- * 不画顶栏、不挂业务内容。认证失败复用 `features/connection-problem.ts` 的同一份模型与同一
+ * 不画顶栏、不挂业务内容，但保留导航容器；页面内容由 `AuthenticatedScreen` 拦截。
+ * 认证失败复用 `features/connection-problem.ts` 的同一份模型与同一
  * 个弹层组件；已认证后的连接问题则盖在内容区之上（顶栏保持可见，方便进主机页排查）。
  *
  * 呈现全部交给 `ShellView`（`./ShellView.tsx`）：它只吃模型与回调，因此本文件不参与组件测试，
@@ -32,7 +33,6 @@ import type { ClientState } from "../../features/client-store";
 import { buildConnectionProblem, shouldShowConnectionProblem } from "../../features/connection-problem";
 import type { ConnectionProblemModel } from "../../features/connection-problem";
 import { useClientState, useClientStore } from "../../features/runtime";
-import { AuthTransition } from "../AuthTransition";
 import type { ThemePreference } from "../theme";
 import { THEME_PREFERENCE_LABELS, themePreferenceStore, useTheme, useThemePreference } from "../theme";
 import { useReducedMotion } from "./reduced-motion";
@@ -90,10 +90,7 @@ export function Shell({ children }: ShellProps): ReactElement {
     if (typeof globalThis.location !== "undefined") globalThis.location.reload();
   };
 
-  // 未认证的业务路由不呈现顶栏与业务内容：认证失败时 `AuthTransition` 复用同一个问题弹层。
-  if (authGateOpen) {
-    return <AuthTransition problem={problem} onRepair={onRepair} onReload={onReload} />;
-  }
+  // 认证等待由 Stack 的 screenLayout 拦住页面内容；这里必须保留导航容器。
 
   const model = buildShellModel({
     pathname,
@@ -113,7 +110,7 @@ export function Shell({ children }: ShellProps): ReactElement {
 
   return (
     <ShellView
-      model={model}
+      model={authGateOpen ? { ...model, topBarVisible: false, contentFill: false } : model}
       themePreference={themePreference}
       themeDark={theme.dark}
       reducedMotion={reducedMotion}

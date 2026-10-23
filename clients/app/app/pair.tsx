@@ -37,18 +37,16 @@
  * 目录页（`app/index.tsx`，路由 `/`）——恢复路径由电脑重新生成的配对地址给出，而不是页内按钮。
  */
 
-import { useRouter } from "expo-router";
+import { usePathname, useRouter } from "expo-router";
 import { useEffect } from "react";
 import type { ReactElement } from "react";
 
 import { PairingPanel, PairingThemeToggle, RuntimeUnavailable } from "../src/components";
+import { usePairingNavigation } from "../src/components/pairing-navigation";
 import type { Palette } from "../src/components/theme";
 import { StyleSheet, View, palettes, spacing, useTheme, useWindowDimensions } from "../src/components/theme";
 import type { PairingKind } from "../src/features/pairing-model";
 import { useClientState, useClientStore } from "../src/features/runtime";
-
-/** 已批准后停留在这里的过渡时长（design D4 / 原型 S1）。 */
-const APPROVED_REDIRECT_MS = 1_600;
 
 /**
  * 页面骨架：只有一块居中的舞台。
@@ -90,6 +88,8 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
   const store = useClientStore();
   const state = useClientState();
   const router = useRouter();
+  const pathname = usePathname();
+  const isCurrentRoute = pathname === (kind === "sync" ? "/pair" : "/node-link/pair");
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const { width } = useWindowDimensions();
@@ -105,27 +105,10 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
   const approvedSync = page !== null && page.phase === "approved" && page.kind === "sync";
 
   // 已经配对过的浏览器再次打开设备配对页（`/pair`）：直接回目录页，不在配对入口上重来一遍。
-  // 例外是**已批准**的过渡：那时页面正在播「配对成功」，由下面那条定时跳转负责（kind 也限定
-  // 在 `sync`，`/node-link/pair` 的节点资料展示不受影响）。
-  useEffect(() => {
-    if (kind !== "sync") return;
-    if (state === null || state.host === null) return;
-    if (approvedSync) return;
-    router.replace("/");
-  }, [kind, state, approvedSync, router]);
-
-  // 审批通过后自动进目录（design D4）：不等连接进入 online，也不要求用户再点一次。
-  // 阶段变化或卸载时清理，避免离开页面后仍发生一次导航。
-  useEffect(() => {
-    if (!approvedSync) return;
-    const timer = setTimeout(() => {
-      // 目录页就是根路由：`app/index.tsx` 匹配 `/`（`DIRS_ROUTE.path === "/"`）。
-      router.replace("/");
-    }, APPROVED_REDIRECT_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [approvedSync, router]);
+  // 身份变化或设备撤销后必须允许重新配对；旧主机记录要保留到批准后，不能拿它当作返回依据。
+  // 例外还有**已批准**的过渡：那时页面正在播「配对成功」，由定时跳转负责（kind 也限定在
+  // `sync`，`/node-link/pair` 的节点资料展示不受影响）。
+  usePairingNavigation({ kind, isCurrentRoute, state, approvedSync, router });
 
   return (
     <View role="main" style={[styles.page, width < 600 ? styles.pageCompact : null]}>

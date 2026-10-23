@@ -44,6 +44,7 @@ import { openPlatform } from "../../src/platform";
 import type { DeviceIdentity, PlatformPorts } from "../../src/platform";
 import { ClientStoreProvider } from "../../src/features/runtime";
 import { Shell } from "../../src/components/shell/Shell";
+import { renderAuthenticatedScreen } from "../../src/components/AuthenticatedScreen";
 import RootLayout from "../../app/_layout";
 import { Stack, mountRoute, registerRoutes } from "./router-stub";
 import type { RouteEntry } from "./router-stub";
@@ -372,7 +373,7 @@ function HarnessLayout({ composition }: { readonly composition: Composition }): 
           生效的容器——对话页的视口高度、三栏独立滚动与吸底输入区在浏览器里全都退化成
           普通文档流，而这些正是本目录的布局检查要测的东西。 */}
       <Shell>
-        <Stack screenOptions={{ headerShown: false }} />
+        <Stack screenLayout={renderAuthenticatedScreen} screenOptions={{ headerShown: false }} />
       </Shell>
     </ClientStoreProvider>
   );

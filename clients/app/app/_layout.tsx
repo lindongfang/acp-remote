@@ -28,6 +28,7 @@ import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 
 import { Shell } from "../src/components/shell/Shell";
+import { renderAuthenticatedScreen } from "../src/components/AuthenticatedScreen";
 import { useTheme } from "../src/components/theme";
 import { createComposition } from "../src/composition";
 import type { Composition } from "../src/composition";
@@ -68,6 +69,7 @@ export default function RootLayout(): ReactElement {
           `bg` 后，宽屏留白是主题色而不是白色；浅色下仍是浅底。
         */}
         <Stack
+          screenLayout={renderAuthenticatedScreen}
           screenOptions={{
             headerShown: false,
             contentStyle: { backgroundColor: theme.colors.bg },

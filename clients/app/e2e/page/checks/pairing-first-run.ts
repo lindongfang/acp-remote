@@ -759,6 +759,11 @@ const checks: readonly Check[] = [
           "配对后进入在线",
           PAIRING_WAIT_MS,
         );
+        await waitFor(
+          () => query(mounted.container, '[data-route="dirs"]') !== null,
+          "审批通过后目录页面实际可见",
+          PAIRING_WAIT_MS,
+        );
       } finally {
         await mounted.unmount();
       }
