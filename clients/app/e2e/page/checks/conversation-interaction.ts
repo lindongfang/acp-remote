@@ -320,24 +320,24 @@ const checks: readonly Check[] = [
             "有进行中的轮次时输入区必须是进行中",
           );
           expectThat(
-            textOf(query(container, "[data-submit-unavailable]")).includes("进行中"),
-            "进行中这一态必须有对应的不可提交说明",
+            query(container, "[data-submit-unavailable]") === null,
+            "正常执行不新增临时说明行",
           );
 
           // 进行中：发送入口仍在，但被闸门禁用；回车不派发、不排队（spec「不可提交时回车无副作用」）。
           expectThat(
-            query(container, '[data-action="submit-prompt"]') !== null,
-            "进行中仍应呈现发送入口（禁用而不是消失）",
+            query(container, '[data-action="submit-prompt"]') === null,
+            "进行中由停止入口接替发送",
           );
           expectEqual(
             query(container, "[data-submit-enabled]")?.getAttribute("data-submit-enabled"),
-            "false",
-            "进行中发送必须标为不可提交",
+            undefined,
+            "进行中不显示发送入口",
           );
           expectEqual(
             query(container, '[data-action="submit-prompt"]')?.getAttribute("aria-disabled"),
-            "true",
-            "进行中的发送按钮必须真的禁用",
+            undefined,
+            "进行中不显示第二个发送按钮",
           );
           expectThat(
             query(container, 'button[data-action="cancel-turn"]') !== null,
@@ -424,13 +424,13 @@ const checks: readonly Check[] = [
           // 提交：未收到终态前**不是**「已发送」。
           click(query(container, 'button[data-action="submit-prompt"]'), "发送");
           await waitFor(
-            () => query(container, '[data-submission="pending_confirmation"]') !== null,
-            "提交后呈现待确认",
+            () => commandBody(mounted.host?.sent ?? [], "session.prompt") !== null,
+            "提交命令实际派发",
           );
           expectNone(domText(container), ["已发送", "已排队"], "未收到终态前不得呈现为已发送/已排队");
           expectThat(
-            textOf(query(container, '[data-submission="pending_confirmation"]')).includes("等待终态确认"),
-            "待确认的呈现必须说清在等服务端终态",
+            query(container, '[data-submission="pending_confirmation"]') === null,
+            "正常提交不插入临时等待行",
           );
 
           // 实际发出的载荷恰好是一段文本：附件在这里没有表达方式，也不可能被静默丢弃后提交。
@@ -678,7 +678,7 @@ const checks: readonly Check[] = [
             "切换中状态",
           );
           expectEqual(
-            query(container, '[data-settings-current-name]')?.getAttribute("data-settings-current-name"),
+            query(container, '[data-settings-section="model"] [data-settings-current-name]')?.getAttribute("data-settings-current-name"),
             "GPT-5",
             "未确认前不得把当前值预先改成新值",
           );
@@ -709,7 +709,7 @@ const checks: readonly Check[] = [
             "确认后必须标注变更在下一轮生效",
           );
           expectEqual(
-            query(container, '[data-settings-state]')?.getAttribute("data-settings-state"),
+            query(container, '[data-settings-section="model"]')?.getAttribute("data-settings-state"),
             "available",
             "确认后回到可切换态",
           );
@@ -849,11 +849,11 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "CP-8 会话头：Agent 胶囊沿用连接覆盖层（缺覆盖层即「状态未知」）；路由层不再自建连接表达与导航",
+    name: "CP-8 会话头：明确子 Agent 数据缺失，不把节点目录冒充子 Agent；路由不重复连接状态",
     async run() {
       await withSessionPage(
         sessionScenario(),
-        (container) => query(container, '[data-agent-chip="agents"]') !== null,
+        (container) => query(container, '[data-subagents="unavailable"]') !== null,
         "会话头渲染",
         async (mounted) => {
           const container = mounted.container;
@@ -863,41 +863,9 @@ const checks: readonly Check[] = [
           expectThat(query(container, "[data-session-state]") !== null, "会话头必须有状态徽标");
           expectEqual(textOf(query(container, "[data-session-agent]")), "codex", "会话头必须给出 Agent 名");
 
-          // 胶囊的弹层内容**始终在 DOM**（收起时只是不显示），因此静置状态就能断言。
-          expectEqual(
-            query(container, "[data-agent-popover]")?.getAttribute("data-agent-popover"),
-            "closed",
-            "弹层缺省收起",
-          );
-          const rows = queryAll(container, "[data-agent-row]");
-          expectEqual(
-            rows.map((row) => row.getAttribute("data-agent-row")).sort(),
-            ["codex-a", "codex-b"],
-            "名单来自快照的 Agent 目录（同名靠标识区分，不合并）",
-          );
-          expectEqual(
-            rows.map((row) => row.getAttribute("data-agent-connection")),
-            ["unknown", "unknown"],
-            "覆盖层缺席时状态是未知",
-          );
-          // 反例：把「缺席」写成「已断开」→ 上面这条与下面这条都会红。
-          expectEqual(query(container, '[data-agent-connection="disconnected"]'), null, "状态未知不等于已断开");
-          expectThat(
-            textOf(query(container, "[data-agent-chip-source]")).includes("连接事件"),
-            "必须说明名单来源是连接事件而不是静态配置",
-          );
+          expectEqual(query(container, '[data-agent-chip="agents"]'), null, "Node catalog is not session subagents");
+          expectThat(query(container, '[data-subagents="unavailable"]') !== null, "Missing lifecycle data remains explicit");
 
-          // 点开：弹层展开（内容本来就在 DOM 里，展开只是把样式换掉）。
-          click(query(container, '[data-action="toggle-agent-chip"]'), "展开 Agent 胶囊");
-          await waitFor(() => query(container, '[data-agent-popover="open"]') !== null, "弹层展开");
-          expectEqual(
-            query(container, "[data-agent-chip]")?.getAttribute("data-agent-chip-open"),
-            "true",
-            "展开状态可从锚点读出",
-          );
-
-          // 路由自己那一层：不再自建导航，也不再有第二个连接状态徽标
-          // （连接状态只由共享外壳的设备胶囊表达；外壳在路由层之外，这里只需证明路由层没有）。
           const pageLayer = query(container, '[data-route="session"]')?.parentElement ?? null;
           expectThat(pageLayer !== null, '对话页应渲染出带 `data-route="session"` 的容器');
           expectEqual(query(pageLayer, "nav"), null, "路由层不得再自建导航");
@@ -967,8 +935,8 @@ const checks: readonly Check[] = [
           const container = mounted.container;
           expectEqual(
             query(container, '[data-action="submit-prompt"]')?.getAttribute("aria-disabled"),
-            "true",
-            "进行中的发送必须禁用（不是消失）",
+            undefined,
+            "进行中由停止接替发送",
           );
           expectThat(
             query(container, 'button[data-action="cancel-turn"]') !== null,
@@ -1043,7 +1011,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "CP-10 跳转胶囊：没有用户输入时不呈现；输入滚出中栏可视带时呈现，跳转后短暂高亮目标",
+    name: "CP-10 对话页不再显示用户输入跳转按钮或跳转高亮",
     async run() {
       // ① 一条用户输入都没有：MUST NOT 呈现跳转入口。
       const withoutInput = await enterRoute(
@@ -1115,21 +1083,8 @@ const checks: readonly Check[] = [
         );
         scroller.scrollTop = scroller.scrollHeight;
         scroller.dispatchEvent(new Event("scroll"));
-        await waitFor(
-          () => query(scrolled.container, '[data-jump-pill="up"]') !== null,
-          "用户输入滚出可视带后呈现向上跳转入口",
-        );
-        expectEqual(
-          query(scrolled.container, '[data-jump-pill="up"]')?.getAttribute("data-jump-remaining"),
-          "1",
-          "向上还有一条输入",
-        );
-
-        click(query(scrolled.container, '[data-jump-pill="up"]'), "跳到你最近的输入");
-        await waitFor(
-          () => query(scrolled.container, `[data-jump-flash="${MESSAGE_ID}"]`) !== null,
-          "跳转后短暂高亮目标",
-        );
+        expectEqual(query(scrolled.container, '[data-jump-pill]'), null, "No input jump button after scrolling");
+        expectEqual(query(scrolled.container, '[data-jump-flash]'), null, "No input jump highlight");
       } finally {
         // 滚动位置属于该场景自己的中栏容器，随卸载一起消失，不会留给后面的用例。
         await scrolled.unmount();

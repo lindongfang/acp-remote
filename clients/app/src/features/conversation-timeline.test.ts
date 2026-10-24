@@ -376,14 +376,13 @@ describe("D9 轮次分组：同 turnId 被无标识条目切开", () => {
     const groups = groupTimelineEntries(entries);
     // 反例：key 仅由 turnId 组成时，这两个兄弟节点会拿到同一个 `turn:turn-7`。
     const turnGroups = groups.filter((group) => group.turnId === "turn-7");
-    expect(turnGroups).toHaveLength(2);
+    expect(turnGroups).toHaveLength(1);
     const keys = groups.map((group) => group.key);
     expect(new Set(keys).size).toBe(keys.length);
-    // 第一次出现的组保持短 key（常见路径与前置历史时不漂移），第二次追加出现序号。
+    // 结果原位合并，不再切开同轮输出。
     expect(turnGroups[0]?.key).toBe("turn:turn-7");
-    expect(turnGroups[1]?.key).toBe("turn:turn-7#1");
-    // 无标识的授权结果仍独立成组（不猜它属于哪个轮次）。
-    expect(groups.some((group) => group.turnId === null)).toBe(true);
+    expect(entries.filter(entry => entry.kind === "permission_requested")).toHaveLength(1);
+    expect(entries.some(entry => entry.kind === "permission_resolved")).toBe(false);
   });
 });
 

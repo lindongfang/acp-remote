@@ -268,7 +268,6 @@ describe("对话时间线：消息与结构化条目同一条时间线", () => {
       "file-changed",
       "permission-requested",
       "elicitation-requested",
-      "permission-resolved",
       "elicitation-resolved",
     ];
     for (const kind of kinds) {
@@ -276,6 +275,7 @@ describe("对话时间线：消息与结构化条目同一条时间线", () => {
     }
     expect(html).not.toContain('data-timeline-card="config-changed"');
     expect(html).not.toContain('data-timeline-card="mode-changed"');
+    expect(html).not.toContain('data-timeline-card="permission-resolved"');
     // 每类卡片自己的标识锚点也在（唯一）。
     expect(html.match(/data-turn-id="turn-1"/g)).toHaveLength(1);
     expect(html.match(/data-tool-call-id="tool-1"/g)).toHaveLength(1);
@@ -491,7 +491,7 @@ describe("对话时间线：条目形态与原型对齐", () => {
     expect(html.indexOf('data-timeline-header="true"')).toBeLessThan(html.indexOf('data-message-id="u1"'));
   });
 
-  it("等待响应通过回复侧光标呈现，不占用文字提示行", () => {
+  it("等待响应不插入临时署名和光标行，避免真实回复到达时改变高度", () => {
     const { store: client } = store();
     applyEvent(client, {
       eventType: "turn.started",
@@ -500,11 +500,9 @@ describe("对话时间线：条目形态与原型对齐", () => {
       view: { turnId: "turn-wait", state: "running" },
     });
     const html = renderPage(pageOf(client));
-    expect(html).toContain('data-response-activity="true"');
-    expect(html).toContain('data-response-cursor="true"');
-    expect(html).toContain('data-awaiting-header="true"');
-    expect(html.indexOf('data-awaiting-header="true"')).toBeLessThan(html.indexOf('data-response-cursor="true"'));
-    expect(html).toContain('aria-label="等待响应"');
+    expect(html).not.toContain('data-response-activity="true"');
+    expect(html).not.toContain('data-response-cursor="true"');
+    expect(html).not.toContain('data-awaiting-header="true"');
     expect(html).not.toContain('data-process-label="true"');
   });
 
@@ -1125,7 +1123,32 @@ describe("对话时间线：授权与提问的可用边界", () => {
     expect(html.match(/data-answer-interaction-id="perm-live"/g) ?? []).toHaveLength(1);
   });
 
-  it("已被其它设备处理：标出「不是本设备所为」且没有应答按钮", () => {
+  it("只有授权结果时保留卡片；加载对应请求后合并并显示中文", () => {
+    const { store: client } = interactionStore();
+    applyEvent(client, {
+      eventType: "permission.resolved",
+      eventId: "dddddddd-0000-4000-8000-000000000291",
+      globalSequence: "42",
+      view: { interactionId: "perm-merge", resolution: "allow_once", resolvedByDeviceId: "another-device" },
+    });
+    const resultOnly = renderPage(pageOf(client));
+    expect(resultOnly).toContain('data-timeline-card="permission-resolved"');
+    expect(resultOnly).toContain("已允许一次");
+    applyEvent(client, {
+      eventType: "permission.requested",
+      eventId: "dddddddd-0000-4000-8000-000000000290",
+      globalSequence: "41",
+      view: { interactionId: "perm-merge", title: "运行命令", options: [{ optionId: "once", label: "Allow", kind: "allow_once" }] },
+    });
+    const merged = renderPage(pageOf(client));
+    expect(merged.match(/data-interaction-id="perm-merge"/g)).toHaveLength(1);
+    expect(merged).toContain("已允许一次 · 其他设备");
+    expect(merged).toContain("运行命令");
+    expect(merged).not.toContain('data-timeline-card="permission-resolved"');
+    expect(merged).not.toContain('data-answer-option="once"');
+  });
+
+  it("已被其它设备处理：标出其他设备且没有应答按钮", () => {
     const { store: client } = interactionStore();
     applyEvent(client, {
       eventType: "permission.requested",
@@ -1144,7 +1167,8 @@ describe("对话时间线：授权与提问的可用边界", () => {
     expect(html).toContain('data-interaction-availability="handled_elsewhere"');
     expect(html).toContain('data-interaction-handled="other-device"');
     expect(html).toContain('data-resolved-by-device-id="another-device"');
-    expect(html).toContain("不是本设备所为");
+    expect(html).toContain("其他设备");
+    expect(html).not.toContain('data-timeline-card="permission-resolved"');
     expect(html).not.toContain('data-answer-option="reject"');
   });
 

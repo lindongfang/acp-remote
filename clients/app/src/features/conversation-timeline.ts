@@ -460,6 +460,18 @@ export function buildTimeline(input: {
     entries.push(cardEntry(card, group.earliest));
   }
 
+  // 结果已更新到原请求卡片；仅当请求不在当前历史窗口中时保留独立结果。
+  const resolvedPermissions = new Set(entries.flatMap(entry =>
+    entry.kind === "permission_requested" &&
+      (entry.availability.kind === "handled_here" || entry.availability.kind === "handled_elsewhere")
+      ? [entry.interactionId] : []));
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry?.kind === "permission_resolved" && resolvedPermissions.has(entry.interactionId)) {
+      entries.splice(index, 1);
+    }
+  }
+
   const shownInteractions = new Set(entries.flatMap(entry =>
     entry.kind === "permission_requested" || entry.kind === "elicitation_requested" ? [entry.interactionId] : []));
   for (const interaction of input.interactions) {

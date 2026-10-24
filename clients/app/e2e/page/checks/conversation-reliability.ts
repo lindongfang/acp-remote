@@ -366,12 +366,10 @@ const checks: readonly Check[] = [
         });
 
         // 受理后没有任何输出：唯一的依据是「本轮未终结且没有实际内容」。
-        await waitFor(
-          () => query(container, '[data-process-row="awaiting"]') !== null,
-          "无首个输出时出现等待行",
-        );
+        await waitFor(() => query(container, '[data-message-local="submitted"]') !== null, "受理后保留用户输入");
         const awaiting = textOf(query(container, '[data-process-row="awaiting"]'));
-        expectThat(query(container, '[data-response-cursor="true"]') !== null, "等待时展示光标");
+        expectThat(query(container, '[data-process-row="awaiting"]') === null, "等待不插入临时高度");
+        expectThat(query(container, '[data-response-cursor="true"]') === null, "等待不插入临时光标");
         expectThat(!awaiting.includes("等待响应"), "等待效果不显示文字提示");
         expectThat(!awaiting.includes("思考"), `不得把等待写成 Agent 正在思考：${awaiting}`);
 

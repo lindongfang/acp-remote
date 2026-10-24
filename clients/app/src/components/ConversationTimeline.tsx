@@ -41,8 +41,6 @@
  */
 
 import type { ReactElement, ReactNode } from "react";
-import { useEffect, useRef } from "react";
-import { useReducedMotion } from "./shell/reduced-motion";
 
 import type { FormInputValue } from "../domain/form";
 import { buildElicitationForm } from "../domain/form";
@@ -62,7 +60,7 @@ import { Markdown } from "./Markdown";
 import { TODO_STATUS_LABELS } from "./ConversationTodo";
 import { MessageMedia } from "./MessageMedia";
 import type { Palette } from "./theme";
-import { Animated, Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
 
 /** `kind` 取某一类的时间线条目类型（判别联合的成员）。 */
 type EntryOf<K extends TimelineEntry["kind"]> = Extract<TimelineEntry, { readonly kind: K }>;
@@ -1382,7 +1380,10 @@ function PermissionRequestedEntry({
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const availability = entry.availability;
   const actionable = availability.kind === "answerable";
-  const statusLabel = interactionStatusLabel(availability, "授权");
+  const handled = availability.kind === "handled_here" || availability.kind === "handled_elsewhere";
+  const statusLabel = handled
+    ? `${permissionResolutionLabel(availability.resolution)} · ${availability.kind === "handled_here" ? "本设备" : "其他设备"}`
+    : interactionStatusLabel(availability, "授权");
   const detail = entry.detail;
   const input = detail?.input?.value;
   const fields = typeof input === "object" && input !== null && !Array.isArray(input)
@@ -1409,7 +1410,10 @@ function PermissionRequestedEntry({
         dataSet={{ permissionTone: actionable ? "action-required" : "neutral" }}>
         <View style={styles.cardHead}>
           <Text style={[styles.permissionStatus, actionable ? null : styles.permissionStatusInactive]}
-            dataSet={{ permissionStatus: statusLabel }}>{statusLabel}</Text>
+            dataSet={{ permissionStatus: statusLabel,
+              ...(handled ? { interactionHandled: availability.kind === "handled_here" ? "this-device" : "other-device",
+                resolvedByDeviceId: availability.kind === "handled_elsewhere" ? availability.resolvedByDeviceId ?? "unknown" : "unknown" } : {}),
+            }}>{statusLabel}</Text>
 
         </View>
         <View style={styles.detailSection} dataSet={{ approvalContext: "true" }}>
@@ -1423,7 +1427,7 @@ function PermissionRequestedEntry({
             onAnswerInteraction={onAnswerInteraction}
           />
         </View>
-        <InteractionAvailabilityNote availability={entry.availability} />
+        {handled ? null : <InteractionAvailabilityNote availability={entry.availability} />}
         <RefreshInteractionsAction
           availability={entry.availability}
           onRefreshInteractions={onRefreshInteractions}
@@ -1528,7 +1532,11 @@ function ElicitationRequestedEntry({
   );
 }
 
-/** 授权已处理卡片（事实原样呈现，不推断是谁处理的——那是 `availability` 的判定）。 */
+function permissionResolutionLabel(resolution: string): string {
+  return ({ allow_once: "已允许一次", allow_always: "已始终允许", reject_once: "已拒绝一次", reject_always: "已始终拒绝" } as Readonly<Record<string, string>>)[resolution] ?? resolution;
+}
+
+/** 历史窗口缺少原请求时保留独立结果卡片。 */
 function PermissionResolvedEntry({ entry }: { readonly entry: EntryOf<"permission_resolved"> }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -1549,7 +1557,7 @@ function PermissionResolvedEntry({ entry }: { readonly entry: EntryOf<"permissio
         <View style={styles.cardHead}>
           <Text style={styles.kicker}>授权已处理</Text>
           <Text style={styles.title} dataSet={{ interactionResolutionLabel: entry.resolution }}>
-            {entry.resolution}
+            {permissionResolutionLabel(entry.resolution)}
           </Text>
 
         </View>
@@ -1744,7 +1752,7 @@ function ProcessRow({ process }: { readonly process: ConversationProcessModel })
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   if (process.label === null) return null;
-  if (process.phase === "awaiting") return <ResponseActivity />;
+  if (process.phase === "awaiting") return null;
   return (
     <View role="listitem" style={styles.processRow} dataSet={{ processRow: process.phase }}>
       <Text style={styles.processLabel} dataSet={{ processLabel: "true" }}>
@@ -1760,31 +1768,6 @@ function ProcessRow({ process }: { readonly process: ConversationProcessModel })
 }
 
 /** 等待回复时显示无背景光标；减少动态效果时保持静态，卸载时停止动画。 */
-function ResponseActivity(): ReactElement {
-  const theme = useTheme();
-  const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const reducedMotion = useReducedMotion();
-  const opacity = useRef(new Animated.Value(0.5)).current;
-  useEffect(() => {
-    if (reducedMotion) {
-      opacity.setValue(0.7);
-      return;
-    }
-    const animation = Animated.loop(Animated.sequence([
-      Animated.timing(opacity, { toValue: 1, duration: 450, useNativeDriver: false }),
-      Animated.timing(opacity, { toValue: 0, duration: 450, useNativeDriver: false }),
-    ]));
-    animation.start();
-    return () => animation.stop();
-  }, [opacity, reducedMotion]);
-  return (
-    <View role="status" accessibilityLabel="等待响应" style={styles.waitingRow}
-      dataSet={{ processRow: "awaiting", responseActivity: "true" }}>
-      <Animated.View aria-hidden style={[styles.waitingCursor, { opacity }]}
-        dataSet={{ responseCursor: "true" }} />
-    </View>
-  );
-}
 
 /**
  * 时间线。
@@ -1823,7 +1806,6 @@ export function ConversationTimeline({
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const sources = media ?? new Map<string, AttachmentMediaView>();
   const groups = groupTimelineEntries(entries);
-  const waitingAt = entries.at(-1)?.createdAt;
   const timeStarts = new Set<string>();
   let previous: { side: string } | null = null;
   for (const entry of entries) {
@@ -1900,14 +1882,6 @@ export function ConversationTimeline({
           ))}
         </View>
       ))}
-      {process?.phase !== "awaiting" ? null : (
-        <View style={styles.entryHeader} dataSet={{ awaitingHeader: "true" }}>
-          <Text style={styles.who}>{agentName || "Agent"}</Text>
-          <Text style={styles.kicker}>
-            {waitingAt === undefined ? "" : formatEntryTime(waitingAt)}
-          </Text>
-        </View>
-      )}
       {process === null || process === undefined ? null : <ProcessRow process={process} />}
     </View>
   );

@@ -64,6 +64,7 @@ import {
 
 export interface ContextUsageBarProps {
   readonly usage: ContextUsageView;
+  readonly compact?: boolean;
 }
 
 /** 进度条尺寸（原型 `.ctxbar`：66 × 6）。 */
@@ -76,6 +77,20 @@ const CONTEXT_DETAIL_NOTE =
 
 /** 已编译的填充宽度类：按整百分点缓存，同一档只编译一次。 */
 const FILL_WIDTH_CLASSES = new Map<number, ViewStyle>();
+const RING_CLASSES = new Map<string, ViewStyle>();
+
+function ringStyle(percent: number, colors: Palette): ViewStyle {
+  const step = Math.max(0, Math.min(100, Math.round(percent)));
+  const key = `${step}|${colors.panel2}`;
+  const cached = RING_CLASSES.get(key);
+  if (cached !== undefined) return cached;
+  const compiled = StyleSheet.create({ ring: webStyle({
+    borderWidth: 0,
+    backgroundImage: `radial-gradient(closest-side, ${colors.panel2} 65%, transparent 70%), conic-gradient(${colors.accent} ${step * 3.6}deg, ${colors.line} 0deg)`,
+  }) }).ring;
+  RING_CLASSES.set(key, compiled);
+  return compiled;
+}
 
 /** 占比 → 进度条填充的宽度类（四舍五入到整百分点，见文件头）。 */
 function fillWidthStyle(percent: number): ViewStyle {
@@ -123,6 +138,20 @@ function buildStyles(colors: Palette) {
   return StyleSheet.create({
     wrap: {
       position: "relative",
+    },
+    compactChip: {
+      minWidth: 40,
+      height: 40,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    ring: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      borderWidth: 3,
+      borderColor: colors.line,
+      borderTopColor: colors.ink3,
     },
     chip: {
       flexDirection: "row",
@@ -234,7 +263,7 @@ function buildStyles(colors: Palette) {
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
 /** 上下文占用胶囊。 */
-export function ContextUsageBar({ usage }: ContextUsageBarProps): ReactElement {
+export function ContextUsageBar({ usage, compact = false }: ContextUsageBarProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const [expanded, setExpanded] = useState(false);
@@ -257,7 +286,7 @@ export function ContextUsageBar({ usage }: ContextUsageBarProps): ReactElement {
       <Pressable
         role="button"
         aria-label={`上下文占用：${label}（点击展开明细）`}
-        style={tone === null ? styles.chip : [styles.chip, tone.chip]}
+        style={compact ? styles.compactChip : tone === null ? styles.chip : [styles.chip, tone.chip]}
         dataSet={{
           action: "toggle-context-detail",
           contextChip: "true",
@@ -269,7 +298,10 @@ export function ContextUsageBar({ usage }: ContextUsageBarProps): ReactElement {
           setExpanded(!expanded);
         }}
       >
-        {known === null ? (
+        {compact ? (
+          <View style={known === null ? styles.ring : [styles.ring, ringStyle(known.percent, palettes[theme.dark ? "dark" : "light"])]}
+            role="img" aria-label={known === null ? "上下文未上报" : `上下文已用 ${known.percent.toFixed(1)}%`} />
+        ) : known === null ? (
           <>
             {/* 原型只在「窗口为零」时才补一句可区分说明；从未上报就只留「—」，不把状态词堆进胶囊。 */}
             {usage.kind === "zero_window" ? <Text style={styles.state}>{label}</Text> : null}

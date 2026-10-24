@@ -203,11 +203,10 @@ describe("输入区三态与附件边界", () => {
     // 执行中仍可编辑：输入框**不**只读，草稿可以写，但不建立队列。
     expect(tagContaining(html, 'data-composer-input="in_progress"')).not.toMatch(/readonly/i);
     // 发送按钮仍呈现但禁用（不是「消失」：状态与入口都在，闸门由 canSubmit 决定）。
-    expect(html).toContain('data-submit-enabled="false"');
-    expect(tagContaining(html, 'data-action="submit-prompt"')).toContain('aria-disabled="true"');
+    expect(html).not.toContain('data-action="submit-prompt"');
     expect(html).toContain('data-action="cancel-turn"');
     expect(html).not.toContain("data-submit-unavailable");
-    expect(html).toContain("会话进行中，完成后可继续输入");
+    expect(html).toContain("输入消息，Enter 发送，Shift+Enter 换行");
     expect(html).not.toContain("进行中 · 可编辑但发送禁用，不排队");
   });
 
@@ -306,7 +305,7 @@ describe("提交与取消以服务端终态为准", () => {
     expect(requested).toContain('data-cancel-request-id="req-c"');
     expect(requested).toContain("等待服务端终态");
     // 反例：未确认就呈现为空闲/再次可取消 → 这里会再次出现按钮。
-    expect(requested).not.toContain('data-action="cancel-turn"');
+    expect(tagContaining(requested, 'data-action="cancel-turn"')).toContain('aria-disabled="true"');
 
     const confirmed = render(input({ cancel: { kind: "confirmed" } }));
     expect(confirmed).not.toContain('data-cancel="confirmed"');

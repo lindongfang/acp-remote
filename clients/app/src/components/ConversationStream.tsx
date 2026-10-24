@@ -75,7 +75,6 @@ import {
   fontFamily,
   fontSize,
   fontWeight,
-  motion,
   palettes,
   radius,
   spacing,
@@ -366,7 +365,6 @@ export function jumpTargetIndexOf(distribution: UserInputDistribution): number |
 }
 
 /** 没有测量结果时的分布：没有用户输入（因此不呈现跳转入口）。 */
-const NO_USER_INPUTS: UserInputDistribution = { visible: 0, above: [], below: [] };
 
 /**
  * 生效的次级视图（三栏里哪几栏被藏起来由它决定）。
@@ -694,6 +692,25 @@ function buildStyles(colors: Palette) {
     composerDock: {
       flexShrink: 0,
     },
+    timelineRegion: {
+      position: "relative",
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+      minHeight: 0,
+      overflow: "hidden",
+    },
+    foldShortcut: {
+      position: "absolute",
+      top: 8,
+      alignSelf: "center",
+      padding: 10,
+      borderRadius: radius.lg,
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.line,
+      zIndex: zIndex.topBar,
+    },
     hidden: {
       display: "none",
     },
@@ -881,33 +898,9 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
-    jumpPill: {
-      // 固定在**视口**底部居中（原型把胶囊绝对定位在滚动栏内）。它是中栏滚动容器的兄弟节点：
-      // 包含块因此是视口，胶囊不随内容滚动、也不会被滚动容器的 overflow 裁掉；中栏被次级视图
-      // 藏起来时，这个入口随中栏一起消失（那时时间线本来就不在台上）。
-      left: "50%",
-      bottom: spacing.lg,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: spacing.sm,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.lg,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.lg,
-      backgroundColor: colors.panel,
-      zIndex: zIndex.topBar,
-      ...webStyle({ position: "fixed", transform: "translateX(-50%)" }),
-    },
-    jumpPillText: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
-    /** 「回到底部」入口：与跳转胶囊同形，放在它上方一档（两者可同时出现：方向不同）。 */
     scrollPill: {
       left: "50%",
-      bottom: spacing.lg + 48,
+      bottom: 14,
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.sm,
@@ -918,7 +911,7 @@ function buildStyles(colors: Palette) {
       borderRadius: radius.lg,
       backgroundColor: colors.accentSoft,
       zIndex: zIndex.topBar,
-      ...webStyle({ position: "fixed", transform: "translateX(-50%)" }),
+      ...webStyle({ position: "absolute", transform: "translateX(-50%)" }),
     },
     scrollPillText: {
       color: colors.accentInk,
@@ -926,13 +919,6 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.sm,
     },
     // 跳转后的短暂高亮：一层不吃点击的固定覆盖层（目标条目的样式不归本组件管）。
-    flashRing: {
-      borderWidth: 2,
-      borderColor: colors.accent,
-      borderRadius: radius.md,
-      zIndex: zIndex.topBar,
-      ...webStyle({ position: "fixed" }),
-    },
     footer: {
       display: "none",
       flexShrink: 0,
@@ -964,84 +950,6 @@ const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.
  * 弹层内容**始终在 DOM**（收起时只 `display: none`，与原型 `.pop` 同一形态）：这样
  * 「状态未知不等于已断开」在静置的渲染结果里就能被断言，而不是要先把弹层点开。
  */
-function AgentChip({ panel }: { readonly panel: HostPanelModel }): ReactElement {
-  const theme = useTheme();
-  const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const [open, setOpen] = useState(false);
-  // 「有没有 Agent 在跑」只从面板已有的连接状态得出：`connected` 视为运行中，其余（含未知）
-  // 取空闲色。未知状态不会被降级成「已断开」——那一条仍由每行的连接文案承担。
-  const anyRunning = panel.agents.some((agent) => agent.connection === "connected");
-  const dotTone = anyRunning ? "running" : "idle";
-
-  return (
-    <View style={styles.chipWrap} dataSet={{ agentChip: "agents", agentChipOpen: String(open) }}>
-      <Pressable
-        role="button"
-        style={styles.chip}
-        accessibilityLabel="查看会话涉及的 Agent"
-        accessibilityState={{ expanded: open }}
-        aria-expanded={open}
-        dataSet={{ action: "toggle-agent-chip", agentChipCount: String(panel.agents.length), agentChipDot: dotTone }}
-        onPress={() => {
-          setOpen(!open);
-        }}
-      >
-        <View style={[styles.dot, anyRunning ? styles.dotRunning : styles.dotIdle]} />
-        <Text style={styles.chipText}>{`${String(panel.agents.length)} 个 Agent ▾`}</Text>
-      </Pressable>
-
-      <View
-        style={open ? styles.popover : [styles.popover, styles.popoverHidden]}
-        dataSet={{ agentPopover: open ? "open" : "closed" }}
-      >
-        <Text style={styles.popoverTitle} dataSet={{ agentPopoverTitle: "本会话涉及的 Agent" }}>
-          本会话涉及的 Agent
-        </Text>
-        {panel.agents.length === 0 ? (
-          <Text style={styles.note} dataSet={{ agentChipEmpty: "true" }}>
-            最近一次同步的 Agent 目录里没有 Agent。
-          </Text>
-        ) : (
-          panel.agents.map((agent) => (
-            <View
-              key={agent.id}
-              style={styles.agentRow}
-              dataSet={{ agentRow: agent.id, agentConnection: agent.connection }}
-            >
-              <View
-                style={[styles.dot, agent.connection === "connected" ? styles.dotRunning : styles.dotIdle]}
-                dataSet={{ agentRowDot: agent.connection }}
-              />
-              <Text style={styles.agentName} dataSet={{ agentRowName: agent.displayName }}>
-                {agent.displayName}
-              </Text>
-              {/* 标识：同名 Agent 靠它区分，不按展示名合并。 */}
-              <Text style={styles.agentId} dataSet={{ agentRowId: agent.id }}>
-                {agent.id}
-              </Text>
-              <Text style={styles.agentState} dataSet={{ agentRowConnection: agent.connectionLabel }}>
-                {agent.connectionLabel}
-              </Text>
-              {agent.disconnectReason === null ? null : (
-                <Text style={styles.hint} dataSet={{ agentRowReason: agent.disconnectReason }}>
-                  {agent.disconnectReason}
-                </Text>
-              )}
-            </View>
-          ))
-        )}
-        <Text style={styles.hint} dataSet={{ agentChipSource: "connection-events" }}>
-          来源：agent.connected / agent.disconnected 连接事件，不是静态配置。
-        </Text>
-        {panel.unknownStateNote === null ? null : (
-          <Text style={styles.hint} dataSet={{ agentChipUnknownNote: "true" }}>
-            {panel.unknownStateNote}
-          </Text>
-        )}
-      </View>
-    </View>
-  );
-}
 
 /**
  * 左栏：目录上下文（返回目录列表、展示名、进本目录详情、带「路径」标签的逐字路径）+ 带图标的
@@ -1189,22 +1097,6 @@ function Sidebar({
   );
 }
 
-/**
- * 视口里的用户输入节点（按时间线次序）。
- *
- * 定位方式是消息条目的既有锚点 `data-message-id`（`ConversationTimeline` 发的那个；
- * `conversation-timeline` 的浏览器用例也逐字断言它），并只取**本会话的用户消息**那一批
- * ——因此 Agent 气泡与思考条目不会被当成「你的输入」。
- */
-function userInputNodes(host: HTMLElement, ids: readonly string[]): readonly HTMLElement[] {
-  const wanted = new Set(ids);
-  const nodes: HTMLElement[] = [];
-  host.querySelectorAll("[data-message-id]").forEach((node) => {
-    const id = node.getAttribute("data-message-id");
-    if (id !== null && wanted.has(id)) nodes.push(node as HTMLElement);
-  });
-  return nodes;
-}
 
 /** 对话页正文。 */
 export function ConversationStream({
@@ -1252,7 +1144,6 @@ export function ConversationStream({
   onTitleDraftChange,
   onCommitTitle,
   onCancelTitleEdit,
-  hostPanel,
   filesPanel,
   onSelectFileSource,
   onRefreshFiles,
@@ -1370,7 +1261,27 @@ export function ConversationStream({
     filesScrollRef.current = node as ScrollHandle | null;
   }, []);
   const followingRef = useRef(true);
+  const reconciledGeometry = useRef<{
+    readonly host: HTMLElement;
+    readonly contentHeight: number;
+    readonly viewportHeight: number;
+  } | null>(null);
   const [following, setFollowing] = useState(true);
+  const [crossingFold, setCrossingFold] = useState<{ key: string; label: string } | null>(null);
+  const measureCrossingFold = (): void => {
+    const host = scroller();
+    if (host === null || host.clientHeight === 0) return;
+    const top = host.getBoundingClientRect().top;
+    let found: { key: string; label: string } | null = null;
+    for (const fold of host.querySelectorAll<HTMLElement>('[data-fold-entry][data-entry-expanded="true"]')) {
+      const rect = fold.getBoundingClientRect();
+      const button = fold.querySelector<HTMLElement>('[data-action="toggle-timeline-entry"]');
+      if (button !== null && button.getBoundingClientRect().bottom < top && rect.bottom > top + 44) {
+        found = { key: fold.dataset['foldEntry'] ?? '', label: button.getAttribute('aria-label') ?? '收起当前内容' };
+      }
+    }
+    setCrossingFold((previous) => previous?.key === found?.key && previous?.label === found?.label ? previous : found);
+  };
   /** 上读期间有新内容到达（只影响提示措辞，不改变滚动位置）。 */
   const [unseen, setUnseen] = useState(false);
   /** 上读时的锚点：第一条仍在可视带内的条目键与它相对容器顶边的偏移。 */
@@ -1416,9 +1327,11 @@ export function ConversationStream({
    */
   const captureOpenFileScroll = (): void => {
     const host = scroller();
-    if (host !== null) savedBeforeFile.current = { sessionId, offsetY: host.scrollTop };
+    if (fileContent === null && host !== null && host.clientHeight > 0) {
+      savedBeforeFile.current = { sessionId, offsetY: host.scrollTop };
+    }
     const filesHost = filesScroller();
-    if (filesHost !== null) savedFilesScroll.current = { sessionId, offsetY: filesHost.scrollTop };
+    if (filesHost !== null && filesHost.clientHeight > 0) savedFilesScroll.current = { sessionId, offsetY: filesHost.scrollTop };
   };
   /** 记下当前阅读锚点（上读时才会用到；没有条目时锚点为 `null`）。 */
   const captureAnchor = (): void => {
@@ -1448,14 +1361,25 @@ export function ConversationStream({
   };
   const handleContentSizeChange = (): void => {
     // 查看文件期间时间线被隐藏，维度变化不是「新内容」，不能借机滚到底。
-    if (fileContent !== null) return;
+    if (fileContent !== null || previousSession.current !== sessionId) return;
     const host = scroller();
-    if (host === null) return;
+    if (host === null || host.clientHeight === 0 || (typeof document !== "undefined" && document.hidden)) return;
+    const previous = reconciledGeometry.current;
+    const contentHeight = host.scrollHeight;
+    const viewportHeight = host.clientHeight;
+    const resized = previous === null || previous.host !== host ||
+      previous.contentHeight !== contentHeight || previous.viewportHeight !== viewportHeight;
+    reconciledGeometry.current = { host, contentHeight, viewportHeight };
     if (followingRef.current) {
-      scrollToY(host.scrollHeight);
+      // 草稿、接受确认及终态通知也会触发渲染；没有布局变化就不改阅读位置。
+      // 同一次布局的 layout effect / ResizeObserver / RNW 回调也只定位一次。
+      if (resized) scrollToY(contentHeight);
+      measureCrossingFold();
       return;
     }
     restoreAnchor();
+    captureAnchor();
+    measureCrossingFold();
   };
   // 历史读取接替流式内容、思考自动折叠等更新会改变高度。
   // 在浏览器绘制前完成位置补偿，尺寸回调继续处理图片等异步布局。
@@ -1463,9 +1387,10 @@ export function ConversationStream({
     handleContentSizeChange();
   });
   const handleTimelineScroll = (): void => {
-    measureRef.current();
     const host = scroller();
-    if (host === null) return;
+    if (host === null || host.clientHeight === 0 || document.hidden || fileContent !== null) return;
+    scrollPositions().set(sessionId, host.scrollTop);
+    measureCrossingFold();
     const next = isFollowingBottom({
       offsetY: host.scrollTop,
       contentHeight: host.scrollHeight,
@@ -1481,6 +1406,7 @@ export function ConversationStream({
     }
     if (next === followingRef.current) {
       if (next && unseen) setUnseen(false);
+      if (!next) captureAnchor();
       return;
     }
     followingRef.current = next;
@@ -1488,6 +1414,29 @@ export function ConversationStream({
     if (next) setUnseen(false);
     else captureAnchor();
   };
+  const reconcileRef = useRef(handleContentSizeChange);
+  const scrollHandlerRef = useRef(handleTimelineScroll);
+  useLayoutEffect(() => {
+    reconcileRef.current = handleContentSizeChange;
+    scrollHandlerRef.current = handleTimelineScroll;
+  });
+  useLayoutEffect(() => {
+    const host = scroller();
+    if (host === null) return;
+    // 使用同步宿主事件记录阅读位置，避免 RNW 节流期间流式刷新使用旧锚点。
+    const onScroll = (): void => scrollHandlerRef.current();
+    const reconcile = (): void => reconcileRef.current();
+    host.addEventListener("scroll", onScroll, { passive: true });
+    document.addEventListener("visibilitychange", reconcile);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(reconcile);
+    observer?.observe(host);
+    if (host.firstElementChild !== null) observer?.observe(host.firstElementChild);
+    return () => {
+      host.removeEventListener("scroll", onScroll);
+      document.removeEventListener("visibilitychange", reconcile);
+      observer?.disconnect();
+    };
+  }, [sessionId]);
   const scrollToBottom = (): void => {
     const host = scroller();
     if (host === null) return;
@@ -1516,28 +1465,22 @@ export function ConversationStream({
   }, [contentKey]);
 
   /** 会话切换：先记下旧会话的位置，再在新会话的布局完成后恢复（没有记录即跟随最新）。 */
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (previousSession.current === sessionId) return undefined;
-    const host = scroller();
-    if (host !== null) scrollPositions().set(previousSession.current, host.scrollTop);
     previousSession.current = sessionId;
     anchorRef.current = null;
     const saved = scrollPositions().get(sessionId);
     followingRef.current = saved === undefined;
     setFollowing(saved === undefined);
     setUnseen(false);
-    if (saved === undefined) return undefined;
-    const timer = setTimeout(() => {
-      scrollToY(saved);
-    }, 0);
-    return () => {
-      clearTimeout(timer);
-    };
+    scrollToY(saved ?? scroller()?.scrollHeight ?? 0);
+    if (saved !== undefined) captureAnchor();
+    return undefined;
   }, [sessionId]);
 
   /** 打开文件查看时保存时间线位置，关闭时恢复（不强制滚到底）。 */
   const fileOpen = fileContent !== null;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (fileOpen) return;
     const host = scroller();
     const saved = savedBeforeFile.current;
@@ -1553,6 +1496,7 @@ export function ConversationStream({
       });
       followingRef.current = next;
       setFollowing(next);
+      if (!next) captureAnchor();
     }
     const filesSaved = savedFilesScroll.current;
     savedFilesScroll.current = null;
@@ -1569,95 +1513,6 @@ export function ConversationStream({
   const assignRootRef = useCallback((node: unknown) => {
     rootRef.current = node as HTMLElement | null;
   }, []);
-  /**
-   * 中栏自己的滚动容器（`ScrollView`）滚动的测量入口。
-   *
-   * 对话页的滚动者是三栏各自的 `ScrollView`，`window` 的 scroll 事件不再代表「时间线在滚」；
-   * 由 `ScrollView.onScroll` 调到这里，跳转入口才会随中栏滚动更新。node 侧没有触屏/滚动事件，
-   * 这个函数保持空实现（跳转入口因此不呈现）。
-   */
-  const measureRef = useRef<() => void>(() => undefined);
-  const [distribution, setDistribution] = useState<UserInputDistribution>(NO_USER_INPUTS);
-  const [flash, setFlash] = useState<{
-    readonly messageId: string;
-    readonly top: number;
-    readonly left: number;
-    readonly width: number;
-    readonly height: number;
-  } | null>(null);
-  /** 本会话用户消息的标识（时间线次序）：测量与跳转都以它定位 DOM 节点。 */
-  const userMessageIds = model.timeline.entries.flatMap((entry) =>
-    entry.kind === "message" && entry.channel === "user" ? [entry.message.id] : [],
-  );
-  // 依赖用**稳定**的字符串而不用数组：array 每次渲染都是新引用，effect 会反复重挂监听。
-  const userMessageKey = userMessageIds.join(",");
-
-  useEffect(() => {
-    const host = rootRef.current;
-    // node 侧（`renderToStaticMarkup`）没有布局可测：那时 `distribution` 保持「没有用户输入」，
-    // 因此跳转入口不呈现（不猜、也不编一个假的「在视口外」）。
-    if (host === null || typeof window === "undefined") return;
-    const ids = userMessageKey === "" ? [] : userMessageKey.split(",");
-    const measure = (): void => {
-      // 可见带是**中栏时间线滚动容器**的上下边：会话头与来源条在它上面、输入区在它下面，
-      // 用视口高度会把这两块里露出的（或被容器裁掉的）消息算进「看得到」。容器缺失时退回
-      // 视口坐标，三栏未进入滚动布局（例如旧窄屏高度不足）时行为不变。
-      const container = host.querySelector<HTMLElement>('[data-conversation-scroll="timeline"]');
-      const bounds = container === null ? null : container.getBoundingClientRect();
-      const rects = userInputNodes(host, ids).map((node) => {
-        const rect = node.getBoundingClientRect();
-        return { top: rect.top, bottom: rect.bottom };
-      });
-      setDistribution(
-        classifyUserInputsInBand(
-          rects,
-          bounds === null ? 0 : bounds.top,
-          bounds === null ? window.innerHeight : bounds.height,
-        ),
-      );
-    };
-    measureRef.current = measure;
-    measure();
-    window.addEventListener("scroll", measure, { passive: true });
-    window.addEventListener("resize", measure);
-    return () => {
-      measureRef.current = () => undefined;
-      window.removeEventListener("scroll", measure);
-      window.removeEventListener("resize", measure);
-    };
-  }, [userMessageKey]);
-
-  useEffect(() => {
-    if (flash === null) return;
-    const timer = setTimeout(() => {
-      setFlash(null);
-    }, motion.pulse);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [flash]);
-
-  const jump = jumpPillOf(distribution);
-
-  /** 跳到最近的用户输入，并把它短暂框住（原型 `jumpToUser`）。 */
-  const jumpToUserInput = (): void => {
-    const host = rootRef.current;
-    if (host === null) return;
-    const index = jumpTargetIndexOf(distribution);
-    if (index === null) return;
-    const node = userInputNodes(host, userMessageIds)[index];
-    if (node === undefined) return;
-    node.scrollIntoView({ block: "center" });
-    const rect = node.getBoundingClientRect();
-    setFlash({
-      messageId: node.getAttribute("data-message-id") ?? "",
-      top: rect.top,
-      left: rect.left,
-      width: rect.width,
-      height: rect.height,
-    });
-  };
-
   /** 跳到第一张待处理卡片（原型 `data-jump` 的占位行为在这里落到真实的卡片上）。 */
   const jumpToPending = (): void => {
     const host = rootRef.current;
@@ -1774,7 +1629,7 @@ export function ConversationStream({
                   {model.header.agentName}
                 </Text>
                 <View style={styles.headerSpacer} />
-                {hostPanel === null || hostPanel === undefined ? null : <AgentChip panel={hostPanel} />}
+                <Text style={styles.agent} accessibilityLabel="子 Agent 状态未上报" dataSet={{ subagents: "unavailable" }}>子 Agent —</Text>
               </View>
             </View>
 
@@ -1792,16 +1647,17 @@ export function ConversationStream({
               />
             )}
 
+            <View style={fileContent === null ? styles.timelineRegion : [styles.timelineRegion, styles.hidden]}
+              dataSet={{ conversationRegion: "timeline" }}>
             <ScrollView
               ref={assignScrollRef}
-              style={fileContent === null ? styles.columnScroll : [styles.columnScroll, styles.hidden]}
+              style={[styles.columnScroll, webStyle({ overflowAnchor: "none", scrollbarGutter: "stable", scrollBehavior: "auto" })]}
               contentContainerStyle={styles.timelineScrollBody}
               dataSet={{
                 conversationScroll: "timeline",
                 scrollFollow: String(following),
                 scrollUnseen: String(unseen),
               }}
-              onScroll={handleTimelineScroll}
               onContentSizeChange={handleContentSizeChange}
               scrollEventThrottle={32}
             >
@@ -1828,11 +1684,6 @@ export function ConversationStream({
               </Text>
             )}
 
-            {model.timeline.windowLoading !== true ? null : (
-              <Text role="status" style={styles.historyNotice} dataSet={{ timelineWindowLoading: "true" }}>
-                正在补齐这段对话的消息和工具记录…
-              </Text>
-            )}
             <ConversationTimeline
               entries={model.timeline.entries}
               diagnosticsMode={diagnosticsMode}
@@ -1857,6 +1708,26 @@ export function ConversationStream({
               onFilePathPress={onFilePathPress}
             />
             </ScrollView>
+            {crossingFold === null || onToggleTimelineEntry === undefined ? null : (
+              <Pressable role="button" style={styles.foldShortcut}
+                accessibilityLabel={crossingFold.label}
+                dataSet={{ action: "collapse-crossing-fold", entryKey: crossingFold.key }}
+                onPress={() => {
+                  const host = scroller();
+                  const fold = host === null ? undefined : Array.from(host.querySelectorAll<HTMLElement>('[data-fold-entry]'))
+                    .find((node) => node.dataset['foldEntry'] === crossingFold.key);
+                  // 折叠横跨视口的长块后保留其标题，避免当前位置被夹到无关内容。
+                  const entry = fold?.closest<HTMLElement>('[data-timeline-key]');
+                  if (entry !== null && entry !== undefined && host !== null) {
+                    anchorRef.current = { key: entry.dataset['timelineKey'] ?? '', offset: 0 };
+                    followingRef.current = false;
+                    setFollowing(false);
+                  }
+                  onToggleTimelineEntry(crossingFold.key, false);
+                }}>
+                <Text style={styles.scrollPillText}>↑ {crossingFold.label}</Text>
+              </Pressable>
+            )}
 
             {/* 上读时的新内容/回到底部入口：不自动改变滚动位置，只有用户主动点它才恢复跟随。 */}
             {following || fileContent !== null ? null : (
@@ -1872,23 +1743,8 @@ export function ConversationStream({
               </Pressable>
             )}
 
-            {/* 没有用户输入、或全部用户输入都在视口内时**不**呈现（spec 的两条场景）。
-                放在滚动容器**之后**：`position: fixed` 的包含块必须是视口——RNW 的 `ScrollView`
-                自带 `transform` 与 `overflow`，放进里面会把它变成随内容滚动、被裁切的定位容器。 */}
-            {jump === null || fileContent !== null ? null : (
-              <Pressable
-                role="button"
-                style={styles.jumpPill}
-                dataSet={{ jumpPill: jump.direction, jumpRemaining: String(jump.remaining) }}
-                onPress={jumpToUserInput}
-              >
-                <Text style={styles.jumpPillText}>
-                  {jump.direction === "up"
-                    ? `↑ 跳到你最近的输入（上面还有 ${String(jump.remaining)} 条）`
-                    : `↓ 跳到你的下一条输入（下面还有 ${String(jump.remaining)} 条）`}
-                </Text>
-              </Pressable>
-            )}
+            {/* 输入跳转和回到底部共用对话区的定位边界，不参与正文滚动。 */}
+            </View>
 
             {/* 输入区吸在中栏底部：时间线独立滚动时它不跟着走（宽屏与窄屏同一份结构）。
                 查看文件时它仍在 DOM（草稿与输入焦点不丢），只是不占主体。 */}
@@ -1974,13 +1830,7 @@ export function ConversationStream({
         </View>
 
         {/* 跳转后的短暂高亮：目标条目的坐标取自它自己的视口矩形，本组件不为它加样式。 */}
-        {flash === null ? null : (
-          <View
-            pointerEvents="none"
-            style={[styles.flashRing, { top: flash.top, left: flash.left, width: flash.width, height: flash.height }]}
-            dataSet={{ jumpFlash: flash.messageId }}
-          />
-        )}
+
       </View>
     </View>
   );

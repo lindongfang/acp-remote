@@ -410,8 +410,8 @@ describe("对话页正文：历史条目与实时事件同一套呈现（重开�
   });
 });
 
-describe("会话头与 Agent 胶囊（同一份连接覆盖层）", () => {
-  it("覆盖层缺席时逐个呈现标识与「状态未知」，MUST NOT 写成已断开", () => {
+describe("会话头与子 Agent 数据边界", () => {
+  it("节点 Agent 目录不能冒充会话子 Agent，缺少生命周期时明确未上报", () => {
     const { store } = filledStore("running");
     const html = renderPage(pageOf(store), { hostPanel: store.hostPanel() });
 
@@ -419,29 +419,13 @@ describe("会话头与 Agent 胶囊（同一份连接覆盖层）", () => {
     expect(html).toContain('data-session-title="true"');
     expect(html).toContain("data-session-state=");
     expect(html).toContain('data-session-agent="Claude"');
-    // 胶囊的弹层内容**始终在 DOM**（收起时只 `display: none`），因此静置状态就断言得到。
-    expect(html).toContain('data-agent-chip="agents"');
-    expect(html).toContain('data-agent-popover="closed"');
-    expect(html).toContain('data-agent-popover-title="本会话涉及的 Agent"');
-    expect(html).toContain("本会话涉及的 Agent");
-    // 覆盖层缺席 = 没有任何 Agent 处于连接态：胶囊圆点取空闲色（不冒充运行中）。
-    expect(html).toContain('data-agent-chip-dot="idle"');
-    expect(html.match(/data-agent-row-dot="unknown"/g) ?? []).toHaveLength(2);
-    expect(html).toContain('data-agent-row="codex-a"');
-    expect(html).toContain('data-agent-row="codex-b"');
-    expect(html).toContain('data-agent-row-id="codex-a"');
-    expect(html).toContain('data-agent-row-connection="状态未知"');
-    expect(html).toContain("状态未知");
-    // 反例：把「覆盖层缺席」写成「已断开」→ 下面两条会红（判定看的是属性取值，不是文案子串）。
-    expect(html).not.toContain('data-agent-connection="disconnected"');
-    // 两个 Agent（`codex-a` / `codex-b`）各一行，两行的连接状态都是「未知」。
-    expect(html.match(/data-agent-connection="unknown"/g) ?? []).toHaveLength(2);
-    // 名单来源必须说明清楚（连接事件，不是静态配置）。
-    expect(html).toContain('data-agent-chip-source="connection-events"');
-    expect(html).toContain("连接事件");
+    // 整台节点有两个 Agent，不意味着当前会话有两个存活子 Agent。
+    expect(html).toContain('data-subagents="unavailable"');
+    expect(html).not.toContain('data-agent-chip="agents"');
+    expect(html).not.toContain('data-agent-row="codex-a"');
   });
 
-  it("会话头是单行：标题、状态胶囊、Agent 名、弹性空白、Agent 胶囊依次排列", () => {
+  it("会话头是单行：标题、状态、Agent 名和子 Agent 槽位依次排列", () => {
     const fixture = filledStore("running");
     const html = renderPage(pageOf(fixture.store), { hostPanel: fixture.store.hostPanel() });
     const header = sliceBetween(html, 'data-session-header="', 'data-conversation-scroll="timeline"');
@@ -450,11 +434,11 @@ describe("会话头与 Agent 胶囊（同一份连接覆盖层）", () => {
     expect(header).toContain('data-session-title="true"');
     expect(header).toContain('data-session-state="running"');
     expect(header).toContain('data-session-agent="Claude"');
-    expect(header).toContain('data-agent-chip="agents"');
+    expect(header).toContain('data-subagents="unavailable"');
     // 顺序：标题 → 状态胶囊 → Agent 名 → Agent 胶囊（弹性空白把它们推成左右两段）。
     expect(header.indexOf('data-session-title="true"')).toBeLessThan(header.indexOf('data-session-state="running"'));
     expect(header.indexOf('data-session-state="running"')).toBeLessThan(header.indexOf('data-session-agent="Claude"'));
-    expect(header.indexOf('data-session-agent="Claude"')).toBeLessThan(header.indexOf('data-agent-chip="agents"'));
+    expect(header.indexOf('data-session-agent="Claude"')).toBeLessThan(header.indexOf('data-subagents="unavailable"'));
   });
 
   it("状态胶囊带字形：运行中 ●、待处理 ⏸、空闲 ○；三态词表之外没有旧七态", () => {
@@ -699,7 +683,8 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     const { store } = filledStore("running");
     applyUsage(store, "188000", "200000");
     const html = renderPage(pageOf(store));
-    const bar = sliceBetween(html, 'data-composer-bar="true"', 'data-composer-input');
+    expect(html.indexOf('data-composer-input')).toBeLessThan(html.indexOf('data-composer-bar="true"'));
+    const bar = html.slice(html.indexOf('data-composer-bar="true"'));
 
     expect(bar).toContain('data-context-state="known"');
     expect(bar).toContain('data-settings="true"');
@@ -728,8 +713,7 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
     // 未上报不是禁用理由：会话能力与输入区都不受影响。进行中的输入区可编辑但发送禁用，
     // 同时呈现停止（spec「执行中可编辑但不可发送」；发送入口在、但闸门关着）。
     expect(html).toContain('data-can-send="true"');
-    expect(html).toContain('data-action="submit-prompt"');
-    expect(html).toContain('data-submit-enabled="false"');
+    expect(html).not.toContain('data-action="submit-prompt"');
     expect(html).toContain('data-action="cancel-turn"');
   });
 
@@ -842,9 +826,7 @@ describe("输入区组合：上下文胶囊、告警条、模型与模式胶囊"
 
     expect(html).not.toContain('data-composer-hint="true"');
     expect(html).not.toContain('data-composer-keys="enter-submits"');
-    expect(html).not.toContain("Enter");
-    expect(html).not.toContain("Shift");
-    expect(html).not.toContain("换行");
+    expect(html).toContain('placeholder="输入消息，Enter 发送，Shift+Enter 换行"');
     expect(html).not.toContain('data-attachment-notice="true"');
     expect(html).toContain("添加文件不可用：");
   });
