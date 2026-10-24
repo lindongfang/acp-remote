@@ -348,8 +348,8 @@ function checkImplementedPorts(contract) {
 
 function checkImplementedDdl(contract) {
   const text = section(contract, "## 7.");
-  if (!text.includes("v17 = 17") || !text.includes("当前 **v17 = 17**")) {
-    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v17 = 17 / owned_schema_version 17`);
+  if (!text.includes("v18 = 18") || !text.includes("当前 **v18 = 18**")) {
+    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v18 = 18 / owned_schema_version 18`);
   }
   for (const table of [
     "owned_attachment_transfer",
@@ -399,8 +399,8 @@ function checkImplementedDdl(contract) {
   }
   const migrate = readText(migratePath, migrateLabel) ?? "";
   for (const constant of [
-    "FILE_FORMAT_VERSION: i64 = 17",
-    "OWNED_SCHEMA_VERSION: i64 = 17",
+    "FILE_FORMAT_VERSION: i64 = 18",
+    "OWNED_SCHEMA_VERSION: i64 = 18",
   ]) {
     if (!migrate.includes(constant)) {
       errors.push(`contract drift: ${migrateLabel} 缺少 v17 常量 ${constant}`);

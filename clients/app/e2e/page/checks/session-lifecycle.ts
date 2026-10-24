@@ -118,8 +118,8 @@ const checks: readonly Check[] = [
             "恢复中发送必须禁用（不能把 active 标签当成可发送）",
           );
           expectThat(
-            textOf(query(container, "[data-submit-unavailable]")).includes("正在恢复"),
-            "恢复中必须在输入区给出明确原因",
+            query(container, "[data-submit-unavailable]") === null,
+            "后台恢复不在输入区显示提示",
           );
           expectEqual(query(container, "[data-session-activation]"), null, "会话头不再渲染激活提示");
 

@@ -76,6 +76,29 @@ function pageOf(store: ClientStore): ConversationPageModel {
   return model;
 }
 
+describe("提交反馈不产生短暂附加行", () => {
+  it("受理后的本地用户消息保留正文，不再附加已受理标签", () => {
+    const { store: client } = interactionStore();
+    const submitted = client.submitPrompt(ONLINE_SESSION_ID, "检查页面稳定性");
+    if (!submitted.ok) throw new Error(submitted.reason);
+    const pendingHtml = renderPage(pageOf(client));
+    expect(pendingHtml).toContain("检查页面稳定性");
+    expect(pendingHtml).not.toContain('data-local-prompt-phase="submitted"');
+    expect(pendingHtml).not.toContain('data-process-row="submitting"');
+    client.apply({ kind: "command_result", result: {
+      protocolVersion: 1, type: "command.result",
+      messageId: "bbbbbbbb-1111-4111-8111-0000000009a1",
+      connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637", connectionSequence: "1",
+      body: { requestId: submitted.requestId, command: "session.prompt", status: "accepted",
+        acceptedAt: "2026-10-01T00:00:02.000Z", terminalEventId: null,
+        result: { turnId: "stable-turn" }, error: null },
+    } });
+    const html = renderPage(pageOf(client));
+    expect(html).toContain("检查页面稳定性");
+    expect(html).not.toContain('data-local-prompt-phase="accepted"');
+  });
+});
+
 /** 一个已在线、协商到结构化历史的仓库。 */
 function store(): StoreFixture {
   return onlineStore({
@@ -440,6 +463,51 @@ describe("对话时间线：正文按不可信输入渲染", () => {
 });
 
 describe("对话时间线：条目形态与原型对齐", () => {
+  it("每条用户输入与每组连续 Agent 输出各显示一次署名和北京时间", () => {
+    const { store: client, gateway } = store();
+    client.loadSession(ONLINE_SESSION_ID);
+    client.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: ONLINE_SESSION_ID,
+        messages: [
+          messageItem({ id: "u1", createdAt: "2026-10-01T23:00:00Z", role: "user" }),
+          messageItem({ id: "u2", createdAt: "2026-10-01T23:05:00Z", role: "user" }),
+          messageItem({ id: "u3", createdAt: "2026-10-01T23:10:01Z", role: "user" }),
+          messageItem({ id: "a1", createdAt: "2026-10-01T23:10:02Z", role: "agent" }),
+          messageItem({ id: "a2", createdAt: "2026-10-01T23:10:03Z", role: "agent" }),
+        ],
+      }),
+    });
+    const html = renderPage(pageOf(client));
+    expect(html.match(/data-timeline-header="true"/g)).toHaveLength(4);
+    expect(html.match(/data-message-who="user"/g)).toHaveLength(3);
+    expect(html.match(/data-message-who="agent"/g)).toHaveLength(1);
+    expect(html.match(/data-timeline-time=/g)).toHaveLength(4);
+    expect(html).toContain("07:00");
+    expect(html).toContain("07:10");
+    expect(html).toContain('data-timeline-time="2026-10-01T23:05:00Z"');
+    expect(html.indexOf('data-timeline-header="true"')).toBeLessThan(html.indexOf('data-message-id="u1"'));
+  });
+
+  it("等待响应通过回复侧光标呈现，不占用文字提示行", () => {
+    const { store: client } = store();
+    applyEvent(client, {
+      eventType: "turn.started",
+      eventId: "dddddddd-0000-4000-8000-000000000296",
+      globalSequence: "36",
+      view: { turnId: "turn-wait", state: "running" },
+    });
+    const html = renderPage(pageOf(client));
+    expect(html).toContain('data-response-activity="true"');
+    expect(html).toContain('data-response-cursor="true"');
+    expect(html).toContain('data-awaiting-header="true"');
+    expect(html.indexOf('data-awaiting-header="true"')).toBeLessThan(html.indexOf('data-response-cursor="true"'));
+    expect(html).toContain('aria-label="等待响应"');
+    expect(html).not.toContain('data-process-label="true"');
+  });
+
   it("用户消息与 Agent 气泡是两档样式（靠右的用户气泡 vs 另一个气泡档）", () => {
     const { store: client, gateway } = store();
     client.loadSession(ONLINE_SESSION_ID);
@@ -1274,5 +1342,40 @@ describe("刷新交互入口的 hook 顺序（同一卡片重渲染）", () => {
 
     expect(html).toContain('data-action="refresh-interactions"');
     expect(html).toContain('data-refresh-interactions-reason="request_version_unknown"');
+  });
+});
+
+
+describe("权威顺序与历史说明", () => {
+  it("按序号呈现思考、工具、回复且连续 Agent 输出只显示一次时间", () => {
+    const { store: client, gateway } = store();
+    client.loadSession(ONLINE_SESSION_ID);
+    client.apply({ kind: "command_result", result: readResult({ requestId: lastDispatch(gateway).body.requestId,
+      messages: [
+        { ...messageItem({ id: "u-order", role: "user", createdAt: "2026-10-01T00:00:00.000Z" }), sequence: "1" },
+        { ...messageItem({ id: "z-thought-order", role: "agent", text: "先思考", createdAt: "2026-10-01T00:00:02.000Z" }), channel: "thought", sequence: "2" },
+        { ...messageItem({ id: "a-reply-order", role: "agent", text: "再回复", createdAt: "2026-09-01T00:00:00.000Z" }), sequence: "4" },
+      ],
+      history: [historyItem({ eventId: "order-tool", eventType: "tool.call.started", sessionSequence: "3", view: { toolCallId: "tool-order", turnId: "turn-order", title: "中间工具", state: "in_progress" } })],
+      historyHasEarlier: false,
+    }) });
+    const html = renderPage(pageOf(client));
+    expect(html.indexOf('data-message-id="z-thought-order"')).toBeLessThan(html.indexOf('data-timeline-card="tool-call"'));
+    expect(html.indexOf('data-timeline-card="tool-call"')).toBeLessThan(html.indexOf('data-message-id="a-reply-order"'));
+    expect(html.match(/data-timeline-time=/g)).toHaveLength(2);
+    expect(html).not.toContain('data-timeline-order-incomplete="true"');
+  });
+
+  it("缺少历史序号时保留正文并明确提示无法完整还原顺序", () => {
+    const { store: client, gateway } = store();
+    client.loadSession(ONLINE_SESSION_ID);
+    client.apply({ kind: "command_result", result: readResult({ requestId: lastDispatch(gateway).body.requestId,
+      messages: [messageItem({ id: "legacy-order", role: "agent", text: "旧正文仍保留", createdAt: "2026-10-01T00:00:00.000Z" })],
+      history: [], historyHasEarlier: false,
+    }) });
+    const html = renderPage(pageOf(client));
+    expect(html).toContain('data-timeline-order-incomplete="true"');
+    expect(html).toContain("部分旧历史的顺序无法完整还原");
+    expect(html).toContain("旧正文仍保留");
   });
 });

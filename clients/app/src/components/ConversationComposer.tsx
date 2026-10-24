@@ -75,6 +75,7 @@ import {
 } from "./theme";
 
 export interface ConversationComposerProps {
+  readonly silentRecovery?: boolean;
   readonly input: ConversationInputModel;
   /** 上下文用量：胶囊 + 明细；缺省时不呈现上下文条。 */
   readonly usage?: ContextUsageView | null;
@@ -439,31 +440,8 @@ function SubmissionLine({ submission }: { readonly submission: SubmissionPresent
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
-  if (submission.kind === "none") return null;
-  if (submission.kind === "pending_confirmation") {
-    return (
-      <Text style={styles.pending} dataSet={{ submission: "pending_confirmation", submissionRequestId: submission.requestId }}>
-        已提交给服务端，等待终态确认（尚未确认）。
-      </Text>
-    );
-  }
-  if (submission.kind === "accepted") {
-    return (
-      <Text
-        style={styles.note}
-        dataSet={{ submission: "accepted", ...(submission.acceptedAt === null ? {} : { submissionAcceptedAt: submission.acceptedAt }) }}
-      >
-        服务端已接受。
-      </Text>
-    );
-  }
-  if (submission.kind === "completed") {
-    return (
-      <Text style={styles.ok} dataSet={{ submission: "completed" }}>
-        服务端已处理完成。
-      </Text>
-    );
-  }
+  // 正常提交只通过正文回显和按钮状态反馈，不新增会随应答消失的文字行。
+  if (submission.kind !== "failed" && submission.kind !== "uncertain") return null;
   if (submission.kind === "uncertain") {
     return (
       <Text role="alert" style={styles.alert} dataSet={{ submission: "uncertain" }}>
@@ -610,6 +588,7 @@ function AttachmentList({
 
 /** 输入区。 */
 export function ConversationComposer({
+  silentRecovery = false,
   input,
   usage,
   settings,
@@ -782,13 +761,15 @@ export function ConversationComposer({
 
       </div>
 
-      {input.canSubmit ? null : (
+      {input.canSubmit || input.disabledReason === null ||
+        (silentRecovery && input.blockedBy === "session_not_ready") ||
+        input.blockedBy === "turn_in_progress" || input.blockedBy === "submission_in_flight" ? null : (
         <Text style={styles.note} dataSet={{ submitUnavailable: "true" }}>
           {input.disabledReason ?? "当前不能提交。"}
         </Text>
       )}
 
-      {["failed", "uncertain", "pending_confirmation"].includes(input.submission.kind) ? <SubmissionLine submission={input.submission} /> : null}
+      {["failed", "uncertain"].includes(input.submission.kind) ? <SubmissionLine submission={input.submission} /> : null}
       {/* 没有可取消轮次时不占一行：原型也没有这条静息文案，窄高度下它会挤掉时间线。 */}
       {input.cancel.kind === "requested" || (input.cancel.kind === "available" && input.cancel.failure !== null) ? <CancelLine cancel={input.cancel} /> : null}
 

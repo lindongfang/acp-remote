@@ -178,6 +178,7 @@ async fn interaction_creation_links_the_request_event() {
     let view = store.read_view().await.expect("read view");
     let page = view
         .read_session(acp_core::ports::HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: acp_core::ports::HistoryInclude {
                 messages: false,

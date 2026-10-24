@@ -899,6 +899,8 @@ impl SqliteStore {
             }
         }
 
+        crate::session_store::pin_message_position(tx, &write.session, &write.user_message_id)
+            .await?;
         let row = load_row(tx, &write.session)
             .await?
             .ok_or(PortError::Corrupt(

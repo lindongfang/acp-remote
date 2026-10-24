@@ -20,9 +20,9 @@ use crate::error::StorageError;
 /// `owned_user_input`；v16 的 `owned_first_submission` 与 `owned_message.channel = 'user'`、
 /// v15 的 `owned_session.custom_title`、v14 删除全部 `imported_*` 远程资源表、
 /// v13 的三态 `owned_session`、v12 的分块附件传输/清单、消息通道与媒体引用保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 17;
+pub const FILE_FORMAT_VERSION: i64 = 18;
 /// §7.2：`meta.owned_schema_version` 的已知版本（v17 新增 `owned_user_input`）。
-pub const OWNED_SCHEMA_VERSION: i64 = 17;
+pub const OWNED_SCHEMA_VERSION: i64 = 18;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -257,9 +257,20 @@ CREATE TABLE IF NOT EXISTS owned_message (
   partial_reason    TEXT,
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL,
+  first_sequence    INTEGER CHECK(first_sequence > 0),
+  first_origin_sequence INTEGER CHECK(first_origin_sequence > 0),
   CHECK (state <> 'completed' OR partial_reason IS NULL)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS owned_message_session ON owned_message(session_id, created_at, message_id);
+
+CREATE TABLE IF NOT EXISTS owned_timeline_anchor (
+  session_id TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  first_sequence INTEGER NOT NULL CHECK(first_sequence > 0),
+  first_origin_sequence INTEGER CHECK(first_origin_sequence > 0),
+  PRIMARY KEY(session_id, entity_kind, entity_id)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS owned_media_ref (
   message_id        TEXT NOT NULL REFERENCES owned_message(message_id) ON DELETE CASCADE,
@@ -1707,6 +1718,9 @@ async fn migrate_locked(
         });
     }
 
+    if new_database {
+        v18_upgrade(&mut tx).await?;
+    }
     if !new_database && file_version < FILE_FORMAT_VERSION {
         // v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8（§7.2 的连续升级）：两张审计表的 CHECK 扩宽、`imported_import`
         // 的拆分、`owned_event.origin_kind` 的扩宽与 `owned_device` 的删列必须在同一个事务里完成，否则会留下
@@ -1779,6 +1793,9 @@ async fn migrate_locked(
         }
         if file_version < 17 {
             v17_upgrade(&mut tx).await?;
+        }
+        if file_version < 18 {
+            v18_upgrade(&mut tx).await?;
         }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;
@@ -2123,4 +2140,47 @@ pub mod window {
             );
         }
     }
+}
+
+/// Persist the first event positions independently of expiring delta rows.
+async fn v18_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
+    let has_position: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('owned_message') WHERE name='first_sequence'",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if has_position == 0 {
+        sqlx::raw_sql("ALTER TABLE owned_message ADD COLUMN first_sequence INTEGER CHECK(first_sequence > 0); ALTER TABLE owned_message ADD COLUMN first_origin_sequence INTEGER CHECK(first_origin_sequence > 0);").execute(&mut **tx).await?;
+    }
+    sqlx::raw_sql("CREATE INDEX owned_message_order ON owned_message(session_id, first_sequence, created_at, message_id);
+CREATE INDEX owned_message_origin_order ON owned_message(session_id, first_origin_sequence, created_at, message_id);").execute(&mut **tx).await?;
+    sqlx::raw_sql("INSERT OR IGNORE INTO owned_timeline_anchor SELECT session_id, (CASE WHEN event_type LIKE 'tool.call.%' THEN 'tool' WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN 'interaction' WHEN event_type LIKE 'turn.%' THEN 'turn' WHEN event_type='session.plan.changed' THEN 'plan' END), (CASE WHEN event_type LIKE 'tool.call.%' THEN json_extract(payload_json,'$.toolCallId') WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN json_extract(payload_json,'$.interactionId') WHEN event_type LIKE 'turn.%' THEN COALESCE(json_extract(payload_json,'$.turnId'),turn_id) WHEN event_type='session.plan.changed' THEN 'plan' END), session_sequence, origin_sequence FROM owned_event
+ WHERE session_id IS NOT NULL AND session_sequence IS NOT NULL AND (CASE WHEN event_type LIKE 'tool.call.%' THEN json_extract(payload_json,'$.toolCallId') WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN json_extract(payload_json,'$.interactionId') WHEN event_type LIKE 'turn.%' THEN COALESCE(json_extract(payload_json,'$.turnId'),turn_id) WHEN event_type='session.plan.changed' THEN 'plan' END) IS NOT NULL
+ AND event_type IN ('tool.call.started','permission.requested','elicitation.requested','turn.started')
+ ORDER BY session_sequence").execute(&mut **tx).await?;
+    // Completion receipts cannot prove original content positions. Recover only complete,
+    // uninterrupted delta ranges; keep ambiguous legacy content explicitly unordered.
+    sqlx::raw_sql("WITH candidates AS (
+ SELECT m.message_id, MIN(e.session_sequence) AS first_seq, MIN(e.origin_sequence) AS first_origin,
+ MAX(e.session_sequence) AS last_seq, COUNT(*) AS n,
+ MIN(CAST(json_extract(e.payload_json, '$.deltaIndex') AS INTEGER)) AS lo,
+ MAX(CAST(json_extract(e.payload_json, '$.deltaIndex') AS INTEGER)) AS hi
+ FROM owned_message m JOIN owned_event e ON e.session_id=m.session_id
+ AND json_extract(e.payload_json, '$.messageId')=m.message_id
+ AND e.event_type IN ('agent.message.delta','agent.thought.delta','user.message.delta')
+ GROUP BY m.message_id
+ HAVING lo=0 AND hi=n-1 AND COUNT(DISTINCT json_extract(e.payload_json, '$.deltaIndex'))=n
+ ), proven AS (SELECT c.* FROM candidates c JOIN owned_message m ON m.message_id=c.message_id
+ WHERE NOT EXISTS (SELECT 1 FROM json_each(m.content_json) WHERE json_extract(value,'$.type') <> 'text')
+ AND NOT EXISTS (SELECT 1 FROM owned_event e WHERE e.session_id=m.session_id AND json_extract(e.payload_json,'$.messageId')=m.message_id AND e.event_type IN ('agent.message.delta','agent.thought.delta','user.message.delta') AND json_extract(e.payload_json,'$.block') IS NOT NULL)
+ AND (SELECT group_concat(part,'') FROM (SELECT json_extract(e.payload_json,'$.text') AS part FROM owned_event e WHERE e.session_id=m.session_id AND json_extract(e.payload_json,'$.messageId')=m.message_id AND e.event_type IN ('agent.message.delta','agent.thought.delta','user.message.delta') ORDER BY e.session_sequence))
+ = (SELECT group_concat(json_extract(value,'$.text'),'') FROM json_each(m.content_json))
+ AND NOT EXISTS (SELECT 1 FROM owned_event x WHERE x.session_id=m.session_id
+ AND x.session_sequence BETWEEN c.first_seq AND c.last_seq
+ AND (json_extract(x.payload_json, '$.messageId') IS NOT c.message_id
+ OR x.event_type NOT IN ('agent.message.delta','agent.thought.delta','user.message.delta'))))
+ UPDATE owned_message SET first_sequence=(SELECT first_seq FROM proven WHERE proven.message_id=owned_message.message_id),
+ first_origin_sequence=(SELECT first_origin FROM proven WHERE proven.message_id=owned_message.message_id)
+ WHERE message_id IN (SELECT message_id FROM proven);").execute(&mut **tx).await?;
+    Ok(())
 }

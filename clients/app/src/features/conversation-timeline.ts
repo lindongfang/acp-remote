@@ -16,8 +16,8 @@
  *
  * ## 排序
  *
- * 以 `createdAt` 为主键、`sequence`（会话内序号）为次键；两者都相同则保持构造次序
- * （`Array.prototype.sort` 稳定）。消息没有会话内序号，因此同一毫秒里排在结构化条目之前。
+ * 所有已知位置按 Owner 固定的同域序号排序，与时间戳无关；旧历史缺少序号时独立前置。
+ * 相邻连续消息片段由后端分配标识，本层不跨工具或不同消息重新合并。
  */
 
 import type { MessageView } from "../domain/conversation";
@@ -54,6 +54,7 @@ export interface VolatileMessageState {
   readonly turnId: string | null;
   /** 首条增量的时间：它决定易失条目在时间线上的位置。 */
   readonly createdAt: string;
+  readonly sequence?: string;
   readonly deltas: ReadonlyMap<string, string>;
   readonly completed: boolean;
   /** 增量里携带的媒体/资源块（按到达顺序）。 */
@@ -152,6 +153,7 @@ export function appendDelta(
     readonly deltaIndex: string;
     readonly text: string;
     readonly createdAt: string;
+    readonly sequence?: string;
     readonly mediaBlocks?: readonly MediaBlockView[];
   },
 ): VolatileMessageState {
@@ -162,6 +164,7 @@ export function appendDelta(
       channel: input.channel,
       turnId: input.turnId,
       createdAt: input.createdAt,
+      ...(input.sequence === undefined ? {} : { sequence: input.sequence }),
       deltas: new Map([[input.deltaIndex, input.text]]),
       completed: false,
       mediaBlocks: input.mediaBlocks ?? [],
@@ -173,6 +176,8 @@ export function appendDelta(
   deltas.set(input.deltaIndex, input.text);
   return {
     ...state,
+    ...(input.sequence !== undefined && (state.sequence === undefined || BigInt(input.sequence) < BigInt(state.sequence))
+      ? { sequence: input.sequence, createdAt: input.createdAt } : {}),
     deltas,
     mediaBlocks:
       input.mediaBlocks === undefined || input.mediaBlocks.length === 0
@@ -260,7 +265,7 @@ function degradedEntry(record: StructuredRecord, unusableView: boolean): Degrade
     kind: "degraded",
     key: `event:${record.eventId}`,
     createdAt: record.createdAt,
-    sequence: record.sessionSequence ?? record.globalSequence,
+    sequence: record.sessionSequence,
     degraded: buildDegradedRecordModel(record, { unusableView }),
   };
 }
@@ -328,7 +333,7 @@ export function buildTimeline(input: {
       kind: "message",
       key: `message:${message.id}`,
       createdAt: message.createdAt,
-      sequence: null,
+      sequence: message.sequence ?? null,
       channel: message.role === "user" ? "user" : message.channel === "thought" ? "thought" : "agent",
       message: {
         ...message,
@@ -350,7 +355,7 @@ export function buildTimeline(input: {
       kind: "message",
       key: `message:${tail.messageId}`,
       createdAt: tail.createdAt,
-      sequence: null,
+      sequence: tail.sequence ?? null,
       channel: tail.channel,
       message: {
         id: tail.messageId,
@@ -460,9 +465,21 @@ export function buildTimeline(input: {
   for (const interaction of input.interactions) {
     if (shownInteractions.has(interaction.interactionId)) continue;
     entries.push({ kind: "pending_interaction", key: `pending:${interaction.interactionId}`,
-      createdAt: interaction.requestedAt, sequence: null, interaction });
+      createdAt: interaction.requestedAt, sequence: interaction.sequence ?? null, interaction });
   }
-  return entries.sort((a, b) => compareTimelinePosition(a, b));
+  // Provisional local input is inserted separately: its clock must never change
+  // the relative order of two authoritative entries (a mixed comparator can cycle).
+  const local = entries.filter(entry => entry.kind === "message" && entry.local != null);
+  const ordered = entries.filter(entry => !(entry.kind === "message" && entry.local != null))
+    .sort(compareTimelinePosition);
+  for (const entry of local) {
+    const turnId = entry.kind === "message" ? entry.message.turnId : null;
+    const related = turnId === null ? -1 : ordered.findIndex(candidate => entryTurnId(candidate) === turnId);
+    const provisional = related >= 0 ? related : ordered.findIndex(candidate =>
+      candidate.kind === "message" && candidate.volatile && candidate.createdAt >= entry.createdAt);
+    ordered.splice(provisional < 0 ? ordered.length : provisional, 0, entry);
+  }
+  return ordered;
 }
 
 /** 一条改动的诊断入口数据：原文按不可信文本呈现，**不**解析成结构化差异（D8）。 */

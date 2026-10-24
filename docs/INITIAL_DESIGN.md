@@ -1,5 +1,7 @@
 # ACP Remote 初始设计文档
 
+> 对话发生顺序（2026-10-24）：同一会话以 Agent 实际写出 ACP 内容的先后为准，Owner 保序接收并持久固定；思考、工具调用与回复可以交替，不按类型重排，也不跨其他可见条目合并文字。时间只是辅助显示。实时、刷新、翻页、重连与远程回源须保持一致，Access 持久化边界不变。旧历史不能证明的部分保留并明确说明；详见 [ADR-0015](adr/0015-agent-output-order.md) 和 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。
+
 文件列表、文件预览/下载与 Git 状态/差异属于目录，不依赖会话保存、首条消息或 Agent 生命周期。客户端进入会话界面即可读取选定本机目录；目录查询不创建目录、会话或事件。目标与兼容语义见 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。
 
 > 目录选择器补充（2026-10-18）：Windows 默认浏览不展示隐藏或系统属性目录；PWA 按名称忽略大小写、数字自然升序显示收到的目录。这些规则仅影响浏览与显示，不新增创建路径授权限制。实现边界见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.1。

@@ -397,6 +397,7 @@ fn a_restart_settles_an_accepted_prompt_as_uncertain_without_redispatch() {
         let view = restarted.sessions.read_view().await.expect("读视图");
         let page = view
             .read_session(acp_core::ports::HistoryQuery {
+                origin_order: false,
                 session: session_key.clone(),
                 include: acp_core::ports::HistoryInclude {
                     messages: false,

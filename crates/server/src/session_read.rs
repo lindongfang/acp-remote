@@ -68,6 +68,8 @@ const FILE_DIFF_VIEW_KEYS: [&str; 2] = ["diffLines", "diffUnavailable"];
 /// 调用方已经完成的 feature 门控与分页参数。
 #[derive(Debug, Clone)]
 pub(crate) struct SessionReadRequest {
+    /// Node Link 使用 Owner 来源域；本机 Sync 使用会话域。
+    pub origin_order: bool,
     pub session: SessionId,
     pub include: HistoryInclude,
     pub before_history: Option<CoreSequence>,
@@ -291,6 +293,7 @@ pub(crate) async fn read_session<S: SessionReadSource>(
         limit: ReplayLimit::new(page_limit),
     };
     let history_query = HistoryQuery {
+        origin_order: request.origin_order,
         session: session_id.clone(),
         include,
         after: None,
@@ -346,6 +349,7 @@ pub(crate) async fn read_session<S: SessionReadSource>(
     let mut owned_has_earlier = batch.messages_has_earlier;
     let cursor = before_messages.as_ref().map(|cursor| {
         (
+            cursor.sequence,
             cursor.created_at.as_str().to_owned(),
             cursor.message_id.as_str().to_owned(),
         )
@@ -360,7 +364,13 @@ pub(crate) async fn read_session<S: SessionReadSource>(
             fetched += owned_messages.len();
             let page_messages = owned_messages
                 .iter()
-                .map(|record| Message::from_owned_record(record, typed_media))
+                .map(|record| {
+                    let mut message = Message::from_owned_record(record, typed_media)?;
+                    if request.origin_order {
+                        message.sequence = record.first_origin_sequence;
+                    }
+                    Some(message)
+                })
                 .collect::<Option<Vec<_>>>()
                 .ok_or(SessionReadFault::Internal(
                     "a persisted message cannot be projected",
@@ -390,15 +400,23 @@ pub(crate) async fn read_session<S: SessionReadSource>(
                 ));
             };
             let before_messages = Some(MessageCursor {
-                created_at: CoreTimestamp::new(oldest.0.as_str())
+                sequence: owned_messages.first().and_then(|record| {
+                    if request.origin_order {
+                        record.first_origin_sequence
+                    } else {
+                        record.first_sequence
+                    }
+                }),
+                created_at: CoreTimestamp::new(oldest.1.as_str())
                     .map_err(|_| SessionReadFault::Internal("a message cursor is invalid"))?,
-                message_id: MessageId::new(oldest.1.as_str())
+                message_id: MessageId::new(oldest.2.as_str())
                     .map_err(|_| SessionReadFault::Internal("a message cursor is invalid"))?,
             });
             batch = core
                 .read_session(
                     actor,
                     HistoryQuery {
+                        origin_order: request.origin_order,
                         session: session_id.clone(),
                         include: HistoryInclude {
                             messages: true,
@@ -425,9 +443,10 @@ pub(crate) async fn read_session<S: SessionReadSource>(
     // 「游标指向已按保留策略清理的区间」（显式 `CursorExpired`，不静默返回空页）。
     let cursor_expired = match (&cursor, page.messages.is_empty(), page.has_earlier) {
         (Some(cursor), true, false) => {
-            match earliest_message_key(core, actor, &session_id).await? {
+            match earliest_message_key(core, actor, &session_id, request.origin_order).await? {
                 Some(earliest) => {
-                    (cursor.0.as_str(), &cursor.1) < (earliest.0.as_str(), &earliest.1)
+                    (cursor.0, cursor.1.as_str(), &cursor.2)
+                        < (earliest.0, earliest.1.as_str(), &earliest.2)
                 }
                 None => true,
             }
@@ -466,7 +485,7 @@ pub(crate) async fn read_session<S: SessionReadSource>(
         Some(
             effective
                 .iter()
-                .map(wire_effective_interaction)
+                .map(|interaction| wire_effective_interaction(interaction, request.origin_order))
                 .collect::<Option<Vec<_>>>()
                 .ok_or(SessionReadFault::Internal(
                     "a pending interaction cannot be projected",
@@ -485,6 +504,7 @@ pub(crate) async fn read_session<S: SessionReadSource>(
                         request.negotiate_acp,
                         request.negotiate_file_diff,
                         typed_media,
+                        request.origin_order,
                     )
                 })
                 .collect::<Option<Vec<_>>>()
@@ -773,9 +793,14 @@ fn wire_history_item(
     negotiate_acp: bool,
     negotiate_file_diff: bool,
     negotiate_typed_media: bool,
+    origin_order: bool,
 ) -> Option<SnapshotItemHistory> {
     let event = &record.event;
-    let sequence = event.session_sequence.as_ref()?;
+    let sequence = if origin_order {
+        event.origin_sequence.as_ref()?
+    } else {
+        event.session_sequence.as_ref()?
+    };
     let view = RawObject::parse(record.payload.view.as_str()).ok()?;
     // `view` 是库里原文（`payload_json`）：未协商差异行时只在 `file.changed` 上去掉那两个键，其余字节
     // 原样（不解析、不重新序列化）。
@@ -868,6 +893,7 @@ fn wire_raw_acp(acp: Option<&CoreAcpRaw>) -> Option<Option<RawAcp>> {
 /// `image_ref` 去掉 `attachmentId`（与事件轨道的 `gate_typed_media` 同一套降级）。
 #[derive(Debug, Clone)]
 pub(crate) struct Message {
+    pub(crate) sequence: Option<CoreSequence>,
     pub(crate) message_id: Uuid,
     pub(crate) role: MessageRole,
     pub(crate) content: Vec<AgentContentBlock>,
@@ -911,6 +937,7 @@ impl Message {
             ),
         };
         Some(Self {
+            sequence: record.first_origin_sequence,
             message_id: Uuid::parse(record.message.as_str()).ok()?,
             role,
             content,
@@ -931,10 +958,13 @@ impl Message {
     /// 后者的投影失败是整页错误；用户块中**单个**不可表达的块降级为 `unsupported`，不让整页失败。
     pub(crate) fn from_owned_record(record: &MessageRecord, typed_media: bool) -> Option<Self> {
         if record.channel != CoreMessageChannel::User {
-            return Self::from_record(record, typed_media);
+            let mut message = Self::from_record(record, typed_media)?;
+            message.sequence = record.first_sequence;
+            return Some(message);
         }
         let content = project_user_content(record, typed_media);
         Some(Self {
+            sequence: record.first_sequence,
             message_id: Uuid::parse(record.message.as_str()).ok()?,
             role: MessageRole::User,
             content,
@@ -961,6 +991,9 @@ impl Message {
             Some(WireMessageState::Cancelled) => "cancelled",
         };
         Some(SnapshotItemMessage {
+            sequence: self
+                .sequence
+                .and_then(|sequence| decimal(&sequence.get().to_string())),
             message_id: self.message_id.clone(),
             session_id: session.clone(),
             role: self.role,
@@ -1003,6 +1036,7 @@ fn wire_partial(result: &CorePartialResult) -> WirePartialResult {
 /// core 的有效待处理交互 → wire 的 `effectiveInteraction`（§11.7）。
 fn wire_effective_interaction(
     interaction: &acp_core::model::EffectiveInteraction,
+    origin_order: bool,
 ) -> Option<WireEffectiveInteraction> {
     let kind = match interaction.kind {
         CoreInteractionKind::Permission => WireInteractionKind::Permission,
@@ -1024,6 +1058,12 @@ fn wire_effective_interaction(
         None => Nullable::null(),
     };
     Some(WireEffectiveInteraction {
+        sequence: (if origin_order {
+            interaction.first_origin_sequence
+        } else {
+            interaction.first_sequence
+        })
+        .and_then(|sequence| decimal(&sequence.get().to_string())),
         interaction_id: Uuid::parse(interaction.interaction.as_str()).ok()?,
         session_id: Uuid::parse(interaction.session.as_str()).ok()?,
         kind,
@@ -1054,10 +1094,13 @@ pub(crate) fn finish_message_page(
     mut messages: Vec<Message>,
     has_earlier_in_store: bool,
 ) -> MessagePage {
-    // `createdAt` 定宽（UTC 毫秒），字典序即时间序；同一时刻以 `messageId` 作稳定 tie-breaker。
+    // 未知旧历史独立置前；已知位置不受同毫秒或时钟回拨影响。
     messages.sort_by(|left, right| {
-        (left.created_at.as_str(), &left.message_id)
-            .cmp(&(right.created_at.as_str(), &right.message_id))
+        (left.sequence, left.created_at.as_str(), &left.message_id).cmp(&(
+            right.sequence,
+            right.created_at.as_str(),
+            &right.message_id,
+        ))
     });
     let mut start = messages.len();
     let mut users_in_page = 0_u32;
@@ -1091,15 +1134,16 @@ pub(crate) fn user_input_count(messages: &[Message]) -> u32 {
 }
 
 /// `owned_message` 行的排序键（与合并页的游标同一口径：`(createdAt, messageId)`，升序）。
-pub(crate) fn message_key(record: &MessageRecord) -> (String, String) {
+pub(crate) fn message_key(record: &MessageRecord) -> (Option<CoreSequence>, String, String) {
     (
+        record.first_sequence,
         record.created_at.as_str().to_owned(),
         record.message.as_str().to_owned(),
     )
 }
 
 /// 一页 `owned_message` 里最早一条的排序键（端口按 `(created_at, message_id)` 升序返回）。
-fn oldest_message(records: &[MessageRecord]) -> Option<(String, String)> {
+fn oldest_message(records: &[MessageRecord]) -> Option<(Option<CoreSequence>, String, String)> {
     records.first().map(message_key)
 }
 
@@ -1111,7 +1155,8 @@ async fn earliest_message_key<S: SessionReadSource>(
     core: &S,
     actor: &Actor,
     session: &SessionId,
-) -> Result<Option<(String, String)>, SessionReadFault> {
+    origin_order: bool,
+) -> Result<Option<(Option<CoreSequence>, String, String)>, SessionReadFault> {
     let mut before = None;
     let mut collected = 0_usize;
     loop {
@@ -1119,6 +1164,7 @@ async fn earliest_message_key<S: SessionReadSource>(
             .read_session(
                 actor,
                 HistoryQuery {
+                    origin_order,
                     session: session.clone(),
                     include: HistoryInclude {
                         messages: true,
@@ -1135,7 +1181,13 @@ async fn earliest_message_key<S: SessionReadSource>(
             .map_err(SessionReadFault::Port)?;
         collected += page.messages.len();
         if !page.messages_has_earlier {
-            return Ok(oldest_message(&page.messages));
+            return Ok(page.messages.first().map(|record| {
+                let mut key = message_key(record);
+                if origin_order {
+                    key.0 = record.first_origin_sequence;
+                }
+                key
+            }));
         }
         if collected >= MAX_SCAN_MESSAGES {
             return Err(SessionReadFault::TooLarge(
@@ -1148,9 +1200,16 @@ async fn earliest_message_key<S: SessionReadSource>(
             ));
         };
         before = Some(MessageCursor {
-            created_at: CoreTimestamp::new(oldest.0.as_str())
+            sequence: page.messages.first().and_then(|record| {
+                if origin_order {
+                    record.first_origin_sequence
+                } else {
+                    record.first_sequence
+                }
+            }),
+            created_at: CoreTimestamp::new(oldest.1.as_str())
                 .map_err(|_| SessionReadFault::Internal("a message cursor is invalid"))?,
-            message_id: MessageId::new(oldest.1.as_str())
+            message_id: MessageId::new(oldest.2.as_str())
                 .map_err(|_| SessionReadFault::Internal("a message cursor is invalid"))?,
         });
     }
@@ -1609,6 +1668,48 @@ mod tests {
         serde_json::to_value(message).expect("wire message")
     }
 
+    #[test]
+    fn message_page_uses_output_order_even_when_ids_and_clock_disagree() {
+        let mut thought = record(
+            CoreMessageChannel::Thought,
+            r#"[{"type":"text","text":"先思考"}]"#,
+        );
+        thought.message = message_id(9);
+        thought.first_sequence = Some(Sequence::new(6).expect("sequence"));
+        thought.first_origin_sequence = Some(Sequence::new(106).expect("sequence"));
+        let mut reply = record(
+            CoreMessageChannel::Reply,
+            r#"[{"type":"text","text":"后回复"}]"#,
+        );
+        reply.message = message_id(2);
+        reply.created_at = CoreTimestamp::new("2026-09-17T23:59:59.000Z").expect("timestamp");
+        reply.first_sequence = Some(Sequence::new(21).expect("sequence"));
+        reply.first_origin_sequence = Some(Sequence::new(121).expect("sequence"));
+        let page = finish_message_page(
+            20,
+            vec![
+                Message::from_owned_record(&reply, true).expect("reply"),
+                Message::from_owned_record(&thought, true).expect("thought"),
+            ],
+            false,
+        );
+        assert_eq!(
+            page.messages[0].message_id.as_str(),
+            thought.message.as_str()
+        );
+        assert_eq!(
+            wire_json(
+                &page.messages[0]
+                    .to_wire(&Uuid::parse(session_id().as_str()).expect("session"))
+                    .expect("wire")
+            )["sequence"],
+            "6"
+        );
+        let imported = Message::from_record(&thought, true).expect("remote");
+        assert_eq!(imported.sequence, thought.first_origin_sequence);
+        assert_ne!(imported.sequence, thought.first_sequence);
+    }
+
     /// `conversation-reliability` §2.2：同一次受理的持久用户消息只投影一条 `role=user`，不带
     /// `channel`/`partial`；事件轨道的 `user.message.delta` 不参与正文拼接。
     #[test]
@@ -1760,6 +1861,7 @@ mod tests {
             history_has_earlier: false,
         };
         let request = SessionReadRequest {
+            origin_order: false,
             session: session.clone(),
             include: HistoryInclude {
                 messages: true,

@@ -1449,6 +1449,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
     let view = store.read_view().await.expect("read view");
     let page = view
         .read_session(HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: HistoryInclude {
                 messages: true,
@@ -2281,6 +2282,7 @@ async fn prompt_input_is_written_in_one_transaction_and_replayed_once() {
         .await
         .expect("view")
         .read_session(HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: HistoryInclude {
                 messages: true,

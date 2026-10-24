@@ -131,6 +131,7 @@ async fn activity_events_are_replayable_but_never_history_entries() {
     // 历史页不带它；任务三态事实也不因生命周期投影改变。
     let page = view
         .read_session(HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: HistoryInclude {
                 history: true,

@@ -177,6 +177,7 @@ export interface ConversationCapabilitiesModel {
  * 时间线模型。`buildConversationModel` 缺省构造时为空（见下面的 `ABSENT_TIMELINE`）。
  */
 export interface ConversationTimelineModel {
+  readonly windowLoading?: boolean;
   /** 唯一渲染列表：消息、结构化卡片、降级卡片按时间排序。 */
   readonly entries: readonly TimelineEntry[];
   /** 结构化历史的可用性与说明（不可用时必须有说明）。 */
@@ -523,7 +524,8 @@ export function buildConversationModel(input: {
       nextBeforeHistory: input.nextBeforeHistory ?? null,
     },
     // 「还能不能翻更早」由 wire 的 `hasEarlier` 决定，与用量状态无关（R17 第三条 MUST）。
-    capabilities: { ...input.capabilities, canLoadEarlier: hasEarlier && input.loadingEarlier === false },
+    capabilities: { ...input.capabilities, canLoadEarlier: (hasEarlier || input.historyHasEarlier === true) &&
+      input.loadingEarlier === false && input.loadingHistory !== true },
     input: input.input ?? ABSENT_INPUT,
     interactions: input.interactions ?? [],
     media: input.media ?? new Map<string, AttachmentMediaView>(),

@@ -5495,6 +5495,7 @@ mod tests {
         let page = block_on(fixture.use_cases.read_session(
             &Actor::LocalCli,
             HistoryQuery {
+                origin_order: false,
                 session: fixture.session.clone(),
                 include: HistoryInclude {
                     messages: true,

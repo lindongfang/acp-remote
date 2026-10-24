@@ -140,6 +140,7 @@ async fn read_messages(
 ) -> acp_core::ports::HistoryPage {
     let view = store.read_view().await.expect("view");
     view.read_session(HistoryQuery {
+        origin_order: false,
         session: session.clone(),
         include: HistoryInclude {
             messages: true,
@@ -748,5 +749,255 @@ async fn prompt_input_without_echo_remains_readable() {
     assert_eq!(stored.turn, Some(turn));
     assert_eq!(stored.content.as_str(), content.json().as_str());
     assert!(stored.media.is_empty());
+    reopened.close().await;
+}
+
+#[tokio::test]
+async fn durable_positions_survive_same_millisecond_reverse_ids_clock_rollback_and_cleanup() {
+    let dir = temp_dir("messages-real-order");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let t = turn(1);
+    let ids = [message(90), message(10), message(80), message(1)];
+    store
+        .commit(commit(
+            &session,
+            &at("2026-09-19"),
+            vec![
+                thought_delta(&t, &ids[0], "thought A"),
+                reply_delta(&t, &ids[1], "reply A"),
+                thought_delta(&t, &ids[2], "thought B"),
+            ],
+            Vec::new(),
+        ))
+        .await
+        .expect("ordered batch");
+    store
+        .commit(commit(
+            &session,
+            &at("2026-09-18"),
+            vec![reply_delta(&turn(2), &ids[3], "clock rollback")],
+            Vec::new(),
+        ))
+        .await
+        .expect("later output with older clock");
+    let page = read_messages(&store, &session, false).await;
+    assert_eq!(
+        page.messages
+            .iter()
+            .map(|m| m.message.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    let positions: Vec<_> = page
+        .messages
+        .iter()
+        .map(|m| m.first_sequence.expect("position").get())
+        .collect();
+    assert!(positions.windows(2).all(|w| w[0] < w[1]));
+    let mut q = HistoryQuery {
+        origin_order: false,
+        session: session.clone(),
+        include: HistoryInclude {
+            messages: true,
+            ..HistoryInclude::default()
+        },
+        after: None,
+        before_history: None,
+        before_messages: None,
+        messages_limit: ReplayLimit::new(2),
+        limit: ReplayLimit::new(0),
+    };
+    let view = store.read_view().await.expect("view");
+    let latest = view.read_session(q.clone()).await.expect("latest");
+    let boundary = &latest.messages[0];
+    q.before_messages = Some(acp_core::ports::MessageCursor {
+        sequence: boundary.first_sequence,
+        created_at: boundary.created_at.clone(),
+        message_id: boundary.message.clone(),
+    });
+    let earlier = view.read_session(q).await.expect("earlier");
+    assert_eq!(
+        earlier
+            .messages
+            .iter()
+            .chain(latest.messages.iter())
+            .map(|m| m.message.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    drop(view);
+    store.close().await;
+    let pool = raw_write_pool(&dir.join("acp-remote.sqlite3")).await;
+    sqlx::query("DELETE FROM owned_event WHERE session_id=?1")
+        .bind(session.as_str())
+        .execute(&pool)
+        .await
+        .expect("delta cleanup");
+    pool.close().await;
+    let reopened = open_store(&dir).await;
+    let page = read_messages(&reopened, &session, false).await;
+    assert_eq!(
+        page.messages
+            .iter()
+            .map(|m| m.first_sequence.expect("retained").get())
+            .collect::<Vec<_>>(),
+        positions
+    );
+    assert_eq!(
+        page.messages
+            .iter()
+            .map(|m| m.message.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    reopened.close().await;
+}
+
+#[tokio::test]
+async fn v18_migration_recovers_only_proven_continuous_legacy_fragments() {
+    let dir = temp_dir("messages-order-migration");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let t = turn(1);
+    let safe = message(10);
+    let crossed = message(20);
+    store
+        .commit(commit(
+            &session,
+            &at("2026-09-18"),
+            vec![
+                reply_delta(&t, &safe, "safe"),
+                thought_delta(&t, &crossed, "A"),
+                event(
+                    EventKind::Structured,
+                    "tool.call.started",
+                    r#"{"toolCallId":"tool","title":"tool","state":"pending"}"#,
+                    Some(t.clone()),
+                    &at("2026-09-18"),
+                ),
+                event(
+                    EventKind::Delta,
+                    "agent.thought.delta",
+                    &format!(
+                        r#"{{"messageId":"{}","deltaIndex":"1","text":"B"}}"#,
+                        crossed.as_str()
+                    ),
+                    Some(t.clone()),
+                    &at("2026-09-18"),
+                ),
+            ],
+            Vec::new(),
+        ))
+        .await
+        .expect("legacy events");
+    store.close().await;
+    let pool = raw_write_pool(&dir.join("acp-remote.sqlite3")).await;
+    sqlx::raw_sql("DROP INDEX owned_message_order; DROP INDEX owned_message_origin_order; ALTER TABLE owned_message DROP COLUMN first_sequence; ALTER TABLE owned_message DROP COLUMN first_origin_sequence; PRAGMA user_version=17; UPDATE meta SET value='17' WHERE key='owned_schema_version';").execute(&pool).await.expect("v17 copy");
+    pool.close().await;
+    let migrated = open_store(&dir).await;
+    let page = read_messages(&migrated, &session, false).await;
+    assert!(
+        page.messages
+            .iter()
+            .find(|m| m.message == safe)
+            .expect("safe body")
+            .first_sequence
+            .is_some()
+    );
+    let unknown = page
+        .messages
+        .iter()
+        .find(|m| m.message == crossed)
+        .expect("crossed body");
+    assert!(unknown.first_sequence.is_none());
+    assert!(unknown.content.as_str().contains("B"));
+    migrated.close().await;
+    let again = open_store(&dir).await;
+    let after = read_messages(&again, &session, false).await;
+    assert_eq!(page.messages, after.messages);
+    again.close().await;
+}
+
+#[tokio::test]
+async fn tool_update_keeps_initial_position_when_start_is_outside_the_history_page_or_removed() {
+    let dir = temp_dir("messages-tool-anchor");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let t = turn(1);
+    store
+        .commit(commit(
+            &session,
+            &at("2026-09-18"),
+            vec![
+                event(
+                    EventKind::Structured,
+                    "tool.call.started",
+                    r#"{"toolCallId":"tool","title":"tool","state":"pending"}"#,
+                    Some(t.clone()),
+                    &at("2026-09-18"),
+                ),
+                reply_delta(&t, &message(1), "reply"),
+                event(
+                    EventKind::Structured,
+                    "tool.call.completed",
+                    r#"{"toolCallId":"tool","title":"tool","state":"completed"}"#,
+                    Some(t),
+                    &at("2026-09-18"),
+                ),
+            ],
+            Vec::new(),
+        ))
+        .await
+        .expect("events");
+    let query = HistoryQuery {
+        origin_order: false,
+        session: session.clone(),
+        include: HistoryInclude {
+            history: true,
+            ..HistoryInclude::default()
+        },
+        after: None,
+        before_history: None,
+        before_messages: None,
+        messages_limit: ReplayLimit::new(0),
+        limit: ReplayLimit::new(1),
+    };
+    let view = store.read_view().await.expect("view");
+    let page = view
+        .read_session(query.clone())
+        .await
+        .expect("latest history");
+    assert_eq!(page.history.len(), 1);
+    let e = &page.history[0];
+    let projected: serde_json::Value =
+        serde_json::from_str(e.payload.view.as_str()).expect("projected");
+    let initial = projected["_timelineSequence"]
+        .as_str()
+        .expect("anchor")
+        .parse::<u64>()
+        .expect("position");
+    assert!(initial < e.event.session_sequence.expect("update position").get());
+    drop(view);
+    store.close().await;
+    let pool = raw_write_pool(&dir.join("acp-remote.sqlite3")).await;
+    let stored:String=sqlx::query_scalar("SELECT payload_json FROM owned_event WHERE session_id=?1 AND event_type='tool.call.completed'").bind(session.as_str()).fetch_one(&pool).await.expect("stored original");
+    assert!(!stored.contains("_timelineSequence"));
+    sqlx::query("DELETE FROM owned_event WHERE session_id=?1 AND event_type='tool.call.started'")
+        .bind(session.as_str())
+        .execute(&pool)
+        .await
+        .expect("clean old start");
+    pool.close().await;
+    let reopened = open_store(&dir).await;
+    let view = reopened.read_view().await.expect("view");
+    let page = view
+        .read_session(query)
+        .await
+        .expect("history after cleanup");
+    let projected: serde_json::Value =
+        serde_json::from_str(page.history[0].payload.view.as_str()).expect("projected");
+    assert_eq!(projected["_timelineSequence"], initial.to_string());
+    drop(view);
     reopened.close().await;
 }

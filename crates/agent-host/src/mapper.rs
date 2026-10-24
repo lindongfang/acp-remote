@@ -34,7 +34,7 @@ use crate::error::HostError;
 /// delta 分组状态：同一消息内的 `deltaIndex` 从 0 起严格加一（由适配器分配）。
 #[derive(Debug, Default)]
 pub struct UpdateState {
-    messages: HashMap<String, MessageId>,
+    active: Option<(String, MessageId)>,
     counters: HashMap<MessageId, u64>,
     turn_seq: u64,
 }
@@ -42,18 +42,25 @@ pub struct UpdateState {
 impl UpdateState {
     /// 新 turn 开始时重置消息分组（新 turn 的流是新消息）。
     pub fn begin_turn(&mut self) {
-        self.messages.clear();
+        self.active = None;
         self.counters.clear();
         self.turn_seq += 1;
     }
 
     fn message_for(&mut self, key: &str, ids: &dyn IdGenerator) -> MessageId {
-        if let Some(existing) = self.messages.get(key) {
-            return existing.clone();
+        if let Some((active_key, existing)) = &self.active {
+            if active_key == key {
+                return existing.clone();
+            }
         }
         let id = ids.message_id();
-        self.messages.insert(key.to_owned(), id.clone());
+        self.active = Some((key.to_owned(), id.clone()));
         id
+    }
+
+    /// A visible non-message entry terminates the current continuous fragment.
+    pub fn interrupt(&mut self) {
+        self.active = None;
     }
 
     fn next_index(&mut self, message: &MessageId) -> u64 {
@@ -84,6 +91,14 @@ pub fn update_events(
     let at = clock.now();
     let mut events = Vec::new();
 
+    if !matches!(
+        update,
+        SessionUpdate::UserMessageChunk(_)
+            | SessionUpdate::AgentMessageChunk(_)
+            | SessionUpdate::AgentThoughtChunk(_)
+    ) {
+        state.interrupt();
+    }
     match update {
         SessionUpdate::UserMessageChunk(chunk) => {
             // 重复回显：持久化的首条正文才是权威。这条既不产出事件，也不占用该消息的 delta 状态
@@ -1490,5 +1505,112 @@ mod tests {
             !view.to_string().contains("不可文本化"),
             "未识别 content 不得被文本化或透传进 toolDetail"
         );
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+    use acp_core::model::{InteractionId, OriginEpoch, PairingId, RequestId, SessionId, TurnId};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    struct Ids(AtomicU64);
+    impl IdGenerator for Ids {
+        fn message_id(&self) -> MessageId {
+            MessageId::new(&format!(
+                "00000000-0000-4000-8000-{:012}",
+                self.0.fetch_add(1, Ordering::Relaxed)
+            ))
+            .expect("id")
+        }
+        fn session_id(&self) -> SessionId {
+            unreachable!()
+        }
+        fn turn_id(&self) -> TurnId {
+            unreachable!()
+        }
+        fn interaction_id(&self) -> InteractionId {
+            unreachable!()
+        }
+        fn pairing_id(&self) -> PairingId {
+            unreachable!()
+        }
+        fn origin_epoch(&self) -> OriginEpoch {
+            unreachable!()
+        }
+        fn request_id(&self) -> RequestId {
+            unreachable!()
+        }
+    }
+    struct FixedClock;
+    impl Clock for FixedClock {
+        fn now(&self) -> Timestamp {
+            Timestamp::new("2026-10-24T00:00:00.000Z").expect("time")
+        }
+    }
+    fn send(
+        state: &mut UpdateState,
+        ids: &Ids,
+        kind: &str,
+        external: Option<&str>,
+    ) -> EndpointEvent {
+        let payload = if kind == "tool_call" {
+            json!({"sessionUpdate":kind,"toolCallId":"tool-1","title":"tool"})
+        } else {
+            let mut p = json!({"sessionUpdate":kind,"content":{"type":"text","text":"x"},"future":9007199254740993_u64});
+            if let Some(id) = external {
+                p["messageId"] = json!(id);
+            }
+            p
+        };
+        let raw = RawDocument::parse(payload.to_string()).expect("raw");
+        let update = SessionUpdate::decode(&payload).expect("update");
+        let event = update_events(&update, &raw, state, ids, &FixedClock, None)
+            .expect("mapped")
+            .remove(0);
+        assert_eq!(
+            event
+                .payload
+                .acp
+                .as_ref()
+                .expect("raw ACP")
+                .as_available()
+                .expect("available")
+                .1,
+            raw.as_str()
+        );
+        event
+    }
+    #[test]
+    fn fragments_preserve_interleaving_with_and_without_external_ids() {
+        for external in [Some("same-external-id"), None] {
+            let mut state = UpdateState::default();
+            let ids = Ids(AtomicU64::new(1));
+            let mut views = Vec::new();
+            for kind in [
+                "agent_thought_chunk",
+                "agent_thought_chunk",
+                "tool_call",
+                "agent_thought_chunk",
+                "agent_message_chunk",
+                "agent_thought_chunk",
+            ] {
+                let e = send(&mut state, &ids, kind, external);
+                if kind != "tool_call" {
+                    views.push(
+                        serde_json::from_str::<Value>(e.payload.view.as_str()).expect("view"),
+                    );
+                }
+            }
+            assert_eq!(views[0]["messageId"], views[1]["messageId"]);
+            assert_eq!(views[1]["deltaIndex"], "1");
+            for index in 2..views.len() {
+                assert_ne!(views[index - 1]["messageId"], views[index]["messageId"]);
+                assert_eq!(views[index]["deltaIndex"], "0");
+            }
+            state.interrupt(); // permission/terminal emitted outside session/update
+            let next = send(&mut state, &ids, "agent_thought_chunk", external);
+            let next: Value = serde_json::from_str(next.payload.view.as_str()).expect("view");
+            assert_ne!(next["messageId"], views.last().expect("last")["messageId"]);
+        }
     }
 }

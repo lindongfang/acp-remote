@@ -286,6 +286,11 @@ pub async fn session_read<C: SessionReadSource>(
     };
     let before_messages = match payload.before.as_ref() {
         Some(before) => Some(MessageCursor {
+            sequence: before
+                .sequence
+                .as_ref()
+                .map(|value| parse_sequence(value.as_str()))
+                .transpose()?,
             created_at: CoreTimestamp::new(before.created_at.as_str())
                 .map_err(|_| Rejection::Schema("before.createdAt is not a timestamp"))?,
             message_id: MessageId::new(before.message_id.as_str())
@@ -301,6 +306,7 @@ pub async fn session_read<C: SessionReadSource>(
         _ => None,
     };
     let request = crate::session_read::SessionReadRequest {
+        origin_order: false,
         session: session_id.clone(),
         include,
         before_history,
@@ -1421,6 +1427,7 @@ mod tests {
     /// 一条页内的待投影消息（用户输入与 Agent 正文共用同一形状）。
     fn page_message(id: u32, role: MessageRole) -> Message {
         Message {
+            sequence: None,
             message_id: Uuid::parse(&uid(id)).expect("message id"),
             role,
             content: Vec::new(),
@@ -1588,6 +1595,7 @@ mod tests {
                     None => self.all.len(),
                     Some(cursor) => {
                         let key = (
+                            cursor.sequence,
                             cursor.created_at.as_str().to_owned(),
                             cursor.message_id.as_str().to_owned(),
                         );

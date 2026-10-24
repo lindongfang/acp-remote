@@ -484,6 +484,7 @@ async fn long_prompt_input_survives_delta_compaction() {
         .await
         .expect("view")
         .read_session(acp_core::ports::HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: acp_core::ports::HistoryInclude {
                 messages: true,

@@ -206,7 +206,7 @@ describe("输入区三态与附件边界", () => {
     expect(html).toContain('data-submit-enabled="false"');
     expect(tagContaining(html, 'data-action="submit-prompt"')).toContain('aria-disabled="true"');
     expect(html).toContain('data-action="cancel-turn"');
-    expect(html).toContain("data-submit-unavailable");
+    expect(html).not.toContain("data-submit-unavailable");
     expect(html).toContain("会话进行中，完成后可继续输入");
     expect(html).not.toContain("进行中 · 可编辑但发送禁用，不排队");
   });
@@ -249,6 +249,14 @@ describe("输入区三态与附件边界", () => {
 });
 
 describe("提交与取消以服务端终态为准", () => {
+  it("正常提交与轮次执行不插入禁用原因行", () => {
+    for (const blockedBy of ["submission_in_flight", "turn_in_progress"] as const) {
+      const html = render(input({ state: "in_progress", canSubmit: false, blockedBy,
+        disabledReason: "消息已提交，等待服务端确认后才能继续发送" }));
+      expect(html).not.toContain("data-submit-unavailable");
+      expect(html).toContain('data-submit-enabled="false"');
+    }
+  });
   it("待确认：只说等待服务端确认，不写「已发送」「已排队」", () => {
     const html = render(
       input({
@@ -259,9 +267,8 @@ describe("提交与取消以服务端终态为准", () => {
       }),
     );
 
-    expect(html).toContain('data-submission="pending_confirmation"');
-    expect(html).toContain('data-submission-request-id="req-1"');
-    expect(html).toContain("等待终态确认");
+    expect(html).not.toContain('data-submission="pending_confirmation"');
+    expect(html).not.toContain("等待终态确认");
     // 反例：本地乐观置态会把这两句写进渲染结果 → 断言变红。
     expect(html).not.toContain("已发送");
     expect(html).not.toContain("已排队");
@@ -372,7 +379,7 @@ describe("输入区：生产路径（仓库模型 → 组件）", () => {
 
     expect(html).toContain('data-composer="unavailable"');
     expect(html).toContain('data-submit-enabled="false"');
-    expect(html).toContain("当前不能提交。");
+    expect(html).not.toContain("当前不能提交。");
     expect(html).not.toContain("连接不可用或来源节点离线，不能提交");
     expect(tagContaining(html, 'data-composer-input="unavailable"')).not.toMatch(/readonly/i);
   });

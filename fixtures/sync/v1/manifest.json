@@ -1849,6 +1849,17 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "oneOf"
+    },
+    {
+      "fixture": "valid/command-result-session-read-output-order.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-result-session-read-output-order-sequence.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
     }
   ],
   "deviceQrVectors": [

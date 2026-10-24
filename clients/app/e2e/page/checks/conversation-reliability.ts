@@ -371,7 +371,8 @@ const checks: readonly Check[] = [
           "无首个输出时出现等待行",
         );
         const awaiting = textOf(query(container, '[data-process-row="awaiting"]'));
-        expectThat(awaiting.includes("等待响应"), `等待行必须说「等待响应」：${awaiting}`);
+        expectThat(query(container, '[data-response-cursor="true"]') !== null, "等待时展示光标");
+        expectThat(!awaiting.includes("等待响应"), "等待效果不显示文字提示");
         expectThat(!awaiting.includes("思考"), `不得把等待写成 Agent 正在思考：${awaiting}`);
 
         // 工具开始：实际内容占屏，过程行让位（不重复反馈）。

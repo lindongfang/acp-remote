@@ -697,6 +697,7 @@ async fn invalidated_requests_disappear_from_every_pending_reader() {
     let view = store.read_view().await.expect("view");
     let page = view
         .read_session(HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: HistoryInclude {
                 messages: false,

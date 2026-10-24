@@ -41,6 +41,8 @@
  */
 
 import type { ReactElement, ReactNode } from "react";
+import { useEffect, useRef } from "react";
+import { useReducedMotion } from "./shell/reduced-motion";
 
 import type { FormInputValue } from "../domain/form";
 import { buildElicitationForm } from "../domain/form";
@@ -60,7 +62,7 @@ import { Markdown } from "./Markdown";
 import { TODO_STATUS_LABELS } from "./ConversationTodo";
 import { MessageMedia } from "./MessageMedia";
 import type { Palette } from "./theme";
-import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import { Animated, Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
 
 /** `kind` 取某一类的时间线条目类型（判别联合的成员）。 */
 type EntryOf<K extends TimelineEntry["kind"]> = Extract<TimelineEntry, { readonly kind: K }>;
@@ -137,7 +139,25 @@ function buildStyles(colors: Palette) {
       gap: spacing.md,
     },
     turnGroupEntry: {
-      gap: 0,
+      gap: spacing.xs,
+    },
+    entryHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+    },
+    entryHeaderUser: {
+      flexDirection: "row-reverse",
+    },
+    waitingCursor: {
+      width: 2,
+      height: 20,
+      backgroundColor: colors.accent,
+    },
+    waitingRow: {
+      alignItems: "flex-start",
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
     },
     entry: {
       gap: spacing.xs,
@@ -401,7 +421,9 @@ function buildStyles(colors: Palette) {
     foldKind: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
+      fontSize: fontSize.sm,
+      fontWeight: "600",
+      flexShrink: 0,
     },
     foldKindThink: {
       color: colors.think,
@@ -477,8 +499,8 @@ function buildStyles(colors: Palette) {
     permissionStatus: {
       color: colors.warn,
       fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-      fontWeight: "600",
+      fontSize: fontSize.md,
+      fontWeight: "700",
     },
     permissionStatusInactive: {
       color: colors.ink3,
@@ -524,7 +546,11 @@ const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.
  * 原始时刻经 `data-timeline-entry-at` 原样进 DOM，需要精确值时从属性取。
  */
 function formatEntryTime(createdAt: string): string {
-  return createdAt.length < 16 ? createdAt : createdAt.slice(11, 16);
+  const timestamp = Date.parse(createdAt);
+  if (!Number.isFinite(timestamp)) return "—";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(timestamp);
 }
 
 /** 消息条目的作者标签。 */
@@ -632,7 +658,6 @@ function Fold({
   inProgress,
   expanded,
   onToggle,
-  time,
   titleDataSet,
   children,
 }: {
@@ -674,7 +699,7 @@ function Fold({
           {({ pending: "待执行", in_progress: "进行中", running: "进行中", completed: "已完成", failed: "失败", cancelled: "已取消" } as Readonly<Record<string, string>>)[state] ?? state}
         </Text>
       )}
-      <Text style={styles.time}>{time}</Text>
+
     </>
   );
 
@@ -779,7 +804,7 @@ function MessageEntry({
         </Text>
       )}
       {/* 本地提交（还没有权威正文接替）：如实说明上传/待确认/未发送，Agent 未收到时不假装收到。 */}
-      {local === null ? null : (
+      {local === null || local.phase === "accepted" || local.phase === "submitted" ? null : (
         <Text
           style={[
             styles.localState,
@@ -828,7 +853,7 @@ function MessageEntry({
           label="思考"
           title=""
           titleMono={false}
-          state={entry.partial !== null && entry.partial.state !== "completed" ? "已中断" : entry.volatile && !entry.streamComplete ? "进行中" : "已结束"}
+          state={entry.partial !== null && entry.partial.state !== "completed" ? "已中断" : entry.volatile && !entry.streamComplete ? "进行中" : null}
           inProgress={entryInProgress(entry)}
           expanded={expanded}
           onToggle={onToggle}
@@ -840,12 +865,7 @@ function MessageEntry({
       ) : (
         body
       )}
-      {entry.channel === "thought" ? null : <Text
-        style={[styles.time, entry.channel === "user" ? styles.messageTimeUser : styles.messageTimeAgent]}
-        dataSet={{ messageCreatedAt: entry.createdAt }}
-      >
-        {formatEntryTime(entry.createdAt)}
-      </Text>}
+
     </View>
   );
 }
@@ -882,7 +902,7 @@ function TurnEntry({ entry }: { readonly entry: EntryOf<"turn"> }): ReactElement
           本轮已取消
         </Text>
       ) : null}
-      <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
+
     </View>
   );
 }
@@ -965,15 +985,16 @@ function ToolCallEntry({
         entryKey={entry.key}
         foldClass="tool"
         label="工具调用"
-        title={entry.title}
+        title=""
         titleMono={false}
-        state={entry.state}
+        state={entry.state === "completed" ? null : entry.state}
         inProgress={inProgress}
         expanded={expanded}
         onToggle={onToggle}
         time={formatEntryTime(entry.createdAt)}
         titleDataSet={{ toolTitle: entry.title }}
       >
+        <Text style={styles.title} dataSet={{ toolDetailTitle: entry.title }}>{entry.title}</Text>
         {detail === null ? null : (
           <View style={styles.detail} dataSet={{ toolDetail: "present" }}>
             {detail.input === null ? null : (
@@ -1158,7 +1179,7 @@ function FileChangedEntry({
               工作区之外
             </Text>
           ) : null}
-          <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
+
         </View>
         <Text style={styles.meta} dataSet={{ changeSummary: "true" }}>
           {entry.summary}
@@ -1237,7 +1258,7 @@ function ModeChangedEntry({ entry }: { readonly entry: EntryOf<"mode_changed"> }
             {entry.currentModeId ?? "未提供当前模式"}
           </Text>
           <StateChip state={`v${entry.version}`} style={styles.chip} />
-          <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
+
         </View>
       </View>
     </View>
@@ -1264,7 +1285,7 @@ function ConfigChangedEntry({ entry }: { readonly entry: EntryOf<"config_changed
         <View style={styles.cardHead}>
           <Text style={styles.kicker}>配置变更</Text>
           <StateChip state={`v${entry.version}`} style={styles.chip} />
-          <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
+
         </View>
         {entry.configOptions.map((option) => (
           <View
@@ -1389,7 +1410,7 @@ function PermissionRequestedEntry({
         <View style={styles.cardHead}>
           <Text style={[styles.permissionStatus, actionable ? null : styles.permissionStatusInactive]}
             dataSet={{ permissionStatus: statusLabel }}>{statusLabel}</Text>
-          <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
+
         </View>
         <View style={styles.detailSection} dataSet={{ approvalContext: "true" }}>
           <Text selectable style={styles.detailValue} dataSet={{ interactionTitle: entry.title }}>{command ?? entry.title}</Text>
@@ -1466,7 +1487,7 @@ function ElicitationRequestedEntry({
           <Text style={styles.title} dataSet={{ interactionTitle: entry.title }}>
             {entry.title}
           </Text>
-          <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
+
         </View>
         {answerable ? (
           // 表单自己渲染「提交」（带值），按钮组只保留拒绝/取消：同一动作只有一个入口。
@@ -1530,7 +1551,7 @@ function PermissionResolvedEntry({ entry }: { readonly entry: EntryOf<"permissio
           <Text style={styles.title} dataSet={{ interactionResolutionLabel: entry.resolution }}>
             {entry.resolution}
           </Text>
-          <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
+
         </View>
       </View>
     </View>
@@ -1560,7 +1581,7 @@ function ElicitationResolvedEntry({ entry }: { readonly entry: EntryOf<"elicitat
           <Text style={styles.title} dataSet={{ interactionResolutionLabel: entry.action }}>
             {entry.action}
           </Text>
-          <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
+
         </View>
       </View>
     </View>
@@ -1723,6 +1744,7 @@ function ProcessRow({ process }: { readonly process: ConversationProcessModel })
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   if (process.label === null) return null;
+  if (process.phase === "awaiting") return <ResponseActivity />;
   return (
     <View role="listitem" style={styles.processRow} dataSet={{ processRow: process.phase }}>
       <Text style={styles.processLabel} dataSet={{ processLabel: "true" }}>
@@ -1733,6 +1755,33 @@ function ProcessRow({ process }: { readonly process: ConversationProcessModel })
           {process.detail}
         </Text>
       )}
+    </View>
+  );
+}
+
+/** 等待回复时显示无背景光标；减少动态效果时保持静态，卸载时停止动画。 */
+function ResponseActivity(): ReactElement {
+  const theme = useTheme();
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const reducedMotion = useReducedMotion();
+  const opacity = useRef(new Animated.Value(0.5)).current;
+  useEffect(() => {
+    if (reducedMotion) {
+      opacity.setValue(0.7);
+      return;
+    }
+    const animation = Animated.loop(Animated.sequence([
+      Animated.timing(opacity, { toValue: 1, duration: 450, useNativeDriver: false }),
+      Animated.timing(opacity, { toValue: 0, duration: 450, useNativeDriver: false }),
+    ]));
+    animation.start();
+    return () => animation.stop();
+  }, [opacity, reducedMotion]);
+  return (
+    <View role="status" accessibilityLabel="等待响应" style={styles.waitingRow}
+      dataSet={{ processRow: "awaiting", responseActivity: "true" }}>
+      <Animated.View aria-hidden style={[styles.waitingCursor, { opacity }]}
+        dataSet={{ responseCursor: "true" }} />
     </View>
   );
 }
@@ -1774,18 +1823,19 @@ export function ConversationTimeline({
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const sources = media ?? new Map<string, AttachmentMediaView>();
   const groups = groupTimelineEntries(entries);
-  // 跨轮次分组按实际相邻消息合并署名；思考与回复都属于同一 Agent。
-  const senderStarts = new Set<string>();
-  let previousSender: string | null = null;
+  const waitingAt = entries.at(-1)?.createdAt;
+  const timeStarts = new Set<string>();
+  let previous: { side: string } | null = null;
   for (const entry of entries) {
-    if (entry.kind !== "message") {
-      previousSender = null;
-      continue;
+    // Invisible turn markers do not split a visible run.
+    if (entry.kind === "turn" && entry.error === null && entry.state !== "cancelled") continue;
+    const side = entry.kind === "message" && entry.channel === "user" ? "user" : "agent";
+    if (previous === null || previous.side !== side || side === "user") {
+      timeStarts.add(entry.key);
     }
-    const sender = entry.channel === "user" ? "user" : "agent";
-    if (sender !== previousSender) senderStarts.add(entry.key);
-    previousSender = sender;
+    previous = { side };
   }
+
 
   return (
     <View
@@ -1793,6 +1843,11 @@ export function ConversationTimeline({
       style={styles.timeline}
       dataSet={{ timeline: "entries", messageList: "messages", timelineEntryCount: entries.length }}
     >
+      {entries.some(entry => entry.kind === "message" && entry.sequence === null && entry.local == null) ? (
+        <Text role="status" style={styles.kicker} dataSet={{ timelineOrderIncomplete: "true" }}>
+          部分旧历史的顺序无法完整还原，已保留原有内容。
+        </Text>
+      ) : null}
       {groups.map((group) => (
         <View
           key={group.key}
@@ -1807,9 +1862,20 @@ export function ConversationTimeline({
         >
           {group.entries.map((entry) => (
             <View key={entry.key} style={styles.turnGroupEntry} dataSet={{ timelineKey: entry.key }}>
+              {timeStarts.has(entry.key) ? (
+                <View style={[styles.entryHeader, entry.kind === "message" && entry.channel === "user"
+                  ? styles.entryHeaderUser : null]} dataSet={{ timelineHeader: "true" }}>
+                  <Text style={styles.who} dataSet={{ messageWho: entry.kind === "message" && entry.channel === "user" ? "user" : "agent" }}>
+                    {entry.kind === "message" && entry.channel === "user" ? "你" : agentName || "Agent"}
+                  </Text>
+                  <Text style={styles.kicker} dataSet={{ timelineTime: entry.createdAt }}>
+                    {formatEntryTime(entry.createdAt)}
+                  </Text>
+                </View>
+              ) : null}
               <TimelineEntryView
                 diagnosticsMode={diagnosticsMode}
-                showSender={senderStarts.has(entry.key)}
+                showSender={false}
                 entry={entry}
                 sessionId={sessionId}
                 agentName={agentName}
@@ -1834,6 +1900,14 @@ export function ConversationTimeline({
           ))}
         </View>
       ))}
+      {process?.phase !== "awaiting" ? null : (
+        <View style={styles.entryHeader} dataSet={{ awaitingHeader: "true" }}>
+          <Text style={styles.who}>{agentName || "Agent"}</Text>
+          <Text style={styles.kicker}>
+            {waitingAt === undefined ? "" : formatEntryTime(waitingAt)}
+          </Text>
+        </View>
+      )}
       {process === null || process === undefined ? null : <ProcessRow process={process} />}
     </View>
   );

@@ -16,6 +16,7 @@ import { CONVERSATION_CONTENT_CHECKS } from "./checks/conversation-content";
 import { CONVERSATION_LAYOUT_CHECKS } from "./checks/conversation-layout";
 import { CONVERSATION_TOOL_DETAIL_CHECKS } from "./checks/conversation-tool-detail";
 import { CONVERSATION_RELIABILITY_CHECKS } from "./checks/conversation-reliability";
+import { OUTPUT_ORDER_CHECKS } from "./checks/output-order";
 import { SESSION_FILES_CHECKS } from "./checks/session-files";
 import { SESSION_TITLE_CHECKS } from "./checks/session-title";
 import { FRAME_ACCEPTANCE_CHECKS } from "./checks/frame-acceptance";
@@ -87,6 +88,7 @@ import type { CheckResult } from "./support";
  * 而它验的是「打开 node-link 二维码落在可用入口」与「两类内容喂错入口都明确失败」。
  */
 const ALL_CHECKS = [
+  ...OUTPUT_ORDER_CHECKS,
   ...COMPOSER_FILE_CHECKS,
   ...CONVERSATION_SCROLL_PAGING_CHECKS,
   ...UI_STYLESHEET_CHECKS,

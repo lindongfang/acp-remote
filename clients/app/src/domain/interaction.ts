@@ -201,6 +201,7 @@ export interface InteractionView {
   readonly schema: Readonly<Record<string, unknown>> | null;
   /** 请求时间：亲历请求用事件时间，读回的待处理项用它的 `createdAt`。 */
   readonly requestedAt: string;
+  readonly sequence?: string;
   readonly turnId: string | null;
   /** 本设备连接期间收到过该请求的实时事件。 */
   readonly witnessed: boolean;

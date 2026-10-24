@@ -1,5 +1,7 @@
 # ACP Remote 模块架构
 
+> 对话顺序补充（2026-10-24，`preserve-agent-output-order`）：core 消息记录包含彼此独立的首次会话序号与首次来源序号；storage-sqlite 在首次持久事务固定并独立保留，读取按所选域分页（§4.1/§4.7 的详细端口仍以 [CORE_PORTS_AND_STORAGE.md](CORE_PORTS_AND_STORAGE.md) 为准）。agent-host 保留同一 ACP 输出流的先后，相邻文字可连续呈现，但跨其他可见条目后分配新的内部消息片段，不改 ACP 原文；server 本机和 Node Link 读取分别选择会话域和来源域；前端按权威位置合并消息与结构化条目。Access 不新增持久数据或序号映射。
+
 > 授权上下文投影（2026-10-24）：`agent-host::mapper` 将 ACP 授权请求自带的工具标识、类别、输入与文本内容投影为 `permission.requested` 的可选 `toolCallId` / `toolKind` / `toolDetail`；复用工具详情的限额与数值校验，不从相邻工具猜关联，不改动原始 ACP 内容。wire 字段与兼容策略以 `SYNC_PROTOCOL.md` §10.3 为准。
 
 > 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 已落地的路径是切片 4 的 `transport::local` + `local_admin`、切片 5 的 `transport::net` + `node_link`、`sync-server-connection` 的 `sync`（认证、订阅、投递、快照与配对 HTTP）与 `sync-server-commands` 的业务命令面，以及 `sync-ui-hosting` 在 `transport::net` 上的根路径静态托管（见 §4.9），`acp_facade` 仍待后续切片；`app` 已按切片 4/5/本变更接线，见 §3 `[现状]` 与 `README.md` 的 crate 表）
@@ -198,6 +200,8 @@ crates/
 
 ### 4.1 `core`
 
+对话发生顺序的纯类型合同包含消息及交互的首次会话位置与首次来源位置；两域不可混用。具体字段及读取合同以 [CORE_PORTS_AND_STORAGE.md](CORE_PORTS_AND_STORAGE.md) 为准。
+
 目录文件查询用例解析已登记目录或既有绝对路径，通过 `SessionFiles` 端口读取文件/Git；无需会话、Agent 或持久化写入。旧会话文件查询共享根内读取与预算检查，协议适配层负责目录目标的 feature 门控。
 
 唯一职责：承载与传输、数据库和具体 Agent 无关的会话业务。参考 Pi `agent-core`，首日把稳定且共同演进的领域、用例、端口和协调逻辑放在一个 crate 内，而不是为了目录整齐拆成三个相互依赖的 crate。
@@ -381,6 +385,8 @@ AttachmentTransfer（计划，`attachment.schema.json`）：独立已认证附�
 
 ### 4.5 `agent-host`
 
+同一 ACP 输出流按写出顺序同步映射与交付；相邻同通道、同 ACP 消息的文字可连续追加，跨其他可见内容后分配新的内部片段标识。终端输出与通知的片段边界共用同步锁，重绑先释放旧状态锁再更换终端出口，避免并发插入与锁反转。ACP 原文及外部消息标识保持保真。
+
 唯一职责：把一个本地 ACP 子进程实现为 `AgentCatalog + SessionBackendFactory + SessionEndpoint`。
 
 包含：
@@ -430,6 +436,8 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 `[现状]`（2026-10-20，WP5c）两处收口：① `app` 组合根注入 `agent-host` 的附件读取端口是**非拥有**句柄（`compose::WeakAttachmentStore`，每次调用升级一次）。原因是会话持有 core 的 `EventSink`、sink 闭包持有会话槽位、槽位缓存端点、端点又持有会话，这条环在 `AgentHost::shutdown_all` 之后仍留到进程结束；强引用会让 `Composition::close` 以 `StoreStillShared` 跳过检查点。端口语义不变：存储关闭后如实返回 `Unavailable(IoError)`。环本身属 core 的关闭语义（`Broker` 暂无释放槽位端点的入口），登记为残余。② 集成判据补齐：`crates/app/tests/imported_delivery.rs`（收据先于广播、重复事件不追加、ACK 与重启恢复、Access 磁盘无远程正文）与 `tests/remote_session.rs`（附票证路由、稳定 requestId、uncertain 只回查不重发）、以及两份握手协商的「未注册端点不宣告」单测。
 
 ### 4.7 `storage-sqlite`
+
+首次片段正文、事件序号与卡片锚点在同一事务固定。消息及卡片顺序独立于短期 delta 保留期限恢复，本机与 Node Link 读取显式选择同一序号域。两域字段、DDL 和迁移以 [CORE_PORTS_AND_STORAGE.md](CORE_PORTS_AND_STORAGE.md) §7 为准。
 
 唯一职责：实现持久化端口。
 

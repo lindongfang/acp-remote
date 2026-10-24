@@ -33,7 +33,7 @@
  * `getBoundingClientRect()`（网页专有面；node 侧不做测量，那时跳转入口不呈现）。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import type { InteractionAnswer } from "../domain/interaction";
@@ -1400,6 +1400,12 @@ export function ConversationStream({
     return node instanceof HTMLElement ? node : null;
   };
   const scrollToY = (y: number): void => {
+    // Web 直接同步定位，避免布局回调后再排队滚动造成可见的第二次位移。
+    const host = scroller();
+    if (host !== null) {
+      host.scrollTop = y;
+      return;
+    }
     scrollRef.current?.scrollTo?.({ y, animated: false });
   };
   /**
@@ -1451,6 +1457,11 @@ export function ConversationStream({
     }
     restoreAnchor();
   };
+  // 历史读取接替流式内容、思考自动折叠等更新会改变高度。
+  // 在浏览器绘制前完成位置补偿，尺寸回调继续处理图片等异步布局。
+  useLayoutEffect(() => {
+    handleContentSizeChange();
+  });
   const handleTimelineScroll = (): void => {
     measureRef.current();
     const host = scroller();
@@ -1461,7 +1472,7 @@ export function ConversationStream({
       viewportHeight: host.clientHeight,
     });
     // 先保存阅读锚点，早期返回也不能跳过顶部翻页。
-    if (!next && host.scrollTop <= 96 && paging.hasEarlier && !paging.loading) {
+    if (!next && host.scrollTop <= 96 && (paging.hasEarlier || paging.hasEarlierHistory) && !paging.loading && !paging.loadingHistory) {
       followingRef.current = false;
       setFollowing(false);
       captureAnchor();
@@ -1817,6 +1828,11 @@ export function ConversationStream({
               </Text>
             )}
 
+            {model.timeline.windowLoading !== true ? null : (
+              <Text role="status" style={styles.historyNotice} dataSet={{ timelineWindowLoading: "true" }}>
+                正在补齐这段对话的消息和工具记录…
+              </Text>
+            )}
             <ConversationTimeline
               entries={model.timeline.entries}
               diagnosticsMode={diagnosticsMode}
@@ -1882,6 +1898,7 @@ export function ConversationStream({
             >
               <ConversationTodoDock model={model} />
               <ConversationComposer
+                silentRecovery={model.header.activation?.kind === "activating"}
                 input={model.input}
                 usage={model.usage}
                 settings={model.settings}

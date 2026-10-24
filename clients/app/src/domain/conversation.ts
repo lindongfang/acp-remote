@@ -39,6 +39,7 @@ export interface MessageView {
   readonly hasStructuredContent: boolean;
   /** turn 终态的部分结果标记；读取消息没有该字段时为 `null`。 */
   readonly partial: PartialResultView | null;
+  readonly sequence?: DecimalString;
   readonly createdAt: string;
   readonly turnId: Uuid | null;
 }
@@ -54,7 +55,7 @@ export interface SessionReadPageView {
   readonly messages: readonly MessageView[];
   readonly hasEarlier: boolean;
   /** 本页最早一条的复合游标；无消息时为 `null`。 */
-  readonly earliestCursor: { readonly createdAt: string; readonly messageId: MessageId } | null;
+  readonly earliestCursor: { readonly sequence?: DecimalString; readonly createdAt: string; readonly messageId: MessageId } | null;
 }
 
 /**
@@ -119,6 +120,7 @@ export function buildSessionReadPageView(result: SessionReadResult): SessionRead
     const content = buildAgentMessageContent(message.content);
     return {
       id: message.messageId,
+      ...(message.sequence === undefined ? {} : { sequence: message.sequence }),
       role: message.role,
       channel: message.channel ?? "reply",
       text: content.text,
@@ -142,6 +144,7 @@ export function buildSessionReadPageView(result: SessionReadResult): SessionRead
       messages.length === 0
         ? null
         : {
+            ...(messages[0]!.sequence === undefined ? {} : { sequence: messages[0]!.sequence }),
             createdAt: messages[0]!.createdAt,
             messageId: messages[0]!.messageId,
           },

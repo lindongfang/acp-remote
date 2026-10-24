@@ -136,6 +136,15 @@ export function buildConversationProcess(input: {
 }): ConversationProcessModel {
   // 1. 本次提交还没被服务端受理：上传/封存/待确认。此时说「等待响应」会假装它已被受理。
   const latest = latestPrompt(input.prompts);
+  // 当前输入之后已出现的流式正文（包括已结束但尚未读回的正文）替代等待提示。
+  // 用条目顺序限定当前展示区间，避免上一轮回复压住新一轮的等待；不补造轮次归属。
+  const lastUserIndex = input.entries.findLastIndex((entry) =>
+    entry.kind === "message" && entry.channel === "user");
+  const liveContent = input.entries.slice(lastUserIndex + 1).findLast((entry) => entry.kind === "message" &&
+    entry.channel !== "user" && entry.volatile && !entry.streamComplete);
+  if (liveContent?.kind === "message") {
+    return { phase: liveContent.channel === "thought" ? "thought" : "reply", label: null, detail: null };
+  }
   if (latest !== null && IN_FLIGHT_PHASES[latest.phase] === true) {
     return submittingModel(latest.phase);
   }
@@ -165,6 +174,11 @@ export function buildConversationProcess(input: {
     }
     // 4. 轮次未终结且没有任何实际内容：这是「等待响应」的唯一依据。
     if (!terminal) {
+      const completedContent = input.entries.slice(lastUserIndex + 1).findLast((entry) =>
+        entry.kind === "message" && entry.channel !== "user" && entry.volatile && entry.streamComplete);
+      if (completedContent?.kind === "message") {
+        return { phase: completedContent.channel === "thought" ? "thought" : "reply", label: null, detail: null };
+      }
       return {
         phase: "awaiting",
         label: "等待响应",
@@ -173,12 +187,12 @@ export function buildConversationProcess(input: {
     }
   }
 
-  // 5. 恢复中（且没有实际内容占屏）：恢复完成即消失，不另留说明。
+  // 5. 后台恢复不占时间线，避免完成回复下方短暂插入提示。
   if (input.restoring) {
     return {
       phase: "restoring",
-      label: "会话恢复中",
-      detail: "恢复完成前不会发送新消息；历史可以照常阅读。",
+      label: null,
+      detail: null,
     };
   }
   return ABSENT;
@@ -200,5 +214,5 @@ function submittingModel(phase: SentPromptPhase): ConversationProcessModel {
       detail: "Agent 尚未收到任何内容；封存完成后才会提交这一条。",
     };
   }
-  return { phase: "submitting", label: "已提交，等待服务端确认", detail: null };
+  return { phase: "submitting", label: null, detail: null };
 }

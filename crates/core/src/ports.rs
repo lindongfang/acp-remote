@@ -568,18 +568,20 @@ pub struct HistoryInclude {
 
 /// 会话消息的分页游标：`(createdAt, messageId)` 复合游标。
 ///
-/// `owned_message` 没有会话内序号，正文页按「创建时间 + 标识」稳定排序（同毫秒的消息靠标识决定先后）。
-/// 它只作用于 [`HistoryPage::messages`]，与 `events` 的 `after`（全局游标）和 `history` 的
-/// `before_history`（会话内序号）各自独立分页；取值只能来自上一页最早一条
-/// [`MessageRecord::created_at`]/[`MessageRecord::message_id`]，实现不得据此猜测或补全。
+/// Message pagination uses the durable initial event position; unknown legacy records
+/// form a stable prefix. The identity and selected domain position must match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageCursor {
+    /// Position in the request domain; storage resolves message_id to its own domain.
+    pub sequence: Option<Sequence>,
     pub created_at: Timestamp,
     pub message_id: MessageId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryQuery {
+    /// Select Owner origin positions instead of local session positions.
+    pub origin_order: bool,
     pub session: SessionId,
     pub include: HistoryInclude,
     /// 分页起点：只返回该 cursor 之后的事件；`None` = 从头。cursor 的合法性由用例层判定。

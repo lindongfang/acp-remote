@@ -115,7 +115,7 @@ async fn v15_upgrades_without_touching_old_sessions_and_keeps_references() {
         .await
         .expect("version");
     assert_eq!(version, FILE_FORMAT_VERSION);
-    assert_eq!(FILE_FORMAT_VERSION, 17);
+    assert_eq!(FILE_FORMAT_VERSION, 18);
     let owned: String =
         sqlx::query_scalar("SELECT value FROM meta WHERE key = 'owned_schema_version'")
             .fetch_one(&pool)

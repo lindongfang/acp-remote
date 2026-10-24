@@ -676,6 +676,7 @@ async fn capabilities_are_negotiated_truthfully_and_gate_unsupported_calls() {
     // 历史往返必须显式不支持，而不是返回空页（空页会被误读成「没有历史」）。
     let history = endpoint
         .read_history(acp_core::ports::HistoryQuery {
+            origin_order: false,
             session: session_id(SESSION),
             include: Default::default(),
             before_history: None,

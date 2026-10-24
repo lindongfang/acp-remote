@@ -2,9 +2,10 @@ import { expect, it } from "vitest";
 import { appendDelta, buildTimeline } from "./conversation-timeline";
 import type { InteractionView } from "../domain/interaction";
 
-it("没有历史事件的审批按请求时间插入思考和工具之后，补回事件后不重复", () => {
+it("没有历史事件的审批按请求序号插入思考和工具之后，补回事件后不重复", () => {
   const interaction: InteractionView = {
     interactionId: "approval", sessionId: "session", kind: "permission",
+    sequence: "3",
     title: null, description: null, schema: null,
     requestedAt: "2026-10-24T00:00:03.000Z", turnId: null,
     witnessed: false, effective: false, requestVersion: null, expiresAt: null,
@@ -12,6 +13,7 @@ it("没有历史事件的审批按请求时间插入思考和工具之后，补�
   };
   const input = { messages: [], volatile: [appendDelta(undefined, {
     messageId: "thought", sessionId: "session", channel: "thought", turnId: null,
+    sequence: "1",
     deltaIndex: "0", text: "先检查环境", createdAt: "2026-10-24T00:00:01.000Z",
   })], interactions: [interaction], records: [
     { source: "history", ownerNodeId: null, eventId: "tool", eventType: "tool.call.started",

@@ -181,11 +181,10 @@ import {
   buildElicitationForm,
   buildSessionReadPageView,
   buildTimelineCard,
-  compareTimelinePosition,
+  compareRecordOrder,
   directoryNamesOf,
   localActivityOf,
   mediaBlocksOfDelta,
-  positionOf,
   recordFromEvent,
   recordFromHistoryItem,
   recordFromRemoteEvent,
@@ -1318,6 +1317,7 @@ function decodePendingInteractions(raw: readonly unknown[]): PendingInteractionI
         sessionId: decoded.value.sessionId,
         kind: decoded.value.kind,
         requestVersion: decoded.value.requestVersion,
+        ...(decoded.value.sequence === undefined ? {} : { sequence: decoded.value.sequence }),
         expiresAt: decoded.value.expiresAt,
         options: decoded.value.options,
         schema: decoded.value.schema,
@@ -1510,7 +1510,7 @@ function withPromptPhase(
 function newestRecordOf(records: readonly StructuredRecord[]): StructuredRecord | null {
   let newest: StructuredRecord | null = null;
   for (const record of records) {
-    if (newest === null || compareTimelinePosition(positionOf(record), positionOf(newest)) > 0) newest = record;
+    if (newest === null || compareRecordOrder(record, newest) > 0) newest = record;
   }
   return newest;
 }
@@ -1654,6 +1654,8 @@ export class ClientStore {
   readonly #pairing: PairingWiring | null;
   readonly #overlayStore = new AgentConnectionOverlayStore();
   readonly #pendingReads = new Map<Uuid, PendingRead>();
+  /** Fixed lower bound while the two independently paged resources catch up. */
+  readonly #timelineFloors = new Map<Uuid, string>();
   readonly #listeners = new Set<Listener>();
   readonly #directoryRefreshRequests = new Set<Uuid>();
   readonly #schedule: ((delayMs: number, task: () => void) => () => void) | null;
@@ -1830,6 +1832,7 @@ export class ClientStore {
    * `resources`——§9.4 要求验证失败时保留上一次已完成的状态。
    */
   apply(event: SyncClientEvent): void {
+    const readPending = event.kind === "command_result" ? this.#pendingReads.get(event.result.body.requestId) : undefined;
     const wasOnline = this.#state.connection.state === "online";
     // 新连接上的结果查询重新计数：同一条标题命令每次重连后都会再查一次原请求。
     if (event.kind === "authenticated") {
@@ -1855,7 +1858,21 @@ export class ClientStore {
     // 只有在权威摘要反映这次保存后才能退出编辑。
     const settled = this.#settleTitleCommits(recovered);
     if (settled === this.#state) return;
+    if (resetFiles) this.#timelineFloors.clear();
+    if (readPending !== undefined && event.kind === "command_result") {
+      if (event.result.body.status !== "completed") this.#timelineFloors.delete(readPending.sessionId);
+      else if (!this.#timelineFloors.has(readPending.sessionId) &&
+        ["first", "rebuild_remote", "earlier", "earlier_history"].includes(readPending.intent)) {
+        const thread = settled.threads.get(readPending.sessionId);
+        const message = thread?.page?.earliestCursor?.sequence;
+        const history = thread?.nextBeforeHistory;
+        if (message !== undefined && history != null) {
+          this.#timelineFloors.set(readPending.sessionId, BigInt(message) < BigInt(history) ? message : history);
+        }
+      }
+    }
     this.#commit(settled);
+    if (readPending !== undefined) this.#alignTimelineWindow(readPending.sessionId);
     if (!wasOnline && this.#state.connection.state === "online" && this.#activeConversationSession !== null) {
       this.#activeFileRefreshNeeded = true;
     }
@@ -2800,7 +2817,8 @@ export class ClientStore {
       for (const [messageId, tail] of volatile) {
         if (tail.channel !== "thought" || tail.completed || tail.sessionId !== sessionId ||
             tail.turnId !== phaseTurnId || messageId === nextMessageId ||
-            record.createdAt < tail.createdAt) continue;
+            (record.sessionSequence !== null && tail.sequence !== undefined &&
+             BigInt(record.sessionSequence) < BigInt(tail.sequence))) continue;
         volatile.set(messageId, { ...tail, completed: true });
         changed = true;
       }
@@ -2831,6 +2849,7 @@ export class ClientStore {
           deltaIndex,
           text: text ?? "",
           createdAt: record.createdAt,
+          ...(record.sessionSequence === null ? {} : { sequence: record.sessionSequence }),
           mediaBlocks: blockMedia,
         }),
       );
@@ -3696,6 +3715,7 @@ export class ClientStore {
       timeline: {
         entries,
         process,
+        windowLoading: this.#timelineFloors.has(sessionId),
         structuredHistory: structuredHistoryAvailability({
           origin,
           historyFeatureNegotiated: this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE),
@@ -3888,7 +3908,7 @@ export class ClientStore {
       (record) => record.sessionId === null && isDegradedRecord(record),
     );
     // 到达顺序不等于时间顺序（重投、批次交错），按时间位置排序让这一面的内容可复现。
-    records.sort((left, right) => compareTimelinePosition(positionOf(left), positionOf(right)));
+    records.sort(compareRecordOrder);
     return records.map((record) => buildDegradedRecordModel(record));
   }
 
@@ -6901,10 +6921,35 @@ export class ClientStore {
   /** 向上翻页（消息）：续取游标取上一页最早一条的 `(createdAt, messageId)`。 */
   loadEarlier(sessionId: Uuid): void {
     if ([...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId)) return;
-    if (this.#state.threads.get(sessionId)?.page?.hasEarlier !== true) return;
-    const before = this.#state.threads.get(sessionId)?.page?.earliestCursor ?? null;
-    if (before === null) return;
+    const thread = this.#state.threads.get(sessionId);
+    const before = thread?.page?.earliestCursor ?? null;
+    // Catch up the stream whose boundary is newer before extending the other stream.
+    // An exhausted message stream must not hide older tools/history from the load action.
+    const history = thread?.nextBeforeHistory ?? null;
+    if (thread?.historyHasEarlier === true && history !== null &&
+        (thread.page?.hasEarlier !== true ||
+         (before?.sequence !== undefined && BigInt(history) > BigInt(before.sequence)))) {
+      this.loadEarlierHistory(sessionId);
+      return;
+    }
+    if (thread?.page?.hasEarlier !== true || before === null) return;
     this.#requestPage(sessionId, "earlier", { before });
+  }
+
+  #alignTimelineWindow(sessionId: Uuid): void {
+    const floor = this.#timelineFloors.get(sessionId);
+    if (floor === undefined || [...this.#pendingReads.values()].some(pending => pending.sessionId === sessionId)) return;
+    const thread = this.#state.threads.get(sessionId);
+    const message = thread?.page?.earliestCursor;
+    const history = thread?.nextBeforeHistory;
+    if (thread?.historyHasEarlier === true && history != null && BigInt(history) > BigInt(floor)) {
+      this.loadEarlierHistory(sessionId);
+    } else if (thread?.page?.hasEarlier === true && message?.sequence !== undefined && BigInt(message.sequence) > BigInt(floor)) {
+      this.#requestPage(sessionId, "earlier", { before: message });
+    } else {
+      this.#timelineFloors.delete(sessionId);
+      this.#commit({ ...this.#state });
+    }
   }
 
   /**

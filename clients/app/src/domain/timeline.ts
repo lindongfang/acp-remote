@@ -20,9 +20,8 @@
  *
  * ## 时间顺序
  *
- * 以 `createdAt` 为主键；同一时刻退到**会话内序号**（历史与实时都有它，`beforeHistory` 用的是
- * 同一口径），再退到全局投递序号，最后按构造次序（`Array.prototype.sort` 稳定）。序号比较用
- * `BigInt`：它是十进制字符串，位数不同时字典序会给错答案。
+ * 按 Owner 的同域序号排序，不能用时间或 Access 投递序号替代；未知旧历史前置。
+ * 序号使用 `BigInt` 精确比较，不经过 JavaScript number。
  */
 
 import type { ConfigOptionChoice, ConfigOptionView, PublicError, RawAcp } from "../protocol/common";
@@ -58,6 +57,7 @@ export interface StructuredRecord {
   readonly sessionSequence: string | null;
   /** 全局投递序号：只有实时事件有（历史条目不是本次连接的投递记录）。 */
   readonly globalSequence: string | null;
+  readonly firstSequence?: string | null;
   /** 事件来源种类（`body.origin.kind`）；历史条目没有 origin，为 `null`。 */
   readonly originKind: string | null;
   readonly view: Readonly<Record<string, unknown>>;
@@ -74,6 +74,7 @@ export function recordFromEvent(event: EventMessage): StructuredRecord {
     sessionId: event.body.sessionId,
     createdAt: event.body.createdAt,
     sessionSequence: event.body.sessionSequence,
+    firstSequence: timelineAnchor(event.body.payload.view, "_timelineSequence"),
     globalSequence: event.body.globalSequence,
     originKind: event.body.origin.kind,
     view: event.body.payload.view,
@@ -100,6 +101,7 @@ export function recordFromHistoryItem(
     sessionId,
     createdAt: item.createdAt,
     sessionSequence: item.sessionSequence,
+    firstSequence: timelineAnchor(item.view, ownerNodeId === null ? "_timelineSequence" : "_timelineOriginSequence"),
     globalSequence: null,
     originKind: null,
     view: item.view,
@@ -123,6 +125,7 @@ export function recordFromRemoteEvent(event: RemoteEventItem): StructuredRecord 
     sessionId: event.sessionRef.sessionId,
     createdAt: event.createdAt,
     sessionSequence: event.originSequence,
+    firstSequence: timelineAnchor(event.payload.view ?? {}, "_timelineOriginSequence"),
     globalSequence: null,
     originKind: "node",
     view: event.payload.view ?? {},
@@ -136,20 +139,40 @@ export interface TimelinePosition {
   readonly sequence: string | null;
 }
 
-/** 记录的位置：次序分量优先取会话内序号，其次全局序号。 */
+/** 记录的位置：owned 会话域或 remote 来源域；绝不混入全局投递序号。 */
 export function positionOf(record: StructuredRecord): TimelinePosition {
-  return { createdAt: record.createdAt, sequence: record.sessionSequence ?? record.globalSequence };
+  return { createdAt: record.createdAt, sequence: record.firstSequence ?? record.sessionSequence };
 }
 
 /**
  * 位置比较。
  *
- * 时间走 `Date.parse`（`createdAt` 是固定形状的 UTC 毫秒时间戳）；同一时刻按次序分量升序，
- * 分量缺席（`null`）排在有值的**前面**（它没有可比信息，保持「先构造先出现」更不容易制造错觉）。
+ * 已知位置只比较同域序号；缺席位置独立前置，时间只给旧历史提供稳定次序。
  */
+/** Owner projection anchors never pass through JavaScript numbers. */
+function timelineAnchor(view: Readonly<Record<string, unknown>>, key: string): string | null {
+  const value = view[key];
+  if (value === undefined) return null;
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) throw new Error('Invalid ' + key);
+  return value;
+}
+
+/** State updates use the event position, not the fixed presentation anchor. */
+export function compareRecordOrder(a: StructuredRecord, b: StructuredRecord): number {
+  if (a.ownerNodeId === b.ownerNodeId && a.sessionId === b.sessionId && a.sessionSequence !== null && b.sessionSequence !== null) {
+    return compareTimelinePosition({ createdAt: a.createdAt, sequence: a.sessionSequence }, { createdAt: b.createdAt, sequence: b.sessionSequence });
+  }
+  if (a.ownerNodeId === null && b.ownerNodeId === null && a.globalSequence !== null && b.globalSequence !== null) {
+    return BigInt(a.globalSequence) === BigInt(b.globalSequence) ? 0 : BigInt(a.globalSequence) < BigInt(b.globalSequence) ? -1 : 1;
+  }
+  return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+}
+
 export function compareTimelinePosition(a: TimelinePosition, b: TimelinePosition): number {
-  const delta = Date.parse(a.createdAt) - Date.parse(b.createdAt);
-  if (delta !== 0) return delta;
+  // Unknown legacy positions form a stable prefix; clocks never reorder known positions.
+  if (a.sequence === null && b.sequence === null) {
+    return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  }
   if (a.sequence === b.sequence) return 0;
   if (a.sequence === null) return -1;
   if (b.sequence === null) return 1;
@@ -659,7 +682,7 @@ export function buildTimelineCard(
       const toolCallId = viewText(group.earliest.view, "toolCallId");
       // 到达顺序不等于时间顺序；各部分组成取最新非缺席值，因此先按位置排序。
       const ordered = [...group.records].sort((a, b) =>
-        compareTimelinePosition(positionOf(a), positionOf(b)),
+        compareRecordOrder(a, b),
       );
       // 真实 Agent 的 updated/completed 可能把 title 写成空串；空串不是「标题缺失」的
       // 权威事实，取组内最新的非空标题（通常来自 started），否则才降级。
@@ -797,7 +820,7 @@ export function groupStructuredRecords(records: readonly StructuredRecord[]): re
       continue;
     }
     existing.records.push(record);
-    if (compareTimelinePosition(positionOf(record), positionOf(existing.latest)) > 0) existing.latest = record;
+    if (compareRecordOrder(record, existing.latest) > 0) existing.latest = record;
     if (compareTimelinePosition(positionOf(record), positionOf(existing.earliest)) < 0) existing.earliest = record;
   }
   return [...groups.entries()]

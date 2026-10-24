@@ -313,6 +313,14 @@ pub struct SnapshotItemMessage {
     pub status: NonEmptyText<32>,
     #[serde(rename = "createdAt")]
     pub created_at: Timestamp,
+    /// 首次输出位置；owned 为会话序号，远程来源为 Owner origin 序号。
+    /// 缺席表示旧历史无法可靠恢复顺序，不允许按时间伪造该值。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sequence: Option<DecimalString>,
     #[serde(rename = "turnId")]
     pub turn_id: Nullable<Uuid>,
     /// 消息通道（`core.typed-media.v1`）：回复与思考分别持久化，客户端据此区分。

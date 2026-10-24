@@ -2035,7 +2035,7 @@ fn json_message(value: &serde_json::Value) -> Result<MessageRecord, PortError> {
         .ok_or(PortError::Corrupt("a message createdAt is missing"))?;
     let created_at =
         Timestamp::new(created_at).map_err(|_| PortError::Corrupt("a message time is invalid"))?;
-    MessageRecord::try_new(
+    let mut record = MessageRecord::try_new(
         MessageId::new(message_id).map_err(|_| PortError::Corrupt("a message id is invalid"))?,
         SessionId::new(session)
             .map_err(|_| PortError::Corrupt("a message session id is invalid"))?,
@@ -2047,7 +2047,29 @@ fn json_message(value: &serde_json::Value) -> Result<MessageRecord, PortError> {
         created_at.clone(),
         created_at,
     )
-    .map_err(|_| PortError::Corrupt("a message is not representable"))
+    .map_err(|_| PortError::Corrupt("a message is not representable"))?;
+    record.first_origin_sequence = match value.get("sequence") {
+        None => None,
+        Some(value) => {
+            let text = value
+                .as_str()
+                .ok_or(PortError::Corrupt("a message sequence is invalid"))?;
+            if text.is_empty()
+                || (text.len() > 1 && text.starts_with('0'))
+                || !text.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(PortError::Corrupt("a message sequence is invalid"));
+            }
+            Some(
+                Sequence::new(
+                    text.parse()
+                        .map_err(|_| PortError::Corrupt("a message sequence is invalid"))?,
+                )
+                .map_err(|_| PortError::Corrupt("a message sequence is invalid"))?,
+            )
+        }
+    };
+    Ok(record)
 }
 
 fn json_history(

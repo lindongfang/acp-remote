@@ -5116,24 +5116,18 @@ impl Broker {
         if fragments.is_empty() {
             return Ok(Vec::new());
         }
-        let mut order: HashMap<String, (u64, MessageId)> = HashMap::new();
+        // Receipt order follows first appearance, never per-message delta indexes or UUIDs.
+        let mut messages = Vec::new();
         for fragment in &fragments {
-            let key = fragment.message.as_str().to_owned();
-            let entry = order
-                .entry(key)
-                .or_insert((fragment.index, fragment.message.clone()));
-            if fragment.index < entry.0 {
-                entry.0 = fragment.index;
+            if !messages
+                .iter()
+                .any(|message: &MessageId| message == &fragment.message)
+            {
+                messages.push(fragment.message.clone());
             }
         }
-        let mut messages: Vec<(u64, MessageId)> = order.into_values().collect();
-        messages.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.as_str().cmp(right.1.as_str()))
-        });
         let mut events = Vec::new();
-        for (_, message) in messages {
+        for message in messages {
             let own: Vec<DeltaFragment> = fragments
                 .iter()
                 .filter(|fragment| fragment.message == message)
@@ -5293,6 +5287,7 @@ impl Broker {
             let view = self.deps.store.read_view().await?;
             let page = view
                 .read_session(HistoryQuery {
+                    origin_order: false,
                     session: session_id.clone(),
                     include: HistoryInclude {
                         messages: true,
@@ -5612,6 +5607,7 @@ impl Broker {
         request: &RequestId,
     ) -> Result<Option<TurnId>, PortError> {
         let query = HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: HistoryInclude {
                 turns: true,
@@ -5861,6 +5857,7 @@ impl Broker {
             }
             None => {
                 let query = HistoryQuery {
+                    origin_order: false,
                     session: session.clone(),
                     include: HistoryInclude {
                         pending_interactions: true,
@@ -11468,6 +11465,7 @@ mod tests {
         // (b) 读视图里该行的 options 恒为空（不落库），正文经 event_payload 还原。
         let read_view = block_on(harness.broker.read_view()).expect("read view");
         let page = block_on(read_view.read_session(HistoryQuery {
+            origin_order: false,
             session: harness.session.clone(),
             include: HistoryInclude {
                 messages: false,
@@ -11554,6 +11552,7 @@ mod tests {
 
         let read_view = block_on(harness.broker.read_view()).expect("read view");
         let page = block_on(read_view.read_session(HistoryQuery {
+            origin_order: false,
             session: harness.session.clone(),
             include: HistoryInclude {
                 history: true,

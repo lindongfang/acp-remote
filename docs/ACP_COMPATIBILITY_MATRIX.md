@@ -285,3 +285,8 @@ report 的每行只能使用：
 - `blocked`：环境依赖缺失，必须附原因。
 
 不得用 `skip` 或空值把失败伪装成兼容。普通 CI 使用 fake Agent；真实 Agent report 不作为普通单元测试的硬依赖，但发布前应保存所支持 Agent 的版本化报告。
+
+
+### Continuous output order
+
+Agent-host preserves ACP output order without imposing thought/tool/reply phases. Adjacent chunks of the same channel and ACP message append to one Remote fragment; intervening visible events terminate it. Permission and terminal events also terminate a fragment. Remote fragment IDs do not rewrite ACP message IDs or raw JSON. Durable message start positions survive delta cleanup. See CORE_PORTS_AND_STORAGE.md, Conversation order (v18).

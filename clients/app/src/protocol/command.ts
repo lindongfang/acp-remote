@@ -194,6 +194,7 @@ export interface SessionResumeCommand extends CommandEnvelope {
  * 单字段游标按 `protocol.schema_invalid` 拒绝（`design.md` D2）。
  */
 export interface SessionReadBefore {
+  readonly sequence?: DecimalString;
   readonly createdAt: Timestamp;
   readonly messageId: Uuid;
 }

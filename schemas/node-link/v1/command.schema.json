@@ -306,6 +306,7 @@
         "messageId"
       ],
       "properties": {
+        "sequence": { "$ref": "common.schema.json#/$defs/decimalString" },
         "createdAt": {
           "$ref": "common.schema.json#/$defs/timestamp"
         },
@@ -313,7 +314,7 @@
           "$ref": "common.schema.json#/$defs/uuid"
         }
       },
-      "description": "session.read 消息页的复合游标（docs/NODE_LINK_PROTOCOL.md §12.7），与 Sync 面 §11.5 的 before 同义：两个键必须同时出现，单字段游标被拒绝。"
+      "description": "Message page cursor. sequence is the first output position; createdAt and messageId identify the boundary. A missing sequence denotes legacy history whose order cannot be proven."
     },
     "submitSessionRead": {
       "allOf": [

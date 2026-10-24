@@ -108,6 +108,7 @@ fn append(session: &SessionId, hour: u32, events: Vec<PendingEvent>) -> OwnedCom
 /// 只开 `history` 的历史页查询：`messages` 关掉，用来固定「两个集合互不影响」。
 fn query(session: &SessionId, before: Option<u64>, limit: u32) -> HistoryQuery {
     HistoryQuery {
+        origin_order: false,
         session: session.clone(),
         include: HistoryInclude {
             messages: false,
@@ -133,6 +134,7 @@ fn both_faces(
     limit: u32,
 ) -> HistoryQuery {
     HistoryQuery {
+        origin_order: false,
         session: session.clone(),
         include: HistoryInclude {
             messages: true,
@@ -407,10 +409,28 @@ async fn history_pages_carry_bodies_and_never_overlap() {
     .fetch_one(&pool)
     .await
     .expect("stored row");
+    assert!(
+        first
+            .payload
+            .view
+            .as_str()
+            .starts_with(stored_view.trim_end().strip_suffix('}').expect("object")),
+        "原始 view 成员必须保留库内字节，不重新序列化"
+    );
+    let mut projected: serde_json::Value =
+        serde_json::from_str(first.payload.view.as_str()).expect("view");
+    let object = projected.as_object_mut().expect("object");
     assert_eq!(
-        first.payload.view.as_str(),
-        stored_view.as_str(),
-        "view 必须是库内那串字节（不重新序列化）"
+        object.remove("_timelineSequence"),
+        Some(serde_json::json!("1"))
+    );
+    assert_eq!(
+        object.remove("_timelineOriginSequence"),
+        Some(serde_json::json!("1"))
+    );
+    assert_eq!(
+        projected,
+        serde_json::from_str::<serde_json::Value>(&stored_view).expect("stored view")
     );
     pool.close().await;
 

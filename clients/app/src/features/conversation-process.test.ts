@@ -88,12 +88,34 @@ function applyEvent(
 }
 
 describe("过程阶段：提交中 → 等待响应 → 实际思考/工具/回复", () => {
+  it("无轮次标识的回复流结束后，不在轮次终态到达前重新插入等待行", () => {
+    const { store } = interactionStore();
+    const requestId = submit(store, "检查稳定性");
+    store.apply({ kind: "command_result", result: promptAccepted(requestId, "turn-1") });
+    applyEvent(store, {
+      eventType: "agent.message.delta", eventId: "dddddddd-0000-4000-8000-0000000009b1",
+      globalSequence: "10", createdAt: "2026-10-01T00:00:03.000Z",
+      view: { messageId: "reply-without-turn", deltaIndex: "0", text: "检查完成" },
+    });
+    expect(processOf(store).label).toBeNull();
+    applyEvent(store, {
+      eventType: "agent.message.completed", eventId: "dddddddd-0000-4000-8000-0000000009b2",
+      globalSequence: "11", createdAt: "2026-10-01T00:00:04.000Z",
+      view: { messageId: "reply-without-turn" },
+    });
+    expect(processOf(store).label).toBeNull();
+    applyEvent(store, {
+      eventType: "turn.completed", eventId: "dddddddd-0000-4000-8000-0000000009b3",
+      globalSequence: "12", view: { turnId: "turn-1", state: "completed" },
+    });
+    expect(processOf(store).label).toBeNull();
+  });
   it("已提交但未受理时是「等待服务端确认」，不冒充已受理", () => {
     const { store } = interactionStore();
     submit(store, "帮我看看");
     const process = processOf(store);
     expect(process.phase).toBe("submitting");
-    expect(process.label).toBe("已提交，等待服务端确认");
+    expect(process.label).toBeNull();
   });
 
   it("受理后没有输出：一条「等待响应」，不写成思考中", () => {
@@ -143,6 +165,21 @@ describe("过程阶段：提交中 → 等待响应 → 实际思考/工具/回�
     const replying = processOf(store);
     expect(replying.phase).toBe("reply");
     expect(replying.label).toBeNull();
+  });
+
+  it("流式回复没有轮次标识时也撤掉等待效果", () => {
+    const { store } = interactionStore();
+    const requestId = submit(store, "帮我看看");
+    store.apply({ kind: "command_result", result: promptAccepted(requestId, "turn-1") });
+    expect(processOf(store).phase).toBe("awaiting");
+    applyEvent(store, {
+      eventType: "agent.message.delta",
+      eventId: "dddddddd-0000-4000-8000-0000000008f1",
+      globalSequence: "10",
+      view: { messageId: "reply-without-turn", deltaIndex: "0", text: "开始回复" },
+    });
+    expect(processOf(store).phase).toBe("reply");
+    expect(processOf(store).label).toBeNull();
   });
 
   it("授权卡在等待时让位（attention），不与「等待响应」重叠", () => {
@@ -204,7 +241,7 @@ describe("过程阶段：提交中 → 等待响应 → 实际思考/工具/回�
 });
 
 describe("过程阶段：会话恢复", () => {
-  it("恢复中给一条恢复说明；恢复成功后撤掉它", () => {
+  it("恢复中不显示提示，后台仍派发恢复请求", () => {
     const fixture: StoreFixture = onlineStore({
       resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "idle", localActivity: "active" })] }),
       features: [LOCAL_SESSION_LIFECYCLE_FEATURE],
@@ -213,7 +250,8 @@ describe("过程阶段：会话恢复", () => {
 
     const restoring = processOf(fixture.store);
     expect(restoring.phase).toBe("restoring");
-    expect(restoring.label).toBe("会话恢复中");
+    expect(restoring.label).toBeNull();
+    expect(restoring.detail).toBeNull();
 
     const resume = lastDispatch(fixture.gateway);
     if (resume.body.command !== "session.resume") throw new Error("应先派发 session.resume");
