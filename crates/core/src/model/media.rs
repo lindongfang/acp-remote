@@ -34,9 +34,15 @@ pub const ATTACHMENT_MANIFEST_PAGE: usize = 64;
 
 token_enum!(
     /// 消息通道（`SYNC_PROTOCOL.md` §10.4）：回复与思考**分别**持久化、分别折叠。
+    ///
+    /// `User` 是**内部存储通道**（`conversation-reliability` WP2）：它只用于解析
+    /// `owned_message.channel='user'` 的行——Owner 自己受理并保存的用户输入（首条与后续同形），
+    /// **不是** Agent 回显。该取值**不进** wire 的 `messageChannel` 词表：用户消息在 `session.read`
+    /// 的 `messages` 里按 `role=user` 投影、`channel` 键缺席（§3.11/§5.2）。
     MessageChannel {
         Reply => "reply",
         Thought => "thought",
+        User => "user",
     }
 );
 

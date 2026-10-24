@@ -59,6 +59,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create session")
@@ -115,6 +116,7 @@ async fn create_permission(
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create permission");
@@ -150,6 +152,7 @@ async fn create_elicitation(store: &SqliteStore, session: &SessionId) -> Interac
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create elicitation");
@@ -211,6 +214,7 @@ fn resolution_commit(
         idempotency: None,
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     }
 }
 
@@ -238,6 +242,7 @@ fn confirmation_commit(interaction: &InteractionId, session: &SessionId, hour: u
         idempotency: None,
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     }
 }
 
@@ -752,6 +757,7 @@ async fn invalidated_requests_disappear_from_every_pending_reader() {
         idempotency: None,
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     };
     let error = store.commit(commit).await.expect_err("expired request");
     assert!(

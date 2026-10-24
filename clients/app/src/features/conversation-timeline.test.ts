@@ -305,6 +305,23 @@ describe("D1 时间线：历史条目与实时事件同一套呈现", () => {
 });
 
 describe("D9 轮次分组：同 turnId 被无标识条目切开", () => {
+  it("思考先到则排在授权前，工具后续完成不把卡片移到授权后", () => {
+    const { store } = storeWithHistoryFeature();
+    const items = [
+      { eventType: "agent.thought.delta", view: { messageId: "order-thought", turnId: "order-turn", deltaIndex: "0", text: "先检查环境" } },
+      { eventType: "tool.call.started", view: { toolCallId: "order-tool", turnId: "order-turn", title: "搜索代码", state: "in_progress" } },
+      { eventType: "permission.requested", view: { interactionId: "order-permission", turnId: "order-turn", title: "pwd", options: [{ optionId: "once", label: "允许一次", kind: "allow_once" }] } },
+      { eventType: "tool.call.completed", view: { toolCallId: "order-tool", turnId: "order-turn", title: "搜索代码", state: "completed" } },
+    ];
+    items.forEach((item, index) => store.apply({ kind: "event", event: eventMessage({
+      ...item, eventId: `dddddddd-0000-4000-8000-${String(901 + index).padStart(12, "0")}`,
+      sessionId: SESSION_ID, globalSequence: String(20 + index), createdAt: "2026-10-01T00:00:02.000Z",
+    }) }));
+    const entries = store.conversationPage(SESSION_ID)?.timeline.entries ?? [];
+    expect(entries.map((entry) => entry.kind)).toEqual(["message", "tool_call", "permission_requested"]);
+    expect(entries[1]).toMatchObject({ state: "completed" });
+  });
+
   it("permission_requested → permission_resolved → agent.message 的组 key 不重复", () => {
     const { store } = storeWithHistoryFeature();
     const interactionId = "99999999-0000-4000-8000-000000000031";

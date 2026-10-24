@@ -287,6 +287,79 @@ describe("附件上传：失败与取消都不发文字", () => {
   });
 });
 
+describe("附件上传阶段在时间线上的实情", () => {
+  it("点击发送后立即显示本次输入与「上传中」，Agent 尚未收到内容", async () => {
+    const { store, gateway, transfer } = buildStore();
+    await store.pickAttachments(SESSION_ID, "file");
+    const gate: { resolve: () => void } = { resolve: () => undefined };
+    const promise = new Promise<void>((resolve) => {
+      gate.resolve = resolve;
+    });
+    transfer.gate = { promise, release: gate.resolve };
+
+    store.submitPrompt(SESSION_ID, "带附件的输入");
+    await settle();
+
+    const page = store.conversationPage(SESSION_ID);
+    const entry = (page?.timeline.entries ?? []).find(
+      (item) => item.kind === "message" && item.channel === "user",
+    );
+    expect(entry?.kind === "message" ? entry.message.text : null).toContain("带附件的输入");
+    expect(entry?.kind === "message" ? entry.local?.phase : null).toBe("uploading");
+    expect(page?.timeline.process.phase).toBe("submitting");
+    expect(page?.timeline.process.label).toBe("附件上传中");
+    // 上传完成前一条 prompt 都没有派发。
+    expect(promptDispatches(gateway)).toHaveLength(0);
+
+    gate.resolve();
+    await settle();
+    // 封存/派发之后转到「已提交」，而不是继续显示上传中。
+    const dispatched = store.conversationPage(SESSION_ID);
+    expect(dispatched?.timeline.process.phase).not.toBe("uploading");
+    expect(promptDispatches(gateway)).toHaveLength(1);
+  });
+
+  it("上传失败：已显示的输入标「未发送」并保留文字，不假装 Agent 收到", async () => {
+    const { store, gateway, transfer } = buildStore();
+    await store.pickAttachments(SESSION_ID, "file");
+    transfer.failAt = 1;
+
+    store.submitPrompt(SESSION_ID, "上传会失败");
+    await settle();
+
+    const page = store.conversationPage(SESSION_ID);
+    const entry = (page?.timeline.entries ?? []).find(
+      (item) => item.kind === "message" && item.channel === "user",
+    );
+    expect(entry?.kind === "message" ? entry.local?.phase : null).toBe("failed");
+    // 阶段标签本身已经是「未发送」，notice 只留真实原因，不重复前缀。
+    expect(entry?.kind === "message" ? entry.local?.notice : null).toBe("网络中断：上传未完成");
+    expect(entry?.kind === "message" ? entry.local?.notice : null).not.toContain("未发送");
+    // 文字仍在输入区（可修正），且没有派发任何 prompt。
+    expect(page?.input.draft).toBe("上传会失败");
+    expect(promptDispatches(gateway)).toHaveLength(0);
+    // 过程行不再宣称「提交中」。
+    expect(page?.timeline.process.phase).not.toBe("submitting");
+  });
+
+  it("同一请求重试只保留一条本地条目", async () => {
+    const { store, transfer } = buildStore();
+    await store.pickAttachments(SESSION_ID, "file");
+    transfer.failAt = 1;
+    store.submitPrompt(SESSION_ID, "重试的输入");
+    await settle();
+    transfer.failAt = null;
+    store.retryAttachments(SESSION_ID);
+    store.submitPrompt(SESSION_ID, "重试的输入");
+    await settle();
+
+    const locals = (store.conversationPage(SESSION_ID)?.timeline.entries ?? []).filter(
+      (item) => item.kind === "message" && item.channel === "user",
+    );
+    expect(locals).toHaveLength(1);
+  });
+});
+
 describe("媒体读取与 Blob 生命周期", () => {
   it("读取一次生成对象 URL，释放时撤销并移除状态", async () => {
     const { store, media } = buildStore();

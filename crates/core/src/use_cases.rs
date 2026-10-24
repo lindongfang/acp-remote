@@ -5212,6 +5212,7 @@ mod tests {
             }),
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(&uuid_text(303)).expect("origin epoch")),
+            input: None,
         }))
         .expect("五条事件 + 一条设备命令行");
         block_on(store.commit(OwnedCommit {
@@ -5238,6 +5239,7 @@ mod tests {
             }),
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(&uuid_text(303)).expect("origin epoch")),
+            input: None,
         }))
         .expect("一条节点命令行");
 
@@ -5417,6 +5419,7 @@ mod tests {
                     }),
                     command_terminal: None,
                     origin_epoch: Some(OriginEpoch::new(&uuid_text(321)).expect("origin epoch")),
+                    input: None,
                 }),
             )
             .expect("一条设备事件");

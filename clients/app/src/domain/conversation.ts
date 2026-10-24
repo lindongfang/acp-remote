@@ -12,7 +12,7 @@
 import type { DecimalString, Uuid } from "../protocol/common";
 import type { SessionReadResult } from "../protocol/command";
 import type { AgentMessageContent, MessageChannelView, PartialResultView } from "./media";
-import { buildAgentMessageContent } from "./media";
+import { buildAgentMessageContent, PARTIAL_RESULT_LABELS } from "./media";
 
 /** 消息的稳定标识。 */
 export type MessageId = Uuid;
@@ -120,12 +120,15 @@ export function buildSessionReadPageView(result: SessionReadResult): SessionRead
     return {
       id: message.messageId,
       role: message.role,
-      // `snapshotItem.messages` 没有通道字段：读取结果按正文呈现。思考由实时/历史事件承载。
-      channel: "reply",
+      channel: message.channel ?? "reply",
       text: content.text,
       content,
       hasStructuredContent: content.hasStructuredContent,
-      partial: null,
+      partial: message.partial === undefined ? null : {
+        state: message.partial.state,
+        reason: message.partial.reason,
+        label: PARTIAL_RESULT_LABELS[message.partial.state],
+      },
       createdAt: message.createdAt,
       turnId: message.turnId,
     };

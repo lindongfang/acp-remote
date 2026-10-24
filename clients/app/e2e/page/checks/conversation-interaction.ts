@@ -171,6 +171,114 @@ function messageIdsOf(container: HTMLElement): readonly string[] {
 
 const checks: readonly Check[] = [
   {
+    name: "CP-TURNENDED 本轮取消后撤掉缓存审批，四个选项显示中文",
+    async run() {
+      const interactionId = "e0000000-0000-4000-8000-000000000308";
+      const options = [
+        { optionId: "once", label: "Allow once", kind: "allow_once" },
+        { optionId: "always", label: "Always allow", kind: "allow_always" },
+        { optionId: "reject", label: "Reject", kind: "reject_once" },
+        { optionId: "never", label: "Always reject", kind: "reject_always" },
+      ];
+      await withSessionPage(sessionScenario({ selectPendingInteractions: true,
+        events: [wireEvent({ globalSequence: 11, eventId: "e0000000-0000-4000-8000-000000000309", sessionId: SESSION_ALPHA,
+          eventType: "permission.requested", view: { interactionId, turnId: TURN_ID, requestVersion: "7", title: "运行命令", options } })],
+        readResult: (sessionId) => readPage({ sessionId, pendingInteractions: [{ interactionId, sessionId, kind: "permission",
+          requestVersion: "7", expiresAt: null, options, schema: null }] }),
+      }), (container) => queryAll(container, '[data-answer-option]').length === 4, "四个审批选项出现", async (mounted) => {
+        for (const [id, label] of [["once", "允许一次"], ["always", "始终允许"], ["reject", "拒绝一次"], ["never", "始终拒绝"]]) {
+          expectEqual(textOf(query(mounted.container, `[data-answer-option="${id}"]`)), label, "审批选项中文展示");
+        }
+        mounted.host?.deliverEvent(wireEvent({ globalSequence: 12, eventId: "e0000000-0000-4000-8000-000000000310",
+          sessionId: SESSION_ALPHA, eventType: "turn.cancelled", view: { turnId: TURN_ID, state: "cancelled" } }));
+        await waitFor(() => queryAll(mounted.container, '[data-answer-option]').length === 0, "取消立即撤掉旧审批");
+        expectThat(textOf(mounted.container).includes("本轮已结束"), "明确说明失效原因");
+      });
+    },
+  },
+  {
+    name: "CP-STALE 服务端核实已失效后撤掉旧审批按钮",
+    async run() {
+      let effective = true;
+      const interactionId = "e0000000-0000-4000-8000-000000000298";
+      await withSessionPage(sessionScenario({ selectPendingInteractions: true,
+        events: [wireEvent({ globalSequence: 11, eventId: "e0000000-0000-4000-8000-000000000299",
+          sessionId: SESSION_ALPHA, eventType: "permission.requested", view: { interactionId, requestVersion: "7", title: "读取文件",
+            options: [{ optionId: "allow-once", label: "允许一次", kind: "allow_once" }] } })],
+        readResult: (sessionId) => readPage({ sessionId, pendingInteractions: effective ? [{ interactionId, sessionId,
+          kind: "permission", requestVersion: "7", expiresAt: null, schema: null,
+          options: [{ optionId: "allow-once", label: "允许一次", kind: "allow_once" }] }] : [] }),
+      }), (container) => query(container, '[data-answer-option="allow-once"]') !== null, "审批按钮出现", async (mounted) => {
+        effective = false;
+        // 等首屏读取完成，专门核实当前请求，不能用旧请求历史继续授权。
+        await waitFor(() => mounted.composition?.store.refreshInteractions(SESSION_ALPHA).ok === true, "有效请求核实已发出");
+        await waitFor(() => query(mounted.container, '[data-answer-option="allow-once"]') === null, "旧审批按钮消失");
+        expectThat(textOf(mounted.container).includes("授权当前无效"), "明确显示授权无效");
+      });
+    },
+  },
+  {
+    name: "CP-APPROVAL 实时工具授权缺少版本时自动核实并显示审批项",
+    async run() {
+      let requested = false;
+      const interactionId = "e0000000-0000-4000-8000-000000000288";
+      await withSessionPage(sessionScenario({ selectPendingInteractions: true,
+        readResult: (sessionId) => readPage({ sessionId, pendingInteractions: requested ? [{
+          interactionId, sessionId, kind: "permission", requestVersion: "7", expiresAt: null,
+          options: [{ optionId: "allow-once", label: "允许一次", kind: "allow_once" },
+            { optionId: "reject", label: "拒绝", kind: "reject_once" }], schema: null,
+        }] : [] }),
+      }), (container) => query(container, '[data-composer]') !== null, "会话页面就绪", async (mounted) => {
+        requested = true;
+        mounted.host?.deliverEvent(wireEvent({ globalSequence: 11,
+          eventId: "e0000000-0000-4000-8000-000000000289", sessionId: SESSION_ALPHA,
+          eventType: "permission.requested", view: { interactionId, title: "读取文件",
+            toolKind: "execute", toolDetail: { input: { command: "pwd", cwd: "/workspace" }, text: ["核对当前命令执行位置"] },
+            options: [{ optionId: "allow-once", label: "允许一次", kind: "allow_once" },
+              { optionId: "reject", label: "拒绝", kind: "reject_once" }] } }));
+        await waitFor(() => query(mounted.container, '[data-answer-option="allow-once"]') !== null,
+          "无需手动刷新即可出现审批项");
+        expectThat(query(mounted.container, '[data-answer-option="reject"]') !== null, "同时提供拒绝选项");
+        expectEqual(textOf(query(mounted.container, '[data-approval-context="true"]')), "pwd", "授权内容区域仅显示完整命令");
+        click(query(mounted.container, '[data-answer-option="allow-once"]'), "允许一次");
+        await waitFor(() => commandBody(mounted.host?.sent ?? [], "permission.resolve") !== null, "审批命令发出");
+        expectEqual(commandBody(mounted.host?.sent ?? [], "permission.resolve")?.["payload"],
+          { interactionId, optionId: "allow-once", requestVersion: "7" }, "审批携带已核实版本");
+      });
+    },
+  },
+  {
+    name: "CP-TODO 输入框上方清单默认折叠、实时更新并在取消后移除",
+    async run() {
+      const plan = (sequence: number, statuses: readonly string[]) => wireEvent({
+        globalSequence: sequence, sessionId: SESSION_ALPHA,
+        eventId: `e0000000-0000-4000-8000-${String(sequence).padStart(12, "0")}`,
+        eventType: "session.plan.changed",
+        view: { entries: statuses.map((status, index) => ({ content: `清单任务 ${index + 1}`, status, priority: "medium" })) },
+      });
+      await withSessionPage(sessionScenario({ events: [
+        wireEvent({ globalSequence: 11, eventId: EVENT_TURN_STARTED,
+          sessionId: SESSION_ALPHA, eventType: "turn.started", view: { turnId: TURN_ID, state: "running" } }),
+        plan(12, ["in_progress", "pending"]),
+      ] }), (container) => query(container, '[data-composer-todo="true"]') !== null, "任务清单出现", async (mounted) => {
+        const container = mounted.container;
+        const dock = () => query(container, '[data-composer-todo="true"]');
+        expectEqual(query(dock()!, '[data-action="toggle-composer-todo"]')?.getAttribute("aria-expanded"), "false", "默认折叠");
+        expectEqual(queryAll(dock()!, '[data-todo-status]').length, 0, "折叠不挤占输入区");
+        click(query(dock()!, '[data-action="toggle-composer-todo"]'), "展开任务清单");
+        await waitFor(() => queryAll(dock()!, '[data-todo-status]').length === 2, "展示两项任务");
+        mounted.host?.deliverEvent(plan(13, ["completed", "in_progress"]));
+        await waitFor(() => textOf(dock()).includes("1/2"), "完成比例实时更新");
+        expectEqual(queryAll(dock()!, '[data-todo-status]').length, 2, "更新保留展开选择");
+        mounted.host?.deliverEvent(wireEvent({ globalSequence: 14,
+          eventId: "e0000000-0000-4000-8000-000000000014", sessionId: SESSION_ALPHA,
+          eventType: "turn.cancelled", view: { turnId: TURN_ID, state: "cancelled" } }));
+        await waitFor(() => dock() === null, "取消后移除输入区清单");
+        expectThat(query(container, '[data-timeline-card="plan"]') !== null, "历史计划仍保留");
+      });
+    },
+  },
+  {
     name: "CP-4 输入区只收文本、附件显式不受支持；进行中可编辑但发送禁用，提交在无可提交轮次时以终态为准",
     async run() {
       // ① 有进行中的轮次：可编辑但发送禁用、只有停止；回车不得发出任何命令。
@@ -199,10 +307,11 @@ const checks: readonly Check[] = [
             "false",
             "输入区必须显式标明附件不受支持",
           );
-          const attachmentNotice = textOf(query(container, "[data-attachment-notice]"));
+          const attachmentButton = query(container, '[data-action="pick-attachment"]');
           expectThat(
-            attachmentNotice.includes("附件") && attachmentNotice.includes("不支持"),
-            `输入区必须用一句说明交代附件不受支持；实际「${attachmentNotice}」`,
+            (attachmentButton?.getAttribute("aria-label") ?? "").includes("不可用") &&
+              (attachmentButton?.getAttribute("aria-label") ?? "").includes("附件"),
+            `输入区必须显式说明附件不可用；实际「${attachmentButton?.getAttribute("aria-label") ?? ""}」`,
           );
           // 进行中的轮次决定输入区是「进行中」这一态（不是「可输入」也不是「已关闭」）。
           expectEqual(
@@ -211,8 +320,8 @@ const checks: readonly Check[] = [
             "有进行中的轮次时输入区必须是进行中",
           );
           expectThat(
-            textOf(query(container, "[data-composer-state]")).includes("进行中"),
-            "进行中这一态必须有对应的文案",
+            textOf(query(container, "[data-submit-unavailable]")).includes("进行中"),
+            "进行中这一态必须有对应的不可提交说明",
           );
 
           // 进行中：发送入口仍在，但被闸门禁用；回车不派发、不排队（spec「不可提交时回车无副作用」）。
@@ -255,7 +364,10 @@ const checks: readonly Check[] = [
             0,
             "进行中按回车 MUST NOT 发出 session.prompt",
           );
-          expectEqual(query(container, "[data-submission]"), null, "进行中按回车不得产生提交呈现");
+          expectThat(
+            query(container, "[data-submission]") === null,
+            "进行中按回车不得产生提交呈现",
+          );
           expectEqual(
             mounted.composition?.store.draftOf(SESSION_ALPHA),
             PROMPT_TEXT,
@@ -277,7 +389,10 @@ const checks: readonly Check[] = [
             "取消必须指向当前进行中的轮次",
           );
           mounted.host?.completeHeldCommand("session.cancel", { status: "completed" });
-          await waitFor(() => query(container, '[data-cancel="confirmed"]') !== null, "终态后呈现已确认");
+          await waitFor(
+            () => query(container, '[data-cancel="requested"]') === null,
+            "终态后不再呈现取消等待",
+          );
         },
       );
 
@@ -331,16 +446,23 @@ const checks: readonly Check[] = [
             "session.prompt 载荷必须恰好是那一段文本",
           );
 
-          // 服务端确认「已接受」仍不等于完成；只有终态才算。
+          // 服务端确认「已接受」仍不等于完成：待确认行消失，但页面上不得写成已发送/已排队。
           expectEqual(
             mounted.host?.completeHeldCommand("session.prompt", { status: "accepted" }) ?? false,
             true,
             "必须有被扣住的 session.prompt 可供应答",
           );
-          await waitFor(() => query(container, '[data-submission="accepted"]') !== null, "接受后呈现已接受");
+          await waitFor(
+            () => query(container, '[data-submission="pending_confirmation"]') === null,
+            "接受后不再呈现待确认",
+          );
           expectNone(domText(container), ["已发送", "已排队"], "已接受仍不得写成已发送");
           mounted.host?.completeHeldCommand("session.prompt", { status: "completed" });
-          await waitFor(() => query(container, '[data-submission="completed"]') !== null, "终态后呈现已完成");
+          await waitFor(
+            () => query(container, '[data-submission="pending_confirmation"]') === null,
+            "终态后不残留待确认",
+          );
+          expectNone(domText(container), ["已发送", "已排队"], "终态不得写成已发送");
         },
       );
     },
@@ -809,7 +931,10 @@ const checks: readonly Check[] = [
 
           // 回车：提交当前草稿（载荷与点击发送同一形状）。
           pressEnter(container);
-          await waitFor(() => query(container, "[data-submission]") !== null, "回车提交后呈现提交态");
+          await waitFor(
+            () => commandBodies(mounted.host?.sent ?? [], "session.prompt").length === 1,
+            "回车后发出一次 session.prompt",
+          );
           expectEqual(
             commandBodies(mounted.host?.sent ?? [], "session.prompt").length,
             1,
@@ -862,7 +987,10 @@ const checks: readonly Check[] = [
             0,
             "进行中回车 MUST NOT 发出 session.prompt",
           );
-          expectEqual(query(container, "[data-submission]"), null, "进行中回车不得产生提交呈现");
+          expectThat(
+            query(container, "[data-submission]") === null,
+            "进行中回车不得产生提交呈现",
+          );
           expectEqual(
             mounted.composition?.store.draftOf(SESSION_ALPHA),
             PROMPT_TEXT,

@@ -46,15 +46,18 @@ import type { FormInputValue } from "../domain/form";
 import { buildElicitationForm } from "../domain/form";
 import type { InteractionAnswer, InteractionAvailability } from "../domain/interaction";
 import type { AttachmentMediaView } from "../domain/media";
-import type { FileChangeDiagnostics, TimelineEntry } from "../features/conversation-timeline";
+import type { FileChangeDiagnostics, LocalPromptState, SentPromptPhase, TimelineEntry } from "../features/conversation-timeline";
 import { groupTimelineEntries } from "../features/conversation-timeline";
+import type { ConversationProcessModel } from "../features/conversation-process-model";
 import { ChangeDiagnosticsPanel } from "./ChangeDiagnosticsPanel";
 import { ChangeDiff } from "./ChangeDiff";
 import { CodeBlock } from "./CodeBlock";
+import { PendingInteractionsPanel } from "./PendingInteractionsPanel";
 import { DegradedEntryContent } from "./DegradedEntryContent";
 import { ElicitationForm } from "./ElicitationForm";
 import { InteractionAnswerButtons, InteractionAvailabilityNote } from "./InteractionAnswering";
 import { Markdown } from "./Markdown";
+import { TODO_STATUS_LABELS } from "./ConversationTodo";
 import { MessageMedia } from "./MessageMedia";
 import type { Palette } from "./theme";
 import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
@@ -63,11 +66,12 @@ import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radi
 type EntryOf<K extends TimelineEntry["kind"]> = Extract<TimelineEntry, { readonly kind: K }>;
 
 export interface ConversationTimelineProps {
+  readonly diagnosticsMode?: boolean | undefined;
   /** 时间线条目（唯一渲染列表，已按时间排序、已去重）。 */
   readonly entries: readonly TimelineEntry[];
   /** 归属会话标识：媒体读取要求会话绑定（页面从 `model.header.sessionId` 给出）。 */
   readonly sessionId: string;
-  /** 会话头显示的 Agent 名：消息署名按原型写成「Agent · omp」。 */
+  /** 会话头显示的 Agent 名：消息署名直接显示「omp」等名称。 */
   readonly agentName?: string | undefined;
   /** 打开某条条目（降级 / 工具调用）的诊断抽屉（页面负责把 `eventId` 交给仓库）。 */
   readonly onOpenDiagnostics: (eventId: string) => void;
@@ -111,6 +115,11 @@ export interface ConversationTimelineProps {
   readonly onRefreshInteractions?: (() => void) | undefined;
   /** 打开 Markdown 里可解析的工作目录相对路径。 */
   readonly onFilePathPress?: ((path: string) => void) | undefined;
+  /**
+   * 互斥过程阶段（`model.timeline.process`）：只在提交中/恢复中/等待响应时渲染**一条**紧凑
+   * 过程行，放在条目之后（不是顶部重复条）。有实际内容时模型给的 `label` 为 `null`，这里就不画。
+   */
+  readonly process?: ConversationProcessModel | null | undefined;
 }
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
@@ -135,7 +144,8 @@ function buildStyles(colors: Palette) {
       paddingBottom: 0,
     },
     message: {
-      gap: spacing.xs,
+      gap: spacing.sm,
+      paddingVertical: spacing.sm,
     },
     /** 用户消息靠右：整条条目右对齐，气泡宽度跟着内容走（原型 `.msg-user`）。 */
     messageUser: {
@@ -159,16 +169,19 @@ function buildStyles(colors: Palette) {
       backgroundColor: colors.panel,
     },
     bodyUser: {
-      maxWidth: "78%",
+      maxWidth: "88%",
+      paddingVertical: spacing.md,
+      borderTopRightRadius: radius.sm,
       backgroundColor: colors.accentSoft,
       borderColor: colors.accentSoft,
     },
     bodyAgent: {
-      maxWidth: "92%",
+      maxWidth: "100%",
+      paddingVertical: spacing.md,
     },
     card: {
       gap: spacing.sm,
-      paddingVertical: spacing.sm,
+      paddingVertical: spacing.md,
       paddingHorizontal: spacing.md,
       borderWidth: 1,
       borderColor: colors.line,
@@ -218,6 +231,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
+      lineHeight: 21,
     },
     /** 诊断入口（ACP 原文）：与右栏的原文入口同一语义。 */
     diagnosticsEntry: {
@@ -244,6 +258,15 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
+    },
+    messageTimeUser: {
+      alignSelf: "flex-end",
+      textAlign: "right",
+    },
+    messageTimeAgent: {
+      marginLeft: 0,
+      alignSelf: "flex-start",
+      textAlign: "left",
     },
     chip: {
       paddingHorizontal: spacing.sm,
@@ -281,7 +304,7 @@ function buildStyles(colors: Palette) {
       flexWrap: "wrap",
       alignItems: "baseline",
       gap: spacing.sm,
-      paddingVertical: 2,
+      paddingVertical: spacing.sm,
     },
     note: {
       color: colors.ink2,
@@ -292,6 +315,39 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+    },
+    /** 本地提交条目的阶段说明（上传中/待确认/未发送）：只是实情，不冒充已受理。 */
+    localState: {
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
+      textAlign: "right",
+    },
+    localStateWarn: {
+      color: colors.warn,
+    },
+    /** 过程行：时间线末尾的一条紧凑说明（等待响应/恢复中/提交中），不是顶部条。 */
+    processRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "baseline",
+      gap: spacing.sm,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.md,
+      backgroundColor: colors.panel2,
+    },
+    processLabel: {
+      color: colors.ink2,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+      fontWeight: "600",
+    },
+    processDetail: {
+      flexShrink: 1,
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
     },
     /** 失败条：整条流程的失败不塞进折叠块（原型 `.streamfail`）。 */
     failureStrip: {
@@ -332,8 +388,10 @@ function buildStyles(colors: Palette) {
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.sm,
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.sm,
+      minHeight: 44,
+      flexWrap: "nowrap",
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
     },
     foldCaret: {
       color: colors.ink3,
@@ -342,7 +400,7 @@ function buildStyles(colors: Palette) {
     },
     foldKind: {
       color: colors.ink2,
-      fontFamily: fontFamily.mono,
+      fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
     },
     foldKindThink: {
@@ -353,6 +411,7 @@ function buildStyles(colors: Palette) {
     },
     foldTitle: {
       flexShrink: 1,
+      minWidth: 0,
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
@@ -366,11 +425,23 @@ function buildStyles(colors: Palette) {
     foldStateRun: {
       color: colors.accent,
     },
+    foldStateFailed: {
+      color: colors.danger,
+      fontWeight: "600",
+    },
+    foldTerminal: {
+      borderLeftColor: colors.ink3,
+      backgroundColor: colors.panel2,
+    },
+    fileChange: {
+      borderLeftWidth: 3,
+      borderLeftColor: colors.ok,
+    },
     /** 折叠块的正文：收起时用 `display: none` 隐藏（留在 DOM 里）。 */
     foldBody: {
       gap: spacing.xs,
       paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.sm,
+      paddingHorizontal: spacing.md,
       borderTopWidth: 1,
       borderTopColor: colors.line2,
       backgroundColor: colors.panel,
@@ -380,9 +451,9 @@ function buildStyles(colors: Palette) {
     },
     /** 授权卡（原型 `.perm`）：琥珀色的一整块，三个应答按钮排在 `opts` 行里。 */
     permission: {
-      gap: spacing.sm,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
+      gap: spacing.md,
+      paddingVertical: spacing.lg,
+      paddingHorizontal: spacing.lg,
       borderWidth: 1,
       borderColor: colors.warn,
       borderLeftWidth: 3,
@@ -395,6 +466,22 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
       fontWeight: "600",
+      flexShrink: 1,
+      minWidth: 0,
+    },
+    permissionInactive: {
+      borderColor: colors.line,
+      borderLeftColor: colors.ink3,
+      backgroundColor: colors.panel2,
+    },
+    permissionStatus: {
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
+      fontWeight: "600",
+    },
+    permissionStatusInactive: {
+      color: colors.ink3,
     },
     /** 请求自身的说明：等宽块（原型 `.pdesc`），内容按不可信文本处理。 */
     permissionDescription: {
@@ -407,6 +494,18 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
+    },
+    question: {
+      borderLeftWidth: 3,
+      borderLeftColor: colors.accent,
+      backgroundColor: colors.accentSoft,
+    },
+    cancelled: {
+      padding: spacing.sm,
+      borderLeftWidth: 3,
+      borderLeftColor: colors.ink3,
+      backgroundColor: colors.panel2,
+      borderRadius: radius.sm,
     },
     permissionOptions: {
       flexDirection: "row",
@@ -434,6 +533,30 @@ const CHANNEL_LABELS: Readonly<Record<EntryOf<"message">["channel"], string>> = 
   agent: "Agent",
   thought: "Agent · 思考",
 };
+
+/** 本地提交阶段的固定说明（`SentPromptPhase` → 一句实情）。 */
+const LOCAL_PROMPT_LABELS: Readonly<Record<SentPromptPhase, string>> = {
+  uploading: "附件上传中…",
+  sealing: "附件封存中…",
+  submitted: "已提交，等待服务端确认",
+  accepted: "已受理",
+  uncertain: "结果不确定",
+  failed: "未发送",
+};
+
+/** 阶段自带的补充说明；失败/取消用本地登记的 `notice`（真实原因）。 */
+function localPromptDetail(local: LocalPromptState): string | null {
+  if (local.notice !== null) return local.notice;
+  switch (local.phase) {
+    case "uploading":
+    case "sealing":
+      return "Agent 尚未收到任何内容";
+    case "uncertain":
+      return "可能已经保存；可以核实，不会自动重发";
+    default:
+      return null;
+  }
+}
 
 /** 工具调用「仍在进行中」的状态取值（ACP `ToolCallStatus` 的两个非终态）。 */
 const TOOL_CALL_IN_PROGRESS: readonly string[] = ["pending", "in_progress"];
@@ -464,7 +587,7 @@ function entryInProgress(entry: TimelineEntry): boolean {
 }
 
 /** 可折叠的结构化条目：思考、工具调用、终端输出、计划（spec 列举的那四类）。 */
-type FoldClass = "think" | "tool" | "plan";
+type FoldClass = "think" | "tool" | "plan" | "terminal";
 
 function foldableOf(entry: TimelineEntry): FoldClass | null {
   if (entry.kind === "message") return entry.channel === "thought" ? "think" : null;
@@ -481,7 +604,8 @@ function isExpanded(
 ): boolean {
   const explicit = expandedEntries?.[entry.key];
   if (explicit !== undefined) return explicit;
-  return foldableOf(entry) !== null && entryInProgress(entry);
+  return foldableOf(entry) !== null && (entryInProgress(entry) ||
+    (entry.kind === "tool_call" && entry.state === "failed"));
 }
 
 /** 轮次/工具调用状态的中性呈现：状态取值原样显示，不翻译成可能出错的措辞。 */
@@ -528,7 +652,7 @@ function Fold({
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   // 思考一族用 think 色、工具一族（含终端输出）与计划用 tool 色：两档语义色与上面那四个 class 一一对应。
-  const boxTint = foldClass === "think" ? styles.foldThink : styles.foldTool;
+  const boxTint = foldClass === "think" ? styles.foldThink : foldClass === "terminal" ? styles.foldTerminal : styles.foldTool;
   const kindTint = foldClass === "think" ? styles.foldKindThink : styles.foldKindTool;
 
   const head = (
@@ -543,10 +667,11 @@ function Fold({
       </Text>
       {state === null ? null : (
         <Text
-          style={inProgress ? [styles.foldState, styles.foldStateRun] : styles.foldState}
+          style={[styles.foldState, inProgress ? styles.foldStateRun : null,
+            state === "failed" ? styles.foldStateFailed : null]}
           dataSet={{ entryState: state }}
         >
-          {state}
+          {({ pending: "待执行", in_progress: "进行中", running: "进行中", completed: "已完成", failed: "失败", cancelled: "已取消" } as Readonly<Record<string, string>>)[state] ?? state}
         </Text>
       )}
       <Text style={styles.time}>{time}</Text>
@@ -564,6 +689,8 @@ function Fold({
         <Pressable
           role="button"
           accessibilityState={{ expanded }}
+          aria-expanded={expanded}
+          accessibilityLabel={`${expanded ? "收起" : "展开"}${label}${title ? `：${title}` : ""}`}
           style={styles.foldHead}
           dataSet={{ action: "toggle-timeline-entry", entryKey, entryExpanded: String(expanded) }}
           onPress={() => {
@@ -597,8 +724,10 @@ function MessageEntry({
   onFilePathPress,
   sessionId,
   agentName,
+  showSender,
 }: {
   readonly entry: EntryOf<"message">;
+  readonly showSender: boolean;
   readonly expanded: boolean;
   readonly onToggle: ((key: string, expanded: boolean) => void) | undefined;
   readonly onCopyCode: ((code: string, language: string) => void) | undefined;
@@ -614,6 +743,8 @@ function MessageEntry({
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const message = entry.message;
+  const local = entry.local ?? null;
+  const localDetail = local === null ? null : localPromptDetail(local);
 
   const body = (
     <>
@@ -647,6 +778,20 @@ function MessageEntry({
           {entry.partial.label}
         </Text>
       )}
+      {/* 本地提交（还没有权威正文接替）：如实说明上传/待确认/未发送，Agent 未收到时不假装收到。 */}
+      {local === null ? null : (
+        <Text
+          style={[
+            styles.localState,
+            local.phase === "failed" || local.phase === "uncertain" ? styles.localStateWarn : null,
+          ]}
+          dataSet={{ localPromptPhase: local.phase, localPromptDetail: local.notice ?? "none" }}
+        >
+          {localDetail === null
+            ? LOCAL_PROMPT_LABELS[local.phase]
+            : `${LOCAL_PROMPT_LABELS[local.phase]} · ${localDetail}`}
+        </Text>
+      )}
     </>
   );
 
@@ -661,17 +806,18 @@ function MessageEntry({
         messageChannel: entry.channel,
         messageVolatile: String(entry.volatile),
         messageStreamComplete: String(entry.streamComplete),
+        messageLocal: local === null ? "false" : String(local.phase),
         timelineEntryAt: entry.createdAt,
       }}
     >
-      {entry.channel === "thought" ? null : (
+      {!showSender ? null : (
         <Text
           style={entry.channel === "user" ? [styles.who, styles.whoUser] : styles.who}
           dataSet={{ messageWho: entry.channel }}
         >
-          {entry.channel === "agent" && agentName !== undefined && agentName.length > 0
-            ? `Agent · ${agentName}`
-            : CHANNEL_LABELS[entry.channel]}
+          {entry.channel !== "user" && agentName !== undefined && agentName.length > 0
+            ? agentName
+            : CHANNEL_LABELS[entry.channel === "thought" ? "agent" : entry.channel]}
         </Text>
       )}
       {/* 思考通道是一条可折叠的结构化条目（spec 列举的四类之一）；用户与 Agent 气泡不需要折叠。 */}
@@ -682,7 +828,7 @@ function MessageEntry({
           label="思考"
           title=""
           titleMono={false}
-          state={entry.volatile && !entry.streamComplete ? "进行中" : "完成"}
+          state={entry.partial !== null && entry.partial.state !== "completed" ? "已中断" : entry.volatile && !entry.streamComplete ? "进行中" : "已结束"}
           inProgress={entryInProgress(entry)}
           expanded={expanded}
           onToggle={onToggle}
@@ -694,12 +840,12 @@ function MessageEntry({
       ) : (
         body
       )}
-      <Text
-        style={entry.channel === "user" ? [styles.time, styles.whoUser] : styles.time}
+      {entry.channel === "thought" ? null : <Text
+        style={[styles.time, entry.channel === "user" ? styles.messageTimeUser : styles.messageTimeAgent]}
         dataSet={{ messageCreatedAt: entry.createdAt }}
       >
         {formatEntryTime(entry.createdAt)}
-      </Text>
+      </Text>}
     </View>
   );
 }
@@ -732,7 +878,7 @@ function TurnEntry({ entry }: { readonly entry: EntryOf<"turn"> }): ReactElement
         </View>
       )}
       {cancelled ? (
-        <Text style={styles.note} dataSet={{ turnCancelled: "true" }}>
+        <Text style={[styles.note, styles.cancelled]} dataSet={{ turnCancelled: "true" }}>
           本轮已取消
         </Text>
       ) : null}
@@ -787,12 +933,14 @@ function ToolDetailSection({
 
 /** 工具调用卡片（可折叠：进行中的默认展开；详情只来自 `entry.detail`，不读 `acp.rawJson`）。 */
 function ToolCallEntry({
+  diagnosticsMode,
   entry,
   expanded,
   onToggle,
   onOpenDiagnostics,
 }: {
   readonly entry: EntryOf<"tool_call">;
+  readonly diagnosticsMode: boolean;
   readonly expanded: boolean;
   readonly onToggle: ((key: string, expanded: boolean) => void) | undefined;
   readonly onOpenDiagnostics: (eventId: string) => void;
@@ -848,8 +996,8 @@ function ToolCallEntry({
             ))}
           </View>
         )}
-        {/* 详情只来自结构化视图：原文入口始终是诊断抽屉（本组件不解析 `acp.rawJson`）。 */}
-        <Pressable
+        {/* 原文仅在诊断模式提供，不参与正常工具详情展示。 */}
+        {diagnosticsMode ? <Pressable
           role="button"
           style={styles.diagnosticsEntry}
           dataSet={{ action: "open-tool-call-diagnostics", eventId: entry.eventId }}
@@ -858,7 +1006,7 @@ function ToolCallEntry({
           }}
         >
           <Text style={styles.diagnosticsEntryText}>查看 ACP 原文</Text>
-        </Pressable>
+        </Pressable> : null}
       </Fold>
     </View>
   );
@@ -892,10 +1040,10 @@ function TerminalOutputEntry({
     >
       <Fold
         entryKey={entry.key}
-        foldClass="tool"
-        label="终端输出"
-        title={`${entry.terminalId} · 第 ${entry.chunkIndex} 块`}
-        titleMono={true}
+        foldClass="terminal"
+        label={entry.stream === "stderr" ? "标准错误输出" : "终端输出"}
+        title=""
+        titleMono={false}
         state={null}
         inProgress={false}
         expanded={expanded}
@@ -903,6 +1051,7 @@ function TerminalOutputEntry({
         time={formatEntryTime(entry.createdAt)}
         titleDataSet={{ terminalIdLabel: entry.terminalId }}
       >
+        <Text style={styles.dimNote}>{`终端 ${entry.terminalId} · 输出块 ${entry.chunkIndex}`}</Text>
         {entry.truncated ? (
           <Text style={styles.chipWarn} dataSet={{ terminalTruncatedNote: "true" }}>
             已截断
@@ -937,7 +1086,7 @@ function PlanEntryView({
         entryKey={entry.key}
         foldClass="plan"
         label="计划"
-        title={`${String(entry.entries.length)} 项`}
+        title={`${entry.entries.filter((item) => item.status === "completed").length}/${entry.entries.length} 项已完成`}
         titleMono={false}
         state={null}
         inProgress={entryInProgress(entry)}
@@ -953,7 +1102,7 @@ function PlanEntryView({
             style={styles.planRow}
             dataSet={{ planEntryStatus: item.status, planEntryPriority: item.priority }}
           >
-            <Text style={styles.chip}>{item.status}</Text>
+            <Text style={[styles.chip, item.status === "completed" ? styles.chipOk : item.status === "in_progress" ? styles.chipAccent : null]}>{TODO_STATUS_LABELS[item.status]}</Text>
             <Text style={styles.meta} dataSet={{ planEntryContent: "true" }}>
               {item.content}
             </Text>
@@ -997,7 +1146,7 @@ function FileChangedEntry({
         timelineEntryAt: entry.createdAt,
       }}
     >
-      <View style={styles.card}>
+      <View style={[styles.card, styles.fileChange]}>
         <View style={styles.cardHead}>
           <Text style={styles.kicker}>文件改动</Text>
           <Text style={styles.title} dataSet={{ changePathLabel: entry.displayPath }}>
@@ -1181,6 +1330,24 @@ export function RefreshInteractionsAction({
  * 协商 `core.pending-interactions.v1` 后版本未知（实时事件没带 `requestVersion`）时同样是
  * `not_answerable`，并给出刷新入口：没有版本就发出的应答必然被服务端拒绝。
  */
+function interactionStatusLabel(availability: InteractionAvailability, subject: "授权" | "提问"): string {
+  switch (availability.kind) {
+    case "answerable": return subject === "授权" ? "等待授权" : "等待你回答";
+    case "submitting": return `${subject}应答提交中`;
+    case "handled_here":
+    case "handled_elsewhere": return `${subject}已处理`;
+    case "not_answerable":
+      switch (availability.reason) {
+        case "read_from_history": return `历史${subject} · 待核实`;
+        case "request_version_unknown": return `${subject}请求 · 待核实`;
+        case "expired": return `${subject}已过期`;
+        case "turn_ended": return `${subject}已失效 · 本轮已结束`;
+        case "not_effective": return `${subject}当前无效`;
+        case "options_missing": return `${subject}暂不可操作`;
+      }
+  }
+}
+
 function PermissionRequestedEntry({
   entry,
   onAnswerInteraction,
@@ -1192,6 +1359,18 @@ function PermissionRequestedEntry({
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const availability = entry.availability;
+  const actionable = availability.kind === "answerable";
+  const statusLabel = interactionStatusLabel(availability, "授权");
+  const detail = entry.detail;
+  const input = detail?.input?.value;
+  const fields = typeof input === "object" && input !== null && !Array.isArray(input)
+    ? input as Readonly<Record<string, unknown>> : null;
+  const inputText = (key: string): string | null => {
+    const value = fields?.[key];
+    return typeof value === "string" && value.trim().length > 0 ? value : null;
+  };
+  const command = inputText("command");
 
   return (
     <View
@@ -1205,19 +1384,16 @@ function PermissionRequestedEntry({
         timelineEntryAt: entry.createdAt,
       }}
     >
-      <View style={styles.permission}>
+      <View style={[styles.permission, actionable ? null : styles.permissionInactive]}
+        dataSet={{ permissionTone: actionable ? "action-required" : "neutral" }}>
         <View style={styles.cardHead}>
-          <Text style={styles.kicker}>授权请求</Text>
-          <Text style={styles.permissionTitle} dataSet={{ interactionTitle: entry.title }}>
-            {entry.title}
-          </Text>
+          <Text style={[styles.permissionStatus, actionable ? null : styles.permissionStatusInactive]}
+            dataSet={{ permissionStatus: statusLabel }}>{statusLabel}</Text>
           <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
         </View>
-        {entry.description === null ? null : (
-          <Text style={styles.permissionDescription} dataSet={{ interactionDescription: "true" }}>
-            {entry.description}
-          </Text>
-        )}
+        <View style={styles.detailSection} dataSet={{ approvalContext: "true" }}>
+          <Text selectable style={styles.detailValue} dataSet={{ interactionTitle: entry.title }}>{command ?? entry.title}</Text>
+        </View>
         {/* 应答按钮排在 opts 行里：可选项只来自这次请求自身的下发内容（逐字呈现，不翻译）。 */}
         <View style={styles.permissionOptions}>
           <InteractionAnswerButtons
@@ -1284,9 +1460,9 @@ function ElicitationRequestedEntry({
         timelineEntryAt: entry.createdAt,
       }}
     >
-      <View style={styles.card}>
+      <View style={[styles.card, answerable ? styles.question : styles.permissionInactive]}>
         <View style={styles.cardHead}>
-          <Text style={styles.kicker}>提问</Text>
+          <Text style={styles.kicker}>{interactionStatusLabel(entry.availability, "提问")}</Text>
           <Text style={styles.title} dataSet={{ interactionTitle: entry.title }}>
             {entry.title}
           </Text>
@@ -1313,9 +1489,6 @@ function ElicitationRequestedEntry({
                 {fieldSummary}
               </Text>
             )}
-            <Text style={styles.note} dataSet={{ elicitationUnavailableHint: "true" }}>
-              这条提问当前不可填写：取得服务端确认的当前有效请求后才能提交值。
-            </Text>
           </>
         )}
         <InteractionAnswerButtons
@@ -1359,9 +1532,6 @@ function PermissionResolvedEntry({ entry }: { readonly entry: EntryOf<"permissio
           </Text>
           <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
         </View>
-        <Text style={styles.meta} dataSet={{ resolvedByDeviceLabel: entry.resolvedByDeviceId ?? "unknown" }}>
-          处理设备标识原样呈现（缺省即未下发）。
-        </Text>
       </View>
     </View>
   );
@@ -1404,10 +1574,12 @@ function ElicitationResolvedEntry({ entry }: { readonly entry: EntryOf<"elicitat
  * 两个面因此不会在归因上分叉；这里只提供时间线的容器与锚点。
  */
 function DegradedEntry({
+  diagnosticsMode,
   entry,
   onOpenDiagnostics,
 }: {
   readonly entry: EntryOf<"degraded">;
+  readonly diagnosticsMode: boolean;
   readonly onOpenDiagnostics: (eventId: string) => void;
 }): ReactElement {
   const theme = useTheme();
@@ -1425,14 +1597,16 @@ function DegradedEntry({
         timelineEntryAt: entry.createdAt,
       }}
     >
-      <DegradedEntryContent model={model} onOpenDiagnostics={onOpenDiagnostics} />
+      <DegradedEntryContent model={model} onOpenDiagnostics={diagnosticsMode ? onOpenDiagnostics : undefined} />
     </View>
   );
 }
 
 /** 一条时间线条目的呈现。 */
 function TimelineEntryView(props: {
+  readonly diagnosticsMode: boolean;
   readonly entry: TimelineEntry;
+  readonly showSender: boolean;
   readonly sessionId: string;
   readonly expandedEntries: Readonly<Record<string, boolean>> | undefined;
   /**
@@ -1463,6 +1637,7 @@ function TimelineEntryView(props: {
     case "message":
       return (
         <MessageEntry
+          showSender={props.showSender}
           entry={entry}
           agentName={props.agentName}
           expanded={expanded}
@@ -1482,6 +1657,7 @@ function TimelineEntryView(props: {
     case "tool_call":
       return (
         <ToolCallEntry
+          diagnosticsMode={props.diagnosticsMode}
           entry={entry}
           expanded={expanded}
           onToggle={props.onToggleEntry}
@@ -1497,7 +1673,7 @@ function TimelineEntryView(props: {
       return (
         <FileChangedEntry
           entry={entry}
-          diagnostics={diagnostics}
+          diagnostics={props.diagnosticsMode ? diagnostics : undefined}
           diagnosticsOpen={
             diagnostics !== undefined && props.openChangeDiagnosticsEventId === diagnostics.eventId
           }
@@ -1530,9 +1706,35 @@ function TimelineEntryView(props: {
       return <PermissionResolvedEntry entry={entry} />;
     case "elicitation_resolved":
       return <ElicitationResolvedEntry entry={entry} />;
+    case "pending_interaction":
+      return <PendingInteractionsPanel interactions={[entry.interaction]} onAnswerInteraction={props.onAnswerInteraction} />;
     case "degraded":
-      return <DegradedEntry entry={entry} onOpenDiagnostics={props.onOpenDiagnostics} />;
+      return <DegradedEntry entry={entry} diagnosticsMode={props.diagnosticsMode} onOpenDiagnostics={props.onOpenDiagnostics} />;
   }
+}
+
+/**
+ * 过程行（时间线末尾的一条紧凑说明）。
+ *
+ * 只在模型给出了 `label`（提交中/恢复中/等待响应）时渲染；有实际思考/工具/回复/待处理卡片时
+ * 模型给 `label: null`，这里什么也不画——过程反馈不重复占行，也不是顶部状态条。
+ */
+function ProcessRow({ process }: { readonly process: ConversationProcessModel }): ReactElement | null {
+  const theme = useTheme();
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
+  if (process.label === null) return null;
+  return (
+    <View role="listitem" style={styles.processRow} dataSet={{ processRow: process.phase }}>
+      <Text style={styles.processLabel} dataSet={{ processLabel: "true" }}>
+        {process.label}
+      </Text>
+      {process.detail === null ? null : (
+        <Text style={styles.processDetail} dataSet={{ processDetail: "true" }}>
+          {process.detail}
+        </Text>
+      )}
+    </View>
+  );
 }
 
 /**
@@ -1546,6 +1748,7 @@ function TimelineEntryView(props: {
  * `data-timeline-key`：滚动锚点按它定位（内容在组内原位更新时节点不换）。
  */
 export function ConversationTimeline({
+  diagnosticsMode = false,
   entries,
   sessionId,
   agentName,
@@ -1565,11 +1768,24 @@ export function ConversationTimeline({
   onSubmitElicitation,
   onRefreshInteractions,
   onFilePathPress,
+  process,
 }: ConversationTimelineProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const sources = media ?? new Map<string, AttachmentMediaView>();
   const groups = groupTimelineEntries(entries);
+  // 跨轮次分组按实际相邻消息合并署名；思考与回复都属于同一 Agent。
+  const senderStarts = new Set<string>();
+  let previousSender: string | null = null;
+  for (const entry of entries) {
+    if (entry.kind !== "message") {
+      previousSender = null;
+      continue;
+    }
+    const sender = entry.channel === "user" ? "user" : "agent";
+    if (sender !== previousSender) senderStarts.add(entry.key);
+    previousSender = sender;
+  }
 
   return (
     <View
@@ -1592,6 +1808,8 @@ export function ConversationTimeline({
           {group.entries.map((entry) => (
             <View key={entry.key} style={styles.turnGroupEntry} dataSet={{ timelineKey: entry.key }}>
               <TimelineEntryView
+                diagnosticsMode={diagnosticsMode}
+                showSender={senderStarts.has(entry.key)}
                 entry={entry}
                 sessionId={sessionId}
                 agentName={agentName}
@@ -1616,6 +1834,7 @@ export function ConversationTimeline({
           ))}
         </View>
       ))}
+      {process === null || process === undefined ? null : <ProcessRow process={process} />}
     </View>
   );
 }

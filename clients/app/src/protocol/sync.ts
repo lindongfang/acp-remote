@@ -95,6 +95,8 @@ export interface SyncSnapshotBegin extends PostAuthEnvelope {
 
 /** `$defs.snapshotItem.messages`：`session.read` 的 `resources.messages` 元素。 */
 export interface SnapshotItemMessages {
+  readonly channel?: import("./media").MessageChannel;
+  readonly partial?: import("./media").PartialResult;
   readonly messageId: Uuid;
   readonly sessionId: Uuid;
   readonly role: "user" | "agent";

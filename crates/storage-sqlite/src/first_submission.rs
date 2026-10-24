@@ -188,21 +188,39 @@ async fn load_row(
     .db()?)
 }
 
+/// 读取首条用户消息：身份来自 `owned_first_submission.user_message_id`（唯一），**不**按
+/// `channel='user' ORDER BY created_at LIMIT 1` 猜——后续普通输入也会写 `channel='user'` 行，
+/// 按时间取最早一条在并发/同毫秒时间戳下不再是首条。
+///
+/// 没有首条关联（旧会话/普通会话）→ `Ok(None)`；关联存在但消息行缺失或不可读 → `Corrupt`
+/// （显式失败，不回退时间排序、不编造内容）。
 async fn load_first_message(
     ex: &mut sqlx::SqliteConnection,
     session: &SessionId,
 ) -> Result<Option<FirstUserMessage>, PortError> {
+    let Some(user_message) = sqlx::query_scalar::<_, String>(
+        "SELECT user_message_id FROM owned_first_submission WHERE session_id = ?1",
+    )
+    .bind(session.as_str())
+    .fetch_optional(&mut *ex)
+    .await
+    .db()?
+    else {
+        return Ok(None);
+    };
     let row = sqlx::query(
         "SELECT message_id, turn_id, content_json, created_at FROM owned_message \
-         WHERE session_id = ?1 AND channel = 'user' \
-         ORDER BY created_at ASC, message_id ASC LIMIT 1",
+         WHERE message_id = ?1 AND session_id = ?2 AND channel = 'user'",
     )
+    .bind(&user_message)
     .bind(session.as_str())
     .fetch_optional(&mut *ex)
     .await
     .db()?;
     let Some(row) = row else {
-        return Ok(None);
+        return Err(PortError::Corrupt(
+            "the first submission user message is missing",
+        ));
     };
     Ok(Some(FirstUserMessage {
         session: session.clone(),
@@ -227,7 +245,7 @@ fn actor_columns(actor: &Actor) -> (&'static str, String) {
     (actor.kind().as_str(), actor.id_text())
 }
 
-fn media_kind_of(media_type: &str) -> &'static str {
+pub(crate) fn media_kind_of(media_type: &str) -> &'static str {
     if media_type.starts_with("image/") {
         "image"
     } else if media_type.starts_with("audio/") {

@@ -15,6 +15,7 @@ import { CONVERSATION_INTERACTION_CHECKS } from "./checks/conversation-interacti
 import { CONVERSATION_CONTENT_CHECKS } from "./checks/conversation-content";
 import { CONVERSATION_LAYOUT_CHECKS } from "./checks/conversation-layout";
 import { CONVERSATION_TOOL_DETAIL_CHECKS } from "./checks/conversation-tool-detail";
+import { CONVERSATION_RELIABILITY_CHECKS } from "./checks/conversation-reliability";
 import { SESSION_FILES_CHECKS } from "./checks/session-files";
 import { SESSION_TITLE_CHECKS } from "./checks/session-title";
 import { FRAME_ACCEPTANCE_CHECKS } from "./checks/frame-acceptance";
@@ -101,6 +102,7 @@ const ALL_CHECKS = [
   ...CONVERSATION_CONTENT_CHECKS,
   ...CONVERSATION_LAYOUT_CHECKS,
   ...CONVERSATION_TOOL_DETAIL_CHECKS,
+  ...CONVERSATION_RELIABILITY_CHECKS,
   ...SESSION_FILES_CHECKS,
   ...SESSION_TITLE_CHECKS,
   ...FRAME_ACCEPTANCE_CHECKS,

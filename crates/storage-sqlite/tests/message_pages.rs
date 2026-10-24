@@ -50,6 +50,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("create session")

@@ -66,6 +66,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create session")
@@ -128,6 +129,7 @@ fn commit(
         idempotency: None,
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     }
 }
 
@@ -663,4 +665,88 @@ async fn retention_and_gc_respect_shared_message_references() {
     );
 
     store.close().await;
+}
+
+/// `conversation-reliability`：Agent 不回显的第二条输入，刷新/重新打开后仍完整可见。
+///
+/// 正文只来自受理事务写下的 `owned_message`（`channel='user'`），不依赖任何回显事件。
+#[tokio::test]
+async fn prompt_input_without_echo_remains_readable() {
+    let dir = temp_dir("messages-prompt-no-echo");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let turn = acp_core::model::TurnId::new("33333333-3333-4333-8333-000000000042").expect("turn");
+    let message =
+        acp_core::model::MessageId::new("40000000-0000-4000-8000-000000000042").expect("message");
+    let text = "第二条没有回显的输入";
+    let content = acp_core::model::FirstSubmissionInput::new(vec![
+        acp_core::model::PromptContentBlock::from_json_text(
+            &serde_json::json!({"type": "text", "text": text}).to_string(),
+        )
+        .expect("block"),
+    ])
+    .expect("input");
+    let request =
+        acp_core::model::RequestId::new("66666666-6666-4666-8666-000000000042").expect("request");
+    store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at("2026-09-19"),
+            expected_version: None,
+            state: None,
+            turns: vec![acp_core::ports::TurnChange::Create(
+                acp_core::ports::NewTurn {
+                    turn: turn.clone(),
+                    state: acp_core::model::TurnState::Running,
+                    causation: Some(request.clone()),
+                    started_at: None,
+                },
+            )],
+            events: vec![event(
+                EventKind::State,
+                "turn.queued",
+                r#"{"state":"queued"}"#,
+                Some(turn.clone()),
+                &at("2026-09-19"),
+            )],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(acp_core::ports::IdempotencyRecord {
+                actor: acp_core::model::Actor::Device {
+                    device: DeviceId::new(DEVICE).expect("device"),
+                },
+                request: request.clone(),
+                command: "session.prompt".to_owned(),
+                kind: acp_core::model::CommandKind::Mutation,
+                session: Some(session.clone()),
+                expected_version: None,
+                request_fingerprint: Digest::new(&digest_text("no-echo-request")).expect("digest"),
+                accepted_at: at("2026-09-19"),
+            }),
+            command_terminal: None,
+            origin_epoch: Some(epoch()),
+            input: Some(acp_core::model::UserInputWrite {
+                message: message.clone(),
+                session: session.clone(),
+                turn: turn.clone(),
+                request,
+                content: content.clone(),
+                at: at("2026-09-19"),
+            }),
+        })
+        .await
+        .expect("commit input");
+    store.close().await;
+
+    // 进程重启后重新打开：没有 Agent 回显也能完整读回。
+    let reopened = open_store(&dir).await;
+    let page = read_messages(&reopened, &session, false).await;
+    assert_eq!(page.messages.len(), 1, "恰好一条用户消息");
+    let stored = &page.messages[0];
+    assert_eq!(stored.message, message);
+    assert_eq!(stored.channel, MessageChannel::User);
+    assert_eq!(stored.turn, Some(turn));
+    assert_eq!(stored.content.as_str(), content.json().as_str());
+    assert!(stored.media.is_empty());
+    reopened.close().await;
 }

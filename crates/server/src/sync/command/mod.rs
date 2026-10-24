@@ -1328,7 +1328,17 @@ impl CommandRoute {
         // 记录刚写成 `accepted`，走的也是同一分支——因此两种情形共用一条回复路径。
         match self.broker.command_status(&actor, &request_id).await {
             Ok(Some(record)) if record.status().is_terminal() => {
-                self.send_record_terminal(handle, &command.request_id, command.command, &record);
+                // 普通 prompt 的派发可能在 `submit_command` 返回前就同步失败（脚本后端/快速拒绝），
+                // 此时持久记录已是终态：只回一条终态，但把本次 `turnId` 放进 `result`，客户端仍能
+                // 把本地即时条目与持久用户消息按稳定身份接替；不能先伪造一条 `accepted`（重放也会
+                // 命中同一分支，重复的 accepted 会破坏「重放只回终态」）。
+                self.send_record_terminal_with_turn(
+                    handle,
+                    &command.request_id,
+                    command.command,
+                    &record,
+                    turn.as_ref(),
+                );
             }
             Ok(Some(record)) => {
                 self.send_accepted(handle, &command, turn, record.accepted_at());
@@ -3407,7 +3417,8 @@ impl CommandRoute {
         self::query::wire_session(&prepared.summary, catalog, activity)
     }
 
-    /// 回一条 `accepted` 的 `command.result`：`result` 与 `terminalEventId` 均为 `null`。
+    /// 回一条 `accepted` 的 `command.result`：`session.prompt` 带 `{turnId}`（客户端据此把本地
+    /// 即时条目与随后的持久用户消息按稳定身份接替），其余命令的 `result` 与 `terminalEventId` 为 `null`。
     fn send_accepted(
         &self,
         handle: &ConnectionHandle,
@@ -3439,6 +3450,15 @@ impl CommandRoute {
             self.encoding_fault(handle);
             return;
         };
+        let result = if command.command == CommandName::SessionPrompt {
+            turn.as_ref().and_then(|turn| {
+                RawObject::parse(&format!(r#"{{"turnId":"{}"}}"#, turn.as_str()))
+                    .ok()
+                    .map(CommandResultPayload::Object)
+            })
+        } else {
+            None
+        };
         self.send_result(
             handle,
             &CommandResult {
@@ -3447,7 +3467,7 @@ impl CommandRoute {
                 status: CommandState::Accepted,
                 accepted_at: Nullable::value(accepted_at),
                 terminal_event_id: Nullable::null(),
-                result: Nullable::null(),
+                result: result.map_or_else(Nullable::null, Nullable::value),
                 error: Nullable::null(),
             },
             "mutation",
@@ -3486,6 +3506,19 @@ impl CommandRoute {
         request_id: &Uuid,
         name: CommandName,
         record: &acp_core::model::CommandRecord,
+    ) {
+        self.send_record_terminal_with_turn(handle, request_id, name, record, None);
+    }
+
+    /// 同 [`Self::send_record_terminal`]，但额外把本次派发的 `turnId` 放进 `session.prompt` 的
+    /// 终态 `result`：派发在受理返回前同步失败时，客户端只能拿到终态，仍需按稳定轮次接替本地条目。
+    fn send_record_terminal_with_turn(
+        &self,
+        handle: &ConnectionHandle,
+        request_id: &Uuid,
+        name: CommandName,
+        record: &acp_core::model::CommandRecord,
+        turn: Option<&TurnId>,
     ) {
         let status = wire_command_state(record.status());
         // 终态日志（与受理那条成对）：类别取自持久记录本身，成因由记录里的错误码经封闭词表收敛
@@ -3594,6 +3627,18 @@ impl CommandRoute {
                 }
             },
             None => Nullable::null(),
+        };
+        // 普通 prompt 的快速失败/重放只有终态：把本次（或回放到的）turnId 放进开放结果对象，
+        // 客户端据此按稳定身份接替本地条目；记录已有结果时以记录为准。
+        let result = if name == CommandName::SessionPrompt && record.result().is_none() {
+            turn.and_then(|turn| {
+                RawObject::parse(&format!(r#"{{"turnId":"{}"}}"#, turn.as_str())).ok()
+            })
+            .map_or_else(Nullable::null, |value| {
+                Nullable::value(CommandResultPayload::Object(value))
+            })
+        } else {
+            result
         };
         self.send_result(
             handle,

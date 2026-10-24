@@ -32,7 +32,7 @@ use acp_core::ports::{
 use serde_json::{Value, json};
 use server::local_admin::Method;
 use sqlx::Connection as _;
-use storage_sqlite::migrate::StorageConfig;
+use storage_sqlite::migrate::{FILE_FORMAT_VERSION, OWNED_SCHEMA_VERSION, StorageConfig};
 use storage_sqlite::session_store::SqliteStore;
 use support::nodelink::{AccessKey, NodeLinkClient, PairingTicket};
 use support::owner::OwnerNode;
@@ -714,6 +714,7 @@ fn a_v12_database_keeps_its_old_session_updated_payload_readable_after_upgrade()
                 idempotency: None,
                 command_terminal: None,
                 origin_epoch: Some(epoch.clone()),
+                input: None,
             })
             .await
             .expect("创建会话")
@@ -746,6 +747,7 @@ fn a_v12_database_keeps_its_old_session_updated_payload_readable_after_upgrade()
                 idempotency: None,
                 command_terminal: None,
                 origin_epoch: Some(epoch),
+                input: None,
             })
             .await
             .expect("追加旧 session.updated");
@@ -801,8 +803,8 @@ fn a_v12_database_keeps_its_old_session_updated_payload_readable_after_upgrade()
             .expect("v12 库必须升级到当前版本");
         assert_eq!(
             upgraded.metadata().owned_schema_version,
-            16,
-            "升级必须把 owned schema 推进到当前版本 v16"
+            OWNED_SCHEMA_VERSION,
+            "升级必须把 owned schema 推进到当前版本"
         );
 
         // 当前摘要：只有三态，且不被旧事件里的 `waiting_permission` 覆盖。
@@ -886,7 +888,10 @@ fn a_v12_database_keeps_its_old_session_updated_payload_readable_after_upgrade()
             .fetch_one(&mut raw)
             .await
             .expect("读 user_version");
-        assert_eq!(user_version, 16, "升级后的文件格式版本必须是 16");
+        assert_eq!(
+            user_version, FILE_FORMAT_VERSION,
+            "升级后的文件格式版本必须是当前版本"
+        );
         let _ = raw.close().await;
 
         let _ = upgraded.close().await;

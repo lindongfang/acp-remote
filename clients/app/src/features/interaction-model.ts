@@ -123,6 +123,7 @@ export function buildInteractionViews(input: {
    * 否则用户点「重新取得」在结果为空时看不到任何变化。
    */
   readonly pendingChecked?: boolean;
+  readonly checkedRequestEvents?: ReadonlySet<string> | undefined;
   /**
    * 本连接是否协商了 `core.pending-interactions.v1`。
    *
@@ -132,6 +133,10 @@ export function buildInteractionViews(input: {
   readonly requestVersionRequired?: boolean;
 }): readonly InteractionView[] {
   const requests = new Map<string, RequestAccumulator>();
+  const endedTurns = new Set(input.records
+    .filter((record) => record.eventType === "turn.completed" || record.eventType === "turn.cancelled" || record.eventType === "turn.failed")
+    .map((record) => viewText(record.view, "turnId"))
+    .filter((turnId) => turnId !== null));
   const resolutions = new Map<string, { readonly resolution: InteractionResolution; readonly record: StructuredRecord }>();
 
   const placeRequest = (candidate: RequestAccumulator): void => {
@@ -265,6 +270,8 @@ export function buildInteractionViews(input: {
       options: request.options,
       witnessed,
       effective: request.effective,
+      turnEnded: request.turnId !== null && endedTurns.has(request.turnId),
+      confirmedIneffective: request.effective !== true && input.checkedRequestEvents?.has(request.record.eventId) === true,
       requestVersion: request.requestVersion,
       requiresRequestVersion: input.requestVersionRequired === true,
       expiresAt: request.expiresAt,

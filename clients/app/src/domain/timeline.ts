@@ -595,6 +595,8 @@ export interface PermissionRequestedTimelineCard {
   readonly turnId: string | null;
   readonly title: string;
   readonly description: string | null;
+  readonly toolKind?: string | null;
+  readonly detail?: ToolCallDetail | null;
   readonly availability: InteractionAvailability;
 }
 
@@ -733,6 +735,8 @@ export function buildTimelineCard(
         turnId: viewText(view, "turnId"),
         title,
         description: viewText(view, "description"),
+        toolKind: viewText(view, "toolKind"),
+        detail: toolDetailOf(view),
         availability,
       };
     }

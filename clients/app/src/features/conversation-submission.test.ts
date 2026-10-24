@@ -20,13 +20,15 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { SessionSummary } from "../protocol";
+import type { CommandResultMessage, SessionSummary } from "../protocol";
 import {
   ONLINE_SESSION_ID,
   eventMessage,
   interactionStore,
   lastDispatch,
+  messageItem,
   onlineStore,
+  readResult,
   resources,
   session,
   storeWithNoConnection,
@@ -76,6 +78,57 @@ function configChanged(eventId: string, globalSequence: string, version: string)
   };
 }
 
+/** 一条 `session.prompt` 的命令结果（受理给出 `{turnId}`，失败/不确定只给错误）。 */
+function promptResult(input: {
+  readonly requestId: string;
+  readonly status: "accepted" | "completed" | "failed" | "rejected" | "uncertain";
+  readonly turnId?: string | null;
+}): CommandResultMessage {
+  return {
+    protocolVersion: 1,
+    type: "command.result",
+    messageId: "bbbbbbbb-1111-4111-8111-0000000007aa",
+    connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+    connectionSequence: "1",
+    body: {
+      requestId: input.requestId,
+      command: "session.prompt",
+      status: input.status,
+      acceptedAt: input.status === "rejected" ? null : "2026-10-01T00:00:02.000Z",
+      terminalEventId: null,
+      result:
+        input.status === "accepted" && input.turnId != null ? { turnId: input.turnId } : null,
+      error:
+        input.status === "failed" || input.status === "rejected" || input.status === "uncertain"
+          ? { code: "session.busy", message: "执行失败", retryable: false, details: {} }
+          : null,
+    },
+  };
+}
+
+/** 一条 `user.message.delta`（权威用户消息的实时投影）。 */
+function userDelta(input: {
+  readonly messageId: string;
+  readonly turnId: string | null;
+  readonly text: string;
+  readonly eventId?: string;
+}): { readonly kind: "event"; readonly event: ReturnType<typeof eventMessage> } {
+  return {
+    kind: "event",
+    event: eventMessage({
+      eventType: "user.message.delta",
+      eventId: input.eventId ?? "dddddddd-0000-4000-8000-000000000701",
+      sessionId: ONLINE_SESSION_ID,
+      view: {
+        messageId: input.messageId,
+        ...(input.turnId === null ? {} : { turnId: input.turnId }),
+        deltaIndex: "0",
+        text: input.text,
+      },
+    }),
+  };
+}
+
 describe("用户消息在时间线上立即可见", () => {
   it("提交后、服务端回显/读取之前就呈现自己发的正文", () => {
     const { store } = interactionStore();
@@ -90,18 +143,12 @@ describe("用户消息在时间线上立即可见", () => {
     expect(userMessages[0]?.kind === "message" ? userMessages[0].message.text : null).toBe("这条消息现在就要出现");
   });
 
-  it("权威回显到达后同一条正文只呈现一次", () => {
+  it("权威回显带同一 turnId 时原位接替本地条目（只呈现一处）", () => {
     const { store } = interactionStore();
-    store.submitPrompt(ONLINE_SESSION_ID, "只出现一次");
-    store.apply({
-      kind: "event",
-      event: eventMessage({
-        eventType: "user.message.delta",
-        eventId: "dddddddd-0000-4000-8000-000000000701",
-        sessionId: ONLINE_SESSION_ID,
-        view: { messageId: "cccccccc-0000-4000-8000-000000000701", turnId: "turn-1", deltaIndex: "0", text: "只出现一次" },
-      }),
-    });
+    const outcome = store.submitPrompt(ONLINE_SESSION_ID, "只出现一次");
+    if (!outcome.ok) throw new Error("提交应被接受");
+    store.apply({ kind: "command_result", result: promptResult({ requestId: outcome.requestId, status: "accepted", turnId: "turn-1" }) });
+    store.apply(userDelta({ messageId: "cccccccc-0000-4000-8000-000000000701", turnId: "turn-1", text: "只出现一次" }));
 
     const page = store.conversationPage(ONLINE_SESSION_ID);
     const matching = (page?.timeline.entries ?? []).filter(
@@ -109,6 +156,53 @@ describe("用户消息在时间线上立即可见", () => {
         entry.message.text === "只出现一次",
     );
     expect(matching).toHaveLength(1);
+    // 留下的必须是正式消息，而不是本地的 `sent:` 条目。
+    expect(matching[0]?.key).toBe("message:cccccccc-0000-4000-8000-000000000701");
+  });
+
+  it("旧“继续”不抵消新“继续”：文字相同也各自保留，直到它们各自的身份到位", () => {
+    const { store, gateway } = interactionStore();
+    // 历史里已有一条“继续”（权威消息，turnId 不同）。
+    store.loadSession(ONLINE_SESSION_ID);
+    const readId = lastDispatch(gateway).body.requestId;
+    store.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: readId,
+        messages: [messageItem({ id: "m-old", createdAt: "2026-10-01T00:00:01.000Z", text: "继续" })],
+      }),
+    });
+
+    const first = store.submitPrompt(ONLINE_SESSION_ID, "继续");
+    if (!first.ok) throw new Error("提交应被接受");
+    store.apply({ kind: "command_result", result: promptResult({ requestId: first.requestId, status: "accepted", turnId: "turn-new" }) });
+
+    const userTexts = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .filter((entry) => entry.kind === "message" && entry.channel === "user")
+      .map((entry) => (entry.kind === "message" ? entry.message.text : ""));
+    // 历史“继续” + 本次“继续”都必须可见：按文字计数抵消会只剩 1 条。
+    expect(userTexts.filter((text) => text === "继续")).toHaveLength(2);
+
+    // 本次的正式消息按同一 turnId 接替后，历史那条仍然在。
+    store.apply(userDelta({ messageId: "cccccccc-0000-4000-8000-000000000702", turnId: "turn-new", text: "继续" }));
+    const after = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .filter((entry) => entry.kind === "message" && entry.channel === "user");
+    expect(after).toHaveLength(2);
+    expect(after.map((entry) => entry.key)).toEqual([
+      "message:m-old",
+      "message:cccccccc-0000-4000-8000-000000000702",
+    ]);
+  });
+
+  it("没有身份关联的相同文字不被当作重复：正式消息先到也不吞掉本地输入", () => {
+    const { store } = interactionStore();
+    store.submitPrompt(ONLINE_SESSION_ID, "同样的字");
+    // 回显带的是另一个轮次，且本地提交还没拿到 turnId：不能凭文字判定为同一条。
+    store.apply(userDelta({ messageId: "cccccccc-0000-4000-8000-000000000703", turnId: "turn-other", text: "同样的字" }));
+    const userEntries = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .filter((entry) => entry.kind === "message" && entry.channel === "user");
+    expect(userEntries).toHaveLength(2);
+    expect(userEntries.some((entry) => entry.key.startsWith("sent:"))).toBe(true);
   });
 
   it("明确被拒绝的提交不再冒充已发送", () => {
@@ -140,6 +234,57 @@ describe("用户消息在时间线上立即可见", () => {
     expect((page?.timeline.entries ?? []).some(
       (entry) => entry.kind === "message" && entry.channel === "user" && entry.message.text === "不会发出去",
     )).toBe(false);
+    // 从未受理的输入回到草稿区，用户可以修正后再发（不是凭空消失）。
+    expect(page?.input.draft).toBe("不会发出去");
+  });
+
+  it("受理后执行失败：已显示的输入保留，且不会把草稿回填成可重发的新消息", () => {
+    const { store } = interactionStore();
+    const outcome = store.submitPrompt(ONLINE_SESSION_ID, "已经保存过的输入");
+    if (!outcome.ok) throw new Error("提交应被接受");
+    store.apply({ kind: "command_result", result: promptResult({ requestId: outcome.requestId, status: "accepted", turnId: "turn-1" }) });
+    store.apply({ kind: "command_result", result: promptResult({ requestId: outcome.requestId, status: "failed" }) });
+
+    const page = store.conversationPage(ONLINE_SESSION_ID);
+    const entry = (page?.timeline.entries ?? []).find(
+      (item) => item.kind === "message" && item.channel === "user" && item.message.text === "已经保存过的输入",
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.kind === "message" ? entry.local?.phase : null).toBe("accepted");
+    // 受理后失败不把正文退回输入框：已保存的消息不该诱导用户再发一条。
+    expect(page?.input.draft).toBe("");
+  });
+
+  it("只回终态的快速失败：acceptedAt 证明已受理，输入保留且不回填草稿", () => {
+    const { store } = interactionStore();
+    const outcome = store.submitPrompt(ONLINE_SESSION_ID, "快速失败但已保存");
+    if (!outcome.ok) throw new Error("提交应被接受");
+    // 没有先前的 accepted：服务端在受理返回前同步派发失败，只能回一条带 acceptedAt 的终态。
+    store.apply({ kind: "command_result", result: promptResult({ requestId: outcome.requestId, status: "failed" }) });
+
+    const page = store.conversationPage(ONLINE_SESSION_ID);
+    const entry = (page?.timeline.entries ?? []).find(
+      (item) => item.kind === "message" && item.channel === "user" && item.message.text === "快速失败但已保存",
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.kind === "message" ? entry.local?.phase : null).toBe("accepted");
+    expect(page?.input.draft).toBe("");
+  });
+
+  it("受理结果不确定：输入保留并标注不确定，草稿不回填", () => {
+    const { store } = interactionStore();
+    const outcome = store.submitPrompt(ONLINE_SESSION_ID, "不知道有没有保存");
+    if (!outcome.ok) throw new Error("提交应被接受");
+    store.apply({ kind: "command_result", result: promptResult({ requestId: outcome.requestId, status: "uncertain" }) });
+
+    const page = store.conversationPage(ONLINE_SESSION_ID);
+    const entry = (page?.timeline.entries ?? []).find(
+      (item) => item.kind === "message" && item.channel === "user" && item.message.text === "不知道有没有保存",
+    );
+    expect(entry?.kind === "message" ? entry.local?.phase : null).toBe("uncertain");
+    expect(entry?.kind === "message" ? entry.local?.notice : null).toContain("不确定");
+    expect(page?.input.draft).toBe("");
+    expect(page?.input.submission.kind).toBe("uncertain");
   });
 });
 

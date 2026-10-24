@@ -120,8 +120,11 @@ export type {
   DegradedTimelineEntry,
   FileChangeDiagnostics,
   FileChangeView,
+  LocalPromptState,
   MessageChannel,
   MessageTimelineEntry,
+  SentPromptPhase,
+  SentPromptView,
   TimelineEntry,
   TimelineEntryBase,
   TimelineTurnGroup,
@@ -136,6 +139,14 @@ export {
   residualVolatileText,
   volatileText,
 } from "./conversation-timeline";
+
+// ── 过程阶段（D3：提交中/等待/恢复与思考/工具/回复互斥）────────────────────
+export type {
+  ContentPhase,
+  ConversationProcessModel,
+  ConversationProcessPhase,
+} from "./conversation-process-model";
+export { buildConversationProcess } from "./conversation-process-model";
 
 // ── 交互应答（D7）──────────────────────────────────────────────────────────
 export { buildInteractionViews } from "./interaction-model";

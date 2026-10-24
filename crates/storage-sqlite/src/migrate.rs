@@ -16,13 +16,13 @@ use acp_core::model::derive_directory_id;
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v16：新增 `owned_first_submission` 并把
-/// `owned_message.channel` 的 CHECK 扩到 `user`（首条用户消息无需 Agent 回显即可读取）；
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v17：新增普通输入的受理关联表
+/// `owned_user_input`；v16 的 `owned_first_submission` 与 `owned_message.channel = 'user'`、
 /// v15 的 `owned_session.custom_title`、v14 删除全部 `imported_*` 远程资源表、
 /// v13 的三态 `owned_session`、v12 的分块附件传输/清单、消息通道与媒体引用保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 16;
-/// §7.2：`meta.owned_schema_version` 的已知版本（v16 新增首条提交表与 `owned_message` 的 user 通道）。
-pub const OWNED_SCHEMA_VERSION: i64 = 16;
+pub const FILE_FORMAT_VERSION: i64 = 17;
+/// §7.2：`meta.owned_schema_version` 的已知版本（v17 新增 `owned_user_input`）。
+pub const OWNED_SCHEMA_VERSION: i64 = 17;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -251,7 +251,7 @@ CREATE TABLE IF NOT EXISTS owned_message (
   message_id        TEXT PRIMARY KEY,
   session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
   turn_id           TEXT,
-  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought','user')), -- 'user' = 首条用户消息（owned_first_submission）；不是 Agent 消息
+  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought','user')), -- 'user' = 已受理的用户输入（首条或后续普通输入）；不是 Agent 消息
   state             TEXT NOT NULL CHECK (state IN ('partial','completed','failed','cancelled')),
   content_json      TEXT NOT NULL,
   partial_reason    TEXT,
@@ -297,6 +297,20 @@ CREATE TABLE IF NOT EXISTS owned_first_submission (
   CHECK (ever_dispatched = 0 OR stage <> 'saved_not_dispatched'),
   CHECK (stage <> 'dispatch_started' OR ever_dispatched = 1),
   CHECK (terminal_outcome IS NULL OR terminal_outcome = 'completed' OR error_code IS NOT NULL)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_user_input (
+  message_id       TEXT PRIMARY KEY REFERENCES owned_message(message_id) ON DELETE CASCADE,
+  session_id       TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  turn_id          TEXT NOT NULL REFERENCES owned_turn(turn_id) ON DELETE CASCADE,
+  actor_kind       TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_id         TEXT NOT NULL,
+  request_id       TEXT NOT NULL,
+  content_digest   TEXT NOT NULL,
+  attachment_count INTEGER NOT NULL DEFAULT 0 CHECK (attachment_count >= 0),
+  created_at       TEXT NOT NULL,
+  UNIQUE (session_id, actor_kind, actor_id, request_id),
+  UNIQUE (session_id, turn_id)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS owned_device (
@@ -1028,6 +1042,24 @@ async fn v16_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageErro
     Ok(())
 }
 
+/// §7.2 的 v16 → v17 升级：普通输入的受理关联表 `owned_user_input`。
+///
+/// - 表本身由 §7.3 的 `CREATE TABLE IF NOT EXISTS`（`OWNED_SCHEMA_V1`）在**同一个** `BEGIN IMMEDIATE`
+///   事务里、升级段之前建出；本段只确认它确实存在——建表语句被删除或改名时升级必须显式失败，而不是
+///   把版本推进到一个缺表的库上。
+/// - **不回填任何历史行**：既不为旧 `owned_message` 的 `user` 行补关联，也不从事件/回显推算旧输入
+///   （`conversation-reliability` 的非目标）。首条用户消息的关联仍由 `owned_first_submission` 承担。
+/// - 本段不写行；版本由 `mark_schema_versions` 在同一事务末尾统一写到 17/17，失败整体回滚。
+/// - 第二次打开因 `user_version = 17` 跳过本段；`sqlite_master`/`meta`/行集逐字节不变。
+async fn v17_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
+    if !table_exists(&mut **tx, "owned_user_input").await? {
+        return Err(StorageError::InvalidRequest(
+            "owned_user_input is missing after the v17 DDL",
+        ));
+    }
+    Ok(())
+}
+
 /// v15 → v16 的 DDL（`owned_message` 12-step 重建 + 首条提交表）。
 const V16_UPGRADE_OWNED: &str = r#"
 CREATE TABLE owned_message_v16_new (
@@ -1744,6 +1776,9 @@ async fn migrate_locked(
         }
         if file_version < 16 {
             v16_upgrade(&mut tx).await?;
+        }
+        if file_version < 17 {
+            v17_upgrade(&mut tx).await?;
         }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;

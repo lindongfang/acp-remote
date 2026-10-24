@@ -46,6 +46,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "owned_peer_key",
     "owned_session",
     "owned_turn",
+    "owned_user_input",
     "owned_workspace",
 ];
 

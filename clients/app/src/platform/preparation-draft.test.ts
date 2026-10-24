@@ -788,6 +788,57 @@ describe("6.3 标签页归属、刷新恢复与迟到写", () => {
     expect(loaded.status).toBe("active");
   });
 
+  it("readTabLocator 只回非敏感定位；clearTabLocator 清掉它但不删草稿", async () => {
+    const storage = new MemoryStorage();
+    const port = openPort(storage);
+    const { access } = await beginOwner(port, scopeFor());
+    await port.saveDraft({
+      access,
+      expectedRevision: null,
+      content: contentFor(access, { text: "keep-me" }),
+      nowMs: now,
+    });
+
+    const locator = await port.readTabLocator();
+    expect(locator).toMatchObject({
+      canonicalOrigin: access.scope.canonicalOrigin,
+      ownerNodeId: access.scope.ownerNodeId,
+      deviceId: access.scope.deviceId,
+      tabSlotId: access.scope.tabSlotId,
+      sessionId: access.scope.sessionId,
+    });
+    // 定位里不存在正文、凭据或配置。
+    expect(JSON.stringify(locator)).not.toContain("keep-me");
+    expect(locator).not.toHaveProperty("text");
+
+    await port.clearTabLocator();
+    expect(await port.readTabLocator()).toBeNull();
+    expect(storage.getItem(PREPARATION_TAB_STORAGE_KEY)).toBeNull();
+    const loaded = await port.loadDraft({ access, nowMs: now });
+    expect(loaded.status).toBe("active");
+  });
+
+  it("显式放弃写 abandoned 墓碑（旧记录版本仍可读）", async () => {
+    const storage = new MemoryStorage();
+    const port = openPort(storage);
+    const { access } = await beginOwner(port, scopeFor());
+    const saved = await port.saveDraft({
+      access,
+      expectedRevision: null,
+      content: contentFor(access, { text: "abandon-me" }),
+      nowMs: now,
+    });
+    await port.invalidateDraft({
+      access,
+      expectedRevision: saved.revision,
+      reason: "abandoned",
+      nowMs: now,
+    });
+    const loaded = await port.loadDraft({ access, nowMs: now });
+    expect(loaded.status).toBe("invalidated");
+    if (loaded.status === "invalidated") expect(loaded.reason).toBe("abandoned");
+  });
+
   it("首次加载不知道 tabSlotId 时仍能按定位恢复（调用方只提供会话四项）", async () => {
     const storage = new MemoryStorage();
     const port = openPort(storage);

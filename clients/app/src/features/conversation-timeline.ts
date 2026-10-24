@@ -194,6 +194,24 @@ export interface TimelineEntryBase {
   readonly sequence: string | null;
 }
 
+/**
+ * 本设备这次提交在时间线上的本地阶段（尚未被权威用户消息接替时的实情）。
+ *
+ * - `uploading` / `sealing`：附件还在上传/封存，**Agent 尚未收到任何内容**；
+ * - `submitted`：命令已发出，服务端尚未确认受理；
+ * - `accepted`：服务端已受理（已知 `turnId`），等待 Agent 输出；
+ * - `uncertain`：受理结果不确定（可能已保存），不自动重发；
+ * - `failed`：本次提交未成立（上传失败/取消或受理前失败），输入仍可修正。
+ */
+export type SentPromptPhase = "uploading" | "sealing" | "submitted" | "accepted" | "uncertain" | "failed";
+
+/** 本地条目的阶段与说明（组件据此在用户气泡下补一行实情）。 */
+export interface LocalPromptState {
+  readonly requestId: string;
+  readonly phase: SentPromptPhase;
+  readonly notice: string | null;
+}
+
 /** 一条消息条目（`volatile` 为真时它的正文来自易失叠加层）。 */
 export interface MessageTimelineEntry extends TimelineEntryBase {
   readonly kind: "message";
@@ -205,6 +223,11 @@ export interface MessageTimelineEntry extends TimelineEntryBase {
   readonly streamComplete: boolean;
   /** 停止/失败/断线时的部分结果标注；完成或未标注为 `null`。 */
   readonly partial: PartialResultView | null;
+  /**
+   * 这条用户消息只存在于本设备（还没有权威正文接替它）时的本地阶段；权威消息为 `null`。
+   * 组件只按它说明「上传中 / 已提交 / 未发送」，不得据此伪造已受理。
+   */
+  readonly local?: LocalPromptState | null;
 }
 
 /** 一张结构化卡片条目。 */
@@ -217,7 +240,13 @@ export interface DegradedTimelineEntry extends TimelineEntryBase {
 }
 
 /** 时间线条目：消息、结构化卡片、降级卡片。 */
-export type TimelineEntry = MessageTimelineEntry | CardTimelineEntry | DegradedTimelineEntry;
+export type TimelineEntry = MessageTimelineEntry | CardTimelineEntry | DegradedTimelineEntry | PendingInteractionTimelineEntry;
+
+/** 缺少请求事件的读回交互也参与时间排序，不单独置顶。 */
+export interface PendingInteractionTimelineEntry extends TimelineEntryBase {
+  readonly kind: "pending_interaction";
+  readonly interaction: InteractionView;
+}
 
 /** 卡片条目（把卡片与它的定位字段合成一条）。 */
 function cardEntry(card: TimelineCard, record: StructuredRecord): CardTimelineEntry {
@@ -236,12 +265,26 @@ function degradedEntry(record: StructuredRecord, unusableView: boolean): Degrade
   };
 }
 
-/** 本设备刚派发、尚未被权威读取/回显覆盖的用户消息（视图层只读）。 */
+/**
+ * 本设备刚提交、尚未被权威读取/回显接替的用户消息（视图层只读）。
+ *
+ * 身份来自可靠关联：`messageId`（首条的准备关联或读取确认的首条正文）与 `turnId`
+ * （`session.prompt` 的 `accepted { turnId }`）。**没有**按文字或时间推断重复的字段——
+ * 同一段文字发送两次是两条独立输入，各自保留。
+ */
 export interface SentPromptView {
   readonly requestId: string;
   readonly text: string;
   readonly attachmentNames: readonly string[];
   readonly createdAt: string;
+  /** 本地阶段（上传中/封存中/待确认/已受理/不确定/未成立）。 */
+  readonly phase: SentPromptPhase;
+  /** 服务端受理后给出的轮次标识；尚未受理为 `null`。 */
+  readonly turnId: string | null;
+  /** 已确认的正式用户消息标识（首条准备关联或首条权威读取）；未知为 `null`。 */
+  readonly messageId: string | null;
+  /** 本地实情说明（上传失败原因、取消说明等）；没有为 `null`。 */
+  readonly notice: string | null;
 }
 
 /**
@@ -251,7 +294,8 @@ export interface SentPromptView {
  * @param records 已去重的结构化记录（`mergeStructuredRecords` 之后，含实时与历史）。
  * @param volatile 该会话的易失叠加层。
  * @param interactions 该会话的交互视图：授权/提问卡片的可应答性由它提供。
- * @param sentPrompts 本设备已派发、尚未被读取/回显覆盖的用户消息；同文出现后不再重复。
+ * @param sentPrompts 本设备已提交、尚未被权威用户消息接替的输入；只按 `messageId`/`turnId`
+ *   的同身份接替，**不**按相同文字抵消。
  */
 export function buildTimeline(input: {
   readonly messages: readonly MessageView[];
@@ -295,6 +339,7 @@ export function buildTimeline(input: {
       volatile: residual.length > 0,
       streamComplete: tail?.completed ?? true,
       partial: tail?.partial ?? message.partial,
+      local: null,
     });
   }
 
@@ -326,32 +371,32 @@ export function buildTimeline(input: {
       volatile: true,
       streamComplete: tail.completed,
       partial: tail.partial,
+      local: null,
     });
   }
 
-  // 本设备刚派发的用户消息：Agent 不回显时也要立刻可见；同文已被读取/回显后不再重复。
+  // 本设备刚提交的用户消息：Agent 不回显时也要立刻可见。**只有**权威用户消息或用户增量事件
+  // 带着同一 `messageId`/`turnId` 到位时，本地条目才让位——相同文字、相近时间都不是身份。
   if (input.sentPrompts !== undefined && input.sentPrompts.length > 0) {
-    const reflected = new Map<string, number>();
-    const bump = (text: string): void => {
-      reflected.set(text, (reflected.get(text) ?? 0) + 1);
-    };
+    const claimedMessageIds = new Set<string>();
+    const claimedTurnIds = new Set<string>();
     for (const message of input.messages) {
-      if (message.role === "user") bump(message.text);
+      if (message.role !== "user") continue;
+      claimedMessageIds.add(message.id);
+      if (message.turnId !== null) claimedTurnIds.add(message.turnId);
     }
     for (const tail of input.volatile) {
-      if (tail.channel === "user") bump(volatileText(tail));
+      if (tail.channel !== "user") continue;
+      claimedMessageIds.add(tail.messageId);
+      if (tail.turnId !== null) claimedTurnIds.add(tail.turnId);
     }
     const ordered = [...input.sentPrompts].sort((left, right) =>
       left.createdAt < right.createdAt ? -1 : left.createdAt > right.createdAt ? 1 : 0);
     for (const prompt of ordered) {
-      // 同一正文可能被发送多次：一条权威消息只抵消一条本地待回显消息。
-      if (prompt.text.length > 0) {
-        const count = reflected.get(prompt.text) ?? 0;
-        if (count > 0) {
-          reflected.set(prompt.text, count - 1);
-          continue;
-        }
-      }
+      const claimed =
+        (prompt.messageId !== null && claimedMessageIds.has(prompt.messageId)) ||
+        (prompt.turnId !== null && claimedTurnIds.has(prompt.turnId));
+      if (claimed) continue;
       const text = [prompt.text, ...prompt.attachmentNames.map((name) => `📎 ${name}`)]
         .filter((part) => part.length > 0)
         .join("\n");
@@ -370,11 +415,12 @@ export function buildTimeline(input: {
           hasStructuredContent: false,
           partial: null,
           createdAt: prompt.createdAt,
-          turnId: null,
+          turnId: prompt.turnId,
         },
         volatile: false,
         streamComplete: true,
         partial: null,
+        local: { requestId: prompt.requestId, phase: prompt.phase, notice: prompt.notice },
       });
     }
   }
@@ -386,6 +432,11 @@ export function buildTimeline(input: {
 
   const cardRecords: StructuredRecord[] = [];
   for (const record of input.records) {
+    // 会话管理通知由状态层接收，不进入聊天区（包括原先的诊断兜底卡）。
+    if (record.eventType === "session.mode.changed" ||
+        record.eventType === "session.config.changed" ||
+        record.eventType === "session.info.changed" ||
+        record.eventType === "session.commands.changed") continue;
     if (isDegradedRecord(record)) {
       entries.push(degradedEntry(record, false));
       continue;
@@ -404,6 +455,13 @@ export function buildTimeline(input: {
     entries.push(cardEntry(card, group.earliest));
   }
 
+  const shownInteractions = new Set(entries.flatMap(entry =>
+    entry.kind === "permission_requested" || entry.kind === "elicitation_requested" ? [entry.interactionId] : []));
+  for (const interaction of input.interactions) {
+    if (shownInteractions.has(interaction.interactionId)) continue;
+    entries.push({ kind: "pending_interaction", key: `pending:${interaction.interactionId}`,
+      createdAt: interaction.requestedAt, sequence: null, interaction });
+  }
   return entries.sort((a, b) => compareTimelinePosition(a, b));
 }
 
@@ -504,6 +562,8 @@ function entryTurnId(entry: TimelineEntry): string | null {
     case "permission_requested":
     case "elicitation_requested":
       return entry.turnId;
+    case "pending_interaction":
+      return entry.interaction.turnId;
     default:
       return null;
   }

@@ -66,7 +66,7 @@ use crate::session_read::{
     DEFAULT_PAGE_MESSAGES, MAX_PAGE_MESSAGES, SessionReadSource, wire_config_option,
 };
 #[cfg(test)]
-use crate::session_read::{Message, MessageMerger, needs_older_agents};
+use crate::session_read::{Message, finish_message_page, user_input_count};
 use crate::sync::event::{FILE_DIFF_FEATURE, RAW_PAYLOAD_FEATURE, TYPED_MEDIA_FEATURE};
 use crate::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE;
 use crate::sync::remote::STATELESS_ORIGIN_FEATURE;
@@ -1191,19 +1191,20 @@ mod tests {
     use super::*;
     use crate::session_read::message_key;
     use acp_core::model::{
-        AgentId, AgentRef, EffectiveInteraction as CoreEffectiveInteraction,
-        FileReadPurpose as CorePurpose, GitDiffBase as CoreBase, GitDiffKind as CoreDiffKind,
-        GitFileStatus as CoreStatus, GitState as CoreState, GitStatusEntry as CoreStatusEntry,
-        GitStatusPage as CoreStatusPage, GlobalCursor, JsonValueText,
-        MessageChannel as CoreMessageChannel, MessageRecord, PartialResult as CorePartialResult,
-        PortError, ServerEpoch, SessionFileEntry as CoreEntry, SessionFilePage as CorePage,
-        SessionFilePath, SessionFileRestrictedReason as CoreRestricted,
-        SessionListPath as CoreListPath, SessionPageToken as CoreToken, SessionSummary, Version,
+        AgentId, AgentRef, CommittedEvent, EffectiveInteraction as CoreEffectiveInteraction,
+        EventId, EventPayload, EventType, FileReadPurpose as CorePurpose, GitDiffBase as CoreBase,
+        GitDiffKind as CoreDiffKind, GitFileStatus as CoreStatus, GitState as CoreState,
+        GitStatusEntry as CoreStatusEntry, GitStatusPage as CoreStatusPage, GlobalCursor,
+        JsonValueText, MessageChannel as CoreMessageChannel, MessageRecord, OriginEpoch,
+        PartialResult as CorePartialResult, PortError, ServerEpoch, SessionFileEntry as CoreEntry,
+        SessionFilePage as CorePage, SessionFilePath,
+        SessionFileRestrictedReason as CoreRestricted, SessionListPath as CoreListPath,
+        SessionPageToken as CoreToken, SessionSummary, Version, ViewJson,
     };
     use acp_core::ports::{HistoryPage, HistoryQuery, OwnedEventRecord};
     use std::collections::BTreeSet;
     use std::sync::Mutex;
-    use sync_protocol::common::AgentContentBlock;
+    use sync_protocol::sync::MessageRole;
 
     use async_trait::async_trait;
 
@@ -1417,128 +1418,46 @@ mod tests {
         format!("00000000-0000-4000-8000-{number:012}")
     }
 
-    /// 一条持久化的 `user.message.delta`（正文页的输入那一半）。
-    fn user_delta(
-        event: u32,
-        message: u32,
-        index: u64,
-        text: &str,
-        created_at: &str,
-    ) -> OwnedEventRecord {
-        let session = acp_core::model::SessionId::new(&uid(1)).expect("session id");
-        let view = serde_json::json!({
-            "messageId": uid(message),
-            "turnId": uid(90),
-            "deltaIndex": index.to_string(),
-            "text": text,
-        })
-        .to_string();
-        OwnedEventRecord {
-            event: acp_core::model::CommittedEvent {
-                id: acp_core::model::EventId::new(&uid(event)).expect("event id"),
-                event_type: acp_core::model::EventType::new("user.message.delta")
-                    .expect("event type"),
-                session: Some(session.clone()),
-                session_sequence: Some(
-                    acp_core::model::Sequence::new(index + 1).expect("sequence"),
-                ),
-                global_sequence: acp_core::model::Sequence::new(event as u64 + 1)
-                    .expect("sequence"),
-                origin_epoch: Some(
-                    acp_core::model::OriginEpoch::new(&uid(2)).expect("origin epoch"),
-                ),
-                origin_sequence: Some(acp_core::model::Sequence::new(index + 1).expect("sequence")),
-                created_at: acp_core::model::Timestamp::new(created_at).expect("timestamp"),
-            },
-            payload: acp_core::model::EventPayload::new(
-                acp_core::model::ViewJson::new(&view).expect("view"),
-                None,
-            ),
+    /// 一条页内的待投影消息（用户输入与 Agent 正文共用同一形状）。
+    fn page_message(id: u32, role: MessageRole) -> Message {
+        Message {
+            message_id: Uuid::parse(&uid(id)).expect("message id"),
+            role,
+            content: Vec::new(),
+            created_at: Timestamp::parse("2026-01-01T00:00:00.000Z").expect("timestamp"),
+            turn_id: None,
+            channel: None,
+            partial: None,
         }
     }
 
-    fn text_of(message: &Message) -> String {
-        message
-            .content
-            .iter()
-            .filter_map(|block| match block {
-                AgentContentBlock::Text { text } => Some(text.as_str().to_owned()),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// 已提交增量在重连后重复到达：整体只应用一次（不重复追加）。
+    /// 页边界按**用户输入**计数：从尾部往前收下 `limit` 条用户消息，页首之前的 Agent 消息留在页内。
     #[test]
-    fn duplicate_user_delta_events_are_applied_once() {
-        let record = user_delta(10, 2, 0, "hello ", "2026-01-01T00:00:00.000Z");
-        let mut merger = MessageMerger::new(None);
-        merger.absorb(&record);
-        merger.absorb(&record);
-        let page = merger.finish(20, Vec::new(), false);
+    fn message_page_counts_user_inputs_only() {
+        let messages = vec![
+            page_message(20, MessageRole::Agent),
+            page_message(21, MessageRole::User),
+            page_message(22, MessageRole::Agent),
+            page_message(23, MessageRole::User),
+        ];
+        assert_eq!(user_input_count(&messages), 2);
+        let page = finish_message_page(1, messages, false);
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| message.message_id.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                Uuid::parse(&uid(22)).expect("id"),
+                Uuid::parse(&uid(23)).expect("id")
+            ],
+            "只保留最后一条用户输入与它之前的 Agent 正文"
+        );
+        assert!(page.has_earlier, "被切掉的前缀即 hasEarlier");
+
+        let page = finish_message_page(5, vec![page_message(24, MessageRole::User)], false);
         assert_eq!(page.messages.len(), 1);
-        assert_eq!(text_of(&page.messages[0]), "hello ");
-        assert_eq!(
-            page.messages[0].message_id,
-            Uuid::parse(&uid(2)).expect("message id")
-        );
-    }
-
-    /// 同一 `(messageId, deltaIndex)` 换了 eventId 重投：也只应用一次。
-    #[test]
-    fn duplicate_delta_position_with_a_new_event_id_is_applied_once() {
-        let first = user_delta(11, 3, 0, "same", "2026-01-01T00:00:00.000Z");
-        let retried = user_delta(12, 3, 0, "same", "2026-01-01T00:00:00.000Z");
-        let mut merger = MessageMerger::new(None);
-        merger.absorb(&first);
-        merger.absorb(&retried);
-        let page = merger.finish(20, Vec::new(), false);
-        assert_eq!(page.messages.len(), 1);
-        assert_eq!(text_of(&page.messages[0]), "same");
-    }
-
-    /// 读取屏障：每次读只覆盖读口内的增量；旧页不因新增量而改变，新页按游标只取游标之前的消息。
-    #[test]
-    fn read_barrier_keeps_the_snapshot_and_later_reads_see_new_increments() {
-        let first = user_delta(20, 4, 0, "one", "2026-01-01T00:00:00.000Z");
-        let second = user_delta(21, 5, 0, "two", "2026-01-01T00:00:01.000Z");
-        let mut initial = MessageMerger::new(None);
-        initial.absorb(&first);
-        initial.absorb(&second);
-        let snapshot = initial.finish(20, Vec::new(), false);
-        assert_eq!(
-            snapshot.messages.iter().map(text_of).collect::<Vec<_>>(),
-            vec!["one".to_owned(), "two".to_owned()]
-        );
-
-        // 新增量到达后：不带游标的读看到全部三条；带游标（`before` = 第三条）的读只看到它之前的两条。
-        // 旧的一次读是已经被取走的页，不会被后来的增量“覆盖”成三条。
-        let third = user_delta(22, 6, 0, "three", "2026-01-01T00:00:02.000Z");
-        let mut latest = MessageMerger::new(None);
-        for record in [&first, &second, &third] {
-            latest.absorb(record);
-        }
-        let head = latest.finish(20, Vec::new(), false);
-        assert_eq!(
-            head.messages.iter().map(text_of).collect::<Vec<_>>(),
-            vec!["one".to_owned(), "two".to_owned(), "three".to_owned()]
-        );
-
-        let cursor = (
-            "2026-01-01T00:00:02.000Z".to_owned(),
-            Uuid::parse(&uid(6)).expect("message id"),
-        );
-        let mut older = MessageMerger::new(Some(cursor));
-        for record in [&first, &second, &third] {
-            older.absorb(record);
-        }
-        let page = older.finish(20, Vec::new(), false);
-        assert_eq!(
-            page.messages.iter().map(text_of).collect::<Vec<_>>(),
-            vec!["one".to_owned(), "two".to_owned()]
-        );
-        assert_eq!(text_of(&snapshot.messages[0]), "one");
-        assert_eq!(snapshot.messages.len(), 2);
+        assert!(!page.has_earlier);
     }
 
     /// 一条持久化的 Agent 正文（`owned_message` 的投影原料）。
@@ -1612,62 +1531,33 @@ mod tests {
         assert_eq!(blocks[1]["attachmentId"], uid(70));
     }
 
-    /// 页边界：用户输入超过一页时，下界是从最新往前数第 `limit+1` 条用户消息；不超过一页时没有下界
-    /// （页从最早一条开始）。下界只统计**严格早于**游标的用户消息。
-    #[test]
-    fn page_floor_is_the_user_message_before_the_page() {
-        let mut merger = MessageMerger::new(None);
-        for (index, second) in [0u32, 1, 2].into_iter().enumerate() {
-            merger.absorb(&user_delta(
-                30 + index as u32,
-                10 + second,
-                0,
-                "x",
-                &format!("2026-01-01T00:00:0{second}.000Z"),
-            ));
+    /// 首批里的一条 `user.message.delta` 事件（`messageId` 与任何持久化行都不同）。
+    ///
+    /// 它只走历史轨道：正文页的原料是 `owned_message`，事件里的 `messageId` **不得**被合成为
+    /// 第二条用户输入。把它放进读面，才能让「正文页不含该 messageId」成为可证伪的断言，而不是对着
+    /// 空事件列表的恒真式。
+    fn synthetic_user_delta(id: u32) -> OwnedEventRecord {
+        OwnedEventRecord {
+            event: CommittedEvent {
+                id: EventId::new(&uid(9000)).expect("event id"),
+                event_type: EventType::new("user.message.delta").expect("event type"),
+                session: Some(SessionId::new(&uid(1)).expect("session id")),
+                session_sequence: Some(Sequence::new(1).expect("sequence")),
+                global_sequence: Sequence::new(1).expect("sequence"),
+                origin_epoch: Some(OriginEpoch::new(&uid(8000)).expect("origin epoch")),
+                origin_sequence: Some(Sequence::new(1).expect("sequence")),
+                created_at: CoreTimestamp::new("2026-01-01T00:00:00.000Z").expect("timestamp"),
+            },
+            payload: EventPayload::new(
+                ViewJson::new(&format!(
+                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"synthetic","source":"agent"}}"#,
+                    uid(id),
+                    uid(9100)
+                ))
+                .expect("view"),
+                None,
+            ),
         }
-        assert_eq!(merger.floor(3), None);
-        assert_eq!(
-            merger.floor(2),
-            Some(("2026-01-01T00:00:00.000Z".to_owned(), uid(10)))
-        );
-
-        // 游标 = 最新一条：它的下界是第二条（游标本身不计数）。
-        let cursor = (
-            "2026-01-01T00:00:02.000Z".to_owned(),
-            Uuid::parse(&uid(12)).expect("message id"),
-        );
-        let mut narrowed = MessageMerger::new(Some(cursor));
-        for (index, second) in [0u32, 1, 2].into_iter().enumerate() {
-            narrowed.absorb(&user_delta(
-                40 + index as u32,
-                10 + second,
-                0,
-                "x",
-                &format!("2026-01-01T00:00:0{second}.000Z"),
-            ));
-        }
-        assert_eq!(
-            narrowed.floor(1),
-            Some(("2026-01-01T00:00:00.000Z".to_owned(), uid(10)))
-        );
-    }
-
-    /// Agent 正文的补齐判定：没有下界时读到最早；有下界时最早一条严格更早才算覆盖。
-    #[test]
-    fn message_paging_continues_until_the_page_floor_is_covered() {
-        let floor = ("2026-01-01T00:00:01.000Z".to_owned(), uid(10));
-        assert!(needs_older_agents(None, None));
-        assert!(needs_older_agents(Some(&floor), None));
-        assert!(needs_older_agents(Some(&floor), Some(&floor)));
-        assert!(needs_older_agents(
-            Some(&floor),
-            Some(&("2026-01-01T00:00:02.000Z".to_owned(), uid(11)))
-        ));
-        assert!(!needs_older_agents(
-            Some(&floor),
-            Some(&("2026-01-01T00:00:00.000Z".to_owned(), uid(9)))
-        ));
     }
 
     /// `session.read` 的用例读面替身：`messages` 按真实端口的口径分页（`before` 严格更早、一页
@@ -1763,6 +1653,24 @@ mod tests {
         .expect("record")
     }
 
+    /// 一条已持久化的用户输入行（`channel='user'`）：读取面必须投影成 `role=user`，
+    /// 且不与事件轨道合并。它参与分页，因此也验证用户行与 Agent 正文共用同一游标。
+    fn user_record(index: u32) -> MessageRecord {
+        let created_at = second(index);
+        MessageRecord::try_new(
+            MessageId::new(&uid(2000)).expect("message id"),
+            acp_core::model::SessionId::new(&uid(1)).expect("session id"),
+            None,
+            CoreMessageChannel::User,
+            CorePartialResult::completed(),
+            JsonValueText::new(r#"[{"type":"text","text":"继续"}]"#).expect("content"),
+            Vec::new(),
+            CoreTimestamp::new(&created_at).expect("timestamp"),
+            CoreTimestamp::new(&created_at).expect("timestamp"),
+        )
+        .expect("record")
+    }
+
     fn page_session() -> SessionSummary {
         let created_at = CoreTimestamp::new(&second(0)).expect("timestamp");
         SessionSummary::try_new(
@@ -1837,20 +1745,16 @@ mod tests {
     }
 
     /// 修复前：补齐循环每轮都用初始页最早一条当 `before`，重复取同一页直到 `resource.result_too_large`。
-    /// 这里用 450 条 Agent 正文（200 + 200 + 50 三页）驱动真正的 `session_read`：游标必须逐页前移，
-    /// 合并页完整且无重复，`hasEarlier` 与真实页边界一致。
+    /// 这里用 450 条已持久化消息（449 条 Agent 正文 + 1 条用户输入；200 + 200 + 50 三页）驱动真正的
+    /// `session_read`：游标必须逐页前移，合并页完整且无重复，`hasEarlier` 与真实页边界一致。
     #[tokio::test]
     async fn session_read_completes_agent_messages_across_pages() {
-        let all = (0..450).map(agent_record).collect::<Vec<_>>();
+        let mut all = (0..449).map(agent_record).collect::<Vec<_>>();
+        all.push(user_record(450));
         let source = PagedSource {
             all,
-            events: vec![user_delta(
-                900,
-                5000,
-                0,
-                "hello",
-                "2026-01-01T00:03:45.500Z",
-            )],
+            // 首批带一条 `user.message.delta`：正文页必须仍然只来自 `owned_message`。
+            events: vec![synthetic_user_delta(5000)],
             session: page_session(),
             queries: Mutex::new(Vec::new()),
         };
@@ -1880,7 +1784,11 @@ mod tests {
         };
         assert!(!result.has_earlier, "已读到最早一条：hasEarlier 必须为假");
         let messages = result.resources.messages.expect("messages requested");
-        assert_eq!(messages.len(), 451, "450 条 Agent 正文 + 1 条用户输入");
+        assert_eq!(
+            messages.len(),
+            450,
+            "450 条已持久化消息：449 条 Agent 正文 + 1 条用户输入"
+        );
         let ids = messages
             .iter()
             .map(|message| message.message_id.clone())
@@ -1904,11 +1812,17 @@ mod tests {
         );
         assert_eq!(
             messages.last().expect("last").message_id,
-            Uuid::parse(&uid(1449)).expect("message id")
+            Uuid::parse(&uid(2000)).expect("message id"),
+            "用户输入行来自 owned_message，排在它自己的 (createdAt, messageId) 位置"
+        );
+        assert_eq!(
+            messages.last().expect("last").role,
+            sync_protocol::sync::MessageRole::User,
+            "持久用户行必须投影成 role=user"
         );
         assert!(
-            ids.contains(&Uuid::parse(&uid(5000)).expect("message id")),
-            "事件流里的用户输入必须仍在合并页内"
+            !ids.contains(&Uuid::parse(&uid(5000)).expect("message id")),
+            "正文页只取 owned_message，不再按事件合成第二条用户输入"
         );
 
         let queries = source.queries.lock().expect("query log");

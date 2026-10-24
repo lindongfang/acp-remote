@@ -32,32 +32,32 @@ use crate::derive::{
 };
 use crate::lifecycle::{ActivationPlan, LocalSessionLifecycle};
 use crate::model::{
-    AcpRaw, Actor, AgentRef, AgentSessionId, AuditAction, AuditOutcome, AuditRecord, ClientCommand,
-    CommandKind, CommandPayload, CommandReceipt, CommandRecord, CommandResult, CommandStatus,
-    CommandTerminalRecord, CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind,
-    CreateSessionRequest, Digest, DirectoryId, DispatchContext, DispatchFence,
+    AcceptedInput, AcpRaw, Actor, AgentRef, AgentSessionId, AuditAction, AuditOutcome, AuditRecord,
+    ClientCommand, CommandKind, CommandPayload, CommandReceipt, CommandRecord, CommandResult,
+    CommandStatus, CommandTerminalRecord, CommittedEvent, ConfigOptionId, ConfigValue,
+    ConflictKind, CreateSessionRequest, Digest, DirectoryId, DispatchContext, DispatchFence,
     EffectiveInteraction, ElicitationAction, ElicitationValues, EndpointEvent, EntityRef,
     EventKind, EventOrigin, EventPayload, EventType, FirstSubmissionConfig, FirstSubmissionId,
     FirstSubmissionInput, FirstSubmissionRecord, FirstSubmissionSettlement, FirstSubmissionStage,
     FirstSubmissionWrite, FirstUserMessage, GlobalCursor, InteractionId, InteractionKind,
     InteractionResolution, MemberValue, MessageId, ModeId, ModeRef, OriginEpoch, OwnedSessionRef,
-    PendingEvent, PendingInteraction, PermissionDecision, PermissionDecisionKind,
-    PersistencePolicy, PortError, PromptContentBlock, PromptRequest, PublicError, RequestId,
-    Resolution, ResourceGeneration, ResourceOrigin, ResumeSessionRequest, Sequence,
-    SessionActivity, SessionId, SessionRecoveryRecord, SessionReference, SessionState,
+    PROMPT_USER_MESSAGE_SOURCE, PendingEvent, PendingInteraction, PermissionDecision,
+    PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock, PromptRequest,
+    PublicError, RequestId, Resolution, ResourceGeneration, ResourceOrigin, ResumeSessionRequest,
+    Sequence, SessionActivity, SessionId, SessionRecoveryRecord, SessionReference, SessionState,
     SessionSummary, SessionTitle, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind,
-    Version, ViewJson, WorkspaceRef, decode_json_string as json_string,
+    UserInputWrite, Version, ViewJson, WorkspaceRef, decode_json_string as json_string,
     encode_json_string as json_text, insert_string_member_front, object_members as json_members,
-    top_level_member,
+    prompt_message_text, top_level_member,
 };
 use crate::ports::{
     ActivationOutcome, AuditStore, Clock, CommitOutcome, EventPublisher, EventSink,
     FirstSubmission, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord,
     InteractionAuthority, InteractionResolved, ModeChange, NewTurn, OriginReadPage, OwnedCommit,
-    PendingInteractionWrite, PreparedSessionCreate, ReadView, ReplayBatch, ReplayLimit,
-    SessionActivityFacts, SessionBackendFactory, SessionCreateAdmission, SessionEndpoint,
-    SessionQuery, SessionStore, SessionUpdate, SettledSession, StateChange, SubmissionBinding,
-    TrustStore, TurnChange, TurnUpdate,
+    PendingInteractionWrite, PreparedSessionCreate, PromptAcceptanceInput, ReadView, ReplayBatch,
+    ReplayLimit, SessionActivityFacts, SessionBackendFactory, SessionCreateAdmission,
+    SessionEndpoint, SessionQuery, SessionStore, SessionUpdate, SettledSession, StateChange,
+    SubmissionBinding, TrustStore, TurnChange, TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -490,6 +490,9 @@ struct QueuedTurn {
     /// 首次提交的派发计划（`session.start`）：端点已由准备阶段建立/转正，派发时不走
     /// `SessionBackendFactory::open`，并带上回显关联所需的派发上下文。
     first: Option<FirstDispatchPlan>,
+    /// 普通后续输入的派发上下文（`conversation-reliability` D2）：受理期已完整组装，派发时原样交给
+    /// `SessionEndpoint::prompt_with_context`。`None` = 该次派发没有可证明的回显关联（首条走 `first`）。
+    echo: Option<DispatchContext>,
 }
 
 /// 首次提交的派发计划（`design.md` D7/D8）。
@@ -1014,6 +1017,7 @@ impl Broker {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = self.commit_owned(commit).await?;
         self.publish(&outcome.appended);
@@ -1233,55 +1237,184 @@ impl Broker {
                 false,
             );
         };
+        // 预检口径与首条一致：空/超 64 块必须在**受理之前**整条拒绝，并同时得到本次输入的
+        // 保真 JSON 数组与同源摘要（不接受第二套编码）。
+        let content = match FirstSubmissionInput::new(content.to_vec()) {
+            Ok(content) => content,
+            Err(error) => return Err(PortError::from(error)),
+        };
+        // 派发正文与受理写集来自同一份内容块（同一数组顺序、同一保真字节）。
+        let prompt_content = content.content().to_vec();
+        let input = PromptAcceptanceInput {
+            session: session.clone(),
+            request: command.request.clone(),
+            request_fingerprint: command.request_fingerprint.clone(),
+            expected_version: command.expected_version,
+            message: self.deps.ids.message_id(),
+            turn: self.deps.ids.turn_id(),
+            content,
+            binding,
+        };
         let slot = self.owned_slot(&session);
         let _guard = slot.gate.guard().await;
+        match self.accept_prompt(&slot, actor, input).await? {
+            PromptAcceptance::Receipt(receipt) | PromptAcceptance::Replayed(receipt) => Ok(receipt),
+            PromptAcceptance::Committed { accepted, dispatch } => {
+                // 派发计划在受理提交之后才入队：受理顺序 = 入队顺序（两者同在本门的临界区内）。
+                let turn = accepted.turn.clone();
+                lock(&slot.queue).waiting.push_back(QueuedTurn {
+                    turn: turn.clone(),
+                    request: accepted.request.clone(),
+                    prompt: PromptRequest {
+                        content: prompt_content,
+                    },
+                    actor: actor.clone(),
+                    first: None,
+                    echo: dispatch,
+                });
+                self.pump_locked(&slot, &session).await?;
+                Ok(CommandReceipt::Accepted {
+                    request: accepted.request,
+                    turn: Some(turn),
+                })
+            }
+        }
+    }
 
-        if let Some(receipt) = self.idempotency(actor, command).await? {
-            return Ok(receipt);
+    /// 普通（后续）输入的受理（`conversation-reliability` §6 第 24 条）。
+    ///
+    /// 顺序固定：① 授权 → ② 幂等回放 → ③ 排队策略 → ④ `validate_prompt` 预检 → ⑤ core 分配
+    /// `MessageId`/`TurnId` 并组装一次 `OwnedCommit`（用户消息写集 + turn + 初始可见性事件 +
+    /// 幂等记录）→ ⑥ **一次** `commit`（附件绑定同事务）→ ⑦ 提交成功后才发布并返回派发计划。
+    /// 任一失败都零行、零广播、零派发。
+    ///
+    /// 两条委托入口（`SessionCommands::submit_command` 与
+    /// `UseCases::submit_prompt_with_submission`）都经过这里：授权因此不会因为附件路径而被绕过。
+    ///
+    /// 调用方必须已持有该会话的串行门（`slot.gate`）：受理提交与入队因此处在同一个临界区，
+    /// 受理顺序与派发顺序不会颠倒。后端端点只在**授权与幂等回放之后**才取得：重放不得碰后端，
+    /// 未授权也不得触发 `open`。
+    async fn accept_prompt(
+        &self,
+        slot: &Slot,
+        actor: &Actor,
+        input: PromptAcceptanceInput,
+    ) -> Result<PromptAcceptance, PortError> {
+        let session = input.session.clone();
+
+        // ① 授权：设备认证即前提；配对认领方一律拒绝（§6 第 5 条）。
+        if let Err(denied) = self
+            .authorize(actor, "session.prompt", Some(&session), &input.request)
+            .await
+        {
+            return Ok(PromptAcceptance::Receipt(CommandReceipt::Rejected {
+                error: denied.into_error()?,
+            }));
+        }
+
+        // ② 幂等回放：`(actor, requestId)` 命中即返回首次结果，不写第二条消息、不派发。
+        if let Some(record) = self.deps.store.find_request(&input.request, actor).await? {
+            let same = record.command() == "session.prompt"
+                && record.kind() == CommandKind::Mutation
+                && record.session() == Some(&session)
+                && record.expected_version() == input.expected_version
+                && record.request_fingerprint() == &input.request_fingerprint;
+            if !same {
+                return Ok(PromptAcceptance::Receipt(self.reject(
+                    "command.idempotency_conflict",
+                    "同一 requestId 已用于不同的命令或载荷",
+                    false,
+                )?));
+            }
+            let turn = match record.session() {
+                Some(session) => self.turn_for_request(session, &input.request).await?,
+                None => None,
+            };
+            return Ok(PromptAcceptance::Receipt(CommandReceipt::Accepted {
+                request: input.request,
+                turn,
+            }));
         }
         let Some(snapshot) = self.deps.store.load(&session).await? else {
-            return self.reject("session.not_found", "会话不存在", false);
+            return Ok(PromptAcceptance::Receipt(self.reject(
+                "session.not_found",
+                "会话不存在",
+                false,
+            )?));
         };
 
-        // §6.4：已有未结束任务时的两种策略（排队中的 turn 也算「有工作」）。
+        // ③ §6.4：已有未结束任务时的两种策略（排队中的 turn 也算「有工作」）。
         let facts = self.deps.store.session_activity(&session).await?;
         let busy = facts.unfinished_turns > 0 || slot.running_turn().is_some();
         if busy {
             let waiting = lock(&slot.queue).waiting.len() as u32;
             match self.config.queue_policy {
                 QueuePolicy::RejectBusy => {
-                    return self.reject("session.busy", "该会话已有 active turn", true);
+                    return Ok(PromptAcceptance::Receipt(self.reject(
+                        "session.busy",
+                        "该会话已有 active turn",
+                        true,
+                    )?));
                 }
                 QueuePolicy::Queue => {
                     if waiting >= self.config.max_queued_turns {
-                        return self.reject("session.busy", "该会话的排队 turn 已达上限", true);
+                        return Ok(PromptAcceptance::Receipt(self.reject(
+                            "session.busy",
+                            "该会话的排队 turn 已达上限",
+                            true,
+                        )?));
                     }
                 }
             }
         }
 
-        // 派发前预检：不支持的媒体/超预算必须在**受理之前**整条拒绝，否则客户端会先看到
+        // ④ 派发前预检：不支持的媒体/超预算必须在**受理之前**整条拒绝，否则客户端会先看到
         // accepted、再看到泛化的 turn.failed，并已清空草稿与附件。
-        let endpoint = self.endpoint(&slot, &session).await?;
+        //
+        // 端点在这里才取得（而不是入口）：幂等回放与授权拒绝都不得碰后端，`open` 的副作用只属于
+        // 真正要派发的那一次受理。
+        let endpoint = self.endpoint(slot, &session).await?;
         endpoint
             .validate_prompt(&PromptRequest {
-                content: content.to_vec(),
+                content: input.content.content().to_vec(),
             })
             .await?;
 
-        let turn = self.deps.ids.turn_id();
-        let mut events = vec![pending_event(
-            "turn.queued",
-            EventKind::State,
-            view_turn(&turn, TurnState::Queued)?,
-            Some(turn.clone()),
-            Some(command.request.clone()),
-            StoredPolicy::Durable,
-            Some(actor),
-        )?];
+        // ⑤ 组装受理写集：用户消息写集、turn、初始可见性事件与幂等记录。
+        //
+        // 初始事件只做实时可见性：`text` 按单条消息上限截断，`source` 标明来源是 Owner 自己受理的
+        // 输入（不是 Agent 回显），正文权威仍是 `owned_message.content_json`。
+        let turn = input.turn.clone();
+        let at = self.now();
+        let view = view(format!(
+            r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":{},"source":"{}"}}"#,
+            input.message.as_str(),
+            turn.as_str(),
+            json_text(&prompt_message_text(&input.content)),
+            PROMPT_USER_MESSAGE_SOURCE
+        ))?;
+        let mut events = vec![
+            pending_event(
+                "user.message.delta",
+                EventKind::Delta,
+                view,
+                Some(turn.clone()),
+                Some(input.request.clone()),
+                StoredPolicy::ShortTerm,
+                Some(actor),
+            )?,
+            pending_event(
+                "turn.queued",
+                EventKind::State,
+                view_turn(&turn, TurnState::Queued)?,
+                Some(turn.clone()),
+                Some(input.request.clone()),
+                StoredPolicy::Durable,
+                Some(actor),
+            )?,
+        ];
         // 会话状态：新增一个排队 turn 后按归约规则重算（`pending` 交互仍优先）。状态未变化时不重复
         // 广播，也不无谓递增版本。
-        let at = self.now();
         let state = self.state_after(&facts, 0, 1, slot.hold_blocks_dispatch());
         let state = if snapshot.session.state() == state {
             None
@@ -1305,31 +1438,107 @@ impl Broker {
         let turns = vec![TurnChange::Create(NewTurn {
             turn: turn.clone(),
             state: TurnState::Queued,
-            causation: Some(command.request.clone()),
+            causation: Some(input.request.clone()),
             started_at: None,
         })];
-        match self
-            .accept_with_binding(actor, command, &session, state, turns, events, binding)
-            .await?
-        {
-            Accept::Done(receipt) => Ok(receipt),
-            Accept::Committed => {
-                lock(&slot.queue).waiting.push_back(QueuedTurn {
-                    turn: turn.clone(),
-                    request: command.request.clone(),
-                    prompt: PromptRequest {
-                        content: content.to_vec(),
-                    },
-                    actor: actor.clone(),
-                    first: None,
-                });
-                self.pump_locked(&slot, &session).await?;
-                Ok(CommandReceipt::Accepted {
-                    request: command.request.clone(),
-                    turn: Some(turn),
-                })
+        let write = UserInputWrite {
+            message: input.message.clone(),
+            session: session.clone(),
+            turn: turn.clone(),
+            request: input.request.clone(),
+            content: input.content.clone(),
+            at: at.clone(),
+        };
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at,
+            expected_version: input.expected_version,
+            state,
+            turns,
+            events,
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: input.request.clone(),
+                command: "session.prompt".to_owned(),
+                kind: CommandKind::Mutation,
+                session: Some(session.clone()),
+                expected_version: input.expected_version,
+                request_fingerprint: input.request_fingerprint.clone(),
+                accepted_at: self.now(),
+            }),
+            command_terminal: None,
+            origin_epoch: Some(snapshot.origin_epoch.clone()),
+            input: Some(write),
+        };
+
+        // 派发上下文在受理期完整组装：Agent 身份取自会话行，Agent 会话标识取自本次派发端点。
+        // 取不到 Agent 会话标识时不伪造：该次回显没有可证明的关联（照常作为独立事件下发），
+        // 但 turn 仍按计划派发。
+        let dispatch = endpoint
+            .agent_session_id()
+            .map(|agent_session| DispatchContext {
+                session: session.clone(),
+                first_submission: None,
+                user_message: input.message.clone(),
+                request: input.request.clone(),
+                turn: turn.clone(),
+                agent: snapshot.session.agent().clone(),
+                agent_session: agent_session.clone(),
+                // 普通后续输入没有准备资源代；该字段只参与回显身份比对，不冒充准备资源代。
+                resource_generation: ResourceGeneration::new(0),
+                input_digest: input.content.digest().clone(),
+            });
+
+        // ⑥ 一次受理提交（附件绑定同事务）。
+        let outcome = match self.commit_owned_with_binding(commit, input.binding).await {
+            Ok(outcome) => outcome,
+            Err(PortError::Unavailable(_)) => {
+                return Ok(PromptAcceptance::Receipt(self.reject(
+                    "internal.unavailable",
+                    "命令未落盘，未产生任何副作用",
+                    true,
+                )?));
             }
+            Err(PortError::Conflict(ConflictKind::VersionMismatch)) => {
+                let current = self.session_version_of(&session).await?;
+                let error = PublicError::try_new(
+                    "state.version_conflict",
+                    "该会话版本已变化，命令未受理",
+                    true,
+                    view_version_conflict(current, input.expected_version.as_ref()),
+                )
+                .map_err(PortError::from)?;
+                return Ok(PromptAcceptance::Receipt(CommandReceipt::Rejected {
+                    error,
+                }));
+            }
+            Err(error) => return Err(error),
+        };
+
+        // ⑦ 提交成功后才广播并返回派发计划；入队由调用方在同一串行门内完成（§6 第 24 条）。
+        // `accept_prompt` 自己不派发：它只组装计划。
+        if outcome.replayed.is_some() {
+            // 竞态：另一路径已经用同一幂等键落盘（§5.2 的 `replayed`），不二次派发。
+            let turn = match outcome
+                .replayed
+                .as_ref()
+                .and_then(|replay| replay.record.session().cloned())
+            {
+                Some(session) => self.turn_for_request(&session, &input.request).await?,
+                None => None,
+            };
+            return Ok(PromptAcceptance::Replayed(CommandReceipt::Accepted {
+                request: input.request,
+                turn,
+            }));
         }
+        self.publish(&outcome.appended);
+        let accepted = outcome.accepted_input.ok_or(PortError::InvalidRequest(
+            "a prompt acceptance must report the accepted input",
+        ))?;
+        Ok(PromptAcceptance::Committed { accepted, dispatch })
     }
 
     /// `session.start`（`kind: initial`）的受理（`web-session-preparation` D7/D8）。
@@ -1494,6 +1703,7 @@ impl Broker {
             },
             actor: actor.clone(),
             first: Some(plan),
+            echo: None,
         });
         self.pump_locked(&slot, &start.session).await?;
         Ok(CommandReceipt::Accepted {
@@ -1645,6 +1855,7 @@ impl Broker {
             prompt: PromptRequest { content },
             actor: actor.clone(),
             first: Some(plan),
+            echo: None,
         });
         self.pump_locked(&slot, &request.session).await?;
         Ok(CommandReceipt::Accepted {
@@ -2063,6 +2274,7 @@ impl Broker {
                 None,
             )?),
             origin_epoch: None,
+            input: None,
         };
         match self.commit_owned(commit).await {
             Ok(outcome) => {
@@ -2564,6 +2776,7 @@ impl Broker {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = self.commit_owned(commit).await?;
         self.publish(&outcome.appended);
@@ -2632,6 +2845,7 @@ impl Broker {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = self.commit_owned(commit).await?;
         self.publish(&outcome.appended);
@@ -2790,6 +3004,7 @@ impl Broker {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         match self.commit_owned(commit).await {
             Ok(_) => {}
@@ -2895,6 +3110,7 @@ impl Broker {
                 }),
                 command_terminal: None,
                 origin_epoch: None,
+                input: None,
             })
             .await?;
         Ok(outcome.replayed.map(|replay| replay.record))
@@ -2966,6 +3182,7 @@ impl Broker {
                     idempotency: None,
                     command_terminal: Some(terminal),
                     origin_epoch: None,
+                    input: None,
                 },
             )
             .await?;
@@ -3088,6 +3305,7 @@ impl Broker {
             }),
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = match self.commit_owned(commit).await {
             Ok(outcome) => outcome,
@@ -3238,6 +3456,7 @@ impl Broker {
             }),
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = self.commit_owned(commit).await?;
         Ok(if outcome.replayed.is_some() {
@@ -3338,6 +3557,7 @@ impl Broker {
             }),
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = self.commit_owned(commit).await?;
         if let Some(replayed) = outcome.replayed {
@@ -3458,6 +3678,7 @@ impl Broker {
             idempotency: None,
             command_terminal: Some(terminal),
             origin_epoch: Some(prepared.epoch.clone()),
+            input: None,
         };
         match self.commit_owned(commit).await {
             Ok(outcome) => {
@@ -3563,6 +3784,7 @@ impl Broker {
             idempotency: None,
             command_terminal: Some(terminal),
             origin_epoch: None,
+            input: None,
         };
         match self.commit_owned(commit).await {
             Ok(outcome) => {
@@ -3687,6 +3909,7 @@ impl Broker {
             idempotency: None,
             command_terminal: Some(terminal),
             origin_epoch: None,
+            input: None,
         };
         let slot = self.owned_slot(&session);
         let _guard = slot.gate.guard().await;
@@ -3896,6 +4119,7 @@ impl Broker {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = self.commit_owned(commit).await?;
         self.publish(&outcome.appended);
@@ -4309,6 +4533,7 @@ impl Broker {
             idempotency: None,
             command_terminal,
             origin_epoch: None,
+            input: None,
         };
         match self.commit_owned(commit).await {
             Ok(outcome) => {
@@ -4488,6 +4713,7 @@ impl Broker {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         match self.commit_owned(commit).await {
             Ok(outcome) => self.publish(&outcome.appended),
@@ -4516,9 +4742,10 @@ impl Broker {
             });
             let context = DispatchContext {
                 session: session.clone(),
-                first_submission: plan.first_submission.clone(),
+                first_submission: Some(plan.first_submission.clone()),
                 user_message: plan.user_message.clone(),
                 request: next.request.clone(),
+                turn: next.turn.clone(),
                 agent: plan.agent.clone(),
                 agent_session: plan.agent_session.clone(),
                 resource_generation: plan.resource_generation,
@@ -4532,6 +4759,21 @@ impl Broker {
                 Err(error) => {
                     self.settle_failed_dispatch(slot, session, &next, plan, &error)
                         .await?;
+                    Ok(true)
+                }
+            };
+        }
+        // 普通后续输入也带派发上下文：可证明重复的回显不产出第二条 `user.message.delta`，
+        // 持久消息才是权威（§3.11）。上下文在受理期组装，派发时原样使用。
+        if let Some(context) = &next.echo {
+            return match endpoint
+                .prompt_with_context(next.prompt.clone(), at, Some(context.clone()))
+                .await
+            {
+                Ok(_) => Ok(true),
+                Err(error) => {
+                    let public = self.port_error_public(&error)?;
+                    self.fail_turn(slot, session, &next, &public).await?;
                     Ok(true)
                 }
             };
@@ -4658,6 +4900,7 @@ impl Broker {
                 Some(error.clone()),
             )?),
             origin_epoch: None,
+            input: None,
         };
         slot.finish_turn();
         match self.commit_owned(commit).await {
@@ -4779,6 +5022,7 @@ impl Broker {
                 Some(error),
             )?),
             origin_epoch: None,
+            input: None,
         };
         match self.commit_owned(commit).await {
             Ok(outcome) => {
@@ -4842,6 +5086,7 @@ impl Broker {
             idempotency: None,
             command_terminal: Some(record),
             origin_epoch: None,
+            input: None,
         };
         if let Ok(outcome) = self.commit_owned(commit).await {
             self.publish(&outcome.appended);
@@ -4957,6 +5202,7 @@ impl Broker {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = self.commit_owned(commit).await?;
         self.publish(&outcome.appended);
@@ -5152,6 +5398,7 @@ impl Broker {
             idempotency: None,
             command_terminal: Some(terminal),
             origin_epoch: None,
+            input: None,
         };
         let outcome = if record.command() == "workspace.mkdir" {
             self.deps
@@ -5442,6 +5689,7 @@ impl Broker {
             }),
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         match self.commit_owned_with_binding(commit, binding).await {
             Ok(outcome) => {
@@ -5494,6 +5742,7 @@ impl Broker {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = self.commit_owned(commit).await?;
         let version = outcome.version;
@@ -5566,6 +5815,7 @@ impl Broker {
             idempotency: None,
             command_terminal: Some(record),
             origin_epoch: None,
+            input: None,
         };
         match self.commit_owned(commit).await {
             Ok(outcome) => {
@@ -5971,6 +6221,21 @@ impl Broker {
 enum Accept {
     Committed,
     Done(CommandReceipt),
+}
+
+/// 普通输入受理的三种出路（§6 第 24 条）。
+#[allow(clippy::large_enum_variant)] // 内部受理结果只在进程内传递一次；为 `Committed` 单独装箱会让每个调用点多一层解引用。
+enum PromptAcceptance {
+    /// 协议级拒绝或幂等直接回放：调用方原样返回回执，零写入、零派发。
+    Receipt(CommandReceipt),
+    /// 已提交并已追加到串行队列。
+    Committed {
+        accepted: AcceptedInput,
+        /// 派发上下文；`None` = 取不到可证明的 Agent 会话标识（回显因此没有可证明关联，照常独立下发）。
+        dispatch: Option<DispatchContext>,
+    },
+    /// 竞态：另一路径已经用同一幂等键落盘（`CommitOutcome::replayed`），不二次派发。
+    Replayed(CommandReceipt),
 }
 
 /// `InteractionOption.kind`（ACP 的 `PermissionOptionKind`，`SECURITY_DESIGN.md`/ACP schema 的
@@ -6831,6 +7096,8 @@ pub(crate) mod test_support {
         pub(crate) resume_errors: Mutex<VecDeque<PortError>>,
         /// `create` 的调用次数（断言「同键重发不派发第二次创建」）。
         pub(crate) create_calls: AtomicUsize,
+        /// `SessionBackendFactory::open` 的调用次数（断言「幂等重放/未授权都不碰后端」）。
+        pub(crate) open_calls: AtomicUsize,
         /// `create` 的脚本化错误（先进先出弹出；空 = 成功返回端点）。
         ///
         /// 用它钉「后端失败」那条路径：错误类别决定终态（`Unavailable(SessionNotEstablished)` ⇒
@@ -6914,6 +7181,19 @@ pub(crate) mod test_support {
         pub(crate) fail_at: Option<usize>,
         /// 指定第 N 次 `commit` 返回的会话版本比实际值大 1（模拟存储层版本规则漂移）。
         pub(crate) version_drift_at: Option<usize>,
+        /// 受理过的普通输入（真实存储的 `owned_message.channel='user'` + `owned_user_input` 的替身）。
+        /// 键是用户消息标识：同一条消息不可能被受理两次。
+        pub(crate) user_inputs: HashMap<String, FakeUserInput>,
+        /// `(actor, requestId)` → 首次受理的输入事实；幂等回放从这里回读（不重新分配）。
+        pub(crate) accepted_inputs: HashMap<String, AcceptedInput>,
+    }
+
+    /// fake 记录的一条普通输入受理（内容与时间用于断言「正文不依赖回显」与「超长仍完整」）。
+    #[allow(dead_code)] // 记录受理写集的完整事实，供断言阅读；不参与运行时分支。
+    pub(crate) struct FakeUserInput {
+        pub(crate) accepted: AcceptedInput,
+        pub(crate) content: FirstSubmissionInput,
+        pub(crate) at: Timestamp,
     }
 
     pub(crate) struct InteractionRow {
@@ -7037,6 +7317,27 @@ pub(crate) mod test_support {
 
         pub(crate) fn prompt_count(&self) -> usize {
             self.prompts.load(Ordering::SeqCst)
+        }
+
+        /// `SessionBackendFactory::open` 的调用次数。
+        pub(crate) fn open_count(&self) -> usize {
+            self.open_calls.load(Ordering::SeqCst)
+        }
+
+        /// 已受理的普通输入条数（真实存储的 `owned_message.channel='user'` 计数）。
+        pub(crate) fn user_input_count(&self) -> usize {
+            lock(&self.state).user_inputs.len()
+        }
+
+        /// 已受理普通输入的 `text` 投影（按消息标识排序，测试断言顺序稳定）。
+        pub(crate) fn user_input_texts(&self) -> Vec<String> {
+            let state = lock(&self.state);
+            let mut entries: Vec<(&String, &FakeUserInput)> = state.user_inputs.iter().collect();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            entries
+                .into_iter()
+                .map(|(_, input)| prompt_message_text(&input.content))
+                .collect()
         }
 
         pub(crate) fn create_calls(&self) -> usize {
@@ -7428,12 +7729,16 @@ pub(crate) mod test_support {
                     let origin_epoch = session_id
                         .as_ref()
                         .and_then(|session| state.epochs.get(session.as_str()).cloned());
+                    // §3.11：幂等回放原样返回首次受理的输入事实（真实存储按 `owned_user_input`
+                    // 的唯一键回读）；不是本次重新分配。
+                    let accepted_input = state.accepted_inputs.get(&key).cloned();
                     return Ok(CommitOutcome {
                         session_id,
                         origin_epoch,
                         version,
                         appended: Vec::new(),
                         replayed: Some(IdempotentReplay { record: existing }),
+                        accepted_input,
                     });
                 }
             }
@@ -7454,12 +7759,20 @@ pub(crate) mod test_support {
                 .as_ref()
                 .and_then(|session| state.epochs.get(session.as_str()).cloned())
                 .or_else(|| commit.origin_epoch.clone());
+            // §3.11：普通输入受理的落盘结果（`apply` 已校验并记录）。
+            let accepted_input = commit.idempotency.as_ref().and_then(|record| {
+                state
+                    .accepted_inputs
+                    .get(&command_key(&record.actor, &record.request))
+                    .cloned()
+            });
             Ok(CommitOutcome {
                 session_id: created.or_else(|| commit.session.clone()),
                 origin_epoch,
                 version,
                 appended,
                 replayed: None,
+                accepted_input,
             })
         }
 
@@ -7469,7 +7782,71 @@ pub(crate) mod test_support {
             commit: &OwnedCommit,
             terminal_actor: Option<&Actor>,
         ) -> Result<(Option<SessionId>, Vec<CommittedEvent>), PortError> {
+            // §3.11：普通输入受理的写集校验与真实存储同口径——会话、turn、幂等请求必须同源，
+            // 且一条消息不能被受理两次。校验放在任何写入之前，因此失败是零写入。
+            let accepted = match &commit.input {
+                None => None,
+                Some(input) => {
+                    let session = commit.session.as_ref().ok_or(PortError::InvalidRequest(
+                        "a user input write requires a session",
+                    ))?;
+                    if input.session != *session {
+                        return Err(PortError::InvalidRequest(
+                            "the user input must belong to the committed session",
+                        ));
+                    }
+                    if !commit
+                        .turns
+                        .iter()
+                        .any(|change| matches!(change, TurnChange::Create(new) if new.turn == input.turn))
+                    {
+                        return Err(PortError::InvalidRequest(
+                            "a user input write must create its own turn",
+                        ));
+                    }
+                    let idem = commit
+                        .idempotency
+                        .as_ref()
+                        .ok_or(PortError::InvalidRequest(
+                            "a user input write requires the acceptance idempotency row",
+                        ))?;
+                    if idem.request != input.request {
+                        return Err(PortError::InvalidRequest(
+                            "the user input and the idempotency row must share a request id",
+                        ));
+                    }
+                    Some(AcceptedInput {
+                        session: input.session.clone(),
+                        message: input.message.clone(),
+                        request: input.request.clone(),
+                        turn: input.turn.clone(),
+                    })
+                }
+            };
             let mut state = lock(&self.world.state);
+            if let (Some(input), Some(accepted)) = (&commit.input, &accepted) {
+                if state.user_inputs.contains_key(input.message.as_str()) {
+                    return Err(PortError::InvalidRequest(
+                        "the user message was already accepted",
+                    ));
+                }
+                let idem = commit
+                    .idempotency
+                    .as_ref()
+                    .ok_or(PortError::InvalidRequest(
+                        "a user input write requires the acceptance idempotency row",
+                    ))?;
+                let key = command_key(&idem.actor, &input.request);
+                state.user_inputs.insert(
+                    input.message.as_str().to_owned(),
+                    FakeUserInput {
+                        accepted: accepted.clone(),
+                        content: input.content.clone(),
+                        at: commit.at.clone(),
+                    },
+                );
+                state.accepted_inputs.insert(key, accepted.clone());
+            }
             let at = commit.at.clone();
             let mut created: Option<SessionId> = None;
             match commit.state.clone() {
@@ -8948,6 +9325,7 @@ pub(crate) mod test_support {
             reference: SessionReference,
             sink: EventSink,
         ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+            self.world.open_calls.fetch_add(1, Ordering::SeqCst);
             if let Some(error) = lock(&self.world.open_errors).pop_front() {
                 return Err(error);
             }
@@ -9251,6 +9629,36 @@ pub(crate) mod test_support {
             RequestId::new(&uuid_text(900 + n)).expect("uuid")
         }
 
+        /// 同一 fake 世界上的**第二个** broker：存储数据共享，端点缓存与串行队列全新。
+        ///
+        /// 用来钉「幂等回放/授权拒绝先于端点取得」：在原 broker 上重放时端点早已缓存，
+        /// 不 `open` 是平凡成立的；只有在空缓存的 broker 上仍然零 `open`，才证明顺序正确。
+        /// 交互授权端口不随它复制（本辅助函数只供不涉及交互的用例）。
+        pub(crate) fn sibling_broker(&self, config: BrokerConfig) -> Arc<Broker> {
+            Arc::new(Broker::new(
+                BrokerDeps {
+                    store: Arc::new(FakeStore {
+                        world: self.world.clone(),
+                    }),
+                    backends: Arc::new(FakeBackend {
+                        world: self.world.clone(),
+                    }),
+                    trust: Arc::new(FakeTrust {
+                        world: self.world.clone(),
+                    }),
+                    publisher: Arc::new(TestPublisher {
+                        world: self.world.clone(),
+                    }),
+                    clock: TestClock::new(),
+                    ids: Arc::new(TestIds::default()),
+                    audit: Some(Arc::new(TestAudit {
+                        world: self.world.clone(),
+                    })),
+                },
+                config,
+            ))
+        }
+
         pub(crate) fn reference(&self) -> SessionReference {
             SessionReference::Owned(OwnedSessionRef::new(self.session.clone()))
         }
@@ -9374,6 +9782,7 @@ mod tests {
         assert_eq!(
             harness.world.event_types(&harness.session),
             vec![
+                "user.message.delta",
                 "turn.queued",
                 "session.updated",
                 "turn.started",
@@ -9576,6 +9985,172 @@ mod tests {
             ) => assert_eq!(first, second, "仍为 accepted 的重放返回原 turnId"),
             other => panic!("幂等重放应返回同一 turn：{other:?}"),
         }
+    }
+
+    /// `conversation-reliability` §2.1：受理事务失败时零写入、零广播、零派发；同一请求重试可以成功，
+    /// 且重试本身不留下第二条用户输入。
+    #[test]
+    fn prompt_acceptance_failure_writes_broadcasts_and_dispatches_nothing() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.fail_next_commit();
+
+        let receipt = harness.submit_prompt(1, 'A');
+        assert_eq!(rejection_code(&receipt), "internal.unavailable");
+        assert_eq!(harness.world.user_input_count(), 0, "失败不得写用户输入");
+        assert_eq!(harness.world.prompt_count(), 0, "失败不得派发 Agent");
+        assert_eq!(harness.world.publish_count(), 0, "失败不得广播");
+        {
+            let state = lock(&harness.world.state);
+            assert!(state.turns.is_empty(), "失败不得留下 turn");
+            assert!(state.commands.is_empty(), "失败不得留下幂等行");
+            assert!(state.events.is_empty(), "失败不得留下事件");
+        }
+
+        // 客户端修正后重试同一请求：成功，且只产生一条输入、一次派发。
+        let accepted = harness.submit_prompt(1, 'A');
+        assert!(matches!(accepted, CommandReceipt::Accepted { .. }));
+        assert_eq!(harness.world.user_input_count(), 1);
+        assert_eq!(harness.world.prompt_count(), 1);
+    }
+
+    /// `conversation-reliability` §2.1：同一 `requestId` 的重试只执行一次；受理计划在幂等回放时为
+    /// `None`（不追加 turn、不入队、不派发），也不写第二条消息。
+    #[test]
+    fn prompt_retry_same_request_dispatches_once_and_replays_without_dispatch() {
+        let harness = Harness::new(BrokerConfig::default());
+        let first = harness.submit_prompt(1, 'A');
+        let first_turn = match first {
+            CommandReceipt::Accepted { turn, .. } => turn.expect("首次受理带 turn"),
+            other => panic!("首次受理应接受：{other:?}"),
+        };
+        assert_eq!(harness.world.user_input_count(), 1);
+        assert_eq!(harness.world.prompt_count(), 1);
+        let message_ids: Vec<String> = lock(&harness.world.state)
+            .user_inputs
+            .keys()
+            .cloned()
+            .collect();
+
+        let second = harness.submit_prompt(1, 'A');
+        let second_turn = match second {
+            CommandReceipt::Accepted { turn, .. } => turn,
+            other => panic!("幂等重放应接受：{other:?}"),
+        };
+        assert_eq!(second_turn, Some(first_turn), "回放返回首次的 turn");
+        assert_eq!(harness.world.user_input_count(), 1, "重试不得写第二条消息");
+        assert_eq!(harness.world.prompt_count(), 1, "重试不得二次派发");
+        assert_eq!(
+            lock(&harness.world.state)
+                .user_inputs
+                .keys()
+                .cloned()
+                .collect::<Vec<String>>(),
+            message_ids,
+            "重试不得重新分配消息身份"
+        );
+    }
+
+    /// `conversation-reliability` §2.1：幂等回放与授权拒绝都不得碰后端（不触发 `open`），
+    /// 端点只在真正要派发的受理里取得（② 幂等回放之后、④ 预检之前）。
+    ///
+    /// 两条断言各在**空端点缓存**的新 broker 上做，否则旧实现也能通过：
+    /// - 未授权走受理入口 `submit_prompt_with_submission`（`submit_mutation` 在入口处就拒绝，
+    ///   根本到不了受理）：授权若晚于端点取得，就会真的 `open`；
+    /// - 回放换到共享同一 store/world 的 `sibling_broker`：端点若在幂等查询之前取得，同样会 `open`。
+    #[test]
+    fn prompt_replay_and_denial_never_open_the_backend() {
+        let harness = Harness::new(BrokerConfig::default());
+        let actor = harness.actor();
+        let (submission, attachment, manifest) = submission_of(&harness.session, 1);
+        let subject = manifest.subject.clone();
+        lock(&harness.world.submissions).insert(submission.as_str().to_owned(), manifest);
+        let binding = SubmissionBinding {
+            submission,
+            attachments: vec![attachment],
+            subject,
+        };
+        let content = [PromptContentBlock::new(json_view(
+            r#"{"type":"text","text":"hi"}"#,
+        ))];
+
+        // 首次受理真正要派发：打开一次端点。
+        let command = prompt_command(&actor, &harness.session, &harness.request(1), 'A');
+        let first = block_on(harness.broker.submit_prompt_with_submission(
+            &actor,
+            &command,
+            &content,
+            binding.clone(),
+        ))
+        .expect("submit");
+        assert!(matches!(first, CommandReceipt::Accepted { .. }));
+        assert_eq!(harness.world.open_count(), 1, "首次受理打开一次端点");
+
+        // 未授权的调用方：走受理入口（`submit_mutation` 在入口处就拒绝，到不了受理），且换到
+        // 空端点缓存的新 broker，授权判定若晚于端点取得就会真的 `open`。
+        let (denied_submission, denied_attachment, denied_manifest) =
+            submission_of(&harness.session, 2);
+        let denied_subject = denied_manifest.subject.clone();
+        lock(&harness.world.submissions)
+            .insert(denied_submission.as_str().to_owned(), denied_manifest);
+        let denied = Actor::PairingClaimant {
+            pairing: PairingId::new(&uuid_text(77)).expect("pairing"),
+        };
+        let denied_command = prompt_command(&denied, &harness.session, &harness.request(2), 'B');
+        let denied_broker = harness.sibling_broker(BrokerConfig::default());
+        let receipt = block_on(denied_broker.submit_prompt_with_submission(
+            &denied,
+            &denied_command,
+            &content,
+            SubmissionBinding {
+                submission: denied_submission,
+                attachments: vec![denied_attachment],
+                subject: denied_subject,
+            },
+        ))
+        .expect("submit");
+        assert_eq!(rejection_code(&receipt), "authorization.scope_denied");
+        assert_eq!(harness.world.open_count(), 1, "未授权不得触发后端 open");
+        assert_eq!(harness.world.prompt_count(), 1, "未授权不得派发");
+        assert_eq!(harness.world.user_input_count(), 1, "未授权不得写输入");
+
+        // 同一 requestId 的重放：只读持久结果，不重新打开端点。同样在空端点缓存的新 broker 上做，
+        // 「靠内存缓存才没 open」因此被排除。
+        let replay_broker = harness.sibling_broker(BrokerConfig::default());
+        let replayed = block_on(
+            replay_broker.submit_prompt_with_submission(&actor, &command, &content, binding),
+        )
+        .expect("replay");
+        assert!(matches!(replayed, CommandReceipt::Accepted { .. }));
+        assert_eq!(harness.world.open_count(), 1, "幂等回放不得碰后端");
+        assert_eq!(harness.world.prompt_count(), 1, "回放不二次派发");
+        assert_eq!(harness.world.user_input_count(), 1, "回放不写第二条输入");
+    }
+
+    /// `conversation-reliability` §2.1：两个不同请求的相同文字是两条独立用户输入；正式读回不增不减。
+    #[test]
+    fn two_same_text_prompts_produce_two_distinct_user_inputs() {
+        let harness = Harness::new(BrokerConfig::default());
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert!(matches!(
+            harness.submit_prompt(2, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert_eq!(
+            harness.world.user_input_count(),
+            2,
+            "两请求各写一条用户输入"
+        );
+        assert_eq!(
+            harness.world.user_input_texts(),
+            vec!["hi".to_owned(), "hi".to_owned()],
+            "相同文字不得被合并或吞掉"
+        );
+        assert_eq!(harness.world.prompt_count(), 2, "两条输入各派发一次");
+        // 读回不增不减：仍恰好两条，不因事件流里也有 `user.message.delta` 而二次拼接。
+        assert_eq!(harness.world.user_input_count(), 2);
     }
 
     /// §6 第 20 条：`settle_session_create` 只终结 `session.create` 的持久记录。同一 `(actor, requestId)`
@@ -10306,6 +10881,7 @@ mod tests {
         assert_eq!(
             harness.world.event_types(&harness.session),
             vec![
+                "user.message.delta",
                 "turn.queued",
                 "session.updated",
                 "turn.started",
@@ -10423,9 +10999,11 @@ mod tests {
         assert_eq!(
             harness.world.event_types(&harness.session),
             vec![
+                "user.message.delta",
                 "turn.queued",
                 "session.updated",
                 "turn.started",
+                "user.message.delta",
                 "turn.queued",
                 "turn.failed",
                 "command.uncertain",
@@ -10703,8 +11281,8 @@ mod tests {
         );
         assert_eq!(
             harness.world.events(&harness.session).len(),
-            9,
-            "合并不得丢事件（turn.queued + session.updated + turn.started + 3 delta + turn.completed + command.completed + session.updated）"
+            10,
+            "合并不得丢事件（user.message.delta + turn.queued + session.updated + turn.started + 3 delta + turn.completed + command.completed + session.updated）"
         );
     }
 
@@ -11058,6 +11636,7 @@ mod tests {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let error = block_on(harness.broker.commit_owned(commit)).expect_err("必须拒绝");
         assert!(
@@ -11094,6 +11673,7 @@ mod tests {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = block_on(harness.broker.commit_owned(commit)).expect("commit");
         assert_eq!(outcome.appended.len(), 1);
@@ -11780,14 +12360,16 @@ mod tests {
                 .expect("event"),
             ],
             interactions: Vec::new(),
-            // 指向一条非 delta 行（会话的第一条事件是 `turn.queued`）。
+            // 指向一条非 delta 行（会话的第二条事件是 `turn.queued`；第一条是受理写集的
+            // `user.message.delta`，本身就是 delta）。
             compacted: vec![GlobalCursor {
                 server_epoch: server_epoch_of(999),
-                global_sequence: Sequence::new(1).expect("sequence"),
+                global_sequence: Sequence::new(2).expect("sequence"),
             }],
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let error = block_on(harness.broker.commit_owned(bad)).expect_err("必须拒绝");
         assert!(matches!(error, PortError::InvalidRequest(_)));
@@ -11832,19 +12414,19 @@ mod tests {
                     started_at: None,
                 })],
                 events: vec![pending_event(
-                "agent.message.delta",
-                EventKind::Delta,
-                json_view(&format!(
-                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"lost tail"}}"#,
-                    message.as_str(),
-                    turn.as_str()
-                )),
-                Some(turn.clone()),
-                Some(request.clone()),
-                StoredPolicy::Durable,
-                Some(&actor),
-            )
-            .expect("event")],
+            "agent.message.delta",
+            EventKind::Delta,
+            json_view(&format!(
+                r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"lost tail"}}"#,
+                message.as_str(),
+                turn.as_str()
+            )),
+            Some(turn.clone()),
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            Some(&actor),
+                        )
+                        .expect("event")],
                 interactions: Vec::new(),
                 compacted: Vec::new(),
                 idempotency: Some(IdempotencyRecord {
@@ -11859,6 +12441,7 @@ mod tests {
                 }),
                 command_terminal: None,
                 origin_epoch: None,
+                input: None,
             };
         block_on(fixture.broker.commit_owned(accepted)).expect("seed accepted");
         assert_eq!(
@@ -12135,13 +12718,14 @@ mod tests {
         assert_eq!(
             types,
             vec![
+                "user.message.delta".to_owned(),
                 "turn.queued".to_owned(),
                 "session.updated".to_owned(),
                 "turn.started".to_owned()
             ],
             "冲突批不得落盘任何事件"
         );
-        assert_eq!(harness.world.publish_count(), 3, "冲突批不得发布任何帧");
+        assert_eq!(harness.world.publish_count(), 4, "冲突批不得发布任何帧");
         assert_eq!(
             harness.world.turns(&harness.session)[0].state(),
             TurnState::Running,
@@ -12255,6 +12839,7 @@ mod tests {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = block_on(harness.broker.commit_owned(commit)).expect("commit");
         assert_eq!(outcome.version.get(), 2, "状态变更提交递增一");
@@ -12363,6 +12948,7 @@ mod tests {
             }),
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = block_on(harness.broker.commit_owned(replayed)).expect("replay");
         assert!(outcome.replayed.is_some(), "必须命中幂等回放");
@@ -12482,7 +13068,7 @@ mod tests {
                 .any(|event| event.event_type.as_str() == "agent.message.delta"),
             "该批不得落盘"
         );
-        assert_eq!(harness.world.publish_count(), 3, "该批不得发布");
+        assert_eq!(harness.world.publish_count(), 4, "该批不得发布");
     }
 
     /// `expected_version` 已给出的纯事件提交：推导值即它，且与存储返回值一致（§6 第 19 条的快捷分支）。
@@ -12512,6 +13098,7 @@ mod tests {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = block_on(harness.broker.commit_owned(commit)).expect("commit");
         assert_eq!(outcome.version, Version::new(1), "无状态变更不递增");

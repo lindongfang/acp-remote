@@ -2,6 +2,7 @@
 
 > 状态：编码前契约（Draft）  
 > ACP wire 版本：1  
+> 修订记录（2026-10-23，`conversation-reliability` WP1/WP2，**ACP 面不变**）：新增 §5.2——普通（后续）输入的 Owner 持久保存与回显关联都是 Sync 侧行为，**不新增、不改写任何 ACP 方法、能力、矩阵行或 fixture**；`session/prompt` 的线级形状、`payload.acp` 原文与未知字段/`_meta` 保真不变。派发上下文扩展到普通 prompt 仍只在 `agent-host` 内部使用，`Duplicate` 只消除重复的**实时投影**（持久消息是权威），`Differs`/`Unattributed` 照常映射为 `user.message.delta`；不为用户消息伪造 ACP 原文。WP2 已按此合同落地。
 > 修订记录（2026-10-22，`web-session-preparation` WP4，已实现）：§5.1 从「计划」改为已实现——准备（临时）端点复用 `session/new` 的真实模式/配置，不新增 ACP 方法、能力或矩阵行；`session/new`、`session/close`、`session/resume` 的线级形状、能力门控与错误映射不变；`prompt_with_context` 的派发上下文只在适配器**内部**用于该次派发的用户输入回显关联（可证明重复的回显不再产出第二条 `user.message.delta`），**不**写入事件视图、不新增 wire 字段，`payload.acp` 逐字节保真，未知字段/`_meta`/未知判别子的既有不变量不变；准备期不发送 prompt，释放仍只认 Agent 的 `sessionCapabilities.close`。
 > 修订记录（2026-10-22，`session-activation-lifecycle` WP1，**合同先行；实现待 WP3/WP4，真实能力门槛见 WP0**）：`method.session_close` 与 `cap.agent.session_close` 的 `delivery` 由 `post_mvp` 提升为 **`conditional_mvp`**，能力条件仍是 `agentCapabilities.sessionCapabilities.close`；`broker` 由 `explicit_unsupported` 改为 `project_and_preserve`，`sync`/`pwa` 保持 `explicit_unsupported`，`facade` 保持 `not_advertised`（机器矩阵同步）。§5 把 `session/close` 移出 `post_mvp` 集合并写明清空条件：只有 Agent 宣告 `sessionCapabilities.close` 时 Owner 才发送，回收必须确认真实释放，否则保留资源与名额；未宣告时显式不支持。同时澄清：Sync 的自动激活走业务命令 `session.resume`（feature `core.local-session-lifecycle.v1`），**不**等于把 ACP `session/resume` 方法暴露给 Sync 层；该方法的 `layers.sync` 仍为 `explicit_unsupported`。  
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§5 的 `update.session_info_update` 说明改写为只描述 **Agent 侧**标题投影，并声明 `session.title.set` 是非 ACP 的 Broker 元数据命令（feature `core.session-title.v1`，不宣告 Agent capability、不改写 ACP 原文）；**取代**旧条款「标题唯一来源是该判别子、不存在客户端重命名命令」。矩阵字段与机器矩阵不变；`session.title.set` 与 `custom_title` 持久化已接线。  
@@ -226,6 +227,16 @@ Web/PWA 的「准备 → 首次提交」是 **Sync 客户端路径**，不新增
 - **派发上下文不是 ACP 字段，也不进入事件视图**：`SessionEndpoint::prompt_with_context` 的上下文只在 `agent-host` 适配器内部用于该次派发的用户输入回显关联（`associate_user_echo`）；它不改变 ACP 请求/响应，不进入 `session/update` 的线级形状，**也**不写进事件的 `payload.view`——视图仍是 §10.3 登记的最低字段形状，未登记属性一个都不加。可证明与已保存首条逐字节一致的回显由适配器直接丢弃（首条正文的权威在持久消息），内容不同或无法证明关联的回显照常映射为 `user.message.delta`；已登记的事件词表没有「Agent 来源的用户输入事件」，因此这里不发明新键、也不改写判别子映射。上游未知字段、`_meta` 与未知判别子的既有保真规则（§4 的 `invariant.meta_fields_byte_exact` / `extension_method_explicit_unsupported` / `future_update_visible`）不受影响：`payload.acp` 原文逐字节不变。
 - **资源回收**：逐会话释放仍只认 Agent 宣告的 `sessionCapabilities.close`；未宣告时不得发送 `session/close`，临时端点也只在本地让出并保留真实占用（与 §5 的既有回收规则一致）。整进程关闭仍结束进程树与全部任务。
 - **可测试性**：本变更不增加 ACP fixture、不改变矩阵行；验证集中在 Sync 合同（共享 fixture、`sync-protocol` 与 TS 解码器）与 WP4 的真实 stdio fake 场景（真实模式/配置、选项消失、旧代迟到、重建时真实 `session/close`、关闭拒绝、进程树收口、回显关联不泄漏到事件视图）。
+
+### 5.2 普通输入不改变 ACP 面（`conversation-reliability` WP2 已实现）
+
+普通（后续）输入的「Owner 持久保存 + 按稳定身份关联回显」是 **Sync/Owner 侧**行为，不新增、不改写任何 ACP 方法、能力、矩阵行或 fixture：
+
+- **矩阵不变**：`compatibility/acp/v1/matrix.json` 不新增条目、不改现有行的 `layers`/`delivery`/`capability`。用户消息由 Owner 保存为 `owned_message`（`channel='user'`，`CORE_PORTS_AND_STORAGE.md` §3.11/§7.3），**不**构造 ACP `session/update`，也不伪造 `payload.acp`；原文可用性按既有的来源缺席/不可用规则表达。
+- **Agent 侧观察不变**：ACP 侧始终是「一个已存在的会话收到一次 `session/prompt`」。普通输入与首条一样，受理事务提交先于派发；不存在隐藏消息、二次 prompt 或空消息探测。
+- **回显关联不外溢**：`SessionEndpoint::prompt_with_context` 的派发上下文已扩展到普通 prompt（携带本次 `messageId`/`requestId`/`turnId` 与完整内容摘要）。它仍**只**在 `agent-host` 内部用于 `associate_user_echo`：字段全部相等且内容摘要一致才不产出重复的 `user.message.delta`（持久消息是权威）；内容不同、无上下文、旧资源代或迟到一律照常映射为 `user.message.delta`。上下文不进入 `payload.view`、不改变 `payload.acp` 字节，不新增 wire 字段或 ACP 方法。
+- **不变量照旧**：上游未知字段、`_meta`、未知判别子的保真与降级规则（§4 的 `invariant.meta_fields_byte_exact` / `extension_method_explicit_unsupported` / `future_update_visible`）不受影响；`session/prompt` 的 content 映射、能力门控与预算检查不变。
+- **可测试性**：本口径不增加 ACP fixture；验证在 Sync 合同（`owned_message` 读取、事件不重复拼接、共享 fixture 不变）与 WP2 的真实 stdio fake 场景（同文不同请求、同请求异文、迟到回显、长输入）中完成。
 
 ## 6. `acp_facade` 的 `session/new` 映射与错误映射
 

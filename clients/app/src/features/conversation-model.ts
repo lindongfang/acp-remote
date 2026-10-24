@@ -44,6 +44,7 @@ import { displayDirectoryPath } from "../domain/directory";
 import type { WorkspaceRef } from "../protocol";
 import type { ReadCursor, StagedResources } from "../sync-client";
 import type { ConversationInputModel } from "./conversation-input-model";
+import type { ConversationProcessModel } from "./conversation-process-model";
 import type { ConversationSettingsModel } from "./conversation-settings-model";
 import type { FileChangeView, TimelineEntry } from "./conversation-timeline";
 import type { DegradedEventModel } from "./degradation-model";
@@ -183,6 +184,11 @@ export interface ConversationTimelineModel {
     readonly state: "available" | "unavailable";
     readonly notice: string | null;
   };
+  /**
+   * 互斥过程阶段（`conversation-process-model.ts`）：提交中/恢复中/等待响应各只有一条紧凑
+   * 过程行；已有实际思考、工具、回复或待处理卡片时不再另起一行。
+   */
+  readonly process: ConversationProcessModel;
 }
 
 /**
@@ -194,6 +200,8 @@ export interface ConversationTimelineModel {
 const ABSENT_TIMELINE: ConversationTimelineModel = {
   entries: [],
   structuredHistory: { state: "unavailable", notice: "本页模型未提供结构化历史信息。" },
+  // 手拼模型没有过程事实：不呈现任何过程行，也不猜「等待/恢复」。
+  process: { phase: "none", label: null, detail: null },
 };
 
 const ABSENT_INPUT: ConversationInputModel = {

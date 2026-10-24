@@ -30,12 +30,20 @@ import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radi
 function buildStyles(colors: Palette) {
   /** 实心按钮：底色即严重度，边框同底色（原型 `.perm .opts .btn.p-*` 的 `border-color:transparent`）。 */
   const solidAnswer = (background: string) => ({
-    paddingVertical: spacing.xs,
+    minHeight: 48,
+    minWidth: 112,
+    justifyContent: "center" as const,
+    alignItems: "center" as const,
+    paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
     borderWidth: 1,
     borderColor: background,
     borderRadius: radius.sm,
     backgroundColor: background,
+  });
+  const outlinedAnswer = (color: string) => ({
+    ...solidAnswer(colors.panel),
+    borderColor: color,
   });
   /** 实心按钮上的文字：原型写死 `#fff`，这里用「表面色」token（浅色主题正好是白色，深色主题反过来）。 */
   const solidAnswerText = {
@@ -78,19 +86,20 @@ function buildStyles(colors: Palette) {
     actions: {
       flexDirection: "row",
       flexWrap: "wrap",
-      gap: spacing.sm,
+      gap: spacing.md,
+      paddingTop: spacing.xs,
     },
     answer: plainAnswer,
     answerText: plainAnswerText,
     /** 允许一次：推荐且最小权限（原型 `.p-once`，accent）。 */
     answerOnce: solidAnswer(colors.accent),
     answerOnceText: solidAnswerText,
-    /** 始终允许：长期授权需留意（原型 `.p-always`，warn）。 */
-    answerAlways: solidAnswer(colors.warn),
-    answerAlwaysText: solidAnswerText,
-    /** 拒绝：与「停止」同一套语义色（原型 `.p-reject`，danger）。 */
-    answerReject: solidAnswer(colors.danger),
-    answerRejectText: solidAnswerText,
+    /** 长期允许：警示色描边，避免与单次允许争夺主操作层级。 */
+    answerAlways: outlinedAnswer(colors.warn),
+    answerAlwaysText: { ...solidAnswerText, color: colors.warn },
+    /** 拒绝：危险色描边，文字明确表达操作，减少大面积强色。 */
+    answerReject: outlinedAnswer(colors.danger),
+    answerRejectText: { ...solidAnswerText, color: colors.danger },
     /** 未知/新增取值：确定性降级到中性档——既不是「允许」也不是「拒绝」的语义色。 */
     answerUnknown: neutralAnswer,
     answerUnknownText: neutralAnswerText,
@@ -202,7 +211,9 @@ export function InteractionAnswerButtons({
               onAnswerInteraction(interactionId, answer);
             }}
           >
-            <Text style={paints === null ? styles.answerText : paints.text}>{answer.label}</Text>
+            <Text style={paints === null ? styles.answerText : paints.text}>{answer.via === "option"
+              ? ({ allow_once: "允许一次", allow_always: "始终允许", reject_once: "拒绝一次", reject_always: "始终拒绝" } as Readonly<Record<string, string>>)[answer.kind] ?? answer.label
+              : answer.label}</Text>
           </Pressable>
         );
       })}

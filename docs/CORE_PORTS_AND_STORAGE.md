@@ -50,6 +50,10 @@
 
 > 版本：0.29（2026-10-22，`web-session-preparation` 变更 **WP4**：**准备端点与派发上下文**——§5.1 的 `SessionEndpoint` 增加带默认实现的 `prompt_with_context`（`Option<DispatchContext>`，默认委托既有 `prompt`，既有实现与测试行为不变）；该次 prompt 的派发上下文只在适配器**内部**用于回显关联（构造 `UserEchoEvent` 并调用 `associate_user_echo`）：可证明与已保存首条逐字节一致的重复回显不再产出第二条 `user.message.delta`，内容不同/无法归属的照常下发；上下文**不**写入事件视图，不新增 wire 字段/ACP 方法，`payload.acp` 原文不变。`agent-host` 新增临时端点（`prepare`/`rebuild_preparation`/`transfer_preparation`/`release_preparation`）：不要求 `SessionStore` 行、真实 `session/new` 模式与配置、选项不可用阻止派发、按精确资源代释放、首次提交同一端点转正；重建前拒绝已转正的绑定（不再先建后弃），并在换入新代前用能力门控的 `session/close` 真实释放旧代；不读会话存储、不按 Agent 名称分支。
 
+> 版本：0.31（2026-10-23，`conversation-reliability` 变更 **WP2（实现落地，文档随动）**：**普通输入的受理、读取与回显已实现**——§3.3 的 `MessageChannel` 增第三取值 `User`（只用于 `owned_message.channel='user'`，不进 wire 词表）；§3.11 去掉计划措辞并给出纯类型的 `rust` 块（`UserInputWrite`/`AcceptedInput`/`DispatchContext`/`UserEchoLink`，代码在 `crates/core/src/model/first_submission.rs`）；§4 的 `PromptAcceptance` 已实现（`crates/core/src/broker.rs` 的 `accept_prompt`，两条委托入口共享同一受理事务）；§5.12 的计划围栏并入常规 `rust` 块（`PromptAcceptanceInput`/`PromptAcceptanceOutcome` 与 `crates/core/src/ports.rs` 逐字对齐），§5.2 的 `OwnedCommit`/`CommitOutcome` 补 `input`/`accepted_input` 成员；§6 第 24 条改为已实现；§7.2 版本常量为 **v17 = 17**、新增 v16 → v17 升级步骤（只建 `owned_user_input`、不回填、二次打开跳过、v16 二进制拒绝启动），§7.3 的 `sql` 块补该表与两条唯一约束；§9 判据 43–46 改为已实现并写测试落点；顶层 §12 计划小节删除。
+
+> 版本：0.30（2026-10-23，`conversation-reliability` 变更 **WP1（合同先行，实现待 WP2/WP3/WP4）**：**普通（后续）输入的受理写集、稳定关联与回显上下文冻结**——§3.3 的 `MessageChannel` 计划增加 `User` 通道并写明 `session.read` 的 `messages` 从 `owned_message.channel='user'` 映射 `role=user`（**未实现**，当前读取路径仍排除 `user` 行）；新增 §3.11 的语义索引；§4 增计划用例入口；§5 新增 **§5.12**（`rust-planned` 围栏）冻结受理输入/结果、写入集与回显上下文的纯类型，并明确它们是**扩展现有** `SessionStore::commit`/`OwnedCommit`/`CommitOutcome`、`DispatchContext` 与 `MessageChannel`，不另起一套端口；§6 新增第 **24** 条（普通输入的受理→提交→派发顺序与失败语义）；§9 新增判据 43–46；新增顶层 **§12**（`sql-planned` 围栏）冻结 v17 的受理关联表，**不**写进 §7；并冻结用户消息内容块从 `promptContentBlock` 到 `agentContentBlock` 的读取投影（含附件/路径引用与不可表达块的降级）。**§7 的 DDL、`v16 = 16`/`owned_schema_version = 16` 常量与 §5 的常规 rust 块逐字未变**（v16 是当前版本，v17 是计划；漂移门禁继续逐条成立）；不新增任何 wire 字段（理由见 §5.12 与 `SYNC_PROTOCOL.md` §11.5）。
+
 ## 1. 范围与非目标
 
 范围：core 的值对象/用例/端口/错误类型、broker 的提交与发布契约、`storage-sqlite` 的 PRAGMA/文件布局/migration/表结构/索引/保留与容量/崩溃恢复、以及实现该合同的验收判据。
@@ -166,7 +170,7 @@ pub enum UnavailableKind {
 | `PendingInteraction` | `{ id, kind, session, created_at, options: Vec<InteractionOption> }`；`options` 在**存储读视图**里恒为空——真值只存在于 `request_event` 指向的事件 payload（§5.2、§6 第 13 条） | `NODE_LINK_PROTOCOL.md` §12.4 |
 | `PendingInteractionWrite` | `{ interaction: PendingInteraction, turn: Option<TurnId> }`——新建 pending 交互行的写入形状。**不携带 `request_event`**：`owned_event.event_id` 由存储层在提交事务内分配（§3.1），装配方无法预知；`owned_interaction.request_event` 是 `INTEGER REFERENCES owned_event(global_sequence)`（§7.3），由存储层按「同一提交 + 事件 payload 的 `interactionId` 等于 `interaction.id()`」配对后写入该事件的 `global_sequence`，配不到即整事务 `InvalidRequest` | 本合同（§5.2、§6 第 13 条） |
 
-| `MessageChannel` | enum `Reply｜Thought`（wire `reply/thought`）；回复与思考分别持久化，`Thought` 只在 Agent 明确提供时产生，`agent.thought.delta` 不产生 `agent.message.completed` | `SYNC_PROTOCOL.md` §10.4 |
+| `MessageChannel` | enum `Reply｜Thought｜User`（wire `reply/thought`，`User` 不进 wire）；回复与思考分别持久化，`Thought` 只在 Agent 明确提供时产生，`agent.thought.delta` 不产生 `agent.message.completed`。**`User`（已实现，`conversation-reliability` WP2；`crates/core/src/model/media.rs`）**：存储 token `user`，只表示 **Owner 自己受理并保存的用户输入**（首条与后续同形），不表示 Agent 回显；该取值**不进 wire 的 `messageChannel` 词表**——用户消息在 `session.read` 的 `messages` 里按 `role=user` 投影、`channel` 键缺席（`SYNC_PROTOCOL.md` §10.4/§11.5），因此旧 peer 的形状逐字不变。读取侧规则：`session.read` 的 `messages` 页从 `owned_message` 取 `channel='user'` 的行并映射为 `role=user`（按 `(created_at, message_id)` 与回复/思考同序混排），实现在 `crates/server/src/session_read.rs`；`owned_message.channel` 的 CHECK 含 `user`（v16，§7.3） | `SYNC_PROTOCOL.md` §10.4；§3.11 |
 | `PartialResult` | `{ state: Completed｜Partial｜Failed｜Cancelled, reason: Option<PartialReason> }`；`Partial` 表示保留已收到内容但上游未完成，MUST NOT 折叠成成功 | 同上 |
 | `PartialReason` | enum `AgentStopped｜AgentFailed｜TurnCancelled｜ConnectionLost｜RetentionExpired` | 同上 |
 | `MediaKind` | enum `Image｜Audio｜File` | 同上 |
@@ -298,6 +302,68 @@ pub enum UnavailableKind {
 
 纯类型在 `crates/core/src/model/preparation.rs`：`PreparationState`（`allocated → preparing → ready → released`）、`PreparationFailureReason`、`PreparationOwner`、`AllocatePreparation`/`AllocatePreparationOutcome`、`PreparationView`、`PreparationDecision`、`PreparationStaleReason`、`PreparationReleaseOutcome`、`PreparationFreeze`/`PreparationGrant`、`PreparationBinding` 与暂存形状（`StagedTransferBegin/State`、`StagedChunk/Outcome`、`StagedSeal/Outcome`、`SealedFacts`、`StagedManifestBegin/Page/Seal/State`、`StagedClaim`、`ClaimedAttachment`）。运行期目录 `core::preparation::PreparationDirectory`：30 秒租约（`PREPARATION_LEASE_MS`）、10 秒续租节奏、每次重建新资源代、释放失败/未知继续占位、首次提交冻结资源代与 Agent 身份（成功后名额转移给正式会话）。释放成功或首次提交成功的条目**立即从目录移除**，只留 `PREPARATION_RELEASED_TOMBSTONES` 条有界的释放事实（`(session, generation, released_at)`），因此长期运行的目录不会为每个已结束的准备保留内存项，旧代操作仍得到 `stale(released)`。全部运行期，不落库、不发事件、不写准备目录。
 
+### 3.11 普通输入的受理、关联与回显（WP2 已实现）
+
+本节定语义并冻结纯类型；端口输入/结果（`PromptAcceptanceInput`/`PromptAcceptanceOutcome`）见 §5.12，v17 DDL 见 §7.3。实现落点：`crates/core/src/broker.rs` 的 `accept_prompt` 与 `crates/storage-sqlite/src/session_store.rs` 的 `write_user_input`/`load_accepted_input`。
+
+纯类型在 `crates/core/src/model/first_submission.rs`：
+
+```rust
+/// 普通（后续）输入的受理写集：并入 `OwnedCommit` 的新成员（既有字段逐字不变）。
+/// `None` = 本提交不是普通输入受理（首条、delta 合批、终态、交互等既有提交）。
+pub struct UserInputWrite {
+    pub message: MessageId,
+    pub session: SessionId,
+    pub turn: TurnId,
+    pub request: RequestId,
+    /// 与首条**同一内容编码**（有序内容块 + 保真 JSON 数组 + 同源 SHA-256 摘要）。
+    pub content: FirstSubmissionInput,
+    pub at: Timestamp,
+}
+
+/// 一次普通输入受理的持久事实（并入 `CommitOutcome`）。幂等回放原样返回首次值。
+pub struct AcceptedInput {
+    pub session: SessionId,
+    pub message: MessageId,
+    pub request: RequestId,
+    pub turn: TurnId,
+}
+
+/// 一次 prompt 派发的内部上下文（首条与普通后续输入共用）。只在内存里随事件 sink 传入 mapper；
+/// 不写入事件视图，也不含 ACP DTO。`input_digest` 是本次受理的**完整内容**摘要。
+pub struct DispatchContext {
+    pub session: SessionId,
+    pub first_submission: Option<FirstSubmissionId>,
+    pub user_message: MessageId,
+    pub request: RequestId,
+    pub turn: TurnId,
+    pub agent: AgentRef,
+    pub agent_session: AgentSessionId,
+    pub resource_generation: ResourceGeneration,
+    pub input_digest: Digest,
+}
+
+/// 一条 Agent 用户输入回显携带的可证明关联（字段由适配器从当前派发上下文与事件本身取得）。
+pub struct UserEchoLink {
+    pub session: SessionId,
+    pub first_submission: Option<FirstSubmissionId>,
+    pub user_message: MessageId,
+    pub request: RequestId,
+    pub turn: TurnId,
+    pub agent: AgentRef,
+    pub agent_session: AgentSessionId,
+    pub resource_generation: ResourceGeneration,
+}
+```
+
+`associate_user_echo` 的判据是上述**八个身份字段**全部相等**且** `UserEchoEvent.content_digest` 与 `DispatchContext.input_digest` 逐字节相等；事件来源常量 `PROMPT_USER_MESSAGE_SOURCE = "owned_prompt"`，可见性事件 `text` 由 `prompt_message_text` 按 262144 字符截断。
+
+- **受理即保存**：每个普通 `session.prompt`（首条之后的任意输入）在与该命令受理**同一事务**里写一条 `owned_message`（`channel='user'`、`state='completed'`、完整内容）与一条受理关联（`requestId`/`turnId`/`messageId` 的对应），并沿用**既有幂等记录**（`owned_command`，键 `(actor, requestId)`）。内容编码**沿用首条** `FirstSubmissionInput` 的有序内容块与保真 JSON 数组（同源 SHA-256 摘要），不为后续消息另造文本格式；附件通过既有 `SubmissionBinding` 在同一次事务绑定，并按 `SubmissionBinding.attachments` 的**位置顺序**逐附件写 `owned_media_ref(message_id, position, attachment_id, kind)`（`kind` 由 `mediaType` 前缀判定为 `image`/`audio`/`file`），复用已由封存写入的 `owned_attachment` 内容寻址行并写入/更新 `owned_attachment_link`（按 `attachment_id` 读不到 `owned_attachment` 行即整事务失败，视为附件未封存；本步骤**不建立** `owned_attachment` 行，该行只由 `seal_transfer` 写入），并把 `last_used_at` 刷新为本次受理时刻；媒体引用写法与首条一致，后续消息因此和首条一样携带媒体引用（§7.6）。失败全回滚，成功后才发 `accepted`、广播与派发。
+- **读取与投影同源**：用户输入的长期正文只来自 `owned_message.channel='user'`；`user.message.delta` 只服务实时可见性与易失呈现，不与同一 `messageId` 的持久行拼接、也不作为 `messages` 页的第二来源。超过单条事件文本上限（262144 字符）或事件已过期/被压缩时，读取仍返回完整内容。首条用户消息的关联仍由 `owned_first_submission`（`user_message_id`）承担，不依赖 v17 的受理关联表。
+- **内容块投影（冻结）**：`messages` 页的 `content`（`agentContentBlock` 数组）**不是** `owned_message.content_json`（`promptContentBlock` 数组）的逐字回放——两套词表各自封闭且不同，必须逐块投影。`text` 直通；`attachment_ref` 的投影只采信块内 `attachmentId`，`type`/`mimeType`/`byteLength` 以该消息本页加载的 `owned_media_ref`/`owned_attachment` 行为**唯一权威**：`type` 由 `owned_media_ref.kind` 决定（`image`/`audio`/`file` → `image_ref`/`audio_ref`/`file_ref`），`mimeType` 取 `owned_attachment.media_type`、`byteLength` 取 `owned_attachment.byte_length`。块内自报的 `mediaType`/`byteLength` 只是声明——受理绑定（`verify_prompt_bindings`）只比对 `attachmentId` 集合、`sha256` 与 `byteLength`，**不**比对 `mediaType`——因此 MUST NOT 用它们决定 `type`/`mimeType`；块内自报值与权威行不一致（自报 `mediaType`/`byteLength` 与 `owned_attachment.media_type`/`byte_length` 不等）、或该 `attachmentId` 在本页媒体引用里缺失时，整个块降级为 `unsupported`。`displayState` 取该消息在本页加载的媒体引用的可用性（`available`/`not_fetched`/`unsupported`，`file_ref` 另可表达 `expired`；`image_ref`/`audio_ref` 的 `displayState` 词表没有 `expired`，附件已过期时降级为 `unsupported`），`displayName` 只出现在 `file_ref`，取 `MediaReference.display_name`（`owned_attachment` 没有该列、`promptContentBlock` 也不携带文件名，因此当前恒为 `null`）；`workspace_path_ref` 投影为 `text`，文本即该相对路径（与 `agent-host` 输入映射「只把相对路径作为文本块发出」同口径，`ACP_COMPATIBILITY_MATRIX.md` §5；`agentContentBlock` 没有路径变体，`unsupported` 又只能带 `originalType` 而无处安放路径，因此不选 `unsupported`）；任何其它不可表达的块（未知 `type`、形状不符，或投影结果不满足 `agentContentBlock` 的封闭 schema——例如某分支的 `mimeType`/`byteLength` 上限更严）降级为 `unsupported`（`originalType` 为原 `type`，`reason = "unsupported_by_client"`）。降级只作用于该块，MUST NOT 让整个 `session.read` 失败；投影由读取侧的投影层在严格解码为 `agentContentBlock` **之前**完成，`owned_message.content_json` 保持 `promptContentBlock` 原样、不被改写，也不引入第二个正文来源。未协商 `core.typed-media.v1` 的既有降级（`SYNC_PROTOCOL.md` §10.4 与 §11.5）在投影**之后**按原规则执行。
+- **回显只按身份**：普通派发复用 `SessionEndpoint::prompt_with_context` 的派发上下文（扩展为携带本次 `messageId`/`requestId`/`turnId` 与内容摘要），由唯一规则 `associate_user_echo` 判定：上下文全部固定字段相等**且**完整内容摘要一致才视为同一提交输入（不重复投影）；内容不同（`Differs`）或无法归属（无上下文/旧资源代/迟到）一律保留为独立回显。相同文字的不同请求各自保留；MUST NOT 用文本相同或 Agent `messageId` 兜底。
+- **实现状态（已落地）**：以上写入、读取与关联均已实现——受理写集在 `crates/core/src/broker.rs::accept_prompt` 组装并由 `crates/storage-sqlite/src/session_store.rs` 在同一 `BEGIN IMMEDIATE` 内落盘（`write_user_input`）；读取侧在 `crates/server/src/session_read.rs` 只从 `owned_message` 取行（含 `channel='user'`），删除按 `user.message.delta` 累积的旧路径；回显关联在 `crates/agent-host/src/mapper.rs` 用扩展后的 `DispatchContext`（八字段 + `input_digest`）调用 `associate_user_echo`。测试落点见 §9 判据 43–46。
+
 ## 4. `core::use_cases` 用例面
 
 `[决定]` **每个**入口的第一个参数都是 `actor: &Actor`：授权只在 core 判定，`server` 不得传入“已授权”标志，也不得代替 core 判定（`AGENTS.md` §4/§5、`SECURITY_DESIGN.md` §8）。全部 mutation 只同步接受。
@@ -305,6 +371,7 @@ pub enum UnavailableKind {
 | 用例族 | 入口 | 调用方 |
 |---|---|---|
 | `SessionCommands` | `submit_command(actor, ClientCommand) -> CommandReceipt` | `server::sync`、`server::node_link`、`server::acp_facade` |
+| `PromptAcceptance`（已实现，WP2；`session.prompt` 的内部受理步骤，**不是** server 可调用的公共入口） | 私有入口 `Broker::accept_prompt(&self, slot: &Slot, actor: &Actor, input: PromptAcceptanceInput) -> Result<PromptAcceptance, PortError>`（`crates/core/src/broker.rs`）：授权 → 幂等回放 → 排队策略 → 预检 → **先**在同一事务写用户消息/受理关联/幂等/turn/初始事件，**再**返回 `accepted` 与派发计划；后端端点在 **② 幂等回放之后、④ 预检之前** 经 `endpoint(slot, session)` 取得（按会话槽位缓存），因此幂等回放与授权拒绝都不会触发后端 `open`；内部结果 `PromptAcceptance = Receipt(CommandReceipt) ｜ Committed { accepted: AcceptedInput, dispatch: Option<DispatchContext> } ｜ Replayed(CommandReceipt)`（`PromptAcceptanceOutcome` 的公开形状在 §5.12；语义见 §3.11/§6 第 24 条）。**单一受理语义、两条委托入口**：`session.prompt` 由 `SessionCommands::submit_command`（无 `submissionId`）与 `UseCases::submit_prompt_with_submission`（带 `submissionId`/附件清单）分别受理，两者都在**同一受理事务**内委托 `accept_prompt`（后者把 `SubmissionBinding` 随 `PromptAcceptanceInput.binding` 一并传入）；两条入口共享同一事务、同一顺序与同一写集，不产生第二种受理语义。server 只调这两个用例入口，MUST NOT 直接调用 `accept_prompt`。派发仍由 broker 的每会话串行槽/队列（`owned_slot` + `slot.queue`/泵）执行，`accept_prompt` 只返回计划、不入队。`session.start` 的首条仍走既有 `FirstSubmission`，两者共用内容编码与回显关联，不合并成第二个创建入口 | `core::use_cases::UseCases::submit_command`（同一受理事务内经 `Broker::submit_mutation` 委托 `accept_prompt`）与 `UseCases::submit_prompt_with_submission`（同样委托，并传入 `SubmissionBinding`） |
 | `FirstSubmission`（`web-session-preparation` D7/D8，已实现） | `start_first_submission(actor, FirstSubmissionStart, Arc<dyn SessionEndpoint>) -> CommandReceipt`（`kind=initial`：受理事务 → 派发围栏 → 入队；`accepted` 只在提交后）、`continue_first_submission(actor, FirstSubmissionContinue) -> CommandReceipt`（`kind=continue`：新 requestId + `retryOfRequestId`，正文只复用持久首条）、`first_submission(actor, &SessionId) -> Option<FirstSubmissionRecord>`、`first_user_message(actor, &SessionId) -> Option<FirstUserMessage>`、`settle_first_submission(actor, FirstSubmissionSettlement) -> FirstSubmissionRecord`（继续的准备阶段失败写该次 failed）、`converge_first_submissions(actor, Timestamp) -> usize`（启动收敛：可证明未派发 → failed/等待继续，可能已派发 → uncertain，**绝不**自动派发）、`resolve_preparation_workspace(actor, PreparationWorkspaceSource) -> PreparationWorkspace`（`allocate` 的目录解析，与 `session.create` 同口径） | `server::sync`（`session.start`、准备控制帧的 `allocate`）；`app::daemon`（启动收敛） |
 | `SessionLifecycle` | `create_session(actor, RequestId, Digest, CreateSessionRequest, Option<WorkspaceSource>) -> SessionCreateAdmission`、`settle_session_create(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool`、`resume_session(actor, RequestId, Digest, SessionId) -> SessionId`、`settle_session_resume(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool` | `server::node_link`（§6 第 20 条；`resume_session`/`settle_session_resume` 见 §5.1） |
 | `LocalSessionLifecycle`（计划，WP2 实施；用例面**恰好由 §5.10 的五个端口组合**：`SessionActivation`/`ViewRegistry`/`CapacityAdmission`/`SessionRelease`/`LifecycleQuery`，方法名与签名以 §5.10 为唯一权威） | 每个入口先取 `actor`，再委托同名端口方法：`activate_session(actor, ActivationRequest) -> ActivationAdmission`（→ `SessionActivation::activate`；同会话并发激活合并为一次建立，先查幂等记录，再判 ready 复用或启动恢复）、`settle_session(actor, SessionId, ResourceGeneration, ActivationOutcome)`（→ `SessionActivation::settle`）、`declare_view(actor, ConnectionId, Option<SessionId>, view_version, now) -> ViewDecision`（→ `ViewRegistry::declare`）、`renew_view(actor, ConnectionId, view_version, now) -> ViewDecision`（→ `ViewRegistry::renew`）、`release_view(actor, ConnectionId, now)`（→ `ViewRegistry::release`；离页/断开/撤销）、`reserve_capacity(actor, SessionId, now) -> Admission`（→ `CapacityAdmission::reserve`）、`release_capacity(actor, SessionId, ResourceGeneration, now)`（→ `CapacityAdmission::release`）、`reclaim_candidate(actor, now) -> Option<ReclaimCandidate>`（→ `CapacityAdmission::reclaim_candidate`；满额时的安全候选，**没有候选就是 `None`**）、`release_session(actor, SessionId, ResourceGeneration, now) -> ReleaseOutcome`（→ `SessionRelease::release_session`；只有 `Released` 交还名额）、`current_activity(actor, SessionId) -> LocalActivity`（→ `LifecycleQuery::local_activity`）、`lifecycle_snapshot(actor) -> Vec<SessionSummary>`（→ `LifecycleQuery::snapshot`；owned 当前查询，与快照同一代目录） | `server::sync`（激活命令、查看控制帧、快照/事件投影）；`app::daemon` 只按返回的候选与配置驱动回收，不做业务判断 |
@@ -437,6 +504,9 @@ pub struct OwnedCommit {
     pub idempotency: Option<IdempotencyRecord>,   // 含指纹与 expected_version
     pub command_terminal: Option<CommandTerminalRecord>,
     pub origin_epoch: Option<OriginEpoch>,        // 新建会话时由 core 生成并传入
+    /// 普通（后续）输入的受理写集（§3.11）：`Some` 时存储层在同一事务写用户消息行、受理关联行、
+    /// 逐附件媒体引用与幂等/turn/事件；`None` = 本提交不是普通输入受理。
+    pub input: Option<UserInputWrite>,
 }
 
 pub struct CommitOutcome {
@@ -445,6 +515,9 @@ pub struct CommitOutcome {
     pub version: Version,
     pub appended: Vec<CommittedEvent>,
     pub replayed: Option<IdempotentReplay>,
+    /// 本次受理写入的普通输入事实（`OwnedCommit.input` 的落盘结果）；只在受理事务提交成功后为
+    /// `Some`，幂等回放时从 `owned_user_input` 回读首次值。
+    pub accepted_input: Option<AcceptedInput>,
 }
 
 pub struct HistoryInclude {
@@ -645,6 +718,7 @@ pub trait ReadView: Send + Sync {
 - `[决定]`（`session-activity` 变更 + `custom-session-title` 变更）**`StateChange::Update` 的形状**（`crates/core/src/ports.rs` 的 `SessionUpdate`）：`state: Option<SessionState>`（`None` = 不改状态）、`title: Option<Option<String>>`（Agent 标题，两层可选，见上）、`custom_title: Option<SessionTitle>`（`owned_session.custom_title`；`None` = 不改该列，`Some` = 写入 trim 后的 1..=512 标量值——没有清除/恢复分支，Agent 通知永远不碰它）、`mode: ModeChange`、`interaction: Option<InteractionResolved>`（仲裁）、`confirmation: Option<InteractionId>`（**确认**）、`agent_session_id`/`workspace_cwd`/`workspace_directory_id`（`None` = 不改列）。**没有 `closed_at`**。`InteractionResolved { interaction, resolution, resolved_by, request_version: Option<Version> }`：`request_version` 为 `Some` 时必须等于行内 `owned_interaction.request_version`，不符 → 整事务 `Conflict(VersionMismatch)` 且不消费请求。仲裁只把行推进到 `state='resolved'` 并写 `resolved_at`，**不写 `confirmed_at`**：在端点确认处理结果前该行仍是有效待处理（归约到 `pending`）。`confirmation` 是唯一把 `confirmed_at` 写入的路径；行不存在、不是 `resolved` 或已确认时是无操作（不产生第二次副作用），且确认与会话摘要、`session.updated` 同事务。
 - `[决定]` **`SessionActivityFacts` 的读口径**（§5.2 的 `session_activity`）：`unresolved_interactions` = 未失效（`invalidated_at IS NULL`）且 `state='pending'` 或（`resolved` 且 `confirmed_at IS NULL`）的行数；`unconfirmed_interactions` = 其中已仲裁未确认的行标识；`unresolved_by_turn` = 按 `turn_id` 分组的未解决计数（`turn_id IS NULL` 的历史行不出现，供 turn 终态提交计算同事务失效数）；`unfinished_turns` = `owned_turn.state IN ('queued','running','waiting_input','waiting_permission')` 的行数。调用方据此取 `SessionActivity::reduce(unresolved_interactions > 0, unfinished_turns > 0)`。
 - `[决定]`（`pwa-conversation-ui` D2/D4）**会话历史读的元素带持久化正文、按会话内序号分页**：`HistoryPage.events`（`messages` 面的原料，`after`/`next` 的全局 cursor 升序）与 `HistoryPage.history`（结构化历史条目，`before_history`/`history_has_earlier`）都由既有 `OwnedEventRecord` 承载——**正文与定位来自同一条行**，实现在一次取行里一并取出 `payload_json` 与 ACP 五列（`acp_media_type`/`acp_raw_json`/`acp_byte_length`/`acp_sha256`/`acp_raw_unavailable_reason`），MUST NOT 为逐条事件再调 `ReadView::event_payload`（N+1）。原文不可用时按行里的 `acp_raw_unavailable_reason` 还原为 `AcpRaw::Unavailable`（与 `event_payload` 同规则，摘要不因原文被清掉而丢失）。历史条目按 `owned_event.session_sequence` 取行，走的正是已有的唯一索引 `owned_event_session(session_id, session_sequence)`——**本次不新增索引、不改 §7**；省略游标 = 最新一页、带游标 = 严格更早的一页、只跳过 `compacted_into IS NOT NULL` 的行（已压缩事件不产生条目、也不占位），且**只取条目集合内的事件类型**——集合是 `SYNC_PROTOCOL.md` §10.2.1 的 17 类（该表同时登记了不进入的 17 类：消息正文与其收尾、摘要/仪表类、命令终态类、连接与审计类），由存储查询以 `event_type IN (...)` 与 `limit`/`history_has_earlier` 在**同一条语句**里施加：事后过滤会让页大小与页标记按未过滤的行计数，客户端会拿到空页或短页却被 `historyHasEarlier` 告知「更早还有条目」，而它按「上一页最早条目的会话内序号」续读时没有游标可用。集合只定义一次（`HISTORY_ENTRY_EVENT_TYPES`），`storage-sqlite` 与 core 的读视图替身共用它，不各写一份字面量。游标早于该会话仍可读**条目**的下界时返回 `InvalidRequest`（保留窗口之前显式不可读，MUST NOT 静默少返回让调用方误以为已到最早一条）。`HistoryInclude.history` 只决定该集合是否下发，两个集合在同一次请求里各自分页、互不影响（`SYNC_PROTOCOL.md` §11.5）。
+- `[决定]`（2026-10-23，`conversation-reliability` WP1 合同；WP2 已实现）**用户输入的长期正文只来自 `owned_message`，`user.message.delta` 只做实时可见性**：`session.read` 的 `messages` 页从 `owned_message` 读取 `channel='user'` 的行并映射为 `role=user`，与回复/思考按 `(created_at, message_id)` 同一排序、同一 `before` 复合游标分页，用户输入条数按这些**持久行**计数（不是按事件条数）；`user.message.delta` 不进入 `messages` 页、不与同一 `messageId` 的持久行拼接（同一 `messageId` 在读取结果里恰好一条）。因此超过单条事件文本上限（262144 字符）的输入、事件已过期/被压缩的历史仍能完整读回。首条用户消息由 v16 的 `owned_first_submission.user_message_id` 关联、同样经本路径读取；旧库升级不回填、不推断从未保存过的输入。实现见 `crates/server/src/session_read.rs`（`Message::from_owned_record` 与 `user_input_count`），旧的事件累积路径已删除；两条路径不得并存。读路径不新增端口方法、不改 `HistoryPage`/`MessageRecord` 形状（`MessageChannel` 增加内部取值 `User`，见 §3.3/§3.11）。该页的 `content` 由 `content_json` 的 `promptContentBlock` 数组按 §3.11 的**冻结投影**转成 `agentContentBlock`（`text` 直通、`attachment_ref` 只采信块内 `attachmentId` 并按其在本页 `MessageRecord.media` 的 `MediaReference`（`kind`/`media_type`/`byte_length`）权威投影为 `image_ref`/`audio_ref`/`file_ref`（块内自报值不作权威，不一致或缺失时整块降级 `unsupported`）、`workspace_path_ref` 以相对路径文本块呈现、不可表达的块降级为 `unsupported`），MUST NOT 因含附件或路径引用的输入让整页读取失败。
 - `[决定]`（`sync-server-connection` 变更 WP1 的 1.6，2026-10-14）**Sync 事件读面（`ReadView::sync_replay` + `SyncEventRecord`/`SyncReplaySlice` + 用例入口 `UseCases::sync_replay`）**：`SYNC_PROTOCOL.md` §10.1 的 `event` 帧把 `origin.kind`/`origin.deviceId`、`origin.nodeId` 与 `causationRequestId` 列为必需字段，而这几项只存在于 `owned_event` 的两个列（`origin_kind`/`causation`，§7.3），`CommittedEvent` 与 `EventPayload` 都不承载——因此新条目类型承载它们，**不**改 `CommittedEvent`/`OwnedEventRecord` 的形状（两者有大量现存调用方）。口径逐条如下：
   - **来源的取值只有一处**：`origin.kind` 取 `owned_event.origin_kind`，**五个**取值（`agent`/`device`/`daemon`/`local_cli`/`node`）原样往返（§7.3 的 CHECK 与 wire 词表同集，`node` 由 1.7 的前置补入）；词表外取值是**列值损坏**（实现返回 `Corrupt`），不得静默降级或挑近义取值。MUST NOT 用「这条事件有没有 `session_id`」推断来源（与 §5.2 关于 `PendingEvent.origin` 的条款同口径）。
   - **两个身份字段都不是第三处事实来源**：`origin.deviceId`/`origin.nodeId` 只能由 `owned_event.causation`（= 诱发该事件的命令 `requestId`）回查 `owned_command` 的 `actor_id` 得到，且**仅**在同类 `origin_kind`（`device`/`node`）时可能出现；前者要求 `actor_kind = 'device'`，后者要求 `actor_kind = 'node'` 并取复合键 `"{ownerNodeId}/{accessNodeId}"` 里的主 principal `ownerNodeId`（§6 第 6 条的幂等键；§10.1 的 `nodeId` 要的是产生该事件的另一个节点）。回查与事件读 MUST 在同一次只读事务内完成，且 MUST NOT 逐条事件各查一次（一条批量 `IN (…)` 查询覆写两类 actor），device 事件只认设备行、node 事件只认节点行，两类身份因此不可互换。
@@ -1347,6 +1421,51 @@ pub trait PreparationAttachmentStaging: Send + Sync {
 - **暂存无 owned 外键行**：`PreparationAttachmentStaging` 只维护运行期元数据与 `<attachment_dir>/.preparation/` 中的字节；`claim` 只核验已封存事实，首次提交把字节 `rename` 到同一内容寻址路径，不复制、不全量重哈希。受理事务回滚时 `finish_claim(committed = false)` **只把本次认领真的 `rename` 过**的字节移回封存路径（正式路径上原本就存在的同内容字节属于更早已提交的会话，绝不移回），且 `begin_claim` 也接受已在正式路径的字节，因此同 ID 可原样重试（D8 第 2 行）；提交成功的清单与其传输记录一并从运行期目录清除。
 - **连接绑定**：传输/清单记录绑定连接标识；旧连接迟到帧返回 `ConnectionMismatch`，重绑只转移连接归属、不重置偏移。
 
+### 5.12 普通输入的受理写集、关联与回显上下文（WP2 已实现）
+
+> **实现状态：已实现。** 下面两个结构的成员与 `crates/core/src/ports.rs` 逐条相等（`scripts/check-contract-drift.mjs` 按 §5 的常规 `rust` 块断言）；纯类型（`UserInputWrite`/`AcceptedInput`/`DispatchContext`/`UserEchoLink` 与 `MessageChannel::User`）属于 `core::model`，形状见 §3.11/§3.3。受理语义见 §3.11 与 §6 第 24 条；落盘与幂等回读在 `crates/storage-sqlite/src/session_store.rs`（`write_user_input`/`load_accepted_input`），读取投影在 `crates/server/src/session_read.rs`；v17 DDL 见 §7.3。`Broker::accept_prompt` 当前返回私有枚举 `PromptAcceptance`（`Receipt`/`Committed`/`Replayed`），其 `Committed` 分支与端口结构 `PromptAcceptanceOutcome` 字段同源。
+>
+> **不另起一套端口**：没有新的 trait、没有第二套写入口。受理写集 = 既有 `SessionStore::commit`/`commit_with_submission` 的 `OwnedCommit` 多一个可选成员（附件仍走既有 `SubmissionBinding`）；回显上下文 = 既有 `SessionEndpoint::prompt_with_context` 的 `DispatchContext` 扩展；读取 = 既有 `ReadView::read_session` 的 `messages` 页（`MessageRecord`/`HistoryPage` 形状不变）；回显判定 = 既有纯函数 `associate_user_echo`（签名与 `EchoAssociation` 三态不变）。
+
+```rust
+/// 受理输入（`Broker::accept_prompt` 的参数）：`message`/`turn` 由 core 在提交前用
+/// `IdGenerator::message_id`/`turn_id` 分配（§3.1），存储层只采用、不另行编号。
+pub struct PromptAcceptanceInput {
+    pub session: SessionId,
+    pub request: RequestId,
+    /// 适配层按 ACPR-CJ1 计算的解码 payload 摘要（core 不依赖 `acpr-wire`，§6 第 6 条）。
+    pub request_fingerprint: Digest,
+    /// 该命令的 `expectedVersion`（幂等键比对的一部分）。
+    pub expected_version: Option<Version>,
+    pub message: MessageId,
+    pub turn: TurnId,
+    /// 与首条同一内容编码（有序内容块 + 保真 JSON 数组 + 同源 SHA-256 摘要）。
+    pub content: FirstSubmissionInput,
+    /// 附件绑定：由同一受理事务写 `owned_attachment_link` 与逐附件 `owned_media_ref`（§3.11）；
+    /// `None` = 本次输入无附件。
+    pub binding: Option<SubmissionBinding>,
+}
+
+/// 受理结果的公开形状（端口层）：已提交的持久事实 + 派发计划。
+/// 只组装计划、不入队、不派发；入队与执行仍由 broker 的每会话串行槽（`owned_slot` + `slot.queue`/泵）
+/// 完成，见 §6 第 24 条。`Broker::accept_prompt` 的内部返回是等价的私有枚举 `PromptAcceptance`
+/// （`Receipt`/`Replayed` 另表达拒绝与幂等回放，`Committed` 分支的字段与本结构同源）。
+pub struct PromptAcceptanceOutcome {
+    /// 本次受理已提交的持久事实；幂等回放时是首次值。
+    pub accepted: AcceptedInput,
+    /// `Some` = 调用方把该 turn 与这份上下文一起追加到该会话的串行队列，由队列泵派发一次。
+    /// `None` = 幂等回放：不追加 turn、不入队、不派发。
+    pub dispatch: Option<DispatchContext>,
+}
+```
+
+- **同一事务**：`OwnedCommit.input` 与幂等记录、turn（`TurnChange::Create`）、初始可见性事件、会话摘要、附件绑定（取自 `PromptAcceptanceInput.binding` 的 `SubmissionBinding`：`owned_attachment_link` 与按 `attachments` 位置顺序的逐附件 `owned_media_ref`）在**一次** `commit`/`commit_with_submission` 内落盘；任一步失败整事务回滚，零行、零广播、零派发（§6 第 24 条、§9 判据 43）。
+- **同一内容编码**：`UserInputWrite.content` 复用 `FirstSubmissionInput`（`core::model::first_submission`），附件字节不复制（沿用既有 `owned_attachment` 引用）。后续消息**不**引入第二套文本格式或第二套摘要口径；写集与首条的 `claim_attachment` 同形，因此 `MessageRecord.media` 对后续消息同样非空。
+- **受理结果**：`accepted` 只在提交返回后才发给客户端；幂等命中沿用既有 `CommitOutcome::replayed` 语义并回放同一个 `AcceptedInput`，不再派发、不再写第二条消息（`PromptAcceptanceOutcome.dispatch = None`）。
+- **回显只按身份 + 完整内容**：普通派发也调用 `prompt_with_context`（`Some(DispatchContext)`）。`Duplicate` 仅当上下文的**八个身份字段**（会话/首条/用户消息/请求/turn/Agent/Agent 会话/资源代）全部相等**且** `input_digest` 逐字节相等；此时适配器不产出第二条 `user.message.delta`，持久消息是权威。`Differs`（同一次派发、内容不同）与 `Unattributed`（无上下文/取不到原文/旧资源代/迟到）**照常**映射为 `user.message.delta`，不吞掉、不覆盖已保存输入。相同文字的不同请求有不同 `request`/`turn`/`user_message`，因此互不抵消。
+- **不新增 wire 字段**：全部身份都在 Owner 进程内从已保存事实（`OwnedCommit`/`owned_message`/`owned_command`）与派发调用参数取得，不需要在 Sync/ACP 上新增字段、feature 或 fixture；`payload.view`/`payload.acp` 的形状与字节不受影响（`SYNC_PROTOCOL.md` §11.5 的旧端策略）。若实现阶段发现某一边界无法在进程内传递，必须先按 §16.2 登记 wire 变更，不能退回文本匹配。
+- **DDL 在 §7.3**：受理关联表 `owned_user_input`（`message_id` 主键、`content_digest`、`attachment_count`、两条唯一约束 `(session_id, actor_kind, actor_id, request_id)` 与 `(session_id, turn_id)`）已随 **v17** 进入 §7.3 的常规 `sql` 块；升级规则见 §7.2，本文件不再保留计划 DDL 小节。
+
 ## 6. Broker 的顺序与事务契约
 
 1. owned：`EventSink` → broker 组装 `OwnedCommit` → `SessionStore::commit` → `EventPublisher::publish`（顺序不可交换）。
@@ -1435,14 +1554,21 @@ pub trait PreparationAttachmentStaging: Send + Sync {
     - **不交错**：激活与回收由每会话串行门互斥；关闭中/结果不确定的资源保留容量占位，禁止「回收未确认时又启动恢复」产生两个绑定。容量驱逐只选未受保护（无查看者、无未结束/排队任务、无有效交互、无停止未确认执行）的候选，`sessions.idle_timeout_ms = 0` 只关闭按时间回收，不关闭容量策略。
     - **命令合并**：同一会话的并发激活共享一次建立过程；先查稳定 `requestId` 的持久记录，再判 ready 复用或启动恢复。旧命令重试返回历史结果**不**等于当前资源 ready；`uncertain` 的恢复不得换号自动重试，必须先核实状态。查看者只按最新声明集合计算，不因旧命令结果重新添加。
     - **不持久化**：查看者、租约与资源代只存在于运行期（§5.10），不新增表、不新增列；`session.activity.changed` 复用既有 owned 事件表。
+24. `[决定]` **普通输入的受理、保存与派发顺序**（`conversation-reliability` WP2 已实现；形状见 §3.11/§5.12、DDL 见 §7.3；实现在 `crates/core/src/broker.rs` 的 `accept_prompt`）：
+    - **单一受理语义、两条委托入口**：`session.prompt` 由 `UseCases::submit_command`（无 `submissionId`）或 `UseCases::submit_prompt_with_submission`（带 `submissionId`/附件清单）受理，两者都在同一受理事务内委托 `PromptAcceptance::accept_prompt`（后者把 `SubmissionBinding` 随 `PromptAcceptanceInput.binding` 一并传入，§4）；以下 ①–⑦ 是**唯一**一套顺序，两条入口共享同一事务与同一写集，不产生第二种受理语义。
+    - **顺序不可交换**：① 授权（设备认证即前提；配对认领方一律拒绝，§6 第 5 条）→ ② 幂等回放（`(actor, requestId)` 命中即返回首次结果，不写第二条消息、不派发）→ ③ 排队策略（`queue`/`reject_busy`，§6 第 4 条）→ ④ 派发前预检（`validate_prompt`，不支持的能力整条拒绝）→ ⑤ core 分配 `TurnId`/`MessageId` 并组装 `OwnedCommit`（`input` + turn + `turn.queued` + 需要时的 `session.updated` + 幂等记录）→ ⑥ **一次** `commit`/`commit_with_submission`（内容行、受理关联、附件绑定即会话链接与逐附件媒体引用、幂等、turn、事件同一事务）→ ⑦ 成功后才返回 `accepted`、广播并交付派发计划（`dispatch = Some` 时调用方把该 turn 与这份上下文一起追加到会话串行队列，由队列泵派发一次；`dispatch = None` 只出现在幂等回放，不追加 turn、不入队、不派发；派发仍由 broker 的每会话串行槽/队列执行，`accept_prompt` 只返回计划、不入队）。
+    - **失败全回滚**：⑤–⑥ 任一步失败（含磁盘满、外键/CHECK 冲突、附件绑定失败）→ 零用户消息行、零受理关联、零 turn、零事件、零幂等行、零广播、零派发；客户端看到明确失败并保留可修正输入（`SYNC_PROTOCOL.md` §11.2）。
+    - **首条同一口径**：`session.start`（首条）继续走既有 `commit_first_submission`（§5.11）——正式会话、首条消息、命令受理、turn、`owned_first_submission` 与附件引用同一事务；本条只补普通后续输入，两处共用同一内容编码与同一回显关联。
+    - **初始可见性事件**：受理事务同时写一条 `user.message.delta`（`turnId`/`causation = 本次 requestId`、`source = "owned_prompt"`、`messageId` 等于本次持久消息），只做实时可见性与多端即时呈现；其 `text` 按 §10.3 单条 message 文本上限（262144 字符）截断，正文权威仍是 `owned_message.content_json`。重放/读取**不**把它拼成第二条消息（§5.2、§9 判据 44）。
+    - **执行失败不删输入**：派发后的 `turn.failed`/`command.failed`/`uncertain` 只表达执行结果，不删除、不改写已保存的用户消息；`uncertain` 不自动重发（§6 第 16 条）。
 
-## 7. `storage-sqlite` v16 表结构（仅 owned 家族与连接资料）
+## 7. `storage-sqlite` v17 表结构（仅 owned 家族与连接资料）
 
 ### 7.1 文件、PRAGMA、连接与权限
 
 - 单文件 `<data_dir>/acp-remote.sqlite3`；附件目录 `<data_dir>/attachments`（`[决定]` 新增配置键 `storage.attachment_dir`，默认 `<data_dir>/attachments`，语义与权限同数据库目录）。
 - `[决定]` `session-file-browser` **不新增持久字段、表或 migration**：会话文件的根仍取既有 `owned_session.workspace_cwd`（§3.6 的窄读取），枚举/内容/Git 结果只在内存与 wire 中存在；不保存内容快照、文件正文、Git 差异或翻页位置。查询不改变 `owned_*`/`imported_*` 的任何行，也不推进 `global_sequence`。
-- `[决定]` `session-activation-lifecycle` **本阶段不改 DDL**（当前为 **v16 = 16**，v16 只由 `web-session-preparation` 的首条表与 `owned_message.channel = user` 引入）：本机生命周期的资源代、查看租约、当前活跃目录都是运行期状态（§5.10、§6 第 23 条），`session.activity.changed` 复用既有 `owned_event` 表与既有列，`localActivity` 是投影而非新列。**若实现阶段确需新增列**（例如为区分任务/资源事实而必须持久化新事实），必须先在本节登记版本化 migration、提供旧库升级测试并同步 §7.2 的版本常量与 §9 判据；禁止只加列不改门禁，也禁止把租约、查看者或进程句柄写进任何持久表。
+- `[决定]` `session-activation-lifecycle` **本阶段不改 DDL**（当前为 **v17 = 17**；v16 由 `web-session-preparation` 的首条表与 `owned_message.channel = user` 引入，v17 只新增普通输入的受理关联表 `owned_user_input`）：本机生命周期的资源代、查看租约、当前活跃目录都是运行期状态（§5.10、§6 第 23 条），`session.activity.changed` 复用既有 `owned_event` 表与既有列，`localActivity` 是投影而非新列。**若实现阶段确需新增列**（例如为区分任务/资源事实而必须持久化新事实），必须先在本节登记版本化 migration、提供旧库升级测试并同步 §7.2 的版本常量与 §9 判据；禁止只加列不改门禁，也禁止把租约、查看者或进程句柄写进任何持久表。
 - `[决定]` 启动设置：`journal_mode = WAL`、`synchronous = FULL`、`foreign_keys = ON`、`busy_timeout = 5000`、`wal_autocheckpoint = 1000`。
 - `[决定]` 连接模型：1 个写连接（串行化写事务）＋ N 个只读连接；`read_view()` 打开一个显式只读事务（`BEGIN`）供快照使用。
 - `[决定]` 权限：Unix 目录 `0700`、数据库/WAL/`-shm`/附件 `0600`；启动时检查，正式模式失败关闭（`SECURITY_DESIGN.md` §13.2）。
@@ -1452,14 +1578,15 @@ pub trait PreparationAttachmentStaging: Send + Sync {
 
 ### 7.2 Migration
 
-- `[决定]` `PRAGMA user_version` = 文件格式版本（上一版为 v14 = 14；当前 **v16 = 16**）；`meta` 只保存 `owned_schema_version`（当前 16）。两个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`；Access 不再有 imported schema 版本键。
+- `[决定]` `PRAGMA user_version` = 文件格式版本（当前 **v17 = 17**；上一版 v16 = 16）；`meta` 只保存 `owned_schema_version`（当前 17）。两个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`；Access 不再有 imported schema 版本键。
+- `[决定]`（2026-10-23，`conversation-reliability` WP2 已实现）**v17 只增加普通输入的受理关联**：`FILE_FORMAT_VERSION` 与 `OWNED_SCHEMA_VERSION` 都是 **17**，§7.3 的常规 `sql` 块含 `owned_user_input`（`message_id` 主键、`content_digest`、`attachment_count` 与两条唯一约束）。`PRAGMA user_version = 16` 的库只走 v17 段；**不回填**历史行（含首条用户消息，其关联仍由 `owned_first_submission` 提供）；v16 二进制遇到 v17 库按「版本过新」拒绝启动，不降级写入。实现见 `crates/storage-sqlite/src/migrate.rs` 的 `v17_upgrade`。
 - `[决定]` 两族 migration 分开维护；单事务、可重复执行、失败整体回滚；文件格式版本**或**任一表结构版本高于本二进制已知版本 → 拒绝启动，不降级写入。
-- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 16` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库依次走 v2…v16 段，…，v13 库走 v14/v15/v16 三段，v14/v15 库只走 v15/v16 或 v16 段）；`user_version = 16` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL（三态 `owned_session`（含 `custom_title`）、`owned_interaction` 的 `confirmed_at`/`turn_id` 与 v12 的五张表）建成当前形状（此时 `user_version` 是 0，不能只按版本号判断）。每段各自带 `file_version < N` 的守卫，因此「文件格式已比该段新、但仍低于最新版」的库不会重跑那一段。
+- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 17` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库依次走 v2…v17 段，…，v13 库走 v14…v17 四段，v14/v15/v16 库分别只走 v15…v17、v16/v17 或 v17 段）；`user_version = 17` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL（三态 `owned_session`（含 `custom_title`）、`owned_interaction` 的 `confirmed_at`/`turn_id`、v12 的五张表、v16 的 `owned_first_submission` 与 v17 的 `owned_user_input`）建成当前形状（此时 `user_version` 是 0，不能只按版本号判断）。每段各自带 `file_version < N` 的守卫，因此「文件格式已比该段新、但仍低于最新版」的库不会重跑那一段。
 - `[决定]` v1 → v2 升级步骤（顺序固定，都在同一事务内）：
   1. 执行 §7.3/§7.4 的 DDL 常量：`CREATE ... IF NOT EXISTS` 建出新增的管理表与 `imported_import_export`，既有表不动；
   2. `owned_audit` 与 `imported_audit` 走 **12-step 表重建**（SQLite 不能修改既有 CHECK）：新建带完整 `action` CHECK 的表 → 按列拷贝**全部行（含 `audit_id`）** → `DROP` 旧表 → `RENAME` → 重建索引；之后按升级前的 `sqlite_sequence` 回填序列，**AUTOINCREMENT 不得回退**（审计有 365 天 TTL，尾部行被清理后 `seq` 会领先于 `max(audit_id)`）；
   3. `imported_import` 重建：去掉 `export_id` 与 `UNIQUE (owner_node_id, export_id)`，新增 `grants_json`；原行的 `(owner_node_id, export_id)` 与 `created_at` 迁为一条 `imported_import_export` 关联行（`added_at` = 原 `created_at`）。旧行**没有可信的 grants 来源**，因此 `grants_json` 一律写 `'[]'`——**不得凭空补齐或默认放权**，这类 Import 保持不可用，等本地重新授权；
-  4. 本段**不单独落盘版本**：`meta.owned_schema_version` 与 `PRAGMA user_version` 都由同一事务内紧随其后的升级段在**全部**段结束后统一按当前常量写入（当前为 `'16'` 与 `16`，见下面几条），因此不存在「已写 v2 版本号、表仍是 v1 形状」的中间落盘。
+  4. 本段**不单独落盘版本**：`meta.owned_schema_version` 与 `PRAGMA user_version` 都由同一事务内紧随其后的升级段在**全部**段结束后统一按当前常量写入（当前为 `'17'` 与 `17`，见下面几条），因此不存在「已写 v2 版本号、表仍是 v1 形状」的中间落盘。
 - `[决定]` **v2 → v3 升级步骤**（与 v2 段在同一事务内、顺序在后）：两张审计表同样走 12-step 表重建，**列集合与列顺序逐字不变**，只扩宽 CHECK——`actor_kind` 增 `'pairing_claimant'`（配对认领方的审计归因）、`action` 增 `'node.authenticated'`/`'node.auth_failed'`（节点握手留痕）；之后按本次升级前的 `sqlite_sequence` 回填序列（两段重建各自 `DROP` 过审计表，因此序列只在**全部**重建结束后回填一次）；版本键与 `PRAGMA user_version` 的落盘不在本段，见下一条。`owned_command` **不重建**：认领方永不提交命令，它的 `actor_kind` CHECK 保持 `('device','node','cli')`（design D12）——因此 v3 库上两张审计表接受四值、`owned_command` 只接受三值。
 - `[决定]` **v3 → v4 升级步骤**（与 v2/v3 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_node` 在**列清单末尾**追加一列 `export_ids_json TEXT NOT NULL DEFAULT '[]'`，用 `ALTER TABLE owned_node ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK，见 §11.8），`NOT NULL` 由默认值满足，因此既有行得到 `'[]'`（**不得默认放权**，§11.8）；`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 28）。版本键与 `PRAGMA user_version` 的落盘不在本段，见下一条。
 - `[决定]` **v4 → v5 升级步骤**（与 v2/v3/v4 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加两列 `agent_session_id TEXT` 与 `workspace_cwd TEXT`，用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK）；两列都可空、**无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有可用于恢复的标识或目录」，`MUST NOT` 被任何读取路径补全、推导或替换为别名解析结果（`NOT NULL DEFAULT ''` 做不到这一点：空串无法与「未取得」区分，会让「可恢复」判定被默认值蒙蔽），§9 判据 28 逐行断言。`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'13'`、`PRAGMA user_version` 置为 `13`，`meta.imported_schema_version` 置为 `'5'`（见 v12 → v13 段）。
@@ -1476,6 +1603,7 @@ pub trait PreparationAttachmentStaging: Send + Sync {
 - `[决定]` **v13 → v14 升级步骤**（`access-owner-data-stateless`；与既有段同一事务、顺序最后）：按外键顺序 `DROP TABLE IF EXISTS imported_delivery_index` → `imported_command_ref` → `imported_session` → `imported_audit` → `imported_import_export` → `imported_import`；删除前按明确来源谓词清理 `owned_command` 与 `owned_audit` 中可辨认的远程代理记录（只命中属于旧 imported 会话、且不属于 `owned_session` 的记录），归属无法安全判定时整段失败且不写入版本；删除 `meta.imported_schema_version`；最终写入 `meta.owned_schema_version = '14'` 与 `PRAGMA user_version = 14`。owned 会话/事件/序列/epoch/幂等/信任与既有 owned 审计不删除。
 - `[决定]` **v14 → v15 升级步骤**（`custom-session-title`；与既有段同一事务、顺序最后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加一列 `custom_title TEXT`（用户设置的自定义标题），用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建；该列可空、**无默认值**，因此既有会话行得到 `NULL`（= 从未设置自定义标题），Agent 标题列 `title` 与事件/epoch/幂等/审计一律不动。`column_exists` 守卫让重开/重跑幂等（已加过列不再 `ALTER`）；`ALTER TABLE ADD COLUMN` 把新列追加在列清单末尾，新建库的 DDL 也把它写在末尾，因此升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 28）。最终写入 `meta.owned_schema_version = '15'` 与 `PRAGMA user_version = 15`；失败整体回滚到 v14 形状。
 - `[决定]` **v15 → v16 升级步骤**（`web-session-preparation` WP2；与既有段同一事务、顺序最后）：给 `owned_message.channel` 的 CHECK 增加 `'user'`（首条用户消息，不是 Agent 消息），因 SQLite 不能修改既有 CHECK 而走 **12-step 表重建**（拷贝全部行与正文、重建索引）；`owned_first_submission` 由 `CREATE TABLE IF NOT EXISTS` 建出。**不回填历史会话**、不扫描空正文改状态；旧会话没有本表行，也永不被推断成准备。失败整体回滚，第二次打开因 `user_version = 16` 跳过本段。
+- `[决定]` **v16 → v17 升级步骤**（`conversation-reliability` WP2 已实现；与既有段同一事务、顺序最后）：**只建表、不回填**。`owned_user_input` 由 §7.3 的 `CREATE TABLE IF NOT EXISTS` 在同一个 `BEGIN IMMEDIATE` 内、升级段之前建出；`v17_upgrade`（`crates/storage-sqlite/src/migrate.rs`）只校验该表确实存在——建表语句被删除或改名时显式失败，而不是把版本推进到缺表的库上。段内不写任何行：既不为旧 `owned_message` 的 `user` 行补关联，也不从事件/回显推算旧输入；首条用户消息的关联仍由 `owned_first_submission` 承担。版本由 `mark_schema_versions` 在同一事务末尾统一写到 `meta.owned_schema_version = '17'` 与 `PRAGMA user_version = 17`；失败整体回滚，重开可重试。第二次打开因 `user_version = 17` 跳过本段，`sqlite_master`/`meta`/行集逐字节不变；v16 二进制按「版本过新」拒绝启动（§7.2 的既有回滚口径：恢复升级前备份 + 回退二进制，不降级写入）。测试见 `crates/storage-sqlite/tests/upgrade_v16.rs::v16_database_upgrades_to_v17_idempotently_without_backfilling_inputs`。
 
 - `[决定]` **目录归属的读取投影**（`design.md` D1/D6）：`SessionSummary.workspace` 取自 `owned_session.workspace_alias`，展示名由 `storage-sqlite` 在同一条读查询里 `LEFT JOIN owned_workspace ON w.alias = s.workspace_alias` 取得；**关联不上时回退为别名本身**（目录被删除不丢分组，也不让规范化路径进入摘要——路径只出现在快照的 `workspaces` 条目上，§11.1）。该 JOIN 留在 `storage-sqlite` 内部（它同时拥有两张表），**不上浮到 core**。实现 `MUST NOT` 存在任何「按 `owned_session.workspace_cwd` 反查别名」的查询——`NULL` 就是未分组，这是「别名重指向后既有会话归属不漂移」的前提。
 - `[决定]` 保留不变量：`server_epoch`、会话 `origin_epoch` 与事件 `global_sequence`/`session_sequence`、`requestId` 与幂等行、命令终态、全部既有审计都逐行保留，**不得重新编号**。管理表初始为空；profile 种子与「已初始化」标记在同一事务里提交（`LocalConfigStore::mark_seeded`，§5.3），不从聊天或审计内容推断信任。
@@ -1687,7 +1815,7 @@ CREATE TABLE IF NOT EXISTS owned_message (
   message_id        TEXT PRIMARY KEY,
   session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
   turn_id           TEXT,
-  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought','user')), -- 'user' = 首条用户消息（owned_first_submission）；不是 Agent 消息
+  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought','user')), -- 'user' = 已受理的用户输入（首条或后续普通输入）；不是 Agent 消息
   state             TEXT NOT NULL CHECK (state IN ('partial','completed','failed','cancelled')),
   content_json      TEXT NOT NULL,
   partial_reason    TEXT,
@@ -1733,6 +1861,20 @@ CREATE TABLE IF NOT EXISTS owned_first_submission (
   CHECK (ever_dispatched = 0 OR stage <> 'saved_not_dispatched'),
   CHECK (stage <> 'dispatch_started' OR ever_dispatched = 1),
   CHECK (terminal_outcome IS NULL OR terminal_outcome = 'completed' OR error_code IS NOT NULL)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_user_input (
+  message_id       TEXT PRIMARY KEY REFERENCES owned_message(message_id) ON DELETE CASCADE,
+  session_id       TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  turn_id          TEXT NOT NULL REFERENCES owned_turn(turn_id) ON DELETE CASCADE,
+  actor_kind       TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_id         TEXT NOT NULL,
+  request_id       TEXT NOT NULL,
+  content_digest   TEXT NOT NULL,
+  attachment_count INTEGER NOT NULL DEFAULT 0 CHECK (attachment_count >= 0),
+  created_at       TEXT NOT NULL,
+  UNIQUE (session_id, actor_kind, actor_id, request_id),
+  UNIQUE (session_id, turn_id)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS owned_device (
@@ -1878,7 +2020,7 @@ v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_ind
 
 ### 7.6 临时传输、清单、消息与媒体引用的落盘语义
 
-本节描述 §7.3 已含的五张表与两列的实际语义（DDL 见 §7.3，版本见 §7.2）；
+本节描述 §7.3 已含的五张表、两列与 v17 的 `owned_user_input` 的实际语义（DDL 见 §7.3，版本见 §7.2）；
 `check-contract-drift` 已把它们与 `migrate.rs` 的 `OWNED_SCHEMA_V1` 逐条绑定。
 
 - `owned_attachment_transfer.received_length` 与 `updated_at` 在每次接受块时条件更新；
@@ -1888,7 +2030,7 @@ v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_ind
   与 `state = sealed` 同生同灭（CHECK）；`prompt` 受理前按 `(session_id, subject)` 复核整份清单，绑定事务内
   再复核一次主体并在成功后删除清单行（条目级联删除）。未绑定清单按 `created_at`/`sealed_at` 在 24 小时后
   过期，因此 `owned_attachment_submission_item` 只对活跃清单构成附件 GC 根。
-- `owned_message` 是回复/思考/部分结果的权威正文表，`channel` 区分 `reply|thought`；
+- `owned_message` 是回复/思考/部分结果的权威正文表，`channel` 区分 `reply|thought|user`（`user` = Owner 自己受理并保存的用户输入，首条与后续同形，v16 起）；
   `completed` 的 `partial_reason` 恒为 NULL；`failed`/`cancelled` 必须给出原因；`partial` 允许 NULL——它
   表示该 turn 仍在进行，turn 终态时由收尾逻辑改写为终态（未收到收尾则按 `failed` + `agent_failed` 落盘）。
   历史读取只从这里取正文，并只取 `(created_at, message_id)` 游标指定的一页。
@@ -1896,6 +2038,13 @@ v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_ind
   `owned_attachment_submission_item` 的引用判定。`owned_attachment_link` 只在附件仍处于正文保留窗口内、或
   仍被某条保留消息的媒体引用时保留；窗口按附件的 `last_used_at` 判定（建立链接时刷新为绑定时刻，见 §7.5），
   不按内容首次上传的 `created_at`——去重复用的旧内容因此不会刚绑定就被回收。清单条目只对未绑定/未过期的清单存在。
+- `owned_user_input` 是普通（后续）输入的受理关联（v17，一次受理一行）：`message_id` 主键并随所属消息
+  `ON DELETE CASCADE` 删除，保留期清理消息时关联一并消失、不留悬空引用；`actor_kind`/`actor_id`/`request_id`
+  必须与同批幂等行逐字相同，否则整事务 `InvalidRequest`；`content_digest` 是该次受理完整内容的同源
+  SHA-256（与 `FirstSubmissionInput` 同一口径），不是展示文本摘要。附件字节不复制——`attachment_count`
+  只是引用计数事实，标识与摘要仍只在 `owned_attachment`/`owned_media_ref`。读取**不依赖**本表：用户输入按
+  `owned_message.channel='user'` 取（§5.2/§3.11），首条消息的关联仍由 `owned_first_submission` 提供；本表
+  只服务「按请求查受理、按 turn 找用户消息、回显身份核对」，MUST NOT 用有无行判断消息是否存在或已保存。
 - `owned_interaction.request_version` 是当前有效请求版本（新行默认 1；本版本不递增——同一个 `pending` 请求
   只有一次创建，重发/重试沿用该值）；`invalidated_at` 记录失效时刻，失效同时把 `state` 置为 `expired`，
   所有 pending 读面按 `state = 'pending' AND invalidated_at IS NULL` 过滤，已终结请求不复活。失效行与其
@@ -1960,6 +2109,10 @@ v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_ind
 40. **本机生命周期归约与查看租约（计划，WP2 实现）**（§3.3/§5.10/§6 第 23 条）：① 假时钟下，纯 `session.view` 查看者让会话在保留期内保持 `Active` 且不启动 Agent；② 离页、断网、撤销与租约到期分别移除查看者，`control.ping` 不续租；③ 最后保护条件解除后才开始计时，重新出现保护条件即取消原计时、再次解除后从头计时；④ 未结束/排队任务、有效待处理交互与「停止未确认」都阻止回收；⑤ 同版本重试幂等、旧版本不复活、切换会话只替换同一连接的查看者。
 41. **容量准入与安全候选（计划，WP2 实现）**（§5.10/§6 第 23 条）：① 创建与恢复共用准入，预占计入上限；可证明未建立的激活失败释放预占，结果不确定的激活不丢占位；② 满额时只在未受保护候选中选最久未使用者，同一时刻以稳定会话标识打破并列；③ 所有候选均受保护时返回明确容量拒绝（映射 `session.capacity_exceeded`），不中断受保护会话；④ `sessions.idle_timeout_ms = 0` 仍执行容量策略；运行期调低上限不强杀受保护会话，只拒绝新增直到计数回落。
 42. **生命周期事件的提交与启动收敛（计划，WP2 实现）**（§6 第 23 条）：① `session.activity.changed` 与该次状态变化同一次 `commit` 落盘，落盘失败不广播；② 重启后不把旧事件里的 `Active` 当作资源已恢复：启动收敛完成前不开放入站查询/订阅，收敛事件在旧进程资源与租约清空后提交；③ owned 当前查询、快照 `sessions` 与 `session.read` 摘要来自同一代运行期目录，租约/查看者/资源代不出现在任何快照、事件或 wire 字段；④ 关闭中或结果不确定的资源保持 `Active` 与容量占位，直到适配器确认释放。
+43. **普通输入受理的原子写集（WP2 已实现；实现：`crates/core/src/broker.rs::accept_prompt`、`crates/storage-sqlite/src/session_store.rs::write_user_input`；测试：`crates/storage-sqlite/tests/commit.rs::prompt_input_is_written_in_one_transaction_and_replayed_once`、`crates/storage-sqlite/tests/attachments.rs::prompt_with_attachment_writes_owned_media_refs_in_the_same_transaction`、`crates/core/src/broker.rs::prompt_acceptance_failure_writes_broadcasts_and_dispatches_nothing`/`prompt_retry_same_request_dispatches_once_and_replays_without_dispatch`）**（§5.12/§6 第 24 条/§7.3）：① 一次成功的普通 `session.prompt` 受理后，`owned_message`（`channel='user'`）、受理关联行、`owned_turn`、幂等行、`turn.queued`、初始可见性事件 `user.message.delta`（`source = "owned_prompt"`、`messageId` 等于本次持久消息）（以及状态变化时的 `session.updated`）与附件绑定（`owned_attachment_link` 及按 `SubmissionBinding.attachments` 位置顺序的逐附件 `owned_media_ref(message_id, position, attachment_id, kind)`）**同时**可见；用装饰 store 断言它们（含该 `user.message.delta`）来自同一次 `commit`；② 在写用户消息、写关联、绑附件（链接或媒体引用）、写事件、写幂等任一处注入失败 → 会话版本、`owned_message`、`owned_turn`、`owned_event`、`owned_command` 与关联表**逐行**与提交前相同，且零广播、零派发（不得调用 `promote`/`start_prompt` 等派发方法；`validate_prompt` 预检允许，见 §6 第 24 条 ④；断言只统计派发方法的调用次数）；③ `accepted` 只在事务提交后返回；④ 同一 `(actor, requestId)` 重试返回首次 `AcceptedInput`，不新增第二行消息、不第二次派发；不同 actor 使用相同 `requestId` 是两条独立命令、两个独立关联行（唯一约束含 actor）；⑤ 附件绑定失败与清单未封存同样整事务失败，不留下可被后续 prompt 引用的半成品。
+44. **用户输入的读取与事件投影同源（WP2 已实现；测试：`crates/storage-sqlite/tests/messages.rs::prompt_input_without_echo_remains_readable`、`crates/storage-sqlite/tests/compaction_recovery.rs::long_prompt_input_survives_delta_compaction`、`crates/server/src/session_read.rs::session_read_returns_exactly_one_user_message_per_accepted_input`/`user_attachment_block_degrades_when_owned_media_disagrees`、`crates/node-link-client/src/runtime.rs::tests::imported_user_message_without_channel_reads_as_user`）**（§5.2/§3.11/§11.5）：① `session.read` 的 `messages` 页包含 `channel='user'` 的行并映射 `role=user`，与回复/思考按 `(created_at, message_id)` 混排，`before` 复合游标续读不重不漏，页内用户输入按**持久行**计数；② 同一次受理同时存在持久行与 `user.message.delta` 时，读取结果对该 `messageId` 恰好一条，文本**不**与事件文本拼接或截断；③ 受理输入超过 262144 字符、或对应 delta 事件已过期/被压缩后，读取仍返回完整内容（正文文本与写入的 `content_json` 逐字相等，内容块按 §3.11 的冻结投影转换，不按事件文本截断）；④ 首条用户消息在无 v17 关联行时仍可读（关联由 `owned_first_submission` 提供）；⑤ 升级前未保存输入的旧轮次不产生猜测行，读取不凭空补用户消息；⑥ 带附件（`image/*`、`audio/*` 与其它 `mediaType`）与 `workspace_path_ref` 的普通输入，读取页**可以解码**：`attachment_ref` 的投影只采信块内 `attachmentId`，其分支 `type`、`mimeType`、`byteLength` 分别等同于该消息 `owned_media_ref.kind` 决定的 `image_ref`/`audio_ref`/`file_ref` 与 `owned_attachment.media_type`、`owned_attachment.byte_length`（构造一条块内自报 `mediaType`/`byteLength` 与权威行不同的用例，断言投影不采信声明值、且 `type` 与 `kind` 一致）；块内自报值与权威行不一致或附件引用缺失时整块降级 `unsupported`；路径引用以文本块保留原相对路径，未知或形状不符的块降级为 `unsupported` 而**不**让整页 `session.read` 失败。
+45. **回显关联的保真（WP2 已实现；测试：`crates/core/src/model/first_submission_tests.rs::duplicate_echo_is_reused_without_a_second_message`/`differs_and_unattributed_echoes_are_preserved`、`crates/core/src/broker.rs::two_same_text_prompts_produce_two_distinct_user_inputs`）**（§5.12/§6 第 24 条）：① 两个不同 `requestId`/`turnId` 各发一次相同文字 → 时间线、读取结果与回显投影都保留两条，MUST NOT 互相抵消；② 上下文的八个身份字段全部相等且 `input_digest` 逐字节一致的回显 → 不新增第二条 `user.message.delta`、不新增消息行；③ 内容不同（拆块/重新编码/追加文本）→ `Differs`，保留 Agent 回显且不覆盖已保存输入；④ 无上下文、旧资源代、迟到或跨会话的回显 → `Unattributed`，照常显示；⑤ 关联**不**读文本、不读 Agent `messageId`、不按时间相邻推断（用例直接构造「同文不同请求」与「同请求异文」两组）；⑥ 派发上下文不进入事件 view/ACP 原文/wire 字段。
+46. **v17 升级与表形状的自检（WP2 已实现；测试：`crates/storage-sqlite/tests/upgrade_v16.rs::v15_upgrades_without_touching_old_sessions_and_keeps_references`/`failed_v16_upgrade_rolls_back_the_whole_transaction`）**（§7.2/§7.3）：① v17 段在同一事务内建表（`owned_user_input` 由 §7.3 的 DDL 常量在同一 `BEGIN IMMEDIATE` 内建出）并把版本常量写到 17/17；DDL 失败时整段回滚、版本不推进、不留新表与临时表；② 旧库（测试播种 `user_version = 15` 的 v15 形状并连续升级到 v17）升级后**不新增任何回填行**（`SELECT count(*) FROM owned_user_input` 只含升级后新受理的行），首条用户消息的关联仍从 `owned_first_submission` 读取；③ 升级后第二次打开 `sqlite_master`/`meta`/行集逐字节不变；④ 升级库与新建库的 `owned_user_input` 形状（列清单的列名/顺序/类型/`NOT NULL`/默认值与索引）由 §7.3 的 DDL 漂移门禁保证——`scripts/check-contract-drift.mjs` 把 §7 的 `sql` 块与 `crates/storage-sqlite/src/migrate.rs` 的 DDL 常量逐条比对；升级用例本身只断言该表已建出且旧行不被回填，不断言列清单或约束冲突的插入行为；⑤ 唯一约束覆盖 `(session_id, actor_kind, actor_id, request_id)`（同请求重试只一行）与 `(session_id, turn_id)`（一次受理只对应一个用户输入），其存在与文本同样由 ④ 的 DDL 门禁断言；本表不新增其它索引（`messages` 页读取走 §7.3 的 `owned_message_session`，不经过本表）；⑥ v16 二进制打开 v17 库按「版本过新」拒绝启动，不降级写入；本合同当前声明 **v17 = 17**（§7.2），该拒绝行为由 `crates/storage-sqlite/tests/migration.rs` 的版本门禁用例覆盖。
 
 ## 10. 未决项
 
@@ -2160,4 +2313,8 @@ v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_ind
 运行期远程来源端口的最终定义在 §5.9（`RemoteRuntimeDirectory`、`RemoteSourceReads`、`RemoteCommandStatus` 及其值对象，代码在 `crates/core/src/ports.rs`）；本小节不重复端口形状。
 
 v14 迁移已删除 `imported_delivery_index`/`imported_command_ref`/`imported_session`/`imported_audit` 及更早的 `imported_import*` 表，并按 §7.2 的来源谓词清理可辨认的远程代理 `owned_command`/`owned_audit` 记录。清理后启动门禁（`SqliteStore::run_startup_gate`）验证远程家族不存在、owned 事件/epoch/幂等与节点信任逐项保留，并完成 WAL/自由页收尾；失败则不开始监听，重开可安全重试。
+
+## 12. v17 受理关联（已并入 §7.2/§7.3）
+
+`[已并入]`（2026-10-23，`conversation-reliability` WP2）原计划小节已删除：`owned_user_input` 的 DDL 在 §7.3 的常规 `sql` 块，v16 → v17 升级步骤在 §7.2，读/写语义在 §3.11/§5.12/§6 第 24 条，验收判据在 §9 判据 46。`scripts/check-contract-drift.mjs` 只按 §7 的常规块逐条断言，因此本节不再保留 DDL 副本（第二份副本必然漂移）。
 

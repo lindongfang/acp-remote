@@ -11,12 +11,12 @@
 //! **正文只在内存中**：返回的 `SessionReadResult` 由调用方直接编码进响应帧；本模块不写数据库、临时文件
 //! 或日志，也不缓存结果。
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use acp_core::model::{
     AcpRaw as CoreAcpRaw, Actor, ConfigOption as CoreConfigOption, ConfigOptionKind, ConfigValue,
     EffectiveInteraction as CoreEffectiveInteraction, InteractionKind as CoreInteractionKind,
+    MediaAvailability as CoreMediaAvailability, MediaKind as CoreMediaKind, MediaReference,
     MessageChannel as CoreMessageChannel, MessageId, MessageRecord,
     MessageState as CoreMessageState, PartialReason as CorePartialReason,
     PartialResult as CorePartialResult, PortError, RawUnavailableReason, Sequence as CoreSequence,
@@ -30,9 +30,9 @@ use acp_core::use_cases::UseCases;
 use async_trait::async_trait;
 use sync_protocol::common::{
     AgentContentBlock, Base64Url, ConfigOption as WireConfigOptionEntry, ConfigOptionType,
-    ConfigOptionValue, ConfigOptionView as WireConfigOptionView, DecimalString,
-    InteractionOption as WireInteractionOption, NonEmptyText, Nullable, RawAcp,
-    RawAcpUnavailableReason, RawObject, Text, Timestamp, Uuid,
+    ConfigOptionValue, ConfigOptionView as WireConfigOptionView, DecimalString, DisplayState,
+    FileDisplayState, InteractionOption as WireInteractionOption, NonEmptyText, Nullable, RawAcp,
+    RawAcpUnavailableReason, RawObject, Text, Timestamp, UnsupportedByClient, Uuid,
 };
 use sync_protocol::event::EventType;
 use sync_protocol::media::{
@@ -41,7 +41,6 @@ use sync_protocol::media::{
     PartialReason as WirePartialReason, PartialResult as WirePartialResult,
 };
 use sync_protocol::sync::{MessageRole, SnapshotItemHistory, SnapshotItemMessage};
-use sync_protocol::views::{View, project};
 use tracing::debug;
 
 /// `session.read` 单页消息数的服务端上限（客户端给的 `limit` 收敛到它；§11.5「超过服务端为该会话配置的
@@ -51,14 +50,8 @@ pub(crate) const MAX_PAGE_MESSAGES: u32 = 200;
 /// `session.read` 省略 `limit` 时的默认页大小（§11.5：默认页是最近 20 条用户输入）。
 pub(crate) const DEFAULT_PAGE_MESSAGES: u32 = 20;
 
-/// 单次 `session.read` 扫描事件的上限（超出即显式失败）。
-const MAX_SCAN_EVENTS: u64 = 20_000;
-
-/// 单次 `session.read` 读取 Agent 正文行的上限（合并页覆盖到页边界所需；超出即显式失败）。
+/// 单次 `session.read` 读取消息行的上限（用户输入不足一页而继续下降时的窗口；超出即显式失败）。
 const MAX_SCAN_MESSAGES: usize = 20_000;
-
-/// 扫描事件时的单批取行数（与 §14 的 `maxReplayEventsPerBatch` 同量级）。
-const SCAN_BATCH_EVENTS: u32 = 2_000;
 
 /// 内嵌 ACP 原文的单条上限（§10.1/§11.5：超过即 `rawAcp.unavailable{size_limit}`）。
 const MAX_INLINE_ACP_BYTES: usize = 256 * 1024;
@@ -351,91 +344,55 @@ pub(crate) async fn read_session<S: SessionReadSource>(
     let history_has_earlier = batch.history_has_earlier;
     let mut owned_messages = std::mem::take(&mut batch.messages);
     let mut owned_has_earlier = batch.messages_has_earlier;
-    let cursor = before_messages.as_ref().and_then(|cursor| {
-        Uuid::parse(cursor.message_id.as_str())
-            .ok()
-            .map(|message_id| (cursor.created_at.as_str().to_owned(), message_id))
+    let cursor = before_messages.as_ref().map(|cursor| {
+        (
+            cursor.created_at.as_str().to_owned(),
+            cursor.message_id.as_str().to_owned(),
+        )
     });
-    let mut merger = MessageMerger::new(cursor.clone());
-    let mut scanned = 0_u64;
-    let mut complete = request.stateless_origin;
-    // 原子读取（R + 覆盖）不能跨多个事务拼页：stateless-origin 只返回本次页，由客户端按覆盖合并。
-    if !request.stateless_origin {
-        loop {
-            if include.messages {
-                for record in &batch.events {
-                    merger.absorb(record);
-                }
-                scanned += batch.events.len() as u64;
-            }
-            let Some(next) = batch.next.clone() else {
-                complete = true;
-                break;
-            };
-            if !include.messages {
-                complete = true;
-                break;
-            }
-            if scanned >= MAX_SCAN_EVENTS {
-                break;
-            }
-            batch = core
-                .read_session(
-                    actor,
-                    HistoryQuery {
-                        session: session_id.clone(),
-                        include: HistoryInclude {
-                            messages: true,
-                            ..HistoryInclude::default()
-                        },
-                        after: Some(next),
-                        before_history: None,
-                        before_messages: None,
-                        messages_limit: ReplayLimit::new(0),
-                        limit: ReplayLimit::new(SCAN_BATCH_EVENTS),
-                    },
-                )
-                .await
-                .map_err(SessionReadFault::Port)?;
-        }
-    }
-    if !complete {
-        debug!(
-            event = "session_read_window_exceeded",
-            session_id = session_id.as_str(),
-            scanned,
-            "the session history exceeds the readable window of a single read"
-        );
-        return Err(SessionReadFault::TooLarge(
-            "the session history exceeds the readable window of a single read",
-        ));
-    }
-    let mut agent_has_earlier = false;
+    // 消息正文只来自 `owned_message`（用户行与 Agent 行同源，`user.message.delta` 不参与）。
+    // 一页里用户输入不足 `page_limit` 时继续取更早的一页，直到够数或没有更早行；取数上限与
+    // 旧的事件扫描口径相同（超限显式失败）。
+    let mut projected: Vec<Message> = Vec::new();
+    let mut fetched = 0_usize;
     if include.messages {
-        let floor = merger.floor(page_limit);
-        let mut fetched = owned_messages.len();
-        let mut oldest = oldest_message(&owned_messages);
-        while owned_has_earlier && needs_older_agents(floor.as_ref(), oldest.as_ref()) {
+        loop {
+            fetched += owned_messages.len();
+            let page_messages = owned_messages
+                .iter()
+                .map(|record| Message::from_owned_record(record, typed_media))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(SessionReadFault::Internal(
+                    "a persisted message cannot be projected",
+                ))?;
+            projected.extend(page_messages);
+            // 原子读取（R + 覆盖）不能跨多个事务拼页：stateless-origin 只返回本次页，由客户端按覆盖合并。
+            if request.stateless_origin
+                || !owned_has_earlier
+                || user_input_count(&projected) >= page_limit
+            {
+                break;
+            }
             if fetched >= MAX_SCAN_MESSAGES {
                 debug!(
                     event = "session_read_messages_window_exceeded",
                     session_id = session_id.as_str(),
                     fetched,
-                    "the agent messages exceed the readable window of a single read"
+                    "the session messages exceed the readable window of a single read"
                 );
                 return Err(SessionReadFault::TooLarge(
                     "the session messages exceed the readable window of a single read",
                 ));
             }
-            let Some(cursor) = oldest.clone() else {
+            let Some(oldest) = oldest_message(&owned_messages) else {
                 return Err(SessionReadFault::Internal(
                     "the message page cannot advance",
                 ));
             };
             let before_messages = Some(MessageCursor {
-                created_at: CoreTimestamp::new(cursor.0.as_str())
+                created_at: CoreTimestamp::new(oldest.0.as_str())
                     .map_err(|_| SessionReadFault::Internal("a message cursor is invalid"))?,
-                message_id: MessageId::new(cursor.1.as_str())
+                message_id: MessageId::new(oldest.1.as_str())
                     .map_err(|_| SessionReadFault::Internal("a message cursor is invalid"))?,
             });
             batch = core
@@ -456,29 +413,28 @@ pub(crate) async fn read_session<S: SessionReadSource>(
                 )
                 .await
                 .map_err(SessionReadFault::Port)?;
-            let earlier = std::mem::take(&mut batch.messages);
-            let Some(earlier_oldest) = oldest_message(&earlier) else {
-                return Err(SessionReadFault::Internal(
-                    "the message page cannot advance",
-                ));
-            };
-            fetched += earlier.len();
-            oldest = Some(earlier_oldest);
-            owned_messages.extend(earlier);
+            owned_messages = std::mem::take(&mut batch.messages);
             owned_has_earlier = batch.messages_has_earlier;
+            if owned_messages.is_empty() {
+                break;
+            }
         }
-        agent_has_earlier =
-            owned_has_earlier && needs_older_agents(floor.as_ref(), oldest.as_ref());
     }
-    let agents = owned_messages
-        .iter()
-        .map(|record| Message::from_record(record, typed_media))
-        .collect::<Option<Vec<_>>>()
-        .ok_or(SessionReadFault::Internal(
-            "a persisted message cannot be projected",
-        ))?;
-    let page = merger.finish(page_limit, agents, agent_has_earlier);
-    if include.messages && page.cursor_expired {
+    let page = finish_message_page(page_limit, projected, owned_has_earlier);
+    // 游标在场而这一页为空、且没有更早行时，还要区分「游标正好指向仍可读的最早一条」（合法空页）与
+    // 「游标指向已按保留策略清理的区间」（显式 `CursorExpired`，不静默返回空页）。
+    let cursor_expired = match (&cursor, page.messages.is_empty(), page.has_earlier) {
+        (Some(cursor), true, false) => {
+            match earliest_message_key(core, actor, &session_id).await? {
+                Some(earliest) => {
+                    (cursor.0.as_str(), &cursor.1) < (earliest.0.as_str(), &earliest.1)
+                }
+                None => true,
+            }
+        }
+        _ => false,
+    };
+    if include.messages && cursor_expired {
         debug!(
             event = "session_read_cursor_expired",
             session_id = session_id.as_str(),
@@ -900,12 +856,13 @@ fn wire_raw_acp(acp: Option<&CoreAcpRaw>) -> Option<Option<RawAcp>> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 消息页：从持久化事件折叠出一页 `resources.messages`
+// 消息页：从 `owned_message` 投影出一页 `resources.messages`
 // ---------------------------------------------------------------------------------------------
 
 /// 一条待投影的消息（取值只来自持久化事实，不重算、不补全）。
 ///
-/// 两个来源：`user.message.delta` 事件（用户输入）与 `owned_message` 行（Agent 的回复与思考，§7.6）。
+/// 唯一来源是 `owned_message`（§5.2/§7.6）：用户输入行（`channel='user'`）投影成 `role=user`，
+/// Agent 的回复与思考投影成 `role=agent`。`user.message.delta` **不是**正文来源，只做实时可见性。
 /// `channel`/`partial` 只在协商 `core.typed-media.v1` 时下发；未协商时保持 `None`，wire 上这两个键
 /// **缺席**（不是 `null`）。内容块同样受该 feature 门控：未协商时 `audio_ref`/`file_ref` 整块去掉、
 /// `image_ref` 去掉 `attachmentId`（与事件轨道的 `gate_typed_media` 同一套降级）。
@@ -921,13 +878,18 @@ pub(crate) struct Message {
 }
 
 impl Message {
-    /// `owned_message` 行 → 待投影消息。任一处形状不可表达即 `None`（调用方整页失败，不静默丢条目）。
+    /// **已投影**的正文 → 待投影消息（远程来源：Owner 已经给出 `agentContentBlock` 数组）。
+    ///
+    /// 任一处形状不可表达即 `None`（调用方整页失败，不静默丢条目）。
     ///
     /// 未协商 `core.typed-media.v1` 时，`content` 也必须经**与事件轨道同一个**降级判定
     /// （`sync::event::degrade_blocks`）：旧 peer 的 `agentContentBlock` 是封闭词表且 `deny_unknown_fields`，
     /// 一条带 `audio_ref`/`file_ref`（或 `image_ref.attachmentId`）的消息会让整条 `session.read` 结果
     /// 解码失败——不是「少显示一张卡片」，而是整页错误。降级在解析成 wire 块之前做，因此三种键走的是
     /// 事件视图那条完全相同的规则（`§5.3` 的「未协商时新键与不可表达的内容块都不得出现」）。
+    ///
+    /// `role` 只由持久 `channel` 决定：`user` → `role=user` 且不带 `channel`/`partial`；因此缺少
+    /// `channel` 的 Agent 消息不会被误当成用户输入（`server::session_read` 的导入投影也走这里）。
     pub(crate) fn from_record(record: &MessageRecord, typed_media: bool) -> Option<Self> {
         let mut content_json: serde_json::Value =
             serde_json::from_str(record.content.as_str()).ok()?;
@@ -935,30 +897,62 @@ impl Message {
             degrade_blocks(&mut content_json);
         }
         let content: Vec<AgentContentBlock> = serde_json::from_value(content_json).ok()?;
-        let channel = match record.channel {
-            CoreMessageChannel::Reply => WireMessageChannel::Reply,
-            CoreMessageChannel::Thought => WireMessageChannel::Thought,
+        let (role, channel, partial) = match record.channel {
+            CoreMessageChannel::User => (MessageRole::User, None, None),
+            CoreMessageChannel::Reply => (
+                MessageRole::Agent,
+                Some(WireMessageChannel::Reply),
+                Some(wire_partial(&record.result)),
+            ),
+            CoreMessageChannel::Thought => (
+                MessageRole::Agent,
+                Some(WireMessageChannel::Thought),
+                Some(wire_partial(&record.result)),
+            ),
         };
-        let partial = wire_partial(&record.result);
         Some(Self {
             message_id: Uuid::parse(record.message.as_str()).ok()?,
-            role: MessageRole::Agent,
+            role,
             content,
             created_at: Timestamp::parse(record.created_at.as_str()).ok()?,
             turn_id: record
                 .turn
                 .as_ref()
                 .and_then(|turn| Uuid::parse(turn.as_str()).ok()),
-            channel: typed_media.then_some(channel),
-            partial: typed_media.then_some(partial),
+            channel: channel.filter(|_| typed_media),
+            partial: partial.filter(|_| typed_media),
+        })
+    }
+
+    /// **`owned_message` 原文** → 待投影消息（本机读取面）。
+    ///
+    /// 用户行的 `content_json` 是 `promptContentBlock` 数组，必须按 §3.11 的冻结投影逐块转换成
+    /// `agentContentBlock`（两套词表各自封闭且不同）；Agent 行仍是 `agentContentBlock` 原文。
+    /// 后者的投影失败是整页错误；用户块中**单个**不可表达的块降级为 `unsupported`，不让整页失败。
+    pub(crate) fn from_owned_record(record: &MessageRecord, typed_media: bool) -> Option<Self> {
+        if record.channel != CoreMessageChannel::User {
+            return Self::from_record(record, typed_media);
+        }
+        let content = project_user_content(record, typed_media);
+        Some(Self {
+            message_id: Uuid::parse(record.message.as_str()).ok()?,
+            role: MessageRole::User,
+            content,
+            created_at: Timestamp::parse(record.created_at.as_str()).ok()?,
+            turn_id: record
+                .turn
+                .as_ref()
+                .and_then(|turn| Uuid::parse(turn.as_str()).ok()),
+            channel: None,
+            partial: None,
         })
     }
 
     /// wire 的 `snapshotItem.messages` 元素。
     ///
     /// `status` 是 §11.5 未登记词表的开放串（`NonEmptyText<32>`，客户端不消费它）：取值表达**持久化日志
-    /// 里该消息的正文状态**（`completed`/`partial`/`failed`/`cancelled`）。用户消息的来源是它自己的全部
-    /// delta（发送即完整），Agent 消息的来源是 `owned_message.state`。
+    /// 里该消息的正文状态**（`completed`/`partial`/`failed`/`cancelled`）。用户消息发送即完整
+    /// （`partial` 缺席 ⇒ `completed`），Agent 消息的来源是 `owned_message.state`。
     fn to_wire(&self, session: &Uuid) -> Option<SnapshotItemMessage> {
         let status = match self.partial.as_ref().map(|partial| partial.state) {
             Some(WireMessageState::Completed) | None => "completed",
@@ -1044,212 +1038,56 @@ fn wire_effective_interaction(
     })
 }
 
-/// 把用户输入的事件折叠成消息页的一半（Agent 正文来自 `owned_message`，见模块文档）。
-///
-/// 折叠规则：
-///
-/// - `user.message.delta` 是用户输入的持久化载体：同一 `messageId` 的多个 delta 按 `deltaIndex` 升序拼成
-///   文本，`createdAt` 取最早一条，`turnId` 取该消息的 turn；
-/// - `agent.message.completed`/`agent.message.delta`/`agent.thought.delta` **不参与**：Agent 正文（含
-///   思考与部分状态）的权威是 `owned_message`，事件只是流式增量与收尾收据，不能再造第二份正文。
-#[derive(Debug)]
-pub(crate) struct MessageMerger {
-    /// 复合游标（`{createdAt, messageId}`）：只收集**严格早于**它的用户消息；`None` = 不按游标收窄。
-    cursor: Option<(String, Uuid)>,
-    users: BTreeMap<Uuid, UserMessage>,
-    /// 已收下的事件 id：投递至少一次语义下同一条事件可能重复到达，正文只能应用一次。
-    seen_events: BTreeSet<String>,
-}
-
-#[derive(Debug, Default)]
-struct UserMessage {
-    created_at: Option<Timestamp>,
-    turn_id: Option<Uuid>,
-    parts: Vec<(u64, String)>,
-}
-
-/// 一页消息 + 页标记（`cursor_expired` 见 [`MessageMerger::finish`]）。
+/// 一页消息 + 页标记（游标是否早于可读窗口由调用方单独判定）。
 pub(crate) struct MessagePage {
     pub(crate) messages: Vec<Message>,
     pub(crate) has_earlier: bool,
-    pub(crate) cursor_expired: bool,
 }
 
-impl MessageMerger {
-    pub(crate) fn new(cursor: Option<(String, Uuid)>) -> Self {
-        Self {
-            cursor,
-            users: BTreeMap::new(),
-            seen_events: BTreeSet::new(),
+/// 把 `owned_message` 的一页（已按 `(createdAt, messageId)` 升序、已含用户行）裁成用户可读的一页。
+///
+/// `limit` 是**用户输入**的条数（§11.5 的默认页口径）：从尾部往前收，直到本页已含 `limit` 条用户消息；
+/// 页首之前的 Agent 消息留在页内（它们属于这一页的 turn）。`has_earlier` 同时看两半：本页自身还有被
+/// 切掉的前缀，或存储的那一页本身还有更早行。
+pub(crate) fn finish_message_page(
+    limit: u32,
+    mut messages: Vec<Message>,
+    has_earlier_in_store: bool,
+) -> MessagePage {
+    // `createdAt` 定宽（UTC 毫秒），字典序即时间序；同一时刻以 `messageId` 作稳定 tie-breaker。
+    messages.sort_by(|left, right| {
+        (left.created_at.as_str(), &left.message_id)
+            .cmp(&(right.created_at.as_str(), &right.message_id))
+    });
+    let mut start = messages.len();
+    let mut users_in_page = 0_u32;
+    while start > 0 {
+        let is_user = messages[start - 1].role == MessageRole::User;
+        if is_user && users_in_page == limit {
+            break;
         }
+        if is_user {
+            users_in_page += 1;
+        }
+        start -= 1;
     }
-
-    /// 收下一条持久化事件（非用户输入的事件直接跳过）。
-    ///
-    /// 去重有两道：同一 `eventId` 的重复投递整体跳过；同一 `(messageId, deltaIndex)` 的重复增量也
-    /// 只应用一次（重连后重放/重试可能换了 eventId，但内容位置相同）。两者都是「只应用一次」，不是
-    /// 覆盖：历史与最终呈现因此不会因重复到达而出现两份正文。
-    pub(crate) fn absorb(&mut self, record: &OwnedEventRecord) {
-        if record.event.event_type.as_str() != "user.message.delta" {
-            return;
-        }
-        if !self.seen_events.insert(record.event.id.as_str().to_owned()) {
-            return;
-        }
-        let Ok(view_object) = RawObject::parse(record.payload.view.as_str()) else {
-            return;
-        };
-        let Ok(view) = project(record.event.event_type.as_str(), &view_object) else {
-            // 形状不符只记诊断并跳过该事件：`session.read` 是读取面，不因为一条坏行让整页失败
-            // （事件轨道那一侧的显式降级由 `sync::event` 负责）。
-            debug!(
-                event = "sync.session_read_view_skipped",
-                event_type = "user.message.delta",
-                "the persisted view does not match the registered shape"
-            );
-            return;
-        };
-        if let View::UserMessageDelta(delta) = view {
-            let created_at = Timestamp::parse(record.event.created_at.as_str()).ok();
-            let entry = self.users.entry(delta.message_id.clone()).or_default();
-            if entry.created_at.is_none() {
-                entry.created_at = created_at;
-            }
-            entry.turn_id = Some(delta.turn_id.clone());
-            let index = delta
-                .delta_index
-                .as_str()
-                .parse::<u64>()
-                .unwrap_or(u64::MAX);
-            // 同一位置只应用一次：重复投递/换了 eventId 的重试都不会把同一段正文追加两遍。
-            if entry.parts.iter().any(|(existing, _)| *existing == index) {
-                return;
-            }
-            entry.parts.push((index, delta.text.as_str().to_owned()));
-        }
+    let has_earlier = start > 0 || has_earlier_in_store;
+    messages.drain(..start);
+    MessagePage {
+        messages,
+        has_earlier,
     }
+}
 
-    /// 合并页的**排他下界**：按游标收窄后、从最新往前数第 `limit+1` 条用户消息的排序键。
-    ///
-    /// `finish` 会从尾部往前收，直到已含 `limit` 条用户输入；它停下的位置正好是这条消息之后。Agent 正文
-    /// 的取数必须覆盖到该边界（含边界之后的全部 Agent 消息），否则合并页会缺条目。返回 `None` 表示用户
-    /// 输入不超过一页——页从最早一条消息开始，Agent 正文也要读到最早。
-    pub(crate) fn floor(&self, limit: u32) -> Option<(String, String)> {
-        let cursor = self
-            .cursor
-            .as_ref()
-            .map(|(created_at, message_id)| (created_at.clone(), message_id.as_str().to_owned()));
-        let mut keys: Vec<(String, String)> = self
-            .users
+/// 一批已投影消息里的用户输入条数（调用方据此决定是否继续取更早的一页）。
+pub(crate) fn user_input_count(messages: &[Message]) -> u32 {
+    u32::try_from(
+        messages
             .iter()
-            .filter_map(|(message_id, user)| {
-                let created_at = user.created_at.as_ref()?;
-                let key = (
-                    created_at.as_str().to_owned(),
-                    message_id.as_str().to_owned(),
-                );
-                match &cursor {
-                    // 只统计**严格早于**游标的用户消息（与 `finish` 的收窄口径一致）。
-                    Some(cursor) if key >= *cursor => None,
-                    _ => Some(key),
-                }
-            })
-            .collect();
-        keys.sort();
-        if keys.len() <= limit as usize {
-            return None;
-        }
-        keys.get(keys.len() - limit as usize - 1).cloned()
-    }
-
-    /// 折叠出一页：用户消息（本累加器）+ Agent 正文（`owned_message` 的一页）按 `createdAt` 升序合并
-    /// （同一时刻以 `messageId` 稳定定序），只保留游标之前的消息，再取**最新**一页（页里最多 `limit` 条
-    /// 用户输入，与 §11.5 的默认页口径一致）。
-    ///
-    /// `has_earlier` 同时看两半：合并页自身还有被切掉的前缀，或 `owned_message` 那一页本身还有更早行。
-    ///
-    /// 同时给出 `cursor_expired`：游标在场、这一页为空、两半都说没有更早内容、且游标**严格早于**本次读到
-    /// 的**最早一条可读消息**（或本次一条可读消息都没有）时，唯一能解释「游标指向的东西不在这份读口里」
-    /// 的物理事实就是它已被保留策略清理。比较必须是严格的：游标恰好等于最早一条可读消息是**合法**的。
-    pub(crate) fn finish(
-        self,
-        limit: u32,
-        agents: Vec<Message>,
-        agent_has_earlier: bool,
-    ) -> MessagePage {
-        let MessageMerger { cursor, users, .. } = self;
-        let mut messages: Vec<Message> = users
-            .into_iter()
-            .filter_map(|(message_id, user)| {
-                let created_at = user.created_at?;
-                let mut parts = user.parts;
-                parts.sort_by_key(|(index, _)| *index);
-                let text = parts.into_iter().map(|(_, text)| text).collect::<String>();
-                Some(Message {
-                    message_id,
-                    role: MessageRole::User,
-                    content: text_blocks(&text)?,
-                    created_at,
-                    turn_id: user.turn_id,
-                    channel: None,
-                    partial: None,
-                })
-            })
-            .chain(agents)
-            .collect();
-        // `createdAt` 定宽（UTC 毫秒），字典序即时间序；同一时刻以 `messageId` 作稳定 tie-breaker。
-        messages.sort_by(|left, right| {
-            (left.created_at.as_str(), &left.message_id)
-                .cmp(&(right.created_at.as_str(), &right.message_id))
-        });
-        // 可读窗口的下界（本次读口内最早的一条消息），必须在按游标收窄**之前**取。
-        let earliest = messages.first().map(|message| {
-            (
-                message.created_at.as_str().to_owned(),
-                message.message_id.clone(),
-            )
-        });
-        messages.retain(|message| match &cursor {
-            Some((created_at, message_id)) => {
-                (message.created_at.as_str(), &message.message_id)
-                    < (created_at.as_str(), message_id)
-            }
-            None => true,
-        });
-        // 最新一页：从尾部往前收，直到这一页已含 `limit` 条用户输入；页首之前的 Agent 消息留在页内
-        // （它们属于这一页的 turn）。
-        let mut start = messages.len();
-        let mut users_in_page = 0_u32;
-        while start > 0 {
-            let candidate = &messages[start - 1];
-            let is_user = candidate.role == MessageRole::User;
-            if is_user && users_in_page == limit {
-                break;
-            }
-            if is_user {
-                users_in_page += 1;
-            }
-            start -= 1;
-        }
-        let has_earlier = start > 0 || agent_has_earlier;
-        messages.drain(..start);
-        let cursor_expired = match (&cursor, &earliest) {
-            // 游标早于最早一条可读消息：它指向的行已不在读口内。
-            (Some(cursor), Some(earliest)) => {
-                messages.is_empty()
-                    && !has_earlier
-                    && (cursor.0.as_str(), &cursor.1) < (earliest.0.as_str(), &earliest.1)
-            }
-            // 一条可读消息都没有：任何游标都指向读口之外的区间。
-            (Some(_), None) => true,
-            (None, _) => false,
-        };
-        MessagePage {
-            messages,
-            has_earlier,
-            cursor_expired,
-        }
-    }
+            .filter(|message| message.role == MessageRole::User)
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
 }
 
 /// `owned_message` 行的排序键（与合并页的游标同一口径：`(createdAt, messageId)`，升序）。
@@ -1265,17 +1103,221 @@ fn oldest_message(records: &[MessageRecord]) -> Option<(String, String)> {
     records.first().map(message_key)
 }
 
-/// 是否还需要继续取更早的 Agent 正文页（[`session_read`] 的补齐循环）。
+/// 仍可读的**最早一条**消息的排序键（游标过期判定专用）。
 ///
-/// - 没有下界（用户输入不超过一页）→ 必须读到最早一条；
-/// - 有下界 → 最早一条已**严格早于**下界时覆盖完成；否则（包括本页为空）继续往前取。
-pub(crate) fn needs_older_agents(
-    floor: Option<&(String, String)>,
-    oldest: Option<&(String, String)>,
-) -> bool {
-    match (floor, oldest) {
-        (None, _) | (Some(_), None) => true,
-        (Some(floor), Some(oldest)) => oldest >= floor,
+/// 只在「带游标的一页为空且没有更早行」时调用：那是唯一需要区分「游标 == 最早一条」与「游标早于
+/// 最早一条」的场合。倒序分页下降，取数上限与消息页一致（超限显式失败，不猜结论）。
+async fn earliest_message_key<S: SessionReadSource>(
+    core: &S,
+    actor: &Actor,
+    session: &SessionId,
+) -> Result<Option<(String, String)>, SessionReadFault> {
+    let mut before = None;
+    let mut collected = 0_usize;
+    loop {
+        let page = core
+            .read_session(
+                actor,
+                HistoryQuery {
+                    session: session.clone(),
+                    include: HistoryInclude {
+                        messages: true,
+                        ..HistoryInclude::default()
+                    },
+                    after: None,
+                    before_history: None,
+                    before_messages: before,
+                    messages_limit: ReplayLimit::new(MAX_PAGE_MESSAGES),
+                    limit: ReplayLimit::new(0),
+                },
+            )
+            .await
+            .map_err(SessionReadFault::Port)?;
+        collected += page.messages.len();
+        if !page.messages_has_earlier {
+            return Ok(oldest_message(&page.messages));
+        }
+        if collected >= MAX_SCAN_MESSAGES {
+            return Err(SessionReadFault::TooLarge(
+                "the session messages exceed the readable window of a single read",
+            ));
+        }
+        let Some(oldest) = oldest_message(&page.messages) else {
+            return Err(SessionReadFault::Internal(
+                "the message page cannot advance",
+            ));
+        };
+        before = Some(MessageCursor {
+            created_at: CoreTimestamp::new(oldest.0.as_str())
+                .map_err(|_| SessionReadFault::Internal("a message cursor is invalid"))?,
+            message_id: MessageId::new(oldest.1.as_str())
+                .map_err(|_| SessionReadFault::Internal("a message cursor is invalid"))?,
+        });
+    }
+}
+
+/// §3.11 的冻结投影：用户输入行的 `promptContentBlock` 数组 → `agentContentBlock` 数组。
+///
+/// 两套词表各自封闭且不同，必须逐块投影（`MUST NOT` 逐字回放 `content_json`）：
+///
+/// - `text` 直通（单块超过字符上限时切分，不丢字）；
+/// - `attachment_ref` 的 `type`/`mimeType`/`byteLength` 以该消息本页加载的
+///   `owned_media_ref`/`owned_attachment` 行为唯一权威，块内自报值只用于一致性核对；
+/// - `workspace_path_ref` 投影为 `text`（文本即相对路径）；
+/// - 其它/形状不符/核对不一致 → **该块**降级为 `unsupported`，MUST NOT 让整页失败。
+fn project_user_content(record: &MessageRecord, typed_media: bool) -> Vec<AgentContentBlock> {
+    let parsed: Option<serde_json::Value> = serde_json::from_str(record.content.as_str()).ok();
+    let Some(blocks) = parsed.as_ref().and_then(serde_json::Value::as_array) else {
+        return unsupported_blocks("unknown");
+    };
+    let mut content = Vec::new();
+    for block in blocks {
+        match block.get("type").and_then(serde_json::Value::as_str) {
+            Some("text") => match block.get("text").and_then(serde_json::Value::as_str) {
+                Some(text) => match text_blocks(text) {
+                    Some(blocks) => content.extend(blocks),
+                    None => content.extend(unsupported_blocks("text")),
+                },
+                None => content.extend(unsupported_blocks("text")),
+            },
+            Some("workspace_path_ref") => {
+                match block.get("path").and_then(serde_json::Value::as_str) {
+                    Some(path) => match text_blocks(path) {
+                        Some(blocks) => content.extend(blocks),
+                        None => content.extend(unsupported_blocks("workspace_path_ref")),
+                    },
+                    None => content.extend(unsupported_blocks("workspace_path_ref")),
+                }
+            }
+            Some("attachment_ref") => {
+                content.extend(project_attachment(block, record, typed_media));
+            }
+            Some(other) => content.extend(unsupported_blocks(other)),
+            None => content.extend(unsupported_blocks("unknown")),
+        }
+    }
+    content
+}
+
+/// 一个 `attachment_ref` 块的投影（权威行缺失或自报值不一致时整块降级为 `unsupported`）。
+fn project_attachment(
+    block: &serde_json::Value,
+    record: &MessageRecord,
+    typed_media: bool,
+) -> Vec<AgentContentBlock> {
+    let Some(declared_id) = block
+        .get("attachmentId")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return unsupported_blocks("attachment_ref");
+    };
+    let Some(media) = record
+        .media
+        .iter()
+        .find(|media| media.attachment().as_str() == declared_id)
+    else {
+        // 本页媒体引用里缺失：块内声明的标识不足以确定类型/字节，整块降级。
+        return unsupported_blocks("attachment_ref");
+    };
+    let declared_type = block.get("mediaType").and_then(serde_json::Value::as_str);
+    let declared_length = block.get("byteLength").and_then(serde_json::Value::as_str);
+    let authority_length = media.byte_length().to_string();
+    if declared_type != Some(media.media_type())
+        || declared_length != Some(authority_length.as_str())
+    {
+        return unsupported_blocks("attachment_ref");
+    }
+    let Some(block) = attachment_block(media, typed_media) else {
+        return unsupported_blocks("attachment_ref");
+    };
+    vec![block]
+}
+
+/// 权威行 → 类型化内容块（`displayState`/`mimeType`/`byteLength` 都取自权威行）。
+fn attachment_block(media: &MediaReference, typed_media: bool) -> Option<AgentContentBlock> {
+    let byte_length = media.byte_length().to_string();
+    match media.kind() {
+        CoreMediaKind::Image => {
+            // `image_ref` 的词表没有 `expired`：附件已过期时降级（调用方映射成 `unsupported` 块）。
+            let display_state = match media.availability() {
+                CoreMediaAvailability::Available => DisplayState::Available,
+                CoreMediaAvailability::NotFetched => DisplayState::NotFetched,
+                CoreMediaAvailability::Expired | CoreMediaAvailability::Unsupported => return None,
+            };
+            let attachment_id = if typed_media {
+                Some(Nullable::value(
+                    Uuid::parse(media.attachment().as_str()).ok()?,
+                ))
+            } else {
+                None
+            };
+            Some(AgentContentBlock::ImageRef {
+                mime_type: NonEmptyText::<128>::parse(media.media_type()).ok()?,
+                byte_length: Nullable::value(DecimalString::parse(&byte_length).ok()?),
+                display_state,
+                attachment_id,
+            })
+        }
+        CoreMediaKind::Audio => {
+            if !typed_media {
+                // `core.typed-media.v1` 未协商：`audio_ref` 整块去掉（事件轨道同一降级）。
+                return None;
+            }
+            let display_state = match media.availability() {
+                CoreMediaAvailability::Available => DisplayState::Available,
+                CoreMediaAvailability::NotFetched => DisplayState::NotFetched,
+                CoreMediaAvailability::Expired | CoreMediaAvailability::Unsupported => return None,
+            };
+            Some(AgentContentBlock::AudioRef {
+                mime_type: NonEmptyText::<128>::parse(media.media_type()).ok()?,
+                byte_length: Nullable::value(DecimalString::parse(&byte_length).ok()?),
+                display_state,
+                attachment_id: Some(Nullable::value(
+                    Uuid::parse(media.attachment().as_str()).ok()?,
+                )),
+            })
+        }
+        CoreMediaKind::File => {
+            if !typed_media {
+                return None;
+            }
+            let display_state = match media.availability() {
+                CoreMediaAvailability::Available => FileDisplayState::Available,
+                CoreMediaAvailability::Expired => FileDisplayState::Expired,
+                CoreMediaAvailability::NotFetched | CoreMediaAvailability::Unsupported => {
+                    FileDisplayState::Unsupported
+                }
+            };
+            Some(AgentContentBlock::FileRef {
+                attachment_id: Uuid::parse(media.attachment().as_str()).ok()?,
+                mime_type: NonEmptyText::<255>::parse(media.media_type()).ok()?,
+                byte_length: DecimalString::parse(&byte_length).ok()?,
+                display_name: match media.display_name() {
+                    Some(name) => Nullable::value(NonEmptyText::<255>::parse(name).ok()?),
+                    None => Nullable::null(),
+                },
+                display_state,
+            })
+        }
+    }
+}
+
+/// 单个不可表达的块 → `unsupported`（`originalType` 为原 `type`）。
+fn unsupported_blocks(original_type: &str) -> Vec<AgentContentBlock> {
+    let original_type = NonEmptyText::<128>::parse(original_type).ok();
+    match original_type {
+        Some(original_type) => vec![AgentContentBlock::Unsupported {
+            original_type,
+            reason: UnsupportedByClient::UnsupportedByClient,
+        }],
+        // 极长/空的 `type` 无法进入封闭词表：仍必须给出一个可表达块（不丢条目、不让整页失败）。
+        None => match NonEmptyText::<128>::parse("unknown") {
+            Ok(original_type) => vec![AgentContentBlock::Unsupported {
+                original_type,
+                reason: UnsupportedByClient::UnsupportedByClient,
+            }],
+            Err(_) => Vec::new(),
+        },
     }
 }
 
@@ -1513,4 +1555,236 @@ fn scan_value(bytes: &[u8], start: usize) -> Option<usize> {
         }
     }
     if depth == 0 { Some(cursor) } else { None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acp_core::model::{
+        AgentId, AgentRef, AttachmentId, Digest, MediaAvailability, MediaKind, MessageState,
+        NodeId, OriginCursor, OriginEpoch, PartialResult, ResourceOrigin, Sequence, SessionState,
+        SessionSummary, Version,
+    };
+    use acp_core::ports::RemoteReadResult;
+
+    fn session_id() -> SessionId {
+        SessionId::new("11111111-1111-4111-8111-111111111111").expect("session")
+    }
+
+    fn message_id(seed: u8) -> MessageId {
+        MessageId::new(&format!(
+            "{seed:02x}000000-0000-4000-8000-0000000000{seed:02x}"
+        ))
+        .expect("message")
+    }
+
+    fn attachment_id() -> AttachmentId {
+        AttachmentId::new("22222222-2222-4222-8222-222222222222").expect("attachment")
+    }
+
+    fn timestamp() -> CoreTimestamp {
+        CoreTimestamp::new("2026-09-18T00:00:00.000Z").expect("timestamp")
+    }
+
+    fn digest() -> Digest {
+        Digest::new(&"A".repeat(43)).expect("digest")
+    }
+
+    fn record(channel: CoreMessageChannel, content: &str) -> MessageRecord {
+        MessageRecord::try_new(
+            message_id(1),
+            session_id(),
+            None,
+            channel,
+            PartialResult::try_new(MessageState::Completed, None).expect("result"),
+            acp_core::model::JsonValueText::new(content).expect("content"),
+            Vec::new(),
+            timestamp(),
+            timestamp(),
+        )
+        .expect("record")
+    }
+
+    fn wire_json(message: &SnapshotItemMessage) -> serde_json::Value {
+        serde_json::to_value(message).expect("wire message")
+    }
+
+    /// `conversation-reliability` §2.2：同一次受理的持久用户消息只投影一条 `role=user`，不带
+    /// `channel`/`partial`；事件轨道的 `user.message.delta` 不参与正文拼接。
+    #[test]
+    fn session_read_returns_exactly_one_user_message_per_accepted_input() {
+        let user = record(
+            CoreMessageChannel::User,
+            r#"[{"type":"text","text":"继续"}]"#,
+        );
+        let mut reply = record(
+            CoreMessageChannel::Reply,
+            r#"[{"type":"text","text":"好的"}]"#,
+        );
+        reply.message = message_id(2);
+
+        let projected: Vec<Message> = [user, reply]
+            .iter()
+            .filter_map(|record| Message::from_owned_record(record, true))
+            .collect();
+        assert_eq!(
+            projected
+                .iter()
+                .filter(|message| message.role == MessageRole::User)
+                .count(),
+            1,
+            "一次受理只投影一条用户消息"
+        );
+        let user = projected
+            .iter()
+            .find(|message| message.role == MessageRole::User)
+            .expect("user message");
+        assert!(user.channel.is_none(), "用户行不带 channel");
+        assert!(user.partial.is_none(), "用户行不带 partial");
+        assert_eq!(user.content.len(), 1);
+
+        let wire = user
+            .to_wire(&Uuid::parse(session_id().as_str()).expect("uuid"))
+            .expect("wire");
+        let value = wire_json(&wire);
+        assert_eq!(
+            value.get("role").and_then(|role| role.as_str()),
+            Some("user")
+        );
+        assert!(
+            value.get("channel").is_none(),
+            "未协商 typed-media 时 channel 键必须缺席：{value}"
+        );
+        assert!(
+            value.get("partial").is_none(),
+            "用户消息不携带 partial：{value}"
+        );
+        assert_eq!(
+            value
+                .get("content")
+                .and_then(|content| content.as_array())
+                .map(Vec::len),
+            Some(1),
+            "正文来自 owned_message 这一段，不重复拼接事件"
+        );
+    }
+
+    /// `conversation-reliability` §2.1：附件块的自报值与权威行不一致时整块降级为 `unsupported`，
+    /// 不让整页失败、也不据自报值伪造类型。
+    #[test]
+    fn user_attachment_block_degrades_when_owned_media_disagrees() {
+        let media = MediaReference::try_new(
+            attachment_id(),
+            session_id(),
+            MediaKind::File,
+            "text/plain",
+            6,
+            digest(),
+            Some("report.txt"),
+            MediaAvailability::Available,
+        )
+        .expect("media");
+        let mut user = record(
+            CoreMessageChannel::User,
+            r#"[{"type":"text","text":"请看附件"},{"type":"attachment_ref","attachmentId":"22222222-2222-4222-8222-222222222222","mediaType":"image/png","byteLength":"6"}]"#,
+        );
+        user.media = vec![media.clone()];
+
+        let projected = Message::from_owned_record(&user, true).expect("projected");
+        assert_eq!(projected.content.len(), 2);
+        assert!(
+            matches!(
+                &projected.content[1],
+                AgentContentBlock::Unsupported { original_type, .. }
+                    if original_type.as_str() == "attachment_ref"
+            ),
+            "自报 mediaType 与 owned 行不一致时必须降级：{:?}",
+            projected.content[1]
+        );
+
+        // 自报值与权威行一致 → 正常投影为 file_ref（类型与字节长度都取权威行）。
+        let matching = record(
+            CoreMessageChannel::User,
+            r#"[{"type":"attachment_ref","attachmentId":"22222222-2222-4222-8222-222222222222","mediaType":"text/plain","byteLength":"6"}]"#,
+        );
+        let mut matching = matching;
+        matching.media = vec![media];
+        let projected = Message::from_owned_record(&matching, true).expect("projected");
+        assert!(
+            matches!(
+                &projected.content[0],
+                AgentContentBlock::FileRef { mime_type, .. } if mime_type.as_str() == "text/plain"
+            ),
+            "一致时按权威行投影：{:?}",
+            projected.content[0]
+        );
+    }
+
+    /// `conversation-reliability` §2.2：imported 会话的读取投影不得改写 Owner 的 `role`；
+    /// 缺 `channel` 的用户消息仍是 `role=user`，而不是退化成 Agent 回复。
+    #[test]
+    fn remote_read_keeps_the_imported_user_role() {
+        let session = session_id();
+        let summary = SessionSummary::try_new(
+            session.clone(),
+            Some("imported".to_owned()),
+            AgentRef::try_new(AgentId::new("codex").expect("agent"), "Codex").expect("agent ref"),
+            SessionState::Idle,
+            ResourceOrigin::Remote {
+                owner_node_id: NodeId::new("33333333-3333-4333-8333-333333333333").expect("node"),
+                origin_epoch: OriginEpoch::new("44444444-4444-4444-8444-444444444444")
+                    .expect("epoch"),
+                online: true,
+            },
+            None,
+            Version::new(1),
+            timestamp(),
+            timestamp(),
+            None,
+        )
+        .expect("summary");
+        let user = record(
+            CoreMessageChannel::User,
+            r#"[{"type":"text","text":"继续"}]"#,
+        );
+        let page = RemoteReadResult {
+            summary,
+            read_cursor: OriginCursor::new(
+                OriginEpoch::new("44444444-4444-4444-8444-444444444444").expect("epoch"),
+                Sequence::new(7).expect("sequence"),
+            ),
+            messages: vec![user],
+            history: Vec::new(),
+            coverage: Vec::new(),
+            messages_has_earlier: false,
+            history_has_earlier: false,
+        };
+        let request = SessionReadRequest {
+            session: session.clone(),
+            include: HistoryInclude {
+                messages: true,
+                ..HistoryInclude::default()
+            },
+            before_history: None,
+            before_messages: None,
+            page_limit: 20,
+            typed_media: false,
+            negotiate_acp: false,
+            negotiate_file_diff: true,
+            catalog: false,
+            local_activity: None,
+            stateless_origin: true,
+        };
+        let result = project_remote_read(page, &session, &request).expect("remote read");
+        let messages = result.resources.messages.expect("messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, MessageRole::User, "role 必须原样保留");
+        let value = wire_json(&messages[0]);
+        assert_eq!(
+            value.get("role").and_then(|role| role.as_str()),
+            Some("user")
+        );
+        assert!(value.get("channel").is_none());
+        assert!(value.get("partial").is_none());
+    }
 }

@@ -22,6 +22,7 @@ use super::ids::{
 use super::json::{JsonValueText, ViewJson};
 use super::scalars::{Digest, ResourceGeneration, Timestamp};
 use super::session::{ConfigValue, PromptContentBlock, PublicError};
+use super::{MemberValue, top_level_member};
 
 /// 首条输入的内容块上限（与 `session.prompt` 相同：1..=64）。
 pub const FIRST_SUBMISSION_MAX_BLOCKS: usize = 64;
@@ -354,16 +355,21 @@ pub struct FirstUserMessage {
     pub created_at: Timestamp,
 }
 
-/// 一次 prompt 派发的内部上下文（`design.md` D7）。
+/// 一次 prompt 派发的内部上下文（`design.md` D7；`conversation-reliability` D2）。
 ///
 /// 只在内存里随该次调用的事件 sink 传入 mapper；它**不**是持久凭据，也不含 ACP DTO。资源代把旧代的
 /// 迟到事件挡在关联之外。
+///
+/// 首条与普通后续输入共用这一种上下文：`first_submission` 让首条保持原关联（`None` = 普通输入），
+/// `turn` 让普通输入也能在「固定字段全部相等」的判据里被证明。`input_digest` 是**本次受理的完整
+/// 内容**摘要（不是事件文本摘要），只有它与回显摘要逐字节相等才算 [`EchoAssociation::Duplicate`]。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchContext {
     pub session: SessionId,
-    pub first_submission: FirstSubmissionId,
+    pub first_submission: Option<FirstSubmissionId>,
     pub user_message: MessageId,
     pub request: RequestId,
+    pub turn: TurnId,
     pub agent: AgentRef,
     pub agent_session: AgentSessionId,
     pub resource_generation: ResourceGeneration,
@@ -374,9 +380,10 @@ pub struct DispatchContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserEchoLink {
     pub session: SessionId,
-    pub first_submission: FirstSubmissionId,
+    pub first_submission: Option<FirstSubmissionId>,
     pub user_message: MessageId,
     pub request: RequestId,
+    pub turn: TurnId,
     pub agent: AgentRef,
     pub agent_session: AgentSessionId,
     pub resource_generation: ResourceGeneration,
@@ -407,12 +414,16 @@ pub enum EchoAssociation {
     Unattributed,
 }
 
-/// `design.md` D7 的唯一回显关联规则。
+/// `design.md` D7 的唯一回显关联规则（`conversation-reliability` D2 扩展到普通后续输入）。
 ///
-/// - 没有上下文、事件没有关联、或任一固定字段（会话/首条/用户消息/请求/Agent 身份/资源代）不相等
+/// - 没有上下文、事件没有关联、或任一固定字段（会话/首条/用户消息/请求/turn/Agent 身份/资源代）不相等
 ///   → [`EchoAssociation::Unattributed`]；**不以内容或 Agent `messageId` 兜底**。
-/// - 全部相等：内容摘要与首条一致 → `Duplicate`；否则 `Differs`（同一条用户消息的 Agent 回显）。
-/// - 第二条**有意**发送的相同文字属于新的 `first_submission`/`user_message`，因此不会被这里吞并。
+/// - 全部相等：内容摘要与本次受理的完整内容一致 → `Duplicate`；否则 `Differs`（同一条用户消息的 Agent
+///   回显）。
+/// - 第二条**有意**发送的相同文字属于新的 `request`/`turn`/`user_message`，因此不会被这里吞并。
+///
+/// 八个身份字段而不是七个：普通输入的 `first_submission` 为 `None`，只靠其余字段无法区分同一会话里
+/// 相邻两次派发的迟到事件，`turn` 因此是判据的一部分。
 pub fn associate_user_echo(
     context: Option<&DispatchContext>,
     event: &UserEchoEvent,
@@ -427,6 +438,7 @@ pub fn associate_user_echo(
         || link.first_submission != context.first_submission
         || link.user_message != context.user_message
         || link.request != context.request
+        || link.turn != context.turn
         || link.agent != context.agent
         || link.agent_session != context.agent_session
         || link.resource_generation != context.resource_generation
@@ -447,6 +459,64 @@ pub fn associate_user_echo(
 
 /// 首条消息投影进入事件流时的来源标记：首条来自已保存的用户输入，而不是 Agent 回显。
 pub const FIRST_USER_MESSAGE_SOURCE: &str = "owned_first_submission";
+
+/// 普通（后续）输入投影进入事件流时的来源标记（§6 第 24 条）：受理事务写的那条
+/// `user.message.delta` 只做实时可见性，正文权威仍是 `owned_message.content_json`。
+pub const PROMPT_USER_MESSAGE_SOURCE: &str = "owned_prompt";
+
+/// 普通输入可见性事件里 `text` 的字符上限（与首条同口径：§10.3 单条 message 文本上限）。
+pub const PROMPT_MESSAGE_TEXT_MAX_CHARS: usize = 262_144;
+
+/// 普通（后续）输入的受理写集：并入 [`crate::ports::OwnedCommit`] 的新成员（§3.11/§5.2）。
+///
+/// `None` = 本提交不是普通输入受理（首条、delta 合批、终态、交互等既有提交）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserInputWrite {
+    pub message: MessageId,
+    pub session: SessionId,
+    pub turn: TurnId,
+    pub request: RequestId,
+    /// 与首条**同一内容编码**（有序内容块 + 保真 JSON 数组 + 同源 SHA-256 摘要）。
+    pub content: FirstSubmissionInput,
+    pub at: Timestamp,
+}
+
+/// 一次普通输入受理的持久事实（并入 [`crate::ports::CommitOutcome`]）。
+///
+/// 只在受理事务提交成功后为 `Some`；幂等回放原样返回首次值。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptedInput {
+    pub session: SessionId,
+    pub message: MessageId,
+    pub request: RequestId,
+    pub turn: TurnId,
+}
+
+/// 受理输入进入事件流时的 `text` 投影：只拼接 `text` 块，超长按
+/// [`PROMPT_MESSAGE_TEXT_MAX_CHARS`] 截断（正文权威仍是 `owned_message.content_json`）。
+///
+/// 内容块是首条同款不透明 JSON 载体，因此这里只读顶层 `type`/`text` 两个成员，不重建块、不改写原文。
+pub fn prompt_message_text(input: &FirstSubmissionInput) -> String {
+    let mut text = String::new();
+    let mut remaining = PROMPT_MESSAGE_TEXT_MAX_CHARS;
+    for block in input.content() {
+        if remaining == 0 {
+            break;
+        }
+        let member = top_level_member(block.as_str(), "type");
+        let is_text = matches!(&member, Ok(MemberValue::Text(value)) if value == "text");
+        if !is_text {
+            continue;
+        }
+        let Ok(MemberValue::Text(chunk)) = top_level_member(block.as_str(), "text") else {
+            continue;
+        };
+        let taken: String = chunk.chars().take(remaining).collect();
+        remaining -= taken.chars().count();
+        text.push_str(&taken);
+    }
+    text
+}
 
 #[cfg(test)]
 #[path = "first_submission_tests.rs"]

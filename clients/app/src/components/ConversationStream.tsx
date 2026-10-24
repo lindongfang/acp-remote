@@ -50,6 +50,8 @@ import type { HostPanelModel } from "../features/host-panel-model";
 import type { SessionTitleCommitReason, SessionTitleEditorView } from "../features/session-title-editor";
 import { isSessionTitleDoubleClick, sessionTitleKeyAction } from "../features/session-title-editor";
 import { ConversationComposer } from "./ConversationComposer";
+import { ConversationTodo } from "./ConversationTodo";
+import { activeConversationTodo } from "../features/conversation-todo";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { ConversationColumnResizer } from "./ConversationColumnResizer";
 import { CONVERSATION_SIDEBAR_PAGE_SIZE } from "../features/conversation-model";
@@ -57,7 +59,6 @@ import { FileContentViewer } from "./FileContentViewer";
 import type { FilePreviewArtifact } from "./FileContentViewer";
 import { SessionFilesPanel } from "./SessionFilesPanel";
 import type { FileSource, SessionFileDownloadState, SessionFilesPanelModel } from "../features";
-import { PendingInteractionsPanel } from "./PendingInteractionsPanel";
 import { Pager } from "./Pager";
 import { SegmentControl } from "./SegmentControl";
 import { SessionRow } from "./SessionRow";
@@ -91,6 +92,7 @@ import {
 export type { ConversationSecondaryView } from "../features/conversation-model";
 
 export interface ConversationStreamProps {
+  readonly diagnosticsMode?: boolean | undefined;
   readonly model: ConversationPageModel;
   /** 向上翻页（消息）：续取 `(createdAt, messageId)` 复合游标。 */
   readonly onLoadEarlier: () => void;
@@ -976,6 +978,9 @@ function AgentChip({ panel }: { readonly panel: HostPanelModel }): ReactElement 
       <Pressable
         role="button"
         style={styles.chip}
+        accessibilityLabel="查看会话涉及的 Agent"
+        accessibilityState={{ expanded: open }}
+        aria-expanded={open}
         dataSet={{ action: "toggle-agent-chip", agentChipCount: String(panel.agents.length), agentChipDot: dotTone }}
         onPress={() => {
           setOpen(!open);
@@ -1203,6 +1208,7 @@ function userInputNodes(host: HTMLElement, ids: readonly string[]): readonly HTM
 
 /** 对话页正文。 */
 export function ConversationStream({
+  diagnosticsMode = false,
   model,
   onLoadEarlier,
   onOpenDiagnostics,
@@ -1302,16 +1308,6 @@ export function ConversationStream({
     onCloseFile !== undefined
       ? activeFilesPanel.content
       : null;
-  /**
-   * 只把「时间线上没有对应卡片」的交互交给待处理清单：有卡片的那条已经在时间线上带着同一份
-   * 可用性呈现（同一 `interactionId` 不重复呈现）。没有请求事件的读回待处理项因此不会消失。
-   */
-  const shownInteractionIds = new Set(
-    model.timeline.entries.flatMap((entry) =>
-      entry.kind === "permission_requested" || entry.kind === "elicitation_requested" ? [entry.interactionId] : [],
-    ),
-  );
-  const pendingOnly = model.interactions.filter((interaction) => !shownInteractionIds.has(interaction.interactionId));
   /**
    * 还等在本设备手上的交互条数（会话头下方的待处理跳转条用）。
    *
@@ -1821,11 +1817,10 @@ export function ConversationStream({
               </Text>
             )}
 
-            {pendingOnly.length === 0 ? null : (
-              <PendingInteractionsPanel interactions={pendingOnly} onAnswerInteraction={onAnswerInteraction} />
-            )}
             <ConversationTimeline
               entries={model.timeline.entries}
+              diagnosticsMode={diagnosticsMode}
+              process={model.timeline.process}
               sessionId={sessionId}
               agentName={model.header.agentName}
               onOpenDiagnostics={onOpenDiagnostics}
@@ -1885,6 +1880,7 @@ export function ConversationStream({
               style={fileContent === null ? styles.composerDock : [styles.composerDock, styles.hidden]}
               dataSet={{ composerDock: "true" }}
             >
+              <ConversationTodoDock model={model} />
               <ConversationComposer
                 input={model.input}
                 usage={model.usage}
@@ -1971,4 +1967,9 @@ export function ConversationStream({
       </View>
     </View>
   );
+}
+
+function ConversationTodoDock({ model }: { readonly model: ConversationPageModel }) {
+  const todo = activeConversationTodo(model.timeline.entries, model.header.state);
+  return todo === null ? null : <ConversationTodo key={model.header.sessionId} todo={todo} />;
 }

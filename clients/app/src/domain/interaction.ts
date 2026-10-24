@@ -34,6 +34,7 @@ export type InteractionKind = "permission" | "elicitation";
 
 /** 不可应答的原因（MUST 可区分：措辞不同、可核对）。 */
 export type InteractionUnavailableReason =
+  | "turn_ended"
   | "read_from_history"
   | "options_missing"
   | "expired"
@@ -42,6 +43,7 @@ export type InteractionUnavailableReason =
 
 /** 不可应答原因的展示文案。 */
 export const INTERACTION_UNAVAILABLE_LABELS: Readonly<Record<InteractionUnavailableReason, string>> = {
+  turn_ended: "这条请求所属的轮次已结束，不能再应答",
   read_from_history: "这条待处理项只从历史读到，尚未取得服务端确认的当前有效请求，无法应答",
   options_missing: "这次请求没有下发可选项，无法应答",
   expired: "这次请求已过期或上游等待方已不存在，不能再应答",
@@ -137,6 +139,9 @@ export function buildInteractionAvailability(input: {
    * 「尚未取得确认」——否则刷新按钮在结果为空时没有任何可见效果。
    */
   readonly pendingChecked?: boolean;
+  /** 服务端后续核实已排除此请求，覆盖此前亲历的旧状态。 */
+  readonly confirmedIneffective?: boolean;
+  readonly turnEnded?: boolean;
   /** 当前时刻（epoch 毫秒），用于判断 `expiresAt`；缺省不判过期。 */
   readonly nowMs?: number;
   readonly resolution: InteractionResolution | null;
@@ -154,6 +159,8 @@ export function buildInteractionAvailability(input: {
         };
   }
   if (input.pendingRequestId !== null) return { kind: "submitting", requestId: input.pendingRequestId };
+  if (input.turnEnded === true) return { kind: "not_answerable", reason: "turn_ended" };
+  if (input.confirmedIneffective === true) return { kind: "not_answerable", reason: "not_effective" };
   if (input.expiresAt !== null && input.expiresAt !== undefined && input.nowMs !== undefined) {
     if (Date.parse(input.expiresAt) <= input.nowMs) return { kind: "not_answerable", reason: "expired" };
   }

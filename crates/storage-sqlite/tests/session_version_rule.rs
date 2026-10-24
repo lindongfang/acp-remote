@@ -74,6 +74,7 @@ fn create_session() -> OwnedCommit {
         idempotency: None,
         command_terminal: None,
         origin_epoch: Some(origin_epoch()),
+        input: None,
     }
 }
 
@@ -96,6 +97,7 @@ fn commit(
         idempotency: None,
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     }
 }
 
@@ -260,6 +262,7 @@ async fn a_state_change_with_a_stale_expected_version_is_rejected() {
     // 未被拒绝的路径照常工作（turn 行与事件在同一事务内）。
     let outcome = store
         .commit(OwnedCommit {
+            input: None,
             turns: vec![TurnChange::Create(NewTurn {
                 turn: TurnId::new(TURN).expect("turn id"),
                 state: TurnState::Queued,

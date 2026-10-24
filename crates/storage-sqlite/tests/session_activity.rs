@@ -53,6 +53,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("create session")
@@ -95,6 +96,7 @@ async fn activity_events_are_replayable_but_never_history_entries() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("commit activity event");

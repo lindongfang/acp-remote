@@ -80,6 +80,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create session")
@@ -100,6 +101,7 @@ fn append(session: &SessionId, hour: u32, events: Vec<PendingEvent>) -> OwnedCom
         idempotency: None,
         command_terminal: None,
         origin_epoch: Some(epoch()),
+        input: None,
     }
 }
 
@@ -877,4 +879,78 @@ async fn a_cursor_before_the_retained_window_is_rejected() {
 
     drop(view);
     store.close().await;
+}
+
+/// `conversation-reliability` / ACP 不变量：事件里的原始 ACP payload 含未知字段与大整数时，
+/// 持久化与读回都逐字节保真（不经过泛化 DTO 重编码）。
+#[tokio::test]
+async fn agent_event_raw_acp_round_trips_unknown_fields() {
+    let dir = temp_dir("history-raw-unknown");
+    let store = open(&dir).await;
+    let session = create_session(&store).await;
+
+    let raw = r#"{"path":"src/main.rs","addedLines":3,"future":{"big":9007199254740993,"nested":["x",{"y":null}]},"acpExtension":{"dispatch":true}}"#;
+    let digest = Digest::new(&digest_text("raw-unknown")).expect("digest");
+    let written = store
+        .commit(append(
+            &session,
+            1,
+            vec![event(
+                EventKind::Structured,
+                "tool.call.started",
+                StoredPolicy::Durable,
+                r#"{"toolCallId":"c-unknown"}"#,
+                Some(
+                    AcpRaw::available("application/vnd.acp.tool+json", raw, digest.clone())
+                        .expect("raw"),
+                ),
+            )],
+        ))
+        .await
+        .expect("commit raw event");
+    let event_id = written.appended[0].id.clone();
+
+    let view = store.read_view().await.expect("view");
+    let payload = view
+        .event_payload(&event_id)
+        .await
+        .expect("payload")
+        .expect("stored payload");
+    let (media_type, stored_raw, byte_length, sha256) = payload
+        .acp
+        .as_ref()
+        .expect("raw acp")
+        .as_available()
+        .expect("available");
+    assert_eq!(media_type, "application/vnd.acp.tool+json");
+    assert_eq!(stored_raw, raw, "未知字段与大整数必须逐字节往返");
+    assert_eq!(byte_length, raw.len() as u64);
+    assert_eq!(sha256, &digest);
+
+    // 历史读面同样来自同一条行（视图 + 原文都保真）。
+    let page = view
+        .read_session(query(&session, None, 10))
+        .await
+        .expect("history");
+    assert_eq!(page.history.len(), 1);
+    let history_raw = page.history[0]
+        .payload
+        .acp
+        .as_ref()
+        .expect("raw acp")
+        .as_available()
+        .expect("available");
+    assert_eq!(history_raw.1, raw);
+    drop(view);
+
+    // 落库的列也保存了原文（不是重新序列化后的等价 JSON）。
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    let stored: String =
+        sqlx::query_scalar("SELECT acp_raw_json FROM owned_event WHERE event_id = ?1")
+            .bind(event_id.as_str())
+            .fetch_one(&pool)
+            .await
+            .expect("raw column");
+    assert_eq!(stored, raw);
+    pool.close().await;
 }

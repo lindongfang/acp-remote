@@ -47,7 +47,7 @@ async fn v14_upgrade_preserves_rows_and_v15_custom_titles_survive_reopen() {
         .fetch_one(&pool)
         .await
         .expect("version");
-    assert_eq!(version, 16);
+    assert_eq!(version, 17);
     sqlx::query("UPDATE owned_session SET custom_title = 'My title'")
         .execute(&pool)
         .await

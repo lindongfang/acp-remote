@@ -1,5 +1,5 @@
-//! v15 → v16 升级（`docs/CORE_PORTS_AND_STORAGE.md` §7.2）：新增 `owned_first_submission`、把
-//! `owned_message.channel` 扩到 `user`，且**不回填**任何旧会话。
+//! v15 → 当前版本升级（`docs/CORE_PORTS_AND_STORAGE.md` §7.2）：新增 `owned_first_submission`、
+//! 把 `owned_message.channel` 扩到 `user`、v17 新增 `owned_user_input`，且**不回填**任何旧会话。
 
 mod support;
 
@@ -22,6 +22,7 @@ async fn downgrade_to_v15(pool: &sqlx::SqlitePool, with_bad_channel: bool) {
     sqlx::raw_sql(
         "PRAGMA foreign_keys = OFF;
          DROP TABLE owned_first_submission;
+         DROP TABLE owned_user_input;
          CREATE TABLE owned_message_v15 (
            message_id TEXT PRIMARY KEY,
            session_id TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
@@ -114,7 +115,7 @@ async fn v15_upgrades_without_touching_old_sessions_and_keeps_references() {
         .await
         .expect("version");
     assert_eq!(version, FILE_FORMAT_VERSION);
-    assert_eq!(FILE_FORMAT_VERSION, 16);
+    assert_eq!(FILE_FORMAT_VERSION, 17);
     let owned: String =
         sqlx::query_scalar("SELECT value FROM meta WHERE key = 'owned_schema_version'")
             .fetch_one(&pool)
@@ -143,6 +144,12 @@ async fn v15_upgrades_without_touching_old_sessions_and_keeps_references() {
         .await
         .expect("submissions");
     assert_eq!(submissions, 0);
+    // v17 的受理关联表已建出，但旧消息不被回填成普通输入（不按附近回复猜补）。
+    let user_inputs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM owned_user_input")
+        .fetch_one(&pool)
+        .await
+        .expect("user inputs");
+    assert_eq!(user_inputs, 0, "升级不得回填历史输入关联");
     // 新通道可用；外键仍阻止无会话的首条行。
     sqlx::query(
         "INSERT INTO owned_message

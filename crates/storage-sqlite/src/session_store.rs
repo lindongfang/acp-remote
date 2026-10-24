@@ -24,23 +24,24 @@ use tokio::sync::Mutex;
 
 use acp_core::broker::HISTORY_ENTRY_EVENT_TYPES;
 use acp_core::model::{
-    AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
-    AttachmentId, CommandRecord, CommandResult, CommandStatus, CommandTerminalRecord,
-    CommittedEvent, ConflictKind, DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind,
-    EventOrigin, EventPayload, GlobalCursor, InteractionId, InteractionOption,
+    AcceptedInput, AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId,
+    AttachmentGeneration, AttachmentId, CommandRecord, CommandResult, CommandStatus,
+    CommandTerminalRecord, CommittedEvent, ConflictKind, DeviceId, Digest, DirectoryId, EntityRef,
+    EventId, EventKind, EventOrigin, EventPayload, GlobalCursor, InteractionId, InteractionOption,
     InteractionResolution, MediaKind, MediaReference, MessageChannel, MessageId, MessageRecord,
     MessageState, ModeId, ModeRef, NodeId, OriginCursor, OriginEpoch, PartialReason, PartialResult,
     PendingInteraction, PortError, PublicError, RawUnavailableReason, RequestId, ResourceOrigin,
     Sequence, ServerEpoch, Session, SessionId, SessionRecoveryRecord, SessionSnapshot,
     SessionState, SessionSummary, SessionTitle, StoredPolicy, Timestamp, Turn, TurnId,
-    UnavailableKind, Version, ViewJson, WorkspaceRef,
+    UnavailableKind, UserInputWrite, Version, ViewJson, WorkspaceRef,
 };
 use acp_core::ports::{
-    AttachmentRef, AttachmentStore, CommitOutcome, HistoryPage, HistoryQuery, IdempotentReplay,
-    ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord, PendingInteractionOrigin,
-    PreparationAttachmentStaging, PruneReport, ReadView, ReplayBatch, ReplayLimit, ResetReason,
-    RetentionPolicy, SessionActivityFacts, SessionQuery, SessionStore, SettledSession, StateChange,
-    StoreHealth, SubmissionBinding, SyncEventRecord, SyncReplaySlice, TurnChange, TurnUpdate,
+    AttachmentRef, AttachmentStore, CommitOutcome, HistoryPage, HistoryQuery, IdempotencyRecord,
+    IdempotentReplay, ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
+    PendingInteractionOrigin, PreparationAttachmentStaging, PruneReport, ReadView, ReplayBatch,
+    ReplayLimit, ResetReason, RetentionPolicy, SessionActivityFacts, SessionQuery, SessionStore,
+    SettledSession, StateChange, StoreHealth, SubmissionBinding, SyncEventRecord, SyncReplaySlice,
+    TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
@@ -1280,6 +1281,21 @@ impl SqliteStore {
                 // 命中路径不写任何行，显式结束事务。§6 第 20 条：`idem.session` 为 `None` 时以行里记的
                 // 目标会话作答（`session.create` 的重试因此能拿回首次创建的那个 sessionId）。
                 let session_id = idem.session.clone().or_else(|| record.session().cloned());
+                // §3.11：幂等回放原样返回首次受理的输入事实（按 `owned_user_input` 的唯一键回读），
+                // 不重新分配 message/turn，也不写第二条消息。
+                let accepted_input = match session_id.as_ref() {
+                    Some(session) => {
+                        load_accepted_input(
+                            &mut tx,
+                            session,
+                            kind.as_str(),
+                            &actor_id,
+                            idem.request.as_str(),
+                        )
+                        .await?
+                    }
+                    None => None,
+                };
                 drop(tx);
                 return Ok(CommitOutcome {
                     session_id,
@@ -1287,6 +1303,7 @@ impl SqliteStore {
                     version,
                     appended: Vec::new(),
                     replayed: Some(IdempotentReplay { record }),
+                    accepted_input,
                 });
             }
         }
@@ -1389,6 +1406,7 @@ impl SqliteStore {
                         version,
                         appended: Vec::new(),
                         replayed: Some(IdempotentReplay { record }),
+                        accepted_input: None,
                     });
                 }
                 Some(TerminalTarget::Locate(request))
@@ -1737,6 +1755,45 @@ impl SqliteStore {
             materialize_messages(&mut tx, session, &commit.events, &commit.at).await?;
         }
 
+        // ---- §3.11/§5.2：普通输入的受理写集（用户消息行 + 受理关联 + 逐附件媒体引用）。
+        //
+        // 与幂等行、turn、事件和上面的附件绑定在**同一事务**里：任一步失败整事务回滚（零行、
+        // 零广播、零派发）。首条不走这里（它由 `commit_first_submission` 一次写全）。
+        let accepted_input = match &commit.input {
+            Some(input) => {
+                let session = session_id.as_ref().ok_or(PortError::InvalidRequest(
+                    "a user input write requires a session",
+                ))?;
+                if input.session != *session {
+                    return Err(PortError::InvalidRequest(
+                        "the user input must belong to the committed session",
+                    ));
+                }
+                // turn 必须是**本次提交**新建的那一个：否则消息会挂到一个不存在或别的请求的 turn 上。
+                let creates_turn = commit.turns.iter().any(|change| {
+                    matches!(change, TurnChange::Create(new_turn) if new_turn.turn == input.turn)
+                });
+                if !creates_turn {
+                    return Err(PortError::InvalidRequest(
+                        "a user input write must create its own turn",
+                    ));
+                }
+                let idem = commit
+                    .idempotency
+                    .as_ref()
+                    .ok_or(PortError::InvalidRequest(
+                        "a user input write requires the acceptance idempotency row",
+                    ))?;
+                if idem.request != input.request {
+                    return Err(PortError::InvalidRequest(
+                        "the user input and the idempotency row must share a request id",
+                    ));
+                }
+                Some(write_user_input(&mut tx, session, input, binding.as_ref(), idem).await?)
+            }
+            None => None,
+        };
+
         // ---- §6 第 15 条：把被替代的 delta 行指向那条 summary 事件。
         //
         // 条件更新的 `WHERE` 同时校验「同一会话 / 行存在 / `kind = 'delta'` / `compacted_into IS NULL`」：
@@ -1893,6 +1950,7 @@ impl SqliteStore {
             version,
             appended,
             replayed: None,
+            accepted_input,
         })
     }
 }
@@ -3106,6 +3164,129 @@ async fn materialize_messages(
     Ok(())
 }
 
+/// §3.11：普通输入受理的行集（用户消息行 + 受理关联 + 逐附件媒体引用）。
+///
+/// 调用方在同一事务里已写幂等行、turn、事件并完成附件清单绑定；本函数只补「输入事实」本身。
+/// 附件字节不复制、不重哈希：`owned_attachment` 行由封存写就，这里只按 `attachments` 的**位置顺序**
+/// 写媒体引用（`kind` 取该附件权威行的 `media_type` 前缀；块内自报的 `mediaType` 不参与）。
+async fn write_user_input(
+    tx: &mut Transaction<'_, Sqlite>,
+    session: &SessionId,
+    input: &UserInputWrite,
+    binding: Option<&SubmissionBinding>,
+    idem: &IdempotencyRecord,
+) -> Result<AcceptedInput, PortError> {
+    let (kind, actor_id) = actor_key(&idem.actor);
+    let attachments: &[AttachmentId] = binding
+        .map(|binding| binding.attachments.as_slice())
+        .unwrap_or(&[]);
+    let attachment_count = i64::try_from(attachments.len())
+        .map_err(|_| PortError::InvalidRequest("attachment count is out of range"))?;
+    sqlx::query(
+        "INSERT INTO owned_message (message_id, session_id, turn_id, channel, state, \
+         content_json, partial_reason, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, 'user', 'completed', ?4, NULL, ?5, ?5)",
+    )
+    .bind(input.message.as_str())
+    .bind(session.as_str())
+    .bind(input.turn.as_str())
+    .bind(input.content.json().as_str())
+    .bind(input.at.as_str())
+    .execute(&mut **tx)
+    .await
+    .db()?;
+    sqlx::query(
+        "INSERT INTO owned_user_input (message_id, session_id, turn_id, actor_kind, actor_id, \
+         request_id, content_digest, attachment_count, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    )
+    .bind(input.message.as_str())
+    .bind(session.as_str())
+    .bind(input.turn.as_str())
+    .bind(kind.as_str())
+    .bind(&actor_id)
+    .bind(input.request.as_str())
+    .bind(input.content.digest().as_str())
+    .bind(attachment_count)
+    .bind(input.at.as_str())
+    .execute(&mut **tx)
+    .await
+    .db()?;
+    for (position, attachment) in attachments.iter().enumerate() {
+        let media_type: Option<String> =
+            sqlx::query_scalar("SELECT media_type FROM owned_attachment WHERE attachment_id = ?1")
+                .bind(attachment.as_str())
+                .fetch_optional(&mut **tx)
+                .await
+                .db()?;
+        let Some(media_type) = media_type else {
+            // 清单里出现未封存的附件：整事务失败（不得写出指向不存在内容的媒体引用）。
+            return Err(PortError::InvalidRequest(
+                "a bound attachment has no sealed content row",
+            ));
+        };
+        sqlx::query(
+            "INSERT INTO owned_media_ref (message_id, position, attachment_id, kind) \
+             VALUES (?1, ?2, ?3, ?4) ON CONFLICT(message_id, position) DO NOTHING",
+        )
+        .bind(input.message.as_str())
+        .bind(
+            i64::try_from(position)
+                .map_err(|_| PortError::InvalidRequest("attachment position is out of range"))?,
+        )
+        .bind(attachment.as_str())
+        .bind(crate::first_submission::media_kind_of(&media_type))
+        .execute(&mut **tx)
+        .await
+        .db()?;
+    }
+    Ok(AcceptedInput {
+        session: session.clone(),
+        message: input.message.clone(),
+        request: input.request.clone(),
+        turn: input.turn.clone(),
+    })
+}
+
+/// §3.11：按 `owned_user_input` 的唯一键回读首次受理的输入事实（幂等回放）。
+///
+/// 读不到行即 `None`（v17 之前受理的普通输入没有关联行）；**不得**据此推断消息不存在——消息正文的
+/// 读取只按 `owned_message`（§7.3）。命中多行是库损坏（唯一约束应挡住），按 `Corrupt` 失败关闭。
+async fn load_accepted_input(
+    tx: &mut Transaction<'_, Sqlite>,
+    session: &SessionId,
+    actor_kind: &str,
+    actor_id: &str,
+    request: &str,
+) -> Result<Option<AcceptedInput>, PortError> {
+    let rows = sqlx::query(
+        "SELECT message_id, turn_id, request_id FROM owned_user_input \
+         WHERE session_id = ?1 AND actor_kind = ?2 AND actor_id = ?3 AND request_id = ?4",
+    )
+    .bind(session.as_str())
+    .bind(actor_kind)
+    .bind(actor_id)
+    .bind(request)
+    .fetch_all(&mut **tx)
+    .await
+    .db()?;
+    match rows.as_slice() {
+        [] => Ok(None),
+        [row] => Ok(Some(AcceptedInput {
+            session: session.clone(),
+            message: MessageId::new(&text(row, "message_id")?)
+                .map_err(|_| PortError::Corrupt("owned_user_input.message_id is malformed"))?,
+            request: RequestId::new(&text(row, "request_id")?)
+                .map_err(|_| PortError::Corrupt("owned_user_input.request_id is malformed"))?,
+            turn: TurnId::new(&text(row, "turn_id")?)
+                .map_err(|_| PortError::Corrupt("owned_user_input.turn_id is malformed"))?,
+        })),
+        _ => Err(PortError::Corrupt(
+            "owned_user_input has duplicate rows for one acceptance",
+        )),
+    }
+}
+
 /// prompt 受理时的清单绑定（§6 第 22 条）：在**受理事务内**复核并写入会话绑定。
 ///
 /// 复核项：清单存在且已封存、属于该会话与**认证主体**、条目与清单登记逐项相同、每个附件仍存在且
@@ -3948,7 +4129,7 @@ async fn read_session_locked(
         let rows = sqlx::query(
             "SELECT message_id, session_id, turn_id, channel, state, content_json, \
                         partial_reason, created_at, updated_at \
-                 FROM owned_message WHERE session_id = ?1 AND channel <> 'user' \
+                 FROM owned_message WHERE session_id = ?1 \
                  AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND message_id < ?3)) \
                  ORDER BY created_at DESC, message_id DESC LIMIT ?4",
         )

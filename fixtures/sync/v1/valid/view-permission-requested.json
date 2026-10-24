@@ -24,6 +24,12 @@
         "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
         "title": "执行 npm run check",
         "description": "允许在仓库根目录运行合同检查？",
+        "toolCallId": "permission-check-tool",
+        "toolKind": "execute",
+        "toolDetail": {
+          "input": { "command": "npm run check", "cwd": "/workspace/acp-remote" },
+          "text": ["运行仓库合同检查，确认协议与文档一致。"]
+        },
         "options": [
           {
             "optionId": "allow_once",

@@ -63,6 +63,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create session")
@@ -83,6 +84,7 @@ fn commit(session: &SessionId, hour: u32) -> OwnedCommit {
         idempotency: None,
         command_terminal: None,
         origin_epoch: Some(epoch()),
+        input: None,
     }
 }
 
@@ -346,4 +348,160 @@ async fn unsettled_commands_lists_only_accepted_mutations() {
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].request().as_str(), earlier_request);
     store.close().await;
+}
+
+/// `conversation-reliability`：超过单条事件文本上限的输入，在 `user.message.delta` 被压缩后
+/// 仍从 `owned_message` 完整读回；事件文本按上限截断。
+#[tokio::test]
+async fn long_prompt_input_survives_delta_compaction() {
+    use acp_core::model::{FirstSubmissionInput, PromptContentBlock, TurnState};
+
+    let dir = temp_dir("compaction-long-input");
+    let store = store(&dir).await;
+    let session = create_session(&store).await;
+
+    let text = "长".repeat(300_000);
+    let content = FirstSubmissionInput::new(vec![
+        PromptContentBlock::from_json_text(
+            &serde_json::json!({"type": "text", "text": text}).to_string(),
+        )
+        .expect("block"),
+    ])
+    .expect("input");
+    let projected = acp_core::model::prompt_message_text(&content);
+    assert_eq!(
+        projected.chars().count(),
+        acp_core::model::PROMPT_MESSAGE_TEXT_MAX_CHARS,
+        "事件文本按上限截断"
+    );
+    assert!(projected.chars().count() < text.chars().count());
+
+    let message =
+        acp_core::model::MessageId::new("40000000-0000-4000-8000-000000000077").expect("message");
+    let turn = acp_core::model::TurnId::new("33333333-3333-4333-8333-000000000077").expect("turn");
+    let request = RequestId::new("66666666-6666-4666-8666-000000000077").expect("request");
+    let accepted = store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at(1),
+            expected_version: None,
+            state: None,
+            turns: vec![acp_core::ports::TurnChange::Create(
+                acp_core::ports::NewTurn {
+                    turn: turn.clone(),
+                    state: TurnState::Queued,
+                    causation: Some(request.clone()),
+                    started_at: None,
+                },
+            )],
+            events: vec![PendingEvent::new(
+                EventKind::Delta,
+                EventType::new("user.message.delta").expect("event type"),
+                StoredPolicy::ShortTerm,
+                acp_core::model::EventPayload::new(
+                    ViewJson::new(
+                        &serde_json::json!({
+                            "messageId": message.as_str(),
+                            "deltaIndex": "0",
+                            "text": projected,
+                        })
+                        .to_string(),
+                    )
+                    .expect("view"),
+                    None,
+                ),
+                acp_core::model::EventOrigin::Device,
+                Some(turn.clone()),
+                Some(request.clone()),
+            )],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: acp_core::model::Actor::Device {
+                    device: acp_core::model::DeviceId::new("55555555-5555-4555-8555-000000000077")
+                        .expect("device"),
+                },
+                request: request.clone(),
+                command: "session.prompt".to_owned(),
+                kind: CommandKind::Mutation,
+                session: Some(session.clone()),
+                expected_version: None,
+                request_fingerprint: Digest::new(&digest_text("long-input")).expect("digest"),
+                accepted_at: at(1),
+            }),
+            command_terminal: None,
+            origin_epoch: Some(epoch()),
+            input: Some(acp_core::model::UserInputWrite {
+                message: message.clone(),
+                session: session.clone(),
+                turn: turn.clone(),
+                request,
+                content: content.clone(),
+                at: at(1),
+            }),
+        })
+        .await
+        .expect("commit long input");
+    let delta = accepted.appended[0].clone();
+
+    // 压缩这条 delta：正文权威仍是 owned_message。
+    let mut compaction = commit(&session, 2);
+    compaction.events.push(pending(
+        EventKind::Summary,
+        "turn.delta_compacted",
+        r#"{"deltaCount":1,"turnId":"33333333-3333-4333-8333-000000000077"}"#,
+    ));
+    let server_epoch = ServerEpoch::new(&store_epoch(&dir).await).expect("epoch");
+    compaction.compacted = vec![GlobalCursor::new(server_epoch, delta.global_sequence)];
+    store.commit(compaction).await.expect("compact");
+
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    let stored_text: String = sqlx::query_scalar(
+        "SELECT json_extract(payload_json, '$.text') FROM owned_event \
+         WHERE event_type = 'user.message.delta'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("event text");
+    assert_eq!(
+        stored_text.chars().count(),
+        acp_core::model::PROMPT_MESSAGE_TEXT_MAX_CHARS,
+        "事件文本按上限截断"
+    );
+    let compacted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM owned_event WHERE event_type = 'user.message.delta' \
+         AND compacted_into IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("compacted");
+    assert_eq!(compacted, 1);
+    pool.close().await;
+
+    // 正式读回：完整正文（不按事件文本截断）。
+    let page = store
+        .read_view()
+        .await
+        .expect("view")
+        .read_session(acp_core::ports::HistoryQuery {
+            session: session.clone(),
+            include: acp_core::ports::HistoryInclude {
+                messages: true,
+                ..acp_core::ports::HistoryInclude::default()
+            },
+            after: None,
+            before_history: None,
+            before_messages: None,
+            messages_limit: ReplayLimit::new(10),
+            limit: ReplayLimit::new(10),
+        })
+        .await
+        .expect("read");
+    assert_eq!(page.messages.len(), 1);
+    assert_eq!(page.messages[0].message, message);
+    assert_eq!(page.messages[0].content.as_str(), content.json().as_str());
+    assert!(
+        page.messages[0].content.as_str().contains(&text),
+        "完整输入必须逐字读回"
+    );
 }
