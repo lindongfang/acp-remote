@@ -1,7 +1,12 @@
 # ACP Remote 模块架构
 
+> 对话顺序补充（2026-10-24，`preserve-agent-output-order`）：core 消息记录包含彼此独立的首次会话序号与首次来源序号；storage-sqlite 在首次持久事务固定并独立保留，读取按所选域分页（§4.1/§4.7 的详细端口仍以 [CORE_PORTS_AND_STORAGE.md](CORE_PORTS_AND_STORAGE.md) 为准）。agent-host 保留同一 ACP 输出流的先后，相邻文字可连续呈现，但跨其他可见条目后分配新的内部消息片段，不改 ACP 原文；server 本机和 Node Link 读取分别选择会话域和来源域；前端按权威位置合并消息与结构化条目。Access 不新增持久数据或序号映射。
+
+> 授权上下文投影（2026-10-24）：`agent-host::mapper` 将 ACP 授权请求自带的工具标识、类别、输入与文本内容投影为 `permission.requested` 的可选 `toolCallId` / `toolKind` / `toolDetail`；复用工具详情的限额与数值校验，不从相邻工具猜关联，不改动原始 ACP 内容。wire 字段与兼容策略以 `SYNC_PROTOCOL.md` §10.3 为准。
+
 > 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 已落地的路径是切片 4 的 `transport::local` + `local_admin`、切片 5 的 `transport::net` + `node_link`、`sync-server-connection` 的 `sync`（认证、订阅、投递、快照与配对 HTTP）与 `sync-server-commands` 的业务命令面，以及 `sync-ui-hosting` 在 `transport::net` 上的根路径静态托管（见 §4.9），`acp_facade` 仍待后续切片；`app` 已按切片 4/5/本变更接线，见 §3 `[现状]` 与 `README.md` 的 crate 表）
 > 版本：0.5
+> 修订记录（2026-10-23，`conversation-reliability` WP2 已实现）：普通（后续）输入的保存、读取与回显关联落地——`core` 的 `PromptAcceptance` 在 broker 内按「授权 → 幂等 → 排队策略 → 预检 → 一次事务提交」受理，`DispatchContext` 扩展为八字段 + 完整内容摘要；`storage-sqlite` 在同一事务写 `owned_message`（`channel='user'`）、`owned_user_input`（**v17**，含两条唯一约束）、媒体引用、turn、幂等与事件，读取侧消息页只从 `owned_message` 取正文；`server::sync` 的 `session.read` 把用户行投影为 `role=user`（`channel` 键缺席、内容块按 CORE §3.11 冻结投影），`node-link-client` 的导入消息改按 wire `role` 决定通道，`agent-host` 的回显链接带 `turn`。crate 边界与依赖矩阵**未变**。
 > 修订记录（2026-10-22，`web-session-preparation` WP2 已实现）：`core` 新增准备运行期目录 `PreparationDirectory`（`allocated → preparing → ready → released`、30 秒租约/10 秒续租、资源代、容量经既有 `CapacityAdmission`；纯运行期，不落库/不发事件）与首条提交/派发围栏/回显关联的纯类型；`storage-sqlite` 实现 `FirstSubmission`（同一 `BEGIN IMMEDIATE` 写会话、`owned_message` 的 `user` 首条消息、命令受理、turn、`owned_first_submission` 与附件引用）与 `PreparationAttachmentStaging`（无数据库行、私有暂存区、流式摘要、封存不可变、24 小时/启动回收），schema 推进到 **v16**。`server`/`app` 的控制面接线仍属 WP5；未协商的新入口继续禁用。
 
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§4.1 新增一条 `[决定]`——有效标题优先级只在 core，`owned_session.title` 保留 Agent 标题、新增可空列 `custom_title`（v15 migration），`session.title.set` 经 `SessionStore::commit` 一次事务写入；客户端改名禁令与「标题仅由 Agent 更新」的旧口径由本变更取代（原文见 SYNC_PROTOCOL §10.3 与 ACP_COMPATIBILITY_MATRIX §5）。不变量与依赖矩阵未变，持久化与命令接线已落地。
@@ -195,6 +200,8 @@ crates/
 
 ### 4.1 `core`
 
+对话发生顺序的纯类型合同包含消息及交互的首次会话位置与首次来源位置；两域不可混用。具体字段及读取合同以 [CORE_PORTS_AND_STORAGE.md](CORE_PORTS_AND_STORAGE.md) 为准。
+
 目录文件查询用例解析已登记目录或既有绝对路径，通过 `SessionFiles` 端口读取文件/Git；无需会话、Agent 或持久化写入。旧会话文件查询共享根内读取与预算检查，协议适配层负责目录目标的 feature 门控。
 
 唯一职责：承载与传输、数据库和具体 Agent 无关的会话业务。参考 Pi `agent-core`，首日把稳定且共同演进的领域、用例、端口和协调逻辑放在一个 crate 内，而不是为了目录整齐拆成三个相互依赖的 crate。
@@ -235,6 +242,7 @@ Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord 
 - Owned 与 imported session 必须在类型或 `ResourceOrigin` 上可区分，禁止依靠 nullable `ownerNodeId` 猜测持久化规则。
 - `core::broker` 实现每会话串行、active turn、授权调用点、幂等、permission first-writer-wins、模型切换时机和先提交后发布。
 - `[决定]`（`web-session-preparation` WP2 已实现）**准备与正式会话是三个事实**：准备目录、临时资源代与租约只在 `core::preparation` 的运行时内存中，不写 owned 行/命令收据/事件；首次受理由 `FirstSubmission` 在同一事务写 `owned_first_submission`（`saved_not_dispatched`），派发围栏是唯一把阶段推进到 `dispatch_started` 的入口，启动收敛只把可证明未派发记为失败等待显式继续、把可能已派发记为 `uncertain`，绝不自动重派。首条用户消息写入 `owned_message` 的 `user` 通道，不依赖 Agent 回显；回显只按派发上下文（首条/用户消息/请求 + Agent 身份/资源代）关联，不以文本或 Agent messageId 匹配。释放成功或首次提交成功的条目立即从目录移除，只保留 `PREPARATION_RELEASED_TOMBSTONES` 条有界释放事实，因此目录不随进程运行无限增长。
+- `[决定]`（`conversation-reliability` WP1 合同，WP2 已实现）**普通后续输入与首条同一保存口径**：每个受理的 `session.prompt` 由 core 在**同一事务**里写用户 `owned_message`（`channel='user'`）、受理关联行 `owned_user_input`（形状见 `CORE_PORTS_AND_STORAGE.md` §3.11/§5.12，DDL 见 §7.3）、既有幂等记录、turn 与初始可见性事件，提交成功后才返回 `accepted` 并派发；失败全回滚。受理步骤是 `Broker::accept_prompt`（`crates/core/src/broker.rs`）：授权 → 幂等回放 → 排队策略 → `validate_prompt` 预检 → 组装一次 `OwnedCommit`（`input` + turn + `user.message.delta` + 幂等）→ 一次 `commit`/`commit_with_submission` → 发布并返回派发计划；两条委托入口（`submit_command`、`submit_prompt_with_submission`）共用同一事务。派发上下文 `DispatchContext` 统一为「首条可选 + 本次 messageId/requestId/turnId + Agent 身份/资源代 + 完整内容摘要」，回显关联只按该上下文判定，不以文本或 Agent `messageId` 匹配。读取的用户输入只来自持久消息（`session.read` 的 `messages` 映射 `role=user`），`user.message.delta` 只做实时可见性。
 - `[决定]`（`session-activity-three-states`，WP2 已实现）**会话主状态只有 `idle|running|pending`**，取值只由 `SessionActivity::reduce(pending, unfinished_turns)` 决定：有效未解决交互（含已仲裁未确认）优先 → `pending`；否则未结束 turn（`queued`/`running`/`waiting_*`，含已派发但停止未确认的占位）→ `running`；否则 `idle`。`TurnState`/`CommandStatus` 词表不变；失败/取消一个 turn 不终结会话，后续排队继续。`session.updated` 由 core 在状态变化时生成（携带完整摘要与嵌套 `session.version`），每次提交最多一条，仲裁/确认/turn 终态/恢复都不得各自另发。应答的 first-writer-wins 只写 `resolved_at`，端点确认（`SessionUpdate.confirmation`）才写 `confirmed_at`；`agent-host` 现在把「字节已写入并 flush 到 Agent stdin」作为 `prompt` 与交互应答的成功条件，core 在适配器成功返回后经 `Broker::confirm_interaction` 原子写 `confirmed_at` 与摘要，失败或写未确认时保持待处理并在重启恢复统一失效。
 - `[决定]` 启动恢复重水化持久队列：`SessionStore::queued_turns` 给出遗留排队项（`owned_turn` 不含 prompt 正文，**不得**重放 Agent 副作用），内存队列为空时显式终结为 `failed` 并由 `unsettled_commands` 把 `accepted` 命令结算为 `uncertain`；`sessions_with_pending_activity` 补齐仍需重算摘要的会话。`uncertain` 命令与无法确认停止的执行不自动重试。
 - 事件 view 的职责分工（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条）：适配器负责 ACP 派生投影（`block`/`title`/`options`/`deltaIndex` 等，它持有 ACP DTO），`core::broker` 在提交前补 `SYNC_PROTOCOL.md` §10.3 要求的身份与会话版本字段（`turnId`、`version`）并在存储返回后比对版本；两侧不得互相替代，也不得在 broker 的公共领域视图里重建 ACP 语义。同一分工下，`file.changed` 的**行级差异统计与结构化差异行**（新增/删除/上下文，feature `core.file-diff.v1`）都由 `core::broker` 从**同一次**类型化 Diff 派生，受 `SYNC_PROTOCOL.md` §14 的固定行数/字节/单行上限约束，超限时只带统计并以已登记原因标记差异行未下发；未协商该 feature 的连接由投递层去掉该键。
@@ -377,6 +385,8 @@ AttachmentTransfer（计划，`attachment.schema.json`）：独立已认证附�
 
 ### 4.5 `agent-host`
 
+同一 ACP 输出流按写出顺序同步映射与交付；相邻同通道、同 ACP 消息的文字可连续追加，跨其他可见内容后分配新的内部片段标识。终端输出与通知的片段边界共用同步锁，重绑先释放旧状态锁再更换终端出口，避免并发插入与锁反转。ACP 原文及外部消息标识保持保真。
+
 唯一职责：把一个本地 ACP 子进程实现为 `AgentCatalog + SessionBackendFactory + SessionEndpoint`。
 
 包含：
@@ -394,7 +404,7 @@ AttachmentTransfer（计划，`attachment.schema.json`）：独立已认证附�
 
 wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` 与公共领域 view 同时交给 core，不能只交规范化文本。优先使用一个通用 ACP 实现；Codex、OMP 差异优先表示为 capability/profile 数据。
 
-- **准备（临时）端点**（已实现，`web-session-preparation` WP4；`crates/agent-host/src/preparation.rs`）：`AgentHost::prepare` 为 core 已分配的 `SessionId` 建立真实 `session/new` 端点，**不要求 `SessionStore` 中存在行**；模式与配置只取 Agent 响应（默认值也是 Agent 的），准备期不发送任何 prompt、也不发空消息促使 Agent 写盘。`TemporaryEndpoint::apply_selection` 先读当前选项再验证/应用草稿；请求的模式/配置已不可用时保留在报告里可见并把端点标为 blocked，`transfer_preparation` 与 prompt 都被拒绝（不静默回退默认值）。`rebuild_preparation` 在新的绑定资源代下重建同一会话：已转正的绑定在**任何** `session/new` 之前被拒绝（本地可判定，不在 Agent 侧留下随后被丢弃的会话）；旧代在仍是当前映射时用能力门控的 `session/close` 真实释放（关闭被拒绝/说不清时保留映射与占用并让重建失败），旧代迟到的关闭/`set_mode`/`set_config` 结果不会摘除或改写新代；`release_preparation` 只释放目录当前指向的**精确代**，关闭被拒绝/超时/只剩旧句柄时返回未释放并保留占用，整进程关闭仍走 `shutdown_*` 的进程树与任务回收。首次提交由 `transfer_preparation` 把**同一端点**转正后直接派发，不需要第二次 `session/new`。`prompt_with_context` 携带的派发上下文只在该适配器内部用于回显关联：可证明与已保存首条逐字节一致的重复回显不再产出第二条 `user.message.delta`，内容不同/无法归属的照常下发；上下文**不**写入事件视图、不新增 wire 字段（普通 prompt 完全不出现关联行为）。本层**不读** `SessionStore`、不按 Agent 名称分支。
+- **准备（临时）端点**（已实现，`web-session-preparation` WP4；`crates/agent-host/src/preparation.rs`）：`AgentHost::prepare` 为 core 已分配的 `SessionId` 建立真实 `session/new` 端点，**不要求 `SessionStore` 中存在行**；模式与配置只取 Agent 响应（默认值也是 Agent 的），准备期不发送任何 prompt、也不发空消息促使 Agent 写盘。`TemporaryEndpoint::apply_selection` 先读当前选项再验证/应用草稿；请求的模式/配置已不可用时保留在报告里可见并把端点标为 blocked，`transfer_preparation` 与 prompt 都被拒绝（不静默回退默认值）。`rebuild_preparation` 在新的绑定资源代下重建同一会话：已转正的绑定在**任何** `session/new` 之前被拒绝（本地可判定，不在 Agent 侧留下随后被丢弃的会话）；旧代在仍是当前映射时用能力门控的 `session/close` 真实释放（关闭被拒绝/说不清时保留映射与占用并让重建失败），旧代迟到的关闭/`set_mode`/`set_config` 结果不会摘除或改写新代；`release_preparation` 只释放目录当前指向的**精确代**，关闭被拒绝/超时/只剩旧句柄时返回未释放并保留占用，整进程关闭仍走 `shutdown_*` 的进程树与任务回收。首次提交由 `transfer_preparation` 把**同一端点**转正后直接派发，不需要第二次 `session/new`。`prompt_with_context` 携带的派发上下文只在该适配器内部用于回显关联：可证明与已保存输入（首条或普通后续输入）逐字节一致的重复回显不再产出第二条 `user.message.delta`，内容不同/无法归属的照常下发；上下文**不**写入事件视图、不新增 wire 字段。**普通后续派发也已携带同一上下文**（`conversation-reliability` WP2 已实现）：`first_submission = None`，并携带本次 `messageId`/`requestId`/`turnId` 与完整内容摘要（`crates/agent-host/src/mapper.rs` 的 `UserEchoLink` 增 `turn`），因此同文不同请求不再互相抵消、只有凭证一致才消除重复投影。本层**不读** `SessionStore`、不按 Agent 名称分支。
 
 实现前已冻结的硬约束（都不是可选优化）：
 
@@ -417,6 +427,8 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 
 默认 `no-content-cache` 下不得把 prompt、回复、工具内容、diff、终端、附件或 ACP raw 写入 Access SQLite；正文重放回源 Owner。断开、撤销或来源 epoch 变化时整代丢弃内存目录与缓冲；断线后只自动恢复订阅和安全查询，不自动重放副作用命令。`agent-host` 与 `node-link-client` 是平级 backend，不能互相调用。
 
+`[决定]`（2026-10-23，`conversation-reliability` WP2 已实现）**导入消息的通道由 wire `role` 决定**：`json_message`（`crates/node-link-client/src/runtime.rs`）先看 `role`——`user` → `MessageChannel::User`，`agent` 才按 `channel` 或默认 `Reply`，词表外取值报 `Corrupt`。用户消息在 `messages` 里按 `role=user` 投影、`channel` 键缺席，因此旧实现「缺 `channel` 即 Reply」会把导入的用户消息误判成 Agent 回复；WP2 起按角色判定。正文仍只在内存与 wire 中存在，不落 Access 存储（`no-content-cache` 不变）。
+
 `[现状]`（2026-10-20，`conversation-area-complete` WP5）crate 已落地并登记为 workspace 成员，依赖边界是 `core + node-link-protocol + identity-auth + acpr-wire`（`acpr-transcript` 只作为测试依赖；`scripts/check-crate-boundaries.mjs` 逐条断言）。已实现：WSS `Transport`、`node.hello`→`node.ready` 握手与 Owner 签名校验、单任务连接所有权/重连/撤销、catalog 无正文投影、`commit_receipt` → 发布 → `resource.ack` 的顺序、远程 `SessionEndpoint` 与 `SessionBackendFactory`，以及按 `node-link.attachment-transfer.v1` 的独立附件连接（`attachment` 模块：`begin`/`chunk`/`seal`/`status`/`abort`/`read`/清单，停等、有界内存、不落盘；已转发不等于已提交）。
 
 `[现状]`（2026-10-20，`conversation-area-complete` WP5d）Access 侧出站装配已接线：`app::trust::OutboundTrust` 加载系统根 + `node_link.access.trust_roots`（空锚/坏 PEM 失败关闭），`app::access::AccessManager` 实现 `node pair --mode access` 的 claim/status（二维码固定公钥验签 `ownerProof`、批准后才写 Owner 信任）、启动时按持久化 `kind = owner`/`state = paired` 记录建立 `OwnerLink`、向本地调用方提供远程 `SessionEndpoint`（惰性构造自当前 link）与附件转发入口，并在 `node.revoke` 后停止重连、让路由随 link 移除而失效；`Composition::close` 先 `shutdown_all` 再关存储（supervisor 有取消与 abort 两条终止路径，不留 detached task）。`daemon.status.links[]` 由该管理器填充。仍未落地：`server::acp_facade`（本地 ACP 客户端的业务命令转发）与 Node Link 面的 `session.read` 正文投影。
@@ -424,6 +436,8 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 `[现状]`（2026-10-20，WP5c）两处收口：① `app` 组合根注入 `agent-host` 的附件读取端口是**非拥有**句柄（`compose::WeakAttachmentStore`，每次调用升级一次）。原因是会话持有 core 的 `EventSink`、sink 闭包持有会话槽位、槽位缓存端点、端点又持有会话，这条环在 `AgentHost::shutdown_all` 之后仍留到进程结束；强引用会让 `Composition::close` 以 `StoreStillShared` 跳过检查点。端口语义不变：存储关闭后如实返回 `Unavailable(IoError)`。环本身属 core 的关闭语义（`Broker` 暂无释放槽位端点的入口），登记为残余。② 集成判据补齐：`crates/app/tests/imported_delivery.rs`（收据先于广播、重复事件不追加、ACK 与重启恢复、Access 磁盘无远程正文）与 `tests/remote_session.rs`（附票证路由、稳定 requestId、uncertain 只回查不重发）、以及两份握手协商的「未注册端点不宣告」单测。
 
 ### 4.7 `storage-sqlite`
+
+首次片段正文、事件序号与卡片锚点在同一事务固定。消息及卡片顺序独立于短期 delta 保留期限恢复，本机与 Node Link 读取显式选择同一序号域。两域字段、DDL 和迁移以 [CORE_PORTS_AND_STORAGE.md](CORE_PORTS_AND_STORAGE.md) §7 为准。
 
 唯一职责：实现持久化端口。
 
@@ -444,7 +458,9 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 
 它不解析 ACP、不广播 WebSocket、不决定会话状态（三态归约只在 core；本 crate 只按提交写入与读取摘要、迁移时写暂存值）、不保存明文私钥。数据库 record 与领域对象通过 mapper 转换。
 
-`[决定]`（2026-10-19，`conversation-area-complete` WP2 已实现）分块附件、封存清单、消息通道/部分结果与媒体引用的落盘由本 crate 拥有（`CORE_PORTS_AND_STORAGE.md` §5.8/§7.3/§7.6）：临时传输、清单、`owned_message`、`owned_media_ref` 与交互版本列都经**版本化 migration** 追加（v12 引入，当前 v13），`imported_*` 家族不新增任何正文列。
+`[决定]`（2026-10-19，`conversation-area-complete` WP2 已实现）分块附件、封存清单、消息通道/部分结果与媒体引用的落盘由本 crate 拥有（`CORE_PORTS_AND_STORAGE.md` §5.8/§7.3/§7.6）：临时传输、清单、`owned_message`、`owned_media_ref` 与交互版本列都经**版本化 migration** 追加（v12 引入，当前 schema 版本为 v17，见 `CORE_PORTS_AND_STORAGE.md` §7.2），`imported_*` 家族不新增任何正文列。
+
+`[决定]`（2026-10-23，`conversation-reliability` WP1 合同，WP2 已实现）本 crate 负责普通输入的保存与读取：在同一次 `commit` 事务里写 `owned_message`（`channel='user'`，与首条同一内容编码）、受理关联表 `owned_user_input`（v17，含 `(session_id, actor_kind, actor_id, request_id)` 与 `(session_id, turn_id)` 两条唯一约束，DDL 见 `CORE_PORTS_AND_STORAGE.md` §7.3）、附件链接与按 `SubmissionBinding.attachments` 位置顺序的逐附件媒体引用（`owned_attachment_link`/`owned_media_ref`，与首条 `claim_attachment` 同形）、turn、幂等行与事件（`crates/storage-sqlite/src/session_store.rs` 的 `write_user_input`）；幂等回放按 `owned_user_input` 唯一键回读 `AcceptedInput`（`load_accepted_input`），不再写第二条消息。读取侧消息页只从 `owned_message` 取正文（含 `channel='user'`，与回复/思考按 `(created_at, message_id)` 同序、共用 `before` 游标）。v16 → v17 迁移只建表、不回填历史行（`crates/storage-sqlite/src/migrate.rs` 的 `v17_upgrade`）；旧库升级不回填，首条用户消息的关联仍由 `owned_first_submission` 提供。
 
 `[决定]`（2026-10-22，`web-session-preparation` WP2 已实现）本 crate 新增 `owned_first_submission`（v16）：会话主键、首条/用户消息唯一、完整输入与摘要、阶段/`ever_dispatched`、当前请求/终态；`owned_message.channel` 扩到 `user`（12-step 重建）。准备附件暂存的元数据只在内存、字节在 `<attachment_dir>/.preparation/`（无 `owned_session` 外键行），首次提交只把已封存字节 `rename` 到正式内容寻址路径并写引用行；受理事务回滚时只把**本次认领真的** `rename` 过的字节移回封存路径（正式路径上更早会话已提交的同内容字节不动；同页同 ID 可原样重试），提交成功后清除该清单的运行期记录；启动/24 小时回收孤儿。旧会话不回填、不被识别成准备。
 
@@ -498,6 +514,8 @@ server::transport    listener、连接级 backpressure 与根路径静态托管�
 Node Link 和 Sync attachment 必须具有 connection generation 或 attachment ID。重新认证/重新订阅会生成新 generation，延迟到达的旧连接 frame 必须被拒绝，不能误投递到新会话绑定。
 
 `[决定]`（2026-10-19，`conversation-area-complete` WP1，计划/待实施）`server::sync` 与 `server::node_link` 各自拥有**独立附件端点**的入站适配（`/sync/v1/attachments`、`/node-link/v1/attachments`）：复用同一 listener 与各自的认证/撤销/心跳规则，在认证后按连接协商结果门控帧族；未协商、跨会话/主体、撤销与预算超限都在触碰存储或网络字节之前拒绝。附件帧只调用 `core::use_cases`（`AttachmentTransferStore`/`InteractionAuthority` 的计划入口），两个 adapter 仍不得互相调用。旧 peer 的 `message.schema.json` 与业务消息路径逐字不变。
+
+`[决定]`（2026-10-23，`conversation-reliability` WP1 合同；WP2 已实现）**Sync 的用户消息投影只读持久消息**：`session.read` 的 `messages` 页把 core 读出的 `owned_message.channel='user'` 映射为 `role=user`（`channel` 键缺席、`content` 由该行完整正文按 `CORE_PORTS_AND_STORAGE.md` §3.11 的冻结投影转换为 `agentContentBlock`，不是 `promptContentBlock` 的逐字回放），与回复/思考按同一复合游标排序分页；页边界按**用户输入**计数（`user_input_count`），`user.message.delta` 只经事件流投递用于实时可见性，投递层**不**把它并入读取页、也不与同一 `messageId` 拼接。实现落在 `crates/server/src/session_read.rs`（删除按事件累积的 `MessageMerger`），命令面测试在 `crates/server/src/sync/command/query.rs`。该投影不新增 wire 字段、不新增 feature、不改 schema（`SYNC_PROTOCOL.md` §11.5 的旧端策略）。
 
 `[决定]`（2026-10-22，`session-activation-lifecycle` WP1 合同，实现待 WP4/WP5）**Sync 面的本机生命周期接线边界**：
 

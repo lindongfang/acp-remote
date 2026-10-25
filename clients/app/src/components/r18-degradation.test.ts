@@ -85,6 +85,7 @@ function renderStream(degraded: readonly DegradedEventModel[]): string {
         })),
       ],
       structuredHistory: { state: "unavailable", notice: null },
+      process: { phase: "none", label: null, detail: null },
     },
     loadingEarlier: false,
     pagingError: null,
@@ -196,7 +197,7 @@ describe("R18 未识别事件与未知内容", () => {
     // 事件类型原样显示（不替换成占位名称）。
     expect(html).toContain("acp.agent.vendor_status");
     expect(html).toContain("当前客户端未提供专用视图");
-    expect(html).toContain('data-action="open-diagnostics"');
+    expect(html).not.toContain('data-action="open-diagnostics"');
     // 反例：若静默隐藏该事件，这里不会有降级条目，断言变红。
     expect(html).toContain('data-degraded-entry=');
   });

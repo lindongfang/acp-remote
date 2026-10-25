@@ -78,7 +78,7 @@ function buildStyles(colors: Palette) {
       // 原型 `.deg`：左边一道 3px 的竖线；`.deg.warn` 把它换成提醒色。
       borderLeftWidth: 3,
       borderLeftColor: colors.ink3,
-      borderRadius: radius.sm,
+      borderRadius: radius.md,
       backgroundColor: colors.panel2,
     },
     cardAttention: {
@@ -87,6 +87,7 @@ function buildStyles(colors: Palette) {
     },
     head: {
       flexDirection: "row",
+      flexWrap: "wrap",
       alignItems: "baseline",
       gap: spacing.sm,
     },
@@ -106,6 +107,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      lineHeight: 22,
     },
     rawUnavailable: {
       color: colors.warn,

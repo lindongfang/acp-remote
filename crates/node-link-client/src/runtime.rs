@@ -1993,9 +1993,21 @@ fn json_message(value: &serde_json::Value) -> Result<MessageRecord, PortError> {
         .get("turnId")
         .and_then(|value| value.as_str())
         .and_then(|id| TurnId::new(id).ok());
-    let channel = match value.get("channel").and_then(|value| value.as_str()) {
-        Some("thought") => MessageChannel::Thought,
-        _ => MessageChannel::Reply,
+    // 角色来自 wire 的 `role`，**不是** `channel` 的缺省值：`role=user` 的导入用户消息没有 `channel`
+    // （用户消息在 messages 里按 `role=user` 投影、`channel` 键缺席），旧实现会把它当成 Agent 回复。
+    // Agent 消息未协商 `core.typed-media.v1` 时 `channel` 缺席，此时才是 Reply。
+    let role = value
+        .get("role")
+        .and_then(|value| value.as_str())
+        .ok_or(PortError::Corrupt("a message role is missing"))?;
+    let channel = match role {
+        "user" => MessageChannel::User,
+        "agent" => match value.get("channel").and_then(|value| value.as_str()) {
+            Some("thought") => MessageChannel::Thought,
+            Some("reply") | None => MessageChannel::Reply,
+            Some(_) => return Err(PortError::Corrupt("a message channel is invalid")),
+        },
+        _ => return Err(PortError::Corrupt("a message role is invalid")),
     };
     let status = value
         .get("status")
@@ -2023,7 +2035,7 @@ fn json_message(value: &serde_json::Value) -> Result<MessageRecord, PortError> {
         .ok_or(PortError::Corrupt("a message createdAt is missing"))?;
     let created_at =
         Timestamp::new(created_at).map_err(|_| PortError::Corrupt("a message time is invalid"))?;
-    MessageRecord::try_new(
+    let mut record = MessageRecord::try_new(
         MessageId::new(message_id).map_err(|_| PortError::Corrupt("a message id is invalid"))?,
         SessionId::new(session)
             .map_err(|_| PortError::Corrupt("a message session id is invalid"))?,
@@ -2035,7 +2047,29 @@ fn json_message(value: &serde_json::Value) -> Result<MessageRecord, PortError> {
         created_at.clone(),
         created_at,
     )
-    .map_err(|_| PortError::Corrupt("a message is not representable"))
+    .map_err(|_| PortError::Corrupt("a message is not representable"))?;
+    record.first_origin_sequence = match value.get("sequence") {
+        None => None,
+        Some(value) => {
+            let text = value
+                .as_str()
+                .ok_or(PortError::Corrupt("a message sequence is invalid"))?;
+            if text.is_empty()
+                || (text.len() > 1 && text.starts_with('0'))
+                || !text.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(PortError::Corrupt("a message sequence is invalid"));
+            }
+            Some(
+                Sequence::new(
+                    text.parse()
+                        .map_err(|_| PortError::Corrupt("a message sequence is invalid"))?,
+                )
+                .map_err(|_| PortError::Corrupt("a message sequence is invalid"))?,
+            )
+        }
+    };
+    Ok(record)
 }
 
 fn json_history(
@@ -2168,5 +2202,43 @@ mod tests {
             title_rejection(Some(&error)),
             PortError::Conflict(ConflictKind::IdempotencyConflict)
         ));
+    }
+
+    /// `conversation-reliability` §2.2：imported 用户消息按 `role=user` 读取，**不**因 `channel`
+    /// 缺席（未协商 typed-media）退化成 Agent 回复；非法的 role 仍失败关闭。
+    #[test]
+    fn imported_user_message_without_channel_reads_as_user() {
+        let user = serde_json::json!({
+            "messageId": "11111111-1111-4111-8111-111111111111",
+            "sessionId": "22222222-2222-4222-8222-222222222222",
+            "role": "user",
+            "status": "completed",
+            "content": [{"type": "text", "text": "继续"}],
+            "createdAt": "2026-09-18T00:00:00.000Z"
+        });
+        let record = json_message(&user).expect("user message");
+        assert_eq!(record.channel, MessageChannel::User);
+
+        // Agent 消息在未协商 typed-media 时本来就缺 `channel`：默认 reply，不改成 user。
+        let reply = serde_json::json!({
+            "messageId": "11111111-1111-4111-8111-111111111112",
+            "sessionId": "22222222-2222-4222-8222-222222222222",
+            "role": "agent",
+            "status": "completed",
+            "content": [{"type": "text", "text": "好的"}],
+            "createdAt": "2026-09-18T00:00:00.000Z"
+        });
+        let record = json_message(&reply).expect("agent message");
+        assert_eq!(record.channel, MessageChannel::Reply);
+
+        let invalid = serde_json::json!({
+            "messageId": "11111111-1111-4111-8111-111111111113",
+            "sessionId": "22222222-2222-4222-8222-222222222222",
+            "role": "system",
+            "status": "completed",
+            "content": [],
+            "createdAt": "2026-09-18T00:00:00.000Z"
+        });
+        assert!(matches!(json_message(&invalid), Err(PortError::Corrupt(_))));
     }
 }

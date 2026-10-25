@@ -553,7 +553,70 @@ describe("D7 实时交互的请求版本", () => {
     });
   });
 
-  it("事件视图没有请求版本：不可应答、不发命令；刷新取得版本后才可提交", () => {
+  it("核实结果排除旧实时请求后撤销其审批能力", () => {
+    const { store, gateway } = negotiatedStore();
+    store.apply(versionedPermission({ eventId: "dddddddd-0000-4000-8000-0000000000f9", globalSequence: "59", requestVersion: "7" }));
+    expect(interactionViewOf(store, PERMISSION_ID)?.availability.kind).toBe("answerable");
+    store.refreshInteractions(ONLINE_SESSION_ID);
+    store.apply({ kind: "command_result", result: readResult({ requestId: lastDispatch(gateway).body.requestId,
+      sessionId: ONLINE_SESSION_ID, pending: [] }) });
+    expect(interactionViewOf(store, PERMISSION_ID)?.availability).toEqual({ kind: "not_answerable", reason: "not_effective" });
+    const count = gateway.dispatches.length;
+    expect(store.resolvePermission(ONLINE_SESSION_ID, PERMISSION_ID, "allow-once").ok).toBe(false);
+    expect(gateway.dispatches).toHaveLength(count);
+  });
+
+  it.each(["turn.cancelled", "turn.completed", "turn.failed"])("%s 后即使缓存仍确认旧请求也不能继续审批", (eventType) => {
+    const { store, gateway } = negotiatedStore();
+    store.apply(versionedPermission({ eventId: "dddddddd-0000-4000-8000-0000000000a1", globalSequence: "61", requestVersion: "7" }));
+    store.refreshInteractions(ONLINE_SESSION_ID);
+    store.apply({ kind: "command_result", result: readResult({ requestId: lastDispatch(gateway).body.requestId,
+      sessionId: ONLINE_SESSION_ID, pending: [{ interactionId: PERMISSION_ID, sessionId: ONLINE_SESSION_ID, kind: "permission",
+        requestVersion: "7", expiresAt: null, options: [{ optionId: "allow-once", label: "Allow once", kind: "allow_once" }], schema: null }] }) });
+    store.apply({ kind: "event", event: eventMessage({ eventType, eventId: "dddddddd-0000-4000-8000-0000000000a2",
+      sessionId: ONLINE_SESSION_ID, globalSequence: "62", view: { turnId: "turn-1", state: eventType.slice(5) } }) });
+    expect(interactionViewOf(store, PERMISSION_ID)?.availability).toEqual({ kind: "not_answerable", reason: "turn_ended" });
+    expect(store.resolvePermission(ONLINE_SESSION_ID, PERMISSION_ID, "allow-once").ok).toBe(false);
+  });
+
+  it("旧读取的空结果不使读取期间刚收到的新请求失效", () => {
+    const { store, gateway } = negotiatedStore();
+    store.apply(versionedPermission({ eventId: "dddddddd-0000-4000-8000-0000000000f7", globalSequence: "57", requestVersion: "7" }));
+    store.refreshInteractions(ONLINE_SESSION_ID);
+    const requestId = lastDispatch(gateway).body.requestId;
+    store.apply(versionedPermission({ eventId: "dddddddd-0000-4000-8000-0000000000f8", globalSequence: "58", requestVersion: "8" }));
+    store.apply({ kind: "command_result", result: readResult({ requestId, sessionId: ONLINE_SESSION_ID, pending: [] }) });
+    expect(interactionViewOf(store, PERMISSION_ID)?.availability.kind).toBe("answerable");
+    expect(interactionViewOf(store, PERMISSION_ID)?.requestVersion).toBe("8");
+  });
+
+  it("其他轮次的终态不会使当前审批失效", () => {
+    const { store } = negotiatedStore();
+    store.apply(versionedPermission({ eventId: "dddddddd-0000-4000-8000-0000000000b1", globalSequence: "71", requestVersion: "7" }));
+    store.apply({ kind: "event", event: eventMessage({ eventType: "turn.cancelled",
+      eventId: "dddddddd-0000-4000-8000-0000000000b2", sessionId: ONLINE_SESSION_ID, globalSequence: "72",
+      view: { turnId: "another-turn", state: "cancelled" } }) });
+    expect(interactionViewOf(store, PERMISSION_ID)?.availability.kind).toBe("answerable");
+  });
+
+  it("初次读取期间收到缺版本授权：等读取完成后再核实，不丢失刷新", () => {
+    const { store, gateway } = negotiatedStore();
+    store.loadSession(ONLINE_SESSION_ID);
+    const firstRead = lastDispatch(gateway).body.requestId;
+    const count = gateway.dispatches.length;
+    const request = versionedPermission({ eventId: "dddddddd-0000-4000-8000-0000000000e9", globalSequence: "49" });
+    store.apply(request);
+    expect(gateway.dispatches).toHaveLength(count);
+    store.apply({ kind: "command_result", result: readResult({ requestId: firstRead, sessionId: ONLINE_SESSION_ID, pending: [] }) });
+    expect(gateway.dispatches).toHaveLength(count + 1);
+    const refresh = lastDispatch(gateway).body;
+    if (refresh.command !== "session.read") throw new Error("没有自动核实审批请求");
+    expect(refresh.payload.include).toEqual(["pending_interactions"]);
+    store.apply(request);
+    expect(gateway.dispatches).toHaveLength(count + 1);
+  });
+
+  it("事件视图没有请求版本：自动读取有效请求，确认前禁止审批，取得版本后可提交", () => {
     const { store, gateway } = negotiatedStore();
     store.apply(
       versionedPermission({ eventId: "dddddddd-0000-4000-8000-0000000000e2", globalSequence: "42" }),
@@ -569,12 +632,14 @@ describe("D7 实时交互的请求版本", () => {
     // 反例：缺版本仍派发 → 这里会多一条记录（服务端必然拒绝它）。
     expect(gateway.dispatches).toHaveLength(dispatches);
 
-    const refresh = store.refreshInteractions(ONLINE_SESSION_ID);
-    expect(refresh.ok).toBe(true);
+    const refresh = lastDispatch(gateway).body;
+    expect(refresh.command).toBe("session.read");
+    if (refresh.command !== "session.read") throw new Error("没有自动读取有效请求");
+    expect(refresh.payload.include).toEqual(["pending_interactions"]);
     store.apply({
       kind: "command_result",
       result: readResult({
-        requestId: refresh.ok ? refresh.requestId : "",
+        requestId: refresh.requestId,
         sessionId: ONLINE_SESSION_ID,
         pending: [
           {

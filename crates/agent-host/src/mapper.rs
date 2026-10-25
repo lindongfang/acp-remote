@@ -34,7 +34,7 @@ use crate::error::HostError;
 /// delta 分组状态：同一消息内的 `deltaIndex` 从 0 起严格加一（由适配器分配）。
 #[derive(Debug, Default)]
 pub struct UpdateState {
-    messages: HashMap<String, MessageId>,
+    active: Option<(String, MessageId)>,
     counters: HashMap<MessageId, u64>,
     turn_seq: u64,
 }
@@ -42,18 +42,25 @@ pub struct UpdateState {
 impl UpdateState {
     /// 新 turn 开始时重置消息分组（新 turn 的流是新消息）。
     pub fn begin_turn(&mut self) {
-        self.messages.clear();
+        self.active = None;
         self.counters.clear();
         self.turn_seq += 1;
     }
 
     fn message_for(&mut self, key: &str, ids: &dyn IdGenerator) -> MessageId {
-        if let Some(existing) = self.messages.get(key) {
-            return existing.clone();
+        if let Some((active_key, existing)) = &self.active {
+            if active_key == key {
+                return existing.clone();
+            }
         }
         let id = ids.message_id();
-        self.messages.insert(key.to_owned(), id.clone());
+        self.active = Some((key.to_owned(), id.clone()));
         id
+    }
+
+    /// A visible non-message entry terminates the current continuous fragment.
+    pub fn interrupt(&mut self) {
+        self.active = None;
     }
 
     fn next_index(&mut self, message: &MessageId) -> u64 {
@@ -84,6 +91,14 @@ pub fn update_events(
     let at = clock.now();
     let mut events = Vec::new();
 
+    if !matches!(
+        update,
+        SessionUpdate::UserMessageChunk(_)
+            | SessionUpdate::AgentMessageChunk(_)
+            | SessionUpdate::AgentThoughtChunk(_)
+    ) {
+        state.interrupt();
+    }
     match update {
         SessionUpdate::UserMessageChunk(chunk) => {
             // 重复回显：持久化的首条正文才是权威。这条既不产出事件，也不占用该消息的 delta 状态
@@ -257,13 +272,13 @@ pub fn update_events(
     Ok(events)
 }
 
-/// 本次派发的用户输入回显是否可证明是**已保存首条的重复**（`design.md` D7）。
+/// 本次派发的用户输入回显是否可证明是**已保存输入的重复**（`design.md` D7）。
 ///
-/// 关联只用派发上下文与事件自身：`UserEchoLink` 的七个固定字段取自该次调用传入的上下文，内容数组与
+/// 关联只用派发上下文与事件自身：`UserEchoLink` 的八个固定字段取自该次调用传入的上下文，内容数组与
 /// 摘要则由这条 `user_message_chunk` 的**原文**内容块按首条输入的同一口径算出（`[<block 原文>]` 的
 /// UTF-8 字节 SHA-256 → 无填充 base64url），再交给唯一规则 [`associate_user_echo`] 判定。
 ///
-/// 返回 `true`（`EchoAssociation::Duplicate`）时调用方**不产出**这条 `user.message.delta`：持久首条
+/// 返回 `true`（`EchoAssociation::Duplicate`）时调用方**不产出**这条 `user.message.delta`：持久消息
 /// 正文才是权威，回显不能再造第二条用户消息。其余两种结论照常下发：
 ///
 /// - `Differs`：已登记的事件词表里没有「Agent 来源的用户输入事件」（`EndpointEvent` 不携带
@@ -298,7 +313,7 @@ fn user_echo_is_duplicate(
 
 /// 由派发上下文与一条用户输入回显的**原文**构造 [`UserEchoEvent`]。
 ///
-/// `link` 的全部固定字段来自**本次调用**的上下文（会话/首条/用户消息/请求/Agent 身份/资源代），
+/// `link` 的全部固定字段来自**本次调用**的上下文（会话/首条/用户消息/请求/turn/Agent 身份/资源代），
 /// `agent_message` 是 Agent 自己给这条回显的标识（不存在或不是本实现的 `MessageId` 形状时为 `None`；
 /// 它从不作为匹配依据）。内容数组与摘要与 [`acp_core::model::FirstSubmissionInput`] 同源口径：内容块
 /// 原文按顺序以 `,` 连接、外层加 `[...]`，摘要对同一份字节计算。
@@ -318,6 +333,7 @@ fn user_echo_event(
             first_submission: context.first_submission.clone(),
             user_message: context.user_message.clone(),
             request: context.request.clone(),
+            turn: context.turn.clone(),
             agent: context.agent.clone(),
             agent_session: context.agent_session.clone(),
             resource_generation: context.resource_generation,
@@ -908,15 +924,26 @@ pub fn permission_event(
             })
         })
         .collect();
+    let mut view = json!({
+        "interactionId": interaction_id.as_str(),
+        "title": tool_call.title.clone().unwrap_or_default(),
+        "description": tool_call.name.clone().unwrap_or_default(),
+        "options": options,
+        "toolCallId": tool_call.tool_call_id,
+    });
+    if let Some(kind) = &tool_call.kind {
+        view["toolKind"] = json!(kind);
+    }
+    attach_tool_detail(
+        &mut view,
+        tool_call.raw_input.as_ref(),
+        None,
+        tool_call.content.as_deref(),
+    );
     view_event(
         EventKind::Interaction,
         "permission.requested",
-        json!({
-            "interactionId": interaction_id.as_str(),
-            "title": tool_call.title.clone().unwrap_or_default(),
-            "description": tool_call.name.clone().unwrap_or_default(),
-            "options": options,
-        }),
+        view,
         acp,
         at,
     )
@@ -1018,6 +1045,32 @@ pub fn has_diff(content: &ToolCallContent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_carries_approval_context() {
+        let tool: ToolCallUpdate = serde_json::from_value(json!({
+            "toolCallId": "approval-tool", "kind": "execute", "title": "Check workspace",
+            "rawInput": { "command": "pwd", "cwd": "/workspace" },
+            "content": [{ "type": "content", "content": { "type": "text", "text": "Show working directory" } }]
+        }))
+        .expect("tool update");
+        let event = permission_event(
+            &acp_core::model::InteractionId::new("e0000000-0000-4000-8000-000000000501")
+                .expect("interaction"),
+            &tool,
+            &[],
+            None,
+            Timestamp::new("2026-10-24T00:00:00.000Z").expect("timestamp"),
+        )
+        .expect("permission event");
+        let view: Value = serde_json::from_str(event.payload.view.as_str()).expect("view");
+        assert_eq!(view["toolKind"], "execute");
+        assert_eq!(view["toolCallId"], "approval-tool");
+        assert_eq!(view["toolDetail"]["input"]["command"], "pwd");
+        assert_eq!(view["toolDetail"]["input"]["cwd"], "/workspace");
+        assert_eq!(view["toolDetail"]["text"][0], "Show working directory");
+        assert!(view["toolDetail"].get("output").is_none());
+    }
 
     /// 一段含 Diff 元素的 `session/update` 通知原文（**刻意保留原样的空白、转义与大整数字面量**：
     /// 切片必须来自它，而不是重新序列化的结果）。
@@ -1452,5 +1505,112 @@ mod tests {
             !view.to_string().contains("不可文本化"),
             "未识别 content 不得被文本化或透传进 toolDetail"
         );
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+    use acp_core::model::{InteractionId, OriginEpoch, PairingId, RequestId, SessionId, TurnId};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    struct Ids(AtomicU64);
+    impl IdGenerator for Ids {
+        fn message_id(&self) -> MessageId {
+            MessageId::new(&format!(
+                "00000000-0000-4000-8000-{:012}",
+                self.0.fetch_add(1, Ordering::Relaxed)
+            ))
+            .expect("id")
+        }
+        fn session_id(&self) -> SessionId {
+            unreachable!()
+        }
+        fn turn_id(&self) -> TurnId {
+            unreachable!()
+        }
+        fn interaction_id(&self) -> InteractionId {
+            unreachable!()
+        }
+        fn pairing_id(&self) -> PairingId {
+            unreachable!()
+        }
+        fn origin_epoch(&self) -> OriginEpoch {
+            unreachable!()
+        }
+        fn request_id(&self) -> RequestId {
+            unreachable!()
+        }
+    }
+    struct FixedClock;
+    impl Clock for FixedClock {
+        fn now(&self) -> Timestamp {
+            Timestamp::new("2026-10-24T00:00:00.000Z").expect("time")
+        }
+    }
+    fn send(
+        state: &mut UpdateState,
+        ids: &Ids,
+        kind: &str,
+        external: Option<&str>,
+    ) -> EndpointEvent {
+        let payload = if kind == "tool_call" {
+            json!({"sessionUpdate":kind,"toolCallId":"tool-1","title":"tool"})
+        } else {
+            let mut p = json!({"sessionUpdate":kind,"content":{"type":"text","text":"x"},"future":9007199254740993_u64});
+            if let Some(id) = external {
+                p["messageId"] = json!(id);
+            }
+            p
+        };
+        let raw = RawDocument::parse(payload.to_string()).expect("raw");
+        let update = SessionUpdate::decode(&payload).expect("update");
+        let event = update_events(&update, &raw, state, ids, &FixedClock, None)
+            .expect("mapped")
+            .remove(0);
+        assert_eq!(
+            event
+                .payload
+                .acp
+                .as_ref()
+                .expect("raw ACP")
+                .as_available()
+                .expect("available")
+                .1,
+            raw.as_str()
+        );
+        event
+    }
+    #[test]
+    fn fragments_preserve_interleaving_with_and_without_external_ids() {
+        for external in [Some("same-external-id"), None] {
+            let mut state = UpdateState::default();
+            let ids = Ids(AtomicU64::new(1));
+            let mut views = Vec::new();
+            for kind in [
+                "agent_thought_chunk",
+                "agent_thought_chunk",
+                "tool_call",
+                "agent_thought_chunk",
+                "agent_message_chunk",
+                "agent_thought_chunk",
+            ] {
+                let e = send(&mut state, &ids, kind, external);
+                if kind != "tool_call" {
+                    views.push(
+                        serde_json::from_str::<Value>(e.payload.view.as_str()).expect("view"),
+                    );
+                }
+            }
+            assert_eq!(views[0]["messageId"], views[1]["messageId"]);
+            assert_eq!(views[1]["deltaIndex"], "1");
+            for index in 2..views.len() {
+                assert_ne!(views[index - 1]["messageId"], views[index]["messageId"]);
+                assert_eq!(views[index]["deltaIndex"], "0");
+            }
+            state.interrupt(); // permission/terminal emitted outside session/update
+            let next = send(&mut state, &ids, "agent_thought_chunk", external);
+            let next: Value = serde_json::from_str(next.payload.view.as_str()).expect("view");
+            assert_ne!(next["messageId"], views.last().expect("last")["messageId"]);
+        }
     }
 }

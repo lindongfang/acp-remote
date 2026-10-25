@@ -226,6 +226,7 @@ impl Fixture {
                 idempotency: None,
                 command_terminal: None,
                 origin_epoch: Some(OriginEpoch::new(EPOCH).expect("epoch")),
+                input: None,
             })
             .await
             .expect("建立会话行");
@@ -257,6 +258,7 @@ impl Fixture {
                     idempotency: None,
                     command_terminal: None,
                     origin_epoch: None,
+                    input: None,
                 })
                 .await
                 .expect("登记工作目录根");
@@ -1661,6 +1663,7 @@ async fn unchanged_mode_without_a_title_keeps_it_and_still_advances_the_version(
         idempotency: None,
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     };
     fixture
         .store
@@ -1762,6 +1765,7 @@ async fn unchanged_mode_title_clear_writes_every_column_in_the_batch() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("写标题");
@@ -1794,6 +1798,7 @@ async fn unchanged_mode_title_clear_writes_every_column_in_the_batch() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("Unchanged 分支的显式置空必须提交成功");

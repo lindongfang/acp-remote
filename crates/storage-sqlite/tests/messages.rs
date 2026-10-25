@@ -66,6 +66,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create session")
@@ -128,6 +129,7 @@ fn commit(
         idempotency: None,
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     }
 }
 
@@ -138,6 +140,7 @@ async fn read_messages(
 ) -> acp_core::ports::HistoryPage {
     let view = store.read_view().await.expect("view");
     view.read_session(HistoryQuery {
+        origin_order: false,
         session: session.clone(),
         include: HistoryInclude {
             messages: true,
@@ -663,4 +666,338 @@ async fn retention_and_gc_respect_shared_message_references() {
     );
 
     store.close().await;
+}
+
+/// `conversation-reliability`：Agent 不回显的第二条输入，刷新/重新打开后仍完整可见。
+///
+/// 正文只来自受理事务写下的 `owned_message`（`channel='user'`），不依赖任何回显事件。
+#[tokio::test]
+async fn prompt_input_without_echo_remains_readable() {
+    let dir = temp_dir("messages-prompt-no-echo");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let turn = acp_core::model::TurnId::new("33333333-3333-4333-8333-000000000042").expect("turn");
+    let message =
+        acp_core::model::MessageId::new("40000000-0000-4000-8000-000000000042").expect("message");
+    let text = "第二条没有回显的输入";
+    let content = acp_core::model::FirstSubmissionInput::new(vec![
+        acp_core::model::PromptContentBlock::from_json_text(
+            &serde_json::json!({"type": "text", "text": text}).to_string(),
+        )
+        .expect("block"),
+    ])
+    .expect("input");
+    let request =
+        acp_core::model::RequestId::new("66666666-6666-4666-8666-000000000042").expect("request");
+    store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at("2026-09-19"),
+            expected_version: None,
+            state: None,
+            turns: vec![acp_core::ports::TurnChange::Create(
+                acp_core::ports::NewTurn {
+                    turn: turn.clone(),
+                    state: acp_core::model::TurnState::Running,
+                    causation: Some(request.clone()),
+                    started_at: None,
+                },
+            )],
+            events: vec![event(
+                EventKind::State,
+                "turn.queued",
+                r#"{"state":"queued"}"#,
+                Some(turn.clone()),
+                &at("2026-09-19"),
+            )],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(acp_core::ports::IdempotencyRecord {
+                actor: acp_core::model::Actor::Device {
+                    device: DeviceId::new(DEVICE).expect("device"),
+                },
+                request: request.clone(),
+                command: "session.prompt".to_owned(),
+                kind: acp_core::model::CommandKind::Mutation,
+                session: Some(session.clone()),
+                expected_version: None,
+                request_fingerprint: Digest::new(&digest_text("no-echo-request")).expect("digest"),
+                accepted_at: at("2026-09-19"),
+            }),
+            command_terminal: None,
+            origin_epoch: Some(epoch()),
+            input: Some(acp_core::model::UserInputWrite {
+                message: message.clone(),
+                session: session.clone(),
+                turn: turn.clone(),
+                request,
+                content: content.clone(),
+                at: at("2026-09-19"),
+            }),
+        })
+        .await
+        .expect("commit input");
+    store.close().await;
+
+    // 进程重启后重新打开：没有 Agent 回显也能完整读回。
+    let reopened = open_store(&dir).await;
+    let page = read_messages(&reopened, &session, false).await;
+    assert_eq!(page.messages.len(), 1, "恰好一条用户消息");
+    let stored = &page.messages[0];
+    assert_eq!(stored.message, message);
+    assert_eq!(stored.channel, MessageChannel::User);
+    assert_eq!(stored.turn, Some(turn));
+    assert_eq!(stored.content.as_str(), content.json().as_str());
+    assert!(stored.media.is_empty());
+    reopened.close().await;
+}
+
+#[tokio::test]
+async fn durable_positions_survive_same_millisecond_reverse_ids_clock_rollback_and_cleanup() {
+    let dir = temp_dir("messages-real-order");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let t = turn(1);
+    let ids = [message(90), message(10), message(80), message(1)];
+    store
+        .commit(commit(
+            &session,
+            &at("2026-09-19"),
+            vec![
+                thought_delta(&t, &ids[0], "thought A"),
+                reply_delta(&t, &ids[1], "reply A"),
+                thought_delta(&t, &ids[2], "thought B"),
+            ],
+            Vec::new(),
+        ))
+        .await
+        .expect("ordered batch");
+    store
+        .commit(commit(
+            &session,
+            &at("2026-09-18"),
+            vec![reply_delta(&turn(2), &ids[3], "clock rollback")],
+            Vec::new(),
+        ))
+        .await
+        .expect("later output with older clock");
+    let page = read_messages(&store, &session, false).await;
+    assert_eq!(
+        page.messages
+            .iter()
+            .map(|m| m.message.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    let positions: Vec<_> = page
+        .messages
+        .iter()
+        .map(|m| m.first_sequence.expect("position").get())
+        .collect();
+    assert!(positions.windows(2).all(|w| w[0] < w[1]));
+    let mut q = HistoryQuery {
+        origin_order: false,
+        session: session.clone(),
+        include: HistoryInclude {
+            messages: true,
+            ..HistoryInclude::default()
+        },
+        after: None,
+        before_history: None,
+        before_messages: None,
+        messages_limit: ReplayLimit::new(2),
+        limit: ReplayLimit::new(0),
+    };
+    let view = store.read_view().await.expect("view");
+    let latest = view.read_session(q.clone()).await.expect("latest");
+    let boundary = &latest.messages[0];
+    q.before_messages = Some(acp_core::ports::MessageCursor {
+        sequence: boundary.first_sequence,
+        created_at: boundary.created_at.clone(),
+        message_id: boundary.message.clone(),
+    });
+    let earlier = view.read_session(q).await.expect("earlier");
+    assert_eq!(
+        earlier
+            .messages
+            .iter()
+            .chain(latest.messages.iter())
+            .map(|m| m.message.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    drop(view);
+    store.close().await;
+    let pool = raw_write_pool(&dir.join("acp-remote.sqlite3")).await;
+    sqlx::query("DELETE FROM owned_event WHERE session_id=?1")
+        .bind(session.as_str())
+        .execute(&pool)
+        .await
+        .expect("delta cleanup");
+    pool.close().await;
+    let reopened = open_store(&dir).await;
+    let page = read_messages(&reopened, &session, false).await;
+    assert_eq!(
+        page.messages
+            .iter()
+            .map(|m| m.first_sequence.expect("retained").get())
+            .collect::<Vec<_>>(),
+        positions
+    );
+    assert_eq!(
+        page.messages
+            .iter()
+            .map(|m| m.message.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    reopened.close().await;
+}
+
+#[tokio::test]
+async fn v18_migration_recovers_only_proven_continuous_legacy_fragments() {
+    let dir = temp_dir("messages-order-migration");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let t = turn(1);
+    let safe = message(10);
+    let crossed = message(20);
+    store
+        .commit(commit(
+            &session,
+            &at("2026-09-18"),
+            vec![
+                reply_delta(&t, &safe, "safe"),
+                thought_delta(&t, &crossed, "A"),
+                event(
+                    EventKind::Structured,
+                    "tool.call.started",
+                    r#"{"toolCallId":"tool","title":"tool","state":"pending"}"#,
+                    Some(t.clone()),
+                    &at("2026-09-18"),
+                ),
+                event(
+                    EventKind::Delta,
+                    "agent.thought.delta",
+                    &format!(
+                        r#"{{"messageId":"{}","deltaIndex":"1","text":"B"}}"#,
+                        crossed.as_str()
+                    ),
+                    Some(t.clone()),
+                    &at("2026-09-18"),
+                ),
+            ],
+            Vec::new(),
+        ))
+        .await
+        .expect("legacy events");
+    store.close().await;
+    let pool = raw_write_pool(&dir.join("acp-remote.sqlite3")).await;
+    sqlx::raw_sql("DROP INDEX owned_message_order; DROP INDEX owned_message_origin_order; ALTER TABLE owned_message DROP COLUMN first_sequence; ALTER TABLE owned_message DROP COLUMN first_origin_sequence; PRAGMA user_version=17; UPDATE meta SET value='17' WHERE key='owned_schema_version';").execute(&pool).await.expect("v17 copy");
+    pool.close().await;
+    let migrated = open_store(&dir).await;
+    let page = read_messages(&migrated, &session, false).await;
+    assert!(
+        page.messages
+            .iter()
+            .find(|m| m.message == safe)
+            .expect("safe body")
+            .first_sequence
+            .is_some()
+    );
+    let unknown = page
+        .messages
+        .iter()
+        .find(|m| m.message == crossed)
+        .expect("crossed body");
+    assert!(unknown.first_sequence.is_none());
+    assert!(unknown.content.as_str().contains("B"));
+    migrated.close().await;
+    let again = open_store(&dir).await;
+    let after = read_messages(&again, &session, false).await;
+    assert_eq!(page.messages, after.messages);
+    again.close().await;
+}
+
+#[tokio::test]
+async fn tool_update_keeps_initial_position_when_start_is_outside_the_history_page_or_removed() {
+    let dir = temp_dir("messages-tool-anchor");
+    let store = open_store(&dir).await;
+    let session = create_session(&store).await;
+    let t = turn(1);
+    store
+        .commit(commit(
+            &session,
+            &at("2026-09-18"),
+            vec![
+                event(
+                    EventKind::Structured,
+                    "tool.call.started",
+                    r#"{"toolCallId":"tool","title":"tool","state":"pending"}"#,
+                    Some(t.clone()),
+                    &at("2026-09-18"),
+                ),
+                reply_delta(&t, &message(1), "reply"),
+                event(
+                    EventKind::Structured,
+                    "tool.call.completed",
+                    r#"{"toolCallId":"tool","title":"tool","state":"completed"}"#,
+                    Some(t),
+                    &at("2026-09-18"),
+                ),
+            ],
+            Vec::new(),
+        ))
+        .await
+        .expect("events");
+    let query = HistoryQuery {
+        origin_order: false,
+        session: session.clone(),
+        include: HistoryInclude {
+            history: true,
+            ..HistoryInclude::default()
+        },
+        after: None,
+        before_history: None,
+        before_messages: None,
+        messages_limit: ReplayLimit::new(0),
+        limit: ReplayLimit::new(1),
+    };
+    let view = store.read_view().await.expect("view");
+    let page = view
+        .read_session(query.clone())
+        .await
+        .expect("latest history");
+    assert_eq!(page.history.len(), 1);
+    let e = &page.history[0];
+    let projected: serde_json::Value =
+        serde_json::from_str(e.payload.view.as_str()).expect("projected");
+    let initial = projected["_timelineSequence"]
+        .as_str()
+        .expect("anchor")
+        .parse::<u64>()
+        .expect("position");
+    assert!(initial < e.event.session_sequence.expect("update position").get());
+    drop(view);
+    store.close().await;
+    let pool = raw_write_pool(&dir.join("acp-remote.sqlite3")).await;
+    let stored:String=sqlx::query_scalar("SELECT payload_json FROM owned_event WHERE session_id=?1 AND event_type='tool.call.completed'").bind(session.as_str()).fetch_one(&pool).await.expect("stored original");
+    assert!(!stored.contains("_timelineSequence"));
+    sqlx::query("DELETE FROM owned_event WHERE session_id=?1 AND event_type='tool.call.started'")
+        .bind(session.as_str())
+        .execute(&pool)
+        .await
+        .expect("clean old start");
+    pool.close().await;
+    let reopened = open_store(&dir).await;
+    let view = reopened.read_view().await.expect("view");
+    let page = view
+        .read_session(query)
+        .await
+        .expect("history after cleanup");
+    let projected: serde_json::Value =
+        serde_json::from_str(page.history[0].payload.view.as_str()).expect("projected");
+    assert_eq!(projected["_timelineSequence"], initial.to_string());
+    drop(view);
+    reopened.close().await;
 }

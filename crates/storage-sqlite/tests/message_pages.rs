@@ -50,6 +50,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("create session")
@@ -82,6 +83,7 @@ async fn insert_message(
 
 fn page_query(session: &SessionId, before: Option<MessageCursor>, limit: u32) -> HistoryQuery {
     HistoryQuery {
+        origin_order: false,
         session: session.clone(),
         include: HistoryInclude {
             messages: true,
@@ -124,6 +126,7 @@ async fn message_pages_use_the_composite_cursor_without_gaps_or_duplicates() {
     assert!(first.messages_has_earlier);
 
     let cursor = MessageCursor {
+        sequence: None,
         created_at: first.messages[0].created_at.clone(),
         message_id: first.messages[0].message.clone(),
     };
@@ -143,6 +146,7 @@ async fn message_pages_use_the_composite_cursor_without_gaps_or_duplicates() {
     assert!(second.messages_has_earlier);
 
     let cursor = MessageCursor {
+        sequence: None,
         created_at: second.messages[0].created_at.clone(),
         message_id: second.messages[0].message.clone(),
     };
@@ -218,6 +222,7 @@ async fn media_references_are_scoped_to_the_returned_message_page() {
     assert_eq!(latest.messages[0].media[0].attachment(), &attachment.id);
 
     let cursor = MessageCursor {
+        sequence: None,
         created_at: latest.messages[0].created_at.clone(),
         message_id: latest.messages[0].message.clone(),
     };

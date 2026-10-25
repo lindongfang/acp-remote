@@ -1,7 +1,7 @@
 {
   "$schema": "../../../schemas/acp/compatibility-matrix.schema.json",
   "schemaVersion": 1,
-  "revision": "2026-10-22",
+  "revision": "2026-10-24",
   "protocol": {
     "name": "ACP",
     "wireVersion": 1,
@@ -62,8 +62,8 @@
   ],
   "sessionUpdates": [
     { "id": "update.user_message_chunk", "wireValue": "user_message_chunk", "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "wire.raw_roundtrip", "storage.replay", "client.presentation"] },
-    { "id": "update.agent_message_chunk", "wireValue": "agent_message_chunk", "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "wire.raw_roundtrip", "storage.replay", "client.presentation"] },
-    { "id": "update.agent_thought_chunk", "wireValue": "agent_thought_chunk", "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "wire.raw_roundtrip", "storage.replay", "client.presentation"] },
+    { "id": "update.agent_message_chunk", "wireValue": "agent_message_chunk", "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["broker.semantic", "wire.decode_encode", "wire.raw_roundtrip", "storage.replay", "client.presentation"] },
+    { "id": "update.agent_thought_chunk", "wireValue": "agent_thought_chunk", "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["broker.semantic", "wire.decode_encode", "wire.raw_roundtrip", "storage.replay", "client.presentation"] },
     { "id": "update.tool_call", "wireValue": "tool_call", "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "wire.raw_roundtrip", "broker.semantic", "storage.replay", "client.presentation"] },
     { "id": "update.tool_call_update", "wireValue": "tool_call_update", "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "wire.raw_roundtrip", "broker.semantic", "storage.replay", "client.presentation"] },
     { "id": "update.plan", "wireValue": "plan", "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "wire.raw_roundtrip", "storage.replay", "client.presentation"] },

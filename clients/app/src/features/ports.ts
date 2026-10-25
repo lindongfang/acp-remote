@@ -266,6 +266,19 @@ export interface PreparationDraftAccess {
   readonly instanceId: string;
 }
 
+/**
+ * 本标签页在 sessionStorage 里的**非敏感**定位（结构镜像）。
+ *
+ * 只用于刷新/重新挂载后找回唯一准备槽位：不含正文、凭据、配置或附件字节。
+ */
+export interface PreparationTabLocatorSnapshot {
+  readonly canonicalOrigin: string;
+  readonly ownerNodeId: string;
+  readonly deviceId: string;
+  readonly tabSlotId: string;
+  readonly sessionId: string;
+}
+
 /** `beginTab` 的结果（只保留 feature 层用到的两支）。 */
 export type PreparationTabBeginResult =
   | {
@@ -304,6 +317,14 @@ export type PreparationDraftLoadResult =
 
 /** 浏览器准备草稿端口（组合根注入；缺省时准备流程只保留内存草稿并如实说明）。 */
 export interface PreparationDraftGateway {
+  /**
+   * 读本标签页的非敏感定位。
+   *
+   * 刷新后 feature 层据此找回唯一准备槽位的 `sessionId`；没有定位时不猜任何会话。
+   */
+  readTabLocator(): Promise<PreparationTabLocatorSnapshot | null>;
+  /** 清掉本标签页定位（显式放弃/身份失效）；不删除草稿记录本身。 */
+  clearTabLocator(): Promise<void>;
   beginTab(input: {
     readonly scope: PreparationDraftScope;
     readonly nowMs: number;
@@ -341,7 +362,7 @@ export interface PreparationDraftGateway {
   invalidateDraft(input: {
     readonly access: PreparationDraftAccess;
     readonly expectedRevision: number | null;
-    readonly reason: "navigation" | "agent_changed" | "directory_changed" | "replaced";
+    readonly reason: "navigation" | "agent_changed" | "directory_changed" | "replaced" | "abandoned";
     readonly nowMs: number;
   }): Promise<{ readonly revision: number }>;
   releaseTab(input: {

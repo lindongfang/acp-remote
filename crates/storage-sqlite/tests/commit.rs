@@ -4,9 +4,10 @@ mod support;
 
 use acp_core::model::{
     Actor, AgentId, AgentRef, CommandKind, CommandResult, CommandStatus, CommandTerminalRecord,
-    ConflictKind, Digest, EntityRef, EventKind, EventOrigin, EventType, InteractionId,
-    OriginCursor, OriginEpoch, PendingEvent, PortError, PublicError, RequestId, Sequence,
-    SessionId, SessionState, StoredPolicy, Timestamp, TurnId, TurnState, ViewJson,
+    ConflictKind, Digest, EntityRef, EventKind, EventOrigin, EventType, FirstSubmissionInput,
+    InteractionId, MessageChannel, MessageId, OriginCursor, OriginEpoch, PendingEvent, PortError,
+    PromptContentBlock, PublicError, RequestId, Sequence, SessionId, SessionState, StoredPolicy,
+    Timestamp, TurnId, TurnState, UserInputWrite, ViewJson,
 };
 use acp_core::ports::{
     HistoryInclude, HistoryQuery, IdempotencyRecord, ModeChange, NewTurn, OwnedCommit, ReplayLimit,
@@ -88,6 +89,7 @@ fn create_session(title: &str) -> OwnedCommit {
         idempotency: None,
         command_terminal: None,
         origin_epoch: Some(origin_epoch()),
+        input: None,
     }
 }
 
@@ -156,6 +158,7 @@ async fn commit_writes_state_turns_events_and_terminal_in_one_transaction() {
         idempotency: Some(idempotency(REQUEST, "request-one", Some(session.clone()))),
         command_terminal: None,
         origin_epoch: Some(origin_epoch()),
+        input: None,
     };
     let first = store.commit(commit.clone()).await.expect("commit");
     assert_eq!(first.version, acp_core::model::Version::new(2));
@@ -289,6 +292,7 @@ async fn failed_commit_rolls_back_every_row() {
         idempotency: Some(idempotency(REQUEST_OTHER, "request-two", Some(session))),
         command_terminal: None,
         origin_epoch: Some(origin_epoch()),
+        input: None,
     };
     let error = store
         .commit(failing)
@@ -332,6 +336,7 @@ async fn idempotency_conflicts_are_detected() {
         idempotency: Some(idempotency(REQUEST, "request-one", Some(session.clone()))),
         command_terminal: None,
         origin_epoch: Some(origin_epoch()),
+        input: None,
     };
     store.commit(commit.clone()).await.expect("accept");
 
@@ -404,6 +409,7 @@ async fn terminal_commit_completes_the_accepted_command() {
             idempotency: Some(idempotency(REQUEST, "request-one", Some(session.clone()))),
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("accept");
@@ -436,6 +442,7 @@ async fn terminal_commit_completes_the_accepted_command() {
             idempotency: None,
             command_terminal: Some(terminal),
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("terminal");
@@ -501,6 +508,7 @@ async fn terminal_commit_completes_the_accepted_command() {
                 .expect("terminal"),
             ),
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("duplicate terminal");
@@ -550,6 +558,7 @@ async fn terminal_for_unknown_request_is_not_found() {
                 .expect("terminal"),
             ),
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect_err("missing command");
@@ -592,6 +601,7 @@ async fn sequences_are_dense_and_global_sequence_covers_node_events() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("session events");
@@ -615,6 +625,7 @@ async fn sequences_are_dense_and_global_sequence_covers_node_events() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("node event");
@@ -698,6 +709,7 @@ async fn payload_digest_is_the_cj1_digest_of_the_stored_payload() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("commit");
@@ -769,6 +781,7 @@ async fn non_canonical_payload_is_rejected_without_writing() {
                 idempotency: None,
                 command_terminal: None,
                 origin_epoch: Some(origin_epoch()),
+                input: None,
             })
             .await
             .expect_err("a non-canonical view must be rejected");
@@ -851,6 +864,7 @@ async fn interaction_resolution_is_first_writer_wins() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("first writer wins");
@@ -868,6 +882,7 @@ async fn interaction_resolution_is_first_writer_wins() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect_err("second writer must be rejected");
@@ -938,6 +953,7 @@ async fn interaction_resolution_is_first_writer_wins() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect_err("unknown interaction");
@@ -982,6 +998,7 @@ async fn terminal_turn_expires_only_its_own_unresolved_interactions() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("two running turns");
@@ -1050,6 +1067,7 @@ async fn terminal_turn_expires_only_its_own_unresolved_interactions() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("terminal turn");
@@ -1109,6 +1127,7 @@ async fn references_are_intact() {
             idempotency: Some(idempotency(REQUEST, "request-one", Some(session.clone()))),
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("commit");
@@ -1178,6 +1197,7 @@ async fn integrity_check_is_ok_after_normal_writes() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("commit");
@@ -1268,6 +1288,7 @@ async fn crash_child() {
             idempotency: Some(idempotency(REQUEST, "request-one", Some(session.clone()))),
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("accept");
@@ -1298,6 +1319,7 @@ async fn crash_child() {
                 .expect("terminal"),
             ),
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("terminal");
@@ -1337,6 +1359,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect("update");
@@ -1375,6 +1398,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch()),
+            input: None,
         })
         .await
         .expect_err("stale version");
@@ -1407,6 +1431,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect_err("missing session");
@@ -1424,6 +1449,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
     let view = store.read_view().await.expect("read view");
     let page = view
         .read_session(HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: HistoryInclude {
                 messages: true,
@@ -1505,6 +1531,7 @@ async fn node_link_slice_returns_origin_events_and_pending_interactions() {
             idempotency: Some(idempotency(REQUEST, "slice", None)),
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("commit events");
@@ -1656,6 +1683,7 @@ async fn expected_version_is_part_of_the_idempotency_check() {
         )),
         command_terminal: None,
         origin_epoch: Some(origin_epoch()),
+        input: None,
     };
     store.commit(accepted.clone()).await.expect("accept");
 
@@ -1713,6 +1741,7 @@ async fn session_create_persists_its_idempotency_row_and_terminal() {
                 request_fingerprint: fingerprint("create-a"),
                 accepted_at: at(0),
             }),
+            input: None,
             ..create_session("create")
         })
         .await
@@ -1758,6 +1787,7 @@ async fn session_create_persists_its_idempotency_row_and_terminal() {
                 .expect("terminal record"),
             ),
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("terminal");
@@ -1803,6 +1833,7 @@ async fn session_create_persists_its_idempotency_row_and_terminal() {
                 request_fingerprint: fingerprint("create-a"),
                 accepted_at: at(2),
             }),
+            input: None,
             ..create_session("replay")
         })
         .await
@@ -1834,6 +1865,7 @@ async fn session_create_persists_its_idempotency_row_and_terminal() {
                 request_fingerprint: fingerprint("create-b"),
                 accepted_at: at(2),
             }),
+            input: None,
             ..create_session("conflict")
         })
         .await
@@ -1870,6 +1902,7 @@ async fn session_create_crash_window_is_visible_to_startup_recovery() {
                 request_fingerprint: fingerprint("create-a"),
                 accepted_at: at(0),
             }),
+            input: None,
             ..create_session("crash")
         })
         .await
@@ -2083,4 +2116,190 @@ async fn workspace_mkdir_same_request_across_actors_settles_and_recovers_after_r
             .expect("command");
         assert_eq!(command.terminal_event(), Some(&event.event.id));
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// `conversation-reliability` §3.11/§5.2：普通输入受理的原子写集与幂等回放。
+// ---------------------------------------------------------------------------------------------
+
+fn user_content(text: &str) -> FirstSubmissionInput {
+    FirstSubmissionInput::new(vec![
+        PromptContentBlock::from_json_text(&format!(
+            r#"{{"type":"text","text":{}}}"#,
+            serde_json::to_string(text).expect("json string")
+        ))
+        .expect("block"),
+    ])
+    .expect("input")
+}
+
+fn input_commit(
+    session: &SessionId,
+    request_text: &str,
+    message: MessageId,
+    turn: TurnId,
+    text: &str,
+) -> OwnedCommit {
+    let content = user_content(text);
+    OwnedCommit {
+        session: Some(session.clone()),
+        at: at(2),
+        expected_version: None,
+        state: None,
+        turns: vec![TurnChange::Create(NewTurn {
+            turn: turn.clone(),
+            state: TurnState::Queued,
+            causation: Some(request(request_text)),
+            started_at: None,
+        })],
+        events: vec![
+            PendingEvent::new(
+                EventKind::Delta,
+                EventType::new("user.message.delta").expect("event type"),
+                StoredPolicy::ShortTerm,
+                acp_core::model::EventPayload::new(
+                    ViewJson::new(r#"{"deltaIndex":"0"}"#).expect("view"),
+                    None,
+                ),
+                EventOrigin::Device,
+                Some(turn.clone()),
+                Some(request(request_text)),
+            ),
+            event(
+                EventKind::State,
+                "turn.queued",
+                r#"{"state":"queued"}"#,
+                Some(request(request_text)),
+            ),
+        ],
+        interactions: Vec::new(),
+        compacted: Vec::new(),
+        idempotency: Some(IdempotencyRecord {
+            actor: actor(),
+            request: request(request_text),
+            command: "session.prompt".to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(session.clone()),
+            expected_version: None,
+            request_fingerprint: fingerprint(request_text),
+            accepted_at: at(2),
+        }),
+        command_terminal: None,
+        origin_epoch: Some(origin_epoch()),
+        input: Some(UserInputWrite {
+            message,
+            session: session.clone(),
+            turn,
+            request: request(request_text),
+            content,
+            at: at(2),
+        }),
+    }
+}
+
+/// 普通输入与幂等行、turn、事件在同一个事务里；同一请求的重试只回读首次事实，不写第二条消息。
+#[tokio::test]
+async fn prompt_input_is_written_in_one_transaction_and_replayed_once() {
+    let dir = temp_dir("commit-prompt-input");
+    let store = store(&dir).await;
+    let session = store
+        .commit(create_session("prompt-input"))
+        .await
+        .expect("session")
+        .session_id
+        .expect("session id");
+
+    let message = MessageId::new("aaaaaaaa-0000-4000-8000-000000000001").expect("message");
+    let turn = TurnId::new("aaaaaaaa-0000-4000-8000-000000000002").expect("turn");
+    let commit = input_commit(
+        &session,
+        "11111111-aaaa-4111-8111-111111111111",
+        message.clone(),
+        turn.clone(),
+        "继续",
+    );
+
+    let first = store.commit(commit.clone()).await.expect("commit");
+    assert!(first.replayed.is_none());
+    let accepted = first.accepted_input.clone().expect("accepted input");
+    assert_eq!(accepted.message, message);
+    assert_eq!(accepted.turn, turn);
+
+    // 失败注入：本提交的 turn 合法，但用户消息标识与既有行冲突（真实事务里最后一步写消息）。
+    // 整事务必须回滚：不得留下这条新 turn、幂等行或事件。
+    let broken_turn = TurnId::new("33333333-aaaa-4333-8333-333333333333").expect("turn");
+    let broken = input_commit(
+        &session,
+        "22222222-aaaa-4222-8222-222222222222",
+        message.clone(),
+        broken_turn.clone(),
+        "继续",
+    );
+    let error = store.commit(broken).await.expect_err("duplicate message");
+    assert!(
+        !matches!(error, PortError::InvalidRequest(_)),
+        "这是存储层写失败而不是形状校验：{error}"
+    );
+
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_message").await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_user_input").await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_turn").await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_command").await,
+        1
+    );
+    pool.close().await;
+
+    // 同一 requestId 重试：幂等回放返回首次受理事实，不写第二条消息、不新增 turn。
+    let replay = store.commit(commit).await.expect("replay");
+    assert!(replay.replayed.is_some());
+    assert_eq!(replay.accepted_input, Some(accepted));
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_message").await,
+        1,
+        "重试不得写第二条消息"
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_user_input").await,
+        1
+    );
+    pool.close().await;
+
+    // 正式读回：恰好一条用户消息，正文是完整内容（不依赖回显）。
+    let page = store
+        .read_view()
+        .await
+        .expect("view")
+        .read_session(HistoryQuery {
+            origin_order: false,
+            session: session.clone(),
+            include: HistoryInclude {
+                messages: true,
+                ..HistoryInclude::default()
+            },
+            after: None,
+            before_history: None,
+            before_messages: None,
+            messages_limit: ReplayLimit::new(10),
+            limit: ReplayLimit::new(10),
+        })
+        .await
+        .expect("read");
+    assert_eq!(page.messages.len(), 1);
+    assert_eq!(page.messages[0].channel, MessageChannel::User);
+    assert_eq!(
+        page.messages[0].content.as_str(),
+        user_content("继续").json().as_str()
+    );
 }

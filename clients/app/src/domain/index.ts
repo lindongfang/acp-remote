@@ -112,6 +112,7 @@ export {
   FILE_DIFF_UNAVAILABLE_LABELS,
   buildTimelineCard,
   compareTimelinePosition,
+  compareRecordOrder,
   groupStructuredRecords,
   mergeStructuredRecords,
   positionOf,

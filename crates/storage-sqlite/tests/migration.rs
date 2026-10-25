@@ -88,6 +88,7 @@ fn create_session(title: &str) -> OwnedCommit {
         idempotency: None,
         command_terminal: None,
         origin_epoch: Some(OriginEpoch::new(FIXTURE_EPOCH).expect("origin epoch")),
+        input: None,
     }
 }
 
@@ -1584,6 +1585,7 @@ async fn v14_database_gains_a_null_custom_title_and_stays_writable() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("an upgraded database must stay writable");
@@ -1649,7 +1651,7 @@ async fn v14_database_gains_a_null_custom_title_and_stays_writable() {
 
 /// v16 段在 migration 的同一事务里：后续步骤失败必须整体回滚（v15 列不存在、版本仍是 14）。
 ///
-/// 手法：把 `meta` 换成拒绝写入 `'16'` 的形状（`CHECK (value <> '16')`），使事务末尾的
+/// 手法：把 `meta` 换成拒绝写入 `'17'` 的形状（`CHECK (value <> '18')`），使事务末尾的
 /// `mark_schema_versions` 失败；`ALTER TABLE ... ADD COLUMN custom_title` 必须随事务一起回滚。
 #[tokio::test]
 async fn a_failed_v15_upgrade_rolls_back_the_added_column() {
@@ -1669,9 +1671,10 @@ async fn a_failed_v15_upgrade_rolls_back_the_added_column() {
         .execute(&pool)
         .await
         .expect("park the current meta table");
-    sqlx::query(
-        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL CHECK (value <> '16')) STRICT",
-    )
+    sqlx::query(&format!(
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL CHECK (value <> '{}')) STRICT",
+        storage_sqlite::migrate::OWNED_SCHEMA_VERSION,
+    ))
     .execute(&pool)
     .await
     .expect("install a meta table that rejects the v15 version write");
@@ -1771,6 +1774,7 @@ async fn recovery_columns_round_trip_and_are_not_rewritten_by_the_resume_flow() 
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("write the recovery columns");
@@ -1832,6 +1836,7 @@ async fn recovery_columns_round_trip_and_are_not_rewritten_by_the_resume_flow() 
             }),
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("write the resume accepted row");
@@ -2098,6 +2103,7 @@ async fn corrupt_database_fails_closed() {
                     idempotency: None,
                     command_terminal: None,
                     origin_epoch: None,
+                    input: None,
                 })
                 .await
                 .expect_err("write paths must be refused in fail-closed mode");

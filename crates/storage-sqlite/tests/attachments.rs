@@ -42,6 +42,7 @@ async fn session(store: &SqliteStore) -> acp_core::model::SessionId {
                 acp_core::model::OriginEpoch::new("6f2a1f8e-7b1c-4a8f-9b0d-1c2d3e4f5a6b")
                     .expect("epoch"),
             ),
+            input: None,
         })
         .await
         .expect("create session")
@@ -304,4 +305,306 @@ async fn sweep_orphans_only_removes_stale_untracked_files() {
     );
     assert!(!orphan_a.exists(), "the oldest-name orphan goes first");
     store.close().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// `conversation-reliability` §2.1：带附件的普通输入与受理写集同事务。
+// ---------------------------------------------------------------------------------------------
+
+use acp_core::model::{
+    Actor, AttachmentId, AttachmentSubject, CommandKind, DeviceId, Digest, EventKind, EventOrigin,
+    EventPayload, EventType, FirstSubmissionInput, MessageId, PendingEvent, PromptContentBlock,
+    RequestId, StoredPolicy, SubmissionId, TurnId, ViewJson,
+};
+use acp_core::ports::{
+    AttachmentTransferStore, IdempotencyRecord, NewTurn, OwnedCommit, SubmissionBegin,
+    SubmissionBinding, SubmissionPage, SubmissionSeal, TransferBegin, TransferChunk, TransferSeal,
+    TurnChange,
+};
+
+fn user_device() -> DeviceId {
+    DeviceId::new("55555555-5555-4555-8555-000000000088").expect("device")
+}
+
+fn input_actor() -> Actor {
+    Actor::Device {
+        device: user_device(),
+    }
+}
+
+fn input_subject() -> AttachmentSubject {
+    AttachmentSubject::Device(user_device())
+}
+
+fn digest_of(data: &[u8]) -> Digest {
+    Digest::new(&digest_text(&String::from_utf8_lossy(data))).expect("digest")
+}
+
+fn manifest_digest(attachments: &[AttachmentId]) -> Digest {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha256::new();
+    for attachment in attachments {
+        let bytes = attachment.as_str().as_bytes();
+        hasher.update((bytes.len() as u32).to_be_bytes());
+        hasher.update(bytes);
+    }
+    Digest::new(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize()))
+        .expect("digest")
+}
+
+async fn seal_attachment(
+    store: &SqliteStore,
+    session: &acp_core::model::SessionId,
+) -> AttachmentId {
+    let data = b"report";
+    let transfer = AttachmentId::new("70000000-0000-4000-8000-000000000088").expect("id");
+    store
+        .begin_transfer(TransferBegin {
+            transfer: transfer.clone(),
+            session: session.clone(),
+            subject: input_subject(),
+            total_length: data.len() as u64,
+            media_type: "text/plain".to_owned(),
+            file_name: "report.txt".to_owned(),
+            at: at(1),
+        })
+        .await
+        .expect("begin transfer");
+    store
+        .append_chunk(TransferChunk {
+            transfer: transfer.clone(),
+            offset: 0,
+            data: data.to_vec(),
+            at: at(1),
+        })
+        .await
+        .expect("append");
+    store
+        .seal_transfer(TransferSeal {
+            transfer,
+            length: data.len() as u64,
+            sha256: digest_of(data),
+            at: at(1),
+        })
+        .await
+        .expect("seal")
+        .attachment
+}
+
+async fn seal_submission(
+    store: &SqliteStore,
+    session: &acp_core::model::SessionId,
+    submission: &SubmissionId,
+    attachments: &[AttachmentId],
+) {
+    store
+        .begin_submission(SubmissionBegin {
+            submission: submission.clone(),
+            session: session.clone(),
+            subject: input_subject(),
+            attachment_count: attachments.len() as u64,
+            at: at(1),
+        })
+        .await
+        .expect("begin submission");
+    store
+        .append_submission_page(SubmissionPage {
+            submission: submission.clone(),
+            start_position: 0,
+            attachments: attachments.to_vec(),
+            at: at(1),
+        })
+        .await
+        .expect("page");
+    store
+        .finalize_submission(SubmissionSeal {
+            submission: submission.clone(),
+            session: session.clone(),
+            subject: input_subject(),
+            attachments: attachments.to_vec(),
+            digest: manifest_digest(attachments),
+            at: at(1),
+        })
+        .await
+        .expect("finalize");
+}
+
+fn prompt_input(
+    session: &acp_core::model::SessionId,
+    message: &MessageId,
+    turn: &TurnId,
+    request: &RequestId,
+    attachment: &AttachmentId,
+    declared_media_type: &str,
+) -> (OwnedCommit, SubmissionBinding) {
+    let content = FirstSubmissionInput::new(vec![
+        PromptContentBlock::from_json_text(r#"{"type":"text","text":"请看附件"}"#)
+            .expect("text block"),
+        PromptContentBlock::from_json_text(
+            &serde_json::json!({
+                "type": "attachment_ref",
+                "attachmentId": attachment.as_str(),
+                "mediaType": declared_media_type,
+                "byteLength": "6",
+            })
+            .to_string(),
+        )
+        .expect("attachment block"),
+    ])
+    .expect("input");
+    let binding = SubmissionBinding {
+        submission: SubmissionId::new("80000000-0000-4000-8000-000000000088").expect("submission"),
+        attachments: vec![attachment.clone()],
+        subject: input_subject(),
+    };
+    (
+        OwnedCommit {
+            session: Some(session.clone()),
+            at: at(2),
+            expected_version: None,
+            state: None,
+            turns: vec![TurnChange::Create(NewTurn {
+                turn: turn.clone(),
+                state: acp_core::model::TurnState::Queued,
+                causation: Some(request.clone()),
+                started_at: None,
+            })],
+            events: vec![PendingEvent::new(
+                EventKind::Delta,
+                EventType::new("user.message.delta").expect("event type"),
+                StoredPolicy::ShortTerm,
+                EventPayload::new(
+                    ViewJson::new(r#"{"deltaIndex":"0","text":"请看附件"}"#).expect("view"),
+                    None,
+                ),
+                EventOrigin::Device,
+                Some(turn.clone()),
+                Some(request.clone()),
+            )],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: input_actor(),
+                request: request.clone(),
+                command: "session.prompt".to_owned(),
+                kind: CommandKind::Mutation,
+                session: Some(session.clone()),
+                expected_version: None,
+                request_fingerprint: Digest::new(&digest_text("attachment-prompt"))
+                    .expect("digest"),
+                accepted_at: at(2),
+            }),
+            command_terminal: None,
+            origin_epoch: None,
+            input: Some(acp_core::model::UserInputWrite {
+                message: message.clone(),
+                session: session.clone(),
+                turn: turn.clone(),
+                request: request.clone(),
+                content,
+                at: at(2),
+            }),
+        },
+        binding,
+    )
+}
+
+/// 带附件的普通输入：媒体引用与消息/受理关联在同一事务里写；清单无效时零写入。
+#[tokio::test]
+async fn prompt_with_attachment_writes_owned_media_refs_in_the_same_transaction() {
+    let dir = temp_dir("attachments-prompt-input");
+    let store = store(&dir, 1024 * 1024).await;
+    let session = session(&store).await;
+    let attachment = seal_attachment(&store, &session).await;
+    let submission = SubmissionId::new("80000000-0000-4000-8000-000000000088").expect("submission");
+    seal_submission(
+        &store,
+        &session,
+        &submission,
+        std::slice::from_ref(&attachment),
+    )
+    .await;
+
+    let message = MessageId::new("40000000-0000-4000-8000-000000000088").expect("message");
+    let turn = TurnId::new("33333333-3333-4333-8333-000000000088").expect("turn");
+    let request = RequestId::new("66666666-6666-4666-8666-000000000088").expect("request");
+    let (commit, binding) = prompt_input(
+        &session,
+        &message,
+        &turn,
+        &request,
+        &attachment,
+        "text/plain",
+    );
+    store
+        .commit_with_submission(commit, Some(binding.clone()))
+        .await
+        .expect("accepted prompt");
+
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    let (kind, position, media_attachment): (String, i64, String) = sqlx::query_as(
+        "SELECT kind, position, attachment_id FROM owned_media_ref WHERE message_id = ?1",
+    )
+    .bind(message.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("media ref");
+    assert_eq!(kind, "file", "kind 取自附件权威行的 media_type");
+    assert_eq!(position, 0);
+    assert_eq!(media_attachment, attachment.as_str());
+    let attachment_count: i64 =
+        sqlx::query_scalar("SELECT attachment_count FROM owned_user_input WHERE message_id = ?1")
+            .bind(message.as_str())
+            .fetch_one(&pool)
+            .await
+            .expect("user input");
+    assert_eq!(attachment_count, 1);
+    pool.close().await;
+
+    // 清单不可用（未封存/未知 submission）：整事务失败，不得留下消息、受理关联或媒体引用。
+    let second_message = MessageId::new("40000000-0000-4000-8000-000000000089").expect("message");
+    let second_turn = TurnId::new("33333333-3333-4333-8333-000000000089").expect("turn");
+    let second_request = RequestId::new("66666666-6666-4666-8666-000000000089").expect("request");
+    let (commit, _) = prompt_input(
+        &session,
+        &second_message,
+        &second_turn,
+        &second_request,
+        &attachment,
+        "text/plain",
+    );
+    let unknown = SubmissionBinding {
+        submission: SubmissionId::new("80000000-0000-4000-8000-000000000099").expect("submission"),
+        attachments: vec![attachment.clone()],
+        subject: input_subject(),
+    };
+    let error = store
+        .commit_with_submission(commit, Some(unknown))
+        .await
+        .expect_err("unknown submission");
+    assert!(matches!(
+        error,
+        acp_core::model::PortError::NotFound(_) | acp_core::model::PortError::InvalidRequest(_)
+    ));
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_message").await,
+        1,
+        "失败提交不得留下第二条消息"
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_media_ref").await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_user_input").await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_turn").await,
+        1,
+        "失败提交的 turn 也必须回滚"
+    );
+    pool.close().await;
 }

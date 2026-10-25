@@ -760,6 +760,24 @@ impl CommandRoute {
         };
         let before_messages = match read.before.as_ref() {
             Some(before) => Some(MessageCursor {
+                sequence: match before.sequence.as_ref() {
+                    Some(value) => match value
+                        .as_str()
+                        .parse::<u64>()
+                        .ok()
+                        .and_then(|value| Sequence::new(value).ok())
+                    {
+                        Some(sequence) => Some(sequence),
+                        None => {
+                            return self.reject_schema(
+                                handle,
+                                message,
+                                "before.sequence is not a sequence",
+                            );
+                        }
+                    },
+                    None => None,
+                },
                 created_at: match CoreTimestamp::new(before.created_at.as_str()) {
                     Ok(at) => at,
                     Err(_) => {
@@ -788,6 +806,7 @@ impl CommandRoute {
             .map(|limit| u32::try_from(limit).unwrap_or(crate::session_read::MAX_PAGE_MESSAGES))
             .unwrap_or(crate::session_read::DEFAULT_PAGE_MESSAGES);
         let request = crate::session_read::SessionReadRequest {
+            origin_order: true,
             session: target.session.clone(),
             include,
             before_history,

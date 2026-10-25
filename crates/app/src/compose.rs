@@ -320,7 +320,7 @@ impl Composition {
                 .map_err(|_| ComposeError::Port(PortError::Corrupt("runtime epoch")))?,
         ));
         let preparation_endpoints: Arc<dyn server::sync::preparation::PreparationEndpoints> =
-            Arc::new(HostPreparationEndpoints::new(Arc::clone(&host)));
+            Arc::new(HostPreparationEndpoints::new(Arc::clone(&host), &broker));
         let use_cases = Arc::new(
             UseCases::new(UseCaseDeps {
                 broker: Arc::clone(&broker),
@@ -1170,6 +1170,7 @@ impl SessionRelease for HostSessionRelease {
 /// release 可能关掉另一次 claim 刚转正的绑定。
 pub struct HostPreparationEndpoints {
     host: Arc<AgentHost>,
+    broker: std::sync::Weak<Broker>,
     entries: tokio::sync::Mutex<std::collections::HashMap<String, PreparedEndpoint>>,
 }
 
@@ -1177,13 +1178,15 @@ struct PreparedEndpoint {
     /// 建立它时的 core 资源代；`claim`/`release` 只认精确匹配。
     generation: u64,
     endpoint: Arc<agent_host::TemporaryEndpoint>,
+    events: Arc<std::sync::Mutex<Option<acp_core::ports::EventSink>>>,
 }
 
 impl HostPreparationEndpoints {
     /// 装配（组合根唯一实例）。
-    pub fn new(host: Arc<AgentHost>) -> Self {
+    pub fn new(host: Arc<AgentHost>, broker: &Arc<Broker>) -> Self {
         Self {
             host,
+            broker: Arc::downgrade(broker),
             entries: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -1253,8 +1256,18 @@ impl server::sync::preparation::PreparationEndpoints for HostPreparationEndpoint
             }
             entries.remove(&key);
         }
-        // 准备期没有正式会话行：事件不进入任何会话槽位（`design.md` D1「准备期无持久记录」）。
-        let sink = acp_core::ports::EventSink::new(|_| {});
+        // 准备期不进入正式会话槽位；claim 后切换到 broker，同一端点的回复和终态不能继续丢弃。
+        let events = Arc::new(std::sync::Mutex::new(None::<acp_core::ports::EventSink>));
+        let route = Arc::clone(&events);
+        let sink = acp_core::ports::EventSink::new(move |event| {
+            let destination = route
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone();
+            if let Some(destination) = destination {
+                destination.send(event);
+            }
+        });
         let request_new = acp_core::model::CreateSessionRequest::new(
             request.agent,
             Some(request.workspace),
@@ -1278,6 +1291,7 @@ impl server::sync::preparation::PreparationEndpoints for HostPreparationEndpoint
             PreparedEndpoint {
                 generation: request.generation,
                 endpoint,
+                events,
             },
         );
         Ok(wire_options(options))
@@ -1321,7 +1335,14 @@ impl server::sync::preparation::PreparationEndpoints for HostPreparationEndpoint
                 UnavailableKind::SessionNotEstablished,
             ));
         }
+        let broker = self.broker.upgrade().ok_or(PortError::Unavailable(
+            UnavailableKind::SessionNotEstablished,
+        ))?;
         self.host.transfer_preparation(&entry.endpoint).await?;
+        *entry
+            .events
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(broker.sink(&session));
         Ok(Arc::clone(&entry.endpoint) as Arc<dyn acp_core::ports::SessionEndpoint>)
     }
 
@@ -1665,5 +1686,118 @@ mod tests {
             .expect("除本用例外的句柄都已释放")
             .close()
             .await;
+    }
+
+    /// Preparation must discard temporary events, then deliver the same endpoint's reply and
+    /// terminal through the real broker/store after the first submission.
+    #[tokio::test]
+    async fn prepared_endpoint_delivers_reply_and_terminal_after_first_submission() {
+        use acp_core::model::{AgentRef, Digest, PromptContentBlock, RequestId, ResolvedWorkspace};
+        use server::sync::preparation::{PreparationEstablish, PreparationSelectionInput};
+        let dir = TempDir::new("preparation-events");
+        let script = dir.path.join("agent.cjs");
+        std::fs::write(&script, r#"
+const readline = require('readline');
+const send = x => process.stdout.write(JSON.stringify(x)+'\n');
+readline.createInterface({input:process.stdin}).on('line',line=>{
+ const m=JSON.parse(line); const result = r=>send({jsonrpc:'2.0',id:m.id,result:r});
+ if(m.method==='initialize') return result({protocolVersion:1,agentCapabilities:{sessionCapabilities:{close:{}}},agentInfo:{name:'regression',version:'1'}});
+ if(m.method==='session/new') return result({sessionId:'prepared-agent'});
+ if(m.method==='session/prompt') {
+  send({jsonrpc:'2.0',method:'session/update',params:{sessionId:m.params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'reply survived promotion'}}}});
+  return result({stopReason:'end_turn'});
+ }
+ if(m.id!==undefined) result({});
+});
+"#).expect("controlled agent");
+        let agent_config = format!(
+            "[agent]\nregression = [\"node\", {:?}]\n",
+            script.to_string_lossy().replace('\\', "/")
+        );
+        let mut publisher = SyncPublisher::channel();
+        let mut events = publisher.take_receiver().expect("receiver");
+        let composition =
+            Composition::assemble(dev_config(&dir.path, &agent_config), Arc::new(publisher))
+                .await
+                .expect("assemble");
+        let session = SessionId::new(&Uuid::new_v4().to_string()).expect("session");
+        let agent = AgentRef::try_new(
+            acp_core::model::AgentId::new("regression").expect("agent id"),
+            "regression",
+        )
+        .expect("agent");
+        let workspace =
+            ResolvedWorkspace::at_path(dir.path.to_string_lossy().into_owned()).expect("workspace");
+        let endpoints = composition.preparation_endpoints();
+        endpoints
+            .establish(PreparationEstablish {
+                session: session.clone(),
+                agent: agent.clone(),
+                workspace: workspace.clone(),
+                generation: 1,
+                selection: PreparationSelectionInput::default(),
+            })
+            .await
+            .expect("prepare");
+        while let Ok(event) = events.try_recv() {
+            assert!(
+                event.session.is_none(),
+                "preparation must not publish session events"
+            );
+        }
+        let endpoint = endpoints.claim(session.clone(), 1).await.expect("promote");
+        composition
+            .use_cases()
+            .start_first_submission(
+                &Actor::Device {
+                    device: DeviceId::new(&Uuid::new_v4().to_string()).expect("device"),
+                },
+                acp_core::broker::FirstSubmissionStart {
+                    session: session.clone(),
+                    request: RequestId::new(&Uuid::new_v4().to_string()).expect("request"),
+                    fingerprint: Digest::new(&"A".repeat(43)).expect("digest"),
+                    agent,
+                    workspace_cwd: Some(workspace.canonical_path().to_owned()),
+                    workspace_directory: Some(workspace.directory_id().clone()),
+                    mode: None,
+                    config: Vec::new(),
+                    content: vec![
+                        PromptContentBlock::from_json_text(r#"{"type":"text","text":"hello"}"#)
+                            .expect("prompt"),
+                    ],
+                    manifest: None,
+                    generation: ResourceGeneration::new(1),
+                },
+                endpoint,
+            )
+            .await
+            .expect("first submission");
+        let mut delivered = Vec::new();
+        for _ in 0..100 {
+            composition.broker().pump(&session).await.expect("pump");
+            while let Ok(event) = events.try_recv() {
+                delivered.push(event.event_type.as_str().to_owned());
+            }
+            if delivered.iter().any(|kind| kind == "turn.completed") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let terminal = composition
+            .use_cases()
+            .first_submission(&session)
+            .await
+            .expect("record")
+            .expect("saved")
+            .terminal;
+        composition.close().await.expect("close");
+        assert!(
+            delivered.iter().any(|kind| kind == "agent.message.delta"),
+            "Agent reply must reach the persisted event stream: {delivered:?}"
+        );
+        assert_eq!(
+            terminal.expect("first submission must finish").outcome,
+            acp_core::model::RequestOutcome::Completed
+        );
     }
 }

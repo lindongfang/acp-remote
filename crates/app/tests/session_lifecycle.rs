@@ -442,10 +442,11 @@ async fn prompt_to_completion(
         .await;
     let accepted = client.expect_command_result(&request).await;
     assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
-    assert_eq!(
-        accepted["result"],
-        Value::Null,
-        "accepted 不得带业务结果：{accepted}"
+    assert!(
+        accepted["result"]["turnId"]
+            .as_str()
+            .is_some_and(|turn| !turn.is_empty()),
+        "session.prompt 的 accepted 必须带稳定 turnId：{accepted}"
     );
     let released = host.parked().release(marker);
     assert!(

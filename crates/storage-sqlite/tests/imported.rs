@@ -39,6 +39,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "owned_first_submission",
     "owned_interaction",
     "owned_message",
+    "owned_timeline_anchor",
     "owned_media_ref",
     "owned_node",
     "owned_pairing",
@@ -46,6 +47,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "owned_peer_key",
     "owned_session",
     "owned_turn",
+    "owned_user_input",
     "owned_workspace",
 ];
 

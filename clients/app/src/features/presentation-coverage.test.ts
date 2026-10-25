@@ -99,7 +99,7 @@ describe("D5 覆盖表：每个协议已知类型都有明确结论", () => {
 });
 
 describe("D5 生产管线：已知但覆盖未命中 → 降级卡片", () => {
-  it("session.info.changed（协议已知、客户端还没有卡片）经 store 产出降级卡片", () => {
+  it("已由会话状态层处理的 session.info.changed 不额外插入聊天诊断卡片", () => {
     const { store } = storeWithSession();
 
     store.apply({
@@ -112,12 +112,8 @@ describe("D5 生产管线：已知但覆盖未命中 → 降级卡片", () => {
     });
 
     const page = store.conversationPage(SESSION_ID);
-    // 反例：用协议词表当覆盖判定时这里会是 0 条（事件被静默丢掉）→ 断言变红。
-    expect(page?.degraded).toHaveLength(1);
-    expect(page?.degraded[0]?.reason).toEqual({ kind: "no_dedicated_view" });
-    expect(page?.degraded[0]?.eventType).toBe("session.info.changed");
-    // 时间线上看得见它（降级卡片是时间线的第三种条目，不是别处的影子）。
-    expect(page?.timeline.entries.map((entry) => entry.kind)).toContain("degraded");
+    expect(page?.degraded).toHaveLength(0);
+    expect(page?.timeline.entries.map((entry) => entry.kind)).not.toContain("degraded");
   });
 
   it("多个未覆盖类型各自产出自己的降级卡片（不合并、不覆盖）", () => {
@@ -135,7 +131,7 @@ describe("D5 生产管线：已知但覆盖未命中 → 降级卡片", () => {
     }
     const page = store.conversationPage(SESSION_ID);
     // `device.revoked` 是节点级事件（没有会话），不进任何会话时间线；会话级的两个各一条。
-    expect(page?.degraded.map((item) => item.eventType).sort()).toEqual(["session.commands.changed", "session.info.changed"]);
+    expect(page?.degraded).toEqual([]);
     // 它也不是「没有出口」：节点级的那一条落在主机/连接面的节点级降级列表上。
     expect(store.nodeDegraded().map((item) => item.eventType)).toEqual(["device.revoked"]);
   });

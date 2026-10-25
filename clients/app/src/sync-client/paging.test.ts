@@ -68,7 +68,7 @@ describe("R3：游标由时间与标识复合构成", () => {
     // 页内最早一条是 m-a；下一页从它之前取，因此 m-b/m-c 不会被跳过。
     expect(cursor).toEqual({ createdAt: T0, messageId: "m-a" });
 
-    const older = [message({ messageId: "m-x", createdAt: T0 })];
+    const older = [message({ messageId: "m-0", createdAt: T0 })];
     // 相邻两页不重叠：下一页的消息标识与本页交集为空。
     expect(() => assertPagesDoNotOverlap(page, older)).not.toThrow();
   });

@@ -286,6 +286,13 @@ impl RemoteSession {
         };
         let before = match query.before_messages.as_ref() {
             Some(cursor) if remote_history => Some(SessionReadBefore {
+                sequence: cursor
+                    .sequence
+                    .map(|sequence| DecimalString::parse(&sequence.get().to_string()))
+                    .transpose()
+                    .map_err(|_| {
+                        PortError::InvalidRequest("the message cursor is not encodable")
+                    })?,
                 created_at: node_link_protocol::common::Timestamp::parse(
                     cursor.created_at.as_str(),
                 )

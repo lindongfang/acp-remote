@@ -1184,7 +1184,7 @@ impl InteractionAuthority for SqliteStore {
         let mut read = self.acquire_read().await?;
         let rows = sqlx::query(
             "SELECT i.interaction_id, i.session_id, i.kind, i.request_version, i.created_at, \
-                    e.payload_json \
+                    e.payload_json, CAST(e.session_sequence AS TEXT) AS first_sequence, CAST(e.origin_sequence AS TEXT) AS first_origin_sequence \
              FROM owned_interaction i \
              LEFT JOIN owned_event e ON e.global_sequence = i.request_event \
              WHERE i.session_id = ?1 AND i.state = 'pending' AND i.invalidated_at IS NULL \
@@ -1211,28 +1211,40 @@ impl InteractionAuthority for SqliteStore {
                 InteractionKind::Permission => (options_from_view(&view)?, None),
                 InteractionKind::Elicitation => (Vec::new(), schema_from_view(&view)?),
             };
-            effective.push(
-                EffectiveInteraction::try_new(
-                    InteractionId::new(&text(row, "interaction_id")?).map_err(|_| {
-                        StorageError::ColumnValue {
-                            column: "owned_interaction.interaction_id",
-                            expected: "canonical uuid",
-                        }
-                    })?,
-                    SessionId::new(&text(row, "session_id")?).map_err(|_| {
-                        StorageError::ColumnValue {
-                            column: "owned_interaction.session_id",
-                            expected: "canonical uuid",
-                        }
-                    })?,
-                    kind,
-                    Version::new(version),
-                    None,
-                    options,
-                    schema,
-                )
-                .map_err(|_| PortError::Corrupt("stored interaction is invalid"))?,
-            );
+            let mut interaction = EffectiveInteraction::try_new(
+                InteractionId::new(&text(row, "interaction_id")?).map_err(|_| {
+                    StorageError::ColumnValue {
+                        column: "owned_interaction.interaction_id",
+                        expected: "canonical uuid",
+                    }
+                })?,
+                SessionId::new(&text(row, "session_id")?).map_err(|_| {
+                    StorageError::ColumnValue {
+                        column: "owned_interaction.session_id",
+                        expected: "canonical uuid",
+                    }
+                })?,
+                kind,
+                Version::new(version),
+                None,
+                options,
+                schema,
+            )
+            .map_err(|_| PortError::Corrupt("stored interaction is invalid"))?;
+            let position = |column| -> Result<Option<acp_core::model::Sequence>, PortError> {
+                opt_text(row, column)?
+                    .map(|value| {
+                        value
+                            .parse::<u64>()
+                            .ok()
+                            .and_then(|n| acp_core::model::Sequence::new(n).ok())
+                            .ok_or(PortError::Corrupt("invalid interaction position"))
+                    })
+                    .transpose()
+            };
+            interaction.first_sequence = position("first_sequence")?;
+            interaction.first_origin_sequence = position("first_origin_sequence")?;
+            effective.push(interaction);
         }
         Ok(effective)
     }

@@ -84,6 +84,7 @@ fn create_session(title: Option<&str>) -> OwnedCommit {
         idempotency: None,
         command_terminal: None,
         origin_epoch: Some(origin_epoch()),
+        input: None,
     }
 }
 
@@ -106,6 +107,7 @@ fn update(
         idempotency: None,
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     }
 }
 
@@ -610,6 +612,7 @@ async fn acceptance_and_terminal_can_be_settled_in_one_commit() {
                 .expect("terminal record"),
         ),
         origin_epoch: None,
+        input: None,
     };
 
     // causation 不属于本次受理的 requestId → 整事务拒绝，零写入。

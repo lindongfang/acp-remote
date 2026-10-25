@@ -34,6 +34,7 @@
 
 import type { SocketHandlers, SocketOpenInput, SocketPort } from "../../src/sync-client";
 import {
+  ATTACHMENT_FEATURE,
   encodeBase64Url,
   LOCAL_SESSION_LIFECYCLE_FEATURE,
   REQUIRED_FEATURES,
@@ -242,6 +243,28 @@ export interface FakeHostOptions {
    */
   readonly selectPreparation?: boolean | undefined;
   readonly selectWorkspaceFiles?: boolean | undefined;
+  readonly selectPendingInteractions?: boolean | undefined;
+  /**
+   * 是否在握手时**选中** `core.attachment-transfer.v1`。
+   *
+   * 缺省 `false`：既有用例不装配附件连接（页面因此把附件能力视为未协商）。打开后客户端会建立
+   * 第二条已认证连接（`/sync/v1/attachments`），本假主机按最小协议应答 begin/chunk/seal 与
+   * manifest 帧，供「上传中 / 上传失败」两条页面断言使用。
+   */
+  readonly selectAttachments?: boolean | undefined;
+  /**
+   * 在指定附件帧上暂停应答（例如 `"attachment.chunk"`），直到用例调用
+   * {@link FakeHost.releaseAttachmentPause}。上传中反馈只有在服务端**尚未**确认块时才可观测。
+   */
+  readonly attachmentPauseAt?: string | undefined;
+  /**
+   * 指定附件帧的失败应答（返回 `null` 表示正常应答）。
+   *
+   * 错误码原样进入 `attachment.error`，页面据此显示失败原因；上传失败时不得派发 `session.prompt`。
+   */
+  readonly attachmentFailure?:
+    | ((frameType: string) => { readonly code: string; readonly message: string; readonly retryable: boolean } | null)
+    | undefined;
   /**
    * `session.preparation` 的应答体（返回 `null` 表示故意不应答，用例观察「没有终态」）。
    *
@@ -402,8 +425,20 @@ export class FakeHost {
    */
   readonly socketProtocols: (readonly string[] | undefined)[] = [];
   readonly deviceProofs: string[] = [];
+  /** 附件连接（第二条已认证 WSS）上客户端发出的每一帧原文。 */
+  readonly attachmentSent: string[] = [];
+  /** 附件连接的 socket URL（与业务连接分开记录，便于断言它真的被建立过）。 */
+  readonly attachmentSocketUrls: string[] = [];
 
   #handlers: SocketHandlers | null = null;
+  /** 附件连接的处理器（与业务连接各自独立：同一次 e2e 里两条 socket 同时开着）。 */
+  #attachmentHandlers: SocketHandlers | null = null;
+  #attachmentClosed = false;
+  #attachmentNegotiated = "";
+  #attachmentDeviceId: string | null = null;
+  #attachmentSequence = 0;
+  /** 被 `attachmentPauseAt` 扣住的附件帧原文（按到达顺序）。 */
+  #attachmentPaused: string[] = [];
   /** 本假主机为最近一条连接「选中」的子协议（合规服务端会选中客户端声明的第一条）。 */
   #negotiated = "";
   #closed = false;
@@ -446,6 +481,26 @@ export class FakeHost {
 
   /** 注入给 `createComposition({ openSocket })` 的连接工厂。 */
   readonly openSocket = (input: SocketOpenInput): SocketPort => {
+    if (input.url.includes("/sync/v1/attachments")) {
+      // 附件连接：独立 socket、独立句柄；握手与业务连接同形，业务阶段只有 `attachment.*`。
+      this.attachmentSocketUrls.push(input.url);
+      this.#attachmentNegotiated = input.protocols?.[0] ?? "";
+      this.#attachmentHandlers = input.handlers;
+      this.#attachmentClosed = false;
+      queueMicrotask(() => {
+        if (!this.#attachmentClosed) input.handlers.onOpen();
+      });
+      return {
+        send: (text: string): void => {
+          this.attachmentSent.push(text);
+          this.#onAttachmentFrame(text);
+        },
+        close: (code: number, reason: string): void => {
+          this.#dropAttachment(code, reason);
+        },
+        negotiatedSubprotocol: (): string => this.#attachmentNegotiated,
+      };
+    }
     this.socketUrls.push(input.url);
     this.socketProtocols.push(input.protocols);
     // 合规服务端选中客户端声明的第一条（§3.1 的 v1 只声明一条）；没声明就什么都不选，
@@ -641,13 +696,140 @@ export class FakeHost {
     }
   }
 
+  /** 放行被 `attachmentPauseAt` 扣住的那一帧（按到达顺序）。 */
+  releaseAttachmentPause(): void {
+    const pending = [...this.#attachmentPaused];
+    this.#attachmentPaused = [];
+    for (const text of pending) this.#handleAttachmentFrame(text, false);
+  }
+
+  #dropAttachment(code: number, reason: string): void {
+    if (this.#attachmentHandlers === null || this.#attachmentClosed) return;
+    this.#attachmentClosed = true;
+    this.#attachmentHandlers.onClose(code, reason);
+  }
+
+  #deliverAttachment(text: string): void {
+    if (this.#attachmentHandlers === null || this.#attachmentClosed) return;
+    const handlers = this.#attachmentHandlers;
+    queueMicrotask(() => {
+      if (!this.#attachmentClosed) handlers.onMessage(text);
+    });
+  }
+
+  /** 附件连接的一帧（握手仍是 `auth.*`；业务阶段只有 `attachment.*`）。 */
+  #onAttachmentFrame(text: string): void {
+    const parsed = JSON.parse(text) as { readonly type?: unknown; readonly body?: Record<string, unknown> };
+    const type = typeof parsed.type === "string" ? parsed.type : "";
+    if (type === "auth.client_hello") {
+      const body = parsed.body ?? {};
+      this.#attachmentDeviceId = requiredString(body, "deviceId");
+      const hello = {
+        deviceId: this.#attachmentDeviceId,
+        clientNonce: requiredString(body, "clientNonce"),
+      };
+      void this.#serverChallenge(hello).then((challenge) => {
+        this.#deliverAttachment(JSON.stringify(challenge));
+      });
+      return;
+    }
+    if (type === "auth.client_proof") {
+      if (this.options.authenticate && this.#attachmentDeviceId !== null) {
+        this.#deliverAttachment(JSON.stringify(this.#authenticatedFor(this.#attachmentDeviceId)));
+      }
+      return;
+    }
+    if (!type.startsWith("attachment.")) return;
+    this.#handleAttachmentFrame(text, true);
+  }
+
+  #handleAttachmentFrame(text: string, allowPause: boolean): void {
+    const parsed = JSON.parse(text) as { readonly type?: unknown; readonly body?: Record<string, unknown> };
+    const type = typeof parsed.type === "string" ? parsed.type : "";
+    const body = parsed.body ?? {};
+    if (allowPause && this.options.attachmentPauseAt === type) {
+      this.#attachmentPaused.push(text);
+      return;
+    }
+    const failure = this.options.attachmentFailure?.(type) ?? null;
+    if (failure !== null) {
+      const transferId = typeof body["transferId"] === "string" ? body["transferId"] : null;
+      this.#attachmentReply("attachment.error", {
+        code: failure.code,
+        message: failure.message,
+        retryable: failure.retryable,
+        transferId,
+        details: {},
+      });
+      return;
+    }
+    switch (type) {
+      case "attachment.chunk": {
+        const offset = requiredString(body, "offset");
+        const data = requiredString(body, "data");
+        const length = decodeBase64UrlLoose(data).length;
+        this.#attachmentReply("attachment.chunk_ack", {
+          transferId: requiredString(body, "transferId"),
+          offset,
+          length: String(length),
+          duplicate: false,
+          nextOffset: (BigInt(offset) + BigInt(length)).toString(),
+        });
+        return;
+      }
+      case "attachment.seal":
+        this.#attachmentReply("attachment.sealed", {
+          transferId: requiredString(body, "transferId"),
+          attachmentId: crypto.randomUUID(),
+          length: requiredString(body, "length"),
+          sha256: requiredString(body, "sha256"),
+          sealedAt: new Date().toISOString(),
+        });
+        return;
+      case "attachment.manifest_sealed":
+        this.#attachmentReply("attachment.manifest_sealed", {
+          submissionId: requiredString(body, "submissionId"),
+          attachmentCount: requiredString(body, "attachmentCount"),
+          manifestDigest: requiredString(body, "manifestDigest"),
+          sealedAt: new Date().toISOString(),
+        });
+        return;
+      default:
+        // begin / manifest_begin / manifest_page / abort 不产生应答帧。
+        return;
+    }
+  }
+
+  #attachmentReply(type: string, body: Record<string, unknown>): void {
+    this.#attachmentSequence += 1;
+    this.#deliverAttachment(
+      JSON.stringify({
+        protocolVersion: 1,
+        type,
+        messageId: crypto.randomUUID(),
+        connectionId: CONNECTION_ID,
+        connectionSequence: String(this.#attachmentSequence),
+        body,
+      }),
+    );
+  }
+
   async #onClientHello(hello: { readonly deviceId: string; readonly clientNonce: string }): Promise<void> {
+    this.#deliver(JSON.stringify(await this.#serverChallenge(hello)));
+  }
+
+  /** 一条 `auth.server_challenge` 消息（业务连接与附件连接共用同一条真实转录）。 */
+  async #serverChallenge(
+    hello: { readonly deviceId: string; readonly clientNonce: string },
+  ): Promise<Record<string, unknown>> {
     const serverNonce = crypto.getRandomValues(new Uint8Array(32)) as Uint8Array<ArrayBuffer>;
     const selectedFeatures = [
       ...SERVER_SELECTED_FEATURES,
       ...(this.options.selectLocalLifecycle === true ? [LOCAL_SESSION_LIFECYCLE_FEATURE] : []),
       ...(this.options.selectPreparation === true ? [SESSION_PREPARATION_FEATURE] : []),
       ...(this.options.selectWorkspaceFiles === true ? ["core.workspace-files.v1"] : []),
+      ...(this.options.selectPendingInteractions === true ? ["core.pending-interactions.v1"] : []),
+      ...(this.options.selectAttachments === true ? [ATTACHMENT_FEATURE] : []),
     ];
     const transcript = encodeTranscript(HOST_CHALLENGE_DOMAIN, [
       { tag: HOST_CHALLENGE_TAG.protocolVersion, bytes: encodeU16be(1) },
@@ -664,46 +846,47 @@ export class FakeHost {
     ]);
     const hostProof = await this.identity.signTranscript(transcript as Uint8Array<ArrayBuffer>);
 
-    this.#deliver(
-      JSON.stringify({
-        protocolVersion: 1,
-        type: "auth.server_challenge",
-        messageId: "00000000-0000-4000-8000-0000000000c1",
-        body: {
-          selectedProtocolVersion: 1,
-          hostId: this.identity.hostId,
-          connectionId: CONNECTION_ID,
-          serverNonce: encodeBase64Url(serverNonce),
-          selectedFeatures,
-          hostProof: this.options.tamperHostProof ? flipSignature(hostProof) : hostProof,
-        },
-      }),
-    );
+    return {
+      protocolVersion: 1,
+      type: "auth.server_challenge",
+      messageId: "00000000-0000-4000-8000-0000000000c1",
+      body: {
+        selectedProtocolVersion: 1,
+        hostId: this.identity.hostId,
+        connectionId: CONNECTION_ID,
+        serverNonce: encodeBase64Url(serverNonce),
+        selectedFeatures,
+        hostProof: this.options.tamperHostProof ? flipSignature(hostProof) : hostProof,
+      },
+    };
   }
 
   #sendAuthenticated(): void {
     if (!this.options.authenticate) return;
-    this.#deliver(
-      JSON.stringify({
-        protocolVersion: 1,
-        type: "auth.authenticated",
-        messageId: "00000000-0000-4000-8000-0000000000a1",
-        connectionId: CONNECTION_ID,
-        connectionSequence: "1",
-        body: {
-          deviceId: this.#deviceIdFromHello(),
-          // 设备方向没有授权维度：body 里**没有** `scopes`（`wire.ts` 的必填集合与 schema 逐字对应）。
-          serverEpoch: SERVER_EPOCH,
-          headGlobalSequence: this.options.barrierGlobalSequence,
-          heartbeatIntervalMs: 30_000,
-          limits: {
-            maxMessageBytes: 1_048_576,
-            maxPromptBytes: 262_144,
-            maxReplayEventsPerBatch: 500,
-          },
+    this.#deliver(JSON.stringify(this.#authenticatedFor(this.#deviceIdFromHello())));
+  }
+
+  /** 一条 `auth.authenticated` 消息（设备标识由调用方按各自连接给出）。 */
+  #authenticatedFor(deviceId: string): Record<string, unknown> {
+    return {
+      protocolVersion: 1,
+      type: "auth.authenticated",
+      messageId: "00000000-0000-4000-8000-0000000000a1",
+      connectionId: CONNECTION_ID,
+      connectionSequence: "1",
+      body: {
+        deviceId,
+        // 设备方向没有授权维度：body 里**没有** `scopes`（`wire.ts` 的必填集合与 schema 逐字对应）。
+        serverEpoch: SERVER_EPOCH,
+        headGlobalSequence: this.options.barrierGlobalSequence,
+        heartbeatIntervalMs: 30_000,
+        limits: {
+          maxMessageBytes: 1_048_576,
+          maxPromptBytes: 262_144,
+          maxReplayEventsPerBatch: 500,
         },
-      }),
-    );
+      },
+    };
   }
 
   #deviceIdFromHello(): string {

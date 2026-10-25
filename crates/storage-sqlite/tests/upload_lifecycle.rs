@@ -94,6 +94,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("create session")
@@ -250,6 +251,7 @@ fn acceptance(session: &SessionId, request: u64) -> OwnedCommit {
         }),
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     }
 }
 

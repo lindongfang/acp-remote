@@ -58,6 +58,8 @@ export interface SettingsSectionModel {
 export interface ConversationSettingsModel {
   readonly model: SettingsSectionModel;
   readonly mode: SettingsSectionModel;
+  /** 仅使用 Agent 明确提供的 thought_level 配置。 */
+  readonly thought?: SettingsSectionModel;
 }
 
 /** 模型配置项：配置项里 `category === "model"` 的那一项（多个时取第一个，声明顺序即优先级）。 */
@@ -69,7 +71,9 @@ export function modelConfigOption(configOptions: readonly ConfigOptionView[]): C
 function modelSection(input: {
   readonly option: ConfigOptionView | null;
   readonly switchCommand: CommandRecord | null;
+  readonly label?: string;
 }): SettingsSectionModel {
+  const label = input.label ?? "模型";
   const switching = input.switchCommand !== null && (!isTerminalState(input.switchCommand.state) || input.switchCommand.state === "uncertain");
   const confirmed = input.switchCommand !== null && input.switchCommand.state === "completed";
   const option = input.option;
@@ -79,7 +83,7 @@ function modelSection(input: {
       currentId: null,
       currentName: null,
       choices: [],
-      notice: switching ? "已提交切换，等待服务端确认；变更在下一轮生效。" : "该会话的 Agent 未提供模型可选项。",
+      notice: switching ? "已提交切换，等待服务端确认；变更在下一轮生效。" : `该会话的 Agent 未提供${label}可选项。`,
       // 配置项未提供：没有可写的 configId，不能拿别的东西顶上。
       configId: null,
     };
@@ -100,7 +104,7 @@ function modelSection(input: {
     notice: switching
       ? "已提交切换，等待服务端确认；变更在下一轮生效。"
       : choices.length === 0
-        ? "该会话的 Agent 未提供模型可选项。"
+        ? `该会话的 Agent 未提供${label}可选项。`
         : confirmed
           ? "已切换；变更在下一轮生效。"
           : null,
@@ -170,6 +174,7 @@ export function buildConversationSettingsModel(input: {
   readonly modeSwitchCommand: CommandRecord | null;
 }): ConversationSettingsModel {
   return {
+    thought: modelSection({ option: input.configOptions.find((option) => option.category === "thought_level") ?? null, switchCommand: input.modelSwitchCommand, label: "思考模式" }),
     model: modelSection({ option: modelConfigOption(input.configOptions), switchCommand: input.modelSwitchCommand }),
     mode: modeSection({
       mode: input.mode,

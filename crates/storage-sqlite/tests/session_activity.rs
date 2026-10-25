@@ -53,6 +53,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("create session")
@@ -95,6 +96,7 @@ async fn activity_events_are_replayable_but_never_history_entries() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("commit activity event");
@@ -129,6 +131,7 @@ async fn activity_events_are_replayable_but_never_history_entries() {
     // 历史页不带它；任务三态事实也不因生命周期投影改变。
     let page = view
         .read_session(HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: HistoryInclude {
                 history: true,

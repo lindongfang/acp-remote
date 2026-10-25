@@ -24,7 +24,7 @@ use super::ids::{
     require_bounded,
 };
 use super::json::{JsonValueText, ViewJson, array_items, decode_json_string, json_object_members};
-use super::scalars::{Digest, Timestamp, Version};
+use super::scalars::{Digest, Sequence, Timestamp, Version};
 use super::session::{InteractionKind, InteractionOption};
 
 /// 分块附件的固定单块上限（`SYNC_PROTOCOL.md` §3.4 的 `chunkSize` 常量；不是可协商值）。
@@ -34,9 +34,15 @@ pub const ATTACHMENT_MANIFEST_PAGE: usize = 64;
 
 token_enum!(
     /// 消息通道（`SYNC_PROTOCOL.md` §10.4）：回复与思考**分别**持久化、分别折叠。
+    ///
+    /// `User` 是**内部存储通道**（`conversation-reliability` WP2）：它只用于解析
+    /// `owned_message.channel='user'` 的行——Owner 自己受理并保存的用户输入（首条与后续同形），
+    /// **不是** Agent 回显。该取值**不进** wire 的 `messageChannel` 词表：用户消息在 `session.read`
+    /// 的 `messages` 里按 `role=user` 投影、`channel` 键缺席（§3.11/§5.2）。
     MessageChannel {
         Reply => "reply",
         Thought => "thought",
+        User => "user",
     }
 );
 
@@ -486,6 +492,8 @@ fn float_literal(raw: &str) -> Option<f64> {
 /// 有效待处理交互（`SYNC_PROTOCOL.md` §11.7）：服务端在本次读取时确认过的完整当前请求。
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectiveInteraction {
+    pub first_sequence: Option<Sequence>,
+    pub first_origin_sequence: Option<Sequence>,
     pub interaction: InteractionId,
     pub session: SessionId,
     pub kind: InteractionKind,
@@ -510,6 +518,8 @@ impl EffectiveInteraction {
             return Err(InvalidValue::Field);
         }
         Ok(Self {
+            first_sequence: None,
+            first_origin_sequence: None,
             interaction,
             session,
             kind,
@@ -543,6 +553,10 @@ impl EffectiveInteraction {
 /// 重复拼接正文；事件只承载增量与收尾收据。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageRecord {
+    /// First durable event position; absent only for unprovable legacy history.
+    pub first_sequence: Option<Sequence>,
+    /// Owner origin position, independent of the session position.
+    pub first_origin_sequence: Option<Sequence>,
     pub message: MessageId,
     pub session: SessionId,
     pub turn: Option<TurnId>,
@@ -571,6 +585,8 @@ impl MessageRecord {
         updated_at: Timestamp,
     ) -> Result<Self, InvalidValue> {
         Ok(Self {
+            first_sequence: None,
+            first_origin_sequence: None,
             message,
             session,
             turn,

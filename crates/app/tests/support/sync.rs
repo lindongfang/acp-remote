@@ -24,13 +24,16 @@ use std::time::Duration;
 use super::TempRoot;
 use acp_core::broker::Broker;
 use acp_core::model::{
-    DispatchAdmission, DispatchFence, FirstSubmissionAdmission, FirstSubmissionConvergence,
-    FirstSubmissionRecord, FirstSubmissionSettlement, FirstSubmissionWrite, FirstUserMessage,
-    ModeId, ModeRef, ModeState, PortError,
+    Actor, CommandRecord, DispatchAdmission, DispatchFence, FirstSubmissionAdmission,
+    FirstSubmissionConvergence, FirstSubmissionRecord, FirstSubmissionSettlement,
+    FirstSubmissionWrite, FirstUserMessage, GlobalCursor, ModeId, ModeRef, ModeState, OriginEpoch,
+    PortError, RequestId, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionSummary, Turn,
 };
 use acp_core::ports::{
-    AttachmentTransferStore, CapacityAdmission, FirstSubmission, PreparationAttachmentStaging,
-    SessionBackendFactory,
+    AttachmentTransferStore, CapacityAdmission, CommitOutcome, FirstSubmission, OwnedCommit,
+    PreparationAttachmentStaging, PruneReport, ReadView, ReplayLimit, RetentionPolicy,
+    SessionActivityFacts, SessionBackendFactory, SessionQuery, SessionStore, StoreHealth,
+    SubmissionBinding,
 };
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use base64::Engine as _;
@@ -925,6 +928,8 @@ pub struct HostNode {
     preparations: Arc<server::sync::preparation::Preparations>,
     /// 准备端点替身（建立/释放的观测口）。
     preparation_endpoints: Arc<ScriptedPreparationEndpoints>,
+    /// 普通输入受理提交的故障注入装饰器（「保存失败」窗口）。
+    session_store_faults: Arc<FlakyPromptStore>,
     /// 首次提交端口的故障注入装饰器（「保存前」与「保存后、派发前」两个窗口）。
     first_submission_faults: Arc<FirstSubmissionFaults>,
     /// 宿主名（`daemon.public_origin` 的 authority）。
@@ -1022,6 +1027,11 @@ pub struct ScriptedScript {
     prepared_echo: std::sync::Mutex<Option<String>>,
     /// 普通 prompt 的用户输入回显标识；`None` = 不回显（既有用例的 2 条脚本事件因此不变）。
     plain_echo: std::sync::Mutex<Option<String>>,
+    /// 普通 prompt 的回显正文；`None` = 与本次派发正文相同（可证明重复的回显）。
+    ///
+    /// 只有「Agent 回显了**不同内容**」这一条边界需要它：不同内容必须作为独立事件保留，
+    /// 不能被关联规则误吞。
+    plain_echo_text: std::sync::Mutex<Option<String>>,
     /// 被 `associate_user_echo` 判定为重复并抑制的回显次数（用例证明「确实评估过回显」）。
     duplicate_echoes: std::sync::atomic::AtomicUsize,
 }
@@ -1188,11 +1198,27 @@ impl ScriptedScript {
         *self.plain_echo.lock().expect("用例内互斥量不会中毒") = Some(message.to_owned());
     }
 
+    /// 普通 prompt 回一条**不同内容**的用户输入回显（Agent 改写了用户输入）。
+    ///
+    /// 内容摘要与本次派发正文不同 ⇒ 关联规则不得把它判成重复；这条事件必须作为独立内容保留。
+    pub fn echo_plain_prompt_with_text(&self, message: &str, text: &str) {
+        *self.plain_echo.lock().expect("用例内互斥量不会中毒") = Some(message.to_owned());
+        *self.plain_echo_text.lock().expect("用例内互斥量不会中毒") = Some(text.to_owned());
+    }
+
     fn plain_echo(&self) -> Option<String> {
         self.plain_echo
             .lock()
             .expect("用例内互斥量不会中毒")
             .clone()
+    }
+
+    fn plain_echo_text(&self, marker: &str) -> String {
+        self.plain_echo_text
+            .lock()
+            .expect("用例内互斥量不会中毒")
+            .clone()
+            .unwrap_or_else(|| marker.to_owned())
     }
 
     /// 被关联规则判定为重复、因而没有产出事件的上行回显次数。
@@ -1345,6 +1371,20 @@ fn insert_before_terminal(
     events.insert(index, event);
 }
 
+/// 当前派发上下文对应的回显身份（与 `agent-host` mapper 用的是同一组固定字段）。
+fn echo_link(context: &acp_core::model::DispatchContext) -> acp_core::model::UserEchoLink {
+    acp_core::model::UserEchoLink {
+        session: context.session.clone(),
+        first_submission: context.first_submission.clone(),
+        user_message: context.user_message.clone(),
+        request: context.request.clone(),
+        turn: context.turn.clone(),
+        agent: context.agent.clone(),
+        agent_session: context.agent_session.clone(),
+        resource_generation: context.resource_generation,
+    }
+}
+
 /// 脚本：一条用户输入回显（`user.message.delta`）。`message` 是 Agent 给这条回显的标识
 /// （不参与首条关联判定，只用于展示身份）。
 ///
@@ -1488,7 +1528,8 @@ impl acp_core::ports::SessionEndpoint for ScriptedEndpoint {
         // 回显必须排在 turn 终态**之前**：真实 Agent 先回显输入再结束 turn；若排在终态之后，core
         // 已经没有「在跑的 turn」可以归属它，事件会失去 turnId（读取面因此无法把用户输入折叠成消息）。
         if let Some(message) = self.script.plain_echo() {
-            insert_before_terminal(&mut events, scripted_user_echo(&message, &marker));
+            let text = self.script.plain_echo_text(&marker);
+            insert_before_terminal(&mut events, scripted_user_echo(&message, &text));
         }
         self.parked.park(&marker, events);
         Ok(acp_core::ports::TurnAccepted { turn })
@@ -1509,22 +1550,63 @@ impl acp_core::ports::SessionEndpoint for ScriptedEndpoint {
         let marker = prompt_marker(&request);
         let turn = acp_core::model::TurnId::new(&uuid_text()).expect("turn id 是规范 uuid 文本");
         let mut events = scripted_events(&marker);
+        // 普通输入也走本入口（受理期已组装派发上下文）：Agent 对**本次已保存输入**的纯回显必须按
+        // `associate_user_echo` 抑制，不得再插一条独立的用户消息；不同内容/无法关联才保留。
+        if let Some(message) = self.script.plain_echo() {
+            let text = self.script.plain_echo_text(&marker);
+            let duplicate = match &context {
+                Some(context) => {
+                    // 纯回显（正文与本次派发相同）必须使用**本次已保存输入的摘要**：摘要按保真 JSON
+                    // 字节计算，合成事件自己拼一份 JSON 会因键序/空白差异误判为 Differs。
+                    // 只有 Agent 改写了正文时才按改写后的内容重新计算（它必然不同）。
+                    let content_digest = if text == marker {
+                        Some(context.input_digest.clone())
+                    } else {
+                        acp_core::model::PromptContentBlock::from_json_text(
+                            &json!({ "type": "text", "text": text }).to_string(),
+                        )
+                        .ok()
+                        .and_then(|block| {
+                            acp_core::model::FirstSubmissionInput::new(vec![block]).ok()
+                        })
+                        .map(|input| input.digest().clone())
+                    };
+                    match content_digest {
+                        Some(content_digest) => {
+                            let echo = acp_core::model::UserEchoEvent {
+                                link: Some(echo_link(context)),
+                                agent_message: acp_core::model::MessageId::new(&message).ok(),
+                                content: acp_core::model::JsonValueText::new(&format!(
+                                    r#"[{{"type":"text","text":"{text}"}}]"#
+                                ))
+                                .expect("回显原文是 JSON 数组"),
+                                content_digest,
+                            };
+                            match acp_core::model::associate_user_echo(Some(context), &echo) {
+                                acp_core::model::EchoAssociation::Duplicate { .. } => {
+                                    self.script.duplicate_echoes.fetch_add(1, Ordering::SeqCst);
+                                    true
+                                }
+                                acp_core::model::EchoAssociation::Differs { .. }
+                                | acp_core::model::EchoAssociation::Unattributed => false,
+                            }
+                        }
+                        None => false,
+                    }
+                }
+                None => false,
+            };
+            if !duplicate {
+                insert_before_terminal(&mut events, scripted_user_echo(&message, &text));
+            }
+        }
         if let Some(message) = self.script.prepared_echo() {
             let duplicate = context.as_ref().is_some_and(|context| {
                 use acp_core::model::{
-                    EchoAssociation, JsonValueText, MessageId, UserEchoEvent, UserEchoLink,
-                    associate_user_echo,
+                    EchoAssociation, JsonValueText, MessageId, UserEchoEvent, associate_user_echo,
                 };
                 let echo = UserEchoEvent {
-                    link: Some(UserEchoLink {
-                        session: context.session.clone(),
-                        first_submission: context.first_submission.clone(),
-                        user_message: context.user_message.clone(),
-                        request: context.request.clone(),
-                        agent: context.agent.clone(),
-                        agent_session: context.agent_session.clone(),
-                        resource_generation: context.resource_generation,
-                    }),
+                    link: Some(echo_link(context)),
                     agent_message: MessageId::new(&message).ok(),
                     content: JsonValueText::new(&format!(
                         r#"[{{"type":"text","text":"{marker}"}}]"#
@@ -1712,7 +1794,8 @@ impl HostNode {
                 .await
                 .expect("打开真实存储"),
         );
-        let sessions: Arc<dyn acp_core::ports::SessionStore> = store.clone();
+        let session_store_faults = FlakyPromptStore::new(Arc::clone(&store));
+        let sessions: Arc<dyn acp_core::ports::SessionStore> = session_store_faults.clone();
         let trust: Arc<dyn acp_core::ports::TrustStore> = store.clone();
         let audit: Arc<dyn acp_core::ports::AuditStore> = store.clone();
         let local_config: Arc<dyn acp_core::ports::LocalConfigStore> = store.clone();
@@ -1977,6 +2060,7 @@ impl HostNode {
             script,
             preparations,
             preparation_endpoints,
+            session_store_faults,
             first_submission_faults,
             host_name,
             shutdown,
@@ -2086,6 +2170,11 @@ impl HostNode {
     /// 首条端口的故障注入装饰器（「保存前」「保存后、派发前」两个窗口）。
     pub fn first_submission_faults(&self) -> &Arc<FirstSubmissionFaults> {
         &self.first_submission_faults
+    }
+
+    /// 普通输入受理提交的故障注入装饰器（「保存失败」窗口）。
+    pub fn session_store_faults(&self) -> &Arc<FlakyPromptStore> {
+        &self.session_store_faults
     }
 
     /// 真实身份状态机（配对码/secret 的内存态观测口：`has_secret`、`consume_pairing_code`）。
@@ -2218,6 +2307,7 @@ impl HostNode {
             script,
             preparations,
             preparation_endpoints,
+            session_store_faults,
             first_submission_faults,
             host_name: _,
             shutdown,
@@ -2251,6 +2341,7 @@ impl HostNode {
         drop(preparations);
         drop(core);
         drop(broker);
+        drop(session_store_faults);
         drop(authority);
         drop(first_submission_faults);
         drop(parked);
@@ -2391,6 +2482,167 @@ impl FirstSubmission for FirstSubmissionFaults {
         at: acp_core::model::Timestamp,
     ) -> Result<FirstSubmissionConvergence, PortError> {
         self.inner.converge_first_submission(session, at).await
+    }
+}
+
+/// `SessionStore` 装饰器：**一次性**让下一次普通输入的受理提交失败（§6 第 24 条的「保存失败」窗口）。
+///
+/// 只对**携带用户输入写集**（`OwnedCommit::input`）的提交布防：其余提交（turn 状态、终态事件、启动
+/// 恢复、维护类）原样落地。故障类别取 `StorageFull`——存储层的真实磁盘/事务故障里最容易被用户
+/// 观察的一类，且 `Broker` 会把它映射成 `internal.unavailable` 的明确拒绝，不会派发也不会广播。
+pub struct FlakyPromptStore {
+    inner: Arc<SqliteStore>,
+    fail_next: std::sync::atomic::AtomicBool,
+    rejected: std::sync::atomic::AtomicUsize,
+}
+
+impl FlakyPromptStore {
+    fn new(inner: Arc<SqliteStore>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            fail_next: std::sync::atomic::AtomicBool::new(false),
+            rejected: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    /// 让下一次普通输入的受理提交失败（只生效一次）。
+    pub fn fail_next_prompt_commit(&self) {
+        self.fail_next.store(true, Ordering::SeqCst);
+    }
+
+    /// 被注入拦下的受理提交次数（用例证明故障路径真的走到了）。
+    pub fn rejected(&self) -> usize {
+        self.rejected.load(Ordering::SeqCst)
+    }
+
+    /// 该提交是否应被拦下：只认带 `input` 的提交，且一次性开关确实生效。
+    fn should_fail(&self, commit: &OwnedCommit) -> bool {
+        if commit.input.is_none() {
+            return false;
+        }
+        if !self.fail_next.swap(false, Ordering::SeqCst) {
+            return false;
+        }
+        self.rejected.fetch_add(1, Ordering::SeqCst);
+        true
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionStore for FlakyPromptStore {
+    async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+        if self.should_fail(&commit) {
+            return Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::StorageFull,
+            ));
+        }
+        self.inner.commit(commit).await
+    }
+
+    /// 带附件清单的受理也走同一事务：故障注入同样覆盖它，否则「附件 + 正文」的保存失败窗口
+    /// 会被默认实现绕过。
+    async fn commit_with_submission(
+        &self,
+        commit: OwnedCommit,
+        binding: Option<SubmissionBinding>,
+    ) -> Result<CommitOutcome, PortError> {
+        if self.should_fail(&commit) {
+            return Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::StorageFull,
+            ));
+        }
+        self.inner.commit_with_submission(commit, binding).await
+    }
+
+    async fn session_activity(
+        &self,
+        session: &SessionId,
+    ) -> Result<SessionActivityFacts, PortError> {
+        self.inner.session_activity(session).await
+    }
+
+    /// `workspace.mkdir` 的终态提交不属于普通输入：原样转发（故障注入只作用于受理写集）。
+    async fn commit_workspace_mkdir_terminal(
+        &self,
+        actor: &Actor,
+        commit: OwnedCommit,
+    ) -> Result<CommitOutcome, PortError> {
+        SessionStore::commit_workspace_mkdir_terminal(self.inner.as_ref(), actor, commit).await
+    }
+
+    async fn queued_turns(&self, session: &SessionId) -> Result<Vec<Turn>, PortError> {
+        self.inner.queued_turns(session).await
+    }
+
+    async fn sessions_with_pending_activity(
+        &self,
+        limit: ReplayLimit,
+    ) -> Result<Vec<SessionId>, PortError> {
+        self.inner.sessions_with_pending_activity(limit).await
+    }
+
+    async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {
+        self.inner.load(session).await
+    }
+
+    async fn list(&self, query: SessionQuery) -> Result<Vec<SessionSummary>, PortError> {
+        self.inner.list(query).await
+    }
+
+    async fn origin_epochs(
+        &self,
+        sessions: &[SessionId],
+    ) -> Result<Vec<(SessionId, OriginEpoch)>, PortError> {
+        self.inner.origin_epochs(sessions).await
+    }
+
+    async fn head(&self) -> Result<GlobalCursor, PortError> {
+        self.inner.head().await
+    }
+
+    async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError> {
+        self.inner.read_view().await
+    }
+
+    async fn find_request(
+        &self,
+        request: &RequestId,
+        actor: &Actor,
+    ) -> Result<Option<CommandRecord>, PortError> {
+        self.inner.find_request(request, actor).await
+    }
+
+    async fn load_recovery(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+        self.inner.load_recovery(session).await
+    }
+
+    async fn unsettled_commands(
+        &self,
+        limit: ReplayLimit,
+    ) -> Result<Vec<CommandRecord>, PortError> {
+        self.inner.unsettled_commands(limit).await
+    }
+
+    async fn retention_window(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<(acp_core::model::Sequence, acp_core::model::Sequence)>, PortError> {
+        self.inner.retention_window(session).await
+    }
+
+    async fn prune(
+        &self,
+        policy: RetentionPolicy,
+        at: acp_core::model::Timestamp,
+    ) -> Result<PruneReport, PortError> {
+        SessionStore::prune(self.inner.as_ref(), policy, at).await
+    }
+
+    async fn health(&self) -> Result<StoreHealth, PortError> {
+        self.inner.health().await
     }
 }
 

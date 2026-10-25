@@ -348,8 +348,8 @@ function checkImplementedPorts(contract) {
 
 function checkImplementedDdl(contract) {
   const text = section(contract, "## 7.");
-  if (!text.includes("v16 = 16") || !text.includes("当前 **v16 = 16**")) {
-    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v16 = 16 / owned_schema_version 16`);
+  if (!text.includes("v18 = 18") || !text.includes("当前 **v18 = 18**")) {
+    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v18 = 18 / owned_schema_version 18`);
   }
   for (const table of [
     "owned_attachment_transfer",
@@ -383,6 +383,45 @@ function checkImplementedDdl(contract) {
   }
   if (!subsection(contract, "\n### 7.3 ").includes("custom_title")) {
     errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的列 owned_session.custom_title`);
+  }
+  // v17（`conversation-reliability` WP2）：受理关联表与两条唯一约束必须进入 §7.3，常量与实现同版本。
+  const ownedTables = subsection(contract, "\n### 7.3 ");
+  if (!ownedTables.includes("owned_user_input")) {
+    errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的表 owned_user_input`);
+  }
+  for (const constraint of [
+    "unique (session_id, actor_kind, actor_id, request_id)",
+    "unique (session_id, turn_id)",
+  ]) {
+    if (!ownedTables.toLowerCase().includes(constraint)) {
+      errors.push(`contract drift: ${contractLabel} §7.3 的 owned_user_input 缺少唯一约束 ${constraint}`);
+    }
+  }
+  const migrate = readText(migratePath, migrateLabel) ?? "";
+  for (const constant of [
+    "FILE_FORMAT_VERSION: i64 = 18",
+    "OWNED_SCHEMA_VERSION: i64 = 18",
+  ]) {
+    if (!migrate.includes(constant)) {
+      errors.push(`contract drift: ${migrateLabel} 缺少 v17 常量 ${constant}`);
+    }
+  }
+  if (!migrate.includes("owned_user_input")) {
+    errors.push(`contract drift: ${migrateLabel} 缺少 owned_user_input 的 DDL / v17 升级段`);
+  }
+  // §5.12 已落地：计划围栏必须并入常规 rust 块，且不得再标注「尚未实现」。
+  const acceptance = subsection(contract, "\n### 5.12 ");
+  if (acceptance === undefined || acceptance.includes("尚未实现") || acceptance.includes("rust-planned")) {
+    errors.push(`contract drift: ${contractLabel} §5.12 已实现，不得缺失、标注「尚未实现」或继续使用 rust-planned`);
+  } else {
+    for (const name of ["PromptAcceptanceInput", "PromptAcceptanceOutcome"]) {
+      if (!acceptance.includes(name)) {
+        errors.push(`contract drift: ${contractLabel} §5.12 缺少已实现的 ${name}`);
+      }
+    }
+    if (fenced(acceptance, "rust").length < 1) {
+      errors.push(`contract drift: ${contractLabel} §5.12 需要常规 rust 代码块`);
+    }
   }
   if (text.includes("sql-planned")) {
     errors.push(`contract drift: ${contractLabel} §7 不得再含 sql-planned 块（已实现）`);

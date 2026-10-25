@@ -22,8 +22,8 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         .expect("open");
     store.close().await;
 
-    assert_eq!(FILE_FORMAT_VERSION, 16);
-    assert_eq!(OWNED_SCHEMA_VERSION, 16);
+    assert_eq!(FILE_FORMAT_VERSION, 18);
+    assert_eq!(OWNED_SCHEMA_VERSION, 18);
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
     let version: i64 = sqlx::query_scalar("PRAGMA user_version")
@@ -32,7 +32,10 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         .expect("user_version");
     assert_eq!(version, FILE_FORMAT_VERSION);
     let meta = meta_rows(&pool).await;
-    assert!(meta.contains(&("owned_schema_version".to_owned(), "16".to_owned())));
+    assert!(meta.contains(&(
+        "owned_schema_version".to_owned(),
+        OWNED_SCHEMA_VERSION.to_string()
+    )));
 
     for table in [
         "owned_attachment_transfer",
@@ -40,6 +43,7 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         "owned_attachment_submission_item",
         "owned_message",
         "owned_media_ref",
+        "owned_user_input",
     ] {
         assert!(table_exists(&pool, table).await, "missing table {table}");
     }
@@ -349,6 +353,7 @@ async fn v1_fixture_preserves_data_and_gets_the_new_tables() {
                 origin_epoch: Some(
                     OriginEpoch::new("6f2a1f8e-7b1c-4a8f-9b0d-1c2d3e4f5a6b").expect("epoch"),
                 ),
+                input: None,
             })
             .await
             .expect("create session")

@@ -12,7 +12,7 @@
 import type { DecimalString, Uuid } from "../protocol/common";
 import type { SessionReadResult } from "../protocol/command";
 import type { AgentMessageContent, MessageChannelView, PartialResultView } from "./media";
-import { buildAgentMessageContent } from "./media";
+import { buildAgentMessageContent, PARTIAL_RESULT_LABELS } from "./media";
 
 /** 消息的稳定标识。 */
 export type MessageId = Uuid;
@@ -39,6 +39,7 @@ export interface MessageView {
   readonly hasStructuredContent: boolean;
   /** turn 终态的部分结果标记；读取消息没有该字段时为 `null`。 */
   readonly partial: PartialResultView | null;
+  readonly sequence?: DecimalString;
   readonly createdAt: string;
   readonly turnId: Uuid | null;
 }
@@ -54,7 +55,7 @@ export interface SessionReadPageView {
   readonly messages: readonly MessageView[];
   readonly hasEarlier: boolean;
   /** 本页最早一条的复合游标；无消息时为 `null`。 */
-  readonly earliestCursor: { readonly createdAt: string; readonly messageId: MessageId } | null;
+  readonly earliestCursor: { readonly sequence?: DecimalString; readonly createdAt: string; readonly messageId: MessageId } | null;
 }
 
 /**
@@ -119,13 +120,17 @@ export function buildSessionReadPageView(result: SessionReadResult): SessionRead
     const content = buildAgentMessageContent(message.content);
     return {
       id: message.messageId,
+      ...(message.sequence === undefined ? {} : { sequence: message.sequence }),
       role: message.role,
-      // `snapshotItem.messages` 没有通道字段：读取结果按正文呈现。思考由实时/历史事件承载。
-      channel: "reply",
+      channel: message.channel ?? "reply",
       text: content.text,
       content,
       hasStructuredContent: content.hasStructuredContent,
-      partial: null,
+      partial: message.partial === undefined ? null : {
+        state: message.partial.state,
+        reason: message.partial.reason,
+        label: PARTIAL_RESULT_LABELS[message.partial.state],
+      },
       createdAt: message.createdAt,
       turnId: message.turnId,
     };
@@ -139,6 +144,7 @@ export function buildSessionReadPageView(result: SessionReadResult): SessionRead
       messages.length === 0
         ? null
         : {
+            ...(messages[0]!.sequence === undefined ? {} : { sequence: messages[0]!.sequence }),
             createdAt: messages[0]!.createdAt,
             messageId: messages[0]!.messageId,
           },

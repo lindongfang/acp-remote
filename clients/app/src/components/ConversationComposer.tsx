@@ -75,6 +75,7 @@ import {
 } from "./theme";
 
 export interface ConversationComposerProps {
+  readonly silentRecovery?: boolean;
   readonly input: ConversationInputModel;
   /** 上下文用量：胶囊 + 明细；缺省时不呈现上下文条。 */
   readonly usage?: ContextUsageView | null;
@@ -106,7 +107,6 @@ export interface ConversationComposerProps {
   readonly onRemovePathRef?: ((path: string) => void) | undefined;
 }
 
-const STATE_PLACEHOLDERS = { editable: "给 Agent 发消息", in_progress: "会话进行中，完成后可继续输入", unavailable: "当前无法发送，仍可编辑草稿" };
 
 /** 附件状态的展示文案（每种状态一句，互不混用）。 */
 const ATTACHMENT_STATUS_LABELS: Readonly<Record<DraftAttachment["status"], string>> = {
@@ -192,12 +192,14 @@ function buildStyles(colors: Palette) {
   return StyleSheet.create({
     composer: {
       gap: spacing.xs,
-      paddingTop: 10,
-      paddingBottom: 14,
-      paddingHorizontal: 20,
-      borderTopWidth: 1,
-      borderTopColor: colors.line,
-      backgroundColor: colors.panel,
+      paddingTop: 6,
+      paddingBottom: 6,
+      paddingHorizontal: 12,
+      margin: 12,
+      borderWidth: 1,
+      borderColor: colors.accent,
+      borderRadius: 24,
+      backgroundColor: colors.panel2,
     },
     warnBar: {
       flexDirection: "row",
@@ -216,29 +218,27 @@ function buildStyles(colors: Palette) {
     },
     bar: {
       justifyContent: "flex-end",
-      marginBottom: 8,
+      marginTop: 4,
+      minHeight: 40,
       flexDirection: "row",
-      flexWrap: "wrap",
+      flexWrap: "nowrap",
       alignItems: "center",
-      gap: spacing.sm,
+      gap: 4,
     },
-    inputRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "flex-end",
-      gap: spacing.sm,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.md,
-      backgroundColor: colors.panel2,
-    },
+    inputRow: { minHeight: 40 },
+    addButton: { width: 32, height: 40, flexShrink: 0, alignItems: "center", justifyContent: "center" },
     input: {
       flexGrow: 1,
       flexShrink: 1,
       minWidth: 0,
-      minHeight: 44,
+      minHeight: 40,
+      height: 44,
+      maxHeight: 200,
+      borderWidth: 0,
+      outlineWidth: 0,
+      outlineStyle: "solid",
+      boxShadow: "none",
+      backgroundColor: "transparent",
       paddingVertical: spacing.xs,
       paddingHorizontal: 0,
       color: colors.ink,
@@ -247,11 +247,13 @@ function buildStyles(colors: Palette) {
     },
     primary: {
       flexShrink: 0,
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.lg,
+      width: 40,
+      height: 40,
+      alignItems: "center",
+      justifyContent: "center",
       borderWidth: 1,
       borderColor: colors.accent,
-      borderRadius: radius.sm,
+      borderRadius: 15,
       backgroundColor: colors.accent,
     },
     primaryText: {
@@ -269,11 +271,13 @@ function buildStyles(colors: Palette) {
     },
     stop: {
       flexShrink: 0,
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.md,
+      width: 40,
+      height: 40,
+      alignItems: "center",
+      justifyContent: "center",
       borderWidth: 1,
       borderColor: colors.danger,
-      borderRadius: radius.sm,
+      borderRadius: 15,
       backgroundColor: colors.danger,
     },
     stopText: {
@@ -439,31 +443,8 @@ function SubmissionLine({ submission }: { readonly submission: SubmissionPresent
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
-  if (submission.kind === "none") return null;
-  if (submission.kind === "pending_confirmation") {
-    return (
-      <Text style={styles.pending} dataSet={{ submission: "pending_confirmation", submissionRequestId: submission.requestId }}>
-        已提交给服务端，等待终态确认（尚未确认）。
-      </Text>
-    );
-  }
-  if (submission.kind === "accepted") {
-    return (
-      <Text
-        style={styles.note}
-        dataSet={{ submission: "accepted", ...(submission.acceptedAt === null ? {} : { submissionAcceptedAt: submission.acceptedAt }) }}
-      >
-        服务端已接受。
-      </Text>
-    );
-  }
-  if (submission.kind === "completed") {
-    return (
-      <Text style={styles.ok} dataSet={{ submission: "completed" }}>
-        服务端已处理完成。
-      </Text>
-    );
-  }
+  // 正常提交只通过正文回显和按钮状态反馈，不新增会随应答消失的文字行。
+  if (submission.kind !== "failed" && submission.kind !== "uncertain") return null;
   if (submission.kind === "uncertain") {
     return (
       <Text role="alert" style={styles.alert} dataSet={{ submission: "uncertain" }}>
@@ -610,6 +591,7 @@ function AttachmentList({
 
 /** 输入区。 */
 export function ConversationComposer({
+  silentRecovery = false,
   input,
   usage,
   settings,
@@ -666,25 +648,7 @@ export function ConversationComposer({
       {input.persistenceWarning == null ? null : (
         <Text role="status" style={styles.note} dataSet={{ composerPersistenceWarning: "true" }}>{input.persistenceWarning}</Text>
       )}
-      <View style={styles.bar} dataSet={{ composerBar: "true" }}>
-        <Pressable role="button" aria-label={input.attachmentsSupported ? "添加文件" : `添加文件不可用：${input.attachmentNotice}`}
-          disabled={!input.attachmentsSupported || onPickAttachment === undefined}
-          style={[styles.attachmentButton, { marginRight: "auto", paddingVertical: 6 }]}
-          dataSet={{ action: "pick-attachment", attachmentKind: "file", attachmentsSupported: String(input.attachmentsSupported) }}
-          onPress={() => onPickAttachment?.("file")}>
-          <Text style={styles.attachmentButtonText}>＋ 添加</Text>
-        </Pressable>
-        {/* 上下文胶囊 + 明细（未上报时不给数字）；未上报不影响任何交互。 */}
-        {usage === null || usage === undefined ? null : <ContextUsageBar usage={usage} />}
-        {/* 模型 / 模式胶囊与弹层。 */}
-        {settings === null || settings === undefined ? null : (
-          <ConversationSettingsPanel
-            settings={settings}
-            onSelectModel={onSelectModel}
-            onSelectMode={onSelectMode}
-          />
-        )}
-      </View>
+
 
       <AttachmentList
         attachments={attachments}
@@ -741,7 +705,7 @@ export function ConversationComposer({
         <TextInput
           value={input.draft}
           multiline
-          placeholder={STATE_PLACEHOLDERS[input.state]}
+          placeholder="输入消息，Enter 发送，Shift+Enter 换行"
           style={styles.input}
           dataSet={{ composerInput: input.state }}
           onChangeText={(text: string) => {
@@ -750,9 +714,30 @@ export function ConversationComposer({
           onKeyPress={onKeyPress}
         />
 
-        {/* 发送按钮始终呈现，是否可点只由闸门决定（执行中/不可用禁用并说明原因，不排队）。 */}
-        <Pressable
+      </View>
+
+      </div>
+      <View style={styles.bar} dataSet={{ composerBar: "true" }}>
+        <Pressable role="button" aria-label={input.attachmentsSupported ? "添加文件" : `添加文件不可用：${input.attachmentNotice}`}
+          disabled={!input.attachmentsSupported || onPickAttachment === undefined}
+          style={[styles.addButton, { marginRight: "auto" }]}
+          dataSet={{ action: "pick-attachment", attachmentKind: "file", attachmentsSupported: String(input.attachmentsSupported) }}
+          onPress={() => onPickAttachment?.("file")}>
+          <Text style={[styles.attachmentButtonText, { fontSize: 26, fontWeight: "300" }]}>＋</Text>
+        </Pressable>
+        {/* 上下文胶囊 + 明细（未上报时不给数字）；未上报不影响任何交互。 */}
+        {usage === null || usage === undefined ? null : <ContextUsageBar usage={usage} compact />}
+        {/* 模型 / 模式胶囊与弹层。 */}
+        {settings === null || settings === undefined ? null : (
+          <ConversationSettingsPanel
+            settings={settings}
+            onSelectModel={onSelectModel}
+            onSelectMode={onSelectMode}
+          />
+        )}
+        {input.cancel.kind === "available" || input.cancel.kind === "requested" ? null : <Pressable
           role="button"
+          accessibilityLabel="发送消息"
           // 闸门是模型给的 `canSubmit`：执行中 / 离线 / imported 来源 / 附件未就绪都会在这里
           // 变为不可点（仓库侧 `submitPrompt` 还会再拦一次，不靠组件记得禁用）。
           disabled={!submittable || onSubmit === undefined}
@@ -762,33 +747,34 @@ export function ConversationComposer({
             onSubmit?.(input.draft);
           }}
         >
-          <Text style={submittable ? styles.primaryText : [styles.primaryText, styles.buttonDisabledText]}>发送</Text>
-        </Pressable>
+          <Text style={[styles.primaryText, { fontSize: 22 }, submittable ? null : styles.buttonDisabledText]}>↑</Text>
+        </Pressable>}
 
-        {input.cancel.kind === "available" ? (
+        {input.cancel.kind === "available" || input.cancel.kind === "requested" ? (
           <Pressable
             role="button"
-            disabled={onCancel === undefined}
+            accessibilityLabel="停止输出"
+            disabled={onCancel === undefined || input.cancel.kind === "requested"}
             style={styles.stop}
             dataSet={{ action: "cancel-turn" }}
             onPress={() => {
               onCancel?.();
             }}
           >
-            <Text style={styles.stopText}>■ 停止</Text>
+            <Text style={styles.stopText}>■</Text>
           </Pressable>
         ) : null}
       </View>
 
-      </div>
-
-      {input.canSubmit ? null : (
+      {!hasUnsent || input.canSubmit || input.disabledReason === null ||
+        (silentRecovery && input.blockedBy === "session_not_ready") ||
+        input.blockedBy === "turn_in_progress" || input.blockedBy === "submission_in_flight" ? null : (
         <Text style={styles.note} dataSet={{ submitUnavailable: "true" }}>
           {input.disabledReason ?? "当前不能提交。"}
         </Text>
       )}
 
-      {["failed", "uncertain", "pending_confirmation"].includes(input.submission.kind) ? <SubmissionLine submission={input.submission} /> : null}
+      {["failed", "uncertain"].includes(input.submission.kind) ? <SubmissionLine submission={input.submission} /> : null}
       {/* 没有可取消轮次时不占一行：原型也没有这条静息文案，窄高度下它会挤掉时间线。 */}
       {input.cancel.kind === "requested" || (input.cancel.kind === "available" && input.cancel.failure !== null) ? <CancelLine cancel={input.cancel} /> : null}
 

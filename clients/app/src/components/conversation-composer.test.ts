@@ -203,11 +203,10 @@ describe("输入区三态与附件边界", () => {
     // 执行中仍可编辑：输入框**不**只读，草稿可以写，但不建立队列。
     expect(tagContaining(html, 'data-composer-input="in_progress"')).not.toMatch(/readonly/i);
     // 发送按钮仍呈现但禁用（不是「消失」：状态与入口都在，闸门由 canSubmit 决定）。
-    expect(html).toContain('data-submit-enabled="false"');
-    expect(tagContaining(html, 'data-action="submit-prompt"')).toContain('aria-disabled="true"');
+    expect(html).not.toContain('data-action="submit-prompt"');
     expect(html).toContain('data-action="cancel-turn"');
-    expect(html).toContain("data-submit-unavailable");
-    expect(html).toContain("会话进行中，完成后可继续输入");
+    expect(html).not.toContain("data-submit-unavailable");
+    expect(html).toContain("输入消息，Enter 发送，Shift+Enter 换行");
     expect(html).not.toContain("进行中 · 可编辑但发送禁用，不排队");
   });
 
@@ -249,6 +248,14 @@ describe("输入区三态与附件边界", () => {
 });
 
 describe("提交与取消以服务端终态为准", () => {
+  it("正常提交与轮次执行不插入禁用原因行", () => {
+    for (const blockedBy of ["submission_in_flight", "turn_in_progress"] as const) {
+      const html = render(input({ state: "in_progress", canSubmit: false, blockedBy,
+        disabledReason: "消息已提交，等待服务端确认后才能继续发送" }));
+      expect(html).not.toContain("data-submit-unavailable");
+      expect(html).toContain('data-submit-enabled="false"');
+    }
+  });
   it("待确认：只说等待服务端确认，不写「已发送」「已排队」", () => {
     const html = render(
       input({
@@ -259,9 +266,8 @@ describe("提交与取消以服务端终态为准", () => {
       }),
     );
 
-    expect(html).toContain('data-submission="pending_confirmation"');
-    expect(html).toContain('data-submission-request-id="req-1"');
-    expect(html).toContain("等待终态确认");
+    expect(html).not.toContain('data-submission="pending_confirmation"');
+    expect(html).not.toContain("等待终态确认");
     // 反例：本地乐观置态会把这两句写进渲染结果 → 断言变红。
     expect(html).not.toContain("已发送");
     expect(html).not.toContain("已排队");
@@ -299,7 +305,7 @@ describe("提交与取消以服务端终态为准", () => {
     expect(requested).toContain('data-cancel-request-id="req-c"');
     expect(requested).toContain("等待服务端终态");
     // 反例：未确认就呈现为空闲/再次可取消 → 这里会再次出现按钮。
-    expect(requested).not.toContain('data-action="cancel-turn"');
+    expect(tagContaining(requested, 'data-action="cancel-turn"')).toContain('aria-disabled="true"');
 
     const confirmed = render(input({ cancel: { kind: "confirmed" } }));
     expect(confirmed).not.toContain('data-cancel="confirmed"');
@@ -372,7 +378,7 @@ describe("输入区：生产路径（仓库模型 → 组件）", () => {
 
     expect(html).toContain('data-composer="unavailable"');
     expect(html).toContain('data-submit-enabled="false"');
-    expect(html).toContain("当前不能提交。");
+    expect(html).not.toContain("当前不能提交。");
     expect(html).not.toContain("连接不可用或来源节点离线，不能提交");
     expect(tagContaining(html, 'data-composer-input="unavailable"')).not.toMatch(/readonly/i);
   });

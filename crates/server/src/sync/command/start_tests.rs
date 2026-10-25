@@ -245,6 +245,7 @@ impl SessionStore for TestStore {
             version: Version::new(*version),
             appended: Vec::new(),
             replayed: None,
+            accepted_input: None,
         })
     }
 

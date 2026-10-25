@@ -162,6 +162,7 @@ fn create_session(title: &str) -> OwnedCommit {
         idempotency: None,
         command_terminal: None,
         origin_epoch: Some(OriginEpoch::new(EPOCH).expect("origin epoch")),
+        input: None,
     }
 }
 
@@ -314,6 +315,7 @@ async fn the_written_directory_id_round_trips_verbatim_and_an_unwritten_row_stay
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("写入目录标识");
@@ -385,6 +387,7 @@ async fn a_mode_change_commit_also_persists_the_workspace_directory_id() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("同批写入模式与目录标识");
@@ -477,6 +480,7 @@ async fn a_null_directory_id_is_never_back_filled_from_the_canonical_path() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("只写 cwd");
@@ -551,6 +555,7 @@ async fn the_resume_flow_neither_reads_nor_rewrites_the_directory_id() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("写入目录标识");

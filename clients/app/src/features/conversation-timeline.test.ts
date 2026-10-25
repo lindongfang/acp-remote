@@ -305,6 +305,23 @@ describe("D1 时间线：历史条目与实时事件同一套呈现", () => {
 });
 
 describe("D9 轮次分组：同 turnId 被无标识条目切开", () => {
+  it("思考先到则排在授权前，工具后续完成不把卡片移到授权后", () => {
+    const { store } = storeWithHistoryFeature();
+    const items = [
+      { eventType: "agent.thought.delta", view: { messageId: "order-thought", turnId: "order-turn", deltaIndex: "0", text: "先检查环境" } },
+      { eventType: "tool.call.started", view: { toolCallId: "order-tool", turnId: "order-turn", title: "搜索代码", state: "in_progress" } },
+      { eventType: "permission.requested", view: { interactionId: "order-permission", turnId: "order-turn", title: "pwd", options: [{ optionId: "once", label: "允许一次", kind: "allow_once" }] } },
+      { eventType: "tool.call.completed", view: { toolCallId: "order-tool", turnId: "order-turn", title: "搜索代码", state: "completed" } },
+    ];
+    items.forEach((item, index) => store.apply({ kind: "event", event: eventMessage({
+      ...item, eventId: `dddddddd-0000-4000-8000-${String(901 + index).padStart(12, "0")}`,
+      sessionId: SESSION_ID, globalSequence: String(20 + index), createdAt: "2026-10-01T00:00:02.000Z",
+    }) }));
+    const entries = store.conversationPage(SESSION_ID)?.timeline.entries ?? [];
+    expect(entries.map((entry) => entry.kind)).toEqual(["message", "tool_call", "permission_requested"]);
+    expect(entries[1]).toMatchObject({ state: "completed" });
+  });
+
   it("permission_requested → permission_resolved → agent.message 的组 key 不重复", () => {
     const { store } = storeWithHistoryFeature();
     const interactionId = "99999999-0000-4000-8000-000000000031";
@@ -359,14 +376,13 @@ describe("D9 轮次分组：同 turnId 被无标识条目切开", () => {
     const groups = groupTimelineEntries(entries);
     // 反例：key 仅由 turnId 组成时，这两个兄弟节点会拿到同一个 `turn:turn-7`。
     const turnGroups = groups.filter((group) => group.turnId === "turn-7");
-    expect(turnGroups).toHaveLength(2);
+    expect(turnGroups).toHaveLength(1);
     const keys = groups.map((group) => group.key);
     expect(new Set(keys).size).toBe(keys.length);
-    // 第一次出现的组保持短 key（常见路径与前置历史时不漂移），第二次追加出现序号。
+    // 结果原位合并，不再切开同轮输出。
     expect(turnGroups[0]?.key).toBe("turn:turn-7");
-    expect(turnGroups[1]?.key).toBe("turn:turn-7#1");
-    // 无标识的授权结果仍独立成组（不猜它属于哪个轮次）。
-    expect(groups.some((group) => group.turnId === null)).toBe(true);
+    expect(entries.filter(entry => entry.kind === "permission_requested")).toHaveLength(1);
+    expect(entries.some(entry => entry.kind === "permission_resolved")).toBe(false);
   });
 });
 

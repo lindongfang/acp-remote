@@ -181,11 +181,10 @@ import {
   buildElicitationForm,
   buildSessionReadPageView,
   buildTimelineCard,
-  compareTimelinePosition,
+  compareRecordOrder,
   directoryNamesOf,
   localActivityOf,
   mediaBlocksOfDelta,
-  positionOf,
   recordFromEvent,
   recordFromHistoryItem,
   recordFromRemoteEvent,
@@ -215,6 +214,7 @@ import type {
   PreparationDraftContent,
   PreparationDraftGateway,
   PreparationDraftScope,
+  PreparationTabLocatorSnapshot,
   SyncGateway,
 } from "./ports";
 import type {
@@ -251,13 +251,14 @@ import {
 } from "./session-lifecycle";
 import type { ConversationSettingsModel } from "./conversation-settings-model";
 import { buildConversationSettingsModel } from "./conversation-settings-model";
-import type { VolatileMessageState } from "./conversation-timeline";
+import type { SentPromptPhase, VolatileMessageState } from "./conversation-timeline";
 import {
   appendDelta,
   buildFileChangeViews,
   buildTimeline,
   deltaChannelOf,
 } from "./conversation-timeline";
+import { buildConversationProcess } from "./conversation-process-model";
 import type { DegradedEventModel } from "./degradation-model";
 import { buildDegradedRecordModel, buildRecordDiagnosticsModel, isDegradedRecord } from "./degradation-model";
 import { buildInteractionViews } from "./interaction-model";
@@ -302,6 +303,7 @@ import type {
   PreparationBeginOutcome,
   PreparationPageModel,
   PreparationSessionState,
+  PreparationSlotRoute,
   PreparationWorkspace,
   PreparationWorkspaceInput,
 } from "./preparation-model";
@@ -403,6 +405,8 @@ export interface ConversationThreadState {
    * 「服务端当前不再确认」（`not_effective`）——否则按钮点下去在结果为空时没有任何可见变化。
    */
   readonly interactionsRefreshed?: boolean;
+  /** 已被有效请求读取覆盖的请求事件；不覆盖读取发出后才到达的新事件。 */
+  readonly checkedInteractionEvents?: ReadonlySet<string>;
 }
 
 /** 一次 `session.read` 的用途：首屏、向上翻消息、向上翻历史、刷新有效交互。 */
@@ -417,6 +421,7 @@ type ReadIntent =
 
 /** 待完成的读取请求。 */
 interface PendingRead {
+  readonly interactionEventsAtRequest: ReadonlySet<string>;
   readonly sessionId: Uuid;
   readonly intent: ReadIntent;
   /**
@@ -605,7 +610,13 @@ function activationShapeFailure(): ActivationFailure {
   };
 }
 
-/** 本设备已派发、尚未被权威消息回显的用户消息。 */
+/**
+ * 本设备已提交、尚未被权威消息接替的用户消息。
+ *
+ * 本地条目只有**可靠身份**：`turnId` 来自 `session.prompt` 的 `accepted { turnId }`（首条
+ * `session.start` 没有该字段，用它准备关联的 `messageId` 或权威读取确认的首条消息）；
+ * 视图层只按这些标识接替，不按相同文字或时间接近推断重复。
+ */
 export interface SentPrompt {
   readonly requestId: Uuid;
   readonly sessionId: Uuid;
@@ -613,6 +624,14 @@ export interface SentPrompt {
   /** 附件文件名（仅用于呈现；字节与上传状态不在这里）。 */
   readonly attachmentNames: readonly string[];
   readonly createdAt: string;
+  /** 本地阶段：上传/封存/待确认/已受理/不确定/未成立。 */
+  readonly phase: SentPromptPhase;
+  /** 服务端受理后给出的轮次标识；尚未受理为 `null`。 */
+  readonly turnId: string | null;
+  /** 已确认的正式用户消息标识（首条准备关联或权威首条读取）；未知为 `null`。 */
+  readonly messageId: string | null;
+  /** 本地实情（上传失败/取消说明）；没有为 `null`。 */
+  readonly notice: string | null;
 }
 
 /** 客户端状态（不可变快照）。 */
@@ -621,11 +640,12 @@ export interface ClientState {
   /** 本设备当前这次会话是否已经成功认证过（`auth.authenticated` 至少到达过一次）。 */
   readonly hasAuthenticated: boolean;
   /**
-   * 本设备已经派发、但服务端/Agent 尚未回显的用户消息（按 `requestId`）。
+   * 本设备已经提交、但权威用户消息尚未接替的用户消息（按 `requestId`）。
    *
-   * 用户消息的权威来源是 `session.read` 里的 `user.message.delta`；但 Agent 不一定回显用户输入，
-   * 正式读取也可能尚未返回。这里保留「我刚发出去的正文」，让用户立刻在时间线上看到自己的消息。
-   * 一旦读取结果或实时回显出现同文消息，视图层就不再重复呈现这一条。
+   * 用户消息的权威来源是 `session.read` 的消息页；Agent 不一定回显用户输入，读取也可能尚未返回。
+   * 这里保留「我刚发出去的正文」与它的本地阶段（上传/封存/待确认/已受理/不确定/未成立），让用户
+   * 立刻看到自己的消息与真实进度。视图层**只按** `messageId` 或 `turnId` 的同身份正式消息接替它，
+   * MUST NOT 按相同文字抵消（文字相同的两次输入是两条独立消息）。
    */
   readonly sentPrompts: ReadonlyMap<Uuid, SentPrompt>;
   /** 最近一次 `closed`/`blocked` 的关闭码与原因；从未关闭为 `null`。 */
@@ -1297,6 +1317,7 @@ function decodePendingInteractions(raw: readonly unknown[]): PendingInteractionI
         sessionId: decoded.value.sessionId,
         kind: decoded.value.kind,
         requestVersion: decoded.value.requestVersion,
+        ...(decoded.value.sequence === undefined ? {} : { sequence: decoded.value.sequence }),
         expiresAt: decoded.value.expiresAt,
         options: decoded.value.options,
         schema: decoded.value.schema,
@@ -1431,11 +1452,65 @@ function withoutEntry<K, V>(map: ReadonlyMap<K, V>, key: K): ReadonlyMap<K, V> {
   return next;
 }
 
+/**
+ * 创建一条本地提交条目（唯一构造点，保证每个创建路径都带上阶段与身份字段）。
+ *
+ * `turnId`/`messageId` 只放**已知**的可靠标识：拿不到就留 `null`，让条目继续以「本地待接替」
+ * 的形式存在，而不是退化成按文字猜测。
+ */
+function sentPromptOf(input: {
+  readonly requestId: Uuid;
+  readonly sessionId: Uuid;
+  readonly text: string;
+  readonly attachmentNames: readonly string[];
+  readonly createdAt: string;
+  readonly phase: SentPromptPhase;
+  readonly turnId?: string | null;
+  readonly messageId?: string | null;
+  readonly notice?: string | null;
+}): SentPrompt {
+  return {
+    requestId: input.requestId,
+    sessionId: input.sessionId,
+    text: input.text,
+    attachmentNames: input.attachmentNames,
+    createdAt: input.createdAt,
+    phase: input.phase,
+    turnId: input.turnId ?? null,
+    messageId: input.messageId ?? null,
+    notice: input.notice ?? null,
+  };
+}
+
+/**
+ * 受理结果里的 `turnId`（`session.prompt` 的 `accepted { turnId }`）。
+ *
+ * 只认字符串字段；形状不符时返回 `null`——不能把「读不到」当成某个轮次标识。
+ */
+function acceptedTurnIdOf(result: unknown): string | null {
+  const record = toResultRecord(result);
+  const turnId = record === null ? null : record["turnId"];
+  return typeof turnId === "string" && turnId.length > 0 ? turnId : null;
+}
+
+/** 纯函数版：更新一条本地提交的阶段/身份（不存在时原样返回，不用迟到结果复活条目）。 */
+function withPromptPhase(
+  state: ClientState,
+  requestId: Uuid,
+  update: (prompt: SentPrompt) => SentPrompt,
+): ClientState {
+  const current = state.sentPrompts.get(requestId);
+  if (current === undefined) return state;
+  const next = update(current);
+  if (next === current) return state;
+  return { ...state, sentPrompts: withEntry(state.sentPrompts, requestId, next) };
+}
+
 /** 按时间位置取最新的一条记录；无记录时为 `null`。 */
 function newestRecordOf(records: readonly StructuredRecord[]): StructuredRecord | null {
   let newest: StructuredRecord | null = null;
   for (const record of records) {
-    if (newest === null || compareTimelinePosition(positionOf(record), positionOf(newest)) > 0) newest = record;
+    if (newest === null || compareRecordOrder(record, newest) > 0) newest = record;
   }
   return newest;
 }
@@ -1579,6 +1654,8 @@ export class ClientStore {
   readonly #pairing: PairingWiring | null;
   readonly #overlayStore = new AgentConnectionOverlayStore();
   readonly #pendingReads = new Map<Uuid, PendingRead>();
+  /** Fixed lower bound while the two independently paged resources catch up. */
+  readonly #timelineFloors = new Map<Uuid, string>();
   readonly #listeners = new Set<Listener>();
   readonly #directoryRefreshRequests = new Set<Uuid>();
   readonly #schedule: ((delayMs: number, task: () => void) => () => void) | null;
@@ -1594,6 +1671,7 @@ export class ClientStore {
   readonly #fileRefreshQueued = new Set<string>();
   /** 压缩通知后待重读权威消息的会话（`turn.delta_compacted`）。 */
   readonly #messageRefreshQueued = new Set<Uuid>();
+  readonly #interactionRefreshQueued = new Set<Uuid>();
   /** 每条标题命令本连接上已发出过结果查询的 `requestId`（重连后清空，不换号重发）。 */
   readonly #titleStatusQueries = new Set<Uuid>();
   /** 首次读取在连接认证前被丢弃的会话；`authenticated` 后补发。 */
@@ -1671,9 +1749,18 @@ export class ClientStore {
   readonly #preparationEffects: (() => void)[] = [];
   /** 正在尝试恢复准备的会话：未知 URL 的跳转必须等它落地（否则合法准备会被误判成不存在）。 */
   readonly #preparationOpening = new Set<Uuid>();
-  /** 正在分配的入口键（防重复点击；分配成功后立即释放）。 */
-  readonly #preparationAllocating = new Set<string>();
-  /** 正在换 Agent/目录的会话（防重复）。 */
+  /**
+   * 唯一准备槽位的在途分配。
+   *
+   * 所有普通新建入口共用一个闸门：已有在途分配时再次新建只会拿到同一个 Promise，
+   * 不会发第二帧 `allocate`，也不会按入口各自的目录分配第二个 ID。
+   */
+  #pendingSlotAllocation: Promise<PreparationBeginOutcome> | null = null;
+  /** 页面请求过从本标签页定位恢复槽位：主机身份/认证就绪后自动补一次。 */
+  #tabRestoreRequested = false;
+  /** 启动时读定位并恢复槽位的在途任务（并发调用共享）。 */
+  #tabRestoreInFlight: Promise<Uuid | null> | null = null;
+  /** 正在显式更换 Agent 的会话（防重复替换）。 */
   readonly #preparationBusy = new Set<Uuid>();
   /** 草稿正文的合并写定时器（按键路径去重）。 */
   readonly #preparationSaveTimers = new Map<Uuid, () => void>();
@@ -1745,18 +1832,22 @@ export class ClientStore {
    * `resources`——§9.4 要求验证失败时保留上一次已完成的状态。
    */
   apply(event: SyncClientEvent): void {
+    const readPending = event.kind === "command_result" ? this.#pendingReads.get(event.result.body.requestId) : undefined;
     const wasOnline = this.#state.connection.state === "online";
     // 新连接上的结果查询重新计数：同一条标题命令每次重连后都会再查一次原请求。
     if (event.kind === "authenticated") {
       this.#titleStatusQueries.clear();
       this.#preparationStatusQueries.clear();
       this.#preparationOps.clear();
+      // 旧连接上的分配应答不会再来：结束在途闸门，避免永久挡住下一次新建。
+      this.#dropPendingSlotAllocations("连接已更新，这次新建没有完成，请重试");
     }
     const reduced = this.#reduce(event);
     // 连接离开 online（closed/blocked）或建立新连接（authenticated）后，旧连接上的在途
     // 文件查询不会再回来：必须丢掉它们并把来源的 loading 复位，否则 in-flight 标记会让
     // 下一次刷新被永久排队、来源永久停在加载中。
     const resetFiles = event.kind === "authenticated" || event.kind === "closed" || event.kind === "blocked";
+    if (resetFiles) this.#interactionRefreshQueued.clear();
     if (resetFiles) this.#resetFileQueries();
     // 读取结果只属于发起它的连接：换连接后旧结果不会回来。留着在途表会永久挡住同一会话的
     // 后续读取（页面只剩实时事件、看不到已保存的用户输入与历史）。
@@ -1767,13 +1858,28 @@ export class ClientStore {
     // 只有在权威摘要反映这次保存后才能退出编辑。
     const settled = this.#settleTitleCommits(recovered);
     if (settled === this.#state) return;
+    if (resetFiles) this.#timelineFloors.clear();
+    if (readPending !== undefined && event.kind === "command_result") {
+      if (event.result.body.status !== "completed") this.#timelineFloors.delete(readPending.sessionId);
+      else if (!this.#timelineFloors.has(readPending.sessionId) &&
+        ["first", "rebuild_remote", "earlier", "earlier_history"].includes(readPending.intent)) {
+        const thread = settled.threads.get(readPending.sessionId);
+        const message = thread?.page?.earliestCursor?.sequence;
+        const history = thread?.nextBeforeHistory;
+        if (message !== undefined && history != null) {
+          this.#timelineFloors.set(readPending.sessionId, BigInt(message) < BigInt(history) ? message : history);
+        }
+      }
+    }
     this.#commit(settled);
+    if (readPending !== undefined) this.#alignTimelineWindow(readPending.sessionId);
     if (!wasOnline && this.#state.connection.state === "online" && this.#activeConversationSession !== null) {
       this.#activeFileRefreshNeeded = true;
     }
     this.#drainActiveFileRefresh();
     this.#drainQueuedFileRefreshes();
     this.#drainQueuedMessageRefreshes();
+    this.#drainQueuedInteractionRefreshes();
     // 归并阶段推迟的副作用（请求正式会话、发准备控制帧）在提交之后执行。
     this.#drainPreparationEffects();
     // 首条受理后的权威读取：读到完整会话才清浏览器正文/Blob（只保留请求关联）。
@@ -1786,10 +1892,15 @@ export class ClientStore {
       // 旧连接上的准备操作不会再有应答：清掉在飞标记，重连后按 restore/状态查询重新收口。
       this.#preparationOps.clear();
       this.#preparationStatusQueries.clear();
+      this.#dropPendingSlotAllocations("连接已断开，这次新建没有完成，请重试");
     }
     if (event.kind === "online") {
       this.#ensureLifecycle("authenticated");
       this.#recoverPreparations();
+    }
+    if (this.#tabRestoreRequested && (event.kind === "authenticated" || event.kind === "snapshot_verified")) {
+      // 页面已经在等槽位恢复：主机身份/认证到这个时点才可用，补读一次定位。
+      void this.restoreTabPreparation();
     }
     if (event.kind === "authenticated") {
       this.#drainDeferredReads();
@@ -2689,6 +2800,30 @@ export class ClientStore {
   #withMessageLane(state: ClientState, record: StructuredRecord): ClientState {
     const channel = deltaChannelOf(record.eventType);
     const sessionId = record.sessionId;
+    // 实时交互可能没有请求版本；提交后自动回源取得当前有效选项，不能要求用户猜测刷新。
+    if (sessionId !== null && (record.eventType === "permission.requested" || record.eventType === "elicitation.requested") &&
+      state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE) && viewText(record.view, "requestVersion") === null) {
+      this.#interactionRefreshQueued.add(sessionId);
+    }
+    // ACP 思考通常没有独立结束通知；同轮开始工具、交互或下一条 Agent 消息即结束前一段。
+    const nextMessageId = viewText(record.view, "messageId");
+    const phaseTurnId = viewText(record.view, "turnId");
+    const advancesPhase = channel === "agent" || channel === "thought" ||
+      record.eventType === "tool.call.started" || record.eventType === "permission.requested" ||
+      record.eventType === "elicitation.requested";
+    if (advancesPhase && sessionId !== null && phaseTurnId !== null) {
+      const volatile = new Map(state.volatile);
+      let changed = false;
+      for (const [messageId, tail] of volatile) {
+        if (tail.channel !== "thought" || tail.completed || tail.sessionId !== sessionId ||
+            tail.turnId !== phaseTurnId || messageId === nextMessageId ||
+            (record.sessionSequence !== null && tail.sequence !== undefined &&
+             BigInt(record.sessionSequence) < BigInt(tail.sequence))) continue;
+        volatile.set(messageId, { ...tail, completed: true });
+        changed = true;
+      }
+      if (changed) state = { ...state, volatile };
+    }
     if (channel !== null) {
       const messageId = viewText(record.view, "messageId");
       const deltaIndex = viewText(record.view, "deltaIndex");
@@ -2714,6 +2849,7 @@ export class ClientStore {
           deltaIndex,
           text: text ?? "",
           createdAt: record.createdAt,
+          ...(record.sessionSequence === null ? {} : { sequence: record.sessionSequence }),
           mediaBlocks: blockMedia,
         }),
       );
@@ -2743,10 +2879,10 @@ export class ClientStore {
       return { ...state, volatile };
     }
 
-    if (record.eventType === "turn.failed" || record.eventType === "turn.cancelled") {
+    if (record.eventType === "turn.completed" || record.eventType === "turn.failed" || record.eventType === "turn.cancelled") {
       const turnId = viewText(record.view, "turnId");
       if (turnId === null || sessionId === null) return state;
-      const partial = partialViewFrom({
+      const partial = record.eventType === "turn.completed" ? null : partialViewFrom({
         state: record.eventType === "turn.failed" ? "failed" : "cancelled",
         reason: record.eventType === "turn.failed" ? "agent_failed" : "turn_cancelled",
       });
@@ -2814,9 +2950,20 @@ export class ClientStore {
     // 本机激活的受理/终态：只改对应会话的尝试（迟到的旧连接结果在归并里被丢弃）。
     if (result.body.command === "session.resume") next = this.#withActivationResult(next, result);
     if (result.body.command === "session.prompt") {
-      const snapshot = this.#promptDrafts.get(result.body.requestId);
-      if (snapshot !== undefined && (result.body.status === "rejected" || result.body.status === "failed")) {
-        // 受理前拒绝（如 Agent 不支持该媒体）或 turn 失败：把派发前清掉的草稿/选择完整放回。
+      const requestId = result.body.requestId;
+      const promptBefore = next.sentPrompts.get(requestId) ?? null;
+      // 已经受理过（或结果不确定）的输入不再被当作「可修正草稿」放回：它已经保存过，
+      // 放回输入区会诱导用户再发一条。受理前失败才恢复草稿与选择。
+      // 命令记录的先前状态也是证据：正式用户消息可能已经把本地条目接替掉（那时只剩命令历史）。
+      const previousCommandState = this.#state.commands.get(requestId)?.state ?? null;
+      // 快速失败可能只回一条终态（没有先前的 accepted）：终态带 `acceptedAt` 就是「已受理」的证据。
+      const acceptedBefore = (result.body.status === "failed" && result.body.acceptedAt !== null) ||
+        previousCommandState === "accepted" || previousCommandState === "uncertain" ||
+        (promptBefore !== null && (promptBefore.phase === "accepted" || promptBefore.phase === "uncertain"));
+      const snapshot = this.#promptDrafts.get(requestId);
+      if (snapshot !== undefined && (result.body.status === "rejected" || result.body.status === "failed") &&
+        !acceptedBefore) {
+        // 受理前拒绝（如 Agent 不支持该媒体）或执行失败（尚未受理）：把派发前清掉的草稿/选择完整放回。
         const attachments = new Map(next.attachments);
         attachments.set(snapshot.sessionId, snapshot.attachments);
         next = {
@@ -2827,16 +2974,70 @@ export class ClientStore {
         };
       }
       if (["rejected", "failed", "completed", "uncertain"].includes(result.body.status)) {
-        this.#promptDrafts.delete(result.body.requestId);
+        this.#promptDrafts.delete(requestId);
       }
-      // 明确未受理（rejected/failed）的用户消息不应继续冒充「已发送」；uncertain/completed 保留。
-      if (result.body.status === "rejected" || result.body.status === "failed") {
-        next = { ...next, sentPrompts: withoutEntry(next.sentPrompts, result.body.requestId) };
+      switch (result.body.status) {
+        case "accepted":
+          // 服务端受理后给出本次 `turnId`：本地条目此后只按它与正式用户消息关联。
+          next = withPromptPhase(next, requestId, (prompt) => ({
+            ...prompt,
+            phase: "accepted",
+            turnId: acceptedTurnIdOf(result.body.result) ?? prompt.turnId,
+            notice: null,
+          }));
+          break;
+        case "uncertain":
+          next = withPromptPhase(next, requestId, (prompt) => ({
+            ...prompt,
+            phase: "uncertain",
+            turnId: acceptedTurnIdOf(result.body.result) ?? prompt.turnId,
+            notice: prompt.notice ?? "受理结果不确定：可能已经保存；可以核实，不会自动重发。",
+          }));
+          break;
+        case "rejected":
+          // 从未受理：本地回声不能继续冒充「已发送」。
+          next = { ...next, sentPrompts: withoutEntry(next.sentPrompts, requestId) };
+          break;
+        case "failed":
+          // `failed` 是**已受理后**的执行失败（未受理是 `rejected`）：输入已由 Owner 保存，
+          // 必须保留并进入「已受理」阶段；只有终态缺少 acceptedAt（从未受理）才移除。
+          if (!acceptedBefore) {
+            next = { ...next, sentPrompts: withoutEntry(next.sentPrompts, requestId) };
+            break;
+          }
+          next = withPromptPhase(next, requestId, (prompt) => ({
+            ...prompt,
+            phase: "accepted",
+            turnId: acceptedTurnIdOf(result.body.result) ?? prompt.turnId,
+          }));
+          break;
+        case "completed":
+          // 完成不改变「这条输入已显示」的事实；等权威用户消息按 `turnId` 接替它。
+          next = withPromptPhase(next, requestId, (prompt) => ({
+            ...prompt,
+            turnId: acceptedTurnIdOf(result.body.result) ?? prompt.turnId,
+          }));
+          break;
       }
     }
-    if (result.body.command === "session.start" &&
-      (result.body.status === "rejected" || result.body.status === "failed")) {
-      next = { ...next, sentPrompts: withoutEntry(next.sentPrompts, result.body.requestId) };
+    if (result.body.command === "session.start") {
+      const requestId = result.body.requestId;
+      const promptBefore = next.sentPrompts.get(requestId) ?? null;
+      const previousCommandState = this.#state.commands.get(requestId)?.state ?? null;
+      const acceptedBefore = previousCommandState === "accepted" || previousCommandState === "uncertain" ||
+        (promptBefore !== null && (promptBefore.phase === "accepted" || promptBefore.phase === "uncertain"));
+      if (result.body.status === "accepted") {
+        next = withPromptPhase(next, requestId, (prompt) => ({ ...prompt, phase: "accepted", notice: null }));
+      } else if (result.body.status === "uncertain") {
+        next = withPromptPhase(next, requestId, (prompt) => ({
+          ...prompt,
+          phase: "uncertain",
+          notice: prompt.notice ?? "受理结果不确定：可能已经保存；可以核实，不会自动重发。",
+        }));
+      } else if (result.body.status === "rejected" || (result.body.status === "failed" && !acceptedBefore)) {
+        // 首条从未成立：草稿留在准备页，本地回声移除。
+        next = { ...next, sentPrompts: withoutEntry(next.sentPrompts, requestId) };
+      }
     }
     // 创建完成回复自带权威摘要；无需等待另一个 session.created 才让列表可见。
     // 只补缺失项：重投的创建结果不能覆盖之后的实时更新。
@@ -3045,7 +3246,7 @@ export class ClientStore {
     this.#pendingReads.delete(result.body.requestId);
     const threads = new Map(state.threads);
     const sessionId = pending.sessionId;
-    const existing = threads.get(sessionId) ?? EMPTY_THREAD;
+    let existing = threads.get(sessionId) ?? EMPTY_THREAD;
 
     if (result.body.command !== "session.read" || result.body.status !== "completed") {
       threads.set(sessionId, {
@@ -3062,6 +3263,11 @@ export class ClientStore {
     }
 
     const read = result.body.result as SessionReadResult;
+    if (read.resources.pending_interactions !== undefined) {
+      existing = { ...existing, checkedInteractionEvents: new Set([
+        ...(existing.checkedInteractionEvents ?? []), ...pending.interactionEventsAtRequest,
+      ]) };
+    }
     if (pending.intent === "refresh_interactions") {
       // 这一次读取本身就是「服务端当前有效请求」的确认：结果里没有的历史卡片从此标「不再有效」。
       threads.set(sessionId, { ...existing, interactionsRefreshed: true });
@@ -3375,6 +3581,8 @@ export class ClientStore {
         degraded: [],
         timeline: {
           entries: [],
+          // 来源不可用时没有轮次/提交事实可归约：不呈现过程行。
+          process: { phase: "none", label: null, detail: null },
           structuredHistory: structuredHistoryAvailability({
             origin,
             historyFeatureNegotiated: this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE),
@@ -3431,18 +3639,29 @@ export class ClientStore {
           effectiveAt: new Date(effectiveNow).toISOString(),
           nowMs: effectiveNow,
           pendingChecked: thread?.interactionsRefreshed === true,
+          checkedRequestEvents: thread?.checkedInteractionEvents,
           requestVersionRequired: this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE),
         })
       : [];
+    const activeTurn = activeTurnOf(records);
+    const sentPrompts = this.#sentPromptsOf(sessionId);
     const entries = remoteReady
       ? buildTimeline({
           messages: thread?.page?.messages ?? [],
           records,
           volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === sessionId),
           interactions,
-          sentPrompts: this.#sentPromptsOf(sessionId),
+          sentPrompts,
         })
       : [];
+    // 过程阶段与时间线**同一份输入**（条目 + 本地提交 + 活动轮次），因此「等待」「恢复」
+    // 不会与实际已经出现的思考/工具/回复各说一套。
+    const process = buildConversationProcess({
+      restoring: header.activation?.kind === "activating",
+      prompts: sentPrompts,
+      activeTurnId: activeTurn === null ? null : activeTurn.turnId,
+      entries,
+    });
     // 降级条目与时间线**同源**：扁平列表是时间线上 `kind === "degraded"` 的投影，
     // 因此不可能出现「时间线没有降级卡而诊断列表有」这类不一致。
     const degraded = entries.flatMap((entry) => (entry.kind === "degraded" ? [entry.degraded] : []));
@@ -3457,7 +3676,6 @@ export class ClientStore {
       modelSwitchCommand: this.#switchCommandOf(sessionId, "model"),
       modeSwitchCommand: this.#switchCommandOf(sessionId, "mode"),
     });
-    const activeTurn = activeTurnOf(records);
     const draftAttachments = this.#state.attachments.get(sessionId) ?? [];
     const pathRefs = this.#state.pathRefs.get(sessionId) ?? [];
     const agentCapabilities = this.#state.readResources.get(sessionId)?.agentCapabilities ?? null;
@@ -3496,6 +3714,8 @@ export class ClientStore {
       degraded,
       timeline: {
         entries,
+        process,
+        windowLoading: this.#timelineFloors.has(sessionId),
         structuredHistory: structuredHistoryAvailability({
           origin,
           historyFeatureNegotiated: this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE),
@@ -3532,20 +3752,6 @@ export class ClientStore {
         sessionReady: readiness.ready,
       }),
     });
-  }
-
-  /** 会话页优先复用同目录、同 Agent 且尚未提交的会话。 */
-  reusableUnsentSession(currentSessionId: Uuid): Uuid | null {
-    const current = this.#state.preparations.get(currentSessionId);
-    const summary = this.#findSession(currentSessionId);
-    const agentId = current?.agentId ?? summary?.agent.agentId;
-    const path = current?.workspace.path ?? this.#state.resources?.workspaces.find((item) =>
-      item.directoryId === summary?.workspace?.directoryId)?.path;
-    if (agentId === undefined || path === undefined) return null;
-    return [...this.#state.preparations.values()].find((session) => session.phase === "ready" &&
-      session.association === null && session.agentId === agentId &&
-      !this.#preparationSubmissions.has(session.sessionId) &&
-      displayDirectoryPath(session.workspace.path) === displayDirectoryPath(path))?.sessionId ?? null;
   }
 
   #unsentSidebarRows(directoryId: string | null, path?: string): readonly SessionRowModel[] {
@@ -3616,14 +3822,24 @@ export class ClientStore {
       effectiveAt: new Date(nowMs).toISOString(),
       nowMs,
       pendingChecked: this.#state.threads.get(page.sessionId)?.interactionsRefreshed === true,
+      checkedRequestEvents: this.#state.threads.get(page.sessionId)?.checkedInteractionEvents,
       requestVersionRequired: this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE),
     });
+    const sentPrompts = this.#sentPromptsOf(page.sessionId);
     const entries = buildTimeline({
       messages: [],
       records,
       volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === page.sessionId),
       interactions,
-      sentPrompts: this.#sentPromptsOf(page.sessionId),
+      sentPrompts,
+    });
+    const activeTurn = activeTurnOf(records);
+    // 准备态没有正式会话的激活事实：恢复提示不适用；提交/等待/内容阶段照常归约。
+    const process = buildConversationProcess({
+      restoring: false,
+      prompts: sentPrompts,
+      activeTurnId: activeTurn === null ? null : activeTurn.turnId,
+      entries,
     });
     const degraded = entries.flatMap((entry) => (entry.kind === "degraded" ? [entry.degraded] : []));
     return buildConversationModel({
@@ -3640,7 +3856,7 @@ export class ClientStore {
       degraded,
       loadingEarlier: false,
       pagingError: null,
-      timeline: { entries, structuredHistory: structuredHistoryAvailability({
+      timeline: { entries, process, structuredHistory: structuredHistoryAvailability({
         origin: "local", historyFeatureNegotiated: this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE),
       }) },
       input: { ...input, canSubmit: page.input.canSend && input.canSubmit,
@@ -3692,7 +3908,7 @@ export class ClientStore {
       (record) => record.sessionId === null && isDegradedRecord(record),
     );
     // 到达顺序不等于时间顺序（重投、批次交错），按时间位置排序让这一面的内容可复现。
-    records.sort((left, right) => compareTimelinePosition(positionOf(left), positionOf(right)));
+    records.sort(compareRecordOrder);
     return records.map((record) => buildDegradedRecordModel(record));
   }
 
@@ -4563,6 +4779,8 @@ export class ClientStore {
    */
   setHostIdentity(host: HostIdentityModel): void {
     this.#commit({ ...this.#state, host });
+    // 页面可能先于主机身份挂载：定位恢复需要 origin/节点/设备三项，到这里补读一次。
+    if (this.#tabRestoreRequested) void this.restoreTabPreparation();
   }
 
   /**
@@ -4702,6 +4920,8 @@ export class ClientStore {
   preparationPage(sessionId: Uuid, nowMs?: number): PreparationPageModel | null {
     const session = this.#state.preparations.get(sessionId);
     if (session === undefined) return null;
+    // 会话已进入权威快照：首条已转正，正式会话视图优先；准备页不得继续遮蔽它。
+    if (this.#findSession(sessionId) !== undefined) return null;
     const record = this.#state.commands.get(session.association?.requestId ?? "");
     const commandState =
       record === undefined || record.state === "draft" || record.state === "submitting"
@@ -4737,23 +4957,59 @@ export class ClientStore {
   }
 
   /**
+   * 普通新建入口的**统一判定**（目录页、目录详情页、会话左栏共用）。
+   *
+   * 同一标签页在该节点/设备下至多一个未转正的临时会话：已有槽位就只导航回它，分配在途就
+   * 等同一个结果。只有 `none` 才允许页面打开创建弹层并发 `allocate`。
+   *
+   * 只承载说明的条目（复制标签页的「另一个标签页正在使用这份准备」）不是槽位：提示照常渲染，
+   * 但本标签页的普通新建入口仍然放行（合同 §7）。
+   */
+  preparationSlotRoute(): PreparationSlotRoute {
+    if (this.#pendingSlotAllocation !== null) {
+      return { kind: "allocating", outcome: this.#pendingSlotAllocation };
+    }
+    const slot = this.#activePreparation();
+    return slot === null
+      ? { kind: "none" }
+      : { kind: "session", sessionId: slot.sessionId };
+  }
+
+  /** 当前标签页唯一未转正临时会话的 ID；没有则为 `null`。 */
+  activePreparationSessionId(): Uuid | null {
+    return this.#activePreparation()?.sessionId ?? null;
+  }
+
+  /**
    * 从目录/详情页发起 prepare → allocate（`session.preparation` 的 `allocate`）。
    *
    * 只提交 Agent、目录与标签页归属：正式 `sessionId` 由 Owner 分配，客户端不指定。
    * 成功时页面立即导航到 `/session/<id>`（准备模式），**不**新增任何目录会话行。
+   *
+   * 已有未转正槽位时**不**再分配：无论入口属于哪个目录、选了什么 Agent、槽位是否 ready，
+   * 都返回现有 ID；换 Agent 只能走 {@link changePreparationAgent}，换目录必须先显式放弃。
    */
-  beginPreparation(input: {
+  async beginPreparation(input: {
     readonly directoryId: string | null;
     readonly agentId: string;
     readonly directoryPath?: string;
-    readonly reuseUnsent?: boolean;
   }): Promise<PreparationBeginOutcome> {
+    const existing = this.#activePreparation();
+    if (existing !== null) return { ok: true, sessionId: existing.sessionId };
+    if (this.#pendingSlotAllocation !== null) return this.#pendingSlotAllocation;
+    // 刷新后定位恢复在途：先等它落地，避免恢复中的槽位被当成「没有」再分配一个。
+    if (this.#tabRestoreInFlight !== null) await this.#tabRestoreInFlight;
+    // 等待期间另一个入口可能已经发出了分配：闸门必须在 await 后复查，否则两帧 `allocate`。
+    if (this.#pendingSlotAllocation !== null) return this.#pendingSlotAllocation;
+    const restored = this.#activePreparation();
+    if (restored !== null) return { ok: true, sessionId: restored.sessionId };
+
     const availability = this.preparationEntryAvailability();
     if (!availability.available) {
-      return Promise.resolve({ ok: false, reason: availability.reason ?? "准备不可用" });
+      return { ok: false, reason: availability.reason ?? "准备不可用" };
     }
     if (this.#identity.connectionId === null) {
-      return Promise.resolve({ ok: false, reason: "还没连上主机" });
+      return { ok: false, reason: "还没连上主机" };
     }
     const entry = this.createEntry(input.directoryId);
     if (!entry.agents.some((agent) => agent.id === input.agentId)) {
@@ -4784,43 +5040,100 @@ export class ClientStore {
       });
     }
 
-    const operationId = this.#ids.uuid();
-    if (input.reuseUnsent === true) {
-      const reusable = [...this.#state.preparations.values()].find((session) =>
-        session.agentId === input.agentId && session.phase === "ready" && session.association === null &&
-        !this.#preparationSubmissions.has(session.sessionId) &&
-        displayDirectoryPath(session.workspace.path) === displayDirectoryPath(workspace.path));
-      if (reusable !== undefined) return Promise.resolve({ ok: true, sessionId: reusable.sessionId });
-    }
     const tabNonceSource = this.#preparationTabNonce;
     if (tabNonceSource === null) {
-      return Promise.resolve({ ok: false, reason: PREPARATION_NO_TAB_NONCE_NOTICE });
+      return { ok: false, reason: PREPARATION_NO_TAB_NONCE_NOTICE };
     }
-    const tabNonce = tabNonceSource();
-    const sheetKey = input.directoryId ?? CREATE_SHEET_BROWSE_KEY;
-    if (this.#preparationAllocating.has(sheetKey)) {
-      return Promise.resolve({ ok: false, reason: "正在为这个入口分配会话，等待这一次结束" });
-    }
-    this.#preparationAllocating.add(sheetKey);
-    return new Promise<PreparationBeginOutcome>((resolve) => {
-      const settle = (outcome: PreparationBeginOutcome): void => {
-        this.#preparationAllocating.delete(sheetKey);
-        resolve(outcome);
-      };
-      this.#pendingAllocations.set(operationId, {
-        resolve: settle,
-        agentId: input.agentId,
-        workspace,
-        tabNonce,
-      });
-      const sent = this.#sync.sendPreparation(
-        buildAllocateBody({ operationId, agentId: input.agentId, workspace: workspaceInput, tabNonce }),
-      );
-      if (!sent) {
-        this.#pendingAllocations.delete(operationId);
-        settle({ ok: false, reason: "命令通道尚未就绪，请稍后重试" });
-      }
+    return this.#allocatePreparation({
+      operationId: this.#ids.uuid(),
+      agentId: input.agentId,
+      workspace,
+      workspaceInput,
+      tabNonce: tabNonceSource(),
     });
+  }
+
+  /**
+   * 发出唯一槽位的 `allocate`，并把 Promise 记成在途闸门。
+   *
+   * 分配结果由 `#withPreparationResult` 按 `operationId` 收口；连接断开/重建时
+   * `#dropPendingSlotAllocations` 结束在途 Promise，避免它永久挡住后续新建。
+   */
+  #allocatePreparation(input: {
+    readonly operationId: Uuid;
+    readonly agentId: string;
+    readonly workspace: PreparationWorkspace;
+    readonly workspaceInput: PreparationWorkspaceInput;
+    readonly tabNonce: string;
+  }): Promise<PreparationBeginOutcome> {
+    let resolveOutcome!: (outcome: PreparationBeginOutcome) => void;
+    const promise = new Promise<PreparationBeginOutcome>((resolve) => {
+      resolveOutcome = resolve;
+    });
+    let settled = false;
+    const settle = (outcome: PreparationBeginOutcome): void => {
+      if (settled) return;
+      settled = true;
+      if (this.#pendingSlotAllocation === promise) this.#pendingSlotAllocation = null;
+      resolveOutcome(outcome);
+    };
+    this.#pendingAllocations.set(input.operationId, {
+      resolve: settle,
+      agentId: input.agentId,
+      workspace: input.workspace,
+      tabNonce: input.tabNonce,
+    });
+    this.#pendingSlotAllocation = promise;
+    const sent = this.#sync.sendPreparation(
+      buildAllocateBody({
+        operationId: input.operationId,
+        agentId: input.agentId,
+        workspace: input.workspaceInput,
+        tabNonce: input.tabNonce,
+      }),
+    );
+    if (!sent) {
+      this.#pendingAllocations.delete(input.operationId);
+      settle({ ok: false, reason: "命令通道尚未就绪，请稍后重试" });
+    }
+    return promise;
+  }
+
+  /** 唯一未转正临时会话（`accepted`/`committed`/`released` 已退出槽位角色）。 */
+  #activePreparation(state: ClientState = this.#state): PreparationSessionState | null {
+    for (const session of state.preparations.values()) {
+      if (this.#occupiesPreparationSlot(session)) return session;
+    }
+    return null;
+  }
+
+  /**
+   * 条目是否占着唯一槽位。
+   *
+   * `accepted`/`committed`/`released` 已退出槽位角色。**只承载说明的条目**（复制标签页得到的
+   * 「另一个标签页正在使用这份准备」）没有凭据、没有关联请求、也没有 Agent：本标签页从未持有
+   * 它的任何资源，它只用于渲染提示。把它算作槽位会让复制标签页的普通新建入口全被劫持到原会话
+   * （合同 §7「复制标签页与其他身份不得接管该槽位」），因此这里同样排除。
+   */
+  #occupiesPreparationSlot(session: PreparationSessionState): boolean {
+    if (session.phase === "accepted" || session.phase === "committed" || session.phase === "released") {
+      return false;
+    }
+    // 权威快照里已有这个会话 = 首条已转正：准备角色退出（刷新后不能把正式会话再当成未转正新会话）。
+    if (this.#findSession(session.sessionId) !== undefined) return false;
+    return !(session.receipt === null && session.association === null && session.agentId.length === 0);
+  }
+
+  /** 连接失效后结束在途分配：旧连接上的应答不会再来，闸门不能永久挡住新建。 */
+  #dropPendingSlotAllocations(reason: string): void {
+    if (this.#pendingAllocations.size === 0) {
+      this.#pendingSlotAllocation = null;
+      return;
+    }
+    const pending = [...this.#pendingAllocations.values()];
+    this.#pendingAllocations.clear();
+    this.#pendingSlotAllocation = null;
+    for (const item of pending) item.resolve({ ok: false, reason });
   }
 
   /**
@@ -4832,24 +5145,106 @@ export class ClientStore {
    * @returns 本页当前是否有准备（含正在恢复 / 被另一标签页占用的明确不可用态）。`false` 表示
    * 没有可恢复的草稿，调用方可以开始正式读取——正式读取**只**在没有准备时派发。
    */
-  openPreparationSession(sessionId: Uuid): Promise<boolean> {
-    if (this.#state.preparations.has(sessionId)) return Promise.resolve(true);
-    if (this.#preparationDrafts === null || this.#preparationOpening.has(sessionId)) {
-      return Promise.resolve(this.#state.preparations.has(sessionId));
+  async openPreparationSession(sessionId: Uuid): Promise<boolean> {
+    // 会话已在权威快照里：首条已转正，正式读取优先；准备说明/条目不得遮蔽它。
+    if (this.#findSession(sessionId) !== undefined) return false;
+    if (this.#state.preparations.has(sessionId)) return true;
+    const drafts = this.#preparationDrafts;
+    if (drafts === null) return false;
+    // 页面可能同时发起启动恢复：等它落地，避免同一会话两条并发恢复路径。
+    if (this.#tabRestoreInFlight !== null) await this.#tabRestoreInFlight;
+    if (this.#state.preparations.has(sessionId)) return true;
+    if (this.#preparationOpening.has(sessionId)) return this.#state.preparations.has(sessionId);
+    const locator = await this.#readTabLocator();
+    // 没有本标签页定位就不是可恢复的准备：陌生 URL 不发起任何准备，也不写定位。
+    if (locator === null) return false;
+    // 本标签页的槽位在别的会话上（例如 A→B 后刷新 B）：只恢复那个槽位，绝不把它改绑到当前 URL，
+    // 也不给当前 URL 造一个准备。
+    if (locator.sessionId !== sessionId) {
+      await this.restoreTabPreparation();
+      return this.#state.preparations.has(sessionId);
     }
+    if (!this.#locatorMatchesIdentity(locator)) return false;
     const scope = this.#preparationScope(sessionId);
-    if (scope === null) return Promise.resolve(false);
+    if (scope === null) return false;
     this.#preparationOpening.add(sessionId);
-    return this.#restoreFromDraft(sessionId, scope)
-      .then(() => this.#state.preparations.has(sessionId))
-      .finally(() => {
-        this.#preparationOpening.delete(sessionId);
-      });
+    try {
+      await this.#restoreFromDraft(sessionId, scope);
+    } finally {
+      this.#preparationOpening.delete(sessionId);
+    }
+    return this.#state.preparations.has(sessionId);
   }
 
   /** 当前标签页是否仍在尝试恢复这个会话的准备（未知 URL 的跳转要等它落地）。 */
   preparationRestoring(sessionId: Uuid): boolean {
     return this.#preparationOpening.has(sessionId);
+  }
+
+  /**
+   * 启动时按本标签页的非敏感定位恢复唯一准备槽位（目录页与正式会话页都可以调用）。
+   *
+   * 只读 sessionStorage 定位与 `PreparationDraftPort`；不分配新 ID、不改当前 URL、不接管
+   * 别的标签页。幂等：已有槽位直接返回；主机身份/认证尚未就绪时返回 `null`，并在
+   * `setHostIdentity`/连接事件后由 `#tabRestoreRequested` 自动补一次。
+   */
+  async restoreTabPreparation(): Promise<Uuid | null> {
+    this.#tabRestoreRequested = true;
+    const drafts = this.#preparationDrafts;
+    if (drafts === null) return null;
+    const existing = this.#activePreparation();
+    if (existing !== null) return existing.sessionId;
+    if (this.#tabRestoreInFlight !== null) return this.#tabRestoreInFlight;
+    const task = this.#restoreTabSlot();
+    this.#tabRestoreInFlight = task;
+    try {
+      return await task;
+    } finally {
+      if (this.#tabRestoreInFlight === task) this.#tabRestoreInFlight = null;
+    }
+  }
+
+  async #restoreTabSlot(): Promise<Uuid | null> {
+    const locator = await this.#readTabLocator();
+    if (locator === null) return null;
+    // 已经处理过这个定位：只有真正占槽位的条目才算恢复成功；转正式或只承载占用说明时不重复读草稿。
+    const known = this.#state.preparations.get(locator.sessionId);
+    if (known !== undefined) return this.#occupiesPreparationSlot(known) ? known.sessionId : null;
+    if (!this.#locatorMatchesIdentity(locator)) return null;
+    const scope = this.#preparationScope(locator.sessionId);
+    if (scope === null) return null;
+    if (this.#preparationOpening.has(locator.sessionId)) {
+      const opening = this.#state.preparations.get(locator.sessionId);
+      return opening !== undefined && this.#occupiesPreparationSlot(opening) ? locator.sessionId : null;
+    }
+    this.#preparationOpening.add(locator.sessionId);
+    try {
+      await this.#restoreFromDraft(locator.sessionId, scope);
+    } finally {
+      this.#preparationOpening.delete(locator.sessionId);
+    }
+    const restored = this.#state.preparations.get(locator.sessionId);
+    return restored !== undefined && this.#occupiesPreparationSlot(restored) ? locator.sessionId : null;
+  }
+
+  async #readTabLocator(): Promise<PreparationTabLocatorSnapshot | null> {
+    const drafts = this.#preparationDrafts;
+    if (drafts === null) return null;
+    try {
+      return await drafts.readTabLocator();
+    } catch {
+      return null;
+    }
+  }
+
+  /** 定位必须属于当前 canonical origin、本机节点与设备；别的主机/设备的残留不恢复。 */
+  #locatorMatchesIdentity(locator: PreparationTabLocatorSnapshot): boolean {
+    const host = this.#state.host;
+    const deviceId = this.#state.deviceId;
+    if (host === null || deviceId === null) return false;
+    return locator.canonicalOrigin === host.address &&
+      locator.ownerNodeId === (host.hostId ?? deviceId) &&
+      locator.deviceId === deviceId;
   }
 
   /** 更新准备草稿正文（只在内存；落草稿合并成一次异步写）。 */
@@ -4920,6 +5315,8 @@ export class ClientStore {
     }
     // 本地上传失败从未派发：同一 `requestId` 重试是安全的（服务端从未见过它）。
     const requestId = session.association?.requestId ?? this.#ids.uuid();
+    const attachments = this.#state.attachments.get(sessionId) ?? [];
+    const attachmentNames = attachments.map((attachment) => attachment.fileName);
     this.#preparationRequestSessions.set(requestId, sessionId);
     this.#preparationSubmissions.add(sessionId);
     this.#updatePreparation(sessionId, (current) => ({
@@ -4931,6 +5328,24 @@ export class ClientStore {
       canContinue: false,
       association: { requestId, firstSubmissionId: null, firstRequestId: null, currentRequestId: null, firstMessageId: null },
     }));
+    // 带附件时先展示本次输入与「上传中」：Agent 此时尚未收到任何内容。没有附件时命令在同一
+    // 次提交里同步派出，由 `#dispatchPrompt` 的派发补丁登记为「已提交」。
+    this.#dropUnsettledPrompts(sessionId);
+    if (attachments.length > 0) {
+      this.#commit({
+        ...this.#state,
+        sentPrompts: withEntry(this.#state.sentPrompts, requestId, sentPromptOf({
+          requestId,
+          sessionId,
+          text,
+          attachmentNames,
+          createdAt: new Date(this.#now()).toISOString(),
+          phase: "uploading",
+          // 准备关联已知的首条正文标识（刷新恢复的 committed 状态带回）：有了它就不靠位置猜。
+          messageId: session.association?.firstMessageId ?? null,
+        })),
+      });
+    }
     this.#cancelPreparationRenew(sessionId);
     this.#schedulePreparationSave(sessionId);
     void this.#uploadAndStart({ sessionId, requestId, text });
@@ -4996,13 +5411,16 @@ export class ClientStore {
             configOptions: session.selectedConfig,
           }),
         patch: (id) => ({
-          sentPrompts: withEntry(this.#state.sentPrompts, id, {
+          sentPrompts: withEntry(this.#state.sentPrompts, id, sentPromptOf({
             requestId: id,
             sessionId,
             text: this.#state.drafts.get(sessionId) ?? "",
             attachmentNames: (this.#state.attachments.get(sessionId) ?? []).map((attachment) => attachment.fileName),
             createdAt: new Date(this.#now()).toISOString(),
-          }),
+            phase: "submitted",
+            // 续发的首条沿用准备关联的首条正文标识：正式消息到达时按它原位接替。
+            messageId: session.association?.firstMessageId ?? null,
+          })),
         }),
       });
       if (dispatched === null) {
@@ -5047,7 +5465,7 @@ export class ClientStore {
     const session = this.#state.preparations.get(sessionId);
     if (session === undefined) return { ok: false, reason: "这不是准备会话" };
     if (session.agentId === agentId) return { ok: true, sessionId };
-    if (this.#preparationBusy.has(sessionId)) return { ok: false, reason: "正在更换 Agent/目录，等待这一次结束" };
+    if (this.#preparationBusy.has(sessionId)) return { ok: false, reason: "正在更换 Agent，等待这一次结束" };
     this.#preparationBusy.add(sessionId);
     try {
       const tabNonce = session.tabNonce;
@@ -5058,36 +5476,83 @@ export class ClientStore {
     }
   }
 
-  /** 更换目录：与换 Agent 同一条清理路径（新 ID、新草稿、旧响应不得覆盖）。 */
-  async changePreparationWorkspace(
-    sessionId: Uuid,
-    workspace: { readonly directoryId: string | null; readonly path: string },
-  ): Promise<PreparationBeginOutcome> {
+  /**
+   * 是否提供「放弃新会话」动作：只有尚未转正（未受理首条）的临时会话可以放弃。
+   *
+   * 普通返回目录/刷新**不**调用它；页面必须再经一次显式确认才执行。
+   */
+  canAbandonPreparation(sessionId: Uuid): boolean {
     const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return { ok: false, reason: "这不是准备会话" };
-    if (session.workspace.path === workspace.path && session.workspace.directoryId === workspace.directoryId) {
-      return { ok: true, sessionId };
-    }
-    if (this.#preparationBusy.has(sessionId)) return { ok: false, reason: "正在更换 Agent/目录，等待这一次结束" };
-    this.#preparationBusy.add(sessionId);
-    try {
-      const tabNonce = session.tabNonce;
-      await this.#discardPreparation(sessionId, "directory_changed");
-      return await this.#allocateReplacement({
-        agentId: session.agentId,
-        workspace: {
-          directoryId: workspace.directoryId,
-          path: workspace.path,
-          source: workspace.directoryId === null ? "workspacePath" : "directoryId",
-        },
-        tabNonce,
-      });
-    } finally {
-      this.#preparationBusy.delete(sessionId);
-    }
+    if (session === undefined) return false;
+    // 与普通新建入口同一判据：只承载说明的条目（复制标签页的提示）不占槽，本标签页从未持有
+    // 它的资源，因此也不能「放弃」它——否则会顺手清掉本标签页自己槽位的定位（合同 §7）。
+    return this.#occupiesPreparationSlot(session);
   }
 
-  /** 主动离开准备页：作废草稿、请求释放临时资源、清掉本标签页的归属。 */
+  /**
+   * 显式「放弃新会话」：作废草稿（写墓碑挡住迟到写）、请求释放临时资源、清本标签页定位与槽位。
+   *
+   * 用户确认后在未转正临时会话页调用；换目录必须先走这里，再从新目录普通新建。
+   */
+  async abandonPreparation(sessionId: Uuid): Promise<void> {
+    const session = this.#state.preparations.get(sessionId);
+    if (session === undefined || !this.canAbandonPreparation(sessionId)) return;
+    const drafts = this.#preparationDrafts;
+    const held = this.#preparationDraftAccess.get(sessionId);
+    if (drafts !== null) {
+      if (held !== undefined) {
+        try {
+          await drafts.invalidateDraft({
+            access: held.access,
+            expectedRevision: held.revision,
+            reason: "abandoned",
+            nowMs: this.#now(),
+          });
+        } catch {
+          // 草稿已不可写：仍继续释放资源并退出槽位，不让清理停在这里。
+        }
+      }
+      try {
+        await drafts.clearTabLocator();
+      } catch {
+        // 定位清理失败不阻塞；`#forgetPreparation` 后本页不再有任何入口指向旧槽位。
+      }
+      if (held !== undefined) {
+        try {
+          await drafts.releaseTab({ access: held.access, nowMs: this.#now() });
+        } catch {
+          // 归属释放失败由孤儿清理收口。
+        }
+      }
+    }
+    // 上面的 await 可能让本会话的 `restore` 结果落地并写入资源代：release 必须用最新快照，
+    // 否则旧快照的 `runtimeEpoch`/`generation` 为 `null`，释放帧会被静默跳过。
+    const current = this.#state.preparations.get(sessionId);
+    if (current !== undefined) this.#releasePreparationResource(current);
+    this.#forgetPreparation(sessionId);
+  }
+
+  /** 发出一次 `release`（凭据/资源代齐全时）；不修改槽位状态。 */
+  #releasePreparationResource(session: PreparationSessionState): void {
+    if (session.receipt === null || session.runtimeEpoch === null || session.generation === null) return;
+    this.#sendPreparationFrame(
+      session.sessionId,
+      "release",
+      buildReleaseBody({
+        operationId: this.#ids.uuid(),
+        sessionId: session.sessionId,
+        receipt: session.receipt,
+        runtimeEpoch: session.runtimeEpoch,
+        generation: session.generation,
+      }),
+    );
+  }
+
+  /**
+   * 身份/存储失效后的内部清理：作废草稿、请求释放临时资源、清掉本标签页归属。
+   *
+   * **普通返回目录/切换会话不调用它**；用户显式放弃走 {@link abandonPreparation}。
+   */
   leavePreparation(sessionId: Uuid): void {
     const session = this.#state.preparations.get(sessionId);
     if (session === undefined) return;
@@ -5095,25 +5560,14 @@ export class ClientStore {
     const held = this.#preparationDraftAccess.get(sessionId);
     if (drafts !== null && held !== undefined) {
       const nowMs = this.#now();
+      // 只有身份/存储失效才走到这里（普通导航不再清理）；墓碑原因按 `replaced` 记录。
       void drafts
-        .invalidateDraft({ access: held.access, expectedRevision: held.revision, reason: "navigation", nowMs })
+        .invalidateDraft({ access: held.access, expectedRevision: held.revision, reason: "replaced", nowMs })
         .catch(() => undefined)
         .then(() => drafts.releaseTab({ access: held.access, nowMs }))
         .catch(() => undefined);
     }
-    if (session.receipt !== null && session.runtimeEpoch !== null && session.generation !== null) {
-      this.#sendPreparationFrame(
-        sessionId,
-        "release",
-        buildReleaseBody({
-          operationId: this.#ids.uuid(),
-          sessionId,
-          receipt: session.receipt,
-          runtimeEpoch: session.runtimeEpoch,
-          generation: session.generation,
-        }),
-      );
-    }
+    this.#releasePreparationResource(session);
     this.#forgetPreparation(sessionId);
   }
 
@@ -5146,41 +5600,37 @@ export class ClientStore {
     });
   }
 
-  /** 换 Agent/目录的公共前半段：释放旧资源、作废旧草稿、清空输入与附件。 */
-  async #discardPreparation(sessionId: Uuid, reason: "agent_changed" | "directory_changed"): Promise<void> {
+  /** 换 Agent 的前半段：释放旧资源、作废旧草稿、清空输入与附件。 */
+  async #discardPreparation(sessionId: Uuid, reason: "agent_changed"): Promise<void> {
     const session = this.#state.preparations.get(sessionId);
     if (session === undefined) return;
     const drafts = this.#preparationDrafts;
     const held = this.#preparationDraftAccess.get(sessionId);
-    if (drafts !== null && held !== undefined) {
+    if (drafts !== null) {
+      if (held !== undefined) {
+        try {
+          await drafts.invalidateDraft({
+            access: held.access,
+            expectedRevision: held.revision,
+            reason,
+            nowMs: this.#now(),
+          });
+        } catch {
+          // 草稿已不可写（配额/存储不可用）：内存输入仍按主动更换清空，不因此中断换 ID。
+        }
+      }
+      // 换 Agent 后旧定位不再指向任何槽位；新分配成功保存草稿时会写回新定位。
       try {
-        await drafts.invalidateDraft({
-          access: held.access,
-          expectedRevision: held.revision,
-          reason,
-          nowMs: this.#now(),
-        });
+        await drafts.clearTabLocator();
       } catch {
-        // 草稿已不可写（配额/存储不可用）：内存输入仍按主动更换清空，不因此中断换 ID。
+        // 定位清理由新 `beginTab` 覆盖，失败不阻塞换 ID。
       }
     }
-    if (session.receipt !== null && session.runtimeEpoch !== null && session.generation !== null) {
-      this.#sendPreparationFrame(
-        sessionId,
-        "release",
-        buildReleaseBody({
-          operationId: this.#ids.uuid(),
-          sessionId,
-          receipt: session.receipt,
-          runtimeEpoch: session.runtimeEpoch,
-          generation: session.generation,
-        }),
-      );
-    }
+    this.#releasePreparationResource(session);
     this.#forgetPreparation(sessionId);
   }
 
-  /** 以既有 Agent/目录（或新的那一份）分配一个**新** ID；旧响应因会话键不同而无法覆盖它。 */
+  /** 以既有目录与新的 Agent 分配一个**新** ID；旧响应因会话键不同而无法覆盖它。 */
   #allocateReplacement(input: {
     readonly agentId: string;
     readonly workspace: PreparationWorkspace;
@@ -5188,30 +5638,16 @@ export class ClientStore {
   }): Promise<PreparationBeginOutcome> {
     const availability = this.preparationEntryAvailability();
     if (!availability.available) return Promise.resolve({ ok: false, reason: availability.reason ?? "准备不可用" });
-    const operationId = this.#ids.uuid();
     const workspaceInput: PreparationWorkspaceInput =
       input.workspace.source === "directoryId" && input.workspace.directoryId !== null
         ? { directoryId: input.workspace.directoryId }
         : { workspacePath: input.workspace.path };
-    return new Promise<PreparationBeginOutcome>((resolve) => {
-      this.#pendingAllocations.set(operationId, {
-        resolve,
-        agentId: input.agentId,
-        workspace: input.workspace,
-        tabNonce: input.tabNonce,
-      });
-      const sent = this.#sync.sendPreparation(
-        buildAllocateBody({
-          operationId,
-          agentId: input.agentId,
-          workspace: workspaceInput,
-          tabNonce: input.tabNonce,
-        }),
-      );
-      if (!sent) {
-        this.#pendingAllocations.delete(operationId);
-        resolve({ ok: false, reason: "命令通道尚未就绪，请稍后重试" });
-      }
+    return this.#allocatePreparation({
+      operationId: this.#ids.uuid(),
+      agentId: input.agentId,
+      workspace: input.workspace,
+      workspaceInput,
+      tabNonce: input.tabNonce,
     });
   }
 
@@ -5655,6 +6091,15 @@ export class ClientStore {
       notice: null,
       restartRequired: false,
     };
+    // 与 `#withPreparationResult` 同形的单槽位守卫：另一次分配/恢复已经占住槽位时，本次慢恢复
+    // 不落库——否则同一标签页会同时出现两条「新会话」。本次恢复还没有向服务端发任何帧，
+    // 丢弃它只需清掉刚取得的草稿访问权。
+    const occupied = this.#activePreparation();
+    if (occupied !== null && occupied.sessionId !== sessionId) {
+      this.#preparationDraftAccess.delete(sessionId);
+      for (const attachment of restoredAttachments) this.#restoredAttachmentBytes.delete(attachment.localId);
+      return;
+    }
     const attachments = new Map(this.#state.attachments);
     if (restoredAttachments.length > 0) attachments.set(sessionId, restoredAttachments);
     this.#commit({
@@ -5733,6 +6178,20 @@ export class ClientStore {
           ok: false,
           reason: body.status === "failed" ? body.error.message : "服务端没有分配会话",
         });
+        return state;
+      }
+      // 竞赛防御：恢复/另一分配已经占住唯一槽位时，不把新分配插进来；把新资源当场释放，
+      // 两个入口都只指向既有槽位。
+      const existing = this.#activePreparation(state);
+      if (existing !== null && existing.sessionId !== resultSessionId) {
+        pending.resolve({ ok: true, sessionId: existing.sessionId });
+        this.#sync.sendPreparation(buildReleaseBody({
+          operationId: this.#ids.uuid(),
+          sessionId: resultSessionId,
+          receipt: body.receipt,
+          runtimeEpoch: body.runtimeEpoch,
+          generation: body.generation,
+        }));
         return state;
       }
       const session: PreparationSessionState = {
@@ -6189,8 +6648,30 @@ export class ClientStore {
       const thread = this.#state.threads.get(sessionId);
       if (thread === undefined || thread.page == null) continue;
       this.#preparationAwaitingRead.delete(sessionId);
+      this.#linkFirstPromptMessage(sessionId, thread.page);
       this.#finalizeAcceptedPreparation(sessionId);
     }
+  }
+
+  /**
+   * 把首条正文的**正式消息标识**登记到首条本地提交上。
+   *
+   * 首条 `session.start` 的受理结果没有 `turnId`，但正在转正的这个会话由这次首条提交创建：
+   * 权威读取里**最早的一条用户消息**就是它。只在读取页确认没有更早内容（`hasEarlier === false`）
+   * 时才这样关联——有更早内容时位置不能证明身份，宁可保留本地条目也不猜。
+   */
+  #linkFirstPromptMessage(sessionId: Uuid, page: SessionReadPageView): void {
+    if (page.hasEarlier) return;
+    const firstUser = page.messages.find((message) => message.role === "user");
+    if (firstUser === undefined) return;
+    const session = this.#state.preparations.get(sessionId);
+    const requestId = session?.association?.requestId ?? null;
+    if (requestId === null) return;
+    this.#patchSentPrompt(requestId, (prompt) =>
+      prompt.messageId === firstUser.id
+        ? prompt
+        : { ...prompt, messageId: firstUser.id, phase: prompt.phase === "failed" ? prompt.phase : "accepted" },
+    );
   }
 
   /** 权威受理 + 正式读取之后：清浏览器正文/Blob，只保留请求关联。 */
@@ -6305,6 +6786,8 @@ export class ClientStore {
           }));
           transferIds.push(attachment.transferId);
         }
+        // 附件全部上传完、清单尚未登记：如实标「封存中」（Agent 仍未收到内容）。
+        this.#patchSentPrompt(input.requestId, (prompt) => ({ ...prompt, phase: "sealing", notice: null }));
         await transfer.sealManifest({
           sessionId,
           subjectId,
@@ -6341,16 +6824,22 @@ export class ClientStore {
             mode,
             configOptions: currentSession.selectedConfig,
           }),
-        // 首条在准备态也要立刻可见；服务端受理后回显同文时由视图层去重。
-        patch: (id) => ({
-          sentPrompts: withEntry(this.#state.sentPrompts, id, {
-            requestId: id,
-            sessionId,
-            text: input.text,
-            attachmentNames: sealedAttachments.map((attachment) => attachment.fileName),
-            createdAt: new Date(this.#now()).toISOString(),
-          }),
-        }),
+        // 首条在准备态也要立刻可见。身份只用可靠关联：准备关联已知的首条正文标识，或
+        // 附件上传阶段已登记的本地条目；**不**在视图层按相同文字去重。
+        patch: (id) => {
+          const existing = this.#state.sentPrompts.get(id);
+          return {
+            sentPrompts: withEntry(this.#state.sentPrompts, id, sentPromptOf({
+              requestId: id,
+              sessionId,
+              text: input.text,
+              attachmentNames: sealedAttachments.map((attachment) => attachment.fileName),
+              createdAt: existing?.createdAt ?? new Date(this.#now()).toISOString(),
+              phase: "submitted",
+              messageId: existing?.messageId ?? currentSession.association?.firstMessageId ?? null,
+            })),
+          };
+        },
       });
       if (dispatched === null) throw new Error("命令通道尚未就绪");
       this.#schedulePreparationSave(sessionId);
@@ -6374,6 +6863,12 @@ export class ClientStore {
               details: error.details,
             }
           : { code: "internal.unavailable", message: detail, retryable: true, details: {} };
+      // 已显示的输入不消失：标成「未发送」并保留原因（Agent 从未收到内容）。
+      this.#patchSentPrompt(input.requestId, (prompt) => ({
+        ...prompt,
+        phase: "failed",
+        notice: detail,
+      }));
       this.#applyPreparationFailureNow(sessionId, failure, "local_upload");
     } finally {
       this.#preparationSubmissions.delete(sessionId);
@@ -6426,10 +6921,35 @@ export class ClientStore {
   /** 向上翻页（消息）：续取游标取上一页最早一条的 `(createdAt, messageId)`。 */
   loadEarlier(sessionId: Uuid): void {
     if ([...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId)) return;
-    if (this.#state.threads.get(sessionId)?.page?.hasEarlier !== true) return;
-    const before = this.#state.threads.get(sessionId)?.page?.earliestCursor ?? null;
-    if (before === null) return;
+    const thread = this.#state.threads.get(sessionId);
+    const before = thread?.page?.earliestCursor ?? null;
+    // Catch up the stream whose boundary is newer before extending the other stream.
+    // An exhausted message stream must not hide older tools/history from the load action.
+    const history = thread?.nextBeforeHistory ?? null;
+    if (thread?.historyHasEarlier === true && history !== null &&
+        (thread.page?.hasEarlier !== true ||
+         (before?.sequence !== undefined && BigInt(history) > BigInt(before.sequence)))) {
+      this.loadEarlierHistory(sessionId);
+      return;
+    }
+    if (thread?.page?.hasEarlier !== true || before === null) return;
     this.#requestPage(sessionId, "earlier", { before });
+  }
+
+  #alignTimelineWindow(sessionId: Uuid): void {
+    const floor = this.#timelineFloors.get(sessionId);
+    if (floor === undefined || [...this.#pendingReads.values()].some(pending => pending.sessionId === sessionId)) return;
+    const thread = this.#state.threads.get(sessionId);
+    const message = thread?.page?.earliestCursor;
+    const history = thread?.nextBeforeHistory;
+    if (thread?.historyHasEarlier === true && history != null && BigInt(history) > BigInt(floor)) {
+      this.loadEarlierHistory(sessionId);
+    } else if (thread?.page?.hasEarlier === true && message?.sequence !== undefined && BigInt(message.sequence) > BigInt(floor)) {
+      this.#requestPage(sessionId, "earlier", { before: message });
+    } else {
+      this.#timelineFloors.delete(sessionId);
+      this.#commit({ ...this.#state });
+    }
   }
 
   /**
@@ -7523,6 +8043,9 @@ export class ClientStore {
     if (text.length > 0 && this.#state.drafts.get(sessionId) !== text) {
       this.#commit({ ...this.#state, drafts: withEntry(this.#state.drafts, sessionId, text) });
     }
+    // 上一次未成立的提交（上传失败/取消）不再代表当前输入：清掉它的本地回声，避免时间线上
+    // 留下一条永远不会被权威消息接替的失败条目。已受理/不确定的条目不清理。
+    this.#dropUnsettledPrompts(sessionId);
 
     if (attachments.length === 0) {
       const outcome = this.#dispatchPrompt({
@@ -7556,7 +8079,19 @@ export class ClientStore {
       manifestSealed: false,
       error: null,
     });
-    this.#commit({ ...this.#state, attachmentRuns: runs });
+    // 本次输入立刻可见，并如实标注「附件上传中」：此时 Agent 尚未收到任何内容。
+    this.#commit({
+      ...this.#state,
+      attachmentRuns: runs,
+      sentPrompts: withEntry(this.#state.sentPrompts, promptRequestId, sentPromptOf({
+        requestId: promptRequestId,
+        sessionId,
+        text: trimmed,
+        attachmentNames: attachments.map((attachment) => attachment.fileName),
+        createdAt: new Date(this.#now()).toISOString(),
+        phase: "uploading",
+      })),
+    });
     this.#uploadingSessions.add(sessionId);
     void this.#uploadAndSubmit({
       sessionId,
@@ -7684,6 +8219,8 @@ export class ClientStore {
       }
 
       if (this.#cancelledUploads.has(sessionId)) throw new Error("附件上传已取消");
+      // 附件都已封存，清单还没登记：如实说「封存中」，仍然没有任何内容到达 Agent。
+      this.#patchSentPrompt(input.promptRequestId, (prompt) => ({ ...prompt, phase: "sealing", notice: null }));
       await transfer.sealManifest({
         sessionId,
         subjectId,
@@ -7736,6 +8273,14 @@ export class ClientStore {
         error: cancelled ? "上传已取消：未向 Agent 派发任何内容，草稿与选择仍保留。" : detail,
       });
       this.#commit({ ...this.#state, attachmentRuns: runs });
+      // 已显示的输入**不消失**：标成「未发送」，并说明是失败还是取消（Agent 从未收到内容）。
+      this.#patchSentPrompt(input.promptRequestId, (prompt) => ({
+        ...prompt,
+        phase: "failed",
+        notice: cancelled
+          ? "上传已取消：未向 Agent 派发任何内容，输入仍可修正后重新发送。"
+          : detail,
+      }));
     } finally {
       this.#uploadingSessions.delete(sessionId);
       this.#activeTransfers.delete(sessionId);
@@ -7783,19 +8328,27 @@ export class ClientStore {
             ? { content }
             : { content, submissionId: input.submissionId },
       }),
-      patch: (id) => ({
-        promptRequestIds: withEntry(this.#state.promptRequestIds, input.sessionId, id),
-        drafts: withoutEntry(this.#state.drafts, input.sessionId),
-        pathRefs: withoutEntry(this.#state.pathRefs, input.sessionId),
-        // 用户消息不一定被 Agent 回显：先把「我刚发的正文」放进时间线，读取/回显出现同文时再让位。
-        sentPrompts: withEntry(this.#state.sentPrompts, id, {
-          requestId: id,
-          sessionId: input.sessionId,
-          text: input.text,
-          attachmentNames: input.attachments.map((attachment) => attachment.fileName),
-          createdAt: new Date(this.#now()).toISOString(),
-        }),
-      }),
+      patch: (id) => {
+        const existing = this.#state.sentPrompts.get(id);
+        return {
+          promptRequestIds: withEntry(this.#state.promptRequestIds, input.sessionId, id),
+          drafts: withoutEntry(this.#state.drafts, input.sessionId),
+          pathRefs: withoutEntry(this.#state.pathRefs, input.sessionId),
+          // 用户消息不一定被 Agent 回显：先把「我刚发的正文」放进时间线。阶段是**已发出、
+          // 等待服务端确认**；正式正文到达时只按 `turnId`/`messageId` 接替它。
+          sentPrompts: withEntry(this.#state.sentPrompts, id, sentPromptOf({
+            requestId: id,
+            sessionId: input.sessionId,
+            text: input.text,
+            attachmentNames: input.attachments.map((attachment) => attachment.fileName),
+            // 上传阶段已经显示过这条输入：保留它的首次可见时刻，不因进入下一阶段而跳动。
+            createdAt: existing?.createdAt ?? new Date(this.#now()).toISOString(),
+            phase: "submitted",
+            turnId: existing?.turnId ?? null,
+            messageId: existing?.messageId ?? null,
+          })),
+        };
+      },
     });
     if (requestId === null) return NOT_CONNECTED;
     this.#promptDrafts.set(requestId, {
@@ -8564,18 +9117,31 @@ export class ClientStore {
     }
   }
 
+  #drainQueuedInteractionRefreshes(): void {
+    if (this.#state.connection.state !== "online") return;
+    for (const sessionId of this.#interactionRefreshQueued) {
+      // 保留排队标记，等当前读取完成；其快照可能早于刚收到的请求。
+      if ([...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId)) continue;
+      this.#interactionRefreshQueued.delete(sessionId);
+      this.#requestPage(sessionId, "refresh_interactions");
+    }
+  }
+
   #requestPage(
     sessionId: Uuid,
     intent: ReadIntent,
     cursors: { readonly before?: ReadCursor; readonly beforeHistory?: string } = {},
   ): Uuid | null {
     const volatileAtRequest = this.#volatileSnapshot(sessionId);
+    const interactionEventsAtRequest = new Set(this.#recordsOf(sessionId)
+      .filter((record) => record.eventType === "permission.requested" || record.eventType === "elicitation.requested")
+      .map((record) => record.eventId));
     const remote = remoteRefOf(this.#state, sessionId);
     const generation = remote === null ? 0 : sourceGenerationOf(this.#state, remote.ownerNodeId);
     return this.#dispatchIntent({
       sessionId,
       build: (requestId) => {
-        this.#pendingReads.set(requestId, { sessionId, intent, volatileAtRequest, remote, generation });
+        this.#pendingReads.set(requestId, { sessionId, intent, volatileAtRequest, interactionEventsAtRequest, remote, generation });
         // 与 `paging.ts` 的 `buildReadPayload` 同一形状；这里就地构造是为了让 `include`
         // 保持 `SessionReadInclude[]`（协议类型），而 `PageRequest` 声明的是更宽的 `string[]`。
         const payload: { include: readonly SessionReadInclude[]; before?: ReadCursor; beforeHistory?: string; limit?: number } = {
@@ -8682,6 +9248,34 @@ export class ClientStore {
   /** 本会话在本设备已派发、尚未被读取/回显覆盖的用户消息。 */
   #sentPromptsOf(sessionId: Uuid): readonly SentPrompt[] {
     return [...this.#state.sentPrompts.values()].filter((prompt) => prompt.sessionId === sessionId);
+  }
+
+  /**
+   * 更新一条本地提交的阶段（上传 → 封存 → 待确认 → 已受理…）。
+   *
+   * 条目已经让位（权威消息先到）时什么都不做：迟到的上传/命令结果不得复活它。
+   */
+  #patchSentPrompt(requestId: Uuid, update: (prompt: SentPrompt) => SentPrompt): void {
+    const next = withPromptPhase(this.#state, requestId, update);
+    if (next !== this.#state) this.#commit(next);
+  }
+
+  /**
+   * 清掉本会话里**未成立**（上传失败/取消）的旧提交回声。
+   *
+   * 它们从未被服务端受理，不会有权威消息来接替；下一次提交开始时若还留着，时间线上就会留下
+   * 一条永远显示「未发送」的孤立条目。已受理/不确定的条目**不**在这里清理。
+   */
+  #dropUnsettledPrompts(sessionId: Uuid): void {
+    let changed = false;
+    const sentPrompts = new Map(this.#state.sentPrompts);
+    for (const [requestId, prompt] of sentPrompts) {
+      if (prompt.sessionId === sessionId && prompt.phase === "failed") {
+        sentPrompts.delete(requestId);
+        changed = true;
+      }
+    }
+    if (changed) this.#commit({ ...this.#state, sentPrompts });
   }
 
   /** 本会话的结构化记录（实时与历史按 `eventId` 去重，实时优先）。 */
