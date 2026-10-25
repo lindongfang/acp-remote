@@ -4,8 +4,8 @@
 
 关联材料：
 
-- 变更任务：[`openspec/changes/session-activation-lifecycle/tasks.md`](../../openspec/changes/session-activation-lifecycle/tasks.md) 的 1.1–1.3 与 [`plan.md`](../../openspec/changes/session-activation-lifecycle/plan.md) 的 PV0。
-- 会话规范：[`specs/local-session-lifecycle/spec.md`](../../openspec/changes/session-activation-lifecycle/specs/local-session-lifecycle/spec.md)。
+- 变更任务：[`openspec/changes/session-activation-lifecycle/tasks.md`](../../openspec/changes/archive/2026-10-25-session-activation-lifecycle/tasks.md) 的 1.1–1.3 与 [`plan.md`](../../openspec/changes/archive/2026-10-25-session-activation-lifecycle/plan.md) 的 PV0。
+- 会话规范：[`specs/local-session-lifecycle/spec.md`](../../openspec/changes/archive/2026-10-25-session-activation-lifecycle/specs/local-session-lifecycle/spec.md)。
 - ACP 方法矩阵：[`compatibility/acp/v1/matrix.json`](../../compatibility/acp/v1/matrix.json)（`method.session_resume`、`method.session_close`）。
 - 探针脚本：[`scripts/probe-session-lifecycle.mjs`](../../scripts/probe-session-lifecycle.mjs)。
 
