@@ -6,10 +6,10 @@
 
 关联材料：
 
-- 变更与任务：[`openspec/changes/session-activation-lifecycle/tasks.md`](../../openspec/changes/session-activation-lifecycle/tasks.md)
-  的 7.1–7.4、[`plan.md`](../../openspec/changes/session-activation-lifecycle/plan.md) 的 PV6/PV7。
-- 规范：[`specs/local-session-lifecycle/spec.md`](../../openspec/changes/session-activation-lifecycle/specs/local-session-lifecycle/spec.md)、
-  [`specs/session-activity/spec.md`](../../openspec/changes/session-activation-lifecycle/specs/session-activity/spec.md)。
+- 变更与任务：[`openspec/changes/session-activation-lifecycle/tasks.md`](../../openspec/changes/archive/2026-10-25-session-activation-lifecycle/tasks.md)
+  的 7.1–7.4、[`plan.md`](../../openspec/changes/archive/2026-10-25-session-activation-lifecycle/plan.md) 的 PV6/PV7。
+- 规范：[`specs/local-session-lifecycle/spec.md`](../../openspec/changes/archive/2026-10-25-session-activation-lifecycle/specs/local-session-lifecycle/spec.md)、
+  [`specs/session-activity/spec.md`](../../openspec/changes/archive/2026-10-25-session-activation-lifecycle/specs/session-activity/spec.md)。
 - 上一轮真实探针：[`session-lifecycle-probe.md`](session-lifecycle-probe.md)（WP0，已执行）。
 - 测试与脚本：
   - [`crates/app/tests/session_lifecycle.rs`](../../crates/app/tests/session_lifecycle.rs)
