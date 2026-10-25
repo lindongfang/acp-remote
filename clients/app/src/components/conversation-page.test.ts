@@ -30,11 +30,16 @@ import type { ConversationStreamProps } from "./index";
 import { ConversationStream, RuntimeUnavailable, StatusPill } from "./index";
 import { composerKeyAction } from "./ConversationComposer";
 import {
+  CROSSING_FOLD_ENTER_PX,
+  CROSSING_FOLD_EXIT_PX,
+  CROSSING_FOLD_MIN_BODY_PX,
   SCROLL_FOLLOW_GUARD_PX,
   anchorScrollDelta,
   classifyUserInputsInBand,
+  crossingFoldAtTop,
   isFollowingBottom,
   jumpPillOf,
+  type CrossingFoldGeometry,
 } from "./ConversationStream";
 import type { ConversationPageModel } from "../features/conversation-model";
 import type { ClientStore } from "../features/client-store";
@@ -986,6 +991,28 @@ describe("对话页：激活失败的显式重试入口", () => {
   });
 });
 
+describe("对话页：折叠表头是否可点只取决于页面给没给回调", () => {
+  it("没有 onToggleTimelineEntry 时折叠块照旧呈现，但表头不是控件", () => {
+    const { store } = filledStore("running");
+    const html = renderPage(pageOf(store));
+
+    // 折叠块本身在（工具调用的内容仍按折叠块结构呈现）。
+    expect(html).toContain("data-fold-entry=");
+    // 没有回调时不得渲染按钮/折叠箭头/toggle 动作：一个点了没反应的可点控件比不可点更糟。
+    expect(html).not.toContain('data-action="toggle-timeline-entry"');
+  });
+
+  it("给了 onToggleTimelineEntry 时表头是可点控件并带展开状态", () => {
+    const { store } = filledStore("running");
+    const html = renderPage(pageOf(store), { onToggleTimelineEntry: () => undefined });
+
+    expect(html).toContain('data-action="toggle-timeline-entry"');
+    const toggle = html.slice(html.indexOf('data-action="toggle-timeline-entry"'));
+    expect(toggle).toContain("data-entry-key=");
+    expect(toggle).toContain("data-entry-expanded=");
+  });
+});
+
 describe("对话页：阅读锚点的几何补偿", () => {
   it("内容在上方增长时补偿同样的像素；只在下方增长时不滚动", () => {
     // 更早历史/媒体加载把锚点向下推 120px：scrollTop 也要 +120，阅读位置才不动。
@@ -994,5 +1021,65 @@ describe("对话页：阅读锚点的几何补偿", () => {
     expect(anchorScrollDelta(240, 240)).toBe(0);
     // 折叠块在上方收起：内容变短，阅读位置相应上移。
     expect(anchorScrollDelta(240, 200)).toBe(-40);
+  });
+});
+
+describe("对话页：快捷收起入口的进入/退出容差", () => {
+  /** 表头底边在容器顶边上方 `above` 像素（负数=已滚出）、折叠块底边在顶边下方 `body` 像素的几何。 */
+  function fold(above: number, body: number): CrossingFoldGeometry {
+    return { headerBottom: -above, bodyBottom: body };
+  }
+
+  it("未显示的目标按进入阈值判定：表头要真的滚出顶部，正文还要留够可见高度", () => {
+    // 表头刚好滚出 `CROSSING_FOLD_ENTER_PX`：进入。
+    expect(crossingFoldAtTop(fold(CROSSING_FOLD_ENTER_PX, 400), false)).toBe(true);
+    // 少一像素就不进入——进入阈值不是「贴着顶部就算」。
+    expect(crossingFoldAtTop(fold(CROSSING_FOLD_ENTER_PX - 1, 400), false)).toBe(false);
+    // 正文露出量：恰好到下限算进入，差一像素不算（收起后标题没地方可见）。
+    expect(crossingFoldAtTop(fold(80, CROSSING_FOLD_MIN_BODY_PX + CROSSING_FOLD_ENTER_PX), false)).toBe(true);
+    expect(crossingFoldAtTop(fold(80, CROSSING_FOLD_MIN_BODY_PX + CROSSING_FOLD_ENTER_PX - 1), false)).toBe(false);
+  });
+
+  it("已显示的目标按更宽容的退出阈值保留：边界附近一两个像素不挂卸", () => {
+    // 表头已经回到可见带里 1px：如果仍用进入阈值，这里会立刻移除入口。
+    const justInside = fold(-1, 400);
+    expect(crossingFoldAtTop(justInside, false)).toBe(false);
+    expect(crossingFoldAtTop(justInside, true)).toBe(true);
+    // 退出阈值之内保留，达到/超过才移除。
+    expect(crossingFoldAtTop(fold(-(CROSSING_FOLD_EXIT_PX - 1), 400), true)).toBe(true);
+    expect(crossingFoldAtTop(fold(-CROSSING_FOLD_EXIT_PX, 400), true)).toBe(false);
+    // 正文侧同理：块只剩很少可见高度时，再看退出方向的容差。
+    expect(crossingFoldAtTop(fold(80, CROSSING_FOLD_MIN_BODY_PX - CROSSING_FOLD_EXIT_PX + 1), true)).toBe(true);
+    expect(crossingFoldAtTop(fold(80, CROSSING_FOLD_MIN_BODY_PX - CROSSING_FOLD_EXIT_PX), true)).toBe(false);
+  });
+
+  it("目标失效时彻底移除：折叠后（正文高度归零）或表头回到可见带内", () => {
+    // 目标被折叠：正文高度变成 0，任何容差都不该保留入口。
+    expect(crossingFoldAtTop({ headerBottom: -200, bodyBottom: 0 }, true)).toBe(false);
+    // 表头回到可见带里：用户已经看得到它，快捷收起不再有意义（退出阈值之外）。
+    expect(crossingFoldAtTop({ headerBottom: CROSSING_FOLD_EXIT_PX, bodyBottom: 500 }, true)).toBe(false);
+  });
+
+  it("容差只决定按钮展示，不改变「是否跟随底部」的真实几何判据", () => {
+    const contentHeight = 1000;
+    const viewportHeight = 400;
+    // 同一时刻：折叠块仍在退出容差带里（按钮保留）。
+    expect(crossingFoldAtTop({ headerBottom: -1, bodyBottom: 300 }, true)).toBe(true);
+    // 但滚动位置距底部超过跟随闸门一像素——仍然**不**跟随，容差不放宽这个判据。
+    expect(
+      isFollowingBottom({
+        offsetY: contentHeight - viewportHeight - (SCROLL_FOLLOW_GUARD_PX + 1),
+        contentHeight,
+        viewportHeight,
+      }),
+    ).toBe(false);
+    // 闸门本身仍是 24px 的真实几何：正好到达时跟随，差一像素不跟随。
+    expect(
+      isFollowingBottom({
+        offsetY: contentHeight - viewportHeight - SCROLL_FOLLOW_GUARD_PX,
+        contentHeight,
+        viewportHeight,
+      }),
+    ).toBe(true);
   });
 });

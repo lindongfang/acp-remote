@@ -22,6 +22,7 @@ import { describe, expect, it } from "vitest";
 
 import { ConversationComposer } from "./index";
 import { ConversationStream } from "./index";
+import { submitBlockedReasonOf } from "./ConversationComposer";
 import type { ClientStore } from "../features/client-store";
 import type { ConversationInputModel } from "../features/conversation-input-model";
 import { resources, session, storeWith } from "../features/testing/fixtures";
@@ -401,5 +402,88 @@ describe("输入区：生产路径（仓库模型 → 组件）", () => {
     expect(html).toContain('data-composer-draft-in-memory-only="true"');
     expect(html).toContain('data-submit-enabled="false"');
     expect(html).toContain('data-attachments-supported="false"');
+  });
+});
+
+describe("发送/停止切换：不自动闪现通用禁用提示，真实原因仍可取得", () => {
+  it("判定只有一个来源：正常流程状态没有原因，真正的阻塞才有", () => {
+    const blocked = (blockedBy: ConversationInputModel["blockedBy"], extra: { silent?: boolean } = {}) =>
+      submitBlockedReasonOf(
+        { canSubmit: false, blockedBy, disabledReason: "某个原因" },
+        { silentRecovery: extra.silent === true },
+      );
+
+    // 流程本身：执行中、等待服务端终态，都不是「故障」，不产生提示。
+    expect(blocked("turn_in_progress")).toBeNull();
+    expect(blocked("submission_in_flight")).toBeNull();
+    // 会话恢复中的静默重连同样不提示；同一原因在非静默场景下要说得出口。
+    expect(blocked("session_not_ready", { silent: true })).toBeNull();
+    expect(blocked("session_not_ready")).toBe("某个原因");
+    // 真正的阻塞：原因必须保留。
+    expect(blocked("source_offline")).toBe("某个原因");
+    expect(blocked("attachments_not_negotiated")).toBe("某个原因");
+    // 可提交时没有原因；没有说明文案时也不编造。
+    expect(submitBlockedReasonOf({ canSubmit: true, blockedBy: null, disabledReason: null }, { silentRecovery: false }))
+      .toBeNull();
+  });
+
+  it("停止→发送自动切换的三种状态都不出现原因行，也不带通用禁用文案", () => {
+    // ① 进行中、可取消：发送入口由停止入口接替。
+    const stopping = render(input({
+      state: "in_progress",
+      blockedBy: "turn_in_progress",
+      canSubmit: false,
+      disabledReason: "会话进行中，完成后可继续输入",
+      cancel: { kind: "available", failure: null },
+    }));
+    expect(stopping).toContain('data-action="cancel-turn"');
+    expect(stopping).not.toContain("data-submit-unavailable");
+    expect(stopping).not.toContain("data-submit-reason");
+    expect(stopping).not.toContain("当前不能提交。");
+    expect(stopping).not.toContain("不可发送");
+
+    // ② 轮次结束、停止入口消失而发送入口回来但暂时被禁用（无任务在跑的状态切换）。
+    const settle = render(input({
+      state: "in_progress",
+      blockedBy: "submission_in_flight",
+      canSubmit: false,
+      disabledReason: "消息已提交，等待服务端确认后才能继续发送",
+      cancel: { kind: "unavailable" },
+    }));
+    expect(settle).toContain('data-action="submit-prompt"');
+    expect(settle).not.toContain("data-submit-unavailable");
+    expect(settle).not.toContain("data-submit-reason");
+    expect(tagContaining(settle, 'data-action="submit-prompt"')).toContain('aria-label="发送消息"');
+
+    // ③ 恢复可发送：正常名称，没有任何残留提示。
+    const ready = render(input({ state: "editable", canSubmit: true }));
+    expect(ready).toContain('data-submit-enabled="true"');
+    expect(ready).not.toContain("data-submit-unavailable");
+    expect(ready).not.toContain("data-submit-reason");
+  });
+
+  it("真实不可用原因经名称与文本同时可取得（键盘/读屏不需要悬浮提示）", () => {
+    const html = render(input({
+      state: "unavailable",
+      blockedBy: "source_offline",
+      canSubmit: false,
+      disabledReason: "来源节点离线，暂时不能提交",
+      draft: "",
+    }));
+
+    const send = tagContaining(html, 'data-action="submit-prompt"');
+    // 名称里带着真实原因：焦点落到按钮上就能听到，不依赖鼠标悬浮。
+    expect(send).toContain("来源节点离线，暂时不能提交");
+    expect(send).toContain('data-submit-reason="来源节点离线，暂时不能提交"');
+    expect(send).toContain('aria-disabled="true"');
+    // 有未发送内容时原因行同样在（两处共用同一份判据，措辞一致）。
+    const withDraft = render(input({
+      state: "unavailable",
+      blockedBy: "source_offline",
+      canSubmit: false,
+      disabledReason: "来源节点离线，暂时不能提交",
+    }));
+    expect(withDraft).toContain("data-submit-unavailable");
+    expect(withDraft).toContain("来源节点离线，暂时不能提交");
   });
 });

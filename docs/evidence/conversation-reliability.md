@@ -33,7 +33,7 @@
 | PV3 前端 | `cd clients/app && npm run check` | 通过：typecheck、e2e typecheck、1509 项 vitest、Web 导出 |
 | PV4 浏览器回归 | `cd clients/app && node e2e/run-e2e.mjs` | 通过：128/128（真实 Chromium + 假主机；含 CR-1…CR-6） |
 
-CR 系列断言：旧“继续”不抵消新“继续”、正式正文按 `turnId` 原位接替、附件上传中/失败、等待→工具→回复过程行、复制标签页不接管、显式放弃后换目录得到新 ID。
+CR 系列断言：旧“继续”不抵消新“继续”、正式正文按 `turnId` 原位接替、附件上传中/失败、等待→工具→回复过程行、复制标签页不接管，以及新会话不显示临时状态行或放弃入口。
 
 ## 3. 真实 Daemon + Chromium + Codex（WP5.2）
 

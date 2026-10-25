@@ -53,6 +53,8 @@ export interface StructuredRecord {
   readonly eventType: string;
   readonly sessionId: string | null;
   readonly createdAt: string;
+  /** Live event causation; history rows do not expose the originating request id. */
+  readonly causationRequestId?: string | null;
   /** 会话内序号：实时事件的 `body.sessionSequence`，历史条目**必有**。 */
   readonly sessionSequence: string | null;
   /** 全局投递序号：只有实时事件有（历史条目不是本次连接的投递记录）。 */
@@ -73,6 +75,7 @@ export function recordFromEvent(event: EventMessage): StructuredRecord {
     eventType: event.body.eventType,
     sessionId: event.body.sessionId,
     createdAt: event.body.createdAt,
+    causationRequestId: event.body.causationRequestId,
     sessionSequence: event.body.sessionSequence,
     firstSequence: timelineAnchor(event.body.payload.view, "_timelineSequence"),
     globalSequence: event.body.globalSequence,

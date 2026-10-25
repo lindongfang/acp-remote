@@ -17,6 +17,9 @@
  * ## 排序
  *
  * 所有已知位置按 Owner 固定的同域序号排序，与时间戳无关；旧历史缺少序号时独立前置。
+ * 正式条目（含从本地回显接替而来、带 `localAnchor` 的正文）一律走这条规则，不得按 `turnId`
+ * 或时间前置——那会改写两条权威记录的相对顺序。只有**尚无权威位置**的本地回显单独作临时呈现，
+ * 插在对应轮次的可见输出之前或末尾，不参与权威相对顺序。
  * 相邻连续消息片段由后端分配标识，本层不跨工具或不同消息重新合并。
  */
 
@@ -233,6 +236,19 @@ export interface MessageTimelineEntry extends TimelineEntryBase {
    * 组件只按它说明「上传中 / 已提交 / 未发送」，不得据此伪造已受理。
    */
   readonly local?: LocalPromptState | null;
+  /**
+   * 本设备这次提交的**稳定锚点**（`requestId`）。
+   *
+   * 本地回显与它的权威接替（同一 `messageId`/`turnId` 已确认）共享同一个锚点，因此 `key` 一直是
+   * `sent:<requestId>`；接替只改属性，React 原位更新该节点而不是把它移除后另建一条（D2）。
+   *
+   * 锚点**只**决定身份与键，**不**参与排序：取得权威位置后这条正文与其它正式条目一样按
+   * `compareTimelinePosition` 落位（不得为维持分组把它前置到整轮之前）。不是本设备提交的消息
+   * 为 `null`。
+   *
+   * 该字段只描述身份来源，不参与条目键的计算（条目键只看 `key`），因此历史模型可以不写它。
+   */
+  readonly localAnchor?: string | null;
 }
 
 /** 一张结构化卡片条目。 */
@@ -301,6 +317,8 @@ export interface SentPromptView {
  * @param interactions 该会话的交互视图：授权/提问卡片的可应答性由它提供。
  * @param sentPrompts 本设备已提交、尚未被权威用户消息接替的输入；只按 `messageId`/`turnId`
  *   的同身份接替，**不**按相同文字抵消。
+ * @param promptAnchors 已确认的接替关联（`messageId → requestId`）：本设备这次提交的权威消息
+ *   沿用本地条目的稳定键与分组，节点原位更新。关联只来自可靠标识，绝不按文字或时间推断。
  */
 export function buildTimeline(input: {
   readonly messages: readonly MessageView[];
@@ -308,6 +326,8 @@ export function buildTimeline(input: {
   readonly volatile: readonly VolatileMessageState[];
   readonly interactions: readonly InteractionView[];
   readonly sentPrompts?: readonly SentPromptView[];
+  /** 该会话已确认的接替关联；没有时显式给 `undefined`（调用点直接取会话分桶）。 */
+  readonly promptAnchors?: ReadonlyMap<string, string> | undefined;
 }): readonly TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   const volatileById = new Map(input.volatile.map((tail) => [tail.messageId, tail]));
@@ -329,9 +349,12 @@ export function buildTimeline(input: {
     const textContent =
       mergedText === message.text ? message.content : { ...message.content, text: mergedText };
     const content = mergeMediaBlocks(textContent, tail?.mediaBlocks ?? []);
+    // 已确认的本地锚点（`messageId → requestId`）：这条正式用户消息就是本设备那次提交的接替，
+    // 因此沿用本地条目的稳定键（父级始终是同一个平级列表），节点原位更新而不是被移除重建。
+    const localAnchor = message.role === "user" ? (input.promptAnchors?.get(message.id) ?? null) : null;
     entries.push({
       kind: "message",
-      key: `message:${message.id}`,
+      key: localAnchor === null ? `message:${message.id}` : `sent:${localAnchor}`,
       createdAt: message.createdAt,
       sequence: message.sequence ?? null,
       channel: message.role === "user" ? "user" : message.channel === "thought" ? "thought" : "agent",
@@ -345,15 +368,17 @@ export function buildTimeline(input: {
       streamComplete: tail?.completed ?? true,
       partial: tail?.partial ?? message.partial,
       local: null,
+      localAnchor,
     });
   }
 
   for (const tail of input.volatile) {
     // 读取结果已经给出同 id 的正文：残留增量已在上面并入那条权威消息，不再另起一条。
     if (readIds.has(tail.messageId)) continue;
+    const localAnchor = tail.channel === "user" ? (input.promptAnchors?.get(tail.messageId) ?? null) : null;
     entries.push({
       kind: "message",
-      key: `message:${tail.messageId}`,
+      key: localAnchor === null ? `message:${tail.messageId}` : `sent:${localAnchor}`,
       createdAt: tail.createdAt,
       sequence: tail.sequence ?? null,
       channel: tail.channel,
@@ -377,6 +402,7 @@ export function buildTimeline(input: {
       streamComplete: tail.completed,
       partial: tail.partial,
       local: null,
+      localAnchor,
     });
   }
 
@@ -407,6 +433,8 @@ export function buildTimeline(input: {
         .join("\n");
       entries.push({
         kind: "message",
+        // 稳定内容身份（D2）：本地回显与它的权威接替共用 `sent:<requestId>`，因此正式消息到达时
+        // React 复用同一个节点（属性更新，不卸载再挂载）。
         key: `sent:${prompt.requestId}`,
         createdAt: prompt.createdAt,
         sequence: null,
@@ -426,6 +454,7 @@ export function buildTimeline(input: {
         streamComplete: true,
         partial: null,
         local: { requestId: prompt.requestId, phase: prompt.phase, notice: prompt.notice },
+        localAnchor: prompt.requestId,
       });
     }
   }
@@ -479,19 +508,56 @@ export function buildTimeline(input: {
     entries.push({ kind: "pending_interaction", key: `pending:${interaction.interactionId}`,
       createdAt: interaction.requestedAt, sequence: interaction.sequence ?? null, interaction });
   }
-  // Provisional local input is inserted separately: its clock must never change
-  // the relative order of two authoritative entries (a mixed comparator can cycle).
-  const local = entries.filter(entry => entry.kind === "message" && entry.local != null);
-  const ordered = entries.filter(entry => !(entry.kind === "message" && entry.local != null))
-    .sort(compareTimelinePosition);
-  for (const entry of local) {
-    const turnId = entry.kind === "message" ? entry.message.turnId : null;
+  // 权威顺序只由 `compareTimelinePosition` 决定（ADR 0015、`docs/FRONTEND_DESIGN.md`
+  // 「Agent 输出顺序」）：**所有**正式消息——包括从本设备本地回显接替而来、带 `localAnchor` 的
+  // 那条——与卡片、交互条目一样按 Owner 序号排序。不得按 `turnId` 或创建时间把正式消息前置：
+  // 那会改写两条权威记录之间的相对顺序（思考序号 10、用户消息 11、回复 12 必须仍是 10/11/12，
+  // 无论那条用户消息有没有 `turnId`）。
+  //
+  // 只有**尚无权威位置**的本地回显单独占一个临时位置：它还不是任何一条权威记录（`sequence`
+  // 为 `null`），所以不参与上面的相对顺序；插进有序序列也不会改变任何两条权威记录的相对次序。
+  // 取得可靠轮次关联（`accepted { turnId }`）时放在该轮可见输出之前；还没有关联时按创建时刻
+  // 回到它进入时间线的位置（第一条不早于它的条目前，否则末尾），不猜 `turnId`。被正式消息
+  // 接替后这条临时条目消失，同一条正文回到权威序号。
+  const ordered = entries.filter((entry) => !isTemporaryLocalEcho(entry)).sort(compareTimelinePosition);
+  const temporary = entries.filter(isTemporaryLocalEcho);
+  // 同一轮的多次提交按发起顺序落位：先按创建时间排队（`sort` 稳定，同一时刻保持原序）。
+  temporary.sort((left, right) =>
+    left.createdAt < right.createdAt ? -1 : left.createdAt > right.createdAt ? 1 : 0);
+  for (const entry of temporary) {
+    const turnId = entryTurnId(entry);
     const related = turnId === null ? -1 : ordered.findIndex(candidate => entryTurnId(candidate) === turnId);
-    const provisional = related >= 0 ? related : ordered.findIndex(candidate =>
-      candidate.kind === "message" && candidate.volatile && candidate.createdAt >= entry.createdAt);
-    ordered.splice(provisional < 0 ? ordered.length : provisional, 0, entry);
+    if (related < 0) {
+      // 尚无可靠轮次关联（或该轮还没有任何条目）：回到**只决定临时占位**的创建时间回退——
+      // 插在第一条创建时刻不早于它的条目前，否则留在末尾。没有 `turnId` 的流式回复因此仍在
+      // 这条输入之后（过程模型按条目顺序判断「等待响应」，回复排到用户之前会被误判成还没回复）。
+      // 候选可以包含正式条目：临时条目插进有序序列不会改变任何两条正式记录的相对次序。
+      const provisional = ordered.findIndex(candidate =>
+        Date.parse(candidate.createdAt) >= Date.parse(entry.createdAt));
+      ordered.splice(provisional < 0 ? ordered.length : provisional, 0, entry);
+      continue;
+    }
+    // 插在该轮第一条条目之前；同轮已落位的临时回显之后再插，保持发起顺序。
+    let index = related;
+    while (index < ordered.length) {
+      const current = ordered[index];
+      if (current === undefined || !isTemporaryLocalEcho(current) || entryTurnId(current) !== turnId) break;
+      index += 1;
+    }
+    ordered.splice(index, 0, entry);
   }
   return ordered;
+}
+
+/**
+ * 尚未取得权威位置的本地回显。
+ *
+ * `local` 非空说明它只是本设备的临时呈现，还没有正式消息接替它；`sequence` 为 `null` 说明它
+ * 没有 Owner 序号。两者同时成立才允许临时落位。**正式**消息（含从本地回显接替而来的那条，
+ * `local` 为 `null`）永远按权威序号排序，即使它带着 `localAnchor`。
+ */
+function isTemporaryLocalEcho(entry: TimelineEntry): boolean {
+  return entry.kind === "message" && entry.local != null && entry.sequence === null;
 }
 
 /** 一条改动的诊断入口数据：原文按不可信文本呈现，**不**解析成结构化差异（D8）。 */
@@ -565,13 +631,19 @@ export function buildFileChangeViews(records: readonly StructuredRecord[]): read
 }
 
 /**
- * 一个**轮次分组**：由用户发送及其引发的条目组成；未归属轮次的条目单独成组。
+ * 一个**轮次分组**：同一可靠轮次标识的连续条目。
  *
  * 这里的「归属」只来自可靠标识（消息的 `turnId`、工具/授权/提问卡片的 `turnId`、轮次卡片自身），
  * **不**按呈现顺序猜测。标识相同的连续条目进同一组；组序即它们在时间线上的位置。没有标识的条目
  * （终端输出块、计划、文件改动、降级卡片等）保持独立按时间出现——宁可多一个独立块，也不猜分组。
+ * 本设备提交的正文（`localAnchor`）与其它条目一视同仁地按 `turnId` 归组；它是**呈现资料**，
+ * 不是 DOM 父级（视图里条目平级渲染），因此组键怎么变都不会重挂正文。
  */
 export interface TimelineTurnGroup {
+  /**
+   * 组键：只由轮次标识或条目自身的稳定身份决定，与组内成员、组的位置无关
+   * （规则见 `groupTimelineEntries`）。同一份时间线里唯一，仅用于呈现资料。
+   */
   readonly key: string;
   readonly turnId: string | null;
   /** 轮次状态（组内最新的轮次卡片）；没有轮次卡片为 `null`。 */
@@ -599,17 +671,34 @@ function entryTurnId(entry: TimelineEntry): string | null {
 }
 
 /**
- * 把已排序的时间线条目切成轮次分组。
+ * 把已排序的时间线条目切成**逻辑**轮次分组。
  *
- * 纯函数：同一份条目换个次序时不变量仍成立（「同一标识连续出现才同组」），因此组件只负责画，
+ * 纯函数：同一份条目换个次序时该不变量仍成立（「同一标识连续出现才同组」），因此组件只负责画，
  * 分组的对错可以在单测里直接断言。
+ *
+ * ## 分组只是呈现资料，不是 DOM 父级（D2）
+ *
+ * 条目在视图里**平级**渲染：每个条目以自己的稳定键（`entry.key`）作为列表项键，消息条目在任何
+ * 时候都不换父容器。分组键、组内计数与轮次状态只作为每条的呈现属性交给视图，因此「一条正式
+ * 消息落进哪一段轮次」怎么变，都不会让已有正文卸载重挂。
+ *
+ * 组键来源：
+ *
+ * - 有轮次标识的条目按 `turn:<turnId>` 成组；同一轮被无标识条目（授权结果、计划、文件改动等）
+ *   切成多段时按出现次序编号（`turn:<turnId>#2`…），组键因此仍唯一。
+ * - 没有标识的条目自成一组，键是它自己的条目键（`group:<key>`）。
+ *
+ * 本设备提交的正文（本地回显与它的权威接替）不再独占组：它按自己的 `turnId` 与同轮条目连续
+ * 成组，与其它条目一视同仁。它**不**为了「同组」或「在输出之前」被移动——顺序只来自
+ * `buildTimeline` 的权威排序。
+ *
+ * 同一 `turnId` 的连续条目进同一组；中间夹着无标识条目时切成多个组——宁可多一个独立块，也不
+ * 猜分组，更不为了「同组」而移动条目改变顺序。
  */
 export function groupTimelineEntries(entries: readonly TimelineEntry[]): readonly TimelineTurnGroup[] {
   const groups: TimelineTurnGroup[] = [];
-  // 同一 turnId 可能因中间夹着无标识条目（授权结果、计划、文件改动等）而切成**多个**组。
-  // 这些组的 `turnId` 合法地相同，但 React 兄弟节点的 key 必须唯一：第一次出现保持
-  // `turn:<turnId>`（常见路径不变，前置历史时键也不漂移），再次出现追加出现序号。
-  const occurrences = new Map<string, number>();
+  /** 同一 `turnId` 已切出的组数：编号只用于让多段组的键唯一，不影响哪些条目同组。 */
+  const turnOrdinals = new Map<string, number>();
   for (const entry of entries) {
     const turnId = entryTurnId(entry);
     const last = groups[groups.length - 1];
@@ -619,12 +708,12 @@ export function groupTimelineEntries(entries: readonly TimelineEntry[]): readonl
       continue;
     }
     let key: string;
-    if (turnId === null) {
-      key = `entry:${entry.key}`;
+    if (turnId !== null) {
+      const ordinal = (turnOrdinals.get(turnId) ?? 0) + 1;
+      turnOrdinals.set(turnId, ordinal);
+      key = ordinal === 1 ? `turn:${turnId}` : `turn:${turnId}#${ordinal}`;
     } else {
-      const ordinal = occurrences.get(turnId) ?? 0;
-      occurrences.set(turnId, ordinal + 1);
-      key = ordinal === 0 ? `turn:${turnId}` : `turn:${turnId}#${String(ordinal)}`;
+      key = `group:${entry.key}`;
     }
     groups.push({
       key,
@@ -634,4 +723,128 @@ export function groupTimelineEntries(entries: readonly TimelineEntry[]): readonl
     });
   }
   return groups;
+}
+
+/** 两个时间线条目值是否结构相同（含嵌套的正文、状态、媒体与诊断数据）。 */
+function sameTimelineValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== typeof right || typeof left !== "object" || left === null || right === null) return false;
+  // 内建类型没有自有字段，逐字段比较会把它们判成「空且相等」（两个不同时刻的 `Date`、
+  // 两份不同内容的 `Map` 会因此被当成没变化）。这里逐个显式比较；未列出的类型走自有字段比较，
+  // 并由原型一致性拦住「有内容的实例 vs 空对象」这类误判。
+  if (left instanceof Date || right instanceof Date) {
+    return left instanceof Date && right instanceof Date && left.getTime() === right.getTime();
+  }
+  if (left instanceof Map || right instanceof Map) {
+    if (!(left instanceof Map) || !(right instanceof Map) || left.size !== right.size) return false;
+    // 键按标识比较（与 `Map` 自身的查找语义一致），值递归比较。
+    for (const [key, value] of left) {
+      if (!right.has(key) || !sameTimelineValue(value, right.get(key))) return false;
+    }
+    return true;
+  }
+  if (left instanceof Set || right instanceof Set) {
+    if (!(left instanceof Set) || !(right instanceof Set) || left.size !== right.size) return false;
+    for (const value of left) if (!right.has(value)) return false;
+    return true;
+  }
+  if (left instanceof ArrayBuffer || right instanceof ArrayBuffer) {
+    if (!(left instanceof ArrayBuffer) || !(right instanceof ArrayBuffer)) return false;
+    if (left.byteLength !== right.byteLength) return false;
+    const beforeBytes = new Uint8Array(left);
+    const afterBytes = new Uint8Array(right);
+    for (let index = 0; index < beforeBytes.length; index += 1) {
+      if (beforeBytes[index] !== afterBytes[index]) return false;
+    }
+    return true;
+  }
+  if (Object.getPrototypeOf(left) !== Object.getPrototypeOf(right)) return false;
+  const leftIsArray = Array.isArray(left);
+  if (leftIsArray !== Array.isArray(right)) return false;
+  if (leftIsArray) {
+    const before = left as readonly unknown[];
+    const after = right as readonly unknown[];
+    if (before.length !== after.length) return false;
+    for (let index = 0; index < before.length; index += 1) {
+      if (!sameTimelineValue(before[index], after[index])) return false;
+    }
+    return true;
+  }
+  const before = left as Record<string, unknown>;
+  const after = right as Record<string, unknown>;
+  const keys = Object.keys(before);
+  if (keys.length !== Object.keys(after).length) return false;
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(after, key)) return false;
+    if (!sameTimelineValue(before[key], after[key])) return false;
+  }
+  return true;
+}
+
+/**
+ * 复用**内容没变**的条目对象（`design.md` D1「语义稳定的条目模型」）。
+ *
+ * `buildTimeline` 每次都会重建全部条目；如果不复用，`memo` 化的条目视图会被新对象全部击穿，
+ * 一条流式增量就会让所有历史正文重新渲染。这里按键与顺序逐条比对：键或顺序一变直接返回新
+ * 数组；只有内容（正文、状态、媒体、诊断等**全部字段**）都没变时才返回上一次的对象。
+ *
+ * 比较是**结构化**的：对象按自有字段递归比较（不是手挑字段的白名单，因此新增的可见字段不会
+ * 被漏比），数组按元素递归比较，`Date`/`Map`/`Set`/`ArrayBuffer` 这类没有自有字段的内建值显式
+ * 比较内容——否则它们会被判成「空且相等」，内容真变了却被复用成旧对象。未列入的内建类型由原型
+ * 一致性拦住「有内容的实例 vs 空对象」这类误判。命中时整份数组也可以保持同一引用。
+ */
+export function stabilizeTimelineEntries(
+  previous: readonly TimelineEntry[] | undefined,
+  next: readonly TimelineEntry[],
+): readonly TimelineEntry[] {
+  if (previous === undefined || previous.length !== next.length) return next;
+  const stabilized: TimelineEntry[] = [];
+  let changed = false;
+  for (let index = 0; index < next.length; index += 1) {
+    const before = previous[index];
+    const current = next[index];
+    if (current === undefined) return next;
+    if (before !== undefined && before.key === current.key && sameTimelineValue(before, current)) {
+      stabilized.push(before);
+      continue;
+    }
+    stabilized.push(current);
+    changed = true;
+  }
+  return changed ? stabilized : previous;
+}
+
+/** 条目时刻的共享格式化器：浅/深主题无关，时区与 24 小时制固定（`HH:MM`）。 */
+let entryTimeFormatter: Intl.DateTimeFormat | null = null;
+
+/** 已格式化结果的缓存上限：时间线上的原始时刻种类远少于这个数。 */
+const ENTRY_TIME_CACHE_LIMIT = 512;
+
+const entryTimeCache = new Map<string, string>();
+
+/**
+ * 条目时刻的展示形式：只做**位置固定**的字符串截取（`HH:MM`）。
+ *
+ * 与 `SessionRow` 同一条纪律：`renderToStaticMarkup` 没有时钟，同一份模型必须渲染出同一段文本。
+ * 原始时刻经 `data-timeline-entry-at` 原样进 DOM，需要精确值时从属性取。
+ *
+ * `Intl.DateTimeFormat` 的构造有明显开销，因此**整个应用共用一个实例**；同一时刻再次显示时
+ * 直接命中结果缓存（流式更新里绝大多数时刻根本没有变）。
+ */
+export function formatTimelineTime(createdAt: string): string {
+  const cached = entryTimeCache.get(createdAt);
+  if (cached !== undefined) return cached;
+  const timestamp = Date.parse(createdAt);
+  let label: string;
+  if (!Number.isFinite(timestamp)) {
+    label = "—";
+  } else {
+    entryTimeFormatter ??= new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    });
+    label = entryTimeFormatter.format(timestamp);
+  }
+  if (entryTimeCache.size >= ENTRY_TIME_CACHE_LIMIT) entryTimeCache.clear();
+  entryTimeCache.set(createdAt, label);
+  return label;
 }

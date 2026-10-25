@@ -251,12 +251,13 @@ import {
 } from "./session-lifecycle";
 import type { ConversationSettingsModel } from "./conversation-settings-model";
 import { buildConversationSettingsModel } from "./conversation-settings-model";
-import type { SentPromptPhase, VolatileMessageState } from "./conversation-timeline";
+import type { SentPromptPhase, TimelineEntry, VolatileMessageState } from "./conversation-timeline";
 import {
   appendDelta,
   buildFileChangeViews,
   buildTimeline,
   deltaChannelOf,
+  stabilizeTimelineEntries,
 } from "./conversation-timeline";
 import { buildConversationProcess } from "./conversation-process-model";
 import type { DegradedEventModel } from "./degradation-model";
@@ -648,6 +649,16 @@ export interface ClientState {
    * MUST NOT 按相同文字抵消（文字相同的两次输入是两条独立消息）。
    */
   readonly sentPrompts: ReadonlyMap<Uuid, SentPrompt>;
+  /**
+   * 已确认的本地接替关联（每个会话一份 `messageId → requestId`）：权威用户消息接替本地回显时
+   * 在同一状态更新里登记。时间线据此让正式消息沿用本地条目的稳定键与分组（节点原位更新，D2）。
+   *
+   * 按会话分桶是为了**能清理**：会话被删除、来源数据被清空或连接重置时整桶丢弃，锚点不会只增
+   * 不删、把每个会话的历史 `messageId` 一直挂在进程内存里。仍在使用的会话不受影响。
+   *
+   * 关联只来自 `messageId`/`turnId` 的同身份确认，**不**按相同文字或时间接近推断。
+   */
+  readonly sentPromptAnchors: ReadonlyMap<Uuid, ReadonlyMap<string, string>>;
   /** 最近一次 `closed`/`blocked` 的关闭码与原因；从未关闭为 `null`。 */
   readonly lastClose: ConnectionCloseRecord | null;
   /** 自动重连的尝试次数与下次重试时刻；未安排重连时次数为 0。 */
@@ -785,6 +796,7 @@ export function initialClientState(): ClientState {
     connection: initialConnectionState(),
     hasAuthenticated: false,
     sentPrompts: new Map(),
+    sentPromptAnchors: new Map(),
     lastClose: null,
     reconnect: { attempts: 0, nextRetryAtMs: null },
     deviceId: null,
@@ -951,6 +963,7 @@ function clearRemoteOwnerData(
   const switchIntents = new Map(state.switchIntents);
   const attachmentRuns = new Map(state.attachmentRuns);
   const promptRequestIds = new Map(state.promptRequestIds);
+  const sentPromptAnchors = new Map(state.sentPromptAnchors);
   const commands = new Map(state.commands);
   const removedRequests = new Set<Uuid>();
   for (const sessionId of sessionIds) {
@@ -961,6 +974,8 @@ function clearRemoteOwnerData(
     switchIntents.delete(sessionId);
     attachmentRuns.delete(sessionId);
     promptRequestIds.delete(sessionId);
+    // 会话被移除（来源数据清除）后，它的接替锚点不再指向任何仍在呈现的正文：整桶丢弃。
+    sentPromptAnchors.delete(sessionId);
   }
   for (const [requestId, record] of commands) {
     if (record.sessionId !== null && sessionIds.has(record.sessionId)) {
@@ -1012,6 +1027,7 @@ function clearRemoteOwnerData(
     switchIntents,
     attachmentRuns,
     promptRequestIds,
+    sentPromptAnchors,
     commands,
     uncertainRequestIds,
     remoteSessions,
@@ -1076,6 +1092,10 @@ function clearRemoteSessionData(
   attachmentRuns.delete(sessionId);
   const promptRequestIds = new Map(state.promptRequestIds);
   promptRequestIds.delete(sessionId);
+  // 锚点只对「这条已读回并留在时间线上的正式消息」有意义：会话数据被清空后页面要重建，
+  // 留下的锚点只会变成永不回收的键。
+  const sentPromptAnchors = new Map(state.sentPromptAnchors);
+  sentPromptAnchors.delete(sessionId);
   const commands = new Map(state.commands);
   const removedRequests = new Set<Uuid>();
   for (const [requestId, record] of commands) {
@@ -1117,6 +1137,7 @@ function clearRemoteSessionData(
     switchIntents,
     attachmentRuns,
     promptRequestIds,
+    sentPromptAnchors,
     commands,
     uncertainRequestIds: state.uncertainRequestIds.filter((id) => !removedRequests.has(id)),
     remoteSessions,
@@ -1453,6 +1474,46 @@ function withoutEntry<K, V>(map: ReadonlyMap<K, V>, key: K): ReadonlyMap<K, V> {
 }
 
 /**
+ * 权威用户消息接替本地回显：**同一次状态更新**里移除已接替的本地条目，并登记
+ * `messageId → requestId` 锚点。
+ *
+ * 依据只有可靠标识：`prompt.messageId` 等于该消息的 `messageId`，或 `prompt.turnId` 等于该消息
+ * 的 `turnId`。相同文字、相近时间都不是身份——同文两次发送是两条独立输入。
+ *
+ * 锚点让时间线继续用本地条目的稳定键承载这条正式消息；本地条目同时消失，因此「页替换/重读后
+ * 回显重新出现」在状态层就不可能发生（显示层的同身份让位判据仍保留，作为第二道防线）。
+ */
+function withPromptTakeover(
+  state: ClientState,
+  sessionId: Uuid,
+  confirmed: readonly {
+    readonly messageId: string;
+    readonly turnId: string | null;
+    readonly causationRequestId?: string | null;
+  }[],
+): ClientState {
+  if (state.sentPrompts.size === 0 || confirmed.length === 0) return state;
+  let prompts: Map<Uuid, SentPrompt> | null = null;
+  let anchors: Map<Uuid, ReadonlyMap<string, string>> | null = null;
+  for (const prompt of state.sentPrompts.values()) {
+    if (prompt.sessionId !== sessionId) continue;
+    const match = confirmed.find((item) =>
+      (prompt.messageId !== null && prompt.messageId === item.messageId) ||
+      (prompt.turnId !== null && item.turnId !== null && prompt.turnId === item.turnId) ||
+      (item.causationRequestId != null && prompt.requestId === item.causationRequestId));
+    if (match === undefined) continue;
+    prompts ??= new Map(state.sentPrompts);
+    prompts.delete(prompt.requestId);
+    anchors ??= new Map(state.sentPromptAnchors);
+    const sessionAnchors = new Map(anchors.get(sessionId) ?? []);
+    sessionAnchors.set(match.messageId, prompt.requestId);
+    anchors.set(sessionId, sessionAnchors);
+  }
+  if (prompts === null || anchors === null) return state;
+  return { ...state, sentPrompts: prompts, sentPromptAnchors: anchors };
+}
+
+/**
  * 创建一条本地提交条目（唯一构造点，保证每个创建路径都带上阶段与身份字段）。
  *
  * `turnId`/`messageId` 只放**已知**的可靠标识：拿不到就留 `null`，让条目继续以「本地待接替」
@@ -1656,6 +1717,13 @@ export class ClientStore {
   readonly #pendingReads = new Map<Uuid, PendingRead>();
   /** Fixed lower bound while the two independently paged resources catch up. */
   readonly #timelineFloors = new Map<Uuid, string>();
+  /**
+   * 每个会话最近一次的时间线条目（只用于**引用复用**，不是正文缓存）。
+   *
+   * `conversationPage()` 每次都会重建条目；没有这一层，`memo` 化的条目视图会被新对象全部击穿，
+   * 一条流式增量就会重新渲染所有历史正文（D1）。
+   */
+  readonly #timelineEntries = new Map<Uuid, readonly TimelineEntry[]>();
   readonly #listeners = new Set<Listener>();
   readonly #directoryRefreshRequests = new Set<Uuid>();
   readonly #schedule: ((delayMs: number, task: () => void) => () => void) | null;
@@ -1834,6 +1902,8 @@ export class ClientStore {
   apply(event: SyncClientEvent): void {
     const readPending = event.kind === "command_result" ? this.#pendingReads.get(event.result.body.requestId) : undefined;
     const wasOnline = this.#state.connection.state === "online";
+    // 归并前后用来判断「哪些会话的线程被删掉了」：时间线复用层随会话一起释放。
+    const threadsBefore = this.#state.threads;
     // 新连接上的结果查询重新计数：同一条标题命令每次重连后都会再查一次原请求。
     if (event.kind === "authenticated") {
       this.#titleStatusQueries.clear();
@@ -1859,6 +1929,9 @@ export class ClientStore {
     const settled = this.#settleTitleCommits(recovered);
     if (settled === this.#state) return;
     if (resetFiles) this.#timelineFloors.clear();
+    // 时间线复用层只对**同一份**会话数据有意义：换连接/断开后一切都要按新数据重整，
+    // 不复用旧连接上拼出来的条目对象（也避免整份数组被继续持有）。
+    if (resetFiles) this.#timelineEntries.clear();
     if (readPending !== undefined && event.kind === "command_result") {
       if (event.result.body.status !== "completed") this.#timelineFloors.delete(readPending.sessionId);
       else if (!this.#timelineFloors.has(readPending.sessionId) &&
@@ -1872,6 +1945,7 @@ export class ClientStore {
       }
     }
     this.#commit(settled);
+    this.#pruneTimelineEntries(threadsBefore);
     if (readPending !== undefined) this.#alignTimelineWindow(readPending.sessionId);
     if (!wasOnline && this.#state.connection.state === "online" && this.#activeConversationSession !== null) {
       this.#activeFileRefreshNeeded = true;
@@ -2853,7 +2927,16 @@ export class ClientStore {
           mediaBlocks: blockMedia,
         }),
       );
-      return { ...state, volatile };
+      // 用户增量是本次提交的正式投影：同一次更新里移除本地回显并登记 `messageId → requestId`
+      // 锚点（不按文字推断），正式消息因此在时间线上原位接替同一条目。
+      const taken = channel === "user" && sessionId !== null
+        ? withPromptTakeover(state, sessionId, [{
+          messageId,
+          turnId,
+          causationRequestId: record.causationRequestId ?? null,
+        }])
+        : state;
+      return { ...taken, volatile };
     }
 
     if (record.eventType === "agent.message.completed") {
@@ -2901,16 +2984,13 @@ export class ClientStore {
       if (turnId === null || sessionId === null) return state;
       const discardedTurns = new Set(state.discardedTurns);
       discardedTurns.add(`${sessionId}|${turnId}`);
-      const volatile = new Map(state.volatile);
-      for (const [messageId, tail] of volatile) {
-        if (tail.turnId === turnId && tail.sessionId === sessionId) volatile.delete(messageId);
-      }
-      // 压缩只清了易失叠加层；权威正文仍在 `owned_message`。当前会话必须重读消息页，
-      // 否则真实 Agent 的回复在实时视图与刷新后的历史里都会消失。
+      // Keep the visible stream mounted until `session.read` returns the authoritative
+      // rows. Removing it here creates a blank frame; the read result atomically swaps
+      // the two representations in `#applyReadResultInner`.
       if (this.#activeConversationSession === sessionId) {
         this.#messageRefreshQueued.add(sessionId);
       }
-      return { ...state, discardedTurns, volatile };
+      return { ...state, discardedTurns };
     }
 
     return state;
@@ -3018,6 +3098,29 @@ export class ClientStore {
             turnId: acceptedTurnIdOf(result.body.result) ?? prompt.turnId,
           }));
           break;
+      }
+      // `user.message.delta` 可能先于受理结果到达。那时提交还没有 `turnId`，事件处理无法建立
+      // `messageId → requestId` 的接替锚点；受理结果补齐 turnId 后必须立刻补做一次，否则本地条目
+      // 会先按 `message:<id>` 让位，权威读取返回时又改回 `sent:<requestId>`，造成同一条正文的 DOM
+      // 节点被卸下再挂回。这里只按服务端给出的同一 turnId 关联，不按文字或到达顺序猜测。
+      const acceptedPrompt = next.sentPrompts.get(result.body.requestId);
+      if (acceptedPrompt?.turnId != null) {
+        const liveUserMessages = [...next.volatile.values()].flatMap((tail) =>
+          tail.channel === "user" &&
+            tail.sessionId === acceptedPrompt.sessionId &&
+            tail.turnId === acceptedPrompt.turnId
+            ? [{ messageId: tail.messageId, turnId: tail.turnId }]
+            : []);
+        // 权威消息页也可能先于受理结果返回：`session.read` 与 `session.prompt` 是两条独立命令，
+        // 结果到达顺序不受页面控制。只扫实时增量会让本地回显状态一直留着；随后页替换若暂时不含
+        // 这条消息，旧回显就会重新出现。这里同样只使用已经确认的 `turnId`，不按文字或时间推断。
+        const readUserMessages = (next.threads.get(acceptedPrompt.sessionId)?.page?.messages ?? [])
+          .flatMap((message) =>
+            message.role === "user" && message.turnId === acceptedPrompt.turnId
+              ? [{ messageId: message.id, turnId: message.turnId }]
+              : []);
+        const confirmedUserMessages = [...liveUserMessages, ...readUserMessages];
+        next = withPromptTakeover(next, acceptedPrompt.sessionId, confirmedUserMessages);
       }
     }
     if (result.body.command === "session.start") {
@@ -3304,6 +3407,9 @@ export class ClientStore {
       if (deltas.size === 0) volatileAfterRead.delete(message.messageId);
       else volatileAfterRead.set(message.messageId, { ...tail, deltas });
     }
+    // 权威消息页里属于本设备已提交输入的消息：同一次更新里移除本地回显并登记锚点。
+    const confirmedUsers = loaded.messages.flatMap((message) =>
+      message.role === "user" ? [{ messageId: message.messageId, turnId: message.turnId }] : []);
     if (pending.intent === "refresh_messages") {
       // 压缩后的权威回填：用最新消息页替换同 id 的旧条目，保留更早已加载的页。
       const loadedIds = new Set(loaded.messages.map((message) => message.messageId));
@@ -3311,6 +3417,18 @@ export class ClientStore {
         ...loaded.messages,
         ...existing.items.filter((item) => !loadedIds.has(item.messageId)),
       ];
+      // The completed authoritative page is the handoff point for compacted
+      // streams. Rows it did not return must leave with the volatile tail;
+      // otherwise an empty page leaves stale content from a discarded turn.
+      const volatileAfterAuthoritativeRefresh = new Map(volatileAfterRead);
+      for (const [messageId, tail] of volatileAfterAuthoritativeRefresh) {
+        if (
+          tail.sessionId === sessionId &&
+          state.discardedTurns.has(`${sessionId}|${tail.turnId}`)
+        ) {
+          volatileAfterAuthoritativeRefresh.delete(messageId);
+        }
+      }
       threads.set(sessionId, {
         ...existing,
         page: buildSessionReadPageView(loaded.result),
@@ -3318,7 +3436,11 @@ export class ClientStore {
         loadingEarlier: false,
         pagingError: null,
       });
-      return { ...state, threads, volatile: volatileAfterRead };
+      return {
+        ...withPromptTakeover(state, sessionId, confirmedUsers),
+        threads,
+        volatile: volatileAfterAuthoritativeRefresh,
+      };
     }
 
     // 首屏/远程重建把历史首页与明细资源落进来；翻页请求只并入自己那一份。
@@ -3366,7 +3488,11 @@ export class ClientStore {
         loadingHistory: false,
         pagingError: null,
       });
-      return { ...staged, threads, volatile: volatileAfterRead };
+      return {
+        ...withPromptTakeover(staged, sessionId, confirmedUsers),
+        threads,
+        volatile: volatileAfterRead,
+      };
     }
 
     // 向上翻页：不重不漏由 `assertPagesDoNotOverlap` 把关，违反即抛而不是静默拼接。
@@ -3385,7 +3511,11 @@ export class ClientStore {
       loadingHistory: false,
       pagingError: null,
     });
-    return { ...staged, threads, volatile: volatileAfterRead };
+    return {
+      ...withPromptTakeover(staged, sessionId, confirmedUsers),
+      threads,
+      volatile: volatileAfterRead,
+    };
   }
 
   // ── 选择器 ────────────────────────────────────────────────────────────────
@@ -3646,13 +3776,14 @@ export class ClientStore {
     const activeTurn = activeTurnOf(records);
     const sentPrompts = this.#sentPromptsOf(sessionId);
     const entries = remoteReady
-      ? buildTimeline({
+      ? this.#stabilizeTimeline(sessionId, buildTimeline({
           messages: thread?.page?.messages ?? [],
           records,
           volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === sessionId),
           interactions,
           sentPrompts,
-        })
+          promptAnchors: this.#state.sentPromptAnchors.get(sessionId),
+        }))
       : [];
     // 过程阶段与时间线**同一份输入**（条目 + 本地提交 + 活动轮次），因此「等待」「恢复」
     // 不会与实际已经出现的思考/工具/回复各说一套。
@@ -3777,11 +3908,20 @@ export class ClientStore {
       pathRefs: [],
       capabilityOf: (): AttachmentCapability => ({ kind: "supported" }),
     });
+    // 分配、恢复、保存和等待同页接管都属于正常流程。它们会暂时关闭发送，但不能作为
+    // `session_not_ready` 原因多画一行；那一行会在首次回车后改变输入区高度，并一直留到
+    // 正式会话页接管。失败、结果不确定、设置或租约等真实阻塞仍按原状态呈现。
+    const preparationInFlight =
+      page.phase === "allocating" ||
+      page.phase === "restoring" ||
+      page.phase === "submitting" ||
+      page.phase === "accepted" ||
+      page.phase === "committed";
     const input = buildConversationInputModel({
       connectionOnline: this.#state.connection.state === "online",
       originLocal: true,
       originOnline: true,
-      turnInProgress: false,
+      turnInProgress: preparationInFlight,
       canCancel: false,
       promptCommand: null,
       cancelCommand: null,
@@ -3789,7 +3929,8 @@ export class ClientStore {
       attachmentsNegotiated,
       attachments,
       pathRefs: [],
-      sessionNotReadyReason: page.input.canSend ? null : page.input.reason,
+      sessionNotReadyReason:
+        page.input.canSend || preparationInFlight ? null : page.input.reason,
     });
     const settings = buildConversationSettingsModel({
       configOptions: page.settings.configOptions.map(({ option, value }) => ({ ...option, currentValue: value })),
@@ -3826,13 +3967,14 @@ export class ClientStore {
       requestVersionRequired: this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE),
     });
     const sentPrompts = this.#sentPromptsOf(page.sessionId);
-    const entries = buildTimeline({
+    const entries = this.#stabilizeTimeline(page.sessionId, buildTimeline({
       messages: [],
       records,
       volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === page.sessionId),
       interactions,
       sentPrompts,
-    });
+      promptAnchors: this.#state.sentPromptAnchors.get(page.sessionId),
+    }));
     const activeTurn = activeTurnOf(records);
     // 准备态没有正式会话的激活事实：恢复提示不适用；提交/等待/内容阶段照常归约。
     const process = buildConversationProcess({
@@ -4987,7 +5129,7 @@ export class ClientStore {
    * 成功时页面立即导航到 `/session/<id>`（准备模式），**不**新增任何目录会话行。
    *
    * 已有未转正槽位时**不**再分配：无论入口属于哪个目录、选了什么 Agent、槽位是否 ready，
-   * 都返回现有 ID；换 Agent 只能走 {@link changePreparationAgent}，换目录必须先显式放弃。
+   * 都返回现有 ID；换 Agent 只能走 {@link changePreparationAgent}，其他目录不得原位改绑。
    */
   async beginPreparation(input: {
     readonly directoryId: string | null;
@@ -5477,22 +5619,21 @@ export class ClientStore {
   }
 
   /**
-   * 是否提供「放弃新会话」动作：只有尚未转正（未受理首条）的临时会话可以放弃。
-   *
-   * 普通返回目录/刷新**不**调用它；页面必须再经一次显式确认才执行。
+   * 旧版页面动作所依赖的槽位判定。当前新会话页不展示放弃动作；保留该方法只为旧调用方和
+   * 资源清理回归，不能再把它接回用户界面。
    */
   canAbandonPreparation(sessionId: Uuid): boolean {
     const session = this.#state.preparations.get(sessionId);
     if (session === undefined) return false;
     // 与普通新建入口同一判据：只承载说明的条目（复制标签页的提示）不占槽，本标签页从未持有
-    // 它的资源，因此也不能「放弃」它——否则会顺手清掉本标签页自己槽位的定位（合同 §7）。
+    // 它的资源，因此也不能 cleanup 它——否则会顺手清掉本标签页自己槽位的定位（合同 §7）。
     return this.#occupiesPreparationSlot(session);
   }
 
   /**
-   * 显式「放弃新会话」：作废草稿（写墓碑挡住迟到写）、请求释放临时资源、清本标签页定位与槽位。
+   * 旧版新会话页使用的槽位清理原语：作废草稿、请求释放临时资源、清本标签页定位与槽位。
    *
-   * 用户确认后在未转正临时会话页调用；换目录必须先走这里，再从新目录普通新建。
+   * 当前界面不再提供这个动作；普通导航、刷新和目录入口都不会调用它。
    */
   async abandonPreparation(sessionId: Uuid): Promise<void> {
     const session = this.#state.preparations.get(sessionId);
@@ -5551,7 +5692,7 @@ export class ClientStore {
   /**
    * 身份/存储失效后的内部清理：作废草稿、请求释放临时资源、清掉本标签页归属。
    *
-   * **普通返回目录/切换会话不调用它**；用户显式放弃走 {@link abandonPreparation}。
+   * **普通返回目录/切换会话不调用它**；旧版用户动作曾走 {@link abandonPreparation}。
    */
   leavePreparation(sessionId: Uuid): void {
     const session = this.#state.preparations.get(sessionId);
@@ -9113,7 +9254,12 @@ export class ClientStore {
       this.#messageRefreshQueued.delete(sessionId);
       // 没有在途读取才发；已有读取会在结果里带上权威正文。
       const inFlight = [...this.#pendingReads.values()].some((pending) => pending.sessionId === sessionId);
-      if (!inFlight) this.#requestPage(sessionId, "refresh_messages");
+      if (inFlight) {
+        this.#messageRefreshQueued.add(sessionId);
+        continue;
+      }
+      this.#messageRefreshQueued.delete(sessionId);
+      this.#requestPage(sessionId, "refresh_messages");
     }
   }
 
@@ -9248,6 +9394,35 @@ export class ClientStore {
   /** 本会话在本设备已派发、尚未被读取/回显覆盖的用户消息。 */
   #sentPromptsOf(sessionId: Uuid): readonly SentPrompt[] {
     return [...this.#state.sentPrompts.values()].filter((prompt) => prompt.sessionId === sessionId);
+  }
+
+  /**
+   * 时间线条目的引用复用（D1）：内容没变就交回上一次的对象。
+   *
+   * 复用是**结构化**的（`stabilizeTimelineEntries` 比较条目全部字段，且显式比较 `Date`/`Map`/
+   * `Set`/`ArrayBuffer` 的内容），因此不会漏掉正文、状态、媒体或诊断的真实变化；命中时整份
+   * 条目数组也保持同一引用。
+   */
+  #stabilizeTimeline(sessionId: Uuid, entries: readonly TimelineEntry[]): readonly TimelineEntry[] {
+    const stabilized = stabilizeTimelineEntries(this.#timelineEntries.get(sessionId), entries);
+    this.#timelineEntries.set(sessionId, stabilized);
+    return stabilized;
+  }
+
+  /**
+   * 释放**已不存在的会话**的时间线复用层。
+   *
+   * 这一层只是引用复用的比对基线，不是正文缓存：线程被删除（来源数据清除、会话被移除）后
+   * `conversationPage` 再也构造不出该会话的页面，留着只会把整份条目数组挂到进程结束。只删除
+   * 「归并前有线程、归并后没有」的会话，仍在使用的会话（含准备态页面）不受影响。
+   */
+  #pruneTimelineEntries(threadsBefore: ReadonlyMap<Uuid, ConversationThreadState>): void {
+    if (this.#timelineEntries.size === 0 || threadsBefore === this.#state.threads) return;
+    for (const sessionId of this.#timelineEntries.keys()) {
+      if (threadsBefore.has(sessionId) && !this.#state.threads.has(sessionId)) {
+        this.#timelineEntries.delete(sessionId);
+      }
+    }
   }
 
   /**

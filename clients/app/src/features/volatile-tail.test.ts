@@ -7,7 +7,8 @@
  *   结果为准。若实现是「追加」而不是「按 `messageId` 替换」，文本会叠成两段 → 断言变红。
  * - 增量按 `deltaIndex` 去重：重投同一条增量不会让正文变成两份（上游 `eventId` 去重之外的
  *   第二道防线，也是网络重投的实际形态）。
- * - `turn.delta_compacted` 之后该轮次的累加内容必须消失，且迟到的增量不再把它带回来。
+ * - `turn.delta_compacted` 之后正文继续可见，直到权威读取在同一状态更新中替换它；
+ *   迟到的增量不再改变正在展示的内容。
  * - `agent.message.completed` **不**贡献正文：它只标「增量流结束」——正文权威始终是
  *   `session.read`（D3 因此把消息类事件排除在历史条目之外）。
  */
@@ -201,8 +202,9 @@ describe("D6 易失叠加层：累加、替换、作废", () => {
     expect(entry?.message.text).toBe("草稿");
   });
 
-  it("turn.delta_compacted 作废该轮次的累加内容，迟到的增量也不再带回来", () => {
-    const { store } = storeWithSession();
+  it("turn.delta_compacted 保留可见正文直到权威替换，迟到的增量不再改变它", () => {
+    const { store, gateway } = storeWithSession();
+    store.setActiveConversationSession(SESSION_ID);
     const messageId = "cccccccc-0000-4000-8000-0000000000e5";
     store.apply(
       delta({
@@ -227,9 +229,10 @@ describe("D6 易失叠加层：累加、替换、作废", () => {
       }),
     });
 
-    // 反例：不清叠加层时这里仍是 1 条残留 → 断言变红。
-    expect(messageEntries(store)).toHaveLength(0);
-    expect(store.state.volatile.size).toBe(0);
+    // 移除流式条目会造成正文先消失、再异步回填的可见闪动。
+    expect(messageEntries(store)).toHaveLength(1);
+    expect(messageEntries(store)[0]?.message.text).toBe("会被压缩掉的半句");
+    expect(store.state.volatile.size).toBe(1);
 
     // 迟到的增量不得让作废的内容复活。
     store.apply(
@@ -242,7 +245,19 @@ describe("D6 易失叠加层：累加、替换、作废", () => {
         text: "迟到的一句",
       }),
     );
+    expect(messageEntries(store)).toHaveLength(1);
+    expect(messageEntries(store)[0]?.message.text).toBe("会被压缩掉的半句");
+
+    store.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: SESSION_ID,
+        messages: [],
+      }),
+    });
     expect(messageEntries(store)).toHaveLength(0);
+    expect(store.state.volatile.has(messageId)).toBe(false);
   });
 
   it("压缩只作废本会话本轮的累加：别的轮次不受影响", () => {

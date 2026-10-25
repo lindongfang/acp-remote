@@ -354,3 +354,27 @@ describe("富文本：长输出分块与可见范围", () => {
     expect(visibleText(html)).toContain("还有 2 段更早内容未展开");
   });
 });
+
+describe("D1 分块渲染：稳定块与代码序号", () => {
+  it("跨块渲染时代码块序号连续递增，不因分块重新计数", () => {
+    // 两块各自含代码块（块长度超过阈值才切，因此每块都塞足内容）。
+    const filler = "正文".repeat(MARKDOWN_CHUNK_CHARS / 2);
+    const value = [
+      "```ts", "const first = 1;", "```", "", filler,
+      "```json", "{}", "```", "", filler,
+      "```text", "third", "```",
+    ].join("\n");
+    const chunks = splitMarkdownSource(value);
+    expect(chunks.length).toBeGreaterThan(1);
+
+    const html = renderMarkdown({ value });
+    const indices = [...html.matchAll(/data-code-index="(\d+)"/g)].map((match) => Number(match[1]));
+    // 反例：每块从 0 开始编号时这里会是 [0, 0, 0]（或跳号），序号不再跨文档连续。
+    expect(indices).toEqual([0, 1, 2]);
+  });
+
+  it("同一份内容重复渲染得到逐字相同的标记（分块与缓存不改变呈现）", () => {
+    const value = ["# 标题", "", "段落", "", "```ts", "const a = 1;", "```"].join("\n");
+    expect(renderMarkdown({ value })).toBe(renderMarkdown({ value }));
+  });
+});

@@ -60,6 +60,18 @@ const RAW_JSON_TEXT = '{"widget":"vendor","n":7}';
 const RAW_BYTE_LENGTH = "281344";
 const RAW_SHA256 = "kQ8x2mB7yV1cJ0nP5rT9wZa3dE6fH8iL1sU4vX7yZ0aB2cD5eF8gH1iJ4kL7mN0p";
 
+/**
+ * 诊断模式下的会话路由。
+ *
+ * `app/session/[id].tsx` 只在路由参数 `diagnostics === "1"` 时把 `diagnosticsMode` 传给
+ * `ConversationStream`，降级卡片的 `open-diagnostics` 入口受该开关门控
+ * （`docs/FRONTEND_DESIGN.md` 的「对话诊断模式」一节）。路由替身用静态 `params`，无法写
+ * `?diagnostics=1` 查询串，因此只能在这里覆盖参数。
+ */
+function diagnosticsRoute(): ScenarioOptions["route"] {
+  return { ...sessionRoute(SESSION_ALPHA), params: { id: SESSION_ALPHA, diagnostics: "1" } };
+}
+
 /** 会话页场景：一条会话 + 上面那批事件。 */
 function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions {
   return {
@@ -228,7 +240,7 @@ const checks: readonly Check[] = [
           "诊断抽屉必须给出字节长度与摘要（元数据），而不是原文",
         );
         expectNone(textOf(unavailable), ['"'], "未下发原文的槽位里出现了疑似 JSON 原文");
-      });
+      }, { route: diagnosticsRoute() });
     },
   },
   {
@@ -341,7 +353,7 @@ const checks: readonly Check[] = [
           textOf(query(container, '[data-degraded-reason="no_dedicated_view"]')).length > 0,
           "抽屉必须说明降级原因",
         );
-      });
+      }, { route: diagnosticsRoute() });
     },
   },
   {

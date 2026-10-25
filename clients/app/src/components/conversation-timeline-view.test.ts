@@ -1270,12 +1270,22 @@ describe("对话时间线：轮次分组", () => {
     });
     const html = renderPage(pageOf(client));
 
-    // 组只来自可靠标识：两条 `turn-9` 同组（计数 2），计划没有标识因此单独成组。
-    const turnGroup = tagContaining(html, 'data-turn-group-id="turn-9"');
-    expect(attributeOf(turnGroup, "data-turn-group-entry-count")).toBe("2");
-    expect(html.match(/data-turn-group-id="turn-9"/g) ?? []).toHaveLength(1);
-    const unassignedGroup = tagContaining(html, 'data-turn-group-id="unassigned"');
-    expect(attributeOf(unassignedGroup, "data-turn-group-entry-count")).toBe("1");
+    // 分组只来自可靠标识，且只作为每条的呈现资料（条目在视图里平级，不共用父容器）：
+    // 两条 `turn-9` 属于同一段（计数 2），计划没有标识因此单独成一段（计数 1）。
+    const turnEntry = tagContaining(html, 'data-timeline-key="event:dddddddd-0000-4000-8000-000000000301"');
+    expect(attributeOf(turnEntry, "data-turn-group-id")).toBe("turn-9");
+    expect(attributeOf(turnEntry, "data-turn-group-entry-count")).toBe("2");
+    expect(attributeOf(turnEntry, "data-turn-group-start")).toBe("true");
+    const toolEntry = tagContaining(html, 'data-timeline-key="event:dddddddd-0000-4000-8000-000000000302"');
+    expect(attributeOf(toolEntry, "data-turn-group-id")).toBe("turn-9");
+    expect(attributeOf(toolEntry, "data-turn-group-entry-count")).toBe("2");
+    expect(toolEntry).not.toContain("data-turn-group-start");
+    const unassignedEntry = tagContaining(html, 'data-timeline-key="event:dddddddd-0000-4000-8000-000000000303"');
+    expect(attributeOf(unassignedEntry, "data-turn-group-id")).toBe("unassigned");
+    expect(attributeOf(unassignedEntry, "data-turn-group-entry-count")).toBe("1");
+    expect(attributeOf(unassignedEntry, "data-turn-group-start")).toBe("true");
+    // 段边界每条只标一次：两段共两个起点。
+    expect(html.match(/data-turn-group-start="true"/g) ?? []).toHaveLength(2);
     // 组内保持发生顺序：turn 卡在工具卡之前。
     expect(html.indexOf('data-timeline-card="turn"')).toBeLessThan(
       html.indexOf('data-timeline-card="tool-call"'),

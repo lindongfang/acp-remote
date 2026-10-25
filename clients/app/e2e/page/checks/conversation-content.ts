@@ -10,6 +10,7 @@
  *   把原文解析成差异行渲染，或把诊断槽位当成默认呈现，两种回退都会红。
  * - **来源离线降级**：会话摘要的来源声明为其它节点且离线，断言结构化历史的不可用说明、
  *   输入区「草稿只在内存」的标注、发送入口禁用与不可点，以及**没有任何 `data-submission`**。
+ *   不可提交的原因只在有未发送内容时渲染，因此先用真实输入事件写一段草稿再断言提示文案。
  *   同一用例另挂一个本机会话做**对照**（同样的历史条目 → 没有不可用说明、卡片照常呈现）：
  *   证明那句说明不是无条件渲染的。
  * - **富文本不可信**：断言消息条目里没有 `script`/`img`/`iframe`，没有任何 `onerror`/`src`/`href`
@@ -40,6 +41,7 @@ import {
   wireEvent,
 } from "../fixtures";
 import {
+  CheckFailure,
   click,
   domHtml,
   domText,
@@ -59,6 +61,7 @@ import {
   TOOL_CALL_ID,
   TURN_ID,
   commandBody,
+  diagnosticsRoute,
   sessionScenario,
   withSessionPage,
 } from "./conversation-timeline";
@@ -169,12 +172,23 @@ function localHistory(): readonly Record<string, unknown>[] {
   ];
 }
 
+/** 往对话输入区写一段草稿（走原生 setter，React 的受控值才会更新）。 */
+function setComposerDraft(container: HTMLElement, value: string): void {
+  const node = query(container, "[data-composer-input]");
+  if (!(node instanceof HTMLTextAreaElement)) throw new CheckFailure("对话输入区必须是 textarea");
+  const native = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+  native?.set?.call(node, value);
+  node.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 const checks: readonly Check[] = [
   {
     name: "CP-7 时间线文件改动：只呈现有结构化来源的统计与相对化路径，未下发的差异正文一次都不出现",
     async run() {
       await withSessionPage(
         sessionScenario({
+          // 三处改动的 `open-file-change-diagnostics` 入口只在诊断模式（`?diagnostics=1`）渲染。
+          route: diagnosticsRoute(),
           events: [
             wireEvent({
               globalSequence: 11,
@@ -393,14 +407,22 @@ const checks: readonly Check[] = [
           expectEqual(query(container, "[data-origin-offline]"), null, "会话头不得再呈现来源离线标注");
 
           // 输入：草稿只在内存、发送入口禁用，且**不是**「已发送」。
+          // 不可提交的原因只在**有未发送内容**时渲染（`ConversationComposer` 的 `hasUnsent`），
+          // 因此先真的写一段草稿，再断言提示文案。
+          setComposerDraft(container, "这段草稿只在内存里");
+          await waitFor(
+            () => query(container, "[data-submit-unavailable]") !== null,
+            "不可提交的原因渲染",
+          );
           expectEqual(
             query(container, "[data-composer]")?.getAttribute("data-composer-draft-in-memory-only"),
             "true",
             "来源为其它节点的会话，草稿只在内存",
           );
+          const unavailableReason = textOf(query(container, "[data-submit-unavailable]"));
           expectThat(
-            textOf(query(container, "[data-submit-unavailable]")).includes("来源节点离线"),
-            "不可提交时必须说明来源节点离线",
+            unavailableReason.includes("来源节点离线") && unavailableReason.includes("不能提交"),
+            `不可提交时必须说明当前真实原因；实际「${unavailableReason}」`,
           );
           const submit = query(container, 'button[data-action="submit-prompt"]');
           expectEqual(submit?.hasAttribute("disabled") ?? false, true, "来源为其它节点的会话不得可提交");

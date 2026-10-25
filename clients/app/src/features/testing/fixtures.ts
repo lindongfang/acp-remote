@@ -262,6 +262,7 @@ export function eventMessage(input: {
   readonly acp?: RawAcp;
   readonly globalSequence?: string;
   readonly createdAt?: string;
+  readonly causationRequestId?: string | null;
 }): EventMessage {
   const payload: { view: Record<string, unknown>; acp?: RawAcp } = { view: input.view ?? {} };
   if (input.acp !== undefined) payload.acp = input.acp;
@@ -277,7 +278,7 @@ export function eventMessage(input: {
       eventId: input.eventId ?? "dddddddd-0000-4000-8000-000000000001",
       sessionId: input.sessionId ?? null,
       eventType: input.eventType,
-      causationRequestId: null,
+      causationRequestId: input.causationRequestId ?? null,
       origin: { kind: "agent", deviceId: null },
       remoteOrigin: null,
       createdAt: input.createdAt ?? "2026-10-01T00:00:02.000Z",

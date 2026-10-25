@@ -187,6 +187,27 @@ export function composerKeyAction(
 /** `onKeyPress` 的签名（类型从 `theme.ts` 的 `TextInputProps` 取，不直接把 react-native 引进组件）。 */
 type ComposerKeyPress = NonNullable<TextInputProps["onKeyPress"]>;
 
+/**
+ * 发送入口的**真实**不可提交原因；正常流程状态返回 `null`。
+ *
+ * 「执行中」「等待服务端确认」与会话恢复中的静默重连都是流程本身，不是故障：把它们做成提示
+ * 会在停止→发送自动切换时凭空闪现一句通用禁用文案（D4）。真正不可用（来源离线、附件未协商/
+ * 上传中/被能力挡住、会话未就绪且不在静默恢复）才返回说明。
+ *
+ * 这个判定同时喂两处：可见的原因行（有未发送内容时才显示）与发送按钮的可访问名称
+ * （键盘/读屏随时取得真实原因，不需要视觉悬浮提示）。两处共用一份判据，不会出现
+ * 「自动弹了提示」或「原因说不出口」的分叉。
+ */
+export function submitBlockedReasonOf(
+  input: Pick<ConversationInputModel, "canSubmit" | "blockedBy" | "disabledReason">,
+  options: { readonly silentRecovery: boolean },
+): string | null {
+  if (input.canSubmit || input.disabledReason === null) return null;
+  if (options.silentRecovery && input.blockedBy === "session_not_ready") return null;
+  if (input.blockedBy === "turn_in_progress" || input.blockedBy === "submission_in_flight") return null;
+  return input.disabledReason;
+}
+
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
@@ -617,6 +638,13 @@ export function ConversationComposer({
   // 模型里变成假）加上「有可提交内容」与「回调已接线」。可提交内容与仓库 `submitPrompt` 同源：
   // 文字、附件、路径引用三者有任一非空即可——纯附件消息不能被 UI 单独挡死。
   const submittable = input.canSubmit && hasUnsent;
+  // 真实不可用原因：只在真正的阻塞下存在（执行中/待确认/静默重连都为空）。
+  const blockedReason = submitBlockedReasonOf(input, { silentRecovery });
+  // 发送入口的可访问名称：正常状态就是「发送消息」，有真实原因时把原因一并交给键盘/读屏。
+  // 名称**不受** `hasUnsent` 约束，与下方原因行（只有草稿/附件非空时才出现）有意不同：原因行是
+  // 「你写好了却发不出去」的视觉提示，草稿为空时只会是噪声；而名称只有在焦点落到这个禁用控件上
+  // 时才会被读到，此时它往往是「为什么不能发」的唯一通道（例如来源离线、会话未就绪）。
+  const sendLabel = blockedReason === null ? "发送消息" : `发送消息（当前不可发送：${blockedReason}）`;
 
   // 有未发送内容时才提示：刷新/关闭后不恢复（不承诺草稿与上传续传）。
   useEffect(() => {
@@ -737,12 +765,16 @@ export function ConversationComposer({
         )}
         {input.cancel.kind === "available" || input.cancel.kind === "requested" ? null : <Pressable
           role="button"
-          accessibilityLabel="发送消息"
+          aria-label={sendLabel}
           // 闸门是模型给的 `canSubmit`：执行中 / 离线 / imported 来源 / 附件未就绪都会在这里
           // 变为不可点（仓库侧 `submitPrompt` 还会再拦一次，不靠组件记得禁用）。
           disabled={!submittable || onSubmit === undefined}
           style={!submittable || onSubmit === undefined ? [styles.primary, styles.buttonDisabled] : styles.primary}
-          dataSet={{ action: "submit-prompt", submitEnabled: String(submittable && onSubmit !== undefined) }}
+          dataSet={{
+            action: "submit-prompt",
+            submitEnabled: String(submittable && onSubmit !== undefined),
+            ...(blockedReason === null ? {} : { submitReason: blockedReason }),
+          }}
           onPress={() => {
             onSubmit?.(input.draft);
           }}
@@ -766,11 +798,9 @@ export function ConversationComposer({
         ) : null}
       </View>
 
-      {!hasUnsent || input.canSubmit || input.disabledReason === null ||
-        (silentRecovery && input.blockedBy === "session_not_ready") ||
-        input.blockedBy === "turn_in_progress" || input.blockedBy === "submission_in_flight" ? null : (
+      {!hasUnsent || blockedReason === null ? null : (
         <Text style={styles.note} dataSet={{ submitUnavailable: "true" }}>
-          {input.disabledReason ?? "当前不能提交。"}
+          {blockedReason}
         </Text>
       )}
 

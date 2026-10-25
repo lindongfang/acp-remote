@@ -295,6 +295,104 @@ export function anchorScrollDelta(offsetBefore: number, offsetAfter: number): nu
   return offsetAfter - offsetBefore;
 }
 
+/**
+ * 滚动容器的**几何签名**：宿主、内容高度、可视高度与可视宽度。
+ *
+ * 三个读数一起进键：宽度变化会让所有长段落重新换行，即使内容高度碰巧不变，锚点相对容器顶边的
+ * 偏移也已经变了。只比较内容高度会把「宽度重排」当成「什么都没发生」，也会把重排期间送达的
+ * 滚动事件误认成用户滚动。
+ */
+export interface ScrollGeometry {
+  readonly host: HTMLElement;
+  readonly contentHeight: number;
+  readonly viewportHeight: number;
+  readonly viewportWidth: number;
+}
+
+/** 读一次几何签名：只读三个数，不遍历条目、不触发布局树。 */
+export function readScrollGeometry(host: HTMLElement): ScrollGeometry {
+  return {
+    host,
+    contentHeight: host.scrollHeight,
+    viewportHeight: host.clientHeight,
+    viewportWidth: host.clientWidth,
+  };
+}
+
+/** 两份几何签名是否一致（宿主同一且三个读数都没变）。`null` 与任何签名都不一致。 */
+export function sameScrollGeometry(a: ScrollGeometry | null, b: ScrollGeometry | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.host === b.host && a.contentHeight === b.contentHeight &&
+    a.viewportHeight === b.viewportHeight && a.viewportWidth === b.viewportWidth;
+}
+
+/**
+ * 绘制后复核的窗口帧数：一次几何处理之后再看这么多帧。
+ *
+ * 兜的是「容器签名一个都没变、阅读位置却挪了」的重排（上方某个条目长高 13px、下方另一个条目
+ * 同时矮 13px）：`ResizeObserver` 不会通知，签名比较也看不见，只有时间维度的窗口能追上它。
+ * 帧数要够那些提交之后一两帧才落地的重排，又不能把它做成常驻逐帧循环。
+ */
+export const GEOMETRY_VERIFY_FRAMES = 4;
+/**
+ * 可视宽度变化后的复核窗口帧数。
+ *
+ * 宽度变化意味着**每个**长段落都要重新换行，而重排在提交之后才逐帧落地（字体与文本测量、
+ * 媒体尺寸）；一次补偿之后仍可能在随后几帧里再挪几像素。给这种重排更长的窗口，是为了让复核
+ * 覆盖「换行正在收敛」的那段时间，而不是只盯住补偿的那一帧。
+ */
+export const GEOMETRY_VERIFY_REWRAP_FRAMES = 10;
+/**
+ * 同一复核窗口的硬上界：真的补过一次位置才续一帧，且无论重排怎么收敛，复核都会在这个帧数内
+ * 收手——最坏情况也只是有界的一段窗口，而不是逐帧常驻。
+ */
+export const GEOMETRY_VERIFY_FRAMES_MAX = 16;
+
+/**
+ * 快捷收起入口的**进入**容差（像素）：折叠块表头要完全滚出顶部这么多，才算「横跨顶部」。
+ *
+ * 容差只决定按钮的进入/退出，不参与 {@link isFollowingBottom} 的真实判据；它存在的理由是
+ * 亚像素滚动、字体微调或滚动条取整会让表头底边在 0 附近来回抖，严格比较会把同一个入口挂卸
+ * 多次（D4）。
+ */
+export const CROSSING_FOLD_ENTER_PX = 2;
+
+/**
+ * 快捷收起入口的**退出**容差（像素）：已经显示的目标在表头回到顶部这么多以内仍保留。
+ *
+ * 退出阈值必须**大于**进入阈值，两者之间形成一个缓冲带：只有真正离开这个带才移除入口。
+ */
+export const CROSSING_FOLD_EXIT_PX = 6;
+
+/** 折叠块正文至少还要在可见带里露出这么多像素，收起后标题才有地方可见（与原型 44px 同口径）。 */
+export const CROSSING_FOLD_MIN_BODY_PX = 44;
+
+/**
+ * 一个展开块相对对话区可见带的几何（都换算成「相对容器顶边」的像素，负数表示已经滚出）。
+ */
+export interface CrossingFoldGeometry {
+  /** 该块表头（`data-action="toggle-timeline-entry"` 按钮）的底边。 */
+  readonly headerBottom: number;
+  /** 该块自身的底边。 */
+  readonly bodyBottom: number;
+}
+
+/**
+ * 该展开块现在是否应让快捷收起入口出现。
+ *
+ * `active` 表示「它当前就是入口的目标」：那时用**退出**阈值（更宽容），否则用**进入**阈值
+ * （更严格）。进入/退出不同的两个阈值消除了边界抖动，且**只影响按钮展示**——是否跟随底部
+ * 仍由 {@link isFollowingBottom} 按真实几何判定，不受这里的像素容差影响。
+ */
+export function crossingFoldAtTop(geometry: CrossingFoldGeometry, active: boolean): boolean {
+  if (active) {
+    return geometry.headerBottom < CROSSING_FOLD_EXIT_PX &&
+      geometry.bodyBottom > CROSSING_FOLD_MIN_BODY_PX - CROSSING_FOLD_EXIT_PX;
+  }
+  return geometry.headerBottom <= -CROSSING_FOLD_ENTER_PX &&
+    geometry.bodyBottom >= CROSSING_FOLD_MIN_BODY_PX + CROSSING_FOLD_ENTER_PX;
+}
+
 /** 滚动容器的窄接口：只依赖真实用到的几个成员（RNW 的 `ScrollView` 结构上满足它）。 */
 interface ScrollHandle {
   scrollTo?: (options: { readonly y?: number; readonly animated?: boolean }) => void;
@@ -1261,31 +1359,81 @@ export function ConversationStream({
     filesScrollRef.current = node as ScrollHandle | null;
   }, []);
   const followingRef = useRef(true);
-  const reconciledGeometry = useRef<{
-    readonly host: HTMLElement;
-    readonly contentHeight: number;
-    readonly viewportHeight: number;
-  } | null>(null);
+  /**
+   * 上一次做几何决策时看到的尺寸（宿主、内容高度、可视高度、可视宽度）。
+   *
+   * 既是**去重**也是**判据**：内容高度、可视高度与宽度都没变时不写滚动、也不遍历展开块——
+   * 「同行追加」正是这种情形（D3）。宽度也进键：中栏变窄会让所有长段落重新换行，即使内容高度
+   * 碰巧不变也要重新补偿一次（否则「宽度变化」这个触发点在实现里是假的）。
+   * 每次提交都会在绘制前读一次这三个数并与它比较（`useLayoutEffect` 里的同步几何哨兵），
+   * 所以正文增量只通过「尺寸真的变了」进入真正的几何处理；`ResizeObserver` 与 RNW 的尺寸
+   * 回调仍是图片、字体等提交之后才落地的异步布局与可见性恢复的触发点。
+   */
+  const reconciledGeometry = useRef<ScrollGeometry | null>(null);
+  /**
+   * 我们自己写下的滚动落点。滚动事件回来时若位置与它一致，就认出这是程序补偿，只记录位置，
+   * 不据此改写「是否跟随底部」与「有新内容」——否则贴底补偿会让回到底部入口闪一下（D4）。
+   */
+  const scrollIntent = useRef<number | null>(null);
   const [following, setFollowing] = useState(true);
   const [crossingFold, setCrossingFold] = useState<{ key: string; label: string } | null>(null);
+  /** 快捷收起的当前目标：测量时要按「是否仍是它」选进入/退出阈值，因此与状态同步留一份。 */
+  const crossingFoldRef = useRef<{ key: string; label: string } | null>(null);
+  /** 只在目标或文案真的变了才写状态：同一几何的重复测量不产生渲染。 */
+  const applyCrossingFold = (next: { key: string; label: string } | null): void => {
+    const previous = crossingFoldRef.current;
+    if (previous?.key === next?.key && previous?.label === next?.label) return;
+    crossingFoldRef.current = next;
+    setCrossingFold(next);
+  };
+  /** 按条目键找折叠块宿主节点（键可能含选择器元字符，因此按 `dataSet` 的值逐个比较）。 */
+  const findFold = (host: HTMLElement, key: string): HTMLElement | null => {
+    for (const node of host.querySelectorAll<HTMLElement>("[data-fold-entry]")) {
+      if (node.dataset["foldEntry"] === key) return node;
+    }
+    return null;
+  };
+  /**
+   * 重新评估「顶部横跨的展开块」。**先看当前目标**：它仍横跨顶部就保留（用更宽容的退出
+   * 阈值），不因为后出现的候选把目标换掉；目标折叠、节点被移除或完全离开可见带时才移除，
+   * 之后才找新候选。进入/退出阈值只决定按钮展示（D4），不参与底部跟随判定。
+   */
   const measureCrossingFold = (): void => {
     const host = scroller();
     if (host === null || host.clientHeight === 0) return;
     const top = host.getBoundingClientRect().top;
-    let found: { key: string; label: string } | null = null;
+    const current = crossingFoldRef.current;
+    let keep: { key: string; label: string } | null = null;
+    let candidate: { key: string; label: string } | null = null;
     for (const fold of host.querySelectorAll<HTMLElement>('[data-fold-entry][data-entry-expanded="true"]')) {
-      const rect = fold.getBoundingClientRect();
       const button = fold.querySelector<HTMLElement>('[data-action="toggle-timeline-entry"]');
-      if (button !== null && button.getBoundingClientRect().bottom < top && rect.bottom > top + 44) {
-        found = { key: fold.dataset['foldEntry'] ?? '', label: button.getAttribute('aria-label') ?? '收起当前内容' };
+      if (button === null) continue;
+      const key = fold.dataset["foldEntry"] ?? "";
+      const label = button.getAttribute("aria-label") ?? "收起当前内容";
+      const geometry: CrossingFoldGeometry = {
+        headerBottom: button.getBoundingClientRect().bottom - top,
+        bodyBottom: fold.getBoundingClientRect().bottom - top,
+      };
+      if (current !== null && current.key === key) {
+        if (crossingFoldAtTop(geometry, true)) keep = { key, label };
+        continue;
       }
+      if (candidate === null && crossingFoldAtTop(geometry, false)) candidate = { key, label };
     }
-    setCrossingFold((previous) => previous?.key === found?.key && previous?.label === found?.label ? previous : found);
+    applyCrossingFold(keep ?? candidate);
   };
   /** 上读期间有新内容到达（只影响提示措辞，不改变滚动位置）。 */
   const [unseen, setUnseen] = useState(false);
-  /** 上读时的锚点：第一条仍在可视带内的条目键与它相对容器顶边的偏移。 */
-  const anchorRef = useRef<{ readonly key: string; readonly offset: number } | null>(null);
+  /**
+   * 上读时的锚点：第一条仍在可视带内的条目键、它相对容器顶边的偏移，以及该条目的宿主节点。
+   *
+   * 节点只是**快路**（流式追加时不必重新扫描整棵时间线）；节点被卸载或不在容器内时按键重找。
+   */
+  const anchorRef = useRef<{
+    readonly key: string;
+    readonly offset: number;
+    readonly node: HTMLElement | null;
+  } | null>(null);
   /** 会话切换前的位置（按会话标识）：切回时恢复，不强制回到最新。 */
   const savedScroll = useRef<Map<string, number> | null>(null);
   /** 首次真正记录位置时才建表：渲染路径上不为此分配。 */
@@ -1310,11 +1458,22 @@ export function ConversationStream({
     if (typeof HTMLElement === "undefined") return null;
     return node instanceof HTMLElement ? node : null;
   };
+  /**
+   * 把阅读位置写到滚动容器上，并登记这次写入是**程序补偿**。
+   *
+   * 浏览器会把目标夹到可滚动范围内，因此登记的是写入后的真实 `scrollTop`；落点没变化时不登记
+   * （不会产生滚动事件，留着反而是个可能误配旧值）。
+   */
+  const applyScroll = (host: HTMLElement, y: number): void => {
+    const before = host.scrollTop;
+    host.scrollTop = y;
+    if (host.scrollTop !== before) scrollIntent.current = host.scrollTop;
+  };
   const scrollToY = (y: number): void => {
     // Web 直接同步定位，避免布局回调后再排队滚动造成可见的第二次位移。
     const host = scroller();
     if (host !== null) {
-      host.scrollTop = y;
+      applyScroll(host, y);
       return;
     }
     scrollRef.current?.scrollTo?.({ y, animated: false });
@@ -1333,64 +1492,259 @@ export function ConversationStream({
     const filesHost = filesScroller();
     if (filesHost !== null && filesHost.clientHeight > 0) savedFilesScroll.current = { sessionId, offsetY: filesHost.scrollTop };
   };
-  /** 记下当前阅读锚点（上读时才会用到；没有条目时锚点为 `null`）。 */
-  const captureAnchor = (): void => {
+  /**
+   * 绘制后复核的**窗口**（`null` = 窗口已关闭）：还要看几帧、本窗口已经看过几帧。
+   *
+   * 窗口有界：每次几何处理看 {@link GEOMETRY_VERIFY_FRAMES} 帧（可视宽度变过时看
+   * {@link GEOMETRY_VERIFY_REWRAP_FRAMES} 帧），真补过一次位置才续一帧，整个窗口不超过
+   * {@link GEOMETRY_VERIFY_FRAMES_MAX} 帧——收敛中的连续重排能被追平，但它不会是常驻逐帧
+   * 循环，没变化时也没有滚动写入或条目遍历。
+   */
+  const verification = useRef<{ left: number; used: number } | null>(null);
+  /** 这一轮的 `requestAnimationFrame` 与它内部的 `setTimeout` 是否已经排出（同一时间只排一份）。 */
+  const verificationArmed = useRef(false);
+  /**
+   * 按**锚点条目自身**的偏移补齐阅读位置；返回是否真的写了滚动。
+   *
+   * 为什么不能只看容器签名：宽度还原这类重排会让上方某个条目长高 13px、下方另一个条目同时矮
+   * 13px，`scrollHeight` / `clientHeight` / `clientWidth` 一个都没变，`ResizeObserver` 也不
+   * 通知，而锚点条目相对容器顶边的偏移已经从 -30 变成 -17——阅读位置挪了却没有补偿
+   * （SCROLL-REWRAP）。判据因此必须是条目**自己**的偏移，差额 ≥1px 才写。
+   *
+   * 只读锚点节点自身的两个矩形：节点不在容器里就直接放弃（按键重找是遍历，留给真正的几何
+   * 处理），因此没有变化时这里既没有遍历也没有写入。跟随底部时锚点是过期读数，一律不碰——
+   * 那时位置由 `handleGeometryChange` 贴底决定。
+   */
+  const verifyAnchorOffset = (): boolean => {
+    if (followingRef.current) return false;
+    if (typeof document !== "undefined" && document.hidden) return false;
+    const anchor = anchorRef.current;
+    const host = scroller();
+    if (anchor === null || anchor.node === null || host === null) return false;
+    if (host.clientHeight === 0 || !host.contains(anchor.node)) return false;
+    if (fileContent !== null || previousSession.current !== sessionId) return false;
+    const hostTop = host.getBoundingClientRect().top;
+    const delta = anchorScrollDelta(anchor.offset, anchor.node.getBoundingClientRect().top - hostTop);
+    if (Math.abs(delta) < 1) return false;
+    applyScroll(host, host.scrollTop + delta);
+    // 写入后按真实读数更新锚点：`scrollTop` 会被夹在可滚动范围内，落不到位的差额不该被反复重试。
+    anchorRef.current = {
+      key: anchor.key,
+      offset: anchor.node.getBoundingClientRect().top - hostTop,
+      node: anchor.node,
+    };
+    return true;
+  };
+  /** 把窗口的下一帧排出去（同一时间只排一份）。 */
+  const armVerification = (): void => {
+    if (verificationArmed.current) return;
+    verificationArmed.current = true;
+    requestAnimationFrame(() => {
+      // `requestAnimationFrame` 的回调跑在样式与布局**之前**，此刻读到的仍是上一帧布局完成的
+      // 读数；再排一个 `setTimeout(0)` 才是这一帧画完的时刻（与 e2e 的 `sampleAfterPaint` 同
+      // 帧序）。只排 rAF 的话复核在结构上就抓不到这一帧及之后才落地的重排。
+      setTimeout(() => {
+        verificationArmed.current = false;
+        const pending = verification.current;
+        if (pending === null || pending.left <= 0) return;
+        pending.left -= 1;
+        pending.used += 1;
+        // 布局之后：先让常规几何处理吸收「签名也变了」的那部分（它此刻读到的才是这一帧的读数），
+        // 再按锚点条目自身的偏移补齐「签名没变、阅读位置却挪了」的那部分。
+        reconcileRef.current();
+        if (verifyAnchorOffset() && pending.used < GEOMETRY_VERIFY_FRAMES_MAX) {
+          pending.left = Math.max(pending.left, 1);
+        }
+        if (pending.left <= 0 || pending.used >= GEOMETRY_VERIFY_FRAMES_MAX) {
+          // 期间若有新的几何事件开出了新窗口，别把它一起关掉。
+          if (verification.current === pending) verification.current = null;
+          return;
+        }
+        armVerification();
+      }, 0);
+    });
+  };
+  /**
+   * 一次几何处理结束之后排**绘制后**的复核。
+   *
+   * `ResizeObserver` 只在「尺寸相对上一份通知变了」时才回调；一次重排若在帧内被抵消（样式表换回、
+   * 响应式类名来回切换、字体在同一帧里替换），或者像宽度还原那样把上方长高、下方变矮的差额互相
+   * 抵消，观察者不再通知，容器签名也一模一样，而上一轮补偿是照那一版中间布局算的——没有任何
+   * 后续触发点把它改回来，错位就永久留在屏幕上。
+   *
+   * 窗口已经在跑时只把剩余帧数抬到这次应有的长度（仍受硬上界约束），窗口收手之后这次的几何
+   * 变化再重新开一个：每个窗口各自有界，不累加，因此任何一次几何事件都不会把复核续成逐帧常驻。
+   */
+  const scheduleGeometryVerification = (frames = GEOMETRY_VERIFY_FRAMES): void => {
+    if (typeof requestAnimationFrame !== "function" || typeof setTimeout !== "function") return;
+    const pending = verification.current;
+    const remaining = pending === null ? 0 : GEOMETRY_VERIFY_FRAMES_MAX - pending.used;
+    if (pending === null || pending.left <= 0 || remaining <= 0) {
+      // 上一次窗口已经收手：这一次几何变化重新开一个（各自有界，不会累积成逐帧常驻）。
+      verification.current = { left: frames, used: 0 };
+    } else {
+      pending.left = Math.max(pending.left, Math.min(frames, remaining));
+    }
+    armVerification();
+  };
+  /**
+   * 记下当前阅读锚点（上读时才会用到；没有条目时锚点为 `null`）。
+   *
+   * 尺寸已经变了、但这一轮还没对账时**不覆盖**已有锚点：此刻量到的偏移属于「用户没看见过的
+   * 那一版布局」（宽度重排会在同一条滚动事件的送达次序里夹进来）。这种读数一旦写进锚点，
+   * 紧接着的 `restoreAnchor` 就是拿它和自己比——差值为 0，补偿被静默跳过，位置从此不再被纠正。
+   * 重排前的锚点才是用户真正看到的阅读位置，必须留给 `handleGeometryChange` 去补偿。
+   * `force` 留给「用户自己决定了位置」的调用方：真正上读、上读中继续上滚、翻页前置、关闭文件
+   * 查看后恢复位置。程序路径（`handleGeometryChange` 补偿之后、`restoreAnchor` 找不到节点时）
+   * 不加 `force`——那里 `reconciledGeometry` 刚被写成当前读数，保护条件本来就不成立，加了反而
+   * 会让「没对账的布局」也能覆盖锚点。
+   * 会话切换不需要它——那里已经把 `reconciledGeometry` 置空，保护条件自然不成立。
+   */
+  const captureAnchor = (force = false): void => {
     const host = scroller();
     if (host === null) return;
+    if (!force && anchorRef.current !== null && reconciledGeometry.current !== null &&
+      reconciledGeometry.current.host === host &&
+      !sameScrollGeometry(reconciledGeometry.current, readScrollGeometry(host))) return;
     const hostTop = host.getBoundingClientRect().top;
     for (const node of host.querySelectorAll<HTMLElement>("[data-timeline-key]")) {
       const rect = node.getBoundingClientRect();
       if (rect.bottom <= hostTop + 1) continue;
-      anchorRef.current = { key: node.dataset["timelineKey"] ?? "", offset: rect.top - hostTop };
+      anchorRef.current = { key: node.dataset["timelineKey"] ?? "", offset: rect.top - hostTop, node };
       return;
     }
     anchorRef.current = null;
   };
-  /** 内容高度变化后把锚点移回原偏移：内容在上方增长（更早历史、媒体加载）时补偿 `scrollTop`。 */
+  /**
+   * 把锚点移回原偏移：内容在上方增长（更早历史、媒体加载）时补偿 `scrollTop`。
+   *
+   * 锚点条目已经不存在（内容被权威接替、条目键变化、所在折叠块被收起）时不做任何回拉，而是
+   * 改锚到当前第一条可见条目——陈旧键不会反复落空，也不会把页面拉回旧位置（D3）。
+   */
   const restoreAnchor = (): void => {
     const anchor = anchorRef.current;
     const host = scroller();
     if (anchor === null || host === null) return;
-    const hostTop = host.getBoundingClientRect().top;
-    for (const node of host.querySelectorAll<HTMLElement>("[data-timeline-key]")) {
-      if (node.dataset["timelineKey"] !== anchor.key) continue;
-      const delta = anchorScrollDelta(anchor.offset, node.getBoundingClientRect().top - hostTop);
-      if (delta !== 0) scrollToY(host.scrollTop + delta);
+    let node = anchor.node;
+    if (node === null || !host.contains(node)) {
+      node = null;
+      for (const candidate of host.querySelectorAll<HTMLElement>("[data-timeline-key]")) {
+        if (candidate.dataset["timelineKey"] !== anchor.key) continue;
+        node = candidate;
+        break;
+      }
+    }
+    if (node === null) {
+      // 程序路径：几何刚在 `handleGeometryChange` 里对过账，这里按当前第一条可见条目重取。
+      captureAnchor();
       return;
     }
+    const hostTop = host.getBoundingClientRect().top;
+    const delta = anchorScrollDelta(anchor.offset, node.getBoundingClientRect().top - hostTop);
+    // 偏移用记下来的原值比对，写入后再统一 `captureAnchor()` 取新的真实偏移。
+    anchorRef.current = { key: anchor.key, offset: anchor.offset, node };
+    if (delta !== 0) applyScroll(host, host.scrollTop + delta);
   };
-  const handleContentSizeChange = (): void => {
-    // 查看文件期间时间线被隐藏，维度变化不是「新内容」，不能借机滚到底。
+  /**
+   * 一次几何处理（D3）：**先集中读、再决定、最后一次性写** `scrollTop`。
+   *
+   * 触发点是每次提交的同步几何哨兵（见下方 `useLayoutEffect`）、`ResizeObserver` / RNW 的
+   * 尺寸通知、用户滚动、宽度变化、显式展开/收起、分页前置、可见性恢复与会话切换。内容高度、
+   * 可视高度与宽度都没变时直接返回：同行追加不写滚动，也不遍历展开块。查看文件期间与页面
+   * 隐藏时同样不处理（恢复可见时 `visibilitychange` 会再来一次）。
+   */
+  const handleGeometryChange = (): void => {
     if (fileContent !== null || previousSession.current !== sessionId) return;
     const host = scroller();
     if (host === null || host.clientHeight === 0 || (typeof document !== "undefined" && document.hidden)) return;
+    const geometry = readScrollGeometry(host);
     const previous = reconciledGeometry.current;
-    const contentHeight = host.scrollHeight;
-    const viewportHeight = host.clientHeight;
-    const resized = previous === null || previous.host !== host ||
-      previous.contentHeight !== contentHeight || previous.viewportHeight !== viewportHeight;
-    reconciledGeometry.current = { host, contentHeight, viewportHeight };
+    const resized = !sameScrollGeometry(previous, geometry);
+    reconciledGeometry.current = geometry;
+    if (!resized) return;
+    // 宽度变了意味着每一个长段落都要重新换行，重排会在提交之后的几帧里继续收敛（文本测量、
+    // 媒体尺寸），因此复核窗口相应放宽（见 `GEOMETRY_VERIFY_REWRAP_FRAMES`）。
+    const verifyFrames = previous !== null && previous.viewportWidth !== geometry.viewportWidth
+      ? GEOMETRY_VERIFY_REWRAP_FRAMES
+      : GEOMETRY_VERIFY_FRAMES;
     if (followingRef.current) {
-      // 草稿、接受确认及终态通知也会触发渲染；没有布局变化就不改阅读位置。
-      // 同一次布局的 layout effect / ResizeObserver / RNW 回调也只定位一次。
-      if (resized) scrollToY(contentHeight);
+      // 跟随底部：这一轮唯一的一次滚动写入；写完再评估顶部入口（读的是最终几何）。
+      applyScroll(host, geometry.contentHeight);
       measureCrossingFold();
+      scheduleGeometryVerification(verifyFrames);
       return;
     }
     restoreAnchor();
+    // 程序路径：`reconciledGeometry` 刚写成这一版布局，因此不会被保护条件拦下；重取的是补偿后
+    // 的真实偏移，紧接的绘制后复核就以它为基准。
     captureAnchor();
     measureCrossingFold();
+    // 这一轮是对着「刚量到的这一版布局」补偿的：绘制之后再按锚点条目自身的偏移核对一次，
+    // 抵消帧内来回的重排与「签名没变、阅读位置却挪了」的重排（见 `verifyAnchorOffset`）。
+    scheduleGeometryVerification(verifyFrames);
   };
-  // 历史读取接替流式内容、思考自动折叠等更新会改变高度。
-  // 在浏览器绘制前完成位置补偿，尺寸回调继续处理图片等异步布局。
-  useLayoutEffect(() => {
-    handleContentSizeChange();
-  });
+  /**
+   * 表头被点选（显式展开/收起）：折叠前先把锚点从「即将消失的内容」挪到这个条目自身。
+   *
+   * 展开/收起的终态仍然只由页面决定（本组件只透传），这里只负责让折叠后的绘制前补偿有
+   * 一个确定的存续条目可用（D3）。锚点偏移取条目的**真实**偏移，不是 `0`：写 `0` 会让下一次
+   * 几何处理把这个条目拉到容器顶边，位移量恰好等于它当前滚出顶部的距离（条目越高跳得越远）。
+   * 几何必须在调用回调**之前**读——回调会提交渲染，之后读到的是折叠后的布局。
+   */
+  const handleTimelineToggle = (key: string, expanded: boolean): void => {
+    if (expanded) {
+      onToggleTimelineEntry?.(key, expanded);
+      return;
+    }
+    const host = scroller();
+    const anchor = anchorRef.current;
+    const fold = host === null ? null : findFold(host, key);
+    const entry = fold?.closest<HTMLElement>("[data-timeline-key]") ?? null;
+    const entryOffset = entry !== null && host !== null
+      ? entry.getBoundingClientRect().top - host.getBoundingClientRect().top
+      : null;
+    onToggleTimelineEntry?.(key, expanded);
+    if (host === null || anchor === null || fold === null || entry === null || entryOffset === null) return;
+    const anchorInFold = (anchor.node !== null && fold.contains(anchor.node)) ||
+      entry.dataset["timelineKey"] === anchor.key;
+    if (!anchorInFold) return;
+    anchorRef.current = {
+      key: entry.dataset["timelineKey"] ?? anchor.key,
+      offset: entryOffset,
+      node: entry,
+    };
+  };
   const handleTimelineScroll = (): void => {
     const host = scroller();
     if (host === null || host.clientHeight === 0 || document.hidden || fileContent !== null) return;
     scrollPositions().set(sessionId, host.scrollTop);
+    const intent = scrollIntent.current;
+    scrollIntent.current = null;
+    // 我们自己刚写下的落点：只记录位置，不按它改写跟随/提示状态（否则补偿会闪一下入口）。
+    const programmatic = intent !== null && Math.abs(host.scrollTop - intent) <= 1;
+    const reconciled = reconciledGeometry.current;
+    if (
+      reconciled !== null && reconciled.host === host && previousSession.current === sessionId &&
+      !followingRef.current && !sameScrollGeometry(reconciled, readScrollGeometry(host))
+    ) {
+      // 布局回声：DOM 已经变高/变矮或重新换行，但还没有任何一次几何处理把它计入（浏览器滚动
+      // 锚定、`ResizeObserver` 与本条事件的送达次序都可能造成这一小段错位）。判据是**整份几何
+      // 签名**：只比内容高度会漏掉「宽度变了、高度碰巧没变」的重排——中栏变窄后所有长段落重新
+      // 换行，内容高度可能一致，而锚点偏移已经变了；那条滚动事件若被当成用户滚动，就会用重排后
+      // 的位置覆盖阅读锚点，随后 `restoreAnchor` 拿它和自己比，补偿永远差那一次重排的量。
+      // 此刻这一条滚动事件读到的位置是**补偿前**的，因此不能按它改写阅读锚点（SCROLL-PAGING、
+      // SCROLL-REWRAP）。
+      // 只在上读时启用：跟随底部时同样的错位里出现的滚动事件是用户的真实上滚，按回声处理会把
+      // 位置拉回底部、还让这条事件失去一次跟随状态重算；分页前置在 `onLoadEarlier()` 之前已把
+      // `followingRef` 置为 false，因此分页场景仍由这里覆盖。
+      // 命中后走完整的 `handleGeometryChange`：先按旧锚点补偿（上读时补偿后立即重取锚点），
+      // 本条事件不再参与跟随/提示判定。
+      reconcileRef.current();
+      scrollPositions().set(sessionId, host.scrollTop);
+      return;
+    }
     measureCrossingFold();
+    if (programmatic) return;
     const next = isFollowingBottom({
       offsetY: host.scrollTop,
       contentHeight: host.scrollHeight,
@@ -1400,26 +1754,58 @@ export function ConversationStream({
     if (!next && host.scrollTop <= 96 && (paging.hasEarlier || paging.hasEarlierHistory) && !paging.loading && !paging.loadingHistory) {
       followingRef.current = false;
       setFollowing(false);
-      captureAnchor();
+      // 这条事件就是用户的位置：翻页补偿必须按它写下的锚点做，因此不受「未对账几何」保护。
+      captureAnchor(true);
       onLoadEarlier();
       return;
     }
     if (next === followingRef.current) {
       if (next && unseen) setUnseen(false);
-      if (!next) captureAnchor();
+      if (!next) {
+        // 已经在上读态继续往上滚：这是用户的意图，位置必须按滚动后的读数记下来。但不能直接
+        // 强制重取——若此刻还有未对账的几何变化，循环体里那次 `captureAnchor()` 会被保护条件
+        // 拦掉，锚点停留在滚动前的位置，紧接着的 `restoreAnchor` 就把用户刚滚的位移原样推回。
+        // 因此先对账（把布局变化补偿掉），再强制重取这次用户位置。
+        reconcileRef.current();
+        captureAnchor(true);
+      }
       return;
     }
     followingRef.current = next;
     setFollowing(next);
     if (next) setUnseen(false);
-    else captureAnchor();
+    // 跟随→上读的第一帧：位置由用户自己决定，同样强制重取（重排回声已在上面的守卫里排除）。
+    else captureAnchor(true);
   };
-  const reconcileRef = useRef(handleContentSizeChange);
+  const reconcileRef = useRef(handleGeometryChange);
   const scrollHandlerRef = useRef(handleTimelineScroll);
   useLayoutEffect(() => {
-    reconcileRef.current = handleContentSizeChange;
+    reconcileRef.current = handleGeometryChange;
     scrollHandlerRef.current = handleTimelineScroll;
   });
+  /**
+   * 同步几何哨兵（D3）：每次提交都在**绘制前**读一次滚动容器的几何。
+   *
+   * 只读 `scrollHeight` / `clientHeight` / `clientWidth` 三个数并与上一次的读数比较
+   * （`handleGeometryChange` 的开头就是这一步）：三者都没变时立即返回——不遍历折叠块、不遍历
+   * 条目、不写 `scrollTop`，因此同行追加与纯草稿更新仍是零几何写入。真的变了才在绘制前完成
+   * **这一次**补偿，所以换行的正文与分页前置的历史不会先被画成一帧旧位置。
+   *
+   * 为什么不能只靠 `ResizeObserver`：它的回调与 RNW 的尺寸通知是异步送达的，跨过一帧才到，
+   * 一帧里连续两次高度变化（流式换行）就可能被画成「先落后再纠正」。尺寸观察仍然保留，负责
+   * 提交之后才落地的异步布局（图片解码、字体替换、滚动条出现）与可见性恢复。
+   */
+  useLayoutEffect(() => {
+    reconcileRef.current();
+  });
+  // 显式展开/收起是几何事件：`expandedTimelineEntries` 的引用只在切换时变化（页面用 state
+  // 持有它），因此这里不跟着正文增量跑，又能在浏览器绘制前完成必要的一次补偿。
+  useLayoutEffect(() => {
+    reconcileRef.current();
+    // 展开/收起直接改变「谁横跨顶部」：即使高度没变（例如收起一个零高的块），也要重新判定
+    // 入口归属——目标折叠后必须立刻移除。
+    measureCrossingFold();
+  }, [expandedTimelineEntries]);
   useLayoutEffect(() => {
     const host = scroller();
     if (host === null) return;
@@ -1428,6 +1814,9 @@ export function ConversationStream({
     const reconcile = (): void => reconcileRef.current();
     host.addEventListener("scroll", onScroll, { passive: true });
     document.addEventListener("visibilitychange", reconcile);
+    // 尺寸观察负责**提交之后才落地**的异步布局（图片解码、字体替换、滚动条出现）与可见性
+    // 恢复；提交本身的高度变化由绘制前的同步几何哨兵处理，不依赖这条异步通知的送达时点。
+    // 观察滚动容器与内容容器两处：容器尺寸固定，内容容器才是长高的那一个。
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(reconcile);
     observer?.observe(host);
     if (host.firstElementChild !== null) observer?.observe(host.firstElementChild);
@@ -1469,6 +1858,10 @@ export function ConversationStream({
     if (previousSession.current === sessionId) return undefined;
     previousSession.current = sessionId;
     anchorRef.current = null;
+    // 会话切换后旧会话的顶部入口、尺寸读数与未兑现的滚动意图都不再有效。
+    applyCrossingFold(null);
+    reconciledGeometry.current = null;
+    scrollIntent.current = null;
     const saved = scrollPositions().get(sessionId);
     followingRef.current = saved === undefined;
     setFollowing(saved === undefined);
@@ -1487,8 +1880,9 @@ export function ConversationStream({
     savedBeforeFile.current = null;
     if (host !== null && saved !== null && saved.sessionId === sessionId) {
       // 关闭后这次恢复必须同步落到节点上：`scrollTo` 在刚取消 `display:none` 的同一帧
-      // 可能排到布局之后，而内容尺寸回调会先按「跟随底部」改写位置。
-      host.scrollTop = saved.offsetY;
+      // 可能排到布局之后，而尺寸回调会先按「跟随底部」改写位置。写入登记为程序补偿，
+      // 紧随其后的滚动事件因此不会改写跟随/提示状态。
+      applyScroll(host, saved.offsetY);
       const next = isFollowingBottom({
         offsetY: saved.offsetY,
         contentHeight: host.scrollHeight,
@@ -1496,7 +1890,9 @@ export function ConversationStream({
       });
       followingRef.current = next;
       setFollowing(next);
-      if (!next) captureAnchor();
+      // 位置刚刚被有意改回打开文件前：这一版的锚点就是用户看到的位置，不受「未对账几何」保护
+      // （两栏刚从 `display:none` 回来，尺寸读数与隐藏前那次对账必然不同）。
+      if (!next) captureAnchor(true);
     }
     const filesSaved = savedFilesScroll.current;
     savedFilesScroll.current = null;
@@ -1658,7 +2054,7 @@ export function ConversationStream({
                 scrollFollow: String(following),
                 scrollUnseen: String(unseen),
               }}
-              onContentSizeChange={handleContentSizeChange}
+              onContentSizeChange={handleGeometryChange}
               scrollEventThrottle={32}
             >
             {answerableCount === 0 ? null : (
@@ -1695,7 +2091,7 @@ export function ConversationStream({
               onCopyCode={onCopyCode}
               onLinkPress={onLinkPress}
               expandedEntries={expandedTimelineEntries}
-              onToggleEntry={onToggleTimelineEntry}
+              onToggleEntry={onToggleTimelineEntry === undefined ? undefined : handleTimelineToggle}
               changeDiagnostics={changeDiagnostics}
               openChangeDiagnosticsEventId={openChangeDiagnosticsEventId ?? null}
               onOpenChangeDiagnostics={onOpenChangeDiagnostics}
@@ -1714,16 +2110,17 @@ export function ConversationStream({
                 dataSet={{ action: "collapse-crossing-fold", entryKey: crossingFold.key }}
                 onPress={() => {
                   const host = scroller();
-                  const fold = host === null ? undefined : Array.from(host.querySelectorAll<HTMLElement>('[data-fold-entry]'))
-                    .find((node) => node.dataset['foldEntry'] === crossingFold.key);
+                  const fold = host === null ? null : findFold(host, crossingFold.key);
                   // 折叠横跨视口的长块后保留其标题，避免当前位置被夹到无关内容。
-                  const entry = fold?.closest<HTMLElement>('[data-timeline-key]');
-                  if (entry !== null && entry !== undefined && host !== null) {
-                    anchorRef.current = { key: entry.dataset['timelineKey'] ?? '', offset: 0 };
+                  // 这里**不**走 `handleTimelineToggle`：那条路会保留条目的真实偏移，而快捷收起的
+                  // 表头本身已经滚到可见带之上，把偏移记成 0 才是「收起后标题留在上沿」。
+                  const entry = fold?.closest<HTMLElement>("[data-timeline-key]") ?? null;
+                  if (entry !== null && host !== null) {
+                    anchorRef.current = { key: entry.dataset["timelineKey"] ?? "", offset: 0, node: entry };
                     followingRef.current = false;
                     setFollowing(false);
                   }
-                  onToggleTimelineEntry(crossingFold.key, false);
+                  onToggleTimelineEntry?.(crossingFold.key, false);
                 }}>
                 <Text style={styles.scrollPillText}>↑ {crossingFold.label}</Text>
               </Pressable>
