@@ -12,7 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::common::{DecimalString, InteractionOption, Nullable, RawObject, Timestamp, Uuid};
+use crate::common::{
+    DecimalString, InteractionOption, Nullable, RawObject, Timestamp, Uuid,
+    deserialize_optional_non_null,
+};
 
 /// `messageChannel`：消息通道的封闭词表（`reply｜thought`）。
 ///
@@ -153,6 +156,13 @@ pub enum InteractionKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EffectiveInteraction {
+    /// 创建请求的权威位置；在缺少历史事件的读取页中仍可正确定位。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sequence: Option<DecimalString>,
     #[serde(rename = "interactionId")]
     pub interaction_id: Uuid,
     #[serde(rename = "sessionId")]

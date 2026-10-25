@@ -1159,9 +1159,12 @@ async fn e5_same_text_second_message_gets_a_new_identity() {
         None,
     )
     .await;
+    let first_accepted = client.expect_command_result(&first_request).await;
+    assert_eq!(first_accepted["status"], json!("accepted"));
     assert_eq!(
-        client.expect_command_result(&first_request).await["status"],
-        json!("accepted")
+        first_accepted["result"],
+        json!(null),
+        "session.start 不属于普通 prompt，accepted result 保持 null"
     );
     settle_dispatch(&host, &prepared.session, message).await;
     assert_eq!(
@@ -1170,9 +1173,10 @@ async fn e5_same_text_second_message_gets_a_new_identity() {
     );
     let first_row = first_submission_row(&host, &prepared.session).await;
 
-    // 第二次有意发送同一段文字：普通 prompt（没有首条派发上下文），Agent 给新消息身份。
-    let second_message = uuid_text();
-    host.script().echo_plain_prompt(&second_message);
+    // 第二次有意发送同一段文字：普通 prompt，受理事务分配新的消息身份；Agent 的同文回显是
+    // 可证明的重复，只能补充已保存的那条消息，不得新增第二条用户消息。
+    let agent_echo_identity = uuid_text();
+    host.script().echo_plain_prompt(&agent_echo_identity);
     let second_request = uuid_text();
     client.step("session.prompt（相同文本）");
     client
@@ -1185,10 +1189,14 @@ async fn e5_same_text_second_message_gets_a_new_identity() {
         .await;
     let accepted = client.expect_command_result(&second_request).await;
     assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    assert!(
+        accepted["result"]["turnId"].as_str().is_some(),
+        "session.prompt 的 accepted 必须带稳定 turnId，客户端据此按身份接替本地条目：{accepted}"
+    );
     let released = settle_dispatch(&host, &prepared.session, message).await;
     assert_eq!(
-        released, 3,
-        "普通 prompt 的 Agent 回显必须是一条独立事件（agent delta + 回显 + turn.completed）"
+        released, 2,
+        "同文回显被关联为重复：只派发 agent delta + turn.completed"
     );
     let terminal = client.expect_command_result(&second_request).await;
     assert_eq!(terminal["status"], json!("completed"), "{terminal}");
@@ -1203,9 +1211,13 @@ async fn e5_same_text_second_message_gets_a_new_identity() {
         .unwrap_or_else(|| panic!("第一条消息身份必须仍在：{users:?}"));
     let second = users
         .iter()
-        .find(|(identity, _)| identity == &second_message)
-        .unwrap_or_else(|| panic!("第二条消息必须是新身份：{users:?}"));
+        .find(|(identity, _)| identity != first_identity)
+        .unwrap_or_else(|| panic!("第二条用户消息必须存在：{users:?}"));
     assert_ne!(first.0, second.0, "相同文字必须有不同的消息身份：{users:?}");
+    assert_ne!(
+        second.0, agent_echo_identity,
+        "第二条身份来自受理事务，不是 Agent 回显：{users:?}"
+    );
     assert_eq!(first.1, message, "{users:?}");
     assert_eq!(second.1, message, "{users:?}");
     let after = first_submission_row(&host, &prepared.session).await;
@@ -1215,8 +1227,8 @@ async fn e5_same_text_second_message_gets_a_new_identity() {
     );
     assert_eq!(
         owned_rows(&host, &prepared.session).await.user_messages,
-        1,
-        "第二条消息不新增首条边界的持久用户消息"
+        2,
+        "两条有意发送的输入各写一条持久用户消息，回显不重复写入"
     );
 
     host.stop().await;

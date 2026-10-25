@@ -777,6 +777,7 @@
       "additionalProperties": false,
       "required": ["messageId", "sessionId", "role", "content", "status", "createdAt", "turnId"],
       "properties": {
+        "sequence": { "$ref": "common.schema.json#/$defs/decimalString", "description": "首次输出位置：owned 为会话域，远程为来源域；缺席表示旧历史顺序无法完整还原。" },
         "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
         "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
         "role": { "enum": ["user", "agent"] },

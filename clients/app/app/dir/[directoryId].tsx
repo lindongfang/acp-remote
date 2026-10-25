@@ -49,6 +49,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 
 import { CreateSessionSheet, DirectoryDetail, DirectoryPicker, RuntimeUnavailable } from "../../src/components";
+import { toastStore } from "../../src/components/shell/toast";
 import type { Palette } from "../../src/components/theme";
 import { StyleSheet, View, palettes, spacing, useTheme } from "../../src/components/theme";
 import type { DirectorySelection } from "../../src/features/create-session-model";
@@ -108,6 +109,8 @@ export default function DirectoryDetailRoute(): ReactElement {
   useEffect(() => {
     if (store === null || typeof directoryId !== "string") return;
     store.closeCreateSheet();
+    // 刷新详情页同样找回本标签页唯一的准备槽位；随后点击新建会导航回它。
+    void store.restoreTabPreparation();
   }, [store, directoryId]);
 
   // 选择器的回调定住身份：它挂载时按 `initialPath` 请求初始层，回调换身份会让那次请求重跑。
@@ -144,6 +147,29 @@ export default function DirectoryDetailRoute(): ReactElement {
    */
   const sheetOpen = state.createSheetDirectoryId === directoryId;
 
+  /** 已有唯一准备槽位（或分配在途）时只导航回它，不打开创建弹层、不改目录。 */
+  const openExistingPreparation = (): boolean => {
+    const route = store.preparationSlotRoute();
+    if (route.kind === "session") {
+      store.closeCreateSheet();
+      router.push(`/session/${encodeURIComponent(route.sessionId)}`);
+      return true;
+    }
+    if (route.kind === "allocating") {
+      void route.outcome.then((outcome) => {
+        // 这一支没有打开弹层，失败原因只能走页面外提示（否则点击看起来毫无反应）。
+        if (!outcome.ok) {
+          toastStore.show(outcome.reason);
+          return;
+        }
+        setCreateIssue(null);
+        router.push(`/session/${encodeURIComponent(outcome.sessionId)}`);
+      });
+      return true;
+    }
+    return false;
+  };
+
   return (
     <View role="main" style={styles.outer}>
       <View style={styles.page}>
@@ -162,6 +188,7 @@ export default function DirectoryDetailRoute(): ReactElement {
           router.push(`/session/${encodeURIComponent(sessionId)}`);
         }}
         onCreateSession={() => {
+          if (openExistingPreparation()) return;
           setCreateIssue(null);
           store.openCreateSheet(directoryId);
         }}

@@ -399,10 +399,6 @@ const checks: readonly Check[] = [
             "来源为其它节点的会话，草稿只在内存",
           );
           expectThat(
-            textOf(query(container, "[data-draft-notice]")).includes("只在内存"),
-            "草稿必须标注为只在内存、尚未提交",
-          );
-          expectThat(
             textOf(query(container, "[data-submit-unavailable]")).includes("来源节点离线"),
             "不可提交时必须说明来源节点离线",
           );
@@ -414,9 +410,8 @@ const checks: readonly Check[] = [
             null,
             "来源为其它节点的会话不得发出 session.prompt",
           );
-          expectEqual(
-            query(container, "[data-submission]"),
-            null,
+          expectThat(
+            query(container, "[data-submission]") === null,
             "输入不得被标记为已发送（没有 submission 呈现）",
           );
         },

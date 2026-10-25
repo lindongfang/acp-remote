@@ -66,6 +66,7 @@ async fn create(store: &SqliteStore, hour: u32) -> acp_core::model::SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create session")
@@ -92,6 +93,7 @@ async fn append(
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("append events");
@@ -483,6 +485,7 @@ async fn commit_refuses_to_write_when_capacity_cannot_be_recovered() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect_err("must refuse");
@@ -526,6 +529,7 @@ async fn session_limit_is_enforced_per_session() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect_err("session limit");
@@ -586,6 +590,7 @@ async fn prune_clears_expired_events_referenced_by_terminal_interactions() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("interaction event + pending row");
@@ -631,6 +636,7 @@ async fn prune_clears_expired_events_referenced_by_terminal_interactions() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("resolve interaction");
@@ -726,6 +732,7 @@ async fn capacity_reports_storage_full_not_backend_when_events_are_referenced() 
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("interaction event + pending row");
@@ -763,6 +770,7 @@ async fn capacity_reports_storage_full_not_backend_when_events_are_referenced() 
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("resolve");
@@ -806,6 +814,7 @@ async fn capacity_reports_storage_full_not_backend_when_events_are_referenced() 
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect_err("capacity must reject the write");

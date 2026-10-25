@@ -53,9 +53,10 @@ const SECTION_STATE_LABELS: Readonly<Record<SettingsSectionModel["state"], strin
 };
 
 /** 分节的说明文案（胶囊上的「模型」「模式」）。 */
-const SECTION_KICKERS: Readonly<Record<"model" | "mode", string>> = {
+const SECTION_KICKERS: Readonly<Record<"model" | "mode" | "thought", string>> = {
   model: "模型",
   mode: "模式",
+  thought: "思考",
 };
 
 /**
@@ -63,7 +64,8 @@ const SECTION_KICKERS: Readonly<Record<"model" | "mode", string>> = {
  *
  * 与四态无关（`unavailable` 时同样说明「谁提供」），因此放在选项之前、始终渲染。
  */
-const SECTION_SOURCE_NOTES: Readonly<Record<"model" | "mode", string>> = {
+const SECTION_SOURCE_NOTES: Readonly<Record<"model" | "mode" | "thought", string>> = {
+  thought: "思考模式（由 Agent 提供，下一轮生效）",
   model: "模型（由 Agent 提供，下一轮生效）",
   mode: "模式（由 Agent 提供，下一轮生效）",
 };
@@ -73,23 +75,26 @@ function buildStyles(colors: Palette) {
   return StyleSheet.create({
     panel: {
       flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "flex-start",
-      gap: spacing.sm,
+      flexWrap: "nowrap",
+      alignItems: "center",
+      flexShrink: 1,
+      gap: 4,
     },
     section: {
       position: "relative",
+      flexShrink: 1,
+      minWidth: 0,
     },
     pill: {
+      minWidth: 0,
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.xs,
       paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.lg,
-      backgroundColor: colors.panel2,
+      paddingHorizontal: spacing.xs,
+      minHeight: 40,
+      borderWidth: 0,
+      backgroundColor: "transparent",
     },
     kicker: {
       color: colors.ink2,
@@ -97,6 +102,9 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.sm,
     },
     value: {
+      flexShrink: 1,
+      maxWidth: 110,
+      minWidth: 0,
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
@@ -111,7 +119,7 @@ function buildStyles(colors: Palette) {
       // 弹层浮在胶囊**上方**（原型 `.pick .pop`：`position:absolute;bottom:calc(100% + 6px)`），
       // 因此展开不会把输入区推下去。收起时 `display:none`，布局没有变化。
       position: "absolute",
-      left: 0,
+      right: 0,
       bottom: "100%",
       gap: spacing.xs,
       minWidth: 220,
@@ -195,7 +203,7 @@ function ChoiceButton({
   readonly choice: SettingsChoice;
   readonly onSelect: ((id: string) => void) | null;
   /** `data-*` 锚点的键（模型分节与模式分节各一个，便于逐条断言）。 */
-  readonly testKey: "modelChoice" | "modeChoice";
+  readonly testKey: "modelChoice" | "modeChoice" | "thoughtChoice";
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -229,10 +237,10 @@ function SettingsSection({
   onSelect,
   testKey,
 }: {
-  readonly name: "model" | "mode";
+  readonly name: "model" | "mode" | "thought";
   readonly section: SettingsSectionModel;
   readonly onSelect: ((id: string) => void) | null;
-  readonly testKey: "modelChoice" | "modeChoice";
+  readonly testKey: "modelChoice" | "modeChoice" | "thoughtChoice";
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -252,14 +260,15 @@ function SettingsSection({
       <Pressable
         role="button"
         style={styles.pill}
+        accessibilityLabel={`${SECTION_KICKERS[name]}：${section.currentName ?? "未提供"}`}
         dataSet={{ action: "toggle-settings-popover", settingsPill: name, settingsPillOpen: String(open) }}
         onPress={() => {
           setOpen(!open);
         }}
       >
-        <Text style={styles.kicker}>{SECTION_KICKERS[name]}</Text>
-        <Text style={styles.value} dataSet={{ settingsCurrentName: section.currentName ?? "none" }}>
-          {section.currentName ?? "未提供"}
+        <Text style={styles.kicker}>{name === "model" ? "" : name === "mode" ? "☷" : "思考"}</Text>
+        <Text numberOfLines={1} style={styles.value} dataSet={{ settingsCurrentName: section.currentName ?? "none" }}>
+          {section.currentName ?? "—"}
         </Text>
         <Text style={styles.caret}>▾</Text>
       </Pressable>
@@ -318,13 +327,19 @@ export function ConversationSettingsPanel({
 
   return (
     <View style={styles.panel} dataSet={{ settings: "true" }}>
-      <SettingsSection name="model" section={settings.model} onSelect={selectModel} testKey="modelChoice" />
       <SettingsSection
         name="mode"
         section={settings.mode}
         onSelect={onSelectMode === undefined ? null : onSelectMode}
         testKey="modeChoice"
       />
+      <SettingsSection name="model" section={settings.model} onSelect={selectModel} testKey="modelChoice" />
+      <SettingsSection name="thought"
+        section={settings.thought ?? { state: "unavailable", currentId: null, currentName: null, choices: [], notice: "Agent 未提供思考模式。", configId: null }}
+        onSelect={settings.thought?.configId == null || onSelectModel === undefined ? null : (value) => {
+          const configId = settings.thought?.configId;
+          if (configId != null) onSelectModel(configId, value);
+        }} testKey="thoughtChoice" />
     </View>
   );
 }

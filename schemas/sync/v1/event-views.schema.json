@@ -327,6 +327,9 @@
         "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
         "title": { "type": "string", "maxLength": 1024 },
         "description": { "type": ["string", "null"], "maxLength": 4096 },
+        "toolCallId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "toolKind": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "toolDetail": { "$ref": "#/$defs/tool.call.started/properties/toolDetail" },
         "options": {
           "type": "array",
           "items": { "$ref": "common.schema.json#/$defs/interactionOption" }

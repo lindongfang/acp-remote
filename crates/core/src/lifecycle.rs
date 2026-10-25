@@ -1252,6 +1252,7 @@ impl LocalSessionLifecycle {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         };
         let outcome = self.store.commit(commit).await?;
         for event in outcome.appended {

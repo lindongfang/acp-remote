@@ -85,6 +85,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create session")
@@ -133,6 +134,7 @@ async fn interaction_creation_links_the_request_event() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create pending interaction in one commit");
@@ -176,6 +178,7 @@ async fn interaction_creation_links_the_request_event() {
     let view = store.read_view().await.expect("read view");
     let page = view
         .read_session(acp_core::ports::HistoryQuery {
+            origin_order: false,
             session: session.clone(),
             include: acp_core::ports::HistoryInclude {
                 messages: false,
@@ -241,6 +244,7 @@ async fn creating_and_resolving_in_one_commit_is_rejected() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("event");
@@ -291,6 +295,7 @@ async fn creating_and_resolving_in_one_commit_is_rejected() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect_err("create + resolve in one commit must be rejected");
@@ -348,6 +353,7 @@ async fn event_payload_is_byte_exact() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("events");
@@ -461,6 +467,7 @@ async fn node_scope_events_have_null_origin_columns() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("node-scope event");
@@ -486,6 +493,7 @@ async fn node_scope_events_have_null_origin_columns() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("session event");
@@ -591,6 +599,7 @@ async fn interaction_without_a_paired_event_is_rejected() {
                 idempotency: None,
                 command_terminal: None,
                 origin_epoch: Some(epoch()),
+                input: None,
             })
             .await
             .expect_err("an unpaired interaction must be rejected");

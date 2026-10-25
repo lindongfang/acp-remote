@@ -109,6 +109,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("create session")
@@ -178,6 +179,7 @@ async fn seed(store: &SqliteStore, session: &SessionId) {
             idempotency: Some(device_command(session, request())),
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("四条事件 + 一条设备命令行");
@@ -198,6 +200,7 @@ async fn seed(store: &SqliteStore, session: &SessionId) {
             idempotency: Some(node_command(session, node_request())),
             command_terminal: None,
             origin_epoch: Some(epoch()),
+            input: None,
         })
         .await
         .expect("一条 node 事件 + 一条节点命令行");
@@ -383,6 +386,7 @@ async fn sync_replay_fails_closed_when_a_history_row_cannot_be_attributed() {
                 }),
                 command_terminal: None,
                 origin_epoch: Some(epoch()),
+                input: None,
             })
             .await
             .expect("一条 device 事件");
@@ -480,6 +484,7 @@ async fn sync_replay_fails_closed_when_a_history_row_cannot_be_attributed() {
                 }),
                 command_terminal: None,
                 origin_epoch: Some(epoch()),
+                input: None,
             })
             .await
             .expect("一条 node 事件");

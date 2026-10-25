@@ -18,6 +18,7 @@ use acp_core::model::{
     AgentId, AgentProfile, AgentRef, ConfigOptionId, ConfigOptionKind, ConfigValue,
     CreateSessionRequest, DispatchContext, FirstSubmissionId, MessageId, ModeId, PortError,
     PromptContentBlock, PromptRequest, RequestId, ResourceGeneration, ResourceOrigin, SessionId,
+    TurnId,
 };
 use acp_core::ports::SessionEndpoint;
 use agent_host::{
@@ -603,10 +604,13 @@ async fn ownership_transfer_reuses_endpoint_and_associates_user_echo_internally(
     let echo_digest = digest_of(&format!("[{echo_block}]"));
     let context = DispatchContext {
         session: session_id(ECHO_SESSION),
-        first_submission: FirstSubmissionId::new("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
-            .expect("first submission"),
+        first_submission: Some(
+            FirstSubmissionId::new("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+                .expect("first submission"),
+        ),
         user_message: MessageId::new("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").expect("message"),
         request: RequestId::new("cccccccc-cccc-4ccc-8ccc-cccccccccccc").expect("request"),
+        turn: TurnId::new("dddddddd-dddd-4ddd-8ddd-dddddddddddd").expect("turn"),
         agent: agent_ref(),
         agent_session,
         resource_generation: ResourceGeneration::new(endpoint.generation()),

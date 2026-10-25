@@ -24,23 +24,24 @@ use tokio::sync::Mutex;
 
 use acp_core::broker::HISTORY_ENTRY_EVENT_TYPES;
 use acp_core::model::{
-    AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
-    AttachmentId, CommandRecord, CommandResult, CommandStatus, CommandTerminalRecord,
-    CommittedEvent, ConflictKind, DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind,
-    EventOrigin, EventPayload, GlobalCursor, InteractionId, InteractionOption,
+    AcceptedInput, AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId,
+    AttachmentGeneration, AttachmentId, CommandRecord, CommandResult, CommandStatus,
+    CommandTerminalRecord, CommittedEvent, ConflictKind, DeviceId, Digest, DirectoryId, EntityRef,
+    EventId, EventKind, EventOrigin, EventPayload, GlobalCursor, InteractionId, InteractionOption,
     InteractionResolution, MediaKind, MediaReference, MessageChannel, MessageId, MessageRecord,
     MessageState, ModeId, ModeRef, NodeId, OriginCursor, OriginEpoch, PartialReason, PartialResult,
     PendingInteraction, PortError, PublicError, RawUnavailableReason, RequestId, ResourceOrigin,
     Sequence, ServerEpoch, Session, SessionId, SessionRecoveryRecord, SessionSnapshot,
     SessionState, SessionSummary, SessionTitle, StoredPolicy, Timestamp, Turn, TurnId,
-    UnavailableKind, Version, ViewJson, WorkspaceRef,
+    UnavailableKind, UserInputWrite, Version, ViewJson, WorkspaceRef,
 };
 use acp_core::ports::{
-    AttachmentRef, AttachmentStore, CommitOutcome, HistoryPage, HistoryQuery, IdempotentReplay,
-    ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord, PendingInteractionOrigin,
-    PreparationAttachmentStaging, PruneReport, ReadView, ReplayBatch, ReplayLimit, ResetReason,
-    RetentionPolicy, SessionActivityFacts, SessionQuery, SessionStore, SettledSession, StateChange,
-    StoreHealth, SubmissionBinding, SyncEventRecord, SyncReplaySlice, TurnChange, TurnUpdate,
+    AttachmentRef, AttachmentStore, CommitOutcome, HistoryPage, HistoryQuery, IdempotencyRecord,
+    IdempotentReplay, ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
+    PendingInteractionOrigin, PreparationAttachmentStaging, PruneReport, ReadView, ReplayBatch,
+    ReplayLimit, ResetReason, RetentionPolicy, SessionActivityFacts, SessionQuery, SessionStore,
+    SettledSession, StateChange, StoreHealth, SubmissionBinding, SyncEventRecord, SyncReplaySlice,
+    TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
@@ -51,7 +52,9 @@ use crate::staging::PreparationStaging;
 const EVENT_COLUMNS: &str = "global_sequence, session_id, session_sequence, origin_epoch, \
      origin_sequence, event_id, turn_id, event_type, kind, policy, origin_kind, causation, \
      payload_json, payload_digest, acp_media_type, acp_raw_json, acp_byte_length, acp_sha256, \
-     acp_raw_unavailable_reason, created_at, expires_at, compacted_into";
+     acp_raw_unavailable_reason, created_at, expires_at, compacted_into,
+ (SELECT first_sequence FROM owned_timeline_anchor a WHERE a.session_id=owned_event.session_id AND a.entity_kind=(CASE WHEN event_type LIKE 'tool.call.%' THEN 'tool' WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN 'interaction' WHEN event_type LIKE 'turn.%' THEN 'turn' WHEN event_type='session.plan.changed' THEN 'plan' END) AND a.entity_id=(CASE WHEN event_type LIKE 'tool.call.%' THEN json_extract(payload_json,'$.toolCallId') WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN json_extract(payload_json,'$.interactionId') WHEN event_type LIKE 'turn.%' THEN COALESCE(json_extract(payload_json,'$.turnId'),turn_id) WHEN event_type='session.plan.changed' THEN 'plan' END)) AS timeline_sequence,
+ (SELECT first_origin_sequence FROM owned_timeline_anchor a WHERE a.session_id=owned_event.session_id AND a.entity_kind=(CASE WHEN event_type LIKE 'tool.call.%' THEN 'tool' WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN 'interaction' WHEN event_type LIKE 'turn.%' THEN 'turn' WHEN event_type='session.plan.changed' THEN 'plan' END) AND a.entity_id=(CASE WHEN event_type LIKE 'tool.call.%' THEN json_extract(payload_json,'$.toolCallId') WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN json_extract(payload_json,'$.interactionId') WHEN event_type LIKE 'turn.%' THEN COALESCE(json_extract(payload_json,'$.turnId'),turn_id) WHEN event_type='session.plan.changed' THEN 'plan' END)) AS timeline_origin_sequence";
 
 /// `owned_session` 的读列（`load` 的 `Session` 聚合：不带目录归属）。
 ///
@@ -674,11 +677,38 @@ fn event_from_row(row: &SqliteRow) -> Result<CommittedEvent, StorageError> {
 
 /// `owned_event` 的一行 → 持久化正文（`ReadView::event_payload` 与 `session_event_payload` 共用）。
 ///
-/// `view` 直接取库内 `payload_json` 的**原样文本**（只经 `ViewJson` 做形状校验，不重新序列化）；
+/// `view` 保留库内 `payload_json` 的成员原文，仅追加独立保存的展示位置；
 /// `acp` 按 `acp_raw_unavailable_reason` 分两路还原（字节数必须与原文一致）。
 fn payload_from_row(row: &SqliteRow) -> Result<EventPayload, PortError> {
     let view = ViewJson::new(&text(row, "payload_json")?)
         .map_err(|_| PortError::Corrupt("stored payload_json is not a JSON object"))?;
+    let mut view = view;
+    if let Ok(Some(position)) = row.try_get::<Option<i64>, _>("timeline_sequence") {
+        let projected: serde_json::Value = serde_json::from_str(view.as_str())
+            .map_err(|_| PortError::Corrupt("invalid event view"))?;
+        let object = projected
+            .as_object()
+            .ok_or(PortError::Corrupt("event view is not object"))?;
+        if object.contains_key("_timelineSequence")
+            || object.contains_key("_timelineOriginSequence")
+        {
+            return Err(PortError::Corrupt(
+                "reserved timeline projection key collision",
+            ));
+        }
+        let original = view.as_str().trim_end();
+        let prefix = original
+            .strip_suffix('}')
+            .ok_or(PortError::Corrupt("invalid event view"))?;
+        let separator = if object.is_empty() { "" } else { "," };
+        let mut projected = format!("{prefix}{separator}\"_timelineSequence\":\"{position}\"");
+        if let Ok(Some(origin)) = row.try_get::<Option<i64>, _>("timeline_origin_sequence") {
+            projected.push_str(&format!(",\"_timelineOriginSequence\":\"{origin}\""));
+        }
+        projected.push('}');
+        view = ViewJson::new(&projected)
+            .map_err(|_| PortError::Corrupt("invalid timeline projection"))?;
+    }
     let reason: Option<RawUnavailableReason> = decode_opt(
         opt_text(row, "acp_raw_unavailable_reason")?,
         "owned_event.acp_raw_unavailable_reason",
@@ -1280,6 +1310,21 @@ impl SqliteStore {
                 // 命中路径不写任何行，显式结束事务。§6 第 20 条：`idem.session` 为 `None` 时以行里记的
                 // 目标会话作答（`session.create` 的重试因此能拿回首次创建的那个 sessionId）。
                 let session_id = idem.session.clone().or_else(|| record.session().cloned());
+                // §3.11：幂等回放原样返回首次受理的输入事实（按 `owned_user_input` 的唯一键回读），
+                // 不重新分配 message/turn，也不写第二条消息。
+                let accepted_input = match session_id.as_ref() {
+                    Some(session) => {
+                        load_accepted_input(
+                            &mut tx,
+                            session,
+                            kind.as_str(),
+                            &actor_id,
+                            idem.request.as_str(),
+                        )
+                        .await?
+                    }
+                    None => None,
+                };
                 drop(tx);
                 return Ok(CommitOutcome {
                     session_id,
@@ -1287,6 +1332,7 @@ impl SqliteStore {
                     version,
                     appended: Vec::new(),
                     replayed: Some(IdempotentReplay { record }),
+                    accepted_input,
                 });
             }
         }
@@ -1389,6 +1435,7 @@ impl SqliteStore {
                         version,
                         appended: Vec::new(),
                         replayed: Some(IdempotentReplay { record }),
+                        accepted_input: None,
                     });
                 }
                 Some(TerminalTarget::Locate(request))
@@ -1696,6 +1743,7 @@ impl SqliteStore {
                     .execute(&mut *tx)
                     .await
                     .db()?;
+                pin_timeline_anchor(&mut tx, &event_id_text).await?;
                 let event_id = EventId::new(&event_id_text)
                     .map_err(|_| PortError::InvalidRequest("generated event id is malformed"))?;
                 if pending.kind == EventKind::Summary {
@@ -1736,6 +1784,45 @@ impl SqliteStore {
         if let Some(session) = &session_id {
             materialize_messages(&mut tx, session, &commit.events, &commit.at).await?;
         }
+
+        // ---- §3.11/§5.2：普通输入的受理写集（用户消息行 + 受理关联 + 逐附件媒体引用）。
+        //
+        // 与幂等行、turn、事件和上面的附件绑定在**同一事务**里：任一步失败整事务回滚（零行、
+        // 零广播、零派发）。首条不走这里（它由 `commit_first_submission` 一次写全）。
+        let accepted_input = match &commit.input {
+            Some(input) => {
+                let session = session_id.as_ref().ok_or(PortError::InvalidRequest(
+                    "a user input write requires a session",
+                ))?;
+                if input.session != *session {
+                    return Err(PortError::InvalidRequest(
+                        "the user input must belong to the committed session",
+                    ));
+                }
+                // turn 必须是**本次提交**新建的那一个：否则消息会挂到一个不存在或别的请求的 turn 上。
+                let creates_turn = commit.turns.iter().any(|change| {
+                    matches!(change, TurnChange::Create(new_turn) if new_turn.turn == input.turn)
+                });
+                if !creates_turn {
+                    return Err(PortError::InvalidRequest(
+                        "a user input write must create its own turn",
+                    ));
+                }
+                let idem = commit
+                    .idempotency
+                    .as_ref()
+                    .ok_or(PortError::InvalidRequest(
+                        "a user input write requires the acceptance idempotency row",
+                    ))?;
+                if idem.request != input.request {
+                    return Err(PortError::InvalidRequest(
+                        "the user input and the idempotency row must share a request id",
+                    ));
+                }
+                Some(write_user_input(&mut tx, session, input, binding.as_ref(), idem).await?)
+            }
+            None => None,
+        };
 
         // ---- §6 第 15 条：把被替代的 delta 行指向那条 summary 事件。
         //
@@ -1893,6 +1980,7 @@ impl SqliteStore {
             version,
             appended,
             replayed: None,
+            accepted_input,
         })
     }
 }
@@ -2298,6 +2386,7 @@ pub(crate) async fn write_session_event(
         .execute(&mut **tx)
         .await
         .db()?;
+    pin_timeline_anchor(tx, &event_id_text).await?;
     EventId::new(&event_id_text).map_err(|_| PortError::Corrupt("generated event id is malformed"))
 }
 
@@ -2857,6 +2946,29 @@ fn media_kind_of(block_type: &str) -> Option<MediaKind> {
 /// 回复与思考分别持久化；`agent.thought.delta` 不产生 `agent.message.completed`，因此思考消息在 turn
 /// 终态时按终态收尾（正常完成 = `completed`，停止/失败保留正文并标记原因）。正文只来自事件 view，
 /// 存储层不解析 ACP 原文。
+/// Pin the initial delta position inside the same transaction as its durable content.
+async fn pin_timeline_anchor(
+    tx: &mut Transaction<'_, Sqlite>,
+    event_id: &str,
+) -> Result<(), PortError> {
+    sqlx::query("INSERT OR IGNORE INTO owned_timeline_anchor SELECT session_id, (CASE WHEN event_type LIKE 'tool.call.%' THEN 'tool' WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN 'interaction' WHEN event_type LIKE 'turn.%' THEN 'turn' WHEN event_type='session.plan.changed' THEN 'plan' END), (CASE WHEN event_type LIKE 'tool.call.%' THEN json_extract(payload_json,'$.toolCallId') WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN json_extract(payload_json,'$.interactionId') WHEN event_type LIKE 'turn.%' THEN COALESCE(json_extract(payload_json,'$.turnId'),turn_id) WHEN event_type='session.plan.changed' THEN 'plan' END), session_sequence, origin_sequence FROM owned_event WHERE event_id=?1 AND session_id IS NOT NULL AND session_sequence IS NOT NULL AND (CASE WHEN event_type LIKE 'tool.call.%' THEN 'tool' WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN 'interaction' WHEN event_type LIKE 'turn.%' THEN 'turn' WHEN event_type='session.plan.changed' THEN 'plan' END) IS NOT NULL AND (CASE WHEN event_type LIKE 'tool.call.%' THEN json_extract(payload_json,'$.toolCallId') WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN json_extract(payload_json,'$.interactionId') WHEN event_type LIKE 'turn.%' THEN COALESCE(json_extract(payload_json,'$.turnId'),turn_id) WHEN event_type='session.plan.changed' THEN 'plan' END) IS NOT NULL")
+        .bind(event_id).execute(&mut **tx).await.db()?;
+    Ok(())
+}
+
+pub(crate) async fn pin_message_position(
+    tx: &mut Transaction<'_, Sqlite>,
+    session: &SessionId,
+    message: &MessageId,
+) -> Result<(), PortError> {
+    sqlx::query("UPDATE owned_message SET
+ first_sequence=(SELECT session_sequence FROM owned_event WHERE session_id=?1 AND json_extract(payload_json,'$.messageId')=?2 AND json_extract(payload_json,'$.deltaIndex')='0' AND event_type IN ('agent.message.delta','agent.thought.delta','user.message.delta') ORDER BY session_sequence LIMIT 1),
+ first_origin_sequence=(SELECT origin_sequence FROM owned_event WHERE session_id=?1 AND json_extract(payload_json,'$.messageId')=?2 AND json_extract(payload_json,'$.deltaIndex')='0' AND event_type IN ('agent.message.delta','agent.thought.delta','user.message.delta') ORDER BY session_sequence LIMIT 1)
+ WHERE message_id=?2 AND session_id=?1 AND first_sequence IS NULL")
+ .bind(session.as_str()).bind(message.as_str()).execute(&mut **tx).await.db()?;
+    Ok(())
+}
+
 async fn materialize_messages(
     tx: &mut Transaction<'_, Sqlite>,
     session: &SessionId,
@@ -2908,6 +3020,9 @@ async fn materialize_messages(
         .execute(&mut **tx)
         .await
         .db()?;
+        if view_text(&view, "deltaIndex").as_deref() == Some("0") {
+            pin_message_position(tx, session, &message_id).await?;
+        }
         let row = sqlx::query(
             "SELECT channel, state, content_json FROM owned_message WHERE message_id = ?1",
         )
@@ -3104,6 +3219,130 @@ async fn materialize_messages(
         }
     }
     Ok(())
+}
+
+/// §3.11：普通输入受理的行集（用户消息行 + 受理关联 + 逐附件媒体引用）。
+///
+/// 调用方在同一事务里已写幂等行、turn、事件并完成附件清单绑定；本函数只补「输入事实」本身。
+/// 附件字节不复制、不重哈希：`owned_attachment` 行由封存写就，这里只按 `attachments` 的**位置顺序**
+/// 写媒体引用（`kind` 取该附件权威行的 `media_type` 前缀；块内自报的 `mediaType` 不参与）。
+async fn write_user_input(
+    tx: &mut Transaction<'_, Sqlite>,
+    session: &SessionId,
+    input: &UserInputWrite,
+    binding: Option<&SubmissionBinding>,
+    idem: &IdempotencyRecord,
+) -> Result<AcceptedInput, PortError> {
+    let (kind, actor_id) = actor_key(&idem.actor);
+    let attachments: &[AttachmentId] = binding
+        .map(|binding| binding.attachments.as_slice())
+        .unwrap_or(&[]);
+    let attachment_count = i64::try_from(attachments.len())
+        .map_err(|_| PortError::InvalidRequest("attachment count is out of range"))?;
+    sqlx::query(
+        "INSERT INTO owned_message (message_id, session_id, turn_id, channel, state, \
+         content_json, partial_reason, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, 'user', 'completed', ?4, NULL, ?5, ?5)",
+    )
+    .bind(input.message.as_str())
+    .bind(session.as_str())
+    .bind(input.turn.as_str())
+    .bind(input.content.json().as_str())
+    .bind(input.at.as_str())
+    .execute(&mut **tx)
+    .await
+    .db()?;
+    pin_message_position(tx, session, &input.message).await?;
+    sqlx::query(
+        "INSERT INTO owned_user_input (message_id, session_id, turn_id, actor_kind, actor_id, \
+         request_id, content_digest, attachment_count, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    )
+    .bind(input.message.as_str())
+    .bind(session.as_str())
+    .bind(input.turn.as_str())
+    .bind(kind.as_str())
+    .bind(&actor_id)
+    .bind(input.request.as_str())
+    .bind(input.content.digest().as_str())
+    .bind(attachment_count)
+    .bind(input.at.as_str())
+    .execute(&mut **tx)
+    .await
+    .db()?;
+    for (position, attachment) in attachments.iter().enumerate() {
+        let media_type: Option<String> =
+            sqlx::query_scalar("SELECT media_type FROM owned_attachment WHERE attachment_id = ?1")
+                .bind(attachment.as_str())
+                .fetch_optional(&mut **tx)
+                .await
+                .db()?;
+        let Some(media_type) = media_type else {
+            // 清单里出现未封存的附件：整事务失败（不得写出指向不存在内容的媒体引用）。
+            return Err(PortError::InvalidRequest(
+                "a bound attachment has no sealed content row",
+            ));
+        };
+        sqlx::query(
+            "INSERT INTO owned_media_ref (message_id, position, attachment_id, kind) \
+             VALUES (?1, ?2, ?3, ?4) ON CONFLICT(message_id, position) DO NOTHING",
+        )
+        .bind(input.message.as_str())
+        .bind(
+            i64::try_from(position)
+                .map_err(|_| PortError::InvalidRequest("attachment position is out of range"))?,
+        )
+        .bind(attachment.as_str())
+        .bind(crate::first_submission::media_kind_of(&media_type))
+        .execute(&mut **tx)
+        .await
+        .db()?;
+    }
+    Ok(AcceptedInput {
+        session: session.clone(),
+        message: input.message.clone(),
+        request: input.request.clone(),
+        turn: input.turn.clone(),
+    })
+}
+
+/// §3.11：按 `owned_user_input` 的唯一键回读首次受理的输入事实（幂等回放）。
+///
+/// 读不到行即 `None`（v17 之前受理的普通输入没有关联行）；**不得**据此推断消息不存在——消息正文的
+/// 读取只按 `owned_message`（§7.3）。命中多行是库损坏（唯一约束应挡住），按 `Corrupt` 失败关闭。
+async fn load_accepted_input(
+    tx: &mut Transaction<'_, Sqlite>,
+    session: &SessionId,
+    actor_kind: &str,
+    actor_id: &str,
+    request: &str,
+) -> Result<Option<AcceptedInput>, PortError> {
+    let rows = sqlx::query(
+        "SELECT message_id, turn_id, request_id FROM owned_user_input \
+         WHERE session_id = ?1 AND actor_kind = ?2 AND actor_id = ?3 AND request_id = ?4",
+    )
+    .bind(session.as_str())
+    .bind(actor_kind)
+    .bind(actor_id)
+    .bind(request)
+    .fetch_all(&mut **tx)
+    .await
+    .db()?;
+    match rows.as_slice() {
+        [] => Ok(None),
+        [row] => Ok(Some(AcceptedInput {
+            session: session.clone(),
+            message: MessageId::new(&text(row, "message_id")?)
+                .map_err(|_| PortError::Corrupt("owned_user_input.message_id is malformed"))?,
+            request: RequestId::new(&text(row, "request_id")?)
+                .map_err(|_| PortError::Corrupt("owned_user_input.request_id is malformed"))?,
+            turn: TurnId::new(&text(row, "turn_id")?)
+                .map_err(|_| PortError::Corrupt("owned_user_input.turn_id is malformed"))?,
+        })),
+        _ => Err(PortError::Corrupt(
+            "owned_user_input has duplicate rows for one acceptance",
+        )),
+    }
 }
 
 /// prompt 受理时的清单绑定（§6 第 22 条）：在**受理事务内**复核并写入会话绑定。
@@ -3873,15 +4112,20 @@ async fn read_session_locked(
     // 提交总为 `session_sequence` 绑定 `Some`（§9 判据 17），缺列的行（外部改写）不能被编一个序号
     // 当作条目——schema 层并未强制这一点（§7.3 的成对 CHECK 只约束非会话行，且 SQLite 的 UNIQUE
     // 视 NULL 互不相等）。
+    let history_axis = if query.origin_order {
+        "origin_sequence"
+    } else {
+        "session_sequence"
+    };
     let before = query.before_history.as_ref().map(|cursor| cursor.get());
     let bound = before.map(storable).transpose()?;
     let (history, history_has_earlier) = if query.include.history {
         let entries = history_entry_predicate();
         let rows = sqlx::query(&format!(
             "SELECT {EVENT_COLUMNS} FROM owned_event WHERE session_id = ?1 \
-             AND compacted_into IS NULL AND session_sequence IS NOT NULL AND {entries} \
-             AND (?2 IS NULL OR session_sequence < ?2) \
-             ORDER BY session_sequence DESC LIMIT ?3"
+             AND compacted_into IS NULL AND {history_axis} IS NOT NULL AND {entries} \
+             AND (?2 IS NULL OR {history_axis} < ?2) \
+             ORDER BY {history_axis} DESC LIMIT ?3"
         ))
         .bind(query.session.as_str())
         .bind(bound)
@@ -3904,7 +4148,7 @@ async fn read_session_locked(
             && history.is_empty()
         {
             let low: Option<i64> = sqlx::query_scalar(&format!(
-                "SELECT MIN(session_sequence) FROM owned_event WHERE session_id = ?1 \
+                "SELECT MIN({history_axis}) FROM owned_event WHERE session_id = ?1 \
                  AND compacted_into IS NULL AND session_sequence IS NOT NULL AND {entries}",
             ))
             .bind(query.session.as_str())
@@ -3938,24 +4182,59 @@ async fn read_session_locked(
     {
         let page_size = query.messages_limit.events();
         let fetch = i64::from(page_size) + 1;
-        let (before_created, before_id) = match &query.before_messages {
-            Some(cursor) => (
-                Some(cursor.created_at.as_str().to_owned()),
-                Some(cursor.message_id.as_str().to_owned()),
-            ),
-            None => (None, None),
+        let axis = if query.origin_order {
+            "first_origin_sequence"
+        } else {
+            "first_sequence"
         };
-        let rows = sqlx::query(
-            "SELECT message_id, session_id, turn_id, channel, state, content_json, \
-                        partial_reason, created_at, updated_at \
-                 FROM owned_message WHERE session_id = ?1 AND channel <> 'user' \
-                 AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND message_id < ?3)) \
-                 ORDER BY created_at DESC, message_id DESC LIMIT ?4",
-        )
+        // Resolve the durable identity, never compare a remote origin number to a local position.
+        let boundary = if let Some(cursor) = &query.before_messages {
+            Some(sqlx::query(&format!("SELECT {axis} AS position, created_at, message_id FROM owned_message WHERE session_id=?1 AND message_id=?2"))
+                .bind(query.session.as_str()).bind(cursor.message_id.as_str())
+                .fetch_optional(&mut **guard).await.db()?
+                .ok_or(PortError::InvalidRequest("message cursor identity is unavailable"))?)
+        } else {
+            None
+        };
+        let before_position = boundary
+            .as_ref()
+            .map(|row| opt_int(row, "position"))
+            .transpose()?
+            .flatten();
+        if let Some(cursor) = &query.before_messages {
+            if cursor
+                .sequence
+                .map(|value| value.get())
+                .map(storable)
+                .transpose()?
+                != before_position
+            {
+                return Err(PortError::InvalidRequest(
+                    "message cursor position does not match its identity",
+                ));
+            }
+        }
+        let before_created = boundary
+            .as_ref()
+            .map(|row| text(row, "created_at"))
+            .transpose()?;
+        let before_id = boundary
+            .as_ref()
+            .map(|row| text(row, "message_id"))
+            .transpose()?;
+        let rows = sqlx::query(&format!(
+            "SELECT message_id, session_id, turn_id, channel, state, content_json,
+                        partial_reason, created_at, updated_at, first_sequence, first_origin_sequence
+                 FROM owned_message WHERE session_id = ?1
+                 AND (?2 IS NULL OR ({axis} IS NOT NULL, COALESCE({axis},0), created_at, message_id)
+                    < (?5 IS NOT NULL, COALESCE(?5,0), ?2, ?3))
+                 ORDER BY {axis} IS NOT NULL DESC, {axis} DESC, created_at DESC, message_id DESC LIMIT ?4"
+        ))
         .bind(query.session.as_str())
         .bind(before_created.as_deref())
         .bind(before_id.as_deref())
         .bind(fetch)
+        .bind(before_position)
         .fetch_all(&mut **guard)
         .await
         .db()?;
@@ -4038,22 +4317,27 @@ async fn read_session_locked(
                 })?),
                 None => None,
             };
-            messages.push(
-                MessageRecord::try_new(
-                    decode(&message_id_text, "owned_message.message_id")?,
-                    query.session.clone(),
-                    decode_opt(opt_text(row, "turn_id")?, "owned_message.turn_id")?,
-                    channel,
-                    PartialResult::try_new(state, reason)
-                        .map_err(|_| PortError::Corrupt("stored message result is invalid"))?,
-                    acp_core::model::JsonValueText::new(&text(row, "content_json")?)
-                        .map_err(|_| PortError::Corrupt("stored message content is not json"))?,
-                    by_message.remove(&message_id_text).unwrap_or_default(),
-                    decode(&text(row, "created_at")?, "owned_message.created_at")?,
-                    decode(&text(row, "updated_at")?, "owned_message.updated_at")?,
-                )
-                .map_err(|_| PortError::Corrupt("stored message is invalid"))?,
-            );
+            let mut message = MessageRecord::try_new(
+                decode(&message_id_text, "owned_message.message_id")?,
+                query.session.clone(),
+                decode_opt(opt_text(row, "turn_id")?, "owned_message.turn_id")?,
+                channel,
+                PartialResult::try_new(state, reason)
+                    .map_err(|_| PortError::Corrupt("stored message result is invalid"))?,
+                acp_core::model::JsonValueText::new(&text(row, "content_json")?)
+                    .map_err(|_| PortError::Corrupt("stored message content is not json"))?,
+                by_message.remove(&message_id_text).unwrap_or_default(),
+                decode(&text(row, "created_at")?, "owned_message.created_at")?,
+                decode(&text(row, "updated_at")?, "owned_message.updated_at")?,
+            )
+            .map_err(|_| PortError::Corrupt("stored message is invalid"))?;
+            message.first_sequence = opt_int(row, "first_sequence")?
+                .map(|value| sequence(value, "owned_message.first_sequence"))
+                .transpose()?;
+            message.first_origin_sequence = opt_int(row, "first_origin_sequence")?
+                .map(|value| sequence(value, "owned_message.first_origin_sequence"))
+                .transpose()?;
+            messages.push(message);
         }
         (messages, has_earlier)
     } else {
@@ -4253,10 +4537,9 @@ impl ReadView for SqlReadView {
     /// `AcpRaw::validate` 自检一次（字节数必须与原文一致）。
     async fn event_payload(&self, event: &EventId) -> Result<Option<EventPayload>, PortError> {
         let mut guard = self.tx.lock().await;
-        let row = sqlx::query(
-            "SELECT payload_json, acp_media_type, acp_raw_json, acp_byte_length, acp_sha256, \
-             acp_raw_unavailable_reason FROM owned_event WHERE event_id = ?1",
-        )
+        let row = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM owned_event WHERE event_id = ?1"
+        ))
         .bind(event.as_str())
         .fetch_optional(&mut **guard)
         .await
@@ -4380,10 +4663,9 @@ impl ReadView for SqlReadView {
         event: &EventId,
     ) -> Result<Option<EventPayload>, PortError> {
         let mut guard = self.tx.lock().await;
-        let row = sqlx::query(
-            "SELECT payload_json, acp_media_type, acp_raw_json, acp_byte_length, acp_sha256, \
-             acp_raw_unavailable_reason FROM owned_event WHERE event_id = ?1 AND session_id = ?2",
-        )
+        let row = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM owned_event WHERE event_id = ?1 AND session_id = ?2"
+        ))
         .bind(event.as_str())
         .bind(session.as_str())
         .fetch_optional(&mut **guard)
@@ -4440,7 +4722,7 @@ async fn session_coverage(
             .db()?
             .ok_or_else(|| PortError::NotFound(EntityRef::Session(query.session.clone())))?;
     let head: Option<i64> = sqlx::query_scalar(
-        "SELECT MAX(session_sequence) FROM owned_event WHERE session_id = ?1 AND session_sequence IS NOT NULL",
+        "SELECT MAX(origin_sequence) FROM owned_event WHERE session_id = ?1 AND origin_sequence IS NOT NULL",
     )
     .bind(query.session.as_str())
     .fetch_one(&mut **guard)

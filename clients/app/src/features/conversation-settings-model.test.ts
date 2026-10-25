@@ -73,6 +73,17 @@ function settings(input: {
 }
 
 describe("模型分节的 configId 是配置项 id", () => {
+  it("思考配置只认明确分类，保留真实配置项 id 和 Agent 可选值", () => {
+    const option: ConfigOptionView = { ...MODEL_OPTION, id: "reasoning-effort-custom", category: "thought_level" };
+    const view = settings({ configOptions: [MODEL_OPTION, option] });
+    expect(view.thought?.configId).toBe("reasoning-effort-custom");
+    expect(view.thought?.currentId).toBe("fast");
+    expect(view.thought?.choices.map((choice) => choice.id)).toEqual(["fast", "smart"]);
+    expect(view.model.configId).toBe("model");
+    const missing = settings({ configOptions: [{ ...option, category: null }] });
+    expect(missing.thought?.configId).toBeNull();
+    expect(missing.thought?.choices).toEqual([]);
+  });
   it("configId 取配置项的 id（不是当前取值，也不是可选项取值）", () => {
     const model = settings({ configOptions: [MODEL_OPTION] }).model;
     expect(model.state).toBe("available");

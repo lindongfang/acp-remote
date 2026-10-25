@@ -18,9 +18,11 @@ import type {
   AttachmentMediaPort,
   SyncGateway,
   AttachmentTransferGateway,
+  PreparationDraftAttachmentInput,
   PreparationDraftContent,
   PreparationDraftGateway,
   PreparationDraftLoadResult,
+  PreparationTabLocatorSnapshot,
 } from "./ports";
 import { SESSION_PREPARATION_FEATURE, PREPARATION_RENEW_INTERVAL_MS } from "./preparation-model";
 import { eventMessage, resources, session } from "./testing/fixtures";
@@ -32,6 +34,18 @@ const SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
 const SESSION_ID = "6f1c2d3e-4a5b-4c6d-8e7f-901122334455";
 const TAB_NONCE = "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8";
 const ORIGIN = "https://127.0.0.1:1";
+const TAB_SLOT_ID = "11111111-1111-4111-8111-111111111111";
+
+/** 本标签页定位：刷新恢复只认它（不含正文/凭据）。 */
+function tabLocatorFor(sessionId: string): PreparationTabLocatorSnapshot {
+  return {
+    canonicalOrigin: ORIGIN,
+    ownerNodeId: HOST_ID,
+    deviceId: DEVICE_ID,
+    tabSlotId: TAB_SLOT_ID,
+    sessionId,
+  };
+}
 
 function receiptFor(sessionId: string, agentId = "codex-a"): PreparationReceipt {
   return {
@@ -209,30 +223,99 @@ function fakeMedia(): AttachmentMediaPort {
   };
 }
 
-/** 内存草稿端口：只实现本用例用到的两条路径。 */
+/** 内存草稿端口：实现本用例用到的草稿/定位路径。 */
 function fakeDrafts(input: {
   readonly load?: PreparationDraftLoadResult;
   readonly onSave?: (content: PreparationDraftContent) => void;
+  /** 模拟复制/opener 标签页：归属已被另一个文档实例持有（可按会话区分）。 */
+  readonly duplicate?: boolean | ((sessionId: string) => boolean);
+  /** 让 `beginTab` 停在闸门上，用来构造「慢恢复晚于新分配落地」的竞态。 */
+  readonly beginTabGate?: Promise<void>;
+  /** 让 `invalidateDraft` 停在闸门上，用来构造「放弃期间 restore 结果落地」的竞态。 */
+  readonly invalidateGate?: Promise<void>;
+  readonly locator?: PreparationTabLocatorSnapshot | null;
 }): PreparationDraftGateway & { readonly invalidated: number } {
   let revision = 0;
   let invalidated = 0;
+  let locator: PreparationTabLocatorSnapshot | null = input.locator ?? null;
+  let saved:
+    | {
+        readonly revision: number;
+        readonly content: PreparationDraftContent;
+        readonly attachments: readonly PreparationDraftAttachmentInput[];
+      }
+    | null = null;
   return {
     get invalidated() {
       return invalidated;
     },
+    async readTabLocator() {
+      return locator;
+    },
+    async clearTabLocator() {
+      locator = null;
+    },
     async beginTab({ scope }) {
+      if (input.beginTabGate !== undefined) await input.beginTabGate;
+      const duplicate =
+        typeof input.duplicate === "function" ? input.duplicate(scope.sessionId) : input.duplicate === true;
+      if (duplicate) {
+        return { status: "duplicate", reason: "live_tab_owner" };
+      }
+      // 与 Web 端口同一规则：定位与来源/节点/设备/会话一致时沿用它的 tabSlotId，
+      // 否则刷新会被误判成换分区。调用方首次挂载时只带随机占位值。
+      const effectiveScope =
+        locator !== null &&
+        locator.canonicalOrigin === scope.canonicalOrigin &&
+        locator.ownerNodeId === scope.ownerNodeId &&
+        locator.deviceId === scope.deviceId &&
+        locator.sessionId === scope.sessionId
+          ? { ...scope, tabSlotId: locator.tabSlotId }
+          : scope;
+      locator = {
+        canonicalOrigin: effectiveScope.canonicalOrigin,
+        ownerNodeId: effectiveScope.ownerNodeId,
+        deviceId: effectiveScope.deviceId,
+        tabSlotId: effectiveScope.tabSlotId,
+        sessionId: effectiveScope.sessionId,
+      };
       return {
         status: "owner",
-        access: { scope, instanceId: "11111111-1111-4111-8111-111111111111" },
+        access: { scope: effectiveScope, instanceId: "11111111-1111-4111-8111-111111111111" },
         restorable: true,
         restored: input.load?.status === "active",
       };
     },
     async loadDraft() {
-      return input.load ?? { status: "absent" };
+      if (input.load !== undefined) return input.load;
+      if (saved === null) return { status: "absent" };
+      return {
+        status: "active",
+        record: {
+          revision: saved.revision,
+          payload: {
+            status: "active",
+            content: saved.content,
+            attachments: saved.attachments.map((attachment) => ({
+              localId: attachment.localId,
+              kind: attachment.kind,
+              fileName: attachment.fileName,
+              mediaType: attachment.mediaType,
+              byteLength: attachment.byteLength,
+              chunkSize: 128 * 1024,
+              chunkCount: Math.max(1, Math.ceil(Number(attachment.byteLength) / (128 * 1024))),
+            })),
+          },
+        },
+      };
     },
     async saveDraft(request) {
       revision += 1;
+      saved = {
+        revision,
+        content: request.content,
+        attachments: request.attachments ?? [],
+      };
       input.onSave?.(request.content);
       return { revision, restorable: true };
     },
@@ -258,7 +341,9 @@ function fakeDrafts(input: {
       /* 恢复记录删除由平台端口落盘；测试只需要它不抛错。 */
     },
     async invalidateDraft() {
+      if (input.invalidateGate !== undefined) await input.invalidateGate;
       invalidated += 1;
+      saved = null;
       revision += 1;
       return { revision };
     },
@@ -320,32 +405,26 @@ describe("会话准备：分配与同页", () => {
     expect(harness.store.sessionFilesPage(SESSION_ID).gitNotice).toBeNull();
   });
 
-  it("会话内复用同目录同 Agent 的未发送会话，切换后保留标题与草稿", async () => {
+  it("普通新建只复用唯一槽位：切换后保留标题与草稿，其他目录/Agent 入口不另分配", async () => {
     const harness = preparationStore({});
     await allocateReady(harness);
     harness.store.setPreparationDraft(SESSION_ID, "尚未发送");
     const count = harness.frames.length;
-    expect(harness.store.reusableUnsentSession(SESSION_ID)).toBe(SESSION_ID);
+    expect(harness.store.activePreparationSessionId()).toBe(SESSION_ID);
+    expect(harness.store.preparationSlotRoute()).toEqual({ kind: "session", sessionId: SESSION_ID });
     harness.store.leaveConversationSession(SESSION_ID);
     expect(harness.store.preparationPage(SESSION_ID)?.text).toBe("尚未发送");
     expect(harness.store.conversationPage(SESSION_ID)?.sidebar.rows).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: SESSION_ID, title: "新会话" }),
     ]));
-    expect(await harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a", reuseUnsent: true }))
+    // 其他目录、不同 Agent 的普通入口也只导航回现有槽位：不发 allocate、不改目录。
+    expect(await harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a" }))
+      .toEqual({ ok: true, sessionId: SESSION_ID });
+    expect(await harness.store.beginPreparation({ directoryId: "work-other", agentId: "codex-b" }))
       .toEqual({ ok: true, sessionId: SESSION_ID });
     expect(harness.frames).toHaveLength(count);
-    const otherAgent = harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-b", reuseUnsent: true });
-    const allocation = harness.frames.at(-1);
-    if (allocation === undefined || allocation.action !== "allocate") throw new Error("缺少另一 Agent 的分配");
-    expect(allocation.agentId).toBe("codex-b");
-    expect(harness.frames).toHaveLength(count + 1);
-    const otherId = "7f1c2d3e-4a5b-4c6d-8e7f-901122334455";
-    const ready = readyResult({ operationId: allocation.operationId, sessionId: otherId, action: "allocate" });
-    if (ready.kind !== "session_preparation_result" || ready.result.body.status !== "ready") throw new Error("准备响应错误");
-    harness.store.apply(preparationEvent({ ...ready.result.body, receipt: receiptFor(otherId, "codex-b") }));
-    expect(await otherAgent).toEqual({ ok: true, sessionId: otherId });
-    expect(harness.store.conversationPage(SESSION_ID)?.sidebar.rows.filter((row) => row.id === SESSION_ID || row.id === otherId)).toHaveLength(2);
-    expect(harness.store.reusableUnsentSession(otherId)).toBe(otherId);
+    expect(harness.store.preparationPage(SESSION_ID)?.workspace.path).toBe("D:\\work\\api");
+    expect(harness.store.preparationPage(SESSION_ID)?.agentId).toBe("codex-a");
   });
 
   it("首条前提供正常对话页、目录上下文和输入模型，且不伪造正式会话", async () => {
@@ -449,6 +528,26 @@ describe("会话准备：分配与同页", () => {
     expect(page?.input.canSend).toBe(false);
   });
 
+  it("会话进入权威快照后退出准备角色：准备页不再遮蔽正式会话", async () => {
+    const harness = preparationStore({});
+    await allocateReady(harness);
+    expect(harness.store.preparationPage(SESSION_ID)).not.toBeNull();
+    harness.store.apply({
+      kind: "snapshot_verified",
+      snapshot: {
+        snapshotId: "8194de43-e213-423d-acf4-2e3549304567",
+        cursor: { serverEpoch: SERVER_EPOCH, globalSequence: "11" },
+        resources: resources({ sessions: [session({ id: SESSION_ID, directoryId: "work-api" })] }),
+        chunkCount: 3,
+        receivedChunks: 3,
+        snapshotDigest: "kQ8x2mB7yV1cJ0nP5",
+      },
+    });
+    expect(harness.store.preparationPage(SESSION_ID)).toBeNull();
+    expect(harness.store.preparationSlotRoute()).toEqual({ kind: "none" });
+    expect(harness.store.conversationPage(SESSION_ID)).not.toBeNull();
+  });
+
   it("未协商准备能力：入口明确不可用，且一条准备帧/命令都不发", async () => {
     const harness = preparationStore({ features: ["core.attachment-transfer.v1"] });
     expect(harness.store.preparationEntryAvailability().available).toBe(false);
@@ -466,15 +565,19 @@ describe("会话准备：分配与同页", () => {
     expect(harness.frames).toEqual([]);
   });
 
-  it("同一入口重复点击不会分配两个 ID", async () => {
+  it("分配在途时两个入口共用一个闸门：只发一帧，两个 Promise 得到同一 ID", async () => {
     const harness = preparationStore({});
     const first = harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a" });
-    const second = await harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a" });
-    expect(second.ok).toBe(false);
+    // 第二个入口可以是另一个目录、另一个 Agent：都不得再发 allocate。
+    const second = harness.store.beginPreparation({ directoryId: "work-other", agentId: "codex-b" });
+    expect(harness.store.preparationSlotRoute().kind).toBe("allocating");
     expect(harness.frames).toHaveLength(1);
     const frame = harness.frames[0];
     harness.store.apply(readyResult({ operationId: frame!.operationId, sessionId: SESSION_ID, action: "allocate" }));
-    expect((await first).ok).toBe(true);
+    await expect(first).resolves.toEqual({ ok: true, sessionId: SESSION_ID });
+    await expect(second).resolves.toEqual({ ok: true, sessionId: SESSION_ID });
+    expect(harness.frames).toHaveLength(1);
+    expect(harness.store.activePreparationSessionId()).toBe(SESSION_ID);
   });
 });
 
@@ -579,14 +682,16 @@ describe("会话准备：换 Agent/目录与旧应答", () => {
     const outcome = await changing;
     if (!outcome.ok) throw new Error(outcome.reason);
     expect(outcome.sessionId).toBe(newSessionId);
-    // 旧会话状态被清掉，新页面从空白开始
+    // 旧会话状态被清掉，新页面从空白开始；槽位只剩新的那一个。
     expect(harness.store.preparationPage(SESSION_ID)).toBeNull();
     expect(harness.store.preparationPage(newSessionId)?.agentId).toBe("codex-b");
     expect(harness.store.preparationPage(newSessionId)?.text).toBe("");
-    // 迟到的旧代应答不改变新页面
+    expect(harness.store.activePreparationSessionId()).toBe(newSessionId);
+    // 迟到的旧代应答不改变新页面，也不能复活旧槽位
     harness.store.apply(readyResult({ operationId: oldAllocate.operationId, sessionId: SESSION_ID, action: "allocate" }));
     expect(harness.store.preparationPage(SESSION_ID)).toBeNull();
     expect(harness.store.preparationPage(newSessionId)?.phase).toBe("ready");
+    expect(harness.store.activePreparationSessionId()).toBe(newSessionId);
   });
 });
 
@@ -594,6 +699,7 @@ describe("会话准备：刷新恢复", () => {
   it("同标签页草稿沿同一 ID restore，并用真实设置重新渲染", async () => {
     const receipt = receiptFor(SESSION_ID);
     const drafts = fakeDrafts({
+      locator: tabLocatorFor(SESSION_ID),
       load: {
         status: "active",
         record: {
@@ -633,6 +739,7 @@ describe("会话准备：刷新恢复", () => {
   it("restore 发现已正式受理：转 committed 并读正式会话，不重新 start", async () => {
     const receipt = receiptFor(SESSION_ID);
     const drafts = fakeDrafts({
+      locator: tabLocatorFor(SESSION_ID),
       load: {
         status: "active",
         record: {
@@ -673,6 +780,333 @@ describe("会话准备：刷新恢复", () => {
     // 不再次 start；只读取正式会话。
     await flush();
     expect(harness.commands.filter((command) => command.body.command === "session.start")).toHaveLength(0);
+  });
+});
+
+// ── WP3：单一准备槽位、刷新恢复、显式放弃与身份隔离 ───────────────────────────
+
+const FORMAL_B_ID = "1f1c2d3e-4a5b-4c6d-8e7f-901122334455";
+const REPLACEMENT_ID = "7f1c2d3e-4a5b-4c6d-8e7f-901122334455";
+
+describe("会话准备：单一槽位跨切换与刷新", () => {
+  it("A→B→刷新 B→新建回 A，草稿与附件一起恢复且不分配第二个 ID", async () => {
+    const drafts = fakeDrafts({});
+    const first = preparationStore({
+      drafts,
+      media: singleAttachmentMedia(),
+      transfers: failingTransfer(new AttachmentTransferError("protocol", "本用例不上传", true)),
+    });
+    await allocateReady(first);
+    first.store.setPreparationDraft(SESSION_ID, "刷新前的草稿");
+    const picked = await first.store.pickAttachments(SESSION_ID, "file");
+    expect(picked.ok).toBe(true);
+    await flush();
+    await expect(drafts.readTabLocator()).resolves.toMatchObject({ sessionId: SESSION_ID });
+
+    // “刷新”：同一份草稿/定位存储换一个 store（内存状态全丢，只剩平台端口）。
+    const refreshed = preparationStore({
+      drafts,
+      media: singleAttachmentMedia(),
+      transfers: failingTransfer(new AttachmentTransferError("protocol", "本用例不上传", true)),
+    });
+    await expect(refreshed.store.restoreTabPreparation()).resolves.toBe(SESSION_ID);
+    expect(refreshed.store.preparationPage(SESSION_ID)?.text).toBe("刷新前的草稿");
+    expect(refreshed.store.preparationPage(SESSION_ID)?.attachments.map((item) => item.fileName))
+      .toEqual(["a.txt"]);
+    expect(refreshed.store.preparationSlotRoute()).toEqual({ kind: "session", sessionId: SESSION_ID });
+
+    // 刷新在正式会话 B 上：恢复槽位不能把 B 变成准备，也不得改绑到 B。
+    const b = FORMAL_B_ID;
+    await expect(refreshed.store.openPreparationSession(b)).resolves.toBe(false);
+    expect(refreshed.store.state.preparations.has(b)).toBe(false);
+    expect(refreshed.store.preparationSlotRoute()).toEqual({ kind: "session", sessionId: SESSION_ID });
+
+    // 从别的目录点普通新建：导航回 A，不再发 allocate。
+    const restoreFrames = refreshed.frames.length;
+    await expect(refreshed.store.beginPreparation({ directoryId: "work-other", agentId: "codex-b" }))
+      .resolves.toEqual({ ok: true, sessionId: SESSION_ID });
+    expect(refreshed.frames.filter((frame) => frame.action === "allocate")).toHaveLength(0);
+    expect(refreshed.frames.length).toBe(restoreFrames);
+    expect(refreshed.store.preparationPage(SESSION_ID)?.workspace.path).toBe("D:\\work\\api");
+    expect(refreshed.store.preparationPage(SESSION_ID)?.agentId).toBe("codex-a");
+  });
+
+  it("复制标签页的定位不接管原槽位：只得到重复占用说明，普通新建仍可用", async () => {
+    const drafts = fakeDrafts({
+      duplicate: true,
+      locator: {
+        canonicalOrigin: ORIGIN,
+        ownerNodeId: HOST_ID,
+        deviceId: DEVICE_ID,
+        tabSlotId: TAB_SLOT_ID,
+        sessionId: SESSION_ID,
+      },
+    });
+    const copied = preparationStore({ drafts });
+    // 复制标签页从未持有槽位：恢复不报告会话，普通新建入口仍按「没有槽位」放行。
+    await expect(copied.store.restoreTabPreparation()).resolves.toBeNull();
+    expect(copied.store.preparationSlotRoute()).toEqual({ kind: "none" });
+    expect(copied.store.activePreparationSessionId()).toBeNull();
+    // 提示照常渲染，且不声称恢复出任何内容。
+    expect(copied.store.preparationPage(SESSION_ID)?.notice).toContain("另一个标签页");
+    expect(copied.store.preparationPage(SESSION_ID)?.text).toBe("");
+    expect(copied.frames.filter((frame) => frame.action === "restore")).toHaveLength(0);
+    expect(copied.frames.filter((frame) => frame.action === "allocate")).toHaveLength(0);
+
+    // 点普通新建只发自己的 allocate，不被占用提示劫持到原会话。
+    const begin = copied.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a" });
+    const allocate = copied.frames.find((frame) => frame.action === "allocate");
+    if (allocate === undefined) throw new Error("没有发出 allocate");
+    copied.store.apply(readyResult({ operationId: allocate.operationId, sessionId: REPLACEMENT_ID, action: "allocate" }));
+    await expect(begin).resolves.toEqual({ ok: true, sessionId: REPLACEMENT_ID });
+    expect(copied.store.activePreparationSessionId()).toBe(REPLACEMENT_ID);
+    expect(copied.store.preparationPage(SESSION_ID)?.notice).toContain("另一个标签页");
+  });
+
+  it("复制标签页的占用说明条目不提供/不执行放弃，也不清本标签页自己槽位的定位", async () => {
+    const drafts = fakeDrafts({
+      // 只有被复制的原会话被另一个文档实例占用；本标签页为自己新分配的槽位仍能持有归属。
+      duplicate: (sessionId) => sessionId === SESSION_ID,
+      locator: tabLocatorFor(SESSION_ID),
+    });
+    const copied = preparationStore({ drafts });
+    // 打开原会话 URL：只得到说明条目（无凭据、无 Agent，本页从未持有它的资源）。
+    await expect(copied.store.openPreparationSession(SESSION_ID)).resolves.toBe(true);
+    expect(copied.store.preparationPage(SESSION_ID)?.notice).toContain("另一个标签页");
+
+    // 本标签页照常新建自己的槽位 R；草稿保存把定位改写成 R。
+    const begin = copied.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a" });
+    const allocate = copied.frames.find((frame) => frame.action === "allocate");
+    if (allocate === undefined) throw new Error("没有发出 allocate");
+    copied.store.apply(readyResult({ operationId: allocate.operationId, sessionId: REPLACEMENT_ID, action: "allocate" }));
+    await expect(begin).resolves.toEqual({ ok: true, sessionId: REPLACEMENT_ID });
+    copied.store.setPreparationDraft(REPLACEMENT_ID, "本标签页的草稿");
+    await flush();
+    await expect(drafts.readTabLocator()).resolves.toMatchObject({ sessionId: REPLACEMENT_ID });
+
+    // 说明条目不是槽位：不提供放弃；即使调用也既不作废草稿，也不清掉 R 的唯一定位。
+    expect(copied.store.canAbandonPreparation(SESSION_ID)).toBe(false);
+    await copied.store.abandonPreparation(SESSION_ID);
+    expect(drafts.invalidated).toBe(0);
+    await expect(drafts.readTabLocator()).resolves.toMatchObject({ sessionId: REPLACEMENT_ID });
+    expect(copied.store.preparationPage(SESSION_ID)?.notice).toContain("另一个标签页");
+    expect(copied.store.preparationSlotRoute()).toEqual({ kind: "session", sessionId: REPLACEMENT_ID });
+    // 真正占槽的临时会话仍然可以放弃。
+    expect(copied.store.canAbandonPreparation(REPLACEMENT_ID)).toBe(true);
+  });
+
+  it("启动恢复在途时两个新建入口只发一帧 allocate", async () => {
+    let openBeginTab!: () => void;
+    const beginTabGate = new Promise<void>((resolve) => {
+      openBeginTab = resolve;
+    });
+    // 定位指向一个已经没有草稿的记录：恢复最终不产生槽位，两个入口都会在恢复上等待。
+    const drafts = fakeDrafts({ locator: tabLocatorFor(SESSION_ID), beginTabGate });
+    const harness = preparationStore({ drafts });
+    const restoring = harness.store.restoreTabPreparation();
+    await flush();
+    const first = harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a" });
+    const second = harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a" });
+    await flush();
+    expect(harness.frames.filter((frame) => frame.action === "allocate")).toHaveLength(0);
+
+    openBeginTab();
+    await expect(restoring).resolves.toBeNull();
+    await flush();
+    const allocations = harness.frames.filter((frame) => frame.action === "allocate");
+    expect(allocations).toHaveLength(1);
+    harness.store.apply(readyResult({ operationId: allocations[0]!.operationId, sessionId: SESSION_ID, action: "allocate" }));
+    await expect(first).resolves.toEqual({ ok: true, sessionId: SESSION_ID });
+    await expect(second).resolves.toEqual({ ok: true, sessionId: SESSION_ID });
+    expect(harness.frames.filter((frame) => frame.action === "allocate")).toHaveLength(1);
+  });
+
+  it("慢恢复晚于新分配落地时被丢弃：槽位只留新分配", async () => {
+    let openBeginTab!: () => void;
+    const beginTabGate = new Promise<void>((resolve) => {
+      openBeginTab = resolve;
+    });
+    const drafts = fakeDrafts({
+      locator: tabLocatorFor(SESSION_ID),
+      beginTabGate,
+      load: {
+        status: "active",
+        record: {
+          revision: 2,
+          payload: {
+            status: "active",
+            content: {
+              text: "刷新前的输入",
+              mode: null,
+              configOptions: {},
+              agentId: "codex-a",
+              workspace: { directoryId: "work-api", path: "D:\\work\\api", source: "directoryId" },
+              receipt: receiptFor(SESSION_ID),
+              pendingRequestId: null,
+            },
+            attachments: [],
+          },
+        },
+      },
+    });
+    const harness = preparationStore({ drafts });
+    // 启动恢复卡在 `beginTab`：这一刻槽位还是空的。
+    const restoring = harness.store.openPreparationSession(SESSION_ID);
+    await flush();
+    expect(harness.store.preparationSlotRoute()).toEqual({ kind: "none" });
+
+    // 用户在这个窗口里点普通新建：分配先落地。
+    const begin = harness.store.beginPreparation({ directoryId: "work-api", agentId: "codex-a" });
+    const allocate = harness.frames.find((frame) => frame.action === "allocate");
+    if (allocate === undefined) throw new Error("没有发出 allocate");
+    harness.store.apply(readyResult({ operationId: allocate.operationId, sessionId: REPLACEMENT_ID, action: "allocate" }));
+    await expect(begin).resolves.toEqual({ ok: true, sessionId: REPLACEMENT_ID });
+
+    // 慢恢复随后完成：不得插入第二个槽位条目，也不得再发 restore。
+    openBeginTab();
+    await expect(restoring).resolves.toBe(false);
+    expect(harness.store.preparationPage(SESSION_ID)).toBeNull();
+    expect(harness.store.activePreparationSessionId()).toBe(REPLACEMENT_ID);
+    expect(harness.store.preparationSlotRoute()).toEqual({ kind: "session", sessionId: REPLACEMENT_ID });
+    expect(harness.frames.filter((frame) => frame.action === "restore")).toHaveLength(0);
+  });
+
+  it("显式放弃：清草稿与定位、release 旧资源；随后换目录新建得到新 ID，迟到旧应答不复活", async () => {
+    const drafts = fakeDrafts({});
+    const harness = preparationStore({ drafts });
+    await allocateReady(harness);
+    harness.store.setPreparationDraft(SESSION_ID, "要放弃的草稿");
+    await flush();
+    const oldAllocate = harness.frames.find((frame) => frame.action === "allocate")!;
+
+    await harness.store.abandonPreparation(SESSION_ID);
+    expect(drafts.invalidated).toBe(1);
+    await expect(drafts.readTabLocator()).resolves.toBeNull();
+    expect(harness.frames.some((frame) => frame.action === "release" && frame.sessionId === SESSION_ID)).toBe(true);
+    expect(harness.store.preparationSlotRoute()).toEqual({ kind: "none" });
+    expect(harness.store.preparationPage(SESSION_ID)).toBeNull();
+
+    // 换目录后普通新建：新 ID（不把旧证明用于新目录）。
+    const begin = harness.store.beginPreparation({ directoryId: "personal-api", agentId: "codex-b" });
+    const replacement = harness.frames.at(-1);
+    if (replacement === undefined || replacement.action !== "allocate") throw new Error("缺少新目录的分配");
+    expect(replacement.workspace).toEqual({ directoryId: "personal-api" });
+    harness.store.apply(readyResult({ operationId: replacement.operationId, sessionId: REPLACEMENT_ID, action: "allocate" }));
+    await expect(begin).resolves.toEqual({ ok: true, sessionId: REPLACEMENT_ID });
+    expect(harness.store.activePreparationSessionId()).toBe(REPLACEMENT_ID);
+
+    // 迟到的旧分配/准备应答不能复活旧槽位。
+    harness.store.apply(readyResult({ operationId: oldAllocate.operationId, sessionId: SESSION_ID, action: "allocate" }));
+    await flush();
+    expect(harness.store.preparationPage(SESSION_ID)).toBeNull();
+    expect(harness.store.preparationSlotRoute()).toEqual({ kind: "session", sessionId: REPLACEMENT_ID });
+  });
+
+  it("未确认放弃时返回目录/普通新建保留原槽位", async () => {
+    const harness = preparationStore({});
+    await allocateReady(harness);
+    harness.store.setPreparationDraft(SESSION_ID, "还没放弃");
+    harness.store.leaveConversationSession(SESSION_ID);
+    expect(harness.store.preparationSlotRoute()).toEqual({ kind: "session", sessionId: SESSION_ID });
+    await expect(harness.store.beginPreparation({ directoryId: "work-other", agentId: "codex-b" }))
+      .resolves.toEqual({ ok: true, sessionId: SESSION_ID });
+    expect(harness.store.preparationPage(SESSION_ID)?.text).toBe("还没放弃");
+    expect(harness.store.canAbandonPreparation(SESSION_ID)).toBe(true);
+  });
+
+  it("restoring 阶段确认放弃：restore 结果在等待期间落地后，仍用最新资源代发 release", async () => {
+    let openInvalidate!: () => void;
+    const invalidateGate = new Promise<void>((resolve) => {
+      openInvalidate = resolve;
+    });
+    const drafts = fakeDrafts({
+      locator: tabLocatorFor(SESSION_ID),
+      invalidateGate,
+      load: {
+        status: "active",
+        record: {
+          revision: 1,
+          payload: {
+            status: "active",
+            content: {
+              text: "恢复中的草稿",
+              mode: null,
+              configOptions: {},
+              agentId: "codex-a",
+              workspace: { directoryId: "work-api", path: "D:\\work\\api", source: "directoryId" },
+              receipt: receiptFor(SESSION_ID),
+              pendingRequestId: null,
+            },
+            attachments: [],
+          },
+        },
+      },
+    });
+    const harness = preparationStore({ drafts });
+    void harness.store.openPreparationSession(SESSION_ID);
+    await flush();
+    const restore = harness.frames.find((frame) => frame.action === "restore");
+    if (restore === undefined) throw new Error("没有发出 restore");
+    expect(harness.store.preparationPage(SESSION_ID)?.phase).toBe("restoring");
+
+    // 放弃在草稿作废处停住；这期间 restore 结果到达，把 runtimeEpoch/generation 写进状态。
+    const abandoning = harness.store.abandonPreparation(SESSION_ID);
+    await flush();
+    harness.store.apply(readyResult({ operationId: restore.operationId, sessionId: SESSION_ID, action: "restore" }));
+    await flush();
+    openInvalidate();
+    await expect(abandoning).resolves.toBeUndefined();
+
+    expect(drafts.invalidated).toBe(1);
+    // 旧快照此刻仍是 `null`/`null`，只有最新快照能发出释放帧。
+    const release = harness.frames.find((frame) => frame.action === "release");
+    expect(release?.sessionId).toBe(SESSION_ID);
+    expect(harness.store.preparationPage(SESSION_ID)).toBeNull();
+  });
+
+  it("资源过期（stale）：先核实原请求，再同 ID restore，不分配第二个", async () => {
+    const harness = preparationStore({});
+    await allocateReady(harness);
+    const allocateCount = harness.frames.filter((frame) => frame.action === "allocate").length;
+    const configured = harness.store.selectPreparationMode(SESSION_ID, "compact");
+    expect(configured.ok).toBe(true);
+    const configure = harness.frames.find((frame) => frame.action === "configure");
+    if (configure === undefined) throw new Error("缺少 configure 帧");
+    harness.store.apply(failedResult({
+      operationId: configure.operationId,
+      sessionId: SESSION_ID,
+      action: "configure",
+      code: "preparation.stale",
+      retryable: false,
+    }));
+    await flush();
+    expect(harness.frames.some((frame) => frame.action === "restore" && frame.sessionId === SESSION_ID)).toBe(true);
+    expect(harness.frames.filter((frame) => frame.action === "allocate")).toHaveLength(allocateCount);
+  });
+
+  it("接受转正后槽位退出：再次显式新建才分配新 ID", async () => {
+    const drafts = fakeDrafts({});
+    const harness = preparationStore({ drafts });
+    await allocateReady(harness);
+    await flush();
+    const firstAllocate = harness.frames.find((frame) => frame.action === "allocate")!;
+    // 服务端确认同 ID 已正式受理：槽位退出临时角色。
+    harness.store.apply(preparationEvent({
+      operationId: firstAllocate.operationId,
+      action: "restore",
+      sessionId: SESSION_ID,
+      status: "committed",
+      firstSubmissionId: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      firstRequestId: "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+      currentRequestId: "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f",
+      firstMessageId: "3d4e5f6a-7b8c-4d9e-8f0a-1b2c3d4e5f6a",
+    }));
+    expect(harness.store.preparationSlotRoute()).toEqual({ kind: "none" });
+    const begin = harness.store.beginPreparation({ directoryId: "personal-api", agentId: "codex-b" });
+    const replacement = harness.frames.at(-1);
+    if (replacement === undefined || replacement.action !== "allocate") throw new Error("缺少转正后的新分配");
+    harness.store.apply(readyResult({ operationId: replacement.operationId, sessionId: REPLACEMENT_ID, action: "allocate" }));
+    await expect(begin).resolves.toEqual({ ok: true, sessionId: REPLACEMENT_ID });
   });
 });
 

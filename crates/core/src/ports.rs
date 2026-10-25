@@ -19,27 +19,28 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::model::{
-    Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId, AttachmentGeneration,
-    AttachmentId, AttachmentSubject, AttachmentSubmission, AttachmentTransfer, AuditAction,
-    AuditOutcome, AuditRecord, CapabilitySet, ClaimedAttachment, CommandKind, CommandRecord,
-    CommandResult, CommandStatus, CommandTerminalRecord, CommittedEvent, ConfigOption,
-    ConfigOptionId, ConfigValue, ConnectionId, ContentSnapshot, ContentVersion,
-    CreateSessionRequest, DeviceId, DeviceRecord, Digest, DirectoryId, DirectoryRecord,
-    DispatchAdmission, DispatchContext, DispatchFence, EffectiveInteraction, EndpointEvent,
-    EntityRef, EventId, EventOrigin, EventPayload, EventType, FileReadPurpose,
-    FirstSubmissionAdmission, FirstSubmissionConvergence, FirstSubmissionRecord,
-    FirstSubmissionSettlement, FirstSubmissionWrite, FirstUserMessage, GitDiff, GitStatusPage,
-    GlobalCursor, InteractionId, InteractionResolution, LocalActivity, MessageId, MessageRecord,
-    ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
-    OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
-    PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
-    PublicError, RemoteSessionRef, RequestId, ResourceGeneration, ResumeSessionRequest,
-    SealedAttachment, Sequence, ServerEpoch, SessionFileChunk, SessionFilePage, SessionFilePath,
-    SessionId, SessionPageToken, SessionRecoveryRecord, SessionReference, SessionSnapshot,
-    SessionState, SessionSummary, SessionTitle, StagedAbortReason, StagedChunk, StagedChunkOutcome,
-    StagedClaim, StagedManifestBegin, StagedManifestPage, StagedManifestSeal, StagedManifestState,
-    StagedSeal, StagedSealOutcome, StagedTransferBegin, StagedTransferState, SubmissionId,
-    Timestamp, Turn, TurnId, TurnState, UnavailableKind, Version,
+    AcceptedInput, Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId,
+    AttachmentGeneration, AttachmentId, AttachmentSubject, AttachmentSubmission,
+    AttachmentTransfer, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, ClaimedAttachment,
+    CommandKind, CommandRecord, CommandResult, CommandStatus, CommandTerminalRecord,
+    CommittedEvent, ConfigOption, ConfigOptionId, ConfigValue, ConnectionId, ContentSnapshot,
+    ContentVersion, CreateSessionRequest, DeviceId, DeviceRecord, Digest, DirectoryId,
+    DirectoryRecord, DispatchAdmission, DispatchContext, DispatchFence, EffectiveInteraction,
+    EndpointEvent, EntityRef, EventId, EventOrigin, EventPayload, EventType, FileReadPurpose,
+    FirstSubmissionAdmission, FirstSubmissionConvergence, FirstSubmissionInput,
+    FirstSubmissionRecord, FirstSubmissionSettlement, FirstSubmissionWrite, FirstUserMessage,
+    GitDiff, GitStatusPage, GlobalCursor, InteractionId, InteractionResolution, LocalActivity,
+    MessageId, MessageRecord, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord,
+    OriginCursor, OriginEpoch, OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord,
+    PairingSettlement, PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError,
+    PromptRequest, PublicError, RemoteSessionRef, RequestId, ResourceGeneration,
+    ResumeSessionRequest, SealedAttachment, Sequence, ServerEpoch, SessionFileChunk,
+    SessionFilePage, SessionFilePath, SessionId, SessionPageToken, SessionRecoveryRecord,
+    SessionReference, SessionSnapshot, SessionState, SessionSummary, SessionTitle,
+    StagedAbortReason, StagedChunk, StagedChunkOutcome, StagedClaim, StagedManifestBegin,
+    StagedManifestPage, StagedManifestSeal, StagedManifestState, StagedSeal, StagedSealOutcome,
+    StagedTransferBegin, StagedTransferState, SubmissionId, Timestamp, Turn, TurnId, TurnState,
+    UnavailableKind, UserInputWrite, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -144,12 +145,13 @@ pub trait SessionEndpoint: Send + Sync {
         at: Timestamp,
     ) -> Result<TurnAccepted, PortError>;
 
-    /// 带**本次派发上下文**的 prompt（`design.md` D7）。
+    /// 带**本次派发上下文**的 prompt（`design.md` D7；`conversation-reliability` D2）。
     ///
     /// `context` 只属于这一次调用：它让适配器把该次 prompt 引起的用户输入回显（`user.message.delta`）
-    /// 关联到已保存的首条消息（`session`/`firstSubmission`/`userMessage`/`request`/Agent 身份/资源代/
-    /// 输入摘要），而不是按相同文本或 Agent 的 `messageId` 猜测。它**不是**持久凭据，也不进入任何
-    /// wire DTO；普通 prompt（旧路径、第二条消息）传 `None`。
+    /// 关联到已保存的用户消息（`session`/`firstSubmission`/`userMessage`/`request`/`turn`/Agent 身份/
+    /// 资源代/输入摘要），而不是按相同文本或 Agent 的 `messageId` 猜测。它**不是**持久凭据，也不进入
+    /// 任何 wire DTO。首条与普通后续输入共用这一种上下文；取不到可证明的 Agent 会话标识时调用方传
+    /// `None`（该次回显照常作为独立事件下发）。
     ///
     /// 默认实现丢弃上下文并委托 [`SessionEndpoint::prompt`]：既有实现与测试因此无需改动，也没有任何
     /// 行为变化。需要回显关联的适配器覆盖本方法（`agent-host` 的实现把上下文随该调用的事件 sink
@@ -469,6 +471,12 @@ pub struct OwnedCommit {
     pub command_terminal: Option<CommandTerminalRecord>,
     /// 新建会话时由 core 生成并传入；存储层只校验“已有 epoch 时必须一致”。
     pub origin_epoch: Option<OriginEpoch>,
+    /// 普通（后续）输入的受理写集（§3.11/§5.2）。`None` = 本提交不是普通输入受理。
+    ///
+    /// `Some` 时存储层必须在**同一事务**里写用户消息行（`owned_message.channel='user'`）、受理关联行
+    /// （`owned_user_input`）、该消息的逐附件媒体引用与幂等行/turn/事件；任一步失败整事务回滚。
+    /// 附件本身仍走 [`SubmissionBinding`]，本字段只携带「哪条消息、哪个 turn、哪次请求、什么内容」。
+    pub input: Option<UserInputWrite>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -479,6 +487,44 @@ pub struct CommitOutcome {
     pub version: Version,
     pub appended: Vec<CommittedEvent>,
     pub replayed: Option<IdempotentReplay>,
+    /// 本次受理写入的普通输入事实（`OwnedCommit.input` 的落盘结果）。
+    ///
+    /// 只在受理事务提交成功后为 `Some`；幂等回放时从 `owned_user_input` 回读首次值（不是本次重新分配
+    /// 的标识）。非普通输入受理的提交恒为 `None`。
+    pub accepted_input: Option<AcceptedInput>,
+}
+
+/// 普通（后续）输入受理的输入（§3.11/§5.2；`PromptAcceptance::accept_prompt` 的唯一参数）。
+///
+/// `message`/`turn` 由 core 在提交前用 [`IdGenerator::message_id`]/[`IdGenerator::turn_id`] 分配，
+/// 存储层只采用、不另行编号。内容复用首条 [`FirstSubmissionInput`] 的编码，不为后续消息另造文本格式。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PromptAcceptanceInput {
+    pub session: SessionId,
+    pub request: RequestId,
+    /// 适配层按 ACPR-CJ1 计算的解码 payload 摘要（core 不依赖 `acpr-wire`，§6 第 6 条）。
+    pub request_fingerprint: Digest,
+    /// 该命令的 `expectedVersion`（幂等键比对的一部分）。
+    pub expected_version: Option<Version>,
+    pub message: MessageId,
+    pub turn: TurnId,
+    /// 与首条同一内容编码（有序内容块 + 保真 JSON 数组 + 同源 SHA-256 摘要）。
+    pub content: FirstSubmissionInput,
+    /// 附件绑定：带清单的受理把 [`SubmissionBinding`] 随输入传入，由同一受理事务写
+    /// `owned_attachment_link` 与逐附件 `owned_media_ref`；`None` = 本次输入无附件。
+    pub binding: Option<SubmissionBinding>,
+}
+
+/// 普通输入受理的派发计划（§3.11/§5.2）。
+///
+/// 只组装计划、不入队、不派发：实际入队与执行仍由 broker 的每会话串行槽完成（§6 第 24 条）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PromptAcceptanceOutcome {
+    /// 本次受理已提交的持久事实；幂等回放时是首次值。
+    pub accepted: AcceptedInput,
+    /// `Some` = 调用方把该 turn 与这份上下文一起追加到该会话的串行队列，由队列泵派发一次。
+    /// `None` = 幂等回放：不追加 turn、不入队、不派发。
+    pub dispatch: Option<DispatchContext>,
 }
 
 /// prompt 受理时需要与命令同事务绑定的附件清单（`SYNC_PROTOCOL.md` §11.5 的 `submissionId`）。
@@ -522,18 +568,20 @@ pub struct HistoryInclude {
 
 /// 会话消息的分页游标：`(createdAt, messageId)` 复合游标。
 ///
-/// `owned_message` 没有会话内序号，正文页按「创建时间 + 标识」稳定排序（同毫秒的消息靠标识决定先后）。
-/// 它只作用于 [`HistoryPage::messages`]，与 `events` 的 `after`（全局游标）和 `history` 的
-/// `before_history`（会话内序号）各自独立分页；取值只能来自上一页最早一条
-/// [`MessageRecord::created_at`]/[`MessageRecord::message_id`]，实现不得据此猜测或补全。
+/// Message pagination uses the durable initial event position; unknown legacy records
+/// form a stable prefix. The identity and selected domain position must match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageCursor {
+    /// Position in the request domain; storage resolves message_id to its own domain.
+    pub sequence: Option<Sequence>,
     pub created_at: Timestamp,
     pub message_id: MessageId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryQuery {
+    /// Select Owner origin positions instead of local session positions.
+    pub origin_order: bool,
     pub session: SessionId,
     pub include: HistoryInclude,
     /// 分页起点：只返回该 cursor 之后的事件；`None` = 从头。cursor 的合法性由用例层判定。

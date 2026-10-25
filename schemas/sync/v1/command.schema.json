@@ -289,7 +289,7 @@
       }
     },
     "sessionReadBefore": {
-      "description": "session.read 的分页游标：由消息创建时间与消息标识复合构成（design D2）。两个键都必需——只给其中一项是单字段游标，按 protocol.schema_invalid 拒绝，服务端 MUST NOT 猜测或补全缺失的排序分量。排序 MUST NOT 依赖 messageId 的数值或字典序（docs/SYNC_PROTOCOL.md §3.3、§11.5）：服务端按 createdAt 升序返回一页，并在同一 createdAt 内以稳定可重复的次序排列 messageId 作为 tie-breaker，使相邻两页不重不漏。",
+      "description": "Message page cursor. sequence is the first output position; createdAt and messageId identify the boundary. A missing sequence denotes legacy history whose order cannot be proven.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -297,6 +297,7 @@
         "messageId"
       ],
       "properties": {
+        "sequence": { "$ref": "common.schema.json#/$defs/decimalString" },
         "createdAt": {
           "$ref": "common.schema.json#/$defs/timestamp"
         },

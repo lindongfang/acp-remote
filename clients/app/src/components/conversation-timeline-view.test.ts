@@ -58,6 +58,7 @@ import {
 function renderPage(model: ConversationPageModel, extra: Partial<ConversationStreamProps> = {}): string {
   return renderToStaticMarkup(
     createElement(ConversationStream, {
+      diagnosticsMode: true,
       model,
       onLoadEarlier: () => undefined,
       onOpenDiagnostics: () => undefined,
@@ -74,6 +75,29 @@ function pageOf(store: ClientStore): ConversationPageModel {
   if (model === null) throw new Error("会话页模型不应为 null：快照里有该会话");
   return model;
 }
+
+describe("提交反馈不产生短暂附加行", () => {
+  it("受理后的本地用户消息保留正文，不再附加已受理标签", () => {
+    const { store: client } = interactionStore();
+    const submitted = client.submitPrompt(ONLINE_SESSION_ID, "检查页面稳定性");
+    if (!submitted.ok) throw new Error(submitted.reason);
+    const pendingHtml = renderPage(pageOf(client));
+    expect(pendingHtml).toContain("检查页面稳定性");
+    expect(pendingHtml).not.toContain('data-local-prompt-phase="submitted"');
+    expect(pendingHtml).not.toContain('data-process-row="submitting"');
+    client.apply({ kind: "command_result", result: {
+      protocolVersion: 1, type: "command.result",
+      messageId: "bbbbbbbb-1111-4111-8111-0000000009a1",
+      connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637", connectionSequence: "1",
+      body: { requestId: submitted.requestId, command: "session.prompt", status: "accepted",
+        acceptedAt: "2026-10-01T00:00:02.000Z", terminalEventId: null,
+        result: { turnId: "stable-turn" }, error: null },
+    } });
+    const html = renderPage(pageOf(client));
+    expect(html).toContain("检查页面稳定性");
+    expect(html).not.toContain('data-local-prompt-phase="accepted"');
+  });
+});
 
 /** 一个已在线、协商到结构化历史的仓库。 */
 function store(): StoreFixture {
@@ -220,6 +244,17 @@ function applyOneOfEachCard(store: ClientStore): void {
 }
 
 describe("对话时间线：消息与结构化条目同一条时间线", () => {
+  it("普通模式隐藏原文入口，诊断模式显示入口，工具内容仍保留", () => {
+    const { store: client } = store();
+    applyOneOfEachCard(client);
+    const normal = renderPage(pageOf(client), { diagnosticsMode: false });
+    expect(normal).not.toContain('data-action="open-tool-call-diagnostics"');
+    expect(normal).not.toContain('data-action="open-change-diagnostics"');
+    expect(normal).not.toContain('data-action="open-diagnostics"');
+    expect(normal).toContain('data-timeline-card="tool-call"');
+    expect(renderPage(pageOf(client), { diagnosticsMode: true })).toContain('data-action="open-tool-call-diagnostics"');
+  });
+
   it("每类卡片各有唯一锚点，且每个锚点在渲染结果里恰好出现一次", () => {
     const { store: client } = store();
     applyOneOfEachCard(client);
@@ -231,16 +266,16 @@ describe("对话时间线：消息与结构化条目同一条时间线", () => {
       "terminal-output",
       "plan",
       "file-changed",
-      "mode-changed",
-      "config-changed",
       "permission-requested",
       "elicitation-requested",
-      "permission-resolved",
       "elicitation-resolved",
     ];
     for (const kind of kinds) {
       expect(html.match(new RegExp(`data-timeline-card="${kind}"`, "g")), kind).toHaveLength(1);
     }
+    expect(html).not.toContain('data-timeline-card="config-changed"');
+    expect(html).not.toContain('data-timeline-card="mode-changed"');
+    expect(html).not.toContain('data-timeline-card="permission-resolved"');
     // 每类卡片自己的标识锚点也在（唯一）。
     expect(html.match(/data-turn-id="turn-1"/g)).toHaveLength(1);
     expect(html.match(/data-tool-call-id="tool-1"/g)).toHaveLength(1);
@@ -428,6 +463,49 @@ describe("对话时间线：正文按不可信输入渲染", () => {
 });
 
 describe("对话时间线：条目形态与原型对齐", () => {
+  it("每条用户输入与每组连续 Agent 输出各显示一次署名和北京时间", () => {
+    const { store: client, gateway } = store();
+    client.loadSession(ONLINE_SESSION_ID);
+    client.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: ONLINE_SESSION_ID,
+        messages: [
+          messageItem({ id: "u1", createdAt: "2026-10-01T23:00:00Z", role: "user" }),
+          messageItem({ id: "u2", createdAt: "2026-10-01T23:05:00Z", role: "user" }),
+          messageItem({ id: "u3", createdAt: "2026-10-01T23:10:01Z", role: "user" }),
+          messageItem({ id: "a1", createdAt: "2026-10-01T23:10:02Z", role: "agent" }),
+          messageItem({ id: "a2", createdAt: "2026-10-01T23:10:03Z", role: "agent" }),
+        ],
+      }),
+    });
+    const html = renderPage(pageOf(client));
+    expect(html.match(/data-timeline-header="true"/g)).toHaveLength(4);
+    expect(html.match(/data-message-who="user"/g)).toHaveLength(3);
+    expect(html.match(/data-message-who="agent"/g)).toHaveLength(1);
+    expect(html.match(/data-timeline-time=/g)).toHaveLength(4);
+    expect(html).toContain("07:00");
+    expect(html).toContain("07:10");
+    expect(html).toContain('data-timeline-time="2026-10-01T23:05:00Z"');
+    expect(html.indexOf('data-timeline-header="true"')).toBeLessThan(html.indexOf('data-message-id="u1"'));
+  });
+
+  it("等待响应不插入临时署名和光标行，避免真实回复到达时改变高度", () => {
+    const { store: client } = store();
+    applyEvent(client, {
+      eventType: "turn.started",
+      eventId: "dddddddd-0000-4000-8000-000000000296",
+      globalSequence: "36",
+      view: { turnId: "turn-wait", state: "running" },
+    });
+    const html = renderPage(pageOf(client));
+    expect(html).not.toContain('data-response-activity="true"');
+    expect(html).not.toContain('data-response-cursor="true"');
+    expect(html).not.toContain('data-awaiting-header="true"');
+    expect(html).not.toContain('data-process-label="true"');
+  });
+
   it("用户消息与 Agent 气泡是两档样式（靠右的用户气泡 vs 另一个气泡档）", () => {
     const { store: client, gateway } = store();
     client.loadSession(ONLINE_SESSION_ID);
@@ -573,6 +651,71 @@ describe("对话时间线：结构化条目的展开收起（D10）", () => {
       view: { messageId: "th-1", turnId: "turn-1", content: [] },
     });
     expect(foldExpanded(renderPage(pageOf(client)), "message:th-1")).toBe("false");
+  });
+
+  it("思考在轮次结束后折叠，正式读回后仍保留思考卡片并可展开", () => {
+    const { store: client, gateway } = store();
+    applyEvent(client, {
+      eventType: "agent.thought.delta",
+      eventId: "dddddddd-0000-4000-8000-000000000311",
+      globalSequence: "49",
+      view: { messageId: "th-retained", turnId: "turn-retained", deltaIndex: "0", text: "保留的思考内容" },
+    });
+    expect(foldExpanded(renderPage(pageOf(client)), "message:th-retained")).toBe("true");
+    applyEvent(client, {
+      eventType: "turn.completed",
+      eventId: "dddddddd-0000-4000-8000-000000000312",
+      globalSequence: "50",
+      view: { turnId: "turn-retained", state: "completed" },
+    });
+    expect(foldExpanded(renderPage(pageOf(client)), "message:th-retained")).toBe("false");
+    client.loadSession(ONLINE_SESSION_ID);
+    client.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: ONLINE_SESSION_ID,
+        messages: [{
+          ...messageItem({ id: "th-retained", role: "agent", text: "保留的思考内容", createdAt: "2026-10-01T00:00:01.000Z" }),
+          channel: "thought",
+          turnId: "turn-retained",
+          partial: { state: "completed", reason: null },
+        }],
+      }),
+    });
+    const html = renderPage(pageOf(client));
+    expect(foldExpanded(html, "message:th-retained")).toBe("false");
+    expect(html).toContain("保留的思考内容");
+    const opened = renderPage(pageOf(client), { expandedTimelineEntries: { "message:th-retained": true } });
+    expect(foldExpanded(opened, "message:th-retained")).toBe("true");
+    expect(opened).toContain("保留的思考内容");
+  });
+
+  it("开始工具后前一段思考立即完成折叠，下一段思考仍实时展开", () => {
+    const { store: client } = store();
+    applyEvent(client, {
+      eventType: "agent.thought.delta",
+      eventId: "dddddddd-0000-4000-8000-000000000321",
+      globalSequence: "51",
+      view: { messageId: "phase-thought-1", turnId: "phase-turn", deltaIndex: "0", text: "先读取文件" },
+    });
+    expect(foldExpanded(renderPage(pageOf(client)), "message:phase-thought-1")).toBe("true");
+    applyEvent(client, {
+      eventType: "tool.call.started",
+      eventId: "dddddddd-0000-4000-8000-000000000322",
+      globalSequence: "52",
+      view: { toolCallId: "phase-tool", turnId: "phase-turn", title: "读取文件", state: "in_progress" },
+    });
+    applyEvent(client, {
+      eventType: "agent.thought.delta",
+      eventId: "dddddddd-0000-4000-8000-000000000323",
+      globalSequence: "53",
+      view: { messageId: "phase-thought-2", turnId: "phase-turn", deltaIndex: "0", text: "继续检查结果" },
+    });
+    const html = renderPage(pageOf(client));
+    expect(foldExpanded(html, "message:phase-thought-1")).toBe("false");
+    expect(foldExpanded(html, "message:phase-thought-2")).toBe("true");
+    expect(html).toContain("先读取文件");
   });
 
   it("显式覆盖只影响本条：同状态的两条里被指定的那条收起", () => {
@@ -840,7 +983,7 @@ describe("对话时间线：授权与提问的可用边界", () => {
     expect(html).toContain("允许一次");
   });
 
-  it("授权按钮按 kind 分三档底色，未知取值退到中性档（不冒充拒绝）", () => {
+  it("授权按钮区分实心单次允许、描边长期允许与拒绝，未知取值为中性", () => {
     const { store: client } = interactionStore();
     applyEvent(client, {
       eventType: "permission.requested",
@@ -860,25 +1003,21 @@ describe("对话时间线：授权与提问的可用边界", () => {
     });
     const html = renderPage(pageOf(client));
 
-    // 底色就是 RNW 生成的原子 class（`r-backgroundColor-*`）：颜色相同即同一个 class，退化成
-    // 同一档就会退化成同一个 class，因此这条断言能拦住「三个按钮一个样」。
-    const backgroundClassOf = (optionId: string): string => {
-      const match = /r-backgroundColor-[a-z0-9]+/.exec(classOf(tagContaining(html, `data-answer-option="${optionId}"`)));
-      expect(match, `${optionId} 的按钮没有背景色 class`).not.toBeNull();
-      return match?.[0] ?? "";
+    // 语义色可以在背景或描边上表达；比较完整样式，防止所有选项退化为同一外观。
+    const buttonClassOf = (optionId: string): string => {
+      return classOf(tagContaining(html, `data-answer-option="${optionId}"`));
     };
 
-    const once = backgroundClassOf("once");
-    const always = backgroundClassOf("always");
-    const reject = backgroundClassOf("reject");
-    // 三档互不相同：accent / warn / danger。三者合成一档时其中一条必然变红。
+    const once = buttonClassOf("once");
+    const always = buttonClassOf("always");
+    const reject = buttonClassOf("reject");
     expect(once).not.toBe(always);
     expect(always).not.toBe(reject);
     expect(once).not.toBe(reject);
     // 两条拒绝取值合到同一档（原型只有 `.p-reject` 一个拒绝档）。
-    expect(backgroundClassOf("reject-always")).toBe(reject);
+    expect(buttonClassOf("reject-always")).toBe(reject);
     // 未知取值确定性降级：不与拒绝档同色，也不冒充允许的两档。
-    const future = backgroundClassOf("future");
+    const future = buttonClassOf("future");
     expect([once, always, reject]).not.toContain(future);
   });
 
@@ -984,7 +1123,32 @@ describe("对话时间线：授权与提问的可用边界", () => {
     expect(html.match(/data-answer-interaction-id="perm-live"/g) ?? []).toHaveLength(1);
   });
 
-  it("已被其它设备处理：标出「不是本设备所为」且没有应答按钮", () => {
+  it("只有授权结果时保留卡片；加载对应请求后合并并显示中文", () => {
+    const { store: client } = interactionStore();
+    applyEvent(client, {
+      eventType: "permission.resolved",
+      eventId: "dddddddd-0000-4000-8000-000000000291",
+      globalSequence: "42",
+      view: { interactionId: "perm-merge", resolution: "allow_once", resolvedByDeviceId: "another-device" },
+    });
+    const resultOnly = renderPage(pageOf(client));
+    expect(resultOnly).toContain('data-timeline-card="permission-resolved"');
+    expect(resultOnly).toContain("已允许一次");
+    applyEvent(client, {
+      eventType: "permission.requested",
+      eventId: "dddddddd-0000-4000-8000-000000000290",
+      globalSequence: "41",
+      view: { interactionId: "perm-merge", title: "运行命令", options: [{ optionId: "once", label: "Allow", kind: "allow_once" }] },
+    });
+    const merged = renderPage(pageOf(client));
+    expect(merged.match(/data-interaction-id="perm-merge"/g)).toHaveLength(1);
+    expect(merged).toContain("已允许一次 · 其他设备");
+    expect(merged).toContain("运行命令");
+    expect(merged).not.toContain('data-timeline-card="permission-resolved"');
+    expect(merged).not.toContain('data-answer-option="once"');
+  });
+
+  it("已被其它设备处理：标出其他设备且没有应答按钮", () => {
     const { store: client } = interactionStore();
     applyEvent(client, {
       eventType: "permission.requested",
@@ -1003,7 +1167,8 @@ describe("对话时间线：授权与提问的可用边界", () => {
     expect(html).toContain('data-interaction-availability="handled_elsewhere"');
     expect(html).toContain('data-interaction-handled="other-device"');
     expect(html).toContain('data-resolved-by-device-id="another-device"');
-    expect(html).toContain("不是本设备所为");
+    expect(html).toContain("其他设备");
+    expect(html).not.toContain('data-timeline-card="permission-resolved"');
     expect(html).not.toContain('data-answer-option="reject"');
   });
 
@@ -1040,6 +1205,45 @@ describe("对话时间线：授权与提问的可用边界", () => {
     expect(html).toContain('data-action="submit-elicitation-form"');
     expect(html).toContain('data-action="decline-elicitation"');
     expect(html).toContain('data-action="cancel-elicitation"');
+  });
+});
+
+describe("对话状态呈现", () => {
+  it("授权卡只展示等待授权、完整命令与选项，不重复目录说明或参数", () => {
+    const { store: client } = interactionStore();
+    applyEvent(client, { eventId: "dddddddd-0000-4000-8000-000000000811", eventType: "permission.requested", globalSequence: "81",
+      view: { interactionId: "approval-context", title: "检查环境", toolKind: "execute", toolCallId: "tool-context",
+        toolDetail: { input: { command: "pwd", cwd: "/workspace" }, text: ["确认当前执行目录"] },
+        options: [{ optionId: "once", label: "Allow once", kind: "allow_once" }] } });
+    const html = renderPage(pageOf(client));
+    expect(html).toContain("等待授权");
+    expect(html).toContain("pwd");
+    expect(html).not.toContain("执行命令");
+    expect(html).not.toContain("/workspace");
+    expect(html).not.toContain("确认当前执行目录");
+    expect(html).not.toContain("长期选项会影响");
+    expect(html).not.toContain("未提供操作目的说明");
+  });
+  it("失败工具默认展开，用户仍可显式收起", () => {
+    const { store: client } = store();
+    const eventId = "dddddddd-0000-4000-8000-000000000801";
+    applyEvent(client, { eventId, eventType: "tool.call.completed", globalSequence: "80",
+      view: { toolCallId: "failed-tool", title: "读取文件", state: "failed" } });
+    const page = pageOf(client);
+    expect(foldExpanded(renderPage(page), foldKey(eventId))).toBe("true");
+    expect(foldExpanded(renderPage(page, { expandedTimelineEntries: { [foldKey(eventId)]: false } }), foldKey(eventId))).toBe("false");
+  });
+
+  it("过期提问不再提示重新确认即可填写，也不显示表单", () => {
+    const { store: client } = interactionStore();
+    applyEvent(client, { eventId: "dddddddd-0000-4000-8000-000000000802", eventType: "elicitation.requested", globalSequence: "80",
+      view: { interactionId: "expired-question", title: "选择分支", schema: { type: "object", properties: { branch: { type: "string" } } } } });
+    const page = pageOf(client);
+    const html = renderPage({ ...page, timeline: { ...page.timeline, entries: page.timeline.entries.map((entry) =>
+      entry.kind === "elicitation_requested" ? { ...entry, availability: { kind: "not_answerable", reason: "expired" } } : entry) } });
+    expect(html).toContain("提问已过期");
+    expect(html).not.toContain("确认的当前有效请求后才能提交值");
+    expect(html).not.toContain('data-form-input="branch"');
   });
 });
 
@@ -1080,7 +1284,7 @@ describe("对话时间线：轮次分组", () => {
 });
 
 describe("对话时间线：降级条目", () => {
-  it("客户端没有专用视图的事件：产出降级卡片并保留诊断入口", () => {
+  it("会话管理通知不展示卡片或诊断兜底提示", () => {
     const { store: client } = store();
     applyEvent(client, {
       eventType: "session.info.changed",
@@ -1090,11 +1294,8 @@ describe("对话时间线：降级条目", () => {
     });
     const html = renderPage(pageOf(client));
 
-    expect(html).toContain('data-timeline-card="degraded"');
-    expect(html).toContain('data-degraded-entry="dddddddd-0000-4000-8000-00000000020b"');
-    expect(html).toContain('data-degraded-view="no-dedicated-view"');
-    expect(html).toContain('data-action="open-diagnostics"');
-    expect(html).toContain('data-event-id="dddddddd-0000-4000-8000-00000000020b"');
+    expect(html).not.toContain('data-timeline-card="degraded"');
+    expect(html).not.toContain('data-degraded-entry="dddddddd-0000-4000-8000-00000000020b"');
   });
 
   it("降级条目与消息同容器（未知事件不得让会话渲染失败）", () => {
@@ -1165,5 +1366,40 @@ describe("刷新交互入口的 hook 顺序（同一卡片重渲染）", () => {
 
     expect(html).toContain('data-action="refresh-interactions"');
     expect(html).toContain('data-refresh-interactions-reason="request_version_unknown"');
+  });
+});
+
+
+describe("权威顺序与历史说明", () => {
+  it("按序号呈现思考、工具、回复且连续 Agent 输出只显示一次时间", () => {
+    const { store: client, gateway } = store();
+    client.loadSession(ONLINE_SESSION_ID);
+    client.apply({ kind: "command_result", result: readResult({ requestId: lastDispatch(gateway).body.requestId,
+      messages: [
+        { ...messageItem({ id: "u-order", role: "user", createdAt: "2026-10-01T00:00:00.000Z" }), sequence: "1" },
+        { ...messageItem({ id: "z-thought-order", role: "agent", text: "先思考", createdAt: "2026-10-01T00:00:02.000Z" }), channel: "thought", sequence: "2" },
+        { ...messageItem({ id: "a-reply-order", role: "agent", text: "再回复", createdAt: "2026-09-01T00:00:00.000Z" }), sequence: "4" },
+      ],
+      history: [historyItem({ eventId: "order-tool", eventType: "tool.call.started", sessionSequence: "3", view: { toolCallId: "tool-order", turnId: "turn-order", title: "中间工具", state: "in_progress" } })],
+      historyHasEarlier: false,
+    }) });
+    const html = renderPage(pageOf(client));
+    expect(html.indexOf('data-message-id="z-thought-order"')).toBeLessThan(html.indexOf('data-timeline-card="tool-call"'));
+    expect(html.indexOf('data-timeline-card="tool-call"')).toBeLessThan(html.indexOf('data-message-id="a-reply-order"'));
+    expect(html.match(/data-timeline-time=/g)).toHaveLength(2);
+    expect(html).not.toContain('data-timeline-order-incomplete="true"');
+  });
+
+  it("缺少历史序号时保留正文并明确提示无法完整还原顺序", () => {
+    const { store: client, gateway } = store();
+    client.loadSession(ONLINE_SESSION_ID);
+    client.apply({ kind: "command_result", result: readResult({ requestId: lastDispatch(gateway).body.requestId,
+      messages: [messageItem({ id: "legacy-order", role: "agent", text: "旧正文仍保留", createdAt: "2026-10-01T00:00:00.000Z" })],
+      history: [], historyHasEarlier: false,
+    }) });
+    const html = renderPage(pageOf(client));
+    expect(html).toContain('data-timeline-order-incomplete="true"');
+    expect(html).toContain("部分旧历史的顺序无法完整还原");
+    expect(html).toContain("旧正文仍保留");
   });
 });

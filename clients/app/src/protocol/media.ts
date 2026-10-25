@@ -62,6 +62,7 @@ export interface MediaReference {
 
 /** `$defs.effectiveInteraction`。 */
 export interface EffectiveInteraction {
+  readonly sequence?: DecimalString;
   readonly interactionId: Uuid;
   readonly sessionId: Uuid;
   readonly kind: "permission" | "elicitation";
@@ -247,6 +248,7 @@ export function decodeEffectiveInteraction(value: unknown): MediaDecode<Effectiv
       "sessionId",
       "kind",
       "requestVersion",
+      "sequence",
       "expiresAt",
       "options",
       "schema",
@@ -262,6 +264,9 @@ export function decodeEffectiveInteraction(value: unknown): MediaDecode<Effectiv
   }
   if (!isDecimal(value["requestVersion"])) {
     return { ok: false, detail: "requestVersion 必须是十进制字符串" };
+  }
+  if (value["sequence"] !== undefined && !isDecimal(value["sequence"])) {
+    return { ok: false, detail: "sequence 必须是规范十进制字符串" };
   }
   const expiresAt = value["expiresAt"];
   if (expiresAt !== null && (typeof expiresAt !== "string" || !TIMESTAMP_PATTERN.test(expiresAt))) {
@@ -280,6 +285,7 @@ export function decodeEffectiveInteraction(value: unknown): MediaDecode<Effectiv
       sessionId: value["sessionId"],
       kind: value["kind"],
       requestVersion: value["requestVersion"],
+      ...(value["sequence"] === undefined ? {} : { sequence: value["sequence"] as DecimalString }),
       expiresAt,
       options: options.value,
       schema: schema === null ? null : schema,

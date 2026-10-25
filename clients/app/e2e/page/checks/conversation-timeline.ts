@@ -603,6 +603,18 @@ const checks: readonly Check[] = [
         async (mounted) => {
           const container = mounted.container;
 
+          // 验证实际几何位置，避免标题元素换到第二行后产生上下偏移。
+          for (const eventId of [EVENT_TOOL_RUN, EVENT_TOOL_DONE, EVENT_TERMINAL_TWO]) {
+            const head = query(container, `[data-fold-entry="event:${eventId}"] [data-action="toggle-timeline-entry"]`)!;
+            const bounds = head.getBoundingClientRect();
+            for (const child of Array.from(head.children)) {
+              const rect = child.getBoundingClientRect();
+              if (rect.width === 0 || rect.height === 0) continue;
+              expectThat(Math.abs((rect.top + rect.bottom) / 2 - (bounds.top + bounds.bottom) / 2) < 2,
+                `折叠标题应垂直居中：${child.textContent}；标题高度 ${bounds.height}，内容高度 ${rect.height}`);
+            }
+          }
+
           // 默认值只跟条目自己的状态走：进行中的展开、已完成的收起、终端块（没有「进行中」这一档）收起。
           expectEqual(foldState(container, EVENT_TOOL_RUN), "true", "进行中的工具调用必须默认展开");
           expectEqual(foldState(container, EVENT_TOOL_RUN_TWO), "true", "同为 in_progress 的第二条也必须默认展开");

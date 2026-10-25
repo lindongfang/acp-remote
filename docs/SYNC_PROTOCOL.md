@@ -1,7 +1,12 @@
 # ACP Remote Sync Protocol
 
+> 对话发生顺序修订（2026-10-24，`preserve-agent-output-order`）：消息片段新增可选 `sequence`，owned 取 Owner 会话内序号，远程来源取 Owner origin 序号；不考虑旧版本兼容。缺席只表示旧历史无法完整恢复顺序，不能补造。消息、思考和工具按同一序号域合并，时钟相同或回拨不改变先后。持久化、分页和展示细则见 §11.5；产品决策见 [ADR-0015](adr/0015-agent-output-order.md)。
+
+卡片定位补充：Owner 在事件 `view` 的运行期投影中追加可选 `_timelineSequence` 与 `_timelineOriginSequence`，分别保存该工具、轮次、交互或计划首次出现的位置；后续事件本身的 `sessionSequence`/`originSequence` 仍用于状态先后与分页，不被锚点替换。历史页只含工具完成更新时也沿用其首次位置；旧历史缺少起点证据时不补造。原始 `view` 成员与 `acp.rawJson` 保真，投影键冲突显式失败。有效待处理交互的读回元素另有可选 `sequence`（与消息同域），不依赖请求历史页恰好包含创建事件。消息与历史独立分页时，客户端固定共同可见下界，自动补齐较浅资源或读到耗尽；补齐期间必须明确显示正在加载，不能冒充完整时间线。
+
 > 状态：wire 基线（Draft）已冻结；本合同声明 v1 的 **31 个消息类型**——信封与消息类型分派，`auth`/`sync`（含 9 个 `sync.remote_*` 来源流消息）/`control`/`error`/`event`/`command` 六个家族的 body，外加两个查看控制帧 `session.view`/`session.view.result` 与两个准备控制帧 `session.preparation`/`session.preparation.result`——与 **35 个事件视图定义**（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（设备短二维码 `q2` 编解码、claim、status、lookup、qr-lookup、HTTP 错误体）。**实现现状（`sync-protocol` crate 已镜像，服务端接线待 WP5）**：crate 已含 31 个消息类型、35 个视图与 54 个错误码（含 `session.capacity_exceeded` 与 `preparation.stale`/`preparation.already_committed`/`preparation.store_rebuilt`），查看控制帧、准备控制帧与 `session.activity.changed` 的 Rust 镜像与合同逐项相等；准备控制面、`session.start` 与附件准备 target 的 **服务端（Daemon 侧）处理路径尚未落地**（§11.9）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的既有配对 HTTP（§7.6 `qr-lookup` 待 WP2–WP4）、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。
 > 协议版本：1  
+> 修订记录（2026-10-23，`conversation-reliability` WP1–WP4，**无 wire 变更**）：冻结「每条受理输入均有持久正文、读取与实时投影同源、回显按稳定身份关联、单一准备槽位」的 Sync 面口径——§10.2.1 与 §10.4 说明 `user.message.delta` 只做实时可见性，`session.read` 的 `messages` 从 `owned_message.channel='user'` 映射 `role=user`（WP2 已实现）；§11.5 增加用户名细来源、分页计数与旧端策略，并明确**无需新增 wire 字段**（`role` 词表已含 `user`，`messageChannel` 保持 `reply|thought`，用户消息不带 `channel` 键）。机器资产（schema/fixture/feature）因此不变；`schemas/sync/v1/` 与 `fixtures/sync/v1/` 本次不修改。
 > 修订记录（2026-10-22，`web-session-preparation` WP1（合同先行，实现待 WP2–WP8））：§5.2 登记 `core.session-preparation.v1`（本轮不宣告）；§3.4 给 `attachment.begin`/`attachment.manifest_begin` 增加与顶层 `sessionId` 互斥的 `target: preparation` 分支，`attachment.error` 增加可选 `submissionId`；§6.2/§6.3 登记准备凭据签名 domain `acp-remote/session-preparation/v1` 与 tag 17–24；§11.5 增加 Sync-only mutation `session.start`（`kind: initial`/`continue` 闭合判别载荷）与 21 条 Sync 命令；§11.9 新增准备控制帧族、闭合五态结果、`session.start` 语义与四项固定预算；§12.1/§12.2 增加三个 `preparation.*` 错误码及其 details 与客户端固定动作；§14 增加准备租约/续租/控制帧速率/去重窗口；§16.2 说明加性演进边界。合同因此声明 **31 个消息类型 / 35 个事件视图 / 54 个错误码**；`sync-protocol` 镜像已同步，服务端处理路径与真实设置接线仍是**计划/待实现**。  
 > 修订记录（2026-10-22，`session-activation-lifecycle`（合同与实现））：在 §5.2 登记 `core.local-session-lifecycle.v1`（本轮不宣告）；§9.8 新增 owned 摘要可选键 `localActivity` 与持久事件 `session.activity.changed`，并规定事件只在取值实际变化时写（ready 复用仍为 `active` 不写、`idle → active` 必写、查看者增减不触发）；§11.5 让 `session.resume` 取得 Sync 面（closed payload `{}`、`completed { sessionId, session }`、feature 门控、失败分类，**服务端接线待 WP4**）；§11.8 新增查看控制帧族 `session.view`/`session.view.result`（同版本同载荷幂等、同版本不同选择与低于版本的离页都回 `stale` 且不改动查看者、`sessionId` 允许 `null` 并逐字回显、120 帧/分钟只统计客户端 → 服务端的 `session.view`、持续超限与业务命令同规则）与四项固定预算；§14 补对应上限与错误映射。当时声明 **29 个消息类型 / 35 个事件视图**（现为 31 / 35）；`sync-protocol` 的 `MessageType`/`VIEW_TYPES`/`ErrorCode` 镜像与全部服务端/适配接线**待 WP4**——在这些镜像落地前 crate 级漂移门禁会让 `cargo test --workspace` 因合同先行而红，不得据此判为回归，也不得据此宣称已实现。  
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§5.2 登记 feature `core.session-title.v1` 并宣告（Owner 持久化、Access 转发、客户端编辑已接线）；§9.4 的快照 `sessions[].title`、§10.3 的 `session.info.changed` 行与标题来源说明改为「Agent 标题 + 自定义标题 → 有效标题」投影；§11.5 新增 mutation `session.title.set`（closed payload `{ title }`，输入按 wire 原文 1..=512 个 Unicode 标量值、保存 trim 后的文本、trim 后为空拒绝、超长不截断），命令集合更新为 20 条（该修订时 Sync 枚举 19 条、Node Link 枚举 14 条；`session.resume` 于 2026-10-22 进入 Sync 面后 Sync 枚举为 20 条）。**取代**旧条款「标题只来自 Agent 的 `session_info_update`、命令目录不存在客户端重命名命令」；Owner 的 `custom_title` 持久化与命令接线已落地。  
@@ -1354,6 +1359,8 @@ device.revoked
 
 **已按保留策略压缩的事件不产生条目**：`compacted_into IS NOT NULL` 的行既不进历史也不可读（与第 11.5 节的保留窗口口径一致）。因此 `agent.thought.delta` 没有收尾事件，压缩后即从**事件流**消失。Agent 明确提供的思考按 `MessageChannel.Thought` 与回复分别落盘到 `owned_message`（`CORE_PORTS_AND_STORAGE.md` §7.6，计划由 WP2 实施），历史恢复经 `session.read` 的 `messages` 取得，不依赖 delta 事件仍在保留期内；压缩只影响事件重放，不删除已保存的正文。WP2 落地前，`owned_message` 的思考正文尚不存在，不得据此宣称思考历史恢复已实现。
 
+**用户输入同理，但正文来源是 Owner 保存的消息（`conversation-reliability`，WP2 已实现）**：每个已受理的 `session.prompt`（首条之后的输入也一样）由 Owner 在同一受理事务里保存为 `owned_message.channel='user'` 的完整消息；`session.read` 的 `messages` 页从该行映射 `role=user`，`user.message.delta` 只用于实时可见性与未读回时的易失呈现。因此：① 同一 `messageId` 的持久行与 delta 事件**不重复拼接**（读取结果对该消息恰好一条）；② delta 的 `view.text` 受单条 message 文本上限（262144 字符）截断，但读取返回完整内容；③ delta 被压缩/过期后，输入仍可完整读回，不得要求 Agent 补回显。实现落点：受理写集在 `crates/core/src/broker.rs::accept_prompt`（`crates/storage-sqlite/src/session_store.rs::write_user_input` 在同一事务落盘），读取侧在 `crates/server/src/session_read.rs`——只从 `owned_message` 取行，按 `user.message.delta` 累积的旧路径已删除。
+
 ### 10.3 v1 Event View Contract
 
 所有 `view` 都是 object。下面字段是最低必填合同；可以增加已协商 feature 所允许的可选字段，但不得改变既有字段语义；向后兼容的可选字段（例如 `toolDetail`）不要求 feature 协商。 三条跨字段规则： (a) `deltaIndex` 在**每条消息内**从 `0` 开始严格加一，由生产事件的适配器分配；空洞不是协议错误，也不表示丢包（检测丢包请用 `payloadDigest`/序号），消费方按现存的 `deltaIndex` 升序拼接； (b) `agent.message.completed` **由 Broker 在 turn 结束时生成**，与该 turn 的终态事件在**同一次提交**内落盘：正文按该消息的 delta（含可选 `block`）折叠，规则见 `CORE_PORTS_AND_STORAGE.md` §6 第 14 条；`agent.thought.delta` 不产生收尾事件（登记在案的短保留期降级）； (c) delta 被 `turn.delta_compacted` 压缩后，**重放里由该 summary 事件替代**（不再出现那些 delta）；客户端察觉 delta 丢失靠会话内 `sessionSequence` 的稠密性（§9.4），终态正文一律以 `agent.message.completed` 为准（`CORE_PORTS_AND_STORAGE.md` §6 第 15 条）。`view` 内的 JSON 取值域遵守 §3.3 的 ACPR-CJ1：数字必须是整数（`|n| ≤ 2^53−1`），不得出现浮点，否则 `payloadDigest` 无法跨实现复算。
@@ -1390,7 +1397,9 @@ device.revoked
 | `command.uncertain` | `requestId`, `reason`, `mayHaveReachedAgent: true` |
 | `device.revoked` | `deviceId`, `revokedAt`；只发送给仍有权查看设备状态的其他客户端 |
 
-`toolDetail` 是 `tool.call.started` / `tool.call.updated` / `tool.call.completed` 的**可选**工具详情，只在 Agent 确实提供了对应数据时出现；它不包含任何由视图层推断的取值：
+`toolDetail` 是 `tool.call.started` / `tool.call.updated` / `tool.call.completed` 与 `permission.requested` 的**可选**工具详情，只在 Agent 确实提供了对应数据时出现；它不包含任何由视图层推断的取值：
+
+`permission.requested` 还可携带 `toolCallId`、`toolKind`，原样来自当前 ACP 授权请求的工具标识与类别；其 `toolDetail` 只投影该请求自带的输入和文本说明，不用其他工具的标题推测关联，不解析 `acp.rawJson` 补字段。客户端据此显示操作、命令与执行位置；Agent 没有提供的目的、目录或长期授权匹配范围必须明确为未知。此为向后兼容的可选展示字段：旧客户端可忽略，新客户端面对旧事件使用缺失提示，不改变授权选项、有效性或命令载荷；适用相同的 32 KiB 分部／64 KiB 总量与数值约束。
 
 - `input` / `output`：ACP `rawInput` / `rawOutput` 的 JSON 值，原样保留（不重新解释形状）。ACP 未提供对应字段时该键**缺席**；MUST NOT 以下发 `null`、空对象或空数组冒充。
 - `text`：ACP 工具内容里文本块（`ToolCallContent::Content` 包装的 `Text`）的文本数组，顺序与 Agent 提供的一致；没有文本块时缺席。Diff、terminal 与未识别的 content 类型**不进入** `text`——差异行继续由类型化 `diff` 与 `file.changed` 承担，终端输出走 `terminal.output`，未识别类型仍可经 `acp.rawJson` 诊断查看。未识别的 content MUST NOT 被文本化或猜测成上述任一部分。
@@ -1497,7 +1506,7 @@ PublicError { code: string, message: string, retryable: boolean, details: object
 
 | 值对象 | 形状与语义 |
 |---|---|
-| `messageChannel` | `reply｜thought`。回复与思考**分别**持久化、分别折叠；Agent 未提供思考时不得生成思考消息；`agent.thought.delta` 不产生 `agent.message.completed`（§10.3） |
+| `messageChannel` | `reply｜thought`。回复与思考**分别**持久化、分别折叠；Agent 未提供思考时不得生成思考消息；`agent.thought.delta` 不产生 `agent.message.completed`（§10.3）。**用户输入不在本词表内**：`session.read` 的 `messages` 用 `role: "user"` 区分用户消息，该键对用户行**缺席**（不是 `"user"`），因此本枚举与旧 peer 的形状逐字不变；`owned_message.channel='user'` 是存储取值，不是 wire 取值（`conversation-reliability`，WP2 已实现） |
 | `mediaReference` | `{ attachmentId, sessionId, kind: image｜audio｜file, mediaType, byteLength, sha256, displayName, availability }`；只标识内容与可用性，**不含**下载 URL、临时路径或凭据 |
 | `partialResult` | `{ state: completed｜partial｜failed｜cancelled, reason }`；`partial` 表示停止/失败/断线时已收到内容被保留，MUST NOT 被客户端当作完整成功回复 |
 
@@ -1761,11 +1770,13 @@ local.audit.export
 
 `session.read` 是会话明细的唯一入口（第 9.4 节：六类明细资源不进快照），因此它在 Sync 面带分页参数：
 
-- **`before` 是由消息创建时间与消息标识复合而成的游标**，`{ createdAt, messageId }`，两个键都必需。服务端 MUST 按 `createdAt` 升序返回一页，并在同一 `createdAt` 的多条消息之间给出稳定且可重复的次序（以 `messageId` 作 tie-breaker），使相邻两页不重不漏。`createdAt` 是 Daemon 持久化时间（第 10.2 节），不是客户端时间。
+- **`before` 是消息页的权威位置与身份游标**，`{ createdAt, messageId, sequence? }`；`createdAt`/`messageId` 必需且来自上一页最早条目，已知位置必须携带 `sequence`。消息条目的 `sequence` 是首次输出事件的位置，owned 为会话内序号，Node Link/imported 为 Owner 来源序号；两域不得混用。已知消息 MUST 按序号升序，不能用时间或随机标识覆盖。旧历史缺少可靠证据时位置缺席，按时间与标识保留独立前置稳定分区，并明确提示无法完整还原顺序。分页按同一排序键严格向前，不重不漏；`createdAt` 仅保留时间信息，非新消息的先后依据。
 - **排序 MUST NOT 依赖 `messageId` 的数值或字典序**（第 3.3 节「排序不得依赖 UUID」）。`messageId` 只在同一创建时刻内部定序；消息标识的数值次序与创建时间次序不一致时，结果仍按创建时间给出。
 - **单字段游标被拒**：只提供 `messageId` 或只提供 `createdAt` 的 `before` 按 `protocol.schema_invalid` 拒绝，服务端 MUST NOT 猜测或补全缺失的排序分量。`before` 只接受这两个键，出现别的键（例如 `offset`）同样拒绝——偏移量分页不是 v1 的形状。
-- **省略 `before` 返回最新一页**；客户端把上一次结果中最早一条的 `(createdAt, messageId)` 作为下一次请求的 `before`，得到紧接在它之前的更早一页，不与上一次重叠也不跳条。同一会话在明细未变化时以同一 `before` 重复读取 MUST 返回相同结果。
+- **省略 `before` 返回最新一页**；客户端把上一次最早条目的 `sequence`（已知时）及 `createdAt`/`messageId` 原样作为下一次 `before`，得到严格更早的一页。同一会话在明细未变化时以同一 `before` 重复读取 MUST 返回相同结果。片段首次位置与正文同事务保存，原始 delta 清理后仍保留该位置。相邻同消息输出可连续追加；工具、用户输入、其他消息或通道切换中断后必须产生新的呈现片段，不跨越可见条目合并。工具卡状态更新保留首次出现位置。
 - **默认页是最近 20 条用户输入**（`role: "user"` 的消息数）。用户输入与 turn 边界天然接近，是用户能数得清的量，服务端按此计数取页，使一页体积对用户可预期。
+- **用户输入的来源是持久消息（`conversation-reliability`，WP2 已实现）**：`messages` 页的 `role: "user"` 条目来自 `owned_message.channel='user'` 的**持久行**（首条与后续输入同一来源），按本节权威 `sequence` 与未知旧历史分区排序、分页，页内的「用户输入条数」按这些行计数；`user.message.delta` 不贡献条目、不参与计数，也不与同一 `messageId` 的持久行拼接。`content` 是该行保存的完整正文，**不受**单条事件文本上限（262144 字符）影响；事件过期或被压缩后仍返回同样内容。`content` 是 `agentContentBlock` 数组，由 `owned_message.content_json`（`promptContentBlock` 数组）按 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §3.11 的冻结投影逐块转换而来，**不是**两套词表的逐字互通：`text` 直通；`attachment_ref` 只采信块内 `attachmentId`，`type`/`mimeType`/`byteLength` 以该消息的 `owned_media_ref`/`owned_attachment` 行为权威（`kind` + `media_type` + `byte_length`；块内自报值不作权威，不一致或附件缺失时整块降级 `unsupported`）并带 `displayState`（`file_ref` 另带 `displayName`）；`workspace_path_ref` 以该相对路径的 `text` 块呈现（不丢弃路径）；任何不可表达的块降级为 `unsupported`（`originalType` 为原 `type`），MUST NOT 让整页 `session.read` 失败。读取侧实现：`crates/server/src/session_read.rs` 只从 `owned_message` 取行（含 `channel='user'`），按 delta 事件累积用户输入的旧路径已删除；升级前未保存输入的旧轮次不补造用户消息。正文来源切换不影响内容投影；本次顺序修订另新增 `sequence`。
+- **旧端策略与未知字段保真（无 wire 新增字段）**：本口径不需要也不新增任何 wire 字段——`role` 词表原本就含 `user`，`channel` 是可选加性键且用户消息**不带**它（`messageChannel` 仍只有 `reply|thought`），`turnId`/`messageId`/`createdAt` 都是既有必填键。旧客户端按既有 schema 解码不会失败；旧前端若因不认识新的 Owner 用户事件而重复展示，发布时提示刷新并把它作为已知的客户端降级，服务端 MUST NOT 为此删除持久正文、改写成 Agent 角色或退回按文本去重。客户端不认识 `user.message.delta` 时按 §10.1 的未知事件规则显示降级视图并保留 payload，不得丢弃、不得把它当作 Agent 正文。imported 会话的 `messages` 由 Owner 投影、Access 转发、不落盘（`NODE_LINK_PROTOCOL.md` §12.4 与本节 §9.7）。Owner 的投影是**唯一权威**：Access MUST 原样保留 Owner 给出的 `role`，且缺 `channel` 的用户消息 MUST NOT 默认成 `reply`。**已实现**：`crates/node-link-client/src/runtime.rs` 的 `json_message` 读 wire 的 `role`（`user` → `User` 通道；只有 `agent` 才看 `channel`，缺席按 `reply`），`crates/server/src/session_read.rs` 的 `Message::from_record`（`project_remote_read` 经它投影）只由持久 `channel` 决定 `role`——`User` → `role=user` 且不带 `channel`/`partial`，因此 imported 用户消息不会退化成 Agent 回复；用例见 `crates/node-link-client/src/runtime.rs::tests::imported_user_message_without_channel_reads_as_user`。未登记扩展键只在 §4.2 允许的开放对象内保真：`event.payload.view` 与 ACP 原文（`rawJson`）里的未登记键原样下发并保真往返，客户端不得因未知键拒绝整条事件；`session.read` 的读取页仍是封闭对象（`messages` 元素 `additionalProperties: false`），不得按“未知键宽容”扩展，实现阶段确需新增任何键或枚举取值时，必须先按 §16.2 登记 feature/schema/fixture 与旧端显式降级。
 - **`limit` 是可选的整数码数**（`minimum: 1`，与 `chunkCount` 同属第 3.3 节的结构性常量一类，不走十进制字符串规则）。省略时用服务端配置默认页；**超过服务端为该会话配置的明细条数上限时，服务端收敛到自己的上限并照常返回，MUST NOT 因此让请求失败**——因此 schema 上没有 `maximum`。
 - **到达最早一条时**结果给出 `hasEarlier: false`，且不返回空占位；客户端据此停止翻页。
 - **一页包含该页边界内的全部消息**：服务端按页内用户输入计数，但返回的消息还包括页边界之后的 Agent 回复与思考——两段用户输入之间可以有任意多条 Agent 正文（回复 + 思考），服务端一直往前读到覆盖页首用户消息之前的那条为止，MUST NOT 因内部页大小（200 条）静默截断；那会让更早的 Agent 消息永远无法通过 `before` 取回。超过单次读取的硬上限时返回 `resource.result_too_large`，而不是一份缺条目的页。
@@ -1774,7 +1785,7 @@ local.audit.export
 
 结构化历史条目（`include` 含 `history`）走**同一命令、独立的一套游标与页标记**（design D2），因此上面关于消息的规则都不因它而改变：
 
-- **`beforeHistory` 是会话内事件序号**（十进制字符串，提交时分配，天然单调唯一）。它与消息的 `{ createdAt, messageId }` 复合游标是两套字段：同一请求可以同时给出两者，各自翻各自的页，任一方都不改变另一方的页边界；`limit` 是本次请求里**每一页各自**的单页上限，不把两页合并计数。
+- **`beforeHistory` 是会话内事件序号**（十进制字符串，提交时分配，天然单调唯一）。它与消息的 `{ createdAt, messageId, sequence? }` 位置和身份游标是两套字段：同一请求可以同时给出两者，各自翻各自的页，任一方都不改变另一方的页边界；`limit` 是本次请求里**每一页各自**的单页上限，不把两页合并计数。
 - **条目按会话内序号升序返回**，省略 `beforeHistory` 时返回最新一页；客户端用这一页最早一条的 `sessionSequence` 作为下一次的 `beforeHistory`，得到紧接在它之前的一页，不重不漏。**到达最早一条时** `historyHasEarlier: false`，且不返回空占位。
 - **游标不可由其它标识代替**：`beforeHistory` 只接受十进制序号，事件标识（`eventId`）不是它的替身，服务端 MUST NOT 猜测或补全。请求的游标早于该节点对结构化事件的保留窗口、且更早条目已按保留策略清理时，同样返回 `sync.cursor_invalid`（`details.reason = "cursor_expired"`），MUST NOT 静默返回更少的条目让客户端误以为已到最早一条。
 - **条目与实时事件同形**：每条携带 `eventId`、`eventType`、`sessionSequence`、`createdAt` 与结构化 `view`，以及按 `acp.raw-payload.v1` 协商结果出现的 `acp`（原文逐字节保真；因单条上限、保留期或存储原因不可用时按已登记原因标记为不可用，不得用占位内容冒充）。`view` 是开放对象：协议未定义的扩展字段原样下发。哪些事件类型产生条目见第 10.2 节。

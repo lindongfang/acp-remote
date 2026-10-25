@@ -109,7 +109,7 @@ function availabilityOf(value: unknown): MediaAvailabilityView {
 /**
  * 把 `AgentContentBlock[]` 投影成内容视图。
  *
- * 媒体块保持到达顺序；文本块拼接时用换行分隔，空文本块不产生空行。未知块只可能来自未来的
+ * 媒体块保持到达顺序；文本块原样拼接，不在传输片段之间添加换行。未知块只可能来自未来的
  * ACP 内容：已由协议层归成 `unsupported`（带原始类型），这里原样保留为不可用说明。
  */
 export function buildAgentMessageContent(blocks: readonly AgentContentBlock[]): AgentMessageContent {
@@ -153,7 +153,7 @@ export function buildAgentMessageContent(blocks: readonly AgentContentBlock[]): 
         break;
     }
   }
-  return { text: texts.join("\n"), media, hasStructuredContent: media.length > 0 };
+  return { text: texts.join(""), media, hasStructuredContent: media.length > 0 };
 }
 
 function stringField(value: object, key: string): string | null {

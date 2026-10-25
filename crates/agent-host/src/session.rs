@@ -109,7 +109,17 @@ pub struct AcpSession {
     attachments: Option<Arc<dyn AttachmentStore>>,
     /// 终端服务（重绑时把同一实例交给新绑定，旧绑定得到空替身）。
     terminal: Mutex<Arc<TerminalService>>,
-    inner: Mutex<Inner>,
+    inner: Arc<Mutex<Inner>>,
+}
+
+// Mapping and delivery share this lock with terminal output. A concurrent terminal
+// entry must close the text fragment before the next ACP notification is mapped.
+fn ordered_terminal_sink(inner: Arc<Mutex<Inner>>, sink: EventSink) -> EventSink {
+    EventSink::new(move |event| {
+        let mut inner = lock(&inner);
+        inner.updates.interrupt();
+        sink.send(event);
+    })
 }
 
 impl std::fmt::Debug for AcpSession {
@@ -176,12 +186,32 @@ impl AcpSession {
             attachments,
             terminal_enabled,
         } = init;
+        let inner = Arc::new(Mutex::new(Inner {
+            closed: false,
+            released: false,
+            temporary,
+            preparation: if temporary {
+                PreparationGate::Unverified
+            } else {
+                PreparationGate::NotPreparation
+            },
+            dispatch: None,
+            turn_running: false,
+            turn_dispatched: false,
+            cancel_requested: false,
+            agent_capabilities: capabilities,
+            modes,
+            config_options,
+            interactions: HashMap::new(),
+            updates: UpdateState::default(),
+            last_activity: Instant::now(),
+        }));
         let terminal = Mutex::new(Arc::new(TerminalService::new(TerminalConfig {
             session: session.clone(),
             workspace: workspace.clone(),
             clock: Arc::clone(&clock),
             supervisor: Arc::clone(&supervisor),
-            sink: sink.clone(),
+            sink: ordered_terminal_sink(Arc::clone(&inner), sink.clone()),
             enabled: terminal_enabled,
         })));
         Self {
@@ -196,26 +226,7 @@ impl AcpSession {
             workspace,
             attachments,
             terminal,
-            inner: Mutex::new(Inner {
-                closed: false,
-                released: false,
-                temporary,
-                preparation: if temporary {
-                    PreparationGate::Unverified
-                } else {
-                    PreparationGate::NotPreparation
-                },
-                dispatch: None,
-                turn_running: false,
-                turn_dispatched: false,
-                cancel_requested: false,
-                agent_capabilities: capabilities,
-                modes,
-                config_options,
-                interactions: HashMap::new(),
-                updates: UpdateState::default(),
-                last_activity: Instant::now(),
-            }),
+            inner,
         }
     }
 
@@ -279,6 +290,13 @@ impl AcpSession {
     }
 
     fn emit(&self, event: EndpointEvent) {
+        let mut inner = lock(&self.inner);
+        if !matches!(
+            event.event_type.as_str(),
+            "agent.message.delta" | "agent.thought.delta" | "user.message.delta"
+        ) {
+            inner.updates.interrupt();
+        }
         self.sink.send(event);
     }
 
@@ -717,8 +735,8 @@ impl AcpSession {
             tracing::warn!("session/update 属于其它会话，忽略");
             return;
         }
+        let mut inner = lock(&self.inner);
         let events = {
-            let mut inner = lock(&self.inner);
             let mut updates = std::mem::take(&mut inner.updates);
             // 派发上下文只在本次 turn 内存在，且**只**在适配器里用于回显关联；它不写进任何事件视图
             // （普通 prompt 的上下文是 `None`，行为与本字段出现之前完全相同）。
@@ -736,7 +754,7 @@ impl AcpSession {
         match events {
             Ok(events) => {
                 for event in events {
-                    self.emit(event);
+                    self.sink.send(event);
                 }
             }
             Err(error) => tracing::warn!(error = %error, "无法映射 session/update"),
@@ -981,17 +999,34 @@ impl AcpSession {
         let inner = lock(&self.inner);
         // 终端服务随 ACP 会话一起存活：新绑定接管同一实例并把事件出口指向新 sink；旧绑定拿到
         // 空替身，因此旧端点即使被关闭也不会误杀新绑定上的终端。
+        let new_inner = Arc::new(Mutex::new(Inner {
+            closed: false,
+            released: false,
+            temporary: false,
+            preparation: PreparationGate::NotPreparation,
+            dispatch: None,
+            turn_running: false,
+            turn_dispatched: false,
+            cancel_requested: false,
+            agent_capabilities: inner.agent_capabilities.clone(),
+            modes: inner.modes.clone(),
+            config_options: inner.config_options.clone(),
+            interactions: HashMap::new(),
+            updates: UpdateState::default(),
+            last_activity: Instant::now(),
+        }));
+        drop(inner);
         let enabled = self.terminal().is_enabled();
         let replacement = Arc::new(TerminalService::new(TerminalConfig {
             session: self.session_id().clone(),
             workspace: self.workspace.clone(),
             clock: Arc::clone(&self.clock),
             supervisor: Arc::clone(&self.supervisor),
-            sink: sink.clone(),
+            sink: ordered_terminal_sink(Arc::clone(&new_inner), sink.clone()),
             enabled,
         }));
         let terminal = std::mem::replace(&mut *lock(&self.terminal), replacement);
-        terminal.set_sink(sink.clone());
+        terminal.set_sink(ordered_terminal_sink(Arc::clone(&new_inner), sink.clone()));
         Self {
             reference: self.reference.clone(),
             acp_session_id: self.acp_session_id.clone(),
@@ -1004,22 +1039,7 @@ impl AcpSession {
             workspace: self.workspace.clone(),
             attachments: self.attachments.clone(),
             terminal: Mutex::new(terminal),
-            inner: Mutex::new(Inner {
-                closed: false,
-                released: false,
-                temporary: false,
-                preparation: PreparationGate::NotPreparation,
-                dispatch: None,
-                turn_running: false,
-                turn_dispatched: false,
-                cancel_requested: false,
-                agent_capabilities: inner.agent_capabilities.clone(),
-                modes: inner.modes.clone(),
-                config_options: inner.config_options.clone(),
-                interactions: HashMap::new(),
-                updates: UpdateState::default(),
-                last_activity: Instant::now(),
-            }),
+            inner: new_inner,
         }
     }
 
@@ -1107,7 +1127,7 @@ impl AcpSession {
             workspace: self.workspace.clone(),
             clock: Arc::clone(&self.clock),
             supervisor: Arc::clone(&self.supervisor),
-            sink: self.sink.clone(),
+            sink: ordered_terminal_sink(Arc::clone(&self.inner), self.sink.clone()),
             enabled: previous.is_enabled(),
         }));
         *lock(&self.terminal) = replacement;

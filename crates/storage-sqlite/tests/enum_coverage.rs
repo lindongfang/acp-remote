@@ -343,6 +343,7 @@ async fn elicitation_decline_round_trips() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(acp_core::model::OriginEpoch::new(EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("create session")
@@ -395,6 +396,7 @@ async fn elicitation_decline_round_trips() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(acp_core::model::OriginEpoch::new(EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("decline must be storable");

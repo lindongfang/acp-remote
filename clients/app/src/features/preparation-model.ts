@@ -209,6 +209,18 @@ export type PreparationBeginOutcome =
   | { readonly ok: true; readonly sessionId: Uuid }
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * 普通新建入口的统一判定：当前标签页只有一个准备槽位。
+ *
+ * - `session`：已有未转正临时会话，入口只导航到它（不弹创建、不改目录/Agent）；
+ * - `allocating`：槽位分配在途，入口等同一个结果，不再发第二帧；
+ * - `none`：没有槽位，可以打开创建弹层（这是唯一会发 `allocate` 的分支）。
+ */
+export type PreparationSlotRoute =
+  | { readonly kind: "none" }
+  | { readonly kind: "session"; readonly sessionId: Uuid }
+  | { readonly kind: "allocating"; readonly outcome: Promise<PreparationBeginOutcome> };
+
 /** 同一标签页已被另一份准备占用（复制/opener 标签页）时的说明。 */
 export const PREPARATION_DUPLICATE_TAB_NOTICE =
   "这个地址属于另一个标签页的准备；当前标签页不会接管它的草稿，确认不存在后返回目录页。";

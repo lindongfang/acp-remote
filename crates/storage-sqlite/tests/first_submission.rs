@@ -663,6 +663,7 @@ async fn unsettled_commands_leaves_first_submission_attempts_to_convergence() {
             }),
             command_terminal: None,
             origin_epoch: None,
+            input: None,
         })
         .await
         .expect("accept a plain mutation");

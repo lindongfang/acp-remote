@@ -41,7 +41,17 @@ import {
 import type { ConversationSecondaryView, FilePreviewArtifact } from "../../src/components";
 import { toastStore } from "../../src/components/shell/toast";
 import type { Palette } from "../../src/components/theme";
-import { StyleSheet, View, breakpoints, palettes, useTheme, useWindowDimensions } from "../../src/components/theme";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  breakpoints,
+  palettes,
+  spacing,
+  useTheme,
+  useWindowDimensions,
+} from "../../src/components/theme";
 import type { FileSource } from "../../src/features";
 import { currentSessionFileDownloader } from "../../src/features/session-file-download";
 import { useClientState, useClientStore } from "../../src/features/runtime";
@@ -58,17 +68,48 @@ function buildStyles(colors: Palette) {
       flexDirection: "column",
       backgroundColor: colors.bg,
     },
+    abandonBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: spacing.sm,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.line,
+      backgroundColor: colors.panel,
+    },
+    abandonText: { flexShrink: 1, color: colors.ink2, fontSize: 13 },
+    abandonActions: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+    abandonButton: {
+      borderWidth: 1,
+      borderColor: colors.danger,
+      borderRadius: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    abandonButtonDisabled: { opacity: 0.5 },
+    abandonButtonLabel: { color: colors.danger, fontSize: 13 },
+    abandonCancel: {
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    abandonCancelLabel: { color: colors.ink2, fontSize: 13 },
   });
 }
 
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
 export default function SessionRoute(): ReactElement {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, diagnostics } = useLocalSearchParams<{ id: string; diagnostics?: string }>();
   const store = useClientStore();
   const state = useClientState();
   const router = useRouter();
   const theme = useTheme();
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
   const windowWidth = useWindowDimensions().width;
   const narrow = windowWidth < breakpoints.wide;
   const sessionId = typeof id === "string" ? id : null;
@@ -138,6 +179,9 @@ export default function SessionRoute(): ReactElement {
   // 本地闸门拒绝提交的原因（未连接/Agent 不在目录/目录引用缺失）。这类拒绝不产生命令记录，
   // 必须由页面带回弹层，否则点击按钮看起来毫无反应。
   const [createIssue, setCreateIssue] = useState<string | null>(null);
+  // 「放弃新会话」是页面级视图状态：先要一次显式确认，确认期间禁用重复点击。
+  const [abandonConfirm, setAbandonConfirm] = useState(false);
+  const [abandonBusy, setAbandonBusy] = useState(false);
   // 「哪一处改动的 ACP 原文是展开的」是**页面级视图状态**：它不改变任何数据判定、也不需要
   // 跨页存活，因此留在这里（次级视图那一个是跨路由的 UI 偏好，因此住在仓库里）。
   const [openChangeDiagnostics, setOpenChangeDiagnostics] = useState<string | null>(null);
@@ -150,8 +194,12 @@ export default function SessionRoute(): ReactElement {
   // 迟到的响应不能重新打开文件（spec「切换文件时旧响应迟到」）。
   useEffect(() => {
     setFileReturnView(null);
+    setAbandonConfirm(false);
+    setAbandonBusy(false);
     if (store === null || sessionId === null) return;
     store.setActiveConversationSession(sessionId);
+    // 先按本标签页的非敏感定位找回唯一准备槽位（A→B→刷新 B 时也要能新建回 A）。
+    void store.restoreTabPreparation();
     // 本标签页有合法准备时按准备页呈现；没有则按正式会话处理（未知 URL 只在权威不存在后回目录）。
     // 正式读取**只**在没有准备时开始；受理/`committed` 之后的读取由仓库的转换副作用发起
     // （`#enterFormalSession`），挂载本身不能替准备页伪造一个线程条目。
@@ -296,9 +344,99 @@ export default function SessionRoute(): ReactElement {
       ? requestedSheetDirectoryId
       : null;
 
+  /**
+   * 普通新建入口的统一前置：已有唯一准备槽位（或分配在途）时只导航回它。
+   *
+   * 点当前临时会话本身不是导航（不打断正在进行的编辑）。
+   */
+  const openExistingPreparation = (): boolean => {
+    const route = store.preparationSlotRoute();
+    if (route.kind === "session") {
+      if (route.sessionId !== sessionId) {
+        store.leaveConversationSession(sessionId);
+        router.push(`/session/${encodeURIComponent(route.sessionId)}`);
+      }
+      return true;
+    }
+    if (route.kind === "allocating") {
+      void route.outcome.then((outcome) => {
+        // 这一支没有打开弹层，失败原因只能走页面外提示（否则点击看起来毫无反应）。
+        if (!outcome.ok) {
+          toastStore.show(outcome.reason);
+          return;
+        }
+        setCreateIssue(null);
+        if (outcome.sessionId !== sessionId) router.push(`/session/${encodeURIComponent(outcome.sessionId)}`);
+      });
+      return true;
+    }
+    return false;
+  };
+
+  /** 显式放弃：确认后 release、清草稿与本标签页定位，再回目录页。 */
+  const abandonPreparation = (): void => {
+    if (abandonBusy) return;
+    setAbandonBusy(true);
+    void store.abandonPreparation(sessionId)
+      .catch(() => undefined)
+      .finally(() => {
+        setAbandonBusy(false);
+        setAbandonConfirm(false);
+        router.replace("/");
+      });
+  };
+
+  const abandonable = preparation !== null && store.canAbandonPreparation(sessionId);
+
   return (
     <View role="main" style={theme.dark ? STYLES.dark.page : STYLES.light.page}>
+      {/* 未转正临时会话的唯一显式退出：普通返回目录/刷新不会触发这里的清理。 */}
+      {abandonable ? (
+        <View style={styles.abandonBar} dataSet={{ route: "preparation-abandon" }}>
+          <Text style={styles.abandonText}>
+            {abandonConfirm
+              ? "放弃后草稿、附件与这个临时会话都会被清理，且无法恢复。"
+              : "这是一个尚未转正的新会话。"}
+          </Text>
+          <View style={styles.abandonActions}>
+            {abandonConfirm ? (
+              <>
+                <Pressable
+                  role="button"
+                  accessibilityRole="button"
+                  style={styles.abandonCancel}
+                  onPress={() => {
+                    if (abandonBusy) return;
+                    setAbandonConfirm(false);
+                  }}
+                >
+                  <Text style={styles.abandonCancelLabel}>取消</Text>
+                </Pressable>
+                <Pressable
+                  role="button"
+                  accessibilityRole="button"
+                  disabled={abandonBusy}
+                  style={[styles.abandonButton, abandonBusy ? styles.abandonButtonDisabled : null]}
+                  onPress={abandonPreparation}
+                >
+                  <Text style={styles.abandonButtonLabel}>{abandonBusy ? "正在放弃…" : "确认放弃"}</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Pressable
+                role="button"
+                accessibilityRole="button"
+                style={styles.abandonButton}
+                onPress={() => setAbandonConfirm(true)}
+              >
+                <Text style={styles.abandonButtonLabel}>放弃新会话</Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+      ) : null}
       <ConversationStream
+        diagnosticsMode={diagnostics === "1"}
         model={model}
         // 两套翻页：消息一页、结构化历史一页（各自续取自己的游标，互不影响）。
         onLoadEarlier={() => {
@@ -421,20 +559,12 @@ export default function SessionRoute(): ReactElement {
           store.setConversationSidebarPage(pageInput);
         }}
         onCreateSession={(directoryId) => {
-          const reusable = store.reusableUnsentSession(sessionId);
-          if (reusable !== null) {
-            if (reusable !== sessionId) router.push(`/session/${encodeURIComponent(reusable)}`);
-            return;
-          }
+          if (openExistingPreparation()) return;
           setCreateIssue(null);
           store.openCreateSheet(directoryId);
         }}
         onCreateSessionAtPath={(path) => {
-          const reusable = store.reusableUnsentSession(sessionId);
-          if (reusable !== null) {
-            if (reusable !== sessionId) router.push(`/session/${encodeURIComponent(reusable)}`);
-            return;
-          }
+          if (openExistingPreparation()) return;
           setCreateIssue(null);
           setAgentId(null);
           store.openCreateSheetAtPath(path);
@@ -548,7 +678,7 @@ export default function SessionRoute(): ReactElement {
           onSubmit={({ agentId: selected, directoryPath }) => {
             // 目录标识由本页给出；入口只做 prepare → allocate，首条发送前不保存会话。
             void store
-              .beginPreparation({ directoryId: sheetDirectoryId, agentId: selected, directoryPath, reuseUnsent: true })
+              .beginPreparation({ directoryId: sheetDirectoryId, agentId: selected, directoryPath })
               .then((outcome) => {
                 if (!outcome.ok) {
                   setCreateIssue(outcome.reason);

@@ -171,12 +171,19 @@ export interface PreparationDraftInvalidation extends PreparationDraftBase {
 /** 存储层里一条记录的两种形态。 */
 export type PreparationStoredDraft = PreparationDraftRecord | PreparationDraftInvalidation;
 
-/** 草稿作废原因（主动导航/更换 Agent/目录等）。 */
+/**
+ * 草稿作废原因。
+ *
+ * `navigation`/`directory_changed` 保留给旧记录读取（普通导航与换目录不再写入墓碑）；
+ * 新代码只在更换 Agent（`agent_changed`）、显式「放弃新会话」（`abandoned`）与
+ * 身份/存储失效（`replaced`）时写墓碑。
+ */
 export type PreparationDraftInvalidationReason =
   | "navigation"
   | "agent_changed"
   | "directory_changed"
-  | "replaced";
+  | "replaced"
+  | "abandoned";
 
 /** 标签页定位：sessionStorage 中只保存这些非敏感标识，不含凭据/文字/配置。 */
 export interface PreparationTabLocator {
@@ -334,6 +341,17 @@ export interface PreparationDraftEnvironment {
 
 /** 浏览器的准备草稿端口。页面/feature 只依赖这个接口，不直接触碰 IndexedDB。 */
 export interface PreparationDraftPort {
+  /**
+   * 读本标签页在 sessionStorage 里的非敏感定位。
+   *
+   * 刷新/重新挂载后 feature 层只凭它找回唯一准备槽位的 `sessionId`；它不含正文、
+   * 凭据或配置，丢失或损坏时按「本标签页没有可恢复槽位」处理。
+   */
+  readTabLocator(): Promise<PreparationTabLocator | null>;
+
+  /** 清掉本标签页定位（显式放弃/身份失效）；草稿与分块由各自路径清理。 */
+  clearTabLocator(): Promise<void>;
+
   /**
    * 标签页归属握手。
    *

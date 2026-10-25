@@ -30,7 +30,7 @@ import type {
 } from "../domain/interaction";
 import { buildInteractionAvailability } from "../domain/interaction";
 import type { StructuredRecord } from "../domain/timeline";
-import { compareTimelinePosition, positionOf, viewText } from "../domain/timeline";
+import { compareRecordOrder, viewText } from "../domain/timeline";
 
 /**
  * `session.read` 返回的一条待处理交互（客户端内部输入）。
@@ -40,6 +40,7 @@ import { compareTimelinePosition, positionOf, viewText } from "../domain/timelin
  * 而不是静默丢掉这张卡。
  */
 export interface PendingInteractionInput {
+  readonly sequence?: string;
   readonly interactionId: string;
   readonly sessionId: string;
   readonly kind: InteractionKind;
@@ -123,6 +124,7 @@ export function buildInteractionViews(input: {
    * 否则用户点「重新取得」在结果为空时看不到任何变化。
    */
   readonly pendingChecked?: boolean;
+  readonly checkedRequestEvents?: ReadonlySet<string> | undefined;
   /**
    * 本连接是否协商了 `core.pending-interactions.v1`。
    *
@@ -132,12 +134,16 @@ export function buildInteractionViews(input: {
   readonly requestVersionRequired?: boolean;
 }): readonly InteractionView[] {
   const requests = new Map<string, RequestAccumulator>();
+  const endedTurns = new Set(input.records
+    .filter((record) => record.eventType === "turn.completed" || record.eventType === "turn.cancelled" || record.eventType === "turn.failed")
+    .map((record) => viewText(record.view, "turnId"))
+    .filter((turnId) => turnId !== null));
   const resolutions = new Map<string, { readonly resolution: InteractionResolution; readonly record: StructuredRecord }>();
 
   const placeRequest = (candidate: RequestAccumulator): void => {
     const existing = requests.get(candidate.interactionId);
     // 同一交互的最新请求胜出（协议允许重发请求内容）；位置比较与时间线同一口径。
-    if (existing !== undefined && compareTimelinePosition(positionOf(existing.record), positionOf(candidate.record)) >= 0) {
+    if (existing !== undefined && compareRecordOrder(existing.record, candidate.record) >= 0) {
       return;
     }
     requests.set(candidate.interactionId, candidate);
@@ -174,7 +180,7 @@ export function buildInteractionViews(input: {
         const detail = viewText(view, "resolution") ?? viewText(view, "action");
         if (interactionId === null || detail === null) break;
         const existing = resolutions.get(interactionId);
-        if (existing !== undefined && compareTimelinePosition(positionOf(existing.record), positionOf(record)) >= 0) break;
+        if (existing !== undefined && compareRecordOrder(existing.record, record) >= 0) break;
         resolutions.set(interactionId, {
           resolution: {
             detail,
@@ -265,6 +271,8 @@ export function buildInteractionViews(input: {
       options: request.options,
       witnessed,
       effective: request.effective,
+      turnEnded: request.turnId !== null && endedTurns.has(request.turnId),
+      confirmedIneffective: request.effective !== true && input.checkedRequestEvents?.has(request.record.eventId) === true,
       requestVersion: request.requestVersion,
       requiresRequestVersion: input.requestVersionRequired === true,
       expiresAt: request.expiresAt,
@@ -282,6 +290,7 @@ export function buildInteractionViews(input: {
       description: request.description,
       schema: request.schema,
       requestedAt: request.record.createdAt,
+      ...(request.record.sessionSequence === null ? {} : { sequence: request.record.sessionSequence }),
       turnId: request.turnId,
       witnessed,
       effective: request.effective,
@@ -306,7 +315,7 @@ function pendingRecordOf(item: PendingInteractionInput, readAt: string): Structu
     eventType: item.kind === "permission" ? "permission.requested" : "elicitation.requested",
     sessionId: item.sessionId,
     createdAt: readAt,
-    sessionSequence: null,
+    sessionSequence: item.sequence ?? null,
     globalSequence: null,
     originKind: null,
     view: {},

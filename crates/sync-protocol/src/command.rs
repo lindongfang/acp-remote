@@ -1258,6 +1258,13 @@ pub struct SessionReadBefore {
     pub created_at: Timestamp,
     #[serde(rename = "messageId")]
     pub message_id: Uuid,
+    /// 上一页最早消息的权威位置；旧历史未知位置时缺席。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sequence: Option<DecimalString>,
 }
 
 /// `sessionRead`（`command.schema.json#/$defs/sessionRead`）的 `payload`：

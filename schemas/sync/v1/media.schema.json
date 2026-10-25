@@ -51,6 +51,7 @@
       "additionalProperties": false,
       "required": ["interactionId", "sessionId", "kind", "requestVersion", "expiresAt", "options", "schema"],
       "properties": {
+        "sequence": { "$ref": "common.schema.json#/$defs/decimalString" },
         "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
         "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
         "kind": { "enum": ["permission", "elicitation"] },

@@ -480,10 +480,15 @@ async fn a_prompt_is_accepted_and_then_completes_with_its_terminal_event() {
         )
         .await;
 
-    // ① 首响应必须是 `accepted`，且**不得**携带业务结果或终态事件。
+    // ① 首响应必须是 `accepted`，且携带本次派发的稳定 `turnId`；不得携带终态事件。
     let accepted = client.expect_command_result(&request).await;
     assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
-    assert_eq!(accepted["result"], Value::Null, "accepted 不得带业务结果");
+    assert!(
+        accepted["result"]["turnId"]
+            .as_str()
+            .is_some_and(|turn| !turn.is_empty()),
+        "session.prompt 的 accepted 必须带稳定 turnId：{accepted}"
+    );
     assert_eq!(accepted["terminalEventId"], Value::Null);
     assert!(
         accepted["acceptedAt"].is_string(),
@@ -589,7 +594,12 @@ async fn an_authenticated_device_without_any_authorization_set_is_still_accepted
         json!("accepted"),
         "已认证设备必须被受理：{accepted}"
     );
-    assert_eq!(accepted["result"], Value::Null, "accepted 不得带业务结果");
+    assert!(
+        accepted["result"]["turnId"]
+            .as_str()
+            .is_some_and(|turn| !turn.is_empty()),
+        "session.prompt 的 accepted 必须带稳定 turnId：{accepted}"
+    );
     assert_eq!(accepted["terminalEventId"], Value::Null);
 
     // ② 副作用真的发生了：脚本后端被派发一次，因此恰好有一份事件可以释放（被拒的命令不会有）。

@@ -183,6 +183,20 @@ class WebPreparationDraftStore implements PreparationDraftPort {
 
   // ── sessionStorage 定位 ─────────────────────────────────────────────────
 
+  /**
+   * 读本标签页的非敏感定位（刷新后找回唯一准备槽位）。
+   *
+   * 损坏/不可读的定位按不存在处理（并从 sessionStorage 清掉），绝不凭残留恢复。
+   */
+  async readTabLocator(): Promise<PreparationTabLocator | null> {
+    return this.#currentLocator();
+  }
+
+  /** 清掉本标签页定位；不删除草稿、附件分块或归属记录。 */
+  async clearTabLocator(): Promise<void> {
+    this.#clearLocator();
+  }
+
   #currentLocator(): PreparationTabLocator | null {
     if (this.#locatorLoaded) return this.#locator;
     this.#locatorLoaded = true;
@@ -1693,7 +1707,8 @@ function assertInvalidationReason(
     value !== "navigation" &&
     value !== "agent_changed" &&
     value !== "directory_changed" &&
-    value !== "replaced"
+    value !== "replaced" &&
+    value !== "abandoned"
   ) {
     throw new PreparationDraftError("invalid_argument", "草稿作废原因非法");
   }

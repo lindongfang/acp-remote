@@ -62,6 +62,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("create session")
@@ -257,6 +258,7 @@ async fn seal_streams_the_digest_and_reads_are_session_scoped() {
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH).expect("epoch")),
+            input: None,
         })
         .await
         .expect("second session");
@@ -570,6 +572,7 @@ fn acceptance(session: &SessionId, request: &str) -> OwnedCommit {
         }),
         command_terminal: None,
         origin_epoch: None,
+        input: None,
     }
 }
 

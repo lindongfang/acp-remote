@@ -1,5 +1,7 @@
 # ACP Remote Node Link 设计
 
+> 对话顺序修订（2026-10-24，`preserve-agent-output-order`）：`session.read.resources.messages[].sequence` 与 `before.sequence` 使用 Owner 的 origin 序号，不使用 Owner 的独立 session 序号，也不映射为 Access 本机序号。Owner 持久保存片段起点；Access 仅连接期转发。消息页按权威序号分页，缺少可靠位置的旧历史保留为显式未知分区；具体字段与分段行为同 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。不支持旧版本排序兼容。
+
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 30 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。Owner 侧的节点状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）已由 `server::node_link` 落地（切片 5，`node-link-owner`）；Access 侧的出站客户端 crate `node-link-client` 已落地（WSS 握手、单任务重连与撤销、catalog 无正文投影、`commit_receipt` → 发布 → `resource.ack`、远程 `SessionEndpoint`/`SessionBackendFactory`、独立附件连接与有界内存转发）；**已接线**的是 Access 侧配对（`node pair --mode access` 的 HTTPS claim/status 与 Owner 信任落盘）、Daemon 启动时对 `NodeLinkClient`/Owner 连接的实例化，以及 `AccessManager` 向本地调用方暴露的远程 `SessionEndpoint` 与附件转发入口（2026-10-20，WP5d）；仍未落地的是 `server::acp_facade`（本地 ACP 客户端的业务命令转发）。  
 > 版本：1.0  
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§11.3 登记 `core.session-title.v1` 并宣告（Owner 持久化、Access 转发已接线）；§11.5 补未协商时的拒绝口径；§12.7 新增 `session.title.set`（closed payload `{ title }`，输入按 wire 原文 1..=512 个 Unicode 标量值、保存 trim 后的文本），`command.submit` 的命令名计数更新为 14。**取代**旧条款「标题仅由 Agent 更新、不存在客户端重命名入口」（原文见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.3 与 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §5；本文件此前没有单独的标题写入条款）；Owner 侧持久化与命令接线已落地。  
@@ -565,7 +567,7 @@ resource.attach → resource.attached → resource.subscribe
 | `command` | `payload` |
 |---|---|
 | `session.list` | `{}`（空 object） |
-| `session.read` | `{ "include": ["messages"\|"turns"\|"pending_interactions"\|"config_options"\|"capabilities"\|"history", …], "beforeHistory"?: decimal string, "before"?: { "createdAt": timestamp, "messageId": UUID }, "limit"?: integer ≥ 1 }`；`history` 与 `beforeHistory` 只在协商 `node-link.remote-history.v1` 后接受，按 origin 会话内序号独立分页并回源 Owner；消息页的 `before`/`limit` 在同一 feature 下接受（与 Sync 面同名同义，`limit` 是结构常量而非十进制字符串）；`pending_interactions` 只在协商 `node-link.pending-interactions.v1` 后返回完整有效请求；未协商却携带新字段按 `nodelink.command.unsupported_field` 拒绝 |
+| `session.read` | `{ "include": ["messages"\|"turns"\|"pending_interactions"\|"config_options"\|"capabilities"\|"history", …], "beforeHistory"?: decimal string, "before"?: { "createdAt": timestamp, "messageId": UUID, "sequence"?: decimal string }, "limit"?: integer ≥ 1 }`；`history` 与 `beforeHistory` 只在协商 `node-link.remote-history.v1` 后接受，按 origin 会话内序号独立分页并回源 Owner；消息页的 `before`/`limit` 在同一 feature 下接受（与 Sync 面同名同义，`limit` 是结构常量而非十进制字符串）；`pending_interactions` 只在协商 `node-link.pending-interactions.v1` 后返回完整有效请求；未协商却携带新字段按 `nodelink.command.unsupported_field` 拒绝 |
 | `command.status` | `{ "targetRequestId": UUID, "remoteTarget"?: { "ownerNodeId": UUID, "sessionId": UUID \| null } }`；`remoteTarget` 在协商 `resource.stateless-origin.v1` 后必须携带（`sessionId` 为 `null` 只用于尚未建成会话的 `session.create`），未协商时缺席 |
 | `session.mode.list` | `{}` |
 | `session.config.list` | `{}` |
@@ -579,7 +581,7 @@ resource.attach → resource.attached → resource.subscribe
 | `session.resume` | `{}`（空 object；出现任何键即以 `nodelink.command.unsupported_field` 拒绝） |
 | `session.title.set` | `{ "title": string }`：closed object，只允许这一个键；输入（trim 前）是 1..=512 个 Unicode 标量值，保存值是 trim 后的文本，trim 后为空则拒绝；超长按输入计、不截断（wire codec 保真原文并校验标量与空白，Owner 的 core 去首尾空白后保存）；body 的 `expectedVersion` 必须为 `null`；受 feature `core.session-title.v1` 门控，未协商时 Owner 返回 `nodelink.protocol.feature_required` |
 
-`session.read` 在两个传输面同名，载荷在协商 `node-link.remote-history.v1` 后才有分页参数：Sync 面另有可选的 `before`（`(createdAt, messageId)` 复合游标）与 `limit`；Node Link 面在同一 feature 下接受同名同义的 `before`/`limit`（`limit` 为结构常量整数），并保留 `beforeHistory`（origin 会话内序号）供结构化历史独立分页。未协商该 feature 的旧 peer 省略这些键，请求与结果形状与本变更前逐字相同；Owner 收到未协商的新键时按 `nodelink.command.unsupported_field` 拒绝，不静默忽略。
+`session.read` 在两个传输面同名，载荷在协商 `node-link.remote-history.v1` 后才有分页参数：Sync 面另有可选的 `before`（`sequence?` 加创建时间与消息身份）与 `limit`；Node Link 面在同一 feature 下接受同名同义的 `before`/`limit`（`limit` 为结构常量整数），并保留 `beforeHistory`（origin 会话内序号）供结构化历史独立分页。未协商该 feature 的旧 peer 省略这些键，请求与结果形状与本变更前逐字相同；Owner 收到未协商的新键时按 `nodelink.command.unsupported_field` 拒绝，不静默忽略。
 
 协商 `resource.stateless-origin.v1` 后，`session.read` 的 `completed` 结果另带三个加性字段（`schemas/node-link/v1/command.schema.json#/$defs/sessionReadResult`，design D4）：`readCursor`（同一次 Owner 只读事务原子捕获的来源位置 R）、该次读取的完整 `sessionSummary`、以及 `messageCoverage[]{messageId, through: originCursor, lastDeltaIndex: decimalString | null}`——每个已返回消息恰有一项，`through` 等于 R，`lastDeltaIndex` 是该消息在所返回完整内容中已覆盖的最后连续增量索引（无增量时为 `null`）。数据和覆盖信息必须同次原子读取，不能在读取结束后再采样 head。`messageCoverage`/`readCursor` 只在该 feature 协商后出现；`messages`/`history` 原有页边界与 `hasEarlier`/`historyHasEarlier` 不改变，每个读取结果独立合并，不声明整页或整个分页浏览是同一历史快照。Access 逐字节转发 Owner 的结果对象，不重新解释或补造条目。
 
