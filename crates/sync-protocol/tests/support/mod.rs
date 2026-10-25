@@ -59,7 +59,7 @@ pub fn vectors(manifest_relative: &str) -> Vec<String> {
 }
 
 pub fn hex_decode(text: &str) -> Vec<u8> {
-    assert!(text.len() % 2 == 0, "hex 输入长度为奇数：{text}");
+    assert!(text.len().is_multiple_of(2), "hex 输入长度为奇数：{text}");
     (0..text.len() / 2)
         .map(|index| {
             u8::from_str_radix(&text[index * 2..index * 2 + 2], 16)
