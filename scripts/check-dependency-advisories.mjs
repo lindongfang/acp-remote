@@ -1,10 +1,11 @@
 // 依赖 advisory 门禁：对**每个** npm 工程跑一次 `npm audit`，只放行**已登记**的 advisory，其余一律阻塞。
 //
 // 为什么需要它而不是直接跑 `npm audit`：`npm audit` 没有 ignore 机制（`npm audit --help`
-// 里没有这个选项），而仓库当前有**上游无修复**的 advisory——`braces` 的
-// GHSA-vfj7-8cjw-p6xm（栈耗尽 DoS）在 npm 上的受影响范围是 `*`，3.x 线最新版 3.0.3
-// 就是被通报的版本，`fixAvailable` 为 false。直接跑 audit 会让 `deps` job 永远红灯，
-// 于是每次合并都得走管理员 bypass —— 那会让「绕过门禁」变成习惯，是比这条 DoS 更大的风险。
+// 里没有这个选项），而仓库里总会有**上游无修复**或修复代价过高的 advisory（当前是
+// `node-forge`、`uuid`、`decode-uri-component` 与 `zod`）。直接跑 audit 会让 `deps` job
+// 永远红灯，于是每次合并都得走管理员 bypass —— 那会让「绕过门禁」变成习惯，是比单条
+// advisory 更大的风险。反过来，advisory 被上游撤回或修复后，对应登记项会以「本次未命中」
+// 提示，复核后即应删除（`braces` 的 GHSA-vfj7-8cjw-p6xm 于 2026-10-23 撤回，登记项已删除）。
 //
 // 判定面 = 下面的 `PROJECTS`：仓库根与 `clients/app`。后者是**独立 npm 工程**
 // （自带 package.json/package-lock.json），根目录的 `npm ci` / `npm run check` 都不覆盖它；
@@ -14,7 +15,7 @@
 // - 只按 **advisory ID** 放行，不按包名、不按 severity：新增任意一条未登记的 advisory
 //   就会失败，即使它落在同一个包上。
 // - 放行项必须**同时**匹配 advisory ID 与**适用工程**：同号 advisory 出现在另一个工程时仍需单独登记，
-//   因为它在不同工程里可达性可以完全不同（本文件里 `braces` 就是这个情况：两个工程各登记一条）。
+//   因为它在不同工程里可达性可以完全不同。
 // - 只放行 `high` 及以下；出现 `critical` 一律失败（当前豁免项是 moderate/high）。
 // - 放行项必须在下面的 `ALLOWED` 里逐条登记，含理由与**到期条件**；登记不全即失败。
 // - 传播包（`via` 指向另一个包名而非 advisory 对象）不单独判定：只要根因 advisory 被放行，
@@ -47,26 +48,6 @@ const PROJECTS = [
  */
 const ALLOWED = [
   {
-    id: "GHSA-vfj7-8cjw-p6xm",
-    project: ".",
-    package: "braces",
-    severity: "high",
-    reason:
-      "上游无修复：受影响范围是 `*`，braces 3.x 线最新版（3.0.3）就是被通报的版本，npm audit 报 fixAvailable=false。本工程不可达：它只在 devDependencies 里（仓库根 package.json 的 dependencies 为空），是本地合同校验与提交钩子的工具链，不随产品分发；调用方是 @fission-ai/openspec 经 fast-glob → micromatch 扫描本地 openspec/**，传给 braces 的 glob 模式是仓库自己的常量，不由外部输入构造，该栈耗尽 DoS 所需的攻击者可控嵌套模式在本仓库不成立。",
-    expires:
-      "上游发布含修复的 braces（受影响范围不再为 `*`），或 @fission-ai/openspec 换掉 fast-glob/micromatch 链时删除本条。",
-  },
-  {
-    id: "GHSA-vfj7-8cjw-p6xm",
-    project: "clients/app",
-    package: "braces",
-    severity: "high",
-    reason:
-      "上游无修复：与根工程同一条 advisory（受影响范围 `*`，3.x 线最新版 3.0.3 即被通报版本，fixAvailable=false）。本工程不可达：它经 expo → @expo/metro → metro-file-map → micromatch 进入**构建期**工具链，glob 模式来自 Expo 自身配置而非外部输入，且不进 web 产物（已导出产物的字符级核对中 micromatch 0 命中）。",
-    expires:
-      "上游发布含修复的 braces（受影响范围不再为 `*`），或本工程的 metro-file-map 链换掉 micromatch 时删除本条。",
-  },
-  {
     id: "GHSA-86w9-cpqp-85rv",
     project: "clients/app",
     package: "node-forge",
@@ -95,6 +76,16 @@ const ALLOWED = [
       "**真实可达、本次不修**（与上面三条的「不可达」性质不同，不得混为一谈）：它在 web 产物里，路径是 expo-router 的 parseQueryParams → query-string.parse → decode，打开带畸形百分号编码 query 的链接即可触发指数级解码 DoS。本次不修的理由是修复代价高于收益：唯一修复版 0.5.0 是 ESM、与 query-string@7 的 CJS require() 不兼容，强压会直接崩溃；有效路径只有升到 Expo SDK 58（expo-router@58 移除 query-string），而 SDK 58 当前是 npm `next` 标签、期望 react-native 0.88.0-rc.4（RC），且实测其依赖树里 braces/node-forge/uuid 原样保留——付出跨 SDK major 的代价也只清掉 4 条里的一条。",
     expires:
       "Expo SDK 58 进入 npm `latest` 时升级 expo-router 并删除本条（当前 `latest` 仍是 SDK 57，本条到期条件未满足）。",
+  },
+  {
+    id: "GHSA-mrhx-c7xc-m3w5",
+    project: "clients/app",
+    package: "zod",
+    severity: "high",
+    reason:
+      "上游修复不可用：advisory 只给 `>= 4.6.6` 的修复范围，zod 3.x 线最新版 3.25.76 仍在受影响区间，而 @expo/cli（57 与 58 两个 major 均如此）把 zod 固定在 `^3.25.76`，强压 zod 4 属跨 major 改写 CLI 内部校验。本工程不可达：它只在 `expo → @expo/cli` 的**构建期**工具链里，`clients/app` 自身不依赖 zod，导出的 web 产物经字符级核对 0 命中 ZodError；该 DoS 需要攻击者控制传给 zod 校验的集合数据，而 CLI 的这个入口只读本地项目配置。",
+    expires:
+      "`@expo/cli` 依赖 zod 4 时升级并删除本条（届时 `npm ls zod` 在 clients/app 应落在 >= 4.6.6）。",
   },
 ];
 
