@@ -348,8 +348,8 @@ function checkImplementedPorts(contract) {
 
 function checkImplementedDdl(contract) {
   const text = section(contract, "## 7.");
-  if (!text.includes("v15 = 15") || !text.includes("当前 **v15 = 15**")) {
-    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v15 = 15 / owned_schema_version 15`);
+  if (!text.includes("v16 = 16") || !text.includes("当前 **v16 = 16**")) {
+    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v16 = 16 / owned_schema_version 16`);
   }
   for (const table of [
     "owned_attachment_transfer",
@@ -363,6 +363,24 @@ function checkImplementedDdl(contract) {
     }
   }
   // v15：`owned_session.custom_title`（`session.title.set` 的持久化列）必须出现在 §7.3 的 DDL 里。
+  // v16：首条提交表与 `owned_message.channel = 'user'` 必须出现在 §7.3 的 DDL 里。
+  if (!subsection(contract, "\n### 7.3 ").includes("owned_first_submission")) {
+    errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的表 owned_first_submission`);
+  }
+  if (!subsection(contract, "\n### 7.3 ").includes("'user'")) {
+    errors.push(`contract drift: ${contractLabel} §7.3 缺少 owned_message 的 user 通道`);
+  }
+  // §5.11 已落地：不得再标注「尚未实现」，并必须列出两个端口。
+  const firstSubmission = subsection(contract, "\n### 5.11 ");
+  if (firstSubmission === undefined || firstSubmission.includes("尚未实现")) {
+    errors.push(`contract drift: ${contractLabel} §5.11 已实现，不得缺失或标注「尚未实现」`);
+  } else {
+    for (const name of ["FirstSubmission", "PreparationAttachmentStaging"]) {
+      if (!firstSubmission.includes(name)) {
+        errors.push(`contract drift: ${contractLabel} §5.11 缺少已实现的 ${name}`);
+      }
+    }
+  }
   if (!subsection(contract, "\n### 7.3 ").includes("custom_title")) {
     errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的列 owned_session.custom_title`);
   }

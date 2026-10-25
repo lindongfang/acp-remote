@@ -1,5 +1,7 @@
 # ACP Remote 初始设计文档
 
+文件列表、文件预览/下载与 Git 状态/差异属于目录，不依赖会话保存、首条消息或 Agent 生命周期。客户端进入会话界面即可读取选定本机目录；目录查询不创建目录、会话或事件。目标与兼容语义见 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。
+
 > 目录选择器补充（2026-10-18）：Windows 默认浏览不展示隐藏或系统属性目录；PWA 按名称忽略大小写、数字自然升序显示收到的目录。这些规则仅影响浏览与显示，不新增创建路径授权限制。实现边界见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.1。
 
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§8 的会话标题口径改写为「两个来源 + 有效标题投影」——登记 Owner 元数据命令 `session.title.set` 与 feature `core.session-title.v1`，有效标题 = 自定义标题优先 → 否则 Agent 标题 → 否则未命名，由 Owner 投影成既有 `SessionSummary.title`；删除「标题只由 Agent 单向更新 / 不存在客户端重命名入口」的旧条款（原文见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.3 与 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §5），明确 Access 只转发命令、不持久化标题与命令状态，且该命令不新增 ACP 方法。Owner 的 `custom_title` 持久化与命令事务已接线。  
@@ -134,6 +136,18 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 | Q21 真实 ACP 终端服务 | ACP 矩阵 terminal rows / MODULE §4.5 |
 | Q22 思考单独保存与历史恢复 | [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.4 / [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.3、§7.6（计划，WP2） / 本节 §10.3 |
 | Q23 增量原位更新、重放去重与部分结果 | SYNC §10.2–§10.4 / FRONTEND §4.2 / CORE §6 第 14 条 |
+
+### 3.7 Web 新建会话的准备与首次提交（计划，`web-session-preparation`，尚未实现）
+
+Web/PWA 的「新建会话」在产品上分成两段：**准备**（临时）与**首发**（正式）。本节的合同已冻结在 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9 与 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11/§7.3，wire 资产在 `schemas/sync/v1/` 与 `fixtures/sync/v1/`；实现按工作包推进，落地前不得对外宣称已支持。
+
+- **临时准备**：Owner 先分配**最终** `sessionId` 并签发准备凭据（`acp-remote/session-preparation/v1`），允许为它在 Agent 侧建立临时端点以取得**真实的**模式与配置。准备阶段 ACP Remote MUST NOT 持久化会话记录、目录登记、owned 命令或事件：准备不进入目录/快照、不被其他设备看到，也不产生正式恢复承诺。临时资源只存在运行期，计入节点容量（[`CONFIG_REFERENCE.md`](./CONFIG_REFERENCE.md) §4）。
+- **固定标识与地址**：`sessionId` 在准备时就确定，页面地址 `/session/<id>` 在整条流程中保持不变；首次提交成功后不换 ID、不跳转、不重建页面，快照随后让同一地址读到正式内容。
+- **首次提交的原子保存与派发围栏**：首条消息走 Sync-only mutation `session.start`（`kind: initial`）。受理只在**同一事务**写完正式会话、目录归属、完整首条输入、已确认的模式/配置、稳定的消息/请求身份与附件正式引用之后发生（阶段 `saved_not_dispatched`）；`accepted` 只在该事务提交后发出。真正调用 Agent 之前必须先在**同一事务**写入派发围栏（`dispatch_started`），因此崩溃后只有两种确定结论：可证明未派发，或进入既有 `uncertain`（不自动重发）。显式继续（`kind: continue`）只允许对可证明未派发、且上一次尝试已有失败终态的首条提交执行。
+- **不采用的替代**：不发送「隐藏首条消息」促使 Agent 写盘，不在准备阶段自动派发 prompt，也不把「已有恢复数据缺失」解释成可重新准备。旧 `session.create`（立即持久化）的语义与 wire 形状不变；未协商该 feature 的客户端**不得**回退到它来代替准备式新建。
+- **正常重启与存储重建**：正常重启后，有效准备凭据可以重新取得/重建准备资源（已受理则返回 `committed` 关联）；存储被整体重建（`storeEpoch` 改变）时旧凭据统一失效并返回不可重试的 `preparation.store_rebuilt`，客户端丢弃旧材料、认证后回目录重新开始。准备阶段建立的空 Agent 会话**不**承诺跨进程恢复。
+
+准备阶段的浏览器草稿、刷新与标签页归属见 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §4.6；凭据不是登录凭证、草稿的窄例外与清理边界见 [`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §12.8；决策背景见 [ADR-0014](./adr/0014-web-session-preparation-before-first-message.md)。
 
 ## 4. 总体架构
 
@@ -432,6 +446,7 @@ Owner Node 需要保存足以支持客户端和 Access Node 历史查看、断�
 - 终端完整输出：限制 head/tail 和总大小。
 - 大型 diff：压缩并限制容量。
 - 图片、音频与文件：已提交附件使用内容寻址存储，随所属消息保留与清理；不设附件数量/大小产品额度，但受分块、并发、速率、磁盘与库容量保护。未提交上传按 24 小时闲置清理；远程附件正文只由 Owner 保存，Access 不落盘。
+- 准备阶段的临时资源：运行期准备目录、租约/资源代、准备凭据与临时端点都不写 SQLite，也不进快照、事件或命令历史（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11）。首次受理事务才写入正式记录（`owned_first_submission` 的 DDL 见该文档 §7.3）：完整首条输入、稳定消息身份与派发阶段随会话保留；即使首条尚未派发，它也是正式记录，不随未提交上传的 24 小时 TTL 清除。存储整体重建后旧准备凭据失效（`preparation.store_rebuilt`），客户端不得凭旧材料恢复。
 
 ### 10.4 保留策略默认值
 

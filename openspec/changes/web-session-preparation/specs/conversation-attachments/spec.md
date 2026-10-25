@@ -66,7 +66,7 @@
 
 ### Requirement: 准备上传过代与已提交结果明确区分
 
-上传目标归属验证成功后，已正式受理的ID SHALL 返回 `preparation.already_committed` 并指示核实正式会话；仅未受理且运行期/资源代过期时返回 `preparation.stale`，要求先恢复准备。未知传输仍使用 `attachment.transfer_not_found`。客户端 MUST NOT 因这些错误直接重新发送业务消息。清单错误 SHALL 带可核实的submissionId以供定位。
+上传目标归属验证成功后，已正式受理的ID SHALL 返回 `preparation.already_committed` 并指示核实正式会话；仅未受理且运行期/资源代过期时返回 `preparation.stale`，要求先恢复准备。receipt 的 storeEpoch 与当前存储不一致 SHALL 返回不可重试的 `preparation.store_rebuilt`；客户端 MUST NOT 重放旧 receipt 或恢复，认证后回目录重新开始。未知传输仍使用 `attachment.transfer_not_found`。客户端 MUST NOT 因这些错误直接重新发送业务消息。清单错误 SHALL 带可核实的submissionId以供定位。
 
 #### Scenario: 提交与附件操作并发
 - **WHEN** 首条正式受理先完成，随后收到旧准备清单或块操作
@@ -75,6 +75,10 @@
 #### Scenario: 节点重启导致准备目标过代
 - **WHEN** 原准备尚未受理，但节点重启导致运行期改变
 - **THEN** 明确返回过代或旧传输不存在；客户端核实原请求、恢复同会话ID的新准备后才重传，不盲重发旧代块
+
+#### Scenario: 存储整体重建
+- **WHEN** 节点存储被整体重建，旧 receipt 的 storeEpoch 与当前不一致
+- **THEN** 返回不可重试的 `preparation.store_rebuilt`；客户端丢弃旧准备、认证后回目录重新分配新ID，不重传旧字节、不重放旧 receipt
 
 ### Requirement: 附件转正不重复传输或复制全文
 

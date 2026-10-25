@@ -42,6 +42,15 @@
 
 上述选择的原因与备选方案记于 [ADR-0014（提案）](adr/0014-web-session-preparation-before-first-message.md)。正式合同更新和实现须在完整方案最终确认后进行。
 
+**验收入口（2026-10-23，`web-session-preparation` WP8）**：分层证据与逐项结果记于
+[`docs/evidence/session-preparation.md`](evidence/session-preparation.md)。真实 Codex 的隔离跨进程探针是
+[`scripts/probe-session-preparation.mjs`](../scripts/probe-session-preparation.mjs)（隔离 data_dir/codex-home、
+真实 Daemon/TLS/Sync、强制终止后同 ID restore、首条只派发一次）；真实浏览器验收入口是
+[`clients/app/e2e/session-preparation-live.mjs`](../clients/app/e2e/session-preparation-live.mjs)，由
+`crates/app/tests/session_preparation_browser.rs` 编排真实 Daemon + 构建后的 PWA + 受控 Agent。两层刻意分开：
+浏览器层不断言真实 Codex 的模型/tool 行为，探针层不断言浏览器 DOM 与草稿恢复。未执行的项在该证据文件中保持
+未完成，不写成通过。
+
 ## 已确认的容量策略
 
 补充硬要求：激活必须恢复原 Agent 会话上下文；只展示旧历史不代表恢复成功。资源回收后及 Daemon 重启后均须验证连续性，不新建替代、不重发旧消息、不重新执行旧任务。恢复不支持、原身份丢失或恢复失败时明确失败并保留草稿。

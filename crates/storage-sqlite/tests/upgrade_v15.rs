@@ -47,7 +47,7 @@ async fn v14_upgrade_preserves_rows_and_v15_custom_titles_survive_reopen() {
         .fetch_one(&pool)
         .await
         .expect("version");
-    assert_eq!(version, 15);
+    assert_eq!(version, 16);
     sqlx::query("UPDATE owned_session SET custom_title = 'My title'")
         .execute(&pool)
         .await
@@ -58,7 +58,7 @@ async fn v14_upgrade_preserves_rows_and_v15_custom_titles_survive_reopen() {
     for _ in 0..2 {
         let store = SqliteStore::open(StorageConfig::new(&dir), &at)
             .await
-            .expect("reopen v15");
+            .expect("reopen current");
         store.close().await;
     }
     let pool = raw_pool(&path).await;

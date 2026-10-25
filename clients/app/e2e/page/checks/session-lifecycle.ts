@@ -106,8 +106,8 @@ const checks: readonly Check[] = [
     async run() {
       await withSessionPage(
         lifecycleScenario({ holdCommands: ["session.resume"] }),
-        (container) => query(container, '[data-session-activation="activating"]') !== null,
-        "恢复中提示出现",
+        (container) => query(container, '[data-composer="unavailable"]') !== null,
+        "恢复中不可提交",
         async (mounted) => {
           assertDeclareBeforeResume(mounted);
           const container = mounted.container;
@@ -118,9 +118,10 @@ const checks: readonly Check[] = [
             "恢复中发送必须禁用（不能把 active 标签当成可发送）",
           );
           expectThat(
-            textOf(query(container, "[data-session-activation-notice]")).includes("正在恢复"),
-            "恢复中必须有明确说明",
+            textOf(query(container, "[data-submit-unavailable]")).includes("正在恢复"),
+            "恢复中必须在输入区给出明确原因",
           );
+          expectEqual(query(container, "[data-session-activation]"), null, "会话头不再渲染激活提示");
 
           const store = mounted.composition?.store;
           if (store === null || store === undefined) throw new CheckFailure("用例必须拿到仓库");
@@ -132,8 +133,7 @@ const checks: readonly Check[] = [
             "假主机必须扣住了 session.resume",
           );
           await waitFor(
-            () => query(container, '[data-session-activation="ready"]') === null &&
-              query(container, '[data-composer="editable"]') !== null,
+            () => query(container, '[data-composer="editable"]') !== null,
             "恢复完成且输入可用",
           );
           expectEqual(store.draftOf(SESSION_ALPHA), "恢复期间写的草稿", "恢复成功 MUST NOT 自动提交草稿");
@@ -187,9 +187,10 @@ const checks: readonly Check[] = [
     async run() {
       await withSessionPage(
         lifecycleScenario(),
-        (container) => query(container, '[data-session-activation="ready"]') !== null,
+        (container) => query(container, '[data-session-title]') !== null,
         "首次激活完成",
         async (mounted) => {
+          await waitFor(() => mounted.composition?.store.state.lifecycle.activations.get(SESSION_ALPHA)?.phase === "ready", "activation ready");
           const before = mounted.host?.viewFrames().length ?? 0;
           await waitFor(
             () => (mounted.host?.viewFrames().length ?? 0) > before,
@@ -234,12 +235,12 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "LC-4 旧 peer：未协商本机生命周期时不发新帧，并明确显示自动激活不可用",
+    name: "LC-4 旧 peer：不发未协商的新帧，会话头不显示静态恢复说明",
     async run() {
       await withSessionPage(
         lifecycleScenario({ selectLocalLifecycle: false }),
-        (container) => query(container, '[data-session-activation="unavailable"]') !== null,
-        "不可用提示出现",
+        (container) => query(container, '[data-composer]') !== null,
+        "会话输入区出现",
         async (mounted) => {
           expectEqual(mounted.host?.viewFrames().length ?? 0, 0, "未协商时 MUST NOT 发送 session.view");
           expectEqual(
@@ -247,14 +248,11 @@ const checks: readonly Check[] = [
             0,
             "未协商时 MUST NOT 派发 session.resume",
           );
+          expectEqual(query(mounted.container, "[data-session-activation]"), null, "static activation explanation removed");
+          // 输入区继续呈现，实际发送限制仍由输入模型表达。
           expectThat(
-            textOf(query(mounted.container, "[data-session-activation-notice]")).includes("自动激活不可用"),
-            "未协商时必须明确显示自动激活不可用",
-          );
-          // 旧合同下发送仍按原有判定（连接/任务事实），不因少了本机生命周期而整体禁用。
-          expectThat(
-            query(mounted.container, '[data-composer="editable"]') !== null,
-            "旧 peer 的输入判定保持原有合同",
+            query(mounted.container, '[data-composer]') !== null,
+            "旧 peer 保留输入区",
           );
         },
       );
@@ -280,10 +278,10 @@ export const SESSION_ACTIVITY_PAGE_CHECKS: readonly Check[] = [
             }),
           ],
         }),
-        (container) => query(container, '[data-session-activity="active"]') !== null,
+        (container) => query(container, '[data-session-header] [data-session-activity="active"]') !== null,
         "本机活跃标签出现",
         async (mounted) => {
-          const pill = query(mounted.container, '[data-session-activity="active"]');
+          const pill = query(mounted.container, '[data-session-header] [data-session-activity="active"]');
           expectThat(pill !== null, "活跃会话必须有本机活跃标签");
           expectThat(textOf(pill).includes("活跃"), "主标签必须是「活跃」而不是「运行中」");
           expectEqual(pill?.getAttribute("data-session-state"), "idle", "任务事实必须仍是 idle");

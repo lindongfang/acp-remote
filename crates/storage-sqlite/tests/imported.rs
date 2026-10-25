@@ -36,6 +36,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "owned_device",
     "owned_directory",
     "owned_event",
+    "owned_first_submission",
     "owned_interaction",
     "owned_message",
     "owned_media_ref",

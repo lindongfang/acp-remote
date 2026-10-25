@@ -38,15 +38,16 @@ use crate::model::{
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditQuery, AuditStore,
     Clock, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryCreator, DirectoryListing,
-    ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore, MessageCoverage,
-    NodeConnectedWrite, NodeRevocation, NodeWrite, OriginReadPage, PairingClaimOutcome,
-    PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
-    PruneReport, RemoteCommandLookup, RemoteCommandRecord, RemoteCommandStatus,
-    RemoteCommandTarget, RemoteReadQuery, RemoteReadResult, RemoteRuntimeDirectory,
-    RemoteSessionEntry, RemoteSourceReads, RemoteSourceState, RemoteTitleWrite, ReplayBatch,
-    ReplayLimit, RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionFiles, SessionQuery,
-    SessionStore, StoreHealth, SubmissionBinding, SyncReplaySlice, TrustRecordRef, TrustStore,
-    WorkspaceMkdirAdmission, WorkspaceMkdirExecution, WriteContext,
+    ExpiryWrite, FirstSubmission, HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore,
+    MessageCoverage, NodeConnectedWrite, NodeRevocation, NodeWrite, OriginReadPage,
+    PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
+    PairingWrite, PendingAudit, PreparationAttachmentStaging, PruneReport, RemoteCommandLookup,
+    RemoteCommandRecord, RemoteCommandStatus, RemoteCommandTarget, RemoteReadQuery,
+    RemoteReadResult, RemoteRuntimeDirectory, RemoteSessionEntry, RemoteSourceReads,
+    RemoteSourceState, RemoteTitleWrite, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
+    SessionCreateAdmission, SessionFiles, SessionQuery, SessionStore, StoreHealth,
+    SubmissionBinding, SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceMkdirAdmission,
+    WorkspaceMkdirExecution, WriteContext,
 };
 
 /// §4 的 `LocalSessionLifecycle` 用例面（`docs/CORE_PORTS_AND_STORAGE.md` §5.10）。
@@ -64,6 +65,23 @@ pub use crate::lifecycle::{
 pub struct ModeListing {
     pub state: ModeState,
     pub version: Version,
+}
+
+/// 准备 `allocate` 的目录来源（`web-session-preparation` D3：`directoryId` 与 `workspacePath` 二选一）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparationWorkspaceSource {
+    /// 本机已登记的目录标识。
+    Directory(DirectoryId),
+    /// 客户端提交的绝对路径（形状与文件系统校验在解析路径里，顺序与 `session.create` 一致）。
+    Path(String),
+}
+
+/// 已解析的准备目录：规范化路径 + 来源（来源只进凭据 claims，不参与路径比较）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparationWorkspace {
+    pub workspace: ResolvedWorkspace,
+    /// `true` = 由 `directoryId` 解析；`false` = 由客户端绝对路径解析。
+    pub from_directory: bool,
 }
 
 /// 配对通道的只读视图（claim/status HTTP 端点；design D12 的 seam 补全）。
@@ -302,6 +320,13 @@ pub struct UseCases {
     /// 向 Owner 转发 `session.title.set` 的窄端口（`design.md` D2/D3）。默认未装配：显式
     /// `BackendUnsupported`，不把远程标题的修改留在本机。
     remote_titles: std::sync::OnceLock<Arc<dyn RemoteTitleWrite>>,
+    /// 准备运行期目录（`web-session-preparation` D1/D3）：会话 ID 的分配权威、资源代/租约与容量预占。
+    /// `None` = 组合根没有装配准备能力（`session.preparation` 不注册、feature 不宣告）。
+    preparations: Option<Arc<crate::preparation::PreparationDirectory>>,
+    /// 首次提交的持久入口（D7/D8）：`session.start` 的受理/围栏/结算与 committed 投影的唯一读面。
+    first_submission: Option<Arc<dyn FirstSubmission>>,
+    /// 准备附件暂存（D6.4）：运行期传输/清单 + Owner 私有内容区，不写 `owned_session` 外键行。
+    staging: Option<Arc<dyn PreparationAttachmentStaging>>,
 }
 
 /// [`UseCases`] 的依赖。
@@ -337,6 +362,9 @@ impl UseCases {
             remote_sources: std::sync::OnceLock::new(),
             remote_commands: std::sync::OnceLock::new(),
             remote_titles: std::sync::OnceLock::new(),
+            preparations: None,
+            first_submission: None,
+            staging: None,
         }
     }
 
@@ -391,6 +419,150 @@ impl UseCases {
     /// 与 [`UseCases::with_directory_browser`] 同款：消耗 `self` 并返回它，保证装配只发生一次。
     pub fn with_session_files(self, files: Arc<dyn SessionFiles>) -> Self {
         Self { files, ..self }
+    }
+
+    /// 接线准备运行期目录（组合根装配一次；`None` 保持准备能力不可用）。
+    pub fn with_preparations(
+        self,
+        preparations: Arc<crate::preparation::PreparationDirectory>,
+    ) -> Self {
+        Self {
+            preparations: Some(preparations),
+            ..self
+        }
+    }
+
+    /// 接线首次提交的持久端口。同一实例也装进 broker（`session.start` 的受理/围栏/结算都经它）。
+    pub fn with_first_submission(self, first: Arc<dyn FirstSubmission>) -> Self {
+        let _ = self.broker.set_first_submission(Arc::clone(&first));
+        Self {
+            first_submission: Some(first),
+            ..self
+        }
+    }
+
+    /// 接线准备附件暂存端口（与首次提交事务共用同一个存储实例）。
+    pub fn with_preparation_staging(self, staging: Arc<dyn PreparationAttachmentStaging>) -> Self {
+        Self {
+            staging: Some(staging),
+            ..self
+        }
+    }
+
+    /// 准备运行期目录（`None` = 本进程没有装配准备能力）。
+    pub fn preparations(&self) -> Option<&Arc<crate::preparation::PreparationDirectory>> {
+        self.preparations.as_ref()
+    }
+
+    /// 首次提交的持久端口（`None` = 未接线；`restore` 的 committed 分支因此显式不可用）。
+    pub fn first_submission_store(&self) -> Option<&Arc<dyn FirstSubmission>> {
+        self.first_submission.as_ref()
+    }
+
+    /// 准备附件暂存端口（`None` = 未接线；附件准备目标显式拒绝）。
+    pub fn preparation_staging(&self) -> Option<&Arc<dyn PreparationAttachmentStaging>> {
+        self.staging.as_ref()
+    }
+
+    /// `session.start`（`kind: initial`）：委托 broker 的受理/围栏/派发管线。
+    ///
+    /// 请求身份（`request`/`fingerprint`）随 [`crate::broker::FirstSubmissionStart`] 传入：适配层已按
+    /// wire 原文算好摘要，core 不重新构造第二份 payload。
+    pub async fn start_first_submission(
+        &self,
+        actor: &Actor,
+        start: crate::broker::FirstSubmissionStart,
+        endpoint: Arc<dyn crate::ports::SessionEndpoint>,
+    ) -> Result<CommandReceipt, PortError> {
+        self.broker
+            .start_first_submission(actor, start, endpoint)
+            .await
+    }
+
+    /// `session.start`（`kind: continue`）：显式继续一次可证明未派发的失败。
+    pub async fn continue_first_submission(
+        &self,
+        actor: &Actor,
+        request: crate::broker::FirstSubmissionContinue,
+    ) -> Result<CommandReceipt, PortError> {
+        self.broker.continue_first_submission(actor, request).await
+    }
+
+    /// 首条提交的只读投影（`restore` 的 committed、`command.status` 的协商投影、继续准入）。
+    pub async fn first_submission(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<crate::model::FirstSubmissionRecord>, PortError> {
+        self.broker.first_submission_record(session).await
+    }
+
+    /// 显式继续在端点/配置复核阶段失败时写该次尝试的 failed 终态（正文与首条身份不变）。
+    pub async fn settle_first_submission(
+        &self,
+        settlement: crate::model::FirstSubmissionSettlement,
+    ) -> Result<crate::model::FirstSubmissionRecord, PortError> {
+        self.broker.settle_first_submission(settlement).await
+    }
+
+    /// 持久首条用户消息（`owned_message.channel = 'user'`）：无需 Agent 回显即可读取。
+    pub async fn first_user_message(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<crate::model::FirstUserMessage>, PortError> {
+        self.broker.first_user_message(session).await
+    }
+
+    /// 启动收敛：遍历本机 owned 会话，把首条提交收敛到可证明的事实（**绝不**自动派发）。
+    ///
+    /// 返回实际收敛的会话数（`NotPreparation` 不计）。没有接线首次提交端口的进程是空操作。
+    pub async fn converge_first_submissions(&self, at: Timestamp) -> Result<usize, PortError> {
+        if self.first_submission.is_none() {
+            return Ok(0);
+        }
+        let sessions = self
+            .list_sessions(&Actor::LocalCli, SessionQuery::default())
+            .await?;
+        let mut converged = 0;
+        for summary in sessions {
+            match self
+                .broker
+                .converge_first_submission(summary.session_id(), at.clone())
+                .await?
+            {
+                crate::model::FirstSubmissionConvergence::NotPreparation => {}
+                _ => converged += 1,
+            }
+        }
+        Ok(converged)
+    }
+
+    /// 准备阶段的目录解析（`session.preparation` 的 `allocate`）：已登记目录或客户端绝对路径。
+    ///
+    /// 与 `session.create` 共用同一套形状校验与失败分类（先形状、后 IO）；不查/不登记别名之外的任何
+    /// 持久会话事实。
+    pub async fn resolve_preparation_workspace(
+        &self,
+        actor: &Actor,
+        source: PreparationWorkspaceSource,
+    ) -> Result<PreparationWorkspace, PortError> {
+        if matches!(actor, Actor::PairingClaimant { .. }) {
+            return Err(PortError::InvalidRequest("authorization.scope_denied"));
+        }
+        match source {
+            PreparationWorkspaceSource::Directory(directory_id) => {
+                let record = self.config.directory(&directory_id).await?.ok_or(
+                    PortError::InvalidRequest("workspace directory is not registered on this node"),
+                )?;
+                Ok(PreparationWorkspace {
+                    workspace: resolve_workspace(&directory_id, record.canonical_path())?,
+                    from_directory: true,
+                })
+            }
+            PreparationWorkspaceSource::Path(path) => Ok(PreparationWorkspace {
+                workspace: resolve_client_workspace(&path)?,
+                from_directory: false,
+            }),
+        }
     }
 
     /// Persist acceptance before touching the filesystem. Only the first caller receives a ticket.
@@ -1002,23 +1174,8 @@ impl UseCases {
         let root = self
             .session_files_root(actor, session, "session.files.list")
             .await?;
-        let path = SessionListPath::parse(path)?;
-        let after = parse_page_token(after)?;
-        let page = self
-            .files
-            .list(&root, path.file(), hide_ignored, after.as_ref())
-            .await?;
-        if page.entries().len() > crate::model::SESSION_FILE_PAGE_LIMIT {
-            return Err(PortError::Corrupt(
-                "session file page exceeds the v1 entry limit",
-            ));
-        }
-        if page.path() != &path {
-            return Err(PortError::Corrupt(
-                "session file page does not echo the requested path",
-            ));
-        }
-        Ok(page)
+        self.list_files_at_root(&root, path, hide_ignored, after)
+            .await
     }
 
     /// `session.files.read`：读取当前会话工作目录内的一个字节块。
@@ -1038,24 +1195,8 @@ impl UseCases {
         let root = self
             .session_files_root(actor, session, "session.files.read")
             .await?;
-        let path = SessionFilePath::parse(path)?;
-        let version = version.map(ContentVersion::parse).transpose()?;
-        let version = match version {
-            Some(version) => version,
-            None => self
-                .files
-                .open_content(&root, &path, purpose)
-                .await?
-                .version()
-                .clone(),
-        };
-        let chunk = self.files.read_content(&version, offset).await?;
-        if chunk.path() != &path || chunk.version() != &version {
-            return Err(PortError::Corrupt(
-                "session file chunk does not match the requested path or version",
-            ));
-        }
-        Ok(chunk)
+        self.read_file_at_root(&root, path, purpose, offset, version)
+            .await
     }
 
     /// `session.git.status`：当前会话工作目录内的 Git 状态页。
@@ -1071,14 +1212,7 @@ impl UseCases {
         let root = self
             .session_files_root(actor, session, "session.git.status")
             .await?;
-        let after = parse_page_token(after)?;
-        let page = self.files.git_status(&root, after.as_ref()).await?;
-        if page.entries().len() > crate::model::SESSION_FILE_PAGE_LIMIT {
-            return Err(PortError::Corrupt(
-                "git status page exceeds the v1 entry limit",
-            ));
-        }
-        Ok(page)
+        self.git_status_at_root(&root, after).await
     }
 
     /// `session.git.diff`：当前会话工作目录内一个文件的 HEAD 与工作树差异。
@@ -1094,14 +1228,177 @@ impl UseCases {
         let root = self
             .session_files_root(actor, session, "session.git.diff")
             .await?;
+        self.git_diff_at_root(&root, path).await
+    }
+
+    /// Read an existing local workspace without requiring or creating a session.
+    pub async fn list_workspace_files(
+        &self,
+        actor: &Actor,
+        workspace: WorkspaceSource,
+        path: &str,
+        hide_ignored: bool,
+        after: Option<&str>,
+    ) -> Result<SessionFilePage, PortError> {
+        let root = self
+            .workspace_files_root(actor, workspace, "session.files.list")
+            .await?;
+        self.list_files_at_root(&root, path, hide_ignored, after)
+            .await
+    }
+
+    pub async fn read_workspace_file(
+        &self,
+        actor: &Actor,
+        workspace: WorkspaceSource,
+        path: &str,
+        purpose: FileReadPurpose,
+        offset: u64,
+        version: Option<&str>,
+    ) -> Result<SessionFileChunk, PortError> {
+        let root = self
+            .workspace_files_root(actor, workspace, "session.files.read")
+            .await?;
+        self.read_file_at_root(&root, path, purpose, offset, version)
+            .await
+    }
+
+    pub async fn workspace_git_status(
+        &self,
+        actor: &Actor,
+        workspace: WorkspaceSource,
+        after: Option<&str>,
+    ) -> Result<GitStatusPage, PortError> {
+        let root = self
+            .workspace_files_root(actor, workspace, "session.git.status")
+            .await?;
+        self.git_status_at_root(&root, after).await
+    }
+
+    pub async fn workspace_git_diff(
+        &self,
+        actor: &Actor,
+        workspace: WorkspaceSource,
+        path: &str,
+    ) -> Result<GitDiff, PortError> {
+        let root = self
+            .workspace_files_root(actor, workspace, "session.git.diff")
+            .await?;
+        self.git_diff_at_root(&root, path).await
+    }
+
+    async fn list_files_at_root(
+        &self,
+        root: &str,
+        path: &str,
+        hide_ignored: bool,
+        after: Option<&str>,
+    ) -> Result<SessionFilePage, PortError> {
+        let path = SessionListPath::parse(path)?;
+        let after = parse_page_token(after)?;
+        let page = self
+            .files
+            .list(root, path.file(), hide_ignored, after.as_ref())
+            .await?;
+        if page.entries().len() > crate::model::SESSION_FILE_PAGE_LIMIT {
+            return Err(PortError::Corrupt(
+                "session file page exceeds the v1 entry limit",
+            ));
+        }
+        if page.path() != &path {
+            return Err(PortError::Corrupt(
+                "session file page does not echo the requested path",
+            ));
+        }
+        Ok(page)
+    }
+
+    async fn read_file_at_root(
+        &self,
+        root: &str,
+        path: &str,
+        purpose: FileReadPurpose,
+        offset: u64,
+        version: Option<&str>,
+    ) -> Result<SessionFileChunk, PortError> {
         let path = SessionFilePath::parse(path)?;
-        let diff = self.files.git_diff(&root, &path).await?;
+        let version = version.map(ContentVersion::parse).transpose()?;
+        let version = match version {
+            Some(version) => version,
+            None => self
+                .files
+                .open_content(root, &path, purpose)
+                .await?
+                .version()
+                .clone(),
+        };
+        let chunk = self.files.read_content(&version, offset).await?;
+        if chunk.path() != &path || chunk.version() != &version {
+            return Err(PortError::Corrupt(
+                "session file chunk does not match the requested path or version",
+            ));
+        }
+        Ok(chunk)
+    }
+
+    async fn git_status_at_root(
+        &self,
+        root: &str,
+        after: Option<&str>,
+    ) -> Result<GitStatusPage, PortError> {
+        let after = parse_page_token(after)?;
+        let page = self.files.git_status(root, after.as_ref()).await?;
+        if page.entries().len() > crate::model::SESSION_FILE_PAGE_LIMIT {
+            return Err(PortError::Corrupt(
+                "git status page exceeds the v1 entry limit",
+            ));
+        }
+        Ok(page)
+    }
+
+    async fn git_diff_at_root(&self, root: &str, path: &str) -> Result<GitDiff, PortError> {
+        let path = SessionFilePath::parse(path)?;
+        let diff = self.files.git_diff(root, &path).await?;
         if diff.path() != &path {
             return Err(PortError::Corrupt(
                 "git diff does not match the requested path",
             ));
         }
         Ok(diff)
+    }
+
+    async fn workspace_files_root(
+        &self,
+        actor: &Actor,
+        source: WorkspaceSource,
+        command: &'static str,
+    ) -> Result<String, PortError> {
+        if !matches!(actor, Actor::Device { .. } | Actor::LocalCli) {
+            return Err(PortError::InvalidRequest("authorization.scope_denied"));
+        }
+        self.broker
+            .authorize(actor, command, None, &self.ids.request_id())
+            .await
+            .map_err(Denied::into_port_error)?;
+        let workspace = match source {
+            WorkspaceSource::Directory(id) => {
+                let record = self
+                    .config
+                    .directory(&id)
+                    .await?
+                    .ok_or(PortError::InvalidRequest(
+                        "workspace directory is not registered on this node",
+                    ))?;
+                resolve_workspace(&id, record.canonical_path())?
+            }
+            WorkspaceSource::Path(path) => resolve_client_workspace(&path)?,
+            WorkspaceSource::PathWithCreate(_) => {
+                return Err(PortError::InvalidRequest(
+                    "file queries cannot create directories",
+                ));
+            }
+        };
+        Ok(workspace.canonical_path().to_owned())
     }
 
     /// 四条会话文件查询共用的前置链：授权 → 会话来源 → 实际工作目录。
@@ -9058,6 +9355,74 @@ mod tests {
             .join(format!("acpr-session-files-{}", uuid_text(61)))
             .to_string_lossy()
             .into_owned()
+    }
+
+    #[test]
+    fn workspace_file_queries_are_independent_of_sessions_and_read_only() {
+        let files = Arc::new(RecordingFiles::new());
+        let fixture = fixture_with_session_files(files.clone());
+        let path = std::env::temp_dir().to_string_lossy().into_owned();
+        let root = std::fs::canonicalize(&path)
+            .expect("temp directory")
+            .to_string_lossy()
+            .into_owned();
+        let events = lock(&fixture.world.state).events.len();
+        let commands = lock(&fixture.world.state).commands.len();
+        block_on(fixture.use_cases.list_workspace_files(
+            &Actor::LocalCli,
+            WorkspaceSource::Path(path.clone()),
+            "",
+            false,
+            None,
+        ))
+        .expect("list without session");
+        block_on(fixture.use_cases.read_workspace_file(
+            &Actor::LocalCli,
+            WorkspaceSource::Path(path.clone()),
+            "src/main.rs",
+            FileReadPurpose::Preview,
+            0,
+            None,
+        ))
+        .expect("read without session");
+        block_on(fixture.use_cases.workspace_git_status(
+            &Actor::LocalCli,
+            WorkspaceSource::Path(path.clone()),
+            None,
+        ))
+        .expect("git without session");
+        block_on(fixture.use_cases.workspace_git_diff(
+            &Actor::LocalCli,
+            WorkspaceSource::Path(path),
+            "src/main.rs",
+        ))
+        .expect("diff without session");
+        assert!(
+            files
+                .calls()
+                .iter()
+                .zip(files.roots())
+                .filter(|(call, _)| **call != "read")
+                .all(|(_, actual)| actual == root)
+        );
+        assert_eq!(lock(&fixture.world.state).events.len(), events);
+        assert_eq!(lock(&fixture.world.state).commands.len(), commands);
+        let before = files.calls().len();
+        assert!(
+            block_on(fixture.use_cases.list_workspace_files(
+                &Actor::LocalCli,
+                WorkspaceSource::Path(root),
+                "../outside",
+                false,
+                None
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            files.calls().len(),
+            before,
+            "unsafe relative paths never reach the adapter"
+        );
     }
 
     /// 未分组会话（没有目录登记归属）仍以持久化的实际 cwd 为根；查询不写命令/事件。

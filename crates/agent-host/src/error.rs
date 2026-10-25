@@ -88,6 +88,15 @@ pub enum HostError {
     #[error("交互不存在或已有结论")]
     UnknownInteraction,
 
+    /// 准备端点还不可派发（尚未转正、选项未复核，或请求的选项已不可用）。
+    ///
+    /// 这是**准备生命周期**的拒绝，不是 Agent 错误：不发送任何请求，也不会以默认值静默回退。
+    #[error("准备会话尚不可派发：{detail}")]
+    PreparationNotReady {
+        /// 拒绝原因（协议元数据级别，不含选项值或正文）。
+        detail: &'static str,
+    },
+
     /// 环境变量名不合法（例如含 `=` 或 NUL）。
     #[error("环境变量名不合法")]
     InvalidEnvName,
@@ -167,6 +176,9 @@ impl HostError {
             Self::InvalidResolution | Self::InvalidPrompt | Self::PromptRejected { .. } => {
                 PortError::InvalidRequest("invalid agent-host request")
             }
+            Self::PreparationNotReady { .. } => {
+                PortError::InvalidRequest("preparation endpoint is not ready")
+            }
             Self::UnknownTerminal | Self::TerminalRejected { .. } => {
                 PortError::InvalidRequest("terminal task is not available")
             }
@@ -208,6 +220,7 @@ impl HostError {
             | Self::InvalidResolution
             | Self::InvalidPrompt
             | Self::PromptRejected { .. }
+            | Self::PreparationNotReady { .. }
             | Self::UnknownTerminal
             | Self::TerminalRejected { .. }
             | Self::ShutdownPending
@@ -269,7 +282,7 @@ mod tests {
 
     /// 逐变体钉死映射表。
     ///
-    /// `HostError` 目前有 22 个变体（`tasks.md`/`design.md` 里写的「16 个」是更早版本的计数）；
+    /// `HostError` 目前有 23 个变体（`tasks.md`/`design.md` 里写的「16 个」是更早版本的计数）；
     /// **新增变体时必须在这里补一行**——映射是 core 端口合同的一部分，合法调整应显式发生，
     /// 而不是被静默改坏。
     ///
@@ -278,7 +291,7 @@ mod tests {
     /// `session_establishment_failures_are_classified` 单独钉死。
     #[test]
     fn to_port_error_is_pinned_per_variant() {
-        let cases: [(&str, HostError, Shape); 22] = [
+        let cases: [(&str, HostError, Shape); 23] = [
             (
                 "UnknownProfile",
                 HostError::UnknownProfile,
@@ -410,6 +423,13 @@ mod tests {
                 "TerminalRejected",
                 HostError::TerminalRejected {
                     detail: "活动终端数已达上限".to_owned(),
+                },
+                Shape::InvalidRequest,
+            ),
+            (
+                "PreparationNotReady",
+                HostError::PreparationNotReady {
+                    detail: "options are not verified",
                 },
                 Shape::InvalidRequest,
             ),

@@ -53,6 +53,7 @@ pub mod conn;
 pub mod event;
 pub mod local_lifecycle;
 pub mod pairing;
+pub mod preparation;
 pub mod remote;
 pub mod router;
 pub mod snapshot;

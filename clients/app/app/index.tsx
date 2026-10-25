@@ -174,10 +174,6 @@ export default function DirectoriesRoute(): ReactElement {
       {entry === null ? null : (
         <CreateSessionSheet
           model={entry}
-          onCreated={(sessionId) => {
-            store.closeCreateSheet();
-            router.push(`/session/${encodeURIComponent(sessionId)}`);
-          }}
           selectedAgentId={agentId}
           submitIssue={createIssue}
           onSelectAgent={(next) => {
@@ -187,19 +183,24 @@ export default function DirectoriesRoute(): ReactElement {
           onOpenDirectoryPicker={() => {
             store.openDirectoryPicker();
           }}
-          onSubmit={({ agentId: selected, directoryPath, createIfMissing }) => {
-            const outcome = store.submitCreateSession({
-              directoryId: browseSheet ? null : sheetDirectoryId,
-              agentId: selected,
-              directoryPath,
-              createIfMissing,
-            });
-            if (!outcome.ok) {
-              setCreateIssue(outcome.reason);
-              setAgentId(null);
-            } else {
-              setCreateIssue(null);
-            }
+          onSubmit={({ agentId: selected, directoryPath }) => {
+            // 顶部入口同样只做 prepare → allocate：目录由浏览/选择给出，正式 ID 由后端分配。
+            void store
+              .beginPreparation({
+                directoryId: browseSheet ? null : sheetDirectoryId,
+                agentId: selected,
+                directoryPath,
+              })
+              .then((outcome) => {
+                if (!outcome.ok) {
+                  setCreateIssue(outcome.reason);
+                  setAgentId(null);
+                  return;
+                }
+                setCreateIssue(null);
+                store.closeCreateSheet();
+                router.push(`/session/${encodeURIComponent(outcome.sessionId)}`);
+              });
           }}
           onDismissUncertain={() => {
             const requestId = sheetKey === null ? undefined : state.createRequestIds.get(sheetKey);

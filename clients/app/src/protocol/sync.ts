@@ -17,7 +17,10 @@ import type {
   ConfigOptionView,
   Cursor,
   DecimalString,
+  ModeRef,
   OriginCursor,
+  PositiveDecimalString,
+  PreparationReceipt,
   PublicError,
   RawAcp,
   SessionRef,
@@ -26,6 +29,7 @@ import type {
   Uuid,
   WorkspaceCatalogEntry,
 } from "./common";
+import type { PreparationConfigSelection } from "./command";
 
 /** 认证后消息的公共信封（`$defs.postAuthBase`）。 */
 export interface PostAuthEnvelope {
@@ -380,6 +384,147 @@ export interface SyncRemoteSourceState extends PostAuthEnvelope {
   };
 }
 
+// ── 准备控制帧（`core.session-preparation.v1`，§11.9；计划/待实现） ──────────
+//
+// 准备是**首条消息提交前**的临时阶段：Owner 分配最终 `sessionId` 并签发凭据，可以建立临时
+// Agent 端点取得真实模式/配置，但不持久化会话记录。本节只镜像 wire 形状；生命周期、租约与
+// 容量属于 `core`/`server::sync`。未协商该 feature 的连接不发送也不接收这些帧（§5.3）。
+
+/** `$defs.preparationAction`：准备控制面的闭合 action 词表。 */
+export type PreparationAction = "allocate" | "restore" | "configure" | "renew" | "release";
+
+/**
+ * `$defs.preparationWorkspaceRef`：`allocate` 的目录输入，`directoryId` 与 `workspacePath`
+ * **恰好一个**（与 `session.create` 的目录来源同义）。规范化结果进入凭据 claims。
+ */
+export type PreparationWorkspaceRef =
+  | { readonly directoryId: string }
+  | { readonly workspacePath: string };
+
+/**
+ * `$defs.sessionPreparation.body` 的 action 分支：每个分支都带 `operationId`/`action`，
+ * 但只有非 `allocate` 分支带 `sessionId`——正式 ID 由 Owner 在 `allocate` 时分配并在结果中
+ * 回传，客户端不得自行指定。`restore` 的 `knownRuntimeEpoch`/`knownGeneration` 只作旧状态提示
+ * 与操作去重，不参与拒绝判定；`configure` 至少要给 `mode` 或 `configOptions` 之一。
+ */
+export type SessionPreparationDetail =
+  | {
+      readonly action: "allocate";
+      readonly agentId: string;
+      readonly workspace: PreparationWorkspaceRef;
+      readonly tabNonce: Base64Url32;
+    }
+  | {
+      readonly action: "restore";
+      readonly sessionId: Uuid;
+      readonly receipt: PreparationReceipt;
+      readonly knownRuntimeEpoch?: Uuid;
+      readonly knownGeneration?: PositiveDecimalString;
+    }
+  | {
+      readonly action: "configure";
+      readonly sessionId: Uuid;
+      readonly receipt: PreparationReceipt;
+      readonly runtimeEpoch: Uuid;
+      readonly generation: PositiveDecimalString;
+      readonly mode?: string;
+      readonly configOptions?: PreparationConfigSelection;
+    }
+  | {
+      readonly action: "renew";
+      readonly sessionId: Uuid;
+      readonly receipt: PreparationReceipt;
+      readonly runtimeEpoch: Uuid;
+      readonly generation: PositiveDecimalString;
+    }
+  | {
+      readonly action: "release";
+      readonly sessionId: Uuid;
+      readonly receipt: PreparationReceipt;
+      readonly runtimeEpoch: Uuid;
+      readonly generation: PositiveDecimalString;
+    };
+
+/**
+ * 把公共 body 字段（`operationId`/`action`）**分配到每个 action/status 分支**。
+ *
+ * 直接写 `DetailUnion & { ... }` 会让 `Extract<Body, { action: "allocate" }>` 无法按键收窄；
+ * 这里用分配条件类型得到真正的判别联合，`keyof` 与 `Extract` 才能逐分支工作。
+ */
+type WithPreparationEnvelope<T> = T extends unknown
+  ? T & { readonly operationId: Uuid; readonly action: PreparationAction }
+  : never;
+
+/** `$defs.sessionPreparation.body`：`operationId`/`action` + 该 action 的闭合字段。 */
+export type SessionPreparationBody = WithPreparationEnvelope<SessionPreparationDetail>;
+
+/**
+ * `$defs.sessionPreparation`：准备控制请求。
+ *
+ * 所有分支都带 `operationId`（连接期有界去重；同 id 不同参数按 `command.idempotency_conflict`
+ * 拒绝）。它只作用于**临时**控制面：不产生 owned 命令记录或全局事件。
+ */
+export interface SyncSessionPreparation extends PostAuthEnvelope {
+  readonly type: "session.preparation";
+  readonly body: SessionPreparationBody;
+}
+
+/** `$defs.sessionPreparationResult.body.status` 的封闭五态。 */
+export type PreparationStatus = "ready" | "committed" | "stale" | "released" | "failed";
+
+/** `status = "stale"` 的资源代失效原因（`$defs.sessionPreparationResult` 的内联词表）。 */
+export type PreparationStaleReason = "runtime_epoch_mismatch" | "generation_mismatch" | "released";
+
+/**
+ * `$defs.sessionPreparationResult` 的 status 判别分支（闭合，不能用多个可空字段拼出非法组合）。
+ *
+ * - `ready`：`modes`/`configOptions` 是 Agent 确认过的**真实**值；未提供的选项是空数组，不伪造。
+ * - `committed`：同 ID 已被首次提交正式受理。**不**携带临时代/租约/配置/凭据；`firstSubmissionId`
+ *   只在这一支出现，它是服务端在受理事务生成的关联键（不是附件清单的 `submissionId`）。
+ * - `stale`：唯一来源是 `configure`/`renew`/`release` 与附件 `begin`/`manifest_begin`。
+ * - `released`：临时资源释放，不代表 ID 已提交。
+ * - `failed`：认证后的业务失败（含 `preparation.store_rebuilt`），不能隐含表达「已提交」。
+ */
+export type PreparationOutcome =
+  | {
+      readonly status: "ready";
+      readonly receipt: PreparationReceipt;
+      readonly runtimeEpoch: Uuid;
+      readonly generation: PositiveDecimalString;
+      readonly modes: readonly ModeRef[];
+      readonly configOptions: readonly ConfigOptionView[];
+      readonly leaseExpiresAt: Timestamp;
+    }
+  | {
+      readonly status: "committed";
+      readonly firstSubmissionId: Uuid;
+      readonly firstRequestId: Uuid;
+      readonly currentRequestId: Uuid;
+      readonly firstMessageId: Uuid;
+    }
+  | { readonly status: "stale"; readonly reason: PreparationStaleReason }
+  | { readonly status: "released" }
+  | { readonly status: "failed"; readonly error: PublicError };
+
+/**
+ * 结果信封：`operationId`/`action`/`sessionId` 在**每个** status 分支上恒在（schema 的必填集合）。
+ *
+ * 与请求侧的 {@link WithPreparationEnvelope} 分开：`allocate` 请求没有 `sessionId`（由 Owner 分配
+ * 后回显），因此不能共用一个信封。
+ */
+type WithPreparationResultEnvelope<T> = T extends unknown
+  ? T & { readonly operationId: Uuid; readonly action: PreparationAction; readonly sessionId: Uuid }
+  : never;
+
+/** `$defs.sessionPreparationResult.body`：回显字段 + 该 status 的闭合结果。 */
+export type PreparationResultBody = WithPreparationResultEnvelope<PreparationOutcome>;
+
+/** `$defs.sessionPreparationResult`：`operationId`/`action`/`sessionId` 逐字回显 + 闭合结果。 */
+export interface SyncSessionPreparationResult extends PostAuthEnvelope {
+  readonly type: "session.preparation.result";
+  readonly body: PreparationResultBody;
+}
+
 /** `sync.schema.json` 的顶层 `oneOf`。 */
 export type SyncMessage =
   | SyncSubscribe
@@ -400,4 +545,6 @@ export type SyncMessage =
   | SyncRemoteUnsubscribe
   | SyncRemoteUnavailable
   | SyncRemoteCatalogChanged
-  | SyncRemoteSourceState;
+  | SyncRemoteSourceState
+  | SyncSessionPreparation
+  | SyncSessionPreparationResult;

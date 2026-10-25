@@ -49,6 +49,7 @@ import {
   createDirectoryNoticeText,
   initialDirectoryBrowseState,
 } from "../features/create-session-model";
+import { SESSION_PREPARATION_FEATURE } from "../features/preparation-model";
 import type { RecordingGateway } from "../features/testing/fixtures";
 import { WORKSPACES_WITH_PATHS, onlineStore, resources, session, storeWith } from "../features/testing/fixtures";
 
@@ -159,8 +160,10 @@ function browseEntry(store: ClientStore): CreateSessionEntryModel {
 
 /** 尚未提交时的弹层模型（目录带服务端下发的路径；入口没有权限维度，因此不需要任何授权输入）。 */
 function entryModel(): CreateSessionEntryModel {
-  const { store } = storeWith({
+  // 新入口只在协商了会话准备能力后可用（未协商时明确禁用，不退回旧 session.create）。
+  const { store } = onlineStore({
     resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
+    features: [SESSION_PREPARATION_FEATURE],
   });
   return store.createEntry(DIRECTORY_ID);
 }
@@ -429,7 +432,8 @@ describe("R16 不能逐层浏览时按原因说明，并保留已登记目录这
   function unsupportedSheet(): { readonly store: ClientStore; readonly gateway: RecordingGateway } {
     const fixture = onlineStore({
       resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
-      features: [],
+      // 未协商的只是**目录浏览**；会话准备能力单独协商（新入口不以浏览能力为前提）。
+      features: [SESSION_PREPARATION_FEATURE],
     });
     fixture.store.openCreateSheetToBrowse();
     return fixture;

@@ -135,7 +135,7 @@
 | `sessions.queue_policy` | enum | `"queue"` | 同一会话已有 active turn 时的新 prompt 处理：`queue` 按持久化接受顺序排队；`reject_busy` 直接返回 `session.busy`。v1 默认排队，与 `SYNC_PROTOCOL.md` §11.6 的二选一一致 |
 | `sessions.max_queued_turns` | integer | `16` | `queue` 策略下的排队上限，超出返回 `session.busy` |
 | `sessions.idle_timeout_ms` | integer | `1800000` | 无人查看、无任务/交互且资源已释放确认后开始计时的保留期（30 分钟）。显式 `0` **只**关闭按时间回收，**不**关闭容量保护；非零时只影响 Daemon 侧运行资源，不影响事件、历史、游标与命令终态语义 |
-| `sessions.max_active_sessions` | integer | `50` | 本机所有 Agent 合计可同时占用运行资源的 owned 会话数上限（正整数，**没有**表示无限的取值）。`ready`/激活中/回收中，以及仍占真实运行资源的会话都计入；待处理会话计入，历史会话不计入。满额时优先回收无人查看、无任务/交互的最久未使用会话（同时间以稳定会话标识为平局规则），没有安全候选时以 `session.capacity_exceeded` 拒绝新激活 |
+| `sessions.max_active_sessions` | integer | `50` | 本机所有 Agent 合计可同时占用运行资源的 owned 会话数上限（正整数，**没有**表示无限的取值）。`ready`/激活中/回收中，以及仍占真实运行资源的会话都计入；待处理会话计入，历史会话不计入。**临时准备也计入**：尚未首次提交、但已建立临时 Agent 端点或持有租约的准备占用名额（`web-session-preparation`，已实现），因此「准备中」不是绕过容量的手段。满额时优先回收无人查看、无任务/交互的最久未使用会话（同时间以稳定会话标识为平局规则），没有安全候选时以 `session.capacity_exceeded` 拒绝新激活或新准备 |
 
 四个键的目标语义如上，且均已接线（WP4）：`queue_policy`/`max_queued_turns` 注入 broker；`idle_timeout_ms`（缺省 1800000，显式 `0` 只关闭按时间回收）与 `max_active_sessions`（正整数，缺省候选 50）注入 `LocalSessionLifecycle`，非法值在配置解析阶段启动失败。`max_active_sessions` 的 50 仍是**待实测候选值**（PV6 的 10/25/50 档），不得声称已验证安全。
 
@@ -143,6 +143,7 @@
 - **容量回收可早于保留期**：满额且存在安全候选时提前回收最久未使用者；`idle_timeout_ms = 0` 不改变这条策略。
 - **50 是候选值**：交付前必须测量 10/25/50 个恢复会话的内存、切换耗时与回收效果（真实硬件/Agent 版本/上下文规模），实测不支持时携证据重新确认；在此之前不得把它写成已验证的安全上限，也不得把「会话数」当成内存硬上限宣传。
 - **非法取值失败关闭**：`max_active_sessions` 必须是正整数（`0`、负数、非整数一律在配置解析阶段拒绝，不退化成「无限」）；`queue_policy` 的未知取值与超过 `u32` 的排队上限同样失败关闭。
+- **准备阶段不新增配置键（已实现，`web-session-preparation` WP2/WP5）**：准备租约 30 秒、可见页面续租间隔 10 秒、准备控制帧速率 120 帧/分钟与操作去重窗口 60 秒都是固定 v1 常量（[`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §14 的预算表），不得由部署配置下调或放大；临时准备计入上面的 `sessions.max_active_sessions`（`PreparationDirectory` 用同一个 `CapacityAdmission`），但**不**增加第二个容量键（例如「准备数上限」）。显式 `sessions.idle_timeout_ms = 0` 与准备租约无关：租约到期只结束临时资源，不删除正式会话；首次提交成功后名额转移给正式会话。
 
 ## 5. `storage`
 

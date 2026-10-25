@@ -15,10 +15,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acp_core::model::{
-    AgentSessionId, ConfigOption, ConfigValue, ElicitationAction, EndpointEvent, EventKind,
-    EventType, InteractionId, InteractionKind, InteractionResolution, ModeId, ModeRef, ModeState,
-    OwnedSessionRef, PortError, PromptRequest, PublicError, SessionId, SessionReference, Timestamp,
-    TurnId, ViewJson,
+    AgentSessionId, ConfigOption, ConfigValue, DispatchContext, ElicitationAction, EndpointEvent,
+    EventKind, EventType, InteractionId, InteractionKind, InteractionResolution, ModeId, ModeRef,
+    ModeState, OwnedSessionRef, PortError, PromptRequest, PublicError, SessionId, SessionReference,
+    Timestamp, TurnId, ViewJson,
 };
 use acp_core::ports::{
     AttachmentStore, Clock, EventSink, HistoryPage, HistoryQuery, IdGenerator, SessionEndpoint,
@@ -35,7 +35,7 @@ use crate::error::HostError;
 use crate::limits;
 use crate::mapper::{self, UpdateState};
 use crate::process::Supervisor;
-use crate::release::ReleaseRefusal;
+use crate::release::{ReleaseAction, ReleaseRefusal};
 use crate::terminal::{TerminalConfig, TerminalService};
 
 /// 已登记但尚未解析的交互。
@@ -45,6 +45,19 @@ struct PendingInteraction {
     id: IdLiteral,
     /// 类别（决定回传形状与校验）。
     kind: InteractionKind,
+}
+
+/// 准备（临时）端点的选项复核状态（`design.md` D4）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreparationGate {
+    /// 不是准备端点（`session.create`/`resume`/`open` 的普通绑定）：行为与之前完全一致。
+    NotPreparation,
+    /// 临时端点，尚未读取并复核当前选项。
+    Unverified,
+    /// 选项已由 Agent 确认（未修改时即 Agent 的默认值）：允许转正与首次派发。
+    Ready,
+    /// 请求的模式/配置已不可用：保留在报告里可见，但**阻止**派发（不静默回退默认值）。
+    Blocked,
 }
 
 /// 会话的内部状态（一把锁保护，锁内不做 I/O）。
@@ -58,6 +71,12 @@ struct Inner {
     ///
     /// 只有这个位能支撑「资源与容量名额可以交还」。已 closed 但没有它的绑定只说明本层让出了这一代。
     released: bool,
+    /// 本绑定是否是**准备（临时）端点**：真时不得派发 prompt，直到 [`AcpSession::mark_owned`] 转正。
+    temporary: bool,
+    /// 准备选项复核状态（普通绑定恒为 [`PreparationGate::NotPreparation`]）。
+    preparation: PreparationGate,
+    /// 当前 turn 的派发上下文（`design.md` D7）：只在该次 prompt 期间存在，随 turn 终态清空。
+    dispatch: Option<DispatchContext>,
     turn_running: bool,
     /// `session/prompt` 的字节已经确认写入 Agent stdin（写确认前不算已派发）。
     turn_dispatched: bool,
@@ -121,6 +140,8 @@ pub(crate) struct SessionInit {
     pub ids: Arc<dyn IdGenerator>,
     /// 时钟。
     pub clock: Arc<dyn Clock>,
+    /// 本绑定是否是准备（临时）端点：真时不得派发 prompt，转正后仍沿用同一 Agent 端点。
+    pub temporary: bool,
     /// `initialize` 协商出的 Agent 能力（能力门控判据）。
     pub capabilities: AgentCapabilities,
     /// `session/new` 给出的模式状态（`None` = 未宣告）。
@@ -147,6 +168,7 @@ impl AcpSession {
             sink,
             ids,
             clock,
+            temporary,
             capabilities,
             modes,
             config_options,
@@ -177,6 +199,13 @@ impl AcpSession {
             inner: Mutex::new(Inner {
                 closed: false,
                 released: false,
+                temporary,
+                preparation: if temporary {
+                    PreparationGate::Unverified
+                } else {
+                    PreparationGate::NotPreparation
+                },
+                dispatch: None,
                 turn_running: false,
                 turn_dispatched: false,
                 cancel_requested: false,
@@ -266,12 +295,43 @@ impl AcpSession {
     pub async fn prompt(
         self: &Arc<Self>,
         request: PromptRequest,
+        at: Timestamp,
+    ) -> Result<TurnAccepted, HostError> {
+        self.prompt_with_context(request, at, None).await
+    }
+
+    /// 带本次派发上下文的 prompt（`design.md` D7）：上下文只在该次 turn 期间存在，用户输入回显据此
+    /// 关联到已保存的首条消息；普通 prompt 传 `None`，事件上不会出现任何关联字段。
+    pub async fn prompt_with_context(
+        self: &Arc<Self>,
+        request: PromptRequest,
         _at: Timestamp,
+        context: Option<DispatchContext>,
     ) -> Result<TurnAccepted, HostError> {
         let capabilities = {
             let mut inner = lock(&self.inner);
             if inner.closed {
                 return Err(HostError::SessionClosed);
+            }
+            if inner.temporary {
+                // 准备端点只用于读取真实选项与转正；准备期间**绝不**发送 prompt（不靠空消息促使
+                // Agent 写盘，也不伪造一个 turn）。
+                return Err(HostError::PreparationNotReady {
+                    detail: "temporary endpoint is not owned yet",
+                });
+            }
+            match inner.preparation {
+                PreparationGate::NotPreparation | PreparationGate::Ready => {}
+                PreparationGate::Unverified => {
+                    return Err(HostError::PreparationNotReady {
+                        detail: "options are not verified",
+                    });
+                }
+                PreparationGate::Blocked => {
+                    return Err(HostError::PreparationNotReady {
+                        detail: "requested options are unavailable",
+                    });
+                }
             }
             if inner.turn_running {
                 // 同一会话不能有两个 active turn（`AGENTS.md` §4）。
@@ -284,6 +344,7 @@ impl AcpSession {
             inner.cancel_requested = false;
             inner.updates.begin_turn();
             inner.last_activity = Instant::now();
+            inner.dispatch = context;
             inner.agent_capabilities.clone()
         };
 
@@ -298,7 +359,9 @@ impl AcpSession {
             Ok(prompt) => prompt,
             Err(error) => {
                 // 整条拒绝：turn 状态回滚，调用方看到明确失败，Agent 侧什么也没收到。
-                lock(&self.inner).turn_running = false;
+                let mut inner = lock(&self.inner);
+                inner.turn_running = false;
+                inner.dispatch = None;
                 return Err(error);
             }
         };
@@ -315,7 +378,9 @@ impl AcpSession {
             Ok(receiver) => receiver,
             Err(error) => {
                 // 字节没有真正写入 stdin：回滚 turn 状态，不派发 `finish_turn`。
-                lock(&self.inner).turn_running = false;
+                let mut inner = lock(&self.inner);
+                inner.turn_running = false;
+                inner.dispatch = None;
                 return Err(error);
             }
         };
@@ -385,6 +450,7 @@ impl AcpSession {
             inner.turn_running = false;
             inner.turn_dispatched = false;
             inner.cancel_requested = false;
+            inner.dispatch = None;
             inner.last_activity = Instant::now();
         }
 
@@ -405,6 +471,8 @@ impl AcpSession {
             inner.turn_running && inner.turn_dispatched
         };
         if !is_turn {
+            // 没有可收敛的 turn 时也必须丢掉该次派发上下文：旧代的关联不得留给后续事件。
+            lock(&self.inner).dispatch = None;
             return;
         }
         let error = mapper::public_error(
@@ -420,6 +488,7 @@ impl AcpSession {
             }
             inner.turn_running = false;
             inner.turn_dispatched = false;
+            inner.dispatch = None;
         }
         if let Ok(event) = mapper::turn_event("turn.failed", error.as_ref(), at) {
             self.emit(event);
@@ -651,12 +720,15 @@ impl AcpSession {
         let events = {
             let mut inner = lock(&self.inner);
             let mut updates = std::mem::take(&mut inner.updates);
+            // 派发上下文只在本次 turn 内存在，且**只**在适配器里用于回显关联；它不写进任何事件视图
+            // （普通 prompt 的上下文是 `None`，行为与本字段出现之前完全相同）。
             let result = mapper::update_events(
                 &notification.update,
                 envelope.document(),
                 &mut updates,
                 self.ids.as_ref(),
                 self.clock.as_ref(),
+                inner.dispatch.as_ref(),
             );
             inner.updates = updates;
             result
@@ -935,6 +1007,9 @@ impl AcpSession {
             inner: Mutex::new(Inner {
                 closed: false,
                 released: false,
+                temporary: false,
+                preparation: PreparationGate::NotPreparation,
+                dispatch: None,
                 turn_running: false,
                 turn_dispatched: false,
                 cancel_requested: false,
@@ -973,6 +1048,7 @@ impl AcpSession {
         inner.turn_running = false;
         inner.turn_dispatched = false;
         inner.cancel_requested = false;
+        inner.dispatch = None;
         // 未解析的交互随会话一起作废：不代答、不伪造结论，登记直接丢弃。
         inner.interactions.clear();
     }
@@ -990,6 +1066,7 @@ impl AcpSession {
             inner.closed = true;
             // 未解析的交互随会话一起作废：不代答、不伪造结论，登记直接丢弃。
             inner.interactions.clear();
+            inner.dispatch = None;
             inner.turn_running
         };
         self.terminal().shutdown_sync();
@@ -1043,12 +1120,19 @@ impl AcpSession {
         let Some(modes) = &inner.modes else {
             return ModeState::new(None, Vec::new());
         };
+        // 当前模式的展示名同样来自 Agent（`availableModes` 里同 id 的 `name`）；Agent 没有列出当前
+        // 模式时退回 id，**不**编造一个展示名。
+        let current_name = modes
+            .available_modes
+            .iter()
+            .find(|mode| mode.id == modes.current_mode_id)
+            .map_or_else(|| modes.current_mode_id.clone(), |mode| mode.name.clone());
         let current = ModeRef::try_new(
             match ModeId::new(&modes.current_mode_id) {
                 Ok(id) => id,
                 Err(_) => return ModeState::new(None, Vec::new()),
             },
-            &modes.current_mode_id,
+            &current_name,
         )
         .ok();
         let available = modes
@@ -1064,6 +1148,78 @@ impl AcpSession {
         let mut inner = lock(&self.inner);
         if let Some(modes) = inner.modes.as_mut() {
             modes.current_mode_id = mode_id.to_owned();
+        }
+    }
+
+    /// 更新配置项的当前值（`set_config` 成功后由 host 调用）。
+    ///
+    /// 只改 Agent 已经确认的那一项的 `currentValue`；值形状来自本次请求（布尔或选择值），
+    /// **不**伪造 Agent 没有返回的新选项。
+    pub(crate) fn note_config(&self, id: &acp_core::model::ConfigOptionId, value: &ConfigValue) {
+        let raw = match value {
+            ConfigValue::Boolean(flag) => json!(flag),
+            ConfigValue::Select(selected) => json!(selected.as_str()),
+            // 线上没有文本取值的形状，`set_config` 不会发出这类请求。
+            ConfigValue::Text(_) => return,
+        };
+        let mut inner = lock(&self.inner);
+        for option in &mut inner.config_options {
+            if option.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+                continue;
+            }
+            if let Some(object) = option.as_object_mut() {
+                object.insert("currentValue".to_owned(), raw);
+            }
+            return;
+        }
+    }
+
+    /// 是否是准备（临时）端点（未转正时不得派发 prompt）。
+    #[must_use]
+    pub fn is_temporary(&self) -> bool {
+        lock(&self.inner).temporary
+    }
+
+    /// 记录选项复核结果：没有不可用项 ⇒ `Ready`，否则 `Blocked`（保留报告可见，但阻止派发）。
+    pub(crate) fn note_preparation(&self, blocked: bool) {
+        let mut inner = lock(&self.inner);
+        if inner.preparation == PreparationGate::NotPreparation {
+            return;
+        }
+        inner.preparation = if blocked {
+            PreparationGate::Blocked
+        } else {
+            PreparationGate::Ready
+        };
+    }
+
+    /// 把准备端点转正（首次提交所有权转移）：之后同一端点即可用于首次派发，**不**新建 Agent 会话。
+    ///
+    /// 只允许在选项已由 Agent 确认（[`PreparationGate::Ready`]）且未关闭/未释放时转正；不可用的选择
+    /// 会阻止转正，而不是静默回退默认值。
+    pub(crate) fn mark_owned(&self) -> Result<(), HostError> {
+        let mut inner = lock(&self.inner);
+        if inner.closed || inner.released {
+            return Err(HostError::SessionClosed);
+        }
+        if !inner.temporary {
+            return Err(HostError::PreparationNotReady {
+                detail: "endpoint is already owned",
+            });
+        }
+        match inner.preparation {
+            PreparationGate::Ready => {
+                inner.temporary = false;
+                Ok(())
+            }
+            PreparationGate::Blocked => Err(HostError::PreparationNotReady {
+                detail: "requested options are unavailable",
+            }),
+            PreparationGate::Unverified | PreparationGate::NotPreparation => {
+                Err(HostError::PreparationNotReady {
+                    detail: "options are not verified",
+                })
+            }
         }
     }
 
@@ -1221,7 +1377,10 @@ pub struct Endpoint {
 #[async_trait::async_trait]
 pub(crate) trait BindingControl: Send + Sync {
     /// 执行真实清理顺序；只有 Agent 确认后才摘除映射并标记关闭。
-    async fn release(&self, session: &AcpSession) -> Result<(), ReleaseRefusal>;
+    ///
+    /// 返回值区分「Agent 已确认释放」与「只是本地让出」：core 的回收判定据
+    /// [`ReleaseAction::outcome`] 决定是否交还容量名额，不能用 `()` 把两者抹平。
+    async fn release(&self, session: &AcpSession) -> Result<ReleaseAction, ReleaseRefusal>;
 }
 
 impl Endpoint {
@@ -1239,6 +1398,17 @@ impl Endpoint {
     #[must_use]
     pub fn generation(&self) -> u64 {
         self.session.generation()
+    }
+
+    /// 执行一次真实释放并返回 core 口径的结论（与 [`SessionEndpoint::close`] 同一顺序）。
+    ///
+    /// 与 `close` 的差别只在结果形状：`close` 把未完成映射成 `PortError`，这里保留
+    /// [`ReleaseOutcome`] 的三态，供 core 的逐会话回收判定是否交还容量名额。
+    pub(crate) async fn release_outcome(&self) -> crate::release::ReleaseOutcome {
+        match self.release.release(&self.session).await {
+            Ok(action) => action.outcome(),
+            Err(refusal) => refusal.outcome,
+        }
     }
 }
 
@@ -1263,6 +1433,18 @@ impl SessionEndpoint for Endpoint {
             .map_err(|error| error.to_port_error())
     }
 
+    async fn prompt_with_context(
+        &self,
+        request: PromptRequest,
+        at: Timestamp,
+        context: Option<DispatchContext>,
+    ) -> Result<TurnAccepted, PortError> {
+        self.session
+            .prompt_with_context(request, at, context)
+            .await
+            .map_err(|error| error.to_port_error())
+    }
+
     async fn validate_prompt(&self, request: &PromptRequest) -> Result<(), PortError> {
         self.session
             .validate_prompt(request)
@@ -1277,6 +1459,10 @@ impl SessionEndpoint for Endpoint {
     }
 
     async fn set_mode(&self, mode: &ModeId) -> Result<(), PortError> {
+        // 已让出/旧代的端点不得再改 Agent 状态（新代可能已经占用同一个 ACP 会话标识）。
+        if self.session.is_closed() {
+            return Err(HostError::SessionClosed.to_port_error());
+        }
         // 出站活动：刷新空闲时钟（只改模式、不 prompt 的会话不得在超时前被回收）。
         self.session.touch();
         if self.session.mode_state().available.is_empty() {
@@ -1320,6 +1506,10 @@ impl SessionEndpoint for Endpoint {
         id: &acp_core::model::ConfigOptionId,
         value: ConfigValue,
     ) -> Result<(), PortError> {
+        // 同 `set_mode`：旧代/已让出的端点不得改写 Agent 状态。
+        if self.session.is_closed() {
+            return Err(HostError::SessionClosed.to_port_error());
+        }
         // 出站活动：同 `set_mode`，写入配置也算活动。
         self.session.touch();
         let known = self
@@ -1335,8 +1525,8 @@ impl SessionEndpoint for Endpoint {
         }
         // `session/set_config_option` 的 `value` 是一个 anyOf：布尔必须写成
         // `{type:"boolean",value:bool}`，其余只能是 `{value:"<id>"}`。裸值两种形状都不匹配。
-        let raw = match value {
-            ConfigValue::Boolean(flag) => message::config_value_boolean(flag),
+        let raw = match &value {
+            ConfigValue::Boolean(flag) => message::config_value_boolean(*flag),
             ConfigValue::Select(selected) => message::config_value_id(selected.as_str()),
             // 线上没有文本取值的形状（只有 boolean 与 value-id），因此显式拒绝而不是发一个非法请求。
             ConfigValue::Text(_) => {
@@ -1360,6 +1550,8 @@ impl SessionEndpoint for Endpoint {
             )
             .await
             .map_err(|error| error.to_port_error())?;
+        // Agent 已确认：当前值以这次请求为准（不重新读 Agent，也不改其它选项）。
+        self.session.note_config(id, &value);
         Ok(())
     }
 
@@ -1391,6 +1583,7 @@ impl SessionEndpoint for Endpoint {
         self.release
             .release(&self.session)
             .await
+            .map(|_action| ())
             .map_err(|refusal| {
                 tracing::warn!(
                     session = %self.session.session_id(),

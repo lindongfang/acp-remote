@@ -1,0 +1,30 @@
+{
+  "description": "Public interoperability vector for the preparation receipt signature (acp-remote/session-preparation/v1). The claims are the closed D2 claim set; the signature is ECDSA P-256 over the transcript, P1363 64 bytes, unpadded base64url. Never use this key in production.",
+  "domain": "acp-remote/session-preparation/v1",
+  "codec": "acpr-transcript-v1",
+  "input": {
+    "protocolVersion": 1,
+    "ownerNodeId": "0f9c3b9a-2d31-4fd0-8e5d-4a4f7a5f1b10",
+    "storeEpoch": "9c6a1e34-5b7d-4f2a-9d18-6e0b2c3d4e5f",
+    "origin": "https://work-pc.example.ts.net",
+    "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+    "tabNonceHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "sessionId": "6f1c2d3e-4a5b-4c6d-8e7f-901122334455",
+    "agentId": "codex",
+    "normalizedWorkspacePath": "D:\\Projects\\acp-remote",
+    "workspaceSource": "workspacePath"
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAIWFjcC1yZW1vdGUvc2Vzc2lvbi1wcmVwYXJhdGlvbi92MQAKAAEAAAACAAEAAwAAABAq4cB8kkJG6anSTsWMEw9JABEAAAAQD5w7mi0xT9COXUpPel8bEAASAAAAEJxqHjRbfU8qnRhuCyw9Tl8AEwAAAB5odHRwczovL3dvcmstcGMuZXhhbXBsZS50cy5uZXQAFAAAACBAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eXwAVAAAAEG8cLT5KW0xtjn-QESIzRFUAFgAAAAVjb2RleAAXAAAAFkQ6XFByb2plY3RzXGFjcC1yZW1vdGUAGAAAAA13b3Jrc3BhY2VQYXRo",
+    "transcriptSha256Hex": "17f019fa53f0334a63f61a1e2f5ba0c305387f3d5a58b96ea80a83d8b3b73652",
+    "publicKey": "BDXudT3HHr7L3qnVV_OlFoeDj9wRzuSVH-xXHPZogvWTZTCx01bTIpVqg6e9I92NoGBGYQ6YP9mNJ9vPNo9ObRs",
+    "privateJwk": {
+      "kty": "EC",
+      "x": "Ne51PccevsveqdVX86UWh4OP3BHO5JUf7Fcc9miC9ZM",
+      "y": "ZTCx01bTIpVqg6e9I92NoGBGYQ6YP9mNJ9vPNo9ObRs",
+      "crv": "P-256",
+      "d": "FI4w4YrjRTLa4hH-EqNmJvWeFu4BTtJdexLbZzGwFrE"
+    },
+    "p1363Signature": "fQajLSzq22JwoKUsx9CuNXg6t1wPQpr2CbpLKOhnNqCBl33DMmr8uIlPXDDBdkzdCehwkW503hBvUjO2ywZQsw"
+  }
+}

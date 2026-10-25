@@ -17,8 +17,9 @@
 use std::collections::HashMap;
 
 use acp_core::model::{
-    AcpRaw, Digest, EndpointEvent, EventKind, EventPayload, EventType, InteractionOption,
-    MessageId, PublicError, Timestamp, ViewJson,
+    AcpRaw, Digest, DispatchContext, EchoAssociation, EndpointEvent, EventKind, EventPayload,
+    EventType, InteractionOption, JsonValueText, MessageId, PublicError, Timestamp, UserEchoEvent,
+    UserEchoLink, ViewJson, associate_user_echo,
 };
 use acp_core::ports::{Clock, IdGenerator};
 use acp_protocol::RawDocument;
@@ -67,12 +68,17 @@ impl UpdateState {
 ///
 /// 已知判别子映射到 Sync 事件类型（`docs/SYNC_PROTOCOL.md` §10.3 的判别子映射表）；
 /// 未登记判别子按未知事件**可见降级**并保留原文。
+///
+/// `dispatch` 是**本次 prompt 调用**的派发上下文（`design.md` D7），只在 `user.message.delta` 上使用：
+/// 可证明与已保存首条内容一致的回显**不**再产出一条用户消息事件（见 [`user_echo_is_duplicate`]）。
+/// 它不进入任何事件视图或 wire 字段；普通 prompt 传 `None`。
 pub fn update_events(
     update: &SessionUpdate,
     raw: &RawDocument,
     state: &mut UpdateState,
     ids: &dyn IdGenerator,
     clock: &dyn Clock,
+    dispatch: Option<&DispatchContext>,
 ) -> Result<Vec<EndpointEvent>, HostError> {
     let acp = Some(acp_raw(raw)?);
     let at = clock.now();
@@ -80,18 +86,26 @@ pub fn update_events(
 
     match update {
         SessionUpdate::UserMessageChunk(chunk) => {
-            events.push(delta_event(
-                DeltaSpec {
-                    event_type: "user.message.delta",
-                    acp_message_id: chunk.message_id.as_deref(),
-                    kind: "user",
-                },
-                state,
-                &chunk.content,
-                acp,
-                at,
-                ids,
-            )?);
+            // 重复回显：持久化的首条正文才是权威。这条既不产出事件，也不占用该消息的 delta 状态
+            // （`messageId`/`deltaIndex`），被丢弃的回显因此不会在后续片段里留下空洞。
+            if !user_echo_is_duplicate(
+                dispatch,
+                update_content_literal(raw),
+                chunk.message_id.as_deref(),
+            ) {
+                events.push(delta_event(
+                    DeltaSpec {
+                        event_type: "user.message.delta",
+                        acp_message_id: chunk.message_id.as_deref(),
+                        kind: "user",
+                    },
+                    state,
+                    &chunk.content,
+                    acp,
+                    at,
+                    ids,
+                )?);
+            }
         }
         SessionUpdate::AgentMessageChunk(chunk) => {
             events.push(delta_event(
@@ -243,6 +257,92 @@ pub fn update_events(
     Ok(events)
 }
 
+/// 本次派发的用户输入回显是否可证明是**已保存首条的重复**（`design.md` D7）。
+///
+/// 关联只用派发上下文与事件自身：`UserEchoLink` 的七个固定字段取自该次调用传入的上下文，内容数组与
+/// 摘要则由这条 `user_message_chunk` 的**原文**内容块按首条输入的同一口径算出（`[<block 原文>]` 的
+/// UTF-8 字节 SHA-256 → 无填充 base64url），再交给唯一规则 [`associate_user_echo`] 判定。
+///
+/// 返回 `true`（`EchoAssociation::Duplicate`）时调用方**不产出**这条 `user.message.delta`：持久首条
+/// 正文才是权威，回显不能再造第二条用户消息。其余两种结论照常下发：
+///
+/// - `Differs`：已登记的事件词表里没有「Agent 来源的用户输入事件」（`EndpointEvent` 不携带
+///   `EventOrigin`，唯一被登记的映射仍是 `user_message_chunk` → `user.message.delta`），因此不发明新键、
+///   也不改写判别子映射；该回显保留为独立的用户输入事件，由 WP5 的投影决定展示方式。
+/// - `Unattributed`：没有上下文、取不到原文或摘要算不出，保留为有来源说明的独立事件，绝不吞掉或
+///   改写首条。
+///
+/// 已知边界（不新增 wire 字段的代价）：摘要按**逐字节**比较，且以内容块的原文为准。Agent 把首条的
+/// 一个文本块拆成多个 chunk、或对块重新编码（键序/转义/附加字段变化）时，单块摘要不会等于整条输入的
+/// 摘要，结论是 `Differs`——宁可多显示一条独立回显，也绝不错删内容。
+fn user_echo_is_duplicate(
+    dispatch: Option<&DispatchContext>,
+    content_literal: Option<&str>,
+    agent_message_id: Option<&str>,
+) -> bool {
+    let Some(context) = dispatch else {
+        return false;
+    };
+    let Some(content_literal) = content_literal else {
+        return false;
+    };
+    let Ok(echo) = user_echo_event(context, content_literal, agent_message_id) else {
+        // 内容/摘要不可构造：不猜关联，照常下发。
+        return false;
+    };
+    matches!(
+        associate_user_echo(Some(context), &echo),
+        EchoAssociation::Duplicate { .. }
+    )
+}
+
+/// 由派发上下文与一条用户输入回显的**原文**构造 [`UserEchoEvent`]。
+///
+/// `link` 的全部固定字段来自**本次调用**的上下文（会话/首条/用户消息/请求/Agent 身份/资源代），
+/// `agent_message` 是 Agent 自己给这条回显的标识（不存在或不是本实现的 `MessageId` 形状时为 `None`；
+/// 它从不作为匹配依据）。内容数组与摘要与 [`acp_core::model::FirstSubmissionInput`] 同源口径：内容块
+/// 原文按顺序以 `,` 连接、外层加 `[...]`，摘要对同一份字节计算。
+fn user_echo_event(
+    context: &DispatchContext,
+    content_literal: &str,
+    agent_message_id: Option<&str>,
+) -> Result<UserEchoEvent, HostError> {
+    let json = format!("[{content_literal}]");
+    let content = JsonValueText::new(&json).map_err(|_| HostError::IdUnavailable)?;
+    let digest = Sha256::digest(json.as_bytes());
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
+    let content_digest = Digest::new(&encoded).map_err(|_| HostError::IdUnavailable)?;
+    Ok(UserEchoEvent {
+        link: Some(UserEchoLink {
+            session: context.session.clone(),
+            first_submission: context.first_submission.clone(),
+            user_message: context.user_message.clone(),
+            request: context.request.clone(),
+            agent: context.agent.clone(),
+            agent_session: context.agent_session.clone(),
+            resource_generation: context.resource_generation,
+        }),
+        agent_message: agent_message_id.and_then(|id| MessageId::new(id).ok()),
+        content,
+        content_digest,
+    })
+}
+
+/// 一条 `session/update` 通知里 `params.update.content` 成员的**原文**（内容块的逐字节载体）。
+fn update_content_literal(raw: &RawDocument) -> Option<&str> {
+    let update = member_literal(raw.as_str(), "params")
+        .and_then(|params| member_literal(params, "update"))?;
+    member_literal(update, "content")
+}
+
+/// 一个 ACP 内容块的可序列化 JSON（未登记类型用原始 payload：那是「可见降级」而不是降成 `null`）。
+fn content_block_json(content: &ContentBlock) -> Option<Value> {
+    match content {
+        ContentBlock::Unknown { payload, .. } => Some(payload.clone()),
+        other => serde_json::to_value(other).ok(),
+    }
+}
+
 /// 一条 delta 的标识（事件类型 + ACP 消息标识 + 分组类别）。
 #[derive(Debug, Clone, Copy)]
 struct DeltaSpec<'a> {
@@ -280,11 +380,7 @@ fn delta_event(
         // 非文本块必须带上结构化 `block`（core 折叠收尾消息时用它，纯文本客户端只读 `text`）。
         // 未登记类型走 `ContentBlock::Unknown`：它标记了 `skip_serializing`（重新编码没有意义），
         // 因此这里直接用 Agent 给的原始 payload——那才是「可见降级」而不是把它降成 null。
-        let block = match content {
-            ContentBlock::Unknown { payload, .. } => payload.clone(),
-            other => serde_json::to_value(other).unwrap_or(Value::Null),
-        };
-        if let Some(object) = view.as_object_mut() {
+        if let (Some(block), Some(object)) = (content_block_json(content), view.as_object_mut()) {
             object.insert("block".to_owned(), block);
         }
     }

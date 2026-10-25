@@ -28,6 +28,8 @@ pub enum TranscriptError {
     Base64Url(&'static str),
     #[error("UUID 文本不是规范小写 8-4-4-4-12：{0}")]
     Uuid(&'static str),
+    #[error("字段取值不合法：{0}")]
+    InvalidField(&'static str),
     #[error("字段长度超过 u32 上限")]
     FieldTooLong,
     #[error("表驱动编解码失败：{0}")]

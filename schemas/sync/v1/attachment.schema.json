@@ -60,6 +60,19 @@
         "id": { "$ref": "common.schema.json#/$defs/uuid" }
       }
     },
+    "preparationAttachmentTarget": {
+      "description": "准备附件的闭合 target（`core.session-preparation.v1`，design D6.1）：`sessionId` 是由节点签发准备凭据的 ID，`receipt` 是完整 claims+signature（不是业务 connectionId 或登录 token），`runtimeEpoch` 是本节点当前准备运行期标识（正常进程重启改变），`generation` 是 `1..=2^63−1` 的十进制字符串。target 与顶层 `sessionId` **互斥**：正式上传仍用旧分支。每块不重复附带 receipt；服务端从已核验的运行期传输记录恢复 target。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sessionId", "receipt", "runtimeEpoch", "generation"],
+      "properties": {
+        "kind": { "const": "preparation" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "receipt": { "$ref": "common.schema.json#/$defs/preparationReceipt" },
+        "runtimeEpoch": { "$ref": "common.schema.json#/$defs/uuid" },
+        "generation": { "$ref": "common.schema.json#/$defs/positiveDecimalString" }
+      }
+    },
     "base": {
       "type": "object",
       "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
@@ -72,18 +85,37 @@
       }
     },
     "beginBody": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["transferId", "sessionId", "subject", "totalLength", "chunkSize", "mediaType", "fileName"],
-      "properties": {
-        "transferId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "subject": { "$ref": "#/$defs/subject" },
-        "totalLength": { "$ref": "common.schema.json#/$defs/decimalString" },
-        "chunkSize": { "const": 32768 },
-        "mediaType": { "type": "string", "minLength": 1, "maxLength": 255 },
-        "fileName": { "type": "string", "minLength": 1, "maxLength": 255 }
-      }
+      "description": "`attachment.begin` 的 body：正式上传（顶层 `sessionId`）与准备上传（`target`）二选一，两个分支各自闭合，禁止同时出现 `sessionId` 与 `target`，也不接受 `target.kind` 取正式值来绕过旧分支。准备分支要求连接已同时协商 `core.attachment-transfer.v1` 与 `core.session-preparation.v1`，否则回 `protocol.feature_required`（details.features 含缺失 feature）且不触碰存储。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transferId", "sessionId", "subject", "totalLength", "chunkSize", "mediaType", "fileName"],
+          "properties": {
+            "transferId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "subject": { "$ref": "#/$defs/subject" },
+            "totalLength": { "$ref": "common.schema.json#/$defs/decimalString" },
+            "chunkSize": { "const": 32768 },
+            "mediaType": { "type": "string", "minLength": 1, "maxLength": 255 },
+            "fileName": { "type": "string", "minLength": 1, "maxLength": 255 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transferId", "target", "subject", "totalLength", "chunkSize", "mediaType", "fileName"],
+          "properties": {
+            "transferId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "target": { "$ref": "#/$defs/preparationAttachmentTarget" },
+            "subject": { "$ref": "#/$defs/subject" },
+            "totalLength": { "$ref": "common.schema.json#/$defs/decimalString" },
+            "chunkSize": { "const": 32768 },
+            "mediaType": { "type": "string", "minLength": 1, "maxLength": 255 },
+            "fileName": { "type": "string", "minLength": 1, "maxLength": 255 }
+          }
+        }
+      ]
     },
     "chunkBody": {
       "type": "object",
@@ -192,15 +224,31 @@
       }
     },
     "manifestBeginBody": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["submissionId", "sessionId", "subject", "attachmentCount"],
-      "properties": {
-        "submissionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "subject": { "$ref": "#/$defs/subject" },
-        "attachmentCount": { "$ref": "common.schema.json#/$defs/decimalString" }
-      }
+      "description": "`attachment.manifest_begin` 的 body：正式会话清单（顶层 `sessionId`）与准备清单（`target`）二选一，两个分支各自闭合。`submissionId` 是**附件清单**标识（不是首条提交的 `firstSubmissionId`），`session.start` 的 `kind: initial` 用它认领清单。准备清单里的每个 `transferId` 必须已封存在同设备/同 sessionId/同 tabNonce/同 runtimeEpoch+generation 的准备下。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["submissionId", "sessionId", "subject", "attachmentCount"],
+          "properties": {
+            "submissionId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "subject": { "$ref": "#/$defs/subject" },
+            "attachmentCount": { "$ref": "common.schema.json#/$defs/decimalString" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["submissionId", "target", "subject", "attachmentCount"],
+          "properties": {
+            "submissionId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "target": { "$ref": "#/$defs/preparationAttachmentTarget" },
+            "subject": { "$ref": "#/$defs/subject" },
+            "attachmentCount": { "$ref": "common.schema.json#/$defs/decimalString" }
+          }
+        }
+      ]
     },
     "manifestPageBody": {
       "type": "object",
@@ -239,6 +287,10 @@
         "retryable": { "type": "boolean" },
         "transferId": {
           "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        },
+        "submissionId": {
+          "description": "可选：只有协商 `core.session-preparation.v1` 的连接才允许出现（旧 peer 与会话出错时缺席）。**清单错误的每个分支都必须携带它，且 `transferId` 为 `null`**；传输错误的 `transferId` 非空；无法安全识别标识时两边都省略/置 `null`，MUST NOT 回显未核实的资源详情（design D6.1/D6.3）。",
+          "$ref": "common.schema.json#/$defs/uuid"
         },
         "details": { "type": "object" }
       }

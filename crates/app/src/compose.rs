@@ -169,6 +169,11 @@ pub struct Composition {
     use_cases: Arc<UseCases>,
     /// 本机会话生命周期（`core.local-session-lifecycle.v1`）：启动收敛、容量/保留回收与查看租约。
     lifecycle: Arc<LocalSessionLifecycle>,
+    /// 准备控制/首次提交面（`core.session-preparation.v1`）：`server::sync` 的控制帧、附件准备目标与
+    /// `session.start` 都经它。组合根持有同一实例，daemon 用它注册路由并决定是否宣告 feature。
+    preparations: Arc<server::sync::preparation::Preparations>,
+    /// 准备端点窄面（`agent-host` 适配器）：关闭序列在 `AgentHost::shutdown_all` **之前**释放全部临时端点。
+    preparation_endpoints: Arc<dyn server::sync::preparation::PreparationEndpoints>,
     /// 会话文件/Git 的原生只读端口（与 `UseCases` 内部注入的是同一个实例）。
     ///
     /// 用例面不暴露端口，而连接级版本释放（`CommandRoute::on_closed`）与 daemon 关闭都要拿到同一实例，
@@ -292,6 +297,30 @@ impl Composition {
             .with_interaction_authority(interaction_authority),
         );
         let session_files = Arc::new(NativeSessionFiles::new());
+        let lifecycle = Arc::new(LocalSessionLifecycle::new(
+            Arc::clone(&clock),
+            lifecycle_store,
+            lifecycle_publisher,
+            config.sessions.lifecycle,
+        ));
+        lifecycle.set_session_release(Arc::new(HostSessionRelease {
+            host: Arc::clone(&host),
+        }));
+        // 准备运行期目录与首次提交/暂存端口（`core.session-preparation.v1`）：
+        // - 目录只活在内存（`design.md` D1），容量与创建/恢复共用同一本账；
+        // - `SqliteStore` 同一实例同时实现 `FirstSubmission`/`PreparationAttachmentStaging`，二者与
+        //   `SessionStore` 的受理事务必须同源，不能在组合根另建第二份。
+        let first_submission_port: Arc<dyn acp_core::ports::FirstSubmission> = store.clone();
+        let preparation_staging: Arc<dyn acp_core::ports::PreparationAttachmentStaging> =
+            store.clone();
+        let preparations_directory = Arc::new(acp_core::preparation::PreparationDirectory::new(
+            Arc::clone(&ids),
+            Arc::clone(&lifecycle) as Arc<dyn acp_core::ports::CapacityAdmission>,
+            acp_core::model::RuntimeEpoch::new(&Uuid::new_v4().to_string())
+                .map_err(|_| ComposeError::Port(PortError::Corrupt("runtime epoch")))?,
+        ));
+        let preparation_endpoints: Arc<dyn server::sync::preparation::PreparationEndpoints> =
+            Arc::new(HostPreparationEndpoints::new(Arc::clone(&host)));
         let use_cases = Arc::new(
             UseCases::new(UseCaseDeps {
                 broker: Arc::clone(&broker),
@@ -305,17 +334,20 @@ impl Composition {
                 ids: Arc::clone(&ids),
             })
             .with_session_files(Arc::clone(&session_files) as Arc<dyn SessionFiles>)
-            .with_attachment_transfers(attachment_transfers),
+            .with_attachment_transfers(attachment_transfers)
+            .with_preparations(Arc::clone(&preparations_directory))
+            .with_first_submission(Arc::clone(&first_submission_port))
+            .with_preparation_staging(Arc::clone(&preparation_staging)),
         );
-        let lifecycle = Arc::new(LocalSessionLifecycle::new(
-            Arc::clone(&clock),
-            lifecycle_store,
-            lifecycle_publisher,
-            config.sessions.lifecycle,
+        let preparations = Arc::new(server::sync::preparation::Preparations::new(
+            Arc::new(server::sync::preparation::CorePreparationTrust::new(
+                Arc::clone(&use_cases),
+                Arc::clone(&authority),
+            )),
+            Arc::clone(&preparations_directory),
+            first_submission_port,
+            Some(preparation_staging),
         ));
-        lifecycle.set_session_release(Arc::new(HostSessionRelease {
-            host: Arc::clone(&host),
-        }));
         // `session.create` 与 `session.resume` 共用同一本容量账：broker 在分配会话标识之后、启动后端
         // 之前预占，失败交还、落账后 settle 为 ready。
         assert!(
@@ -367,6 +399,8 @@ impl Composition {
             broker,
             use_cases,
             lifecycle,
+            preparations,
+            preparation_endpoints,
             session_files,
             node_event_tasks,
             access: None,
@@ -440,6 +474,18 @@ impl Composition {
     /// 本机会话生命周期（组合根唯一实例；`server::sync` 与后台回收任务共用）。
     pub fn lifecycle(&self) -> &Arc<LocalSessionLifecycle> {
         &self.lifecycle
+    }
+
+    /// 准备控制/首次提交面（`core.session-preparation.v1`）。
+    pub fn preparations(&self) -> &Arc<server::sync::preparation::Preparations> {
+        &self.preparations
+    }
+
+    /// 准备端点窄面（`agent-host` 适配器）。
+    pub fn preparation_endpoints(
+        &self,
+    ) -> &Arc<dyn server::sync::preparation::PreparationEndpoints> {
+        &self.preparation_endpoints
     }
 
     /// 会话文件/Git 的原生只读端口（与 [`Composition::use_cases`] 注入的是同一个实例）。
@@ -516,6 +562,8 @@ impl Composition {
             store,
             use_cases,
             lifecycle,
+            preparations,
+            preparation_endpoints,
             session_files,
             host,
             broker,
@@ -539,6 +587,11 @@ impl Composition {
         // 内容快照只存在于内存；连接断开的逐版本释放由 Sync 命令面完成，这里兜底释放全部（daemon 关闭）。
         // 必须在关闭存储之前：`release_all` 不触碰存储，但关闭顺序上它属于「先释放资源」的一段。
         session_files.release_all();
+        // 准备端点（`core.session-preparation.v1`）：临时资源先于 Agent 宿主与存储关闭。失败只记日志
+        // （组合根不伪造成释放成功），名额与真实占用由 Agent 宿主自己的状态承担。
+        preparation_endpoints.release_all().await;
+        drop(preparation_endpoints);
+        drop(preparations);
         // 显式释放：`UseCases`/`Broker`/`AgentHost` 各自持有存储句柄（`Arc<dyn …>` 克隆）。
         drop(use_cases);
         drop(lifecycle);
@@ -1099,6 +1152,218 @@ impl SessionRelease for HostSessionRelease {
             agent_host::release::ReleaseOutcome::Failed => ReleaseOutcome::Failed,
             agent_host::release::ReleaseOutcome::Uncertain => ReleaseOutcome::Uncertain,
         })
+    }
+}
+
+/// 准备端点（`core.session-preparation.v1`）的组合根适配器。
+///
+/// 把 `server::sync::preparation::PreparationEndpoints` 接到 `agent-host` 的临时端点 API：
+///
+/// - `establish`：同一会话同一资源代已建立 ⇒ 直接复核/应用选择并复用（`restore` 的 live 路径）；
+///   换了资源代或不存在 ⇒ 先按精确代释放旧代（释放失败**不**建立第二代），再 `prepare` 新的临时端点；
+/// - `configure`：只作用于当前资源代，返回 Agent 当场确认的选项；
+/// - `claim`：把准备端点转正为正式所有权（首次提交），返回同一句柄用于派发；
+/// - `release`/`release_all`：按精确代释放；关闭序列释放全部，先于 `AgentHost::shutdown_all`。
+///
+/// 一把异步锁序列化全部端点操作：准备面的会话门在 server 侧只覆盖 `session.start`，控制帧（allocate/
+/// restore/configure/release）与首次提交仍可能并发落到同一会话；端点状态必须线性化，否则一次
+/// release 可能关掉另一次 claim 刚转正的绑定。
+pub struct HostPreparationEndpoints {
+    host: Arc<AgentHost>,
+    entries: tokio::sync::Mutex<std::collections::HashMap<String, PreparedEndpoint>>,
+}
+
+struct PreparedEndpoint {
+    /// 建立它时的 core 资源代；`claim`/`release` 只认精确匹配。
+    generation: u64,
+    endpoint: Arc<agent_host::TemporaryEndpoint>,
+}
+
+impl HostPreparationEndpoints {
+    /// 装配（组合根唯一实例）。
+    pub fn new(host: Arc<AgentHost>) -> Self {
+        Self {
+            host,
+            entries: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// 释放某个条目并返回是否确认释放；失败时**保留**条目（资源与名额继续占用）。
+    async fn release_entry(
+        &self,
+        entry: &PreparedEndpoint,
+    ) -> server::sync::preparation::EndpointRelease {
+        match self.host.release_preparation(&entry.endpoint).await {
+            agent_host::release::ReleaseOutcome::Released => {
+                server::sync::preparation::EndpointRelease::Released
+            }
+            agent_host::release::ReleaseOutcome::Failed => {
+                server::sync::preparation::EndpointRelease::Failed
+            }
+            agent_host::release::ReleaseOutcome::Uncertain => {
+                server::sync::preparation::EndpointRelease::Uncertain
+            }
+        }
+    }
+}
+
+fn host_selection(
+    selection: &server::sync::preparation::PreparationSelectionInput,
+) -> agent_host::PreparationSelection {
+    agent_host::PreparationSelection::new(
+        selection.mode.clone(),
+        selection
+            .config
+            .iter()
+            .map(|(id, value)| agent_host::PreparationConfigChoice::new(id.clone(), value.clone()))
+            .collect(),
+    )
+}
+
+fn wire_options(
+    options: agent_host::PreparationOptions,
+) -> server::sync::preparation::PreparationOptions {
+    server::sync::preparation::PreparationOptions {
+        blocks_dispatch: options.blocks_dispatch(),
+        modes: options.modes,
+        config: options.config,
+    }
+}
+
+#[async_trait::async_trait]
+impl server::sync::preparation::PreparationEndpoints for HostPreparationEndpoints {
+    async fn establish(
+        &self,
+        request: server::sync::preparation::PreparationEstablish,
+    ) -> Result<server::sync::preparation::PreparationOptions, PortError> {
+        let key = request.session.as_str().to_owned();
+        let selection = host_selection(&request.selection);
+        let mut entries = self.entries.lock().await;
+        if let Some(existing) = entries.get(&key) {
+            if existing.generation == request.generation && !existing.endpoint.is_released() {
+                let options = existing.endpoint.apply_selection(&selection).await?;
+                return Ok(wire_options(options));
+            }
+            // 换代：旧代必须真的释放，否则会留下第二个 Agent 会话（容量与进程树都说不清）。
+            if !matches!(
+                self.release_entry(existing).await,
+                server::sync::preparation::EndpointRelease::Released
+            ) {
+                return Err(PortError::Unavailable(UnavailableKind::Busy));
+            }
+            entries.remove(&key);
+        }
+        // 准备期没有正式会话行：事件不进入任何会话槽位（`design.md` D1「准备期无持久记录」）。
+        let sink = acp_core::ports::EventSink::new(|_| {});
+        let request_new = acp_core::model::CreateSessionRequest::new(
+            request.agent,
+            Some(request.workspace),
+            None,
+            acp_core::model::ResourceOrigin::Local,
+        );
+        let endpoint = match self.host.prepare(&request.session, request_new, sink).await {
+            Ok(endpoint) => Arc::new(endpoint),
+            Err(error) => return Err(error),
+        };
+        let options = match endpoint.apply_selection(&selection).await {
+            Ok(options) => options,
+            Err(error) => {
+                // 复核失败：释放刚建立的端点，不把它留在 Agent 侧。
+                let _ = self.host.release_preparation(&endpoint).await;
+                return Err(error);
+            }
+        };
+        entries.insert(
+            key,
+            PreparedEndpoint {
+                generation: request.generation,
+                endpoint,
+            },
+        );
+        Ok(wire_options(options))
+    }
+
+    async fn configure(
+        &self,
+        request: server::sync::preparation::PreparationConfigure,
+    ) -> Result<server::sync::preparation::PreparationOptions, PortError> {
+        let entries = self.entries.lock().await;
+        let Some(entry) = entries.get(request.session.as_str()) else {
+            return Err(PortError::Unavailable(
+                UnavailableKind::SessionNotEstablished,
+            ));
+        };
+        if entry.generation != request.generation || entry.endpoint.is_released() {
+            return Err(PortError::Unavailable(
+                UnavailableKind::SessionNotEstablished,
+            ));
+        }
+        let options = entry
+            .endpoint
+            .apply_selection(&host_selection(&request.selection))
+            .await?;
+        Ok(wire_options(options))
+    }
+
+    async fn claim(
+        &self,
+        session: SessionId,
+        generation: u64,
+    ) -> Result<Arc<dyn acp_core::ports::SessionEndpoint>, PortError> {
+        let entries = self.entries.lock().await;
+        let Some(entry) = entries.get(session.as_str()) else {
+            return Err(PortError::Unavailable(
+                UnavailableKind::SessionNotEstablished,
+            ));
+        };
+        if entry.generation != generation || entry.endpoint.is_released() {
+            return Err(PortError::Unavailable(
+                UnavailableKind::SessionNotEstablished,
+            ));
+        }
+        self.host.transfer_preparation(&entry.endpoint).await?;
+        Ok(Arc::clone(&entry.endpoint) as Arc<dyn acp_core::ports::SessionEndpoint>)
+    }
+
+    async fn release(
+        &self,
+        session: SessionId,
+        generation: u64,
+    ) -> server::sync::preparation::EndpointRelease {
+        let mut entries = self.entries.lock().await;
+        let Some(entry) = entries.get(session.as_str()) else {
+            return server::sync::preparation::EndpointRelease::Failed;
+        };
+        if entry.generation != generation {
+            // 旧代释放不得作用到新代绑定（`design.md` D1）。
+            return server::sync::preparation::EndpointRelease::Failed;
+        }
+        let outcome = self.release_entry(entry).await;
+        if matches!(
+            outcome,
+            server::sync::preparation::EndpointRelease::Released
+        ) {
+            entries.remove(session.as_str());
+        }
+        outcome
+    }
+
+    async fn release_all(&self) {
+        let entries: Vec<PreparedEndpoint> = {
+            let mut entries = self.entries.lock().await;
+            std::mem::take(&mut *entries).into_values().collect()
+        };
+        for entry in entries {
+            match self.host.release_preparation(&entry.endpoint).await {
+                agent_host::release::ReleaseOutcome::Released => {}
+                outcome => tracing::warn!(
+                    event = "daemon.preparation_release_incomplete",
+                    session = %entry.endpoint.session_id(),
+                    outcome = ?outcome,
+                    "关闭时未能确认释放准备端点（资源与名额保持占用）"
+                ),
+            }
+        }
     }
 }
 

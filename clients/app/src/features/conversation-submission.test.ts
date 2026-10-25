@@ -76,6 +76,73 @@ function configChanged(eventId: string, globalSequence: string, version: string)
   };
 }
 
+describe("用户消息在时间线上立即可见", () => {
+  it("提交后、服务端回显/读取之前就呈现自己发的正文", () => {
+    const { store } = interactionStore();
+    const outcome = store.submitPrompt(ONLINE_SESSION_ID, "这条消息现在就要出现");
+    expect(outcome.ok).toBe(true);
+
+    const page = store.conversationPage(ONLINE_SESSION_ID);
+    const userMessages = page?.timeline.entries.filter(
+      (entry) => entry.kind === "message" && entry.channel === "user",
+    ) ?? [];
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]?.kind === "message" ? userMessages[0].message.text : null).toBe("这条消息现在就要出现");
+  });
+
+  it("权威回显到达后同一条正文只呈现一次", () => {
+    const { store } = interactionStore();
+    store.submitPrompt(ONLINE_SESSION_ID, "只出现一次");
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "user.message.delta",
+        eventId: "dddddddd-0000-4000-8000-000000000701",
+        sessionId: ONLINE_SESSION_ID,
+        view: { messageId: "cccccccc-0000-4000-8000-000000000701", turnId: "turn-1", deltaIndex: "0", text: "只出现一次" },
+      }),
+    });
+
+    const page = store.conversationPage(ONLINE_SESSION_ID);
+    const matching = (page?.timeline.entries ?? []).filter(
+      (entry) => entry.kind === "message" && entry.channel === "user" &&
+        entry.message.text === "只出现一次",
+    );
+    expect(matching).toHaveLength(1);
+  });
+
+  it("明确被拒绝的提交不再冒充已发送", () => {
+    const { store, gateway } = interactionStore();
+    const outcome = store.submitPrompt(ONLINE_SESSION_ID, "不会发出去");
+    if (!outcome.ok) throw new Error("提交应被接受");
+    const requestId = outcome.requestId;
+    store.apply({
+      kind: "command_result",
+      result: {
+        protocolVersion: 1,
+        type: "command.result",
+        messageId: "bbbbbbbb-1111-4111-8111-000000000703",
+        connectionId: lastDispatch(gateway).connectionId,
+        connectionSequence: "1",
+        body: {
+          requestId,
+          command: "session.prompt",
+          status: "rejected",
+          acceptedAt: null,
+          terminalEventId: "dddddddd-0000-4000-8000-000000000703",
+          result: null,
+          error: { code: "session.not_found", message: "会话不存在", retryable: false, details: {} },
+        },
+      },
+    });
+
+    const page = store.conversationPage(ONLINE_SESSION_ID);
+    expect((page?.timeline.entries ?? []).some(
+      (entry) => entry.kind === "message" && entry.channel === "user" && entry.message.text === "不会发出去",
+    )).toBe(false);
+  });
+});
+
 describe("输入与提交以终态为准", () => {
   it("提交只发文本、先呈现待确认，服务端确认后才变已接受", () => {
     const { store, gateway } = interactionStore();

@@ -12,7 +12,8 @@ use sync_protocol::domains::DOMAINS;
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 const PROTOCOL: &str = "sync";
-const POSITIVE_EXPECTED: usize = 5;
+/// `core.session-preparation.v1` 新增 `transcripts/session-preparation.json`，故由 5 变为 6。
+const POSITIVE_EXPECTED: usize = 6;
 const TRANSCRIPT_NEGATIVES_EXPECTED: usize = 9;
 const PUBLIC_KEY_NEGATIVES_EXPECTED: usize = 4;
 

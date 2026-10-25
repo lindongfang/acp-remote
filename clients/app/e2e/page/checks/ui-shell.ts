@@ -23,12 +23,13 @@
  * 断言一律属性型（`[data-shell-top-bar="visible"]` 这类锚点），不看 class 名或标签名。
  */
 
-import { createElement } from "react";
+import { createElement, useEffect } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
 import { Shell } from "../../../src/components/shell/Shell";
+import { renderAuthenticatedScreen } from "../../../src/components/AuthenticatedScreen";
 import { ClientStoreProvider } from "../../../src/features/runtime";
 import { AGENTS, DIRS_ROUTE, HOSTS_ROUTE, PAIR_ROUTE, WORKSPACES_WITH_PATHS, sessionsForBothDirectories } from "../fixtures";
 import { Stack, currentPath } from "../router-stub";
@@ -97,6 +98,65 @@ async function withShell(
 }
 
 const checks: readonly Check[] = [
+  {
+    name: "UI-SHELL-6 认证等待及完成期间导航容器始终挂载，业务页面只在认证后出现",
+    async run() {
+      let mounts = 0;
+      let unmounts = 0;
+      function NavigatorProbe() {
+        useEffect(() => { mounts += 1; return () => { unmounts += 1; }; }, []);
+        return createElement(Stack, { screenLayout: renderAuthenticatedScreen });
+      }
+      await withShell(baseScenario({ authenticate: false, deliverSnapshot: false }), async ({ container, mounted }) => {
+        await waitFor(() => query(container, '[data-auth-transition="pending"]') !== null, "目录页等待认证");
+        await waitFor(() => mounts === 1, "等待期间导航容器保持挂载");
+        expectEqual(mounts, 1, "等待期间导航容器仍然挂载");
+        expectEqual(query(container, '[data-shell-top-bar="visible"]'), null, "认证前不显示顶栏");
+        expectEqual(query(container, '[data-route="dirs"]'), null, "认证前不挂载业务页面");
+        await waitFor(() => mounted.host?.received.some((frame) => frame["type"] === "auth.client_proof") === true, "设备证明已发送");
+        mounted.host?.deliverEvent({
+          protocolVersion: 1,
+          type: "auth.authenticated",
+          messageId: "00000000-0000-4000-8000-0000000000a1",
+          body: {
+            deviceId: mounted.composition?.store.state.host?.deviceId,
+            serverEpoch: "00000000-0000-4000-8000-000000000001",
+            headGlobalSequence: "10",
+            heartbeatIntervalMs: 30_000,
+            limits: { maxMessageBytes: 1_048_576, maxPromptBytes: 262_144, maxReplayEventsPerBatch: 500 },
+          },
+        });
+        await waitFor(() => query(container, '[data-shell-top-bar="visible"]') !== null, "认证完成后显示顶栏");
+        await waitFor(() => query(container, '[data-route="dirs"]') !== null, "认证完成后挂载目录页面");
+        expectEqual(query(container, '[data-auth-transition="pending"]'), null, "认证完成后退出等待页");
+        expectEqual(mounts, 1, "完成认证不重新挂载导航容器");
+        expectEqual(unmounts, 0, "认证切换不卸载导航容器");
+      }, createElement(NavigatorProbe));
+    },
+  },
+  {
+    name: "UI-SHELL-5 主机身份变化后点击重新配对，保留配对码输入且不退回认证空白页",
+    async run() {
+      await withShell(
+        baseScenario({ tamperHostProof: true, extraRoutes: [PAIR_ROUTE] }),
+        async ({ container, mounted }) => {
+          await waitFor(
+            () => mounted.composition?.store.state.connection.state === "identity_changed",
+            "主机验签失败后进入身份变化状态",
+          );
+          await waitFor(() => query(container, '[data-problem-action="repair"]') !== null, "重新配对按钮出现");
+          click(query(container, '[data-problem-action="repair"]'), "重新配对");
+          await waitFor(() => query(container, '[data-pairing-code-entry="true"]') !== null, "配对码输入出现");
+          // 等待页面 effect 和路由更新完成，不能只断言跳回目录前的短暂一帧。
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          expectEqual(currentPath(), "/pair", "重新配对必须停留在配对页");
+          expectThat(query(container, '[data-pairing-code-entry="true"]') !== null, "配对输入持续可见");
+          expectThat(mounted.composition?.store.state.host !== null, "批准之前保留旧主机记录");
+        },
+        createElement(Stack, { screenLayout: renderAuthenticatedScreen }),
+      );
+    },
+  },
   {
     name: "UI-SHELL-1 根路由呈现全局顶栏：在线时胶囊只有正常档与设备标识，没有状态短词，也没有第二处状态锚点",
     async run() {

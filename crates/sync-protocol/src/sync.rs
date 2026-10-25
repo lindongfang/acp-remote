@@ -11,10 +11,12 @@ use serde::de::{DeserializeOwned, Error as DeError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
+use crate::command::PreparationConfigSelection;
 use crate::common::{
-    AgentCatalogEntry, AgentContentBlock, Base64Url, BoundedU64, Cursor, DecimalString,
-    NonEmptyText, Nullable, OriginCursor, ProtocolVersionV1, PublicError, RawAcp, RawObject,
-    SessionRef, SessionSummary, Timestamp, Uuid, ValueError, WorkspaceCatalogEntry,
+    AgentCatalogEntry, AgentContentBlock, Base64Url, BoundedU64, ConfigOptionView, Cursor,
+    DecimalString, ModeRef, NonEmptyText, Nullable, OriginCursor, PositiveDecimalString,
+    PreparationReceipt, ProtocolVersionV1, PublicError, RawAcp, RawObject, SessionRef,
+    SessionSummary, Timestamp, Uuid, ValueError, WorkspaceCatalogEntry,
     deserialize_optional_non_null,
 };
 use crate::event::EventType;
@@ -1061,6 +1063,853 @@ impl<'de> Deserialize<'de> for SessionViewResult {
             view_version: raw.view_version,
             status: raw.status,
             lease_expires_at: raw.lease_expires_at,
+        })
+    }
+}
+
+/// `preparationAction`（`sync.schema.json#/$defs/preparationAction`）：准备控制面的闭合 action。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PreparationAction {
+    /// `allocate`
+    Allocate,
+    /// `restore`
+    Restore,
+    /// `configure`
+    Configure,
+    /// `renew`
+    Renew,
+    /// `release`
+    Release,
+}
+
+impl PreparationAction {
+    pub const ALL: [PreparationAction; 5] = [
+        PreparationAction::Allocate,
+        PreparationAction::Restore,
+        PreparationAction::Configure,
+        PreparationAction::Renew,
+        PreparationAction::Release,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PreparationAction::Allocate => "allocate",
+            PreparationAction::Restore => "restore",
+            PreparationAction::Configure => "configure",
+            PreparationAction::Renew => "renew",
+            PreparationAction::Release => "release",
+        }
+    }
+}
+
+impl std::fmt::Display for PreparationAction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for PreparationAction {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "action",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for PreparationAction {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for PreparationAction {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::from_str(&text).map_err(DeError::custom)
+    }
+}
+
+/// `session.preparation.result.body.status`：闭合五态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PreparationStatus {
+    /// `ready`
+    Ready,
+    /// `committed`
+    Committed,
+    /// `stale`
+    Stale,
+    /// `released`
+    Released,
+    /// `failed`
+    Failed,
+}
+
+impl PreparationStatus {
+    pub const ALL: [PreparationStatus; 5] = [
+        PreparationStatus::Ready,
+        PreparationStatus::Committed,
+        PreparationStatus::Stale,
+        PreparationStatus::Released,
+        PreparationStatus::Failed,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PreparationStatus::Ready => "ready",
+            PreparationStatus::Committed => "committed",
+            PreparationStatus::Stale => "stale",
+            PreparationStatus::Released => "released",
+            PreparationStatus::Failed => "failed",
+        }
+    }
+}
+
+impl std::fmt::Display for PreparationStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for PreparationStatus {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "status",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for PreparationStatus {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for PreparationStatus {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::from_str(&text).map_err(DeError::custom)
+    }
+}
+
+/// `session.preparation.result.body.reason`（`status = "stale"`）：资源代失效的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PreparationStaleReason {
+    /// `runtime_epoch_mismatch`
+    RuntimeEpochMismatch,
+    /// `generation_mismatch`
+    GenerationMismatch,
+    /// `released`
+    Released,
+}
+
+impl PreparationStaleReason {
+    pub const ALL: [PreparationStaleReason; 3] = [
+        PreparationStaleReason::RuntimeEpochMismatch,
+        PreparationStaleReason::GenerationMismatch,
+        PreparationStaleReason::Released,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PreparationStaleReason::RuntimeEpochMismatch => "runtime_epoch_mismatch",
+            PreparationStaleReason::GenerationMismatch => "generation_mismatch",
+            PreparationStaleReason::Released => "released",
+        }
+    }
+}
+
+impl std::fmt::Display for PreparationStaleReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for PreparationStaleReason {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "reason",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for PreparationStaleReason {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for PreparationStaleReason {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::from_str(&text).map_err(DeError::custom)
+    }
+}
+
+/// `session.preparation`（`sync.schema.json#/$defs/sessionPreparation`）的 body（§11.9）。
+///
+/// 临时控制面的闭合 action 载荷：`allocate` 只带 Agent/目录与标签页归属；`restore` 必带凭据，
+/// `knownRuntimeEpoch`/`knownGeneration` 只作旧状态提示（不参与拒绝判定）；`configure`/`renew`/
+/// `release` 携带凭据与待操作资源代。所有分支都带 `operationId`（连接期有界去重）。构造与反序列化
+/// 都按 action 钉死「哪些字段必须出现、哪些禁止出现」——混用字段是形状错误，不是被忽略的多余键。
+///
+/// `session_id` 只为 `allocate` 之外的分支存在：正式 ID 由 Owner 在 `allocate` 时分配并在
+/// `session.preparation.result` 中回传，客户端不得自行指定（design D2/D3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionPreparation {
+    pub operation_id: Uuid,
+    pub action: PreparationAction,
+    /// `allocate` 为 `None`；`restore`/`configure`/`renew`/`release` 必须给出。
+    pub session_id: Option<Uuid>,
+    pub detail: PreparationRequestDetail,
+}
+
+/// 准备 action 的闭合字段。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparationRequestDetail {
+    /// `allocate`：Agent、目录来源与标签页归属。
+    Allocate {
+        agent_id: NonEmptyText<128>,
+        workspace: PreparationWorkspaceRef,
+        tab_nonce: Base64Url<32>,
+    },
+    /// `restore`：凭据 + 可选的旧状态提示。
+    Restore {
+        receipt: PreparationReceipt,
+        known_runtime_epoch: Option<Uuid>,
+        known_generation: Option<PositiveDecimalString>,
+    },
+    /// `configure`：在当前资源代上应用模式/配置（至少一个）。
+    Configure {
+        receipt: PreparationReceipt,
+        runtime_epoch: Uuid,
+        generation: PositiveDecimalString,
+        mode: Option<NonEmptyText<256>>,
+        config_options: Option<PreparationConfigSelection>,
+    },
+    /// `renew`：续租当前资源代。
+    Renew {
+        receipt: PreparationReceipt,
+        runtime_epoch: Uuid,
+        generation: PositiveDecimalString,
+    },
+    /// `release`：释放当前资源代。
+    Release {
+        receipt: PreparationReceipt,
+        runtime_epoch: Uuid,
+        generation: PositiveDecimalString,
+    },
+}
+
+/// allocate 的目录来源：`directoryId` 与 `workspacePath` **恰好一个**。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparationWorkspaceRef {
+    /// 已登记目录的标识（32 字符小写十六进制）。
+    Directory { directory_id: NonEmptyText<32> },
+    /// 客户端提交的绝对路径（1..=4096 字符）。
+    Path { workspace_path: NonEmptyText<4096> },
+}
+
+impl Serialize for PreparationWorkspaceRef {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            PreparationWorkspaceRef::Directory { directory_id } => {
+                map.serialize_entry("directoryId", directory_id)?;
+            }
+            PreparationWorkspaceRef::Path { workspace_path } => {
+                map.serialize_entry("workspacePath", workspace_path)?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl PreparationWorkspaceRef {
+    fn validate(value: &PreparationWorkspaceRef) -> Result<(), ValueError> {
+        match value {
+            PreparationWorkspaceRef::Directory { directory_id } => {
+                let text = directory_id.as_str();
+                if text.len() != 32
+                    || !text
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                {
+                    return Err(ValueError::Pattern {
+                        field: "directoryId",
+                        value: text.to_owned(),
+                    });
+                }
+            }
+            PreparationWorkspaceRef::Path { .. } => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawPreparationWorkspaceRef {
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    directory_id: Option<NonEmptyText<32>>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    workspace_path: Option<NonEmptyText<4096>>,
+}
+
+impl<'de> Deserialize<'de> for PreparationWorkspaceRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawPreparationWorkspaceRef::deserialize(deserializer)?;
+        let value = match (raw.directory_id, raw.workspace_path) {
+            (Some(directory_id), None) => PreparationWorkspaceRef::Directory { directory_id },
+            (None, Some(workspace_path)) => PreparationWorkspaceRef::Path { workspace_path },
+            _ => {
+                return Err(DeError::custom(ValueError::Shape {
+                    field: "workspace",
+                    expected: "directoryId 与 workspacePath 必须恰好给出一个",
+                }));
+            }
+        };
+        Self::validate(&value).map_err(DeError::custom)?;
+        Ok(value)
+    }
+}
+
+impl SessionPreparation {
+    pub fn new(
+        operation_id: Uuid,
+        action: PreparationAction,
+        session_id: Option<Uuid>,
+        detail: PreparationRequestDetail,
+    ) -> Self {
+        Self {
+            operation_id,
+            action,
+            session_id,
+            detail,
+        }
+    }
+}
+
+impl Serialize for SessionPreparation {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("operationId", &self.operation_id)?;
+        map.serialize_entry("action", &self.action)?;
+        if let Some(session_id) = &self.session_id {
+            map.serialize_entry("sessionId", session_id)?;
+        }
+        match &self.detail {
+            PreparationRequestDetail::Allocate {
+                agent_id,
+                workspace,
+                tab_nonce,
+            } => {
+                map.serialize_entry("agentId", agent_id)?;
+                map.serialize_entry("workspace", workspace)?;
+                map.serialize_entry("tabNonce", tab_nonce)?;
+            }
+            PreparationRequestDetail::Restore {
+                receipt,
+                known_runtime_epoch,
+                known_generation,
+            } => {
+                map.serialize_entry("receipt", receipt)?;
+                if let Some(value) = known_runtime_epoch {
+                    map.serialize_entry("knownRuntimeEpoch", value)?;
+                }
+                if let Some(value) = known_generation {
+                    map.serialize_entry("knownGeneration", value)?;
+                }
+            }
+            PreparationRequestDetail::Configure {
+                receipt,
+                runtime_epoch,
+                generation,
+                mode,
+                config_options,
+            } => {
+                map.serialize_entry("receipt", receipt)?;
+                map.serialize_entry("runtimeEpoch", runtime_epoch)?;
+                map.serialize_entry("generation", generation)?;
+                if let Some(value) = mode {
+                    map.serialize_entry("mode", value)?;
+                }
+                if let Some(value) = config_options {
+                    map.serialize_entry("configOptions", value)?;
+                }
+            }
+            PreparationRequestDetail::Renew {
+                receipt,
+                runtime_epoch,
+                generation,
+            }
+            | PreparationRequestDetail::Release {
+                receipt,
+                runtime_epoch,
+                generation,
+            } => {
+                map.serialize_entry("receipt", receipt)?;
+                map.serialize_entry("runtimeEpoch", runtime_epoch)?;
+                map.serialize_entry("generation", generation)?;
+            }
+        }
+        map.end()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawSessionPreparation {
+    operation_id: Uuid,
+    action: PreparationAction,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    session_id: Option<Uuid>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    agent_id: Option<NonEmptyText<128>>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    workspace: Option<PreparationWorkspaceRef>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    tab_nonce: Option<Base64Url<32>>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    receipt: Option<PreparationReceipt>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    runtime_epoch: Option<Uuid>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    generation: Option<PositiveDecimalString>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    mode: Option<NonEmptyText<256>>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    config_options: Option<PreparationConfigSelection>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    known_runtime_epoch: Option<Uuid>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    known_generation: Option<PositiveDecimalString>,
+}
+
+fn forbidden(field: &'static str) -> ValueError {
+    ValueError::Shape {
+        field,
+        expected: "该 action 不允许此字段（sessionPreparation 的闭合分支）",
+    }
+}
+
+fn required(field: &'static str) -> ValueError {
+    ValueError::Shape {
+        field,
+        expected: "该 action 必须携带此字段（sessionPreparation 的闭合分支）",
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionPreparation {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawSessionPreparation::deserialize(deserializer)?;
+        let action = raw.action;
+
+        // 除 action 自身字段外，其余任何字段出现都按形状错误拒绝。
+        let forbid = |present: bool, field: &'static str| -> Result<(), D::Error> {
+            if present {
+                Err(DeError::custom(forbidden(field)))
+            } else {
+                Ok(())
+            }
+        };
+        let detail = match action {
+            PreparationAction::Allocate => {
+                forbid(raw.session_id.is_some(), "sessionId")?;
+                forbid(raw.receipt.is_some(), "receipt")?;
+                forbid(raw.runtime_epoch.is_some(), "runtimeEpoch")?;
+                forbid(raw.generation.is_some(), "generation")?;
+                forbid(raw.mode.is_some(), "mode")?;
+                forbid(raw.config_options.is_some(), "configOptions")?;
+                forbid(raw.known_runtime_epoch.is_some(), "knownRuntimeEpoch")?;
+                forbid(raw.known_generation.is_some(), "knownGeneration")?;
+                let agent_id = raw
+                    .agent_id
+                    .ok_or_else(|| DeError::custom(required("agentId")))?;
+                let workspace = raw
+                    .workspace
+                    .ok_or_else(|| DeError::custom(required("workspace")))?;
+                let tab_nonce = raw
+                    .tab_nonce
+                    .ok_or_else(|| DeError::custom(required("tabNonce")))?;
+                PreparationRequestDetail::Allocate {
+                    agent_id,
+                    workspace,
+                    tab_nonce,
+                }
+            }
+            PreparationAction::Restore => {
+                forbid(raw.agent_id.is_some(), "agentId")?;
+                forbid(raw.workspace.is_some(), "workspace")?;
+                forbid(raw.tab_nonce.is_some(), "tabNonce")?;
+                forbid(raw.runtime_epoch.is_some(), "runtimeEpoch")?;
+                forbid(raw.generation.is_some(), "generation")?;
+                forbid(raw.mode.is_some(), "mode")?;
+                forbid(raw.config_options.is_some(), "configOptions")?;
+                let receipt = raw
+                    .receipt
+                    .ok_or_else(|| DeError::custom(required("receipt")))?;
+                PreparationRequestDetail::Restore {
+                    receipt,
+                    known_runtime_epoch: raw.known_runtime_epoch,
+                    known_generation: raw.known_generation,
+                }
+            }
+            PreparationAction::Configure => {
+                forbid(raw.agent_id.is_some(), "agentId")?;
+                forbid(raw.workspace.is_some(), "workspace")?;
+                forbid(raw.tab_nonce.is_some(), "tabNonce")?;
+                forbid(raw.known_runtime_epoch.is_some(), "knownRuntimeEpoch")?;
+                forbid(raw.known_generation.is_some(), "knownGeneration")?;
+                if raw.mode.is_none() && raw.config_options.is_none() {
+                    return Err(DeError::custom(required("mode | configOptions")));
+                }
+                PreparationRequestDetail::Configure {
+                    receipt: raw
+                        .receipt
+                        .ok_or_else(|| DeError::custom(required("receipt")))?,
+                    runtime_epoch: raw
+                        .runtime_epoch
+                        .ok_or_else(|| DeError::custom(required("runtimeEpoch")))?,
+                    generation: raw
+                        .generation
+                        .ok_or_else(|| DeError::custom(required("generation")))?,
+                    mode: raw.mode,
+                    config_options: raw.config_options,
+                }
+            }
+            PreparationAction::Renew | PreparationAction::Release => {
+                forbid(raw.agent_id.is_some(), "agentId")?;
+                forbid(raw.workspace.is_some(), "workspace")?;
+                forbid(raw.tab_nonce.is_some(), "tabNonce")?;
+                forbid(raw.mode.is_some(), "mode")?;
+                forbid(raw.config_options.is_some(), "configOptions")?;
+                forbid(raw.known_runtime_epoch.is_some(), "knownRuntimeEpoch")?;
+                forbid(raw.known_generation.is_some(), "knownGeneration")?;
+                let receipt = raw
+                    .receipt
+                    .ok_or_else(|| DeError::custom(required("receipt")))?;
+                let runtime_epoch = raw
+                    .runtime_epoch
+                    .ok_or_else(|| DeError::custom(required("runtimeEpoch")))?;
+                let generation = raw
+                    .generation
+                    .ok_or_else(|| DeError::custom(required("generation")))?;
+                if action == PreparationAction::Renew {
+                    PreparationRequestDetail::Renew {
+                        receipt,
+                        runtime_epoch,
+                        generation,
+                    }
+                } else {
+                    PreparationRequestDetail::Release {
+                        receipt,
+                        runtime_epoch,
+                        generation,
+                    }
+                }
+            }
+        };
+        // 正式 ID 只对 `allocate` 之外的分支有意义；`allocate` 的 ID 由 Owner 分配并回传。
+        let session_id = match action {
+            PreparationAction::Allocate => None,
+            _ => Some(
+                raw.session_id
+                    .ok_or_else(|| DeError::custom(required("sessionId")))?,
+            ),
+        };
+
+        Ok(Self {
+            operation_id: raw.operation_id,
+            action,
+            session_id,
+            detail,
+        })
+    }
+}
+
+/// `session.preparation.result`（`sync.schema.json#/$defs/sessionPreparationResult`）的 body（§11.9）。
+///
+/// 闭合 `status` 判别联合：`ready` 给出凭据/资源代/Agent 确认过的真实设置；`committed` 只给首次
+/// 提交关联（**不是** `completed`）；`stale` 只来自 `configure`/`renew`/`release` 与附件 begin/
+/// manifest；`released` 无额外字段；`failed` 带结构化错误。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionPreparationResult {
+    pub operation_id: Uuid,
+    pub action: PreparationAction,
+    pub session_id: Uuid,
+    pub outcome: PreparationOutcome,
+}
+
+/// 准备结果的分支。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // wire 联合本身即分支形状；装箱会改变跨 crate 的解码 API。
+pub enum PreparationOutcome {
+    /// `ready`
+    Ready {
+        receipt: PreparationReceipt,
+        runtime_epoch: Uuid,
+        generation: PositiveDecimalString,
+        modes: Vec<ModeRef>,
+        config_options: Vec<ConfigOptionView>,
+        lease_expires_at: Timestamp,
+    },
+    /// `committed`
+    Committed {
+        first_submission_id: Uuid,
+        first_request_id: Uuid,
+        current_request_id: Uuid,
+        first_message_id: Uuid,
+    },
+    /// `stale`
+    Stale { reason: PreparationStaleReason },
+    /// `released`
+    Released,
+    /// `failed`
+    Failed { error: PublicError },
+}
+
+impl PreparationOutcome {
+    pub fn status(&self) -> PreparationStatus {
+        match self {
+            PreparationOutcome::Ready { .. } => PreparationStatus::Ready,
+            PreparationOutcome::Committed { .. } => PreparationStatus::Committed,
+            PreparationOutcome::Stale { .. } => PreparationStatus::Stale,
+            PreparationOutcome::Released => PreparationStatus::Released,
+            PreparationOutcome::Failed { .. } => PreparationStatus::Failed,
+        }
+    }
+}
+
+impl Serialize for SessionPreparationResult {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("operationId", &self.operation_id)?;
+        map.serialize_entry("action", &self.action)?;
+        map.serialize_entry("sessionId", &self.session_id)?;
+        map.serialize_entry("status", &self.outcome.status())?;
+        match &self.outcome {
+            PreparationOutcome::Ready {
+                receipt,
+                runtime_epoch,
+                generation,
+                modes,
+                config_options,
+                lease_expires_at,
+            } => {
+                map.serialize_entry("receipt", receipt)?;
+                map.serialize_entry("runtimeEpoch", runtime_epoch)?;
+                map.serialize_entry("generation", generation)?;
+                map.serialize_entry("modes", modes)?;
+                map.serialize_entry("configOptions", config_options)?;
+                map.serialize_entry("leaseExpiresAt", lease_expires_at)?;
+            }
+            PreparationOutcome::Committed {
+                first_submission_id,
+                first_request_id,
+                current_request_id,
+                first_message_id,
+            } => {
+                map.serialize_entry("firstSubmissionId", first_submission_id)?;
+                map.serialize_entry("firstRequestId", first_request_id)?;
+                map.serialize_entry("currentRequestId", current_request_id)?;
+                map.serialize_entry("firstMessageId", first_message_id)?;
+            }
+            PreparationOutcome::Stale { reason } => {
+                map.serialize_entry("reason", reason)?;
+            }
+            PreparationOutcome::Released => {}
+            PreparationOutcome::Failed { error } => {
+                map.serialize_entry("error", error)?;
+            }
+        }
+        map.end()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawSessionPreparationResult {
+    operation_id: Uuid,
+    action: PreparationAction,
+    session_id: Uuid,
+    status: PreparationStatus,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    receipt: Option<PreparationReceipt>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    runtime_epoch: Option<Uuid>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    generation: Option<PositiveDecimalString>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    modes: Option<Vec<ModeRef>>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    config_options: Option<Vec<ConfigOptionView>>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    lease_expires_at: Option<Timestamp>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    first_submission_id: Option<Uuid>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    first_request_id: Option<Uuid>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    current_request_id: Option<Uuid>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    first_message_id: Option<Uuid>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    reason: Option<PreparationStaleReason>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    error: Option<PublicError>,
+}
+
+impl<'de> Deserialize<'de> for SessionPreparationResult {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawSessionPreparationResult::deserialize(deserializer)?;
+        // 每个 status 只接受自己的字段；其余字段出现即形状错误。
+        let forbid = |present: bool, field: &'static str| -> Result<(), D::Error> {
+            if present {
+                Err(DeError::custom(forbidden(field)))
+            } else {
+                Ok(())
+            }
+        };
+        let outcome = match raw.status {
+            PreparationStatus::Ready => {
+                forbid(raw.first_submission_id.is_some(), "firstSubmissionId")?;
+                forbid(raw.first_request_id.is_some(), "firstRequestId")?;
+                forbid(raw.current_request_id.is_some(), "currentRequestId")?;
+                forbid(raw.first_message_id.is_some(), "firstMessageId")?;
+                forbid(raw.reason.is_some(), "reason")?;
+                forbid(raw.error.is_some(), "error")?;
+                PreparationOutcome::Ready {
+                    receipt: raw
+                        .receipt
+                        .ok_or_else(|| DeError::custom(required("receipt")))?,
+                    runtime_epoch: raw
+                        .runtime_epoch
+                        .ok_or_else(|| DeError::custom(required("runtimeEpoch")))?,
+                    generation: raw
+                        .generation
+                        .ok_or_else(|| DeError::custom(required("generation")))?,
+                    modes: raw
+                        .modes
+                        .ok_or_else(|| DeError::custom(required("modes")))?,
+                    config_options: raw
+                        .config_options
+                        .ok_or_else(|| DeError::custom(required("configOptions")))?,
+                    lease_expires_at: raw
+                        .lease_expires_at
+                        .ok_or_else(|| DeError::custom(required("leaseExpiresAt")))?,
+                }
+            }
+            PreparationStatus::Committed => {
+                forbid(raw.receipt.is_some(), "receipt")?;
+                forbid(raw.runtime_epoch.is_some(), "runtimeEpoch")?;
+                forbid(raw.generation.is_some(), "generation")?;
+                forbid(raw.modes.is_some(), "modes")?;
+                forbid(raw.config_options.is_some(), "configOptions")?;
+                forbid(raw.lease_expires_at.is_some(), "leaseExpiresAt")?;
+                forbid(raw.reason.is_some(), "reason")?;
+                forbid(raw.error.is_some(), "error")?;
+                PreparationOutcome::Committed {
+                    first_submission_id: raw
+                        .first_submission_id
+                        .ok_or_else(|| DeError::custom(required("firstSubmissionId")))?,
+                    first_request_id: raw
+                        .first_request_id
+                        .ok_or_else(|| DeError::custom(required("firstRequestId")))?,
+                    current_request_id: raw
+                        .current_request_id
+                        .ok_or_else(|| DeError::custom(required("currentRequestId")))?,
+                    first_message_id: raw
+                        .first_message_id
+                        .ok_or_else(|| DeError::custom(required("firstMessageId")))?,
+                }
+            }
+            PreparationStatus::Stale => {
+                forbid(raw.receipt.is_some(), "receipt")?;
+                forbid(raw.runtime_epoch.is_some(), "runtimeEpoch")?;
+                forbid(raw.generation.is_some(), "generation")?;
+                forbid(raw.modes.is_some(), "modes")?;
+                forbid(raw.config_options.is_some(), "configOptions")?;
+                forbid(raw.lease_expires_at.is_some(), "leaseExpiresAt")?;
+                forbid(raw.first_submission_id.is_some(), "firstSubmissionId")?;
+                forbid(raw.first_request_id.is_some(), "firstRequestId")?;
+                forbid(raw.current_request_id.is_some(), "currentRequestId")?;
+                forbid(raw.first_message_id.is_some(), "firstMessageId")?;
+                forbid(raw.error.is_some(), "error")?;
+                PreparationOutcome::Stale {
+                    reason: raw
+                        .reason
+                        .ok_or_else(|| DeError::custom(required("reason")))?,
+                }
+            }
+            PreparationStatus::Released => {
+                for (present, field) in [
+                    (raw.receipt.is_some(), "receipt"),
+                    (raw.runtime_epoch.is_some(), "runtimeEpoch"),
+                    (raw.generation.is_some(), "generation"),
+                    (raw.modes.is_some(), "modes"),
+                    (raw.config_options.is_some(), "configOptions"),
+                    (raw.lease_expires_at.is_some(), "leaseExpiresAt"),
+                    (raw.first_submission_id.is_some(), "firstSubmissionId"),
+                    (raw.first_request_id.is_some(), "firstRequestId"),
+                    (raw.current_request_id.is_some(), "currentRequestId"),
+                    (raw.first_message_id.is_some(), "firstMessageId"),
+                    (raw.reason.is_some(), "reason"),
+                    (raw.error.is_some(), "error"),
+                ] {
+                    forbid(present, field)?;
+                }
+                PreparationOutcome::Released
+            }
+            PreparationStatus::Failed => {
+                for (present, field) in [
+                    (raw.receipt.is_some(), "receipt"),
+                    (raw.runtime_epoch.is_some(), "runtimeEpoch"),
+                    (raw.generation.is_some(), "generation"),
+                    (raw.modes.is_some(), "modes"),
+                    (raw.config_options.is_some(), "configOptions"),
+                    (raw.lease_expires_at.is_some(), "leaseExpiresAt"),
+                    (raw.first_submission_id.is_some(), "firstSubmissionId"),
+                    (raw.first_request_id.is_some(), "firstRequestId"),
+                    (raw.current_request_id.is_some(), "currentRequestId"),
+                    (raw.first_message_id.is_some(), "firstMessageId"),
+                    (raw.reason.is_some(), "reason"),
+                ] {
+                    forbid(present, field)?;
+                }
+                PreparationOutcome::Failed {
+                    error: raw
+                        .error
+                        .ok_or_else(|| DeError::custom(required("error")))?,
+                }
+            }
+        };
+
+        Ok(Self {
+            operation_id: raw.operation_id,
+            action: raw.action,
+            session_id: raw.session_id,
+            outcome,
         })
     }
 }

@@ -57,26 +57,31 @@ use std::str::FromStr as _;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use acp_core::broker::Broker;
+use acp_core::broker::{Broker, FirstSubmissionContinue, FirstSubmissionStart};
 use acp_core::model::{
-    Actor, AttachmentId, ClientCommand, CommandKind, CommandPayload as CorePayload, CommandReceipt,
-    ConfigOptionId, ConfigValue as CoreConfigValue, ConflictKind, ContentVersion, Digest,
-    ElicitationAction as CoreElicitationAction, ElicitationValues, InteractionId, ModeId,
-    PortError, PromptContentBlock, PublicError as CorePublicError, RESULT_TOO_LARGE,
-    ReadInclude as CoreReadInclude, RequestId as CoreRequestId, SessionFilePath, SessionId,
-    SessionTitle, SubmissionId, Timestamp as CoreTimestamp, TurnId, UnavailableKind, Version,
-    WorkspaceSource,
+    Actor, AgentRef, AttachmentId, ClientCommand, CommandKind, CommandPayload as CorePayload,
+    CommandReceipt, ConfigOptionId, ConfigValue as CoreConfigValue, ConflictKind, ContentVersion,
+    Digest, ElicitationAction as CoreElicitationAction, ElicitationValues, FirstSubmissionConfig,
+    FirstSubmissionSettlement, FirstSubmissionStage, InteractionId, ModeId, ModeRef, PortError,
+    PreparationFreeze, PreparationStaleReason, PromptContentBlock, PublicError as CorePublicError,
+    RESULT_TOO_LARGE, ReadInclude as CoreReadInclude, RequestId as CoreRequestId, RequestOutcome,
+    ResolvedWorkspace, ResourceGeneration, SessionFilePath, SessionId, SessionTitle, SubmissionId,
+    SubmissionManifestClaim, Timestamp as CoreTimestamp, TurnId, UnavailableKind, Version,
+    ViewJson, WorkspaceSource,
 };
 use acp_core::ports::{
     ActivationOutcome, ActivationRequest, RemoteCommandRecord, SessionFiles, SessionQuery,
 };
-use acp_core::use_cases::{ActivationPlan, LocalSessionLifecycle, ResumeAdmission, UseCases};
+use acp_core::use_cases::{
+    ActivationPlan, LocalSessionLifecycle, ResumeAdmission, SyncSessionQuery, UseCases,
+};
 use identity_auth::Authority;
 use sha2::Digest as _;
 use sync_protocol::command::{
     Command, CommandName, CommandPayload, CommandResult, CommandResultPayload, CommandState,
     ElicitationAction as WireElicitationAction, IncludeResource as WireReadInclude,
-    SessionCreateResult, SessionCreateWorkspace, SessionFilesRead,
+    SessionCreateResult, SessionCreateWorkspace, SessionFilesRead, SessionStartPayload,
+    SessionStartProjection,
 };
 use sync_protocol::common::{
     ConfigOptionValue as WireConfigValue, Nullable, PublicError, RawObject,
@@ -96,6 +101,10 @@ use crate::sync::attachments::ATTACHMENT_FEATURE;
 use crate::sync::conn::registry::SendFault;
 use crate::sync::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close};
 use crate::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE;
+use crate::sync::preparation::{
+    self as preparation, PREPARATION_FEATURE, PreparationConfigure, PreparationEstablish,
+    Preparations, RuntimeCheck,
+};
 use crate::sync::snapshot::LOCAL_CATALOG_FEATURE;
 use crate::sync::subscribe::cursor::CursorFault;
 use crate::sync::subscribe::{NegotiatedFeatures, OwnerReachability};
@@ -298,12 +307,21 @@ struct ConnectionState {
 /// 版本令牌只在建立它的连接/设备/会话/路径组合内有效，不能当作跨连接的 bearer 凭据。设备维度与连接
 /// 一一对应（连接在注册表里按设备键登记），但仍显式记录，使「跨连接/跨设备/跨会话/跨路径」四类拒绝
 /// 由同一处比较给出。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContentTarget {
+    Session(SessionId),
+    Workspace(
+        sync_protocol::command::WorkspaceFilesTarget,
+        sync_protocol::command::FileReadPurpose,
+    ),
+}
+
 #[derive(Debug, Clone)]
 struct ContentBinding {
     /// 建立快照的连接所属设备。
     device: acp_core::model::DeviceId,
     /// 该快照所属的会话。
-    session: SessionId,
+    target: ContentTarget,
     /// 根内相对路径。
     path: SessionFilePath,
     /// 不透明内容版本。
@@ -315,12 +333,12 @@ impl ContentBinding {
     fn matches(
         &self,
         device: &acp_core::model::DeviceId,
-        session: &SessionId,
+        target: &ContentTarget,
         path: &str,
         version: &str,
     ) -> bool {
         self.device == *device
-            && self.session == *session
+            && self.target == *target
             && self.path.as_str() == path
             && self.version.as_str() == version
     }
@@ -413,6 +431,14 @@ pub struct CommandRoute {
     /// 本机生命周期（`core.local-session-lifecycle.v1`）：`session.resume` 的激活/复用与 owned 摘要的
     /// `localActivity` 都经它读。`None` = 组合根没有接线（该 feature 不宣告）。
     lifecycle: Option<Arc<LocalSessionLifecycle>>,
+    /// 准备运行期目录、凭据验证与首条受理读面（`core.session-preparation.v1`）。`None` = 组合根没有
+    /// 接线：`session.start` 与协商该 feature 的 `command.status` 投影显式不可用。
+    preparations: Option<Arc<crate::sync::preparation::Preparations>>,
+    /// 准备端点的建立/复核/转正窄面（组合根用 `agent-host` 实现）。两者必须同时接线。
+    preparation_endpoints: Option<Arc<dyn crate::sync::preparation::PreparationEndpoints>>,
+    /// 同会话 `session.start` 的准备阶段串行门：establish → claim → 核心受理必须对同一会话线性化，
+    /// 否则两个并发继续可能各自建立端点、互相释放对方的绑定（核心的会话门只覆盖受理之后）。
+    start_gates: Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// 同会话激活的合并门：建立者完成/失败时唤醒其它设备的等待者。
     resume_gates: Mutex<BTreeMap<String, Arc<ResumeGate>>>,
     rate: CommandRateLimiter,
@@ -456,6 +482,9 @@ impl CommandRoute {
             owner,
             files,
             lifecycle,
+            preparations: None,
+            preparation_endpoints: None,
+            start_gates: Mutex::new(BTreeMap::new()),
             resume_gates: Mutex::new(BTreeMap::new()),
             rate: CommandRateLimiter::new(limits::COMMANDS_PER_MINUTE, limits::COMMAND_WINDOW),
             consecutive_limit: limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS,
@@ -464,6 +493,33 @@ impl CommandRoute {
             mkdir_queue,
             mkdir_receiver: Mutex::new(Some(mkdir_receiver)),
         }
+    }
+
+    /// 接线准备控制/首次提交面（`core.session-preparation.v1`）。
+    ///
+    /// 只有两个零件**同时**就位才宣告能力：`preparations` 提供凭据验证/运行期目录/首条读面，
+    /// `endpoints` 提供临时端点建立、设置复核与所有权转移。任一缺失时 `session.start` 必须显式不可用，
+    /// 组合根因此不宣告该 feature（能力协商不得虚报）。
+    pub fn with_preparation(
+        mut self,
+        preparations: Arc<crate::sync::preparation::Preparations>,
+        endpoints: Arc<dyn crate::sync::preparation::PreparationEndpoints>,
+    ) -> Self {
+        self.preparations = Some(preparations);
+        self.preparation_endpoints = Some(endpoints);
+        self
+    }
+
+    /// 准备面是否已完整接线。
+    fn preparation_ready(&self) -> bool {
+        self.preparations.is_some() && self.preparation_endpoints.is_some()
+    }
+
+    /// 该会话的 `session.start` 准备阶段串行门（表项在最后一个持有者离开后可被回收）。
+    fn start_gate(&self, session: &SessionId) -> Arc<tokio::sync::Mutex<()>> {
+        let mut gates = lock(&self.start_gates);
+        gates.retain(|_, gate| Arc::strong_count(gate) > 1);
+        Arc::clone(gates.entry(session.as_str().to_owned()).or_default())
     }
 
     /// 命令限流（§14：单设备业务命令 120/分钟，按 `deviceId` 与命令族分别统计）。
@@ -973,7 +1029,13 @@ impl CommandRoute {
         features: &NegotiatedFeatures,
     ) -> Result<CommandResultPayload, Rejection> {
         query::require_session_files(features)?;
-        let session = query::command_session(command)?;
+        let target = match payload.workspace.as_ref() {
+            Some(workspace) => {
+                query::workspace_source(command, Some(workspace), features)?;
+                ContentTarget::Workspace(workspace.clone(), payload.purpose)
+            }
+            None => ContentTarget::Session(query::command_session(command)?),
+        };
         let requested = payload
             .version
             .as_ref()
@@ -981,7 +1043,7 @@ impl CommandRoute {
         let path = payload.path.as_str().to_owned();
         match requested.as_deref() {
             Some(version) => {
-                if !self.content_matches(handle, &session, &path, version) {
+                if !self.content_matches(handle, &target, &path, version) {
                     debug!(
                         event = "sync.session_files_version_rejected",
                         connection_id = handle.connection_id().as_str(),
@@ -1018,7 +1080,7 @@ impl CommandRoute {
                 handle,
                 ContentBinding {
                     device: handle.device_id().clone(),
-                    session,
+                    target,
                     path: chunk.path().clone(),
                     version: chunk.version().clone(),
                 },
@@ -1036,14 +1098,14 @@ impl CommandRoute {
     fn content_matches(
         &self,
         handle: &ConnectionHandle,
-        session: &SessionId,
+        target: &ContentTarget,
         path: &str,
         version: &str,
     ) -> bool {
         lock(&self.states)
             .get(handle.connection_id().as_str())
             .and_then(|state| state.content.as_ref())
-            .is_some_and(|binding| binding.matches(handle.device_id(), session, path, version))
+            .is_some_and(|binding| binding.matches(handle.device_id(), target, path, version))
     }
 
     /// 取出并清空本连接的活动内容版本（调用方负责在适当时机释放端口快照）。
@@ -1097,6 +1159,10 @@ impl CommandRoute {
         }
         if command.command == CommandName::SessionResume {
             return self.on_session_resume(handle, &actor, command).await;
+        }
+        // `session.start`：准备凭据 + 首条原子受理 + 派发围栏由独立用例承载（不走通用 mutation 管道）。
+        if command.command == CommandName::SessionStart {
+            return self.on_session_start(handle, &actor, command).await;
         }
         let Some(payload) = core_payload(&command.payload).ok() else {
             self.deny(
@@ -2193,6 +2259,688 @@ impl CommandRoute {
         }
     }
 
+    /// `session.start` 的入口（`web-session-preparation` D7/D8/D8.1）。
+    ///
+    /// 顺序固定：feature 门控 → 认证/凭据绑定 → 同 `requestId` 的幂等回放 → 已受理查询 → 运行期与
+    /// 资源代 → 端点复核/转正 → 核心受理（原子提交 + 派发围栏）。任何一步失败都不会产生半提交，
+    /// 也不会自动派发。
+    async fn on_session_start(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        command: Command,
+    ) -> RouteOutcome {
+        if !self.features(handle).contains(PREPARATION_FEATURE) {
+            // §11.9：未协商该 feature 时 `session.start` 回 `command.unsupported`（不建资源、不读存储）。
+            self.deny(
+                handle,
+                &command,
+                "the client did not negotiate core.session-preparation.v1",
+                ErrorCode::CommandUnsupported,
+            );
+            return RouteOutcome::Claimed;
+        }
+        if !self.preparation_ready() {
+            self.deny(
+                handle,
+                &command,
+                "the session-preparation capability is not assembled",
+                ErrorCode::CommandUnsupported,
+            );
+            return RouteOutcome::Claimed;
+        }
+        let CommandPayload::SessionStart(payload) = &command.payload else {
+            self.deny(
+                handle,
+                &command,
+                "the payload does not match session.start",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let Some(session) = command
+            .session_id
+            .as_ref()
+            .and_then(|id| SessionId::new(id.as_str()).ok())
+        else {
+            self.deny(
+                handle,
+                &command,
+                "session.start requires envelope.sessionId",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let Some(request_id) = core_request_id(&command.request_id) else {
+            return self.encoding_fault(handle);
+        };
+        let Some(fingerprint) = payload_fingerprint(&command.payload) else {
+            return self.encoding_fault(handle);
+        };
+
+        // 同一 `requestId` 的重放只读原受理/终态（包括 rejected/failed），不触碰准备资源。
+        match self.core.command_status(actor, request_id.clone()).await {
+            Ok(Some(record)) if record.command() == "session.start" => {
+                if record.session() != Some(&session)
+                    || record.request_fingerprint() != &fingerprint
+                {
+                    let Some(error) = public_error(
+                        ErrorCode::CommandIdempotencyConflict,
+                        "the requestId was already used for a different session.start",
+                        RawObject::empty(),
+                    ) else {
+                        return self.encoding_fault(handle);
+                    };
+                    self.send_rejected(handle, &command, error);
+                    return RouteOutcome::Claimed;
+                }
+                return self.reply_existing_start(handle, &command, &record);
+            }
+            Ok(_) => {}
+            Err(_) => return self.encoding_fault(handle),
+        }
+
+        let (Some(preparations), Some(endpoints)) = (
+            self.preparations.as_ref(),
+            self.preparation_endpoints.as_ref(),
+        ) else {
+            self.deny(
+                handle,
+                &command,
+                "the session-preparation capability is not assembled",
+                ErrorCode::CommandUnsupported,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let outcome = match payload {
+            SessionStartPayload::Initial {
+                receipt,
+                runtime_epoch,
+                generation,
+                content,
+                submission_id,
+                mode,
+                config_options,
+            } => {
+                self.start_initial(
+                    handle,
+                    actor,
+                    preparations,
+                    endpoints,
+                    &session,
+                    &request_id,
+                    &fingerprint,
+                    receipt,
+                    runtime_epoch,
+                    generation,
+                    content,
+                    submission_id,
+                    mode,
+                    config_options,
+                )
+                .await
+            }
+            SessionStartPayload::Continue {
+                first_submission_id,
+                retry_of_request_id,
+                mode,
+                config_options,
+            } => {
+                self.start_continue(
+                    handle,
+                    actor,
+                    preparations,
+                    endpoints,
+                    &session,
+                    &request_id,
+                    &fingerprint,
+                    first_submission_id,
+                    retry_of_request_id,
+                    mode,
+                    config_options,
+                )
+                .await
+            }
+        };
+        match outcome {
+            Ok(Some(receipt)) => {
+                self.reply_first_submission(handle, &command, actor, &request_id, receipt)
+                    .await
+            }
+            // 已经在上面的幂等分支里回复过。
+            Ok(None) => RouteOutcome::Claimed,
+            Err((code, message, details)) => {
+                let Some(error) = public_error(code, message, details) else {
+                    return self.encoding_fault(handle);
+                };
+                self.send_rejected(handle, &command, error);
+                RouteOutcome::Claimed
+            }
+        }
+    }
+
+    /// 回放一条既有的 `session.start` 持久记录（`command.status` 与提交回复共用同一条路径）。
+    fn reply_existing_start(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        record: &acp_core::model::CommandRecord,
+    ) -> RouteOutcome {
+        if record.status().is_terminal() {
+            self.send_record_terminal(handle, &command.request_id, command.command, record);
+            return RouteOutcome::Claimed;
+        }
+        let turn = None;
+        self.send_accepted(handle, command, turn, record.accepted_at());
+        self.watch_terminal(
+            handle,
+            command,
+            &Actor::Device {
+                device: handle.device_id().clone(),
+            },
+        );
+        RouteOutcome::Claimed
+    }
+
+    /// 核心受理结果 → 与通用 mutation 相同的回包（`accepted` 后按持久记录观察终态）。
+    async fn reply_first_submission(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        actor: &Actor,
+        request_id: &CoreRequestId,
+        receipt: CommandReceipt,
+    ) -> RouteOutcome {
+        let turn = match receipt {
+            CommandReceipt::Rejected { error } => {
+                let Some(error) = wire_public_error(&error) else {
+                    return self.encoding_fault(handle);
+                };
+                self.send_rejected(handle, command, error);
+                return RouteOutcome::Claimed;
+            }
+            CommandReceipt::Accepted { turn, .. } => turn,
+        };
+        match self.broker.command_status(actor, request_id).await {
+            Ok(Some(record)) if record.status().is_terminal() => {
+                self.send_record_terminal(handle, &command.request_id, command.command, &record);
+            }
+            Ok(Some(record)) => {
+                self.send_accepted(handle, command, turn, record.accepted_at());
+                self.watch_terminal(handle, command, actor);
+            }
+            Ok(None) | Err(_) => {
+                self.encoding_fault(handle);
+            }
+        }
+        RouteOutcome::Claimed
+    }
+
+    /// `kind: initial`：凭据 → 已受理 → 运行期 → 端点复核/转正 → 核心原子受理。
+    #[allow(clippy::too_many_arguments)] // 与 wire 的闭合 `initial` 分支字段一一对应
+    async fn start_initial(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        preparations: &Arc<Preparations>,
+        endpoints: &Arc<dyn crate::sync::preparation::PreparationEndpoints>,
+        session: &SessionId,
+        request_id: &CoreRequestId,
+        fingerprint: &Digest,
+        receipt: &sync_protocol::common::PreparationReceipt,
+        runtime_epoch: &Uuid,
+        generation: &sync_protocol::common::PositiveDecimalString,
+        content: &sync_protocol::command::PromptContentList,
+        submission_id: &Option<Uuid>,
+        mode: &Option<sync_protocol::common::NonEmptyText<256>>,
+        config_options: &Option<sync_protocol::command::PreparationConfigSelection>,
+    ) -> Result<Option<CommandReceipt>, StartRejection> {
+        let runtime_epoch =
+            preparation::parse_epoch(runtime_epoch).map_err(|error| error.into_parts())?;
+        let generation =
+            preparation::parse_generation(generation).map_err(|error| error.into_parts())?;
+        // 认证与凭据签名/claims 绑定先于任何运行期读取（D3.1 的固定优先级）。
+        let verified = preparations
+            .verify(
+                handle.device_id(),
+                handle.canonical_origin(),
+                receipt,
+                session,
+            )
+            .await
+            .map_err(preparation::receipt_rejection)?;
+
+        // 同会话准备阶段串行：establish → claim → 核心受理不能被并发请求交错。
+        let gate = self.start_gate(session);
+        let _serial = gate.lock().await;
+
+        if preparations
+            .committed(session)
+            .await
+            .map_err(|error| port_rejection(&error).into_parts())?
+            .is_some()
+        {
+            return Err((
+                ErrorCode::CommandIdempotencyConflict,
+                "the first submission was already accepted for this session",
+                RawObject::empty(),
+            ));
+        }
+
+        let view = match preparations.runtime(session, &runtime_epoch, generation, true) {
+            RuntimeCheck::Stale(reason) => return Err(preparation::stale_rejection(reason)),
+            RuntimeCheck::Ready(view) => view,
+        };
+        if !preparations.matches_runtime(&verified, &view) {
+            return Err(binding_rejection());
+        }
+        let now = preparations.now();
+        match preparations.directory().freeze_for_submission(
+            session,
+            generation,
+            &runtime_epoch,
+            now.clone(),
+        ) {
+            PreparationFreeze::Granted(_) => {}
+            PreparationFreeze::Busy => {
+                return Err((
+                    ErrorCode::SessionBusy,
+                    "another first submission is in progress",
+                    RawObject::empty(),
+                ));
+            }
+            PreparationFreeze::Stale(reason) => return Err(preparation::stale_rejection(reason)),
+            PreparationFreeze::Unknown => {
+                return Err(preparation::stale_rejection(
+                    PreparationStaleReason::Released,
+                ));
+            }
+        };
+
+        let selection = preparation::selection_input(mode, config_options)
+            .map_err(|error| error.into_parts())?;
+        // 复核并在该资源代上重新应用草稿选择：以 Agent 当场确认为准，失败不派发。
+        let options = match endpoints
+            .configure(PreparationConfigure {
+                session: session.clone(),
+                generation: generation.get(),
+                selection: selection.clone(),
+            })
+            .await
+        {
+            Ok(options) => options,
+            Err(error) => {
+                let _ = preparations.directory().abort_submission(
+                    session,
+                    generation,
+                    preparations.now(),
+                );
+                return Err(port_rejection(&error).into_parts());
+            }
+        };
+        let (selected_mode, selected_config) =
+            match submission_selection(&options, mode, config_options) {
+                Ok(selection) => selection,
+                Err(rejection) => {
+                    // D8：选择被拒时撤销冻结并释放临时端点，保持同 ID 可重试。
+                    let _ = preparations.directory().abort_submission(
+                        session,
+                        generation,
+                        preparations.now(),
+                    );
+                    let _ = endpoints.release(session.clone(), generation.get()).await;
+                    return Err(rejection);
+                }
+            };
+        let endpoint = match endpoints.claim(session.clone(), generation.get()).await {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                let _ = preparations.directory().abort_submission(
+                    session,
+                    generation,
+                    preparations.now(),
+                );
+                return Err(port_rejection(&error).into_parts());
+            }
+        };
+
+        let workspace = ResolvedWorkspace::at_path(verified.workspace_path.clone())
+            .map_err(|_| binding_rejection())?;
+        let agent = AgentRef::try_new(verified.agent.clone(), verified.agent.as_str())
+            .map_err(|_| binding_rejection())?;
+        let manifest = match submission_id.as_ref() {
+            Some(submission) => Some(SubmissionManifestClaim {
+                submission: SubmissionId::new(submission.as_str())
+                    .map_err(|_| binding_rejection())?,
+                runtime_epoch: runtime_epoch.clone(),
+                generation,
+            }),
+            None => None,
+        };
+        let mut blocks = Vec::with_capacity(content.as_slice().len());
+        for block in content.as_slice() {
+            let text = serde_json::to_string(block)
+                .map_err(|_| schema_rejection("the prompt block cannot be re-encoded"))?;
+            blocks.push(
+                PromptContentBlock::from_json_text(&text).map_err(|_| {
+                    schema_rejection("the prompt block is not a valid content block")
+                })?,
+            );
+        }
+        let start = FirstSubmissionStart {
+            session: session.clone(),
+            request: request_id.clone(),
+            fingerprint: fingerprint.clone(),
+            agent,
+            workspace_cwd: Some(workspace.canonical_path().to_owned()),
+            workspace_directory: Some(workspace.directory_id().clone()),
+            mode: selected_mode,
+            config: selected_config,
+            content: blocks,
+            manifest,
+            generation,
+        };
+        let receipt = match self
+            .core
+            .start_first_submission(actor, start, endpoint)
+            .await
+        {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let _ = preparations.directory().abort_submission(
+                    session,
+                    generation,
+                    preparations.now(),
+                );
+                let _ = endpoints.release(session.clone(), generation.get()).await;
+                return Err(port_rejection(&error).into_parts());
+            }
+        };
+        match &receipt {
+            CommandReceipt::Accepted { .. } => {
+                // 受理事务已提交：名额转给正式会话（准备条目不再可观察）。
+                let _ = preparations.directory().finish_submission(
+                    session,
+                    generation,
+                    preparations.now(),
+                );
+            }
+            CommandReceipt::Rejected { .. } => {
+                let _ = preparations.directory().abort_submission(
+                    session,
+                    generation,
+                    preparations.now(),
+                );
+                let _ = endpoints.release(session.clone(), generation.get()).await;
+            }
+        }
+        Ok(Some(receipt))
+    }
+
+    /// `kind: continue`：准入 → 端点重建/复核 → 核心派发围栏（新 requestId + `retryOfRequestId`）。
+    #[allow(clippy::too_many_arguments)] // 与 wire 的闭合 `continue` 分支字段一一对应
+    async fn start_continue(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        preparations: &Arc<Preparations>,
+        endpoints: &Arc<dyn crate::sync::preparation::PreparationEndpoints>,
+        session: &SessionId,
+        request_id: &CoreRequestId,
+        fingerprint: &Digest,
+        first_submission_id: &Uuid,
+        retry_of_request_id: &Uuid,
+        mode: &Option<sync_protocol::common::NonEmptyText<256>>,
+        config_options: &Option<sync_protocol::command::PreparationConfigSelection>,
+    ) -> Result<Option<CommandReceipt>, StartRejection> {
+        let gate = self.start_gate(session);
+        let _serial = gate.lock().await;
+        let Some(record) = self
+            .core
+            .first_submission(session)
+            .await
+            .map_err(|error| port_rejection(&error).into_parts())?
+        else {
+            return Err((
+                ErrorCode::CommandIdempotencyConflict,
+                "the session has no first submission",
+                RawObject::empty(),
+            ));
+        };
+        if record.first_submission_id.as_str() != first_submission_id.as_str() {
+            return Err((
+                ErrorCode::CommandIdempotencyConflict,
+                "firstSubmissionId does not match this session",
+                RawObject::empty(),
+            ));
+        }
+        // D8.1 顺序：成功终态 → 可能已派发 → 仅失败且可证明未派发才允许继续。
+        if record
+            .terminal
+            .as_ref()
+            .is_some_and(|terminal| terminal.outcome == RequestOutcome::Completed)
+        {
+            return Err((
+                ErrorCode::CommandIdempotencyConflict,
+                "the first submission already has a terminal result",
+                RawObject::empty(),
+            ));
+        }
+        // `uncertain` 不是 failed：说不清是否已发出，不得重建、不得派发（D8.1）。
+        if record.ever_dispatched
+            || record.stage == FirstSubmissionStage::DispatchStarted
+            || record
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| terminal.outcome == RequestOutcome::Uncertain)
+        {
+            return Err((
+                ErrorCode::CommandUncertain,
+                "the first submission may already have been dispatched",
+                RawObject::empty(),
+            ));
+        }
+        match record.terminal.as_ref() {
+            Some(terminal) if terminal.outcome == RequestOutcome::Failed => {
+                if terminal.request_id.as_str() != retry_of_request_id.as_str() {
+                    return Err((
+                        ErrorCode::CommandIdempotencyConflict,
+                        "retryOfRequestId is not the failed attempt of this session",
+                        RawObject::empty(),
+                    ));
+                }
+            }
+            _ => {
+                return Err((
+                    ErrorCode::CommandIdempotencyConflict,
+                    "only a provably-not-dispatched failure can be continued",
+                    RawObject::empty(),
+                ));
+            }
+        }
+        if record.current_request_id.as_str() != retry_of_request_id.as_str() {
+            return Err((
+                ErrorCode::CommandIdempotencyConflict,
+                "retryOfRequestId does not reference the latest attempt",
+                RawObject::empty(),
+            ));
+        }
+        let retry_of = CoreRequestId::new(retry_of_request_id.as_str())
+            .map_err(|_| schema_rejection("retryOfRequestId is not a request id"))?;
+        // 认证先于目录/端点读取：设备 revoked/unknown 时停止。
+        preparations
+            .trust()
+            .snapshot(handle.device_id())
+            .await
+            .map_err(|error| port_rejection(&error).into_parts())?;
+
+        let (agent, workspace) = self.session_workspace(actor, session).await?;
+        let selection = continue_selection(&record, mode, config_options)?;
+        let generation = record
+            .resource_generation
+            .unwrap_or_else(|| ResourceGeneration::new(1));
+        let established = endpoints
+            .establish(PreparationEstablish {
+                session: session.clone(),
+                agent,
+                workspace,
+                generation: generation.get(),
+                selection: selection.clone(),
+            })
+            .await;
+        let options = match established {
+            Ok(options) => options,
+            Err(error) => {
+                // D8.1：端点建立/配置复核失败写该次尝试的 failed 终态，正文与首条身份不变。
+                self.settle_failed_continue(actor, session, request_id, fingerprint, &error)
+                    .await;
+                return Err(port_rejection(&error).into_parts());
+            }
+        };
+        if let Err(rejection) = validate_continue_selection(&options, &selection) {
+            let error = PortError::InvalidRequest("the preparation selection is not available");
+            self.settle_failed_continue(actor, session, request_id, fingerprint, &error)
+                .await;
+            let _ = endpoints.release(session.clone(), generation.get()).await;
+            return Err(rejection);
+        }
+        let endpoint = match endpoints.claim(session.clone(), generation.get()).await {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.settle_failed_continue(actor, session, request_id, fingerprint, &error)
+                    .await;
+                return Err(port_rejection(&error).into_parts());
+            }
+        };
+        let receipt = match self
+            .core
+            .continue_first_submission(
+                actor,
+                FirstSubmissionContinue {
+                    session: session.clone(),
+                    request: request_id.clone(),
+                    fingerprint: fingerprint.clone(),
+                    first_submission_id: record.first_submission_id.clone(),
+                    retry_of,
+                    generation,
+                    endpoint,
+                },
+            )
+            .await
+        {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let _ = endpoints.release(session.clone(), generation.get()).await;
+                return Err(port_rejection(&error).into_parts());
+            }
+        };
+        if matches!(receipt, CommandReceipt::Rejected { .. }) {
+            // 准入在核心被拒：本请求没有跨越派发围栏，释放本次新建的端点。
+            let _ = endpoints.release(session.clone(), generation.get()).await;
+        }
+        Ok(Some(receipt))
+    }
+
+    /// 显式继续的准备阶段失败：写本次尝试的 `failed` 终态（唯一 writer 在存储层）。
+    async fn settle_failed_continue(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        request_id: &CoreRequestId,
+        fingerprint: &Digest,
+        error: &PortError,
+    ) {
+        let (code, message, details) = port_rejection(error).into_parts();
+        let Ok(view) = ViewJson::new(details.get()) else {
+            return;
+        };
+        let Ok(public) =
+            CorePublicError::try_new(code.as_str(), message, code.default_retryable(), view)
+        else {
+            return;
+        };
+        let settlement = FirstSubmissionSettlement {
+            session: session.clone(),
+            actor: actor.clone(),
+            request_id: request_id.clone(),
+            request_fingerprint: fingerprint.clone(),
+            outcome: RequestOutcome::Failed,
+            error: Some(public),
+            at: self.authority.now(),
+        };
+        if self.core.settle_first_submission(settlement).await.is_err() {
+            debug!(
+                event = "sync.session_start_settlement_failed",
+                request_id = request_id.as_str(),
+                "the failed continue attempt could not be persisted"
+            );
+        }
+    }
+
+    /// 显式继续所需的 Agent 与工作目录（只读持久事实；缺一即不可继续）。
+    async fn session_workspace(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+    ) -> Result<(AgentRef, ResolvedWorkspace), StartRejection> {
+        let sessions = self
+            .core
+            .sync_visible_sessions(
+                actor,
+                SyncSessionQuery {
+                    owned: SessionQuery::default(),
+                    remote: None,
+                },
+                |_| false,
+            )
+            .await
+            .map_err(|error| port_rejection(&error).into_parts())?;
+        let summary = sessions
+            .into_iter()
+            .find(|summary| summary.session_id() == session)
+            .ok_or((
+                ErrorCode::SessionNotFound,
+                "the session is not visible to this device",
+                RawObject::empty(),
+            ))?;
+        let directory = summary
+            .workspace()
+            .map(|workspace| workspace.directory_id().clone())
+            .ok_or((
+                ErrorCode::InternalUnavailable,
+                "the session has no recorded workspace",
+                RawObject::empty(),
+            ))?;
+        // 目录路径必须经**设备可读**的解析入口取得：`UseCases::directory` 是本机管理读面
+        // （`Actor::LocalCli` 守卫），拿它解析会让任何设备的继续都以 `authorization.scope_denied`
+        // 失败。这里用与准备 allocate 同一个解析入口（已认证设备可读、只认已登记目录）。
+        let resolved = self
+            .core
+            .resolve_preparation_workspace(
+                actor,
+                acp_core::use_cases::PreparationWorkspaceSource::Directory(directory.clone()),
+            )
+            .await
+            .map_err(|error| match error {
+                PortError::InvalidRequest(_) => (
+                    ErrorCode::SessionNotFound,
+                    "the session workspace is no longer registered",
+                    RawObject::empty(),
+                ),
+                other => port_rejection(&other).into_parts(),
+            })?;
+        let workspace =
+            ResolvedWorkspace::try_new(directory, resolved.workspace.canonical_path().to_owned())
+                .map_err(|_| {
+                (
+                    ErrorCode::InternalUnavailable,
+                    "the recorded workspace path is not usable",
+                    RawObject::empty(),
+                )
+            })?;
+        Ok((summary.agent().clone(), workspace))
+    }
+
     /// 建立/复用完成后的终态落盘与回包。
     ///
     /// `Ok(())` 写 `completed { sessionId, session }`；`Err(failure)` 写 `failed`（可证明）或
@@ -2822,6 +3570,16 @@ impl CommandRoute {
                     Ok(value) => {
                         Nullable::value(CommandResultPayload::SessionResume(Box::new(value)))
                     }
+                    Err(_) => {
+                        self.encoding_fault(handle);
+                        return;
+                    }
+                }
+            }
+            // `session.start` 的 completed 是六字段首条投影（`sessionStartProjection`）。
+            Some(result) if name == CommandName::SessionStart => {
+                match serde_json::from_str::<SessionStartProjection>(result.as_str()) {
+                    Ok(value) => Nullable::value(CommandResultPayload::SessionStart(value)),
                     Err(_) => {
                         self.encoding_fault(handle);
                         return;
@@ -3477,6 +4235,10 @@ fn core_payload(payload: &CommandPayload) -> Result<CorePayload, &'static str> {
         CommandPayload::SessionResume(_) => {
             return Err("session.resume is dispatched by its own handler");
         }
+        // `session.start` 有自己的受理/继续用例（准备凭据、首条事务与派发围栏都不在通用 mutation 管道里）。
+        CommandPayload::SessionStart(_) => {
+            return Err("session.start is dispatched by its own handler");
+        }
         // `session.title.set` 的标题在 wire 层已按 1..=512 个标量值校验，core 的值对象是同一规则的
         // 唯一实现：这里只做类型映射（trim 由 `SessionTitle::parse` 完成，保存值即 trim 后的文本）。
         CommandPayload::SessionTitleSet(set) => CorePayload::TitleSet {
@@ -3562,8 +4324,188 @@ fn wire_digest(value: &sync_protocol::common::Base64Url<32>) -> Result<Digest, (
     Digest::new(&text).map_err(|_| ())
 }
 
-/// 载荷指纹（ACPR-CJ1 之后的 SHA-256，§6 第 6 条）——幂等冲突判定的唯一依据。
+/// `session.start` 的拒绝三元组（与 [`Rejection::into_parts`] 同形）。
+type StartRejection = (ErrorCode, &'static str, RawObject);
+
+/// 凭据/claims 不绑定当前资源：统一折叠，不泄露具体失败字段。
+fn binding_rejection() -> StartRejection {
+    (
+        ErrorCode::AttachmentBindingMismatch,
+        "the preparation receipt does not bind this resource",
+        RawObject::empty(),
+    )
+}
+
+/// 形状错误。
+fn schema_rejection(message: &'static str) -> StartRejection {
+    (
+        ErrorCode::ProtocolSchemaInvalid,
+        message,
+        RawObject::empty(),
+    )
+}
+
+/// Agent 无法确认草稿选择（不存在的模式/配置，或配置未生效）。
+fn capability_rejection(message: &'static str) -> StartRejection {
+    (
+        ErrorCode::CapabilityUnsupportedByAgent,
+        message,
+        RawObject::empty(),
+    )
+}
+
+/// wire 的配置值 → core 值对象。
 ///
+/// `select` 类型选项在 wire 上就是字符串（`{ <configId>: string }`），而 Agent 确认的当前值一律是
+/// [`CoreConfigValue::Select`]（`agent-host` 把 ACP 的 `currentValue` 投影成 select，且显式拒绝
+/// 文本取值）。因此字符串必须映射成 `select`，不能映射成 `text`——否则同一个草稿选择在准备控制帧
+/// （`selection_input` 用的就是 `select`）通过，到了 `session.start` 却永远「无法应用」。
+fn core_config_value(value: &WireConfigValue) -> Result<CoreConfigValue, StartRejection> {
+    match value {
+        WireConfigValue::Text(text) => CoreConfigValue::select(text.as_str())
+            .map_err(|_| schema_rejection("the config value is out of range")),
+        WireConfigValue::Boolean(flag) => Ok(CoreConfigValue::Boolean(*flag)),
+    }
+}
+
+/// `kind=initial` 的模式/配置：必须在**本次** Agent 复核后的真实选项里存在且已生效。
+fn submission_selection(
+    options: &preparation::PreparationOptions,
+    mode: &Option<sync_protocol::common::NonEmptyText<256>>,
+    config_options: &Option<sync_protocol::command::PreparationConfigSelection>,
+) -> Result<(Option<ModeRef>, Vec<FirstSubmissionConfig>), StartRejection> {
+    if options.blocks_dispatch {
+        return Err(capability_rejection(
+            "the preparation has an unavailable selection",
+        ));
+    }
+    let selected_mode = match mode {
+        Some(selected) => {
+            let id = ModeId::new(selected.as_str())
+                .map_err(|_| schema_rejection("the mode is out of range"))?;
+            if options.modes.current_mode.as_ref().map(ModeRef::mode_id) != Some(&id) {
+                return Err(capability_rejection(
+                    "the selected mode is not available on the agent",
+                ));
+            }
+            options.modes.current_mode.clone()
+        }
+        None => options.modes.current_mode.clone(),
+    };
+    let mut config = Vec::new();
+    if let Some(selection) = config_options {
+        for (id, value) in selection.as_map() {
+            let id = ConfigOptionId::new(id)
+                .map_err(|_| schema_rejection("the config id is out of range"))?;
+            let option = options
+                .config
+                .iter()
+                .find(|option| option.id() == &id)
+                .ok_or_else(|| {
+                    capability_rejection("the selected configuration is not available on the agent")
+                })?;
+            if option.current() != &core_config_value(value)? {
+                return Err(capability_rejection(
+                    "the selected configuration could not be applied",
+                ));
+            }
+            config.push(FirstSubmissionConfig {
+                id,
+                value: option.current().clone(),
+            });
+        }
+    }
+    Ok((selected_mode, config))
+}
+
+/// `kind=continue` 的选择：载荷给出则用载荷，否则沿用受理记录（D8.1）。
+fn continue_selection(
+    record: &acp_core::model::FirstSubmissionRecord,
+    mode: &Option<sync_protocol::common::NonEmptyText<256>>,
+    config_options: &Option<sync_protocol::command::PreparationConfigSelection>,
+) -> Result<preparation::PreparationSelectionInput, StartRejection> {
+    let mode = match mode {
+        Some(selected) => Some(
+            ModeId::new(selected.as_str())
+                .map_err(|_| schema_rejection("the mode is out of range"))?,
+        ),
+        None => record.mode_id.clone(),
+    };
+    let mut config = Vec::new();
+    match config_options {
+        Some(selection) => {
+            for (id, value) in selection.as_map() {
+                config.push((
+                    ConfigOptionId::new(id)
+                        .map_err(|_| schema_rejection("the config id is out of range"))?,
+                    core_config_value(value)?,
+                ));
+            }
+        }
+        None => {
+            if !record.config.as_str().is_empty() {
+                let parsed: serde_json::Value = serde_json::from_str(record.config.as_str())
+                    .map_err(|_| schema_rejection("the recorded configuration is not readable"))?;
+                if let serde_json::Value::Object(entries) = parsed {
+                    for (id, value) in entries {
+                        let id = ConfigOptionId::new(&id)
+                            .map_err(|_| schema_rejection("the config id is out of range"))?;
+                        let value = match value {
+                            serde_json::Value::String(text) => CoreConfigValue::text(&text)
+                                .map_err(|_| {
+                                    schema_rejection("the config value is out of range")
+                                })?,
+                            serde_json::Value::Bool(flag) => CoreConfigValue::Boolean(flag),
+                            _ => {
+                                return Err(schema_rejection(
+                                    "the recorded configuration is not a string/boolean",
+                                ));
+                            }
+                        };
+                        config.push((id, value));
+                    }
+                }
+            }
+        }
+    }
+    Ok(preparation::PreparationSelectionInput { mode, config })
+}
+
+/// 继续的端点复核：选中的模式/配置必须与 Agent 当场确认的值一致。
+fn validate_continue_selection(
+    options: &preparation::PreparationOptions,
+    selection: &preparation::PreparationSelectionInput,
+) -> Result<(), StartRejection> {
+    if options.blocks_dispatch {
+        return Err(capability_rejection(
+            "the preparation has an unavailable selection",
+        ));
+    }
+    if let Some(mode) = &selection.mode {
+        if options.modes.current_mode.as_ref().map(ModeRef::mode_id) != Some(mode) {
+            return Err(capability_rejection(
+                "the selected mode is not available on the agent",
+            ));
+        }
+    }
+    for (id, value) in &selection.config {
+        let option = options
+            .config
+            .iter()
+            .find(|option| option.id() == id)
+            .ok_or_else(|| {
+                capability_rejection("the selected configuration is not available on the agent")
+            })?;
+        if option.current() != value {
+            return Err(capability_rejection(
+                "the selected configuration could not be applied",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 载荷指纹（ACPR-CJ1 之后的 SHA-256，§6 第 6 条）——幂等冲突判定的唯一依据。
 /// 与 `node_link` 的同名助手同一算法；协议无关，但各自持有本协议的 DTO，因此不复用一个函数。
 fn payload_fingerprint(payload: &CommandPayload) -> Option<acp_core::model::Digest> {
     use base64::Engine as _;
@@ -3573,6 +4515,9 @@ fn payload_fingerprint(payload: &CommandPayload) -> Option<acp_core::model::Dige
     acp_core::model::Digest::new(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
         .ok()
 }
+
+#[cfg(test)]
+mod start_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3699,7 +4644,7 @@ mod tests {
     fn binding(device: &str, session: &str, path: &str, version: &str) -> ContentBinding {
         ContentBinding {
             device: acp_core::model::DeviceId::new(device).expect("device id"),
-            session: SessionId::new(session).expect("session id"),
+            target: ContentTarget::Session(SessionId::new(session).expect("session id")),
             path: SessionFilePath::parse(path).expect("session path"),
             version: ContentVersion::parse(version).expect("content version"),
         }
@@ -3717,20 +4662,45 @@ mod tests {
         let device = acp_core::model::DeviceId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622b")
             .expect("device id");
         let session = SessionId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622c").expect("session id");
-        assert!(binding.matches(&device, &session, "src/main.rs", "version_1"));
+        assert!(binding.matches(
+            &device,
+            &ContentTarget::Session(session.clone()),
+            "src/main.rs",
+            "version_1"
+        ));
 
         // 另一个连接 = 另一台设备：同一份版本令牌不得当 bearer 使用。
         let other_device = acp_core::model::DeviceId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622d")
             .expect("device id");
-        assert!(!binding.matches(&other_device, &session, "src/main.rs", "version_1"));
+        assert!(!binding.matches(
+            &other_device,
+            &ContentTarget::Session(session.clone()),
+            "src/main.rs",
+            "version_1"
+        ));
         // 同一设备上的另一个会话。
         let other_session =
             SessionId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622e").expect("session id");
-        assert!(!binding.matches(&device, &other_session, "src/main.rs", "version_1"));
+        assert!(!binding.matches(
+            &device,
+            &ContentTarget::Session(other_session.clone()),
+            "src/main.rs",
+            "version_1"
+        ));
         // 同一会话的另一个路径。
-        assert!(!binding.matches(&device, &session, "src/lib.rs", "version_1"));
+        assert!(!binding.matches(
+            &device,
+            &ContentTarget::Session(session.clone()),
+            "src/lib.rs",
+            "version_1"
+        ));
         // 另一个版本。
-        assert!(!binding.matches(&device, &session, "src/main.rs", "version_2"));
+        assert!(!binding.matches(
+            &device,
+            &ContentTarget::Session(session.clone()),
+            "src/main.rs",
+            "version_2"
+        ));
     }
 
     /// 连接关闭路径必须把活动版本交给端口释放，而不是只从内存表里丢掉。

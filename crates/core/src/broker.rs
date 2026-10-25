@@ -32,29 +32,32 @@ use crate::derive::{
 };
 use crate::lifecycle::{ActivationPlan, LocalSessionLifecycle};
 use crate::model::{
-    AcpRaw, Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand, CommandKind,
-    CommandPayload, CommandReceipt, CommandRecord, CommandResult, CommandStatus,
+    AcpRaw, Actor, AgentRef, AgentSessionId, AuditAction, AuditOutcome, AuditRecord, ClientCommand,
+    CommandKind, CommandPayload, CommandReceipt, CommandRecord, CommandResult, CommandStatus,
     CommandTerminalRecord, CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind,
-    CreateSessionRequest, Digest, EffectiveInteraction, ElicitationAction, ElicitationValues,
-    EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType, GlobalCursor,
-    InteractionId, InteractionKind, InteractionResolution, MemberValue, MessageId, ModeId, ModeRef,
-    OriginEpoch, OwnedSessionRef, PendingEvent, PendingInteraction, PermissionDecision,
-    PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock, PromptRequest,
-    PublicError, RequestId, Resolution, ResourceGeneration, ResourceOrigin, ResumeSessionRequest,
-    Sequence, SessionActivity, SessionId, SessionRecoveryRecord, SessionReference, SessionState,
+    CreateSessionRequest, Digest, DirectoryId, DispatchContext, DispatchFence,
+    EffectiveInteraction, ElicitationAction, ElicitationValues, EndpointEvent, EntityRef,
+    EventKind, EventOrigin, EventPayload, EventType, FirstSubmissionConfig, FirstSubmissionId,
+    FirstSubmissionInput, FirstSubmissionRecord, FirstSubmissionSettlement, FirstSubmissionStage,
+    FirstSubmissionWrite, FirstUserMessage, GlobalCursor, InteractionId, InteractionKind,
+    InteractionResolution, MemberValue, MessageId, ModeId, ModeRef, OriginEpoch, OwnedSessionRef,
+    PendingEvent, PendingInteraction, PermissionDecision, PermissionDecisionKind,
+    PersistencePolicy, PortError, PromptContentBlock, PromptRequest, PublicError, RequestId,
+    Resolution, ResourceGeneration, ResourceOrigin, ResumeSessionRequest, Sequence,
+    SessionActivity, SessionId, SessionRecoveryRecord, SessionReference, SessionState,
     SessionSummary, SessionTitle, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind,
     Version, ViewJson, WorkspaceRef, decode_json_string as json_string,
     encode_json_string as json_text, insert_string_member_front, object_members as json_members,
     top_level_member,
 };
 use crate::ports::{
-    ActivationOutcome, AuditStore, Clock, CommitOutcome, EventPublisher, EventSink, HistoryInclude,
-    HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord, InteractionAuthority,
-    InteractionResolved, ModeChange, NewTurn, OriginReadPage, OwnedCommit, PendingInteractionWrite,
-    PreparedSessionCreate, ReadView, ReplayBatch, ReplayLimit, SessionActivityFacts,
-    SessionBackendFactory, SessionCreateAdmission, SessionEndpoint, SessionQuery, SessionStore,
-    SessionUpdate, SettledSession, StateChange, SubmissionBinding, TrustStore, TurnChange,
-    TurnUpdate,
+    ActivationOutcome, AuditStore, Clock, CommitOutcome, EventPublisher, EventSink,
+    FirstSubmission, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord,
+    InteractionAuthority, InteractionResolved, ModeChange, NewTurn, OriginReadPage, OwnedCommit,
+    PendingInteractionWrite, PreparedSessionCreate, ReadView, ReplayBatch, ReplayLimit,
+    SessionActivityFacts, SessionBackendFactory, SessionCreateAdmission, SessionEndpoint,
+    SessionQuery, SessionStore, SessionUpdate, SettledSession, StateChange, SubmissionBinding,
+    TrustStore, TurnChange, TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -269,6 +272,43 @@ pub enum ResumeAdmission {
     Settled(CommandRecord),
 }
 
+/// 一次 `session.start`（`kind: initial`）的受理输入（`web-session-preparation` D7/D8）。
+///
+/// `session` 必须是由准备凭据证明的 Owner 分配 ID；`content` 是**有序**完整首条输入（适配器按 wire 原文
+/// 构造块，core 只在 `FirstSubmissionInput` 里拼一次数组与摘要）。`generation` 是准备运行期资源代，
+/// 随派发围栏固定。
+pub struct FirstSubmissionStart {
+    pub session: SessionId,
+    /// 本次尝试的稳定请求标识（服务端从 wire 的 `requestId` 转换，不重新分配）。
+    pub request: RequestId,
+    /// 适配器对解码后 wire payload 取的 ACPR-CJ1 摘要（幂等冲突判定的唯一依据）。
+    pub fingerprint: Digest,
+    pub agent: AgentRef,
+    pub workspace_cwd: Option<String>,
+    pub workspace_directory: Option<DirectoryId>,
+    pub mode: Option<ModeRef>,
+    pub config: Vec<FirstSubmissionConfig>,
+    pub content: Vec<PromptContentBlock>,
+    pub manifest: Option<crate::model::SubmissionManifestClaim>,
+    pub generation: ResourceGeneration,
+}
+
+/// 一次 `session.start`（`kind: continue`）的受理输入（`web-session-preparation` D8.1）。
+///
+/// 正文不来自本次请求：总是复用持久首条用户消息的原文（`owned_message.channel = 'user'`），因此
+/// 继续不会追加第二条首条消息。`endpoint` 由准备阶段按持久 Agent/目录重建或复用。
+pub struct FirstSubmissionContinue {
+    pub session: SessionId,
+    /// 本次继续的稳定请求标识（每次继续都是新的 requestId）。
+    pub request: RequestId,
+    /// 适配器对解码后 wire payload 取的 ACPR-CJ1 摘要。
+    pub fingerprint: Digest,
+    pub first_submission_id: FirstSubmissionId,
+    pub retry_of: RequestId,
+    pub generation: ResourceGeneration,
+    pub endpoint: Arc<dyn SessionEndpoint>,
+}
+
 /// 一次 `session.resume` 的**执行事实**（[`Broker::resume_session_with_execution`]）。
 ///
 /// `established == false` 表示这次调用只命中了既有幂等记录（同键重试/并发重发），**没有**调用
@@ -447,6 +487,33 @@ struct QueuedTurn {
     prompt: PromptRequest,
     /// 触发该 turn 的设备/本地 CLI；用于 `SYNC_PROTOCOL.md` §10.1 的 `origin.kind` 判定。
     actor: Actor,
+    /// 首次提交的派发计划（`session.start`）：端点已由准备阶段建立/转正，派发时不走
+    /// `SessionBackendFactory::open`，并带上回显关联所需的派发上下文。
+    first: Option<FirstDispatchPlan>,
+}
+
+/// 首次提交的派发计划（`design.md` D7/D8）。
+///
+/// 端点来自准备阶段（`agent-host` 的临时端点转正后就是正式绑定），资源代在准备凭据/运行期记录里固定；
+/// `fence` 已在本条命令受理时提交，因此派发前不再写第二次围栏。
+struct FirstDispatchPlan {
+    first_submission: FirstSubmissionId,
+    user_message: MessageId,
+    agent: AgentRef,
+    fingerprint: Digest,
+    resource_generation: ResourceGeneration,
+    agent_session: AgentSessionId,
+    input_digest: Digest,
+    endpoint: Arc<dyn SessionEndpoint>,
+}
+
+/// 一次已跨越派发围栏的首次提交尝试（终态提交时据此改用 `FirstSubmission::settle_first_submission`
+/// 写命令终态，而不是通用 `command_terminal`）。
+#[derive(Clone)]
+struct FirstAttemptScope {
+    request: RequestId,
+    actor: Actor,
+    fingerprint: Digest,
 }
 
 /// **诱发当前提交事件的命令**：`request` 写进 `PendingEvent.causation`（§10.1 的 `causationRequestId`），
@@ -545,6 +612,9 @@ struct Slot {
     /// 为什么不用 [`Self::window_overflowed`] 代替：那个标志在落账提交期间也可能被并发的入队置位，
     /// 而那条竞态下会话会正常落账——按它丢弃会让已落账会话静默丢事件。围栏只在失败关闭那一步闭合。
     fenced: AtomicBool,
+    /// 已跨越派发围栏、正在等待本轮终态的首次提交尝试（`session.start`）。终态提交据此改走
+    /// `FirstSubmission::settle_first_submission`，避免通用 `command_terminal` 与首条结算写两条终态。
+    first_attempt: Mutex<Option<FirstAttemptScope>>,
 }
 
 /// 一条已提交 delta 的折叠输入（只来自 delta 的 view，`agent.message.delta` 专用）。
@@ -641,6 +711,21 @@ impl Slot {
         queue.running_actor = None;
     }
 
+    /// 登记一次已跨越派发围栏的首次提交尝试（`dispatch_one` 在调用 Agent **之前**调用）。
+    fn set_first_attempt(&self, scope: FirstAttemptScope) {
+        *lock(&self.first_attempt) = Some(scope);
+    }
+
+    /// 当前的首次提交尝试（终态提交时用来判定是否改走首条结算）。
+    fn first_attempt(&self) -> Option<FirstAttemptScope> {
+        lock(&self.first_attempt).clone()
+    }
+
+    /// 本次尝试的终态已由首条结算写盘：清掉登记，后续命令不再按首条口径处理。
+    fn clear_first_attempt(&self) {
+        *lock(&self.first_attempt) = None;
+    }
+
     /// §6 第 9 条：放弃 `turn` 之后不让出 `running` 槽位，而是登记为待观测的占位。
     fn hold_abandoned_turn(&self, turn: &TurnId) {
         let mut queue = lock(&self.queue);
@@ -716,6 +801,9 @@ pub struct Broker {
     /// 之后、调用后端之前**预占名额，与 `session.resume` 共用同一本账。`None` = 组合根未接线（受控
     /// 路径测试），创建行为与接线前完全一致（不做容量准入）。
     lifecycle: std::sync::OnceLock<Arc<LocalSessionLifecycle>>,
+    /// 首次提交的持久入口（`web-session-preparation`）：`session.start` 的受理/围栏/结算都经它。
+    /// `None` = 组合根未接线，`session.start` 显式 `command.unsupported`（能力协商不得虚报）。
+    first_submission: std::sync::OnceLock<Arc<dyn FirstSubmission>>,
 }
 
 /// `PortError::InvalidRequest` 的哨兵：`session.create` 没有可用容量。
@@ -760,6 +848,7 @@ impl Broker {
             prepared: Mutex::new(HashMap::new()),
             interactions: None,
             lifecycle: std::sync::OnceLock::new(),
+            first_submission: std::sync::OnceLock::new(),
         }
     }
 
@@ -767,6 +856,13 @@ impl Broker {
     /// 容量准入。重复注入保留首次实现（返回 `false`），避免两个目录各自记账。
     pub fn set_lifecycle(&self, lifecycle: Arc<LocalSessionLifecycle>) -> bool {
         self.lifecycle.set(lifecycle).is_ok()
+    }
+
+    /// 注入首次提交的持久入口（组合根在装配时调用一次）。重复注入保留首次实现（返回 `false`）。
+    ///
+    /// 未注入时 `session.start` 显式不可用：能力协商不得虚报（`AGENTS.md` §4）。
+    pub fn set_first_submission(&self, first: Arc<dyn FirstSubmission>) -> bool {
+        self.first_submission.set(first).is_ok()
     }
 
     /// 注入有效待处理交互端口（组合根在装配时调用；见 [`InteractionAuthority`]）。
@@ -821,6 +917,7 @@ impl Broker {
                     unaccounted: AtomicBool::new(false),
                     window_overflowed: AtomicBool::new(false),
                     fenced: AtomicBool::new(false),
+                    first_attempt: Mutex::new(None),
                 })
             })
             .clone()
@@ -1224,6 +1321,7 @@ impl Broker {
                         content: content.to_vec(),
                     },
                     actor: actor.clone(),
+                    first: None,
                 });
                 self.pump_locked(&slot, &session).await?;
                 Ok(CommandReceipt::Accepted {
@@ -1231,6 +1329,406 @@ impl Broker {
                     turn: Some(turn),
                 })
             }
+        }
+    }
+
+    /// `session.start`（`kind: initial`）的受理（`web-session-preparation` D7/D8）。
+    ///
+    /// 顺序固定：同 ID 已受理 → 幂等回放；否则**先**在存储的首次提交事务里写正式会话、完整首条输入、
+    /// 稳定消息/请求身份与 `saved_not_dispatched`，**再**提交派发围栏（`dispatch_started`），最后才把
+    /// 派发计划排进同一会话串行门。`accepted` 因此只可能出现在受理事务提交之后；Agent 调用永远晚于
+    /// 围栏落盘。
+    pub async fn start_first_submission(
+        &self,
+        actor: &Actor,
+        start: FirstSubmissionStart,
+        endpoint: Arc<dyn SessionEndpoint>,
+    ) -> Result<CommandReceipt, PortError> {
+        let Some(first) = self.first_submission.get().cloned() else {
+            return self.reject("command.unsupported", "会话准备能力没有在本机接线", false);
+        };
+        let slot = self.owned_slot(&start.session);
+        let _guard = slot.gate.guard().await;
+
+        // 同一 requestId 的重放只读原受理/终态（包括此前的 rejected），不提交第二次首条。
+        if let Some(receipt) = self
+            .first_submission_idempotency(actor, &start.session, &start.request, &start.fingerprint)
+            .await?
+        {
+            return Ok(receipt);
+        }
+
+        // 同 ID 已受理：只回放既有受理/终态，不追加第二条首条、不重传附件。
+        if let Some(record) = first.first_submission(start.session.clone()).await? {
+            if record.first_request_id == start.request
+                || record.current_request_id == start.request
+            {
+                return Ok(CommandReceipt::Accepted {
+                    request: start.request,
+                    turn: None,
+                });
+            }
+            return self.reject(
+                "command.idempotency_conflict",
+                "该会话的首次提交已被另一请求受理",
+                false,
+            );
+        }
+
+        let input = FirstSubmissionInput::new(start.content.clone()).map_err(PortError::from)?;
+        let write = FirstSubmissionWrite {
+            actor: actor.clone(),
+            session: start.session.clone(),
+            first_submission_id: FirstSubmissionId::new(self.deps.ids.request_id().as_str())
+                .map_err(PortError::from)?,
+            user_message_id: self.deps.ids.message_id(),
+            origin_epoch: self.deps.ids.origin_epoch(),
+            agent: start.agent.clone(),
+            workspace_cwd: start.workspace_cwd.clone(),
+            workspace_directory: start.workspace_directory.clone(),
+            mode: start.mode.clone(),
+            config: start.config.clone(),
+            input,
+            manifest: start.manifest.clone(),
+            request_id: start.request.clone(),
+            request_fingerprint: start.fingerprint.clone(),
+            turn: self.deps.ids.turn_id(),
+            at: self.now(),
+        };
+        let turn = write.turn.clone();
+        let user_message = write.user_message_id.clone();
+        let record = match first.commit_first_submission(write).await? {
+            crate::model::FirstSubmissionAdmission::Accepted(record) => record,
+            crate::model::FirstSubmissionAdmission::AlreadyCommitted(_record) => {
+                return Ok(CommandReceipt::Accepted {
+                    request: start.request,
+                    turn: None,
+                });
+            }
+        };
+
+        // D1/D9：首次受理成功后把准备预占转成正式 ready，交由既有生命周期账本计一次名额、
+        // 参与保留期与容量回收；不新建第二个容量台账。
+        if let Some(lifecycle) = self.lifecycle.get()
+            && let Ok(ActivationPlan::Establish { generation }) = lifecycle
+                .begin_created_session(actor, start.session.clone(), self.now())
+                .await
+        {
+            let _ = lifecycle
+                .settle_session(
+                    actor,
+                    start.session.clone(),
+                    generation,
+                    ActivationOutcome::Ready,
+                )
+                .await;
+        }
+
+        // 派发围栏：在调用 Agent **之前**提交（D8）。端点没有 Agent 会话标识时无法证明可以派发，
+        // 写入一次可证明未派发的失败终态并保留正文。
+        let Some(agent_session) = endpoint.agent_session_id().cloned() else {
+            let error = self.port_error_public(&PortError::Unavailable(
+                UnavailableKind::SessionNotEstablished,
+            ))?;
+            self.settle_first(
+                &start.session,
+                actor,
+                &start.request,
+                &start.fingerprint,
+                crate::model::RequestOutcome::Failed,
+                Some(error),
+            )
+            .await;
+            return Ok(CommandReceipt::Accepted {
+                request: start.request,
+                turn: Some(turn),
+            });
+        };
+        let fence = DispatchFence {
+            session: start.session.clone(),
+            first_submission_id: record.first_submission_id.clone(),
+            actor: actor.clone(),
+            request_id: start.request.clone(),
+            retry_of: None,
+            request_fingerprint: start.fingerprint.clone(),
+            agent_session: agent_session.clone(),
+            resource_generation: start.generation,
+            at: self.now(),
+        };
+        match first.begin_dispatch(fence).await? {
+            crate::model::DispatchAdmission::Granted => {}
+            crate::model::DispatchAdmission::NotEligible => {
+                let error = self
+                    .port_error_public(&PortError::Conflict(ConflictKind::IdempotencyConflict))?;
+                self.settle_first(
+                    &start.session,
+                    actor,
+                    &start.request,
+                    &start.fingerprint,
+                    crate::model::RequestOutcome::Failed,
+                    Some(error),
+                )
+                .await;
+                return Ok(CommandReceipt::Accepted {
+                    request: start.request,
+                    turn: Some(turn),
+                });
+            }
+        }
+
+        let plan = FirstDispatchPlan {
+            first_submission: record.first_submission_id.clone(),
+            user_message,
+            agent: start.agent.clone(),
+            fingerprint: start.fingerprint.clone(),
+            resource_generation: start.generation,
+            agent_session,
+            input_digest: record.input_digest.clone(),
+            endpoint,
+        };
+        lock(&slot.queue).waiting.push_back(QueuedTurn {
+            turn,
+            request: start.request.clone(),
+            prompt: PromptRequest {
+                content: start.content,
+            },
+            actor: actor.clone(),
+            first: Some(plan),
+        });
+        self.pump_locked(&slot, &start.session).await?;
+        Ok(CommandReceipt::Accepted {
+            request: start.request,
+            turn: None,
+        })
+    }
+
+    /// `session.start`（`kind: continue`）的显式继续（`web-session-preparation` D8.1）。
+    ///
+    /// 准入在同会话串行门内按固定顺序判定；正文永远是持久首条消息的原文，不新增第二条首条消息。
+    /// 端点由调用方（准备阶段）按持久 Agent/目录重建，但只有在围栏 CAS 成功之后才会被派发。
+    pub async fn continue_first_submission(
+        &self,
+        actor: &Actor,
+        request: FirstSubmissionContinue,
+    ) -> Result<CommandReceipt, PortError> {
+        let Some(first) = self.first_submission.get().cloned() else {
+            return self.reject("command.unsupported", "会话准备能力没有在本机接线", false);
+        };
+        let slot = self.owned_slot(&request.session);
+        let _guard = slot.gate.guard().await;
+        if let Some(receipt) = self
+            .first_submission_idempotency(
+                actor,
+                &request.session,
+                &request.request,
+                &request.fingerprint,
+            )
+            .await?
+        {
+            return Ok(receipt);
+        }
+        let Some(snapshot) = self.deps.store.load(&request.session).await? else {
+            return self.reject("session.not_found", "会话不存在", false);
+        };
+        let tracked_agent = snapshot.session.agent().clone();
+        let Some(record) = first.first_submission(request.session.clone()).await? else {
+            return self.reject(
+                "command.idempotency_conflict",
+                "该会话没有首次提交关联",
+                false,
+            );
+        };
+        if record.first_submission_id != request.first_submission_id {
+            return self.reject(
+                "command.idempotency_conflict",
+                "firstSubmissionId 与该会话的首次提交不一致",
+                false,
+            );
+        }
+        // D8.1 顺序：成功终态 → 可能已派发 → 仅失败且可证明未派发才允许继续。
+        // 成功终态：原首次结果权威（先于「可能已派发」判定）。
+        if record
+            .terminal
+            .as_ref()
+            .is_some_and(|terminal| terminal.outcome == crate::model::RequestOutcome::Completed)
+        {
+            return self.reject(
+                "command.idempotency_conflict",
+                "首次提交已有成功终态",
+                false,
+            );
+        }
+        // 跨越过派发边界或首个命令说不清：不重建、不派发（不是 failed）。
+        if record.ever_dispatched
+            || record.stage == FirstSubmissionStage::DispatchStarted
+            || record
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| terminal.outcome == crate::model::RequestOutcome::Uncertain)
+        {
+            return self.reject(
+                "command.uncertain",
+                "首次提交已进入可能派发阶段，不能自动重发",
+                false,
+            );
+        }
+        if record
+            .terminal
+            .as_ref()
+            .is_none_or(|terminal| terminal.outcome != crate::model::RequestOutcome::Failed)
+        {
+            // 仍在受理中（没有 failed 终态）：继续的前提不成立。
+            return self.reject(
+                "command.idempotency_conflict",
+                "首次提交仍在受理中，只有可证明未派发的失败可以继续",
+                false,
+            );
+        }
+        // 正文：持久首条用户消息的原文（逐字节，不重新构造）。
+        let Some(message) = first.first_user_message(request.session.clone()).await? else {
+            return self.reject("internal.unavailable", "首条用户消息不可读", true);
+        };
+        let Some(items) = crate::model::array_items(message.content.as_str()) else {
+            return self.reject("internal.unavailable", "首条用户消息不可读", true);
+        };
+        let mut content = Vec::with_capacity(items.len());
+        for raw in items {
+            content.push(PromptContentBlock::from_json_text(raw).map_err(PortError::from)?);
+        }
+        let Some(turn) = message.turn.clone() else {
+            return self.reject("internal.unavailable", "首条用户消息缺少 turn 关联", true);
+        };
+        let agent_session = match request.endpoint.agent_session_id().cloned() {
+            Some(agent_session) => agent_session,
+            None => {
+                return self.reject(
+                    "command.uncertain",
+                    "继续端点没有可证明的 Agent 会话标识",
+                    false,
+                );
+            }
+        };
+        let fence = DispatchFence {
+            session: request.session.clone(),
+            first_submission_id: record.first_submission_id.clone(),
+            actor: actor.clone(),
+            request_id: request.request.clone(),
+            retry_of: Some(request.retry_of.clone()),
+            request_fingerprint: request.fingerprint.clone(),
+            agent_session: agent_session.clone(),
+            resource_generation: request.generation,
+            at: self.now(),
+        };
+        match first.begin_dispatch(fence).await? {
+            crate::model::DispatchAdmission::Granted => {}
+            crate::model::DispatchAdmission::NotEligible => {
+                return self.reject(
+                    "command.idempotency_conflict",
+                    "另一次继续已跨越派发边界或前置条件已改变",
+                    false,
+                );
+            }
+        }
+        let plan = FirstDispatchPlan {
+            first_submission: record.first_submission_id.clone(),
+            user_message: message.message.clone(),
+            agent: tracked_agent,
+            fingerprint: request.fingerprint.clone(),
+            resource_generation: request.generation,
+            agent_session,
+            input_digest: record.input_digest.clone(),
+            endpoint: request.endpoint,
+        };
+        lock(&slot.queue).waiting.push_back(QueuedTurn {
+            turn: turn.clone(),
+            request: request.request.clone(),
+            prompt: PromptRequest { content },
+            actor: actor.clone(),
+            first: Some(plan),
+        });
+        self.pump_locked(&slot, &request.session).await?;
+        Ok(CommandReceipt::Accepted {
+            request: request.request,
+            turn: Some(turn),
+        })
+    }
+
+    /// 写一次首条结算（显式继续的端点/配置建立失败也走这里：该次尝试必须留下 failed 终态）。
+    ///
+    /// 首次提交的终态由本方法唯一写入；与内部 [`Self::settle_first`] 的区别只在于返回存储结果，
+    /// 适配层可以如实区分「已落盘」与「落盘失败」。
+    pub async fn settle_first_submission(
+        &self,
+        settlement: FirstSubmissionSettlement,
+    ) -> Result<FirstSubmissionRecord, PortError> {
+        let Some(first) = self.first_submission.get() else {
+            return Err(PortError::Unavailable(
+                UnavailableKind::SessionNotEstablished,
+            ));
+        };
+        first.settle_first_submission(settlement).await
+    }
+
+    /// 首条提交的只读投影（`restore` 的 committed 分支、`command.status` 的协商投影、继续准入）。
+    pub async fn first_submission_record(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<FirstSubmissionRecord>, PortError> {
+        match self.first_submission.get() {
+            Some(first) => first.first_submission(session.clone()).await,
+            None => Ok(None),
+        }
+    }
+
+    /// 持久首条用户消息（`owned_message.channel = 'user'`）：无需 Agent 回显即可读取。
+    pub async fn first_user_message(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<FirstUserMessage>, PortError> {
+        match self.first_submission.get() {
+            Some(first) => first.first_user_message(session.clone()).await,
+            None => Ok(None),
+        }
+    }
+
+    /// 启动收敛：只收敛到可证明的事实，**绝不**自动派发。未接线的进程返回 `NotPreparation`。
+    pub async fn converge_first_submission(
+        &self,
+        session: &SessionId,
+        at: Timestamp,
+    ) -> Result<crate::model::FirstSubmissionConvergence, PortError> {
+        match self.first_submission.get() {
+            Some(first) => first.converge_first_submission(session.clone(), at).await,
+            None => Ok(crate::model::FirstSubmissionConvergence::NotPreparation),
+        }
+    }
+
+    /// 写一次首条结算（失败/终态都经这里；`settle_first_submission` 是唯一 writer）。
+    async fn settle_first(
+        &self,
+        session: &SessionId,
+        actor: &Actor,
+        request: &RequestId,
+        fingerprint: &Digest,
+        outcome: crate::model::RequestOutcome,
+        error: Option<PublicError>,
+    ) {
+        let Some(first) = self.first_submission.get() else {
+            return;
+        };
+        let settlement = FirstSubmissionSettlement {
+            session: session.clone(),
+            actor: actor.clone(),
+            request_id: request.clone(),
+            request_fingerprint: fingerprint.clone(),
+            outcome,
+            error,
+            at: self.now(),
+        };
+        if let Err(error) = first.settle_first_submission(settlement).await {
+            // core 没有日志依赖：结算失败不改变调用方的判定（命令保持 accepted，由恢复/查询收敛），
+            // 但也不得伪造成功。
+            let _ = error;
         }
     }
 
@@ -3313,6 +3811,25 @@ impl Broker {
         if queued.is_empty() {
             return Ok(());
         }
+        // 首条提交的 turn 不是「重启后失去正文的排队 prompt」：正文与请求都持久化在
+        // `owned_first_submission`，它的失败/继续由显式 `session.start` 收敛。这里把它排除在外，否则
+        // 一次普通 pump 就会把「可证明未派发、等待显式继续」的首条 turn 误标成 failed。
+        let first_turn = match self.first_submission.get() {
+            Some(first) => match first.first_submission(session.clone()).await {
+                Ok(Some(record)) if record.stage != FirstSubmissionStage::DispatchStarted => {
+                    Some(record.first_request_id)
+                }
+                _ => None,
+            },
+            None => None,
+        };
+        let queued: Vec<_> = queued
+            .into_iter()
+            .filter(|turn| first_turn.as_ref() != turn.causation())
+            .collect();
+        if queued.is_empty() {
+            return Ok(());
+        }
         let at = self.now();
         let error = PublicError::coded(
             "internal.unavailable",
@@ -3658,6 +4175,15 @@ impl Broker {
         events.extend(completed_events);
         let had_terminal = terminal.is_some();
         let mut command_terminal = None;
+        // 首次提交的尝试：终态必须由 `FirstSubmission::settle_first_submission` 写（它同时写六字段结果
+        // 投影），因此这里**不**再产出通用 `command.*` 事件与 `command_terminal`，避免同一 request 的
+        // 两个终态 writer。
+        let first_attempt = slot.first_attempt();
+        let mut first_settlement: Option<(
+            FirstAttemptScope,
+            crate::model::RequestOutcome,
+            Option<PublicError>,
+        )> = None;
         if let Some((_, status)) = terminal {
             if let Some(request) = terminal_request.clone() {
                 // §11.2：同一事务内 sequence 上先写领域事件，再写 terminal event。
@@ -3683,29 +4209,40 @@ impl Broker {
                         None,
                     ),
                 };
-                events.push(pending_event(
-                    event_type,
-                    EventKind::Structured,
-                    view,
-                    terminal_turn.clone(),
-                    Some(request.clone()),
-                    StoredPolicy::Durable,
-                    running_actor.as_ref(),
-                )?);
-                // §11.2 的终态收据：`completed` 带上这条命令自己的 turn（收据里唯一有意义的分量），
-                // `failed` 的无 turn 信息（错误已单独落盘）。终态结果的这次落盘是这次修复
-                // 点：在此之前所有 `completed` 记录的 `result` 都是 NULL，适配层只能回空 object。
-                let result = match (status, terminal_turn.as_ref()) {
-                    (CommandStatus::Completed, Some(turn)) => Some(turn_result(turn)?),
-                    _ => None,
-                };
-                command_terminal = Some(CommandTerminalRecord::try_new(
-                    status,
-                    Some(at.clone()),
-                    None,
-                    result,
-                    error,
-                )?);
+                if let Some(attempt) = first_attempt
+                    .clone()
+                    .filter(|attempt| attempt.request == request)
+                {
+                    let outcome = match status {
+                        CommandStatus::Failed => crate::model::RequestOutcome::Failed,
+                        _ => crate::model::RequestOutcome::Completed,
+                    };
+                    first_settlement = Some((attempt, outcome, error));
+                } else {
+                    events.push(pending_event(
+                        event_type,
+                        EventKind::Structured,
+                        view,
+                        terminal_turn.clone(),
+                        Some(request.clone()),
+                        StoredPolicy::Durable,
+                        running_actor.as_ref(),
+                    )?);
+                    // §11.2 的终态收据：`completed` 带上这条命令自己的 turn（收据里唯一有意义的分量），
+                    // `failed` 的无 turn 信息（错误已单独落盘）。终态结果的这次落盘是这次修复
+                    // 点：在此之前所有 `completed` 记录的 `result` 都是 NULL，适配层只能回空 object。
+                    let result = match (status, terminal_turn.as_ref()) {
+                        (CommandStatus::Completed, Some(turn)) => Some(turn_result(turn)?),
+                        _ => None,
+                    };
+                    command_terminal = Some(CommandTerminalRecord::try_new(
+                        status,
+                        Some(at.clone()),
+                        None,
+                        result,
+                        error,
+                    )?);
+                }
             }
         }
         // 会话状态：turn 终态会失效该轮的遗留请求，新增交互请求会把摘要推到 `pending`。两者都在本事务
@@ -3807,6 +4344,20 @@ impl Broker {
                         .push(committed.global_sequence);
                 }
                 self.publish(&outcome.appended);
+                // 首次提交的终态：领域事件（turn 终态/会话摘要）已随本批提交，命令终态与首条阶段由
+                // `FirstSubmission::settle_first_submission` 在后续事务里写（唯一 writer）。
+                if let Some((attempt, outcome, error)) = first_settlement {
+                    self.settle_first(
+                        session,
+                        &attempt.actor,
+                        &attempt.request,
+                        &attempt.fingerprint,
+                        outcome,
+                        error,
+                    )
+                    .await;
+                    slot.clear_first_attempt();
+                }
                 // §6 第 15 条：turn 终态提交之后紧接一次压缩提交（执行中不压缩）。
                 if let Some((turn, count)) = compact_after {
                     let sequences = lock(&slot.turn_deltas)
@@ -3948,7 +4499,43 @@ impl Broker {
             }
             Err(error) => return Err(error),
         }
-        let endpoint = self.endpoint(slot, session).await?;
+        let endpoint = match &next.first {
+            Some(plan) => {
+                // 准备端点在提交时已转正：这里沿用同一个绑定（不第二次 `session/new`），并让后续
+                // 普通 prompt 也能从槽位缓存里拿到它。
+                *lock(&slot.endpoint) = Some(Arc::clone(&plan.endpoint));
+                Arc::clone(&plan.endpoint)
+            }
+            None => self.endpoint(slot, session).await?,
+        };
+        if let Some(plan) = &next.first {
+            slot.set_first_attempt(FirstAttemptScope {
+                request: next.request.clone(),
+                actor: next.actor.clone(),
+                fingerprint: plan.fingerprint.clone(),
+            });
+            let context = DispatchContext {
+                session: session.clone(),
+                first_submission: plan.first_submission.clone(),
+                user_message: plan.user_message.clone(),
+                request: next.request.clone(),
+                agent: plan.agent.clone(),
+                agent_session: plan.agent_session.clone(),
+                resource_generation: plan.resource_generation,
+                input_digest: plan.input_digest.clone(),
+            };
+            return match endpoint
+                .prompt_with_context(next.prompt.clone(), at, Some(context))
+                .await
+            {
+                Ok(_) => Ok(true),
+                Err(error) => {
+                    self.settle_failed_dispatch(slot, session, &next, plan, &error)
+                        .await?;
+                    Ok(true)
+                }
+            };
+        }
         match endpoint.prompt(next.prompt.clone(), at).await {
             Ok(_) => Ok(true),
             Err(error) => {
@@ -3957,6 +4544,39 @@ impl Broker {
                 Ok(true)
             }
         }
+    }
+
+    /// 首次派发失败：围栏已提交，因此结果只能是 `failed`（可证明请求未发出）或 `uncertain`（说不清）。
+    ///
+    /// 结算由 `FirstSubmission::settle_first_submission` 唯一写入；`uncertain` 保持 turn 的运行事实，
+    /// `failed` 由存储层把首条 turn 收敛为失败——两种情况都**不**自动重发。
+    async fn settle_failed_dispatch(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+        next: &QueuedTurn,
+        plan: &FirstDispatchPlan,
+        error: &PortError,
+    ) -> Result<(), PortError> {
+        let outcome = match error {
+            PortError::Unavailable(UnavailableKind::SessionNotEstablished) => {
+                crate::model::RequestOutcome::Failed
+            }
+            _ => crate::model::RequestOutcome::Uncertain,
+        };
+        let public = self.port_error_public(error)?;
+        self.settle_first(
+            session,
+            &next.actor,
+            &next.request,
+            &plan.fingerprint,
+            outcome,
+            Some(public),
+        )
+        .await;
+        slot.finish_turn();
+        slot.clear_first_attempt();
+        Ok(())
     }
 
     /// 派发失败的 turn：显式终态（`turn.failed` + `command.failed`），不静默重试。
@@ -4655,6 +5275,45 @@ impl Broker {
     // -----------------------------------------------------------------------------------------
     // mutation 管道的公共步骤
     // -----------------------------------------------------------------------------------------
+
+    /// `session.start` 的幂等键比对（initial 与 continue 共用）。
+    ///
+    /// 命中任何既有记录（`accepted`/`completed`/`failed`/`uncertain`/`rejected`）都只回执原请求；
+    /// 适配层随后按 `command.status` 回放**原有终态**，绝不把 rejected/failed 改写成 accepted，也不
+    /// 执行第二次。键不同则按既有错因冲突。
+    async fn first_submission_idempotency(
+        &self,
+        actor: &Actor,
+        session: &SessionId,
+        request: &RequestId,
+        fingerprint: &Digest,
+    ) -> Result<Option<CommandReceipt>, PortError> {
+        let Some(record) = self.deps.store.find_request(request, actor).await? else {
+            return Ok(None);
+        };
+        let same = record.command() == "session.start"
+            && record.kind() == CommandKind::Mutation
+            && record.session() == Some(session)
+            && record.expected_version().is_none()
+            && record.request_fingerprint() == fingerprint;
+        if !same {
+            return self
+                .reject(
+                    "command.idempotency_conflict",
+                    "同一 requestId 已用于不同的命令或载荷",
+                    false,
+                )
+                .map(Some);
+        }
+        let turn = match record.status() {
+            CommandStatus::Accepted => Some(self.turn_for_request(session, request).await?),
+            _ => None,
+        };
+        Ok(Some(CommandReceipt::Accepted {
+            request: request.clone(),
+            turn: turn.flatten(),
+        }))
+    }
 
     /// §6.6：幂等键是协议维度的 `(actor, requestId)`。命中且五项指纹全同 → 返回首次结果、不二次派发；
     /// 任一不同 → `command.idempotency_conflict`。

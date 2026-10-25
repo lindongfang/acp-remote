@@ -463,7 +463,9 @@ function GitChanges({
 
   if (model.gitNotice !== null) {
     return (
-      <View accessibilityLabel={model.gitNotice} dataSet={{ gitNotice: git.unsupported ?? "unsupported" }} />
+      <View accessibilityLabel={model.gitNotice} dataSet={{ gitNotice: git.unsupported ?? "unsupported" }}>
+        {git.unsupported === "workspace_feature_unavailable" ? <Text style={styles.notice}>{model.gitNotice}</Text> : null}
+      </View>
     );
   }
   if (git.gitState === "not_repository") {
@@ -786,7 +788,9 @@ export function SessionFilesPanel({
 
       <View style={model.selectedSource === "all" ? styles.list : [styles.list, styles.hidden]}>
           {model.allNotice === null ? null : (
-            <View accessibilityLabel={model.allNotice} dataSet={{ filesAllNotice: "true" }} />
+            <View accessibilityLabel={model.allNotice} dataSet={{ filesAllNotice: "true" }}>
+              {model.all.unsupported === "workspace_feature_unavailable" ? <Text style={styles.notice}>{model.allNotice}</Text> : null}
+            </View>
           )}
           {ignoreDisabledReason === null ? (
             <Text style={[styles.note, styles.hidden]} dataSet={{ ignoreToggleScope: "true" }}>

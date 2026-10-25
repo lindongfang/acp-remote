@@ -11,6 +11,11 @@
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)$"
     },
+    "positiveDecimalString": {
+      "description": "正十进制字符串（`1..=2^63−1`，无前导零）：准备运行期资源代 `generation` 的编码（docs/SYNC_PROTOCOL.md §11.9）。与 `decimalString` 不同，它不接受 `0`；上界由服务端比较判定，不在 schema 里做数值解析。",
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
     "timestamp": {
       "type": "string",
       "format": "date-time",
@@ -149,6 +154,9 @@
         "attachment.budget_exhausted",
         "attachment.expired",
         "attachment.revoked",
+        "preparation.stale",
+        "preparation.already_committed",
+        "preparation.store_rebuilt",
         "media.unavailable",
         "interaction.unavailable",
         "interaction.version_conflict",
@@ -515,6 +523,55 @@
           }
         }
       ]
+    },
+    "preparationWorkspaceSource": {
+      "description": "准备凭据的目录来源（design D2）：`directoryId` 表示目标来自本机已登记的目录标识，`workspacePath` 表示来自客户端提交的绝对路径。目录**规范化后的路径**是 claims 的绑定值，来源只说明它由哪条输入得出，不参与路径比较。",
+      "enum": ["directoryId", "workspacePath"]
+    },
+    "preparationReceiptClaims": {
+      "description": "准备凭据的闭合 claims（`core.session-preparation.v1`，design D2）。它只证明「这个 sessionId 由当前 Owner 分配并绑定到该设备/标签页/Agent/目录」，不是登录凭证、不授予 scope、不含文字/附件/Provider/MCP 凭据。`storeEpoch` 是持久 `meta.server_epoch`（正常重启不变，整体重建存储时改变），`tabNonce` 是每标签页的随机归属，不进入 URL。字段顺序即 transcript domain `acp-remote/session-preparation/v1` 的 tag 顺序（§6.3）。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "ownerNodeId",
+        "storeEpoch",
+        "origin",
+        "deviceId",
+        "tabNonce",
+        "sessionId",
+        "agentId",
+        "normalizedWorkspacePath",
+        "workspaceSource"
+      ],
+      "properties": {
+        "version": { "const": 1 },
+        "ownerNodeId": { "$ref": "#/$defs/uuid" },
+        "storeEpoch": { "$ref": "#/$defs/uuid" },
+        "origin": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "deviceId": { "$ref": "#/$defs/uuid" },
+        "tabNonce": {
+          "description": "32 字节随机标签页归属（不进入 URL）。",
+          "$ref": "#/$defs/base64url32"
+        },
+        "sessionId": { "$ref": "#/$defs/uuid" },
+        "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "normalizedWorkspacePath": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "workspaceSource": { "$ref": "#/$defs/preparationWorkspaceSource" }
+      }
+    },
+    "preparationReceipt": {
+      "description": "节点签发的准备凭据（design D2）：闭合 claims 加 P-256 P1363 64 字节签名的无填充 base64url。签名域是 `acp-remote/session-preparation/v1` 的 transcript（§6.2/§6.3），不接受普通 JSON 签名；验证方按 claims 逐字段重建 transcript 后验签。凭据跨正常重启有效，`storeEpoch` 变化（整库重建）时统一失效并返回 `preparation.store_rebuilt`。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claims", "signature"],
+      "properties": {
+        "claims": { "$ref": "#/$defs/preparationReceiptClaims" },
+        "signature": {
+          "description": "ECDSA P-256 over the transcript, P1363 (r||s) 64 bytes, unpadded base64url（86 字符）。",
+          "$ref": "#/$defs/base64url64"
+        }
+      }
     }
   }
 }

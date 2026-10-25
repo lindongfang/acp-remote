@@ -57,16 +57,18 @@
 | status | 分支字段 | 合法来源与客户端动作 |
 | --- | --- | --- |
 | `ready` | `receipt`、`runtimeEpoch: UUID`、`generation: 正十进制字符串`、`modes`、`configOptions`、`leaseExpiresAt` | allocate/restore/configure/renew成功；展示已确认的真实设置。receipt为D2的闭合claims+signature对象；未提供的Agent选项以协议对应的明确缺席/空值呈现，不伪造 |
-| `committed` | `firstRequestId: UUID`、`currentRequestId: UUID`、`firstMessageId: UUID` | restore/configure/renew/release与首次提交竞争、或首条响应丢失后发现已受理；不携带临时代/lease/配置/receipt。保持原URL，用currentRequestId查command.status并session.read，不重建准备、重传附件或重新start |
-| `stale` | `reason`（`runtime_epoch_mismatch / generation_mismatch / released`） | 通过认证和凭据核实后发现资源代已失效；不宣告已有正式提交，不自行生成新ID。先核实原start，再用receipt执行restore；不能原样盲重发旧代操作 |
+| `committed` | `firstSubmissionId: UUID`、`firstRequestId: UUID`、`currentRequestId: UUID`、`firstMessageId: UUID` | restore/configure/renew/release与首次提交竞争、或首条响应丢失后发现已受理；不携带临时代/lease/配置/receipt。保持原URL，用currentRequestId查command.status并session.read，不重建准备、重传附件或重新start |
+| `stale` | `reason`（`runtime_epoch_mismatch / generation_mismatch / released`） | 通过认证和凭据核实后发现资源代已失效；不宣告已有正式提交，不自行生成新ID。先核实原start，再用receipt执行restore，然后按当前代重试（restore对有效receipt返回ready） |
 | `released` | 无额外字段 | release在首条未受理的准备上成功或幂等成功；只说明临时资源释放，不表示ID已正式提交 |
-| `failed` | `error: {code,message,retryable,details}` | 真正的认证后业务失败；使用D6错误映射及既有容量/目录错误，不能用该分支隐含表达已提交 |
+| `failed` | `error: {code,message,retryable,details}` | 真正的认证后业务失败；使用D6错误映射及既有容量/目录错误，不能用该分支隐含表达已提交。receipt 的 storeEpoch 与当前不一致时用新增不可重试码 `preparation.store_rebuilt`（`details:{}`） |
+
+`stale` 的**唯一**来源是 `configure / renew / release` 与附件 begin/manifest；`restore` 对有效 receipt **永不**返回 `stale`：资源可重建时返回 `ready`（已受理则 `committed`），目录/Agent 不可解析等业务失败走 `failed`；`allocate` 也不返回 `stale`。receipt 的 storeEpoch 与当前持久 storeEpoch 不一致不归入 `stale`：它说明旧存储已整体被替换，统一返回 `failed` + `preparation.store_rebuilt`（不可重试），客户端丢弃 receipt、认证后回目录重新 allocate。restore 携带的 `knownRuntimeEpoch/knownGeneration` 只用于旧状态提示与操作去重，不参与拒绝判定；否则正常重启后会形成 `stale → restore → stale` 的不可恢复环。
 
 `generation` 取1..2^63−1，按现有序号编码为无前导零十进制字符串。status=committed不是命令completed：首条可能仍accepted、failed或uncertain，必须查询currentRequestId。新Web同页转换正式模型，确认完整内容已保存后才清浏览器草稿。正式会话及首条关联记录不因正文TTL一起清除；本轮不定义删除后的恢复结果。
 
 判断优先级固定为：当前连接认证/撤销 → 凭据签名与节点/origin/storeEpoch/设备/ID/标签页claims绑定 → 同ID首条持久受理查询 → 仅未受理时检查runtimeEpoch/generation/lease与目录/Agent现状 → 执行动作。受理与restore/release并发在同会话串行门及提交重查下线性化：恢复先完成可返回ready，提交先完成必须返回committed；任何ready都不能越过session.start自身的事务复校验。
 
-首条使用新增 Sync-only mutation `session.start`，命令名仍只在 commands manifest 定义。envelope.sessionId 必须是已签发 ID；payload 包括准备凭据、完整用户输入或完整附件清单、模式与配置选择，不能携带 Provider/MCP 凭据。它不透传 Node Link，不改变 ACP `session/new` 或旧 `session.create`。`accepted` 只在 D6 事务提交后发出；最终命令结果沿用持久终态规则，不能用准备控制结果代替业务受理。
+首条使用新增 Sync-only mutation `session.start`，命令名仍只在 commands manifest 定义。envelope.sessionId 必须是已签发 ID；payload 是闭合判别联合：`kind=initial` 携带准备凭据、完整用户输入或完整附件清单、模式与配置选择，`kind=continue` 的合同见 D8.1（新请求 ID 与 `retryOfRequestId`，不带正文、附件清单或 receipt）；两者都不能携带 Provider/MCP 凭据。它不透传 Node Link，不改变 ACP `session/new` 或旧 `session.create`。`accepted` 只在 D6 事务提交后发出；最终命令结果沿用持久终态规则，不能用准备控制结果代替业务受理。
 
 重建、configure、附件控制都先认证再验准备归属。旧客户端未协商不得收到新帧/字段；新客户端连旧服务端明确禁用新建准备，不自动 fallback。现有会话仍用原读取、配置和 prompt 路径，不能因看到旧 NULL 恢复列就走 start。
 
@@ -134,6 +136,7 @@ seal/manifest封存与start认领在同session门下排序。start最后一次�
 | 形状/字段/尺寸不合法 | `protocol.schema_invalid` 或 `protocol.message_too_large` / false / 原登记details | 修正输入；无存储副作用 |
 | 伪造receipt、跨设备/会话/标签页、subject与连接不符、ID重用不同声明、未重绑连接、混用正式与准备资源 | `attachment.binding_mismatch` / false / `{}` | 保留浏览器输入，终止这次传输，不泄露目标存在性或具体哪个签名字段失败 |
 | 核实归属后发现运行期或代失效/已释放 | 新增 `preparation.stale` / true / `{reason:"runtime_epoch_mismatch"或"generation_mismatch"或"released"}` | 先查原start，restore；只有仍未受理才取得新target重建上传，不能盲重发旧帧 |
+| 核实归属后发现 receipt 的 storeEpoch 已因存储整体重建而失效 | 新增 `preparation.store_rebuilt` / false / `{}` | 不重放旧 receipt、不 restore；认证后回目录重新 allocate 新 ID，旧上传内容作废 |
 | 归属有效但首条已正式受理 | 新增 `preparation.already_committed` / false / `{sessionId:UUID}` | 停止上传，restore取得committed关联，再同页读正式状态，不再次start |
 | 同一live目标内transferId/submissionId不存在或闲置过期 | `attachment.transfer_not_found` / false / `{}` | 核实start未受理后创建新传输/清单，不认为消息已失败或重新创建会话 |
 | 偏移不符/同偏移不同块/摘要不符/已封存 | 沿用 `attachment.offset_mismatch / attachment.chunk_conflict / attachment.digest_mismatch / attachment.sealed` 及原retryable/details | 仅按既有传输恢复规则处理，不改为业务提交或部分发送 |
@@ -144,7 +147,7 @@ seal/manifest封存与start认领在同session门下排序。start最后一次�
 
 #### D6.4 转正只认领，不再次上传或复制文件
 
-暂存复用已有块/流控/哈希机制，经独立准备暂存端口传入，不横向调用storage实现。文件第一次上传即写入Owner私有、正式附件可引用的内容目录，封存后字节不可变；临时/正式区别在元数据与访问权，不是另一份文件。传输元数据仅运行期，不写带owned_session外键的表。
+暂存复用已有块/流控/哈希机制，经独立准备暂存端口（core 纯端口 `PreparationAttachmentStaging`，WP1 以 CORE_PORTS §5.11 的 `rust-planned` 块冻结，WP2 在 `storage-sqlite` 实现并测试）传入，不横向调用storage实现。该端口只维护运行期传输/清单元数据与 Owner 私有内容区中的字节，不写带 `owned_session` 外键的行；分块接收、流式摘要、封存后不可变、24 小时与启动回收、配额都复用现有预算，不在 server 另造一套。文件第一次上传即写入Owner私有、正式附件可引用的内容目录，封存后字节不可变；临时/正式区别在元数据与访问权，不是另一份文件。
 
 所有附件封存后，`session.start`携带同准备ID、receipt、runtimeEpoch/generation、原PromptContentBlock有序content、准备submissionId与所选模式/配置；其中attachment_ref只能引用该清单已封存的attachmentId。受理事务创建正式会话、目录归属、完整首条输入、稳定请求/任务/阶段以及附件正式记录/引用。任一步失败全回滚、不派发，文件仍是未认领字节。正文与附件无需第二次上传，也不得先建正式会话再补齐附件。
 
@@ -156,7 +159,7 @@ seal/manifest封存与start认领在同session门下排序。start最后一次�
 
 在 `core::model/ports` 增加纯类型的首条持久输入及事务写集，扩展已有 `SessionStore::commit_with_submission` 或同语义专用事务口，避免 UI/adapter 分几笔写。完整输入包含有序内容块、精确值和扩展容器，不把 ACP DTO 或 wire JSON 解析器引入 core；原文保真仍经协议规定的 rawJson 载体，领域视图不充当完整消息。
 
-SQLite 增加 owned 初始提交记录（建议表名 `owned_first_submission`，DDL 在 WP1 冻结）：session_id 唯一、稳定 user_message_id、原始主体/请求、完整输入和摘要、已选配置、派发阶段及曾否派发、当前尝试 requestId/结果。首次受理的同一事务写入，供restore明确投影 `committed`；本轮保留其会话/首条/当前请求关联，不增加删除正式会话或独立清除此关联的功能。正文按既有保留策略清理不等于删除身份关联；不新增ID消费或删除墓碑表，也不迁移旧会话。
+SQLite 增加 owned 初始提交记录（建议表名 `owned_first_submission`）：session_id 唯一、`first_submission_id` 唯一（服务端生成）、稳定 user_message_id、原始主体/请求、完整输入和摘要、已选配置、派发阶段及曾否派发、当前尝试 requestId/结果。WP1 在 CORE_PORTS 新增**顶层计划小节**（如 `## 12.`）用 `sql-planned` 冻结 DDL，不写进 §7——`check:drift` 会把 §7 的 sql 块与 `migrate.rs` 逐条比对，实现前写入即报红；WP2 以 v16 migration 落地后把块移入 §7、删除计划小节，并同步更新 `scripts/check-contract-drift.mjs` 的 v15 版本断言。准备附件暂存端口与首条事务口的计划形状同样放在 §5.11 的 `rust-planned` 块，不改 §5.2 `SessionStore` 与 §5.3 既有附件端口的方法集；WP2 实现后必须把同名 trait 移入常规 §5 块（drift 逐方法比对），否则文档会一直把已实现能力写成计划。首次受理的同一事务写入，供restore明确投影 `committed`；本轮保留其会话/首条/当前请求关联，不增加删除正式会话或独立清除此关联的功能。正文按既有保留策略清理不等于删除身份关联；不新增ID消费或删除墓碑表，也不迁移旧会话。
 
 正式消息投影与初始事件在同事务写；Owned 会话只留一份首条消息身份。回显关联使用 backend 每次 prompt 调用的内部派发尝试上下文（firstSubmissionId/userMessageId/requestId + 固定Agent身份/资源代），随该调用的事件sink传给mapper；FIFO响应结算屏障结束该尝试关联。不得以相同文本或 Agent messageId 作为匹配依据。可证明属于该尝试的 user chunks 保存原始事件，但投影为同一 userMessageId 的回显补充，不覆盖已保存用户原文；回显内容不同则显式显示为 Agent 回显。响应后/无上下文/旧资源代的 user 事件不得猜测归并，保留为有来源说明的独立 Agent 输入事件，不能吞掉或改写首条。
 
@@ -181,11 +184,20 @@ SQLite 增加 owned 初始提交记录（建议表名 `owned_first_submission`�
 
 尚为 accepted 且未派发的崩溃记录，启动只收敛为明确可证明未派发的失败，保留正文并等待显式继续；与既有 recover_unsettled 区分，不能一律 uncertain，也不能自动消费持久输入队列。`command.status` 的新协商投影应给出可核实的首次提交阶段/继续条件，不能让客户端按超时猜测。所有启动恢复与事件终态仍在 owned 提交口产生。
 
+#### D8.1 显式继续的闭合合同
+
+- **命令与载荷**：继续仍走 Sync-only mutation `session.start`，由 `payload.kind` 判别。`kind:"continue"` 的闭合字段是 `firstSubmissionId: UUID`、`retryOfRequestId: UUID`，以及可选的 `mode: string` / `configOptions: object`（只允许本次重新验证后要应用的值，缺省表示沿用记录的选择）；MUST NOT 携带正文、附件清单、`receipt`、`runtimeEpoch`/`generation`。`envelope.sessionId` 必须是已有正式会话，且与 `firstSubmissionId` 所属会话相同。
+- **`firstSubmissionId` 的来源**：由服务端在首次受理事务生成，与 `sessionId` 一对一，写入 `owned_first_submission.first_submission_id`（唯一列）；`kind:initial` **不携带**该字段。它经 `session.start` 的持久终态、`command.status` 的协商投影与准备的 `committed` 结果返回，因此刷新、响应丢失后客户端总能重新取得。它不等于附件清单的 `submissionId`（附件清单标识：附件帧定义它，`kind:initial` 的 `session.start` 用它认领清单；它不是首条提交身份），也不等于 `firstMessageId`（持久用户消息身份）。
+- **准入**（同会话串行门内，按顺序）：当前连接已认证且设备未撤销 → owned 会话存在且 Agent/目录仍可解析 → `owned_first_submission` 存在且 `firstSubmissionId` 相等（不存在或不等均回 `command.idempotency_conflict`）→ **若首次提交已有成功终态，回 `command.idempotency_conflict`** → **若阶段为 `dispatch_started`、`everDispatched=true` 或首个命令为 uncertain，回 `command.uncertain`**（不是 failed，不重建、不派发）→ 仅当阶段为可证明未派发时，要求 `retryOfRequestId` 指向本会话一个持久终态为 failed 的 `session.start` 命令（否则回 `command.idempotency_conflict`）。
+- **端点与事务**：在串行门内按持久 Agent/目录重建或复用临时端点，重新读取并应用本次选择的配置；端点建立或配置复核失败时写该次 attempt 的 failed 终态、保持 `everDispatched=false`，正文与首条身份不变，仍可再次显式继续。端点就绪后，在**同一事务**写入 `dispatch_started`、固定 Agent 会话标识、本次 attempt 的 requestId 与 `retryOfRequestId`，然后才允许调用 Agent。事务提交后无法确认结果 → 既有 `uncertain`，绝不自动重发。
+- **幂等与并发**：每次继续携带新的稳定 requestId；同 requestId 重放只返回该 attempt 的持久终态。不同 requestId 并发继续由阶段 CAS 只允许一个从“已失败且从未派发”进入 `dispatch_started`，其余回 `command.idempotency_conflict`（details 不含资源信息）。历史 attempt 的结果由既有 `owned_command` 持久记录提供，不新增 attempt 表。
+- **投影**：协商了新 feature 的 `command.status` 投影给出 `stage`（`saved_not_dispatched / dispatch_started / terminal`）、`firstSubmissionId`、`firstRequestId`、`currentRequestId`、`everDispatched` 与 `canContinue`；未协商的旧客户端不新增字段。正文始终只有一份首条消息。
+
 ### D9. 现有模块边界与准备容量统一
 
 - core 拥有 ID、准备生命周期、首次提交/继续的业务规则与纯端口；依赖闭包不变。
 - agent-host 通过现有 backend/endpoint 机制管理临时端点、真实选项、关闭、代隔离和进程树；新建临时端点不要求 SessionStore 中已有行。没有临时 endpoint 不能伪装可发送。
-- storage-sqlite 只实现 owned 原子首条提交、读投影与迁移，不读取 Agent stdio。附件正式与准备暂存通过组合根注入的端口协调，不横向 import。
+- storage-sqlite 实现 owned 原子首条提交、读投影与迁移，以及 core 的准备附件暂存纯端口（运行期元数据 + 同一受管内容区，无 `owned_session` 外键行），不读取 Agent stdio。附件正式与准备暂存经组合根注入的端口协调，不横向 import。
 - identity-auth 负责准备凭据纯签名/验证契约；identity-keystore 只沿已有平台端口签名；新增签名域登记到 transcript 机器表，不复制到协议以外的常量表。
 - server::sync 独立接控制帧、首次命令、附件准备目标及 DTO mapper，只调用 core 用例；不调用 Node Link/local_admin 等同级 adapter。
 - app 接线这些端口、计时和关闭顺序；临时资源关闭先于 Host/Store 关闭，所有任务有取消/回收所有者。

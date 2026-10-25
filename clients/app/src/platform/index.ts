@@ -20,6 +20,7 @@ import { openLocalCache } from "./local-cache.web";
 import { openDeviceIdentityStore } from "./secure-storage.web";
 import { openDownloadPort } from "./download.web";
 import { openAttachmentMediaPort } from "./attachment.web";
+import { openPreparationDraftStore } from "./preparation-draft.web";
 
 export type { LifecycleEvent, LifecyclePort, Unsubscribe, VisibilityState } from "./lifecycle";
 export type { CacheEntry, CacheHit, CacheStats, LocalCachePort } from "./local-cache";
@@ -52,12 +53,62 @@ export type {
   PlatformAttachmentPort,
 } from "./attachment";
 export { openAttachmentMediaPort } from "./attachment.web";
+export type {
+  PreparationDraftAccess,
+  PreparationDraftAttachment,
+  PreparationDraftAttachmentInput,
+  PreparationDraftAttachmentKind,
+  PreparationDraftCleanupReport,
+  PreparationDraftContent,
+  PreparationDraftEnvironment,
+  PreparationDraftErrorKind,
+  PreparationDraftInvalidation,
+  PreparationDraftInvalidationReason,
+  PreparationDraftLoadResult,
+  PreparationDraftPayload,
+  PreparationDraftPort,
+  PreparationDraftRecord,
+  PreparationDraftSaveResult,
+  PreparationDraftScope,
+  PreparationLifecycleEvent,
+  PreparationNavigationKind,
+  PreparationRequestAssociation,
+  PreparationSessionStorageLike,
+  PreparationStoredChunk,
+  PreparationStoredDraft,
+  PreparationTabBeginResult,
+  PreparationTabClaimDecision,
+  PreparationTabLocator,
+  PreparationTabOwnership,
+  PreparationWorkspaceRef,
+} from "./preparation-draft";
+export {
+  PREPARATION_DRAFT_CHUNK_SIZE,
+  PREPARATION_DRAFT_DB_NAME,
+  PREPARATION_DRAFT_DB_VERSION,
+  PREPARATION_DRAFT_ORPHAN_WINDOW_MS,
+  PREPARATION_DRAFT_RECORD_VERSION,
+  PREPARATION_TAB_STORAGE_KEY,
+  PreparationDraftError,
+  assertPreparationAttachmentInput,
+  assertPreparationDraftAttachment,
+  assertPreparationDraftContent,
+  assertPreparationDraftScope,
+  decideTabClaim,
+  orphanCleanupPlan,
+  parsePreparationByteLength,
+  preparationChunkKey,
+  preparationDraftKey,
+  preparationTabOwnershipKey,
+} from "./preparation-draft";
+export { openPreparationDraftStore } from "./preparation-draft.web";
 
 import type { LifecyclePort } from "./lifecycle";
 import type { LocalCachePort } from "./local-cache";
 import type { DeviceIdentityPort } from "./secure-storage";
 import type { DownloadPort } from "./download.shared";
 import type { PlatformAttachmentPort } from "./attachment";
+import type { PreparationDraftPort } from "./preparation-draft";
 
 /** 平台端口束：组合根装配一次，向下传给 Sync Client / 状态机 / feature。 */
 export interface PlatformPorts {
@@ -73,6 +124,13 @@ export interface PlatformPorts {
    * `openPlatform()` 提供。
    */
   readonly attachments?: PlatformAttachmentPort;
+  /**
+   * 浏览器准备草稿端口（`web-session-preparation` D5）。
+   *
+   * 与 `attachments` 一样按可选装配：注入的替身平台束可以没有它；生产实现由
+   * `openPlatform()` 提供。只有本机 Web 准备页会在首次提交前读写它。
+   */
+  readonly preparationDrafts?: PreparationDraftPort;
 }
 
 /**
@@ -90,5 +148,6 @@ export function openPlatform(): PlatformPorts {
     download: openDownloadPort(),
     // 页内句柄标识由平台生成：与设备身份/配对无关，只是本次选择内的稳定键。
     attachments: openAttachmentMediaPort(() => globalThis.crypto.randomUUID()),
+    preparationDrafts: openPreparationDraftStore(),
   };
 }

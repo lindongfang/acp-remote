@@ -20,6 +20,8 @@ import type {
   MessageCoverage,
   ModeState,
   OriginCursor,
+  PositiveDecimalString,
+  PreparationReceipt,
   PromptContentBlock,
   PublicError,
   SessionSummary,
@@ -46,7 +48,7 @@ import type {
 } from "./session-files";
 
 /**
- * `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（当前 20 条，与
+ * `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（当前 21 条，与
  * `compatibility/commands/v1/commands.json` 里 `transport` 含 `sync` 的条目一一对应）。
  * 四条 `session.files.*` / `session.git.*` 的严格形状与解码见 `./session-files`。
  */
@@ -70,7 +72,8 @@ export type CommandName =
   | "session.files.list"
   | "session.files.read"
   | "session.git.status"
-  | "session.git.diff";
+  | "session.git.diff"
+  | "session.start";
 
 /** 命令消息的公共信封（`$defs.command` 的固有字段）。 */
 export interface CommandEnvelope {
@@ -370,6 +373,73 @@ export interface SessionTitleSetCommand extends CommandEnvelope {
 }
 
 /**
+ * `$defs.preparationConfigSelection`：`{ <configId>: string | boolean }`，1..=64 项。
+ *
+ * 缺席表示沿用准备记录里的选择；服务端 MUST 在临时端点上重新读取并应用、以 Agent 确认为准。
+ */
+export type PreparationConfigSelection = Readonly<Record<string, string | boolean>>;
+
+/** `$defs.preparationStage`（design D8）：首条提交阶段，不是命令状态。 */
+export type PreparationStage =
+  | "saved_not_dispatched"
+  | "dispatch_started"
+  | "terminal";
+
+/**
+ * `$defs.sessionStart`（`core.session-preparation.v1`，`docs/SYNC_PROTOCOL.md` §11.9）：
+ * Sync-only mutation。`body.sessionId` 必须是由 Owner 签发准备的 ID（`initial`）或已存在的正式
+ * 会话（`continue`）；`payload` 是 `kind` 闭合判别联合，两个分支互斥且各自闭合。
+ *
+ * `initial` 带准备凭据与**有序**完整首条输入（`attachment_ref` 只能引用同一准备清单里已封存的
+ * `attachmentId`），不带 `firstSubmissionId`；`continue` 只带首次提交关联，不带正文/附件/凭据/
+ * 运行期字段。两者都禁止 Provider/MCP 凭据。
+ */
+export type SessionStartPayload =
+  | {
+      readonly kind: "initial";
+      readonly receipt: PreparationReceipt;
+      readonly runtimeEpoch: Uuid;
+      readonly generation: PositiveDecimalString;
+      readonly content: readonly PromptContentBlock[];
+      readonly submissionId?: Uuid;
+      readonly mode?: string;
+      readonly configOptions?: PreparationConfigSelection;
+    }
+  | {
+      readonly kind: "continue";
+      readonly firstSubmissionId: Uuid;
+      readonly retryOfRequestId: Uuid;
+      readonly mode?: string;
+      readonly configOptions?: PreparationConfigSelection;
+    };
+
+/** `$defs.sessionStart`：`command` 消息里 `command === "session.start"` 的那一支。 */
+export interface SessionStartCommand extends CommandEnvelope {
+  readonly body: {
+    readonly requestId: Uuid;
+    readonly command: "session.start";
+    readonly sessionId: Uuid;
+    readonly payload: SessionStartPayload;
+  };
+}
+
+/**
+ * `$defs.sessionStartProjection`：`session.start` 的 completed 结果，也是协商了新 feature 的
+ * `command.status` 的 `preparation` 字段（design D8/D8.1）。
+ *
+ * `canContinue` 只在阶段可证明未派发且首个命令已有 failed 终态时为真；`committed` 不是
+ * `completed`，派发结果仍要看 `currentRequestId`。
+ */
+export interface SessionStartProjection {
+  readonly stage: PreparationStage;
+  readonly firstSubmissionId: Uuid;
+  readonly firstRequestId: Uuid;
+  readonly currentRequestId: Uuid;
+  readonly everDispatched: boolean;
+  readonly canContinue: boolean;
+}
+
+/**
  * `$defs.remoteTarget`：远程命令/查询的来源定位（`resource.stateless-origin.v1`，§9.7/§11.4）。
  *
  * `sessionId` 为 `null` 只用于尚未建成会话的 `session.create`；其他会话操作必须给出原来源会话。
@@ -414,7 +484,8 @@ export type CommandBody =
   | SessionFilesListCommand["body"]
   | SessionFilesReadCommand["body"]
   | SessionGitStatusCommand["body"]
-  | SessionGitDiffCommand["body"];
+  | SessionGitDiffCommand["body"]
+  | SessionStartCommand["body"];
 
 /** `$defs.command`：`body` 由上面的判别联合（按 `command` 字段）表达。 */
 export type CommandMessage = CommandEnvelope & { readonly body: CommandBody };
@@ -514,6 +585,11 @@ export interface CommandStatusRecord {
   readonly terminalEventId: Uuid | null;
   readonly result: Record<string, unknown> | null;
   readonly error: PublicError | null;
+  /**
+   * 首次提交投影（`core.session-preparation.v1`）：只在连接协商了新 feature、且目标存在首条提交
+   * 记录时出现；旧客户端与旧会话 MUST NOT 收到该键（不是 `null`）。`state` 的既有语义不变。
+   */
+  readonly preparation?: SessionStartProjection;
 }
 
 /** `$defs.commandResult.body.status` 的封闭词表。 */
@@ -558,6 +634,7 @@ export type CommandResultValue =
   | SessionFilesReadResult
   | SessionGitStatusResult
   | SessionGitDiffResult
+  | SessionStartProjection
   | Record<string, unknown>;
 
 /** `$defs.commandResult`：`command.result` 消息。 */

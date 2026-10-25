@@ -125,11 +125,20 @@ export function currentPath(): string | null {
 }
 
 /** 路由出口：`app/_layout.tsx` 渲染的 `<Stack />`。 */
-export function Stack(_props: { readonly screenOptions?: unknown; readonly children?: ReactNode }): ReactElement | null {
+export function Stack(_props: {
+  readonly screenOptions?: unknown;
+  readonly children?: ReactNode;
+  readonly screenLayout?: (props: { readonly children: ReactNode; readonly route: { readonly name: string } }) => ReactElement;
+}): ReactElement | null {
   useSyncExternalStore(subscribe, getVersion, getVersion);
   if (current === null) return null;
   // 作为**元素**交给 React（见文件头）：`key` 取路径，同类型路由之间切换时强制重挂。
-  return createElement(current.component, { key: current.path });
+  const content = createElement(current.component, { key: current.path });
+  // 与真实 useDescriptors 一致，layout 是直接调用的回调，不是由 React 挂载的组件。
+  return _props.screenLayout === undefined ? content : _props.screenLayout({
+    children: content,
+    route: { name: current.path === "/" ? "index" : current.path.slice(1) },
+  });
 }
 
 /** `useRouter()`：只提供页面用到的方法。 */

@@ -25,6 +25,8 @@ import type {
   AttachmentFrame,
   AttachmentFrameType,
   AttachmentTransferState,
+  ErrorCode,
+  PreparationAttachmentTarget,
 } from "../protocol";
 import {
   ATTACHMENT_CHUNK_SIZE,
@@ -74,25 +76,40 @@ export type AttachmentTransferFailure =
   | "revoked"
   | "expired"
   | "aborted"
-  | "already_sealed";
+  | "already_sealed"
+  /** 准备运行期/代失效：先核实原 start，再 restore（D6.3）。 */
+  | "preparation_stale"
+  /** 首条已被正式受理：停止上传，restore 取关联，不重传。 */
+  | "already_committed"
+  /** 凭据所属存储已整体重建：旧材料彻底作废，回目录重新分配。 */
+  | "store_rebuilt";
 
 /** 结构化失败：`details` 原样来自 `attachment.error`（offset 等）。 */
 export class AttachmentTransferError extends Error {
   readonly failure: AttachmentTransferFailure;
   readonly retryable: boolean;
   readonly details: Readonly<Record<string, unknown>>;
+  /**
+   * 服务端 `attachment.error.code` 原文（客户端侧失败为 `null`）。
+   *
+   * 仓库按这个码走 D6.3 的固定动作；只看 `failure` 会把 `preparation.*` 与同名的传输
+   * 失败混在一起，也无法把 `details` 原样交给页面。
+   */
+  readonly code: ErrorCode | null;
 
   constructor(
     failure: AttachmentTransferFailure,
     message: string,
     retryable = false,
     details: Readonly<Record<string, unknown>> = {},
+    code: ErrorCode | null = null,
   ) {
     super(message);
     this.name = "AttachmentTransferError";
     this.failure = failure;
     this.retryable = retryable;
     this.details = details;
+    this.code = code;
   }
 }
 
@@ -151,6 +168,13 @@ export interface AttachmentTransferOptions {
 export interface AttachmentBinding {
   readonly sessionId: string;
   readonly subjectId: string;
+  /**
+   * 准备目标（`design.md` D6.1）：出现时 `attachment.begin` 与
+   * `attachment.manifest_begin` 走 `target` 分支，**不再**带顶层 `sessionId`。
+   *
+   * 首条提交之前的附件只能这样上传：没有正式会话行，也不能用空会话绕过外键。
+   */
+  readonly target?: PreparationAttachmentTarget;
 }
 
 interface Waiter<T> {
@@ -197,6 +221,12 @@ function failureOfCode(code: string): AttachmentTransferFailure {
       return "expired";
     case "attachment.sealed":
       return "already_sealed";
+    case "preparation.stale":
+      return "preparation_stale";
+    case "preparation.already_committed":
+      return "already_committed";
+    case "preparation.store_rebuilt":
+      return "store_rebuilt";
     default:
       return "protocol";
   }
@@ -316,6 +346,7 @@ export class AttachmentTransferClient {
             frame.body.message,
             frame.body.retryable,
             frame.body.details,
+            frame.body.code,
           );
           // 一个 transfer 可能同时有块确认与封存等待者；错误帧同时结束它们。
           this.#rejectAll(waiters, error);
@@ -355,7 +386,10 @@ export class AttachmentTransferClient {
     }
     this.#sendFrame("attachment.begin", {
       transferId,
-      sessionId: binding.sessionId,
+      // 两个分支各自闭合（`oneOf`）：准备上传带 `target`，正式上传带顶层 `sessionId`。
+      ...(binding.target === undefined
+        ? { sessionId: binding.sessionId }
+        : { target: binding.target }),
       subject: { kind: "device", id: binding.subjectId },
       totalLength: source.totalLength,
       chunkSize: ATTACHMENT_CHUNK_SIZE,
@@ -410,7 +444,9 @@ export class AttachmentTransferClient {
     }
     this.#sendFrame("attachment.manifest_begin", {
       submissionId,
-      sessionId: binding.sessionId,
+      ...(binding.target === undefined
+        ? { sessionId: binding.sessionId }
+        : { target: binding.target }),
       subject: { kind: "device", id: binding.subjectId },
       attachmentCount: String(transferIds.length),
     });

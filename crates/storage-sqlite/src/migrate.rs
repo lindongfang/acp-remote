@@ -16,12 +16,13 @@ use acp_core::model::derive_directory_id;
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v15：`owned_session` 追加可空的 `custom_title`，
-/// 保存用户设置的自定义标题；v14 删除全部 `imported_*` 远程资源表并清理可辨认的远程代理记录，
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v16：新增 `owned_first_submission` 并把
+/// `owned_message.channel` 的 CHECK 扩到 `user`（首条用户消息无需 Agent 回显即可读取）；
+/// v15 的 `owned_session.custom_title`、v14 删除全部 `imported_*` 远程资源表、
 /// v13 的三态 `owned_session`、v12 的分块附件传输/清单、消息通道与媒体引用保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 15;
-/// §7.2：`meta.owned_schema_version` 的已知版本（v15 给 `owned_session` 追加 `custom_title`）。
-pub const OWNED_SCHEMA_VERSION: i64 = 15;
+pub const FILE_FORMAT_VERSION: i64 = 16;
+/// §7.2：`meta.owned_schema_version` 的已知版本（v16 新增首条提交表与 `owned_message` 的 user 通道）。
+pub const OWNED_SCHEMA_VERSION: i64 = 16;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -250,7 +251,7 @@ CREATE TABLE IF NOT EXISTS owned_message (
   message_id        TEXT PRIMARY KEY,
   session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
   turn_id           TEXT,
-  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought')),
+  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought','user')), -- 'user' = 首条用户消息（owned_first_submission）；不是 Agent 消息
   state             TEXT NOT NULL CHECK (state IN ('partial','completed','failed','cancelled')),
   content_json      TEXT NOT NULL,
   partial_reason    TEXT,
@@ -268,6 +269,35 @@ CREATE TABLE IF NOT EXISTS owned_media_ref (
   PRIMARY KEY (message_id, position)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS owned_media_ref_attachment ON owned_media_ref(attachment_id);
+
+CREATE TABLE IF NOT EXISTS owned_first_submission (
+  session_id          TEXT PRIMARY KEY REFERENCES owned_session(session_id) ON DELETE RESTRICT,
+  first_submission_id TEXT NOT NULL UNIQUE,
+  user_message_id     TEXT NOT NULL UNIQUE,
+  first_request_id    TEXT NOT NULL,
+  current_request_id  TEXT NOT NULL,
+  actor_kind          TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_id            TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  input_json          TEXT NOT NULL,
+  input_digest        TEXT NOT NULL,
+  mode_id             TEXT,
+  config_json         TEXT NOT NULL,
+  stage               TEXT NOT NULL CHECK (stage IN ('saved_not_dispatched','dispatch_started','terminal')),
+  ever_dispatched     INTEGER NOT NULL DEFAULT 0 CHECK (ever_dispatched IN (0,1)),
+  agent_session_id    TEXT,
+  resource_epoch      TEXT,
+  terminal_outcome    TEXT CHECK (terminal_outcome IN ('completed','failed','uncertain')),
+  terminal_at         TEXT,
+  error_code          TEXT, error_message TEXT, error_details_json TEXT, retryable INTEGER,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  CHECK (stage = 'saved_not_dispatched' OR agent_session_id IS NOT NULL),
+  CHECK (stage <> 'terminal' OR terminal_outcome IS NOT NULL),
+  CHECK (ever_dispatched = 0 OR stage <> 'saved_not_dispatched'),
+  CHECK (stage <> 'dispatch_started' OR ever_dispatched = 1),
+  CHECK (terminal_outcome IS NULL OR terminal_outcome = 'completed' OR error_code IS NOT NULL)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS owned_device (
   device_id     TEXT PRIMARY KEY,
@@ -982,6 +1012,74 @@ async fn v15_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageErro
     Ok(())
 }
 
+/// §7.2 的 v15 → v16 升级：新增首条提交表，并把 `owned_message.channel` 的 CHECK 扩到 `user`。
+///
+/// - **只加不填**：`owned_first_submission` 不回填任何历史会话、不扫描空正文改状态；旧会话没有本表行，
+///   永远不得据 `agent_session_id = NULL` 推断可重新准备。
+/// - `owned_message` 的 CHECK 必须用 12-step 重建（SQLite 不能修改既有 CHECK）：行（含
+///   `created_at`/`updated_at` 与正文）逐列搬到新表，索引重建；`migrate()` 已在事务外关闭外键，
+///   `owned_media_ref` 的 FK 文本因此仍指向 `owned_message` 并跟随新表。
+/// - 表与索引的重建在同一事务里；失败整体回滚，第二次打开因 `user_version = 16` 跳过本段。
+async fn v16_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
+    // 调用点已保证 `file_version < 16`；版本号在同一事务里推进，因此重开不会重跑本段。
+    // 注意 `OWNED_SCHEMA_V1` 已在升级段之前 `CREATE TABLE IF NOT EXISTS owned_first_submission`，
+    // 因此不能按「表已存在」判断是否需要重建 `owned_message`。
+    sqlx::raw_sql(V16_UPGRADE_OWNED).execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// v15 → v16 的 DDL（`owned_message` 12-step 重建 + 首条提交表）。
+const V16_UPGRADE_OWNED: &str = r#"
+CREATE TABLE owned_message_v16_new (
+  message_id        TEXT PRIMARY KEY,
+  session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  turn_id           TEXT,
+  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought','user')),
+  state             TEXT NOT NULL CHECK (state IN ('partial','completed','failed','cancelled')),
+  content_json      TEXT NOT NULL,
+  partial_reason    TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  CHECK (state <> 'completed' OR partial_reason IS NULL)
+) STRICT;
+INSERT INTO owned_message_v16_new
+  (message_id, session_id, turn_id, channel, state, content_json, partial_reason, created_at, updated_at)
+  SELECT message_id, session_id, turn_id, channel, state, content_json, partial_reason, created_at, updated_at
+  FROM owned_message;
+DROP TABLE owned_message;
+ALTER TABLE owned_message_v16_new RENAME TO owned_message;
+CREATE INDEX IF NOT EXISTS owned_message_session ON owned_message(session_id, created_at, message_id);
+
+CREATE TABLE IF NOT EXISTS owned_first_submission (
+  session_id          TEXT PRIMARY KEY REFERENCES owned_session(session_id) ON DELETE RESTRICT,
+  first_submission_id TEXT NOT NULL UNIQUE,
+  user_message_id     TEXT NOT NULL UNIQUE,
+  first_request_id    TEXT NOT NULL,
+  current_request_id  TEXT NOT NULL,
+  actor_kind          TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_id            TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  input_json          TEXT NOT NULL,
+  input_digest        TEXT NOT NULL,
+  mode_id             TEXT,
+  config_json         TEXT NOT NULL,
+  stage               TEXT NOT NULL CHECK (stage IN ('saved_not_dispatched','dispatch_started','terminal')),
+  ever_dispatched     INTEGER NOT NULL DEFAULT 0 CHECK (ever_dispatched IN (0,1)),
+  agent_session_id    TEXT,
+  resource_epoch      TEXT,
+  terminal_outcome    TEXT CHECK (terminal_outcome IN ('completed','failed','uncertain')),
+  terminal_at         TEXT,
+  error_code          TEXT, error_message TEXT, error_details_json TEXT, retryable INTEGER,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  CHECK (stage = 'saved_not_dispatched' OR agent_session_id IS NOT NULL),
+  CHECK (stage <> 'terminal' OR terminal_outcome IS NOT NULL),
+  CHECK (ever_dispatched = 0 OR stage <> 'saved_not_dispatched'),
+  CHECK (stage <> 'dispatch_started' OR ever_dispatched = 1),
+  CHECK (terminal_outcome IS NULL OR terminal_outcome = 'completed' OR error_code IS NOT NULL)
+) STRICT;
+"#;
+
 /// v14：把可辨认的远程代理记录从 owned 家族清出（不触碰 owned 事件/epoch/幂等/信任）。
 const V14_CLEAN_OWNED_PROXIES: &str = r#"
 CREATE TABLE v14_remote_sessions AS
@@ -1643,6 +1741,9 @@ async fn migrate_locked(
         }
         if file_version < 15 {
             v15_upgrade(&mut tx).await?;
+        }
+        if file_version < 16 {
+            v16_upgrade(&mut tx).await?;
         }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;

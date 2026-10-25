@@ -1,7 +1,10 @@
 # ACP Remote 安全设计
 
+目录文件/Git 查询仅对已认证设备或本地 CLI 开放，不授予 Node Link 或配对认领方；每次重新解析既有目录，禁止通过查询创建目录。沿用根内相对路径、安全打开、内容预算与连接期快照限制；内容版本绑定设备、连接、目录目标、相对路径和用途，不记录绝对路径或文件正文到错误与日志。协议边界见 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。
+
 > 状态：编码前安全基线（Draft）  
 > 版本：0.6
+> 修订记录（2026-10-22，`web-session-preparation` WP3，**identity-auth 已实现；服务端/存储接线待 WP2–WP5**）：§12.8 写回准备凭据的签名/验证实现边界——专用 domain、`Authority::sign_preparation_receipt` 与 `verify_preparation_receipt` 的固定顺序（认证/撤销 → 签名 → 绑定）、`storeEpoch` 单独的不可重试结果、逐字段绑定与跨设备/跨节点拒绝、错误脱敏与重放边界；确认 receipt 不是 bearer 凭证、不替代逐连接认证且不授予 scope。临时资源、附件暂存与服务端帧仍为计划。
 > 修订记录（2026-10-22，`session-activation-lifecycle` WP1，**合同先行；实现待 WP2–WP5**）：新增 §12.7「本机资源回收与查看租约」——查看声明只绑定**已认证且页面可见**的连接、租期 30 秒/续租 10 秒、普通心跳不续租，断开/撤销/连接被替换立即清除且**不持久化**；资源回收只有 Agent 适配器确认真实释放后才交还容量名额，关闭失败/不确定保留占位。§9.5 补「撤销即刻失效查看声明」；§10.2 的 `session.resume` 更新为双传输面（Sync 侧受 `core.local-session-lifecycle.v1` 门控，payload `{}`、结果不带 `remoteSessionRef`），并说明 `session.view` 不是业务命令；§12.2 的空闲回收行更新为缺省 30 分钟与新增容量上限的语义；§5 威胁表补「伪造查看/容量」一行。威胁模型与信任边界**未变**：没有新增设备权限、没有新的长活凭据，也不放宽路径/内容可见面。
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§10.2 的命令表登记 `session.title.set`（mutation、mvp、feature `core.session-title.v1`，Owner 元数据而非 ACP capability；只写本地会话标题列、不启动 Agent）；客户端改名禁令与「标题仅由 Agent 更新」的旧口径由本变更取代（原文见 SYNC_PROTOCOL §10.3 与 ACP_COMPATIBILITY_MATRIX §5）。威胁模型与信任边界未变；`custom_title` 持久化与命令接线已落地。
 > 日期：2026-10-17  
@@ -352,6 +355,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `session.git.diff` | query | mvp |
 | `session.resume` | mutation | conditional_mvp（Node Link 与 Sync 共用命令名；Sync 侧仅在协商 `core.local-session-lifecycle.v1` 后开放，payload `{}`、结果 `{ sessionId, session }` 不带 `remoteSessionRef`） |
 | `session.title.set` | mutation | mvp（feature `core.session-title.v1`；Owner 元数据，非 ACP capability） |
+| `session.start` | mutation | conditional_mvp（feature `core.session-preparation.v1`；Sync-only 首次提交与显式继续。`envelope.sessionId` 必须是准备凭据证明的 ID 或已存在的正式会话，`payload` 是 `kind` 闭合判别联合；不进入 Node Link，也不改变 ACP `session/new` 与旧 `session.create`） |
 
 仍由各层独立执行的下界：schema/长度/频率限制、会话状态机、幂等键、连接上限，以及本地管理入口的 OS 用户边界。
 
@@ -412,6 +416,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 - Device private `CryptoKey` 只在 IndexedDB 中以不可导出形式保存。
 - imported resource 的会话正文、ACP raw、终端和 diff 不得持久化；对 Owner 本地资源未来允许的缓存仍按敏感内容设置容量、版本和清理策略。
 - `localStorage` 不保存私钥、pairing secret、完整 prompt 或可恢复认证材料。
+- **准备草稿（`web-session-preparation` WP6，已实现）**：唯一允许的客户端正文留存是「本机准备中、尚未首次提交」的标签页草稿（[`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §7）。它由专用平台端口 `PreparationDraftPort` 实现，使用独立 IndexedDB 数据库 `acp-remote-preparation-v1`（`drafts`/`chunks`/`ownership`），按 `canonical origin + ownerNodeId + deviceId + tabSlotId + sessionId` 分区；sessionStorage 只保存非敏感标签页定位。草稿 MUST NOT 含 Provider/MCP 凭据、设备密钥、配对码/配对秘密、认证材料、续传令牌或 imported 内容；运行期精确键守门拒绝任何未知字段，配置值只接受字符串/布尔值。附件以 128 KiB 分块保存为字节，不保存 `File` 句柄或 Blob URL。每次保存先写完新版本分块，再在单个 IndexedDB 读写事务里比较版本并提交，旧版本在提交前保持可读；迟到写看到墓碑即失败。配额失败逐项返回 `itemLocalIds`，不得截断、静默删附件或改走服务端上传；实现不设产品级附件数量/大小上限，只受浏览器配额约束。可见性隐藏/冻结只更新归属心跳；主动离开、更换 Agent/目录先写逻辑删除墓碑再清字节；无人持有的活跃残留以 24 小时孤儿窗口回收，活标签页持有的草稿不删；墓碑只含版本/原因并保留以阻止迟到写，不承载正文。只有在权威 `accepted` 且读取验证完整消息后才清除正文/Blob，并保留未终结请求关联直至命令终结。站点数据被清理时草稿随之丢失，按草稿丢失处理；设备密钥同时丢失时仍按本节下一条重新配对。本例外不放宽 imported/no-content-cache 或摘要缓存规则。
 - `navigator.storage.persist()` 被拒绝不降低认证，数据被清理后要求重新配对。
 
 ## 12. Daemon、Agent 与 Workspace
@@ -511,6 +516,21 @@ Agent 可以通过 ACP 的 `terminal/create`/`output`/`wait_for_exit`/`kill`/`re
 - **输入与错误边界**：控制帧受 schema、字段数、单帧大小、`viewVersion` 范围（0..=`2^53−1`）、会话归属与频率（120 帧/分钟，独立于业务命令）校验，且门控先于任何存储或 Agent 调用；拒绝使用既有 `protocol.schema_invalid`/`protocol.type_unsupported`/`resource.rate_limited`/`session.not_found`，容量拒绝用 `session.capacity_exceeded`（`retryable = true`）。错误与日志不含密钥、正文、路径或任意会话内容。
 - **配置边界**：显式 `sessions.idle_timeout_ms = 0` 只关闭按时间回收，容量保护仍然生效；`sessions.max_active_sessions` 必须是正整数（无「无限」取值），运行期调低上限不强杀受保护会话，只拒绝新增直到计数回落（`CONFIG_REFERENCE.md` §4）。
 
+### 12.8 准备凭据与临时资源（`web-session-preparation`；`identity-auth` 签名/验证边界已实现，服务端帧/存储/临时资源待 WP2–WP5）
+
+准备凭据让 Owner 证明「某个 `sessionId` 是我分配的、并绑定到这个设备/标签页/Agent/目录」，它**不是**一种新的认证方式：
+
+- **不是 bearer token**：receipt 不替代每条 WSS 的 challenge-response，不授予 scope，不带来跨设备/跨会话访问，不读取其他标签页草稿或任意目录，也不能恢复已提交会话或旧存储代。任何把 receipt 当作登录凭证、缓存成长期凭据或写进 URL 的做法都违反本节。`identity-auth` 的验证入口强制要求当前连接的 `Authenticated`（来自 §5 握手）与最新设备凭据状态；返回值 `PreparationAdmission` 只有私有字段与 `session_id()`，不携带授权、scope、端点或密钥。
+- **签名与验证边界（已实现）**：claims 是闭合的 10 个 wire 字段（`version`/`ownerNodeId`/`storeEpoch`/`origin`/`deviceId`/`tabNonce`/`sessionId`/`agentId`/`normalizedWorkspacePath`/`workspaceSource`，[`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §6.3），签名域是专用 transcript `acp-remote/session-preparation/v1`（P-256 P1363 64 字节 + 无填充 base64url）。签发只经 `Authority::sign_preparation_receipt` → `IdentityKeystore::sign(KeyPurpose::NodeIdentity)`；验签只经纯函数 `verify_preparation_receipt` / `Authority::verify_preparation_receipt`。不新增「任意字节签名」入口，不接受调用方自选 domain，也不复用设备认证的签名域；`identity-auth` 不持私钥、不做平台 IO。
+- **验证顺序（已实现）**：`verify_preparation_receipt` 固定为 **当前连接认证与撤销 → 专用 domain 签名 → claims 绑定**。`Revoked`/`Unknown`/`ScopeReduced` 在验签之前失败（分别映射既有认证/关闭规则，不返回业务错误）；签名结构/编码失败与密码学失败分类不同；之后才比较 `ownerNodeId`、当前已认证 `deviceId`、连接 canonical origin、持久 `storeEpoch`、`sessionId`、`tabNonce`、`agentId`、规范化目录与来源。跨设备/跨节点/跨标签页/跨会话一律拒绝；本地 `PreparationBinding` 只服务决策与测试。`PreparationAdmission` 在全部检查通过后才可构造，资源查询/重建/启动入口应以它为前提（服务端接线待 WP5）。
+- **绑定与拒绝（已实现 + 服务端映射待 WP5）**：`storeEpoch` 取持久 `meta.server_epoch`（正常重启不变，整库重建时改变），`origin` 是 canonical origin，`tabNonce` 是 32 字节随机标签页归属（不进入 URL）。伪造签名、跨设备/跨会话/跨标签页、`subject` 与连接不符、同 ID 不同声明、附件连接未重绑、混用正式与准备资源，统一返回 `attachment.binding_mismatch` / `{}`（控制面用已登记业务错误），不泄露目标存在性，也不指出哪个签名字段失败。
+- **存储重建**：receipt 的 `storeEpoch` 与当前持久值不一致时，`identity-auth` 返回独立的 `PreparationError::StoreRebuilt`；服务端 MUST 映射为不可重试的 `preparation.store_rebuilt`（`details: {}`），客户端丢弃 receipt 并认证后回目录重新分配；不得重放旧 receipt、不得沿用旧临时端点，也不得把这种情况报成 `preparation.stale`。
+- **重放边界**：receipt 没有 `consumed` 状态、不写墓碑，也不是可兑换的一次性令牌。重放最多证明「同一未撤销设备、同一 origin、同一标签页/会话绑定仍成立」，不会产生新的正式会话；对正式 ID 的重放由 WP2 的持久首条受理记录与唯一约束挡住（尚未实现）。正常进程重启（同一 `storeEpoch`）receipt 继续有效；整库重建使其失效；节点身份材料变化按 §9.4 进入 `identity_changed`，不得用新密钥静默重签成同一 `sessionId`。已正式受理的 `committed` 优先于运行期过代/租约/目录变化仍由服务端在验签与绑定之后判定。
+- **脱敏**：`PreparationReceipt` 与 `PreparationClaims` 的 `Debug` 只输出固定脱敏标记，不打印 claims 值（目录路径、origin、设备/会话/节点标识、`storeEpoch`）或签名内容；receipt 不含私钥、认证材料、正文、附件或 Provider/MCP 凭据；`SecretBytes` 仍不实现 `Debug`/`Serialize`、`KeyHandle` 的 `Debug` 保持不透明。claims 含本机规范化目录，调用方 MUST NOT 把整个 receipt 原样写入日志/审计（路径禁入日志，§14.1）。`PreparationError` 的 `Display`/`Debug` 只带固定文案与字段类别，不带 claims 值、路径、签名内容或密钥材料；adapter MUST NOT 把本地 `PreparationBinding` 原样写入日志、错误 `message`/`details` 或审计。
+- **验证顺序与撤销优先级（服务端，计划）**：服务端在任何凭据读取或临时资源访问前先确认当前连接认证与最新撤销状态；之后才验签与 claims 绑定，再查首条持久受理，最后核对运行期资源代/租约与目录/Agent 现状。已撤销设备立即中止其准备控制帧、附件准备上传与临时端点（附件连接按 `4410` 关闭）。
+- **临时资源与孤儿清理（计划）**：准备目录、租约、资源代、临时端点与暂存传输只存在于运行期（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11）；不写带 `owned_session` 外键的行，不产生正式会话/命令/事件。临时资源计入 `sessions.max_active_sessions` 容量，租约 30 秒、可见页面每 10 秒续租（[`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §14）。未封存或已封存待认领的暂存字节由启动回收与 24 小时闲置回收清理；活动传输与已受理消息引用的字节不得被误删。回收只删除无引用孤儿，且不写日志正文、路径或摘要之外的敏感字段。
+- **不重传、不复制（计划）**：首次提交只认领已封存字节的元数据与引用（design D6.4）；转正不得再次全量上传、复制文件或重新计算整份摘要。必要的存在性/权限复核不在此限。
+
 ## 13. 持久化与本地数据保护
 
 ### 13.1 第一阶段静态数据决策
@@ -548,6 +568,7 @@ Agent 可以通过 ACP 的 `terminal/create`/`output`/`wait_for_exit`/`kill`/`re
 向第三方客户端交付正文必须被视为显式数据披露
 - 撤销设备或节点后 Owner 不再提供数据，Access 清除该来源的运行期模型与内存内容（不存在需要删除的持久索引）。
 - 客户端收到自己被撤销或用户执行“清除此设备”时，应删除缓存和 device key；浏览器能力不足时明确说明残留风险。
+- **准备材料的数据最小化（浏览器侧已实现；Owner 侧仍按计划）**：准备凭据只在浏览器内随准备草稿持有（窄例外与实现边界见 §11.4），不写日志、不进 URL、不进入普通 SQLite 字段；Owner 侧对准备阶段**不落任何行**（core/storage 已在 WP2 落地，服务端接线待 WP5）——准备目录/租约/资源代与暂存传输都是运行期状态，正式记录只由首次受理事务产生（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §7.3）。Access Node 不接触准备凭据：它既不签发、不验证，也不缓存，准备帧只在 Sync 面由 Owner 处理。
 - 未来启用加密离线正文缓存时，必须新增协商 feature、Owner 明示授权、容量/TTL/撤销提示和独立 ADR；Owner 仍不得声称能远程可靠擦除已有副本。
 - 与 Daemon 同包发布的 PWA 静态资源属 §3 的 `public-artifact` 类别：根路径静态面只交付这些公开构建产物（入口文档与前端资源），不交付任何会话内容、凭据或用户数据，因此未认证的请求也能取到它。同包发布、构建版本可检查与发布构建缺产物即拒绝启动见 §16.3。
 

@@ -790,7 +790,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "CP-6 条目形态：用户气泡靠右、代码卡有语言条与复制、运行指示与失败条各就各位",
+    name: "CP-6 条目形态：用户气泡靠右、代码卡有语言条与复制、失败条各就各位；进行中不写文案",
     async run() {
       await withSessionPage(
         sessionScenario({
@@ -846,11 +846,9 @@ const checks: readonly Check[] = [
             "Agent 气泡不得靠右",
           );
 
-          // 运行指示：进行中的轮次带它（只看状态，不看位置）。
-          expectThat(
-            query(container, '[data-turn-running="true"]') !== null,
-            "进行中的轮次必须带运行指示",
-          );
+          // 进行中的轮次不另写「正在输出」：输出证据是实际的回复/思考/工具条目。
+          expectEqual(query(container, '[data-turn-running="true"]'), null, "不再用文案提示输出");
+          expectThat(!domText(container).includes("Agent 正在输出"), "不得出现「Agent 正在输出」文案");
           // 失败条：失败轮次的错误在一条明确的条里。
           const failure = query(container, "[data-turn-failure]");
           expectThat(failure !== null, "失败的轮次必须是一条失败条");

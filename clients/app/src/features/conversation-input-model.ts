@@ -75,6 +75,8 @@ export type CancelPresentation =
 
 /** 输入区模型。 */
 export interface ConversationInputModel {
+  /** 本机首条草稿无法恢复时的功能性告警；与远程草稿来源说明分开。 */
+  readonly persistenceWarning?: string | null;
   readonly state: ConversationInputState;
   /** 当前不可提交的原因；可提交时为 `null`（与 `state !== "editable"` 一一对应）。 */
   readonly blockedBy: ConversationInputBlock | null;

@@ -38,13 +38,14 @@ use acp_core::model::{
 use acp_core::ports::{
     AttachmentRef, AttachmentStore, CommitOutcome, HistoryPage, HistoryQuery, IdempotentReplay,
     ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord, PendingInteractionOrigin,
-    PruneReport, ReadView, ReplayBatch, ReplayLimit, ResetReason, RetentionPolicy,
-    SessionActivityFacts, SessionQuery, SessionStore, SettledSession, StateChange, StoreHealth,
-    SubmissionBinding, SyncEventRecord, SyncReplaySlice, TurnChange, TurnUpdate,
+    PreparationAttachmentStaging, PruneReport, ReadView, ReplayBatch, ReplayLimit, ResetReason,
+    RetentionPolicy, SessionActivityFacts, SessionQuery, SessionStore, SettledSession, StateChange,
+    StoreHealth, SubmissionBinding, SyncEventRecord, SyncReplaySlice, TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
 use crate::migrate::{self, Pools, StorageConfig, StoreMetadata, window};
+use crate::staging::PreparationStaging;
 
 /// `owned_event` 的读列（顺序无关，集中一处便于与 §7.3 对照）。
 const EVENT_COLUMNS: &str = "global_sequence, session_id, session_sequence, origin_epoch, \
@@ -93,6 +94,8 @@ pub struct SqliteStore {
     measure_sql: String,
     /// §7.1：启动 `quick_check` 的结论；`false` 即只读失败关闭（写路径返回 `PortError::Corrupt`）。
     integrity_ok: bool,
+    /// 准备附件暂存的运行期元数据（§5.11）：没有数据库行，字节在 `<attachment_dir>/.preparation/`。
+    pub(crate) staging: PreparationStaging,
 }
 
 impl std::fmt::Debug for SqliteStore {
@@ -157,13 +160,22 @@ impl SqliteStore {
         let mut write = pools.write.acquire().await.db()?;
         let measure_sql = build_measure_sql(&mut write).await?;
         drop(write);
-        Ok(SqliteStore {
+        let store = SqliteStore {
             pools,
-            config,
+            config: config.clone(),
             meta,
             measure_sql,
             integrity_ok,
-        })
+            staging: PreparationStaging::new(config),
+        };
+        // 启动回收（§5.11）：准备暂存没有数据库行，崩溃/重启后只能按 24 小时窗口清理。失败不阻止
+        // 打开（下一次维护/启动会再试），也不冒充“已清理”。
+        if let Some(before) = window::shift_days(at.as_str(), -1)
+            && let Ok(before) = Timestamp::new(&before)
+        {
+            let _ = store.staging.release_orphans(before).await;
+        }
+        Ok(store)
     }
 
     /// §7.2 的启动清理门禁（`access-owner-data-stateless`）：迁移成功之后、开始监听之前调用一次。
@@ -2223,6 +2235,72 @@ async fn insert_created_session_row(
     Ok(())
 }
 
+/// 单条会话级事件的写入输入（§7.3 的一行 `owned_event`）。
+///
+/// 首条提交/结算走各自的专用事务（§5.11），但仍必须与 [`SqliteStore::commit_owned`] 的批量路径
+/// **同一口径**：同一个 `expires_at` 策略、同一个 `INSERT_EVENT`、同一套 `MAX+1` 序号与 ACPR-CJ1
+/// 摘要。否则专用路径会写出 `expires_at IS NULL`（逃过保留清理）或不同的 `payload_digest`。
+pub(crate) struct SessionEventWrite<'a> {
+    pub event_type: &'a str,
+    pub kind: EventKind,
+    pub policy: StoredPolicy,
+    pub origin: EventOrigin,
+    pub turn: Option<&'a TurnId>,
+    pub causation: Option<&'a RequestId>,
+    pub view: &'a ViewJson,
+    pub at: &'a Timestamp,
+    pub window: &'a RetentionPolicy,
+}
+
+/// 写入一条会话级事件并返回分配的 event id。
+pub(crate) async fn write_session_event(
+    tx: &mut Transaction<'_, Sqlite>,
+    session: &SessionId,
+    write: &SessionEventWrite<'_>,
+) -> Result<EventId, PortError> {
+    let global = next_global_sequence(&mut *tx).await?;
+    let session_sequence = next_sequence_for(&mut *tx, "session_sequence", session).await?;
+    let origin_sequence = next_sequence_for(&mut *tx, "origin_sequence", session).await?;
+    let origin_epoch: String =
+        sqlx::query_scalar("SELECT origin_epoch FROM owned_session WHERE session_id = ?1")
+            .bind(session.as_str())
+            .fetch_one(&mut **tx)
+            .await
+            .db()?;
+    // §7.3/§9.9：`payload_digest` 是**对 `payload_json` 施 ACPR-CJ1 后**的 SHA-256。
+    let canonical = acpr_wire::cj1::canonicalize(write.view.as_str())
+        .map_err(|error| PortError::InvalidRequest(cj1_message(&error)))?;
+    let payload_digest = digest_text(canonical.as_bytes())?;
+    let expires = expires_at(write.at, write.policy, write.kind, write.window)?;
+    let event_id_text = new_uuid();
+    sqlx::query(INSERT_EVENT)
+        .bind(storable(global)?)
+        .bind(session.as_str())
+        .bind(storable(session_sequence)?)
+        .bind(&origin_epoch)
+        .bind(storable(origin_sequence)?)
+        .bind(&event_id_text)
+        .bind(write.turn.map(TurnId::as_str))
+        .bind(write.event_type)
+        .bind(write.kind.as_str())
+        .bind(write.policy.as_str())
+        .bind(write.origin.as_str())
+        .bind(write.causation.map(RequestId::as_str))
+        .bind(write.view.as_str())
+        .bind(payload_digest.as_str())
+        .bind(None::<String>)
+        .bind(None::<String>)
+        .bind(None::<i64>)
+        .bind(None::<String>)
+        .bind(None::<String>)
+        .bind(write.at.as_str())
+        .bind(expires.as_str())
+        .execute(&mut **tx)
+        .await
+        .db()?;
+    EventId::new(&event_id_text).map_err(|_| PortError::Corrupt("generated event id is malformed"))
+}
+
 /// 把既有 `accepted` 行推进到终态（§11.2）。
 ///
 /// `terminal_at`/`result`/`error` 为 `None` 表示**保持既有列不变**：终态块无法重发接受时的结果，
@@ -2230,7 +2308,10 @@ async fn insert_created_session_row(
 ///
 /// `session` 为 `None` 时按 `session_id IS NULL` 定位（§6 第 20 条的「尚无会话」形状：`session.create`
 /// 的失败终态与启动恢复）。
-async fn apply_terminal(
+///
+/// 首条提交的结算（`crate::first_submission`）也走这里：终态行只能有一处写法，否则
+/// `result_json`/`terminal_event_id`/`Conflict(Consumed)` 三处口径会分叉。
+pub(crate) async fn apply_terminal(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     session: Option<&SessionId>,
     request: &RequestId,
@@ -3433,6 +3514,12 @@ impl SessionStore for SqliteStore {
     /// §5.2：该会话**仍可重放**的 `session_sequence` 下界/上界；没有可重放行时返回 `None`。
     /// §6 第 16 条：启动恢复要重新确认的命令行——`status = 'accepted'`、尚未拿到终态事件的
     /// **mutation** 行，按 `accepted_at` 升序（走 §7.3 的 `owned_command_status` 索引）。
+    ///
+    /// **首条提交的命令不在这里**（`design.md` D8）：`owned_first_submission` 的首个/当前请求同样是
+    /// `accepted` 且没有终态，但它的结算归 `converge_first_submission` 独占。两边都写会让先跑的
+    /// `recover_unsettled` 把它写成 `uncertain`，随后的收敛再结算同一条命令时得到
+    /// `Conflict(Consumed)`，启动直接中止。只排除该 `(actor, requestId)` 对——普通 mutation 仍照旧
+    /// 暴露给启动恢复。
     async fn unsettled_commands(
         &self,
         limit: ReplayLimit,
@@ -3440,6 +3527,11 @@ impl SessionStore for SqliteStore {
         let rows = sqlx::query(&format!(
             "SELECT {COMMAND_COLUMNS} FROM owned_command \
              WHERE status = 'accepted' AND terminal_event_id IS NULL AND kind = 'mutation' \
+             AND NOT EXISTS (SELECT 1 FROM owned_first_submission f \
+             WHERE f.actor_kind = owned_command.actor_kind \
+             AND f.actor_id = owned_command.actor_id \
+             AND (f.first_request_id = owned_command.request_id \
+             OR f.current_request_id = owned_command.request_id)) \
              ORDER BY accepted_at ASC, request_id ASC LIMIT ?1"
         ))
         .bind(i64::from(limit.events()))
@@ -3856,7 +3948,7 @@ async fn read_session_locked(
         let rows = sqlx::query(
             "SELECT message_id, session_id, turn_id, channel, state, content_json, \
                         partial_reason, created_at, updated_at \
-                 FROM owned_message WHERE session_id = ?1 \
+                 FROM owned_message WHERE session_id = ?1 AND channel <> 'user' \
                  AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND message_id < ?3)) \
                  ORDER BY created_at DESC, message_id DESC LIMIT ?4",
         )

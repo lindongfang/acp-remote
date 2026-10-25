@@ -606,6 +606,26 @@ impl ConfigValue {
                 | (Self::Text(_) | Self::Select(_), ConfigOptionKind::Select)
         )
     }
+
+    /// 文本/选择值的原文；布尔值返回 `None`。
+    ///
+    /// 只服务把**已确认**的选择写入持久层（`owned_first_submission.config_json`）；kind 仍由调用方
+    /// 从 [`ConfigValue`] 的变体区分，存储层不得据此反推 ACP 类型。
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text.as_str()),
+            Self::Select(value) => Some(value.as_str()),
+            Self::Boolean(_) => None,
+        }
+    }
+
+    /// 布尔值的原文；文本/选择值返回 `None`。
+    pub fn as_boolean(&self) -> Option<bool> {
+        match self {
+            Self::Boolean(value) => Some(*value),
+            Self::Text(_) | Self::Select(_) => None,
+        }
+    }
 }
 
 /// 配置项的候选取值（`configOptionView.options[]`）。

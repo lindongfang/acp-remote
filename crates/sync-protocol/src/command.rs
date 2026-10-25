@@ -17,7 +17,7 @@
 //!
 //! 结构不符一律报 [`ValueError::Shape`]；`Deserialize` 返回 `Ok` 即表示该 body 满足 schema。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::str::FromStr;
 
@@ -30,8 +30,9 @@ use serde_json::value::RawValue;
 
 use crate::common::{
     ConfigOptionValue, ConfigOptionView, DecimalString, MessageCoverage, ModeState, NonEmptyText,
-    Nullable, OriginCursor, PromptContentBlock, PublicError, RawObject, SessionSummary, Text,
-    Timestamp, UIntAtLeast, Uuid, ValueError, deserialize_optional_non_null,
+    Nullable, OriginCursor, PositiveDecimalString, PreparationReceipt, PromptContentBlock,
+    PublicError, RawObject, SessionSummary, Text, Timestamp, UIntAtLeast, Uuid, ValueError,
+    deserialize_optional_non_null,
 };
 use crate::media::EffectiveInteraction;
 use crate::sync::{
@@ -101,11 +102,17 @@ pub enum CommandName {
     /// 它同时登记 `sync` 与 `node_link` 两个传输面；Sync 面只在协商该 feature 后开放（未协商时由
     /// 命令面回 `command.unsupported`）。payload 固定为 `{}`，会话引用在 body 顶层。
     SessionResume,
+    /// `session.start`（feature `core.session-preparation.v1`）：Sync-only 首次提交与显式继续。
+    ///
+    /// payload 是 `kind` 闭合判别联合（`initial`/`continue`）；`envelope.sessionId` 必须是由 Owner
+    /// 签发准备的 ID（`initial`）或已存在的正式会话（`continue`）。命令名只在
+    /// `compatibility/commands/v1/commands.json` 登记，不进 Node Link。
+    SessionStart,
 }
 
 impl CommandName {
     /// 与 `compatibility/commands/v1/commands.json` 的 sync 子集逐条相等，顺序一致。
-    pub const ALL: [CommandName; 20] = [
+    pub const ALL: [CommandName; 21] = [
         CommandName::SessionList,
         CommandName::SessionRead,
         CommandName::CommandStatus,
@@ -126,6 +133,7 @@ impl CommandName {
         CommandName::SessionGitDiff,
         CommandName::SessionResume,
         CommandName::SessionTitleSet,
+        CommandName::SessionStart,
     ];
 
     /// 查询命令（`docs/SYNC_PROTOCOL.md` §11.5 的"类别"列）：不进入异步队列，`command.result` 的
@@ -191,6 +199,7 @@ impl CommandName {
             CommandName::SessionGitDiff => "session.git.diff",
             CommandName::SessionResume => "session.resume",
             CommandName::SessionTitleSet => "session.title.set",
+            CommandName::SessionStart => "session.start",
         }
     }
 }
@@ -752,10 +761,31 @@ pub struct SessionFileEntry {
     pub restricted: Option<SessionFileRestrictedReason>,
 }
 
-/// `sessionFilesList`（`command.schema.json#/$defs/sessionFilesList`）的 payload。
+/// Directory-scoped file target, independent of persisted sessions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum WorkspaceFilesTarget {
+    Directory {
+        #[serde(rename = "directoryId")]
+        directory_id: NonEmptyText<128>,
+    },
+    Path {
+        #[serde(rename = "workspacePath")]
+        workspace_path: NonEmptyText<4096>,
+    },
+}
+
+/// File enumeration payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionFilesList {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<WorkspaceFilesTarget>,
+
     pub path: SessionFilesPath,
     pub hide_ignored: bool,
     #[serde(
@@ -785,6 +815,13 @@ pub struct SessionFilesListResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionFilesRead {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<WorkspaceFilesTarget>,
+
     pub path: SessionRelativePath,
     pub purpose: FileReadPurpose,
     pub offset: DecimalString,
@@ -814,6 +851,13 @@ pub struct SessionFilesReadResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionGitStatus {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<WorkspaceFilesTarget>,
+
     #[serde(
         default,
         deserialize_with = "deserialize_optional_non_null",
@@ -919,6 +963,13 @@ pub struct SessionGitStatusResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionGitDiff {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<WorkspaceFilesTarget>,
+
     pub path: SessionRelativePath,
 }
 
@@ -1627,6 +1678,209 @@ pub struct SessionResumeResult {
     pub session: SessionSummary,
 }
 
+/// `sessionStart`（`command.schema.json#/$defs/sessionStart`）的 `payload`：`kind` 闭合判别联合。
+///
+/// `initial` 是首次提交：准备凭据 + 运行期资源代 + **有序**完整首条输入 + 可选附件清单标识，
+/// 不携带 `firstSubmissionId`（由服务端在受理事务生成），也禁止 Provider/MCP 凭据。
+/// `continue` 是显式继续：`firstSubmissionId` + `retryOfRequestId`，不带正文、附件清单、`receipt`
+/// 或运行期字段。判别与闭合由 `tag = "kind"` + `deny_unknown_fields` 共同保证——混用字段会直接
+/// 变成形状错误，而不是被静默忽略。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+#[allow(clippy::large_enum_variant)] // wire 联合本身即分支形状；装箱会改变跨 crate 的解码 API。
+pub enum SessionStartPayload {
+    /// `kind: "initial"`
+    #[serde(rename = "initial")]
+    Initial {
+        receipt: PreparationReceipt,
+        #[serde(rename = "runtimeEpoch")]
+        runtime_epoch: Uuid,
+        generation: PositiveDecimalString,
+        /// 有序完整用户输入；`attachment_ref` 只能引用同一准备清单里已封存的 `attachmentId`。
+        content: PromptContentList,
+        /// 准备附件清单标识（不是 `firstSubmissionId`，也不是 `firstMessageId`）。
+        #[serde(
+            rename = "submissionId",
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        submission_id: Option<Uuid>,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        mode: Option<NonEmptyText<256>>,
+        #[serde(
+            rename = "configOptions",
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        config_options: Option<PreparationConfigSelection>,
+    },
+    /// `kind: "continue"`
+    #[serde(rename = "continue")]
+    Continue {
+        #[serde(rename = "firstSubmissionId")]
+        first_submission_id: Uuid,
+        #[serde(rename = "retryOfRequestId")]
+        retry_of_request_id: RequestId,
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        mode: Option<NonEmptyText<256>>,
+        #[serde(
+            rename = "configOptions",
+            default,
+            deserialize_with = "deserialize_optional_non_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        config_options: Option<PreparationConfigSelection>,
+    },
+}
+
+/// `preparationConfigSelection`：`{ <configId>: string | boolean }`，1..=64 项、键 1..=256 字符。
+///
+/// 缺席表示沿用准备记录里的选择；服务端 MUST 在临时端点上重新读取并应用、以 Agent 确认为准。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparationConfigSelection(BTreeMap<String, ConfigOptionValue>);
+
+impl PreparationConfigSelection {
+    pub fn new(entries: BTreeMap<String, ConfigOptionValue>) -> Result<Self, ValueError> {
+        let selection = Self(entries);
+        selection.validate()?;
+        Ok(selection)
+    }
+
+    pub fn as_map(&self) -> &BTreeMap<String, ConfigOptionValue> {
+        &self.0
+    }
+
+    fn validate(&self) -> Result<(), ValueError> {
+        if self.0.is_empty() {
+            return Err(ValueError::Shape {
+                field: "configOptions",
+                expected: "至少 1 项（schema 的 minProperties: 1）",
+            });
+        }
+        if self.0.len() > 64 {
+            return Err(ValueError::TooManyItems {
+                field: "configOptions",
+                max: 64,
+                actual: self.0.len(),
+            });
+        }
+        for key in self.0.keys() {
+            if key.is_empty() || key.len() > 256 {
+                return Err(ValueError::TextLength {
+                    min: 1,
+                    max: 256,
+                    actual: key.len(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for PreparationConfigSelection {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PreparationConfigSelection {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let entries = BTreeMap::<String, ConfigOptionValue>::deserialize(deserializer)?;
+        let selection = Self(entries);
+        selection.validate().map_err(DeError::custom)?;
+        Ok(selection)
+    }
+}
+
+/// `preparationStage`（design D8）：首条提交阶段，不是命令状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FirstSubmissionStage {
+    /// 正式记录存在且**可证明未派发**；客户端可显式继续。
+    SavedNotDispatched,
+    /// 已提交派发围栏：可能已派发，崩溃后保守 `uncertain`，不再自动重发。
+    DispatchStarted,
+    /// 首个命令已有终态。
+    Terminal,
+}
+
+impl FirstSubmissionStage {
+    /// schema `preparationStage.enum` 的取值，顺序一致。
+    pub const ALL: [FirstSubmissionStage; 3] = [
+        FirstSubmissionStage::SavedNotDispatched,
+        FirstSubmissionStage::DispatchStarted,
+        FirstSubmissionStage::Terminal,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FirstSubmissionStage::SavedNotDispatched => "saved_not_dispatched",
+            FirstSubmissionStage::DispatchStarted => "dispatch_started",
+            FirstSubmissionStage::Terminal => "terminal",
+        }
+    }
+}
+
+impl fmt::Display for FirstSubmissionStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for FirstSubmissionStage {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "stage",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for FirstSubmissionStage {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for FirstSubmissionStage {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::from_str(&text).map_err(DeError::custom)
+    }
+}
+
+/// `sessionStartProjection`：`session.start` 的 completed 结果，也是协商了新 feature 的
+/// `command.status` 的 `preparation` 字段（design D8/D8.1）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionStartProjection {
+    pub stage: FirstSubmissionStage,
+    #[serde(rename = "firstSubmissionId")]
+    pub first_submission_id: Uuid,
+    #[serde(rename = "firstRequestId")]
+    pub first_request_id: RequestId,
+    #[serde(rename = "currentRequestId")]
+    pub current_request_id: RequestId,
+    #[serde(rename = "everDispatched")]
+    pub ever_dispatched: bool,
+    #[serde(rename = "canContinue")]
+    pub can_continue: bool,
+}
+
 /// `command`（`command.schema.json#/$defs/command`）`body` 的 `payload`（该 def 的 `body.oneOf`）。
 ///
 /// 变体顺序与 schema 的 `oneOf` 顺序一致。payload 里没有自己的判别字段，所以本枚举**没有**
@@ -1636,6 +1890,7 @@ pub struct SessionResumeResult {
 /// tagged 编码会写成 `{"SessionPrompt": …}`，与 schema 不符）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)] // 与 wire schema 的 payload 联合一一对应；装箱会改变跨 crate 的解码 API。
 pub enum CommandPayload {
     /// `session.list` 的 payload。
     SessionList(SessionList),
@@ -1676,6 +1931,8 @@ pub enum CommandPayload {
     SessionTitleSet(SessionTitleSet),
     /// `session.resume` 的 payload（固定 `{}`）。
     SessionResume(SessionResume),
+    /// `session.start` 的 payload（`kind` 闭合判别联合）。
+    SessionStart(SessionStartPayload),
 }
 
 impl CommandPayload {
@@ -1773,6 +2030,11 @@ impl CommandPayload {
                 parse_payload(payload, "空 object（sessionResume 的 payload）")
                     .map(CommandPayload::SessionResume)
             }
+            CommandName::SessionStart => parse_payload(
+                payload,
+                "{ kind: \"initial\", receipt, runtimeEpoch, generation, content, submissionId?, mode?, configOptions? } | { kind: \"continue\", firstSubmissionId, retryOfRequestId, mode?, configOptions? }（sessionStart 的 payload）",
+            )
+            .map(CommandPayload::SessionStart),
         }
     }
 }
@@ -1846,7 +2108,14 @@ impl Command {
         session_id_present: bool,
         expected_version_present: bool,
     ) -> Result<(), ValueError> {
-        let session_id_required = self.command.requires_session_id();
+        let workspace = match &self.payload {
+            CommandPayload::SessionFilesList(p) => p.workspace.is_some(),
+            CommandPayload::SessionFilesRead(p) => p.workspace.is_some(),
+            CommandPayload::SessionGitStatus(p) => p.workspace.is_some(),
+            CommandPayload::SessionGitDiff(p) => p.workspace.is_some(),
+            _ => false,
+        };
+        let session_id_required = self.command.requires_session_id() && !workspace;
         if session_id_required && !session_id_present {
             return Err(ValueError::Shape {
                 field: "sessionId",
@@ -2039,6 +2308,13 @@ pub struct CommandStatusRecord {
     pub terminal_event_id: Nullable<Uuid>,
     pub result: Nullable<RawObject>,
     pub error: Nullable<PublicError>,
+    /// `session.start` 的首次提交投影；旧会话/旧路径没有本字段。
+    #[serde(
+        rename = "preparation",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub preparation: Option<SessionStartProjection>,
 }
 
 /// `commandResult.body.result`：查询命令的 `completed` 由 `command` 决定形状（schema 的
@@ -2080,6 +2356,8 @@ pub enum CommandResultPayload {
     SessionGitDiff(SessionGitDiffResult),
     /// `session.resume` 的完成结果。
     SessionResume(Box<SessionResumeResult>),
+    /// `session.start` 的完成结果（首次提交投影）。
+    SessionStart(SessionStartProjection),
     /// 变更命令的完成结果，或非完成态的开放结果对象（基类型 `object | null`）。
     Object(RawObject),
 }
@@ -2188,6 +2466,13 @@ impl CommandResultPayload {
                     .map(|value| {
                         Nullable::value(CommandResultPayload::SessionResume(Box::new(value)))
                     });
+                }
+                CommandName::SessionStart => {
+                    return parse_result::<SessionStartProjection>(
+                        result,
+                        "sessionStartProjection（session.start 的 completed）",
+                    )
+                    .map(|value| Nullable::value(CommandResultPayload::SessionStart(value)));
                 }
                 _ => {}
             }
@@ -2420,7 +2705,7 @@ mod tests {
 
     #[test]
     fn command_name_covers_the_sync_subset_and_round_trips() {
-        assert_eq!(CommandName::ALL.len(), 20, "sync 子集是 20 条命令");
+        assert_eq!(CommandName::ALL.len(), 21, "sync 子集是 21 条命令");
         assert!(
             CommandName::ALL
                 .iter()

@@ -171,29 +171,26 @@ export default function DirectoryDetailRoute(): ReactElement {
       {sheetOpen ? (
         <CreateSessionSheet
           model={entry}
-          onCreated={(sessionId) => {
-            store.closeCreateSheet();
-            router.push(`/session/${encodeURIComponent(sessionId)}`);
-          }}
           selectedAgentId={agentId}
           submitIssue={createIssue}
           onSelectAgent={(next) => {
             setCreateIssue(null);
             setAgentId(next);
           }}
-          onSubmit={({ agentId: selected, directoryPath, createIfMissing }) => {
-            const outcome = store.submitCreateSession({
-              directoryId,
-              agentId: selected,
-              directoryPath,
-              createIfMissing,
-            });
-            if (!outcome.ok) {
-              setCreateIssue(outcome.reason);
-              setAgentId(null);
-            } else {
-              setCreateIssue(null);
-            }
+          onSubmit={({ agentId: selected, directoryPath }) => {
+            // 新入口只做 prepare → allocate：正式 ID 由后端分配，首条发送前不保存任何会话行。
+            void store
+              .beginPreparation({ directoryId, agentId: selected, directoryPath })
+              .then((outcome) => {
+                if (!outcome.ok) {
+                  setCreateIssue(outcome.reason);
+                  setAgentId(null);
+                  return;
+                }
+                setCreateIssue(null);
+                store.closeCreateSheet();
+                router.push(`/session/${encodeURIComponent(outcome.sessionId)}`);
+              });
           }}
           onOpenDirectoryPicker={() => {
             store.openDirectoryPicker();

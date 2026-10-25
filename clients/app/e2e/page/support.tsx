@@ -41,9 +41,10 @@ import { createRoot } from "react-dom/client";
 import { createComposition } from "../../src/composition";
 import type { Composition, FetchLike } from "../../src/composition";
 import { openPlatform } from "../../src/platform";
-import type { DeviceIdentity } from "../../src/platform";
+import type { DeviceIdentity, PlatformPorts } from "../../src/platform";
 import { ClientStoreProvider } from "../../src/features/runtime";
 import { Shell } from "../../src/components/shell/Shell";
+import { renderAuthenticatedScreen } from "../../src/components/AuthenticatedScreen";
 import RootLayout from "../../app/_layout";
 import { Stack, mountRoute, registerRoutes } from "./router-stub";
 import type { RouteEntry } from "./router-stub";
@@ -276,16 +277,22 @@ export async function seedDeviceIdentity(): Promise<DeviceIdentity> {
   });
 }
 
-/** 预置设备身份 + 已配对主机记录。返回主机身份（用例可核对公钥真的被用上了）。 */
-export async function seedPairedHost(): Promise<FakeHostIdentity> {
-  const identity = await createFakeHostIdentity(HOST_ID);
+/**
+ * 预置设备身份 + 已配对主机记录。返回主机身份（用例可核对公钥真的被用上了）。
+ *
+ * `identity` 给出时沿用它的主机标识与公钥，而不是每次新生成一把：准备草稿的分区键里含
+ * `ownerNodeId`（= 已配对主机的 `hostId`），「刷新后仍能恢复同一个草稿」只有在两次挂载
+ * 指向同一个节点时才谈得上成立。
+ */
+export async function seedPairedHost(identity?: FakeHostIdentity): Promise<FakeHostIdentity> {
+  const hostIdentity = identity ?? (await createFakeHostIdentity(HOST_ID));
   await seedDeviceIdentity();
   await openPlatform().localCache.putLocalSummary({
     key: `${PAIRED_HOST_KEY_PREFIX}${CANONICAL_ORIGIN}`,
-    summary: JSON.stringify({ hostId: identity.hostId, publicKeyBase64Url: identity.publicKeyBase64Url }),
+    summary: JSON.stringify({ hostId: hostIdentity.hostId, publicKeyBase64Url: hostIdentity.publicKeyBase64Url }),
     nowMs: Date.now(),
   });
-  return identity;
+  return hostIdentity;
 }
 
 // ── 场景装配 ────────────────────────────────────────────────────────────────
@@ -307,6 +314,14 @@ export type ScenarioOptions = FakeHostOptions & {
   readonly seedPaired?: boolean;
   /** 预置的主机身份；缺省新建一把。未配对起点用它把「已批准」响应的公钥与宿主钥对上。 */
   readonly identity?: FakeHostIdentity;
+  /**
+   * 平台端口束替身（整体替换 `openPlatform()`）。
+   *
+   * 只用于**环境事实**（与 `secureContext` / `origin` 同一类注入）：真实 Web 平台在页面测试里
+   * 造不出「这是一次刷新」的 Navigation Timing，而准备草稿的刷新恢复正是按它决定是否接管
+   * 同一标签页的归属。生产端口的其余成员照旧使用，注入的束通常就是 `{...openPlatform(), …}`。
+   */
+  readonly platform?: PlatformPorts;
   /**
    * 配对 HTTPS 面的替身（`claim` / `status`）；缺省用生产 `fetch`。
    *
@@ -358,7 +373,7 @@ function HarnessLayout({ composition }: { readonly composition: Composition }): 
           生效的容器——对话页的视口高度、三栏独立滚动与吸底输入区在浏览器里全都退化成
           普通文档流，而这些正是本目录的布局检查要测的东西。 */}
       <Shell>
-        <Stack screenOptions={{ headerShown: false }} />
+        <Stack screenLayout={renderAuthenticatedScreen} screenOptions={{ headerShown: false }} />
       </Shell>
     </ClientStoreProvider>
   );
@@ -381,7 +396,7 @@ export async function mountScenario(options: ScenarioOptions): Promise<Mounted> 
   if (unpairedStart) await openPlatform().localCache.clear();
   const identity = unpairedStart
     ? (options.identity ?? (await createFakeHostIdentity(HOST_ID)))
-    : await seedPairedHost();
+    : await seedPairedHost(options.identity);
   if (unpairedStart) await seedDeviceIdentity();
   // 「预置记录被改坏」的场景：写入一条形状非法的摘要。`parseStoredPairedHost`
   // 把它判成「从未配对」而不是抛错——验签因此绝不会被放行。
@@ -407,6 +422,7 @@ export async function mountScenario(options: ScenarioOptions): Promise<Mounted> 
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     ...(options.secureContext === undefined ? {} : { secureContext: options.secureContext }),
     ...(options.origin === undefined ? {} : { origin: options.origin }),
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
   });
   const root = createRoot(container);
   root.render(createElement(HarnessLayout, { composition }));

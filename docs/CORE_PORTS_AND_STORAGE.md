@@ -42,6 +42,14 @@
 > 版本：0.25（2026-10-22，`session-activation-lifecycle` 变更 **WP1（合同先行，实现待 WP2/WP3/WP4）**：**本机生命周期的纯类型与端口**——§3.3 新增 `LocalActivity`（`Idle｜Active｜Pending`，唯一归约）、`ResourceGeneration` 与 `ViewLease`（纯运行期，**不新增持久表**）；§4 新增 `LocalSessionLifecycle` 用例族（激活/合并、查看声明与续租、容量准入与候选选择、逐会话释放确认、当前生命周期查询），时钟经既有 `Clock` 端口注入；§5 新增 **§5.10** 的计划端口（用 `rust-planned` 围栏，避免 §5 的常规 rust 块把它当成已实现形状）；§6 新增第 **23** 条：`session.activity.changed` 先持久化后发布、启动收敛不信旧 ready、查看者/租约不持久化、owned 当前查询与快照读同一代目录、激活与回收不交错、`uncertain` 不自动重派；§7 明确**不改 DDL**（`owned_*` 家族与 migration 未变），运行期目录不落盘，若实现阶段确需列变更必须版本化迁移 + 旧库升级测试；§9 新增判据 40–42。**§5 的既有 rust 块、§7 的 SQL 块与漂移门禁逐条不变**）
 
 
+> 版本：0.26（2026-10-22，`web-session-preparation` 变更 **WP1（合同先行，实现待 WP2–WP7）**：**首条提交与准备附件的合同冻结**——§5 新增 **§5.11** 计划端口（`FirstSubmission`、`PreparationAttachmentStaging` 及全部纯类型，`rust-planned` 围栏）；新增顶层 **§12** 用 `sql-planned` 围栏冻结 `owned_first_submission` 的 DDL（`session_id` 主键、`first_submission_id`/`user_message_id` 唯一、完整输入与摘要、阶段与 `ever_dispatched`、当前请求/结果），**不**写进 §7；§7 的 DDL 与 v15 版本断言逐字未变。配套 wire 合同（feature `core.session-preparation.v1`、准备控制帧、`session.start`、三个 `preparation.*` 错误码、`acp-remote/session-preparation/v1` 签名域、附件准备 target）见 `SYNC_PROTOCOL.md` §3.4/§6.3/§11.5/§11.9/§12.2。WP2 以 v16 落地后把计划 DDL 移入 §7、把已实现的端口移入 §5 常规块并删除 §5.11/§12 的计划小节。
+
+> 版本：0.27（2026-10-22，`web-session-preparation` 变更 **WP2**：**首条提交与准备附件暂存落地**——`owned_first_submission` 进入 §7 的 `sql` 块（v16）；`owned_message.channel` 的 CHECK 扩到 `user`（首条用户消息无需 Agent 回显即可读取）；§5.11 的两个端口移入常规 `rust` 块并与 `crates/core/src/ports.rs` 逐条对齐，§12 计划小节删除。准备运行期目录（`PreparationDirectory`：`allocated → preparing → ready → released`、30 秒租约/10 秒续租、容量经 `CapacityAdmission`）与派发围栏/启动收敛/回显关联的纯类型见 §3.9/§3.10。旧会话不回填、不被识别成准备。
+
+> 版本：0.28（2026-10-22，`web-session-preparation` 变更 **WP2 检视修复**：终态投影与事件口径——`session.start` 的 `command.completed` 现在携带 §11.9 的六字段 `result` 并持久化 `result_json`（重放返回同一终态与 `terminal_event_id`）；结算只在首条 turn 仍非终态时写 `turn.*` 领域事件（CAS，随后写命令终态），已由 broker 收敛的 turn 不再重复终态/`ended_at`/会话版本，非 `accepted` 行按 `Conflict(Consumed)` 拒绝；终态事件与首条初始事件都按既有 `expires_at` 策略写 TTL；`FirstSubmissionRecord` 增加 `mode_id`/`config` 供显式继续复用记录的选择；受理事务回滚只把**本次认领**真的搬走的附件字节移回封存路径（不碰更早会话已提交的同内容字节）且同 ID 可重试；准备目录在释放/提交成功后移除条目，只留 `PREPARATION_RELEASED_TOMBSTONES` 条 tombstone。§7 的 DDL 与 v16 版本断言逐字未变。
+
+> 版本：0.29（2026-10-22，`web-session-preparation` 变更 **WP4**：**准备端点与派发上下文**——§5.1 的 `SessionEndpoint` 增加带默认实现的 `prompt_with_context`（`Option<DispatchContext>`，默认委托既有 `prompt`，既有实现与测试行为不变）；该次 prompt 的派发上下文只在适配器**内部**用于回显关联（构造 `UserEchoEvent` 并调用 `associate_user_echo`）：可证明与已保存首条逐字节一致的重复回显不再产出第二条 `user.message.delta`，内容不同/无法归属的照常下发；上下文**不**写入事件视图，不新增 wire 字段/ACP 方法，`payload.acp` 原文不变。`agent-host` 新增临时端点（`prepare`/`rebuild_preparation`/`transfer_preparation`/`release_preparation`）：不要求 `SessionStore` 行、真实 `session/new` 模式与配置、选项不可用阻止派发、按精确资源代释放、首次提交同一端点转正；重建前拒绝已转正的绑定（不再先建后弃），并在换入新代前用能力门控的 `session/close` 真实释放旧代；不读会话存储、不按 Agent 名称分支。
+
 ## 1. 范围与非目标
 
 范围：core 的值对象/用例/端口/错误类型、broker 的提交与发布契约、`storage-sqlite` 的 PRAGMA/文件布局/migration/表结构/索引/保留与容量/崩溃恢复、以及实现该合同的验收判据。
@@ -282,6 +290,14 @@ pub enum UnavailableKind {
 
 固定 v1 常量（`SYNC_PROTOCOL.md` §14）：`SESSION_FILE_PAGE_LIMIT = 128`、`SESSION_FILE_PATH_MAX_CHARS = 4096`、`SESSION_FILE_CHUNK_MAX_BYTES = 32 KiB`、`SESSION_FILE_TEXT_PREVIEW_MAX_BYTES = 256 KiB`、`SESSION_FILE_IMAGE_PREVIEW_MAX_BYTES = 4 MiB`、`SESSION_FILE_DOWNLOAD_MAX_BYTES = 64 MiB`、`GIT_DIFF_MAX_LINES = 400`、`GIT_DIFF_MAX_BYTES = 64 KiB`、`GIT_DIFF_LINE_MAX_CHARS = 4096`。
 
+### 3.9 首条提交、派发围栏与回显关联（WP2 已实现）
+
+纯类型在 `crates/core/src/model/first_submission.rs`：`FirstSubmissionStage`（`saved_not_dispatched | dispatch_started | terminal`）、`RequestOutcome`、`FirstSubmissionInput`（有序内容块、保真 JSON 数组与同源 SHA-256 摘要）、`FirstSubmissionConfig`、`SubmissionManifestClaim`、`FirstSubmissionWrite`、`FirstSubmissionRecord`、`RequestTerminal`、`FirstSubmissionAdmission`、`DispatchFence`/`DispatchAdmission`、`FirstSubmissionSettlement`、`FirstSubmissionConvergence`、`FirstUserMessage`、`DispatchContext`/`UserEchoLink`/`UserEchoEvent`/`EchoAssociation` 与唯一关联规则 `associate_user_echo`。`FirstSubmissionId`（服务端生成、与会话一对一）与 `RuntimeEpoch`（进程运行期）在 §3.1。回显只按派发上下文匹配，文本/Agent `messageId` 不参与。
+
+### 3.10 准备运行期与暂存（WP2 已实现）
+
+纯类型在 `crates/core/src/model/preparation.rs`：`PreparationState`（`allocated → preparing → ready → released`）、`PreparationFailureReason`、`PreparationOwner`、`AllocatePreparation`/`AllocatePreparationOutcome`、`PreparationView`、`PreparationDecision`、`PreparationStaleReason`、`PreparationReleaseOutcome`、`PreparationFreeze`/`PreparationGrant`、`PreparationBinding` 与暂存形状（`StagedTransferBegin/State`、`StagedChunk/Outcome`、`StagedSeal/Outcome`、`SealedFacts`、`StagedManifestBegin/Page/Seal/State`、`StagedClaim`、`ClaimedAttachment`）。运行期目录 `core::preparation::PreparationDirectory`：30 秒租约（`PREPARATION_LEASE_MS`）、10 秒续租节奏、每次重建新资源代、释放失败/未知继续占位、首次提交冻结资源代与 Agent 身份（成功后名额转移给正式会话）。释放成功或首次提交成功的条目**立即从目录移除**，只留 `PREPARATION_RELEASED_TOMBSTONES` 条有界的释放事实（`(session, generation, released_at)`），因此长期运行的目录不会为每个已结束的准备保留内存项，旧代操作仍得到 `stale(released)`。全部运行期，不落库、不发事件、不写准备目录。
+
 ## 4. `core::use_cases` 用例面
 
 `[决定]` **每个**入口的第一个参数都是 `actor: &Actor`：授权只在 core 判定，`server` 不得传入“已授权”标志，也不得代替 core 判定（`AGENTS.md` §4/§5、`SECURITY_DESIGN.md` §8）。全部 mutation 只同步接受。
@@ -289,6 +305,7 @@ pub enum UnavailableKind {
 | 用例族 | 入口 | 调用方 |
 |---|---|---|
 | `SessionCommands` | `submit_command(actor, ClientCommand) -> CommandReceipt` | `server::sync`、`server::node_link`、`server::acp_facade` |
+| `FirstSubmission`（`web-session-preparation` D7/D8，已实现） | `start_first_submission(actor, FirstSubmissionStart, Arc<dyn SessionEndpoint>) -> CommandReceipt`（`kind=initial`：受理事务 → 派发围栏 → 入队；`accepted` 只在提交后）、`continue_first_submission(actor, FirstSubmissionContinue) -> CommandReceipt`（`kind=continue`：新 requestId + `retryOfRequestId`，正文只复用持久首条）、`first_submission(actor, &SessionId) -> Option<FirstSubmissionRecord>`、`first_user_message(actor, &SessionId) -> Option<FirstUserMessage>`、`settle_first_submission(actor, FirstSubmissionSettlement) -> FirstSubmissionRecord`（继续的准备阶段失败写该次 failed）、`converge_first_submissions(actor, Timestamp) -> usize`（启动收敛：可证明未派发 → failed/等待继续，可能已派发 → uncertain，**绝不**自动派发）、`resolve_preparation_workspace(actor, PreparationWorkspaceSource) -> PreparationWorkspace`（`allocate` 的目录解析，与 `session.create` 同口径） | `server::sync`（`session.start`、准备控制帧的 `allocate`）；`app::daemon`（启动收敛） |
 | `SessionLifecycle` | `create_session(actor, RequestId, Digest, CreateSessionRequest, Option<WorkspaceSource>) -> SessionCreateAdmission`、`settle_session_create(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool`、`resume_session(actor, RequestId, Digest, SessionId) -> SessionId`、`settle_session_resume(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool` | `server::node_link`（§6 第 20 条；`resume_session`/`settle_session_resume` 见 §5.1） |
 | `LocalSessionLifecycle`（计划，WP2 实施；用例面**恰好由 §5.10 的五个端口组合**：`SessionActivation`/`ViewRegistry`/`CapacityAdmission`/`SessionRelease`/`LifecycleQuery`，方法名与签名以 §5.10 为唯一权威） | 每个入口先取 `actor`，再委托同名端口方法：`activate_session(actor, ActivationRequest) -> ActivationAdmission`（→ `SessionActivation::activate`；同会话并发激活合并为一次建立，先查幂等记录，再判 ready 复用或启动恢复）、`settle_session(actor, SessionId, ResourceGeneration, ActivationOutcome)`（→ `SessionActivation::settle`）、`declare_view(actor, ConnectionId, Option<SessionId>, view_version, now) -> ViewDecision`（→ `ViewRegistry::declare`）、`renew_view(actor, ConnectionId, view_version, now) -> ViewDecision`（→ `ViewRegistry::renew`）、`release_view(actor, ConnectionId, now)`（→ `ViewRegistry::release`；离页/断开/撤销）、`reserve_capacity(actor, SessionId, now) -> Admission`（→ `CapacityAdmission::reserve`）、`release_capacity(actor, SessionId, ResourceGeneration, now)`（→ `CapacityAdmission::release`）、`reclaim_candidate(actor, now) -> Option<ReclaimCandidate>`（→ `CapacityAdmission::reclaim_candidate`；满额时的安全候选，**没有候选就是 `None`**）、`release_session(actor, SessionId, ResourceGeneration, now) -> ReleaseOutcome`（→ `SessionRelease::release_session`；只有 `Released` 交还名额）、`current_activity(actor, SessionId) -> LocalActivity`（→ `LifecycleQuery::local_activity`）、`lifecycle_snapshot(actor) -> Vec<SessionSummary>`（→ `LifecycleQuery::snapshot`；owned 当前查询，与快照同一代目录） | `server::sync`（激活命令、查看控制帧、快照/事件投影）；`app::daemon` 只按返回的候选与配置驱动回收，不做业务判断 |
 | `SessionQueries` | `list_sessions(actor, SessionQuery) -> Vec<SessionSummary>`、`read_session(actor, ReadQuery) -> HistoryPage` | 同上 |
@@ -306,6 +323,7 @@ pub enum UnavailableKind {
 | `RemoteSessionQueries` | `read_imported_session(actor, &SessionId, ImportedReadQuery) -> Option<ImportedRead>`（旧 wire 原文路径；先经运行期目录校验来源身份/在线）、`read_remote_source(actor, &RemoteSessionRef, RemoteReadQuery) -> RemoteReadResult`（D4 的类型化回源，含 `readCursor`/`messageCoverage`）、`remote_command_status(actor, RemoteCommandTarget, RequestId) -> RemoteCommandLookup`（D5：按原 requestId 直接向 Owner 查询，不读本地请求表） | `server::sync`、`server::node_link`（旧入口保留到 WP4 切换） |
 | `WorkspaceBrowse` | `workspace_browse(actor, Option<&str>) -> WorkspaceBrowse`（`workspace.browse`：`None` = 根列表；条目只含名称、绝对路径与是否已登记，按名称升序、单层上限 128 并置截断标记；受 feature `core.workspace-browse.v1` 门控，门控在适配层） | `server::sync` |
 | `SessionFilesQueries` | `list_session_files(actor, &SessionId, &str, bool, Option<&str>) -> SessionFilePage`、`read_session_file(actor, &SessionId, &str, FileReadPurpose, u64, Option<&str>) -> SessionFileChunk`、`session_git_status(actor, &SessionId, Option<&str>) -> GitStatusPage`、`session_git_diff(actor, &SessionId, &str) -> GitDiff`（授权 → 来源 → 实际 cwd → 形状 → `SessionFiles` 端口；imported 在端口前拒绝，查询无终态/无事件） | `server::sync`（feature 门控在适配层） |
+| `WorkspaceFilesQueries` | `list_workspace_files`、`read_workspace_file`、`workspace_git_status`、`workspace_git_diff`：以 `WorkspaceSource` 替代会话标识，其余参数与结果沿用对应会话查询；仅允许 Device/LocalCli，解析登记目录或重新规范化既有绝对路径，不允许 `PathWithCreate`，不读写会话、不追加事件；两类查询共用 `SessionFiles` 端口与预算检查 | `server::sync`（`core.workspace-files.v1` 门控） |
 
 `[决定]` 配对通道的 actor 规则（design D12）：`claim_pairing`/`pairing`/`pairing_channel_view` 在 `Actor::LocalCli` 之外**只**接受 `Actor::PairingClaimant`，且 `actor.pairing` 必须等于本次调用的目标配对，否则与其它 actor 一样得到 `authorization.scope_denied`（同一拒绝形状，不区分「不是本机入口」与「绑定了别的配对」）；`consume_pairing` **只**接受与该配对已批准对端一致的 `Actor::Node`/`Actor::Device`，把 `approved` 推进到 `consumed`（`terminal_at` + 审计同一写集），已是 `consumed` 且对端一致时幂等成功（不覆盖首次 `terminal_at`，也不重复写审计）。
 
@@ -374,6 +392,10 @@ pub trait SessionEndpoint: Send + Sync {
     /// 实现**不得**编造占位值。
     fn agent_session_id(&self) -> Option<&AgentSessionId>;
     async fn prompt(&self, request: PromptRequest, at: Timestamp) -> Result<TurnAccepted, PortError>;
+    /// 带**本次派发上下文**的 prompt（`design.md` D7；默认实现丢弃上下文并委托 `prompt`，既有实现与
+    /// 测试因此无需改动）。上下文只属于这一次调用，用于把该次 prompt 引起的用户输入回显关联到已保存
+    /// 的首条消息；它**不**进入事件视图或任何 wire DTO。普通 prompt 传 `None`。
+    async fn prompt_with_context(&self, request: PromptRequest, at: Timestamp, context: Option<DispatchContext>) -> Result<TurnAccepted, PortError>;
     async fn validate_prompt(&self, request: &PromptRequest) -> Result<(), PortError>;
     async fn cancel(&self, turn: Option<TurnId>) -> Result<(), PortError>;
     /// 模式的只读枚举（`session.mode.list` 的唯一来源，§6 第 17 条）：候选列表来自 ACP 的
@@ -390,6 +412,7 @@ pub trait SessionEndpoint: Send + Sync {
 ```
 
 - `[决定]` 后端事件通道：`create`/`open` 接收 `EventSink`（`[决定]` 定义为 `Arc<dyn Fn(EndpointEvent) + Send + Sync>` 的包装类型，由 core 提供有界队列的发送端）；`EventSink` 的调用顺序即提交顺序，broker 按该顺序组装 `OwnedCommit`（§6 第 1/3 条）。**不**在 `SessionEndpoint` 上暴露 `next_event`，以免后端自己持有排序权。
+- `[决定]` **派发上下文只在适配器内部用于回显关联**（`web-session-preparation` WP4）：`prompt_with_context` 的 `Some(context)` 让 `agent-host` 对该次 turn 的 `user_message_chunk` 构造 `UserEchoEvent`（`link` 的七个固定字段取自上下文，内容数组与摘要由**内容块原文**按 `FirstSubmissionInput` 的 `[<block>]` 字节口径算出）并调用唯一规则 `associate_user_echo`。`Duplicate`（与已保存首条逐字节一致）⇒ 不产出 `user.message.delta`：持久首条正文是权威，回显不得再造第二条用户消息；`Differs`（内容不同）与 `Unattributed`（无上下文/原文取不到/旧资源代）⇒ 照常映射为 `user.message.delta`，不吞掉也不改写首条。上下文**不**写入 `payload.view`、不新增 wire 字段或 ACP 方法，`payload.acp` 原文不变；`None`（普通 prompt、第二条消息、旧路径）与不传上下文完全同形。已登记的事件词表没有「Agent 来源的用户输入事件」（`EndpointEvent` 不带 `EventOrigin`），所以 `Differs` 仍是用户输入事件，展示口径留给 WP5 的投影，**不得**为它发明新键或改写判别子映射。关联**不得**按相同文本或 Agent `messageId` 推导；摘要按逐字节比较，拆块/重新编码的 Agent 回显因此归入 `Differs`（宁多显示一条独立回显，也不错删内容）。
 - `[决定]` **`TurnAccepted.turn` 是适配器侧占位/审计值，不是 turn 归属的权威来源**：turn 归属一律由 core 在提交前用自己的 `TurnId`（`IdGenerator::turn_id`）定稿并写入 `owned_event.turn_id` 与事件 view 的 `turnId`（§6 第 19 条）；适配器返回的值**不得**参与归属决策、不得产生第二个 turn 行，也不得影响事件顺序（§9 判据 31）。
 - `[决定]` `read_history` 的分流：owned 由 `storage-sqlite` 从事件日志回答；imported 由 `node-link-client` 在线回源 Owner，Owner 不可达返回 `PortError::Unavailable(RemoteUnavailable)`。
 - `[决定]` **workspace 解析归 core**（§3.6 的 `CreateSessionRequest.workspace` 是 `Option<ResolvedWorkspace>`）：`UseCases::create_session(actor, requestId, requestFingerprint, request, Option<WorkspaceSource>)` 在调用 `SessionBackendFactory::create` **之前**完成 alias → 规范化绝对路径的解析与校验，后端只收到 `ResolvedWorkspace`，**不得**自己查存储、也不得按约定拼路径。`requestId` 与 `requestFingerprint` 由适配层传入（Node Link 的幂等键是 `(ownerNodeId, accessNodeId, requestId)`，指纹是 ACPR-CJ1 之后的解码 payload 摘要）：core **不得**自造 requestId 或指纹，否则同一次重试会得到第二个幂等键（§6 第 20 条）。终态由 `UseCases::settle_session_create(actor, requestId, status, result, error)` 提交（没有持久记录或记录已终结时是幂等 no-op），`completed` 的 `result` 由适配层投影（Node Link 的 `SessionCreateResult` 原文）。校验（与 `SECURITY_DESIGN.md` §12.3 同口径）：必须是绝对路径、必须存在、必须是目录；`canonicalize`（解析 symlink/junction/大小写/`.` 与 `..`）的结果作为权威值，拒绝相对路径与含 `..` 的输入。失败分类：alias 未在该 Export 中声明 → 参数类错误（`NODE_LINK_PROTOCOL.md` §12.7 的 `nodelink.export.not_granted`）；alias 已声明但**本机**解析失败（目录被删/不是目录/`canonicalize` 失败）→ `PortError::Unavailable(UnavailableKind::IoError)`，在线映射为服务端错误（`nodelink.internal.unavailable`），**不得**降级为参数错误。别名命名空间：Export 的 `workspace_aliases[].alias` 就是本机 `owned_workspace.alias`，Export 不复制路径，`export.create` 必须校验每个 alias 已存在。`canonical_path` 只出现在该调用入参里：不进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog。UNC/网络路径允许解析且不改变授权模型，是否记结构化警告由 `server` 层决定（core 不引入日志依赖）。
@@ -1285,6 +1308,45 @@ pub enum ReleaseOutcome {
 - **适配器边界**：`agent-host` 提供有语义的单会话释放并执行真实 ACP close（§4 的「Agent 托管」）；`server::sync` 声明/续租/释放查看者，认证撤销与断开时主动通知；`app` 只负责扫描调度、任务所有权与关闭顺序，不做回收业务判断。
 - **不落盘**：本节的目录、租约、资源代都不进 `storage-sqlite`，不需要 migration（§7）。
 
+### 5.11 首条提交与准备附件暂存（WP2 已实现）
+
+> 实现状态：**已实现**（`crates/storage-sqlite/src/first_submission.rs` / `staging.rs`；纯类型在 `core::model`，运行期目录在 `core::preparation`）。下面两个 trait 与 `ports.rs` 的方法集逐条相等；输入/输出纯类型见 §3.9（首条提交/派发/回显）与 §3.10（准备运行期与暂存）。core 仍不得依赖 Tokio、SQLite、文件系统、wire DTO 或具体 Agent。
+
+```rust
+#[async_trait]
+pub trait FirstSubmission: Send + Sync {
+    async fn commit_first_submission(&self, write: FirstSubmissionWrite) -> Result<FirstSubmissionAdmission, PortError>;
+    async fn first_submission(&self, session: SessionId) -> Result<Option<FirstSubmissionRecord>, PortError>;
+    async fn first_user_message(&self, session: SessionId) -> Result<Option<FirstUserMessage>, PortError>;
+    async fn begin_dispatch(&self, fence: DispatchFence) -> Result<DispatchAdmission, PortError>;
+    async fn settle_first_submission(&self, settlement: FirstSubmissionSettlement) -> Result<FirstSubmissionRecord, PortError>;
+    async fn converge_first_submission(&self, session: SessionId, at: Timestamp) -> Result<FirstSubmissionConvergence, PortError>;
+}
+
+#[async_trait]
+pub trait PreparationAttachmentStaging: Send + Sync {
+    async fn begin(&self, begin: StagedTransferBegin) -> Result<StagedTransferState, PortError>;
+    async fn append(&self, chunk: StagedChunk) -> Result<StagedChunkOutcome, PortError>;
+    async fn seal(&self, seal: StagedSeal) -> Result<StagedSealOutcome, PortError>;
+    async fn status(&self, transfer: AttachmentId) -> Result<Option<StagedTransferState>, PortError>;
+    async fn abort(&self, transfer: AttachmentId, reason: StagedAbortReason) -> Result<(), PortError>;
+    async fn begin_manifest(&self, begin: StagedManifestBegin) -> Result<StagedManifestState, PortError>;
+    async fn append_manifest_page(&self, page: StagedManifestPage) -> Result<StagedManifestState, PortError>;
+    async fn seal_manifest(&self, seal: StagedManifestSeal) -> Result<StagedManifestState, PortError>;
+    async fn claim(&self, claim: StagedClaim) -> Result<Vec<ClaimedAttachment>, PortError>;
+    async fn release_orphans(&self, before: Timestamp) -> Result<usize, PortError>;
+}
+```
+
+- **受理 ≠ 派发**：`commit_first_submission` 只写 `saved_not_dispatched`；`begin_dispatch` 是唯一把阶段推进到 `dispatch_started` 的入口，且必须在调用 Agent 之前提交。`AlreadyCommitted` 不重建准备、不追加首条、不重传附件。
+- **初始事件**：受理事务同时写首条用户消息进入事件流的初始事件（`user.message.delta`，`turn_id`/`causation` 指向本次受理，`source = "owned_first_submission"`）；正文权威仍是 `owned_message.content_json`，事件只做可见性与来源标注（D7），其 `text` 是按 §10.3 单条 message 文本上限（262144 字符）截断的文本块拼接。它的 sequence 早于该命令的终态事件。
+- **同一事务**：正式会话行、完整首条输入（`owned_message` 的 `user` 通道）、命令受理、turn、`owned_first_submission` 与附件正式引用全在一个 `BEGIN IMMEDIATE`；任一步失败全回滚。
+- **终态只写一处**：`settle_first_submission`/`converge_first_submission` 复用 owned 提交路径的同一个终态 writer（`apply_terminal`）与同一个事件 writer（`write_session_event`）：先写**领域事件**（`turn.completed`/`turn.failed`），再写命令终态；`owned_command` 的 `result_json`/`terminal_event_id` 与事件同源。turn 的领域事件只用 CAS 推进**仍非终态、且 `causation = first_request_id`** 的首条 turn：turn 已由 `agent_host::finish_turn` + broker `commit_chunk` 收敛时，结算不再改 `ended_at`、不再提升 `owned_session.version`、也不再写第二个 `turn.*`（`session.updated` 仍只由 core 生成，§6 第 1 条，存储层不伪造）。
+- **冻结结果投影**：`command.completed` 的 `view.result` 与 `owned_command.result_json` 是 `SYNC_PROTOCOL.md` §11.9 的六字段投影（`stage`/`firstSubmissionId`/`firstRequestId`/`currentRequestId`/`everDispatched`/`canContinue`）。同一 `requestId` 的重放（含并发）返回原终态与原 `terminal_event_id`，不追加第二条 `command.*`、不改 `current_request_id`；已非 `accepted` 的行按 `Conflict(Consumed)` 拒绝。
+- **读投影带记录的选择**：`FirstSubmissionRecord.mode_id`/`config` 原样暴露受理时记录的模式与配置选择（`config` 是记录原文 object，`{}` = 未选择），供 `kind:"continue"` 缺省 `mode`/`configOptions` 时复用（D8.1）。存储层不把文本值反推成 `Text`/`Select`。
+- **暂存无 owned 外键行**：`PreparationAttachmentStaging` 只维护运行期元数据与 `<attachment_dir>/.preparation/` 中的字节；`claim` 只核验已封存事实，首次提交把字节 `rename` 到同一内容寻址路径，不复制、不全量重哈希。受理事务回滚时 `finish_claim(committed = false)` **只把本次认领真的 `rename` 过**的字节移回封存路径（正式路径上原本就存在的同内容字节属于更早已提交的会话，绝不移回），且 `begin_claim` 也接受已在正式路径的字节，因此同 ID 可原样重试（D8 第 2 行）；提交成功的清单与其传输记录一并从运行期目录清除。
+- **连接绑定**：传输/清单记录绑定连接标识；旧连接迟到帧返回 `ConnectionMismatch`，重绑只转移连接归属、不重置偏移。
+
 ## 6. Broker 的顺序与事务契约
 
 1. owned：`EventSink` → broker 组装 `OwnedCommit` → `SessionStore::commit` → `EventPublisher::publish`（顺序不可交换）。
@@ -1330,6 +1392,7 @@ pub enum ReleaseOutcome {
     - 同一趟恢复还要补写**缺失的收尾事件**：若某个 turn 已有已提交的 `agent.message.delta` 却没有 `agent.message.completed`（进程在终态提交前崩溃），必须用 `ReadView::event_payload` 从库里按第 14 条的规则重建该事件并在**同一次恢复提交**内落盘，否则那段已经广播出去的文本永远没有终态记录。
     - **交互与队列的恢复顺序**（`session-activity` D3）：恢复开始时先调用 `InteractionAuthority::invalidate_pending(None, now)` 把仍有效的交互（含已仲裁未确认）失效——重启后上游 ACP 请求已不存在，不得再被当作可应答，也不得复活；然后按 `unsettled_commands` 终结 `accepted` 命令（对应 turn → `failed`，同事务失效该 turn 的交互），最后用 `SessionStore::sessions_with_pending_activity(limit)` 补齐仍有未结束 turn/有效交互的会话，逐个 `pump` 并 `refresh_activity` 重算摘要。恢复可重复执行：已终结的行不会被再次终结，已失效的交互不会被重新计数。
     - **持久队列的恢复**：`SessionStore::queued_turns` 按 `queue_index` 升序给出遗留 `queued` turn；`Session.prompt` 正文不在 `owned_turn` 里（只由 Agent 回显的 `user.message.delta` 留下），因此**不得**重放它们的 Agent 副作用。内存队列为空且没有在跑 turn 时，broker 把这些遗留项显式终结为 `failed`（`internal.unavailable`，不静默删除）、`accepted` 命令由恢复结算为 `uncertain`，然后 FIFO 从后续项继续；同一会话最多一个 active turn 的不变量不变。**不确定的工作不重派**：`uncertain` 命令、被放弃的 turn 与无法确认停止的执行都不自动重试，后者保留占位与运行阻塞，不提前 `idle`、不提升后续 turn。
+    - **首条提交的崩溃窗口归启动收敛**（`web-session-preparation` D8）：`unsettled_commands` **不返回** `owned_first_submission` 的首个/当前请求对应的 `accepted` 命令（按 `(actor_kind, actor_id, request_id)` 精确排除，普通 mutation 不受影响）。这些命令只由随后的 `converge_first_submissions` 结算——可证明未派发的写 `failed` 并保留正文等待显式继续，已跨越派发围栏的写 `uncertain`。两步在同一趟启动里按此顺序执行；若恢复先把它写成 `uncertain`，收敛再结算同一命令会得到 `Conflict(Consumed)` 并中止启动。
     - **摘要收敛**：同一趟恢复里每个会话的摘要只按 `SessionActivity::reduce` 重算一次，状态未变不写行、不生成 `session.updated`；变化时摘要更新与 `session.updated` 同一次提交，不得重复生成。
 17. `[决定]` **`session.mode.list` 的应答**：结果形状是 `ModeState { currentModeId, availableModes: ModeRef[], version }`（`SYNC_PROTOCOL.md` §11.5/§10.2）；`availableModes` **只能**来自 `SessionEndpoint::modes()`（§5.1），`version` 取该会话当前版本。core 不得凭 `current_mode` 编造候选列表，端口返回空列表时结果就是空列表（不伪造）。
 18. `[决定]` **附件文件与行的事务边界**：行的删除与它所在的事务一起提交，**文件删除一律在提交之后**（崩溃只会留下无人引用的孤儿文件，绝不会留下悬空行）；`AttachmentStore::prune_lru` 与 `sweep_orphans` 因此都在事务之外运行。
@@ -1373,13 +1436,13 @@ pub enum ReleaseOutcome {
     - **命令合并**：同一会话的并发激活共享一次建立过程；先查稳定 `requestId` 的持久记录，再判 ready 复用或启动恢复。旧命令重试返回历史结果**不**等于当前资源 ready；`uncertain` 的恢复不得换号自动重试，必须先核实状态。查看者只按最新声明集合计算，不因旧命令结果重新添加。
     - **不持久化**：查看者、租约与资源代只存在于运行期（§5.10），不新增表、不新增列；`session.activity.changed` 复用既有 owned 事件表。
 
-## 7. `storage-sqlite` v15 表结构（仅 owned 家族与连接资料）
+## 7. `storage-sqlite` v16 表结构（仅 owned 家族与连接资料）
 
 ### 7.1 文件、PRAGMA、连接与权限
 
 - 单文件 `<data_dir>/acp-remote.sqlite3`；附件目录 `<data_dir>/attachments`（`[决定]` 新增配置键 `storage.attachment_dir`，默认 `<data_dir>/attachments`，语义与权限同数据库目录）。
 - `[决定]` `session-file-browser` **不新增持久字段、表或 migration**：会话文件的根仍取既有 `owned_session.workspace_cwd`（§3.6 的窄读取），枚举/内容/Git 结果只在内存与 wire 中存在；不保存内容快照、文件正文、Git 差异或翻页位置。查询不改变 `owned_*`/`imported_*` 的任何行，也不推进 `global_sequence`。
-- `[决定]` `session-activation-lifecycle` **本阶段不改 DDL**（当前仍为 **v15 = 15**）：本机生命周期的资源代、查看租约、当前活跃目录都是运行期状态（§5.10、§6 第 23 条），`session.activity.changed` 复用既有 `owned_event` 表与既有列，`localActivity` 是投影而非新列。**若实现阶段确需新增列**（例如为区分任务/资源事实而必须持久化新事实），必须先在本节登记版本化 migration、提供旧库升级测试并同步 §7.2 的版本常量与 §9 判据；禁止只加列不改门禁，也禁止把租约、查看者或进程句柄写进任何持久表。
+- `[决定]` `session-activation-lifecycle` **本阶段不改 DDL**（当前为 **v16 = 16**，v16 只由 `web-session-preparation` 的首条表与 `owned_message.channel = user` 引入）：本机生命周期的资源代、查看租约、当前活跃目录都是运行期状态（§5.10、§6 第 23 条），`session.activity.changed` 复用既有 `owned_event` 表与既有列，`localActivity` 是投影而非新列。**若实现阶段确需新增列**（例如为区分任务/资源事实而必须持久化新事实），必须先在本节登记版本化 migration、提供旧库升级测试并同步 §7.2 的版本常量与 §9 判据；禁止只加列不改门禁，也禁止把租约、查看者或进程句柄写进任何持久表。
 - `[决定]` 启动设置：`journal_mode = WAL`、`synchronous = FULL`、`foreign_keys = ON`、`busy_timeout = 5000`、`wal_autocheckpoint = 1000`。
 - `[决定]` 连接模型：1 个写连接（串行化写事务）＋ N 个只读连接；`read_view()` 打开一个显式只读事务（`BEGIN`）供快照使用。
 - `[决定]` 权限：Unix 目录 `0700`、数据库/WAL/`-shm`/附件 `0600`；启动时检查，正式模式失败关闭（`SECURITY_DESIGN.md` §13.2）。
@@ -1389,14 +1452,14 @@ pub enum ReleaseOutcome {
 
 ### 7.2 Migration
 
-- `[决定]` `PRAGMA user_version` = 文件格式版本（上一版为 v14 = 14；当前 **v15 = 15**）；`meta` 只保存 `owned_schema_version`（当前 15）。两个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`；Access 不再有 imported schema 版本键。
+- `[决定]` `PRAGMA user_version` = 文件格式版本（上一版为 v14 = 14；当前 **v16 = 16**）；`meta` 只保存 `owned_schema_version`（当前 16）。两个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`；Access 不再有 imported schema 版本键。
 - `[决定]` 两族 migration 分开维护；单事务、可重复执行、失败整体回滚；文件格式版本**或**任一表结构版本高于本二进制已知版本 → 拒绝启动，不降级写入。
-- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 15` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库依次走 v2…v15 段，…，v13 库走 v14/v15 两段，v14 库只走 v15 段）；`user_version = 15` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL（三态 `owned_session`（含 `custom_title`）、`owned_interaction` 的 `confirmed_at`/`turn_id` 与 v12 的五张表）建成当前形状（此时 `user_version` 是 0，不能只按版本号判断）。每段各自带 `file_version < N` 的守卫，因此「文件格式已比该段新、但仍低于最新版」的库不会重跑那一段。
+- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 16` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库依次走 v2…v16 段，…，v13 库走 v14/v15/v16 三段，v14/v15 库只走 v15/v16 或 v16 段）；`user_version = 16` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL（三态 `owned_session`（含 `custom_title`）、`owned_interaction` 的 `confirmed_at`/`turn_id` 与 v12 的五张表）建成当前形状（此时 `user_version` 是 0，不能只按版本号判断）。每段各自带 `file_version < N` 的守卫，因此「文件格式已比该段新、但仍低于最新版」的库不会重跑那一段。
 - `[决定]` v1 → v2 升级步骤（顺序固定，都在同一事务内）：
   1. 执行 §7.3/§7.4 的 DDL 常量：`CREATE ... IF NOT EXISTS` 建出新增的管理表与 `imported_import_export`，既有表不动；
   2. `owned_audit` 与 `imported_audit` 走 **12-step 表重建**（SQLite 不能修改既有 CHECK）：新建带完整 `action` CHECK 的表 → 按列拷贝**全部行（含 `audit_id`）** → `DROP` 旧表 → `RENAME` → 重建索引；之后按升级前的 `sqlite_sequence` 回填序列，**AUTOINCREMENT 不得回退**（审计有 365 天 TTL，尾部行被清理后 `seq` 会领先于 `max(audit_id)`）；
   3. `imported_import` 重建：去掉 `export_id` 与 `UNIQUE (owner_node_id, export_id)`，新增 `grants_json`；原行的 `(owner_node_id, export_id)` 与 `created_at` 迁为一条 `imported_import_export` 关联行（`added_at` = 原 `created_at`）。旧行**没有可信的 grants 来源**，因此 `grants_json` 一律写 `'[]'`——**不得凭空补齐或默认放权**，这类 Import 保持不可用，等本地重新授权；
-  4. 本段**不单独落盘版本**：`meta.owned_schema_version` 与 `PRAGMA user_version` 都由同一事务内紧随其后的升级段在**全部**段结束后统一按当前常量写入（当前为 `'15'` 与 `15`，见下面几条），因此不存在「已写 v2 版本号、表仍是 v1 形状」的中间落盘。
+  4. 本段**不单独落盘版本**：`meta.owned_schema_version` 与 `PRAGMA user_version` 都由同一事务内紧随其后的升级段在**全部**段结束后统一按当前常量写入（当前为 `'16'` 与 `16`，见下面几条），因此不存在「已写 v2 版本号、表仍是 v1 形状」的中间落盘。
 - `[决定]` **v2 → v3 升级步骤**（与 v2 段在同一事务内、顺序在后）：两张审计表同样走 12-step 表重建，**列集合与列顺序逐字不变**，只扩宽 CHECK——`actor_kind` 增 `'pairing_claimant'`（配对认领方的审计归因）、`action` 增 `'node.authenticated'`/`'node.auth_failed'`（节点握手留痕）；之后按本次升级前的 `sqlite_sequence` 回填序列（两段重建各自 `DROP` 过审计表，因此序列只在**全部**重建结束后回填一次）；版本键与 `PRAGMA user_version` 的落盘不在本段，见下一条。`owned_command` **不重建**：认领方永不提交命令，它的 `actor_kind` CHECK 保持 `('device','node','cli')`（design D12）——因此 v3 库上两张审计表接受四值、`owned_command` 只接受三值。
 - `[决定]` **v3 → v4 升级步骤**（与 v2/v3 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_node` 在**列清单末尾**追加一列 `export_ids_json TEXT NOT NULL DEFAULT '[]'`，用 `ALTER TABLE owned_node ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK，见 §11.8），`NOT NULL` 由默认值满足，因此既有行得到 `'[]'`（**不得默认放权**，§11.8）；`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 28）。版本键与 `PRAGMA user_version` 的落盘不在本段，见下一条。
 - `[决定]` **v4 → v5 升级步骤**（与 v2/v3/v4 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加两列 `agent_session_id TEXT` 与 `workspace_cwd TEXT`，用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK）；两列都可空、**无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有可用于恢复的标识或目录」，`MUST NOT` 被任何读取路径补全、推导或替换为别名解析结果（`NOT NULL DEFAULT ''` 做不到这一点：空串无法与「未取得」区分，会让「可恢复」判定被默认值蒙蔽），§9 判据 28 逐行断言。`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'13'`、`PRAGMA user_version` 置为 `13`，`meta.imported_schema_version` 置为 `'5'`（见 v12 → v13 段）。
@@ -1412,6 +1475,8 @@ pub enum ReleaseOutcome {
   4. 版本只在三件事全部成功后统一落盘（与其它段同一事务）：`meta.owned_schema_version = '13'`、`meta.imported_schema_version = '5'`、`PRAGMA user_version = 13`。失败整体回滚，重开可重试；`sqlite_sequence`、既有索引、外键与事件/审计字节保持不变（§9 判据 37）。
 - `[决定]` **v13 → v14 升级步骤**（`access-owner-data-stateless`；与既有段同一事务、顺序最后）：按外键顺序 `DROP TABLE IF EXISTS imported_delivery_index` → `imported_command_ref` → `imported_session` → `imported_audit` → `imported_import_export` → `imported_import`；删除前按明确来源谓词清理 `owned_command` 与 `owned_audit` 中可辨认的远程代理记录（只命中属于旧 imported 会话、且不属于 `owned_session` 的记录），归属无法安全判定时整段失败且不写入版本；删除 `meta.imported_schema_version`；最终写入 `meta.owned_schema_version = '14'` 与 `PRAGMA user_version = 14`。owned 会话/事件/序列/epoch/幂等/信任与既有 owned 审计不删除。
 - `[决定]` **v14 → v15 升级步骤**（`custom-session-title`；与既有段同一事务、顺序最后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加一列 `custom_title TEXT`（用户设置的自定义标题），用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建；该列可空、**无默认值**，因此既有会话行得到 `NULL`（= 从未设置自定义标题），Agent 标题列 `title` 与事件/epoch/幂等/审计一律不动。`column_exists` 守卫让重开/重跑幂等（已加过列不再 `ALTER`）；`ALTER TABLE ADD COLUMN` 把新列追加在列清单末尾，新建库的 DDL 也把它写在末尾，因此升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 28）。最终写入 `meta.owned_schema_version = '15'` 与 `PRAGMA user_version = 15`；失败整体回滚到 v14 形状。
+- `[决定]` **v15 → v16 升级步骤**（`web-session-preparation` WP2；与既有段同一事务、顺序最后）：给 `owned_message.channel` 的 CHECK 增加 `'user'`（首条用户消息，不是 Agent 消息），因 SQLite 不能修改既有 CHECK 而走 **12-step 表重建**（拷贝全部行与正文、重建索引）；`owned_first_submission` 由 `CREATE TABLE IF NOT EXISTS` 建出。**不回填历史会话**、不扫描空正文改状态；旧会话没有本表行，也永不被推断成准备。失败整体回滚，第二次打开因 `user_version = 16` 跳过本段。
+
 - `[决定]` **目录归属的读取投影**（`design.md` D1/D6）：`SessionSummary.workspace` 取自 `owned_session.workspace_alias`，展示名由 `storage-sqlite` 在同一条读查询里 `LEFT JOIN owned_workspace ON w.alias = s.workspace_alias` 取得；**关联不上时回退为别名本身**（目录被删除不丢分组，也不让规范化路径进入摘要——路径只出现在快照的 `workspaces` 条目上，§11.1）。该 JOIN 留在 `storage-sqlite` 内部（它同时拥有两张表），**不上浮到 core**。实现 `MUST NOT` 存在任何「按 `owned_session.workspace_cwd` 反查别名」的查询——`NULL` 就是未分组，这是「别名重指向后既有会话归属不漂移」的前提。
 - `[决定]` 保留不变量：`server_epoch`、会话 `origin_epoch` 与事件 `global_sequence`/`session_sequence`、`requestId` 与幂等行、命令终态、全部既有审计都逐行保留，**不得重新编号**。管理表初始为空；profile 种子与「已初始化」标记在同一事务里提交（`LocalConfigStore::mark_seeded`，§5.3），不从聊天或审计内容推断信任。
 - `[决定]` 管理表纳入 §7.5 的容量度量（TEXT 列 + 附件字节）与清理顺序；撤销 tombstone 不因容量压力被删除，空间不足时拒绝新写入而不是删活动信任或未到期审计。
@@ -1421,6 +1486,7 @@ pub enum ReleaseOutcome {
 ### 7.3 `owned_*` 表
 
 ```sql
+
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -1621,7 +1687,7 @@ CREATE TABLE IF NOT EXISTS owned_message (
   message_id        TEXT PRIMARY KEY,
   session_id        TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
   turn_id           TEXT,
-  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought')),
+  channel           TEXT NOT NULL CHECK (channel IN ('reply','thought','user')), -- 'user' = 首条用户消息（owned_first_submission）；不是 Agent 消息
   state             TEXT NOT NULL CHECK (state IN ('partial','completed','failed','cancelled')),
   content_json      TEXT NOT NULL,
   partial_reason    TEXT,
@@ -1639,6 +1705,35 @@ CREATE TABLE IF NOT EXISTS owned_media_ref (
   PRIMARY KEY (message_id, position)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS owned_media_ref_attachment ON owned_media_ref(attachment_id);
+
+CREATE TABLE IF NOT EXISTS owned_first_submission (
+  session_id          TEXT PRIMARY KEY REFERENCES owned_session(session_id) ON DELETE RESTRICT,
+  first_submission_id TEXT NOT NULL UNIQUE,
+  user_message_id     TEXT NOT NULL UNIQUE,
+  first_request_id    TEXT NOT NULL,
+  current_request_id  TEXT NOT NULL,
+  actor_kind          TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_id            TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  input_json          TEXT NOT NULL,
+  input_digest        TEXT NOT NULL,
+  mode_id             TEXT,
+  config_json         TEXT NOT NULL,
+  stage               TEXT NOT NULL CHECK (stage IN ('saved_not_dispatched','dispatch_started','terminal')),
+  ever_dispatched     INTEGER NOT NULL DEFAULT 0 CHECK (ever_dispatched IN (0,1)),
+  agent_session_id    TEXT,
+  resource_epoch      TEXT,
+  terminal_outcome    TEXT CHECK (terminal_outcome IN ('completed','failed','uncertain')),
+  terminal_at         TEXT,
+  error_code          TEXT, error_message TEXT, error_details_json TEXT, retryable INTEGER,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  CHECK (stage = 'saved_not_dispatched' OR agent_session_id IS NOT NULL),
+  CHECK (stage <> 'terminal' OR terminal_outcome IS NOT NULL),
+  CHECK (ever_dispatched = 0 OR stage <> 'saved_not_dispatched'),
+  CHECK (stage <> 'dispatch_started' OR ever_dispatched = 1),
+  CHECK (terminal_outcome IS NULL OR terminal_outcome = 'completed' OR error_code IS NOT NULL)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS owned_device (
   device_id     TEXT PRIMARY KEY,
@@ -2065,3 +2160,4 @@ v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_ind
 运行期远程来源端口的最终定义在 §5.9（`RemoteRuntimeDirectory`、`RemoteSourceReads`、`RemoteCommandStatus` 及其值对象，代码在 `crates/core/src/ports.rs`）；本小节不重复端口形状。
 
 v14 迁移已删除 `imported_delivery_index`/`imported_command_ref`/`imported_session`/`imported_audit` 及更早的 `imported_import*` 表，并按 §7.2 的来源谓词清理可辨认的远程代理 `owned_command`/`owned_audit` 记录。清理后启动门禁（`SqliteStore::run_startup_gate`）验证远程家族不存在、owned 事件/epoch/幂等与节点信任逐项保留，并完成 WAL/自由页收尾；失败则不开始监听，重开可安全重试。
+

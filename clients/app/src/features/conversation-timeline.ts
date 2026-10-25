@@ -236,6 +236,14 @@ function degradedEntry(record: StructuredRecord, unusableView: boolean): Degrade
   };
 }
 
+/** 本设备刚派发、尚未被权威读取/回显覆盖的用户消息（视图层只读）。 */
+export interface SentPromptView {
+  readonly requestId: string;
+  readonly text: string;
+  readonly attachmentNames: readonly string[];
+  readonly createdAt: string;
+}
+
 /**
  * 组装时间线。
  *
@@ -243,12 +251,14 @@ function degradedEntry(record: StructuredRecord, unusableView: boolean): Degrade
  * @param records 已去重的结构化记录（`mergeStructuredRecords` 之后，含实时与历史）。
  * @param volatile 该会话的易失叠加层。
  * @param interactions 该会话的交互视图：授权/提问卡片的可应答性由它提供。
+ * @param sentPrompts 本设备已派发、尚未被读取/回显覆盖的用户消息；同文出现后不再重复。
  */
 export function buildTimeline(input: {
   readonly messages: readonly MessageView[];
   readonly records: readonly StructuredRecord[];
   readonly volatile: readonly VolatileMessageState[];
   readonly interactions: readonly InteractionView[];
+  readonly sentPrompts?: readonly SentPromptView[];
 }): readonly TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   const volatileById = new Map(input.volatile.map((tail) => [tail.messageId, tail]));
@@ -317,6 +327,56 @@ export function buildTimeline(input: {
       streamComplete: tail.completed,
       partial: tail.partial,
     });
+  }
+
+  // 本设备刚派发的用户消息：Agent 不回显时也要立刻可见；同文已被读取/回显后不再重复。
+  if (input.sentPrompts !== undefined && input.sentPrompts.length > 0) {
+    const reflected = new Map<string, number>();
+    const bump = (text: string): void => {
+      reflected.set(text, (reflected.get(text) ?? 0) + 1);
+    };
+    for (const message of input.messages) {
+      if (message.role === "user") bump(message.text);
+    }
+    for (const tail of input.volatile) {
+      if (tail.channel === "user") bump(volatileText(tail));
+    }
+    const ordered = [...input.sentPrompts].sort((left, right) =>
+      left.createdAt < right.createdAt ? -1 : left.createdAt > right.createdAt ? 1 : 0);
+    for (const prompt of ordered) {
+      // 同一正文可能被发送多次：一条权威消息只抵消一条本地待回显消息。
+      if (prompt.text.length > 0) {
+        const count = reflected.get(prompt.text) ?? 0;
+        if (count > 0) {
+          reflected.set(prompt.text, count - 1);
+          continue;
+        }
+      }
+      const text = [prompt.text, ...prompt.attachmentNames.map((name) => `📎 ${name}`)]
+        .filter((part) => part.length > 0)
+        .join("\n");
+      entries.push({
+        kind: "message",
+        key: `sent:${prompt.requestId}`,
+        createdAt: prompt.createdAt,
+        sequence: null,
+        channel: "user",
+        message: {
+          id: prompt.requestId,
+          role: "user",
+          channel: "reply",
+          text,
+          content: { text, media: [], hasStructuredContent: false },
+          hasStructuredContent: false,
+          partial: null,
+          createdAt: prompt.createdAt,
+          turnId: null,
+        },
+        volatile: false,
+        streamComplete: true,
+        partial: null,
+      });
+    }
   }
 
   const availability = new Map<string, InteractionAvailability>();

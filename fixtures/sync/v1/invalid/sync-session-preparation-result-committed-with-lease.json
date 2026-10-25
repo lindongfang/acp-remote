@@ -1,0 +1,18 @@
+{
+  "protocolVersion": 1,
+  "type": "session.preparation.result",
+  "messageId": "6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "26",
+  "body": {
+    "operationId": "4e5f6a7b-8c9d-4e0f-9a1b-2c3d4e5f6a7b",
+    "action": "restore",
+    "sessionId": "6f1c2d3e-4a5b-4c6d-8e7f-901122334455",
+    "status": "committed",
+    "firstSubmissionId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    "firstRequestId": "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+    "currentRequestId": "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f",
+    "firstMessageId": "3d4e5f6a-7b8c-4d9e-8f0a-1b2c3d4e5f6a",
+    "leaseExpiresAt": "2026-10-22T08:00:30.000Z"
+  }
+}

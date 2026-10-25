@@ -27,11 +27,12 @@ use std::sync::Arc;
 use acp_core::broker::Broker;
 use acp_core::model::{
     Actor, CommandRecord, CommandStatus, FileReadPurpose as CoreFileReadPurpose,
+    FirstSubmissionRecord, FirstSubmissionStage as CoreFirstSubmissionStage,
     GitDiff as CoreGitDiff, GitDiffBase as CoreGitDiffBase, GitDiffKind as CoreGitDiffKind,
     GitDiffUnavailableReason as CoreGitDiffUnavailable, GitFileStatus as CoreGitFileStatus,
     GitState as CoreGitState, GitStatusPage, MessageId, ModeRef as CoreModeRef, OwnedSessionRef,
-    RemoteSessionRef, ResourceOrigin, Sequence, SessionFileChunk, SessionFileContentKind,
-    SessionFileEntryKind as CoreEntryKind, SessionFilePage,
+    RemoteSessionRef, RequestOutcome, ResourceOrigin, Sequence, SessionFileChunk,
+    SessionFileContentKind, SessionFileEntryKind as CoreEntryKind, SessionFilePage,
     SessionFileRestrictedReason as CoreRestrictedReason, SessionId, SessionReference,
     SessionState as CoreSessionState, Timestamp as CoreTimestamp,
 };
@@ -41,15 +42,15 @@ use base64::Engine as _;
 use sync_protocol::command::{
     Command, CommandResultPayload, CommandState, CommandStatus as WireCommandStatus,
     CommandStatusRecord, ConfigListResult, ContentVersion as WireContentVersion,
-    FileReadPurpose as WireFileReadPurpose, GitDiffBase as WireGitDiffBase,
-    GitDiffKind as WireGitDiffKind, GitDiffUnavailableReason as WireGitDiffUnavailable,
-    GitFileStatus as WireGitFileStatus, GitState as WireGitState,
-    GitStatusEntry as WireGitStatusEntry, IncludeList, SessionFileData,
+    FileReadPurpose as WireFileReadPurpose, FirstSubmissionStage as WireFirstSubmissionStage,
+    GitDiffBase as WireGitDiffBase, GitDiffKind as WireGitDiffKind,
+    GitDiffUnavailableReason as WireGitDiffUnavailable, GitFileStatus as WireGitFileStatus,
+    GitState as WireGitState, GitStatusEntry as WireGitStatusEntry, IncludeList, SessionFileData,
     SessionFileEntry as WireSessionFileEntry, SessionFilesList, SessionFilesListResult,
     SessionFilesPath, SessionFilesRead, SessionFilesReadResult, SessionGitDiff,
     SessionGitDiffResult, SessionGitStatus, SessionGitStatusResult, SessionListResult,
-    SessionPageToken, SessionRead, SessionRelativePath, WorkspaceBrowse, WorkspaceBrowseEntry,
-    WorkspaceBrowseResult,
+    SessionPageToken, SessionRead, SessionRelativePath, SessionStartProjection, WorkspaceBrowse,
+    WorkspaceBrowseEntry, WorkspaceBrowseResult,
 };
 use sync_protocol::common::{
     DecimalString, ModeRef as WireModeRef, ModeState as WireModeState, NonEmptyText, Nullable,
@@ -58,6 +59,8 @@ use sync_protocol::common::{
 };
 use sync_protocol::error::ErrorCode;
 use tracing::debug;
+
+use crate::sync::preparation::PREPARATION_FEATURE;
 
 use crate::session_read::{
     DEFAULT_PAGE_MESSAGES, MAX_PAGE_MESSAGES, SessionReadSource, wire_config_option,
@@ -375,10 +378,13 @@ pub async fn command_status(
                 "the request is not known to this device",
             ));
         };
-        let wire = wire_status_record(&record).ok_or(Rejection::Code(
+        let mut wire = wire_status_record(&record).ok_or(Rejection::Code(
             ErrorCode::InternalUnavailable,
             "the command record cannot be projected",
         ))?;
+        if features.contains(PREPARATION_FEATURE) {
+            wire.preparation = preparation_projection(core, &record).await;
+        }
         return Ok(CommandResultPayload::CommandStatus(wire));
     };
     if !features.contains(STATELESS_ORIGIN_FEATURE) {
@@ -452,7 +458,49 @@ fn wire_remote_status_record(
             Some(error) => Nullable::value(wire_public_error(error)?),
             None => Nullable::null(),
         },
+        // Access 不推断远程会话的首条提交投影（那不是 Owner 已转发的持久事实）。
+        preparation: None,
     })
+}
+
+/// 协商 `core.session-preparation.v1` 后，`command.status` 的首次提交六字段投影（design D8/D8.1）。
+///
+/// 只在目标请求确实是该会话的首次/当前尝试时给出：别的请求不能借它看到首条身份。旧客户端（未协商）
+/// 不经过这里，`preparation` 键因此缺席。
+async fn preparation_projection(
+    core: &Arc<UseCases>,
+    record: &CommandRecord,
+) -> Option<SessionStartProjection> {
+    let session = record.session()?;
+    let first: FirstSubmissionRecord = core.first_submission(session).await.ok()??;
+    if record.request() != &first.first_request_id && record.request() != &first.current_request_id
+    {
+        return None;
+    }
+    Some(SessionStartProjection {
+        stage: wire_first_stage(first.stage),
+        first_submission_id: Uuid::parse(first.first_submission_id.as_str()).ok()?,
+        first_request_id: Uuid::parse(first.first_request_id.as_str()).ok()?,
+        current_request_id: Uuid::parse(first.current_request_id.as_str()).ok()?,
+        ever_dispatched: first.ever_dispatched,
+        can_continue: first.stage == CoreFirstSubmissionStage::SavedNotDispatched
+            && !first.ever_dispatched
+            && first
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| terminal.outcome == RequestOutcome::Failed),
+    })
+}
+
+/// core 的首条阶段 → wire 词表（两侧取值一一对应）。
+fn wire_first_stage(stage: CoreFirstSubmissionStage) -> WireFirstSubmissionStage {
+    match stage {
+        CoreFirstSubmissionStage::SavedNotDispatched => {
+            WireFirstSubmissionStage::SavedNotDispatched
+        }
+        CoreFirstSubmissionStage::DispatchStarted => WireFirstSubmissionStage::DispatchStarted,
+        CoreFirstSubmissionStage::Terminal => WireFirstSubmissionStage::Terminal,
+    }
 }
 
 /// core 的命令状态 → wire `commandStatusRecord.state` 词表。
@@ -611,6 +659,35 @@ pub(super) fn require_session_files(features: &NegotiatedFeatures) -> Result<(),
 }
 
 /// 命令信封上的 `sessionId`（四条文件/Git 查询都以它定位会话）。
+pub(super) fn workspace_source(
+    command: &Command,
+    workspace: Option<&sync_protocol::command::WorkspaceFilesTarget>,
+    features: &NegotiatedFeatures,
+) -> Result<Option<acp_core::model::WorkspaceSource>, Rejection> {
+    let Some(workspace) = workspace else {
+        return Ok(None);
+    };
+    if !features.contains("core.workspace-files.v1") {
+        return Err(Rejection::FeatureRequired("core.workspace-files.v1"));
+    }
+    if command.session_id.is_some() {
+        return Err(Rejection::Schema(
+            "workspace and sessionId are mutually exclusive",
+        ));
+    }
+    Ok(Some(match workspace {
+        sync_protocol::command::WorkspaceFilesTarget::Directory { directory_id } => {
+            acp_core::model::WorkspaceSource::Directory(
+                acp_core::model::DirectoryId::new(directory_id.as_str())
+                    .map_err(|_| Rejection::Schema("invalid directoryId"))?,
+            )
+        }
+        sync_protocol::command::WorkspaceFilesTarget::Path { workspace_path } => {
+            acp_core::model::WorkspaceSource::Path(workspace_path.as_str().to_owned())
+        }
+    }))
+}
+
 pub(super) fn command_session(command: &Command) -> Result<SessionId, Rejection> {
     let Some(session) = command.session_id.as_ref() else {
         return Err(Rejection::Schema("this command requires sessionId"));
@@ -627,17 +704,29 @@ pub async fn session_files_list(
     features: &NegotiatedFeatures,
 ) -> Result<CommandResultPayload, Rejection> {
     require_session_files(features)?;
-    let session = command_session(command)?;
-    let page = core
-        .list_session_files(
-            actor,
-            &session,
-            payload.path.as_str(),
-            payload.hide_ignored,
-            payload.after.as_ref().map(|after| after.as_str()),
-        )
-        .await
-        .map_err(|error| port_rejection(&error))?;
+    let page = match workspace_source(command, payload.workspace.as_ref(), features)? {
+        Some(workspace) => {
+            core.list_workspace_files(
+                actor,
+                workspace,
+                payload.path.as_str(),
+                payload.hide_ignored,
+                payload.after.as_ref().map(|p| p.as_str()),
+            )
+            .await
+        }
+        None => {
+            core.list_session_files(
+                actor,
+                &command_session(command)?,
+                payload.path.as_str(),
+                payload.hide_ignored,
+                payload.after.as_ref().map(|p| p.as_str()),
+            )
+            .await
+        }
+    }
+    .map_err(|error| port_rejection(&error))?;
     let result = wire_session_file_page(&page, payload.path).ok_or(Rejection::Code(
         ErrorCode::InternalUnavailable,
         "a session file entry cannot be projected",
@@ -657,7 +746,7 @@ pub async fn session_files_read(
     features: &NegotiatedFeatures,
 ) -> Result<SessionFileChunk, Rejection> {
     require_session_files(features)?;
-    let session = command_session(command)?;
+
     let purpose = match payload.purpose {
         WireFileReadPurpose::Preview => CoreFileReadPurpose::Preview,
         WireFileReadPurpose::Download => CoreFileReadPurpose::Download,
@@ -669,15 +758,30 @@ pub async fn session_files_read(
         .parse::<u64>()
         .map_err(|_| Rejection::Schema("offset is not a decimal byte offset"))?;
     let version = payload.version.as_ref().map(|version| version.as_str());
-    core.read_session_file(
-        actor,
-        &session,
-        payload.path.as_str(),
-        purpose,
-        offset,
-        version,
-    )
-    .await
+    match workspace_source(command, payload.workspace.as_ref(), features)? {
+        Some(workspace) => {
+            core.read_workspace_file(
+                actor,
+                workspace,
+                payload.path.as_str(),
+                purpose,
+                offset,
+                version,
+            )
+            .await
+        }
+        None => {
+            core.read_session_file(
+                actor,
+                &command_session(command)?,
+                payload.path.as_str(),
+                purpose,
+                offset,
+                version,
+            )
+            .await
+        }
+    }
     .map_err(|error| port_rejection(&error))
 }
 
@@ -690,15 +794,21 @@ pub async fn session_git_status(
     features: &NegotiatedFeatures,
 ) -> Result<CommandResultPayload, Rejection> {
     require_session_files(features)?;
-    let session = command_session(command)?;
-    let page = core
-        .session_git_status(
-            actor,
-            &session,
-            payload.after.as_ref().map(|after| after.as_str()),
-        )
-        .await
-        .map_err(|error| port_rejection(&error))?;
+    let page = match workspace_source(command, payload.workspace.as_ref(), features)? {
+        Some(workspace) => {
+            core.workspace_git_status(actor, workspace, payload.after.as_ref().map(|p| p.as_str()))
+                .await
+        }
+        None => {
+            core.session_git_status(
+                actor,
+                &command_session(command)?,
+                payload.after.as_ref().map(|p| p.as_str()),
+            )
+            .await
+        }
+    }
+    .map_err(|error| port_rejection(&error))?;
     let result = wire_git_status_page(&page, features.contains("core.session-git-stats.v1"))
         .ok_or(Rejection::Code(
             ErrorCode::InternalUnavailable,
@@ -716,11 +826,17 @@ pub async fn session_git_diff(
     features: &NegotiatedFeatures,
 ) -> Result<CommandResultPayload, Rejection> {
     require_session_files(features)?;
-    let session = command_session(command)?;
-    let diff = core
-        .session_git_diff(actor, &session, payload.path.as_str())
-        .await
-        .map_err(|error| port_rejection(&error))?;
+    let diff = match workspace_source(command, payload.workspace.as_ref(), features)? {
+        Some(workspace) => {
+            core.workspace_git_diff(actor, workspace, payload.path.as_str())
+                .await
+        }
+        None => {
+            core.session_git_diff(actor, &command_session(command)?, payload.path.as_str())
+                .await
+        }
+    }
+    .map_err(|error| port_rejection(&error))?;
     let mut result = wire_git_diff(&diff).ok_or(Rejection::Code(
         ErrorCode::InternalUnavailable,
         "a git diff cannot be projected",
@@ -1014,7 +1130,7 @@ fn wire_session_state(state: CoreSessionState) -> WireSessionState {
 }
 
 /// core 的 `ModeRef` → wire `modeRef`。
-fn wire_mode_ref(mode: &CoreModeRef) -> Option<WireModeRef> {
+pub(crate) fn wire_mode_ref(mode: &CoreModeRef) -> Option<WireModeRef> {
     Some(WireModeRef {
         mode_id: NonEmptyText::<256>::parse(mode.mode_id().as_str()).ok()?,
         display_name: NonEmptyText::<256>::parse(mode.display_name()).ok()?,
@@ -1065,6 +1181,8 @@ fn wire_status_record(record: &CommandRecord) -> Option<CommandStatusRecord> {
             Some(error) => Nullable::value(wire_public_error(error)?),
             None => Nullable::null(),
         },
+        // 由 `command_status` 在协商 `core.session-preparation.v1` 时补上（本函数不读首条记录）。
+        preparation: None,
     })
 }
 

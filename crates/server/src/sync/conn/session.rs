@@ -1018,6 +1018,7 @@ impl Session {
             self.conn.authority.local_node().clone(),
             device_id.clone(),
             self.peer.client_ip,
+            resolve_origin(&self.origin),
             self.limits,
             Arc::clone(self.conn.core.ids()),
         );

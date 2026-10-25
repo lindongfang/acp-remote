@@ -106,7 +106,7 @@ export interface ConversationComposerProps {
   readonly onRemovePathRef?: ((path: string) => void) | undefined;
 }
 
-const STATE_PLACEHOLDERS = { editable: "输入消息…", in_progress: "编辑下一条消息…", unavailable: "当前无法发送，仍可编辑草稿…" };
+const STATE_PLACEHOLDERS = { editable: "给 Agent 发消息", in_progress: "会话进行中，完成后可继续输入", unavailable: "当前无法发送，仍可编辑草稿" };
 
 /** 附件状态的展示文案（每种状态一句，互不混用）。 */
 const ATTACHMENT_STATUS_LABELS: Readonly<Record<DraftAttachment["status"], string>> = {
@@ -663,6 +663,9 @@ export function ConversationComposer({
 
   return (
     <View style={styles.composer} dataSet={{ composer: input.state, composerDraftInMemoryOnly: String(input.draftInMemoryOnly) }}>
+      {input.persistenceWarning == null ? null : (
+        <Text role="status" style={styles.note} dataSet={{ composerPersistenceWarning: "true" }}>{input.persistenceWarning}</Text>
+      )}
       <View style={styles.bar} dataSet={{ composerBar: "true" }}>
         <Pressable role="button" aria-label={input.attachmentsSupported ? "添加文件" : `添加文件不可用：${input.attachmentNotice}`}
           disabled={!input.attachmentsSupported || onPickAttachment === undefined}

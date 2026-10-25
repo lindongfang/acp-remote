@@ -67,6 +67,8 @@ export interface ConversationTimelineProps {
   readonly entries: readonly TimelineEntry[];
   /** 归属会话标识：媒体读取要求会话绑定（页面从 `model.header.sessionId` 给出）。 */
   readonly sessionId: string;
+  /** 会话头显示的 Agent 名：消息署名按原型写成「Agent · omp」。 */
+  readonly agentName?: string | undefined;
   /** 打开某条条目（降级 / 工具调用）的诊断抽屉（页面负责把 `eventId` 交给仓库）。 */
   readonly onOpenDiagnostics: (eventId: string) => void;
   /** 授权/提问的应答上抛；缺省时不渲染任何应答按钮（不是「渲染了但点了没反应」）。 */
@@ -291,19 +293,6 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
-    /** 运行指示：轮次仍在进行中时的那一枚胶囊（原型 `.live`）。 */
-    live: {
-      alignSelf: "flex-start",
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.ok,
-      borderRadius: radius.lg,
-      backgroundColor: colors.okSoft,
-      color: colors.ok,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-    },
     /** 失败条：整条流程的失败不塞进折叠块（原型 `.streamfail`）。 */
     failureStrip: {
       paddingVertical: spacing.sm,
@@ -449,9 +438,6 @@ const CHANNEL_LABELS: Readonly<Record<EntryOf<"message">["channel"], string>> = 
 /** 工具调用「仍在进行中」的状态取值（ACP `ToolCallStatus` 的两个非终态）。 */
 const TOOL_CALL_IN_PROGRESS: readonly string[] = ["pending", "in_progress"];
 
-/** 轮次「正在输出」的状态取值（`waiting_*` 是在等我们，不算输出中）。 */
-const TURN_RUNNING: readonly string[] = ["queued", "running"];
-
 /**
  * 条目的「仍在进行中」判定——**折叠块默认展开值的唯一依据**（D10）。
  *
@@ -461,7 +447,7 @@ const TURN_RUNNING: readonly string[] = ["queued", "running"];
  * - 思考消息：易失且增量流尚未标记结束（`volatile && !streamComplete`）＝仍在输出；
  * - 工具调用：`pending` / `in_progress`；
  * - 计划：有 `in_progress` 的一步；
- * - 其余（终端输出块、已落地的思考、完成的计划）：不是「进行中」——终端块的进行中由轮次卡片的
+ * - 其余（终端输出块、已落地的思考、完成的计划）：不是「进行中」——终端块的进行中由轮次条上的
  *   运行指示表达，它自己只有「这一块已经落地」这一个事实。
  */
 function entryInProgress(entry: TimelineEntry): boolean {
@@ -610,6 +596,7 @@ function MessageEntry({
   onDownloadAttachment,
   onFilePathPress,
   sessionId,
+  agentName,
 }: {
   readonly entry: EntryOf<"message">;
   readonly expanded: boolean;
@@ -622,6 +609,7 @@ function MessageEntry({
   readonly onDownloadAttachment: ConversationTimelineProps["onDownloadAttachment"];
   readonly onFilePathPress: ConversationTimelineProps["onFilePathPress"];
   readonly sessionId: string;
+  readonly agentName?: string | undefined;
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -659,11 +647,6 @@ function MessageEntry({
           {entry.partial.label}
         </Text>
       )}
-      {entry.volatile ? (
-        <Text style={styles.note} dataSet={{ messageVolatileNote: "true" }}>
-          流式增量（尚未持久化）：正文以按会话读取的结果为准。
-        </Text>
-      ) : null}
     </>
   );
 
@@ -681,21 +664,25 @@ function MessageEntry({
         timelineEntryAt: entry.createdAt,
       }}
     >
-      <Text
-        style={entry.channel === "user" ? [styles.who, styles.whoUser] : styles.who}
-        dataSet={{ messageWho: entry.channel }}
-      >
-        {CHANNEL_LABELS[entry.channel]}
-      </Text>
+      {entry.channel === "thought" ? null : (
+        <Text
+          style={entry.channel === "user" ? [styles.who, styles.whoUser] : styles.who}
+          dataSet={{ messageWho: entry.channel }}
+        >
+          {entry.channel === "agent" && agentName !== undefined && agentName.length > 0
+            ? `Agent · ${agentName}`
+            : CHANNEL_LABELS[entry.channel]}
+        </Text>
+      )}
       {/* 思考通道是一条可折叠的结构化条目（spec 列举的四类之一）；用户与 Agent 气泡不需要折叠。 */}
       {entry.channel === "thought" ? (
         <Fold
           entryKey={entry.key}
           foldClass="think"
           label="思考"
-          title="思考"
+          title=""
           titleMono={false}
-          state={entry.volatile ? (entry.streamComplete ? "增量已结束" : "进行中") : "已持久化"}
+          state={entry.volatile && !entry.streamComplete ? "进行中" : "完成"}
           inProgress={entryInProgress(entry)}
           expanded={expanded}
           onToggle={onToggle}
@@ -717,45 +704,39 @@ function MessageEntry({
   );
 }
 
-/** 轮次卡片：失败时是一条失败条，进行中时带运行指示。 */
+/** 轮次：只在失败/取消时留下可见条；进行中由实际思考/工具/回复条目表达，不另写文案。 */
 function TurnEntry({ entry }: { readonly entry: EntryOf<"turn"> }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const error = entry.error;
-  const running = TURN_RUNNING.includes(entry.state);
+  const cancelled = entry.state === "cancelled" && error === null;
+  const anchor = {
+    timelineCard: "turn",
+    turnId: entry.turnId,
+    turnState: entry.state,
+    timelineEntryAt: entry.createdAt,
+  };
+
+  if (error === null && !cancelled) {
+    // 进行中/完成态都不占视觉行：消息、思考、工具与回复本身就是输出证据。
+    return <View role="listitem" style={styles.hidden} dataSet={anchor} />;
+  }
 
   return (
-    <View
-      role="listitem"
-      style={styles.entry}
-      dataSet={{ timelineCard: "turn", turnId: entry.turnId, turnState: entry.state, timelineEntryAt: entry.createdAt }}
-    >
-      <View style={styles.card}>
-        <View style={styles.cardHead}>
-          <Text style={styles.kicker}>轮次</Text>
-          <Text style={styles.title} dataSet={{ turnIdLabel: entry.turnId }}>
-            {entry.turnId}
+    <View role="listitem" style={styles.entry} dataSet={anchor}>
+      {error === null ? null : (
+        <View style={styles.failureStrip} dataSet={{ turnFailure: "true" }}>
+          <Text style={styles.failureText} dataSet={{ turnError: error.code, turnErrorRetryable: String(error.retryable) }}>
+            {`轮次失败：${error.message}`}
           </Text>
-          <StateChip
-            state={entry.state}
-            style={entry.state === "failed" ? styles.chipDanger : entry.state === "completed" ? styles.chipOk : styles.chipAccent}
-          />
-          <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
         </View>
-        {/* 运行指示：只看这条轮次自己的状态，不看它在时间线上的位置。 */}
-        {running ? (
-          <Text style={styles.live} dataSet={{ turnRunning: "true" }}>
-            ● Agent 正在输出…
-          </Text>
-        ) : null}
-        {error === null ? null : (
-          <View style={styles.failureStrip} dataSet={{ turnFailure: "true" }}>
-            <Text style={styles.failureText} dataSet={{ turnError: error.code, turnErrorRetryable: String(error.retryable) }}>
-              {`轮次失败：${error.message}`}
-            </Text>
-          </View>
-        )}
-      </View>
+      )}
+      {cancelled ? (
+        <Text style={styles.note} dataSet={{ turnCancelled: "true" }}>
+          本轮已取消
+        </Text>
+      ) : null}
+      <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
     </View>
   );
 }
@@ -845,11 +826,6 @@ function ToolCallEntry({
         time={formatEntryTime(entry.createdAt)}
         titleDataSet={{ toolTitle: entry.title }}
       >
-        {entry.turnId === null ? null : (
-          <Text style={styles.meta} dataSet={{ toolTurnId: entry.turnId }}>
-            {`所属轮次：${entry.turnId}`}
-          </Text>
-        )}
         {detail === null ? null : (
           <View style={styles.detail} dataSet={{ toolDetail: "present" }}>
             {detail.input === null ? null : (
@@ -1242,11 +1218,6 @@ function PermissionRequestedEntry({
             {entry.description}
           </Text>
         )}
-        {entry.turnId === null ? null : (
-          <Text style={styles.meta} dataSet={{ interactionTurnId: entry.turnId }}>
-            {`所属轮次：${entry.turnId}`}
-          </Text>
-        )}
         {/* 应答按钮排在 opts 行里：可选项只来自这次请求自身的下发内容（逐字呈现，不翻译）。 */}
         <View style={styles.permissionOptions}>
           <InteractionAnswerButtons
@@ -1321,11 +1292,6 @@ function ElicitationRequestedEntry({
           </Text>
           <Text style={styles.time}>{formatEntryTime(entry.createdAt)}</Text>
         </View>
-        {entry.turnId === null ? null : (
-          <Text style={styles.meta} dataSet={{ interactionTurnId: entry.turnId }}>
-            {`所属轮次：${entry.turnId}`}
-          </Text>
-        )}
         {answerable ? (
           // 表单自己渲染「提交」（带值），按钮组只保留拒绝/取消：同一动作只有一个入口。
           <ElicitationForm
@@ -1478,6 +1444,7 @@ function TimelineEntryView(props: {
   readonly changeDiagnostics: ReadonlyMap<string, FileChangeDiagnostics> | undefined;
   readonly openChangeDiagnosticsEventId: string | null;
   readonly onOpenChangeDiagnostics: ((eventId: string | null) => void) | undefined;
+  readonly agentName?: string | undefined;
   readonly onOpenDiagnostics: (eventId: string) => void;
   readonly onAnswerInteraction: ((interactionId: string, answer: InteractionAnswer) => void) | undefined;
   readonly onCopyCode: ((code: string, language: string) => void) | undefined;
@@ -1497,6 +1464,7 @@ function TimelineEntryView(props: {
       return (
         <MessageEntry
           entry={entry}
+          agentName={props.agentName}
           expanded={expanded}
           onToggle={props.onToggleEntry}
           onCopyCode={props.onCopyCode}
@@ -1580,6 +1548,7 @@ function TimelineEntryView(props: {
 export function ConversationTimeline({
   entries,
   sessionId,
+  agentName,
   onOpenDiagnostics,
   onAnswerInteraction,
   onCopyCode,
@@ -1625,6 +1594,7 @@ export function ConversationTimeline({
               <TimelineEntryView
                 entry={entry}
                 sessionId={sessionId}
+                agentName={agentName}
                 expandedEntries={expandedEntries}
                 onToggleEntry={onToggleEntry}
                 changeDiagnostics={changeDiagnostics}

@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{Nullable, RawObject, Text, Uuid, ValueError};
 
-/// Sync v1 的错误码（51 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
+/// Sync v1 的错误码（54 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// `protocol.invalid_json`
@@ -108,6 +108,13 @@ pub enum ErrorCode {
     AttachmentExpired,
     /// `attachment.revoked`
     AttachmentRevoked,
+    /// `preparation.stale`（`core.session-preparation.v1`，retryable）：运行期资源代已失效；
+    /// `details.reason` 必填（`runtime_epoch_mismatch`/`generation_mismatch`/`released`）。
+    PreparationStale,
+    /// `preparation.already_committed`：首条已被正式受理；`details.sessionId` 必填。
+    PreparationAlreadyCommitted,
+    /// `preparation.store_rebuilt`：凭据的 storeEpoch 随存储整体重建失效；`details` 必须是空对象。
+    PreparationStoreRebuilt,
     /// `media.unavailable`
     MediaUnavailable,
     /// `interaction.unavailable`
@@ -120,7 +127,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// 与 `compatibility/errors/v1/errors.json` 的 sync 列表逐条相等。
-    pub const ALL: [ErrorCode; 51] = [
+    pub const ALL: [ErrorCode; 54] = [
         ErrorCode::ProtocolInvalidJson,
         ErrorCode::ProtocolSchemaInvalid,
         ErrorCode::ProtocolMessageTooLarge,
@@ -168,6 +175,9 @@ impl ErrorCode {
         ErrorCode::AttachmentBudgetExhausted,
         ErrorCode::AttachmentExpired,
         ErrorCode::AttachmentRevoked,
+        ErrorCode::PreparationStale,
+        ErrorCode::PreparationAlreadyCommitted,
+        ErrorCode::PreparationStoreRebuilt,
         ErrorCode::MediaUnavailable,
         ErrorCode::InteractionUnavailable,
         ErrorCode::InteractionVersionConflict,
@@ -190,6 +200,7 @@ impl ErrorCode {
                 | ErrorCode::ResourceRemoteUnavailable
                 | ErrorCode::AttachmentOffsetMismatch
                 | ErrorCode::AttachmentBudgetExhausted
+                | ErrorCode::PreparationStale
                 | ErrorCode::InteractionVersionConflict
                 | ErrorCode::InternalUnavailable
         )
@@ -244,6 +255,9 @@ impl ErrorCode {
             ErrorCode::AttachmentBudgetExhausted => "attachment.budget_exhausted",
             ErrorCode::AttachmentExpired => "attachment.expired",
             ErrorCode::AttachmentRevoked => "attachment.revoked",
+            ErrorCode::PreparationStale => "preparation.stale",
+            ErrorCode::PreparationAlreadyCommitted => "preparation.already_committed",
+            ErrorCode::PreparationStoreRebuilt => "preparation.store_rebuilt",
             ErrorCode::MediaUnavailable => "media.unavailable",
             ErrorCode::InteractionUnavailable => "interaction.unavailable",
             ErrorCode::InteractionVersionConflict => "interaction.version_conflict",

@@ -92,23 +92,23 @@ describe("会话头标题的两种形态", () => {
     expect(html).not.toContain('value="未命名会话"');
   });
 
-  it("非法输入的错误显示在会话头内，并保留输入框", () => {
+  it("非法输入保留输入框；错误不再占用会话头", () => {
     const { store } = titleStore();
     store.beginTitleEdit(SESSION_ID);
     store.setTitleDraft(SESSION_ID, "x".repeat(513));
     store.commitTitleEdit(SESSION_ID, "enter");
     const html = renderPage(pageOf(store), { titleEditor: store.titleEditorView(SESSION_ID) });
-    expect(html).toContain('data-session-title-error="true"');
-    expect(html).toContain("512");
+    // 会话头只保留标题/状态/Agent/子 Agent：校验错误仍由编辑器状态保留，但不在头里多画一行。
+    expect(html).not.toContain('data-session-title-error');
     expect(html).toContain('data-session-title-input="true"');
   });
 
-  it("离线/未协商：会话头明确说明不可用，没有输入框", () => {
+  it("离线/未协商：没有输入框，也不在会话头堆能力说明", () => {
     const { store } = titleStore({ features: [] });
     store.beginTitleEdit(SESSION_ID);
     const html = renderPage(pageOf(store), { titleEditor: store.titleEditorView(SESSION_ID) });
-    expect(html).toContain('data-session-title-notice="true"');
-    expect(html).toContain("core.session-title.v1");
+    expect(html).not.toContain('data-session-title-notice');
+    expect(html).not.toContain("core.session-title.v1");
     expect(html).not.toContain("data-session-title-input");
   });
 });

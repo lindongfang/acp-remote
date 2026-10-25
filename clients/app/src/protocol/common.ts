@@ -90,6 +90,9 @@ export type ErrorCode =
   | "attachment.budget_exhausted"
   | "attachment.expired"
   | "attachment.revoked"
+  | "preparation.stale"
+  | "preparation.already_committed"
+  | "preparation.store_rebuilt"
   | "media.unavailable"
   | "internal.unavailable";
 
@@ -376,3 +379,49 @@ export type RawAcp =
         readonly sha256: Base64Url32 | null;
       };
     };
+
+// ── 准备凭据（`core.session-preparation.v1`，计划/待实现）────────────────────
+
+/**
+ * `$defs.positiveDecimalString`：`1..=2^63−1` 的无前导零十进制字符串。
+ *
+ * 准备运行期资源代 `generation` 的编码；与 `DecimalString` 不同，它不接受 `0`。上界由服务端比较
+ * 判定，客户端 MUST NOT 把它读成 number 再写回（超过 `2^53` 会静默改写取值）。
+ */
+export type PositiveDecimalString = string;
+
+/** `$defs.preparationWorkspaceSource`：凭据里的目录来源。 */
+export type PreparationWorkspaceSource = "directoryId" | "workspacePath";
+
+/**
+ * `$defs.preparationReceiptClaims`：准备凭据的闭合 claims（design D2）。
+ *
+ * 它只证明「该 `sessionId` 由当前 Owner 分配并绑定到该设备/标签页/Agent/目录」，**不是**登录凭证、
+ * 不授予 scope、不含文字/附件/Provider/MCP 凭据。字段顺序即 transcript domain
+ * `acp-remote/session-preparation/v1` 的 tag 顺序（`docs/SYNC_PROTOCOL.md` §6.3）。
+ */
+export interface PreparationReceiptClaims {
+  readonly version: 1;
+  readonly ownerNodeId: Uuid;
+  /** 持久 `meta.server_epoch`：正常重启不变，整库重建时改变（旧凭据因此失效）。 */
+  readonly storeEpoch: Uuid;
+  readonly origin: string;
+  readonly deviceId: Uuid;
+  /** 32 字节随机标签页归属（不进入 URL）。 */
+  readonly tabNonce: Base64Url32;
+  readonly sessionId: Uuid;
+  readonly agentId: string;
+  readonly normalizedWorkspacePath: string;
+  readonly workspaceSource: PreparationWorkspaceSource;
+}
+
+/**
+ * `$defs.preparationReceipt`：闭合 claims + P-256 P1363 64 字节签名的无填充 base64url。
+ *
+ * 签名域是 `acp-remote/session-preparation/v1` 的 transcript，不接受普通 JSON 签名；浏览器只保存与
+ * 回传该对象，签发与验签都在 Owner。
+ */
+export interface PreparationReceipt {
+  readonly claims: PreparationReceiptClaims;
+  readonly signature: Base64Url64;
+}
