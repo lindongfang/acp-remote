@@ -508,7 +508,7 @@ pub enum EntropyError {
 
 ## 9. 待确认与开放项
 
-- `[待确认]` `identity-keystore` 与 `agent-host` 的 **wrapper crate 选型**（DPAPI wrapper、Windows Job Object wrapper）：档位已定（§7 第 6 条、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20），但具体 crate 必须在实现切片里按 `AGENTS.md` §8 核验后选定，并把结论写回 `MODULE_ARCHITECTURE.md` §4.5/§4.12；若候选的 MSRV 高于 `rust-version = 1.85`，先单独决定是否抬 MSRV。
+- `[待确认]` `identity-keystore` 与 `agent-host` 的 **wrapper crate 选型**（DPAPI wrapper、Windows Job Object wrapper）：档位已定（§7 第 6 条、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20），但具体 crate 必须在实现切片里按 `AGENTS.md` §8 核验后选定，并把结论写回 `MODULE_ARCHITECTURE.md` §4.5/§4.12；若候选的 MSRV 高于 `rust-version = 1.87`，先单独决定是否抬 MSRV。
 - `[已裁定]`（2026-09-23）为实现管理写集而新增的 `ConflictKind` 取值 `AlreadyExists`/`IdentityMismatch`/`DuplicateOwnership` 与 `UnavailableKind` 取值 `KeystoreUnavailable`：见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6；枚举本体（含 `ALL`/`as_str`）已随实现落地（`crates/core/src/model/error.rs`），合同 §2 的取值表与之逐项一致。
 - `[open]` 客户端与服务端时钟偏移容忍（§5.2）。
 - `[open]` 组织级用户身份：第一阶段明确只有节点级信任，需要 Owner 直接认证操作人时必须新增独立协议，不能把 `localPrincipalRef` 升格为安全凭据（[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8.3）。

@@ -804,7 +804,7 @@ pub(crate) fn uuid_bytes(text: &str) -> [u8; 16] {
             b'a'..=b'f' => byte - b'a' + 10,
             _ => 0,
         };
-        if index % 2 == 0 {
+        if index.is_multiple_of(2) {
             out[index / 2] = value << 4;
         } else {
             out[index / 2] |= value;
