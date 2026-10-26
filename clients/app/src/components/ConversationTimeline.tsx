@@ -40,6 +40,7 @@
  * 渲染（D8）——它的入口是诊断抽屉（降级条目 / 工具调用）或右栏（改动）。
  */
 
+import { memo, useMemo, useRef } from "react";
 import type { ReactElement, ReactNode } from "react";
 
 import type { FormInputValue } from "../domain/form";
@@ -47,7 +48,7 @@ import { buildElicitationForm } from "../domain/form";
 import type { InteractionAnswer, InteractionAvailability } from "../domain/interaction";
 import type { AttachmentMediaView } from "../domain/media";
 import type { FileChangeDiagnostics, LocalPromptState, SentPromptPhase, TimelineEntry } from "../features/conversation-timeline";
-import { groupTimelineEntries } from "../features/conversation-timeline";
+import { groupTimelineEntries, formatTimelineTime } from "../features/conversation-timeline";
 import type { ConversationProcessModel } from "../features/conversation-process-model";
 import { ChangeDiagnosticsPanel } from "./ChangeDiagnosticsPanel";
 import { ChangeDiff } from "./ChangeDiff";
@@ -132,10 +133,7 @@ function buildStyles(colors: Palette) {
       gap: spacing.md,
       paddingVertical: spacing.sm,
     },
-    /** 轮次分组：继承时间线的条目间距（原条目是时间线的直接子节点）。 */
-    turnGroup: {
-      gap: spacing.md,
-    },
+    /** 一条条目：署名/时间行与正文各自成行。条目之间由时间线的 `gap` 分隔。 */
     turnGroupEntry: {
       gap: spacing.xs,
     },
@@ -537,20 +535,6 @@ function buildStyles(colors: Palette) {
 
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
-/**
- * 条目时刻的展示形式：只做**位置固定**的字符串截取（`HH:MM`）。
- *
- * 与 `SessionRow` 同一条纪律：`renderToStaticMarkup` 没有时钟，同一份模型必须渲染出同一段文本。
- * 原始时刻经 `data-timeline-entry-at` 原样进 DOM，需要精确值时从属性取。
- */
-function formatEntryTime(createdAt: string): string {
-  const timestamp = Date.parse(createdAt);
-  if (!Number.isFinite(timestamp)) return "—";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).format(timestamp);
-}
-
 /** 消息条目的作者标签。 */
 const CHANNEL_LABELS: Readonly<Record<EntryOf<"message">["channel"], string>> = {
   user: "你",
@@ -855,7 +839,7 @@ function MessageEntry({
           inProgress={entryInProgress(entry)}
           expanded={expanded}
           onToggle={onToggle}
-          time={formatEntryTime(entry.createdAt)}
+          time={formatTimelineTime(entry.createdAt)}
           titleDataSet={{ messageThoughtTitle: "true" }}
         >
           {body}
@@ -989,7 +973,7 @@ function ToolCallEntry({
         inProgress={inProgress}
         expanded={expanded}
         onToggle={onToggle}
-        time={formatEntryTime(entry.createdAt)}
+        time={formatTimelineTime(entry.createdAt)}
         titleDataSet={{ toolTitle: entry.title }}
       >
         <Text style={styles.title} dataSet={{ toolDetailTitle: entry.title }}>{entry.title}</Text>
@@ -1067,7 +1051,7 @@ function TerminalOutputEntry({
         inProgress={false}
         expanded={expanded}
         onToggle={onToggle}
-        time={formatEntryTime(entry.createdAt)}
+        time={formatTimelineTime(entry.createdAt)}
         titleDataSet={{ terminalIdLabel: entry.terminalId }}
       >
         <Text style={styles.dimNote}>{`终端 ${entry.terminalId} · 输出块 ${entry.chunkIndex}`}</Text>
@@ -1111,7 +1095,7 @@ function PlanEntryView({
         inProgress={entryInProgress(entry)}
         expanded={expanded}
         onToggle={onToggle}
-        time={formatEntryTime(entry.createdAt)}
+        time={formatTimelineTime(entry.createdAt)}
         titleDataSet={{ planEntryCountLabel: String(entry.entries.length) }}
       >
         {entry.entries.map((item, index) => (
@@ -1631,21 +1615,30 @@ function DegradedEntry({
   );
 }
 
-/** 一条时间线条目的呈现。 */
-function TimelineEntryView(props: {
+/**
+ * 一条时间线条目的呈现。
+ *
+ * `memo` 的默认浅比较在这里足够且不会漏变化：可见内容全部来自以下输入——`entry`（正文、状态、
+ * 媒体、诊断数据；由仓库按**结构化相等**复用，未变即同一对象）、`expanded`（显式覆盖或状态默认
+ * 值）、`media`（附件读取状态）、`diagnostics`（改动诊断数据）、`diagnosticsOpen`、`agentName`、
+ * `sessionId`、`diagnosticsMode` 与稳定回调。主题经 context 传进来，`memo` 不会挡掉主题切换。
+ */
+const TimelineEntryView = memo(function TimelineEntryView(props: {
   readonly diagnosticsMode: boolean;
   readonly entry: TimelineEntry;
   readonly showSender: boolean;
   readonly sessionId: string;
-  readonly expandedEntries: Readonly<Record<string, boolean>> | undefined;
+  /** 折叠块当前**生效**的展开值（显式覆盖优先，否则由条目状态推出，D10）。 */
+  readonly expanded: boolean;
   /**
-   * 折叠块表头被点选：上抛条目键与**切换后的**值。子组件拿到的是当前**生效**值
-   * （`isExpanded`：显式覆盖优先、否则由条目状态推出），因此翻转必须在这里发生——页面只存覆盖值，
-   * 它看不到「这条默认值是多少」（D10）。
+   * 折叠块表头被点选：上抛条目键与**切换后的**值。子组件拿到的是当前**生效**值，
+   * 因此翻转必须在这里发生——页面只存覆盖值，它看不到「这条默认值是多少」（D10）。
    */
   readonly onToggleEntry: ((key: string, expanded: boolean) => void) | undefined;
-  readonly changeDiagnostics: ReadonlyMap<string, FileChangeDiagnostics> | undefined;
-  readonly openChangeDiagnosticsEventId: string | null;
+  /** 该条改动自己的诊断数据（只有 `file_changed` 条目会拿到）。 */
+  readonly diagnostics: FileChangeDiagnostics | undefined;
+  /** 诊断抽屉当前是否展开在这一条改动上。 */
+  readonly diagnosticsOpen: boolean;
   readonly onOpenChangeDiagnostics: ((eventId: string | null) => void) | undefined;
   readonly agentName?: string | undefined;
   readonly onOpenDiagnostics: (eventId: string) => void;
@@ -1661,7 +1654,6 @@ function TimelineEntryView(props: {
   readonly onFilePathPress: ConversationTimelineProps["onFilePathPress"];
 }): ReactElement {
   const entry = props.entry;
-  const expanded = isExpanded(entry, props.expandedEntries);
   switch (entry.kind) {
     case "message":
       return (
@@ -1669,7 +1661,7 @@ function TimelineEntryView(props: {
           showSender={props.showSender}
           entry={entry}
           agentName={props.agentName}
-          expanded={expanded}
+          expanded={props.expanded}
           onToggle={props.onToggleEntry}
           onCopyCode={props.onCopyCode}
           onLinkPress={props.onLinkPress}
@@ -1688,28 +1680,24 @@ function TimelineEntryView(props: {
         <ToolCallEntry
           diagnosticsMode={props.diagnosticsMode}
           entry={entry}
-          expanded={expanded}
+          expanded={props.expanded}
           onToggle={props.onToggleEntry}
           onOpenDiagnostics={props.onOpenDiagnostics}
         />
       );
     case "terminal_output":
-      return <TerminalOutputEntry entry={entry} expanded={expanded} onToggle={props.onToggleEntry} />;
+      return <TerminalOutputEntry entry={entry} expanded={props.expanded} onToggle={props.onToggleEntry} />;
     case "plan":
-      return <PlanEntryView entry={entry} expanded={expanded} onToggle={props.onToggleEntry} />;
-    case "file_changed": {
-      const diagnostics = props.changeDiagnostics?.get(entry.changeId);
+      return <PlanEntryView entry={entry} expanded={props.expanded} onToggle={props.onToggleEntry} />;
+    case "file_changed":
       return (
         <FileChangedEntry
           entry={entry}
-          diagnostics={props.diagnosticsMode ? diagnostics : undefined}
-          diagnosticsOpen={
-            diagnostics !== undefined && props.openChangeDiagnosticsEventId === diagnostics.eventId
-          }
+          diagnostics={props.diagnosticsMode ? props.diagnostics : undefined}
+          diagnosticsOpen={props.diagnostics !== undefined && props.diagnosticsOpen}
           onOpenChangeDiagnostics={props.onOpenChangeDiagnostics}
         />
       );
-    }
     case "mode_changed":
       return <ModeChangedEntry entry={entry} />;
     case "config_changed":
@@ -1740,7 +1728,7 @@ function TimelineEntryView(props: {
     case "degraded":
       return <DegradedEntry entry={entry} diagnosticsMode={props.diagnosticsMode} onOpenDiagnostics={props.onOpenDiagnostics} />;
   }
-}
+});
 
 /**
  * 过程行（时间线末尾的一条紧凑说明）。
@@ -1769,15 +1757,27 @@ function ProcessRow({ process }: { readonly process: ConversationProcessModel })
 
 /** 等待回复时显示无背景光标；减少动态效果时保持静态，卸载时停止动画。 */
 
+/** 一条条目所属的逻辑轮次分组：只作为呈现资料挂在条目上，不作为 DOM 父级。 */
+interface EntryPlacement {
+  readonly group: string;
+  readonly turnId: string;
+  readonly state: string;
+  readonly entryCount: string;
+  /** 是否是这一段轮次的首条（组边界标记）。 */
+  readonly startsGroup: boolean;
+}
+
 /**
  * 时间线。
  *
  * 容器同时带 `data-timeline="entries"`（新的一等锚点）与 `data-message-list="messages"`（既有
  * 消费方的锚点）：消息与结构化条目进的是同一份列表，因此两者都在它里面。
  *
- * 条目按**可靠轮次标识**分组（`groupTimelineEntries`）：同一 `turnId` 的连续条目进一个组，
- * 没有标识的条目独立成组。分组只来自标识，不按呈现顺序猜测。每个条目外层带
- * `data-timeline-key`：滚动锚点按它定位（内容在组内原位更新时节点不换）。
+ * 条目**平级**渲染：每个条目以自己的稳定键（`entry.key`）做列表项键，父级永远是这个列表，
+ * 因此正文接替、轮次归属补齐或某条新条目插到它之前都只是键控重排，不会卸载再挂载已有条目（D2）。
+ * 轮次分组（`groupTimelineEntries`）只是呈现在每条上的资料（`data-turn-group*`），不作为 DOM
+ * 父级；分组只来自可靠标识，不按呈现顺序猜测。每个条目外层还带 `data-timeline-key`：滚动锚点
+ * 按它定位。
  */
 export function ConversationTimeline({
   diagnosticsMode = false,
@@ -1805,18 +1805,111 @@ export function ConversationTimeline({
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const sources = media ?? new Map<string, AttachmentMediaView>();
-  const groups = groupTimelineEntries(entries);
-  const timeStarts = new Set<string>();
-  let previous: { side: string } | null = null;
-  for (const entry of entries) {
-    // Invisible turn markers do not split a visible run.
-    if (entry.kind === "turn" && entry.error === null && entry.state !== "cancelled") continue;
-    const side = entry.kind === "message" && entry.channel === "user" ? "user" : "agent";
-    if (previous === null || previous.side !== side || side === "user") {
-      timeStarts.add(entry.key);
+  /**
+   * 最新一版回调：传下去的包装函数**身份稳定**，但总是调用当前这一版。
+   *
+   * 页面在每次状态更新时都会重建内联箭头函数；如果把它们原样传进 `memo` 条目视图，比较永远不相等，
+   * 「无关条目跳过重渲染」就成了空话。这里只让身份稳定，语义（调用哪个函数）不变。
+   */
+  const latest = useRef({
+    onOpenDiagnostics, onAnswerInteraction, onToggleEntry, onOpenChangeDiagnostics, onCopyCode,
+    onLinkPress, onLoadMedia, onReleaseMedia, onDownloadAttachment, onSubmitElicitation,
+    onRefreshInteractions, onFilePathPress,
+  });
+  latest.current = {
+    onOpenDiagnostics, onAnswerInteraction, onToggleEntry, onOpenChangeDiagnostics, onCopyCode,
+    onLinkPress, onLoadMedia, onReleaseMedia, onDownloadAttachment, onSubmitElicitation,
+    onRefreshInteractions, onFilePathPress,
+  };
+  const canAnswer = onAnswerInteraction !== undefined;
+  const canToggle = onToggleEntry !== undefined;
+  const canChangeDiagnostics = onOpenChangeDiagnostics !== undefined;
+  const canCopy = onCopyCode !== undefined;
+  const canFollowLink = onLinkPress !== undefined;
+  const canLoadMedia = onLoadMedia !== undefined;
+  const canReleaseMedia = onReleaseMedia !== undefined;
+  const canDownload = onDownloadAttachment !== undefined;
+  const canSubmitElicitation = onSubmitElicitation !== undefined;
+  const canRefreshInteractions = onRefreshInteractions !== undefined;
+  const canOpenFilePath = onFilePathPress !== undefined;
+  const callbacks = useMemo(() => ({
+    // 必需回调（没有缺省语义）直接转发。
+    onOpenDiagnostics: (eventId: string): void => latest.current.onOpenDiagnostics(eventId),
+    // 可选回调保持 `undefined`：子组件用它区分「不是控件」与「点了没反应」。
+    onAnswerInteraction: canAnswer
+      ? (interactionId: string, answer: InteractionAnswer): void =>
+          latest.current.onAnswerInteraction?.(interactionId, answer)
+      : undefined,
+    onToggleEntry: canToggle
+      ? (key: string, expanded: boolean): void => latest.current.onToggleEntry?.(key, expanded)
+      : undefined,
+    onOpenChangeDiagnostics: canChangeDiagnostics
+      ? (eventId: string | null): void => latest.current.onOpenChangeDiagnostics?.(eventId)
+      : undefined,
+    onCopyCode: canCopy
+      ? (code: string, language: string): void => latest.current.onCopyCode?.(code, language)
+      : undefined,
+    onLinkPress: canFollowLink
+      ? (href: string): void => latest.current.onLinkPress?.(href)
+      : undefined,
+    onLoadMedia: canLoadMedia
+      ? (attachmentId: string, mediaSessionId: string, mimeType: string): void =>
+          latest.current.onLoadMedia?.(attachmentId, mediaSessionId, mimeType)
+      : undefined,
+    onReleaseMedia: canReleaseMedia
+      ? (attachmentId: string): void => latest.current.onReleaseMedia?.(attachmentId)
+      : undefined,
+    onDownloadAttachment: canDownload
+      ? (attachmentId: string, mimeType: string, fileName: string): void =>
+          latest.current.onDownloadAttachment?.(attachmentId, mimeType, fileName)
+      : undefined,
+    onSubmitElicitation: canSubmitElicitation
+      ? (interactionId: string, values: Readonly<Record<string, FormInputValue>>): void =>
+          latest.current.onSubmitElicitation?.(interactionId, values)
+      : undefined,
+    onRefreshInteractions: canRefreshInteractions
+      ? (): void => latest.current.onRefreshInteractions?.()
+      : undefined,
+    onFilePathPress: canOpenFilePath
+      ? (path: string): void => latest.current.onFilePathPress?.(path)
+      : undefined,
+  }), [
+    canAnswer, canToggle, canChangeDiagnostics, canCopy, canFollowLink, canLoadMedia,
+    canReleaseMedia, canDownload, canSubmitElicitation, canRefreshInteractions, canOpenFilePath,
+  ]);
+  // 分组与「时间头从哪条开始」只依赖条目本身：每次流式更新都重算这两份纯数据没有收益。
+  // 分组只产出**每条自己的**呈现资料（“我属于哪一段轮次”），条目渲染仍是平级的。
+  const placements = useMemo(() => {
+    const byKey = new Map<string, EntryPlacement>();
+    for (const group of groupTimelineEntries(entries)) {
+      const entryCount = String(group.entries.length);
+      group.entries.forEach((entry, index) => {
+        byKey.set(entry.key, {
+          group: group.key,
+          turnId: group.turnId ?? "unassigned",
+          state: group.state ?? "unknown",
+          entryCount,
+          startsGroup: index === 0,
+        });
+      });
     }
-    previous = { side };
-  }
+    return byKey;
+  }, [entries]);
+  const timeStarts = useMemo(() => {
+    const starts = new Set<string>();
+    let previous: { side: string } | null = null;
+    for (const entry of entries) {
+      // Invisible turn markers do not split a visible run.
+      if (entry.kind === "turn" && entry.error === null && entry.state !== "cancelled") continue;
+      const side = entry.kind === "message" && entry.channel === "user" ? "user" : "agent";
+      if (previous === null || previous.side !== side || side === "user") {
+        starts.add(entry.key);
+      }
+      previous = { side };
+    }
+    return starts;
+  }, [entries]);
+  const diagnosticsOpenEventId = openChangeDiagnosticsEventId ?? null;
 
 
   return (
@@ -1830,58 +1923,67 @@ export function ConversationTimeline({
           部分旧历史的顺序无法完整还原，已保留原有内容。
         </Text>
       ) : null}
-      {groups.map((group) => (
-        <View
-          key={group.key}
-          style={styles.turnGroup}
-          role="group"
-          dataSet={{
-            turnGroup: group.key,
-            turnGroupId: group.turnId ?? "unassigned",
-            turnGroupState: group.state ?? "unknown",
-            turnGroupEntryCount: String(group.entries.length),
-          }}
-        >
-          {group.entries.map((entry) => (
-            <View key={entry.key} style={styles.turnGroupEntry} dataSet={{ timelineKey: entry.key }}>
-              {timeStarts.has(entry.key) ? (
-                <View style={[styles.entryHeader, entry.kind === "message" && entry.channel === "user"
-                  ? styles.entryHeaderUser : null]} dataSet={{ timelineHeader: "true" }}>
-                  <Text style={styles.who} dataSet={{ messageWho: entry.kind === "message" && entry.channel === "user" ? "user" : "agent" }}>
-                    {entry.kind === "message" && entry.channel === "user" ? "你" : agentName || "Agent"}
-                  </Text>
-                  <Text style={styles.kicker} dataSet={{ timelineTime: entry.createdAt }}>
-                    {formatEntryTime(entry.createdAt)}
-                  </Text>
-                </View>
-              ) : null}
-              <TimelineEntryView
-                diagnosticsMode={diagnosticsMode}
-                showSender={false}
-                entry={entry}
-                sessionId={sessionId}
-                agentName={agentName}
-                expandedEntries={expandedEntries}
-                onToggleEntry={onToggleEntry}
-                changeDiagnostics={changeDiagnostics}
-                openChangeDiagnosticsEventId={openChangeDiagnosticsEventId ?? null}
-                onOpenChangeDiagnostics={onOpenChangeDiagnostics}
-                onOpenDiagnostics={onOpenDiagnostics}
-                onAnswerInteraction={onAnswerInteraction}
-                onCopyCode={onCopyCode}
-                onLinkPress={onLinkPress}
-                media={sources}
-                onLoadMedia={onLoadMedia}
-                onReleaseMedia={onReleaseMedia}
-                onDownloadAttachment={onDownloadAttachment}
-                onSubmitElicitation={onSubmitElicitation}
-                onRefreshInteractions={onRefreshInteractions}
-                onFilePathPress={onFilePathPress}
-              />
-            </View>
-          ))}
-        </View>
-      ))}
+      {entries.map((entry) => {
+        // 展开值与改动诊断在这里算成**判别值**：`memo` 的浅比较因此覆盖它们，又不必把整份
+        // 覆盖表/诊断表传进每个条目（那会让一条条目的变化击穿所有条目）。
+        const diagnostics = entry.kind === "file_changed"
+          ? changeDiagnostics?.get(entry.changeId)
+          : undefined;
+        const placement = placements.get(entry.key);
+        return (
+          <View
+            key={entry.key}
+            style={styles.turnGroupEntry}
+            dataSet={{
+              timelineKey: entry.key,
+              // 轮次分组只是这条条目自己的呈现资料：父级始终是这个列表，正文不会因分组变化
+              // 卸载重挂（D2）。`turnGroupStart` 标出每一段的首条，供阅读顺序断言使用。
+              ...(placement === undefined ? {} : {
+                turnGroup: placement.group,
+                turnGroupId: placement.turnId,
+                turnGroupState: placement.state,
+                turnGroupEntryCount: placement.entryCount,
+              }),
+              ...(placement?.startsGroup === true ? { turnGroupStart: "true" } : {}),
+            }}
+          >
+            {timeStarts.has(entry.key) ? (
+              <View style={[styles.entryHeader, entry.kind === "message" && entry.channel === "user"
+                ? styles.entryHeaderUser : null]} dataSet={{ timelineHeader: "true" }}>
+                <Text style={styles.who} dataSet={{ messageWho: entry.kind === "message" && entry.channel === "user" ? "user" : "agent" }}>
+                  {entry.kind === "message" && entry.channel === "user" ? "你" : agentName || "Agent"}
+                </Text>
+                <Text style={styles.kicker} dataSet={{ timelineTime: entry.createdAt }}>
+                  {formatTimelineTime(entry.createdAt)}
+                </Text>
+              </View>
+            ) : null}
+            <TimelineEntryView
+              diagnosticsMode={diagnosticsMode}
+              showSender={false}
+              entry={entry}
+              sessionId={sessionId}
+              agentName={agentName}
+              expanded={isExpanded(entry, expandedEntries)}
+              onToggleEntry={callbacks.onToggleEntry}
+              diagnostics={diagnostics}
+              diagnosticsOpen={diagnostics !== undefined && diagnosticsOpenEventId === diagnostics.eventId}
+              onOpenChangeDiagnostics={callbacks.onOpenChangeDiagnostics}
+              onOpenDiagnostics={callbacks.onOpenDiagnostics}
+              onAnswerInteraction={callbacks.onAnswerInteraction}
+              onCopyCode={callbacks.onCopyCode}
+              onLinkPress={callbacks.onLinkPress}
+              media={sources}
+              onLoadMedia={callbacks.onLoadMedia}
+              onReleaseMedia={callbacks.onReleaseMedia}
+              onDownloadAttachment={callbacks.onDownloadAttachment}
+              onSubmitElicitation={callbacks.onSubmitElicitation}
+              onRefreshInteractions={callbacks.onRefreshInteractions}
+              onFilePathPress={callbacks.onFilePathPress}
+            />
+          </View>
+        );
+      })}
       {process === null || process === undefined ? null : <ProcessRow process={process} />}
     </View>
   );

@@ -17,10 +17,11 @@
  * - 「重开仍见历史条目」的场景里实时**一条结构化事件都不投递**：卡片只可能来自 `session.read`
  *   的历史那一页。离开对话页（目录页真的渲染出来）再回来、以及整页重挂（store 全部重建）两条
  *   路径都断言；把历史 include 去掉或把历史记录丢掉，两条都红。
- * - 「未覆盖类型产出降级卡片」用的是**协议词表里存在、客户端覆盖表里没有**的类型
- *   （`session.info.changed` / `session.commands.changed` / 节点级的 `device.revoked`）。
- *   覆盖判定若退回协议词表（早先的缺陷），这些事件会既不走卡片也不降级、静默消失，
- *   断言「卡片存在」即红。
+ * - 「未覆盖类型产出降级卡片」用的是**协议开放、客户端没有专用视图**的扩展事件类型
+ *   （会话级的 `vendor.custom.telemetry`；节点级的 `device.revoked`）。覆盖判定若退回协议词表
+ *   （早先的缺陷），这些事件会既不走卡片也不降级、静默消失，断言「卡片存在」即红。
+ *   会话管理通知（`session.info.changed` / `session.commands.changed`）按当前产品语义不进入
+ *   时间线，因此**不**作为本用例的样例、也不登记回覆盖表。
  *
  * ## 本文件同时承载本工作包共用的机关
  *
@@ -75,9 +76,8 @@ export const EVENT_TOOL_CALL = "d0000000-0000-4000-8000-000000000101";
 const EVENT_TERMINAL = "d0000000-0000-4000-8000-000000000102";
 /** 只出现在历史里的计划变更。 */
 const EVENT_PLAN = "d0000000-0000-4000-8000-000000000103";
-/** 协议已知、客户端没有专用视图的会话级类型（两个样本）。 */
-const EVENT_INFO_CHANGED = "d0000000-0000-4000-8000-000000000201";
-const EVENT_COMMANDS_CHANGED = "d0000000-0000-4000-8000-000000000202";
+/** 协议开放、客户端没有专用视图的会话级扩展事件（`vendor.*` 未登记取值）。 */
+const EVENT_CUSTOM_TELEMETRY = "d0000000-0000-4000-8000-000000000201";
 /** 协议已知、客户端没有专用视图的**节点级**类型（没有会话可挂）。 */
 const EVENT_DEVICE_REVOKED = "d0000000-0000-4000-8000-000000000203";
 
@@ -212,6 +212,18 @@ function computedStyleOf(container: HTMLElement, selector: string, label: string
   const element = query(container, selector);
   if (element === null) throw new CheckFailure(`${label}：容器里找不到 ${selector}`);
   return getComputedStyle(element);
+}
+
+/**
+ * 诊断模式下的会话路由。
+ *
+ * `app/session/[id].tsx` 只在路由参数 `diagnostics === "1"` 时才把 `diagnosticsMode` 传给
+ * `ConversationStream`，工具 / 文件改动 / 降级卡片的 `open-*-diagnostics` 入口都由该开关门控
+ * （`docs/FRONTEND_DESIGN.md` 的「对话诊断模式」一节）。路由替身读的是静态 `params`，不能写
+ * 查询串，因此这里显式覆盖 `params.diagnostics`。
+ */
+export function diagnosticsRoute(sessionId: string = SESSION_ALPHA): ScenarioOptions["route"] {
+  return { ...sessionRoute(sessionId), params: { id: sessionId, diagnostics: "1" } };
 }
 
 /** 会话页默认场景：一条本机自有、进行中的会话 + 两个 scope；事件与读回应答由各用例给出。 */
@@ -450,64 +462,58 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "CP-3 协议已知但客户端没有专用视图的事件产出降级卡片（会话级与节点级各自都有出口）",
+    name: "CP-3 协议开放但客户端没有专用视图的事件产出降级卡片（会话级与节点级各自都有出口）",
     async run() {
+      // 会话级样例用协议允许的**开放 eventType 扩展事件**：`session.info.changed` /
+      // `session.commands.changed` 现在作为会话管理通知被状态层消费、不进入时间线
+      // （`docs/FRONTEND_DESIGN.md` 的「会话管理通知隐藏」一节），不能再充当降级卡片样例。
+      // 开放 eventType 的未登记取值按未知事件降级（`SYNC_PROTOCOL.md` §4.2 / §16.1）。
+      const customEventType = "vendor.custom.telemetry";
       await withSessionPage(
         sessionScenario({
+          // 诊断入口由 `diagnosticsMode` 门控：这条断言需要 `?diagnostics=1` 等价的静态参数。
+          route: diagnosticsRoute(),
           events: [
             wireEvent({
               globalSequence: 11,
-              eventId: EVENT_INFO_CHANGED,
+              eventId: EVENT_CUSTOM_TELEMETRY,
               sessionId: SESSION_ALPHA,
-              eventType: "session.info.changed",
-              view: { session: { title: "另一个标题" } },
-            }),
-            wireEvent({
-              globalSequence: 12,
-              eventId: EVENT_COMMANDS_CHANGED,
-              sessionId: SESSION_ALPHA,
-              eventType: "session.commands.changed",
-              view: { commands: [{ name: "/deploy", description: "部署" }] },
+              eventType: customEventType,
+              view: { sample: 42 },
             }),
           ],
         }),
-        (container) => queryAll(container, "[data-degraded-entry]").length >= 2,
-        "两条未覆盖事件都产出降级卡片",
+        (container) => queryAll(container, "[data-degraded-entry]").length >= 1,
+        "未覆盖的扩展事件产出降级卡片",
         async (mounted) => {
           const container = mounted.container;
           const timeline = query(container, '[data-timeline="entries"]');
           expectThat(timeline !== null, "对话页必须有时间线容器");
 
-          const samples = [
-            [EVENT_INFO_CHANGED, "session.info.changed"],
-            [EVENT_COMMANDS_CHANGED, "session.commands.changed"],
-          ] as const;
-          for (const [eventId, eventType] of samples) {
-            const card = query(container, `[data-degraded-entry="${eventId}"]`);
-            expectThat(card !== null, `${eventType} 必须产出降级卡片，不得静默消失`);
-            expectThat(
-              query(timeline, `[data-degraded-entry="${eventId}"]`) !== null,
-              `${eventType} 的降级卡片必须落在会话时间线上`,
-            );
-            expectEqual(
-              card?.getAttribute("data-degraded-event-type"),
-              eventType,
-              `${eventType} 必须原样显示事件类型`,
-            );
-            expectThat(
-              query(card, '[data-degraded-view="no-dedicated-view"]') !== null,
-              `${eventType} 必须说明客户端没有专用视图`,
-            );
-            // 「没有专用视图」≠「客户端/服务端/Agent 能力不支持」：不得冒充三类归因之一。
-            expectThat(
-              query(card, "[data-unsupported-reason]") === null,
-              `${eventType} 不得被归为三类能力不支持`,
-            );
-            expectThat(
-              query(card, `button[data-action="open-diagnostics"][data-event-id="${eventId}"]`) !== null,
-              `${eventType} 必须保留原文与元数据的入口`,
-            );
-          }
+          const card = query(container, `[data-degraded-entry="${EVENT_CUSTOM_TELEMETRY}"]`);
+          expectThat(card !== null, `${customEventType} 必须产出降级卡片，不得静默消失`);
+          expectThat(
+            query(timeline, `[data-degraded-entry="${EVENT_CUSTOM_TELEMETRY}"]`) !== null,
+            `${customEventType} 的降级卡片必须落在会话时间线上`,
+          );
+          expectEqual(
+            card?.getAttribute("data-degraded-event-type"),
+            customEventType,
+            `${customEventType} 必须原样显示事件类型`,
+          );
+          expectThat(
+            query(card, '[data-degraded-view="no-dedicated-view"]') !== null,
+            `${customEventType} 必须说明客户端没有专用视图`,
+          );
+          // 「没有专用视图」≠「客户端/服务端/Agent 能力不支持」：不得冒充三类归因之一。
+          expectThat(
+            query(card, "[data-unsupported-reason]") === null,
+            `${customEventType} 不得被归为三类能力不支持`,
+          );
+          expectThat(
+            query(card, `button[data-action="open-diagnostics"][data-event-id="${EVENT_CUSTOM_TELEMETRY}"]`) !== null,
+            `${customEventType} 必须保留原文与元数据的入口`,
+          );
           expectEqual(
             queryAll(container, "[data-node-degraded-entry]").length,
             0,
@@ -702,6 +708,8 @@ const checks: readonly Check[] = [
     async run() {
       await withSessionPage(
         sessionScenario({
+          // `open-file-change-diagnostics` 只在诊断模式下渲染（`?diagnostics=1` 的静态等价）。
+          route: diagnosticsRoute(),
           events: [
             wireEvent({
               globalSequence: 11,

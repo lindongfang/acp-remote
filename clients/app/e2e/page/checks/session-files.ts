@@ -40,7 +40,7 @@ import {
 } from "../support";
 import type { Check, ScenarioOptions } from "../support";
 import { overrideViewportWidth } from "./r15-directory-detail";
-import { commandBody, sessionScenario, withSessionPage } from "./conversation-timeline";
+import { commandBody, diagnosticsRoute, sessionScenario, withSessionPage } from "./conversation-timeline";
 
 /** 一个固定的改动事件视图（带结构化差异行）。 */
 function changeView(input: {
@@ -456,6 +456,9 @@ const checks: readonly Check[] = [
       const rawDiff = '{"update":{"path":"src/app.ts","diff":"+const first = 1;"}}';
       await withSessionPage(
         sessionOptions({
+          // `open-file-change-diagnostics` 只在诊断模式（`?diagnostics=1`）渲染；
+          // 这里是入口缺失而不是 schema/feature 协商问题（`view.diffLines` 由客户端直接读）。
+          route: diagnosticsRoute(),
           events: [
             wireEvent({
               globalSequence: 21,

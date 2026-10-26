@@ -148,6 +148,10 @@ describe("用户消息在时间线上立即可见", () => {
     const outcome = store.submitPrompt(ONLINE_SESSION_ID, "只出现一次");
     if (!outcome.ok) throw new Error("提交应被接受");
     store.apply({ kind: "command_result", result: promptResult({ requestId: outcome.requestId, status: "accepted", turnId: "turn-1" }) });
+    // 接替前：本地回显用一次提交的稳定键（`sent:<requestId>`），不是正式消息标识。
+    const localKey = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .find((entry) => entry.kind === "message" && entry.channel === "user")?.key;
+    expect(localKey).toBe(`sent:${outcome.requestId}`);
     store.apply(userDelta({ messageId: "cccccccc-0000-4000-8000-000000000701", turnId: "turn-1", text: "只出现一次" }));
 
     const page = store.conversationPage(ONLINE_SESSION_ID);
@@ -156,8 +160,62 @@ describe("用户消息在时间线上立即可见", () => {
         entry.message.text === "只出现一次",
     );
     expect(matching).toHaveLength(1);
-    // 留下的必须是正式消息，而不是本地的 `sent:` 条目。
-    expect(matching[0]?.key).toBe("message:cccccccc-0000-4000-8000-000000000701");
+    // 留下的必须是正式消息本身（`message.id` 是服务端标识、不再是本地阶段），而且沿用本地条目的
+    // 稳定键：接替是同一节点原位更新，不是移除本地条目再新建一条 `message:<id>`。
+    const entry = matching[0];
+    if (entry?.kind !== "message") throw new Error("条目不是消息");
+    expect(entry.key).toBe(localKey);
+    expect(entry.message.id).toBe("cccccccc-0000-4000-8000-000000000701");
+    expect(entry.local).toBe(null);
+  });
+
+  it("用户实时消息先于受理结果到达时，受理后同样原位接替", () => {
+    const { store } = interactionStore();
+    const outcome = store.submitPrompt(ONLINE_SESSION_ID, "先到的消息");
+    if (!outcome.ok) throw new Error("提交应被接受");
+    const localKey = `sent:${outcome.requestId}`;
+    const messageId = "cccccccc-0000-4000-8000-000000000704";
+
+    // 现场顺序是事件先到、受理结果后到：事件有 turnId，但提交时回显还没有。
+    store.apply(userDelta({ messageId, turnId: "turn-1", text: "先到的消息" }));
+    store.apply({ kind: "command_result", result: promptResult({ requestId: outcome.requestId, status: "accepted", turnId: "turn-1" }) });
+
+    const users = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .filter((entry) => entry.kind === "message" && entry.channel === "user");
+    expect(users).toHaveLength(1);
+    const entry = users[0];
+    if (entry?.kind !== "message") throw new Error("条目不是消息");
+    expect(entry.key).toBe(localKey);
+    expect(entry.message.id).toBe(messageId);
+    expect(entry.local).toBe(null);
+  });
+
+  it("权威消息页先于受理结果到达时，受理后也建立稳定接替", () => {
+    const { store, gateway } = interactionStore();
+    const outcome = store.submitPrompt(ONLINE_SESSION_ID, "页面先到");
+    if (!outcome.ok) throw new Error("提交应被接受");
+    const messageId = "cccccccc-0000-4000-8000-000000000705";
+
+    // 两条命令的结果可能乱序：权威读取先带回正式用户消息，此后受理结果才补齐 turnId。
+    store.loadSession(ONLINE_SESSION_ID);
+    store.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: ONLINE_SESSION_ID,
+        messages: [{ ...messageItem({ id: messageId, createdAt: "2026-10-01T00:00:02.000Z", text: "页面先到" }), turnId: "turn-1" }],
+      }),
+    });
+    store.apply({ kind: "command_result", result: promptResult({ requestId: outcome.requestId, status: "accepted", turnId: "turn-1" }) });
+
+    const users = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .filter((entry) => entry.kind === "message" && entry.channel === "user");
+    expect(users).toHaveLength(1);
+    const entry = users[0];
+    if (entry?.kind !== "message") throw new Error("条目不是消息");
+    expect(entry.key).toBe(`sent:${outcome.requestId}`);
+    expect(entry.message.id).toBe(messageId);
+    expect(entry.local).toBe(null);
   });
 
   it("旧“继续”不抵消新“继续”：文字相同也各自保留，直到它们各自的身份到位", () => {
@@ -183,15 +241,24 @@ describe("用户消息在时间线上立即可见", () => {
     // 历史“继续” + 本次“继续”都必须可见：按文字计数抵消会只剩 1 条。
     expect(userTexts.filter((text) => text === "继续")).toHaveLength(2);
 
-    // 本次的正式消息按同一 turnId 接替后，历史那条仍然在。
+    // 本次的正式消息按同一 turnId 接替后，历史那条仍然在；本次正文沿用提交时的稳定键。
+    const localKey = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .find((entry) => entry.kind === "message" && entry.channel === "user" &&
+        entry.key.startsWith("sent:"))?.key;
+    expect(localKey).toBe(`sent:${first.requestId}`);
     store.apply(userDelta({ messageId: "cccccccc-0000-4000-8000-000000000702", turnId: "turn-new", text: "继续" }));
     const after = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
       .filter((entry) => entry.kind === "message" && entry.channel === "user");
     expect(after).toHaveLength(2);
     expect(after.map((entry) => entry.key)).toEqual([
       "message:m-old",
-      "message:cccccccc-0000-4000-8000-000000000702",
+      localKey,
     ]);
+    const taken = after[1];
+    if (taken?.kind !== "message") throw new Error("条目不是消息");
+    // 接替后的正式正文：服务端消息标识、没有本地阶段，键与接替前相同。
+    expect(taken.message.id).toBe("cccccccc-0000-4000-8000-000000000702");
+    expect(taken.local).toBe(null);
   });
 
   it("没有身份关联的相同文字不被当作重复：正式消息先到也不吞掉本地输入", () => {
@@ -762,5 +829,73 @@ describe("session.origin.online_changed 只改来源可达性", () => {
 
     const summary = store.state.resources?.sessions.find((item) => item.sessionId === ONLINE_SESSION_ID);
     expect(summary?.origin).toEqual({ kind: "local" });
+  });
+});
+
+describe("本地回显的接替身份（D2）", () => {
+  it("正式正文接替后，本地回显在同一次更新里退出状态：后续页替换不会让它重新出现", () => {
+    const { store, gateway } = interactionStore();
+    const outcome = store.submitPrompt(ONLINE_SESSION_ID, "只出现一次");
+    if (!outcome.ok) throw new Error("提交应被接受");
+    store.apply({ kind: "command_result", result: promptResult({ requestId: outcome.requestId, status: "accepted", turnId: "turn-1" }) });
+
+    const messageId = "cccccccc-0000-4000-8000-000000000711";
+    store.apply(userDelta({ messageId, turnId: "turn-1", text: "只出现一次" }));
+
+    // 第一次权威读取确认了这条用户消息：接替发生，本地回显从状态里移除。
+    store.loadSession(ONLINE_SESSION_ID);
+    store.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: ONLINE_SESSION_ID,
+        messages: [{ ...messageItem({ id: messageId, createdAt: "2026-10-01T00:00:02.000Z", text: "只出现一次" }), turnId: "turn-1" }],
+      }),
+    });
+    // 正式消息沿用已确认的锚点：稳定键仍是本地那次提交，节点可以原位更新。
+    const afterTakeover = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .filter((entry) => entry.kind === "message" && entry.channel === "user");
+    expect(afterTakeover).toHaveLength(1);
+    expect(afterTakeover[0]?.key).toBe(`sent:${outcome.requestId}`);
+
+    // 第二次读取把页替换成一个不含该消息的最新页（压缩后的典型形状）。
+    store.loadSession(ONLINE_SESSION_ID);
+    store.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: ONLINE_SESSION_ID,
+        messages: [],
+      }),
+    });
+
+    const afterReplacement = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .filter((entry) => entry.kind === "message" && entry.channel === "user");
+    // 反例（旧实现）：`sentPrompts` 仍在，权威页又不再压制它 → 本地回显重新冒出来（长度 1）。
+    expect(afterReplacement).toHaveLength(0);
+    // 显示层的第二道防线仍在：没有任何「本地阶段」条目冒充正式消息。
+    expect(
+      (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+        .some((entry) => entry.kind === "message" && entry.local != null),
+    ).toBe(false);
+  });
+
+  it("同文两次发送仍是两条独立输入：接替只按 messageId/turnId，不按文字抵消", () => {
+    const { store } = interactionStore();
+    const first = store.submitPrompt(ONLINE_SESSION_ID, "继续");
+    if (!first.ok) throw new Error("第一次提交应被接受");
+    store.apply({ kind: "command_result", result: promptResult({ requestId: first.requestId, status: "accepted", turnId: "turn-a" }) });
+
+    const second = store.submitPrompt(ONLINE_SESSION_ID, "继续");
+    if (!second.ok) throw new Error("第二次提交应被接受");
+    store.apply({ kind: "command_result", result: promptResult({ requestId: second.requestId, status: "accepted", turnId: "turn-b" }) });
+
+    // 只有第二个轮次的正式正文到达：第一条本地输入不得被同文吞掉。
+    store.apply(userDelta({ messageId: "cccccccc-0000-4000-8000-000000000712", turnId: "turn-b", text: "继续" }));
+    const keys = (store.conversationPage(ONLINE_SESSION_ID)?.timeline.entries ?? [])
+      .filter((entry) => entry.kind === "message" && entry.channel === "user")
+      .map((entry) => entry.key);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys)).toEqual(new Set([`sent:${first.requestId}`, `sent:${second.requestId}`]));
   });
 });

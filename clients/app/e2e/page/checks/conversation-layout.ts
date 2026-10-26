@@ -27,6 +27,7 @@ import {
   DIRECTORY_ID_ALPHA,
   DIRS_ROUTE,
   SESSION_ALPHA,
+  SESSION_BETA,
   WORKSPACES_WITH_PATHS,
   dirRoute,
   readMessage,
@@ -35,8 +36,10 @@ import {
   sessionSeries,
   sessionSummary,
   seriesSessionId,
+  wireEvent,
 } from "../fixtures";
 import {
+  CheckFailure,
   click,
   expectEqual,
   expectThat,
@@ -47,9 +50,39 @@ import {
 } from "../support";
 import type { Check } from "../support";
 import type { SessionSummary } from "../../../src/protocol";
-import { currentPath } from "../router-stub";
+import { currentPath, navigate } from "../router-stub";
 import { overrideViewportWidth } from "./r15-directory-detail";
-import { sessionScenario, withSessionPage } from "./conversation-timeline";
+import { commandBody, sessionScenario, withSessionPage } from "./conversation-timeline";
+
+/** 等一帧（几何/状态采样用）。 */
+function nextFrame(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  requestAnimationFrame(() => {
+    resolve();
+  });
+  return promise;
+}
+
+/**
+ * 带思考折叠块的历史：每三条一条思考，正文足够长，展开后必然横跨可见带。
+ *
+ * 用于快捷收起的边界容差与失效判定——需要多个可展开块，且每块展开后都比可见带高。
+ */
+function foldMessages(): readonly Record<string, unknown>[] {
+  return Array.from({ length: 24 }, (_, index) => {
+    const part = index % 3;
+    return {
+      ...readMessage({
+        messageId: `b0000000-0000-4000-8000-00000002${String(index).padStart(4, "0")}`,
+        sessionId: SESSION_ALPHA,
+        role: part === 0 ? "user" : "agent",
+        text: `${part === 0 ? "用户输入" : part === 1 ? "思考" : "回复"} ${String(index)}\n${"内容行。\n".repeat(6)}`,
+        createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString(),
+      }),
+      channel: part === 1 ? "thought" : "reply",
+    };
+  });
+}
 
 /** 让中栏真的能滚起来的一串 Agent 消息（每条都足够长，12 条即可超过 600px 的可用高度）。 */
 const LONG_MESSAGE_LINE = "这一段用来把时间线撑长，让中栏出现自己的滚动区间。";
@@ -393,6 +426,277 @@ const checks: readonly Check[] = [
       } finally {
         restore();
       }
+    },
+  },
+  {
+    name: "FOLD-HYSTERESIS 快捷收起目标在边界微小像素变化下不挂卸，失效后及时移除且点击命中正确条目",
+    async run() {
+      // 旧实现用严格比较（`button.bottom < top && rect.bottom > top + 44`）：把表头底边放到容器
+      // 顶边上下 1~3px 抖动，入口就会反复出现/消失，本用例第一条抖动断言会红。
+      const betaRoute = sessionRoute(SESSION_BETA);
+      await withSessionPage(
+        sessionScenario({
+          sessions: [
+            sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "idle" }),
+            sessionSummary({ id: SESSION_BETA, directoryId: DIRECTORY_ID_ALPHA, state: "idle" }),
+          ],
+          extraRoutes: [betaRoute],
+          readResult: (sessionId) =>
+            readPage({ sessionId, messages: sessionId === SESSION_ALPHA ? foldMessages() : [] }),
+        }),
+        (container) => queryAll(container, "[data-message-id]").length === foldMessages().length,
+        "历史与思考折叠块就绪",
+        async (mounted) => {
+          const container = mounted.container;
+          const timeline = query(container, '[data-conversation-scroll="timeline"]');
+          const region = query(container, '[data-conversation-region="timeline"]');
+          expectThat(timeline !== null && region !== null, "对话区存在");
+          await waitFor(() => timeline.scrollTop > 200, "首次贴底");
+
+          const folds = queryAll(timeline, "[data-fold-entry]");
+          expectThat(folds.length > 3, "历史里必须有多个思考折叠块");
+          const foldKey = folds[3]?.getAttribute("data-fold-entry") ?? "";
+          expectThat(foldKey.length > 0, "第四个折叠块必须带条目键");
+          /** 按条目键取当前的折叠块节点：状态切换会让 React 重渲染，不能抓着旧节点不放。 */
+          const foldNow = (): Element | null =>
+            queryAll(timeline, "[data-fold-entry]")
+              .find((node) => node.getAttribute("data-fold-entry") === foldKey) ?? null;
+          const expandedNow = (): string | null => foldNow()?.getAttribute("data-entry-expanded") ?? null;
+          const shortcut = (): Element | null => query(region, '[data-action="collapse-crossing-fold"]');
+          const placeHeaderAt = (target: number): void => {
+            const header = query(foldNow(), '[data-action="toggle-timeline-entry"]');
+            if (header === null) throw new CheckFailure("找不到该折叠块的表头");
+            timeline.scrollTop += header.getBoundingClientRect().bottom - timeline.getBoundingClientRect().top - target;
+            timeline.dispatchEvent(new Event("scroll"));
+          };
+
+          // 展开这一块：它是「横跨顶部的展开块」的候选。
+          click(query(foldNow(), '[data-action="toggle-timeline-entry"]'), "展开思考");
+          await waitFor(() => expandedNow() === "true", "思考已展开");
+
+          // 进入：表头完全滚出顶部足够多。
+          placeHeaderAt(-6);
+          await waitFor(() => shortcut() !== null, "表头滚出顶部后出现快捷收起");
+          expectEqual(shortcut()?.getAttribute("data-entry-key"), foldKey, "入口指向横跨顶部的那个条目");
+
+          // 边界抖动：表头底边在顶部上下 1~3px 之间来回。入口既不能消失，也不能换目标。
+          for (const target of [-1, 0, 1, 3]) {
+            placeHeaderAt(target);
+            await nextFrame();
+            await nextFrame();
+            expectThat(shortcut() !== null, `表头在 ${String(target)}px 处时入口必须保留（微动不得挂卸）`);
+            expectEqual(shortcut()?.getAttribute("data-entry-key"), foldKey, `表头在 ${String(target)}px 处时目标不得切换`);
+          }
+
+          // 真正离开适用范围：表头回到可见带内较深的位置。
+          placeHeaderAt(24);
+          await waitFor(() => shortcut() === null, "表头回到可见带内后入口移除");
+
+          // 再出现一次，点击必须收起这个块（命中正确条目）。
+          placeHeaderAt(-6);
+          await waitFor(() => shortcut() !== null, "再次出现快捷收起");
+          click(shortcut(), "快捷收起");
+          await waitFor(() => expandedNow() === "false", "对应思考已收起");
+          expectThat(shortcut() === null, "目标折叠后入口必须移除");
+
+          // 会话切换：旧会话的入口不得残留。
+          navigate(betaRoute.path);
+          await waitFor(() => currentPath() === betaRoute.path, "切换到另一个会话");
+          await waitFor(() => query(container, "[data-message-id]") === null, "新会话的历史替换旧会话");
+          expectEqual(shortcut(), null, "切换会话后旧入口必须移除");
+        },
+      );
+    },
+  },
+  {
+    name: "FOLD-MANUAL-ANCHOR 手动收起块时保留所在条目的真实偏移，不把条目拉到容器顶边",
+    async run() {
+      // 手动点折叠块表头时锚点会挪到这个条目自身。偏移必须记它的**真实**位置：写成 0（或任何
+      // 常量）会让紧随其后的几何处理把条目顶到容器上沿，用户看到一次跳变。这里把表头底边放到
+      // 可见带上沿下方 24px 处（表头 `minHeight: 44`，露出大半，仍是真实可点的位置）——此时该
+      // 条目正是阅读锚点（前一个条目已完全在可见带之上），条目顶边还有约 20–40px 在带上沿之上，
+      // 写 0 会立刻产生远超 3px 容差的位移。
+      await withSessionPage(
+        sessionScenario({
+          readResult: (sessionId) => readPage({ sessionId, messages: foldMessages() }),
+        }),
+        (container) => queryAll(container, "[data-message-id]").length === foldMessages().length,
+        "历史与思考折叠块就绪",
+        async (mounted) => {
+          const container = mounted.container;
+          const timeline = query(container, '[data-conversation-scroll="timeline"]');
+          expectThat(timeline !== null, "对话区存在");
+          await waitFor(() => timeline.scrollTop > 200, "首次贴底");
+
+          const folds = queryAll(timeline, "[data-fold-entry]");
+          expectThat(folds.length > 2, "历史里必须有多个思考折叠块");
+          const foldKey = folds[2]?.getAttribute("data-fold-entry") ?? "";
+          expectThat(foldKey.length > 0, "第三个折叠块必须带条目键");
+          // 状态切换会让 React 重渲染，因此每次都按条目键重新取节点。
+          const foldNow = (): Element | null =>
+            queryAll(timeline, "[data-fold-entry]")
+              .find((node) => node.getAttribute("data-fold-entry") === foldKey) ?? null;
+          /** 折叠块所在的条目：锚点找的就是带 `data-timeline-key` 的这一层。 */
+          const entryNow = (): Element | null => foldNow()?.closest("[data-timeline-key]") ?? null;
+          const entryOffset = (): number => {
+            const entry = entryNow();
+            return entry === null ? Number.NaN : entry.getBoundingClientRect().top - timeline.getBoundingClientRect().top;
+          };
+
+          // 展开：收起时才有「正文消失、上方几何不变」的真实变化。
+          click(query(foldNow(), '[data-action="toggle-timeline-entry"]'), "展开思考");
+          await waitFor(() => foldNow()?.getAttribute("data-entry-expanded") === "true", "思考已展开");
+
+          const header = query(foldNow(), '[data-action="toggle-timeline-entry"]');
+          expectThat(header !== null, "展开后的表头存在");
+          timeline.scrollTop += header.getBoundingClientRect().bottom - timeline.getBoundingClientRect().top - 24;
+          timeline.dispatchEvent(new Event("scroll"));
+          await waitFor(() => timeline.getAttribute("data-scroll-follow") === "false", "上读后不再跟随底部");
+
+          const before = entryOffset();
+          expectThat(before < -6,
+            `条目顶边必须已滚出可见带上沿（否则「拉到顶边」测不出位移）：before=${String(before)}`);
+
+          click(query(foldNow(), '[data-action="toggle-timeline-entry"]'), "手动收起思考");
+          await waitFor(() => foldNow()?.getAttribute("data-entry-expanded") === "false", "思考已收起");
+          await nextFrame();
+          await nextFrame();
+
+          const after = entryOffset();
+          expectThat(Math.abs(after - before) < 3,
+            `手动收起不得把条目拉到容器顶边：before=${String(before)}，after=${String(after)}`);
+        },
+      );
+    },
+  },
+  {
+    name: "COMPOSER-SWITCH 停止→发送切换不弹出通用禁用提示；真实失败与授权反馈仍在",
+    async run() {
+      // D4：提示只在真正不可用时存在。旧实现没有这条判据（任何状态都能写说明行/提示），
+      // 一旦有人把原因行或悬浮提示接到状态切换上，这里的逐帧采样会红。
+      const interactionId = "e0000000-0000-4000-8000-0000000002b1";
+      const turnId = "switch-turn";
+      const options = [
+        { optionId: "allow-once", label: "允许一次", kind: "allow_once" },
+        { optionId: "reject", label: "拒绝", kind: "reject_once" },
+      ];
+      await withSessionPage(
+        sessionScenario({
+          holdCommands: ["session.prompt"],
+          selectPendingInteractions: true,
+          events: [
+            wireEvent({
+              globalSequence: 11,
+              eventId: "e0000000-0000-4000-8000-0000000002b2",
+              sessionId: SESSION_ALPHA,
+              eventType: "turn.started",
+              view: { turnId, state: "running" },
+            }),
+            wireEvent({
+              globalSequence: 12,
+              eventId: "e0000000-0000-4000-8000-0000000002b3",
+              sessionId: SESSION_ALPHA,
+              eventType: "permission.requested",
+              view: {
+                interactionId,
+                turnId,
+                requestVersion: "7",
+                title: "读取文件",
+                toolKind: "execute",
+                toolDetail: { input: { command: "pwd", cwd: "/workspace" }, text: ["核对当前命令执行位置"] },
+                options,
+              },
+            }),
+          ],
+          readResult: (sessionId) =>
+            readPage({
+              sessionId,
+              pendingInteractions: [
+                { interactionId, sessionId, kind: "permission", requestVersion: "7", expiresAt: null, options, schema: null },
+              ],
+            }),
+        }),
+        (container) =>
+          query(container, '[data-action="cancel-turn"]') !== null &&
+          query(container, '[data-answer-option="allow-once"]') !== null,
+        "轮次进行中且授权请求可应答",
+        async (mounted) => {
+          const container = mounted.container;
+          // 进行中：没有任何通用禁用文案。
+          expectEqual(query(container, "[data-submit-unavailable]"), null, "进行中不出现禁用原因行");
+          expectEqual(query(container, "[data-submit-reason]"), null, "进行中不出现禁用原因标记");
+
+          // 授权反馈仍在：真实请求可以应答，命令真的发出（提示逻辑不影响授权路径）。
+          click(query(container, '[data-answer-option="allow-once"]'), "允许一次");
+          await waitFor(
+            () => commandBody(mounted.host?.sent ?? [], "permission.resolve") !== null,
+            "审批命令发出",
+          );
+
+          // 收尾：停止→发送。逐帧钉住「没有提示闪过」。
+          const frames: string[] = [];
+          let sampling = true;
+          const sample = (): void => {
+            frames.push(
+              `${query(container, "[data-submit-unavailable]") === null ? "-" : "hint"}/` +
+                `${query(container, "[data-submit-reason]") === null ? "-" : "reason"}`,
+            );
+            if (sampling) requestAnimationFrame(sample);
+          };
+          requestAnimationFrame(sample);
+          mounted.host?.deliverEvent(wireEvent({
+            globalSequence: 13,
+            eventId: "e0000000-0000-4000-8000-0000000002b4",
+            sessionId: SESSION_ALPHA,
+            eventType: "turn.completed",
+            view: { turnId, state: "completed" },
+          }));
+          try {
+            await waitFor(() => query(container, 'button[data-action="submit-prompt"]') !== null, "发送入口回来");
+            for (let index = 0; index < 6; index += 1) await nextFrame();
+          } finally {
+            sampling = false;
+          }
+          expectThat(frames.length > 2, "实际采样多帧");
+          expectThat(frames.every((value) => value === "-/-"), `切换期间不得出现禁用提示：${frames.join(",")}`);
+          expectEqual(
+            query(container, 'button[data-action="submit-prompt"]')?.getAttribute("aria-label"),
+            "发送消息",
+            "正常切换后的发送入口名称不带通用禁用文案",
+          );
+
+          // 真实失败仍然显著呈现（不是被状态切换吞掉）。
+          const textarea = query(container, "[data-composer-input]");
+          if (!(textarea instanceof HTMLTextAreaElement)) {
+            throw new CheckFailure("输入区：找不到多行输入框");
+          }
+          const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+          nativeSet?.call(textarea, "触发一次真实失败");
+          textarea.dispatchEvent(new Event("input", { bubbles: true }));
+          await waitFor(
+            () => query(container, 'button[data-action="submit-prompt"]')?.getAttribute("data-submit-enabled") === "true",
+            "输入后可提交",
+          );
+          click(query(container, 'button[data-action="submit-prompt"]'), "发送");
+          await waitFor(() => query(container, "[data-message-local]") !== null, "本地条目已提交");
+          mounted.host?.completeHeldCommand("session.prompt", {
+            status: "failed",
+            error: { code: "session.busy", message: "Agent 正忙，稍后再试", retryable: true, details: {} },
+          });
+          await waitFor(() => query(container, '[data-submission="failed"]') !== null, "失败终态显著呈现");
+          expectThat(
+            textOf(query(container, '[data-submission="failed"]')).includes("Agent 正忙"),
+            "失败原因必须来自权威终态",
+          );
+
+          // 能力降级反馈保留：附件不支持是显式说明，不是「没提」。
+          expectEqual(
+            query(container, "[data-attachments-supported]")?.getAttribute("data-attachments-supported"),
+            "false",
+            "能力降级必须显式说明",
+          );
+        },
+      );
     },
   },
 ];

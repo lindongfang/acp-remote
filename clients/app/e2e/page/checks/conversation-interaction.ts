@@ -473,6 +473,10 @@ const checks: readonly Check[] = [
       await withSessionPage(
         sessionScenario({
           holdCommands: ["permission.resolve"],
+          // 协商 `core.pending-interactions.v1`：亲历请求必须经 `session.read` 的
+          // `pending_interactions` 确认（effectiveInteraction 带 `requestVersion`）才可应答
+          // （`docs/FRONTEND_DESIGN.md` 的「权限与 elicitation 应答」一节）。
+          selectPendingInteractions: true,
           sessions: [sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "pending" })],
           events: [
             wireEvent({
@@ -480,14 +484,17 @@ const checks: readonly Check[] = [
               eventId: "e0000000-0000-4000-8000-000000000301",
               sessionId: SESSION_ALPHA,
               eventType: "permission.requested",
-              view: permissionRequestedView(PERM_WITNESSED, true),
+              // 实时视图自带请求版本；协商后应答原样回传，未知版本不得判为可应答。
+              view: { ...permissionRequestedView(PERM_WITNESSED, true), requestVersion: "7" },
             }),
             wireEvent({
               globalSequence: 12,
               eventId: "e0000000-0000-4000-8000-000000000302",
               sessionId: SESSION_ALPHA,
               eventType: "permission.requested",
-              view: permissionRequestedView(PERM_ELSEWHERE, true),
+              // 同一个连接上的实时请求都带版本：缺少版本会触发「自动回源取当前有效请求」，
+              // 那会把历史卡片的 `read_from_history` 改成 `not_effective`（本条用例要保留前者）。
+              view: { ...permissionRequestedView(PERM_ELSEWHERE, true), requestVersion: "7" },
             }),
             wireEvent({
               globalSequence: 13,
@@ -511,6 +518,18 @@ const checks: readonly Check[] = [
                 }),
               ],
               pendingInteractions: [
+                // 亲历请求的服务端确认：`effectiveInteraction` 形状带完整可选项与请求版本，
+                // 缺少它时该请求会被判成「服务端不再确认」而不可应答。
+                {
+                  interactionId: PERM_WITNESSED,
+                  sessionId,
+                  kind: "permission",
+                  requestVersion: "7",
+                  expiresAt: null,
+                  options: PERMISSION_OPTIONS,
+                  schema: null,
+                },
+                // 只读得到的历史待处理项继续用旧定位形状（无可选项、无版本）→ 不可操作。
                 pendingInteraction({
                   interactionId: PERM_PENDING_READ,
                   sessionId,
@@ -578,7 +597,7 @@ const checks: readonly Check[] = [
             "必须给出处理设备标识",
           );
           expectThat(
-            textOf(query(elsewhere, '[data-interaction-handled="other-device"]')).includes("其它设备"),
+            textOf(query(elsewhere, '[data-interaction-handled="other-device"]')).includes("其他设备"),
             "必须说明不是本设备所为",
           );
           expectEqual(
@@ -612,8 +631,8 @@ const checks: readonly Check[] = [
           );
           expectEqual(
             commandBody(mounted.host?.sent ?? [], "permission.resolve")?.["payload"],
-            { interactionId: PERM_WITNESSED, optionId: "allow_once" },
-            "permission.resolve 的载荷必须取自这次请求自身的可选项",
+            { interactionId: PERM_WITNESSED, optionId: "allow_once", requestVersion: "7" },
+            "permission.resolve 的载荷必须取自这次请求自身的可选项与服务端确认的版本",
           );
           expectEqual(
             queryAll(query(container, `[data-interaction-id="${PERM_WITNESSED}"]`), "[data-answer-option]").length,

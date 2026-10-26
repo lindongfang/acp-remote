@@ -36,7 +36,7 @@ import {
   waitFor,
 } from "../support";
 import type { Check } from "../support";
-import { TURN_ID, sessionScenario, withSessionPage } from "./conversation-timeline";
+import { TURN_ID, diagnosticsRoute, sessionScenario, withSessionPage } from "./conversation-timeline";
 
 /** 工具调用标识与事件标识（与其它检查集不重复）。 */
 const TOOL_CALL_ID = "d0000000-0000-4000-8000-000000000601";
@@ -71,6 +71,8 @@ const checks: readonly Check[] = [
     async run() {
       await withSessionPage(
         sessionScenario({
+          // `open-tool-call-diagnostics` 只在诊断模式（`?diagnostics=1`）渲染。
+          route: diagnosticsRoute(),
           workspaces: WORKSPACES_WITH_PATHS,
           sessions: [
             sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "running" }),

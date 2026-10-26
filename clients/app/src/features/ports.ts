@@ -323,7 +323,7 @@ export interface PreparationDraftGateway {
    * 刷新后 feature 层据此找回唯一准备槽位的 `sessionId`；没有定位时不猜任何会话。
    */
   readTabLocator(): Promise<PreparationTabLocatorSnapshot | null>;
-  /** 清掉本标签页定位（显式放弃/身份失效）；不删除草稿记录本身。 */
+  /** 清掉本标签页定位（生命周期清理/身份失效）；不删除草稿记录本身。 */
   clearTabLocator(): Promise<void>;
   beginTab(input: {
     readonly scope: PreparationDraftScope;

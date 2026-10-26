@@ -42,13 +42,10 @@ import type { ConversationSecondaryView, FilePreviewArtifact } from "../../src/c
 import { toastStore } from "../../src/components/shell/toast";
 import type { Palette } from "../../src/components/theme";
 import {
-  Pressable,
   StyleSheet,
-  Text,
   View,
   breakpoints,
   palettes,
-  spacing,
   useTheme,
   useWindowDimensions,
 } from "../../src/components/theme";
@@ -68,36 +65,6 @@ function buildStyles(colors: Palette) {
       flexDirection: "column",
       backgroundColor: colors.bg,
     },
-    abandonBar: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: spacing.sm,
-      paddingHorizontal: spacing.lg,
-      paddingVertical: spacing.sm,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.line,
-      backgroundColor: colors.panel,
-    },
-    abandonText: { flexShrink: 1, color: colors.ink2, fontSize: 13 },
-    abandonActions: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-    abandonButton: {
-      borderWidth: 1,
-      borderColor: colors.danger,
-      borderRadius: 6,
-      paddingHorizontal: 10,
-      paddingVertical: 4,
-    },
-    abandonButtonDisabled: { opacity: 0.5 },
-    abandonButtonLabel: { color: colors.danger, fontSize: 13 },
-    abandonCancel: {
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: 6,
-      paddingHorizontal: 10,
-      paddingVertical: 4,
-    },
-    abandonCancelLabel: { color: colors.ink2, fontSize: 13 },
   });
 }
 
@@ -109,7 +76,6 @@ export default function SessionRoute(): ReactElement {
   const state = useClientState();
   const router = useRouter();
   const theme = useTheme();
-  const styles = theme.dark ? STYLES.dark : STYLES.light;
   const windowWidth = useWindowDimensions().width;
   const narrow = windowWidth < breakpoints.wide;
   const sessionId = typeof id === "string" ? id : null;
@@ -179,9 +145,6 @@ export default function SessionRoute(): ReactElement {
   // 本地闸门拒绝提交的原因（未连接/Agent 不在目录/目录引用缺失）。这类拒绝不产生命令记录，
   // 必须由页面带回弹层，否则点击按钮看起来毫无反应。
   const [createIssue, setCreateIssue] = useState<string | null>(null);
-  // 「放弃新会话」是页面级视图状态：先要一次显式确认，确认期间禁用重复点击。
-  const [abandonConfirm, setAbandonConfirm] = useState(false);
-  const [abandonBusy, setAbandonBusy] = useState(false);
   // 「哪一处改动的 ACP 原文是展开的」是**页面级视图状态**：它不改变任何数据判定、也不需要
   // 跨页存活，因此留在这里（次级视图那一个是跨路由的 UI 偏好，因此住在仓库里）。
   const [openChangeDiagnostics, setOpenChangeDiagnostics] = useState<string | null>(null);
@@ -194,8 +157,6 @@ export default function SessionRoute(): ReactElement {
   // 迟到的响应不能重新打开文件（spec「切换文件时旧响应迟到」）。
   useEffect(() => {
     setFileReturnView(null);
-    setAbandonConfirm(false);
-    setAbandonBusy(false);
     if (store === null || sessionId === null) return;
     store.setActiveConversationSession(sessionId);
     // 先按本标签页的非敏感定位找回唯一准备槽位（A→B→刷新 B 时也要能新建回 A）。
@@ -373,68 +334,8 @@ export default function SessionRoute(): ReactElement {
     return false;
   };
 
-  /** 显式放弃：确认后 release、清草稿与本标签页定位，再回目录页。 */
-  const abandonPreparation = (): void => {
-    if (abandonBusy) return;
-    setAbandonBusy(true);
-    void store.abandonPreparation(sessionId)
-      .catch(() => undefined)
-      .finally(() => {
-        setAbandonBusy(false);
-        setAbandonConfirm(false);
-        router.replace("/");
-      });
-  };
-
-  const abandonable = preparation !== null && store.canAbandonPreparation(sessionId);
-
   return (
     <View role="main" style={theme.dark ? STYLES.dark.page : STYLES.light.page}>
-      {/* 未转正临时会话的唯一显式退出：普通返回目录/刷新不会触发这里的清理。 */}
-      {abandonable ? (
-        <View style={styles.abandonBar} dataSet={{ route: "preparation-abandon" }}>
-          <Text style={styles.abandonText}>
-            {abandonConfirm
-              ? "放弃后草稿、附件与这个临时会话都会被清理，且无法恢复。"
-              : "这是一个尚未转正的新会话。"}
-          </Text>
-          <View style={styles.abandonActions}>
-            {abandonConfirm ? (
-              <>
-                <Pressable
-                  role="button"
-                  accessibilityRole="button"
-                  style={styles.abandonCancel}
-                  onPress={() => {
-                    if (abandonBusy) return;
-                    setAbandonConfirm(false);
-                  }}
-                >
-                  <Text style={styles.abandonCancelLabel}>取消</Text>
-                </Pressable>
-                <Pressable
-                  role="button"
-                  accessibilityRole="button"
-                  disabled={abandonBusy}
-                  style={[styles.abandonButton, abandonBusy ? styles.abandonButtonDisabled : null]}
-                  onPress={abandonPreparation}
-                >
-                  <Text style={styles.abandonButtonLabel}>{abandonBusy ? "正在放弃…" : "确认放弃"}</Text>
-                </Pressable>
-              </>
-            ) : (
-              <Pressable
-                role="button"
-                accessibilityRole="button"
-                style={styles.abandonButton}
-                onPress={() => setAbandonConfirm(true)}
-              >
-                <Text style={styles.abandonButtonLabel}>放弃新会话</Text>
-              </Pressable>
-            )}
-          </View>
-        </View>
-      ) : null}
       <ConversationStream
         diagnosticsMode={diagnostics === "1"}
         model={model}

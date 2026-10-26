@@ -12,12 +12,23 @@
  * - 来源为其它节点的会话必须给出「结构化历史不可用」的说明（spec 场景）。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { SESSION_HISTORY_FEATURE } from "../sync-client";
 import { FILE_DIFF_UNAVAILABLE_LABELS } from "../domain";
-import type { FileChangeView, MessageTimelineEntry } from "./conversation-timeline";
-import { groupTimelineEntries } from "./conversation-timeline";
+import type {
+  FileChangeView,
+  MessageTimelineEntry,
+  SentPromptView,
+  TimelineEntry,
+  VolatileMessageState,
+} from "./conversation-timeline";
+import {
+  buildTimeline,
+  formatTimelineTime,
+  groupTimelineEntries,
+  stabilizeTimelineEntries,
+} from "./conversation-timeline";
 import type { StoreFixture } from "./testing/fixtures";
 import {
   eventMessage,
@@ -374,7 +385,8 @@ describe("D9 轮次分组：同 turnId 被无标识条目切开", () => {
 
     const entries = store.conversationPage(SESSION_ID)?.timeline.entries ?? [];
     const groups = groupTimelineEntries(entries);
-    // 反例：key 仅由 turnId 组成时，这两个兄弟节点会拿到同一个 `turn:turn-7`。
+    // 组键只由轮次标识与条目自身的稳定身份决定：同一 turnId 的连续条目仍是一个组，且组键与
+    // 「谁是组内首条」无关。分组只是呈现资料，条目本身平级渲染，因此组键变化不会重挂已有正文。
     const turnGroups = groups.filter((group) => group.turnId === "turn-7");
     expect(turnGroups).toHaveLength(1);
     const keys = groups.map((group) => group.key);
@@ -865,5 +877,301 @@ describe("WP2 工具调用：跨事件详情归并与诊断入口", () => {
     expect(card.eventId).toBe(sharedEventId);
     expect(card.detail?.output).toEqual({ present: true, value: { ok: true } });
     expect(card.detail?.text).toEqual(["完成"]);
+  });
+});
+
+/** 一条本设备刚提交的输入（身份字段由用例给出）。 */
+function sentPromptView(overrides: Partial<SentPromptView> = {}): SentPromptView {
+  return {
+    requestId: "req-1",
+    text: "继续",
+    attachmentNames: [],
+    createdAt: "2026-10-01T00:00:01.000Z",
+    phase: "submitted",
+    turnId: null,
+    messageId: null,
+    notice: null,
+    ...overrides,
+  };
+}
+
+/** 一条权威消息视图（`session.read` 的形状）：默认是本设备用户的正文，可指定序号/通道/时刻。 */
+function messageView(input: {
+  readonly id: string;
+  readonly turnId: string | null;
+  readonly sequence?: string;
+  readonly role?: "user" | "agent";
+  readonly channel?: "reply" | "thought";
+  readonly text?: string;
+  readonly createdAt?: string;
+}): MessageTimelineEntry["message"] {
+  const text = input.text ?? "继续";
+  return {
+    id: input.id,
+    role: input.role ?? "user",
+    channel: input.channel ?? "reply",
+    text,
+    content: { text, media: [], hasStructuredContent: false },
+    hasStructuredContent: false,
+    partial: null,
+    ...(input.sequence === undefined ? {} : { sequence: input.sequence }),
+    createdAt: input.createdAt ?? "2026-10-01T00:00:02.000Z",
+    turnId: input.turnId,
+  };
+}
+
+/** 一条来自实时增量的 Agent 正文（`turnId` 由增量事件给出）。 */
+function volatileAgentMessage(turnId: string): VolatileMessageState {
+  return {
+    messageId: "agent-1",
+    sessionId: null,
+    channel: "agent",
+    turnId,
+    createdAt: "2026-10-01T00:00:04.000Z",
+    deltas: new Map([["0", "部署脚本检查完成"]]),
+    completed: false,
+    mediaBlocks: [],
+    partial: null,
+  };
+}
+
+describe("D2 稳定内容身份：轮次资料补齐与正文接替都不换节点", () => {
+  it("本地回显拿到 turnId：条目键不变，变化的只是可更新的轮次资料", () => {
+    const before = buildTimeline({
+      messages: [], records: [], volatile: [], interactions: [],
+      sentPrompts: [sentPromptView()],
+    });
+    const after = buildTimeline({
+      messages: [], records: [], volatile: [], interactions: [],
+      sentPrompts: [sentPromptView({ phase: "accepted", turnId: "turn-1" })],
+    });
+
+    // 节点身份只由条目键决定；接替/补齐前后必须是同一个键。
+    expect(before.map((entry) => entry.key)).toEqual(after.map((entry) => entry.key));
+    expect(before[0]?.key).toBe("sent:req-1");
+    // 分组只是呈现资料：轮次补齐会改「属于哪一段」，但不会让条目换父级（视图里条目是平级的）。
+    const groupsBefore = groupTimelineEntries(before);
+    const groupsAfter = groupTimelineEntries(after);
+    expect(groupsBefore[0]?.turnId).toBe(null);
+    expect(groupsAfter[0]?.turnId).toBe("turn-1");
+    expect(groupsAfter[0]?.entries.map((entry) => entry.key)).toEqual(["sent:req-1"]);
+  });
+
+  it("正式用户消息按已确认锚点沿用本地稳定键；没有锚点时仍是自己的 message 身份", () => {
+    const message = messageView({ id: "m-1", turnId: "turn-1", sequence: "11" });
+    const anchored = buildTimeline({
+      messages: [message], records: [], volatile: [], interactions: [],
+      promptAnchors: new Map([["m-1", "req-1"]]),
+    });
+    // 反例（旧实现）：这里会是 `message:m-1`，接替时 `sent:req-1` 节点被移除再新建。
+    expect(anchored[0]?.key).toBe("sent:req-1");
+    const entry = anchored[0];
+    if (entry?.kind !== "message") throw new Error("条目不是消息");
+    expect(entry.message.id).toBe("m-1");
+    expect(entry.localAnchor).toBe("req-1");
+    expect(entry.local).toBe(null);
+
+    // 没有可靠关联时不猜：同一个 messageId 不会被套上别人的本地身份。
+    const plain = buildTimeline({ messages: [message], records: [], volatile: [], interactions: [] });
+    expect(plain[0]?.key).toBe("message:m-1");
+    expect(plain[0]?.kind === "message" ? plain[0].localAnchor : "missing").toBe(null);
+  });
+
+  it("被接替的正式消息与同轮 Agent 输出按权威序号相邻，条目键不变", () => {
+    const entries = buildTimeline({
+      messages: [
+        messageView({ id: "m-1", turnId: "turn-1", sequence: "11" }),
+        messageView({
+          id: "m-2", turnId: "turn-1", sequence: "12", role: "agent", text: "收到",
+          createdAt: "2026-10-01T00:00:03.000Z",
+        }),
+      ],
+      records: [], volatile: [], interactions: [],
+      promptAnchors: new Map([["m-1", "req-1"]]),
+    });
+    // 顺序只来自权威序号：本设备的正文是 11，Agent 输出是 12。
+    expect(entries.map((entry) => entry.key)).toEqual(["sent:req-1", "message:m-2"]);
+    // 同一轮次的连续条目进同一段呈现资料；分组不决定渲染父级（条目在视图里是平级的）。
+    const groups = groupTimelineEntries(entries);
+    expect(groups.map((group) => group.key)).toEqual(["turn:turn-1"]);
+    expect(groups[0]?.entries.map((entry) => entry.key)).toEqual(["sent:req-1", "message:m-2"]);
+  });
+
+  it("正式条目序号 10/11/12：带已确认锚点的用户消息不得被前置到思考之前（turnId 有无都一样）", () => {
+    // 反例（旧实现）：带 `localAnchor` 的**正式**消息被从权威排序里剔除，再按 `turnId` 插到整轮
+    // 第一条之前 → 思考 10 被挤到用户消息之后，两条权威记录的相对顺序被改写。
+    for (const turnId of ["turn-1", null]) {
+      const entries = buildTimeline({
+        messages: [
+          messageView({
+            id: "m-thought", turnId: "turn-1", sequence: "10", role: "agent", channel: "thought",
+            text: "先想一下", createdAt: "2026-10-01T00:00:01.000Z",
+          }),
+          messageView({ id: "m-user", turnId, sequence: "11" }),
+          messageView({
+            id: "m-reply", turnId: "turn-1", sequence: "12", role: "agent", text: "做完了",
+            createdAt: "2026-10-01T00:00:03.000Z",
+          }),
+        ],
+        records: [], volatile: [], interactions: [],
+        promptAnchors: new Map([["m-user", "req-1"]]),
+      });
+      expect(entries.map((entry) => entry.key))
+        .toEqual(["message:m-thought", "sent:req-1", "message:m-reply"]);
+      const user = entries[1];
+      if (user?.kind !== "message") throw new Error("序号 11 的条目不是消息");
+      expect(user.message.id).toBe("m-user");
+      expect(user.localAnchor).toBe("req-1");
+      expect(user.sequence).toBe("11");
+      expect(user.local).toBe(null);
+      // 分组只是呈现资料：缺 `turnId` 时那条用户消息自成一段，但顺序一个位置都不动。
+      expect(groupTimelineEntries(entries).flatMap((group) => group.entries.map((entry) => entry.key)))
+        .toEqual(entries.map((entry) => entry.key));
+    }
+
+    // 没有序号时按创建时间稳定排序：接替来的正式消息留在它自己的时间位置，不因为带 `turnId`
+    // 被前移到整轮第一条之前。
+    const timed = buildTimeline({
+      messages: [
+        messageView({
+          id: "m-a", turnId: "turn-1", role: "agent", text: "第一段",
+          createdAt: "2026-10-01T00:00:01.000Z",
+        }),
+        messageView({ id: "m-1", turnId: "turn-1", createdAt: "2026-10-01T00:00:02.000Z" }),
+        messageView({
+          id: "m-b", turnId: "turn-1", role: "agent", text: "第二段",
+          createdAt: "2026-10-01T00:00:03.000Z",
+        }),
+      ],
+      records: [], volatile: [], interactions: [],
+      promptAnchors: new Map([["m-1", "req-1"]]),
+    });
+    // 反例（旧实现）：这里会被前插成 `sent:req-1, message:m-a, message:m-b`。
+    expect(timed.map((entry) => entry.key)).toEqual(["message:m-a", "sent:req-1", "message:m-b"]);
+  });
+
+  it("回显尚无权威位置时只占临时位置：取得可靠轮次关联后前插，正式条目相对顺序不变", () => {
+    const agentOutput = volatileAgentMessage("turn-1");
+    // 提交已发出（尚无 `turnId`），且发起时刻晚于已有输出：临时回显排在这里（末尾）。
+    const before = buildTimeline({
+      messages: [], records: [], interactions: [], volatile: [agentOutput],
+      sentPrompts: [sentPromptView({ createdAt: "2026-10-01T00:00:05.000Z" })],
+    });
+    expect(before.map((entry) => entry.key)).toEqual(["message:agent-1", "sent:req-1"]);
+    const groupsBefore = groupTimelineEntries(before);
+    expect(groupsBefore.map((group) => group.key)).toEqual(["turn:turn-1", "group:sent:req-1"]);
+
+    // 受理应答后到：回显仍是**没有权威位置**的临时条目，因此可以移到该轮输出之前——这条移动
+    // 不改变任何两条正式条目的相对顺序（Agent 正文只有它自己一条正式记录）。
+    const after = buildTimeline({
+      messages: [], records: [], interactions: [], volatile: [agentOutput],
+      sentPrompts: [sentPromptView({ phase: "accepted", turnId: "turn-1" })],
+    });
+    expect(after.map((entry) => entry.key)).toEqual(["sent:req-1", "message:agent-1"]);
+    expect([...after.map((entry) => entry.key)].sort()).toEqual([...before.map((entry) => entry.key)].sort());
+    // Agent 正文的条目键在补齐前后都不变：位置变化只是键控重排，不换节点。
+    expect(before[0]?.key).toBe("message:agent-1");
+    expect(after[1]?.key).toBe("message:agent-1");
+    // 分组只是资料：补齐后回显与同轮输出连续，因此归入同一段。
+    const groupsAfter = groupTimelineEntries(after);
+    expect(groupsAfter.map((group) => group.key)).toEqual(["turn:turn-1"]);
+    expect(groupsAfter[0]?.entries.map((entry) => entry.key)).toEqual(["sent:req-1", "message:agent-1"]);
+  });
+
+  it("没有轮次关联的临时回显仍落在创建时刻之后：无 turnId 的流式回复不会排到输入之前", () => {
+    // 提交回显（00:00:01）尚无 `turnId`，随后到达的流式回复（00:00:04）也没有 `turnId`：
+    // 临时占位按创建时刻落位，回复在输入之后——过程模型据此才看得到「已回复」，不重新显示等待。
+    const entries = buildTimeline({
+      messages: [], records: [], interactions: [],
+      volatile: [{ ...volatileAgentMessage("turn-1"), turnId: null }],
+      sentPrompts: [sentPromptView()],
+    });
+    expect(entries.map((entry) => entry.key)).toEqual(["sent:req-1", "message:agent-1"]);
+
+    // 回退只决定临时位置：夹在两条正式条目之间也不会改变它们的相对顺序。
+    const between = buildTimeline({
+      messages: [
+        messageView({
+          id: "m-a", turnId: null, sequence: "10", role: "agent", channel: "thought",
+          text: "先想一下", createdAt: "2026-10-01T00:00:00.500Z",
+        }),
+        messageView({
+          id: "m-b", turnId: null, sequence: "12", role: "agent", text: "做完了",
+          createdAt: "2026-10-01T00:00:03.000Z",
+        }),
+      ],
+      records: [], interactions: [], volatile: [],
+      sentPrompts: [sentPromptView({ createdAt: "2026-10-01T00:00:02.000Z" })],
+    });
+    expect(between.map((entry) => entry.key))
+      .toEqual(["message:m-a", "sent:req-1", "message:m-b"]);
+  });
+});
+
+describe("D1 条目复用：内建值按内容比较，不把不同内容判成没变", () => {
+  /** 一条带任意附加字段的消息条目（把内建值塞进结构比较的路径里）。 */
+  const entryWith = (extra: Record<string, unknown>): TimelineEntry => ({
+    kind: "message",
+    key: "message:m-1",
+    createdAt: "2026-10-01T00:00:01.000Z",
+    sequence: null,
+    channel: "agent",
+    message: {
+      id: "m-1",
+      role: "agent",
+      channel: "reply",
+      text: "收到",
+      content: { text: "收到", media: [], hasStructuredContent: false },
+      hasStructuredContent: false,
+      partial: null,
+      createdAt: "2026-10-01T00:00:01.000Z",
+      turnId: "turn-1",
+      ...extra,
+    } as MessageTimelineEntry["message"],
+    volatile: false,
+    streamComplete: true,
+    partial: null,
+  });
+
+  it("Date 的时刻不同必须算作变化，相同时刻仍复用旧对象", () => {
+    const at = (iso: string): TimelineEntry => entryWith({ createdAt: new Date(iso) });
+    const before = at("2026-10-01T00:00:01.000Z");
+    // 旧实现按自有字段比较：`Date` 没有自有字段，两个不同时刻会被判成相等。
+    expect(stabilizeTimelineEntries([before], [at("2026-10-01T00:00:02.000Z")])[0]).not.toBe(before);
+    expect(stabilizeTimelineEntries([before], [at("2026-10-01T00:00:01.000Z")])[0]).toBe(before);
+  });
+
+  it("Map 与 Set 的内容不同必须算作变化，内容相同仍复用旧对象", () => {
+    const mapBefore = entryWith({ attachments: new Map([["k", 1]]) });
+    // 旧实现按自有字段比较：`Map` 的条目不在自有字段里，两份不同内容会被判成相等。
+    expect(stabilizeTimelineEntries([mapBefore], [entryWith({ attachments: new Map([["k", 2]]) })])[0])
+      .not.toBe(mapBefore);
+    expect(stabilizeTimelineEntries([mapBefore], [entryWith({ attachments: new Map([["k", 1]]) })])[0])
+      .toBe(mapBefore);
+
+    const setBefore = entryWith({ tags: new Set(["a"]) });
+    expect(stabilizeTimelineEntries([setBefore], [entryWith({ tags: new Set(["b"]) })])[0]).not.toBe(setBefore);
+    expect(stabilizeTimelineEntries([setBefore], [entryWith({ tags: new Set(["a"]) })])[0]).toBe(setBefore);
+  });
+});
+
+describe("D1 时间格式化：共享实例并复用同一时刻的结果", () => {
+  it("同一时刻重复显示不新建格式化器；非法时刻固定为占位符", () => {
+    const spy = vi.spyOn(Intl, "DateTimeFormat");
+    try {
+      // 先预热一次（格式化器或结果缓存可能已在别的用例里建立）。
+      formatTimelineTime("2026-10-01T00:00:02.000Z");
+      const constructedBefore = spy.mock.calls.length;
+      const first = formatTimelineTime("2026-10-01T00:00:02.000Z");
+      const second = formatTimelineTime("2026-10-01T00:00:02.000Z");
+      // 反例（旧实现）：每次调用都 `new Intl.DateTimeFormat(...)`，这里会多 2 次。
+      expect(spy.mock.calls.length - constructedBefore).toBe(0);
+      expect(second).toBe(first);
+      expect(first).toMatch(/^\d{2}:\d{2}$/);
+      expect(formatTimelineTime("不是时间")).toBe("—");
+      expect(formatTimelineTime("不是时间")).toBe("—");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

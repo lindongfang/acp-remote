@@ -37,7 +37,7 @@
  * 组件是纯函数：内容与回调都从 props 来，缺省等价于「不启用」。
  */
 
-import { Fragment, useState } from "react";
+import { Fragment, memo, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { TextStyle, ViewStyle } from "react-native";
 import { lexer } from "marked";
@@ -598,6 +598,70 @@ function renderInline(raw: Token, key: string, ctx: RenderContext): ReactNode {
 }
 
 /**
+ * 统计一段词法结果里的代码块数量（含容器 token 里的嵌套代码块）。
+ *
+ * 代码块的显示序号跨越整个 Markdown 文档；分块渲染时每块必须知道自己前面有多少个代码块，
+ * 否则窗口滑动或复用块时序号会跳。计数只看 token 形状，不重新渲染。
+ */
+function countCodeTokens(tokens: readonly Token[]): number {
+  let count = 0;
+  for (const raw of tokens) {
+    const token = raw as MarkedToken;
+    switch (token.type) {
+      case "code":
+        count += 1;
+        break;
+      case "blockquote":
+        count += countCodeTokens(token.tokens);
+        break;
+      case "list":
+        for (const item of token.items) count += countCodeTokens(item.tokens);
+        break;
+      case "heading":
+      case "paragraph":
+      case "text":
+        if (token.tokens !== undefined) count += countCodeTokens(token.tokens);
+        break;
+      case "table":
+        for (const cell of token.header) count += countCodeTokens(cell.tokens);
+        for (const row of token.rows) {
+          for (const cell of row) count += countCodeTokens(cell.tokens);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  return count;
+}
+
+/**
+ * 一个已稳定的源码块。
+ *
+ * `tokens` 来自按**源码**缓存的前词法结果，`styles` 与回调是模块级/稳定引用，`base` 只依赖它
+ * 前面的块。因此流式追加时只有末尾那一块真正重新渲染，已完成的块由 `memo` 直接跳过。
+ */
+const MarkdownChunk = memo(function MarkdownChunk(props: {
+  readonly tokens: readonly Token[];
+  readonly styles: MarkdownStyles;
+  readonly blockKey: string;
+  readonly base: number;
+  readonly onLinkPress: ((href: string) => void) | undefined;
+  readonly onCopyCode: ((code: string, language: string) => void) | undefined;
+  readonly onFilePathPress: ((path: string) => void) | undefined;
+}): ReactElement {
+  // 代码块序号只在这一次渲染里有意义，因此放在渲染上下文里而不是模块作用域（保持纯函数）。
+  const ctx: RenderContext = {
+    styles: props.styles,
+    onLinkPress: props.onLinkPress,
+    onCopyCode: props.onCopyCode,
+    onFilePathPress: props.onFilePathPress,
+    codeIndex: { next: props.base },
+  };
+  return <Fragment>{renderBlocks(props.tokens, props.blockKey, ctx)}</Fragment>;
+});
+
+/**
  * 一段 Agent 产出的 Markdown。
  *
  * 长输出按 {@link splitMarkdownSource} 切块：每块按**它自己的源码**缓存词法结果，增量只让最后
@@ -605,7 +669,7 @@ function renderInline(raw: Token, key: string, ctx: RenderContext): ReactNode {
  * 块，更早内容由用户显式展开（不一次构建整棵视图树）。缓存只在本次挂载内有效，抹掉它不会影响
  * 任何语义（下次重新词法分析即可）。
  */
-export function Markdown({ value, onLinkPress, onCopyCode, onFilePathPress }: MarkdownProps): ReactElement {
+export const Markdown = memo(function Markdown({ value, onLinkPress, onCopyCode, onFilePathPress }: MarkdownProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   // 源码分块 → 词法结果。键是块的**原文**：流式输出中前面的块不变，命中缓存。
@@ -626,8 +690,19 @@ export function Markdown({ value, onLinkPress, onCopyCode, onFilePathPress }: Ma
     return tokens;
   };
 
-  // 代码块序号只在这一次渲染里有意义，因此放在渲染上下文里而不是模块作用域（保持纯函数）。
-  const ctx: RenderContext = { styles, onLinkPress, onCopyCode, onFilePathPress, codeIndex: { next: 0 } };
+  // 每个可见块的代码块起始序号：只由它**前面**的块决定，因此未变化的块拿到同一个值，
+  // `MarkdownChunk` 的 `memo` 才能命中。
+  const codeBases: number[] = [];
+  if (visible.length > 0) {
+    let base = 0;
+    for (let index = 0; index < hiddenCount; index += 1) {
+      base += countCodeTokens(lexChunk(chunks[index] ?? ""));
+    }
+    for (const source of visible) {
+      codeBases.push(base);
+      base += countCodeTokens(lexChunk(source));
+    }
+  }
 
   return (
     <View style={styles.root} dataSet={{ markdown: "true" }}>
@@ -643,9 +718,22 @@ export function Markdown({ value, onLinkPress, onCopyCode, onFilePathPress }: Ma
           {`… 还有 ${String(hiddenCount)} 段更早内容未展开（点击显示）`}
         </Text>
       )}
-      {visible.map((source, index) =>
-        renderBlocks(lexChunk(source), `md.${String(hiddenCount + index)}`, ctx),
-      )}
+      {visible.map((source, index) => {
+        // 绝对块序号作为 key：已存在的块在窗口滑动或增量追加时键不变，节点因此不重建。
+        const absolute = hiddenCount + index;
+        return (
+          <MarkdownChunk
+            key={absolute}
+            tokens={lexChunk(source)}
+            styles={styles}
+            blockKey={`md.${String(absolute)}`}
+            base={codeBases[index] ?? 0}
+            onLinkPress={onLinkPress}
+            onCopyCode={onCopyCode}
+            onFilePathPress={onFilePathPress}
+          />
+        );
+      })}
     </View>
   );
-}
+});

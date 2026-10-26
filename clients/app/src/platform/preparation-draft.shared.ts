@@ -174,9 +174,8 @@ export type PreparationStoredDraft = PreparationDraftRecord | PreparationDraftIn
 /**
  * 草稿作废原因。
  *
- * `navigation`/`directory_changed` 保留给旧记录读取（普通导航与换目录不再写入墓碑）；
- * 新代码只在更换 Agent（`agent_changed`）、显式「放弃新会话」（`abandoned`）与
- * 身份/存储失效（`replaced`）时写墓碑。
+ * `navigation`/`directory_changed`/`abandoned` 保留给旧记录读取；当前界面不再提供放弃动作，
+ * 新代码只在更换 Agent（`agent_changed`）与身份/存储失效（`replaced`）时写墓碑。
  */
 export type PreparationDraftInvalidationReason =
   | "navigation"
@@ -349,7 +348,7 @@ export interface PreparationDraftPort {
    */
   readTabLocator(): Promise<PreparationTabLocator | null>;
 
-  /** 清掉本标签页定位（显式放弃/身份失效）；草稿与分块由各自路径清理。 */
+  /** 清掉本标签页定位（生命周期清理/身份失效）；草稿与分块由各自路径清理。 */
   clearTabLocator(): Promise<void>;
 
   /**

@@ -251,6 +251,7 @@ export function wireEvent(input: {
   readonly view?: Record<string, unknown>;
   readonly acp?: Record<string, unknown>;
   readonly createdAt?: string;
+  readonly causationRequestId?: string | null;
   /** 事件来源（`event.body.origin`）；缺省 `{ kind: "agent", deviceId: null }`。 */
   readonly origin?: Record<string, unknown>;
 }): Record<string, unknown> {
@@ -269,7 +270,7 @@ export function wireEvent(input: {
       eventId: input.eventId,
       sessionId: input.sessionId,
       eventType: input.eventType,
-      causationRequestId: null,
+      causationRequestId: input.causationRequestId ?? null,
       origin: input.origin ?? { kind: "agent", deviceId: null },
       remoteOrigin: null,
       createdAt: input.createdAt ?? "2026-10-01T00:00:02.000Z",

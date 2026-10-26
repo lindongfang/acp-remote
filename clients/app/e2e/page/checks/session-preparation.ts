@@ -274,6 +274,80 @@ async function settle(ms = 250): Promise<void> {
   await promise;
 }
 
+interface SubmissionGeometry {
+  readonly page: string;
+  readonly header: string;
+  readonly timeline: string;
+  readonly composerDock: string;
+  readonly composer: string;
+  readonly windowY: number;
+}
+
+function boxOf(element: Element | null): string {
+  if (element === null) return "missing";
+  const rect = element.getBoundingClientRect();
+  return [rect.x, rect.y, rect.width, rect.height].map((value) => value.toFixed(2)).join(",");
+}
+
+function submissionGeometry(container: HTMLElement): SubmissionGeometry {
+  return {
+    page: boxOf(query(container, "[data-conversation-page]")),
+    header: boxOf(query(container, "[data-session-header]")),
+    timeline: boxOf(query(container, '[data-conversation-region="timeline"]')),
+    composerDock: boxOf(query(container, "[data-composer-dock]")),
+    composer: boxOf(query(container, "[data-composer]")),
+    windowY: window.scrollY,
+  };
+}
+
+/**
+ * 在浏览器绘制之后逐帧读页面外框。rAF 回调早于布局与绘制；再排一个 `setTimeout(0)`
+ * 才能读到用户实际看到的帧，避免把补偿前、用户看不到的中间态误判成抖动。
+ */
+function sampleSubmissionAfterPaint(
+  container: HTMLElement,
+  samples: SubmissionGeometry[],
+  isRunning: () => boolean,
+): void {
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      if (!isRunning()) return;
+      samples.push(submissionGeometry(container));
+      sampleSubmissionAfterPaint(container, samples, isRunning);
+    }, 0);
+  });
+}
+
+function expectStableSubmissionGeometry(
+  baseline: SubmissionGeometry,
+  samples: readonly SubmissionGeometry[],
+  phase: string,
+): void {
+  expectThat(samples.length > 2, `${phase}：实际采样多帧`);
+  const fields = ["page", "header", "timeline", "composerDock", "composer", "windowY"] as const;
+  const drift = samples.some((sample) => fields.some((field) => sample[field] !== baseline[field]));
+  expectThat(
+    !drift,
+    `${phase}：会话外框在绘制后的每一帧都必须保持原位；baseline=${JSON.stringify(baseline)}，` +
+      `samples=${samples.map((sample) => JSON.stringify(sample)).join(" | ")}`,
+  );
+}
+
+function pressPreparationEnter(container: HTMLElement): void {
+  const input = preparationInputOf(container);
+  expectThat(input !== null, "准备页：找不到多行输入框");
+  input.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
 /** 预置一份「上一次页面已保存」的真实浏览器草稿（走生产草稿端口，不是内存假件）。 */
 async function seedDraft(sessionId: string, receipt: PreparationReceipt): Promise<void> {
   const identity = await createFakeHostIdentity(HOST_ID);
@@ -620,7 +694,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R16P-5 首条提交：点击后只发一次 session.start，受理前不显示已保存，URL 不变",
+    name: "R16P-5 首条回车：只发一次 session.start，且提交与受理前后页面外框逐帧稳定",
     async run() {
       const mounted = await mountScenario(baseScenario({ holdCommands: ["session.start"] }));
       const sent = (): readonly string[] => mounted.host?.sent ?? [];
@@ -633,12 +707,29 @@ const checks: readonly Check[] = [
         );
         expectEqual(startBodies(sent()).length, 0, "点击之前不得派发首条");
         const composerBeforeSend = query(mounted.container, "[data-composer-input]");
+        await settle(80);
+        const submitBaseline = submissionGeometry(mounted.container);
+        const submitSamples: SubmissionGeometry[] = [];
+        let samplingSubmit = true;
+        sampleSubmissionAfterPaint(mounted.container, submitSamples, () => samplingSubmit);
 
-        // 双击：只允许一次执行（闸门在仓库，页面连点不应产生第二条）。
-        click(query(mounted.container, '[data-action="submit-prompt"]'), "发送首条（第一次）");
-        click(query(mounted.container, '[data-action="submit-prompt"]'), "发送首条（第二次）");
+        // 连续两次回车：isSubmitting 闸门必须在同步状态提交前挡住第二条副作用。
+        pressPreparationEnter(mounted.container);
+        pressPreparationEnter(mounted.container);
         await waitFor(() => startBodies(sent()).length >= 1, "发出 session.start");
         await settle(100);
+        samplingSubmit = false;
+        expectStableSubmissionGeometry(submitBaseline, submitSamples, "首次回车");
+        expectEqual(
+          query(mounted.container, "[data-submit-unavailable]"),
+          null,
+          "首次回车后的正常保存流程不得新增临时原因行",
+        );
+        expectEqual(
+          query(mounted.container, "[data-composer-persistence-warning]"),
+          null,
+          "首次回车后的正常保存流程不得新增临时告警行",
+        );
         expectEqual(startBodies(sent()).length, 1, "双击只产生一次首条提交");
 
         const start = startBodies(sent())[0];
@@ -666,6 +757,10 @@ const checks: readonly Check[] = [
         );
         expectEqual(domText(mounted.container).includes("首条消息已保存"), false, "服务端确认前不得显示已保存");
         expectEqual(currentPath(), `/session/${PREPARED_SESSION_ID}`, "提交期间地址不变");
+        const acceptedBaseline = submissionGeometry(mounted.container);
+        const acceptedSamples: SubmissionGeometry[] = [];
+        let samplingAccepted = true;
+        sampleSubmissionAfterPaint(mounted.container, acceptedSamples, () => samplingAccepted);
 
         // 服务端受理之后才推进：同一 URL 改读正式会话。
         expectThat(
@@ -681,6 +776,9 @@ const checks: readonly Check[] = [
           () => commandNames(sent()).filter((name) => name === "session.read").length >= 1,
           "同页读取正式会话",
         );
+        await settle(180);
+        samplingAccepted = false;
+        expectStableSubmissionGeometry(acceptedBaseline, acceptedSamples, "首条受理与正式读取");
         expectEqual(startBodies(sent()).length, 1, "受理后不重复提交");
         expectThat(query(mounted.container, "[data-composer-input]") === composerBeforeSend,
           "首条受理前后复用同一个会话输入框，不切换页面实例");

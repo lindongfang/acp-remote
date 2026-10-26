@@ -671,8 +671,8 @@ export class FakeHost {
       // 扣住用例点名的命令：只登记不应答，终态交给 `completeHeldCommand`。
       // `session.read` 永不扣——页面首帧就靠它，扣住只会让每条用例都超时，而不是断言到什么。
       const held =
-        frame.command !== "session.read" &&
-        (this.options.holdCommands?.includes(frame.command) === true || this.#dynamicHolds.has(frame.command));
+        (frame.command !== "session.read" && this.options.holdCommands?.includes(frame.command) === true) ||
+        this.#dynamicHolds.has(frame.command);
       if (held) {
         this.#held.push(frame);
         return;
