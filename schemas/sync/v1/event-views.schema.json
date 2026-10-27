@@ -12,6 +12,15 @@
       },
       "additionalProperties": true
     },
+    "session.deleted": {
+      "type": "object",
+      "description": "删除事实的最小视图：只携带被删除会话的稳定 `sessionId`，不携带标题、关闭状态、通知文案、草稿或会话正文。事件表示权威记录已删除（tombstone），客户端据此从目录、摘要缓存与当前页投影中移除该会话；重复投递或重放按同一 `eventId` 幂等应用，不得用 `session.updated` 的空标题或关闭标志代替（docs/SYNC_PROTOCOL.md §10.2/§10.3）。该事件由 owned 生命周期 feature `core.local-session-lifecycle.v1` 门控，Node Link 不转发。",
+      "required": ["sessionId"],
+      "properties": {
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" }
+      },
+      "additionalProperties": true
+    },
     "session.updated": {
       "type": "object",
       "required": ["session"],

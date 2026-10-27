@@ -12,9 +12,6 @@
 //!
 //! 校验只发生在反序列化：构造出来的值必然满足对应 schema，后续层不需要重复校验。
 
-use std::fmt;
-use std::str::FromStr;
-
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -804,102 +801,6 @@ impl<'de> Deserialize<'de> for PositiveDecimalString {
         let text = String::deserialize(deserializer)?;
         Self::parse(&text).map_err(DeError::custom)
     }
-}
-
-/// `common.schema.json#/$defs/preparationWorkspaceSource`：准备凭据的目录来源。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PreparationWorkspaceSource {
-    /// `directoryId`：目标来自本机已登记的目录标识。
-    DirectoryId,
-    /// `workspacePath`：目标来自客户端提交的绝对路径。
-    WorkspacePath,
-}
-
-impl PreparationWorkspaceSource {
-    pub const ALL: [PreparationWorkspaceSource; 2] = [
-        PreparationWorkspaceSource::DirectoryId,
-        PreparationWorkspaceSource::WorkspacePath,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            PreparationWorkspaceSource::DirectoryId => "directoryId",
-            PreparationWorkspaceSource::WorkspacePath => "workspacePath",
-        }
-    }
-}
-
-impl fmt::Display for PreparationWorkspaceSource {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl FromStr for PreparationWorkspaceSource {
-    type Err = ValueError;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|candidate| candidate.as_str() == text)
-            .ok_or_else(|| ValueError::Enumerated {
-                field: "workspaceSource",
-                value: text.to_owned(),
-            })
-    }
-}
-
-impl Serialize for PreparationWorkspaceSource {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for PreparationWorkspaceSource {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        Self::from_str(&text).map_err(DeError::custom)
-    }
-}
-
-/// `common.schema.json#/$defs/preparationReceiptClaims`：准备凭据的闭合 claims（design D2）。
-///
-/// 只证明「该 `sessionId` 由当前 Owner 分配并绑定到该设备/标签页/Agent/目录」；不是登录凭证、
-/// 不授予 scope、不含文字/附件/Provider/MCP 凭据。`storeEpoch` 是持久 `meta.server_epoch`，
-/// `tabNonce` 是 32 字节标签页归属。字段顺序即 transcript domain
-/// `acp-remote/session-preparation/v1` 的 tag 顺序（`SYNC_PROTOCOL.md` §6.3）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreparationReceiptClaims {
-    pub version: ProtocolVersionV1,
-    #[serde(rename = "ownerNodeId")]
-    pub owner_node_id: Uuid,
-    #[serde(rename = "storeEpoch")]
-    pub store_epoch: Uuid,
-    pub origin: NonEmptyText<255>,
-    #[serde(rename = "deviceId")]
-    pub device_id: Uuid,
-    #[serde(rename = "tabNonce")]
-    pub tab_nonce: Base64Url<32>,
-    #[serde(rename = "sessionId")]
-    pub session_id: Uuid,
-    #[serde(rename = "agentId")]
-    pub agent_id: NonEmptyText<128>,
-    #[serde(rename = "normalizedWorkspacePath")]
-    pub normalized_workspace_path: NonEmptyText<4096>,
-    #[serde(rename = "workspaceSource")]
-    pub workspace_source: PreparationWorkspaceSource,
-}
-
-/// `common.schema.json#/$defs/preparationReceipt`：闭合 claims 加 P1363 64 字节签名（base64url）。
-///
-/// 签名域是 `acp-remote/session-preparation/v1` 的 transcript，不接受普通 JSON 签名；本类型只承载
-/// wire 形状，签发/验签由 `identity-auth` 的专用纯类型入口完成。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreparationReceipt {
-    pub claims: PreparationReceiptClaims,
-    pub signature: Base64Url<64>,
 }
 
 #[cfg(test)]

@@ -12,8 +12,9 @@ use sync_protocol::domains::DOMAINS;
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 const PROTOCOL: &str = "sync";
-/// `core.session-preparation.v1` 新增 `transcripts/session-preparation.json`，故由 5 变为 6。
-const POSITIVE_EXPECTED: usize = 6;
+/// 准备凭据所使用的 transcript domain 已随准备能力整体移除，因此正向量由 6 回到 5；
+/// 负向量与公钥向量不受影响。
+const POSITIVE_EXPECTED: usize = 5;
 const TRANSCRIPT_NEGATIVES_EXPECTED: usize = 9;
 const PUBLIC_KEY_NEGATIVES_EXPECTED: usize = 4;
 

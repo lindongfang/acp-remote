@@ -30,31 +30,30 @@ use crate::derive::{
     self, FILE_CHANGE_DEDUP_CAPACITY, TitleIntent, file_change_event, file_changed_view,
     title_intent,
 };
-use crate::lifecycle::{ActivationPlan, LocalSessionLifecycle};
+use crate::lifecycle::PromptClaim;
+use crate::lifecycle::{ActivationPlan, LocalSessionLifecycle, SessionLifecycleGate};
 use crate::model::{
-    AcceptedInput, AcpRaw, Actor, AgentRef, AgentSessionId, AuditAction, AuditOutcome, AuditRecord,
-    ClientCommand, CommandKind, CommandPayload, CommandReceipt, CommandRecord, CommandResult,
-    CommandStatus, CommandTerminalRecord, CommittedEvent, ConfigOptionId, ConfigValue,
-    ConflictKind, CreateSessionRequest, Digest, DirectoryId, DispatchContext, DispatchFence,
-    EffectiveInteraction, ElicitationAction, ElicitationValues, EndpointEvent, EntityRef,
-    EventKind, EventOrigin, EventPayload, EventType, FirstSubmissionConfig, FirstSubmissionId,
-    FirstSubmissionInput, FirstSubmissionRecord, FirstSubmissionSettlement, FirstSubmissionStage,
-    FirstSubmissionWrite, FirstUserMessage, GlobalCursor, InteractionId, InteractionKind,
-    InteractionResolution, MemberValue, MessageId, ModeId, ModeRef, OriginEpoch, OwnedSessionRef,
-    PROMPT_USER_MESSAGE_SOURCE, PendingEvent, PendingInteraction, PermissionDecision,
-    PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock, PromptRequest,
-    PublicError, RequestId, Resolution, ResourceGeneration, ResourceOrigin, ResumeSessionRequest,
-    Sequence, SessionActivity, SessionId, SessionRecoveryRecord, SessionReference, SessionState,
-    SessionSummary, SessionTitle, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind,
-    UserInputWrite, Version, ViewJson, WorkspaceRef, decode_json_string as json_string,
-    encode_json_string as json_text, insert_string_member_front, object_members as json_members,
-    prompt_message_text, top_level_member,
+    AcceptedInput, AcpRaw, Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand,
+    CommandKind, CommandPayload, CommandReceipt, CommandRecord, CommandResult, CommandStatus,
+    CommandTerminalRecord, CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind,
+    CreateSessionRequest, Digest, DispatchContext, EffectiveInteraction, ElicitationAction,
+    ElicitationValues, EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType,
+    GlobalCursor, InteractionId, InteractionKind, InteractionResolution, MemberValue, MessageId,
+    ModeId, ModeRef, OriginEpoch, OwnedSessionRef, PROMPT_USER_MESSAGE_SOURCE, PendingEvent,
+    PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
+    PromptContentBlock, PromptInput, PromptRequest, PublicError, RequestId, Resolution,
+    ResourceGeneration, ResourceOrigin, ResumeSessionRequest, Sequence, SessionActivity, SessionId,
+    SessionRecoveryRecord, SessionReference, SessionState, SessionSummary, SessionTitle,
+    StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind, UserInputWrite, Version, ViewJson,
+    WorkspaceRef, decode_json_string as json_string, encode_json_string as json_text,
+    insert_string_member_front, object_members as json_members, prompt_message_text,
+    top_level_member,
 };
 use crate::ports::{
-    ActivationOutcome, AuditStore, Clock, CommitOutcome, EventPublisher, EventSink,
-    FirstSubmission, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord,
-    InteractionAuthority, InteractionResolved, ModeChange, NewTurn, OriginReadPage, OwnedCommit,
-    PendingInteractionWrite, PreparedSessionCreate, PromptAcceptanceInput, ReadView, ReplayBatch,
+    AuditStore, Clock, CommitOutcome, EventPublisher, EventSink, HistoryInclude, HistoryPage,
+    HistoryQuery, IdGenerator, IdempotencyRecord, InteractionAuthority, InteractionResolved,
+    ModeChange, NewTurn, OriginReadPage, OwnedCommit, PendingInteractionWrite,
+    PreparedSessionCreate, PromptAcceptanceInput, ReadView, ReleaseOutcome, ReplayBatch,
     ReplayLimit, SessionActivityFacts, SessionBackendFactory, SessionCreateAdmission,
     SessionEndpoint, SessionQuery, SessionStore, SessionUpdate, SettledSession, StateChange,
     SubmissionBinding, TrustStore, TurnChange, TurnUpdate,
@@ -111,6 +110,7 @@ pub fn command_name(payload: &CommandPayload) -> &'static str {
         CommandPayload::ModeList { .. } => "session.mode.list",
         CommandPayload::ConfigList { .. } => "session.config.list",
         CommandPayload::Prompt { .. } => "session.prompt",
+        CommandPayload::SessionDelete {} => "session.delete",
         CommandPayload::Cancel { .. } => "session.cancel",
         CommandPayload::ElicitationRespond { .. } => "elicitation.respond",
         CommandPayload::WorkspaceBrowse { .. } => "workspace.browse",
@@ -272,41 +272,12 @@ pub enum ResumeAdmission {
     Settled(CommandRecord),
 }
 
-/// 一次 `session.start`（`kind: initial`）的受理输入（`web-session-preparation` D7/D8）。
-///
-/// `session` 必须是由准备凭据证明的 Owner 分配 ID；`content` 是**有序**完整首条输入（适配器按 wire 原文
-/// 构造块，core 只在 `FirstSubmissionInput` 里拼一次数组与摘要）。`generation` 是准备运行期资源代，
-/// 随派发围栏固定。
-pub struct FirstSubmissionStart {
-    pub session: SessionId,
-    /// 本次尝试的稳定请求标识（服务端从 wire 的 `requestId` 转换，不重新分配）。
-    pub request: RequestId,
-    /// 适配器对解码后 wire payload 取的 ACPR-CJ1 摘要（幂等冲突判定的唯一依据）。
-    pub fingerprint: Digest,
-    pub agent: AgentRef,
-    pub workspace_cwd: Option<String>,
-    pub workspace_directory: Option<DirectoryId>,
-    pub mode: Option<ModeRef>,
-    pub config: Vec<FirstSubmissionConfig>,
-    pub content: Vec<PromptContentBlock>,
-    pub manifest: Option<crate::model::SubmissionManifestClaim>,
-    pub generation: ResourceGeneration,
-}
-
-/// 一次 `session.start`（`kind: continue`）的受理输入（`web-session-preparation` D8.1）。
-///
-/// 正文不来自本次请求：总是复用持久首条用户消息的原文（`owned_message.channel = 'user'`），因此
-/// 继续不会追加第二条首条消息。`endpoint` 由准备阶段按持久 Agent/目录重建或复用。
-pub struct FirstSubmissionContinue {
-    pub session: SessionId,
-    /// 本次继续的稳定请求标识（每次继续都是新的 requestId）。
-    pub request: RequestId,
-    /// 适配器对解码后 wire payload 取的 ACPR-CJ1 摘要。
-    pub fingerprint: Digest,
-    pub first_submission_id: FirstSubmissionId,
-    pub retry_of: RequestId,
-    pub generation: ResourceGeneration,
-    pub endpoint: Arc<dyn SessionEndpoint>,
+/// `session.delete` 的受理结果。业务执行只在 `Prepared` 分支发生；终态记录命中后直接原样回放。
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionDeleteAdmission {
+    Prepared,
+    InFlight,
+    Settled(Box<CommandRecord>),
 }
 
 /// 一次 `session.resume` 的**执行事实**（[`Broker::resume_session_with_execution`]）。
@@ -364,8 +335,161 @@ struct GateInner {
     granted: Option<u64>,
 }
 
-struct GateGuard<'a> {
+pub(crate) struct GateGuard<'a> {
     gate: &'a Gate,
+}
+
+pub(crate) struct OwnedGateGuard {
+    gate: Arc<Gate>,
+    released: bool,
+}
+
+pub(crate) struct DeleteSubmissionGuard {
+    slot: Arc<Slot>,
+}
+
+impl Drop for DeleteSubmissionGuard {
+    fn drop(&mut self) {
+        self.slot
+            .delete_submission_in_flight
+            .store(false, Ordering::Release);
+        self.slot
+            .delete_intent_in_flight
+            .store(false, Ordering::Release);
+    }
+}
+
+fn claim_submission(flag: &AtomicBool) -> Result<(), PortError> {
+    flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map(|_| ())
+        .map_err(|_| PortError::Unavailable(UnavailableKind::Busy))
+}
+
+fn has_submission(flag: &AtomicBool) -> bool {
+    flag.load(Ordering::Acquire)
+}
+
+/// Serializes acceptance against a lifecycle operation which owns this
+/// session. Acquisition is nonblocking so an unrelated command returns a
+/// visible Busy result instead of waiting behind a backend release.
+pub(crate) struct SessionLifecycleSubmissionGuard {
+    slot: Arc<Slot>,
+    flag: SubmissionFlag,
+}
+
+#[derive(Clone, Copy)]
+enum SubmissionFlag {
+    Lifecycle,
+    Delete,
+}
+
+pub(crate) struct OwnedDeletionSubmissionSlot {
+    gate: Arc<Gate>,
+    submission: Option<SessionLifecycleSubmissionGuard>,
+    dispatch_fence: Option<OwnedDispatchFence>,
+}
+
+impl OwnedDeletionSubmissionSlot {
+    fn new(slot: Arc<Slot>) -> Self {
+        let dispatch_fence = slot
+            .delete_dispatch_fenced
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| OwnedDispatchFence {
+                slot: Arc::clone(&slot),
+            });
+        let claimed = dispatch_fence.is_some()
+            && !has_submission(&slot.lifecycle_submission)
+            && !has_submission(&slot.create_submission_in_flight)
+            && claim_submission(&slot.delete_submission_in_flight).is_ok();
+        let submission = claimed.then(|| SessionLifecycleSubmissionGuard {
+            slot: Arc::clone(&slot),
+            flag: SubmissionFlag::Delete,
+        });
+        Self {
+            gate: Arc::clone(&slot.gate),
+            submission,
+            dispatch_fence,
+        }
+    }
+
+    pub fn gate(&self) -> DeletionSubmissionGate<'_> {
+        DeletionSubmissionGate {
+            gate: &self.gate,
+            submission: self.submission.as_ref(),
+            dispatch_fence: self.dispatch_fence.as_ref(),
+        }
+    }
+}
+
+pub(crate) struct OwnedDispatchFence {
+    slot: Arc<Slot>,
+}
+
+impl Drop for OwnedDispatchFence {
+    fn drop(&mut self) {
+        self.slot
+            .delete_dispatch_fenced
+            .store(false, Ordering::Release);
+    }
+}
+
+pub(crate) struct DeletionSubmissionGate<'a> {
+    gate: &'a Gate,
+    submission: Option<&'a SessionLifecycleSubmissionGuard>,
+    dispatch_fence: Option<&'a OwnedDispatchFence>,
+}
+
+impl DeletionSubmissionGate<'_> {
+    /// The dispatch fence is established before waiting for the session's
+    /// serial gate. An older prompt can therefore finish its durable commit
+    /// and release the gate, while it cannot begin a new dispatch from that
+    /// commit. The returned guard still holds the session gate until the
+    /// delete outcome is terminal.
+    pub(crate) async fn guard(&self) -> Result<GateGuard<'_>, PortError> {
+        let _submission = self
+            .submission
+            .ok_or(PortError::Unavailable(UnavailableKind::Busy))?;
+        let _dispatch_fence = self
+            .dispatch_fence
+            .ok_or(PortError::Unavailable(UnavailableKind::Busy))?;
+        Ok(self.gate.guard().await)
+    }
+}
+
+impl Drop for SessionLifecycleSubmissionGuard {
+    fn drop(&mut self) {
+        // A later client command may be dropped while this acceptance is
+        // still unwinding. Releasing the claim on unwind keeps subsequent
+        // deletion eligibility from depending on a detached client future.
+        let flag = match self.flag {
+            SubmissionFlag::Lifecycle => &self.slot.lifecycle_submission,
+            SubmissionFlag::Delete => &self.slot.delete_submission_in_flight,
+        };
+        flag.store(false, Ordering::Release);
+    }
+}
+
+impl OwnedGateGuard {
+    pub(crate) fn release(mut self) {
+        self.unlock();
+        self.released = true;
+    }
+
+    fn unlock(&mut self) {
+        let mut inner = lock(&self.gate.inner);
+        match inner.waiters.pop_front() {
+            Some((ticket, waker)) => {
+                inner.granted = Some(ticket);
+                drop(inner);
+                waker.wake();
+            }
+            None => {
+                inner.locked = false;
+                inner.granted = None;
+            }
+        }
+    }
 }
 
 /// 等待取锁的 future；`Drop` 时收回票据（调用方在等待期间取消命令时不会卡住会话）。
@@ -397,6 +521,20 @@ impl Gate {
         }
         .await;
         GateGuard { gate: self }
+    }
+
+    async fn owned_guard(gate: &Arc<Self>) -> OwnedGateGuard {
+        let handle = Arc::clone(gate);
+        Wait {
+            gate: &handle,
+            ticket: None,
+        }
+        .await;
+        drop(handle);
+        OwnedGateGuard {
+            gate: Arc::clone(gate),
+            released: false,
+        }
     }
 }
 
@@ -476,6 +614,14 @@ impl Drop for GateGuard<'_> {
     }
 }
 
+impl Drop for OwnedGateGuard {
+    fn drop(&mut self) {
+        if !self.released {
+            self.unlock();
+        }
+    }
+}
+
 /// 已持久接受、等待派发的 turn（§6.4）。
 ///
 /// **prompt 正文只在内存**：`owned_command` 按 §11.2 只承诺保留 fingerprint/接受状态/结果引用，不要求
@@ -487,36 +633,9 @@ struct QueuedTurn {
     prompt: PromptRequest,
     /// 触发该 turn 的设备/本地 CLI；用于 `SYNC_PROTOCOL.md` §10.1 的 `origin.kind` 判定。
     actor: Actor,
-    /// 首次提交的派发计划（`session.start`）：端点已由准备阶段建立/转正，派发时不走
-    /// `SessionBackendFactory::open`，并带上回显关联所需的派发上下文。
-    first: Option<FirstDispatchPlan>,
     /// 普通后续输入的派发上下文（`conversation-reliability` D2）：受理期已完整组装，派发时原样交给
-    /// `SessionEndpoint::prompt_with_context`。`None` = 该次派发没有可证明的回显关联（首条走 `first`）。
+    /// `SessionEndpoint::prompt_with_context`。`None` = 该次派发没有可证明的回显关联。
     echo: Option<DispatchContext>,
-}
-
-/// 首次提交的派发计划（`design.md` D7/D8）。
-///
-/// 端点来自准备阶段（`agent-host` 的临时端点转正后就是正式绑定），资源代在准备凭据/运行期记录里固定；
-/// `fence` 已在本条命令受理时提交，因此派发前不再写第二次围栏。
-struct FirstDispatchPlan {
-    first_submission: FirstSubmissionId,
-    user_message: MessageId,
-    agent: AgentRef,
-    fingerprint: Digest,
-    resource_generation: ResourceGeneration,
-    agent_session: AgentSessionId,
-    input_digest: Digest,
-    endpoint: Arc<dyn SessionEndpoint>,
-}
-
-/// 一次已跨越派发围栏的首次提交尝试（终态提交时据此改用 `FirstSubmission::settle_first_submission`
-/// 写命令终态，而不是通用 `command_terminal`）。
-#[derive(Clone)]
-struct FirstAttemptScope {
-    request: RequestId,
-    actor: Actor,
-    fingerprint: Digest,
 }
 
 /// **诱发当前提交事件的命令**：`request` 写进 `PendingEvent.causation`（§10.1 的 `causationRequestId`），
@@ -568,7 +687,17 @@ struct HeldTurn {
 /// 一个会话的运行时状态（owned 与远程各一份，键见 [`Broker::slot_key`]）。
 struct Slot {
     /// §6.3 的每会话串行门：命令处理、事件落盘与派发都在它内部完成。
-    gate: Gate,
+    gate: Arc<Gate>,
+    /// A deletion accepted by the owner lifecycle remains referenced by its
+    /// lifecycle resource release. Keep one submission reference until that
+    /// release and the final write have completed.
+    delete_submission_in_flight: AtomicBool,
+    /// An accepted deletion owns the dispatch boundary while it waits for
+    /// an earlier prompt acceptance to settle.
+    delete_dispatch_fenced: AtomicBool,
+    delete_intent_in_flight: AtomicBool,
+    create_submission_in_flight: AtomicBool,
+    lifecycle_submission: AtomicBool,
     pending: Mutex<Vec<EndpointEvent>>,
     endpoint: Mutex<Option<Arc<dyn SessionEndpoint>>>,
     queue: Mutex<TurnQueue>,
@@ -615,9 +744,6 @@ struct Slot {
     /// 为什么不用 [`Self::window_overflowed`] 代替：那个标志在落账提交期间也可能被并发的入队置位，
     /// 而那条竞态下会话会正常落账——按它丢弃会让已落账会话静默丢事件。围栏只在失败关闭那一步闭合。
     fenced: AtomicBool,
-    /// 已跨越派发围栏、正在等待本轮终态的首次提交尝试（`session.start`）。终态提交据此改走
-    /// `FirstSubmission::settle_first_submission`，避免通用 `command_terminal` 与首条结算写两条终态。
-    first_attempt: Mutex<Option<FirstAttemptScope>>,
 }
 
 /// 一条已提交 delta 的折叠输入（只来自 delta 的 view，`agent.message.delta` 专用）。
@@ -714,21 +840,6 @@ impl Slot {
         queue.running_actor = None;
     }
 
-    /// 登记一次已跨越派发围栏的首次提交尝试（`dispatch_one` 在调用 Agent **之前**调用）。
-    fn set_first_attempt(&self, scope: FirstAttemptScope) {
-        *lock(&self.first_attempt) = Some(scope);
-    }
-
-    /// 当前的首次提交尝试（终态提交时用来判定是否改走首条结算）。
-    fn first_attempt(&self) -> Option<FirstAttemptScope> {
-        lock(&self.first_attempt).clone()
-    }
-
-    /// 本次尝试的终态已由首条结算写盘：清掉登记，后续命令不再按首条口径处理。
-    fn clear_first_attempt(&self) {
-        *lock(&self.first_attempt) = None;
-    }
-
     /// §6 第 9 条：放弃 `turn` 之后不让出 `running` 槽位，而是登记为待观测的占位。
     fn hold_abandoned_turn(&self, turn: &TurnId) {
         let mut queue = lock(&self.queue);
@@ -797,6 +908,7 @@ pub struct Broker {
     /// [`Broker::settle_session_create`] 里取走；适配层对每个 `Prepared` 都必须结算一次，未结算的条目
     /// 会一直留到进程退出（那条命令停在 `accepted`，由启动恢复终结为 `uncertain`）。
     prepared: Mutex<HashMap<String, PreparedCreate>>,
+    create_flights: Mutex<HashMap<String, Arc<Mutex<CreateFlight>>>>,
     /// 有效待处理交互端口（§5.8）：服务协商 `core.pending-interactions.v1` 的读-校验-原子胜出路径。
     /// 未注入时该路径显式不可用（旧 peer 的按 id 解析路径不受影响）。
     interactions: Option<Arc<dyn InteractionAuthority>>,
@@ -804,9 +916,6 @@ pub struct Broker {
     /// 之后、调用后端之前**预占名额，与 `session.resume` 共用同一本账。`None` = 组合根未接线（受控
     /// 路径测试），创建行为与接线前完全一致（不做容量准入）。
     lifecycle: std::sync::OnceLock<Arc<LocalSessionLifecycle>>,
-    /// 首次提交的持久入口（`web-session-preparation`）：`session.start` 的受理/围栏/结算都经它。
-    /// `None` = 组合根未接线，`session.start` 显式 `command.unsupported`（能力协商不得虚报）。
-    first_submission: std::sync::OnceLock<Arc<dyn FirstSubmission>>,
 }
 
 /// `PortError::InvalidRequest` 的哨兵：`session.create` 没有可用容量。
@@ -831,6 +940,100 @@ struct PreparedCreate {
     /// 准入）；`Some` = 名额已预占，落账提交成功后必须 `settle` 为 `Ready`，让后续 `session.resume`
     /// 复用资源而不是再启动一次后端。
     generation: Option<ResourceGeneration>,
+    guard: Option<Arc<PreparedSessionCreateGuard>>,
+}
+
+/// A backend call registered by one create request. A concurrent request
+/// waits for this same result instead of opening a second Agent.
+struct CreateFlight {
+    active: bool,
+    result: Option<Result<Box<PreparedSessionCreate>, ()>>,
+    waiters: Vec<(u64, std::task::Waker)>,
+}
+
+struct CreateFlightTicket(Arc<Mutex<CreateFlight>>);
+
+impl Future for CreateFlightTicket {
+    type Output = Result<Box<PreparedSessionCreate>, PortError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut flight = lock(&self.0);
+        if let Some(result) = &flight.result {
+            return Poll::Ready(match result {
+                Ok(prepared) => Ok(Box::new(prepared.as_ref().clone())),
+                Err(()) => Err(PortError::Unavailable(UnavailableKind::Busy)),
+            });
+        }
+        if !flight.active {
+            return Poll::Ready(Err(PortError::Unavailable(UnavailableKind::Busy)));
+        }
+        if !flight
+            .waiters
+            .iter()
+            .any(|(_, waker)| waker.will_wake(context.waker()))
+        {
+            flight.waiters.push((0, context.waker().clone()));
+        }
+        Poll::Pending
+    }
+}
+
+impl Clone for PreparedSessionCreate {
+    fn clone(&self) -> Self {
+        Self {
+            session: self.session.clone(),
+            summary: self.summary.clone(),
+            agent_session_id: self.agent_session_id.clone(),
+        }
+    }
+}
+
+struct CreateFlightOwner<'a> {
+    broker: &'a Broker,
+    key: String,
+    flight: Arc<Mutex<CreateFlight>>,
+}
+
+impl Drop for CreateFlightOwner<'_> {
+    fn drop(&mut self) {
+        self.broker
+            .complete_create_flight(&self.key, &self.flight, None);
+    }
+}
+
+/// 创建从预占资源代到会话行与终态提交的连续所有权。适配层将本值交回 core 结算；
+/// 无论提交成功还是任一错误返回，两个门都由 `Drop` 释放。
+pub struct PreparedSessionCreateGuard {
+    lifecycle: Option<(Arc<LocalSessionLifecycle>, SessionLifecycleGate)>,
+    resource_generation: Option<ResourceGeneration>,
+    slot: Mutex<Option<OwnedGateGuard>>,
+}
+
+impl PreparedSessionCreateGuard {
+    pub fn session(&self) -> Option<&SessionId> {
+        self.lifecycle.as_ref().map(|(_, gate)| gate.session())
+    }
+
+    pub fn generation(&self) -> Option<ResourceGeneration> {
+        self.resource_generation
+    }
+
+    pub(crate) fn release_slot(&self) {
+        let guard = lock(&self.slot).take();
+        if let Some(guard) = guard {
+            guard.release();
+        }
+    }
+}
+
+impl std::fmt::Debug for PreparedSessionCreateGuard {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedSessionCreateGuard")
+            .field("session", &self.session())
+            .field("generation", &self.resource_generation)
+            .finish_non_exhaustive()
+    }
 }
 
 /// 窗口期（会话行落账之前）事件队列的上限（§6 第 20 条）。
@@ -849,9 +1052,9 @@ impl Broker {
             config,
             slots: Mutex::new(HashMap::new()),
             prepared: Mutex::new(HashMap::new()),
+            create_flights: Mutex::new(HashMap::new()),
             interactions: None,
             lifecycle: std::sync::OnceLock::new(),
-            first_submission: std::sync::OnceLock::new(),
         }
     }
 
@@ -861,11 +1064,8 @@ impl Broker {
         self.lifecycle.set(lifecycle).is_ok()
     }
 
-    /// 注入首次提交的持久入口（组合根在装配时调用一次）。重复注入保留首次实现（返回 `false`）。
-    ///
-    /// 未注入时 `session.start` 显式不可用：能力协商不得虚报（`AGENTS.md` §4）。
-    pub fn set_first_submission(&self, first: Arc<dyn FirstSubmission>) -> bool {
-        self.first_submission.set(first).is_ok()
+    pub fn lifecycle_handle(&self) -> Option<Arc<LocalSessionLifecycle>> {
+        self.lifecycle.get().cloned()
     }
 
     /// 注入有效待处理交互端口（组合根在装配时调用；见 [`InteractionAuthority`]）。
@@ -901,6 +1101,10 @@ impl Broker {
         })
     }
 
+    pub(crate) fn remove_owned_slot(&self, reference: &SessionReference) {
+        lock(&self.slots).remove(&Self::slot_key(reference));
+    }
+
     fn slot(&self, reference: &SessionReference) -> Arc<Slot> {
         let key = Self::slot_key(reference);
         let mut slots = lock(&self.slots);
@@ -908,7 +1112,12 @@ impl Broker {
             .entry(key)
             .or_insert_with(|| {
                 Arc::new(Slot {
-                    gate: Gate::new(),
+                    gate: Arc::new(Gate::new()),
+                    delete_submission_in_flight: AtomicBool::new(false),
+                    delete_dispatch_fenced: AtomicBool::new(false),
+                    delete_intent_in_flight: AtomicBool::new(false),
+                    create_submission_in_flight: AtomicBool::new(false),
+                    lifecycle_submission: AtomicBool::new(false),
                     pending: Mutex::new(Vec::new()),
                     endpoint: Mutex::new(None),
                     queue: Mutex::new(TurnQueue::default()),
@@ -920,7 +1129,6 @@ impl Broker {
                     unaccounted: AtomicBool::new(false),
                     window_overflowed: AtomicBool::new(false),
                     fenced: AtomicBool::new(false),
-                    first_attempt: Mutex::new(None),
                 })
             })
             .clone()
@@ -928,6 +1136,12 @@ impl Broker {
 
     fn owned_slot(&self, session: &SessionId) -> Arc<Slot> {
         self.slot(&Self::reference_of(session))
+    }
+
+    /// The accepted delete holds this gate from its preflight through the
+    /// released resource and durable command terminal.
+    pub(crate) fn owned_deletion_slot(&self, session: &SessionId) -> OwnedDeletionSubmissionSlot {
+        OwnedDeletionSubmissionSlot::new(self.owned_slot(session))
     }
 
     /// 交给 `SessionBackendFactory` 的 `EventSink`（§5.1/§6.1）。事件按到达顺序缓冲，由
@@ -1182,6 +1396,11 @@ impl Broker {
             CommandPayload::TitleSet { title } => {
                 self.submit_title_set(actor, command, title).await
             }
+            CommandPayload::SessionDelete {} => self.reject(
+                "capability.unsupported_by_broker",
+                "session.delete is handled by its own lifecycle path",
+                false,
+            ),
             // 查询命令不在此派发：结果由 §4 的查询入口（`list_sessions`/`read_session`/
             // `command_status`/`config_options`）返回 core 类型，由适配器投影到 wire（core 不做 JSON
             // 序列化）。这里只确认"已接受、无副作用"。
@@ -1239,7 +1458,7 @@ impl Broker {
         };
         // 预检口径与首条一致：空/超 64 块必须在**受理之前**整条拒绝，并同时得到本次输入的
         // 保真 JSON 数组与同源摘要（不接受第二套编码）。
-        let content = match FirstSubmissionInput::new(content.to_vec()) {
+        let content = match PromptInput::new(content.to_vec()) {
             Ok(content) => content,
             Err(error) => return Err(PortError::from(error)),
         };
@@ -1256,10 +1475,34 @@ impl Broker {
             binding,
         };
         let slot = self.owned_slot(&session);
+        let _submission = match self
+            .lifecycle
+            .get()
+            .map(|_| self.claim_prompt_submission(&slot, &session))
+            .transpose()
+        {
+            Ok(submission) => submission,
+            Err(error) => {
+                let public = self.port_error_public(&error)?;
+                return Ok(CommandReceipt::Rejected { error: public });
+            }
+        };
         let _guard = slot.gate.guard().await;
-        match self.accept_prompt(&slot, actor, input).await? {
+        let lifecycle_gate = match self.lifecycle.get() {
+            Some(lifecycle) => Some(lifecycle.acquire_owner_lifecycle_gate(&session).await),
+            None => None,
+        };
+        let acceptance = self
+            .accept_prompt(&slot, &lifecycle_gate, actor, input)
+            .await?;
+        match acceptance {
             PromptAcceptance::Receipt(receipt) | PromptAcceptance::Replayed(receipt) => Ok(receipt),
-            PromptAcceptance::Committed { accepted, dispatch } => {
+            PromptAcceptance::Committed {
+                accepted,
+                dispatch,
+                lifecycle_delete_generation,
+                lifecycle_prompt_generation,
+            } => {
                 // 派发计划在受理提交之后才入队：受理顺序 = 入队顺序（两者同在本门的临界区内）。
                 let turn = accepted.turn.clone();
                 lock(&slot.queue).waiting.push_back(QueuedTurn {
@@ -1269,16 +1512,48 @@ impl Broker {
                         content: prompt_content,
                     },
                     actor: actor.clone(),
-                    first: None,
                     echo: dispatch,
                 });
-                self.pump_locked(&slot, &session).await?;
+                // The input is committed. Releasing the gate or failing to
+                // dispatch must not recover the delete intent it superseded.
+                // An accepted successor deletion owns the dispatch fence;
+                // this prompt then completes without entering the Agent.
+                self.pump_locked_after_prompt(
+                    &slot,
+                    &session,
+                    lifecycle_gate.as_ref(),
+                    lifecycle_delete_generation,
+                    lifecycle_prompt_generation,
+                )
+                .await?;
                 Ok(CommandReceipt::Accepted {
                     request: accepted.request,
                     turn: Some(turn),
                 })
             }
         }
+    }
+
+    fn claim_prompt_submission(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+    ) -> Result<SessionLifecycleSubmissionGuard, PortError> {
+        if has_submission(&slot.lifecycle_submission)
+            || has_submission(&slot.delete_submission_in_flight)
+            || has_submission(&slot.create_submission_in_flight)
+        {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        claim_submission(&slot.lifecycle_submission)?;
+        let submission = SessionLifecycleSubmissionGuard {
+            slot: self.owned_slot(session),
+            flag: SubmissionFlag::Lifecycle,
+        };
+        if has_submission(&slot.delete_submission_in_flight) {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        Ok(submission)
     }
 
     /// 普通（后续）输入的受理（`conversation-reliability` §6 第 24 条）。
@@ -1297,6 +1572,7 @@ impl Broker {
     async fn accept_prompt(
         &self,
         slot: &Slot,
+        lifecycle_gate: &Option<SessionLifecycleGate>,
         actor: &Actor,
         input: PromptAcceptanceInput,
     ) -> Result<PromptAcceptance, PortError> {
@@ -1335,6 +1611,14 @@ impl Broker {
                 turn,
             }));
         }
+        if let Some(lifecycle) = self.lifecycle.get() {
+            lifecycle.ensure_no_delete_in_progress_locked(
+                lifecycle_gate
+                    .as_ref()
+                    .ok_or(PortError::Unavailable(UnavailableKind::Busy))?,
+                &session,
+            )?;
+        }
         let Some(snapshot) = self.deps.store.load(&session).await? else {
             return Ok(PromptAcceptance::Receipt(self.reject(
                 "session.not_found",
@@ -1344,6 +1628,29 @@ impl Broker {
         };
 
         // ③ §6.4：已有未结束任务时的两种策略（排队中的 turn 也算「有工作」）。
+        let mut prompt_claim = None;
+        if let (Some(lifecycle), Some(gate)) = (self.lifecycle.get(), lifecycle_gate.as_ref()) {
+            match lifecycle.reserve_owner_prompt_locked(gate, &session, self.now()) {
+                Ok(Some((generation, newly_reserved))) => {
+                    prompt_claim = Some(PromptClaim::new(
+                        lifecycle.as_ref(),
+                        session.clone(),
+                        generation,
+                        input.request.clone(),
+                        newly_reserved,
+                    ));
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    return Ok(PromptAcceptance::Receipt(self.reject(
+                        "session.busy",
+                        "会话正在删除或没有可用容量",
+                        true,
+                    )?));
+                }
+            }
+        }
+
         let facts = self.deps.store.session_activity(&session).await?;
         let busy = facts.unfinished_turns > 0 || slot.running_turn().is_some();
         if busy {
@@ -1379,6 +1686,12 @@ impl Broker {
                 content: input.content.content().to_vec(),
             })
             .await?;
+        let generation = match (self.lifecycle.get(), lifecycle_gate.as_ref()) {
+            (Some(lifecycle), Some(gate)) => {
+                Some(lifecycle.begin_prompt_in_gate(gate, &session, input.request.clone())?)
+            }
+            _ => None,
+        };
 
         // ⑤ 组装受理写集：用户消息写集、turn、初始可见性事件与幂等记录。
         //
@@ -1480,13 +1793,12 @@ impl Broker {
             .agent_session_id()
             .map(|agent_session| DispatchContext {
                 session: session.clone(),
-                first_submission: None,
                 user_message: input.message.clone(),
                 request: input.request.clone(),
                 turn: turn.clone(),
                 agent: snapshot.session.agent().clone(),
                 agent_session: agent_session.clone(),
-                // 普通后续输入没有准备资源代；该字段只参与回显身份比对，不冒充准备资源代。
+                // 普通输入没有准备资源代；该字段只参与回显身份比对。
                 resource_generation: ResourceGeneration::new(0),
                 input_digest: input.content.digest().clone(),
             });
@@ -1534,413 +1846,25 @@ impl Broker {
                 turn,
             }));
         }
+        if let (Some(lifecycle), Some(gate)) = (self.lifecycle.get(), lifecycle_gate.as_ref()) {
+            lifecycle.complete_prompt_in_gate(gate, &session, &input.request)?;
+        }
+        if let Some(claim) = prompt_claim.as_mut() {
+            claim.committed();
+            claim.disarm();
+        }
         self.publish(&outcome.appended);
         let accepted = outcome.accepted_input.ok_or(PortError::InvalidRequest(
             "a prompt acceptance must report the accepted input",
         ))?;
-        Ok(PromptAcceptance::Committed { accepted, dispatch })
-    }
-
-    /// `session.start`（`kind: initial`）的受理（`web-session-preparation` D7/D8）。
-    ///
-    /// 顺序固定：同 ID 已受理 → 幂等回放；否则**先**在存储的首次提交事务里写正式会话、完整首条输入、
-    /// 稳定消息/请求身份与 `saved_not_dispatched`，**再**提交派发围栏（`dispatch_started`），最后才把
-    /// 派发计划排进同一会话串行门。`accepted` 因此只可能出现在受理事务提交之后；Agent 调用永远晚于
-    /// 围栏落盘。
-    pub async fn start_first_submission(
-        &self,
-        actor: &Actor,
-        start: FirstSubmissionStart,
-        endpoint: Arc<dyn SessionEndpoint>,
-    ) -> Result<CommandReceipt, PortError> {
-        let Some(first) = self.first_submission.get().cloned() else {
-            return self.reject("command.unsupported", "会话准备能力没有在本机接线", false);
-        };
-        let slot = self.owned_slot(&start.session);
-        let _guard = slot.gate.guard().await;
-
-        // 同一 requestId 的重放只读原受理/终态（包括此前的 rejected），不提交第二次首条。
-        if let Some(receipt) = self
-            .first_submission_idempotency(actor, &start.session, &start.request, &start.fingerprint)
-            .await?
-        {
-            return Ok(receipt);
-        }
-
-        // 同 ID 已受理：只回放既有受理/终态，不追加第二条首条、不重传附件。
-        if let Some(record) = first.first_submission(start.session.clone()).await? {
-            if record.first_request_id == start.request
-                || record.current_request_id == start.request
-            {
-                return Ok(CommandReceipt::Accepted {
-                    request: start.request,
-                    turn: None,
-                });
-            }
-            return self.reject(
-                "command.idempotency_conflict",
-                "该会话的首次提交已被另一请求受理",
-                false,
-            );
-        }
-
-        let input = FirstSubmissionInput::new(start.content.clone()).map_err(PortError::from)?;
-        let write = FirstSubmissionWrite {
-            actor: actor.clone(),
-            session: start.session.clone(),
-            first_submission_id: FirstSubmissionId::new(self.deps.ids.request_id().as_str())
-                .map_err(PortError::from)?,
-            user_message_id: self.deps.ids.message_id(),
-            origin_epoch: self.deps.ids.origin_epoch(),
-            agent: start.agent.clone(),
-            workspace_cwd: start.workspace_cwd.clone(),
-            workspace_directory: start.workspace_directory.clone(),
-            mode: start.mode.clone(),
-            config: start.config.clone(),
-            input,
-            manifest: start.manifest.clone(),
-            request_id: start.request.clone(),
-            request_fingerprint: start.fingerprint.clone(),
-            turn: self.deps.ids.turn_id(),
-            at: self.now(),
-        };
-        let turn = write.turn.clone();
-        let user_message = write.user_message_id.clone();
-        let record = match first.commit_first_submission(write).await? {
-            crate::model::FirstSubmissionAdmission::Accepted(record) => record,
-            crate::model::FirstSubmissionAdmission::AlreadyCommitted(_record) => {
-                return Ok(CommandReceipt::Accepted {
-                    request: start.request,
-                    turn: None,
-                });
-            }
-        };
-
-        // D1/D9：首次受理成功后把准备预占转成正式 ready，交由既有生命周期账本计一次名额、
-        // 参与保留期与容量回收；不新建第二个容量台账。
-        if let Some(lifecycle) = self.lifecycle.get()
-            && let Ok(ActivationPlan::Establish { generation }) = lifecycle
-                .begin_created_session(actor, start.session.clone(), self.now())
-                .await
-        {
-            let _ = lifecycle
-                .settle_session(
-                    actor,
-                    start.session.clone(),
-                    generation,
-                    ActivationOutcome::Ready,
-                )
-                .await;
-        }
-
-        // 派发围栏：在调用 Agent **之前**提交（D8）。端点没有 Agent 会话标识时无法证明可以派发，
-        // 写入一次可证明未派发的失败终态并保留正文。
-        let Some(agent_session) = endpoint.agent_session_id().cloned() else {
-            let error = self.port_error_public(&PortError::Unavailable(
-                UnavailableKind::SessionNotEstablished,
-            ))?;
-            self.settle_first(
-                &start.session,
-                actor,
-                &start.request,
-                &start.fingerprint,
-                crate::model::RequestOutcome::Failed,
-                Some(error),
-            )
-            .await;
-            return Ok(CommandReceipt::Accepted {
-                request: start.request,
-                turn: Some(turn),
-            });
-        };
-        let fence = DispatchFence {
-            session: start.session.clone(),
-            first_submission_id: record.first_submission_id.clone(),
-            actor: actor.clone(),
-            request_id: start.request.clone(),
-            retry_of: None,
-            request_fingerprint: start.fingerprint.clone(),
-            agent_session: agent_session.clone(),
-            resource_generation: start.generation,
-            at: self.now(),
-        };
-        match first.begin_dispatch(fence).await? {
-            crate::model::DispatchAdmission::Granted => {}
-            crate::model::DispatchAdmission::NotEligible => {
-                let error = self
-                    .port_error_public(&PortError::Conflict(ConflictKind::IdempotencyConflict))?;
-                self.settle_first(
-                    &start.session,
-                    actor,
-                    &start.request,
-                    &start.fingerprint,
-                    crate::model::RequestOutcome::Failed,
-                    Some(error),
-                )
-                .await;
-                return Ok(CommandReceipt::Accepted {
-                    request: start.request,
-                    turn: Some(turn),
-                });
-            }
-        }
-
-        let plan = FirstDispatchPlan {
-            first_submission: record.first_submission_id.clone(),
-            user_message,
-            agent: start.agent.clone(),
-            fingerprint: start.fingerprint.clone(),
-            resource_generation: start.generation,
-            agent_session,
-            input_digest: record.input_digest.clone(),
-            endpoint,
-        };
-        lock(&slot.queue).waiting.push_back(QueuedTurn {
-            turn,
-            request: start.request.clone(),
-            prompt: PromptRequest {
-                content: start.content,
-            },
-            actor: actor.clone(),
-            first: Some(plan),
-            echo: None,
-        });
-        self.pump_locked(&slot, &start.session).await?;
-        Ok(CommandReceipt::Accepted {
-            request: start.request,
-            turn: None,
-        })
-    }
-
-    /// `session.start`（`kind: continue`）的显式继续（`web-session-preparation` D8.1）。
-    ///
-    /// 准入在同会话串行门内按固定顺序判定；正文永远是持久首条消息的原文，不新增第二条首条消息。
-    /// 端点由调用方（准备阶段）按持久 Agent/目录重建，但只有在围栏 CAS 成功之后才会被派发。
-    pub async fn continue_first_submission(
-        &self,
-        actor: &Actor,
-        request: FirstSubmissionContinue,
-    ) -> Result<CommandReceipt, PortError> {
-        let Some(first) = self.first_submission.get().cloned() else {
-            return self.reject("command.unsupported", "会话准备能力没有在本机接线", false);
-        };
-        let slot = self.owned_slot(&request.session);
-        let _guard = slot.gate.guard().await;
-        if let Some(receipt) = self
-            .first_submission_idempotency(
-                actor,
-                &request.session,
-                &request.request,
-                &request.fingerprint,
-            )
-            .await?
-        {
-            return Ok(receipt);
-        }
-        let Some(snapshot) = self.deps.store.load(&request.session).await? else {
-            return self.reject("session.not_found", "会话不存在", false);
-        };
-        let tracked_agent = snapshot.session.agent().clone();
-        let Some(record) = first.first_submission(request.session.clone()).await? else {
-            return self.reject(
-                "command.idempotency_conflict",
-                "该会话没有首次提交关联",
-                false,
-            );
-        };
-        if record.first_submission_id != request.first_submission_id {
-            return self.reject(
-                "command.idempotency_conflict",
-                "firstSubmissionId 与该会话的首次提交不一致",
-                false,
-            );
-        }
-        // D8.1 顺序：成功终态 → 可能已派发 → 仅失败且可证明未派发才允许继续。
-        // 成功终态：原首次结果权威（先于「可能已派发」判定）。
-        if record
-            .terminal
-            .as_ref()
-            .is_some_and(|terminal| terminal.outcome == crate::model::RequestOutcome::Completed)
-        {
-            return self.reject(
-                "command.idempotency_conflict",
-                "首次提交已有成功终态",
-                false,
-            );
-        }
-        // 跨越过派发边界或首个命令说不清：不重建、不派发（不是 failed）。
-        if record.ever_dispatched
-            || record.stage == FirstSubmissionStage::DispatchStarted
-            || record
-                .terminal
+        Ok(PromptAcceptance::Committed {
+            accepted,
+            dispatch,
+            lifecycle_delete_generation: generation,
+            lifecycle_prompt_generation: prompt_claim
                 .as_ref()
-                .is_some_and(|terminal| terminal.outcome == crate::model::RequestOutcome::Uncertain)
-        {
-            return self.reject(
-                "command.uncertain",
-                "首次提交已进入可能派发阶段，不能自动重发",
-                false,
-            );
-        }
-        if record
-            .terminal
-            .as_ref()
-            .is_none_or(|terminal| terminal.outcome != crate::model::RequestOutcome::Failed)
-        {
-            // 仍在受理中（没有 failed 终态）：继续的前提不成立。
-            return self.reject(
-                "command.idempotency_conflict",
-                "首次提交仍在受理中，只有可证明未派发的失败可以继续",
-                false,
-            );
-        }
-        // 正文：持久首条用户消息的原文（逐字节，不重新构造）。
-        let Some(message) = first.first_user_message(request.session.clone()).await? else {
-            return self.reject("internal.unavailable", "首条用户消息不可读", true);
-        };
-        let Some(items) = crate::model::array_items(message.content.as_str()) else {
-            return self.reject("internal.unavailable", "首条用户消息不可读", true);
-        };
-        let mut content = Vec::with_capacity(items.len());
-        for raw in items {
-            content.push(PromptContentBlock::from_json_text(raw).map_err(PortError::from)?);
-        }
-        let Some(turn) = message.turn.clone() else {
-            return self.reject("internal.unavailable", "首条用户消息缺少 turn 关联", true);
-        };
-        let agent_session = match request.endpoint.agent_session_id().cloned() {
-            Some(agent_session) => agent_session,
-            None => {
-                return self.reject(
-                    "command.uncertain",
-                    "继续端点没有可证明的 Agent 会话标识",
-                    false,
-                );
-            }
-        };
-        let fence = DispatchFence {
-            session: request.session.clone(),
-            first_submission_id: record.first_submission_id.clone(),
-            actor: actor.clone(),
-            request_id: request.request.clone(),
-            retry_of: Some(request.retry_of.clone()),
-            request_fingerprint: request.fingerprint.clone(),
-            agent_session: agent_session.clone(),
-            resource_generation: request.generation,
-            at: self.now(),
-        };
-        match first.begin_dispatch(fence).await? {
-            crate::model::DispatchAdmission::Granted => {}
-            crate::model::DispatchAdmission::NotEligible => {
-                return self.reject(
-                    "command.idempotency_conflict",
-                    "另一次继续已跨越派发边界或前置条件已改变",
-                    false,
-                );
-            }
-        }
-        let plan = FirstDispatchPlan {
-            first_submission: record.first_submission_id.clone(),
-            user_message: message.message.clone(),
-            agent: tracked_agent,
-            fingerprint: request.fingerprint.clone(),
-            resource_generation: request.generation,
-            agent_session,
-            input_digest: record.input_digest.clone(),
-            endpoint: request.endpoint,
-        };
-        lock(&slot.queue).waiting.push_back(QueuedTurn {
-            turn: turn.clone(),
-            request: request.request.clone(),
-            prompt: PromptRequest { content },
-            actor: actor.clone(),
-            first: Some(plan),
-            echo: None,
-        });
-        self.pump_locked(&slot, &request.session).await?;
-        Ok(CommandReceipt::Accepted {
-            request: request.request,
-            turn: Some(turn),
+                .map(|claim| (claim.generation(), input.request.clone())),
         })
-    }
-
-    /// 写一次首条结算（显式继续的端点/配置建立失败也走这里：该次尝试必须留下 failed 终态）。
-    ///
-    /// 首次提交的终态由本方法唯一写入；与内部 [`Self::settle_first`] 的区别只在于返回存储结果，
-    /// 适配层可以如实区分「已落盘」与「落盘失败」。
-    pub async fn settle_first_submission(
-        &self,
-        settlement: FirstSubmissionSettlement,
-    ) -> Result<FirstSubmissionRecord, PortError> {
-        let Some(first) = self.first_submission.get() else {
-            return Err(PortError::Unavailable(
-                UnavailableKind::SessionNotEstablished,
-            ));
-        };
-        first.settle_first_submission(settlement).await
-    }
-
-    /// 首条提交的只读投影（`restore` 的 committed 分支、`command.status` 的协商投影、继续准入）。
-    pub async fn first_submission_record(
-        &self,
-        session: &SessionId,
-    ) -> Result<Option<FirstSubmissionRecord>, PortError> {
-        match self.first_submission.get() {
-            Some(first) => first.first_submission(session.clone()).await,
-            None => Ok(None),
-        }
-    }
-
-    /// 持久首条用户消息（`owned_message.channel = 'user'`）：无需 Agent 回显即可读取。
-    pub async fn first_user_message(
-        &self,
-        session: &SessionId,
-    ) -> Result<Option<FirstUserMessage>, PortError> {
-        match self.first_submission.get() {
-            Some(first) => first.first_user_message(session.clone()).await,
-            None => Ok(None),
-        }
-    }
-
-    /// 启动收敛：只收敛到可证明的事实，**绝不**自动派发。未接线的进程返回 `NotPreparation`。
-    pub async fn converge_first_submission(
-        &self,
-        session: &SessionId,
-        at: Timestamp,
-    ) -> Result<crate::model::FirstSubmissionConvergence, PortError> {
-        match self.first_submission.get() {
-            Some(first) => first.converge_first_submission(session.clone(), at).await,
-            None => Ok(crate::model::FirstSubmissionConvergence::NotPreparation),
-        }
-    }
-
-    /// 写一次首条结算（失败/终态都经这里；`settle_first_submission` 是唯一 writer）。
-    async fn settle_first(
-        &self,
-        session: &SessionId,
-        actor: &Actor,
-        request: &RequestId,
-        fingerprint: &Digest,
-        outcome: crate::model::RequestOutcome,
-        error: Option<PublicError>,
-    ) {
-        let Some(first) = self.first_submission.get() else {
-            return;
-        };
-        let settlement = FirstSubmissionSettlement {
-            session: session.clone(),
-            actor: actor.clone(),
-            request_id: request.clone(),
-            request_fingerprint: fingerprint.clone(),
-            outcome,
-            error,
-            at: self.now(),
-        };
-        if let Err(error) = first.settle_first_submission(settlement).await {
-            // core 没有日志依赖：结算失败不改变调用方的判定（命令保持 accepted，由恢复/查询收敛），
-            // 但也不得伪造成功。
-            let _ = error;
-        }
     }
 
     async fn submit_cancel(
@@ -3242,28 +3166,83 @@ impl Broker {
         let workspace = check_workspace_ownership(&create, ownership)?;
         let at = self.now();
         let session = self.deps.ids.session_id();
+        let slot = self.owned_slot(&session);
+        let lifecycle_gate = match self.lifecycle.get().cloned() {
+            Some(lifecycle) => Some(lifecycle.acquire_owner_lifecycle_gate(&session).await),
+            None => None,
+        };
+        let flight_key = prepared_key(actor, request);
+        // The durable check above closes the completed replay. This registry
+        // closes the small window between that read and acceptance: a second
+        // request waits for the first backend result and never reaches the
+        // accepted row as an InFlight dead end.
+        let flight = {
+            let mut flights = lock(&self.create_flights);
+            if let Some(flight) = flights.get(&flight_key) {
+                Err(Arc::clone(flight))
+            } else {
+                let flight = Arc::new(Mutex::new(CreateFlight {
+                    active: true,
+                    result: None,
+                    waiters: Vec::new(),
+                }));
+                flights.insert(flight_key.clone(), Arc::clone(&flight));
+                Ok(flight)
+            }
+        };
+        let flight = match flight {
+            Ok(flight) => flight,
+            Err(flight) => {
+                drop(lifecycle_gate);
+                return match CreateFlightTicket(Arc::clone(&flight)).await {
+                    Ok(prepared) => Ok(SessionCreateAdmission::Prepared(prepared)),
+                    Err(error) => Err(error),
+                };
+            }
+        };
+        let _owner = CreateFlightOwner {
+            broker: self,
+            key: flight_key.clone(),
+            flight,
+        };
+        let slot_guard = Gate::owned_guard(&slot.gate).await;
+        let mut create_guard = PreparedSessionCreateGuard {
+            lifecycle: self.lifecycle.get().cloned().zip(lifecycle_gate),
+            resource_generation: None,
+            slot: Mutex::new(Some(slot_guard)),
+        };
         // ①（容量）与 `session.resume` 共用同一本账：会话标识已经分配、**后端尚未启动**，此刻预占。
         //     创建失败必须把名额交还（`release_capacity`），成功则在落账提交后 settle 为 ready。
-        let generation = match self.lifecycle.get() {
-            None => None,
-            Some(lifecycle) => match lifecycle
-                .begin_created_session(actor, session.clone(), at.clone())
-                .await?
-            {
-                ActivationPlan::Establish { generation }
-                | ActivationPlan::Reused { generation } => Some(generation),
-                ActivationPlan::CapacityExceeded => {
-                    return Err(PortError::InvalidRequest(SESSION_CAPACITY_EXCEEDED));
+        let generation = match (self.lifecycle.get(), create_guard.lifecycle.as_ref()) {
+            (None, _) => None,
+            (Some(lifecycle), Some((_, gate))) => {
+                let mut plan =
+                    lifecycle.begin_created_session_in_gate(gate, &session, at.clone())?;
+                if matches!(plan, ActivationPlan::CapacityExceeded)
+                    && lifecycle.reclaim_capacity_once(actor).await?
+                {
+                    plan = lifecycle.begin_created_session_in_gate(gate, &session, self.now())?;
                 }
-                // 新建会话的标识由 core 现分配，不可能与在建立/回收中的同一会话相撞；撞上就是
-                // 标识生成器违背了唯一性契约，失败关闭（不猜、不冒领别人的名额）。
-                ActivationPlan::InFlight | ActivationPlan::Settled(_) => {
-                    return Err(PortError::InvalidRequest(
-                        "session.create allocated an id that is already activating",
-                    ));
+                match plan {
+                    ActivationPlan::Establish { generation }
+                    | ActivationPlan::Reused { generation } => Some(generation),
+                    ActivationPlan::CapacityExceeded => {
+                        return Err(PortError::InvalidRequest(SESSION_CAPACITY_EXCEEDED));
+                    }
+                    // 新建会话的标识由 core 现分配，不可能与在建立/回收中的同一会话相撞；撞上就是
+                    // 标识生成器违背了唯一性契约，失败关闭（不猜、不冒领别人的名额）。
+                    ActivationPlan::InFlight | ActivationPlan::Settled(_) => {
+                        return Err(PortError::InvalidRequest(
+                            "session.create allocated an id that is already activating",
+                        ));
+                    }
                 }
-            },
+            }
+            (Some(_), None) => {
+                return Err(PortError::Unavailable(UnavailableKind::Busy));
+            }
         };
+        create_guard.resource_generation = generation;
         let settled = SettledSession {
             session: session.clone(),
             title: None,
@@ -3310,9 +3289,19 @@ impl Broker {
         let outcome = match self.commit_owned(commit).await {
             Ok(outcome) => outcome,
             Err(error) => {
-                // 受理没落盘 = 本次不会建会话：预占必须交还，否则每次失败都吃掉一个名额。
-                self.release_create_capacity(actor, &session, generation)
+                self.complete_create_flight(&flight_key, &_owner.flight, None);
+                if let (Some((lifecycle, gate)), Some(generation)) =
+                    (&create_guard.lifecycle, generation)
+                {
+                    self.release_created_session_gate(
+                        actor,
+                        &session,
+                        Some(generation),
+                        lifecycle,
+                        gate,
+                    )
                     .await;
+                }
                 return Err(error);
             }
         };
@@ -3320,15 +3309,25 @@ impl Broker {
             // 同键：既有持久记录就是首次结果。仍是 `accepted` ⇒ **窗口期重发**（并发或重试）：回受理态、
             // 不派发第二次创建、不碰首次记录；已终结 ⇒ 回首次终态。两者都不再打开后端端点。
             // 本次也没有建立会话，因此预占的名额必须交还（首次调用的名额由它自己持有）。
-            self.release_create_capacity(actor, &session, generation)
+            if let (Some((lifecycle, gate)), Some(generation)) =
+                (&create_guard.lifecycle, generation)
+            {
+                self.release_created_session_gate(
+                    actor,
+                    &session,
+                    Some(generation),
+                    lifecycle,
+                    gate,
+                )
                 .await;
+            }
+            self.complete_create_flight(&flight_key, &_owner.flight, None);
             return Ok(match replayed.record.status() {
                 CommandStatus::Accepted => SessionCreateAdmission::InFlight,
                 _ => SessionCreateAdmission::Settled(Box::new(replayed.record)),
             });
         }
         // ② 执行：窗口期从这里开始——后端一返回事件就可能到达，而那时会话行还没落盘。
-        let slot = self.owned_slot(&session);
         slot.hold_unaccounted();
         let sink = self.sink(&session);
         let endpoint: Arc<dyn SessionEndpoint> =
@@ -3339,10 +3338,38 @@ impl Broker {
                     //    窗口期队列里的事件随失败一起作废：那个会话不会存在，它们没有归属。
                     slot.release_unaccounted();
                     slot.take_pending();
-                    // 可证明没有建立外部资源：交还预占名额（`settle(Failed)` 需要会话行，此刻还没有）。
-                    self.release_create_capacity(actor, &session, generation)
+                    if create_failure_status(&error) == CommandStatus::Failed
+                        && let (Some((lifecycle, gate)), Some(generation)) =
+                            (&create_guard.lifecycle, generation)
+                    {
+                        self.release_created_session_gate(
+                            actor,
+                            &session,
+                            Some(generation),
+                            lifecycle,
+                            gate,
+                        )
                         .await;
+                    } else if create_failure_status(&error) == CommandStatus::Uncertain
+                        && let (Some((lifecycle, gate)), Some(generation)) =
+                            (&create_guard.lifecycle, generation)
+                    {
+                        match lifecycle
+                            .release_session_locked(
+                                gate,
+                                actor,
+                                session.clone(),
+                                generation,
+                                self.now(),
+                            )
+                            .await
+                        {
+                            Ok(ReleaseOutcome::Released | ReleaseOutcome::AlreadyReleased) => {}
+                            Ok(ReleaseOutcome::Failed | ReleaseOutcome::Uncertain) | Err(_) => {}
+                        }
+                    }
                     self.commit_create_failure(actor, request, &error).await;
+                    self.complete_create_flight(&flight_key, &_owner.flight, None);
                     return Err(error);
                 }
             };
@@ -3353,47 +3380,82 @@ impl Broker {
             agent_session_id: agent_session_id.clone(),
             ..settled
         };
+        let ownership = Arc::new(create_guard);
         let prepared = PreparedSessionCreate {
             session: session.clone(),
             summary,
             agent_session_id,
         };
         lock(&self.prepared).insert(
-            prepared_key(actor, request),
+            flight_key.clone(),
             PreparedCreate {
                 settled,
                 at,
                 epoch,
                 generation,
+                guard: Some(ownership),
             },
+        );
+        self.complete_create_flight(
+            &flight_key,
+            &_owner.flight,
+            Some(Ok(Box::new(prepared.clone()))),
         );
         Ok(SessionCreateAdmission::Prepared(Box::new(prepared)))
     }
 
-    /// 交还 `session.create` 的容量预占（只用于**可证明不会建立会话**的路径）。
-    ///
-    /// 未接线生命周期（`None`）或该代已被其它路径收口时是 no-op。`release_capacity` 只接受
-    /// `Inactive`/未确认的 `Activating`：`Ready`/`Reclaiming` 必须走释放确认，因此这里不会把已建立的
-    /// 资源名额悄悄放掉。
-    async fn release_create_capacity(
+    fn complete_create_flight(
+        &self,
+        key: &str,
+        expected: &Arc<Mutex<CreateFlight>>,
+        result: Option<Result<Box<PreparedSessionCreate>, ()>>,
+    ) {
+        let flight = {
+            let mut flights = lock(&self.create_flights);
+            if flights
+                .get(key)
+                .is_some_and(|flight| Arc::ptr_eq(flight, expected))
+            {
+                flights.remove(key)
+            } else {
+                None
+            }
+        };
+        let Some(flight) = flight else {
+            return;
+        };
+        let wake = {
+            let mut flight = lock(&flight);
+            flight.active = false;
+            flight.result = result;
+            std::mem::take(&mut flight.waiters)
+        };
+        for (_, waker) in wake {
+            waker.wake();
+        }
+    }
+
+    /// Roll back a reservation when the backend has provably not established
+    /// a session. Established or uncertain resources must use real release.
+    async fn release_created_session_gate(
         &self,
         actor: &Actor,
         session: &SessionId,
         generation: Option<ResourceGeneration>,
+        lifecycle: &LocalSessionLifecycle,
+        gate: &SessionLifecycleGate,
     ) {
-        let (Some(lifecycle), Some(generation)) = (self.lifecycle.get(), generation) else {
+        let Some(generation) = generation else {
             return;
         };
+        if gate.session() != session {
+            return;
+        }
         if let Err(error) = lifecycle
             .release_capacity(actor, session.clone(), generation, self.now())
             .await
         {
-            // core 不依赖日志设施：这里保留结构化事实的唯一出口是名值对本身（调用方可按名检索）。
-            let _ = (
-                "core.session_create_capacity_release_failed",
-                session.as_str(),
-                error,
-            );
+            let _ = ("core.session_create_gate_release_failed", error);
         }
     }
 
@@ -3464,6 +3526,592 @@ impl Broker {
         } else {
             ResumeAdmission::Prepared
         })
+    }
+
+    /// `session.delete` 的持久受理。终态记录先于会话可见性检查返回，因此 tombstone 建立后同一
+    /// `(actor, requestId)` 仍可幂等重放首次终态。
+    pub async fn admit_session_delete(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        session: &SessionId,
+    ) -> Result<SessionDeleteAdmission, PortError> {
+        if let Some(lifecycle) = self.lifecycle.get() {
+            return self
+                .admit_session_delete_with_runtime_claim(
+                    lifecycle.as_ref(),
+                    actor,
+                    request,
+                    request_fingerprint,
+                    session,
+                    None,
+                )
+                .await;
+        }
+        self.admit_session_delete_inner(actor, request, request_fingerprint, session)
+            .await
+    }
+
+    pub async fn admit_session_delete_in_lifecycle_gate(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: &SessionLifecycleGate,
+        actor: &Actor,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        session: &SessionId,
+    ) -> Result<SessionDeleteAdmission, PortError> {
+        let lifecycle = self
+            .lifecycle
+            .get()
+            .filter(|bound| std::ptr::eq(bound.as_ref(), lifecycle))
+            .ok_or(PortError::Unavailable(UnavailableKind::BackendUnsupported))?;
+        if gate.session() != session {
+            return Err(PortError::InvalidRequest(
+                "the lifecycle gate belongs to another session",
+            ));
+        }
+        let pending = lifecycle
+            .delete_pending_generation_locked(gate, session)?
+            .is_some();
+        let observed = lifecycle
+            .delete_pending_generation_locked(gate, session)?
+            .or(lifecycle.resource_generation_locked(gate, session)?)
+            .ok_or(PortError::Unavailable(UnavailableKind::Busy))?;
+        let before = lifecycle.delete_intent_locked(gate, session)?;
+        let (generation, bound_request) = lifecycle.bind_delete_intent_locked(
+            gate,
+            session,
+            observed,
+            request.clone(),
+            pending,
+        )?;
+        let is_new_intent = before.is_none();
+        let result = self
+            .admit_session_delete_inner(actor, request, request_fingerprint, session)
+            .await;
+        if matches!(&result, Ok(SessionDeleteAdmission::Prepared)) {
+            lifecycle.accept_delete(session);
+        }
+        if let Err(error) = &result {
+            if is_new_intent {
+                lifecycle.clear_exact_delete_intent_locked(
+                    gate,
+                    session,
+                    generation,
+                    Some(&bound_request),
+                )?;
+            }
+            return Err(match error {
+                PortError::NotFound(target) => PortError::NotFound(target.clone()),
+                PortError::Conflict(kind) => PortError::Conflict(*kind),
+                PortError::Unavailable(kind) => PortError::Unavailable(*kind),
+                PortError::Corrupt(reason) => PortError::Corrupt(reason),
+                PortError::InvalidRequest(reason) => PortError::InvalidRequest(reason),
+                PortError::Backend(_) => {
+                    PortError::Corrupt("a backend error cannot occur during delete admission")
+                }
+            });
+        }
+        result
+    }
+
+    pub async fn admit_retention_session_delete(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        actor: &Actor,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        session: &SessionId,
+        prompt_generation: ResourceGeneration,
+    ) -> Result<SessionDeleteAdmission, PortError> {
+        self.admit_session_delete_with_runtime_claim(
+            lifecycle,
+            actor,
+            request,
+            request_fingerprint,
+            session,
+            Some(prompt_generation),
+        )
+        .await
+    }
+
+    pub async fn admit_session_delete_with_provenant_claim(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        actor: &Actor,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        session: &SessionId,
+        prompt_generation: ResourceGeneration,
+    ) -> Result<SessionDeleteAdmission, PortError> {
+        self.admit_session_delete_with_runtime_claim(
+            lifecycle,
+            actor,
+            request,
+            request_fingerprint,
+            session,
+            Some(prompt_generation),
+        )
+        .await
+    }
+
+    async fn admit_session_delete_with_runtime_claim(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        actor: &Actor,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        session: &SessionId,
+        prompt_generation: Option<ResourceGeneration>,
+    ) -> Result<SessionDeleteAdmission, PortError> {
+        self.authorize(actor, "session.delete", Some(session), request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let gate = lifecycle.acquire_owner_lifecycle_gate(session).await;
+        if let Some(record) = self.deps.store.find_request(request, actor).await? {
+            if record.command() != "session.delete"
+                || record.kind() != CommandKind::Mutation
+                || record.session() != Some(session)
+                || record.expected_version().is_some()
+                || record.request_fingerprint() != request_fingerprint
+            {
+                return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
+            }
+            return Ok(if record.status().is_terminal() {
+                SessionDeleteAdmission::Settled(Box::new(record))
+            } else {
+                SessionDeleteAdmission::InFlight
+            });
+        }
+        let observed = lifecycle
+            .delete_pending_generation_locked(&gate, session)?
+            .or(lifecycle.resource_generation_locked(&gate, session)?)
+            .ok_or(PortError::Unavailable(UnavailableKind::Busy))?;
+        if let Some(generation) = prompt_generation {
+            let facts = self.deps.store.session_activity(session).await?;
+            if observed != generation
+                || facts.unfinished_turns > 0
+                || facts.unresolved_interactions > 0
+            {
+                return Err(PortError::Unavailable(UnavailableKind::Busy));
+            }
+        }
+        lifecycle.bind_delete_intent_locked(&gate, session, observed, request.clone(), false)?;
+        let result = self
+            .admit_session_delete_inner(actor, request, request_fingerprint, session)
+            .await;
+        if matches!(&result, Ok(SessionDeleteAdmission::Prepared)) {
+            lifecycle.accept_delete(session);
+        }
+        if let Err(error) = &result {
+            lifecycle.clear_exact_delete_intent_locked(&gate, session, observed, Some(request))?;
+            return Err(match error {
+                PortError::NotFound(target) => PortError::NotFound(target.clone()),
+                PortError::Conflict(kind) => PortError::Conflict(*kind),
+                PortError::Unavailable(kind) => PortError::Unavailable(*kind),
+                PortError::Corrupt(reason) => PortError::Corrupt(reason),
+                PortError::InvalidRequest(reason) => PortError::InvalidRequest(reason),
+                PortError::Backend(_) => {
+                    PortError::Corrupt("a backend error cannot occur during delete admission")
+                }
+            });
+        }
+        result
+    }
+
+    async fn admit_session_delete_inner(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        session: &SessionId,
+    ) -> Result<SessionDeleteAdmission, PortError> {
+        self.authorize(actor, "session.delete", Some(session), request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let slot = self.owned_slot(session);
+        if has_submission(&slot.delete_submission_in_flight)
+            || has_submission(&slot.lifecycle_submission)
+            || has_submission(&slot.create_submission_in_flight)
+        {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        claim_submission(&slot.delete_submission_in_flight)?;
+        let submission = DeleteSubmissionGuard {
+            slot: Arc::clone(&slot),
+        };
+        claim_submission(&slot.delete_intent_in_flight)?;
+        if let Some(record) = self.deps.store.find_request(request, actor).await? {
+            if record.command() != "session.delete"
+                || record.kind() != CommandKind::Mutation
+                || record.session() != Some(session)
+                || record.expected_version().is_some()
+                || record.request_fingerprint() != request_fingerprint
+            {
+                return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
+            }
+            return Ok(if record.status().is_terminal() {
+                SessionDeleteAdmission::Settled(Box::new(record))
+            } else {
+                SessionDeleteAdmission::InFlight
+            });
+        }
+        let at = self.now();
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: request.clone(),
+                command: "session.delete".to_owned(),
+                kind: CommandKind::Mutation,
+                session: Some(session.clone()),
+                expected_version: None,
+                request_fingerprint: request_fingerprint.clone(),
+                accepted_at: at,
+            }),
+            command_terminal: None,
+            origin_epoch: None,
+            input: None,
+        };
+        let outcome = match self.commit_owned(commit).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                drop(submission);
+                return Err(error);
+            }
+        };
+        drop(submission);
+        Ok(if outcome.replayed.is_some() {
+            SessionDeleteAdmission::InFlight
+        } else {
+            SessionDeleteAdmission::Prepared
+        })
+    }
+
+    /// 结束已受理、但未进入删除事务的 `session.delete`。
+    pub async fn settle_session_delete(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        self.settle_session_delete_with_guard(actor, request, status, error, None, None, false)
+            .await
+    }
+
+    pub async fn settle_session_delete_in_lifecycle_gate(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        let session = self
+            .deps
+            .store
+            .find_request(request, actor)
+            .await?
+            .and_then(|record| record.session().cloned())
+            .ok_or(PortError::Unavailable(UnavailableKind::Busy))?;
+        let gate = lifecycle.acquire_owner_lifecycle_gate(&session).await;
+        self.settle_session_delete_in_owned_lifecycle_gate(
+            lifecycle, gate, actor, request, status, error,
+        )
+        .await
+    }
+
+    pub async fn settle_session_delete_in_owned_lifecycle_gate(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: SessionLifecycleGate,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        self.settle_session_delete_in_owned_lifecycle_gate_for(
+            lifecycle, gate, None, actor, request, status, error,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // Carries the exact request identity and held lifecycle ownership.
+    pub async fn settle_session_delete_in_owned_lifecycle_gate_for(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: SessionLifecycleGate,
+        session: Option<&SessionId>,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        let session = match session {
+            Some(session) => session.clone(),
+            None => self
+                .deps
+                .store
+                .find_request(request, actor)
+                .await?
+                .and_then(|record| record.session().cloned())
+                .ok_or(PortError::Unavailable(UnavailableKind::Busy))?,
+        };
+        self.settle_session_delete_in_held_lifecycle_gate(
+            lifecycle, gate, &session, actor, request, status, error,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn settle_session_delete_in_held_lifecycle_gate(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: SessionLifecycleGate,
+        session: &SessionId,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        if gate.session() != session {
+            return Err(PortError::InvalidRequest(
+                "the lifecycle gate belongs to another session",
+            ));
+        }
+        self.settle_session_delete_with_guard(
+            actor,
+            request,
+            status,
+            error,
+            Some((lifecycle, &gate)),
+            Some(session),
+            false,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // Carries the exact request identity and held lifecycle ownership.
+    pub(crate) async fn settle_session_delete_in_held_lifecycle_gate_locked(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: SessionLifecycleGate,
+        session: &SessionId,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        if gate.session() != session {
+            return Err(PortError::InvalidRequest(
+                "the lifecycle gate belongs to another session",
+            ));
+        }
+        self.settle_session_delete_with_guard(
+            actor,
+            request,
+            status,
+            error,
+            Some((lifecycle, &gate)),
+            Some(session),
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn settle_session_delete_in_held_submission_gate_locked(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        lifecycle_gate: SessionLifecycleGate,
+        session: &SessionId,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        if lifecycle_gate.session() != session {
+            return Err(PortError::InvalidRequest(
+                "the lifecycle gate belongs to another session",
+            ));
+        }
+        // The deletion executor owns the session submission gate for its
+        // whole release-and-terminal transaction. Re-entering it here would
+        // deadlock the accepted delete.
+        self.settle_session_delete_with_guard(
+            actor,
+            request,
+            status,
+            error,
+            Some((lifecycle, &lifecycle_gate)),
+            Some(session),
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // Carries the exact request identity and held lifecycle ownership.
+    async fn settle_session_delete_with_guard(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+        lifecycle_gate: Option<(&LocalSessionLifecycle, &SessionLifecycleGate)>,
+        bound_session: Option<&SessionId>,
+        lifecycle_gate_is_locked: bool,
+    ) -> Result<bool, PortError> {
+        self.settle_session_delete_with_guard_and_terminal(
+            actor,
+            request,
+            status,
+            error,
+            lifecycle_gate,
+            bound_session,
+            lifecycle_gate_is_locked,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn settle_session_delete_with_guard_and_terminal(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+        lifecycle_gate: Option<(&LocalSessionLifecycle, &SessionLifecycleGate)>,
+        _bound_session: Option<&SessionId>,
+        lifecycle_gate_is_locked: bool,
+        prepared_terminal: Option<CommandTerminalRecord>,
+    ) -> Result<bool, PortError> {
+        if !matches!(status, CommandStatus::Failed | CommandStatus::Uncertain) {
+            return Err(PortError::InvalidRequest(
+                "session.delete completion is written by its deletion transaction",
+            ));
+        }
+        let record = self.deps.store.find_request(request, actor).await?;
+        let Some(record) = record else {
+            return Ok(false);
+        };
+        if record.command() != "session.delete" {
+            return Err(PortError::InvalidRequest(
+                "settle_session_delete only terminates session.delete",
+            ));
+        }
+        if record.status().is_terminal() {
+            return Ok(false);
+        }
+        let Some(session) = record.session().cloned() else {
+            return Err(PortError::Corrupt(
+                "session.delete command record has no target session",
+            ));
+        };
+        let at = self.now();
+        let terminal = match prepared_terminal {
+            Some(terminal) => terminal,
+            None => CommandTerminalRecord::try_new(status, Some(at.clone()), None, None, error)?,
+        };
+        let (event_type, view) = match status {
+            CommandStatus::Failed => ("command.failed", view_command_failed(request, None)?),
+            CommandStatus::Uncertain => (
+                "command.uncertain",
+                view_command_uncertain(request, "无法确认空会话资源是否已经释放")?,
+            ),
+            _ => {
+                return Err(PortError::InvalidRequest(
+                    "session.delete settlement must be failed or uncertain",
+                ));
+            }
+        };
+        let event = pending_event(
+            event_type,
+            EventKind::Structured,
+            view,
+            None,
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            Some(actor),
+        )?;
+        let owned_gate = match (self.lifecycle.get(), lifecycle_gate) {
+            (Some(lifecycle), None) => Some(lifecycle.acquire_owner_lifecycle_gate(&session).await),
+            _ => None,
+        };
+        let gate = match lifecycle_gate {
+            Some((lifecycle, gate)) => Some((lifecycle, gate)),
+            None => owned_gate
+                .as_ref()
+                .zip(self.lifecycle.get())
+                .map(|(gate, lifecycle)| (lifecycle.as_ref(), gate)),
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = if lifecycle_gate_is_locked {
+            None
+        } else {
+            Some(slot.gate.guard().await)
+        };
+        let current = self.deps.store.find_request(request, actor).await?;
+        if current
+            .as_ref()
+            .is_none_or(|current| current.status().is_terminal())
+        {
+            slot.delete_intent_in_flight.store(false, Ordering::Release);
+            return Ok(false);
+        }
+        if let Some((lifecycle, gate)) = gate {
+            lifecycle.delete_intent_locked(gate, &session)?;
+        }
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at,
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![event],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(terminal),
+            origin_epoch: None,
+            input: None,
+        };
+        let result = {
+            match self.commit_owned(commit).await {
+                Ok(outcome) => {
+                    self.publish(&outcome.appended);
+                    Ok(true)
+                }
+                Err(PortError::Unavailable(_)) => Ok(false),
+                Err(error) => Err(error),
+            }
+        };
+        if let Some((lifecycle, gate)) = gate {
+            let intent = lifecycle.delete_intent_locked(gate, &session)?;
+            if let Some((generation, intent_request)) = &intent
+                && intent_request == request
+            {
+                lifecycle.clear_exact_delete_intent_locked(
+                    gate,
+                    &session,
+                    *generation,
+                    Some(intent_request),
+                )?;
+            }
+        }
+        let slot = self.owned_slot(&session);
+        slot.delete_intent_in_flight.store(false, Ordering::Release);
+        result
     }
 
     /// `session.resume`（§5.1、§12.7）：进程不在的 owned 会话的恢复入口。
@@ -3611,12 +4259,38 @@ impl Broker {
         result: Option<CommandResult>,
         error: Option<PublicError>,
     ) -> Result<bool, PortError> {
+        self.settle_session_create_with_gate(actor, request, status, result, error)
+            .await
+    }
+
+    async fn settle_session_create_with_gate(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        result: Option<CommandResult>,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
         if !status.is_terminal() {
             return Err(PortError::InvalidRequest("命令终态必须是终止态"));
         }
         let key = prepared_key(actor, request);
         let prepared = lock(&self.prepared).get(&key).cloned();
         let Some(prepared) = prepared else {
+            if let (Some(lifecycle), Some(record)) = (
+                self.lifecycle.get(),
+                self.deps.store.find_request(request, actor).await?,
+            ) {
+                if record.command() == "session.create" {
+                    if let Some(session) = record.session() {
+                        let gate = lifecycle.acquire_owner_lifecycle_gate(session).await;
+                        let temporary_slot = self.owned_slot(session);
+                        let _guard = temporary_slot.gate.guard().await;
+                        self.release_created_session_gate(actor, session, None, lifecycle, &gate)
+                            .await;
+                    }
+                }
+            }
             return self
                 .settle_session_create_without_window(actor, request, status, result, error)
                 .await;
@@ -3628,7 +4302,11 @@ impl Broker {
         }
         let session = prepared.settled.session.clone();
         let slot = self.owned_slot(&session);
-        let _guard = slot.gate.guard().await;
+        if prepared.guard.is_none() {
+            return Err(PortError::InvalidRequest(
+                "session.create settlement must retain its original ownership guard",
+            ));
+        }
         if slot.window_overflowed() {
             // 失败关闭（`sync-session-create` 的「窗口期事件不丢不重、超限走失败关闭」）：窗口期队列
             // 超限意味着这个后端不能再被信任。顺序与 `agent-host` 的「超限结束」同源：先结束该 Agent
@@ -3655,6 +4333,10 @@ impl Broker {
             let written = self
                 .commit_create_terminal(actor, request, CommandStatus::Uncertain, None, Some(error))
                 .await?;
+            if let (Some(lifecycle), Some(generation)) = (self.lifecycle.get(), prepared.generation)
+            {
+                lifecycle.rollback_created_session_ready_locked(&session, generation);
+            }
             return Ok(written);
         }
         // 落账提交用**准备期**那个时间戳（[`PreparedCreate::at`]），不再另取时钟：会话行的
@@ -3680,39 +4362,47 @@ impl Broker {
             origin_epoch: Some(prepared.epoch.clone()),
             input: None,
         };
-        match self.commit_owned(commit).await {
+        // 结果与随后的事件必须在生命周期已经可见为 Ready 之后才广播。此标记只改内存；下面的提交
+        // 失败时回滚，保证外部仍按「会话行尚未落账」的 Activating 事实处理。
+        if let (Some(lifecycle), Some(generation)) = (self.lifecycle.get(), prepared.generation) {
+            lifecycle.settle_created_session_ready(actor, &session, generation)?;
+        }
+        let committed = match self.commit_owned(commit).await {
             Ok(outcome) => {
                 // §6.1：先落盘成功、再广播；窗口期的事件按到达顺序落盘并广播（同一个会话槽位门内，
                 // 因此与并发的 flush 不会交错、也不会重复）。
                 self.publish(&outcome.appended);
                 slot.release_unaccounted();
                 self.flush_locked(&slot, &session).await?;
+                if let Some(lifecycle) = self.lifecycle.get()
+                    && let Err(error) = lifecycle.refresh_activity(&session).await
+                {
+                    // The create is already durably completed. Preserve that
+                    // terminal as the fact and leave the projection for the
+                    // next lifecycle observation instead of rewriting it.
+                    let _ = ("core.session_create_activity_failed", error);
+                }
                 lock(&self.prepared).remove(&key);
-                // 会话行已经落盘：容量预占正式转为 ready（与 `session.resume` 的成功收口同形）。
-                // 此后同会话的 `session.resume` 命中 ready 复用，不会再启动一次后端。
+                true
+            }
+            Err(PortError::Unavailable(_)) => {
+                // A create whose dialog write did not commit cannot be adopted
+                // by a retention deletion: no visible session row exists yet.
+                false
+            }
+            Err(error) => {
                 if let (Some(lifecycle), Some(generation)) =
                     (self.lifecycle.get(), prepared.generation)
-                    && let Err(error) = lifecycle
-                        .settle_session(
-                            actor,
-                            session.clone(),
-                            generation,
-                            ActivationOutcome::Ready,
-                        )
-                        .await
                 {
-                    // core 不依赖日志设施：保留可检索的失败事实（会话行已落账，命令终态不受影响）。
-                    let _ = (
-                        "core.session_create_lifecycle_settle_failed",
-                        session.as_str(),
-                        error,
-                    );
+                    lifecycle.rollback_created_session_ready_locked(&session, generation);
                 }
-                Ok(true)
+                return Err(error);
             }
-            Err(PortError::Unavailable(_)) => Ok(false),
-            Err(error) => Err(error),
+        };
+        if let Some(guard) = &prepared.guard {
+            guard.release_slot();
         }
+        Ok(committed)
     }
 
     /// 没有窗口期状态时的 `settle_session_create`：只终结「尚无会话」的持久记录（见上）。
@@ -3999,8 +4689,59 @@ impl Broker {
     /// 被放弃 turn 的【占位】未释放时只落盘、不派发下一个排队 turn（§6 第 9 条，见 [`HeldTurn`]）。
     pub async fn pump(&self, session: &SessionId) -> Result<(), PortError> {
         let slot = self.owned_slot(session);
+        if slot.is_unaccounted() {
+            return Ok(());
+        }
         let _guard = slot.gate.guard().await;
+        if has_submission(&slot.delete_submission_in_flight)
+            || has_submission(&slot.lifecycle_submission)
+        {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
         self.pump_locked(&slot, session).await
+    }
+
+    /// A committed prompt has replaced the delete intent with queued work.
+    /// Complete that transition before releasing the same lifecycle gate;
+    /// later dispatch failures cannot roll it back.
+    async fn pump_locked_after_prompt(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+        lifecycle_gate: Option<&SessionLifecycleGate>,
+        delete_generation: Option<ResourceGeneration>,
+        prompt_generation: Option<(ResourceGeneration, RequestId)>,
+    ) -> Result<(), PortError> {
+        if let (Some(lifecycle), Some(gate)) = (self.lifecycle.get(), lifecycle_gate) {
+            if let Some((_generation, request)) = prompt_generation {
+                lifecycle.complete_prompt_after_delete_locked(
+                    gate,
+                    session,
+                    &request,
+                    delete_generation,
+                )?;
+            }
+        }
+        self.pump_locked(slot, session).await
+    }
+
+    /// Called by the adapter once an accepted delete has released this
+    /// session's backend resources and durably settled its outcome.
+    pub(crate) async fn resume_dispatch_after_delete(
+        &self,
+        session: &SessionId,
+    ) -> Result<(), PortError> {
+        let slot = self.owned_slot(session);
+        {
+            let _guard = slot.gate.guard().await;
+            self.flush_locked(&slot, session).await?;
+        }
+        // The deletion operation itself owns the lifecycle gate while it
+        // checks and settles the delete. A later pump must take that gate in
+        // the normal order (lifecycle, then session), after the caller drops
+        // its held lifecycle gate. Taking it here can invert the lock order
+        // against activation and block both futures.
+        self.pump(session).await
     }
 
     async fn pump_locked(&self, slot: &Slot, session: &SessionId) -> Result<(), PortError> {
@@ -4031,25 +4772,6 @@ impl Broker {
             }
         }
         let queued = self.deps.store.queued_turns(session).await?;
-        if queued.is_empty() {
-            return Ok(());
-        }
-        // 首条提交的 turn 不是「重启后失去正文的排队 prompt」：正文与请求都持久化在
-        // `owned_first_submission`，它的失败/继续由显式 `session.start` 收敛。这里把它排除在外，否则
-        // 一次普通 pump 就会把「可证明未派发、等待显式继续」的首条 turn 误标成 failed。
-        let first_turn = match self.first_submission.get() {
-            Some(first) => match first.first_submission(session.clone()).await {
-                Ok(Some(record)) if record.stage != FirstSubmissionStage::DispatchStarted => {
-                    Some(record.first_request_id)
-                }
-                _ => None,
-            },
-            None => None,
-        };
-        let queued: Vec<_> = queued
-            .into_iter()
-            .filter(|turn| first_turn.as_ref() != turn.causation())
-            .collect();
         if queued.is_empty() {
             return Ok(());
         }
@@ -4399,15 +5121,6 @@ impl Broker {
         events.extend(completed_events);
         let had_terminal = terminal.is_some();
         let mut command_terminal = None;
-        // 首次提交的尝试：终态必须由 `FirstSubmission::settle_first_submission` 写（它同时写六字段结果
-        // 投影），因此这里**不**再产出通用 `command.*` 事件与 `command_terminal`，避免同一 request 的
-        // 两个终态 writer。
-        let first_attempt = slot.first_attempt();
-        let mut first_settlement: Option<(
-            FirstAttemptScope,
-            crate::model::RequestOutcome,
-            Option<PublicError>,
-        )> = None;
         if let Some((_, status)) = terminal {
             if let Some(request) = terminal_request.clone() {
                 // §11.2：同一事务内 sequence 上先写领域事件，再写 terminal event。
@@ -4433,40 +5146,28 @@ impl Broker {
                         None,
                     ),
                 };
-                if let Some(attempt) = first_attempt
-                    .clone()
-                    .filter(|attempt| attempt.request == request)
-                {
-                    let outcome = match status {
-                        CommandStatus::Failed => crate::model::RequestOutcome::Failed,
-                        _ => crate::model::RequestOutcome::Completed,
-                    };
-                    first_settlement = Some((attempt, outcome, error));
-                } else {
-                    events.push(pending_event(
-                        event_type,
-                        EventKind::Structured,
-                        view,
-                        terminal_turn.clone(),
-                        Some(request.clone()),
-                        StoredPolicy::Durable,
-                        running_actor.as_ref(),
-                    )?);
-                    // §11.2 的终态收据：`completed` 带上这条命令自己的 turn（收据里唯一有意义的分量），
-                    // `failed` 的无 turn 信息（错误已单独落盘）。终态结果的这次落盘是这次修复
-                    // 点：在此之前所有 `completed` 记录的 `result` 都是 NULL，适配层只能回空 object。
-                    let result = match (status, terminal_turn.as_ref()) {
-                        (CommandStatus::Completed, Some(turn)) => Some(turn_result(turn)?),
-                        _ => None,
-                    };
-                    command_terminal = Some(CommandTerminalRecord::try_new(
-                        status,
-                        Some(at.clone()),
-                        None,
-                        result,
-                        error,
-                    )?);
-                }
+                events.push(pending_event(
+                    event_type,
+                    EventKind::Structured,
+                    view,
+                    terminal_turn.clone(),
+                    Some(request.clone()),
+                    StoredPolicy::Durable,
+                    running_actor.as_ref(),
+                )?);
+                // §11.2 的终态收据：`completed` 带上这条命令自己的 turn（收据里唯一有意义的分量），
+                // `failed` 的无 turn 信息（错误已单独落盘）。
+                let result = match (status, terminal_turn.as_ref()) {
+                    (CommandStatus::Completed, Some(turn)) => Some(turn_result(turn)?),
+                    _ => None,
+                };
+                command_terminal = Some(CommandTerminalRecord::try_new(
+                    status,
+                    Some(at.clone()),
+                    None,
+                    result,
+                    error,
+                )?);
             }
         }
         // 会话状态：turn 终态会失效该轮的遗留请求，新增交互请求会把摘要推到 `pending`。两者都在本事务
@@ -4569,20 +5270,6 @@ impl Broker {
                         .push(committed.global_sequence);
                 }
                 self.publish(&outcome.appended);
-                // 首次提交的终态：领域事件（turn 终态/会话摘要）已随本批提交，命令终态与首条阶段由
-                // `FirstSubmission::settle_first_submission` 在后续事务里写（唯一 writer）。
-                if let Some((attempt, outcome, error)) = first_settlement {
-                    self.settle_first(
-                        session,
-                        &attempt.actor,
-                        &attempt.request,
-                        &attempt.fingerprint,
-                        outcome,
-                        error,
-                    )
-                    .await;
-                    slot.clear_first_attempt();
-                }
                 // §6 第 15 条：turn 终态提交之后紧接一次压缩提交（执行中不压缩）。
                 if let Some((turn, count)) = compact_after {
                     let sequences = lock(&slot.turn_deltas)
@@ -4631,6 +5318,11 @@ impl Broker {
 
     /// 派发一个排队 turn：Queued → Running（`turn.started`）→ 后端 `prompt`。
     async fn dispatch_one(&self, slot: &Slot, session: &SessionId) -> Result<bool, PortError> {
+        // Deletion order is decided at its admitted dispatch boundary, not
+        // when a slower storage commit happens to return.
+        if has_submission(&slot.delete_dispatch_fenced) {
+            return Ok(false);
+        }
         // §6 第 9 条：被放弃 turn 的【占位】未释放前不得提升下一个排队 turn，
         // 否则它的迟到事件会被记到下一个 turn 上（见 [`HeldTurn`]）。兜底轮次也在这里推进。
         let held_before = slot.held_turn();
@@ -4656,6 +5348,11 @@ impl Broker {
                 None => return Ok(false),
             }
         };
+        if has_submission(&slot.delete_dispatch_fenced) {
+            slot.finish_turn();
+            lock(&slot.queue).waiting.push_front(next);
+            return Ok(false);
+        }
         // 该 turn 的命令现在起在会话作用域里：后端随后产出的响应类事件若还没有被别的命令接管
         // （`permission.resolve`/`elicitation.respond`/`session.mode.set`/`session.config.set` 各自会在
         // 派发前覆盖它），就按这条命令归因——此时它与在跑的 turn 的命令是同一条。turn 生命周期事件与
@@ -4725,44 +5422,12 @@ impl Broker {
             }
             Err(error) => return Err(error),
         }
-        let endpoint = match &next.first {
-            Some(plan) => {
-                // 准备端点在提交时已转正：这里沿用同一个绑定（不第二次 `session/new`），并让后续
-                // 普通 prompt 也能从槽位缓存里拿到它。
-                *lock(&slot.endpoint) = Some(Arc::clone(&plan.endpoint));
-                Arc::clone(&plan.endpoint)
-            }
-            None => self.endpoint(slot, session).await?,
-        };
-        if let Some(plan) = &next.first {
-            slot.set_first_attempt(FirstAttemptScope {
-                request: next.request.clone(),
-                actor: next.actor.clone(),
-                fingerprint: plan.fingerprint.clone(),
-            });
-            let context = DispatchContext {
-                session: session.clone(),
-                first_submission: Some(plan.first_submission.clone()),
-                user_message: plan.user_message.clone(),
-                request: next.request.clone(),
-                turn: next.turn.clone(),
-                agent: plan.agent.clone(),
-                agent_session: plan.agent_session.clone(),
-                resource_generation: plan.resource_generation,
-                input_digest: plan.input_digest.clone(),
-            };
-            return match endpoint
-                .prompt_with_context(next.prompt.clone(), at, Some(context))
-                .await
-            {
-                Ok(_) => Ok(true),
-                Err(error) => {
-                    self.settle_failed_dispatch(slot, session, &next, plan, &error)
-                        .await?;
-                    Ok(true)
-                }
-            };
+        if has_submission(&slot.delete_dispatch_fenced) {
+            slot.finish_turn();
+            lock(&slot.queue).waiting.push_front(next);
+            return Ok(false);
         }
+        let endpoint = self.endpoint(slot, session).await?;
         // 普通后续输入也带派发上下文：可证明重复的回显不产出第二条 `user.message.delta`，
         // 持久消息才是权威（§3.11）。上下文在受理期组装，派发时原样使用。
         if let Some(context) = &next.echo {
@@ -4786,39 +5451,6 @@ impl Broker {
                 Ok(true)
             }
         }
-    }
-
-    /// 首次派发失败：围栏已提交，因此结果只能是 `failed`（可证明请求未发出）或 `uncertain`（说不清）。
-    ///
-    /// 结算由 `FirstSubmission::settle_first_submission` 唯一写入；`uncertain` 保持 turn 的运行事实，
-    /// `failed` 由存储层把首条 turn 收敛为失败——两种情况都**不**自动重发。
-    async fn settle_failed_dispatch(
-        &self,
-        slot: &Slot,
-        session: &SessionId,
-        next: &QueuedTurn,
-        plan: &FirstDispatchPlan,
-        error: &PortError,
-    ) -> Result<(), PortError> {
-        let outcome = match error {
-            PortError::Unavailable(UnavailableKind::SessionNotEstablished) => {
-                crate::model::RequestOutcome::Failed
-            }
-            _ => crate::model::RequestOutcome::Uncertain,
-        };
-        let public = self.port_error_public(error)?;
-        self.settle_first(
-            session,
-            &next.actor,
-            &next.request,
-            &plan.fingerprint,
-            outcome,
-            Some(public),
-        )
-        .await;
-        slot.finish_turn();
-        slot.clear_first_attempt();
-        Ok(())
     }
 
     /// 派发失败的 turn：显式终态（`turn.failed` + `command.failed`），不静默重试。
@@ -5272,10 +5904,12 @@ impl Broker {
     ) -> Result<(), PortError> {
         let at = self.now();
         let request = record.request().clone();
-        let reason = if record.command() == "workspace.mkdir" {
-            "Unable to confirm whether the directory was created after restart"
-        } else {
-            "进程恢复后无法确认命令是否已到达 Agent"
+        let reason = match record.command() {
+            "workspace.mkdir" => {
+                "Unable to confirm whether the directory was created after restart"
+            }
+            "session.delete" => "无法确认空会话资源在重启前是否已经释放",
+            _ => "进程恢复后无法确认命令是否已到达 Agent",
         };
         let error =
             PublicError::coded("command.uncertain", reason, false).map_err(PortError::from)?;
@@ -5517,45 +6151,6 @@ impl Broker {
     // -----------------------------------------------------------------------------------------
     // mutation 管道的公共步骤
     // -----------------------------------------------------------------------------------------
-
-    /// `session.start` 的幂等键比对（initial 与 continue 共用）。
-    ///
-    /// 命中任何既有记录（`accepted`/`completed`/`failed`/`uncertain`/`rejected`）都只回执原请求；
-    /// 适配层随后按 `command.status` 回放**原有终态**，绝不把 rejected/failed 改写成 accepted，也不
-    /// 执行第二次。键不同则按既有错因冲突。
-    async fn first_submission_idempotency(
-        &self,
-        actor: &Actor,
-        session: &SessionId,
-        request: &RequestId,
-        fingerprint: &Digest,
-    ) -> Result<Option<CommandReceipt>, PortError> {
-        let Some(record) = self.deps.store.find_request(request, actor).await? else {
-            return Ok(None);
-        };
-        let same = record.command() == "session.start"
-            && record.kind() == CommandKind::Mutation
-            && record.session() == Some(session)
-            && record.expected_version().is_none()
-            && record.request_fingerprint() == fingerprint;
-        if !same {
-            return self
-                .reject(
-                    "command.idempotency_conflict",
-                    "同一 requestId 已用于不同的命令或载荷",
-                    false,
-                )
-                .map(Some);
-        }
-        let turn = match record.status() {
-            CommandStatus::Accepted => Some(self.turn_for_request(session, request).await?),
-            _ => None,
-        };
-        Ok(Some(CommandReceipt::Accepted {
-            request: request.clone(),
-            turn: turn.flatten(),
-        }))
-    }
 
     /// §6.6：幂等键是协议维度的 `(actor, requestId)`。命中且五项指纹全同 → 返回首次结果、不二次派发；
     /// 任一不同 → `command.idempotency_conflict`。
@@ -5917,6 +6512,12 @@ impl Broker {
         }
     }
 
+    /// 发布已由专用数据库事务提交的事件。调用方只能传入事务返回的 `CommittedEvent`，不得在提交前
+    /// 用预测序号自行构造。
+    pub(crate) fn publish_committed(&self, events: &[CommittedEvent]) {
+        self.publish(events);
+    }
+
     /// 组装一条 pending 交互行（§6 第 13 条）。
     ///
     /// id 优先取事件 payload 里的 `interactionId`（客户端用同一个 id 应答），缺失时用
@@ -6230,6 +6831,8 @@ enum PromptAcceptance {
         accepted: AcceptedInput,
         /// 派发上下文；`None` = 取不到可证明的 Agent 会话标识（回显因此没有可证明关联，照常独立下发）。
         dispatch: Option<DispatchContext>,
+        lifecycle_delete_generation: Option<ResourceGeneration>,
+        lifecycle_prompt_generation: Option<(ResourceGeneration, RequestId)>,
     },
     /// 竞态：另一路径已经用同一幂等键落盘（`CommitOutcome::replayed`），不二次派发。
     Replayed(CommandReceipt),
@@ -7189,7 +7792,7 @@ pub(crate) mod test_support {
     #[allow(dead_code)] // 记录受理写集的完整事实，供断言阅读；不参与运行时分支。
     pub(crate) struct FakeUserInput {
         pub(crate) accepted: AcceptedInput,
-        pub(crate) content: FirstSubmissionInput,
+        pub(crate) content: PromptInput,
         pub(crate) at: Timestamp,
     }
 
@@ -10247,6 +10850,43 @@ mod tests {
                     .then(|| event.event_type.as_str().to_owned())
             })
             .collect()
+    }
+
+    #[test]
+    fn a_finished_create_owner_cannot_remove_a_successor_with_the_same_key() {
+        let harness = Harness::new(BrokerConfig::default());
+        let key = prepared_key(&harness.actor(), &harness.request(900));
+        let flight = || {
+            Arc::new(Mutex::new(CreateFlight {
+                active: true,
+                result: None,
+                waiters: Vec::new(),
+            }))
+        };
+        let first = flight();
+        lock(&harness.broker.create_flights).insert(key.clone(), Arc::clone(&first));
+        let old_owner = CreateFlightOwner {
+            broker: &harness.broker,
+            key: key.clone(),
+            flight: Arc::clone(&first),
+        };
+        harness.broker.complete_create_flight(&key, &first, None);
+        let successor = flight();
+        lock(&harness.broker.create_flights).insert(key.clone(), Arc::clone(&successor));
+        drop(old_owner);
+        assert!(
+            lock(&harness.broker.create_flights)
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &successor))
+        );
+        assert!(
+            lock(&successor).active,
+            "old cleanup must not terminate the new creation"
+        );
+        harness
+            .broker
+            .complete_create_flight(&key, &successor, None);
+        assert!(!lock(&successor).active);
     }
 
     /// 窗口期第 1 态（`sync-session-create`「会话行落账前的事件不丢」）：落账之前到达的事件只在会话

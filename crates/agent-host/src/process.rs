@@ -28,6 +28,363 @@ use crate::limits;
 use crate::platform::ProcessTree;
 
 type Pending = HashMap<u64, oneshot::Sender<Result<Value, HostError>>>;
+type StartupResult = Result<(Arc<Supervisor>, mpsc::UnboundedReceiver<Inbound>), StartFailure>;
+
+pub(crate) enum StartFailure {
+    NotStarted(HostError),
+    /// The process was spawned and then failed before ownership reached a supervisor.
+    Unconfirmed {
+        detail: String,
+    },
+}
+
+enum BarrierSpec {
+    #[cfg(any(test, feature = "test-support"))]
+    File(std::path::PathBuf),
+}
+
+impl BarrierSpec {
+    async fn wait(&self) {
+        #[cfg(any(test, feature = "test-support"))]
+        match self {
+            Self::File(path) => {
+                let _ = std::fs::write(path, b"spawned");
+                while path.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        }
+    }
+}
+
+/// A permanent veto attached to one startup attempt.
+///
+/// It is created before the process is spawned. The host retains it, so losing or cancelling the
+/// startup future cannot erase uncertainty after the child exists.
+pub(crate) struct StartupProof {
+    unconfirmed: AtomicBool,
+}
+
+impl StartupProof {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            unconfirmed: AtomicBool::new(false),
+        })
+    }
+
+    pub(crate) fn is_unconfirmed(&self) -> bool {
+        self.unconfirmed.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn mark_unconfirmed(&self) {
+        self.unconfirmed.store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn retains_unconfirmed_startup_proof(&self) -> bool {
+        self.is_unconfirmed()
+    }
+}
+
+struct SpawnLease {
+    spawned: Option<SpawnedChild>,
+    proof: Arc<StartupProof>,
+}
+
+impl SpawnLease {
+    fn new(proof: Arc<StartupProof>) -> Self {
+        Self {
+            spawned: None,
+            proof,
+        }
+    }
+
+    fn claim_child(&mut self) -> Result<SpawnedChild, HostError> {
+        self.spawned
+            .take()
+            .ok_or_else(|| HostError::SpawnCleanupUnconfirmed {
+                detail: "startup lease lost spawned child".to_owned(),
+            })
+    }
+
+    fn retain(&mut self, spawned: SpawnedChild) {
+        if let Some(previous) = self.spawned.replace(spawned) {
+            if let Some(tree) = &previous.tree {
+                tree.terminate();
+            }
+        }
+    }
+
+    fn detach(&mut self) -> Option<SpawnedChild> {
+        self.spawned.take()
+    }
+}
+
+impl Drop for SpawnLease {
+    fn drop(&mut self) {
+        let Some(spawned) = self.spawned.take() else {
+            return;
+        };
+        // Cancellation is the one startup exit that cannot return an error to the caller. Veto
+        // before touching the child, and keep both the tree and child wait under task ownership.
+        self.proof.mark_unconfirmed();
+        spawned.transfer_to_cancellation_owner("Agent startup was cancelled");
+    }
+}
+
+struct SpawnedChild {
+    child: Option<Child>,
+    tree: Option<ProcessTree>,
+    pipes: Option<SpawnPipes>,
+}
+
+impl SpawnedChild {
+    fn new(child: Child, tree: ProcessTree) -> Self {
+        Self {
+            child: Some(child),
+            tree: Some(tree),
+            pipes: None,
+        }
+    }
+
+    fn take_spawn_pipes(
+        &mut self,
+    ) -> Result<
+        (
+            tokio::process::ChildStdin,
+            tokio::process::ChildStdout,
+            tokio::process::ChildStderr,
+        ),
+        HostError,
+    > {
+        let Some(child) = self.child.as_mut() else {
+            return Err(HostError::SpawnCleanupUnconfirmed {
+                detail: "spawned child was already detached".to_owned(),
+            });
+        };
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let mut pipes = SpawnPipes {
+            stdin,
+            stdout,
+            stderr,
+        };
+        if let Some((stdin, stdout, stderr)) = pipes.take_complete() {
+            return Ok((stdin, stdout, stderr));
+        }
+        let missing = match (pipes.stdin.take(), pipes.stdout.take(), pipes.stderr.take()) {
+            (None, _, _) => "stdin",
+            (_, None, _) => "stdout",
+            (_, _, None) => "stderr",
+            (_, _, _) => {
+                return Err(HostError::SpawnCleanupUnconfirmed {
+                    detail: "spawned child pipe ownership was already transferred".to_owned(),
+                });
+            }
+        };
+        self.pipes = Some(pipes);
+        Err(HostError::SpawnFailed {
+            detail: format!("{missing} 未建立管道"),
+        })
+    }
+
+    fn attach(&self) -> Result<(), HostError> {
+        self.tree()?.attach(self.child()?)
+    }
+
+    async fn clean_up_after_spawn(&mut self, primary: &HostError) -> bool {
+        let Some(tree) = self.tree.as_ref() else {
+            return false;
+        };
+        tree.terminate();
+        let deadline = tokio::time::Instant::now() + limits::EXIT_DRAIN_TIMEOUT;
+        let maybe_child = self.child.as_mut();
+        let status = match maybe_child {
+            Some(child) => match tokio::time::timeout_at(deadline, child.wait()).await {
+                Ok(Ok(status)) => Some(status),
+                Ok(Err(_)) | Err(_) => None,
+            },
+            None => None,
+        };
+        let tree_exited = match status {
+            Some(status) => {
+                self.wait_for_tree_exit(deadline, || tree.confirms_startup_exit(status))
+                    .await
+            }
+            None => false,
+        };
+        tracing::warn!(
+            error = %primary,
+            status_observed = status.is_some(),
+            tree_exited,
+            "Agent process startup failed after spawn; cleanup finished"
+        );
+        status.is_some() && tree_exited
+    }
+
+    fn tree(&self) -> Result<&ProcessTree, HostError> {
+        self.tree
+            .as_ref()
+            .ok_or_else(|| HostError::SpawnCleanupUnconfirmed {
+                detail: "spawned child tree was already detached".to_owned(),
+            })
+    }
+
+    fn child(&self) -> Result<&Child, HostError> {
+        self.child
+            .as_ref()
+            .ok_or_else(|| HostError::SpawnCleanupUnconfirmed {
+                detail: "spawned child was already detached".to_owned(),
+            })
+    }
+
+    async fn wait_for_tree_exit(
+        &self,
+        deadline: tokio::time::Instant,
+        confirms: impl Fn() -> bool,
+    ) -> bool {
+        loop {
+            if confirms() {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn into_supervisor(
+        mut self,
+        program: String,
+        stdin: tokio::process::ChildStdin,
+        stdout: tokio::process::ChildStdout,
+        stderr: tokio::process::ChildStderr,
+    ) -> (Arc<Supervisor>, mpsc::UnboundedReceiver<Inbound>) {
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+        let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+        // The lease detaches this value before it reaches here. Claim every process resource
+        // first so the ownership handoff can never fall back to cancellation cleanup.
+        debug_assert!(self.pipes.is_none());
+        let Some(tree) = self.tree.take() else {
+            return unavailable_supervisor(self.pipes.take(), incoming_rx);
+        };
+        let Some(child) = self.child.take() else {
+            return unavailable_supervisor(self.pipes.take(), incoming_rx);
+        };
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let exit = Arc::new(ExitState::new());
+        let stderr_ring = Arc::new(Mutex::new(StderrRing::default()));
+        let tree = Arc::new(tree);
+        let supervisor = Arc::new(Supervisor {
+            program,
+            tree: Arc::clone(&tree),
+            outbound: Mutex::new(Some(outbound_tx)),
+            pending: Arc::clone(&pending),
+            next_id: AtomicU64::new(1),
+            exit: Arc::clone(&exit),
+            stderr: Arc::clone(&stderr_ring),
+            tasks: Mutex::new(Vec::new()),
+            closing: AtomicBool::new(false),
+            capabilities: Mutex::new(None),
+        });
+        let tasks = vec![
+            tokio::spawn(write_loop(outbound_rx, stdin)),
+            tokio::spawn(read_loop(
+                stdout,
+                Arc::clone(&pending),
+                incoming_tx,
+                Arc::clone(&exit),
+                Arc::clone(&tree),
+            )),
+            tokio::spawn(stderr_loop(stderr, stderr_ring)),
+            tokio::spawn(wait_loop(child, Arc::clone(&exit), pending)),
+        ];
+        if let Ok(mut slot) = supervisor.tasks.lock() {
+            *slot = tasks;
+        }
+        (supervisor, incoming_rx)
+    }
+
+    fn transfer_to_cancellation_owner(mut self, detail: &'static str) {
+        FailureParts {
+            tree: self.tree.take(),
+            child: self.child.take(),
+            pipes: self.pipes.take(),
+        }
+        .transfer_to_task(detail);
+    }
+}
+
+impl Drop for SpawnedChild {
+    fn drop(&mut self) {
+        // A successfully handed-off child has no live resource left here. A startup failure
+        // cannot be assumed to be cancellation cleanup: its supervisor may already own the
+        // process and must remain responsible for waiting for the root child.
+        if self.child.is_none() && self.tree.is_none() && self.pipes.is_none() {
+            return;
+        }
+        FailureParts {
+            tree: self.tree.take(),
+            child: self.child.take(),
+            pipes: self.pipes.take(),
+        }
+        .transfer_to_task("Dropped a spawned child without a supervisor");
+    }
+}
+
+struct FailureParts {
+    tree: Option<ProcessTree>,
+    child: Option<Child>,
+    pipes: Option<SpawnPipes>,
+}
+
+struct SpawnPipes {
+    stdin: Option<tokio::process::ChildStdin>,
+    stdout: Option<tokio::process::ChildStdout>,
+    stderr: Option<tokio::process::ChildStderr>,
+}
+
+impl SpawnPipes {
+    fn take_complete(
+        &mut self,
+    ) -> Option<(
+        tokio::process::ChildStdin,
+        tokio::process::ChildStdout,
+        tokio::process::ChildStderr,
+    )> {
+        if self.stdin.is_none() || self.stdout.is_none() || self.stderr.is_none() {
+            return None;
+        }
+        let stdin = self.stdin.take()?;
+        let stdout = self.stdout.take()?;
+        let stderr = self.stderr.take()?;
+        Some((stdin, stdout, stderr))
+    }
+}
+
+impl FailureParts {
+    fn transfer_to_task(mut self, detail: &'static str) {
+        if let Some(tree) = self.tree.take() {
+            tree.terminate();
+        }
+        tokio::runtime::Handle::current().spawn(async move {
+            // The proof is already vetoed. Wait for the direct child, then keep the handles until
+            // runtime shutdown so a failed startup cannot lose the final KILL_ON_JOB_CLOSE.
+            let mut child = self.child.take();
+            let pipes = self.pipes.take();
+            let tree = self.tree.take();
+            if let Some(child) = child.as_mut() {
+                if child.wait().await.is_err() {
+                    return;
+                }
+            }
+            let _holds = (child, pipes, tree);
+            std::future::pending::<()>().await;
+        });
+        tracing::warn!(detail, "Agent process cancellation cleanup started");
+    }
+}
 
 /// 写入确认：`Ok(())` 表示 `write_all` 与 `flush` 都成功，字节已交给 Agent 的 stdin。
 ///
@@ -63,6 +420,9 @@ type ExitReporter = Box<dyn Fn(bool) + Send + Sync>;
 /// 退出状态（供失败分类与日志使用；不含任何正文）。
 struct ExitState {
     done: AtomicBool,
+    process_exit_observed: AtomicBool,
+    tree_exit_observed: AtomicBool,
+    forced_stop: AtomicBool,
     /// 该进程是否因**单条 stdout 消息超限**被结束（决定节点级断开事件的错误类别）。
     oversize: AtomicBool,
     status: Mutex<Option<String>>,
@@ -78,6 +438,9 @@ impl ExitState {
     fn new() -> Self {
         Self {
             done: AtomicBool::new(false),
+            process_exit_observed: AtomicBool::new(false),
+            tree_exit_observed: AtomicBool::new(false),
+            forced_stop: AtomicBool::new(false),
             oversize: AtomicBool::new(false),
             status: Mutex::new(None),
             notify: Notify::new(),
@@ -101,6 +464,29 @@ impl ExitState {
     /// 是否已被判定退出。
     fn is_done(&self) -> bool {
         self.done.load(Ordering::SeqCst)
+    }
+
+    fn process_exit_observed(&self) -> bool {
+        self.process_exit_observed.load(Ordering::SeqCst)
+    }
+
+    fn mark_process_exit_observed(&self) {
+        self.process_exit_observed.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    fn trusted_shutdown_proof(&self) -> bool {
+        !self.forced_stop.load(Ordering::SeqCst)
+            && self.process_exit_observed()
+            && self.tree_exit_observed()
+    }
+
+    fn tree_exit_observed(&self) -> bool {
+        self.tree_exit_observed.load(Ordering::SeqCst)
+    }
+
+    fn mark_tree_exit_observed(&self) {
+        self.tree_exit_observed.store(true, Ordering::SeqCst);
     }
 
     fn mark(&self, status: String) {
@@ -174,6 +560,42 @@ pub struct Supervisor {
     capabilities: Mutex<Option<acp_protocol::capability::AgentCapabilities>>,
 }
 
+fn unavailable_supervisor(
+    pipes: Option<SpawnPipes>,
+    incoming: mpsc::UnboundedReceiver<Inbound>,
+) -> (Arc<Supervisor>, mpsc::UnboundedReceiver<Inbound>) {
+    let tree = Arc::new(ProcessTree::unavailable());
+    let exit = Arc::new(ExitState::new());
+    exit.forced_stop.store(true, Ordering::SeqCst);
+    exit.mark("startup ownership unavailable".to_owned());
+    (
+        Arc::new(Supervisor {
+            program: "<startup ownership unavailable>".to_owned(),
+            tree,
+            outbound: Mutex::new(None),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            next_id: AtomicU64::new(1),
+            exit,
+            stderr: Arc::new(Mutex::new(StderrRing::default())),
+            tasks: Mutex::new(pipes_into_tasks(pipes)),
+            closing: AtomicBool::new(true),
+            capabilities: Mutex::new(None),
+        }),
+        incoming,
+    )
+}
+
+fn pipes_into_tasks(pipes: Option<SpawnPipes>) -> Vec<tokio::task::JoinHandle<()>> {
+    pipes
+        .map(|pipes| {
+            vec![tokio::spawn(async move {
+                let _held = pipes;
+                std::future::pending::<()>().await;
+            })]
+        })
+        .unwrap_or_default()
+}
+
 impl std::fmt::Debug for Supervisor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Supervisor")
@@ -184,12 +606,79 @@ impl std::fmt::Debug for Supervisor {
 }
 
 impl Supervisor {
+    /// The configured program is diagnostic metadata; it contains no prompt or credential.
+    #[must_use]
+    pub(crate) fn program(&self) -> &str {
+        &self.program
+    }
+
+    pub(crate) async fn start_for_host(
+        spec: LaunchSpec,
+        proof: Arc<StartupProof>,
+    ) -> StartupResult {
+        let mut lease = SpawnLease::new(Arc::clone(&proof));
+        let result = Self::start_with_policy_and_lease(spec, None, &mut lease).await;
+        Self::finish_lease(result, &mut lease)
+    }
+
+    fn finish_lease(
+        result: Result<(Arc<Supervisor>, mpsc::UnboundedReceiver<Inbound>), HostError>,
+        lease: &mut SpawnLease,
+    ) -> StartupResult {
+        let started = match result {
+            Ok(started) => Ok(started),
+            Err(HostError::SpawnCleanupUnconfirmed { detail }) => {
+                lease.proof.mark_unconfirmed();
+                Err(StartFailure::Unconfirmed { detail })
+            }
+            Err(error) => Err(StartFailure::NotStarted(error)),
+        };
+        if started.is_ok() {
+            // 监督者已经接管子进程；之后取消调用方不会丢清理责任。
+            let _ = lease.detach();
+        }
+        started
+    }
+
+    fn startup_failure(
+        result: Result<(Arc<Supervisor>, mpsc::UnboundedReceiver<Inbound>), HostError>,
+        lease: &mut SpawnLease,
+    ) -> HostError {
+        match Self::finish_lease(result, lease) {
+            Ok(_) => HostError::SpawnFailed {
+                detail: "startup finished after reporting failure".to_owned(),
+            },
+            Err(StartFailure::NotStarted(error)) => error,
+            Err(StartFailure::Unconfirmed { detail }) => {
+                if lease.proof.retains_unconfirmed_startup_proof() {
+                    HostError::SpawnCleanupUnconfirmed { detail }
+                } else {
+                    HostError::SpawnFailed { detail }
+                }
+            }
+        }
+    }
+
     /// 启动 Agent 进程并开始监督。
     ///
     /// 返回监督者与**进站消息**通道：通道里是已分类的信封（通知与 agent→client 请求），
     /// 响应不进通道（它们在 `stdout` 任务里直接结算给对应的未完成请求）。
     pub async fn start(
         spec: LaunchSpec,
+    ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Inbound>), HostError> {
+        let proof = StartupProof::new();
+        let mut lease = SpawnLease::new(Arc::clone(&proof));
+        let result = Self::start_with_policy_and_lease(spec, None, &mut lease).await;
+        match result {
+            Ok(started) => Ok(started),
+            Err(result) => Err(Self::startup_failure(Err(result), &mut lease)),
+        }
+    }
+
+    async fn start_with_policy_and_lease(
+        spec: LaunchSpec,
+        after_spawn: Option<&BarrierSpec>,
+        lease: &mut SpawnLease,
     ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Inbound>), HostError> {
         let mut command = Command::new(&spec.program);
         command.args(&spec.args);
@@ -204,75 +693,80 @@ impl Supervisor {
         command.kill_on_drop(false);
 
         let tree = ProcessTree::prepare(&mut command)?;
-        let mut child = command.spawn().map_err(|error| HostError::SpawnFailed {
+        #[cfg(any(test, feature = "test-support"))]
+        let fault = crate::test_support::startup_fault(&spec.env)?.or_else(|| {
+            spec.args
+                .windows(2)
+                .find(|pair| pair[0] == "--scenario")
+                .and_then(|pair| pair[1].strip_prefix("startup-fault-"))
+                .map(str::to_owned)
+        });
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(fault) = fault.as_deref() {
+            Self::apply_pre_spawn_fault(fault, &mut command)?;
+        }
+        let child = command.spawn().map_err(|error| HostError::SpawnFailed {
             detail: error.to_string(),
         })?;
-        // spawn 之后、写 stdin 之前立刻挂进进程树。
-        if let Err(error) = tree.attach(&child) {
-            // 已经 spawn 出来了：任何后续失败都必须结束它，不能把孤儿留给系统。
-            tree.terminate();
-            let _ = child.start_kill();
-            return Err(error);
+        lease.retain(SpawnedChild::new(child, tree));
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(path) = crate::test_support::startup_barrier(&spec.env)? {
+            BarrierSpec::File(path).wait().await;
         }
-
-        let pipes = (|| -> Result<(_, _, _), HostError> {
-            let stdin = child.stdin.take().ok_or_else(|| HostError::SpawnFailed {
-                detail: "stdin 未建立管道".to_owned(),
-            })?;
-            let stdout = child.stdout.take().ok_or_else(|| HostError::SpawnFailed {
-                detail: "stdout 未建立管道".to_owned(),
-            })?;
-            let stderr = child.stderr.take().ok_or_else(|| HostError::SpawnFailed {
-                detail: "stderr 未建立管道".to_owned(),
-            })?;
-            Ok((stdin, stdout, stderr))
-        })();
-        let (stdin, stdout, stderr) = match pipes {
-            Ok(pipes) => pipes,
-            Err(error) => {
-                tree.terminate();
-                let _ = child.start_kill();
-                return Err(error);
-            }
+        if let Some(barrier) = after_spawn {
+            barrier.wait().await;
+        }
+        let mut spawned = lease.claim_child()?;
+        let primary = match spawned.attach() {
+            #[cfg(any(test, feature = "test-support"))]
+            Ok(()) if fault.as_deref() == Some("attach") => Some(HostError::SpawnFailed {
+                detail: "injected process-tree attachment failure".to_owned(),
+            }),
+            #[cfg(any(test, feature = "test-support"))]
+            Ok(()) if fault.as_deref() == Some("stdout") => Some(HostError::SpawnFailed {
+                detail: "injected stdout ownership failure".to_owned(),
+            }),
+            Ok(()) => match spawned.take_spawn_pipes() {
+                Ok((stdin, stdout, stderr)) => {
+                    return Ok(spawned.into_supervisor(spec.program, stdin, stdout, stderr));
+                }
+                Err(error) => Some(error),
+            },
+            Err(error) => Some(error),
         };
-
-        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
-        let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
-        let pending: Arc<Mutex<Pending>> = Arc::new(Mutex::new(HashMap::new()));
-        let exit = Arc::new(ExitState::new());
-        let stderr_ring = Arc::new(Mutex::new(StderrRing::default()));
-
-        let tree = Arc::new(tree);
-        let supervisor = Arc::new(Self {
-            program: spec.program.clone(),
-            tree: Arc::clone(&tree),
-            outbound: Mutex::new(Some(outbound_tx)),
-            pending: Arc::clone(&pending),
-            next_id: AtomicU64::new(1),
-            exit: Arc::clone(&exit),
-            stderr: Arc::clone(&stderr_ring),
-            tasks: Mutex::new(Vec::new()),
-            closing: AtomicBool::new(false),
-            capabilities: Mutex::new(None),
-        });
-
-        let tasks = vec![
-            tokio::spawn(write_loop(outbound_rx, stdin)),
-            tokio::spawn(read_loop(
-                stdout,
-                Arc::clone(&pending),
-                incoming_tx,
-                Arc::clone(&exit),
-                Arc::clone(&tree),
-            )),
-            tokio::spawn(stderr_loop(stderr, stderr_ring)),
-            tokio::spawn(wait_loop(child, Arc::clone(&exit), pending)),
-        ];
-        if let Ok(mut slot) = supervisor.tasks.lock() {
-            *slot = tasks;
+        let Some(primary) = primary else {
+            return Err(HostError::SpawnFailed {
+                detail: "startup failed without a cleanup target".to_owned(),
+            });
+        };
+        let confirmed = spawned.clean_up_after_spawn(&primary).await;
+        if confirmed {
+            return Err(primary);
         }
+        lease.retain(spawned);
+        Err(HostError::SpawnCleanupUnconfirmed {
+            detail: primary.to_string(),
+        })
+    }
 
-        Ok((supervisor, incoming_rx))
+    #[cfg(any(test, feature = "test-support"))]
+    fn apply_pre_spawn_fault(fault: &str, command: &mut Command) -> Result<(), HostError> {
+        match fault {
+            "pre-spawn" | "kill-wait" => Err(HostError::SpawnFailed {
+                detail: format!("injected {fault} process-tree preparation failure"),
+            }),
+            "missing-program" => {
+                *command = Command::new(
+                    std::env::temp_dir()
+                        .join(format!("acpr-missing-program-{}", std::process::id())),
+                );
+                Ok(())
+            }
+            "attach" | "stdout" => Ok(()),
+            _ => Err(HostError::SpawnFailed {
+                detail: "unknown startup fault".to_owned(),
+            }),
+        }
     }
 
     /// 结算一条已排到 FIFO 队首之后的响应（由 router 调用；集成测试也需要驱动这条路径）。
@@ -296,6 +790,16 @@ impl Supervisor {
     #[must_use]
     pub fn has_exited(&self) -> bool {
         self.exit.done.load(Ordering::SeqCst)
+    }
+
+    /// `child.wait()` 是否实际观察到当前 Agent 根进程退出。
+    ///
+    /// 这不是 `is_running()` 的取反：`shutdown()` 一开始就会清掉 running 标志，而本判据只由
+    /// wait 任务在操作系统成功返回退出状态时置位。只有本判据为真且进程树句柄已关闭时，
+    /// Daemon 才可写出 clean-shutdown fence。
+    #[must_use]
+    pub fn shutdown_confirmed(&self) -> bool {
+        self.exit.trusted_shutdown_proof()
     }
 
     /// 本次退出是否因单条 stdout 消息超限（节点级断开事件的错误类别据此判定）。
@@ -525,10 +1029,11 @@ impl Supervisor {
     /// 用于必须马上停止 Agent 的失败路径（stdout 超限、显式终止）与回归测试；正常关闭路径用
     /// [`Supervisor::shutdown`] 的 grace 顺序。
     pub fn terminate_tree(&self) {
+        self.exit.forced_stop.store(true, Ordering::SeqCst);
         self.tree.terminate();
     }
 
-    /// 等待进程退出（不主动杀死它）。
+    /// 等待 `child.wait()` 实际观察到根进程退出（不主动杀死它）。
     async fn wait_exit(&self) {
         loop {
             // 先登记 waiter 再判 done：`notify_waiters` 只唤醒已注册的 waiter，
@@ -536,7 +1041,7 @@ impl Supervisor {
             let notified = self.exit.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.exit.done.load(Ordering::SeqCst) {
+            if self.exit.process_exit_observed() {
                 return;
             }
             notified.await;
@@ -553,17 +1058,41 @@ impl Supervisor {
         // 2) 关闭 stdin：丢弃写出队列的发送端，写出任务随之结束并关闭 stdin（EOF）。
         let sender = self.outbound.lock().ok().and_then(|mut slot| slot.take());
         drop(sender);
-        // 3) 等 grace；超时则结束整棵进程树。
+        // 3) 等 grace；超时则结束整棵进程树。即使根进程已自然退出，也关闭 Job/进程组，
+        //    确保根进程留下的派生子进程一并停止。
         if tokio::time::timeout(limits::SHUTDOWN_GRACE, self.wait_exit())
             .await
             .is_err()
         {
-            self.tree.terminate();
-            let _ = tokio::time::timeout(limits::EXIT_DRAIN_TIMEOUT, self.wait_exit()).await;
+            // Irreversible shared policy, even if Unix can subsequently observe ESRCH.
+            self.terminate_tree();
         }
-        // 4) 释放句柄（Windows：关闭 Job 句柄 ⇒ KILL_ON_JOB_CLOSE；Unix：结束进程组）。
-        self.tree.close();
-        // 5) join 全部子任务（先给它们一点时间自然结束，再兜底 abort）。
+        // 4) 在仍可查询树状态时等待并证明树内没有存活进程。强制终止已经关闭句柄时，
+        //    这里无法取得空集合证明，因此保守地不留下 clean-shutdown fence。
+        let deadline = tokio::time::Instant::now() + limits::EXIT_DRAIN_TIMEOUT;
+        loop {
+            if !self.exit.process_exit_observed()
+                && tokio::time::timeout_at(deadline, self.wait_exit())
+                    .await
+                    .is_err()
+            {
+                break;
+            }
+            if self.tree.confirms_tree_exit() {
+                self.exit.mark_tree_exit_observed();
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // 5) 释放句柄（Windows：关闭 Job 句柄 ⇒ KILL_ON_JOB_CLOSE；Unix：结束进程组）。
+        let tree_exit_confirmed = self.tree.close();
+        if tree_exit_confirmed {
+            self.exit.mark_tree_exit_observed();
+        }
+        // 6) join 全部子任务（先给它们一点时间自然结束，再兜底 abort）。
         let handles: Vec<_> = self
             .tasks
             .lock()
@@ -579,7 +1108,7 @@ impl Supervisor {
                 let _ = handle.await;
             }
         }
-        // 6) 收敛退出：子任务已全部结束，此时若进程仍未被判定为退出（例如它在 grace 内自行退出但
+        // 7) 收敛退出：子任务已全部结束，此时若进程仍未被判定为退出（例如它在 grace 内自行退出但
         //    读任务的 EOF 因管道持有者未全部关闭而尚未观察到），由本路径补上——**断开上报不早于退出
         //    判定**由 `converge_exit` 的顺序保证，且钩子只被取走一次。
         let status = self.exit.status().unwrap_or_else(|| "已关闭".to_owned());
@@ -617,7 +1146,7 @@ impl Supervisor {
 impl Drop for Supervisor {
     fn drop(&mut self) {
         // 结构被丢弃时进程树也必须结束：不能留下孤儿 Agent。
-        self.tree.close();
+        let _ = self.tree.close();
     }
 }
 
@@ -727,6 +1256,7 @@ fn abort_agent(
             actual,
         })));
     }
+    exit.forced_stop.store(true, Ordering::SeqCst);
     tree.terminate();
 }
 
@@ -841,10 +1371,13 @@ async fn stderr_loop(mut stderr: tokio::process::ChildStderr, ring: Arc<Mutex<St
 
 /// 退出监视：进程退出时收敛未完成请求、唤醒关闭路径，并上报节点级断开（恰好一次）。
 async fn wait_loop(mut child: Child, exit: Arc<ExitState>, pending: Arc<Mutex<Pending>>) {
-    let status = match child.wait().await {
-        Ok(status) => format!("{status}"),
-        Err(error) => format!("wait 失败：{error}"),
+    let (status, observed) = match child.wait().await {
+        Ok(status) => (format!("{status}"), true),
+        Err(error) => (format!("wait 失败：{error}"), false),
     };
+    if observed {
+        exit.mark_process_exit_observed();
+    }
     if exit.is_done() {
         // 已被其它路径判定退出（超限结束）：那条路径负责上报与收敛，这里什么都不做。
         return;
@@ -871,7 +1404,42 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWrite};
 
-    use super::{Outbound, write_loop};
+    use super::{ExitState, Outbound, write_loop};
+
+    #[test]
+    fn forced_stop_cannot_be_rehabilitated_by_later_exit_observations() {
+        let exit = ExitState::new();
+        exit.mark_process_exit_observed();
+        exit.mark_tree_exit_observed();
+        assert!(
+            exit.trusted_shutdown_proof(),
+            "graceful complete exit can provide proof"
+        );
+        exit.forced_stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Unix can observe an empty process group after a forced stop. That observation
+        // is real, but it cannot undo this supervisor's irreversible policy decision.
+        exit.mark_process_exit_observed();
+        exit.mark_tree_exit_observed();
+        assert!(
+            !exit.trusted_shutdown_proof(),
+            "post-force observations cannot restore trust"
+        );
+    }
+
+    #[test]
+    fn internal_exit_mark_without_child_wait_is_not_a_clean_shutdown_proof() {
+        let exit = ExitState::new();
+        exit.mark("已判定退出".to_owned());
+        assert!(exit.is_done());
+        assert!(
+            !exit.process_exit_observed(),
+            "主动收敛退出状态不能替代操作系统 wait 证据"
+        );
+
+        exit.mark_process_exit_observed();
+        assert!(exit.process_exit_observed());
+    }
 
     /// 第一次尝试写入时通知测试的包装器，用来证明「写入已开始、确认尚未发出」。
     struct SignalWriter {

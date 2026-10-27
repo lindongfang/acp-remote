@@ -803,6 +803,35 @@ fn the_status_result_keeps_the_documented_field_set() {
     assert_eq!(started_at.len(), 24, "{started_at}");
     assert!(daemon.stop().success());
 }
+
+#[test]
+fn the_daemon_uses_the_file_clock_only_when_explicitly_injected() {
+    let injected = Daemon::configure("test-file-clock", &seed_profile("codex", true));
+    let clock_path = injected.root().join("acceptance.clock");
+    std::fs::write(&clock_path, "2026-10-26T00:29:59.999Z").expect("seed test clock");
+    let mut injected = injected
+        .with_env("ACPR_TEST_CLOCK_FILE", clock_path.as_os_str())
+        .with_env("ACPR_TEST_RECLAIM_INTERVAL_MS", "5");
+    injected.start();
+    let injected_status = injected.ok_value(Method::DaemonStatus, params());
+    assert_eq!(
+        injected_status["startedAt"],
+        json!("2026-10-26T00:29:59.999Z"),
+        "the real daemon must consume the externally supplied acceptance clock"
+    );
+    assert!(injected.stop().success());
+
+    let mut default = Daemon::configure("default-system-clock", &seed_profile("codex", true));
+    default.start();
+    let default_status = default.ok_value(Method::DaemonStatus, params());
+    assert_ne!(
+        default_status["startedAt"],
+        json!("2026-10-26T00:29:59.999Z"),
+        "without the explicit dev-only environment seam the daemon must use SystemClock"
+    );
+    assert!(default.stop().success());
+}
+
 /// R13：宽限被前面的步骤用满（在途连接把排空预算耗尽）时，关闭仍必须正常收尾——后台任务的取消
 /// 窗口此时已经过期，但不得因此留下 detached 任务或陈旧运行记录。
 ///

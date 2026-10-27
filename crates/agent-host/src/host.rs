@@ -10,9 +10,10 @@
 //! - 能力协商按**进程代**缓存：进程换了，缓存即失效。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use acp_core::model::{
@@ -35,10 +36,124 @@ use crate::error::HostError;
 use crate::launch;
 use crate::limits;
 use crate::node::{self, AgentLifecycle, ExitCause, ExitMark, NodeEvents};
-use crate::preparation::TemporaryEndpoint;
-use crate::process::{Inbound, Supervisor};
+use crate::process::{Inbound, StartFailure, StartupProof, Supervisor};
 use crate::release::{ReleaseAction, ReleaseOutcome, ReleaseRefusal};
 use crate::session::{AcpSession, BindingControl, Endpoint, SessionInit};
+
+/// 每个 core 会话的绑定代，以及本进程内已经获得肯定退出/清理证据的释放代。
+///
+/// 证明必须与资源代一起保存：无 descriptor 只能说明本进程没有可检查的句柄，不能说明上一进程
+/// 留下的资源已经消失。新建或恢复出下一代时清空旧证明，避免旧代幂等结果影响新代。
+#[derive(Debug, Default)]
+struct BindingGeneration {
+    current: u64,
+    confirmed_release: Option<u64>,
+}
+
+type BindingGenerations = Arc<std::sync::Mutex<HashMap<SessionId, BindingGeneration>>>;
+
+const CLEAN_SHUTDOWN_FENCE: &[u8] = b"ACPR-AGENT-HOST-CLEAN-SHUTDOWN\0v1\n";
+static CLEAN_SHUTDOWN_FENCE_TEMP: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanShutdownFenceState {
+    Consumed,
+    Absent,
+    Invalid,
+    IoFailed,
+}
+
+impl CleanShutdownFenceState {
+    #[cfg(test)]
+    fn trusts_absent_descriptors(self) -> bool {
+        self == Self::Consumed
+    }
+}
+
+fn consume_clean_shutdown_fence_with(
+    path: &Path,
+    quarantine: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> CleanShutdownFenceState {
+    let contents = match std::fs::read(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return CleanShutdownFenceState::Absent;
+        }
+        Err(_) => return CleanShutdownFenceState::IoFailed,
+    };
+    if contents != CLEAN_SHUTDOWN_FENCE {
+        return CleanShutdownFenceState::Invalid;
+    }
+    match quarantine(path) {
+        Ok(()) => CleanShutdownFenceState::Consumed,
+        Err(_) => CleanShutdownFenceState::IoFailed,
+    }
+}
+
+fn quarantine_clean_shutdown_fence(path: &Path) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "clean-shutdown fence has no parent directory",
+        )
+    })?;
+    let nonce = CLEAN_SHUTDOWN_FENCE_TEMP.fetch_add(1, Ordering::Relaxed);
+    let quarantine = parent.join(format!(
+        ".agent-host.clean-shutdown.quarantine-{}-{nonce}",
+        std::process::id()
+    ));
+    // The trusted fixed path must disappear atomically before the proof is considered consumed.
+    // If the best-effort cleanup of the quarantine name fails, future startups still cannot
+    // mistake it for the fixed proof.
+    std::fs::rename(path, &quarantine)?;
+    let _ = std::fs::remove_file(quarantine);
+    Ok(())
+}
+
+fn consume_clean_shutdown_fence(path: &Path) -> CleanShutdownFenceState {
+    consume_clean_shutdown_fence_with(path, quarantine_clean_shutdown_fence)
+}
+
+fn failed_fence_consumption_blocks_agent_work(state: CleanShutdownFenceState) -> bool {
+    // An unreadable fence may contain a valid proof. Until this process knows and atomically
+    // invalidates its fixed path, it must not create Agent work that a stale proof could later
+    // falsely describe as stopped.
+    state == CleanShutdownFenceState::IoFailed
+}
+
+fn publish_clean_shutdown_fence(path: &Path) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "clean-shutdown fence has no parent directory",
+        )
+    })?;
+    let nonce = CLEAN_SHUTDOWN_FENCE_TEMP.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(
+        ".agent-host.clean-shutdown.tmp-{}-{nonce}",
+        std::process::id()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    if let Err(error) = (|| {
+        file.write_all(CLEAN_SHUTDOWN_FENCE)?;
+        file.sync_all()?;
+        drop(file);
+        if path.try_exists()? {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "clean-shutdown fence target already exists",
+            ));
+        }
+        std::fs::rename(&temporary, path)
+    })() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}
 
 /// 一个 Agent 的运行时（一个进程 + 该进程上的全部会话）。
 struct AgentRuntime {
@@ -72,6 +187,8 @@ struct AgentRuntime {
     /// core 会话重绑到新代，而旧代 ack 到达时目录里已经指向新代，留下一个指向「已被 Agent 释放的会话」
     /// 的新绑定。
     bindings: Arc<Mutex<()>>,
+    /// 与 [`AgentHost`] 共享的释放证明；端点直接关闭也必须留下可验证的幂等事实。
+    binding_generations: BindingGenerations,
 }
 
 impl std::fmt::Debug for AgentRuntime {
@@ -92,6 +209,7 @@ impl AgentRuntime {
         node_events: Arc<std::sync::RwLock<NodeEvents>>,
         clock: Arc<dyn Clock>,
         bindings: Arc<Mutex<()>>,
+        binding_generations: BindingGenerations,
     ) -> Self {
         Self {
             supervisor,
@@ -106,7 +224,16 @@ impl AgentRuntime {
             exit_mark: ExitMark::new(),
             clock,
             bindings,
+            binding_generations,
         }
+    }
+
+    fn confirm_release(&self, session: &AcpSession) {
+        let mut generations = lock(&self.binding_generations);
+        generations
+            .entry(session.session_id().clone())
+            .or_default()
+            .confirmed_release = Some(session.generation());
     }
 
     /// 上报本进程实例的连接（**恰好一次**）。
@@ -285,27 +412,19 @@ impl AgentRuntime {
         self.release_locked(session).await
     }
 
-    /// 让出**准备（临时）代**：只有尚未转正、且仍是当前映射的代才会真的发送 `session/close`。
-    ///
-    /// 重建（[`AgentHost::rebuild_preparation`]）在换入新代之前调用它。转正与关闭由同一把绑定门串行化：
-    /// 转正先到 ⇒ 这里拒绝（绝不关闭已经属于正式会话的绑定）；关闭先到 ⇒ 随后的
-    /// [`AgentHost::transfer_preparation`] 找不到映射而失败。只释放本地状态、摘掉映射会让旧 Agent 会话
-    /// 永远留在 Agent 进程里，因此这里走与逐会话释放完全相同的能力门控顺序。
-    async fn release_temporary_session(
+    /// [`Self::release_bound_session`] 的绑定门内实现（判定 → 停终端 → `session/close` → 摘除映射）。
+    async fn release_locked(&self, session: &AcpSession) -> Result<ReleaseAction, ReleaseRefusal> {
+        let outcome = self.release_locked_inner(session).await;
+        if matches!(&outcome, Ok(ReleaseAction::Released)) {
+            self.confirm_release(session);
+        }
+        outcome
+    }
+
+    async fn release_locked_inner(
         &self,
         session: &AcpSession,
     ) -> Result<ReleaseAction, ReleaseRefusal> {
-        let _bindings = self.bindings.lock().await;
-        if !session.is_temporary() {
-            return Err(ReleaseRefusal::from_error(HostError::DuplicateSession {
-                session: session.session_id().as_str().to_owned(),
-            }));
-        }
-        self.release_locked(session).await
-    }
-
-    /// [`Self::release_bound_session`] 的绑定门内实现（判定 → 停终端 → `session/close` → 摘除映射）。
-    async fn release_locked(&self, session: &AcpSession) -> Result<ReleaseAction, ReleaseRefusal> {
         if session.is_released() {
             // Agent 已确认释放（或进程已退出）：重复释放幂等，且不再发任何请求。
             self.remove_session_if_current(session);
@@ -439,8 +558,6 @@ pub struct SessionResourceFacts {
     pub acp_session_id: String,
     /// 绑定资源代。
     pub generation: u64,
-    /// 是否是准备（临时）端点（未转正；**不**来自 `SessionStore`，没有持久行）。
-    pub temporary: bool,
     /// 本地绑定是否已关闭（**不**代表 Agent 已确认释放：重绑/回收也会置位）。
     pub closed: bool,
     /// 是否有进行中的 turn。
@@ -460,8 +577,22 @@ pub struct AgentHost {
     clock: Arc<dyn Clock>,
     runtimes: Mutex<HashMap<AgentId, Arc<AgentRuntime>>>,
     generations: std::sync::Mutex<HashMap<AgentId, u64>>,
+    /// Removal from the serving directory is not proof of process exit.
+    proof_supervisors: std::sync::Mutex<Vec<Arc<Supervisor>>>,
+    /// Each startup proof is retained before spawning. Losing or cancelling the startup future
+    /// therefore cannot erase an unconfirmed process cleanup.
+    startup_proofs: std::sync::Mutex<Vec<Arc<StartupProof>>>,
+    /// A later binding or empty directory cannot prove legacy resources exited.
+    legacy_release_unconfirmed: AtomicBool,
     /// 每个 core 会话的绑定资源代（建立/恢复/重绑递增；跨进程代续增）。
-    binding_generations: std::sync::Mutex<HashMap<SessionId, u64>>,
+    binding_generations: BindingGenerations,
+    /// 启动时成功消费的有效关闭证明；只用于证明启动前没有本进程 descriptor 的旧会话已随完整停止而释放。
+    clean_restart: bool,
+    /// 完整关闭时原子写出的一次性证明路径。
+    clean_shutdown_fence: Option<PathBuf>,
+    /// 启动时 fence 读取/搬移失败后关闭 Agent 工作入口。旧有效文件仍可能在固定路径上，
+    /// 若本进程随后创建新 Agent 工作并在崩溃后留下该文件，下一进程会把它误当天新工作的停止证明。
+    agent_work_blocked_by_fence: bool,
     /// 绑定变更与逐会话释放的串行门。
     ///
     /// `open` 的重绑与 `resume` 的换绑只覆盖「读目录 → 让出旧绑定 → 登记新绑定」这一小段，**不**覆盖
@@ -500,6 +631,44 @@ impl AgentHost {
         ids: Arc<dyn IdGenerator>,
         clock: Arc<dyn Clock>,
     ) -> Self {
+        let mut clean_restart = false;
+        let mut agent_work_blocked_by_fence = false;
+        if let Some(path) = host_config.clean_shutdown_fence.as_deref() {
+            let state = consume_clean_shutdown_fence(path);
+            match state {
+                CleanShutdownFenceState::Consumed => {
+                    tracing::info!(
+                        event = "agent_host.clean_shutdown_fence_consumed",
+                        path = %path.display(),
+                        "clean-restart proof consumed; absent descriptors from the previous process are trusted"
+                    );
+                    clean_restart = true;
+                }
+                CleanShutdownFenceState::Absent => {
+                    tracing::debug!(
+                        event = "agent_host.clean_shutdown_fence_absent",
+                        path = %path.display(),
+                        "no clean AgentHost shutdown proof; descriptor absence remains uncertain"
+                    );
+                }
+                CleanShutdownFenceState::Invalid => {
+                    tracing::warn!(
+                        event = "agent_host.clean_shutdown_fence_invalid",
+                        path = %path.display(),
+                        "AgentHost shutdown proof is invalid; descriptor absence remains uncertain"
+                    );
+                }
+                CleanShutdownFenceState::IoFailed => {
+                    agent_work_blocked_by_fence = failed_fence_consumption_blocks_agent_work(state);
+                    tracing::warn!(
+                        event = "agent_host.clean_shutdown_fence_consume_failed",
+                        path = %path.display(),
+                        "AgentHost shutdown proof could not be atomically consumed; Agent work is blocked and descriptor absence remains uncertain"
+                    );
+                }
+            }
+        }
+        let clean_shutdown_fence = host_config.clean_shutdown_fence.clone();
         Self {
             profiles,
             host_config,
@@ -507,7 +676,13 @@ impl AgentHost {
             clock,
             runtimes: Mutex::new(HashMap::new()),
             generations: std::sync::Mutex::new(HashMap::new()),
-            binding_generations: std::sync::Mutex::new(HashMap::new()),
+            proof_supervisors: std::sync::Mutex::new(Vec::new()),
+            startup_proofs: std::sync::Mutex::new(Vec::new()),
+            legacy_release_unconfirmed: AtomicBool::new(false),
+            binding_generations: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            clean_restart,
+            clean_shutdown_fence,
+            agent_work_blocked_by_fence,
             bindings: Arc::new(Mutex::new(())),
             shutting_down: AtomicBool::new(false),
             node_events: Arc::new(std::sync::RwLock::new(NodeEvents::unbound())),
@@ -558,9 +733,58 @@ impl AgentHost {
     /// 分配下一个绑定资源代（同一 core 会话严格递增；跨进程代仍单调）。
     fn next_binding_generation(&self, session: &SessionId) -> u64 {
         let mut generations = lock(&self.binding_generations);
-        let next = generations.entry(session.clone()).or_insert(0);
-        *next += 1;
-        *next
+        let entry = generations.entry(session.clone()).or_default();
+        entry.current += 1;
+        entry.confirmed_release = None;
+        entry.current
+    }
+
+    /// Register the existence of a persisted startup session before opening ingress.
+    /// This is independent of idle timeout, content, or allocation of a nonzero resource generation.
+    /// It supplies no release evidence and never creates a binding generation.
+    pub fn register_restart_session(&self) {
+        if !self.clean_restart {
+            self.legacy_release_unconfirmed
+                .store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// 在开放入站前对齐 core 已分配的启动资源代；不建立 Agent，也不伪造释放确认。
+    /// 只有已消费的 clean-shutdown 证明可以确认该启动代已释放。
+    /// 重复登记或已有绑定时拒绝，防止把运行中的资源重新标为已释放。
+    pub fn seed_restart_generation(&self, session: SessionId, generation: u64) -> bool {
+        if generation == 0 || self.shutting_down.load(Ordering::Acquire) {
+            return false;
+        }
+        let mut generations = lock(&self.binding_generations);
+        if generations.contains_key(&session) {
+            return false;
+        }
+        self.register_restart_session();
+        generations.insert(
+            session,
+            BindingGeneration {
+                current: generation,
+                confirmed_release: self.clean_restart.then_some(generation),
+            },
+        );
+        true
+    }
+    fn release_is_confirmed(&self, session: &SessionId, generation: u64) -> bool {
+        lock(&self.binding_generations)
+            .get(session)
+            .and_then(|entry| entry.confirmed_release)
+            == Some(generation)
+    }
+
+    fn current_release_is_confirmed(&self, session: &SessionId) -> bool {
+        lock(&self.binding_generations)
+            .get(session)
+            .is_some_and(|entry| entry.confirmed_release == Some(entry.current))
+    }
+
+    fn clean_restart_confirms_missing_descriptor(&self, session: &SessionId) -> bool {
+        self.clean_restart && !lock(&self.binding_generations).contains_key(session)
     }
 
     /// 逐会话释放端口（core 的 `SessionRelease` 适配入口）。
@@ -573,21 +797,28 @@ impl AgentHost {
     /// Agent 侧的确认（见 [`crate::session::AcpSession::is_released`]）。对这样的绑定本方法返回
     /// `Failed`——真实资源可能已由新代占用，交还名额会让同一个会话被重复计入。
     ///
-    /// 没有活动绑定时返回 `Released`：本层已经没有该会话的资源可释放（重复调用幂等）。若调用期间
-    /// 该会话被重绑/恢复成新代，返回 `Failed`——旧代端点不得对新代绑定执行破坏性关闭，调用方应针对
-    /// 新代重新判定。
+    /// 没有活动绑定时，只有本进程已经为同代记录过肯定释放证明才返回 `Released`；否则返回
+    /// `Uncertain`。descriptor 缺失本身只说明本层无句柄可查，不能证明重启前留下的进程或资源已消失。
+    /// 若调用期间该会话被重绑/恢复成新代，返回 `Failed`——旧代端点不得对新代绑定执行破坏性关闭，
+    /// 调用方应针对新代重新判定。
     #[must_use]
     pub async fn release_session(&self, session: &SessionId) -> ReleaseOutcome {
         match self.find_binding(session).await {
-            None => ReleaseOutcome::Released,
+            None if self.current_release_is_confirmed(session) => ReleaseOutcome::Released,
+            None if self.clean_restart_confirms_missing_descriptor(session) => {
+                ReleaseOutcome::Released
+            }
+            None => ReleaseOutcome::Uncertain,
             Some((runtime, binding)) => Self::release_binding(&runtime, &binding).await,
         }
     }
 
     /// 带资源代的逐会话释放（core `SessionRelease::release_session(session, generation, now)` 的适配）。
     ///
-    /// 只有目录里的当前绑定仍是该代时才允许发送 `session/close`；若期间已重绑/恢复成新代，返回
-    /// `Failed` 且**不触碰**新代绑定——迟到的释放请求不得关闭一个刚建立的新资源。
+    /// 只有目录里的当前绑定仍是该代时才允许发送 `session/close`。没有活动 descriptor 时，仅同代已有
+    /// 肯定退出/清理证明才返回 `Released`，否则返回 `Uncertain`，调用方必须保留会话与容量。
+    /// 若期间已重绑/恢复成新代，返回 `Failed` 且**不触碰**新代绑定——迟到的释放请求不得关闭一个
+    /// 刚建立的新资源。
     #[must_use]
     pub async fn release_session_at_generation(
         &self,
@@ -595,7 +826,18 @@ impl AgentHost {
         generation: u64,
     ) -> ReleaseOutcome {
         match self.find_binding(session).await {
-            None => ReleaseOutcome::Released,
+            None if self.release_is_confirmed(session, generation) => ReleaseOutcome::Released,
+            None if self.clean_restart_confirms_missing_descriptor(session) => {
+                ReleaseOutcome::Released
+            }
+            None => {
+                tracing::warn!(
+                    session = %session,
+                    generation,
+                    "会话没有运行时 descriptor，且没有同代肯定释放证据"
+                );
+                ReleaseOutcome::Uncertain
+            }
             Some((runtime, binding)) if binding.generation() == generation => {
                 Self::release_binding(&runtime, &binding).await
             }
@@ -655,7 +897,6 @@ impl AgentHost {
         runtime: &Arc<AgentRuntime>,
         request: CreateSessionRequest,
         sink: EventSink,
-        temporary: bool,
     ) -> Result<Arc<AcpSession>, PortError> {
         let capabilities = lock(&runtime.capabilities).clone().unwrap_or_default();
 
@@ -698,7 +939,6 @@ impl AgentHost {
             sink,
             ids: Arc::clone(&self.ids),
             clock: Arc::clone(&self.clock),
-            temporary,
             capabilities,
             modes: response.modes,
             config_options: response.config_options.unwrap_or_default(),
@@ -706,181 +946,6 @@ impl AgentHost {
             attachments: self.attachments(),
             terminal_enabled: self.terminal_enabled(),
         })))
-    }
-
-    /// 为 core 已分配的 `SessionId` 建立**准备（临时）端点**（`design.md` D4/D9）。
-    ///
-    /// 与 [`SessionBackendFactory::create`] 的差别只在生命周期：不要求 `SessionStore` 中存在行，绑定
-    /// 只活在运行期；该端点不得派发 prompt，直到 [`AgentHost::transfer_preparation`] 转正。模式和配置
-    /// 全部来自真实 `session/new` 的响应（默认值也是 Agent 的），本层不缓存占位值。
-    ///
-    /// 同一会话已有绑定（临时或正式）时显式失败：重建走 [`AgentHost::rebuild_preparation`]，不能靠
-    /// 悄悄覆盖把旧资源留在 Agent 侧。
-    pub async fn prepare(
-        &self,
-        session: &SessionId,
-        request: CreateSessionRequest,
-        sink: EventSink,
-    ) -> Result<TemporaryEndpoint, PortError> {
-        if self.find_binding(session).await.is_some() {
-            return Err(HostError::DuplicateSession {
-                session: session.as_str().to_owned(),
-            }
-            .to_port_error());
-        }
-        let agent = request.agent.agent_id().clone();
-        let runtime = self
-            .ensure_runtime(&agent)
-            .await
-            .map_err(|error| error.to_establishment_error())?;
-        let prepared = self
-            .establish_binding(session, &runtime, request, sink, true)
-            .await?;
-        if let Err(error) = runtime.insert_session(&prepared) {
-            Self::close_unregistered_binding(&runtime, &prepared).await;
-            return Err(error.to_port_error());
-        }
-        let release: Arc<dyn BindingControl> = runtime;
-        Ok(TemporaryEndpoint::new(Endpoint::new(prepared, release)))
-    }
-
-    /// 在**新的资源代**下重建同一准备会话（恢复/重建路径）。
-    ///
-    /// 顺序固定为：先做本地可判定的拒绝（已转正的绑定不能被准备路径替换）→ 真实 `session/new` 取新代
-    /// 的真实选项 → 在旧代仍是当前映射时用能力门控的 `session/close` 释放它 → 在绑定门下登记新代。
-    /// 旧代随后的迟到结果只能作用于它自己那一代（关闭 ack 不会摘除新映射，`set_mode`/`set_config`
-    /// 在已让出的绑定上直接拒绝），不会覆盖新代的选择。
-    ///
-    /// 任何一条失败路径都必须收尾刚建立的端点：否则每次失败都会在 Agent 侧留下一个没人释放的会话。
-    /// 旧代关闭失败时**不**摘除它的映射（真实占用与容量名额保持），重建显式失败，core 仍可按旧句柄重试。
-    ///
-    /// 正式（已转正）绑定不能被准备路径替换：那是恢复（[`SessionBackendFactory::resume`]）的职责。
-    pub async fn rebuild_preparation(
-        &self,
-        session: &SessionId,
-        request: CreateSessionRequest,
-        sink: EventSink,
-    ) -> Result<TemporaryEndpoint, PortError> {
-        let agent = request.agent.agent_id().clone();
-        let runtime = self
-            .ensure_runtime(&agent)
-            .await
-            .map_err(|error| error.to_establishment_error())?;
-
-        // 已转正 ⇒ 在**任何 Agent I/O 之前**拒绝：`session/new` 一旦发出就会产生真实会话，随后只能
-        // 丢弃；这个判定是本地事实，不需要也不允许先建后弃。
-        {
-            let _bindings = self.bindings.lock().await;
-            if self
-                .find_binding(session)
-                .await
-                .is_some_and(|(_, existing)| !existing.is_temporary())
-            {
-                return Err(Self::owned_preparation_error(session));
-            }
-        }
-
-        // `session/new` 在绑定门外完成（Agent I/O 不占串行门）；旧绑定此刻仍可能服务，但准备端点
-        // 不派发 prompt，选项写入由 core 串行化。
-        let prepared = self
-            .establish_binding(session, &runtime, request, sink, true)
-            .await?;
-
-        // 释放旧代：只 `close_session()` 再摘掉映射会让 Agent 侧会话永远留在 Agent 进程里。
-        if let Some((previous_runtime, previous)) = self.find_binding(session).await {
-            match previous_runtime.release_temporary_session(&previous).await {
-                Ok(ReleaseAction::Released) => {}
-                Ok(ReleaseAction::Yielded) => {
-                    // 旧代已在本地让出、Agent 侧没有释放证据：保留占用（映射不动），重建失败。
-                    Self::close_unregistered_binding(&runtime, &prepared).await;
-                    return Err(HostError::SessionClosed.to_port_error());
-                }
-                Err(refusal) => {
-                    // 已经转正，或关闭被拒绝/说不清：旧绑定与真实资源保持占用，重建失败。
-                    Self::close_unregistered_binding(&runtime, &prepared).await;
-                    return Err(refusal.error.to_port_error());
-                }
-            }
-        }
-
-        let bindings = self.bindings.lock().await;
-        if let Err(error) = runtime.insert_session(&prepared) {
-            drop(bindings);
-            Self::close_unregistered_binding(&runtime, &prepared).await;
-            return Err(error.to_port_error());
-        }
-        drop(bindings);
-        let release: Arc<dyn BindingControl> = runtime;
-        Ok(TemporaryEndpoint::new(Endpoint::new(prepared, release)))
-    }
-
-    /// 「该会话已经是正式绑定」的拒绝（准备路径不替换已转正会话）。
-    fn owned_preparation_error(session: &SessionId) -> PortError {
-        HostError::DuplicateSession {
-            session: session.as_str().to_owned(),
-        }
-        .to_port_error()
-    }
-
-    /// 首次提交的**所有权转移**：把准备端点转成正式绑定，无需第二次 `create`/`session/new`。
-    ///
-    /// 只接受目录里仍然指向该句柄**同一代**的绑定；选项未复核对齐或存在不可用选择时拒绝（不静默
-    /// 回退默认值）。转正后同一端点即可用于首次派发（[`SessionEndpoint::prompt_with_context`]），
-    /// `agent_session_id`/模式/配置也原样沿用——它们都来自这次真实的 `session/new`。
-    pub async fn transfer_preparation(
-        &self,
-        endpoint: &TemporaryEndpoint,
-    ) -> Result<(), PortError> {
-        let _bindings = self.bindings.lock().await;
-        let Some((_, current)) = self.find_binding(endpoint.session_id()).await else {
-            return Err(HostError::UnknownSession.to_port_error());
-        };
-        if !Arc::ptr_eq(&current, endpoint.session_ref())
-            || current.generation() != endpoint.generation()
-        {
-            // 旧代句柄不得转正（新代已经存在）：这不是“没找到”，而是代不匹配。
-            return Err(HostError::SessionClosed.to_port_error());
-        }
-        current.mark_owned().map_err(|error| error.to_port_error())
-    }
-
-    /// 按**精确资源代**释放准备端点（core 的逐会话回收入口）。
-    ///
-    /// - 句柄已确认释放 ⇒ `Released`（幂等）；
-    /// - 目录里仍指向该代 ⇒ 执行真实关闭（停终端 → 能力门控的 `session/close` → 摘除映射）；
-    /// - 目录指向新代、只剩旧句柄，或根本找不到 ⇒ `Failed`：旧代**不得**关闭新绑定，也不能凭
-    ///   “没有映射”就宣称资源已释放（Agent 侧可能仍占用，容量名额保持占用）。
-    ///
-    /// `close` 被拒绝/能力未宣告/超时同样映射为 [`ReleaseOutcome::Failed`] 或 `Uncertain`，都保留占用。
-    pub async fn release_preparation(&self, endpoint: &TemporaryEndpoint) -> ReleaseOutcome {
-        if endpoint.is_released() {
-            return ReleaseOutcome::Released;
-        }
-        let Some((runtime, current)) = self.find_binding(endpoint.session_id()).await else {
-            return ReleaseOutcome::Failed;
-        };
-        if !Arc::ptr_eq(&current, endpoint.session_ref())
-            || current.generation() != endpoint.generation()
-        {
-            return ReleaseOutcome::Failed;
-        }
-        Self::release_binding(&runtime, &current).await
-    }
-
-    /// 收尾一条**未登记**的端点绑定（建立后没能换入目录）：同样走能力门控的 `session/close`。
-    ///
-    /// 这种绑定不在目录里，因此没有映射可判定/摘除；失败只记日志——调用方已经在返回自己的错误，
-    /// 不能用一个新错误覆盖它。与 `discard` 的关键区别：只作废本地状态会让 Agent 侧会话永久残留。
-    async fn close_unregistered_binding(runtime: &AgentRuntime, binding: &Arc<AcpSession>) {
-        let _bindings = runtime.bindings.lock().await;
-        if let Err(refusal) = runtime.close_session_io(binding).await {
-            tracing::warn!(
-                session = %binding.session_id(),
-                generation = binding.generation(),
-                error = %refusal.error,
-                "未能关闭未登记的准备端点（Agent 侧资源可能仍占用）"
-            );
-        }
     }
 
     /// 当前运行期会话的事实快照（只报告，不做回收决定）。
@@ -904,7 +969,6 @@ impl AgentHost {
                     session: session.session_id().clone(),
                     acp_session_id: session.acp_session_id().to_owned(),
                     generation: session.generation(),
-                    temporary: session.is_temporary(),
                     closed: session.is_closed(),
                     turn_running: session.turn_running(),
                     last_activity_ago: session.last_activity_elapsed(),
@@ -964,6 +1028,11 @@ impl AgentHost {
         &self,
         agent: &AgentId,
     ) -> Result<(Arc<AgentRuntime>, bool), HostError> {
+        if self.agent_work_blocked_by_fence {
+            return Err(HostError::SpawnFailed {
+                detail: "clean-shutdown fence could not be consumed safely".to_owned(),
+            });
+        }
         // 关闭中不得再启动新进程（`shutdown_all` 已置位）：显式失败，不静默超时、不偷偷拉起来。
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(HostError::NotRunning);
@@ -989,6 +1058,7 @@ impl AgentHost {
             }
             runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
+            self.prune_confirmed_supervisors();
         }
 
         let profile = self
@@ -998,7 +1068,19 @@ impl AgentHost {
             .cloned()
             .ok_or(HostError::UnknownProfile)?;
         let spec = launch::resolve_launch(&profile)?;
-        let (supervisor, incoming) = Supervisor::start(spec).await?;
+        let proof = StartupProof::new();
+        lock(&self.startup_proofs).push(Arc::clone(&proof));
+        let (supervisor, incoming) =
+            match Supervisor::start_for_host(spec, Arc::clone(&proof)).await {
+                Ok(started) => started,
+                Err(StartFailure::NotStarted(error)) => return Err(error),
+                Err(StartFailure::Unconfirmed { detail }) => {
+                    return Err(HostError::SpawnCleanupUnconfirmed { detail });
+                }
+            };
+        // Register before the next await: cancellation or failed initialize cannot lose ownership.
+        // The directory lock serializes this with shutdown_all's startup barrier.
+        self.track_supervisor(Arc::clone(&supervisor));
         let generation = {
             let mut generations = lock(&self.generations);
             let next = generations.entry(agent.clone()).or_insert(0);
@@ -1012,6 +1094,7 @@ impl AgentHost {
             Arc::clone(&self.node_events),
             Arc::clone(&self.clock),
             Arc::clone(&self.bindings),
+            Arc::clone(&self.binding_generations),
         ));
         // 退出上报钩子：断开事件的唯一触发点（无论哪条路径先观察到退出，钩子只被取走一次）。
         // 它在 `converge_exit` 的顺序下被调用，因此钩子里 `supervisor.is_running()` 必然已为假。
@@ -1043,6 +1126,7 @@ impl AgentHost {
                 // 协商失败：不留下半开的进程（进程树与任务一并回收）。**不上报连接**——该进程从未
                 // 可服务会话，因此也就没有连接可上报（`AgentLifecycle::on_spawn` 从未被调用）。
                 supervisor.shutdown().await;
+                self.prune_confirmed_supervisors();
                 return Err(error);
             }
         }
@@ -1148,6 +1232,7 @@ impl AgentHost {
             }
             runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
+            self.prune_confirmed_supervisors();
         }
     }
 
@@ -1231,7 +1316,18 @@ impl AgentHost {
                 session.shutdown_terminals().await;
             }
             runtime.supervisor.shutdown().await;
+            self.prune_confirmed_supervisors();
         }
+    }
+
+    fn track_supervisor(&self, supervisor: Arc<Supervisor>) {
+        let mut tracked = lock(&self.proof_supervisors);
+        tracked.retain(|previous| !previous.shutdown_confirmed());
+        tracked.push(supervisor);
+    }
+
+    fn prune_confirmed_supervisors(&self) {
+        lock(&self.proof_supervisors).retain(|supervisor| !supervisor.shutdown_confirmed());
     }
 
     /// 显式关闭某个 Agent 的进程树（会话级语义由 core 决定）。
@@ -1245,20 +1341,28 @@ impl AgentHost {
             }
             runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
+            self.prune_confirmed_supervisors();
         }
     }
 
     /// 全部 Agent 的关闭（Daemon 停止时使用）。
     ///
     /// 先置关闭标志（此后 `ensure_runtime` 拒绝启动任何新进程），再清目录并逐个按关闭顺序回收。
-    pub async fn shutdown_all(&self) {
+    pub async fn shutdown_all(&self) -> bool {
         self.shutting_down.store(true, Ordering::SeqCst);
+        // Count prior startup proof coverage before any current shutdown can remove a supervisor.
+        let startup_veto = lock(&self.startup_proofs)
+            .iter()
+            .any(|proof| proof.retains_unconfirmed_startup_proof());
         let runtimes: Vec<Arc<AgentRuntime>> = {
             let mut runtimes = self.runtimes.lock().await;
             let values = runtimes.values().cloned().collect();
             runtimes.clear();
             values
         };
+        let mut all_stopped = !self.legacy_release_unconfirmed.load(Ordering::SeqCst)
+            && !self.agent_work_blocked_by_fence
+            && !startup_veto;
         for runtime in runtimes {
             for session in runtime.sessions() {
                 session.close_session();
@@ -1266,6 +1370,58 @@ impl AgentHost {
             }
             runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
+            self.prune_confirmed_supervisors();
+            if !runtime.supervisor.shutdown_confirmed() {
+                all_stopped = false;
+                tracing::error!(
+                    event = "agent_host.shutdown_unconfirmed",
+                    agent = %runtime.agent,
+                    "Agent process exit was not observed after shutdown"
+                );
+            }
+        }
+        // Includes retired runtimes and failed/cancelled initialization. A successfully started
+        // child leaves its startup proof recorded by the Host; it is not a cleanup uncertainty.
+        let supervisors = lock(&self.proof_supervisors).clone();
+        for supervisor in supervisors {
+            if supervisor.shutdown_confirmed() {
+                continue;
+            }
+            supervisor.shutdown().await;
+            if !supervisor.shutdown_confirmed() {
+                all_stopped = false;
+                tracing::error!(
+                    event = "agent_host.retired_shutdown_unconfirmed",
+                    program = %supervisor.program(),
+                    "retired Agent process exit was not observed after shutdown"
+                );
+            }
+        }
+        self.prune_confirmed_supervisors();
+        if !all_stopped {
+            return false;
+        }
+        let Some(path) = &self.clean_shutdown_fence else {
+            return true;
+        };
+        match publish_clean_shutdown_fence(path) {
+            Ok(()) => {
+                tracing::info!(
+                    event = "agent_host.clean_shutdown_fence_published",
+                    path = %path.display(),
+                    "all managed Agent processes stopped; restart proof published"
+                );
+                true
+            }
+            Err(error) => {
+                tracing::error!(
+                    event = "agent_host.clean_shutdown_fence_publish_failed",
+                    path = %path.display(),
+                    error = %error,
+                    "all managed Agent processes stopped but restart proof could not be published"
+                );
+                false
+            }
         }
     }
 }
@@ -1378,7 +1534,7 @@ impl SessionBackendFactory for AgentHost {
             .await
             .map_err(|error| error.to_establishment_error())?;
         let session = self
-            .establish_binding(session, &runtime, request, sink, false)
+            .establish_binding(session, &runtime, request, sink)
             .await?;
         runtime
             .insert_session(&session)
@@ -1414,12 +1570,6 @@ impl SessionBackendFactory for AgentHost {
             let Some(previous) = runtime.session_for_acp(&acp_id) else {
                 continue;
             };
-            // 准备（临时）端点没有 owned 行，也不能靠 `open` 绕过选项复核/所有权转移：显式拒绝。
-            if previous.is_temporary() {
-                return Err(PortError::InvalidRequest(
-                    "准备端点不能通过 open 转正（必须 transfer_preparation）",
-                ));
-            }
             // 重开：同一个 core 会话换一个新的 endpoint 绑定。旧绑定必须先让出，避免同一会话同时
             // 存在两个会派发 turn 的 endpoint（`AGENTS.md` §4「同一会话最多一个 active turn」）。
             // 新绑定拿到严格递增的资源代：旧端点随后的迟到关闭结果只能作用于旧代。
@@ -1522,7 +1672,6 @@ impl SessionBackendFactory for AgentHost {
             sink,
             ids: Arc::clone(&self.ids),
             clock: Arc::clone(&self.clock),
-            temporary: false,
             capabilities,
             modes: response.modes,
             config_options: response.config_options.unwrap_or_default(),
@@ -1718,6 +1867,571 @@ fn write<T>(lock: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
 mod tests {
     use super::*;
 
+    struct FenceTempDir(PathBuf);
+
+    impl FenceTempDir {
+        fn new(label: &str) -> Self {
+            let nonce = CLEAN_SHUTDOWN_FENCE_TEMP.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "acpr-agent-host-fence-{label}-{}-{nonce}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).expect("create fence test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for FenceTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn host_clean_shutdown_waits_for_the_root_child_exit() {
+        let directory = FenceTempDir::new("host-root-child-exit");
+        let path = directory.0.join("agent-host.fence");
+        let host = proof_test_host(path.clone(), "normal");
+        let agent = AgentId::new("agent-1").expect("id");
+        let runtime = host.ensure_runtime(&agent).await.expect("runtime");
+        assert!(runtime.supervisor.is_running());
+        assert!(
+            host.shutdown_all().await,
+            "a launched Agent must stop before the Host shutdown fence is published"
+        );
+        assert!(runtime.supervisor.shutdown_confirmed());
+        assert!(path.exists(), "clean shutdown must publish the fence");
+    }
+
+    #[test]
+    fn clean_shutdown_fence_is_strict_and_consumed_once() {
+        let directory = FenceTempDir::new("strict");
+        let path = directory.0.join("agent-host.fence");
+        std::fs::write(&path, CLEAN_SHUTDOWN_FENCE).expect("write valid fence");
+
+        assert_eq!(
+            consume_clean_shutdown_fence(&path),
+            CleanShutdownFenceState::Consumed
+        );
+        assert!(!path.exists(), "valid proof must be removed when consumed");
+        assert_eq!(
+            consume_clean_shutdown_fence(&path),
+            CleanShutdownFenceState::Absent
+        );
+        assert!(!consume_clean_shutdown_fence(&path).trusts_absent_descriptors());
+    }
+
+    #[test]
+    fn corrupt_shutdown_fence_and_failed_consumption_fail_closed() {
+        let directory = FenceTempDir::new("fail-closed");
+        let path = directory.0.join("agent-host.fence");
+        std::fs::write(&path, b"valid-prefix-but-wrong").expect("write corrupt fence");
+        assert_eq!(
+            consume_clean_shutdown_fence(&path),
+            CleanShutdownFenceState::Invalid
+        );
+        assert!(
+            path.exists(),
+            "invalid proof must not be treated as consumed"
+        );
+
+        std::fs::write(&path, CLEAN_SHUTDOWN_FENCE).expect("write valid fence");
+        let state = consume_clean_shutdown_fence_with(&path, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected remove failure",
+            ))
+        });
+        assert_eq!(state, CleanShutdownFenceState::IoFailed);
+        assert!(
+            !state.trusts_absent_descriptors(),
+            "a proof that cannot be atomically consumed cannot authorize absent descriptors"
+        );
+        assert!(
+            failed_fence_consumption_blocks_agent_work(state),
+            "an unreadable or unmovable fence must close the Agent work gate"
+        );
+        assert!(
+            path.exists(),
+            "failed consumption must leave the proof visible"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_fence_consumption_blocks_all_new_agent_work() {
+        let directory = FenceTempDir::new("blocked-agent-work");
+        let path = directory.0.join("agent-host.fence");
+        let mut host = AgentHost::new(
+            Arc::new(Vec::new()),
+            HostConfig {
+                clean_shutdown_fence: Some(path.clone()),
+                ..HostConfig::default()
+            },
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        );
+        std::fs::write(&path, CLEAN_SHUTDOWN_FENCE).expect("write valid fence");
+        let state = consume_clean_shutdown_fence_with(&path, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected rename failure",
+            ))
+        });
+        assert_eq!(state, CleanShutdownFenceState::IoFailed);
+        assert!(path.exists(), "the injected failure leaves the old proof");
+
+        host.agent_work_blocked_by_fence = failed_fence_consumption_blocks_agent_work(state);
+        let error = host
+            .ensure_runtime(&AgentId::new("agent-1").expect("agent id"))
+            .await
+            .expect_err("failed fence consumption must block Agent spawning");
+        assert!(
+            matches!(error, HostError::SpawnFailed { .. }),
+            "blocked Agent work must fail closed: {error:?}"
+        );
+        assert!(
+            path.exists(),
+            "a simulated crash after the failed consume still leaves the old proof"
+        );
+    }
+
+    #[test]
+    fn shutdown_fence_publication_is_atomic_and_byte_exact() {
+        let directory = FenceTempDir::new("publish");
+        let path = directory.0.join("agent-host.fence");
+        publish_clean_shutdown_fence(&path).expect("publish clean-shutdown fence");
+        assert_eq!(
+            std::fs::read(&path).expect("read published fence"),
+            CLEAN_SHUTDOWN_FENCE
+        );
+        assert!(
+            std::fs::read_dir(&directory.0)
+                .expect("read fence test directory")
+                .all(|entry| {
+                    !entry
+                        .expect("directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .contains(".clean-shutdown.tmp-")
+                }),
+            "atomic publication must not leave a temporary file"
+        );
+        assert_eq!(
+            publish_clean_shutdown_fence(&path)
+                .expect_err("existing proof must not be silently replaced")
+                .kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+    }
+
+    #[test]
+    fn only_a_consumed_fence_can_trust_missing_startup_sessions() {
+        let directory = FenceTempDir::new("startup-sessions");
+        let path = directory.0.join("agent-host.fence");
+        let session = SessionId::new("10101010-1010-4010-8010-101010101010").expect("session");
+        let absent = AgentHost::new(
+            Arc::new(Vec::new()),
+            HostConfig {
+                clean_shutdown_fence: Some(path.clone()),
+                ..HostConfig::default()
+            },
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        assert_eq!(
+            runtime.block_on(absent.release_session_at_generation(&session, 1)),
+            ReleaseOutcome::Uncertain,
+            "no proof must keep descriptor absence uncertain"
+        );
+        assert!(absent.seed_restart_generation(session.clone(), 1));
+        assert!(!absent.release_is_confirmed(&session, 1));
+        assert_eq!(
+            runtime.block_on(absent.release_session_at_generation(&session, 1)),
+            ReleaseOutcome::Uncertain
+        );
+        assert_eq!(absent.next_binding_generation(&session), 2);
+        drop(absent);
+
+        std::fs::write(&path, CLEAN_SHUTDOWN_FENCE).expect("write valid fence");
+        let clean = AgentHost::new(
+            Arc::new(Vec::new()),
+            HostConfig {
+                clean_shutdown_fence: Some(path.clone()),
+                ..HostConfig::default()
+            },
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        );
+        assert_eq!(
+            runtime.block_on(clean.release_session_at_generation(&session, 1)),
+            ReleaseOutcome::Released,
+            "a consumed clean proof confirms a missing descriptor from the prior process"
+        );
+
+        assert!(clean.seed_restart_generation(session.clone(), 1));
+        assert!(!clean.seed_restart_generation(session.clone(), 1));
+        assert!(clean.release_is_confirmed(&session, 1));
+        assert_eq!(
+            runtime.block_on(clean.release_session_at_generation(&session, 1)),
+            ReleaseOutcome::Released
+        );
+        assert_eq!(clean.next_binding_generation(&session), 2);
+        assert_eq!(
+            runtime.block_on(clean.release_session_at_generation(&session, 1)),
+            ReleaseOutcome::Uncertain,
+            "a session generation created in this process cannot borrow startup proof"
+        );
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_legacy_resources_survive_two_restarts() {
+        let directory = FenceTempDir::new("legacy-two-restarts");
+        let path = directory.0.join("agent-host.fence");
+        let session = SessionId::new("10101010-1010-4010-8010-101010101010").expect("id");
+        for generation in 1..=3 {
+            let host = AgentHost::new(
+                Arc::new(Vec::new()),
+                HostConfig {
+                    clean_shutdown_fence: Some(path.clone()),
+                    ..HostConfig::default()
+                },
+                Arc::new(TestIds),
+                Arc::new(TestClock),
+            );
+            assert!(host.seed_restart_generation(session.clone(), generation));
+            assert_eq!(
+                host.release_session_at_generation(&session, generation)
+                    .await,
+                ReleaseOutcome::Uncertain
+            );
+            // Advancing a binding generation supplies no exit evidence for the old resource.
+            assert_eq!(host.next_binding_generation(&session), generation + 1);
+            assert!(
+                !host.shutdown_all().await,
+                "an empty runtime directory cannot erase legacy uncertainty"
+            );
+            assert!(
+                !path.exists(),
+                "restart {generation} must not manufacture a fence"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn timeout_disabled_zero_generation_sessions_cannot_launder_restart_proof() {
+        let directory = FenceTempDir::new("timeout-disabled-zero-generation");
+        let path = directory.0.join("agent-host.fence");
+        let session = SessionId::new("10101010-1010-4010-8010-101010101010").expect("id");
+        // Both an empty session with idle timeout disabled and a nonempty startup session
+        // can have no allocated resource generation. Neither may disappear from proof accounting.
+        for _ in 0..2 {
+            let host = AgentHost::new(
+                Arc::new(Vec::new()),
+                HostConfig {
+                    idle_timeout: Some(Duration::ZERO),
+                    clean_shutdown_fence: Some(path.clone()),
+                    ..HostConfig::default()
+                },
+                Arc::new(TestIds),
+                Arc::new(TestClock),
+            );
+            assert_eq!(host.host_config.idle_timeout(), None);
+            host.register_restart_session();
+            assert!(
+                !host.seed_restart_generation(session.clone(), 0),
+                "zero is still not an allocated generation"
+            );
+            assert!(
+                lock(&host.binding_generations).is_empty(),
+                "registration cannot invent a generation"
+            );
+            assert_eq!(
+                host.release_session_at_generation(&session, 0).await,
+                ReleaseOutcome::Uncertain
+            );
+            assert!(!host.shutdown_all().await);
+            assert!(!path.exists());
+        }
+        // Re-enable timed cleanup on the next startup: no new evidence means still uncertain.
+        let host = AgentHost::new(
+            Arc::new(Vec::new()),
+            HostConfig {
+                idle_timeout: Some(Duration::from_secs(1800)),
+                clean_shutdown_fence: Some(path.clone()),
+                ..HostConfig::default()
+            },
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        );
+        host.register_restart_session();
+        assert!(host.seed_restart_generation(session.clone(), 1));
+        assert_eq!(
+            host.release_session_at_generation(&session, 1).await,
+            ReleaseOutcome::Uncertain
+        );
+        assert!(!host.shutdown_all().await);
+        assert!(!path.exists());
+    }
+
+    fn proof_test_host(path: PathBuf, scenario: &str) -> AgentHost {
+        let profile = AgentProfile::try_new(
+            AgentId::new("agent-1").expect("id"),
+            &fake_agent_binary().to_string_lossy(),
+            vec!["--scenario".to_owned(), scenario.to_owned()],
+            false,
+        )
+        .expect("profile");
+        AgentHost::new(
+            Arc::new(vec![profile]),
+            HostConfig {
+                clean_shutdown_fence: Some(path),
+                ..HostConfig::default()
+            },
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn removed_unconfirmed_runtime_blocks_fence() {
+        let directory = FenceTempDir::new("removed-runtime");
+        let path = directory.0.join("agent-host.fence");
+        let host = proof_test_host(path.clone(), "normal");
+        let agent = AgentId::new("agent-1").expect("id");
+        let runtime = host
+            .ensure_runtime(&agent)
+            .await
+            .expect("real initialized runtime");
+        runtime.supervisor.terminate_tree();
+        host.shutdown_agent(&agent).await;
+        assert!(host.runtimes.lock().await.is_empty());
+        assert!(!runtime.supervisor.shutdown_confirmed());
+        assert!(
+            !host.shutdown_all().await,
+            "removed supervisors still count toward the global proof"
+        );
+        assert!(
+            !host.shutdown_all().await,
+            "repeated shutdown must not forget the proof gap"
+        );
+        assert!(!path.exists());
+        assert_eq!(lock(&host.proof_supervisors).len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retired_shutdown_in_flight_blocks_fence() {
+        let directory = FenceTempDir::new("retired-in-flight");
+        let path = directory.0.join("agent-host.fence");
+        let host = Arc::new(proof_test_host(path.clone(), "linger-after-eof"));
+        let agent = AgentId::new("agent-1").expect("id");
+        let runtime = host.ensure_runtime(&agent).await.expect("runtime");
+        let retiring = Arc::clone(&host);
+        let retire = tokio::spawn(async move { retiring.shutdown_agent(&agent).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !host.runtimes.lock().await.is_empty() || runtime.supervisor.is_running() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("retirement must remove the runtime and begin shutdown");
+        assert!(
+            !host.shutdown_all().await,
+            "an in-flight retired process has no proof yet"
+        );
+        assert!(!path.exists());
+        retire.await.expect("join retiring owner");
+        assert!(!host.shutdown_all().await);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn confirmed_removed_supervisors_are_pruned() {
+        let directory = FenceTempDir::new("confirmed-retirees");
+        let path = directory.0.join("agent-host.fence");
+        let host = proof_test_host(path.clone(), "normal");
+        let agent = AgentId::new("agent-1").expect("id");
+        for _ in 0..3 {
+            let runtime = host.ensure_runtime(&agent).await.expect("runtime");
+            assert_eq!(lock(&host.proof_supervisors).len(), 1);
+            host.shutdown_agent(&agent).await;
+            assert!(runtime.supervisor.shutdown_confirmed());
+            assert!(
+                lock(&host.proof_supervisors).is_empty(),
+                "confirmed retirees must not accumulate"
+            );
+        }
+        assert!(
+            host.shutdown_all().await,
+            "confirmed and successfully spawned Agents do not make cleanup uncertain"
+        );
+        assert!(path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn startup_failure_veto_survives_repeated_shutdown() {
+        let directory = FenceTempDir::new("startup-failure-proof");
+        let path = directory.0.join("agent-host.fence");
+        let host = proof_test_host(path.clone(), "normal");
+        let proof = StartupProof::new();
+        lock(&host.startup_proofs).push(Arc::clone(&proof));
+        proof.mark_unconfirmed();
+        assert!(!host.shutdown_all().await);
+        assert!(!host.shutdown_all().await);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cancelled_prepared_startup_retains_its_veto() {
+        let barrier = FenceTempDir::new("prepared-startup-cancellation");
+        let barrier_path = barrier.0.join("spawned");
+        let mut spec = crate::launch::LaunchSpec {
+            program: fake_agent_binary().to_string_lossy().into_owned(),
+            args: vec!["--scenario".to_owned(), "normal".to_owned()],
+            env: vec![(
+                crate::test_support::STARTUP_BARRIER_ENV.to_owned(),
+                barrier_path.to_string_lossy().into_owned(),
+            )],
+        };
+        for name in ["PATH", "SystemRoot", "TEMP", "TMP", "HOME", "USERPROFILE"] {
+            if let Ok(value) = std::env::var(name) {
+                spec.env.push((name.to_owned(), value));
+            }
+        }
+        let proof = StartupProof::new();
+        let started = tokio::spawn(Supervisor::start_for_host(spec, Arc::clone(&proof)));
+        tokio::pin!(started);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !barrier_path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the child must reach the injected barrier");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut started)
+                .await
+                .is_err()
+        );
+        started.abort();
+        let cancelled = started.await;
+        assert!(
+            matches!(cancelled, Err(error) if error.is_cancelled()),
+            "the spawned Host startup owner must be cancelled at its wait"
+        );
+        assert!(proof.is_unconfirmed());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_attach_failure_never_publishes_a_clean_fence() {
+        let directory = FenceTempDir::new("attach-startup-failure");
+        let path = directory.0.join("agent-host.fence");
+        let profile = AgentProfile::try_new(
+            AgentId::new("agent-1").expect("id"),
+            &fake_agent_binary().to_string_lossy(),
+            vec!["--scenario".to_owned(), "startup-fault-attach".to_owned()],
+            false,
+        )
+        .expect("profile");
+        let host = AgentHost::new(
+            Arc::new(vec![profile]),
+            HostConfig {
+                clean_shutdown_fence: Some(path.clone()),
+                ..HostConfig::default()
+            },
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        );
+        let agent = AgentId::new("agent-1").expect("id");
+        let error = host
+            .ensure_runtime(&agent)
+            .await
+            .expect_err("injected attach fault");
+        assert!(matches!(error, HostError::SpawnCleanupUnconfirmed { .. }));
+        assert!(!host.shutdown_all().await);
+        assert!(!host.shutdown_all().await);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_missing_program_allows_a_normal_clean_fence() {
+        let directory = FenceTempDir::new("missing-program-startup");
+        let path = directory.0.join("agent-host.fence");
+        let program = std::env::temp_dir().join(format!(
+            "acpr-missing-agent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let host = AgentHost::new(
+            Arc::new(vec![
+                AgentProfile::try_new(
+                    AgentId::new("agent-1").expect("id"),
+                    &program.to_string_lossy(),
+                    Vec::new(),
+                    false,
+                )
+                .expect("profile"),
+            ]),
+            HostConfig {
+                clean_shutdown_fence: Some(path.clone()),
+                ..HostConfig::default()
+            },
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        );
+        let agent = AgentId::new("agent-1").expect("id");
+        let error = host
+            .ensure_runtime(&agent)
+            .await
+            .expect_err("missing program");
+        assert!(matches!(error, HostError::SpawnFailed { .. }));
+        assert!(host.shutdown_all().await);
+        assert!(path.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cancelled_shutdown_does_not_publish_a_clean_fence() {
+        let directory = FenceTempDir::new("cancelled");
+        let path = directory.0.join("agent-host.fence");
+        let host = AgentHost::new(
+            Arc::new(Vec::new()),
+            HostConfig {
+                clean_shutdown_fence: Some(path.clone()),
+                ..HostConfig::default()
+            },
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        );
+        let (runtime, supervisor, _) = runtime_with_binding().await;
+        host.runtimes
+            .lock()
+            .await
+            .insert(AgentId::new("agent-1").expect("id"), runtime);
+
+        // Hold the directory lock so cancellation happens after shutdown starts but before any process stop
+        // or proof publication can make progress.
+        let runtimes = host.runtimes.lock().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), host.shutdown_all())
+                .await
+                .is_err(),
+            "the shutdown future must remain pending while the runtime directory is locked"
+        );
+        drop(runtimes);
+        assert!(
+            !path.exists(),
+            "a cancelled/timeout shutdown must never publish a trusted fence"
+        );
+
+        supervisor.shutdown().await;
+    }
+
     /// 恢复请求的参数逐字来自持久化取值：恰好是 `sessionId` 与 `cwd` 两个必填字段。
     ///
     /// 本用例的取值为无前缀的普通绝对路径，因此 `outbound_cwd` 的形式转换是逐字节直通；带 verbatim
@@ -1760,6 +2474,51 @@ mod tests {
             .collect();
         keys.sort_unstable();
         assert_eq!(keys, vec!["sessionId"], "参数只允许这一个键：{params}");
+    }
+
+    #[tokio::test]
+    async fn release_evidence_is_scoped_to_the_current_generation() {
+        let host = AgentHost::new(
+            Arc::new(Vec::new()),
+            HostConfig::default(),
+            Arc::new(TestIds),
+            Arc::new(TestClock),
+        );
+        let session = SessionId::new("99999999-9999-4999-8999-999999999990").expect("session id");
+        let first = host.next_binding_generation(&session);
+        {
+            let mut generations = lock(&host.binding_generations);
+            generations
+                .get_mut(&session)
+                .expect("generation entry")
+                .confirmed_release = Some(first);
+        }
+
+        assert_eq!(
+            host.release_session(&session).await,
+            ReleaseOutcome::Released,
+            "同代已确认释放必须幂等"
+        );
+        assert_eq!(
+            host.release_session_at_generation(&session, first).await,
+            ReleaseOutcome::Released,
+            "带代数的重试也必须命中同一份确认证明"
+        );
+
+        let second = host.next_binding_generation(&session);
+        assert!(second > first);
+        assert_eq!(
+            host.release_session(&session).await,
+            ReleaseOutcome::Uncertain,
+            "新代必须清除旧代确认证明"
+        );
+        assert_eq!(
+            host.release_session_at_generation(&session, first).await,
+            ReleaseOutcome::Uncertain,
+            "旧代证明不得授权新代释放"
+        );
+
+        host.shutdown_all().await;
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1868,6 +2627,7 @@ mod tests {
             Arc::new(std::sync::RwLock::new(NodeEvents::unbound())),
             Arc::new(TestClock),
             bindings,
+            Arc::new(std::sync::Mutex::new(HashMap::new())),
         ));
         let session = Arc::new(AcpSession::new(SessionInit {
             session: SessionId::new("11111111-1111-4111-8111-111111111111").expect("session"),
@@ -1878,7 +2638,6 @@ mod tests {
             sink: EventSink::new(|_| {}),
             ids: Arc::new(TestIds),
             clock: Arc::new(TestClock),
-            temporary: false,
             capabilities: AgentCapabilities::default(),
             modes: None,
             config_options: Vec::new(),

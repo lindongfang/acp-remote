@@ -37,10 +37,8 @@ import {
   DirectoryPicker,
   RuntimeUnavailable,
 } from "../src/components";
-import { toastStore } from "../src/components/shell/toast";
 import type { Palette } from "../src/components/theme";
 import { StyleSheet, View, palettes, useTheme } from "../src/components/theme";
-import { CREATE_SHEET_BROWSE_KEY } from "../src/features/create-session-model";
 import type { DirectorySelection } from "../src/features/create-session-model";
 import { useClientState, useClientStore } from "../src/features/runtime";
 
@@ -82,8 +80,6 @@ export default function DirectoriesRoute(): ReactElement {
   useEffect(() => {
     if (store === null) return;
     store.closeCreateSheet();
-    // 刷新后只凭 sessionStorage 的非敏感定位找回唯一准备槽位；恢复不跳转、不分配新 ID。
-    void store.restoreTabPreparation();
   }, [store]);
 
   // 选择器的回调定住身份：选择器挂载时按 `initialPath` 请求初始层，依赖里带 `onBrowse`，
@@ -119,34 +115,6 @@ export default function DirectoriesRoute(): ReactElement {
   const page = store.directoryPage();
 
   /**
-   * 普通新建入口的统一前置：已有唯一准备槽位（或分配在途）时只导航回它。
-   *
-   * @returns `true` 表示这次点击已经由现有槽位答完，页面不得再打开创建弹层。
-   */
-  const openExistingPreparation = (): boolean => {
-    const route = store.preparationSlotRoute();
-    if (route.kind === "session") {
-      store.closeCreateSheet();
-      router.push(`/session/${encodeURIComponent(route.sessionId)}`);
-      return true;
-    }
-    if (route.kind === "allocating") {
-      void route.outcome.then((outcome) => {
-        // 这一支没有打开弹层（弹层里的 `submitIssue` 无处渲染），失败原因必须走页面外的提示，
-        // 否则点了「新建」看起来毫无反应。
-        if (!outcome.ok) {
-          toastStore.show(outcome.reason);
-          return;
-        }
-        setCreateIssue(null);
-        router.push(`/session/${encodeURIComponent(outcome.sessionId)}`);
-      });
-      return true;
-    }
-    return false;
-  };
-
-  /**
    * 要呈现的创建弹层：`null` 表示本页不呈现。
    *
    * 唯一来源是 store 的两支单份状态——顶部入口（`createSheetBrowses`）或某个**已记录目录**
@@ -160,8 +128,6 @@ export default function DirectoriesRoute(): ReactElement {
       ?.directoryId ?? null;
   const entry =
     browseSheet ? store.createEntry(null) : sheetDirectoryId === null ? null : store.createEntry(sheetDirectoryId);
-  // 提交状态按弹层的机器键读写（已记录目录用目录标识，顶部入口用 `CREATE_SHEET_BROWSE_KEY`）。
-  const sheetKey = browseSheet ? CREATE_SHEET_BROWSE_KEY : sheetDirectoryId;
   const directoryBlock = entry !== null && entry.directory.kind === "browse" ? entry.directory : null;
 
   return (
@@ -183,22 +149,22 @@ export default function DirectoriesRoute(): ReactElement {
           store.setDirectoryListPage(requested);
         }}
         onOpenSession={(sessionId) => {
+          store.cancelPendingNavigation();
           router.push(`/session/${encodeURIComponent(sessionId)}`);
         }}
         onOpenDirectory={(directoryId) => {
+          store.cancelPendingNavigation();
           router.push(`/dir/${encodeURIComponent(directoryId)}`);
         }}
         // 目录卡片的创建入口与详情页是同一条链路（同一个弹层模型、同一条提交命令）。
         // 入口恒可用：设备不再有创建会话的权限维度，页面因此无条件给出回调。
         onCreateSession={(directoryId: string) => {
-          if (openExistingPreparation()) return;
           setCreateIssue(null);
           store.openCreateSheet(directoryId);
         }}
         // **顶部**创建入口：目录未知，由用户浏览/选择一层。它画在目录列表工具条的右端（原型的位置），
         // 与卡片上的目录内入口是两条不同的路径；已有槽位时同样只导航回它，不打开选择器。
         onCreateSessionToBrowse={() => {
-          if (openExistingPreparation()) return;
           onOpenBrowseSheet();
         }}
         />
@@ -219,30 +185,17 @@ export default function DirectoriesRoute(): ReactElement {
             store.openDirectoryPicker();
           }}
           onSubmit={({ agentId: selected, directoryPath }) => {
-            // 顶部入口同样只做 prepare → allocate：目录由浏览/选择给出，正式 ID 由后端分配。
-            void store
-              .beginPreparation({
-                directoryId: browseSheet ? null : sheetDirectoryId,
-                agentId: selected,
-                directoryPath,
-              })
-              .then((outcome) => {
-                if (!outcome.ok) {
-                  setCreateIssue(outcome.reason);
-                  setAgentId(null);
-                  return;
-                }
-                setCreateIssue(null);
-                store.closeCreateSheet();
-                router.push(`/session/${encodeURIComponent(outcome.sessionId)}`);
-              });
+            const outcome = store.submitCreateSession({
+              directoryId: browseSheet ? null : sheetDirectoryId,
+              agentId: selected,
+              directoryPath,
+            });
+            setCreateIssue(outcome.ok ? null : outcome.reason);
           }}
-          onDismissUncertain={() => {
-            const requestId = sheetKey === null ? undefined : state.createRequestIds.get(sheetKey);
-            if (requestId !== undefined) store.dismissUncertain(requestId);
-          }}
+
           onClose={() => {
             setCreateIssue(null);
+            store.cancelPendingNavigation();
             store.closeCreateSheet();
           }}
         />

@@ -27,12 +27,11 @@ use std::sync::Arc;
 use acp_core::broker::Broker;
 use acp_core::model::{
     Actor, CommandRecord, CommandStatus, FileReadPurpose as CoreFileReadPurpose,
-    FirstSubmissionRecord, FirstSubmissionStage as CoreFirstSubmissionStage,
     GitDiff as CoreGitDiff, GitDiffBase as CoreGitDiffBase, GitDiffKind as CoreGitDiffKind,
     GitDiffUnavailableReason as CoreGitDiffUnavailable, GitFileStatus as CoreGitFileStatus,
     GitState as CoreGitState, GitStatusPage, MessageId, ModeRef as CoreModeRef, OwnedSessionRef,
-    RemoteSessionRef, RequestOutcome, ResourceOrigin, Sequence, SessionFileChunk,
-    SessionFileContentKind, SessionFileEntryKind as CoreEntryKind, SessionFilePage,
+    RemoteSessionRef, ResourceOrigin, Sequence, SessionFileChunk, SessionFileContentKind,
+    SessionFileEntryKind as CoreEntryKind, SessionFilePage,
     SessionFileRestrictedReason as CoreRestrictedReason, SessionId, SessionReference,
     SessionState as CoreSessionState, Timestamp as CoreTimestamp,
 };
@@ -42,15 +41,15 @@ use base64::Engine as _;
 use sync_protocol::command::{
     Command, CommandResultPayload, CommandState, CommandStatus as WireCommandStatus,
     CommandStatusRecord, ConfigListResult, ContentVersion as WireContentVersion,
-    FileReadPurpose as WireFileReadPurpose, FirstSubmissionStage as WireFirstSubmissionStage,
-    GitDiffBase as WireGitDiffBase, GitDiffKind as WireGitDiffKind,
-    GitDiffUnavailableReason as WireGitDiffUnavailable, GitFileStatus as WireGitFileStatus,
-    GitState as WireGitState, GitStatusEntry as WireGitStatusEntry, IncludeList, SessionFileData,
+    FileReadPurpose as WireFileReadPurpose, GitDiffBase as WireGitDiffBase,
+    GitDiffKind as WireGitDiffKind, GitDiffUnavailableReason as WireGitDiffUnavailable,
+    GitFileStatus as WireGitFileStatus, GitState as WireGitState,
+    GitStatusEntry as WireGitStatusEntry, IncludeList, SessionFileData,
     SessionFileEntry as WireSessionFileEntry, SessionFilesList, SessionFilesListResult,
     SessionFilesPath, SessionFilesRead, SessionFilesReadResult, SessionGitDiff,
     SessionGitDiffResult, SessionGitStatus, SessionGitStatusResult, SessionListResult,
-    SessionPageToken, SessionRead, SessionRelativePath, SessionStartProjection, WorkspaceBrowse,
-    WorkspaceBrowseEntry, WorkspaceBrowseResult,
+    SessionPageToken, SessionRead, SessionRelativePath, WorkspaceBrowse, WorkspaceBrowseEntry,
+    WorkspaceBrowseResult,
 };
 use sync_protocol::common::{
     DecimalString, ModeRef as WireModeRef, ModeState as WireModeState, NonEmptyText, Nullable,
@@ -59,8 +58,6 @@ use sync_protocol::common::{
 };
 use sync_protocol::error::ErrorCode;
 use tracing::debug;
-
-use crate::sync::preparation::PREPARATION_FEATURE;
 
 use crate::session_read::{
     DEFAULT_PAGE_MESSAGES, MAX_PAGE_MESSAGES, SessionReadSource, wire_config_option,
@@ -384,13 +381,10 @@ pub async fn command_status(
                 "the request is not known to this device",
             ));
         };
-        let mut wire = wire_status_record(&record).ok_or(Rejection::Code(
+        let wire = wire_status_record(&record).ok_or(Rejection::Code(
             ErrorCode::InternalUnavailable,
             "the command record cannot be projected",
         ))?;
-        if features.contains(PREPARATION_FEATURE) {
-            wire.preparation = preparation_projection(core, &record).await;
-        }
         return Ok(CommandResultPayload::CommandStatus(wire));
     };
     if !features.contains(STATELESS_ORIGIN_FEATURE) {
@@ -464,49 +458,7 @@ fn wire_remote_status_record(
             Some(error) => Nullable::value(wire_public_error(error)?),
             None => Nullable::null(),
         },
-        // Access 不推断远程会话的首条提交投影（那不是 Owner 已转发的持久事实）。
-        preparation: None,
     })
-}
-
-/// 协商 `core.session-preparation.v1` 后，`command.status` 的首次提交六字段投影（design D8/D8.1）。
-///
-/// 只在目标请求确实是该会话的首次/当前尝试时给出：别的请求不能借它看到首条身份。旧客户端（未协商）
-/// 不经过这里，`preparation` 键因此缺席。
-async fn preparation_projection(
-    core: &Arc<UseCases>,
-    record: &CommandRecord,
-) -> Option<SessionStartProjection> {
-    let session = record.session()?;
-    let first: FirstSubmissionRecord = core.first_submission(session).await.ok()??;
-    if record.request() != &first.first_request_id && record.request() != &first.current_request_id
-    {
-        return None;
-    }
-    Some(SessionStartProjection {
-        stage: wire_first_stage(first.stage),
-        first_submission_id: Uuid::parse(first.first_submission_id.as_str()).ok()?,
-        first_request_id: Uuid::parse(first.first_request_id.as_str()).ok()?,
-        current_request_id: Uuid::parse(first.current_request_id.as_str()).ok()?,
-        ever_dispatched: first.ever_dispatched,
-        can_continue: first.stage == CoreFirstSubmissionStage::SavedNotDispatched
-            && !first.ever_dispatched
-            && first
-                .terminal
-                .as_ref()
-                .is_some_and(|terminal| terminal.outcome == RequestOutcome::Failed),
-    })
-}
-
-/// core 的首条阶段 → wire 词表（两侧取值一一对应）。
-fn wire_first_stage(stage: CoreFirstSubmissionStage) -> WireFirstSubmissionStage {
-    match stage {
-        CoreFirstSubmissionStage::SavedNotDispatched => {
-            WireFirstSubmissionStage::SavedNotDispatched
-        }
-        CoreFirstSubmissionStage::DispatchStarted => WireFirstSubmissionStage::DispatchStarted,
-        CoreFirstSubmissionStage::Terminal => WireFirstSubmissionStage::Terminal,
-    }
 }
 
 /// core 的命令状态 → wire `commandStatusRecord.state` 词表。
@@ -1187,8 +1139,6 @@ fn wire_status_record(record: &CommandRecord) -> Option<CommandStatusRecord> {
             Some(error) => Nullable::value(wire_public_error(error)?),
             None => Nullable::null(),
         },
-        // 由 `command_status` 在协商 `core.session-preparation.v1` 时补上（本函数不读首条记录）。
-        preparation: None,
     })
 }
 

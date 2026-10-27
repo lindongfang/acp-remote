@@ -29,20 +29,12 @@ import type {
   Base64Url32,
   DecimalString,
   ErrorCode,
-  PositiveDecimalString,
-  PreparationReceipt,
   Timestamp,
   Uuid,
 } from "./common";
 
 /** 附件传输的 feature ID（`compatibility/features/v1/features.json` 的 sync 列表）。 */
 export const ATTACHMENT_FEATURE = "core.attachment-transfer.v1";
-
-/**
- * 准备附件目标的 feature ID：准备分支要求**这条附件连接**同时协商 `core.attachment-transfer.v1`
- * 与它，未协商时回 `protocol.feature_required`（`docs/SYNC_PROTOCOL.md` §3.4/§11.9）。
- */
-export const PREPARATION_FEATURE = "core.session-preparation.v1";
 
 /** 附件连接的 WSS 路径（`docs/SYNC_PROTOCOL.md` §3.4；与业务连接共用 subprotocol）。 */
 export const ATTACHMENT_WS_PATH = "/sync/v1/attachments";
@@ -121,44 +113,16 @@ interface FrameBase<TType extends AttachmentFrameType, TBody> {
   readonly body: TBody;
 }
 
-/**
- * `attachment.schema.json#/$defs/preparationAttachmentTarget`（design D6.1）：准备上传的闭合目标。
- *
- * `sessionId` 是由节点签发准备凭据的 ID（不是 bearer token、不是业务 `connectionId`），
- * `receipt` 是完整 claims+signature，`runtimeEpoch` 是当前准备运行期标识，`generation` 是
- * `1..=2^63−1` 的十进制字符串。每块不重复附带 receipt：服务端从已核验的传输记录恢复 target。
- */
-export interface PreparationAttachmentTarget {
-  readonly kind: "preparation";
+/** `attachment.begin` body for a formal session upload. */
+export interface AttachmentBeginBody {
+  readonly transferId: Uuid;
   readonly sessionId: Uuid;
-  readonly receipt: PreparationReceipt;
-  readonly runtimeEpoch: Uuid;
-  readonly generation: PositiveDecimalString;
+  readonly subject: AttachmentSubject;
+  readonly totalLength: DecimalString;
+  readonly chunkSize: 32768;
+  readonly mediaType: string;
+  readonly fileName: string;
 }
-
-/**
- * `attachment.begin` 的 body：正式上传（顶层 `sessionId`）与准备上传（`target`）**二选一**，
- * 两个分支各自闭合。同时出现两者、或让 `target.kind` 取正式值绕过旧分支都不是合法帧。
- */
-export type AttachmentBeginBody =
-  | {
-      readonly transferId: Uuid;
-      readonly sessionId: Uuid;
-      readonly subject: AttachmentSubject;
-      readonly totalLength: DecimalString;
-      readonly chunkSize: 32768;
-      readonly mediaType: string;
-      readonly fileName: string;
-    }
-  | {
-      readonly transferId: Uuid;
-      readonly target: PreparationAttachmentTarget;
-      readonly subject: AttachmentSubject;
-      readonly totalLength: DecimalString;
-      readonly chunkSize: 32768;
-      readonly mediaType: string;
-      readonly fileName: string;
-    };
 
 export interface AttachmentBeginFrame
   extends FrameBase<"attachment.begin", AttachmentBeginBody> {}
@@ -231,24 +195,13 @@ export interface AttachmentReadChunkFrame
     readonly eof: boolean;
   }> {}
 
-/**
- * `attachment.manifest_begin` 的 body：正式会话清单（顶层 `sessionId`）与准备清单（`target`）
- * 二选一，两个分支各自闭合。`submissionId` 是**附件清单**标识（不是首条提交的
- * `firstSubmissionId`），`session.start` 的 `kind: initial` 用它认领清单。
- */
-export type AttachmentManifestBeginBody =
-  | {
-      readonly submissionId: Uuid;
-      readonly sessionId: Uuid;
-      readonly subject: AttachmentSubject;
-      readonly attachmentCount: DecimalString;
-    }
-  | {
-      readonly submissionId: Uuid;
-      readonly target: PreparationAttachmentTarget;
-      readonly subject: AttachmentSubject;
-      readonly attachmentCount: DecimalString;
-    };
+/** `attachment.manifest_begin` body for a formal session attachment manifest. */
+export interface AttachmentManifestBeginBody {
+  readonly submissionId: Uuid;
+  readonly sessionId: Uuid;
+  readonly subject: AttachmentSubject;
+  readonly attachmentCount: DecimalString;
+}
 
 export interface AttachmentManifestBeginFrame
   extends FrameBase<"attachment.manifest_begin", AttachmentManifestBeginBody> {}
@@ -274,11 +227,6 @@ export interface AttachmentErrorFrame
     readonly message: string;
     readonly retryable: boolean;
     readonly transferId: Uuid | null;
-    /**
-     * 可选：只有协商 `core.session-preparation.v1` 的连接才允许出现。**清单错误必带它且
-     * `transferId` 为 `null`**；传输错误带 `transferId`。无法安全识别标识时两边都省略/置 `null`。
-     */
-    readonly submissionId?: Uuid;
     readonly details: Record<string, unknown>;
   }> {}
 
@@ -339,10 +287,6 @@ function isDecimal(value: unknown): value is string {
 }
 
 /** `$defs.positiveDecimalString`：`1..=2^63−1` 的无前导零十进制字符串（`"0"` 不合法）。 */
-function isPositiveDecimal(value: unknown): value is string {
-  return typeof value === "string" && /^[1-9][0-9]*$/.test(value);
-}
-
 function isBase64Url(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength && BASE64URL_PATTERN.test(value);
 }
@@ -415,129 +359,22 @@ function invalidBody(detail: string): BodyDecode {
   return { ok: false, reason: "body", detail };
 }
 
-/** `$defs.preparationReceiptClaims` 的闭合键集合（字段顺序即 transcript tag 顺序）。 */
-const RECEIPT_CLAIM_KEYS = [
-  "version",
-  "ownerNodeId",
-  "storeEpoch",
-  "origin",
-  "deviceId",
-  "tabNonce",
-  "sessionId",
-  "agentId",
-  "normalizedWorkspacePath",
-  "workspaceSource",
-] as const;
-
-/** 32 字节无填充 base64url 的字符数（`ceil(32 * 4 / 3)`）。 */
-const BASE64URL_32_CHARS = 43;
-
-/** 64 字节 P1363 签名的无填充 base64url 字符数（`ceil(64 * 4 / 3)`）。 */
-const BASE64URL_64_CHARS = 86;
-
-/**
- * `$defs.preparationReceipt`：闭合 claims + P1363 64 字节签名。
- *
- * 这里只校验 **wire 形状**：签名是否有效由 Owner 用专用 transcript domain 判定，客户端不验签、
- * 也不把 receipt 当登录凭证。claims 的键集合是闭合的——多一个字段就不是 §6.3 的 transcript。
- */
-function decodePreparationReceipt(value: unknown): BodyDecode {
-  if (!isPlainObject(value) || !hasOnlyKeys(value, ["claims", "signature"]) || !hasKeys(value, ["claims", "signature"])) {
-    return invalidBody("receipt 必须只含 claims/signature");
-  }
-  const claims = value["claims"];
-  if (
-    !isPlainObject(claims) ||
-    !hasKeys(claims, [...RECEIPT_CLAIM_KEYS]) ||
-    !hasOnlyKeys(claims, [...RECEIPT_CLAIM_KEYS])
-  ) {
-    return invalidBody("receipt.claims 的键集合不符");
-  }
-  if (claims["version"] !== 1) return invalidBody("receipt.claims.version 必须为 1");
-  for (const key of ["ownerNodeId", "storeEpoch", "deviceId", "sessionId"] as const) {
-    if (!isUuid(claims[key])) return { ok: false, reason: "uuid", detail: `receipt.claims.${key} 必须是 UUID` };
-  }
-  const origin = claims["origin"];
-  if (typeof origin !== "string" || origin.length === 0 || origin.length > 255) {
-    return invalidBody("receipt.claims.origin 长度必须在 1..=255");
-  }
-  const tabNonce = claims["tabNonce"];
-  if (!isBase64Url(tabNonce, BASE64URL_32_CHARS) || tabNonce.length !== BASE64URL_32_CHARS) {
-    return { ok: false, reason: "base64url", detail: "receipt.claims.tabNonce 必须是 32 字节 base64url" };
-  }
-  const agentId = claims["agentId"];
-  if (typeof agentId !== "string" || agentId.length === 0 || agentId.length > 128) {
-    return invalidBody("receipt.claims.agentId 长度必须在 1..=128");
-  }
-  const workspacePath = claims["normalizedWorkspacePath"];
-  if (typeof workspacePath !== "string" || workspacePath.length === 0 || workspacePath.length > 4096) {
-    return invalidBody("receipt.claims.normalizedWorkspacePath 长度必须在 1..=4096");
-  }
-  if (claims["workspaceSource"] !== "directoryId" && claims["workspaceSource"] !== "workspacePath") {
-    return invalidBody("receipt.claims.workspaceSource 必须是 directoryId/workspacePath");
-  }
-  const signature = value["signature"];
-  if (!isBase64Url(signature, BASE64URL_64_CHARS) || signature.length !== BASE64URL_64_CHARS) {
-    return { ok: false, reason: "base64url", detail: "receipt.signature 必须是 64 字节 base64url" };
-  }
-  return { ok: true, body: value };
-}
-
-/**
- * `$defs.preparationAttachmentTarget`（design D6.1）：闭合的准备目标。
- *
- * `target` 与顶层 `sessionId` 互斥由调用方的分支选择保证；这里只确认它自身的闭合形状与
- * `kind` 常量——`formal`/`owned` 之类取值是想绕过旧分支，必须显式拒绝。
- */
-function decodePreparationTarget(value: unknown): BodyDecode {
-  const required = ["kind", "sessionId", "receipt", "runtimeEpoch", "generation"];
-  if (!isPlainObject(value) || !hasKeys(value, required) || !hasOnlyKeys(value, required)) {
-    return invalidBody("target 的键集合不符（kind/sessionId/receipt/runtimeEpoch/generation）");
-  }
-  if (value["kind"] !== "preparation") {
-    return invalidBody('target.kind 必须恒为 "preparation"');
-  }
-  if (!isUuid(value["sessionId"]) || !isUuid(value["runtimeEpoch"])) {
-    return { ok: false, reason: "uuid", detail: "target.sessionId/runtimeEpoch 必须是 UUID" };
-  }
-  if (!isPositiveDecimal(value["generation"])) {
-    return { ok: false, reason: "decimal", detail: "target.generation 必须是正十进制字符串" };
-  }
-  const receipt = decodePreparationReceipt(value["receipt"]);
-  if (!receipt.ok) return receipt;
-  return { ok: true, body: value };
-}
-
 function decodeBody(type: AttachmentFrameType, body: Record<string, unknown>): BodyDecode {
   switch (type) {
     case "attachment.begin": {
       const shared = ["transferId", "subject", "totalLength", "chunkSize", "mediaType", "fileName"];
-      const hasSession = Object.hasOwn(body, "sessionId");
-      const hasTarget = Object.hasOwn(body, "target");
-      // 两个分支各自闭合：`sessionId` 与 `target` 互斥，多写的键一律拒绝。
-      if (hasSession && hasTarget) {
-        return invalidBody("attachment.begin 的 sessionId 与 target 互斥");
+      if (!hasKeys(body, shared) || !hasOnlyKeys(body, [...shared, "sessionId"])) {
+        return invalidBody("attachment.begin body keys");
       }
-      if (
-        !hasKeys(body, shared) ||
-        !hasOnlyKeys(body, [...shared, hasTarget ? "target" : "sessionId"])
-      ) {
-        return invalidBody("attachment.begin 的键集合不符");
-      }
-      if (!isUuid(body["transferId"])) return { ok: false, reason: "uuid", detail: "transferId 必须是 UUID" };
-      if (hasTarget) {
-        const target = decodePreparationTarget(body["target"]);
-        if (!target.ok) return target;
-      } else if (!isUuid(body["sessionId"])) {
-        return { ok: false, reason: "uuid", detail: "sessionId 必须是 UUID" };
-      }
+      if (!isUuid(body["transferId"])) return { ok: false, reason: "uuid", detail: "transferId must be UUID" };
+      if (!isUuid(body["sessionId"])) return { ok: false, reason: "uuid", detail: "sessionId must be UUID" };
       const subject = decodeSubject(body["subject"]);
       if (!subject.ok) return subject;
       if (!isDecimal(body["totalLength"])) {
-        return { ok: false, reason: "decimal", detail: "totalLength 必须是十进制字符串" };
+        return { ok: false, reason: "decimal", detail: "totalLength must be decimal" };
       }
       if (body["chunkSize"] !== ATTACHMENT_CHUNK_SIZE) {
-        return { ok: false, reason: "budget", detail: `chunkSize 必须是 ${ATTACHMENT_CHUNK_SIZE}` };
+        return { ok: false, reason: "budget", detail: `chunkSize must be ${ATTACHMENT_CHUNK_SIZE}` };
       }
       if (
         typeof body["mediaType"] !== "string" ||
@@ -547,7 +384,7 @@ function decodeBody(type: AttachmentFrameType, body: Record<string, unknown>): B
         body["fileName"].length === 0 ||
         body["fileName"].length > 255
       ) {
-        return invalidBody("mediaType/fileName 长度必须在 1..=255");
+        return invalidBody("mediaType/fileName length must be 1..=255");
       }
       return { ok: true, body };
     }
@@ -681,30 +518,19 @@ function decodeBody(type: AttachmentFrameType, body: Record<string, unknown>): B
     }
     case "attachment.manifest_begin": {
       const shared = ["submissionId", "subject", "attachmentCount"];
-      const hasSession = Object.hasOwn(body, "sessionId");
-      const hasTarget = Object.hasOwn(body, "target");
-      if (hasSession && hasTarget) {
-        return invalidBody("attachment.manifest_begin 的 sessionId 与 target 互斥");
-      }
-      if (
-        !hasKeys(body, shared) ||
-        !hasOnlyKeys(body, [...shared, hasTarget ? "target" : "sessionId"])
-      ) {
-        return invalidBody("attachment.manifest_begin 的键集合不符");
+      if (!hasKeys(body, shared) || !hasOnlyKeys(body, [...shared, "sessionId"])) {
+        return invalidBody("attachment.manifest_begin body keys");
       }
       if (!isUuid(body["submissionId"])) {
-        return { ok: false, reason: "uuid", detail: "submissionId 必须是 UUID" };
+        return { ok: false, reason: "uuid", detail: "submissionId must be UUID" };
       }
-      if (hasTarget) {
-        const target = decodePreparationTarget(body["target"]);
-        if (!target.ok) return target;
-      } else if (!isUuid(body["sessionId"])) {
-        return { ok: false, reason: "uuid", detail: "sessionId 必须是 UUID" };
+      if (!isUuid(body["sessionId"])) {
+        return { ok: false, reason: "uuid", detail: "sessionId must be UUID" };
       }
       const subject = decodeSubject(body["subject"]);
       if (!subject.ok) return subject;
       if (!isDecimal(body["attachmentCount"])) {
-        return { ok: false, reason: "decimal", detail: "attachmentCount 必须是十进制字符串" };
+        return { ok: false, reason: "decimal", detail: "attachmentCount must be decimal" };
       }
       return { ok: true, body };
     }

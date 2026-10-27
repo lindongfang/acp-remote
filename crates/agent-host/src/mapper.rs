@@ -330,7 +330,6 @@ fn user_echo_event(
     Ok(UserEchoEvent {
         link: Some(UserEchoLink {
             session: context.session.clone(),
-            first_submission: context.first_submission.clone(),
             user_message: context.user_message.clone(),
             request: context.request.clone(),
             turn: context.turn.clone(),

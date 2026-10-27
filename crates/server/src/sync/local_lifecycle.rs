@@ -17,9 +17,14 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use acp_core::lifecycle::LocalSessionLifecycle;
-use acp_core::model::{Actor, ConnectionId, SessionId, Timestamp};
-use acp_core::ports::{Clock, SessionQuery};
+use acp_core::broker::SessionDeleteAdmission;
+use acp_core::lifecycle::{LocalSessionLifecycle, RetentionSnapshot};
+use acp_core::model::{
+    Actor, CommandStatus, ConnectionId, Digest, PortError, PublicError, RequestId,
+    SessionDeletionBlocker, SessionDeletionEligibility, SessionDeletionOutcome,
+    SessionDeletionWrite, SessionId, Timestamp,
+};
+use acp_core::ports::{Clock, ReclaimCandidate, ReleaseOutcome, SessionQuery};
 use acp_core::use_cases::UseCases;
 use sync_protocol::common::{
     LocalActivity, Nullable, RawObject, Text, Timestamp as WireTimestamp, Uuid,
@@ -37,6 +42,36 @@ use crate::transport::net::ratelimit::MAX_TRACKED_KEYS;
 
 /// `core.local-session-lifecycle.v1`：本机生命周期投影与激活的唯一 feature ID。
 pub const LOCAL_LIFECYCLE_FEATURE: &str = "core.local-session-lifecycle.v1";
+
+/// `session.delete` 的 closed payload 是 `{}`；摘要固定对应这份规范字节。
+pub fn session_delete_fingerprint() -> Digest {
+    Digest::new("RBNvo1WzZ4oRRq0W9-hknpT7T8If536DEMBg9hyq_4o")
+        .expect("the session.delete fingerprint is canonical")
+}
+
+/// 一次扫描候选及其生命周期预期。
+///
+/// 候选本身只说明扫描时安全；进入删除 gate 后必须重新确认资源代、保留期起点和待删除阶段都没有
+/// 变化，再重新执行到期与保护检查。
+#[derive(Debug, Clone)]
+pub struct RetentionDeleteCandidate {
+    candidate: ReclaimCandidate,
+    snapshot: RetentionSnapshot,
+}
+
+/// 为扫描器返回的候选冻结当前生命周期预期。
+pub fn retention_delete_candidate(
+    lifecycle: &LocalSessionLifecycle,
+    candidate: ReclaimCandidate,
+) -> Result<Option<RetentionDeleteCandidate>, PortError> {
+    let Some(snapshot) = lifecycle.retention_snapshot(&candidate.session) else {
+        return Ok(None);
+    };
+    Ok(Some(RetentionDeleteCandidate {
+        candidate,
+        snapshot,
+    }))
+}
 
 /// 单连接查看控制帧速率（§11.8/§14：120 帧/分钟，只统计 `session.view`）。
 pub const VIEWS_PER_MINUTE: u32 = 120;
@@ -505,13 +540,374 @@ pub async fn activity_of(
         .map(wire_activity)
 }
 
-/// 周期性消费保留期与容量候选并逐会话释放（组合根 spawn，关闭信号到达即返回）。
+/// 执行一条已经持久受理的 `session.delete`。
 ///
-/// 候选来自 core：`retention_due`（未受保护且已过保留期）与 `reclaim_candidate`（容量策略的 LRU 安全
-/// 候选）。查看者、任务与交互的保护判定都在 core，本层不重算；同一会话只释放一次。容量候选因此即使
-/// `sessions.idle_timeout_ms = 0` 也会被周期消费（显式 0 只关闭按时间回收，不关闭容量策略）。
-/// 释放走 `release_reclaim_candidate`，只有适配器确认 `Released` 才交还名额。
+/// 扫描器和 Sync 命令面共用这条顺序：在每会话 lifecycle gate 内先用完整删除写集
+/// 做只读资格预检，再取当前资源代并真实释放；只有适配器确认 `Released` 才调用
+/// 最终删除事务。最终事务仍会复核资格，以覆盖预检后的新事实。`Failed` 与
+/// `Uncertain` 分别写成持久终态并保留会话和容量占位。
+/// 调用方只能传入 `Prepared` 分支的受理，重复请求不得再次进入这里。
+pub async fn execute_session_delete(
+    core: &UseCases,
+    lifecycle: &LocalSessionLifecycle,
+    at: Timestamp,
+    actor: &Actor,
+    request: &RequestId,
+    request_fingerprint: &Digest,
+    session: &SessionId,
+) -> Result<(), PortError> {
+    execute_session_delete_inner(
+        core,
+        lifecycle,
+        SessionDeleteContext {
+            at,
+            actor,
+            request,
+            request_fingerprint,
+            session,
+        },
+        false,
+        None,
+    )
+    .await
+}
+
+/// 执行扫描器候选；资源代或保留窗口在取得 gate 后发生变化时放弃本次删除。
+pub async fn execute_retention_session_delete(
+    core: &UseCases,
+    lifecycle: &LocalSessionLifecycle,
+    at: Timestamp,
+    actor: &Actor,
+    request: &RequestId,
+    request_fingerprint: &Digest,
+    candidate: &RetentionDeleteCandidate,
+) -> Result<(), PortError> {
+    execute_session_delete_inner(
+        core,
+        lifecycle,
+        SessionDeleteContext {
+            at,
+            actor,
+            request,
+            request_fingerprint,
+            session: &candidate.candidate.session,
+        },
+        candidate.candidate.delete_pending,
+        Some(candidate),
+    )
+    .await
+}
+
+/// Accepted deletion command shared by direct and retention-triggered execution.
+struct SessionDeleteContext<'a> {
+    at: Timestamp,
+    actor: &'a Actor,
+    request: &'a RequestId,
+    request_fingerprint: &'a Digest,
+    session: &'a SessionId,
+}
+
+async fn execute_session_delete_inner(
+    core: &UseCases,
+    lifecycle: &LocalSessionLifecycle,
+    command: SessionDeleteContext<'_>,
+    require_pending: bool,
+    retention_candidate: Option<&RetentionDeleteCandidate>,
+) -> Result<(), PortError> {
+    core.with_owned_deletion_submission_gate(command.session, || {
+        execute_session_delete_submission_locked(
+            core,
+            lifecycle,
+            command,
+            require_pending,
+            retention_candidate,
+        )
+    })
+    .await
+}
+
+async fn execute_session_delete_submission_locked(
+    core: &UseCases,
+    lifecycle: &LocalSessionLifecycle,
+    command: SessionDeleteContext<'_>,
+    require_pending: bool,
+    retention_candidate: Option<&RetentionDeleteCandidate>,
+) -> Result<(), PortError> {
+    let SessionDeleteContext {
+        at,
+        actor,
+        request,
+        request_fingerprint,
+        session,
+    } = command;
+    let mut delete_barrier = lifecycle.enter_accepted_delete(session).await;
+    let gate = lifecycle.acquire_owner_lifecycle_gate(session).await;
+    if let Some(candidate) = retention_candidate {
+        let current_snapshot = lifecycle.retention_snapshot_locked(&gate, session)?;
+        let same_snapshot = current_snapshot.as_ref() == Some(&candidate.snapshot);
+        let current_candidate = if same_snapshot {
+            lifecycle
+                .retention_candidate_locked(&gate, session, &at)
+                .await?
+        } else {
+            None
+        };
+        let still_current = current_candidate.as_ref().is_some_and(|current| {
+            current.session == candidate.candidate.session
+                && current.delete_pending == candidate.candidate.delete_pending
+                && current.last_protected_at == candidate.candidate.last_protected_at
+        });
+        if !same_snapshot || !still_current {
+            let error = PublicError::coded(
+                "session.busy",
+                "the session changed before its retention deletion could be executed",
+                true,
+            )
+            .map_err(PortError::from)?;
+            lifecycle
+                .fail_delete_release_in_gate(
+                    core,
+                    gate.clone_lifecycle_handle(),
+                    session,
+                    lifecycle
+                        .resource_generation_locked(&gate, session)?
+                        .unwrap_or(candidate.snapshot.generation),
+                    None,
+                    actor,
+                    request,
+                    error,
+                )
+                .await?;
+            return Ok(());
+        }
+    }
+    let pending_generation = lifecycle.delete_pending_generation_locked(&gate, session)?;
+    if require_pending && pending_generation.is_none() {
+        let error = PublicError::coded(
+            "session.not_found",
+            "the pending deletion was cancelled before it could be retried",
+            false,
+        )
+        .map_err(PortError::from)?;
+        core.settle_session_delete_in_held_submission_gate_locked(
+            lifecycle,
+            gate.clone_lifecycle_handle(),
+            session,
+            actor,
+            request,
+            CommandStatus::Failed,
+            Some(error),
+        )
+        .await?;
+        return Ok(());
+    }
+    let write = SessionDeletionWrite::new(
+        session.clone(),
+        actor.clone(),
+        request.clone(),
+        request_fingerprint.clone(),
+        at.clone(),
+    );
+    match core.session_deletion_preflight(&write).await {
+        Ok(SessionDeletionEligibility::Eligible) => {}
+        Ok(SessionDeletionEligibility::Blocked(SessionDeletionBlocker::NotFound)) => {
+            if let Some(generation) = pending_generation {
+                lifecycle.complete_delete_pending_locked(&gate, session, generation)?;
+            }
+            let error =
+                PublicError::coded("session.not_found", "the session does not exist", false)
+                    .map_err(PortError::from)?;
+            core.settle_session_delete_in_held_submission_gate_locked(
+                lifecycle,
+                gate.clone_lifecycle_handle(),
+                session,
+                actor,
+                request,
+                CommandStatus::Failed,
+                Some(error),
+            )
+            .await?;
+            return Ok(());
+        }
+        Ok(SessionDeletionEligibility::Blocked(
+            SessionDeletionBlocker::NotEmpty | SessionDeletionBlocker::Protected,
+        )) => {
+            if let Some(generation) = pending_generation {
+                lifecycle.cancel_delete_pending_locked(&gate, session, generation)?;
+            }
+            let error = PublicError::coded(
+                "session.busy",
+                "the session gained content or unresolved work before it could be released",
+                true,
+            )
+            .map_err(PortError::from)?;
+            core.settle_session_delete_in_held_submission_gate_locked(
+                lifecycle,
+                gate.clone_lifecycle_handle(),
+                session,
+                actor,
+                request,
+                CommandStatus::Failed,
+                Some(error),
+            )
+            .await?;
+            return Ok(());
+        }
+        Err(error) => {
+            let public = PublicError::coded(
+                "internal.unavailable",
+                "the session deletion eligibility could not be checked before release",
+                true,
+            )
+            .map_err(PortError::from)?;
+            core.settle_session_delete_in_held_submission_gate_locked(
+                lifecycle,
+                gate.clone_lifecycle_handle(),
+                session,
+                actor,
+                request,
+                CommandStatus::Failed,
+                Some(public),
+            )
+            .await?;
+            return Err(error);
+        }
+    }
+
+    let Some(generation) = pending_generation.or_else(|| lifecycle.resource_generation(session))
+    else {
+        let error = PublicError::coded(
+            "internal.unavailable",
+            "the session resource cannot be released",
+            true,
+        )
+        .map_err(PortError::from)?;
+        core.settle_session_delete_in_held_submission_gate_locked(
+            lifecycle,
+            gate.clone_lifecycle_handle(),
+            session,
+            actor,
+            request,
+            CommandStatus::Failed,
+            Some(error),
+        )
+        .await?;
+        return Ok(());
+    };
+
+    let release = lifecycle
+        .release_session_for_delete_locked(&gate, actor, session.clone(), generation, at.clone())
+        .await;
+    if let Some(delete_barrier) = delete_barrier.take() {
+        delete_barrier.release();
+    }
+    match release {
+        Ok(ReleaseOutcome::Released | ReleaseOutcome::AlreadyReleased) => {
+            let delete_epoch =
+                lifecycle.delete_epoch_locked(&gate, session, generation, request)?;
+            lifecycle.continue_deletion_after_release_locked(
+                &gate,
+                session,
+                generation,
+                ReleaseOutcome::Released,
+                at.clone(),
+            )?;
+            let outcome = core
+                .finish_delete_in_held_lifecycle_gate_locked(
+                    lifecycle,
+                    gate.clone_lifecycle_handle(),
+                    write,
+                )
+                .await;
+            match outcome {
+                Ok(SessionDeletionOutcome::Deleted { .. }) => {
+                    lifecycle.complete_delete_pending_locked(&gate, session, generation)?;
+                    Ok(())
+                }
+                Ok(SessionDeletionOutcome::Replayed(record))
+                    if record.status() == CommandStatus::Completed =>
+                {
+                    lifecycle.complete_delete_pending_locked(&gate, session, generation)?;
+                    Ok(())
+                }
+                Ok(_) => {
+                    lifecycle.cancel_delete_pending_locked(&gate, session, generation)?;
+                    Ok(())
+                }
+                Err(error) => {
+                    let public = PublicError::coded(
+                        "internal.unavailable",
+                        "the empty session could not be deleted",
+                        true,
+                    )
+                    .map_err(PortError::from)?;
+                    lifecycle
+                        .finish_failed_delete_in_held_lifecycle_gate_locked(
+                            core,
+                            &gate,
+                            session,
+                            actor,
+                            request,
+                            generation,
+                            delete_epoch,
+                            public,
+                        )
+                        .await?;
+                    Err(error)
+                }
+            }
+        }
+        Ok(ReleaseOutcome::Failed) => {
+            let error = PublicError::coded(
+                "internal.unavailable",
+                "the session resource could not be released",
+                true,
+            )
+            .map_err(PortError::from)?;
+            lifecycle
+                .fail_delete_release_in_gate(
+                    core,
+                    gate.clone_lifecycle_handle(),
+                    session,
+                    generation,
+                    None,
+                    actor,
+                    request,
+                    error,
+                )
+                .await?;
+            Ok(())
+        }
+        Ok(ReleaseOutcome::Uncertain) | Err(_) => {
+            let error = PublicError::coded(
+                "command.uncertain",
+                "the session resource release outcome cannot be confirmed",
+                false,
+            )
+            .map_err(PortError::from)?;
+            core.settle_delete_in_held_lifecycle_gate_locked(
+                lifecycle,
+                gate.clone_lifecycle_handle(),
+                session,
+                actor,
+                request,
+                CommandStatus::Uncertain,
+                Some(error),
+            )
+            .await?;
+            lifecycle.complete_delete_pending_locked(&gate, session, generation)?;
+            Ok(())
+        }
+    }
+}
+
+/// 周期性消费保留期与容量候选（组合根 spawn，关闭信号到达即返回）。
+///
+/// 保留期到期的空会话先持久受理 `session.delete`，再走共用释放与删除顺序；同一条路径上的非空会话
+/// 只释放 Agent 资源。容量候选永远只释放，不得因容量压力提前删除空会话。查看者、任务与交互保护判定
+/// 仍在 core，本层不重算。
 pub async fn reclaim_loop(
+    core: Arc<UseCases>,
     lifecycle: Arc<LocalSessionLifecycle>,
     clock: Arc<dyn Clock>,
     actor: Actor,
@@ -525,48 +921,140 @@ pub async fn reclaim_loop(
             () = tokio::time::sleep(interval) => {}
         }
         let now = clock.now();
-        let mut candidates = match lifecycle.retention_due(&actor, now.clone()).await {
+        let candidates = match lifecycle.retention_due(&actor, now.clone()).await {
             Ok(due) => due,
             Err(error) => {
                 debug!(event = "sync.lifecycle_reclaim_failed", error = ?error, "the retention candidates cannot be read");
                 continue;
             }
         };
-        if lifecycle.has_capacity_pressure() {
-            match lifecycle.reclaim_candidate(&actor, clock.now()).await {
-                Ok(Some(candidate))
-                    if !candidates
-                        .iter()
-                        .any(|due| due.session == candidate.session) =>
-                {
-                    candidates.push(candidate);
+        let due_sessions = candidates
+            .iter()
+            .map(|candidate| candidate.session.clone())
+            .collect::<Vec<_>>();
+        for candidate in candidates {
+            let session_id = candidate.session.clone();
+            let candidate = match retention_delete_candidate(lifecycle.as_ref(), candidate) {
+                Ok(Some(candidate)) => candidate,
+                Ok(None) => continue,
+                Err(error) => {
+                    debug!(
+                        event = "sync.lifecycle_candidate_snapshot_failed",
+                        session_id = session_id.as_str(),
+                        error = ?error,
+                        "the retention candidate snapshot cannot be captured"
+                    );
+                    continue;
                 }
-                Ok(_) => {}
+            };
+            match core.session_has_content(&candidate.candidate.session).await {
+                Ok(false) => {
+                    let request = core.new_request_id();
+                    let candidate_fingerprint = session_delete_fingerprint();
+                    match core
+                        .admit_session_delete(
+                            &actor,
+                            request.clone(),
+                            candidate_fingerprint.clone(),
+                            candidate.candidate.session.clone(),
+                        )
+                        .await
+                    {
+                        Ok(SessionDeleteAdmission::Prepared) => {
+                            let result = execute_retention_session_delete(
+                                core.as_ref(),
+                                lifecycle.as_ref(),
+                                clock.now(),
+                                &actor,
+                                &request,
+                                &candidate_fingerprint,
+                                &candidate,
+                            )
+                            .await;
+                            if let Err(error) = result {
+                                debug!(
+                                    event = "sync.lifecycle_delete_failed",
+                                    session_id = candidate.candidate.session.as_str(),
+                                    error = ?error,
+                                    "the lifecycle delete could not be completed"
+                                );
+                            }
+                        }
+                        Ok(SessionDeleteAdmission::InFlight) => debug!(
+                            event = "sync.lifecycle_delete_in_flight",
+                            session_id = candidate.candidate.session.as_str(),
+                            "the lifecycle delete is already in flight"
+                        ),
+                        Ok(SessionDeleteAdmission::Settled(_)) => debug!(
+                            event = "sync.lifecycle_delete_settled",
+                            session_id = candidate.candidate.session.as_str(),
+                            "the lifecycle delete was already settled"
+                        ),
+                        Err(error) => debug!(
+                            event = "sync.lifecycle_delete_admission_failed",
+                            session_id = candidate.candidate.session.as_str(),
+                            error = ?error,
+                            "the lifecycle delete could not be admitted"
+                        ),
+                    }
+                }
+                Ok(true) => {
+                    match lifecycle
+                        .release_retention_candidate(&actor, &candidate.candidate, clock.now())
+                        .await
+                    {
+                        Ok(outcome) => debug!(
+                            event = "sync.lifecycle_reclaimed",
+                            session_id = candidate.candidate.session.as_str(),
+                            outcome = ?outcome,
+                            "a nonempty retention candidate was released"
+                        ),
+                        Err(error) => debug!(
+                            event = "sync.lifecycle_release_failed",
+                            session_id = candidate.candidate.session.as_str(),
+                            error = ?error,
+                            "a nonempty retention candidate cannot be released"
+                        ),
+                    }
+                }
                 Err(error) => debug!(
-                    event = "sync.lifecycle_capacity_candidate_failed",
+                    event = "sync.lifecycle_content_classification_failed",
+                    session_id = candidate.candidate.session.as_str(),
                     error = ?error,
-                    "the capacity reclaim candidate cannot be read"
+                    "the retention candidate content cannot be classified"
                 ),
             }
         }
-        for candidate in candidates {
-            match lifecycle
-                .release_reclaim_candidate(&actor, &candidate, clock.now())
-                .await
-            {
-                Ok(outcome) => debug!(
-                    event = "sync.lifecycle_reclaimed",
-                    session_id = candidate.session.as_str(),
-                    outcome = ?outcome,
-                    "a lifecycle candidate was released"
-                ),
-                Err(error) => debug!(
-                    event = "sync.lifecycle_release_failed",
-                    session_id = candidate.session.as_str(),
-                    error = ?error,
-                    "a lifecycle candidate cannot be released"
-                ),
+        if !lifecycle.has_capacity_pressure() {
+            continue;
+        }
+        match lifecycle.reclaim_candidate(&actor, clock.now()).await {
+            Ok(Some(candidate)) if !due_sessions.contains(&candidate.session) => {
+                let session = candidate.session.clone();
+                match lifecycle
+                    .release_capacity_candidate(&actor, &candidate, clock.now())
+                    .await
+                {
+                    Ok(outcome) => debug!(
+                        event = "sync.lifecycle_capacity_reclaimed",
+                        session_id = session.as_str(),
+                        outcome = ?outcome,
+                        "a capacity candidate was released"
+                    ),
+                    Err(error) => debug!(
+                        event = "sync.lifecycle_capacity_release_failed",
+                        session_id = session.as_str(),
+                        error = ?error,
+                        "a capacity candidate cannot be released"
+                    ),
+                }
             }
+            Ok(_) => {}
+            Err(error) => debug!(
+                event = "sync.lifecycle_capacity_candidate_failed",
+                error = ?error,
+                "the capacity reclaim candidate cannot be read"
+            ),
         }
     }
 }

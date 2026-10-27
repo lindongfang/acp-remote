@@ -354,14 +354,14 @@ async fn unsettled_commands_lists_only_accepted_mutations() {
 /// 仍从 `owned_message` 完整读回；事件文本按上限截断。
 #[tokio::test]
 async fn long_prompt_input_survives_delta_compaction() {
-    use acp_core::model::{FirstSubmissionInput, PromptContentBlock, TurnState};
+    use acp_core::model::{PromptContentBlock, PromptInput, TurnState};
 
     let dir = temp_dir("compaction-long-input");
     let store = store(&dir).await;
     let session = create_session(&store).await;
 
     let text = "长".repeat(300_000);
-    let content = FirstSubmissionInput::new(vec![
+    let content = PromptInput::new(vec![
         PromptContentBlock::from_json_text(
             &serde_json::json!({"type": "text", "text": text}).to_string(),
         )

@@ -1,14 +1,12 @@
 //! 对话可靠性（`conversation-reliability` 任务 5.1）的跨层套件：真实组合根形状 + 真实 SQLite +
 //! 真实 loopback listener，只有 Agent 边界是脚本化后端。
 //!
-//! 覆盖 Main E2E 里**可以自动化**的部分（E1–E7），断言全部指向可观察事实：
+//! 覆盖 Main E2E 里**可以自动化**的部分（E1/E2/E3/E5），断言全部指向可观察事实：
 //!
 //! - E1：首条无回显 + 两条后续输入在停/重启 Daemon 后仍完整可读，第二个已认证设备读到同一批正文；
 //! - E2：历史“继续”后的两次独立“继续”各自有身份；同一 requestId 重试只保存一次、只派发一次；
 //! - E3：受理事务失败零派发零广播；保存后派发失败正文仍在；重启把 accepted 收敛为 uncertain 且不重发；
 //! - E5：文字与附件同事务保存、上传/封存失败不派发、派发失败后已保存输入仍在、异内容回显保留；
-//! - E6：准备 `allocate → restore` 同 ID、同一资源代与同一临时端点（浏览器刷新见 `clients/app/e2e/`）；
-//! - E7：两个已认证连接并发 restore 同一份准备，不产生第二个准备 ID 或第二个临时端点。
 //!
 //! 浏览器/真实 Chromium 与真实 Codex 的验收不在本文件：页面路径见 `clients/app/e2e/`（PV4），
 //! 真实 Agent 见任务 5.2。本文件不冒充其中任何一项。
@@ -29,7 +27,7 @@ const AGENT: &str = "codex";
 /// 重启用例的固定节点身份种子（`EphemeralKeystore` 只活在进程内，固定后才是「同一节点的重启」）。
 const SEED: [u8; 32] = [0x7b; 32];
 
-/// 本套件协商的 feature 集合：正文读取、命令终态、准备、附件与生命周期缺一不可。
+/// 本套件协商的 feature 集合：正文读取、命令终态、附件与生命周期缺一不可。
 fn supported_features() -> Vec<&'static str> {
     vec![
         "core.snapshot.v1",
@@ -46,12 +44,11 @@ fn supported_features() -> Vec<&'static str> {
         "core.typed-media.v1",
         server::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE,
         server::sync::attachments::ATTACHMENT_FEATURE,
-        server::sync::preparation::PREPARATION_FEATURE,
     ]
 }
 
 // ---------------------------------------------------------------------------------------------
-// 配对与握手（真实 HTTP 端点 + 真实四消息握手；与 `session_preparation` 同一套真实路径）
+// 配对与握手（真实 HTTP 端点 + 真实四消息握手）
 // ---------------------------------------------------------------------------------------------
 
 struct Device {
@@ -359,17 +356,8 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 准备 / 首条 / 读取 / 派发的驱动件
+// 正式会话 / 读取 / 派发的驱动件
 // ---------------------------------------------------------------------------------------------
-
-/// `allocate` 的 `ready` 结果（会话 ID、凭据与运行期代）。
-#[derive(Clone)]
-struct Prepared {
-    session: String,
-    receipt: Value,
-    runtime_epoch: String,
-    generation: String,
-}
 
 /// 一个真实存在、可规范化的测试工作目录。
 fn workspace_path(host: &HostNode) -> String {
@@ -379,94 +367,6 @@ fn workspace_path(host: &HostNode) -> String {
         .expect("规范化工作目录")
         .to_string_lossy()
         .into_owned()
-}
-
-/// `session.preparation.allocate`（真实控制帧）：要求 `ready`。
-async fn allocate(client: &mut SyncClient, workspace: &str) -> Prepared {
-    let operation = uuid_text();
-    client.step("session.preparation.allocate");
-    client
-        .send(
-            "session.preparation",
-            json!({
-                "operationId": operation,
-                "action": "allocate",
-                "agentId": AGENT,
-                "workspace": { "workspacePath": workspace },
-                "tabNonce": nonce_text(0x41),
-            }),
-        )
-        .await;
-    let body = client.expect_type("session.preparation.result").await["body"].clone();
-    assert_eq!(body["operationId"], json!(operation), "{body}");
-    assert_eq!(body["action"], json!("allocate"), "{body}");
-    assert_eq!(body["status"], json!("ready"), "分配必须 ready：{body}");
-    Prepared {
-        session: body["sessionId"].as_str().expect("sessionId").to_owned(),
-        receipt: body["receipt"].clone(),
-        runtime_epoch: body["runtimeEpoch"]
-            .as_str()
-            .expect("runtimeEpoch")
-            .to_owned(),
-        generation: body["generation"].as_str().expect("generation").to_owned(),
-    }
-}
-
-/// `session.preparation.restore`：返回完整结果 body（调用方按 status 断言）。
-async fn restore(client: &mut SyncClient, prepared: &Prepared) -> Value {
-    let operation = uuid_text();
-    client.step("session.preparation.restore");
-    client
-        .send(
-            "session.preparation",
-            json!({
-                "operationId": operation,
-                "action": "restore",
-                "sessionId": prepared.session,
-                "receipt": prepared.receipt,
-                "knownRuntimeEpoch": prepared.runtime_epoch,
-                "knownGeneration": prepared.generation,
-            }),
-        )
-        .await;
-    let body = client.expect_type("session.preparation.result").await["body"].clone();
-    assert_eq!(body["operationId"], json!(operation), "{body}");
-    assert_eq!(body["action"], json!("restore"), "{body}");
-    body
-}
-
-/// `session.start` 的 `kind: initial` 载荷。
-fn initial_payload(prepared: &Prepared, content: &[Value], submission: Option<&str>) -> Value {
-    let mut payload = json!({
-        "kind": "initial",
-        "receipt": prepared.receipt,
-        "runtimeEpoch": prepared.runtime_epoch,
-        "generation": prepared.generation,
-        "content": content,
-    });
-    if let Some(submission) = submission {
-        payload["submissionId"] = json!(submission);
-    }
-    payload
-}
-
-/// 派发一条首条（`kind: initial`）。
-async fn start_initial(
-    client: &mut SyncClient,
-    request: &str,
-    prepared: &Prepared,
-    content: &[Value],
-    submission: Option<&str>,
-) {
-    client.step("session.start（initial）");
-    client
-        .command(
-            request,
-            "session.start",
-            Some(&prepared.session),
-            initial_payload(prepared, content, submission),
-        )
-        .await;
 }
 
 /// 释放脚本端点暂存的事件并落盘（真实路径上这一步由 `agent-host` 驱动）。
@@ -566,29 +466,31 @@ async fn prompt_until_terminal(
     (accepted, terminal)
 }
 
-/// 用准备流程建立一条正式会话（首条无回显），返回会话 ID。
-async fn prepared_session(host: &HostNode, client: &mut SyncClient, first_text: &str) -> String {
-    let prepared = allocate(client, &workspace_path(host)).await;
+/// 创建正式会话并提交首条普通输入（首条无回显），返回会话 ID。
+async fn seeded_session(host: &HostNode, client: &mut SyncClient, first_text: &str) -> String {
     let request = uuid_text();
-    start_initial(
-        client,
-        &request,
-        &prepared,
-        &[json!({ "type": "text", "text": first_text })],
-        None,
-    )
-    .await;
-    assert_eq!(
-        client.expect_command_result(&request).await["status"],
-        json!("accepted")
-    );
-    let released = settle_dispatch(host, &prepared.session, first_text).await;
-    assert_eq!(released, 2, "首条派发应释放 agent delta 与 turn.completed");
-    assert_eq!(
-        client.expect_command_result(&request).await["status"],
-        json!("completed")
-    );
-    prepared.session
+    client.step("session.create");
+    client
+        .command(
+            &request,
+            "session.create",
+            None,
+            json!({ "agentId": AGENT, "workspacePath": workspace_path(host) }),
+        )
+        .await;
+    let accepted = client.expect_command_result(&request).await;
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    let created = client.expect_command_result(&request).await;
+    assert_eq!(created["status"], json!("completed"), "{created}");
+    let session = created["result"]["sessionId"]
+        .as_str()
+        .expect("创建终态必须返回会话 ID")
+        .to_owned();
+    let prompt_request = uuid_text();
+    let (_, terminal) =
+        prompt_until_terminal(host, client, &session, &prompt_request, first_text).await;
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    session
 }
 
 /// 直接读库连接（同一 data_dir 的原始 SQL；只用于独立复核持久事实）。
@@ -657,8 +559,8 @@ async fn e1_inputs_survive_restart_and_a_second_device_reads_them() {
     pair_and_approve(&host, &device).await;
     let mut client = connect(&host, &device).await;
 
-    // 首条：准备流程 + 无 Agent 回显（脚本默认不回显）。
-    let session = prepared_session(&host, &mut client, "E1 first message").await;
+    // 首条：正式创建会话后提交普通输入并等待完成，无 Agent 回显（脚本默认不回显）。
+    let session = seeded_session(&host, &mut client, "E1 first message").await;
     // 两条后续输入各自独立受理，也都没有回显。
     let first_request = uuid_text();
     let (_, first_terminal) = prompt_until_terminal(
@@ -713,8 +615,8 @@ async fn e1_inputs_survive_restart_and_a_second_device_reads_them() {
     let (recovered, converged) = host.startup_sequence().await;
     assert_eq!(recovered, 0, "全部命令都已终结，启动恢复不应结算任何命令");
     assert_eq!(
-        converged, 1,
-        "收敛会检查已终态的首条记录并原样返回终态，不写库、不重发"
+        converged, 0,
+        "start_in_root 已完成生命周期收敛，再次收敛不应新增事件；正式创建后的首条输入已完成，无待结算首条记录"
     );
     assert_eq!(
         host.script().prompt_calls(),
@@ -753,7 +655,7 @@ async fn e2_two_continues_are_independent_and_a_retried_request_dispatches_once(
     let device = Device::new();
     pair_and_approve(&host, &device).await;
     let mut client = connect(&host, &device).await;
-    let session = prepared_session(&host, &mut client, "E2 seed message").await;
+    let session = seeded_session(&host, &mut client, "E2 seed message").await;
 
     let text = "继续";
     let first_request = uuid_text();
@@ -869,7 +771,7 @@ async fn e3_save_failure_is_side_effect_free_and_saved_input_survives_dispatch_f
     let device = Device::new();
     pair_and_approve(&host, &device).await;
     let mut client = connect(&host, &device).await;
-    let session = prepared_session(&host, &mut client, "E3 seeded message").await;
+    let session = seeded_session(&host, &mut client, "E3 seeded message").await;
 
     // ① 保存事务失败：注入存储故障（只布防下一次普通输入受理）。
     let watermark = host.head().await;
@@ -992,7 +894,7 @@ async fn e3_restart_marks_accepted_input_uncertain_without_redispatch() {
     let device = Device::new();
     pair_and_approve(&host, &device).await;
     let mut client = connect(&host, &device).await;
-    let session = prepared_session(&host, &mut client, "E3 restart seed").await;
+    let session = seeded_session(&host, &mut client, "E3 restart seed").await;
 
     let request = uuid_text();
     let text = "E3 uncertain after restart";
@@ -1052,7 +954,7 @@ async fn e5_text_and_attachment_are_saved_together_and_kept_when_dispatch_fails(
     let device = Device::new();
     pair_and_approve(&host, &device).await;
     let mut client = connect(&host, &device).await;
-    let session = prepared_session(&host, &mut client, "E5 attachment seed").await;
+    let session = seeded_session(&host, &mut client, "E5 attachment seed").await;
 
     let bytes = b"reliability attachment payload";
     let transfer = uuid_text();
@@ -1298,6 +1200,81 @@ async fn e5_text_and_attachment_are_saved_together_and_kept_when_dispatch_fails(
     host.stop().await;
 }
 
+/// 普通 prompt 连续发送同文时各有独立身份；同文回显不得新增或替换用户消息。
+#[tokio::test]
+async fn e5_same_text_second_message_gets_a_new_identity() {
+    let host = HostNode::start("reliability-e5-same-text", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect(&host, &device).await;
+    let text = "same text twice";
+    let session = seeded_session(&host, &mut client, text).await;
+    let first_users = user_messages(&read_messages(&mut client, &session).await);
+    assert_eq!(first_users.len(), 1, "首条输入必须已保存：{first_users:?}");
+    assert_eq!(first_users[0].1, text);
+
+    // 保留普通 prompt 的同文回显注入；回显带独立身份，不能覆盖受理事务分配的身份。
+    let agent_echo_identity = uuid_text();
+    host.script().echo_plain_prompt(&agent_echo_identity);
+    let request = uuid_text();
+    client.step("session.prompt（相同文本 + Agent 同文回显）");
+    client
+        .command(
+            &request,
+            "session.prompt",
+            Some(&session),
+            json!({ "content": [{ "type": "text", "text": text }] }),
+        )
+        .await;
+    let accepted = client.expect_command_result(&request).await;
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    assert!(
+        accepted["result"]["turnId"].as_str().is_some(),
+        "受理必须返回稳定 turnId：{accepted}"
+    );
+
+    // Agent 事件尚未释放：记录受理时保存的消息身份，再与回显后的结果直接比较。
+    let accepted_users = user_messages(&read_messages(&mut client, &session).await);
+    assert_eq!(
+        accepted_users.len(),
+        2,
+        "两次主动发送应各自保存：{accepted_users:?}"
+    );
+    assert!(
+        accepted_users.contains(&first_users[0]),
+        "首条身份与正文必须保留"
+    );
+    let second = accepted_users
+        .iter()
+        .find(|(identity, _)| identity != &first_users[0].0)
+        .expect("第二次受理必须分配新的消息身份");
+    assert_eq!(second.1, text);
+    assert_ne!(
+        second.0, agent_echo_identity,
+        "身份来自受理事务，不是 Agent 回显"
+    );
+
+    let released = settle_dispatch(&host, &session, text).await;
+    assert_eq!(
+        released, 2,
+        "同文回显去重后只释放 agent delta + turn.completed"
+    );
+    let terminal = client.expect_command_result(&request).await;
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    let after_echo = user_messages(&read_messages(&mut client, &session).await);
+    assert_eq!(
+        after_echo, accepted_users,
+        "回显不得新增第三条用户消息或替换受理身份"
+    );
+    assert_eq!(
+        stored_user_messages(&host, &session).await,
+        2,
+        "同文回显不得重复落库"
+    );
+    assert_eq!(host.script().prompt_calls(), 2, "两次主动发送各派发一次");
+    host.stop().await;
+}
+
 /// E5：Agent 回显了**不同内容**时保留为独立事件，不覆盖已保存正文，也不被当成重复吞掉。
 ///
 /// 变红点：回显只按文本/时间近似关联 ⇒ 异内容被吞（事件库里没有那条 `user.message.delta`）或覆盖
@@ -1308,7 +1285,7 @@ async fn e5_differing_agent_echo_is_kept_as_its_own_event() {
     let device = Device::new();
     pair_and_approve(&host, &device).await;
     let mut client = connect(&host, &device).await;
-    let session = prepared_session(&host, &mut client, "E5 echo seed").await;
+    let session = seeded_session(&host, &mut client, "E5 echo seed").await;
 
     let echo_message = uuid_text();
     host.script()
@@ -1358,146 +1335,6 @@ async fn e5_differing_agent_echo_is_kept_as_its_own_event() {
             |payload| payload.contains("Agent 改写后的内容") && payload.contains(&echo_message)
         ),
         "异内容回显得作为独立事件保留（含它自己的 messageId）：{echoes:?}"
-    );
-
-    host.stop().await;
-}
-
-// ---------------------------------------------------------------------------------------------
-// E6：准备 allocate → restore 同 ID、同一资源代、同一临时端点
-// ---------------------------------------------------------------------------------------------
-
-/// 变红点：restore 走「重新分配」⇒ 会话 ID/资源代变化；同代 restore 重建端点 ⇒ 建立计数增长；
-/// 两条连接各自占一个准备 ⇒ 目录条目 > 1。
-#[tokio::test]
-async fn e6_restore_reuses_the_same_preparation_id_and_endpoint() {
-    let host = HostNode::start("reliability-e6", HOST).await;
-    let device = Device::new();
-    pair_and_approve(&host, &device).await;
-    let mut client = connect(&host, &device).await;
-    let prepared = allocate(&mut client, &workspace_path(&host)).await;
-    assert_eq!(
-        host.preparation_endpoints().establish_calls(),
-        1,
-        "allocate 建立一次临时端点"
-    );
-    assert_eq!(
-        host.preparations().directory().occupied(),
-        1,
-        "同一标签页只占一个准备"
-    );
-
-    // 刷新 / 重新挂载后的 restore：同一 ID，不分配第二个。
-    let restored = restore(&mut client, &prepared).await;
-    assert_eq!(restored["status"], json!("ready"), "{restored}");
-    assert_eq!(
-        restored["sessionId"],
-        json!(prepared.session),
-        "restore 必须回到同一准备 ID：{restored}"
-    );
-    assert_eq!(
-        restored["generation"],
-        json!(prepared.generation),
-        "同一代 restore 不得换代：{restored}"
-    );
-    assert_eq!(
-        host.preparation_endpoints().establish_calls(),
-        1,
-        "同代 restore 不得重建临时端点"
-    );
-    assert_eq!(
-        host.preparations().directory().occupied(),
-        1,
-        "restore 不得产生第二个准备条目"
-    );
-
-    // 幂等：再 restore 一次仍是同 ID/同代，准备数量不变。
-    let again = restore(&mut client, &prepared).await;
-    assert_eq!(again["status"], json!("ready"), "{again}");
-    assert_eq!(again["sessionId"], json!(prepared.session), "{again}");
-    assert_eq!(
-        host.preparations().directory().occupied(),
-        1,
-        "重复 restore 不得产生第二个准备"
-    );
-
-    host.stop().await;
-}
-
-// ---------------------------------------------------------------------------------------------
-// E7：两个连接并发 restore 不产生第二个准备
-// ---------------------------------------------------------------------------------------------
-
-/// 变红点：并发恢复各建一个端点/各分配一个 ID ⇒ 建立计数或目录条目增长；两者返回不同 ID。
-#[tokio::test]
-async fn e7_concurrent_restores_do_not_create_a_second_preparation() {
-    let host = HostNode::start("reliability-e7", HOST).await;
-    let device = Device::new();
-    pair_and_approve(&host, &device).await;
-    let mut client = connect(&host, &device).await;
-    let prepared = allocate(&mut client, &workspace_path(&host)).await;
-
-    // 同一设备只保留一条连接（新连接会替换旧的），因此用同一条连接并发发出两次 restore：
-    // 两次请求在读取任何结果前都已入站，服务端仍必须合并到同一个准备。
-    let first_operation = uuid_text();
-    let second_operation = uuid_text();
-    let restore_body = |operation: &str, prepared: &Prepared| {
-        json!({
-            "operationId": operation,
-            "action": "restore",
-            "sessionId": prepared.session,
-            "receipt": prepared.receipt,
-            "knownRuntimeEpoch": prepared.runtime_epoch,
-            "knownGeneration": prepared.generation,
-        })
-    };
-    client.step("session.preparation.restore（两条并发请求）");
-    client
-        .send(
-            "session.preparation",
-            restore_body(&first_operation, &prepared),
-        )
-        .await;
-    client
-        .send(
-            "session.preparation",
-            restore_body(&second_operation, &prepared),
-        )
-        .await;
-
-    let first = client.expect_type("session.preparation.result").await["body"].clone();
-    let second_result = client.expect_type("session.preparation.result").await["body"].clone();
-    assert_eq!(first["operationId"], json!(first_operation), "{first}");
-    assert_eq!(
-        second_result["operationId"],
-        json!(second_operation),
-        "{second_result}"
-    );
-    assert_eq!(first["status"], json!("ready"), "{first}");
-    assert_eq!(second_result["status"], json!("ready"), "{second_result}");
-    assert_eq!(
-        first["sessionId"],
-        json!(prepared.session),
-        "第一次恢复必须回到原准备：{first}"
-    );
-    assert_eq!(
-        second_result["sessionId"],
-        json!(prepared.session),
-        "并发恢复必须回到同一准备，不得分配第二个 ID：{second_result}"
-    );
-    assert_eq!(
-        first["generation"], second_result["generation"],
-        "并发恢复必须使用同一资源代：{first} / {second_result}"
-    );
-    assert_eq!(
-        host.preparation_endpoints().establish_calls(),
-        1,
-        "并发恢复不得建立第二个临时端点"
-    );
-    assert_eq!(
-        host.preparations().directory().occupied(),
-        1,
-        "并发恢复不得产生第二个准备条目"
     );
 
     host.stop().await;

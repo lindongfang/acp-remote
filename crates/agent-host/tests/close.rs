@@ -544,3 +544,64 @@ async fn a_close_in_flight_blocks_rebinding_the_same_session() {
     drop(resumed);
     host.shutdown_all().await;
 }
+
+/// A managed process that exited has already released every session resource in its tree.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_exited_managed_process_is_a_confirmed_session_release() {
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "exit-after-new"],
+    )]);
+    let session = session_id("88888888-8888-4888-8888-888888888888");
+    let endpoint = create(&host, "agent-1", &session, &Collector::new()).await;
+    let generation = generation_of(&host, &session).await;
+    let agent = AgentId::new("agent-1").expect("id");
+    for _ in 0..200 {
+        if !runtime_running(&host, &agent) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !runtime_running(&host, &agent),
+        "the fake process must have exited before release"
+    );
+
+    assert_eq!(
+        host.release_session_at_generation(&session, generation)
+            .await,
+        ReleaseOutcome::Released,
+        "an exited process confirms that the target session no longer has a live resource"
+    );
+    assert_eq!(
+        host.release_session_at_generation(&session, generation)
+            .await,
+        ReleaseOutcome::Released,
+        "releasing the already-exited binding must be idempotent"
+    );
+
+    drop(endpoint);
+    host.shutdown_all().await;
+}
+
+/// 没有 descriptor 只代表本进程没有可检查的句柄；除非同代已有肯定释放证明，
+/// 否则不能把重启前可能仍存活的进程误判成已释放。
+#[tokio::test]
+async fn a_missing_descriptor_without_release_evidence_is_uncertain() {
+    let host = host(Vec::new());
+    let session = session_id("99999999-9999-4999-8999-999999999999");
+
+    assert_eq!(
+        host.release_session_at_generation(&session, 1).await,
+        ReleaseOutcome::Uncertain,
+        "missing descriptor alone cannot confirm that a prior process exited"
+    );
+    assert_eq!(
+        host.release_session(&session).await,
+        ReleaseOutcome::Uncertain,
+        "the unversioned endpoint must also fail closed without release evidence"
+    );
+
+    host.shutdown_all().await;
+}

@@ -3,9 +3,8 @@
 //! 只有本模块出现 `cfg`（`docs/MODULE_ARCHITECTURE.md` §4.5）。两条实现都要满足同一个性质：
 //! **系统结束该 Agent 或关闭它持有的句柄后，孙进程不再存活**。
 //!
-//! - Windows：`win32job` 的 Job Object，`KILL_ON_JOB_CLOSE` 打开；结束该 Agent 的方式是**关闭 Job 句柄**
-//!   （内核随之结束树内全部进程）。`win32job` 2.x 没有封装 `TerminateJobObject`，而
-//!   `unsafe_code = "forbid"` 不允许直接写 FFI，因此走「丢弃句柄」这条等价路径（`tasks.md` 2.17 允许）。
+//! - Windows：`win32job` 的 Job Object，`KILL_ON_JOB_CLOSE` 打开；终止即关闭 Job 句柄。
+//!   句柄关闭后无法再查询树成员，因此这条路径只给出清理完成事实，不冒充后代退出证明。
 //! - Unix：spawn 时把子进程放进**自己的进程组**（`process_group(0)`），结束用 `killpg`；没有句柄可关，
 //!   因此「关闭」显式等于结束该进程组。
 //!
@@ -141,15 +140,42 @@ impl ProcessTree {
         self.inner.terminate();
     }
 
+    /// 在释放树句柄前证明树内已无存活进程。
+    pub(crate) fn confirms_tree_exit(&self) -> bool {
+        self.inner.confirms_tree_exit()
+    }
+
+    pub(crate) fn unavailable() -> Self {
+        Self {
+            inner: inner::Inner::default(),
+        }
+    }
+
+    pub(crate) fn confirms_startup_exit(&self, status: std::process::ExitStatus) -> bool {
+        // 只有根进程实际退出，并且树句柄中的成员已经清空，才可确认启动失败清理完成。
+        let _ = status.code();
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt as _;
+            let _ = status.signal();
+        }
+        self.confirms_tree_exit()
+    }
+
     /// 释放句柄（与 [`ProcessTree::terminate`] 同义；幂等）。
-    pub fn close(&self) {
-        self.inner.close();
+    ///
+    /// 返回 `true` 只表示平台确认树已清理；Windows 关闭 Job 句柄时无法同时确认树内成员
+    /// 已退出，因此返回 `false`，全局 clean-shutdown 证明必须保守失败。
+    #[must_use]
+    pub(crate) fn close(&self) -> bool {
+        self.inner.close()
     }
 }
 
 #[cfg(windows)]
 mod inner {
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use win32job::{ExtendedLimitInfo, Job};
 
@@ -159,6 +185,7 @@ mod inner {
     #[derive(Debug, Default)]
     pub struct Inner {
         job: Mutex<Option<Job>>,
+        exited: AtomicBool,
     }
 
     impl Inner {
@@ -172,6 +199,7 @@ mod inner {
                 })?;
             Ok(Self {
                 job: Mutex::new(Some(job)),
+                exited: AtomicBool::new(false),
             })
         }
 
@@ -189,12 +217,31 @@ mod inner {
         }
 
         pub fn terminate(&self) {
-            // 取出并丢弃句柄：内核按 KILL_ON_JOB_CLOSE 结束整棵树。
+            // win32job 2.0.3 只公开安全资源管理，不封装 TerminateJobObject。
+            // 关闭 KILL_ON_JOB_CLOSE Job 的最后一个句柄即可结束整棵树。
             drop(lock(&self.job).take());
         }
 
-        pub fn close(&self) {
+        pub fn confirms_tree_exit(&self) -> bool {
+            if self.exited.load(Ordering::SeqCst) {
+                return true;
+            }
+            let guard = lock(&self.job);
+            let exited = guard.as_ref().is_some_and(|job| {
+                job.query_process_id_list()
+                    .is_ok_and(|processes| processes.is_empty())
+            });
+            if exited {
+                self.exited.store(true, Ordering::SeqCst);
+            }
+            exited
+        }
+
+        pub fn close(&self) -> bool {
             self.terminate();
+            // A later query cannot distinguish this closed Job's former descendants from
+            // processes that escaped it. Never turn the close into a tree-exit proof.
+            self.exited.load(Ordering::SeqCst)
         }
     }
 
@@ -249,8 +296,22 @@ mod inner {
             }
         }
 
-        pub fn close(&self) {
+        pub fn confirms_tree_exit(&self) -> bool {
+            let Some(pgid) = *lock(&self.pgid) else {
+                return false;
+            };
+            matches!(
+                nix::sys::signal::killpg(
+                    nix::unistd::Pid::from_raw(pgid),
+                    None::<nix::sys::signal::Signal>,
+                ),
+                Err(nix::errno::Errno::ESRCH)
+            )
+        }
+
+        pub fn close(&self) -> bool {
             self.terminate();
+            self.confirms_tree_exit()
         }
     }
 
@@ -282,7 +343,13 @@ mod inner {
 
         pub fn terminate(&self) {}
 
-        pub fn close(&self) {}
+        pub fn confirms_tree_exit(&self) -> bool {
+            false
+        }
+
+        pub fn close(&self) -> bool {
+            false
+        }
     }
 }
 

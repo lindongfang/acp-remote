@@ -732,8 +732,6 @@ fn spawn_maintenance(
     let policy = composition.retention_policy();
     let clock = Arc::clone(composition.clock());
     let attachments = composition.attachments();
-    let preparations = Arc::clone(composition.preparations());
-    let preparation_endpoints = Arc::clone(composition.preparation_endpoints());
     tasks.spawn("maintenance", cancel, async move {
         let mut next = tokio::time::Instant::now();
         let mut startup = true;
@@ -751,7 +749,6 @@ fn spawn_maintenance(
                 &policy,
                 &clock,
                 attachments.as_ref(),
-                Some((preparations.as_ref(), &preparation_endpoints)),
                 if startup { "startup" } else { "periodic" },
             )
             .await;
@@ -768,10 +765,6 @@ async fn maintenance_tick(
     policy: &acp_core::ports::RetentionPolicy,
     clock: &Arc<dyn acp_core::ports::Clock>,
     attachments: &SqliteStore,
-    preparations: Option<(
-        &server::sync::preparation::Preparations,
-        &Arc<dyn server::sync::preparation::PreparationEndpoints>,
-    )>,
     reason: &'static str,
 ) {
     let actor = Actor::LocalCli;
@@ -826,32 +819,12 @@ async fn maintenance_tick(
             0
         }
     };
-    // 准备租约：先释放真实临时端点，确认后才能交还容量；失败/不确定保持占位。
-    let mut reclaimed_preparations = 0usize;
-    if let Some((preparations, endpoints)) = preparations {
-        let now = clock.now();
-        for (session, generation) in preparations.directory().expired(now.clone()) {
-            if matches!(
-                endpoints.release(session.clone(), generation.get()).await,
-                server::sync::preparation::EndpointRelease::Released
-            ) && matches!(
-                preparations
-                    .directory()
-                    .release(&session, generation, now.clone())
-                    .await,
-                acp_core::model::PreparationReleaseOutcome::Released
-            ) {
-                reclaimed_preparations += 1;
-            }
-        }
-    }
     tracing::info!(
         event = "daemon.maintenance",
         reason,
         removed_events,
         expired_pairings,
         swept_orphans,
-        reclaimed_preparations,
         still_over_limit,
         "周期清理完成"
     );
@@ -1296,20 +1269,7 @@ pub fn register_sync_paths(
         remote,
         event_queue,
         None,
-        None,
     )
-}
-
-/// 准备控制/首次提交面的接线件（`core.session-preparation.v1`）。
-///
-/// 两个零件必须一起提供：`preparations` 是凭据验证/运行期目录/首条读面，`endpoints` 是临时端点
-/// 建立、设置复核与所有权转移。缺一就不宣告 feature，也不注册控制帧路由。
-#[derive(Clone)]
-pub struct PreparationPorts {
-    /// 准备面的共享服务（控制帧、附件准备目标与 `session.start` 共用）。
-    pub preparations: Arc<server::sync::preparation::Preparations>,
-    /// 准备端点窄面（组合根的 `agent-host` 适配器）。
-    pub endpoints: Arc<dyn server::sync::preparation::PreparationEndpoints>,
 }
 
 /// 同 [`register_sync_paths`]，但把本机生命周期接线一并交给命令面/订阅面/查看控制帧。
@@ -1333,7 +1293,6 @@ pub fn register_sync_paths_with_lifecycle(
         Arc<acp_core::use_cases::LocalSessionLifecycle>,
         Arc<dyn Clock>,
     )>,
-    preparation: Option<PreparationPorts>,
 ) -> Result<SyncIngress, NetworkError> {
     let registry = SyncConnectionRegistry::new();
     let lifecycle_visible = lifecycle.is_some();
@@ -1351,7 +1310,7 @@ pub fn register_sync_paths_with_lifecycle(
     let subscribe = Arc::new(subscribe);
     // 命令面（`command`）：`SyncConn` 只有一个路由槽，因此两者由 `SyncRoutes` 按序组合（订阅面在前）；
     // `on_authenticated` 由组合件转发给两者，本次协商出的 feature 因此同时到达订阅面与命令面的门控。
-    let mut command_route = SyncCommandRoute::new(
+    let command_route = SyncCommandRoute::new(
         Arc::clone(core),
         Arc::clone(broker),
         Arc::clone(authority),
@@ -1362,23 +1321,11 @@ pub fn register_sync_paths_with_lifecycle(
             .as_ref()
             .map(|(lifecycle, _)| Arc::clone(lifecycle)),
     );
-    if let Some(ports) = preparation.as_ref() {
-        command_route = command_route.with_preparation(
-            Arc::clone(&ports.preparations),
-            Arc::clone(&ports.endpoints),
-        );
-    }
     let command = Arc::new(command_route);
     let mut parts: Vec<Arc<dyn SyncMessageRoute>> = vec![
         Arc::clone(&subscribe) as Arc<dyn SyncMessageRoute>,
         Arc::clone(&command) as Arc<dyn SyncMessageRoute>,
     ];
-    if let Some(ports) = preparation.as_ref() {
-        parts.push(Arc::new(server::sync::preparation::PreparationRoute::new(
-            Arc::clone(&ports.preparations),
-            Arc::clone(&ports.endpoints),
-        )) as Arc<dyn SyncMessageRoute>);
-    }
     if let Some((lifecycle, clock)) = lifecycle {
         parts.push(Arc::new(server::sync::local_lifecycle::ViewRoute::new(
             Arc::clone(core),
@@ -1405,12 +1352,7 @@ pub fn register_sync_paths_with_lifecycle(
             path: "/sync/v1".to_owned(),
         }));
     };
-    let attachment_service = match preparation.as_ref() {
-        Some(ports) => {
-            SyncAttachmentService::from_core_with_preparation(core, Arc::clone(&ports.preparations))
-        }
-        None => SyncAttachmentService::from_core(core),
-    };
+    let attachment_service = SyncAttachmentService::from_core(core);
     let mut supported = if attachment_service.is_some() {
         server::sync::conn::feature_list()
     } else {
@@ -1421,18 +1363,6 @@ pub fn register_sync_paths_with_lifecycle(
         supported.retain(|feature| {
             feature.as_str() != server::sync::local_lifecycle::LOCAL_LIFECYCLE_FEATURE
         });
-    }
-    match preparation.is_some() {
-        true => {
-            if !supported
-                .iter()
-                .any(|feature| feature.as_str() == server::sync::preparation::PREPARATION_FEATURE)
-            {
-                supported.push(server::sync::preparation::PREPARATION_FEATURE.to_owned());
-            }
-        }
-        false => supported
-            .retain(|feature| feature.as_str() != server::sync::preparation::PREPARATION_FEATURE),
     }
     let conn = Arc::new(
         SyncConn::new(
@@ -1562,6 +1492,36 @@ impl NetIngress {
             .converge_on_startup()
             .await
             .map_err(NetworkError::Lifecycle)?;
+        // 启动空会话的占位代也必须进入宿主的代号账；首次恢复随后递增到同一新代。
+        // 这里只装配 core 的结果，是否为空及是否有退出证明仍分别由 core/host 决定。
+        let startup_sessions = composition
+            .use_cases()
+            .list_sessions(&Actor::LocalCli, SessionQuery::default())
+            .await
+            .map_err(NetworkError::Lifecycle)?;
+        for summary in startup_sessions {
+            // Every persisted session counts, including generation zero when timeout is disabled
+            // and nonempty sessions. Generation alignment below is a separate concern.
+            composition.host().register_restart_session();
+            let startup_gate = composition
+                .lifecycle()
+                .acquire_owner_lifecycle_gate(summary.session_id())
+                .await;
+            if let Some(generation) = composition
+                .lifecycle()
+                .resource_generation_locked(&startup_gate, summary.session_id())
+                .map_err(NetworkError::Lifecycle)?
+            {
+                if !composition
+                    .host()
+                    .seed_restart_generation(summary.session_id().clone(), generation.get())
+                {
+                    return Err(NetworkError::Lifecycle(PortError::Corrupt(
+                        "startup host generation already assigned",
+                    )));
+                }
+            }
+        }
         let mut listener = NetListener::bind(net_config(composition.config()))
             .await
             .map_err(NetworkError::Listener)?;
@@ -1610,10 +1570,6 @@ impl NetIngress {
                 Arc::clone(composition.lifecycle()),
                 Arc::clone(composition.clock()) as Arc<dyn Clock>,
             )),
-            Some(PreparationPorts {
-                preparations: Arc::clone(composition.preparations()),
-                endpoints: Arc::clone(composition.preparation_endpoints()),
-            }),
         )?;
         // 静态面（`design.md` D1/D2/D3）：第三类端点，注册在**全部协议端点之后**（`tasks.md` 3.1 的装配
         // 要求）。注意「协议端点优先」**不**由这个顺序保证，而是由 `server` 侧的结构保证：协议端点是精确
@@ -1678,6 +1634,50 @@ impl NetIngress {
         ));
         // Sync 的实时事件扇出（`event` 帧的实时腿；重放腿在订阅面的 `advance` 里）。
         // 停读信号（§14 的高水位）由每连接的出站账本负责、在分发侧消费；`shutdown` 触发即退出。
+        // 与文件时钟配套的只读验收屏障；普通生产配置不会启动此任务。
+        if composition.config().dev_mode.enabled {
+            if let Ok(path) = std::env::var(crate::compose::TEST_CLOCK_FILE_ENV) {
+                tasks.push(("test_lifecycle_observer", tokio::spawn({
+                    let lifecycle = Arc::clone(composition.lifecycle());
+                    let clock = Arc::clone(composition.clock());
+                    let signal = signal.clone();
+                    async move {
+                        let mut last_id = None;
+                        loop {
+                            tokio::select! {
+                                () = signal.clone().wait() => break,
+                                () = tokio::time::sleep(Duration::from_millis(10)) => {}
+                            }
+                            let Ok(bytes) = std::fs::read(format!("{path}.observe-request")) else { continue };
+                            if bytes.len() > 1024 { continue; }
+                            let Ok(request) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
+                            let (Some(id), Some(session)) = (request["id"].as_u64(), request["sessionId"].as_str()) else { continue };
+                            if last_id == Some(id) { continue; }
+                            let Ok(session) = SessionId::new(session) else { continue };
+                            let gate = tokio::select! {
+                                () = signal.clone().wait() => break,
+                                gate = lifecycle.acquire_owner_lifecycle_gate(&session) => gate,
+                            };
+                            let now = clock.now();
+                            let viewers = acp_core::ports::ViewRegistry::viewers(lifecycle.as_ref(), session.clone(), now.clone()).await;
+                            let snapshot = lifecycle.retention_snapshot_locked(&gate, &session);
+                            if let (Ok(viewers), Ok(Some(snapshot))) = (viewers, snapshot) {
+                                let response = serde_json::json!({
+                                    "id": id, "sessionId": session.as_str(), "now": now.as_str(),
+                                    "generation": snapshot.generation.get(), "viewerCount": viewers.len(),
+                                    "retentionStart": snapshot.retention_start.as_ref().map(|value| value.as_str()),
+                                });
+                                if let Ok(bytes) = serde_json::to_vec(&response) {
+                                    if std::fs::write(format!("{path}.observe-response-{id}.json"), bytes).is_ok() {
+                                        last_id = Some(id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                })));
+            }
+        }
         let sync_registry = Arc::clone(sync.registry());
         // Sync 命令面的终态观察者：mutation 的 `accepted` 之后，终态由它轮询持久记录后推回提交方。
         let sync_command = Arc::clone(sync.command());
@@ -1685,15 +1685,18 @@ impl NetIngress {
         tasks.push((
             "session_lifecycle_reclaim",
             tokio::spawn({
+                let core = Arc::clone(composition.use_cases());
                 let lifecycle = Arc::clone(composition.lifecycle());
                 let clock = Arc::clone(composition.clock());
+                let interval = composition.reclaim_interval();
                 let signal = signal.clone();
                 async move {
                     server::sync::local_lifecycle::reclaim_loop(
+                        core,
                         lifecycle,
                         clock,
                         acp_core::model::Actor::LocalCli,
-                        std::time::Duration::from_secs(60),
+                        interval,
                         signal,
                     )
                     .await
@@ -1925,20 +1928,6 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
             event = "daemon.recovered_unsettled",
             commands = recovered,
             "启动恢复终结了未决命令（不确定终态，未重放副作用）"
-        );
-    }
-    // `web-session-preparation` D8：首条提交的启动收敛——可证明未派发的失败保留正文、等待显式继续；
-    // 可能已派发的记 `uncertain`。**绝不**自动派发或自动消费持久输入。
-    let converged = composition
-        .use_cases()
-        .converge_first_submissions(composition.clock().now())
-        .await
-        .map_err(|error| DaemonError::Compose(ComposeError::Port(error)))?;
-    if converged > 0 {
-        tracing::warn!(
-            event = "daemon.converged_first_submissions",
-            sessions = converged,
-            "启动收敛了首次提交（未自动派发；等待用户显式继续）"
         );
     }
     // 出站连接在启动恢复之后才开始：imported 事件要等本机状态一致后再落索引。
@@ -2256,19 +2245,30 @@ async fn close(
     audit_writer.close().await;
 
     // 3) 停止 Agent 进程（本切片没有已启动的 Agent，`shutdown_all` 因此立即返回）。
-    if tokio::time::timeout_at(
+    match tokio::time::timeout_at(
         tokio::time::Instant::from_std(deadline),
         host.shutdown_all(),
     )
     .await
-    .is_err()
     {
-        tracing::error!(
-            event = "daemon.agent_stop_timeout",
-            "Agent 进程未在期限内停止（继续关闭序列）"
-        );
-    } else {
-        tracing::info!(event = "daemon.agents_stopped", "本机 Agent 已停止");
+        Ok(true) => {
+            tracing::info!(
+                event = "daemon.agents_stopped",
+                "本地 Agent 已完整停止并写出干净重启证明"
+            );
+        }
+        Ok(false) => {
+            tracing::error!(
+                event = "daemon.agent_stop_unconfirmed",
+                "本地 Agent 停止或关闭证明写入未完整成功；下次启动将保守保留未知会话"
+            );
+        }
+        Err(_) => {
+            tracing::error!(
+                event = "daemon.agent_stop_timeout",
+                "Agent 进程未在期限内停止；未写出干净重启证明"
+            );
+        }
     }
     // `AgentHost` 持有存储句柄（`LocalConfigStore`）：必须在 `Composition::close` 之前释放本函数持有的
     // 这个 `Arc` 克隆，否则检查点会被上报为 `StoreStillShared`。

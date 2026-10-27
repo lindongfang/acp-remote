@@ -13,7 +13,7 @@
 
 import type { ReactElement } from "react";
 
-import type { PreparationReceipt, SessionSummary, WorkspaceCatalogEntry } from "../../src/protocol";
+import type { SessionSummary, WorkspaceCatalogEntry } from "../../src/protocol";
 import DirectoriesRoute from "../../app/index";
 import DirectoryDetailRoute from "../../app/dir/[directoryId]";
 import HostsRoute from "../../app/hosts";
@@ -403,105 +403,4 @@ export function readPage(input: {
   };
   if (input.historyHasEarlier !== undefined) page["historyHasEarlier"] = input.historyHasEarlier;
   return page;
-}
-
-// ── 会话准备（`core.session-preparation.v1`）──────────────────────────────────
-
-/**
- * 准备会话的固定 Owner ID。
- *
- * `allocate` 由**后端**分配最终 `sessionId`（客户端不得指定），因此它是假主机对分配请求的
- * 回显值，而不是任何请求里携带的字段。R16 与准备页用例都断言「URL 用的是这一个」。
- */
-export const PREPARED_SESSION_ID = "eeeeeeee-0000-4000-8000-0000000000a1";
-
-/** 准备结果的资源代与租约（远未来：续租/失租不是这些用例的观测面）。 */
-export const PREPARATION_RUNTIME_EPOCH = "9f1c0a52-3e4b-4c7d-8a90-112233445566";
-export const PREPARATION_LEASE_EXPIRES_AT = "2099-01-01T00:00:00.000Z";
-
-/** Agent 真实回报的模式与配置：页面必须原样呈现，不伪造缺失项。 */
-export const PREPARATION_MODES = [
-  { modeId: "plan", displayName: "计划" },
-  { modeId: "build", displayName: "构建" },
-] as const;
-
-export const PREPARATION_CONFIG = [
-  {
-    id: "model",
-    name: "模型",
-    description: null,
-    category: "model",
-    type: "select",
-    currentValue: "gpt-5",
-    options: [
-      { value: "gpt-5", name: "GPT-5", description: null },
-      { value: "gpt-5-mini", name: "GPT-5 mini", description: null },
-    ],
-  },
-  {
-    id: "web",
-    name: "联网",
-    description: null,
-    category: null,
-    type: "boolean",
-    currentValue: false,
-  },
-] as const;
-
-/**
- * 假主机的准备凭据。
- *
- * 浏览器只保存/回传它（签发与验签都在 Owner），因此这里只需要**形状**合法：claims 逐字段
- * 闭合、签名是 64 字节 P1363 的 86 字符 base64url。`sessionId` 必须与分配结果一致——页面会把它
- * 写进草稿台账，`restore` 再原样回传。
- *
- * 绑定字段（节点/来源/设备）由调用方给出：它们必须与**当前场景**的已配对主机一致，否则
- * 草稿分区键与凭据会指向两个不同的世界，恢复用例验的就不再是同一次准备。
- */
-export function preparationReceipt(input: {
-  readonly ownerNodeId: string;
-  readonly origin: string;
-  readonly deviceId: string;
-  /** 凭据绑定的准备会话；缺省为 {@link PREPARED_SESSION_ID}。 */
-  readonly sessionId?: string;
-}): PreparationReceipt {
-  return {
-    claims: {
-      version: 1,
-      ownerNodeId: input.ownerNodeId,
-      storeEpoch: "00384a03-bc90-4095-b65d-82fb8cc47e13",
-      origin: input.origin,
-      deviceId: input.deviceId,
-      tabNonce: "A".repeat(43),
-      sessionId: input.sessionId ?? PREPARED_SESSION_ID,
-      agentId: "codex-a",
-      normalizedWorkspacePath: DIRECTORY_PATH_ALPHA,
-      workspaceSource: "directoryId",
-    },
-    signature: "B".repeat(86),
-  };
-}
-
-/**
- * `session.preparation.result` 的 `ready` 应答（wire 形状，假主机原样投递）。
- *
- * `sessionId` 对 `allocate` 取固定分配值，对 `restore`/`configure`/`renew` 逐字回显请求里的那一个；
- * `operationId`/`action` 同样回显，仓库据此丢弃迟到的旧操作。
- */
-export function readyPreparationResult(
-  body: Record<string, unknown>,
-  receipt: PreparationReceipt,
-): Record<string, unknown> {
-  return {
-    operationId: body["operationId"],
-    action: body["action"],
-    sessionId: typeof body["sessionId"] === "string" ? body["sessionId"] : PREPARED_SESSION_ID,
-    status: "ready",
-    receipt,
-    runtimeEpoch: PREPARATION_RUNTIME_EPOCH,
-    generation: "1",
-    modes: PREPARATION_MODES,
-    configOptions: PREPARATION_CONFIG,
-    leaseExpiresAt: PREPARATION_LEASE_EXPIRES_AT,
-  };
 }

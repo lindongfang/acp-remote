@@ -11,16 +11,11 @@ use acp_core::ports::Clock;
 
 use crate::error::IdentityError;
 use crate::port::{EntropySource, IdentityKeystore, KeyHandle};
-use crate::preparation::{
-    PreparationAdmission, PreparationBinding, PreparationError, PreparationExpectation,
-    PreparationReceipt,
-};
 use crate::state::State;
 use crate::transcript::{
-    NodeLinkChallenge, NodeLinkPairingOwnerProof, PreparationClaims, SyncHostChallenge,
-    SyncPairingHostProof,
+    NodeLinkChallenge, NodeLinkPairingOwnerProof, SyncHostChallenge, SyncPairingHostProof,
 };
-use crate::types::{Authenticated, P1363Signature};
+use crate::types::P1363Signature;
 
 /// 身份状态机的组合点（见模块文档）。
 pub struct Authority {
@@ -140,48 +135,6 @@ impl Authority {
         self.sign_transcript(&transcript)
             .await
             .map_err(IdentityError::from)
-    }
-
-    /// 签准备凭据（`acp-remote/session-preparation/v1`，design D2）。
-    ///
-    /// 只接受结构化 claims：domain 与字段顺序由 [`PreparationClaims::transcript`] 按登记表固定，
-    /// 本入口**不**签名任意字节，也不接受调用方给出的 domain。claims 的 `ownerNodeId` 必须是本节点，
-    /// 否则拒绝签名（同一把密钥不得为其他节点出证）。`storeEpoch` 由调用方按当前持久
-    /// `meta.server_epoch` 提供；本 crate 不读存储，因此不能替调用方校验该事实。
-    pub async fn sign_preparation_receipt(
-        &self,
-        claims: &PreparationClaims,
-    ) -> Result<PreparationReceipt, PreparationError> {
-        if claims.owner_node_id != self.local_node {
-            return Err(PreparationError::Binding(PreparationBinding::OwnerNode));
-        }
-        let transcript = claims.transcript()?;
-        let signature = self.sign_transcript(&transcript).await?;
-        Ok(PreparationReceipt::new(claims.clone(), signature))
-    }
-
-    /// 用**本节点**身份公钥校验准备凭据（组合根/服务接线入口）。
-    ///
-    /// 公钥只从本节点 keystore 条目读取，调用方无从传入对端公钥。检查顺序与
-    /// [`verify_preparation_receipt`](crate::preparation::verify_preparation_receipt) 相同；
-    /// `authenticated.credential` MUST 由调用方在调用前刷新为最新持久设备状态。每帧调用会读一次
-    /// keystore；连接级缓存 `node_public_key()` 后直接调用纯函数可以避免重复解包。
-    pub async fn verify_preparation_receipt(
-        &self,
-        authenticated: &Authenticated,
-        receipt: &PreparationReceipt,
-        expected: &PreparationExpectation,
-    ) -> Result<PreparationAdmission, PreparationError> {
-        if expected.owner_node_id != self.local_node {
-            return Err(PreparationError::Binding(PreparationBinding::OwnerNode));
-        }
-        let public_key = self.keystore.public_key(&self.node_key).await?;
-        crate::preparation::verify_preparation_receipt(
-            authenticated,
-            &public_key,
-            receipt,
-            expected,
-        )
     }
 
     /// 进程重启语义：丢弃全部内存 secret、配对码反查与挑战缓存（返回 `(secrets, challenges)`

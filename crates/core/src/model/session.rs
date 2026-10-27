@@ -609,7 +609,7 @@ impl ConfigValue {
 
     /// 文本/选择值的原文；布尔值返回 `None`。
     ///
-    /// 只服务把**已确认**的选择写入持久层（`owned_first_submission.config_json`）；kind 仍由调用方
+    /// 只服务把**已确认**的选择写入持久层；kind 仍由调用方
     /// 从 [`ConfigValue`] 的变体区分，存储层不得据此反推 ACP 类型。
     pub fn as_text(&self) -> Option<&str> {
         match self {
@@ -848,6 +848,9 @@ pub enum CommandPayload {
     Prompt {
         content: Vec<PromptContentBlock>,
     },
+    /// `session.delete`：Sync-only 的空会话删除 mutation。目标来自命令信封的 `sessionId`，payload 固定为
+    /// 空对象；它删除 ACP Remote 自身的历史与元数据，不是 ACP 的 `session/delete`。
+    SessionDelete {},
     Cancel {
         turn: Option<TurnId>,
     },
@@ -895,6 +898,7 @@ impl CommandPayload {
             | Self::ConfigList {}
             | Self::WorkspaceBrowse { .. } => CommandKind::Query,
             Self::Prompt { .. }
+            | Self::SessionDelete {}
             | Self::Cancel { .. }
             | Self::ModeSet { .. }
             | Self::ConfigSet { .. }
@@ -943,6 +947,7 @@ impl CommandPayload {
             // `TitleSet` 的标题已在 [`SessionTitle::parse`] 校验（trim 后 1..=512）；这里不再有第二套文本
             // 规则，也不接受 `null`（变体本身就没有 None 分支）。
             Self::SessionList {}
+            | Self::SessionDelete {}
             | Self::CommandStatus { .. }
             | Self::ModeList {}
             | Self::ConfigList {}
@@ -1206,13 +1211,7 @@ pub struct CommandRecord {
 }
 
 impl CommandRecord {
-    /// 构造。除 §3.3 的字段形状外，额外强制 §11.2/§7.3 的相容性：
-    ///
-    /// - `rejected` 必须无 `accepted_at`/`result` 且有 `error`；其余状态必须有 `accepted_at`；
-    /// - `accepted` 不得携带 `terminal_at`/`terminal_event`/`result`/`error`；
-    /// - `completed` 不得有 `error`，查询命令不得有 `terminal_event`，mutation 的 `completed` 必须有；
-    /// - `failed`/`uncertain` 必须有 `error` 与 `terminal_event`。
-    #[allow(clippy::too_many_arguments)] // §3.3 冻结的 13 字段记录
+    #[allow(clippy::too_many_arguments)] // Mirrors the complete persisted command record.
     pub fn try_new(
         session: Option<SessionId>,
         request: RequestId,

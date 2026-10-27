@@ -1,0 +1,18 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "e18b5c73-90a4-4d26-8f17-6b2c4e9d0a53",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "84",
+  "body": {
+    "requestId": "c9d2f4a6-1b37-4e85-9a60-3f8b7d1c2e05",
+    "command": "session.delete",
+    "status": "completed",
+    "acceptedAt": "2026-10-26T08:30:00.000Z",
+    "terminalEventId": "7e0f2a94-5c61-4b38-a0d5-18e6f3b72c49",
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
+    },
+    "error": null
+  }
+}

@@ -1,4 +1,4 @@
-//! 11 个 transcript domain 的输入类型与装配（`docs/SYNC_PROTOCOL.md` §6.3、
+//! 10 个 transcript domain 的输入类型与装配（`docs/SYNC_PROTOCOL.md` §6.3、
 //! `docs/NODE_LINK_PROTOCOL.md` §9.3/§9.4，机器登记见 `compatibility/transcripts/v1/transcripts.json`）。
 //!
 //! 设计（`design.md` D2）：每个 domain 一个输入结构，`transcript()` 按**协议 crate 导出的表**装配
@@ -10,17 +10,13 @@
 use node_link_protocol::domains::DOMAINS as NODE_LINK_DOMAINS;
 use sync_protocol::domains::DOMAINS as SYNC_DOMAINS;
 
-use acp_core::model::{
-    AgentId, DeviceId, NodeId, NodeKind, Nonce, PairingId, PeerPublicKey, ServerEpoch, SessionId,
-    Timestamp,
-};
+use acp_core::model::{DeviceId, NodeId, NodeKind, Nonce, PairingId, PeerPublicKey, Timestamp};
 use acpr_transcript::table::{DomainSpec, domain_spec, encode_transcript};
 
 use crate::error::{ProofError, TranscriptError};
 use crate::types::{
-    CanonicalOrigin, ChallengeId, ClientKind, NodeEndpoint, NormalizedWorkspacePath,
-    P1363Signature, PROTOCOL_VERSION, PairingProof, PairingRequestId, PairingSecret,
-    PreparationWorkspaceSource,
+    CanonicalOrigin, ChallengeId, ClientKind, NodeEndpoint, P1363Signature, PROTOCOL_VERSION,
+    PairingProof, PairingRequestId, PairingSecret,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -104,36 +100,6 @@ impl FieldValue for ClientKind {
 }
 
 impl FieldValue for NodeKind {
-    fn field_bytes(&self) -> Result<Vec<u8>, TranscriptError> {
-        Ok(self.as_str().as_bytes().to_vec())
-    }
-}
-
-impl FieldValue for ServerEpoch {
-    fn field_bytes(&self) -> Result<Vec<u8>, TranscriptError> {
-        Ok(crate::types::uuid_bytes(self.as_str()).to_vec())
-    }
-}
-
-impl FieldValue for SessionId {
-    fn field_bytes(&self) -> Result<Vec<u8>, TranscriptError> {
-        Ok(crate::types::uuid_bytes(self.as_str()).to_vec())
-    }
-}
-
-impl FieldValue for AgentId {
-    fn field_bytes(&self) -> Result<Vec<u8>, TranscriptError> {
-        Ok(self.as_str().as_bytes().to_vec())
-    }
-}
-
-impl FieldValue for NormalizedWorkspacePath {
-    fn field_bytes(&self) -> Result<Vec<u8>, TranscriptError> {
-        Ok(self.as_str().as_bytes().to_vec())
-    }
-}
-
-impl FieldValue for PreparationWorkspaceSource {
     fn field_bytes(&self) -> Result<Vec<u8>, TranscriptError> {
         Ok(self.as_str().as_bytes().to_vec())
     }
@@ -811,38 +777,4 @@ impl NodeLinkProof {
         let transcript = self.transcript()?;
         verify_signature(access_public_key, &transcript, signature)
     }
-}
-
-domain_input! {
-    /// 准备凭据的闭合 claims（`acp-remote/session-preparation/v1`，节点签名，design D2）。
-    ///
-    /// 字段顺序即登记表的 tag 顺序；`protocolVersion`（tag 1）由宏注入为 v1 常量，wire 上必须等于 1
-    /// （解码方负责比较，见 `sync-protocol` 的 `PreparationReceiptClaims` 投影）。这组 claims 只绑定
-    /// 「哪个节点为哪台设备/哪个标签页分配了哪个会话 ID」，不含正文、附件、Provider/MCP 凭据或任何
-    /// scope；签名与绑定校验入口在 [`crate::preparation`]。`Debug` 只输出固定脱敏标记，不打印任何
-    /// 字段值（claims 含本机规范化目录、origin 与设备/会话标识）。
-    pub struct PreparationClaims {
-        device_id: DeviceId,
-        owner_node_id: NodeId,
-        store_epoch: ServerEpoch,
-        origin: CanonicalOrigin,
-        tab_nonce: Nonce,
-        session_id: SessionId,
-        agent_id: AgentId,
-        normalized_workspace_path: NormalizedWorkspacePath,
-        workspace_source: PreparationWorkspaceSource,
-    }
-    domain SYNC_DOMAINS, "acp-remote/session-preparation/v1";
-    tags [
-        3 => device_id,
-        17 => owner_node_id,
-        18 => store_epoch,
-        19 => origin,
-        20 => tab_nonce,
-        21 => session_id,
-        22 => agent_id,
-        23 => normalized_workspace_path,
-        24 => workspace_source,
-    ];
-    debug redacted;
 }

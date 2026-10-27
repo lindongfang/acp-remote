@@ -1,6 +1,6 @@
 //! `event.payload.view` 的类型化视图（`schemas/sync/v1/event-views.schema.json`）。
 //!
-//! 每个 `$defs` 条目对应一个公开 struct，名字是 eventType 的驼峰化；[`VIEW_TYPES`] 登记全部 35 个
+//! 每个 `$defs` 条目对应一个公开 struct，名字是 eventType 的驼峰化；[`VIEW_TYPES`] 登记全部 36 个
 //! eventType，[`project`] 按 eventType 把 `payload.view` 投影成 [`View`]。
 //!
 //! 视图是**开放对象**（schema 的 `additionalProperties: true`）：因此
@@ -935,6 +935,18 @@ pub struct SessionCreated {
     pub extra: ExtraFields,
 }
 
+/// `session.deleted`（`event-views.schema.json#/$defs/session.deleted`）。
+///
+/// 删除事实的最小视图：只有稳定 `sessionId`，没有标题、关闭标志、通知文案、草稿或正文。客户端按
+/// 同一 `eventId` 幂等应用；`additionalProperties: true` 的未知键按值保留（`ExtraFields`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDeleted {
+    #[serde(rename = "sessionId")]
+    pub session_id: Uuid,
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
 /// `session.info.changed`（`event-views.schema.json#/$defs/session.info.changed`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfoChanged {
@@ -1257,8 +1269,8 @@ pub struct UserMessageDelta {
 /// `tests/schema_drift.rs::view_types_match_schema_defs` 逐条比较的那个顺序。
 macro_rules! view_registry {
     ($( $event_type:literal => $variant:ident($ty:ty) ),+ $(,)?) => {
-        /// 全部 35 个登记 eventType，与 `event-views.schema.json` 的 `$defs` 键集合逐条相等。
-        pub const VIEW_TYPES: [&str; 35] = [ $( $event_type ),+ ];
+        /// 全部 36 个登记 eventType，与 `event-views.schema.json` 的 `$defs` 键集合逐条相等。
+        pub const VIEW_TYPES: [&str; 36] = [ $( $event_type ),+ ];
 
         /// 投影结果：一个登记 eventType 一个变体，负载是对应的类型化视图。
         #[derive(Debug, Clone, Serialize)]
@@ -1313,6 +1325,7 @@ view_registry! {
     "session.commands.changed" => SessionCommandsChanged(SessionCommandsChanged),
     "session.config.changed" => SessionConfigChanged(SessionConfigChanged),
     "session.created" => SessionCreated(SessionCreated),
+    "session.deleted" => SessionDeleted(SessionDeleted),
     "session.info.changed" => SessionInfoChanged(SessionInfoChanged),
     "session.mode.changed" => SessionModeChanged(SessionModeChanged),
     "session.origin.online_changed" => SessionOriginOnlineChanged(SessionOriginOnlineChanged),

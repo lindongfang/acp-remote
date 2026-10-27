@@ -3,11 +3,9 @@
  *
  * ## 载荷为什么可以是「精确列出」而不是「至少列出」
  *
- * `schemas/sync/v1/command.schema.json#/$defs/sessionCreate` 的 `payload` 只允许 `agentId`、
- * **一个**目录引用（`directoryId`（已记录目录的标识）或 `workspacePath`（绝对目录），二者恰好一个）
- * 与可选的 `createIfMissing`（显式的「目录不存在则先创建」开关）三类字段。
+ * `schemas/sync/v1/command.schema.json#/$defs/sessionCreate` 的 `payload` 只允许 `agentId` 和
+ * **一个**目录引用（`directoryId`（已记录目录的标识）或 `workspacePath`（绝对目录），二者恰好一个）。
  * 多写 `cwd`/`exportId`/`templateParams`/MCP 配置/凭据即被服务端按 `protocol.schema_invalid` 拒绝；
- * `createIfMissing` 与 `directoryId` 同时出现同样被拒（已记录的目录必然已存在）。
  * 因此本模块的 `CreateSessionRefs` 是精确形状，并配一条**运行期**断言 `assertCreateSessionRefs`：
  * 类型系统保护编译期，断言保护「从别处拼出来的对象」这一路（例如后续有人从 JSON 里读回 payload 再转发）。
  *
@@ -35,8 +33,8 @@
  *
  * `uncertain` 终态由服务端确认（`src/state/command-machine.ts` 的
  * `serverConfirmedUncertain`）。本模型把它建模成**没有时间维度**的分支：
- * 既不存时间戳也不存「稍后重试」的定时器，因此不可能随时间或重连自动清除；
- * 只有用户主动处理（`dismiss`）才会离开该分支。
+ * 既不存时间戳也不存「稍后重试」的定时器，因此不可能随时间或重连自动清除。
+ * Web 创建弹层也不提供静默关闭该警告的动作：原 requestId 与重复提交阻挡必须保留。
  */
 
 import type { CommandMessage, ErrorCode, PublicError, Uuid } from "../protocol";
@@ -44,10 +42,10 @@ import type { CommandRecord, CommandState } from "../state";
 import { isTerminalState, mayDisplayAsAccepted, shouldPresentUncertain } from "../state";
 import type { AgentCatalogEntryView } from "../domain";
 
-/** 提交载荷的两个引用：目录引用（目录标识或绝对目录）+ Agent 标识，另可带「不存在则先创建」。**只有这三项**。 */
+/** 提交载荷的两个引用：目录引用（目录标识或绝对目录）+ Agent 标识。**只有这两项**。 */
 export type CreateSessionRefs =
-  | { readonly directoryId: string; readonly agentId: string; readonly createIfMissing?: never }
-  | { readonly workspacePath: string; readonly agentId: string; readonly createIfMissing?: boolean };
+  | { readonly directoryId: string; readonly agentId: string }
+  | { readonly workspacePath: string; readonly agentId: string };
 
 /** 载荷越界：出现了相对路径、目录追加、MCP 配置或凭据字段。 */
 export class CreateSessionPayloadViolation extends Error {
@@ -57,20 +55,18 @@ export class CreateSessionPayloadViolation extends Error {
   }
 }
 
-/** 载荷允许出现的键；`agentId` 之外只允许一个目录引用键，另加可选的建目录开关。 */
-const ALLOWED_PAYLOAD_KEYS: readonly string[] = ["directoryId", "workspacePath", "agentId", "createIfMissing"];
+/** 载荷允许出现的键；`agentId` 之外只允许一个目录引用键。 */
+const ALLOWED_PAYLOAD_KEYS: readonly string[] = ["directoryId", "workspacePath", "agentId"];
 const DIRECTORY_REF_KEYS: readonly string[] = ["directoryId", "workspacePath"];
 
 /**
- * 运行期校验：载荷**恰好**是 `agentId` 加一个目录引用（可带 `createIfMissing`）。
+ * 运行期校验：载荷**恰好**是 `agentId` 加一个目录引用。
  *
  * 存在的理由不是「类型已经保证了」——它保证的是**本模块内部**写出来的对象；
  * 断言拦的是「对象来自别处」（从 JSON 读回、从缓存恢复、从 UI 事件里解出来的字段）。
  *
  * 目录引用必须**恰好一个**：同时给出目录标识与路径、或两者都不给，都在这里当场失败——
  * 与 `sync-session-create` 的「目录引用二选一」同一条口径（不猜以哪一个为准）。
- * `createIfMissing` 只在**路径**那一支成立，且缺席即假：拿目录标识加这个开关一律拒绝，
- * 不猜测调用方想建哪个目录。
  */
 export function assertCreateSessionRefs(payload: unknown): CreateSessionRefs {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
@@ -89,25 +85,16 @@ export function assertCreateSessionRefs(payload: unknown): CreateSessionRefs {
   if (typeof agentId !== "string" || agentId.length === 0) {
     throw new CreateSessionPayloadViolation("agentId 缺失或为空");
   }
-  const createIfMissing = record["createIfMissing"];
-  if (createIfMissing !== undefined && typeof createIfMissing !== "boolean") {
-    throw new CreateSessionPayloadViolation("createIfMissing 不是布尔");
-  }
+
   const key = present[0];
   const value = key === undefined ? undefined : record[key];
   if (typeof value !== "string" || value.length === 0) {
     throw new CreateSessionPayloadViolation(`${String(key)} 缺失或为空`);
   }
   if (key === "directoryId") {
-    if (createIfMissing !== undefined) {
-      throw new CreateSessionPayloadViolation("createIfMissing 与 directoryId 互斥（已记录的目录必然已存在）");
-    }
     return { directoryId: value, agentId };
   }
-  // 缺席即假：只有显式为真才把键写进载荷，因此「不建目录」那一支的键集与引入本键之前逐字相同。
-  return createIfMissing === true
-    ? { workspacePath: value, agentId, createIfMissing: true }
-    : { workspacePath: value, agentId };
+  return { workspacePath: value, agentId };
 }
 
 /**
@@ -221,7 +208,7 @@ export type DirectorySelection =
       readonly name: string;
       /** 该目录已是本机记录的目录（只影响提示口径，不改变目录引用用哪一支）。 */
       readonly registered: boolean;
-      /** 该目录在主机上还不存在，提交时要先新建它（载荷的 `createIfMissing`）。 */
+      /** 该目录来自一个尚未确认落地的新建候选；提交前仍必须由浏览结果显示其真实状态。 */
       readonly willCreate: boolean;
     };
 
@@ -597,11 +584,15 @@ export type CreateSubmissionModel =
   | { readonly kind: "uncertain"; readonly requestId: Uuid }
   | { readonly kind: "created"; readonly sessionId: Uuid };
 
-/** 提交按钮是否可点：只有 idle/失败/结果不确定（用户主动重试）时可点。 */
+/**
+ * 提交按钮是否可点。
+ *
+ * 已被接受的创建和结果不确定的创建都不能靠再点一次变成“重试”：前者已经在执行，
+ * 后者必须先保留原 requestId 供核实。只有从未派发，或已有明确失败结论时，用户才能
+ * 发起下一次动作。
+ */
 export function isSubmissionAvailable(submission: CreateSubmissionModel): boolean {
-  if (submission.kind === "creating") return false;
-  if (submission.kind === "accepted") return false;
-  return true;
+  return submission.kind === "idle" || submission.kind === "failed";
 }
 
 /**
@@ -676,12 +667,6 @@ export interface CreateSessionEntryModel {
   readonly submission: CreateSubmissionModel;
   /** 终态判定：结果不确定时为真，页面据此保留显眼提示直到用户处理。 */
   readonly uncertainRequiresUserAction: boolean;
-  /**
-   * 会话准备能力的可用性（`core.session-preparation.v1`）。
-   *
-   * 未协商时入口**明确不可用**并给出原因：MUST NOT 退回旧 `session.create` 偷偷持久化。
-   */
-  readonly preparation: { readonly available: boolean; readonly reason: string | null };
 }
 
 /** 构造创建弹层模型的输入（全部来自快照、浏览状态与命令记录）。 */
@@ -711,11 +696,6 @@ export interface CreateSessionEntryInput {
    * （{@link BrowseUnavailableReason}：未 `online` 时本机还不知道服务端支持什么）。
    */
   readonly connectionOnline: boolean;
-  /**
-   * 准备能力的可用性（由仓库按协商结果给出）。缺省视为可用——既有纯模型用例不必逐条补参数，
-   * 但仓库**总是**显式传入，因此未协商的降级在真实链路里不会被这里漏掉。
-   */
-  readonly preparation?: { readonly available: boolean; readonly reason: string | null } | undefined;
 }
 
 /** 目录块旁的分支提示（四类，见文件头）。 */
@@ -781,7 +761,6 @@ export function buildCreateSessionEntryModel(input: CreateSessionEntryInput): Cr
     agents: input.agents,
     submission,
     uncertainRequiresUserAction: submission.kind === "uncertain",
-    preparation: input.preparation ?? { available: true, reason: null },
   };
 }
 

@@ -17,24 +17,31 @@
 //! 本模块不依赖 Tokio、文件系统、进程、wire DTO 或 SQLite；它只组合 [`Clock`]/[`SessionStore`]/
 //! [`EventPublisher`]/[`SessionRelease`] 这些既有的 core 端口。
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::task::{Context, Poll, Waker};
 
 use async_trait::async_trait;
 
 use crate::broker::{pending_event, session_summary_view};
 use crate::model::{
-    Actor, CommandRecord, CommandStatus, ConflictKind, ConnectionId, EventKind, GlobalCursor,
-    InvalidValue, LocalActivity, LocalActivityFacts, PortError, PublicError, ResourceGeneration,
-    SessionId, SessionSummary, StoredPolicy, Timestamp, UnavailableKind, ViewJson,
+    Actor, CommandRecord, CommandStatus, ConflictKind, ConnectionId, EntityRef, EventKind,
+    GlobalCursor, InvalidValue, LocalActivity, LocalActivityFacts, PortError, PublicError,
+    RequestId, ResourceGeneration, RestartEmptySessionDeadline, SessionDeletionOutcome,
+    SessionDeletionWrite, SessionId, SessionSummary, StoredPolicy, Timestamp, UnavailableKind,
+    ViewJson,
 };
+
 use crate::ports::{
     ActivationAdmission, ActivationOutcome, ActivationRequest, Admission, CapacityAdmission, Clock,
     EventPublisher, LifecycleQuery, OwnedCommit, ReclaimCandidate, ReleaseOutcome, ReplayLimit,
-    SessionActivation, SessionActivityFacts, SessionQuery, SessionRelease, SessionStore,
-    ViewDecision, ViewRegistry,
+    SessionActivation, SessionActivityFacts, SessionContentFacts, SessionQuery, SessionRelease,
+    SessionStore, ViewDecision, ViewRegistry,
 };
+use crate::use_cases::UseCases;
 
 /// 查看租约的固定 v1 时长（`SYNC_PROTOCOL.md` §11.8 的「查看控制预算」：30 秒）。
 ///
@@ -131,6 +138,61 @@ pub struct LocalSessionView {
     pub activity: LocalActivity,
 }
 
+/// 单个 owned 会话的 Owner 生命周期门。
+///
+/// 该值只证明调用方当前持有某条会话的串行权。生产入口在内部获取；
+/// [`LocalSessionLifecycle::acquire_owner_lifecycle_gate`] 仅供需要把「释放 → 最终删除事务」作为一个
+/// 不可插入区间的适配层使用。
+pub struct SessionLifecycleGate {
+    session: SessionId,
+    inner: Arc<SessionGateClaim>,
+}
+
+struct SessionGateClaim {
+    inner: Arc<Mutex<SessionGateInner>>,
+}
+
+pub fn clone_gate(gate: &SessionLifecycleGate) -> SessionLifecycleGate {
+    gate.clone_lifecycle_handle()
+}
+
+impl std::fmt::Debug for SessionLifecycleGate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SessionLifecycleGate")
+            .field("session", &self.session)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SessionLifecycleGate {
+    pub fn session(&self) -> &SessionId {
+        &self.session
+    }
+
+    /// Hand the already-held lifecycle claim to an asynchronous settlement
+    /// without taking a second ticket for the same session.
+    /// Extends the same ownership claim to another future. Dropping either
+    /// handle keeps the claim until the remaining handle is dropped.
+    pub fn clone_lifecycle_handle(&self) -> Self {
+        Self {
+            session: self.session.clone(),
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+/// 扫描器生成删除意图时读取的保留状态快照。
+///
+/// 快照只在生成候选时用于建立预期；实际删除必须持有会话 gate 后再次读取并重新执行到期检查，
+/// 不能把这个一次性快照当作授权本身。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetentionSnapshot {
+    pub generation: ResourceGeneration,
+    pub retention_start: Option<Timestamp>,
+    pub delete_pending: bool,
+}
+
 /// 激活/回收失败的运行期事实。它只服务于 UI/诊断：失败**不覆盖**真实任务或交互，也不改变容量占位规则
 /// （`uncertain`/关闭失败保持占位与 `Active`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,11 +212,25 @@ enum Phase {
     Ready,
     /// 已开始回收、尚未确认释放：保持 `Active` 与占位。
     Reclaiming,
+    /// 资源已确认释放，但持久删除事务尚未成功；保留会话行供扫描器用新请求重试。
+    DeletePending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReleaseTarget {
+    Inactive,
+    DeletePending,
 }
 
 #[derive(Debug, Clone)]
 struct Entry {
     generation: ResourceGeneration,
+    /// Identifies this runtime incarnation independently of its numeric
+    /// generation, so a late async result cannot bind to a successor.
+    epoch: Option<u64>,
+    /// Epoch of the exact delete intent. A later activation can start a new
+    /// epoch on the same entry while the old request is unwinding.
+    delete_epoch: Option<u64>,
     phase: Phase,
     /// 容量名额是否被本会话占用（ready/activating/reclaiming/uncertain 都算）。
     reserved: bool,
@@ -163,26 +239,49 @@ struct Entry {
     /// 外部资源可能存在、但结果不确定（`ActivationOutcome::Uncertain` 或关闭结果不确定）。
     resource_unconfirmed: bool,
     failure: Option<LifecycleFailure>,
+    /// The runtime resource exists although creation has not yet persisted the
+    /// session row. A prompt on it is safe and must not be treated as an empty
+    /// session pending cleanup.
+    established: bool,
+    /// 启动发现时为空会话播种的资源回收标记。它不占容量，只让缺失运行资源也能进入
+    /// 到期释放与删除路径；用户重新建立该会话时清除。
+    restart_seeded: bool,
     /// 最后观察到的「全部保护解除」的时刻；`None` = 仍受保护。
     retention_start: Option<Timestamp>,
     /// 最后一次仍受保护的时刻（容量 LRU 的选择依据）。
     last_protected_at: Timestamp,
     /// 最近一次已发布/已观察的归约值（任务驱动的刷新据此判断「取值是否实际变化」）。
     last_activity: LocalActivity,
+    /// A prompt which began before its durable write may have committed.
+    /// This remains set across message-dispatch errors.
+    active_prompt: Option<RequestId>,
+    /// A durable deletion has been admitted while the lifecycle gate is held.
+    /// It blocks later prompts before their acceptance transaction.
+    delete_intent: Option<(ResourceGeneration, RequestId)>,
+    /// A retention scanner has picked this exact generation. Any later user
+    /// activity revokes this lease synchronously, before its I/O starts.
+    delete_lease: Option<ResourceGeneration>,
 }
 
 impl Entry {
     fn new(now: Timestamp) -> Self {
         Self {
             generation: ResourceGeneration::new(0),
+            epoch: None,
+            delete_epoch: None,
             phase: Phase::Inactive,
             reserved: false,
             settled: None,
             resource_unconfirmed: false,
             failure: None,
+            established: false,
+            restart_seeded: false,
             retention_start: None,
             last_protected_at: now,
             last_activity: LocalActivity::Idle,
+            active_prompt: None,
+            delete_intent: None,
+            delete_lease: None,
         }
     }
 }
@@ -212,6 +311,138 @@ struct DirectoryState {
     views: HashMap<ConnectionId, ViewState>,
 }
 
+/// 按会话分配 FIFO 门。映射只保留弱引用，避免删除后的会话永久占用进程内存。
+#[derive(Default)]
+struct SessionGates {
+    gates: Mutex<HashMap<SessionId, Weak<Mutex<SessionGateInner>>>>,
+}
+
+struct SessionGateInner {
+    locked: bool,
+    next_ticket: u64,
+    waiters: VecDeque<(u64, Waker)>,
+    granted: Option<u64>,
+}
+
+struct SessionGateWait {
+    inner: Arc<Mutex<SessionGateInner>>,
+    ticket: Option<u64>,
+}
+
+impl SessionGates {
+    async fn acquire(&self, session: SessionId) -> SessionLifecycleGate {
+        let inner = self.acquire_raw(session.clone()).await;
+        SessionLifecycleGate {
+            session,
+            inner: Arc::new(SessionGateClaim { inner }),
+        }
+    }
+
+    async fn acquire_raw(&self, session: SessionId) -> Arc<Mutex<SessionGateInner>> {
+        let inner = {
+            let mut gates = lock(&self.gates);
+            if gates.len() > 256 {
+                gates.retain(|_, gate| gate.strong_count() > 0);
+            }
+            match gates.get(&session).and_then(Weak::upgrade) {
+                Some(inner) => inner,
+                None => {
+                    let inner = Arc::new(Mutex::new(SessionGateInner {
+                        locked: false,
+                        next_ticket: 0,
+                        waiters: VecDeque::new(),
+                        granted: None,
+                    }));
+                    gates.insert(session.clone(), Arc::downgrade(&inner));
+                    inner
+                }
+            }
+        };
+        SessionGateWait {
+            inner: inner.clone(),
+            ticket: None,
+        }
+        .await;
+        inner
+    }
+}
+
+impl Future for SessionGateWait {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let inner_handle = Arc::clone(&self.inner);
+        let mut inner = lock(&inner_handle);
+        if !inner.locked {
+            inner.locked = true;
+            inner.granted = None;
+            self.ticket = None;
+            return Poll::Ready(());
+        }
+        match self.ticket {
+            Some(ticket) if inner.granted == Some(ticket) => {
+                inner.granted = None;
+                self.ticket = None;
+                Poll::Ready(())
+            }
+            Some(_) => Poll::Pending,
+            None => {
+                inner.next_ticket += 1;
+                let ticket = inner.next_ticket;
+                inner.waiters.push_back((ticket, cx.waker().clone()));
+                self.ticket = Some(ticket);
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl Drop for SessionGateWait {
+    fn drop(&mut self) {
+        let Some(ticket) = self.ticket else {
+            return;
+        };
+        let mut inner = lock(&self.inner);
+        if let Some(position) = inner
+            .waiters
+            .iter()
+            .position(|(queued, _)| *queued == ticket)
+        {
+            inner.waiters.remove(position);
+        }
+        if inner.granted == Some(ticket) {
+            match inner.waiters.pop_front() {
+                Some((next, waker)) => {
+                    inner.granted = Some(next);
+                    drop(inner);
+                    waker.wake();
+                }
+                None => {
+                    inner.locked = false;
+                    inner.granted = None;
+                }
+            }
+        }
+    }
+}
+
+impl Drop for SessionGateClaim {
+    fn drop(&mut self) {
+        let mut inner = lock(&self.inner);
+        match inner.waiters.pop_front() {
+            Some((ticket, waker)) => {
+                inner.granted = Some(ticket);
+                drop(inner);
+                waker.wake();
+            }
+            None => {
+                inner.locked = false;
+                inner.granted = None;
+            }
+        }
+    }
+}
+
 /// 本机生命周期的运行期目录 + 五个端口的 core 实现。
 ///
 /// 组合根在启动收敛完成后才开放入站查询/订阅；本类型的查询/准入入口在收敛完成前返回
@@ -219,11 +450,272 @@ struct DirectoryState {
 pub struct LocalSessionLifecycle {
     clock: Arc<dyn Clock>,
     store: Arc<dyn SessionStore>,
+    content: Arc<dyn SessionContentFacts>,
     publisher: Arc<dyn EventPublisher>,
     release: std::sync::OnceLock<Arc<dyn SessionRelease>>,
     config: Mutex<LifecycleConfig>,
     state: Mutex<DirectoryState>,
+    gates: SessionGates,
+    delete_barriers: DeleteBarriers,
     converged: AtomicBool,
+    next_epoch: AtomicU64,
+}
+
+/// A lifecycle gate plus an immutable snapshot of the session's runtime
+/// directory. A delete held on the gate can prove that no activation was
+/// granted its own gate before the tombstone transaction.
+pub struct SessionLifecycleStateGuard {
+    gate: SessionLifecycleGate,
+    generation: Option<ResourceGeneration>,
+    delete_pending: bool,
+}
+
+pub struct DeleteLease {
+    session: SessionId,
+    generation: ResourceGeneration,
+    delete_epoch: Option<u64>,
+    epoch: Option<u64>,
+    gate: Option<SessionLifecycleGate>,
+}
+
+/// Deletion processes in the order accepted, before the write executor
+/// acquires the session lifecycle gate. This preserves a user's deletion
+/// intent when a create or prompt settlement is also still pending.
+#[derive(Clone, Default)]
+pub struct DeleteBarriers {
+    barriers: Arc<Mutex<HashMap<SessionId, Arc<Mutex<DeleteBarrierState>>>>>,
+}
+
+struct DeleteBarrierState {
+    accepted: bool,
+    active: bool,
+    waiters: Vec<Waker>,
+}
+
+pub struct DeleteBarrierGuard {
+    barrier: Arc<Mutex<DeleteBarrierState>>,
+    active: bool,
+}
+
+impl DeleteBarriers {
+    pub fn accept(&self, session: &SessionId) {
+        let mut barriers = lock(&self.barriers);
+        if barriers.len() > 256 {
+            barriers.retain(|_, barrier| {
+                let state = lock(barrier);
+                state.accepted || state.active
+            });
+        }
+        match barriers.get(session) {
+            Some(barrier) => lock(barrier).accepted = true,
+            None => {
+                barriers.insert(
+                    session.clone(),
+                    Arc::new(Mutex::new(DeleteBarrierState {
+                        accepted: true,
+                        active: false,
+                        waiters: Vec::new(),
+                    })),
+                );
+            }
+        }
+    }
+
+    pub async fn enter(&self, session: &SessionId) -> Option<DeleteBarrierGuard> {
+        let barrier = {
+            let barriers = lock(&self.barriers);
+            barriers
+                .get(session)
+                .filter(|barrier| lock(barrier).accepted)
+                .cloned()
+        }?;
+        let guard = DeleteBarrierGuard {
+            barrier,
+            active: false,
+        };
+        let mut guard = guard;
+        std::future::poll_fn(|cx| {
+            let mut state = lock(&guard.barrier);
+            if !state.accepted {
+                return Poll::Ready(());
+            }
+            if state.active {
+                state.waiters.push(cx.waker().clone());
+                return Poll::Pending;
+            }
+            state.active = true;
+            Poll::Ready(())
+        })
+        .await;
+        guard.active = true;
+        Some(guard)
+    }
+}
+
+impl LocalSessionLifecycle {
+    /// Establishes ordering for a deletion which has already been accepted
+    /// durably. Its write executor will wait for an earlier create or prompt
+    /// settlement without holding the session's lifecycle gate.
+    pub fn accept_delete(&self, session: &SessionId) {
+        self.delete_barriers.accept(session);
+    }
+
+    pub fn finish_accepted_delete(&self, session: &SessionId) {
+        let Some(barrier) = lock(&self.delete_barriers.barriers).get(session).cloned() else {
+            return;
+        };
+        let wake = {
+            let mut state = lock(&barrier);
+            state.accepted = false;
+            std::mem::take(&mut state.waiters)
+        };
+        for waker in wake {
+            waker.wake();
+        }
+    }
+
+    pub async fn enter_accepted_delete(&self, session: &SessionId) -> Option<DeleteBarrierGuard> {
+        self.delete_barriers.enter(session).await
+    }
+
+    /// After the exact deletion failure is durable, releases only this
+    /// request's runtime claim. The command gate remains held by the caller
+    /// through this transition, so a retried request cannot race it.
+    pub fn fail_delete_release_current_in_gate(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Ok(());
+        };
+        if entry.phase == Phase::Reclaiming && !entry.resource_unconfirmed {
+            entry.delete_lease = None;
+            entry.resource_unconfirmed = false;
+            entry.restart_seeded = false;
+            entry.established = false;
+            entry.phase = Phase::Inactive;
+            entry.reserved = false;
+            entry.retention_start = None;
+            entry.last_protected_at = self.now();
+        }
+        Ok(())
+    }
+}
+
+impl DeleteBarrierGuard {
+    pub fn release(mut self) {
+        self.active = false;
+        let wake = {
+            let mut state = lock(&self.barrier);
+            state.active = false;
+            std::mem::take(&mut state.waiters)
+        };
+        for waker in wake {
+            waker.wake();
+        }
+    }
+}
+
+impl Drop for DeleteBarrierGuard {
+    fn drop(&mut self) {
+        if self.active {
+            self.active = false;
+            let wake = {
+                let mut state = lock(&self.barrier);
+                if state.active {
+                    state.active = false;
+                }
+                std::mem::take(&mut state.waiters)
+            };
+            for waker in wake {
+                waker.wake();
+            }
+        }
+    }
+}
+
+/// A prompt claim which must be released by every failed acceptance path.
+pub struct PromptClaim<'a> {
+    lifecycle: &'a LocalSessionLifecycle,
+    session: SessionId,
+    generation: ResourceGeneration,
+    request: RequestId,
+    armed: bool,
+    committed: bool,
+    newly_reserved: bool,
+}
+
+impl PromptClaim<'_> {
+    pub fn new(
+        lifecycle: &LocalSessionLifecycle,
+        session: SessionId,
+        generation: ResourceGeneration,
+        request: RequestId,
+        newly_reserved: bool,
+    ) -> PromptClaim<'_> {
+        PromptClaim {
+            lifecycle,
+            session,
+            generation,
+            request,
+            armed: true,
+            committed: false,
+            newly_reserved,
+        }
+    }
+
+    pub fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    pub fn generation(&self) -> ResourceGeneration {
+        self.generation
+    }
+
+    pub fn committed(&mut self) {
+        self.committed = true;
+    }
+
+    pub fn is_committed(&self) -> bool {
+        self.committed
+    }
+}
+
+impl Drop for PromptClaim<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.lifecycle
+            .clear_prompt_claim(&self.session, self.generation, &self.request);
+        if self.newly_reserved && !self.committed {
+            let mut state = lock(&self.lifecycle.state);
+            if let Some(entry) = state.entries.get_mut(&self.session)
+                && entry.generation == self.generation
+                && entry.phase == Phase::Inactive
+                && !entry.resource_unconfirmed
+            {
+                entry.reserved = false;
+            }
+        }
+    }
+}
+
+impl SessionLifecycleStateGuard {
+    pub fn generation(&self) -> Option<ResourceGeneration> {
+        self.generation
+    }
+
+    pub fn delete_pending(&self) -> bool {
+        self.delete_pending
+    }
+
+    pub fn gate(&self) -> &SessionLifecycleGate {
+        &self.gate
+    }
 }
 
 impl LocalSessionLifecycle {
@@ -231,17 +723,22 @@ impl LocalSessionLifecycle {
     pub fn new(
         clock: Arc<dyn Clock>,
         store: Arc<dyn SessionStore>,
+        content: Arc<dyn SessionContentFacts>,
         publisher: Arc<dyn EventPublisher>,
         config: LifecycleConfig,
     ) -> Self {
         Self {
             clock,
             store,
+            content,
             publisher,
             release: std::sync::OnceLock::new(),
             config: Mutex::new(config),
             state: Mutex::new(DirectoryState::default()),
+            gates: SessionGates::default(),
+            delete_barriers: DeleteBarriers::default(),
             converged: AtomicBool::new(false),
+            next_epoch: AtomicU64::new(1),
         }
     }
 
@@ -276,6 +773,42 @@ impl LocalSessionLifecycle {
         self.clock.now()
     }
 
+    /// 取得某条 owned 会话的 Owner 生命周期门。
+    ///
+    /// 组合层的「真实释放 + 最终删除事务」必须持有同一个 [`SessionLifecycleGate`] 直到事务返回，
+    /// 否则释放完成后到达的 `session.view` 或 `session.resume` 可能看到尚可读的空会话并重新占用资源。
+    pub async fn acquire_owner_lifecycle_gate(&self, session: &SessionId) -> SessionLifecycleGate {
+        self.gates.acquire(session.clone()).await
+    }
+
+    /// 取得删除门和同一个运行时目录快照。调用方必须把这个 guard 一直持有到删除事务结束，
+    /// 才能防止资源释放之后的新激活穿插进来。
+    pub async fn acquire_owner_lifecycle_state(
+        &self,
+        session: &SessionId,
+    ) -> SessionLifecycleStateGuard {
+        let gate = self.acquire_owner_lifecycle_gate(session).await;
+        let entry = lock(&self.state).entries.get(session).cloned();
+        SessionLifecycleStateGuard {
+            gate,
+            generation: entry
+                .as_ref()
+                .filter(|entry| entry.reserved || entry.generation.get() > 0)
+                .map(|entry| entry.generation),
+            delete_pending: entry
+                .as_ref()
+                .is_some_and(|entry| entry.phase == Phase::DeletePending),
+        }
+    }
+
+    async fn ensure_session_visible(&self, session: &SessionId) -> Result<(), PortError> {
+        if self.store.load(session).await?.is_some() {
+            Ok(())
+        } else {
+            Err(PortError::NotFound(EntityRef::Session(session.clone())))
+        }
+    }
+
     // -------------------------------------------------------------------------------------
     // §4 用例面：每个入口先取 actor，再委托同名端口方法（授权仍由命令路径的 broker 判定）。
     // -------------------------------------------------------------------------------------
@@ -286,15 +819,20 @@ impl LocalSessionLifecycle {
         actor: &Actor,
         request: ActivationRequest,
     ) -> Result<ActivationPlan, PortError> {
+        let gate = self.acquire_owner_lifecycle_gate(&request.session).await;
+        self.ensure_session_visible(&request.session).await?;
         let plan = self.plan_activation(&request).await?;
         if !matches!(plan, ActivationPlan::CapacityExceeded) {
             return Ok(plan);
         }
+        drop(gate);
         // 满额先按 LRU 回收一个**未受保护**的 ready 会话；只有适配器确认 `Released` 才重试准入一次。
         // 拒绝前回收是容量策略的一半（`sessions.idle_timeout_ms = 0` 只关闭按时间回收，不影响这里）。
         if !self.reclaim_capacity_once(actor).await? {
             return Ok(plan);
         }
+        let _gate = self.acquire_owner_lifecycle_gate(&request.session).await;
+        self.ensure_session_visible(&request.session).await?;
         self.plan_activation(&request).await
     }
 
@@ -309,11 +847,186 @@ impl LocalSessionLifecycle {
             >= max
     }
 
+    /// Read facts outside the lifecycle gate so a yielding store operation
+    /// cannot deadlock against acceptance on the same session.
+    pub async fn session_activity_facts(
+        &self,
+        session: &SessionId,
+    ) -> Result<SessionActivityFacts, PortError> {
+        self.store.session_activity(session).await
+    }
+
+    /// Snapshot the generation for diagnostics and tests without exposing runtime
+    /// mutation through an unlockable accessor.
+    pub fn resource_generation(&self, session: &SessionId) -> Option<ResourceGeneration> {
+        lock(&self.state)
+            .entries
+            .get(session)
+            .filter(|entry| entry.reserved || entry.generation.get() > 0)
+            .map(|entry| entry.generation)
+    }
+
+    pub fn claim_delete_lease_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<DeleteLease, PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        };
+        if entry.generation != generation
+            || entry.phase != Phase::Reclaiming
+            || entry.delete_intent.is_none()
+            || entry.delete_lease.is_some()
+            || entry.active_prompt.is_some()
+        {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        entry.delete_lease = Some(generation);
+        entry.active_prompt = None;
+        Ok(DeleteLease {
+            session: session.clone(),
+            generation,
+            delete_epoch: entry.delete_epoch,
+            epoch: entry.epoch,
+            gate: None,
+        })
+    }
+
+    pub fn has_delete_lease_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<bool, PortError> {
+        self.ensure_gate(gate, session)?;
+        Ok(lock(&self.state).entries.get(session).is_some_and(|entry| {
+            entry.generation == generation
+                && entry.phase == Phase::Reclaiming
+                && entry.delete_lease == Some(generation)
+        }))
+    }
+
+    pub async fn release_session_for_delete(
+        &self,
+        lease: &DeleteLease,
+        actor: &Actor,
+        session: SessionId,
+        generation: ResourceGeneration,
+        reserved_at_claim: bool,
+        now: Timestamp,
+    ) -> Result<ReleaseOutcome, PortError> {
+        let gate = match lease.gate.as_ref() {
+            Some(gate) => gate.clone_lifecycle_handle(),
+            None => self.acquire_owner_lifecycle_gate(&session).await,
+        };
+        self.ensure_gate(&gate, &session)?;
+        if lease.session != session
+            || lease.generation != generation
+            || lock(&self.state).entries.get(&session).is_none_or(|entry| {
+                entry.epoch != lease.epoch || entry.delete_epoch != lease.delete_epoch
+            })
+        {
+            return Ok(ReleaseOutcome::Failed);
+        }
+        if !self.has_delete_lease_locked(&gate, &session, generation)? {
+            return Ok(ReleaseOutcome::Failed);
+        }
+        if !reserved_at_claim
+            && let Some(entry) = lock(&self.state).entries.get_mut(&session)
+            && entry.generation == generation
+            && entry.phase == Phase::Inactive
+            && !entry.reserved
+            && entry.restart_seeded
+            && entry.delete_lease == Some(generation)
+        {
+            entry.phase = Phase::Reclaiming;
+            entry.reserved = true;
+        }
+        let outcome = self
+            .release_session_for_delete_locked(&gate, actor, session, generation, now)
+            .await?;
+        drop(gate);
+        Ok(outcome)
+    }
+
+    pub fn continue_deletion_after_release_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        outcome: ReleaseOutcome,
+        now: Timestamp,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Ok(());
+        };
+        if entry.generation != generation || entry.delete_lease != Some(generation) {
+            return Ok(());
+        }
+        entry.delete_lease = None;
+        entry.last_protected_at = now;
+        if !matches!(
+            outcome,
+            ReleaseOutcome::Released | ReleaseOutcome::AlreadyReleased
+        ) {
+            entry.phase = match outcome {
+                ReleaseOutcome::Failed => Phase::Inactive,
+                ReleaseOutcome::Released => Phase::DeletePending,
+                ReleaseOutcome::AlreadyReleased => entry.phase,
+                ReleaseOutcome::Uncertain => Phase::Ready,
+            };
+            entry.resource_unconfirmed = outcome == ReleaseOutcome::Uncertain;
+            entry.reserved = outcome == ReleaseOutcome::Uncertain;
+            entry.restart_seeded = false;
+            entry.retention_start = None;
+        }
+        Ok(())
+    }
+
+    /// Ends a failed prompt claim without changing content or runtime
+    /// capacity. Activation and deletion retry after they observe the lease.
+    pub fn discard_delete_lease_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        if let Some(entry) = lock(&self.state).entries.get_mut(session)
+            && entry.generation == generation
+            && entry.phase == Phase::Reclaiming
+            && !entry.reserved
+            && entry.resource_unconfirmed
+        {
+            entry.phase = Phase::Inactive;
+            entry.reserved = false;
+            entry.delete_lease = None;
+        }
+        Ok(())
+    }
+
+    pub async fn finish_delete_in_lifecycle_gate(
+        &self,
+        core: &UseCases,
+        gate: SessionLifecycleGate,
+        write: SessionDeletionWrite,
+    ) -> Result<SessionDeletionOutcome, PortError> {
+        self.ensure_gate(&gate, write.session())?;
+        core.finish_delete_in_held_lifecycle_gate_locked(self, gate, write)
+            .await
+    }
+
     /// 容量满时回收一个安全候选并交还名额；返回是否真的释放成功。
     ///
     /// 没有释放端口（未接线/纯目录测试）、没有安全候选、或释放结果不是 `Released` 时返回 `false`：
     /// 调用方据此保留原来的容量拒绝，不伪造「已腾出名额」。
-    async fn reclaim_capacity_once(&self, actor: &Actor) -> Result<bool, PortError> {
+    pub(crate) async fn reclaim_capacity_once(&self, actor: &Actor) -> Result<bool, PortError> {
         if self.release.get().is_none() {
             return Ok(false);
         }
@@ -322,7 +1035,7 @@ impl LocalSessionLifecycle {
             return Ok(false);
         };
         Ok(matches!(
-            self.release_reclaim_candidate(actor, &candidate, self.now())
+            self.release_capacity_candidate(actor, &candidate, self.now())
                 .await?,
             ReleaseOutcome::Released
         ))
@@ -340,16 +1053,18 @@ impl LocalSessionLifecycle {
         session: SessionId,
         now: Timestamp,
     ) -> Result<ActivationPlan, PortError> {
-        self.ensure_converged()?;
-        let plan = self.begin_establishment(&session, now)?;
+        let gate = self.acquire_owner_lifecycle_gate(&session).await;
+        let plan = self.begin_created_session_in_gate(&gate, &session, now)?;
         if !matches!(plan, ActivationPlan::CapacityExceeded) {
             return Ok(plan);
         }
         // 与恢复同一口径：满额先回收一个未受保护的 ready 会话，`Released` 后重试准入一次。
+        drop(gate);
         if !self.reclaim_capacity_once(actor).await? {
             return Ok(plan);
         }
-        self.begin_establishment(&session, self.now())
+        let gate = self.acquire_owner_lifecycle_gate(&session).await;
+        self.begin_created_session_in_gate(&gate, &session, self.now())
     }
 
     /// 完成一次激活（`session.resume` 的终态/恢复适配器回调）。
@@ -360,7 +1075,105 @@ impl LocalSessionLifecycle {
         generation: ResourceGeneration,
         outcome: ActivationOutcome,
     ) -> Result<(), PortError> {
-        self.settle(session, generation, outcome).await
+        let _gate = self.acquire_owner_lifecycle_gate(&session).await;
+        self.settle_if_visible(session, generation, outcome).await
+    }
+
+    async fn settle_if_visible(
+        &self,
+        session: SessionId,
+        generation: ResourceGeneration,
+        outcome: ActivationOutcome,
+    ) -> Result<(), PortError> {
+        if self.store.load(&session).await?.is_none() {
+            // 删除事务提交后，旧 generation 的迟到结果只能清理运行期残留，不能复活 tombstone。
+            lock(&self.state).entries.remove(&session);
+            return Ok(());
+        }
+        self.settle_impl(session, generation, outcome).await
+    }
+
+    /// 在 `session.create` 的事务提交前标记本代资源为 Ready。
+    ///
+    /// 创建命令的会话行与终态在同一事务里落盘；适配层需要在那次提交成功后立即广播结果。若等到广播
+    /// 之后才把生命周期改为 Ready，实时摘要会在两件事实之间短暂投影为 `Idle`。本入口只更新内存，
+    /// 不写事件；事务失败时调用方必须用 [`Self::rollback_created_session_ready`] 恢复本代。
+    pub fn settle_created_session_ready(
+        &self,
+        _actor: &Actor,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<(), PortError> {
+        self.settle_created_session_ready_locked(session, generation)
+    }
+
+    /// 在已持有的同一会话生命周期门内，于创建最终事务前标记 Ready。
+    pub fn settle_created_session_ready_locked(
+        &self,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<(), PortError> {
+        self.ensure_converged()?;
+        let now = self.now();
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Ok(());
+        };
+        if entry.generation != generation || entry.phase != Phase::Activating {
+            return Ok(());
+        }
+        entry.phase = Phase::Ready;
+        entry.established = true;
+        entry.reserved = true;
+        entry.resource_unconfirmed = false;
+        entry.failure = None;
+        entry.settled = Some(generation);
+        entry.last_protected_at = now.clone();
+        entry.retention_start = Some(now);
+        Ok(())
+    }
+
+    /// 删除最终事务已接受本代：同时结束删除态与资源占位。
+    /// 调用方持有同一会话的 [`SessionLifecycleGate`]。
+    pub fn complete_deleted_session_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        if state.entries.get(session).is_some_and(|entry| {
+            entry.phase == Phase::DeletePending && entry.generation == generation
+        }) {
+            state.entries.remove(session);
+        }
+        Ok(())
+    }
+
+    /// 撤销尚未落盘成功的创建 Ready 标记；只处理同一资源代，迟到的回滚不得影响新代。
+    /// 仅撤销同一代、尚未落库的创建 Ready 标记。调用方须持有创建会话的门。
+    pub fn rollback_created_session_ready_locked(
+        &self,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) {
+        let now = self.now();
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return;
+        };
+        if entry.generation != generation || entry.phase != Phase::Ready {
+            return;
+        }
+        entry.phase = Phase::Activating;
+        entry.established = false;
+        entry.reserved = true;
+        entry.resource_unconfirmed = false;
+        entry.failure = None;
+        entry.settled = None;
+        entry.retention_start = None;
+        entry.last_protected_at = now;
     }
 
     pub async fn declare_view(
@@ -371,7 +1184,38 @@ impl LocalSessionLifecycle {
         view_version: u64,
         now: Timestamp,
     ) -> Result<ViewDecision, PortError> {
-        self.declare(connection, session, view_version, now).await
+        loop {
+            let locked_session = match session.as_ref() {
+                Some(session) => Some(session.clone()),
+                None => lock(&self.state)
+                    .views
+                    .get(&connection)
+                    .and_then(|view| view.session.clone()),
+            };
+            let gate = match locked_session.as_ref() {
+                Some(session) => Some(self.acquire_owner_lifecycle_gate(session).await),
+                None => None,
+            };
+            if let Some(session) = session.as_ref() {
+                self.ensure_session_visible(session).await?;
+            } else if let Some(locked_session) = locked_session.as_ref() {
+                // 等待门期间连接可能切到别的会话；只让仍与取得门时一致的声明继续。
+                let unchanged = lock(&self.state)
+                    .views
+                    .get(&connection)
+                    .and_then(|view| view.session.as_ref())
+                    == Some(locked_session);
+                if !unchanged {
+                    drop(gate);
+                    continue;
+                }
+            }
+            let decision = self
+                .declare_impl(connection, session, view_version, now)
+                .await?;
+            drop(gate);
+            return Ok(decision);
+        }
     }
 
     pub async fn renew_view(
@@ -381,7 +1225,29 @@ impl LocalSessionLifecycle {
         view_version: u64,
         now: Timestamp,
     ) -> Result<ViewDecision, PortError> {
-        self.renew(connection, view_version, now).await
+        loop {
+            let Some(session) = lock(&self.state)
+                .views
+                .get(&connection)
+                .and_then(|view| view.session.clone())
+            else {
+                return self.renew_impl(connection, view_version, now).await;
+            };
+            let gate = self.acquire_owner_lifecycle_gate(&session).await;
+            let unchanged = lock(&self.state)
+                .views
+                .get(&connection)
+                .and_then(|view| view.session.as_ref())
+                == Some(&session);
+            if !unchanged {
+                drop(gate);
+                continue;
+            }
+            self.ensure_session_visible(&session).await?;
+            let decision = self.renew_impl(connection, view_version, now).await;
+            drop(gate);
+            return decision;
+        }
     }
 
     pub async fn release_view(
@@ -390,7 +1256,381 @@ impl LocalSessionLifecycle {
         connection: ConnectionId,
         now: Timestamp,
     ) -> Result<(), PortError> {
-        self.release_viewer_impl(connection, now).await
+        loop {
+            let session = lock(&self.state)
+                .views
+                .get(&connection)
+                .and_then(|view| view.session.clone());
+            let Some(session) = session else {
+                lock(&self.state).views.remove(&connection);
+                return Ok(());
+            };
+            let gate = self.acquire_owner_lifecycle_gate(&session).await;
+            let unchanged = lock(&self.state)
+                .views
+                .get(&connection)
+                .and_then(|view| view.session.as_ref())
+                == Some(&session);
+            if !unchanged {
+                drop(gate);
+                continue;
+            }
+            let result = self.release_viewer_impl(connection, now).await;
+            drop(gate);
+            return result;
+        }
+    }
+
+    /// 会话存在正在收尾的删除事务或输入尚在受理时拒绝激活。调用方须持有该会话的生命周期门。
+    pub fn ensure_no_delete_in_progress_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        if state.entries.get(session).is_some_and(|entry| {
+            entry.phase == Phase::DeletePending
+                || entry.delete_intent.is_some()
+                || entry.active_prompt.is_some()
+        }) {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        if let Some(entry) = state.entries.get_mut(session) {
+            entry.delete_lease = None;
+        }
+        Ok(())
+    }
+
+    /// Marks this claim as the one-time prompt which takes an empty session
+    /// out of its deletion grace period. The marker is cleared only by the
+    /// durable prompt commit, so a failed acceptance cannot later remove a
+    /// concurrently protected session.
+    pub(crate) fn begin_prompt_in_gate(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        request: RequestId,
+    ) -> Result<ResourceGeneration, PortError> {
+        self.ensure_gate(gate, session)?;
+        self.ensure_no_delete_in_progress_locked(gate, session)?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        };
+        entry.active_prompt = Some(request);
+        entry.last_protected_at = self.now();
+        entry.retention_start = None;
+        Ok(entry.generation)
+    }
+
+    /// Applies protection only when the prompt commit which observed this
+    /// generation is the pending one. A late commit cannot claim a newer one.
+    pub(crate) fn complete_prompt_in_gate(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        request: &RequestId,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Ok(());
+        };
+        if entry.active_prompt.as_ref() == Some(request) {
+            entry.active_prompt = None;
+            entry.last_protected_at = self.now();
+            entry.retention_start = None;
+        }
+        Ok(())
+    }
+
+    /// Finishes a committed prompt only if the exact delete intent it
+    /// replaced is still current. A newer deletion request keeps its result.
+    pub fn complete_prompt_after_delete_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        request: &RequestId,
+        delete_generation: Option<ResourceGeneration>,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Ok(());
+        };
+        if let Some(generation) = delete_generation
+            && entry
+                .delete_intent
+                .as_ref()
+                .is_some_and(|(intent_generation, _)| *intent_generation == generation)
+        {
+            entry.delete_intent = None;
+            entry.delete_epoch = None;
+            if entry.phase == Phase::DeletePending && entry.generation == generation {
+                entry.phase = Phase::Inactive;
+                entry.reserved = false;
+                entry.restart_seeded = false;
+                entry.retention_start = None;
+            }
+        }
+        if entry.active_prompt.as_ref() == Some(request) {
+            entry.active_prompt = None;
+            entry.last_protected_at = self.now();
+            entry.retention_start = None;
+        }
+        Ok(())
+    }
+
+    /// A prompt rejected by deletion owns only its provisional runtime claim;
+    /// end that claim and its exact delete intent together.
+    pub fn abandon_prompt_after_delete_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        request: &RequestId,
+        delete_generation: Option<ResourceGeneration>,
+    ) -> Result<(), PortError> {
+        self.clear_prompt_claim(
+            session,
+            delete_generation.ok_or(PortError::InvalidRequest(
+                "prompt cleanup is only for a lifecycle prompt claim",
+            ))?,
+            request,
+        );
+        if let Some(generation) = delete_generation {
+            self.complete_prompt_after_delete_locked(gate, session, request, Some(generation))?;
+        }
+        Ok(())
+    }
+
+    pub fn clear_prompt_claim(
+        &self,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        request: &RequestId,
+    ) {
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return;
+        };
+        if entry.generation != generation {
+            return;
+        }
+        if entry.active_prompt.as_ref() == Some(request) {
+            entry.active_prompt = None;
+        }
+        if entry.phase == Phase::Reclaiming
+            && !entry.reserved
+            && entry.resource_unconfirmed
+            && entry.delete_lease.is_none()
+        {
+            entry.phase = Phase::Inactive;
+            entry.reserved = false;
+        }
+    }
+
+    /// Returns true when a delayed release is still allowed to close exactly
+    /// this runtime incarnation.
+    pub fn delete_release_lease_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        epoch: Option<u64>,
+        delete_epoch: u64,
+    ) -> Result<bool, PortError> {
+        self.ensure_gate(gate, session)?;
+        Ok(lock(&self.state).entries.get(session).is_some_and(|entry| {
+            entry.generation == generation
+                && entry.epoch == epoch
+                && entry.delete_epoch == Some(delete_epoch)
+                && entry.phase == Phase::Reclaiming
+                && entry.delete_lease == Some(generation)
+        }))
+    }
+
+    pub fn delete_epoch_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        request: &RequestId,
+    ) -> Result<Option<u64>, PortError> {
+        self.ensure_gate(gate, session)?;
+        Ok(lock(&self.state).entries.get(session).and_then(|entry| {
+            entry
+                .delete_intent
+                .as_ref()
+                .and_then(|(intent_generation, intent_request)| {
+                    (*intent_generation == generation && intent_request == request)
+                        .then_some(entry.delete_epoch)
+                        .flatten()
+                })
+        }))
+    }
+
+    pub fn delete_epoch_is_current_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        request: &RequestId,
+        delete_epoch: u64,
+    ) -> Result<bool, PortError> {
+        self.ensure_gate(gate, session)?;
+        Ok(lock(&self.state).entries.get(session).is_some_and(|entry| {
+            entry.generation == generation
+                && entry.delete_epoch == Some(delete_epoch)
+                && entry.delete_intent.as_ref().is_some_and(
+                    |(intent_generation, intent_request)| {
+                        *intent_generation == generation && intent_request == request
+                    },
+                )
+        }))
+    }
+
+    /// Passes an already-held lifecycle claim to every step of one deletion.
+    /// The adapter may await Agent I/O while holding it; activation therefore
+    /// waits for the final tombstone instead of entering the release window.
+    pub fn hold_delete_lease_gate(
+        &self,
+        lease: &mut DeleteLease,
+        gate: SessionLifecycleGate,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(&gate, &lease.session)?;
+        if lease.gate.is_some() {
+            return Err(PortError::InvalidRequest(
+                "the delete lease already holds a lifecycle gate",
+            ));
+        }
+        lease.gate = Some(gate);
+        Ok(())
+    }
+
+    /// Releases a failed deletion's runtime claim while the adapter still
+    /// owns the lifecycle gate, and publishes its durable failed terminal.
+    #[allow(clippy::too_many_arguments)] // Binds the exact request to the resource generation under the held gate.
+    pub async fn finish_failed_delete_in_held_lifecycle_gate_locked(
+        &self,
+        core: &UseCases,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        actor: &Actor,
+        request: &RequestId,
+        _generation: ResourceGeneration,
+        _delete_epoch: Option<u64>,
+        error: PublicError,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        core.settle_delete_in_held_lifecycle_gate_locked(
+            self,
+            gate.clone_lifecycle_handle(),
+            session,
+            actor,
+            request,
+            CommandStatus::Failed,
+            Some(error),
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub fn runtime_epoch_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<Option<u64>, PortError> {
+        self.ensure_gate(gate, session)?;
+        Ok(lock(&self.state).entries.get(session).and_then(|entry| {
+            (entry.generation == generation)
+                .then_some(entry.epoch)
+                .flatten()
+        }))
+    }
+
+    pub fn bind_delete_epoch_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        request: RequestId,
+    ) -> Result<u64, PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        };
+        if let Some((intent_generation, intent_request)) = &entry.delete_intent {
+            if *intent_generation == generation && intent_request == &request {
+                return entry.delete_epoch.ok_or(PortError::Corrupt(
+                    "a bound delete intent must retain its delete epoch",
+                ));
+            }
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        if entry.phase == Phase::DeletePending || entry.generation != generation {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        entry.active_prompt = None;
+        entry.delete_intent = Some((generation, request));
+        let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed);
+        entry.delete_epoch = Some(epoch);
+        entry.last_protected_at = self.now();
+        entry.retention_start = None;
+        Ok(epoch)
+    }
+
+    pub fn has_delete_intent(&self, session: &SessionId) -> bool {
+        lock(&self.state)
+            .entries
+            .get(session)
+            .is_some_and(|entry| entry.delete_intent.is_some())
+    }
+
+    pub fn release_prompt_claim(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        request: &RequestId,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        self.clear_prompt_claim(session, generation, request);
+        Ok(())
+    }
+
+    /// Checks deletion and capacity. The broker rechecks the delete intent
+    /// after its asynchronous read and before the durable prompt commit.
+    pub fn reserve_owner_prompt_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        now: Timestamp,
+    ) -> Result<Option<(ResourceGeneration, bool)>, PortError> {
+        self.ensure_gate(gate, session)?;
+        self.ensure_no_delete_in_progress_locked(gate, session)?;
+        let max = self.config().max_active_sessions() as usize;
+        let mut state = lock(&self.state);
+        let reserved = state
+            .entries
+            .values()
+            .filter(|entry| entry.reserved)
+            .count();
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Ok(None);
+        };
+        let newly_reserved = !entry.reserved;
+        if !entry.reserved {
+            if reserved >= max {
+                return Err(PortError::Unavailable(UnavailableKind::Busy));
+            }
+            entry.reserved = true;
+        }
+        entry.last_protected_at = now;
+        entry.retention_start = None;
+        Ok(Some((entry.generation, newly_reserved)))
     }
 
     pub async fn reserve_capacity(
@@ -409,7 +1649,7 @@ impl LocalSessionLifecycle {
         generation: ResourceGeneration,
         now: Timestamp,
     ) -> Result<(), PortError> {
-        CapacityAdmission::release(self, session, generation, now).await
+        self.release_capacity_impl(session, generation, now).await
     }
 
     pub async fn reclaim_candidate(
@@ -424,27 +1664,103 @@ impl LocalSessionLifecycle {
     ///
     /// 组合根持有容量候选/释放路径时用它取得与候选同一代的标识；查看者、租约与资源代都不出现在
     /// 快照或事件里，因此这是唯一的读取入口。
-    pub fn resource_generation(&self, session: &SessionId) -> Option<ResourceGeneration> {
-        lock(&self.state)
+    pub fn resource_generation_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+    ) -> Result<Option<ResourceGeneration>, PortError> {
+        self.ensure_gate(gate, session)?;
+        Ok(lock(&self.state)
             .entries
             .get(session)
             .filter(|entry| entry.reserved || entry.generation.get() > 0)
-            .map(|entry| entry.generation)
+            .map(|entry| entry.generation))
     }
 
-    /// 按容量/保留候选执行一次逐会话释放：资源代由 core 的目录给出，组合根不自行猜测。
+    /// 读取保留状态快照。调用方仍必须在取得同一会话 gate 后通过
+    /// [`Self::retention_snapshot_locked`] 复核。
+    pub fn retention_snapshot(&self, session: &SessionId) -> Option<RetentionSnapshot> {
+        lock(&self.state)
+            .entries
+            .get(session)
+            .map(|entry| RetentionSnapshot {
+                generation: entry.generation,
+                retention_start: entry.retention_start.clone(),
+                delete_pending: entry.phase == Phase::DeletePending,
+            })
+    }
+
+    /// 在调用方已取得的 gate 内复核保留状态快照。
+    pub fn retention_snapshot_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+    ) -> Result<Option<RetentionSnapshot>, PortError> {
+        self.ensure_gate(gate, session)?;
+        Ok(self.retention_snapshot(session))
+    }
+
+    /// 在调用方已取得的 gate 内重新判断保留候选是否仍然到期。
     ///
-    /// 只有 `Released` 交还名额并把归约收敛为 `Idle`；`Failed`/`Uncertain` 保持 `Active` 与占位。
-    pub async fn release_reclaim_candidate(
+    /// 该检查同时观察查看者、未结束任务与未解决交互；因此候选生成后的激活或保护变化会使旧删除
+    /// 意图失效。`Reclaiming` 会直接成为重试候选，后续每次扫描都必须使用新的命令 requestId。
+    pub async fn retention_candidate_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        now: &Timestamp,
+    ) -> Result<Option<ReclaimCandidate>, PortError> {
+        self.ensure_gate(gate, session)?;
+        self.observe_and_due(session, now, Some(self.config()))
+            .await
+    }
+
+    /// 按保留期候选执行一次逐会话释放。
+    ///
+    /// 候选只是扫描时的快照；进入 Owner 门后必须重新判断当前保留期仍未到期、查看者与任务保护仍全部
+    /// 解除。这样候选生成后被激活、查看或写入任务时，旧候选不会越权释放。
+    pub async fn release_retention_candidate(
         &self,
         actor: &Actor,
         candidate: &ReclaimCandidate,
         now: Timestamp,
     ) -> Result<ReleaseOutcome, PortError> {
-        let Some(generation) = self.resource_generation(&candidate.session) else {
+        self.release_candidate_checked(actor, candidate, now, Some(self.config()))
+            .await
+    }
+
+    /// 按容量候选执行一次逐会话释放。容量回收不受保留期限制，但仍必须在门内复核查看者与任务保护。
+    pub async fn release_capacity_candidate(
+        &self,
+        actor: &Actor,
+        candidate: &ReclaimCandidate,
+        now: Timestamp,
+    ) -> Result<ReleaseOutcome, PortError> {
+        self.release_candidate_checked(actor, candidate, now, None)
+            .await
+    }
+
+    async fn release_candidate_checked(
+        &self,
+        actor: &Actor,
+        candidate: &ReclaimCandidate,
+        now: Timestamp,
+        timeout: Option<LifecycleConfig>,
+    ) -> Result<ReleaseOutcome, PortError> {
+        let gate = self.acquire_owner_lifecycle_gate(&candidate.session).await;
+        let Some(current) = self
+            .observe_and_due(&candidate.session, &now, timeout)
+            .await?
+        else {
             return Ok(ReleaseOutcome::Failed);
         };
-        self.release_session(actor, candidate.session.clone(), generation, now)
+        if current.session != candidate.session {
+            return Ok(ReleaseOutcome::Failed);
+        }
+        let Some(generation) = self.resource_generation_locked(&gate, &candidate.session)? else {
+            return Ok(ReleaseOutcome::Failed);
+        };
+        self.release_session_locked(&gate, actor, candidate.session.clone(), generation, now)
             .await
     }
 
@@ -454,15 +1770,432 @@ impl LocalSessionLifecycle {
     /// `Failed`/`Uncertain`；已被另一次调用确认 `Released` 的会话不会因迟到的失败结果回到占位状态。
     pub async fn release_session(
         &self,
+        actor: &Actor,
+        session: SessionId,
+        generation: ResourceGeneration,
+        now: Timestamp,
+    ) -> Result<ReleaseOutcome, PortError> {
+        let _gate = self.acquire_owner_lifecycle_gate(&session).await;
+        self.release_session_locked(&_gate, actor, session, generation, now)
+            .await
+    }
+
+    /// 在调用方已取得的 Owner 生命周期门内执行释放。
+    ///
+    /// `gate` 必须属于同一条会话。删除适配层用它把真实释放和后续 tombstone 事务放在同一个不可插入区间。
+    pub async fn release_session_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        actor: &Actor,
+        session: SessionId,
+        generation: ResourceGeneration,
+        now: Timestamp,
+    ) -> Result<ReleaseOutcome, PortError> {
+        if gate.session() != &session {
+            return Err(PortError::InvalidRequest(
+                "the lifecycle gate belongs to another session",
+            ));
+        }
+        self.release_session_in_gate(actor, session, generation, now)
+            .await
+    }
+
+    /// 删除路径的专用释放入口。
+    ///
+    /// 首次调用在适配器确认 `Released` 后进入 [`Phase::DeletePending`]；后续调用看到同一代
+    /// `DeletePending` 时直接返回 `Released`，不会再次关闭已经释放的资源。
+    /// Establishes the durable deletion intent while the same lifecycle gate
+    /// covers eligibility, command admission and block on all new prompts.
+    pub fn begin_delete_intent_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        request: RequestId,
+        allow_existing: bool,
+    ) -> Result<(), PortError> {
+        self.bind_delete_intent_locked(gate, session, generation, request, allow_existing)
+            .map(|_| ())
+    }
+
+    /// Binds a delete request to the exact runtime generation or returns the
+    /// existing intent only when it belongs to the same request.
+    ///
+    /// A local lifecycle is runtime-only. Startup recovery cannot match an
+    /// in-memory intent from a previous process, so each new request receives
+    /// its own intent and delete epoch.
+    pub fn bind_delete_intent_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        request: RequestId,
+        _allow_existing: bool,
+    ) -> Result<(ResourceGeneration, RequestId), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        };
+        if let Some((intent_generation, intent_request)) = &entry.delete_intent {
+            if *intent_generation == generation && intent_request == &request {
+                return Ok((*intent_generation, intent_request.clone()));
+            }
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        if entry.generation != generation {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        entry.delete_intent = Some((generation, request.clone()));
+        entry.delete_epoch = Some(self.next_epoch.fetch_add(1, Ordering::Relaxed));
+        Ok((generation, request))
+    }
+
+    pub fn delete_intent_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+    ) -> Result<Option<(ResourceGeneration, RequestId)>, PortError> {
+        self.ensure_gate(gate, session)?;
+        Ok(lock(&self.state)
+            .entries
+            .get(session)
+            .and_then(|entry| entry.delete_intent.as_ref())
+            .cloned())
+    }
+
+    pub fn delete_intent_generation_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+    ) -> Result<Option<ResourceGeneration>, PortError> {
+        Ok(self
+            .delete_intent_locked(gate, session)?
+            .map(|(generation, _)| generation))
+    }
+
+    /// Ends one deletion intent. An older intent cannot clear a newer one.
+    pub fn clear_delete_intent_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<(), PortError> {
+        self.clear_exact_delete_intent_locked(gate, session, generation, None)
+    }
+
+    /// Clears only the request which owns this intent. A same-generation
+    /// successor remains protected while an older execution unwinds.
+    pub fn clear_exact_delete_intent_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        request: Option<&RequestId>,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        if let Some(entry) = state.entries.get_mut(session)
+            && entry
+                .delete_intent
+                .as_ref()
+                .is_some_and(|(intent_generation, intent_request)| {
+                    *intent_generation == generation
+                        && request.is_none_or(|request| request == intent_request)
+                })
+        {
+            entry.delete_intent = None;
+            entry.delete_epoch = None;
+        }
+        Ok(())
+    }
+
+    pub async fn release_session_for_delete_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        actor: &Actor,
+        session: SessionId,
+        generation: ResourceGeneration,
+        now: Timestamp,
+    ) -> Result<ReleaseOutcome, PortError> {
+        self.ensure_gate(gate, &session)?;
+        if self
+            .delete_pending_generation_locked(gate, &session)?
+            .is_some_and(|pending| pending == generation)
+        {
+            return Ok(ReleaseOutcome::AlreadyReleased);
+        }
+        self.release_session_in_gate_with(
+            actor,
+            session,
+            generation,
+            now,
+            ReleaseTarget::DeletePending,
+        )
+        .await
+    }
+
+    /// 在生命周期 gate 内读取待删除资源代。扫描器用它证明候选仍对应同一删除意图。
+    pub fn delete_pending_generation_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+    ) -> Result<Option<ResourceGeneration>, PortError> {
+        self.ensure_gate(gate, session)?;
+        let state = lock(&self.state);
+        Ok(state
+            .entries
+            .get(session)
+            .and_then(|entry| (entry.phase == Phase::DeletePending).then_some(entry.generation)))
+    }
+
+    /// tombstone 已提交：清除运行期目录项。
+    pub fn complete_delete_pending_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        if state.entries.get(session).is_some_and(|entry| {
+            entry.phase == Phase::DeletePending && entry.generation == generation
+        }) {
+            state.entries.remove(session);
+        }
+        Ok(())
+    }
+
+    /// 删除事务明确失败或资格已变化：退出待删除态，后续激活可正常建立新资源。
+    pub fn cancel_delete_pending_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<bool, PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        if let Some(entry) = state.entries.get_mut(session) {
+            if entry.phase == Phase::DeletePending && entry.generation == generation {
+                entry.phase = Phase::Inactive;
+                entry.reserved = false;
+                entry.restart_seeded = false;
+                entry.retention_start = None;
+                if entry
+                    .delete_intent
+                    .as_ref()
+                    .is_some_and(|(intent_generation, _)| *intent_generation == generation)
+                {
+                    entry.delete_intent = None;
+                    entry.delete_epoch = None;
+                }
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn ensure_gate(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+    ) -> Result<(), PortError> {
+        if gate.session() != session {
+            return Err(PortError::InvalidRequest(
+                "the lifecycle gate belongs to another session",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Records a deletion candidate as reclaiming after task and content
+    /// eligibility were checked in this gate. The durable delete intent keeps
+    /// every activation and later prompt waiting until release settles.
+    pub fn begin_delete_release_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        self.ensure_converged()?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        };
+        if entry.generation == generation
+            && entry.phase == Phase::Inactive
+            && !entry.reserved
+            && entry.restart_seeded
+            && entry.delete_intent.is_some()
+        {
+            entry.reserved = true;
+        }
+        if entry.generation != generation || !entry.reserved {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        if entry.delete_intent.is_none() {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        let restart_seeded = entry.restart_seeded && entry.phase == Phase::Inactive;
+        match entry.phase {
+            Phase::Ready | Phase::Reclaiming => entry.phase = Phase::Reclaiming,
+            Phase::Activating if entry.resource_unconfirmed => entry.phase = Phase::Reclaiming,
+            Phase::Inactive if restart_seeded => {}
+            Phase::Activating | Phase::Inactive | Phase::DeletePending => {
+                return Err(PortError::Unavailable(UnavailableKind::Busy));
+            }
+        }
+        Ok(())
+    }
+
+    /// Releases the runtime-generation claim and publishes the failed delete
+    /// terminal while the same lifecycle gate is held. This keeps a prompt
+    /// that was blocked during preflight from entering between the two steps.
+    #[allow(clippy::too_many_arguments)] // Binds the exact request to the resource generation under the held gate.
+    pub async fn fail_delete_release_in_gate(
+        &self,
+        core: &UseCases,
+        gate: SessionLifecycleGate,
+        session: &SessionId,
+        _generation: ResourceGeneration,
+        _delete_epoch: Option<u64>,
+        actor: &Actor,
+        request: &RequestId,
+        error: PublicError,
+    ) -> Result<(), PortError> {
+        let gate_for_settlement = gate.clone_lifecycle_handle();
+        core.settle_delete_in_held_lifecycle_gate_locked(
+            self,
+            gate_for_settlement,
+            session,
+            actor,
+            request,
+            CommandStatus::Failed,
+            Some(error),
+        )
+        .await?;
+        // The command is now terminal. A later retry is a distinct request
+        // and must not remain permanently blocked by this failed attempt.
+        if self.has_delete_intent(session) {
+            self.fail_delete_release_current_in_gate(&gate, session)?;
+        }
+        Ok(())
+    }
+
+    pub fn begin_seeded_delete_release_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        self.ensure_converged()?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        };
+        if entry.generation != generation
+            || entry.phase != Phase::Inactive
+            || entry.reserved
+            || !entry.restart_seeded
+        {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        entry.phase = Phase::Reclaiming;
+        entry.reserved = true;
+        Ok(())
+    }
+
+    /// Confirms that the read-only eligibility and activity checks still
+    /// describe the generation whose delete lease was claimed.
+    pub fn confirm_release_in_gate(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+        release_observed: bool,
+        now: &Timestamp,
+    ) -> Result<bool, PortError> {
+        self.ensure_gate(gate, session)?;
+        let state = lock(&self.state);
+        Ok(state.entries.get(session).is_some_and(|entry| {
+            entry.generation == generation
+                && entry.phase == Phase::Reclaiming
+                && entry.delete_lease == Some(generation)
+                && entry.delete_intent.is_some()
+                && entry.active_prompt.is_none()
+                && (release_observed || !self.has_live_viewer(session, now))
+        }))
+    }
+
+    /// Converts the deletion intent into the released state only when the
+    /// released resource is exactly the one that was admitted for deletion.
+    pub fn enter_delete_pending_locked(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        generation: ResourceGeneration,
+    ) -> Result<(), PortError> {
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        let Some(entry) = state.entries.get_mut(session) else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        };
+        if entry.generation != generation
+            || entry
+                .delete_intent
+                .as_ref()
+                .is_none_or(|(intent_generation, _)| *intent_generation != generation)
+        {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
+        entry.phase = Phase::DeletePending;
+        entry.reserved = false;
+        entry.resource_unconfirmed = false;
+        entry.failure = None;
+        entry.restart_seeded = false;
+        entry.retention_start = None;
+        Ok(())
+    }
+
+    async fn release_session_in_gate(
+        &self,
+        actor: &Actor,
+        session: SessionId,
+        generation: ResourceGeneration,
+        now: Timestamp,
+    ) -> Result<ReleaseOutcome, PortError> {
+        self.release_session_in_gate_with(actor, session, generation, now, ReleaseTarget::Inactive)
+            .await
+    }
+
+    async fn release_session_in_gate_with(
+        &self,
         _actor: &Actor,
         session: SessionId,
         generation: ResourceGeneration,
         now: Timestamp,
+        target: ReleaseTarget,
     ) -> Result<ReleaseOutcome, PortError> {
         self.ensure_converged()?;
         let Some(release) = self.release.get().cloned() else {
             return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
         };
+        let facts = match self.store.session_activity(&session).await {
+            Ok(facts) => facts,
+            Err(PortError::NotFound(_)) => {
+                lock(&self.state).entries.remove(&session);
+                return Ok(ReleaseOutcome::Failed);
+            }
+            Err(error) => return Err(error),
+        };
+        if self.has_live_viewer(&session, &now)
+            || facts.unfinished_turns > 0
+            || facts.unresolved_interactions > 0
+        {
+            return Ok(ReleaseOutcome::Failed);
+        }
         // 先进入 `reclaiming`：关闭中的资源不得再被新的激活当成可复用资源（禁止交错产生两个绑定）。
         {
             let mut state = lock(&self.state);
@@ -473,9 +2206,14 @@ impl LocalSessionLifecycle {
                 // 旧代结果不得绑定到新代资源（§3.3）。
                 return Ok(ReleaseOutcome::Failed);
             }
+            let restart_seeded = entry.restart_seeded && entry.phase == Phase::Inactive;
             match entry.phase {
                 Phase::Ready | Phase::Reclaiming => entry.phase = Phase::Reclaiming,
                 Phase::Activating if entry.resource_unconfirmed => entry.phase = Phase::Reclaiming,
+                // 启动种子没有本进程可复用的运行时，但仍必须请求释放端口确认「没有资源可关」。
+                // 释放完成前后都保持 Inactive，避免空会话在静默删除前短暂投影为 active。
+                Phase::Inactive if restart_seeded => {}
+                Phase::DeletePending => return Ok(ReleaseOutcome::Failed),
                 Phase::Activating | Phase::Inactive => return Ok(ReleaseOutcome::Failed),
             }
             entry.reserved = true;
@@ -496,14 +2234,30 @@ impl LocalSessionLifecycle {
                 false
             } else {
                 match outcome {
-                    ReleaseOutcome::Released => {
-                        let changed = entry.phase != Phase::Inactive
+                    ReleaseOutcome::Released | ReleaseOutcome::AlreadyReleased => {
+                        let has_delete_intent = entry
+                            .delete_intent
+                            .as_ref()
+                            .is_some_and(|(intent_generation, _)| *intent_generation == generation);
+                        let released_phase = match target {
+                            ReleaseTarget::Inactive => Phase::Inactive,
+                            ReleaseTarget::DeletePending if has_delete_intent => {
+                                Phase::DeletePending
+                            }
+                            ReleaseTarget::DeletePending => entry.phase,
+                        };
+                        let changed = entry.phase != released_phase
                             || entry.reserved
                             || entry.resource_unconfirmed;
-                        entry.phase = Phase::Inactive;
+                        if target == ReleaseTarget::DeletePending && !has_delete_intent {
+                            entry.phase = Phase::Reclaiming;
+                        } else {
+                            entry.phase = released_phase;
+                        }
                         entry.reserved = false;
                         entry.resource_unconfirmed = false;
                         entry.failure = None;
+                        entry.restart_seeded = false;
                         entry.retention_start = None;
                         entry.last_protected_at = now.clone();
                         changed
@@ -586,19 +2340,42 @@ impl LocalSessionLifecycle {
         now: Timestamp,
     ) -> Result<Vec<ReclaimCandidate>, PortError> {
         self.ensure_converged()?;
-        let config = self.config();
-        if !config.time_based_reclaim_enabled() {
-            return Ok(Vec::new());
-        }
         let ready = {
             let state = lock(&self.state);
             state
                 .entries
                 .iter()
-                .filter(|(_, entry)| entry.phase == Phase::Ready && entry.reserved)
+                .filter(|(_, entry)| {
+                    entry.phase == Phase::DeletePending
+                        || (entry.phase == Phase::Reclaiming && entry.reserved)
+                        || entry.restart_seeded
+                        || (entry.phase == Phase::Ready && entry.reserved)
+                })
                 .map(|(session, entry)| (session.clone(), entry.retention_start.clone()))
                 .collect::<Vec<_>>()
         };
+        let config = self.config();
+        if !config.time_based_reclaim_enabled() {
+            let mut pending = Vec::new();
+            for (session, _) in ready {
+                let state = lock(&self.state);
+                let Some(entry) = state.entries.get(&session) else {
+                    continue;
+                };
+                let delete_pending =
+                    entry.phase == Phase::DeletePending && entry.retention_start.is_some();
+                let reclaiming = entry.phase == Phase::Reclaiming && entry.reserved;
+                if delete_pending || reclaiming {
+                    pending.push(ReclaimCandidate {
+                        session: session.clone(),
+                        last_protected_at: entry.last_protected_at.clone(),
+                        delete_pending,
+                    });
+                }
+            }
+            sort_candidates(&mut pending);
+            return Ok(pending);
+        }
         let mut due = Vec::new();
         for (session, _) in ready {
             if let Some(candidate) = self.observe_and_due(&session, &now, Some(config)).await? {
@@ -643,30 +2420,52 @@ impl LocalSessionLifecycle {
             state.views.clear();
         }
         let now = self.now();
+        let config = self.config();
+        let seed_empty_sessions = config.time_based_reclaim_enabled();
         let published = self.published_activities().await?;
         let summaries = self.store.list(SessionQuery::default()).await?;
         let mut emitted = 0_usize;
         for summary in summaries {
-            let facts = self.store.session_activity(summary.session_id()).await?;
+            let session = summary.session_id();
+            let empty = match self.content.has_content(session).await {
+                Ok(has_content) => !has_content,
+                Err(PortError::NotFound(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            let restart_deadline = if seed_empty_sessions && empty {
+                Some(RestartEmptySessionDeadline::from_restart(
+                    now.clone(),
+                    config.idle_timeout_ms(),
+                )?)
+            } else {
+                None
+            };
+            let facts = self.store.session_activity(session).await?;
             let activity = reduce(Phase::Inactive, false, &facts);
             {
                 let mut state = lock(&self.state);
                 let entry = state
                     .entries
-                    .entry(summary.session_id().clone())
+                    .entry(session.clone())
                     .or_insert_with(|| Entry::new(now.clone()));
                 entry.phase = Phase::Inactive;
+                entry.generation = if restart_deadline.is_some() {
+                    ResourceGeneration::new(1)
+                } else {
+                    ResourceGeneration::new(0)
+                };
                 entry.reserved = false;
                 entry.resource_unconfirmed = false;
                 entry.failure = None;
-                entry.retention_start = None;
+                entry.restart_seeded = restart_deadline.is_some();
+                entry.retention_start =
+                    restart_deadline.map(|deadline| deadline.started_at().clone());
                 entry.last_protected_at = now.clone();
                 entry.last_activity = activity;
             }
-            if let Some(previous) = published.get(summary.session_id()) {
+            if let Some(previous) = published.get(session) {
                 if *previous != activity {
-                    self.emit_activity(summary.session_id(), activity, now.clone())
-                        .await?;
+                    self.emit_activity(session, activity, now.clone()).await?;
                     emitted += 1;
                 }
             }
@@ -698,8 +2497,18 @@ impl LocalSessionLifecycle {
         session: &SessionId,
         now: Timestamp,
     ) -> Result<ActivationPlan, PortError> {
-        let max = self.config().max_active_sessions();
         let mut state = lock(&self.state);
+        self.begin_establishment_locked(&mut state, session, now)
+    }
+
+    /// Runtime admission when the caller already holds the same lifecycle gate.
+    fn begin_establishment_locked(
+        &self,
+        state: &mut DirectoryState,
+        session: &SessionId,
+        now: Timestamp,
+    ) -> Result<ActivationPlan, PortError> {
+        let max = self.config().max_active_sessions();
         let reserved = state
             .entries
             .values()
@@ -709,7 +2518,17 @@ impl LocalSessionLifecycle {
             .entries
             .entry(session.clone())
             .or_insert_with(|| Entry::new(now.clone()));
+        if entry.delete_intent.is_some()
+            && matches!(entry.phase, Phase::Reclaiming | Phase::DeletePending)
+        {
+            return Err(PortError::Unavailable(UnavailableKind::Busy));
+        }
         match entry.phase {
+            // An accepted prompt reserves the runtime before its durable commit.
+            // Do not report an activation as complete during that window.
+            Phase::Ready if entry.active_prompt.is_some() => {
+                return Ok(ActivationPlan::InFlight);
+            }
             // ready 复用：不新建资源代、不预占新名额、不触发 ACP。
             Phase::Ready => {
                 entry.last_protected_at = now;
@@ -720,7 +2539,9 @@ impl LocalSessionLifecycle {
             }
             // 建立中/回收中：不得启动第二次建立（关闭中禁止恢复与回收交错）。
             Phase::Activating | Phase::Reclaiming => return Ok(ActivationPlan::InFlight),
-            Phase::Inactive => {}
+            // 删除事务尚未提交时，激活在同一生命周期 gate 内先取得所有权并取消 pending；
+            // 此时资源已经确认释放，因此分配新代是安全的，也不会重复 close。
+            Phase::Inactive | Phase::DeletePending => {}
         }
         if !entry.reserved {
             if reserved >= max as usize {
@@ -732,13 +2553,28 @@ impl LocalSessionLifecycle {
             return Err(PortError::Corrupt("资源代已溢出"));
         };
         entry.generation = next;
+        entry.epoch = Some(self.next_epoch.fetch_add(1, Ordering::Relaxed));
         entry.phase = Phase::Activating;
         entry.settled = None;
         entry.resource_unconfirmed = false;
         entry.failure = None;
+        entry.restart_seeded = false;
         entry.retention_start = None;
         entry.last_protected_at = now;
         Ok(ActivationPlan::Establish { generation: next })
+    }
+
+    /// 创建入口在同一个生命周期门内取得资源代，删除请求在此期间无法插入。
+    pub fn begin_created_session_in_gate(
+        &self,
+        gate: &SessionLifecycleGate,
+        session: &SessionId,
+        now: Timestamp,
+    ) -> Result<ActivationPlan, PortError> {
+        self.ensure_converged()?;
+        self.ensure_gate(gate, session)?;
+        let mut state = lock(&self.state);
+        self.begin_establishment_locked(&mut state, session, now)
     }
 
     /// 先查持久幂等记录：accepted（含窗口期）→ `InFlight`；终态 → `Settled`；命令/指纹/会话冲突 →
@@ -798,6 +2634,7 @@ impl LocalSessionLifecycle {
             match outcome {
                 ActivationOutcome::Ready => {
                     entry.phase = Phase::Ready;
+                    entry.established = true;
                     entry.reserved = true;
                     entry.resource_unconfirmed = false;
                     entry.failure = None;
@@ -808,6 +2645,7 @@ impl LocalSessionLifecycle {
                 }
                 ActivationOutcome::Failed { error } => {
                     entry.phase = Phase::Inactive;
+                    entry.established = false;
                     entry.reserved = false;
                     entry.resource_unconfirmed = false;
                     entry.failure = Some(LifecycleFailure {
@@ -821,6 +2659,7 @@ impl LocalSessionLifecycle {
                     // 结果不确定：外部资源可能存在，保留容量占位与 `Active` 事实；后续显式核实/释放前
                     // 新的激活一律 `InFlight`（`uncertain` 不自动换号重派）。
                     entry.phase = Phase::Activating;
+                    entry.established = true;
                     entry.reserved = true;
                     entry.resource_unconfirmed = true;
                     entry.failure = Some(LifecycleFailure {
@@ -1024,9 +2863,9 @@ impl LocalSessionLifecycle {
             return Ok(());
         }
         match entry.phase {
-            Phase::Ready | Phase::Reclaiming => Err(PortError::InvalidRequest(
-                "已建立/回收中的资源必须先经释放确认才能交还名额",
-            )),
+            Phase::Ready | Phase::Reclaiming | Phase::DeletePending => Err(
+                PortError::InvalidRequest("已建立/回收中的资源必须先经释放确认才能交还名额"),
+            ),
             // `Uncertain` 的激活可能已经在外部建立了资源：名额必须保留到显式
             // `SessionRelease::release_session` 确认释放，不能在这里当作回滚放掉。
             Phase::Activating if entry.resource_unconfirmed => Err(PortError::InvalidRequest(
@@ -1055,7 +2894,11 @@ impl LocalSessionLifecycle {
             state
                 .entries
                 .iter()
-                .filter(|(_, entry)| entry.phase == Phase::Ready && entry.reserved)
+                .filter(|(_, entry)| {
+                    (entry.phase == Phase::Ready && entry.reserved)
+                        || (entry.phase == Phase::Reclaiming && entry.reserved)
+                })
+                .filter(|(_, entry)| entry.established)
                 .map(|(session, _)| session.clone())
                 .collect::<Vec<_>>()
         };
@@ -1159,10 +3002,30 @@ impl LocalSessionLifecycle {
         let Some(entry) = state.entries.get_mut(session) else {
             return Ok(None);
         };
-        if entry.phase != Phase::Ready || !entry.reserved {
+        let delete_pending = entry.phase == Phase::DeletePending;
+        let reclaiming = entry.phase == Phase::Reclaiming && entry.reserved;
+        if !delete_pending
+            && !reclaiming
+            && !entry.restart_seeded
+            && (entry.phase != Phase::Ready || !entry.reserved)
+        {
             return Ok(None);
         }
-        if let Some(config) = timeout {
+        // 已开始的释放重试不受保留期重新计时；每次扫描用新 requestId 尝试确认关闭，成功后才删除。
+        if reclaiming {
+            if entry.retention_start.is_none() {
+                return Ok(None);
+            }
+            return Ok(Some(ReclaimCandidate {
+                session: session.clone(),
+                last_protected_at: entry.last_protected_at.clone(),
+                delete_pending: false,
+            }));
+        }
+        if delete_pending && entry.retention_start.is_none() {
+            return Ok(None);
+        }
+        if let Some(config) = timeout.filter(|_| !delete_pending) {
             let Some(start) = entry.retention_start.clone() else {
                 return Ok(None);
             };
@@ -1179,6 +3042,7 @@ impl LocalSessionLifecycle {
         Ok(Some(ReclaimCandidate {
             session: session.clone(),
             last_protected_at: entry.last_protected_at.clone(),
+            delete_pending,
         }))
     }
 
@@ -1345,6 +3209,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[async_trait]
 impl SessionActivation for LocalSessionLifecycle {
     async fn activate(&self, request: ActivationRequest) -> Result<ActivationAdmission, PortError> {
+        let _gate = self.acquire_owner_lifecycle_gate(&request.session).await;
+        self.ensure_session_visible(&request.session).await?;
         match self.plan_activation(&request).await? {
             // `ActivationAdmission` 没有容量变体：该端口调用方 MUST 先经
             // `CapacityAdmission::reserve`/`reclaim_candidate` 取得明确拒绝；这里是防御性失败关闭
@@ -1360,7 +3226,8 @@ impl SessionActivation for LocalSessionLifecycle {
         generation: ResourceGeneration,
         outcome: ActivationOutcome,
     ) -> Result<(), PortError> {
-        self.settle_impl(session, generation, outcome).await
+        let _gate = self.acquire_owner_lifecycle_gate(&session).await;
+        self.settle_if_visible(session, generation, outcome).await
     }
 }
 
@@ -1373,7 +3240,7 @@ impl ViewRegistry for LocalSessionLifecycle {
         view_version: u64,
         now: Timestamp,
     ) -> Result<ViewDecision, PortError> {
-        self.declare_impl(connection, session, view_version, now)
+        self.declare_view(&Actor::LocalCli, connection, session, view_version, now)
             .await
     }
 
@@ -1383,11 +3250,12 @@ impl ViewRegistry for LocalSessionLifecycle {
         view_version: u64,
         now: Timestamp,
     ) -> Result<ViewDecision, PortError> {
-        self.renew_impl(connection, view_version, now).await
+        self.renew_view(&Actor::LocalCli, connection, view_version, now)
+            .await
     }
 
     async fn release(&self, connection: ConnectionId, now: Timestamp) -> Result<(), PortError> {
-        self.release_viewer_impl(connection, now).await
+        self.release_view(&Actor::LocalCli, connection, now).await
     }
 
     async fn viewers(
@@ -1411,6 +3279,7 @@ impl CapacityAdmission for LocalSessionLifecycle {
         generation: ResourceGeneration,
         now: Timestamp,
     ) -> Result<(), PortError> {
+        let _gate = self.acquire_owner_lifecycle_gate(&session).await;
         self.release_capacity_impl(session, generation, now).await
     }
 

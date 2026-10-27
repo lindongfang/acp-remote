@@ -3,11 +3,10 @@
  *
  * 逐条 MUST NOT 的负向用例：
  *
- * - **载荷恰好三类键集** → 目录标识、浏览选定的路径、会先新建的路径各一条：键集分别是
- *   `{agentId, directoryId}`、`{agentId, workspacePath}`、`{agentId, workspacePath, createIfMissing}`；
- *   对越界载荷（`cwd`/`path`/`mcpServers`/`token`）、「目录引用不唯一」与「目录标识 + createIfMissing」
- *   构造违规输入，断言 `assertCreateSessionRefs` 抛错；并断言实际派发的命令 JSON 里只有那三类键、
- *   不含任何凭据字面量。
+ * - **载荷恰好两类键集** → 目录标识或浏览选定的路径：键集分别是
+ *   `{agentId, directoryId}`、`{agentId, workspacePath}`；对越界载荷
+ *   （`cwd`/`path`/`mcpServers`/`token`/`createIfMissing`）与「目录引用不唯一」构造违规输入，
+ *   断言 `assertCreateSessionRefs` 抛错；并断言实际派发的命令 JSON 里只有那两类键、不含凭据。
  * - **候选只来自本机已配置的 Agent** → 选一个不在快照 `agents` 里的 Agent 提交，
  *   断言被拒绝且**一条命令都没发**。
  * - **目录不由用户手工输入** → 弹层里没有目录输入框；目录与路径逐字来自服务端（目录标识不出现文本里）。
@@ -49,7 +48,6 @@ import {
   createDirectoryNoticeText,
   initialDirectoryBrowseState,
 } from "../features/create-session-model";
-import { SESSION_PREPARATION_FEATURE } from "../features/preparation-model";
 import type { RecordingGateway } from "../features/testing/fixtures";
 import { WORKSPACES_WITH_PATHS, onlineStore, resources, session, storeWith } from "../features/testing/fixtures";
 
@@ -78,7 +76,6 @@ function renderSheet(
       submitIssue,
       onSelectAgent: () => undefined,
       onSubmit: () => undefined,
-      onDismissUncertain: () => undefined,
       onOpenDirectoryPicker: () => undefined,
       onClose: () => undefined,
     }),
@@ -163,7 +160,6 @@ function entryModel(): CreateSessionEntryModel {
   // 新入口只在协商了会话准备能力后可用（未协商时明确禁用，不退回旧 session.create）。
   const { store } = onlineStore({
     resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
-    features: [SESSION_PREPARATION_FEATURE],
   });
   return store.createEntry(DIRECTORY_ID);
 }
@@ -242,7 +238,7 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
     expect(serialized).not.toMatch(/token|password|apiKey|mcp|exportId|templateParams/i);
   });
 
-  it("目录载荷：键恰好是 agentId 与 workspacePath（不带建目录开关）", () => {
+  it("目录载荷键恰好是 agentId 与 workspacePath；createIfMissing 是越界键", () => {
     const command = buildCreateSessionCommand({
       refs: { workspacePath: "D:\\work\\api", agentId: "claude" },
       requestId: "4c4dafda-dd98-442e-8d55-252b75bac72d",
@@ -254,26 +250,12 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
     // 反例：把路径塞进 directoryId（或反过来丢弃它）→ 键集与取值都会红。
     expect(Object.keys(payload).sort()).toEqual(["agentId", "workspacePath"]);
     expect(payload["workspacePath"]).toBe("D:\\work\\api");
-    // 缺席即假：显式给 `false` 与不给，发出的载荷逐字相同（不凭空多一个键）。
-    expect(assertCreateSessionRefs({ workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: false })).toEqual(
-      { workspacePath: "D:\\work\\api", agentId: "claude" },
-    );
+    expect(() =>
+      assertCreateSessionRefs({ workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: false }),
+    ).toThrow();
   });
 
-  it("会先新建：键恰好是 agentId、workspacePath 与 createIfMissing", () => {
-    const command = buildCreateSessionCommand({
-      refs: { workspacePath: "D:\\work\\new-api", agentId: "claude", createIfMissing: true },
-      requestId: "4c4dafda-dd98-442e-8d55-252b75bac72d",
-      messageId: "bbbbbbbb-1111-4111-8111-00000000000b",
-      connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637",
-    });
-
-    const payload = command.body.payload as Record<string, unknown>;
-    expect(Object.keys(payload).sort()).toEqual(["agentId", "createIfMissing", "workspacePath"]);
-    expect(payload["createIfMissing"]).toBe(true);
-  });
-
-  it("越界载荷、「目录引用不唯一」与「目录标识 + 建目录开关」一律被拒绝", () => {
+  it("越界载荷与目录引用不唯一一律被拒绝", () => {
     const violations: readonly Record<string, unknown>[] = [
       { directoryId: DIRECTORY_ID, agentId: "claude", cwd: "D:\\work\\api" },
       { directoryId: DIRECTORY_ID, agentId: "claude", path: "/home/dev/api" },
@@ -284,9 +266,10 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
       // 目录引用必须**恰好一个**：两个都给，或都不给。
       { directoryId: DIRECTORY_ID, workspacePath: "D:\\work\\api", agentId: "claude" },
       { agentId: "claude" },
-      // 已记录的目录必然已存在，因此建目录开关与它互斥。
+      // 建目录开关不属于 Web 提交载荷，目录标识或路径旁出现都必须拒绝。
       { directoryId: DIRECTORY_ID, agentId: "claude", createIfMissing: true },
-      // 开关不是布尔。
+      { workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: false },
+      { workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: true },
       { workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: "yes" },
     ];
 
@@ -294,7 +277,7 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
       // 反例：若断言放宽成「至少一个目录引用」，后两条不会抛错，用例变红。
       expect(() => assertCreateSessionRefs(payload)).toThrow();
     }
-    // 对照：三种合法载荷仍然通过（证明断言不是「一律拒绝」）。
+    // 对照：两种合法载荷仍然通过（证明断言不是「一律拒绝」）。
     expect(assertCreateSessionRefs({ directoryId: DIRECTORY_ID, agentId: "claude" })).toEqual({
       directoryId: DIRECTORY_ID,
       agentId: "claude",
@@ -303,14 +286,9 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
       workspacePath: "D:\\work\\api",
       agentId: "claude",
     });
-    expect(assertCreateSessionRefs({ workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: true })).toEqual({
-      workspacePath: "D:\\work\\api",
-      agentId: "claude",
-      createIfMissing: true,
-    });
   });
 
-  it("实际派发的命令：三条路径的载荷键集恰好是规范允许的三类", () => {
+  it("实际派发的命令：载荷键集恰好是规范允许的两类", () => {
     const { store, gateway } = onlineStore({
       resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
       features: [WORKSPACE_BROWSE_FEATURE, "core.workspace-mkdir.v1"],
@@ -336,7 +314,6 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
         directoryId: null,
         agentId: "claude",
         directoryPath: existing.path,
-        createIfMissing: false,
       }).ok,
     ).toBe(true);
     expect(Object.keys(createPayloadAt(gateway, 1)).sort()).toEqual(["agentId", "workspacePath"]);
@@ -433,7 +410,6 @@ describe("R16 不能逐层浏览时按原因说明，并保留已登记目录这
     const fixture = onlineStore({
       resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
       // 未协商的只是**目录浏览**；会话准备能力单独协商（新入口不以浏览能力为前提）。
-      features: [SESSION_PREPARATION_FEATURE],
     });
     fixture.store.openCreateSheetToBrowse();
     return fixture;
@@ -555,7 +531,7 @@ describe("R16 不能逐层浏览时按原因说明，并保留已登记目录这
     expect(html).toContain('data-create-directory-notice="registered"');
     expect(html).toContain('data-create-selected-name="api"');
 
-    expect(store.submitCreateSession({ directoryId: null, agentId: "claude", directoryPath: "", createIfMissing: false }).ok).toBe(
+    expect(store.submitCreateSession({ directoryId: null, agentId: "claude", directoryPath: "" }).ok).toBe(
       true,
     );
     expect(Object.keys(createPayloadAt(gateway, 0)).sort()).toEqual(["agentId", "directoryId"]);
@@ -1032,6 +1008,13 @@ describe("R16 结果不确定显眼且不被自动消解", () => {
     const html = renderSheet(store.createEntry(DIRECTORY_ID), "claude");
     expect(html).toContain('data-create-submission="uncertain"');
     expect(html).toContain('role="alert"');
+    expect(html).not.toContain("我知道了");
+    expect(html).not.toContain("dismiss");
+
+    expect(store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "claude" })).toEqual({
+      ok: false,
+      reason: "创建结果不确定，必须保留原请求；系统不会自动重发或更换请求标识。",
+    });
 
     // 再来一条无关事件与一次「时间推进」（now 变了）：它必须仍在。
     store.apply({
@@ -1058,9 +1041,8 @@ describe("R16 结果不确定显眼且不被自动消解", () => {
     });
 
     expect(store.state.uncertainRequestIds).toEqual([outcome.requestId]);
-    // 用户主动处理之后才消失。
-    store.dismissUncertain(outcome.requestId);
-    expect(store.state.uncertainRequestIds).toEqual([]);
+    expect(store.state.createRequestIds.get(DIRECTORY_ID)).toBe(outcome.requestId);
+    expect(renderSheet(store.createEntry(DIRECTORY_ID), "claude")).not.toContain("我知道了");
   });
 });
 

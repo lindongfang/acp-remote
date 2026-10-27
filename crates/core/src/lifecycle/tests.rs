@@ -4,6 +4,7 @@
 //! 时间全部由 [`FakeClock`] 提供（不睡眠、不读系统时间）；存储与发布使用 broker 的内存替身
 //! （`crate::broker::test_support`），因此这里断言的是 core 的判定与提交顺序，不是 SQLite 行为。
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -24,11 +25,30 @@ use crate::model::{
 };
 use crate::ports::{
     ActivationOutcome, ActivationRequest, Admission, Clock, ReleaseOutcome, ReplayLimit,
-    SessionActivityFacts, SessionRelease, SessionStore, ViewRegistry,
+    SessionActivityFacts, SessionContentFacts, SessionRelease, SessionStore, ViewRegistry,
 };
 
 const BASE: &str = "2026-09-18T00:00:00.000Z";
 const MINUTE_MS: u64 = 60_000;
+
+#[test]
+fn a_cloned_lifecycle_gate_holds_ownership_until_the_last_handle_is_dropped() {
+    let fixture = Fixture::new();
+    let session = fixture.seed_session(1);
+    let lifecycle = fixture.converged(LifecycleConfig::new(0, 1).expect("config"));
+    let gate = block_on(lifecycle.acquire_owner_lifecycle_gate(&session));
+    let clone = gate.clone_lifecycle_handle();
+    let mut waiting = std::pin::pin!(lifecycle.acquire_owner_lifecycle_gate(&session));
+    let mut context = Context::from_waker(std::task::Waker::noop());
+    assert!(waiting.as_mut().poll(&mut context).is_pending());
+    drop(clone);
+    assert!(waiting.as_mut().poll(&mut context).is_pending());
+    let clone = gate.clone_lifecycle_handle();
+    drop(gate);
+    assert!(waiting.as_mut().poll(&mut context).is_pending());
+    drop(clone);
+    assert!(waiting.as_mut().poll(&mut context).is_ready());
+}
 
 fn at(millis: u64) -> Timestamp {
     Timestamp::new(BASE)
@@ -62,8 +82,20 @@ impl Clock for FakeClock {
 struct Fixture {
     world: Arc<FakeWorld>,
     store: Arc<FakeStore>,
+    content: Arc<FixtureContent>,
     publisher: Arc<TestPublisher>,
     clock: Arc<FakeClock>,
+}
+
+struct FixtureContent {
+    nonempty: Mutex<HashSet<SessionId>>,
+}
+
+#[async_trait]
+impl SessionContentFacts for FixtureContent {
+    async fn has_content(&self, session: &SessionId) -> Result<bool, PortError> {
+        Ok(lock(&self.nonempty).contains(session))
+    }
 }
 
 impl Fixture {
@@ -72,6 +104,9 @@ impl Fixture {
         Self {
             store: Arc::new(FakeStore {
                 world: world.clone(),
+            }),
+            content: Arc::new(FixtureContent {
+                nonempty: Mutex::new(HashSet::new()),
             }),
             publisher: Arc::new(TestPublisher {
                 world: world.clone(),
@@ -85,6 +120,7 @@ impl Fixture {
         LocalSessionLifecycle::new(
             self.clock.clone(),
             self.store.clone(),
+            self.content.clone(),
             self.publisher.clone(),
             config,
         )
@@ -116,6 +152,10 @@ impl Fixture {
         .expect("session");
         self.world.seed_session(row);
         session
+    }
+
+    fn mark_nonempty(&self, session: &SessionId) {
+        lock(&self.content.nonempty).insert(session.clone());
     }
 
     fn activation(&self, session: &SessionId, n: u64) -> ActivationRequest {
@@ -260,7 +300,11 @@ fn two_devices_viewing_one_session_share_a_single_establishment() {
     let plan =
         block_on(lifecycle.activate_session(&Actor::LocalCli, fixture.activation(&session, 1)))
             .expect("first activation");
-    assert!(matches!(plan, ActivationPlan::Establish { generation } if generation.get() == 1));
+    assert_eq!(
+        expect_establish(plan).get(),
+        2,
+        "the empty-session startup seed owns generation 1"
+    );
 
     // 第二个并发调用者不启动第二次建立，也不自造第二个资源代。
     let concurrent =
@@ -383,10 +427,17 @@ fn reclaiming_and_failed_release_keep_active_and_the_slot() {
         Admission::CapacityExceeded,
         "a failed close keeps the capacity slot"
     );
-    assert!(
-        block_on(lifecycle.reclaim_candidate(&Actor::LocalCli, at(1_000)))
-            .expect("candidate")
-            .is_none()
+    let retry = block_on(lifecycle.reclaim_candidate(&Actor::LocalCli, at(1_000)))
+        .expect("candidate")
+        .expect("a failed release remains a capacity retry candidate");
+    assert_eq!(retry.session, session);
+    assert!(!retry.delete_pending);
+    assert_eq!(
+        block_on(lifecycle.retention_due(&Actor::LocalCli, at(1_000)))
+            .expect("periodic retry")
+            .len(),
+        1,
+        "a failed release must be retried even when time-based retention is disabled"
     );
 
     // 关闭中禁止恢复与回收交错：不会启动第二个绑定。
@@ -398,14 +449,15 @@ fn reclaiming_and_failed_release_keep_active_and_the_slot() {
 
     // 适配器确认释放后才转 idle 并交还名额。
     release.set(ReleaseOutcome::Released);
-    let outcome = block_on(lifecycle.release_session(
-        &Actor::LocalCli,
-        session.clone(),
-        generation,
-        at(2_000),
-    ))
-    .expect("second release attempt");
+    let outcome =
+        block_on(lifecycle.release_capacity_candidate(&Actor::LocalCli, &retry, at(2_000)))
+            .expect("second release attempt");
     assert_eq!(outcome, ReleaseOutcome::Released);
+    assert_eq!(
+        release.calls(),
+        2,
+        "the second scanner attempt must call the release adapter again"
+    );
     assert_eq!(
         block_on(lifecycle.current_activity(&Actor::LocalCli, session.clone())).expect("activity"),
         LocalActivity::Idle
@@ -413,6 +465,100 @@ fn reclaiming_and_failed_release_keep_active_and_the_slot() {
     assert_eq!(
         block_on(lifecycle.reserve_capacity(&Actor::LocalCli, other, at(2_000))).expect("reserve"),
         Admission::Reserved
+    );
+}
+
+#[test]
+fn a_failed_release_is_retried_by_the_next_retention_scan() {
+    let fixture = Fixture::new();
+    let session = fixture.seed_session(1);
+    let lifecycle = fixture.converged(config());
+    let release = FakeRelease::new(ReleaseOutcome::Failed);
+    assert!(lifecycle.set_session_release(release.clone()));
+    let generation = ready(&lifecycle, &fixture, &session);
+
+    let due = block_on(lifecycle.retention_due(&Actor::LocalCli, at(30 * MINUTE_MS)))
+        .expect("first due scan");
+    assert_eq!(due.len(), 1);
+    let first = block_on(lifecycle.release_retention_candidate(
+        &Actor::LocalCli,
+        &due[0],
+        at(30 * MINUTE_MS),
+    ))
+    .expect("first release");
+    assert_eq!(first, ReleaseOutcome::Failed);
+    assert_eq!(release.calls(), 1);
+    assert_eq!(lifecycle.resource_generation(&session), Some(generation));
+
+    let retry = block_on(lifecycle.retention_due(&Actor::LocalCli, at(30 * MINUTE_MS)))
+        .expect("retry due scan");
+    assert_eq!(retry.len(), 1, "Reclaiming must remain scanner-visible");
+    assert!(!retry[0].delete_pending);
+    assert_eq!(
+        block_on(lifecycle.activate_session(&Actor::LocalCli, fixture.activation(&session, 2),))
+            .expect("activation during reclaim"),
+        ActivationPlan::InFlight
+    );
+
+    release.set(ReleaseOutcome::Released);
+    let second = block_on(lifecycle.release_capacity_candidate(
+        &Actor::LocalCli,
+        &retry[0],
+        at(30 * MINUTE_MS + 1),
+    ))
+    .expect("retry release");
+    assert_eq!(second, ReleaseOutcome::Released);
+    assert_eq!(
+        release.calls(),
+        2,
+        "the retry must reach the release adapter with the same generation"
+    );
+    let other = fixture.seed_session(2);
+    assert_eq!(
+        block_on(lifecycle.reserve_capacity(&Actor::LocalCli, other, at(30 * MINUTE_MS + 2)))
+            .expect("reserve after confirmed release"),
+        Admission::Reserved,
+        "capacity is returned only after a confirmed release"
+    );
+}
+
+#[test]
+fn activation_clears_the_old_retention_snapshot_and_starts_a_new_window() {
+    let fixture = Fixture::new();
+    let session = fixture.seed_session(1);
+    let lifecycle = fixture.converged(config());
+    let generation = ready(&lifecycle, &fixture, &session);
+    let due = block_on(lifecycle.retention_due(&Actor::LocalCli, at(30 * MINUTE_MS))).expect("due");
+    assert_eq!(due.len(), 1);
+    let old = lifecycle
+        .retention_snapshot(&session)
+        .expect("old retention snapshot");
+    assert!(old.retention_start.is_some());
+
+    let plan =
+        block_on(lifecycle.activate_session(&Actor::LocalCli, fixture.activation(&session, 2)))
+            .expect("activation before stale deletion");
+    assert_eq!(
+        plan,
+        ActivationPlan::Reused { generation },
+        "the ready resource is reused"
+    );
+    let current = lifecycle
+        .retention_snapshot(&session)
+        .expect("new retention snapshot");
+    assert_eq!(current.generation, old.generation);
+    assert_eq!(current.retention_start, None);
+    assert!(
+        block_on(lifecycle.retention_due(&Actor::LocalCli, at(30 * MINUTE_MS)))
+            .expect("old deadline must not remain due")
+            .is_empty()
+    );
+    assert_eq!(
+        block_on(lifecycle.retention_due(&Actor::LocalCli, at(60 * MINUTE_MS)))
+            .expect("new deadline")
+            .len(),
+        1,
+        "the new complete retention window remains eligible later"
     );
 }
 
@@ -1021,9 +1167,125 @@ fn restart_converges_published_activity_without_trusting_old_ready_resources() {
     let next = expect_establish(plan);
     assert_eq!(
         next.get(),
-        1,
-        "the new process has a fresh runtime directory (no old ready generation)"
+        2,
+        "the startup seed consumes generation 1; activation must use a fresh later generation"
     );
+}
+
+#[test]
+fn restart_seeds_only_empty_sessions_with_a_fresh_complete_window() {
+    let fixture = Fixture::new();
+    let empty = fixture.seed_session(1);
+    let nonempty = fixture.seed_session(2);
+    fixture.mark_nonempty(&nonempty);
+
+    let first_process = fixture.converged(config());
+    fixture.clock.advance(20 * MINUTE_MS);
+
+    // A new process at minute 20 discovers both rows. It must not reuse the first process's
+    // deadline; the empty session gets another complete 30-minute window.
+    let second_process = fixture.converged(config());
+    assert!(
+        block_on(second_process.retention_due(&Actor::LocalCli, at(30 * MINUTE_MS)))
+            .expect("due at old deadline")
+            .is_empty(),
+        "restart must discard the pre-restart deadline"
+    );
+    assert!(
+        block_on(second_process.retention_due(&Actor::LocalCli, at(50 * MINUTE_MS - 1)))
+            .expect("due before new deadline")
+            .is_empty(),
+        "the new window must not expire early"
+    );
+    let due = block_on(second_process.retention_due(&Actor::LocalCli, at(50 * MINUTE_MS)))
+        .expect("due at new deadline");
+    assert_eq!(
+        due.iter()
+            .map(|candidate| candidate.session.clone())
+            .collect::<Vec<_>>(),
+        vec![empty.clone()],
+        "only the persisted empty session receives a restart deadline"
+    );
+    assert_eq!(
+        second_process.resource_generation(&empty),
+        Some(ResourceGeneration::new(1)),
+        "the restart seed needs a releasable generation even with no runtime entry"
+    );
+    assert_eq!(
+        second_process.resource_generation(&nonempty),
+        None,
+        "nonempty sessions are not seeded for empty-session deletion"
+    );
+
+    let release = FakeRelease::new(ReleaseOutcome::Released);
+    assert!(second_process.set_session_release(release.clone()));
+    let outcome = block_on(second_process.release_retention_candidate(
+        &Actor::LocalCli,
+        &due[0],
+        at(50 * MINUTE_MS),
+    ))
+    .expect("release the absent runtime");
+    assert_eq!(outcome, ReleaseOutcome::Released);
+    assert_eq!(
+        release.calls(),
+        1,
+        "a missing runtime entry must still ask the release port for confirmation"
+    );
+    assert_eq!(
+        block_on(second_process.current_activity(&Actor::LocalCli, empty))
+            .expect("activity after release"),
+        LocalActivity::Idle,
+        "the restart seed must never flash active while being released"
+    );
+    assert_eq!(
+        block_on(first_process.current_activity(&Actor::LocalCli, nonempty))
+            .expect("first process still owns its converged view"),
+        LocalActivity::Idle
+    );
+}
+
+#[test]
+fn restart_after_an_old_deadline_still_grants_the_full_new_window() {
+    let fixture = Fixture::new();
+    let session = fixture.seed_session(1);
+
+    let _first_process = fixture.converged(config());
+    fixture.clock.advance(40 * MINUTE_MS);
+    let restarted = fixture.converged(config());
+
+    assert!(
+        block_on(restarted.retention_due(&Actor::LocalCli, at(40 * MINUTE_MS)))
+            .expect("due immediately after restart")
+            .is_empty(),
+        "an already-expired pre-restart deadline must never delete at startup"
+    );
+    assert!(
+        block_on(restarted.retention_due(&Actor::LocalCli, at(70 * MINUTE_MS - 1)))
+            .expect("due before restarted deadline")
+            .is_empty()
+    );
+    assert_eq!(
+        block_on(restarted.retention_due(&Actor::LocalCli, at(70 * MINUTE_MS)))
+            .expect("due after restarted window")
+            .into_iter()
+            .map(|candidate| candidate.session)
+            .collect::<Vec<_>>(),
+        vec![session]
+    );
+}
+
+#[test]
+fn zero_idle_timeout_does_not_seed_restart_candidates() {
+    let fixture = Fixture::new();
+    let session = fixture.seed_session(1);
+    let lifecycle = fixture.converged(LifecycleConfig::new(0, 4).expect("config"));
+
+    assert!(
+        block_on(lifecycle.retention_due(&Actor::LocalCli, at(u32::MAX as u64 * 1_000),))
+            .expect("disabled retention")
+            .is_empty()
+    );
+    assert_eq!(lifecycle.resource_generation(&session), None);
 }
 
 #[test]

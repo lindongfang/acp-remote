@@ -313,8 +313,8 @@ async fn sweep_orphans_only_removes_stale_untracked_files() {
 
 use acp_core::model::{
     Actor, AttachmentId, AttachmentSubject, CommandKind, DeviceId, Digest, EventKind, EventOrigin,
-    EventPayload, EventType, FirstSubmissionInput, MessageId, PendingEvent, PromptContentBlock,
-    RequestId, StoredPolicy, SubmissionId, TurnId, ViewJson,
+    EventPayload, EventType, MessageId, PendingEvent, PromptContentBlock, PromptInput, RequestId,
+    StoredPolicy, SubmissionId, TurnId, ViewJson,
 };
 use acp_core::ports::{
     AttachmentTransferStore, IdempotencyRecord, NewTurn, OwnedCommit, SubmissionBegin,
@@ -438,7 +438,7 @@ fn prompt_input(
     attachment: &AttachmentId,
     declared_media_type: &str,
 ) -> (OwnedCommit, SubmissionBinding) {
-    let content = FirstSubmissionInput::new(vec![
+    let content = PromptInput::new(vec![
         PromptContentBlock::from_json_text(r#"{"type":"text","text":"请看附件"}"#)
             .expect("text block"),
         PromptContentBlock::from_json_text(

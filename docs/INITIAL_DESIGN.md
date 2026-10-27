@@ -7,6 +7,7 @@
 > 目录选择器补充（2026-10-18）：Windows 默认浏览不展示隐藏或系统属性目录；PWA 按名称忽略大小写、数字自然升序显示收到的目录。这些规则仅影响浏览与显示，不新增创建路径授权限制。实现边界见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.1。
 
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§8 的会话标题口径改写为「两个来源 + 有效标题投影」——登记 Owner 元数据命令 `session.title.set` 与 feature `core.session-title.v1`，有效标题 = 自定义标题优先 → 否则 Agent 标题 → 否则未命名，由 Owner 投影成既有 `SessionSummary.title`；删除「标题只由 Agent 单向更新 / 不存在客户端重命名入口」的旧条款（原文见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.3 与 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §5），明确 Access 只转发命令、不持久化标题与命令状态，且该命令不新增 ACP 方法。Owner 的 `custom_title` 持久化与命令事务已接线。  
+> 修订记录（2026-10-26，`session-create-and-empty-cleanup`，**已实现**）：Web 新建改为直接 `session.create`（创建即持久化，§3.7），并写回空会话定义、先释放后删除的顺序、tombstone 不可见与「Access 不持久化远程删除事实」。准备式新建（`web-session-preparation`，ADR-0014）不再是目标，由 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 取代；wire 语义见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.8/§11.5/§11.9，存储与事务见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §13，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.6。
 > 状态：编码前原始设计（Draft）  
 > 版本：0.5  
 > 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「workspace 实际路径不离开 Owner Node」收窄为带前提的边界——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显（§2/§8）。本机自己的设备新增两项受限能力：`session.create` 可带一个「目录不存在则先创建」开关，`workspace.browse` 提供只读的逐层目录浏览（feature 门控、不登记、不产生审计动作）。口径以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2/§12.3 与 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md) 为权威。
@@ -107,7 +108,7 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 
 - 内容范围：用户消息、Agent 回复、Agent 明确提供的思考、工具调用及结果、审批、提问、计划、终端、文件改动、轮次结果、多媒体与资源、异常与不可用提示。
 - **每条受理输入都由 Owner 保存（`conversation-reliability`，已实现）**：首条与之后的每次输入一视同仁——同一个受理事务保存完整正文、稳定 `requestId`/`turnId`/`messageId` 关联与附件绑定，提交成功后才派发与广播；保存失败明确报错且不派发，执行失败或结果不确定不删除已保存输入。刷新、重连、另一台已认证设备以及 Agent 不回显时都能读到该输入；读取的正文不受单条事件文本上限或事件过期影响。Agent 回显只在可靠的派发关联且完整内容一致时视为同一条输入，相同文字的不同输入各自保留。Access 仍不保存任何远程正文（§10）。
-- 草稿默认只在页面内存；唯一例外是本机「准备中、尚未首次提交」临时会话的标签页草稿（见 §3.7 与 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §7），正式会话与 imported 会话不缓存正文。
+- 草稿只在页面内存（包括已立即创建、尚未发出第一条消息的新会话）：不写持久草稿，也没有「准备中」的标签页例外（该窄例外已被 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 取代），正式会话与 imported 会话不缓存正文。客户端行为见 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §4.6/§7。
 - 输入：点击发送后才上传附件，全部完成后整体提交；任一失败保留完整草稿、不触发执行。不支持的类型明确说明，MUST NOT 静默删除附件或只发文字。
 - 附件：无数量/大小产品额度，但有 32 KiB 分块、并发、速率、内存与磁盘保护；已提交附件随消息保留，未提交上传闲置 24 小时清理，刷新不承诺续传。
 - 交互与历史：刷新或换设备后可重新取得服务端确认的有效待处理请求再应答；首个有效答案胜出。历史与实时同形，超出保留期显式不可用。
@@ -132,27 +133,31 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 | Q13 折叠与默认展开 | FRONTEND §4.4 |
 | Q14 表单类型、校验与首个有效答案 | SYNC §11.7 / §10.4 / FRONTEND §4.1 |
 | Q15 执行中可编辑不可发送、无排队 | FRONTEND §4.1 |
-| Q16 分块、内存、速率与磁盘保护 | SYNC §3.4/§14 / CORE §5.8 |
+| Q16 分块、内存、速率与磁盘保护 | SYNC §3.4/§14 / [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.8 |
 | Q17 路径引用不固定版本 | SYNC §11.5 |
-| Q18 草稿仅在内存、24 小时清理（**窄例外**：本机准备中、尚未首次提交的唯一槽位草稿可按标签页持久化并跨刷新恢复；正式/imported 正文禁缓存不变） | FRONTEND §4.1/§4.6/§7 / SECURITY §11.4 / SYNC §3.4 / CORE §7.6（计划） |
+| Q18 草稿仅在内存、未提交上传 24 小时清理（准备式新建的「标签页草稿」窄例外已由 ADR-0016 取消：直接创建后所有会话的草稿都只留在页面内存；正式/imported 正文禁缓存不变） | FRONTEND §4.1/§4.6/§7 / SYNC §3.4 / CORE §7.6（计划） |
 | Q19 上读保持锚点、回到底部 | FRONTEND §4.1 / SYNC §11.5 |
 | Q20 Markdown、代码与媒体安全渲染 | FRONTEND §4.5 / [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §11.2 |
-| Q21 真实 ACP 终端服务 | ACP 矩阵 terminal rows / MODULE §4.5 |
+| Q21 真实 ACP 终端服务 | ACP 矩阵 terminal rows / [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.5 |
 | Q22 思考单独保存与历史恢复 | [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.4 / [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.3、§7.6（计划，WP2） / 本节 §10.3 |
 | Q23 增量原位更新、重放去重与部分结果 | SYNC §10.2–§10.4 / FRONTEND §4.2 / CORE §6 第 14 条 |
 
-### 3.7 Web 新建会话的准备与首次提交（计划，`web-session-preparation`，尚未实现）
+### 3.7 Web 新建会话、空会话清理与会话删除（目标，`session-create-and-empty-cleanup`；准备式新建已被 ADR-0016 取代）
 
-Web/PWA 的「新建会话」在产品上分成两段：**准备**（临时）与**首发**（正式）。本节的合同已冻结在 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9 与 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11/§7.3，wire 资产在 `schemas/sync/v1/` 与 `fixtures/sync/v1/`；实现按工作包推进，落地前不得对外宣称已支持。
+> 状态：**已实现**。wire 合同见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §9.8/§11.5/§11.9，存储与事务合同见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §13，客户端行为见 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §4.6；决策与取舍见 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md)。
 
-- **临时准备**：Owner 先分配**最终** `sessionId` 并签发准备凭据（`acp-remote/session-preparation/v1`），允许为它在 Agent 侧建立临时端点以取得**真实的**模式与配置。准备阶段 ACP Remote MUST NOT 持久化会话记录、目录登记、owned 命令或事件：准备不进入目录/快照、不被其他设备看到，也不产生正式恢复承诺。临时资源只存在运行期，计入节点容量（[`CONFIG_REFERENCE.md`](./CONFIG_REFERENCE.md) §4）。
-- **固定标识与地址**：`sessionId` 在准备时就确定，页面地址 `/session/<id>` 在整条流程中保持不变；首次提交成功后不换 ID、不跳转、不重建页面，快照随后让同一地址读到正式内容。
-- **首次提交的原子保存与派发围栏**：首条消息走 Sync-only mutation `session.start`（`kind: initial`）。受理只在**同一事务**写完正式会话、目录归属、完整首条输入、已确认的模式/配置、稳定的消息/请求身份与附件正式引用之后发生（阶段 `saved_not_dispatched`）；`accepted` 只在该事务提交后发出。真正调用 Agent 之前必须先在**同一事务**写入派发围栏（`dispatch_started`），因此崩溃后只有两种确定结论：可证明未派发，或进入既有 `uncertain`（不自动重发）。显式继续（`kind: continue`）只允许对可证明未派发、且上一次尝试已有失败终态的首条提交执行。
-- **单一准备槽位（`conversation-reliability` WP3，已实现）**：同一标签页在当前已配对节点与设备下**最多一个**尚未转正的临时会话。普通导航、返回目录、刷新、切换已有会话及再次点击新建都保留并复用同一 ID、草稿与附件；准备资源过期优先以同 ID `restore`，不因「尚未 ready」另分配。只有显式更换 Agent 才替换准备目标并清理旧材料；新会话页不提供放弃动作、临时状态提示或确认弹层。其他目录的普通新建入口 MUST 返回现有临时会话，不得原位替换目录，也不得把旧证明用于新目录；该临时会话转正后再显式新建才可分配其他目录的新 ID。复制标签页与其他身份不得接管该槽位。会话一旦进入权威快照即退出准备角色，正式会话视图优先。
-- **不采用的替代**：不发送「隐藏首条消息」促使 Agent 写盘，不在准备阶段自动派发 prompt，也不把「已有恢复数据缺失」解释成可重新准备。旧 `session.create`（立即持久化）的语义与 wire 形状不变；未协商该 feature 的客户端**不得**回退到它来代替准备式新建。
-- **正常重启与存储重建**：正常重启后，有效准备凭据可以重新取得/重建准备资源（已受理则返回 `committed` 关联）；存储被整体重建（`storeEpoch` 改变）时旧凭据统一失效并返回不可重试的 `preparation.store_rebuilt`，客户端丢弃旧材料、认证后回目录重新开始。准备阶段建立的空 Agent 会话**不**承诺跨进程恢复。
-
-准备阶段的浏览器草稿、刷新与标签页归属见 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §4.6；凭据不是登录凭证、草稿的窄例外与清理边界见 [`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §12.8；决策背景见 [ADR-0014](./adr/0014-web-session-preparation-before-first-message.md)。
+- **直接创建**：Web/PWA 的「新建会话」直接调用既有 `session.create`，创建即持久化——受理幂等记录 → 建立 Agent 会话 → 在**同一事务**里落正式会话行、Agent 会话标识、目录归属与 `command.completed` 终态（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §6 第 20 条）。因此**首条消息之前会话就已经存在**，并已出现在目录与会话列表里；不存在「临时/准备」阶段，也没有第二套身份、第二套提交命令或预分配 ID。可证明未建会话的失败 ⇒ 零会话行 + 失败终态；无法证明 ⇒ `uncertain`，绝不伪造会话行。
+- **创建即活跃**：创建完成结果与紧随其后的快照对协商了 `core.local-session-lifecycle.v1` 的连接直接投影 `localActivity: active`（生命周期预占在同一编排边界内结算为 ready），没有中间的「空闲」闪变。页面随后声明查看并派发 `session.resume`，已 ready 的端点直接复用。
+- **结果驱动导航**：客户端只在**匹配的创建终态**、且该操作仍是当前导航意图时进入 `/session/<id>`；已受理、失败与 `uncertain` 都不跳转；迟到结果不得把页面切回旧会话。
+- **切换/刷新/重连都以可见会话为目标**：切换会话、刷新、页面重新可见与重连执行同一顺序——为当前可见的会话声明查看并激活；离开即释放查看者。「进入页面 → 恢复原上下文 → 无人查看后按保留期回收」是同一条本机生命周期（[`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §9.8）。
+- **空会话的定义**：空会话指**已正式创建、但从未保存任何会话内容**的会话。标题、模式、配置、目录归属、`session.created`/`session.info.changed`/`session.mode.changed`/`session.config.changed`/`session.activity.changed`/`session.updated`/`session.commands.changed`/`session.usage.changed`/`session.origin.online_changed`/`session.deleted` 这类纯元数据与控制事实、命令受理与终态事件、未提交附件与浏览器草稿都**不是**内容；任何持久消息（含首条用户输入）、轮次、交互、计划/终端/工具/文件改动等结构化历史才是内容。判据只有一条存储查询，排除表见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §13.1。
+- **完整保留期**：空会话在「最后一个查看者离开、且没有未结束或排队任务、未解决交互、未确认的停止或释放」之后开始一个**完整的**保留窗口，缺省 30 分钟（既有配置 `sessions.idle_timeout_ms`；显式 `0` 只关闭按时间回收，容量保护仍生效；键名与默认值以 [`CONFIG_REFERENCE.md`](./CONFIG_REFERENCE.md) §4 为唯一权威）。任一保护条件重新出现即取消计时并在全部解除后重新计时；页面阅读、心跳与配置查询不延长它。Daemon 重启后，仍存在的空会话从启动发现重新获得一个完整窗口，绝不复用可能已经过期的旧截止时间；重启不自动发送、重放或替换任何会话。只有上一次 `shutdown_all` 在全部受管 Agent 停止后原子留下、且新进程成功消费 clean-restart fence 时，启动前遗留会话的缺失 descriptor 才可视为受管进程已退出；fence 缺失、损坏、消费失败或关闭超时/取消都必须保守返回 `Uncertain`，不能凭“当前看不到句柄”删除会话。
+- **先释放、再删除**：期满（或因容量压力提前回收资源）时**先真实释放**运行资源并要求 Agent 确认（`session/close` 成功，或受管进程已确认退出）；只有在释放得到确认、且删除事务内重新检查「仍为空、仍无保护条件」之后才静默删除。释放失败或不可证明（`uncertain`）时保留会话行与容量占用、可重试，绝不按「应该没人看」推测删除；容量压力可以提前回收资源，但**不得**提前删除空会话。
+- **静默删除**：删除不通知用户、不显示删除/关闭提示、不写通知文案。在线客户端按稳定 `eventId` 幂等消费 `session.deleted`，移除目录项、摘要、详情、草稿、激活状态与导航缓存，当前会话页回到目录页 `/`。
+- **非空会话只回收资源**：非空会话离开保留期只释放运行资源，**身份与全部历史保留**，之后可再次进入、恢复原上下文并继续对话。
+- **删除后不可见**：删除保留一个最小 tombstone（清除标题与自定义标题、Agent 会话标识、规范化工作目录、目录归属与模式显示元数据，只留命令/事件的外键锚点与序列）。tombstone 不是会话：列表、读取、快照、摘要、历史、恢复、origin 查找、激活与查看声明一律视其不存在；迟到的激活与删除前创建的命令重试返回 `session.not_found`，不得由删除事件或旧缓存重建会话。`session.delete` 是 ACP Remote 的 Sync mutation，**不是** ACP `session/delete`：它不调用 Agent 的删除方法，也不清理 Agent 自身数据或宿主工作目录。
+- **Access/Node Link 不持久化删除**：删除只发生在 Owner。Access 不保存任何远程删除状态（没有删除索引、没有镜像事件、没有正文/游标/收据/命令状态），Owner 目录不再包含该会话时只丢弃运行期条目并返回常规 not-found，重连一律回 Owner 重建；`session.delete` 不登记、不暴露在 Node Link（[`NODE_LINK_PROTOCOL.md`](./NODE_LINK_PROTOCOL.md) §12.11）。
+- **历史（已被取代）**：本节的旧版本描述过「准备（临时）→ 首发（正式）」两段式新建——Sync-only `session.start`、准备凭据、单一准备槽位、可持久化的准备草稿。该方案已由 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 取代，实现记录保留在 [ADR-0014](./adr/0014-web-session-preparation-before-first-message.md) 与 `web-session-preparation` 变更中，不再作为目标；相关字段、命令、错误码与存储（`owned_first_submission`、`/attachments/.preparation`）计划在 v19 一并删除。
 
 ## 4. 总体架构
 
@@ -238,6 +243,7 @@ session-2 -> command queue -> agent
 - **容量保护**：本机同时占用运行资源的会话数受 `sessions.max_active_sessions` 限制（正整数，候选默认 50，**待实测**；没有无限取值）。创建与恢复共用名额，待处理会话计入、历史会话不计入。满额时优先提前回收无人查看、无任务且无交互的最久未使用会话；所有会话都受保护时以 `session.capacity_exceeded` 拒绝新激活，保留历史可读，MUST NOT 中断受保护会话。50 不是已验证的安全上限，也不是内存硬限额。
 - **展示**：协商该能力的客户端用「空闲 / 活跃 / 待处理」呈现本机活跃程度（有效交互优先待处理；否则未结束任务、已确认可用资源或回收未确认时为活跃；否则空闲），任务细节（正在执行/排队/失败原因）仍读任务事实。未协商的连接与远程导入会话沿用任务三态，不显示本机活跃字段。活跃不是拒绝发送的理由；发送只依据实际可用的运行资源与既有排队策略。
 - **回收**：按会话释放运行资源，保留会话身份与全部历史，不影响同 Agent 的其他会话；只有全部会话都可回收时才允许停止共享进程。无法证明真实释放时明确报告「回收未完成」并保留占用，MUST NOT 只改展示或计数冒充成功。
+- **空会话清理与会话删除（`session-create-and-empty-cleanup`，已实现）**：空会话（已正式创建但从未保存任何会话内容，定义见 §3.7）在完整保留窗口期满后，先真实释放并取得 Agent 确认、再在**一次事务**内静默删除：重新检查存在/为空/无保护 → 追加 `session.deleted` → 清会话历史 → 把会话行收成不可见 tombstone → 追加 `command.completed` → 写终态。非空会话只回收资源并保留身份与历史。tombstone 在全部读面不可见，迟到操作返回 `session.not_found`。激活、查看、释放与删除按每个会话的单一生命周期顺序线性化：激活先提交时，尚未受理的删除候选放弃并等新的完整窗口，已经受理的删除仍写 `command.failed`；删除先提交则迟到的激活不会打开任何 Agent。事务、已受理命令的终态与可见性谓词见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §13，wire 语义见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9。
 
 ### 5.3 ACP 兼容性不变量
 
@@ -452,7 +458,7 @@ Owner Node 需要保存足以支持客户端和 Access Node 历史查看、断�
 - 终端完整输出：限制 head/tail 和总大小。
 - 大型 diff：压缩并限制容量。
 - 图片、音频与文件：已提交附件使用内容寻址存储，随所属消息保留与清理；不设附件数量/大小产品额度，但受分块、并发、速率、磁盘与库容量保护。未提交上传按 24 小时闲置清理；远程附件正文只由 Owner 保存，Access 不落盘。
-- 准备阶段的临时资源：运行期准备目录、租约/资源代、准备凭据与临时端点都不写 SQLite，也不进快照、事件或命令历史（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §5.11）。首次受理事务才写入正式记录（`owned_first_submission` 的 DDL 见该文档 §7.3）：完整首条输入、稳定消息身份与派发阶段随会话保留；即使首条尚未派发，它也是正式记录，不随未提交上传的 24 小时 TTL 清除。存储整体重建后旧准备凭据失效（`preparation.store_rebuilt`），客户端不得凭旧材料恢复。
+- 空会话与删除后的残留：空会话在删除之前仍是正式会话（标题、模式、目录归属等元数据按正常规则保存）；删除后只留一个不可见的最小 tombstone——`owned_session` 行保留 `session_id`/`origin_epoch`/时间戳与命令、事件的外键锚点，标题、Agent 会话标识、路径与显示元数据全部清除，会话历史（消息、轮次、交互、附件绑定、内容事件）删除，命令幂等行与终态事件保留（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §13，计划）。未提交上传只存在于运行期暂存目录并按 24 小时孤儿清理；Access 不保存任何远程删除状态。
 
 ### 10.4 保留策略默认值
 

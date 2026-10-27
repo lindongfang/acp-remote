@@ -4,6 +4,7 @@
 
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 30 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。Owner 侧的节点状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）已由 `server::node_link` 落地（切片 5，`node-link-owner`）；Access 侧的出站客户端 crate `node-link-client` 已落地（WSS 握手、单任务重连与撤销、catalog 无正文投影、`commit_receipt` → 发布 → `resource.ack`、远程 `SessionEndpoint`/`SessionBackendFactory`、独立附件连接与有界内存转发）；**已接线**的是 Access 侧配对（`node pair --mode access` 的 HTTPS claim/status 与 Owner 信任落盘）、Daemon 启动时对 `NodeLinkClient`/Owner 连接的实例化，以及 `AccessManager` 向本地调用方暴露的远程 `SessionEndpoint` 与附件转发入口（2026-10-20，WP5d）；仍未落地的是 `server::acp_facade`（本地 ACP 客户端的业务命令转发）。  
 > 版本：1.0  
+> 修订记录（2026-10-26，`session-create-and-empty-cleanup` WP1，**docs-only：无 wire 变更**）：新增 §12.11 登记会话删除的边界——`session.delete` 不在 Node Link 登记或暴露、`session.deleted` 不跨节点转发（§11.4 的共享事件集合随之排除该类型）、Access 按 Owner 当前 catalog/快照丢弃运行期目录条目并返回常规 not-found、不持久化任何远程删除状态（索引/墓碑/事件镜像/正文/游标/receipt/命令状态），重连一律回源，imported 会话不可再导出。§11.5 补一条未协商口径。消息形状、feature 表、错误码与 fixture 均未变。
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§11.3 登记 `core.session-title.v1` 并宣告（Owner 持久化、Access 转发已接线）；§11.5 补未协商时的拒绝口径；§12.7 新增 `session.title.set`（closed payload `{ title }`，输入按 wire 原文 1..=512 个 Unicode 标量值、保存 trim 后的文本），`command.submit` 的命令名计数更新为 14。**取代**旧条款「标题仅由 Agent 更新、不存在客户端重命名入口」（原文见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.3 与 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §5；本文件此前没有单独的标题写入条款）；Owner 侧持久化与命令接线已落地。  
 > 修订记录（2026-10-19，`conversation-area-complete` 的合同包，无实现变更）：§11.3 登记 `node-link.attachment-transfer.v1`/`node-link.typed-media.v1`/`node-link.pending-interactions.v1`/`node-link.remote-history.v1`；新增 §11.5（旧 peer 与未协商行为）、§12.9（独立已认证附件连接、13 个附件帧与固定预算）与 §12.10（有效交互与远程历史）；§12.7 的 `session.read`/`session.prompt`/`elicitation.respond`/`permission.resolve` 增加协商后字段；§14.1 增补附件/媒体/交互错误码与 details 登记；§2.5、§17、§18 同步预算、范围与必测场景。实现与 fixture 之外的 wire 行为仍标为计划/待实施，`node-link-client` 仍未落地。  
 > 修订记录（2026-10-16，`pairing-model`）：**删除节点配对的短验证码**——§9.2 的 domain 表与 §9.4 的字段集合删除 `acp-remote/node-link-pairing-sas/v1` 一行与 SAS 计算规则，§8.2 与 §13.2 的确认仪式去掉 SAS（本机界面仍显示节点名、类型、指纹与待授予的 `grant.*`），机器资产（`compatibility/transcripts/v1/transcripts.json` 与节点侧固定向量）同步删除。**设备方向不再有授权维度**——§3.4 与 §10 的措辞收窄为「设备通过认证即可执行本节点命令」，`pack.*`/`preset.*` 两类词汇（设备授权包与配对预设）删除，跨节点导出授权 `grant.*`、Export `scopes` 与 Import `grants` 边界不变。Node Link 面的这次修订**不改 wire**：本节列出的都是节点配对仪式与词汇表口径，消息形状、握手、catalog、resource、command 与 `fixtures/node-link/v1/` 的其余向量不变（仅删除 `transcripts/pairing-sas.json` 与 `manifest.json` 的对应条目；§12.7 的 `session.create` 仍只接受 `workspaceDirectory`、请求不得携带任意 Owner 路径）。  
@@ -420,7 +421,7 @@ Node Link 握手交换：
 
 Node Link 不另立一份 event type 表：
 
-- `resource.event.eventType` 的取值集合与每个类型的最低 `view` 字段，等于 `SYNC_PROTOCOL.md` §10.2 与 §10.3 的登记集合，减去只由 Access Node 本地产生、不跨节点传输的 `session.origin.online_changed`。
+- `resource.event.eventType` 的取值集合与每个类型的最低 `view` 字段，等于 `SYNC_PROTOCOL.md` §10.2 与 §10.3 的登记集合，减去只由 Access Node 本地产生、不跨节点传输的 `session.origin.online_changed`，以及只属于本机生命周期的 `session.deleted`（删除是 Owner 的 Sync-only 事实，Node Link 不登记、不转发，见 §12.11）。
 - 机器表达复用 [`schemas/sync/v1/event-views.schema.json`](../schemas/sync/v1/event-views.schema.json)：Node Link 的事件 fixture 用该文件的 `$defs` 校验 `payload.view`。
 - 未登记的 `eventType` 按未知事件处理：保留 `payload.acp`、向本地客户端可见降级，不得静默丢弃，也不得把结构化事件降级成普通文本。
 - `view` 内允许的 JSON 取值遵守 `SYNC_PROTOCOL.md` §3.3 的 ACPR-CJ1 取值域（数字必须是整数），否则 `payloadDigest` 无法跨实现复算。
@@ -434,6 +435,7 @@ Node Link 不另立一份 event type 表：
 - **来源流是加性 feature**：未协商 `resource.stateless-origin.v1` 时不发送也不接收 `resource.caught_up`/`resource.reset_required`/`resource.unavailable`、`command.status.remoteTarget` 或 `session.read` 的 `readCursor`/`sessionSummary`/`messageCoverage`；收到未协商的新资源帧按 `nodelink.protocol.type_unsupported` 拒绝，收到未协商的封闭字段按 `nodelink.protocol.schema_invalid` 拒绝。`resource.ack` 的 wire 形状不变，但只有在该 feature 协商后才按「运行期处理进度」解释；未协商时沿用既有 v1 语义。Access MUST NOT 用本地落盘索引冒充该 feature，Owner 也不得据此提前清理保留期数据。
 - **三态合同是必需 feature**：`core.session-activity.v1` 未由双方选中时连接不进入业务阶段（§11.3）。旧 Owner 面对新 Access：`node.challenge.selectedFeatures` 里没有该 ID，Access MUST 停止同步并提示版本不兼容，MUST NOT 按七态摘要自行折算或把 `pending` 当作某个 `waiting_*`。旧 Access 面对新 Owner：`node.hello` 未声明该 ID，Owner MUST 以 `nodelink.protocol.feature_required` 拒绝，且 MUST NOT 下发三态 `sessionMeta`、catalog 会话或快照条目。
 - **标题写入是加性 feature**：未协商 `core.session-title.v1` 时 Access MUST NOT 发送 `session.title.set`；Owner 收到时在触碰会话状态之前以 `nodelink.protocol.feature_required` 拒绝（`details.features` 给出该 ID），标题与版本都不变。协商后 Access 只把命令转发给 Owner、不落盘标题或命令状态，结果未知时以 `command.status` + `remoteTarget` 回源原请求，不自动换号重发；`sessionMeta`/catalog 与 `session.read` 的 `sessionSummary` 始终是 Owner 给出的有效标题（不新增 `customTitle` 键），旧 peer 的读取形状因此逐字不变。
+- **删除不跨节点**：`session.delete`/`session.deleted` 不属于 Node Link（§12.11）——本面既不登记该命令与事件，也没有「远程已删除」的持久事实；Access 只按 Owner 当前 catalog/快照收敛目录，重连回源重建。未协商 `core.local-session-lifecycle.v1` 的连接与本节其它加性 feature 一样看不到任何删除相关字段或事件。
 
 ## 12. 消息族与消息体
 
@@ -741,6 +743,16 @@ Node Link 的配对 HTTP 载荷（§13）不在 WSS 联合入口内：
 - **应答校验**：`permission.resolve`/`elicitation.respond` 在 Owner 侧重新校验节点身份、会话、请求仍为 pending、`requestVersion`、上游等待方存活与表单值；版本不符返回 `nodelink.interaction.version_conflict`，已处理返回既有 `nodelink.command.idempotency_conflict` 或已处理事实，失效/上游丢失/Owner 不可达返回 `nodelink.interaction.unavailable`，均不消耗请求。首个有效答案胜出，其余显式返回已处理。
 - **远程历史**：协商 `node-link.remote-history.v1` 后，`session.read` 的 `history` include、`beforeHistory` 与消息页的 `before`/`limit` 由 Owner 按 origin 会话内序号/复合游标分页，Access 只转发页边界与来源游标，不保存无正文索引；每次读取前重新鉴权，Owner 不可达返回 `nodelink.resource.owner_unavailable`，超出保留期显式不可用，MUST NOT 返回空页。
 - **不复制正文**：两类读取都只在内存转发；Access MUST NOT 把历史条目、交互 schema 或表单值写入数据库、临时文件、日志或持久缓存。
+
+### 12.11 会话删除的边界（`session.delete` / `session.deleted`）
+
+删除只发生在 Owner，且**只经 Sync 面**（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.9，存储与事务见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §13）。Node Link 侧因此是纯边界，没有新增帧、字段或 feature：
+
+- **不在 Node Link 登记或暴露**：`session.delete` 不是 Node Link 命令——它不在 `command.submit.command` 的封闭集合里（[`schemas/node-link/v1/command.schema.json`](../schemas/node-link/v1/command.schema.json) 的 `commandName`，§12.5/§12.7）、不在 §11.3 的 feature 表中、也没有对应 payload 形状。由于该 `enum` 是封闭的，Access 把它当作 `command` 提交时在**结构层**就被拒绝（`nodelink.protocol.schema_invalid`），不会到达 Owner 的命令分派，因此也不会被映射成任何本地删除动作；`nodelink.command.unsupported` 只用于「命令名本身合法、但本 Owner 不投影该能力」的既有分支。它同样不是 ACP `session/delete`。
+- **Owner catalog 是唯一事实**：会话被删除后，Owner 的 catalog、`sessionMeta` 与 `session.read` 一律不再包含它（tombstone 不是会话）。Owner 用既有 `catalog.snapshot` 消息向在线 Access 发布调用删除事务后的当前清单；该快照是目录刷新，不承载删除事件或原因。Access 在收到新 catalog/快照时**丢弃该会话的运行期目录条目与来源模型**；此后的 `resource.attach`、`session.read`、`session.prompt` 等按常规 not-found 失败（`nodelink.command.not_found` 或既有归属校验错误），MUST NOT 触发自动重建、自动重放或「可能只是暂时读不到」的降级。
+- **不持久化删除事实**：Access MUST NOT 为远程删除写任何持久状态——没有删除索引表、没有墓碑行、没有镜像的 `session.deleted` 事件、没有正文/摘要/游标/receipt/ACK/命令状态。删除后的目录收敛完全来自 Owner 的当前 catalog 与快照；**本协议不存在**「Access 本地记录了一次 Owner 删除」这种事实，也不存在需要跨重启保留的「已删除会话」清单。
+- **重连一律回源**：断线、重连或 catalog revision 变化后，Access 重新 `catalog.subscribe` 并 `resource.attach`（§15），目录与可见性由 Owner 当时的状态决定；不沿用旧目录、不据上一次快照推断删除，也不需要保留任何「离线期间的删除」。
+- **imported 会话不能被重新导出**：同一资源只允许一个 hop（§4），因此 Access 本地持有的 imported 会话既不能通过 Node Link 再导出给第三节点，也不能成为本节点 `session.delete` 的对象——删除只作用于 Owner 自己 owned 的本机会话。
 
 ## 13. 节点配对 HTTP
 

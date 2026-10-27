@@ -15,7 +15,6 @@ pub mod broker;
 pub mod lifecycle;
 pub mod model;
 pub mod ports;
-pub mod preparation;
 pub mod use_cases;
 
 mod derive;

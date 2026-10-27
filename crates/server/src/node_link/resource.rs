@@ -53,9 +53,12 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
+use crate::node_link::catalog::{advance_catalog_revision, project, publication_guard};
 use crate::node_link::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome};
 use crate::node_link::link_error;
 use crate::transport::net::Shutdown;
+
+const SESSION_DELETED_EVENT: &str = "session.deleted";
 
 /// 扇出链路自己的有界队列容量（每连接队列之外的第二道；满了只丢这一条并记日志，broker 绝不被阻塞）。
 pub const EVENT_QUEUE_CAPACITY: usize = 1024;
@@ -155,6 +158,10 @@ impl ResourceRoute {
 
     /// 把一条已持久化的 owned 事件投递给所有订阅了该会话的连接。
     async fn fan_out(&self, event: &CommittedEvent) {
+        if event.event_type.as_str() == SESSION_DELETED_EVENT {
+            self.refresh_catalog_after_deletion(event).await;
+            return;
+        }
         if !node_link_forwards(event.event_type.as_str()) {
             // Sync 专有事件（`session.activity.changed`）：不构造、不投递（§5.3）。
             return;
@@ -221,6 +228,52 @@ impl ResourceRoute {
                     "the connection cannot take the event right now"
                 );
                 self.forget_if_closed(&key);
+            }
+        }
+    }
+
+    /// `session.deleted` is a Sync-only fact and never becomes a `resource.event`.
+    /// The catalog revision still changed, so publish the current catalog snapshot
+    /// through the existing message. The snapshot omits tombstones and lets every
+    /// online Access node discard the removed runtime entry without persisting a
+    /// remote deletion index or event mirror.
+    async fn refresh_catalog_after_deletion(&self, event: &CommittedEvent) {
+        let _publication = publication_guard().await;
+        advance_catalog_revision(event.global_sequence.get());
+        for handle in self.registry.handles() {
+            let view = match self.core.node_link_catalog_view(handle.node_id()).await {
+                Ok(view) => view,
+                Err(error) => {
+                    warn!(
+                        event = "node_link.catalog_refresh_failed",
+                        access_node_id = handle.node_id().as_str(),
+                        error = ?error,
+                        "the post-deletion catalog projection could not be read"
+                    );
+                    continue;
+                }
+            };
+            let snapshot = match project(&view) {
+                Ok(snapshot) => snapshot,
+                Err(fault) => {
+                    warn!(
+                        event = "node_link.catalog_refresh_projection_failed",
+                        access_node_id = handle.node_id().as_str(),
+                        fault = fault.as_str(),
+                        "the post-deletion catalog cannot be published as-is"
+                    );
+                    continue;
+                }
+            };
+            if handle
+                .send(MessageType::CatalogSnapshot, &snapshot)
+                .is_err()
+            {
+                debug!(
+                    event = "node_link.catalog_refresh_skipped",
+                    access_node_id = handle.node_id().as_str(),
+                    "the connection cannot take the refreshed catalog"
+                );
             }
         }
     }
@@ -1021,10 +1074,12 @@ pub struct NodeLinkPublisher {
 ///
 /// `session.activity.changed` 只描述**本机**运行资源的活跃程度，Access 用它的 origin cursor 也读不到
 /// 任何可消费的会话内容；把它发给已配对节点既是合同外的扩展，也让远端看到一个它无法解释的事件类型。
+/// `session.deleted` 同样不进入 `resource.event`；它只作为扇出循环内部的目录失效触发点，随后发送一份
+/// 不含墓碑的当前 `catalog.snapshot`（§12.11）。
 /// 过滤点覆盖三条投递腿：实时扇出的发布端（尽早丢弃）、扇出投递与增量重放。重放批次仍按**未过滤**的
 /// head 发 `resource.caught_up`，因此远端游标会跨过被过滤的序号段，不会反复重读同一条。
 fn node_link_forwards(event_type: &str) -> bool {
-    event_type != LOCAL_ACTIVITY_EVENT
+    event_type != LOCAL_ACTIVITY_EVENT && event_type != SESSION_DELETED_EVENT
 }
 
 impl NodeLinkPublisher {
@@ -1041,7 +1096,9 @@ impl EventPublisher for NodeLinkPublisher {
             // 非会话级事件（node 作用域）没有会话级 origin cursor，也不属于任何 attachment。
             return;
         }
-        if !node_link_forwards(event.event_type.as_str()) {
+        if !node_link_forwards(event.event_type.as_str())
+            && event.event_type.as_str() != SESSION_DELETED_EVENT
+        {
             // Sync 专有事件：不进队列（扇出/重放两处还有同样的过滤，这里只是尽早丢弃）。
             return;
         }
@@ -1318,10 +1375,12 @@ mod tests {
         }
     }
 
-    /// §5.3/§11.8：`session.activity.changed` 是 Sync 专有投影，Node Link 三条投递腿都不得转发它。
+    /// Sync-only lifecycle facts never become Node Link `resource.event`s. A deletion
+    /// is still queued as an internal catalog-refresh trigger.
     #[test]
-    fn the_lifecycle_activity_event_is_never_forwarded() {
+    fn sync_only_lifecycle_events_never_become_resource_events() {
         assert!(!node_link_forwards(LOCAL_ACTIVITY_EVENT));
+        assert!(!node_link_forwards(SESSION_DELETED_EVENT));
         assert!(node_link_forwards("session.updated"));
 
         let (publisher, mut receiver) = NodeLinkPublisher::channel();
@@ -1329,6 +1388,15 @@ mod tests {
         assert!(
             receiver.try_recv().is_err(),
             "生命周期的活动事件不得进入 Node Link 的投递队列"
+        );
+        publisher.publish(event(SESSION_DELETED_EVENT));
+        assert_eq!(
+            receiver
+                .try_recv()
+                .expect("删除事实必须进入内部目录刷新队列")
+                .event_type
+                .as_str(),
+            SESSION_DELETED_EVENT
         );
         publisher.publish(event("session.updated"));
         assert_eq!(

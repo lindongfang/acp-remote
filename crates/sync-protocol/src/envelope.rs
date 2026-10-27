@@ -51,10 +51,6 @@ pub enum MessageType {
     SessionView,
     /// `session.view.result`：服务端对同一个 `viewVersion` 的应答。
     SessionViewResult,
-    /// `session.preparation`（`core.session-preparation.v1`，§11.9）：准备控制请求。
-    SessionPreparation,
-    /// `session.preparation.result`：准备控制结果（闭合 status 判别联合）。
-    SessionPreparationResult,
 }
 
 /// 消息类型在认证前后的归属，决定信封是否必须携带连接字段。
@@ -70,7 +66,7 @@ pub enum AuthState {
 
 impl MessageType {
     /// 与 schema 的 `type` 常量逐条相等的完整集合，顺序即 `docs/SYNC_PROTOCOL.md` §4 的家族顺序。
-    pub const ALL: [MessageType; 31] = [
+    pub const ALL: [MessageType; 29] = [
         MessageType::AuthClientHello,
         MessageType::AuthServerChallenge,
         MessageType::AuthClientProof,
@@ -100,8 +96,6 @@ impl MessageType {
         MessageType::CommandResult,
         MessageType::SessionView,
         MessageType::SessionViewResult,
-        MessageType::SessionPreparation,
-        MessageType::SessionPreparationResult,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -135,8 +129,6 @@ impl MessageType {
             MessageType::CommandResult => "command.result",
             MessageType::SessionView => "session.view",
             MessageType::SessionViewResult => "session.view.result",
-            MessageType::SessionPreparation => "session.preparation",
-            MessageType::SessionPreparationResult => "session.preparation.result",
         }
     }
 
