@@ -42,3 +42,6 @@ openspec/changes/**/reports/**/*.log
 # 每次删除后又被重建、反复出现在 `git status` 里。
 *.sqlite3-wal
 *.sqlite3-shm
+
+# 编码宿主配置属于本机偏好，不再作为项目执行依赖
+/.omp/

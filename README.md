@@ -1,5 +1,7 @@
 # ACP Remote
 
+开发流程见 [变更执行工作流](docs/WORKFLOW.md)：不要求安装特定编码宿主或模型，也不强制每包启动独立 reviewer。默认串行实现，按风险复核；本地验证与 PR 必需检查仍须通过。
+
 本地优先的 ACP（Agent Client Protocol）中转站：一个节点可以直接管理本地 Agent，也可以通过 Node Link 导入其他节点导出的 Agent；手机、电脑、Zed、PWA 与 CLI 都是客户端形态，不是固定权限角色。
 
 ## 仓库当前状态
