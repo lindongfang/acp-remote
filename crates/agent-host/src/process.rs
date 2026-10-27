@@ -739,11 +739,13 @@ impl Supervisor {
                 detail: "startup failed without a cleanup target".to_owned(),
             });
         };
+        // A child existed: even confirmed cleanup cannot turn this attempt into NotStarted.
+        // Keep the host's permanent startup veto on every platform, before cleanup can yield.
+        lease.proof.mark_unconfirmed();
         let confirmed = spawned.clean_up_after_spawn(&primary).await;
-        if confirmed {
-            return Err(primary);
+        if !confirmed {
+            lease.retain(spawned);
         }
-        lease.retain(spawned);
         Err(HostError::SpawnCleanupUnconfirmed {
             detail: primary.to_string(),
         })
