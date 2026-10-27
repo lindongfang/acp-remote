@@ -410,6 +410,15 @@ async fn create_v18(dir: &Path, seed: bool) -> PathBuf {
 
     let preparation = dir.join("attachments").join(".preparation");
     std::fs::create_dir_all(preparation.join("nested")).expect("preparation dir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            dir.join("attachments"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .expect("private v18 attachment directory");
+    }
     std::fs::write(preparation.join("nested/upload.part"), b"uncommitted")
         .expect("preparation file");
     path
