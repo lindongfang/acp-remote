@@ -90,7 +90,7 @@ windows-dpapi = "0.2"
 clap = { version = "4.6", features = ["derive"] }
 # `config origin` 的只读网卡枚举：`if-addrs` 0.14（MIT OR BSD-3-Clause）是跨平台 getifaddrs 包装，只返回接口地址，
 # 不启动网络、不解析主机名；`config origin` 是唯一消费点，启动路径不依赖它。
-if-addrs = "0.14"
+if-addrs = "0.15"
 # `app` 读 CONFIG_REFERENCE.md 的配置文件（只读，不回写，因此不引入 toml_edit）。
 toml = "1.1"
 # 单实例锁的 OS advisory 文件锁：unix 走 `flock`、Windows 走 `LockFileEx`，公开 API 只有独占锁 +
