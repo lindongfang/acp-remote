@@ -88,6 +88,13 @@ fn remote() -> acp_core::model::RemoteSessionRef {
     )
 }
 
+fn wire_remote() -> node_link_protocol::common::RemoteSessionRef {
+    node_link_protocol::common::RemoteSessionRef {
+        owner_node_id: uuid_text(OWNER_NODE),
+        session_id: uuid_text(SESSION),
+    }
+}
+
 /// `resource.attached`：票证与当前会话元数据。
 fn attached() -> Attached {
     Attached {
@@ -121,6 +128,48 @@ async fn send_catalog_snapshot(io: &mut OwnerIo, connection: &node_link_protocol
     };
     io.send_envelope(MessageType::CatalogSnapshot, connection, &snapshot)
         .await;
+}
+
+/// Send a full catalog that no longer contains the imported session.
+async fn send_empty_catalog_snapshot(
+    io: &mut OwnerIo,
+    connection: &node_link_protocol::common::Uuid,
+) {
+    let snapshot = node_link_protocol::catalog::CatalogSnapshot {
+        revision: decimal(2),
+        agents: node_link_protocol::catalog::AgentEntryList::new(Vec::new()).expect("agents"),
+        directories: node_link_protocol::catalog::DirectoryEntryList::new(Vec::new())
+            .expect("directories"),
+        sessions: node_link_protocol::catalog::CatalogSessionList::new(Vec::new())
+            .expect("sessions"),
+    };
+    io.send_envelope(MessageType::CatalogSnapshot, connection, &snapshot)
+        .await;
+}
+
+async fn wait_for_catalog_len(
+    runtime: &node_link_client::RemoteRuntime,
+    owner: &NodeId,
+    expected: usize,
+) {
+    use acp_core::ports::RemoteRuntimeDirectory as _;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if runtime
+            .snapshot(owner)
+            .await
+            .expect("remote directory")
+            .is_some_and(|snapshot| snapshot.sessions.len() == expected)
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "catalog did not converge to {expected} sessions"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }
 
 /// 回填 `resource.attached`（票证与当前会话元数据）。
@@ -219,20 +268,7 @@ async fn prompt_routes_through_the_attachment_ticket_and_keeps_the_caller_reques
             .recv_envelope(&session.connection_id, &mut inbound)
             .await
             .expect("catalog.subscribe");
-        let snapshot = node_link_protocol::catalog::CatalogSnapshot {
-            revision: decimal(1),
-            agents: node_link_protocol::catalog::AgentEntryList::new(Vec::new()).expect("agents"),
-            directories: node_link_protocol::catalog::DirectoryEntryList::new(Vec::new())
-                .expect("directories"),
-            sessions: node_link_protocol::catalog::CatalogSessionList::new(Vec::new())
-                .expect("sessions"),
-        };
-        io.send_envelope(
-            MessageType::CatalogSnapshot,
-            &session.connection_id,
-            &snapshot,
-        )
-        .await;
+        send_catalog_snapshot(&mut io, &session.connection_id).await;
 
         // 第一条 prompt：先 attach，再提交。
         let attach = io
@@ -327,6 +363,76 @@ async fn prompt_routes_through_the_attachment_ticket_and_keeps_the_caller_reques
         acp_core::model::SessionReference::Remote(remote())
     );
     link.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_removal_rejects_attach_even_when_an_old_ticket_was_cached() {
+    let owner = ownership();
+    let mem = Arc::new(MemTransport::default());
+    let (client_connection, mut io) = OwnerIo::pair();
+    mem.push(client_connection);
+    let (remove_tx, remove_rx) = tokio::sync::oneshot::channel();
+
+    let owner_task = tokio::spawn(async move {
+        let session = accept_handshake(&mut io, &owner, &selected_features(&[])).await;
+        let mut inbound = session.inbound_next;
+        let _ = io
+            .recv_envelope(&session.connection_id, &mut inbound)
+            .await
+            .expect("catalog.subscribe");
+        send_catalog_snapshot(&mut io, &session.connection_id).await;
+
+        let attach = io
+            .recv_envelope(&session.connection_id, &mut inbound)
+            .await
+            .expect("initial resource.attach");
+        assert_eq!(attach.message_type(), MessageType::ResourceAttach);
+        reply_attached(&mut io, &session.connection_id).await;
+
+        remove_rx.await.expect("remove catalog");
+        send_empty_catalog_snapshot(&mut io, &session.connection_id).await;
+
+        let unexpected = io.recv_envelope(&session.connection_id, &mut inbound).await;
+        assert!(
+            unexpected.is_none(),
+            "an attach queued after catalog removal must not reach the Owner"
+        );
+    });
+
+    let runtime = node_link_client::RemoteRuntime::new();
+    let client = NodeLinkClient::new(
+        mem.factory(),
+        Arc::new(FixedIdentity::new([0x71; 32])),
+        Arc::clone(&runtime),
+    );
+    let link = client
+        .open(ClientConfig::new(
+            owner_trust(&ownership()),
+            "wss://owner.test/node-link/v1",
+            TlsTrust::PlaintextDev,
+        ))
+        .expect("open");
+    wait_online(&link).await;
+    wait_for_catalog_len(&runtime, link.owner(), 1).await;
+
+    let ticket = link
+        .shared()
+        .attach(wire_remote())
+        .await
+        .expect("initial attachment");
+    assert_eq!(ticket.remote, wire_remote());
+
+    remove_tx.send(()).expect("request catalog removal");
+    wait_for_catalog_len(&runtime, link.owner(), 0).await;
+    assert!(link.shared().attachment(&wire_remote()).is_none());
+
+    assert!(matches!(
+        link.shared().attach(wire_remote()).await,
+        Err(ClientError::NotFound(session)) if session.as_str() == SESSION
+    ));
+
+    link.shutdown().await;
+    owner_task.await.expect("owner task");
 }
 
 /// 连接在命令受理前丢失 → 调用方得到失败；重连后**只**发 `command.status`，绝不重发 `session.prompt`。

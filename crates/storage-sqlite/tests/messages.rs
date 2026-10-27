@@ -680,7 +680,7 @@ async fn prompt_input_without_echo_remains_readable() {
     let message =
         acp_core::model::MessageId::new("40000000-0000-4000-8000-000000000042").expect("message");
     let text = "第二条没有回显的输入";
-    let content = acp_core::model::FirstSubmissionInput::new(vec![
+    let content = acp_core::model::PromptInput::new(vec![
         acp_core::model::PromptContentBlock::from_json_text(
             &serde_json::json!({"type": "text", "text": text}).to_string(),
         )

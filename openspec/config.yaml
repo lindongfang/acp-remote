@@ -38,10 +38,10 @@ rules:
     - design.md 是必产 artifact，不得因变更规模省略。
     - 涉及部署、数据迁移或回滚时必须写 `## Migration Plan`；Open Questions 只记录可安全延后的未知项。
   plan:
-    - 执行原语只能是本仓库的 Oh My Pi（omp）：batch `task` 派发、`task.isolation` patch 模式且 apply 关闭、`<id>.patch` + `agent://<id>` 交付、主 Agent 串行 `git apply`。不得引入外部调度器或第二套台账。
+    - 执行方式遵循 docs/WORKFLOW.md，默认单执行者串行完成；需要并行时使用隔离工作区，不依赖指定宿主、模型、角色名或报告 URI。
     - 工作包写范围不得重叠；确实重叠的必须在本文件的 Merge Order 里串行并声明后合入者需重跑的检查。
-    - Project Verify 只写主检出可执行的命令：隔离工作区没有 `target/` 与 `node_modules/`。
-    - 每个工作包都必须有对应的检视行，且检视者不能是作者那次 spawn。
+    - Project Verify 写明命令、依赖和实际执行位置；最终验证覆盖待提交的集成结果。
+    - Code Review 按风险说明复核方式；普通低风险改动可由执行者检查，独立复核可使用任意可用人员或 Agent，不要求每包启动检视进程。
   tasks:
     - 每个 `- [ ] X.Y` 必须在同一行内写明完成判据（测试、命令、可观察行为或交付物）。
     - 每个任务组必须自带它该有的测试与文档，不得把所有测试和文档堆到最后一组。
@@ -52,17 +52,15 @@ operations:
   apply:
     guidance:
       - 派发前先确认 plan.md 已通过检视：写范围无静默重叠、合入顺序覆盖所有重叠、每个工作包都有可执行位置正确的 Verify。
-      - 用 `task` 工具的 batch 形状派发，共享背景放 `context`，逐包写 `task` 与 `solutionSpace`；不要串行逐个 spawn 本来可以并行的包。
-      - 每个工作包的 `isolated` 必须为 true，隔离配置来自项目 `.omp/config.yml`（patch 模式，apply 关闭）。不要让子 Agent 直接改主检出。
-      - 交付物是 `<id>.patch` + `agent://<id>` + `history://<id>`。子 Agent 结束后先 `git apply --check` 校验，再按 Merge Order 串行 `git apply`。
-      - 合入固定用命令行 `git apply`，不要改用 omp 原生 git。`omp git` 是交互 TUI 无法自动化；`omp commit` 按目录名推 scope 会被 commitlint 拒，且 `--dry-run` 也会抹掉索引里的执行位；`merge` 的 branch 模式未实测且绕开 `--check`。依据见 `docs/WORKFLOW.md` §6.1 与 §6.3。
-      - 提交信息按 `commitlint.config.mjs` 的 type/scope 词表手写（scope 是模块边界，不是目录名）。不要跑 `omp commit`，它生成的 scope 必被钩子拒绝且会改动 git 索引。
-      - 本地合入后按 `docs/WORKFLOW.md` §6.2 走远端落地：为这一批 patch 开分支、推远端、`gh pr create --fill`、`gh pr checks --watch` 等六个必需检查（含 `前端检查（clients/app）`）全绿后 `gh pr merge --squash`。PR 标题同样必须符合 `commitlint.config.mjs`（squash 用它当提交信息）；不要直推 main，那只会走 admin bypass 并跳过三个只在 CI 跑的判定（依赖/公告/密钥）。
-      - 仓库级检查（`npm run verify`、`cargo test`、`npm run check`）只在主检出、合入之后执行；不要要求隔离工作区跑它们。
-      - 检视必须是独立 spawn，读 patch 与 `agent://<id>`/`history://<id>`；作者自评不算检视证据。
-      - 检视返回 changes-requested 时派**新** spawn 修复：隔离 spawn 结束后无法再被唤起，所以不能让原 coder 继续；prompt 必须自带工作包目标、写范围、上一版 patch 与 findings 原文。复核用新 reviewer spawn，只修一部分就继续循环；同一工作包最多修 3 轮，超过说明该重新拆工作包。合入只应用最终通过的那一版 patch。
-      - 检视返回 blocked 时不是派修复，而是补齐缺失证据后重新检视。
-      - 派发前确认主检出工作区相对干净：隔离区的基线是**整个工作目录的副本**（含未提交改动），半成品改动会被带进工作包并隐含依赖。
+      - 默认由当前执行者串行实现；确需并行时明确基线、写范围与隔离工作区，不允许并行写入同一工作区。
+      - 可交付实际 diff、patch 或提交及可读报告；patch 合入先 git apply --check 再 git apply，提交合入核对范围与依赖。
+      - 直接实现无需绕行 patch；最终检查覆盖实际集成结果，不要求额外宿主、模型或私有会话地址。
+      - 提交信息按 commitlint.config.mjs 校验，避免工具隐式改写索引或扩展提交范围。
+      - 远端按 docs/WORKFLOW.md §6.2 走分支、推送、PR、必需检查全绿、squash 合并，不直推 main 或绕过检查。
+      - 检查在具备依赖的工作区运行；最终执行 npm run verify，前端有改动还需执行 clients/app 的 npm run check。
+      - 按风险复核真实差异，记录问题和结论；不再指定内置 reviewer 或每包独立 spawn，工具不可用不阻断普通低风险改动。
+      - 修复可沿用当前执行上下文，针对实际改动复核；阻断问题先修复，证据不足先补证据，不把未执行写成通过。
+      - 修改和合入前核对用户未提交改动，不覆盖或隐式纳入无关工作。
       - 只有 tracked task 且其完成判据有可读证据时才勾 `- [x]`；失败或受阻保持待办并说明。
   archive:
     guidance:

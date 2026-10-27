@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-26
+goal: Web 新建直接持久化并激活正式会话；使用现有 30 分钟资源回收窗口清理空会话；移除准备式新建。
+retire_capabilities: true

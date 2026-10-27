@@ -34,6 +34,7 @@ import { createComposition } from "../src/composition";
 import type { Composition } from "../src/composition";
 import { ClientStoreProvider } from "../src/features/runtime";
 import { RuntimeLoading, RuntimeUnavailable } from "../src/components/RuntimeUnavailable";
+import { NavigationConsumer } from "./_navigation-consumer";
 
 /** 进程内唯一的组合根：一次装配，多个路由共享同一个 store。 */
 const composition: Composition = createComposition();
@@ -60,6 +61,7 @@ export default function RootLayout(): ReactElement {
 
   return (
     <ClientStoreProvider store={composition.store}>
+      <NavigationConsumer />
       {/* 共享外壳（design D1）：一份外壳装在这里，「开发模式横幅 → 顶栏 → 路由内容 →
           抽屉/遮罩/提示」的装配顺序只有这一处；路由不各自拼导航。 */}
       <Shell>

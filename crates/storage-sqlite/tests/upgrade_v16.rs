@@ -21,7 +21,9 @@ fn at() -> Timestamp {
 async fn downgrade_to_v15(pool: &sqlx::SqlitePool, with_bad_channel: bool) {
     sqlx::raw_sql(
         "PRAGMA foreign_keys = OFF;
-         DROP TABLE owned_first_submission;
+         DROP TABLE IF EXISTS owned_first_submission;
+         ALTER TABLE owned_session DROP COLUMN deleted_at;
+         ALTER TABLE owned_session DROP COLUMN custom_title;
          DROP TABLE owned_user_input;
          CREATE TABLE owned_message_v15 (
            message_id TEXT PRIMARY KEY,
@@ -115,7 +117,7 @@ async fn v15_upgrades_without_touching_old_sessions_and_keeps_references() {
         .await
         .expect("version");
     assert_eq!(version, FILE_FORMAT_VERSION);
-    assert_eq!(FILE_FORMAT_VERSION, 18);
+    assert_eq!(FILE_FORMAT_VERSION, 19);
     let owned: String =
         sqlx::query_scalar("SELECT value FROM meta WHERE key = 'owned_schema_version'")
             .fetch_one(&pool)
@@ -139,11 +141,7 @@ async fn v15_upgrades_without_touching_old_sessions_and_keeps_references() {
             .expect("media");
     assert_eq!(media, 1);
     // 旧会话不被回填成准备，也没有首条关联。
-    let submissions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM owned_first_submission")
-        .fetch_one(&pool)
-        .await
-        .expect("submissions");
-    assert_eq!(submissions, 0);
+    assert!(!table_exists(&pool, "owned_first_submission").await);
     // v17 的受理关联表已建出，但旧消息不被回填成普通输入（不按附近回复猜补）。
     let user_inputs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM owned_user_input")
         .fetch_one(&pool)
@@ -161,26 +159,7 @@ async fn v15_upgrades_without_touching_old_sessions_and_keeps_references() {
     .execute(&pool)
     .await
     .expect("user channel accepted");
-    let foreign_key = sqlx::query(
-        "INSERT INTO owned_first_submission
-           (session_id, first_submission_id, user_message_id, first_request_id, current_request_id,
-            actor_kind, actor_id, request_fingerprint, input_json, input_digest, config_json,
-            stage, ever_dispatched, created_at, updated_at)
-         VALUES ('99999999-9999-4999-8999-999999999999',
-                 '66666666-6666-4666-8666-666666666666',
-                 '77777777-7777-4777-8777-777777777777',
-                 '88888888-8888-4888-8888-888888888888',
-                 '88888888-8888-4888-8888-888888888888',
-                 'device', 'x', 'y', '[]', 'z', '{}',
-                 'saved_not_dispatched', 0, ?1, ?1)",
-    )
-    .bind(AT)
-    .execute(&pool)
-    .await;
-    assert!(
-        foreign_key.is_err(),
-        "首条行必须引用存在的会话（ON DELETE RESTRICT）"
-    );
+    assert!(!table_exists(&pool, "owned_first_submission").await);
     let before_meta = meta_rows(&pool).await;
     pool.close().await;
 

@@ -5,7 +5,7 @@
 
 mod support;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use acp_core::model::EndpointEvent;
 use agent_host::launch::LaunchSpec;
@@ -64,6 +64,10 @@ async fn initialize_succeeds_and_reports_capabilities() {
     );
     assert!(supervisor.is_running());
     supervisor.shutdown().await;
+    assert!(
+        supervisor.shutdown_confirmed(),
+        "normal shutdown must observe child.wait() before reporting success"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -80,6 +84,37 @@ async fn initialize_must_not_spawn_a_shell() {
         Some(1)
     );
     supervisor.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_new_program_that_cannot_spawn_has_no_cleanup_uncertainty() {
+    // This scenario is the same path used by AgentHost: ProcessTree preparation succeeds,
+    // but there is no child yet whose exit could remain unconfirmed.
+    let mut spec = scenario("normal");
+    spec.env.push((
+        "ACPR_TEST_AGENT_STARTUP_FAULT".to_owned(),
+        "missing-program".to_owned(),
+    ));
+    let error = Supervisor::start(spec)
+        .await
+        .expect_err("a missing executable must fail before spawn");
+    assert!(matches!(error, agent_host::HostError::SpawnFailed { .. }));
+}
+
+#[tokio::test]
+async fn prepared_startup_failures_report_cleanup_uncertainty() {
+    for fault in ["attach", "stdout"] {
+        let mut spec = scenario("normal");
+        spec.env
+            .push(("ACPR_TEST_AGENT_STARTUP_FAULT".to_owned(), fault.to_owned()));
+        let error = Supervisor::start(spec)
+            .await
+            .expect_err("spawned startup fault must be explicit");
+        assert!(
+            matches!(error, agent_host::HostError::SpawnCleanupUnconfirmed { .. }),
+            "{fault} must not claim that no child was created: {error}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -385,6 +420,10 @@ async fn tree_forced_termination_stops_the_whole_process_tree() {
 
     // 关闭整棵树。
     supervisor.shutdown().await;
+    assert!(
+        !supervisor.shutdown_confirmed(),
+        "forced termination permanently disqualifies this supervisor on every platform"
+    );
     let after_shutdown = std::fs::metadata(&temp)
         .map(|meta| meta.len() as usize)
         .unwrap_or(0);
@@ -488,6 +527,10 @@ async fn tree_terminate_while_parent_alive_stops_parent_and_grandchild() {
         .unwrap_or(0);
     assert_eq!(after, later, "强制终止后孙进程必须停止写心跳");
     supervisor.shutdown().await;
+    assert!(
+        !supervisor.shutdown_confirmed(),
+        "explicit force is never clean proof"
+    );
     let _ = std::fs::remove_file(&temp);
 }
 
@@ -511,6 +554,15 @@ async fn shutdown_waits_for_grace_then_terminates_the_whole_tree() {
     supervisor.shutdown().await;
     let elapsed = started_at.elapsed();
     assert!(
+        !supervisor.shutdown_confirmed(),
+        "grace timeout requires forced termination and therefore cannot create a clean-shutdown proof"
+    );
+    supervisor.shutdown().await;
+    assert!(
+        !supervisor.shutdown_confirmed(),
+        "later shutdown cannot undo forced-stop policy"
+    );
+    assert!(
         elapsed >= agent_host::limits::SHUTDOWN_GRACE,
         "必须等满 grace（{}s）后才强杀，实际 {elapsed:?}",
         agent_host::limits::SHUTDOWN_GRACE.as_secs()
@@ -529,6 +581,58 @@ async fn shutdown_waits_for_grace_then_terminates_the_whole_tree() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let later = std::fs::metadata(&temp).map(|meta| meta.len()).unwrap_or(0);
     assert_eq!(after, later, "grace 后必须强制结束整棵进程树");
+    let _ = std::fs::remove_file(&temp);
+}
+
+/// 根进程退出不等于整棵树退出：仍在 Job/进程组里的后代必须阻止 clean-shutdown 证明。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn root_exit_with_a_live_descendant_is_not_a_clean_tree_proof() {
+    let temp = TempFile::new("acpr-agent-host-root-exit-child-live.txt");
+    let _ = std::fs::remove_file(&temp);
+    let spec = scenario_with(
+        "spawn-child-then-exit-after-new",
+        &["--heartbeat-file", &temp.to_string_lossy()],
+    );
+    let (supervisor, _collector) = started(spec).await;
+    supervisor
+        .request("initialize", &initialize_params(), Duration::from_secs(10))
+        .await
+        .expect("initialize");
+    supervisor
+        .request(
+            "session/new",
+            &session_new_params(),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("session/new");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !supervisor.has_exited() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(supervisor.has_exited(), "the root ACP process must exit");
+    let size = std::fs::metadata(&temp)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    assert!(
+        size > 0,
+        "the descendant must still be alive when the root exits"
+    );
+
+    supervisor.shutdown().await;
+    assert!(
+        !supervisor.shutdown_confirmed(),
+        "a live descendant means the root wait is not proof that the whole tree exited"
+    );
+    let after = std::fs::metadata(&temp)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let later = std::fs::metadata(&temp)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    assert_eq!(after, later, "shutdown must still clean the remaining tree");
     let _ = std::fs::remove_file(&temp);
 }
 

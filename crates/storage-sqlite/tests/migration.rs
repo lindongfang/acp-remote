@@ -979,6 +979,8 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
         .await
         .expect("seed a node.paired audit row");
     for column in [
+        "deleted_at",
+        "custom_title",
         "agent_session_id",
         "workspace_cwd",
         "workspace_directory_id",
@@ -1120,13 +1122,17 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
         .filter(|spec| {
             matches!(
                 spec.0.as_str(),
-                "agent_session_id" | "workspace_cwd" | "workspace_directory_id" | "custom_title"
+                "agent_session_id"
+                    | "workspace_cwd"
+                    | "workspace_directory_id"
+                    | "custom_title"
+                    | "deleted_at"
             )
         })
         .cloned()
         .collect();
     assert_eq!(
-        session_specs[session_specs.len().saturating_sub(4)..].to_vec(),
+        session_specs[session_specs.len().saturating_sub(5)..].to_vec(),
         appended_specs,
         "追加的四列必须是 owned_session 的最后四列"
     );
@@ -1140,6 +1146,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
             ("workspace_cwd".to_owned(), false, None),
             ("workspace_directory_id".to_owned(), false, None),
             ("custom_title".to_owned(), false, None),
+            ("deleted_at".to_owned(), false, None),
         ],
         "追加的四列必须可空且无默认值"
     );
@@ -1518,6 +1525,10 @@ async fn v14_database_gains_a_null_custom_title_and_stays_writable() {
     .execute(&pool)
     .await
     .expect("seed a v14 session row");
+    sqlx::query("ALTER TABLE owned_session DROP COLUMN deleted_at")
+        .execute(&pool)
+        .await
+        .expect("rewind owned_session to its v14 shape");
     sqlx::query("ALTER TABLE owned_session DROP COLUMN custom_title")
         .execute(&pool)
         .await
@@ -1663,6 +1674,10 @@ async fn a_failed_v15_upgrade_rolls_back_the_added_column() {
     let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
 
     let pool = raw_write_pool(&path).await;
+    sqlx::query("ALTER TABLE owned_session DROP COLUMN deleted_at")
+        .execute(&pool)
+        .await
+        .expect("rewind owned_session to its v14 shape");
     sqlx::query("ALTER TABLE owned_session DROP COLUMN custom_title")
         .execute(&pool)
         .await

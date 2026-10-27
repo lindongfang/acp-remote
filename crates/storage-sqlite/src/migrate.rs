@@ -16,13 +16,13 @@ use acp_core::model::derive_directory_id;
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v17：新增普通输入的受理关联表
-/// `owned_user_input`；v16 的 `owned_first_submission` 与 `owned_message.channel = 'user'`、
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v19：会话删除墓碑；v18 的消息顺序位置、
+/// v17 的 `owned_user_input`、v16 的 `owned_message.channel = 'user'`、
 /// v15 的 `owned_session.custom_title`、v14 删除全部 `imported_*` 远程资源表、
 /// v13 的三态 `owned_session`、v12 的分块附件传输/清单、消息通道与媒体引用保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 18;
-/// §7.2：`meta.owned_schema_version` 的已知版本（v17 新增 `owned_user_input`）。
-pub const OWNED_SCHEMA_VERSION: i64 = 18;
+pub const FILE_FORMAT_VERSION: i64 = 19;
+/// §7.2：`meta.owned_schema_version` 的已知版本（v19 新增删除墓碑列并移除准备表）。
+pub const OWNED_SCHEMA_VERSION: i64 = 19;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS owned_session (
   agent_session_id  TEXT,                      -- Agent（ACP）侧会话标识；NULL = 该会话没有可用于恢复的标识，不得被补齐/推导
   workspace_cwd     TEXT,                      -- 创建时解析出的规范化绝对路径；NULL = 同上（不得按别名重解析来填上）
   workspace_directory_id TEXT,                 -- 创建时解析出的目录标识；NULL = 未分组（不得按 workspace_cwd 反查补齐）
-  custom_title      TEXT                       -- 用户设置的自定义标题（trim 后 1..=512 标量值）；NULL = 从未设置。与 title 互不覆盖
+  custom_title      TEXT,                      -- 用户设置的自定义标题（trim 后 1..=512 标量值）；NULL = 从未设置。与 title 互不覆盖
+  deleted_at        TEXT                       -- 删除墓碑时间；NULL = 可读会话，非 NULL = 对所有产品读面不可见
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS owned_turn (
@@ -280,35 +281,6 @@ CREATE TABLE IF NOT EXISTS owned_media_ref (
   PRIMARY KEY (message_id, position)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS owned_media_ref_attachment ON owned_media_ref(attachment_id);
-
-CREATE TABLE IF NOT EXISTS owned_first_submission (
-  session_id          TEXT PRIMARY KEY REFERENCES owned_session(session_id) ON DELETE RESTRICT,
-  first_submission_id TEXT NOT NULL UNIQUE,
-  user_message_id     TEXT NOT NULL UNIQUE,
-  first_request_id    TEXT NOT NULL,
-  current_request_id  TEXT NOT NULL,
-  actor_kind          TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
-  actor_id            TEXT NOT NULL,
-  request_fingerprint TEXT NOT NULL,
-  input_json          TEXT NOT NULL,
-  input_digest        TEXT NOT NULL,
-  mode_id             TEXT,
-  config_json         TEXT NOT NULL,
-  stage               TEXT NOT NULL CHECK (stage IN ('saved_not_dispatched','dispatch_started','terminal')),
-  ever_dispatched     INTEGER NOT NULL DEFAULT 0 CHECK (ever_dispatched IN (0,1)),
-  agent_session_id    TEXT,
-  resource_epoch      TEXT,
-  terminal_outcome    TEXT CHECK (terminal_outcome IN ('completed','failed','uncertain')),
-  terminal_at         TEXT,
-  error_code          TEXT, error_message TEXT, error_details_json TEXT, retryable INTEGER,
-  created_at          TEXT NOT NULL,
-  updated_at          TEXT NOT NULL,
-  CHECK (stage = 'saved_not_dispatched' OR agent_session_id IS NOT NULL),
-  CHECK (stage <> 'terminal' OR terminal_outcome IS NOT NULL),
-  CHECK (ever_dispatched = 0 OR stage <> 'saved_not_dispatched'),
-  CHECK (stage <> 'dispatch_started' OR ever_dispatched = 1),
-  CHECK (terminal_outcome IS NULL OR terminal_outcome = 'completed' OR error_code IS NOT NULL)
-) STRICT;
 
 CREATE TABLE IF NOT EXISTS owned_user_input (
   message_id       TEXT PRIMARY KEY REFERENCES owned_message(message_id) ON DELETE CASCADE,
@@ -1047,8 +1019,8 @@ async fn v15_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageErro
 /// - 表与索引的重建在同一事务里；失败整体回滚，第二次打开因 `user_version = 16` 跳过本段。
 async fn v16_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
     // 调用点已保证 `file_version < 16`；版本号在同一事务里推进，因此重开不会重跑本段。
-    // 注意 `OWNED_SCHEMA_V1` 已在升级段之前 `CREATE TABLE IF NOT EXISTS owned_first_submission`，
-    // 因此不能按「表已存在」判断是否需要重建 `owned_message`。
+    // 历史 v16 升级会创建 `owned_first_submission`；v19 fresh schema 已移除该表，
+    // 因此这里只按版本执行，不能按「当前 DDL 是否创建了准备表」判断。
     sqlx::raw_sql(V16_UPGRADE_OWNED).execute(&mut **tx).await?;
     Ok(())
 }
@@ -1059,7 +1031,8 @@ async fn v16_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageErro
 ///   事务里、升级段之前建出；本段只确认它确实存在——建表语句被删除或改名时升级必须显式失败，而不是
 ///   把版本推进到一个缺表的库上。
 /// - **不回填任何历史行**：既不为旧 `owned_message` 的 `user` 行补关联，也不从事件/回显推算旧输入
-///   （`conversation-reliability` 的非目标）。首条用户消息的关联仍由 `owned_first_submission` 承担。
+///   （`conversation-reliability` 的非目标）。在 v17 当时，首条用户消息的关联仍由
+///   `owned_first_submission` 承担；该表已在 v19 随准备式新建路径移除。
 /// - 本段不写行；版本由 `mark_schema_versions` 在同一事务末尾统一写到 17/17，失败整体回滚。
 /// - 第二次打开因 `user_version = 17` 跳过本段；`sqlite_master`/`meta`/行集逐字节不变。
 async fn v17_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
@@ -1664,12 +1637,16 @@ fn expect_ok(results: Vec<String>) -> Result<(), StorageError> {
 /// 关掉，再在同一个连接上开 `BEGIN IMMEDIATE`，结束后无论成败都恢复为 `ON`（连接会回到池里）。
 /// 标准 12-step 流程正是这么做的：关外键时 `ALTER TABLE ... RENAME` 也不会改写子表的 `REFERENCES`
 /// 子句，旧表因此可以被安全删除，重建后的新表仍以原名被引用。
-pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, StorageError> {
+pub async fn migrate(
+    write: &SqlitePool,
+    at: &str,
+    attachment_dir: &Path,
+) -> Result<StoreMetadata, StorageError> {
     let mut connection = write.acquire().await?;
     sqlx::query("PRAGMA foreign_keys = OFF")
         .execute(&mut *connection)
         .await?;
-    let result = migrate_locked(&mut connection, at).await;
+    let result = migrate_locked(&mut connection, at, attachment_dir).await;
     // 无论升级成功与否都复位：失败路径也要把连接完好地还给池。
     let restored = sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&mut *connection)
@@ -1684,6 +1661,7 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
 async fn migrate_locked(
     connection: &mut SqliteConnection,
     at: &str,
+    attachment_dir: &Path,
 ) -> Result<StoreMetadata, StorageError> {
     let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
 
@@ -1696,6 +1674,21 @@ async fn migrate_locked(
         });
     }
     let new_database = !table_exists(&mut *tx, "owned_session").await?;
+    let owned_version = if table_exists(&mut *tx, "meta").await? {
+        read_meta_row(&mut *tx, META_OWNED_SCHEMA_VERSION)
+            .await?
+            .map(|value| parse_version(&value, "meta.owned_schema_version"))
+            .transpose()?
+            .unwrap_or(OWNED_SCHEMA_VERSION)
+    } else {
+        OWNED_SCHEMA_VERSION
+    };
+    if owned_version > OWNED_SCHEMA_VERSION {
+        return Err(StorageError::SchemaTooNew {
+            found: owned_version,
+            supported: OWNED_SCHEMA_VERSION,
+        });
+    }
     // v4 段只给**升级前就存在**的 `owned_node` 追加列、v8 段只从**升级前就存在**的 `owned_device` 删列：
     // v1 库没有这两张表，它们由下面的 DDL 常量按**当前形状**建出来（已含 `export_ids_json`、已不含
     // `scopes_json`），那时再 `ALTER TABLE` 就是重复列或缺失列。
@@ -1705,18 +1698,6 @@ async fn migrate_locked(
     // 在 DDL 常量执行前已经存在（v1 起每代都有这张表），因此这两段不再单独探测。
 
     sqlx::raw_sql(OWNED_SCHEMA_V1).execute(&mut *tx).await?;
-
-    let owned_version = read_meta_row(&mut *tx, META_OWNED_SCHEMA_VERSION)
-        .await?
-        .map(|value| parse_version(&value, "meta.owned_schema_version"))
-        .transpose()?
-        .unwrap_or(OWNED_SCHEMA_VERSION);
-    if owned_version > OWNED_SCHEMA_VERSION {
-        return Err(StorageError::SchemaTooNew {
-            found: owned_version,
-            supported: OWNED_SCHEMA_VERSION,
-        });
-    }
 
     if new_database {
         v18_upgrade(&mut tx).await?;
@@ -1797,6 +1778,9 @@ async fn migrate_locked(
         if file_version < 18 {
             v18_upgrade(&mut tx).await?;
         }
+        if file_version < 19 {
+            v19_upgrade(&mut tx).await?;
+        }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;
     }
@@ -1827,6 +1811,19 @@ async fn migrate_locked(
         .ok_or(StorageError::InvalidRequest("meta.last_prune_at missing"))?;
 
     tx.commit().await?;
+    // SQLite 已持久提交到 v19。文件清理失败时不得回滚正式 schema、数据或阻止启动：
+    // 每次 open 都会重试该文件系统步骤，失败只留下可重试的暂存目录。
+    if let Err(error) = cleanup_preparation_staging(attachment_dir) {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "level": "warn",
+                "event": "storage.preparation_cleanup_failed",
+                "error": error.to_string(),
+                "message": "failed to remove preparation staging after committing the v19 migration; will retry on the next open",
+            })
+        );
+    }
 
     Ok(StoreMetadata {
         server_epoch,
@@ -2183,4 +2180,35 @@ CREATE INDEX owned_message_origin_order ON owned_message(session_id, first_origi
  first_origin_sequence=(SELECT first_origin FROM proven WHERE proven.message_id=owned_message.message_id)
  WHERE message_id IN (SELECT message_id FROM proven);").execute(&mut **tx).await?;
     Ok(())
+}
+
+/// v18 → v19：增加删除时间并移除准备式新建的持久表。
+///
+/// 两处 SQL 都带守卫；正式行、事件序号、命令幂等和审计不在本段读写。
+async fn v19_upgrade(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
+    if !column_exists(&mut **tx, "owned_session", "deleted_at").await? {
+        sqlx::raw_sql("ALTER TABLE owned_session ADD COLUMN deleted_at TEXT;")
+            .execute(&mut **tx)
+            .await?;
+    }
+    sqlx::raw_sql("DROP TABLE IF EXISTS owned_first_submission;")
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// `.preparation` 只保存未提交上传；v19 起不再有读取者。
+///
+/// 调用点必须位于 SQL commit 之后：迁移失败时正式数据仍完整回滚；SQL 已提交而
+/// 文件清理失败时保留 v19、记录结构化警告并正常启动，下一次 open 幂等重试清理。
+fn cleanup_preparation_staging(attachment_dir: &Path) -> Result<(), StorageError> {
+    let staging = attachment_dir.join(".preparation");
+    match std::fs::symlink_metadata(&staging) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            std::fs::remove_dir_all(&staging).map_err(StorageError::from)
+        }
+        Ok(_) => std::fs::remove_file(&staging).map_err(StorageError::from),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(StorageError::from(error)),
+    }
 }

@@ -20,7 +20,8 @@ async fn v14_upgrade_preserves_rows_and_v15_custom_titles_survive_reopen() {
         .await
         .expect("epoch");
     sqlx::raw_sql(
-        "ALTER TABLE owned_session DROP COLUMN custom_title;
+        "ALTER TABLE owned_session DROP COLUMN deleted_at;
+         ALTER TABLE owned_session DROP COLUMN custom_title;
          INSERT INTO owned_session
            (session_id, title, agent_id, agent_name, state, origin_epoch, version, created_at, updated_at)
          VALUES ('11111111-1111-4111-8111-111111111111', 'Agent title', 'agent', 'Agent', 'idle',

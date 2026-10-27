@@ -6,7 +6,7 @@
 //! 消息类型的抽取规则与 `scripts/check-schema-fixtures.mjs` 的 `declaredTypes` 一致：从
 //! `message.schema.json` 的 union 出发，只沿 `$ref` 与 `allOf`/`oneOf`/`anyOf` 递归，**不进入**
 //! `properties.*`。因此 `common.schema.json` 里 content block 的判别子（`text`/`image_ref`/…）
-//! 不会被误收——这正是"按 glob 全文件抽 const"会得到更多个而非 31 个的原因。
+//! 不会被误收——这正是"按 glob 全文件抽 const"会得到更多个而非 29 个的原因。
 
 mod support;
 
@@ -164,8 +164,8 @@ fn message_types_match_schema_union() {
 
     assert_eq!(
         expected.len(),
-        31,
-        "从 message.schema.json 的 union 应当恰好抽出 31 个 type 常量，实际：{expected:?}"
+        29,
+        "从 message.schema.json 的 union 应当恰好抽出 29 个 type 常量，实际：{expected:?}"
     );
     let missing: Vec<&String> = expected.difference(&declared).collect();
     let extra: Vec<&String> = declared.difference(&expected).collect();
@@ -173,7 +173,7 @@ fn message_types_match_schema_union() {
         missing.is_empty() && extra.is_empty(),
         "schema 有而 Rust 没有：{missing:?}；Rust 有而 schema 没有：{extra:?}"
     );
-    assert_eq!(declared.len(), 31, "v1 的 type 常量数应为 31");
+    assert_eq!(declared.len(), 29, "v1 的 type 常量数应为 29");
     assert!(
         expected.iter().all(
             |constant| !["text", "image_ref", "resource_ref", "unsupported"]
@@ -205,8 +205,8 @@ fn view_types_match_schema_defs() {
     let declared: Vec<&str> = defs.keys().map(String::as_str).collect();
     assert_eq!(
         declared.len(),
-        35,
-        "event-views.schema.json 的 $defs 条目数应为 35，实际：{declared:?}"
+        36,
+        "event-views.schema.json 的 $defs 条目数应为 36，实际：{declared:?}"
     );
     assert_eq!(
         VIEW_TYPES.as_slice(),
@@ -517,8 +517,8 @@ fn error_codes_and_retryable_match_registry() {
 
     assert_eq!(
         declared.len(),
-        54,
-        "v1 的 sync 错误码应为 54 个（registry 有 {} 个）；`web-session-preparation` WP1 新增三个 `preparation.*`",
+        51,
+        "v1 的 sync 错误码应为 51 个（registry 有 {} 个）；准备凭据的三个错误码已随准备能力整体移除",
         registered.len()
     );
     assert_eq!(

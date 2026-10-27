@@ -6,7 +6,8 @@
 //! 场景清单见 `README`/`tasks.md` 2.13：`normal`、`chunked-updates`、`permission-request`、
 //! `permission-request-then-exit`（写出权限请求后退出，用于验证写入确认失败路径）、
 //! `elicitation`、`slow-initialize`、`no-response`、`illegal-json`、`unknown-id`、`out-of-order`、
-//! `crash-on-prompt`、`exit-after-new`（`session/new` 应答后退出）、`spawn-grandchild`、
+//! `crash-on-prompt`、`exit-after-new`（`session/new` 应答后退出）、
+//! `spawn-child-then-exit-after-new`（留下仍存活的孙进程后让根进程退出）、`spawn-grandchild`、
 //! `heartbeat-child`、`stderr-flood`、
 //! `stderr-protocol-noise`（在 **stderr** 上写语法完全合法的 ACP 报文，stdout 仍正常应答），
 //! 另有 `--dump-env <path>` 便于断言注入给子进程的环境变量集合。
@@ -529,6 +530,18 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
             if args.scenario == "exit-after-new" {
                 // 让 session/new 的响应先被读侧处理，再退出：之后任何写入都必须失败
                 // （用于验证写确认失败路径）。
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                std::process::exit(0);
+            }
+            if args.scenario == "spawn-child-then-exit-after-new" {
+                let file = args
+                    .heartbeat_file
+                    .clone()
+                    .unwrap_or_else(|| "heartbeat.txt".to_owned());
+                let exe = std::env::current_exe().unwrap_or_default();
+                let _ = std::process::Command::new(exe)
+                    .args(["--scenario", "heartbeat-child", "--heartbeat-file", &file])
+                    .spawn();
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 std::process::exit(0);
             }

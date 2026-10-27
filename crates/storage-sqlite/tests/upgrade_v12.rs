@@ -22,8 +22,8 @@ async fn fresh_databases_are_created_in_the_current_shape() {
         .expect("open");
     store.close().await;
 
-    assert_eq!(FILE_FORMAT_VERSION, 18);
-    assert_eq!(OWNED_SCHEMA_VERSION, 18);
+    assert_eq!(FILE_FORMAT_VERSION, 19);
+    assert_eq!(OWNED_SCHEMA_VERSION, 19);
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
     let version: i64 = sqlx::query_scalar("PRAGMA user_version")

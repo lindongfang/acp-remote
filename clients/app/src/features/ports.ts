@@ -17,13 +17,7 @@
  * `src/sync-client/`，由组合根装配后从这里进入（`AGENTS.md` §6）。
  */
 
-import type {
-  CommandMessage,
-  PreparationAttachmentTarget,
-  PreparationReceipt,
-  SessionPreparationBody,
-  SessionRef,
-} from "../protocol";
+import type { CommandMessage, SessionRef } from "../protocol";
 import type { AuthenticatedInfo, CompletedSnapshot, EventDedupKey } from "../sync-client";
 
 /** 快照读取与刷新面：断连时保留已验证清单，刷新复用同步协议。 */
@@ -57,16 +51,6 @@ export interface AuthenticatedGateway {
 }
 
 /**
- * 会话准备控制面（`core.session-preparation.v1`，§11.9）。
- *
- * 只在服务端选中该 feature 后调用；返回 `false` 表示帧未发出（没有已认证连接），
- * 调用方据此把操作停在「未发出」而不是假装已分配。
- */
-export interface PreparationGateway {
-  sendPreparation(body: SessionPreparationBody): boolean;
-}
-
-/**
  * 远程来源订阅面（`resource.stateless-origin.v1`，§9.7）。
  *
  * 门面保存当前运行期的最后连续位置 C 与去重窗口；feature 层只表达「哪条来源会话要订阅」。
@@ -96,7 +80,6 @@ export interface ConnectionIdentity {
 export type SyncGateway = SnapshotGateway &
   CommandGateway &
   AuthenticatedGateway &
-  PreparationGateway &
   RemoteSourceGateway &
   SessionViewGateway;
 
@@ -144,11 +127,6 @@ export interface AttachmentUploadRequest {
   readonly fileName: string;
   readonly mediaType: string;
   readonly totalLength: string;
-  /**
-   * 准备目标（`design.md` D6.1）：出现时 `attachment.begin` 走 `target` 分支，
-   * 顶层 `sessionId` 不再出现。首条提交之前的上传**只有**这一种合法形式。
-   */
-  readonly target?: PreparationAttachmentTarget;
   readonly readChunk: (offset: bigint, length: number) => Promise<Uint8Array>;
 }
 
@@ -165,8 +143,6 @@ export interface AttachmentManifestRequest {
   readonly subjectId: string;
   readonly submissionId: string;
   readonly transferIds: readonly string[];
-  /** 准备清单（与上传同一目标）：出现时 `attachment.manifest_begin` 走 `target` 分支。 */
-  readonly target?: PreparationAttachmentTarget;
 }
 
 /** 清单封存事实（`attachment.manifest_sealed`）。 */
@@ -202,171 +178,3 @@ export interface AttachmentTransferGateway {
 
 /** 去重键别名（feature 层按 `eventId` 去重的键，与 `src/sync-client` 同源）。 */
 export type { EventDedupKey };
-
-// ── 浏览器准备草稿端口（`web-session-preparation` D5；平台实现由组合根注入）──────────
-//
-// 这些声明是 `src/platform/preparation-draft.shared.ts` 的**结构镜像**：feature 层不得
-// import 平台层（`src/layers.test.ts`），因此端口形状在这里再声明一次，由组合根把平台实现
-// 原样装配进来（结构相同即赋值成立）。字段含义见 WP6 的共享声明。
-
-/** 草稿分区键：canonical origin + ownerNodeId + deviceId + tabSlotId + sessionId。 */
-export interface PreparationDraftScope {
-  readonly canonicalOrigin: string;
-  readonly ownerNodeId: string;
-  readonly deviceId: string;
-  readonly tabSlotId: string;
-  readonly sessionId: string;
-}
-
-/** 工作目录引用（服务端下发的标识与逐字路径）。 */
-export interface PreparationDraftWorkspace {
-  readonly directoryId: string | null;
-  readonly path: string;
-  readonly source: "directoryId" | "workspacePath";
-}
-
-/** 可恢复的草稿正文（准备中的那一份）。 */
-export interface PreparationDraftContent {
-  readonly text: string;
-  readonly mode: string | null;
-  readonly configOptions: Readonly<Record<string, string | boolean>>;
-  readonly agentId: string;
-  readonly workspace: PreparationDraftWorkspace;
-  readonly receipt: PreparationReceipt;
-  readonly pendingRequestId: string | null;
-}
-
-/** 已持久化的附件元数据（字节单独按块存储）。 */
-export interface PreparationDraftAttachmentMeta {
-  readonly localId: string;
-  readonly kind: "image" | "audio" | "file";
-  readonly fileName: string;
-  readonly mediaType: string;
-  readonly byteLength: string;
-  readonly chunkSize: number;
-  readonly chunkCount: number;
-}
-
-/** 保存一项附件时的流式输入。 */
-export interface PreparationDraftAttachmentInput extends PreparationDraftAttachmentMeta {
-  readonly readChunk: (offset: number, length: number) => Promise<Uint8Array>;
-}
-
-/** 首次提交已受理后的请求关联（正文/Blob 已清除）。 */
-export interface PreparationRequestAssociation {
-  readonly requestId: string;
-  readonly firstSubmissionId: string | null;
-  readonly firstMessageId: string | null;
-  readonly acceptedAtMs: number;
-}
-
-/** 一次草稿读写的访问句柄。 */
-export interface PreparationDraftAccess {
-  readonly scope: PreparationDraftScope;
-  readonly instanceId: string;
-}
-
-/**
- * 本标签页在 sessionStorage 里的**非敏感**定位（结构镜像）。
- *
- * 只用于刷新/重新挂载后找回唯一准备槽位：不含正文、凭据、配置或附件字节。
- */
-export interface PreparationTabLocatorSnapshot {
-  readonly canonicalOrigin: string;
-  readonly ownerNodeId: string;
-  readonly deviceId: string;
-  readonly tabSlotId: string;
-  readonly sessionId: string;
-}
-
-/** `beginTab` 的结果（只保留 feature 层用到的两支）。 */
-export type PreparationTabBeginResult =
-  | {
-      readonly status: "owner";
-      readonly access: PreparationDraftAccess;
-      readonly restorable: boolean;
-      readonly restored: boolean;
-    }
-  | { readonly status: "duplicate"; readonly reason: "live_tab_owner" | "unexpected_navigation" };
-
-/** 草稿载荷：准备中，或已受理但请求尚未终结（与平台端口的联合同形）。 */
-export type PreparationDraftPayload =
-  | {
-      readonly status: "active";
-      readonly content: PreparationDraftContent;
-      readonly attachments: readonly PreparationDraftAttachmentMeta[];
-    }
-  | {
-      readonly status: "accepted";
-      readonly association: PreparationRequestAssociation;
-    };
-
-/** 草稿读取结果（只保留出现的分支）。 */
-export type PreparationDraftLoadResult =
-  | { readonly status: "absent" }
-  | { readonly status: "invalidated"; readonly reason: string }
-  | {
-      readonly status: "active";
-      readonly record: { readonly revision: number; readonly payload: PreparationDraftPayload };
-    }
-  | {
-      readonly status: "accepted";
-      readonly record: { readonly revision: number };
-      readonly association: PreparationRequestAssociation;
-    };
-
-/** 浏览器准备草稿端口（组合根注入；缺省时准备流程只保留内存草稿并如实说明）。 */
-export interface PreparationDraftGateway {
-  /**
-   * 读本标签页的非敏感定位。
-   *
-   * 刷新后 feature 层据此找回唯一准备槽位的 `sessionId`；没有定位时不猜任何会话。
-   */
-  readTabLocator(): Promise<PreparationTabLocatorSnapshot | null>;
-  /** 清掉本标签页定位（生命周期清理/身份失效）；不删除草稿记录本身。 */
-  clearTabLocator(): Promise<void>;
-  beginTab(input: {
-    readonly scope: PreparationDraftScope;
-    readonly nowMs: number;
-  }): Promise<PreparationTabBeginResult>;
-  loadDraft(input: {
-    readonly access: PreparationDraftAccess;
-    readonly nowMs: number;
-  }): Promise<PreparationDraftLoadResult>;
-  saveDraft(input: {
-    readonly access: PreparationDraftAccess;
-    readonly expectedRevision: number | null;
-    readonly content: PreparationDraftContent;
-    readonly attachments?: readonly PreparationDraftAttachmentInput[];
-    readonly nowMs: number;
-  }): Promise<{ readonly revision: number; readonly restorable: boolean }>;
-  readAttachment(input: {
-    readonly access: PreparationDraftAccess;
-    readonly localId: string;
-  }): Promise<{
-    readonly attachment: PreparationDraftAttachmentMeta;
-    readonly bytes: Uint8Array;
-  }>;
-  markAccepted(input: {
-    readonly access: PreparationDraftAccess;
-    readonly expectedRevision: number;
-    readonly association: PreparationRequestAssociation;
-    readonly nowMs: number;
-  }): Promise<{ readonly revision: number }>;
-  completeRequest(input: {
-    readonly access: PreparationDraftAccess;
-    readonly expectedRevision: number;
-    readonly requestId: string;
-    readonly nowMs: number;
-  }): Promise<void>;
-  invalidateDraft(input: {
-    readonly access: PreparationDraftAccess;
-    readonly expectedRevision: number | null;
-    readonly reason: "navigation" | "agent_changed" | "directory_changed" | "replaced" | "abandoned";
-    readonly nowMs: number;
-  }): Promise<{ readonly revision: number }>;
-  releaseTab(input: {
-    readonly access: PreparationDraftAccess;
-    readonly nowMs: number;
-  }): Promise<void>;
-}

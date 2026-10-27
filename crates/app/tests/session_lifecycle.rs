@@ -21,13 +21,15 @@
 //!   5. 回收未确认（`Failed`）保持活跃与容量占位，不伪造空闲。
 //!
 //! 唯一替身是 Agent 后端（脚本化端点，不启动进程），行为脚本在 `support/sync.rs` 的模块注释里声明。
-
 mod support;
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use acp_core::model::{Actor, PortError, SessionId};
-use acp_core::ports::ReleaseOutcome;
+use acp_core::model::{
+    Actor, CommandStatus, ConnectionId, EntityRef, PortError, RequestId, SessionId,
+};
+use acp_core::ports::{ActivationRequest, ReleaseOutcome};
 use serde_json::{Value, json};
 use support::TempRoot;
 use support::sync::{DeviceKey, HostNode, SyncClient, base64url, nonce_text, uuid_text};
@@ -647,7 +649,7 @@ async fn a_retention_reclaim_keeps_history_and_resume_restores_the_same_identity
     let candidate = wait_for_retention_candidate(&host, &session).await;
     let outcome = host
         .lifecycle()
-        .release_reclaim_candidate(&Actor::LocalCli, &candidate, host.clock().now())
+        .release_retention_candidate(&Actor::LocalCli, &candidate, host.clock().now())
         .await
         .expect("逐会话释放");
     assert_eq!(
@@ -1363,4 +1365,1402 @@ async fn a_stale_release_generation_never_reopens_a_released_session() {
     );
 
     host.stop().await;
+}
+
+async fn admit_session_delete(
+    host: &HostNode,
+    session: &str,
+) -> (RequestId, acp_core::model::Digest) {
+    let request = host.core().new_request_id();
+    let fingerprint = server::sync::local_lifecycle::session_delete_fingerprint();
+    let admission = host
+        .core()
+        .admit_session_delete(
+            &Actor::LocalCli,
+            request.clone(),
+            fingerprint.clone(),
+            SessionId::new(session).expect("session id"),
+        )
+        .await
+        .expect("persist session.delete admission");
+    assert!(
+        matches!(
+            admission,
+            acp_core::broker::SessionDeleteAdmission::Prepared
+        ),
+        "the first delete request must be prepared"
+    );
+    (request, fingerprint)
+}
+
+async fn session_is_visible(host: &HostNode, session: &str) -> bool {
+    host.core()
+        .list_sessions(&Actor::LocalCli, acp_core::ports::SessionQuery::default())
+        .await
+        .expect("list sessions")
+        .iter()
+        .any(|item| item.session_id().as_str() == session)
+}
+
+async fn wait_for_release_call(host: &HostNode, expected: usize) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while host.script().release_calls() < expected {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "release was not called {expected} time(s)"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn session_delete_request_ids(host: &HostNode, session: &str) -> Vec<String> {
+    let pool = sqlite_pool(host).await;
+    let requests = sqlx::query_scalar(
+        "SELECT request_id FROM owned_command
+         WHERE session_id=?1 AND command='session.delete'
+         ORDER BY accepted_at, request_id",
+    )
+    .bind(session)
+    .fetch_all(&pool)
+    .await
+    .expect("read session.delete request ids");
+    pool.close().await;
+    requests
+}
+
+async fn sqlite_pool(host: &HostNode) -> sqlx::SqlitePool {
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(host.data_dir().join("acp-remote.sqlite3"))
+        .create_if_missing(false);
+    sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .expect("open the running test database")
+}
+
+async fn insert_accepted_title_mutation(host: &HostNode, session: &str, request: &str) {
+    let pool = sqlite_pool(host).await;
+    let fingerprint = digest("accepted title mutation");
+    let accepted_at = host.clock().now();
+    sqlx::query(
+        "INSERT INTO owned_command
+           (actor_kind, actor_id, request_id, session_id, command, kind,
+            expected_version, request_fingerprint, accepted_at, status)
+         VALUES ('cli', 'cli', ?1, ?2, 'session.title.set', 'mutation',
+                 NULL, ?3, ?4, 'accepted')",
+    )
+    .bind(request)
+    .bind(session)
+    .bind(fingerprint.as_str())
+    .bind(accepted_at.as_str())
+    .execute(&pool)
+    .await
+    .expect("seed an accepted title mutation");
+    pool.close().await;
+}
+
+async fn session_deleted_event_count(host: &HostNode, session: &str) -> i64 {
+    let pool = sqlite_pool(host).await;
+    let count = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM owned_event WHERE session_id=?1 AND event_type='session.deleted'",
+    )
+    .bind(session)
+    .fetch_one(&pool)
+    .await
+    .expect("count deletion events");
+    pool.close().await;
+    count
+}
+
+fn activation_request(session: &str, label: &str) -> ActivationRequest {
+    ActivationRequest {
+        actor: Actor::LocalCli,
+        request_id: RequestId::new(&uuid_text()).expect("request id"),
+        request_fingerprint: digest(label),
+        session: SessionId::new(session).expect("session id"),
+    }
+}
+
+fn first_prompt_command(
+    host: &HostNode,
+    session: &str,
+    marker: &str,
+) -> acp_core::model::ClientCommand {
+    let content = vec![acp_core::model::PromptContentBlock::new(
+        acp_core::model::ViewJson::new(
+            &acp_core::model::ViewJson::new(
+                &json!({
+                    "type": "text",
+                    "text": marker
+                })
+                .to_string(),
+            )
+            .expect("prompt content")
+            .to_string(),
+        )
+        .expect("prompt content"),
+    )];
+    let payload = acp_core::model::CommandPayload::Prompt {
+        content: content.clone(),
+    };
+    acp_core::model::ClientCommand {
+        actor: Actor::LocalCli,
+        request: host.core().new_request_id(),
+        command: "session.prompt".to_owned(),
+        kind: acp_core::model::CommandKind::Mutation,
+        session: Some(SessionId::new(session).expect("session id")),
+        expected_version: None,
+        request_fingerprint: digest(marker),
+        payload,
+    }
+}
+
+#[tokio::test]
+async fn deletion_first_blocks_activation_until_the_tombstone_is_committed() {
+    let host =
+        HostNode::start_with_lifecycle("life-delete-first-race", HOST, config(1_800_000, 5)).await;
+    let session = local_session(&host).await;
+    let session_id = SessionId::new(&session).expect("session id");
+    let (request, fingerprint) = admit_session_delete(&host, &session).await;
+    host.script().block_releases();
+
+    let delete = tokio::spawn({
+        let core = Arc::clone(host.core());
+        let lifecycle = Arc::clone(host.lifecycle());
+        let at = host.clock().now();
+        let session_id = session_id.clone();
+        async move {
+            server::sync::local_lifecycle::execute_session_delete(
+                core.as_ref(),
+                lifecycle.as_ref(),
+                at.clone(),
+                &Actor::LocalCli,
+                &request,
+                &fingerprint,
+                &session_id,
+            )
+            .await
+        }
+    });
+    host.script().wait_for_release_entered().await;
+
+    let resumes_before = host.script().resume_calls();
+    let mut activation = tokio::spawn({
+        let lifecycle = Arc::clone(host.lifecycle());
+        let request = activation_request(&session, "deletion-first-race");
+        async move { lifecycle.activate_session(&Actor::LocalCli, request).await }
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut activation)
+            .await
+            .is_err(),
+        "activation must wait behind the in-progress deletion gate"
+    );
+
+    host.script().allow_release();
+    delete
+        .await
+        .expect("delete task")
+        .expect("delete execution");
+    let error = activation
+        .await
+        .expect("activation task")
+        .expect_err("activation after committed deletion must fail");
+    assert!(matches!(
+        error,
+        PortError::NotFound(EntityRef::Session(ref missing)) if missing == &session_id
+    ));
+    assert_eq!(
+        host.script().resume_calls(),
+        resumes_before,
+        "a failed activation lookup must not start an Agent"
+    );
+    assert!(!session_is_visible(&host, &session).await);
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn activation_first_keeps_an_old_retention_candidate_from_releasing() {
+    let host =
+        HostNode::start_with_lifecycle("life-activation-first-race", HOST, config(1_000, 5)).await;
+    let session = local_session(&host).await;
+    let candidate = wait_for_retention_candidate(&host, &session).await;
+    let candidate = server::sync::local_lifecycle::retention_delete_candidate(
+        host.lifecycle().as_ref(),
+        candidate,
+    )
+    .expect("capture the scanner candidate")
+    .expect("the candidate still has lifecycle state");
+    let plan = host
+        .lifecycle()
+        .activate_session(
+            &Actor::LocalCli,
+            activation_request(&session, "activation-first-race"),
+        )
+        .await
+        .expect("activation before release");
+    assert!(
+        plan.reuses_ready_resource(),
+        "the resource must still be ready"
+    );
+
+    let (request, fingerprint) = admit_session_delete(&host, &session).await;
+    server::sync::local_lifecycle::execute_retention_session_delete(
+        host.core().as_ref(),
+        host.lifecycle().as_ref(),
+        host.clock().now(),
+        &Actor::LocalCli,
+        &request,
+        &fingerprint,
+        &candidate,
+    )
+    .await
+    .expect("the stale scanner candidate becomes a failed delete terminal");
+    assert_eq!(
+        host.script().release_calls(),
+        0,
+        "activation after candidate creation must prevent release"
+    );
+    assert!(session_is_visible(&host, &session).await);
+    assert_eq!(
+        session_deleted_event_count(&host, &session).await,
+        0,
+        "a stale scanner candidate must not commit session.deleted"
+    );
+    assert!(
+        !is_retention_candidate(&host, &session).await,
+        "activation must start a fresh complete retention window"
+    );
+    let record = host
+        .core()
+        .command_status(&Actor::LocalCli, request)
+        .await
+        .expect("read stale delete command")
+        .expect("the stale scanner request is terminal");
+    assert_eq!(record.status(), CommandStatus::Failed);
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn a_prompt_commit_in_progress_prevents_stale_empty_deletion() {
+    let host =
+        HostNode::start_with_lifecycle("life-delete-dispatch-race", HOST, config(1_800_000, 5))
+            .await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let session_id = SessionId::new(&session).expect("session id");
+    let generation = host
+        .lifecycle()
+        .resource_generation(&session_id)
+        .expect("resource generation");
+    let mut client = connect_lifecycle(&host, &device).await;
+    let marker = "saved-before-delete-intent";
+    let command = first_prompt_command(&host, &session, marker);
+    let releases_before = host.script().release_calls();
+    host.session_store_faults().block_next_prompt_commit();
+    let prompt = tokio::spawn({
+        let core = Arc::clone(host.core());
+        async move { core.submit_command(&Actor::LocalCli, command).await }
+    });
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        host.session_store_faults().wait_for_prompt_commit_entered(),
+    )
+    .await
+    .expect("prompt reaches storage");
+    for marker in ["second-while-saving", "third-while-saving"] {
+        let receipt = host
+            .core()
+            .submit_command(
+                &Actor::LocalCli,
+                first_prompt_command(&host, &session, marker),
+            )
+            .await
+            .expect("concurrent prompt is classified");
+        assert!(
+            matches!(receipt, acp_core::model::CommandReceipt::Rejected { .. }),
+            "rejecting one contender must keep the original prompt's claim intact"
+        );
+    }
+    let mut delete = tokio::spawn({
+        let core = Arc::clone(host.core());
+        let session_id = session_id.clone();
+        async move {
+            core.admit_retention_session_delete(
+                &Actor::LocalCli,
+                core.new_request_id(),
+                server::sync::local_lifecycle::session_delete_fingerprint(),
+                session_id,
+                generation,
+            )
+            .await
+        }
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut delete)
+            .await
+            .is_err(),
+        "cleanup waits while the earlier prompt owns the lifecycle gate"
+    );
+    host.session_store_faults().allow_prompt_commit();
+    tokio::time::timeout(Duration::from_secs(5), prompt)
+        .await
+        .expect("prompt does not deadlock")
+        .expect("prompt task")
+        .expect("prompt accepted");
+    let result = tokio::time::timeout(Duration::from_secs(5), delete)
+        .await
+        .expect("cleanup does not deadlock")
+        .expect("delete task");
+    assert!(
+        matches!(
+            result,
+            Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::Busy
+            ))
+        ),
+        "a stale empty candidate must yield to the accepted prompt"
+    );
+    assert_eq!(
+        host.script().release_calls(),
+        releases_before,
+        "the durably accepted input prevents external release"
+    );
+    assert!(session_is_visible(&host, &session).await);
+    assert!(
+        message_texts(&read_resources(&mut client, &session).await)
+            .iter()
+            .any(|text| text == marker)
+    );
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn a_capacity_rejected_create_can_retry_the_same_request_after_protection_ends() {
+    let host =
+        HostNode::start_with_lifecycle("life-create-capacity-retry", HOST, config(1_800_000, 1))
+            .await;
+    let occupied = SessionId::new(&local_session(&host).await).expect("session id");
+    let connection = ConnectionId::new(&uuid_text()).expect("connection");
+    host.lifecycle()
+        .declare_view(
+            &Actor::LocalCli,
+            connection.clone(),
+            Some(occupied),
+            1,
+            host.clock().now(),
+        )
+        .await
+        .expect("protect existing session");
+    let request = host.core().new_request_id();
+    let create = || {
+        acp_core::model::CreateSessionRequest::new(
+            acp_core::model::AgentRef::try_new(
+                acp_core::model::AgentId::new(AGENT).expect("agent id"),
+                "Codex",
+            )
+            .expect("agent"),
+            None,
+            None,
+            acp_core::model::ResourceOrigin::Local,
+        )
+    };
+    assert!(
+        host.core()
+            .create_session(
+                &Actor::LocalCli,
+                request.clone(),
+                digest("capacity-retry"),
+                create(),
+                None
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        host.core()
+            .command_status(&Actor::LocalCli, request.clone())
+            .await
+            .expect("status")
+            .is_none()
+    );
+    host.lifecycle()
+        .release_view(&Actor::LocalCli, connection, host.clock().now())
+        .await
+        .expect("leave session");
+    let admission = tokio::time::timeout(
+        Duration::from_secs(5),
+        host.core().create_session(
+            &Actor::LocalCli,
+            request.clone(),
+            digest("capacity-retry"),
+            create(),
+            None,
+        ),
+    )
+    .await
+    .expect("the rejected create must not strand its shared result")
+    .expect("reclaim then create");
+    let acp_core::ports::SessionCreateAdmission::Prepared(prepared) = admission else {
+        panic!("new creation expected")
+    };
+    assert_eq!(host.script().release_calls(), 1);
+    assert_eq!(host.script().create_calls(), 2);
+    let result = acp_core::model::CommandResult::from_json_text(
+        &json!({"sessionId":prepared.session.as_str()}).to_string(),
+    )
+    .expect("result");
+    assert!(
+        host.core()
+            .settle_session_create(
+                &Actor::LocalCli,
+                &request,
+                CommandStatus::Completed,
+                Some(result),
+                None
+            )
+            .await
+            .expect("settle")
+    );
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn failed_creation_returns_capacity_for_the_next_create() {
+    let host =
+        HostNode::start_with_lifecycle("life-create-failed-capacity", HOST, config(1_800_000, 1))
+            .await;
+    host.script()
+        .fail_create(acp_core::model::UnavailableKind::SessionNotEstablished);
+    let request = host.core().new_request_id();
+    let result = host
+        .core()
+        .create_session(
+            &Actor::LocalCli,
+            request.clone(),
+            digest("failed-create"),
+            acp_core::model::CreateSessionRequest::new(
+                acp_core::model::AgentRef::try_new(
+                    acp_core::model::AgentId::new(AGENT).expect("agent id"),
+                    "Codex",
+                )
+                .expect("agent"),
+                None,
+                None,
+                acp_core::model::ResourceOrigin::Local,
+            ),
+            None,
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(!host.lifecycle().has_capacity_pressure());
+    assert_eq!(
+        host.core()
+            .command_status(&Actor::LocalCli, request)
+            .await
+            .expect("status")
+            .expect("durable failure")
+            .status(),
+        CommandStatus::Failed
+    );
+    host.script().succeed_create();
+    let session = local_session(&host).await;
+    assert!(session_is_visible(&host, &session).await);
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn prompt_replay_ignores_capacity_and_failed_input_returns_its_new_reservation() {
+    let host =
+        HostNode::start_with_lifecycle("life-input-capacity", HOST, config(1_800_000, 1)).await;
+    let session = local_session(&host).await;
+    let id = SessionId::new(&session).expect("session id");
+    let original = first_prompt_command(&host, &session, "capacity-replay");
+    host.core()
+        .submit_command(&Actor::LocalCli, original.clone())
+        .await
+        .expect("accept input");
+    assert!(host.parked().release("capacity-replay") >= 2);
+    host.broker().pump(&id).await.expect("complete input");
+    let generation = host
+        .lifecycle()
+        .resource_generation(&id)
+        .expect("generation");
+    assert_eq!(
+        host.lifecycle()
+            .release_session(&Actor::LocalCli, id.clone(), generation, host.clock().now())
+            .await
+            .expect("release A"),
+        ReleaseOutcome::Released
+    );
+    host.session_store_faults().fail_next_prompt_commit();
+    let rejected = host
+        .core()
+        .submit_command(
+            &Actor::LocalCli,
+            first_prompt_command(&host, &session, "failed-capacity-reservation"),
+        )
+        .await
+        .expect("rejected input");
+    assert!(matches!(
+        rejected,
+        acp_core::model::CommandReceipt::Rejected { .. }
+    ));
+    assert_eq!(host.session_store_faults().rejected(), 1);
+    assert!(
+        !host.lifecycle().has_capacity_pressure(),
+        "failed input must return only its newly reserved slot"
+    );
+    let other = local_session(&host).await;
+    let prompts_before = host.script().prompt_calls();
+    let replay = host
+        .core()
+        .submit_command(&Actor::LocalCli, original)
+        .await
+        .expect("replay");
+    assert!(matches!(
+        replay,
+        acp_core::model::CommandReceipt::Accepted { .. }
+    ));
+    assert_eq!(host.script().prompt_calls(), prompts_before);
+    assert!(session_is_visible(&host, &other).await);
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn a_failed_first_prompt_commit_does_not_prevent_empty_cleanup() {
+    let host =
+        HostNode::start_with_lifecycle("life-failed-input-cleanup", HOST, config(50, 5)).await;
+    let session = local_session(&host).await;
+    let session_id = SessionId::new(&session).expect("session id");
+    let prompts_before = host.script().prompt_calls();
+    host.session_store_faults().fail_next_prompt_commit();
+    let receipt = host
+        .core()
+        .submit_command(
+            &Actor::LocalCli,
+            first_prompt_command(&host, &session, "not-saved"),
+        )
+        .await
+        .expect("failed acceptance returns a receipt");
+    assert!(matches!(
+        receipt,
+        acp_core::model::CommandReceipt::Rejected { .. }
+    ));
+    assert_eq!(host.session_store_faults().rejected(), 1);
+    assert_eq!(host.script().prompt_calls(), prompts_before);
+    assert!(
+        !host
+            .core()
+            .session_has_content(&session_id)
+            .await
+            .expect("content facts")
+    );
+    let candidate = wait_for_retention_candidate(&host, &session).await;
+    let candidate = server::sync::local_lifecycle::retention_delete_candidate(
+        host.lifecycle().as_ref(),
+        candidate,
+    )
+    .expect("candidate snapshot")
+    .expect("empty session remains eligible");
+    let (request, fingerprint) = admit_session_delete(&host, &session).await;
+    server::sync::local_lifecycle::execute_retention_session_delete(
+        host.core().as_ref(),
+        host.lifecycle().as_ref(),
+        host.clock().now(),
+        &Actor::LocalCli,
+        &request,
+        &fingerprint,
+        &candidate,
+    )
+    .await
+    .expect("cleanup after failed input");
+    assert!(!session_is_visible(&host, &session).await);
+    assert_eq!(host.script().release_calls(), 1);
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn view_declaration_after_candidate_creation_blocks_release() {
+    let host = HostNode::start_with_lifecycle("life-view-first-race", HOST, config(50, 5)).await;
+    let session = local_session(&host).await;
+    let session_id = SessionId::new(&session).expect("session id");
+    let candidate = wait_for_retention_candidate(&host, &session).await;
+    let connection = ConnectionId::new(&uuid_text()).expect("connection id");
+    host.lifecycle()
+        .declare_view(
+            &Actor::LocalCli,
+            connection,
+            Some(session_id),
+            1,
+            host.clock().now(),
+        )
+        .await
+        .expect("view declaration");
+
+    let outcome = host
+        .lifecycle()
+        .release_retention_candidate(&Actor::LocalCli, &candidate, host.clock().now())
+        .await
+        .expect("stale candidate is checked under the gate");
+    assert_eq!(outcome, ReleaseOutcome::Failed);
+    assert_eq!(
+        host.script().release_calls(),
+        0,
+        "a live viewer must prevent release even when the candidate was older"
+    );
+    assert!(session_is_visible(&host, &session).await);
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn stale_generation_settle_and_release_cannot_revive_a_tombstone() {
+    let host =
+        HostNode::start_with_lifecycle("life-stale-generation", HOST, config(1_800_000, 5)).await;
+    let session = local_session(&host).await;
+    let session_id = SessionId::new(&session).expect("session id");
+    let generation = host
+        .lifecycle()
+        .resource_generation(&session_id)
+        .expect("created session generation");
+    let (request, fingerprint) = admit_session_delete(&host, &session).await;
+    server::sync::local_lifecycle::execute_session_delete(
+        host.core().as_ref(),
+        host.lifecycle().as_ref(),
+        host.clock().now(),
+        &Actor::LocalCli,
+        &request,
+        &fingerprint,
+        &session_id,
+    )
+    .await
+    .expect("delete committed");
+    let releases_after_delete = host.script().release_calls();
+    assert!(!session_is_visible(&host, &session).await);
+
+    host.lifecycle()
+        .settle_session(
+            &Actor::LocalCli,
+            session_id.clone(),
+            generation,
+            acp_core::ports::ActivationOutcome::Ready,
+        )
+        .await
+        .expect("stale settle is an idempotent no-op");
+    assert_eq!(
+        host.lifecycle()
+            .release_session(
+                &Actor::LocalCli,
+                session_id.clone(),
+                generation,
+                host.clock().now(),
+            )
+            .await
+            .expect("stale release is classified"),
+        ReleaseOutcome::Failed
+    );
+    host.lifecycle()
+        .rollback_created_session_ready_locked(&session_id, generation);
+
+    assert_eq!(
+        host.script().release_calls(),
+        releases_after_delete,
+        "a stale release must not call the Agent adapter"
+    );
+    assert_eq!(
+        host.lifecycle().resource_generation(&session_id),
+        None,
+        "the stale settle must not recreate runtime state"
+    );
+    assert!(matches!(
+        host.lifecycle()
+            .current_activity(&Actor::LocalCli, session_id.clone())
+            .await,
+        Err(PortError::NotFound(EntityRef::Session(ref missing))) if missing == &session_id
+    ));
+    assert!(!session_is_visible(&host, &session).await);
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn an_accepted_title_mutation_blocks_empty_delete_before_release() {
+    let host =
+        HostNode::start_with_lifecycle("life-delete-protected", HOST, config(1_800_000, 1)).await;
+    let session = local_session(&host).await;
+    let session_id = SessionId::new(&session).expect("session id");
+    let generation_before = host
+        .lifecycle()
+        .resource_generation(&session_id)
+        .expect("created session has a ready resource generation");
+    let title_request = uuid_text();
+    insert_accepted_title_mutation(&host, &session, &title_request).await;
+
+    let releases_before = host.script().release_calls();
+    let (request, fingerprint) = admit_session_delete(&host, &session).await;
+    server::sync::local_lifecycle::execute_session_delete(
+        host.core().as_ref(),
+        host.lifecycle().as_ref(),
+        host.clock().now(),
+        &Actor::LocalCli,
+        &request,
+        &fingerprint,
+        &session_id,
+    )
+    .await
+    .expect("protected deletion is a persisted failed outcome");
+
+    assert_eq!(
+        host.script().release_calls(),
+        releases_before,
+        "another accepted mutation must be rejected before the real release"
+    );
+    assert_eq!(
+        host.lifecycle().resource_generation(&session_id),
+        Some(generation_before),
+        "a protected deletion must retain the existing resource generation"
+    );
+    assert!(
+        host.lifecycle().has_capacity_pressure(),
+        "a protected deletion must retain its capacity reservation"
+    );
+    assert!(
+        session_is_visible(&host, &session).await,
+        "the protected session must remain readable"
+    );
+    assert_eq!(
+        session_deleted_event_count(&host, &session).await,
+        0,
+        "the preflight must not write a deletion fact"
+    );
+
+    let record = host
+        .core()
+        .command_status(&Actor::LocalCli, request)
+        .await
+        .expect("read command")
+        .expect("persisted command");
+    assert_eq!(record.status(), CommandStatus::Failed);
+    assert!(
+        record
+            .error()
+            .is_some_and(|error| error.code() == "session.busy"),
+        "the delete terminal must report the active mutation protection"
+    );
+
+    let plan = host
+        .lifecycle()
+        .activate_session(
+            &Actor::LocalCli,
+            activation_request(&session, "delete-protected-reactivation"),
+        )
+        .await
+        .expect("the retained session remains activatable");
+    assert!(
+        plan.reuses_ready_resource(),
+        "the failed delete must leave the ready resource available"
+    );
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn confirmed_release_is_the_only_path_to_empty_session_deletion() {
+    let host =
+        HostNode::start_with_lifecycle("life-delete-released", HOST, config(1_800_000, 5)).await;
+    let session = local_session(&host).await;
+    let session_id = SessionId::new(&session).expect("session id");
+    let (request, fingerprint) = admit_session_delete(&host, &session).await;
+
+    host.script().set_release_outcome(ReleaseOutcome::Released);
+    server::sync::local_lifecycle::execute_session_delete(
+        host.core().as_ref(),
+        host.lifecycle().as_ref(),
+        host.clock().now(),
+        &Actor::LocalCli,
+        &request,
+        &fingerprint,
+        &session_id,
+    )
+    .await
+    .expect("confirmed release and delete");
+
+    assert_eq!(host.script().release_calls(), 1);
+    assert!(!session_is_visible(&host, &session).await);
+    let record = host
+        .core()
+        .command_status(&Actor::LocalCli, request.clone())
+        .await
+        .expect("read command")
+        .expect("persisted command");
+    assert_eq!(record.status(), CommandStatus::Completed);
+
+    let replay = host
+        .core()
+        .admit_session_delete(&Actor::LocalCli, request, fingerprint, session_id)
+        .await
+        .expect("idempotent replay");
+    assert!(matches!(
+        replay,
+        acp_core::broker::SessionDeleteAdmission::Settled(ref record)
+            if record.status() == CommandStatus::Completed
+    ));
+    assert_eq!(
+        host.script().release_calls(),
+        1,
+        "a settled delete must not release the resource again"
+    );
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn confirmed_release_retries_the_failed_tombstone_without_closing_again() {
+    let host =
+        HostNode::start_with_lifecycle("life-delete-tombstone-retry", HOST, config(1_800_000, 5))
+            .await;
+    let session = local_session(&host).await;
+    let session_id = SessionId::new(&session).expect("session id");
+    let (first_request, fingerprint) = admit_session_delete(&host, &session).await;
+    host.fail_next_session_deletes(1);
+
+    let error = server::sync::local_lifecycle::execute_session_delete(
+        host.core().as_ref(),
+        host.lifecycle().as_ref(),
+        host.clock().now(),
+        &Actor::LocalCli,
+        &first_request,
+        &fingerprint,
+        &session_id,
+    )
+    .await
+    .expect_err("the injected final store transaction must fail");
+    assert!(matches!(error, PortError::Unavailable(_)));
+    assert_eq!(
+        host.script().release_calls(),
+        1,
+        "the confirmed release must close the resource exactly once"
+    );
+    assert!(session_is_visible(&host, &session).await);
+    let pending = host
+        .lifecycle()
+        .retention_due(&Actor::LocalCli, host.clock().now())
+        .await
+        .expect("retry candidates");
+    assert!(
+        pending
+            .iter()
+            .any(|candidate| { candidate.session == session_id && candidate.delete_pending })
+    );
+
+    let (shutdown, signal) = server::transport::net::Shutdown::channel();
+    let reclaim = tokio::spawn({
+        let core = Arc::clone(host.core());
+        let lifecycle = Arc::clone(host.lifecycle());
+        let clock = Arc::clone(host.clock());
+        async move {
+            server::sync::local_lifecycle::reclaim_loop(
+                core,
+                lifecycle,
+                clock,
+                Actor::LocalCli,
+                Duration::from_millis(5),
+                signal,
+            )
+            .await;
+        }
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while session_is_visible(&host, &session).await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the pending tombstone was not retried by the scanner"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    shutdown.trigger();
+    reclaim.await.expect("reclaim task");
+
+    assert_eq!(
+        host.lifecycle().resource_generation(&session_id),
+        None,
+        "the same generation is retired only after the tombstone commits"
+    );
+    assert!(!session_is_visible(&host, &session).await);
+    assert_eq!(
+        host.script().release_calls(),
+        1,
+        "a tombstone retry must not repeat the external close"
+    );
+    assert!(
+        host.lifecycle()
+            .retention_due(&Actor::LocalCli, host.clock().now())
+            .await
+            .expect("post-delete candidates")
+            .iter()
+            .all(|candidate| candidate.session != session_id)
+    );
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn activation_cancels_a_pending_delete_and_keeps_the_session() {
+    let host = HostNode::start_with_lifecycle(
+        "life-delete-pending-activation",
+        HOST,
+        config(1_800_000, 5),
+    )
+    .await;
+    let session = local_session(&host).await;
+    let session_id = SessionId::new(&session).expect("session id");
+    let generation_before = host
+        .lifecycle()
+        .resource_generation(&session_id)
+        .expect("created session generation");
+    let (request, fingerprint) = admit_session_delete(&host, &session).await;
+    host.fail_next_session_deletes(1);
+    server::sync::local_lifecycle::execute_session_delete(
+        host.core().as_ref(),
+        host.lifecycle().as_ref(),
+        host.clock().now(),
+        &Actor::LocalCli,
+        &request,
+        &fingerprint,
+        &session_id,
+    )
+    .await
+    .expect_err("leave the session in delete-pending state");
+    assert!(
+        host.lifecycle()
+            .retention_due(&Actor::LocalCli, host.clock().now())
+            .await
+            .expect("pending deletion")
+            .iter()
+            .any(|candidate| candidate.delete_pending)
+    );
+
+    let activation = host
+        .lifecycle()
+        .activate_session(
+            &Actor::LocalCli,
+            activation_request(&session, "activate-over-pending-delete"),
+        )
+        .await
+        .expect("activation can take the lifecycle gate");
+    assert!(matches!(
+        activation,
+        acp_core::lifecycle::ActivationPlan::Establish { .. }
+    ));
+    let generation_after = host
+        .lifecycle()
+        .resource_generation(&session_id)
+        .expect("new generation");
+    assert_eq!(
+        generation_after,
+        generation_before
+            .checked_next()
+            .expect("generation successor")
+    );
+    assert!(session_is_visible(&host, &session).await);
+    assert_eq!(
+        host.script().release_calls(),
+        1,
+        "cancelling the pending delete must retain the already-confirmed close"
+    );
+    assert!(
+        host.lifecycle()
+            .retention_due(&Actor::LocalCli, host.clock().now())
+            .await
+            .expect("activation cancel candidates")
+            .iter()
+            .all(|candidate| !candidate.delete_pending)
+    );
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn unconfirmed_release_keeps_the_empty_session_and_records_the_terminal() {
+    for (label, release, expected) in [
+        ("failed", ReleaseOutcome::Failed, CommandStatus::Failed),
+        (
+            "uncertain",
+            ReleaseOutcome::Uncertain,
+            CommandStatus::Uncertain,
+        ),
+    ] {
+        let host = HostNode::start_with_lifecycle(
+            &format!("life-delete-{label}"),
+            HOST,
+            config(1_800_000, 1),
+        )
+        .await;
+        let session = local_session(&host).await;
+        let session_id = SessionId::new(&session).expect("session id");
+        let generation_before = host
+            .lifecycle()
+            .resource_generation(&session_id)
+            .expect("created session has a resource generation");
+        let (request, fingerprint) = admit_session_delete(&host, &session).await;
+        host.script().set_release_outcome(release);
+
+        server::sync::local_lifecycle::execute_session_delete(
+            host.core().as_ref(),
+            host.lifecycle().as_ref(),
+            host.clock().now(),
+            &Actor::LocalCli,
+            &request,
+            &fingerprint,
+            &session_id,
+        )
+        .await
+        .expect("release outcome is persisted");
+
+        assert_eq!(host.script().release_calls(), 1, "{label}");
+        assert!(
+            session_is_visible(&host, &session).await,
+            "{label} release must retain the session"
+        );
+        let record = host
+            .core()
+            .command_status(&Actor::LocalCli, request.clone())
+            .await
+            .expect("read command")
+            .expect("persisted command");
+        assert_eq!(record.status(), expected, "{label}");
+        assert!(
+            host.lifecycle().has_capacity_pressure(),
+            "{label} release must keep the capacity reservation"
+        );
+        assert!(
+            host.lifecycle().resource_generation(&session_id) == Some(generation_before),
+            "{label} release must keep the resource generation unchanged"
+        );
+
+        host.script().set_release_outcome(ReleaseOutcome::Released);
+        host.script().block_releases();
+        let (shutdown, signal) = server::transport::net::Shutdown::channel();
+        let reclaim = tokio::spawn({
+            let core = Arc::clone(host.core());
+            let lifecycle = Arc::clone(host.lifecycle());
+            let clock = Arc::clone(host.clock());
+            async move {
+                server::sync::local_lifecycle::reclaim_loop(
+                    core,
+                    lifecycle,
+                    clock,
+                    Actor::LocalCli,
+                    Duration::from_millis(5),
+                    signal,
+                )
+                .await;
+            }
+        });
+        host.script().wait_for_release_entered().await;
+
+        let requests = session_delete_request_ids(&host, &session).await;
+        assert!(
+            requests
+                .iter()
+                .any(|candidate| candidate != request.as_str()),
+            "{label} scanner must admit a new session.delete requestId: {requests:?}"
+        );
+
+        host.script().allow_release();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while session_is_visible(&host, &session).await {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{label} scanner retry did not delete the session after a confirmed release"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        shutdown.trigger();
+        reclaim.await.expect("reclaim task");
+
+        assert_eq!(
+            host.script().release_calls(),
+            2,
+            "{label} retry must close once and succeed"
+        );
+        assert!(
+            !host.lifecycle().has_capacity_pressure(),
+            "{label} capacity is returned only after the retry confirms release"
+        );
+        assert_eq!(
+            session_deleted_event_count(&host, &session).await,
+            1,
+            "{label} confirmed retry commits exactly one deletion fact"
+        );
+        let original = host
+            .core()
+            .command_status(&Actor::LocalCli, request)
+            .await
+            .expect("original command remains readable")
+            .expect("original command remains persisted");
+        assert_eq!(
+            original.status(),
+            expected,
+            "{label} the retry must not overwrite the original terminal"
+        );
+
+        host.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn restart_recovery_marks_an_admitted_delete_uncertain_without_releasing() {
+    let host =
+        HostNode::start_with_lifecycle("life-delete-restart", HOST, config(1_800_000, 1)).await;
+    let session = local_session(&host).await;
+    let (request, _fingerprint) = admit_session_delete(&host, &session).await;
+    let releases_before = host.script().release_calls();
+
+    let recovered = host
+        .core()
+        .recover_unsettled(&Actor::LocalCli, acp_core::ports::ReplayLimit::default())
+        .await
+        .expect("startup recovery");
+    assert!(recovered >= 1);
+    assert_eq!(
+        host.script().release_calls(),
+        releases_before,
+        "startup recovery must not retry the external release"
+    );
+    assert!(session_is_visible(&host, &session).await);
+    let record = host
+        .core()
+        .command_status(&Actor::LocalCli, request)
+        .await
+        .expect("read command")
+        .expect("persisted command");
+    assert_eq!(record.status(), CommandStatus::Uncertain);
+    assert!(
+        record
+            .error()
+            .is_some_and(|error| error.message().contains("释放")),
+        "session.delete recovery must explain the unknown release state"
+    );
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn retention_scanner_releases_nonempty_sessions_without_deleting_them() {
+    let host = HostNode::start_with_lifecycle("life-retention-nonempty", HOST, config(50, 5)).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+    let marker = "retention-nonempty-marker";
+    prompt_to_completion(&host, &mut client, &session, marker).await;
+
+    let (shutdown, signal) = server::transport::net::Shutdown::channel();
+    let task = tokio::spawn({
+        let core = Arc::clone(host.core());
+        let lifecycle = Arc::clone(host.lifecycle());
+        let clock = Arc::clone(host.clock());
+        async move {
+            server::sync::local_lifecycle::reclaim_loop(
+                core,
+                lifecycle,
+                clock,
+                Actor::LocalCli,
+                Duration::from_millis(5),
+                signal,
+            )
+            .await;
+        }
+    });
+
+    wait_for_release_call(&host, 1).await;
+    shutdown.trigger();
+    task.await.expect("scanner task");
+    assert!(session_is_visible(&host, &session).await);
+    let resources = read_resources(&mut client, &session).await;
+    assert!(
+        message_texts(&resources).iter().any(|text| text == marker),
+        "nonempty retention cleanup must preserve content: {resources}"
+    );
+    assert!(
+        !history_ids(&resources)
+            .iter()
+            .any(|(_, event_type)| event_type == "session.deleted"),
+        "nonempty retention must not expose a deletion fact"
+    );
+
+    let resume_request = uuid_text();
+    client.step("session.resume after nonempty resource reclaim");
+    client
+        .command(&resume_request, "session.resume", Some(&session), json!({}))
+        .await;
+    assert_eq!(
+        client.expect_command_result(&resume_request).await["status"],
+        json!("accepted")
+    );
+    let resumed = client.expect_command_result(&resume_request).await;
+    assert_eq!(resumed["status"], json!("completed"), "{resumed}");
+    assert_eq!(
+        resumed["result"]["sessionId"],
+        json!(session),
+        "nonempty cleanup must preserve the original session identity"
+    );
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn capacity_scanner_only_releases_and_never_deletes_an_empty_session() {
+    let host =
+        HostNode::start_with_lifecycle("life-capacity-release-only", HOST, config(0, 1)).await;
+    let session = local_session(&host).await;
+    let (shutdown, signal) = server::transport::net::Shutdown::channel();
+    let task = tokio::spawn({
+        let core = Arc::clone(host.core());
+        let lifecycle = Arc::clone(host.lifecycle());
+        let clock = Arc::clone(host.clock());
+        async move {
+            server::sync::local_lifecycle::reclaim_loop(
+                core,
+                lifecycle,
+                clock,
+                Actor::LocalCli,
+                Duration::from_millis(5),
+                signal,
+            )
+            .await;
+        }
+    });
+
+    wait_for_release_call(&host, 1).await;
+    shutdown.trigger();
+    task.await.expect("scanner task");
+    assert!(
+        session_is_visible(&host, &session).await,
+        "capacity pressure must not delete an empty session"
+    );
+
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn restart_reseeds_an_expired_empty_session_and_its_missing_runtime_still_releases() {
+    let root = TempRoot::new("life-restart-empty-cleanup");
+    let lifecycle = config(10_000, 5);
+    let first = HostNode::start_in_root(root.path(), HOST, lifecycle, restart_seed()).await;
+    let session = local_session(&first).await;
+    let expired = first
+        .clock()
+        .now()
+        .checked_add_millis(20_000)
+        .expect("future timestamp");
+    assert!(
+        first
+            .lifecycle()
+            .retention_due(&Actor::LocalCli, expired)
+            .await
+            .expect("old retention candidates")
+            .iter()
+            .any(|candidate| candidate.session.as_str() == session),
+        "the session's original retention window must expire before restart"
+    );
+    first.stop().await;
+
+    let restarted = HostNode::start_in_root(root.path(), HOST, lifecycle, restart_seed()).await;
+    assert!(
+        session_is_visible(&restarted, &session).await,
+        "the empty session remains visible during the restarted grace period"
+    );
+    let now = restarted.clock().now();
+    assert!(
+        !restarted
+            .lifecycle()
+            .retention_due(
+                &Actor::LocalCli,
+                now.checked_add_millis(9_000).expect("future timestamp"),
+            )
+            .await
+            .expect("new retention candidates")
+            .iter()
+            .any(|candidate| candidate.session.as_str() == session),
+        "restart must grant a complete new retention window"
+    );
+    assert!(
+        restarted
+            .lifecycle()
+            .retention_due(
+                &Actor::LocalCli,
+                now.checked_add_millis(10_000).expect("future timestamp"),
+            )
+            .await
+            .expect("expired restarted candidate")
+            .iter()
+            .any(|candidate| candidate.session.as_str() == session),
+        "the restarted empty session must eventually become a cleanup candidate"
+    );
+
+    let session_id = SessionId::new(&session).expect("session id");
+    let (request, fingerprint) = admit_session_delete(&restarted, &session).await;
+    let releases_before = restarted.script().release_calls();
+    server::sync::local_lifecycle::execute_session_delete(
+        restarted.core().as_ref(),
+        restarted.lifecycle().as_ref(),
+        now.checked_add_millis(10_000).expect("future timestamp"),
+        &Actor::LocalCli,
+        &request,
+        &fingerprint,
+        &session_id,
+    )
+    .await
+    .expect("missing runtime release and deletion");
+    assert_eq!(
+        restarted.script().release_calls(),
+        releases_before + 1,
+        "a restart-seeded session must still request confirmation from the release port"
+    );
+    assert!(
+        !session_is_visible(&restarted, &session).await,
+        "a confirmed release permits deleting the empty session"
+    );
+
+    restarted.stop().await;
+}
+
+#[tokio::test]
+async fn restart_does_not_seed_a_nonempty_session_for_empty_cleanup() {
+    let root = TempRoot::new("life-restart-nonempty");
+    let lifecycle = config(100, 5);
+    let first = HostNode::start_in_root(root.path(), HOST, lifecycle, restart_seed()).await;
+    let device = Device::new();
+    pair_and_approve(&first, &device).await;
+    let session = local_session(&first).await;
+    let mut client = connect_lifecycle(&first, &device).await;
+    prompt_to_completion(&first, &mut client, &session, "restart-nonempty").await;
+    drop(client);
+    first.stop().await;
+
+    let restarted = HostNode::start_in_root(root.path(), HOST, lifecycle, restart_seed()).await;
+    assert!(session_is_visible(&restarted, &session).await);
+    let far_future = restarted
+        .clock()
+        .now()
+        .checked_add_millis(1_000)
+        .expect("future timestamp");
+    assert!(
+        !restarted
+            .lifecycle()
+            .retention_due(&Actor::LocalCli, far_future)
+            .await
+            .expect("retention candidates")
+            .iter()
+            .any(|candidate| candidate.session.as_str() == session),
+        "startup discovery must not turn a nonempty session into an empty-delete candidate"
+    );
+
+    restarted.stop().await;
 }

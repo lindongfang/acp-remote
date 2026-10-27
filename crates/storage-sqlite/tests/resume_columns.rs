@@ -53,6 +53,7 @@ async fn rewind_to_v4(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join(DATABASE_FILE);
     let pool = raw_write_pool(&path).await;
     for column in [
+        "deleted_at",
         "agent_session_id",
         "workspace_cwd",
         "workspace_directory_id",
@@ -226,8 +227,8 @@ async fn v13_rebuilds_owned_session_without_closed_at_and_keeps_recovery_columns
     //    `cid` 连续无空洞。
     assert_eq!(
         columns_after.len(),
-        15,
-        "当前 owned_session 是 15 列（v4 的 12 列去掉 closed_at + 恢复三列 + custom_title）"
+        16,
+        "当前 owned_session 是 16 列（v4 的形状去掉 closed_at，再追加 recovery/custom/deletion 列）"
     );
     assert_eq!(
         &columns_after[..11],
@@ -238,14 +239,17 @@ async fn v13_rebuilds_owned_session_without_closed_at_and_keeps_recovery_columns
     assert_eq!(columns_after[12].0, "workspace_cwd");
     assert_eq!(columns_after[13].0, "workspace_directory_id");
     assert_eq!(columns_after[14].0, "custom_title");
+    assert_eq!(columns_after[15].0, "deleted_at");
     assert_eq!(
         (
             &columns_after[11].1,
             &columns_after[12].1,
             &columns_after[13].1,
-            &columns_after[14].1
+            &columns_after[14].1,
+            &columns_after[15].1
         ),
         (
+            &"TEXT".to_owned(),
             &"TEXT".to_owned(),
             &"TEXT".to_owned(),
             &"TEXT".to_owned(),
@@ -257,7 +261,11 @@ async fn v13_rebuilds_owned_session_without_closed_at_and_keeps_recovery_columns
         .fetch_all(&pool)
         .await
         .expect("读 cid");
-    assert_eq!(cids, (0..15).collect::<Vec<i64>>(), "cid 必须连续无空洞");
+    assert_eq!(
+        cids,
+        (0..16).collect::<Vec<i64>>(),
+        "cid must be contiguous"
+    );
 
     // ③ 反证：v1 升级路径里确实重建 `owned_audit`，其文本的表名**带双引号**（RENAME 的签名）——
     //    说明本文件的「重建会改存储文本」判断有实际判别力。

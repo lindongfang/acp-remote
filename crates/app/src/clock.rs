@@ -6,6 +6,8 @@
 //! `crates/storage-sqlite/src/migrate.rs` 的保留窗口），本次是第三处，理由与那次相同：`core` 不提供
 //! 时间工具，而反方向的「让 `core` 依赖日期库」是更大的取舍。三处都只覆盖公历换算，不涉及时区。
 
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use acp_core::model::Timestamp;
@@ -17,6 +19,8 @@ use acp_core::ports::Clock;
 const EPOCH_TEXT: &str = "1970-01-01T00:00:00.000Z";
 
 const DAY_MILLIS: i64 = 86_400_000;
+const MIN_UNIX_MILLIS: i64 = -62_167_219_200_000;
+const MAX_UNIX_MILLIS: i64 = 253_402_300_799_999;
 
 /// 系统时钟：`Clock` 端口的唯一实现（`core` 不读系统时间，时间一律由本实现提供）。
 #[derive(Debug, Default, Clone, Copy)]
@@ -38,6 +42,85 @@ impl Clock for SystemClock {
         };
         timestamp_from_unix_millis(millis)
     }
+}
+
+/// 验收专用文件时钟构造失败。只给稳定分类，错误文本不携带路径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum FileClockError {
+    #[error("the test clock file cannot be read")]
+    Unreadable,
+    #[error("the test clock file must contain a canonical timestamp or Unix milliseconds")]
+    InvalidValue,
+}
+
+/// 由外部文件推进的验收时钟。
+///
+/// 每个文件内容要么是 24 字节规范 [`Timestamp`]，要么是 Unix 毫秒整数。测试更新文件时必须先写同目录临时文件，
+/// 再用原子 rename 替换，避免进程读到半写内容。读取失败或内容非法时保持在上一个有效值并记录错误，测试
+/// 时间因此不会回落到系统时间或在 29:59.999/30:00.000 边界附近自行滑动。
+#[derive(Debug)]
+pub struct FileClock {
+    path: PathBuf,
+    last_valid: Mutex<Timestamp>,
+}
+
+impl FileClock {
+    /// 打开并验证文件。生产组合根只会在显式开发模式且设置验收环境变量时调用它。
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, FileClockError> {
+        let path = path.into();
+        let initial = read_clock_file(&path)?;
+        Ok(Self {
+            path,
+            last_valid: Mutex::new(initial),
+        })
+    }
+}
+
+impl Clock for FileClock {
+    fn now(&self) -> Timestamp {
+        let mut last_valid = lock(&self.last_valid);
+        match read_clock_file(&self.path) {
+            Ok(timestamp) => {
+                *last_valid = timestamp.clone();
+                timestamp
+            }
+            Err(error) => {
+                tracing::error!(
+                    event = "clock.test_file_invalid",
+                    error = ?error,
+                    "验收时钟文件不可读或内容非法；保持上一个有效时间，不推进扫描"
+                );
+                last_valid.clone()
+            }
+        }
+    }
+}
+
+fn read_clock_file(path: &Path) -> Result<Timestamp, FileClockError> {
+    let text = std::fs::read_to_string(path).map_err(|_| FileClockError::Unreadable)?;
+    parse_clock_value(text.trim())
+}
+
+fn parse_clock_value(text: &str) -> Result<Timestamp, FileClockError> {
+    if let Ok(millis) = text.parse::<i64>() {
+        return timestamp_from_unix_millis_checked(millis).ok_or(FileClockError::InvalidValue);
+    }
+    Timestamp::new(text).map_err(|_| FileClockError::InvalidValue)
+}
+
+fn timestamp_from_unix_millis_checked(millis: i64) -> Option<Timestamp> {
+    if !(MIN_UNIX_MILLIS..=MAX_UNIX_MILLIS).contains(&millis) {
+        return None;
+    }
+    let text = format_unix_millis(millis);
+    if text.len() != 24 {
+        return None;
+    }
+    Timestamp::new(&text).ok()
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Unix 毫秒 → 规范时间戳文本。
@@ -123,11 +206,88 @@ mod tests {
     }
 
     #[test]
+    fn file_clock_accepts_the_complete_canonical_year_range() {
+        assert_eq!(
+            parse_clock_value("-62167219200000")
+                .expect("minimum timestamp")
+                .as_str(),
+            "0000-01-01T00:00:00.000Z"
+        );
+        assert_eq!(
+            parse_clock_value("253402300799999")
+                .expect("maximum timestamp")
+                .as_str(),
+            "9999-12-31T23:59:59.999Z"
+        );
+    }
+
+    #[test]
+    fn file_clock_rejects_milliseconds_outside_the_canonical_year_range() {
+        assert_eq!(
+            parse_clock_value("-62167219200001"),
+            Err(FileClockError::InvalidValue)
+        );
+        assert_eq!(
+            parse_clock_value("253402300800000"),
+            Err(FileClockError::InvalidValue)
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "acpr-file-clock-invalid-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temporary clock directory");
+        let path = root.join("clock");
+        for value in ["-62167219200001", "253402300800000"] {
+            std::fs::write(&path, value).expect("invalid clock value");
+            assert_eq!(
+                FileClock::open(&path).expect_err("out-of-range value must fail closed"),
+                FileClockError::InvalidValue
+            );
+        }
+        std::fs::remove_dir_all(&root).expect("remove temporary clock directory");
+    }
+
+    #[test]
     fn the_system_clock_advances() {
         let clock = SystemClock::new();
         let first = clock.now();
         let second = clock.now();
         assert!(second.as_str() >= first.as_str(), "{first} → {second}");
         assert!(first.as_str() >= "2024-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn the_file_clock_crosses_the_retention_boundary_exactly() {
+        let root = std::env::temp_dir().join(format!(
+            "acpr-file-clock-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temporary clock directory");
+        let path = root.join("clock");
+        std::fs::write(&path, "2026-10-26T00:29:59.999Z").expect("initial clock value");
+        let clock = FileClock::open(&path).expect("valid file clock");
+        assert_eq!(clock.now().as_str(), "2026-10-26T00:29:59.999Z");
+
+        let replacement = root.join("clock.next");
+        std::fs::write(&replacement, "2026-10-26T00:30:00.000Z").expect("next clock value");
+        std::fs::rename(&replacement, &path).expect("atomic clock replacement");
+        assert_eq!(clock.now().as_str(), "2026-10-26T00:30:00.000Z");
+
+        std::fs::write(&path, "not-a-timestamp").expect("invalid clock value");
+        assert_eq!(
+            clock.now().as_str(),
+            "2026-10-26T00:30:00.000Z",
+            "invalid input must keep the last valid value"
+        );
+        std::fs::remove_dir_all(&root).expect("remove temporary clock directory");
     }
 }

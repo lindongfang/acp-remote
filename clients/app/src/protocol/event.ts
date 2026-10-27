@@ -82,6 +82,7 @@ export interface EventMessage {
 /** `event-views.schema.json` 的 `$defs` 键集合（34 个 eventType）。 */
 export type EventType =
   | "session.created"
+  | "session.deleted"
   | "session.updated"
   | "session.activity.changed"
   | "session.info.changed"
@@ -141,6 +142,10 @@ export type OpenView = Record<string, unknown>;
 /** `$defs.session.created` / `$defs.session.updated`。 */
 export type SessionCreatedView = { readonly session: SessionSummary } & OpenView;
 export type SessionUpdatedView = { readonly session: SessionSummary } & OpenView;
+
+export type SessionDeletedView = {
+  readonly sessionId: Uuid;
+} & OpenView;
 
 /**
  * `$defs.session.activity.changed`（`core.local-session-lifecycle.v1`）：本机活跃程度**实际变化**
@@ -422,6 +427,7 @@ export type DeviceRevokedView = {
 /** eventType → 视图类型的映射。 */
 export interface EventViewByType {
   readonly "session.created": SessionCreatedView;
+  readonly "session.deleted": SessionDeletedView;
   readonly "session.updated": SessionUpdatedView;
   readonly "session.activity.changed": SessionActivityChangedView;
   readonly "session.info.changed": SessionInfoChangedView;
@@ -487,6 +493,7 @@ export function projectView(
 /** `EventViewByType` 的键集合，运行期用作 eventType 的封闭判别。 */
 export const KNOWN_EVENT_TYPES: readonly EventType[] = [
   "session.created",
+  "session.deleted",
   "session.updated",
   "session.activity.changed",
   "session.info.changed",

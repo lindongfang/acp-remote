@@ -25,12 +25,16 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const contractPath = resolve(root, "docs", "CORE_PORTS_AND_STORAGE.md");
 const portsPath = resolve(root, "crates", "core", "src", "ports.rs");
+const sessionDeletionPath = resolve(root, "crates", "core", "src", "model", "session_deletion.rs");
 const migratePath = resolve(root, "crates", "storage-sqlite", "src", "migrate.rs");
+const sessionStorePath = resolve(root, "crates", "storage-sqlite", "src", "session_store.rs");
 
 const errors = [];
 const contractLabel = relative(root, contractPath);
 const portsLabel = relative(root, portsPath);
+const sessionDeletionLabel = relative(root, sessionDeletionPath);
 const migrateLabel = relative(root, migratePath);
+const sessionStoreLabel = relative(root, sessionStorePath);
 
 function readText(path, label) {
   try {
@@ -114,8 +118,8 @@ function checkDdl() {
     }
   }
 
-  if (total < 20) {
-    errors.push(`contract drift: DDL 提取结果异常（文档 ${total} 条），门禁解析规则可能已过期`);
+  if (total !== 35) {
+    errors.push(`contract drift: §7 当前 DDL 必须恰好 35 条，实际提取 ${total} 条`);
   }
   return { statements: total };
 }
@@ -293,14 +297,11 @@ function checkPorts() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// C. 计划合同的「尚未实现」断言
+// C. 已实现合同的精确断言
 //
-// `conversation-area-complete` 的 WP1 需要在冻结端口与表结构的同时声明它们**尚未实现**——
-// 若把计划形状写进 §5 的 ```rust / §7 的 ```sql 块，drift 会立刻报「合同声明了代码里没有的
-// trait / 语句」。因此计划块使用独立围栏 ```rust-planned / ```sql-planned，并由本节断言：
-//   - 计划 trait/struct 若已出现在 ports.rs，则必须与声明逐项相等（实现后允许直接移入 §5）；
-//   - 计划 DDL 语句若已出现在 migrate.rs，则失败并提示把块移入 §7 的常规 DDL 与 migration；
-//   - 计划块的提取数量必须非零，避免围栏改名后这条判据静默失效。
+// 通用比对只能证明“文档里写出的声明与代码一致”，不能证明当前合同仍声明了正确的契约。
+// 这里因此对重点小节做结构化的存在性、类型和语义断言；历史修订文本可以继续出现旧名称，
+// 但只有常规 rust/sql 围栏里的声明与当前 DDL 才算现行合同。
 // ---------------------------------------------------------------------------------------------
 
 function subsection(text, heading) {
@@ -346,87 +347,272 @@ function checkImplementedPorts(contract) {
   return { traits: 2, types: 11 };
 }
 
-function checkImplementedDdl(contract) {
-  const text = section(contract, "## 7.");
-  if (!text.includes("v18 = 18") || !text.includes("当前 **v18 = 18**")) {
-    errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前版本 v18 = 18 / owned_schema_version 18`);
-  }
-  for (const table of [
-    "owned_attachment_transfer",
-    "owned_attachment_submission",
-    "owned_attachment_submission_item",
-    "owned_message",
-    "owned_media_ref",
-  ]) {
-    if (!text.toLowerCase().includes(table)) {
-      errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的表 ${table}`);
+const CURRENT_OWNED_TABLES = [
+  "meta",
+  "owned_session",
+  "owned_turn",
+  "owned_event",
+  "owned_command",
+  "owned_interaction",
+  "owned_audit",
+  "owned_attachment",
+  "owned_attachment_link",
+  "owned_attachment_transfer",
+  "owned_attachment_submission",
+  "owned_attachment_submission_item",
+  "owned_message",
+  "owned_timeline_anchor",
+  "owned_media_ref",
+  "owned_user_input",
+  "owned_device",
+  "owned_node",
+  "owned_peer_key",
+  "owned_pairing",
+  "owned_pairing_peer",
+  "owned_directory",
+];
+
+function declarationMap(text) {
+  return scanDeclarations(fenced(text, "rust").join("\n"));
+}
+
+function checkDeclarations(sectionLabel, expectedNames, documented, implemented, implementedLabel) {
+  for (const name of expectedNames) {
+    const contractDeclaration = documented.get(name);
+    const implementationDeclaration = implemented.get(name);
+    if (!contractDeclaration) {
+      errors.push(`contract drift: ${contractLabel} ${sectionLabel} 缺少当前声明 ${name}`);
+      continue;
     }
+    if (!implementationDeclaration) {
+      errors.push(`contract drift: ${implementedLabel} 缺少 ${sectionLabel} 声明的 ${name}`);
+      continue;
+    }
+    if (contractDeclaration.kind !== implementationDeclaration.kind) {
+      errors.push(
+        `contract drift: ${sectionLabel} 把 ${name} 声明为 ${contractDeclaration.kind}，` +
+          `${implementedLabel} 里是 ${implementationDeclaration.kind}`,
+      );
+      continue;
+    }
+    compareSets(
+      `${sectionLabel} 的 ${name} 与 ${implementedLabel}`,
+      contractDeclaration.members.slice().sort(),
+      implementationDeclaration.members.slice().sort(),
+    );
+    compareSets(
+      `${sectionLabel} 的 ${name} 签名与 ${implementedLabel}`,
+      contractDeclaration.signatures.slice().sort(),
+      implementationDeclaration.signatures.slice().sort(),
+    );
   }
-  // v15：`owned_session.custom_title`（`session.title.set` 的持久化列）必须出现在 §7.3 的 DDL 里。
-  // v16：首条提交表与 `owned_message.channel = 'user'` 必须出现在 §7.3 的 DDL 里。
-  if (!subsection(contract, "\n### 7.3 ").includes("owned_first_submission")) {
-    errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的表 owned_first_submission`);
-  }
-  if (!subsection(contract, "\n### 7.3 ").includes("'user'")) {
-    errors.push(`contract drift: ${contractLabel} §7.3 缺少 owned_message 的 user 通道`);
-  }
-  // §5.11 已落地：不得再标注「尚未实现」，并必须列出两个端口。
-  const firstSubmission = subsection(contract, "\n### 5.11 ");
-  if (firstSubmission === undefined || firstSubmission.includes("尚未实现")) {
-    errors.push(`contract drift: ${contractLabel} §5.11 已实现，不得缺失或标注「尚未实现」`);
+}
+
+function hasFieldType(declaration, field, type) {
+  const expected = `${field}:${type}`;
+  return (declaration?.members ?? []).some((member) => {
+    const normalized = member.replace(/\s+/g, "").replace(/,$/, "");
+    return normalized === expected || normalized === `pub${expected}`;
+  });
+}
+
+function checkVersionAndCurrentDdl(contract) {
+  const migration = subsection(contract, "\n### 7.2 ");
+  if (migration === undefined) {
+    errors.push(`contract drift: ${contractLabel} 缺少 §7.2 Migration`);
   } else {
-    for (const name of ["FirstSubmission", "PreparationAttachmentStaging"]) {
-      if (!firstSubmission.includes(name)) {
-        errors.push(`contract drift: ${contractLabel} §5.11 缺少已实现的 ${name}`);
-      }
+    if (!migration.includes("当前 **v19 = 19**")) {
+      errors.push(`contract drift: ${contractLabel} §7.2 必须写明当前文件格式 v19 = 19`);
+    }
+    if (!migration.includes("`owned_schema_version`（当前 19）")) {
+      errors.push(`contract drift: ${contractLabel} §7.2 必须写明 owned_schema_version 当前为 19`);
     }
   }
-  if (!subsection(contract, "\n### 7.3 ").includes("custom_title")) {
-    errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的列 owned_session.custom_title`);
+
+  const migrate = readText(migratePath, migrateLabel) ?? "";
+  for (const constant of ["FILE_FORMAT_VERSION", "OWNED_SCHEMA_VERSION"]) {
+    const pattern = new RegExp(`pub const ${constant}:\\s*i64\\s*=\\s*19\\s*;`);
+    if (!pattern.test(migrate)) {
+      errors.push(`contract drift: ${migrateLabel} 的 ${constant} 必须显式等于 19`);
+    }
   }
-  // v17（`conversation-reliability` WP2）：受理关联表与两条唯一约束必须进入 §7.3，常量与实现同版本。
-  const ownedTables = subsection(contract, "\n### 7.3 ");
-  if (!ownedTables.includes("owned_user_input")) {
-    errors.push(`contract drift: ${contractLabel} §7.3 缺少已实现的表 owned_user_input`);
+
+  const tableSection = subsection(contract, "\n### 7.3 ");
+  if (tableSection === undefined) {
+    errors.push(`contract drift: ${contractLabel} 缺少 §7.3 当前表结构`);
+    return { tables: 0 };
   }
+  if (tableSection.includes("sql-planned")) {
+    errors.push(`contract drift: ${contractLabel} §7.3 当前表结构不得使用 sql-planned`);
+  }
+
+  const currentSql = fenced(tableSection, "sql").flatMap(sqlStatements);
+  const currentTables = currentSql
+    .map((statement) => statement.match(/^create table (\w+) \(/)?.[1])
+    .filter(Boolean);
+  compareSets(
+    `§7.3 当前 owned 表集合与 ${migrateLabel}`,
+    CURRENT_OWNED_TABLES.slice().sort(),
+    currentTables.slice().sort(),
+  );
+
+  if (currentSql.some((statement) => statement.startsWith("create table owned_first_submission ("))) {
+    errors.push(`contract drift: ${contractLabel} §7.3 当前 DDL 不得包含 owned_first_submission`);
+  }
+
+  const ownedSession = currentSql.find((statement) => statement.startsWith("create table owned_session ("));
+  if (!ownedSession) {
+    errors.push(`contract drift: ${contractLabel} §7.3 缺少 owned_session 当前 DDL`);
+  } else {
+    if (!/\bcustom_title\s+text\b/.test(ownedSession)) {
+      errors.push(`contract drift: ${contractLabel} §7.3 的 owned_session 缺少 custom_title`);
+    }
+    if (!/\bdeleted_at\s+text\b/.test(ownedSession)) {
+      errors.push(`contract drift: ${contractLabel} §7.3 的 owned_session 缺少 deleted_at`);
+    }
+  }
+
+  const ownedMessage = currentSql.find((statement) => statement.startsWith("create table owned_message ("));
+  if (!ownedMessage || !ownedMessage.includes("'user'")) {
+    errors.push(`contract drift: ${contractLabel} §7.3 的 owned_message 缺少 user 通道`);
+  }
+
+  const ownedUserInput = currentSql.find((statement) => statement.startsWith("create table owned_user_input ("));
   for (const constraint of [
     "unique (session_id, actor_kind, actor_id, request_id)",
     "unique (session_id, turn_id)",
   ]) {
-    if (!ownedTables.toLowerCase().includes(constraint)) {
+    if (!ownedUserInput?.includes(constraint)) {
       errors.push(`contract drift: ${contractLabel} §7.3 的 owned_user_input 缺少唯一约束 ${constraint}`);
     }
   }
-  const migrate = readText(migratePath, migrateLabel) ?? "";
-  for (const constant of [
-    "FILE_FORMAT_VERSION: i64 = 18",
-    "OWNED_SCHEMA_VERSION: i64 = 18",
-  ]) {
-    if (!migrate.includes(constant)) {
-      errors.push(`contract drift: ${migrateLabel} 缺少 v17 常量 ${constant}`);
+  return { tables: currentTables.length };
+}
+
+function checkCurrentPortSections(contract, ports) {
+  const portsDeclarations = scanDeclarations(ports);
+
+  const sessionFacts = subsection(contract, "\n### 5.11 ");
+  if (sessionFacts === undefined || sessionFacts.includes("尚未实现") || sessionFacts.includes("rust-planned")) {
+    errors.push(`contract drift: ${contractLabel} §5.11 已实现，不得缺失、标注「尚未实现」或使用 rust-planned`);
+  } else {
+    const documented = declarationMap(sessionFacts);
+    checkDeclarations(
+      "§5.11",
+      ["SessionContentFacts", "SessionDeletion"],
+      documented,
+      portsDeclarations,
+      portsLabel,
+    );
+    for (const obsolete of ["FirstSubmission", "PreparationAttachmentStaging"]) {
+      if (documented.has(obsolete)) {
+        errors.push(`contract drift: ${contractLabel} §5.11 不得再把已删除的 ${obsolete} 声明为当前端口`);
+      }
     }
   }
-  if (!migrate.includes("owned_user_input")) {
-    errors.push(`contract drift: ${migrateLabel} 缺少 owned_user_input 的 DDL / v17 升级段`);
-  }
-  // §5.12 已落地：计划围栏必须并入常规 rust 块，且不得再标注「尚未实现」。
+
   const acceptance = subsection(contract, "\n### 5.12 ");
   if (acceptance === undefined || acceptance.includes("尚未实现") || acceptance.includes("rust-planned")) {
     errors.push(`contract drift: ${contractLabel} §5.12 已实现，不得缺失、标注「尚未实现」或继续使用 rust-planned`);
   } else {
-    for (const name of ["PromptAcceptanceInput", "PromptAcceptanceOutcome"]) {
-      if (!acceptance.includes(name)) {
-        errors.push(`contract drift: ${contractLabel} §5.12 缺少已实现的 ${name}`);
-      }
+    const documented = declarationMap(acceptance);
+    checkDeclarations(
+      "§5.12",
+      ["PromptAcceptanceInput", "PromptAcceptanceOutcome"],
+      documented,
+      portsDeclarations,
+      portsLabel,
+    );
+    const documentedInput = documented.get("PromptAcceptanceInput");
+    const implementedInput = portsDeclarations.get("PromptAcceptanceInput");
+    if (!hasFieldType(documentedInput, "content", "PromptInput")) {
+      errors.push(`contract drift: ${contractLabel} §5.12 的 PromptAcceptanceInput.content 必须是 PromptInput`);
     }
-    if (fenced(acceptance, "rust").length < 1) {
-      errors.push(`contract drift: ${contractLabel} §5.12 需要常规 rust 代码块`);
+    if (!hasFieldType(implementedInput, "content", "PromptInput")) {
+      errors.push(`contract drift: ${portsLabel} 的 PromptAcceptanceInput.content 必须是 PromptInput`);
     }
   }
-  if (text.includes("sql-planned")) {
-    errors.push(`contract drift: ${contractLabel} §7 不得再含 sql-planned 块（已实现）`);
+
+  return { traits: 2, types: 2 };
+}
+
+function checkSessionDeletion(contract) {
+  const deletion = section(contract, "## 13.");
+  if (!deletion || deletion.includes("尚未实现") || deletion.includes("rust-planned") || deletion.includes("sql-planned")) {
+    errors.push(`contract drift: ${contractLabel} §13 必须描述已实现的会话删除合同，不得使用计划围栏`);
   }
-  return 5;
+
+  const documented = declarationMap(deletion);
+  const portsDeclarations = scanDeclarations(portsText ?? "");
+  checkDeclarations(
+    "§13",
+    ["SessionContentFacts", "SessionDeletion"],
+    documented,
+    portsDeclarations,
+    portsLabel,
+  );
+
+  const modelDeclarations = scanDeclarations(readText(sessionDeletionPath, sessionDeletionLabel) ?? "");
+  checkDeclarations(
+    "§13",
+    [
+      "SessionDeletionWrite",
+      "SessionDeletionEligibility",
+      "SessionDeletionOutcome",
+      "SessionDeletionBlocker",
+    ],
+    documented,
+    modelDeclarations,
+    sessionDeletionLabel,
+  );
+
+  const sessionStore = readText(sessionStorePath, sessionStoreLabel) ?? "";
+  for (const implementation of [
+    "impl SessionContentFacts for SqliteStore",
+    "impl SessionDeletion for SqliteStore",
+    'const VISIBLE_SESSION: &str = "deleted_at IS NULL"',
+  ]) {
+    if (!sessionStore.includes(implementation)) {
+      errors.push(`contract drift: ${sessionStoreLabel} 缺少 §13 所需的实现 ${implementation}`);
+    }
+  }
+
+  const migrationSection = subsection(deletion, "\n### 13.5 ");
+  const migrationBlocks = fenced(migrationSection ?? "", "sql");
+  if (migrationBlocks.length !== 1) {
+    errors.push(`contract drift: ${contractLabel} §13.5 必须只有一个 sql 迁移块，实际 ${migrationBlocks.length} 个`);
+  } else {
+    const expected = [
+      "alter table owned_session add column deleted_at text",
+      "drop table if exists owned_first_submission",
+    ];
+    const actual = sqlStatements(migrationBlocks[0]);
+    compareSets("§13.5 v18 → v19 迁移语句", expected, actual);
+  }
+
+  const migrate = migrateText ?? "";
+  const functionStart = migrate.indexOf("async fn v19_upgrade");
+  const functionEnd = functionStart < 0 ? -1 : migrate.indexOf("\n}\n", functionStart);
+  const upgrade = functionStart < 0 || functionEnd < 0 ? "" : migrate.slice(functionStart, functionEnd);
+  const normalizedUpgrade = normalizeSql(upgrade);
+  if (
+    !normalizedUpgrade.includes('column_exists(&mut **tx, "owned_session", "deleted_at")') ||
+    !normalizedUpgrade.includes("alter table owned_session add column deleted_at text") ||
+    !normalizedUpgrade.includes("drop table if exists owned_first_submission")
+  ) {
+    errors.push(
+      `contract drift: ${migrateLabel} 的 v19_upgrade 必须守卫 deleted_at、执行加列并删除 owned_first_submission`,
+    );
+  }
+
+  return { traits: 2, types: 4 };
+}
+
+function checkImplementedDdl(contract) {
+  const versionAndDdl = checkVersionAndCurrentDdl(contract);
+  const currentPorts = checkCurrentPortSections(contract, portsText ?? "");
+  const deletion = checkSessionDeletion(contract);
+  return { ...versionAndDdl, ...currentPorts, ...deletion };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -437,7 +623,9 @@ const migrateText = readText(migratePath, migrateLabel);
 const ddl = checkDdl();
 const ports = checkPorts();
 const implementedPorts = contractText ? checkImplementedPorts(contractText) : { traits: 0, types: 0 };
-const implementedDdl = contractText ? checkImplementedDdl(contractText) : 0;
+const implementedDdl = contractText
+  ? checkImplementedDdl(contractText)
+  : { tables: 0, traits: 0, types: 0 };
 
 if (errors.length > 0) {
   for (const error of errors) console.error(error);
@@ -446,6 +634,8 @@ if (errors.length > 0) {
   console.log(
     `contract drift OK: §7 的 ${ddl.statements} 条 DDL 与 ${migrateLabel} 逐条一致；` +
       `§5 的 ${ports.traits} 个 trait / ${ports.methods} 个方法签名与 ${portsLabel} 一致；` +
-      `§5.8 的 ${implementedPorts.traits} 个 trait / ${implementedPorts.types} 个类型已实现；§7 的 ${implementedDdl} 张新表已进入 ${migrateLabel}`,
+      `§5.8 的 ${implementedPorts.traits} 个 trait / ${implementedPorts.types} 个类型已实现；` +
+      `§5.11/§5.12/§13 的 ${implementedDdl.traits} 个 trait / ${implementedDdl.types} 个类型与实现一致；` +
+      `§7.3 的 ${implementedDdl.tables} 张当前表已由 v19 合同覆盖`,
   );
 }

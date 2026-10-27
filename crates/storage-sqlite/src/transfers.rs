@@ -98,6 +98,113 @@ fn temporary_path(config: &StorageConfig, transfer: &AttachmentId) -> PathBuf {
     temporary_dir(config).join(format!("{}.part", transfer.as_str()))
 }
 
+/// Completes the filesystem half of session deletion.
+///
+/// The deletion transaction commits the tombstone before calling this function,
+/// so a crash cannot leave a live session with missing transfer bytes. Transfer
+/// rows remain as the durable locator until their `.part` file is gone; only
+/// then are the rows removed. Cleanup is best effort after the authoritative
+/// deletion commit: failures retain the locator, emit a structured warning, and
+/// are retried by the next delete, startup, or pruning pass without changing the
+/// already committed command result.
+pub(crate) async fn cleanup_tombstoned_transfer_files(
+    pool: &sqlx::SqlitePool,
+    config: &StorageConfig,
+    session: Option<&SessionId>,
+) {
+    match cleanup_tombstoned_transfer_files_inner(pool, config, session).await {
+        Ok(failures) if !failures.is_empty() => {
+            eprintln!("{}", transfer_cleanup_warning(session, &failures));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "level": "warn",
+                    "event": "storage.tombstoned_transfer_cleanup_failed",
+                    "session_id": session.map(SessionId::as_str),
+                    "error": error.to_string(),
+                    "message": "failed to finish tombstoned transfer cleanup; durable locators remain for retry",
+                })
+            );
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TransferCleanupFailure {
+    session_id: String,
+    transfer_id: String,
+    error: String,
+}
+
+fn transfer_cleanup_warning(
+    session: Option<&SessionId>,
+    failures: &[TransferCleanupFailure],
+) -> serde_json::Value {
+    serde_json::json!({
+        "level": "warn",
+        "event": "storage.tombstoned_transfer_file_cleanup_failed",
+        "session_id": session.map(SessionId::as_str),
+        "failed_transfer_count": failures.len(),
+        "failures": failures.iter().map(|failure| {
+            serde_json::json!({
+                "session_id": failure.session_id,
+                "transfer_id": failure.transfer_id,
+                "error": failure.error,
+            })
+        }).collect::<Vec<_>>(),
+        "message": "failed to remove tombstoned transfer files; durable locators retained",
+    })
+}
+
+async fn cleanup_tombstoned_transfer_files_inner(
+    pool: &sqlx::SqlitePool,
+    config: &StorageConfig,
+    session: Option<&SessionId>,
+) -> Result<Vec<TransferCleanupFailure>, StorageError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.db()?;
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT transfer_id, session_id FROM owned_attachment_transfer t \
+         WHERE (?1 IS NULL OR t.session_id = ?1) \
+           AND EXISTS (SELECT 1 FROM owned_session s \
+                       WHERE s.session_id = t.session_id AND s.deleted_at IS NOT NULL) \
+         ORDER BY t.session_id, t.transfer_id",
+    )
+    .bind(session.map(SessionId::as_str))
+    .fetch_all(&mut *tx)
+    .await
+    .db()?;
+
+    let mut failures = Vec::new();
+    for (transfer_text, session_text) in &rows {
+        let transfer = AttachmentId::new(transfer_text).map_err(|_| StorageError::ColumnValue {
+            column: "owned_attachment_transfer.transfer_id",
+            expected: "canonical uuid",
+        })?;
+        match std::fs::remove_file(temporary_path(config, &transfer)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                failures.push(TransferCleanupFailure {
+                    session_id: session_text.clone(),
+                    transfer_id: transfer.as_str().to_owned(),
+                    error: error.to_string(),
+                });
+                continue;
+            }
+        }
+        sqlx::query("DELETE FROM owned_attachment_transfer WHERE transfer_id = ?1")
+            .bind(transfer.as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?;
+    }
+    tx.commit().await.db()?;
+    Ok(failures)
+}
+
 fn io_error() -> PortError {
     PortError::Unavailable(UnavailableKind::IoError)
 }
@@ -212,7 +319,11 @@ async fn load_transfer_row(
     transfer: &AttachmentId,
 ) -> Result<Option<SqliteRow>, PortError> {
     Ok(sqlx::query(&format!(
-        "SELECT {TRANSFER_COLUMNS} FROM owned_attachment_transfer WHERE transfer_id = ?1"
+        "SELECT {TRANSFER_COLUMNS} FROM owned_attachment_transfer t \
+         WHERE t.transfer_id = ?1 \
+           AND EXISTS (SELECT 1 FROM owned_session s \
+                       WHERE s.session_id = t.session_id AND {})",
+        crate::session_store::visible_session(Some("s"))
     ))
     .bind(transfer.as_str())
     .fetch_optional(&mut *ex)
@@ -365,12 +476,14 @@ impl AttachmentTransferStore for SqliteStore {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .db()?;
-        let exists: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM owned_session WHERE session_id = ?1")
-                .bind(write.session.as_str())
-                .fetch_optional(&mut *tx)
-                .await
-                .db()?;
+        let exists: Option<i64> = sqlx::query_scalar(&format!(
+            "SELECT 1 FROM owned_session WHERE session_id = ?1 AND {}",
+            crate::session_store::visible_session(None)
+        ))
+        .bind(write.session.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .db()?;
         if exists.is_none() {
             return Err(PortError::NotFound(EntityRef::Session(write.session)));
         }
@@ -702,12 +815,14 @@ impl AttachmentTransferStore for SqliteStore {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .db()?;
-        let exists: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM owned_session WHERE session_id = ?1")
-                .bind(write.session.as_str())
-                .fetch_optional(&mut *tx)
-                .await
-                .db()?;
+        let exists: Option<i64> = sqlx::query_scalar(&format!(
+            "SELECT 1 FROM owned_session WHERE session_id = ?1 AND {}",
+            crate::session_store::visible_session(None)
+        ))
+        .bind(write.session.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .db()?;
         if exists.is_none() {
             return Err(PortError::NotFound(EntityRef::Session(write.session)));
         }
@@ -767,10 +882,14 @@ impl AttachmentTransferStore for SqliteStore {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .db()?;
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             "SELECT state, attachment_count FROM owned_attachment_submission \
-             WHERE submission_id = ?1",
-        )
+             WHERE submission_id = ?1 \
+               AND EXISTS (SELECT 1 FROM owned_session s \
+                           WHERE s.session_id = owned_attachment_submission.session_id \
+                             AND {})",
+            crate::session_store::visible_session(Some("s"))
+        ))
         .bind(write.submission.as_str())
         .fetch_optional(&mut *tx)
         .await
@@ -832,10 +951,14 @@ impl AttachmentTransferStore for SqliteStore {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .db()?;
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             "SELECT submission_id, session_id, subject_kind, subject_id, state, attachment_count, \
-             manifest_digest, sealed_at FROM owned_attachment_submission WHERE submission_id = ?1",
-        )
+             manifest_digest, sealed_at FROM owned_attachment_submission WHERE submission_id = ?1 \
+               AND EXISTS (SELECT 1 FROM owned_session s \
+                           WHERE s.session_id = owned_attachment_submission.session_id \
+                             AND {})",
+            crate::session_store::visible_session(Some("s"))
+        ))
         .bind(write.submission.as_str())
         .fetch_optional(&mut *tx)
         .await
@@ -936,10 +1059,15 @@ impl AttachmentTransferStore for SqliteStore {
         submission: &SubmissionId,
     ) -> Result<Option<AttachmentSubmission>, PortError> {
         let mut read = self.acquire_read().await?;
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             "SELECT submission_id, session_id, subject_kind, subject_id, state, attachment_count, \
-             manifest_digest, sealed_at FROM owned_attachment_submission WHERE submission_id = ?1",
-        )
+             manifest_digest, sealed_at FROM owned_attachment_submission \
+             WHERE submission_id = ?1 \
+               AND EXISTS (SELECT 1 FROM owned_session s \
+                           WHERE s.session_id = owned_attachment_submission.session_id \
+                             AND {})",
+            crate::session_store::visible_session(Some("s"))
+        ))
         .bind(submission.as_str())
         .fetch_optional(&mut *read)
         .await
@@ -961,11 +1089,14 @@ impl AttachmentTransferStore for SqliteStore {
             return Err(PortError::InvalidRequest("max_length must be positive"));
         }
         let mut read = self.acquire_read().await?;
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             "SELECT attachment_id, byte_length, relative_path FROM owned_attachment \
-             WHERE attachment_id = ?1",
-        )
+             WHERE attachment_id = ?1 \
+               AND EXISTS (SELECT 1 FROM owned_session s WHERE s.session_id = ?2 AND {})",
+            crate::session_store::visible_session(Some("s"))
+        ))
         .bind(request.attachment.as_str())
+        .bind(request.session.as_str())
         .fetch_optional(&mut *read)
         .await
         .db()?
@@ -1015,6 +1146,7 @@ impl AttachmentTransferStore for SqliteStore {
 
     async fn prune_transfers(&self, at: Timestamp, limit: u32) -> Result<u32, PortError> {
         self.writable()?;
+        cleanup_tombstoned_transfer_files(&self.pools().write, self.config(), None).await;
         let mut tx = self
             .pools()
             .write
@@ -1188,6 +1320,8 @@ impl InteractionAuthority for SqliteStore {
              FROM owned_interaction i \
              LEFT JOIN owned_event e ON e.global_sequence = i.request_event \
              WHERE i.session_id = ?1 AND i.state = 'pending' AND i.invalidated_at IS NULL \
+             AND EXISTS (SELECT 1 FROM owned_session s WHERE s.session_id=i.session_id \
+                         AND s.deleted_at IS NULL) \
              ORDER BY i.created_at ASC, i.interaction_id ASC",
         )
         .bind(session.as_str())
@@ -1283,5 +1417,42 @@ impl InteractionAuthority for SqliteStore {
             .db()?,
         };
         Ok(u32::try_from(affected.rows_affected()).unwrap_or(u32::MAX))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transfer_cleanup_warning_aggregates_all_failed_files() {
+        let warning = transfer_cleanup_warning(
+            Some(&SessionId::new("11111111-1111-4111-8111-111111111111").expect("session")),
+            &[
+                TransferCleanupFailure {
+                    session_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+                    transfer_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+                    error: "first removal failed".to_owned(),
+                },
+                TransferCleanupFailure {
+                    session_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+                    transfer_id: "33333333-3333-4333-8333-333333333333".to_owned(),
+                    error: "second removal failed".to_owned(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            warning["event"],
+            "storage.tombstoned_transfer_file_cleanup_failed"
+        );
+        assert_eq!(warning["failed_transfer_count"], 2);
+        assert_eq!(
+            warning["failures"]
+                .as_array()
+                .expect("aggregated failures")
+                .len(),
+            2
+        );
     }
 }

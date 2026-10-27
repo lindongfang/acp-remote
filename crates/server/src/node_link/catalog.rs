@@ -11,6 +11,7 @@
 
 use std::str::FromStr as _;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use acp_core::use_cases::{NodeLinkCatalogSession, NodeLinkCatalogView};
 use node_link_protocol::catalog::{
@@ -28,6 +29,34 @@ use tracing::{debug, warn};
 
 use crate::node_link::conn::{ConnectionHandle, MessageRoute, RouteOutcome, SendFault};
 use crate::node_link::link_error;
+
+/// Catalog membership also changes through session lifecycle events, which do not append audit
+/// rows. Keep their revision bump process-local while `max()` still preserves the persisted audit
+/// watermark across restarts.
+static CATALOG_REVISION_FLOOR: AtomicU64 = AtomicU64::new(0);
+
+/// Serialize catalog reads with revision advances so a read that started before a deletion can
+/// never publish its old membership under the post-deletion revision.
+static CATALOG_PUBLICATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub(super) async fn publication_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    CATALOG_PUBLICATION.lock().await
+}
+
+/// The event's global sequence prevents the synthetic revision from falling behind the event log;
+/// the extra increment guarantees consecutive catalog-changing events cannot reuse a revision even
+/// when the persisted audit watermark has not moved.
+pub(super) fn advance_catalog_revision(global_sequence: u64) {
+    let _ = CATALOG_REVISION_FLOOR.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        Some(current.max(global_sequence).saturating_add(1))
+    });
+}
+
+fn projection_revision(persisted: u64) -> u64 {
+    CATALOG_REVISION_FLOOR
+        .fetch_max(persisted, Ordering::AcqRel)
+        .max(persisted)
+}
 
 /// `catalog.subscribe` 的处理件（无连接级状态：投影每次现算）。
 pub struct CatalogRoute {
@@ -58,6 +87,7 @@ impl MessageRoute for CatalogRoute {
             known_revision = request.known_revision.as_ref().map(|value| value.as_str()),
             "the access node subscribed to the catalog"
         );
+        let _publication = publication_guard().await;
         let view = match self.core.node_link_catalog_view(session.node_id()).await {
             Ok(view) => view,
             Err(error) => {
@@ -166,13 +196,13 @@ impl CatalogRoute {
 
 /// 投影失败的原因（只用于结构化日志；对端一律看到 `internal.unavailable`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProjectionFault {
+pub(super) enum ProjectionFault {
     /// 字段超出 wire 的取值域，或列表超过 schema 的 `maxItems`。
     Field,
 }
 
 impl ProjectionFault {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Field => "field_out_of_range",
         }
@@ -180,9 +210,9 @@ impl ProjectionFault {
 }
 
 /// 把 core 的持久事实投影成 wire 快照（Agent / 目录 / 会话三类，均不含正文与路径）。
-fn project(view: &NodeLinkCatalogView) -> Result<CatalogSnapshot, ProjectionFault> {
-    let revision =
-        DecimalString::parse(&view.revision.to_string()).map_err(|_| ProjectionFault::Field)?;
+pub(super) fn project(view: &NodeLinkCatalogView) -> Result<CatalogSnapshot, ProjectionFault> {
+    let revision = DecimalString::parse(&projection_revision(view.revision).to_string())
+        .map_err(|_| ProjectionFault::Field)?;
     let agents = view
         .agents
         .iter()

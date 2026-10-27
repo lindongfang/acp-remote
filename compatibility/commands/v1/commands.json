@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-10-22",
+  "revision": "2026-10-26",
   "commands": [
     { "name": "session.list", "kind": "query", "scope": "session.list", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "session.read", "kind": "query", "scope": "session.read", "transport": ["sync", "node_link"], "delivery": "mvp" },
@@ -22,7 +22,7 @@
     { "name": "session.git.diff", "kind": "query", "scope": "session.git.diff", "transport": ["sync"], "delivery": "mvp" },
     { "name": "session.resume", "kind": "mutation", "scope": "session.resume", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
     { "name": "session.title.set", "kind": "mutation", "scope": "session.title.set", "transport": ["sync", "node_link"], "delivery": "mvp" },
-    { "name": "session.start", "kind": "mutation", "scope": "session.start", "transport": ["sync"], "delivery": "conditional_mvp" }
+    { "name": "session.delete", "kind": "mutation", "scope": "session.delete", "transport": ["sync"], "delivery": "conditional_mvp" }
   ],
   "localCapabilities": [
     "local.agent.configure",
@@ -70,21 +70,6 @@
       "frames": [
         "session.view",
         "session.view.result"
-      ]
-    },
-    {
-      "protocol": "sync",
-      "feature": "core.session-preparation.v1",
-      "schema": "schemas/sync/v1/sync.schema.json",
-      "budget": {
-        "preparationLeaseMs": 30000,
-        "preparationRenewalIntervalMs": 10000,
-        "maxControlFramesPerMinute": 120,
-        "preparationOperationDedupSeconds": 60
-      },
-      "frames": [
-        "session.preparation",
-        "session.preparation.result"
       ]
     },
     {

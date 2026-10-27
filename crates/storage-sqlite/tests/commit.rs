@@ -4,14 +4,14 @@ mod support;
 
 use acp_core::model::{
     Actor, AgentId, AgentRef, CommandKind, CommandResult, CommandStatus, CommandTerminalRecord,
-    ConflictKind, Digest, EntityRef, EventKind, EventOrigin, EventType, FirstSubmissionInput,
-    InteractionId, MessageChannel, MessageId, OriginCursor, OriginEpoch, PendingEvent, PortError,
-    PromptContentBlock, PublicError, RequestId, Sequence, SessionId, SessionState, StoredPolicy,
-    Timestamp, TurnId, TurnState, UserInputWrite, ViewJson,
+    ConflictKind, Digest, EntityRef, EventKind, EventOrigin, EventType, InteractionId,
+    MessageChannel, MessageId, OriginCursor, OriginEpoch, PendingEvent, PortError,
+    PromptContentBlock, PromptInput, PublicError, RequestId, Sequence, SessionId, SessionState,
+    StoredPolicy, Timestamp, TurnId, TurnState, UserInputWrite, ViewJson,
 };
 use acp_core::ports::{
     HistoryInclude, HistoryQuery, IdempotencyRecord, ModeChange, NewTurn, OwnedCommit, ReplayLimit,
-    SessionQuery, SessionStore, SessionUpdate, StateChange, TurnChange, TurnUpdate,
+    SessionQuery, SessionStore, SessionUpdate, SettledSession, StateChange, TurnChange, TurnUpdate,
 };
 use storage_sqlite::migrate::{FILE_FORMAT_VERSION, StorageConfig};
 use storage_sqlite::session_store::SqliteStore;
@@ -1880,6 +1880,106 @@ async fn session_create_persists_its_idempotency_row_and_terminal() {
     reopened.close().await;
 }
 
+/// 真实 `session.create` 分两次提交：受理时还没有会话行，落账时用 core 已分配的标识执行
+/// `SettleCreate`。落账前检查会话是否存在会错误地回滚整个事务，因此这里覆盖两阶段形状。
+#[tokio::test]
+async fn settle_create_commits_after_a_separate_admission() {
+    let dir = temp_dir("commit-settle-create-after-admission");
+    let store = store(&dir).await;
+    let session = SessionId::new("66666666-6666-4666-8666-666666666666").expect("session id");
+    let request_id = request(REQUEST);
+    let actor_id = actor();
+
+    store
+        .commit(OwnedCommit {
+            session: None,
+            at: at(0),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor_id.clone(),
+                request: request_id.clone(),
+                command: "session.create".to_owned(),
+                kind: CommandKind::Mutation,
+                session: None,
+                expected_version: None,
+                request_fingerprint: fingerprint("settle-create"),
+                accepted_at: at(0),
+            }),
+            command_terminal: None,
+            origin_epoch: None,
+            input: None,
+        })
+        .await
+        .expect("persist admission");
+
+    let result =
+        CommandResult::from_json_text(&format!(r#"{{"sessionId":"{session}"}}"#)).expect("result");
+    let outcome = store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at(1),
+            expected_version: None,
+            state: Some(StateChange::SettleCreate(SettledSession {
+                session: session.clone(),
+                title: Some("settled".to_owned()),
+                agent: agent(),
+                agent_session_id: None,
+                workspace_cwd: None,
+                workspace_directory_id: None,
+            })),
+            turns: Vec::new(),
+            events: vec![event(
+                EventKind::Structured,
+                "command.completed",
+                &format!(r#"{{"requestId":"{REQUEST}","result":{{"sessionId":"{session}"}}}}"#),
+                Some(request_id.clone()),
+            )],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(
+                CommandTerminalRecord::try_new(
+                    CommandStatus::Completed,
+                    Some(at(1)),
+                    None,
+                    Some(result.clone()),
+                    None,
+                )
+                .expect("terminal"),
+            ),
+            origin_epoch: Some(origin_epoch()),
+            input: None,
+        })
+        .await
+        .expect("settle create");
+
+    assert_eq!(outcome.session_id, Some(session.clone()));
+    let record = store
+        .find_request(&request_id, &actor_id)
+        .await
+        .expect("find request")
+        .expect("settled command");
+    assert_eq!(record.session(), Some(&session));
+    assert_eq!(record.status(), CommandStatus::Completed);
+    assert!(record.terminal_event().is_some());
+    assert_eq!(
+        store
+            .load(&session)
+            .await
+            .expect("load session")
+            .expect("session exists")
+            .session
+            .id(),
+        &session
+    );
+    store.close().await;
+}
+
 /// §6 第 16/20 条：创建只落了幂等行（终态从未提交）时，重启后的 `unsettled_commands` 必须把它交给
 /// 启动恢复终结为 `uncertain`——行里带着新建会话 id，恢复因此能定位到那个会话。
 #[tokio::test]
@@ -2122,8 +2222,8 @@ async fn workspace_mkdir_same_request_across_actors_settles_and_recovers_after_r
 // `conversation-reliability` §3.11/§5.2：普通输入受理的原子写集与幂等回放。
 // ---------------------------------------------------------------------------------------------
 
-fn user_content(text: &str) -> FirstSubmissionInput {
-    FirstSubmissionInput::new(vec![
+fn user_content(text: &str) -> PromptInput {
+    PromptInput::new(vec![
         PromptContentBlock::from_json_text(&format!(
             r#"{{"type":"text","text":{}}}"#,
             serde_json::to_string(text).expect("json string")

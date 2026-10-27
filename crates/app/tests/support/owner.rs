@@ -28,15 +28,17 @@ use acp_core::model::{
     Actor, AgentDescriptor, AgentRef, AgentSessionId, CapabilitySet, CommandRecord, ConfigOption,
     CreateSessionRequest, EndpointEvent, EventKind, EventPayload, EventType, GlobalCursor,
     InteractionId, InteractionResolution, ModeId, ModeState, OriginEpoch, OwnedSessionRef,
-    PortError, PromptRequest, RequestId, ResumeSessionRequest, Sequence, SessionId,
+    PortError, PromptRequest, RequestId, ResumeSessionRequest, Sequence,
+    SessionDeletionEligibility, SessionDeletionOutcome, SessionDeletionWrite, SessionId,
     SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionSummary, Timestamp, Turn,
     TurnId, UnavailableKind, ViewJson,
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, CommitOutcome, EventSink, HistoryPage,
     HistoryQuery, IdGenerator, LocalConfigStore, OwnedCommit, PruneReport, ReadView, ReplayLimit,
-    RetentionPolicy, SessionActivityFacts, SessionBackendFactory, SessionEndpoint, SessionQuery,
-    SessionStore, StoreHealth, TrustStore, TurnAccepted,
+    RetentionPolicy, SessionActivityFacts, SessionBackendFactory, SessionContentFacts,
+    SessionDeletion, SessionEndpoint, SessionQuery, SessionStore, StoreHealth, TrustStore,
+    TurnAccepted,
 };
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use identity_auth::{Authority, EntropySource, IdentityKeystore};
@@ -71,6 +73,8 @@ pub struct OwnerNode {
     pub rejected_commits: Arc<AtomicU32>,
     /// `load_recovery` 的调用计数（R31「授权先于本机读取」的计数证据）。
     recovery_reads: Arc<AtomicU32>,
+    /// 下一次若干 `session.delete` 最终事务注入失败。
+    session_delete_failures: Arc<AtomicU32>,
     /// 恢复入口的观察点（`resume` 调用计数、最近一次请求、可配置结果）。
     pub resume_probe: Arc<ResumeProbe>,
     /// 真实存储的会话端口（测试用它做持久事实的只读断言）。
@@ -187,6 +191,7 @@ impl OwnerNode {
         // 使 R31 的「授权先于本机读取」断言恒真；修正记录见测试轮报告
         // （TP2 tester-A2），并已在 R31 用例里补了「计数器确实在动」的自检断言。
         let recovery_reads = Arc::new(AtomicU32::new(0));
+        let session_delete_failures = Arc::new(AtomicU32::new(0));
         let sessions: Arc<dyn SessionStore> = Arc::new(FlakySessionStore {
             inner: Arc::clone(&store),
             marker: Arc::clone(&fault_marker),
@@ -235,17 +240,24 @@ impl OwnerNode {
             },
             BrokerConfig::default(),
         ));
-        let core = Arc::new(UseCases::new(UseCaseDeps {
-            broker: Arc::clone(&broker),
-            store: Arc::clone(&sessions),
-            trust,
-            audit: Arc::clone(&audit),
-            config: local_config,
-            attachments,
-            catalog,
-            clock: Arc::clone(&clock),
-            ids: Arc::clone(&ids),
-        }));
+        let core = Arc::new(
+            UseCases::new(UseCaseDeps {
+                broker: Arc::clone(&broker),
+                store: Arc::clone(&sessions),
+                trust,
+                audit: Arc::clone(&audit),
+                config: local_config,
+                attachments,
+                catalog,
+                clock: Arc::clone(&clock),
+                ids: Arc::clone(&ids),
+            })
+            .with_session_content(Arc::clone(&store) as Arc<dyn SessionContentFacts>)
+            .with_session_deletion(Arc::new(FaultingSessionDeletion {
+                inner: Arc::clone(&store),
+                failures: Arc::clone(&session_delete_failures),
+            })),
+        );
 
         // —— 网络接入面：与组合根同一批装配点 ——
         let mut listener = NetListener::bind(app::daemon::net_config(&config))
@@ -323,6 +335,7 @@ impl OwnerNode {
             rejected_commits,
             resume_probe,
             recovery_reads,
+            session_delete_failures,
             sessions,
             core,
             broker,
@@ -359,6 +372,11 @@ impl OwnerNode {
     /// `load_recovery` 的调用次数（读会话行的唯一入口；R31「授权先于本机读取」的计数证据）。
     pub fn recovery_reads(&self) -> u32 {
         self.recovery_reads.load(Ordering::SeqCst)
+    }
+
+    /// 让接下来 `count` 次持久删除事务返回存储不可用，用于验证 tombstone retry。
+    pub fn fail_next_session_deletes(&self, count: u32) {
+        self.session_delete_failures.store(count, Ordering::SeqCst);
     }
 
     /// 重开**同一 `data_dir`** 的真实存储，让用例对持久化事实做独立复核。
@@ -467,6 +485,7 @@ impl OwnerNode {
             rejected_commits,
             resume_probe,
             recovery_reads,
+            session_delete_failures: _,
             sessions,
             core,
             broker,
@@ -543,6 +562,38 @@ struct FlakySessionStore {
     marker: Arc<Mutex<Option<String>>>,
     rejected: Arc<AtomicU32>,
     recovery_reads: Arc<AtomicU32>,
+}
+
+/// `SessionDeletion` 装饰器：只影响最终删除事务，资格预检仍读取真实存储。
+struct FaultingSessionDeletion {
+    inner: Arc<SqliteStore>,
+    failures: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl SessionDeletion for FaultingSessionDeletion {
+    async fn preflight(
+        &self,
+        write: &SessionDeletionWrite,
+    ) -> Result<SessionDeletionEligibility, PortError> {
+        self.inner.preflight(write).await
+    }
+
+    async fn delete_session(
+        &self,
+        write: SessionDeletionWrite,
+    ) -> Result<SessionDeletionOutcome, PortError> {
+        let should_fail = self
+            .failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok();
+        if should_fail {
+            return Err(PortError::Unavailable(UnavailableKind::StorageFull));
+        }
+        self.inner.delete_session(write).await
+    }
 }
 
 impl FlakySessionStore {

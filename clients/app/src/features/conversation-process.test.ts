@@ -240,18 +240,18 @@ describe("过程阶段：提交中 → 等待响应 → 实际思考/工具/回�
   });
 });
 
-describe("过程阶段：会话恢复", () => {
-  it("恢复中不显示提示，后台仍派发恢复请求", () => {
+describe("过程阶段：会话激活", () => {
+  it("服务端已宣布 active 时首帧直接 ready，同时仍派发恢复请求", () => {
     const fixture: StoreFixture = onlineStore({
       resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "idle", localActivity: "active" })] }),
       features: [LOCAL_SESSION_LIFECYCLE_FEATURE],
     });
     fixture.store.setActiveConversationSession(ONLINE_SESSION_ID);
 
-    const restoring = processOf(fixture.store);
-    expect(restoring.phase).toBe("restoring");
-    expect(restoring.label).toBeNull();
-    expect(restoring.detail).toBeNull();
+    const ready = processOf(fixture.store);
+    expect(ready.phase).toBe("none");
+    expect(ready.label).toBeNull();
+    expect(ready.detail).toBeNull();
 
     const resume = lastDispatch(fixture.gateway);
     if (resume.body.command !== "session.resume") throw new Error("应先派发 session.resume");

@@ -29,7 +29,8 @@ use std::time::{Duration, Instant};
 
 use acp_core::model::{
     Actor, ClientCommand, CommandKind, CommandPayload, CommandReceipt, CommandStatus, Digest,
-    NodeId, NodeKind, NodeState, PortError, RemoteSessionRef, RequestId, SessionId, SessionTitle,
+    NodeId, NodeKind, NodeState, PortError, RemoteSessionRef, RequestId, SessionDeletionWrite,
+    SessionId, SessionTitle, Timestamp,
 };
 use acp_core::ports::{RemoteRuntimeDirectory, SessionQuery};
 use app::access::{AccessDeps, AccessManager};
@@ -417,6 +418,121 @@ fn access_forwards_a_remote_title_and_persists_nothing_of_its_own() {
             leaked.is_empty(),
             "Access 的数据目录里出现了标题正文：{leaked:?}"
         );
+        owner.stop().await;
+    });
+}
+
+#[test]
+fn owner_deletion_refreshes_the_access_catalog_without_persisting_remote_state() {
+    support::block_on(async {
+        let certificate = TestCertificate::generate("access-empty-delete");
+        let port = free_port();
+        let owner = OwnerNode::start_tls_on(
+            "access-empty-delete",
+            &certificate.cert_path,
+            &certificate.key_path,
+            port,
+        )
+        .await;
+        let session = SessionId::new(SAMPLE_SESSION).expect("session id");
+        seed_owner_session(&owner.data_dir(), &session, OWNER_AGENT_TITLE).await;
+
+        let root = TempRoot::new("access-empty-delete-node");
+        let data_dir = root.path().join("data");
+        support::create_owner_only_dir(&data_dir);
+        let access = AccessNode::start(&data_dir, &certificate.cert_path).await;
+        let owner_id = pair(&access, &owner).await;
+        let runtime = access.manager.runtime();
+        wait_for_remote_entry(&runtime, &session).await;
+
+        let request = RequestId::new(&support::nodelink::uuid_text()).expect("request id");
+        let fingerprint = request_digest("access-empty-delete");
+        assert!(matches!(
+            owner
+                .core
+                .admit_session_delete(
+                    &Actor::LocalCli,
+                    request.clone(),
+                    fingerprint.clone(),
+                    session.clone(),
+                )
+                .await
+                .expect("owner deletion admission"),
+            acp_core::broker::SessionDeleteAdmission::Prepared
+        ));
+        let outcome = owner
+            .core
+            .delete_session(SessionDeletionWrite::new(
+                session.clone(),
+                Actor::LocalCli,
+                request,
+                fingerprint,
+                Timestamp::new("2026-10-26T10:00:00.000Z").expect("timestamp"),
+            ))
+            .await
+            .expect("owner deletion transaction");
+        let deletion_event_id = match outcome {
+            acp_core::model::SessionDeletionOutcome::Deleted { deletion_event, .. } => {
+                deletion_event.id
+            }
+            other => panic!("the owner must commit the deletion, got {other:?}"),
+        };
+
+        wait_for_remote_absence(&runtime, &session).await;
+        assert!(
+            !runtime
+                .observed_events()
+                .iter()
+                .any(|event_id| event_id == deletion_event_id.as_str()),
+            "session.deleted must never cross Node Link as resource.event"
+        );
+        assert!(
+            runtime.list().await.expect("runtime catalog").is_empty(),
+            "the refreshed owner catalog must remove the tombstone"
+        );
+        assert!(
+            access.manager.is_online(&owner_id),
+            "catalog convergence must happen on the existing connection"
+        );
+
+        let later_request = RequestId::new(&support::nodelink::uuid_text()).expect("request id");
+        let later_title = SessionTitle::parse("不应到达 Owner").expect("title");
+        let error = access
+            .composition
+            .use_cases()
+            .submit_remote_session_title(
+                &Actor::LocalCli,
+                &session,
+                later_request.clone(),
+                later_title,
+            )
+            .await
+            .expect_err("a removed imported session must fail through normal not-found");
+        assert!(
+            matches!(&error, PortError::NotFound(_) | PortError::Unavailable(_)),
+            "the command must fail explicitly without rebuilding the source: {error:?}"
+        );
+
+        let mut access_db = open_sqlite(&data_dir).await;
+        assert_eq!(
+            access_remote_rows(&mut access_db, &session, &later_request).await,
+            (0, 0, 0),
+            "Access must not persist a remote deletion, command, or mirrored event"
+        );
+        assert_eq!(
+            access_imported_tables(&mut access_db).await,
+            0,
+            "Access must not create an imported deletion index"
+        );
+        access_db.close().await.expect("close Access SQLite");
+
+        let leaked = data_dir_contains(&data_dir, session.as_str().as_bytes());
+        assert!(
+            leaked.is_empty(),
+            "the remote session id must remain runtime-only in Access storage: {leaked:?}"
+        );
+
+        access.stop().await;
         owner.stop().await;
     });
 }
@@ -840,6 +956,25 @@ async fn wait_for_remote_entry(runtime: &node_link_client::RemoteRuntime, sessio
         assert!(
             Instant::now() < deadline,
             "远程目录未在 10 s 内出现会话 {}",
+            session.as_str()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn wait_for_remote_absence(runtime: &node_link_client::RemoteRuntime, session: &SessionId) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let entries = runtime
+            .find_by_session(session)
+            .await
+            .expect("runtime catalog");
+        if entries.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "remote catalog did not converge after 10 s for {}",
             session.as_str()
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
