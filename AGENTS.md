@@ -23,7 +23,6 @@
 
 在修改代码或设计前，先阅读与任务相关的文档：
 
-- [docs/WORKFLOW.md](docs/WORKFLOW.md)：变更从需求走到代码的执行流程（OpenSpec `spec-driven` 项目覆写版 schema 的 proposal/specs/design/plan/tasks、工具无关的串行或隔离实现、独立检视、串行合入、分层 E2E 与门禁）的唯一权威来源。它不定义产品行为或协议语义，只定义「谁在哪个工作区做什么、产物是什么、怎么合入怎么验」。
 - [docs/INITIAL_DESIGN.md](docs/INITIAL_DESIGN.md)：产品目标、系统行为、安全与同步策略的权威来源。
 - [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md)：模块名称、职责、依赖方向和 crate 边界的唯一权威来源。
 - [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md)：前端阶段、客户端行为、状态模型和平台适配边界的权威来源。
@@ -214,7 +213,7 @@ core use_cases   -> core ports + core model
 
 ## 9. 文档维护
 
-通用的文档维护时机与层级规则由仓库的变更流程定义；本节列出的是本仓库「变更类型 → 权威文档」的唯一映射，不重复通用流程正文。
+本节定义「变更类型 → 权威文档」的映射；实现与对应文档、机器合同及验证资产应在同一变更中维护。
 
 - 产品行为和产品级同步策略变化：更新 `docs/INITIAL_DESIGN.md`。
 - 威胁模型、信任边界、授权默认、数据保护或供应链要求变化：更新 `docs/SECURITY_DESIGN.md`；改变已接受密码学/传输决策时同时新增或更新 ADR。
@@ -230,7 +229,7 @@ core use_cases   -> core ports + core model
 - Agent 进程监督、ACP stdio 传输或 profile 来源的实现约束变化：更新 `docs/MODULE_ARCHITECTURE.md` §4.5 与 `docs/ACP_COMPATIBILITY_MATRIX.md`（若影响能力支持状态）。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。监听/路由与部署形态（共用 listener、反代透传、`public_origin` 的权威性）也以该文件 §1 为准，涉及对外暴露方式的改动必须同步它。
 - CLI 与 Daemon 之间的管理方法、envelope、framing、错误码或 **CLI 子命令↔方法映射（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）** 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`，并同步 `schemas/local-admin/v1/`、`fixtures/local-admin/v1/` 与 `compatibility/commands/v1/commands.json` 的 `localCapabilities`（方法集与本地错误码的机器定义在 `schemas/local-admin/v1/envelope.schema.json`，文档表格是它的说明），运行 `npm run check`。
-- 变更执行流程（OpenSpec schema、工作包派遣与隔离、patch 交付、合入顺序、分层 E2E、`check:openspec` 判据）变化：更新 `docs/WORKFLOW.md`，并同步 `openspec/schemas/spec-driven/`、`openspec/config.yaml` 的 `rules`/`operations`；不要求维护特定编码宿主配置。
+- OpenSpec 变更规则直接维护在 `openspec/config.yaml` 的 `rules`/`operations`，产物结构与依赖维护在 `openspec/schemas/spec-driven/`；机器检查判据维护在 `scripts/check-openspec.mjs`。不另设工作流说明文档，也不要求维护特定编码宿主配置。
 - 两份文档出现重叠时，保留一个权威定义，另一处只写概要并链接过去。
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。

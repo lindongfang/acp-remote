@@ -205,7 +205,7 @@ artifacts:
       design covers how - plan covers who does what, in which isolated
       workspace, in which order, and how each piece is verified.
 
-      Read docs/WORKFLOW.md before writing the plan. Execution is tool-neutral:
+      Follow openspec/config.yaml rules. Execution is tool-neutral:
       use the current executor serially by default; use isolated workspaces only
       when parallel implementation is needed. No specific host, model, agent
       role, private report URI, or mandatory per-package reviewer is required.

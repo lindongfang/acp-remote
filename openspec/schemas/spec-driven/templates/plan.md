@@ -1,4 +1,4 @@
-﻿<!-- 计划描述执行安排，不重复 specs/design。遵循 docs/WORKFLOW.md，不绑定宿主、模型或子代理 API。 -->
+﻿<!-- 计划描述执行安排，不重复 specs/design。遵循 openspec/config.yaml 的 rules/operations，不绑定宿主、模型或子代理 API。 -->
 
 ## Execution Model
 
