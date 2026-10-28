@@ -88,7 +88,7 @@ windows-dpapi = "0.2"
 # docs/MODULE_ARCHITECTURE.md §3.1（`daemon-cli-and-local-admin` 的 WP1 报告里附原始证据）。
 # CLI 子命令解析；`derive` 是 clap 的可选 feature（clap_derive）。
 clap = { version = "4.6", features = ["derive"] }
-# `config origin` 的只读网卡枚举：`if-addrs` 0.14（MIT OR BSD-3-Clause）是跨平台 getifaddrs 包装，只返回接口地址，
+# `config origin` 的只读网卡枚举：`if-addrs` 0.15（MIT OR BSD-3-Clause）是跨平台 getifaddrs 包装，只返回接口地址，
 # 不启动网络、不解析主机名；`config origin` 是唯一消费点，启动路径不依赖它。
 if-addrs = "0.15"
 # `app` 读 CONFIG_REFERENCE.md 的配置文件（只读，不回写，因此不引入 toml_edit）。
