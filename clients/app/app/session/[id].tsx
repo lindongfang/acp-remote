@@ -79,6 +79,8 @@ export default function SessionRoute(): ReactElement {
   const windowWidth = useWindowDimensions().width;
   const narrow = windowWidth < breakpoints.wide;
   const sessionId = typeof id === "string" ? id : null;
+  const deletedSession =
+    sessionId !== null && state?.deletedSessionIds.has(sessionId) === true;
   /**
    * 窄屏从文件列表打开文件后要返回的次级视图。宽屏不用它（三栏不切换）；
    * 会话切换时清空，避免把上一个会话的返回位置带到新会话。
@@ -106,6 +108,7 @@ export default function SessionRoute(): ReactElement {
   const pendingAttachmentDownload = useRef<{ readonly attachmentId: string; readonly fileName: string } | null>(
     null,
   );
+  const deletedNavigationSessionId = useRef<string | null>(null);
   useEffect(() => {
     const pending = pendingAttachmentDownload.current;
     if (pending === null || store === null || state === null) return;
@@ -157,25 +160,16 @@ export default function SessionRoute(): ReactElement {
   // 迟到的响应不能重新打开文件（spec「切换文件时旧响应迟到」）。
   useEffect(() => {
     setFileReturnView(null);
-    if (store === null || sessionId === null) return;
+    if (store === null || sessionId === null || deletedSession) return;
     store.setActiveConversationSession(sessionId);
-    // 先按本标签页的非敏感定位找回唯一准备槽位（A→B→刷新 B 时也要能新建回 A）。
-    void store.restoreTabPreparation();
-    // 本标签页有合法准备时按准备页呈现；没有则按正式会话处理（未知 URL 只在权威不存在后回目录）。
-    // 正式读取**只**在没有准备时开始；受理/`committed` 之后的读取由仓库的转换副作用发起
-    // （`#enterFormalSession`），挂载本身不能替准备页伪造一个线程条目。
-    let cancelled = false;
-    void store.openPreparationSession(sessionId).then((hasPreparation) => {
-      if (cancelled || hasPreparation) return;
-      store.loadSession(sessionId);
-    });
+    // 会话页负责声明查看、读取正式会话，并在需要时恢复原会话身份。
+    store.loadSession(sessionId);
     // 离开本会话（切换/返回目录/卸载）时先尝试提交原会话的标题编辑，再放弃未保存输入；
     // 已发出的命令按原 requestId 继续归属，迟到结果不会写进新会话。
     return () => {
-      cancelled = true;
       store.leaveConversationSession(sessionId);
     };
-  }, [store, sessionId]);
+  }, [deletedSession, store, sessionId]);
 
   /**
    * 陌生 URL 回目录：只有**权威结论**是「不存在」才 `replace`，不留失效历史条目。
@@ -183,13 +177,12 @@ export default function SessionRoute(): ReactElement {
    * 「存在」的判据必须是权威读取页（`threads.page`），不能用 `conversationPage`——读取派发本身
    * 就会建立线程条目，用它会永远认为会话存在，回目录分支永远不可达。
    *
-   * 必须排除的误判来源：连接不在 online（离线/认证未完成）、快照尚未就绪、本标签页的准备
-   * 仍在恢复或是准备页、会话其实在快照里、以及读取尚未给出权威失败结论。
+   * 必须排除的误判来源：连接不在 online（离线/认证未完成）、快照尚未就绪、会话其实在快照
+   * 里、以及读取尚未给出权威失败结论。
    */
   useEffect(() => {
     if (store === null || state === null || sessionId === null) return;
     if (state.connection.state !== "online" || state.resources === null) return;
-    if (store.preparationRestoring(sessionId) || store.preparationPage(sessionId) !== null) return;
     const thread = state.threads.get(sessionId);
     if (thread?.page != null) return;
     // 首屏读取尚未返回：等它的权威失败（或成功页）再判定，不能按「还没到」跳走。
@@ -204,28 +197,45 @@ export default function SessionRoute(): ReactElement {
     router.replace("/");
   }, [store, state, sessionId, router]);
 
-  /**
-   * 旧准备材料整体失效（`preparation.store_rebuilt`）：仓库已丢弃 receipt，页面回目录重新开始。
-   * 不在渲染期导航，也不伪造一个可继续点击的准备页。
-   */
+  // A tombstone is final: leave immediately and let this route own the silent
+  // deletion navigation so the passive layout consumer cannot navigate twice.
   useEffect(() => {
-    if (store === null || sessionId === null) return;
-    const preparation = store.preparationPage(sessionId);
-    if (preparation === null || !preparation.restartRequired) return;
-    store.leavePreparation(sessionId);
+    if (
+      !deletedSession ||
+      store === null ||
+      sessionId === null ||
+      deletedNavigationSessionId.current === sessionId
+    ) {
+      return;
+    }
+    deletedNavigationSessionId.current = sessionId;
+    store.takeNavigationTarget();
     router.replace("/");
-  }, [store, state, sessionId, router]);
+  }, [deletedSession, router, sessionId, store]);
 
   if (store === null || state === null || sessionId === null) return <RuntimeUnavailable route="session" />;
+  if (deletedSession) {
+    return <View style={theme.dark ? STYLES.dark.page : STYLES.light.page} />;
+  }
 
   const model = store.conversationPage(sessionId);
-  const preparation = store.preparationPage(sessionId);
-  const beforeFirstMessage = preparation !== null && preparation.phase !== "accepted" && preparation.phase !== "committed";
   const thread = state.threads.get(sessionId);
   const remote = state.remoteSessions.get(sessionId);
+  const missingFromSnapshot =
+    state.resources !== null &&
+    !state.resources.sessions.some((summary) => summary.sessionId === sessionId);
+  if (missingFromSnapshot && thread?.page == null) {
+    return (
+      <View role="main" style={theme.dark ? STYLES.dark.page : STYLES.light.page}>
+        <section data-route="session" data-session-id={sessionId} data-session-state="unknown">
+          <p role="alert">最近一次同步的快照里没有这个会话，它可能已被删除，或本设备还没有同步到它。</p>
+        </section>
+      </View>
+    );
+  }
   // 摘要先于正文到达时，不展示尚未就绪的会话头、分页与配置占位文案。
   // 首次读取失败仍交给正常页面呈现错误，不能一直留在空白等待态。
-  if (preparation === null && model !== null && thread?.page == null && thread?.pagingError == null && remote?.error == null &&
+  if (model !== null && thread?.page == null && thread?.pagingError == null && remote?.error == null &&
       remote?.sourceState !== "offline" && remote?.sourceState !== "revoked") {
     return <View style={theme.dark ? STYLES.dark.page : STYLES.light.page} />;
   }
@@ -296,7 +306,7 @@ export default function SessionRoute(): ReactElement {
   const requestedSheetDirectoryId = state.createSheetDirectoryId;
   const selectedPath = state.directoryBrowse.selection;
   const pathSheetOpen = state.createSheetBrowses && selectedPath?.kind === "path" &&
-    selectedPath.path === (preparation?.workspace.path ?? model.sidebar.directory?.path);
+    selectedPath.path === model.sidebar.directory?.path;
   const directoryId = model.header.directoryId;
   const sheetDirectoryId =
     directoryId !== null &&
@@ -304,35 +314,6 @@ export default function SessionRoute(): ReactElement {
     (state.resources?.workspaces.some((workspace) => workspace.directoryId === requestedSheetDirectoryId) ?? false)
       ? requestedSheetDirectoryId
       : null;
-
-  /**
-   * 普通新建入口的统一前置：已有唯一准备槽位（或分配在途）时只导航回它。
-   *
-   * 点当前临时会话本身不是导航（不打断正在进行的编辑）。
-   */
-  const openExistingPreparation = (): boolean => {
-    const route = store.preparationSlotRoute();
-    if (route.kind === "session") {
-      if (route.sessionId !== sessionId) {
-        store.leaveConversationSession(sessionId);
-        router.push(`/session/${encodeURIComponent(route.sessionId)}`);
-      }
-      return true;
-    }
-    if (route.kind === "allocating") {
-      void route.outcome.then((outcome) => {
-        // 这一支没有打开弹层，失败原因只能走页面外提示（否则点击看起来毫无反应）。
-        if (!outcome.ok) {
-          toastStore.show(outcome.reason);
-          return;
-        }
-        setCreateIssue(null);
-        if (outcome.sessionId !== sessionId) router.push(`/session/${encodeURIComponent(outcome.sessionId)}`);
-      });
-      return true;
-    }
-    return false;
-  };
 
   return (
     <View role="main" style={theme.dark ? STYLES.dark.page : STYLES.light.page}>
@@ -366,14 +347,10 @@ export default function SessionRoute(): ReactElement {
         }}
         // 草稿只在内存（imported 会话也不落盘），提交时把当前草稿交给仓库。
         onDraftChange={(text) => {
-          if (beforeFirstMessage) store.setPreparationDraft(sessionId, text);
-          else store.setDraft(sessionId, text);
+          store.setDraft(sessionId, text);
         }}
         onSubmitPrompt={(draft) => {
-          if (beforeFirstMessage) {
-            const outcome = store.submitPreparation(sessionId, draft);
-            if (!outcome.ok) toastStore.show(outcome.reason);
-          } else store.submitPrompt(sessionId, draft);
+          store.submitPrompt(sessionId, draft);
         }}
         onCancelTurn={() => {
           store.cancelTurn(sessionId);
@@ -388,11 +365,11 @@ export default function SessionRoute(): ReactElement {
         }}
         // `configId` 来自设置模型（配置项 id，不是取值）；`modeId` 来自模式分节。
         onSelectModel={(configId, value) => {
-          const outcome = beforeFirstMessage ? store.setPreparationConfigValue(sessionId, configId, value) : store.setConfigValue(sessionId, configId, value);
+          const outcome = store.setConfigValue(sessionId, configId, value);
           if (!outcome.ok) toastStore.show(outcome.reason);
         }}
         onSelectMode={(modeId) => {
-          const outcome = beforeFirstMessage ? store.selectPreparationMode(sessionId, modeId) : store.setMode(sessionId, modeId);
+          const outcome = store.setMode(sessionId, modeId);
           if (!outcome.ok) toastStore.show(outcome.reason);
         }}
         // 右栏每处改动的 ACP 原文诊断：展开态是页面级视图状态（按 `eventId`），
@@ -443,12 +420,14 @@ export default function SessionRoute(): ReactElement {
         createPreviewUrl={createPreviewUrl}
         // 左栏：返回目录列表、同目录会话、目录内搜索、分页与新建。
         onOpenDirectoryList={() => {
+          store.cancelPendingNavigation();
           store.leaveConversationSession(sessionId);
           router.push("/");
         }}
         onOpenSession={(otherSessionId) => {
           // 点当前会话不是导航：不打断正在进行的编辑。
           if (otherSessionId === sessionId) return;
+          store.cancelPendingNavigation();
           // 先为原会话尝试提交（不等待网络结果），再正常导航；不把草稿带到新会话。
           store.leaveConversationSession(sessionId);
           router.push(`/session/${encodeURIComponent(otherSessionId)}`);
@@ -460,12 +439,12 @@ export default function SessionRoute(): ReactElement {
           store.setConversationSidebarPage(pageInput);
         }}
         onCreateSession={(directoryId) => {
-          if (openExistingPreparation()) return;
+          store.cancelPendingNavigation();
           setCreateIssue(null);
           store.openCreateSheet(directoryId);
         }}
         onCreateSessionAtPath={(path) => {
-          if (openExistingPreparation()) return;
+          store.cancelPendingNavigation();
           setCreateIssue(null);
           setAgentId(null);
           store.openCreateSheetAtPath(path);
@@ -551,7 +530,7 @@ export default function SessionRoute(): ReactElement {
           const outcome = store.cancelAttachmentUpload(sessionId);
           if (!outcome.ok) toastStore.show(outcome.reason);
         }}
-        onAddPathRef={beforeFirstMessage ? undefined : (path) => {
+        onAddPathRef={(path) => {
           const outcome = store.addPathRef(sessionId, path);
           return outcome.ok ? null : outcome.reason;
         }}
@@ -577,26 +556,17 @@ export default function SessionRoute(): ReactElement {
             setAgentId(next);
           }}
           onSubmit={({ agentId: selected, directoryPath }) => {
-            // 目录标识由本页给出；入口只做 prepare → allocate，首条发送前不保存会话。
-            void store
-              .beginPreparation({ directoryId: sheetDirectoryId, agentId: selected, directoryPath })
-              .then((outcome) => {
-                if (!outcome.ok) {
-                  setCreateIssue(outcome.reason);
-                  setAgentId(null);
-                  return;
-                }
-                setCreateIssue(null);
-                store.closeCreateSheet();
-                router.push(`/session/${encodeURIComponent(outcome.sessionId)}`);
-              });
+            const outcome = store.submitCreateSession({
+              directoryId: sheetDirectoryId,
+              agentId: selected,
+              directoryPath,
+            });
+            setCreateIssue(outcome.ok ? null : outcome.reason);
           }}
-          onDismissUncertain={() => {
-            const requestId = sheetDirectoryId === null ? undefined : state.createRequestIds.get(sheetDirectoryId);
-            if (requestId !== undefined) store.dismissUncertain(requestId);
-          }}
+
           onClose={() => {
             setCreateIssue(null);
+            store.cancelPendingNavigation();
             store.closeCreateSheet();
           }}
         />

@@ -131,15 +131,15 @@ mod config;
 mod elicitation;
 mod error;
 mod event;
-mod first_submission;
 mod identity;
 mod ids;
 mod json;
 mod lifecycle;
 mod media;
-mod preparation;
+mod prompt;
 mod scalars;
 mod session;
+mod session_deletion;
 mod session_files;
 
 pub use backend::*;
@@ -147,7 +147,6 @@ pub use config::*;
 pub use elicitation::*;
 pub use error::*;
 pub use event::*;
-pub use first_submission::*;
 pub use identity::*;
 pub use ids::*;
 pub use json::{JsonValueText, ViewJson};
@@ -158,9 +157,10 @@ pub(crate) use json::{
 };
 pub use lifecycle::*;
 pub use media::*;
-pub use preparation::*;
+pub use prompt::*;
 pub use scalars::*;
 pub use session::*;
+pub use session_deletion::*;
 pub use session_files::*;
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //!
 //! 夹具的每条 `viewDef` 都声明了该 `payload.view` 在 `schemas/sync/v1/event-views.schema.json`
 //! 里对应的 `$defs` 条目；本测试要求投影结果落在**同一个** event 类型上，而不是"能解析成某个
-//! 视图"——后者在 35 个形状相近的视图之间几乎必然假通过。
+//! 视图"——后者在 36 个形状相近的视图之间几乎必然假通过。
 //!
 //! `views::VIEW_TYPES` 与 schema `$defs` 的逐条相等由 `tests/schema_drift.rs` 断言；本文件要求的
 //! 是另一半：**每个登记的视图都有夹具覆盖**，且夹具声明的绑定与投影结果一致。
@@ -28,9 +28,10 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// （`diffLines` 结构化差异行、`diffUnavailable` 不可用标记），故为 42。
 /// `conversation-area-complete`（WP1）追加一条 `agent.message.completed` 合法视图夹具
 /// （类型化 `channel`/`partial`），故为 43。
-const EXPECTED_VIEW_CASES: usize = 44;
+/// `session-create-and-empty-cleanup`（WP1）追加一条 `session.deleted` 视图夹具，故为 45（44 + 1）。
+const EXPECTED_VIEW_CASES: usize = 45;
 /// 被夹具覆盖的**不同** event 类型数，等于 `event-views.schema.json` 的 `$defs` 条目数。
-const EXPECTED_DISTINCT_VIEWS: usize = 35;
+const EXPECTED_DISTINCT_VIEWS: usize = 36;
 
 #[test]
 fn every_view_fixture_projects_onto_its_declared_event_type() {

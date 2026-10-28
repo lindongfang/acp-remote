@@ -1106,7 +1106,6 @@ class AttachmentTransport implements AttachmentTransferGateway {
         {
           sessionId: input.sessionId,
           subjectId: input.subjectId,
-          ...(input.target === undefined ? {} : { target: input.target }),
         },
         input.transferId,
         {
@@ -1126,7 +1125,6 @@ class AttachmentTransport implements AttachmentTransferGateway {
         {
           sessionId: input.sessionId,
           subjectId: input.subjectId,
-          ...(input.target === undefined ? {} : { target: input.target }),
         },
         input.submissionId,
         input.transferIds,
@@ -1321,10 +1319,6 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
         ? { ...command, body: store.directoryScopedFileQuery(body as SessionFilesCommandBody) }
         : command);
     },
-    sendPreparation(body): boolean {
-      // 未装配/未认证时返回 `false`：store 把这次操作停在「未发出」，不伪造分配结果。
-      return sync?.dispatchPreparation(body) ?? false;
-    },
     setSessionView(input): boolean {
       // 未装配/未认证时返回 `false`：store 保留声明状态但不把它当作已生效。
       return sync?.setSessionView(input) ?? false;
@@ -1367,12 +1361,6 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     ...(attachmentMedia === null
       ? {}
       : { attachments: { media: attachmentMedia, transfer: attachmentGateway } }),
-    // 准备草稿端口同理由平台提供；缺省时准备仍可分配/发送，但页面会明确说明刷新无法恢复。
-    ...(platform.preparationDrafts === undefined
-      ? {}
-      : { preparationDrafts: platform.preparationDrafts }),
-    // 标签页归属 nonce：32 字节 CSPRNG（进入凭据 claims，不进入 URL）。
-    preparationTabNonce: () => encodeBase64Url(random.bytes(32)),
   });
 
   /**

@@ -25,28 +25,29 @@ use tokio::sync::Mutex;
 use acp_core::broker::HISTORY_ENTRY_EVENT_TYPES;
 use acp_core::model::{
     AcceptedInput, AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId,
-    AttachmentGeneration, AttachmentId, CommandRecord, CommandResult, CommandStatus,
+    AttachmentGeneration, AttachmentId, CommandKind, CommandRecord, CommandResult, CommandStatus,
     CommandTerminalRecord, CommittedEvent, ConflictKind, DeviceId, Digest, DirectoryId, EntityRef,
-    EventId, EventKind, EventOrigin, EventPayload, GlobalCursor, InteractionId, InteractionOption,
-    InteractionResolution, MediaKind, MediaReference, MessageChannel, MessageId, MessageRecord,
-    MessageState, ModeId, ModeRef, NodeId, OriginCursor, OriginEpoch, PartialReason, PartialResult,
-    PendingInteraction, PortError, PublicError, RawUnavailableReason, RequestId, ResourceOrigin,
-    Sequence, ServerEpoch, Session, SessionId, SessionRecoveryRecord, SessionSnapshot,
-    SessionState, SessionSummary, SessionTitle, StoredPolicy, Timestamp, Turn, TurnId,
-    UnavailableKind, UserInputWrite, Version, ViewJson, WorkspaceRef,
+    EventId, EventKind, EventOrigin, EventPayload, EventType, GlobalCursor, InteractionId,
+    InteractionOption, InteractionResolution, MediaKind, MediaReference, MessageChannel, MessageId,
+    MessageRecord, MessageState, ModeId, ModeRef, NodeId, OriginCursor, OriginEpoch, PartialReason,
+    PartialResult, PendingInteraction, PortError, PublicError, RawUnavailableReason, RequestId,
+    ResourceOrigin, SESSION_METADATA_EVENT_TYPES, Sequence, ServerEpoch, Session,
+    SessionDeletionBlocker, SessionDeletionEligibility, SessionDeletionOutcome,
+    SessionDeletionWrite, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState,
+    SessionSummary, SessionTitle, StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind,
+    UserInputWrite, Version, ViewJson, WorkspaceRef,
 };
 use acp_core::ports::{
     AttachmentRef, AttachmentStore, CommitOutcome, HistoryPage, HistoryQuery, IdempotencyRecord,
     IdempotentReplay, ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
-    PendingInteractionOrigin, PreparationAttachmentStaging, PruneReport, ReadView, ReplayBatch,
-    ReplayLimit, ResetReason, RetentionPolicy, SessionActivityFacts, SessionQuery, SessionStore,
-    SettledSession, StateChange, StoreHealth, SubmissionBinding, SyncEventRecord, SyncReplaySlice,
-    TurnChange, TurnUpdate,
+    PendingInteractionOrigin, PruneReport, ReadView, ReplayBatch, ReplayLimit, ResetReason,
+    RetentionPolicy, SessionActivityFacts, SessionContentFacts, SessionDeletion, SessionQuery,
+    SessionStore, SettledSession, StateChange, StoreHealth, SubmissionBinding, SyncEventRecord,
+    SyncReplaySlice, TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
 use crate::migrate::{self, Pools, StorageConfig, StoreMetadata, window};
-use crate::staging::PreparationStaging;
 
 /// `owned_event` 的读列（顺序无关，集中一处便于与 §7.3 对照）。
 const EVENT_COLUMNS: &str = "global_sequence, session_id, session_sequence, origin_epoch, \
@@ -54,7 +55,18 @@ const EVENT_COLUMNS: &str = "global_sequence, session_id, session_sequence, orig
      payload_json, payload_digest, acp_media_type, acp_raw_json, acp_byte_length, acp_sha256, \
      acp_raw_unavailable_reason, created_at, expires_at, compacted_into,
  (SELECT first_sequence FROM owned_timeline_anchor a WHERE a.session_id=owned_event.session_id AND a.entity_kind=(CASE WHEN event_type LIKE 'tool.call.%' THEN 'tool' WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN 'interaction' WHEN event_type LIKE 'turn.%' THEN 'turn' WHEN event_type='session.plan.changed' THEN 'plan' END) AND a.entity_id=(CASE WHEN event_type LIKE 'tool.call.%' THEN json_extract(payload_json,'$.toolCallId') WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN json_extract(payload_json,'$.interactionId') WHEN event_type LIKE 'turn.%' THEN COALESCE(json_extract(payload_json,'$.turnId'),turn_id) WHEN event_type='session.plan.changed' THEN 'plan' END)) AS timeline_sequence,
- (SELECT first_origin_sequence FROM owned_timeline_anchor a WHERE a.session_id=owned_event.session_id AND a.entity_kind=(CASE WHEN event_type LIKE 'tool.call.%' THEN 'tool' WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN 'interaction' WHEN event_type LIKE 'turn.%' THEN 'turn' WHEN event_type='session.plan.changed' THEN 'plan' END) AND a.entity_id=(CASE WHEN event_type LIKE 'tool.call.%' THEN json_extract(payload_json,'$.toolCallId') WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN json_extract(payload_json,'$.interactionId') WHEN event_type LIKE 'turn.%' THEN COALESCE(json_extract(payload_json,'$.turnId'),turn_id) WHEN event_type='session.plan.changed' THEN 'plan' END)) AS timeline_origin_sequence";
+     (SELECT first_origin_sequence FROM owned_timeline_anchor a WHERE a.session_id=owned_event.session_id AND a.entity_kind=(CASE WHEN event_type LIKE 'tool.call.%' THEN 'tool' WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN 'interaction' WHEN event_type LIKE 'turn.%' THEN 'turn' WHEN event_type='session.plan.changed' THEN 'plan' END) AND a.entity_id=(CASE WHEN event_type LIKE 'tool.call.%' THEN json_extract(payload_json,'$.toolCallId') WHEN event_type LIKE 'permission.%' OR event_type LIKE 'elicitation.%' THEN json_extract(payload_json,'$.interactionId') WHEN event_type LIKE 'turn.%' THEN COALESCE(json_extract(payload_json,'$.turnId'),turn_id) WHEN event_type='session.plan.changed' THEN 'plan' END)) AS timeline_origin_sequence";
+
+/// The sole live-session predicate. Aliased reads derive from the same fragment so a new
+/// visibility rule cannot drift between session-scoped queries.
+pub(crate) const VISIBLE_SESSION: &str = "deleted_at IS NULL";
+
+pub(crate) fn visible_session(alias: Option<&str>) -> String {
+    match alias {
+        Some(alias) => format!("{alias}.{VISIBLE_SESSION}"),
+        None => VISIBLE_SESSION.to_owned(),
+    }
+}
 
 /// `owned_session` 的读列（`load` 的 `Session` 聚合：不带目录归属）。
 ///
@@ -97,8 +109,6 @@ pub struct SqliteStore {
     measure_sql: String,
     /// §7.1：启动 `quick_check` 的结论；`false` 即只读失败关闭（写路径返回 `PortError::Corrupt`）。
     integrity_ok: bool,
-    /// 准备附件暂存的运行期元数据（§5.11）：没有数据库行，字节在 `<attachment_dir>/.preparation/`。
-    pub(crate) staging: PreparationStaging,
 }
 
 impl std::fmt::Debug for SqliteStore {
@@ -120,6 +130,7 @@ impl SqliteStore {
     pub(crate) fn config(&self) -> &StorageConfig {
         &self.config
     }
+
     /// v10 升级时被删除的旧 Agent profile 行数（用于启动提示；没有迁移记录即 0）。
     pub async fn discarded_agent_profiles(&self) -> Result<u64, StorageError> {
         let Some(value) =
@@ -156,7 +167,7 @@ impl SqliteStore {
             }
         };
         let meta = if integrity_ok {
-            migrate::migrate(&pools.write, at.as_str()).await?
+            migrate::migrate(&pools.write, at.as_str(), &config.attachment_dir).await?
         } else {
             read_metadata(&pools.write).await?
         };
@@ -169,14 +180,14 @@ impl SqliteStore {
             meta,
             measure_sql,
             integrity_ok,
-            staging: PreparationStaging::new(config),
         };
-        // 启动回收（§5.11）：准备暂存没有数据库行，崩溃/重启后只能按 24 小时窗口清理。失败不阻止
-        // 打开（下一次维护/启动会再试），也不冒充“已清理”。
-        if let Some(before) = window::shift_days(at.as_str(), -1)
-            && let Ok(before) = Timestamp::new(&before)
-        {
-            let _ = store.staging.release_orphans(before).await;
+        if integrity_ok {
+            crate::transfers::cleanup_tombstoned_transfer_files(
+                &store.pools.write,
+                &store.config,
+                None,
+            )
+            .await;
         }
         Ok(store)
     }
@@ -1150,11 +1161,14 @@ async fn session_version_and_epoch(
     ex: &mut SqliteConnection,
     session: &SessionId,
 ) -> Result<Option<(Version, OriginEpoch)>, StorageError> {
-    let row = sqlx::query("SELECT version, origin_epoch FROM owned_session WHERE session_id = ?1")
-        .bind(session.as_str())
-        .fetch_optional(ex)
-        .await
-        .db()?;
+    let row = sqlx::query(&format!(
+        "SELECT version, origin_epoch FROM owned_session WHERE session_id = ?1 AND {}",
+        visible_session(None)
+    ))
+    .bind(session.as_str())
+    .fetch_optional(ex)
+    .await
+    .db()?;
     match row {
         Some(row) => Ok(Some((
             parse_version(int(&row, "version")?, "owned_session.version")?,
@@ -1299,6 +1313,17 @@ impl SqliteStore {
                 load_command_row(&mut tx, kind.as_str(), &actor_id, idem.request.as_str()).await?
             {
                 verify_idempotent(&row, idem)?;
+                if text(&row, "command")? != "session.delete"
+                    && let Some(session_text) = opt_text(&row, "session_id")?
+                {
+                    let session: SessionId = decode(&session_text, "owned_command.session_id")?;
+                    if session_version_and_epoch(&mut tx, &session)
+                        .await?
+                        .is_none()
+                    {
+                        return Err(PortError::NotFound(EntityRef::Session(session)));
+                    }
+                }
                 let record = command_record_from_row(&row)?;
                 let (version, origin_epoch) = match idem.session.as_ref() {
                     Some(session) => match session_version_and_epoch(&mut tx, session).await? {
@@ -1415,6 +1440,13 @@ impl SqliteStore {
                 let Some(row) = located else {
                     return Err(PortError::NotFound(EntityRef::Command { session, request }));
                 };
+                if !settlement
+                    && text(&row, "command")? != "session.delete"
+                    && let Some(session) = session.as_ref()
+                    && session_version_and_epoch(&mut tx, session).await?.is_none()
+                {
+                    return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+                }
                 let status: CommandStatus = decode(&text(&row, "status")?, "owned_command.status")?;
                 if status != CommandStatus::Accepted {
                     // 同一终态块被重复投递：不追加事件、不改行，按重放回既有结果。
@@ -1788,7 +1820,7 @@ impl SqliteStore {
         // ---- §3.11/§5.2：普通输入的受理写集（用户消息行 + 受理关联 + 逐附件媒体引用）。
         //
         // 与幂等行、turn、事件和上面的附件绑定在**同一事务**里：任一步失败整事务回滚（零行、
-        // 零广播、零派发）。首条不走这里（它由 `commit_first_submission` 一次写全）。
+        // 零广播、零派发）。
         let accepted_input = match &commit.input {
             Some(input) => {
                 let session = session_id.as_ref().ok_or(PortError::InvalidRequest(
@@ -2325,9 +2357,9 @@ async fn insert_created_session_row(
 
 /// 单条会话级事件的写入输入（§7.3 的一行 `owned_event`）。
 ///
-/// 首条提交/结算走各自的专用事务（§5.11），但仍必须与 [`SqliteStore::commit_owned`] 的批量路径
-/// **同一口径**：同一个 `expires_at` 策略、同一个 `INSERT_EVENT`、同一套 `MAX+1` 序号与 ACPR-CJ1
-/// 摘要。否则专用路径会写出 `expires_at IS NULL`（逃过保留清理）或不同的 `payload_digest`。
+/// 通用事件 writer 与 [`SqliteStore::commit_owned`] 的批量路径必须保持**同一口径**：同一个
+/// `expires_at` 策略、同一个 `INSERT_EVENT`、同一套 `MAX+1` 序号与 ACPR-CJ1 摘要。否则单条写入
+/// 会写出 `expires_at IS NULL`（逃过保留清理）或不同的 `payload_digest`。
 pub(crate) struct SessionEventWrite<'a> {
     pub event_type: &'a str,
     pub kind: EventKind,
@@ -2340,12 +2372,12 @@ pub(crate) struct SessionEventWrite<'a> {
     pub window: &'a RetentionPolicy,
 }
 
-/// 写入一条会话级事件并返回分配的 event id。
-pub(crate) async fn write_session_event(
+/// 写入一条会话级事件并返回完整的已提交事实。
+async fn write_session_event_committed(
     tx: &mut Transaction<'_, Sqlite>,
     session: &SessionId,
     write: &SessionEventWrite<'_>,
-) -> Result<EventId, PortError> {
+) -> Result<CommittedEvent, PortError> {
     let global = next_global_sequence(&mut *tx).await?;
     let session_sequence = next_sequence_for(&mut *tx, "session_sequence", session).await?;
     let origin_sequence = next_sequence_for(&mut *tx, "origin_sequence", session).await?;
@@ -2387,7 +2419,23 @@ pub(crate) async fn write_session_event(
         .await
         .db()?;
     pin_timeline_anchor(tx, &event_id_text).await?;
-    EventId::new(&event_id_text).map_err(|_| PortError::Corrupt("generated event id is malformed"))
+    let event = CommittedEvent {
+        id: EventId::new(&event_id_text)
+            .map_err(|_| PortError::Corrupt("generated event id is malformed"))?,
+        event_type: EventType::new(write.event_type)
+            .map_err(|_| PortError::Corrupt("generated event type is malformed"))?,
+        session: Some(session.clone()),
+        session_sequence: Some(sequence_of(session_sequence)?),
+        global_sequence: sequence_of(global)?,
+        origin_epoch: Some(
+            OriginEpoch::new(&origin_epoch)
+                .map_err(|_| PortError::Corrupt("owned_session.origin_epoch is malformed"))?,
+        ),
+        origin_sequence: Some(sequence_of(origin_sequence)?),
+        created_at: write.at.clone(),
+    };
+    event.validate().map_err(PortError::from)?;
+    Ok(event)
 }
 
 /// 把既有 `accepted` 行推进到终态（§11.2）。
@@ -2398,7 +2446,7 @@ pub(crate) async fn write_session_event(
 /// `session` 为 `None` 时按 `session_id IS NULL` 定位（§6 第 20 条的「尚无会话」形状：`session.create`
 /// 的失败终态与启动恢复）。
 ///
-/// 首条提交的结算（`crate::first_submission`）也走这里：终态行只能有一处写法，否则
+/// 所有 mutation 的终态行都走这里：终态行只能有一处写法，否则
 /// `result_json`/`terminal_event_id`/`Conflict(Consumed)` 三处口径会分叉。
 pub(crate) async fn apply_terminal(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
@@ -3293,7 +3341,7 @@ async fn write_user_input(
                 .map_err(|_| PortError::InvalidRequest("attachment position is out of range"))?,
         )
         .bind(attachment.as_str())
-        .bind(crate::first_submission::media_kind_of(&media_type))
+        .bind(media_type_kind(&media_type))
         .execute(&mut **tx)
         .await
         .db()?;
@@ -3304,6 +3352,198 @@ async fn write_user_input(
         request: input.request.clone(),
         turn: input.turn.clone(),
     })
+}
+
+fn media_type_kind(media_type: &str) -> &'static str {
+    if media_type.starts_with("image/") {
+        "image"
+    } else if media_type.starts_with("audio/") {
+        "audio"
+    } else {
+        "file"
+    }
+}
+
+fn metadata_event_types_sql() -> String {
+    SESSION_METADATA_EVENT_TYPES
+        .iter()
+        .map(|event_type| format!("'{event_type}'"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The single persisted-content query used by both the public fact port and deletion.
+async fn has_session_content(
+    ex: &mut SqliteConnection,
+    session: &SessionId,
+) -> Result<bool, PortError> {
+    let metadata = metadata_event_types_sql();
+    let value: i64 = sqlx::query_scalar(&format!(
+        "SELECT EXISTS(SELECT 1 FROM owned_message WHERE session_id=?1)
+             OR EXISTS(SELECT 1 FROM owned_user_input WHERE session_id=?1)
+             OR EXISTS(SELECT 1 FROM owned_turn WHERE session_id=?1)
+             OR EXISTS(SELECT 1 FROM owned_interaction WHERE session_id=?1)
+             OR EXISTS(
+                 SELECT 1 FROM owned_media_ref r
+                 JOIN owned_message m ON m.message_id=r.message_id
+                 WHERE m.session_id=?1
+             )
+             OR EXISTS(SELECT 1 FROM owned_timeline_anchor WHERE session_id=?1)
+             OR EXISTS(
+                 SELECT 1 FROM owned_event
+                 WHERE session_id=?1 AND event_type NOT IN ({metadata})
+             )"
+    ))
+    .bind(session.as_str())
+    .fetch_one(&mut *ex)
+    .await
+    .db()?;
+    Ok(value != 0)
+}
+
+async fn deletion_is_protected(
+    ex: &mut SqliteConnection,
+    write: &SessionDeletionWrite,
+) -> Result<bool, PortError> {
+    let (actor_kind, actor_id) = actor_key(write.actor());
+    let value: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM owned_turn
+             WHERE session_id=?1
+               AND state IN ('queued','running','waiting_input','waiting_permission'))
+          OR EXISTS(
+             SELECT 1 FROM owned_interaction
+             WHERE session_id=?1 AND invalidated_at IS NULL
+               AND (state='pending' OR (state='resolved' AND confirmed_at IS NULL)))
+          OR EXISTS(
+             SELECT 1 FROM owned_command
+             WHERE session_id=?1 AND status='accepted' AND kind='mutation'
+               AND NOT (actor_kind=?2 AND actor_id=?3 AND request_id=?4))",
+    )
+    .bind(write.session().as_str())
+    .bind(actor_kind.as_str())
+    .bind(actor_id)
+    .bind(write.request().as_str())
+    .fetch_one(&mut *ex)
+    .await
+    .db()?;
+    Ok(value != 0)
+}
+
+async fn deletion_eligibility(
+    ex: &mut SqliteConnection,
+    write: &SessionDeletionWrite,
+) -> Result<SessionDeletionEligibility, PortError> {
+    let session: Option<Option<String>> = sqlx::query_scalar(&format!(
+        "SELECT deleted_at FROM owned_session WHERE session_id=?1 AND {}",
+        visible_session(None)
+    ))
+    .bind(write.session().as_str())
+    .fetch_optional(&mut *ex)
+    .await
+    .db()?;
+    if !matches!(session, Some(None)) {
+        Ok(SessionDeletionEligibility::Blocked(
+            SessionDeletionBlocker::NotFound,
+        ))
+    } else if has_session_content(ex, write.session()).await? {
+        Ok(SessionDeletionEligibility::Blocked(
+            SessionDeletionBlocker::NotEmpty,
+        ))
+    } else if deletion_is_protected(ex, write).await? {
+        Ok(SessionDeletionEligibility::Blocked(
+            SessionDeletionBlocker::Protected,
+        ))
+    } else {
+        Ok(SessionDeletionEligibility::Eligible)
+    }
+}
+
+/// Checks the complete deletion condition in the same transaction that
+/// writes content before the tombstone. The runtime generation identifies the
+/// resource protected while the lifecycle gate was held; it never comes from
+/// wire input.
+async fn verify_delete_session_identity(
+    ex: &mut Transaction<'_, Sqlite>,
+    write: &SessionDeletionWrite,
+) -> Result<(), PortError> {
+    match deletion_eligibility(ex, write).await? {
+        SessionDeletionEligibility::Eligible => {}
+        SessionDeletionEligibility::Blocked(blocker) => {
+            return Err(match blocker {
+                SessionDeletionBlocker::NotFound => {
+                    PortError::NotFound(EntityRef::Session(write.session().clone()))
+                }
+                SessionDeletionBlocker::NotEmpty | SessionDeletionBlocker::Protected => {
+                    PortError::Unavailable(UnavailableKind::Busy)
+                }
+            });
+        }
+    }
+    let (actor_kind, actor_id) = actor_key(write.actor());
+    let row = load_command_row(ex, actor_kind.as_str(), &actor_id, write.request().as_str())
+        .await?
+        .ok_or(PortError::Conflict(ConflictKind::Consumed))?;
+    if command_record_from_row(&row)?.status() != CommandStatus::Accepted {
+        return Err(PortError::Conflict(ConflictKind::Consumed));
+    }
+    let _expected = write
+        .expected_generation()
+        .ok_or(PortError::InvalidRequest(
+            "a delivery deletion must carry its runtime generation",
+        ))?;
+    Ok(())
+}
+
+fn deletion_event_origin(actor: &Actor) -> Result<EventOrigin, PortError> {
+    match actor.kind() {
+        ActorKind::Device => Ok(EventOrigin::Device),
+        ActorKind::Node => Ok(EventOrigin::Node),
+        ActorKind::Cli => Ok(EventOrigin::LocalCli),
+        ActorKind::PairingClaimant => Err(PortError::InvalidRequest(
+            "a pairing claimant cannot delete a session",
+        )),
+    }
+}
+
+fn deletion_failure_error(blocker: SessionDeletionBlocker) -> Result<PublicError, PortError> {
+    match blocker {
+        SessionDeletionBlocker::NotFound => {
+            PublicError::coded("session.not_found", "会话不存在", false).map_err(PortError::from)
+        }
+        SessionDeletionBlocker::NotEmpty | SessionDeletionBlocker::Protected => {
+            PublicError::coded("session.busy", "会话当前不能删除", true).map_err(PortError::from)
+        }
+    }
+}
+
+fn command_failed_view(request: &RequestId, error: &PublicError) -> Result<ViewJson, PortError> {
+    ViewJson::new(&format!(
+        r#"{{"requestId":"{}","error":{{"code":"{}","message":{},"retryable":{},"details":{}}}}}"#,
+        request.as_str(),
+        error.code(),
+        serde_json::to_string(error.message())
+            .map_err(|_| PortError::Corrupt("public error message is not JSON text"))?,
+        error.retryable(),
+        error.details().as_str()
+    ))
+    .map_err(PortError::from)
+}
+
+fn session_deleted_view(session: &SessionId) -> Result<ViewJson, PortError> {
+    ViewJson::new(&format!(r#"{{"sessionId":"{}"}}"#, session.as_str())).map_err(PortError::from)
+}
+
+fn session_deleted_completed_view(
+    request: &RequestId,
+    session: &SessionId,
+) -> Result<ViewJson, PortError> {
+    ViewJson::new(&format!(
+        r#"{{"requestId":"{}","result":{{"sessionId":"{}"}}}}"#,
+        request.as_str(),
+        session.as_str()
+    ))
+    .map_err(PortError::from)
 }
 
 /// §3.11：按 `owned_user_input` 的唯一键回读首次受理的输入事实（幂等回放）。
@@ -3468,6 +3708,383 @@ async fn bind_submission(
 // ---------------------------------------------------------------------------------------------
 
 #[async_trait]
+impl SessionContentFacts for SqliteStore {
+    async fn has_content(&self, session: &SessionId) -> Result<bool, PortError> {
+        let mut connection = self.pools.read.acquire().await.db()?;
+        has_session_content(&mut connection, session).await
+    }
+}
+
+#[async_trait]
+impl SessionDeletion for SqliteStore {
+    async fn preflight(
+        &self,
+        write: &SessionDeletionWrite,
+    ) -> Result<SessionDeletionEligibility, PortError> {
+        self.writable()?;
+        let mut tx = self.pools.read.begin_with("BEGIN").await.db()?;
+        deletion_eligibility(&mut tx, write).await
+    }
+
+    async fn delete_session(
+        &self,
+        write: SessionDeletionWrite,
+    ) -> Result<SessionDeletionOutcome, PortError> {
+        self.delete_session_checked(write).await
+    }
+}
+
+/// The accepted deletion no longer owns the runtime generation. Its tombstone
+/// must never publish under the old request id, so terminate only the durable
+/// command and leave any current session content untouched.
+async fn terminate_consumed_delete(
+    store: &SqliteStore,
+    tx: &mut Transaction<'_, Sqlite>,
+    write: &SessionDeletionWrite,
+) -> Result<SessionDeletionOutcome, PortError> {
+    let error = PublicError::coded(
+        "session.busy",
+        "the session changed after the deletion intent was accepted",
+        true,
+    )
+    .map_err(PortError::from)?;
+    let visible: Option<i64> = sqlx::query_scalar(&format!(
+        "SELECT 1 FROM owned_session WHERE session_id=?1 AND {}",
+        visible_session(None)
+    ))
+    .bind(write.session().as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .db()?;
+    let event = match visible {
+        Some(_) => {
+            let view = command_failed_view(write.request(), &error)?;
+            Some(
+                write_session_event_committed(
+                    tx,
+                    write.session(),
+                    &SessionEventWrite {
+                        event_type: "command.failed",
+                        kind: EventKind::Structured,
+                        policy: StoredPolicy::Durable,
+                        origin: deletion_event_origin(write.actor())?,
+                        turn: None,
+                        causation: Some(write.request()),
+                        view: &view,
+                        at: write.at(),
+                        window: &store.window(),
+                    },
+                )
+                .await?,
+            )
+        }
+        None => None,
+    };
+    let terminal_event = event
+        .as_ref()
+        .map(|event| event.id.clone())
+        .ok_or(PortError::Conflict(ConflictKind::Consumed))?;
+    let terminal = CommandTerminalRecord::try_new(
+        CommandStatus::Failed,
+        Some(write.at().clone()),
+        Some(terminal_event.clone()),
+        None,
+        Some(error),
+    )
+    .map_err(PortError::from)?;
+    apply_terminal(
+        tx,
+        Some(write.session()),
+        write.request(),
+        &terminal,
+        &terminal_event,
+        Some(write.actor()),
+    )
+    .await?;
+    match event {
+        Some(bound_event) => Ok(SessionDeletionOutcome::Failed {
+            blocker: SessionDeletionBlocker::Protected,
+            terminal_event: bound_event,
+        }),
+        None => {
+            let record = sqlx::query(&format!(
+                "SELECT {COMMAND_COLUMNS} FROM owned_command WHERE request_id=?1"
+            ))
+            .bind(write.request().as_str())
+            .fetch_one(&mut **tx)
+            .await
+            .db()?;
+            Ok(SessionDeletionOutcome::Replayed(command_record_from_row(
+                &record,
+            )?))
+        }
+    }
+}
+
+impl SqliteStore {
+    async fn delete_session_checked(
+        &self,
+        write: SessionDeletionWrite,
+    ) -> Result<SessionDeletionOutcome, PortError> {
+        self.writable()?;
+        let (actor_kind, actor_id) = actor_key(write.actor());
+        let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
+        let row = load_command_row(
+            &mut tx,
+            actor_kind.as_str(),
+            &actor_id,
+            write.request().as_str(),
+        )
+        .await?;
+        let Some(row) = row else {
+            return Err(PortError::InvalidRequest(
+                "session.delete must be admitted before deletion",
+            ));
+        };
+        let idem = IdempotencyRecord {
+            actor: write.actor().clone(),
+            request: write.request().clone(),
+            command: "session.delete".to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(write.session().clone()),
+            expected_version: None,
+            request_fingerprint: write.request_fingerprint().clone(),
+            accepted_at: write.at().clone(),
+        };
+        verify_idempotent(&row, &idem)?;
+        let record = command_record_from_row(&row)?;
+        if record.status() != CommandStatus::Accepted {
+            drop(tx);
+            crate::transfers::cleanup_tombstoned_transfer_files(
+                &self.pools.write,
+                &self.config,
+                Some(write.session()),
+            )
+            .await;
+            return Ok(SessionDeletionOutcome::Replayed(record));
+        }
+        let blocker = match deletion_eligibility(&mut tx, &write).await? {
+            SessionDeletionEligibility::Eligible => None,
+            SessionDeletionEligibility::Blocked(blocker) => Some(blocker),
+        };
+
+        if let Some(blocker) = blocker {
+            let error = deletion_failure_error(blocker)?;
+            let view = command_failed_view(write.request(), &error)?;
+            let event = write_session_event_committed(
+                &mut tx,
+                write.session(),
+                &SessionEventWrite {
+                    event_type: "command.failed",
+                    kind: EventKind::Structured,
+                    policy: StoredPolicy::Durable,
+                    origin: deletion_event_origin(write.actor())?,
+                    turn: None,
+                    causation: Some(write.request()),
+                    view: &view,
+                    at: write.at(),
+                    window: &self.window(),
+                },
+            )
+            .await?;
+            let terminal = CommandTerminalRecord::try_new(
+                CommandStatus::Failed,
+                Some(write.at().clone()),
+                Some(event.id.clone()),
+                None,
+                Some(error),
+            )
+            .map_err(PortError::from)?;
+            apply_terminal(
+                &mut tx,
+                Some(write.session()),
+                write.request(),
+                &terminal,
+                &event.id,
+                Some(write.actor()),
+            )
+            .await?;
+            tx.commit().await.db()?;
+            return Ok(SessionDeletionOutcome::Failed {
+                blocker,
+                terminal_event: event,
+            });
+        }
+
+        if write.expected_generation().is_some() {
+            if let Err(error) = verify_delete_session_identity(&mut tx, &write).await {
+                if matches!(error, PortError::Conflict(ConflictKind::Consumed)) {
+                    let outcome = terminate_consumed_delete(self, &mut tx, &write).await?;
+                    tx.commit().await.db()?;
+                    crate::transfers::cleanup_tombstoned_transfer_files(
+                        &self.pools.write,
+                        &self.config,
+                        Some(write.session()),
+                    )
+                    .await;
+                    return Ok(outcome);
+                }
+                return Err(error);
+            }
+        }
+        let deletion_view = session_deleted_view(write.session())?;
+        let deletion_event = write_session_event_committed(
+            &mut tx,
+            write.session(),
+            &SessionEventWrite {
+                event_type: "session.deleted",
+                kind: EventKind::State,
+                policy: StoredPolicy::Durable,
+                origin: deletion_event_origin(write.actor())?,
+                turn: None,
+                causation: Some(write.request()),
+                view: &deletion_view,
+                at: write.at(),
+                window: &self.window(),
+            },
+        )
+        .await?;
+
+        // Child-to-parent order is fixed by the foreign keys documented in §13.3.
+        sqlx::query("DELETE FROM owned_interaction WHERE session_id=?1")
+            .bind(write.session().as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?;
+        sqlx::query("DELETE FROM owned_user_input WHERE session_id=?1")
+            .bind(write.session().as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?;
+        sqlx::query(
+            "DELETE FROM owned_media_ref WHERE message_id IN \
+             (SELECT message_id FROM owned_message WHERE session_id=?1)",
+        )
+        .bind(write.session().as_str())
+        .execute(&mut *tx)
+        .await
+        .db()?;
+        sqlx::query(
+            "DELETE FROM owned_attachment_submission_item WHERE submission_id IN \
+             (SELECT submission_id FROM owned_attachment_submission WHERE session_id=?1)",
+        )
+        .bind(write.session().as_str())
+        .execute(&mut *tx)
+        .await
+        .db()?;
+        sqlx::query("DELETE FROM owned_attachment_submission WHERE session_id=?1")
+            .bind(write.session().as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?;
+        sqlx::query("DELETE FROM owned_attachment_link WHERE session_id=?1")
+            .bind(write.session().as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?;
+        sqlx::query("DELETE FROM owned_message WHERE session_id=?1")
+            .bind(write.session().as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?;
+        sqlx::query("DELETE FROM owned_timeline_anchor WHERE session_id=?1")
+            .bind(write.session().as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?;
+        let metadata = metadata_event_types_sql();
+        sqlx::query(&format!(
+            "DELETE FROM owned_event WHERE session_id=?1 AND event_type NOT IN ({metadata})"
+        ))
+        .bind(write.session().as_str())
+        .execute(&mut *tx)
+        .await
+        .db()?;
+        sqlx::query(
+            "UPDATE owned_event SET turn_id=NULL WHERE session_id=?1 AND turn_id IS NOT NULL",
+        )
+        .bind(write.session().as_str())
+        .execute(&mut *tx)
+        .await
+        .db()?;
+        sqlx::query("DELETE FROM owned_turn WHERE session_id=?1")
+            .bind(write.session().as_str())
+            .execute(&mut *tx)
+            .await
+            .db()?;
+        let affected = sqlx::query(
+            "UPDATE owned_session SET title=NULL, custom_title=NULL, agent_session_id=NULL, \
+             workspace_cwd=NULL, workspace_directory_id=NULL, current_mode_id=NULL, \
+             current_mode_name=NULL, state='idle', version=version+1, updated_at=?1, \
+             deleted_at=?1 WHERE session_id=?2 AND deleted_at IS NULL",
+        )
+        .bind(write.at().as_str())
+        .bind(write.session().as_str())
+        .execute(&mut *tx)
+        .await
+        .db()?
+        .rows_affected();
+        if affected != 1 {
+            return Err(PortError::Conflict(ConflictKind::Consumed));
+        }
+
+        let completed_view = session_deleted_completed_view(write.request(), write.session())?;
+        let terminal_event = write_session_event_committed(
+            &mut tx,
+            write.session(),
+            &SessionEventWrite {
+                event_type: "command.completed",
+                kind: EventKind::Structured,
+                policy: StoredPolicy::Durable,
+                origin: deletion_event_origin(write.actor())?,
+                turn: None,
+                causation: Some(write.request()),
+                view: &completed_view,
+                at: write.at(),
+                window: &self.window(),
+            },
+        )
+        .await?;
+        let result = CommandResult::from_json_text(&format!(
+            r#"{{"sessionId":"{}"}}"#,
+            write.session().as_str()
+        ))
+        .map_err(PortError::from)?;
+        let terminal = CommandTerminalRecord::try_new(
+            CommandStatus::Completed,
+            Some(write.at().clone()),
+            Some(terminal_event.id.clone()),
+            Some(result),
+            None,
+        )
+        .map_err(PortError::from)?;
+        apply_terminal(
+            &mut tx,
+            Some(write.session()),
+            write.request(),
+            &terminal,
+            &terminal_event.id,
+            Some(write.actor()),
+        )
+        .await?;
+        tx.commit().await.db()?;
+        // The tombstone and completed terminal are durable before filesystem
+        // mutation. Transfer rows remain the locator until their temporary
+        // file is gone; retries, startup and pruning can safely finish this.
+        crate::transfers::cleanup_tombstoned_transfer_files(
+            &self.pools.write,
+            &self.config,
+            Some(write.session()),
+        )
+        .await;
+        Ok(SessionDeletionOutcome::Deleted {
+            deletion_event,
+            terminal_event,
+        })
+    }
+}
+
+#[async_trait]
 impl SessionStore for SqliteStore {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
         self.writable()?;
@@ -3499,6 +4116,17 @@ impl SessionStore for SqliteStore {
         session: &SessionId,
     ) -> Result<SessionActivityFacts, PortError> {
         let mut tx = self.pools.read.begin_with("BEGIN").await.db()?;
+        let visible: Option<i64> = sqlx::query_scalar(&format!(
+            "SELECT 1 FROM owned_session WHERE session_id=?1 AND {}",
+            visible_session(None)
+        ))
+        .bind(session.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .db()?;
+        if visible.is_none() {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        }
         let rows = sqlx::query(
             "SELECT interaction_id, state, turn_id FROM owned_interaction \
              WHERE session_id = ?1 AND invalidated_at IS NULL \
@@ -3551,6 +4179,8 @@ impl SessionStore for SqliteStore {
         let rows = sqlx::query(
             "SELECT turn_id, session_id, state, queue_index, causation, started_at, ended_at \
              FROM owned_turn WHERE session_id = ?1 AND state = 'queued' \
+             AND EXISTS (SELECT 1 FROM owned_session s WHERE s.session_id=owned_turn.session_id \
+                         AND s.deleted_at IS NULL) \
              ORDER BY queue_index ASC",
         )
         .bind(session.as_str())
@@ -3571,12 +4201,13 @@ impl SessionStore for SqliteStore {
     ) -> Result<Vec<SessionId>, PortError> {
         let rows = sqlx::query(
             "SELECT s.session_id FROM owned_session s \
-             WHERE EXISTS (SELECT 1 FROM owned_turn t WHERE t.session_id = s.session_id \
+             WHERE s.deleted_at IS NULL \
+             AND (EXISTS (SELECT 1 FROM owned_turn t WHERE t.session_id = s.session_id \
                            AND t.state IN ('queued','running','waiting_input','waiting_permission')) \
                 OR EXISTS (SELECT 1 FROM owned_interaction i WHERE i.session_id = s.session_id \
                            AND i.invalidated_at IS NULL \
                            AND (i.state = 'pending' \
-                                OR (i.state = 'resolved' AND i.confirmed_at IS NULL))) \
+                                OR (i.state = 'resolved' AND i.confirmed_at IS NULL)))) \
              ORDER BY s.session_id ASC LIMIT ?1",
         )
         .bind(i64::from(limit.events()))
@@ -3596,7 +4227,8 @@ impl SessionStore for SqliteStore {
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {
         let mut tx = self.pools.read.begin_with("BEGIN").await.db()?;
         let row = sqlx::query(&format!(
-            "SELECT {SESSION_COLUMNS} FROM owned_session WHERE session_id = ?1"
+            "SELECT {SESSION_COLUMNS} FROM owned_session WHERE session_id = ?1 AND {}",
+            visible_session(None)
         ))
         .bind(session.as_str())
         .fetch_optional(&mut *tx)
@@ -3621,7 +4253,7 @@ impl SessionStore for SqliteStore {
             return Ok(Vec::new());
         }
         let mut sql = format!("SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM}");
-        let mut clauses = Vec::new();
+        let mut clauses = vec![visible_session(Some("s"))];
         let mut binds: Vec<String> = Vec::new();
         if let Some(only) = &query.only {
             clauses.push(format!("s.session_id IN ({})", placeholders(only.len())));
@@ -3631,10 +4263,8 @@ impl SessionStore for SqliteStore {
             clauses.push(format!("s.state IN ({})", placeholders(query.states.len())));
             binds.extend(query.states.iter().map(|state| state.as_str().to_owned()));
         }
-        if !clauses.is_empty() {
-            sql.push_str(" WHERE ");
-            sql.push_str(&clauses.join(" AND "));
-        }
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
         sql.push_str(" ORDER BY s.updated_at DESC, s.session_id ASC");
         if let Some(limit) = query.limit {
             sql.push_str(&format!(" LIMIT {limit}"));
@@ -3659,8 +4289,10 @@ impl SessionStore for SqliteStore {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "SELECT session_id, origin_epoch FROM owned_session WHERE session_id IN ({})",
-            placeholders(sessions.len())
+            "SELECT session_id, origin_epoch FROM owned_session \
+             WHERE session_id IN ({}) AND {}",
+            placeholders(sessions.len()),
+            visible_session(None)
         );
         let mut statement = sqlx::query(&sql);
         for session in sessions {
@@ -3699,7 +4331,10 @@ impl SessionStore for SqliteStore {
         let (kind, actor_id) = actor_key(actor);
         let row = sqlx::query(&format!(
             "SELECT {COMMAND_COLUMNS} FROM owned_command \
-             WHERE actor_kind = ?1 AND actor_id = ?2 AND request_id = ?3"
+             WHERE actor_kind = ?1 AND actor_id = ?2 AND request_id = ?3 \
+             AND (owned_command.session_id IS NULL OR command='session.delete' OR EXISTS (\
+                 SELECT 1 FROM owned_session s \
+                 WHERE s.session_id=owned_command.session_id AND s.deleted_at IS NULL))"
         ))
         .bind(kind.as_str())
         .bind(actor_id)
@@ -3725,7 +4360,7 @@ impl SessionStore for SqliteStore {
     ) -> Result<Option<SessionRecoveryRecord>, PortError> {
         let row = sqlx::query(
             "SELECT agent_id, agent_name, agent_session_id, workspace_cwd FROM owned_session \
-             WHERE session_id = ?1",
+             WHERE session_id = ?1 AND deleted_at IS NULL",
         )
         .bind(session.as_str())
         .fetch_optional(&self.pools.read)
@@ -3754,11 +4389,6 @@ impl SessionStore for SqliteStore {
     /// §6 第 16 条：启动恢复要重新确认的命令行——`status = 'accepted'`、尚未拿到终态事件的
     /// **mutation** 行，按 `accepted_at` 升序（走 §7.3 的 `owned_command_status` 索引）。
     ///
-    /// **首条提交的命令不在这里**（`design.md` D8）：`owned_first_submission` 的首个/当前请求同样是
-    /// `accepted` 且没有终态，但它的结算归 `converge_first_submission` 独占。两边都写会让先跑的
-    /// `recover_unsettled` 把它写成 `uncertain`，随后的收敛再结算同一条命令时得到
-    /// `Conflict(Consumed)`，启动直接中止。只排除该 `(actor, requestId)` 对——普通 mutation 仍照旧
-    /// 暴露给启动恢复。
     async fn unsettled_commands(
         &self,
         limit: ReplayLimit,
@@ -3766,11 +4396,8 @@ impl SessionStore for SqliteStore {
         let rows = sqlx::query(&format!(
             "SELECT {COMMAND_COLUMNS} FROM owned_command \
              WHERE status = 'accepted' AND terminal_event_id IS NULL AND kind = 'mutation' \
-             AND NOT EXISTS (SELECT 1 FROM owned_first_submission f \
-             WHERE f.actor_kind = owned_command.actor_kind \
-             AND f.actor_id = owned_command.actor_id \
-             AND (f.first_request_id = owned_command.request_id \
-             OR f.current_request_id = owned_command.request_id)) \
+             AND (owned_command.session_id IS NULL OR EXISTS (SELECT 1 FROM owned_session s \
+                         WHERE s.session_id=owned_command.session_id AND s.deleted_at IS NULL)) \
              ORDER BY accepted_at ASC, request_id ASC LIMIT ?1"
         ))
         .bind(i64::from(limit.events()))
@@ -3789,8 +4416,10 @@ impl SessionStore for SqliteStore {
         session: &SessionId,
     ) -> Result<Option<(Sequence, Sequence)>, PortError> {
         let row = sqlx::query(
-            "SELECT MIN(session_sequence) AS low, MAX(session_sequence) AS high FROM owned_event \
-             WHERE session_id = ?1 AND session_sequence IS NOT NULL",
+            "SELECT MIN(e.session_sequence) AS low, MAX(e.session_sequence) AS high \
+             FROM owned_event e JOIN owned_session s ON s.session_id=e.session_id \
+             WHERE e.session_id = ?1 AND e.session_sequence IS NOT NULL \
+             AND s.deleted_at IS NULL",
         )
         .bind(session.as_str())
         .fetch_one(&self.pools.read)
@@ -3811,6 +4440,8 @@ impl SessionStore for SqliteStore {
         at: Timestamp,
     ) -> Result<PruneReport, PortError> {
         self.writable()?;
+        crate::transfers::cleanup_tombstoned_transfer_files(&self.pools.write, &self.config, None)
+            .await;
         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
         let mut sweep = Sweep::default();
 
@@ -4053,7 +4684,9 @@ async fn read_session_locked(
 ) -> Result<HistoryPage, PortError> {
     let head = head_of(&mut *guard).await?;
     let row = sqlx::query(&format!(
-        "SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM} WHERE s.session_id = ?1"
+        "SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM} \
+         WHERE s.session_id = ?1 AND {}",
+        visible_session(Some("s"))
     ))
     .bind(query.session.as_str())
     .fetch_optional(&mut **guard)
@@ -4563,7 +5196,9 @@ impl ReadView for SqlReadView {
     ) -> Result<NodeLinkSlice, PortError> {
         let mut guard = self.tx.lock().await;
         let row = sqlx::query(&format!(
-            "SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM} WHERE s.session_id = ?1"
+            "SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM} \
+             WHERE s.session_id = ?1 AND {}",
+            visible_session(Some("s"))
         ))
         .bind(session.as_str())
         .fetch_optional(&mut **guard)
@@ -4664,7 +5299,10 @@ impl ReadView for SqlReadView {
     ) -> Result<Option<EventPayload>, PortError> {
         let mut guard = self.tx.lock().await;
         let row = sqlx::query(&format!(
-            "SELECT {EVENT_COLUMNS} FROM owned_event WHERE event_id = ?1 AND session_id = ?2"
+            "SELECT {EVENT_COLUMNS} FROM owned_event \
+             WHERE event_id = ?1 AND session_id = ?2 \
+             AND EXISTS (SELECT 1 FROM owned_session s WHERE s.session_id=owned_event.session_id \
+                         AND s.deleted_at IS NULL)"
         ))
         .bind(event.as_str())
         .bind(session.as_str())
@@ -4714,13 +5352,15 @@ async fn session_coverage(
     ),
     PortError,
 > {
-    let epoch: String =
-        sqlx::query_scalar("SELECT origin_epoch FROM owned_session WHERE session_id = ?1")
-            .bind(query.session.as_str())
-            .fetch_optional(&mut **guard)
-            .await
-            .db()?
-            .ok_or_else(|| PortError::NotFound(EntityRef::Session(query.session.clone())))?;
+    let epoch: String = sqlx::query_scalar(&format!(
+        "SELECT origin_epoch FROM owned_session WHERE session_id = ?1 AND {}",
+        visible_session(None)
+    ))
+    .bind(query.session.as_str())
+    .fetch_optional(&mut **guard)
+    .await
+    .db()?
+    .ok_or_else(|| PortError::NotFound(EntityRef::Session(query.session.clone())))?;
     let head: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(origin_sequence) FROM owned_event WHERE session_id = ?1 AND origin_sequence IS NOT NULL",
     )
@@ -4933,12 +5573,14 @@ impl AttachmentStore for SqliteStore {
             .await?
             .ok_or(PortError::InvalidRequest("attachment is not stored"))?;
         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
-        let session_exists: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM owned_session WHERE session_id = ?1")
-                .bind(session.as_str())
-                .fetch_optional(&mut *tx)
-                .await
-                .db()?;
+        let session_exists: Option<i64> = sqlx::query_scalar(&format!(
+            "SELECT 1 FROM owned_session WHERE session_id = ?1 AND {}",
+            visible_session(None)
+        ))
+        .bind(session.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .db()?;
         if session_exists.is_none() {
             return Err(PortError::NotFound(EntityRef::Session(session.clone())));
         }

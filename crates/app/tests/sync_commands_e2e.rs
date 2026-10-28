@@ -13,7 +13,7 @@ mod support;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use support::sync::{DeviceKey, HostNode, SyncClient, nonce_text, uuid_text};
+use support::sync::{DeviceKey, HostNode, SyncClient, nonce_text, snapshot_items, uuid_text};
 
 /// 本机宿主名（`daemon.public_origin` 的 authority；`Host` 头与 `Origin` 头都按它判）。
 const HOST: &str = "sync-commands.example.invalid";
@@ -1111,6 +1111,80 @@ async fn session_create_rejects_both_directory_sources_at_once() {
         before,
         "二选一被拒时不得创建会话：{refused}"
     );
+
+    host.stop().await;
+}
+
+/// 3.1`: a completed local `session.create` is active in the result, list,
+/// and initial snapshot, and no intermediate durable `idle` projection is
+/// published while the lifecycle reservation is settled.
+#[tokio::test]
+async fn created_session_result_and_snapshot_are_active_without_durable_idle() {
+    let host = HostNode::start("sync-create-active", HOST).await;
+    let creator = Device::new();
+    pair_and_approve(&host, &creator).await;
+    let mut creating = connect_lifecycle(&host, &creator).await;
+
+    let request = uuid_text();
+    creating.step("session.create terminal（active projection）");
+    creating
+        .command(&request, "session.create", None, create_payload(&host))
+        .await;
+    let exchange = exchange_until_terminal(&mut creating, &request).await;
+    assert_eq!(exchange.first()["status"], json!("accepted"));
+    let terminal = exchange.terminal();
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    assert_eq!(
+        terminal["result"]["session"]["localActivity"],
+        json!("active"),
+        "the completed create result must expose the ready endpoint as active: {terminal}"
+    );
+    let session = terminal["result"]["sessionId"]
+        .as_str()
+        .expect("completed create has a session id")
+        .to_owned();
+
+    creating.step("session.list（active projection）");
+    let listed = list_sessions(&mut creating).await;
+    let listed_session = listed["result"]["sessions"]
+        .as_array()
+        .expect("list sessions array")
+        .iter()
+        .find(|summary| summary["sessionId"] == json!(session))
+        .unwrap_or_else(|| panic!("created session is missing from session.list: {listed}"));
+    assert_eq!(
+        listed_session["localActivity"],
+        json!("active"),
+        "the post-create list projects the same ready endpoint: {listed}"
+    );
+
+    creating.subscribe(None).await;
+    let reset = creating.expect_type("sync.reset_required").await;
+    assert_eq!(reset["body"]["reason"], json!("initial_sync"), "{reset}");
+    creating.snapshot_request("initial_sync").await;
+    let snapshot = creating.expect_snapshot().await;
+    let snapshot_session = snapshot_items(&snapshot, "sessions")
+        .into_iter()
+        .find(|summary| summary["sessionId"] == json!(session))
+        .unwrap_or_else(|| panic!("created session is missing from the snapshot"));
+    assert_eq!(
+        snapshot_session["localActivity"],
+        json!("active"),
+        "the post-create snapshot must agree with the result and list"
+    );
+
+    let durable_events = stored_events(&host, &session).await;
+    for (_, event_type, payload) in durable_events {
+        if event_type != "session.activity.changed" {
+            continue;
+        }
+        let payload: Value = serde_json::from_str(&payload).expect("activity event payload");
+        assert_ne!(
+            payload["session"]["localActivity"],
+            json!("idle"),
+            "session.create must not publish an intermediate durable idle projection"
+        );
+    }
 
     host.stop().await;
 }
@@ -2414,6 +2488,301 @@ async fn release_ready_session(host: &HostNode, session: &str) {
         .release_session(&actor, id, generation, host.clock().now())
         .await
         .expect("逐会话释放");
+}
+
+/// `session.delete` must be gated at the Sync boundary and must not release an
+/// Agent session when the lifecycle feature was not negotiated.
+#[tokio::test]
+async fn session_delete_requires_the_lifecycle_feature_without_side_effects() {
+    let host = HostNode::start("sync-life-delete-gate", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let mut client = connect_authenticated(&host, &device).await;
+    let rows_before = session_row_count(&host).await;
+    let head_before = host.head().await;
+
+    let request = uuid_text();
+    client.step("session.delete without lifecycle feature");
+    client
+        .command(&request, "session.delete", Some(&session), json!({}))
+        .await;
+    let refused = client.expect_command_result(&request).await;
+
+    assert_eq!(refused["status"], json!("rejected"), "{refused}");
+    assert_eq!(
+        refused["error"]["code"],
+        json!("command.unsupported"),
+        "{refused}"
+    );
+    assert_eq!(host.script().release_calls(), 0);
+    assert_eq!(session_row_count(&host).await, rows_before);
+    assert_eq!(
+        host.head().await.global_sequence,
+        head_before.global_sequence
+    );
+
+    host.stop().await;
+}
+
+/// The real Sync route must release before deleting, hide the session after the
+/// tombstone commit, and replay the first terminal after that session is gone.
+#[tokio::test]
+async fn session_delete_completes_and_replays_from_the_tombstone() {
+    let host = HostNode::start("sync-life-delete", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.delete");
+    client
+        .command(&request, "session.delete", Some(&session), json!({}))
+        .await;
+    let accepted = client.expect_command_result(&request).await;
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    let completed = client.expect_command_result(&request).await;
+    assert_eq!(completed["status"], json!("completed"), "{completed}");
+    assert_eq!(completed["result"]["sessionId"], json!(session));
+    assert_eq!(host.script().release_calls(), 1);
+
+    let listed = list_sessions(&mut client).await;
+    assert!(
+        !listed["result"]["sessions"]
+            .as_array()
+            .expect("sessions")
+            .iter()
+            .any(|entry| entry["sessionId"] == json!(session)),
+        "deleted session must disappear from session.list: {listed}"
+    );
+    let deletion_events = stored_events(&host, &session)
+        .await
+        .into_iter()
+        .filter(|(_, event_type, _)| event_type == "session.deleted")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        deletion_events.len(),
+        1,
+        "one accepted delete must persist exactly one deletion fact"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&deletion_events[0].2).expect("deletion payload"),
+        json!({ "sessionId": session }),
+        "the silent deletion projection must contain only the stable session id"
+    );
+
+    let resume_request = uuid_text();
+    client.step("session.resume after the tombstone committed");
+    client
+        .command(&resume_request, "session.resume", Some(&session), json!({}))
+        .await;
+    let resume = client.expect_command_result(&resume_request).await;
+    assert_eq!(resume["status"], json!("rejected"), "{resume}");
+    assert_eq!(
+        resume["error"]["code"],
+        json!("session.not_found"),
+        "{resume}"
+    );
+
+    let read_request = uuid_text();
+    client.step("session.read after the tombstone committed");
+    client
+        .command(
+            &read_request,
+            "session.read",
+            Some(&session),
+            json!({ "include": [] }),
+        )
+        .await;
+    let read = client.expect_command_result(&read_request).await;
+    assert_eq!(read["status"], json!("rejected"), "{read}");
+    assert_eq!(read["error"]["code"], json!("session.not_found"), "{read}");
+
+    client.step("session.delete replay after tombstone");
+    client
+        .command(&request, "session.delete", Some(&session), json!({}))
+        .await;
+    let replay = client.expect_command_result(&request).await;
+    assert_eq!(replay["status"], json!("completed"), "{replay}");
+    assert_eq!(
+        replay["terminalEventId"], completed["terminalEventId"],
+        "the tombstone must replay the first delete terminal: {replay}"
+    );
+    assert_eq!(
+        host.script().release_calls(),
+        1,
+        "idempotent replay must not release the Agent session again"
+    );
+
+    let new_request = uuid_text();
+    client.step("new session.delete request for an absent session");
+    client
+        .command(&new_request, "session.delete", Some(&session), json!({}))
+        .await;
+    let absent = client.expect_command_result(&new_request).await;
+    assert_eq!(absent["status"], json!("rejected"), "{absent}");
+    assert_eq!(
+        absent["error"]["code"],
+        json!("session.not_found"),
+        "{absent}"
+    );
+
+    host.stop().await;
+}
+
+/// Metadata-only changes do not make a session nonempty. A real title mutation
+/// must therefore still permit the normal release-and-delete path.
+#[tokio::test]
+async fn metadata_only_session_is_still_eligible_for_empty_cleanup() {
+    let host = HostNode::start("sync-life-delete-metadata-only", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let session = local_session(&host).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    let title_request = uuid_text();
+    client.step("session.title.set before empty cleanup");
+    client
+        .command(
+            &title_request,
+            "session.title.set",
+            Some(&session),
+            json!({ "title": "仅元数据" }),
+        )
+        .await;
+    let titled = client.expect_command_result(&title_request).await;
+    assert_eq!(titled["status"], json!("completed"), "{titled}");
+    assert_eq!(
+        stored_session_titles(&host, &session)
+            .await
+            .expect("the metadata-only session remains visible")
+            .1
+            .as_deref(),
+        Some("仅元数据")
+    );
+
+    let delete_request = uuid_text();
+    client.step("session.delete after metadata-only change");
+    client
+        .command(&delete_request, "session.delete", Some(&session), json!({}))
+        .await;
+    assert_eq!(
+        client.expect_command_result(&delete_request).await["status"],
+        json!("accepted")
+    );
+    let deleted = client.expect_command_result(&delete_request).await;
+    assert_eq!(deleted["status"], json!("completed"), "{deleted}");
+    assert_eq!(deleted["result"]["sessionId"], json!(session));
+    assert_eq!(host.script().release_calls(), 1);
+
+    let listed = list_sessions(&mut client).await;
+    assert!(
+        !listed["result"]["sessions"]
+            .as_array()
+            .expect("sessions")
+            .iter()
+            .any(|entry| entry["sessionId"] == json!(session)),
+        "a title-only session must disappear after cleanup: {listed}"
+    );
+
+    host.stop().await;
+}
+
+/// Failed and uncertain release outcomes settle the command but keep the live
+/// rows and capacity reservations; replay must not release a second time.
+#[tokio::test]
+async fn failed_and_uncertain_delete_releases_keep_sessions_visible() {
+    let host = HostNode::start("sync-life-delete-failures", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let failed_session = local_session(&host).await;
+    let uncertain_session = local_session(&host).await;
+    let mut client = connect_lifecycle(&host, &device).await;
+
+    host.script()
+        .set_release_outcome(acp_core::ports::ReleaseOutcome::Failed);
+    let failed_request = uuid_text();
+    client
+        .command(
+            &failed_request,
+            "session.delete",
+            Some(&failed_session),
+            json!({}),
+        )
+        .await;
+    assert_eq!(
+        client.expect_command_result(&failed_request).await["status"],
+        json!("accepted")
+    );
+    let failed = client.expect_command_result(&failed_request).await;
+    assert_eq!(failed["status"], json!("failed"), "{failed}");
+    assert_eq!(
+        failed["error"]["code"],
+        json!("internal.unavailable"),
+        "{failed}"
+    );
+
+    host.script()
+        .set_release_outcome(acp_core::ports::ReleaseOutcome::Uncertain);
+    let uncertain_request = uuid_text();
+    client
+        .command(
+            &uncertain_request,
+            "session.delete",
+            Some(&uncertain_session),
+            json!({}),
+        )
+        .await;
+    assert_eq!(
+        client.expect_command_result(&uncertain_request).await["status"],
+        json!("accepted")
+    );
+    let uncertain = client.expect_command_result(&uncertain_request).await;
+    assert_eq!(uncertain["status"], json!("uncertain"), "{uncertain}");
+    assert_eq!(
+        uncertain["error"]["code"],
+        json!("command.uncertain"),
+        "{uncertain}"
+    );
+
+    let listed = list_sessions(&mut client).await;
+    for session in [&failed_session, &uncertain_session] {
+        assert!(
+            listed["result"]["sessions"]
+                .as_array()
+                .expect("sessions")
+                .iter()
+                .any(|entry| entry["sessionId"] == json!(session)),
+            "a failed or uncertain release must keep the session visible: {listed}"
+        );
+        assert!(
+            !stored_events(&host, session)
+                .await
+                .iter()
+                .any(|(_, event_type, _)| event_type == "session.deleted"),
+            "only a confirmed release may publish session.deleted"
+        );
+    }
+    assert_eq!(host.script().release_calls(), 2);
+
+    client
+        .command(
+            &uncertain_request,
+            "session.delete",
+            Some(&uncertain_session),
+            json!({}),
+        )
+        .await;
+    let replay = client.expect_command_result(&uncertain_request).await;
+    assert_eq!(replay["status"], json!("uncertain"), "{replay}");
+    assert_eq!(
+        replay["terminalEventId"], uncertain["terminalEventId"],
+        "{replay}"
+    );
+    assert_eq!(host.script().release_calls(), 2);
+
+    host.stop().await;
 }
 
 /// 派发一条 `session.view` 并返回 `session.view.result` 的 body。

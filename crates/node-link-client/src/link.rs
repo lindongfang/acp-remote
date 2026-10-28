@@ -28,12 +28,11 @@
 //! 代际先重新 attach），预算耗尽后保留可观测错误、交给下一次重连的恢复计划。重发从不跳过未被补齐的
 //! 位置，因此缺口不会变成永久空洞，也不会形成请求风暴。
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use acp_core::model::NodeId;
-use acp_core::model::Timestamp as CoreTimestamp;
+use acp_core::model::{NodeId, SessionId, Timestamp as CoreTimestamp};
 use node_link_protocol::catalog::{CatalogSnapshot, NodeTrustRevoked};
 use node_link_protocol::command::{
     CommandAccepted, CommandName, CommandPayload, CommandRejected, CommandResultPayload,
@@ -45,7 +44,8 @@ use node_link_protocol::common::{
 use node_link_protocol::envelope::{Envelope, MessageType, Phase, encode_body};
 use node_link_protocol::error::{Body as LinkErrorBody, ErrorCode, Ping, Pong};
 use node_link_protocol::resource::{
-    Ack, Attach, Attached as AttachedBody, Event, SnapshotItems, SnapshotResource, Subscribe,
+    Ack, Attach, Attached as AttachedBody, Event, SnapshotBegin, SnapshotEnd as SnapshotEndBody,
+    SnapshotItems, SnapshotResource, Subscribe,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid as RandomUuid;
@@ -54,7 +54,7 @@ use crate::error::ClientError;
 use crate::handshake::{
     Established, HandshakeConfig, handshake, random_bytes_16, wire_connection_fields,
 };
-use crate::runtime::{EventDisposition, RemoteRuntime};
+use crate::runtime::{CatalogUpdate, EventDisposition, RemoteRuntime};
 use crate::transport::{Incoming, MessageSink, MessageSource};
 
 /// 心跳的默认间隔（与 `node.ready.limits.heartbeatIntervalMs` 的默认 30 秒一致）。
@@ -188,6 +188,34 @@ struct AttachRequest {
     /// 随 attach 成功的这次订阅已经重发过几次（重试路径经重新 attach 重发时递增）。
     subscribe_attempts: u32,
     reply: Option<oneshot::Sender<Result<AttachmentTicket, ClientError>>>,
+    /// Keep a FIFO tombstone after cancellation so a delayed `resource.attached` cannot be assigned
+    /// to the next session's request.
+    discard_response: bool,
+}
+
+/// Each `resource.subscribe` owns one FIFO snapshot slot. A cancelled slot remains as a tombstone
+/// until the corresponding begin/chunk/end sequence has passed.
+#[derive(Debug, Clone)]
+enum SnapshotExpectation {
+    Session {
+        remote: RemoteSessionRef,
+        cursor: Option<OriginCursor>,
+        message_id: Uuid,
+    },
+    Discard,
+}
+
+/// The snapshot currently being consumed from the wire. The protocol has no per-frame request id,
+/// so all session/epoch/cursor checks are tied to the slot selected at `snapshot_begin`.
+#[derive(Debug, Clone)]
+struct SnapshotCurrent {
+    expected: Option<RemoteSessionRef>,
+    requested_cursor: Option<OriginCursor>,
+    snapshot_id: Uuid,
+    cursor: OriginCursor,
+    chunk_count: u64,
+    next_chunk: u64,
+    valid: bool,
 }
 
 /// 非命令资源请求的类别（用于拒绝日志与过期 ticket 处理）。
@@ -239,6 +267,16 @@ struct SubscriptionRetry {
     at: tokio::time::Instant,
 }
 
+/// Connection-owned queues and in-flight state that a catalog deletion or epoch reset invalidates.
+struct CatalogQueues<'a> {
+    pending: &'a mut Vec<Pending>,
+    attach_queue: &'a mut VecDeque<AttachRequest>,
+    resource_requests: &'a mut VecDeque<ResourceRequest>,
+    snapshot_queue: &'a mut VecDeque<SnapshotExpectation>,
+    snapshot_current: &'a mut Option<SnapshotCurrent>,
+    retries: &'a mut Vec<SubscriptionRetry>,
+}
+
 /// 单条连接上订阅重试的退避起点。
 const SUBSCRIPTION_RETRY_BASE: Duration = Duration::from_millis(100);
 
@@ -275,6 +313,207 @@ fn cancel_subscription_retry(retries: &mut Vec<SubscriptionRetry>, remote: &Remo
     retries.retain(|retry| retry.remote.session_id.as_str() != remote.session_id.as_str());
 }
 
+/// Cancel every in-flight waiter and background retry invalidated by a catalog update.
+fn cancel_catalog_updates(
+    update: CatalogUpdate,
+    shared: &SharedLink,
+    queues: &mut CatalogQueues<'_>,
+) {
+    if update.removed.is_empty() && update.reset.is_empty() {
+        return;
+    }
+    let removed_ids: BTreeSet<String> = update
+        .removed
+        .iter()
+        .map(|session| session.session_id.as_str().to_owned())
+        .collect();
+    let reset_ids: BTreeSet<String> = update
+        .reset
+        .iter()
+        .map(|session| session.session_id.as_str().to_owned())
+        .collect();
+    shared.forget_sessions(&removed_ids);
+    shared.reset_sessions_for_epoch_change(&update.reset);
+
+    let mut kept_pending = Vec::with_capacity(queues.pending.len());
+    for mut request in queues.pending.drain(..) {
+        let removed_session = request
+            .session
+            .as_ref()
+            .filter(|session| removed_ids.contains(session.session_id.as_str()))
+            .cloned();
+        if let Some(session) = removed_session {
+            if let Some(target) = request.uncertain_target.as_ref() {
+                shared.clear_uncertain(target);
+            }
+            if let Some(reply) = request.reply.take() {
+                let _ = reply.send(Err(missing_session_error(&session)));
+            }
+        } else {
+            kept_pending.push(request);
+        }
+    }
+    *queues.pending = kept_pending;
+
+    let mut kept_attaches = VecDeque::with_capacity(queues.attach_queue.len());
+    while let Some(mut request) = queues.attach_queue.pop_front() {
+        let removed = removed_ids.contains(request.remote.session_id.as_str());
+        let reset = reset_ids.contains(request.remote.session_id.as_str());
+        if removed || reset {
+            let error = if removed {
+                missing_session_error(&request.remote)
+            } else {
+                ClientError::Timeout
+            };
+            if let Some(reply) = request.reply.take() {
+                let _ = reply.send(Err(error));
+            }
+            request.subscribe = None;
+            request.discard_response = true;
+            kept_attaches.push_back(request);
+        } else {
+            kept_attaches.push_back(request);
+        }
+    }
+    *queues.attach_queue = kept_attaches;
+
+    queues.resource_requests.retain(|request| {
+        !removed_ids.contains(request.remote.session_id.as_str())
+            && !reset_ids.contains(request.remote.session_id.as_str())
+    });
+    for expectation in queues.snapshot_queue.iter_mut() {
+        let SnapshotExpectation::Session { remote, .. } = expectation else {
+            continue;
+        };
+        if removed_ids.contains(remote.session_id.as_str())
+            || reset_ids.contains(remote.session_id.as_str())
+        {
+            *expectation = SnapshotExpectation::Discard;
+        }
+    }
+    if let Some(current) = queues.snapshot_current.as_mut()
+        && current.expected.as_ref().is_some_and(|session| {
+            removed_ids.contains(session.session_id.as_str())
+                || reset_ids.contains(session.session_id.as_str())
+        })
+    {
+        current.expected = None;
+        current.valid = false;
+    }
+    queues.retries.retain(|retry| {
+        !removed_ids.contains(retry.remote.session_id.as_str())
+            && !reset_ids.contains(retry.remote.session_id.as_str())
+    });
+}
+
+fn begin_snapshot(
+    expectation: Option<SnapshotExpectation>,
+    body: &SnapshotBegin,
+    runtime: &RemoteRuntime,
+    generation: acp_core::ports::RemoteGeneration,
+) -> Option<SnapshotCurrent> {
+    let expectation = expectation?;
+    let (expected, requested_cursor, valid) = match expectation {
+        SnapshotExpectation::Discard => (None, None, false),
+        SnapshotExpectation::Session { remote, cursor, .. } => {
+            let epoch_matches =
+                runtime.wire_session_epoch_matches(&remote, generation, &body.cursor.origin_epoch);
+            let requested_matches = cursor.as_ref().is_none_or(|requested| {
+                requested.origin_epoch == body.cursor.origin_epoch
+                    && requested
+                        .origin_sequence
+                        .as_str()
+                        .parse::<u64>()
+                        .ok()
+                        .zip(body.cursor.origin_sequence.as_str().parse::<u64>().ok())
+                        .is_some_and(|(requested, barrier)| requested <= barrier)
+            });
+            (Some(remote), cursor, epoch_matches && requested_matches)
+        }
+    };
+    Some(SnapshotCurrent {
+        expected,
+        requested_cursor,
+        snapshot_id: body.snapshot_id.clone(),
+        cursor: body.cursor.clone(),
+        chunk_count: body.chunk_count.get(),
+        next_chunk: 0,
+        valid,
+    })
+}
+
+fn finish_snapshot(
+    current: SnapshotCurrent,
+    body: &SnapshotEndBody,
+    runtime: &RemoteRuntime,
+    generation: acp_core::ports::RemoteGeneration,
+) -> Option<RemoteSessionRef> {
+    let cursor_matches = current
+        .requested_cursor
+        .as_ref()
+        .is_none_or(|requested| requested.origin_epoch == body.cursor.origin_epoch);
+    let sequence_matches = current
+        .requested_cursor
+        .as_ref()
+        .and_then(|requested| requested.origin_sequence.as_str().parse::<u64>().ok())
+        .zip(body.cursor.origin_sequence.as_str().parse::<u64>().ok())
+        .is_none_or(|(requested, barrier)| requested <= barrier);
+    let body_matches = current.snapshot_id == body.snapshot_id
+        && current.chunk_count == body.chunk_count.get()
+        && current.next_chunk == body.chunk_count.get()
+        && current.cursor == body.cursor;
+    let remote = current.expected?;
+    let epoch_matches =
+        runtime.wire_session_epoch_matches(&remote, generation, &body.cursor.origin_epoch);
+    (current.valid && cursor_matches && sequence_matches && body_matches && epoch_matches)
+        .then_some(remote)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum UnavailableTarget {
+    Owner,
+    Session(RemoteSessionRef),
+    Ignore,
+}
+
+fn unavailable_target(shared: &SharedLink, attachment_id: Option<&Uuid>) -> UnavailableTarget {
+    match attachment_id {
+        None => UnavailableTarget::Owner,
+        Some(attachment_id) => shared
+            .session_by_attachment(attachment_id)
+            .map_or(UnavailableTarget::Ignore, UnavailableTarget::Session),
+    }
+}
+
+fn missing_session_error(session: &RemoteSessionRef) -> ClientError {
+    match SessionId::new(session.session_id.as_str()) {
+        Ok(session_id) => ClientError::NotFound(session_id),
+        Err(_) => ClientError::Local("wire session id is invalid"),
+    }
+}
+
+/// The session identity used for cancellation and catalog checks.
+///
+/// `command.status` carries its remote target inside the payload while the top-level `sessionRef`
+/// is null, so it still belongs to the target session for every connection-local cleanup path.
+fn submit_session_ref(submit: &CommandSubmit) -> Option<RemoteSessionRef> {
+    if let Some(session) = submit.session_ref.as_ref() {
+        return Some(session.clone());
+    }
+    match &submit.payload {
+        CommandPayload::CommandStatus(body) => body.remote_target.as_ref().and_then(|target| {
+            target
+                .session_id
+                .as_ref()
+                .map(|session_id| RemoteSessionRef {
+                    owner_node_id: target.owner_node_id.clone(),
+                    session_id: session_id.clone(),
+                })
+        }),
+        _ => None,
+    }
+}
+
 /// 发送失败的两种性质：编码失败是本机问题（连接仍可用），写失败必须结束连接。
 enum SendFailure {
     Encode(ClientError),
@@ -283,6 +522,7 @@ enum SendFailure {
 
 /// 保留的未决 `resource.subscribe`/`resource.ack` 关联键上限。
 const TRACKED_RESOURCE_REQUESTS: usize = 64;
+const MAX_PENDING_RESOURCE_RESPONSES: usize = 64;
 
 /// 已断开连接上「无法确认结果」的命令（重连后只查询，不重发）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,6 +747,56 @@ impl SharedLink {
             .remove(remote.session_id.as_str());
     }
 
+    /// Drop every connection-local fact keyed by sessions removed from the Owner catalog.
+    pub(crate) fn forget_sessions(&self, session_ids: &BTreeSet<String>) {
+        let mut state = lock(&self.state);
+        state
+            .attachments
+            .retain(|session_id, _| !session_ids.contains(session_id));
+        state
+            .rejected
+            .retain(|session_id, _| !session_ids.contains(session_id));
+        state
+            .faults
+            .retain(|session_id, _| !session_ids.contains(session_id));
+        state.uncertain.retain(|_, command| {
+            command
+                .session
+                .as_ref()
+                .is_none_or(|session| !session_ids.contains(session.session_id.as_str()))
+        });
+    }
+
+    /// Drop all connection-local facts for one removed session.
+    pub(crate) fn forget_session(&self, session_id: &str) {
+        self.forget_sessions(&BTreeSet::from([session_id.to_owned()]));
+    }
+
+    /// Drop routing facts that belong to a session's previous origin epoch. Uncertain commands are
+    /// retained because their `command.status` lookup remains the only safe way to settle effects.
+    pub(crate) fn reset_sessions_for_epoch_change(
+        &self,
+        sessions: &[acp_core::model::RemoteSessionRef],
+    ) {
+        let ids: BTreeSet<&str> = sessions
+            .iter()
+            .map(|session| session.session_id.as_str())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let mut state = lock(&self.state);
+        state
+            .attachments
+            .retain(|session_id, _| !ids.contains(session_id.as_str()));
+        state
+            .rejected
+            .retain(|session_id, _| !ids.contains(session_id.as_str()));
+        state
+            .faults
+            .retain(|session_id, _| !ids.contains(session_id.as_str()));
+    }
+
     /// 停止本连接（幂等）。
     pub fn stop(&self) {
         let _ = self.shutdown.send(true);
@@ -529,7 +819,7 @@ impl SharedLink {
         }
         let request = submit.request_id.clone();
         let command = submit.command;
-        let session = submit.session_ref.as_ref().cloned();
+        let session = submit_session_ref(&submit);
         // 只读查询（`command.status` 等）不会产生副作用：连接丢失时让调用方自行重试，
         // 不把它们登记成「不确定命令」，否则重连恢复会拿查询 id 去查自己。
         let may_have_side_effects = command.accepts_side_effects();
@@ -755,9 +1045,13 @@ impl Link {
         generation: DecimalString,
         cursor: Option<OriginCursor>,
         attempts: u32,
-        snapshot_queue: &mut VecDeque<RemoteSessionRef>,
+        snapshot_queue: &mut VecDeque<SnapshotExpectation>,
     ) -> Result<(), SendFailure> {
-        snapshot_queue.push_back(remote.clone());
+        if snapshot_queue.len() >= MAX_PENDING_RESOURCE_RESPONSES {
+            return Err(SendFailure::Encode(ClientError::Local(
+                "too many pending resource subscriptions on this connection",
+            )));
+        }
         let body = Subscribe {
             attachment_id: attachment,
             attachment_generation: generation,
@@ -777,6 +1071,11 @@ impl Link {
         .map_err(SendFailure::Encode)?;
         sink.send(text).await.map_err(SendFailure::Transport)?;
         *next_sequence += 1;
+        snapshot_queue.push_back(SnapshotExpectation::Session {
+            remote: remote.clone(),
+            cursor: cursor.clone(),
+            message_id: message_id.clone(),
+        });
         track_resource_request(
             tracked,
             message_id,
@@ -825,8 +1124,8 @@ impl Link {
         let mut attach_queue: VecDeque<AttachRequest> = VecDeque::new();
         let mut resource_requests: VecDeque<ResourceRequest> = VecDeque::new();
         // 每个 resource.subscribe 对应一个快照；快照消息不带 sessionRef，因此按发送顺序关联。
-        let mut snapshot_queue: VecDeque<RemoteSessionRef> = VecDeque::new();
-        let mut snapshot_current: Option<RemoteSessionRef> = None;
+        let mut snapshot_queue: VecDeque<SnapshotExpectation> = VecDeque::new();
+        let mut snapshot_current: Option<SnapshotCurrent> = None;
 
         // 重连后的安全恢复（只读）：catalog 订阅 + 每会话 attach/subscribe + 未确定命令的
         // `command.status` 查询。任何副作用命令都**不**在这里重发。
@@ -869,6 +1168,15 @@ impl Link {
                 );
                 continue;
             }
+            if attach_queue.len() >= MAX_PENDING_RESOURCE_RESPONSES {
+                tracing::warn!(
+                    event = "node_link_client.resource_response_queue_full",
+                    owner = %owner,
+                    session_id = resume.remote.session_id.as_str(),
+                    "the bounded resource response queue is full; skipping startup recovery entry"
+                );
+                continue;
+            }
             match Self::send_attach(&mut *sink, &established, &mut next_sequence, &resume.remote)
                 .await
             {
@@ -878,6 +1186,7 @@ impl Link {
                     subscribe: Some(resume.cursor),
                     subscribe_attempts: 0,
                     reply: None,
+                    discard_response: false,
                 }),
                 Err(SendFailure::Encode(error)) => {
                     self.shared.set_online(None);
@@ -973,7 +1282,16 @@ impl Link {
                                 continue;
                             }
                             let command = submit.command;
-                            let session = submit.session_ref.as_ref().cloned();
+                            let session = submit_session_ref(&submit);
+                            if let Some(session) = session.as_ref() {
+                                if self.runtime.wire_session_is_absent_from_catalog(
+                                    session,
+                                    self.generation,
+                                ) {
+                                    let _ = reply.send(Err(missing_session_error(session)));
+                                    continue;
+                                }
+                            }
                             let wire_request = correlation_request(&submit);
                             let status_query = matches!(command, CommandName::CommandStatus);
                             let body = match encode_body(&submit) {
@@ -1014,6 +1332,19 @@ impl Link {
                             });
                         }
                         Outbound::Attach { remote, reply } => {
+                            if attach_queue.len() >= MAX_PENDING_RESOURCE_RESPONSES {
+                                let _ = reply.send(Err(ClientError::Local(
+                                    "too many pending resource attachments on this connection",
+                                )));
+                                continue;
+                            }
+                            if self.runtime.wire_session_is_absent_from_catalog(
+                                &remote,
+                                self.generation,
+                            ) {
+                                let _ = reply.send(Err(missing_session_error(&remote)));
+                                continue;
+                            }
                             // 调用方显式 attach 接管该会话：取消待发的自动重发，避免重复订阅帧。
                             cancel_subscription_retry(&mut retries, &remote);
                             match Self::send_attach(
@@ -1030,6 +1361,7 @@ impl Link {
                                     subscribe: None,
                                     subscribe_attempts: 0,
                                     reply: Some(reply),
+                                    discard_response: false,
                                 }),
                                 Err(SendFailure::Encode(error)) => {
                                     let _ = reply.send(Err(error));
@@ -1041,6 +1373,13 @@ impl Link {
                             }
                         }
                         Outbound::Subscribe { remote, attachment, generation, cursor, reply } => {
+                            if self.runtime.wire_session_is_absent_from_catalog(
+                                &remote,
+                                self.generation,
+                            ) {
+                                let _ = reply.send(Err(missing_session_error(&remote)));
+                                continue;
+                            }
                             // 显式订阅是调用方接管：取消退避中的自动重发（本次请求重置重试预算）。
                             cancel_subscription_retry(&mut retries, &remote);
                             match Self::send_subscribe(
@@ -1070,6 +1409,12 @@ impl Link {
                             }
                         }
                         Outbound::Ack { session, cursor } => {
+                            if self.runtime.wire_session_is_absent_from_catalog(
+                                &session,
+                                self.generation,
+                            ) {
+                                continue;
+                            }
                             let body = Ack { session_ref: session.clone(), cursor };
                             match encode_body(&body) {
                                 Ok(body) => match encode_post_auth_with_message_id(
@@ -1145,17 +1490,31 @@ impl Link {
                         MessageType::CatalogSnapshot => {
                             match decode_body::<CatalogSnapshot>(&envelope) {
                                 Ok(snapshot) => {
-                                    if let Err(error) = self.runtime.apply_catalog(
+                                    match self.runtime.apply_catalog(
                                         &owner,
                                         self.generation,
                                         &snapshot,
                                     ) {
-                                        tracing::warn!(
-                                            event = "node_link_client.catalog_apply_failed",
-                                            owner = %owner,
-                                            error = ?error,
-                                            "the catalog snapshot cannot be applied to the runtime directory"
-                                        );
+                                        Ok(update) => cancel_catalog_updates(
+                                            update,
+                                            &self.shared,
+                                            &mut CatalogQueues {
+                                                pending: &mut pending,
+                                                attach_queue: &mut attach_queue,
+                                                resource_requests: &mut resource_requests,
+                                                snapshot_queue: &mut snapshot_queue,
+                                                snapshot_current: &mut snapshot_current,
+                                                retries: &mut retries,
+                                            },
+                                        ),
+                                        Err(error) => {
+                                            tracing::warn!(
+                                                event = "node_link_client.catalog_apply_failed",
+                                                owner = %owner,
+                                                error = ?error,
+                                                "the catalog snapshot cannot be applied to the runtime directory"
+                                            );
+                                        }
                                     }
                                 }
                                 Err(error) => break LinkEnd::Failed(error),
@@ -1167,6 +1526,14 @@ impl Link {
                                 Err(error) => break LinkEnd::Failed(error),
                             };
                             match attach_queue.pop_front() {
+                                Some(request) if request.discard_response => {
+                                    tracing::debug!(
+                                        event = "node_link_client.attached_discarded",
+                                        owner = %owner,
+                                        session_id = request.remote.session_id.as_str(),
+                                        "a delayed resource.attached belonged to a cancelled request"
+                                    );
+                                }
                                 Some(request) => {
                                     let ticket = AttachmentTicket {
                                         id: body.attachment_id,
@@ -1222,16 +1589,67 @@ impl Link {
                             // `resource.subscribe` 是单向的（服务端直接发快照/重放）。
                         }
                         MessageType::ResourceSnapshotBegin => {
-                            snapshot_current = snapshot_queue.pop_front();
+                            let body: SnapshotBegin = match decode_body(&envelope) {
+                                Ok(body) => body,
+                                Err(error) => break LinkEnd::Failed(error),
+                            };
+                            if snapshot_current.is_none() {
+                                snapshot_current = begin_snapshot(
+                                    snapshot_queue.pop_front(),
+                                    &body,
+                                    &self.runtime,
+                                    self.generation,
+                                );
+                            } else {
+                                tracing::warn!(
+                                    event = "node_link_client.overlapping_snapshot",
+                                    owner = %owner,
+                                    "a snapshot begin arrived before the previous snapshot ended"
+                                );
+                            }
                         }
                         MessageType::ResourceSnapshotChunk => {
                             let body: node_link_protocol::resource::SnapshotChunk = match decode_body(&envelope) {
                                 Ok(body) => body,
                                 Err(error) => break LinkEnd::Failed(error),
                             };
-                            if body.resource() == SnapshotResource::SessionMeta {
-                                if let SnapshotItems::SessionMeta(items) = body.items() {
-                                    for item in items {
+                            let Some(current) = snapshot_current.as_mut() else {
+                                tracing::warn!(
+                                    event = "node_link_client.orphan_snapshot_chunk",
+                                    owner = %owner,
+                                    "a snapshot chunk arrived without a matching begin"
+                                );
+                                continue;
+                            };
+                            let chunk_index = body
+                                .chunk_index()
+                                .as_str()
+                                .parse::<u64>()
+                                .ok();
+                            if current.snapshot_id != *body.snapshot_id()
+                                || chunk_index != Some(current.next_chunk)
+                            {
+                                current.valid = false;
+                            }
+                            current.next_chunk = current.next_chunk.saturating_add(1);
+                            if body.resource() == SnapshotResource::SessionMeta
+                                && let SnapshotItems::SessionMeta(items) = body.items()
+                            {
+                                for item in items {
+                                    if current
+                                        .expected
+                                        .as_ref()
+                                        .is_none_or(|expected| *expected != item.session_ref)
+                                        || !self.runtime.wire_session_epoch_matches(
+                                            &item.session_ref,
+                                            self.generation,
+                                            &current.cursor.origin_epoch,
+                                        )
+                                    {
+                                        current.valid = false;
+                                        continue;
+                                    }
+                                    if current.valid {
                                         // 快照 chunk 到达同样证明该会话的订阅已工作。
                                         self.shared
                                             .clear_subscription_fault(&item.session_ref);
@@ -1259,8 +1677,16 @@ impl Link {
                                     Ok(body) => body,
                                     Err(error) => break LinkEnd::Failed(error),
                                 };
-                            if let Some(remote) = snapshot_current.take() {
+                            if let Some(remote) = snapshot_current.take().and_then(|current| {
+                                finish_snapshot(current, &body, &self.runtime, self.generation)
+                            }) {
                                 self.runtime.apply_snapshot_end(&owner, &remote, &body.cursor);
+                            } else {
+                                tracing::debug!(
+                                    event = "node_link_client.snapshot_discarded",
+                                    owner = %owner,
+                                    "a stale or mismatched snapshot reached its FIFO end"
+                                );
                             }
                         }
                         MessageType::ResourceCaughtUp => {
@@ -1269,7 +1695,12 @@ impl Link {
                                     Ok(body) => body,
                                     Err(error) => break LinkEnd::Failed(error),
                                 };
-                            if let Some(remote) = self.shared.session_by_attachment(&body.attachment_id) {
+                            if let Some(remote) = self.shared.session_by_attachment(&body.attachment_id)
+                                && self.shared.attachment(&remote).is_some_and(|ticket| {
+                                    ticket.id == body.attachment_id
+                                        && ticket.generation == body.attachment_generation
+                                })
+                            {
                                 self.runtime.apply_caught_up(&owner, &remote, &body);
                             }
                         }
@@ -1279,7 +1710,12 @@ impl Link {
                                     Ok(body) => body,
                                     Err(error) => break LinkEnd::Failed(error),
                                 };
-                            if let Some(remote) = self.shared.session_by_attachment(&body.attachment_id) {
+                            if let Some(remote) = self.shared.session_by_attachment(&body.attachment_id)
+                                && self.shared.attachment(&remote).is_some_and(|ticket| {
+                                    ticket.id == body.attachment_id
+                                        && ticket.generation == body.attachment_generation
+                                })
+                            {
                                 self.runtime.apply_reset(&owner, &remote, &body);
                             }
                         }
@@ -1289,12 +1725,19 @@ impl Link {
                                     Ok(body) => body,
                                     Err(error) => break LinkEnd::Failed(error),
                                 };
-                            let remote = body
-                                .attachment_id
-                                .as_ref()
-                                .and_then(|id| self.shared.session_by_attachment(id));
-                            self.runtime
-                                .apply_unavailable(&owner, remote.as_ref(), &body);
+                            match unavailable_target(&self.shared, body.attachment_id.as_ref()) {
+                                UnavailableTarget::Owner => {
+                                    self.runtime.apply_unavailable(&owner, None, &body)
+                                }
+                                UnavailableTarget::Session(remote) => self
+                                    .runtime
+                                    .apply_unavailable(&owner, Some(&remote), &body),
+                                UnavailableTarget::Ignore => tracing::debug!(
+                                    event = "node_link_client.unavailable_discarded",
+                                    owner = %owner,
+                                    "resource.unavailable named an attachment that is no longer current"
+                                ),
+                            }
                         }
                         MessageType::ResourceEvent => {
                             let body: Event = match decode_body(&envelope) {
@@ -1556,6 +1999,7 @@ impl Link {
                             let resources = self.settle_resource_error(
                                 &mut attach_queue,
                                 &mut resource_requests,
+                                &mut snapshot_queue,
                                 &error,
                                 body.code,
                                 body.correlation_id.as_ref(),
@@ -1611,9 +2055,24 @@ impl Link {
                         }
                     }
                     for retry in due {
+                        if self.runtime.wire_session_is_absent_from_catalog(
+                            &retry.remote,
+                            self.generation,
+                        ) {
+                            continue;
+                        }
                         // 票证可能已随 `attach_generation_stale` 被丢弃（或随断线清空）：先重新 attach，
                         // `resource.attached` 到达后再按**同一 cursor** 订阅。
                         let Some(ticket) = self.shared.attachment(&retry.remote) else {
+                            if attach_queue.len() >= MAX_PENDING_RESOURCE_RESPONSES {
+                                tracing::warn!(
+                                    event = "node_link_client.resource_response_queue_full",
+                                    owner = %owner,
+                                    session_id = retry.remote.session_id.as_str(),
+                                    "the bounded resource response queue is full; dropping this retry"
+                                );
+                                continue;
+                            }
                             match Self::send_attach(
                                 &mut *sink,
                                 &established,
@@ -1628,6 +2087,7 @@ impl Link {
                                     subscribe: Some(retry.cursor.clone()),
                                     subscribe_attempts: retry.attempts,
                                     reply: None,
+                                    discard_response: false,
                                 }),
                                 Err(SendFailure::Encode(error)) => tracing::warn!(
                                     event = "node_link_client.subscription_retry_encode_failed",
@@ -1837,6 +2297,7 @@ impl Link {
         &self,
         attach_queue: &mut VecDeque<AttachRequest>,
         tracked: &mut VecDeque<ResourceRequest>,
+        snapshot_queue: &mut VecDeque<SnapshotExpectation>,
         error: &ClientError,
         code: ErrorCode,
         correlation: Option<&Uuid>,
@@ -1895,6 +2356,13 @@ impl Link {
                 continue;
             }
             let request = tracked.remove(index).expect("index is in range");
+            snapshot_queue.retain(|expectation| {
+                !matches!(
+                    expectation,
+                    SnapshotExpectation::Session { message_id, .. }
+                        if message_id.as_str() == request.message_id.as_str()
+                )
+            });
             tracing::warn!(
                 event = "node_link_client.resource_rejected",
                 resource = request.kind.as_str(),
@@ -2182,4 +2650,1091 @@ pub fn status_submit(request_id: Uuid, target: Uuid) -> Result<CommandSubmit, Cl
             remote_target: None,
         }),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acp_core::model::{Nonce, PeerPublicKey};
+    use acp_core::ports::{RemoteRuntimeDirectory, RemoteSourceReads};
+    use async_trait::async_trait;
+    use identity_auth::{ChallengeId, FeatureList, NodeLinkChallenge, P1363Signature};
+    use node_link_protocol::common::SessionState;
+    use node_link_protocol::envelope::{ConnectionFields, Envelope as WireEnvelope};
+    use node_link_protocol::handshake::{NodeChallenge, NodeHello, NodeReady};
+    use p256::ecdsa::signature::Signer as _;
+
+    const OWNER: &str = "5c6d7e8f-9012-4a3b-8c4d-5e6f708192b5";
+    const SESSION_A: &str = "2bc8b944-2a4f-46a7-8c31-b2c40923f60a";
+    const SESSION_B: &str = "3cd9ca55-3b50-47b8-9d42-c3d51a34a71b";
+    const EPOCH_A: &str = "018f0000-0000-4000-8000-0000000000aa";
+    const EPOCH_B: &str = "018f0000-0000-4000-8000-0000000000bb";
+
+    fn remote(session_id: &str) -> RemoteSessionRef {
+        RemoteSessionRef {
+            owner_node_id: Uuid::parse(OWNER).expect("owner"),
+            session_id: Uuid::parse(session_id).expect("session"),
+        }
+    }
+
+    fn ticket(session: &RemoteSessionRef) -> AttachmentTicket {
+        AttachmentTicket {
+            id: Uuid::parse("018f0000-0000-4000-8000-0000000000ca").expect("attachment"),
+            generation: DecimalString::parse("1").expect("generation"),
+            remote: session.clone(),
+            meta: SessionMeta {
+                state: SessionState::Idle,
+                version: DecimalString::parse("3").expect("version"),
+            },
+        }
+    }
+
+    fn core_remote(session_id: &str) -> acp_core::model::RemoteSessionRef {
+        acp_core::model::RemoteSessionRef::new(
+            NodeId::new(OWNER).expect("owner"),
+            SessionId::new(session_id).expect("session"),
+        )
+    }
+
+    struct TestSink {
+        tx: mpsc::Sender<String>,
+    }
+
+    #[async_trait]
+    impl MessageSink for TestSink {
+        async fn send(&mut self, text: String) -> Result<(), ClientError> {
+            self.tx.send(text).await.map_err(|_| ClientError::Closed)
+        }
+
+        async fn close(&mut self) -> Result<(), ClientError> {
+            Ok(())
+        }
+    }
+
+    struct TestSource {
+        rx: mpsc::Receiver<Incoming>,
+    }
+
+    #[async_trait]
+    impl MessageSource for TestSource {
+        async fn recv(&mut self) -> Result<Incoming, ClientError> {
+            self.rx.recv().await.ok_or(ClientError::Closed)
+        }
+    }
+
+    struct TestOwnerIo {
+        to_client: mpsc::Sender<Incoming>,
+        from_client: mpsc::Receiver<String>,
+        next_sequence: u64,
+    }
+
+    impl TestOwnerIo {
+        fn pair() -> (Box<dyn MessageSink>, Box<dyn MessageSource>, Self) {
+            let (client_tx, owner_rx) = mpsc::channel::<String>(64);
+            let (owner_tx, client_rx) = mpsc::channel::<Incoming>(64);
+            (
+                Box::new(TestSink { tx: client_tx }),
+                Box::new(TestSource { rx: client_rx }),
+                Self {
+                    to_client: owner_tx,
+                    from_client: owner_rx,
+                    next_sequence: 1,
+                },
+            )
+        }
+
+        async fn recv(&mut self) -> Option<String> {
+            self.from_client.recv().await
+        }
+
+        async fn send_raw(&mut self, text: String) {
+            self.to_client
+                .send(Incoming::Text(text))
+                .await
+                .expect("owner to client");
+        }
+
+        async fn recv_envelope(
+            &mut self,
+            connection_id: &Uuid,
+            inbound: &mut u64,
+        ) -> Option<Envelope> {
+            let text = self.recv().await?;
+            let envelope = WireEnvelope::decode(&text).expect("wire envelope");
+            let fields = envelope.connection().expect("connection fields");
+            assert_eq!(fields.connection_id, *connection_id);
+            assert_eq!(fields.connection_sequence.as_str(), inbound.to_string());
+            *inbound += 1;
+            Some(envelope)
+        }
+
+        async fn send_envelope<T: serde::Serialize>(
+            &mut self,
+            message_type: MessageType,
+            connection_id: &Uuid,
+            body: &T,
+        ) {
+            let text = encode_test_envelope(
+                message_type,
+                Some(ConnectionFields {
+                    connection_id: connection_id.clone(),
+                    connection_sequence: DecimalString::parse(&self.next_sequence.to_string())
+                        .expect("sequence"),
+                }),
+                body,
+            );
+            self.next_sequence += 1;
+            self.send_raw(text).await;
+        }
+    }
+
+    struct TestOwnerIdentity {
+        node_id: NodeId,
+        signing: p256::ecdsa::SigningKey,
+        public_key: PeerPublicKey,
+    }
+
+    impl TestOwnerIdentity {
+        fn new(seed: [u8; 32], node_id: &str) -> Self {
+            let signing = p256::ecdsa::SigningKey::from_slice(&seed).expect("owner key");
+            let public_key = PeerPublicKey::try_from_bytes(
+                signing.verifying_key().to_sec1_point(false).as_bytes(),
+            )
+            .expect("owner public key");
+            Self {
+                node_id: NodeId::new(node_id).expect("owner id"),
+                signing,
+                public_key,
+            }
+        }
+
+        fn sign(&self, transcript: &[u8]) -> P1363Signature {
+            let signature: p256::ecdsa::Signature = self.signing.sign(transcript);
+            P1363Signature::try_from_bytes(signature.to_bytes().as_slice())
+                .expect("owner signature")
+        }
+    }
+
+    struct TestAccessIdentity {
+        node_id: NodeId,
+        signing: p256::ecdsa::SigningKey,
+    }
+
+    impl TestAccessIdentity {
+        fn new(seed: [u8; 32]) -> Self {
+            Self {
+                node_id: NodeId::new("9f1c3a52-6a4e-4f0e-8d3c-5b2a1e0f7c12").expect("access id"),
+                signing: p256::ecdsa::SigningKey::from_slice(&seed).expect("access key"),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl crate::identity::NodeIdentity for TestAccessIdentity {
+        fn node_id(&self) -> &NodeId {
+            &self.node_id
+        }
+
+        async fn public_key(&self) -> Result<PeerPublicKey, ClientError> {
+            PeerPublicKey::try_from_bytes(
+                self.signing.verifying_key().to_sec1_point(false).as_bytes(),
+            )
+            .map_err(|_| ClientError::Local("test public key"))
+        }
+
+        async fn sign(&self, transcript: &[u8]) -> Result<P1363Signature, ClientError> {
+            let signature: p256::ecdsa::Signature = self.signing.sign(transcript);
+            P1363Signature::try_from_bytes(signature.to_bytes().as_slice())
+                .map_err(|_| ClientError::Local("test signature"))
+        }
+    }
+
+    fn encode_test_envelope<T: serde::Serialize>(
+        message_type: MessageType,
+        connection: Option<ConnectionFields>,
+        body: &T,
+    ) -> String {
+        let raw = serde_json::value::RawValue::from_string(
+            serde_json::to_string(body).expect("serializable body"),
+        )
+        .expect("raw body");
+        WireEnvelope::new(
+            message_type,
+            Uuid::parse("018f0000-0000-4000-8000-0000000000aa").expect("message id"),
+            connection,
+            raw,
+        )
+        .expect("envelope")
+        .encode()
+        .expect("encoded envelope")
+    }
+
+    fn test_limits() -> NodeLinkLimits {
+        use node_link_protocol::common::{BoundedU64, UIntAtLeast};
+        NodeLinkLimits {
+            max_message_bytes: UIntAtLeast::new(1_048_576).expect("limit"),
+            catalog_snapshot_batch_size: UIntAtLeast::new(500).expect("limit"),
+            resource_snapshot_batch_size: UIntAtLeast::new(500).expect("limit"),
+            max_in_flight_commands: UIntAtLeast::new(32).expect("limit"),
+            max_pending_queue_bytes: UIntAtLeast::new(8_388_608).expect("limit"),
+            max_pending_queue_messages: UIntAtLeast::new(2_000).expect("limit"),
+            heartbeat_interval_ms: BoundedU64::new(30_000).expect("limit"),
+        }
+    }
+
+    async fn accept_test_handshake(io: &mut TestOwnerIo, owner: &TestOwnerIdentity) -> (Uuid, u64) {
+        let hello_text = io.recv().await.expect("node.hello");
+        let hello = WireEnvelope::decode(&hello_text).expect("hello envelope");
+        assert_eq!(hello.message_type(), MessageType::NodeHello);
+        let body: NodeHello = serde_json::from_str(hello.body().get()).expect("hello body");
+
+        let selected = [
+            crate::CORE_FEATURE,
+            crate::SESSION_ACTIVITY_FEATURE,
+            crate::runtime::STATELESS_ORIGIN_FEATURE,
+        ];
+        let client_nonce = base64url(body.client_nonce.as_bytes());
+        let server_nonce = base64url(&[0x33; 32]);
+        let connection_id =
+            Uuid::parse("018f0000-0000-4000-8000-000000000010").expect("connection id");
+        let challenge = NodeLinkChallenge {
+            owner_node_id: owner.node_id.clone(),
+            access_node_id: NodeId::new(body.access_node_id.as_str()).expect("access id"),
+            catalog_revision: 0,
+            client_nonce: Nonce::new(&client_nonce).expect("client nonce"),
+            server_nonce: Nonce::new(&server_nonce).expect("server nonce"),
+            connection_id: ChallengeId::parse(connection_id.as_str()).expect("challenge id"),
+            negotiated_features: FeatureList::new(
+                selected.iter().map(|feature| (*feature).to_owned()),
+            ),
+        };
+        let signature = owner.sign(&challenge.transcript().expect("challenge transcript"));
+        let challenge = NodeChallenge {
+            selected_protocol_version: node_link_protocol::common::ProtocolVersionV1::new(1)
+                .expect("protocol"),
+            connection_id: connection_id.clone(),
+            owner_node_id: Uuid::parse(owner.node_id.as_str()).expect("owner id"),
+            server_nonce: node_link_protocol::common::Base64Url::<32>::parse(&server_nonce)
+                .expect("server nonce"),
+            selected_features: node_link_protocol::common::FeatureList::new(
+                selected
+                    .iter()
+                    .map(|feature| {
+                        node_link_protocol::common::FeatureId::parse(feature).expect("feature")
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .expect("selected features"),
+            catalog_revision: DecimalString::parse("0").expect("revision"),
+            node_proof: acpr_wire::Base64Url::<64>::parse(&signature.to_base64url())
+                .expect("proof"),
+        };
+        io.send_raw(encode_test_envelope(
+            MessageType::NodeChallenge,
+            None,
+            &challenge,
+        ))
+        .await;
+
+        let proof = io.recv().await.expect("node.proof");
+        let proof = WireEnvelope::decode(&proof).expect("proof envelope");
+        assert_eq!(proof.message_type(), MessageType::NodeProof);
+        io.next_sequence = 1;
+        io.send_envelope(
+            MessageType::NodeReady,
+            &connection_id,
+            &NodeReady {
+                owner_node_id: Uuid::parse(owner.node_id.as_str()).expect("owner id"),
+                catalog_revision: DecimalString::parse("0").expect("revision"),
+                limits: test_limits(),
+                server_epoch: Uuid::parse("018f0000-0000-4000-8000-000000000020")
+                    .expect("server epoch"),
+            },
+        )
+        .await;
+        (connection_id, 1)
+    }
+
+    fn catalog_snapshot(
+        revision: u64,
+        include_a: bool,
+    ) -> node_link_protocol::catalog::CatalogSnapshot {
+        let session = |session_id: &str, epoch: &str| node_link_protocol::catalog::CatalogSession {
+            session_id: Uuid::parse(session_id).expect("session"),
+            origin_epoch: Uuid::parse(epoch).expect("epoch"),
+            agent_id: node_link_protocol::common::AgentId::parse("codex").expect("agent"),
+            state: SessionState::Idle,
+            version: DecimalString::parse("3").expect("version"),
+            created_at: node_link_protocol::common::Timestamp::parse("2026-10-20T00:00:00.000Z")
+                .expect("timestamp"),
+            workspace_directory_id: Nullable::null(),
+        };
+        let mut sessions = Vec::new();
+        if include_a {
+            sessions.push(session(SESSION_A, EPOCH_A));
+        }
+        sessions.push(session(SESSION_B, EPOCH_B));
+        node_link_protocol::catalog::CatalogSnapshot {
+            revision: DecimalString::parse(&revision.to_string()).expect("revision"),
+            agents: node_link_protocol::catalog::AgentEntryList::new(Vec::new()).expect("agents"),
+            directories: node_link_protocol::catalog::DirectoryEntryList::new(Vec::new())
+                .expect("directories"),
+            sessions: node_link_protocol::catalog::CatalogSessionList::new(sessions)
+                .expect("sessions"),
+        }
+    }
+
+    async fn send_zero_chunk_snapshot(
+        io: &mut TestOwnerIo,
+        connection: &Uuid,
+        epoch: &str,
+        sequence: u64,
+    ) {
+        let snapshot_id =
+            Uuid::parse(&format!("018f0000-0000-4000-8000-{sequence:012x}")).expect("snapshot id");
+        let cursor = OriginCursor {
+            origin_epoch: Uuid::parse(epoch).expect("epoch"),
+            origin_sequence: DecimalString::parse(&sequence.to_string()).expect("sequence"),
+        };
+        let chunk_count =
+            node_link_protocol::common::BoundedU64::<0, 100_000>::new(0).expect("chunk count");
+        io.send_envelope(
+            MessageType::ResourceSnapshotBegin,
+            connection,
+            &SnapshotBegin {
+                snapshot_id: snapshot_id.clone(),
+                cursor: cursor.clone(),
+                schema_version: node_link_protocol::common::ProtocolVersionV1::new(1)
+                    .expect("protocol version"),
+                chunk_count,
+            },
+        )
+        .await;
+        io.send_envelope(
+            MessageType::ResourceSnapshotEnd,
+            connection,
+            &node_link_protocol::resource::SnapshotEnd {
+                snapshot_id,
+                cursor,
+                chunk_count,
+                snapshot_digest: acpr_wire::Base64Url::<32>::parse(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .expect("digest"),
+            },
+        )
+        .await;
+    }
+
+    async fn wait_online(link: &SharedLink) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !link.is_online() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("link came online");
+    }
+
+    async fn wait_catalog(runtime: &RemoteRuntime, owner: &NodeId, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = RemoteRuntimeDirectory::snapshot(runtime, owner)
+                    .await
+                    .expect("catalog snapshot");
+                if snapshot.is_some_and(|snapshot| snapshot.sessions.len() == expected) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("catalog converged");
+    }
+
+    fn wire_cursor(epoch: &str, sequence: u64) -> OriginCursor {
+        OriginCursor {
+            origin_epoch: Uuid::parse(epoch).expect("epoch"),
+            origin_sequence: DecimalString::parse(&sequence.to_string()).expect("sequence"),
+        }
+    }
+
+    fn core_cursor(epoch: &str, sequence: u64) -> acp_core::model::OriginCursor {
+        acp_core::model::OriginCursor::new(
+            acp_core::model::OriginEpoch::new(epoch).expect("epoch"),
+            acp_core::model::Sequence::new(sequence).expect("sequence"),
+        )
+    }
+
+    #[tokio::test]
+    async fn catalog_removal_cancels_only_removed_session_waiters_and_connection_facts() {
+        let owner = NodeId::new(OWNER).expect("owner");
+        let (shared, _, _) = shared_channel(owner.clone());
+        let session_a = remote(SESSION_A);
+        let session_b = remote(SESSION_B);
+        let core_a = acp_core::model::RemoteSessionRef::new(
+            owner,
+            SessionId::new(SESSION_A).expect("session a"),
+        );
+        let cursor = OriginCursor {
+            origin_epoch: Uuid::parse("018f0000-0000-4000-8000-0000000000aa").expect("epoch"),
+            origin_sequence: DecimalString::parse("10").expect("sequence"),
+        };
+
+        {
+            let mut state = lock(&shared.state);
+            state
+                .attachments
+                .insert(SESSION_A.to_owned(), ticket(&session_a));
+            state
+                .attachments
+                .insert(SESSION_B.to_owned(), ticket(&session_b));
+            state
+                .rejected
+                .insert(SESSION_A.to_owned(), ClientError::OwnerOffline);
+            state
+                .rejected
+                .insert(SESSION_B.to_owned(), ClientError::OwnerOffline);
+            state.faults.insert(
+                SESSION_A.to_owned(),
+                SubscriptionFault {
+                    error: ClientError::Timeout,
+                    attempts: 1,
+                    retrying: true,
+                },
+            );
+            state.faults.insert(
+                SESSION_B.to_owned(),
+                SubscriptionFault {
+                    error: ClientError::Timeout,
+                    attempts: 2,
+                    retrying: true,
+                },
+            );
+            state.uncertain.insert(
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+                UncertainCommand {
+                    request_id: Uuid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+                        .expect("request a"),
+                    command: CommandName::SessionResume,
+                    session: Some(session_a.clone()),
+                },
+            );
+            state.uncertain.insert(
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+                UncertainCommand {
+                    request_id: Uuid::parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+                        .expect("request b"),
+                    command: CommandName::SessionResume,
+                    session: Some(session_b.clone()),
+                },
+            );
+        }
+
+        let (pending_reply, pending_result) = oneshot::channel();
+        let (status_reply, status_result) = oneshot::channel();
+        let mut pending = vec![
+            Pending {
+                command: CommandName::SessionResume,
+                completion: Completion::Terminal,
+                reply: Some(pending_reply),
+                session: Some(session_a.clone()),
+                uncertain_target: None,
+                wire_request: Uuid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+                    .expect("request a"),
+                message_id: None,
+                status_query: false,
+            },
+            Pending {
+                command: CommandName::CommandStatus,
+                completion: Completion::Terminal,
+                reply: Some(status_reply),
+                session: Some(session_a.clone()),
+                uncertain_target: None,
+                wire_request: Uuid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+                    .expect("request a"),
+                message_id: None,
+                status_query: true,
+            },
+            Pending {
+                command: CommandName::SessionResume,
+                completion: Completion::Terminal,
+                reply: None,
+                session: Some(session_b.clone()),
+                uncertain_target: None,
+                wire_request: Uuid::parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+                    .expect("request b"),
+                message_id: None,
+                status_query: false,
+            },
+        ];
+
+        let (attach_reply, attach_result) = oneshot::channel();
+        let mut attach_queue = VecDeque::from([
+            AttachRequest {
+                remote: session_a.clone(),
+                message_id: Uuid::parse("018f0000-0000-4000-8000-0000000000aa").expect("message a"),
+                subscribe: Some(Some(cursor.clone())),
+                subscribe_attempts: 1,
+                reply: Some(attach_reply),
+                discard_response: false,
+            },
+            AttachRequest {
+                remote: session_b.clone(),
+                message_id: Uuid::parse("018f0000-0000-4000-8000-0000000000bb").expect("message b"),
+                subscribe: Some(Some(cursor.clone())),
+                subscribe_attempts: 2,
+                reply: None,
+                discard_response: false,
+            },
+        ]);
+        let mut resource_requests = VecDeque::from([
+            ResourceRequest {
+                message_id: Uuid::parse("018f0000-0000-4000-8000-0000000000ac").expect("request a"),
+                remote: session_a.clone(),
+                kind: ResourceKind::Subscribe,
+                resubscribe: Some(Resubscribe {
+                    cursor: Some(cursor.clone()),
+                    attempts: 1,
+                }),
+            },
+            ResourceRequest {
+                message_id: Uuid::parse("018f0000-0000-4000-8000-0000000000bc").expect("request b"),
+                remote: session_b.clone(),
+                kind: ResourceKind::Subscribe,
+                resubscribe: Some(Resubscribe {
+                    cursor: Some(cursor.clone()),
+                    attempts: 2,
+                }),
+            },
+        ]);
+        let mut snapshot_queue = VecDeque::from([
+            SnapshotExpectation::Session {
+                remote: session_a.clone(),
+                cursor: Some(cursor.clone()),
+                message_id: Uuid::parse("018f0000-0000-4000-8000-0000000000ad")
+                    .expect("subscribe message a"),
+            },
+            SnapshotExpectation::Session {
+                remote: session_b.clone(),
+                cursor: Some(cursor.clone()),
+                message_id: Uuid::parse("018f0000-0000-4000-8000-0000000000bd")
+                    .expect("subscribe message b"),
+            },
+        ]);
+        let mut snapshot_current = None;
+        let mut retries = vec![
+            SubscriptionRetry {
+                remote: session_a.clone(),
+                cursor: Some(cursor.clone()),
+                attempts: 1,
+                at: tokio::time::Instant::now(),
+            },
+            SubscriptionRetry {
+                remote: session_b.clone(),
+                cursor: Some(cursor),
+                attempts: 2,
+                at: tokio::time::Instant::now(),
+            },
+        ];
+
+        cancel_catalog_updates(
+            CatalogUpdate {
+                removed: vec![core_a],
+                reset: Vec::new(),
+            },
+            &shared,
+            &mut CatalogQueues {
+                pending: &mut pending,
+                attach_queue: &mut attach_queue,
+                resource_requests: &mut resource_requests,
+                snapshot_queue: &mut snapshot_queue,
+                snapshot_current: &mut snapshot_current,
+                retries: &mut retries,
+            },
+        );
+
+        assert!(matches!(
+            pending_result.await.expect("pending reply"),
+            Err(ClientError::NotFound(session)) if session.as_str() == SESSION_A
+        ));
+        assert!(matches!(
+            attach_result.await.expect("attach reply"),
+            Err(ClientError::NotFound(session)) if session.as_str() == SESSION_A
+        ));
+        assert!(matches!(
+            status_result.await.expect("status reply"),
+            Err(ClientError::NotFound(session)) if session.as_str() == SESSION_A
+        ));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0]
+                .session
+                .as_ref()
+                .map(|session| session.session_id.as_str()),
+            Some(SESSION_B)
+        );
+        assert_eq!(attach_queue.len(), 2);
+        assert_eq!(attach_queue[0].remote.session_id.as_str(), SESSION_A);
+        assert!(attach_queue[0].discard_response);
+        assert_eq!(attach_queue[1].remote.session_id.as_str(), SESSION_B);
+        assert!(!attach_queue[1].discard_response);
+        assert_eq!(resource_requests.len(), 1);
+        assert_eq!(resource_requests[0].remote.session_id.as_str(), SESSION_B);
+        assert_eq!(snapshot_queue.len(), 2);
+        assert!(matches!(snapshot_queue[0], SnapshotExpectation::Discard));
+        assert!(matches!(
+            &snapshot_queue[1],
+            SnapshotExpectation::Session { remote, .. }
+                if remote.session_id.as_str() == SESSION_B
+        ));
+        assert!(snapshot_current.is_none());
+        assert_eq!(retries.len(), 1);
+        assert_eq!(retries[0].remote.session_id.as_str(), SESSION_B);
+
+        let state = lock(&shared.state);
+        assert!(!state.attachments.contains_key(SESSION_A));
+        assert!(!state.rejected.contains_key(SESSION_A));
+        assert!(!state.faults.contains_key(SESSION_A));
+        assert!(!state.uncertain.values().any(|command| {
+            command
+                .session
+                .as_ref()
+                .is_some_and(|session| session.session_id.as_str() == SESSION_A)
+        }));
+        assert!(state.attachments.contains_key(SESSION_B));
+        assert!(state.rejected.contains_key(SESSION_B));
+        assert!(state.faults.contains_key(SESSION_B));
+        assert!(state.uncertain.values().any(|command| {
+            command
+                .session
+                .as_ref()
+                .is_some_and(|session| session.session_id.as_str() == SESSION_B)
+        }));
+    }
+
+    #[test]
+    fn unknown_unavailable_attachment_never_becomes_owner_wide() {
+        let owner = NodeId::new(OWNER).expect("owner");
+        let (shared, _, _) = shared_channel(owner);
+        let session_b = remote(SESSION_B);
+        let ticket_b = ticket(&session_b);
+        shared.put_attachment(ticket_b.clone());
+
+        assert_eq!(unavailable_target(&shared, None), UnavailableTarget::Owner);
+        assert_eq!(
+            unavailable_target(
+                &shared,
+                Some(&Uuid::parse("018f0000-0000-4000-8000-0000000000ff").expect("unknown"))
+            ),
+            UnavailableTarget::Ignore
+        );
+        assert_eq!(
+            unavailable_target(&shared, Some(&ticket_b.id)),
+            UnavailableTarget::Session(session_b.clone())
+        );
+        assert_eq!(
+            shared
+                .attachment(&session_b)
+                .map(|ticket| ticket.id)
+                .as_ref(),
+            Some(&ticket_b.id),
+            "the unrelated session ticket must remain unchanged"
+        );
+    }
+
+    #[test]
+    fn cancelled_fifo_responses_cannot_be_assigned_to_the_next_session() {
+        let owner = NodeId::new(OWNER).expect("owner");
+        let (shared, _, _) = shared_channel(owner.clone());
+        let session_a = remote(SESSION_A);
+        let session_b = remote(SESSION_B);
+        let ticket_b = ticket(&session_b);
+        shared.put_attachment(ticket_b.clone());
+
+        let mut attach_queue = VecDeque::from([
+            AttachRequest {
+                remote: session_a.clone(),
+                message_id: Uuid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1").expect("message a"),
+                subscribe: None,
+                subscribe_attempts: 0,
+                reply: None,
+                discard_response: false,
+            },
+            AttachRequest {
+                remote: session_b.clone(),
+                message_id: Uuid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2").expect("message b"),
+                subscribe: None,
+                subscribe_attempts: 0,
+                reply: None,
+                discard_response: false,
+            },
+        ]);
+        let cursor = wire_cursor(EPOCH_A, 5);
+        let mut snapshot_queue = VecDeque::from([
+            SnapshotExpectation::Session {
+                remote: session_a.clone(),
+                cursor: None,
+                message_id: Uuid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3")
+                    .expect("subscribe message a"),
+            },
+            SnapshotExpectation::Session {
+                remote: session_b.clone(),
+                cursor: Some(wire_cursor(EPOCH_B, 1)),
+                message_id: Uuid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4")
+                    .expect("subscribe message b"),
+            },
+        ]);
+        let mut snapshot_current = None;
+        let mut resource_requests = VecDeque::new();
+        let mut pending = Vec::new();
+        let mut retries = Vec::new();
+        cancel_catalog_updates(
+            CatalogUpdate {
+                removed: vec![acp_core::model::RemoteSessionRef::new(
+                    owner,
+                    SessionId::new(SESSION_A).expect("session id"),
+                )],
+                reset: Vec::new(),
+            },
+            &shared,
+            &mut CatalogQueues {
+                pending: &mut pending,
+                attach_queue: &mut attach_queue,
+                resource_requests: &mut resource_requests,
+                snapshot_queue: &mut snapshot_queue,
+                snapshot_current: &mut snapshot_current,
+                retries: &mut retries,
+            },
+        );
+
+        let delayed_attach = attach_queue.pop_front().expect("delayed attach slot");
+        assert_eq!(delayed_attach.remote.session_id.as_str(), SESSION_A);
+        assert!(delayed_attach.discard_response);
+        assert_eq!(
+            attach_queue
+                .front()
+                .map(|request| request.remote.session_id.as_str()),
+            Some(SESSION_B)
+        );
+        assert_eq!(
+            shared.attachment(&session_b).map(|ticket| ticket.id),
+            Some(ticket_b.id.clone())
+        );
+
+        let runtime = RemoteRuntime::default();
+        let generation = acp_core::ports::RemoteGeneration::new(1);
+        let snapshot_id = Uuid::parse("018f0000-0000-4000-8000-0000000000dd").expect("snapshot");
+        let begin = SnapshotBegin {
+            snapshot_id: snapshot_id.clone(),
+            cursor: cursor.clone(),
+            schema_version: node_link_protocol::common::ProtocolVersionV1::new(1)
+                .expect("protocol version"),
+            chunk_count: node_link_protocol::common::BoundedU64::<0, 100_000>::new(0)
+                .expect("chunk count"),
+        };
+        let current = begin_snapshot(snapshot_queue.pop_front(), &begin, &runtime, generation)
+            .expect("delayed snapshot begin");
+        assert!(current.expected.is_none());
+        assert!(!current.valid);
+        let end = SnapshotEndBody {
+            snapshot_id,
+            cursor: cursor.clone(),
+            chunk_count: node_link_protocol::common::BoundedU64::<0, 100_000>::new(0)
+                .expect("chunk count"),
+            snapshot_digest: acpr_wire::Base64Url::<32>::parse(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .expect("digest"),
+        };
+        assert!(finish_snapshot(current, &end, &runtime, generation).is_none());
+        assert!(matches!(
+            snapshot_queue.pop_front(),
+            Some(SnapshotExpectation::Session { remote, .. })
+                if remote.session_id.as_str() == SESSION_B
+        ));
+        assert_eq!(
+            shared.attachment(&session_b).map(|ticket| ticket.id),
+            Some(ticket_b.id)
+        );
+        assert_eq!(
+            cursor.origin_epoch,
+            Uuid::parse(EPOCH_A).expect("epoch remains the delayed request's epoch")
+        );
+        assert_eq!(
+            cursor.origin_sequence.as_str(),
+            "5",
+            "the delayed snapshot cursor remains tied to A"
+        );
+        assert_eq!(
+            session_b.session_id.as_str(),
+            SESSION_B,
+            "the next FIFO slot remains B"
+        );
+    }
+
+    #[test]
+    fn command_status_uses_its_remote_target_for_session_cleanup() {
+        let request_id = Uuid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").expect("request");
+        let submit = CommandSubmit {
+            request_id: request_id.clone(),
+            command: CommandName::CommandStatus,
+            session_ref: Nullable::null(),
+            attachment_id: Nullable::null(),
+            attachment_generation: Nullable::null(),
+            expected_version: Nullable::null(),
+            payload: CommandPayload::CommandStatus(StatusBody {
+                target_request_id: Uuid::parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+                    .expect("target request"),
+                remote_target: Some(node_link_protocol::command::RemoteTarget {
+                    owner_node_id: Uuid::parse(OWNER).expect("owner"),
+                    session_id: Nullable::value(Uuid::parse(SESSION_A).expect("session")),
+                }),
+            }),
+        };
+
+        let session = submit_session_ref(&submit).expect("status target");
+        assert_eq!(session.session_id.as_str(), SESSION_A);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn real_link_discards_cancelled_a_responses_without_touching_b_state() {
+        let (sink, source, mut io) = TestOwnerIo::pair();
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let (processed_tx, processed_rx) = oneshot::channel();
+        let owner_identity = TestOwnerIdentity::new([0x51; 32], OWNER);
+        let owner_trust = crate::handshake::OwnerTrust {
+            node_id: owner_identity.node_id.clone(),
+            public_key: owner_identity.public_key.clone(),
+        };
+        let attachment_a =
+            Uuid::parse("018f0000-0000-4000-8000-0000000000a1").expect("attachment a");
+        let attachment_b =
+            Uuid::parse("018f0000-0000-4000-8000-0000000000b1").expect("attachment b");
+
+        let owner_task = tokio::spawn(async move {
+            let (connection_id, mut inbound) =
+                accept_test_handshake(&mut io, &owner_identity).await;
+            let catalog_subscribe = io
+                .recv_envelope(&connection_id, &mut inbound)
+                .await
+                .expect("catalog.subscribe");
+            assert_eq!(
+                catalog_subscribe.message_type(),
+                MessageType::CatalogSubscribe
+            );
+            io.send_envelope(
+                MessageType::CatalogSnapshot,
+                &connection_id,
+                &catalog_snapshot(1, true),
+            )
+            .await;
+
+            let attach_a = io
+                .recv_envelope(&connection_id, &mut inbound)
+                .await
+                .expect("A attach");
+            assert_eq!(attach_a.message_type(), MessageType::ResourceAttach);
+            let attach_a_body: Attach =
+                serde_json::from_str(attach_a.body().get()).expect("A attach body");
+            assert_eq!(attach_a_body.remote_session_ref, remote(SESSION_A));
+            io.send_envelope(
+                MessageType::ResourceAttached,
+                &connection_id,
+                &AttachedBody {
+                    attachment_id: attachment_a.clone(),
+                    attachment_generation: DecimalString::parse("1").expect("generation"),
+                    session_meta: SessionMeta {
+                        state: SessionState::Idle,
+                        version: DecimalString::parse("3").expect("version"),
+                    },
+                },
+            )
+            .await;
+
+            let subscribe_a = io
+                .recv_envelope(&connection_id, &mut inbound)
+                .await
+                .expect("A subscribe");
+            assert_eq!(subscribe_a.message_type(), MessageType::ResourceSubscribe);
+            let subscribe_a_body: Subscribe =
+                serde_json::from_str(subscribe_a.body().get()).expect("A subscribe body");
+            assert_eq!(subscribe_a_body.attachment_id, attachment_a);
+
+            let attach_b = io
+                .recv_envelope(&connection_id, &mut inbound)
+                .await
+                .expect("B attach");
+            assert_eq!(attach_b.message_type(), MessageType::ResourceAttach);
+            let attach_b_body: Attach =
+                serde_json::from_str(attach_b.body().get()).expect("B attach body");
+            assert_eq!(attach_b_body.remote_session_ref, remote(SESSION_B));
+            io.send_envelope(
+                MessageType::ResourceAttached,
+                &connection_id,
+                &AttachedBody {
+                    attachment_id: attachment_b.clone(),
+                    attachment_generation: DecimalString::parse("1").expect("generation"),
+                    session_meta: SessionMeta {
+                        state: SessionState::Idle,
+                        version: DecimalString::parse("3").expect("version"),
+                    },
+                },
+            )
+            .await;
+            let subscribe_b = io
+                .recv_envelope(&connection_id, &mut inbound)
+                .await
+                .expect("B subscribe");
+            assert_eq!(subscribe_b.message_type(), MessageType::ResourceSubscribe);
+            let subscribe_b_body: Subscribe =
+                serde_json::from_str(subscribe_b.body().get()).expect("B subscribe body");
+            assert_eq!(subscribe_b_body.attachment_id, attachment_b);
+
+            io.send_envelope(
+                MessageType::CatalogSnapshot,
+                &connection_id,
+                &catalog_snapshot(2, false),
+            )
+            .await;
+            io.send_envelope(
+                MessageType::ResourceAttached,
+                &connection_id,
+                &AttachedBody {
+                    attachment_id: attachment_a,
+                    attachment_generation: DecimalString::parse("1").expect("generation"),
+                    session_meta: SessionMeta {
+                        state: SessionState::Idle,
+                        version: DecimalString::parse("3").expect("version"),
+                    },
+                },
+            )
+            .await;
+            send_zero_chunk_snapshot(&mut io, &connection_id, EPOCH_A, 9).await;
+            send_zero_chunk_snapshot(&mut io, &connection_id, EPOCH_B, 7).await;
+
+            let nonce_text = base64url(&[0x42; 16]);
+            io.send_envelope(
+                MessageType::LinkPing,
+                &connection_id,
+                &node_link_protocol::error::Ping {
+                    nonce: node_link_protocol::common::Base64Url::<16>::parse(&nonce_text)
+                        .expect("nonce"),
+                },
+            )
+            .await;
+            let pong = io
+                .recv_envelope(&connection_id, &mut inbound)
+                .await
+                .expect("pong");
+            assert_eq!(pong.message_type(), MessageType::LinkPong);
+            processed_tx.send(()).expect("processed marker");
+            stop_rx.await.expect("stop owner");
+        });
+
+        let runtime = RemoteRuntime::new();
+        let owner = NodeId::new(OWNER).expect("owner");
+        let generation = runtime.begin(&owner);
+        let (shared, mut outgoing, mut shutdown) = shared_channel(owner.clone());
+        let link = Link::new(
+            Arc::clone(&shared),
+            crate::handshake::HandshakeConfig::new(
+                Arc::new(TestAccessIdentity::new([0x71; 32])),
+                owner_trust,
+            ),
+            Arc::clone(&runtime),
+            generation,
+            Duration::from_secs(30),
+            Duration::from_secs(90),
+        );
+        let link_task = tokio::spawn(async move {
+            link.run(sink, source, &mut outgoing, &mut shutdown, Vec::new())
+                .await
+        });
+        wait_online(&shared).await;
+        wait_catalog(&runtime, &owner, 2).await;
+        let generation = RemoteRuntimeDirectory::snapshot(runtime.as_ref(), &owner)
+            .await
+            .expect("runtime snapshot")
+            .expect("online directory")
+            .generation;
+
+        let a_task = {
+            let runtime = Arc::clone(&runtime);
+            let session_a = core_remote(SESSION_A);
+            tokio::spawn(async move {
+                RemoteSourceReads::replay_barrier(runtime.as_ref(), &session_a, generation, None)
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if shared.attachment(&remote(SESSION_A)).is_some() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("A ticket published");
+
+        let b_task = {
+            let runtime = Arc::clone(&runtime);
+            let session_b = core_remote(SESSION_B);
+            tokio::spawn(async move {
+                RemoteSourceReads::replay_barrier(runtime.as_ref(), &session_b, generation, None)
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if shared.attachment(&remote(SESSION_B)).is_some() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("B ticket published");
+
+        let ticket_b_before = shared.attachment(&remote(SESSION_B)).expect("B ticket");
+        let state_b_before = runtime
+            .test_session_state(&owner, SESSION_B)
+            .expect("B runtime state");
+        assert!(
+            state_b_before
+                .barrier
+                .as_ref()
+                .is_none_or(|cursor| *cursor == core_cursor(EPOCH_B, 7))
+        );
+        assert_eq!(state_b_before.subscribers, 1);
+
+        let a_result = a_task.await.expect("A replay task");
+        assert!(a_result.is_err(), "the removed A session must be rejected");
+        assert!(shared.attachment(&remote(SESSION_A)).is_none());
+
+        let b_barrier = b_task.await.expect("B replay task").expect("B barrier");
+        assert_eq!(b_barrier.cursor, core_cursor(EPOCH_B, 7));
+        processed_rx
+            .await
+            .expect("client processed delayed A frames");
+        let ticket_b_after = shared
+            .attachment(&remote(SESSION_B))
+            .expect("unchanged B ticket");
+        let state_b_after = runtime
+            .test_session_state(&owner, SESSION_B)
+            .expect("unchanged B runtime state");
+        assert_eq!(ticket_b_after.id, ticket_b_before.id);
+        assert_eq!(ticket_b_after.generation, ticket_b_before.generation);
+        assert_eq!(ticket_b_after.remote, ticket_b_before.remote);
+        assert_eq!(ticket_b_after.meta, ticket_b_before.meta);
+        assert_eq!(state_b_after.barrier, Some(core_cursor(EPOCH_B, 7)));
+        assert_eq!(state_b_after.delivered, 7);
+        assert_eq!(state_b_after.subscribers, 1);
+
+        stop_tx.send(()).expect("stop owner");
+        owner_task.await.expect("owner task");
+        shared.stop();
+        link_task.await.expect("link task");
+    }
 }

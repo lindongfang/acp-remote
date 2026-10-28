@@ -205,41 +205,31 @@ artifacts:
       design covers how - plan covers who does what, in which isolated
       workspace, in which order, and how each piece is verified.
 
-      This repository executes with Oh My Pi (omp); the plan is written against
-      those primitives and must not invent another scheduler. Read
-      `docs/WORKFLOW.md` before writing the plan.
+      Read docs/WORKFLOW.md before writing the plan. Execution is tool-neutral:
+      use the current executor serially by default; use isolated workspaces only
+      when parallel implementation is needed. No specific host, model, agent
+      role, private report URI, or mandatory per-package reviewer is required.
 
       Required content, following the template's sections:
 
-      - **Execution Model**: restate the fixed primitives (batch `task`
-        dispatch, `task.isolation` in patch mode with `apply: false`, the
-        `<id>.patch` + `agent://<id>` + `history://<id>` deliverable, serial
-        `git apply` merge by the parent agent, repository-level checks only in
-        the main checkout). Keep it verifiable - a reviewer will check the plan
-        against this section.
-      - **Work Packages**: one row per dispatchable unit. `Write Scope` is a
-        repository-relative path or prefix; two packages MUST NOT write the
-        same place unless their order is serialized in Merge Order. `Agent` is
-        a task-tool agent name (`wp-coder`, `wp-tester`, `reviewer`).
-        `Dependencies` lists only real code/contract dependencies; use `none`
-        when there are none. Do not write "the whole batch depends on the other
-        batch" - dependencies are per package, not per wave.
-      - **Merge Order**: the serial order the parent agent applies patches in.
-        Every pair of packages with overlapping write scope MUST appear here.
-        A package applied after another that touched the same file MUST re-run
-        its verify step, because the earlier patch already changed the
-        workspace.
-      - **Project Verify**: only checks that run in the main checkout. The
-        isolated workspace has no `target/` and no `node_modules/`, so
-        `cargo test`, `npm run check`, and `npm run verify` cannot run there.
-      - **Code Review**: one row per work package, and the reviewer MUST be a
-        different spawn than the author. Review input is the patch plus
-        `agent://<id>` and `history://<id>`.
-      - **Main E2E**: choose `required` when the change has an observable
-        user-facing surface with a runnable entry (Web/PWA via the `browser`
-        prelude, desktop via the `computer` prelude). Otherwise use
-        `not-applicable` with `reason`, `basis`, and non-empty
-        `alternative_checks`.
+      - **Execution Model**: name the actual execution method, baseline,
+        ownership, integration method, and verification locations.
+      - **Work Packages**: one row per unit, with goal, dependencies, executor,
+        repository-relative write scope, deliverable, and executable checks.
+        Overlapping writes must be serialized in Merge Order.
+      - **Merge Order**: define integration order and re-verification for any
+        overlap. Direct serial implementation does not require a patch detour.
+      - **Project Verify**: list commands, working directories, prerequisites,
+        and pass conditions. Checks may run in any prepared workspace; final
+        validation must cover the exact integrated result to be submitted.
+      - **Code Review**: choose review proportional to risk. Low-risk changes
+        may use executor diff inspection and tests. Protocol, security,
+        persistence, concurrency, and cross-module risks warrant independent
+        review by an available person or agent, without host restrictions.
+        Record findings and resolution; do not call self-review independent.
+      - **Main E2E**: use required for runnable user-visible behavior and
+        choose available real-browser or desktop tools. Otherwise record
+        not-applicable, reason, basis, and alternative_checks.
 
       Keep the plan free of design rationale (that belongs in design.md) and of
       per-line task descriptions (those belong in tasks.md). Each work package

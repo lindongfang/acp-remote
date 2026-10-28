@@ -738,18 +738,6 @@ const frameFamilies = {
       控制帧速率: "maxControlFramesPerMinute",
     },
   },
-  // 准备控制面（`core.session-preparation.v1`）：临时控制帧，不是必须有持久 terminal event 的
-  // mutation。帧名同样必须是信封顶层 union 的**可达** type；预算行与命令登记逐项相等。
-  "core.session-preparation.v1": {
-    framesHeading: "#### 准备控制帧族",
-    budgetHeading: "#### 准备控制预算",
-    budgetRows: {
-      准备租约: "preparationLeaseMs",
-      续租间隔: "preparationRenewalIntervalMs",
-      控制帧速率: "maxControlFramesPerMinute",
-      操作去重窗口: "preparationOperationDedupSeconds",
-    },
-  },
 };
 
 /**

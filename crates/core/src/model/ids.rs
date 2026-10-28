@@ -262,15 +262,6 @@ newtype!(
     check_uuid
 );
 newtype!(
-    /// 首次提交标识（`docs/CORE_PORTS_AND_STORAGE.md` §3.9/§7.3 的 `owned_first_submission`）。
-    ///
-    /// 由服务端在首次受理事务前分配、与 `session_id` 一对一（唯一列）；它**不**等于附件清单的
-    /// [`SubmissionId`]（后者由客户端给出、标识一次附件清单），也不等于持久用户消息身份
-    /// [`MessageId`]。显式继续与 `command.status` 投影都以它为关联键。
-    FirstSubmissionId,
-    check_uuid
-);
-newtype!(
     /// 准备运行期 epoch：每个本进程准备运行期一个，正常重启改变。
     ///
     /// **运行期值，不落库**：它只用来拒绝旧代的准备操作（目标里的 `runtimeEpoch`），与持久

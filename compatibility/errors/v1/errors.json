@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-10-22",
+  "revision": "2026-10-26",
   "protocols": {
     "sync": {
       "subprotocol": "acp-remote.sync.v1.json",
@@ -52,9 +52,6 @@
         { "code": "attachment.budget_exhausted", "retryable": true, "details": null, "delivery": "mvp" },
         { "code": "attachment.expired", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "attachment.revoked", "retryable": false, "details": null, "delivery": "mvp" },
-        { "code": "preparation.stale", "retryable": true, "details": { "type": "object", "required": ["reason"], "additionalProperties": true, "properties": { "reason": { "enum": ["runtime_epoch_mismatch", "generation_mismatch", "released"] } } }, "delivery": "conditional_mvp" },
-        { "code": "preparation.already_committed", "retryable": false, "details": { "type": "object", "required": ["sessionId"], "additionalProperties": true, "properties": { "sessionId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" } } }, "delivery": "conditional_mvp" },
-        { "code": "preparation.store_rebuilt", "retryable": false, "details": null, "delivery": "conditional_mvp" },
         { "code": "media.unavailable", "retryable": false, "details": { "type": "object", "required": ["reason"], "additionalProperties": true, "properties": { "reason": { "enum": ["expired", "not_found", "external_uri_not_fetched"] } } }, "delivery": "mvp" },
         { "code": "interaction.unavailable", "retryable": false, "details": { "type": "object", "required": ["reason"], "additionalProperties": true, "properties": { "reason": { "enum": ["expired", "upstream_lost", "owner_offline"] } } }, "delivery": "mvp" },
         { "code": "interaction.version_conflict", "retryable": true, "details": { "type": "object", "required": ["currentVersion"], "additionalProperties": true, "properties": { "expectedVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" }, "currentVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" } } }, "delivery": "mvp" },

@@ -34,3 +34,10 @@ nix.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+test-support = []
+
+[[test]]
+name = "supervision"
+required-features = ["test-support"]

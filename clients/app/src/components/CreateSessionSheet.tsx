@@ -3,7 +3,7 @@
  *
  * ## MUST 的渲染落点
  *
- * 1. **载荷只含 `agentId`、一个目录引用与一个可选的建目录布尔**：本组件没有凭据、MCP 配置的
+ * 1. **载荷只含 `agentId` 与一个目录引用**：本组件没有凭据、MCP 配置的
  *    输入框；Agent 候选来自 `model.agents`（本机已配置的 Agent 目录），不是自由文本。
  * 2. **目录不由用户手工输入**：目录块只有两种形态——**已知目录**（从目录卡片/详情页进来：目录、
  *    路径两行）与**顶部入口**（目录未知：选择文件夹控件 + 已选路径 + 说明 + 四类分支提示）。
@@ -16,14 +16,14 @@
  * 5. **创建中与终态分别呈现**：`creating` 分支显示「创建中」且按钮禁用（不接受重复提交）；
  *    失败分支把**参数类**与**服务端不可用类**分开说明（`CREATE_FAILURE_NOTES`）。
  * 6. **结果不确定显眼且不被自动消解**：`uncertain` 分支是一个独立的、醒目的区块，
- *    它只由用户点击「我知道了」才消失。
+ *    不提供会误导用户以为结果已经处理完毕的关闭按钮。
  *
  * 迁移到 RNW 原语（`design.md` D1）：`View`/`Text`/`Pressable` + `StyleSheet`。可点控件一律
  * `role="button"`（RNW 据此渲染 `<button>`，`disabled` 也随之成为原生属性），列表语义用
  * `role="list"`/`role="listitem"` 补回；所有 `data-*` 属性名与取值原样经 `dataSet` 进 DOM。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { displayDirectoryPath } from "../domain/directory";
 import type { TextProps } from "react-native";
@@ -56,7 +56,7 @@ import {
 } from "./theme";
 
 /**
- * 提交时要带上的三样东西：选中的 Agent、用户看到的那个目录路径、以及是否允许「不存在则先创建」。
+ * 提交时要带上的两样东西：选中的 Agent 和用户看到的那个目录路径。
  *
  * `directoryPath` 留空表示「用入口所属的那个**已记录目录**」（目录标识引用）；顶部入口在回退列表里
  * 选中一项时同样留空——目录标识不在表单载荷里，而是由仓库从它自己的单份浏览状态里读。
@@ -64,12 +64,9 @@ import {
 export interface CreateSessionSubmit {
   readonly agentId: string;
   readonly directoryPath: string;
-  readonly createIfMissing: boolean;
 }
 
 export interface CreateSessionSheetProps {
-  /** 仅在服务端确认创建成功后调用；由页面负责关闭弹层并导航。 */
-  readonly onCreated?: (sessionId: string) => void;
   readonly model: CreateSessionEntryModel;
   /** 当前选中的 Agent 标识；`null` 表示尚未选择（此时不允许提交）。 */
   readonly selectedAgentId: string | null;
@@ -81,7 +78,6 @@ export interface CreateSessionSheetProps {
    * 可选：目录已知的形态用不到它。省略时该控件不呈现——目录块因此不会画一个点了没反应的按钮。
    */
   readonly onOpenDirectoryPicker?: (() => void) | undefined;
-  readonly onDismissUncertain: () => void;
   readonly onClose: () => void;
   /**
    * 提交在**本地闸门**就被拒绝的原因（未连接、所选 Agent 不在目录里、目录引用缺失）。
@@ -405,21 +401,7 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.sm,
       lineHeight: 20.8,
     },
-    dismiss: {
-      alignSelf: "flex-start",
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.md,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel,
-      borderWidth: 1,
-      borderColor: colors.warn,
-    },
-    dismissText: {
-      color: colors.warn,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      lineHeight: 20.8,
-    },
+
     submit: {
       alignSelf: "flex-start",
       paddingVertical: spacing.sm,
@@ -444,10 +426,8 @@ const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.
 /** 提交状态区块。 */
 function Submission({
   submission,
-  onDismissUncertain,
 }: {
   readonly submission: CreateSubmissionModel;
-  readonly onDismissUncertain: () => void;
 }): ReactElement | null {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -462,19 +442,11 @@ function Submission({
     );
   }
   if (submission.kind === "uncertain") {
-    // 显眼且不自动消解：只由下面的按钮（用户主动动作）结束。
+    // 显眼且不自动消解：没有会误导用户以为结果已经核实的关闭按钮。
     return (
       <View style={styles.uncertain} role="alert" dataSet={{ createSubmission: "uncertain" }}>
         <Text style={styles.uncertainTitle}>结果不确定</Text>
-        <Text style={styles.uncertainBody}>服务器无法确认这次创建是否已经生效。它不会自动消失，也不会随重连清除。</Text>
-        <Pressable
-          role="button"
-          style={styles.dismiss}
-          dataSet={{ action: "dismiss-uncertain" }}
-          onPress={onDismissUncertain}
-        >
-          <Text style={styles.dismissText}>我知道了</Text>
-        </Pressable>
+        <Text style={styles.uncertainBody}>服务器无法确认这次创建是否已经生效。原请求会保留，创建入口继续锁定，避免重复创建。</Text>
       </View>
     );
   }
@@ -523,23 +495,14 @@ export function CreateSessionSheet({
   onSelectAgent,
   onSubmit,
   onOpenDirectoryPicker,
-  onDismissUncertain,
   onClose,
-  onCreated,
   submitIssue = null,
 }: CreateSessionSheetProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const selectedAgentId = requestedAgentId ?? model.agents.find((agent) => agent.isDefault)?.id ?? null;
   const [directoryRequired, setDirectoryRequired] = useState(false);
-  const createdSessionId = model.submission.kind === "created" ? model.submission.sessionId : null;
   useModalFocus('[data-create-modal="open"]', onClose);
-  const navigatedSessionId = useRef<string | null>(null);
-  useEffect(() => {
-    if (createdSessionId === null || onCreated === undefined || navigatedSessionId.current === createdSessionId) return;
-    navigatedSessionId.current = createdSessionId;
-    onCreated(createdSessionId);
-  }, [createdSessionId, onCreated]);
 
   // 顶部入口的选定结果：目录引用由它给出（已记录目录用 `directoryId`，选定的路径用 `workspacePath`）。
   // 目录块先取成局部常量：下面按 `kind` 分支时 narrowing 只依赖这一个不可变绑定。
@@ -548,16 +511,13 @@ export function CreateSessionSheet({
   const picked = selection !== null && selection.kind === "path" ? selection : null;
   // 留空 = 用入口所属的已记录目录（或回退列表里选中的那一项）——目录标识不在表单载荷里。
   const directoryPath = picked === null ? "" : picked.path;
-  const createIfMissing = picked !== null && picked.willCreate;
   const selectedName =
     selection === null ? null : selection.kind === "registered" ? selection.displayName : selection.name;
   const selectedPath = selection === null ? null : selection.path;
 
   // 缺少目录通过点击后的行内校验反馈；不派发创建请求。
   const directorySelected = directory.kind === "known" || selection !== null;
-  // 准备能力未协商/未连上时入口**明确不可用**：既不禁用却偷偷走旧 `session.create`，也不静默失败。
-  const disabled =
-    selectedAgentId === null || !model.preparation.available || !isSubmissionAvailable(model.submission);
+  const disabled = selectedAgentId === null || !isSubmissionAvailable(model.submission);
   useEffect(() => {
     if (directorySelected) setDirectoryRequired(false);
   }, [directorySelected]);
@@ -712,12 +672,7 @@ export function CreateSessionSheet({
           <Text style={styles.failureText}>{submitIssue}</Text>
         </View>
       )}
-      {model.preparation.available ? null : (
-        <View role="alert" style={styles.failure} dataSet={{ createUnavailable: "true" }}>
-          <Text style={styles.failureText}>{model.preparation.reason ?? "当前不能新建会话"}</Text>
-        </View>
-      )}
-      <Submission submission={model.submission} onDismissUncertain={onDismissUncertain} />
+      <Submission submission={model.submission} />
       </View>
       <View style={styles.foot}>
         <Pressable role="button" style={styles.cancel} onPress={onClose} dataSet={{ action: "cancel-create-sheet" }}>
@@ -734,7 +689,7 @@ export function CreateSessionSheet({
             setDirectoryRequired(true);
             return;
           }
-          if (!disabled && selectedAgentId !== null) onSubmit({ agentId: selectedAgentId, directoryPath, createIfMissing });
+          if (!disabled && selectedAgentId !== null) onSubmit({ agentId: selectedAgentId, directoryPath });
         }}
       >
         <Text style={styles.submitText}>创建会话</Text>

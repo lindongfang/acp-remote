@@ -46,7 +46,6 @@ import type {
   SessionRef,
   SessionSummary,
   SnapshotItemHistory,
-  SyncSessionPreparationResult,
   SyncSessionViewResult,
   SnapshotItemMessages,
   Uuid,
@@ -94,7 +93,6 @@ function delay(ms: number): Promise<void> {
 import {
   AgentConnectionOverlayStore,
   ATTACHMENT_FEATURE,
-  AttachmentTransferError,
   LOCAL_SESSION_LIFECYCLE_FEATURE,
   PENDING_INTERACTIONS_FEATURE,
   SESSION_HISTORY_FEATURE,
@@ -109,7 +107,6 @@ import type {
   PendingInteractionInput,
 } from "./interaction-model";
 import type { AllFilesDirectoryView, FileSource, FileSourceUnsupportedReason, GitDiffView } from "../domain/session-files";
-import { displayDirectoryPath } from "../domain/directory";
 import {
   SESSION_FILES_FEATURE,
   WORKSPACE_FILES_FEATURE,
@@ -209,12 +206,6 @@ import type {
   AttachmentTransferGateway,
   ConnectionIdentity,
   IdentifierSource,
-  PreparationDraftAccess,
-  PreparationDraftAttachmentInput,
-  PreparationDraftContent,
-  PreparationDraftGateway,
-  PreparationDraftScope,
-  PreparationTabLocatorSnapshot,
   SyncGateway,
 } from "./ports";
 import type {
@@ -299,38 +290,6 @@ import {
 } from "./directory-model";
 import type { HostIdentityModel, HostPanelModel } from "./host-panel-model";
 import { buildHostPanelModel } from "./host-panel-model";
-import type {
-  PreparationAssociation,
-  PreparationBeginOutcome,
-  PreparationPageModel,
-  PreparationSessionState,
-  PreparationSlotRoute,
-  PreparationWorkspace,
-  PreparationWorkspaceInput,
-} from "./preparation-model";
-import {
-  PREPARATION_DUPLICATE_TAB_NOTICE,
-  PREPARATION_NO_TAB_NONCE_NOTICE,
-  PREPARATION_NOT_RESTORABLE_NOTICE,
-  PREPARATION_PHASE_LABELS,
-  PREPARATION_RENEW_INTERVAL_MS,
-  PREPARATION_STORAGE_FAILED_NOTICE,
-  PREPARATION_STORE_REBUILT_NOTICE,
-  PREPARATION_UNCERTAIN_NOTICE,
-  PREPARATION_UNSUPPORTED_NOTICE,
-  SESSION_PREPARATION_FEATURE,
-  buildAllocateBody,
-  buildConfigureBody,
-  buildContinueStartBody,
-  buildInitialContent,
-  buildInitialStartBody,
-  buildPreparationPageModel,
-  buildReleaseBody,
-  buildRenewBody,
-  buildRestoreBody,
-  isSessionStartProjection,
-  preparationErrorAction,
-} from "./preparation-model";
 import type {
   PairingKind,
   PairingLookupOutcome,
@@ -612,11 +571,10 @@ function activationShapeFailure(): ActivationFailure {
 }
 
 /**
- * 本设备已提交、尚未被权威消息接替的用户消息。
+ * A locally submitted user message awaiting authoritative replacement.
  *
- * 本地条目只有**可靠身份**：`turnId` 来自 `session.prompt` 的 `accepted { turnId }`（首条
- * `session.start` 没有该字段，用它准备关联的 `messageId` 或权威读取确认的首条消息）；
- * 视图层只按这些标识接替，不按相同文字或时间接近推断重复。
+ * turnId comes from session.prompt acceptance. Until authoritative session.read confirms the formal
+ * message, messageId stays null; text and timing never establish identity.
  */
 export interface SentPrompt {
   readonly requestId: Uuid;
@@ -633,6 +591,27 @@ export interface SentPrompt {
   readonly messageId: string | null;
   /** 本地实情（上传失败/取消说明）；没有为 `null`。 */
   readonly notice: string | null;
+}
+
+/**
+ * 一次性应用导航意图。
+ *
+ * 路由只消费这里的目标；创建命令回调和删除事件归并都不直接调用 `router`。
+ */
+export type AppNavigationTarget =
+  | { readonly kind: "session"; readonly sessionId: Uuid; readonly reason: "created" }
+  | { readonly kind: "home"; readonly sessionId: Uuid; readonly reason: "deleted" };
+
+/**
+ * 当前创建请求的导航归属。
+ *
+ * 只有 `requestId` 与这份意图仍匹配的 completed 结果才可产生导航。用户开始别的导航时清掉它，
+ * 使迟到的创建结果只更新摘要。
+ */
+export interface CreateNavigationIntent {
+  readonly sheetKey: string;
+  readonly requestId: Uuid;
+  readonly phase: "pending" | "completed";
 }
 
 /** 客户端状态（不可变快照）。 */
@@ -701,13 +680,6 @@ export interface ClientState {
   readonly titleNotices: ReadonlyMap<Uuid, string>;
   /** 已选择的附件（只在内存；选择阶段不上传、不落盘）。 */
   readonly attachments: ReadonlyMap<Uuid, readonly DraftAttachment[]>;
-  /**
-   * Web 准备状态（键是 Owner 分配的 `sessionId`）。
-   *
-   * 存在即「这个 ID 当前是准备会话」：没有正式会话行、模式/配置来自临时真实端点。
-   * 正式受理之后这一项仍保留（承载请求关联与状态），但页面改读正式会话。
-   */
-  readonly preparations: ReadonlyMap<Uuid, PreparationSessionState>;
   /** 每次发送尝试的上传/清单状态；与命令记录分离。 */
   readonly attachmentRuns: ReadonlyMap<Uuid, AttachmentRunState>;
   /** 工作目录路径引用（相对路径；与服务端再校验之前只是草稿的一部分）。 */
@@ -737,6 +709,14 @@ export interface ClientState {
   readonly commands: ReadonlyMap<Uuid, CommandRecord>;
   /** 每个目录当前那次创建会话的 `requestId`；未提交过的目录没有键。 */
   readonly createRequestIds: ReadonlyMap<string, Uuid>;
+  /** 当前仍拥有路由归属的创建意图；用户发生别的导航后为 `null`。 */
+  readonly createNavigationIntent: CreateNavigationIntent | null;
+  /** 路由适配层尚未消费的一次性导航。 */
+  readonly navigationTarget: AppNavigationTarget | null;
+  /** 已确认删除的会话；后续快照和重放都不得重新引入。 */
+  readonly deletedSessionIds: ReadonlySet<Uuid>;
+  /** 已应用的删除事件标识，防止同一事件进入普通结构化记录。 */
+  readonly appliedSessionDeletedEventIds: ReadonlySet<string>;
   /** 结果不确定的 `requestId`：保留到用户主动处理，不随时间或重连清除。 */
   readonly uncertainRequestIds: readonly Uuid[];
   readonly createSheetDirectoryId: string | null;
@@ -815,7 +795,6 @@ export function initialClientState(): ClientState {
     titleCommits: new Map(),
     titleNotices: new Map(),
     attachments: new Map(),
-    preparations: new Map(),
     attachmentRuns: new Map(),
     pathRefs: new Map(),
     attachmentMedia: new Map(),
@@ -829,6 +808,10 @@ export function initialClientState(): ClientState {
     switchIntents: new Map(),
     commands: new Map(),
     createRequestIds: new Map(),
+    createNavigationIntent: null,
+    navigationTarget: null,
+    deletedSessionIds: new Set(),
+    appliedSessionDeletedEventIds: new Set(),
     uncertainRequestIds: [],
     createSheetDirectoryId: null,
     createSheetBrowses: false,
@@ -1146,11 +1129,30 @@ function clearRemoteSessionData(
   };
 }
 
-/** 会话摘要 → 替换 `resources.sessions` 里的同 id 条目（目录汇总随之更新）。 */
-function withSessionSummary(resources: StagedResources | null, summary: SessionSummary): StagedResources | null {
-  if (resources === null) return resources;
+/**
+ * 会话摘要的唯一写入入口。
+ *
+ * 墓碑优先于版本、事件类型和来源：已经确认删除的会话不会被迟到的读取、恢复结果或
+ * `session.created` 重新插回清单。调用方必须传入当前墓碑集合，避免新增写入路径绕过过滤。
+ */
+function withSessionSummary(
+  resources: StagedResources | null,
+  summary: SessionSummary,
+  deletedSessionIds: ReadonlySet<Uuid>,
+): StagedResources | null {
+  if (resources === null || deletedSessionIds.has(summary.sessionId)) return resources;
   const rest = resources.sessions.filter((item) => item.sessionId !== summary.sessionId);
   return { ...resources, sessions: [summary, ...rest] };
+}
+
+/** 删除确认之后，任何晚到或重放的快照都不能把会话重新放回目录。 */
+function withoutDeletedSessionSummaries(
+  resources: StagedResources,
+  deletedSessionIds: ReadonlySet<Uuid>,
+): StagedResources {
+  if (deletedSessionIds.size === 0) return resources;
+  const sessions = resources.sessions.filter((summary) => !deletedSessionIds.has(summary.sessionId));
+  return sessions.length === resources.sessions.length ? resources : { ...resources, sessions };
 }
 
 /**
@@ -1162,15 +1164,31 @@ function withSessionSummary(resources: StagedResources | null, summary: SessionS
 function withVersionedSummary(
   resources: StagedResources | null,
   summary: SessionSummary,
+  deletedSessionIds: ReadonlySet<Uuid>,
 ): StagedResources | null {
-  if (resources === null) return resources;
+  if (resources === null || deletedSessionIds.has(summary.sessionId)) return resources;
   const existing = resources.sessions.find((item) => item.sessionId === summary.sessionId);
   if (existing !== undefined) {
     const incoming = BigInt(summary.version);
     const current = BigInt(existing.version);
     if (incoming < current) return resources;
   }
-  return withSessionSummary(resources, summary);
+  return withSessionSummary(resources, summary, deletedSessionIds);
+}
+
+/** 从命令结果中取出直接或经摘要携带的会话标识；用于过滤删除后的迟到结果。 */
+function commandResultSessionId(result: CommandResultMessage): Uuid | null {
+  const value = toResultRecord(result.body.result);
+  if (value === null) return null;
+  const direct = value["sessionId"];
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  for (const key of ["session", "sessionSummary"] as const) {
+    const summaryValue = value[key];
+    if (typeof summaryValue !== "object" || summaryValue === null || Array.isArray(summaryValue)) continue;
+    const sessionId = (summaryValue as Readonly<Record<string, unknown>>)["sessionId"];
+    if (typeof sessionId === "string" && sessionId.length > 0) return sessionId;
+  }
+  return null;
 }
 
 /**
@@ -1196,6 +1214,13 @@ function sessionSummaryIn(event: EventMessage): SessionSummary | null {
   const state = "state" in summary ? summary.state : undefined;
   if (state !== "idle" && state !== "running" && state !== "pending") return null;
   return summary as SessionSummary;
+}
+
+/** `session.deleted` 的最小 typed 视图：唯一事实是 payload 中的会话标识。 */
+function deletedSessionIdIn(event: EventMessage): Uuid | null {
+  if (event.body.eventType !== "session.deleted") return null;
+  const sessionId = event.body.payload.view["sessionId"];
+  return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : null;
 }
 
 /** 远程事件摘要：会话标识、来源节点都必须与订阅一致，否则不采用。 */
@@ -1644,19 +1669,6 @@ export interface ClientStoreOptions {
         readonly transfer: AttachmentTransferGateway;
       }
     | undefined;
-  /**
-   * 浏览器准备草稿端口（组合根注入平台实现）。
-   *
-   * 缺省时准备流程仍可分配/发送（草稿只在内存），但页面 MUST 明确说明「刷新无法恢复」，
-   * 不能报告完整保存成功。
-   */
-  readonly preparationDrafts?: PreparationDraftGateway | undefined;
-  /**
-   * 每个标签页的准备归属 nonce（32 字节 base64url，进入凭据 claims、不进入 URL）。
-   *
-   * 缺省时无法发起准备：凭据不能凭空拼出一个 nonce，宁可在入口明确失败。
-   */
-  readonly preparationTabNonce?: (() => string) | undefined;
 }
 
 /** 一条在途的文件栏查询（请求代次与返回上下文在结果到达时逐项核对）。 */
@@ -1777,61 +1789,6 @@ export class ClientStore {
   readonly #mediaReads = new Map<string, number>();
   /** 同一附件的在途读取：并发调用共享同一个 Promise；代次用于跨卸载/重建串行化。 */
   readonly #mediaLoads = new Map<string, { readonly generation: number; readonly promise: Promise<void> }>();
-  /** 浏览器准备草稿端口（未装配时草稿只在内存，页面如实说明刷新不可恢复）。 */
-  readonly #preparationDrafts: PreparationDraftGateway | null;
-  readonly #preparationTabNonce: (() => string) | null;
-  /** 每个准备会话的草稿访问句柄与最近一次写入的版本。 */
-  readonly #preparationDraftAccess = new Map<
-    Uuid,
-    { readonly access: PreparationDraftAccess; revision: number | null; readonly restorable: boolean }
-  >();
-  /** 等待分配结果的 `allocate` 操作（按 `operationId`）。迟到的旧操作不在表内即被忽略。 */
-  readonly #pendingAllocations = new Map<
-    Uuid,
-    {
-      readonly resolve: (outcome: PreparationBeginOutcome) => void;
-      readonly agentId: string;
-      readonly workspace: PreparationWorkspace;
-      readonly tabNonce: string;
-    }
-  >();
-  /** 每个准备会话当前在飞的准备操作；应答必须与它逐字匹配才生效。 */
-  readonly #preparationOps = new Map<Uuid, { readonly operationId: Uuid; readonly kind: "restore" | "configure" | "renew" | "release" }>();
-  /** 每个 ready 准备的续租计时器（隐藏/断开/受理/释放都取消）。 */
-  readonly #preparationRenewTimers = new Map<Uuid, () => void>();
-  /** 本连接上已经发过的首条状态查询（重连后清空；同一目标不重复查）。 */
-  readonly #preparationStatusQueries = new Set<Uuid>();
-  /** 「先核实原 start，再 restore」的待办会话（`preparation.stale` 的固定动作）。 */
-  readonly #preparationVerifyThenRestore = new Set<Uuid>();
-  /** 已恢复的附件字节（刷新后不依赖原 File/Blob 句柄）。 */
-  readonly #restoredAttachmentBytes = new Map<string, Uint8Array>();
-  /** 同一准备会话的首条提交（防止双击产生第二次执行）。 */
-  readonly #preparationSubmissions = new Set<Uuid>();
-  /** 首条的上传清单标识：一次提交尝试内稳定（重试复用）。 */
-  readonly #preparationSubmissionIds = new Map<Uuid, Uuid>();
-  /** `requestId → 准备会话`：`command.result` 只带请求标识，需要它才能归并到同一准备。 */
-  readonly #preparationRequestSessions = new Map<Uuid, Uuid>();
-  /** 已受理、等待权威读取验证的会话：读到完整会话后才清浏览器正文/Blob。 */
-  readonly #preparationAwaitingRead = new Set<Uuid>();
-  /** 归并阶段不能做的副作用（读会话、发控制帧）：提交完成后再执行。 */
-  readonly #preparationEffects: (() => void)[] = [];
-  /** 正在尝试恢复准备的会话：未知 URL 的跳转必须等它落地（否则合法准备会被误判成不存在）。 */
-  readonly #preparationOpening = new Set<Uuid>();
-  /**
-   * 唯一准备槽位的在途分配。
-   *
-   * 所有普通新建入口共用一个闸门：已有在途分配时再次新建只会拿到同一个 Promise，
-   * 不会发第二帧 `allocate`，也不会按入口各自的目录分配第二个 ID。
-   */
-  #pendingSlotAllocation: Promise<PreparationBeginOutcome> | null = null;
-  /** 页面请求过从本标签页定位恢复槽位：主机身份/认证就绪后自动补一次。 */
-  #tabRestoreRequested = false;
-  /** 启动时读定位并恢复槽位的在途任务（并发调用共享）。 */
-  #tabRestoreInFlight: Promise<Uuid | null> | null = null;
-  /** 正在显式更换 Agent 的会话（防重复替换）。 */
-  readonly #preparationBusy = new Set<Uuid>();
-  /** 草稿正文的合并写定时器（按键路径去重）。 */
-  readonly #preparationSaveTimers = new Map<Uuid, () => void>();
   #pairingSession: PairingSession | null = null;
   #state: ClientState = initialClientState();
 
@@ -1845,8 +1802,6 @@ export class ClientStore {
     this.#schedule = options.schedule ?? null;
     this.#attachmentMedia = options.attachments?.media ?? null;
     this.#attachmentTransfer = options.attachments?.transfer ?? null;
-    this.#preparationDrafts = options.preparationDrafts ?? null;
-    this.#preparationTabNonce = options.preparationTabNonce ?? null;
   }
 
   /** 当前状态。 */
@@ -1902,15 +1857,17 @@ export class ClientStore {
   apply(event: SyncClientEvent): void {
     const readPending = event.kind === "command_result" ? this.#pendingReads.get(event.result.body.requestId) : undefined;
     const wasOnline = this.#state.connection.state === "online";
+    const deletedCurrentSessionId =
+      event.kind === "event" &&
+      event.event.body.eventType === "session.deleted" &&
+      deletedSessionIdIn(event.event) === this.#activeConversationSession
+        ? deletedSessionIdIn(event.event)
+        : null;
     // 归并前后用来判断「哪些会话的线程被删掉了」：时间线复用层随会话一起释放。
     const threadsBefore = this.#state.threads;
     // 新连接上的结果查询重新计数：同一条标题命令每次重连后都会再查一次原请求。
     if (event.kind === "authenticated") {
       this.#titleStatusQueries.clear();
-      this.#preparationStatusQueries.clear();
-      this.#preparationOps.clear();
-      // 旧连接上的分配应答不会再来：结束在途闸门，避免永久挡住下一次新建。
-      this.#dropPendingSlotAllocations("连接已更新，这次新建没有完成，请重试");
     }
     const reduced = this.#reduce(event);
     // 连接离开 online（closed/blocked）或建立新连接（authenticated）后，旧连接上的在途
@@ -1945,6 +1902,18 @@ export class ClientStore {
       }
     }
     this.#commit(settled);
+    if (deletedCurrentSessionId !== null) {
+      const view = this.#state.lifecycle.view;
+      if (
+        view !== null &&
+        view.sessionId === null &&
+        this.#state.connection.state === "online" &&
+        this.#identity.connectionId !== null
+      ) {
+        // 删除事件使当前选中会话立即消失；同一连接仍要声明离开，保留单调版本并释放 viewer。
+        this.#sync.setSessionView({ sessionId: null, viewVersion: view.viewVersion });
+      }
+    }
     this.#pruneTimelineEntries(threadsBefore);
     if (readPending !== undefined) this.#alignTimelineWindow(readPending.sessionId);
     if (!wasOnline && this.#state.connection.state === "online" && this.#activeConversationSession !== null) {
@@ -1954,34 +1923,18 @@ export class ClientStore {
     this.#drainQueuedFileRefreshes();
     this.#drainQueuedMessageRefreshes();
     this.#drainQueuedInteractionRefreshes();
-    // 归并阶段推迟的副作用（请求正式会话、发准备控制帧）在提交之后执行。
-    this.#drainPreparationEffects();
-    // 首条受理后的权威读取：读到完整会话才清浏览器正文/Blob（只保留请求关联）。
-    this.#drainPreparationsAwaitingRead();
     // 连接代变化或重新追平：可见的当前会话要立即重新声明并激活（§11.8 的页面顺序）。
     // 断开/阻断时先停续租：旧连接上的计时器不得继续发帧。
     if (event.kind === "closed" || event.kind === "blocked") {
       this.#cancelViewRenewal();
-      this.#cancelAllPreparationRenewals();
-      // 旧连接上的准备操作不会再有应答：清掉在飞标记，重连后按 restore/状态查询重新收口。
-      this.#preparationOps.clear();
-      this.#preparationStatusQueries.clear();
-      this.#dropPendingSlotAllocations("连接已断开，这次新建没有完成，请重试");
     }
     if (event.kind === "online") {
       this.#ensureLifecycle("authenticated");
-      this.#recoverPreparations();
-    }
-    if (this.#tabRestoreRequested && (event.kind === "authenticated" || event.kind === "snapshot_verified")) {
-      // 页面已经在等槽位恢复：主机身份/认证到这个时点才可用，补读一次定位。
-      void this.restoreTabPreparation();
     }
     if (event.kind === "authenticated") {
       this.#drainDeferredReads();
       // 认证完成即查询上一条连接上未收束的标题命令（原 requestId，不重发）。
       this.#drainTitleStatusQueries();
-      // 同一 ID 重新准备：存活阶段 restore，`submitting` 只查原请求（不重发）。
-      this.#recoverPreparations();
     }
     if (event.kind === "snapshot_verified") {
       // 快照到达后才能判定来源：补发延迟读取，并为已打开的远程会话建立订阅与重建。
@@ -2087,16 +2040,16 @@ export class ClientStore {
           },
         }));
       case "snapshot_verified":
-        return { ...this.#state, resources: event.snapshot.resources };
+        return {
+          ...this.#state,
+          resources: withoutDeletedSessionSummaries(event.snapshot.resources, this.#state.deletedSessionIds),
+        };
       case "event":
         return this.#withEvent(event.event);
       case "command_result":
         return this.#withCommandResult(event.result);
       case "session_view_result":
         return this.#withViewResult(event.result);
-      case "session_preparation_result":
-        // 准备应答按 `operationId` 归并：迟到/旧代的应答不改变当前状态。
-        return this.#withPreparationResult(this.#state, event.result);
       case "remote_subscribing":
         return this.#withRemoteSubscribing(event);
       case "remote_event":
@@ -2172,8 +2125,6 @@ export class ClientStore {
     const hidden = event.kind === "pagehide" || event.state === "hidden";
     if (hidden) {
       this.#cancelViewRenewal();
-      // 后台不保活临时 Agent：隐藏即停止续租（返回可见时再恢复）。
-      this.#cancelAllPreparationRenewals();
       // 声明必须在状态提交后发出（且只在已认证连接上）；`#declareView` 自己处理这些前提。
       const lifecycle = { ...current, visibility: "hidden" as const };
       if (lifecycle !== current) this.#commit({ ...this.#state, lifecycle });
@@ -2182,7 +2133,6 @@ export class ClientStore {
     }
     this.#commit({ ...this.#state, lifecycle: { ...current, visibility: "visible" } });
     this.#ensureLifecycle("visible");
-    this.#recoverPreparations();
   }
 
   /** 触发一次尝试的原因（决定是否重新派发 `session.resume`）。 */
@@ -2294,6 +2244,11 @@ export class ClientStore {
     }
     // 结果无法证明：结果未知，绝不自动换 `requestId` 重派；只有显式重试才处理。
     if (existing?.failure?.kind === "uncertain" && existing.requestId !== null) return existing.requestId;
+    const summary = this.#findSession(sessionId);
+    const activity = summary === undefined ? null : localActivityOf(summary, true);
+    // 服务端摘要已经宣布资源 active/pending 时，页面从第一帧就是 ready；resume 仍照常发出，
+    // 以完成查看租约衔接并复用已 ready 的资源，避免 UI 先闪一下 idle/activating。
+    const optimisticPhase = activity === "active" || activity === "pending" ? "ready" : "activating";
     const requestId = this.#dispatchIntent({
       sessionId,
       build: (id): CommandBody => ({
@@ -2307,7 +2262,7 @@ export class ClientStore {
           ...this.#state.lifecycle,
           activations: withSessionActivation(this.#state.lifecycle.activations, {
             sessionId,
-            phase: "activating",
+            phase: optimisticPhase,
             requestId: id,
             connectionGeneration: this.#state.lifecycle.generation,
             failure: null,
@@ -2404,9 +2359,9 @@ export class ClientStore {
     if (connectionId === null || result.connectionId !== connectionId) return state;
     const lifecycle = state.lifecycle;
     const entry = findActivationByRequest(lifecycle.activations, result.body.requestId);
-    if (entry === null) return state;
+    if (entry === null || state.deletedSessionIds.has(entry.sessionId)) return state;
     if (result.body.status === "accepted") {
-      if (entry.phase === "activating") return state;
+      if (entry.phase === "activating" || entry.phase === "ready") return state;
       return {
         ...state,
         lifecycle: {
@@ -2439,7 +2394,7 @@ export class ClientStore {
       }
       return {
         ...state,
-        resources: withSessionSummary(state.resources, summary),
+        resources: withSessionSummary(state.resources, summary, state.deletedSessionIds),
         lifecycle: {
           ...lifecycle,
           activations: withSessionActivation(lifecycle.activations, {
@@ -2469,7 +2424,7 @@ export class ClientStore {
   #withActivationStatus(state: ClientState, record: CommandStatusRecord): ClientState {
     const lifecycle = state.lifecycle;
     const entry = findActivationByRequest(lifecycle.activations, record.targetRequestId);
-    if (entry === null) return state;
+    if (entry === null || state.deletedSessionIds.has(entry.sessionId)) return state;
     if (record.state === "completed") {
       // 与 `#withActivationResult` 同一判据：形状不符不得打开发送门，按明确失败处理。
       const summary = resumedSummaryOf(record.result, entry.sessionId);
@@ -2488,7 +2443,7 @@ export class ClientStore {
       }
       return {
         ...state,
-        resources: withSessionSummary(state.resources, summary),
+        resources: withSessionSummary(state.resources, summary, state.deletedSessionIds),
         lifecycle: {
           ...lifecycle,
           activations: withSessionActivation(lifecycle.activations, {
@@ -2650,7 +2605,7 @@ export class ClientStore {
     if (remoteEvent.eventType === "session.created" || remoteEvent.eventType === "session.updated") {
       const summary = view["session"];
       if (isRemoteSummary(summary, sessionId, ownerNodeId)) {
-        next = { ...next, resources: withSessionSummary(next.resources, summary) };
+        next = { ...next, resources: withSessionSummary(next.resources, summary, next.deletedSessionIds) };
       }
     }
     if (remoteEvent.eventType === "session.usage.changed") {
@@ -2782,12 +2737,286 @@ export class ClientStore {
   }
 
   /**
+   * 删除事件是会话生命周期的终止事实，必须优先于普通结构化记录与所有摘要/正文归并。
+   *
+   * `eventId` 与 `sessionId` 两层幂等键共同覆盖两种重放：同一事件重复投递，以及历史重建时
+   * 用另一个事件标识重复宣告同一会话已删除。后者只记住事件，不再产生第二次路由跳转。
+   */
+  #withSessionDeleted(event: EventMessage, sessionId: Uuid): ClientState {
+    const eventKey = `local:${event.body.eventId}`;
+    if (this.#state.appliedSessionDeletedEventIds.has(eventKey)) return this.#state;
+    const appliedSessionDeletedEventIds = new Set(this.#state.appliedSessionDeletedEventIds);
+    appliedSessionDeletedEventIds.add(eventKey);
+    if (this.#state.deletedSessionIds.has(sessionId)) {
+      return { ...this.#state, appliedSessionDeletedEventIds };
+    }
+
+    const wasCurrent =
+      this.#activeConversationSession === sessionId ||
+      this.#state.lifecycle.selectedSessionId === sessionId;
+    this.#dropSessionRuntime(sessionId, wasCurrent);
+
+    const removedRequestIds = new Set<Uuid>();
+    const commands = new Map(this.#state.commands);
+    for (const [requestId, record] of commands) {
+      const createdSessionId = record.command === "session.create" ? record.result?.["sessionId"] : undefined;
+      if (record.sessionId !== sessionId && createdSessionId !== sessionId) continue;
+      commands.delete(requestId);
+      removedRequestIds.add(requestId);
+    }
+
+    const deletedSessionIds = new Set(this.#state.deletedSessionIds);
+    deletedSessionIds.add(sessionId);
+    const createRequestIds = new Map(this.#state.createRequestIds);
+    for (const [sheetKey, requestId] of createRequestIds) {
+      if (removedRequestIds.has(requestId)) createRequestIds.delete(sheetKey);
+    }
+    const createNavigationIntent =
+      this.#state.createNavigationIntent !== null &&
+      removedRequestIds.has(this.#state.createNavigationIntent.requestId)
+        ? null
+        : this.#state.createNavigationIntent;
+
+    const structured = new Map(this.#state.structured);
+    for (const [key, record] of structured) {
+      if (record.sessionId === sessionId) structured.delete(key);
+    }
+    const history = new Map(this.#state.history);
+    for (const [key, record] of history) {
+      if (record.sessionId === sessionId) history.delete(key);
+    }
+    const volatile = new Map(this.#state.volatile);
+    for (const [messageId, tail] of volatile) {
+      if (tail.sessionId === sessionId) volatile.delete(messageId);
+    }
+    const sentPrompts = new Map(this.#state.sentPrompts);
+    for (const [requestId, prompt] of sentPrompts) {
+      if (prompt.sessionId === sessionId) sentPrompts.delete(requestId);
+    }
+    const titleCommits = new Map(this.#state.titleCommits);
+    for (const [requestId, commit] of titleCommits) {
+      if (commit.sessionId === sessionId) titleCommits.delete(requestId);
+    }
+    const attachments = new Map(this.#state.attachments);
+    for (const attachment of attachments.get(sessionId) ?? []) {
+      if (attachment.previewUrl !== null) this.#attachmentMedia?.releaseUrl(attachment.previewUrl);
+      this.#attachmentHandles.delete(attachment.localId);
+    }
+    attachments.delete(sessionId);
+    const attachmentRuns = new Map(this.#state.attachmentRuns);
+    attachmentRuns.delete(sessionId);
+    const attachmentMedia = new Map(this.#state.attachmentMedia);
+    for (const [attachmentId, media] of attachmentMedia) {
+      if (media.sessionId !== sessionId) continue;
+      this.#mediaReads.set(attachmentId, (this.#mediaReads.get(attachmentId) ?? 0) + 1);
+      if (media.kind === "ready") this.#attachmentMedia?.releaseUrl(media.url);
+      attachmentMedia.delete(attachmentId);
+    }
+
+    const threads = new Map(this.#state.threads);
+    threads.delete(sessionId);
+    const readResources = new Map(this.#state.readResources);
+    readResources.delete(sessionId);
+    const usage = new Map(this.#state.usage);
+    usage.delete(sessionId);
+    const modeStates = new Map(this.#state.modeStates);
+    modeStates.delete(sessionId);
+    const switchIntents = new Map(this.#state.switchIntents);
+    switchIntents.delete(sessionId);
+    const promptRequestIds = new Map(this.#state.promptRequestIds);
+    promptRequestIds.delete(sessionId);
+    const responseRequestIds = new Map(this.#state.responseRequestIds);
+    const cancelRequestIds = new Map(this.#state.cancelRequestIds);
+    for (const [key, requestId] of responseRequestIds) {
+      if (removedRequestIds.has(requestId)) responseRequestIds.delete(key);
+    }
+    for (const [key, requestId] of cancelRequestIds) {
+      if (removedRequestIds.has(requestId)) cancelRequestIds.delete(key);
+    }
+    const discardedTurns = new Set(this.#state.discardedTurns);
+    for (const key of discardedTurns) {
+      if (key.startsWith(`${sessionId}|`)) discardedTurns.delete(key);
+    }
+    const sessionFilesSources = new Map(this.#state.sessionFiles.sources);
+    sessionFilesSources.delete(sessionId);
+    const selectedSources = new Map(this.#state.sessionFiles.selectedSources);
+    selectedSources.delete(sessionId);
+    const refreshResults = this.#state.sessionFiles.refreshResults === undefined
+      ? undefined
+      : new Map(this.#state.sessionFiles.refreshResults);
+    if (refreshResults !== undefined) {
+      for (const key of refreshResults.keys()) {
+        if (key.startsWith(`${sessionId}|`)) refreshResults.delete(key);
+      }
+    }
+    const sessionFiles = {
+      ...this.#state.sessionFiles,
+      selectedSources,
+      sources: sessionFilesSources,
+      ...(refreshResults === undefined ? {} : { refreshResults }),
+      content:
+        this.#state.sessionFiles.content.kind === "file" &&
+        this.#state.sessionFiles.content.context.sessionId === sessionId
+          ? { kind: "conversation" as const }
+          : this.#state.sessionFiles.content,
+      generation:
+        this.#state.sessionFiles.content.kind === "file" &&
+        this.#state.sessionFiles.content.context.sessionId === sessionId
+          ? this.#state.sessionFiles.generation + 1
+          : this.#state.sessionFiles.generation,
+    };
+
+    const lifecycle = this.#state.lifecycle;
+    const activations = new Map(lifecycle.activations);
+    activations.delete(sessionId);
+    const leaveVersion =
+      lifecycle.view === null || !canAdvanceViewVersion(lifecycle.view.viewVersion)
+        ? null
+        : nextViewVersion(lifecycle.view.viewVersion);
+    const leavingView =
+      wasCurrent &&
+      lifecycle.negotiated &&
+      leaveVersion !== null
+        ? {
+            sessionId: null,
+            viewVersion: leaveVersion,
+            connectionGeneration: lifecycle.generation,
+            leaseExpiresAt: null,
+          }
+        : null;
+    const withoutDeletedActivation = {
+      ...lifecycle,
+      selectedSessionId: wasCurrent ? null : lifecycle.selectedSessionId,
+      view: wasCurrent ? leavingView : lifecycle.view,
+      leaseExpiresAt: wasCurrent ? null : lifecycle.leaseExpiresAt,
+      activations,
+    };
+    const navigationTarget: AppNavigationTarget | null = wasCurrent
+      ? { kind: "home", sessionId, reason: "deleted" }
+      : this.#state.navigationTarget?.sessionId === sessionId
+        ? null
+        : this.#state.navigationTarget;
+    const titleEditor =
+      this.#state.titleEditor.sessionId === sessionId
+        ? initialSessionTitleEditorState()
+        : this.#state.titleEditor;
+    const sentPromptAnchors = new Map(this.#state.sentPromptAnchors);
+    sentPromptAnchors.delete(sessionId);
+    const titleNotices = new Map(this.#state.titleNotices);
+    titleNotices.delete(sessionId);
+    const pathRefs = new Map(this.#state.pathRefs);
+    pathRefs.delete(sessionId);
+    const remoteSessions = new Map(this.#state.remoteSessions);
+    remoteSessions.delete(sessionId);
+    const resources =
+      this.#state.resources === null
+        ? null
+        : {
+            ...this.#state.resources,
+            sessions: this.#state.resources.sessions.filter((summary) => summary.sessionId !== sessionId),
+          };
+
+    return {
+      ...this.#state,
+      resources,
+      structured,
+      history,
+      volatile,
+      discardedTurns,
+      drafts: withoutEntry(this.#state.drafts, sessionId),
+      titleEditor,
+      titleCommits,
+      titleNotices,
+      attachments,
+      attachmentRuns,
+      pathRefs,
+      attachmentMedia,
+      usage,
+      threads,
+      readResources,
+      modeStates,
+      responseRequestIds,
+      promptRequestIds,
+      cancelRequestIds,
+      switchIntents,
+      commands,
+      createRequestIds,
+      createNavigationIntent,
+      navigationTarget,
+      deletedSessionIds,
+      appliedSessionDeletedEventIds,
+      uncertainRequestIds: this.#state.uncertainRequestIds.filter((id) => !removedRequestIds.has(id)),
+      sentPrompts,
+      sentPromptAnchors,
+      diagnosticsEventId:
+        this.#state.diagnosticsEventId === event.body.eventId ? null : this.#state.diagnosticsEventId,
+      lifecycle: withoutDeletedActivation,
+      conversationSecondaryView:
+        wasCurrent ? DEFAULT_CONVERSATION_SECONDARY_VIEW : this.#state.conversationSecondaryView,
+      conversationSidebarQuery: wasCurrent ? "" : this.#state.conversationSidebarQuery,
+      conversationSidebarPageInput: wasCurrent ? "" : this.#state.conversationSidebarPageInput,
+      sessionFiles,
+      remoteSessions,
+    };
+  }
+
+  /** 删除会话时丢弃不进入公开状态的在途表、计时器和平台句柄。 */
+  #dropSessionRuntime(sessionId: Uuid, wasCurrent: boolean): void {
+    for (const [requestId, pending] of this.#pendingReads) {
+      if (pending.sessionId === sessionId) this.#pendingReads.delete(requestId);
+    }
+    this.#timelineFloors.delete(sessionId);
+    this.#timelineEntries.delete(sessionId);
+    this.#expandedFileDirectories.delete(sessionId);
+    this.#messageRefreshQueued.delete(sessionId);
+    this.#interactionRefreshQueued.delete(sessionId);
+    this.#deferredReads.delete(sessionId);
+    this.#remoteRebuilds.delete(sessionId);
+    for (const [requestId, pending] of this.#pendingFileQueries) {
+      if (pending.sessionId === sessionId) this.#pendingFileQueries.delete(requestId);
+    }
+    for (const key of this.#fileRefreshRounds.keys()) {
+      if (key.startsWith(`${sessionId}|`)) this.#fileRefreshRounds.delete(key);
+    }
+    for (const [key, cancel] of this.#fileRefreshTimers) {
+      if (!key.startsWith(`${sessionId}|`)) continue;
+      cancel();
+      this.#fileRefreshTimers.delete(key);
+      this.#fileRefreshQueued.delete(key);
+    }
+    for (const [requestId, draft] of this.#promptDrafts) {
+      if (draft.sessionId === sessionId) this.#promptDrafts.delete(requestId);
+    }
+    this.#uploadingSessions.delete(sessionId);
+    const activeTransfer = this.#activeTransfers.get(sessionId);
+    if (activeTransfer !== undefined) {
+      this.#attachmentTransfer?.abort(activeTransfer, "client_cancelled");
+      this.#activeTransfers.delete(sessionId);
+    }
+    this.#cancelledUploads.delete(sessionId);
+    const remote = remoteRefOf(this.#state, sessionId);
+    if (remote !== null) this.#sync.unsubscribeRemote(remote);
+    if (wasCurrent) {
+      this.#cancelViewRenewal();
+      this.#activeConversationSession = null;
+      this.#activeFileRefreshNeeded = false;
+    }
+  }
+
+  /**
    * 一条事件的状态归并。
    *
    * 顺序即优先级：先归一成结构化记录（永不丢事件——降级卡片与诊断都从它派生），再按事件类型
    * 更新它自己的通道（摘要/用量/覆盖层/易失叠加层）。**不存在**「既不呈现也不降级」的分支。
    */
   #withEvent(event: EventMessage): ClientState {
+    const deletedSessionId = deletedSessionIdIn(event);
+    if (deletedSessionId !== null) return this.#withSessionDeleted(event, deletedSessionId);
+    // 墓碑是终止事实：除删除事件本身外，迟到的创建、摘要、命令终态和结构化事件都不能复活它。
+    if (event.body.sessionId !== null && this.#state.deletedSessionIds.has(event.body.sessionId)) {
+      return this.#state;
+    }
+
     let next = this.#state;
 
     // 1) 归一记录：实时事件按 `eventId` 先到先留（重投不产生第二条）。
@@ -2826,7 +3055,7 @@ export class ClientStore {
     // 2) 会话摘要（`session.created`/`session.updated`）。
     const summary = sessionSummaryIn(event);
     if (summary !== null) {
-      next = { ...next, resources: withSessionSummary(next.resources, summary) };
+      next = { ...next, resources: withSessionSummary(next.resources, summary, next.deletedSessionIds) };
       // `active`/`pending` 是节点确认资源可用的权威事实：把可能已经丢失终态的「恢复中」
       // 收敛为 ready；`idle` 不反向撤销（避免事件循环触发自动恢复）。
       next = this.#withActivityActivation(next, summary);
@@ -2998,6 +3227,39 @@ export class ClientStore {
 
   /** 命令结果归并：终态回填 + `session.read`/`session.mode.list` 结果并入 + 结果不确定登记。 */
   #withCommandResult(result: CommandResultMessage): ClientState {
+    // 删除后的迟到终态只用来收束本地生命周期，不能重建命令记录或任何会话投影。
+    const recordedSessionId = this.#state.commands.get(result.body.requestId)?.sessionId ?? null;
+    const resultSessionId = commandResultSessionId(result);
+    const tombstonedSessionId = [recordedSessionId, resultSessionId].find(
+      (sessionId): sessionId is Uuid => sessionId !== null && this.#state.deletedSessionIds.has(sessionId),
+    ) ?? null;
+    if (tombstonedSessionId !== null) {
+      this.#pendingReads.delete(result.body.requestId);
+      this.#titleStatusQueries.delete(result.body.requestId);
+      const commands = new Map(this.#state.commands);
+      const removed = commands.delete(result.body.requestId);
+      const createRequestIds = new Map(this.#state.createRequestIds);
+      let removedCreateRequest = false;
+      for (const [sheetKey, requestId] of createRequestIds) {
+        if (requestId !== result.body.requestId) continue;
+        createRequestIds.delete(sheetKey);
+        removedCreateRequest = true;
+      }
+      const clearNavigation =
+        this.#state.navigationTarget?.sessionId === tombstonedSessionId ||
+        this.#state.createNavigationIntent?.requestId === result.body.requestId;
+      const removedUncertain = this.#state.uncertainRequestIds.includes(result.body.requestId);
+      if (!removed && !removedCreateRequest && !clearNavigation && !removedUncertain) return this.#state;
+      return {
+        ...this.#state,
+        commands,
+        createRequestIds,
+        ...(clearNavigation
+          ? { navigationTarget: null, createNavigationIntent: null }
+          : {}),
+        uncertainRequestIds: this.#state.uncertainRequestIds.filter((id) => id !== result.body.requestId),
+      };
+    }
     // 文件栏查询没有命令记录：正文（尤其 `session.files.read` 的 `dataBase64`）只活在本次
     // 操作的闭包与在途表里，绝不能先落进 `commands`——那会把整份下载永久留在公开状态。
     // 迟到或无 pending 的结果同样只走 `#withSessionFilesResult`，由它丢弃。
@@ -3020,13 +3282,6 @@ export class ClientStore {
     commands.set(updated.requestId, updated);
 
     let next: ClientState = { ...this.#state, commands };
-    // 准备首条（`session.start`）与它的原请求查询（`command.status`）：只改对应准备会话。
-    if (result.body.command === "session.start") {
-      next = this.#withPreparationStartResult(next, result, { statusQuery: false });
-    }
-    if (result.body.command === "command.status" && isCommandStatusRecord(result.body.result)) {
-      next = this.#withPreparationStartResult(next, result, { statusQuery: true });
-    }
     // 本机激活的受理/终态：只改对应会话的尝试（迟到的旧连接结果在归并里被丢弃）。
     if (result.body.command === "session.resume") next = this.#withActivationResult(next, result);
     if (result.body.command === "session.prompt") {
@@ -3123,34 +3378,34 @@ export class ClientStore {
         next = withPromptTakeover(next, acceptedPrompt.sessionId, confirmedUserMessages);
       }
     }
-    if (result.body.command === "session.start") {
-      const requestId = result.body.requestId;
-      const promptBefore = next.sentPrompts.get(requestId) ?? null;
-      const previousCommandState = this.#state.commands.get(requestId)?.state ?? null;
-      const acceptedBefore = previousCommandState === "accepted" || previousCommandState === "uncertain" ||
-        (promptBefore !== null && (promptBefore.phase === "accepted" || promptBefore.phase === "uncertain"));
-      if (result.body.status === "accepted") {
-        next = withPromptPhase(next, requestId, (prompt) => ({ ...prompt, phase: "accepted", notice: null }));
-      } else if (result.body.status === "uncertain") {
-        next = withPromptPhase(next, requestId, (prompt) => ({
-          ...prompt,
-          phase: "uncertain",
-          notice: prompt.notice ?? "受理结果不确定：可能已经保存；可以核实，不会自动重发。",
-        }));
-      } else if (result.body.status === "rejected" || (result.body.status === "failed" && !acceptedBefore)) {
-        // 首条从未成立：草稿留在准备页，本地回声移除。
-        next = { ...next, sentPrompts: withoutEntry(next.sentPrompts, requestId) };
-      }
-    }
     // 创建完成回复自带权威摘要；无需等待另一个 session.created 才让列表可见。
-    // 只补缺失项：重投的创建结果不能覆盖之后的实时更新。
+    // 摘要按版本归并，并且只有仍拥有本次导航归属的 requestId 才能产生一次路由意图。
     if (result.body.command === "session.create" && result.body.status === "completed") {
       const value = toResultRecord(result.body.result);
       const summary = value?.["session"] as SessionSummary | undefined;
       if (summary !== undefined && summary !== null &&
-        typeof summary.sessionId === "string" && summary.sessionId === value?.["sessionId"] &&
-        !next.resources?.sessions.some((item) => item.sessionId === summary.sessionId)) {
-        next = { ...next, resources: withSessionSummary(next.resources, summary) };
+        typeof summary.sessionId === "string" && summary.sessionId === value?.["sessionId"]) {
+        next = { ...next, resources: withVersionedSummary(next.resources, summary, next.deletedSessionIds) };
+        const intent = next.createNavigationIntent;
+        const requestStillMapped =
+          intent !== null &&
+          next.createRequestIds.get(intent.sheetKey) === result.body.requestId;
+        if (
+          intent !== null &&
+          intent.requestId === result.body.requestId &&
+          intent.phase === "pending" &&
+          requestStillMapped
+        ) {
+          next = {
+            ...next,
+            createNavigationIntent: { ...intent, phase: "completed" },
+            navigationTarget: {
+              kind: "session",
+              sessionId: summary.sessionId,
+              reason: "created",
+            },
+          };
+        }
       }
     }
     if (result.body.command === "session.title.set") {
@@ -3327,7 +3582,7 @@ export class ClientStore {
     const resources =
       read.sessionSummary === undefined
         ? next.resources
-        : withVersionedSummary(next.resources, read.sessionSummary);
+        : withVersionedSummary(next.resources, read.sessionSummary, next.deletedSessionIds);
     return { ...next, remoteSessions, volatile, resources };
   }
 
@@ -3347,6 +3602,7 @@ export class ClientStore {
     const pending = this.#pendingReads.get(result.body.requestId);
     if (pending === undefined) return state;
     this.#pendingReads.delete(result.body.requestId);
+    if (state.deletedSessionIds.has(pending.sessionId)) return state;
     const threads = new Map(state.threads);
     const sessionId = pending.sessionId;
     let existing = threads.get(sessionId) ?? EMPTY_THREAD;
@@ -3609,7 +3865,6 @@ export class ClientStore {
       agents: this.agentCatalog(),
       record: requestId === undefined ? null : (this.#state.commands.get(requestId) ?? null),
       connectionOnline: this.#state.connection.state === "online",
-      preparation: this.preparationEntryAvailability(),
     });
   }
 
@@ -3670,11 +3925,6 @@ export class ClientStore {
    * @param nowMs 相对时间的基准；缺省读本仓库注入的时钟（{@link nowMs}）。
    */
   conversationPage(sessionId: Uuid, nowMs?: number): ConversationPageModel | null {
-    const preparation = this.preparationPage(sessionId, nowMs);
-    if (preparation !== null && preparation.phase !== "committed" &&
-        (preparation.phase !== "accepted" || this.#state.threads.get(sessionId)?.page == null)) {
-      return this.#preparationConversation(preparation, nowMs ?? this.#now());
-    }
     const thread = this.#state.threads.get(sessionId);
     const summary = this.#findSession(sessionId);
     const runtime = this.#state.remoteSessions.get(sessionId);
@@ -3868,7 +4118,6 @@ export class ClientStore {
       sidebar: buildConversationSidebar({
         resources: this.#state.resources,
         workspace: summary?.workspace ?? null,
-        pendingRows: this.#unsentSidebarRows(summary?.workspace?.directoryId ?? null),
         sessionId,
         ownerLabelOf: this.#ownerLabelOf,
         query: this.#state.conversationSidebarQuery,
@@ -3882,145 +4131,6 @@ export class ClientStore {
         origin,
         sessionReady: readiness.ready,
       }),
-    });
-  }
-
-  #unsentSidebarRows(directoryId: string | null, path?: string): readonly SessionRowModel[] {
-    const directoryPath = path ?? this.#state.resources?.workspaces.find((item) => item.directoryId === directoryId)?.path;
-    if (directoryPath === undefined) return [];
-    return [...this.#state.preparations.values()].filter((session) =>
-      !["committed", "released"].includes(session.phase) &&
-      displayDirectoryPath(session.workspace.path) === displayDirectoryPath(directoryPath)
-    ).map((session) => ({
-      id: session.sessionId, title: "新会话",
-      agentName: this.agentCatalog().find((agent) => agent.id === session.agentId)?.displayName ?? session.agentId,
-      state: "idle", activity: { kind: "task", value: "idle" }, localActivity: null,
-      directoryId, updatedAt: "", updatedAtLabel: session.association === null ? "未发送消息" : "",
-    }));
-  }
-
-  /** 首条发送前沿用正常布局；不伪造持久化会话或历史。 */
-  #preparationConversation(page: PreparationPageModel, nowMs: number): ConversationPageModel {
-    const attachmentsNegotiated = this.#state.selectedFeatures.includes(ATTACHMENT_FEATURE) &&
-      this.#attachmentTransfer !== null && this.#attachmentMedia !== null;
-    const attachments = buildAttachmentBatch({
-      attachments: page.attachments,
-      pathRefs: [],
-      capabilityOf: (): AttachmentCapability => ({ kind: "supported" }),
-    });
-    // 分配、恢复、保存和等待同页接管都属于正常流程。它们会暂时关闭发送，但不能作为
-    // `session_not_ready` 原因多画一行；那一行会在首次回车后改变输入区高度，并一直留到
-    // 正式会话页接管。失败、结果不确定、设置或租约等真实阻塞仍按原状态呈现。
-    const preparationInFlight =
-      page.phase === "allocating" ||
-      page.phase === "restoring" ||
-      page.phase === "submitting" ||
-      page.phase === "accepted" ||
-      page.phase === "committed";
-    const input = buildConversationInputModel({
-      connectionOnline: this.#state.connection.state === "online",
-      originLocal: true,
-      originOnline: true,
-      turnInProgress: preparationInFlight,
-      canCancel: false,
-      promptCommand: null,
-      cancelCommand: null,
-      draft: page.text,
-      attachmentsNegotiated,
-      attachments,
-      pathRefs: [],
-      sessionNotReadyReason:
-        page.input.canSend || preparationInFlight ? null : page.input.reason,
-    });
-    const settings = buildConversationSettingsModel({
-      configOptions: page.settings.configOptions.map(({ option, value }) => ({ ...option, currentValue: value })),
-      mode: null,
-      modeChange: null,
-      summaryMode: null,
-      modelSwitchCommand: null,
-      modeSwitchCommand: null,
-    });
-    const selectedMode = page.settings.modes.find((mode) => mode.modeId === page.settings.selectedMode);
-    const preparationSettings: ConversationSettingsModel = { ...settings, mode: {
-      state: page.settings.modes.length === 0 ? "unavailable" : "available",
-      currentId: page.settings.selectedMode,
-      currentName: selectedMode?.displayName ?? null,
-      choices: page.settings.modes.map((mode) => ({ id: mode.modeId, name: mode.displayName,
-        description: null, current: mode.modeId === page.settings.selectedMode })),
-      notice: page.settings.modes.length === 0 ? "该会话的 Agent 未提供模式可选项。" : null,
-      configId: null,
-    } };
-    const settingsEditable = page.phase === "ready" || page.phase === "failed";
-    // 首条派发后（`submitting`/`accepted`）Agent 的思考、工具调用与权限请求已经会经实时事件到达；
-    // 正式读取完成前也必须呈现它们，不能因为「页面还挂在准备态」就把整条时间线画成空的。
-    const records = this.#recordsOf(page.sessionId);
-    const interactions = buildInteractionViews({
-      records,
-      pending: this.#state.readResources.get(page.sessionId)?.pendingInteractions ?? [],
-      responseRequestIds: this.#state.responseRequestIds,
-      commands: this.#state.commands,
-      deviceId: this.#state.deviceId,
-      effectiveAt: new Date(nowMs).toISOString(),
-      nowMs,
-      pendingChecked: this.#state.threads.get(page.sessionId)?.interactionsRefreshed === true,
-      checkedRequestEvents: this.#state.threads.get(page.sessionId)?.checkedInteractionEvents,
-      requestVersionRequired: this.#state.selectedFeatures.includes(PENDING_INTERACTIONS_FEATURE),
-    });
-    const sentPrompts = this.#sentPromptsOf(page.sessionId);
-    const entries = this.#stabilizeTimeline(page.sessionId, buildTimeline({
-      messages: [],
-      records,
-      volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === page.sessionId),
-      interactions,
-      sentPrompts,
-      promptAnchors: this.#state.sentPromptAnchors.get(page.sessionId),
-    }));
-    const activeTurn = activeTurnOf(records);
-    // 准备态没有正式会话的激活事实：恢复提示不适用；提交/等待/内容阶段照常归约。
-    const process = buildConversationProcess({
-      restoring: false,
-      prompts: sentPrompts,
-      activeTurnId: activeTurn === null ? null : activeTurn.turnId,
-      entries,
-    });
-    const degraded = entries.flatMap((entry) => (entry.kind === "degraded" ? [entry.degraded] : []));
-    return buildConversationModel({
-      header: {
-        sessionId: page.sessionId,
-        title: "新会话",
-        newSession: true,
-        agentName: this.agentCatalog().find((agent) => agent.id === page.agentId)?.displayName ?? page.agentId,
-        state: null,
-        directoryId: page.workspace.directoryId,
-      },
-      page: null,
-      usage: this.#state.usage.get(page.sessionId) ?? null,
-      degraded,
-      loadingEarlier: false,
-      pagingError: null,
-      timeline: { entries, process, structuredHistory: structuredHistoryAvailability({
-        origin: "local", historyFeatureNegotiated: this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE),
-      }) },
-      input: { ...input, canSubmit: page.input.canSend && input.canSubmit,
-        persistenceWarning: page.error === null ? null : page.notice },
-      settings: settingsEditable ? preparationSettings : {
-        model: { ...preparationSettings.model, state: "switching", notice: page.input.reason },
-        mode: { ...preparationSettings.mode, state: "switching", notice: page.input.reason },
-      },
-      interactions,
-      sidebar: buildConversationSidebar({
-        resources: this.#state.resources,
-        pendingRows: this.#unsentSidebarRows(page.workspace.directoryId, page.workspace.path),
-        workspace: page.workspace.directoryId === null ? null : { directoryId: page.workspace.directoryId },
-        workspacePath: page.workspace.path,
-        sessionId: page.sessionId,
-        ownerLabelOf: this.#ownerLabelOf,
-        query: this.#state.conversationSidebarQuery,
-        pageInput: this.#state.conversationSidebarPageInput,
-        nowMs,
-        localLifecycleNegotiated: this.#state.lifecycle.negotiated,
-      }),
-      capabilities: { canSend: page.input.canSend, canCancel: false, canViewHistory: false },
     });
   }
 
@@ -4921,8 +5031,6 @@ export class ClientStore {
    */
   setHostIdentity(host: HostIdentityModel): void {
     this.#commit({ ...this.#state, host });
-    // 页面可能先于主机身份挂载：定位恢复需要 origin/节点/设备三项，到这里补读一次。
-    if (this.#tabRestoreRequested) void this.restoreTabPreparation();
   }
 
   /**
@@ -4961,18 +5069,58 @@ export class ClientStore {
   }
 
   /**
+   * 路由消费一次性导航目标。
+   *
+   * 目标与它对应的创建意图在同一次提交中清掉，因此重复渲染或重复事件不会再次跳转。
+   */
+  takeNavigationTarget(): AppNavigationTarget | null {
+    const target = this.#state.navigationTarget;
+    if (target === null) return null;
+    this.#commit({
+      ...this.#state,
+      navigationTarget: null,
+      createNavigationIntent: null,
+    });
+    return target;
+  }
+
+  /**
+   * 用户开始普通目录/会话导航时调用。
+   *
+   * 清掉尚未消费的创建归属后，迟到的 completed 结果可以更新列表摘要，但不能再把页面拉走。
+   */
+  cancelPendingNavigation(): void {
+    if (this.#state.createNavigationIntent === null && this.#state.navigationTarget === null) return;
+    this.#commit({
+      ...this.#state,
+      createNavigationIntent: null,
+      navigationTarget: null,
+    });
+  }
+
+  /**
+   * 任意真实路由变化结束当前创建上下文。
+   *
+   * 页面按钮、浏览器后退和外部链接最终都表现为路径变化，因此统一从这里撤销一次性归属。
+   * 已到达的创建摘要仍按墓碑/版本规则更新列表，但不能再把用户拉回新建会话。
+   */
+  noteRouteChanged(): void {
+    this.cancelPendingNavigation();
+  }
+
+  /**
    * 提交创建会话。
    *
    * 四道闸门，任一不过即**不发命令**：
    * 1. 已建立连接（命令信封需要 `connectionId`）；
    * 2. Agent 必须在本机已配置的目录里（快照 `agents`），不是「用户输入什么就发什么」；
    * 3. 目录引用必须能定下来（入口目录标识、选定结果，或表单带回来的路径，三者都不为空）；
-   * 4. 载荷恰好是 `agentId` 加一个目录引用（加可选的 `createIfMissing`，由 `assertCreateSessionRefs` 把关）。
+   * 4. 载荷恰好是 `agentId` 加一个目录引用（由 `assertCreateSessionRefs` 把关）。
    *
    * 目录**不再有权限门控**（设备权限层已删除）：入口与提交都不看任何 scope。
    * `directoryPath` 是表单带回来的那一份（顶部入口选定/新建出来的路径，逐字是用户看到的那一份）；
    * 目录标识不跟着表单走，而是从本仓库的浏览器状态里读——顶部入口在回退列表里选中的那一项就是它。
-   * 两者都换算成 `session.create` 的两个合法形状之一，含 `createIfMissing` 的那一支只跟路径搭配。
+   * 两者都换算成 `session.create` 的两个合法形状之一。
    *
    * `createRequestIds` 一律以**弹层的机器键**为键（已记录目录用目录标识，顶部入口用
    * `CREATE_SHEET_BROWSE_KEY`）：用户改目录不改弹层，因此提交状态不会与界面失联。
@@ -4981,7 +5129,6 @@ export class ClientStore {
     readonly directoryId: string | null;
     readonly agentId: string;
     readonly directoryPath?: string;
-    readonly createIfMissing?: boolean;
   }): CreateOutcome {
     const connectionId = this.#identity.connectionId;
     if (connectionId === null) return NOT_CONNECTED;
@@ -4991,32 +5138,52 @@ export class ClientStore {
       return { ok: false, reason: "所选 Agent 不在本机已配置的 Agent 目录里" };
     }
     const path = input.directoryPath ?? "";
-    const createIfMissing = input.createIfMissing === true;
     const selected = this.#state.directoryBrowse.selection;
     const registeredDirectoryId =
       input.directoryId ?? (selected !== null && selected.kind === "registered" ? selected.directoryId : null);
     let refs: CreateSessionRefs;
     if (path.length > 0) {
-      refs = createIfMissing
-        ? { workspacePath: path, agentId: input.agentId, createIfMissing: true }
-        : { workspacePath: path, agentId: input.agentId };
+      refs = { workspacePath: path, agentId: input.agentId };
     } else {
       if (registeredDirectoryId === null) {
         return { ok: false, reason: "还没有选定目录：先浏览并选中一层，或改用已记录的目录。" };
-      }
-      if (createIfMissing) {
-        return { ok: false, reason: "已记录的目录必然存在，不能对它启用「不存在则先创建」。" };
       }
       refs = { directoryId: registeredDirectoryId, agentId: input.agentId };
     }
     assertCreateSessionRefs(refs);
 
+    const sheetKey = input.directoryId ?? CREATE_SHEET_BROWSE_KEY;
+    const currentRequestId = this.#state.createRequestIds.get(sheetKey);
+    const currentRecord =
+      currentRequestId === undefined ? null : (this.#state.commands.get(currentRequestId) ?? null);
+    if (
+      currentRecord !== null &&
+      ["draft", "submitting", "accepted", "completed", "uncertain"].includes(currentRecord.state)
+    ) {
+      return {
+        ok: false,
+        reason:
+          currentRecord.state === "uncertain"
+            ? "创建结果不确定，必须保留原请求；系统不会自动重发或更换请求标识。"
+            : "这次创建请求已经发出或完成，不能重复提交。",
+      };
+    }
+
     const requestId = this.#ids.uuid();
     const commands = new Map(this.#state.commands);
-    commands.set(requestId, createCommand({ requestId, command: "session.create" }));
+    commands.set(
+      requestId,
+      markSubmitting(createCommand({ requestId, command: "session.create" })),
+    );
     const createRequestIds = new Map(this.#state.createRequestIds);
-    createRequestIds.set(input.directoryId ?? CREATE_SHEET_BROWSE_KEY, requestId);
-    this.#commit({ ...this.#state, commands, createRequestIds });
+    createRequestIds.set(sheetKey, requestId);
+    this.#commit({
+      ...this.#state,
+      commands,
+      createRequestIds,
+      createNavigationIntent: { sheetKey, requestId, phase: "pending" },
+      navigationTarget: null,
+    });
 
     this.#sync.dispatch(
       buildCreateSessionCommand({
@@ -5027,1993 +5194,6 @@ export class ClientStore {
       }),
     );
     return { ok: true, requestId };
-  }
-
-  // ── 会话准备（`core.session-preparation.v1`，WP7）────────────────────────────
-  //
-  // 准备是首条提交前的临时阶段：Owner 分配最终 `sessionId` 并签发凭据；没有正式会话行，
-  // 页面始终停在 `/session/<id>`。正式受理之后同一项仍保留（承载请求关联与阶段），
-  // 但页面改读正式会话。草稿只在用户点击发送后才上传。
-
-  /**
-   * 新建入口的可用性。
-   *
-   * 未连上主机时本机不知道服务端支持什么（`selectedFeatures` 为空只是「还没协商」），
-   * 因此只说「还没连上」；已 `online` 却没选中准备 feature 才是「服务端未提供」。
-   */
-  preparationEntryAvailability(): { readonly available: boolean; readonly reason: string | null } {
-    if (this.#preparationTabNonce === null) {
-      return { available: false, reason: PREPARATION_NO_TAB_NONCE_NOTICE };
-    }
-    if (this.#state.connection.state !== "online") {
-      return { available: false, reason: "还没连上主机" };
-    }
-    if (!this.#state.selectedFeatures.includes(SESSION_PREPARATION_FEATURE)) {
-      return { available: false, reason: PREPARATION_UNSUPPORTED_NOTICE };
-    }
-    return { available: true, reason: null };
-  }
-
-  /**
-   * 准备页模型；不是准备会话时 `null`。
-   *
-   * `@param nowMs` 是租约过期的判定基准（缺省读本仓库注入的时钟）。
-   */
-  preparationPage(sessionId: Uuid, nowMs?: number): PreparationPageModel | null {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return null;
-    // 会话已进入权威快照：首条已转正，正式会话视图优先；准备页不得继续遮蔽它。
-    if (this.#findSession(sessionId) !== undefined) return null;
-    const record = this.#state.commands.get(session.association?.requestId ?? "");
-    const commandState =
-      record === undefined || record.state === "draft" || record.state === "submitting"
-        ? session.phase === "ready"
-          ? null
-          : "submitting"
-        : record.state === "accepted" || record.state === "completed"
-          ? "accepted"
-          : record.state === "failed" || record.state === "rejected"
-            ? "failed"
-            : record.state === "uncertain"
-              ? "uncertain"
-              : null;
-    const leaseExpiresAtMs =
-      session.leaseExpiresAt === null ? null : Date.parse(session.leaseExpiresAt);
-    const leaseExpired =
-      session.phase === "ready" &&
-      leaseExpiresAtMs !== null &&
-      Number.isFinite(leaseExpiresAtMs) &&
-      leaseExpiresAtMs <= (nowMs ?? this.#now());
-    return buildPreparationPageModel({
-      session,
-      text: this.#state.drafts.get(sessionId) ?? "",
-      attachments: this.#state.attachments.get(sessionId) ?? [],
-      connected: this.#state.connection.state === "online",
-      attachmentsSupported:
-        this.#state.selectedFeatures.includes(ATTACHMENT_FEATURE) &&
-        this.#attachmentMedia !== null &&
-        this.#attachmentTransfer !== null,
-      commandState,
-      leaseExpired,
-    });
-  }
-
-  /**
-   * 普通新建入口的**统一判定**（目录页、目录详情页、会话左栏共用）。
-   *
-   * 同一标签页在该节点/设备下至多一个未转正的临时会话：已有槽位就只导航回它，分配在途就
-   * 等同一个结果。只有 `none` 才允许页面打开创建弹层并发 `allocate`。
-   *
-   * 只承载说明的条目（复制标签页的「另一个标签页正在使用这份准备」）不是槽位：提示照常渲染，
-   * 但本标签页的普通新建入口仍然放行（合同 §7）。
-   */
-  preparationSlotRoute(): PreparationSlotRoute {
-    if (this.#pendingSlotAllocation !== null) {
-      return { kind: "allocating", outcome: this.#pendingSlotAllocation };
-    }
-    const slot = this.#activePreparation();
-    return slot === null
-      ? { kind: "none" }
-      : { kind: "session", sessionId: slot.sessionId };
-  }
-
-  /** 当前标签页唯一未转正临时会话的 ID；没有则为 `null`。 */
-  activePreparationSessionId(): Uuid | null {
-    return this.#activePreparation()?.sessionId ?? null;
-  }
-
-  /**
-   * 从目录/详情页发起 prepare → allocate（`session.preparation` 的 `allocate`）。
-   *
-   * 只提交 Agent、目录与标签页归属：正式 `sessionId` 由 Owner 分配，客户端不指定。
-   * 成功时页面立即导航到 `/session/<id>`（准备模式），**不**新增任何目录会话行。
-   *
-   * 已有未转正槽位时**不**再分配：无论入口属于哪个目录、选了什么 Agent、槽位是否 ready，
-   * 都返回现有 ID；换 Agent 只能走 {@link changePreparationAgent}，其他目录不得原位改绑。
-   */
-  async beginPreparation(input: {
-    readonly directoryId: string | null;
-    readonly agentId: string;
-    readonly directoryPath?: string;
-  }): Promise<PreparationBeginOutcome> {
-    const existing = this.#activePreparation();
-    if (existing !== null) return { ok: true, sessionId: existing.sessionId };
-    if (this.#pendingSlotAllocation !== null) return this.#pendingSlotAllocation;
-    // 刷新后定位恢复在途：先等它落地，避免恢复中的槽位被当成「没有」再分配一个。
-    if (this.#tabRestoreInFlight !== null) await this.#tabRestoreInFlight;
-    // 等待期间另一个入口可能已经发出了分配：闸门必须在 await 后复查，否则两帧 `allocate`。
-    if (this.#pendingSlotAllocation !== null) return this.#pendingSlotAllocation;
-    const restored = this.#activePreparation();
-    if (restored !== null) return { ok: true, sessionId: restored.sessionId };
-
-    const availability = this.preparationEntryAvailability();
-    if (!availability.available) {
-      return { ok: false, reason: availability.reason ?? "准备不可用" };
-    }
-    if (this.#identity.connectionId === null) {
-      return { ok: false, reason: "还没连上主机" };
-    }
-    const entry = this.createEntry(input.directoryId);
-    if (!entry.agents.some((agent) => agent.id === input.agentId)) {
-      return Promise.resolve({ ok: false, reason: "所选 Agent 不在本机已配置的 Agent 目录里" });
-    }
-    const path = input.directoryPath ?? "";
-    const selected = this.#state.directoryBrowse.selection;
-    const registeredDirectoryId =
-      input.directoryId ?? (selected !== null && selected.kind === "registered" ? selected.directoryId : null);
-    let workspaceInput: PreparationWorkspaceInput;
-    let workspace: PreparationWorkspace;
-    if (path.length > 0) {
-      workspaceInput = { workspacePath: path };
-      workspace = { directoryId: registeredDirectoryId, path, source: "workspacePath" };
-    } else if (registeredDirectoryId !== null) {
-      const item = this.#state.resources?.workspaces.find(
-        (candidate) => candidate.directoryId === registeredDirectoryId,
-      );
-      if (item === undefined) {
-        return Promise.resolve({ ok: false, reason: "目录标识不在最近一次快照里，先刷新目录" });
-      }
-      workspaceInput = { directoryId: registeredDirectoryId };
-      workspace = { directoryId: registeredDirectoryId, path: item.path, source: "directoryId" };
-    } else {
-      return Promise.resolve({
-        ok: false,
-        reason: "还没有选定目录：先浏览并选中一层，或改用已记录的目录。",
-      });
-    }
-
-    const tabNonceSource = this.#preparationTabNonce;
-    if (tabNonceSource === null) {
-      return { ok: false, reason: PREPARATION_NO_TAB_NONCE_NOTICE };
-    }
-    return this.#allocatePreparation({
-      operationId: this.#ids.uuid(),
-      agentId: input.agentId,
-      workspace,
-      workspaceInput,
-      tabNonce: tabNonceSource(),
-    });
-  }
-
-  /**
-   * 发出唯一槽位的 `allocate`，并把 Promise 记成在途闸门。
-   *
-   * 分配结果由 `#withPreparationResult` 按 `operationId` 收口；连接断开/重建时
-   * `#dropPendingSlotAllocations` 结束在途 Promise，避免它永久挡住后续新建。
-   */
-  #allocatePreparation(input: {
-    readonly operationId: Uuid;
-    readonly agentId: string;
-    readonly workspace: PreparationWorkspace;
-    readonly workspaceInput: PreparationWorkspaceInput;
-    readonly tabNonce: string;
-  }): Promise<PreparationBeginOutcome> {
-    let resolveOutcome!: (outcome: PreparationBeginOutcome) => void;
-    const promise = new Promise<PreparationBeginOutcome>((resolve) => {
-      resolveOutcome = resolve;
-    });
-    let settled = false;
-    const settle = (outcome: PreparationBeginOutcome): void => {
-      if (settled) return;
-      settled = true;
-      if (this.#pendingSlotAllocation === promise) this.#pendingSlotAllocation = null;
-      resolveOutcome(outcome);
-    };
-    this.#pendingAllocations.set(input.operationId, {
-      resolve: settle,
-      agentId: input.agentId,
-      workspace: input.workspace,
-      tabNonce: input.tabNonce,
-    });
-    this.#pendingSlotAllocation = promise;
-    const sent = this.#sync.sendPreparation(
-      buildAllocateBody({
-        operationId: input.operationId,
-        agentId: input.agentId,
-        workspace: input.workspaceInput,
-        tabNonce: input.tabNonce,
-      }),
-    );
-    if (!sent) {
-      this.#pendingAllocations.delete(input.operationId);
-      settle({ ok: false, reason: "命令通道尚未就绪，请稍后重试" });
-    }
-    return promise;
-  }
-
-  /** 唯一未转正临时会话（`accepted`/`committed`/`released` 已退出槽位角色）。 */
-  #activePreparation(state: ClientState = this.#state): PreparationSessionState | null {
-    for (const session of state.preparations.values()) {
-      if (this.#occupiesPreparationSlot(session)) return session;
-    }
-    return null;
-  }
-
-  /**
-   * 条目是否占着唯一槽位。
-   *
-   * `accepted`/`committed`/`released` 已退出槽位角色。**只承载说明的条目**（复制标签页得到的
-   * 「另一个标签页正在使用这份准备」）没有凭据、没有关联请求、也没有 Agent：本标签页从未持有
-   * 它的任何资源，它只用于渲染提示。把它算作槽位会让复制标签页的普通新建入口全被劫持到原会话
-   * （合同 §7「复制标签页与其他身份不得接管该槽位」），因此这里同样排除。
-   */
-  #occupiesPreparationSlot(session: PreparationSessionState): boolean {
-    if (session.phase === "accepted" || session.phase === "committed" || session.phase === "released") {
-      return false;
-    }
-    // 权威快照里已有这个会话 = 首条已转正：准备角色退出（刷新后不能把正式会话再当成未转正新会话）。
-    if (this.#findSession(session.sessionId) !== undefined) return false;
-    return !(session.receipt === null && session.association === null && session.agentId.length === 0);
-  }
-
-  /** 连接失效后结束在途分配：旧连接上的应答不会再来，闸门不能永久挡住新建。 */
-  #dropPendingSlotAllocations(reason: string): void {
-    if (this.#pendingAllocations.size === 0) {
-      this.#pendingSlotAllocation = null;
-      return;
-    }
-    const pending = [...this.#pendingAllocations.values()];
-    this.#pendingAllocations.clear();
-    this.#pendingSlotAllocation = null;
-    for (const item of pending) item.resolve({ ok: false, reason });
-  }
-
-  /**
-   * 打开发送前已存在的准备（刷新 / 深链 / 重连）。
-   *
-   * 只有**本标签页**的合法草稿才能恢复：没有草稿就不是准备会话，页面随后按正式会话处理
-   * （未知 URL 只在权威快照确认不存在后回目录）。此方法是幂等的——已有状态直接返回 `true`。
-   *
-   * @returns 本页当前是否有准备（含正在恢复 / 被另一标签页占用的明确不可用态）。`false` 表示
-   * 没有可恢复的草稿，调用方可以开始正式读取——正式读取**只**在没有准备时派发。
-   */
-  async openPreparationSession(sessionId: Uuid): Promise<boolean> {
-    // 会话已在权威快照里：首条已转正，正式读取优先；准备说明/条目不得遮蔽它。
-    if (this.#findSession(sessionId) !== undefined) return false;
-    if (this.#state.preparations.has(sessionId)) return true;
-    const drafts = this.#preparationDrafts;
-    if (drafts === null) return false;
-    // 页面可能同时发起启动恢复：等它落地，避免同一会话两条并发恢复路径。
-    if (this.#tabRestoreInFlight !== null) await this.#tabRestoreInFlight;
-    if (this.#state.preparations.has(sessionId)) return true;
-    if (this.#preparationOpening.has(sessionId)) return this.#state.preparations.has(sessionId);
-    const locator = await this.#readTabLocator();
-    // 没有本标签页定位就不是可恢复的准备：陌生 URL 不发起任何准备，也不写定位。
-    if (locator === null) return false;
-    // 本标签页的槽位在别的会话上（例如 A→B 后刷新 B）：只恢复那个槽位，绝不把它改绑到当前 URL，
-    // 也不给当前 URL 造一个准备。
-    if (locator.sessionId !== sessionId) {
-      await this.restoreTabPreparation();
-      return this.#state.preparations.has(sessionId);
-    }
-    if (!this.#locatorMatchesIdentity(locator)) return false;
-    const scope = this.#preparationScope(sessionId);
-    if (scope === null) return false;
-    this.#preparationOpening.add(sessionId);
-    try {
-      await this.#restoreFromDraft(sessionId, scope);
-    } finally {
-      this.#preparationOpening.delete(sessionId);
-    }
-    return this.#state.preparations.has(sessionId);
-  }
-
-  /** 当前标签页是否仍在尝试恢复这个会话的准备（未知 URL 的跳转要等它落地）。 */
-  preparationRestoring(sessionId: Uuid): boolean {
-    return this.#preparationOpening.has(sessionId);
-  }
-
-  /**
-   * 启动时按本标签页的非敏感定位恢复唯一准备槽位（目录页与正式会话页都可以调用）。
-   *
-   * 只读 sessionStorage 定位与 `PreparationDraftPort`；不分配新 ID、不改当前 URL、不接管
-   * 别的标签页。幂等：已有槽位直接返回；主机身份/认证尚未就绪时返回 `null`，并在
-   * `setHostIdentity`/连接事件后由 `#tabRestoreRequested` 自动补一次。
-   */
-  async restoreTabPreparation(): Promise<Uuid | null> {
-    this.#tabRestoreRequested = true;
-    const drafts = this.#preparationDrafts;
-    if (drafts === null) return null;
-    const existing = this.#activePreparation();
-    if (existing !== null) return existing.sessionId;
-    if (this.#tabRestoreInFlight !== null) return this.#tabRestoreInFlight;
-    const task = this.#restoreTabSlot();
-    this.#tabRestoreInFlight = task;
-    try {
-      return await task;
-    } finally {
-      if (this.#tabRestoreInFlight === task) this.#tabRestoreInFlight = null;
-    }
-  }
-
-  async #restoreTabSlot(): Promise<Uuid | null> {
-    const locator = await this.#readTabLocator();
-    if (locator === null) return null;
-    // 已经处理过这个定位：只有真正占槽位的条目才算恢复成功；转正式或只承载占用说明时不重复读草稿。
-    const known = this.#state.preparations.get(locator.sessionId);
-    if (known !== undefined) return this.#occupiesPreparationSlot(known) ? known.sessionId : null;
-    if (!this.#locatorMatchesIdentity(locator)) return null;
-    const scope = this.#preparationScope(locator.sessionId);
-    if (scope === null) return null;
-    if (this.#preparationOpening.has(locator.sessionId)) {
-      const opening = this.#state.preparations.get(locator.sessionId);
-      return opening !== undefined && this.#occupiesPreparationSlot(opening) ? locator.sessionId : null;
-    }
-    this.#preparationOpening.add(locator.sessionId);
-    try {
-      await this.#restoreFromDraft(locator.sessionId, scope);
-    } finally {
-      this.#preparationOpening.delete(locator.sessionId);
-    }
-    const restored = this.#state.preparations.get(locator.sessionId);
-    return restored !== undefined && this.#occupiesPreparationSlot(restored) ? locator.sessionId : null;
-  }
-
-  async #readTabLocator(): Promise<PreparationTabLocatorSnapshot | null> {
-    const drafts = this.#preparationDrafts;
-    if (drafts === null) return null;
-    try {
-      return await drafts.readTabLocator();
-    } catch {
-      return null;
-    }
-  }
-
-  /** 定位必须属于当前 canonical origin、本机节点与设备；别的主机/设备的残留不恢复。 */
-  #locatorMatchesIdentity(locator: PreparationTabLocatorSnapshot): boolean {
-    const host = this.#state.host;
-    const deviceId = this.#state.deviceId;
-    if (host === null || deviceId === null) return false;
-    return locator.canonicalOrigin === host.address &&
-      locator.ownerNodeId === (host.hostId ?? deviceId) &&
-      locator.deviceId === deviceId;
-  }
-
-  /** 更新准备草稿正文（只在内存；落草稿合并成一次异步写）。 */
-  setPreparationDraft(sessionId: Uuid, text: string): void {
-    if (!this.#state.preparations.has(sessionId)) return;
-    if (this.#state.drafts.get(sessionId) === text) return;
-    this.#commit({ ...this.#state, drafts: withEntry(this.#state.drafts, sessionId, text) });
-    this.#schedulePreparationSave(sessionId);
-  }
-
-  /** 选择模式：立即把选择交给临时端点（`configure`），以 Agent 确认结果为准。 */
-  selectPreparationMode(sessionId: Uuid, modeId: string): CommandOutcome {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return { ok: false, reason: "这不是准备会话" };
-    if (session.phase !== "ready" && session.phase !== "failed") {
-      return { ok: false, reason: PREPARATION_PHASE_LABELS[session.phase] };
-    }
-    this.#updatePreparation(sessionId, (current) => ({ ...current, selectedMode: modeId }));
-    const outcome = this.#sendConfigure(sessionId, { mode: modeId });
-    this.#schedulePreparationSave(sessionId);
-    return outcome;
-  }
-
-  /** 设置一个配置项：同样以 Agent 确认结果为准；不可用的选择保留并阻止发送。 */
-  setPreparationConfigValue(sessionId: Uuid, configId: string, value: string | boolean): CommandOutcome {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return { ok: false, reason: "这不是准备会话" };
-    if (session.phase !== "ready" && session.phase !== "failed") {
-      return { ok: false, reason: PREPARATION_PHASE_LABELS[session.phase] };
-    }
-    this.#updatePreparation(sessionId, (current) => ({
-      ...current,
-      selectedConfig: { ...current.selectedConfig, [configId]: value },
-    }));
-    const outcome = this.#sendConfigure(sessionId, { configOptions: { [configId]: value } });
-    this.#schedulePreparationSave(sessionId);
-    return outcome;
-  }
-
-  /**
-   * 提交首条：先上传附件（准备目标），再发**一次** `session.start` 的 `initial`。
-   *
-   * 一个在途尝试一个 `requestId`；双击不会产生第二次执行（`#preparationSubmissions` 闸门）。
-   * 成功与失败都停在同一 URL/同一页面实例：失败保留完整草稿，受理后改读正式会话。
-   *
-   * 失败后的分支是闭合的（D8/D8.1）：
-   * - 本地失败（附件/保存从未派发）→ 同一 `requestId` 重试 `initial`；
-   * - 服务端报告的 `failed` → 用**新的** `requestId`、`firstSubmissionId` 与 `retryOfRequestId`
-   *   发 `kind:"continue"`；首次提交身份未知时先核实原请求，绝不用旧 `requestId` 再发 `initial`；
-   * - `uncertain` 不可发送，只提供「核实原请求」。
-   */
-  submitPreparation(sessionId: Uuid, text: string): CommandOutcome {
-    const page = this.preparationPage(sessionId);
-    if (page === null) return { ok: false, reason: "这不是准备会话" };
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined || session.receipt === null || session.runtimeEpoch === null || session.generation === null) {
-      return { ok: false, reason: "准备资源尚未就绪，请稍后重试" };
-    }
-    if (session.phase === "failed" && session.failureOrigin === "server_start") {
-      return this.#continueAfterFailure(sessionId, session);
-    }
-    if (!page.input.canSend) return { ok: false, reason: page.input.reason ?? "当前不能发送" };
-    if (this.#preparationSubmissions.has(sessionId)) {
-      return { ok: false, reason: "首条消息正在保存，等待这一批结束" };
-    }
-    if (text.length > 0 && this.#state.drafts.get(sessionId) !== text) {
-      this.#commit({ ...this.#state, drafts: withEntry(this.#state.drafts, sessionId, text) });
-    }
-    // 本地上传失败从未派发：同一 `requestId` 重试是安全的（服务端从未见过它）。
-    const requestId = session.association?.requestId ?? this.#ids.uuid();
-    const attachments = this.#state.attachments.get(sessionId) ?? [];
-    const attachmentNames = attachments.map((attachment) => attachment.fileName);
-    this.#preparationRequestSessions.set(requestId, sessionId);
-    this.#preparationSubmissions.add(sessionId);
-    this.#updatePreparation(sessionId, (current) => ({
-      ...current,
-      phase: "submitting",
-      error: null,
-      notice: null,
-      failureOrigin: null,
-      canContinue: false,
-      association: { requestId, firstSubmissionId: null, firstRequestId: null, currentRequestId: null, firstMessageId: null },
-    }));
-    // 带附件时先展示本次输入与「上传中」：Agent 此时尚未收到任何内容。没有附件时命令在同一
-    // 次提交里同步派出，由 `#dispatchPrompt` 的派发补丁登记为「已提交」。
-    this.#dropUnsettledPrompts(sessionId);
-    if (attachments.length > 0) {
-      this.#commit({
-        ...this.#state,
-        sentPrompts: withEntry(this.#state.sentPrompts, requestId, sentPromptOf({
-          requestId,
-          sessionId,
-          text,
-          attachmentNames,
-          createdAt: new Date(this.#now()).toISOString(),
-          phase: "uploading",
-          // 准备关联已知的首条正文标识（刷新恢复的 committed 状态带回）：有了它就不靠位置猜。
-          messageId: session.association?.firstMessageId ?? null,
-        })),
-      });
-    }
-    this.#cancelPreparationRenew(sessionId);
-    this.#schedulePreparationSave(sessionId);
-    void this.#uploadAndStart({ sessionId, requestId, text });
-    return { ok: true, requestId };
-  }
-
-  /**
-   * 服务端已报告首条失败后的显式继续。
-   *
-   * `kind:"continue"` 必须带首次提交身份：还不知道时先按原 `requestId` 查 `command.status`
-   * （投影会带回 `firstSubmissionId` 与 `canContinue`），下一次显式点击再继续——**不**用旧
-   * `requestId` 重发 `initial`（那只会重放原失败终态）。
-   */
-  #continueAfterFailure(sessionId: Uuid, session: PreparationSessionState): CommandOutcome {
-    if (this.#preparationSubmissions.has(sessionId)) {
-      return { ok: false, reason: "首条消息正在保存，等待这一批结束" };
-    }
-    const original = session.association?.requestId ?? null;
-    if (original === null) {
-      return { ok: false, reason: "没有可继续的原请求；请离开后重新准备" };
-    }
-    const firstSubmissionId = session.association?.firstSubmissionId ?? null;
-    if (firstSubmissionId === null || !session.canContinue) {
-      const outcome = this.#queryPreparationRequest(sessionId, original);
-      if (!outcome.ok) return outcome;
-      this.#updatePreparation(sessionId, (current) => ({
-        ...current,
-        notice: "正在核实原请求；服务端确认可继续后再点一次发送（不会重发旧请求）。",
-      }));
-      return { ok: true, requestId: outcome.requestId };
-    }
-    const requestId = this.#ids.uuid();
-    this.#preparationRequestSessions.set(requestId, sessionId);
-    this.#preparationSubmissions.add(sessionId);
-    this.#updatePreparation(sessionId, (current) => ({
-      ...current,
-      phase: "submitting",
-      error: null,
-      notice: null,
-      failureOrigin: null,
-      canContinue: false,
-      association: {
-        requestId,
-        firstSubmissionId,
-        firstRequestId: current.association?.firstRequestId ?? null,
-        currentRequestId: requestId,
-        firstMessageId: current.association?.firstMessageId ?? null,
-      },
-    }));
-    this.#cancelPreparationRenew(sessionId);
-    this.#schedulePreparationSave(sessionId);
-    try {
-      const dispatched = this.#dispatchIntent({
-        sessionId,
-        requestId,
-        build: (id) =>
-          buildContinueStartBody({
-            requestId: id,
-            sessionId,
-            firstSubmissionId,
-            retryOfRequestId: original,
-            mode: session.selectedMode,
-            configOptions: session.selectedConfig,
-          }),
-        patch: (id) => ({
-          sentPrompts: withEntry(this.#state.sentPrompts, id, sentPromptOf({
-            requestId: id,
-            sessionId,
-            text: this.#state.drafts.get(sessionId) ?? "",
-            attachmentNames: (this.#state.attachments.get(sessionId) ?? []).map((attachment) => attachment.fileName),
-            createdAt: new Date(this.#now()).toISOString(),
-            phase: "submitted",
-            // 续发的首条沿用准备关联的首条正文标识：正式消息到达时按它原位接替。
-            messageId: session.association?.firstMessageId ?? null,
-          })),
-        }),
-      });
-      if (dispatched === null) {
-        this.#updatePreparation(sessionId, (current) => ({
-          ...current,
-          phase: "failed",
-          failureOrigin: "server_start",
-          error: { code: "internal.unavailable", message: "命令通道尚未就绪", retryable: true, details: {} },
-        }));
-        return { ok: false, reason: "命令通道尚未就绪" };
-      }
-      return { ok: true, requestId };
-    } finally {
-      this.#preparationSubmissions.delete(sessionId);
-    }
-  }
-
-  /**
-   * 首条失败后的显式核实：先查原请求，绝不自动重派。
-   *
-   * 查询结果会带回 `firstSubmissionId` / `canContinue`：可继续时「发送首条」改走
-   * `kind:"continue"`（新请求 ID）；`uncertain` 仍然只查不发。
-   */
-  retryPreparation(sessionId: Uuid): CommandOutcome {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return { ok: false, reason: "这不是准备会话" };
-    const original = session.association?.requestId ?? null;
-    if (original !== null) {
-      const outcome = this.#queryPreparationRequest(sessionId, original);
-      if (!outcome.ok) return outcome;
-      return { ok: true, requestId: original };
-    }
-    const page = this.preparationPage(sessionId);
-    if (page === null || !page.input.canSend) {
-      return { ok: false, reason: page?.input.reason ?? "当前不能发送" };
-    }
-    return this.submitPreparation(sessionId, this.#state.drafts.get(sessionId) ?? "");
-  }
-
-  /** 更换 Agent：释放旧临时资源、作废旧草稿，再由后端分配新 ID 与新默认设置。 */
-  async changePreparationAgent(sessionId: Uuid, agentId: string): Promise<PreparationBeginOutcome> {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return { ok: false, reason: "这不是准备会话" };
-    if (session.agentId === agentId) return { ok: true, sessionId };
-    if (this.#preparationBusy.has(sessionId)) return { ok: false, reason: "正在更换 Agent，等待这一次结束" };
-    this.#preparationBusy.add(sessionId);
-    try {
-      const tabNonce = session.tabNonce;
-      await this.#discardPreparation(sessionId, "agent_changed");
-      return await this.#allocateReplacement({ agentId, workspace: session.workspace, tabNonce });
-    } finally {
-      this.#preparationBusy.delete(sessionId);
-    }
-  }
-
-  /**
-   * 旧版页面动作所依赖的槽位判定。当前新会话页不展示放弃动作；保留该方法只为旧调用方和
-   * 资源清理回归，不能再把它接回用户界面。
-   */
-  canAbandonPreparation(sessionId: Uuid): boolean {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return false;
-    // 与普通新建入口同一判据：只承载说明的条目（复制标签页的提示）不占槽，本标签页从未持有
-    // 它的资源，因此也不能 cleanup 它——否则会顺手清掉本标签页自己槽位的定位（合同 §7）。
-    return this.#occupiesPreparationSlot(session);
-  }
-
-  /**
-   * 旧版新会话页使用的槽位清理原语：作废草稿、请求释放临时资源、清本标签页定位与槽位。
-   *
-   * 当前界面不再提供这个动作；普通导航、刷新和目录入口都不会调用它。
-   */
-  async abandonPreparation(sessionId: Uuid): Promise<void> {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined || !this.canAbandonPreparation(sessionId)) return;
-    const drafts = this.#preparationDrafts;
-    const held = this.#preparationDraftAccess.get(sessionId);
-    if (drafts !== null) {
-      if (held !== undefined) {
-        try {
-          await drafts.invalidateDraft({
-            access: held.access,
-            expectedRevision: held.revision,
-            reason: "abandoned",
-            nowMs: this.#now(),
-          });
-        } catch {
-          // 草稿已不可写：仍继续释放资源并退出槽位，不让清理停在这里。
-        }
-      }
-      try {
-        await drafts.clearTabLocator();
-      } catch {
-        // 定位清理失败不阻塞；`#forgetPreparation` 后本页不再有任何入口指向旧槽位。
-      }
-      if (held !== undefined) {
-        try {
-          await drafts.releaseTab({ access: held.access, nowMs: this.#now() });
-        } catch {
-          // 归属释放失败由孤儿清理收口。
-        }
-      }
-    }
-    // 上面的 await 可能让本会话的 `restore` 结果落地并写入资源代：release 必须用最新快照，
-    // 否则旧快照的 `runtimeEpoch`/`generation` 为 `null`，释放帧会被静默跳过。
-    const current = this.#state.preparations.get(sessionId);
-    if (current !== undefined) this.#releasePreparationResource(current);
-    this.#forgetPreparation(sessionId);
-  }
-
-  /** 发出一次 `release`（凭据/资源代齐全时）；不修改槽位状态。 */
-  #releasePreparationResource(session: PreparationSessionState): void {
-    if (session.receipt === null || session.runtimeEpoch === null || session.generation === null) return;
-    this.#sendPreparationFrame(
-      session.sessionId,
-      "release",
-      buildReleaseBody({
-        operationId: this.#ids.uuid(),
-        sessionId: session.sessionId,
-        receipt: session.receipt,
-        runtimeEpoch: session.runtimeEpoch,
-        generation: session.generation,
-      }),
-    );
-  }
-
-  /**
-   * 身份/存储失效后的内部清理：作废草稿、请求释放临时资源、清掉本标签页归属。
-   *
-   * **普通返回目录/切换会话不调用它**；旧版用户动作曾走 {@link abandonPreparation}。
-   */
-  leavePreparation(sessionId: Uuid): void {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return;
-    const drafts = this.#preparationDrafts;
-    const held = this.#preparationDraftAccess.get(sessionId);
-    if (drafts !== null && held !== undefined) {
-      const nowMs = this.#now();
-      // 只有身份/存储失效才走到这里（普通导航不再清理）；墓碑原因按 `replaced` 记录。
-      void drafts
-        .invalidateDraft({ access: held.access, expectedRevision: held.revision, reason: "replaced", nowMs })
-        .catch(() => undefined)
-        .then(() => drafts.releaseTab({ access: held.access, nowMs }))
-        .catch(() => undefined);
-    }
-    this.#releasePreparationResource(session);
-    this.#forgetPreparation(sessionId);
-  }
-
-  #forgetPreparation(sessionId: Uuid): void {
-    this.#cancelPreparationRenew(sessionId);
-    this.#preparationVerifyThenRestore.delete(sessionId);
-    const timer = this.#preparationSaveTimers.get(sessionId);
-    if (timer !== undefined) {
-      timer();
-      this.#preparationSaveTimers.delete(sessionId);
-    }
-    this.#preparationDraftAccess.delete(sessionId);
-    this.#preparationOps.delete(sessionId);
-    this.#preparationSubmissions.delete(sessionId);
-    this.#preparationSubmissionIds.delete(sessionId);
-    const attachments = new Map(this.#state.attachments);
-    for (const attachment of attachments.get(sessionId) ?? []) {
-      if (attachment.previewUrl !== null) this.#attachmentMedia?.releaseUrl(attachment.previewUrl);
-      this.#attachmentHandles.delete(attachment.localId);
-      this.#restoredAttachmentBytes.delete(attachment.localId);
-    }
-    attachments.delete(sessionId);
-    const drafts = new Map(this.#state.drafts);
-    drafts.delete(sessionId);
-    this.#commit({
-      ...this.#state,
-      preparations: withoutEntry(this.#state.preparations, sessionId),
-      attachments,
-      drafts,
-    });
-  }
-
-  /** 换 Agent 的前半段：释放旧资源、作废旧草稿、清空输入与附件。 */
-  async #discardPreparation(sessionId: Uuid, reason: "agent_changed"): Promise<void> {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return;
-    const drafts = this.#preparationDrafts;
-    const held = this.#preparationDraftAccess.get(sessionId);
-    if (drafts !== null) {
-      if (held !== undefined) {
-        try {
-          await drafts.invalidateDraft({
-            access: held.access,
-            expectedRevision: held.revision,
-            reason,
-            nowMs: this.#now(),
-          });
-        } catch {
-          // 草稿已不可写（配额/存储不可用）：内存输入仍按主动更换清空，不因此中断换 ID。
-        }
-      }
-      // 换 Agent 后旧定位不再指向任何槽位；新分配成功保存草稿时会写回新定位。
-      try {
-        await drafts.clearTabLocator();
-      } catch {
-        // 定位清理由新 `beginTab` 覆盖，失败不阻塞换 ID。
-      }
-    }
-    this.#releasePreparationResource(session);
-    this.#forgetPreparation(sessionId);
-  }
-
-  /** 以既有目录与新的 Agent 分配一个**新** ID；旧响应因会话键不同而无法覆盖它。 */
-  #allocateReplacement(input: {
-    readonly agentId: string;
-    readonly workspace: PreparationWorkspace;
-    readonly tabNonce: string;
-  }): Promise<PreparationBeginOutcome> {
-    const availability = this.preparationEntryAvailability();
-    if (!availability.available) return Promise.resolve({ ok: false, reason: availability.reason ?? "准备不可用" });
-    const workspaceInput: PreparationWorkspaceInput =
-      input.workspace.source === "directoryId" && input.workspace.directoryId !== null
-        ? { directoryId: input.workspace.directoryId }
-        : { workspacePath: input.workspace.path };
-    return this.#allocatePreparation({
-      operationId: this.#ids.uuid(),
-      agentId: input.agentId,
-      workspace: input.workspace,
-      workspaceInput,
-      tabNonce: input.tabNonce,
-    });
-  }
-
-  /** 草稿分区键：客户端不知道 core 的 nodeId，用已配对 Host 身份作为本机节点作用域。 */
-  #preparationScope(sessionId: Uuid): PreparationDraftScope | null {
-    const host = this.#state.host;
-    const deviceId = this.#state.deviceId;
-    if (host === null || deviceId === null) return null;
-    return {
-      canonicalOrigin: host.address,
-      ownerNodeId: host.hostId ?? deviceId,
-      deviceId,
-      // 首次加载时只可能知道来源/节点/设备/会话；端口会沿用定位里的 tabSlotId（刷新即同一格）。
-      tabSlotId: this.#ids.uuid(),
-      sessionId,
-    };
-  }
-
-  #updatePreparation(sessionId: Uuid, update: (current: PreparationSessionState) => PreparationSessionState): void {
-    const current = this.#state.preparations.get(sessionId);
-    if (current === undefined) return;
-    const next = new Map(this.#state.preparations);
-    next.set(sessionId, update(current));
-    this.#commit({ ...this.#state, preparations: next });
-  }
-
-  /**
-   * 发送一条准备控制帧并把 `operationId` 记为当前在飞操作。
-   *
-   * 未发出（没有已认证连接）时只留下可读说明：不假装资源已释放/设置已生效。
-   */
-  #sendPreparationFrame(
-    sessionId: Uuid,
-    kind: "restore" | "configure" | "renew" | "release",
-    body: Parameters<SyncGateway["sendPreparation"]>[0],
-  ): CommandOutcome {
-    if (kind !== "release") {
-      this.#preparationOps.set(sessionId, { operationId: body.operationId, kind });
-    }
-    if (!this.#sync.sendPreparation(body)) {
-      this.#preparationOps.delete(sessionId);
-      this.#updatePreparation(sessionId, (current) => ({
-        ...current,
-        notice: "命令通道尚未就绪，这次准备操作没有发出",
-      }));
-      return { ok: false, reason: "命令通道尚未就绪" };
-    }
-    return { ok: true, requestId: body.operationId };
-  }
-
-  #sendConfigure(
-    sessionId: Uuid,
-    values: { readonly mode?: string; readonly configOptions?: Readonly<Record<string, string | boolean>> },
-  ): CommandOutcome {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined || session.receipt === null || session.runtimeEpoch === null || session.generation === null) {
-      return { ok: false, reason: "准备资源尚未就绪" };
-    }
-    return this.#sendPreparationFrame(
-      sessionId,
-      "configure",
-      buildConfigureBody({
-        operationId: this.#ids.uuid(),
-        sessionId,
-        receipt: session.receipt,
-        runtimeEpoch: session.runtimeEpoch,
-        generation: session.generation,
-        ...(values.mode === undefined ? {} : { mode: values.mode }),
-        ...(values.configOptions === undefined
-          ? {}
-          : { configOptions: values.configOptions as Readonly<Record<string, string | boolean>> }),
-      }),
-    );
-  }
-
-  #sendRestore(sessionId: Uuid): CommandOutcome {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined || session.receipt === null) {
-      return { ok: false, reason: "没有可用的准备凭据" };
-    }
-    return this.#sendPreparationFrame(
-      sessionId,
-      "restore",
-      buildRestoreBody({
-        operationId: this.#ids.uuid(),
-        sessionId,
-        receipt: session.receipt,
-        knownRuntimeEpoch: session.runtimeEpoch,
-        knownGeneration: session.generation,
-      }),
-    );
-  }
-
-  /** 可见的 ready 准备每 10 秒续租；隐藏/断开/受理/释放都取消（旧连接不续命）。 */
-  #schedulePreparationRenew(sessionId: Uuid): void {
-    this.#cancelPreparationRenew(sessionId);
-    if (this.#schedule === null) return;
-    const cancel = this.#schedule(PREPARATION_RENEW_INTERVAL_MS, () => {
-      this.#preparationRenewTimers.delete(sessionId);
-      this.#renewPreparation(sessionId);
-    });
-    this.#preparationRenewTimers.set(sessionId, cancel);
-  }
-
-  #cancelPreparationRenew(sessionId: Uuid): void {
-    const cancel = this.#preparationRenewTimers.get(sessionId);
-    if (cancel === undefined) return;
-    cancel();
-    this.#preparationRenewTimers.delete(sessionId);
-  }
-
-  #cancelAllPreparationRenewals(): void {
-    for (const cancel of [...this.#preparationRenewTimers.values()]) cancel();
-    this.#preparationRenewTimers.clear();
-  }
-
-  /** 发一条 `renew`（当前 receipt/epoch/generation）；失租由服务端回 `stale` 走核实+restore。 */
-  #renewPreparation(sessionId: Uuid): void {
-    const state = this.#state;
-    const session = state.preparations.get(sessionId);
-    if (session === undefined) return;
-    // 失败/不确定但资源仍在时也要续租：继续显式派发前资源不能先过期。
-    if (session.phase !== "ready" && session.phase !== "failed") return;
-    if (session.receipt === null || session.runtimeEpoch === null || session.generation === null) return;
-    if (state.connection.state !== "online" || this.#identity.connectionId === null) return;
-    if (state.lifecycle.visibility !== "visible") return;
-    const sent = this.#sendPreparationFrame(
-      sessionId,
-      "renew",
-      buildRenewBody({
-        operationId: this.#ids.uuid(),
-        sessionId,
-        receipt: session.receipt,
-        runtimeEpoch: session.runtimeEpoch,
-        generation: session.generation,
-      }),
-    );
-    if (sent.ok) this.#schedulePreparationRenew(sessionId);
-  }
-
-  /**
-   * 重连 / 服务重启 / 返回可见后的准备恢复（与标题状态查询同一条排空路径）。
-   *
-   * - `submitting`：响应丢失的请求只能查 `command.status`（原 `requestId`），不重发；
-   * - `unavailable`：只有「打开草稿时还没连上」这一种不可用会自愈（见下），其余保持不可用；
-   * - 其余存活阶段：`restore` 同 ID 的临时资源（服务端可能回 `committed`），并重新排续租。
-   *
-   * 隐藏时不恢复：后台不保活临时 Agent（design D3）。
-   */
-  #recoverPreparations(): void {
-    const state = this.#state;
-    if (state.connection.state !== "online" || this.#identity.connectionId === null) return;
-    if (state.lifecycle.visibility !== "visible") return;
-    for (const session of state.preparations.values()) {
-      const sessionId = session.sessionId;
-      if (session.phase === "unavailable") {
-        // 刷新时页面先于认证挂载：`#restoreFromDraft` 已读出草稿与凭据，却只能把入口记成
-        // 「还没连上主机」。连接就绪后按原凭据恢复，否则刷新一次就永久停在不可用。
-        //
-        // 另外两种不可用**不**重试：存储整体重建（`restartRequired`，页面随后回目录）与
-        // 「当前服务端未协商该能力」——后者重连也不会自愈，发帧只会被门控拒掉。
-        if (session.restartRequired || session.receipt === null) continue;
-        if (!this.preparationEntryAvailability().available) continue;
-        this.#updatePreparation(sessionId, (current) => ({ ...current, phase: "restoring", notice: null }));
-        this.#sendRestore(sessionId);
-        continue;
-      }
-      if (session.phase === "accepted" || session.phase === "committed" ||
-          session.phase === "released" || session.phase === "allocating") {
-        continue;
-      }
-      if (session.phase === "submitting") {
-        const target = session.association?.requestId ?? null;
-        if (target === null || this.#preparationStatusQueries.has(target)) continue;
-        this.#preparationStatusQueries.add(target);
-        this.#queryPreparationRequest(sessionId, target);
-        continue;
-      }
-      if (session.receipt === null) continue;
-      if (this.#preparationOps.has(sessionId)) continue;
-      this.#sendRestore(sessionId);
-    }
-  }
-
-  /** 用原 `requestId` 查首条请求的权威状态（响应丢失/结果不明时的唯一动作）。 */
-  #queryPreparationRequest(sessionId: Uuid, targetRequestId: Uuid): CommandOutcome {
-    const requestId = this.#ids.uuid();
-    this.#preparationRequestSessions.set(requestId, sessionId);
-    const dispatched = this.#dispatchIntent({
-      sessionId,
-      requestId,
-      build: (id) => ({ requestId: id, command: "command.status", payload: { targetRequestId } }),
-    });
-    if (dispatched === null) return NOT_CONNECTED;
-    return { ok: true, requestId };
-  }
-
-  /** 草稿写合并：同一会话 350ms 内只写一次（正文输入逐键触发）。 */
-  #schedulePreparationSave(sessionId: Uuid): void {
-    const existing = this.#preparationSaveTimers.get(sessionId);
-    if (existing !== undefined) existing();
-    const task = (): void => {
-      this.#preparationSaveTimers.delete(sessionId);
-      void this.#savePreparationDraft(sessionId);
-    };
-    if (this.#schedule === null) {
-      task();
-      return;
-    }
-    this.#preparationSaveTimers.set(sessionId, this.#schedule(350, task));
-  }
-
-  /** 读出附件字节：恢复过的草稿用内存字节，本次选择的用平台句柄（都按块读）。 */
-  async #readSelectedAttachment(localId: string, offset: number, length: number): Promise<Uint8Array> {
-    const restored = this.#restoredAttachmentBytes.get(localId);
-    if (restored !== undefined) return restored.slice(offset, offset + length);
-    const handle = this.#attachmentHandles.get(localId);
-    const media = this.#attachmentMedia;
-    if (handle === undefined || media === null) throw new Error("附件在本机的句柄已丢失，请重新选择");
-    return media.readChunk(handle, BigInt(offset), length);
-  }
-
-  /** 把当前准备草稿（正文/设置/凭据/附件字节）原子写入浏览器的准备库。 */
-  async #savePreparationDraft(sessionId: Uuid): Promise<void> {
-    const drafts = this.#preparationDrafts;
-    const session = this.#state.preparations.get(sessionId);
-    if (drafts === null || session === undefined || session.receipt === null) return;
-    const held = this.#preparationDraftAccess.get(sessionId);
-    let access = held?.access;
-    if (access === undefined) {
-      const scope = this.#preparationScope(sessionId);
-      if (scope === null) return;
-      try {
-        const begun = await drafts.beginTab({ scope, nowMs: this.#now() });
-        if (begun.status !== "owner") {
-          this.#updatePreparation(sessionId, (current) => ({
-            ...current,
-            notice: PREPARATION_DUPLICATE_TAB_NOTICE,
-          }));
-          return;
-        }
-        access = begun.access;
-        this.#preparationDraftAccess.set(sessionId, {
-          access,
-          revision: null,
-          restorable: begun.restorable,
-        });
-      } catch {
-        this.#notePreparationStorageUnavailable(sessionId);
-        return;
-      }
-    }
-    const attachments = this.#state.attachments.get(sessionId) ?? [];
-    const inputs: PreparationDraftAttachmentInput[] = attachments.map((attachment) => ({
-      localId: attachment.localId,
-      kind: attachment.kind,
-      fileName: attachment.fileName,
-      mediaType: attachment.mediaType,
-      byteLength: attachment.byteLength,
-      chunkSize: 128 * 1024,
-      chunkCount: Math.max(1, Math.ceil(Number(attachment.byteLength) / (128 * 1024))),
-      readChunk: (offset, length) => this.#readSelectedAttachment(attachment.localId, offset, length),
-    }));
-    const content: PreparationDraftContent = {
-      text: this.#state.drafts.get(sessionId) ?? "",
-      mode: session.selectedMode,
-      configOptions: session.selectedConfig,
-      agentId: session.agentId,
-      workspace: session.workspace,
-      receipt: session.receipt,
-      pendingRequestId: session.association?.requestId ?? null,
-    };
-    const currentHeld = this.#preparationDraftAccess.get(sessionId);
-    try {
-      const saved = await drafts.saveDraft({
-        access,
-        expectedRevision: currentHeld?.revision ?? null,
-        content,
-        attachments: inputs,
-        nowMs: this.#now(),
-      });
-      this.#preparationDraftAccess.set(sessionId, {
-        access,
-        revision: saved.revision,
-        restorable: saved.restorable,
-      });
-      if (!saved.restorable) {
-        this.#updatePreparation(sessionId, (current) =>
-          current.notice === PREPARATION_NOT_RESTORABLE_NOTICE
-            ? current
-            : { ...current, notice: PREPARATION_NOT_RESTORABLE_NOTICE },
-        );
-      }
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "浏览器不能保存准备草稿";
-      this.#updatePreparation(sessionId, (current) => ({
-        ...current,
-        notice: `${PREPARATION_STORAGE_FAILED_NOTICE}${detail.length > 0 ? `：${detail}` : ""}`,
-      }));
-    }
-  }
-
-  #notePreparationStorageUnavailable(sessionId: Uuid): void {
-    this.#updatePreparation(sessionId, (current) =>
-      current.notice === PREPARATION_STORAGE_FAILED_NOTICE
-        ? current
-        : { ...current, notice: PREPARATION_STORAGE_FAILED_NOTICE },
-    );
-  }
-
-  /** 打开发送前草稿：active → `restore`（或先核实原 start）；accepted → 同页读正式会话。 */
-  async #restoreFromDraft(sessionId: Uuid, scope: PreparationDraftScope): Promise<void> {
-    const drafts = this.#preparationDrafts;
-    if (drafts === null) return;
-    let begun;
-    try {
-      begun = await drafts.beginTab({ scope, nowMs: this.#now() });
-    } catch {
-      return;
-    }
-    if (begun.status === "duplicate") {
-      this.#setPreparationNotice(sessionId, PREPARATION_DUPLICATE_TAB_NOTICE);
-      return;
-    }
-    const access = begun.access;
-    this.#preparationDraftAccess.set(sessionId, { access, revision: null, restorable: begun.restorable });
-    let loaded;
-    try {
-      loaded = await drafts.loadDraft({ access, nowMs: this.#now() });
-    } catch {
-      this.#preparationDraftAccess.delete(sessionId);
-      return;
-    }
-    if (loaded.status === "absent" || loaded.status === "invalidated") {
-      this.#preparationDraftAccess.delete(sessionId);
-      return;
-    }
-    this.#preparationDraftAccess.set(sessionId, {
-      access,
-      revision: loaded.record.revision,
-      restorable: begun.restorable,
-    });
-    if (loaded.status === "accepted") {
-      // 保存响应丢失后的恢复记录：正文/Blob 已清，只留请求关联；先核实原请求再读正式会话。
-      const association: PreparationAssociation = {
-        requestId: loaded.association.requestId,
-        firstSubmissionId: loaded.association.firstSubmissionId,
-        firstRequestId: null,
-        currentRequestId: null,
-        firstMessageId: loaded.association.firstMessageId,
-      };
-      this.#commit({
-        ...this.#state,
-        preparations: withEntry(this.#state.preparations, sessionId, {
-          sessionId,
-          agentId: "",
-          workspace: { directoryId: null, path: "", source: "workspacePath" },
-          tabNonce: "",
-          receipt: null,
-          runtimeEpoch: null,
-          generation: null,
-          leaseExpiresAt: null,
-          modes: [],
-          configOptions: [],
-          selectedMode: null,
-          selectedConfig: {},
-          phase: "accepted",
-          association,
-          error: null,
-          failureOrigin: null,
-          canContinue: false,
-          notice: "首条消息已保存；正在读取正式会话。",
-          restartRequired: false,
-        }),
-      });
-      this.#preparationRequestSessions.set(association.requestId, sessionId);
-      this.#queryPreparationRequest(sessionId, association.requestId);
-      this.#enterFormalSession(sessionId);
-      return;
-    }
-
-    const payload = loaded.record.payload;
-    if (payload.status !== "active") {
-      // 读取器把已受理记录归到 `accepted` 分支；走到这里说明记录在两次读之间被替换，按无草稿处理。
-      this.#preparationDraftAccess.delete(sessionId);
-      return;
-    }
-    const content = payload.content;
-    const receipt = content.receipt;
-    const association: PreparationAssociation | null =
-      content.pendingRequestId === null
-        ? null
-        : {
-            requestId: content.pendingRequestId,
-            firstSubmissionId: null,
-            firstRequestId: null,
-            currentRequestId: null,
-            firstMessageId: null,
-          };
-    const restoredAttachments: DraftAttachment[] = [];
-    for (const meta of payload.attachments) {
-      try {
-        const read = await drafts.readAttachment({ access, localId: meta.localId });
-        this.#restoredAttachmentBytes.set(meta.localId, read.bytes);
-        restoredAttachments.push({
-          localId: meta.localId,
-          transferId: meta.localId,
-          attachmentId: null,
-          kind: meta.kind,
-          fileName: meta.fileName,
-          mediaType: meta.mediaType,
-          byteLength: meta.byteLength,
-          status: "selected",
-          uploadedBytes: "0",
-          sha256: null,
-          error: null,
-          previewUrl: null,
-        });
-      } catch {
-        // 单项字节读不出来时明确标注该项按未选中处理（不伪造一个空的「已恢复」附件）。
-      }
-    }
-    const session: PreparationSessionState = {
-      sessionId,
-      agentId: content.agentId,
-      workspace: content.workspace,
-      tabNonce: receipt.claims.tabNonce,
-      receipt,
-      runtimeEpoch: null,
-      generation: null,
-      leaseExpiresAt: null,
-      modes: [],
-      configOptions: [],
-      selectedMode: content.mode,
-      selectedConfig: content.configOptions,
-      phase: "restoring",
-      association,
-      error: null,
-      failureOrigin: null,
-      canContinue: false,
-      notice: null,
-      restartRequired: false,
-    };
-    // 与 `#withPreparationResult` 同形的单槽位守卫：另一次分配/恢复已经占住槽位时，本次慢恢复
-    // 不落库——否则同一标签页会同时出现两条「新会话」。本次恢复还没有向服务端发任何帧，
-    // 丢弃它只需清掉刚取得的草稿访问权。
-    const occupied = this.#activePreparation();
-    if (occupied !== null && occupied.sessionId !== sessionId) {
-      this.#preparationDraftAccess.delete(sessionId);
-      for (const attachment of restoredAttachments) this.#restoredAttachmentBytes.delete(attachment.localId);
-      return;
-    }
-    const attachments = new Map(this.#state.attachments);
-    if (restoredAttachments.length > 0) attachments.set(sessionId, restoredAttachments);
-    this.#commit({
-      ...this.#state,
-      preparations: withEntry(this.#state.preparations, sessionId, session),
-      drafts: withEntry(this.#state.drafts, sessionId, content.text),
-      attachments,
-    });
-    if (association !== null) {
-      this.#preparationRequestSessions.set(association.requestId, sessionId);
-      this.#queryPreparationRequest(sessionId, association.requestId);
-      return;
-    }
-    const availability = this.preparationEntryAvailability();
-    if (!availability.available) {
-      this.#updatePreparation(sessionId, (current) => ({
-        ...current,
-        phase: "unavailable",
-        notice: availability.reason,
-      }));
-      return;
-    }
-    this.#sendRestore(sessionId);
-  }
-
-  #setPreparationNotice(sessionId: Uuid, notice: string): void {
-    const preparations = new Map(this.#state.preparations);
-    if (!preparations.has(sessionId)) {
-      this.#commit({
-        ...this.#state,
-        preparations: withEntry(preparations, sessionId, {
-          sessionId,
-          agentId: "",
-          workspace: { directoryId: null, path: "", source: "workspacePath" },
-          tabNonce: "",
-          receipt: null,
-          runtimeEpoch: null,
-          generation: null,
-          leaseExpiresAt: null,
-          modes: [],
-          configOptions: [],
-          selectedMode: null,
-          selectedConfig: {},
-          phase: "unavailable",
-          association: null,
-          error: null,
-          failureOrigin: null,
-          canContinue: false,
-          notice,
-          restartRequired: false,
-        }),
-      });
-      return;
-    }
-    preparations.set(sessionId, { ...preparations.get(sessionId)!, notice });
-    this.#commit({ ...this.#state, preparations });
-  }
-
-  /** 同一页面改读正式会话：首次读取 + 权威清单刷新（只为让目录/摘要跟上）。 */
-  #enterFormalSession(sessionId: Uuid): void {
-    this.#cancelPreparationRenew(sessionId);
-    this.loadSession(sessionId);
-    this.#sync.refreshSnapshot();
-  }
-
-  /** 准备控制应答 → 状态。迟到的旧操作（`operationId` 不匹配）不改变任何状态。 */
-  #withPreparationResult(state: ClientState, result: SyncSessionPreparationResult): ClientState {
-    const body = result.body;
-    const resultSessionId = body.sessionId;
-    if (body.action === "allocate") {
-      const pending = this.#pendingAllocations.get(body.operationId);
-      if (pending === undefined) return state;
-      this.#pendingAllocations.delete(body.operationId);
-      if (body.status !== "ready") {
-        pending.resolve({
-          ok: false,
-          reason: body.status === "failed" ? body.error.message : "服务端没有分配会话",
-        });
-        return state;
-      }
-      // 竞赛防御：恢复/另一分配已经占住唯一槽位时，不把新分配插进来；把新资源当场释放，
-      // 两个入口都只指向既有槽位。
-      const existing = this.#activePreparation(state);
-      if (existing !== null && existing.sessionId !== resultSessionId) {
-        pending.resolve({ ok: true, sessionId: existing.sessionId });
-        this.#sync.sendPreparation(buildReleaseBody({
-          operationId: this.#ids.uuid(),
-          sessionId: resultSessionId,
-          receipt: body.receipt,
-          runtimeEpoch: body.runtimeEpoch,
-          generation: body.generation,
-        }));
-        return state;
-      }
-      const session: PreparationSessionState = {
-        sessionId: resultSessionId,
-        agentId: pending.agentId,
-        workspace: { ...pending.workspace,
-          directoryId: body.receipt.claims.workspaceSource === "directoryId" ? pending.workspace.directoryId :
-            state.resources?.workspaces.find((item) => displayDirectoryPath(item.path) ===
-              displayDirectoryPath(body.receipt.claims.normalizedWorkspacePath))?.directoryId ?? null,
-          path: body.receipt.claims.normalizedWorkspacePath,
-          source: body.receipt.claims.workspaceSource },
-        tabNonce: pending.tabNonce,
-        receipt: body.receipt,
-        runtimeEpoch: body.runtimeEpoch,
-        generation: body.generation,
-        leaseExpiresAt: body.leaseExpiresAt,
-        modes: body.modes,
-        configOptions: body.configOptions,
-        selectedMode: null,
-        selectedConfig: {},
-        phase: "ready",
-        association: null,
-        error: null,
-        failureOrigin: null,
-        canContinue: false,
-        notice: null,
-        restartRequired: false,
-      };
-      pending.resolve({ ok: true, sessionId: resultSessionId });
-      this.#preparationEffects.push(() => {
-        this.#schedulePreparationSave(resultSessionId);
-        this.#schedulePreparationRenew(resultSessionId);
-      });
-      return { ...state, preparations: withEntry(state.preparations, resultSessionId, session) };
-    }
-
-    const session = state.preparations.get(resultSessionId);
-    if (session === undefined) return state;
-    const pendingOp = this.#preparationOps.get(resultSessionId);
-    if (pendingOp !== undefined && pendingOp.operationId !== body.operationId) return state;
-    this.#preparationOps.delete(resultSessionId);
-    const preparations = new Map(state.preparations);
-
-    switch (body.status) {
-      case "ready": {
-        // 恢复临时资源不改变「首条是否可继续」的事实：已有首次提交身份的 failed/uncertain
-        // 保持原阶段（`canContinue` 不由 restore 重置），否则 ready 会把不可继续的失败洗成可发送。
-        const keepPhase = session.phase === "failed" || session.phase === "uncertain";
-        preparations.set(resultSessionId, {
-          ...session,
-          workspace: { ...session.workspace, path: body.receipt.claims.normalizedWorkspacePath,
-            source: body.receipt.claims.workspaceSource },
-          receipt: body.receipt,
-          runtimeEpoch: body.runtimeEpoch,
-          generation: body.generation,
-          leaseExpiresAt: body.leaseExpiresAt,
-          modes: body.modes,
-          configOptions: body.configOptions,
-          phase: keepPhase ? session.phase : "ready",
-          error: keepPhase ? session.error : null,
-          failureOrigin: keepPhase ? session.failureOrigin : null,
-        });
-        break;
-      }
-      case "committed": {
-        const association: PreparationAssociation = {
-          requestId: body.currentRequestId,
-          firstSubmissionId: body.firstSubmissionId,
-          firstRequestId: body.firstRequestId,
-          currentRequestId: body.currentRequestId,
-          firstMessageId: body.firstMessageId,
-        };
-        preparations.set(resultSessionId, {
-          ...session,
-          phase: "committed",
-          association,
-          error: null,
-          failureOrigin: null,
-          canContinue: false,
-          notice: null,
-        });
-        this.#preparationRequestSessions.set(body.currentRequestId, resultSessionId);
-        this.#preparationEffects.push(() => {
-          this.#cancelPreparationRenew(resultSessionId);
-          this.#preparationAwaitingRead.add(resultSessionId);
-          this.#enterFormalSession(resultSessionId);
-        });
-        break;
-      }
-      case "stale": {
-        preparations.set(resultSessionId, {
-          ...session,
-          notice: "临时资源已失效，正在重新准备",
-        });
-        // 先核实原 start，再用 receipt 恢复（restore 对有效凭据不会返回 stale）。
-        const staleRequestId = session.association?.requestId ?? null;
-        if (staleRequestId !== null) {
-          this.#preparationRequestSessions.set(staleRequestId, resultSessionId);
-        }
-        this.#preparationEffects.push(() => {
-          this.#cancelPreparationRenew(resultSessionId);
-          if (staleRequestId !== null) {
-            this.#preparationVerifyThenRestore.add(resultSessionId);
-            this.#queryPreparationRequest(resultSessionId, staleRequestId);
-          } else {
-            this.#sendRestore(resultSessionId);
-          }
-        });
-        break;
-      }
-      case "released": {
-        preparations.set(resultSessionId, { ...session, phase: "released", receipt: null, canContinue: false });
-        this.#preparationEffects.push(() => {
-          this.#cancelPreparationRenew(resultSessionId);
-        });
-        break;
-      }
-      case "failed": {
-        preparations.set(
-          resultSessionId,
-          this.#preparationFailureState(session, body.error, "server_start", this.#preparationEffects),
-        );
-        break;
-      }
-    }
-    if (body.status === "ready") {
-      this.#preparationEffects.push(() => {
-        this.#schedulePreparationSave(resultSessionId);
-        this.#schedulePreparationRenew(resultSessionId);
-      });
-    }
-    return { ...state, preparations };
-  }
-
-  /**
-   * 一条准备失败 → D6.3 的**固定动作**（控制面 `failed`、`session.start` 失败与附件错误共用）。
-   *
-   * `effects` 是归并阶段推迟副作用的收集器：调用方在提交之后统一执行。
-   */
-  #preparationFailureState(
-    session: PreparationSessionState,
-    error: PublicError,
-    origin: "local_upload" | "server_start",
-    effects: { push(effect: () => void): unknown },
-  ): PreparationSessionState {
-    const sessionId = session.sessionId;
-    const action = preparationErrorAction(error);
-    switch (action) {
-      case "restart":
-        // 存储整体重建：旧 receipt 不能重放/restore，草稿关联也一并作废；页面回目录。
-        effects.push(() => {
-          this.#invalidatePreparationDraft(sessionId);
-          this.#cancelPreparationRenew(sessionId);
-        });
-        return {
-          ...session,
-          phase: "unavailable",
-          error,
-          notice: PREPARATION_STORE_REBUILT_NOTICE,
-          restartRequired: true,
-          receipt: null,
-          canContinue: false,
-        };
-      case "already_committed":
-        // 已正式受理：停止上传，restore 取 committed 关联，同页读正式会话，不重传。
-        effects.push(() => {
-          this.#cancelPreparationRenew(sessionId);
-          this.#sendRestore(sessionId);
-        });
-        return {
-          ...session,
-          phase: "restoring",
-          error,
-          notice: "首条消息已保存（或已受理），正在读取正式会话；不会重传附件。",
-          failureOrigin: origin,
-          canContinue: false,
-        };
-      case "restore": {
-        // 过代/已释放：先核实原 start，再 restore（restore 对有效凭据不会 stale）。
-        const target = session.association?.requestId ?? null;
-        effects.push(() => {
-          this.#cancelPreparationRenew(sessionId);
-          if (target !== null) {
-            this.#preparationVerifyThenRestore.add(sessionId);
-            this.#queryPreparationRequest(sessionId, target);
-          } else {
-            this.#sendRestore(sessionId);
-          }
-        });
-        return {
-          ...session,
-          phase: session.phase === "ready" ? "restoring" : session.phase,
-          error,
-          notice: "临时资源已失效，正在核实原请求后重新准备",
-          failureOrigin: origin,
-          canContinue: false,
-        };
-      }
-      case "verify": {
-        const target = session.association?.requestId ?? null;
-        effects.push(() => {
-          if (target !== null) this.#queryPreparationRequest(sessionId, target);
-        });
-        return {
-          ...session,
-          phase: "uncertain",
-          error: null,
-          notice: PREPARATION_UNCERTAIN_NOTICE,
-          failureOrigin: origin,
-          canContinue: false,
-        };
-      }
-      case "retry":
-        return {
-          ...session,
-          phase: session.phase === "submitting" ? "failed" : session.phase,
-          error,
-          failureOrigin: origin,
-          canContinue: false,
-        };
-      case "stop":
-      default:
-        return {
-          ...session,
-          phase: "failed",
-          error,
-          failureOrigin: origin,
-          canContinue: false,
-        };
-    }
-  }
-
-  /** 归并之外的失败入口（附件传输/本地保存）：立刻提交并执行固定动作。 */
-  #applyPreparationFailureNow(
-    sessionId: Uuid,
-    error: PublicError,
-    origin: "local_upload" | "server_start" = "local_upload",
-  ): void {
-    const session = this.#state.preparations.get(sessionId);
-    if (session === undefined) return;
-    const effects: (() => void)[] = [];
-    const next = this.#preparationFailureState(session, error, origin, effects);
-    this.#updatePreparation(sessionId, () => next);
-    for (const effect of effects) {
-      try {
-        effect();
-      } catch {
-        // 单个副作用失败（例如命令通道刚断）不应让失败处理中断。
-      }
-    }
-  }
-
-  /** 执行归并阶段推迟的副作用（每项只执行一次；异常不打断后续项）。 */
-  #drainPreparationEffects(): void {
-    if (this.#preparationEffects.length === 0) return;
-    const effects = this.#preparationEffects.splice(0);
-    for (const effect of effects) {
-      try {
-        effect();
-      } catch {
-        // 单个副作用失败（例如连接刚断）不应让整条事件流中断。
-      }
-    }
-  }
-
-  #invalidatePreparationDraft(sessionId: Uuid): void {
-    const drafts = this.#preparationDrafts;
-    const held = this.#preparationDraftAccess.get(sessionId);
-    if (drafts === null || held === undefined) return;
-    this.#preparationDraftAccess.delete(sessionId);
-    void drafts
-      .invalidateDraft({
-        access: held.access,
-        expectedRevision: held.revision,
-        reason: "replaced",
-        nowMs: this.#now(),
-      })
-      .catch(() => undefined);
-  }
-
-  /** `session.start` / `command.status` 的结果 → 准备阶段（未知请求不改变状态）。 */
-  #withPreparationStartResult(
-    state: ClientState,
-    result: CommandResultMessage,
-    options: { readonly statusQuery: boolean },
-  ): ClientState {
-    const requestId = options.statusQuery
-      ? isCommandStatusRecord(result.body.result)
-        ? result.body.result.targetRequestId
-        : null
-      : result.body.requestId;
-    if (requestId === null) return state;
-    const sessionId = this.#preparationRequestSessions.get(requestId);
-    if (sessionId === undefined) return state;
-    const session = state.preparations.get(sessionId);
-    if (session === undefined) return state;
-    const status = options.statusQuery
-      ? isCommandStatusRecord(result.body.result)
-        ? result.body.result.state
-        : result.body.status
-      : result.body.status;
-    const projection =
-      result.body.command === "session.start" &&
-      result.body.status === "completed" &&
-      isSessionStartProjection(result.body.result)
-        ? result.body.result
-        : options.statusQuery && isCommandStatusRecord(result.body.result)
-          ? isSessionStartProjection(result.body.result.preparation)
-            ? result.body.result.preparation
-            : null
-          : null;
-    const association: PreparationAssociation = {
-      requestId,
-      firstSubmissionId: projection?.firstSubmissionId ?? session.association?.firstSubmissionId ?? null,
-      firstRequestId: projection?.firstRequestId ?? session.association?.firstRequestId ?? null,
-      currentRequestId: projection?.currentRequestId ?? session.association?.currentRequestId ?? null,
-      firstMessageId: session.association?.firstMessageId ?? null,
-    };
-    const canContinue = projection?.canContinue === true;
-    let next: PreparationSessionState;
-    switch (status) {
-      case "accepted":
-      case "completed":
-        next = {
-          ...session,
-          phase: "accepted",
-          association,
-          error: null,
-          failureOrigin: null,
-          canContinue: false,
-          notice: null,
-        };
-        break;
-      case "failed": {
-        // 「先核实原 start，再 restore」的第二步：查询已经落地，现在才恢复临时资源。
-        const verifyThenRestore =
-          options.statusQuery && this.#preparationVerifyThenRestore.has(sessionId);
-        if (verifyThenRestore) this.#preparationVerifyThenRestore.delete(sessionId);
-        const failureError = result.body.error ?? session.error;
-        if (options.statusQuery && verifyThenRestore) {
-          next = {
-            ...session,
-            phase: "restoring",
-            association,
-            error: failureError,
-            failureOrigin: "server_start",
-            canContinue,
-            notice: "原请求已核实，正在重新准备",
-          };
-          this.#preparationEffects.push(() => {
-            this.#cancelPreparationRenew(sessionId);
-            this.#sendRestore(sessionId);
-          });
-        } else if (options.statusQuery) {
-          // 普通核实：只落投影。服务端没有确认「可证明未派发」时不许继续，也不自动恢复。
-          next = {
-            ...session,
-            phase: "failed",
-            association,
-            error: failureError,
-            failureOrigin: "server_start",
-            canContinue,
-            notice: canContinue
-              ? "服务端确认首条未派发：可以显式继续。"
-              : "服务端未确认可以继续（可能已派发）；只能核实原请求，不能重发。",
-          };
-        } else if (failureError === null) {
-          next = {
-            ...session,
-            phase: "failed",
-            association,
-            error: null,
-            failureOrigin: "server_start",
-            canContinue,
-            notice: null,
-          };
-        } else {
-          next = this.#preparationFailureState(
-            { ...session, association },
-            failureError,
-            "server_start",
-            this.#preparationEffects,
-          );
-          next = { ...next, canContinue };
-        }
-        break;
-      }
-      case "rejected":
-        next = {
-          ...session,
-          phase: "ready",
-          association: null,
-          error: result.body.error ?? session.error,
-          failureOrigin: null,
-          canContinue: false,
-          notice: null,
-        };
-        this.#preparationEffects.push(() => {
-          this.#schedulePreparationRenew(sessionId);
-        });
-        break;
-      case "uncertain":
-        next = {
-          ...session,
-          phase: "uncertain",
-          association,
-          error: null,
-          failureOrigin: "server_start",
-          canContinue: false,
-          notice: PREPARATION_UNCERTAIN_NOTICE,
-        };
-        break;
-      default:
-        return state;
-    }
-    const preparations = new Map(state.preparations);
-    preparations.set(sessionId, next);
-    if (status === "accepted" || status === "completed") {
-      this.#preparationEffects.push(() => {
-        this.#cancelPreparationRenew(sessionId);
-        this.#preparationAwaitingRead.add(sessionId);
-        this.#enterFormalSession(sessionId);
-      });
-    }
-    if (status === "completed") {
-      this.#preparationEffects.push(() => {
-        this.#completePreparationRequest(sessionId, requestId);
-      });
-    }
-    return { ...state, preparations };
-  }
-
-  /** 首条命令终结后删掉恢复记录（正文/Blob 已在 `markAccepted` 清除）。 */
-  #completePreparationRequest(sessionId: Uuid, requestId: Uuid): void {
-    const drafts = this.#preparationDrafts;
-    const held = this.#preparationDraftAccess.get(sessionId);
-    const session = this.#state.preparations.get(sessionId);
-    if (drafts === null || held === undefined || held.revision === null || session === undefined) return;
-    if (session.phase !== "accepted" && session.phase !== "committed") return;
-    void drafts
-      .completeRequest({
-        access: held.access,
-        expectedRevision: held.revision,
-        requestId,
-        nowMs: this.#now(),
-      })
-      .catch(() => undefined);
-  }
-
-  /** 首条受理后：等到正式读取带回完整会话，再清准备草稿的正文/Blob。 */
-  #drainPreparationsAwaitingRead(): void {
-    if (this.#preparationAwaitingRead.size === 0) return;
-    for (const sessionId of [...this.#preparationAwaitingRead]) {
-      const thread = this.#state.threads.get(sessionId);
-      if (thread === undefined || thread.page == null) continue;
-      this.#preparationAwaitingRead.delete(sessionId);
-      this.#linkFirstPromptMessage(sessionId, thread.page);
-      this.#finalizeAcceptedPreparation(sessionId);
-    }
-  }
-
-  /**
-   * 把首条正文的**正式消息标识**登记到首条本地提交上。
-   *
-   * 首条 `session.start` 的受理结果没有 `turnId`，但正在转正的这个会话由这次首条提交创建：
-   * 权威读取里**最早的一条用户消息**就是它。只在读取页确认没有更早内容（`hasEarlier === false`）
-   * 时才这样关联——有更早内容时位置不能证明身份，宁可保留本地条目也不猜。
-   */
-  #linkFirstPromptMessage(sessionId: Uuid, page: SessionReadPageView): void {
-    if (page.hasEarlier) return;
-    const firstUser = page.messages.find((message) => message.role === "user");
-    if (firstUser === undefined) return;
-    const session = this.#state.preparations.get(sessionId);
-    const requestId = session?.association?.requestId ?? null;
-    if (requestId === null) return;
-    this.#patchSentPrompt(requestId, (prompt) =>
-      prompt.messageId === firstUser.id
-        ? prompt
-        : { ...prompt, messageId: firstUser.id, phase: prompt.phase === "failed" ? prompt.phase : "accepted" },
-    );
-  }
-
-  /** 权威受理 + 正式读取之后：清浏览器正文/Blob，只保留请求关联。 */
-  #finalizeAcceptedPreparation(sessionId: Uuid): void {
-    const session = this.#state.preparations.get(sessionId);
-    const drafts = this.#preparationDrafts;
-    const held = this.#preparationDraftAccess.get(sessionId);
-    if (session === undefined || session.association === null) return;
-    const association = session.association;
-    if (drafts !== null && held !== undefined && held.revision !== null) {
-      this.#preparationDraftAccess.set(sessionId, {
-        access: held.access,
-        revision: null,
-        restorable: held.restorable,
-      });
-      void drafts
-        .markAccepted({
-          access: held.access,
-          expectedRevision: held.revision,
-          association: {
-            requestId: association.requestId,
-            firstSubmissionId: association.firstSubmissionId,
-            firstMessageId: association.firstMessageId,
-            acceptedAtMs: this.#now(),
-          },
-          nowMs: this.#now(),
-        })
-        .then((saved) => {
-          const current = this.#preparationDraftAccess.get(sessionId);
-          if (current !== undefined && current.access === held.access) {
-            this.#preparationDraftAccess.set(sessionId, {
-              access: current.access,
-              revision: saved.revision,
-              restorable: current.restorable,
-            });
-          }
-        })
-        .catch(() => undefined);
-    }
-    // 内存里的正文/附件同样清掉：正式会话已成为唯一来源。
-    const attachments = new Map(this.#state.attachments);
-    for (const attachment of attachments.get(sessionId) ?? []) {
-      if (attachment.previewUrl !== null) this.#attachmentMedia?.releaseUrl(attachment.previewUrl);
-      this.#attachmentHandles.delete(attachment.localId);
-      this.#restoredAttachmentBytes.delete(attachment.localId);
-    }
-    attachments.delete(sessionId);
-    const draftsMap = new Map(this.#state.drafts);
-    draftsMap.delete(sessionId);
-    this.#commit({ ...this.#state, attachments, drafts: draftsMap });
-  }
-
-  /** 上传全部附件（准备目标）→ 封存清单 → 派发一次 `session.start`（`initial`）。 */
-  async #uploadAndStart(input: { readonly sessionId: Uuid; readonly requestId: Uuid; readonly text: string }): Promise<void> {
-    const sessionId = input.sessionId;
-    try {
-      const session = this.#state.preparations.get(sessionId);
-      if (session === undefined || session.receipt === null || session.runtimeEpoch === null || session.generation === null) {
-        throw new Error("准备资源尚未就绪");
-      }
-      const transfer = this.#attachmentTransfer;
-      const subjectId = this.#state.deviceId;
-      const attachments = this.#state.attachments.get(sessionId) ?? [];
-      const target = {
-        kind: "preparation" as const,
-        sessionId,
-        receipt: session.receipt,
-        runtimeEpoch: session.runtimeEpoch,
-        generation: session.generation,
-      };
-      let submissionId: string | null = null;
-      if (attachments.length > 0) {
-        if (transfer === null) throw new Error("附件能力尚未装配");
-        if (subjectId === null) throw new Error("尚未认证设备，不能上传附件");
-        if (!this.#state.selectedFeatures.includes(SESSION_PREPARATION_FEATURE)) {
-          throw new Error(PREPARATION_UNSUPPORTED_NOTICE);
-        }
-        submissionId = this.#preparationSubmissionIds.get(sessionId) ?? this.#ids.uuid();
-        this.#preparationSubmissionIds.set(sessionId, submissionId);
-        const transferIds: string[] = [];
-        for (const attachment of attachments) {
-          this.#patchAttachment(sessionId, attachment.localId, (current) => ({
-            ...current,
-            status: "uploading",
-            uploadedBytes: "0",
-            error: null,
-          }));
-          let offset = 0;
-          const total = Number(attachment.byteLength);
-          const sealed = await transfer.upload({
-            sessionId,
-            subjectId,
-            transferId: attachment.transferId,
-            target,
-            fileName: attachment.fileName,
-            mediaType: attachment.mediaType,
-            totalLength: attachment.byteLength,
-            readChunk: async (chunkOffset, length) => {
-              const bytes = await this.#readSelectedAttachment(attachment.localId, Number(chunkOffset), length);
-              offset += bytes.length;
-              if (offset > total) throw new Error("附件读取越界");
-              return bytes;
-            },
-          });
-          this.#patchAttachment(sessionId, attachment.localId, (current) => ({
-            ...current,
-            status: "sealed",
-            uploadedBytes: current.byteLength,
-            attachmentId: sealed.attachmentId,
-            sha256: sealed.sha256,
-            error: null,
-          }));
-          transferIds.push(attachment.transferId);
-        }
-        // 附件全部上传完、清单尚未登记：如实标「封存中」（Agent 仍未收到内容）。
-        this.#patchSentPrompt(input.requestId, (prompt) => ({ ...prompt, phase: "sealing", notice: null }));
-        await transfer.sealManifest({
-          sessionId,
-          subjectId,
-          submissionId,
-          transferIds,
-          target,
-        });
-      }
-      const sealedAttachments = this.#state.attachments.get(sessionId) ?? [];
-      const content = buildInitialContent({
-        text: input.text,
-        attachments: sealedAttachments,
-        pathRefs: this.#state.pathRefs.get(sessionId) ?? [],
-      });
-      if (!content.ok) throw new Error(content.reason);
-      const currentSession = this.#state.preparations.get(sessionId);
-      if (currentSession === undefined || currentSession.receipt === null ||
-          currentSession.runtimeEpoch === null || currentSession.generation === null) {
-        throw new Error("准备资源在提交前失效");
-      }
-      const mode = currentSession.selectedMode;
-      const dispatched = this.#dispatchIntent({
-        sessionId,
-        requestId: input.requestId,
-        build: (id) =>
-          buildInitialStartBody({
-            requestId: id,
-            sessionId,
-            receipt: currentSession.receipt!,
-            runtimeEpoch: currentSession.runtimeEpoch!,
-            generation: currentSession.generation!,
-            content: content.content,
-            submissionId,
-            mode,
-            configOptions: currentSession.selectedConfig,
-          }),
-        // 首条在准备态也要立刻可见。身份只用可靠关联：准备关联已知的首条正文标识，或
-        // 附件上传阶段已登记的本地条目；**不**在视图层按相同文字去重。
-        patch: (id) => {
-          const existing = this.#state.sentPrompts.get(id);
-          return {
-            sentPrompts: withEntry(this.#state.sentPrompts, id, sentPromptOf({
-              requestId: id,
-              sessionId,
-              text: input.text,
-              attachmentNames: sealedAttachments.map((attachment) => attachment.fileName),
-              createdAt: existing?.createdAt ?? new Date(this.#now()).toISOString(),
-              phase: "submitted",
-              messageId: existing?.messageId ?? currentSession.association?.firstMessageId ?? null,
-            })),
-          };
-        },
-      });
-      if (dispatched === null) throw new Error("命令通道尚未就绪");
-      this.#schedulePreparationSave(sessionId);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "首条消息未能保存";
-      for (const attachment of this.#state.attachments.get(sessionId) ?? []) {
-        if (attachment.status === "sealed") continue;
-        this.#patchAttachment(sessionId, attachment.localId, (current) =>
-          current.status === "uploading"
-            ? { ...current, status: "failed", error: detail }
-            : current,
-        );
-      }
-      // 服务端码（`attachment.error.code`）原样交给固定动作；其余本地失败按可重试处理。
-      const failure: PublicError =
-        error instanceof AttachmentTransferError && error.code !== null
-          ? {
-              code: error.code,
-              message: error.message.length > 0 ? error.message : detail,
-              retryable: error.retryable,
-              details: error.details,
-            }
-          : { code: "internal.unavailable", message: detail, retryable: true, details: {} };
-      // 已显示的输入不消失：标成「未发送」并保留原因（Agent 从未收到内容）。
-      this.#patchSentPrompt(input.requestId, (prompt) => ({
-        ...prompt,
-        phase: "failed",
-        notice: detail,
-      }));
-      this.#applyPreparationFailureNow(sessionId, failure, "local_upload");
-    } finally {
-      this.#preparationSubmissions.delete(sessionId);
-    }
   }
 
   /**
@@ -7703,8 +5883,6 @@ export class ClientStore {
     const runs = new Map(this.#state.attachmentRuns);
     runs.delete(sessionId);
     this.#commit({ ...this.#state, attachments: next, attachmentRuns: runs });
-    // 移除同样要落草稿：否则刷新会把已移除的附件带回来（迟到的旧版本不得复活内容）。
-    if (this.#state.preparations.has(sessionId)) this.#schedulePreparationSave(sessionId);
   }
 
   /** 添加一个工作目录相对路径引用（只在本机校验形状；边界由服务端最终判定）。 */
@@ -7908,8 +6086,6 @@ export class ClientStore {
     const runs = new Map(this.#state.attachmentRuns);
     runs.delete(sessionId);
     this.#commit({ ...this.#state, attachments, attachmentRuns: runs });
-    // 附件选择是准备草稿的一部分：刷新恢复必须包含它（不依赖用户再输入一次）。
-    if (this.#state.preparations.has(sessionId)) this.#schedulePreparationSave(sessionId);
     return { ok: true, requestId: this.#ids.uuid() };
   }
 
@@ -7997,6 +6173,14 @@ export class ClientStore {
     // 旧会话的续租计时器立即停掉（旧 viewer 不得被迟到计时器重新续租）。
     if (this.#state.lifecycle.selectedSessionId !== sessionId) {
       this.#cancelViewRenewal();
+      if (this.#state.lifecycle.selectedSessionId !== null) {
+        // A → B 必须显式经过 A → null → B：先释放 A 的 viewer，再声明 B，最后才 resume B。
+        this.#commit({
+          ...this.#state,
+          lifecycle: { ...this.#state.lifecycle, selectedSessionId: null },
+        });
+        this.#declareView(null, true);
+      }
       this.#commit({
         ...this.#state,
         lifecycle: { ...this.#state.lifecycle, selectedSessionId: sessionId },
@@ -8516,16 +6700,10 @@ export class ClientStore {
    */
   #fileSourceUnsupported(sessionId: Uuid): FileSourceUnsupportedReason | null {
     if (!this.#state.selectedFeatures.includes(SESSION_FILES_FEATURE)) return "feature_unavailable";
-    if (this.#state.preparations.has(sessionId) && this.#findSession(sessionId) === undefined &&
-        !this.#state.selectedFeatures.includes(WORKSPACE_FILES_FEATURE)) return "workspace_feature_unavailable";
     return this.#findSession(sessionId)?.origin.kind === "remote" ? "remote_imported" : null;
   }
 
   #workspaceFilesTarget(sessionId: Uuid): WorkspaceFilesTarget | null {
-    const preparation = this.#state.preparations.get(sessionId);
-    if (preparation !== undefined && preparation.workspace.path.length > 0) {
-      return { workspacePath: preparation.workspace.path };
-    }
     const session = this.#findSession(sessionId);
     if (session?.origin.kind !== "local" || session.workspace == null) return null;
     return { directoryId: session.workspace.directoryId };
@@ -9414,7 +7592,7 @@ export class ClientStore {
    *
    * 这一层只是引用复用的比对基线，不是正文缓存：线程被删除（来源数据清除、会话被移除）后
    * `conversationPage` 再也构造不出该会话的页面，留着只会把整份条目数组挂到进程结束。只删除
-   * 「归并前有线程、归并后没有」的会话，仍在使用的会话（含准备态页面）不受影响。
+   * 「归并前有线程、归并后没有」的会话，仍在使用的会话不受影响。
    */
   #pruneTimelineEntries(threadsBefore: ReadonlyMap<Uuid, ConversationThreadState>): void {
     if (this.#timelineEntries.size === 0 || threadsBefore === this.#state.threads) return;

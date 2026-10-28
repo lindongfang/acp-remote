@@ -16,7 +16,7 @@
 //! 这里没有收据、没有 local sequence、没有 ACK 落盘：`resource.ack` 只表达当前连接的运行期处理进度
 //! （`design.md` D5）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -94,6 +94,15 @@ pub enum EventDisposition {
     Forwarded(OriginCursor),
     /// 重复/过期/未知会话：不转发，也不关闭连接。
     Ignored,
+}
+
+/// One catalog application's connection-local consequences.
+#[derive(Debug, Default)]
+pub(crate) struct CatalogUpdate {
+    /// Sessions removed from the complete Owner directory.
+    pub(crate) removed: Vec<RemoteSessionRef>,
+    /// Sessions whose same ID now names a different origin generation.
+    pub(crate) reset: Vec<RemoteSessionRef>,
 }
 
 /// 信任撤销的本地落库缝（由 `app` 注入；运行期不拥有持久信任）。
@@ -198,6 +207,74 @@ impl OwnerState {
         }
         last
     }
+
+    /// Reconcile every per-session runtime structure against the Owner's current catalog.
+    ///
+    /// A catalog snapshot is a full membership statement: a session absent from it must not leave a
+    /// subscription, cursor, replay buffer, barrier, signal sender, or subscriber count behind. Active
+    /// stream receivers get an explicit terminal not-found signal before their channels are dropped;
+    /// this prevents them from interpreting deletion as a transient connection failure and rebuilding.
+    fn retain_catalog_sessions(&mut self, catalog: &BTreeSet<String>) -> Vec<String> {
+        let mut session_keys = BTreeSet::new();
+        session_keys.extend(self.entries.keys().cloned());
+        session_keys.extend(self.origin_epochs.keys().cloned());
+        session_keys.extend(self.sequences.keys().cloned());
+        session_keys.extend(self.events.keys().cloned());
+        session_keys.extend(self.barriers.keys().cloned());
+        session_keys.extend(self.signals.keys().cloned());
+        session_keys.extend(self.subscriptions.keys().cloned());
+        session_keys.extend(self.pending.keys().cloned());
+        session_keys.extend(self.replaying.iter().cloned());
+        session_keys.extend(self.failed.iter().cloned());
+        session_keys.extend(self.delivered.keys().cloned());
+        session_keys.extend(self.subscribers.keys().cloned());
+
+        let removed: Vec<String> = session_keys
+            .into_iter()
+            .filter(|key| !catalog.contains(key))
+            .collect();
+        for key in &removed {
+            if let Some(signal) = self.signals.remove(key) {
+                let _ = signal.send(RuntimeSignal::SessionNotFound);
+            }
+            self.entries.remove(key);
+            self.origin_epochs.remove(key);
+            self.sequences.remove(key);
+            self.events.remove(key);
+            self.barriers.remove(key);
+            self.subscriptions.remove(key);
+            self.pending.remove(key);
+            self.replaying.remove(key);
+            self.failed.remove(key);
+            self.delivered.remove(key);
+            self.subscribers.remove(key);
+        }
+        removed
+    }
+
+    /// Drop all state tied to one session's previous origin epoch while preserving its terminal
+    /// signal channel so active consumers can observe the explicit rebuild reason.
+    fn reset_catalog_session(&mut self, key: &str) {
+        if let Some(sender) = self.barriers.get(key) {
+            let _ = sender.send(None);
+        }
+        if let Some(signal) = self.signals.get(key) {
+            let _ = signal.send(RuntimeSignal::Reset {
+                reason: ResetReason::EpochMismatch,
+                cursor: None,
+            });
+        }
+        self.origin_epochs.remove(key);
+        self.sequences.remove(key);
+        self.events.remove(key);
+        self.barriers.remove(key);
+        self.subscriptions.remove(key);
+        self.pending.remove(key);
+        self.replaying.remove(key);
+        self.failed.remove(key);
+        self.delivered.remove(key);
+        self.subscribers.remove(key);
+    }
 }
 
 /// 运行期来源流的终止原因（`apply_reset`/`apply_unavailable` 的落点）。
@@ -212,6 +289,8 @@ enum RuntimeSignal {
     },
     /// `resource.unavailable`：该来源会话在当前连接上不可用。
     Unavailable { error: acp_core::model::PublicError },
+    /// Owner 的当前 catalog 不再包含该会话：这是确定的不存在，不是连接临时不可用。
+    SessionNotFound,
 }
 
 /// 运行期来源通知的通道容量（清单 revision/连接状态）；溢出由接收端重建，不扩容。
@@ -228,6 +307,14 @@ pub struct RemoteRuntime {
     observed: std::sync::Mutex<Vec<String>>,
     /// 来源清单/连接事实的变化通知（`sync.remote_catalog_changed`/`remote_source_state` 的唯一来源）。
     notices: broadcast::Sender<RemoteSourceNotice>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TestSessionState {
+    pub(crate) barrier: Option<acp_core::model::OriginCursor>,
+    pub(crate) delivered: u64,
+    pub(crate) subscribers: usize,
 }
 
 impl Default for RemoteRuntime {
@@ -272,6 +359,24 @@ impl RemoteRuntime {
 
     pub fn observed_events(&self) -> Vec<String> {
         lock(&self.observed).clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_session_state(
+        &self,
+        owner: &NodeId,
+        session: &str,
+    ) -> Option<TestSessionState> {
+        let owners = lock(&self.owners);
+        let state = owners.get(owner.as_str())?;
+        Some(TestSessionState {
+            barrier: state
+                .barriers
+                .get(session)
+                .and_then(|sender| sender.borrow().clone()),
+            delivered: state.delivered.get(session).copied().unwrap_or(0),
+            subscribers: state.subscribers.get(session).copied().unwrap_or(0),
+        })
     }
 
     pub fn begin(&self, owner: &NodeId) -> RemoteGeneration {
@@ -363,12 +468,12 @@ impl RemoteRuntime {
     }
 
     /// `catalog.snapshot`：用协议目录重建该来源的运行期条目（无标题、无正文）。
-    pub fn apply_catalog(
+    pub(crate) fn apply_catalog(
         &self,
         owner: &NodeId,
         generation: RemoteGeneration,
         snapshot: &CatalogSnapshot,
-    ) -> Result<(), PortError> {
+    ) -> Result<CatalogUpdate, PortError> {
         if snapshot.sessions.as_slice().len() > MAX_CATALOG_SESSIONS {
             return Err(PortError::Corrupt(
                 "the owner catalog exceeds the runtime directory budget",
@@ -388,15 +493,14 @@ impl RemoteRuntime {
             .map_err(|_| PortError::Corrupt("the catalog revision is not a decimal string"))?;
         let mut owners = lock(&self.owners);
         let Some(state) = owners.get_mut(owner.as_str()) else {
-            return Ok(());
+            return Ok(CatalogUpdate::default());
         };
         if state.generation != Some(generation) || state.source != RemoteSourceState::Online {
-            return Ok(());
+            return Ok(CatalogUpdate::default());
         }
-        state.catalog_seen = true;
-        state.catalog_ever = true;
         let mut entries = BTreeMap::new();
         let mut epochs = BTreeMap::new();
+        let mut session_ids = BTreeSet::new();
         for session in snapshot.sessions.as_slice() {
             let session_id = SessionId::new(session.session_id.as_str())
                 .map_err(|_| PortError::Corrupt("the catalog carries an invalid session id"))?;
@@ -442,23 +546,68 @@ impl RemoteRuntime {
                     source: RemoteSourceState::Online,
                 },
             );
+            session_ids.insert(session_id.as_str().to_owned());
             epochs.insert(session_id.as_str().to_owned(), origin_epoch);
         }
+
+        if revision < state.revision {
+            return Ok(CatalogUpdate::default());
+        }
+        if revision == state.revision && state.catalog_seen {
+            if entries != state.entries || epochs != state.origin_epochs {
+                return Err(PortError::Corrupt(
+                    "the owner reused a catalog revision for different membership",
+                ));
+            }
+            return Ok(CatalogUpdate::default());
+        }
+
+        let reset_keys: Vec<String> = state
+            .origin_epochs
+            .iter()
+            .filter(|(key, old_epoch)| {
+                epochs
+                    .get(*key)
+                    .is_some_and(|new_epoch| *new_epoch != **old_epoch)
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &reset_keys {
+            state.reset_catalog_session(key);
+        }
+
+        state.catalog_seen = true;
+        state.catalog_ever = true;
         state.revision = revision;
+        let removed = state.retain_catalog_sessions(&session_ids);
         state.entries = entries;
         state.origin_epochs = epochs;
-        state
-            .events
-            .retain(|key, _| state.origin_epochs.contains_key(key));
-        state
-            .barriers
-            .retain(|key, _| state.origin_epochs.contains_key(key));
+        let link = state.link.clone();
         drop(owners);
+        let removed: Vec<RemoteSessionRef> = removed
+            .into_iter()
+            .filter_map(|key| {
+                SessionId::new(&key)
+                    .ok()
+                    .map(|session_id| RemoteSessionRef::new(owner.clone(), session_id))
+            })
+            .collect();
+        let reset: Vec<RemoteSessionRef> = reset_keys
+            .into_iter()
+            .filter_map(|key| {
+                SessionId::new(&key)
+                    .ok()
+                    .map(|session_id| RemoteSessionRef::new(owner.clone(), session_id))
+            })
+            .collect();
+        if let Some(link) = link {
+            link.reset_sessions_for_epoch_change(&reset);
+        }
         self.notify(RemoteSourceNotice::CatalogChanged {
             owner_node_id: owner.clone(),
             revision: RemoteCatalogRevision::new(revision),
         });
-        Ok(())
+        Ok(CatalogUpdate { removed, reset })
     }
 
     /// 快照 `session_meta` item：只更新状态与版本。
@@ -554,11 +703,9 @@ impl RemoteRuntime {
         }
         match state.origin_epochs.get(&key) {
             Some(epoch) if epoch == &origin_epoch => {}
-            Some(_) => {
-                return Err(PortError::Corrupt(
-                    "the event origin epoch disagrees with the runtime catalog",
-                ));
-            }
+            // A catalog epoch change makes old in-flight frames stale. They are connection-local
+            // leftovers, not a malformed authenticated stream, so drop them without ACK or close.
+            Some(_) => return Ok(EventDisposition::Ignored),
             // 目录尚未到达：按迟到事件忽略（连接内的重放会补齐）。
             None => return Ok(EventDisposition::Ignored),
         }
@@ -627,6 +774,12 @@ impl RemoteRuntime {
         let Some(state) = owners.get_mut(owner.as_str()) else {
             return;
         };
+        if !state.entries.contains_key(&key) {
+            return;
+        }
+        if state.origin_epochs.get(&key) != Some(&cursor.origin_epoch) {
+            return;
+        }
         if state.failed.remove(&key) {
             state.pending.remove(&key);
             state.replaying.remove(&key);
@@ -671,6 +824,12 @@ impl RemoteRuntime {
         let Some(state) = owners.get_mut(owner.as_str()) else {
             return;
         };
+        if !state.entries.contains_key(&key) {
+            return;
+        }
+        if state.origin_epochs.get(&key) != Some(&cursor.origin_epoch) {
+            return;
+        }
         if state.failed.remove(&key) {
             state.pending.remove(&key);
             state.replaying.remove(&key);
@@ -763,6 +922,9 @@ impl RemoteRuntime {
     ) -> Option<broadcast::Sender<RuntimeSignal>> {
         let mut owners = lock(&self.owners);
         let state = owners.get_mut(owner.as_str())?;
+        if !state.entries.contains_key(session) {
+            return None;
+        }
         Some(
             state
                 .signals
@@ -792,6 +954,9 @@ impl RemoteRuntime {
             let state = owners
                 .get_mut(remote.owner_node_id.as_str())
                 .ok_or(ClientError::OwnerOffline)?;
+            if !state.entries.contains_key(&key) {
+                return Err(ClientError::NotFound(remote.session_id.clone()));
+            }
             if state.subscriptions.contains_key(&key) {
                 *state.subscribers.entry(key.clone()).or_insert(0) += 1;
                 return Ok(state
@@ -809,6 +974,11 @@ impl RemoteRuntime {
             let state = owners
                 .get_mut(remote.owner_node_id.as_str())
                 .ok_or(ClientError::OwnerOffline)?;
+            if !state.entries.contains_key(&key) {
+                drop(owners);
+                link.forget_session(remote.session_id.as_str());
+                return Err(ClientError::NotFound(remote.session_id.clone()));
+            }
             state.subscriptions.insert(key.clone(), cursor.clone());
             state.subscribers.insert(key.clone(), 1);
             state.replaying.insert(key.clone());
@@ -883,13 +1053,66 @@ impl RemoteRuntime {
             .flatten()
     }
 
+    fn session_is_visible(&self, session: &RemoteSessionRef, generation: RemoteGeneration) -> bool {
+        lock(&self.owners)
+            .get(session.owner_node_id.as_str())
+            .is_some_and(|state| {
+                state.generation == Some(generation)
+                    && state.source == RemoteSourceState::Online
+                    && state.entries.contains_key(session.session_id.as_str())
+            })
+    }
+
+    /// Whether a full catalog has been applied in this generation and no longer contains the session.
+    ///
+    /// Before the first catalog arrives, membership is unknown. Link operations from the startup recovery
+    /// plan must remain valid in that window; once a catalog has been applied, absence is authoritative.
+    pub(crate) fn wire_session_is_absent_from_catalog(
+        &self,
+        session: &WireRemoteSessionRef,
+        generation: RemoteGeneration,
+    ) -> bool {
+        lock(&self.owners)
+            .get(session.owner_node_id.as_str())
+            .is_some_and(|state| {
+                state.generation == Some(generation)
+                    && state.source == RemoteSourceState::Online
+                    && state.catalog_seen
+                    && !state.entries.contains_key(session.session_id.as_str())
+            })
+    }
+
+    /// Whether a resource frame still belongs to the current catalog epoch of this connection.
+    pub(crate) fn wire_session_epoch_matches(
+        &self,
+        session: &WireRemoteSessionRef,
+        generation: RemoteGeneration,
+        epoch: &Uuid,
+    ) -> bool {
+        lock(&self.owners)
+            .get(session.owner_node_id.as_str())
+            .is_some_and(|state| {
+                state.generation == Some(generation)
+                    && state.source == RemoteSourceState::Online
+                    && state
+                        .origin_epochs
+                        .get(session.session_id.as_str())
+                        .is_some_and(|current| current.as_str() == epoch.as_str())
+            })
+    }
+
     async fn wait_barrier(
         &self,
         remote: &RemoteSessionRef,
         generation: RemoteGeneration,
         cursor: Option<WireOriginCursor>,
     ) -> Result<RemoteSourceBarrier, PortError> {
-        if self.current_generation(&remote.owner_node_id) != Some(generation) {
+        if !self.session_is_visible(remote, generation) {
+            if self.current_generation(&remote.owner_node_id) == Some(generation) {
+                return Err(PortError::NotFound(acp_core::model::EntityRef::Session(
+                    remote.session_id.clone(),
+                )));
+            }
             return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
         }
         if !self.has_subscription(remote) {
@@ -903,6 +1126,11 @@ impl RemoteRuntime {
             let state = owners
                 .get_mut(remote.owner_node_id.as_str())
                 .ok_or(PortError::Unavailable(UnavailableKind::OwnerOffline))?;
+            if !state.entries.contains_key(remote.session_id.as_str()) {
+                return Err(PortError::NotFound(acp_core::model::EntityRef::Session(
+                    remote.session_id.clone(),
+                )));
+            }
             state
                 .barriers
                 .entry(remote.session_id.as_str().to_owned())
@@ -915,14 +1143,37 @@ impl RemoteRuntime {
                     return Ok(value);
                 }
                 if receiver.changed().await.is_err() {
-                    return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
+                    return Err(if self.session_is_visible(remote, generation) {
+                        PortError::Unavailable(UnavailableKind::OwnerOffline)
+                    } else if self.current_generation(&remote.owner_node_id) == Some(generation) {
+                        PortError::NotFound(acp_core::model::EntityRef::Session(
+                            remote.session_id.clone(),
+                        ))
+                    } else {
+                        PortError::Unavailable(UnavailableKind::OwnerOffline)
+                    });
                 }
             }
         };
         let value = tokio::time::timeout(BARRIER_WAIT, wait)
             .await
-            .map_err(|_| PortError::Unavailable(UnavailableKind::OwnerOffline))??;
-        if self.current_generation(&remote.owner_node_id) != Some(generation) {
+            .map_err(|_| {
+                if !self.session_is_visible(remote, generation)
+                    && self.current_generation(&remote.owner_node_id) == Some(generation)
+                {
+                    PortError::NotFound(acp_core::model::EntityRef::Session(
+                        remote.session_id.clone(),
+                    ))
+                } else {
+                    PortError::Unavailable(UnavailableKind::OwnerOffline)
+                }
+            })??;
+        if !self.session_is_visible(remote, generation) {
+            if self.current_generation(&remote.owner_node_id) == Some(generation) {
+                return Err(PortError::NotFound(acp_core::model::EntityRef::Session(
+                    remote.session_id.clone(),
+                )));
+            }
             return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
         }
         Ok(RemoteSourceBarrier {
@@ -1037,6 +1288,14 @@ impl RemoteSourceReads for RemoteRuntime {
         generation: RemoteGeneration,
         query: RemoteReadQuery,
     ) -> Result<RemoteReadResult, PortError> {
+        if self.current_generation(&session.owner_node_id) != Some(generation) {
+            return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
+        }
+        if !self.session_is_visible(session, generation) {
+            return Err(PortError::NotFound(acp_core::model::EntityRef::Session(
+                session.session_id.clone(),
+            )));
+        }
         let link = self
             .link_of(&session.owner_node_id)
             .map_err(|error| error.to_port_error())?;
@@ -1048,6 +1307,11 @@ impl RemoteSourceReads for RemoteRuntime {
         let result = map_read_document(session, &document)?;
         if self.current_generation(&session.owner_node_id) != Some(generation) {
             return Err(PortError::Unavailable(UnavailableKind::OwnerOffline));
+        }
+        if !self.session_is_visible(session, generation) {
+            return Err(PortError::NotFound(acp_core::model::EntityRef::Session(
+                session.session_id.clone(),
+            )));
         }
         Ok(result)
     }
@@ -1394,6 +1658,11 @@ impl RemoteEventStream for RemoteRuntime {
                 .get_mut(session.owner_node_id.as_str())
                 .ok_or(PortError::Unavailable(UnavailableKind::OwnerOffline))?;
             let key = session.session_id.as_str().to_owned();
+            if !state.entries.contains_key(&key) {
+                return Err(PortError::NotFound(acp_core::model::EntityRef::Session(
+                    session.session_id.clone(),
+                )));
+            }
             let signals = state
                 .signals
                 .entry(key.clone())
@@ -1459,12 +1728,25 @@ fn signal_item(signal: RuntimeSignal) -> RemoteStreamItem {
             cursor,
         },
         RuntimeSignal::Unavailable { error } => RemoteStreamItem::Unavailable(error),
+        RuntimeSignal::SessionNotFound => not_found_item(),
     }
 }
 
 /// 慢消费者/缓冲溢出的显式处置（`resource.backpressure`，可重试；客户端必须重建）。
 fn backpressure_item() -> RemoteStreamItem {
     RemoteStreamItem::Unavailable(backpressure_error())
+}
+
+/// Catalog removal is a terminal not-found, not a retryable connection failure.
+fn not_found_item() -> RemoteStreamItem {
+    RemoteStreamItem::Unavailable(
+        acp_core::model::PublicError::coded(
+            "nodelink.command.not_found",
+            "the remote session no longer exists in the owner catalog",
+            false,
+        )
+        .expect("the not-found code is valid"),
+    )
 }
 
 /// 缓冲溢出的结构化错误（`resource.backpressure`，可重试；客户端必须重建）。
@@ -2185,6 +2467,437 @@ pub fn include_list(include: &HistoryInclude) -> Result<Vec<IncludeResource>, Po
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const OWNER_ID: &str = "5c6d7e8f-9012-4a3b-8c4d-5e6f708192b5";
+    const SESSION_A: &str = "2bc8b944-2a4f-46a7-8c31-b2c40923f60a";
+    const SESSION_B: &str = "3cd9ca55-3b50-47b8-9d42-c3d51a34a71b";
+    const EPOCH_A: &str = "018f0000-0000-4000-8000-0000000000aa";
+    const EPOCH_B: &str = "018f0000-0000-4000-8000-0000000000bb";
+    const EVENT_A: &str = "018f0000-0000-4000-8000-0000000000ea";
+    const EVENT_B: &str = "018f0000-0000-4000-8000-0000000000eb";
+
+    fn test_event(
+        owner: &NodeId,
+        session: &SessionId,
+        epoch: &OriginEpoch,
+        id: &str,
+        sequence: u64,
+    ) -> RuntimeEvent {
+        RuntimeEvent {
+            owner_node_id: owner.clone(),
+            session_id: session.clone(),
+            origin_event_id: EventId::new(id).expect("event id"),
+            origin_epoch: epoch.clone(),
+            origin_sequence: Sequence::new(sequence).expect("sequence"),
+            event_type: EventType::new("session.activity.changed").expect("event type"),
+            payload_digest: Digest::new(&base64url(&[0_u8; 32])).expect("digest"),
+            created_at: Timestamp::new("2026-10-26T00:00:00.000Z").expect("timestamp"),
+            payload: WireEventPayload::new(Some(RawObject::empty()), None).expect("event payload"),
+        }
+    }
+
+    fn catalog_for(session_id: &str, epoch: &str) -> CatalogSnapshot {
+        catalog_for_revision(2, &[(session_id, epoch)])
+    }
+
+    fn catalog_for_revision(revision: u64, sessions: &[(&str, &str)]) -> CatalogSnapshot {
+        CatalogSnapshot {
+            revision: DecimalString::parse(&revision.to_string()).expect("revision"),
+            agents: node_link_protocol::catalog::AgentEntryList::new(Vec::new()).expect("agents"),
+            directories: node_link_protocol::catalog::DirectoryEntryList::new(Vec::new())
+                .expect("directories"),
+            sessions: node_link_protocol::catalog::CatalogSessionList::new(
+                sessions
+                    .iter()
+                    .map(
+                        |(session_id, epoch)| node_link_protocol::catalog::CatalogSession {
+                            session_id: Uuid::parse(session_id).expect("session id"),
+                            origin_epoch: Uuid::parse(epoch).expect("origin epoch"),
+                            agent_id: node_link_protocol::common::AgentId::parse("codex")
+                                .expect("agent id"),
+                            state: WireSessionState::Idle,
+                            version: DecimalString::parse("3").expect("version"),
+                            created_at: node_link_protocol::common::Timestamp::parse(
+                                "2026-10-26T00:00:00.000Z",
+                            )
+                            .expect("timestamp"),
+                            workspace_directory_id: Nullable::null(),
+                        },
+                    )
+                    .collect(),
+            )
+            .expect("sessions"),
+        }
+    }
+
+    fn wire_event(
+        owner: &NodeId,
+        session_id: &str,
+        epoch: &str,
+        event_id: &str,
+        sequence: u64,
+    ) -> Event {
+        let payload = WireEventPayload::new(Some(RawObject::empty()), None).expect("payload");
+        let digest = payload_digest(&payload).expect("digest");
+        Event {
+            origin_event_id: Uuid::parse(event_id).expect("event id"),
+            origin_epoch: Uuid::parse(epoch).expect("epoch"),
+            origin_sequence: DecimalString::parse(&sequence.to_string()).expect("sequence"),
+            session_ref: WireRemoteSessionRef {
+                owner_node_id: Uuid::parse(owner.as_str()).expect("owner"),
+                session_id: Uuid::parse(session_id).expect("session"),
+            },
+            event_type: node_link_protocol::resource::EventType::parse("session.activity.changed")
+                .expect("event type"),
+            payload_digest: acpr_wire::Base64Url::<32>::parse(&base64url(&digest))
+                .expect("payload digest"),
+            created_at: node_link_protocol::common::Timestamp::parse("2026-10-26T00:00:00.000Z")
+                .expect("timestamp"),
+            payload,
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_removal_clears_every_per_session_runtime_structure_idempotently() {
+        let runtime = RemoteRuntime::default();
+        let owner = NodeId::new(OWNER_ID).expect("owner");
+        let session_a = SessionId::new(SESSION_A).expect("session a");
+        let session_b = SessionId::new(SESSION_B).expect("session b");
+        let epoch_a = OriginEpoch::new(EPOCH_A).expect("epoch a");
+        let epoch_b = OriginEpoch::new(EPOCH_B).expect("epoch b");
+        let event_a = test_event(&owner, &session_a, &epoch_a, EVENT_A, 11);
+        let event_b = test_event(&owner, &session_b, &epoch_b, EVENT_B, 21);
+        let cursor_b = OriginCursor::new(epoch_b.clone(), Sequence::new(20).expect("cursor"));
+        let wire_cursor_b = wire_cursor(&cursor_b).expect("wire cursor");
+        let generation = RemoteGeneration::new(7);
+
+        let (event_a_sender, mut event_a_receiver) = broadcast::channel(EVENT_BUFFER_CAPACITY);
+        let (event_b_sender, _) = broadcast::channel(EVENT_BUFFER_CAPACITY);
+        let (barrier_a_sender, mut barrier_a_receiver) = watch::channel(None);
+        let (barrier_b_sender, _) = watch::channel(None);
+        let (signal_a_sender, mut signal_a_receiver) = broadcast::channel(SIGNAL_CAPACITY);
+        let (signal_b_sender, _) = broadcast::channel(SIGNAL_CAPACITY);
+
+        {
+            let mut owners = lock(&runtime.owners);
+            let state = owners.entry(OWNER_ID.to_owned()).or_default();
+            state.generation = Some(generation);
+            state.counter = generation.get();
+            state.source = RemoteSourceState::Online;
+            state.catalog_seen = true;
+            state.catalog_ever = true;
+
+            state
+                .origin_epochs
+                .insert(SESSION_A.to_owned(), epoch_a.clone());
+            state
+                .origin_epochs
+                .insert(SESSION_B.to_owned(), epoch_b.clone());
+            state.sequences.insert(SESSION_A.to_owned(), 10);
+            state.sequences.insert(SESSION_B.to_owned(), 20);
+            state.events.insert(SESSION_A.to_owned(), event_a_sender);
+            state.events.insert(SESSION_B.to_owned(), event_b_sender);
+            state
+                .barriers
+                .insert(SESSION_A.to_owned(), barrier_a_sender);
+            state
+                .barriers
+                .insert(SESSION_B.to_owned(), barrier_b_sender);
+            state.signals.insert(SESSION_A.to_owned(), signal_a_sender);
+            state.signals.insert(SESSION_B.to_owned(), signal_b_sender);
+            state
+                .subscriptions
+                .insert(SESSION_A.to_owned(), Some(wire_cursor_b.clone()));
+            state
+                .subscriptions
+                .insert(SESSION_B.to_owned(), Some(wire_cursor_b.clone()));
+            state
+                .pending
+                .insert(SESSION_A.to_owned(), BTreeMap::from([(11, event_a)]));
+            state
+                .pending
+                .insert(SESSION_B.to_owned(), BTreeMap::from([(21, event_b)]));
+            state
+                .replaying
+                .extend([SESSION_A.to_owned(), SESSION_B.to_owned()]);
+            state
+                .failed
+                .extend([SESSION_A.to_owned(), SESSION_B.to_owned()]);
+            state.delivered.insert(SESSION_A.to_owned(), 10);
+            state.delivered.insert(SESSION_B.to_owned(), 20);
+            state.subscribers.insert(SESSION_A.to_owned(), 2);
+            state.subscribers.insert(SESSION_B.to_owned(), 3);
+        }
+
+        let snapshot = catalog_for(SESSION_B, EPOCH_B);
+        let update = runtime
+            .apply_catalog(&owner, generation, &snapshot)
+            .expect("catalog applies");
+        let removed = update.removed;
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].session_id, session_a);
+        let wire_a =
+            wire_remote(&RemoteSessionRef::new(owner.clone(), session_a)).expect("wire session a");
+        let wire_b =
+            wire_remote(&RemoteSessionRef::new(owner.clone(), session_b)).expect("wire session b");
+        assert!(runtime.wire_session_is_absent_from_catalog(&wire_a, generation));
+        assert!(!runtime.wire_session_is_absent_from_catalog(&wire_b, generation));
+
+        assert!(matches!(
+            signal_a_receiver.try_recv(),
+            Ok(RuntimeSignal::SessionNotFound)
+        ));
+        assert!(event_a_receiver.try_recv().is_err());
+        assert!(barrier_a_receiver.changed().await.is_err());
+
+        {
+            let owners = lock(&runtime.owners);
+            let state = owners.get(OWNER_ID).expect("owner state");
+            assert!(!state.entries.contains_key(SESSION_A));
+            assert!(!state.origin_epochs.contains_key(SESSION_A));
+            assert!(!state.sequences.contains_key(SESSION_A));
+            assert!(!state.events.contains_key(SESSION_A));
+            assert!(!state.barriers.contains_key(SESSION_A));
+            assert!(!state.signals.contains_key(SESSION_A));
+            assert!(!state.subscriptions.contains_key(SESSION_A));
+            assert!(!state.pending.contains_key(SESSION_A));
+            assert!(!state.replaying.contains(SESSION_A));
+            assert!(!state.failed.contains(SESSION_A));
+            assert!(!state.delivered.contains_key(SESSION_A));
+            assert!(!state.subscribers.contains_key(SESSION_A));
+
+            assert!(state.entries.contains_key(SESSION_B));
+            assert!(state.origin_epochs.contains_key(SESSION_B));
+            assert_eq!(state.sequences.get(SESSION_B), Some(&20));
+            assert!(state.events.contains_key(SESSION_B));
+            assert!(state.barriers.contains_key(SESSION_B));
+            assert!(state.signals.contains_key(SESSION_B));
+            assert_eq!(
+                state.subscriptions.get(SESSION_B),
+                Some(&Some(wire_cursor_b.clone()))
+            );
+            assert!(state.pending.contains_key(SESSION_B));
+            assert!(state.replaying.contains(SESSION_B));
+            assert!(state.failed.contains(SESSION_B));
+            assert_eq!(state.delivered.get(SESSION_B), Some(&20));
+            assert_eq!(state.subscribers.get(SESSION_B), Some(&3));
+        }
+
+        runtime.apply_caught_up(
+            &owner,
+            &wire_a,
+            &CaughtUp {
+                attachment_id: Uuid::parse("018f0000-0000-4000-8000-0000000000ca")
+                    .expect("attachment"),
+                attachment_generation: DecimalString::parse("1").expect("generation"),
+                cursor: wire_cursor_b.clone(),
+            },
+        );
+        assert!(
+            !lock(&runtime.owners)
+                .get(OWNER_ID)
+                .expect("owner state")
+                .barriers
+                .contains_key(SESSION_A),
+            "a late caught_up frame must not recreate removed session state"
+        );
+
+        let update_again = runtime
+            .apply_catalog(&owner, generation, &snapshot)
+            .expect("idempotent catalog applies");
+        assert!(update_again.removed.is_empty());
+        assert!(update_again.reset.is_empty());
+        let owners = lock(&runtime.owners);
+        let state = owners.get(OWNER_ID).expect("owner state");
+        assert_eq!(state.entries.len(), 1);
+        assert!(state.entries.contains_key(SESSION_B));
+        assert_eq!(state.subscribers.get(SESSION_B), Some(&3));
+    }
+
+    #[test]
+    fn stale_catalog_revision_cannot_restore_removed_sessions_or_rewind_state() {
+        let runtime = RemoteRuntime::default();
+        let owner = NodeId::new(OWNER_ID).expect("owner");
+        let generation = RemoteGeneration::new(9);
+        {
+            let mut owners = lock(&runtime.owners);
+            let state = owners.entry(OWNER_ID.to_owned()).or_default();
+            state.generation = Some(generation);
+            state.counter = generation.get();
+            state.source = RemoteSourceState::Online;
+        }
+
+        runtime
+            .apply_catalog(
+                &owner,
+                generation,
+                &catalog_for_revision(1, &[(SESSION_A, EPOCH_A), (SESSION_B, EPOCH_B)]),
+            )
+            .expect("revision one");
+        runtime
+            .apply_catalog(
+                &owner,
+                generation,
+                &catalog_for_revision(2, &[(SESSION_B, EPOCH_B)]),
+            )
+            .expect("revision two");
+
+        let (event_sender, _) = broadcast::channel(EVENT_BUFFER_CAPACITY);
+        let (barrier_sender, _) = watch::channel(None);
+        {
+            let mut owners = lock(&runtime.owners);
+            let state = owners.get_mut(OWNER_ID).expect("owner state");
+            state.events.insert(SESSION_B.to_owned(), event_sender);
+            state.barriers.insert(SESSION_B.to_owned(), barrier_sender);
+            state.delivered.insert(SESSION_B.to_owned(), 21);
+            state.subscribers.insert(SESSION_B.to_owned(), 4);
+        }
+        let mut notices = runtime.notices.subscribe();
+
+        let update = runtime
+            .apply_catalog(
+                &owner,
+                generation,
+                &catalog_for_revision(1, &[(SESSION_A, EPOCH_A), (SESSION_B, EPOCH_B)]),
+            )
+            .expect("late revision is ignored");
+
+        assert!(update.removed.is_empty());
+        assert!(update.reset.is_empty());
+        assert!(notices.try_recv().is_err());
+        let owners = lock(&runtime.owners);
+        let state = owners.get(OWNER_ID).expect("owner state");
+        assert_eq!(state.revision, 2);
+        assert!(!state.entries.contains_key(SESSION_A));
+        assert!(state.entries.contains_key(SESSION_B));
+        assert!(state.events.contains_key(SESSION_B));
+        assert!(state.barriers.contains_key(SESSION_B));
+        assert_eq!(state.delivered.get(SESSION_B), Some(&21));
+        assert_eq!(state.subscribers.get(SESSION_B), Some(&4));
+    }
+
+    #[tokio::test]
+    async fn catalog_epoch_change_clears_only_the_changed_session_and_drops_old_events() {
+        const NEW_EPOCH_A: &str = "018f0000-0000-4000-8000-0000000000cc";
+        let runtime = RemoteRuntime::default();
+        let owner = NodeId::new(OWNER_ID).expect("owner");
+        let session_a = SessionId::new(SESSION_A).expect("session a");
+        let session_b = SessionId::new(SESSION_B).expect("session b");
+        let old_epoch_a = OriginEpoch::new(EPOCH_A).expect("old epoch a");
+        let epoch_b = OriginEpoch::new(EPOCH_B).expect("epoch b");
+        let generation = RemoteGeneration::new(10);
+        {
+            let mut owners = lock(&runtime.owners);
+            let state = owners.entry(OWNER_ID.to_owned()).or_default();
+            state.generation = Some(generation);
+            state.counter = generation.get();
+            state.source = RemoteSourceState::Online;
+        }
+        runtime
+            .apply_catalog(
+                &owner,
+                generation,
+                &catalog_for_revision(1, &[(SESSION_A, EPOCH_A), (SESSION_B, EPOCH_B)]),
+            )
+            .expect("old catalog");
+
+        let (event_a_sender, mut event_a_receiver) = broadcast::channel(EVENT_BUFFER_CAPACITY);
+        let (event_b_sender, _) = broadcast::channel(EVENT_BUFFER_CAPACITY);
+        let (barrier_a_sender, mut barrier_a_receiver) = watch::channel(None);
+        let (barrier_b_sender, _) = watch::channel(None);
+        let (signal_a_sender, mut signal_a_receiver) = broadcast::channel(SIGNAL_CAPACITY);
+        let (signal_b_sender, _) = broadcast::channel(SIGNAL_CAPACITY);
+        {
+            let mut owners = lock(&runtime.owners);
+            let state = owners.get_mut(OWNER_ID).expect("owner state");
+            state.events.insert(SESSION_A.to_owned(), event_a_sender);
+            state.events.insert(SESSION_B.to_owned(), event_b_sender);
+            state
+                .barriers
+                .insert(SESSION_A.to_owned(), barrier_a_sender);
+            state
+                .barriers
+                .insert(SESSION_B.to_owned(), barrier_b_sender);
+            state.signals.insert(SESSION_A.to_owned(), signal_a_sender);
+            state.signals.insert(SESSION_B.to_owned(), signal_b_sender);
+            state.pending.insert(
+                SESSION_A.to_owned(),
+                BTreeMap::from([(3, test_event(&owner, &session_a, &old_epoch_a, EVENT_A, 3))]),
+            );
+            state.pending.insert(
+                SESSION_B.to_owned(),
+                BTreeMap::from([(4, test_event(&owner, &session_b, &epoch_b, EVENT_B, 4))]),
+            );
+            state
+                .replaying
+                .extend([SESSION_A.to_owned(), SESSION_B.to_owned()]);
+            state
+                .failed
+                .extend([SESSION_A.to_owned(), SESSION_B.to_owned()]);
+            state.delivered.insert(SESSION_A.to_owned(), 3);
+            state.delivered.insert(SESSION_B.to_owned(), 4);
+            state.subscribers.insert(SESSION_A.to_owned(), 2);
+            state.subscribers.insert(SESSION_B.to_owned(), 3);
+        }
+
+        let update = runtime
+            .apply_catalog(
+                &owner,
+                generation,
+                &catalog_for_revision(2, &[(SESSION_A, NEW_EPOCH_A), (SESSION_B, EPOCH_B)]),
+            )
+            .expect("new catalog");
+        assert_eq!(update.reset.len(), 1);
+        assert_eq!(update.reset[0].session_id, session_a);
+        assert!(matches!(
+            signal_a_receiver.try_recv(),
+            Ok(RuntimeSignal::Reset {
+                reason: ResetReason::EpochMismatch,
+                cursor: None,
+            })
+        ));
+        assert!(event_a_receiver.try_recv().is_err());
+        assert!(barrier_a_receiver.changed().await.is_ok());
+        assert!(barrier_a_receiver.borrow().is_none());
+
+        {
+            let owners = lock(&runtime.owners);
+            let state = owners.get(OWNER_ID).expect("owner state");
+            assert_eq!(
+                state.origin_epochs.get(SESSION_A).map(OriginEpoch::as_str),
+                Some(NEW_EPOCH_A)
+            );
+            assert!(!state.events.contains_key(SESSION_A));
+            assert!(!state.barriers.contains_key(SESSION_A));
+            assert!(!state.pending.contains_key(SESSION_A));
+            assert!(!state.replaying.contains(SESSION_A));
+            assert!(!state.failed.contains(SESSION_A));
+            assert!(!state.delivered.contains_key(SESSION_A));
+            assert!(!state.subscribers.contains_key(SESSION_A));
+            assert!(state.events.contains_key(SESSION_B));
+            assert!(state.barriers.contains_key(SESSION_B));
+            assert!(state.pending.contains_key(SESSION_B));
+            assert!(state.replaying.contains(SESSION_B));
+            assert!(state.failed.contains(SESSION_B));
+            assert_eq!(state.delivered.get(SESSION_B), Some(&4));
+            assert_eq!(state.subscribers.get(SESSION_B), Some(&3));
+        }
+
+        let old = wire_event(&owner, SESSION_A, EPOCH_A, EVENT_A, 4);
+        assert_eq!(
+            runtime
+                .apply_event(&owner, generation, &old)
+                .expect("old epoch is dropped"),
+            EventDisposition::Ignored
+        );
+        let current = wire_event(&owner, SESSION_A, NEW_EPOCH_A, EVENT_A, 1);
+        assert!(matches!(
+            runtime
+                .apply_event(&owner, generation, &current)
+                .expect("new epoch event"),
+            EventDisposition::Forwarded(_)
+        ));
+    }
 
     /// Owner 的幂等冲突必须保留为 `Conflict`，sync 层才能回 `command.idempotency_conflict`；
     /// 折成 `Backend` 会变成可重试的 `internal.unavailable`，客户端会错误地重试。

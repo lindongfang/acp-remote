@@ -1229,17 +1229,17 @@ impl CommandRoute {
                 .ok()
                 .and_then(|text| acp_core::model::CommandResult::from_json_text(&text).ok())
             {
-                Some(result) => self
-                    .core
-                    .settle_session_create(
-                        &actor,
-                        &request,
-                        CoreStatus::Completed,
-                        Some(result),
-                        None,
-                    )
-                    .await
-                    .map(|_| true),
+                Some(result) => {
+                    self.core
+                        .settle_session_create(
+                            &actor,
+                            &request,
+                            CoreStatus::Completed,
+                            Some(result),
+                            None,
+                        )
+                        .await
+                }
                 None => {
                     warn!(
                         event = "node_link.session_create_result_unencodable",

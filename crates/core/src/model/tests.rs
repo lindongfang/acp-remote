@@ -678,6 +678,25 @@ fn client_command_validates_family_session_and_version() {
     mode_set.expected_version = Some(Version::from(3));
     mode_set.validate().expect("valid mode set");
 
+    // `session.delete` 固定为空 payload，必须带 sessionId，且不接受 expectedVersion。
+    let delete = ClientCommand {
+        actor: Actor::LocalCli,
+        request: request_id(),
+        command: "session.delete".to_owned(),
+        kind: CommandKind::Mutation,
+        session: Some(session_id()),
+        expected_version: None,
+        request_fingerprint: digest(),
+        payload: CommandPayload::SessionDelete {},
+    };
+    delete.validate().expect("valid session delete");
+    let mut delete_with_version = delete.clone();
+    delete_with_version.expected_version = Some(Version::from(1));
+    assert_eq!(delete_with_version.validate(), Err(InvalidValue::Field));
+    let mut delete_without_session = delete;
+    delete_without_session.session = None;
+    assert_eq!(delete_without_session.validate(), Err(InvalidValue::Field));
+
     // include 必须非空且不重复；prompt 项数受限。
     assert_eq!(
         CommandPayload::SessionRead {

@@ -1,6 +1,6 @@
 //! fixture 驱动：`fixtures/sync/v1/manifest.json` 的每条 WSS 消息用例都必须按它在合同里的角色通过。
 //!
-//! 覆盖传输层与全部 31 个消息类型（`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body）。
+//! 覆盖传输层与全部 29 个消息类型（`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body）。
 //! 它同时证明两件事：合法消息的 body 字节**逐字节**不被信封层改动；非法消息在正确的层被拒绝（信封层或
 //! body 层）。`TypedBody::decode` 的 `match` 是穷尽的——新增消息类型必然在此编译失败，不会静默漏掉。
 
@@ -38,7 +38,9 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// 变为 116。
 /// 变更 `access-owner-data-stateless`（WP1）新增 10 条合法 `sync.remote_*` 来源流夹具与 2 条
 /// 带 `resource.stateless-origin.v1` 加性字段的 `command`/`command.result` 夹具，故由 116 变为 128。
-const EXPECTED_VALID_MESSAGE_CASES: usize = 160;
+/// 变更 `session-create-and-empty-cleanup`（WP1）删除 `session.start`/`session.preparation` 的 10 条
+/// 合法夹具，新增 3 条 `session.delete`/`session.deleted` 夹具，故由 160 变为 153。
+const EXPECTED_VALID_MESSAGE_CASES: usize = 153;
 /// 同一集合中 `valid: false` 且由**信封层**拒绝的用例数（`every_manifest_case_behaves_as_declared`
 /// 只显式登记 `invalid/ping-without-connection.json` 与 `invalid/sequence-is-number.json` 两条，
 /// 其余非法 WSS 用例都落在 body 类型化层）。
@@ -56,7 +58,9 @@ const EXPECTED_ENVELOPE_REJECTED: usize = 2;
 /// 旧 imported 游标、未协商额外键、Access 序号混入、ACK 带 `sessionRef`、十进制 `revision` 写成数字、
 /// 未登记来源状态、缺结构化 error、`remoteTarget` 缺 `sessionId`、`readCursor` 缺 `originEpoch`），
 /// 故由 56 变为 66。
-const EXPECTED_BODY_REJECTED: usize = 81;
+/// 变更 `session-create-and-empty-cleanup`（WP1）删除 5 条 `session.start`/`session.preparation`
+/// 非法夹具、新增 2 条 `session.delete` 非法夹具（缺 `sessionId`、payload 多键），故由 81 变为 78。
+const EXPECTED_BODY_REJECTED: usize = 78;
 /// 非 WSS 的 HTTPS 载荷（配对）用例数；它们由 `tests/pairing_fixtures.rs` 覆盖。
 /// 变更 `pairing-code-web-entry`（WP1）新增 lookup 的 2 条正例与 6 条负例，故由 5 变为 13。
 /// 变更 `device-pairing-qr-reference`（WP1）新增 qr-lookup 的 3 条正例与 3 条负例、并移除旧
@@ -85,7 +89,9 @@ const EXPECTED_TARGETED_PAYLOADS: usize = 30;
 /// 附件 WSS 连接（docs/SYNC_PROTOCOL.md §3.4），**不是** `message.schema.json` 的信封消息，因此不经
 /// 信封层与 `TypedBody`；正例/负例的结构由 `check-schema-fixtures.mjs` 用同一 schema 校验。这里是
 /// 显式跳过，不是静默漏计：数量变化会让本断言失败。
-const EXPECTED_SKIPPED_TRANSPORT_FRAMES: usize = 33;
+/// 变更 `session-create-and-empty-cleanup`（WP1）删除 `target: preparation` 的 9 条附件帧夹具
+/// （`attachment.begin`/`manifest_begin` 的准备分支与其错误码正例），故由 33 变为 24。
+const EXPECTED_SKIPPED_TRANSPORT_FRAMES: usize = 24;
 const PAIRING_SCHEMA_SUFFIX: &str = "schemas/sync/v1/pairing.schema.json";
 const TRANSPORT_FRAME_SCHEMA_SUFFIX: &str = "schemas/sync/v1/attachment.schema.json";
 
@@ -93,7 +99,7 @@ fn parse<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, String> {
     serde_json::from_str(body).map_err(|error| error.to_string())
 }
 
-/// 六个家族的类型化 body。`decode` 的 match 穷尽 v1 的 31 个消息类型。
+/// 六个家族的类型化 body。`decode` 的 match 穷尽 v1 的 29 个消息类型。
 enum TypedBody {
     ClientHello(Box<auth::ClientHello>),
     ServerChallenge(Box<auth::ServerChallenge>),
@@ -123,8 +129,6 @@ enum TypedBody {
     CommandResult(Box<command::CommandResult>),
     SessionView(Box<sync::SessionView>),
     SessionViewResult(Box<sync::SessionViewResult>),
-    SessionPreparation(Box<sync::SessionPreparation>),
-    SessionPreparationResult(Box<sync::SessionPreparationResult>),
 }
 
 impl TypedBody {
@@ -168,12 +172,6 @@ impl TypedBody {
             MessageType::CommandResult => TypedBody::CommandResult(Box::new(parse(body)?)),
             MessageType::SessionView => TypedBody::SessionView(Box::new(parse(body)?)),
             MessageType::SessionViewResult => TypedBody::SessionViewResult(Box::new(parse(body)?)),
-            MessageType::SessionPreparation => {
-                TypedBody::SessionPreparation(Box::new(parse(body)?))
-            }
-            MessageType::SessionPreparationResult => {
-                TypedBody::SessionPreparationResult(Box::new(parse(body)?))
-            }
         };
         Ok(decoded)
     }
@@ -208,8 +206,6 @@ impl TypedBody {
             TypedBody::CommandResult(body) => serde_json::to_string(body),
             TypedBody::SessionView(body) => serde_json::to_string(body),
             TypedBody::SessionViewResult(body) => serde_json::to_string(body),
-            TypedBody::SessionPreparation(body) => serde_json::to_string(body),
-            TypedBody::SessionPreparationResult(body) => serde_json::to_string(body),
         }
         .expect("已解码的 body 必然可序列化")
     }
@@ -355,7 +351,7 @@ fn every_manifest_case_behaves_as_declared() {
 
 #[test]
 fn every_message_type_is_covered_by_a_valid_fixture() {
-    // 31 个类型都必须有至少一条合法夹具真正走通"信封 + 类型化 body"，而不是只出现在分派表里。
+    // 29 个类型都必须有至少一条合法夹具真正走通"信封 + 类型化 body"，而不是只出现在分派表里。
     let mut covered: HashSet<MessageType> = HashSet::new();
 
     for case in support::manifest_cases(MANIFEST) {
@@ -379,7 +375,7 @@ fn every_message_type_is_covered_by_a_valid_fixture() {
         missing.is_empty(),
         "以下消息类型没有任何合法夹具覆盖：{missing:?}"
     );
-    assert_eq!(covered.len(), 31, "覆盖到的消息类型数变化");
+    assert_eq!(covered.len(), 29, "覆盖到的消息类型数变化");
 }
 
 #[test]

@@ -9,7 +9,7 @@
 //!   [`crate::remote_session::CommandOutcome`]），但连接层仍需把「发出后断线」标成
 //!   [`ClientError::Uncertain`]，供调用方决定是否显式重查而不是重做。
 
-use acp_core::model::{PortError, PublicError, UnavailableKind};
+use acp_core::model::{EntityRef, PortError, PublicError, SessionId, UnavailableKind};
 
 /// 适配器错误。
 #[derive(Debug, Clone, thiserror::Error)]
@@ -29,6 +29,9 @@ pub enum ClientError {
     /// Owner 不在线或连接尚未建立：明确不可用，不返回空结果。
     #[error("the owner node is not reachable")]
     OwnerOffline,
+    /// Owner 的当前 catalog 已不再包含该会话；这是确定的不存在，不得触发重试或重建。
+    #[error("the remote session no longer exists")]
+    NotFound(SessionId),
     /// 握手失败（版本/feature 无交集、证明无效、角色不符）。
     #[error("node-link handshake failed: {0}")]
     Handshake(String),
@@ -87,6 +90,7 @@ impl ClientError {
                 PortError::Unavailable(UnavailableKind::RemoteUnavailable)
             }
             Self::OwnerOffline => PortError::Unavailable(UnavailableKind::OwnerOffline),
+            Self::NotFound(session) => PortError::NotFound(EntityRef::Session(session.clone())),
             Self::Revoked => PortError::Unavailable(UnavailableKind::OwnerOffline),
             Self::Handshake(reason) | Self::Protocol(reason) => PortError::Backend(Box::new(
                 std::io::Error::other(format!("node-link client: {reason}")),

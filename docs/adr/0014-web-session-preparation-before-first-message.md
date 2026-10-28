@@ -1,8 +1,10 @@
 ---
-status: proposed
+status: superseded
 ---
 
 # Web 新会话在首条消息提交前只进行临时准备
+
+> **已被 [ADR-0016](0016-session-create-and-empty-cleanup.md) 取代**（2026-10-26）：本决策描述的「首条消息前临时准备」方案不再是目标，Web 新建改为直接 `session.create`、创建即持久化，空会话按保留期清理。下文与下方状态说明只作历史保留，不描述现行行为。
 
 真实 Codex 对照实验表明：未发送消息的空会话可以在原 Agent 进程中使用，但更换进程后可能因尚无恢复文件而无法恢复。拿到 Agent 会话 ID 不足以承诺持久恢复；现有恢复探针先发送了消息，遗漏了这个边界。
 
@@ -10,7 +12,7 @@ status: proposed
 
 用户已逐项确认产品选择，完整方案仍待最终核对；详细边界见[设计访谈记录](../SESSION_LIFECYCLE_DISCUSSION.md)。本 ADR 尚不是已实施能力，也不覆写现行创建协议。Zed、Node Link 创建合同与旧会话迁移不在本轮范围内。
 
-`[合同已冻结，实现待 WP2–WP8]`（2026-10-22，`web-session-preparation` WP1）方案 A 的 wire 与端口形状已固定：准备控制帧、`session.start`（`initial`/`continue`）、闭合五态结果与准备凭据见 [SYNC_PROTOCOL.md](../SYNC_PROTOCOL.md) §11.9，纯端口与 DDL 见 [CORE_PORTS_AND_STORAGE.md](../CORE_PORTS_AND_STORAGE.md) §5.11/§7.3。两处关键取舍已定：①准备凭据只是归属证明，不是登录凭证；②正常重启与**存储整体重建**必须区分——前者可重建准备（已受理则返回 `committed`），后者旧材料统一失效并返回不可重试的 `preparation.store_rebuilt`。ADR 状态保持 `proposed`，直到对应工作包接线并通过验收。
+`[合同已冻结，实现待 WP2–WP8]`（2026-10-22，`web-session-preparation` WP1）方案 A 的 wire 与端口形状已固定：准备控制帧、`session.start`（`initial`/`continue`）、闭合五态结果与准备凭据见 [SYNC_PROTOCOL.md](../SYNC_PROTOCOL.md) §11.9，纯端口与 DDL 见 [CORE_PORTS_AND_STORAGE.md](../CORE_PORTS_AND_STORAGE.md) §5.11/§7.3。两处关键取舍已定：①准备凭据只是归属证明，不是登录凭证；②正常重启与**存储整体重建**必须区分——前者可重建准备（已受理则返回 `committed`），后者旧材料统一失效并返回不可重试的 `preparation.store_rebuilt`。ADR 状态当时保持 `proposed`，直到对应工作包接线并通过验收（**2026-10-26 该路径已终止：状态改为 `superseded`，见上方取代说明**）。
 
 ## Considered Options
 

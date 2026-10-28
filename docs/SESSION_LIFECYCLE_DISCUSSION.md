@@ -1,6 +1,8 @@
 # 会话激活与资源回收：设计访谈草稿
 
-状态：访谈已收敛；核心/服务端/前端实现与跨层套件已落地，真实浏览器验收与 50 档容量结论仍待主检出/产品确认；本文保留访谈记录，正式行为以 OpenSpec 变更与权威文档为准。
+状态：2026-10-26 本轮关于“新建即落库、创建后激活、切换激活、空会话清理”的访谈已收敛，并形成 OpenSpec 规划。核心/服务端/前端现有实现与跨层套件状态见下文各历史阶段；规划中的正式行为仍须在后续实施与验收完成后才能视为已落地。
+
+> 2026-10-26 更新：本文原先记录的“首条消息前临时准备会话”已由 [ADR-0016](adr/0016-session-create-and-empty-cleanup.md) 取代 ADR-0014。现行目标是 Web 直接调用 `session.create`、创建成功即进入正式会话并激活；空会话在保留期内完整可用，期满且资源确认释放后静默删除。对应规划见 `openspec/changes/session-create-and-empty-cleanup/`。在该变更实施前，下面的历史记录只说明当时的决策过程，不代表当前产品行为。
 
 验收入口：[`docs/evidence/session-lifecycle-acceptance.md`](evidence/session-lifecycle-acceptance.md)（WP6 的跨层套件、真实浏览器脚本与 10/25/50 基准；第 8 节已记录 app 套件 8/8 与三档实测数据，真实浏览器 live 未执行，未执行项不勾选）。真实 Codex 上下文连续性的上一轮探针证据见 [`docs/evidence/session-lifecycle-probe.md`](evidence/session-lifecycle-probe.md)。
 
@@ -20,9 +22,9 @@
 - 仅恢复成功后才因运行资源可用而显示活跃。恢复失败且没有真实任务或待处理请求时显示空闲，并单独呈现恢复错误和重试入口；不能覆盖仍存在的任务或待处理请求状态。
 - 恢复开始后切换会话，不取消已开始的恢复；恢复成功时若无人查看且无任务或待处理请求，从成功时开始完整保留期。迟到响应不得将当前页面切回原会话。
 
-## 首条消息前的会话准备（2026-10-22 访谈，尚未实现）
+## 首条消息前的会话准备（2026-10-22 历史访谈，已由 ADR-0016 取代）
 
-本节记录排查 Codex 空会话跨进程无法恢复后，用户确认的新方向；尚未写入正式协议或实现，不改变上文已有会话的恢复规则。
+本节保留排查 Codex 空会话跨进程无法恢复时的历史讨论，便于理解后来为何改为直接创建正式会话。下面关于准备阶段、后端的预分配 ID、浏览器准备草稿和首次提交的选择不再作为现行目标。
 
 - 本轮只调整 Web/PWA 的新建入口；Zed 与 Node Link 的现行创建合同不在本轮默许改写。
 - 首条消息提交前不在 ACP Remote 服务端持久化会话。准备阶段由后端提前分配会话 ID，首次保存沿用同一 ID，地址不变；保存成功或失败都留在同一会话页，不采用浏览器准备 ID 替换为 Owner 正式 ID 的方案。提前分配 ID 的协议、内存归属与服务重启后的处理仍待设计。
@@ -40,13 +42,12 @@
 - 服务端明确确认会话不存在时跳转目录页 `/`；断网、未认证或服务异常不能当成不存在处理。
 - 产品选择已逐项确认，完整方案待用户最终核对。后端预分配 ID 的认证/重启核实协议、浏览器刷新与离开判定、附件保存与上传时序、首次提交的原子保存及崩溃窗口属于后续技术设计，尚未实现。
 
-上述选择的原因与备选方案记于 [ADR-0014（提案）](adr/0014-web-session-preparation-before-first-message.md)。正式合同更新和实现须在完整方案最终确认后进行。
+上述选择的原因与备选方案保留在 [ADR-0014（已被取代）](adr/0014-web-session-preparation-before-first-message.md)。2026-10-26，用户确认改为直接落库并在无内容时清理空会话；新决策见 [ADR-0016](adr/0016-session-create-and-empty-cleanup.md)。
 
-**验收入口（2026-10-23，`web-session-preparation` WP8）**：分层证据与逐项结果记于
-[`docs/evidence/session-preparation.md`](evidence/session-preparation.md)。真实 Codex 的隔离跨进程探针是
-[`scripts/probe-session-preparation.mjs`](../scripts/probe-session-preparation.mjs)（隔离 data_dir/codex-home、
-真实 Daemon/TLS/Sync、强制终止后同 ID restore、首条只派发一次）；真实浏览器验收入口是
-[`clients/app/e2e/session-preparation-live.mjs`](../clients/app/e2e/session-preparation-live.mjs)，由
+**验收入口（2026-10-23，`web-session-preparation` WP8；历史——该路径已被 ADR-0016 取代）**：分层证据与逐项结果记于
+[`docs/evidence/session-preparation.md`](evidence/session-preparation.md)。真实 Codex 的隔离跨进程探针曾位于
+`scripts/probe-session-preparation.mjs`（已随 v19 退役删除；其准备控制帧与 `session.start` 合同不再存在）；真实浏览器验收入口是
+`clients/app/e2e/session-preparation-live.mjs`（历史文件已由 ADR-0016 的交付替换），由
 `crates/app/tests/session_preparation_browser.rs` 编排真实 Daemon + 构建后的 PWA + 受控 Agent。两层刻意分开：
 浏览器层不断言真实 Codex 的模型/tool 行为，探针层不断言浏览器 DOM 与草稿恢复。未执行的项在该证据文件中保持
 未完成，不写成通过。

@@ -25,6 +25,7 @@ pub mod nodelink;
 pub mod owner;
 pub mod sync;
 
+use std::ffi::OsString;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -135,6 +136,8 @@ pub struct Daemon {
     child: Option<Child>,
     instance_id: Option<String>,
     endpoint: Option<String>,
+    /// 仅传给本 Daemon 子进程的显式环境变量；默认继承环境中的验收时钟变量会被清空。
+    env: Vec<(OsString, OsString)>,
 }
 
 /// 基础配置里各段可覆盖内容的来源（`build` 的唯一入参形状）。
@@ -307,6 +310,42 @@ impl Daemon {
             },
         );
         next.data_dir = self.data_dir.clone();
+        next.env = self.env.clone();
+        #[cfg(unix)]
+        {
+            next.runtime_dir = self.runtime_dir.clone();
+        }
+        next
+    }
+
+    /// 在同一数据目录和固定端口上准备一次真正可接管的 Daemon 重启。
+    ///
+    /// `configure_in` 默认重新选择临时端口；浏览器验收中的 PWA origin 必须跨重启
+    /// 保持不变，所以这里显式保留 `bind`/`port`。节点身份由组合根重新创建，浏览器
+    /// 会在重启后重新走一次真实配对；会话数据仍位于同一个 `data_dir`。
+    pub fn configure_in_with_bind(
+        &self,
+        label: &str,
+        bind: &str,
+        port: u16,
+        daemon_extra: &str,
+        extra: &str,
+    ) -> Self {
+        let mut next = Self::build(
+            TempRoot::borrowed(self.root()),
+            label,
+            ConfigParts {
+                listen: None,
+                bind: Some(bind),
+                port: Some(port),
+                daemon: daemon_extra,
+                dev_mode: "",
+                logging_level: None,
+                extra,
+            },
+        );
+        next.data_dir = self.data_dir.clone();
+        next.env = self.env.clone();
         #[cfg(unix)]
         {
             next.runtime_dir = self.runtime_dir.clone();
@@ -389,6 +428,7 @@ file = "{log}"
             child: None,
             instance_id: None,
             endpoint: None,
+            env: Vec::new(),
         }
     }
 
@@ -400,6 +440,12 @@ file = "{log}"
     /// 数据目录。
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// 只给这个 Daemon 子进程追加环境变量；不会修改测试进程的全局环境。
+    pub fn with_env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
     }
 
     /// 子进程 pid。
@@ -484,6 +530,8 @@ file = "{log}"
             .arg("--config")
             .arg(&self.config_path)
             .env("ACP_REMOTE_CONFIG", &self.config_path)
+            .env_remove("ACPR_TEST_CLOCK_FILE")
+            .env_remove("ACPR_TEST_RECLAIM_INTERVAL_MS")
             .stdin(Stdio::null())
             .stdout(Stdio::from(
                 std::fs::File::create(&self.stdout_path).expect("stdout 文件"),
@@ -491,6 +539,9 @@ file = "{log}"
             .stderr(Stdio::from(
                 std::fs::File::create(&self.stderr_path).expect("stderr 文件"),
             ));
+        for (key, value) in &self.env {
+            command.env(key, value);
+        }
         #[cfg(unix)]
         command.env("XDG_RUNTIME_DIR", &self.runtime_dir);
         self.child = Some(command.spawn().expect("启动 acp-remote"));

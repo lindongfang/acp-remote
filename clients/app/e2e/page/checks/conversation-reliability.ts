@@ -9,7 +9,7 @@
  * - 正式正文必须按 `turnId` **原位**接替本地条目，而不是追加一条；
  * - 附件上传中与上传失败必须如实说明，且失败时**不派发** `session.prompt`；
  * - 受理后无输出 → 工具 → 回复的互斥过程行；
- * - 复制标签页不接管原准备；新会话不显示临时状态或放弃入口。
+ * - 快速切页后，迟到的旧操作不能改变当前正文。
  *
  * 假主机（`../fake-host`）只替换传输与 Agent 边界；wire 解码、仓库归并、路由与组件都是生产代码。
  * 附件检查里假主机按最小协议应答 `attachment.*`（第二条已认证连接），因此「上传中/失败」两条
@@ -21,22 +21,12 @@
  * 后端的持久化/重启/并发证据见 `crates/app/tests/conversation_reliability_e2e.rs`。
  */
 
-import { openPlatform, openPreparationDraftStore } from "../../../src/platform";
-import type { PlatformPorts, PreparationDraftPort } from "../../../src/platform";
-import type { PreparationReceipt } from "../../../src/protocol";
-import { createFakeHostIdentity } from "../fake-host";
 import {
   AGENTS,
   DIRECTORY_ID_ALPHA,
   DIRS_ROUTE,
-  PREPARED_SESSION_ID,
-  PREPARATION_CONFIG,
-  PREPARATION_MODES,
-  PREPARATION_LEASE_EXPIRES_AT,
-  PREPARATION_RUNTIME_EPOCH,
   SESSION_ALPHA,
   WORKSPACES,
-  preparationReceipt,
   readMessage,
   readPage,
   sessionRoute,
@@ -46,22 +36,18 @@ import {
 import {
   CANONICAL_ORIGIN,
   CheckFailure,
-  DEVICE_ID,
-  HOST_ID,
   click,
-  domText,
   expectEqual,
   expectThat,
   mountScenario,
   query,
   queryAll,
-  seedPairedHost,
   textOf,
   waitFor,
 } from "../support";
 import type { Check, Mounted, ScenarioOptions } from "../support";
 import { commandBody, commandBodies } from "./conversation-timeline";
-import { currentPath, navigate } from "../router-stub";
+import { navigate } from "../router-stub";
 
 /** 历史里那条“继续”的消息身份（它与本次发送**没有**任何身份关联）。 */
 const HISTORY_MESSAGE_ID = "aaaaaaaa-0000-4000-8000-0000000000c1";
@@ -75,9 +61,6 @@ const TOOL_CALL_ID = "aaaaaaaa-0000-4000-8000-0000000000c4";
 const AGENT_MESSAGE_ID = "aaaaaaaa-0000-4000-8000-0000000000c5";
 /** 本轮正式思考消息身份（权威序号 10）。 */
 const THOUGHT_MESSAGE_ID = "aaaaaaaa-0000-4000-8000-0000000000c6";
-/** 复制标签页用例专用的原准备（避免与其它用例的浏览器草稿/定位互相干扰）。 */
-const COPIED_SESSION_ID = "eeeeeeee-0000-4000-8000-00000000c0de";
-
 /** 输入区里的多行输入框（RNW 的多行 `TextInput` 渲染成 `<textarea>`）。 */
 function composerTextArea(container: HTMLElement): HTMLTextAreaElement | null {
   const found = query(container, "[data-composer-input]");
@@ -102,12 +85,6 @@ function typeIntoComposer(container: HTMLElement, value: string): void {
   node.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-async function settle(ms = 120): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
-  await promise;
-}
-
 /**
  * 等一个绘制帧。
  *
@@ -126,61 +103,9 @@ function nextFrame(): Promise<void> {
   });
 }
 
-/** 出站帧的解析结果（`type` 与 `body`）。 */
-function parseFrame(text: string): { readonly type: unknown; readonly body: Record<string, unknown> | null } | null {
-  const parsed: unknown = JSON.parse(text);
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-  const record = parsed as Record<string, unknown>;
-  const body = record["body"];
-  return {
-    type: record["type"],
-    body: typeof body === "object" && body !== null && !Array.isArray(body)
-      ? (body as Record<string, unknown>)
-      : null,
-  };
-}
-
-/** 出站 `session.preparation` 的 body（按发送顺序）。 */
-function preparationBodies(sent: readonly string[]): readonly Record<string, unknown>[] {
-  const bodies: Record<string, unknown>[] = [];
-  for (const text of sent) {
-    const frame = parseFrame(text);
-    if (frame?.type === "session.preparation" && frame.body !== null) bodies.push(frame.body);
-  }
-  return bodies;
-}
-
 /** 用户消息条目（`data-message-channel="user"`），按 DOM 顺序。 */
 function userBubbles(container: HTMLElement): readonly Element[] {
   return queryAll(container, '[data-timeline-entry="message"][data-message-channel="user"]');
-}
-
-/** 一个 `ready` 应答（准备控制帧）。 */
-function readyPreparationResult(
-  body: Record<string, unknown>,
-  receipt: PreparationReceipt,
-): Record<string, unknown> {
-  return {
-    operationId: body["operationId"],
-    action: body["action"],
-    sessionId: typeof body["sessionId"] === "string" ? body["sessionId"] : PREPARED_SESSION_ID,
-    status: "ready",
-    receipt,
-    runtimeEpoch: PREPARATION_RUNTIME_EPOCH,
-    generation: "1",
-    modes: PREPARATION_MODES,
-    configOptions: PREPARATION_CONFIG,
-    leaseExpiresAt: PREPARATION_LEASE_EXPIRES_AT,
-  };
-}
-
-function receiptFor(sessionId: string): PreparationReceipt {
-  return preparationReceipt({
-    ownerNodeId: HOST_ID,
-    origin: CANONICAL_ORIGIN,
-    deviceId: DEVICE_ID,
-    sessionId,
-  });
 }
 
 /** `session.read` 的应答：能力声明里三种附件都支持（附件上传用例的前置）。 */
@@ -569,154 +494,6 @@ const checks: readonly Check[] = [
           "上传失败也要保留输入",
           "失败后完整草稿必须保留",
         );
-      } finally {
-        await mounted.unmount();
-      }
-    },
-  },
-  {
-    name: "CR-5 复制标签页不接管：不发 restore/allocate，普通新建仍从空槽位开始",
-    async run() {
-      const identity = await createFakeHostIdentity(HOST_ID);
-      await seedPairedHost(identity);
-      // 真实草稿端口 + 一条只对「原准备」返回 duplicate 的归属判定：
-      // 这正是复制/opener 标签页在平台层得到的结果（判定本身由 preparation-draft 单测覆盖）。
-      const real = openPreparationDraftStore();
-      const drafts: PreparationDraftPort = new Proxy(real, {
-        get(target, property, receiver) {
-          if (property === "readTabLocator") {
-            return async () => ({
-              canonicalOrigin: CANONICAL_ORIGIN,
-              ownerNodeId: HOST_ID,
-              deviceId: DEVICE_ID,
-              tabSlotId: "11111111-1111-4111-8111-111111111111",
-              instanceId: "22222222-2222-4222-8222-222222222222",
-              sessionId: COPIED_SESSION_ID,
-              savedAtMs: Date.now(),
-            });
-          }
-          if (property === "beginTab") {
-            return async (input: { readonly scope: { readonly sessionId: string } }) =>
-              input.scope.sessionId === COPIED_SESSION_ID
-                ? { status: "duplicate", reason: "live_tab_owner" }
-                : target.beginTab(input as never);
-          }
-          const value = Reflect.get(target, property, receiver) as unknown;
-          return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-        },
-      });
-      const platform: PlatformPorts = { ...openPlatform(), preparationDrafts: drafts };
-      const mounted = await mountScenario({
-        ...reliabilityScenario({
-          selectPreparation: true,
-          preparationResult: (body) => readyPreparationResult(body, receiptFor(COPIED_SESSION_ID)),
-          route: sessionRoute(COPIED_SESSION_ID),
-        }),
-        identity,
-        platform,
-        route: DIRS_ROUTE,
-        extraRoutes: [sessionRoute(COPIED_SESSION_ID), DIRS_ROUTE],
-      });
-      const sent = (): readonly string[] => mounted.host?.sent ?? [];
-      try {
-        await waitFor(
-          () => query(mounted.container, '[data-directory-list="directories"]') !== null,
-          "目录页等到快照",
-        );
-        navigate(sessionRoute(COPIED_SESSION_ID).path);
-        await waitFor(
-          () => mounted.composition?.store.preparationPage(COPIED_SESSION_ID)?.notice?.includes("另一个标签页") === true,
-          "复制标签页得到明确占用说明",
-        );
-        // 不接管：既不恢复原准备、也不分配新的。
-        expectEqual(
-          preparationBodies(sent()).filter((body) => body["action"] === "restore").length,
-          0,
-          "复制标签页不得恢复原准备",
-        );
-        expectEqual(
-          preparationBodies(sent()).filter((body) => body["action"] === "allocate").length,
-          0,
-          "复制标签页不得凭陌生地址分配准备",
-        );
-        expectEqual(
-          mounted.composition?.store.activePreparationSessionId() ?? null,
-          null,
-          "复制标签页不得把原会话当成自己的槽位",
-        );
-        expectEqual(
-          JSON.stringify(mounted.composition?.store.preparationSlotRoute() ?? null),
-          JSON.stringify({ kind: "none" }),
-          "复制标签页的普通新建入口仍按「没有槽位」放行",
-        );
-        // 占用说明条目不提供「放弃」（本标签页从未持有它的资源）。
-        expectEqual(
-          mounted.composition?.store.canAbandonPreparation(COPIED_SESSION_ID) ?? true,
-          false,
-          "复制标签页不得执行放弃（会误清自己的定位）",
-        );
-      } finally {
-        await mounted.unmount();
-      }
-    },
-  },
-  {
-    name: "CR-6 新会话不显示临时状态行或放弃入口",
-    async run() {
-      const identity = await createFakeHostIdentity(HOST_ID);
-      await seedPairedHost(identity);
-      const mounted = await mountScenario({
-        ...reliabilityScenario({
-          selectPreparation: true,
-          preparationResult: (body) => readyPreparationResult(body, receiptFor(PREPARED_SESSION_ID)),
-        }),
-        identity,
-        route: DIRS_ROUTE,
-        extraRoutes: [sessionRoute(PREPARED_SESSION_ID), DIRS_ROUTE],
-      });
-      const container = mounted.container;
-      try {
-        await waitFor(
-          () => query(container, '[data-directory-list="directories"]') !== null,
-          "目录页等到快照",
-        );
-
-        // 第一次普通新建：目录项入口 → 选 Agent → 提交。
-        click(
-          query(query(container, `[data-directory-id="${DIRECTORY_ID_ALPHA}"]`), '[data-action="create-session"]'),
-          "目录内新建",
-        );
-        await waitFor(() => query(container, "[data-create-sheet]") !== null, "创建弹层");
-        click(query(container, 'button[data-agent-id="codex-a"]'), "选择 Agent");
-        await waitFor(
-          () => query(container, '[data-action="submit-create"]')?.getAttribute("aria-disabled") !== "true",
-          "允许提交",
-        );
-        click(query(container, '[data-action="submit-create"]'), "创建会话");
-        await waitFor(
-          () => currentPath() === `/session/${PREPARED_SESSION_ID}`,
-          "进入后端分配的准备页",
-        );
-        await waitFor(
-          () => query(container, "[data-composer-input]") !== null,
-          "准备页输入区就绪",
-        );
-        typeIntoComposer(container, "普通草稿");
-        await settle();
-
-        // 用户明确要求：新会话不显示任何临时状态提示、放弃按钮或确认弹层。
-        for (const forbidden of ["放弃新会话", "尚未转正"]) {
-          expectEqual(domText(container).includes(forbidden), false, `新会话不得显示「${forbidden}」`);
-        }
-        for (const selector of [
-          '[data-action="abandon-preparation"]',
-          '[data-action="confirm-abandon-preparation"]',
-          '[data-action="cancel-abandon-preparation"]',
-          '[data-route="preparation-abandon"]',
-          '[data-preparation-discard-dialog]',
-        ]) {
-          expectEqual(query(container, selector), null, `新会话不得存在 ${selector}`);
-        }
       } finally {
         await mounted.unmount();
       }

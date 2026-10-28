@@ -30,7 +30,8 @@ use crate::model::{
     OriginEpoch, OwnedSessionRef, PairingClaim, PairingId, PairingRecord, PairingSettlement,
     PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, PortError,
     PromptContentBlock, PublicError, RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace,
-    ResourceOrigin, Sequence, SessionFileChunk, SessionFilePage, SessionFilePath, SessionId,
+    ResourceOrigin, Sequence, SessionDeletionEligibility, SessionDeletionOutcome,
+    SessionDeletionWrite, SessionFileChunk, SessionFilePage, SessionFilePath, SessionId,
     SessionListPath, SessionPageToken, SessionReference, SessionSummary, SessionTitle,
     SubmissionId, Timestamp, UnavailableKind, Version, WorkspaceCatalogEntry, WorkspaceRef,
     WorkspaceSource,
@@ -38,16 +39,16 @@ use crate::model::{
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditQuery, AuditStore,
     Clock, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryCreator, DirectoryListing,
-    ExpiryWrite, FirstSubmission, HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore,
-    MessageCoverage, NodeConnectedWrite, NodeRevocation, NodeWrite, OriginReadPage,
-    PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
-    PairingWrite, PendingAudit, PreparationAttachmentStaging, PruneReport, RemoteCommandLookup,
-    RemoteCommandRecord, RemoteCommandStatus, RemoteCommandTarget, RemoteReadQuery,
-    RemoteReadResult, RemoteRuntimeDirectory, RemoteSessionEntry, RemoteSourceReads,
-    RemoteSourceState, RemoteTitleWrite, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
-    SessionCreateAdmission, SessionFiles, SessionQuery, SessionStore, StoreHealth,
-    SubmissionBinding, SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceMkdirAdmission,
-    WorkspaceMkdirExecution, WriteContext,
+    ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore, MessageCoverage,
+    NodeConnectedWrite, NodeRevocation, NodeWrite, OriginReadPage, PairingClaimOutcome,
+    PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
+    PruneReport, RemoteCommandLookup, RemoteCommandRecord, RemoteCommandStatus,
+    RemoteCommandTarget, RemoteReadQuery, RemoteReadResult, RemoteRuntimeDirectory,
+    RemoteSessionEntry, RemoteSourceReads, RemoteSourceState, RemoteTitleWrite, ReplayBatch,
+    ReplayLimit, RetentionPolicy, RevokeReason, SessionContentFacts, SessionCreateAdmission,
+    SessionDeletion, SessionFiles, SessionQuery, SessionStore, StoreHealth, SubmissionBinding,
+    SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceMkdirAdmission, WorkspaceMkdirExecution,
+    WriteContext,
 };
 
 /// §4 的 `LocalSessionLifecycle` 用例面（`docs/CORE_PORTS_AND_STORAGE.md` §5.10）。
@@ -65,23 +66,6 @@ pub use crate::lifecycle::{
 pub struct ModeListing {
     pub state: ModeState,
     pub version: Version,
-}
-
-/// 准备 `allocate` 的目录来源（`web-session-preparation` D3：`directoryId` 与 `workspacePath` 二选一）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PreparationWorkspaceSource {
-    /// 本机已登记的目录标识。
-    Directory(DirectoryId),
-    /// 客户端提交的绝对路径（形状与文件系统校验在解析路径里，顺序与 `session.create` 一致）。
-    Path(String),
-}
-
-/// 已解析的准备目录：规范化路径 + 来源（来源只进凭据 claims，不参与路径比较）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparationWorkspace {
-    pub workspace: ResolvedWorkspace,
-    /// `true` = 由 `directoryId` 解析；`false` = 由客户端绝对路径解析。
-    pub from_directory: bool,
 }
 
 /// 配对通道的只读视图（claim/status HTTP 端点；design D12 的 seam 补全）。
@@ -320,13 +304,9 @@ pub struct UseCases {
     /// 向 Owner 转发 `session.title.set` 的窄端口（`design.md` D2/D3）。默认未装配：显式
     /// `BackendUnsupported`，不把远程标题的修改留在本机。
     remote_titles: std::sync::OnceLock<Arc<dyn RemoteTitleWrite>>,
-    /// 准备运行期目录（`web-session-preparation` D1/D3）：会话 ID 的分配权威、资源代/租约与容量预占。
-    /// `None` = 组合根没有装配准备能力（`session.preparation` 不注册、feature 不宣告）。
-    preparations: Option<Arc<crate::preparation::PreparationDirectory>>,
-    /// 首次提交的持久入口（D7/D8）：`session.start` 的受理/围栏/结算与 committed 投影的唯一读面。
-    first_submission: Option<Arc<dyn FirstSubmission>>,
-    /// 准备附件暂存（D6.4）：运行期传输/清单 + Owner 私有内容区，不写 `owned_session` 外键行。
-    staging: Option<Arc<dyn PreparationAttachmentStaging>>,
+    /// 空会话内容事实与删除事务是两个窄端口，由组合根按需接线。
+    session_content: Option<Arc<dyn SessionContentFacts>>,
+    session_deletion: Option<Arc<dyn SessionDeletion>>,
 }
 
 /// [`UseCases`] 的依赖。
@@ -362,9 +342,8 @@ impl UseCases {
             remote_sources: std::sync::OnceLock::new(),
             remote_commands: std::sync::OnceLock::new(),
             remote_titles: std::sync::OnceLock::new(),
-            preparations: None,
-            first_submission: None,
-            staging: None,
+            session_content: None,
+            session_deletion: None,
         }
     }
 
@@ -421,148 +400,81 @@ impl UseCases {
         Self { files, ..self }
     }
 
-    /// 接线准备运行期目录（组合根装配一次；`None` 保持准备能力不可用）。
-    pub fn with_preparations(
-        self,
-        preparations: Arc<crate::preparation::PreparationDirectory>,
-    ) -> Self {
+    /// 接线空会话内容事实端口。
+    pub fn with_session_content(self, content: Arc<dyn SessionContentFacts>) -> Self {
         Self {
-            preparations: Some(preparations),
+            session_content: Some(content),
             ..self
         }
     }
 
-    /// 接线首次提交的持久端口。同一实例也装进 broker（`session.start` 的受理/围栏/结算都经它）。
-    pub fn with_first_submission(self, first: Arc<dyn FirstSubmission>) -> Self {
-        let _ = self.broker.set_first_submission(Arc::clone(&first));
+    /// 接线会话删除事务端口。
+    pub fn with_session_deletion(self, deletion: Arc<dyn SessionDeletion>) -> Self {
         Self {
-            first_submission: Some(first),
+            session_deletion: Some(deletion),
             ..self
         }
     }
 
-    /// 接线准备附件暂存端口（与首次提交事务共用同一个存储实例）。
-    pub fn with_preparation_staging(self, staging: Arc<dyn PreparationAttachmentStaging>) -> Self {
-        Self {
-            staging: Some(staging),
-            ..self
-        }
+    /// 读取唯一的内容事实；未接线时失败关闭。
+    pub async fn session_has_content(&self, session: &SessionId) -> Result<bool, PortError> {
+        let port = self
+            .session_content
+            .as_ref()
+            .ok_or(PortError::Unavailable(UnavailableKind::BackendUnsupported))?;
+        port.has_content(session).await
     }
 
-    /// 准备运行期目录（`None` = 本进程没有装配准备能力）。
-    pub fn preparations(&self) -> Option<&Arc<crate::preparation::PreparationDirectory>> {
-        self.preparations.as_ref()
-    }
-
-    /// 首次提交的持久端口（`None` = 未接线；`restore` 的 committed 分支因此显式不可用）。
-    pub fn first_submission_store(&self) -> Option<&Arc<dyn FirstSubmission>> {
-        self.first_submission.as_ref()
-    }
-
-    /// 准备附件暂存端口（`None` = 未接线；附件准备目标显式拒绝）。
-    pub fn preparation_staging(&self) -> Option<&Arc<dyn PreparationAttachmentStaging>> {
-        self.staging.as_ref()
-    }
-
-    /// `session.start`（`kind: initial`）：委托 broker 的受理/围栏/派发管线。
-    ///
-    /// 请求身份（`request`/`fingerprint`）随 [`crate::broker::FirstSubmissionStart`] 传入：适配层已按
-    /// wire 原文算好摘要，core 不重新构造第二份 payload。
-    pub async fn start_first_submission(
+    /// 在真实释放资源前读取删除资格；未接线时失败关闭。
+    pub async fn session_deletion_preflight(
         &self,
-        actor: &Actor,
-        start: crate::broker::FirstSubmissionStart,
-        endpoint: Arc<dyn crate::ports::SessionEndpoint>,
-    ) -> Result<CommandReceipt, PortError> {
-        self.broker
-            .start_first_submission(actor, start, endpoint)
-            .await
+        write: &SessionDeletionWrite,
+    ) -> Result<SessionDeletionEligibility, PortError> {
+        let port = self
+            .session_deletion
+            .as_ref()
+            .ok_or(PortError::Unavailable(UnavailableKind::BackendUnsupported))?;
+        port.preflight(write).await
     }
 
-    /// `session.start`（`kind: continue`）：显式继续一次可证明未派发的失败。
-    pub async fn continue_first_submission(
+    /// 调用删除事务；释放与生命周期串行化由运行时组合层负责。
+    pub async fn delete_session(
         &self,
-        actor: &Actor,
-        request: crate::broker::FirstSubmissionContinue,
-    ) -> Result<CommandReceipt, PortError> {
-        self.broker.continue_first_submission(actor, request).await
+        write: SessionDeletionWrite,
+    ) -> Result<SessionDeletionOutcome, PortError> {
+        self.finish_session_deletion(write).await
     }
 
-    /// 首条提交的只读投影（`restore` 的 committed、`command.status` 的协商投影、继续准入）。
-    pub async fn first_submission(
+    pub async fn finish_session_deletion(
         &self,
-        session: &SessionId,
-    ) -> Result<Option<crate::model::FirstSubmissionRecord>, PortError> {
-        self.broker.first_submission_record(session).await
-    }
-
-    /// 显式继续在端点/配置复核阶段失败时写该次尝试的 failed 终态（正文与首条身份不变）。
-    pub async fn settle_first_submission(
-        &self,
-        settlement: crate::model::FirstSubmissionSettlement,
-    ) -> Result<crate::model::FirstSubmissionRecord, PortError> {
-        self.broker.settle_first_submission(settlement).await
-    }
-
-    /// 持久首条用户消息（`owned_message.channel = 'user'`）：无需 Agent 回显即可读取。
-    pub async fn first_user_message(
-        &self,
-        session: &SessionId,
-    ) -> Result<Option<crate::model::FirstUserMessage>, PortError> {
-        self.broker.first_user_message(session).await
-    }
-
-    /// 启动收敛：遍历本机 owned 会话，把首条提交收敛到可证明的事实（**绝不**自动派发）。
-    ///
-    /// 返回实际收敛的会话数（`NotPreparation` 不计）。没有接线首次提交端口的进程是空操作。
-    pub async fn converge_first_submissions(&self, at: Timestamp) -> Result<usize, PortError> {
-        if self.first_submission.is_none() {
-            return Ok(0);
-        }
-        let sessions = self
-            .list_sessions(&Actor::LocalCli, SessionQuery::default())
-            .await?;
-        let mut converged = 0;
-        for summary in sessions {
-            match self
+        write: SessionDeletionWrite,
+    ) -> Result<SessionDeletionOutcome, PortError> {
+        let port = self
+            .session_deletion
+            .as_ref()
+            .ok_or(PortError::Unavailable(UnavailableKind::BackendUnsupported))?;
+        let reference = SessionReference::Owned(OwnedSessionRef {
+            session_id: write.session().clone(),
+        });
+        let outcome = match port.delete_session(write).await {
+            Ok(outcome) => outcome,
+            Err(error) => return Err(error),
+        };
+        match &outcome {
+            SessionDeletionOutcome::Deleted {
+                deletion_event,
+                terminal_event,
+            } => {
+                self.broker
+                    .publish_committed(&[deletion_event.clone(), terminal_event.clone()]);
+                self.broker.remove_owned_slot(&reference);
+            }
+            SessionDeletionOutcome::Failed { terminal_event, .. } => self
                 .broker
-                .converge_first_submission(summary.session_id(), at.clone())
-                .await?
-            {
-                crate::model::FirstSubmissionConvergence::NotPreparation => {}
-                _ => converged += 1,
-            }
+                .publish_committed(std::slice::from_ref(terminal_event)),
+            SessionDeletionOutcome::Replayed(_) => {}
         }
-        Ok(converged)
-    }
-
-    /// 准备阶段的目录解析（`session.preparation` 的 `allocate`）：已登记目录或客户端绝对路径。
-    ///
-    /// 与 `session.create` 共用同一套形状校验与失败分类（先形状、后 IO）；不查/不登记别名之外的任何
-    /// 持久会话事实。
-    pub async fn resolve_preparation_workspace(
-        &self,
-        actor: &Actor,
-        source: PreparationWorkspaceSource,
-    ) -> Result<PreparationWorkspace, PortError> {
-        if matches!(actor, Actor::PairingClaimant { .. }) {
-            return Err(PortError::InvalidRequest("authorization.scope_denied"));
-        }
-        match source {
-            PreparationWorkspaceSource::Directory(directory_id) => {
-                let record = self.config.directory(&directory_id).await?.ok_or(
-                    PortError::InvalidRequest("workspace directory is not registered on this node"),
-                )?;
-                Ok(PreparationWorkspace {
-                    workspace: resolve_workspace(&directory_id, record.canonical_path())?,
-                    from_directory: true,
-                })
-            }
-            PreparationWorkspaceSource::Path(path) => Ok(PreparationWorkspace {
-                workspace: resolve_client_workspace(&path)?,
-                from_directory: false,
-            }),
-        }
+        Ok(outcome)
     }
 
     /// Persist acceptance before touching the filesystem. Only the first caller receives a ticket.
@@ -945,6 +857,295 @@ impl UseCases {
         self.broker
             .settle_session_resume(actor, request_id, status, result, error)
             .await
+    }
+
+    /// `session.delete` 的受理-only 入口。执行方在调用真实 release 前必须先成功持久化这条
+    /// `accepted` 记录；命中既有终态时直接回放，tombstone 建立后仍保持幂等。
+    pub async fn admit_session_delete(
+        &self,
+        actor: &Actor,
+        request_id: RequestId,
+        request_fingerprint: Digest,
+        session: SessionId,
+    ) -> Result<crate::broker::SessionDeleteAdmission, PortError> {
+        self.broker
+            .admit_session_delete(actor, &request_id, &request_fingerprint, &session)
+            .await
+    }
+
+    pub async fn admit_retention_session_delete(
+        &self,
+        actor: &Actor,
+        request_id: RequestId,
+        request_fingerprint: Digest,
+        session: SessionId,
+        prompt_generation: crate::model::ResourceGeneration,
+    ) -> Result<crate::broker::SessionDeleteAdmission, PortError> {
+        let lifecycle = self
+            .broker
+            .lifecycle_handle()
+            .ok_or(PortError::Unavailable(UnavailableKind::BackendUnsupported))?;
+        self.broker
+            .admit_retention_session_delete(
+                lifecycle.as_ref(),
+                actor,
+                &request_id,
+                &request_fingerprint,
+                &session,
+                prompt_generation,
+            )
+            .await
+    }
+
+    pub async fn settle_rejected_prompt_claim(
+        &self,
+        prompt_request: &RequestId,
+        session: &SessionId,
+        resource_generation: crate::model::ResourceGeneration,
+    ) -> Result<(), PortError> {
+        let lifecycle = self
+            .broker
+            .lifecycle_handle()
+            .ok_or(PortError::Unavailable(UnavailableKind::BackendUnsupported))?;
+        let gate = lifecycle.acquire_owner_lifecycle_gate(session).await;
+        lifecycle.abandon_prompt_after_delete_locked(
+            &gate,
+            session,
+            prompt_request,
+            Some(resource_generation),
+        )
+    }
+
+    pub async fn settle_session_delete_in_owned_lifecycle_gate(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: crate::lifecycle::SessionLifecycleGate,
+        actor: &Actor,
+        request_id: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        self.settle_session_delete_in_owned_lifecycle_gate_for(
+            lifecycle, gate, None, actor, request_id, status, error,
+        )
+        .await
+    }
+
+    /// The failure path still has the target session in its bound deletion
+    /// write, even if an earlier acceptance commit failed.
+    #[allow(clippy::too_many_arguments)] // Forwards exact request identity and gate ownership to the broker.
+    pub async fn settle_session_delete_in_owned_lifecycle_gate_for(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: crate::lifecycle::SessionLifecycleGate,
+        session: Option<&SessionId>,
+        actor: &Actor,
+        request_id: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        self.broker
+            .settle_session_delete_in_owned_lifecycle_gate_for(
+                lifecycle, gate, session, actor, request_id, status, error,
+            )
+            .await
+    }
+
+    /// Settles a deletion failure while the caller already owns the
+    /// lifecycle gate.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn settle_session_delete_in_held_lifecycle_gate_locked(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: crate::lifecycle::SessionLifecycleGate,
+        session: &SessionId,
+        actor: &Actor,
+        request_id: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        self.broker
+            .settle_session_delete_in_held_lifecycle_gate_locked(
+                lifecycle, gate, session, actor, request_id, status, error,
+            )
+            .await
+    }
+
+    pub async fn with_owned_deletion_submission_gate<F, T>(
+        &self,
+        session: &SessionId,
+        operation: F,
+    ) -> Result<T, PortError>
+    where
+        F: AsyncFnOnce() -> Result<T, PortError>,
+    {
+        let slot = self.broker.owned_deletion_slot(session);
+        let result = {
+            let gate = slot.gate();
+            let _guard = gate.guard().await?;
+            operation().await
+        };
+        drop(slot);
+        let resumed = self.broker.resume_dispatch_after_delete(session).await;
+        match result {
+            Err(error) => Err(error),
+            Ok(value) => resumed.map(|()| value),
+        }
+    }
+
+    /// Settles a deletion failure while the caller owns both the lifecycle
+    /// gate and the session's serial admission gate.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn settle_session_delete_in_held_submission_gate_locked(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: crate::lifecycle::SessionLifecycleGate,
+        session: &SessionId,
+        actor: &Actor,
+        request_id: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        let gate_for_release = gate.clone_lifecycle_handle();
+        let written = self
+            .broker
+            .settle_session_delete_in_held_submission_gate_locked(
+                lifecycle, gate, session, actor, request_id, status, error,
+            )
+            .await;
+        lifecycle.fail_delete_release_current_in_gate(&gate_for_release, session)?;
+        lifecycle.finish_accepted_delete(session);
+        written
+    }
+
+    /// Publishes the committed tombstone while the caller still owns its
+    /// lifecycle gate. The runtime directory entry is removed only after the
+    /// terminal view is visible.
+    pub async fn finish_delete_in_held_lifecycle_gate_locked(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: crate::lifecycle::SessionLifecycleGate,
+        write: SessionDeletionWrite,
+    ) -> Result<SessionDeletionOutcome, PortError> {
+        let port = self
+            .session_deletion
+            .as_ref()
+            .ok_or(PortError::Unavailable(UnavailableKind::BackendUnsupported))?;
+        let session = write.session().clone();
+        if gate.session() != &session {
+            return Err(PortError::InvalidRequest(
+                "the lifecycle gate belongs to another session",
+            ));
+        }
+        let outcome = port.delete_session(write).await?;
+        match &outcome {
+            SessionDeletionOutcome::Deleted {
+                deletion_event,
+                terminal_event,
+            } => {
+                self.broker
+                    .publish_committed(&[deletion_event.clone(), terminal_event.clone()]);
+                self.broker
+                    .remove_owned_slot(&SessionReference::Owned(OwnedSessionRef {
+                        session_id: session.clone(),
+                    }));
+            }
+            SessionDeletionOutcome::Failed { terminal_event, .. } => self
+                .broker
+                .publish_committed(std::slice::from_ref(terminal_event)),
+            SessionDeletionOutcome::Replayed(_) => {}
+        }
+        if let Some(generation) = lifecycle.delete_pending_generation_locked(&gate, &session)? {
+            if matches!(&outcome, SessionDeletionOutcome::Deleted { .. })
+                || matches!(&outcome, SessionDeletionOutcome::Replayed(record)
+                    if record.status() == CommandStatus::Completed)
+            {
+                lifecycle.complete_delete_pending_locked(&gate, &session, generation)?;
+            } else {
+                lifecycle.cancel_delete_pending_locked(&gate, &session, generation)?;
+            }
+        }
+        lifecycle.finish_accepted_delete(&session);
+        Ok(outcome)
+    }
+
+    /// The lifecycle gate stays held while the exact delete failure becomes
+    /// durable. The caller releases its runtime claim only after this returns.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn settle_delete_in_held_lifecycle_gate_locked(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: crate::lifecycle::SessionLifecycleGate,
+        session: &SessionId,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        let written = self
+            .broker
+            .settle_session_delete_in_held_lifecycle_gate_locked(
+                lifecycle, gate, session, actor, request, status, error,
+            )
+            .await;
+        lifecycle.finish_accepted_delete(session);
+        written
+    }
+
+    /// The adapted deletion executor owns the session submission gate too.
+    #[allow(clippy::too_many_arguments)] // Forwards exact request identity and gate ownership to the broker.
+    pub async fn settle_delete_in_held_submission_gate_locked(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        gate: crate::lifecycle::SessionLifecycleGate,
+        session: &SessionId,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        let gate_for_release = gate.clone_lifecycle_handle();
+        let written = self
+            .broker
+            .settle_session_delete_in_held_submission_gate_locked(
+                lifecycle, gate, session, actor, request, status, error,
+            )
+            .await;
+        lifecycle.fail_delete_release_current_in_gate(&gate_for_release, session)?;
+        lifecycle.finish_accepted_delete(session);
+        written
+    }
+
+    /// 结束已受理但未进入删除事务的 `session.delete`。成功删除由
+    /// [`UseCases::delete_session`] 的事务直接写 `command.completed`。
+    pub async fn settle_session_delete(
+        &self,
+        actor: &Actor,
+        request_id: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        self.broker
+            .settle_session_delete(actor, request_id, status, error)
+            .await
+    }
+
+    pub async fn settle_session_delete_in_lifecycle_gate(
+        &self,
+        lifecycle: &LocalSessionLifecycle,
+        actor: &Actor,
+        request_id: &RequestId,
+        status: CommandStatus,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        self.broker
+            .settle_session_delete_in_lifecycle_gate(lifecycle, actor, request_id, status, error)
+            .await
+    }
+
+    /// 为组合根发起的本地维护操作分配稳定请求标识。
+    pub fn new_request_id(&self) -> RequestId {
+        self.ids.request_id()
     }
 
     // ---------------------------------------------------------------------------------------
@@ -6312,6 +6513,14 @@ mod tests {
     /// （`Settled`/`InFlight`），不能被一次新的 `SessionId` 预占撞成 `session.capacity_exceeded`。
     #[test]
     fn create_replay_is_settled_before_capacity_is_checked() {
+        struct NoContent;
+        #[async_trait::async_trait]
+        impl crate::ports::SessionContentFacts for NoContent {
+            async fn has_content(&self, _session: &SessionId) -> Result<bool, PortError> {
+                Ok(false)
+            }
+        }
+
         struct AlwaysReleased;
         #[async_trait::async_trait]
         impl crate::ports::SessionRelease for AlwaysReleased {
@@ -6332,6 +6541,7 @@ mod tests {
             Arc::new(FakeStore {
                 world: fixture.world.clone(),
             }),
+            Arc::new(NoContent),
             Arc::new(TestPublisher {
                 world: fixture.world.clone(),
             }),

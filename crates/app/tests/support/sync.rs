@@ -24,16 +24,14 @@ use std::time::Duration;
 use super::TempRoot;
 use acp_core::broker::Broker;
 use acp_core::model::{
-    Actor, CommandRecord, DispatchAdmission, DispatchFence, FirstSubmissionAdmission,
-    FirstSubmissionConvergence, FirstSubmissionRecord, FirstSubmissionSettlement,
-    FirstSubmissionWrite, FirstUserMessage, GlobalCursor, ModeId, ModeRef, ModeState, OriginEpoch,
-    PortError, RequestId, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionSummary, Turn,
+    Actor, CommandRecord, GlobalCursor, OriginEpoch, PortError, PromptInput, RequestId,
+    SessionDeletionEligibility, SessionDeletionOutcome, SessionDeletionWrite, SessionId,
+    SessionRecoveryRecord, SessionSnapshot, SessionSummary, Turn, UnavailableKind,
 };
 use acp_core::ports::{
-    AttachmentTransferStore, CapacityAdmission, CommitOutcome, FirstSubmission, OwnedCommit,
-    PreparationAttachmentStaging, PruneReport, ReadView, ReplayLimit, RetentionPolicy,
-    SessionActivityFacts, SessionBackendFactory, SessionQuery, SessionStore, StoreHealth,
-    SubmissionBinding,
+    AttachmentTransferStore, CommitOutcome, OwnedCommit, PruneReport, ReadView, ReplayLimit,
+    RetentionPolicy, SessionActivityFacts, SessionBackendFactory, SessionQuery, SessionStore,
+    StoreHealth, SubmissionBinding,
 };
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use base64::Engine as _;
@@ -923,15 +921,10 @@ pub struct HostNode {
     parked: Arc<ParkedEvents>,
     /// 脚本化后端的行为脚本（失败注入、窗口期事件注入与后端调用计数）。
     script: Arc<ScriptedScript>,
-    /// 准备控制/首次提交面（`core.session-preparation.v1`）：与生产组合根同一形状（真实运行期目录、
-    /// 真实凭据验签、真实首条事务与暂存端口），只有临时 Agent 端点与首条端口的故障注入是替身。
-    preparations: Arc<server::sync::preparation::Preparations>,
-    /// 准备端点替身（建立/释放的观测口）。
-    preparation_endpoints: Arc<ScriptedPreparationEndpoints>,
     /// 普通输入受理提交的故障注入装饰器（「保存失败」窗口）。
     session_store_faults: Arc<FlakyPromptStore>,
-    /// 首次提交端口的故障注入装饰器（「保存前」与「保存后、派发前」两个窗口）。
-    first_submission_faults: Arc<FirstSubmissionFaults>,
+    /// 最终删除事务的一次性故障注入点。
+    session_delete_failures: Arc<AtomicU32>,
     /// 宿主名（`daemon.public_origin` 的 authority）。
     host_name: String,
     shutdown: server::transport::net::ShutdownHandle,
@@ -988,7 +981,6 @@ impl ParkedEvents {
 /// 默认取值是「建立成功、窗口期不产事件、终止是空操作」——其余 Sync 用例的行为因此逐字不变；
 /// 只有显式调过 [`ScriptedScript::fail_create`] / [`ScriptedScript::emit_window_events`] 的用例才会
 /// 走到失败与窗口期那两条路径。
-#[derive(Default)]
 pub struct ScriptedScript {
     /// 此后每一次 `create` 的失败类别；`None` = 正常建立。
     ///
@@ -997,6 +989,13 @@ pub struct ScriptedScript {
     failure: std::sync::Mutex<Option<acp_core::model::UnavailableKind>>,
     /// 此后每一次 `create` 在返回之前推进 sink 的事件条数（窗口期事件的注入点）。
     window_events: std::sync::Mutex<usize>,
+    /// Hold a new create call before it returns to exercise concurrent admission.
+    block_creates: std::sync::atomic::AtomicBool,
+    create_entered: tokio::sync::Semaphore,
+    create_permit: tokio::sync::Semaphore,
+    prompt_entered: tokio::sync::Semaphore,
+    prompt_permit: tokio::sync::Semaphore,
+    block_prompts: std::sync::atomic::AtomicBool,
     /// `create` 的调用次数（「同 `requestId` 重发不派发第二次创建」的观测口）。
     creates: std::sync::atomic::AtomicUsize,
     /// 交给 `create` 的会话标识（按调用顺序）：失败路径下它就是「那一条**不该**有会话行的会话」。
@@ -1017,6 +1016,12 @@ pub struct ScriptedScript {
     release_outcome: std::sync::Mutex<Option<acp_core::ports::ReleaseOutcome>>,
     /// 释放调用次数（「回收确实被请求过」的观测口）。
     releases: std::sync::atomic::AtomicUsize,
+    /// 下一次真实释放是否停在确定性屏障上，供删除与激活竞态用例控制顺序。
+    block_releases: std::sync::atomic::AtomicBool,
+    /// release 适配器已进入阻塞点的信号。
+    release_entered: tokio::sync::Semaphore,
+    /// 允许阻塞中的 release 适配器返回的信号。
+    release_permit: tokio::sync::Semaphore,
     /// 准备端点派发（`prompt_with_context`）的失败类别：`SessionNotEstablished` = 可证明未发出
     /// （首条 `failed`），其余取值 = 说不清（首条 `uncertain`）。`None` = 正常派发。
     prepared_prompt_failure: std::sync::Mutex<Option<acp_core::model::UnavailableKind>>,
@@ -1034,6 +1039,40 @@ pub struct ScriptedScript {
     plain_echo_text: std::sync::Mutex<Option<String>>,
     /// 被 `associate_user_echo` 判定为重复并抑制的回显次数（用例证明「确实评估过回显」）。
     duplicate_echoes: std::sync::atomic::AtomicUsize,
+}
+
+impl Default for ScriptedScript {
+    fn default() -> Self {
+        Self {
+            failure: std::sync::Mutex::new(None),
+            window_events: std::sync::Mutex::new(0),
+            block_creates: std::sync::atomic::AtomicBool::new(false),
+            create_entered: tokio::sync::Semaphore::new(0),
+            create_permit: tokio::sync::Semaphore::new(0),
+            prompt_entered: tokio::sync::Semaphore::new(0),
+            prompt_permit: tokio::sync::Semaphore::new(0),
+            block_prompts: std::sync::atomic::AtomicBool::new(false),
+            creates: std::sync::atomic::AtomicUsize::new(0),
+            created: std::sync::Mutex::new(Vec::new()),
+            terminated: std::sync::Mutex::new(Vec::new()),
+            resume_failure: std::sync::Mutex::new(None),
+            resume_delay: std::sync::Mutex::new(None),
+            resumes: std::sync::atomic::AtomicUsize::new(0),
+            resumed_agent_ids: std::sync::Mutex::new(Vec::new()),
+            prompts: std::sync::atomic::AtomicUsize::new(0),
+            release_outcome: std::sync::Mutex::new(None),
+            releases: std::sync::atomic::AtomicUsize::new(0),
+            block_releases: std::sync::atomic::AtomicBool::new(false),
+            release_entered: tokio::sync::Semaphore::new(0),
+            release_permit: tokio::sync::Semaphore::new(0),
+            prepared_prompt_failure: std::sync::Mutex::new(None),
+            prepared_without_agent_session: std::sync::atomic::AtomicBool::new(false),
+            prepared_echo: std::sync::Mutex::new(None),
+            plain_echo: std::sync::Mutex::new(None),
+            plain_echo_text: std::sync::Mutex::new(None),
+            duplicate_echoes: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
 }
 
 impl ScriptedScript {
@@ -1058,6 +1097,43 @@ impl ScriptedScript {
 
     fn failure(&self) -> Option<acp_core::model::UnavailableKind> {
         *self.failure.lock().expect("用例内互斥量不会中毒")
+    }
+
+    /// Hold newly entered create calls at one observable point.
+    pub fn block_creates(&self) {
+        self.block_creates.store(true, Ordering::SeqCst);
+    }
+
+    /// Wait until one create call has entered its hold point.
+    pub async fn wait_for_create_entered(&self) {
+        self.create_entered
+            .acquire()
+            .await
+            .expect("test semaphore remains open")
+            .forget();
+    }
+
+    /// Release the current create call and let later calls proceed.
+    pub fn allow_create(&self) {
+        self.block_creates.store(false, Ordering::SeqCst);
+        self.create_permit.add_permits(1);
+    }
+
+    pub fn block_prompts(&self) {
+        self.block_prompts.store(true, Ordering::SeqCst);
+    }
+
+    pub async fn wait_for_prompt_entered(&self) {
+        self.prompt_entered
+            .acquire()
+            .await
+            .expect("test semaphore remains open")
+            .forget();
+    }
+
+    pub fn allow_prompt(&self) {
+        self.block_prompts.store(false, Ordering::SeqCst);
+        self.prompt_permit.add_permits(1);
     }
 
     fn window_events(&self) -> usize {
@@ -1121,6 +1197,31 @@ impl ScriptedScript {
     /// 让此后每一次逐会话释放都返回该结果（默认 `Released`）。
     pub fn set_release_outcome(&self, outcome: acp_core::ports::ReleaseOutcome) {
         *self.release_outcome.lock().expect("用例内互斥量不会中毒") = Some(outcome);
+    }
+
+    /// 让下一次 release 调用停在可观测屏障上。
+    pub fn block_releases(&self) {
+        self.block_releases.store(true, Ordering::SeqCst);
+    }
+
+    /// 等待 release 适配器进入阻塞点。
+    pub async fn wait_for_release_entered(&self) {
+        let permit = self
+            .release_entered
+            .acquire()
+            .await
+            .expect("test semaphore remains open");
+        permit.forget();
+    }
+
+    /// 允许当前阻塞的 release 适配器返回，并关闭后续阻塞。
+    pub fn allow_release(&self) {
+        self.block_releases.store(false, Ordering::SeqCst);
+        self.release_permit.add_permits(1);
+    }
+
+    pub fn permit_release(&self) {
+        self.release_permit.add_permits(1);
     }
 
     fn release_outcome(&self) -> acp_core::ports::ReleaseOutcome {
@@ -1270,6 +1371,16 @@ impl acp_core::ports::SessionRelease for ScriptedRelease {
         _now: acp_core::model::Timestamp,
     ) -> Result<acp_core::ports::ReleaseOutcome, PortError> {
         self.script.releases.fetch_add(1, Ordering::SeqCst);
+        if self.script.block_releases.load(Ordering::SeqCst) {
+            self.script.release_entered.add_permits(1);
+            let permit = self
+                .script
+                .release_permit
+                .acquire()
+                .await
+                .expect("test semaphore remains open");
+            permit.forget();
+        }
         Ok(self.script.release_outcome())
     }
 }
@@ -1375,7 +1486,6 @@ fn insert_before_terminal(
 fn echo_link(context: &acp_core::model::DispatchContext) -> acp_core::model::UserEchoLink {
     acp_core::model::UserEchoLink {
         session: context.session.clone(),
-        first_submission: context.first_submission.clone(),
         user_message: context.user_message.clone(),
         request: context.request.clone(),
         turn: context.turn.clone(),
@@ -1452,6 +1562,16 @@ impl SessionBackendFactory for ScriptedBackends {
         for index in 0..self.script.window_events() {
             sink.send(window_event(index));
         }
+        if self.script.block_creates.load(Ordering::SeqCst) {
+            self.script.create_entered.add_permits(1);
+            let permit = self
+                .script
+                .create_permit
+                .acquire()
+                .await
+                .expect("test semaphore remains open");
+            permit.forget();
+        }
         if let Some(kind) = self.script.failure() {
             return Err(PortError::Unavailable(kind));
         }
@@ -1518,6 +1638,8 @@ impl acp_core::ports::SessionEndpoint for ScriptedEndpoint {
         request: acp_core::model::PromptRequest,
         _at: acp_core::model::Timestamp,
     ) -> Result<acp_core::ports::TurnAccepted, PortError> {
+        self.script.prompt_entered.add_permits(1);
+        self.wait_for_test_prompt().await;
         self.script.prompts.fetch_add(1, Ordering::SeqCst);
         let marker = prompt_marker(&request);
         let turn = acp_core::model::TurnId::new(&uuid_text()).expect("turn id 是规范 uuid 文本");
@@ -1543,6 +1665,8 @@ impl acp_core::ports::SessionEndpoint for ScriptedEndpoint {
         at: acp_core::model::Timestamp,
         context: Option<acp_core::model::DispatchContext>,
     ) -> Result<acp_core::ports::TurnAccepted, PortError> {
+        self.script.prompt_entered.add_permits(1);
+        self.wait_for_test_prompt().await;
         self.script.prompts.fetch_add(1, Ordering::SeqCst);
         if let Some(kind) = self.script.prepared_prompt_failure() {
             return Err(PortError::Unavailable(kind));
@@ -1566,9 +1690,7 @@ impl acp_core::ports::SessionEndpoint for ScriptedEndpoint {
                             &json!({ "type": "text", "text": text }).to_string(),
                         )
                         .ok()
-                        .and_then(|block| {
-                            acp_core::model::FirstSubmissionInput::new(vec![block]).ok()
-                        })
+                        .and_then(|block| PromptInput::new(vec![block]).ok())
                         .map(|input| input.digest().clone())
                     };
                     match content_digest {
@@ -1795,6 +1917,7 @@ impl HostNode {
                 .expect("打开真实存储"),
         );
         let session_store_faults = FlakyPromptStore::new(Arc::clone(&store));
+        let session_delete_failures = Arc::new(AtomicU32::new(0));
         let sessions: Arc<dyn acp_core::ports::SessionStore> = session_store_faults.clone();
         let trust: Arc<dyn acp_core::ports::TrustStore> = store.clone();
         let audit: Arc<dyn acp_core::ports::AuditStore> = store.clone();
@@ -1837,6 +1960,7 @@ impl HostNode {
         let lifecycle = Arc::new(acp_core::use_cases::LocalSessionLifecycle::new(
             Arc::clone(&clock),
             Arc::clone(&sessions),
+            Arc::clone(&store) as Arc<dyn acp_core::ports::SessionContentFacts>,
             Arc::clone(&publisher),
             lifecycle_config,
         ));
@@ -1869,14 +1993,6 @@ impl HostNode {
         // 目录只活在内存、容量与创建/恢复共用同一本账；首条端口套一层可注入故障的装饰器（用例显式
         // 布防，平时逐个委托）。暂存与首条事务共用同一个 `SqliteStore` 实例。
         let attachment_transfers: Arc<dyn AttachmentTransferStore> = store.clone();
-        let first_submission_faults = FirstSubmissionFaults::new(Arc::clone(&store));
-        let first_submission_port: Arc<dyn FirstSubmission> = first_submission_faults.clone();
-        let preparation_staging: Arc<dyn PreparationAttachmentStaging> = store.clone();
-        let preparations_directory = Arc::new(acp_core::preparation::PreparationDirectory::new(
-            Arc::clone(&ids),
-            Arc::clone(&lifecycle) as Arc<dyn CapacityAdmission>,
-            acp_core::model::RuntimeEpoch::new(&uuid_text()).expect("runtime epoch"),
-        ));
         let core =
             Arc::new(
                 UseCases::new(UseCaseDeps {
@@ -1894,24 +2010,15 @@ impl HostNode {
                     Arc::clone(&session_files) as Arc<dyn acp_core::ports::SessionFiles>
                 )
                 .with_attachment_transfers(attachment_transfers)
-                .with_preparations(Arc::clone(&preparations_directory))
-                .with_first_submission(Arc::clone(&first_submission_port))
-                .with_preparation_staging(Arc::clone(&preparation_staging)),
+                .with_session_content(
+                    Arc::clone(&store) as Arc<dyn acp_core::ports::SessionContentFacts>
+                )
+                .with_session_deletion(Arc::new(FaultingSessionDeletion {
+                    inner: Arc::clone(&store),
+                    failures: Arc::clone(&session_delete_failures),
+                })
+                    as Arc<dyn acp_core::ports::SessionDeletion>),
             );
-        let preparations = Arc::new(server::sync::preparation::Preparations::new(
-            Arc::new(server::sync::preparation::CorePreparationTrust::new(
-                Arc::clone(&core),
-                Arc::clone(&authority),
-            )),
-            Arc::clone(&preparations_directory),
-            first_submission_port,
-            Some(preparation_staging),
-        ));
-        let preparation_endpoints = ScriptedPreparationEndpoints::new(
-            Arc::clone(&broker),
-            Arc::clone(&parked),
-            Arc::clone(&script),
-        );
 
         // —— 网络接入面：与组合根同一批装配点（含 Sync 的 path 注册与实时扇出）——
         let mut listener =
@@ -1943,11 +2050,6 @@ impl HostNode {
                 Arc::clone(&lifecycle),
                 Arc::clone(&clock) as Arc<dyn acp_core::ports::Clock>,
             )),
-            Some(app::daemon::PreparationPorts {
-                preparations: Arc::clone(&preparations),
-                endpoints: Arc::clone(&preparation_endpoints)
-                    as Arc<dyn server::sync::preparation::PreparationEndpoints>,
-            }),
         )
         .expect("注册 Sync path");
         let addr = listener.local_addrs()[0];
@@ -1985,11 +2087,13 @@ impl HostNode {
         tasks.push((
             "session_lifecycle_reclaim",
             tokio::spawn({
+                let core = Arc::clone(&core);
                 let lifecycle = Arc::clone(&lifecycle);
                 let clock = Arc::clone(&clock);
                 let signal = signal.clone();
                 async move {
                     server::sync::local_lifecycle::reclaim_loop(
+                        core,
                         lifecycle,
                         clock,
                         acp_core::model::Actor::LocalCli,
@@ -2058,10 +2162,8 @@ impl HostNode {
             sync_registry,
             parked,
             script,
-            preparations,
-            preparation_endpoints,
             session_store_faults,
-            first_submission_faults,
+            session_delete_failures,
             host_name,
             shutdown,
             tasks,
@@ -2072,6 +2174,11 @@ impl HostNode {
     /// 真实 listener 的地址。
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// 让接下来 `count` 次持久删除事务返回存储不可用。
+    pub fn fail_next_session_deletes(&self, count: u32) {
+        self.session_delete_failures.store(count, Ordering::SeqCst);
     }
 
     /// 数据目录（注册 workspace alias 时需要一个真实存在的目录）。
@@ -2110,11 +2217,7 @@ impl HostNode {
     }
 
     /// 生产启动序列（`app::daemon` 在取锁、开始监听**之前**的两步，顺序不可交换）：
-    /// `recover_unsettled` → `converge_first_submissions`。
-    ///
-    /// 重启类用例必须按这个顺序驱动。只调后一步测的是测试自己编的顺序：首条提交的崩溃记录同样是
-    /// 「`accepted` 且无终态」的 mutation，恢复若抢先把它结算成 `uncertain`，随后的收敛会在同一命令上
-    /// 得到 `Conflict(Consumed)` 并中止启动——只有真实顺序会暴露这一点。
+    /// 与生产启动顺序一致：先回收未结算命令，再收敛所有者生命周期目录。
     pub async fn startup_sequence(&self) -> (usize, usize) {
         let recovered = self
             .core()
@@ -2125,8 +2228,8 @@ impl HostNode {
             .await
             .expect("启动恢复必须完成（不得中止）");
         let converged = self
-            .core()
-            .converge_first_submissions(self.clock().now())
+            .lifecycle()
+            .converge_on_startup()
             .await
             .expect("启动收敛必须完成（不得中止）");
         (recovered, converged)
@@ -2155,21 +2258,6 @@ impl HostNode {
     /// 脚本化后端的行为脚本（失败注入、窗口期事件注入与后端调用计数）。
     pub fn script(&self) -> &Arc<ScriptedScript> {
         &self.script
-    }
-
-    /// 准备控制/首次提交面（`session.preparation`/`session.start` 共用的真实服务）。
-    pub fn preparations(&self) -> &Arc<server::sync::preparation::Preparations> {
-        &self.preparations
-    }
-
-    /// 准备端点替身（建立/释放次数）。
-    pub fn preparation_endpoints(&self) -> &Arc<ScriptedPreparationEndpoints> {
-        &self.preparation_endpoints
-    }
-
-    /// 首条端口的故障注入装饰器（「保存前」「保存后、派发前」两个窗口）。
-    pub fn first_submission_faults(&self) -> &Arc<FirstSubmissionFaults> {
-        &self.first_submission_faults
     }
 
     /// 普通输入受理提交的故障注入装饰器（「保存失败」窗口）。
@@ -2305,24 +2393,14 @@ impl HostNode {
             sync_registry,
             parked,
             script,
-            preparations,
-            preparation_endpoints,
             session_store_faults,
-            first_submission_faults,
+            session_delete_failures: _,
             host_name: _,
             shutdown,
             tasks,
             _temp,
         } = self;
-        let _ = (
-            &store,
-            &sync_registry,
-            &parked,
-            &script,
-            &lifecycle,
-            &clock,
-            &first_submission_faults,
-        );
+        let _ = (&store, &sync_registry, &parked, &script, &lifecycle, &clock);
         shutdown.trigger();
         for (name, mut handle) in tasks {
             match tokio::time::timeout(Duration::from_secs(10), &mut handle).await {
@@ -2336,14 +2414,10 @@ impl HostNode {
             }
         }
         drop(router);
-        // 生产关闭顺序：先释放临时端点，再放开准备服务，最后关闭存储（临时端口不持有存储）。
-        drop(preparation_endpoints);
-        drop(preparations);
         drop(core);
         drop(broker);
         drop(session_store_faults);
         drop(authority);
-        drop(first_submission_faults);
         drop(parked);
         drop(script);
         drop(sync_registry);
@@ -2361,6 +2435,22 @@ impl HostNode {
 }
 
 impl ScriptedEndpoint {
+    async fn wait_for_test_prompt(&self) {
+        if !self.script.block_prompts.load(Ordering::SeqCst) {
+            return;
+        }
+        // The prompt future can survive after its caller has cancelled the
+        // submission. Retain the queue so a queued permit cannot release a
+        // later prompt.
+        let permit = self
+            .script
+            .prompt_permit
+            .acquire()
+            .await
+            .expect("test semaphore remains open");
+        permit.forget();
+    }
+
     /// 建端点并把它挂上暂存表的 sink（否则 `ParkedEvents::release` 没有出口）。
     fn attach(
         sink: acp_core::ports::EventSink,
@@ -2382,6 +2472,38 @@ impl ScriptedEndpoint {
 // 准备面（`core.session-preparation.v1`）的测试装配件
 // ---------------------------------------------------------------------------------------------
 
+/// 最终删除事务的一次性故障注入装饰器：预检仍读取真实存储。
+struct FaultingSessionDeletion {
+    inner: Arc<SqliteStore>,
+    failures: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl acp_core::ports::SessionDeletion for FaultingSessionDeletion {
+    async fn preflight(
+        &self,
+        write: &SessionDeletionWrite,
+    ) -> Result<SessionDeletionEligibility, PortError> {
+        self.inner.preflight(write).await
+    }
+
+    async fn delete_session(
+        &self,
+        write: SessionDeletionWrite,
+    ) -> Result<SessionDeletionOutcome, PortError> {
+        let should_fail = self
+            .failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok();
+        if should_fail {
+            return Err(PortError::Unavailable(UnavailableKind::StorageFull));
+        }
+        self.inner.delete_session(write).await
+    }
+}
+
 /// 首次提交端口的**可注入故障装饰器**：真实 SQLite 事务照常执行，只在用例显式布防的下一次调用上
 /// 失败。两个窗口与其语义：
 ///
@@ -2390,110 +2512,13 @@ impl ScriptedEndpoint {
 ///   正式行与完整首条正文都在，命令仍是 accepted（等待显式继续），绝不自动重派。
 ///
 /// 只替换端口，不替换存储：`HostNode::store()` 仍直连同一个 `SqliteStore` 做独立读库断言。
-pub struct FirstSubmissionFaults {
-    inner: Arc<SqliteStore>,
-    fail_commit: std::sync::atomic::AtomicBool,
-    fail_begin_dispatch: std::sync::atomic::AtomicBool,
-    commits: std::sync::atomic::AtomicUsize,
-    dispatches: std::sync::atomic::AtomicUsize,
-}
-
-impl FirstSubmissionFaults {
-    fn new(inner: Arc<SqliteStore>) -> Arc<Self> {
-        Arc::new(Self {
-            inner,
-            fail_commit: std::sync::atomic::AtomicBool::new(false),
-            fail_begin_dispatch: std::sync::atomic::AtomicBool::new(false),
-            commits: std::sync::atomic::AtomicUsize::new(0),
-            dispatches: std::sync::atomic::AtomicUsize::new(0),
-        })
-    }
-
-    /// 下一次 `commit_first_submission` 失败（一次性的；重试因此可以直接验证「失败后同 ID 可重试」）。
-    pub fn fail_next_commit(&self) {
-        self.fail_commit.store(true, Ordering::SeqCst);
-    }
-
-    /// 下一次 `begin_dispatch` 失败（一次性的；之后的显式继续可以成功）。
-    pub fn fail_next_begin_dispatch(&self) {
-        self.fail_begin_dispatch.store(true, Ordering::SeqCst);
-    }
-
-    /// 受理事务被尝试的次数（含被注入失败的那次）。
-    pub fn commit_calls(&self) -> usize {
-        self.commits.load(Ordering::SeqCst)
-    }
-
-    /// 派发围栏被尝试的次数。
-    pub fn dispatch_calls(&self) -> usize {
-        self.dispatches.load(Ordering::SeqCst)
-    }
-}
-
-#[async_trait::async_trait]
-impl FirstSubmission for FirstSubmissionFaults {
-    async fn commit_first_submission(
-        &self,
-        write: FirstSubmissionWrite,
-    ) -> Result<FirstSubmissionAdmission, PortError> {
-        self.commits.fetch_add(1, Ordering::SeqCst);
-        if self.fail_commit.swap(false, Ordering::SeqCst) {
-            return Err(PortError::Unavailable(
-                acp_core::model::UnavailableKind::StorageFull,
-            ));
-        }
-        self.inner.commit_first_submission(write).await
-    }
-
-    async fn first_submission(
-        &self,
-        session: acp_core::model::SessionId,
-    ) -> Result<Option<FirstSubmissionRecord>, PortError> {
-        self.inner.first_submission(session).await
-    }
-
-    async fn first_user_message(
-        &self,
-        session: acp_core::model::SessionId,
-    ) -> Result<Option<FirstUserMessage>, PortError> {
-        self.inner.first_user_message(session).await
-    }
-
-    async fn begin_dispatch(&self, fence: DispatchFence) -> Result<DispatchAdmission, PortError> {
-        self.dispatches.fetch_add(1, Ordering::SeqCst);
-        if self.fail_begin_dispatch.swap(false, Ordering::SeqCst) {
-            return Err(PortError::Unavailable(
-                acp_core::model::UnavailableKind::IoError,
-            ));
-        }
-        self.inner.begin_dispatch(fence).await
-    }
-
-    async fn settle_first_submission(
-        &self,
-        settlement: FirstSubmissionSettlement,
-    ) -> Result<FirstSubmissionRecord, PortError> {
-        self.inner.settle_first_submission(settlement).await
-    }
-
-    async fn converge_first_submission(
-        &self,
-        session: acp_core::model::SessionId,
-        at: acp_core::model::Timestamp,
-    ) -> Result<FirstSubmissionConvergence, PortError> {
-        self.inner.converge_first_submission(session, at).await
-    }
-}
-
-/// `SessionStore` 装饰器：**一次性**让下一次普通输入的受理提交失败（§6 第 24 条的「保存失败」窗口）。
-///
-/// 只对**携带用户输入写集**（`OwnedCommit::input`）的提交布防：其余提交（turn 状态、终态事件、启动
-/// 恢复、维护类）原样落地。故障类别取 `StorageFull`——存储层的真实磁盘/事务故障里最容易被用户
-/// 观察的一类，且 `Broker` 会把它映射成 `internal.unavailable` 的明确拒绝，不会派发也不会广播。
 pub struct FlakyPromptStore {
     inner: Arc<SqliteStore>,
     fail_next: std::sync::atomic::AtomicBool,
     rejected: std::sync::atomic::AtomicUsize,
+    hold_prompt_commit: std::sync::atomic::AtomicBool,
+    prompt_commit_entered: tokio::sync::Semaphore,
+    prompt_commit_release: tokio::sync::Semaphore,
 }
 
 impl FlakyPromptStore {
@@ -2502,6 +2527,9 @@ impl FlakyPromptStore {
             inner,
             fail_next: std::sync::atomic::AtomicBool::new(false),
             rejected: std::sync::atomic::AtomicUsize::new(0),
+            hold_prompt_commit: std::sync::atomic::AtomicBool::new(false),
+            prompt_commit_entered: tokio::sync::Semaphore::new(0),
+            prompt_commit_release: tokio::sync::Semaphore::new(0),
         })
     }
 
@@ -2513,6 +2541,41 @@ impl FlakyPromptStore {
     /// 被注入拦下的受理提交次数（用例证明故障路径真的走到了）。
     pub fn rejected(&self) -> usize {
         self.rejected.load(Ordering::SeqCst)
+    }
+
+    pub fn block_next_prompt_commit(&self) {
+        self.hold_prompt_commit.store(true, Ordering::SeqCst);
+    }
+
+    pub async fn wait_for_prompt_commit_entered(&self) {
+        self.prompt_commit_entered
+            .acquire()
+            .await
+            .expect("test semaphore remains open")
+            .forget();
+    }
+
+    pub fn allow_prompt_commit(&self) {
+        self.prompt_commit_release.add_permits(1);
+    }
+
+    /// 在普通输入保存前暂停，以构造与生命周期操作竞争的确定窗口。
+    async fn hold_prompt_commit(&self, commit: &OwnedCommit) {
+        if commit.input.is_some()
+            && commit.idempotency.as_ref().is_some_and(|record| {
+                record.command == "session.prompt"
+                    && record.kind == acp_core::model::CommandKind::Mutation
+            })
+            && self.hold_prompt_commit.swap(false, Ordering::SeqCst)
+        {
+            self.prompt_commit_entered.add_permits(1);
+            let permit = self
+                .prompt_commit_release
+                .acquire()
+                .await
+                .expect("test semaphore remains open");
+            permit.forget();
+        }
     }
 
     /// 该提交是否应被拦下：只认带 `input` 的提交，且一次性开关确实生效。
@@ -2531,6 +2594,7 @@ impl FlakyPromptStore {
 #[async_trait::async_trait]
 impl SessionStore for FlakyPromptStore {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+        self.hold_prompt_commit(&commit).await;
         if self.should_fail(&commit) {
             return Err(PortError::Unavailable(
                 acp_core::model::UnavailableKind::StorageFull,
@@ -2546,6 +2610,7 @@ impl SessionStore for FlakyPromptStore {
         commit: OwnedCommit,
         binding: Option<SubmissionBinding>,
     ) -> Result<CommitOutcome, PortError> {
+        self.hold_prompt_commit(&commit).await;
         if self.should_fail(&commit) {
             return Err(PortError::Unavailable(
                 acp_core::model::UnavailableKind::StorageFull,
@@ -2643,180 +2708,5 @@ impl SessionStore for FlakyPromptStore {
 
     async fn health(&self) -> Result<StoreHealth, PortError> {
         self.inner.health().await
-    }
-}
-
-/// 准备端点的**替身**：真实 `Preparations`/运行期目录/凭据验证照常工作，这里只替换「临时 Agent
-/// 端点」本身（真实实现是 `agent-host` 的 `TemporaryEndpoint`）。
-///
-/// 与生产 `HostPreparationEndpoints` 同形：同一会话同一资源代复用端点、换代先释放旧代、`claim` 只认
-/// 精确代。端点的事件 sink 取真实 `Broker::sink(session)`（生产里由 `transfer_preparation` 完成等价
-/// 的重绑），因此首条派发的事件走与正式会话完全相同的提交路径。
-pub struct ScriptedPreparationEndpoints {
-    broker: Arc<Broker>,
-    parked: Arc<ParkedEvents>,
-    script: Arc<ScriptedScript>,
-    entries: std::sync::Mutex<std::collections::HashMap<String, PreparedEntry>>,
-    establishes: std::sync::atomic::AtomicUsize,
-    releases: std::sync::atomic::AtomicUsize,
-}
-
-struct PreparedEntry {
-    generation: u64,
-    endpoint: Arc<ScriptedEndpoint>,
-}
-
-impl ScriptedPreparationEndpoints {
-    fn new(
-        broker: Arc<Broker>,
-        parked: Arc<ParkedEvents>,
-        script: Arc<ScriptedScript>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            broker,
-            parked,
-            script,
-            entries: std::sync::Mutex::new(std::collections::HashMap::new()),
-            establishes: std::sync::atomic::AtomicUsize::new(0),
-            releases: std::sync::atomic::AtomicUsize::new(0),
-        })
-    }
-
-    /// 建立（或复用）临时端点的次数。
-    pub fn establish_calls(&self) -> usize {
-        self.establishes.load(Ordering::SeqCst)
-    }
-
-    /// 按精确代释放临时端点的次数。
-    pub fn release_calls(&self) -> usize {
-        self.releases.load(Ordering::SeqCst)
-    }
-}
-
-/// 替身端点「Agent 确认过的真实设置」：两种可选模式，当前模式随草稿选择变化。
-fn scripted_preparation_options(
-    selection: &server::sync::preparation::PreparationSelectionInput,
-) -> server::sync::preparation::PreparationOptions {
-    let default =
-        ModeRef::try_new(ModeId::new("default").expect("mode id"), "Default").expect("mode ref");
-    let plan = ModeRef::try_new(ModeId::new("plan").expect("mode id"), "Plan").expect("mode ref");
-    let selected_plan = selection
-        .mode
-        .as_ref()
-        .is_some_and(|mode| mode.as_str() == "plan");
-    server::sync::preparation::PreparationOptions {
-        modes: ModeState::new(
-            Some(if selected_plan {
-                plan.clone()
-            } else {
-                default.clone()
-            }),
-            vec![default, plan],
-        ),
-        config: Vec::new(),
-        blocks_dispatch: false,
-    }
-}
-
-#[async_trait::async_trait]
-impl server::sync::preparation::PreparationEndpoints for ScriptedPreparationEndpoints {
-    async fn establish(
-        &self,
-        request: server::sync::preparation::PreparationEstablish,
-    ) -> Result<server::sync::preparation::PreparationOptions, PortError> {
-        let key = request.session.as_str().to_owned();
-        let mut entries = self.entries.lock().expect("用例内互斥量不会中毒");
-        if let Some(existing) = entries.get(&key) {
-            if existing.generation == request.generation {
-                return Ok(scripted_preparation_options(&request.selection));
-            }
-            // 换代：旧代必须真的释放（与生产实现同一条规则），否则会留下第二个 Agent 会话。
-            entries.remove(&key);
-            self.releases.fetch_add(1, Ordering::SeqCst);
-        }
-        let agent_session = self.script.prepared_has_agent_session().then(|| {
-            acp_core::model::AgentSessionId::new(&format!("acp-{}", &request.session.as_str()[..8]))
-                .expect("会话标识非空、无 NUL、长度合规")
-        });
-        let sink = self.broker.sink(&request.session);
-        let endpoint = Arc::new(ScriptedEndpoint::attach(
-            sink,
-            Arc::clone(&self.parked),
-            Arc::clone(&self.script),
-            agent_session,
-        ));
-        entries.insert(
-            key,
-            PreparedEntry {
-                generation: request.generation,
-                endpoint,
-            },
-        );
-        self.establishes.fetch_add(1, Ordering::SeqCst);
-        Ok(scripted_preparation_options(&request.selection))
-    }
-
-    async fn configure(
-        &self,
-        request: server::sync::preparation::PreparationConfigure,
-    ) -> Result<server::sync::preparation::PreparationOptions, PortError> {
-        let entries = self.entries.lock().expect("用例内互斥量不会中毒");
-        match entries.get(request.session.as_str()) {
-            Some(entry) if entry.generation == request.generation => {
-                Ok(scripted_preparation_options(&request.selection))
-            }
-            _ => Err(PortError::Unavailable(
-                acp_core::model::UnavailableKind::SessionNotEstablished,
-            )),
-        }
-    }
-
-    async fn claim(
-        &self,
-        session: acp_core::model::SessionId,
-        generation: u64,
-    ) -> Result<Arc<dyn acp_core::ports::SessionEndpoint>, PortError> {
-        let entries = self.entries.lock().expect("用例内互斥量不会中毒");
-        match entries.get(session.as_str()) {
-            Some(entry) if entry.generation == generation => {
-                Ok(Arc::clone(&entry.endpoint) as Arc<dyn acp_core::ports::SessionEndpoint>)
-            }
-            _ => Err(PortError::Unavailable(
-                acp_core::model::UnavailableKind::SessionNotEstablished,
-            )),
-        }
-    }
-
-    async fn release(
-        &self,
-        session: acp_core::model::SessionId,
-        generation: u64,
-    ) -> server::sync::preparation::EndpointRelease {
-        let mut entries = self.entries.lock().expect("用例内互斥量不会中毒");
-        match entries.get(session.as_str()) {
-            Some(entry) if entry.generation == generation => {
-                entries.remove(session.as_str());
-                self.releases.fetch_add(1, Ordering::SeqCst);
-                match self.script.release_outcome() {
-                    acp_core::ports::ReleaseOutcome::Released => {
-                        server::sync::preparation::EndpointRelease::Released
-                    }
-                    acp_core::ports::ReleaseOutcome::Failed => {
-                        server::sync::preparation::EndpointRelease::Failed
-                    }
-                    acp_core::ports::ReleaseOutcome::Uncertain => {
-                        server::sync::preparation::EndpointRelease::Uncertain
-                    }
-                }
-            }
-            // 没有该代：幂等（与生产实现「已确认释放 ⇒ Released」同口径）。
-            _ => server::sync::preparation::EndpointRelease::Released,
-        }
-    }
-
-    async fn release_all(&self) {
-        let mut entries = self.entries.lock().expect("用例内互斥量不会中毒");
-        self.releases.fetch_add(entries.len(), Ordering::SeqCst);
-        entries.clear();
     }
 }

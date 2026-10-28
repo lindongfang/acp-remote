@@ -106,60 +106,6 @@ impl NodeEndpoint {
     }
 }
 
-/// 准备凭据里的**已规范化**工作目录（design D2 的 `normalizedWorkspacePath`）。
-///
-/// 只校验形状：1..=4096 字符、不含 NUL。**规范化与绝对性由调用方保证**——本 crate 不访问文件系统，
-/// 也不使用平台相关的绝对路径判定（固定向量里的 Windows 路径必须能在任何平台重编码）。绑定比较是
-/// 精确字符串相等：不做大小写、分隔符或符号链接归一。
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NormalizedWorkspacePath(String);
-
-impl NormalizedWorkspacePath {
-    /// 从已规范化的路径文本构造。
-    pub fn parse(text: &str) -> Result<Self, TranscriptError> {
-        let count = text.chars().count();
-        if count == 0 || count > 4096 || text.contains('\0') {
-            return Err(TranscriptError::InvalidField("normalizedWorkspacePath"));
-        }
-        Ok(Self(text.to_owned()))
-    }
-
-    /// 路径文本。
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// 准备凭据的目录来源（`preparationReceiptClaims.workspaceSource` 的闭合取值）。
-///
-/// 来源只说明路径由哪条输入得出，不参与路径比较；claims 绑定的是规范化后的路径文本本身。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PreparationWorkspaceSource {
-    /// 本机已登记的目录标识（`directoryId`）。
-    DirectoryId,
-    /// 客户端提交的绝对路径（`workspacePath`）。
-    WorkspacePath,
-}
-
-impl PreparationWorkspaceSource {
-    /// 稳定 token（wire 与 transcript 共用）。
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::DirectoryId => "directoryId",
-            Self::WorkspacePath => "workspacePath",
-        }
-    }
-
-    /// 从 wire token 解析；未知取值一律拒绝（闭合词表）。
-    pub fn parse(text: &str) -> Result<Self, TranscriptError> {
-        match text {
-            "directoryId" => Ok(Self::DirectoryId),
-            "workspacePath" => Ok(Self::WorkspacePath),
-            _ => Err(TranscriptError::InvalidField("workspaceSource")),
-        }
-    }
-}
-
 /// 生成一个「规范小写 UUID 文本」 newtype：wire 上是 UUID，transcript 里编码为 16 字节。
 macro_rules! uuid_id {
     ($(#[$meta:meta])* $name:ident) => {

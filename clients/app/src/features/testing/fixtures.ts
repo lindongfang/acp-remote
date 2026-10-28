@@ -23,7 +23,7 @@ import type {
 import type { CompletedSnapshot, StagedResources } from "../../sync-client";
 import { SESSION_HISTORY_FEATURE } from "../../sync-client";
 import type { InteractionView } from "../../domain/interaction";
-import { ClientStore } from "../client-store";
+import { ClientStore, type ClientStoreOptions } from "../client-store";
 import type { SyncGateway } from "../ports";
 
 /**
@@ -158,6 +158,8 @@ export interface RecordingGateway extends SyncGateway {
   readonly dispatches: CommandMessage[];
   /** `session.view` 声明（按发出顺序）。 */
   readonly views: { readonly sessionId: string | null; readonly viewVersion: number }[];
+  /** 查看声明与命令的共享到达顺序，用于断言先 view 后 resume。 */
+  readonly lifecycleOrder: string[];
   snapshotRefreshes: number;
 }
 
@@ -167,6 +169,7 @@ export function recordingGateway(input: {
 }): RecordingGateway {
   const dispatches: CommandMessage[] = [];
   const views: { readonly sessionId: string | null; readonly viewVersion: number }[] = [];
+  const lifecycleOrder: string[] = [];
   const current: CompletedSnapshot | null =
     input.resources === null
       ? null
@@ -179,6 +182,7 @@ export function recordingGateway(input: {
   return {
     dispatches,
     views,
+    lifecycleOrder,
     snapshotRefreshes: 0,
     refreshSnapshot() { this.snapshotRefreshes += 1; },
     current,
@@ -186,14 +190,12 @@ export function recordingGateway(input: {
     // 交付；wire 上没有授权集合，因此这里没有任何 scope 可给，也不编造一份。
     authenticatedInfo: null,
     dispatch(command: CommandMessage) {
+      lifecycleOrder.push(`command:${command.body.command}`);
       dispatches.push(command);
-    },
-    sendPreparation() {
-      // 记账网关默认不接准备控制面：用例需要它时自己替换这个方法（见准备流程用例）。
-      return false;
     },
     setSessionView(input) {
       views.push({ sessionId: input.sessionId, viewVersion: input.viewVersion });
+      lifecycleOrder.push(`view:${input.sessionId ?? "null"}`);
       return true;
     },
     subscribeRemote: () => undefined,
@@ -220,6 +222,8 @@ export function storeWith(input: {
   readonly now?: () => number;
   /** 文件栏刷新退避的定时端口；缺省不排期（测试直接调用 `refreshFiles`）。 */
   readonly schedule?: (delayMs: number, task: () => void) => () => void;
+  /** 附件与媒体端口；缺省保持附件能力不可用。 */
+  readonly attachments?: ClientStoreOptions["attachments"];
 }): StoreFixture {
   const gateway = recordingGateway(input);
   let counter = 0;
@@ -232,11 +236,10 @@ export function storeWith(input: {
       },
     },
     now: input.now ?? (() => 1_700_000_000_000),
-    // 生产组合根总是注入这个端口；测试仓库缺省给同一形状，避免「入口不可用」把无关用例带红。
-    preparationTabNonce: () => TEST_TAB_NONCE,
     // `??` 会把「显式传 null（未连接）」当成缺省，因此这里区分 undefined 与 null。
     identity: { connectionId: input.connectionId === undefined ? "2de54db7-74ae-4c21-88e3-05df0dc2e637" : input.connectionId },
     ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
+    ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
   });
 
   if (input.resources !== null) {
@@ -312,9 +315,6 @@ export const TEST_DEVICE_ID = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
 /** 测试用的服务端 epoch。 */
 export const TEST_SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
 
-/** 测试用的准备标签页 nonce（32 字节 base64url；与生产组合根注入的端口同形）。 */
-export const TEST_TAB_NONCE = "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8";
-
 /**
  * 已认证、已在线、并（可选）协商到若干 feature 的仓库。
  *
@@ -328,11 +328,14 @@ export function onlineStore(input: {
   readonly now?: () => number;
   /** 续租计时器端口（用例据推进 10 秒续租）；缺省不排期。 */
   readonly schedule?: (delayMs: number, task: () => void) => () => void;
+  /** 附件与媒体端口；缺省保持附件能力不可用。 */
+  readonly attachments?: ClientStoreOptions["attachments"];
 }): StoreFixture {
   const { store, gateway } = storeWith({
     resources: input.resources ?? resources({}),
     ...(input.now === undefined ? {} : { now: input.now }),
     ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
+    ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
   });
   // 发一次认证结果，带上服务端在 `auth.server_challenge` 里选中的 feature。
   store.apply({

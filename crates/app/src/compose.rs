@@ -27,18 +27,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
-use acp_core::model::ResourceGeneration;
 use acp_core::model::{
     Actor, AttachmentGeneration, AttachmentId, AuditAction, AuditOutcome, AuditRecord,
-    CommittedEvent, DeviceId, EndpointEvent, EntityRef, NodeId, PortError, ServerEpoch, SessionId,
-    Timestamp, UnavailableKind,
+    CommittedEvent, DeviceId, EndpointEvent, EntityRef, NodeId, PortError, ResourceGeneration,
+    ServerEpoch, SessionId, Timestamp, UnavailableKind,
 };
 use acp_core::ports::TrustStore;
 use acp_core::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AttachmentTransferStore, AuditStore, Clock,
     EventPublisher, IdGenerator, InteractionAuthority, LocalConfigStore, NodeEventSink,
-    PruneReport, ReleaseOutcome, RetentionPolicy, SessionBackendFactory, SessionFiles,
-    SessionRelease, SessionStore,
+    PruneReport, ReleaseOutcome, RetentionPolicy, SessionBackendFactory, SessionContentFacts,
+    SessionDeletion, SessionFiles, SessionRelease, SessionStore,
 };
 use acp_core::use_cases::{LocalSessionLifecycle, UseCaseDeps, UseCases};
 use agent_host::{AgentHost, HostConfig, NodeEvents};
@@ -57,7 +56,7 @@ use storage_sqlite::session_store::SqliteStore;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::clock::SystemClock;
+use crate::clock::{FileClock, SystemClock};
 use crate::config::{Config, KeystoreChoice};
 use crate::identity::{IdentityUnavailable, NodeIdentity};
 use crate::session_files::NativeSessionFiles;
@@ -73,6 +72,42 @@ const AUDIT_CHANNEL_CAPACITY: usize = 64;
 /// 节点级事件稀少（每个 profile 进程各一次）且提交是单条事务；正常情形下毫秒级完成。**必须有**上限：
 /// `close()` 不得无限期挂住，超过上限如实上报为关闭错误（见 [`ComposeError::NodeEventsPending`]）。
 const NODE_EVENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 验收文件时钟路径。只在显式开发模式中生效，不是正式配置键或网络能力。
+pub const TEST_CLOCK_FILE_ENV: &str = "ACPR_TEST_CLOCK_FILE";
+/// 验收扫描间隔（毫秒）。只在文件时钟已启用时生效，范围 `1..=60000`。
+pub const TEST_RECLAIM_INTERVAL_MS_ENV: &str = "ACPR_TEST_RECLAIM_INTERVAL_MS";
+
+const PRODUCTION_RECLAIM_INTERVAL: Duration = Duration::from_secs(60);
+
+#[doc(hidden)]
+#[derive(Clone)]
+struct SessionDeletePort {
+    store: Arc<SqliteStore>,
+}
+
+#[async_trait::async_trait]
+impl SessionDeletion for SessionDeletePort {
+    async fn preflight(
+        &self,
+        write: &acp_core::model::SessionDeletionWrite,
+    ) -> Result<acp_core::model::SessionDeletionEligibility, PortError> {
+        self.store.preflight(write).await
+    }
+
+    async fn delete_session(
+        &self,
+        write: acp_core::model::SessionDeletionWrite,
+    ) -> Result<acp_core::model::SessionDeletionOutcome, PortError> {
+        self.store.delete_session(write).await
+    }
+}
+
+/// Test composition keeps the same storage-side generation check as production.
+#[doc(hidden)]
+pub fn session_deletion_port(store: Arc<SqliteStore>) -> Arc<dyn SessionDeletion> {
+    Arc::new(SessionDeletePort { store })
+}
 
 /// 组合根装配失败。全部失败即拒绝启动（失败关闭）。
 #[derive(Debug, thiserror::Error)]
@@ -96,6 +131,18 @@ pub enum ComposeError {
     /// `agent.disconnected` 会因写入撞上已关闭的存储而丢失）。
     #[error("关闭时仍有节点级事件提交未完成")]
     NodeEventsPending,
+    /// 未启用开发模式却出现了验收时钟环境变量。
+    #[error("the test clock is only available in explicit dev mode")]
+    TestClockOutsideDevMode,
+    /// 验收时钟文件不存在、不可读或内容非法。
+    #[error("the test clock file is unusable")]
+    TestClockInvalid,
+    /// 没有启用验收时钟却设置了短扫描间隔。
+    #[error("the test reclaim interval requires the test clock")]
+    TestReclaimIntervalWithoutClock,
+    /// 验收扫描间隔不是 `1..=60000` 毫秒。
+    #[error("the test reclaim interval must be 1..=60000 milliseconds")]
+    TestReclaimIntervalInvalid,
 }
 
 impl ComposeError {
@@ -117,6 +164,16 @@ impl ComposeError {
             Self::StoreStillShared => "the store is still shared at shutdown time".to_owned(),
             Self::NodeEventsPending => {
                 "node-level event submissions did not drain before the shutdown deadline".to_owned()
+            }
+            Self::TestClockOutsideDevMode => {
+                "the test clock is only available in explicit dev mode".to_owned()
+            }
+            Self::TestClockInvalid => "the test clock file is unusable".to_owned(),
+            Self::TestReclaimIntervalWithoutClock => {
+                "the test reclaim interval requires the test clock".to_owned()
+            }
+            Self::TestReclaimIntervalInvalid => {
+                "the test reclaim interval must be 1..=60000 milliseconds".to_owned()
             }
         }
     }
@@ -169,11 +226,6 @@ pub struct Composition {
     use_cases: Arc<UseCases>,
     /// 本机会话生命周期（`core.local-session-lifecycle.v1`）：启动收敛、容量/保留回收与查看租约。
     lifecycle: Arc<LocalSessionLifecycle>,
-    /// 准备控制/首次提交面（`core.session-preparation.v1`）：`server::sync` 的控制帧、附件准备目标与
-    /// `session.start` 都经它。组合根持有同一实例，daemon 用它注册路由并决定是否宣告 feature。
-    preparations: Arc<server::sync::preparation::Preparations>,
-    /// 准备端点窄面（`agent-host` 适配器）：关闭序列在 `AgentHost::shutdown_all` **之前**释放全部临时端点。
-    preparation_endpoints: Arc<dyn server::sync::preparation::PreparationEndpoints>,
     /// 会话文件/Git 的原生只读端口（与 `UseCases` 内部注入的是同一个实例）。
     ///
     /// 用例面不暴露端口，而连接级版本释放（`CommandRoute::on_closed`）与 daemon 关闭都要拿到同一实例，
@@ -187,6 +239,8 @@ pub struct Composition {
     /// 最后一条 `agent.disconnected`（在 `AgentHost::shutdown_all` 内投递）会与紧随其后的
     /// `Composition::close()` 竞争，存储可能在提交被 poll 到之前就关闭（见 [`Composition::close`]）。
     node_event_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// 生产固定 60 秒；只有显式验收文件时钟可以缩短。
+    reclaim_interval: Duration,
     /// Access 侧出站运行时（按持久化 Owner 信任建立连接、claim/status 与远程路由）。
     ///
     /// 由 `crate::daemon::run` 在组合根之外装配后经 [`Composition::with_access`] 注入：本结构不发起
@@ -206,7 +260,7 @@ impl Composition {
         config: Config,
         publisher: Arc<dyn EventPublisher>,
     ) -> Result<Self, ComposeError> {
-        let clock: Arc<dyn Clock> = Arc::new(SystemClock::new());
+        let (clock, reclaim_interval) = build_clock(&config)?;
         let started_at = clock.now();
         let store = Arc::new(
             SqliteStore::open(config.storage.clone(), &started_at)
@@ -274,6 +328,7 @@ impl Composition {
         let catalog: Arc<dyn AgentCatalog> = host.clone();
         // 生命周期与 broker 共用同一个发布端口/存储/时钟：会话活动事件必须先落库再广播。
         let lifecycle_store = Arc::clone(&session_store);
+        let lifecycle_content = Arc::clone(&store) as Arc<dyn SessionContentFacts>;
         let lifecycle_publisher = Arc::clone(&publisher);
         let broker = Arc::new(
             Broker::new(
@@ -300,27 +355,13 @@ impl Composition {
         let lifecycle = Arc::new(LocalSessionLifecycle::new(
             Arc::clone(&clock),
             lifecycle_store,
+            lifecycle_content,
             lifecycle_publisher,
             config.sessions.lifecycle,
         ));
         lifecycle.set_session_release(Arc::new(HostSessionRelease {
             host: Arc::clone(&host),
         }));
-        // 准备运行期目录与首次提交/暂存端口（`core.session-preparation.v1`）：
-        // - 目录只活在内存（`design.md` D1），容量与创建/恢复共用同一本账；
-        // - `SqliteStore` 同一实例同时实现 `FirstSubmission`/`PreparationAttachmentStaging`，二者与
-        //   `SessionStore` 的受理事务必须同源，不能在组合根另建第二份。
-        let first_submission_port: Arc<dyn acp_core::ports::FirstSubmission> = store.clone();
-        let preparation_staging: Arc<dyn acp_core::ports::PreparationAttachmentStaging> =
-            store.clone();
-        let preparations_directory = Arc::new(acp_core::preparation::PreparationDirectory::new(
-            Arc::clone(&ids),
-            Arc::clone(&lifecycle) as Arc<dyn acp_core::ports::CapacityAdmission>,
-            acp_core::model::RuntimeEpoch::new(&Uuid::new_v4().to_string())
-                .map_err(|_| ComposeError::Port(PortError::Corrupt("runtime epoch")))?,
-        ));
-        let preparation_endpoints: Arc<dyn server::sync::preparation::PreparationEndpoints> =
-            Arc::new(HostPreparationEndpoints::new(Arc::clone(&host), &broker));
         let use_cases = Arc::new(
             UseCases::new(UseCaseDeps {
                 broker: Arc::clone(&broker),
@@ -335,19 +376,11 @@ impl Composition {
             })
             .with_session_files(Arc::clone(&session_files) as Arc<dyn SessionFiles>)
             .with_attachment_transfers(attachment_transfers)
-            .with_preparations(Arc::clone(&preparations_directory))
-            .with_first_submission(Arc::clone(&first_submission_port))
-            .with_preparation_staging(Arc::clone(&preparation_staging)),
+            .with_session_content(
+                Arc::clone(&store) as Arc<dyn acp_core::ports::SessionContentFacts>
+            )
+            .with_session_deletion(session_deletion_port(Arc::clone(&store))),
         );
-        let preparations = Arc::new(server::sync::preparation::Preparations::new(
-            Arc::new(server::sync::preparation::CorePreparationTrust::new(
-                Arc::clone(&use_cases),
-                Arc::clone(&authority),
-            )),
-            Arc::clone(&preparations_directory),
-            first_submission_port,
-            Some(preparation_staging),
-        ));
         // `session.create` 与 `session.resume` 共用同一本容量账：broker 在分配会话标识之后、启动后端
         // 之前预占，失败交还、落账后 settle 为 ready。
         assert!(
@@ -399,10 +432,9 @@ impl Composition {
             broker,
             use_cases,
             lifecycle,
-            preparations,
-            preparation_endpoints,
             session_files,
             node_event_tasks,
+            reclaim_interval,
             access: None,
         })
     }
@@ -476,18 +508,6 @@ impl Composition {
         &self.lifecycle
     }
 
-    /// 准备控制/首次提交面（`core.session-preparation.v1`）。
-    pub fn preparations(&self) -> &Arc<server::sync::preparation::Preparations> {
-        &self.preparations
-    }
-
-    /// 准备端点窄面（`agent-host` 适配器）。
-    pub fn preparation_endpoints(
-        &self,
-    ) -> &Arc<dyn server::sync::preparation::PreparationEndpoints> {
-        &self.preparation_endpoints
-    }
-
     /// 会话文件/Git 的原生只读端口（与 [`Composition::use_cases`] 注入的是同一个实例）。
     ///
     /// 组合根把它同时交给 `UseCases::with_session_files` 与 Sync 命令面；daemon 关闭时
@@ -509,6 +529,11 @@ impl Composition {
     /// 时间来源。
     pub fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
+    }
+
+    /// 生命周期扫描间隔。生产恒为 60 秒，验收文件时钟可显式缩短。
+    pub fn reclaim_interval(&self) -> Duration {
+        self.reclaim_interval
     }
 
     /// id 分配器。
@@ -562,8 +587,6 @@ impl Composition {
             store,
             use_cases,
             lifecycle,
-            preparations,
-            preparation_endpoints,
             session_files,
             host,
             broker,
@@ -587,11 +610,6 @@ impl Composition {
         // 内容快照只存在于内存；连接断开的逐版本释放由 Sync 命令面完成，这里兜底释放全部（daemon 关闭）。
         // 必须在关闭存储之前：`release_all` 不触碰存储，但关闭顺序上它属于「先释放资源」的一段。
         session_files.release_all();
-        // 准备端点（`core.session-preparation.v1`）：临时资源先于 Agent 宿主与存储关闭。失败只记日志
-        // （组合根不伪造成释放成功），名额与真实占用由 Agent 宿主自己的状态承担。
-        preparation_endpoints.release_all().await;
-        drop(preparation_endpoints);
-        drop(preparations);
         // 显式释放：`UseCases`/`Broker`/`AgentHost` 各自持有存储句柄（`Arc<dyn …>` 克隆）。
         drop(use_cases);
         drop(lifecycle);
@@ -708,6 +726,55 @@ impl AttachmentStore for WeakAttachmentStore {
     async fn sweep_orphans(&self, at: Timestamp, limit: u32) -> Result<u32, PortError> {
         self.upgrade()?.sweep_orphans(at, limit).await
     }
+}
+
+/// 选择进程时钟与扫描间隔。
+///
+/// 文件时钟和短间隔都只在 `dev_mode.enabled = true` 且显式设置
+/// [`TEST_CLOCK_FILE_ENV`] 时启用。生产配置即使继承了同名环境变量，也会在未启用
+/// `dev_mode` 时失败关闭；普通生产路径始终使用 [`SystemClock`] 和固定 60 秒扫描。
+fn build_clock(config: &Config) -> Result<(Arc<dyn Clock>, Duration), ComposeError> {
+    build_clock_with(
+        config.dev_mode.enabled,
+        std::env::var_os(TEST_CLOCK_FILE_ENV),
+        std::env::var_os(TEST_RECLAIM_INTERVAL_MS_ENV),
+    )
+}
+
+fn build_clock_with(
+    dev_mode: bool,
+    test_clock_file: Option<std::ffi::OsString>,
+    test_interval: Option<std::ffi::OsString>,
+) -> Result<(Arc<dyn Clock>, Duration), ComposeError> {
+    let dev_test_clock = dev_mode && test_clock_file.is_some();
+
+    if test_clock_file.is_some() && !dev_mode {
+        return Err(ComposeError::TestClockOutsideDevMode);
+    }
+    if test_interval.is_some() && !dev_test_clock {
+        return Err(ComposeError::TestReclaimIntervalWithoutClock);
+    }
+
+    let Some(path) = test_clock_file else {
+        return Ok((
+            Arc::new(SystemClock::new()) as Arc<dyn Clock>,
+            PRODUCTION_RECLAIM_INTERVAL,
+        ));
+    };
+    if path.is_empty() {
+        return Err(ComposeError::TestClockInvalid);
+    }
+    let clock = FileClock::open(path).map_err(|_| ComposeError::TestClockInvalid)?;
+    let interval = match test_interval {
+        None => PRODUCTION_RECLAIM_INTERVAL,
+        Some(value) => value
+            .to_str()
+            .and_then(|text| text.parse::<u64>().ok())
+            .filter(|millis| (1..=60_000).contains(millis))
+            .map(Duration::from_millis)
+            .ok_or(ComposeError::TestReclaimIntervalInvalid)?,
+    };
+    Ok((Arc::new(clock), interval))
 }
 
 /// 选择并构造 keystore（`identity.keystore` + `identity.fail_closed_on_missing_keystore` + `dev_mode.*`）。
@@ -1118,13 +1185,14 @@ pub fn forked_publisher_with_sync(
 /// 别的设备查看/恢复的受保护会话当空闲杀掉。保留期与逐会话释放由 `LocalSessionLifecycle` 负责
 /// （租约/任务/交互保护都在 core）；停整个共享进程只允许在 lifecycle 证明全部会话已释放后执行，
 /// 本切片不提供该路径。`sessions.idle_timeout_ms` 仍由 lifecycle 读取（显式 `0` 只关闭按时间回收）。
-fn host_config(_config: &Config) -> HostConfig {
+fn host_config(config: &Config) -> HostConfig {
     HostConfig {
         idle_timeout: None,
         client_capabilities: agent_host::config::ClientCapabilities {
             terminal: Some(true),
             ..agent_host::config::ClientCapabilities::none()
         },
+        clean_shutdown_fence: Some(config.data_dir.join("agent-host.clean-shutdown.fence")),
         ..HostConfig::default()
     }
 }
@@ -1152,239 +1220,6 @@ impl SessionRelease for HostSessionRelease {
             agent_host::release::ReleaseOutcome::Failed => ReleaseOutcome::Failed,
             agent_host::release::ReleaseOutcome::Uncertain => ReleaseOutcome::Uncertain,
         })
-    }
-}
-
-/// 准备端点（`core.session-preparation.v1`）的组合根适配器。
-///
-/// 把 `server::sync::preparation::PreparationEndpoints` 接到 `agent-host` 的临时端点 API：
-///
-/// - `establish`：同一会话同一资源代已建立 ⇒ 直接复核/应用选择并复用（`restore` 的 live 路径）；
-///   换了资源代或不存在 ⇒ 先按精确代释放旧代（释放失败**不**建立第二代），再 `prepare` 新的临时端点；
-/// - `configure`：只作用于当前资源代，返回 Agent 当场确认的选项；
-/// - `claim`：把准备端点转正为正式所有权（首次提交），返回同一句柄用于派发；
-/// - `release`/`release_all`：按精确代释放；关闭序列释放全部，先于 `AgentHost::shutdown_all`。
-///
-/// 一把异步锁序列化全部端点操作：准备面的会话门在 server 侧只覆盖 `session.start`，控制帧（allocate/
-/// restore/configure/release）与首次提交仍可能并发落到同一会话；端点状态必须线性化，否则一次
-/// release 可能关掉另一次 claim 刚转正的绑定。
-pub struct HostPreparationEndpoints {
-    host: Arc<AgentHost>,
-    broker: std::sync::Weak<Broker>,
-    entries: tokio::sync::Mutex<std::collections::HashMap<String, PreparedEndpoint>>,
-}
-
-struct PreparedEndpoint {
-    /// 建立它时的 core 资源代；`claim`/`release` 只认精确匹配。
-    generation: u64,
-    endpoint: Arc<agent_host::TemporaryEndpoint>,
-    events: Arc<std::sync::Mutex<Option<acp_core::ports::EventSink>>>,
-}
-
-impl HostPreparationEndpoints {
-    /// 装配（组合根唯一实例）。
-    pub fn new(host: Arc<AgentHost>, broker: &Arc<Broker>) -> Self {
-        Self {
-            host,
-            broker: Arc::downgrade(broker),
-            entries: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-        }
-    }
-
-    /// 释放某个条目并返回是否确认释放；失败时**保留**条目（资源与名额继续占用）。
-    async fn release_entry(
-        &self,
-        entry: &PreparedEndpoint,
-    ) -> server::sync::preparation::EndpointRelease {
-        match self.host.release_preparation(&entry.endpoint).await {
-            agent_host::release::ReleaseOutcome::Released => {
-                server::sync::preparation::EndpointRelease::Released
-            }
-            agent_host::release::ReleaseOutcome::Failed => {
-                server::sync::preparation::EndpointRelease::Failed
-            }
-            agent_host::release::ReleaseOutcome::Uncertain => {
-                server::sync::preparation::EndpointRelease::Uncertain
-            }
-        }
-    }
-}
-
-fn host_selection(
-    selection: &server::sync::preparation::PreparationSelectionInput,
-) -> agent_host::PreparationSelection {
-    agent_host::PreparationSelection::new(
-        selection.mode.clone(),
-        selection
-            .config
-            .iter()
-            .map(|(id, value)| agent_host::PreparationConfigChoice::new(id.clone(), value.clone()))
-            .collect(),
-    )
-}
-
-fn wire_options(
-    options: agent_host::PreparationOptions,
-) -> server::sync::preparation::PreparationOptions {
-    server::sync::preparation::PreparationOptions {
-        blocks_dispatch: options.blocks_dispatch(),
-        modes: options.modes,
-        config: options.config,
-    }
-}
-
-#[async_trait::async_trait]
-impl server::sync::preparation::PreparationEndpoints for HostPreparationEndpoints {
-    async fn establish(
-        &self,
-        request: server::sync::preparation::PreparationEstablish,
-    ) -> Result<server::sync::preparation::PreparationOptions, PortError> {
-        let key = request.session.as_str().to_owned();
-        let selection = host_selection(&request.selection);
-        let mut entries = self.entries.lock().await;
-        if let Some(existing) = entries.get(&key) {
-            if existing.generation == request.generation && !existing.endpoint.is_released() {
-                let options = existing.endpoint.apply_selection(&selection).await?;
-                return Ok(wire_options(options));
-            }
-            // 换代：旧代必须真的释放，否则会留下第二个 Agent 会话（容量与进程树都说不清）。
-            if !matches!(
-                self.release_entry(existing).await,
-                server::sync::preparation::EndpointRelease::Released
-            ) {
-                return Err(PortError::Unavailable(UnavailableKind::Busy));
-            }
-            entries.remove(&key);
-        }
-        // 准备期不进入正式会话槽位；claim 后切换到 broker，同一端点的回复和终态不能继续丢弃。
-        let events = Arc::new(std::sync::Mutex::new(None::<acp_core::ports::EventSink>));
-        let route = Arc::clone(&events);
-        let sink = acp_core::ports::EventSink::new(move |event| {
-            let destination = route
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .clone();
-            if let Some(destination) = destination {
-                destination.send(event);
-            }
-        });
-        let request_new = acp_core::model::CreateSessionRequest::new(
-            request.agent,
-            Some(request.workspace),
-            None,
-            acp_core::model::ResourceOrigin::Local,
-        );
-        let endpoint = match self.host.prepare(&request.session, request_new, sink).await {
-            Ok(endpoint) => Arc::new(endpoint),
-            Err(error) => return Err(error),
-        };
-        let options = match endpoint.apply_selection(&selection).await {
-            Ok(options) => options,
-            Err(error) => {
-                // 复核失败：释放刚建立的端点，不把它留在 Agent 侧。
-                let _ = self.host.release_preparation(&endpoint).await;
-                return Err(error);
-            }
-        };
-        entries.insert(
-            key,
-            PreparedEndpoint {
-                generation: request.generation,
-                endpoint,
-                events,
-            },
-        );
-        Ok(wire_options(options))
-    }
-
-    async fn configure(
-        &self,
-        request: server::sync::preparation::PreparationConfigure,
-    ) -> Result<server::sync::preparation::PreparationOptions, PortError> {
-        let entries = self.entries.lock().await;
-        let Some(entry) = entries.get(request.session.as_str()) else {
-            return Err(PortError::Unavailable(
-                UnavailableKind::SessionNotEstablished,
-            ));
-        };
-        if entry.generation != request.generation || entry.endpoint.is_released() {
-            return Err(PortError::Unavailable(
-                UnavailableKind::SessionNotEstablished,
-            ));
-        }
-        let options = entry
-            .endpoint
-            .apply_selection(&host_selection(&request.selection))
-            .await?;
-        Ok(wire_options(options))
-    }
-
-    async fn claim(
-        &self,
-        session: SessionId,
-        generation: u64,
-    ) -> Result<Arc<dyn acp_core::ports::SessionEndpoint>, PortError> {
-        let entries = self.entries.lock().await;
-        let Some(entry) = entries.get(session.as_str()) else {
-            return Err(PortError::Unavailable(
-                UnavailableKind::SessionNotEstablished,
-            ));
-        };
-        if entry.generation != generation || entry.endpoint.is_released() {
-            return Err(PortError::Unavailable(
-                UnavailableKind::SessionNotEstablished,
-            ));
-        }
-        let broker = self.broker.upgrade().ok_or(PortError::Unavailable(
-            UnavailableKind::SessionNotEstablished,
-        ))?;
-        self.host.transfer_preparation(&entry.endpoint).await?;
-        *entry
-            .events
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) = Some(broker.sink(&session));
-        Ok(Arc::clone(&entry.endpoint) as Arc<dyn acp_core::ports::SessionEndpoint>)
-    }
-
-    async fn release(
-        &self,
-        session: SessionId,
-        generation: u64,
-    ) -> server::sync::preparation::EndpointRelease {
-        let mut entries = self.entries.lock().await;
-        let Some(entry) = entries.get(session.as_str()) else {
-            return server::sync::preparation::EndpointRelease::Failed;
-        };
-        if entry.generation != generation {
-            // 旧代释放不得作用到新代绑定（`design.md` D1）。
-            return server::sync::preparation::EndpointRelease::Failed;
-        }
-        let outcome = self.release_entry(entry).await;
-        if matches!(
-            outcome,
-            server::sync::preparation::EndpointRelease::Released
-        ) {
-            entries.remove(session.as_str());
-        }
-        outcome
-    }
-
-    async fn release_all(&self) {
-        let entries: Vec<PreparedEndpoint> = {
-            let mut entries = self.entries.lock().await;
-            std::mem::take(&mut *entries).into_values().collect()
-        };
-        for entry in entries {
-            match self.host.release_preparation(&entry.endpoint).await {
-                agent_host::release::ReleaseOutcome::Released => {}
-                outcome => tracing::warn!(
-                    event = "daemon.preparation_release_incomplete",
-                    session = %entry.endpoint.session_id(),
-                    outcome = ?outcome,
-                    "关闭时未能确认释放准备端点（资源与名额保持占用）"
-                ),
-            }
-        }
     }
 }
 
@@ -1437,6 +1272,87 @@ mod tests {
             "保留期 / 逐会话回收仍读取该值"
         );
         assert_eq!(config.sessions.lifecycle.max_active_sessions(), 7);
+    }
+
+    #[test]
+    fn test_clock_environment_fails_closed_outside_dev_mode_and_without_a_clock() {
+        assert!(matches!(
+            build_clock_with(false, Some("clock".into()), None),
+            Err(ComposeError::TestClockOutsideDevMode)
+        ));
+        assert!(matches!(
+            build_clock_with(true, None, Some("5".into())),
+            Err(ComposeError::TestReclaimIntervalWithoutClock)
+        ));
+
+        let dir = TempDir::new("clock-selection");
+        let path = dir.path.join("clock");
+        std::fs::write(&path, "2026-10-26T00:30:00.000Z").expect("clock file");
+        assert!(matches!(
+            build_clock_with(true, Some(path.as_os_str().to_owned()), Some("0".into())),
+            Err(ComposeError::TestReclaimIntervalInvalid)
+        ));
+    }
+
+    #[test]
+    fn test_clock_environment_rejects_missing_and_invalid_files() {
+        let dir = TempDir::new("clock-files");
+        let missing = dir.path.join("missing");
+        assert!(matches!(
+            build_clock_with(true, Some(missing.into_os_string()), None),
+            Err(ComposeError::TestClockInvalid)
+        ));
+
+        let invalid = dir.path.join("invalid");
+        std::fs::write(&invalid, "not-a-timestamp").expect("invalid clock file");
+        assert!(matches!(
+            build_clock_with(true, Some(invalid.into_os_string()), None),
+            Err(ComposeError::TestClockInvalid)
+        ));
+    }
+
+    #[test]
+    fn test_clock_interval_accepts_only_the_documented_bounds() {
+        let dir = TempDir::new("clock-interval");
+        let path = dir.path.join("clock");
+        std::fs::write(&path, "2026-10-26T00:30:00.000Z").expect("clock file");
+
+        for (raw, expected) in [
+            (Some("1".into()), Duration::from_millis(1)),
+            (None, PRODUCTION_RECLAIM_INTERVAL),
+            (Some("60000".into()), Duration::from_secs(60)),
+        ] {
+            let (clock, interval) = build_clock_with(true, Some(path.as_os_str().to_owned()), raw)
+                .expect("bounded interval");
+            assert_eq!(clock.now().as_str(), "2026-10-26T00:30:00.000Z");
+            assert_eq!(interval, expected);
+        }
+
+        for raw in ["0", "60001", "not-a-number"] {
+            assert!(matches!(
+                build_clock_with(true, Some(path.as_os_str().to_owned()), Some(raw.into())),
+                Err(ComposeError::TestReclaimIntervalInvalid)
+            ));
+        }
+    }
+
+    #[test]
+    fn production_clock_selection_ignores_test_clock_inputs() {
+        let (clock, interval) =
+            build_clock_with(false, None, None).expect("production clock selection");
+        assert_eq!(interval, PRODUCTION_RECLAIM_INTERVAL);
+        assert!(
+            clock.now().as_str() >= "2024-01-01T00:00:00.000Z",
+            "the production path must use the system clock"
+        );
+
+        let (dev_clock, dev_interval) =
+            build_clock_with(true, None, None).expect("dev mode without a test clock");
+        assert_eq!(dev_interval, PRODUCTION_RECLAIM_INTERVAL);
+        assert!(
+            dev_clock.now().as_str() >= "2024-01-01T00:00:00.000Z",
+            "dev mode without ACPR_TEST_CLOCK_FILE must keep the system clock"
+        );
     }
 
     /// `ForkedPublisher` 必须把同一条已提交投递**同时**分叉给 Node Link 与 Sync 两路。
@@ -1686,118 +1602,5 @@ mod tests {
             .expect("除本用例外的句柄都已释放")
             .close()
             .await;
-    }
-
-    /// Preparation must discard temporary events, then deliver the same endpoint's reply and
-    /// terminal through the real broker/store after the first submission.
-    #[tokio::test]
-    async fn prepared_endpoint_delivers_reply_and_terminal_after_first_submission() {
-        use acp_core::model::{AgentRef, Digest, PromptContentBlock, RequestId, ResolvedWorkspace};
-        use server::sync::preparation::{PreparationEstablish, PreparationSelectionInput};
-        let dir = TempDir::new("preparation-events");
-        let script = dir.path.join("agent.cjs");
-        std::fs::write(&script, r#"
-const readline = require('readline');
-const send = x => process.stdout.write(JSON.stringify(x)+'\n');
-readline.createInterface({input:process.stdin}).on('line',line=>{
- const m=JSON.parse(line); const result = r=>send({jsonrpc:'2.0',id:m.id,result:r});
- if(m.method==='initialize') return result({protocolVersion:1,agentCapabilities:{sessionCapabilities:{close:{}}},agentInfo:{name:'regression',version:'1'}});
- if(m.method==='session/new') return result({sessionId:'prepared-agent'});
- if(m.method==='session/prompt') {
-  send({jsonrpc:'2.0',method:'session/update',params:{sessionId:m.params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'reply survived promotion'}}}});
-  return result({stopReason:'end_turn'});
- }
- if(m.id!==undefined) result({});
-});
-"#).expect("controlled agent");
-        let agent_config = format!(
-            "[agent]\nregression = [\"node\", {:?}]\n",
-            script.to_string_lossy().replace('\\', "/")
-        );
-        let mut publisher = SyncPublisher::channel();
-        let mut events = publisher.take_receiver().expect("receiver");
-        let composition =
-            Composition::assemble(dev_config(&dir.path, &agent_config), Arc::new(publisher))
-                .await
-                .expect("assemble");
-        let session = SessionId::new(&Uuid::new_v4().to_string()).expect("session");
-        let agent = AgentRef::try_new(
-            acp_core::model::AgentId::new("regression").expect("agent id"),
-            "regression",
-        )
-        .expect("agent");
-        let workspace =
-            ResolvedWorkspace::at_path(dir.path.to_string_lossy().into_owned()).expect("workspace");
-        let endpoints = composition.preparation_endpoints();
-        endpoints
-            .establish(PreparationEstablish {
-                session: session.clone(),
-                agent: agent.clone(),
-                workspace: workspace.clone(),
-                generation: 1,
-                selection: PreparationSelectionInput::default(),
-            })
-            .await
-            .expect("prepare");
-        while let Ok(event) = events.try_recv() {
-            assert!(
-                event.session.is_none(),
-                "preparation must not publish session events"
-            );
-        }
-        let endpoint = endpoints.claim(session.clone(), 1).await.expect("promote");
-        composition
-            .use_cases()
-            .start_first_submission(
-                &Actor::Device {
-                    device: DeviceId::new(&Uuid::new_v4().to_string()).expect("device"),
-                },
-                acp_core::broker::FirstSubmissionStart {
-                    session: session.clone(),
-                    request: RequestId::new(&Uuid::new_v4().to_string()).expect("request"),
-                    fingerprint: Digest::new(&"A".repeat(43)).expect("digest"),
-                    agent,
-                    workspace_cwd: Some(workspace.canonical_path().to_owned()),
-                    workspace_directory: Some(workspace.directory_id().clone()),
-                    mode: None,
-                    config: Vec::new(),
-                    content: vec![
-                        PromptContentBlock::from_json_text(r#"{"type":"text","text":"hello"}"#)
-                            .expect("prompt"),
-                    ],
-                    manifest: None,
-                    generation: ResourceGeneration::new(1),
-                },
-                endpoint,
-            )
-            .await
-            .expect("first submission");
-        let mut delivered = Vec::new();
-        for _ in 0..100 {
-            composition.broker().pump(&session).await.expect("pump");
-            while let Ok(event) = events.try_recv() {
-                delivered.push(event.event_type.as_str().to_owned());
-            }
-            if delivered.iter().any(|kind| kind == "turn.completed") {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let terminal = composition
-            .use_cases()
-            .first_submission(&session)
-            .await
-            .expect("record")
-            .expect("saved")
-            .terminal;
-        composition.close().await.expect("close");
-        assert!(
-            delivered.iter().any(|kind| kind == "agent.message.delta"),
-            "Agent reply must reach the persisted event stream: {delivered:?}"
-        );
-        assert_eq!(
-            terminal.expect("first submission must finish").outcome,
-            acp_core::model::RequestOutcome::Completed
-        );
     }
 }

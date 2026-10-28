@@ -8,7 +8,7 @@
 
 本节约束 Agent 对用户的**回复方式**，不改变任何产品、协议或技术决策。
 
-> 宿主侧另有一份本地定制（`~/.omp/agent/PERSONALITY.md`，不在版本控制内）。它不随本仓库分发，所以本节的条文必须自足——不要因为「人格文件里已经有了」就删减本节。
+> 本节必须自足，不依赖任何宿主的人格文件、默认提示或用户级配置。
 
 - **默认用通俗易懂的中文解释**：先给结论，再给理由；不使用未解释的黑话、缩写或内部术语堆砌来“证明专业”。
 - **首次出现的术语必须就地解释**：如幂等、游标、backpressure、transcript 等，第一次提及时用一句大白话说明它是什么、和当前问题有什么关系；之后可以正常使用术语。
@@ -23,7 +23,7 @@
 
 在修改代码或设计前，先阅读与任务相关的文档：
 
-- [docs/WORKFLOW.md](docs/WORKFLOW.md)：变更从需求走到代码的执行流程（OpenSpec `spec-driven` 项目覆写版 schema 的 proposal/specs/design/plan/tasks、omp 多 Agent 隔离实现、独立检视、串行合入、分层 E2E 与门禁）的唯一权威来源。它不定义产品行为或协议语义，只定义「谁在哪个工作区做什么、产物是什么、怎么合入怎么验」。
+- [docs/WORKFLOW.md](docs/WORKFLOW.md)：变更从需求走到代码的执行流程（OpenSpec `spec-driven` 项目覆写版 schema 的 proposal/specs/design/plan/tasks、工具无关的串行或隔离实现、独立检视、串行合入、分层 E2E 与门禁）的唯一权威来源。它不定义产品行为或协议语义，只定义「谁在哪个工作区做什么、产物是什么、怎么合入怎么验」。
 - [docs/INITIAL_DESIGN.md](docs/INITIAL_DESIGN.md)：产品目标、系统行为、安全与同步策略的权威来源。
 - [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md)：模块名称、职责、依赖方向和 crate 边界的唯一权威来源。
 - [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md)：前端阶段、客户端行为、状态模型和平台适配边界的权威来源。
@@ -230,7 +230,7 @@ core use_cases   -> core ports + core model
 - Agent 进程监督、ACP stdio 传输或 profile 来源的实现约束变化：更新 `docs/MODULE_ARCHITECTURE.md` §4.5 与 `docs/ACP_COMPATIBILITY_MATRIX.md`（若影响能力支持状态）。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。监听/路由与部署形态（共用 listener、反代透传、`public_origin` 的权威性）也以该文件 §1 为准，涉及对外暴露方式的改动必须同步它。
 - CLI 与 Daemon 之间的管理方法、envelope、framing、错误码或 **CLI 子命令↔方法映射（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）** 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`，并同步 `schemas/local-admin/v1/`、`fixtures/local-admin/v1/` 与 `compatibility/commands/v1/commands.json` 的 `localCapabilities`（方法集与本地错误码的机器定义在 `schemas/local-admin/v1/envelope.schema.json`，文档表格是它的说明），运行 `npm run check`。
-- 变更执行流程（OpenSpec schema、工作包派遣与隔离、patch 交付、合入顺序、分层 E2E、`check:openspec` 判据）变化：更新 `docs/WORKFLOW.md`，并同步 `openspec/schemas/spec-driven/`、`openspec/config.yaml` 的 `rules`/`operations` 与 `.omp/` 下的项目级配置与 agent 定义。
+- 变更执行流程（OpenSpec schema、工作包派遣与隔离、patch 交付、合入顺序、分层 E2E、`check:openspec` 判据）变化：更新 `docs/WORKFLOW.md`，并同步 `openspec/schemas/spec-driven/`、`openspec/config.yaml` 的 `rules`/`operations`；不要求维护特定编码宿主配置。
 - 两份文档出现重叠时，保留一个权威定义，另一处只写概要并链接过去。
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。
@@ -244,6 +244,6 @@ core use_cases   -> core ports + core model
 - Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源：本地 rustup 与 CI 都读它，不要在 workflow、脚本或文档里另写一份版本号；`Cargo.toml` 的 `rust-version`（MSRV）是另一件事，不要合并。
 - `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），其清单与判据见 `README.md` 的「合同检查」。改动合同资产或 crate 依赖后必须让它全绿。
 - 提交信息的 type/scope 词表以 `commitlint.config.mjs` 为唯一机器定义（`.husky/commit-msg` 与 CI 的 `commits` job 都按它判定），不要在任何地方再抄一份词表。**scope 表示模块与交付面边界，不是目录名**：`crates/storage-sqlite/` 用 `storage`、`crates/*-protocol/` 用去掉 `-protocol` 的短名、`identity-*` 用 `identity`、`acpr-*` 用 `transcript`/`wire`、`clients/` 用 `frontend`。
-- AI 提交信息生成器（Oh My Pi 的 `omp commit`、`omp git` 的「Generate message」）**不读** `commitlint.config.mjs`：它自带一份更宽的 type 词表，并按**文件路径目录名**推 scope，实测还会忽略 `AGENTS.md` 里的补充约束，因此常生成 `chore(storage-sqlite): …` 这类被钩子拒绝的消息。被拒时提交不落地、改动留在暂存区，按 `commitlint.config.mjs` 的词表改 scope/type 后重新提交即可。它只是本地便利工具，不参与门禁；直接手写提交信息同样合法。
-- `omp commit` 还有第二个副作用：**`--dry-run` 也会改动 git 索引**。实测两次 `omp commit --dry-run --no-changelog` 把 `.husky/commit-msg` 与 `.husky/pre-commit` 的执行位从索引里抹成 `100644`（内容哈希不变，但 Linux/CI 上钩子会因此无法执行），需 `git reset` 恢复。因此**不要在自动化流程或交付前的工作区里跑它**；合入路径见 `docs/WORKFLOW.md` §6，那里用的是命令行 `git apply`。
-- **宿主沟通人格是本地定制，不在版本控制内**。`~/.omp/agent/PERSONALITY.md` 覆盖了 Oh My Pi 自带的 `default` preset，内容依据 §1 写成。它是**用户级**的（omp 没有项目级 personality 机制），因此：新机器上不会自动恢复，要复刻就按 §1 重写；原 preset 原文备份在 `~/.omp/agent/PERSONALITY.md.backup-original`，`cp` 回去即还原宿主默认。子代理恒为 `personality: none`，实测既不继承该文件也不继承 `AGENTS.md`——要让子代理遵守 §1，必须在派发的 `context`/`task` 里显式带上相关条款。
+- 自动生成提交信息也必须按 `commitlint.config.mjs` 校验；工具默认词表不构成例外。
+- 提交工具不得隐式改写 Git 索引或文件执行位；提交前检查暂存范围。
+- 用户级提示与人格配置不随仓库分发，不能成为执行前提；派发工作时应显式传入适用的仓库规则。

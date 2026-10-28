@@ -28,12 +28,16 @@ const SESSION_B = "bbbbbbbb-0000-4000-8000-000000000002";
 const CONNECTION_ID = "2de54db7-74ae-4c21-88e3-05df0dc2e637";
 
 /** 协商了本机生命周期、两条本机会话的起点。 */
-function lifecycleStore(input: { readonly schedule?: (delayMs: number, task: () => void) => () => void } = {}) {
+function lifecycleStore(input: {
+  readonly schedule?: (delayMs: number, task: () => void) => () => void;
+  readonly localActivity?: "active" | "pending" | "idle";
+} = {}) {
+  const localActivity = input.localActivity ?? "active";
   return onlineStore({
     resources: resources({
       sessions: [
-        session({ id: ONLINE_SESSION_ID, state: "idle", localActivity: "active" }),
-        session({ id: SESSION_B, state: "idle", localActivity: "active" }),
+        session({ id: ONLINE_SESSION_ID, state: "idle", localActivity }),
+        session({ id: SESSION_B, state: "idle", localActivity }),
       ],
     }),
     features: [LOCAL_SESSION_LIFECYCLE_FEATURE],
@@ -149,7 +153,7 @@ function statusResult(input: {
 
 
 describe("本机会话生命周期：声明、激活与恢复态", () => {
-  it("进入会话先声明查看再派发 resume；恢复中不可发送，完成不自动提交草稿", () => {
+  it("进入 active 会话先声明查看再派发 resume；首帧即可发送且不自动提交草稿", () => {
     const { store, gateway } = lifecycleStore();
     store.setDraft(ONLINE_SESSION_ID, "进入前就在的草稿");
     store.setActiveConversationSession(ONLINE_SESSION_ID);
@@ -161,11 +165,11 @@ describe("本机会话生命周期：声明、激活与恢复态", () => {
     expect(requests[0].body.payload).toEqual({});
     expect(requests[0].body.sessionId).toBe(ONLINE_SESSION_ID);
 
-    const activating = store.conversationPage(ONLINE_SESSION_ID);
-    expect(activating?.header.activation?.kind).toBe("activating");
-    expect(activating?.input.canSubmit).toBe(false);
-    expect(activating?.input.draft).toBe("进入前就在的草稿");
-    expect(activating?.capabilities.canSend).toBe(false);
+    const readyBeforeResume = store.conversationPage(ONLINE_SESSION_ID);
+    expect(readyBeforeResume?.header.activation?.kind).toBe("ready");
+    expect(readyBeforeResume?.input.canSubmit).toBe(true);
+    expect(readyBeforeResume?.input.draft).toBe("进入前就在的草稿");
+    expect(readyBeforeResume?.capabilities.canSend).toBe(true);
 
     store.apply({
       kind: "command_result",
@@ -312,7 +316,7 @@ describe("本机会话生命周期：声明、激活与恢复态", () => {
   });
 
   it("旧连接上的 resume 终态被丢弃（不把新连接的状态改成 ready）", () => {
-    const { store, gateway } = lifecycleStore();
+    const { store, gateway } = lifecycleStore({ localActivity: "idle" });
     store.setActiveConversationSession(ONLINE_SESSION_ID);
     const first = resumeRequests(gateway)[0];
     if (first?.body.command !== "session.resume") throw new Error("不是 session.resume");
@@ -394,7 +398,7 @@ describe("本机会话生命周期：声明、激活与恢复态", () => {
   });
 
   it("连接断开终结在途激活；重连后按新连接代重新申请，旧终态不能把它改成 ready", () => {
-    const { store, gateway } = lifecycleStore();
+    const { store, gateway } = lifecycleStore({ localActivity: "idle" });
     store.setActiveConversationSession(ONLINE_SESSION_ID);
     const first = resumeRequestsOf(gateway, ONLINE_SESSION_ID)[0];
     if (first?.body.command !== "session.resume") throw new Error("不是 session.resume");

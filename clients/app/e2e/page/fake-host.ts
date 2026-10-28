@@ -39,7 +39,6 @@ import {
   LOCAL_SESSION_LIFECYCLE_FEATURE,
   REQUIRED_FEATURES,
   SESSION_HISTORY_FEATURE,
-  SESSION_PREPARATION_FEATURE,
   SESSION_TITLE_FEATURE,
   sortedFeatures,
 } from "../../src/sync-client";
@@ -228,6 +227,10 @@ export interface FakeHostOptions {
   readonly commandFailure?:
     | ((command: string, sessionId: string) => Record<string, unknown> | null)
     | undefined;
+  /** `session.create` 的 completed result；必须返回 `{ sessionId, session }`。 */
+  readonly createResult?:
+    | ((payload: Record<string, unknown>) => Record<string, unknown>)
+    | undefined;
   /**
    * 是否在握手时**选中** `core.local-session-lifecycle.v1`。
    *
@@ -235,13 +238,6 @@ export interface FakeHostOptions {
    * 新用例显式打开它，假主机才应答 `session.view` 并按本机摘要完成 `session.resume`。
    */
   readonly selectLocalLifecycle?: boolean | undefined;
-  /**
-   * 是否在握手时**选中** `core.session-preparation.v1`。
-   *
-   * 缺省 `false` 保持旧 peer 路径（入口明确不可用，一条准备帧都不发）。打开后，准备控制帧由
-   * {@link FakeHostOptions.preparationResult} 应答。
-   */
-  readonly selectPreparation?: boolean | undefined;
   readonly selectWorkspaceFiles?: boolean | undefined;
   readonly selectPendingInteractions?: boolean | undefined;
   /**
@@ -264,14 +260,6 @@ export interface FakeHostOptions {
    */
   readonly attachmentFailure?:
     | ((frameType: string) => { readonly code: string; readonly message: string; readonly retryable: boolean } | null)
-    | undefined;
-  /**
-   * `session.preparation` 的应答体（返回 `null` 表示故意不应答，用例观察「没有终态」）。
-   *
-   * 返回的对象按 `session.preparation.result` 原样投递，wire 解码与仓库归并都是生产代码。
-   */
-  readonly preparationResult?:
-    | ((body: Record<string, unknown>) => Record<string, unknown> | null)
     | undefined;
 }
 
@@ -639,24 +627,6 @@ export class FakeHost {
       return;
     }
 
-    const preparation = bodyOf(message, "session.preparation");
-    if (preparation !== null) {
-      const result = this.options.preparationResult?.(preparation);
-      if (result !== null && result !== undefined) {
-        this.#deliver(
-          JSON.stringify({
-            protocolVersion: 1,
-            type: "session.preparation.result",
-            messageId: crypto.randomUUID(),
-            connectionId: CONNECTION_ID,
-            connectionSequence: "1",
-            body: result,
-          }),
-        );
-      }
-      return;
-    }
-
     const command = bodyOf(message, "command");
     if (command !== null) {
       const frame: CommandFrame = {
@@ -826,7 +796,6 @@ export class FakeHost {
     const selectedFeatures = [
       ...SERVER_SELECTED_FEATURES,
       ...(this.options.selectLocalLifecycle === true ? [LOCAL_SESSION_LIFECYCLE_FEATURE] : []),
-      ...(this.options.selectPreparation === true ? [SESSION_PREPARATION_FEATURE] : []),
       ...(this.options.selectWorkspaceFiles === true ? ["core.workspace-files.v1"] : []),
       ...(this.options.selectPendingInteractions === true ? ["core.pending-interactions.v1"] : []),
       ...(this.options.selectAttachments === true ? [ATTACHMENT_FEATURE] : []),
@@ -994,6 +963,8 @@ export class FakeHost {
       result:
         command.command === "session.read"
           ? this.options.readResult(command.sessionId)
+          : command.command === "session.create"
+            ? (this.options.createResult?.(command.payload) ?? DEFAULT_COMMAND_RESULT)
           : command.command === "session.resume"
             ? { sessionId: command.sessionId, session: resumeSummary ?? DEFAULT_COMMAND_RESULT }
             : isFilesQuery && filesResult !== undefined
