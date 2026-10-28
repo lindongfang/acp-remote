@@ -2,7 +2,7 @@
 //!
 //! 跨协议共用的值对象与字段校验机制（`uuid`、`decimalString`、`timestamp`、`base64url*`、`featureId`、
 //! `featureList`、`rawAcp`、`Nullable`、`RawObject`、`ExtraFields`、`Text`、`NonEmptyText`、`BoundedU64`、
-//! `ValueError`）来自叶子 crate `acpr-wire`（[ADR-0007](../../../docs/adr/0007-shared-wire-value-crate.md)），
+//! `ValueError`）来自叶子 crate `acpr-wire`（[ADR-0007](../../../openspec/adr/0007-shared-wire-value-crate.md)），
 //! 这里只做命名空间再导出；本文件拥有的是 Node Link 自己的值对象——节点、Export、workspace 模板、origin
 //! cursor、会话元数据与 limits。
 //!

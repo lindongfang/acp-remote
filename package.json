@@ -20,7 +20,8 @@
     "check:docs": "node scripts/check-doc-links.mjs",
     "check:boundaries": "node scripts/check-crate-boundaries.mjs",
     "check:drift": "node scripts/check-contract-drift.mjs",
-    "check:openspec": "node scripts/check-openspec.mjs",
+    "check:openspec": "npm run test:workflow && node scripts/check-openspec.mjs",
+    "test:workflow": "node --test scripts/tests/openspec-tests.test.mjs",
     "check:rust": "cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-features",
     "lint:commits": "commitlint",
     "prepare": "husky"
@@ -28,9 +29,10 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.2",
-    "@fission-ai/openspec": "1.14.1",
+    "@fission-ai/openspec": "1.15.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "husky": "^9.1.7"
+    "husky": "^9.1.7",
+    "yaml": "2.9.1"
   }
 }

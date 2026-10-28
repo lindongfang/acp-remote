@@ -4,13 +4,13 @@
 
 > 状态：编码前安全基线（Draft）  
 > 版本：0.6
-> 修订记录（2026-10-22，`web-session-preparation` WP3，**历史：该准备能力已被 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 退役，准备凭据、`preparation.*` 错误、临时资源与准备草稿都不是现行能力**）：§12.8 曾登记准备凭据的签名/验证边界——专用 domain、`Authority::sign_preparation_receipt` 与 `verify_preparation_receipt` 的固定顺序（认证/撤销 → 签名 → 绑定）、`storeEpoch` 的不可重试结果、逐字段绑定与跨设备/跨节点拒绝、错误脱敏与重放边界；当时已确认 receipt 不是 bearer 凭证、不替代逐连接认证且不授予 scope。该实现与其固定向量已随 v19 删除；现行新建直接走 `session.create`。安全不变量（不引入长活凭据、不把私钥/路径写入日志、跨设备不复用认证材料）保留在 §12.7/§13/§14。
+> 修订记录（2026-10-22，`web-session-preparation` WP3，**历史：该准备能力已被 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 退役，准备凭据、`preparation.*` 错误、临时资源与准备草稿都不是现行能力**）：§12.8 曾登记准备凭据的签名/验证边界——专用 domain、`Authority::sign_preparation_receipt` 与 `verify_preparation_receipt` 的固定顺序（认证/撤销 → 签名 → 绑定）、`storeEpoch` 的不可重试结果、逐字段绑定与跨设备/跨节点拒绝、错误脱敏与重放边界；当时已确认 receipt 不是 bearer 凭证、不替代逐连接认证且不授予 scope。该实现与其固定向量已随 v19 删除；现行新建直接走 `session.create`。安全不变量（不引入长活凭据、不把私钥/路径写入日志、跨设备不复用认证材料）保留在 §12.7/§13/§14。
 > 修订记录（2026-10-22，`session-activation-lifecycle` WP1，**合同先行；实现待 WP2–WP5**）：新增 §12.7「本机资源回收与查看租约」——查看声明只绑定**已认证且页面可见**的连接、租期 30 秒/续租 10 秒、普通心跳不续租，断开/撤销/连接被替换立即清除且**不持久化**；资源回收只有 Agent 适配器确认真实释放后才交还容量名额，关闭失败/不确定保留占位。§9.5 补「撤销即刻失效查看声明」；§10.2 的 `session.resume` 更新为双传输面（Sync 侧受 `core.local-session-lifecycle.v1` 门控，payload `{}`、结果不带 `remoteSessionRef`），并说明 `session.view` 不是业务命令；§12.2 的空闲回收行更新为缺省 30 分钟与新增容量上限的语义；§5 威胁表补「伪造查看/容量」一行。威胁模型与信任边界**未变**：没有新增设备权限、没有新的长活凭据，也不放宽路径/内容可见面。
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§10.2 的命令表登记 `session.title.set`（mutation、mvp、feature `core.session-title.v1`，Owner 元数据而非 ACP capability；只写本地会话标题列、不启动 Agent）；客户端改名禁令与「标题仅由 Agent 更新」的旧口径由本变更取代（原文见 SYNC_PROTOCOL §10.3 与 ACP_COMPATIBILITY_MATRIX §5）。威胁模型与信任边界未变；`custom_title` 持久化与命令接线已落地。
 > 日期：2026-10-17  
 > 修订记录（2026-10-18，`device-pairing-qr-reference`）：设备二维码改为短引用格式——fragment 只带版本、32 字节扫码取回凭据与 32 字节主机公钥指纹，完整资料经同源 `POST /sync/v1/pairing/qr-lookup` 取回；取回统一失败 `pairing.qr_invalid`、独立 10 次/分钟限流、16 KiB 上限，凭据只存内存且认领/拒绝/失效/过期/重启后不可用。§5.1 增补移动端「先匹配完整 SHA-256 指纹，再验证 `hostProof`」的信任链说明；威胁模型与其它边界未变。字段与端点以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.6 为唯一权威。
 > 修订记录（2026-10-20，`conversation-area-complete` WP3）：新增 §12.6「ACP 终端服务」——Agent 经 `terminal/*` 请求在宿主执行命令的信任边界、会话归属、cwd 限制、环境注入、进程树与输出预算；§5 威胁表补一行对应控制；§12.2 固定上限表登记终端输出保留/分块/并发与排空时长。终端服务只在组合根宣告 `clientCapabilities.terminal` 后接受调用（未宣告时不启动任何进程）；命令、参数、环境值、输出与路径都不进日志。威胁模型与信任边界**未变**（终端执行属于 ACP 原生能力，不新增授权维度）。
-> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「本机规范化路径永不出网」改写为**带前提的新边界**——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览 `workspace.browse` 的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显；日志、审计记录与错误 `details` 仍不含任何路径（§14.1 **未变**）。§3 把已记录目录的规范化路径纳入 `operational-metadata` 并写明例外共有两处（目录资源条目与只读浏览结果）；§8 补一句远程提交目录与目录浏览能力的边界；§10.2 新增只读查询命令 `workspace.browse`（feature `core.workspace-browse.v1` 门控、不登记、不产生审计动作）并改写 Sync 面目录校验的路径口径；§10.3 删去与 §10.2 自相矛盾的「规范化路径永不出网」表述、改为新口径；§12.3 把路径口径改为「只下发给协商该能力的设备、且只含已登记目录，另加只读浏览返回的那一层条目」；§19 登记残余风险。决策理由与被否决备选见 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)。威胁模型与信任边界**变**：在新前提下路径的可见面扩大（残余风险见 §19 与 ADR-0009）。  
+> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「本机规范化路径永不出网」改写为**带前提的新边界**——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览 `workspace.browse` 的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显；日志、审计记录与错误 `details` 仍不含任何路径（§14.1 **未变**）。§3 把已记录目录的规范化路径纳入 `operational-metadata` 并写明例外共有两处（目录资源条目与只读浏览结果）；§8 补一句远程提交目录与目录浏览能力的边界；§10.2 新增只读查询命令 `workspace.browse`（feature `core.workspace-browse.v1` 门控、不登记、不产生审计动作）并改写 Sync 面目录校验的路径口径；§10.3 删去与 §10.2 自相矛盾的「规范化路径永不出网」表述、改为新口径；§12.3 把路径口径改为「只下发给协商该能力的设备、且只含已登记目录，另加只读浏览返回的那一层条目」；§19 登记残余风险。决策理由与被否决备选见 [ADR-0009](../openspec/adr/0009-authenticated-workspace-path-and-browse.md)。威胁模型与信任边界**变**：在新前提下路径的可见面扩大（残余风险见 §19 与 ADR-0009）。
 > 修订记录（2026-10-17，`directory-auto-registration`）：目录改由**成功的会话创建自动记录**（`directoryId = sha256(canonical_path)[..16]`），删除人工登记 `workspace.select` 与目录别名/展示名；目录的规范化路径**始终**随快照 `workspaces` 条目下发给已认证设备（撤销 `core.workspace-path.v1` 门控），会话摘要只带 `{ directoryId }`。路径的两处可见面（目录资源与只读浏览结果）与其余输出的禁路径口径不变。
 > 修订记录（2026-10-16，`pairing-model`）：配对只保留两条密码学校验（用配对载荷里的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节一致），**短验证码（SAS）两套全部删除**——§5 新增 §5.1 说明「为什么本协议不需要短验证码」，§9.3 的 pairing secret 用途、§9.4 的确认页展示项与 §18.1 的测试项随之收窄；**设备权限层删除**——§2.1/§2.2、§3 的 `security-metadata` 行、§4.2 的设备条目、§5 的威胁控制、§7.1/§7.2、§8、§9.4、§9.5、§10.1、§10.2 与 §12.3 改为「通过设备认证即可执行业务命令，设备不再有授权维度」，§10.2 的表格去掉「所属 pack」列、`pack.*`/`preset.*` 两类词汇删除；**保留**设备认证与每连接 challenge-response、配对确认只能由本机用户完成、撤销立即关闭连接、速率与各项上限、跨节点 `grant.*`/Export `scopes`/Import grants。威胁模型与信任边界没有放宽——删 SAS 的前提是 §5.1 写明的两条密码学要求已由 `pwa-web-client` 承担。  
 > 修订记录（2026-10-16，`session-create-settle-order`）：§14.1 的「默认日志允许字段」补上**命令级日志**的固定字段（主体标识——哪个设备/节点在控制、命令名、资源标识、终态类别与**封闭词表**的失败成因类别），并重申「默认禁止」不变（不写路径、凭据与 prompt 正文）。威胁模型与信任边界**未变**。  
@@ -32,7 +32,7 @@
 - 客户端平台边界：[FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md)
 - 认证、游标、命令和事件 wire contract：[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md)
 - 节点间权威、认证、重放与 owner/access 边界：[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)
-- PWA 身份与安全传输决策：[ADR-0001](./adr/0001-pwa-identity-and-secure-transport.md)
+- PWA 身份与安全传输决策：[ADR-0001](../openspec/adr/0001-pwa-identity-and-secure-transport.md)
 
 发生冲突时，已接受 ADR 优先于本文中的候选描述；本文优先于分散在实现注释中的安全假设。改变信任边界、密码算法、密钥生命周期、默认授权或正式部署要求时，必须同步更新本文，必要时新增 ADR。
 
@@ -162,7 +162,7 @@
 - 网页 `/pair` 无 fragment 时输入 8 位配对码，经同源 `POST /sync/v1/pairing/lookup` 取回 `pairingId`/`hostId`/`hostPublicKey`/`canonicalOrigin`/`pairingSecret`/`expiresAt`。主机公钥此时来自 TLS 保护、由 canonical origin 限定的 lookup 响应，客户端把它作为**本次配对**的绑定：用它验证 `hostProof`，并要求已批准响应逐字节相同；已有配对记录时，用户点击「继续配对」即明确发起重新配对；仅在本机批准且主机证明与本次绑定公钥校验通过后替换旧记录，进页、等待确认或失败均保留旧记录。允许任意 canonical origin（含 LAN/Tailscale）——网页 JS 本就由这个 origin 提供；origin 被攻破时，任何带外指纹也无法阻止恶意 JS 跳过校验。网页入口因此只丢失「同源代理把请求错路由到另一台 daemon」这一部署异常的检测，剩余可观察面是终端仍停在等待认领；配对码输入页显示当前 canonical origin 与 HTTPS 标识，让用户能发现打开的是另一台机器。
 - 配对码由 pairing secret 做域分离派生（HMAC-SHA256，domain tag `acp-remote/pairing-code/v1`，取前 40 bit 编码为 8 位 Crockford base32），只作为**一次性取回凭据**：不是 claim/status 的 HMAC 密钥，不替代或缩短 256 bit 的 pairing secret，不新增持久字段。40 bit 可接受的前提是**独立限流**——lookup 与 claim 各按来源 10 次/分钟、互不占用额度，lookup 失败不增加任何配对的证明失败计数，也不区分「配对不存在」与「已过期/已消耗」。5 分钟有效期把单个来源在整个配对生命周期内的尝试压到约 50 次（命中概率约 `50/2^40`），且码只负责取回已存在配对的 secret，不承担认证；离线攻击面仍是完整 secret 的 256 bit。
 - lookup 成功**原子地消耗**配对码；迟到的第二次请求，或第一次响应在网络上丢失，都只能得到统一的 `401 pairing.code_invalid`。这是单次语义的显式代价：恢复路径是重新执行 `device pair`，页面不做自动重试，只呈现固定文案「配对码不对或已过期，请重新生成配对码」。本版不引入 lookup 幂等键。
-- `pairingCode` 与 `pairingSecret` MUST NOT 进入日志、URL query、Cookie、localStorage/sessionStorage、地址历史或任何明文持久化字段，MUST NOT 落盘。配对码只存在于三处：页面内存、`identity-auth` 的进程内查找表（`State.codes`）、以及 `device.pair.begin` 的一次性管理响应；secret 只存在于三处：`identity-auth` 内存、lookup 响应体、页面私有会话状态（`ClientStore` 的私有字段）。三处都不写盘、不进日志、不随可导出状态外泄（与 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §4.3、[ADR-0010](./adr/0010-web-pairing-code-entry.md) 一致）。处理路径不得记录请求/响应体，错误消息不得回显配对码；`PairingCode` 的 `Debug` 必须脱敏且不提供 `Display`。
+- `pairingCode` 与 `pairingSecret` MUST NOT 进入日志、URL query、Cookie、localStorage/sessionStorage、地址历史或任何明文持久化字段，MUST NOT 落盘。配对码只存在于三处：页面内存、`identity-auth` 的进程内查找表（`State.codes`）、以及 `device.pair.begin` 的一次性管理响应；secret 只存在于三处：`identity-auth` 内存、lookup 响应体、页面私有会话状态（`ClientStore` 的私有字段）。三处都不写盘、不进日志、不随可导出状态外泄（与 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §4.3、[ADR-0010](../openspec/adr/0010-web-pairing-code-entry.md) 一致）。处理路径不得记录请求/响应体，错误消息不得回显配对码；`PairingCode` 的 `Debug` 必须脱敏且不提供 `Display`。
 
 ## 6. 信任边界与数据流
 
@@ -216,7 +216,7 @@ TLS 在其他机器或云服务终止时，默认 Profile 不再提供客户端�
 
 Provider/MCP 配置、原始 workspace 路径的**登记**、Node/Device 管理属于 Owner Node 本地管理能力。远程 `session.create` 只能引用已登记的目录与配置声明的 Agent；Node Link 面不得让请求携带任意 Owner 路径。
 
-优先顺序（已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定）：
+优先顺序（已由 [ADR-0004](../openspec/adr/0004-local-admin-transport.md) 落定）：
 
 1. CLI 前台进程内调用或 stdio：`daemon start`、离线 `doctor`，以及确认 Daemon 未运行后的 status/stop 回答在此完成；运行中的 status/stop 经下一项本地 IPC 交给组合根（具体生命周期见 `LOCAL_ADMIN_PROTOCOL.md` §7）。
 运行中 Daemon 的设备配对与撤销、节点配对与撤销、审计导出都走这里，两端共用 `core::use_cases` 的同一组用例。
@@ -261,7 +261,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 
 `[决定]`（2026-09-23）**第一阶段的 Windows 档位已定案**：用 **DPAPI（当前用户 scope）包裹私钥字节**，签名在进程内由 `p256` 完成。依据：
 
-- §9.2 已把「至少 DPAPI 绑定当前用户」列为 Windows 的基线下限，因此这不是 [ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5 所说的「降级实现启用」——它不需要新 ADR；
+- §9.2 已把「至少 DPAPI 绑定当前用户」列为 Windows 的基线下限，因此这不是 [ADR-0006](../openspec/adr/0006-identity-keystore-split.md) 决策 5 所说的「降级实现启用」——它不需要新 ADR；
 - workspace 固定 `unsafe_code = "forbid"`（`Cargo.toml`），而 DPAPI/CNG 都要过 FFI：选择 DPAPI 包裹可用**安全 wrapper crate** 实现，CNG 不可导出密钥则做不到（见 `MODULE_ARCHITECTURE.md` §4.12）；
 - 代价必须写清：签名瞬间私钥存在于进程内存，不具备「密钥不出 OS」的性质。CNG/TPM 不可导出档位作为开放项列在 §20。
 
@@ -416,7 +416,7 @@ Owner Node 本地管理能力只由操作系统用户边界校验后的本地入
 - Device private `CryptoKey` 只在 IndexedDB 中以不可导出形式保存。
 - imported resource 的会话正文、ACP raw、终端和 diff 不得持久化；对 Owner 本地资源未来允许的缓存仍按敏感内容设置容量、版本和清理策略。
 - `localStorage` 不保存私钥、pairing secret、完整 prompt 或可恢复认证材料。
-- **准备草稿已退役（历史，由 ADR-0016 取代）**：`web-session-preparation` WP6 曾在独立 IndexedDB 数据库 `acp-remote-preparation-v1`（`drafts`/`chunks`/`ownership`）持久化「本机准备中、尚未首次提交」的标签页草稿，并由专用端口 `PreparationDraftPort` 管理分区、128 KiB 分块与配额。准备页面、该端口与该数据库已随 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 删除，本文件不再把它列为允许的持久化例外。现行规则：只在已有正式会话的页面内存中持有草稿，不跨标签页或刷新持久化；未提交附件不构成会话内容。任何未来重新引入的持久草稿都必须作为新的显式例外评审，写明分区键、容量、清除规则与撤销行为。保留的通用不变量：客户端草稿与附件不得包含 Provider/MCP 凭据、设备密钥、配对码/配对秘密、认证材料或 imported 内容；配额失败必须逐项返回并显式报错，不得静默丢弃或改走服务端上传。`conversation-reliability` 的「每条受理输入均有正文」由 **Owner** 写入其 owned 存储（`owned_message`，见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §3.11/§5.12），Access 与浏览器端不因此获得新的持久正文缓存。
+- **准备草稿已退役（历史，由 ADR-0016 取代）**：`web-session-preparation` WP6 曾在独立 IndexedDB 数据库 `acp-remote-preparation-v1`（`drafts`/`chunks`/`ownership`）持久化「本机准备中、尚未首次提交」的标签页草稿，并由专用端口 `PreparationDraftPort` 管理分区、128 KiB 分块与配额。准备页面、该端口与该数据库已随 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 删除，本文件不再把它列为允许的持久化例外。现行规则：只在已有正式会话的页面内存中持有草稿，不跨标签页或刷新持久化；未提交附件不构成会话内容。任何未来重新引入的持久草稿都必须作为新的显式例外评审，写明分区键、容量、清除规则与撤销行为。保留的通用不变量：客户端草稿与附件不得包含 Provider/MCP 凭据、设备密钥、配对码/配对秘密、认证材料或 imported 内容；配额失败必须逐项返回并显式报错，不得静默丢弃或改走服务端上传。`conversation-reliability` 的「每条受理输入均有正文」由 **Owner** 写入其 owned 存储（`owned_message`，见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §3.11/§5.12），Access 与浏览器端不因此获得新的持久正文缓存。
 - `navigator.storage.persist()` 被拒绝不降低认证，数据被清理后要求重新配对。
 
 ## 12. Daemon、Agent 与 Workspace
@@ -640,7 +640,7 @@ storage.integrity_failed
   - 第三方 action 只允许按完整 commit SHA 固定，并必须在 ADR 里记录其许可证、向外发送的数据与失败模式；
   - Rust 工具链版本唯一来源是仓库的 `rust-toolchain.toml`，CI 从该文件读取，不在 workflow 里另写一份；
   - 依赖锁文件（`Cargo.lock`、`package-lock.json`）入库，并由 `--locked` / `npm ci` 强制。
-  当前使用的工具、版本与已知残余风险见 [ADR-0008](./adr/0008-ci-supply-chain-tooling.md)。
+  当前使用的工具、版本与已知残余风险见 [ADR-0008](../openspec/adr/0008-ci-supply-chain-tooling.md)。
 - 依赖准入与许可证由机器判定：`deny.toml` 的 `[licenses] allow`、`[sources]` 与 advisory 判定在 CI 强制执行；
   例外条目（`ignore` / `exceptions` / `[bans] deny`）必须逐条写明理由、受影响版本范围与移除条件；
   密钥扫描的允许清单遵循同一规则，且不得用于处置真实凭据（正确处置见 §17）。
@@ -688,7 +688,7 @@ storage.integrity_failed
 - 日志/错误/snapshot/fixture 中的 secret 扫描：仓库侧目前是两层——GitHub 原生 secret scanning 与
   push protection（推送前拦截已知 provider 模式，已启用）＋ CI 的 `secrets` job（push/PR 扫本次范围、
   每日定时任务扫全历史，覆盖 provider 模式之外的凭据，脱敏输出；见
-  [ADR-0008](./adr/0008-ci-supply-chain-tooling.md)）。两者都不能替代运行时日志、错误与 snapshot 的扫描，
+  [ADR-0008](../openspec/adr/0008-ci-supply-chain-tooling.md)）。两者都不能替代运行时日志、错误与 snapshot 的扫描，
   后者仍待实现。**非 provider 模式（本项目自研格式的私钥与配对密钥）的仓库级检测已核实为不可用**
   （个人账号 public 仓库无 GHAS：界面无 Secret scanning 区域、API 不接受 `secret_scanning_non_provider_patterns`；
   见 `README.md` 的「分支保护」小节），因此这一类凭据在推送前没有服务端防线：机制是「一份规则、两个执行器」——
@@ -733,13 +733,13 @@ manual pairing/revoke smoke test
 | 无云时 Owner Node 离线不可用 | 产品明确选择 local-first | 默认不展示 imported 会话正文，明确离线状态 |
 | 内存或未来显式缓存无法保证远程擦除 | Web/PWA/分布式系统限制 | 默认 `no-content-cache`、断线/撤销清内存；未来缓存需单独授权和提示 |
 | 超大 ACP 原文可能不下发 | 有界资源要求 | Daemon 保留策略 + `rawUnavailable` 显式降级 |
-| 已记录目录的规范化路径对被配对设备可见；目录浏览构成有限的目录结构探测面 | 目录页与创建选择器需要路径才能做同名消歧与展示，属产品明确要求的展示能力；任一被配对设备本就可见本节点全部会话与事件 | 路径可见面**只有两处**且各自 feature 门控（快照 `workspaces` 条目的规范化路径始终随目录标识下发；`workspace.browse` 的 `command.result` 只在协商 `core.workspace-browse.v1` 时返回该层条目；未协商的一律不下发/拒绝且不触碰文件系统）+ 浏览只读且只返回一层、不返回文件与任何文件元数据、单层条目上限、复用命令族限流（120/分钟）、不产生审计动作（避免第二条"谁看了什么"的隐私面）+ 这两处之外的一切输出（事件、日志、审计记录、错误 `details`）仍不含任何路径；决策见 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md) |
+| 已记录目录的规范化路径对被配对设备可见；目录浏览构成有限的目录结构探测面 | 目录页与创建选择器需要路径才能做同名消歧与展示，属产品明确要求的展示能力；任一被配对设备本就可见本节点全部会话与事件 | 路径可见面**只有两处**且各自 feature 门控（快照 `workspaces` 条目的规范化路径始终随目录标识下发；`workspace.browse` 的 `command.result` 只在协商 `core.workspace-browse.v1` 时返回该层条目；未协商的一律不下发/拒绝且不触碰文件系统）+ 浏览只读且只返回一层、不返回文件与任何文件元数据、单层条目上限、复用命令族限流（120/分钟）、不产生审计动作（避免第二条"谁看了什么"的隐私面）+ 这两处之外的一切输出（事件、日志、审计记录、错误 `details`）仍不含任何路径；决策见 [ADR-0009](../openspec/adr/0009-authenticated-workspace-path-and-browse.md) |
 
 ## 20. 编码前仍需收口的实现选择
 
 以下选择不能由普通实现补丁静默决定：
 
-- Linux（没有可用的 D-Bus Secret Service，例如无桌面会话或容器）上是否提供经过审计的持久化 fallback，推迟到 Linux 平台开发阶段处理；当前优先交付 Windows，见 `INITIAL_DESIGN.md` §14。在决定前 Linux 正式模式仍失败关闭，不引入明文 fallback。该决定只影响 `identity-keystore`：`identity-auth` 的 keystore 端口必须允许非硬件保护的实现存在，但默认不启用（[ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5）。
+- Linux（没有可用的 D-Bus Secret Service，例如无桌面会话或容器）上是否提供经过审计的持久化 fallback，推迟到 Linux 平台开发阶段处理；当前优先交付 Windows，见 `INITIAL_DESIGN.md` §14。在决定前 Linux 正式模式仍失败关闭，不引入明文 fallback。该决定只影响 `identity-keystore`：`identity-auth` 的 keystore 端口必须允许非硬件保护的实现存在，但默认不启用（[ADR-0006](../openspec/adr/0006-identity-keystore-split.md) 决策 5）。
   - 2026-09-23 定案：**本阶段维持失败关闭**，不提供持久化 fallback；将来若要提供，必须新开 ADR 定 KDF、解锁来源与备份策略（§9.2），并同步 `CONFIG_REFERENCE.md` §8 与本节。
 - 是否以及何时把密钥存储提升到**硬件保护的不可导出档位**（Windows CNG/TPM、Linux 除 Secret Service 以外的系统 keystore）：需要单独 ADR，因为它会改变已接受的「非硬件保护实现允许存在、默认不启用」边界（ADR-0006 决策 5）。当前档位见 §9.2（Windows 用 DPAPI 包裹 + 进程内签名）。注意 `unsafe_code = "forbid"` 下交付该档位需要自写或引入 wrappable 的 FFI 封装，成本与风险必须在 ADR 里评估。
 - `identity-keystore` 与 `agent-host` 的平台包装 crate 选型（DPAPI wrapper、Windows Job Object wrapper 等）：候选必须按 `AGENTS.md` §8 核验维护状态、许可证、平台支持与安全风险，并确认不超出 `deny.toml` 的许可证 allow 列表与 `[graph] targets`；若候选的 **MSRV 高于 `Cargo.toml` 的 `rust-version`（1.87）**，必须先单独做一个「是否抬 MSRV」的决定（工具链版本 `rust-toolchain.toml` 是另一件事，不能代替 MSRV 决策）。选型结论必须写回 `MODULE_ARCHITECTURE.md` §4.5/§4.12。
@@ -747,10 +747,10 @@ manual pairing/revoke smoke test
 - release crash dump 的平台默认策略。
 - 是否以及何时通过 ADR 引入 SQLCipher、字段加密或 Noise Transport Profile。
 
-本地管理通道已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定（stdio + 平台本地 IPC，不实现 loopback HTTP 管理面）。
+本地管理通道已由 [ADR-0004](../openspec/adr/0004-local-admin-transport.md) 落定（stdio + 平台本地 IPC，不实现 loopback HTTP 管理面）。
 
 这些选择不阻塞领域模型和 Sync DTO 开发，但相关平台 adapter 或正式发布在选择落定前不能声称安全完成。
 
 ## 独立目录创建（ADR-0010）
 
-独立建目录沿用已认证设备能力面，不新增设备授权维度；仅 Sync 协商 core.workspace-mkdir.v1 后可执行，不开放 Node Link 任意路径。终态、错误与审计不泄漏路径或名字；崩溃窗口不自动重做。安全决定见 [ADR-0010](adr/0010-immediate-workspace-directory-creation.md)，事务权威见 CORE_PORTS_AND_STORAGE §5.6。
+独立建目录沿用已认证设备能力面，不新增设备授权维度；仅 Sync 协商 core.workspace-mkdir.v1 后可执行，不开放 Node Link 任意路径。终态、错误与审计不泄漏路径或名字；崩溃窗口不自动重做。安全决定见 [ADR-0010](../openspec/adr/0010-immediate-workspace-directory-creation.md)，事务权威见 CORE_PORTS_AND_STORAGE §5.6。

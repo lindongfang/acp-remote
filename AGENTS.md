@@ -23,7 +23,6 @@
 
 在修改代码或设计前，先阅读与任务相关的文档：
 
-- [docs/WORKFLOW.md](docs/WORKFLOW.md)：变更从需求走到代码的执行流程（OpenSpec `spec-driven` 项目覆写版 schema 的 proposal/specs/design/plan/tasks、工具无关的串行或隔离实现、独立检视、串行合入、分层 E2E 与门禁）的唯一权威来源。它不定义产品行为或协议语义，只定义「谁在哪个工作区做什么、产物是什么、怎么合入怎么验」。
 - [docs/INITIAL_DESIGN.md](docs/INITIAL_DESIGN.md)：产品目标、系统行为、安全与同步策略的权威来源。
 - [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md)：模块名称、职责、依赖方向和 crate 边界的唯一权威来源。
 - [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md)：前端阶段、客户端行为、状态模型和平台适配边界的权威来源。
@@ -35,7 +34,7 @@
 - [docs/ACP_COMPATIBILITY_MATRIX.md](docs/ACP_COMPATIBILITY_MATRIX.md)：ACP v1 覆盖范围、各层处理策略和兼容性验收矩阵的权威来源；机器合同位于 `compatibility/acp/v1/matrix.json`。
 - [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)：Daemon 配置键名、类型、默认值与可否调整的唯一权威来源；协议层限额仍以 Sync、Node Link 两份协议文档为准。
 - [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md)：`core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` 表结构/保留/migration 的唯一权威来源（当前 §7 为 v6、`imported_*` 家族为 v3）；管理状态（配对/信任/Export/Import/本地配置）的形状已并入 §3.5–§3.7/§5/§7 并由合同漂移门禁逐条断言，§11 只保留设计理由与索引。
-- [docs/adr/](docs/adr/)：已经接受的架构决策；相关 ADR 优先于仍保留的早期候选描述。
+- [openspec/adr/](openspec/adr/)：已经接受的架构决策；相关 ADR 优先于仍保留的早期候选描述。
 
 另见 `README.md` 的「权威文档」表（同一批文档的一览）。
 
@@ -120,7 +119,7 @@ server              # 已落地（本地通道 + local_admin + transport::net + 
 app                 # 已落地（daemon / CLI / 组合根；已接线网络接入面与 Node Link 路由）
 ```
 
-上表「待落地」只是已经确定的边界，不代表已实现（现状一览见 `README.md` 的「仓库当前状态」，落地范围与编号见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)）。物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
+上表「待落地」只是已经确定的边界，不代表已实现（现状一览见 `README.md` 的「仓库当前状态」，落地范围与编号见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)）。物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `openspec/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`openspec/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`openspec/adr/0006-identity-keystore-split.md`）。
 
 依赖必须指向更稳定的内层：
 
@@ -134,7 +133,7 @@ core use_cases   -> core ports + core model
 必须遵守：
 
 - `core` 不依赖任何 wire protocol、Tokio runtime、Axum、SQLite、WebSocket、子进程、ACP DTO 或具体 Agent。
-- `acp-protocol`、`sync-protocol`、`node-link-protocol` 不依赖 `core`；wire/core mapper 属于对应 adapter。三个协议 crate 彼此不直接依赖：共享的 transcript codec 结构与表驱动校验来自叶子 crate `acpr-transcript`（协议 crate 只导出自己的 `DOMAINS` 表并正常依赖它，不复制宽度与校验逻辑），跨协议共用的 wire 值对象与字段校验机制来自叶子 crate `acpr-wire`（`docs/adr/0007-shared-wire-value-crate.md`）；协议专属的值对象与词表留在各自 crate。
+- `acp-protocol`、`sync-protocol`、`node-link-protocol` 不依赖 `core`；wire/core mapper 属于对应 adapter。三个协议 crate 彼此不直接依赖：共享的 transcript codec 结构与表驱动校验来自叶子 crate `acpr-transcript`（协议 crate 只导出自己的 `DOMAINS` 表并正常依赖它，不复制宽度与校验逻辑），跨协议共用的 wire 值对象与字段校验机制来自叶子 crate `acpr-wire`（`openspec/adr/0007-shared-wire-value-crate.md`）；协议专属的值对象与词表留在各自 crate。
 - `server::sync`、`server::node_link`、`server::acp_facade`、`server::local_admin` 是平级入站适配器，只调用 `core::use_cases`，不能互相调用。
 - `storage-sqlite`、`agent-host`、`node-link-client` 等出站适配器之间不能互相调用。
 - `identity-auth` 是纯状态机，不得依赖任何平台 API 或 `cfg` 平台分支；平台 keystore 由 `identity-keystore` 实现 `identity-auth` 定义的端口，依赖方向只能是 `identity-keystore -> identity-auth`，且除 `app` 外没有 crate 依赖 `identity-keystore`。
@@ -214,7 +213,7 @@ core use_cases   -> core ports + core model
 
 ## 9. 文档维护
 
-通用的文档维护时机与层级规则由仓库的变更流程定义；本节列出的是本仓库「变更类型 → 权威文档」的唯一映射，不重复通用流程正文。
+本节定义「变更类型 → 权威文档」的映射；实现与对应文档、机器合同及验证资产应在同一变更中维护。
 
 - 产品行为和产品级同步策略变化：更新 `docs/INITIAL_DESIGN.md`。
 - 威胁模型、信任边界、授权默认、数据保护或供应链要求变化：更新 `docs/SECURITY_DESIGN.md`；改变已接受密码学/传输决策时同时新增或更新 ADR。
@@ -230,7 +229,7 @@ core use_cases   -> core ports + core model
 - Agent 进程监督、ACP stdio 传输或 profile 来源的实现约束变化：更新 `docs/MODULE_ARCHITECTURE.md` §4.5 与 `docs/ACP_COMPATIBILITY_MATRIX.md`（若影响能力支持状态）。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。监听/路由与部署形态（共用 listener、反代透传、`public_origin` 的权威性）也以该文件 §1 为准，涉及对外暴露方式的改动必须同步它。
 - CLI 与 Daemon 之间的管理方法、envelope、framing、错误码或 **CLI 子命令↔方法映射（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）** 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`，并同步 `schemas/local-admin/v1/`、`fixtures/local-admin/v1/` 与 `compatibility/commands/v1/commands.json` 的 `localCapabilities`（方法集与本地错误码的机器定义在 `schemas/local-admin/v1/envelope.schema.json`，文档表格是它的说明），运行 `npm run check`。
-- 变更执行流程（OpenSpec schema、工作包派遣与隔离、patch 交付、合入顺序、分层 E2E、`check:openspec` 判据）变化：更新 `docs/WORKFLOW.md`，并同步 `openspec/schemas/spec-driven/`、`openspec/config.yaml` 的 `rules`/`operations`；不要求维护特定编码宿主配置。
+- OpenSpec 流程规则集中维护在 [`openspec/config.yaml`](openspec/config.yaml) 的 `rules`/`operations`，产物结构、依赖和模板维护在 `openspec/schemas/spec-driven/`；机器检查判据维护在 `scripts/check-openspec.mjs`。角色职责分别见 [`coder`](openspec/role/coder.md)、[`tester`](openspec/role/tester.md)、[`reviewer`](openspec/role/reviewer.md)，角色文件只规定职责，不复制流程规则。术语唯一用词表位于 [`openspec/GLOSSARY.md`](openspec/GLOSSARY.md)，架构决策位于 [`openspec/adr/`](openspec/adr/)。不另设重复的流程说明，也不要求维护特定编码宿主配置。
 - 两份文档出现重叠时，保留一个权威定义，另一处只写概要并链接过去。
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。

@@ -118,7 +118,7 @@ action」。这条约束在实践中有两个问题：
      `pull_request`（`required_approving_review_count = 0`），并**保留 `RepositoryRole admin` 的 bypass**
      作为紧急出口。因此默认路径变成 PR（三个只能在 CI 跑的判定因此成为先于落地的门禁），
      但直推在技术上仍可行——所以落地流程必须写在文档里才生效：见 `README.md` 的「分支保护」小节，
-     本地合入到 squash 的步骤见 `docs/WORKFLOW.md` §6.1–§6.2。
+     本地验证入口与 PR 必需检查见 `README.md` 的「合同检查」与「分支保护」。
   4. `advisories` job 的失败可能来自与本次改动无关的上游 advisory，需要人工判断是升级依赖还是记录 `ignore`。
      同类的 npm 侧问题已具体化：`deps` job 的 npm 判定现由 `scripts/check-dependency-advisories.mjs` 承担
      （不再直接跑 `npm audit`）。原因是仓库有一条**上游无修复**的 advisory——`braces` 的

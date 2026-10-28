@@ -3,7 +3,7 @@
 - 状态：Accepted
 - 日期：2026-10-18
 - 影响范围：设备配对二维码、`POST /sync/v1/pairing/qr-lookup`、`device.pair.begin.pairingUrl`、CLI `device pair` 输出、PWA `/pair` 入口、`identity-auth` 的扫码取回凭据生命周期
-- 关联：[SYNC_PROTOCOL.md](../SYNC_PROTOCOL.md) §7.1/§7.6、[IDENTITY_AND_AUTH_CONTRACT.md](../IDENTITY_AND_AUTH_CONTRACT.md) §4.3、[FRONTEND_DESIGN.md](../FRONTEND_DESIGN.md) §4.1、[LOCAL_ADMIN_PROTOCOL.md](../LOCAL_ADMIN_PROTOCOL.md) §5.3、[GLOSSARY.md](../../GLOSSARY.md)、[ADR-0010](./0010-web-pairing-code-entry.md)
+- 关联：[SYNC_PROTOCOL.md](../../docs/SYNC_PROTOCOL.md) §7.1/§7.6、[IDENTITY_AND_AUTH_CONTRACT.md](../../docs/IDENTITY_AND_AUTH_CONTRACT.md) §4.3、[FRONTEND_DESIGN.md](../../docs/FRONTEND_DESIGN.md) §4.1、[LOCAL_ADMIN_PROTOCOL.md](../../docs/LOCAL_ADMIN_PROTOCOL.md) §5.3、[GLOSSARY.md](../GLOSSARY.md)、[ADR-0010](./0010-web-pairing-code-entry.md)
 
 ## 背景
 

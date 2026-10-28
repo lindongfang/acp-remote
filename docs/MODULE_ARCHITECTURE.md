@@ -12,7 +12,7 @@
 
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§4.1 新增一条 `[决定]`——有效标题优先级只在 core，`owned_session.title` 保留 Agent 标题、新增可空列 `custom_title`（v15 migration），`session.title.set` 经 `SessionStore::commit` 一次事务写入；客户端改名禁令与「标题仅由 Agent 更新」的旧口径由本变更取代（原文见 SYNC_PROTOCOL §10.3 与 ACP_COMPATIBILITY_MATRIX §5）。不变量与依赖矩阵未变，持久化与命令接线已落地。
 > 修订记录（2026-10-19，`conversation-area-complete` WP1 合同 + WP2 实现）：§4.1 的价值对象、`AttachmentTransferStore`/`InteractionAuthority` 与 §4.7 的消息/清单/临时传输表已由 WP2 落地（版本化 migration 到 v12）；§4.3/§4.4 的独立附件帧编解码、§4.5 的媒体投影、§4.6 的 Access 转发与 §4.9 的附件端点仍属后续工作包。crate 边界与依赖矩阵未变。
-> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery` WP2）：§4.1 的 out-port 摘要新增 `DirectoryBrowser`（`workspace.browse` 的逐层目录列举）、入站能力新增 `WorkspaceBrowse / SyncSnapshotQueries`，并新增一条 `[决定]` 收口「已登记目录的路径边界 + 目录浏览 + 建目录开关」三条职责（[ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)）；`file.changed` 的行级统计与结构化差异行同源派生也记入 §4.1 的事件 view 分工。§4.9 新增一条 `[决定]`：Sync 面的三处 feature 门控（浏览命令、`workspaces` 的路径键、`file.changed` 的差异行）是投递层的唯一判定点，core 不读 feature 表。crate 边界与依赖矩阵**未变**。
+> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery` WP2）：§4.1 的 out-port 摘要新增 `DirectoryBrowser`（`workspace.browse` 的逐层目录列举）、入站能力新增 `WorkspaceBrowse / SyncSnapshotQueries`，并新增一条 `[决定]` 收口「已登记目录的路径边界 + 目录浏览 + 建目录开关」三条职责（[ADR-0009](../openspec/adr/0009-authenticated-workspace-path-and-browse.md)）；`file.changed` 的行级统计与结构化差异行同源派生也记入 §4.1 的事件 view 分工。§4.9 新增一条 `[决定]`：Sync 面的三处 feature 门控（浏览命令、`workspaces` 的路径键、`file.changed` 的差异行）是投递层的唯一判定点，core 不读 feature 表。crate 边界与依赖矩阵**未变**。
 > 修订记录（2026-10-16，`pairing-model`）：§4.8 的 `identity-auth` 职责与授权词汇段按设备权限层删除改写（`identity-auth` 保留跨节点 `grant.*` 展开，设备方向没有授权词汇；`pack.*`/`preset.*` 删除）；§4.9 `[现状]` 把 `sync::command` 的「逐命令 scope 授权先于本机读取」改为「认证与撤销判定先于本机读取」；§11 的词表来源去掉 `pack`。crate 边界、依赖矩阵与 `[现状]` 的落地范围**未变**。
 > 修订记录（2026-10-15，`sync-ui-hosting` WP4/WP2）：§3.1 新增依赖选型的 `[决定]`（`rust-embed 8.13` + `debug-embed`：四判据核验、依赖闭包 8 个节点、落选候选与「为何不用 `interpolate-folder-path`」）；§4.9 `[现状]` 按静态面实绩更新（`transport::net` 的**三类端点**、嵌入资源表模块与 `crates/server/build.rs` 的编译期二选一、发布构建缺产物即拒绝启动、`daemon.status.uiBuildVersion`）；§3 状态行的 `server` 已落地范围随之补上业务命令面（此前 `sync-server-commands` 只更新了 §4.9）与根路径静态托管。
 > 修订记录（2026-10-14，`sync-server-connection` WP7）：§3 状态行、§3 `[现状]` 与 §4.9 `[现状]` 按本变更的同步面实绩写回——`server::sync` 的 WSS 连接面、订阅与投递面、快照面与配对 HTTP 已落地（`app` 组合根 `register_sync_paths` 接线），`acp_facade`、`node-link-client` 与 §11 业务命令面仍未落地，imported 事件回源投递仍是计划条款。
@@ -24,7 +24,7 @@
 > 修订记录（2026-09-24）：§4.2/§4.5 记录 `acp-protocol` 与 `agent-host` 的落地 surface、每个 Agent 一个 Job 的粒度、`win32job`/`nix` 选型与「关闭句柄即结束树」的实际路径；§3.1 的依赖登记与 §5 矩阵补 `agent-host` 列。  §4.1 的端口摘要补 `modes`（`session.mode.list` 的候选来源，见 `CORE_PORTS_AND_STORAGE.md` §5.1/§6 第 17 条）；补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1；§3.1 的 `nix 0.30.1` 许可证订正为 `MIT`（原写 `MIT OR Apache-2.0`，与本地 registry 元数据不符）；§5 披露尚未成为矩阵列的 crate。  
 > 日期：2026-09-18
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
-> 已接受决策：[ADR-0003](./adr/0003-pi-inspired-module-boundaries.md)
+> 已接受决策：[ADR-0003](../openspec/adr/0003-pi-inspired-module-boundaries.md)
 
 ## 1. 设计理念
 
@@ -92,7 +92,7 @@ adapter A -> adapter B
 
 适配器之间只能通过 `core` 定义的 use case 或 port 协作。协议 crate 只拥有 wire schema、codec、framing、limits 和版本协商，不拥有业务领域类型；wire 与 core 的 mapper 属于使用该协议的 adapter。
 
-平级模块共享的底层实现放在叶子 crate：`acpr-transcript`（[ADR-0005](./adr/0005-shared-transcript-codec.md)）只拥有长度前缀 transcript 的编码与解码，不拥有任何 domain/tag 取值或协议语义；`acpr-wire`（[ADR-0007](./adr/0007-shared-wire-value-crate.md)）只拥有跨协议共用的 wire 值对象与字段校验机制（uuid/decimalString/timestamp/base64url/featureList/rawAcp、`Nullable`、`RawObject`、`ExtraFields`、泛型 `PublicError`），不拥有任何协议词表。协议 crate 不互相依赖，Node Link 复用 Sync 的 codec 结构与值对象靠的是"共同依赖同一个叶子 crate"，而不是"一个协议 crate 依赖另一个"。
+平级模块共享的底层实现放在叶子 crate：`acpr-transcript`（[ADR-0005](../openspec/adr/0005-shared-transcript-codec.md)）只拥有长度前缀 transcript 的编码与解码，不拥有任何 domain/tag 取值或协议语义；`acpr-wire`（[ADR-0007](../openspec/adr/0007-shared-wire-value-crate.md)）只拥有跨协议共用的 wire 值对象与字段校验机制（uuid/decimalString/timestamp/base64url/featureList/rawAcp、`Nullable`、`RawObject`、`ExtraFields`、泛型 `PublicError`），不拥有任何协议词表。协议 crate 不互相依赖，Node Link 复用 Sync 的 codec 结构与值对象靠的是"共同依赖同一个叶子 crate"，而不是"一个协议 crate 依赖另一个"。
 
 ### 2.1 客户端边界
 
@@ -139,7 +139,7 @@ crates/
 
 `core` 的包名与库名不同：包名是 `core`（与上表、§5 矩阵一致），**库名是 `acp_core`**——一个名为 `core` 的依赖会在依赖方的宏展开里遮蔽 sysroot 的 `core`（`thiserror::Error` 展开出的 `core::fmt` 会解析到本 crate 而编译失败）。依赖方照旧在 `Cargo.toml` 写 `core = { path = "../core" }`，代码里用 `acp_core::…`；本文档其余部分的 `core::model`/`core::use_cases`/`core::ports`/`core::broker` 均指 `acp_core::…`。
 
-平台安全存储是第二处例外：`identity-keystore` 独立成 crate 是为了隔离平台依赖（原生 keystore API 与 `cfg` 分支），让 `identity-auth` 的状态机在所有平台都能编译与单测（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
+平台安全存储是第二处例外：`identity-keystore` 独立成 crate 是为了隔离平台依赖（原生 keystore API 与 `cfg` 分支），让 `identity-auth` 的状态机在所有平台都能编译与单测（[ADR-0006](../openspec/adr/0006-identity-keystore-split.md)）。
 
 > `[现状]`（2026-09-25，`daemon-cli-and-local-admin` 切片 4 已落地）上表中 `server` 与 `app` 已落地，但**只覆盖本切片范围**：`server` 只有 `transport` 的本地通道部分（平台 IPC listener、对端凭据校验、framing）与 `local_admin`（管理信封与方法路由），`sync`/`node_link`/`acp_facade` 仍待后续切片；`app` 的 daemon、CLI 与组合根已落地。其余行保持既有状态（`node-link-client` 仍待切片 6）。另外新增一个不影响上表结构的 crate 目录：`vendor/windows-local-ipc`（切片 4 自研的 Win32 FFI wrapper，path 依赖、不在 workspace `members` 里，见 §3.1）。成员仍按「真正落地时才写入 `members`」推进：当前 `members` 就是本节除 `node-link-client` 之外的十二个，§5 的列是这十二个再加 `vendor/windows-local-ipc`，`node-link-client` 只作为「行」出现（待切片 6 落地、当前没有依赖方），详见 §5 表下注记。
 >
@@ -306,7 +306,7 @@ LifecycleQuery           当前 owned 生命周期只读投影（计划，CORE �
 
 端口签名、值对象形状、用例入口与 broker 事务顺序已冻结在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3–§6；本节只保留职责边界与依赖规则。
 
-`[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery`）**已登记目录的路径边界与两条受限能力**（[ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)；`SYNC_PROTOCOL.md` §9.4/§11.5、`SECURITY_DESIGN.md` §12.3）：
+`[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery`）**已登记目录的路径边界与两条受限能力**（[ADR-0009](../openspec/adr/0009-authenticated-workspace-path-and-browse.md)；`SYNC_PROTOCOL.md` §9.4/§11.5、`SECURITY_DESIGN.md` §12.3）：
 
 - **路径**：本机规范化路径只在客户端协商了 feature `core.workspace-path.v1` 时随 Sync 快照的 `workspaces` 条目下发，且只覆盖**已登记**目录；取值是 `canonicalize` 的结果**剥掉平台 verbatim 前缀**后的形式（复用 `core` 的 `strip_verbatim`，与发往 Agent 的 `cwd` 同一条规则），客户端回传该形式时 core 重新规范化并以其为权威值。会话摘要的目录引用仍只有 `{alias, displayName}` 两个键；**客户端自己提交的目录不得被回显**，日志、审计、错误 `details`、事件载荷也一律不含路径。投影入口是 `UseCases::sync_workspace_catalog(actor, include_path)`，`include_path` 是**调用方**的协商结果（core 不读 feature 表）。
 - **目录浏览**：`workspace.browse` 是只读查询，core 侧的实现是 `UseCases::workspace_browse(actor, Option<&str>)` + 出站端口 `DirectoryBrowser`（逐层列举、只返回直接子目录的名称与绝对路径，不含文件、大小、时间戳与权限；条目的 `path` 取规范化结果剥掉平台 verbatim 前缀的下发形式，结果的 `path` 则**逐字回显本次请求的父路径**——那是「客户端自己提交的路径不得被回显」的唯一例外，见 `SYNC_PROTOCOL.md` §11.5；顺序由 core 按名称施加、单层上限 128 并置截断标记；不登记、不缓存、不产生审计动作）。feature `core.workspace-browse.v1` 的门控与未认证拒绝都在**适配层**、且在触碰文件系统之前。
@@ -493,7 +493,7 @@ authorization/
 port/          # keystore 端口定义（trait），实现见 identity-keystore
 ```
 
-它负责 Node/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、跨节点 `grant.*` 的展开、设备认证状态与撤销，以及**通过端口**访问平台安全存储（[ADR-0006](./adr/0006-identity-keystore-split.md)）。所有密钥读写与**随机性**都由组合根注入的端口提供：本 crate 不直接调用 DPAPI/Keychain/Secret Service，也不直接读系统随机数，也不为平台差异写 `cfg` 分支。密码学原语固定为 `p256` + `sha2` + `hmac`（纯 Rust、无原生依赖）；65 字节公钥前置校验、禁用 DER、接受 high-S 等实测约束见 `INITIAL_DESIGN.md` §16 第 6 条。Export Policy 的业务交集由 core 执行；本 crate 只把验证后的 `Actor`、credential status 和 grant facts 交给 core。Node Identity 与 Device Identity 必须使用不同 key purpose、record type 和签名 domain。
+它负责 Node/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、跨节点 `grant.*` 的展开、设备认证状态与撤销，以及**通过端口**访问平台安全存储（[ADR-0006](../openspec/adr/0006-identity-keystore-split.md)）。所有密钥读写与**随机性**都由组合根注入的端口提供：本 crate 不直接调用 DPAPI/Keychain/Secret Service，也不直接读系统随机数，也不为平台差异写 `cfg` 分支。密码学原语固定为 `p256` + `sha2` + `hmac`（纯 Rust、无原生依赖）；65 字节公钥前置校验、禁用 DER、接受 high-S 等实测约束见 `INITIAL_DESIGN.md` §16 第 6 条。Export Policy 的业务交集由 core 执行；本 crate 只把验证后的 `Actor`、credential status 和 grant facts 交给 core。Node Identity 与 Device Identity 必须使用不同 key purpose、record type 和签名 domain。
 
 `grant.*` 是唯一的授权管理输入形式：由 `authorization/` 按 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 展开成它直接列出的命令名集合后才写入节点信任记录与 Export（`SECURITY_DESIGN.md` §10.2）。**设备方向没有授权词汇**——设备配对不授予授权、设备记录不保存授权集合，`pack.*` 与 `preset.*` 随设备权限层删除；core 只看到展开后的授权事实（命令名集合与 grant 名），不认任何配对侧的授权输入形式。
 
@@ -517,7 +517,7 @@ server::transport    listener、连接级 backpressure 与根路径静态托管�
 
 四个 adapter 只能调用 `core::use_cases`，不能互相调用、查询 SQLite、启动 Agent 或直接调用 `node-link-client`。每个 adapter 自己拥有 wire/core mapper；共享的只有通用连接生命周期原语，禁止抽出“万能消息 DTO”。
 
-`[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery`）Sync 面的三条新增边界（[ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)；`SYNC_PROTOCOL.md` §9.4/§10.3/§11.5）：`workspace.browse` 的 feature `core.workspace-browse.v1` 门控（未协商 → `protocol.feature_required`）与未认证拒绝都发生在**触碰文件系统之前**；快照的 `workspaces` 条目只在本连接协商了 `core.workspace-path.v1` 时带路径键（未协商时该键缺席，其余字段逐字节不变）；`file.changed` 视图的差异行（feature `core.file-diff.v1`）按同一原则由投递层去掉该键。三处门控都是**唯一**判定点——core 不读 feature 表，也不为「多出来的键」回退到任何默认值。
+`[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery`）Sync 面的三条新增边界（[ADR-0009](../openspec/adr/0009-authenticated-workspace-path-and-browse.md)；`SYNC_PROTOCOL.md` §9.4/§10.3/§11.5）：`workspace.browse` 的 feature `core.workspace-browse.v1` 门控（未协商 → `protocol.feature_required`）与未认证拒绝都发生在**触碰文件系统之前**；快照的 `workspaces` 条目只在本连接协商了 `core.workspace-path.v1` 时带路径键（未协商时该键缺席，其余字段逐字节不变）；`file.changed` 视图的差异行（feature `core.file-diff.v1`）按同一原则由投递层去掉该键。三处门控都是**唯一**判定点——core 不读 feature 表，也不为「多出来的键」回退到任何默认值。
 
 `server::acp_facade` 常驻 daemon：ACP 会话状态、幂等记录与事件提交都必须落在拥有该会话的进程里，因此 `acp-remote acp-stdio` 只是“stdin/stdout ↔ 本地通道”的字节泵，不内嵌 core、storage 或 agent-host（否则会与 daemon 争用同一 SQLite，违反单实例锁与单一权威写入者）。本地通道因此承载两类载荷：`server::local_admin` 的管理请求/响应，以及 `server::acp_facade` 的长期双向 ACP 流；两者各自的编码由本地通道适配器拥有，不复用 Sync 与 Node Link 的 DTO。该通道的 endpoint、访问控制、framing、管理信封、两类载荷的会话语义、方法集与本地错误码以 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 为唯一权威来源（ACP 流见其 §3.1）。daemon 未运行时 `acp-stdio` 必须以明确错误退出，不得自行打开数据库或启动第二套核心。
 
@@ -574,7 +574,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 ### 4.11 `acpr-transcript`
 
-唯一职责：实现 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §6.2 定义的签名/HMAC 输入编码——magic `ACPR`、`codecVersion`、`domainTag`、严格递增且唯一的 `fieldTag`、长度前缀字段——以及对应的解码与校验错误。`table` 模块在此之上提供表驱动层：泛型表类型（`DomainSpec`/`FieldSpec`/`FieldType`/`Proof`）与"按表校验并编解码"（字段数量、tag 成员、定长宽度）。它是叶 crate（[ADR-0005](./adr/0005-shared-transcript-codec.md)）：不依赖任何其他项目 crate。
+唯一职责：实现 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §6.2 定义的签名/HMAC 输入编码——magic `ACPR`、`codecVersion`、`domainTag`、严格递增且唯一的 `fieldTag`、长度前缀字段——以及对应的解码与校验错误。`table` 模块在此之上提供表驱动层：泛型表类型（`DomainSpec`/`FieldSpec`/`FieldType`/`Proof`）与"按表校验并编解码"（字段数量、tag 成员、定长宽度）。它是叶 crate（[ADR-0005](../openspec/adr/0005-shared-transcript-codec.md)）：不依赖任何其他项目 crate。
 
 它**不**包含任何 `domainTag` 取值、`fieldTag` 取值或协议语义：
 
@@ -595,9 +595,9 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 - macOS（未实现，规划中）：Keychain；可用时使用不可导出或硬件保护能力。
 - Linux（未实现，规划中）：Secret Service（D-Bus）。没有可用的 Secret Service 时，按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 的当前决定失败关闭，不得静默降级为明文文件。
 
-约束：不实现业务逻辑、不解析协议、不做授权判定；端口与错误类型由 `identity-auth` 拥有（目标签名见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §7）；任何密钥字节不得进入日志、协议错误或 `Debug` 输出。除 `app` 外没有其他 crate 依赖它（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
+约束：不实现业务逻辑、不解析协议、不做授权判定；端口与错误类型由 `identity-auth` 拥有（目标签名见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §7）；任何密钥字节不得进入日志、协议错误或 `Debug` 输出。除 `app` 外没有其他 crate 依赖它（[ADR-0006](../openspec/adr/0006-identity-keystore-split.md)）。
 
-`[决定]`（2026-09-23）平台差异只能以 **wrapper crate + 本 crate 内的 `cfg` 子模块**表达：workspace 固定 `unsafe_code = "forbid"`（`Cargo.toml`，各 crate 继承 `[lints] workspace = true`），因此本 crate **不得**直接 FFI DPAPI/CNG/Secret Service。DPAPI wrapper、Secret Service client 等候选必须按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 核验 MSRV、维护状态、许可证与平台支持；DPAPI 只能以「当前用户 scope 包裹 + 进程内 `p256` 签名」的方式使用（私钥在签名瞬间存在于内存，这是已知且已记录的取舍）。Linux 后端在没有 Secret Service 的环境（含 CI 容器）只需保证**编译通过 + 运行时明确失败**，单测走 stub 端口——这正是 [ADR-0006](./adr/0006-identity-keystore-split.md) 拆出本 crate 的目的。
+`[决定]`（2026-09-23）平台差异只能以 **wrapper crate + 本 crate 内的 `cfg` 子模块**表达：workspace 固定 `unsafe_code = "forbid"`（`Cargo.toml`，各 crate 继承 `[lints] workspace = true`），因此本 crate **不得**直接 FFI DPAPI/CNG/Secret Service。DPAPI wrapper、Secret Service client 等候选必须按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 核验 MSRV、维护状态、许可证与平台支持；DPAPI 只能以「当前用户 scope 包裹 + 进程内 `p256` 签名」的方式使用（私钥在签名瞬间存在于内存，这是已知且已记录的取舍）。Linux 后端在没有 Secret Service 的环境（含 CI 容器）只需保证**编译通过 + 运行时明确失败**，单测走 stub 端口——这正是 [ADR-0006](../openspec/adr/0006-identity-keystore-split.md) 拆出本 crate 的目的。
 
 `[决定]`（2026-09-24）DPAPI wrapper 采用 **`windows-dpapi 0.2.0`**（`cfg(windows)` 专属依赖）。核验结论（`SECURITY_DESIGN.md` §20 的四个判据）：
 
@@ -608,7 +608,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 已知代价与缓解：
 
-1. `winapi 0.3` 已停止维护，但它只出现在 wrapper 内部（本仓库 `unsafe_code = "forbid"`，不写 FFI），替换路径是自写 wrapper crate 或换用 `windows-sys` 系 wrapper——两者都需要新 ADR（[ADR-0006](./adr/0006-identity-keystore-split.md) 的边界不变）；
+1. `winapi 0.3` 已停止维护，但它只出现在 wrapper 内部（本仓库 `unsafe_code = "forbid"`，不写 FFI），替换路径是自写 wrapper crate 或换用 `windows-sys` 系 wrapper——两者都需要新 ADR（[ADR-0006](../openspec/adr/0006-identity-keystore-split.md) 的边界不变）；
 2. wrapper 不暴露 `CRYPTPROTECT_UI_FORBIDDEN`，本实现因此**总是**传入由条目头（用途 + 标签 + 版本 + 盐）派生的附加熵，把「无熵 + 缺主密钥时可能弹交互提示」收敛为有熵的静默路径；
 3. 附加熵同时把条目绑死到「用途 + 标签 + 版本 + 盐」，因此复制/剪接条目解不开（[PV5] 用真实 DPAPI 断言）。
 
@@ -616,7 +616,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 ### 4.13 `acpr-wire`
 
-唯一职责：跨协议共用的 wire 值对象与字段级校验机制（[ADR-0007](./adr/0007-shared-wire-value-crate.md)）——`Uuid`、`DecimalString`、`Timestamp`、`Base64Url<N>`、`FeatureId`、`FeatureList`、`RawAcp`、`Text<N>`、`NonEmptyText<N>`、`BoundedU64<MIN,MAX>`/`UIntAtLeast<MIN>`、`Nullable<T>`（`required` 且可 null 的键存在性语义）、`RawObject`/`ExtraFields`（开放扩展点的保真载体）、`ValueError`、`deserialize_optional_non_null`、**ACPR-CJ1 规范 JSON**（`SYNC_PROTOCOL.md` §3.3：对象成员按 UTF-16 code unit 排序、禁止重复键与浮点、控制字符写作小写 `\u00xx`；`payloadDigest`/`snapshotDigest` 的前像，Rust 侧唯一实现，与 `scripts/check-contract-assets.mjs` 的参考实现互校），以及泛型 `PublicError<Code>`。
+唯一职责：跨协议共用的 wire 值对象与字段级校验机制（[ADR-0007](../openspec/adr/0007-shared-wire-value-crate.md)）——`Uuid`、`DecimalString`、`Timestamp`、`Base64Url<N>`、`FeatureId`、`FeatureList`、`RawAcp`、`Text<N>`、`NonEmptyText<N>`、`BoundedU64<MIN,MAX>`/`UIntAtLeast<MIN>`、`Nullable<T>`（`required` 且可 null 的键存在性语义）、`RawObject`/`ExtraFields`（开放扩展点的保真载体）、`ValueError`、`deserialize_optional_non_null`、**ACPR-CJ1 规范 JSON**（`SYNC_PROTOCOL.md` §3.3：对象成员按 UTF-16 code unit 排序、禁止重复键与浮点、控制字符写作小写 `\u00xx`；`payloadDigest`/`snapshotDigest` 的前像，Rust 侧唯一实现，与 `scripts/check-contract-assets.mjs` 的参考实现互校），以及泛型 `PublicError<Code>`。
 
 它**不**包含任何协议词表或语义：归属检查（哪些语义属于谁）如下——
 
@@ -628,7 +628,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 ### 4.14 会话删除与空会话清理的职责划分（`session-create-and-empty-cleanup`；已实现）
 
-> 本节描述已实现的职责划分。合同（端口形状、事务顺序、可见性谓词与 v19 迁移）见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §13，wire 见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9，决策见 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md)。准备式新建已被直接创建取代，历史设计见 [ADR-0014](./adr/0014-web-session-preparation-before-first-message.md)。
+> 本节描述已实现的职责划分。合同（端口形状、事务顺序、可见性谓词与 v19 迁移）见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §13，wire 见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.9，决策见 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md)。准备式新建已被直接创建取代，历史设计见 [ADR-0014](../openspec/adr/0014-web-session-preparation-before-first-message.md)。
 
 - **core**：拥有「空会话」的判定规则与删除的业务序——内容事实只来自**一个**端口读（`CORE` §13.1 的排除表是唯一判据），删除只经**一个**事务入口（§13.2），并由既有 `LocalSessionLifecycle` 的每会话串行门线性化激活/查看/释放/删除。core 仍不依赖 Tokio、SQLite、文件系统、wire DTO 或具体 Agent；新增端口不改变 core 的直接依赖集合。
 - **server::sync**：承接 Sync-only `session.delete`（`CORE` §4 的 `SessionDeletion` 用例），认证与 `core.local-session-lifecycle.v1` 门控先于任何存储或 Agent 调用；在每会话 lifecycle gate 内携带完整 `SessionDeletionWrite` 做只读资格预检，只有 `Eligible` 才真实释放，`Blocked` 直接写持久失败终态且不调用 release；只调用 core 用例，不调用 Node Link 或 `local_admin`。Node Link 适配器不登记也不转发该命令与 `session.deleted`（[`NODE_LINK_PROTOCOL.md`](./NODE_LINK_PROTOCOL.md) §12.11）。
@@ -662,9 +662,9 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 额外规则：
 
-- 三个 protocol crate 彼此也不直接依赖；它们共享的 transcript codec 结构与表驱动校验来自叶子 crate `acpr-transcript`（协议 crate 只导出自己的 `DOMAINS` 表并调用它），跨协议共用的 wire 值对象与字段校验机制来自叶子 crate `acpr-wire`（`docs/adr/0007-shared-wire-value-crate.md`），包含 ACP raw 的 Node Link 字段只是受约束 bytes/string，不通过 Rust 类型依赖 ACP DTO。
+- 三个 protocol crate 彼此也不直接依赖；它们共享的 transcript codec 结构与表驱动校验来自叶子 crate `acpr-transcript`（协议 crate 只导出自己的 `DOMAINS` 表并调用它），跨协议共用的 wire 值对象与字段校验机制来自叶子 crate `acpr-wire`（`openspec/adr/0007-shared-wire-value-crate.md`），包含 ACP raw 的 Node Link 字段只是受约束 bytes/string，不通过 Rust 类型依赖 ACP DTO。
 - `storage-sqlite` 依赖 `acpr-wire` **只为** §7.3/§9.9 要求的 `payload_digest = base64url(SHA-256(ACPR-CJ1(payload_json)))`：ACPR-CJ1 是跨 Sync/Node Link 的共享机制，只能有一份实现（v1 早期因为存储层手写摘要而与协议侧口径不一致）；除该函数外不得使用 `acpr-wire` 的业务类型，也不得经它访问协议语义。
-- `server` 对 `acpr-wire` 的依赖**只为** ACPR-CJ1 规范 JSON 与 digest 计算（`payloadDigest`/`snapshotDigest` 前像的唯一实现，`NODE_LINK_PROTOCOL.md` §12.4）：`node-link-protocol` 只再导出 wire 值对象、不再导出 `cj1`（`docs/adr/0007-shared-wire-value-crate.md`），因此该实现在 `server::node_link` 侧只能直接取自 `acpr-wire`；除该模块外不得使用 `acpr-wire` 的业务类型，也不得经它访问协议语义。登记时机与理由见 §3.1 的 `[决定]`（2026-09-26）。
+- `server` 对 `acpr-wire` 的依赖**只为** ACPR-CJ1 规范 JSON 与 digest 计算（`payloadDigest`/`snapshotDigest` 前像的唯一实现，`NODE_LINK_PROTOCOL.md` §12.4）：`node-link-protocol` 只再导出 wire 值对象、不再导出 `cj1`（`openspec/adr/0007-shared-wire-value-crate.md`），因此该实现在 `server::node_link` 侧只能直接取自 `acpr-wire`；除该模块外不得使用 `acpr-wire` 的业务类型，也不得经它访问协议语义。登记时机与理由见 §3.1 的 `[决定]`（2026-09-26）。
 - `identity-auth` 依赖两个协议 crate 与 `acpr-transcript` 仅用于 transcript 编解码与 domain/字段 tag 定义：它不复制这些常量，也不使用协议 crate 的业务类型或业务规则。
 - `server` 对 `identity-auth` 的依赖只用于完成连接认证；业务授权仍由 core 对 `Actor + grant facts` 执行。
 - `app` 可以依赖全部具体 crate，但只做装配；任何其他 crate 不得依赖 `app`。
@@ -812,6 +812,8 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 
 ## 11. 测试边界
 
+变更的测试策略、执行与检视规则以 [`openspec/config.yaml`](../openspec/config.yaml) 为准；测试设计产物使用 [`tests.md` 模板](../openspec/schemas/spec-driven/templates/tests.md)。本节只定义各模块的测试边界。
+
 | 模块 | 测试重点 |
 |---|---|
 | core | 状态转换、值对象、每会话串行、幂等、事务提交、owned/imported 分流和 fake ports |
@@ -837,12 +839,12 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 ## 12. 保持开放的决策
 
 - `identity-auth` 是否拆成纯状态机与平台 keystore 两个 crate；平台 keystore 的具体 crate 在选择时按 `AGENTS.md` §8 审必要性、维护状态、许可证与平台支持。
-  - 2026-09-18 决定：**拆**。新增第 12 个 crate `identity-keystore`，`identity-auth` 收敛为纯状态机，keystore 以端口注入（[ADR-0006](./adr/0006-identity-keystore-split.md)）。判据是 `AGENTS.md` §5 的「独立平台实现」：平台 keystore 各自拖原生依赖与 `cfg` 分支，且在没有桌面会话的 Linux / CI 容器里不可用，混在一起会让状态机无法在所有平台编译与单测。
+  - 2026-09-18 决定：**拆**。新增第 12 个 crate `identity-keystore`，`identity-auth` 收敛为纯状态机，keystore 以端口注入（[ADR-0006](../openspec/adr/0006-identity-keystore-split.md)）。判据是 `AGENTS.md` §5 的「独立平台实现」：平台 keystore 各自拖原生依赖与 `cfg` 分支，且在没有桌面会话的 Linux / CI 容器里不可用，混在一起会让状态机无法在所有平台编译与单测。
   - 2026-09-23 决定：**Windows 第一档位用 DPAPI（当前用户 scope）包裹私钥 + 进程内签名**，Linux 维持失败关闭；CNG/TPM 不可导出档位与 Linux 持久化 fallback 都需单独 ADR。平台实现一律经 wrapper crate（workspace 固定 `unsafe_code = "forbid"`），候选的 MSRV/维护状态/许可证按 `SECURITY_DESIGN.md` §20 核验（[§4.12](#412-identity-keystore)）。与 2026-09-18 那条的关系：拆分不变，本条只是把「具体实现档位」从开放项收口到可落地的第一档。
 - 是否为同步协议生成 TypeScript/Kotlin/Swift 类型。
 - 是否公开部分 crate 到 crates.io；第一阶段可全部保持 workspace-private。
 
-CLI 与 Daemon 的管理通道已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定（stdio + 平台本地 IPC），不再开放。
+CLI 与 Daemon 的管理通道已由 [ADR-0004](../openspec/adr/0004-local-admin-transport.md) 落定（stdio + 平台本地 IPC），不再开放。
 
 标准不是目录是否整齐，而是边界能否降低耦合、支持独立测试并控制变化传播。
 

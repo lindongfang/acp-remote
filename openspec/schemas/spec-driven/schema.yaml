@@ -1,6 +1,6 @@
 name: spec-driven
 version: 1
-description: ACP Remote workflow (project override of spec-driven) - proposal → specs → design → plan → tasks
+description: ACP Remote workflow - proposal → specs/design → tests → plan → tasks
 artifacts:
   - id: proposal
     generates: proposal.md
@@ -11,11 +11,18 @@ artifacts:
 
       Sections:
       - **Why**: 1-2 sentences on the problem or opportunity. What problem does this solve? Why now?
+      - **Success Criteria**: The user's original request, hard constraints, non-goals,
+        and success criteria, kept verbatim. Required - later artifacts and the final
+        archive are checked against this section.
       - **What Changes**: Bullet list of changes. Be specific about new capabilities, modifications, or removals. Mark breaking changes with **BREAKING**.
       - **Capabilities**: Identify which specs will be created or modified:
         - **New Capabilities**: List capabilities being introduced. Each becomes a new `specs/<capability-path>/spec.md`. Name each capability for a durable system behavior (for example, `user-auth`), not the work in this change (for example, `add-login-endpoint`). Choose a cohesive boundary that can own related requirements as the system evolves; avoid broad catch-all capabilities. Use kebab-case for path segments you introduce (e.g., `user-auth` or `identity/user-auth`) and follow the project's existing spec organization.
         - **Modified Capabilities**: List existing capabilities whose REQUIREMENTS are changing. Only include if spec-level behavior changes (not just implementation details). Each needs a delta spec file. Use the exact existing path under `openspec/specs/`. Leave empty if no requirement changes.
       - **Impact**: Affected code, APIs, dependencies, or systems.
+      - **Exploration**: Decision branches from exploration rounds with their status
+        and evidence, terminology-maintenance review, and ADRs when needed. Required;
+        never record suggestions or silence as confirmation, and resolve blocking
+        unknowns before coding.
 
       IMPORTANT: The Capabilities section is critical. It creates the contract between
       proposal and specs phases. Research existing specs before filling this in:
@@ -167,11 +174,9 @@ artifacts:
     instruction: |
       Create the design document that explains HOW to implement the change.
 
-      When to include design.md (create only if any apply):
-      - Cross-cutting change (multiple services/modules) or new architectural pattern
-      - New external dependency or significant data model changes
-      - Security, performance, or migration complexity
-      - Ambiguity that benefits from technical decisions before coding
+      design.md is mandatory for every change in this project. Scale detail to
+      the change, but never skip it based on size. Resolve blocking decisions
+      through the confirmed exploration before test planning or implementation.
 
       Sections:
       - **Context**: Only the current state and constraints needed to explain the approach. Reference the proposal for motivation instead of restating it (e.g., "See proposal.md - Why").
@@ -195,6 +200,34 @@ artifacts:
     requires:
       - proposal
 
+  - id: tests
+    generates: tests.md
+    description: Independent pre-code test cases and repeatable acceptance entries
+    template: tests.md
+    instruction: |
+      An independent tester creates one tests.md before coding. Read
+      openspec/role/tester.md and project config. Do not inherit coder dialogue.
+      Initially use proposal/specs/design without waiting for plan; after plan
+      exists, review its execution arrangements before implementation.
+      Cover every L1-L6/LX level with required or not-applicable and a reason.
+      Use the exact template field names, stable case IDs, requirement/scenario
+      references, execution mode, tool, preconditions, environment, steps,
+      expected assertions, cleanup, schedule and executable entry.
+      L5 comes from confirmed behavioral specs. In an active change, bare
+      specs/<capability>/spec.md means its delta; explicit openspec/specs paths
+      mean durable specs. In durable suites, bare paths mean durable specs.
+      Never fall back across roots. The gate checks file existence only;
+      reviewer verifies Requirement/Scenario names and coverage separately.
+      skip_specs changes reference the proposal's Success Criteria section instead.
+      L6 states real/mock component boundaries.
+      Coder owns development unit tests; tester owns acceptance expectations.
+      Reviewer independently reviews the cases and plan before implementation.
+      Cases describe repeatable checks, not run results. Store execution results
+      separately and synchronize durable cases by capability before archive.
+    requires:
+      - specs
+      - design
+
   - id: plan
     generates: plan.md
     description: Execution arrangement - work packages, isolation, merge order, verification
@@ -205,10 +238,11 @@ artifacts:
       design covers how - plan covers who does what, in which isolated
       workspace, in which order, and how each piece is verified.
 
-      Read docs/WORKFLOW.md before writing the plan. Execution is tool-neutral:
-      use the current executor serially by default; use isolated workspaces only
-      when parallel implementation is needed. No specific host, model, agent
-      role, private report URI, or mandatory per-package reviewer is required.
+      Follow openspec/config.yaml rules. Execution is tool-neutral:
+      actively identify independent work and execute it in parallel in isolated
+      workspaces when possible. Explain dependencies, overlap or unavailable
+      tools for serial work. Use coder/tester/reviewer responsibilities from
+      openspec/role; do not bind them to a host or model.
 
       Required content, following the template's sections:
 
@@ -222,15 +256,18 @@ artifacts:
       - **Project Verify**: list commands, working directories, prerequisites,
         and pass conditions. Checks may run in any prepared workspace; final
         validation must cover the exact integrated result to be submitted.
-      - **Code Review**: choose review proportional to risk. Low-risk changes
-        may use executor diff inspection and tests. Protocol, security,
-        persistence, concurrency, and cross-module risks warrant independent
-        review by an available person or agent, without host restrictions.
-        Record findings and resolution; do not call self-review independent.
+      - **Code Review**: independent reviewer approves plan and tester cases
+        before coding and reviews the real delivery afterwards. Tester and
+        reviewer must not inherit coder dialogue and must assess the same
+        fixed content version. Record stable finding IDs and independent
+        retest/review closure. Self-review never substitutes for this gate.
       - **Main E2E**: use required for runnable user-visible behavior and
         choose available real-browser or desktop tools. Otherwise record
         not-applicable, reason, basis, and alternative_checks.
 
+      Reference tests.md IDs instead of duplicating cases. Record handoff,
+      parallel assessment, content version, results and findings. Synchronize
+      specs/regression cases and archive before PR, then check the moved result.
       Keep the plan free of design rationale (that belongs in design.md) and of
       per-line task descriptions (those belong in tasks.md). Each work package
       row here MUST have at least one corresponding task in tasks.md.
@@ -239,9 +276,20 @@ artifacts:
       that does not silently overlap another's, the merge order covers every
       overlap, and every package has a verify step that can actually run where
       it is executed.
+
+      The local gate also validates plan structure: required sections with
+      non-empty bodies, a Work Packages table with 7 columns and unique IDs,
+      Main E2E typed YAML consistency (one block, no duplicate keys or aliases;
+      non-empty reason/basis strings and string-list alternative_checks for
+      not-applicable; omitted/null/typed empty values for required). Each Work
+      Package ID must appear as a complete token in a real checkbox task;
+      comments/fences/prose and prefix matches do not count. Every real task
+      references a declared package. Persist verification summaries using the
+      plan template; apply config rules for evidence invalidation and reuse.
     requires:
       - specs
       - design
+      - tests
 
   - id: tasks
     generates: tasks.md
@@ -308,16 +356,19 @@ artifacts:
       ```
 
       Reference specs for what needs to be built, design for how to build it,
-      and plan.md for who builds which part in which order. Every work package
+      tests.md for acceptance cases, and plan.md for who builds which part in
+      which order. Include coder unit tests, independent tester execution and
+      reviewer gates with evidence. Every work package
       in plan.md MUST have at least one tracked task here, and no tracked task
       may introduce work that no work package covers.
     requires:
       - specs
       - design
       - plan
+      - tests
 
 apply:
-  requires: [ plan, tasks ]
+  requires: [ tests, plan, tasks ]
   tracks: tasks.md
   instruction: |
     Read context files, work through pending tasks, mark complete as you go.

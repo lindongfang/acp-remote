@@ -3,8 +3,9 @@
  *
  * ## 形态：胶囊 + 弹层（原型 `.pick`）
  *
- * 两节各是一个胶囊（`模型 <当前值> ▾` / `模式 <当前值> ▾`），点开是弹层：可选项、分节状态与
+ * 各分节是一个胶囊（`模式 <当前值> ▾`），点开是弹层：可选项、分节状态与
  * 说明都在弹层里。弹层顶部固定一行「由 Agent 提供，下一轮生效」的来源说明，选项排在它之后。
+ * 展开状态由面板统一持有（同一时间只开一个弹层：三个弹层几乎同位，同时开会互相叠住）。
  * 弹层内容**始终在 DOM**（收起时只 `display: none`），因此「未提供时不展示虚假可选项」
  * 「切换中当前值不变」这些判定在静置的渲染结果里就断言得到。
  *
@@ -78,23 +79,29 @@ function buildStyles(colors: Palette) {
       flexWrap: "nowrap",
       alignItems: "center",
       flexShrink: 1,
-      gap: 4,
+      gap: 6,
     },
     section: {
       position: "relative",
       flexShrink: 1,
       minWidth: 0,
     },
+    // 胶囊：原型 `.pick>button`——`panel2` 底、`line` 边、999 圆角；悬停描边转强调色（`.ctx:hover`）。
     pill: {
       minWidth: 0,
       flexDirection: "row",
       alignItems: "center",
       gap: spacing.xs,
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.xs,
-      minHeight: 40,
-      borderWidth: 0,
-      backgroundColor: "transparent",
+      paddingVertical: 4,
+      paddingHorizontal: 10,
+      minHeight: 32,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: radius.lg,
+      backgroundColor: colors.panel2,
+    },
+    pillHover: {
+      borderColor: colors.accent,
     },
     kicker: {
       color: colors.ink2,
@@ -121,55 +128,84 @@ function buildStyles(colors: Palette) {
       position: "absolute",
       right: 0,
       bottom: "100%",
-      gap: spacing.xs,
-      minWidth: 220,
-      marginBottom: spacing.xs,
-      padding: spacing.sm,
+      gap: 2,
+      minWidth: 240,
+      marginBottom: 6,
+      padding: 6,
       borderWidth: 1,
       borderColor: colors.line,
       borderRadius: radius.md,
       backgroundColor: colors.panel,
+      // 原型弹层带 `box-shadow`：浮在输入区上方时的层次感来自这里，缺了就会贴在背景上。
+      boxShadow: colors.shadow,
       zIndex: zIndex.topBar,
     },
     popoverHidden: {
       display: "none",
     },
+    // 头部一行：来源说明在左、状态徽章在右；水平内距与选项行对齐（选项自带 10px 内距）。
     head: {
       flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "baseline",
+      alignItems: "center",
+      justifyContent: "space-between",
       gap: spacing.sm,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    headNote: {
+      flexShrink: 1,
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
     },
     state: {
+      flexShrink: 0,
       paddingHorizontal: spacing.sm,
       paddingVertical: 2,
-      borderRadius: radius.sm,
+      borderRadius: radius.lg,
       color: colors.ink2,
       backgroundColor: colors.line2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+    },
+    // 「未提供 / 尚未加载」不是可操作状态：比「可选择」再弱一档，避免与选项抢注意力。
+    stateMuted: {
+      color: colors.ink3,
     },
     stateSwitching: {
       color: colors.warn,
       backgroundColor: colors.warnSoft,
     },
     choices: {
-      gap: spacing.xs,
+      gap: 2,
     },
+    // 选项是菜单行而不是卡片（原型 `.pick .pop button`）：无边框透明底，悬停才着色，
+    // 选中用 `accentSoft` 底 + 右侧对勾——深色下 `accentSoft` 与 `panel2` 底色接近，只靠底色分不出当前项。
     choice: {
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.line,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderWidth: 0,
       borderRadius: radius.sm,
+      backgroundColor: "transparent",
+    },
+    choiceHover: {
       backgroundColor: colors.panel2,
     },
     choiceCurrent: {
-      borderColor: colors.accent,
       backgroundColor: colors.accentSoft,
     },
+    choiceDisabled: {
+      opacity: 0.55,
+    },
+    choiceBody: {
+      flexShrink: 1,
+      minWidth: 0,
+    },
     choiceText: {
-      color: colors.ink2,
+      color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
@@ -177,10 +213,18 @@ function buildStyles(colors: Palette) {
       color: colors.accentInk,
       fontWeight: "600",
     },
-    notice: {
-      color: colors.ink2,
+    choiceCheck: {
+      flexShrink: 0,
+      color: colors.accent,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      fontWeight: "600",
+    },
+    notice: {
+      paddingHorizontal: 10,
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
     },
     choiceDescription: {
       color: colors.ink3,
@@ -207,6 +251,7 @@ function ChoiceButton({
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const [hovered, setHovered] = useState(false);
   // 只有「可切换」且页面确实接了回调的选项才可点：其余状态拒绝出现「点了必然失败」的按钮。
   const selectable = section.state === "available" && onSelect !== null;
 
@@ -214,7 +259,21 @@ function ChoiceButton({
     <Pressable
       role="button"
       disabled={!selectable}
-      style={choice.current ? [styles.choice, styles.choiceCurrent] : styles.choice}
+      style={[
+        styles.choice,
+        choice.current
+          ? styles.choiceCurrent
+          : hovered && selectable
+            ? styles.choiceHover
+            : null,
+        selectable ? null : styles.choiceDisabled,
+      ]}
+      onHoverIn={() => {
+        setHovered(true);
+      }}
+      onHoverOut={() => {
+        setHovered(false);
+      }}
       dataSet={{
         [testKey]: choice.id,
         choiceCurrent: String(choice.current),
@@ -224,27 +283,41 @@ function ChoiceButton({
         onSelect?.(choice.id);
       }}
     >
-      <Text style={choice.current ? [styles.choiceText, styles.choiceTextCurrent] : styles.choiceText}>{choice.name}</Text>
-      {choice.description === null ? null : <Text style={styles.choiceDescription}>{choice.description}</Text>}
+      <View style={styles.choiceBody}>
+        <Text style={choice.current ? [styles.choiceText, styles.choiceTextCurrent] : styles.choiceText}>{choice.name}</Text>
+        {choice.description === null ? null : <Text style={styles.choiceDescription}>{choice.description}</Text>}
+      </View>
+      {choice.current ? <Text style={styles.choiceCheck}>✓</Text> : null}
     </Pressable>
   );
 }
 
-/** 一个分节（模型或模式）：胶囊 + 弹层。 */
+/** 一个分节（模型或模式）：胶囊 + 弹层。展开与否由面板统一持有（同一时间只开一个弹层）。 */
 function SettingsSection({
   name,
   section,
+  open,
+  onToggle,
   onSelect,
   testKey,
 }: {
   readonly name: "model" | "mode" | "thought";
   readonly section: SettingsSectionModel;
+  /** 本分节的弹层是否展开（互斥：开另一个分节会把这个关掉，避免两个弹层叠在同一处）。 */
+  readonly open: boolean;
+  readonly onToggle: () => void;
   readonly onSelect: ((id: string) => void) | null;
   readonly testKey: "modelChoice" | "modeChoice" | "thoughtChoice";
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const [open, setOpen] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const stateStyle =
+    section.state === "switching"
+      ? [styles.state, styles.stateSwitching]
+      : section.state === "available"
+        ? styles.state
+        : [styles.state, styles.stateMuted];
 
   return (
     <View
@@ -259,14 +332,18 @@ function SettingsSection({
     >
       <Pressable
         role="button"
-        style={styles.pill}
+        style={[styles.pill, hovered ? styles.pillHover : null]}
+        onHoverIn={() => {
+          setHovered(true);
+        }}
+        onHoverOut={() => {
+          setHovered(false);
+        }}
         accessibilityLabel={`${SECTION_KICKERS[name]}：${section.currentName ?? "未提供"}`}
         dataSet={{ action: "toggle-settings-popover", settingsPill: name, settingsPillOpen: String(open) }}
-        onPress={() => {
-          setOpen(!open);
-        }}
+        onPress={onToggle}
       >
-        <Text style={styles.kicker}>{name === "model" ? "" : name === "mode" ? "☷" : "思考"}</Text>
+        <Text style={styles.kicker}>{SECTION_KICKERS[name]}</Text>
         <Text numberOfLines={1} style={styles.value} dataSet={{ settingsCurrentName: section.currentName ?? "none" }}>
           {section.currentName ?? "—"}
         </Text>
@@ -279,18 +356,14 @@ function SettingsSection({
         dataSet={{ settingsPopover: name, settingsPopoverOpen: String(open) }}
       >
         <View style={styles.head}>
-          <Text
-            style={section.state === "switching" ? [styles.state, styles.stateSwitching] : styles.state}
-            dataSet={{ settingsStateLabel: section.state }}
-          >
+          {/* 来源与生效时机：选项之前的一条固定说明（不随四态变化）。 */}
+          <Text style={styles.headNote} dataSet={{ settingsSourceNote: name }}>
+            {SECTION_SOURCE_NOTES[name]}
+          </Text>
+          <Text style={stateStyle} dataSet={{ settingsStateLabel: section.state }}>
             {SECTION_STATE_LABELS[section.state]}
           </Text>
         </View>
-
-        {/* 来源与生效时机：选项之前的一条固定说明（不随四态变化）。 */}
-        <Text style={styles.notice} dataSet={{ settingsSourceNote: name }}>
-          {SECTION_SOURCE_NOTES[name]}
-        </Text>
 
         <View style={styles.choices}>
           {section.choices.map((choice) => (
@@ -316,6 +389,12 @@ export function ConversationSettingsPanel({
 }: ConversationSettingsPanelProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  // 展开状态收在面板一级：三个弹层都锚在各自胶囊上方、几乎同位，同时展开会互相叠住，
+  // 因此同一时间只允许一个分节开弹层（再点同一个胶囊即收起）。
+  const [openSection, setOpenSection] = useState<"model" | "mode" | "thought" | null>(null);
+  const toggleSection = (name: "model" | "mode" | "thought") => {
+    setOpenSection(openSection === name ? null : name);
+  };
   // `configId` 缺席时没有可写的配置项（类型上就写不出命令），因此不把它变成「有按钮但点了失败」。
   const modelConfigId = settings.model.configId;
   const selectModel =
@@ -330,12 +409,30 @@ export function ConversationSettingsPanel({
       <SettingsSection
         name="mode"
         section={settings.mode}
+        open={openSection === "mode"}
+        onToggle={() => {
+          toggleSection("mode");
+        }}
         onSelect={onSelectMode === undefined ? null : onSelectMode}
         testKey="modeChoice"
       />
-      <SettingsSection name="model" section={settings.model} onSelect={selectModel} testKey="modelChoice" />
-      <SettingsSection name="thought"
+      <SettingsSection
+        name="model"
+        section={settings.model}
+        open={openSection === "model"}
+        onToggle={() => {
+          toggleSection("model");
+        }}
+        onSelect={selectModel}
+        testKey="modelChoice"
+      />
+      <SettingsSection
+        name="thought"
         section={settings.thought ?? { state: "unavailable", currentId: null, currentName: null, choices: [], notice: "Agent 未提供思考模式。", configId: null }}
+        open={openSection === "thought"}
+        onToggle={() => {
+          toggleSection("thought");
+        }}
         onSelect={settings.thought?.configId == null || onSelectModel === undefined ? null : (value) => {
           const configId = settings.thought?.configId;
           if (configId != null) onSelectModel(configId, value);

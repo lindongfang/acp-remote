@@ -1,6 +1,6 @@
 # ACP Remote 前端设计
 
-> 直接创建与会话删除（2026-10-26，`session-create-and-empty-cleanup`，**已实现**）：§4.6 改为直接 `session.create` + 结果驱动导航 + 到达即声明查看/激活，并写回 `session.deleted` 的幂等消费与缓存清理；§2.2/§9 第 1 条的新建入口同步改为 `session.create`；§7 删除「准备草稿」持久化例外。准备式新建（[ADR-0014](adr/0014-web-session-preparation-before-first-message.md)）已被 [ADR-0016](adr/0016-session-create-and-empty-cleanup.md) 取代——下文所有带「准备式新建 / 准备槽位 / 准备草稿」字样的旧修订记录**仅作历史保留**，不再描述现行行为。
+> 直接创建与会话删除（2026-10-26，`session-create-and-empty-cleanup`，**已实现**）：§4.6 改为直接 `session.create` + 结果驱动导航 + 到达即声明查看/激活，并写回 `session.deleted` 的幂等消费与缓存清理；§2.2/§9 第 1 条的新建入口同步改为 `session.create`；§7 删除「准备草稿」持久化例外。准备式新建（[ADR-0014](../openspec/adr/0014-web-session-preparation-before-first-message.md)）已被 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 取代——下文所有带「准备式新建 / 准备槽位 / 准备草稿」字样的旧修订记录**仅作历史保留**，不再描述现行行为。
 
 > 输入提示与跳转精简（2026-10-24）：移除「跳到你最近的输入」及下一条输入跳转按钮，同时移除其滚动测量与短暂高亮；保留回到底部和待处理项定位。输入框占位提示统一为「输入消息，Enter 发送，Shift+Enter 换行」，不额外占用说明行。
 
@@ -60,7 +60,7 @@
 
 > 会话头顶部收敛（2026-10-23）：会话头只保留标题、主状态、Agent 种类与子 Agent 信息（Agent 胶囊）。标题编辑错误/提示、激活失败/恢复中说明等其它行全部移除；不可提交的原因只在输入区说明，时间线继续承载本轮失败/等待原因。
 
-> 用户消息即时回显（2026-10-23；同日按 `conversation-reliability` WP1 修订）：本设备提交 `session.prompt` 后（该记录成文时还包括首条 `session.start`；该命令已随 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 删除，首条输入现在与后续输入同走 `session.prompt`，见 §4.6），立即把该条用户正文放进时间线（附件消息显示文件名）；Agent 不回显、正式读取尚未返回时也能看到自己发的消息。正式消息返回后按**稳定身份**（本标签页的 `requestId`/`turnId`/`messageId`）原位接替本地回显，MUST NOT 按正文相同或时间接近去重——历史里的「继续」与新发的「继续」是两条独立输入。受理前被 `rejected` 时移除本地回显；已受理后的 `failed`/`uncertain` 保留输入并单独呈现执行结果。本地回显只是待确认视图，长期正文权威是服务端保存的消息（计划，WP2/WP4 实施；当前实现仍按正文计数合并，不得据此宣称已满足）。
+> 用户消息即时回显（2026-10-23；同日按 `conversation-reliability` WP1 修订）：本设备提交 `session.prompt` 后（该记录成文时还包括首条 `session.start`；该命令已随 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 删除，首条输入现在与后续输入同走 `session.prompt`，见 §4.6），立即把该条用户正文放进时间线（附件消息显示文件名）；Agent 不回显、正式读取尚未返回时也能看到自己发的消息。正式消息返回后按**稳定身份**（本标签页的 `requestId`/`turnId`/`messageId`）原位接替本地回显，MUST NOT 按正文相同或时间接近去重——历史里的「继续」与新发的「继续」是两条独立输入。受理前被 `rejected` 时移除本地回显；已受理后的 `failed`/`uncertain` 保留输入并单独呈现执行结果。本地回显只是待确认视图，长期正文权威是服务端保存的消息（计划，WP2/WP4 实施；当前实现仍按正文计数合并，不得据此宣称已满足）。
 
 > 对话区与输入区对齐原型（2026-10-23）：输入区只保留上下文/模型/模式、草稿与发送/停止；页级不可提交原因由输入区说明。时间线不再渲染轮次标识卡片，也不写「正在输出」这类状态文案——进行中由实际的回复、思考、工具、终端条目表达；失败只留失败条。工具/授权/提问卡不再显示「所属轮次」；消息署名为「Agent · <name>」，思考条目不再重复标题。上下文未上报时胶囊只显示「— 上下文 — / —」，不在行内堆状态词。
 
@@ -180,7 +180,7 @@ Git 改动标记叠加在原生滚动容器右侧的内容边缘：绿色表示�
 
 - 可以访问当前节点本地拥有或从其他节点导入、且已授权的 Agent/会话。
 - 可以查看历史和实时事件、继续对话、取消 turn、处理权限请求、选择模型和调用 Agent 暴露且被允许的能力。
-- 第一阶段 PWA 提供在本机目录内创建会话的入口：Agent 只能从本机已配置的 profile 中选择（feature `core.local-catalog.v1` 的快照资源供数，离线也可渲染），目录引用取本机已记录的目录标识（`directoryId`）或用户输入的绝对目录（`workspacePath`）二者之一。Web 入口直接使用 `session.create`（feature `core.session-create.v1`，§4.6）：创建即持久化，首条消息之前会话已存在；准备式新建（feature `core.session-preparation.v1`）已被 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 取代，其合同能力、客户端代码与持久草稿均已移除。入口**不按权限门控**（设备方向没有授权维度，服务端以「已认证」为唯一前提）。客户端**不**展示也不构造规范化路径、目录追加、MCP 配置或凭据；Node Link 侧 `session.create` 额外要求 Owner 导出的 workspace template 且只接受目录标识，PWA 不使用这条形状。
+- 第一阶段 PWA 提供在本机目录内创建会话的入口：Agent 只能从本机已配置的 profile 中选择（feature `core.local-catalog.v1` 的快照资源供数，离线也可渲染），目录引用取本机已记录的目录标识（`directoryId`）或用户输入的绝对目录（`workspacePath`）二者之一。Web 入口直接使用 `session.create`（feature `core.session-create.v1`，§4.6）：创建即持久化，首条消息之前会话已存在；准备式新建（feature `core.session-preparation.v1`）已被 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 取代，其合同能力、客户端代码与持久草稿均已移除。入口**不按权限门控**（设备方向没有授权维度，服务端以「已认证」为唯一前提）。客户端**不**展示也不构造规范化路径、目录追加、MCP 配置或凭据；Node Link 侧 `session.create` 额外要求 Owner 导出的 workspace template 且只接受目录标识，PWA 不使用这条形状。
 - 客户端不能提交任意 Owner 路径：Node Link 面一律禁止，Sync 面的创建命令也只允许一个绝对目录并经本机路径校验（不存在的目录、相对路径与含 `..` 的输入都必须明确失败，不回退到任何替代目录）。客户端不能配置 Provider 凭据、扩大沙箱权限或直接发送任意 ACP JSON-RPC。
 - UI 隐藏按钮不是安全措施；Access 与 Owner Node 必须分别执行授权。
 
@@ -380,7 +380,7 @@ PWA 不需要独立云服务器。`[决定]`（2026-10-15，`sync-ui-hosting`）
 
 `[实现现状]`（2026-10-16，`frontend-sync-wiring`；设备 fragment 入口已被上一条取代，以下仅记录当时的实绩）配对秘密的清理口径落在组合根与 store 上（`clients/app/src/composition.ts`、`src/features/pairing-model.ts`、`src/features/client-store.ts`）：秘密只经两条受控入口进入：地址片段或配对码 lookup。fragment 入口由组合根 `takePairingFragment` **先读后清**——只对 `data=` 形态调 `history.replaceState`，且新地址保留 pathname 与 search（其余形态的片段既不解析也不清除，避免清掉别人的语义），因此秘密不留在地址历史里；配对码入口用一次性 8 位码换回 secret，码与 secret 都不进入 URL、Cookie、localStorage 或 sessionStorage。读到的载荷只活在 `ClientStore` 的**私有**会话字段里，已批准或进入终态时立即丢弃。配对进行中由 store 按本次配对的 `expiresAt`（二维码入口来自载荷，配对码入口来自 lookup 响应）安排一次到期回调：到期即取消轮询、丢弃会话并落到对应终态（二维码入口为「地址已过期」，配对码入口为配对码无效/已过期呈现），页面只负责按同一截止时间显示倒计时。`ClientState` 是可导出、可快照的公开状态，其中没有承载秘密的槽位，秘密因此不进缓存摘要、可导出状态与出站 URL。来源与 secure context 校验已一并落地（`pairing-origin-secure-context`）：**地址片段入口**（`ClientStore.startPairingFromAddress`）在读完载荷之后、发任何请求之前，依次校验**安全上下文 → 来源一致 → 载荷类型**，任一条不过都明确失败且**一个 claim/status 都不发**。**配对码入口**在 lookup 之前只校验**安全上下文**与**码形状**（规范化后为 8 位 Crockford 字母表内的字符，不合法即明确失败、不发 lookup）：它没有载荷可读，因此没有来源一致与载荷类型这两步；来源/Host 由服务端在 lookup 上按登记的 canonical origin 校验。环境事实（是否安全上下文、当前来源）经组合根 `CompositionInputs` 注入（默认读浏览器全局 `isSecureContext` 与 `location.origin`，与 `fetch` 同属一次性能力的注入面，不动 `src/platform/**` 的冻结成员表）；来源比较复用 §3.2 的 canonical origin 口径（浏览器 `URL.origin`），不另造字符串比较。失败码取自封闭词表：来源不符复用既有的 `auth.origin_mismatch`，非安全上下文用新增的 `auth.insecure_context`（已按 §6/§9 的同步清单登记 `compatibility/errors/v1/errors.json`、`schemas/sync/v1/common.schema.json` 的 enum 与 `docs/SYNC_PROTOCOL.md` §12.2）。非安全上下文明确拒绝，不回退到可导出形式的密钥、也不静默降级。
 
-完整决策和信任边界见 [ADR-0001](./adr/0001-pwa-identity-and-secure-transport.md)。Noise 不进入第一阶段，仅保留为未来不可信中继场景的可选 Transport Profile。
+完整决策和信任边界见 [ADR-0001](../openspec/adr/0001-pwa-identity-and-secure-transport.md)。Noise 不进入第一阶段，仅保留为未来不可信中继场景的可选 Transport Profile。
 
 第一阶段浏览器验收覆盖 Android Chrome、iOS Safari 和桌面 Chrome/Edge。HTTPS Provider 必须同时通过 Tailscale Serve 和至少一种非 Tailscale 同机方案。
 
@@ -397,7 +397,7 @@ PWA 不加载第三方脚本、字体或 CDN 资源。CSP 最低基线为 `defau
 
 ### 4.6 直接创建：结果驱动导航、查看与激活（目标，`session-create-and-empty-cleanup` WP4）
 
-> 状态：**已实现**。旧准备式新建（`web-session-preparation` WP7）已被 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 取代，其页面、持久草稿与能力协商已从客户端与合同移除；历史见本节末条。直接创建、页面到达后的激活、切换与删除投影已通过真实 PWA、Daemon 与受控 ACP Agent 的浏览器验收。协议侧见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.5/§11.9，产品语义见 [`INITIAL_DESIGN.md`](./INITIAL_DESIGN.md) §3.7，状态模型见 §5。
+> 状态：**已实现**。旧准备式新建（`web-session-preparation` WP7）已被 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 取代，其页面、持久草稿与能力协商已从客户端与合同移除；历史见本节末条。直接创建、页面到达后的激活、切换与删除投影已通过真实 PWA、Daemon 与受控 ACP Agent 的浏览器验收。协议侧见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §11.5/§11.9，产品语义见 [`INITIAL_DESIGN.md`](./INITIAL_DESIGN.md) §3.7，状态模型见 §5。
 
 - **入口与提交**：目录页、目录详情页与会话左栏的新建入口在选择 Agent 与目录后直接发**一次** `session.create`（每次尝试一个**稳定 `requestId`**，重试复用同一个，不换摘要）。不预分配 ID、不建临时会话、不展示准备表单或「新会话（准备中）」页面；创建成功即持久化，会话在第一条消息之前就已存在并进入目录与会话列表。
 - **结果驱动导航**：只在**匹配该请求的完成终态**（`completed` 且结果里带会话标识）、并且该操作仍是**当前导航意图**时才进入 `/session/<id>`。已受理、失败与 `uncertain` 都不跳转；用户在终态到达前切换了会话或另起导航时，迟到结果 MUST NOT 把页面切回旧会话，也不得产生第二次导航。失败按可区分原因就地呈现；`uncertain` 保留为输入区的不可用原因，绝不自动重发。
@@ -406,7 +406,7 @@ PWA 不加载第三方脚本、字体或 CDN 资源。CSP 最低基线为 `defau
 - **删除的消费**：收到 `session.deleted` 时按**稳定 `eventId` 幂等**应用——移除会话列表项、目录行、摘要缓存、详情缓存、草稿、激活/查看状态与导航历史条目；若当前页正是该会话，`replace` 到目录页 `/`，**不显示任何提示、通知或对话框**。重复投递不产生第二次导航或额外的移除效果。游标过期后的重建快照本来就不含 tombstone，因此删除事件不再可重放时同样收敛。
 - **没有持久草稿与预上传**：新会话草稿只在页面内存（与所有正式会话一致，§7），刷新即丢弃；附件只在点击发送后经既有已认证分块连接上传，不存在「上传/封存先于会话创建」的预上传阶段，也不存在需要迁移或清理的准备附件目标。
 - **没有能力协商与回退**：新建不再协商 `core.session-preparation.v1`（该 feature 已从合同资产与 wire schema 删除，代码随 WP4 移除），也没有「该主机不支持准备式新建」的降级态；`session.create` 的载荷、`createIfMissing` 开关与失败分类不变（§2.2/§9 第 1 条）。
-- **历史（已被取代）**：本节此前描述的准备式新建（同页同地址、准备 ID、`session.start`、单一准备槽位、`PreparationDraftPort` 持久草稿、`preparation.*` 错误处理）已从目标语义、合同资产与客户端实现退役；实现记录见 [ADR-0014](./adr/0014-web-session-preparation-before-first-message.md) 与 `web-session-preparation` 变更。保留本段只为解释历史修订记录里的旧命名，它不再是任何行为依据。
+- **历史（已被取代）**：本节此前描述的准备式新建（同页同地址、准备 ID、`session.start`、单一准备槽位、`PreparationDraftPort` 持久草稿、`preparation.*` 错误处理）已从目标语义、合同资产与客户端实现退役；实现记录见 [ADR-0014](../openspec/adr/0014-web-session-preparation-before-first-message.md) 与 `web-session-preparation` 变更。保留本段只为解释历史修订记录里的旧命名，它不再是任何行为依据。
 
 ## 5. 客户端状态模型
 
@@ -477,7 +477,7 @@ PWA 首个版本只持久化连接和恢复所需的最小数据：
 
 - imported 资源遵守 `no-content-cache` 且**不持久化任何远程资料**：不得把会话摘要、标题、prompt、回复、工具内容、diff、终端、附件、ACP raw、Owner cursor/ACK、命令状态或事件 digest 写入 IndexedDB、Cache Storage 或其他持久浏览器存储。来源游标与重建缓冲只在本次连接内存中存在。
 - 普通会话/imported 上传中的选择项、媒体缓冲与 Blob URL 只存在于页面内存：关闭/刷新即丢弃，不写入 IndexedDB、Cache Storage、Service Worker 或任何持久草稿；已提交附件由 Owner 保存，页面只按需经已认证分块连接读取并即时撤销 Blob URL。直接创建的新会话与正式会话、imported 会话适用同一规则——**不存在任何持久草稿例外**。
-- **历史（已被 ADR-0016 取代）**：`web-session-preparation` WP6 曾允许「本机准备中、尚未首次提交」的页面持久化草稿——IndexedDB 专库 `acp-remote-preparation-v1`（`drafts`/`chunks`/`ownership` 三个对象存储、128 KiB 分块、24 小时孤儿回收）与平台端口 `PreparationDraftPort`，以及配套的标签页归属握手、配额错误映射与「受理后转恢复记录」清理规则。该端口、数据库与该例外随 WP4 一并删除，历史细节见 [ADR-0014](./adr/0014-web-session-preparation-before-first-message.md)。
+- **历史（已被 ADR-0016 取代）**：`web-session-preparation` WP6 曾允许「本机准备中、尚未首次提交」的页面持久化草稿——IndexedDB 专库 `acp-remote-preparation-v1`（`drafts`/`chunks`/`ownership` 三个对象存储、128 KiB 分块、24 小时孤儿回收）与平台端口 `PreparationDraftPort`，以及配套的标签页归属握手、配额错误映射与「受理后转恢复记录」清理规则。该端口、数据库与该例外随 WP4 一并删除，历史细节见 [ADR-0014](../openspec/adr/0014-web-session-preparation-before-first-message.md)。
 - 对当前节点本地拥有的资源，只有节点本地策略显式允许时才缓存精简历史；缓存不是权威数据，重连后以 Daemon 快照和事件日志校正。
 - 敏感字段不得因方便调试而进入普通浏览器存储。
 - 必须设置大小上限、版本和迁移策略：v1 的固定值为本节点自有资源摘要缓存上限 **8 MiB**、TTL **30 天**、超出时按 LRU 淘汰。这些是固定常量，不是可由用户放宽的配置项。
@@ -582,7 +582,7 @@ PWA 测试通过不代表原生客户端的安全存储、后台行为和系统�
 
 ## 独立目录创建（ADR-0010）
 
-「新建」立即创建主机目录，保持选择器打开且不自动确认选择；成功后重新浏览父层，从真实条目取得路径并自动进入新目录，方便继续创建下一级，最后单独选择。刷新失败或截断须与创建成功分开显示，无法取得真实条目时不伪造路径跳转；旧服务端未协商时明确显示不支持独立新建。关闭弹层或取消会话不会删除目录。命令状态与兼容规则见 SYNC_PROTOCOL §11.5、[ADR-0010](adr/0010-immediate-workspace-directory-creation.md)。
+「新建」立即创建主机目录，保持选择器打开且不自动确认选择；成功后重新浏览父层，从真实条目取得路径并自动进入新目录，方便继续创建下一级，最后单独选择。刷新失败或截断须与创建成功分开显示，无法取得真实条目时不伪造路径跳转；旧服务端未协商时明确显示不支持独立新建。关闭弹层或取消会话不会删除目录。命令状态与兼容规则见 SYNC_PROTOCOL §11.5、[ADR-0010](../openspec/adr/0010-immediate-workspace-directory-creation.md)。
 
 新建会话表单的目录为必填，未确认目录时点击创建会话，将目录行的「未选择目录」标红并阻止提交；选定后清除错误状态。不显示额外的必填提示、常驻的未选目录操作说明或未登记目录归属提示。未手动选择 Agent 时选中主机声明的默认 Agent；用户改选后保留其选择，无默认 Agent 时由用户选择。
 

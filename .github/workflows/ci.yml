@@ -8,7 +8,7 @@
 # - `npm run check:rust`：fmt / clippy `-D warnings` / test 三条（本地同一入口是 `npm run verify`）；
 # - `commits` job：提交信息规范（词表见 `commitlint.config.mjs`）。
 #
-# 供应链策略（`docs/SECURITY_DESIGN.md` §16.2，决策与理由见 `docs/adr/0008-ci-supply-chain-tooling.md`）：
+# 供应链策略（`docs/SECURITY_DESIGN.md` §16.2，决策与理由见 `openspec/adr/0008-ci-supply-chain-tooling.md`）：
 # - 官方 `actions/*` 固定到 major，但必须是运行在受支持 Node runtime 上的 major（Node 20 已在
 #   2026-09 从 hosted runner 移除，因此不再使用 checkout@v4 / setup-node@v4 一类旧主版本）；
 # - 第三方 action 只允许按**完整 commit SHA** 固定（`cargo-deny-action`、`gitleaks-action`），

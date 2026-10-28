@@ -1,6 +1,6 @@
 # ACP Remote
 
-开发流程见 [变更执行工作流](docs/WORKFLOW.md)：不要求安装特定编码宿主或模型，也不强制每包启动独立 reviewer。默认串行实现，按风险复核；本地验证与 PR 必需检查仍须通过。
+变更规则由 `openspec/config.yaml` 和 `openspec/schemas/spec-driven/` 承载：探索覆盖全部决策分支，主动识别可并行工作并隔离执行；编码前检视方案与用例，交付由独立 tester 和 reviewer 验收与检视，不继承开发对话。不绑定宿主或模型，本地验证与 PR 必需检查仍须通过。
 
 本地优先的 ACP（Agent Client Protocol）中转站：一个节点可以直接管理本地 Agent，也可以通过 Node Link 导入其他节点导出的 Agent；手机、电脑、Zed、PWA 与 CLI 都是客户端形态，不是固定权限角色。
 
@@ -47,7 +47,7 @@ Owner 侧的**会话恢复**（`session.resume` → ACP `session/resume`）已�
 
 `sync-ui-hosting`（OpenSpec 变更③）的**前端静态资源同源托管**已落地：Daemon 在**根路径**同源托管 PWA 构建产物——入口文档、单页应用回退、按扩展名的内容类型映射（未知扩展名回落 `application/octet-stream`），以及 `Content-Security-Policy`（取值等于 `docs/FRONTEND_DESIGN.md` §4.5 的基线，**由响应头下发**）与四个与配对端点同取值的安全响应头。协议端点行为不变：静态面只是 router 的 fallback，因此 `/sync/v1`、`/node-link/v1` 与两条配对端点天然优先，协议族保留前缀下的未注册子路径仍 404；静态面上的非读取方法返回 `405` + `Allow: GET, HEAD`。产物以 `rust-embed` **嵌入二进制**（资源表在 `server::transport::net::ui`；`crates/server/build.rs` 在编译期于「真实产物 ↔ 树内占位入口」之间二选一，产物目录不入库），**发布构建缺前端产物即拒绝启动**（错误指向先在 `clients/app` 跑 `npm run export:web`），构建版本可经 `daemon.status` 的 `uiBuildVersion` 查看（取自同一份嵌入资源；缺失即 `null`，不编造）。**如实边界**：该变更交付的是「浏览器能加载页面与资源、CSP 生效、协议端点行为不变」；当时尚未闭合的四处接线缺口（连接路径 `/sync` → `/sync/v1`、WS subprotocol、`approved` 响应落 `hostPublicKey`、配对页二维码输入入口）已由变更④ `frontend-sync-wiring` 接上（证据与缺口闭合见下段）；该变更在 `SECURITY_DESIGN.md` §11.1 登记的「产物内联 `<style>` 与 CSP 基线冲突」已由后续变更 `ui-csp-inline-styles` 在前端侧消除（内联形态移除、样式改由同源外部样式表交付，Rust 侧 CSP 未改动，见下段）。
 
-`frontend-sync-wiring`（OpenSpec 变更④）的**前端接线**已落地：**连接契约对齐**（出站地址唯一由组合根构造、路径为权威端点 `/sync/v1`；socket 端口容纳「声明的子协议列表」，Web 实现把它作为 `new WebSocket(url, protocols)` 的第二个参数；子协议值经合同测试与仓库根 `compatibility/errors/v1/errors.json` 的 `protocols.sync.subprotocol` 逐字比对，前端不硬编码第二份；握手处比对服务端选中的 feature 是否覆盖客户端必需集合，未覆盖即阻断）、**配对链路闭合**（状态查询的已批准结果携带主机标识与主机公钥，落盘 `paired-host/<canonicalOrigin>` 记录后进入已配对并触发连接；配对页的入口（**已被后续变更取代**：`pairing-code-web-entry` 增加 8 位配对码输入，`device-pairing-qr-reference` 最终把设备入口收敛为**只用配对码**，见下段）原是打开带配对内容的地址（`#data=` 片段），读到片段后立即清除；`/pair` 的 sync 载荷自动开始认领，`/node-link/pair` 的 node-link 载荷只呈现对端信息、不发起 claim/status；页内没有输入框、粘贴入口、提交按钮或「重新扫码」，也不绘制页头/返回，全局顶栏仍不呈现；结构非法时明确失败且不发请求；配对中按载荷 `expiresAt` 显示真实剩余有效期，归零或打开即过期进入「地址已过期」并停止轮询，审批通过后约 1.6 秒自动进入目录（不等连接在线），失败页按九类固定文案呈现且不提供任何按钮；地址片段中的配对秘密**先读后清**，只活在私有会话字段，不进缓存摘要、可导出状态与出站 URL——这一配对页形态由后续变更 `pairing-page-open-url` 落地，见 [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md) §4.1/§9）与**路由/片段取舍消解**（路由走正常路径 `/`、`/pair`、`/hosts`、`/dir/<alias>`、`/session/<id>`，地址片段只承载配对内容）。`incompatible` 阻断态新增封闭成因词表 `subprotocol_not_selected` / `protocol_version_unsupported` / `required_features_missing`，与「网络断开」在事件层可分，且阻断态**结构性**停止自动重连。实测（主检出）：`cd clients/app && npm run check` = 59 files / 725 passed + `expo export` 成功；`node e2e/run-e2e.mjs` = 51/51（既有 49 条 + PW-1、PW-2；真实 Chromium + 假主机）。**当时登记为未做的两项（现已闭合）**：① 真实 Daemon（同源托管）+ 真实浏览器的端到端验收（按 `docs/WORKFLOW.md` 的 E2E 口径不得以假主机用例代替）——**2026-10-16 已完成**，逐条实测见归档的 `openspec/changes/archive/2026-10-16-frontend-sync-wiring/plan.md` 的「真机验收记录」（其中如实登记为待裁决的「内联样式与 CSP 冲突」已由 `ui-csp-inline-styles` 闭合）；② `SYNC_PROTOCOL.md` §7.1 的「当前 origin 与 secure context」校验——**已实现**（变更 `pairing-origin-secure-context`，主规格 `pwa-web-client` 的「配对入口校验来源与安全上下文」）。原登记的前端缺口「服务端为本机 node-link 生成的配对二维码指向 `/node-link/pair`、而前端没有该路由」已由变更 `node-link-pair-route` 关闭：该路由现已存在（与 `/pair` 共用同一入口主体），路由登记见 [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md) §4.1。**本变更 `pairing-model` 把配对的信任判定收口为两条设备侧密码学校验**：用配对载荷里**固定的**主机公钥验证认领响应的 `hostProof`（失败即停止轮询、不写任何主机记录），以及状态为已批准时校验响应里的主机公钥与载荷**逐字节相同**、主机标识一致（不一致即失败且不落盘；落盘的主机公钥以载荷为准，上一段的「已批准结果落 `hostPublicKey`」即在此基础上加逐字节比对并把取值来源改为载荷）。短验证码（SAS）就此删除——它在这条流程里没有独立职责，理由见 [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md) §5.1。
+`frontend-sync-wiring`（OpenSpec 变更④）的**前端接线**已落地：**连接契约对齐**（出站地址唯一由组合根构造、路径为权威端点 `/sync/v1`；socket 端口容纳「声明的子协议列表」，Web 实现把它作为 `new WebSocket(url, protocols)` 的第二个参数；子协议值经合同测试与仓库根 `compatibility/errors/v1/errors.json` 的 `protocols.sync.subprotocol` 逐字比对，前端不硬编码第二份；握手处比对服务端选中的 feature 是否覆盖客户端必需集合，未覆盖即阻断）、**配对链路闭合**（状态查询的已批准结果携带主机标识与主机公钥，落盘 `paired-host/<canonicalOrigin>` 记录后进入已配对并触发连接；配对页的入口（**已被后续变更取代**：`pairing-code-web-entry` 增加 8 位配对码输入，`device-pairing-qr-reference` 最终把设备入口收敛为**只用配对码**，见下段）原是打开带配对内容的地址（`#data=` 片段），读到片段后立即清除；`/pair` 的 sync 载荷自动开始认领，`/node-link/pair` 的 node-link 载荷只呈现对端信息、不发起 claim/status；页内没有输入框、粘贴入口、提交按钮或「重新扫码」，也不绘制页头/返回，全局顶栏仍不呈现；结构非法时明确失败且不发请求；配对中按载荷 `expiresAt` 显示真实剩余有效期，归零或打开即过期进入「地址已过期」并停止轮询，审批通过后约 1.6 秒自动进入目录（不等连接在线），失败页按九类固定文案呈现且不提供任何按钮；地址片段中的配对秘密**先读后清**，只活在私有会话字段，不进缓存摘要、可导出状态与出站 URL——这一配对页形态由后续变更 `pairing-page-open-url` 落地，见 [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md) §4.1/§9）与**路由/片段取舍消解**（路由走正常路径 `/`、`/pair`、`/hosts`、`/dir/<alias>`、`/session/<id>`，地址片段只承载配对内容）。`incompatible` 阻断态新增封闭成因词表 `subprotocol_not_selected` / `protocol_version_unsupported` / `required_features_missing`，与「网络断开」在事件层可分，且阻断态**结构性**停止自动重连。实测（主检出）：`cd clients/app && npm run check` = 59 files / 725 passed + `expo export` 成功；`node e2e/run-e2e.mjs` = 51/51（既有 49 条 + PW-1、PW-2；真实 Chromium + 假主机）。**当时登记为未做的两项（现已闭合）**：① 真实 Daemon（同源托管）+ 真实浏览器的端到端验收（不得以假主机用例代替真实链路验收）——**2026-10-16 已完成**，逐条实测见归档的 `openspec/changes/archive/2026-10-16-frontend-sync-wiring/plan.md` 的「真机验收记录」（其中如实登记为待裁决的「内联样式与 CSP 冲突」已由 `ui-csp-inline-styles` 闭合）；② `SYNC_PROTOCOL.md` §7.1 的「当前 origin 与 secure context」校验——**已实现**（变更 `pairing-origin-secure-context`，主规格 `pwa-web-client` 的「配对入口校验来源与安全上下文」）。原登记的前端缺口「服务端为本机 node-link 生成的配对二维码指向 `/node-link/pair`、而前端没有该路由」已由变更 `node-link-pair-route` 关闭：该路由现已存在（与 `/pair` 共用同一入口主体），路由登记见 [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md) §4.1。**本变更 `pairing-model` 把配对的信任判定收口为两条设备侧密码学校验**：用配对载荷里**固定的**主机公钥验证认领响应的 `hostProof`（失败即停止轮询、不写任何主机记录），以及状态为已批准时校验响应里的主机公钥与载荷**逐字节相同**、主机标识一致（不一致即失败且不落盘；落盘的主机公钥以载荷为准，上一段的「已批准结果落 `hostPublicKey`」即在此基础上加逐字节比对并把取值来源改为载荷）。短验证码（SAS）就此删除——它在这条流程里没有独立职责，理由见 [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md) §5.1。
 
 `device-pairing-qr-reference`（OpenSpec 变更）的**设备短二维码 + 配对码入口**已实现（Native 真机未执行）：设备二维码改为 `https://<canonical-origin>/pair#q2=<payload>`（版本 `0x02` + 32 字节扫码取回凭据 + 32 字节主机公钥 SHA-256 指纹，共 65 字节负载 / 87 字符），`device.pair.begin` 只生成该短地址并保留四个返回键；新增 `POST /sync/v1/pairing/qr-lookup`（显式校验 `Origin`/`Host`/持久绑定，成功重复取回同一份七字段资料、不消耗网页码、不推进状态，统一失败 `401 pairing.qr_invalid`，独立 10 次/分钟限流）；claim 成功后关闭取回入口。PWA 的设备配对**只使用 8 位配对码**：`/pair` 无片段显示码输入，打开 `#q2=` 只清除片段并显示固定 App 指引，打开旧 `#data=` 清除并提示已停用，两者都不发 lookup/qr-lookup/claim/status；`/node-link/pair` 仍只读展示节点资料。原生消费合同（解码、32 字节完整公钥指纹校验、来源绑定、有限重试）在 `clients/app/src/features/native-qr-consumer.ts`，仅由测试调用，PWA 不接入。**C 链路证据**：`crates/app/tests/device_qr_reference_e2e.rs` 用模拟原生消费方对**真实 `acp-remote` Daemon**（真实 listener/SQLite/Authority）走完「短二维码 → qr-lookup → 65 字节公钥与 SHA-256 指纹 → claim → 本机确认 → status → 携带同一 Origin 的 WSS 四消息认证」，并覆盖响应丢失重试同材料、认领后取回 401、重复 claim 幂等、不同内容 claim 冲突、错误指纹/来源/绑定不发 claim，以及日志/进程输出不含完整 `qrToken`/`pairingSecret`；页面回归由 `node e2e/run-e2e.mjs`（假主机，81/81 通过）覆盖，**不替代真实浏览器对真实 Daemon 的验收**。发布/回滚口径：Daemon 与前端必须配套发布，旧前端缓存/已打开标签页在刷新后失效（静态资源 `no-store`、无 service worker，部署后需硬刷新），未完成配对在重启后失效并需重新生成，新旧二维码格式不混用、不保留双栈解码；已批准的设备身份与会话**不要求重新配对**。本机真实浏览器对真实 Daemon 的 Main E2E 已执行：桌面 1280×900 与手机 390×844 视口分别用配对码完成本机确认并进入目录（在线），打开 `q2=`/旧 `data=` 片段均先清片段、显示固定文案且零配对请求，`/node-link/pair` 只读展示且零请求，主题偏好刷新后保留；Android/iOS App、相机、keystore 与真机扫码不在本轮交付。
 
@@ -65,7 +65,6 @@ Owner 侧的**会话恢复**（`session.resume` → ACP `session/resume`）已�
 
 | 文档 | 内容 |
 |---|---|
-| [docs/WORKFLOW.md](docs/WORKFLOW.md) | 变更执行流程：OpenSpec schema、工作包隔离与 patch 交付、独立检视、串行合入、分层 E2E 与门禁 |
 | [docs/INITIAL_DESIGN.md](docs/INITIAL_DESIGN.md) | 产品目标、系统行为、阶段计划 |
 | [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md) | crate / 模块职责与依赖方向 |
 | [docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md) | 客户端同步协议（认证、cursor、命令、事件） |
@@ -78,8 +77,14 @@ Owner 侧的**会话恢复**（`session.resume` → ACP `session/resume`）已�
 | [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md) | Daemon 配置键、类型与默认值 |
 | [config.example.toml](config.example.toml) | 可直接复制的配置模板（默认值可运行；`node_link.*` 暂不生效），由单元测试解析校验 |
 | [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md) | `core` 值对象、用例面、端口签名、broker 事务顺序与 `storage-sqlite` 表结构/保留/migration |
-| [docs/adr/](docs/adr/) | 已接受的架构决策 |
-| [GLOSSARY.md](GLOSSARY.md) | 术语的唯一用词表：只收「在本仓库里必须唯一」的词（命令五态、受理/拒绝、规范化路径等），不写实现细节 |
+| [openspec/adr/](openspec/adr/) | 已接受的架构决策 |
+| [GLOSSARY.md](openspec/GLOSSARY.md) | 术语的唯一用词表：只收「在本仓库里必须唯一」的词（命令五态、受理/拒绝、规范化路径等），不写实现细节 |
+
+## 开发工作流
+
+变更从 [OpenSpec 配置](openspec/config.yaml) 进入：流程规则在配置中，产物结构与模板在 [spec-driven schema](openspec/schemas/spec-driven/) 中。分工见 [coder（实现）](openspec/role/coder.md)、[tester（测试设计与执行）](openspec/role/tester.md)、[reviewer（独立检视）](openspec/role/reviewer.md)；统一用词见 [术语表](openspec/GLOSSARY.md)，已接受的架构选择见 [ADR（架构决策记录）](openspec/adr/)。
+
+每个变更的 `tests.md` 在编码前规划 L1–L6/LX 用例；长期回归按能力维护在 [testing/suites](openspec/testing/suites/)，逐次结果输出到被忽略的 `openspec/testing/runs/`。`npm run test:workflow` 可重跑工作流结构的自动化正反向测试，并已纳入 `npm run check`；自然语言验收由独立 tester 按用例执行，不能把脚本通过当成全部验收通过。本阶段不新增定时回归调度。
 
 ## 合同检查
 
@@ -92,13 +97,11 @@ npm ci          # 首次或依赖变动后
 npm run verify  # 合同门禁 + fmt / clippy / test，与 CI 的 checks job 同源
 ```
 
-② 命令目录与本仓库封闭词表的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格，以及本地管理的方法集与错误码（`LOCAL_ADMIN_PROTOCOL.md` 的
-
 CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与每日定时任务上跑六个 job：`checks`（`npm run check` + `npm run check:rust`，与本地 `npm run verify` 同源）、`frontend`（`clients/app` 的 `npm ci` + `npm run check`：typecheck + `typecheck:e2e` + vitest + `expo export --platform web`；根目录的检查链不覆盖这个独立工程，见「分支保护」一节的必需检查说明）、`commits`（提交范围规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `scripts/check-dependency-advisories.mjs`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 密钥扫描：push/PR 扫本次范围，每日定时任务扫全历史）。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
 
 `deps` 的 npm 侧判定不直接跑 `npm audit`，而经 [`scripts/check-dependency-advisories.mjs`](scripts/check-dependency-advisories.mjs)：`npm audit` 没有 ignore 机制，而仓库中存在**上游无修复**的 advisory，直接跑会让该 job 永远红灯。该脚本**按 (advisory ID, 工程) 放行已登记项**，未登记项与任何 `critical` 一律失败；每条豁免的理由、适用范围与到期条件写在该脚本的 `ALLOWED` 数组里。判定范围是**两个** npm 工程——仓库根与独立工程 `clients/app`（自带 `package.json` 与 `package-lock.json`，根目录的 `npm ci` / `npm run check` 都不覆盖它），两个工程各跑一次 `npm audit` 后合并判定，失败输出会标明出问题的工程路径。已登记的 5 条豁免里，`deepmerge`（`GHSA-gcqx-w48m-w2h4`）、`node-forge`（`GHSA-86w9-cpqp-85rv`）、`uuid`（`GHSA-w5hq-g745-h8pq`）与 `zod`（`GHSA-mrhx-c7xc-m3w5`）是**不可达**（构建期工具链、产物未包含，或漏洞前提在本仓库不成立）；`decode-uri-component` 的 `GHSA-vcc3-ghjq-m6fr` 则是**真实可达但延后**——它进了 web 产物，修复需 Expo SDK 58，到期条件是「SDK 58 进入 npm `latest` 时升级并删除该条」。与 `advisories`、`secrets` 同理，这层判定**本地没有等价物**，只在 CI 的 `deps` job 运行。
 
-`deps` / `advisories` / `secrets` 需要网络或额外二进制，**没有包含在 `npm run verify` 里**（依赖判决见 [`deny.toml`](deny.toml)，密钥扫描规则见 [`.gitleaks.toml`](.gitleaks.toml)）；工具版本、许可证、向外发送的数据与已知残余风险见 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md)。依赖更新由 [`.github/dependabot.yml`](.github/dependabot.yml) 提出：升版前有冷却期（避免第一时间采用刚发布的版本），minor/patch 分组、major 单独提交，且分组 PR 同样要过全部 job。
+`deps` / `advisories` / `secrets` 需要网络或额外二进制，**没有包含在 `npm run verify` 里**（依赖判决见 [`deny.toml`](deny.toml)，密钥扫描规则见 [`.gitleaks.toml`](.gitleaks.toml)）；工具版本、许可证、向外发送的数据与已知残余风险见 [ADR-0008](openspec/adr/0008-ci-supply-chain-tooling.md)。依赖更新由 [`.github/dependabot.yml`](.github/dependabot.yml) 提出：升版前有冷却期（避免第一时间采用刚发布的版本），minor/patch 分组、major 单独提交，且分组 PR 同样要过全部 job。
 
 提交信息遵循 Conventional Commits（`<type>(<scope>)!?: <主题>`）：type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，本地由 husky 的 `.husky/commit-msg` 钩子在 `npm install` 时装配，CI 的独立 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次（`npm run lint:commits -- --from <base> --to <head>`，`--no-verify` 绕得过本地钩子但绕不过它）。词表与合并豁免规则以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义。
 
@@ -116,9 +119,9 @@ CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.githu
 gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].name' | sort -u
 ```
 
-本仓库当前必需的六个是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
+CI 定义的六个检查名称是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
 **依赖安全公告**、**前端检查（clients/app）**。其中**依赖安全公告**是否必需按
-[ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断：它的失败可能来自与本次改动无关的
+[ADR-0008](openspec/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断：它的失败可能来自与本次改动无关的
 上游 advisory。
 
 **前端检查（clients/app）** 是 2026-10-11 新增的 job。`clients/app` 是独立 npm 工程，根目录的
@@ -138,10 +141,10 @@ gh api repos/lindongfang/acp-remote/branches/main/protection   # 404 = 未启用
 分支保护在 public 仓库上随 GitHub Free 就有，私有仓库需要 GitHub Pro/Team/Enterprise。**本仓库是 public**
 （2026-09-23 核实：`gh api repos/lindongfang/acp-remote --jq .visibility` 返回 `public`），所以这一项没有 plan 前提。
 
-**已核实的现状（2026-09-23）**：ruleset **`main-protection`**（id `23858733`）——`target: branch`、
+**历史核实记录（2026-09-23，不代表当前线上设置）**：ruleset **`main-protection`**（id `23858733`）——`target: branch`、
 `enforcement: active`、条件 `ref_name: ["~DEFAULT_BRANCH"]`；规则为 `deletion` + `non_fast_forward` +
 `required_status_checks`（`strict_required_status_checks_policy = true`、`do_not_enforce_on_create = false`，
-五个必需检查就是上面那五个上报名，已逐个与 check-runs 对上）+ `pull_request`
+当时的五个必需检查已逐个与 check-runs 对上；后续新增前端检查，当前必需集合须按线上 ruleset 与 check-runs 重新核实）+ `pull_request`
 （`required_approving_review_count = 0`；单人仓库必须是 0，否则自己的 PR 无人可批准）；
 bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 仍返回 404：
 本仓库用 ruleset 而不是经典分支保护，两者不需要同时开。
@@ -150,7 +153,7 @@ bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 
 （依赖许可证与来源、依赖安全公告、密钥扫描）是先于落地的门禁；bypass 让直推仍然可行，但那是紧急出口不是
 日常路径（直推会跳过这三个判定）。变更落地流程是：分支 → PR → `gh pr checks --watch` → squash 合并
 （`gh pr create --fill`；squash 合并用 PR 标题当提交信息，因此标题同样要合规）。本地合入到开 PR
-之间的完整步骤（含六个必需检查与 up-to-date 要求）见 [`docs/WORKFLOW.md`](docs/WORKFLOW.md) §6.1–§6.2。
+之前须完成本地 `npm run verify`；前端改动另在 `clients/app` 运行 `npm run check`。提交前检查实际差异、暂存范围和 `git diff --check`，不得混入用户的无关修改。PR 必须通过线上规则要求的全部检查，并确认本次变更适用的 CI 检查全部通过；落后 main 时先更新并重新检查。
 
 没有再上「移除 bypass」的理由：对单人仓库它不是对你的安全边界（你本来就能改 ruleset），只是减速带；
 而它的代价是真实的一一某个 workflow 改动把必需检查弄红时，所有 PR 都进不来，你还得先去改设置。
@@ -160,7 +163,7 @@ bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 
 `.gitleaks.toml`。自研 keystore 条目**明文**形态的规则（`acpr-keystore-plaintext-entry`）已随
 `identity-auth-and-keystore` 落地；它的**首次真实执行仍在 CI 的 `secrets` job**（本机无 gitleaks），
 且只覆盖「被 base64/base64url 编码后的明文条目」这一形态——原始二进制与 DPAPI 密文无法模式识别。详情见下方与
-`docs/adr/0008-ci-supply-chain-tooling.md` 的残余风险 3。
+`openspec/adr/0008-ci-supply-chain-tooling.md` 的残余风险 3。
 
 已核实为**已开启的**（2026-09-23）：`secret_scanning`、`secret_scanning_push_protection`、
 Dependabot 告警与安全更新。push protection 在推送前拦截已知 provider 模式的凭据——这个时序 CI 给不了；

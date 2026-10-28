@@ -15,17 +15,21 @@
 //   通过本脚本只等于"资产结构合法"——不等于需求描述正确、不等于 specs 与代码一致。
 //   代码与合同的绑定由其余九道门禁负责。
 //
-// 五项检查：
-//   1) 变更与规范的 `validate --all --strict`；
+// 六项检查：
+//   1) 长期规范全量strict，已有specs或进入tests/plan/tasks的变更逐个strict；
 //   2) 项目本地 schema 的结构合法（artifact 依赖、apply.requires、模板引用）；
 //   3) config.yaml 的 `schema:` 指向真实可解析的 schema；
 //   4) fork 出来的 schema 里「照搬引擎」的模板与上游逐字节一致（分歧只允许在自写模板里）；
 //   5) rules / operations.guidance 的条目不会被 YAML 静默丢弃。
+//   6) 独立角色/术语、活动变更的proposal必备节、plan结构（必备节、工作包表、
+//      Main E2E一致性、工作包被tasks引用）与tests结构（spec文件引用存在性；场景
+//      名称与覆盖仍由reviewer复核）、长期tests结构，以及apply对tests的依赖。
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateWorkflowAssets } from "./openspec-test-cases.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const engine = join(root, "node_modules", "@fission-ai", "openspec", "bin", "openspec.js");
@@ -63,8 +67,21 @@ function run(label, args) {
   return `${result.stdout ?? ""}`;
 }
 
-// 1) 变更与规范资产的严格校验。无活动变更时引擎以 0 退出，因此空仓库同样通过。
-run("openspec validate --all --strict", ["validate", "--all", "--strict"]);
+// 1) 规范始终strict；只有空/proposal/design规划前缀可暂缺delta。
+// 任何specs路径（即使目录为空/损坏）、tests及后续产物均不能借此绕过strict。
+run("openspec validate --specs --strict", ["validate", "--specs", "--strict"]);
+const changesRoot = join(root, "openspec", "changes");
+if (existsSync(changesRoot)) {
+  for (const entry of readdirSync(changesRoot, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory() || entry.name === "archive" || entry.name.startsWith(".")) continue;
+    const changeDir = join(changesRoot, entry.name);
+    const metadata = join(changeDir, ".openspec.yaml");
+    const skipsSpecs = existsSync(metadata) && /^skip_specs:\s*true\b/m.test(readFileSync(metadata, "utf8"));
+    if (skipsSpecs || ["specs", "tests.md", "plan.md", "tasks.md"].some((path) => existsSync(join(changeDir, path)))) {
+      run(`openspec validate ${entry.name} --type change --strict`, ["validate", entry.name, "--type", "change", "--strict"]);
+    }
+  }
+}
 
 // 2) 项目本地 workflow schema 的结构校验（artifact 依赖、apply.requires、模板引用）。
 //    逐目录调用：`schema validate` 不接受 `--all`，只接受单个 schema 名。
@@ -112,7 +129,7 @@ if (existsSync(configPath)) {
 //    `template` 字段是必填、且拒绝指向 schema 目录之外（`relativePathSchema` 禁止 `..` 与绝对路径），
 //    所以 fork 必须自带模板——没有「复用引擎版」这条路。
 //
-//    本仓库的策略是：只让**新增的** artifact 用自写模板（plan.md），其余保持与上游逐字节相同，
+//    本仓库的策略是：只让新增 artifact 用自写模板（plan/tests），其余保持与上游逐字节相同，
 //    分歧面归零、升级时只需 `cp`。这个策略必须被机器判定，否则升级 `@fission-ai/openspec` 后
 //    上游模板若变化，本地的副本会安静地过期而没人发现。
 //
@@ -122,7 +139,7 @@ if (existsSync(configPath)) {
 const FORKED_FROM = { "spec-driven": "spec-driven" };
 
 /** 本仓库在覆写 schema 里自写的 artifact（引擎内置版没有的）。新增时同步此表。 */
-const AUTHORED_ARTIFACTS = ["plan"];
+const AUTHORED_ARTIFACTS = ["plan", "tests"];
 if (existsSync(schemaRoot)) {
   for (const [local, upstream] of Object.entries(FORKED_FROM)) {
     const localDir = join(schemaRoot, local);
@@ -258,9 +275,19 @@ function parseSimpleSection(text, section) {
   return result.size > 0 ? result : null;
 }
 
+// 6) 活动变更和长期用例的固定结构；不回写或追溯要求历史归档。
+errors.push(...validateWorkflowAssets(root));
+// 产物存在不代表apply仍然依赖它：防止升级schema时门禁被静默卸掉。
+const workflowPath = join(schemaRoot, "spec-driven", "schema.yaml");
+if (existsSync(workflowPath)) {
+  const workflow = readFileSync(workflowPath, "utf8");
+  const apply = workflow.match(/^apply:\s*\r?\n\s+requires:\s*\[([^\]]+)\]/m);
+  if (!apply || !apply[1].split(",").map((id) => id.trim()).includes("tests")) errors.push("spec-driven apply.requires 必须包含 tests");
+}
+
 if (errors.length > 0) {
   console.error(`openspec check failed with ${errors.length} problem(s):`);
   for (const error of errors) console.error(`- ${error}`);
   process.exit(1);
 }
-console.log("openspec OK: 变更与规范通过 --strict 校验，本地 schema 结构合法且照搬模板与上游一致，config.yaml 的 schema/rules/guidance 配置有效");
+console.log("openspec OK: 规范/schema/config与活动及长期测试用例结构合法（不代表验收已执行）");

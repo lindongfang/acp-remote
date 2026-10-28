@@ -45,3 +45,6 @@ openspec/changes/**/reports/**/*.log
 
 # 编码宿主配置属于本机偏好，不再作为项目执行依赖
 /.omp/
+
+# 可重复用例入库；逐次执行输出、截图和原始报告由本地/CI保管
+/openspec/testing/runs/
