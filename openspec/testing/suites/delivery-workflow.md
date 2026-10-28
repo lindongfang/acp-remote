@@ -245,4 +245,3 @@
 - Cleanup: 保存输入、输出、退出码及逐ID结果；成功/失败/取消均只清理自身临时资源，CLI超时30秒。
 - Schedule: acceptance,pr,on-demand
 - Entry: 仓库根运行node --test scripts/tests/openspec-tests.test.mjs及npm run check；L3逐例调用validatePlanDocument/validateTestDocument/validateWorkflowAssets，L4执行真实CLI status/instructions --json；L5独立逐条对照config、schema、role、模板及交付plan记录证据。
-

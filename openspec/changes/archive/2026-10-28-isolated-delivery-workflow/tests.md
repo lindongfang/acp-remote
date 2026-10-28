@@ -211,5 +211,3 @@
 - Cleanup: 保存输入、输出和退出码到独立执行记录；仅清理本例拥有的临时副本及资源，不改主工作区或既有归档。
 - Schedule: acceptance,pr,on-demand
 - Entry: git diff -- .github openspec/config.yaml openspec/schemas openspec/role AGENTS.md。
-
-
