@@ -16,14 +16,14 @@
 //   代码与合同的绑定由其余九道门禁负责。
 //
 // 六项检查：
-//   1) 变更与规范的 `validate --all --strict`；
+//   1) 长期规范全量strict，已有specs或进入tests/plan/tasks的变更逐个strict；
 //   2) 项目本地 schema 的结构合法（artifact 依赖、apply.requires、模板引用）；
 //   3) config.yaml 的 `schema:` 指向真实可解析的 schema；
 //   4) fork 出来的 schema 里「照搬引擎」的模板与上游逐字节一致（分歧只允许在自写模板里）；
 //   5) rules / operations.guidance 的条目不会被 YAML 静默丢弃。
 //   6) 独立角色/术语、活动变更的proposal必备节、plan结构（必备节、工作包表、
-//      Main E2E一致性、工作包被tasks引用）与tests结构（spec引用存在性、L5场景
-//      锚定）、长期tests结构，以及apply对tests的依赖。
+//      Main E2E一致性、工作包被tasks引用）与tests结构（spec文件引用存在性；场景
+//      名称与覆盖仍由reviewer复核）、长期tests结构，以及apply对tests的依赖。
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -67,8 +67,21 @@ function run(label, args) {
   return `${result.stdout ?? ""}`;
 }
 
-// 1) 变更与规范资产的严格校验。无活动变更时引擎以 0 退出，因此空仓库同样通过。
-run("openspec validate --all --strict", ["validate", "--all", "--strict"]);
+// 1) 规范始终strict；只有空/proposal/design规划前缀可暂缺delta。
+// 任何specs路径（即使目录为空/损坏）、tests及后续产物均不能借此绕过strict。
+run("openspec validate --specs --strict", ["validate", "--specs", "--strict"]);
+const changesRoot = join(root, "openspec", "changes");
+if (existsSync(changesRoot)) {
+  for (const entry of readdirSync(changesRoot, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory() || entry.name === "archive" || entry.name.startsWith(".")) continue;
+    const changeDir = join(changesRoot, entry.name);
+    const metadata = join(changeDir, ".openspec.yaml");
+    const skipsSpecs = existsSync(metadata) && /^skip_specs:\s*true\b/m.test(readFileSync(metadata, "utf8"));
+    if (skipsSpecs || ["specs", "tests.md", "plan.md", "tasks.md"].some((path) => existsSync(join(changeDir, path)))) {
+      run(`openspec validate ${entry.name} --type change --strict`, ["validate", entry.name, "--type", "change", "--strict"]);
+    }
+  }
+}
 
 // 2) 项目本地 workflow schema 的结构校验（artifact 依赖、apply.requires、模板引用）。
 //    逐目录调用：`schema validate` 不接受 `--all`，只接受单个 schema 名。

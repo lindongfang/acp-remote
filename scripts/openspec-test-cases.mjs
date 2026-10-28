@@ -1,6 +1,7 @@
 // tests.md只登记用例；校验器不执行其中命令，也不证明独立验收已经完成。
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { parseDocument } from "yaml";
 
 export const LEVELS = ["L1", "L2", "L3", "L4", "L5", "L6", "LX"];
 const FIELDS = ["Level", "Requirement", "Executor", "Tool", "Preconditions", "Environment", "Steps", "Expected", "Cleanup", "Schedule", "Entry"];
@@ -14,31 +15,50 @@ function filled(value) {
   return Boolean(text) && !/^(?:TODO|TBD|待填写|替换为.*|<[^>]*>)$/i.test(text);
 }
 
+// 去掉说明性注释和围栏中的示例；保留行号，供用例与真实任务共同使用。
+function markdownLines(text, preserveFences = false) {
+  const source = text.replace(/\r\n?/g, "\n").replace(/^\uFEFF/, "");
+  const lines = [];
+  let fence = null;
+  let inComment = false;
+  for (const line of source.split("\n")) {
+    if (fence) {
+      const marker = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !line.slice(marker[0].length).trim()) fence = null;
+      lines.push(preserveFences ? line : "");
+      continue;
+    }
+    let rest = line;
+    let visible = "";
+    while (rest) {
+      const boundary = rest.indexOf(inComment ? "-->" : "<!--");
+      if (boundary < 0) { if (!inComment) visible += rest; break; }
+      if (!inComment) visible += rest.slice(0, boundary);
+      rest = rest.slice(boundary + (inComment ? 3 : 4));
+      inComment = !inComment;
+    }
+    const marker = /^\s*(`{3,}|~{3,})/.exec(visible);
+    if (marker) {
+      fence = marker[1];
+      lines.push(preserveFences ? visible : "");
+    } else lines.push(visible);
+  }
+  return { lines, unclosedFence: Boolean(fence) };
+}
+
 /**
  * Fixed Markdown format; returned diagnostics include file/case/field.
- * baseDirs 决定 spec 引用从哪里解析（活动变更加变更目录解析 delta，长期套件只对
- * openspec/）；requireSpecRef 仅用于活动变更的 tests.md：L5 用例必须引用 spec
- * 场景。长期套件允许锚定 config/role 规则，只校验已写引用真实存在。
+ * specRoot 是长期 openspec 根，changeRoot 是活动变更根。裸 specs 路径只对当前
+ * changeRoot（suite无changeRoot时对specRoot），显式openspec/specs只对specRoot。
+ * requireSpecRef只要求L5存在文件引用；场景名称和覆盖仍由独立reviewer复核。
  */
 export function validateTestDocument(text, label = "tests.md", options = {}) {
-  const baseDirs = options.baseDirs ?? [];
+  const { specRoot, changeRoot } = options;
   const requireSpecRef = options.requireSpecRef ?? false;
   const errors = [];
   const fail = (message) => errors.push(`${label}: ${message}`);
-  // Comments/fences are examples, not declarations. Blank them without joining lines.
-  const source = text.replace(/\r\n?/g, "\n").replace(/^\uFEFF/, "")
-    .replace(/<!--[^]*?-->/g, (part) => part.replace(/[^\n]/g, ""));
-  const lines = [];
-  let fence = null;
-  for (const line of source.split("\n")) {
-    const marker = /^\s*(`{3,}|~{3,})/.exec(line);
-    if (marker) {
-      if (!fence) fence = marker[1];
-      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length) fence = null;
-      lines.push("");
-    } else lines.push(fence ? "" : line);
-  }
-  if (fence) fail("未关闭的代码围栏");
+  const { lines, unclosedFence } = markdownLines(text);
+  if (unclosedFence) fail("未关闭的代码围栏");
   for (const title of ["Levels", "Cases"]) {
     if (lines.filter((line) => line === `## ${title}`).length !== 1) fail(`需要且仅允许一个 ## ${title}`);
   }
@@ -101,14 +121,13 @@ export function validateTestDocument(text, label = "tests.md", options = {}) {
     const refs = [...requirement.matchAll(SPEC_REF_PATTERN)].map((match) => match[0]);
     for (const ref of refs) {
       const relative = ref.replace(/^openspec\//, "");
-      const resolved = baseDirs.some((dir) => {
-        const candidate = join(dir, relative);
-        return existsSync(candidate) && statSync(candidate).isFile();
-      });
+      const dir = ref.startsWith("openspec/") ? specRoot : (changeRoot ?? specRoot);
+      const candidate = dir && join(dir, relative);
+      const resolved = candidate && existsSync(candidate) && statSync(candidate).isFile();
       if (!resolved) fail(`${id} Requirement 引用的 ${ref} 不存在`);
     }
     if (requireSpecRef && fields.get("Level") === "L5" && refs.length === 0) {
-      fail(`${id} L5 用例必须引用 spec 场景路径（specs/<capability>/spec.md）`);
+      fail(`${id} L5 用例必须引用 spec 文件路径（specs/<capability>/spec.md）`);
     }
   }
   for (const [level, mode] of applicability) if (mode === "required" && !covered.has(level)) fail(`${level} required 但没有用例`);
@@ -138,11 +157,18 @@ const PLAN_HEADING_SECTIONS = ["Work Packages", "Main E2E", "Findings", "Verific
 export function validatePlanDocument(text, label = "plan.md", options = {}) {
   const errors = [];
   const fail = (message) => errors.push(`${label}: ${message}`);
-  const source = text.replace(/\r\n?/g, "\n").replace(/^\uFEFF/, "").replace(/<!--[^]*?-->/g, "");
+  const { lines: planLines, unclosedFence } = markdownLines(text, true);
+  if (unclosedFence) fail("plan.md 未关闭的代码围栏");
   const sections = new Map();
   let current = null;
-  for (const line of source.split("\n")) {
-    const heading = /^## (.+?)\s*$/.exec(line);
+  let sectionFence = null;
+  for (const line of planLines) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (marker) {
+      if (!sectionFence) sectionFence = marker[1];
+      else if (marker[1][0] === sectionFence[0] && marker[1].length >= sectionFence.length && !line.slice(marker[0].length).trim()) sectionFence = null;
+    }
+    const heading = !sectionFence && /^## (.+?)\s*$/.exec(line);
     if (heading) {
       current = heading[1];
       if (!sections.has(current)) sections.set(current, []);
@@ -177,30 +203,50 @@ export function validatePlanDocument(text, label = "plan.md", options = {}) {
     }
     if (headerIndex >= 0 && wpIds.length === 0) fail("Work Packages 至少需要一个工作包");
     if (options.tasksText != null) {
+      const { lines, unclosedFence } = markdownLines(options.tasksText);
+      if (unclosedFence) fail("tasks.md 未关闭的代码围栏");
+      // 与引擎正常任务的列表标记/单字符checkbox兼容；项目关联不计示例。
+      const tasks = lines.flatMap((line) => {
+        const match = /^\s*(?:[-*+]|\d{1,9}[.)])\s*\[(?:\s*([^\]\s]?)\s*\](?![([])|\s+\])\s*(.*)/.exec(line);
+        return match ? [new Set(match[2].match(/[A-Za-z0-9_-]+/g) ?? [])] : [];
+      });
       for (const id of wpIds) {
-        if (!options.tasksText.includes(id)) fail(`工作包 ${id} 未被 tasks.md 引用`);
+        if (!tasks.some((refs) => refs.has(id))) fail(`工作包 ${id} 未被 tasks.md 引用（须为真实任务中的完整ID）`);
       }
+      tasks.forEach((refs, index) => {
+        if (!wpIds.some((id) => refs.has(id))) fail(`tasks.md 第 ${index + 1} 个任务未引用已声明工作包`);
+      });
     }
   }
   if (sections.has("Main E2E")) {
-    const fence = /```[^\n]*\n([^]*?)```/.exec((sections.get("Main E2E") ?? []).join("\n"));
-    if (!fence) fail("Main E2E 需要 yaml 配置块");
+    const fences = [...bodyOf("Main E2E").matchAll(/^[ \t]*(`{3,}|~{3,})ya?ml[ \t]*\n([^]*?)^[ \t]*\1[ \t]*$/gm)];
+    if (fences.length !== 1) fail("Main E2E 需要且仅允许一个 yaml 配置块");
     else {
-      const values = new Map();
-      for (const line of fence[1].split("\n")) {
-        const match = /^([A-Za-z_]+):[ \t]*(.*)$/.exec(line.trim());
-        if (match) values.set(match[1], match[2].split(/\s+#/)[0].trim());
+      let values;
+      try {
+        const doc = parseDocument(fences[0][2]);
+        if (doc.errors.length || doc.warnings.length) throw new Error("YAML语法、重复键或不支持的tag");
+        values = doc.toJS({ maxAliasCount: 0 });
+        if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("配置必须是映射");
+      } catch {
+        fail("Main E2E 非法 YAML 配置（不允许重复键或别名）");
+        return errors;
       }
-      const hasValue = (value) => Boolean(value) && value !== "[]" && value !== '""';
-      const mode = values.get("mode");
+      const mode = values.mode;
       if (mode !== "required" && mode !== "not-applicable") fail("Main E2E mode 必须为 required 或 not-applicable");
-      else if (mode === "not-applicable") {
-        for (const field of ["reason", "basis", "alternative_checks"]) {
-          if (!hasValue(values.get(field))) fail(`Main E2E ${field} 在 not-applicable 时必填`);
-        }
-      } else {
-        for (const field of ["reason", "basis", "alternative_checks"]) {
-          if (hasValue(values.get(field))) fail(`Main E2E ${field} 在 required 时必须留空`);
+      for (const field of ["reason", "basis", "alternative_checks"]) {
+        const value = values[field];
+        const validType = value == null || (field === "alternative_checks"
+          ? Array.isArray(value) && value.every((item) => typeof item === "string" && item.trim().length > 0)
+          : typeof value === "string");
+        if (!validType) { fail(`Main E2E ${field} 类型错误`); continue; }
+        const nonEmpty = field === "alternative_checks" ? Boolean(value?.length) : Boolean(value?.trim().length);
+        if (mode === "not-applicable" && !nonEmpty) fail(`Main E2E ${field} 在 not-applicable 时必填`);
+        if (mode === "required" && nonEmpty) fail(`Main E2E ${field} 在 required 时必须留空`);
+      }
+      for (const key of Object.keys(values)) {
+        if (!["mode", "reason", "basis", "alternative_checks"].includes(key)) {
+          fail(`Main E2E 未知字段 ${key}`);
         }
       }
     }
@@ -224,10 +270,21 @@ export function validateWorkflowAssets(root) {
     if (!entry.isDirectory() || entry.name === "archive" || entry.name.startsWith(".")) continue;
     const changeDir = join(changes, entry.name);
     const label = `openspec/changes/${entry.name}`;
+    const has = (name) => existsSync(join(changeDir, name)) && statSync(join(changeDir, name)).isFile();
+    // 允许保存规划前缀；已经出现的下游产物不能绕过其前置。
+    const dependencies = {
+      "design.md": ["proposal.md"],
+      "tests.md": ["proposal.md", "design.md"],
+      "plan.md": ["proposal.md", "design.md", "tests.md"],
+      "tasks.md": ["proposal.md", "design.md", "tests.md", "plan.md"],
+    };
+    for (const [artifact, prerequisites] of Object.entries(dependencies)) {
+      if (has(artifact)) for (const prerequisite of prerequisites) {
+        if (!has(prerequisite)) errors.push(`${label}/${prerequisite}: ${artifact} 已存在，必须具备此前置产物`);
+      }
+    }
     const proposalPath = join(changeDir, "proposal.md");
-    if (!existsSync(proposalPath) || !statSync(proposalPath).isFile()) {
-      errors.push(`${label}/proposal.md: 活动变更必须具备 proposal.md`);
-    } else {
+    if (has("proposal.md")) {
       const proposal = readFileSync(proposalPath, "utf8");
       errors.push(...requireSection(proposal, "Exploration", `${label}/proposal.md`));
       errors.push(...requireSection(proposal, "Success Criteria", `${label}/proposal.md`));
@@ -236,9 +293,8 @@ export function validateWorkflowAssets(root) {
     const skipSpecs = existsSync(openspecYaml)
       && /^skip_specs:\s*true\b/m.test(readFileSync(openspecYaml, "utf8"));
     const path = join(changeDir, "tests.md");
-    if (!existsSync(path) || !statSync(path).isFile()) errors.push(`${label}/tests.md: 活动变更必须具备 tests.md`);
-    else errors.push(...validateTestDocument(readFileSync(path, "utf8"), `${label}/tests.md`, {
-      baseDirs: [changeDir, join(root, "openspec")],
+    if (has("tests.md")) errors.push(...validateTestDocument(readFileSync(path, "utf8"), `${label}/tests.md`, {
+      changeRoot: changeDir, specRoot: join(root, "openspec"),
       requireSpecRef: !skipSpecs,
     }));
     const planPath = join(changeDir, "plan.md");
@@ -254,7 +310,7 @@ export function validateWorkflowAssets(root) {
       const path = join(dir, entry.name), label = `${prefix}/${entry.name}`;
       if (entry.isDirectory()) scan(path, label);
       else if (entry.isFile() && entry.name.endsWith(".md")) {
-        errors.push(...validateTestDocument(readFileSync(path, "utf8"), label, { baseDirs: [join(root, "openspec")] }));
+        errors.push(...validateTestDocument(readFileSync(path, "utf8"), label, { specRoot: join(root, "openspec") }));
       }
     }
   }

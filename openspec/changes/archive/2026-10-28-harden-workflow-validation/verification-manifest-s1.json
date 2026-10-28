@@ -1,0 +1,102 @@
+{
+  "version": "S1",
+  "baseline": "dfe136128844f016e3d806948997a2df7a61b712",
+  "excluded": [
+    "this manifest itself",
+    "ignored runtime reports",
+    "plan Findings and Verification Results",
+    "tasks checkbox status only"
+  ],
+  "files": [
+    {
+      "path": "openspec/changes/harden-workflow-validation/.openspec.yaml",
+      "normalization": "raw-bytes",
+      "sha256": "c23535bd63e3f8fbf93d3e37666eaa77ccfad13620a5ba14768b1cb95c453a1c"
+    },
+    {
+      "path": "openspec/changes/harden-workflow-validation/design.md",
+      "normalization": "raw-bytes",
+      "sha256": "b7bf3704871e4292cc8ebd5df2d7d5f3a87801cc35d173b6f8ba8c7e7703e552"
+    },
+    {
+      "path": "openspec/changes/harden-workflow-validation/plan.md",
+      "normalization": "LF; prefix before ## Findings",
+      "sha256": "2c8cb78b3141dfe2ad502e99227a93c7a460a9fb5c8b63520c38e6c5699a04df"
+    },
+    {
+      "path": "openspec/changes/harden-workflow-validation/proposal.md",
+      "normalization": "raw-bytes",
+      "sha256": "bad7c0fddad6bc10145c72fa2dcbdef1b913474b66478f3d236f86a582239da0"
+    },
+    {
+      "path": "openspec/changes/harden-workflow-validation/tasks.md",
+      "normalization": "LF; checkbox markers replaced by [ ]",
+      "sha256": "099aee208be64877252e48a9de7aa26de05e7d8420e509a7f160c141a3c11deb"
+    },
+    {
+      "path": "openspec/changes/harden-workflow-validation/tests.md",
+      "normalization": "raw-bytes",
+      "sha256": "dbc86fda169996093d117fdd597c6962f733c93a994cc231846de7a4780007f5"
+    },
+    {
+      "path": "openspec/config.yaml",
+      "normalization": "raw-bytes",
+      "sha256": "20beafc90d558f5bcd4b15a34028a8c9ba80be8c42a569b2de85aace20fa64ea"
+    },
+    {
+      "path": "openspec/role/reviewer.md",
+      "normalization": "raw-bytes",
+      "sha256": "f86ae003463fc9101b22c0388d4f2f338a28a88f80170021f45105426e0f6e09"
+    },
+    {
+      "path": "openspec/role/tester.md",
+      "normalization": "raw-bytes",
+      "sha256": "b388d3d036db9e40a38655da1f3f9f005a8a2088514be4a0787254cc6256f533"
+    },
+    {
+      "path": "openspec/schemas/spec-driven/schema.yaml",
+      "normalization": "raw-bytes",
+      "sha256": "71e6a7de2803f0babd4f3f7b622a1f2a19dccb58bc16a9863d92763c2ec64610"
+    },
+    {
+      "path": "openspec/schemas/spec-driven/templates/plan.md",
+      "normalization": "raw-bytes",
+      "sha256": "ad5b716def85d84c8274ea64f8d9220cd9e482ad169a7f73559beb0d39bb8de5"
+    },
+    {
+      "path": "openspec/schemas/spec-driven/templates/tests.md",
+      "normalization": "raw-bytes",
+      "sha256": "728ce75992b9e77c3f160d31363c2c31ac31d634389daf0e7aa051f02ec25ed5"
+    },
+    {
+      "path": "openspec/testing/suites/delivery-workflow.md",
+      "normalization": "raw-bytes",
+      "sha256": "f3b6f03df2ca10e9aede9091710ec1f62d3e32132a557346068f466e86ad203c"
+    },
+    {
+      "path": "package-lock.json",
+      "normalization": "raw-bytes",
+      "sha256": "43447894ac2312d070e3b6411ed20e47b2dbf3a172935e95a23144ca7c103f18"
+    },
+    {
+      "path": "package.json",
+      "normalization": "raw-bytes",
+      "sha256": "95823fbde15b79ede83c4412f6b99a0958ad8f938dca81d2cca18f6d88ab4326"
+    },
+    {
+      "path": "scripts/check-openspec.mjs",
+      "normalization": "raw-bytes",
+      "sha256": "802fe6a00d73ca1a64f448963c2a4cd344e83e07a106dd8e91ba5b23efdc30aa"
+    },
+    {
+      "path": "scripts/openspec-test-cases.mjs",
+      "normalization": "raw-bytes",
+      "sha256": "61164caa925bb40fed27b7092789f60aa83078cbbb6b7b26d9078fd1e2303cff"
+    },
+    {
+      "path": "scripts/tests/openspec-tests.test.mjs",
+      "normalization": "raw-bytes",
+      "sha256": "cd960bec9685bafc19e85f4045df3425f4cc6a715b5c34390e399c3dea9bf5c5"
+    }
+  ]
+}

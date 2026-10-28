@@ -207,12 +207,17 @@ artifacts:
     instruction: |
       An independent tester creates one tests.md before coding. Read
       openspec/role/tester.md and project config. Do not inherit coder dialogue.
+      Initially use proposal/specs/design without waiting for plan; after plan
+      exists, review its execution arrangements before implementation.
       Cover every L1-L6/LX level with required or not-applicable and a reason.
       Use the exact template field names, stable case IDs, requirement/scenario
       references, execution mode, tool, preconditions, environment, steps,
       expected assertions, cleanup, schedule and executable entry.
-      L5 comes from confirmed behavioral specs; every L5 case cites a spec path
-      such as `specs/<capability>/spec.md`, which the local gate verifies exists.
+      L5 comes from confirmed behavioral specs. In an active change, bare
+      specs/<capability>/spec.md means its delta; explicit openspec/specs paths
+      mean durable specs. In durable suites, bare paths mean durable specs.
+      Never fall back across roots. The gate checks file existence only;
+      reviewer verifies Requirement/Scenario names and coverage separately.
       skip_specs changes reference the proposal's Success Criteria section instead.
       L6 states real/mock component boundaries.
       Coder owns development unit tests; tester owns acceptance expectations.
@@ -274,9 +279,13 @@ artifacts:
 
       The local gate also validates plan structure: required sections with
       non-empty bodies, a Work Packages table with 7 columns and unique IDs,
-      Main E2E yaml consistency (mode required or not-applicable with matching
-      fields), and every Work Package ID referenced by at least one task in
-      tasks.md.
+      Main E2E typed YAML consistency (one block, no duplicate keys or aliases;
+      non-empty reason/basis strings and string-list alternative_checks for
+      not-applicable; omitted/null/typed empty values for required). Each Work
+      Package ID must appear as a complete token in a real checkbox task;
+      comments/fences/prose and prefix matches do not count. Every real task
+      references a declared package. Persist verification summaries using the
+      plan template; apply config rules for evidence invalidation and reuse.
     requires:
       - specs
       - design

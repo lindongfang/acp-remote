@@ -1,6 +1,6 @@
 # 开发工作流长期回归用例
 
-来源变更：isolated-delivery-workflow；历史首次定义保留在 openspec/changes/archive/2026-10-28-isolated-delivery-workflow/tests.md。该路径是出处说明，不作为当前用例或执行入口。本套件维护当前工作流要求，不回写历史定义。
+来源变更：isolated-delivery-workflow；harden-workflow-validation修订阶段、精确关联、YAML类型、规范根及证据规则；历史首次定义保留在 openspec/changes/archive/2026-10-28-isolated-delivery-workflow/tests.md。该路径是出处说明，不作为当前用例或执行入口。本套件维护当前工作流要求，不回写历史定义。
 
 每次执行选定当前工作流固定快照，记录提交及差异文件SHA-256、OS、Node/npm与依赖；禁止绑定首次交付基线。配置权威是 openspec/config.yaml，职责权威是 openspec/role/{coder,tester,reviewer}.md。用例的实现位于 scripts/tests/，执行报告独立输出 openspec/testing/runs/<run-id>/。角色编排的语义由独立Agent按规范检验，不将CLI样例称为完整AI编排自动化。Schedule只是未来执行选择；第一阶段未接入定时调度，第二阶段以当时确认范围实施，不代表日/周用例已经运行。
 
@@ -68,8 +68,8 @@
 - Tool: node:test；validateWorkflowAssets
 - Preconditions: 临时目录有最小合法角色、术语、活动proposal/plan/tests与长期suites；负向样例每次只注入一个缺陷，先确认合法基线通过。
 - Environment: 固定快照的独立临时工作区；Node满足package.json engines、锁定依赖已安装；记录OS、Node/npm、提交及差异hash；不修改主工作区。
-- Steps: 逐一移除GLOSSARY、三个role中任一个、活动proposal、活动plan、活动tests或损坏长期suite；移除活动proposal的Exploration或Success Criteria节；破坏活动plan的必备节、工作包表或Main E2E一致性；单独加入无tests历史归档；测试相似archive名称普通活动目录。
-- Expected: 必需资产和活动用例损坏、活动proposal缺失或缺必备节、活动plan结构损坏返回错误；历史归档不追溯补写；相似名称不能取得历史豁免；拒绝必须是非空错误数组、非零退出码或明确blocked状态，警告后成功不算拒绝。
+- Steps: 逐一移除GLOSSARY、三个role中任一个或损坏长期suite；空变更及合法proposal/design/tests/plan规划前缀应通过；design出现要求proposal，tests出现要求proposal/design，plan出现要求proposal/design/tests，tasks出现要求完整前置，逐一移除前置应拒绝；移除活动proposal的Exploration或Success Criteria节；破坏活动plan的必备节、工作包表或Main E2E一致性；单独加入无tests历史归档；测试相似archive名称普通活动目录；真实check-openspec完整入口验证空/proposal/design且无specs前缀通过，坏delta、空specs目录、缺前置、未skip无spec下游及坏长期规范拒绝。
+- Expected: 全局必需资产和已出现活动产物损坏、下游缺前置、活动proposal缺必备节、活动plan结构损坏返回错误；合法规划前缀不因后续产物未生成失败；历史归档不追溯补写；相似名称不能取得历史豁免；拒绝必须是非空错误数组、非零退出码或明确blocked状态，警告后成功不算拒绝。
 - Cleanup: 保存输入、输出和退出码到独立执行记录；仅清理本例拥有的临时副本及资源，不改主工作区或既有归档。
 - Schedule: acceptance,pr,daily,on-demand
 - Entry: node --test scripts/tests/openspec-tests.test.mjs。
@@ -110,8 +110,8 @@
 - Tool: 仓库锁定OpenSpec CLI；Node
 - Preconditions: 临时副本使用新schema；遥测和更新检查关闭；负向样例每次只注入一个缺陷，先确认合法基线通过。
 - Environment: 固定快照的独立临时工作区；Node满足package.json engines、锁定依赖已安装；记录OS、Node/npm、提交及差异hash；不修改主工作区。
-- Steps: 建立最小skip_specs变更，按proposal/specs/design/tests/plan/tasks顺序查询并生成规划，其中specs按skip_specs显式跳过；读取status及instructions tests/plan/apply JSON；缺tests时查询plan和apply，再补全重查。
-- Expected: tests是真实必产物且在plan之前；缺tests时plan与apply均被阻断；补齐后可恢复；运行时下发模板与规则一致；拒绝必须是非空错误数组、非零退出码或明确blocked状态，警告后成功不算拒绝。
+- Steps: 建立最小skip_specs变更，先验证空变更及proposal/design阶段，不要求提前有tests或plan；tester首次按proposal/specs/design编写tests，plan生成后复核执行安排；按proposal/specs/design/tests/plan/tasks顺序查询并生成规划，其中specs按skip_specs显式跳过；读取status及instructions tests/plan/apply JSON；缺tests时查询plan和apply，再补全重查。
+- Expected: tests是真实必产物且在plan之前；缺tests时plan与apply均被阻断；补齐后可恢复；运行时下发模板与规则一致；真实check-openspec对长期spec全量strict，无specs且无tests/plan/tasks且非skip_specs的规划前缀暂缓delta strict，已有specs（含空目录）、下游或skip_specs则必须逐变更strict；拒绝必须是非空错误数组、非零退出码或明确blocked状态，警告后成功不算拒绝。
 - Cleanup: 保存输入、输出和退出码到独立执行记录；仅清理本例拥有的临时副本及资源，不改主工作区或既有归档。
 - Schedule: acceptance,weekly,on-demand
 - Entry: 分别执行 node node_modules/@fission-ai/openspec/bin/openspec.js status --change <临时变更> --json、node node_modules/@fission-ai/openspec/bin/openspec.js instructions tests --change <临时变更> --json、node node_modules/@fission-ai/openspec/bin/openspec.js instructions apply --change <临时变更> --json。
@@ -139,7 +139,7 @@
 - Preconditions: 准备S1/S2版本及问题F-001示例；负向样例每次只注入一个缺陷，先确认合法基线通过。
 - Environment: 固定快照的独立临时工作区；Node满足package.json engines、锁定依赖已安装；记录OS、Node/npm、提交及差异hash；不修改主工作区。
 - Steps: 核验tester/reviewer目标；确认固定快照覆盖规则、脚本、模板和用例；模拟同HEAD不同工作树及S1/S2不一致；核对原始独立报告、plan结果与tasks勾选分别留证；排除结果记录时记录明确路径范围及理由；对F-001记录发现、修复、复验与关闭；检查修复后的受影响用例重验；归档路径变化单独复核。
-- Expected: 不一致版本不可结束；证据含提交及未提交差异hash或不可变快照标识，覆盖规则、脚本、模板和用例；原始报告不可由plan自评或tasks勾选替代；排除结果记录范围明确且不排除被验资产；归档路径变化有单独复核证据；每个阻断问题同ID闭环；未执行不写通过；拒绝必须是非空错误数组、非零退出码或明确blocked状态，警告后成功不算拒绝。
+- Expected: 不一致版本不可结束；证据含提交及未提交差异hash或不可变快照标识，覆盖规则、脚本、模板和用例；持久plan摘要必须含可重建受测清单、执行者环境、命令、逐ID结论、未执行项、问题关闭与限制，原始报告不可访问时仍可判断；原始报告不可由plan自评或tasks勾选替代；排除结果记录范围明确且不排除被验资产；需求/预期/实现/合同/测试变化须独立判断失效范围并重验受影响项；纯结果记录明确分离且不得掩盖被验内容变化；归档路径变化有映射和内容一致性单独复核证据；每个阻断问题同ID闭环；未执行不写通过；拒绝必须是非空错误数组、非零退出码或明确blocked状态，警告后成功不算拒绝。
 - Cleanup: 保存输入、输出和退出码到独立执行记录；仅清理本例拥有的临时副本及资源，不改主工作区或既有归档。
 - Schedule: acceptance,weekly,on-demand
 - Entry: 对照独立报告目标版本及问题表，复算快照标识。
@@ -152,7 +152,7 @@
 - Tool: 文件对照；独立Agent
 - Preconditions: 当前临时样例tests和长期能力suite可读；负向样例每次只注入一个缺陷，先确认合法基线通过。
 - Environment: 固定快照的独立临时工作区；Node满足package.json engines、锁定依赖已安装；记录OS、Node/npm、提交及差异hash；不修改主工作区。
-- Steps: 核验每例字段、层级适用性和能力归属；确认coder维护单元测试、tester维护验收预期；注入coder为了消除失败擅改验收预期的反例；再模拟tester确认需求确已变化，先更新specs并经过复核再变更验收用例；确认稳定回归进入能力suite；模拟执行失败并检查结果记录位置。
+- Steps: 核验每例字段、层级适用性和能力归属；行为变化用例关联准确的文件、Requirement及Scenario，并逐项复核覆盖；文件存在门禁不代表场景存在或需求覆盖，本次不自动扩大覆盖算法；确认coder维护单元测试、tester维护验收预期；注入coder为了消除失败擅改验收预期的反例；再模拟tester确认需求确已变化，先更新specs并经过复核再变更验收用例；确认稳定回归进入能力suite；模拟执行失败并检查结果记录位置。
 - Expected: coder可以维护单元测试但擅改验收预期会被阻断；tester确认需求变更后先维护specs并经复核，再更新验收预期，不以消除失败为理由放宽要求；结果单独记录ID、版本和证据；历史tests保留；失败或未执行不勾完成；拒绝必须是非空错误数组、非零退出码或明确blocked状态，警告后成功不算拒绝。
 - Cleanup: 保存输入、输出和退出码到独立执行记录；仅清理本例拥有的临时副本及资源，不改主工作区或既有归档。
 - Schedule: acceptance,weekly,on-demand
@@ -200,4 +200,49 @@
 - Schedule: acceptance,weekly,on-demand
 - Entry: git diff -- .github openspec/config.yaml openspec/schemas openspec/role AGENTS.md。
 
+
+
+### WF-015 精确任务关联
+
+- Level: L3
+- Requirement: config.yaml rules.plan/tests及阶段规则；来源harden-workflow-validation编码前基线。
+- Executor: automation
+- Tool: Node内置测试器、真实锁定OpenSpec CLI、Git、独立Agent。
+- Preconditions: 固定提交和差异文件SHA-256清单；锁定依赖已安装；合法基线及单缺陷反例。
+- Environment: Windows独立临时目录/数据/进程；真实解析器与CLI、模拟规划数据；不接外部服务，不触碰用户资源。
+- Steps: WP1合法基线逐一变成WP10/WP1-extra/注释/围栏/标题/普通段落；测试未知ID、空任务及多个声明ID、反引号、中文标点正例。
+- Expected: 只有真实checkbox正文完整ID满足关联；每任务至少引用一个声明ID；反例拒绝且正常并列引用通过。
+- Cleanup: 保存输入、输出、退出码及逐ID结果；成功/失败/取消均只清理自身临时资源，CLI超时30秒。
+- Schedule: acceptance,pr,on-demand
+- Entry: 仓库根运行node --test scripts/tests/openspec-tests.test.mjs及npm run check；L3逐例调用validatePlanDocument/validateTestDocument/validateWorkflowAssets，L4执行真实CLI status/instructions --json；L5独立逐条对照config、schema、role、模板及交付plan记录证据。
+
+
+### WF-016 YAML类型与空值
+
+- Level: L3
+- Requirement: config.yaml rules.plan/tests及阶段规则；来源harden-workflow-validation编码前基线。
+- Executor: automation
+- Tool: Node内置测试器、真实锁定OpenSpec CLI、Git、独立Agent。
+- Preconditions: 固定提交和差异文件SHA-256清单；锁定依赖已安装；合法基线及单缺陷反例。
+- Environment: Windows独立临时目录/数据/进程；真实解析器与CLI、模拟规划数据；不接外部服务，不触碰用户资源。
+- Steps: 对reason/basis/alternative_checks逐一测试省略、null/Null/NULL/~、单/双引号空串、空白串、[]/[ ]；测试引号null与合法列表；注入数值、布尔、映射、嵌套列表、重复键、别名、语法错误、多个配置块。
+- Expected: not-applicable前两字段非空字符串、后者非空字符串列表；required只接受字段合法类型的空值或省略；引号null非空；错误类型/重复键/别名/不唯一块拒绝，正常两模式通过。
+- Cleanup: 保存输入、输出、退出码及逐ID结果；成功/失败/取消均只清理自身临时资源，CLI超时30秒。
+- Schedule: acceptance,pr,on-demand
+- Entry: 仓库根运行node --test scripts/tests/openspec-tests.test.mjs及npm run check；L3逐例调用validatePlanDocument/validateTestDocument/validateWorkflowAssets，L4执行真实CLI status/instructions --json；L5独立逐条对照config、schema、role、模板及交付plan记录证据。
+
+
+### WF-017 路径根隔离
+
+- Level: L3
+- Requirement: config.yaml rules.plan/tests及阶段规则；来源harden-workflow-validation编码前基线。
+- Executor: automation
+- Tool: Node内置测试器、真实锁定OpenSpec CLI、Git、独立Agent。
+- Preconditions: 固定提交和差异文件SHA-256清单；锁定依赖已安装；合法基线及单缺陷反例。
+- Environment: Windows独立临时目录/数据/进程；真实解析器与CLI、模拟规划数据；不接外部服务，不触碰用户资源。
+- Steps: 磁盘样例分别仅delta、仅长期、同名两者、皆缺；活动tests测试裸specs与显式openspec/specs，suite测试裸路径，目录冒充文件。
+- Expected: 活动裸路径只当前delta，显式路径只长期，suite裸路径只长期；不得跨根回退，目录拒绝，正确路径通过。
+- Cleanup: 保存输入、输出、退出码及逐ID结果；成功/失败/取消均只清理自身临时资源，CLI超时30秒。
+- Schedule: acceptance,pr,on-demand
+- Entry: 仓库根运行node --test scripts/tests/openspec-tests.test.mjs及npm run check；L3逐例调用validatePlanDocument/validateTestDocument/validateWorkflowAssets，L4执行真实CLI status/instructions --json；L5独立逐条对照config、schema、role、模板及交付plan记录证据。
 

@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync, rmSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { LEVELS, validateTestDocument, validateWorkflowAssets } from "../openspec-test-cases.mjs";
+import { LEVELS, validatePlanDocument, validateTestDocument, validateWorkflowAssets } from "../openspec-test-cases.mjs";
 
 const fields = {
   Level: "L2", Requirement: "proposal验收条目R1", Executor: "automation", Tool: "Node",
@@ -87,6 +87,7 @@ function fixture(t) {
   for (const path of ["openspec/GLOSSARY.md", "openspec/role/coder.md", "openspec/role/tester.md", "openspec/role/reviewer.md"]) put(path, "# 已填写职责\n");
   mkdirSync(join(root, "openspec/adr"), { recursive: true });
   put("openspec/changes/sample/proposal.md", proposal);
+  put("openspec/changes/sample/design.md", "# Design\n\n测试规划依据。\n");
   put("openspec/changes/sample/tests.md", valid);
   put("openspec/changes/sample/plan.md", plan);
   put("openspec/changes/sample/tasks.md", "# Tasks\n\n- [ ] 1.1 WP1 实现X；完成判据为npm run check通过。\n");
@@ -100,7 +101,7 @@ test("活动用例和长期套件真实磁盘校验；仅精确archive豁免", (
   put("openspec/changes/archive/old/proposal.md", "旧归档不要求tests");
   assert.deepEqual(validateWorkflowAssets(root), []);
   put("openspec/changes/archive-lookalike/proposal.md", "普通活动变更");
-  assert.match(validateWorkflowAssets(root).join("\n"), /archive-lookalike.*tests.md/);
+  assert.match(validateWorkflowAssets(root).join("\n"), /archive-lookalike.*Exploration/);
 });
 
 for (const path of ["openspec/GLOSSARY.md", "openspec/role/coder.md", "openspec/role/tester.md", "openspec/role/reviewer.md", "openspec/changes/sample/proposal.md", "openspec/changes/sample/tests.md", "openspec/adr", "openspec/testing/suites"]) {
@@ -135,7 +136,7 @@ test("L5用例Requirement的spec引用门禁", (t) => {
   put("openspec/specs/durable/spec.md", "# Durable Spec\n");
   const levels5 = levels.replace("| L2 | required", "| L2 | not-applicable").replace("| L5 | not-applicable", "| L5 | required");
   const doc = (requirement) => `# Tests\n\n${levels5}## Cases\n\n${block({ ...fields, Level: "L5", Requirement: requirement })}`;
-  const options = { baseDirs: [join(root, "openspec/changes/sample"), join(root, "openspec")], requireSpecRef: true };
+  const options = { changeRoot: join(root, "openspec/changes/sample"), specRoot: join(root, "openspec"), requireSpecRef: true };
   assert.deepEqual(validateTestDocument(doc("`specs/demo/spec.md` :: 成功场景"), "t", options), []);
   assert.deepEqual(validateTestDocument(doc("`openspec/specs/durable/spec.md` :: 场景"), "t", options), []);
   assert.match(validateTestDocument(doc("`specs/missing/spec.md`"), "t", options).join("\n"), /specs\/missing\/spec\.md 不存在/);
@@ -182,6 +183,163 @@ test("Main E2E模式一致性门禁", (t) => {
     .replace("basis: 无用户可见行为", 'basis: ""')
     .replace("alternative_checks: [L2]", "alternative_checks: []"));
   assert.deepEqual(requiredEmpty, []);
+});
+
+test("工作包只关联真实任务完整ID，兼容引擎列表和checkbox形式", () => {
+  const check = (tasksText) => validatePlanDocument(plan, "plan", { tasksText });
+  for (const text of [
+    "- [ ] 1.1 `WP1`；检查通过", "* [x] WP1", "+ [] WP1", "1. [~] WP1", "  2) [ x ] WP1",
+    "- [ ] WP1、WP1（中文标点）", "- [ ] WP1\r\n",
+  ]) assert.deepEqual(check(text), [], text);
+  for (const text of [
+    "- [ ] WP10", "- [ ] WP1-extra", "- [ ] WP1_extra", "- [ ] 1WP1", "- [ ] otherWP1",
+    "<!-- - [ ] WP1 -->", "<!--\n- [ ] WP1\n-->", "```md\n- [ ] WP1\n```",
+    "~~~md\n- [ ] WP1\n~~~", "## WP1", "WP1", "- WP1", "- [WIP] WP1", "- [1](WP1)",
+  ]) assert.match(check(text).join("\n"), /工作包 WP1 未被/, text);
+  assert.match(check("- [ ] WP1\n- [ ] WP99").join("\n"), /第 2 个任务未引用/);
+  assert.match(check("- [ ] WP1\n- [ ] 没有关联").join("\n"), /第 2 个任务未引用/);
+  assert.match(check("- [ ] WP1\n```md\nexample").join("\n"), /未关闭/);
+  const multi = plan.replace("| WP1 | 实现X", "| WP2 | 实现X")
+    .replace("| WP2 | 实现X", "| WP1 | 实现X | 方案检视 | coder | src/** | diff | npm run check |\n| WP2 | 实现X");
+  assert.deepEqual(validatePlanDocument(multi, "plan", { tasksText: "- [ ] WP1、`WP2` 验证" }), []);
+});
+
+test("Main E2E实际YAML空值、类型与语法，不凭字面值放行", () => {
+  const e2e = (yaml) => plan.replace(/```yaml\n[^]*?```/, `\`\`\`yaml\n${yaml}\n\`\`\``);
+  const validValues = { mode: "not-applicable", reason: "工具链变更", basis: "无产品变化", alternative_checks: "[L2]" };
+  const doc = (overrides) => e2e(Object.entries({ ...validValues, ...overrides }).map(([key, value]) => `${key}: ${value}`).join("\n"));
+  assert.deepEqual(validatePlanDocument(doc({})), []);
+  for (const field of ["reason", "basis", "alternative_checks"]) {
+    for (const empty of ["", "null", "Null", "NULL", "~", "''", '\"\"', "'   '", "[]", "[ ]"]) {
+      assert.match(validatePlanDocument(doc({ [field]: empty })).join("\n"), new RegExp(field), `${field}: ${empty}`);
+    }
+    const omitted = doc({}).replace(new RegExp(`^${field}:.*\\n`, "m"), "");
+    assert.match(validatePlanDocument(omitted).join("\n"), new RegExp(field));
+    for (const value of ["42", "false", "{}", "[{}]", "[[L2]]"]) {
+      assert.match(validatePlanDocument(doc({ [field]: value })).join("\n"), /类型错误/, `${field}: ${value}`);
+    }
+  }
+  for (const value of ["'null'", "'~'", "'case #1: valid'", "|\n  多行理由"]) {
+    assert.deepEqual(validatePlanDocument(doc({ reason: value })), [], value);
+  }
+  for (const field of ["reason", "basis"]) {
+    for (const value of ["TODO", "TBD", "'<!-- explanation -->'"]) {
+      assert.deepEqual(validatePlanDocument(doc({ [field]: value })), [], `${field}: ${value}`);
+      const required = doc({ mode: "required", reason: "null", basis: "''", alternative_checks: "[]", [field]: value });
+      assert.match(validatePlanDocument(required).join("\n"), new RegExp(`${field} 在 required 时必须留空`));
+    }
+  }
+  assert.deepEqual(validatePlanDocument(doc({ reason: "工具链\n## Handoff" })), []);
+  assert.deepEqual(validatePlanDocument(doc({ alternative_checks: "\n  - L2\n  - L3" })), []);
+  for (const value of ["[null]", "[false]", "['']", "['   ']"]) {
+    assert.match(validatePlanDocument(doc({ alternative_checks: value })).join("\n"), /类型错误/);
+  }
+  for (const yaml of [
+    "mode: required", "mode: required\nreason: null\nbasis: ''\nalternative_checks: [ ]",
+    "mode: required\nreason: ' '\nbasis: ~\nalternative_checks: null",
+  ]) assert.deepEqual(validatePlanDocument(e2e(yaml)), []);
+  for (const yaml of [
+    "mode: required\nmode: not-applicable", "mode: [", "[]", "mode: &value required\nreason: *value",
+    "mode: required\nreason: {}", "mode: required\nalternative_checks: ''", "mode: required\nreasonn: x",
+  ]) assert.ok(validatePlanDocument(e2e(yaml)).length > 0, yaml);
+  const duplicate = doc({}).replace("## Handoff", "```yaml\nmode: required\n```\n\n## Handoff");
+  assert.match(validatePlanDocument(duplicate).join("\n"), /仅允许一个/);
+});
+
+test("规范路径只解析指定根，同名文件不得互相补位", (t) => {
+  const { root, put } = fixture(t);
+  const changeRoot = join(root, "openspec/changes/sample"), specRoot = join(root, "openspec");
+  const check = (ref, options = { changeRoot, specRoot }) => validateTestDocument(
+    valid.replace(fields.Requirement, ref), "tests", options);
+  put("openspec/changes/sample/specs/demo/spec.md", "# Delta\n");
+  assert.deepEqual(check("specs/demo/spec.md"), []);
+  assert.match(check("openspec/specs/demo/spec.md").join("\n"), /不存在/);
+  put("openspec/specs/demo/spec.md", "# Durable\n");
+  assert.deepEqual(check("openspec/specs/demo/spec.md"), []);
+  assert.deepEqual(check("specs/demo/spec.md", { specRoot }), []);
+  rmSync(join(changeRoot, "specs/demo/spec.md"));
+  assert.match(check("specs/demo/spec.md").join("\n"), /不存在/);
+  assert.deepEqual(check("openspec/specs/demo/spec.md"), []);
+  rmSync(join(specRoot, "specs/demo/spec.md"));
+  mkdirSync(join(specRoot, "specs/demo/spec.md"));
+  assert.match(check("openspec/specs/demo/spec.md").join("\n"), /不存在/);
+});
+
+test("规划前缀可保存，下游产物必须具备前置且已有内容须合法", (t) => {
+  const { root, put } = fixture(t);
+  const change = join(root, "openspec/changes/sample");
+  const remove = (name) => rmSync(join(change, name), { force: true });
+  for (const name of ["tasks.md", "plan.md", "tests.md", "design.md", "proposal.md"]) remove(name);
+  assert.deepEqual(validateWorkflowAssets(root), []);
+  put("openspec/changes/sample/proposal.md", proposal);
+  assert.deepEqual(validateWorkflowAssets(root), []);
+  put("openspec/changes/sample/design.md", "# Design\n");
+  assert.deepEqual(validateWorkflowAssets(root), []);
+  put("openspec/changes/sample/tests.md", valid);
+  assert.deepEqual(validateWorkflowAssets(root), []);
+  put("openspec/changes/sample/plan.md", plan);
+  assert.deepEqual(validateWorkflowAssets(root), []);
+  const tasks = "- [ ] WP1 实现并验证";
+  put("openspec/changes/sample/tasks.md", tasks);
+  assert.deepEqual(validateWorkflowAssets(root), []);
+  for (const [name, value] of [["proposal.md", proposal], ["design.md", "# Design\n"], ["tests.md", valid], ["plan.md", plan]]) {
+    remove(name);
+    assert.match(validateWorkflowAssets(root).join("\n"), new RegExp(`${name}:.*前置产物`));
+    put(`openspec/changes/sample/${name}`, value);
+  }
+  for (const name of ["tasks.md", "plan.md", "tests.md", "proposal.md"]) remove(name);
+  assert.match(validateWorkflowAssets(root).join("\n"), /proposal.md: design.md.*前置产物/);
+});
+
+test("真实完整门禁允许规划前缀，但不豁免坏delta、缺前置或长期规范", (t) => {
+  const { root, put } = fixture(t);
+  const repo = fileURLToPath(new URL("../../", import.meta.url));
+  // 只共享只读依赖；测试创建的规划与脚本在独立临时项目中。
+  symlinkSync(join(repo, "node_modules"), join(root, "node_modules"), "junction");
+  cpSync(join(repo, "openspec/schemas"), join(root, "openspec/schemas"), { recursive: true });
+  put("openspec/config.yaml", "schema: spec-driven\n");
+  for (const file of ["check-openspec.mjs", "openspec-test-cases.mjs"]) {
+    put(`scripts/${file}`, readFileSync(join(repo, "scripts", file), "utf8"));
+  }
+  put("package.json", '{"type":"module"}\n');
+  const change = join(root, "openspec/changes/sample");
+  for (const name of ["tasks.md", "plan.md", "tests.md", "design.md", "proposal.md"]) rmSync(join(change, name));
+  const invoke = () => spawnSync(process.execPath, [join(root, "scripts/check-openspec.mjs")], {
+    cwd: root, encoding: "utf8", timeout: 30000,
+    env: { ...process.env, OPENSPEC_TELEMETRY: "0", OPENSPEC_NO_UPDATE_CHECK: "1", DO_NOT_TRACK: "1" },
+  });
+  const passes = () => {
+    const result = invoke();
+    assert.equal(result.status, 0, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`);
+  };
+  const fails = (pattern) => {
+    const result = invoke();
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, pattern);
+  };
+  passes();
+  put("openspec/changes/sample/proposal.md", proposal);
+  passes();
+  put("openspec/changes/sample/design.md", "# Design\n");
+  passes();
+  mkdirSync(join(change, "specs"));
+  fails(/No deltas|at least one delta/i);
+  put("openspec/changes/sample/specs/demo/spec.md", "# Broken delta\n");
+  fails(/No delta sections|No deltas/i);
+  rmSync(join(change, "specs"), { recursive: true });
+  put("openspec/changes/sample/tests.md", valid);
+  fails(/No deltas|at least one delta/i);
+  put("openspec/changes/sample/.openspec.yaml", "schema: spec-driven\nskip_specs: true\n");
+  passes();
+  put("openspec/changes/sample/plan.md", plan);
+  passes();
+  put("openspec/changes/sample/tasks.md", "- [ ] 1.1 WP1 实现并验证\n");
+  passes();
+  rmSync(join(change, "tests.md"));
+  fails(/tests.md:.*前置产物/);
+  put("openspec/changes/sample/tests.md", valid);
+  put("openspec/specs/broken/spec.md", "# Broken durable spec\n");
+  fails(/broken/);
 });
 
 test("真实CLI：tests先于plan、缺失阻断apply、补齐恢复及归档保真", (t) => {

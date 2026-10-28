@@ -22,7 +22,7 @@
 ### CAP-001 用例标题
 
 - Level: L5
-- Requirement: 替换为spec文件及Scenario名称（specs/<capability>/spec.md，门禁校验存在）；skip_specs时引用proposal.md的Success Criteria条目
+- Requirement: 替换为spec文件及Requirement/Scenario名称；活动裸specs指增量，显式openspec/specs指长期，suite裸路径指长期；门禁只校验文件，reviewer核对场景与覆盖；skip_specs引用proposal.md的Success Criteria条目
 - Executor: automation
 - Tool: 替换为具体测试程序、浏览器工具或人工
 - Preconditions: 替换为输入、账户/身份、状态和测试数据前提

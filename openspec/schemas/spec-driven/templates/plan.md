@@ -46,7 +46,7 @@
 mode: not-applicable # required | not-applicable
 reason: "" # not-applicable 时必填
 basis: "" # not-applicable 时必填
-alternative_checks: [] # not-applicable 时必填
+alternative_checks: [] # not-applicable 时为非空字符串列表
 ```
 
 <!-- 使用当前可用的真实浏览器或桌面测试工具，按行为选择真实组件，不绑定宿主接口。
@@ -70,7 +70,19 @@ alternative_checks: [] # not-applicable 时必填
 
 ## Verification Results
 
-<!-- 不重复用例。记录提交或受测文件清单SHA-256、环境、逐用例结果摘要和报告位置。
-明确被排除的结果记录/tasks勾选；同HEAD不同工作树不是同版本。
-失败/未执行保持真实状态。CI同版本同范围证据可复用。
-同步specs/长期能力用例后归档，再复核路径与实际集成结果，之后才准备PR。 -->
+<!-- 以下摘要必须入库，原始runs报告是附加证据，不能只填报告路径或tasks状态。
+按config判定证据有效性和复用，不复制用例步骤。未执行保持真实状态。 -->
+
+- 受测版本：<!-- 提交或完整文件清单/删除项及SHA-256；清单必须入库或可由提交重建 -->
+- 摘要排除范围：<!-- plan结果、tasks状态及报告；不能排除实现/配置/测试变化 -->
+- 执行者与环境：<!-- tester/reviewer、OS、依赖及工具版本 -->
+- 验证命令及目录：<!-- 实际执行命令、退出码和检查范围 -->
+
+| Case ID | Executor | Target Version | Status | Evidence / Limitations |
+| --- | --- | --- | --- | --- |
+| <!-- 用例ID --> | <!-- 独立执行者 --> | <!-- 固定版本 --> | <!-- pass/fail/not-run --> | <!-- 可独立判断的断言结果/限制，报告仅附加 --> |
+
+- 未执行项与已知限制：<!-- 明确none或列出范围及影响 -->
+- 问题关闭依据：<!-- 稳定ID、独立复验者和版本；无问题明确none -->
+- 新版本证据判断：<!-- 变化、影响范围、重验与复用依据、独立确认者 -->
+- 归档后复核：<!-- 移动映射、摘要一致性、受影响检查及独立结论；归档前明确待执行 -->
