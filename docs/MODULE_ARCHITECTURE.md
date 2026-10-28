@@ -189,7 +189,7 @@ crates/
   - 判据证据（可自足的对比与许可证核对结论）在根 `Cargo.toml` 的 `rust-embed` 声明注记里，本节与它互引而不复制；**版本漂移防护**同样以那处为准：`8.13` 的 caret 语义挡不住小版本漂移，真正冻结这份闭包的是入库的 `Cargo.lock` 与门禁里的 `--locked`，升级小版本必须按同一清单重核。
 - `[决定]`（2026-10-16，`session-write-deadline` WP1）`server` 的 WebSocket 读写半边拆分依赖固定为 **`futures-util 0.3`**（版本与 feature 的唯一口径在根 `Cargo.toml` 的 `[workspace.dependencies]`，与本节保持一致），`default-features = false` 且只开 `sink`/`alloc`，消费方是 `server::transport::net::ws` 的 `WsConnection::split`（设计见 `crates/server/src/node_link/conn/session.rs` 模块文档「写路径与写任务」）。按 `AGENTS.md` §8 的判据核验：
   - **必要性**：写路径必须从会话任务里拆出去——写卡住时判据仍要被轮询到，否则慢消费者/静默判定会退化成死代码（本变更要修的缺口）。拆分一条 `WebSocket` 只用得到 `StreamExt::split`（得到可分别 poll 的 `SplitSink`/`SplitStream`）；只开 `sink`/`alloc`：前者门控 `split` 与 `SinkExt`，后者是 `split` 依赖的 `BiLock` 的第二道门（`std`/`async-await` 由 axum 那侧统一开启，feature 是加法的）。
-  - **维护状态**：`rust-lang/futures-rs` 维护、随生态持续发版。解析到的 `futures-util 0.3.34` **已是** axum 0.8.9 与 `tokio-tungstenite 0.29`（本仓库 HTTP/WS 栈）的传递依赖，本次只是把已有节点提为直接依赖，**不新增依赖树节点**，也不抬高 MSRV（该栈本就与解析到的同一版本一起构建）。
+  - **维护状态**：`rust-lang/futures-rs` 维护、随生态持续发版。解析到的 `futures-util 0.3.34` **已是** axum 0.8.9 所用 `tokio-tungstenite 0.29` 与 node-link-client 所用 `tokio-tungstenite 0.30`（本仓库 HTTP/WS 栈）的共同传递依赖，本次只是把已有节点提为直接依赖，**不新增该依赖节点**，也不抬高 MSRV（该栈本就与解析到的同一版本一起构建）。
   - **许可证**：`MIT OR Apache-2.0`，落在 `deny.toml` 的 `[licenses] allow` 内，**无需新增条目**；受限的 advisory 判定在 CI 的 `advisories` job，本地无等价物。
   - **可选替代方案（均被否决）**：①手写一个只含 `split` 语义的薄封装——等于把 `futures-util` 的 `BiLock`/`split` 自己再实现一遍，还要自行保证两半的 `poll` 安全（不推荐等于自造 split）；②`Arc<Mutex<WebSocket>>` 共享 socket——会在每一帧上持锁、让 `recv` 与写互相阻塞，比要修的缺口本身更糟。
   - **版本漂移防护**：与本节其余 `[决定]` 同一口径——`0.3` 的 caret 语义挡不住小版本漂移，真正冻结这份闭包的是入库的 `Cargo.lock` 与门禁里的 `--locked`；升级小版本必须按同一清单重核（是否重新引入默认 feature、是否新增节点）。
