@@ -9,7 +9,7 @@
 //! - wrapper `windows-dpapi 0.2.0` 传递依赖已停止维护的 `winapi 0.3`；
 //! - wrapper 不暴露 `CRYPTPROTECT_UI_FORBIDDEN`，因此本实现**总是**传入附加熵（由条目头派生），
 //!   把「无熵 + 缺主密钥时可能弹出交互提示」这条路径收敛为「有熵的静默路径」；
-//! - 换成自写 wrapper 或替换 crate 需要新 ADR（`docs/adr/0006-identity-keystore-split.md` 的边界不变）。
+//! - 换成自写 wrapper 或替换 crate 需要新 ADR（`openspec/adr/0006-identity-keystore-split.md` 的边界不变）。
 
 use identity_auth::KeystoreError;
 

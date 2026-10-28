@@ -2,8 +2,8 @@
 
 - 状态：已接受
 - 日期：2026-09-17
-- 修订记录（2026-10-16，`pairing-model`）：**删掉短验证码（SAS）并删除设备权限层**——决策与 Profile 不再含「设备权限」这一维度（设备通过认证即可执行业务命令，撤销整台设备立即生效，跨节点能力仍由 Owner Export grant 约束）；首次配对改为「设备用二维码里固定的主机公钥验证认领响应的 `hostProof`」＋「已批准响应的主机公钥必须与二维码逐字节相同」两条密码学校验，不再派生或展示 SAS。理由（信任锚是配对载荷带外携带主机公钥 + 一次性配对秘密 + 认领 HMAC）与保留边界见 [SECURITY_DESIGN.md](../SECURITY_DESIGN.md) §5.1、§10。
-- 修订记录（2026-09-18）：配对阶段的 proof 与 SAS 为 **HMAC-SHA256**，不是双方 ECDSA 签名（以 [SYNC_PROTOCOL.md](../SYNC_PROTOCOL.md) §7 与 `fixtures/sync/v1/transcripts/pairing-*.json` 的 `hmacSha256` 固定向量为准）；ECDSA P-256 只用于每次 WSS 连接的 challenge-response。下文“首次配对”第 5 步已按此订正。
+- 修订记录（2026-10-16，`pairing-model`）：**删掉短验证码（SAS）并删除设备权限层**——决策与 Profile 不再含「设备权限」这一维度（设备通过认证即可执行业务命令，撤销整台设备立即生效，跨节点能力仍由 Owner Export grant 约束）；首次配对改为「设备用二维码里固定的主机公钥验证认领响应的 `hostProof`」＋「已批准响应的主机公钥必须与二维码逐字节相同」两条密码学校验，不再派生或展示 SAS。理由（信任锚是配对载荷带外携带主机公钥 + 一次性配对秘密 + 认领 HMAC）与保留边界见 [SECURITY_DESIGN.md](../../docs/SECURITY_DESIGN.md) §5.1、§10。
+- 修订记录（2026-09-18）：配对阶段的 proof 与 SAS 为 **HMAC-SHA256**，不是双方 ECDSA 签名（以 [SYNC_PROTOCOL.md](../../docs/SYNC_PROTOCOL.md) §7 与 `fixtures/sync/v1/transcripts/pairing-*.json` 的 `hmacSha256` 固定向量为准）；ECDSA P-256 只用于每次 WSS 连接的 challenge-response。下文“首次配对”第 5 步已按此订正。
 - 决策范围：第一阶段 PWA，以及后续 Android/iOS/桌面网络客户端的默认安全 Profile
 
 ## 背景
@@ -113,7 +113,7 @@ repeated(fieldTag, byteLength, rawBytes)
 2. 二维码包含 HTTPS endpoint、`hostId`、host public key 与一次性配对数据。
 3. PWA 确认 `window.isSecureContext`，生成不可导出的设备密钥。
 4. PWA 使用 `pairingSecret` 对规范 pairing transcript 计算 HMAC-SHA256 proof，Daemon 验证后才接受设备公钥。
-5. 双方各自用 `pairingSecret` 对包含 Host/设备公钥及随机 nonce 的规范 transcript 计算 HMAC-SHA256 证明（认领与状态两条 domain），用户在服务节点本地入口确认。配对阶段不使用 ECDSA 签名，`hostProof`/`deviceProof` 的 ECDSA P-256 签名只用于 WSS challenge-response。设备侧对「此后长期使用的主机公钥」的信任由两条密码学校验确立：用二维码里**固定的**主机公钥验证认领响应的 `hostProof`，以及已批准响应里的主机公钥与二维码里的那把**逐字节相同**（状态响应不含任何主机签名）。**不派生、不展示、不校验短验证码**——理由与信任锚见 [SECURITY_DESIGN.md](../SECURITY_DESIGN.md) §5.1。
+5. 双方各自用 `pairingSecret` 对包含 Host/设备公钥及随机 nonce 的规范 transcript 计算 HMAC-SHA256 证明（认领与状态两条 domain），用户在服务节点本地入口确认。配对阶段不使用 ECDSA 签名，`hostProof`/`deviceProof` 的 ECDSA P-256 签名只用于 WSS challenge-response。设备侧对「此后长期使用的主机公钥」的信任由两条密码学校验确立：用二维码里**固定的**主机公钥验证认领响应的 `hostProof`，以及已批准响应里的主机公钥与二维码里的那把**逐字节相同**（状态响应不含任何主机签名）。**不派生、不展示、不校验短验证码**——理由与信任锚见 [SECURITY_DESIGN.md](../../docs/SECURITY_DESIGN.md) §5.1。
 6. Daemon 保存 device public key（**设备记录不保存任何授权集合**：配对不授予授权）；为支持 `approved` 状态的可靠轮询，`pairingSecret` 只保留到该设备首次 WSS 认证成功或原过期时间，随后立即清除。它不得延长、复用或转成长期 bearer token。
 
 二维码若使用 URL，秘密数据放在 fragment 而不是 query；PWA 读取后立即从地址栏和历史条目中清除。完整字段、规范编码和错误码在 Sync Protocol 中定义。

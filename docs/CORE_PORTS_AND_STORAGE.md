@@ -54,7 +54,7 @@
 
 > 版本：0.33（2026-10-26，`session-create-and-empty-cleanup` 变更 **WP2 检视修复**：**当前合同与 v19 实现对齐**——删除 `FirstSubmission`/preparation 的当前描述，普通首条输入与后续输入统一为 `PromptInput`；§5.11 只描述已实现的 `SessionContentFacts`/`SessionDeletion`，§3.10 只保留当前会话新建、空会话与删除截止时间；§7 当前 DDL 与 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION` 均为 **v19**，移除 `owned_first_submission` 并加入 `owned_session.deleted_at`；§9 与 §13 记录已实现行为和测试落点。旧版本日志及 v15 → v16、v16 → v17 等升级说明仅作为历史保留，不代表当前能力。
 
-> 版本：0.32（2026-10-26，`session-create-and-empty-cleanup` 变更 **已实现**）：新增顶层 **§13**，说明空会话的单一内容事实与元数据排除表、删除事务的固定顺序与回滚口径、`deleted_at` 的可见性谓词、v18 → v19 迁移（`owned_session.deleted_at`、`drop owned_first_submission`、清理 `/attachments/.preparation`、版本常量 19/19）与 Access 不持久化边界；§5.11 与 §7.2 各加一行指向 §13 的说明。§7 DDL 与 §5 trait 签名由合同漂移门禁逐条核对。wire 语义见 `SYNC_PROTOCOL.md` §9.8/§11.5/§11.9，决策见 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md)。
+> 版本：0.32（2026-10-26，`session-create-and-empty-cleanup` 变更 **已实现**）：新增顶层 **§13**，说明空会话的单一内容事实与元数据排除表、删除事务的固定顺序与回滚口径、`deleted_at` 的可见性谓词、v18 → v19 迁移（`owned_session.deleted_at`、`drop owned_first_submission`、清理 `/attachments/.preparation`、版本常量 19/19）与 Access 不持久化边界；§5.11 与 §7.2 各加一行指向 §13 的说明。§7 DDL 与 §5 trait 签名由合同漂移门禁逐条核对。wire 语义见 `SYNC_PROTOCOL.md` §9.8/§11.5/§11.9，决策见 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md)。
 
 > 版本：0.30（2026-10-23，`conversation-reliability` 变更 **WP1（合同先行，实现待 WP2/WP3/WP4）**：**普通（后续）输入的受理写集、稳定关联与回显上下文冻结**——§3.3 的 `MessageChannel` 计划增加 `User` 通道并写明 `session.read` 的 `messages` 从 `owned_message.channel='user'` 映射 `role=user`（**未实现**，当前读取路径仍排除 `user` 行）；新增 §3.11 的语义索引；§4 增计划用例入口；§5 新增 **§5.12**（`rust-planned` 围栏）冻结受理输入/结果、写入集与回显上下文的纯类型，并明确它们是**扩展现有** `SessionStore::commit`/`OwnedCommit`/`CommitOutcome`、`DispatchContext` 与 `MessageChannel`，不另起一套端口；§6 新增第 **24** 条（普通输入的受理→提交→派发顺序与失败语义）；§9 新增判据 43–46；新增顶层 **§12**（`sql-planned` 围栏）冻结 v17 的受理关联表，**不**写进 §7；并冻结用户消息内容块从 `promptContentBlock` 到 `agentContentBlock` 的读取投影（含附件/路径引用与不可表达块的降级）。**§7 的 DDL、`v16 = 16`/`owned_schema_version = 16` 常量与 §5 的常规 rust 块逐字未变**（v16 是当前版本，v17 是计划；漂移门禁继续逐条成立）；不新增任何 wire 字段（理由见 §5.12 与 `SYNC_PROTOCOL.md` §11.5）。
 
@@ -2327,7 +2327,7 @@ v14 起不再有 `imported_*` 表族（`imported_session`/`imported_delivery_ind
 
 ### 11.9 workspace 解析（并入 §5.1/§3.6）
 
-`[已并入]` `ResolvedWorkspace` 的形状在 §3.6，解析时机、校验、失败分类、别名命名空间与路径下发口径在 §5.1。保留的设计理由：**alias → 实际路径的解析归 core，不属于任何后端**——`agent-host`/`node-link-client` 都拿不到 `owned_workspace`（`MODULE_ARCHITECTURE.md` §5 矩阵：后端只依赖 `core` + 协议 crate）。路径的边界口径（`SECURITY_DESIGN.md` §12.3、`SYNC_PROTOCOL.md` §9.4 与 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)）是：**已登记**目录的规范化路径只在客户端协商了 feature `core.workspace-path.v1` 时随 Sync 快照的 `workspaces` 条目下发给已认证设备（取值剥掉平台 verbatim 前缀），**客户端自己提交的目录不得被回显**，而日志、审计、错误 `details`、事件载荷与会话摘要仍一律不含路径。UNC/网络路径允许解析但不改变授权模型；其结构化告警落在 `server` 层（core 不引入日志依赖）。
+`[已并入]` `ResolvedWorkspace` 的形状在 §3.6，解析时机、校验、失败分类、别名命名空间与路径下发口径在 §5.1。保留的设计理由：**alias → 实际路径的解析归 core，不属于任何后端**——`agent-host`/`node-link-client` 都拿不到 `owned_workspace`（`MODULE_ARCHITECTURE.md` §5 矩阵：后端只依赖 `core` + 协议 crate）。路径的边界口径（`SECURITY_DESIGN.md` §12.3、`SYNC_PROTOCOL.md` §9.4 与 [ADR-0009](../openspec/adr/0009-authenticated-workspace-path-and-browse.md)）是：**已登记**目录的规范化路径只在客户端协商了 feature `core.workspace-path.v1` 时随 Sync 快照的 `workspaces` 条目下发给已认证设备（取值剥掉平台 verbatim 前缀），**客户端自己提交的目录不得被回显**，而日志、审计、错误 `details`、事件载荷与会话摘要仍一律不含路径。UNC/网络路径允许解析但不改变授权模型；其结构化告警落在 `server` 层（core 不引入日志依赖）。
 
 ### 11.10 旧远程持久对象清理（`access-owner-data-stateless`，已落地）
 
@@ -2341,7 +2341,7 @@ v14 迁移已删除 `imported_delivery_index`/`imported_command_ref`/`imported_s
 
 ## 13. 会话删除与 v19（已实现）
 
-> **实现状态：已实现。** `core` 已提供内容事实与删除端口，`UseCases` 已提供对应入口；`storage-sqlite` 已实现删除事务、tombstone 可见性过滤与 v18 → v19 迁移。当前文件格式和 owned schema 版本均为 **v19 = 19**，当前 DDL 含 `owned_session.deleted_at`，不再含 `owned_first_submission`。wire 侧合同（命令形状、completed 结果、事件视图、feature 门控、错误码与客户端收敛）以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.8/§11.5/§11.9 为唯一权威，Node Link 边界见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.11，产品语义见 [INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §3.7/§5.2；本节记录 core 端口、`storage-sqlite` 写集顺序、tombstone 可见性谓词与 v18 → v19 迁移。决策理由与取舍见 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md)。
+> **实现状态：已实现。** `core` 已提供内容事实与删除端口，`UseCases` 已提供对应入口；`storage-sqlite` 已实现删除事务、tombstone 可见性过滤与 v18 → v19 迁移。当前文件格式和 owned schema 版本均为 **v19 = 19**，当前 DDL 含 `owned_session.deleted_at`，不再含 `owned_first_submission`。wire 侧合同（命令形状、completed 结果、事件视图、feature 门控、错误码与客户端收敛）以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.8/§11.5/§11.9 为唯一权威，Node Link 边界见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.11，产品语义见 [INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §3.7/§5.2；本节记录 core 端口、`storage-sqlite` 写集顺序、tombstone 可见性谓词与 v18 → v19 迁移。决策理由与取舍见 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md)。
 
 ### 13.1 空会话 = 没有持久化的会话内容
 

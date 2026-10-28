@@ -9,7 +9,7 @@
 > 版本：1.1（2026-09-23：新增 §3.1 `0x02` ACP 流的会话生命周期；管理载荷的 envelope 与错误码改为机器表达，目录见 [`schemas/local-admin/v1/`](../schemas/local-admin/v1/)）  
 > 日期：2026-09-18  
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
-> 已接受决策：[ADR-0004](./adr/0004-local-admin-transport.md)  
+> 已接受决策：[ADR-0004](../openspec/adr/0004-local-admin-transport.md)
 > 安全约束：[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §8、§9.4、§9.5、§12.1、§13.2、§14  
 > 模块边界：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.9、§4.10  
 > 命令与本地能力：[`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json)、[`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §10.3
@@ -407,7 +407,7 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 
 ### 5.8 CLI 子命令与方法的映射
 
-`[决定]` 本节是 **CLI 子命令 ↔ 本地方法/业务命令的唯一映射**。`app::cli` 只做参数解析、展示与轮询，**不复制业务规则、不自行读写 SQLite**（[ADR-0004](./adr/0004-local-admin-transport.md) 决策 3）；内部仍走同一个 `core::use_cases`。
+`[决定]` 本节是 **CLI 子命令 ↔ 本地方法/业务命令的唯一映射**。`app::cli` 只做参数解析、展示与轮询，**不复制业务规则、不自行读写 SQLite**（[ADR-0004](../openspec/adr/0004-local-admin-transport.md) 决策 3）；内部仍走同一个 `core::use_cases`。
 
 | CLI 子命令 | 通道 | 底层 | 说明 |
 |---|---|---|---|

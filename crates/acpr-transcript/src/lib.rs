@@ -1,6 +1,6 @@
 //! ACP Remote transcript codec v1（`docs/SYNC_PROTOCOL.md` §6.2）。
 //!
-//! 本 crate 是叶 crate（`docs/adr/0005-shared-transcript-codec.md`）：只拥有 codec 结构本身——
+//! 本 crate 是叶 crate（`openspec/adr/0005-shared-transcript-codec.md`）：只拥有 codec 结构本身——
 //! magic 与 `codecVersion` 校验、domain 长度前缀、字段 tag 的严格升序与唯一性、长度前缀字段，
 //! 以及字段值的字节编码（u16be/u64be/NUL 连接）。它**不包含**任何 domain 字符串或 tag 取值，
 //! 那些取值属于使用该 codec 的协议 crate（`sync-protocol`、`node-link-protocol`）。

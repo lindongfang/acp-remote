@@ -43,7 +43,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // 内部链接（变更报告之间）也不再判定，这是可接受的代价：归档的价值是可追溯，不是持续合规。
 const SKIP_DIRS = new Set([".git", ".husky", "node_modules", "target", "dist", ".worktrees", ".target-wt"]);
 // 相对仓库根的路径前缀，命中即整棵子树跳过（用路径而非目录名，避免误伤别处的同名目录）。
-const SKIP_PATH_PREFIXES = ["openspec/changes/archive/"];
+// 原始执行报告被.gitignore忽略，包含本机路径和当次快照引用，不属于现行文档。
+const SKIP_PATH_PREFIXES = ["openspec/changes/archive/", "openspec/testing/runs/"];
 
 const errors = [];
 const info = [];

@@ -4,7 +4,7 @@
 //! **来源与 `Host` 不可互相替代**：`Host` 回答「这个请求打到了哪个虚拟主机」，由
 //! [`HostPolicy`](crate::transport::net::HostPolicy) 按 `daemon.allowed_hosts`/`daemon.public_origin`
 //! 判定（`docs/CONFIG_REFERENCE.md` §1）；而来源回答「发起请求的页面从哪个来源加载」——它本身就是 Sync
-//! 设备身份持久化的绑定对象，即 canonical origin（`docs/adr/0001-pwa-identity-and-secure-transport.md`
+//! 设备身份持久化的绑定对象，即 canonical origin（`openspec/adr/0001-pwa-identity-and-secure-transport.md`
 //! 的 Canonical Origin：`scheme + hostname + port`，一个 PWA 设备身份只绑定一个来源）。反向代理形态下两者
 //! 可以合法地不同（浏览器地址栏是 `https://pc.example.ts.net`，代理转发时可以把 `Host` 改写成内部名），
 //! 因此：来源是**协议层**概念、`Host` 是**虚拟主机**概念，两者在接入层各判一次，既不互为替代，也不能

@@ -9,7 +9,7 @@
 > 版本：0.3（2026-09-24：随 `identity-auth-and-keystore` 的独立 review 把定型块**对齐实现**。0.2 的「目标形状」里 §4.1 写的是入口直接返回 `PairingWrite`/`PairingClaimWrite`/`PairingSettlementWrite`，实现改为「入口返回领域值、调用方组装写集」（理由与代价见 §4.1 的定型说明）；同时补 `PeerTrust.host_binding`/`node_kind` 与三个握手入口签名、把 §2 清单里不存在的类型名（`HandshakeCompletion`/`ClaimVerification`/`SettlementRequest`）换成实现名，并把 `PairingTarget` 归回「已有并直接复用」）
 > 版本：0.2（2026-09-24：随 `identity-auth-and-keystore` 实现定型。在 0.1 的首次冻结之上：§2 补充类型归属（`PeerTrust` 当次持久事实快照、`EntropySource`/`EntropyError` 熵源端口），§4.1/§5.1 把入口定型为「结构化字段 + 调用方读到的当次持久事实快照」（状态机自身不访问存储），§7 冻结 keystore 端口最终形状并**删除** `KeyPurpose::DeviceIdentity`）
 > 版本：0.1（2026-09-23：首次冻结。补上 `docs/CORE_PORTS_AND_STORAGE.md` §1 明确排除的「`identity-auth` 内部状态机」与 `docs/MODULE_ARCHITECTURE.md` §4.8 只给职责、未给签名的那一段）
-> 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §2/§4.8/§4.12/§5、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9/§10/§13/§14、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7/§8、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8/§9/§13、[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5/§11、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.2/§5.3/§5.4、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §8、[adr/0006-identity-keystore-split.md](./adr/0006-identity-keystore-split.md)
+> 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §2/§4.8/§4.12/§5、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9/§10/§13/§14、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7/§8、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8/§9/§13、[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5/§11、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.2/§5.3/§5.4、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §8、[adr/0006-identity-keystore-split.md](../openspec/adr/0006-identity-keystore-split.md)
 > 作用：冻结 `identity-auth` 的状态机边界、握手入口契约（输入、输出与交给 core 的 fact）、授权展开、nonce/重放/时钟规则、撤销传播与 `identity-keystore` 端口 trait。**wire 编码不在本文**：设备与节点配对的 HTTP 载荷、二维码、transcript domain 与字段集合仍以 Sync / Node Link 协议为准；持久化面以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11 为准。
 > 标记约定：`[决定]` = 本合同新定且不改变既有协议语义；`[待确认]` = 触及协议或产品语义，需用户确认；`[open]` = 明确留到实现阶段。
 
@@ -28,7 +28,7 @@
 
 ## 2. 边界与所有权
 
-`[决定]` `identity-auth` 是**纯状态机**：不依赖任何平台 API、不写 `cfg` 平台分支、不做文件或网络 IO；所有密钥操作经 §7 的端口，所有时间经注入的 `Clock`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §2）。依赖方向只有 `identity-keystore -> identity-auth`，且除 `app` 外没有 crate 依赖 `identity-keystore`（`AGENTS.md` §5、[adr/0006-identity-keystore-split.md](./adr/0006-identity-keystore-split.md)）。
+`[决定]` `identity-auth` 是**纯状态机**：不依赖任何平台 API、不写 `cfg` 平台分支、不做文件或网络 IO；所有密钥操作经 §7 的端口，所有时间经注入的 `Clock`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §2）。依赖方向只有 `identity-keystore -> identity-auth`，且除 `app` 外没有 crate 依赖 `identity-keystore`（`AGENTS.md` §5、[adr/0006-identity-keystore-split.md](../openspec/adr/0006-identity-keystore-split.md)）。
 
 依赖矩阵（谁拥有什么，避免实现时按「方便」放错层）：
 
@@ -218,7 +218,7 @@ impl ClaimedPairing {
 
 理由（详细威胁模型见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 的对应小节）：本协议的信任锚是「配对载荷**带外**携带主机公钥与一次性配对秘密 + claim 阶段以配对秘密计算的 HMAC」，教科书里 SAS 所防的公钥替换已由这条锚承担；而对本流程剩下的两种现实威胁——配对载荷在带外被**整条替换**、配对秘密**泄露**——SAS 完全无效（前者真主机从未被认领、其终端上没有可对照的数字；后者持有者能算出同一个数字）。设备侧对主机的验证由两条密码学要求承担：用配对载荷里的公钥验证 claim 响应中的主机证明，以及已批准响应里的主机公钥必须与载荷逐字节一致（见 `pwa-web-client`；`authority` 侧的两个入口见 §5.1）。HMAC 与签名比较一律 constant-time。
 
-`[决定]`（2026-10-18，`pairing-code-web-entry`）网页入口的 8 位配对码**不是**短验证码（SAS），不得按 SAS 叙述：它不是供人眼比对两端的校验值，不出现在确认界面，不是 HMAC 密钥，也不改变「不派生、不展示短验证码」的结论。它只是从 pairing secret 域分离派生的一次性**取回凭据**：持有它的人可以经同源 lookup 取回该配对的绑定与 256 bit secret，成功即消耗，第二次统一失败。二维码入口的主机公钥锚与两条设备侧校验原样保留；网页入口没有带外载荷，其主机公钥来自 TLS + canonical origin 限定的 lookup 响应（TOFU），完整边界见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1 与 [ADR-0010](./adr/0010-web-pairing-code-entry.md)。
+`[决定]`（2026-10-18，`pairing-code-web-entry`）网页入口的 8 位配对码**不是**短验证码（SAS），不得按 SAS 叙述：它不是供人眼比对两端的校验值，不出现在确认界面，不是 HMAC 密钥，也不改变「不派生、不展示短验证码」的结论。它只是从 pairing secret 域分离派生的一次性**取回凭据**：持有它的人可以经同源 lookup 取回该配对的绑定与 256 bit secret，成功即消耗，第二次统一失败。二维码入口的主机公钥锚与两条设备侧校验原样保留；网页入口没有带外载荷，其主机公钥来自 TLS + canonical origin 限定的 lookup 响应（TOFU），完整边界见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1 与 [ADR-0010](../openspec/adr/0010-web-pairing-code-entry.md)。
 
 ### 4.5 失败计数
 
@@ -451,7 +451,7 @@ proof」的连接上会永不消费，因此内存上界必须与真实并发连
 
 ## 7. `identity-keystore` 端口（已定型）
 
-`[已定型]` 端口 trait 由 `identity-auth` 定义、由 `identity-keystore` 实现（[adr/0006-identity-keystore-split.md](./adr/0006-identity-keystore-split.md) 决策 1/3）。平台 `cfg` 只允许出现在 `identity-keystore`，`identity-auth` 在所有平台编译与单测。形状：
+`[已定型]` 端口 trait 由 `identity-auth` 定义、由 `identity-keystore` 实现（[adr/0006-identity-keystore-split.md](../openspec/adr/0006-identity-keystore-split.md) 决策 1/3）。平台 `cfg` 只允许出现在 `identity-keystore`，`identity-auth` 在所有平台编译与单测。形状：
 
 ```rust
 pub enum KeyPurpose { NodeIdentity }
@@ -502,7 +502,7 @@ pub enum EntropyError {
 1. 私钥不出端口——`sign` 是唯一使用点，端口不提供「导出私钥」方法；`SecretBytes` 不实现 `Debug`/`Serialize`，避免被顺手打日志或写库。
 2. `secret` 端口只服务 Provider 凭据（[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.2 `provider.configure`）：写入由本地管理入口发起，读出由组合根组装 `CredentialResolver` 时在子进程启动前完成（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6）；pairing secret 不进 keystore，它只在内存（§4.3）。
 3. keystore 条目与 SQLite 引用之间**没有**分布式事务：先写新的带版本条目，再提交 SQLite 引用，失败时旧引用继续有效、未引用条目作为孤儿回收；新引用提交后才能清理旧条目；重启发现引用缺失即明确不可用，不得静默生成新身份（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.2 第 7 条）。
-4. 端口必须允许「非硬件保护」的实现存在（[ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5）。这里的「默认不启用」指的是 §9.2 基线下限**之外**的降级后端（例如 Linux 的持久化加密文件）；**Windows 的 DPAPI 包裹是 §9.2 明列的基线下限，属于 `identity.keystore = "platform"` 这一档，默认生效**，不需要新 ADR。正式模式下 keystore 不可用时失败关闭，由 `identity.fail_closed_on_missing_keystore` 决定启动失败（[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §8）。
+4. 端口必须允许「非硬件保护」的实现存在（[ADR-0006](../openspec/adr/0006-identity-keystore-split.md) 决策 5）。这里的「默认不启用」指的是 §9.2 基线下限**之外**的降级后端（例如 Linux 的持久化加密文件）；**Windows 的 DPAPI 包裹是 §9.2 明列的基线下限，属于 `identity.keystore = "platform"` 这一档，默认生效**，不需要新 ADR。正式模式下 keystore 不可用时失败关闭，由 `identity.fail_closed_on_missing_keystore` 决定启动失败（[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §8）。
 5. 实现不得为平台差异在 `identity-auth` 里写 `cfg` 分支；平台分支只存在于 `identity-keystore`。
 6. `[决定]`（2026-09-23）**Windows 第一档位已定案**：DPAPI（当前用户 scope）包裹私钥字节 + 进程内 `p256` 签名；**Linux 保持失败关闭**，持久化 fallback 与 CNG/TPM 不可导出档位都需单独 ADR（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.2/§20）。实现约束：本 crate 与 `identity-keystore` 都不得直接 FFI（workspace 固定 `unsafe_code = "forbid"`），DPAPI/Secret Service 都必须经 wrapper crate；候选的 MSRV、维护状态与许可证先按 §20 核验，DPAPI 只能以「包裹 + 进程内签名」的方式使用（私钥在签名瞬间存在于内存）。
 7. `[决定]`（2026-09-25，`daemon-cli-and-local-admin` 切片 4）**本节点 `nodeId` 由节点身份公钥确定性派生，端口上没有、也不需要一条独立的本地 `nodeId` 持久记录**：

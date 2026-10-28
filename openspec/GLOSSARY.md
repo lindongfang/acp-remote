@@ -41,7 +41,7 @@ _Avoid_: 原始标题、自动生成标题
 _Avoid_: 单轮任务、Agent 进程、页面连接
 
 **会话准备**（历史术语，已被 ADR-0016 取代）：
-曾指提交首条消息前临时准备 Agent、工作目录和输入的阶段，当时尚不是已持久保存的会话。自 2026-10-26（`session-create-and-empty-cleanup`）起它不再是目标概念：Web 新建直接调用 `session.create`，创建即持久化，首条消息之前会话就已存在（见 [docs/INITIAL_DESIGN.md](docs/INITIAL_DESIGN.md) §3.7、[ADR-0016](docs/adr/0016-session-create-and-empty-cleanup.md)）。读旧设计文档时该词只表示「当前版本已退役的临时阶段」，不表示任何现行行为，也不得用来描述已创建但尚未发送消息的会话。
+曾指提交首条消息前临时准备 Agent、工作目录和输入的阶段，当时尚不是已持久保存的会话。自 2026-10-26（`session-create-and-empty-cleanup`）起它不再是目标概念：Web 新建直接调用 `session.create`，创建即持久化，首条消息之前会话就已存在（见 [docs/INITIAL_DESIGN.md](../docs/INITIAL_DESIGN.md) §3.7、[ADR-0016](adr/0016-session-create-and-empty-cleanup.md)）。读旧设计文档时该词只表示「当前版本已退役的临时阶段」，不表示任何现行行为，也不得用来描述已创建但尚未发送消息的会话。
 _Avoid_: 已保存的待开始会话、已回收会话、恢复失败的会话
 
 **任务轮次**：
@@ -89,7 +89,7 @@ _Avoid_: 资源回收、会话删除、关闭会话
 _Avoid_: 草稿、未提交附件、设置
 
 **空会话**：
-已经正式创建、但从未产生会话内容的会话；区别于浏览器草稿和未提交输入（准备式新建已由 [ADR-0016](docs/adr/0016-session-create-and-empty-cleanup.md) 取代，不再是目标概念）。
+已经正式创建、但从未产生会话内容的会话；区别于浏览器草稿和未提交输入（准备式新建已由 [ADR-0016](adr/0016-session-create-and-empty-cleanup.md) 取代，不再是目标概念）。
 _Avoid_: 准备、草稿会话、新会话页面
 
 **激活**：
@@ -110,7 +110,7 @@ _Avoid_: 会话版本、进程号、连接代
 
 ### 准备与首次提交（历史术语；已由 ADR-0016 取代，随 v19 删除）
 
-> **本节全部术语已退役，不是现行行为。** 它们记录 `web-session-preparation`（2026-10-22 起冻结、WP2 曾落地核心与存储）那套「准备（临时）→ 首发（正式）」的新建方式。2026-10-26 的 `session-create-and-empty-cleanup`（见 [ADR-0016](docs/adr/0016-session-create-and-empty-cleanup.md)）已用「直接 `session.create`、创建即持久化」取代它：feature `core.session-preparation.v1`、准备控制帧、`session.start`、准备凭据与 `owned_first_submission` 都在 v19 迁移中删除（storage 侧见 [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md) §13）。下面各条只为读懂历史文档与旧分支而保留，**不得**用来描述现行系统；现行目标用语是「空会话」「保留期」「会话删除」与「激活」。
+> **本节全部术语已退役，不是现行行为。** 它们记录 `web-session-preparation`（2026-10-22 起冻结、WP2 曾落地核心与存储）那套「准备（临时）→ 首发（正式）」的新建方式。2026-10-26 的 `session-create-and-empty-cleanup`（见 [ADR-0016](adr/0016-session-create-and-empty-cleanup.md)）已用「直接 `session.create`、创建即持久化」取代它：feature `core.session-preparation.v1`、准备控制帧、`session.start`、准备凭据与 `owned_first_submission` 都在 v19 迁移中删除（storage 侧见 [docs/CORE_PORTS_AND_STORAGE.md](../docs/CORE_PORTS_AND_STORAGE.md) §13）。下面各条只为读懂历史文档与旧分支而保留，**不得**用来描述现行系统；现行目标用语是「空会话」「保留期」「会话删除」与「激活」。
 
 **准备（preparation，历史术语）**：
 Web 新建会话在首条消息提交前的**临时**阶段：节点已分配最终 `sessionId`、可以建立临时 Agent 端点取得真实模式与配置，但尚未持久化会话记录；准备不进入目录、快照或命令历史。
@@ -241,3 +241,21 @@ _Avoid_: 目录名、路径、workspace 名
 **规范化路径**：
 本机 `canonicalize` 的结果，仓库内部的权威取值（Windows 上带 verbatim 前缀）；它属于内部表述，交给外部进程时要另行表述。
 _Avoid_: 绝对路径、真实路径、full path
+
+### ????
+
+**????**?
+?????????????????????????????????????????????
+_Avoid_: ???????????
+
+**????**?
+?????????????????????????????????????
+_Avoid_: ????????????
+
+**?????**?
+?????????????????????????????????????HEAD???????
+_Avoid_: ??????????
+
+**????**?
+???????????????????????????????????
+_Avoid_: ???????????????

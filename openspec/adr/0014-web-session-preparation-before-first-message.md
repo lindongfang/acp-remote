@@ -10,9 +10,9 @@ status: superseded
 
 拟将 Web/PWA 本机新建入口拆为会话准备与首次提交：准备阶段由后端分配最终 ID，允许建立临时 Agent 会话以取得真实模式和配置，但 ACP Remote 不持久化会话记录。首次提交先保存会话、首条消息和请求，再派发消息；成功或失败均留在同一页面与 URL。临时资源在后台或服务重启后可重建；已正式提交后的无法确认结果仍遵守不自动重发的规则。浏览器准备草稿按标签页隔离并支持刷新恢复，主动离开或更换 Agent/目录时清除，后两者同时分配新 ID。
 
-用户已逐项确认产品选择，完整方案仍待最终核对；详细边界见[设计访谈记录](../SESSION_LIFECYCLE_DISCUSSION.md)。本 ADR 尚不是已实施能力，也不覆写现行创建协议。Zed、Node Link 创建合同与旧会话迁移不在本轮范围内。
+用户已逐项确认产品选择，完整方案仍待最终核对；详细边界见[设计访谈记录](../../docs/SESSION_LIFECYCLE_DISCUSSION.md)。本 ADR 尚不是已实施能力，也不覆写现行创建协议。Zed、Node Link 创建合同与旧会话迁移不在本轮范围内。
 
-`[合同已冻结，实现待 WP2–WP8]`（2026-10-22，`web-session-preparation` WP1）方案 A 的 wire 与端口形状已固定：准备控制帧、`session.start`（`initial`/`continue`）、闭合五态结果与准备凭据见 [SYNC_PROTOCOL.md](../SYNC_PROTOCOL.md) §11.9，纯端口与 DDL 见 [CORE_PORTS_AND_STORAGE.md](../CORE_PORTS_AND_STORAGE.md) §5.11/§7.3。两处关键取舍已定：①准备凭据只是归属证明，不是登录凭证；②正常重启与**存储整体重建**必须区分——前者可重建准备（已受理则返回 `committed`），后者旧材料统一失效并返回不可重试的 `preparation.store_rebuilt`。ADR 状态当时保持 `proposed`，直到对应工作包接线并通过验收（**2026-10-26 该路径已终止：状态改为 `superseded`，见上方取代说明**）。
+`[合同已冻结，实现待 WP2–WP8]`（2026-10-22，`web-session-preparation` WP1）方案 A 的 wire 与端口形状已固定：准备控制帧、`session.start`（`initial`/`continue`）、闭合五态结果与准备凭据见 [SYNC_PROTOCOL.md](../../docs/SYNC_PROTOCOL.md) §11.9，纯端口与 DDL 见 [CORE_PORTS_AND_STORAGE.md](../../docs/CORE_PORTS_AND_STORAGE.md) §5.11/§7.3。两处关键取舍已定：①准备凭据只是归属证明，不是登录凭证；②正常重启与**存储整体重建**必须区分——前者可重建准备（已受理则返回 `committed`），后者旧材料统一失效并返回不可重试的 `preparation.store_rebuilt`。ADR 状态当时保持 `proposed`，直到对应工作包接线并通过验收（**2026-10-26 该路径已终止：状态改为 `superseded`，见上方取代说明**）。
 
 ## Considered Options
 

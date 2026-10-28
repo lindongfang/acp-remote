@@ -2,7 +2,7 @@
 
 状态：2026-10-26 本轮关于“新建即落库、创建后激活、切换激活、空会话清理”的访谈已收敛，并形成 OpenSpec 规划。核心/服务端/前端现有实现与跨层套件状态见下文各历史阶段；规划中的正式行为仍须在后续实施与验收完成后才能视为已落地。
 
-> 2026-10-26 更新：本文原先记录的“首条消息前临时准备会话”已由 [ADR-0016](adr/0016-session-create-and-empty-cleanup.md) 取代 ADR-0014。现行目标是 Web 直接调用 `session.create`、创建成功即进入正式会话并激活；空会话在保留期内完整可用，期满且资源确认释放后静默删除。对应规划见 `openspec/changes/session-create-and-empty-cleanup/`。在该变更实施前，下面的历史记录只说明当时的决策过程，不代表当前产品行为。
+> 2026-10-26 更新：本文原先记录的“首条消息前临时准备会话”已由 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 取代 ADR-0014。现行目标是 Web 直接调用 `session.create`、创建成功即进入正式会话并激活；空会话在保留期内完整可用，期满且资源确认释放后静默删除。对应规划见 `openspec/changes/session-create-and-empty-cleanup/`。在该变更实施前，下面的历史记录只说明当时的决策过程，不代表当前产品行为。
 
 验收入口：[`docs/evidence/session-lifecycle-acceptance.md`](evidence/session-lifecycle-acceptance.md)（WP6 的跨层套件、真实浏览器脚本与 10/25/50 基准；第 8 节已记录 app 套件 8/8 与三档实测数据，真实浏览器 live 未执行，未执行项不勾选）。真实 Codex 上下文连续性的上一轮探针证据见 [`docs/evidence/session-lifecycle-probe.md`](evidence/session-lifecycle-probe.md)。
 
@@ -42,7 +42,7 @@
 - 服务端明确确认会话不存在时跳转目录页 `/`；断网、未认证或服务异常不能当成不存在处理。
 - 产品选择已逐项确认，完整方案待用户最终核对。后端预分配 ID 的认证/重启核实协议、浏览器刷新与离开判定、附件保存与上传时序、首次提交的原子保存及崩溃窗口属于后续技术设计，尚未实现。
 
-上述选择的原因与备选方案保留在 [ADR-0014（已被取代）](adr/0014-web-session-preparation-before-first-message.md)。2026-10-26，用户确认改为直接落库并在无内容时清理空会话；新决策见 [ADR-0016](adr/0016-session-create-and-empty-cleanup.md)。
+上述选择的原因与备选方案保留在 [ADR-0014（已被取代）](../openspec/adr/0014-web-session-preparation-before-first-message.md)。2026-10-26，用户确认改为直接落库并在无内容时清理空会话；新决策见 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md)。
 
 **验收入口（2026-10-23，`web-session-preparation` WP8；历史——该路径已被 ADR-0016 取代）**：分层证据与逐项结果记于
 [`docs/evidence/session-preparation.md`](evidence/session-preparation.md)。真实 Codex 的隔离跨进程探针曾位于
@@ -69,7 +69,7 @@
 - 同 Agent 多会话共享进程；`agent-host` 已提供逐会话真实 `session/close` 与三态释放结果，进程级扫描只在全部会话可回收时才停共享进程。
 - `sessions.idle_timeout_ms` 默认值已按本变更改为 `1800000`（30 分钟），显式 `0` 只关闭按时间回收；容量策略不受影响。现行定义以 [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) 为准。
 - Sync v1 已接受经 `core.local-session-lifecycle.v1` 协商的 `session.resume`；恢复依赖 Agent 实际宣告能力，不得虚报或替换为新建。现行合同见 [SYNC_PROTOCOL.md](SYNC_PROTOCOL.md) §11.5 与 [ACP_COMPATIBILITY_MATRIX.md](ACP_COMPATIBILITY_MATRIX.md)。
-- 现行会话主状态仍只根据任务与交互归约（`idle`/`running`/`pending`）；资源生命周期作为独立的 `localActivity` 投影，不改写任务三态。见 [CORE_PORTS_AND_STORAGE.md](CORE_PORTS_AND_STORAGE.md) 与 [GLOSSARY.md](../GLOSSARY.md)。
+- 现行会话主状态仍只根据任务与交互归约（`idle`/`running`/`pending`）；资源生命周期作为独立的 `localActivity` 投影，不改写任务三态。见 [CORE_PORTS_AND_STORAGE.md](CORE_PORTS_AND_STORAGE.md) 与 [GLOSSARY.md](../openspec/GLOSSARY.md)。
 
 ## 收敛状态与实施边界
 

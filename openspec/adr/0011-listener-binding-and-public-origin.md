@@ -3,7 +3,7 @@
 - 状态：Accepted
 - 日期：2026-10-18
 - 影响范围：`daemon.port` / `daemon.bind` / `daemon.public_origin`、接入层绑定、配对地址派生、CLI `config origin`
-- 关联：[CONFIG_REFERENCE.md](../CONFIG_REFERENCE.md) §1、[SECURITY_DESIGN.md](../SECURITY_DESIGN.md) §7.1、[GLOSSARY.md](../../GLOSSARY.md)
+- 关联：[CONFIG_REFERENCE.md](../../docs/CONFIG_REFERENCE.md) §1、[SECURITY_DESIGN.md](../../docs/SECURITY_DESIGN.md) §7.1、[GLOSSARY.md](../GLOSSARY.md)
 
 ## 背景
 

@@ -1,6 +1,6 @@
 # ACP Remote Sync Protocol
 
-> 对话发生顺序修订（2026-10-24，`preserve-agent-output-order`）：消息片段新增可选 `sequence`，owned 取 Owner 会话内序号，远程来源取 Owner origin 序号；不考虑旧版本兼容。缺席只表示旧历史无法完整恢复顺序，不能补造。消息、思考和工具按同一序号域合并，时钟相同或回拨不改变先后。持久化、分页和展示细则见 §11.5；产品决策见 [ADR-0015](adr/0015-agent-output-order.md)。
+> 对话发生顺序修订（2026-10-24，`preserve-agent-output-order`）：消息片段新增可选 `sequence`，owned 取 Owner 会话内序号，远程来源取 Owner origin 序号；不考虑旧版本兼容。缺席只表示旧历史无法完整恢复顺序，不能补造。消息、思考和工具按同一序号域合并，时钟相同或回拨不改变先后。持久化、分页和展示细则见 §11.5；产品决策见 [ADR-0015](../openspec/adr/0015-agent-output-order.md)。
 
 卡片定位补充：Owner 在事件 `view` 的运行期投影中追加可选 `_timelineSequence` 与 `_timelineOriginSequence`，分别保存该工具、轮次、交互或计划首次出现的位置；后续事件本身的 `sessionSequence`/`originSequence` 仍用于状态先后与分页，不被锚点替换。历史页只含工具完成更新时也沿用其首次位置；旧历史缺少起点证据时不补造。原始 `view` 成员与 `acp.rawJson` 保真，投影键冲突显式失败。有效待处理交互的读回元素另有可选 `sequence`（与消息同域），不依赖请求历史页恰好包含创建事件。消息与历史独立分页时，客户端固定共同可见下界，自动补齐较浅资源或读到耗尽；补齐期间必须明确显示正在加载，不能冒充完整时间线。
 
@@ -36,7 +36,7 @@
 
 - 产品权限和保留策略以 [INITIAL_DESIGN.md](./INITIAL_DESIGN.md) 为准。
 - 模块职责和依赖以 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) 为准。
-- PWA 身份与传输安全以 [ADR-0001](./adr/0001-pwa-identity-and-secure-transport.md) 为准。
+- PWA 身份与传输安全以 [ADR-0001](../openspec/adr/0001-pwa-identity-and-secure-transport.md) 为准。
 - 本文只负责把上述决策落实成可互操作的 wire contract。
 
 规范中的“必须”“不得”“应”“可以”分别表示强制要求、强制禁止、推荐要求和可选行为。
@@ -121,7 +121,7 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 - 时间使用 UTC RFC 3339，精确到毫秒，例如 `2026-09-17T12:10:00.123Z`；毫秒精度是强制的，秒精度或其他精度都不合法。该规则同样适用于配对二维码与配对状态响应中的 `expiresAt`。
 - UUID 使用带连字符的小写 canonical 文本；v1 接受 UUIDv4，服务端生成的有序 ID可以使用 UUIDv7，但排序不得依赖 UUID。
 - **ACP Remote canonical JSON v1（ACPR-CJ1）** 是为结构化负载定义的确定性序列化，供 `payloadDigest` 一类内容摘要使用：UTF-8 编码、无 BOM、无前后空白；对象成员名按 UTF-16 code unit 升序排列，不允许重复键；字符串使用 JSON 最小转义（`"`、`\` 与 `< U+0020` 的控制字符，控制字符写作小写十六进制 `\u00XX`）；数字必须是整数且 `|n| ≤ 2^53−1`，`view` 与 interaction payload 内禁止浮点；顶层必须是 object 或 array。内容摘要按 `base64url(SHA-256(ACPR-CJ1(value)))` 计算，接收方不得用自己重新序列化的结果替代。  
-> 实现口径：ACPR-CJ1 在 Rust 侧只有一份实现（叶子 crate `acpr-wire::cj1`，`docs/adr/0007-shared-wire-value-crate.md`），`scripts/check-contract-assets.mjs` 里的 JS 版本是它的对照参考；两者必须逐字节一致（2026-09-18 对齐过一次：JS 原先用 `JSON.stringify` 的 `\t`/`\n` 短转义，违反本条「控制字符写作小写 `\u00XX`」，已改为手写转义器）。`payloadDigest`/`snapshotDigest` 的写入方（存储层）与校验方都调用这一份实现。
+> 实现口径：ACPR-CJ1 在 Rust 侧只有一份实现（叶子 crate `acpr-wire::cj1`，`openspec/adr/0007-shared-wire-value-crate.md`），`scripts/check-contract-assets.mjs` 里的 JS 版本是它的对照参考；两者必须逐字节一致（2026-09-18 对齐过一次：JS 原先用 `JSON.stringify` 的 `\t`/`\n` 短转义，违反本条「控制字符写作小写 `\u00XX`」，已改为手写转义器）。`payloadDigest`/`snapshotDigest` 的写入方（存储层）与校验方都调用这一份实现。
 - 二进制字段使用无填充 base64url，不得使用标准 base64 的 `+`、`/` 或 `=`。
 - 普通 JSON 不做 canonicalization，也不直接用于签名或 HMAC。
 
@@ -134,7 +134,7 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 - **协商与隔离**：连接在 `selectedFeatures` 中声明 `core.attachment-transfer.v1` 后才进入附件帧族。未协商时新帧族、`attachment_ref` 内容块与 `attachment` 相关错误都不得出现（§5.3）。
 - **绑定**：每一帧都重复 `transferId`，`begin`/`manifest_begin` 携带 `sessionId` 与 `subject`。传输只能被创建它的同一主体、同一会话使用；跨会话、跨主体或跨设备复用标识返回 `attachment.binding_mismatch`，不泄露内容也不触发任何 Agent 执行。清单页同样逐条校验：`manifest_page` 里的每个 `transferId` 必须已封存、且会话与主体都与该清单的 `manifest_begin` 一致，否则整页拒绝（不部分登记）。读取（`attachment.read`）同样先校验身份、会话与附件归属。
 - **prompt 绑定（实现事实）**：带 `attachment_ref` 的 `session.prompt` 在派发前要求本连接已协商 `core.attachment-transfer.v1`、携带已封存的 `submissionId`，并逐块比对清单里的 `attachmentId`/`sha256`/`byteLength`；任一不符返回 `attachment.negotiation_required`/`protocol.schema_invalid`/`attachment.binding_mismatch`，不派发 Agent。只有 `submissionId`（全部是文本块）时同样先复核清单的封存状态与归属。
-- **只接受正式会话目标（`session-create-and-empty-cleanup` WP1）**：`attachment.begin` 与 `attachment.manifest_begin` 只绑定**已存在的本机会话**（顶层 `sessionId`），shape 闭合。准备式新建已被整体移除——`target: preparation` 分支、配合准备凭据/运行代/代次与 `attachment.error` 的可选 `submissionId` 都不再存在，出现这些字段按 `protocol.schema_invalid` 拒绝且不触碰存储；上传只在正式会话页发起，全部附件封存后才整体提交消息。见 [ADR-0016](adr/0016-session-create-and-empty-cleanup.md)。
+- **只接受正式会话目标（`session-create-and-empty-cleanup` WP1）**：`attachment.begin` 与 `attachment.manifest_begin` 只绑定**已存在的本机会话**（顶层 `sessionId`），shape 闭合。准备式新建已被整体移除——`target: preparation` 分支、配合准备凭据/运行代/代次与 `attachment.error` 的可选 `submissionId` 都不再存在，出现这些字段按 `protocol.schema_invalid` 拒绝且不触碰存储；上传只在正式会话页发起，全部附件封存后才整体提交消息。见 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md)。
 
 - **分块**：单块原始数据与偏移规则见下方预算表；`offset`、`length`、`totalLength`、`maxLength` 一律是无前导零十进制字符串。客户端按期望偏移提交：同偏移同内容重复提交返回原 `chunk_ack`（`duplicate: true`），同偏移不同内容返回 `attachment.chunk_conflict`（`details.offset`），非期望偏移返回 `attachment.offset_mismatch`（`details.expectedOffset`/`actualOffset`，可重试）。每传输同时最多一块未确认。
 - **封存**：`attachment.seal` 携带完整长度与整段原始字节的流式 SHA-256；长度或摘要不符返回 `attachment.digest_mismatch`，且不产生可引用附件。重复封存相同内容返回原 `attachment.sealed`，不同内容返回 `attachment.sealed` 错误。

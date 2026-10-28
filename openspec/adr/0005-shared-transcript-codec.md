@@ -7,7 +7,7 @@
 
 ## 背景
 
-[SYNC_PROTOCOL.md](../SYNC_PROTOCOL.md) §6.2 与 §6.3 定义了签名/HMAC 输入的长度前缀二进制 codec（magic `ACPR`、`codecVersion 0x01`、`domainTag`、递增 `fieldTag`）以及 Sync 用途的 domain 与字段 tag 表；[NODE_LINK_PROTOCOL.md](../NODE_LINK_PROTOCOL.md) §9.1 明确 Node Link 复用**同一套 codec 结构**，只新增自己的 domain 与 `fieldTag` 含义（tag 表独立，不得跨协议套用）。
+[SYNC_PROTOCOL.md](../../docs/SYNC_PROTOCOL.md) §6.2 与 §6.3 定义了签名/HMAC 输入的长度前缀二进制 codec（magic `ACPR`、`codecVersion 0x01`、`domainTag`、递增 `fieldTag`）以及 Sync 用途的 domain 与字段 tag 表；[NODE_LINK_PROTOCOL.md](../../docs/NODE_LINK_PROTOCOL.md) §9.1 明确 Node Link 复用**同一套 codec 结构**，只新增自己的 domain 与 `fieldTag` 含义（tag 表独立，不得跨协议套用）。
 
 但 ADR-0003 与 `MODULE_ARCHITECTURE.md` §2/§5 规定：协议 crate 各自拥有 codec，且三个协议 crate 彼此不直接依赖。于是这份安全关键的编解码实现无处安放——放进任一协议 crate 就形成协议间横向依赖，分别实现两份就是重复安全代码。
 

@@ -20,7 +20,8 @@
     "check:docs": "node scripts/check-doc-links.mjs",
     "check:boundaries": "node scripts/check-crate-boundaries.mjs",
     "check:drift": "node scripts/check-contract-drift.mjs",
-    "check:openspec": "node scripts/check-openspec.mjs",
+    "check:openspec": "npm run test:workflow && node scripts/check-openspec.mjs",
+    "test:workflow": "node --test scripts/tests/openspec-tests.test.mjs",
     "check:rust": "cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-features",
     "lint:commits": "commitlint",
     "prepare": "husky"

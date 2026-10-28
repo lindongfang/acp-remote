@@ -17,7 +17,7 @@
 > 日期：2026-09-18  
 > 上位产品设计：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
 > 模块边界：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md)  
-> 已接受决策：[ADR-0002](./adr/0002-node-link-first-owner-authority.md)  
+> 已接受决策：[ADR-0002](../openspec/adr/0002-node-link-first-owner-authority.md)
 > 机器可验证资产：[`schemas/node-link/v1/`](../schemas/node-link/v1/)、[`fixtures/node-link/v1/`](../fixtures/node-link/v1/)
 
 ## 1. 文档职责

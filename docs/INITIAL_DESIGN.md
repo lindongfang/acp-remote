@@ -1,16 +1,16 @@
 # ACP Remote 初始设计文档
 
-> 对话发生顺序（2026-10-24）：同一会话以 Agent 实际写出 ACP 内容的先后为准，Owner 保序接收并持久固定；思考、工具调用与回复可以交替，不按类型重排，也不跨其他可见条目合并文字。时间只是辅助显示。实时、刷新、翻页、重连与远程回源须保持一致，Access 持久化边界不变。旧历史不能证明的部分保留并明确说明；详见 [ADR-0015](adr/0015-agent-output-order.md) 和 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。
+> 对话发生顺序（2026-10-24）：同一会话以 Agent 实际写出 ACP 内容的先后为准，Owner 保序接收并持久固定；思考、工具调用与回复可以交替，不按类型重排，也不跨其他可见条目合并文字。时间只是辅助显示。实时、刷新、翻页、重连与远程回源须保持一致，Access 持久化边界不变。旧历史不能证明的部分保留并明确说明；详见 [ADR-0015](../openspec/adr/0015-agent-output-order.md) 和 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。
 
 文件列表、文件预览/下载与 Git 状态/差异属于目录，不依赖会话保存、首条消息或 Agent 生命周期。客户端进入会话界面即可读取选定本机目录；目录查询不创建目录、会话或事件。目标与兼容语义见 [Sync Protocol](SYNC_PROTOCOL.md) §11.5。
 
 > 目录选择器补充（2026-10-18）：Windows 默认浏览不展示隐藏或系统属性目录；PWA 按名称忽略大小写、数字自然升序显示收到的目录。这些规则仅影响浏览与显示，不新增创建路径授权限制。实现边界见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.5，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.1。
 
 > 修订记录（2026-10-21，custom-session-title（合同与实现））：§8 的会话标题口径改写为「两个来源 + 有效标题投影」——登记 Owner 元数据命令 `session.title.set` 与 feature `core.session-title.v1`，有效标题 = 自定义标题优先 → 否则 Agent 标题 → 否则未命名，由 Owner 投影成既有 `SessionSummary.title`；删除「标题只由 Agent 单向更新 / 不存在客户端重命名入口」的旧条款（原文见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.3 与 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §5），明确 Access 只转发命令、不持久化标题与命令状态，且该命令不新增 ACP 方法。Owner 的 `custom_title` 持久化与命令事务已接线。  
-> 修订记录（2026-10-26，`session-create-and-empty-cleanup`，**已实现**）：Web 新建改为直接 `session.create`（创建即持久化，§3.7），并写回空会话定义、先释放后删除的顺序、tombstone 不可见与「Access 不持久化远程删除事实」。准备式新建（`web-session-preparation`，ADR-0014）不再是目标，由 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 取代；wire 语义见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.8/§11.5/§11.9，存储与事务见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §13，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.6。
+> 修订记录（2026-10-26，`session-create-and-empty-cleanup`，**已实现**）：Web 新建改为直接 `session.create`（创建即持久化，§3.7），并写回空会话定义、先释放后删除的顺序、tombstone 不可见与「Access 不持久化远程删除事实」。准备式新建（`web-session-preparation`，ADR-0014）不再是目标，由 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 取代；wire 语义见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.8/§11.5/§11.9，存储与事务见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §13，客户端行为见 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §4.6。
 > 状态：编码前原始设计（Draft）  
 > 版本：0.5  
-> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「workspace 实际路径不离开 Owner Node」收窄为带前提的边界——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显（§2/§8）。本机自己的设备新增两项受限能力：`session.create` 可带一个「目录不存在则先创建」开关，`workspace.browse` 提供只读的逐层目录浏览（feature 门控、不登记、不产生审计动作）。口径以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2/§12.3 与 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md) 为权威。
+> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「workspace 实际路径不离开 Owner Node」收窄为带前提的边界——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显（§2/§8）。本机自己的设备新增两项受限能力：`session.create` 可带一个「目录不存在则先创建」开关，`workspace.browse` 提供只读的逐层目录浏览（feature 门控、不登记、不产生审计动作）。口径以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2/§12.3 与 [ADR-0009](../openspec/adr/0009-authenticated-workspace-path-and-browse.md) 为权威。
 > 修订记录（2026-10-18，`device-pairing-qr-reference`）：§11.2 的设备二维码改为短引用格式 `#q2=`（版本 + 32 字节扫码取回凭据 + 32 字节主机公钥指纹），完整资料经同源 `qr-lookup` 取回；PWA 只使用配对码，旧设备 `#data=` 退出；原生 App 扫码仍为后续交付。字段与拒绝规则以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1/§7.6 为唯一权威。
 > 修订记录（2026-10-16，`pairing-model`）：删除两套配对短验证码（§11.2/§11.7 的展示与派生规则改为两条设备侧密码学校验：用二维码里固定的主机公钥验证认领响应的 `hostProof`，已批准响应的主机公钥必须与二维码逐字节相同）；删除设备权限层（§1/§3.4/§8/§9/§11.4/§17 的「按 Actor 的 scope 授权」「设备记录保存命令 scope」「设备是否拥有该命令 scope」改为「通过设备认证即可执行，设备方向没有授权维度」，§11.4 的设备记录示例去掉 `scopes` 并改名）；`session.create` 在 Sync 面允许客户端提交绝对目录（§8）。跨节点 `grant.*`/Export `scopes`/Import grants 与设备认证、撤销、速率上限不变。
 > 修订记录（2026-09-18）：配对有效期改为固定 5 分钟；PWA 首版明确不展示会话创建入口；移除与 Sync/Node Link 已冻结取值冲突的旧叙述。  
@@ -108,7 +108,7 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 
 - 内容范围：用户消息、Agent 回复、Agent 明确提供的思考、工具调用及结果、审批、提问、计划、终端、文件改动、轮次结果、多媒体与资源、异常与不可用提示。
 - **每条受理输入都由 Owner 保存（`conversation-reliability`，已实现）**：首条与之后的每次输入一视同仁——同一个受理事务保存完整正文、稳定 `requestId`/`turnId`/`messageId` 关联与附件绑定，提交成功后才派发与广播；保存失败明确报错且不派发，执行失败或结果不确定不删除已保存输入。刷新、重连、另一台已认证设备以及 Agent 不回显时都能读到该输入；读取的正文不受单条事件文本上限或事件过期影响。Agent 回显只在可靠的派发关联且完整内容一致时视为同一条输入，相同文字的不同输入各自保留。Access 仍不保存任何远程正文（§10）。
-- 草稿只在页面内存（包括已立即创建、尚未发出第一条消息的新会话）：不写持久草稿，也没有「准备中」的标签页例外（该窄例外已被 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 取代），正式会话与 imported 会话不缓存正文。客户端行为见 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §4.6/§7。
+- 草稿只在页面内存（包括已立即创建、尚未发出第一条消息的新会话）：不写持久草稿，也没有「准备中」的标签页例外（该窄例外已被 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 取代），正式会话与 imported 会话不缓存正文。客户端行为见 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §4.6/§7。
 - 输入：点击发送后才上传附件，全部完成后整体提交；任一失败保留完整草稿、不触发执行。不支持的类型明确说明，MUST NOT 静默删除附件或只发文字。
 - 附件：无数量/大小产品额度，但有 32 KiB 分块、并发、速率、内存与磁盘保护；已提交附件随消息保留，未提交上传闲置 24 小时清理，刷新不承诺续传。
 - 交互与历史：刷新或换设备后可重新取得服务端确认的有效待处理请求再应答；首个有效答案胜出。历史与实时同形，超出保留期显式不可用。
@@ -144,7 +144,7 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 
 ### 3.7 Web 新建会话、空会话清理与会话删除（目标，`session-create-and-empty-cleanup`；准备式新建已被 ADR-0016 取代）
 
-> 状态：**已实现**。wire 合同见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §9.8/§11.5/§11.9，存储与事务合同见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §13，客户端行为见 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §4.6；决策与取舍见 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md)。
+> 状态：**已实现**。wire 合同见 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) §9.8/§11.5/§11.9，存储与事务合同见 [`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §13，客户端行为见 [`FRONTEND_DESIGN.md`](./FRONTEND_DESIGN.md) §4.6；决策与取舍见 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md)。
 
 - **直接创建**：Web/PWA 的「新建会话」直接调用既有 `session.create`，创建即持久化——受理幂等记录 → 建立 Agent 会话 → 在**同一事务**里落正式会话行、Agent 会话标识、目录归属与 `command.completed` 终态（[`CORE_PORTS_AND_STORAGE.md`](./CORE_PORTS_AND_STORAGE.md) §6 第 20 条）。因此**首条消息之前会话就已经存在**，并已出现在目录与会话列表里；不存在「临时/准备」阶段，也没有第二套身份、第二套提交命令或预分配 ID。可证明未建会话的失败 ⇒ 零会话行 + 失败终态；无法证明 ⇒ `uncertain`，绝不伪造会话行。
 - **创建即活跃**：创建完成结果与紧随其后的快照对协商了 `core.local-session-lifecycle.v1` 的连接直接投影 `localActivity: active`（生命周期预占在同一编排边界内结算为 ready），没有中间的「空闲」闪变。页面随后声明查看并派发 `session.resume`，已 ready 的端点直接复用。
@@ -157,7 +157,7 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 - **非空会话只回收资源**：非空会话离开保留期只释放运行资源，**身份与全部历史保留**，之后可再次进入、恢复原上下文并继续对话。
 - **删除后不可见**：删除保留一个最小 tombstone（清除标题与自定义标题、Agent 会话标识、规范化工作目录、目录归属与模式显示元数据，只留命令/事件的外键锚点与序列）。tombstone 不是会话：列表、读取、快照、摘要、历史、恢复、origin 查找、激活与查看声明一律视其不存在；迟到的激活与删除前创建的命令重试返回 `session.not_found`，不得由删除事件或旧缓存重建会话。`session.delete` 是 ACP Remote 的 Sync mutation，**不是** ACP `session/delete`：它不调用 Agent 的删除方法，也不清理 Agent 自身数据或宿主工作目录。
 - **Access/Node Link 不持久化删除**：删除只发生在 Owner。Access 不保存任何远程删除状态（没有删除索引、没有镜像事件、没有正文/游标/收据/命令状态），Owner 目录不再包含该会话时只丢弃运行期条目并返回常规 not-found，重连一律回 Owner 重建；`session.delete` 不登记、不暴露在 Node Link（[`NODE_LINK_PROTOCOL.md`](./NODE_LINK_PROTOCOL.md) §12.11）。
-- **历史（已被取代）**：本节的旧版本描述过「准备（临时）→ 首发（正式）」两段式新建——Sync-only `session.start`、准备凭据、单一准备槽位、可持久化的准备草稿。该方案已由 [ADR-0016](./adr/0016-session-create-and-empty-cleanup.md) 取代，实现记录保留在 [ADR-0014](./adr/0014-web-session-preparation-before-first-message.md) 与 `web-session-preparation` 变更中，不再作为目标；相关字段、命令、错误码与存储（`owned_first_submission`、`/attachments/.preparation`）计划在 v19 一并删除。
+- **历史（已被取代）**：本节的旧版本描述过「准备（临时）→ 首发（正式）」两段式新建——Sync-only `session.start`、准备凭据、单一准备槽位、可持久化的准备草稿。该方案已由 [ADR-0016](../openspec/adr/0016-session-create-and-empty-cleanup.md) 取代，实现记录保留在 [ADR-0014](../openspec/adr/0014-web-session-preparation-before-first-message.md) 与 `web-session-preparation` 变更中，不再作为目标；相关字段、命令、错误码与存储（`owned_first_submission`、`/attachments/.preparation`）计划在 v19 一并删除。
 
 ## 4. 总体架构
 
@@ -295,7 +295,7 @@ ACP Remote 核心只认识：
 - 根据 `100.x.x.x` 或 `.ts.net` 自动授予信任。
 - 把 tailnet 成员身份当作应用身份。
 
-Tailscale 仅作为推荐部署方式。可选集成模块可以帮助检查安装和生成 endpoint，但不能成为核心依赖。默认安全 Profile 及信任边界见 [ADR-0001](./adr/0001-pwa-identity-and-secure-transport.md)。
+Tailscale 仅作为推荐部署方式。可选集成模块可以帮助检查安装和生成 endpoint，但不能成为核心依赖。默认安全 Profile 及信任边界见 [ADR-0001](../openspec/adr/0001-pwa-identity-and-secure-transport.md)。
 
 建议 Daemon 默认监听本机地址，由外部网络层暴露：
 
@@ -323,7 +323,7 @@ Tailscale Serve/反向代理 -> 127.0.0.1:8765
 
 endpoint 的 path **以 wire 权威为准**（`SYNC_PROTOCOL.md` §3.1：WebSocket endpoint 为同源 `/sync/v1`；本节示例按该口径书写）。原生客户端或 Access Node 的 IP/endpoint 变化只需要重新发现地址，不需要重新配对。任何 endpoint 都必须证明持有同一个 Node 私钥。
 
-PWA 是例外：浏览器密钥和 IndexedDB 按 Origin 隔离，一个 PWA 设备身份只绑定一个 `scheme + hostname + port` canonical origin。更换 Origin 必须作为新设备重新配对，第一阶段不支持 PWA 跨 Origin 自动切换；同一 Origin 内的路径变化不受影响。详见 [ADR-0001](./adr/0001-pwa-identity-and-secure-transport.md)。
+PWA 是例外：浏览器密钥和 IndexedDB 按 Origin 隔离，一个 PWA 设备身份只绑定一个 `scheme + hostname + port` canonical origin。更换 Origin 必须作为新设备重新配对，第一阶段不支持 PWA 跨 Origin 自动切换；同一 Origin 内的路径变化不受影响。详见 [ADR-0001](../openspec/adr/0001-pwa-identity-and-secure-transport.md)。
 
 ### 6.4 无云模式限制
 
@@ -841,4 +841,4 @@ Windows 是当前 Daemon/CLI、节点配对、进程树管理和首个 Node Link
 
 ## 独立目录创建（ADR-0010）
 
-文件夹选择器支持立即在主机创建一层目录，用户可逐层新建后单独选择；取消会话不删除已建目录。产品行为与兼容取舍见 [ADR-0010](adr/0010-immediate-workspace-directory-creation.md)，wire 权威见 SYNC_PROTOCOL §11.5。
+文件夹选择器支持立即在主机创建一层目录，用户可逐层新建后单独选择；取消会话不删除已建目录。产品行为与兼容取舍见 [ADR-0010](../openspec/adr/0010-immediate-workspace-directory-creation.md)，wire 权威见 SYNC_PROTOCOL §11.5。

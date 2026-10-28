@@ -1,6 +1,6 @@
 # ACP Remote
 
-变更规则由 `openspec/config.yaml` 和 `openspec/schemas/spec-driven/` 直接承载：不要求安装特定编码宿主或模型，也不强制每包启动独立 reviewer。默认串行实现，按风险复核；本地验证与 PR 必需检查仍须通过。
+变更规则由 `openspec/config.yaml` 和 `openspec/schemas/spec-driven/` 承载：探索覆盖全部决策分支，主动识别可并行工作并隔离执行；编码前检视方案与用例，交付由独立 tester 和 reviewer 验收与检视，不继承开发对话。不绑定宿主或模型，本地验证与 PR 必需检查仍须通过。
 
 本地优先的 ACP（Agent Client Protocol）中转站：一个节点可以直接管理本地 Agent，也可以通过 Node Link 导入其他节点导出的 Agent；手机、电脑、Zed、PWA 与 CLI 都是客户端形态，不是固定权限角色。
 
@@ -77,8 +77,14 @@ Owner 侧的**会话恢复**（`session.resume` → ACP `session/resume`）已�
 | [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md) | Daemon 配置键、类型与默认值 |
 | [config.example.toml](config.example.toml) | 可直接复制的配置模板（默认值可运行；`node_link.*` 暂不生效），由单元测试解析校验 |
 | [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md) | `core` 值对象、用例面、端口签名、broker 事务顺序与 `storage-sqlite` 表结构/保留/migration |
-| [docs/adr/](docs/adr/) | 已接受的架构决策 |
-| [GLOSSARY.md](GLOSSARY.md) | 术语的唯一用词表：只收「在本仓库里必须唯一」的词（命令五态、受理/拒绝、规范化路径等），不写实现细节 |
+| [openspec/adr/](openspec/adr/) | 已接受的架构决策 |
+| [GLOSSARY.md](openspec/GLOSSARY.md) | 术语的唯一用词表：只收「在本仓库里必须唯一」的词（命令五态、受理/拒绝、规范化路径等），不写实现细节 |
+
+## 开发工作流
+
+变更从 [OpenSpec 配置](openspec/config.yaml) 进入：流程规则在配置中，产物结构与模板在 [spec-driven schema](openspec/schemas/spec-driven/) 中。分工见 [coder（实现）](openspec/role/coder.md)、[tester（测试设计与执行）](openspec/role/tester.md)、[reviewer（独立检视）](openspec/role/reviewer.md)；统一用词见 [术语表](openspec/GLOSSARY.md)，已接受的架构选择见 [ADR（架构决策记录）](openspec/adr/)。
+
+每个变更的 `tests.md` 在编码前规划 L1–L6/LX 用例；长期回归按能力维护在 [testing/suites](openspec/testing/suites/)，逐次结果输出到被忽略的 `openspec/testing/runs/`。`npm run test:workflow` 可重跑工作流结构的自动化正反向测试，并已纳入 `npm run check`；自然语言验收由独立 tester 按用例执行，不能把脚本通过当成全部验收通过。本阶段不新增定时回归调度。
 
 ## 合同检查
 
@@ -91,13 +97,11 @@ npm ci          # 首次或依赖变动后
 npm run verify  # 合同门禁 + fmt / clippy / test，与 CI 的 checks job 同源
 ```
 
-② 命令目录与本仓库封闭词表的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格，以及本地管理的方法集与错误码（`LOCAL_ADMIN_PROTOCOL.md` 的
-
 CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与每日定时任务上跑六个 job：`checks`（`npm run check` + `npm run check:rust`，与本地 `npm run verify` 同源）、`frontend`（`clients/app` 的 `npm ci` + `npm run check`：typecheck + `typecheck:e2e` + vitest + `expo export --platform web`；根目录的检查链不覆盖这个独立工程，见「分支保护」一节的必需检查说明）、`commits`（提交范围规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `scripts/check-dependency-advisories.mjs`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 密钥扫描：push/PR 扫本次范围，每日定时任务扫全历史）。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
 
 `deps` 的 npm 侧判定不直接跑 `npm audit`，而经 [`scripts/check-dependency-advisories.mjs`](scripts/check-dependency-advisories.mjs)：`npm audit` 没有 ignore 机制，而仓库有一条**上游无修复**的 advisory（`braces` 的 `GHSA-vfj7-8cjw-p6xm`，受影响范围是 `*`、3.x 线最新版即被通报版本，`fixAvailable` 为 false），直接跑会让该 job 永远红灯。该脚本**按 (advisory ID, 工程) 放行已登记项**，未登记项与任何 `critical` 一律失败；每条豁免的理由、适用范围与到期条件写在该脚本的 `ALLOWED` 数组里。判定范围是**两个** npm 工程——仓库根与独立工程 `clients/app`（自带 `package.json` 与 `package-lock.json`，根目录的 `npm ci` / `npm run check` 都不覆盖它），两个工程各跑一次 `npm audit` 后合并判定，失败输出会标明出问题的工程路径。已登记的 4 条豁免里，`braces`（`GHSA-vfj7-8cjw-p6xm`）、`node-forge`（`GHSA-86w9-cpqp-85rv`）、`uuid`（`GHSA-w5hq-g745-h8pq`）是**不可达**（构建期工具链，或漏洞前提在本仓库不成立）；`decode-uri-component` 的 `GHSA-vcc3-ghjq-m6fr` 则是**真实可达但延后**——它进了 web 产物，修复需 Expo SDK 58，到期条件是「SDK 58 进入 npm `latest` 时升级并删除该条」。与 `advisories`、`secrets` 同理，这层判定**本地没有等价物**，只在 CI 的 `deps` job 运行。
 
-`deps` / `advisories` / `secrets` 需要网络或额外二进制，**没有包含在 `npm run verify` 里**（依赖判决见 [`deny.toml`](deny.toml)，密钥扫描规则见 [`.gitleaks.toml`](.gitleaks.toml)）；工具版本、许可证、向外发送的数据与已知残余风险见 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md)。依赖更新由 [`.github/dependabot.yml`](.github/dependabot.yml) 提出：升版前有冷却期（避免第一时间采用刚发布的版本），minor/patch 分组、major 单独提交，且分组 PR 同样要过全部 job。
+`deps` / `advisories` / `secrets` 需要网络或额外二进制，**没有包含在 `npm run verify` 里**（依赖判决见 [`deny.toml`](deny.toml)，密钥扫描规则见 [`.gitleaks.toml`](.gitleaks.toml)）；工具版本、许可证、向外发送的数据与已知残余风险见 [ADR-0008](openspec/adr/0008-ci-supply-chain-tooling.md)。依赖更新由 [`.github/dependabot.yml`](.github/dependabot.yml) 提出：升版前有冷却期（避免第一时间采用刚发布的版本），minor/patch 分组、major 单独提交，且分组 PR 同样要过全部 job。
 
 提交信息遵循 Conventional Commits（`<type>(<scope>)!?: <主题>`）：type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，本地由 husky 的 `.husky/commit-msg` 钩子在 `npm install` 时装配，CI 的独立 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次（`npm run lint:commits -- --from <base> --to <head>`，`--no-verify` 绕得过本地钩子但绕不过它）。词表与合并豁免规则以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义。
 
@@ -115,9 +119,9 @@ CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.githu
 gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].name' | sort -u
 ```
 
-本仓库当前必需的六个是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
+CI 定义的六个检查名称是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
 **依赖安全公告**、**前端检查（clients/app）**。其中**依赖安全公告**是否必需按
-[ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断：它的失败可能来自与本次改动无关的
+[ADR-0008](openspec/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断：它的失败可能来自与本次改动无关的
 上游 advisory。
 
 **前端检查（clients/app）** 是 2026-10-11 新增的 job。`clients/app` 是独立 npm 工程，根目录的
@@ -137,10 +141,10 @@ gh api repos/lindongfang/acp-remote/branches/main/protection   # 404 = 未启用
 分支保护在 public 仓库上随 GitHub Free 就有，私有仓库需要 GitHub Pro/Team/Enterprise。**本仓库是 public**
 （2026-09-23 核实：`gh api repos/lindongfang/acp-remote --jq .visibility` 返回 `public`），所以这一项没有 plan 前提。
 
-**已核实的现状（2026-09-23）**：ruleset **`main-protection`**（id `23858733`）——`target: branch`、
+**历史核实记录（2026-09-23，不代表当前线上设置）**：ruleset **`main-protection`**（id `23858733`）——`target: branch`、
 `enforcement: active`、条件 `ref_name: ["~DEFAULT_BRANCH"]`；规则为 `deletion` + `non_fast_forward` +
 `required_status_checks`（`strict_required_status_checks_policy = true`、`do_not_enforce_on_create = false`，
-五个必需检查就是上面那五个上报名，已逐个与 check-runs 对上）+ `pull_request`
+当时的五个必需检查已逐个与 check-runs 对上；后续新增前端检查，当前必需集合须按线上 ruleset 与 check-runs 重新核实）+ `pull_request`
 （`required_approving_review_count = 0`；单人仓库必须是 0，否则自己的 PR 无人可批准）；
 bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 仍返回 404：
 本仓库用 ruleset 而不是经典分支保护，两者不需要同时开。
@@ -149,7 +153,7 @@ bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 
 （依赖许可证与来源、依赖安全公告、密钥扫描）是先于落地的门禁；bypass 让直推仍然可行，但那是紧急出口不是
 日常路径（直推会跳过这三个判定）。变更落地流程是：分支 → PR → `gh pr checks --watch` → squash 合并
 （`gh pr create --fill`；squash 合并用 PR 标题当提交信息，因此标题同样要合规）。本地合入到开 PR
-之前须完成本地 `npm run verify`；前端改动另在 `clients/app` 运行 `npm run check`。提交前检查实际差异、暂存范围和 `git diff --check`，不得混入用户的无关修改。PR 必须通过六个必需检查；落后 main 时先更新并重新检查。
+之前须完成本地 `npm run verify`；前端改动另在 `clients/app` 运行 `npm run check`。提交前检查实际差异、暂存范围和 `git diff --check`，不得混入用户的无关修改。PR 必须通过线上规则要求的全部检查，并确认本次变更适用的 CI 检查全部通过；落后 main 时先更新并重新检查。
 
 没有再上「移除 bypass」的理由：对单人仓库它不是对你的安全边界（你本来就能改 ruleset），只是减速带；
 而它的代价是真实的一一某个 workflow 改动把必需检查弄红时，所有 PR 都进不来，你还得先去改设置。
@@ -159,7 +163,7 @@ bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 
 `.gitleaks.toml`。自研 keystore 条目**明文**形态的规则（`acpr-keystore-plaintext-entry`）已随
 `identity-auth-and-keystore` 落地；它的**首次真实执行仍在 CI 的 `secrets` job**（本机无 gitleaks），
 且只覆盖「被 base64/base64url 编码后的明文条目」这一形态——原始二进制与 DPAPI 密文无法模式识别。详情见下方与
-`docs/adr/0008-ci-supply-chain-tooling.md` 的残余风险 3。
+`openspec/adr/0008-ci-supply-chain-tooling.md` 的残余风险 3。
 
 已核实为**已开启的**（2026-09-23）：`secret_scanning`、`secret_scanning_push_protection`、
 Dependabot 告警与安全更新。push protection 在推送前拦截已知 provider 模式的凭据——这个时序 CI 给不了；
