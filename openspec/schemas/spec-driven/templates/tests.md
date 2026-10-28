@@ -1,7 +1,7 @@
 # Tests
 
 <!-- 独立tester编码前规划，reviewer检视。只写用例；结果另存testing/runs。
-固定字段名用于结构校验，值用中文。ID跨版本稳定；Entry是命令或明确操作，不会被门禁自动执行。
+固定字段名供后续结构校验使用，当前由reviewer人工核对，值用中文。ID跨版本稳定；Entry是命令或明确操作，不会被门禁自动执行。
 每级required/not-applicable必须选一项并写理由；required至少一例。实际测试代码留所属工程。
 从以下示例复制用例块并补齐，不能提交占位符。完整规则与工具策略见config.yaml。 -->
 
@@ -22,7 +22,7 @@
 ### CAP-001 用例标题
 
 - Level: L5
-- Requirement: 替换为spec文件及Requirement/Scenario名称；活动裸specs指增量，显式openspec/specs指长期，suite裸路径指长期；门禁只校验文件，reviewer核对场景与覆盖；skip_specs引用proposal.md的Success Criteria条目
+- Requirement: 替换为spec文件及Requirement/Scenario名称；活动裸specs指增量，显式openspec/specs指长期，suite裸路径指长期；当前无专项结构门禁，reviewer核对文件、场景与覆盖；skip_specs引用proposal.md的Success Criteria条目
 - Executor: automation
 - Tool: 替换为具体测试程序、浏览器工具或人工
 - Preconditions: 替换为输入、账户/身份、状态和测试数据前提

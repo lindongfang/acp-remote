@@ -1,141 +1,18 @@
-# Dependabot 配置：依赖更新的唯一配置点。
-#
-# 为什么需要它：`docs/SECURITY_DESIGN.md` §16.2 要求「安全修复可以定位受影响版本」，而本仓库的
-# 依赖是锁定的（`Cargo.lock`、`package-lock.json` 入库）。锁定本身不产生更新——没有这项配置时，
-# 上游发布安全修复只能靠人想起去看，等于把供应链响应依赖在记忆上。
-#
-# 与提交规范的关系：Dependabot 生成的提交信息必须能过 `commitlint.config.mjs` 的词表，
-# 所以每个 ecosystem 都显式配置 `commit-message.prefix`：
-#   - `build(deps):` → `build` 在 TYPES 里、`deps` 在 SCOPES 里；
-#   - `ci:` → `ci` 在 TYPES 里（scope 可选）。
-# 刻意**不使用** `include: scope`：它会把被更新的依赖名列表填进 scope，产生
-# `build(serde, tokio): ...` 这类不在 SCOPES 里的 scope，直接让 `commits` job 失败。
-#
-# `cooldown` 的作用是避免第一时间采用刚发布的版本：发布者账号被盗后植入恶意版本，
-# 通常在被发现与撤回前的这段窗口里传播，冷却期让这段时间过去再考虑升版。
-# 冷却期不改变「升级仍要过 CI」这件事——`checks` / `deps` / `advisories` 三个 job 照常判定。
-
 version: 2
 updates:
-  - package-ecosystem: cargo
-    directory: "/"
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "build(deps)"
-    cooldown:
-      default-days: 7
-      semver-major-days: 30
-    groups:
-      # minor 与 patch 合并成一个 PR：这类升级的审阅重点相近，分开提会淹没 PR 列表。
-      # major 升级刻意不分组——它需要逐个读 changelog 与迁移说明。
-      cargo-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
   - package-ecosystem: npm
     directory: "/"
     schedule:
       interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
     commit-message:
       prefix: "build(deps)"
     cooldown:
       default-days: 7
-      semver-major-days: 30
-    # `@fission-ai/openspec` 是合同门禁 `check:docs` 与变更校验实际使用的引擎，在 `package.json` 里
-    # 精确 pin：它的升级会改变判定语义，必须连同 `openspec/**` 资产一起人工验证，不适合
-    # 让 Dependabot 每周单独开一个 PR。要升级时手工改 pin 并重跑 `npm run check`。
-    ignore:
-      - dependency-name: "@fission-ai/openspec"
-    groups:
-      # 这些包只用于合同校验脚本与提交钩子（见 package.json 的 description），
-      # 它们的升级会影响门禁本身的行为，因此仍需过全部 CI。
-      npm-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  # `clients/app` 是**独立的 npm 工程**（自带 `package.json` 与 `package-lock.json`），
-  # 根条目 `directory: "/"` 不覆盖它。此前没有这条声明时，Dependabot 仍会为该 manifest
-  # 生成更新，但走的是**默认配置**：标题会写成 `... in /clients/app`，其中 `/clients/app`
-  # 被 `commitlint` 当成 scope，而 scope 是「模块与交付面边界」、路径不在词表里，因此
-  # `commits` job 必失败（#49–#53）。显式声明后即可带上与根条目一致的 `commit-message.prefix`，
-  # 标题不再含路径，同时沿用同一套冷却期与分组策略。
-  #
-  # 注意前端工程的验证面：`clients/app` 的 `tsc` / `vitest` / `expo export` 现在由 CI 的
-  # `前端检查（clients/app）` job 覆盖（2026-10-11 新增；`npm ci` 会连带断言锁文件与
-  # package.json 同步）。但**浏览器级 E2E**（`e2e/run-e2e.mjs`、`scripts/run-browser-check.mjs`）
-  # 仍不在任何 job 内，改动前端后仍须本地手动跑。
-  - package-ecosystem: npm
-    directory: "/clients/app"
-    schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "build(deps)"
-    cooldown:
-      default-days: 7
-      semver-major-days: 30
-    # `react-native` 停在 `0.x`，按 SemVer 它的每次 `0.86 → 0.87` 都算 **minor**，但这类 minor
-    # 实际对应的是 Expo SDK 的 **major**（57 → 58）：RN 的升级必须与 SDK 同批进行，单独走 minor
-    # 分组只会稳定失败（实测只升 RN 到 0.87.1 时 `expo export` 报 `ERR_PACKAGE_PATH_NOT_EXPORTED`）。
-    # 因此只挡 `react-native` 的 minor 版本更新，不让它单独进下面的分组。
-    #
-    # 取值域注意：`ignore` 的 `update-types` 用 `version-update:semver-minor`，与 `groups` 的
-    # `minor` 不是同一套词表，写错不会报错、只会静默失效。
-    # 该字段只看**版本更新**、不看**安全更新**，所以 RN 的安全修复仍会照常开 PR。
-    # expo 家族（`expo` / `expo-router` / `expo-constants` / `expo-status-bar`）刻意整族挡住 major：
-    # 这一族的**主版本号就是 SDK 号**（57/58/59…），跨 SDK 必须整族同批升级，而 Dependabot 看不出
-    # 这层关系。证据：`expo-router@58.0.0` 的对等依赖要求 `expo-constants@^58.0.0`，而本仓库顶层与
-    # `expo@57.0.27` 都要求 `expo-constants@~57.0.21`——同一个位置只能有一份，于是 `npm ci` 直接以
-    # `ERESOLVE` 退出，`tsc` 与单测根本没执行（#76 的失败形状）。
-    # `package.json` 里的范围号挡不住 Dependabot：默认 `versioning-strategy: auto` 允许它改写范围本身
-    # （`b34ad17` 中 dependabot[bot] 把 `"typescript": "~6.0.3"` 改成了 `"~7.0.2"`），所以这道边界
-    # 只能设在 `ignore` 里。`react` / `react-dom` 挡 minor 同理：SDK 57 的期望版本是 `19.2.3`，
-    # 而 `19.3.0` 是 minor，能过门禁却不在 SDK 57 的期望集合内。
-    # 维护责任：本清单不随依赖自动扩展——将来若把 expo 家族的包（如 `expo-linking`、
-    # `@expo/metro-runtime`）新增为 `clients/app/package.json` 的**直接依赖**，必须同步在上面补一条
-    # 它的 major 规则，否则跨 SDK 的提议会从新包重新出现。
-    ignore:
-      - dependency-name: "react-native"
-        update-types: ["version-update:semver-minor"]
-      - dependency-name: "expo"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "expo-router"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "expo-constants"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "expo-status-bar"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react"
-        update-types: ["version-update:semver-minor"]
-      - dependency-name: "react-dom"
-        update-types: ["version-update:semver-minor"]
-    groups:
-      # 与根条目同理：minor/patch 合并成一个 PR；major 不分组，需逐个读迁移说明。
-      # expo / react-native 的主版本升级会动构建配置，尤其需要单独审阅。
-      clients-app-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
     cooldown:
       default-days: 7
-    groups:
-      # action 的 major 升级在本仓库是**受约束的变化**：`.github/workflows/ci.yml` 里的
-      # 第三方 action 按 commit SHA 固定，官方 action 固定到 major。Dependabot 只会改注释里的
-      # 版本号而不会把官方 action 换成 SHA，也不会替我们核对 ADR-0008 的许可证与数据外流约束，
-      # 因此这类 PR 必须人工读 diff 后再合。
-      github-actions:
-        patterns: ["*"]

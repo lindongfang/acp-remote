@@ -1,38 +1,19 @@
 {
-  "name": "acp-remote-contracts",
+  "name": "acp-remote",
   "version": "0.0.0",
   "private": true,
-  "description": "ACP Remote 协议合同资产（schema / fixture / 兼容矩阵）的机器校验入口。只承载开发期校验脚本，不发布任何运行时产物；Rust 二进制与 PWA 的构建不依赖本文件。",
+  "description": "Harness Control Plane 新架构设计与通用开发工具；当前无产品实现。",
   "type": "module",
   "license": "Apache-2.0",
-  "engines": {
-    "node": ">=22.12.0"
-  },
+  "engines": { "node": ">=22.12.0" },
   "scripts": {
-    "check": "npm run check:schemas && npm run check:commands && npm run check:errors && npm run check:features && npm run check:assets && npm run check:acp && npm run check:docs && npm run check:boundaries && npm run check:drift && npm run check:openspec",
-    "verify": "npm run check && npm run check:rust",
-    "check:schemas": "node scripts/check-schema-fixtures.mjs",
-    "check:commands": "node scripts/check-command-catalog.mjs",
-    "check:errors": "node scripts/check-error-registry.mjs",
-    "check:features": "node scripts/check-features.mjs",
-    "check:assets": "node scripts/check-contract-assets.mjs",
-    "check:acp": "node scripts/check-acp-compatibility.mjs",
-    "check:docs": "node scripts/check-doc-links.mjs",
-    "check:boundaries": "node scripts/check-crate-boundaries.mjs",
-    "check:drift": "node scripts/check-contract-drift.mjs",
-    "check:openspec": "npm run test:workflow && node scripts/check-openspec.mjs",
-    "test:workflow": "node --test scripts/tests/openspec-tests.test.mjs",
-    "check:rust": "cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && cargo test --locked --workspace --all-features",
     "lint:commits": "commitlint",
     "prepare": "husky"
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.2.4",
-    "@commitlint/config-conventional": "^21.2.2",
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
     "@fission-ai/openspec": "1.15.0",
-    "ajv": "^8.20.0",
-    "ajv-formats": "^3.0.1",
-    "husky": "^9.1.7",
-    "yaml": "2.9.1"
+    "husky": "9.1.7"
   }
 }

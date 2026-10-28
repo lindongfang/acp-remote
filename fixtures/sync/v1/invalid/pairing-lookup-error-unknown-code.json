@@ -1,7 +1,0 @@
-{
-  "code": "pairing.nonexistent",
-  "message": "pairing code is invalid",
-  "retryable": false,
-  "correlationId": null,
-  "details": {}
-}

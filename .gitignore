@@ -1,50 +1,18 @@
-# Rust workspace
+# Build outputs and dependencies
 /target/
+node_modules/
+dist/
 **/*.rs.bk
 
-# `vendor/windows-local-ipc` 不是 workspace 成员（根 `Cargo.toml` 的 `workspace.exclude`），
-# 因此它可以（也需要）在自己的目录里独立 `cargo build/test`——那会在目录下生成 `target/` 与 `Cargo.lock`，
-# 上面的 `/target/` 只匹配仓库根。两者都不入库：作为 path 依赖被 `server` 消费时，构建产物进根 `target/`、
-# 版本解析由根 `Cargo.lock` 覆盖；独立的 `Cargo.lock` 只是本机独立构建的副产物。
-/vendor/windows-local-ipc/target/
-/vendor/windows-local-ipc/Cargo.lock
-
-# Node 工具链（合同校验脚本的 devDependencies）
-node_modules/
-npm-debug.log*
-
-# 前端构建产物
-dist/
-
-# 本地环境与日志
+# Local settings, credentials and runtime data
 .env
 .env.*
 *.log
-# 变更/归档记录里的**原始证据日志**（`openspec/changes/**/reports/**/*.log`）同样不入库：
-# 它们只是工作区内的过程证据，归档记录（`verification.md` 的 Checks 表）已给出命令、环境与结果摘要，
-# 复盘时在对应目标提交上重跑同样命令即可复现；不要把这类日志 `git add -f` 强行入库。
-# 本行与上面的 `*.log` 重叠，显式写出是为了固定这条策略、避免后续被误当作「遗漏的证据」补提。
-openspec/changes/**/reports/**/*.log
-
-# 仓库根的 reports/ 是早期变更的历史遗留（当时证据直接写在仓库根）：
-# 现行约定是 openspec/changes/<变更>/reports/（见上），仓库根不再接受证据/日志目录，
-# 因此这份遗留目录整体不入库；本地文件保留，是否删除由开发者自行决定。
-/reports/
-
-# 本地临时工作树与独占构建目录，不入版本控制
-.worktrees/
-.target-wt/
-
-# SQLite 运行时副产物：`fixtures/storage/**/*.sqlite3` 本身是入库的固定 fixture，但库文件一旦被以连接
-# 方式打开，SQLite 就会在它旁边生成预写日志与共享内存索引（`-wal` / `-shm`）。这两个文件的内容与
-# 进程时序绑定、退出时被 checkpoint 回收，不构成可复现的版本控制内容：本机跑完 `storage-sqlite`
-# 的用例后它们必然重新出现（`fixtures/storage/v2/` 下尤其明显），因此按后缀整体忽略，而不是
-# 每次删除后又被重建、反复出现在 `git status` 里。
+*.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
-
-# 编码宿主配置属于本机偏好，不再作为项目执行依赖
+/reports/
 /.omp/
-
-# 可重复用例入库；逐次执行输出、截图和原始报告由本地/CI保管
+.worktrees/
+.target-wt/
 /openspec/testing/runs/

@@ -216,8 +216,8 @@ artifacts:
       L5 comes from confirmed behavioral specs. In an active change, bare
       specs/<capability>/spec.md means its delta; explicit openspec/specs paths
       mean durable specs. In durable suites, bare paths mean durable specs.
-      Never fall back across roots. The gate checks file existence only;
-      reviewer verifies Requirement/Scenario names and coverage separately.
+      Never fall back across roots. No local structure gate currently exists;
+      reviewer manually verifies file existence, Requirement/Scenario names and coverage.
       skip_specs changes reference the proposal's Success Criteria section instead.
       L6 states real/mock component boundaries.
       Coder owns development unit tests; tester owns acceptance expectations.
@@ -277,7 +277,7 @@ artifacts:
       overlap, and every package has a verify step that can actually run where
       it is executed.
 
-      The local gate also validates plan structure: required sections with
+      Until a dedicated local gate is implemented, reviewer manually validates: required sections with
       non-empty bodies, a Work Packages table with 7 columns and unique IDs,
       Main E2E typed YAML consistency (one block, no duplicate keys or aliases;
       non-empty reason/basis strings and string-list alternative_checks for

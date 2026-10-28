@@ -1,7 +1,0 @@
-{
-  "code": "pairing.qr_invalid",
-  "message": "pairing credential is not valid",
-  "retryable": false,
-  "correlationId": null,
-  "details": {}
-}

@@ -1,68 +1,6 @@
-// 提交信息规范（Conventional Commits）的唯一机器定义。
-//
-// 类型与 scope 词表只在这里维护一处：本地 `commit-msg` 钩子（`.husky/commit-msg`）、
-// CI 的提交范围校验（`.github/workflows/ci.yml` 的 `commits` job，走 `npm run lint:commits`）
-// 和文档（`README.md` 的「合同检查」）都指向本文件，不要在别处再抄一份词表。
-//
-// 与 `@commitlint/config-conventional` 的差异，都是为了中文仓库的实际书写：
-// - 主题用中文书写，没有大小写概念，因此关闭 `subject-case`；
-// - 中文正文不按英文 100 列折行，因此关闭 `body-max-line-length` / `footer-max-line-length`；
-// - `type-enum` 与 `scope-enum` 收窄到本仓库实际存在的边界。
-//
-// 合并提交、`Revert ...` 与 `fixup!` / `squash!` 提交由 commitlint 的默认 ignore 规则跳过。
-// scope 可选；写了就必须落在 `SCOPES` 里。仓库出现新边界（新 crate、新协议、新交付面）时
-// 在这里补一项，并在同一提交里更新 `README.md` 的提交信息说明。
-
-/** 允许的提交类型。`!` 或 `BREAKING CHANGE:` 表示破坏性变更。 */
-export const TYPES = [
-  "feat", // 新增能力
-  "fix", // 修复缺陷
-  "docs", // 只改文档
-  "style", // 只改格式（不改行为）
-  "refactor", // 不改行为的重构
-  "perf", // 性能
-  "test", // 测试
-  "build", // 构建、依赖、工具链
-  "ci", // CI 配置
-  "chore", // 其他杂项
-  "revert", // 回滚
-];
-
-/** 允许的 scope，对应仓库的模块与交付面边界（`docs/MODULE_ARCHITECTURE.md` §3.1）。 */
-export const SCOPES = [
-  "core",
-  "storage", // storage-sqlite
-  "sync", // sync-protocol、server::sync
-  "node-link", // node-link-protocol、server::node_link、node-link-client
-  "acp", // acp-protocol、server::acp_facade
-  "agent-host",
-  "identity", // identity-auth、identity-keystore
-  "server",
-  "app", // daemon、CLI、组合根
-  // 会话恢复（session.resume）交付面：一个能力横跨 acp-protocol 的 `session/resume` DTO、
-  // node-link-protocol + server::node_link 的命令路由、core 的 `resume_session` 用例、
-  // storage-sqlite 的 v5 恢复列与 `load_recovery`、agent-host 的进程不在时恢复路径，
-  // 以及 app 的组合根接线。它不是 §3.1 里的某个 crate 或模块，因此单列一个跨层交付面 scope。
-  "session-resume",
-  "frontend", // Web/PWA 与后续原生客户端
-  "transcript", // acpr-transcript
-  "wire", // acpr-wire
-  "compat", // compatibility/、schemas/、fixtures/
-  "scripts", // scripts/ 下的合同校验脚本
-  "docs",
-  "ci",
-  "deps",
-  "release", // npm 分发与发布
-  "repo", // 仓库级配置（workspace、.gitignore、AGENTS.md 等）
-  // 历史兼容项，**不是**交付面边界：`test` 本是上面 `TYPES` 里的类型而非 scope，
-  // 历史提交 `3484541 docs(test): 订正 R25 覆盖分档与判别式注释` 把它误用成了 scope。
-  // 该提交已进入 `main` 且经评估不再改写（改写会连带改变其后 10 个后继提交的 SHA，
-  // 并使 openspec/changes/archive/2026-10-02-session-resume/ 下多份已入库报告的证据引用悬空），
-  // 因此在这里收录以让 CI `commits` job 能通过。**新增提交不要用它**：
-  // 只改测试请用 `test(<交付面>)`，例如 `test(core)`、`test(storage)`。
-  "test",
-];
-
+// 提交信息 type/scope 的唯一机器定义；新模块落地时同步维护。
+export const TYPES = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"];
+export const SCOPES = ["repo", "docs", "ci", "deps", "release", "scripts"];
 export default {
   extends: ["@commitlint/config-conventional"],
   rules: {
@@ -71,17 +9,7 @@ export default {
     "subject-empty": [2, "never"],
     "subject-case": [0],
     "body-max-line-length": [0],
-    "footer-max-line-length": [0],
+    "footer-max-line-length": [0]
   },
-  // 合并提交豁免的**本意**由 `@commitlint/config-conventional` 提供，但它只认
-  // `Merge pull request` / `Merge branch x` 这类 git 默认措辞（大写、无冒号）；
-  // 本仓库按中文习惯写成 `merge: 并入 …` 或 `merge(candidate): …`，一条都不匹配，
-  // 于是合并提交被当成普通提交去核对 type/scope 词表而失败——偏离的是书写形式，
-  // 不是「合并提交不承载交付语义、不该按 Conventional Commits 校验」这条本意。
-  // 因此这里按同一本意补一条前缀豁免，而不是把 `merge` 塞进 `TYPES`：后者还得把
-  // `candidate`/`integ` 这类**工作流产物**塞进 `SCOPES`，而 scope 的定义是「模块与交付面边界」，
-  // 二者不是同一层概念，塞进去会污染词表。
-  // 范围仍然很窄：只豁免「以 `merge`（可带 scope）加冒号开头」的合并消息，
-  // 普通提交一律照常按词表校验。
-  ignores: [(message) => /^merge(\([^)]+\))?!?:/.test(String(message ?? '').split('\n')[0])],
+  ignores: [(message) => /^merge(?:\(|:)/i.test(message)]
 };

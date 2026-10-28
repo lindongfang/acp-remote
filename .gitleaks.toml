@@ -1,10 +1,10 @@
 # gitleaks 配置：提交进仓库的密钥材料扫描。
 #
-# 判据来源：`AGENTS.md` §4「私钥和 token 不得写入日志、协议错误、测试快照或普通 SQLite 字段」，
-# 以及 `docs/SECURITY_DESIGN.md` §16.2 的供应链要求；执行者是 CI 的 `secrets` job
-# （`gitleaks/gitleaks-action`，按 commit 固定，见 `docs/adr/0008-ci-supply-chain-tooling.md`）。
+# 执行者是 CI 的 secrets job，工作流按 commit 固定扫描 action。
+# 新架构清理后仍保留历史公开测试向量的精确允许项：全历史扫描仍会读取旧提交。
+# 下文旧文件路径及核对记录仅解释历史扫描例外，不表示这些产品文件仍存在。
 #
-# 这里刻意只做一件事：声明使用 gitleaks 的默认规则集。
+# 使用默认规则集，另保留必要的产品密钥格式规则及历史精确例外。
 # `[extend] useDefault = true` 是所有规则的来源，不在这里复制一份正则——复制出来的规则会与上游
 # 默认集漂移，而且会让「为什么漏检」变得无法追溯。
 [extend]
