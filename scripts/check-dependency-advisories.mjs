@@ -2,7 +2,7 @@
 //
 // 为什么需要它而不是直接跑 `npm audit`：`npm audit` 没有 ignore 机制（`npm audit --help`
 // 里没有这个选项），而仓库里总会有**上游无修复**或修复代价过高的 advisory（当前是
-// `node-forge`、`uuid`、`decode-uri-component` 与 `zod`）。直接跑 audit 会让 `deps` job
+// `deepmerge`、`node-forge`、`uuid`、`decode-uri-component` 与 `zod`）。直接跑 audit 会让 `deps` job
 // 永远红灯，于是每次合并都得走管理员 bypass —— 那会让「绕过门禁」变成习惯，是比单条
 // advisory 更大的风险。反过来，advisory 被上游撤回或修复后，对应登记项会以「本次未命中」
 // 提示，复核后即应删除（`braces` 的 GHSA-vfj7-8cjw-p6xm 于 2026-10-23 撤回，登记项已删除）。
@@ -47,6 +47,16 @@ const PROJECTS = [
  * 不允许「不写就等于对所有工程生效」的隐式放行。
  */
 const ALLOWED = [
+  {
+    id: "GHSA-gcqx-w48m-w2h4",
+    project: "clients/app",
+    package: "deepmerge",
+    severity: "low",
+    reason:
+      "上游没有已发布的修复版本。本工程只在 `expo export` 的构建期经 `@expo/config` 合并仓库内受控的 Expo 配置，不进入 web 运行时，也不接收用户或网络输入。",
+    expires:
+      "deepmerge 发布修复版本，或 Expo 移除 `@expo/config` 对 deepmerge 的依赖时删除本条并升级。",
+  },
   {
     id: "GHSA-86w9-cpqp-85rv",
     project: "clients/app",

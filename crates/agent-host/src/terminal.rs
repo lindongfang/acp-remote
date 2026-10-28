@@ -320,11 +320,13 @@ impl TerminalService {
             let closed = self.closed_notify.notified();
             tokio::pin!(closed);
             closed.as_mut().enable();
-            if let Some(status) = lock(&terminal.exit).clone() {
-                return Ok(WaitForTerminalExitResponse::from_status(&status));
-            }
             if self.is_closed() {
                 return Err(HostError::SessionClosed);
+            }
+            // 关闭路径先置 closed，再终止进程树；驱动任务可能紧接着记录退出事实并唤醒本任务。
+            // 会话已经关闭时，这个退出事实属于关闭动作，不能反过来把已经取消的等待报告成成功。
+            if let Some(status) = lock(&terminal.exit).clone() {
+                return Ok(WaitForTerminalExitResponse::from_status(&status));
             }
             tokio::select! {
                 () = notified.as_mut() => {}
@@ -1199,6 +1201,45 @@ mod tests {
         assert!(
             matches!(&result, Err(HostError::SessionClosed)),
             "关闭后 wait_for_exit 必须显式失败：{result:?}"
+        );
+        supervisor.shutdown().await;
+    }
+
+    /// 关闭会终止进程树，因此驱动任务可能在 `closed_notify` 之后记录退出事实。
+    /// 已进入等待的任务即使同时收到两个唤醒，也必须以 `SessionClosed` 收敛；否则关闭请求
+    /// 返回后 fake Agent 会收到成功的退出响应，却收不到它正在等待的取消结果。
+    #[tokio::test]
+    async fn session_close_wins_over_exit_recorded_during_teardown() {
+        let program = fake_agent_binary();
+        let (supervisor, _incoming) = Supervisor::start(launch_spec(&program))
+            .await
+            .expect("启动监督者");
+        let service = Arc::new(service(Arc::clone(&supervisor)));
+        let terminal = dummy_terminal("term-close-wins");
+        lock(&service.terminals).insert("term-close-wins".to_owned(), Some(Arc::clone(&terminal)));
+
+        let waiter = {
+            let service = Arc::clone(&service);
+            tokio::spawn(async move { service.wait_for_exit("term-close-wins").await })
+        };
+        // 单线程 runtime 在当前任务让出前不会调度 spawn；让等待者登记后，再在同一个不抢占区间里
+        // 依次制造「关闭通知 + 随后退出事实」的目标交错。
+        tokio::task::yield_now().await;
+        service.shutdown_sync();
+        *lock(&terminal.exit) = Some(TerminalExitStatus {
+            exit_code: Some(0),
+            signal: None,
+            meta: None,
+        });
+        terminal.exited.notify_waiters();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("关闭必须唤醒等待者")
+            .expect("等待任务");
+        assert!(
+            matches!(&result, Err(HostError::SessionClosed)),
+            "关闭状态必须优先于随后记录的退出事实：{result:?}"
         );
         supervisor.shutdown().await;
     }
