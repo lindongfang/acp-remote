@@ -1,0 +1,2 @@
+const task=await taskSpace('independent-management-r16-20261030');const page=task.page('p1');
+console.log(await page.evaluate(()=>({audit:window.__managementAudit,pages:window.__managementAudit?.pages.map(p=>({ok:p.ok,length:p.result?.items?.length,next:typeof p.result?.nextCursor,error:p.error})),buttons:[...document.querySelectorAll('button')].map(b=>b.textContent),summary:document.body.innerText.slice(0,1000)})));

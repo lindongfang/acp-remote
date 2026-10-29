@@ -1,0 +1,5 @@
+const fs=await import('node:fs/promises');const root=(process.env.ACP_E2E_ROOT??'D:/Project/acp-remote/.tmp/r6-e2e-acceptance-20261030')+'/evidence';
+const before=JSON.parse(await fs.readFile(`${root}/A-restarted.json`,'utf8'));const after=JSON.parse(await fs.readFile(`${root}/A-reopened.json`,'utf8'));
+const result={samePublicKey:before.identity.publicKey===after.identity.publicKey,sameClientId:before.identity.clientId===after.identity.clientId,sameNodeId:before.identity.nodeId===after.identity.nodeId,nonExtractable:after.identity.extractable===false,authenticated:after.body.includes('NODE CONTROL / AUTHENTICATED'),proofObserved:after.events.some(x=>x.event==='send'&&x.type==='proof'),subscribeObserved:after.events.some(x=>x.event==='send'&&x.type==='subscribe')};
+await fs.writeFile(`${root}/A-persistence-comparison.json`,JSON.stringify(result,null,2));console.log(result);
+const b=JSON.parse(await fs.readFile(`${root}/B-all-revoked-final.json`,'utf8'));console.log(b.map(x=>({targetId:x.targetId,closes:x.events.filter(e=>e.event==='close'),page:x.body})));

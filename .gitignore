@@ -1,10 +1,12 @@
 # Build outputs and dependencies
 /target/
+app/target/
 node_modules/
 dist/
 **/*.rs.bk
 
 # Local settings, credentials and runtime data
+.tmp/
 .env
 .env.*
 *.log

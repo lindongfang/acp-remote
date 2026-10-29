@@ -1,0 +1,12 @@
+import fs from 'node:fs/promises';
+import {state} from './browser-state.mjs';
+const root='D:/Project/acp-remote/.tmp/approval-response-loss-20261030/';
+const before=JSON.parse(await fs.readFile(root+'evidence/after-loss.json','utf8'));
+const t=await taskSpace(10),p=t.page('p1');
+await p.reload();
+await p.waitForFunction(()=>window.__recoveryAudit?.authenticated.length===1,undefined,{timeout:20000});
+const after=await state(p),expected=before.loss.observations[0].clientId;
+const result={before,after,expectedClientId:expected,sameKey:before.publicKeySha256===after.publicKeySha256,sameNode:before.nodeId===after.nodeId,stableClientId:after.clientId===expected,nullHello:after.audit.hello.length===1&&after.audit.hello[0].clientId===null,helloSameKey:after.audit.hello[0]?.publicKeySha256===before.publicKeySha256,pairingInvalidObserved:after.audit.http.some(x=>x.status===401&&JSON.stringify(x.error).includes('pairing_invalid'))};
+await fs.writeFile(root+'evidence/recovery.json',JSON.stringify(result,null,2));
+if(!result.sameKey||!result.sameNode||!result.stableClientId||!result.nullHello||!result.helloSameKey||!result.pairingInvalidObserved||after.status!=='consumed'||after.privateExtractable)throw Error('production page recovery assertion failed; inspect redacted evidence');
+console.log(result);console.log(await p.snapshot());

@@ -1,0 +1,1 @@
+import {connect} from './cdp.mjs';const c=await connect('A');try{console.log(c.targets.map(x=>({title:x.title,url:x.url})));const p=await c.attach(c.targets[0].targetId);console.log(await p.evaluate(`({url:location.href,title:document.title,body:document.body?.innerText})`));}finally{c.close()}

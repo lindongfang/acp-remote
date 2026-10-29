@@ -1,0 +1,78 @@
+[package]
+name = "acp-remote"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98"
+license = "Apache-2.0"
+description = "ACP Remote local node access service"
+
+[lib]
+name = "acp_remote"
+path = "src/lib.rs"
+
+[[bin]]
+name = "acp-remote"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+axum = { version = "0.8.9", features = ["ws"] }
+base64 = "0.22.1"
+bytes = "1.12.1"
+clap = { version = "4.6.7", features = ["derive"] }
+fs4 = "1.1.0"
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+getrandom = "0.3.4"
+hex = "0.4.3"
+hyper-util = { version = "0.1.21", features = ["http1", "server", "service", "tokio"] }
+mime_guess = "2.0.5"
+p256 = { version = "0.14.0", features = ["ecdsa"] }
+pem = "3.0.6"
+rust-embed = { version = "8.13.0", features = ["debug-embed"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = "1.15.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
+subtle = "2.6.1"
+thiserror = "2.0.21"
+tokio = { version = "1.53.3", features = ["full"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+toml = "1.1.8"
+tracing = "0.1.44"
+tungstenite = { version = "0.29.0", default-features = false }
+url = "2.5.8"
+zeroize = "1.9.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Console",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+rcgen = "0.14.7"
+tokio-tungstenite = "0.29.0"
+tower = { version = "0.5.3", features = ["util"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,10 @@
+import {readFile,writeFile} from 'node:fs/promises';
+import {readIdentity} from './r2-state.mjs';
+const task=await taskSpace(4);const page=task.page('p1');
+await page.cdp('Page.addScriptToEvaluateOnNewDocument',{source:`window.__closes=[];const Native=window.WebSocket;window.WebSocket=class extends Native{constructor(...args){super(...args);this.addEventListener('close',e=>window.__closes.push({code:e.code,reason:e.reason}))}};`});
+await page.reload();
+await page.waitForFunction(()=>!!document.querySelector('input[name="pairing-code"]')&&window.__closes.some(e=>e.code===4401),undefined,{timeout:15000});
+const identity=await readIdentity(page);const old=JSON.parse(await readFile('D:/Project/acp-remote/.tmp/independent-acceptance-20261030/r2-current-approved.json','utf8'));
+if(identity.clientId!==null||identity.publicKey===old.publicKey)throw Error('verified 4401 did not reset identity');
+const closes=await page.evaluate(()=>window.__closes);
+await writeFile('D:/Project/acp-remote/.tmp/independent-acceptance-20261030/r2-4401.json',JSON.stringify({identity,closes},null,2));console.log({identity,closes});

@@ -1,0 +1,6 @@
+import fs from 'node:fs/promises';
+import {connect,root} from './edge-cdp.mjs';
+const c=await connect();try{
+ const result=await c.evaluate(`(async()=>{const h=window.__claimHarness;const retry=[];for(let i=0;i<3;i++){const r=await h.post('claim',{v:1,proof:h.originalProof});retry.push({status:r.status,sameHostProof:r.body.hostProof===h.response.body.hostProof});}const payload=JSON.parse(new TextDecoder().decode(h.decode(h.originalProof.split('.')[1])));payload.displayName+=' changed';const conflict=await h.post('claim',{v:1,proof:await h.sign(payload)});const raw=h.decode(h.record.publicKey);const publicFingerprint=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',raw)),x=>x.toString(16).padStart(2,'0')).join('');return {retry,conflict:{status:conflict.status,error:conflict.body.error},publicFingerprint,privateExtractable:h.record.privateKey.extractable};})()`);
+ await fs.writeFile(root+'evidence/retries.json',JSON.stringify(result,null,2));console.log(result);if(result.retry.some(x=>x.status!==200||!x.sameHostProof)||result.conflict.status!==409||result.conflict.error.code!=='request_conflict')throw Error('NA021-001 retry/conflict assertion failed');
+}finally{c.close();}

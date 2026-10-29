@@ -7,6 +7,11 @@
   "license": "Apache-2.0",
   "engines": { "node": ">=22.12.0" },
   "scripts": {
+    "build:rust": "npm run build:web && cargo build --manifest-path app/Cargo.toml --locked",
+    "build:web": "npm --prefix clients/web run build",
+    "check": "npm run check:web && npm run check:rust",
+    "check:rust": "cargo fmt --manifest-path app/Cargo.toml --all --check && cargo clippy --manifest-path app/Cargo.toml --all-targets --locked -- -D warnings && cargo test --manifest-path app/Cargo.toml --all-targets --locked",
+    "check:web": "npm --prefix clients/web run check && npm --prefix clients/web run test && npm --prefix clients/web run build",
     "lint:commits": "commitlint",
     "prepare": "husky"
   },

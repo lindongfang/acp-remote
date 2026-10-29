@@ -1,0 +1,7 @@
+import {connect} from './cdp.mjs';const fs=await import('node:fs/promises'),root=process.env.ACP_E2E_ROOT??'D:/Project/acp-remote/.tmp/r6-e2e-acceptance-20261030';
+const a=await connect('A');
+try{const p=await a.attach(a.targets[0].targetId);const clicked=await p.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].filter(x=>x.innerText==='撤销此客户端');if(b.length!==1)throw Error('Expected B revoke button');b[0].click();return true})()`);if(!clicked)throw Error('No click');
+ const confirm=await p.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.innerText==='确认撤销');if(!b)throw Error('Expected confirmation');b.click();return true})()`);console.log({confirm});
+ for(let i=0;i<30;i++){if(await p.evaluate(`document.body.innerText.includes('已撤销')`))break;await new Promise(r=>setTimeout(r,100))}
+}finally{a.close()}
+const b=await connect('B');try{const results=[];for(const t of b.targets){const p=await b.attach(t.targetId);const state=await p.evaluate(`({events:window.__e2e?.events??[],pairForm:!!document.querySelector('form'),savedKeyInMemory:!!window.__saved})`);results.push({targetId:t.targetId,...state})}await fs.writeFile(`${root}/evidence/B-all-revoked.json`,JSON.stringify(results,null,2));console.log(results.map(x=>({targetId:x.targetId,closes:x.events.filter(e=>e.event==='close'),savedKeyInMemory:x.savedKeyInMemory,pairForm:x.pairForm})));}finally{b.close()}

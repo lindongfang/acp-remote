@@ -10,6 +10,28 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  product:
+    name: 节点接入构建与检查
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            clients/web/package-lock.json
+      - name: 读取 Rust 工具链
+        run: rustup show active-toolchain
+      - run: npm ci
+      - run: npm ci --prefix clients/web
+      - name: Rust 与 Web 格式、静态、测试和构建
+        run: npm run check
+      - name: 开发与 Web 依赖审计
+        run: |
+          npm audit --audit-level=high
+          npm --prefix clients/web audit --audit-level=high
   checks:
     name: 开发工具安装与依赖审计
     runs-on: ubuntu-latest

@@ -49,92 +49,96 @@ entropy = 0
 keywords = [
     "QUNQS",
 ]
-# 未验证项（如实登记）：本机无 gitleaks，因此「规则确实会在合成样例上命中」这一点**没有**本地证据，
-# 只能由 CI 的 `secrets` job 承担；若 CI 侧判定该规则从未命中，应在此处调整 keywords 或改用默认规则集。
+# 合成样例与 allowlist 正反控制见 testing/runs/establish-node-access/2026-10-30-independent-supplychain.md。
 
-# 已记录的假阳性（按本文件第 1、2 条政策的最小范围条目）。
-#
-# 命中对象：`Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==` —— **RFC 6455 §1.3 的公开握手示例值**
-# （规范正文里的示例字符串），被默认规则集的 `generic-api-key` 当作候选凭据。它不是任何真实凭据，
-# 也没有对应的服务端秘密；由主 Agent 在 `node-link-owner` 变更交付期核对（PR #28 的 `secrets` job）。
-# 代码侧已把该字面量移除（`test_client.rs` 改为运行时由 16 字节数组编码），这条只为覆盖**历史的那个提交**
-# 仍在 PR 范围内、而 PR 范围扫描会重放旧 diff 的情形；下次全历史扫描（每日 `schedule`）同样受益。
-# 范围故意收窄到「确切字符串 + 确切文件」，不放行目录、不放宽全局规则；若该文件将来不再包含 WebSocket
-# 示例请求，应删掉此条。
+# SC-001 修复：每项只允许指定规则在指定完整路径命中指定完整 secret。
+# condition=AND 将 paths 与 regexes 取交集；regexTarget=secret 避免同一行的其他秘密被一并豁免。
+# paths 相对仓库根目录并使用 ^/$ 锚定；目录扫描应在副本根目录执行 gitleaks dir .。
+# 2026-10-30 配置修复者逐项读取历史 Git blob、重算序列/指纹；不代签独立 reviewer 关闭。
 [[allowlists]]
-description = "RFC 6455 §1.3 公开示例的 Sec-WebSocket-Key（非凭据）；代码已移除该字面量，此条仅豁免历史 diff"
-regexTarget = "line"
-regexes = ['''Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==''']
-paths = ['''crates/server/src/transport/net/test_client\.rs''']
-
-# 每日 `schedule` 的**全历史**扫描命中的固定向量与假阳性（2026-10-11 补登，共 10 处命中、4 条）。
-#
-# 为什么以前没发现：push / pull_request 只扫**本次范围**（实测日志形如「1 commits scanned」），
-# 而这些命中来自**历史提交**（引入提交见下），所以 PR 上一直是绿的；只有每日 `schedule` 的全历史
-# 扫描（实测「204 commits scanned」）才会暴露。
-#
-# 每一处命中值都核对过：A/B/C 三条里的值是**合成的计数序列**——解码后分别是 32 字节的
-# `00 01 02 … 1F`、可打印 ASCII 的连号（PQRSTUVWXYZ 起、到 no 止）、32 字节的 `A0 A1 … BF`——
-# 不是任何真实凭据，也没有对应的服务端秘密；D 那条是文档协议示例里的**节点标识**（UUID），
-# 默认规则集只因字段名含 `access` 而误判。
-#
-# 以下条目都只豁免「确切的值 + 确切的一个或几个文件」：不放行目录、不放宽全局规则。
-# 代价如实记录：以后新增合成向量或同类文档字段，这个 job 会再红一次，需要再补一条。
+description = "RFC 6455 §1.3 公开握手示例，不是身份凭据；历史 test_client.rs 与当前 node.rs 的 management_websocket_rejects_invalid_origin_host_and_protocols 测试使用同一公开 nonce；2026-10-30 修复者核对"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
+paths = ['''^crates/server/src/transport/net/test_client\.rs$''', '''^app/src/node\.rs$''']
 
 [[allowlists]]
-description = "公开固定测试向量：配对 QR 载荷的合成 pairingSecret（base64url 解码为 00 01 … 1F 的 32 字节计数序列）。不是凭据，也没有对应的服务端秘密；fixtures/sync/v1/valid/pairing-qr-payload.json 与 clients/app 的单测共用同一向量。由主 Agent 于 2026-10-11 核对（依据：值解码后的计数序列 + 本地 gitleaks 8.30.1 全历史扫描）"
-regexTarget = "line"
-regexes = ['''"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"''']
-paths = ['''fixtures/sync/v1/valid/pairing-qr-payload\.json''', '''clients/app/src/composition\.test\.ts''']
+description = "公开固定测试材料；synthetic ascending bytes 0..15 (16)；2026-10-30 修复者核对，来源 c1193a0795a7；非运行凭据"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^AAECAwQFBgcICQoLDA0ODw$''']
+paths = ['''^clients/app/src/components/pairing-panel-render\.test\.ts$''']
 
 [[allowlists]]
-description = "公开固定测试向量：node-link 配对 transcript 三个 fixture 的合成 hmacKeyBase64url（base64url 解码为 32 字节可打印 ASCII 连号，PQRSTUVWXYZ 起、到 no 止）。不是凭据；由 compatibility/transcripts/v1/transcripts.json 的表驱动重算。由主 Agent 于 2026-10-11 核对"
-regexTarget = "line"
-regexes = ['''"UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8"''']
-paths = ['''fixtures/node-link/v1/transcripts/pairing-(proof|status|sas)\.json''']
+description = "公开固定测试材料；synthetic ascending bytes 0..31 (32)；2026-10-30 修复者核对，来源 c1193a0795a7,681256a6872a,1b62d87d1b21,22d9dd250684,f6ea252e09fd,fde679c5ba9e；非运行凭据"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8$''']
+paths = ['''^clients/app/e2e/page/checks/pairing-first-run\.ts$''', '''^clients/app/e2e/page/checks/pairing-kinds\.ts$''', '''^clients/app/src/composition\.test\.ts$''', '''^clients/app/src/features/native-qr-consumer\.test\.ts$''', '''^clients/app/src/features/pairing-model\.test\.ts$''', '''^crates/sync-protocol/tests/pairing_fixtures\.rs$''', '''^fixtures/sync/v1/device-qr/vectors\.json$''', '''^fixtures/sync/v1/valid/pairing-lookup-response\.json$''', '''^fixtures/sync/v1/valid/pairing-qr-payload\.json$''']
 
 [[allowlists]]
-description = "公开固定测试向量：sync 配对 transcript 三个 fixture 的合成 hmacKeyBase64url（base64url 解码为 A0 A1 … BF 的 32 字节计数序列）。不是凭据；同样由 compatibility/transcripts/v1/transcripts.json 的表驱动重算。由主 Agent 于 2026-10-11 核对"
-regexTarget = "line"
-regexes = ['''"oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8"''']
-paths = ['''fixtures/sync/v1/transcripts/pairing-(proof|sas|status)\.json''']
+description = "公开固定测试材料；SHA256 of fixture canonical public SEC1 key recomputed；2026-10-30 修复者核对，来源 c1193a0795a7；非运行凭据"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^USpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w$''']
+paths = ['''^clients/app/src/features/native-qr-consumer\.test\.ts$''', '''^fixtures/sync/v1/device-qr/vectors\.json$''']
 
 [[allowlists]]
-description = "已记录的假阳性：docs/NODE_LINK_PROTOCOL.md 协议示例里 accessNodeId 的值是公开的节点标识（UUID），不是凭据；默认规则集 generic-api-key 因字段名含 access 而误判。只豁免该文档里这一类字段，不放行目录、不放宽全局规则。由主 Agent 于 2026-10-11 核对"
-regexTarget = "line"
-regexes = ['''"accessNodeId": "[0-9a-f-]{36}"''']
-paths = ['''docs/NODE_LINK_PROTOCOL\.md''']
-
-# `device-pairing-qr-reference` 新增的公开固定测试向量（2026-10-18 补登）。
-#
-# 这些值是跨 Rust/TypeScript 的共享向量：qrToken 解码后是 00 01 02 … 的合成计数序列，指纹是
-# 公开测试公钥的 SHA-256 摘要；它们不是任何真实凭据，也没有对应的服务端秘密。默认规则集的
-# `generic-api-key` 按高熵字符串误判。只豁免「确切的值 + 确切的文件」，不放行目录、不放宽全局规则。
-[[allowlists]]
-description = "公开固定测试向量：设备扫码取回凭据 qrToken（base64url 解码为 00 01 … 1F 的 32 字节计数序列）。不是凭据；fixtures/sync/v1/valid 与 invalid 请求、clients/app 单测共用同一向量。由主 Agent 于 2026-10-18 核对"
-regexTarget = "line"
-regexes = ['''"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"''']
-paths = ['''fixtures/sync/v1/valid/pairing-qr-lookup-request\.json''', '''fixtures/sync/v1/invalid/pairing-qr-lookup-request-unknown-field\.json''', '''clients/app/src/features/native-qr-consumer\.test\.ts''']
+description = "公开固定测试材料；synthetic ascending bytes 1..32 (32)；2026-10-30 修复者核对，来源 c1193a0795a7；非运行凭据"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA$''']
+paths = ['''^fixtures/sync/v1/invalid/pairing-qr-lookup-request-unknown-field\.json$''', '''^fixtures/sync/v1/valid/pairing-qr-lookup-request\.json$''']
 
 [[allowlists]]
-description = "公开固定测试向量：设备扫码取回凭据的 31 字节负例（长度错误的合成计数序列）。不是凭据；只用于断言请求被拒绝。由主 Agent 于 2026-10-18 核对"
-regexTarget = "line"
-regexes = ['''"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHy"''']
-paths = ['''fixtures/sync/v1/invalid/pairing-qr-lookup-request-short-token\.json''']
+description = "公开固定测试材料；synthetic ascending bytes 1..31 (31)；2026-10-30 修复者核对，来源 c1193a0795a7；非运行凭据"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHy$''']
+paths = ['''^fixtures/sync/v1/invalid/pairing-qr-lookup-request-short-token\.json$''']
 
 [[allowlists]]
-description = "公开固定测试向量：测试公钥的 SHA-256 指纹（32 字节摘要，不是私钥或 token）。该公钥与指纹是共享向量的一部分，用于验证二维码指纹匹配。由主 Agent 于 2026-10-18 核对"
-regexTarget = "line"
-regexes = ['''"USpZeYIpHWiVwqrdwRuVFov6KCpsWZfofCn__9Gcw3w"''']
-paths = ['''fixtures/sync/v1/device-qr/vectors\.json''', '''clients/app/src/features/native-qr-consumer\.test\.ts''']
+description = "公开固定测试材料；public accessNodeId UUID in protocol documentation；2026-10-30 修复者核对，来源 e2b931c3050a；非运行凭据"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^2ae1c07c-9242-46e9-a9d2-4ec58c130f49$''']
+paths = ['''^docs/NODE_LINK_PROTOCOL\.md$''']
 
-# `device-pairing-qr-reference` 历史 diff 中的假 pairingSecret。
-#
-# `pairing-panel-render.test.ts` 首次加入时用 00 01 … 的 16 字节合成序列验证「敏感文本不进 DOM」，
-# 随后已改为低熵占位值；但 gitleaks 的推送范围扫描会重放引入该字面量的旧 diff。这里只豁免
-# 「确切值 + 确切文件」，不放行目录、不放宽全局规则。
 [[allowlists]]
-description = "已记录的假阳性：pairing-panel-render.test.ts 早期版本的假 pairingSecret 字面量（base64url 解码为 00 01 … 0F 的 16 字节合成序列），不是凭据；当前文件已改用低熵占位值。由主 Agent 于 2026-10-18 核对"
-regexTarget = "line"
-regexes = ['''"AAECAwQFBgcICQoLDA0ODw"''']
-paths = ['''clients/app/src/components/pairing-panel-render\.test\.ts''']
+description = "公开固定测试材料；synthetic ascending bytes 160..191 (32)；2026-10-30 修复者核对，来源 e2b931c3050a；非运行凭据"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8$''']
+paths = ['''^fixtures/sync/v1/transcripts/pairing-proof\.json$''', '''^fixtures/sync/v1/transcripts/pairing-sas\.json$''', '''^fixtures/sync/v1/transcripts/pairing-status\.json$''']
+
+[[allowlists]]
+description = "公开固定测试材料；synthetic ascending bytes 80..111 (32)；2026-10-30 修复者核对，来源 e2b931c3050a；非运行凭据"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8$''']
+paths = ['''^fixtures/node-link/v1/transcripts/pairing-proof\.json$''', '''^fixtures/node-link/v1/transcripts/pairing-sas\.json$''', '''^fixtures/node-link/v1/transcripts/pairing-status\.json$''']
+
+[[allowlists]]
+description = "公开 ES256 rust 固定 JWS 向量；合成 [08;32] 私钥与 example.test/固定过期载荷，2026-10-30 修复者以 Node crypto 验签；非运行身份凭据"
+condition = "AND"
+targetRules = ["jwt"]
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJFUzI1NiIsInR5cCI6ImFjcHItYXV0aC1jbGllbnQrand0In0\.eyJjaGFsbGVuZ2VJZCI6IkFRRUJBUUVCQVFFQkFRRUJBUUVCQVEiLCJjbGllbnRJZCI6bnVsbCwiY2xpZW50Tm9uY2UiOiJBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNIiwiY2xpZW50UHVibGljS2V5IjoiQkRyYXNWMW1KV3Z4WE5jV0Exc19CQlJFNVJMLTBkMWsxTHAxV1gwZzQyYnhWRzBza0tnLXVyb0JXVkNaNWZQX3U5TTRUSFNVM21kWl9kWG1YdnJwekdjIiwiY29ubmVjdGlvbklkIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsImV4cCI6MTcwMDAwMDAxNSwiaWF0IjoxNzAwMDAwMDAwLCJub2RlSWQiOiJjOGYxOTNlNjc4ZTc2MmY5YzRiMjhmYzllMTFhNmU0M2Q1Y2Q3OTJkMmUxZTM3NmU1NmI4MGE3NmYyMjc0NGFjIiwibm9kZVB1YmxpY0tleSI6IkJCNFlVeV9VZFV3Qzh3UWRuSFhPc3p1RF85Z2F4ODVQNklMTXNjbUx4WWx1cEd3eEhFNHY5QTNaYWpaVDV1UlVSZE10X2todXp0ZGNlcERHb1lpQndLTSIsIm5vbmNlIjoiQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSSIsIm9yaWdpbiI6Imh0dHBzOi8vbm9kZS5leGFtcGxlLnRlc3QiLCJ2IjoxfQ\.YUBdsUCn481PLz9gjU20E_PTRa1bAk54osx6iqIURFUUBYnHf_rVsunR2w3qj79AslJD2iu4jn5RTry7Q8G2Kg$''']
+paths = ['''^clients/web/tests/fixtures/jws-v1\.json$''']
+
+[[allowlists]]
+description = "公开 ES256 webcrypto 固定 JWS 向量；合成 [08;32] 私钥与 example.test/固定过期载荷，2026-10-30 修复者以 Node crypto 验签；非运行身份凭据"
+condition = "AND"
+targetRules = ["jwt"]
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJFUzI1NiIsInR5cCI6ImFjcHItYXV0aC1jbGllbnQrand0In0\.eyJjaGFsbGVuZ2VJZCI6IkFRRUJBUUVCQVFFQkFRRUJBUUVCQVEiLCJjbGllbnRJZCI6bnVsbCwiY2xpZW50Tm9uY2UiOiJBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNIiwiY2xpZW50UHVibGljS2V5IjoiQkRyYXNWMW1KV3Z4WE5jV0Exc19CQlJFNVJMLTBkMWsxTHAxV1gwZzQyYnhWRzBza0tnLXVyb0JXVkNaNWZQX3U5TTRUSFNVM21kWl9kWG1YdnJwekdjIiwiY29ubmVjdGlvbklkIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsImV4cCI6MTcwMDAwMDAxNSwiaWF0IjoxNzAwMDAwMDAwLCJub2RlSWQiOiJjOGYxOTNlNjc4ZTc2MmY5YzRiMjhmYzllMTFhNmU0M2Q1Y2Q3OTJkMmUxZTM3NmU1NmI4MGE3NmYyMjc0NGFjIiwibm9kZVB1YmxpY0tleSI6IkJCNFlVeV9VZFV3Qzh3UWRuSFhPc3p1RF85Z2F4ODVQNklMTXNjbUx4WWx1cEd3eEhFNHY5QTNaYWpaVDV1UlVSZE10X2todXp0ZGNlcERHb1lpQndLTSIsIm5vbmNlIjoiQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSSIsIm9yaWdpbiI6Imh0dHBzOi8vbm9kZS5leGFtcGxlLnRlc3QiLCJ2IjoxfQ\.nb6xB-DUg6ei4ATD3cMQkngX4u_iZmLV1x2l0Jj9QqnFjBhZx9Q8UxV16jjqn2i8GGlr0o05mzdgLpKsfRko4Q$''']
+paths = ['''^clients/web/tests/fixtures/jws-v1\.json$''']
