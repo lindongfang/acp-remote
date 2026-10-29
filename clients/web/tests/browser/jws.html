@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ACP Remote JWS Browser Contract</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 2rem;
+        background: #f4f1ea;
+        color: #1f2925;
+        font: 16px/1.5 Consolas, monospace;
+      }
+      h1 {
+        font-size: 1.4rem;
+      }
+      #status {
+        font-size: 2rem;
+        font-weight: 700;
+      }
+      pre {
+        overflow: auto;
+        padding: 1rem;
+        background: #ffffff;
+        border: 1px solid #c9c2b5;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>ACP Remote JWS Browser Contract</h1>
+    <div id="status" aria-live="polite">RUNNING</div>
+    <pre id="result"></pre>
+    <script type="module" src="/tests/browser/jws-browser.ts"></script>
+  </body>
+</html>

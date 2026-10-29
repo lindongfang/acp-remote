@@ -1,0 +1,13 @@
+import {root,start,stop,pair,db,key,json,assert} from './lib.mjs';
+import {randomBytes} from 'node:crypto';
+let n=await start('node-one',30451);
+const A=await pair(n,71), B=await pair(n,72);
+await stop(n);
+const database=db(n);const insert=database.prepare("INSERT INTO clients(client_id,public_key,display_name,status,auth_generation,created_at,revoked_at) VALUES(?,?,?,'trusted',1,?,NULL)");
+database.exec('BEGIN IMMEDIATE');
+for(let i=0;i<67;i++)insert.run(randomBytes(16).toString('base64url'),Buffer.from(key(100+i).publicKey,'base64url'),'Independent paging record '+i,Math.floor(Date.now()/1000));
+database.exec('UPDATE node_state SET revision=revision+67; COMMIT');assert(database.prepare('SELECT count(*) n FROM clients').get().n===69,'69 records before genuine browser pairing');database.close();
+n=await start('node-one',30451);
+const second=await start('node-two',30452);const secondA=await pair(second,71);
+await json('state.json',{n,second,A,B,secondA});
+console.log('SETUP_READY isolated nodes30451/30452, real paired A/B, synthetic SQL paging fixture67; browser pairing will make70');

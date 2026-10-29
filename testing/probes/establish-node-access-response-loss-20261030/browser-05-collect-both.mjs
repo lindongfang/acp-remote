@@ -1,0 +1,13 @@
+import fs from 'node:fs/promises';
+import {state} from './browser-state.mjs';
+const root='D:/Project/acp-remote/.tmp/approval-response-loss-20261030/';
+const t=await taskSpace(10);
+const before=JSON.parse(await fs.readFile(root+'evidence/after-loss.json','utf8')),after=await state(t.page('p1'));
+const result={before,after,sameKey:before.publicKeySha256===after.publicKeySha256,sameNode:before.nodeId===after.nodeId,stableClientId:before.loss.observations[0].clientId===after.clientId,reloadProductionPageAuthenticated:after.status==='consumed',frameAuditAvailable:after.audit!==null};
+await fs.writeFile(root+'evidence/reload-recovery.json',JSON.stringify(result,null,2));
+if(!result.sameKey||!result.sameNode||!result.stableClientId||!result.reloadProductionPageAuthenticated)throw Error('reload path did not recover');
+await t.page('p2').waitForFunction(()=>window.__responseLoss?.dropped===1,undefined,{timeout:15000});
+const second=await state(t.page('p2'));
+if(second.status!=='pending_confirmation'||second.clientId!==null)throw Error('second case no longer pending');
+await fs.writeFile(root+'evidence/after-loss-30456.json',JSON.stringify(second,null,2));
+console.log({firstReloadPassed:true,firstFrameAuditAvailable:result.frameAuditAvailable,secondPending:true,secondDropped:second.loss.dropped});

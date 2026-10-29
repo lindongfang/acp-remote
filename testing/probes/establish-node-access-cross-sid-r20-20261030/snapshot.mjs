@@ -1,0 +1,12 @@
+import {DatabaseSync} from 'node:sqlite';
+import {writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+const root='D:/Project/acp-remote/.tmp/cross-sid-r20-20261030';
+const db=new DatabaseSync(`${root}/data/node.sqlite3`,{readOnly:true});
+const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+const content={};
+for(const {name} of tables) content[name]=db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all();
+db.close();
+const result={utc:new Date().toISOString(),tables:Object.fromEntries(Object.entries(content).map(([k,v])=>[k,v.length])),logicalSha256:createHash('sha256').update(JSON.stringify(content)).digest('hex')};
+writeFileSync(`${root}/owner-evidence/${process.argv[2]}.json`,JSON.stringify(result,null,2)+'\n');
+console.log(result);

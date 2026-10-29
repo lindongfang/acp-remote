@@ -1,0 +1,12 @@
+import fs from 'node:fs/promises';
+import {state} from './browser-state.mjs';
+const root='D:/Project/acp-remote/.tmp/approval-response-loss-20261030/';
+const t=await taskSpace(10),p=t.page('p2');
+const before=JSON.parse(await fs.readFile(root+'evidence/after-loss-30456.json','utf8'));
+await p.click('loc=role:button[name="重新检查批准状态"]');
+await p.waitForFunction(()=>window.__recoveryAudit?.authenticated.length===1,undefined,{timeout:15000});
+const after=await state(p);
+const result={before,after,sameKey:before.publicKeySha256===after.publicKeySha256,sameNode:before.nodeId===after.nodeId,stableClientId:after.clientId===before.loss.observations[0].clientId,nullHello:after.audit.hello.length===1&&after.audit.hello[0].clientId===null,helloSameKey:after.audit.hello[0]?.publicKeySha256===before.publicKeySha256,pairingInvalidObserved:after.audit.http.some(x=>x.status===401&&JSON.stringify(x.error).includes('pairing_invalid'))};
+await fs.writeFile(root+'evidence/retry-recovery-30456.json',JSON.stringify(result,null,2));
+if(!result.sameKey||!result.sameNode||!result.stableClientId||!result.nullHello||!result.helloSameKey||!result.pairingInvalidObserved||after.status!=='consumed'||after.privateExtractable)throw Error('retry recovery assertions failed');
+console.log(result);console.log(await p.snapshot());

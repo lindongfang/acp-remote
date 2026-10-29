@@ -1,0 +1,4 @@
+import fs from 'node:fs/promises';
+const root='D:/Project/acp-remote/.tmp/claim-origin-acceptance-20261030/';const t=await taskSpace(12),p=t.page('p1');
+const result=await p.evaluate(async()=>{const h=window.__claimHarness;const replay=await h.post('claim',{v:1,proof:h.originalProof});const requestId=h.b64(crypto.getRandomValues(new Uint8Array(16)));const challenge=await h.post('challenge',{v:1,pairingId:h.lookup.pairingId,clientPublicKey:h.record.publicKey,requestId});return {otherKeyOriginalFreshProof:{status:replay.status,error:replay.body.error},otherKeyNewChallenge:{status:challenge.status,error:challenge.body.error}};});
+await fs.writeFile(root+'evidence/other-key.json',JSON.stringify(result,null,2));console.log(result);if(result.otherKeyOriginalFreshProof.status!==401||result.otherKeyNewChallenge.status!==401)throw Error('NA021-002 other key replaced winner');

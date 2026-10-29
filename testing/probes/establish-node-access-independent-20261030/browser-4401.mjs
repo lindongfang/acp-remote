@@ -1,0 +1,13 @@
+import {readFile,writeFile} from 'node:fs/promises';
+const task=await taskSpace(3);const page=task.page('p1');
+await page.cdp('Page.addScriptToEvaluateOnNewDocument',{source:`window.__probe={opened:0,closed:[]};const Native=window.WebSocket;window.WebSocket=class extends Native{constructor(...args){super(...args);window.__probe.opened++;this.addEventListener('close',e=>window.__probe.closed.push({code:e.code,reason:e.reason}));}};`});
+await page.reload();
+await page.waitForFunction(()=>!!document.querySelector('input[name="pairing-code"]')&&window.__probe?.closed.some(e=>e.code===4401),undefined,{timeout:15000});
+const state=await page.evaluate(async()=>{const db=await new Promise(ok=>{const q=indexedDB.open('acp-remote-access-v1');q.onsuccess=()=>ok(q.result)});const r=await new Promise(ok=>{const q=db.transaction('identity').objectStore('identity').get('primary');q.onsuccess=()=>ok(q.result)});db.close();return {clientId:r.clientId,publicKey:r.publicKey,status:r.status,events:window.__probe,body:document.body.innerText}});
+const before=JSON.parse(await readFile('D:/Project/acp-remote/.tmp/independent-acceptance-20261030/renewed-4410-approved.json','utf8'));
+if(state.clientId!==null||state.publicKey===before.publicKey)throw Error('4401 did not replace invalid pairing');
+await page.evaluate(()=>{window.dispatchEvent(new Event('online'));window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}))});
+await new Promise(ok=>setTimeout(ok,3500));
+if(await page.evaluate(()=>window.__probe.opened)!==state.events.opened)throw Error('4401 retries old identity');
+await writeFile('D:/Project/acp-remote/.tmp/independent-acceptance-20261030/rejected-4401.json',JSON.stringify(state,null,2));
+console.log({clientId:state.clientId,closed:state.events.closed,opened:state.events.opened});console.log(await page.snapshot());

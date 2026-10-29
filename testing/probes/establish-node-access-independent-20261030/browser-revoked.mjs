@@ -1,0 +1,12 @@
+import {readFile,writeFile} from 'node:fs/promises';
+const task=await taskSpace(3);const page=task.page('p1');
+await page.waitForFunction(()=>!!document.querySelector('input[name="pairing-code"]'),undefined,{timeout:10000});
+const state=await page.evaluate(async()=>{const db=await new Promise(ok=>{const q=indexedDB.open('acp-remote-access-v1');q.onsuccess=()=>ok(q.result)});const r=await new Promise(ok=>{const q=db.transaction('identity').objectStore('identity').get('primary');q.onsuccess=()=>ok(q.result)});db.close();return {clientId:r.clientId,publicKey:r.publicKey,nodeId:r.nodeId,status:r.status,events:window.__probe,body:document.body.innerText}});
+const old=JSON.parse(await readFile('D:/Project/acp-remote/.tmp/independent-acceptance-20261030/a-approved.json','utf8'));
+if(state.publicKey===old.identity.publicKey||state.clientId!==null||!state.events.closed.some(e=>e.code===4410))throw Error('revocation reset missing');
+const before=state.events.opened;
+await page.evaluate(()=>{window.dispatchEvent(new Event('online'));window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));});
+await new Promise(ok=>setTimeout(ok,3500));
+const after=await page.evaluate(()=>window.__probe.opened);if(after!==before)throw Error('revoked identity retries');
+await writeFile('D:/Project/acp-remote/.tmp/independent-acceptance-20261030/revoked-4410.json',JSON.stringify(state,null,2));console.log({clientId:state.clientId,status:state.status,closed:state.events.closed,opened:after});
+console.log(await page.snapshot());

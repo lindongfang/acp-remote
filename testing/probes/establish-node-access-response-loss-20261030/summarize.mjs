@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+const root='D:/Project/acp-remote/.tmp/approval-response-loss-20261030/';
+const read=p=>JSON.parse(fs.readFileSync(root+'evidence/'+p,'utf8'));
+const a=read('reload-recovery.json'),b=read('retry-recovery-30456.json');
+const summary={binarySha256:crypto.createHash('sha256').update(fs.readFileSync(root+'bin/acp-remote.exe')).digest('hex'),reload:{sameKey:a.sameKey,sameNode:a.sameNode,stableClientId:a.stableClientId,productionAuthenticated:a.reloadProductionPageAuthenticated,frameAuditAvailable:a.frameAuditAvailable,ownerListContainsCommittedId:fs.readFileSync(root+'evidence/owner-list-before-restart.txt','utf8').includes(a.before.loss.observations[0].clientId)},retry:{sameKey:b.sameKey,sameNode:b.sameNode,stableClientId:b.stableClientId,nullHello:b.nullHello,helloSameKey:b.helloSameKey,pairingInvalidObserved:b.pairingInvalidObserved,ownerListContainsCommittedId:fs.readFileSync(root+'evidence/owner-list-before-restart-30456.txt','utf8').includes(b.before.loss.observations[0].clientId)},cleanup:read('cleanup.json'),browserCleanup:read('browser-cleanup.json')};
+fs.writeFileSync(root+'evidence/summary.json',JSON.stringify(summary,null,2));
+const evidence=fs.readdirSync(root+'evidence').filter(p=>p.endsWith('.json')||p.startsWith('owner-list')).map(p=>({file:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(root+'evidence/'+p)).digest('hex')}));
+fs.writeFileSync(root+'evidence/manifest.json',JSON.stringify(evidence,null,2));
+console.log(JSON.stringify(summary,null,2));

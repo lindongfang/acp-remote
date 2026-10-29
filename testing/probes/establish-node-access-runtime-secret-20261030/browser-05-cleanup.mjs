@@ -1,0 +1,10 @@
+import fs from 'node:fs/promises';
+const root='D:/Project/acp-remote/.tmp/runtime-secret-acceptance-20261030/';
+const t=await taskSpace(11),p=t.page('p1');
+const origin='https://faraday.tail74842e.ts.net:30455';
+if(new URL(await p.url()).origin!==origin)throw Error('test origin mismatch');
+await p.goto('about:blank');
+await p.cdp('Storage.clearDataForOrigin',{origin,storageTypes:'indexeddb'});
+const receipt=await t.finish({keep:[]});
+await fs.writeFile(root+'evidence/browser-cleanup.json',JSON.stringify({onlyOwnedOriginIndexedDbCleared:true,taskSpace:11,receipt},null,2));
+console.log(receipt);

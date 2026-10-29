@@ -1,0 +1,11 @@
+import {connect} from './cdp.mjs';const fs=await import('node:fs/promises'),root=process.env.ACP_E2E_ROOT,label=process.argv[2],c=await connect('A');
+try{const p=await c.attach(c.targets[0].targetId);await c.send('Network.enable',{},p.sessionId);const responses=[];
+// Network protocol metadata only: no headers, cookies, request bodies or proof frames.
+await c.send('Page.addScriptToEvaluateOnNewDocument',{source:await fs.readFile(new URL('./hook.js',import.meta.url),'utf8')},p.sessionId);
+await c.send('Page.navigate',{url:'https://faraday.tail74842e.ts.net:30453/'},p.sessionId);
+for(let i=0;i<80;i++){if(await p.evaluate(`!!document.querySelector('form')||document.body.innerText.includes('NODE CONTROL / AUTHENTICATED')`))break;await new Promise(r=>setTimeout(r,100))}
+const negative=await p.evaluate(`(async()=>{const results=[];for(const [type,action,payload] of [['command','node.info',{}],['command','device.list',{cursor:null}],['subscribe',null,null]]){const result=await new Promise((resolve,reject)=>{const ws=new window.__NativeWebSocket(location.origin.replace('https:','wss:')+'/api/access/v1/control',['acpr.access.v1']);let delivered=false;const timer=setTimeout(()=>{ws.close();reject(Error('Negative timeout'))},8000);ws.onopen=()=>ws.send(JSON.stringify(type==='command'?{v:1,type,requestId:'AAAAAAAAAAAAAAAAAAAAAA',action,payload}:{v:1,type,requestId:'AAAAAAAAAAAAAAAAAAAAAA',resource:'devices'}));ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==='result'&&m.ok||m.type==='devices.changed')delivered=true};ws.onclose=e=>{clearTimeout(timer);resolve({operation:action??'subscribe',code:e.code,reason:e.reason,delivered})};ws.onerror=()=>{}});results.push(result)}return results})()`);
+const page=await p.evaluate(`({secure:isSecureContext,origin:location.origin,pairForm:!!document.querySelector('form'),authenticated:document.body.innerText.includes('NODE CONTROL / AUTHENTICATED'),events:window.__e2e?.events??[]})`);
+const resource=await p.evaluate(`performance.getEntriesByType('navigation').map(x=>({name:x.name,protocol:x.nextHopProtocol}))`);
+await fs.writeFile(`${root}/evidence/${label}-browser.json`,JSON.stringify({page,negative,resource,network:c.network},null,2));console.log({label,page:{...page,events:page.events.slice(-4)},negative,network:c.network});
+}finally{c.close()}
