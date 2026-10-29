@@ -1,39 +1,28 @@
 # Tests
 
 <!-- 独立tester编码前规划，reviewer检视。只写用例；结果另存testing/runs。
-固定字段名供后续结构校验使用，当前由reviewer人工核对，值用中文。ID跨版本稳定；Entry是命令或明确操作，不会被门禁自动执行。
-每级required/not-applicable必须选一项并写理由；required至少一例。实际测试代码留所属工程。
-从以下示例复制用例块并补齐，不能提交占位符。完整规则与工具策略见config.yaml。 -->
-
-## Levels
-
-| Level | Applicability | Reason |
-| --- | --- | --- |
-| L1 | required | 替换为本次类型/编译检查理由或not-applicable及原因 |
-| L2 | required | 替换为静态/合同检查范围 |
-| L3 | required | 替换为局部逻辑风险 |
-| L4 | required | 替换为组件协作风险 |
-| L5 | required | 替换为需求行为验收范围 |
-| L6 | required | 替换为完整链路或不适用及替代检查 |
-| LX | not-applicable | 替换为人工检查范围或无需人工的原因 |
+保留稳定编号和标题，正文只必填用例级别、操作步骤、预期结果。
+只列实际需要的级别，不强制逐级适用性表；实际测试代码留所属工程。
+需求关联和共用执行信息按组说明一次；前提、环境、工具、真实/模拟边界、
+清理等仅在影响执行或判断时补充，可直接写入步骤，不重复填写固定字段。
+补齐示例后删除占位符。完整规则见config.yaml。 -->
 
 ## Cases
 
 ### CAP-001 用例标题
 
-- Level: L5
-- Requirement: 替换为spec文件及Requirement/Scenario名称；活动裸specs指增量，显式openspec/specs指长期，suite裸路径指长期；当前无专项结构门禁，reviewer核对文件、场景与覆盖；skip_specs引用proposal.md的Success Criteria条目
-- Executor: automation
-- Tool: 替换为具体测试程序、浏览器工具或人工
-- Preconditions: 替换为输入、账户/身份、状态和测试数据前提
-- Environment: 替换为OS、依赖、真实/模拟边界和独立环境要求
-- Steps: 替换为操作步骤，复杂步骤可引用下方四级标题或实际测试代码
-- Expected: 替换为可观察结果及失败/边界断言
-- Cleanup: 替换为本例资源归属、成功/失败/取消清理方式
-- Schedule: acceptance,pr
-- Entry: 替换为完整命令及工作目录，或Agent/人工可执行步骤
+- 用例级别：L5
+- 操作步骤：替换为可执行的操作或命令，必要前提直接写在步骤里
+- 预期结果：替换为可观察、可判断通过或不通过的结果
 
-<!-- Executor允许automation/agent/human；LX须human，工具不可用记未执行。
-Schedule允许acceptance/pr/daily/weekly/release/on-demand，逗号分隔。
-用例新增/修改/废弃必须说明依据；长期版本注明来源变更，按能力合并，不复制执行结果。
-运行报告记录目标版本、环境、逐ID结果和证据；必需失败/未执行不能交付。 -->
+<!-- LX仅用于Harness无法验证、必须人工介入的场景；在操作步骤中说明具体原因
+及最小人工范围。Harness可验证的内容按L1–L6执行，有效证据可复用，不要求
+用户重复执行。工具/环境/权限缺失或测试入口未实现记受阻/未执行，不自动转LX。
+混合场景只把无法验证的部分列为LX；没有此类场景则不生成LX用例。
+不得假设Harness已执行或用模型推断代替执行证据。
+LX用户只需回答“通过”或“不通过”。
+Agent记录用例ID、受测版本和用户原始结论；未回复记待确认，不得代签。
+用户无需填写环境、命令、报告或证据；不通过时按需了解问题。
+用例增改须有需求依据；长期版本注明来源变更，按能力合并。
+其他测试的运行报告记录版本、环境、逐ID结果和必要证据；
+必需用例失败、未执行或待确认不能视为验收通过。 -->

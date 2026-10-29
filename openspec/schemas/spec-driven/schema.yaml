@@ -209,10 +209,24 @@ artifacts:
       openspec/role/tester.md and project config. Do not inherit coder dialogue.
       Initially use proposal/specs/design without waiting for plan; after plan
       exists, review its execution arrangements before implementation.
-      Cover every L1-L6/LX level with required or not-applicable and a reason.
-      Use the exact template field names, stable case IDs, requirement/scenario
-      references, execution mode, tool, preconditions, environment, steps,
-      expected assertions, cleanup, schedule and executable entry.
+      Keep stable case IDs and titles. Require only the test level, actionable
+      steps and observable expected results in each case. Include only needed
+      L1-L6/LX levels; do not require an applicability matrix for every level.
+      State requirement/scenario references and shared execution context once
+      per group. Add preconditions, tools, environment, real/mock boundaries or
+      cleanup only where needed to execute or judge a case; avoid repeated fields.
+      Reserve LX strictly for scenarios the harness cannot verify and that
+      require human action or judgment. Explain the concrete limitation and
+      minimal human scope within the steps, without adding mandatory fields.
+      Verify tool-checkable behavior under L1-L6; reuse valid evidence for the
+      same version, scope and required environment without duplicate user runs.
+      Missing tools, environment, permissions or test entries mean blocked or
+      not-run, not automatic LX. Split mixed scenarios; omit LX if unnecessary.
+      Independent security review does not automatically require user execution.
+      Never assume execution or substitute model inference for evidence.
+      For necessary human acceptance (LX), ask only for pass/fail. The agent records the
+      case ID, tested version and user's actual verdict. No reply means pending;
+      never infer a pass or require the user to fill technical evidence fields.
       L5 comes from confirmed behavioral specs. In an active change, bare
       specs/<capability>/spec.md means its delta; explicit openspec/specs paths
       mean durable specs. In durable suites, bare paths mean durable specs.

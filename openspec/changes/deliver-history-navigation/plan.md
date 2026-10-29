@@ -1,0 +1,102 @@
+## Execution Model
+
+状态：文档规划，未实现；依赖 `deliver-codex-session-loop` 的真实交付及本change独立方案/用例检视后才可开工。上游尚不存在可运行产品，不能以规划文件存在作为满足依赖。开工先读取其最终合同、真实检查入口与证据重基准，变化影响当前spec/design/tests时先协调修订。
+
+主执行统筹；coder/tester/reviewer按openspec/role分工。tester/reviewer不继承coder对话。基线是proposal、specs、design、tests以及上游固定版本的完整文件摘要，未提交修改不以HEAD代替。保留用户改动；交付diff/可读报告，不自动提交发布。
+
+## 本轮父步骤展开修订
+
+WP2提供父轮次分页及共享预算的子展开块查询/授权合同；WP3提供展开代际、基线与缓存衔接及折叠资源释放；WP4提供原位展开/折叠与错误展示，不实现独立子页，展开区域支持前端传参正序分页。WP5新增HN-014–025，WP6重新检视当前文档，旧review仅对应旧快照。该阶段可靠子关联可以明确标注的fixture验证组件，真实Harness子身份及完整展开闭环由后续deliver-agent-session-tree交付，不让本change反向依赖它。通用读取和关系模块写范围不重叠；后续若调整共享网关/组件须串行集成并重跑HN与AT回归。
+
+## 最新参数及展示修订
+
+WP2提供前端pageSize默认10的通用逻辑分页、父DESC/子ASC、游标范围和页内块冻结校验；WP3保留内部提交事实但不向正常页面输出保存状态；WP4实现父子独立分页进度及异常才显示错误，正常保存/重连无徽标。WP5新增HN-020–025，WP6检视当前文本；当前产品用例未执行，旧固定10/子不分页/保存标识结论不覆盖本次修订。
+
+## 测试流程修订
+
+按当前config与模板整理为25条用例（HN-001–HN-025），保留全部编号、标题及行为断言；需求关联、执行环境与清理按组说明。HN-013 从LX改为L5，由独立reviewer使用工具检视，不新增人工门禁；工具/环境/权限或入口缺失记受阻/未执行，有效同版本同范围证据可复用。tests及当前执行安排须重新独立检视，旧review与历史结果不签本轮文本通过。
+
+依据本轮用例复核，补实HN-003参数/顺序/版本预期与HN-004交接屏障、真实查询量、分块/队列预算及重同步断言；用例仍25条，参数与边界沿用design，未新增产品行为或常量。本次修订待独立复核，不沿用旧结论，产品未执行。
+
+## Parallel Assessment
+
+WP1先核对上游与检查环境；其他包共享会话历史和查询合同，有写范围交叉，按Merge Order串行集成。已确定的Web接口可让WP4在独立工作区并行准备，但必须等WP3稳定后合入，合入后重跑受影响测试。WP5与WP6对同一固定集成版本可并行独立工作，不能边改实现边签验收。Rust构建使用各自CARGO_TARGET_DIR。
+
+## Work Packages
+
+| ID | Goal / Scenarios | Dependencies | Agent | Write Scope | Deliverable | Verify |
+| --- | --- | --- | --- | --- | --- | --- |
+| WP1 | 固定上游轮次/条目/版本合同和查询测试入口 | 上游真实交付及方案检视 | coder | 本change基线记录、README.md、app/tests/history/ | 字段重基准与测量入口 | HN-001–004；证明上游有真实持久记录 |
+| WP2 | 前端传参默认10轮的父倒序/子正序键集分页、大小预算与大条目展开 | WP1 | coder | app/src/history/、app/src/queries/、app/src/storage/、app/tests/history/ | 索引/查询实现与开发测试、合同文档 | HN-003–007、HN-014–025；查询量可观察，不先全量再隐藏 |
+| WP3 | 原子订阅交接与旧位置更新 | WP2 | coder | app/src/history/、app/src/gateway/、app/tests/history/ | 基线/缓存覆盖/流代际及重同步实现 | HN-004、HN-008–011、HN-016–019真实竞态与崩溃窗口 |
+| WP4 | Web分页、展开与版本合并 | WP2、WP3 | coder | clients/web/、README.md | 按需加载与重连界面、前端测试和操作文档 | HN-005–012、HN-014–025；父页前端传参默认10轮、子步骤原位展开且不重排 |
+| WP5 | 独立验收及回归同步 | WP4 | tester | app/tests/acceptance/history/、clients/web/tests/acceptance/history/、testing/runs/deliver-history-navigation/、testing/suites/、本change/tests.md | 逐例报告及长期回归 | HN-001–025真实存储和Windows Web；HN-013由WP6独立reviewer执行 |
+| WP6 | 独立方案/用例与交付检视 | 方案无产品依赖，交付WP5 | reviewer | 本change/review.md、plan.md结果节 | 逐场景检视与问题闭环 | 同版本无阻断，不以截图代替读取量/竞态证据 |
+
+写范围均为仓库相对路径，表中“本change”指openspec/changes/deliver-history-navigation/。实际目录由上游建立，若上游更名须在开工时更新映射并独立复核，不静默拓宽范围。
+
+## Merge Order
+
+| Order | Work Package | Reason | Re-verify After Merge |
+| --- | --- | --- | --- |
+| 1 | WP1 | 上游门禁和检查入口先收敛 | HN-001/002以及相关能力探测/测量 |
+| 2 | WP2 | 首次领域与持久化改动 | WP2所列开发与组件用例 |
+| 3 | WP3 | 与WP1/2目录嵌套或共享，串行集成 | WP2/3全部受影响用例 |
+| 4 | WP4 | Web可独立准备，依赖协议稳定后合入 | Rust/Web真实检查及HN-012完整链路 |
+| 5 | WP5、WP6 | tester验收目录与开发测试目录嵌套，必须停止开发写入后验收 | 固定集成版本全部适用检查；修复后独立重测复查 |
+
+## Project Verify
+
+| Check ID | Command / Working Directory | Scope / Pass Criteria |
+| --- | --- | --- |
+| PV1 | 根目录：openspec.cmd validate deliver-history-navigation --strict；git diff --check；tester核对HN-001/002 | 当前真实可执行，仅结构/差异检查 |
+| PV2 | WP1从上游README和工程配置核对实际Rust/Web编译、格式、类型和测试入口，根目录及实际工程目录；HN-001–004 | 现有 npm run check、npm run build:rust 等入口按 README 执行；核对是否覆盖本 change，缺专用目标/合同入口记受阻/未执行，不虚构通过 |
+| PV3 | 独立tester按tests.md共用执行安排及各例操作步骤执行HN-005–025；独立Windows与浏览器profile | 引用精确需求和断言，正常链路真实；故障fixture不能代替真实Harness验收 |
+
+固定同一提交或完整文件SHA-256清单，报告存testing/runs/deliver-history-navigation/。记录OS、工具、协议/适配器版本、逐例结果与清理；最终检查覆盖实际集成版本。不得动用户真实数据库、密钥或原生会话；专用测试资源本包拥有并在失败/取消时清理。
+
+## Code Review
+
+| Work Package | Reviewer Agent | Review Focus | Pass Condition |
+| --- | --- | --- | --- |
+| 全部编码前 | 独立reviewer | proposal/spec/design/tests及当前计划与上游依赖 | 每个引用场景存在且覆盖，无未闭环设计阻断 |
+| 全部交付时 | 独立reviewer | 固定集成diff与实际安全/平台/验收证据 | 必需检查实际通过，reviewer问题由其独立复查关闭 |
+
+## Main E2E
+
+```yaml
+mode: required
+```
+
+对应tests.md的HN-012真实Windows/数据库/查询/Web链路；子关系可使用明确标注的可靠关联fixture，仅证明通用展开组件，不证明真实Harness关系能力。后者由后续AT-009完整验收，不能以本例代签。按角色使用真实浏览器/桌面工具；HN-013 由独立reviewer通过工具完成L5检视，当前无LX用例。缺工具、环境、权限或入口记受阻/not-run，不自动转为人工验收；同版本、同范围且环境符合要求的有效证据可复用。环境不可用记not-run，不以模拟替代真实数据库、查询或Web。
+
+## Risks
+
+上游合同尚未实施，当前完成的是待实现文档。真实依赖/版本探测、平台证据、安全与供应链在实施时逐项交付。现有上游编译入口须核对覆盖范围，不将上游构建或用例定义记成本change通过。设计发现违反已确认产品约束时先修文档，不能以门禁失败为由降级承诺。
+
+## Handoff
+
+只交接用户确认（Windows+Web、Codex/ZCode/DeepSeek、分页10轮、保存500ms/64KiB）、AGENTS/config/角色、当前proposal/spec/design/tests、上游固定版本及写范围。交接测试数据/端口/目录所有权，不继承开发对话或代签结论。
+
+## Findings
+
+| ID | Source | Severity | Target Version | Finding | Fix Version | Status | Retest / Re-review |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 文档方案检视 | 独立reviewer | 文档结论 | 当前review快照 | 旧快照方案/用例/计划/任务检视通过；本轮修订另行复核，问题及关闭依据见review.md | 旧快照 | 本轮待复核 | 独立复查；产品未执行 |
+
+## Verification Results
+
+- 受测版本：当前只有规划文本，正式检视固定各文件摘要；上游未交付，产品版本不存在。
+- 摘要排除范围：plan结果、tasks状态和review报告自身；spec/design/tests及实现/配置变化不排除。
+- 执行者与环境：主执行结构自检、独立tester用例规划、旧快照独立reviewer方案检视通过（见review.md，不覆盖本轮修订，非产品验收）。
+- 验证命令及目录：当前仅根目录OpenSpec严格校验和Git差异；实际退出码在整体文档检查记录，非产品结果。
+
+| Case ID | Executor | Target Version | Status | Evidence / Limitations |
+| --- | --- | --- | --- | --- |
+| HN-001–025产品部分 | 独立tester | 产品尚不存在 | not-run | 用例定义不是运行证据，未运行正常/异常/平台验收 |
+
+- 未执行项与已知限制：本change所有产品、安全、平台及真实Harness验收；结构检查不替代它们。
+- 问题关闭依据：待reviewer首次独立检视及修复复查，不代关。
+- 新版本证据判断：受影响spec/design/tests或上游/实现改变后，tester/reviewer独立确认重验范围。
+- 归档后复核：未归档；后续核对spec/长期用例同步、移动映射及摘要一致性。
+
