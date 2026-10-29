@@ -27,7 +27,9 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix clients/web
       - name: Rust 与 Web 格式、静态、测试和构建
-        run: npm run check
+        run: |
+          . ./testing/ci/windows-owner.ps1
+          npm run check
       - name: 开发与 Web 依赖审计
         run: |
           npm audit --audit-level=high

@@ -151,3 +151,7 @@ R20开发全量检查实际通过：144项Rust库测试、4项固定签名向量
 另一真实Windows SID的pair/stop已使用用户授权的现有abc账户补验，详见[跨SID独立补验](../testing/runs/establish-node-access/2026-10-30-cross-sid-r20-acceptance.md)。两个真实控制台命令均exit1、无超时，在私有目录解析阶段被DACL拒绝；不冒称该次到达服务端token比较。随后owner查询正常，数据库及审计逻辑摘要不变，正常stop释放端口/pipe/锁；看守进程后续缺席确认独立保存，原初次观察不改写。账号未创建、删除或修改，密码不进入测试资产。NA012其他正交子项沿用报告明确的独立证据范围，最终逐例与交付结论见plan引用的独立汇总和检视。
 
 用户原30447体验节点未被这些源码构建自动替换。同用户恶意进程访问已解密内存或冒充owner仍在既定威胁边界之外。
+
+## Windows CI 的文件所有者
+
+GitHub Windows 托管 runner 的管理员进程可能以 Administrators 组作为新文件的默认所有者，而节点要求目录和受管文件归当前用户 SID 所有。CI 在启动检查的同一 PowerShell 进程中载入 `testing/ci/windows-owner.ps1`，通过 Windows TokenOwner 设置当前进程创建对象的默认所有者，并创建临时目录断言实际所有者匹配当前用户。脚本不更改已有数据目录的所有者、系统策略或产品校验；API 调用或断言失败即停止检查。新对象所有者语义见 [Microsoft 文档](https://learn.microsoft.com/en-us/windows/win32/secauthz/owner-of-a-new-object)。
