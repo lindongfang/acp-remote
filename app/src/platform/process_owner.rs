@@ -516,7 +516,7 @@ fn environment(overrides: &[(OsString, OsString)]) -> Result<Vec<u16>, ProcessOw
         if name.len() <= 1
             || name.len() > 32767
             || (name[..name.len() - 1].contains(&u16::from(b'='))
-                && !(inherited && inherited_drive_name(&name)))
+                && !(inherited && inherited_reserved_name(&name)))
         {
             return Err(ProcessOwnerError::InvalidSpec("invalid environment name"));
         }
@@ -557,8 +557,15 @@ fn environment(overrides: &[(OsString, OsString)]) -> Result<Vec<u16>, ProcessOw
     result.push(0);
     Ok(result)
 }
+// cmd records external status under =ExitCode and, for character codes, =ExitCodeAscii.
+// Preserve OS-inherited entries without allowing reserved-name overrides.
+fn inherited_reserved_name(name: &[u16]) -> bool {
+    inherited_drive_name(name)
+        || ["=ExitCode\0", "=ExitCodeAscii\0"]
+            .iter()
+            .any(|reserved| name.iter().copied().eq(reserved.encode_utf16()))
+}
 // Windows cmd stores each drive's current directory under =<ASCII drive>:.
-// Only entries inherited from the OS block may use this reserved name form.
 const fn inherited_drive_name(name: &[u16]) -> bool {
     matches!(name, [61, 65..=90 | 97..=122, 58, 0])
 }

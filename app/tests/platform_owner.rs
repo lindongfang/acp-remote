@@ -354,8 +354,8 @@ async fn fixture_process() {
         );
         return;
     }
-    if mode == "hidden-drive" {
-        hidden_drive_fixture(&path).await;
+    if mode == "hidden-drive" || mode == "hidden-exit-code" {
+        hidden_drive_fixture(&path, mode == "hidden-exit-code").await;
         return;
     }
     if mode == "escape" {
@@ -460,18 +460,39 @@ async fn unlisted_inheritable_handle_and_breakaway_are_rejected() {
 
 #[tokio::test]
 async fn cmd_hidden_drive_environment_is_inherited_without_rejecting_spawn() {
+    cmd_environment_fixture(false).await;
+}
+
+#[tokio::test]
+async fn cmd_exit_code_environment_is_inherited_without_rejecting_spawn() {
+    cmd_environment_fixture(true).await;
+}
+
+async fn cmd_environment_fixture(with_exit_code: bool) {
     let scratch = Scratch::new();
     let command_interpreter = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
         .join("System32")
         .join("cmd.exe");
     let executable = std::env::current_exe().unwrap();
     let batch = scratch.0.join("hidden-drive.cmd");
-    std::fs::write(&batch, format!("@echo off\r\ncd /d \"%~dp0\"\r\n\"{}\" --exact fixture_process --nocapture\r\nexit /b %errorlevel%\r\n", executable.display())).unwrap();
+    let preceding_command = if with_exit_code {
+        "cmd /d /c exit 37\r\n"
+    } else {
+        ""
+    };
+    std::fs::write(&batch, format!("@echo off\r\ncd /d \"%~dp0\"\r\n{preceding_command}\"{}\" --exact fixture_process --nocapture\r\nexit /b %errorlevel%\r\n", executable.display())).unwrap();
     let mut command = tokio::process::Command::new(command_interpreter);
     command.args(["/d", "/c"]);
     command.current_dir(&scratch.0).arg("hidden-drive.cmd");
     command
-        .env("ACP_OWNER_FIXTURE", "hidden-drive")
+        .env(
+            "ACP_OWNER_FIXTURE",
+            if with_exit_code {
+                "hidden-exit-code"
+            } else {
+                "hidden-drive"
+            },
+        )
         .env("ACP_OWNER_FIXTURE_PATH", scratch.0.join("unused"))
         .kill_on_drop(true);
     let output = timeout(Duration::from_secs(20), command.output())
@@ -480,14 +501,26 @@ async fn cmd_hidden_drive_environment_is_inherited_without_rejecting_spawn() {
         .unwrap();
     assert!(
         output.status.success(),
-        "hidden drive spawn regression: {} {}",
+        "hidden environment spawn regression: {} {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }
 #[tokio::test]
 async fn explicit_hidden_drive_overrides_remain_invalid() {
-    for name in ["=C:", "=c:", "=C", "=1:", "A=B", ""] {
+    for name in [
+        "=C:",
+        "=c:",
+        "=C",
+        "=1:",
+        "=ExitCode",
+        "=exitcode",
+        "=ExitCodeAscii",
+        "=exitcodeascii",
+        "=ExitCode=extra",
+        "A=B",
+        "",
+    ] {
         let mut input = spec("exit 0");
         input
             .env
@@ -504,7 +537,7 @@ async fn explicit_hidden_drive_overrides_remain_invalid() {
     }
 }
 
-async fn hidden_drive_fixture(path: &std::path::Path) {
+async fn hidden_drive_fixture(path: &std::path::Path, with_exit_code: bool) {
     let (name, value) = std::env::vars_os()
         .find(|(name, _)| {
             let units: Vec<u16> =
@@ -512,6 +545,17 @@ async fn hidden_drive_fixture(path: &std::path::Path) {
             units.len() == 3 && units[0] == u16::from(b'=') && units[2] == u16::from(b':')
         })
         .expect("cmd must establish a real hidden drive environment entry");
+    let mut inherited_entries = vec![(name, value)];
+    if with_exit_code {
+        let exit_code = std::env::var_os("=ExitCode")
+            .expect("cmd external command must establish a real hidden exit code entry");
+        assert_eq!(exit_code, "00000025");
+        inherited_entries.push(("=ExitCode".into(), exit_code));
+        let exit_character = std::env::var_os("=ExitCodeAscii")
+            .expect("cmd character exit code must establish a real hidden ASCII entry");
+        assert_eq!(exit_character, "%");
+        inherited_entries.push(("=ExitCodeAscii".into(), exit_character));
+    }
     let mut child = launch("exit 19").await;
     assert_eq!(
         timeout(Duration::from_secs(10), child.wait_exit())
@@ -525,21 +569,23 @@ async fn hidden_drive_fixture(path: &std::path::Path) {
         .await
         .unwrap();
     assert_eq!(report.disposition, ShutdownDisposition::Graceful);
-    let mut input = fixture_spec("hidden-preserved", path);
-    input.env.extend([
-        ("ACP_OWNER_EXPECTED_HIDDEN_KEY".into(), name),
-        ("ACP_OWNER_EXPECTED_HIDDEN_VALUE".into(), value),
-    ]);
-    let mut nested = OwnedProcess::spawn(input, Instant::now() + Duration::from_secs(10))
-        .await
-        .unwrap();
-    assert_eq!(
-        timeout(Duration::from_secs(10), nested.wait_exit())
+    for (name, value) in inherited_entries {
+        let mut input = fixture_spec("hidden-preserved", path);
+        input.env.extend([
+            ("ACP_OWNER_EXPECTED_HIDDEN_KEY".into(), name),
+            ("ACP_OWNER_EXPECTED_HIDDEN_VALUE".into(), value),
+        ]);
+        let mut nested = OwnedProcess::spawn(input, Instant::now() + Duration::from_secs(10))
             .await
-            .unwrap()
-            .unwrap(),
-        0,
-        "hidden drive preservation fixture failed"
-    );
-    finish(&mut nested).await;
+            .unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(10), nested.wait_exit())
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
+            "hidden environment preservation fixture failed"
+        );
+        finish(&mut nested).await;
+    }
 }
