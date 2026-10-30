@@ -1,0 +1,447 @@
+{
+  "source": "owned synthetic probe; no credentials",
+  "records": [
+    {
+      "version": 1,
+      "approved": false,
+      "rawSha256": "12857a90b89048c41f33ec5ae16bc8cfce521c9dff264ee7d044be1c6bb681e0",
+      "sessionId": "01a189ff-9c73-7d02-9a27-6f456058740a",
+      "steps": [
+        {
+          "name": "initialize",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "create",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "marker",
+          "terminal": {
+            "state": null,
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "close",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "resume-same-native-id",
+          "terminal": null,
+          "responseCode": null,
+          "resumeUpdates": []
+        },
+        {
+          "name": "recall",
+          "terminal": {
+            "state": null,
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "cancel",
+          "terminal": {
+            "state": null,
+            "stopReason": "cancelled"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "permission",
+          "terminal": {
+            "state": null,
+            "stopReason": "cancelled"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "final-close",
+          "terminal": null,
+          "responseCode": null
+        }
+      ],
+      "markerObserved": true,
+      "contextRecallObserved": true,
+      "permissions": [
+        {
+          "requestId": 0,
+          "decision": "cancelled",
+          "optionKinds": [
+            "allow_once",
+            "allow_always",
+            "reject_once"
+          ]
+        }
+      ],
+      "approvedFileMatches": null,
+      "toolStates": [
+        {
+          "id": "exec-55385e22-fab0-4db8-a469-791e0eb675e3",
+          "kind": "execute",
+          "status": "in_progress"
+        },
+        {
+          "id": "exec-55385e22-fab0-4db8-a469-791e0eb675e3",
+          "kind": null,
+          "status": "failed"
+        }
+      ],
+      "failure": null,
+      "cleanup": [
+        {
+          "pid": 23572,
+          "exitCode": 0,
+          "cleanup": "stdio exited",
+          "stderrBytes": 0
+        },
+        {
+          "pid": 42268,
+          "exitCode": 0,
+          "cleanup": "stdio exited",
+          "stderrBytes": 0
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "approved": true,
+      "rawSha256": "2cf52a5c0af81775321a8cb3ab5a5b4ee5d975b07d49dd1a06306412d2987b55",
+      "sessionId": "01a18a01-aafa-7cd0-b85d-824a4d68f0f3",
+      "steps": [
+        {
+          "name": "initialize",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "create",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "marker",
+          "terminal": {
+            "state": null,
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "close",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "resume-same-native-id",
+          "terminal": null,
+          "responseCode": null,
+          "resumeUpdates": []
+        },
+        {
+          "name": "recall",
+          "terminal": {
+            "state": null,
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "cancel",
+          "terminal": {
+            "state": null,
+            "stopReason": "cancelled"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "permission",
+          "terminal": {
+            "state": null,
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "final-close",
+          "terminal": null,
+          "responseCode": null
+        }
+      ],
+      "markerObserved": true,
+      "contextRecallObserved": true,
+      "permissions": [
+        {
+          "requestId": 0,
+          "decision": {
+            "outcome": "selected",
+            "optionId": "allow_once"
+          },
+          "optionKinds": [
+            "allow_once",
+            "allow_always",
+            "reject_once"
+          ]
+        }
+      ],
+      "approvedFileMatches": true,
+      "toolStates": [
+        {
+          "id": "exec-08ca56c2-9ec0-4a3a-af15-08a96da47136",
+          "kind": "execute",
+          "status": "in_progress"
+        },
+        {
+          "id": "exec-08ca56c2-9ec0-4a3a-af15-08a96da47136",
+          "kind": null,
+          "status": "completed"
+        }
+      ],
+      "failure": null,
+      "cleanup": [
+        {
+          "pid": 49228,
+          "exitCode": 0,
+          "cleanup": "stdio exited",
+          "stderrBytes": 0
+        },
+        {
+          "pid": 49164,
+          "exitCode": 0,
+          "cleanup": "stdio exited",
+          "stderrBytes": 0
+        }
+      ]
+    },
+    {
+      "version": 2,
+      "approved": false,
+      "rawSha256": "50b67b9f01b944c07840f1c0bb12e6751429dfb1f13ca78fc3e851e3de7a7cf9",
+      "sessionId": "01a189fe-df07-7870-a9d1-b52b3f7ab275",
+      "steps": [
+        {
+          "name": "initialize",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "create",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "marker",
+          "terminal": {
+            "state": "idle",
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "close",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "resume-same-native-id",
+          "terminal": null,
+          "responseCode": null,
+          "resumeUpdates": [
+            "session_info_update",
+            "usage_update",
+            "state_update"
+          ]
+        },
+        {
+          "name": "recall",
+          "terminal": {
+            "state": "idle",
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "cancel",
+          "terminal": {
+            "state": "idle",
+            "stopReason": "cancelled"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "permission",
+          "terminal": {
+            "state": "idle",
+            "stopReason": "cancelled"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "final-close",
+          "terminal": null,
+          "responseCode": null
+        }
+      ],
+      "markerObserved": true,
+      "contextRecallObserved": true,
+      "permissions": [
+        {
+          "requestId": 0,
+          "decision": "cancelled",
+          "optionKinds": [
+            "allow_once",
+            "allow_always",
+            "reject_once"
+          ]
+        }
+      ],
+      "approvedFileMatches": null,
+      "toolStates": [
+        {
+          "id": "exec-d7c7b211-2bf1-4b7e-9a6d-94247679d506",
+          "kind": "execute",
+          "status": "in_progress"
+        },
+        {
+          "id": "exec-d7c7b211-2bf1-4b7e-9a6d-94247679d506",
+          "kind": null,
+          "status": "failed"
+        }
+      ],
+      "failure": null,
+      "cleanup": [
+        {
+          "pid": 33284,
+          "exitCode": 0,
+          "cleanup": "stdio exited",
+          "stderrBytes": 0
+        },
+        {
+          "pid": 33440,
+          "exitCode": 0,
+          "cleanup": "stdio exited",
+          "stderrBytes": 0
+        }
+      ]
+    },
+    {
+      "version": 2,
+      "approved": true,
+      "rawSha256": "83e5e66384cdc9210b5b0ccbd647154dac12f369ec409b0101c2901a7f74596a",
+      "sessionId": "01a18a00-d80b-75e3-b3eb-8ca5dd5f24ab",
+      "steps": [
+        {
+          "name": "initialize",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "create",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "marker",
+          "terminal": {
+            "state": "idle",
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "close",
+          "terminal": null,
+          "responseCode": null
+        },
+        {
+          "name": "resume-same-native-id",
+          "terminal": null,
+          "responseCode": null,
+          "resumeUpdates": [
+            "session_info_update",
+            "usage_update",
+            "state_update"
+          ]
+        },
+        {
+          "name": "recall",
+          "terminal": {
+            "state": "idle",
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "cancel",
+          "terminal": {
+            "state": "idle",
+            "stopReason": "cancelled"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "permission",
+          "terminal": {
+            "state": "idle",
+            "stopReason": "end_turn"
+          },
+          "responseCode": null
+        },
+        {
+          "name": "final-close",
+          "terminal": null,
+          "responseCode": null
+        }
+      ],
+      "markerObserved": true,
+      "contextRecallObserved": true,
+      "permissions": [
+        {
+          "requestId": 0,
+          "decision": {
+            "outcome": "selected",
+            "optionId": "allow_once"
+          },
+          "optionKinds": [
+            "allow_once",
+            "allow_always",
+            "reject_once"
+          ]
+        }
+      ],
+      "approvedFileMatches": true,
+      "toolStates": [
+        {
+          "id": "exec-718dfa8c-e65e-45fb-be7d-5dba99ccc499",
+          "kind": "execute",
+          "status": "in_progress"
+        },
+        {
+          "id": "exec-718dfa8c-e65e-45fb-be7d-5dba99ccc499",
+          "kind": null,
+          "status": "completed"
+        }
+      ],
+      "failure": null,
+      "cleanup": [
+        {
+          "pid": 50904,
+          "exitCode": 0,
+          "cleanup": "stdio exited",
+          "stderrBytes": 0
+        },
+        {
+          "pid": 41028,
+          "exitCode": 0,
+          "cleanup": "stdio exited",
+          "stderrBytes": 0
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+    "generatedUtc":  "2026-10-30T00:31:00.5478823Z",
+    "scope":  "independent real Harness preflight; not product CL-032 acceptance",
+    "program":  "DeepSeek Harness 0.2.1-rc.3",
+    "agentVersion":  "deepseek-harness-acp/0.0.1",
+    "protocolVersion":  1,
+    "provider":  "deepseek-account",
+    "model":  "deepseek-flash",
+    "sessionId":  "078e2fbf-32c9-444d-a40d-8690f5f67b2d",
+    "telemetryMode":  "DISABLED",
+    "credentialReuse":  "single deepseek-account-platform/default grant copied to owner-only isolated DSH_HOME; original unchanged; copy deleted",
+    "assertionCount":  15,
+    "passed":  15,
+    "assertions":  {
+                       "protocolV1":  true,
+                       "createNativeId":  true,
+                       "markerExact":  true,
+                       "structuredToolCall":  true,
+                       "structuredToolCompleted":  true,
+                       "permissionCancelled":  true,
+                       "cancelledWriteAbsent":  true,
+                       "exactAllowOnce":  true,
+                       "markerFileExact":  true,
+                       "cancelTerminal":  true,
+                       "resumeRpcSuccess":  true,
+                       "resumeNoReplay":  true,
+                       "recallExact":  true,
+                       "bothProcessesExited":  true,
+                       "finalCloseSuccess":  true
+                   },
+    "cleanup":  [
+                    {
+                        "pid":  46232,
+                        "exitCode":  0,
+                        "exited":  true,
+                        "stderrBytes":  0
+                    },
+                    {
+                        "pid":  49304,
+                        "exitCode":  0,
+                        "exited":  true,
+                        "stderrBytes":  0
+                    }
+                ],
+    "processSnapshot":  "owned root PIDs, their direct children, and dedicated probe command lines absent after exit",
+    "rawEvidenceSha256":  "214DB3078676660CC40D1D80495966B7B42982FBF795FE17830A80A7396354E8",
+    "probeSha256":  "7C7EA060B3317CF25A985C7F070CD828365C4A57BCAE955C2932F639EA1DBB68",
+    "initialAttempt":  {
+                           "permissionCancelled":  true,
+                           "reason":  "Probe initially did not join permission toolCallId to prior structured tool_call event; failed closed; second fresh marker/directory fixed correlation",
+                           "allowOnceSucceeded":  false
+                       },
+    "limitations":  [
+                        "Direct ACP protocol probe, not integrated product client/Web",
+                        "Cancel during active model prompt; running external long-lived process cancellation not exercised",
+                        "Owned roots exited and no known descendant remains; Windows Job Object/product cleanup not exercised",
+                        "Full third-party license, signature and vulnerability audit not completed",
+                        "No ACP v2 support asserted for DeepSeek",
+                        "No network interception proof; effective config DISABLED and fixed official code no-SDK branch verified"
+                    ]
+}

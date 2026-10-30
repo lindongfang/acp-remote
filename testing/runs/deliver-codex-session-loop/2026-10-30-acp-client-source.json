@@ -1,0 +1,66 @@
+{
+  "stage": "WP3 ACP-R001/R002 repair candidate; original independent reviewers pending",
+  "workspace": "C:\\Users\\jack\\.codex\\worktrees\\codex-session-wp2\\acp-remote",
+  "target": "C:\\Users\\jack\\.codex\\worktrees\\codex-session-wp2\\acp-remote/.tmp/wp2-target",
+  "baselineMain": "D:/Project/acp-remote",
+  "previousManifest": ".tmp/wp3-acp-logs/frozen-files.json",
+  "previousManifestSha256": "C38150F250C0BC2DFBC73717B7397F89F801BE9D43FDEA9C0E886425A70C1A09",
+  "files": [
+    {
+      "path": "app/src/adapters/acp/README.md",
+      "sha256": "E026F37940BB9D485E6CB09FF61E20770E89AA7B3C0BE649E95F1077B721BCFE",
+      "mainSha256": null,
+      "previousSha256": "B83E149EB70FDBCB1DE44E950267ED4BCDCA299A738C8A3C8FB59B70B6C5FF25",
+      "bytes": 5482
+    },
+    {
+      "path": "app/src/adapters/acp/mod.rs",
+      "sha256": "608496C104CC57276E0EA3244B5184566F077A0846EB2F0DA976AF3E872D6DE4",
+      "mainSha256": null,
+      "previousSha256": "608496C104CC57276E0EA3244B5184566F077A0846EB2F0DA976AF3E872D6DE4",
+      "bytes": 224
+    },
+    {
+      "path": "app/src/adapters/acp/model.rs",
+      "sha256": "A4B5B8F8B33B96A776E39E3F94412DD6222D705CAB4F4E80B279DE6DBBBA2419",
+      "mainSha256": null,
+      "previousSha256": "E3244982F10BC3AC019F1EB98F12ACE2ECB9DBC943FD693BE267C8D3E120656A",
+      "bytes": 7529
+    },
+    {
+      "path": "app/src/adapters/acp/strategy.rs",
+      "sha256": "C4EDD5A106694AC2C91D409153D0690FFBAC2AF99035A1CFA4E36D3E337518D8",
+      "mainSha256": null,
+      "previousSha256": "E8F66B3D79AB58CAF6AA7847E1C8311D1CCFB7A05561F00899B21582983F316C",
+      "bytes": 17464
+    },
+    {
+      "path": "app/src/adapters/acp/tests.rs",
+      "sha256": "374798F6C14DB4EF0BA8DF6A1E76A29F83795FC788F6B26AD03C1B6DC14407F6",
+      "mainSha256": null,
+      "previousSha256": "3B8B843F6B7E220AB92E22D7CA0A89075271AFF7388315FFB3C0130E2FD61EE1",
+      "bytes": 36072
+    },
+    {
+      "path": "app/src/adapters/acp/transport.rs",
+      "sha256": "90EFCDE217821008E84565739C85E68D307B886CBF3C74BFE5161BE442939C5F",
+      "mainSha256": null,
+      "previousSha256": "A884C2E8C70DC61D13E32FC020BC0E7A4FDEE6C6458F109E62723B825E825D04",
+      "bytes": 18653
+    },
+    {
+      "path": "app/src/adapters/mod.rs",
+      "sha256": "F784C5ED5E738BD2EC931BF9FFCCA8D3C00D0F98F39D845955977CD2190D3F13",
+      "mainSha256": null,
+      "previousSha256": "F784C5ED5E738BD2EC931BF9FFCCA8D3C00D0F98F39D845955977CD2190D3F13",
+      "bytes": 45
+    },
+    {
+      "path": "app/src/lib.rs",
+      "sha256": "AA61AC52018E0A6AE3390FC072B09330CC1C7E2C54F366C61D89904C7F9EFC15",
+      "mainSha256": "4645DFF1BCB1FE5940C818E938AF987F64DC4283857130FB3C2516C4E75CC6AC",
+      "previousSha256": "AA61AC52018E0A6AE3390FC072B09330CC1C7E2C54F366C61D89904C7F9EFC15",
+      "bytes": 878
+    }
+  ]
+}

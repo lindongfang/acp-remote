@@ -1,0 +1,62 @@
+[
+    {
+        "protocolVersion":  1,
+        "createdSessionId":  "01a189f4-ea39-7e02-9b5f-1e33395d1c73",
+        "failure":  "timeout session/prompt",
+        "completedSteps":  [
+                               "initialize",
+                               "create"
+                           ],
+        "eventCounts":  [
+                            {
+                                "type":  "available_commands_update",
+                                "count":  1
+                            },
+                            {
+                                "type":  "session_info_update",
+                                "count":  4
+                            }
+                        ],
+        "permissionRequestCount":  0,
+        "cleanup":  [
+                        {
+                            "pid":  37648,
+                            "exitCode":  0,
+                            "cleanup":  "stdio exited",
+                            "stderrBytes":  0
+                        }
+                    ]
+    },
+    {
+        "protocolVersion":  2,
+        "createdSessionId":  "01a189f2-6c6a-7901-a0be-fc2d54ff8d92",
+        "failure":  "timeout idle",
+        "completedSteps":  [
+                               "initialize",
+                               "create"
+                           ],
+        "eventCounts":  [
+                            {
+                                "type":  "state_update",
+                                "count":  1
+                            },
+                            {
+                                "type":  "session_info_update",
+                                "count":  5
+                            },
+                            {
+                                "type":  "user_message_chunk",
+                                "count":  1
+                            }
+                        ],
+        "permissionRequestCount":  0,
+        "cleanup":  [
+                        {
+                            "pid":  28936,
+                            "exitCode":  0,
+                            "cleanup":  "stdio exited",
+                            "stderrBytes":  0
+                        }
+                    ]
+    }
+]

@@ -1,0 +1,66 @@
+﻿{
+    "issue":  "PLAT-T001",
+    "baseSha":  "65b46c01d6b95fc1f1a8223b1c92a729a885c185",
+    "previousManifest":  {
+                             "path":  ".tmp/platform-delivery.json",
+                             "sha256":  "3C3F5E56B03530D2C3F7F67115E3DBDCD38D375C53FDB9E7A1C21FB29CF6F366"
+                         },
+    "files":  [
+                  {
+                      "path":  "app/Cargo.toml",
+                      "sha256":  "C48046E404E8D10B036EEC48163295A1386AA2CBE4BAEAFBE479FE823638045D"
+                  },
+                  {
+                      "path":  "app/DEPENDENCIES.md",
+                      "sha256":  "8CF0CA9C009CCC799E56FD7F5823A5F02DEBBE717756381251E937E6097FAD28"
+                  },
+                  {
+                      "path":  "app/src/platform/mod.rs",
+                      "sha256":  "38224819070BF82A2616BD96C8C52210ACD261F9E71614AC0AA61678609BB37F"
+                  },
+                  {
+                      "path":  "app/src/platform/process_owner.rs",
+                      "sha256":  "17ABD5A4023874E0870B74947A23AF9529BB4DCC37A35781CA3133B1A98DC436"
+                  },
+                  {
+                      "path":  "app/tests/platform_owner.rs",
+                      "sha256":  "BC24DF836BD805697B28B34244C9FB53034A274DA2D3315708729246E5588A25"
+                  }
+              ],
+    "evidence":  [
+                     {
+                         "path":  ".tmp/platform-plat-t001/red.log",
+                         "sha256":  "1C42E51BA463CB00C7DA69B2C6E56CB8D7B4BA8FB213493FA94BB9345AD6943A"
+                     },
+                     {
+                         "path":  ".tmp/platform-plat-t001/green.log",
+                         "sha256":  "05E78C802C1CBA39BD69B4FDA944F838AB85FB3288B3CBF08CD88719B67F7537"
+                     },
+                     {
+                         "path":  ".tmp/platform-plat-t001/fmt.log",
+                         "sha256":  "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+                     },
+                     {
+                         "path":  ".tmp/platform-plat-t001/check.log",
+                         "sha256":  "542C3E13FE0E6A0AECC2E15EEBFD977C6EBA28868D30B8545AB3ECBC1E5EF341"
+                     },
+                     {
+                         "path":  ".tmp/platform-plat-t001/clippy.log",
+                         "sha256":  "501EBD3A293EC5440D8F853818EB095843338BC1816F8CA2CB438FF3D67CBB99"
+                     },
+                     {
+                         "path":  ".tmp/platform-plat-t001/all-tests-cmd.log",
+                         "sha256":  "2515E3FF015615032A1A0A89C836D1BCFCEA6E573CBED46B59A9B41B39A6EEDD"
+                     },
+                     {
+                         "path":  ".tmp/platform-plat-t001/original-process_owner.rs",
+                         "sha256":  "D7231D13F4C4BC02C9B2B58E5B306D7C0ACC96CCD312DFB9B67F96D0A8F40AF0"
+                     },
+                     {
+                         "path":  ".tmp/platform-plat-t001/original-platform_owner.rs",
+                         "sha256":  "44F72407A48C91B84B40D1B7C0ED7680876C637B7E8E6061E1597509D958A7A9"
+                     }
+                 ],
+    "verification":  "fmt --check, cargo check --all-targets --locked, clippy --all-targets --locked -- -D warnings: exit 0. cargo test --all-targets --locked executed through real cmd cd /d under current-user owner: exit 0; 144 library + 4 JWS + 11 platform. Red test on original process_owner confirmed same InvalidSpec before fix; green verifies normal empty override spawn and hidden original value preserved across nested OwnedProcess.",
+    "limitation":  "Original tester failure remains independent evidence; only original tester may close PLAT-T001. No claim of product/shared-instance/real Harness/Web or failure injection acceptance."
+}

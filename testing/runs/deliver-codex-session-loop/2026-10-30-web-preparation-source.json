@@ -1,0 +1,131 @@
+﻿{
+    "stage":  "WP4 isolated Web preparation: WEB-R001–003 repair candidate, independent closure pending",
+    "workspace":  "C:\\Users\\jack\\.codex\\worktrees\\codex-session-web\\acp-remote",
+    "baseHead":  "65b46c01d6b95fc1f1a8223b1c92a729a885c185",
+    "previousHandoffSha256":  "A4AD3BFA3C80FB7CACC5614F589C1C089997C93E6FE6CA98AD91D5473D3947A8",
+    "contractSha256":  "F4E8BDD72935DF71A7983E04EFE1A3522909533DDF90A6FE1AD532E94C47258C",
+    "mainSha256":  "CE6D443E44D4C920D7E7B184BEAAB83EF713B68B8F9CFF4FC6D58499D5D14815",
+    "stylesSha256":  "0109AA878DCE55A26B539A81DD3AADFE9A3E94E651D82541CDD104FF348FAFE2",
+    "files":  [
+                  {
+                      "path":  "clients/web/src/management/client.ts",
+                      "sha256":  "B5693A5E7B48C17C21E4D7D85E6F8C9CC808C2A672E76BB1B62CDDF4AE4FE2C1"
+                  },
+                  {
+                      "path":  "clients/web/src/management/protocol.ts",
+                      "sha256":  "C8C2BBBB31723BEB42A8BDB8B8776D0B5579A492BA1D42C64E1B3ADA7C41A013"
+                  },
+                  {
+                      "path":  "clients/web/src/session/budget.ts",
+                      "sha256":  "D48D22C6F795BB3CABD43562ACBF43F1E3E980D32091A40DFA1DF138A18B8A5F"
+                  },
+                  {
+                      "path":  "clients/web/src/session/catalogue.ts",
+                      "sha256":  "7F1E3EC85578AEB94439DA27843B0215C3AE756C282B67DAB83502E62024DF96"
+                  },
+                  {
+                      "path":  "clients/web/src/session/content.ts",
+                      "sha256":  "18A95B5302AA005C1720112B2302D4658B553C0F813ED6DEA60E05D11E23A5BA"
+                  },
+                  {
+                      "path":  "clients/web/src/session/installation.ts",
+                      "sha256":  "299FB5040B34D487D9BEAEA0C1F13CC099AC7C848D0AAED02DC6D8D6A20F3935"
+                  },
+                  {
+                      "path":  "clients/web/src/session/item-store.ts",
+                      "sha256":  "5A7B3F1A6DE5D2CCF500122570179CDF93C0C3DEC1AAECCE9CA8C062F8A0F302"
+                  },
+                  {
+                      "path":  "clients/web/src/session/model.ts",
+                      "sha256":  "8646FB55193E03A56B5449D84B76E1A07C6D3888DB3AB6845DDDA10D6F0DA2C6"
+                  },
+                  {
+                      "path":  "clients/web/src/session/panel.ts",
+                      "sha256":  "3DD95331C95CF4BD651C712E30B584F03E5EA392498F1F6B52C33A535868A3C8"
+                  },
+                  {
+                      "path":  "clients/web/src/session/projection.ts",
+                      "sha256":  "8A208331E8E8AA873139A9D7BD8280B2BAA4C4AB2694C54CA85EE00950D14E3E"
+                  },
+                  {
+                      "path":  "clients/web/src/session/structured.ts",
+                      "sha256":  "7FFB59C5D2605FF83B7F01DC2950040CF68FBDA43D5118676E3235C0A36140E0"
+                  },
+                  {
+                      "path":  "clients/web/src/session/versions.ts",
+                      "sha256":  "4CA4EF88C1F42DB17DB4FD38D0AB49675D2C68556105193959E2DAC6C82C572B"
+                  },
+                  {
+                      "path":  "clients/web/tests/session-budget.test.ts",
+                      "sha256":  "E44126D88B0EA33C3132EC2043C40C51EE4E35005F28A065B8BC07A1E00FEC72"
+                  },
+                  {
+                      "path":  "clients/web/tests/session-catalogue.test.ts",
+                      "sha256":  "8C6F7408F2AE434523656D861953164162D63950CC00923D28FB74CC022B88B0"
+                  },
+                  {
+                      "path":  "clients/web/tests/session-content.test.ts",
+                      "sha256":  "D7DE68D77DF564594AF5C48E8F726AAC707F87B4031ED1A81A372515AFAC555C"
+                  },
+                  {
+                      "path":  "clients/web/tests/session-events.test.ts",
+                      "sha256":  "F49FBEC7FCBF9B772170351091475767F48CC741C8C7BCE1B9BB137DE46A6A74"
+                  },
+                  {
+                      "path":  "clients/web/tests/session-item-store.test.ts",
+                      "sha256":  "F101980AA451243887779F8E1C786A9C35B6F51EFE69CAD064C8C9E95749DB28"
+                  },
+                  {
+                      "path":  "clients/web/tests/session-panel-state.test.ts",
+                      "sha256":  "A7AEB8C421F1B82414FBFD6E5D7B11380431A20A6DCBD1FE1D80E58D2963B220"
+                  },
+                  {
+                      "path":  "clients/web/tests/session-projection.test.ts",
+                      "sha256":  "86DE9286C26F2CD56442D9296DA27460940A71950CAF6CD53E620A682A70BAE2"
+                  },
+                  {
+                      "path":  "clients/web/tests/session-versions.test.ts",
+                      "sha256":  "E22406B4EDA2A27A3591362CAD9B027447994F3421787DDABE7CA60DD2B9370A"
+                  }
+              ],
+    "checks":  {
+                   "build":  0,
+                   "typecheck":  0,
+                   "testFiles":  15,
+                   "testsPassed":  84,
+                   "test":  0,
+                   "typescriptFormatter":  "No formatter command configured; normalized UTF-8/CRLF and git diff --check only",
+                   "diffCheck":  0
+               },
+    "repairs":  {
+                    "WEB_R002":  "Collect all short catalogue pages before details; panel catalogue barrier pauses body/detail commands during sequential bounded enumeration; captured revision, unique identities/cursors, 1024 rows and 2MiB summary budget enforced",
+                    "WEB_R001":  "InstallationGuard checks view generation, committed operation sequence, revision and liveRevision at synchronous commit; map merge rebases on latest installed state after all awaits",
+                    "WEB_R003":  "Immutable identity index covers installed plus same-batch items before reads and at commit; equal-version contents compared byte for byte, including duplicates within the batch; atomic failed merges preserve previous view"
+                },
+    "developmentRegression":  [
+                                  "Delayed old SessionPanel baseline blocked at approval does not install after newer baseline; newer item retained",
+                                  "View generation change during approval wait suppresses old install",
+                                  "Same-batch committed/live immutable identity conflict fails before any body read",
+                                  "Legal same-item committed/live versions merge; later identity/body conflicts retain complete installed version",
+                                  "Actual baseline turns/live identity conflict preserves an unrelated installed item",
+                                  "Two-page catalogue reaches later page before 1366 command-budget intervals consume more than 60 seconds",
+                                  "Captured revision changes and over-1024 summaries explicitly fail; no silent truncation",
+                                  "Catalogue priority wait aborts without a body request",
+                                  "Same-version bytes conflict rejected even with equal supplied digest",
+                                  "Prepared item batch rebases on latest installed mapping"
+                              ],
+    "notRun":  [
+                   "real browser DOM/component interaction",
+                   "WP3/WP4 integration",
+                   "real authenticated node session commands",
+                   "real ACP/Harness/SQLite/Job Object",
+                   "independent tester/reviewer product acceptance"
+               ],
+    "limits":  [
+                   "SessionPanel state tests use a minimal document/createElement substitute and stub render: not DOM/browser/accessibility acceptance",
+                   "No main.ts/styles.css wiring or shared D product/planning/report modification",
+                   "Summary timing regression is virtual time with real CommandBudget; not real network/16MiB/Harness throughput evidence",
+                   "Previous 14-file handoff and logs retained unchanged; original reviewer alone closes WEB-R001–003",
+                   "No new dependencies; final integrated WP4 and independent product acceptance remain pending"
+               ]
+}
