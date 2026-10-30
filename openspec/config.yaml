@@ -3,19 +3,22 @@ context: |
   # Project Profile
   本分支正在按 docs/HARNESS_CONTROL_PLANE_REDESIGN.md 完全重建，不兼容旧系统。
   旧产品实现、协议合同、数据库迁移、产品规格、ADR、历史变更及验收资料已清退。
-  当前保留重设计文档、AGENTS.md、通用工程安全配置以及 OpenSpec schema/role/rules。
-  当前没有 Rust workspace、Daemon、CLI、前端或可运行产品；详细接口、数据库和 wire 协议尚待设计。
+  Windows Rust节点、CLI、SQLite身份与同源Web配对/管理已由establish-node-access交付并归档；当前状态和命令以README及实际工程配置为准。
+  2026-10-30用户最新确认通用ACP重放兼容：无历史重放的Harness暂不接入，不做厂商专用读取适配；允许标准全量流式重放后在有界可丢弃视图上分页。会话与历史仍以Harness为准，只提供原生删除，查看可激活进程。权威见重设计和当前change规格，取代此前无历史仅当前连接支持。
+  DC-001确认：实际重放可刷新无活动计时但不形成任务保护；默认继承节点环境、允许显式覆盖；会话以显式接入来源+原生ID识别，不自动证明不同来源的物理存储等价，不新增厂商探测或环境白名单/指纹准入。详细行为见当前规格。
+  PV-001确认：新连接优先平台已实现并验证的最高ACP版本，按规范协商最高共同可用版及其实际能力，不按旧报告长期固定低版；仅规范允许且高版无共同支持时协商回退，业务失败不自动降版重发。实际选择与原因证据分别呈现，不宣称未知未来版支持。
+  实现已暂停；旧session-contract、tests/plan/tasks须重基准并独立检视，旧readiness不授权新方案开工。已有未提交领域/存储/适配器工作保留，不自动清库或删原生数据。
   .agents/ 是已有技能资源，不属于旧产品实现，未经任务授权不得修改。
   旧实现基线为 Git 提交 5777067e2ed17503cd8aa3f042015ba11a9cb152，只按需提取，不沿用旧架构。
 
   # Sources and Commands
   已确认产品目标：docs/HARNESS_CONTROL_PLANE_REDESIGN.md；执行约束：AGENTS.md。
-  npm ci 安装开发工具；当前没有统一构建或测试入口，随实际实现建立并在 README 登记，不将工具安装视为产品验收。
+  npm ci安装根开发工具，Web依赖按README单独安装；现有npm run check与npm run build:rust入口以package.json为准，不将工具安装或上游检查视为会话产品验收。
   引入产品实现时同步增加真实构建、测试及合同校验，Rust 工具链只读 rust-toolchain.toml。
   提交信息词表以 commitlint.config.mjs 为准，默认主分支 main，不直接向 main 推送。
   新术语首次需要时创建 openspec/GLOSSARY.md；新规格、ADR 和测试目录按新方案建立。
   下方流程规则和模板约束后续产品变更，不将已移除的旧产品规范、测试或证据作为执行前提。
-  当前重建资料清理不是产品实现验收，不要求为已删除产品重建旧验收用例。
+  已归档节点接入证据仅在固定版本与范围内复用；新会话实现、协议合同、安全及真实Harness验收仍须按当前change独立验证。
 
 # Artifact 规则：追加到对应 artifact 的 instructions 上，不改模板正文。
 rules:
