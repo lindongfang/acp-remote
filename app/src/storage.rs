@@ -9,7 +9,7 @@ use sqlx::{
 
 use crate::error::StorageError;
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodeMeta {
@@ -34,7 +34,7 @@ impl Storage {
     /// schema transaction cannot be completed. An initialization failure closes the connection
     /// pool before returning.
     pub async fn open(path: &Path) -> Result<Self, StorageError> {
-        let existed = path.exists();
+        crate::session_storage::schema::preflight(path).await?;
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
@@ -51,98 +51,11 @@ impl Storage {
             #[cfg(test)]
             close_barrier: std::sync::Mutex::new(None),
         };
-        if let Err(error) = storage.initialize_schema(existed).await {
+        if let Err(error) = crate::session_storage::schema::initialize(&storage.pool).await {
             storage.pool.close().await;
             return Err(error);
         }
         Ok(storage)
-    }
-
-    async fn initialize_schema(&self, existed: bool) -> Result<(), StorageError> {
-        let current_version: i64 = sqlx::query_scalar("PRAGMA user_version")
-            .fetch_one(&self.pool)
-            .await?;
-        if current_version != 0 && current_version != SCHEMA_VERSION {
-            return Err(StorageError::UnknownSchema(current_version));
-        }
-        if current_version == 0 && existed {
-            let table_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM sqlite_schema \
-                 WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-            )
-            .fetch_one(&self.pool)
-            .await?;
-            if table_count != 0 {
-                return Err(StorageError::UnrecognizedSchema);
-            }
-        }
-
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS node_meta (
-                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                schema_version INTEGER NOT NULL,
-                node_id TEXT NOT NULL,
-                public_key BLOB NOT NULL,
-                key_file_ref TEXT NOT NULL
-            )",
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS clients (
-                client_id TEXT PRIMARY KEY,
-                public_key BLOB NOT NULL UNIQUE,
-                display_name TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (status IN ('trusted', 'revoked')),
-                auth_generation INTEGER NOT NULL,
-                created_at INTEGER NOT NULL,
-                revoked_at INTEGER
-            )",
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS management_commands (
-                actor_id TEXT NOT NULL,
-                request_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                payload_digest TEXT NOT NULL,
-                result_json TEXT NOT NULL,
-                expires_at INTEGER NOT NULL,
-                PRIMARY KEY (actor_id, request_id)
-            )",
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS security_audit (
-                audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                actor_id TEXT,
-                action TEXT NOT NULL,
-                target_id TEXT,
-                outcome TEXT NOT NULL,
-                occurred_at INTEGER NOT NULL
-            )",
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS node_state (
-                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                revision INTEGER NOT NULL
-            )",
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query("INSERT OR IGNORE INTO node_state(singleton, revision) VALUES (1, 0)")
-            .execute(&mut *transaction)
-            .await?;
-        sqlx::query("PRAGMA user_version = 1")
-            .execute(&mut *transaction)
-            .await?;
-        transaction.commit().await?;
-        Ok(())
     }
 
     /// Loads the persisted node identity metadata, if present.
@@ -171,6 +84,9 @@ impl Storage {
     ///
     /// Returns an error when the metadata transaction cannot be committed.
     pub async fn write_node_meta(&self, meta: &NodeMeta) -> Result<(), StorageError> {
+        if meta.schema_version != SCHEMA_VERSION {
+            return Err(StorageError::UnrecognizedSchema);
+        }
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO node_meta(singleton, schema_version, node_id, public_key, key_file_ref) \
@@ -245,6 +161,21 @@ impl Storage {
         assert!(slot.is_none(), "only one close barrier can be installed");
         *slot = Some(Arc::clone(&barrier));
         barrier
+    }
+
+    #[must_use]
+    pub fn approvals(&self) -> crate::session_storage::approvals::ApprovalStore {
+        crate::session_storage::approvals::ApprovalStore::new(self.pool.clone())
+    }
+
+    #[must_use]
+    pub fn histories(&self) -> crate::session_storage::history::HistoryStore {
+        crate::session_storage::history::HistoryStore::new(self.pool.clone())
+    }
+
+    #[must_use]
+    pub fn sessions(&self) -> crate::session_storage::SessionStore {
+        crate::session_storage::SessionStore::new(self.pool.clone())
     }
 
     #[must_use]

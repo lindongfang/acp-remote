@@ -79,3 +79,18 @@
 - `npm run check`、`npm --prefix clients/web run test`（6 个文件、30 项）和 `npm --prefix clients/web run build`：通过。
 - 根仓库与 Web 的 `npm audit --audit-level=high`：均为 0 个已知漏洞；Web 审计覆盖 81 个依赖。
 - 2026-10-30 独立验收已取得并校验官方 cargo-audit 0.22.2，针对261个锁定包及1386条公告的官方快照扫描：0漏洞、无warnings；未查询yanked状态。工具来源、快照提交和真实范围见 `testing/runs/establish-node-access/2026-10-30-independent-supplychain.md`。这不等于已完成全部维护/许可/平台审查或秘密扫描问题闭环。
+
+## 会话进程所有权特性（WP3 开发实现）
+
+现有锁定的 windows-sys 0.61.2 增启 `Win32_System_JobObjects` 与 `Win32_Globalization`；未新增或升级依赖，Cargo.lock不变。前者用于进程树归属、活动进程计数与整树终止；后者的 CompareStringOrdinal 用于 Windows 环境名的不区分大小写覆盖与排序，避免 Unicode 大写展开改变名称等价关系。许可证、Microsoft 维护来源与 Windows 支持沿用上表；这不是新的供应链扫描结论。
+
+`platform::process_owner` 的 unsafe 审查边界：
+
+- CreateProcessW 以绝对程序路径、逐项 UTF-16 Windows argv 转义和独立 cwd/env 调用，不经 shell。ProcessSpec 不实现 Debug，错误仅包含固定阶段与 Windows 数字码；参数/路径/环境值不进入错误。环境继承当前节点环境后按 Windows 名称规则覆盖；上层不能将节点私钥放入环境。NUL、非法环境名、过长命令行在启动前拒绝。
+- 父 stdio 使用 Tokio overlapped named pipe，无永久阻塞 read 线程；管道名含192bit系统随机值，复用已审查的 owner-only DACL、first-instance 与拒绝远端。子 stdio 使用同步句柄以支持普通 CLI，只有这三个句柄进入 STARTUPINFOEX 显式继承清单。Job、根进程/线程、父管道不可继承。
+- 根以 CREATE_SUSPENDED 创建；在任何用户代码执行之前设置 KILL_ON_JOB_CLOSE 并归属 Job，成功后 ResumeThread。未启用任何 breakaway 标志。失败回滚拥有根进程并尽力终止；已归属 Job 的最终关闭再次保证整树终止。句柄均由 OwnedHandle 唯一关闭，属性清单由对应分配和 DeleteProcThreadAttributeList 管理，无跨 await 裸指针。
+- OwnedProcess 始终持有 Job；take_io 只转交一次异步 IO。wait_exit 只证明根退出，shutdown 使用 Job 活动数证明整树退出，根退出不释放孙进程责任。总 deadline 包含最多100ms强制终止及退出观察预留；Incomplete 返回最后观察计数并保留所有权，重复调用继续观察，Drop 尽力 TerminateJobObject 后 kill-on-close。共享实例引用/审批/持久化与 stdio reader/writer/stderr有界任务由上层实例owner负责，单会话不得直接强杀共享实例。
+
+开发验证与独立产品验收分开记录：专属 platform_owner 测试使用系统 PowerShell 孙进程和稳定进程句柄验证父先退出、阻塞IO、Drop、嵌套 Job 内 owner 异常退出及不允许 breakaway/无关继承句柄；不以扫描测试exe路径作为整树回收证据。测试仅使用独立随机临时根和自有子进程；实际命令、结果、文件摘要由交付记录固定，本文不自签CL-030或独立安全验收。
+
+PLAT-T001 修订：继承系统环境与调用方 overrides 分开校验。仅对继承来源保留 Windows `=<ASCII字母>:` 隐藏驱动器当前目录条目及其原值；显式 overrides 仍拒绝任何含 `=` 的名称。没有删除、清空或过滤整个父环境。真实 cmd 的 `cd /d` 创建隐藏驱动器条目后运行子测试，验证空 override 的正常启动、隐藏值跨 OwnedProcess 原样继承以及显式保留键拒绝。旧开发环境9项通过与独立tester环境2过7失败分别保留；修订后的开发通过不自行关闭独立问题。
