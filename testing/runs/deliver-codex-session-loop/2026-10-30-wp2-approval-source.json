@@ -1,0 +1,92 @@
+{
+  "stage": "WP2 2.3 candidate; independent review pending",
+  "workspace": "C:\\Users\\jack\\.codex\\worktrees\\codex-session-wp2\\acp-remote",
+  "mainBaseline": "D:/Project/acp-remote",
+  "target": "C:\\Users\\jack\\.codex\\worktrees\\codex-session-wp2\\acp-remote/.tmp/wp2-target",
+  "files": [
+    {
+      "path": "app/src/application/approvals-development.md",
+      "sha256": "B16A27805F50BF6CCE56DBF5F762D9BBEA7C1FFC65DAB83EDC75809C82648FF7",
+      "mainSha256": null,
+      "bytes": 2699
+    },
+    {
+      "path": "app/src/application/approvals.rs",
+      "sha256": "D275786BB45330E6A2C554218C41C85B0FE85641232ED725E4BC8B3CC1FCF3F8",
+      "mainSha256": null,
+      "bytes": 7081
+    },
+    {
+      "path": "app/src/application/history.rs",
+      "sha256": "21E8730D2FF28608F7ED04478571255EB31611F59257560A76DEC40866FFA88F",
+      "mainSha256": "686D12998D1826E77CA3183C3CE0FC69981C0FDADE601722EC85645BDF66ED58",
+      "bytes": 50619
+    },
+    {
+      "path": "app/src/application/mod.rs",
+      "sha256": "1C1E05EB663CEDC48892491CE061505E4C79B81862086CFD9942F57D9AC59CED",
+      "mainSha256": "D6EACDDC11AB283BBE952E8DD79C4A82468C6E1F5C4AC0A19E449B67F17C63E8",
+      "bytes": 1003
+    },
+    {
+      "path": "app/src/domain/approvals.rs",
+      "sha256": "642622ABFE2E674A82A1F5F2089AEBC4EEA6A72E878BB6C7D2361708063A8E5E",
+      "mainSha256": null,
+      "bytes": 11080
+    },
+    {
+      "path": "app/src/domain/history.rs",
+      "sha256": "E7C5101484B1ADA316E9DE2A89699AC2ED74754F9247DE398207C55C67287240",
+      "mainSha256": "371E1C88D5BE2038EC7F0BABC8A4569A7E6B640342AD0F8078EDF70C5A99DE2A",
+      "bytes": 9278
+    },
+    {
+      "path": "app/src/domain/mod.rs",
+      "sha256": "DB8DA4024C18BD84109184E9264936445309F1BA592AD30F17E7003C383AF8B6",
+      "mainSha256": "FB901CE4EB737ABAD538646414FF1B9C0C3FCB394FBCE2B2CB2DDC6C1B42B7DC",
+      "bytes": 3614
+    },
+    {
+      "path": "app/src/session_storage/approvals.rs",
+      "sha256": "0596D97C20C0B9BBD7D1C0F8942134755AABCB6D812DAC438610E364850339AA",
+      "mainSha256": null,
+      "bytes": 47682
+    },
+    {
+      "path": "app/src/session_storage/approvals/tests.rs",
+      "sha256": "EF972FB0270A0175C012A2B7D364FFFDE6ECCA8939660E5AEBFCF82D092D6254",
+      "mainSha256": null,
+      "bytes": 27822
+    },
+    {
+      "path": "app/src/session_storage/history.rs",
+      "sha256": "CAE2932915944CF57EEECEBF1759B7AB3F680E0AC90186D4A7FB9470A7E9BF42",
+      "mainSha256": "CBAC80278D4A44F6528586D694D9F47E173240DFF14687BF918EF30C78A9D588",
+      "bytes": 25753
+    },
+    {
+      "path": "app/src/session_storage/history/tests.rs",
+      "sha256": "F403B2C46DE059EAF358A834FECD5F6E67078D0984C328EAEB1B804EF93C99CE",
+      "mainSha256": "8FAB55E7974805E53A1ECA756BE5006DF6DDF992B8C6AA9F1FC1319A156DD952",
+      "bytes": 33568
+    },
+    {
+      "path": "app/src/session_storage/mod.rs",
+      "sha256": "4783D574E75FFB7AAF8C9AB824409FD7BE191EF5D7CA2904E2DC93D279A9EDC2",
+      "mainSha256": "284E8448BC91C48ED16E5E7C50467BA0C32AA22D905D0C72AA64648AE13818E7",
+      "bytes": 15426
+    },
+    {
+      "path": "app/src/session_storage/schema.rs",
+      "sha256": "1A5697D4A772F9AF1EAE2FE7F1350721FFFBFB6CAEB1E103A70AFF09215E87DF",
+      "mainSha256": "E48B83DDA7DFBDCFDD02A5D3F9AF722B1ED2CB4B0FD9AEEF3EC2EF1DA0ECA0DB",
+      "bytes": 13945
+    },
+    {
+      "path": "app/src/storage.rs",
+      "sha256": "BE67E1815E153CE118E8F964376A7BB9CD399B08F131CC437ADBD1FB32027F4D",
+      "mainSha256": "99D84BE3D66D40F88D3796B046C7011AA574782C3E93ABDA7E21C9EE0752C6D9",
+      "bytes": 8899
+    }
+  ]
+}

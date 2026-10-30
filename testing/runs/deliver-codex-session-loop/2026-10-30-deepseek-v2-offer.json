@@ -1,0 +1,53 @@
+{
+  "program": "DeepSeek Harness 0.2.1-rc.3",
+  "scope": "public initialize offer probe only; no sessions or prompt; not CL-036 product acceptance",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": 2,
+      "capabilities": {},
+      "info": {
+        "name": "acp-remote-preflight",
+        "version": "0.0.0"
+      }
+    }
+  },
+  "stdout": [
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1,\"agentInfo\":{\"name\":\"deepseek-harness-acp\",\"version\":\"0.0.1\"},\"agentCapabilities\":{\"mcpCapabilities\":{\"http\":true},\"promptCapabilities\":{\"image\":false,\"audio\":false,\"embeddedContext\":false},\"sessionCapabilities\":{\"close\":{},\"list\":{},\"resume\":{}}},\"authMethods\":[]}}"
+  ],
+  "stderr": [],
+  "pid": 34164,
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "protocolVersion": 1,
+      "agentInfo": {
+        "name": "deepseek-harness-acp",
+        "version": "0.0.1"
+      },
+      "agentCapabilities": {
+        "mcpCapabilities": {
+          "http": true
+        },
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        },
+        "sessionCapabilities": {
+          "close": {},
+          "list": {},
+          "resume": {}
+        }
+      },
+      "authMethods": []
+    }
+  },
+  "exitCode": 0,
+  "exited": true,
+  "homeHasCredential": false,
+  "sha256": "a5c9c0d195f79e91bd34f90c24c9b1d3b71cbcd443557647246846569e7a7c02"
+}

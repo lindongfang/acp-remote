@@ -1,0 +1,100 @@
+{
+  "kind": "HIST-R001 coder fix candidate; awaiting original reviewer closure",
+  "workspace": "C:\\Users\\jack\\.codex\\worktrees\\codex-session-wp2\\acp-remote",
+  "baseHead": "65b46c01d6b95fc1f1a8223b1c92a729a885c185",
+  "previousManifest": "C:\\Users\\jack\\.codex\\worktrees\\codex-session-wp2\\acp-remote\\.tmp\\wp2-2.2-logs\\frozen-files.json",
+  "previousManifestSha256": "C1BB66052A63846ECC67F8595AA5126A8081D6BE269C9F08BDCBF2B306E39A72",
+  "files": [
+    {
+      "path": "app/src/lib.rs",
+      "sha256": "4645DFF1BCB1FE5940C818E938AF987F64DC4283857130FB3C2516C4E75CC6AC",
+      "mainSha256": "4645DFF1BCB1FE5940C818E938AF987F64DC4283857130FB3C2516C4E75CC6AC",
+      "change": "unchanged-from-integrated-2.1",
+      "previousSha256": "4645DFF1BCB1FE5940C818E938AF987F64DC4283857130FB3C2516C4E75CC6AC"
+    },
+    {
+      "path": "app/src/storage.rs",
+      "sha256": "99D84BE3D66D40F88D3796B046C7011AA574782C3E93ABDA7E21C9EE0752C6D9",
+      "mainSha256": "C07618ACD0DB6CF90050435BCA95B12144622837AF651AF72D22162E294281DA",
+      "change": "modified",
+      "previousSha256": "99D84BE3D66D40F88D3796B046C7011AA574782C3E93ABDA7E21C9EE0752C6D9"
+    },
+    {
+      "path": "app/src/domain/mod.rs",
+      "sha256": "FB901CE4EB737ABAD538646414FF1B9C0C3FCB394FBCE2B2CB2DDC6C1B42B7DC",
+      "mainSha256": "DE1329C04997DFF7474B099C60B498195719DEBD4CDFAEF743392C45C706E30E",
+      "change": "modified",
+      "previousSha256": "FB901CE4EB737ABAD538646414FF1B9C0C3FCB394FBCE2B2CB2DDC6C1B42B7DC"
+    },
+    {
+      "path": "app/src/domain/history.rs",
+      "sha256": "371E1C88D5BE2038EC7F0BABC8A4569A7E6B640342AD0F8078EDF70C5A99DE2A",
+      "mainSha256": null,
+      "change": "new",
+      "previousSha256": "371E1C88D5BE2038EC7F0BABC8A4569A7E6B640342AD0F8078EDF70C5A99DE2A"
+    },
+    {
+      "path": "app/src/application/mod.rs",
+      "sha256": "D6EACDDC11AB283BBE952E8DD79C4A82468C6E1F5C4AC0A19E449B67F17C63E8",
+      "mainSha256": "E99F4BDC70E394B7AF06A6581A901A2A2C6761D45FEEA76FF8CCF63C2DC06E3A",
+      "change": "modified",
+      "previousSha256": "D6EACDDC11AB283BBE952E8DD79C4A82468C6E1F5C4AC0A19E449B67F17C63E8"
+    },
+    {
+      "path": "app/src/application/history.rs",
+      "sha256": "686D12998D1826E77CA3183C3CE0FC69981C0FDADE601722EC85645BDF66ED58",
+      "mainSha256": null,
+      "change": "new",
+      "previousSha256": "D0B6DCF9D03A2A5A2B8E69DFDA1919C36BD46C1D8658AA6DAF510E31CCF382FD"
+    },
+    {
+      "path": "app/src/application/history/tests.rs",
+      "sha256": "7031D8BFE132F87CAD1F6BF24AFD433DF2E82D1C35DF14C32ACFADCE7A14F52B",
+      "mainSha256": null,
+      "change": "new",
+      "previousSha256": "38C2B870151580BBBBC4CE66898F2E11EF1D3BF60855A4DD564028BC1B17D3C5"
+    },
+    {
+      "path": "app/src/application/history/README.md",
+      "sha256": "C9DD6364C80A9BDA8F900F1D03AFDF33BF30332EC1DD035440795243793DA1F4",
+      "mainSha256": null,
+      "change": "new",
+      "previousSha256": "C9DD6364C80A9BDA8F900F1D03AFDF33BF30332EC1DD035440795243793DA1F4"
+    },
+    {
+      "path": "app/src/session_storage/mod.rs",
+      "sha256": "284E8448BC91C48ED16E5E7C50467BA0C32AA22D905D0C72AA64648AE13818E7",
+      "mainSha256": "DBD56A7DE362C9736E924FC014527579EE18C6893F08BE0807C0F121D747EAB7",
+      "change": "modified",
+      "previousSha256": "284E8448BC91C48ED16E5E7C50467BA0C32AA22D905D0C72AA64648AE13818E7"
+    },
+    {
+      "path": "app/src/session_storage/schema.rs",
+      "sha256": "E48B83DDA7DFBDCFDD02A5D3F9AF722B1ED2CB4B0FD9AEEF3EC2EF1DA0ECA0DB",
+      "mainSha256": "81966828A362F0B0CF6DC13D88E44095A66457DB097703EB24BA55E2D9A04FAC",
+      "change": "modified",
+      "previousSha256": "E48B83DDA7DFBDCFDD02A5D3F9AF722B1ED2CB4B0FD9AEEF3EC2EF1DA0ECA0DB"
+    },
+    {
+      "path": "app/src/session_storage/tests.rs",
+      "sha256": "FA2FE59429979D1551EDBCCF16C83801A6E7B43813487703C967E2CF5EFA60FB",
+      "mainSha256": "FA2FE59429979D1551EDBCCF16C83801A6E7B43813487703C967E2CF5EFA60FB",
+      "change": "unchanged-from-integrated-2.1",
+      "previousSha256": "FA2FE59429979D1551EDBCCF16C83801A6E7B43813487703C967E2CF5EFA60FB"
+    },
+    {
+      "path": "app/src/session_storage/history.rs",
+      "sha256": "CBAC80278D4A44F6528586D694D9F47E173240DFF14687BF918EF30C78A9D588",
+      "mainSha256": null,
+      "change": "new",
+      "previousSha256": "CBAC80278D4A44F6528586D694D9F47E173240DFF14687BF918EF30C78A9D588"
+    },
+    {
+      "path": "app/src/session_storage/history/tests.rs",
+      "sha256": "8FAB55E7974805E53A1ECA756BE5006DF6DDF992B8C6AA9F1FC1319A156DD952",
+      "mainSha256": null,
+      "change": "new",
+      "previousSha256": "8FAB55E7974805E53A1ECA756BE5006DF6DDF992B8C6AA9F1FC1319A156DD952"
+    }
+  ]
+}

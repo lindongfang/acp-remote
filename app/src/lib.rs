@@ -2,10 +2,13 @@
 
 #[cfg(windows)]
 pub mod access_policy;
+pub mod adapters;
+pub mod application;
 pub mod challenge;
 pub mod claims;
 pub mod config;
 pub mod data_dir;
+pub mod domain;
 pub mod error;
 pub mod identity;
 #[cfg(windows)]
@@ -20,6 +23,7 @@ pub mod pairing;
 pub mod pairing_http;
 pub mod platform;
 pub mod random;
+pub mod session_storage;
 pub mod storage;
 pub(crate) mod strict_json;
 pub mod tls;

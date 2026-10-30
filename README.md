@@ -2,7 +2,7 @@
 
 ACP Remote 是面向个人使用的 Harness 管理平台，计划在一个用户控制的节点内，统一管理会话、执行、权限审批、历史与审计。
 
-Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP（Agent Client Protocol）是平台与这些程序交互的协议。首批计划接入 Codex、ZCode 和 DeepSeek Harness。
+Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP（Agent Client Protocol）是平台与这些程序交互的协议。通用闭环以 Codex 首验，ZCode 能力待核实；DeepSeek 当前已核对的 rc.5 ACP 不提供历史重放，按已确认的准入规则暂不接入，保留后续调研。
 
 ## 当前状态
 
@@ -10,7 +10,11 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 归档结果与历史路径映射见[归档记录](testing/runs/establish-node-access/2026-10-30-archive-record.md)。完整产品目标见 [Harness Control Plane 设计](docs/HARNESS_CONTROL_PLANE_REDESIGN.md)。
 
+`deliver-codex-session-loop` 的领域、存储及适配器开发已暂停，Harness/Web 会话闭环尚未交付。2026-10-30 最新确认采用通用 ACP 重放兼容，缺少历史重放的 Harness 暂不接入；会话及历史仍以 Harness 为准，平台只使用有界、可丢弃视图，不保存独立聊天档案或编写厂商专用读取器。页面分页可来自全量流式重放，首次加载成本依全部历史量而定。只提供原生删除，查看允许激活进程且不限只读。现有未提交实现及数据保留；[旧会话存储合同](openspec/changes/deliver-codex-session-loop/session-contract.md)已暂停使用，旧实施合同及完整验收计划仍待重基准。开发及独立验证范围见[当前执行计划](openspec/changes/deliver-codex-session-loop/plan.md)，不将文档或内部开发测试作为产品验收。
+
 重建的能力归属、交付闭环与 change 依赖见 [重建能力地图](docs/REBUILD_CAPABILITY_MAP.md)。10个 change 的规划文档已建立；节点接入已实现并归档，其他能力仍按各自 change 交付。文档检视、上游依赖与真实验收结果分别记录，不能将节点接入验收外推为其他能力已经通过。
+
+本轮 DC-001 已确认的重放计时、默认环境继承及显式接入来源取舍见 [总体设计](docs/HARNESS_CONTROL_PLANE_REDESIGN.md) 和 [领域术语表](openspec/GLOSSARY.md)；本次同步仅为文档修订，不代表现有会话代码已符合新版规则。
 
 ## 开始参与
 

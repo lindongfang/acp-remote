@@ -58,3 +58,6 @@ pub fn protect_private_directory(_path: &std::path::Path) -> Result<(), Platform
 pub fn protect_private_file(_path: &std::path::Path) -> Result<(), PlatformError> {
     Err(PlatformError::Unsupported)
 }
+
+#[cfg(windows)]
+pub mod process_owner;

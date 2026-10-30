@@ -1,0 +1,38 @@
+[
+    {
+        "credentialsCopied":  false,
+        "harness":  "codex",
+        "offer":  1,
+        "pid":  44940,
+        "remainingJobProcesses":  0,
+        "rootExitCode":  0,
+        "selected":  1,
+        "sessionCreated":  false,
+        "shutdown":  "Graceful",
+        "stdinClosed":  true
+    },
+    {
+        "credentialsCopied":  false,
+        "harness":  "codex",
+        "offer":  2,
+        "pid":  21164,
+        "remainingJobProcesses":  0,
+        "rootExitCode":  0,
+        "selected":  2,
+        "sessionCreated":  false,
+        "shutdown":  "Graceful",
+        "stdinClosed":  true
+    },
+    {
+        "credentialsCopied":  false,
+        "harness":  "deepseek",
+        "offer":  2,
+        "pid":  51360,
+        "remainingJobProcesses":  0,
+        "rootExitCode":  0,
+        "selected":  1,
+        "sessionCreated":  false,
+        "shutdown":  "Graceful",
+        "stdinClosed":  true
+    }
+]
