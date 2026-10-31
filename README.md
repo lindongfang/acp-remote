@@ -2,7 +2,7 @@
 
 ACP Remote 是面向个人使用的 Harness 管理平台，计划在一个用户控制的节点内，统一管理会话、执行、权限审批、历史与审计。
 
-Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP（Agent Client Protocol）是平台与这些程序交互的协议。通用闭环以 Codex 首验，ZCode 能力待核实；DeepSeek 当前已核对的 rc.5 ACP 不提供历史重放，按已确认的准入规则暂不接入，保留后续调研。
+Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP（Agent Client Protocol）是平台与这些程序交互的协议。通用闭环以 Codex 首验，ZCode/DeepSeek逐能力核验；无历史重放不再整体拒绝接入，当前连接模式须明显提示历史不完整及缓存丢失无法补回。现有调研不代表真实会话闭环已交付。
 
 ## 当前状态
 
@@ -10,7 +10,7 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 归档结果与历史路径映射见[归档记录](testing/runs/establish-node-access/2026-10-30-archive-record.md)。完整产品目标见 [Harness Control Plane 设计](docs/HARNESS_CONTROL_PLANE_REDESIGN.md)。
 
-`deliver-codex-session-loop` 的领域、存储及适配器开发已暂停，Harness/Web 会话闭环尚未交付。2026-10-30 最新确认采用通用 ACP 重放兼容，缺少历史重放的 Harness 暂不接入；会话及历史仍以 Harness 为准，平台只使用有界、可丢弃视图，不保存独立聊天档案或编写厂商专用读取器。页面分页可来自全量流式重放，首次加载成本依全部历史量而定。只提供原生删除，查看允许激活进程且不限只读。现有未提交实现及数据保留；[旧会话存储合同](openspec/changes/deliver-codex-session-loop/session-contract.md)已暂停使用，旧实施合同及完整验收计划仍待重基准。开发及独立验证范围见[当前执行计划](openspec/changes/deliver-codex-session-loop/plan.md)，不将文档或内部开发测试作为产品验收。
+`deliver-codex-session-loop` 正在已有部分实现上按新规格增量调整，Harness/Web 会话闭环尚未交付。当前Q-001规格采用远端受理、节点共享三条待发送队列、本地Harness串行执行；会话历史以Harness为准，无重放可使用当前连接模式。队列可跨设备编辑取消，无期限但不跨节点重启保存；正文和输出缓存不另设平台容量上限。上述为新规划，旧部分实现仍须增量调整。内层已补原生活动模型、独立用途请求签名、schema1/2/3到4无损管理迁移、管理输入受理与单次消费、公共ACP发现/重放与有界内存窗口，并分别通过相应子范围的独立测试。旧聊天存储和强刷审批接口只在测试构建中保留，正常构建不再提供这些接口；旧数据库内容原样保留，不自动清库。实际审批owner、结构化视图适配、资源管理及WSS/Web会话页面仍待装配和验收。[旧会话存储合同](openspec/changes/deliver-codex-session-loop/session-contract.md)停用，当前依据为[实施合同](openspec/changes/deliver-codex-session-loop/implementation-contract.md)及[执行计划](openspec/changes/deliver-codex-session-loop/plan.md)；文档、模型测试及旧探测不代表新版产品验收。
 
 重建的能力归属、交付闭环与 change 依赖见 [重建能力地图](docs/REBUILD_CAPABILITY_MAP.md)。10个 change 的规划文档已建立；节点接入已实现并归档，其他能力仍按各自 change 交付。文档检视、上游依赖与真实验收结果分别记录，不能将节点接入验收外推为其他能力已经通过。
 
@@ -103,3 +103,7 @@ tls_key = "D:/ACPRemote/tls/localhost.key"
 ## 许可证
 
 [Apache-2.0](LICENSE)。
+
+本轮Q-001仅同步规格与规划，新增[ACP额外限制核对](openspec/changes/deliver-codex-session-loop/specs/acp-platform-constraints/spec.md)。输入及审批受理后由节点接管，批准严格保存，附加审计故障分开处理；代码、迁移及真实Harness/Web验收尚未按新版完成。
+
+Q-002补充：已删除公共ACP客户端累计4096个对端请求ID后使连接失效的旧阈值。失败后旧队列挂起、新输入优先、点击继续恢复旧项已补入规格，完整队列实现仍待后续交付。
