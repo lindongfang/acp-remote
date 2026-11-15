@@ -1,0 +1,17 @@
+{
+  "scope": "Private same-read rebind supplement only; original Shared83 unchanged, RB01–06 not executed; no Native/WSS or implementation acceptance",
+  "supplementFreeze": "fe86b466cb2556b1b334dcac2d1c634f78b1d5e197f7f76939e417477c346846",
+  "gate": "6b5b5711b83b35773449b4b3529f289c3f1b25cd2845980b2562c404d1e1f852",
+  "documents": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\rebind-supplement-v2\\input-snapshot\\prior-v1\\contract.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/same-read-rebind-v2/contract.md",
+      "sha256": "3594608dc90cdc54b50151532ffd7b635b530f9876c6371a29dad04804866d4d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\rebind-supplement-v2\\notice-precision.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/same-read-rebind-v2/notice-precision.md",
+      "sha256": "c6a106bdc8da170c46671a15b6d4c37be315d290e08bed1da79ca1e9b5d10557"
+    }
+  ]
+}

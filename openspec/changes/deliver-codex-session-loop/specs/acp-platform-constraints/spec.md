@@ -50,17 +50,22 @@
 
 Q-002补充确认：用户要求删除累计4096上限；失败后原队列挂起，新输入优先，点击继续后原项才恢复。该补充取代Q-001中“暂停后新输入也必须等继续”的解释。
 
+Q-003补充确认：用户要求尽可能直接复用ACP标准能力，Harness不支持直接报错，不增加平台能力准入或兼容兜底；新管理审计默认策略与工具原位更新分别由management-audit、structured-history维护，取代旧90天与含混的位置更新解释。
+
 本轮确认来源为 [proposal 的 Q-001 原始要求](../../proposal.md#success-criteria)。协议对照入口为 [v1输入轮次](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[v2输入生命周期](https://agentclientprotocol.com/protocol/v2/prompt-lifecycle)、[v2审批](https://agentclientprotocol.com/protocol/v2/tool-calls#requesting-permission)及[v2恢复](https://agentclientprotocol.com/protocol/v2/session-setup)。版本草案及实际实现须固定证据，不能将本清单当作真实兼容性报告。
 
 | 规则族 | 当前处置与必要性 | 唯一行为来源 | 必需核验 |
 | --- | --- | --- | --- |
 | 历史重放强制门槛、禁止当前连接聊天 | 删除；缺历史只限制相关能力 | harness-management、structured-history | 无重放输入审批及明显提示 |
+| 平台能力准入矩阵、程序版本白名单及不兼容等待用户决定 | 删除额外门槛；直接使用ACP标准能力并呈现不支持错误，不做私有兜底 | harness-management | 无历史报告仍沿标准调用；Harness不支持直接报错，无额外验证或用户裁决流程 |
 | 串行输入、共享队列、编辑取消、立即发送、失败暂停 | 保留用户交互取舍，不称为 ACP v2 必需限制 | session-execution | A/B并发及取消/发送竞态 |
 | 受理授权、稳定身份去重 | 保留；节点接管且重试不重复入队 | session-execution | A撤销后旧输入继续、新操作拒绝 |
 | 每动作额外签名、统一期限、回退水位及派发再验原actor | 删除；节点登记身份和处理状态即可 | session-execution、permission-approvals | 旧ID、节点校时及离线派发 |
 | 批准先保存、唯一决定和真实请求有效性 | 保留；防冲突批准并保存必要决定 | permission-approvals | 保存失败零允许、相反决定竞争 |
 | 未知审批主题或选项提示一律禁选 | 放宽；原选项人工展示选择，不据未知内容自动允许 | permission-approvals | 未知扩展和原选项身份 |
 | 附加审计失败全局停用 | 删除；必要状态和附加审计分开 | management-audit | 附加审计失败继续、必要状态失败停止 |
+| 新管理审计默认保留与容量 | 保留用户确认策略；不影响必要去重、审批交付和资源责任寿命 | management-audit | 默认保留边界、满额且未到期项受保护，必要事实不随附加审计删除 |
+| 工具按完成时间移位或追加重复完成条目 | 禁止；具有可靠同一身份的更新保留首次位置和后文顺序 | structured-history | 工具开始、后文、多次进度及晚完成后仍原位更新，重读不重复 |
 | 连接累计请求ID寿命上限 | 删除；合法长期使用不因累计次数断开，保留真实请求唯一响应 | 本规格 | 双版连续超过4096次请求及边界后连接可用 |
 | 正文、输出、视图和快照的旧平台容量 | 删除相关内容门槛，不称协议上限 | 本规格、structured-history | 超旧预算内容和不截断输出 |
 | 身份认证、读取撤销、内容及资源安全 | 保留；节点接管不授予页面或其他读取权限 | 长期client-trust、structured-history | 撤销、主动内容、越界读取 |

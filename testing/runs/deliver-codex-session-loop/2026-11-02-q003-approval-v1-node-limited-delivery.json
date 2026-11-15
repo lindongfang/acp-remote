@@ -1,0 +1,55 @@
+{
+  "scope": "Only original V1 Node happy path of approval acceptance; independent limited review",
+  "independentFreeze": "c935f08e9c022ed0300a73d15a820cc14847f37d10a4db8397d8ab6974a19b4b",
+  "membersVerified": 850,
+  "sourceCount": 781,
+  "actualOriginalNodeFunctions": 1,
+  "wireVersion": 1,
+  "seconds": 0.54,
+  "knownPreNoRunNoLoaded": true,
+  "originalEmptyOptionId": true,
+  "savedAndTerminalCommitCloseJoined": true,
+  "firstNativeJoinedAndMetadata": true,
+  "sourceClosed": true,
+  "nodeStorageClosed": true,
+  "mainFirstShareZero": true,
+  "sidecarsAbsent": 3,
+  "firstRemove": true,
+  "secondCleanup": false,
+  "issue": {
+    "id": "APO-ASSET-TERMINAL-SETTLE001",
+    "status": "Closed-tested-local",
+    "scope": "V1 happy path only"
+  },
+  "failureCleanupNegativeControls": false,
+  "v2": false,
+  "apo003": false,
+  "strict": "Parent default279/allfeatures572 remain open",
+  "all48": false,
+  "nodeWssHarness": false,
+  "parentTasksSigned": false,
+  "rootUnchanged": 636,
+  "rootSourceManifest": "e127897fb5e244f8b380496fedee41d5487488974ef11f21851b48b51f5f7939",
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-v1-node-limited-delivery/final-review.md",
+      "sha256": "df8ee4211e4bd11f3d40f0738a9d96a8f1db83ea733c0dd2d5ae483302ea8fd6"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-v1-node-limited-delivery/final-verification.json",
+      "sha256": "51ca4bc77256efdceba6f063edc87bb31378d8d2c37243421dbfa2415c61fe7f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-v1-node-limited-delivery/freeze.json",
+      "sha256": "c935f08e9c022ed0300a73d15a820cc14847f37d10a4db8397d8ab6974a19b4b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-v1-node-limited-delivery/report.md",
+      "sha256": "b23c00d4b4f373f9886377dde83bcb1303aa45428b41d469c78f3274f4f82b2d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-v1-node-limited-delivery/handoff.json",
+      "sha256": "3d08317583d13882b28f6c2546e70f00fe2d5f08e85cacd19990193b5def127e"
+    }
+  ]
+}

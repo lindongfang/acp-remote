@@ -1,0 +1,1119 @@
+{
+  "scope": "Curated original independent backend/LocalDuplex transfer evidence and unchanged synthetic Rust-produced wire vectors. Actual two-version six-stage tests 2/2; no new execution by copying. 35 relevant files matched original S0, not whole434 integrated acceptance. Candidate visibility first red remains Open; CL023 UI/Node/WSS/Harness and source integration not passed. Binaries/other originals remain in original owned external directory.",
+  "originalFreezeSha256": "3912429f3efed2bf56f833ba9066c2b69856e4da9238b3a806901f9c7141dd2b",
+  "copiedCount": 279,
+  "copied": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/ACCEPTANCE.md",
+      "sha256": "11ad31dadb124cc403684a3afd8520d661973d3ad10d476cab4b069ed798fdaf"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/consumer-index.json",
+      "sha256": "5133124c9f006026ba219a71f362d15840bdf7aac4e4908f6566df8ac71a81bb"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/manifest.json",
+      "sha256": "278689c649a1efb3a9f0ec30a60521239def5f2ae9018e0f5f876ddfb016992f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-001.json",
+      "sha256": "fe6f0852273ea77cf0f86744baad96b0f1b49d92d9b77433aa549ec83d440f64"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-005.json",
+      "sha256": "f528597a7e383289832b2378a98a6f8033f63e4a7a7688e7eff8288fa5b8c5a4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-006.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-007.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-008.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-009.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-010.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-011.json",
+      "sha256": "c92db8d38c96686a0b77095c351e94b41d16917c499810b6cc04e4cc3692fe89"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-00-record-012.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-001.json",
+      "sha256": "f85728bfce59db2020a2e70e72286baac31f8cfe0157fb046e564e8351f35b96"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-007.json",
+      "sha256": "bc22f3a43cf22012216a7008ee1a81665377486be8832ec69e54412497f89930"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-008.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-009.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-010.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-011.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-012.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-013.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-014.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-015.json",
+      "sha256": "616f8fe2ec632af89a42fae753a2995966b0d34dc91ea9141cd9d8476b056df2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-01-record-016.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-001.json",
+      "sha256": "fa344f1c90cd838de103c7a796f6857d6ed01149175d17264c9571c1887d6500"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-008.json",
+      "sha256": "b8315c7d1efac9e960a2a7146925a27afe2af111617b35082b1741fd26d56613"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-009.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-010.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-011.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-012.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-013.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-014.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-015.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-016.json",
+      "sha256": "2fdada4feb5cb195205b5e74b6d163c9c4d1398f4921d87efcb15a0c84986adb"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-02-record-017.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-001.json",
+      "sha256": "63da3d63d7375ac8a08117bde0a14b0b032707f033d58ad5b8085ec3aacaa543"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-008.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-009.json",
+      "sha256": "3efb15843e4c0ce85d95cd9a6d99558893bece37a7acace056b9e5a3a730c9aa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-010.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-011.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-012.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-013.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-014.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-015.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-016.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-017.json",
+      "sha256": "4e9b6431173de74f5c16714a4ced8f9f73e4517f625b6b904278d9949a4a2551"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-03-record-018.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-001.json",
+      "sha256": "be688e5df95edfc0ad7a0807c9cfded5b3767b125cfb8a0904a78acfa7501971"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-008.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-009.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-010.json",
+      "sha256": "3efb15843e4c0ce85d95cd9a6d99558893bece37a7acace056b9e5a3a730c9aa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-011.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-012.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-013.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-014.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-015.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-016.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-017.json",
+      "sha256": "b707b975b95f412348f58c342436b8e85c4a97465665e73cd205ceff2d2c9de8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-018.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-019.json",
+      "sha256": "50483882678538ca2e131f762989ca2ee6c597003ce4e0b7f407f6b19627f506"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-04-record-020.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-001.json",
+      "sha256": "be688e5df95edfc0ad7a0807c9cfded5b3767b125cfb8a0904a78acfa7501971"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-008.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-009.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-010.json",
+      "sha256": "3efb15843e4c0ce85d95cd9a6d99558893bece37a7acace056b9e5a3a730c9aa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-011.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-012.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-013.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-014.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-015.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-016.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-017.json",
+      "sha256": "b707b975b95f412348f58c342436b8e85c4a97465665e73cd205ceff2d2c9de8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-018.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-019.json",
+      "sha256": "50483882678538ca2e131f762989ca2ee6c597003ce4e0b7f407f6b19627f506"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v1/stage-05-record-020.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/manifest.json",
+      "sha256": "1581ef719e94809bb9c33cd254a56f715c9193602ebecf452e6d0937b7268f5b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-001.json",
+      "sha256": "aaa829740bbaf2e1646e92c3ecbb814dd77ceea054de5e45afba1164afe11c42"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-004.json",
+      "sha256": "2adad15b616e514ec289d54813d6440a4d703727ed72c7e96f54df234b926313"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-008.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-009.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-010.json",
+      "sha256": "2adad15b616e514ec289d54813d6440a4d703727ed72c7e96f54df234b926313"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-011.json",
+      "sha256": "ae6367c793a98044f194eecd5af92393a6d3d284da52e70d062bba9d27a067be"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-012.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-013.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-014.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-015.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-016.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-017.json",
+      "sha256": "aea823513ecc350cb82cefe18ffb206de64726b9dc23aa23daf5e4c52eb3ed4a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-00-record-018.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-001.json",
+      "sha256": "488d4475359d35d8628975632454fb781049cbe77da3988cd5b4f53294581c37"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-004.json",
+      "sha256": "bca5dc8648a477dee7f7e469957b4511624a4d97783bac5177df3c567450f0e9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-010.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-011.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-012.json",
+      "sha256": "bca5dc8648a477dee7f7e469957b4511624a4d97783bac5177df3c567450f0e9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-013.json",
+      "sha256": "c54d5b0ca17df5f65244213507ab8cb6603305f98a2ea712383b340f9aa39f27"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-014.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-015.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-016.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-017.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-018.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-019.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-020.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-021.json",
+      "sha256": "3956d44c88882cd0e12145f712274fd44bd04b6899efa10cd8b5a38f02bdb3e9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-01-record-022.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-001.json",
+      "sha256": "7ed6e8a01412043f3765260438677f08bfbac2054f325c551114606dc42b6eac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-004.json",
+      "sha256": "ca5951a4251ddbc3c42f49c20ea22e0762178de7383a2db004a126531dc1a366"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-011.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-012.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-013.json",
+      "sha256": "ca5951a4251ddbc3c42f49c20ea22e0762178de7383a2db004a126531dc1a366"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-014.json",
+      "sha256": "09cf4a426c308e1e4984e98801f14b58d6d16abe01780eb335d5e2bdeac98408"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-015.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-016.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-017.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-018.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-019.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-020.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-021.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-022.json",
+      "sha256": "4833df7082296facd4b1ca753ae26a9b7f1f22fb468c993abbdd3d4a36736507"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-02-record-023.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-001.json",
+      "sha256": "96105e0563bce2a19a7f3fd184c2f62096c7a2bde8dd59df4098a25a8835f679"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-004.json",
+      "sha256": "fe2bfc7bc1e615cab99e01fa6d2d1f8fef5c31039da3ecdab0ddf16c55661722"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-011.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-012.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-013.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-014.json",
+      "sha256": "fe2bfc7bc1e615cab99e01fa6d2d1f8fef5c31039da3ecdab0ddf16c55661722"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-015.json",
+      "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-016.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-017.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-018.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-019.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-020.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-021.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-022.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-023.json",
+      "sha256": "39b646e769871c387ff196c34e3a8ccb055ee1b310f54fb3405e7de9fa0f6c59"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-03-record-024.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-001.json",
+      "sha256": "2ff7e0c74e21719c612d03afb0799b19284154ea47ee1d216cd60294c3de1b58"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-004.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-011.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-012.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-013.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-014.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-015.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-016.json",
+      "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-017.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-018.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-019.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-020.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-021.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-022.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-023.json",
+      "sha256": "446943e3edac96532ee3ac714d359b0ca00654fa66fbca0f6ce815bf1ab761a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-024.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-025.json",
+      "sha256": "ed348eb3cf05a9c3e6d448066bf9fe0bf4d1c1e906542fa80029b8df87bb578a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-04-record-026.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-001.json",
+      "sha256": "2ff7e0c74e21719c612d03afb0799b19284154ea47ee1d216cd60294c3de1b58"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-004.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-011.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-012.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-013.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-014.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-015.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-016.json",
+      "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-017.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-018.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-019.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-020.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-021.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-022.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-023.json",
+      "sha256": "446943e3edac96532ee3ac714d359b0ca00654fa66fbca0f6ce815bf1ab761a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-024.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-025.json",
+      "sha256": "ed348eb3cf05a9c3e6d448066bf9fe0bf4d1c1e906542fa80029b8df87bb578a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/actual-wire-vectors/v2/stage-05-record-026.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/case-status.json",
+      "sha256": "53b4932484b2aa80fb82ac9742d9e5d73aadd876db6d5067ea5dd0fc1ede631c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/CURRENT-vs-CANDIDATE.md",
+      "sha256": "5c4765d6f38b201577292b93bd83a99de6f41422c837c8ff124e1760b2a8c864"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/HANDOFF.json",
+      "sha256": "3864039a8f04814745b2297eebef1dc6fec77bd63fa5d1f434c35e302374a0f8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/installation.json",
+      "sha256": "8012cd3fb2452457269c2b87b25b26b52fbbc70a759640b4152a0cb9261251d7"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/issues.json",
+      "sha256": "7de08c6b4324db96058ce5e50c0b0f9ddcb30344acf6ed669061f5d7e3b71d46"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/physical-final.json",
+      "sha256": "fbb686d8e0a56a51927f845942ad1905709acb28c0dc9a81caa49623f3d5779f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final-manifest.json",
+      "sha256": "218689adb3fb521421e17d66640c745f8f8455825bf298965f1d2701fba8358b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final.patch",
+      "sha256": "6fea91349dba1a44bee100cd2fee4f512506365779cc951d34826173736eaa9d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final/app/tests/shared_view_module_acceptance/module_observation.rs",
+      "sha256": "e47ac58536be5eb1924560954a772f391edda94086d30cbf268d5aee8a2ba3da"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final/app/tests/shared_view_module_acceptance/reader_observation.rs",
+      "sha256": "c5d5cf41a10c415769a5ae2ecb2021612b4753fc7a8adaf4c23c680f5a00caf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final/app/tests/shared_view_rf_independent.rs",
+      "sha256": "59e9f9d81bf25aac2e5d6b0747e391f8769f825143bb3cc4e082226f09ad9629"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final/app/tests/shared_view_rf_independent/rf_internal_cases.rs",
+      "sha256": "6e64c7c0b2a0e9167fcb012a1e66d89e337282141252438dce7933593a0e34f6"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final/app/tests/shared_view_rf_independent/rf_remainder_cases.rs",
+      "sha256": "29d500261a7242dbdc5bb6e5e650b101ef49dccf95b213c6495fa5955fc170a8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final/app/tests/shared_view_rf_independent/rf_support_internal.rs",
+      "sha256": "167ad8be532fc5f459a74a20ec201b6059e33660c8af09d8fa8c158035fe7004"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final/app/tests/shared_view_rf_independent/rf_support.rs",
+      "sha256": "1ac4b37bfce8154010065b18cea255ec04a88806e20246c6830576a8b42c98b7"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/portable-lf-final/app/tests/shared_view_rf_independent/tool_origin_cases.rs",
+      "sha256": "0e0f31bb1a2d147ef2861d045e98e8a995db5f460cadb194495b481dde1391d8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/results.json",
+      "sha256": "c038d828261ebe21c70a54ef6e2b4388acb1b3189401e2e6492bb2c3c5851a50"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/source-after-final.json",
+      "sha256": "9e7cc52b68713d77c39198a0da53a04fcbf940c9139caff4a0a4e118b4827df8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/source-before.json",
+      "sha256": "e8075d546e6d4edb45b67781afdcc5ddd770680b5e1a6ddf856e373d701b3b89"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-tool-original-position-v7/vectors-freeze.json",
+      "sha256": "74309ee7a79f723d2ca1d50be488bc779f643df408f3e1762e2c9f91cca9e91b"
+    }
+  ]
+}

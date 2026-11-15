@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-03",
+  "proposalDirectory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-named-configuration-abi-proposal-v1",
+  "proposalFreezeSHA256": "a2feb940ac87e56a658809e6c01d5fac0b0de04efec7ba4b7702ff91642bb3af",
+  "reviewDirectory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-named-configuration-minimal-abi-gate-2026-11-03",
+  "reviewFreezeSHA256": "b5d998a30ea8910864843bbea856ccbd36b9cb821320dac6c16b5b94311b30fb",
+  "reviewMembersVerified": 2,
+  "candidateDirectory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-named-configuration-abi-candidate-v1",
+  "allowedLeaves": [
+    "app/src/session_storage/node_configuration.rs",
+    "app/src/session_storage/mod.rs",
+    "app/src/node/catalog.rs",
+    "app/src/node/catalog/development_tests.rs"
+  ],
+  "preservedBaseLeaves": 806,
+  "scope": "Crate named same original provider Arc; constructors/fields/authority/SQL unchanged. No production Node factory installation.",
+  "actualCheck": {
+    "phase": "all-target all-feature offline locked cargo check",
+    "exitCode": 0,
+    "sourceUnchanged": true
+  },
+  "developmentTests": "running, no result claimed",
+  "parallelIsolation": "Body implementation is in its own separate copy. Later shared mod.rs hunks require sequential precise integration; neither candidate overwrites Root."
+}

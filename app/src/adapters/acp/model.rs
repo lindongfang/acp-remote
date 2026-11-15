@@ -1,11 +1,17 @@
-use serde_json::{Map, Value};
+use super::ConnectionScope;
+use super::raw_json::{OwnedRawValue, RawDocument, RawJsonError, RawKind, RawObject, RawValueRef};
 use std::{fmt, sync::Arc};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Version {
     V1,
     V2,
 }
 impl Version {
+    #[must_use]
+    pub const fn preferred() -> Self {
+        Self::V2
+    }
     #[must_use]
     pub const fn number(self) -> u64 {
         match self {
@@ -21,159 +27,183 @@ pub enum RpcId {
 }
 impl RpcId {
     /// # Errors
-    /// Rejects null, fractions and numbers outside interoperable safe integers.
-    pub fn parse(value: &Value) -> Result<Self, AcpError> {
-        match value {
-            Value::String(s) if s.len() <= 1024 => Ok(Self::String(Arc::from(s.as_str()))),
-            Value::Number(n) => n
-                .as_i64()
-                .filter(|n| n.unsigned_abs() <= 9_007_199_254_740_991)
-                .map(Self::Integer)
-                .ok_or(AcpError::InvalidMessage),
-            _ => Err(AcpError::InvalidMessage),
+    /// Rejects invalid protocol shapes or identity controls, or a raw allocation failure.
+    pub fn parse(value: RawValueRef<'_>) -> Result<Self, AcpError> {
+        if value.kind() == RawKind::String {
+            let s = value.string()?;
+            return if s.len() <= 1024 {
+                Ok(Self::String(s.into()))
+            } else {
+                Err(AcpError::InvalidMessage)
+            };
         }
+        if value.fragment() == "-0" {
+            return Err(AcpError::InvalidMessage);
+        }
+        value
+            .integer()
+            .filter(|n| n.unsigned_abs() <= 9_007_199_254_740_991)
+            .map(Self::Integer)
+            .ok_or(AcpError::InvalidMessage)
     }
-    #[must_use]
-    pub fn json(&self) -> Value {
+    /// # Errors
+    /// Reports scalar JSON encoding/allocation failure; this method performs no RPC routing or authorization.
+    pub fn write_json(&self, out: &mut Vec<u8>) -> Result<(), AcpError> {
         match self {
-            Self::Integer(n) => Value::from(*n),
-            Self::String(s) => Value::String(s.to_string()),
+            Self::Integer(n) => out.extend_from_slice(n.to_string().as_bytes()),
+            Self::String(s) => out.extend_from_slice(
+                &serde_json::to_vec(s.as_ref()).map_err(|_| AcpError::Allocation)?,
+            ),
         }
+        Ok(())
     }
 }
 impl fmt::Debug for RpcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Integer(_) => f.write_str("RpcId::Integer(..)"),
-            Self::String(s) => f.debug_tuple("RpcId::StringBytes").field(&s.len()).finish(),
-        }
+        f.write_str("RpcId(..)")
     }
 }
 macro_rules! native_id {
-    ($name:ident) => {
+    ($name:ident,$limit:expr) => {
         #[derive(Clone, Eq, PartialEq, Hash)]
         pub struct $name(Arc<str>);
         impl $name {
             /// # Errors
-            /// Rejects invalid native identifier types. Native IDs are opaque protocol strings.
-            pub fn parse(value: &Value) -> Result<Self, AcpError> {
-                value
-                    .as_str()
-                    .filter(|s| s.len() <= 4096)
-                    .map(|s| Self(Arc::from(s)))
-                    .ok_or(AcpError::InvalidMessage)
+            /// Rejects invalid protocol shapes or identity controls, or a raw allocation failure.
+            pub fn parse(value: RawValueRef<'_>) -> Result<Self, AcpError> {
+                let s = value.string()?;
+                if $limit.is_some_and(|limit| s.len() > limit) {
+                    return Err(AcpError::InvalidMessage);
+                }
+                Ok(Self(s.into()))
             }
-            #[must_use]
             pub fn as_str(&self) -> &str {
                 &self.0
             }
         }
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.debug_tuple(stringify!($name))
-                    .field(&self.0.len())
-                    .finish()
+                f.write_str(concat!(stringify!($name), "(..)"))
             }
         }
     };
 }
-native_id!(SessionId);
-native_id!(ToolCallId);
-native_id!(MessageId);
-native_id!(OptionId);
-/// Keeps exact original bytes and parsed fields; Debug never emits message contents.
+native_id!(SessionId, Some(4096usize));
+impl SessionId {
+    pub(super) fn shared_text(&self) -> Arc<str> {
+        Arc::clone(&self.0)
+    }
+}
+native_id!(OptionId, Some(4096usize));
+native_id!(ToolCallId, None::<usize>);
+native_id!(MessageId, None::<usize>);
 #[derive(Clone)]
 pub struct RawMessage {
-    bytes: Arc<[u8]>,
-    fields: Arc<Map<String, Value>>,
+    document: RawDocument,
 }
 impl RawMessage {
-    pub(super) fn parse(bytes: Vec<u8>) -> Result<Self, AcpError> {
-        // Count structural tokens before allocating parsed collections; strings/escapes are excluded.
-        let mut string = false;
-        let mut escape = false;
-        let mut tokens = 0usize;
-        for byte in &bytes {
-            if string {
-                if escape {
-                    escape = false;
-                } else if *byte == b'\\' {
-                    escape = true;
-                } else if *byte == b'"' {
-                    string = false;
-                }
-            } else if *byte == b'"' {
-                string = true;
-                tokens += 1;
-            } else if matches!(*byte, b'{' | b'[' | b',' | b':') {
-                tokens += 1;
-            }
-            if tokens > 131_072 {
-                return Err(AcpError::Capacity);
-            }
+    /// # Errors
+    /// Rejects invalid syntax, Unicode, shape, ambiguous envelope fields or allocation failure.
+    pub fn parse(bytes: Vec<u8>) -> Result<Self, AcpError> {
+        let document = RawDocument::parse(bytes)?;
+        let fields = object(document.root())?;
+        for key in ["jsonrpc", "id", "method", "params", "result", "error"] {
+            fields.get(key)?;
         }
-        let fields =
-            crate::strict_json::parse_object(&bytes, 96).map_err(|_| AcpError::InvalidMessage)?;
-        Ok(Self {
-            bytes: bytes.into(),
-            fields: Arc::new(fields),
-        })
+        Ok(Self { document })
     }
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+        self.document.bytes()
     }
-    #[must_use]
-    pub fn fields(&self) -> &Map<String, Value> {
-        &self.fields
+    /// # Errors
+    /// Returns `InvalidMessage` if the validated document root cannot be borrowed as an object.
+    pub fn fields(&self) -> Result<RawObject<'_>, AcpError> {
+        object(self.document.root())
+    }
+    /// # Errors
+    /// Rejects ambiguous decoded names, preserving missing fields as None.
+    pub fn field(&self, key: &str) -> Result<Option<RawValueRef<'_>>, AcpError> {
+        Ok(object(self.document.root())?.get(key)?)
     }
 }
 impl fmt::Debug for RawMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawMessage")
-            .field("bytes", &self.bytes.len())
-            .finish_non_exhaustive()
+            .field("bytes", &self.bytes().len())
+            .finish()
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum AcpError {
-    #[error("ACP request does not belong to this negotiated connection")]
+    #[error("ACP foreign request")]
     InvalidRequestScope,
-    #[error("ACP connection is not initialized")]
+    #[error("ACP not initialized")]
     NotInitialized,
-    #[error("ACP initialization was already attempted")]
+    #[error("ACP initialization already attempted")]
     AlreadyInitialized,
-    #[error("ACP protocol message is invalid")]
+    #[error("ACP invalid message")]
     InvalidMessage,
-    #[error("ACP selected protocol is incompatible")]
+    #[error("ACP incompatible version")]
     IncompatibleVersion,
-    #[error("ACP capability is not supported")]
+    #[error("ACP unsupported capability")]
     UnsupportedCapability,
-    #[error("ACP request or buffer capacity is exhausted")]
+    #[error("ACP control capacity exhausted")]
     Capacity,
-    #[error("ACP response has no matching live request")]
+    #[error("ACP unmatched response")]
     UnmatchedResponse,
-    #[error("ACP delivery or connection outcome is unknown")]
+    #[error("ACP delivery unknown")]
     DeliveryUnknown,
-    #[error("ACP connection is closed")]
+    #[error("ACP connection closed")]
     Closed,
-    #[error("ACP operation deadline elapsed")]
+    #[error("ACP deadline elapsed")]
     Deadline,
     #[error("ACP I/O failed")]
     Io,
-    #[error("ACP permission option is not advertised or supported")]
+    #[error("ACP invalid advertised option")]
     InvalidOption,
-    #[error("ACP current-state snapshot is missing")]
+    #[error("ACP missing snapshot")]
     MissingSnapshot,
+    #[error("ACP session read busy")]
+    SessionReadBusy,
+    #[error("ACP runtime unavailable")]
+    RuntimeUnavailable,
+    #[error("ACP allocation failed")]
+    Allocation,
+    #[error("ACP cancelled")]
+    Cancelled,
+    #[error("ACP invalid write fence")]
+    InvalidFence,
+    #[error("ACP mismatched encoded frame")]
+    InvalidFrame,
+    #[error("ACP configuration incomplete")]
+    ConfigurationIncomplete,
+    #[error("ACP configuration version mismatch")]
+    ConfigurationVersionMismatch,
+    #[error("ACP configuration cannot be encoded")]
+    UnencodableConfiguration,
 }
-pub(super) fn field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, AcpError> {
-    value.get(key).ok_or(AcpError::InvalidMessage)
+impl From<RawJsonError> for AcpError {
+    fn from(e: RawJsonError) -> Self {
+        if e == RawJsonError::Allocation {
+            Self::Allocation
+        } else {
+            Self::InvalidMessage
+        }
+    }
 }
-pub(super) fn object(value: &Value) -> Result<&Map<String, Value>, AcpError> {
-    value.as_object().ok_or(AcpError::InvalidMessage)
+pub(super) fn field<'a>(v: RawValueRef<'a>, key: &str) -> Result<RawValueRef<'a>, AcpError> {
+    object(v)?.get(key)?.ok_or(AcpError::InvalidMessage)
+}
+pub(super) fn object(v: RawValueRef<'_>) -> Result<RawObject<'_>, AcpError> {
+    v.object().ok_or(AcpError::InvalidMessage)
+}
+pub(super) fn text(v: RawValueRef<'_>) -> Result<Arc<str>, AcpError> {
+    Ok(v.string()?.into())
 }
 #[derive(Clone, Debug)]
 pub struct Negotiated {
+    pub offered: Version,
     pub version: Version,
     pub raw: RawMessage,
     pub capabilities: Capabilities,
@@ -181,24 +211,88 @@ pub struct Negotiated {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
-    reason = "Independent advertised protocol features are not lifecycle states"
+    reason = "Independent advertised protocol capabilities"
 )]
 pub struct Capabilities {
     pub sessions: bool,
+    pub list: bool,
+    pub standard_replay: bool,
     pub resume: bool,
     pub close: bool,
     pub image: bool,
     pub audio: bool,
     pub embedded_context: bool,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
+pub enum ReportedDirectories {
+    Omitted,
+    Empty,
+    Known(Vec<Arc<str>>),
+    Null,
+    Uninterpreted(OwnedRawValue),
+}
+impl ReportedDirectories {
+    #[must_use]
+    pub fn known(&self) -> Option<&[Arc<str>]> {
+        match self {
+            Self::Empty => Some(&[]),
+            Self::Known(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone)]
+pub struct SessionListItem {
+    pub(super) session: SessionId,
+    pub(super) cwd: Arc<str>,
+    pub(super) directories: ReportedDirectories,
+    pub(super) raw: OwnedRawValue,
+}
+impl SessionListItem {
+    #[must_use]
+    pub const fn session(&self) -> &SessionId {
+        &self.session
+    }
+    #[must_use]
+    pub fn cwd(&self) -> &str {
+        &self.cwd
+    }
+    #[must_use]
+    pub const fn additional_directories(&self) -> &ReportedDirectories {
+        &self.directories
+    }
+    #[must_use]
+    pub const fn raw(&self) -> RawValueRef<'_> {
+        self.raw.as_ref()
+    }
+}
+#[derive(Clone)]
+pub struct SessionListing {
+    pub(super) sessions: Vec<SessionListItem>,
+    pub(super) next_cursor: Option<Arc<str>>,
+    pub(super) raw: OwnedRawValue,
+}
+impl SessionListing {
+    #[must_use]
+    pub fn sessions(&self) -> &[SessionListItem] {
+        &self.sessions
+    }
+    #[must_use]
+    pub fn next_cursor(&self) -> Option<&str> {
+        self.next_cursor.as_deref()
+    }
+    #[must_use]
+    pub const fn raw(&self) -> RawValueRef<'_> {
+        self.raw.as_ref()
+    }
+}
+#[derive(Clone)]
 pub enum PromptResult {
     Completed { stop_reason: Arc<str> },
     Inserted { message: MessageId },
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum SessionEvent {
-    /// Current state is a snapshot; caller classifies resume boundaries before producing Run facts.
     State {
         session: SessionId,
         state: Arc<str>,
@@ -218,34 +312,116 @@ pub enum SessionEvent {
         kind: Arc<str>,
     },
 }
+impl SessionEvent {
+    pub(super) const fn session(&self) -> &SessionId {
+        match self {
+            Self::State { session, .. }
+            | Self::Tool { session, .. }
+            | Self::Message { session, .. }
+            | Self::Other { session, .. } => session,
+        }
+    }
+}
 #[derive(Clone)]
 pub struct PermissionRequest {
-    pub(super) connection: Option<Arc<()>>,
-    pub id: RpcId,
-    pub session: SessionId,
-    pub tool: Option<ToolCallId>,
-    pub supported_subject: bool,
-    pub options: Vec<PermissionChoice>,
-    pub raw: RawMessage,
+    pub(super) connection: Option<ConnectionScope>,
+    pub(super) id: RpcId,
+    pub(super) session: SessionId,
+    pub(super) tool: Option<ToolCallId>,
+    pub(super) supported_subject: bool,
+    pub(super) options: Vec<PermissionChoice>,
+    pub(super) raw: RawMessage,
+}
+impl PermissionRequest {
+    #[must_use]
+    pub const fn id(&self) -> &RpcId {
+        &self.id
+    }
+    #[must_use]
+    pub const fn session(&self) -> &SessionId {
+        &self.session
+    }
+    #[must_use]
+    pub const fn tool(&self) -> Option<&ToolCallId> {
+        self.tool.as_ref()
+    }
+    #[must_use]
+    pub const fn supported_subject(&self) -> bool {
+        self.supported_subject
+    }
+    #[must_use]
+    pub fn options(&self) -> &[PermissionChoice] {
+        &self.options
+    }
+    #[must_use]
+    pub const fn raw(&self) -> &RawMessage {
+        &self.raw
+    }
+    #[must_use]
+    pub fn scope(&self) -> Option<ConnectionScope> {
+        self.connection.clone()
+    }
 }
 #[derive(Clone)]
 pub struct PermissionChoice {
-    pub id: OptionId,
-    pub kind: Arc<str>,
+    pub(super) id: OptionId,
+    pub(super) kind: Arc<str>,
+    pub(super) raw: OwnedRawValue,
 }
 impl PermissionChoice {
     #[must_use]
+    pub const fn id(&self) -> &OptionId {
+        &self.id
+    }
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+    #[must_use]
+    pub const fn raw(&self) -> RawValueRef<'_> {
+        self.raw.as_ref()
+    }
+    #[must_use]
     pub fn supported(&self) -> bool {
         matches!(
-            self.kind.as_ref(),
+            &*self.kind,
             "allow_once" | "allow_always" | "reject_once" | "reject_always"
         )
     }
 }
-impl fmt::Debug for PermissionRequest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PermissionRequest")
-            .field("options", &self.options.len())
-            .finish_non_exhaustive()
+#[derive(Clone)]
+pub struct UnsupportedRequest {
+    pub(super) scope: ConnectionScope,
+    pub(super) id: RpcId,
+    pub(super) method: Arc<str>,
+    pub(super) raw: RawMessage,
+}
+impl UnsupportedRequest {
+    #[must_use]
+    pub const fn id(&self) -> &RpcId {
+        &self.id
+    }
+    #[must_use]
+    pub fn method(&self) -> &str {
+        &self.method
+    }
+    #[must_use]
+    pub const fn raw(&self) -> &RawMessage {
+        &self.raw
+    }
+    #[must_use]
+    pub fn scope(&self) -> ConnectionScope {
+        self.scope.clone()
     }
 }
+macro_rules! redacted {($($t:ty),*)=>{$(impl fmt::Debug for $t {fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result{f.write_str(concat!(stringify!($t),"(..)"))}})*}}
+redacted!(
+    ReportedDirectories,
+    SessionListItem,
+    SessionListing,
+    PromptResult,
+    SessionEvent,
+    PermissionRequest,
+    PermissionChoice,
+    UnsupportedRequest
+);

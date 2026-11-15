@@ -1,0 +1,112 @@
+{
+  "scope": "Independent pre-code limited PASS; kernel and actual ACP/auth fixtures may be implemented; actual Native glue requires frozen candidate rebase",
+  "stableCases": 83,
+  "oracleChanges": 0,
+  "executedTests": 0,
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2-supplement\\read-and-source-api.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/read-and-source-api.md",
+      "sha256": "8422edfd377f4171b30985c0a513297b02978a69f63fbb427eb7593ac90954f5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2-supplement\\supplement.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/supplement.md",
+      "sha256": "5fec0314f5645f034ee46efb35ebb952cb7d1e242915341fa3dbab8dd777d742"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\engineering-contract.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/engineering-contract.md",
+      "sha256": "e54ee9755a4bbf62b2999f9846a41d69a7db6a2ca400faad6e3ebc3382a77aeb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\send-and-credit-api.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/send-and-credit-api.md",
+      "sha256": "ea8a3ab7f9da7642b23c9760d6bc15814600adc58883aa1ba94e53ddd20ea26e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\native-assembly.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/native-assembly.md",
+      "sha256": "e0ea8a3b753bb23b54376dc0abf30832296937b28691316147036144b0e4b6d4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\issue-disposition.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/issue-disposition.md",
+      "sha256": "e66f952284a9b9df57f0cd576f2866283a93eb1a7f5f1e30582186fdedc8f3a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\case-mapping.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/case-mapping.md",
+      "sha256": "5fcb90092fa5f1d7c89872cf4b88b15abb4ee2bd95fec2f8dbd4d38588c88cb5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\case-mapping.json",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/case-mapping.json",
+      "sha256": "8c60075e5defa4043254861e05450ef6684f8bc1a7531099c525bebf1549f60d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\freeze-v2.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/author-freeze-v2.json",
+      "sha256": "777a273e2a570ab8b61f7aba69defa1e638da3d5c46b2d8e6be8b760f9f18637"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2-supplement\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/supplement-freeze.json",
+      "sha256": "489e4e815d3fd5bb122d57e27eff2a798e8bb4e205ccaf7fc34e9c3dc10c7faf"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\revision2\\definition-manifest-v2.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/definition-manifest-v2.json",
+      "sha256": "96aa8288ad24e2b64460b95b604516859fdfd7a445166ef3660edb485929ed85"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-shared-view\\revision2-supplement83-coding-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/final-coding-gate.md",
+      "sha256": "5609f606991d0c2608074bc7914b3a8bcc33ebf51730645e988d5e87ca47178e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\revision2\\acceptance-definition-v2.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/acceptance-definition-v2.md",
+      "sha256": "d2eaac1ff350dcc88c4c7bbeadf19f5fb2b674babf724a502437ef23c73bc717"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\revision2\\case-index-v2.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/case-index-v2.json",
+      "sha256": "8fba58857ee9941beb2727cb5ae40da207d672f954c29675c09182c2c7339666"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\revision2\\execution-mapping-v2.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/execution-mapping-v2.md",
+      "sha256": "11caf9ffdf41be5c3cb07f00d9a2cc7e4ac4cd4aecda4479c1454460b5267b28"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\revision2\\api-review-v2.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/api-review-v2.md",
+      "sha256": "979c92f1f99c355279161dc2647c10ea69bd52f9239644ba8443b75dbaf5a348"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\revision2\\planning-review-v2.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/planning-review-v2.md",
+      "sha256": "a4ea3e5a1d5ea3d7377d19f877259c35883403eaa3679d1e67c4952974de3b67"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\revision2\\input-audit-v2.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/input-audit-v2.json",
+      "sha256": "c6b74b8e62c41ba4c90461fbcb7712738c9aa629c4e8b2605128d28d274ddc28"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\revision2\\supplement-audit.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/supplement-audit.json",
+      "sha256": "07076e5b66c1b57fd8665b7b4078adad03e4f7ea8984e40f16a69b3cdb40dffc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\revision2\\HANDOFF.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-view-definition/HANDOFF.md",
+      "sha256": "548c79a07789d9c5fd70404f7d12993dae936cdeac67e13b79ad3ec725cd3422"
+    }
+  ],
+  "effectiveFreeze": {
+    "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/effective-freeze.json",
+    "sha256": "d2389f73e0f5fc4fddca26436fe0144af3dcce1dfb77ddc31b9b7934e7d861d3"
+  }
+}

@@ -1,0 +1,60 @@
+{
+    "revision":  "2",
+    "scope":  "design only; public ACP client/raw/config/supervised reader-writer; no product edits or coding approval",
+    "entries":  [
+                    {
+                        "path":  "public-acp-runtime-contract.md",
+                        "sha256":  "64cc19beaeb9fd96e66500aeb9b0048519b2038705b2717fc82a5ccfb924a0cb"
+                    },
+                    {
+                        "path":  "limits-and-migration.md",
+                        "sha256":  "8bb5d345f34952d47f08f50571d1ebc85cfcbefc7b05abc0ac3aaa4d4bd3e3cf"
+                    }
+                ],
+    "preserved_v1":  [
+                         {
+                             "path":  "../public-acp-runtime-contract-draft.md",
+                             "sha256":  "49f5c9a1aaa819302f99c7ad30dbc7e4a81bf7761945cb4a862cea34b5d23488"
+                         },
+                         {
+                             "path":  "../limits-and-migration-draft.md",
+                             "sha256":  "4b5ae041ddcda2b677b6861e9519cef65318070c2c368b7cf3ce6cf790ce42b8"
+                         },
+                         {
+                             "path":  "../draft-freeze-v1.json",
+                             "sha256":  "5d2cd2534ddc2eabc5cefffa11156d984bd764671a7a21ca3c9349b59e5a7f47"
+                         },
+                         {
+                             "path":  "../inputs.json",
+                             "sha256":  "c6cdde2cb7c644f6d2b7ad59f87e887fcfd86c8d6bb80a32b05f82e9a7620463"
+                         }
+                     ],
+    "review_and_definition_inputs":  [
+                                         {
+                                             "path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-acp-runtime\\design-review-v1.md",
+                                             "sha256":  "3b6d4ca75525f70faf89f61335e6ee2c6f67d93a100f74fa84cdef67cc3cce2b"
+                                         },
+                                         {
+                                             "path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-tester\\acp-runtime\\acceptance-definition-v1.md",
+                                             "sha256":  "3327d3a569b69538111d78a25cfc1ea258f9ed89cd8df91c427642156bc9ee30"
+                                         },
+                                         {
+                                             "path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-tester\\acp-runtime\\classification-and-conflict-supplement-v1.md",
+                                             "sha256":  "604105d8a819ca9eea4137bc30d4829215c7081dfa36d199ee7c48c6b6cf5c48"
+                                         },
+                                         {
+                                             "path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-tester\\acp-runtime\\original-p0-p1-p2-inventory.json",
+                                             "sha256":  "2f61a44295100031d44a2f906e5709672d97d71fcb02669b8c8479c5be7fb863"
+                                         },
+                                         {
+                                             "path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-tester\\acp-runtime\\definition-manifest-v1.json",
+                                             "sha256":  "eb2b2c7791bde76bf244d6e06389694ad5c56b66d7a7194530d9824b448cd438"
+                                         }
+                                     ],
+    "addresses":  [
+                      "ACP-PLAN001",
+                      "ACP-PLAN002",
+                      "ACP-PLAN003"
+                  ],
+    "status":  "frozen for independent same-revision review and definition; not implementation or test PASS"
+}

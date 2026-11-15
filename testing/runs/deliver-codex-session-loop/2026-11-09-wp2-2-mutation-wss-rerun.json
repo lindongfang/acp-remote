@@ -1,0 +1,39 @@
+{
+  "schema": "deliver-codex-session-loop-wp2-2-mutation-wss-rerun-v1",
+  "date": "2026-11-09",
+  "scope": "Corrected WSS mutation test rerun",
+  "toolchain": {
+    "rust": "1.98.1-x86_64-pc-windows-msvc",
+    "locked": true,
+    "offline": true,
+    "targetDir": ".tmp/wp22-wss-owner-target-20261109c",
+    "ownerRunner": "testing/ci/windows-owner.ps1"
+  },
+  "results": [
+    {
+      "command": "cargo test --manifest-path app/Cargo.toml --locked --offline --lib node::tests::queue_management_development::queue_command_wss_applies_edit_cancel_prioritize_and_resume -- --test-threads=1",
+      "exitCode": 101,
+      "compiled": true,
+      "passed": 0,
+      "failed": 1,
+      "productAssertionReached": false,
+      "failure": "Node pairing owner control channel returned Windows error 5 before WSS assertions"
+    },
+    {
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File testing/runs/deliver-codex-session-loop/run-wp2-2-mutation-owner-20261109.ps1",
+      "exitCode": 101,
+      "compiled": true,
+      "passed": 0,
+      "failed": 1,
+      "productAssertionReached": false,
+      "failure": "A fresh isolated TEMP, P1_DATA_ROOT, RPC_FIXTURE_ROOT, and CARGO_TARGET_DIR under windows-owner.ps1 still produced Windows error 5 when pair_browser called ipc::begin_pairing; no WSS business assertion ran.",
+      "log": "2026-11-09-wp2-2-mutation-wss-owner-rerun.stdout.txt"
+    }
+  ],
+  "notCovered": [
+    "Edit/cancel/prioritize/resume product assertions",
+    "Approval waiting and multi-socket races",
+    "Independent acceptance/review",
+    "Full WP2.2 and Harness"
+  ]
+}

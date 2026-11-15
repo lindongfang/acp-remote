@@ -1,0 +1,40 @@
+{
+  "change": "deliver-codex-session-loop",
+  "date": "2026-11-09",
+  "scope": "management audit retention, cleanup, deduplication, and capacity",
+  "toolchain": {
+    "rust": "1.98.1",
+    "cargoFlags": ["--locked", "--offline"],
+    "targetDir": ".tmp/q3-wp24-audit-target-20261109",
+    "ownerRunner": "testing/ci/windows-owner.ps1"
+  },
+  "results": [
+    {
+      "test": "session_storage::management_audit::dev_tests::audit_dev_default_retention_duplicate_cleanup_and_source",
+      "result": "passed",
+      "count": "1/1",
+      "evidence": "default 30-day retention, duplicate receipt, expired supplemental cleanup, and original source binding"
+    },
+    {
+      "test": "session_storage::management_audit::dev_tests::audit_dev_real_100000_and_two_original_connections",
+      "result": "passed",
+      "count": "1/1",
+      "evidence": "real 100000-row capacity and two original connection owners"
+    },
+    {
+      "test": "session_storage::management_audit::dev_tests::*",
+      "result": "passed",
+      "count": "14/14 effective",
+      "evidence": "13/14 passed in one parallel invocation; the remaining clock fixture passed when rerun alone. The parallel invocation's sole failure was Windows AlreadyExists while creating a shared fixture directory before audit assertions."
+    }
+  ],
+  "observations": [
+    "The implementation deletes only retention_hold=0 rows whose retain_until_ms is due, then checks the combined management and approval supplemental-audit count against 100000.",
+    "Young protected rows remain unchanged at the full boundary; necessary queue settlement continues with an audit warning.",
+    "Commit veto, lost reply, rollback, unavailable supplemental audit, layout degradation, and schema-upgrade cases passed in the development group.",
+    "No npm audit was run, per user instruction.",
+    "This is a development/storage-limited result. It does not cover authenticated multi-client WSS mutation races, independent acceptance, real Harness behavior, or the remaining WP2.4 scenarios."
+  ],
+  "status": "partial-not-complete",
+  "tasksCheckboxChanged": false
+}

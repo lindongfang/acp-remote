@@ -1,6 +1,26 @@
 //! Session business values; these types do not authenticate network callers.
+pub mod activity;
+pub mod approval_audit;
+pub mod approval_owner;
+pub mod approval_records;
+#[cfg(test)]
 pub mod approvals;
+#[cfg(test)]
 pub mod history;
+pub mod input_queue;
+pub(crate) mod management_audit;
+pub mod native;
+pub mod native_catalog;
+pub mod native_dispatch;
+#[cfg(test)]
+pub mod product_commands;
+pub mod request_registry;
+pub mod requests;
+pub mod shared_projection;
+pub mod shared_view;
+pub(crate) mod shared_view_log;
+pub mod source_sessions;
+pub mod views;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 /// A platform identifier, independent of native protocol identifiers.

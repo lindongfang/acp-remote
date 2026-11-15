@@ -1,0 +1,78 @@
+{
+  "scope": "A2 candidate and independent first eight functions limited accepted for future serial Shared/A2 composition; no Root production integration",
+  "authorFreeze": "942553a4b042a1ca8856ebf155335c2c384c630bbb00d4f5c31f4a4788eeafac",
+  "independentFreeze": "08a0ec67b0051be2e5a08d1786c543afe0f771a8c814711a22beb89d73171d4d",
+  "actualFunctionsPassed": 8,
+  "defaultFactorySqlAuditInCandidate": true,
+  "originalCases": {
+    "partial": 32,
+    "notRun": 16,
+    "tempAxisBlocked": 5,
+    "nodeBlocked": 3,
+    "complete": 0
+  },
+  "defaultCandidateStrict": "inherited failure retained; not global green",
+  "nodeOnly": false,
+  "namespaceVmFull": false,
+  "approvalCombinedGlobalBudget": false,
+  "rootIntegrated": false,
+  "parentTasksSigned": false,
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-phase2/ACCEPTANCE.md",
+      "sha256": "a75c576ae240294fc74b8aad3d2440f3b715640396a4dce424b6430248cf9b1d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-phase2/HANDOFF.md",
+      "sha256": "71617c46bbda1034cffd9076f893b607e7e0d66ff40ace0dc0622f33fd9355df"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-phase2/summary.json",
+      "sha256": "872c18503bfda2c5aa1d92cb1b899972635e649a979df6577b2402dbe9ff0656"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-phase2/function-results.json",
+      "sha256": "d521137ec9f1b5d72edf41b23490236491a2f9eb76a86e1ee98d018539c2e6ed"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-phase2/56-original-row-results.json",
+      "sha256": "e4267cc67ab53f514f8f93b41c9d14258b57c272148898ba3790333a069f2cb1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-phase2/physical-final.json",
+      "sha256": "c463ec4018feb0a34f0a52c8b7ed419933b1870bff41b1d00fbfe83741b94dcf"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-phase2/physical-precision.json",
+      "sha256": "613c64cffc1531c5b4f4ea3a9f65df9daaa60ca085fbb61477f118130940e50d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-phase2/reuse-impact.json",
+      "sha256": "89b75d348c9a374a870dd75df67c8527297fdd09a3946823ab3d54fcf9232708"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-phase2/freeze.json",
+      "sha256": "08a0ec67b0051be2e5a08d1786c543afe0f771a8c814711a22beb89d73171d4d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-precision/PRECISION.md",
+      "sha256": "7fcc5796538a6c0d250cc2cc4d60138a44bb68c61262c62c2f4f6e287fa4ab91"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-precision/issues.json",
+      "sha256": "68aabb085b4d5554e2ef1c6976fc74bb4df17078522095f62fe9974239eec222"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-precision/inputs.json",
+      "sha256": "7beab1f65ec560e667250c8570044a4cdb2c259ba808e971ed0a64d2af599c49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/independent-precision/freeze.json",
+      "sha256": "3e16ea016798451a05b0e47ad34c88efae4b65e054194746971685e543fa110c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/reviews/audit-a2-core-independent-phase2-limited-delivery-review.md",
+      "sha256": "4cee4aa58a7feb88d4a299d60cad5e2c0023ff0f648ab3c91e4608237b925a2d"
+    }
+  ]
+}

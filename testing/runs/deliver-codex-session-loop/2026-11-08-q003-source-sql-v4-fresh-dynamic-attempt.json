@@ -1,0 +1,295 @@
+{
+  "schema": "deliver-codex-session-loop-source-sql-v4-dynamic-attempt-v1",
+  "date": "2026-11-08",
+  "scope": "isolated fresh dynamic gate for Query v13 candidate A and Register v4 candidate B",
+  "runnerFreeze": "d5a0e531cfaacf322c53acd73dd560959f26b96f291cd76a1ce1848af34d67a1",
+  "runnerReview": "2475e60bba9f8e524a472617cbe3805e486acea30993e73bf649496695811b62",
+  "A": {
+    "attempt": "a-query-compile-01",
+    "outcome": "first compile red; candidate stopped; no retry",
+    "cargoExit": 101,
+    "diagnostic": "E0609: SourceSqlOriginalSnapshot has no role field; test references held.role",
+    "ownedCleanup": "Cargo exited with vctip remaining in its isolated Job; forced cleanup reached active count 0",
+    "snapshot": "before/after snapshots equal; candidate source unchanged",
+    "evidence": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/fresh-dynamic-gate-v1/logs",
+    "observationSha256": "see OBSERVATION-A-COMPILE-01.json in isolated gate"
+  },
+  "B": {
+    "attempt": "b-register-compile-02",
+    "outcome": "runner preflight failed before Cargo",
+    "diagnostic": "unapproved candidate drift in app/src/application/native_dispatch/source_sessions.rs",
+    "baselineBytes": 26597,
+    "baselineSha256": "7974954a818cf691fea46a399c7b07920337d80ad183e075dbd7fe23d72c6d24",
+    "candidateBytes": 26779,
+    "candidateSha256": "5e189bbbdebb7281976a06ae3e8abe9c22022aa4cbbd367ef1542d3fa0c84d51",
+    "productModified": false,
+    "next": "identify candidate packaging/version drift; freeze and review a corrected identity before retry"
+  },
+  "constraints": [
+    "A首红后停止且不重试",
+    "npm audit外发保持未执行",
+    "原P1保持开放",
+    "不修改Git索引"
+  ],
+  "overall": "No Source SQL candidate has passed independent dynamic compile/test; P1 remains open. Query v14R is frozen and awaits a fresh independent execution gate; no Cargo/list/test has run for v14R.",
+  "QueryV14": {
+    "outcome": "independent static review rejected fresh gate before execution",
+    "finding": "program candidate.sourceManifestSha256 points to v13 execution hash, while v14 execution candidateManifestSha256 differs; verifier lacks equality and intended canonical source binding",
+    "reviewSha256": "124411c8fb2f6e45cba0bfdec81b84e3cdfedbd9a35bc19a0f1ec6151b480f60",
+    "next": "author must create v14R with canonical v4 source manifest identity and stronger verifier; no Cargo/list/test"
+  },
+  "RegisterV4": {
+    "outcome": "independent baseline review confirms preflight drift outside approved four-file delta",
+    "finding": "fifth file app/src/application/native_dispatch/source_sessions.rs differs by two cfg(test) reexport groups",
+    "reviewSha256": "4fe26a59cbd88489632adc03173ec8da523460837625596cc3975aa63830b6a2",
+    "canonicalSourceManifestSha256": "8c6a799614e4d95f425e40323d47ff63bdd95a5dc88a63e9fc70ece1efac353f",
+    "next": "restore fifth file or create explicit fifth-file amendment/new coding manifest and independent review; do not rebind runner"
+  },
+  "QueryV14R": {
+    "outcome": "static identity verification passed; independent fresh review rejected v14R before execution because runner selector used prefix matching; v14S exact-match repair requested; no dynamic command run",
+    "canonicalSourceManifestSha256": "8c6a799614e4d95f425e40323d47ff63bdd95a5dc88a63e9fc70ece1efac353f",
+    "executionManifestSha256": "ae15014a5018f851ce382acdbca796f65f4cbc9ffe3c289ef945e6dd3ea94ece",
+    "programManifestSha256": "092c9d44e3ec5d38d1c4a6a8c65ccaa498a006c34ae60ae5f9317e07c449a940",
+    "programFreezeSha256": "5dc4eef33fe215b83b475be8a7873f71cf925ecac667ee4c0f9538a38b4f9ccd",
+    "verifier": "allVerified=true; liveMembers=10; executionMembers=945; overlayMounted=true; sqlIncludeMounted=true",
+    "querySelector": "independent_source_query_caller_cancellation_preserves_original_sql_and_receipt",
+    "blocked": [
+      "Register caller cancellation: no in-flight Register ID and claim-state observation API",
+      "no-SQL-start control: APIs do not distinguish absent SQL slot from not-yet-started SQL"
+    ],
+    "report": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reports/REPORT-v14R.md",
+    "reportSha256": "eff527ba720d580f4a734de507ef5c35436955bdd10f2fc8c77053e959b1ee01",
+    "snapshotSha256": "81ee8d731347d5508264a777a22b3d478b2c58b2848064ab2af07926afe3b829"
+  },
+  "QueryV14RReview": {
+    "outcome": "rejected before compile/list/test",
+    "finding": "program-v14R/run.ps1 validates Exact with StartsWith(prefix), so an unintended independent_source_ test could pass the gate",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reports/REVIEW-v14R-QUERY-FRESH-STATIC.md",
+    "reviewSha256": "a0a4883f45994e11a1c09d5efb55d64048ad8cfe9b9f2d3febfc0a60b86125d9",
+    "next": "create v14S runner/freeze with exact equality against the manifest's sole queryTest, then obtain a new independent static gate"
+  },
+  "QueryV14S": {
+    "outcome": "real v14S freeze completed; local verifier passed; awaiting fresh independent static gate; no Cargo/list/test run",
+    "canonicalSourceManifestSha256": "8c6a799614e4d95f425e40323d47ff63bdd95a5dc88a63e9fc70ece1efac353f",
+    "executionManifestSha256": "b3d03f67c65493219f85a08dca15f851019c71091095e8d672e5777956b2c93a",
+    "programManifestSha256": "f8a258b36e3cf8c7c4ae52509bc776d073ada59c9a936af7b4b76c7fee32c64e",
+    "programFreezeSha256": "4460e22769d1a0f1362a021eada13cab08d90aa250a7a69237463378e8323974",
+    "runnerSha256": "1b28cb762a9d4b12caf44032ac71b34b64dfcb17fb14a187b8890101d2cd6a3a",
+    "verifierSha256": "634ee21212c8b8749ed4e8658ac430b1794cc87be01e36362c4e91cb5cedb61a",
+    "snapshotSha256": "7d29f2bbe9dc5b897c8745569e8beed317b1fa7a65244ab03c6ac3d55fa8834b",
+    "reportSha256": "ff7c0ff0828bc2c071adc9839051afa794f3021b6b2dcb2f515d2dc5f3ef9a6e",
+    "verifier": "allVerified=true; liveMembers=10; executionMembers=945; overlayMounted=true; sqlIncludeMounted=true",
+    "selectorGuard": "exact case-sensitive -cne against the sole manifest queryTest; no StartsWith",
+    "compile": {
+      "label": "v14s-compile-01",
+      "outcome": "passed",
+      "cargoExit": 0,
+      "binary": "D:/Project/acp-remote/.tmp/source-sql-v4-acceptance-v14S/target/debug/deps/acp_remote-97a9ea4da3f593fd.exe",
+      "binarySha256": "c37545ec61d48d31bdefce53280ecab61c4ea54eaace372fac6a0316c6e165d9",
+      "sourceUnchanged": true,
+      "ownedJob": "vctip remained at pre-stop count 1; runner forced owned Job cleanup; activeAfterStop=0",
+      "result": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/logs/v14s-compile-01.result.json"
+    },
+    "exactList": {
+      "label": "v14s-query-list-01",
+      "outcome": "stopped before PE launch: runner rejected supplied selector because it included a Rust module prefix while the manifest declares the bare test name",
+      "exitCode": 1,
+      "dynamicTestRun": false,
+      "retry": false,
+      "result": "no result file; preflight stopped before snapshot/Owned Job"
+    }
+  },
+  "RegisterStrict4R": {
+    "outcome": "strict4R-only compile gate preflight red before Cargo: runner resolved gate-config.json from parent instead of its own directory; no retry under first-red rule",
+    "manifestSha256": "d52ad23f0db45658ec638116738a4a51ab17e0944bc4378141a72ef6be29737b",
+    "deltaSha256": "b4d2e232fd4c222b17516286c6ac75acb3099c0ee9603ad99d0d8d6d345e48f7",
+    "freezeSha256": "3d14b7320ab936141e7a74b5f7090399cd38a8c864909e1d9092bf1886c53821",
+    "reportSha256": "4229a6933bbd91108c8849104e2dff533f5fd7f25486860ae8b7e8934cd32259",
+    "authorizedFiles": 4,
+    "nonAllowedMemberMismatches": 0,
+    "assertions": [
+      "request.await returns cancelled JoinError and is_cancelled()",
+      "case.close().await succeeds"
+    ],
+    "status": "strict4R-only compile gate preflight red before Cargo: runner resolved gate-config.json from parent instead of its own directory; no retry under first-red rule",
+    "staticReview": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reports/REVIEW-register-strict4R-FRESH-STATIC.md",
+    "staticReviewSha256": "041a2ee0914aa54033786d82d5a5d159e23fcb7ca8bba65bdbf85a60100f0b34",
+    "next": "preserve first-red evidence and obtain a new independently reviewed runner package with corrected path binding",
+    "compileAttempt": "strict4r-compile-01",
+    "compileOutcome": "preflight failed before Cargo/rustc",
+    "compileDiagnostic": "run-gate.ps1 looked for acceptance-v2/gate-config.json; actual config is fresh-dynamic-gate-register-strict4R/gate-config.json",
+    "dynamicTestRun": false
+  },
+  "RegisterStrict4RV2": {
+    "outcome": "fresh independent static review rejected compile/list/test gate; no Cargo, rustc, verifier, list, or test was run",
+    "programManifestSha256": "6e4ec52939931a8ff35b890ca62391ffff073f8271dbb67f5921e8135a8503e8",
+    "programFreezeSha256": "81fd4e3d9c89ce04402b45f12f0e6027724af4f2358b6b37d9c0e7f3b5627c55",
+    "runnerSha256": "a6eb0e6f49b8d62c0b55f340bcd42d268492a9480a475f81f1a73cb897c8105a",
+    "verifierSha256": "83eb439d3aa76d0da8a1312cdff7d5b2be7215a9ff3e6df268805b6316002440",
+    "reviewSha256": "9ddf7ce452409aab570bd642010802c4cf2d9389bc328f77297ed67d9187ec5a",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reports/REVIEW-strict4R-dynamic-gate-v2-FRESH.md",
+    "findings": [
+      "program freeze member identities do not match live TESTS.json, runner, and verifier bytes",
+      "runner is PREPARED_NOT_EXECUTED and does not invoke Cargo",
+      "execution workspace uses v9 baseline and does not mount the strict4R four-file candidate",
+      "selector namespace and compiled module entry are not proven; SQL acceptance include is unbound",
+      "OwnedProcess is frozen but not used, so process-tree cleanup and first-red stopping are absent"
+    ],
+    "next": "prepare a new independent execution copy mounting the exact strict4R four-file delta, freeze all live runner/verifier/test members, bind SQL acceptance and compiled selectors, implement Owned Job execution, then obtain fresh review",
+    "dynamicTestRun": false
+  },
+  "RegisterStrict4RV3": {
+    "outcome": "author preparation is not frozen and is not eligible for independent review; no Cargo/list/test was run",
+    "observedState": [
+      "node.rs mounts the v3 source_acceptance include but does not directly mount the SQL acceptance include",
+      "runner manifest still contains pending member hashes and freeze does not bind final runner/verifier identities",
+      "runner candidate comparison treats the intentional overlay as unapproved drift",
+      "selectors are not bound to the actual independent SQL acceptance module"
+    ],
+    "next": "author to create a new frozen execution package with strict4R four-file delta and exact SQL acceptance/module wiring, a functioning Owned Job runner, complete hashes and passing static verifier before fresh review",
+    "dynamicTestRun": false
+  },
+  "RegisterStrict4RV4": {
+    "outcome": "fresh independent static review rejected compile and exact-list; no verifier, Cargo, rustc, list, or test was run",
+    "executionManifestSha256": "1962a8c8e7448f5cfa9e1dc5260bf0f9c4b0d0ce6371369d6e744d2e198f0488",
+    "reviewSha256": "1ecd06573f6f414ec0774a1a9e0bfbc7ccf3ffb90e8c210e1cbaa3ee349b8de0",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reports/REVIEW-strict4R-dynamic-gate-v4-FRESH.md",
+    "findings": [
+      "live gate-config, runner manifest v3, and freeze v3 still bind execution-v3 and old SHA 446e17… rather than execution-v4",
+      "runner does not read or bind the v4 execution manifest, so it cannot prove the strict4R four-file overlay is mounted in the Cargo tree",
+      "execution manifest has 945 members and node.rs overlay but does not bind program/source_acceptance/source_sql_acceptance include paths and bytes",
+      "runner manifest and freeze retain pending member identities for config, run script, and binary recorder"
+    ],
+    "runnerAssessment": "Observed runner includes Owned Job cleanup and first-red stop logic, but those bytes are not bound by a valid v4 freeze",
+    "dynamicTestRun": false,
+    "next": "bind execution-v4 and all actual SQL acceptance/test include members in one complete freeze, remove pending identities, then request a new fresh static review"
+  },
+  "RegisterStrict4RV5": {
+    "outcome": "static freeze completed by author; awaiting fresh independent review; no Cargo, rustc, verifier, list, or test was run by the author",
+    "programManifestSha256": "8e6b166cc5846ef80d9699b2b8e7509f114e14d4e365a81a607ef575c3378f50",
+    "programFreezeSha256": "3923c89e2cd23ca6f7863115a2d4e544cd7d6d3618cc31dfb2143b0feb2a2fb7",
+    "executionManifestSha256": "39d2d6a15eb9335e953c31bdd0c36db6821a95598b3c4d132125fc4af55e9249",
+    "verifyStaticSha256": "5f3b245be031618f8210c6c9d8545adba11fc401dd54eeef72963eae96b08950",
+    "staticVerifySha256": "972c4f430d47b5a98ec2c48a0773360c83ae5f9f08dc703faa194c52c1106c4d",
+    "reportSha256": "8cad8a21d4d7ac2ef5ddc03786873d4cf884ebb7bb2c4e2517a15ac9d7ec6579",
+    "staticChecks": {
+      "nodeCheck": "passed",
+      "verifier": "allVerified=true; 945 baseline; 4 delta; 7 program; dynamicCommandsInvoked=false",
+      "dynamicCommandsInvoked": false
+    },
+    "knownGaps": [
+      "Register-role caller cancellation remains unverified",
+      "No-SQL-start control remains unverified"
+    ],
+    "next": "fresh independent static review must authorize any compile or exact-list step; dynamic test execution remains prohibited until that review"
+  },
+  "RegisterStrict4RV5Review": {
+    "outcome": "fresh independent static review rejected compile and exact-list; no verifier, Cargo, rustc, list, or test was run",
+    "reviewSha256": "892b90eecd5e3810e9c8dda64f829a2b8919b006790b2ae11f288b7f2833809d",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reports/REVIEW-strict4R-dynamic-gate-v5-FRESH-STATIC.md",
+    "positiveChecks": [
+      "all supplied frozen hashes matched",
+      "945 execution members independently verified",
+      "seven program members, Cargo manifest/lock, node overlay, SQL include path and bytes matched",
+      "Owned private Job and first-red/no-retry controls were present"
+    ],
+    "blockers": [
+      "runner staticReview path resolves under v5/reports, but the report exists only in parent reports, so precheck fails before Cargo",
+      "selectors target Query acceptance tests rather than Register candidate caller-cancellation and no-SQL-start branches",
+      "list mode checks only exit code; zero discovered tests could be misread as success"
+    ],
+    "next": "preserve v5 and create immutable v6 with valid report binding, exact Register selectors, list discovery assertion, and real Register cancellation/no-SQL-start coverage; obtain fresh static review before any dynamic command",
+    "dynamicTestRun": false
+  },
+  "RegisterStrict4RV6Review": {
+    "outcome": "fresh independent static review rejected compile and exact-list; no verifier, Cargo, rustc, list, or test was run",
+    "reviewSha256": "100bd9fe08b09530a856177f9f08a65c077026254d3962f571e7e56ebd28e06b",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/strict4R-dynamic-gate-v6/reports/REVIEW-strict4R-dynamic-gate-v6-FRESH-STATIC.md",
+    "blockers": [
+      "pending execution/sql hashes",
+      "workspace v6 with cargo lock v5",
+      "stale program/static/report identities and member hashes",
+      "node overlay manifest mismatch",
+      "selectors only corrected in config",
+      "list lacks exact stdout discovery assertion"
+    ],
+    "dynamicTestRun": false,
+    "next": "create immutable v7 from actual tree, regenerate all manifests and hashes, bind Register selectors everywhere, add positive exact-list discovery assertion, obtain fresh review before dynamic execution"
+  },
+  "RegisterStrict4RV7Review": {
+    "outcome": "fresh independent static review rejected compile/list; no verifier, Cargo, rustc, list, or test was run",
+    "reviewSha256": "b5be798d4a60106a0c220133ba76e8ce8799169daab7101907cf4ea4efe3d816",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/strict4R-dynamic-gate-v7/reports/REVIEW-strict4R-dynamic-gate-v7-FRESH-STATIC.md",
+    "positiveChecks": [
+      "7/7 program members independently matched",
+      "945/945 execution members independently matched",
+      "Cargo manifest/lock, overlay and two Register selectors matched"
+    ],
+    "blockers": [
+      "PowerShell list summary array check rejects normal multiline output",
+      "REPORT-v7 has CR/ESC/BEL/LF/NUL corruption and unresolved hash placeholders; its hash is not bound in program/freeze"
+    ],
+    "dynamicTestRun": false,
+    "next": "create immutable v8 with correct summary-line parsing and clean hash-bound report, regenerate all manifests/freeze, fresh review before any dynamic execution"
+  },
+  "RegisterStrict4RV8": {
+    "outcome": "v7 fresh static review rejected before dynamic execution",
+    "reviewSha256": "b5be798d4a60106a0c220133ba76e8ce8799169daab7101907cf4ea4efe3d816",
+    "dynamicTestRun": false,
+    "next": "v8R must be rebuilt immutable from the actual tree with all v8 references, clean report, corrected list-summary parsing, and report hash bound before fresh review"
+  },
+  "WP13ScenarioMapV2": {
+    "map": "testing/runs/deliver-codex-session-loop/2026-11-08-wp1-1.3-scenario-evidence-map-v2.json",
+    "mapSha256": "b26f42bb14e9d6596b6a9834ef7a6eee5417a11a21112055392d844155d9490f",
+    "review": "testing/runs/deliver-codex-session-loop/2026-11-08-wp1-1.3-scenario-evidence-map-v2-review.md",
+    "reviewSha256": "616fddc78893a9aacb3f33cdd2820ad2febf2826068c3db51e1abac96e930ef0",
+    "scope": "identity/traceability only; WP1.3 remains open",
+    "productTestsRun": false
+  },
+  "RegisterStrict4RV8Review": {
+    "outcome": "fresh independent static review rejected before compile/list/test",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reviews/REVIEW-strict4R-dynamic-gate-v8R-FRESH-STATIC.md",
+    "reviewSha256": "8a42d570a6025a6f6f4e7d55f0596ccb0d14b4b0acf1c86d8775dd04ab0544f2",
+    "blocker": "PROGRAM-MANIFEST baselineManifestSha256=null while execution manifest records canonical baseline SHA; baseline and delta baseline identities are not explicitly bound by verifier/runner",
+    "dynamicTestRun": false,
+    "next": "immutable v9 must bind canonical baseline and delta baseline identities and add verifier/runner assertions; fresh review required"
+  },
+  "RegisterStrict4RV9": {
+    "outcome": "fresh independent static review rejected before verifier/Cargo/list/test",
+    "executionManifestSha256": "096c3e66bc5a74b785763d2d42f55fd5b7bb3d47b0e6f90655dd69f64e0a4e73",
+    "programManifestSha256": "2bba7ddfff742f19bc355aa8d57a030c967f814aef36858c69868c2459bf6246",
+    "freezeSha256": "2f6d987699b71f6936171526881a9b6098fee4092a98d26d612e5bf05d3ce671",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reviews/REVIEW-strict4R-dynamic-gate-v9-FRESH-STATIC.md",
+    "reviewSha256": "b1dd70c7933385ad80de89477758df1f7ad51741cf0de3e952f2077fda4919ef",
+    "blocker": "program-v9/source_acceptance.rs SQL include still points to program-v8R; fresh review status/path/hash not approved/empty",
+    "authorization": "none",
+    "dynamicTestRun": false,
+    "next": "preserve v9 and create immutable v10 correcting full nested include chain, regenerate hashes and obtain fresh independent static review"
+  },
+  "RegisterStrict4RV10": {
+    "outcome": "fresh independent static review rejected before any command",
+    "executionManifestSha256": "b095f85b9f3f17bd128d11616a1297bc771a1e36a30ce615f1c619215530dc81",
+    "programManifestSha256": "8c76d0d6999a19655da25d156633c8d9130a71f4035914848c5f8598065cb109",
+    "freezeSha256": "125949dcdac86d2d42cb61c944f413d210412ef301020a1b66d1f9c7c54ab5d5",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reviews/REVIEW-strict4R-dynamic-gate-v10-FRESH-STATIC.md",
+    "reviewSha256": "092b7c8e1e19f1050f64254bb7728c788c019fe85ae8397c98ce106e73bf7484",
+    "blocker": "runner does not bind/enforce the mode and selector scope authorized by the fresh review; test remains callable after generic approval",
+    "authorization": "none",
+    "dynamicTestRun": false,
+    "next": "preserve v10 and create immutable v11 binding an explicit review-authorized mode/selector scope into config, runner, manifests, freeze, report, and verifier; keep test disabled pending later gate"
+  },
+  "RegisterStrict4RV6ReviewV2": {
+    "outcome": "fresh independent static review rejected compile/list/test before running any verifier or Cargo command",
+    "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/strict4R-dynamic-gate-v6-review-v2/REPORT.md",
+    "reviewSha256": "f4795a6ba1ae3871aa11200ffb47912557bbdaff1e27d2eea0ffc136f13ce7bc",
+    "blockers": [
+      "Register selectors are not fully cross-bound between program manifest and static verifier, and REPORT-v6 still names old Query selectors",
+      "positive list discovery count exists but summary parsing is invalid for normal multiline output",
+      "REPORT-v6 path and SHA are not bound into program manifest, freeze, or verifier; report content is stale",
+      "gate config points to the v5 rejection report and runner does not require an approval for the v6 package and scope"
+    ],
+    "authorization": "none",
+    "dynamicCommandsRun": false,
+    "next": "preserve v6 and create a new immutable revision fixing selector/report/list bindings and requiring an explicit approval bound to that package and scope; obtain fresh static review before any execution"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-03",
+  "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-schema9-current-head-two-red-execution-v1",
+  "freezeSHA256": "162f8a779e1e5d3fe1831b94397e6f526526e093c572adef38c1d00c45a7d1fd",
+  "membersVerified": 870,
+  "results": {
+    "source_count": 810,
+    "source_unchanged": true,
+    "only_reviewed_leaf_changed": true,
+    "changed_leaf_sha256": "63b35b9bbbf367f363e5d6a8fa0d4edee828ff6678d470b67185251eb046a81e",
+    "unchanged_base_leaves": 809,
+    "cargo_lock_unchanged": true,
+    "temp_files": 0,
+    "owned_data_files": 0,
+    "compile_pass": true,
+    "list_original_exact7": true,
+    "actual_pass": 7,
+    "actual_fail": 0,
+    "retries": 0,
+    "run_all_exact_once": true,
+    "six_modules_reused_pass": 32,
+    "six_modules_rerun": false,
+    "original_result": {
+      "pass": 37,
+      "fail": 2,
+      "retries": 0,
+      "preserved": true
+    },
+    "root_installed": false,
+    "wp4c001_006_executed": false
+  },
+  "independentPosterior": "pending",
+  "limitations": [
+    "7 actually rerun; 32 prior passes explicitly reused",
+    "No new physical close observation",
+    "No Root installation or full historical migration approval"
+  ]
+}

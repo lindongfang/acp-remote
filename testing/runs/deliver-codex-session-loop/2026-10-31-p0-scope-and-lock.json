@@ -1,0 +1,9 @@
+{
+  "revertedNullHunkMatchesBaseline": true,
+  "restoredStrategySha256": "cb91ed1d4395ac70af35fb422a8c97e1b2edf93f76feb39b10f638f3cf43debf",
+  "productPackages": 261,
+  "probePackages": 238,
+  "dependencyDelta": [
+    "p0-message-probe|0.0.0|path"
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "reviewer": "continuation_reviewer",
+  "p4": {
+    "package": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-p4-v2-independent-execution-limited-posterior-2026-11-03",
+    "freezeSHA256": "1e450acbba3bfc5aa9acd99321838a0ee1bae92284e13ea8a3a30c7f8c5b41ad",
+    "membersVerified": 3,
+    "result": "limited independent execution confirmed: tsc0;14 exact first attempts;615 vectors;0retries;16x1663 identities no change",
+    "notCovered": [
+      "real OOM",
+      "UI/browser",
+      "WSS",
+      "complete P4"
+    ]
+  },
+  "cldbStageA": {
+    "package": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-cldb-stage-a-fixed-delivery-limited-posterior-2026-11-03",
+    "freezeSHA256": "ecfa2e81249059795bdcd03ba13ee40090157b805fc6be56624e63c59e956659",
+    "membersVerified": 3,
+    "result": "limited fixed development delivery posterior passed",
+    "development": "6 first passes; normal check/build0;driver strict0",
+    "appStrict": "101/680; full diagnostic multiset unchanged",
+    "patchWhitespace": "3 upstream original trailing spaces retained: not strict whitespace passed",
+    "independent11Cases45VectorsExecuted": 0,
+    "rootInstallationApproved": false,
+    "entryIssues": {
+      "CLDB-A-RUSTC-LINK001": "closed only for approved alternate entry",
+      "CLDB-A-WORKSPACE-RESOLUTION001": "Open"
+    }
+  },
+  "runtimeSupplement": {
+    "package": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-cldb-stage-a-runtime-entry-supplement-implementation-gate-2026-11-03",
+    "freezeSHA256": "deca7974c2292c52304763370d84ef1a0038c2f016f77b0a07682a0ebc02894a",
+    "membersVerified": 3,
+    "result": "test_block_on and existing _rt-tokio permitted for preparation; unknown independent program not approved for execution"
+  },
+  "raw": {
+    "package": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-raw-preservation-design-technical-handoff-2026-11-03",
+    "freezeSHA256": "503188d8c27f8c917921fab171ff2c52c75b6f85dc71e481d1f8e33e11979fb2",
+    "membersVerified": 3,
+    "result": "tester definitions can proceed; no product coding gate",
+    "independentTester": "raw_preservation_tester",
+    "issue": "WSS-RAW-PRESERVATION001 Open",
+    "documentErratum": {
+      "issue": "WSS-RAW-REF001 P3; pending original reviewer closure",
+      "package": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-preservation-design-reference-erratum-v1",
+      "freezeSHA256": "f301ab3fb91648e4d05648a39ce0ca9a35e040b2e038d3a91eb350eb5f7c9121",
+      "scope": "two exact references only; original freeze unchanged"
+    }
+  },
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  }
+}

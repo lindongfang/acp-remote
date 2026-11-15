@@ -1,0 +1,28 @@
+{
+  "scope": "Open resolver recovery finding and capability-vs-Ready correction; not product delivery",
+  "issue": "APO-RESOLVER-PRE-CANDIDATE-RECOVERY001",
+  "status": "Open-static",
+  "dynamicReproductionByAuthor": "Reported separately, not independently accepted",
+  "v1CapabilityIsNotLoaded": true,
+  "v1OtherOriginalThreeAxesAndPhysicalTailsPreserved": true,
+  "v2Passed": false,
+  "rootProductChanges": 0,
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-resolver-readiness-findings/resolver-review.md",
+      "sha256": "7cd6ad1a7bd94b9f1dc5c616e6d055a3a8dcd722e298efeaaa07b96859741598"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-resolver-readiness-findings/v1-capability-precision.md",
+      "sha256": "bf081a5e98b28edd416bf88f41536ae8604fd1bf01dc62a200a806e1bb708e7e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-resolver-readiness-findings/v2-v5-freeze.json",
+      "sha256": "3cabade36af7e53c9abee815bbea23fc24c63b18cbcc9f8db6a265d160f6a822"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-resolver-readiness-findings/v2-v5-precision.md",
+      "sha256": "e86d26164319e44da2c82b2ccdccba176197eceb8e1e335dd6e763a765467bc2"
+    }
+  ]
+}

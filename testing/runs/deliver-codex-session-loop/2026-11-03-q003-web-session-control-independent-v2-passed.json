@@ -1,0 +1,50 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "tester": "configuration_acceptance",
+  "executionPackage": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-web-session-control-independent-execution-v2",
+  "freezeSHA256": "4e9ed3b9fe6cd525f4f926ce6099f8968a4ca19017af0db02608e0458b4daf18",
+  "rootVerifiedMembers": 929,
+  "result": "pass-limited",
+  "tscExit": 0,
+  "uniqueList": 14,
+  "exact": {
+    "passed": 14,
+    "failed": 0,
+    "attemptsPerEntry": 1,
+    "retries": 0,
+    "order": "P4-SC-001 through P4-SC-014",
+    "eachEntrySkippedOtherCases": 13
+  },
+  "namedVectors": 615,
+  "identity": {
+    "stages": 16,
+    "checksPerStage": 1663,
+    "differences": 0
+  },
+  "allocation": "014: five simulated Allocation error mappings only; no real OOM",
+  "testSHA256": "342c549c3a546eb6261b63b8c183ce06ca626fe369493d2748be75dd7941a0c0",
+  "v1FirstFailure": {
+    "freezeSHA256": "c906aded3656ea41f2b7412c62b7000916b8e46700bbc7a5e6ed2098ef3ff3d1",
+    "error": "TS2591 node:buffer",
+    "retained": true,
+    "testsExecuted": 0
+  },
+  "independentReview": {
+    "agent": "continuation_reviewer",
+    "status": "dispatched; no posterior conclusion yet"
+  },
+  "notCovered": [
+    "browser/UI/main routing",
+    "actual WSS and Node routing",
+    "complete WP4",
+    "Storage/SQLite closure",
+    "real OOM",
+    "real Harness and process tree"
+  ],
+  "rootProductChanges": 0,
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  }
+}

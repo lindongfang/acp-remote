@@ -1,0 +1,45 @@
+{
+  "observed_at": "2026-11-02T19:33:18.617Z",
+  "change": "deliver-codex-session-loop",
+  "role": "Root integration coordination; not independent author",
+  "reviews": [
+    {
+      "name": "WP4C001–006执行门",
+      "dir": "followup-schema9-wp4c001-006-fixed-execution-gate-2026-11-03",
+      "freeze": "e9480a307fa22651a1fb51e665790b9945d8201bca8109c76f501359719ce07b",
+      "scope": "允许固定821源编译、8项exact唯一列表及串行首跑；已激活tester；尚无结果。",
+      "verifiedMembers": 2,
+      "report": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-schema9-wp4c001-006-fixed-execution-gate-2026-11-03\\REVIEW.md"
+    },
+    {
+      "name": "两红独立后验",
+      "dir": "followup-schema9-two-red-independent-posterior-2026-11-03",
+      "freeze": "ad1a245e005568c173d6ba23003c0177ab9526878cd0668bdfd73437da41c466",
+      "scope": "REV001/REV002由原提出者关闭为Fixed-independent-limited；新单叶原7函数7/0/0，另六模块32绿仅复用，原37/2保留。",
+      "verifiedMembers": 2,
+      "report": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-schema9-two-red-independent-posterior-2026-11-03\\REVIEW.md"
+    },
+    {
+      "name": "命名provider四叶交付",
+      "dir": "followup-named-configuration-four-leaf-delivery-2026-11-03",
+      "freeze": "8a25941def5a7650330f5da8c9fa202c4670bc91f0dd0498b31acd6cc9d06025",
+      "scope": "有限静态交付及开发证据通过；不代独立验收或普通Node装配，strict101/682精确2增2减。",
+      "verifiedMembers": 2,
+      "report": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-named-configuration-four-leaf-delivery-2026-11-03\\REVIEW.md"
+    }
+  ],
+  "root_product_sources_modified": false,
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  },
+  "not_done": [
+    "ordinary Node/service assembly",
+    "body production path and stable Node lifecycle",
+    "WSS and page entry",
+    "real Harness and Windows full process tree",
+    "formal CLDB open obligations"
+  ],
+  "audit": "not executed; user declined metadata egress",
+  "commit_push_archive": false
+}

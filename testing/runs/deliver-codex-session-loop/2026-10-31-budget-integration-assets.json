@@ -1,0 +1,14 @@
+﻿[
+    {
+        "path":  "app/tests/view_budget_acceptance.rs",
+        "sha256":  "2b504bc9d89feaaedf50ae4b48094a9ecf1e46f301314507a882e1a8b696470d"
+    },
+    {
+        "path":  "app/tests/view_budget_allocator_acceptance.rs",
+        "sha256":  "c9c7aa38019c02caf5824660be248992e5f93c2bdd29a59a36f4e1228e011f3a"
+    },
+    {
+        "path":  "app/tests/acceptance/view_budget_support.rs",
+        "sha256":  "bcd680e034916be05460ed387a15edce38513ba85b6807b19d88bc27eb7d998a"
+    }
+]

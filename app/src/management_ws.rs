@@ -1,3 +1,17 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::items_after_statements,
+    clippy::manual_let_else,
+    clippy::match_same_arms,
+    clippy::needless_pass_by_ref_mut,
+    clippy::option_if_let_else,
+    clippy::significant_drop_in_scrutinee,
+    clippy::significant_drop_tightening,
+    clippy::too_many_lines,
+    clippy::used_underscore_binding,
+    dead_code,
+    reason = "Preserves existing module structure and intentional scaffolding"
+)]
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
@@ -27,6 +41,15 @@ use tokio::{
     time::timeout,
 };
 
+use crate::application::shared_views::{
+    socket_authority::{SocketLifetime, SocketViewAuthority, SocketViewClient},
+    socket_transfer::{PreparedSocketChunk, QueuedSocketChunk, SocketViewStream},
+};
+#[cfg(windows)]
+use crate::node::{
+    NativeSocketViewRead, NodeCatalogManagement, NodeManagementSessionServices, UploadOwner,
+    UploadRoutingError,
+};
 use crate::{
     access_policy::{
         AccessPolicyError, ApplicationPolicy, AuthenticatedActor as AuthenticatedClient,
@@ -42,6 +65,16 @@ use crate::{
     strict_json::{MAX_PROTOCOL_JSON_DEPTH, parse_object},
     trust::{TrustError, TrustStore},
 };
+
+mod connection_owner;
+use connection_owner::{ConnectionContext, ConnectionLease, ConnectionRegistry, ConnectionStop};
+
+#[cfg(test)]
+use connection_owner::{AcquireError, ConnectionObservation};
+
+pub(crate) mod input_upload;
+mod session_commands;
+pub mod session_protocol;
 
 pub(crate) const CONTROL_PATH: &str = "/api/access/v1/control";
 pub(crate) const CONTROL_PROTOCOL: &str = "acpr.access.v1";
@@ -101,8 +134,10 @@ impl ManagementService {
         if canonical != origin {
             return Err(JwsError::InvalidPayload);
         }
+        let socket_authority = SocketViewAuthority::new(application_policy.clone(), trust.clone());
         Ok(Self {
             state: Arc::new(ManagementState {
+                socket_authority,
                 application_policy,
                 identity,
                 origin: Arc::from(origin),
@@ -113,14 +148,90 @@ impl ManagementService {
                 node_public_key,
                 limiter: HandshakeLimiter::default(),
                 connections: ConnectionRegistry::new_shared(),
+                #[cfg(windows)]
+                session_services: std::sync::OnceLock::new(),
                 #[cfg(test)]
                 write_barrier: Mutex::new(None),
                 #[cfg(test)]
                 auth_resolve_barrier: Mutex::new(None),
                 #[cfg(test)]
+                socket_test_accept: Mutex::new(None),
+                #[cfg(test)]
                 test_hooks: ManagementTestHooks::default(),
             }),
         })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn install_session_services(
+        &self,
+        services: NodeManagementSessionServices,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        if !services.belongs_to(&self.state.socket_authority) {
+            return Err(crate::domain::shared_view::ViewError::InvalidScope);
+        }
+        self.state
+            .session_services
+            .set(services)
+            .map_err(|_| crate::domain::shared_view::ViewError::AlreadyAttached)
+    }
+    #[cfg(test)]
+    pub(crate) fn observe_next_socket_client_for_upload_test(
+        &self,
+    ) -> Result<
+        impl std::future::Future<
+            Output = Result<SocketViewClient, crate::domain::shared_view::ViewError>,
+        > + Send,
+        crate::domain::shared_view::ViewError,
+    > {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut slot = self
+            .state
+            .socket_test_accept
+            .lock()
+            .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+        if slot.is_some() {
+            return Err(crate::domain::shared_view::ViewError::AlreadyAttached);
+        }
+        *slot = Some(tx);
+        Ok(async move {
+            let (attachment, _) = rx
+                .await
+                .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+            Ok(attachment.client.context.client())
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn observe_next_document_socket_for_test(
+        &self,
+    ) -> Result<
+        impl std::future::Future<
+            Output = Result<DocumentSocketEndpoint, crate::domain::shared_view::ViewError>,
+        > + Send,
+        crate::domain::shared_view::ViewError,
+    > {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut slot = self
+            .state
+            .socket_test_accept
+            .lock()
+            .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+        if slot.is_some() {
+            return Err(crate::domain::shared_view::ViewError::AlreadyAttached);
+        }
+        *slot = Some(tx);
+        Ok(async move {
+            let (attachment, outbound) = rx
+                .await
+                .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+            Ok(DocumentSocketEndpoint {
+                attachment,
+                outbound,
+            })
+        })
+    }
+    pub(crate) fn socket_authority(&self) -> Arc<SocketViewAuthority> {
+        self.state.socket_authority.clone()
     }
 
     pub(crate) fn router(&self) -> Router {
@@ -177,10 +288,19 @@ impl ManagementService {
         let barrier = Arc::new(crate::test_support::AsyncBarrier::default());
         let slot = match boundary {
             ManagementBoundary::Admission => &self.state.test_hooks.admission,
+            ManagementBoundary::UpgradeRegistered => &self.state.test_hooks.upgrade_registered,
+            ManagementBoundary::RejectedClose => &self.state.test_hooks.rejected_close,
             ManagementBoundary::Enqueue => &self.state.test_hooks.enqueue,
             ManagementBoundary::WriteLocked => &self.state.test_hooks.write_locked,
             ManagementBoundary::SubscriptionRevision => {
                 &self.state.test_hooks.subscription_revision
+            }
+            ManagementBoundary::BeforeInputDispatch => &self.state.test_hooks.before_input_dispatch,
+            ManagementBoundary::BeforeViewControlDispatch => {
+                &self.state.test_hooks.before_view_control_dispatch
+            }
+            ManagementBoundary::InputAcceptedBeforeAck => {
+                &self.state.test_hooks.input_accepted_before_ack
             }
         };
         let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
@@ -225,24 +345,115 @@ impl ManagementService {
             hooks.last_close_code.load(Ordering::SeqCst),
         )
     }
+    #[cfg(test)]
+    pub(crate) fn connection_counts_for_test(&self) -> (usize, usize, usize, usize) {
+        let snapshot = self.state.connections.snapshot_for_test();
+        (
+            snapshot.total,
+            snapshot.slots,
+            snapshot.protocol_handles,
+            snapshot.writer_handles,
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn writer_close_count_for_test(&self) -> usize {
+        self.state
+            .test_hooks
+            .writer_closes
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(test)]
+    pub(crate) fn pause_next_upload_command(
+        &self,
+        action: UploadCommandAction,
+        boundary: UploadCommandBoundary,
+    ) -> crate::test_support::SharedAsyncBarrier {
+        let barrier = Arc::new(crate::test_support::AsyncBarrier::default());
+        let mut slot = self
+            .state
+            .test_hooks
+            .upload_command
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            slot.is_none(),
+            "only one upload command barrier can be installed"
+        );
+        *slot = Some((action, boundary, Arc::clone(&barrier)));
+        barrier
+    }
+    #[cfg(test)]
+    pub(crate) fn pause_next_input_dispatch(&self) -> crate::test_support::SharedAsyncBarrier {
+        self.pause_next_boundary(ManagementBoundary::BeforeInputDispatch)
+    }
+    #[cfg(test)]
+    pub(crate) fn pause_next_view_control_dispatch(
+        &self,
+    ) -> crate::test_support::SharedAsyncBarrier {
+        self.pause_next_boundary(ManagementBoundary::BeforeViewControlDispatch)
+    }
+    #[cfg(test)]
+    pub(crate) fn pause_next_input_accepted_before_ack(
+        &self,
+    ) -> crate::test_support::SharedAsyncBarrier {
+        self.pause_next_boundary(ManagementBoundary::InputAcceptedBeforeAck)
+    }
+}
+
+impl Drop for ManagementService {
+    fn drop(&mut self) {
+        self.begin_shutdown();
+    }
 }
 
 #[cfg(test)]
 #[derive(Clone, Copy)]
 pub(crate) enum ManagementBoundary {
     Admission,
+    UpgradeRegistered,
+    RejectedClose,
     Enqueue,
     SubscriptionRevision,
     WriteLocked,
+    BeforeInputDispatch,
+    BeforeViewControlDispatch,
+    InputAcceptedBeforeAck,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum UploadCommandAction {
+    Begin,
+    Finish,
+    Status,
+    Release,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UploadCommandBoundary {
+    BeforeCall,
+    AfterCall,
 }
 
 #[cfg(test)]
 #[derive(Default)]
 struct ManagementTestHooks {
+    protocol_failure: std::sync::atomic::AtomicBool,
+    upgrade_registered: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
+    rejected_close: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     admission: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     enqueue: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     subscription_revision: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     write_locked: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
+    before_input_dispatch: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
+    before_view_control_dispatch: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
+    input_accepted_before_ack: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
+    upload_command: Mutex<
+        Option<(
+            UploadCommandAction,
+            UploadCommandBoundary,
+            crate::test_support::SharedAsyncBarrier,
+        )>,
+    >,
     protected_writes: std::sync::atomic::AtomicUsize,
     admitted: std::sync::atomic::AtomicUsize,
     enqueued: std::sync::atomic::AtomicUsize,
@@ -251,6 +462,8 @@ struct ManagementTestHooks {
     overflow_frames: std::sync::atomic::AtomicUsize,
     rejected_bytes: std::sync::atomic::AtomicUsize,
     last_close_code: std::sync::atomic::AtomicUsize,
+    writer_closes: std::sync::atomic::AtomicUsize,
+    writer_settlement: Mutex<Option<WriterSettlement>>,
 }
 
 #[cfg(test)]
@@ -260,8 +473,34 @@ async fn pause_boundary(slot: &Mutex<Option<crate::test_support::SharedAsyncBarr
         barrier.pause().await;
     }
 }
+#[cfg(test)]
+async fn pause_upload_command(
+    state: &ManagementState,
+    action: UploadCommandAction,
+    boundary: UploadCommandBoundary,
+) {
+    let barrier = {
+        let mut slot = state
+            .test_hooks
+            .upload_command
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot
+            .as_ref()
+            .is_some_and(|(armed, current, _)| *armed == action && *current == boundary)
+        {
+            slot.take().map(|(_, _, barrier)| barrier)
+        } else {
+            None
+        }
+    };
+    if let Some(barrier) = barrier {
+        barrier.pause().await;
+    }
+}
 
 struct ManagementState {
+    socket_authority: Arc<SocketViewAuthority>,
     application_policy: Arc<ApplicationPolicy>,
     identity: Arc<NodeIdentity>,
     origin: Arc<str>,
@@ -272,10 +511,14 @@ struct ManagementState {
     node_public_key: PublicKeySec1,
     limiter: HandshakeLimiter,
     connections: Arc<ConnectionRegistry>,
+    #[cfg(windows)]
+    session_services: std::sync::OnceLock<NodeManagementSessionServices>,
     #[cfg(test)]
     write_barrier: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     #[cfg(test)]
     auth_resolve_barrier: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
+    #[cfg(test)]
+    socket_test_accept: Mutex<Option<tokio::sync::oneshot::Sender<SocketTestAccepted>>>,
     #[cfg(test)]
     test_hooks: ManagementTestHooks,
 }
@@ -380,150 +623,6 @@ impl HandshakeLimiter {
     }
 }
 
-#[derive(Default)]
-struct RegistryState {
-    total: usize,
-    unauthenticated: usize,
-    authenticated: HashMap<Id128, usize>,
-    closing: bool,
-}
-
-struct ConnectionRegistry {
-    state: Mutex<RegistryState>,
-    changed: Notify,
-    shutdown: watch::Sender<bool>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AcquireError {
-    Closing,
-    Limit,
-}
-
-struct ConnectionLease {
-    registry: Arc<ConnectionRegistry>,
-    authenticated: Option<Id128>,
-}
-
-impl ConnectionRegistry {
-    fn new() -> Self {
-        let (shutdown, _) = watch::channel(false);
-        Self {
-            state: Mutex::new(RegistryState::default()),
-            changed: Notify::new(),
-            shutdown,
-        }
-    }
-
-    fn new_shared() -> Arc<Self> {
-        Arc::new(Self::new())
-    }
-
-    fn acquire(self: &Arc<Self>) -> Result<ConnectionLease, AcquireError> {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.closing {
-            return Err(AcquireError::Closing);
-        }
-        if state.total >= MAX_MANAGEMENT_CONNECTIONS
-            || state.unauthenticated >= MAX_UNAUTHENTICATED_CONNECTIONS
-        {
-            return Err(AcquireError::Limit);
-        }
-        state.total += 1;
-        state.unauthenticated += 1;
-        drop(state);
-        Ok(ConnectionLease {
-            registry: Arc::clone(self),
-            authenticated: None,
-        })
-    }
-
-    fn begin_shutdown(&self) {
-        let changed = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            if state.closing {
-                false
-            } else {
-                state.closing = true;
-                true
-            }
-        };
-        if changed {
-            self.shutdown.send_replace(true);
-            self.changed.notify_waiters();
-        }
-    }
-
-    async fn wait_empty(&self) {
-        loop {
-            let notified = self.changed.notified();
-            if self
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .total
-                == 0
-            {
-                return;
-            }
-            notified.await;
-        }
-    }
-
-    fn shutdown_receiver(&self) -> watch::Receiver<bool> {
-        self.shutdown.subscribe()
-    }
-}
-
-impl ConnectionLease {
-    fn authenticate(&mut self, client_id: Id128) -> bool {
-        let mut state = self
-            .registry
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if state.closing {
-            return false;
-        }
-        let count = state.authenticated.get(&client_id).copied().unwrap_or(0);
-        if count >= MAX_CONNECTIONS_PER_CLIENT {
-            return false;
-        }
-        state.unauthenticated = state.unauthenticated.saturating_sub(1);
-        *state.authenticated.entry(client_id).or_default() += 1;
-        drop(state);
-        self.authenticated = Some(client_id);
-        true
-    }
-}
-
-impl Drop for ConnectionLease {
-    fn drop(&mut self) {
-        let empty = {
-            let mut state = self
-                .registry
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            state.total = state.total.saturating_sub(1);
-            if let Some(client_id) = self.authenticated {
-                if let Some(count) = state.authenticated.get_mut(&client_id) {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
-                        state.authenticated.remove(&client_id);
-                    }
-                }
-            } else {
-                state.unauthenticated = state.unauthenticated.saturating_sub(1);
-            }
-            state.total == 0
-        };
-        if empty {
-            self.registry.changed.notify_one();
-        }
-    }
-}
-
 async fn upgrade(
     State(state): State<Arc<ManagementState>>,
     peer: Option<Extension<PeerAddress>>,
@@ -543,25 +642,15 @@ async fn upgrade(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
-    let connections = Arc::clone(&state.connections);
-    let mut shutdown = connections.shutdown_receiver();
+    let Ok(ticket) = state.connections.prepare_upgrade() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    #[cfg(test)]
+    pause_boundary(&state.test_hooks.upgrade_registered).await;
     ws.protocols([CONTROL_PROTOCOL])
         .max_message_size(MAX_MANAGEMENT_FRAME_BYTES + 1)
         .max_frame_size(MAX_MANAGEMENT_FRAME_BYTES + 1)
-        .on_upgrade(move |socket| async move {
-            let lease = match connections.acquire() {
-                Ok(lease) => lease,
-                Err(AcquireError::Closing) => {
-                    close_immediately(socket, close(CLOSE_GOING_AWAY, "node stopping")).await;
-                    return;
-                }
-                Err(AcquireError::Limit) => {
-                    close_immediately(socket, close(CLOSE_RATE_LIMITED, "limit exceeded")).await;
-                    return;
-                }
-            };
-            serve_connection(socket, state, lease, &mut shutdown).await;
-        })
+        .on_upgrade(move |socket| ticket.adopt_socket(socket, state))
         .into_response()
 }
 
@@ -596,60 +685,132 @@ async fn close_immediately(mut socket: WebSocket, close: CloseFrame) {
     .await;
 }
 
-async fn serve_connection(
+#[allow(
+    clippy::significant_drop_tightening,
+    reason = "Lifetime guards must stay owned through the original protocol, unique writer and actual writer join"
+)]
+#[cfg(test)]
+fn serve_connection(
+    socket: WebSocket,
+    state: Arc<ManagementState>,
+    lease: ConnectionLease,
+    shutdown: &mut watch::Receiver<bool>,
+) -> ConnectionObservation {
+    state
+        .connections
+        .clone()
+        .adopt_existing(socket, state, lease, shutdown.clone())
+}
+
+async fn run_owned_connection(
     socket: WebSocket,
     state: Arc<ManagementState>,
     mut lease: ConnectionLease,
-    shutdown: &mut watch::Receiver<bool>,
+    shutdown: &mut ConnectionStop,
+    context: ConnectionContext,
 ) {
-    let (sink, mut reader) = socket.split();
+    let (sink, stream) = socket.split();
+    let mut reader = ProtocolReader {
+        stream,
+        peer_close_received: false,
+    };
     let (outbound, outbound_rx) = Outbound::new();
+    let _lifetime_owner = SocketLifetimeOwner(outbound.lifetime.clone());
     let (close_signal, close_rx) = watch::channel(None);
     let (write_authority, write_authority_rx) = watch::channel(None);
-    let mut writer = tokio::spawn(write_loop(sink, outbound_rx, close_rx, write_authority_rx));
-    let result = run_protocol(
-        &mut reader,
-        &state,
-        &mut lease,
-        &outbound,
-        shutdown,
-        &write_authority,
-    )
-    .await;
+    let writer_lifetime = outbound.lifetime.clone();
+    let writer_capacity = outbound.capacity_freed.clone();
+    // Keep the queue alive until the owner supplies Close, including protocol unwind.
+    // Otherwise recv(None) can end the writer before the supervisor observes that unwind.
+    let writer_queue_guard = outbound.sender.clone();
+    let Ok(writer) = context.start_writer(
+        async move {
+            let _writer_lifetime_owner = SocketLifetimeOwner(writer_lifetime);
+            let result = write_loop(
+                sink,
+                outbound_rx,
+                close_rx,
+                write_authority_rx,
+                writer_capacity,
+            )
+            .await;
+            drop(writer_queue_guard);
+            result
+        },
+        close_signal,
+        outbound.lifetime.clone(),
+    ) else {
+        return;
+    };
+    #[cfg(test)]
+    assert!(
+        !state
+            .test_hooks
+            .protocol_failure
+            .swap(false, std::sync::atomic::Ordering::SeqCst),
+        "injected failure in the original protocol task"
+    );
+    let result = {
+        let mut attempt = SocketAuthAttempt {
+            reader: &mut reader,
+            lease: &mut lease,
+            outbound: &outbound,
+        };
+        run_protocol(&mut attempt, &state, shutdown, &write_authority).await
+    };
     #[cfg(test)]
     state.test_hooks.last_close_code.store(
         usize::from(result.code),
         std::sync::atomic::Ordering::SeqCst,
     );
-    close_signal.send_replace(Some(result));
-    if timeout(WRITER_CLOSE_TIMEOUT, &mut writer).await.is_err() {
-        writer.abort();
-        let _ = writer.await;
+    outbound.lifetime.seal();
+    let directive = if reader.peer_close_received {
+        CloseDirective::ReplyToPeer
+    } else {
+        CloseDirective::Initiate(result)
+    };
+    context.close_writer(directive);
+    #[cfg(test)]
+    state
+        .test_hooks
+        .writer_closes
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let settlement = writer.wait().await;
+    if settlement != WriterSettlement::Joined(Ok(())) {
+        tracing::warn!(
+            ?settlement,
+            "management socket writer did not close cleanly"
+        );
     }
+    #[cfg(test)]
+    state
+        .test_hooks
+        .writer_settlement
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .replace(settlement);
     drop(outbound);
 }
 
 #[allow(clippy::too_many_lines)]
 async fn run_protocol(
-    reader: &mut SplitStream<WebSocket>,
+    attempt: &mut SocketAuthAttempt<'_>,
     state: &Arc<ManagementState>,
-    lease: &mut ConnectionLease,
-    outbound: &Outbound,
-    shutdown: &mut watch::Receiver<bool>,
+    shutdown: &mut ConnectionStop,
     write_authority: &watch::Sender<Option<WriteAuthority>>,
 ) -> CloseFrame {
-    if *shutdown.borrow() {
+    let SocketAuthAttempt {
+        reader,
+        lease,
+        outbound,
+    } = attempt;
+    if shutdown.stopped() {
         return close(CLOSE_GOING_AWAY, "node stopping");
     }
 
     let hello = tokio::select! {
         biased;
-        changed = shutdown.changed() => {
-            if changed.is_err() || *shutdown.borrow() {
-                return close(CLOSE_GOING_AWAY, "node stopping");
-            }
-            return close(CLOSE_INTERNAL, "internal error");
-        }
+        () = shutdown.wait() => return close(CLOSE_GOING_AWAY, "node stopping"),
         received = tokio::time::timeout(HELLO_TIMEOUT, receive_frame(reader)) => {
             match received {
                 Ok(Ok(ClientFrame::Hello(hello))) => hello,
@@ -697,12 +858,7 @@ async fn run_protocol(
 
     let proof = tokio::select! {
         biased;
-        changed = shutdown.changed() => {
-            if changed.is_err() || *shutdown.borrow() {
-                return close(CLOSE_GOING_AWAY, "node stopping");
-            }
-            return close(CLOSE_INTERNAL, "internal error");
-        }
+        () = shutdown.wait() => return close(CLOSE_GOING_AWAY, "node stopping"),
         received = tokio::time::timeout(PROOF_TIMEOUT, receive_frame(reader)) => {
             match received {
                 Ok(Ok(ClientFrame::Proof(proof))) => proof.proof,
@@ -751,7 +907,57 @@ async fn run_protocol(
     if !lease.authenticate(client_id) {
         return close(CLOSE_RATE_LIMITED, "limit exceeded");
     }
+    let receipt = AuthenticatedSocketReceipt {
+        policy: state.application_policy.clone(),
+        actor: authenticated.clone(),
+        connection_id,
+        lifetime: outbound.lifetime.clone(),
+    };
+    let Ok(client) = state.socket_authority.accept(receipt) else {
+        return close(CLOSE_INTERNAL, "socket unavailable");
+    };
+    #[cfg(windows)]
+    let (upload, catalog_management) = match state.session_services.get() {
+        None => (None, None),
+        Some(services) => {
+            let upload = match services.open_upload(&client) {
+                Ok(owner) => owner,
+                Err(crate::management_ws::input_upload::UploadError::NodeStopping) => {
+                    return close(CLOSE_GOING_AWAY, "node stopping");
+                }
+                Err(_) => return close(CLOSE_INTERNAL, "upload unavailable"),
+            };
+            (Some(upload), Some(services.catalog_management()))
+        }
+    };
+    let attachment = Arc::new(SocketAttachment {
+        client,
+        #[cfg(windows)]
+        upload,
+        #[cfg(windows)]
+        catalog_management,
+        streams: Mutex::new(HashMap::new()),
+        #[cfg(windows)]
+        document_pumps: Mutex::new(HashMap::new()),
+        #[cfg(windows)]
+        view_pumps: Mutex::new(HashMap::new()),
+        #[cfg(windows)]
+        view_close_receipts: Mutex::new(HashMap::new()),
+    });
+    #[cfg(test)]
+    {
+        let sender = state
+            .socket_test_accept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(sender) = sender {
+            let _ = sender.send((attachment.clone(), (*outbound).clone()));
+        }
+    }
+
     write_authority.send_replace(Some(WriteAuthority {
+        attachment: attachment.clone(),
         state: Arc::clone(state),
         authenticated: authenticated.clone(),
     }));
@@ -771,95 +977,290 @@ async fn run_protocol(
         return error;
     }
 
-    run_authenticated(reader, state, authenticated, outbound, shutdown, revisions).await
+    run_authenticated(
+        reader,
+        state,
+        authenticated,
+        outbound,
+        shutdown,
+        revisions,
+        attachment,
+    )
+    .await
 }
 
 async fn run_authenticated(
-    reader: &mut SplitStream<WebSocket>,
+    reader: &mut ProtocolReader,
     state: &Arc<ManagementState>,
     authenticated: AuthenticatedClient,
     outbound: &Outbound,
-    shutdown: &mut watch::Receiver<bool>,
+    shutdown: &mut ConnectionStop,
+    revisions: watch::Receiver<u64>,
+    attachment: Arc<SocketAttachment>,
+) -> CloseFrame {
+    let close_frame = run_authenticated_loop(
+        reader,
+        state,
+        authenticated,
+        outbound,
+        shutdown,
+        revisions,
+        &attachment,
+    )
+    .await;
+    #[cfg(windows)]
+    attachment.drain().await;
+    close_frame
+}
+
+async fn run_authenticated_loop(
+    reader: &mut ProtocolReader,
+    state: &Arc<ManagementState>,
+    authenticated: AuthenticatedClient,
+    outbound: &Outbound,
+    shutdown: &mut ConnectionStop,
     mut revisions: watch::Receiver<u64>,
+    attachment: &Arc<SocketAttachment>,
 ) -> CloseFrame {
     let mut subscribed = false;
     let mut last_sent_revision = None;
     let mut command_window = CommandWindow::new();
+    let mut pending_reads = session_commands::PendingReads::new();
 
-    loop {
+    let close_frame = loop {
         tokio::select! {
             biased;
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return close(CLOSE_GOING_AWAY, "node stopping");
+            () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+            completion = pending_reads.next(), if !pending_reads.is_empty() => {
+                match completion {
+                    Some(CommandOutcome::Result(result)) => {
+                        let enqueued = tokio::select! {
+                            biased;
+                            () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                            result = enqueue_authenticated(state, &authenticated, outbound, &result) => result,
+                        };
+                        if let Err(error) = enqueued {
+                            break error;
+                        }
+                    }
+                    Some(CommandOutcome::Close(error)) => break error,
+                    None => {}
                 }
             }
             changed = revisions.changed() => {
                 if changed.is_err() {
-                    return close(CLOSE_INTERNAL, "storage unavailable");
+                    break close(CLOSE_INTERNAL, "storage unavailable");
                 }
                 let revision = *revisions.borrow_and_update();
-                let _gate = match lock_current_actor(state, &authenticated).await {
-                    Ok(gate) => gate,
-                    Err(error) => return error,
-                };
-                if subscribed && last_sent_revision != Some(revision) {
-                    if outbound.send_json(&DevicesChangedMessage {
-                        v: 1,
-                        kind: "devices.changed",
-                        revision,
-                    }).is_err() {
-                        return close(CLOSE_RATE_LIMITED, "limit exceeded");
+                match tokio::select! {
+                    biased;
+                    () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                    result = lock_current_actor(state, &authenticated) => result,
+                } {
+                    Ok(_gate) => {
+                        if subscribed && last_sent_revision != Some(revision) {
+                            if outbound.send_json(&DevicesChangedMessage {
+                                v: 1,
+                                kind: "devices.changed",
+                                revision,
+                            }).is_err() {
+                                break close(CLOSE_RATE_LIMITED, "limit exceeded");
+                            }
+                            drop(_gate);
+                            last_sent_revision = Some(revision);
+                        }
                     }
-                    last_sent_revision = Some(revision);
+                    Err(error) => break error,
                 }
             }
             received = receive_frame(reader) => {
                 let frame = match received {
                     Ok(frame) => frame,
-                    Err(close) => return close,
+                    Err(close) => break close,
                 };
                 #[cfg(test)]
                 if state.test_hooks.fresh_command_window.load(std::sync::atomic::Ordering::SeqCst) {
                     command_window = CommandWindow::new();
                 }
+                if let ClientFrame::Shared(bytes)=frame {
+                    #[cfg(windows)]
+                    if bytes.starts_with(b"ACPI") {
+                        #[cfg(test)]
+                        {
+                            let barrier = {
+                                let slot = &state.test_hooks.before_input_dispatch;
+                                slot.lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .take()
+                            };
+                            if let Some(barrier) = barrier {
+                                tokio::select! {
+                                    biased;
+                                    () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                                    () = barrier.pause() => {}
+                                }
+                            }
+                        }
+                        if shutdown.stopped() {
+                            break close(CLOSE_GOING_AWAY, "node stopping");
+                        }
+                        let Some(owner) = attachment.upload.as_ref() else {
+                            break close(CLOSE_FORMAT, "upload unavailable");
+                        };
+                        let data = match input_upload::InputData::decode_client(&bytes) {
+                            Ok(data) => data,
+                            Err(_) => break close(CLOSE_FORMAT, "invalid input data"),
+                        };
+                        let accepted = tokio::select! {
+                            biased;
+                            () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                            accepted = owner.accept_data_routed_typed(&attachment.client, data) => accepted,
+                        };
+                        let ack = match accepted {
+                            Ok(ack) => ack,
+                            Err(error) => break upload_routing_close(error),
+                        };
+                        #[cfg(test)]
+                        {
+                            let barrier = {
+                                let slot = &state.test_hooks.input_accepted_before_ack;
+                                slot.lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .take()
+                            };
+                            if let Some(barrier) = barrier {
+                                tokio::select! {
+                                    biased;
+                                    () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                                    () = barrier.pause() => {}
+                                }
+                            }
+                        }
+                        if shutdown.stopped() {
+                            break close(CLOSE_GOING_AWAY, "node stopping");
+                        }
+                        if outbound.send_binary(ack.encode()).is_err() {
+                            break close(CLOSE_RATE_LIMITED, "limit exceeded");
+                        }
+                        continue;
+                    }
+                    #[cfg(test)]
+                    {
+                        let barrier = {
+                            let slot = &state.test_hooks.before_view_control_dispatch;
+                            slot.lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .take()
+                        };
+                        if let Some(barrier) = barrier {
+                            tokio::select! {
+                                biased;
+                                () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                                () = barrier.pause() => {}
+                            }
+                        }
+                    }
+                    let control_result = tokio::select! {
+                        biased;
+                        () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                        result = async {
+                            if let Err(error) = attachment.control(&bytes, outbound).await {
+                                return Err(binary_control_failure(state, &authenticated, error).await);
+                            }
+                            Ok(())
+                        } => result,
+                    };
+                    if let Err(error) = control_result {
+                        break error;
+                    }
+                    continue;
+                }
                 if !command_window.accept() {
-                    return close(CLOSE_RATE_LIMITED, "limit exceeded");
+                    break close(CLOSE_RATE_LIMITED, "limit exceeded");
                 }
                 match frame {
                     ClientFrame::Command(command) => {
+                        if !matches!(command.action.as_str(), "node.info" | "device.list" | "device.revoke") {
+                            if let Some(outcome) = session_commands::start(state, &authenticated, attachment, outbound, &command, &mut pending_reads) {
+                                match outcome {
+                                    CommandOutcome::Result(result) => {
+                                        let enqueued = tokio::select! {
+                                            biased;
+                                            () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                                            result = enqueue_authenticated(state, &authenticated, outbound, &result) => result,
+                                        };
+                                        if let Err(error) = enqueued {
+                                            break error;
+                                        }
+                                    }
+                                    CommandOutcome::Close(error) => break error,
+                                }
+                            }
+                            continue;
+                        }
                         match execute_command(
                             state,
                             &authenticated,
                             command.request_id,
                             &command.action,
                             command.payload,
-                        ).await {
+                        )
+                        .await
+                        {
                             CommandOutcome::Result(result) => {
-                                if let Err(error) = enqueue_authenticated(state, &authenticated, outbound, &result).await {
-                                    return error;
+                                if let Err(error) =
+                                    enqueue_authenticated(state, &authenticated, outbound, &result)
+                                        .await
+                                {
+                                    break error;
                                 }
                             }
-                            CommandOutcome::Close(close) => return close,
+                            CommandOutcome::Close(close) => break close,
                         }
                     }
                     ClientFrame::Subscribe(subscribe) => {
-                        match subscribe_devices(state, &authenticated, outbound, subscribe).await {
+                        let subscribed_res = tokio::select! {
+                            biased;
+                            () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                            result = subscribe_devices(state, &authenticated, outbound, subscribe) => result,
+                        };
+                        match subscribed_res {
                             Ok(Some(revision)) => {
                                 subscribed = true;
                                 last_sent_revision = Some(revision);
                             }
                             Ok(None) => {}
-                            Err(error) => return error,
+                            Err(error) => break error,
                         }
                     }
-                    ClientFrame::Hello(_) | ClientFrame::Proof(_) => {
-                        return close(CLOSE_FORMAT, "invalid frame");
+                    ClientFrame::Shared(_) | ClientFrame::Hello(_) | ClientFrame::Proof(_) => {
+                        break close(CLOSE_FORMAT, "invalid frame");
                     }
                 }
             }
         }
+    };
+    pending_reads.shutdown().await;
+    close_frame
+}
+
+async fn binary_control_failure(
+    state: &ManagementState,
+    authenticated: &AuthenticatedClient,
+    error: crate::domain::shared_view::ViewError,
+) -> CloseFrame {
+    if matches!(
+        error,
+        crate::domain::shared_view::ViewError::Unauthenticated
+            | crate::domain::shared_view::ViewError::Revoked
+    ) {
+        return match still_valid(state, authenticated).await {
+            Ok(false) => close(CLOSE_REVOKED, "revoked"),
+            Ok(true) => close(CLOSE_AUTHENTICATION, "authentication failed"),
+            Err(()) => close(CLOSE_INTERNAL, "storage unavailable"),
+        };
     }
+    close(CLOSE_FORMAT, "invalid view control")
 }
 
 async fn subscribe_devices(
@@ -1205,6 +1606,7 @@ fn management_error(request_id: Id128, code: &'static str) -> Value {
 
 #[derive(Debug)]
 enum ClientFrame {
+    Shared(bytes::Bytes),
     Hello(HelloFrame),
     Proof(ProofFrame),
     Command(CommandFrame),
@@ -1256,9 +1658,10 @@ struct SubscribeFrame {
     resource: String,
 }
 
-async fn receive_frame(reader: &mut SplitStream<WebSocket>) -> Result<ClientFrame, CloseFrame> {
+async fn receive_frame(reader: &mut ProtocolReader) -> Result<ClientFrame, CloseFrame> {
     loop {
         let message = reader
+            .stream
             .next()
             .await
             .ok_or_else(|| close(CLOSE_GOING_AWAY, "peer closed"))?
@@ -1270,9 +1673,17 @@ async fn receive_frame(reader: &mut SplitStream<WebSocket>) -> Result<ClientFram
                 }
                 return parse_frame(text.as_str());
             }
-            Message::Binary(_) => return Err(close(CLOSE_FORMAT, "invalid frame")),
+            Message::Binary(bytes) => {
+                if bytes.len() > MAX_MANAGEMENT_FRAME_BYTES {
+                    return Err(close(CLOSE_RATE_LIMITED, "limit exceeded"));
+                }
+                return Ok(ClientFrame::Shared(bytes));
+            }
             Message::Ping(_) | Message::Pong(_) => {}
-            Message::Close(_) => return Err(close(1000, "normal closure")),
+            Message::Close(_) => {
+                reader.peer_close_received = true;
+                return Err(close(1000, "normal closure"));
+            }
         }
     }
 }
@@ -1381,29 +1792,102 @@ impl CommandWindow {
     }
 }
 
+#[derive(Clone)]
 struct Outbound {
+    lifetime: Arc<SocketLifetime>,
     sender: mpsc::Sender<QueuedFrame>,
     bytes: Arc<Semaphore>,
+    capacity_freed: Arc<Notify>,
 }
 
 #[derive(Clone)]
 struct WriteAuthority {
+    attachment: Arc<SocketAttachment>,
     state: Arc<ManagementState>,
     authenticated: AuthenticatedClient,
 }
 
+enum QueuedMessage {
+    Text(String),
+    Binary(Vec<u8>),
+    Shared(QueuedSocketChunk),
+}
+enum SocketEnqueueError {
+    Rejected(PreparedSocketChunk),
+    StateLost,
+}
+#[cfg(windows)]
+enum BinarySendError {
+    Full,
+    Closed,
+}
 struct QueuedFrame {
-    json: String,
+    message: QueuedMessage,
     _permit: OwnedSemaphorePermit,
 }
 
 impl Outbound {
+    fn send_shared(
+        &self,
+        chunk: PreparedSocketChunk,
+        client: &SocketViewClient,
+    ) -> Result<(), SocketEnqueueError> {
+        if !chunk.belongs_to(client) || !Arc::ptr_eq(&self.lifetime, &client.context.lifetime) {
+            return Err(SocketEnqueueError::Rejected(chunk));
+        }
+        let Ok(bytes) = u32::try_from(chunk.byte_len()) else {
+            return Err(SocketEnqueueError::Rejected(chunk));
+        };
+        let Ok(permit) = self.bytes.clone().try_acquire_many_owned(bytes) else {
+            return Err(SocketEnqueueError::Rejected(chunk));
+        };
+        let chunk = chunk.queue().map_err(SocketEnqueueError::Rejected)?;
+        match self.sender.try_send(QueuedFrame {
+            message: QueuedMessage::Shared(chunk),
+            _permit: permit,
+        }) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(frame)) => match frame.message {
+                QueuedMessage::Shared(chunk) => Err(SocketEnqueueError::Rejected(chunk.rejected())),
+                QueuedMessage::Text(_) | QueuedMessage::Binary(_) => {
+                    Err(SocketEnqueueError::StateLost)
+                }
+            },
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(SocketEnqueueError::StateLost),
+        }
+    }
+    fn send_document(
+        &self,
+        transfer: &crate::application::document_transfer::DocumentTransfer,
+        client: &SocketViewClient,
+    ) -> Result<
+        crate::application::document_transfer::DocumentEnqueue,
+        crate::application::document_source::DocumentError,
+    > {
+        use crate::application::document_transfer::{
+            DocumentEnqueueFailure, PreparedDocumentChunk,
+        };
+        transfer.enqueue_with(client, |chunk| {
+            match self.send_shared(chunk.into_socket(), client) {
+                Ok(()) => Ok(()),
+                Err(SocketEnqueueError::Rejected(chunk)) => {
+                    match PreparedDocumentChunk::rejected(chunk) {
+                        Ok(chunk) => Err(DocumentEnqueueFailure::Rejected(chunk)),
+                        Err(_) => Err(DocumentEnqueueFailure::StateLost),
+                    }
+                }
+                Err(SocketEnqueueError::StateLost) => Err(DocumentEnqueueFailure::StateLost),
+            }
+        })
+    }
     fn new() -> (Self, mpsc::Receiver<QueuedFrame>) {
         let (sender, receiver) = mpsc::channel(MAX_OUTBOUND_FRAMES);
         (
             Self {
+                lifetime: SocketLifetime::new(),
                 sender,
                 bytes: Arc::new(Semaphore::new(MAX_OUTBOUND_BYTES)),
+                capacity_freed: Arc::new(Notify::new()),
             },
             receiver,
         )
@@ -1420,19 +1904,103 @@ impl Outbound {
             .map_err(|_| ())?;
         self.sender
             .try_send(QueuedFrame {
-                json,
+                message: QueuedMessage::Text(json),
                 _permit: permit,
             })
             .map_err(|_| ())
+    }
+    fn send_binary(&self, bytes: [u8; input_upload::HEADER_BYTES]) -> Result<(), ()> {
+        let permit = Arc::clone(&self.bytes)
+            .try_acquire_many_owned(input_upload::HEADER_BYTES as u32)
+            .map_err(|_| ())?;
+        self.sender
+            .try_send(QueuedFrame {
+                message: QueuedMessage::Binary(bytes.to_vec()),
+                _permit: permit,
+            })
+            .map_err(|_| ())
+    }
+    #[cfg(windows)]
+    fn send_binary_frame(&self, bytes: Vec<u8>) -> Result<(), BinarySendError> {
+        let limit = crate::application::shared_views::wire::HEADER_BYTES
+            + crate::application::shared_views::wire::MAX_PAYLOAD_BYTES;
+        if bytes.len() > limit || self.sender.is_closed() {
+            return Err(BinarySendError::Closed);
+        }
+        let Ok(len) = u32::try_from(bytes.len()) else {
+            return Err(BinarySendError::Closed);
+        };
+        let Ok(permit) = Arc::clone(&self.bytes).try_acquire_many_owned(len) else {
+            return Err(BinarySendError::Full);
+        };
+        match self.sender.try_send(QueuedFrame {
+            message: QueuedMessage::Binary(bytes),
+            _permit: permit,
+        }) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(BinarySendError::Full),
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(BinarySendError::Closed),
+        }
+    }
+}
+
+struct ProtocolReader {
+    stream: SplitStream<WebSocket>,
+    peer_close_received: bool,
+}
+
+#[derive(Clone)]
+enum CloseDirective {
+    Initiate(CloseFrame),
+    ReplyToPeer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriterCloseError {
+    TimedOut,
+    Transport,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriterSettlement {
+    Joined(Result<(), WriterCloseError>),
+    Aborted,
+    TaskFailed,
+}
+
+async fn finish_writer_close(
+    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    directive: CloseDirective,
+) -> Result<(), WriterCloseError> {
+    timeout(WRITER_CLOSE_TIMEOUT, async {
+        match directive {
+            CloseDirective::Initiate(frame) => sink.send(Message::Close(Some(frame))).await,
+            // The locked transport queues its reply when the reader receives Close.
+            // Only the original writer drives that queued reply; another send is invalid.
+            CloseDirective::ReplyToPeer => sink.flush().await,
+        }
+    })
+    .await
+    .map_err(|_| WriterCloseError::TimedOut)?
+    .map_err(|_| WriterCloseError::Transport)
+}
+
+struct NotifyCapacityOnDrop(Arc<Notify>);
+impl Drop for NotifyCapacityOnDrop {
+    fn drop(&mut self) {
+        self.0.notify_waiters();
     }
 }
 
 async fn write_loop(
     mut sink: futures_util::stream::SplitSink<WebSocket, Message>,
     mut outbound: mpsc::Receiver<QueuedFrame>,
-    mut close_rx: watch::Receiver<Option<CloseFrame>>,
+    mut close_rx: watch::Receiver<Option<CloseDirective>>,
     authority: watch::Receiver<Option<WriteAuthority>>,
-) {
+    capacity_freed: Arc<Notify>,
+) -> Result<(), WriterCloseError> {
+    let _notify_on_exit = NotifyCapacityOnDrop(Arc::clone(&capacity_freed));
     loop {
         tokio::select! {
             biased;
@@ -1443,20 +2011,20 @@ async fn write_loop(
                     None
                 };
                 if let Some(frame) = frame {
-                    let _ = timeout(
-                        WRITER_CLOSE_TIMEOUT,
-                        sink.send(Message::Close(Some(frame))),
-                    ).await;
-                    return;
+                    return finish_writer_close(&mut sink, frame).await;
                 }
                 if changed.is_err() {
-                    return;
+                    return Err(WriterCloseError::Stopped);
                 }
             }
             queued = outbound.recv() => {
                 let Some(queued) = queued else {
-                    return;
+                    return Err(WriterCloseError::Stopped);
                 };
+                let QueuedFrame {
+                    message,
+                    _permit: permit,
+                } = queued;
                 let write_authority = authority.borrow().clone();
                 #[cfg(test)]
                 if let Some(authority) = &write_authority {
@@ -1472,7 +2040,31 @@ async fn write_loop(
                         barrier.pause().await;
                     }
                 }
-                let _gate = if let Some(authority) = &write_authority {
+                let message = match message {
+                    QueuedMessage::Shared(chunk) => {
+                        let Some(authority) = &write_authority else {
+                            return Err(WriterCloseError::Stopped);
+                        };
+                        if !chunk.belongs_to(&authority.attachment.client) {
+                            return Err(WriterCloseError::Stopped);
+                        }
+                        match chunk.send(&mut sink, WRITER_SEND_TIMEOUT).await {
+                            Ok(()) => {}
+                            Err(
+                                crate::domain::shared_view::ViewError::StaleCursor
+                                | crate::domain::shared_view::ViewError::StreamSealed
+                                | crate::domain::shared_view::ViewError::SourceReleased,
+                            ) => {}
+                            Err(_) => return Err(WriterCloseError::Stopped),
+                        }
+                        drop(permit);
+                        capacity_freed.notify_waiters();
+                        continue;
+                    }
+                    QueuedMessage::Text(json) => Message::Text(Utf8Bytes::from(json)),
+                    QueuedMessage::Binary(bytes) => Message::Binary(bytes::Bytes::from(bytes)),
+                };
+                let gate = if let Some(authority) = &write_authority {
                     let gate = authority
                         .state
                         .trust
@@ -1481,21 +2073,10 @@ async fn write_loop(
                     match still_valid(&authority.state, &authority.authenticated).await {
                         Ok(true) => {}
                         Ok(false) => {
-                            let _ = timeout(
-                                WRITER_CLOSE_TIMEOUT,
-                                sink.send(Message::Close(Some(close(CLOSE_REVOKED, "revoked")))),
-                            ).await;
-                            return;
+                            return finish_writer_close(&mut sink, CloseDirective::Initiate(close(CLOSE_REVOKED, "revoked"))).await;
                         }
                         Err(()) => {
-                            let _ = timeout(
-                                WRITER_CLOSE_TIMEOUT,
-                                sink.send(Message::Close(Some(close(
-                                    CLOSE_INTERNAL,
-                                    "storage unavailable",
-                                )))),
-                            ).await;
-                            return;
+                            return finish_writer_close(&mut sink, CloseDirective::Initiate(close(CLOSE_INTERNAL, "storage unavailable"))).await;
                         }
                     }
                     Some(gate)
@@ -1506,7 +2087,6 @@ async fn write_loop(
                 if let Some(authority) = &write_authority {
                     pause_boundary(&authority.state.test_hooks.write_locked).await;
                 }
-                let message = Message::Text(Utf8Bytes::from(queued.json));
                 match timeout(WRITER_SEND_TIMEOUT, sink.send(message)).await {
                     Ok(Ok(())) => {
                         #[cfg(test)]
@@ -1514,8 +2094,11 @@ async fn write_loop(
                             authority.state.test_hooks.protected_writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         }
                     }
-                    Ok(Err(_)) | Err(_) => return,
+                    Ok(Err(_)) | Err(_) => return Err(WriterCloseError::Transport),
                 }
+                drop(gate);
+                drop(permit);
+                capacity_freed.notify_waiters();
             }
         }
     }
@@ -1525,6 +2108,14 @@ const fn close(code: u16, reason: &'static str) -> CloseFrame {
     CloseFrame {
         code,
         reason: Utf8Bytes::from_static(reason),
+    }
+}
+#[cfg(windows)]
+const fn upload_routing_close(error: UploadRoutingError) -> CloseFrame {
+    match error {
+        UploadRoutingError::Business(_) => close(CLOSE_FORMAT, "invalid input data"),
+        UploadRoutingError::Revoked => close(CLOSE_REVOKED, "revoked"),
+        UploadRoutingError::StorageUnavailable => close(CLOSE_INTERNAL, "storage unavailable"),
     }
 }
 
@@ -1788,3 +2379,1009 @@ mod tests {
         }
     }
 }
+
+// Only this module can construct the receipt after the original proof/current/lease sequence.
+pub(crate) struct AuthenticatedSocketReceipt {
+    policy: Arc<ApplicationPolicy>,
+    actor: AuthenticatedClient,
+    connection_id: Id128,
+    lifetime: Arc<SocketLifetime>,
+}
+impl AuthenticatedSocketReceipt {
+    pub(crate) const fn policy(&self) -> &Arc<ApplicationPolicy> {
+        &self.policy
+    }
+    pub(crate) const fn actor(&self) -> &AuthenticatedClient {
+        &self.actor
+    }
+    pub(crate) const fn connection_id(&self) -> Id128 {
+        self.connection_id
+    }
+    pub(crate) const fn lifetime(&self) -> &Arc<SocketLifetime> {
+        &self.lifetime
+    }
+}
+struct SocketAuthAttempt<'a> {
+    reader: &'a mut ProtocolReader,
+    lease: &'a mut ConnectionLease,
+    outbound: &'a Outbound,
+}
+struct SocketLifetimeOwner(Arc<SocketLifetime>);
+impl Drop for SocketLifetimeOwner {
+    fn drop(&mut self) {
+        self.0.seal();
+    }
+}
+#[cfg(windows)]
+type ViewPumpDone = (
+    NativeSocketViewRead,
+    Option<PreparedSocketChunk>,
+    Result<(), crate::domain::shared_view::ViewError>,
+);
+#[cfg(windows)]
+type ViewCloseOutcome = Result<
+    crate::application::shared_views::reader::ReadCloseReceipt,
+    crate::domain::shared_view::ViewError,
+>;
+#[cfg(windows)]
+enum ViewPumpState {
+    Active {
+        stop: watch::Sender<bool>,
+        join: tokio::task::JoinHandle<ViewPumpDone>,
+    },
+    Closing(watch::Receiver<Option<ViewCloseOutcome>>),
+}
+#[cfg(windows)]
+async fn emit_stream_rebound_and_park(
+    read: &NativeSocketViewRead,
+    stream: &SocketViewStream,
+    client: &SocketViewClient,
+    outbound: &Outbound,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<(), crate::domain::shared_view::ViewError> {
+    use crate::application::shared_views::{
+        reader::OriginalReadProgress,
+        wire::{RecordKind, TransferHeader},
+    };
+    use crate::domain::shared_view::ViewError;
+    let completed = loop {
+        if *stop.borrow_and_update() {
+            return Ok(());
+        }
+        tokio::select! {
+            biased;
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow_and_update() {
+                    return Ok(());
+                }
+            }
+            () = stream.wait_terminally_sealed() => return Ok(()),
+            result = read.wait_original_progress(client) => break result,
+        }
+    };
+    match completed {
+        Ok(OriginalReadProgress::Complete { .. }) => {}
+        Ok(OriginalReadProgress::Failed(error)) => return Err(error),
+        Ok(_) => return Err(ViewError::StaleCursor),
+        Err(ViewError::StreamSealed) => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    let packet_seq = loop {
+        let ready = stream.ready_notified();
+        tokio::pin!(ready);
+        ready.as_mut().enable();
+        match stream.next_stale_rebound_packet() {
+            Ok(Some(packet)) => break packet,
+            Ok(None) => {}
+            Err(ViewError::StreamSealed) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+        tokio::select! {
+            biased;
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow_and_update() {
+                    return Ok(());
+                }
+            }
+            () = stream.wait_terminally_sealed() => return Ok(()),
+            () = ready => {}
+        }
+    };
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "type": "stream_rebound",
+        "previousStreamId": stream.id().to_base64url(),
+    }))
+    .map_err(|_| ViewError::AllocationFailure)?;
+    let total = u64::try_from(payload.len()).map_err(|_| ViewError::LengthUnrepresentable)?;
+    let header = TransferHeader::data(
+        stream.id(),
+        packet_seq,
+        1,
+        0,
+        total,
+        RecordKind::Status,
+        payload.len(),
+    )
+    .map_err(|_| ViewError::InvalidCursor)?;
+    let frame = header
+        .encode(&payload)
+        .map_err(|_| ViewError::AllocationFailure)?;
+    match stream.mark_stale_rebound_emitted() {
+        Ok(()) => {}
+        Err(ViewError::StreamSealed) => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    loop {
+        let capacity = outbound.capacity_freed.notified();
+        tokio::pin!(capacity);
+        capacity.as_mut().enable();
+        match outbound.send_binary_frame(frame.clone()) {
+            Ok(()) => break,
+            Err(BinarySendError::Closed) => return Err(ViewError::TransportFailure),
+            Err(BinarySendError::Full) => {}
+        }
+        tokio::select! {
+            biased;
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow_and_update() {
+                    return Ok(());
+                }
+            }
+            () = stream.wait_terminally_sealed() => return Ok(()),
+            () = capacity => {}
+        }
+    }
+    loop {
+        tokio::select! {
+            biased;
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow_and_update() {
+                    return Ok(());
+                }
+            }
+            () = stream.wait_terminally_sealed() => return Ok(()),
+        }
+    }
+}
+#[cfg(windows)]
+async fn run_view_pump(
+    read: NativeSocketViewRead,
+    client: SocketViewClient,
+    outbound: Outbound,
+    mut stop: watch::Receiver<bool>,
+) -> ViewPumpDone {
+    use crate::application::shared_views::reader::PrepareNext;
+    let Ok(stream) = read.stream() else {
+        return (
+            read,
+            None,
+            Err(crate::domain::shared_view::ViewError::ReadFailure),
+        );
+    };
+    let mut snapshot_done = false;
+    let mut pending_chunk: Option<PreparedSocketChunk> = None;
+    let result = 'pump: loop {
+        if *stop.borrow_and_update() {
+            break Ok(());
+        }
+        if let Some(chunk) = pending_chunk.take() {
+            let capacity = outbound.capacity_freed.notified();
+            tokio::pin!(capacity);
+            capacity.as_mut().enable();
+            match outbound.send_shared(chunk, &client) {
+                Ok(()) => continue 'pump,
+                Err(SocketEnqueueError::StateLost) => {
+                    break Err(crate::domain::shared_view::ViewError::TransportFailure);
+                }
+                Err(SocketEnqueueError::Rejected(chunk)) => {
+                    pending_chunk = Some(chunk);
+                    tokio::select! {
+                        biased;
+                        _ = stop.changed() => {
+                            if *stop.borrow_and_update() {
+                                break Ok(());
+                            }
+                        }
+                        () = capacity => {}
+                    }
+                    continue 'pump;
+                }
+            }
+        }
+        let next = tokio::select! {
+            biased;
+            _ = stop.changed() => {
+                if *stop.borrow_and_update() {
+                    break 'pump Ok(());
+                }
+                continue 'pump;
+            }
+            next = async {
+                if snapshot_done {
+                    read.next_delta(&client).await
+                } else {
+                    read.next_snapshot(&client).await
+                }
+            } => next,
+        };
+        match next {
+            Ok(PrepareNext::Chunk(chunk)) => match chunk.into_socket() {
+                Ok(chunk) => pending_chunk = Some(chunk),
+                Err(error) => break Err(error),
+            },
+            Ok(PrepareNext::SnapshotFinished) => {
+                snapshot_done = true;
+            }
+            Ok(PrepareNext::AwaitCredit) => {
+                let ready = stream.ready_notified();
+                tokio::pin!(ready);
+                ready.as_mut().enable();
+                match stream.ready() {
+                    Ok(true) => continue 'pump,
+                    Ok(false) => {}
+                    Err(crate::domain::shared_view::ViewError::StaleCursor) => {
+                        if stream.terminally_sealed().unwrap_or(true) {
+                            break Ok(());
+                        }
+                        break emit_stream_rebound_and_park(
+                            &read, &stream, &client, &outbound, &mut stop,
+                        )
+                        .await;
+                    }
+                    Err(error) => break Err(error),
+                }
+                if !stream.can_emit_stale_rebound().unwrap_or(false) {
+                    break Ok(());
+                }
+                if stream.explicitly_sealed().unwrap_or(false)
+                    && !stream.view_current().unwrap_or(false)
+                {
+                    break emit_stream_rebound_and_park(
+                        &read, &stream, &client, &outbound, &mut stop,
+                    )
+                    .await;
+                }
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => {
+                        if *stop.borrow_and_update() {
+                            break Ok(());
+                        }
+                    }
+                    () = stream.wait_closed() => {
+                        if !stream.can_emit_stale_rebound().unwrap_or(false)
+                            || stream.view_current().unwrap_or(false)
+                        {
+                            break Ok(());
+                        }
+                        break emit_stream_rebound_and_park(
+                            &read,
+                            &stream,
+                            &client,
+                            &outbound,
+                            &mut stop,
+                        )
+                        .await;
+                    }
+                    () = ready => {}
+                }
+            }
+            Ok(PrepareNext::AwaitData) => {
+                tokio::select! {
+                    biased;
+                    _ = stop.changed() => {
+                        if *stop.borrow_and_update() {
+                            break Ok(());
+                        }
+                    }
+                    () = stream.wait_closed() => {
+                        if !stream.can_emit_stale_rebound().unwrap_or(false)
+                            || stream.view_current().unwrap_or(false)
+                        {
+                            break Ok(());
+                        }
+                        break emit_stream_rebound_and_park(
+                            &read,
+                            &stream,
+                            &client,
+                            &outbound,
+                            &mut stop,
+                        )
+                        .await;
+                    }
+                    changed = read.wait_change(&client) => {
+                        match changed {
+                            Ok(_) => {}
+                            Err(crate::domain::shared_view::ViewError::StaleCursor) => {
+                                break emit_stream_rebound_and_park(
+                                    &read,
+                                    &stream,
+                                    &client,
+                                    &outbound,
+                                    &mut stop,
+                                )
+                                .await;
+                            }
+                            Err(error) => break Err(error),
+                        }
+                    }
+                }
+            }
+            Ok(PrepareNext::Closed) => break Ok(()),
+            Err(crate::domain::shared_view::ViewError::StaleCursor) => {
+                break emit_stream_rebound_and_park(&read, &stream, &client, &outbound, &mut stop)
+                    .await;
+            }
+            Err(error) => break Err(error),
+        }
+    };
+    (read, pending_chunk, result)
+}
+
+#[cfg(windows)]
+async fn run_document_pump(
+    transfer: crate::application::document_transfer::DocumentTransfer,
+    client: SocketViewClient,
+    outbound: Outbound,
+    mut stop: watch::Receiver<bool>,
+    attachment: std::sync::Weak<SocketAttachment>,
+) {
+    use crate::application::document_transfer::{DocumentEnqueue, DocumentPrepare};
+    use crate::domain::shared_view::ViewError;
+    let stream = transfer.socket_stream();
+    let stream_id = stream.id();
+    loop {
+        if *stop.borrow_and_update() || stream.explicitly_sealed().unwrap_or(true) {
+            break;
+        }
+        let ready = stream.ready_notified();
+        tokio::pin!(ready);
+        ready.as_mut().enable();
+        let capacity = outbound.capacity_freed.notified();
+        tokio::pin!(capacity);
+        capacity.as_mut().enable();
+        match transfer.prepare_next(&client).await {
+            Ok(DocumentPrepare::Prepared) => match outbound.send_document(&transfer, &client) {
+                Ok(DocumentEnqueue::Queued) => {}
+                Ok(DocumentEnqueue::Backpressured) => {
+                    tokio::select! {
+                        biased;
+                        changed = stop.changed() => {
+                            if changed.is_err() || *stop.borrow_and_update() {
+                                break;
+                            }
+                        }
+                        () = transfer.wait_closed() => break,
+                        () = capacity => {}
+                    }
+                }
+                Err(_) => break,
+            },
+            Ok(DocumentPrepare::AwaitCredit) => {
+                tokio::select! {
+                    biased;
+                    changed = stop.changed() => {
+                        if changed.is_err() || *stop.borrow_and_update() {
+                            break;
+                        }
+                    }
+                    () = transfer.wait_closed() => break,
+                    () = ready => {}
+                }
+            }
+            Ok(DocumentPrepare::Complete) | Err(_) => break,
+        }
+    }
+    drop(transfer);
+    if let Some(attachment) = attachment.upgrade() {
+        attachment
+            .view_close_receipts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(stream_id, Err(ViewError::StreamSealed));
+        attachment
+            .streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&stream_id);
+        attachment
+            .document_pumps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&stream_id);
+    }
+}
+
+#[cfg(windows)]
+type DocumentPumpHandle = (watch::Sender<bool>, tokio::task::JoinHandle<()>);
+
+struct SocketAttachment {
+    client: SocketViewClient,
+    #[cfg(windows)]
+    upload: Option<UploadOwner>,
+    #[cfg(windows)]
+    catalog_management: Option<NodeCatalogManagement>,
+    streams: Mutex<HashMap<Id128, SocketViewStream>>,
+    #[cfg(windows)]
+    document_pumps: Mutex<HashMap<Id128, DocumentPumpHandle>>,
+    #[cfg(windows)]
+    view_pumps: Mutex<HashMap<Id128, ViewPumpState>>,
+    #[cfg(windows)]
+    view_close_receipts: Mutex<HashMap<Id128, ViewCloseOutcome>>,
+}
+impl SocketAttachment {
+    #[cfg(windows)]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "Hold document_pumps mutex across duplicate check, reservation, spawn, and insertion"
+    )]
+    fn attach_document(
+        self: &Arc<Self>,
+        transfer: crate::application::document_transfer::DocumentTransfer,
+        outbound: &Outbound,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        let stream = transfer.socket_stream();
+        if !stream.is_document() || !stream.belongs_to(&self.client) {
+            return Err(crate::domain::shared_view::ViewError::InvalidClient);
+        }
+        let stream_id = stream.id();
+        self.view_close_receipts
+            .lock()
+            .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?
+            .try_reserve(1)
+            .map_err(|_| crate::domain::shared_view::ViewError::AllocationFailure)?;
+        {
+            let mut streams = self
+                .streams
+                .lock()
+                .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+            if streams.contains_key(&stream_id) {
+                return Err(crate::domain::shared_view::ViewError::AlreadyAttached);
+            }
+            streams
+                .try_reserve(1)
+                .map_err(|_| crate::domain::shared_view::ViewError::AllocationFailure)?;
+            streams.insert(stream_id, stream);
+        }
+        let mut pumps = self
+            .document_pumps
+            .lock()
+            .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+        if pumps.contains_key(&stream_id) {
+            drop(pumps);
+            self.streams
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&stream_id);
+            return Err(crate::domain::shared_view::ViewError::AlreadyAttached);
+        }
+        if pumps.try_reserve(1).is_err() {
+            drop(pumps);
+            self.streams
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&stream_id);
+            return Err(crate::domain::shared_view::ViewError::AllocationFailure);
+        }
+        let (stop, stop_rx) = watch::channel(false);
+        let client = self.client.context.client();
+        let outbound = outbound.clone();
+        let weak = Arc::downgrade(self);
+        let join = tokio::spawn(run_document_pump(transfer, client, outbound, stop_rx, weak));
+        pumps.insert(stream_id, (stop, join));
+        drop(pumps);
+        Ok(())
+    }
+    #[cfg(test)]
+    fn attach_read(
+        &self,
+        read: &crate::application::shared_views::reader::OpenedView,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        let stream = read.socket_stream()?;
+        if !stream.belongs_to(&self.client) {
+            return Err(crate::domain::shared_view::ViewError::InvalidClient);
+        }
+        let mut streams = self
+            .streams
+            .lock()
+            .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+        streams
+            .try_reserve(1)
+            .map_err(|_| crate::domain::shared_view::ViewError::AllocationFailure)?;
+        streams.insert(stream.id(), stream);
+        drop(streams);
+        Ok(())
+    }
+    #[cfg(all(test, windows))]
+    fn attach_shared_read(
+        &self,
+        read: &crate::application::shared_views::reader::OpenedView,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        self.attach_read(read)
+    }
+    #[cfg(windows)]
+    fn attach_view_read(
+        &self,
+        read: NativeSocketViewRead,
+        outbound: &Outbound,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        let stream = read.stream()?;
+        if !stream.belongs_to(&self.client) {
+            return Err(crate::domain::shared_view::ViewError::InvalidClient);
+        }
+        let stream_id = Id128::new(*stream.id().as_bytes());
+        {
+            let mut streams = self
+                .streams
+                .lock()
+                .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+            if streams.contains_key(&stream_id) {
+                return Err(crate::domain::shared_view::ViewError::AlreadyAttached);
+            }
+            streams
+                .try_reserve(1)
+                .map_err(|_| crate::domain::shared_view::ViewError::AllocationFailure)?;
+        }
+        {
+            let mut pumps = self
+                .view_pumps
+                .lock()
+                .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+            if pumps.contains_key(&stream_id) {
+                return Err(crate::domain::shared_view::ViewError::AlreadyAttached);
+            }
+            pumps
+                .try_reserve(1)
+                .map_err(|_| crate::domain::shared_view::ViewError::AllocationFailure)?;
+        }
+        let (stop, stop_rx) = watch::channel(false);
+        {
+            let mut streams = self
+                .streams
+                .lock()
+                .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+            if streams.contains_key(&stream_id) {
+                return Err(crate::domain::shared_view::ViewError::AlreadyAttached);
+            }
+            streams.insert(stream_id, stream);
+        }
+        let client = self.client.context.client();
+        let outbound = outbound.clone();
+        let join = tokio::spawn(run_view_pump(read, client, outbound, stop_rx));
+        let mut pumps = self
+            .view_pumps
+            .lock()
+            .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+        pumps.insert(stream_id, ViewPumpState::Active { stop, join });
+        Ok(())
+    }
+    #[cfg(windows)]
+    async fn rebind_view_read(
+        self: &Arc<Self>,
+        stream_id: Id128,
+    ) -> Result<NativeSocketViewRead, crate::domain::shared_view::ViewError> {
+        use crate::domain::shared_view::ViewError;
+        let () = self
+            .view_close_receipts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .try_reserve(1)
+            .map_err(|_| ViewError::AllocationFailure)?;
+        let res_rx = {
+            let mut pumps = self
+                .view_pumps
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match pumps.remove(&stream_id) {
+                None => {
+                    let closed = self
+                        .view_close_receipts
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .contains_key(&stream_id);
+                    return Err(if closed {
+                        ViewError::StreamSealed
+                    } else {
+                        ViewError::InvalidClient
+                    });
+                }
+                Some(ViewPumpState::Closing(rx)) => {
+                    pumps.insert(stream_id, ViewPumpState::Closing(rx));
+                    return Err(ViewError::InvalidStage);
+                }
+                Some(ViewPumpState::Active { stop, join }) => {
+                    let (tx, rx) = watch::channel(None);
+                    pumps.insert(stream_id, ViewPumpState::Closing(rx));
+                    let (res_tx, res_rx) = tokio::sync::oneshot::channel();
+                    let this = Arc::clone(self);
+                    tokio::spawn(async move {
+                        let _ = stop.send(true);
+                        let (outcome, rebound) = match join.await {
+                            Ok((read, pending_chunk, _)) => {
+                                if pending_chunk.is_some() {
+                                    drop(pending_chunk);
+                                    let receipt = read.release();
+                                    (Ok(receipt), Err(ViewError::StreamSealed))
+                                } else {
+                                    let client = this.client.context.client();
+                                    let rebound =
+                                        match read.wait_original_progress(&client).await {
+                                            Ok(crate::application::shared_views::reader::OriginalReadProgress::Complete { .. }) => {
+                                                read.rebind_same_read(&client).await
+                                            }
+                                            Ok(crate::application::shared_views::reader::OriginalReadProgress::Failed(error)) => {
+                                                Err(error)
+                                            }
+                                            Ok(_) => Err(ViewError::StaleCursor),
+                                            Err(error) => Err(error),
+                                        };
+                                    let receipt = read.release();
+                                    (Ok(receipt), rebound)
+                                }
+                            }
+                            Err(_) => (Err(ViewError::ReadFailure), Err(ViewError::ReadFailure)),
+                        };
+                        this.streams
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .remove(&stream_id);
+                        this.view_close_receipts
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .insert(stream_id, outcome.clone());
+                        this.view_pumps
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .remove(&stream_id);
+                        let _ = tx.send(Some(outcome));
+                        let _ = res_tx.send(rebound);
+                    });
+                    res_rx
+                }
+            }
+        };
+        res_rx.await.map_err(|_| ViewError::ReadFailure)?
+    }
+    #[cfg(windows)]
+    async fn close_view_read(self: &Arc<Self>, stream_id: Id128) -> ViewCloseOutcome {
+        {
+            let mut receipts = self
+                .view_close_receipts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(receipt) = receipts.get(&stream_id) {
+                return receipt.clone();
+            }
+            if receipts.try_reserve(1).is_err() {
+                return Err(crate::domain::shared_view::ViewError::AllocationFailure);
+            }
+        }
+        enum Action {
+            Return(ViewCloseOutcome),
+            Wait(watch::Receiver<Option<ViewCloseOutcome>>),
+        }
+        let action = {
+            let mut pumps = self
+                .view_pumps
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match pumps.remove(&stream_id) {
+                None => {
+                    let receipts = self
+                        .view_close_receipts
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    Action::Return(
+                        receipts
+                            .get(&stream_id)
+                            .cloned()
+                            .unwrap_or(Err(crate::domain::shared_view::ViewError::InvalidClient)),
+                    )
+                }
+                Some(ViewPumpState::Closing(rx)) => {
+                    pumps.insert(stream_id, ViewPumpState::Closing(rx.clone()));
+                    Action::Wait(rx)
+                }
+                Some(ViewPumpState::Active { stop, join }) => {
+                    let (tx, rx) = watch::channel(None);
+                    pumps.insert(stream_id, ViewPumpState::Closing(rx.clone()));
+                    let this = Arc::clone(self);
+                    tokio::spawn(async move {
+                        let _ = stop.send(true);
+                        let outcome = match join.await {
+                            Ok((read, pending_chunk, _)) => {
+                                let receipt = read.release();
+                                drop(pending_chunk);
+                                Ok(receipt)
+                            }
+                            Err(_) => Err(crate::domain::shared_view::ViewError::ReadFailure),
+                        };
+                        this.streams
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .remove(&stream_id);
+                        this.view_close_receipts
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .insert(stream_id, outcome.clone());
+                        this.view_pumps
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .remove(&stream_id);
+                        let _ = tx.send(Some(outcome));
+                    });
+                    Action::Wait(rx)
+                }
+            }
+        };
+        let mut rx = match action {
+            Action::Return(outcome) => return outcome,
+            Action::Wait(rx) => rx,
+        };
+        loop {
+            if let Some(outcome) = rx.borrow_and_update().clone() {
+                return outcome;
+            }
+            if rx.changed().await.is_err() {
+                return self
+                    .view_close_receipts
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&stream_id)
+                    .cloned()
+                    .unwrap_or(Err(crate::domain::shared_view::ViewError::ReadFailure));
+            }
+        }
+    }
+    #[cfg(windows)]
+    async fn drain(&self) {
+        loop {
+            let mut active = Vec::new();
+            let mut closing = Vec::new();
+            {
+                let mut pumps = self
+                    .view_pumps
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                if pumps.is_empty() {
+                    break;
+                }
+                let keys: Vec<Id128> = pumps.keys().copied().collect();
+                for stream_id in keys {
+                    match pumps.remove(&stream_id) {
+                        Some(ViewPumpState::Active { stop, join }) => {
+                            let (tx, rx) = watch::channel(None);
+                            pumps.insert(stream_id, ViewPumpState::Closing(rx));
+                            active.push((stream_id, stop, join, tx));
+                        }
+                        Some(ViewPumpState::Closing(rx)) => {
+                            pumps.insert(stream_id, ViewPumpState::Closing(rx.clone()));
+                            closing.push(rx);
+                        }
+                        None => {}
+                    }
+                }
+            }
+            for (stream_id, stop, join, tx) in active {
+                let _ = stop.send(true);
+                let outcome = match join.await {
+                    Ok((read, pending_chunk, _)) => {
+                        let receipt = read.release();
+                        drop(pending_chunk);
+                        Ok(receipt)
+                    }
+                    Err(_) => Err(crate::domain::shared_view::ViewError::ReadFailure),
+                };
+                self.streams
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&stream_id);
+                self.view_close_receipts
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(stream_id, outcome.clone());
+                self.view_pumps
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&stream_id);
+                let _ = tx.send(Some(outcome));
+            }
+            for mut rx in closing {
+                while rx.borrow_and_update().is_none() {
+                    if rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        let document_pumps: Vec<_> = self
+            .document_pumps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drain()
+            .collect();
+        for (stream_id, (stop, join)) in document_pumps {
+            let _ = stop.send(true);
+            let _ = join.await;
+            self.view_close_receipts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(
+                    stream_id,
+                    Err(crate::domain::shared_view::ViewError::StreamSealed),
+                );
+            self.streams
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&stream_id);
+        }
+    }
+    async fn control(
+        &self,
+        bytes: &[u8],
+        _outbound: &Outbound,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        use crate::application::shared_views::wire::{PacketKind, TransferHeader};
+        let (h, payload) = TransferHeader::decode(bytes)
+            .map_err(|_| crate::domain::shared_view::ViewError::InvalidCursor)?;
+        let stream = self
+            .streams
+            .lock()
+            .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?
+            .get(&h.stream())
+            .cloned();
+        let Some(stream) = stream else {
+            let owned_closed = self
+                .view_close_receipts
+                .lock()
+                .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?
+                .contains_key(&h.stream());
+            if owned_closed
+                && payload.is_empty()
+                && matches!(h.kind(), PacketKind::Credit | PacketKind::Detach)
+            {
+                return Ok(());
+            }
+            return Err(crate::domain::shared_view::ViewError::InvalidClient);
+        };
+        let _ = stream.accept_control(&self.client, bytes).await?;
+        Ok(())
+    }
+}
+impl Drop for SocketAttachment {
+    fn drop(&mut self) {
+        self.client.context.lifetime.seal();
+    }
+}
+
+#[cfg(test)]
+#[path = "management_ws/socket_development.rs"]
+mod socket_development;
+
+#[cfg(test)]
+type SocketTestAccepted = (Arc<SocketAttachment>, Outbound);
+
+#[cfg(all(test, windows))]
+#[path = "management_ws/socket_independent_acceptance.rs"]
+mod socket_independent_acceptance;
+
+#[cfg(test)]
+mod management_independent;
+
+#[cfg(test)]
+pub(crate) struct DocumentSocketEndpoint {
+    attachment: Arc<SocketAttachment>,
+    outbound: Outbound,
+}
+#[cfg(test)]
+impl DocumentSocketEndpoint {
+    #[cfg(windows)]
+    pub(crate) fn attach_document(
+        &self,
+        transfer: crate::application::document_transfer::DocumentTransfer,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        self.attachment.attach_document(transfer, &self.outbound)
+    }
+    #[cfg(windows)]
+    pub(crate) fn attach_shared_read(
+        &self,
+        read: &crate::application::shared_views::reader::OpenedView,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        self.attachment.attach_shared_read(read)
+    }
+    #[cfg(windows)]
+    pub(crate) fn outbound_observation_for_test(&self) -> (usize, usize) {
+        (
+            MAX_OUTBOUND_BYTES - self.outbound.bytes.available_permits(),
+            MAX_OUTBOUND_FRAMES - self.outbound.sender.capacity(),
+        )
+    }
+    #[cfg(windows)]
+    pub(crate) fn hold_outbound_bytes_below_ack_for_test(
+        &self,
+    ) -> tokio::sync::OwnedSemaphorePermit {
+        self.outbound
+            .bytes
+            .clone()
+            .try_acquire_many_owned(
+                u32::try_from(MAX_OUTBOUND_BYTES - (input_upload::HEADER_BYTES - 1))
+                    .expect("outbound byte budget fits u32"),
+            )
+            .expect("fixture reserves all but one ACK's byte budget")
+    }
+    pub(crate) fn token_observation(
+        &self,
+        transfer: &crate::application::document_transfer::DocumentTransfer,
+    ) -> Result<
+        Option<crate::application::shared_views::socket_transfer::SocketTokenObservation>,
+        crate::application::document_source::DocumentError,
+    > {
+        let stream = transfer.socket_stream();
+        if !stream.belongs_to(&self.attachment.client) {
+            return Err(crate::domain::shared_view::ViewError::InvalidClient.into());
+        }
+        Ok(stream.token_observation()?)
+    }
+
+    pub(crate) fn client(&self) -> SocketViewClient {
+        self.attachment.client.context.client()
+    }
+    pub(crate) fn attach(
+        &self,
+        transfer: &crate::application::document_transfer::DocumentTransfer,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        let stream = transfer.socket_stream();
+        if !stream.is_document() || !stream.belongs_to(&self.attachment.client) {
+            return Err(crate::domain::shared_view::ViewError::InvalidClient);
+        }
+        let mut streams = self
+            .attachment
+            .streams
+            .lock()
+            .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
+        streams
+            .try_reserve(1)
+            .map_err(|_| crate::domain::shared_view::ViewError::AllocationFailure)?;
+        streams.insert(stream.id(), stream);
+        Ok(())
+    }
+    pub(crate) fn send(
+        &self,
+        transfer: &crate::application::document_transfer::DocumentTransfer,
+    ) -> Result<
+        crate::application::document_transfer::DocumentEnqueue,
+        crate::application::document_source::DocumentError,
+    > {
+        self.outbound
+            .send_document(transfer, &self.attachment.client)
+    }
+    pub(crate) fn observation(
+        &self,
+        transfer: &crate::application::document_transfer::DocumentTransfer,
+    ) -> Result<
+        crate::application::shared_views::local_transfer::LocalTransferObservation,
+        crate::application::document_source::DocumentError,
+    > {
+        if !transfer.socket_stream().belongs_to(&self.attachment.client) {
+            return Err(crate::domain::shared_view::ViewError::InvalidClient.into());
+        }
+        transfer.observation()
+    }
+    pub(crate) fn flush_observation(
+        &self,
+        transfer: &crate::application::document_transfer::DocumentTransfer,
+    ) -> Result<
+        crate::application::shared_views::socket_transfer::FlushPollObservation,
+        crate::application::document_source::DocumentError,
+    > {
+        let stream = transfer.socket_stream();
+        if !stream.belongs_to(&self.attachment.client) {
+            return Err(crate::domain::shared_view::ViewError::InvalidClient.into());
+        }
+        Ok(stream.flush_poll_observation())
+    }
+}
+
+#[cfg(test)]
+#[path = "management_ws/connection_owner/development_tests.rs"]
+mod connection_owner_development_tests;

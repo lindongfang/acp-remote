@@ -1,0 +1,1199 @@
+{
+  "CL023ParentPassed": false,
+  "formatChanged": false,
+  "nativeToolIdFromActualRaw": "q003-original-tool-T",
+  "scope": "Synthetic actual Rust projection_wire output and raw references collected over real authorized LocalDuplex transfer; not real Harness, WSS or UI",
+  "stages": [
+    {
+      "label": "T-start-A-B-already-readable",
+      "records": [
+        {
+          "bytes": 597,
+          "path": "stage-00-record-000.json",
+          "recordId": "2",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+        },
+        {
+          "bytes": 583,
+          "path": "stage-00-record-001.json",
+          "recordId": "3",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "aaa829740bbaf2e1646e92c3ecbb814dd77ceea054de5e45afba1164afe11c42"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-00-record-002.json",
+          "recordId": "4",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 152,
+          "path": "stage-00-record-003.json",
+          "recordId": "2",
+          "recordKind": "OriginalRaw",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+        },
+        {
+          "bytes": 584,
+          "path": "stage-00-record-004.json",
+          "recordId": "5",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "2adad15b616e514ec289d54813d6440a4d703727ed72c7e96f54df234b926313"
+        },
+        {
+          "bytes": 248,
+          "path": "stage-00-record-005.json",
+          "recordId": "4",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-00-record-006.json",
+          "recordId": "5",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-00-record-007.json",
+          "recordId": "6",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-00-record-008.json",
+          "recordId": "6",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 955,
+          "path": "stage-00-record-009.json",
+          "recordId": "1",
+          "recordKind": "ItemProjection",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+        },
+        {
+          "bytes": 584,
+          "path": "stage-00-record-010.json",
+          "recordId": "7",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "2adad15b616e514ec289d54813d6440a4d703727ed72c7e96f54df234b926313"
+        },
+        {
+          "bytes": 1140,
+          "path": "stage-00-record-011.json",
+          "recordId": "2",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "ae6367c793a98044f194eecd5af92393a6d3d284da52e70d062bba9d27a067be"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-00-record-012.json",
+          "recordId": "3",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-00-record-013.json",
+          "recordId": "4",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-00-record-014.json",
+          "recordId": "5",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-00-record-015.json",
+          "recordId": "6",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+        },
+        {
+          "bytes": 595,
+          "path": "stage-00-record-016.json",
+          "recordId": "8",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+        },
+        {
+          "bytes": 581,
+          "path": "stage-00-record-017.json",
+          "recordId": "9",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "aea823513ecc350cb82cefe18ffb206de64726b9dc23aa23daf5e4c52eb3ed4a"
+        },
+        {
+          "bytes": 0,
+          "path": "stage-00-record-018.bin",
+          "recordId": "1",
+          "recordKind": "SnapshotEnd",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "label": "T-progress-C",
+      "records": [
+        {
+          "bytes": 597,
+          "path": "stage-01-record-000.json",
+          "recordId": "2",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+        },
+        {
+          "bytes": 583,
+          "path": "stage-01-record-001.json",
+          "recordId": "3",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "488d4475359d35d8628975632454fb781049cbe77da3988cd5b4f53294581c37"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-01-record-002.json",
+          "recordId": "4",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 152,
+          "path": "stage-01-record-003.json",
+          "recordId": "2",
+          "recordKind": "OriginalRaw",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+        },
+        {
+          "bytes": 584,
+          "path": "stage-01-record-004.json",
+          "recordId": "5",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "bca5dc8648a477dee7f7e469957b4511624a4d97783bac5177df3c567450f0e9"
+        },
+        {
+          "bytes": 248,
+          "path": "stage-01-record-005.json",
+          "recordId": "4",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-01-record-006.json",
+          "recordId": "5",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-01-record-007.json",
+          "recordId": "6",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+        },
+        {
+          "bytes": 259,
+          "path": "stage-01-record-008.json",
+          "recordId": "7",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-01-record-009.json",
+          "recordId": "8",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-01-record-010.json",
+          "recordId": "6",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 955,
+          "path": "stage-01-record-011.json",
+          "recordId": "1",
+          "recordKind": "ItemProjection",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+        },
+        {
+          "bytes": 584,
+          "path": "stage-01-record-012.json",
+          "recordId": "7",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "bca5dc8648a477dee7f7e469957b4511624a4d97783bac5177df3c567450f0e9"
+        },
+        {
+          "bytes": 1140,
+          "path": "stage-01-record-013.json",
+          "recordId": "2",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "c54d5b0ca17df5f65244213507ab8cb6603305f98a2ea712383b340f9aa39f27"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-01-record-014.json",
+          "recordId": "3",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-01-record-015.json",
+          "recordId": "4",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-01-record-016.json",
+          "recordId": "5",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-01-record-017.json",
+          "recordId": "6",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+        },
+        {
+          "bytes": 1023,
+          "path": "stage-01-record-018.json",
+          "recordId": "7",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+        },
+        {
+          "bytes": 202,
+          "path": "stage-01-record-019.json",
+          "recordId": "8",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+        },
+        {
+          "bytes": 595,
+          "path": "stage-01-record-020.json",
+          "recordId": "8",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+        },
+        {
+          "bytes": 581,
+          "path": "stage-01-record-021.json",
+          "recordId": "9",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "3956d44c88882cd0e12145f712274fd44bd04b6899efa10cd8b5a38f02bdb3e9"
+        },
+        {
+          "bytes": 0,
+          "path": "stage-01-record-022.bin",
+          "recordId": "1",
+          "recordKind": "SnapshotEnd",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "label": "T-second-progress-after-C",
+      "records": [
+        {
+          "bytes": 597,
+          "path": "stage-02-record-000.json",
+          "recordId": "2",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+        },
+        {
+          "bytes": 583,
+          "path": "stage-02-record-001.json",
+          "recordId": "3",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "7ed6e8a01412043f3765260438677f08bfbac2054f325c551114606dc42b6eac"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-02-record-002.json",
+          "recordId": "4",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 152,
+          "path": "stage-02-record-003.json",
+          "recordId": "2",
+          "recordKind": "OriginalRaw",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+        },
+        {
+          "bytes": 584,
+          "path": "stage-02-record-004.json",
+          "recordId": "5",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "ca5951a4251ddbc3c42f49c20ea22e0762178de7383a2db004a126531dc1a366"
+        },
+        {
+          "bytes": 248,
+          "path": "stage-02-record-005.json",
+          "recordId": "4",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-02-record-006.json",
+          "recordId": "5",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-02-record-007.json",
+          "recordId": "6",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+        },
+        {
+          "bytes": 259,
+          "path": "stage-02-record-008.json",
+          "recordId": "7",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-02-record-009.json",
+          "recordId": "8",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+        },
+        {
+          "bytes": 259,
+          "path": "stage-02-record-010.json",
+          "recordId": "9",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-02-record-011.json",
+          "recordId": "6",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 955,
+          "path": "stage-02-record-012.json",
+          "recordId": "1",
+          "recordKind": "ItemProjection",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+        },
+        {
+          "bytes": 584,
+          "path": "stage-02-record-013.json",
+          "recordId": "7",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "ca5951a4251ddbc3c42f49c20ea22e0762178de7383a2db004a126531dc1a366"
+        },
+        {
+          "bytes": 1141,
+          "path": "stage-02-record-014.json",
+          "recordId": "2",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "09cf4a426c308e1e4984e98801f14b58d6d16abe01780eb335d5e2bdeac98408"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-02-record-015.json",
+          "recordId": "3",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-02-record-016.json",
+          "recordId": "4",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-02-record-017.json",
+          "recordId": "5",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-02-record-018.json",
+          "recordId": "6",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+        },
+        {
+          "bytes": 1023,
+          "path": "stage-02-record-019.json",
+          "recordId": "7",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+        },
+        {
+          "bytes": 202,
+          "path": "stage-02-record-020.json",
+          "recordId": "8",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+        },
+        {
+          "bytes": 595,
+          "path": "stage-02-record-021.json",
+          "recordId": "8",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+        },
+        {
+          "bytes": 581,
+          "path": "stage-02-record-022.json",
+          "recordId": "9",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "4833df7082296facd4b1ca753ae26a9b7f1f22fb468c993abbdd3d4a36736507"
+        },
+        {
+          "bytes": 0,
+          "path": "stage-02-record-023.bin",
+          "recordId": "1",
+          "recordKind": "SnapshotEnd",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "label": "T-late-completed-after-text",
+      "records": [
+        {
+          "bytes": 597,
+          "path": "stage-03-record-000.json",
+          "recordId": "2",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+        },
+        {
+          "bytes": 584,
+          "path": "stage-03-record-001.json",
+          "recordId": "3",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "96105e0563bce2a19a7f3fd184c2f62096c7a2bde8dd59df4098a25a8835f679"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-03-record-002.json",
+          "recordId": "4",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 152,
+          "path": "stage-03-record-003.json",
+          "recordId": "2",
+          "recordKind": "OriginalRaw",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+        },
+        {
+          "bytes": 585,
+          "path": "stage-03-record-004.json",
+          "recordId": "5",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "fe2bfc7bc1e615cab99e01fa6d2d1f8fef5c31039da3ecdab0ddf16c55661722"
+        },
+        {
+          "bytes": 248,
+          "path": "stage-03-record-005.json",
+          "recordId": "4",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-03-record-006.json",
+          "recordId": "5",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-03-record-007.json",
+          "recordId": "6",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+        },
+        {
+          "bytes": 259,
+          "path": "stage-03-record-008.json",
+          "recordId": "7",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-03-record-009.json",
+          "recordId": "8",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+        },
+        {
+          "bytes": 259,
+          "path": "stage-03-record-010.json",
+          "recordId": "9",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+        },
+        {
+          "bytes": 318,
+          "path": "stage-03-record-011.json",
+          "recordId": "10",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-03-record-012.json",
+          "recordId": "6",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 955,
+          "path": "stage-03-record-013.json",
+          "recordId": "1",
+          "recordKind": "ItemProjection",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+        },
+        {
+          "bytes": 585,
+          "path": "stage-03-record-014.json",
+          "recordId": "7",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "fe2bfc7bc1e615cab99e01fa6d2d1f8fef5c31039da3ecdab0ddf16c55661722"
+        },
+        {
+          "bytes": 1145,
+          "path": "stage-03-record-015.json",
+          "recordId": "2",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-03-record-016.json",
+          "recordId": "3",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-03-record-017.json",
+          "recordId": "4",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-03-record-018.json",
+          "recordId": "5",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-03-record-019.json",
+          "recordId": "6",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+        },
+        {
+          "bytes": 1023,
+          "path": "stage-03-record-020.json",
+          "recordId": "7",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+        },
+        {
+          "bytes": 202,
+          "path": "stage-03-record-021.json",
+          "recordId": "8",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+        },
+        {
+          "bytes": 595,
+          "path": "stage-03-record-022.json",
+          "recordId": "8",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+        },
+        {
+          "bytes": 582,
+          "path": "stage-03-record-023.json",
+          "recordId": "9",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "39b646e769871c387ff196c34e3a8ccb055ee1b310f54fb3405e7de9fa0f6c59"
+        },
+        {
+          "bytes": 0,
+          "path": "stage-03-record-024.bin",
+          "recordId": "1",
+          "recordKind": "SnapshotEnd",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "label": "unknown-tag-not-guessed-as-T",
+      "records": [
+        {
+          "bytes": 597,
+          "path": "stage-04-record-000.json",
+          "recordId": "2",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+        },
+        {
+          "bytes": 596,
+          "path": "stage-04-record-001.json",
+          "recordId": "3",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "2ff7e0c74e21719c612d03afb0799b19284154ea47ee1d216cd60294c3de1b58"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-04-record-002.json",
+          "recordId": "4",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 152,
+          "path": "stage-04-record-003.json",
+          "recordId": "2",
+          "recordKind": "OriginalRaw",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+        },
+        {
+          "bytes": 597,
+          "path": "stage-04-record-004.json",
+          "recordId": "5",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+        },
+        {
+          "bytes": 248,
+          "path": "stage-04-record-005.json",
+          "recordId": "4",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-04-record-006.json",
+          "recordId": "5",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-04-record-007.json",
+          "recordId": "6",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+        },
+        {
+          "bytes": 259,
+          "path": "stage-04-record-008.json",
+          "recordId": "7",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-04-record-009.json",
+          "recordId": "8",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+        },
+        {
+          "bytes": 259,
+          "path": "stage-04-record-010.json",
+          "recordId": "9",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+        },
+        {
+          "bytes": 318,
+          "path": "stage-04-record-011.json",
+          "recordId": "10",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+        },
+        {
+          "bytes": 219,
+          "path": "stage-04-record-012.json",
+          "recordId": "11",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-04-record-013.json",
+          "recordId": "6",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 955,
+          "path": "stage-04-record-014.json",
+          "recordId": "1",
+          "recordKind": "ItemProjection",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+        },
+        {
+          "bytes": 597,
+          "path": "stage-04-record-015.json",
+          "recordId": "7",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+        },
+        {
+          "bytes": 1145,
+          "path": "stage-04-record-016.json",
+          "recordId": "2",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-04-record-017.json",
+          "recordId": "3",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-04-record-018.json",
+          "recordId": "4",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-04-record-019.json",
+          "recordId": "5",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-04-record-020.json",
+          "recordId": "6",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+        },
+        {
+          "bytes": 1023,
+          "path": "stage-04-record-021.json",
+          "recordId": "7",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+        },
+        {
+          "bytes": 202,
+          "path": "stage-04-record-022.json",
+          "recordId": "8",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+        },
+        {
+          "bytes": 970,
+          "path": "stage-04-record-023.json",
+          "recordId": "9",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "446943e3edac96532ee3ac714d359b0ca00654fa66fbca0f6ce815bf1ab761a1"
+        },
+        {
+          "bytes": 595,
+          "path": "stage-04-record-024.json",
+          "recordId": "8",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+        },
+        {
+          "bytes": 594,
+          "path": "stage-04-record-025.json",
+          "recordId": "9",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "ed348eb3cf05a9c3e6d448066bf9fe0bf4d1c1e906542fa80029b8df87bb578a"
+        },
+        {
+          "bytes": 0,
+          "path": "stage-04-record-026.bin",
+          "recordId": "1",
+          "recordKind": "SnapshotEnd",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    },
+    {
+      "label": "same-original-read-snapshot-reread",
+      "records": [
+        {
+          "bytes": 597,
+          "path": "stage-05-record-000.json",
+          "recordId": "2",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+        },
+        {
+          "bytes": 596,
+          "path": "stage-05-record-001.json",
+          "recordId": "3",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "2ff7e0c74e21719c612d03afb0799b19284154ea47ee1d216cd60294c3de1b58"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-05-record-002.json",
+          "recordId": "4",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 152,
+          "path": "stage-05-record-003.json",
+          "recordId": "2",
+          "recordKind": "OriginalRaw",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+        },
+        {
+          "bytes": 597,
+          "path": "stage-05-record-004.json",
+          "recordId": "5",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+        },
+        {
+          "bytes": 248,
+          "path": "stage-05-record-005.json",
+          "recordId": "4",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-05-record-006.json",
+          "recordId": "5",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-05-record-007.json",
+          "recordId": "6",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+        },
+        {
+          "bytes": 259,
+          "path": "stage-05-record-008.json",
+          "recordId": "7",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+        },
+        {
+          "bytes": 210,
+          "path": "stage-05-record-009.json",
+          "recordId": "8",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+        },
+        {
+          "bytes": 259,
+          "path": "stage-05-record-010.json",
+          "recordId": "9",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+        },
+        {
+          "bytes": 318,
+          "path": "stage-05-record-011.json",
+          "recordId": "10",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+        },
+        {
+          "bytes": 219,
+          "path": "stage-05-record-012.json",
+          "recordId": "11",
+          "recordKind": "OriginalRaw",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+        },
+        {
+          "bytes": 598,
+          "path": "stage-05-record-013.json",
+          "recordId": "6",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+        },
+        {
+          "bytes": 955,
+          "path": "stage-05-record-014.json",
+          "recordId": "1",
+          "recordKind": "ItemProjection",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+        },
+        {
+          "bytes": 597,
+          "path": "stage-05-record-015.json",
+          "recordId": "7",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+        },
+        {
+          "bytes": 1145,
+          "path": "stage-05-record-016.json",
+          "recordId": "2",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-05-record-017.json",
+          "recordId": "3",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-05-record-018.json",
+          "recordId": "4",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+        },
+        {
+          "bytes": 1021,
+          "path": "stage-05-record-019.json",
+          "recordId": "5",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+        },
+        {
+          "bytes": 201,
+          "path": "stage-05-record-020.json",
+          "recordId": "6",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+        },
+        {
+          "bytes": 1023,
+          "path": "stage-05-record-021.json",
+          "recordId": "7",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+        },
+        {
+          "bytes": 202,
+          "path": "stage-05-record-022.json",
+          "recordId": "8",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+        },
+        {
+          "bytes": 970,
+          "path": "stage-05-record-023.json",
+          "recordId": "9",
+          "recordKind": "ItemProjection",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "446943e3edac96532ee3ac714d359b0ca00654fa66fbca0f6ce815bf1ab761a1"
+        },
+        {
+          "bytes": 595,
+          "path": "stage-05-record-024.json",
+          "recordId": "8",
+          "recordKind": "Status",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+        },
+        {
+          "bytes": 594,
+          "path": "stage-05-record-025.json",
+          "recordId": "9",
+          "recordKind": "Status",
+          "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+          "sha256": "ed348eb3cf05a9c3e6d448066bf9fe0bf4d1c1e906542fa80029b8df87bb578a"
+        },
+        {
+          "bytes": 0,
+          "path": "stage-05-record-026.bin",
+          "recordId": "1",
+          "recordKind": "SnapshotEnd",
+          "segmentId": "3jJLmi1JHLsGTzsKkAiOrg",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ]
+    }
+  ],
+  "version": 2
+}

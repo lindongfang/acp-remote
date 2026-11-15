@@ -312,9 +312,22 @@ mod tests {
         }
     }
 
-    struct TestArea {
+    struct TestAreaRoots {
         directory: PathBuf,
-        storage: Storage,
+    }
+    struct ChildRoots {
+        directory: PathBuf,
+    }
+    struct TestArea {
+        roots: std::sync::Arc<TestAreaRoots>,
+        storage: crate::sqlite_fixture_scope::FixtureStorage,
+        scope: crate::sqlite_fixture_scope::SqliteFixtureScope,
+    }
+    impl std::ops::Deref for TestArea {
+        type Target = TestAreaRoots;
+        fn deref(&self) -> &TestAreaRoots {
+            &self.roots
+        }
     }
 
     impl TestArea {
@@ -328,17 +341,65 @@ mod tests {
                 std::process::id()
             ));
             std::fs::create_dir_all(&directory).expect("test directory");
-            let storage = Storage::open(&directory.join("node.sqlite3"))
-                .await
-                .expect("storage");
-            Self { directory, storage }
+            let roots = std::sync::Arc::new(TestAreaRoots { directory });
+            let scope = crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+                &roots.directory.join("node.sqlite3"),
+                roots.clone(),
+            );
+            let storage = scope.open().await.expect("storage");
+            Self {
+                roots,
+                storage,
+                scope,
+            }
         }
 
         async fn reopen_storage(&mut self) {
             self.storage.close().await;
-            self.storage = Storage::open(&self.directory.join("node.sqlite3"))
-                .await
-                .expect("reopen storage");
+            self.scope.stop_and_observe().await;
+            self.scope.stop_and_observe().await;
+            self.scope = crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+                &self.directory.join("node.sqlite3"),
+                self.roots.clone(),
+            );
+            self.storage = self.scope.open().await.expect("reopen storage");
+        }
+
+        async fn finish(self) {
+            self.storage.close().await;
+            self.scope.stop_and_observe().await;
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                for name in ["node.sqlite3", "node.sqlite3-wal", "node.sqlite3-shm"] {
+                    match std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .share_mode(0)
+                        .open(self.directory.join(name))
+                    {
+                        Ok(_exclusive) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            assert_ne!(name, "node.sqlite3");
+                        }
+                        Err(error) => panic!("owned identity database is still open: {error}"),
+                    }
+                }
+            }
+            let directory = self.directory.canonicalize().expect("owned fixture path");
+            let temporary = std::env::temp_dir()
+                .canonicalize()
+                .expect("owned temporary root");
+            assert_eq!(directory.parent(), Some(temporary.as_path()));
+            assert!(
+                directory
+                    .file_name()
+                    .expect("fixture name")
+                    .to_string_lossy()
+                    .starts_with(&format!("acp-remote-identity-{}-", std::process::id()))
+            );
+            std::fs::remove_dir_all(&directory).expect("normal owned identity fixture cleanup");
+            println!("LEGACY_IDENTITY_FIXTURE_NORMAL_CLOSE");
         }
 
         async fn run_crash_child(&self, point: &str) {
@@ -347,6 +408,7 @@ mod tests {
 
         async fn run_crash_child_with_output(&self, point: &str) -> std::process::Output {
             self.storage.close().await;
+            self.scope.stop_and_observe().await;
             let executable = std::env::current_exe().expect("test executable path");
             let output = Command::new(executable)
                 .arg("identity::tests::identity_crash_child")
@@ -367,7 +429,7 @@ mod tests {
         }
     }
 
-    impl Drop for TestArea {
+    impl Drop for TestAreaRoots {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.directory);
         }
@@ -386,6 +448,7 @@ mod tests {
             .await
             .expect("recovered identity");
         assert_eq!(second.node_id(), first_id);
+        area.finish().await;
     }
 
     #[tokio::test]
@@ -403,6 +466,7 @@ mod tests {
             .await
             .expect("recovered identity");
         assert_eq!(second.node_id(), first.node_id());
+        area.finish().await;
     }
 
     #[tokio::test]
@@ -417,6 +481,7 @@ mod tests {
             .await
             .expect_err("must fail");
         assert!(matches!(error, IdentityError::KeyMissing));
+        area.finish().await;
     }
 
     #[tokio::test]
@@ -438,6 +503,7 @@ mod tests {
             .await
             .expect_err("must fail");
         assert!(matches!(error, IdentityError::IdentityMismatch));
+        area.finish().await;
     }
 
     #[tokio::test]
@@ -448,12 +514,20 @@ mod tests {
             .await
             .expect("change schema");
         area.storage.close().await;
-        let error = Storage::open(&area.directory.join("node.sqlite3"))
+        area.scope.stop_and_observe().await;
+        let failed_scope = crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+            &area.directory.join("node.sqlite3"),
+            area.roots.clone(),
+        );
+        let error = failed_scope
+            .open()
             .await
             .err()
             .expect("unknown schema must fail");
-        assert!(matches!(error, StorageError::UnknownSchema(99)));
+        assert!(matches!(error.as_ref(), StorageError::UnknownSchema(99)));
+        failed_scope.stop_and_observe().await;
         assert!(!area.directory.join(KEY_REFERENCE).exists());
+        area.finish().await;
     }
 
     #[tokio::test]
@@ -480,6 +554,7 @@ mod tests {
             IdentityError::Storage(StorageError::MissingNodeMeta)
         ));
         assert!(!area.directory.join(KEY_REFERENCE).exists());
+        area.finish().await;
     }
 
     #[tokio::test]
@@ -525,6 +600,7 @@ mod tests {
         );
         assert!(!recovered.node_id().is_empty());
         assert!(area.storage.load_node_meta().await.expect("meta").is_some());
+        area.finish().await;
     }
 
     #[tokio::test]
@@ -543,6 +619,7 @@ mod tests {
             .await
             .expect_err("malformed key must fail");
         assert!(matches!(error, IdentityError::UnsupportedKeyFormat));
+        area.finish().await;
     }
 
     #[cfg(windows)]
@@ -579,6 +656,7 @@ mod tests {
             String::from_utf8_lossy(&output.stdout).contains(&expected_node_id),
             "child did not report the recovered node identity"
         );
+        area.finish().await;
     }
 
     #[cfg(windows)]
@@ -590,15 +668,20 @@ mod tests {
         let expected_node_id =
             std::env::var(DPAPI_CHILD_NODE_ID).expect("child node identity is configured");
         let directory = PathBuf::from(directory);
-        let storage = Storage::open(&directory.join("node.sqlite3"))
-            .await
-            .expect("child storage");
-        let identity = initialize(&directory, &storage, &crate::platform::DpapiProtector)
+        let roots = std::sync::Arc::new(ChildRoots { directory });
+        let scope = crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+            &roots.directory.join("node.sqlite3"),
+            roots.clone(),
+        );
+        let directory = &roots.directory;
+        let storage = scope.open().await.expect("child storage");
+        let identity = initialize(directory, &storage, &crate::platform::DpapiProtector)
             .await
             .expect("child identity recovery");
         assert_eq!(identity.node_id(), expected_node_id);
         println!("NODE_ID={}", identity.node_id());
         storage.close().await;
+        scope.stop_and_observe().await;
     }
 
     #[cfg(windows)]
@@ -636,6 +719,7 @@ mod tests {
         initialize(&before_rename.directory, &before_rename.storage, &protector)
             .await
             .expect("fresh identity after pre-rename crash");
+        before_rename.finish().await;
 
         for point in ["identity-after-key-commit", "identity-before-meta-commit"] {
             let mut area = TestArea::new().await;
@@ -658,6 +742,7 @@ mod tests {
                     .expect("key after metadata recovery"),
                 key_before
             );
+            area.finish().await;
         }
 
         let mut after_meta = TestArea::new().await;
@@ -683,6 +768,7 @@ mod tests {
                 .expect("key after committed restart"),
             key_before
         );
+        after_meta.finish().await;
     }
 
     #[cfg(windows)]
@@ -755,7 +841,7 @@ mod tests {
             drop(second);
             area.storage.close().await;
             let owned_directory = area.directory.clone();
-            drop(area);
+            area.finish().await;
             assert!(
                 !owned_directory.exists(),
                 "owned crash fixture was not cleaned"
@@ -770,10 +856,14 @@ mod tests {
             return;
         };
         let directory = PathBuf::from(directory);
-        let storage = Storage::open(&directory.join("node.sqlite3"))
-            .await
-            .expect("crash child storage");
-        let _identity = initialize(&directory, &storage, &crate::platform::DpapiProtector)
+        let roots = std::sync::Arc::new(ChildRoots { directory });
+        let scope = crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+            &roots.directory.join("node.sqlite3"),
+            roots.clone(),
+        );
+        let directory = &roots.directory;
+        let storage = scope.open().await.expect("crash child storage");
+        let _identity = initialize(directory, &storage, &crate::platform::DpapiProtector)
             .await
             .expect("crash child identity setup");
         panic!("configured identity crash point was not reached");

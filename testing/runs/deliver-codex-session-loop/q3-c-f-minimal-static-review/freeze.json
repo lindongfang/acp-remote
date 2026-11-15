@@ -1,0 +1,21 @@
+{
+  "kind": "independent-review-freeze",
+  "date": "2026-11-02",
+  "members": [
+    {
+      "path": "CHECKS.json",
+      "bytes": 676,
+      "sha256": "114d1ff3b6d56ee45f32d9cd10fc7ecf54d134c912dbc5c5d712a63e56dc58f4"
+    },
+    {
+      "path": "REVIEW.md",
+      "bytes": 4945,
+      "sha256": "edc3c76012b8c58e703addd91f1fb0517ef30aacb55d9f8827ae92dc0b1c5e95"
+    },
+    {
+      "path": "summary.json",
+      "bytes": 756,
+      "sha256": "645096bf91f8a93bb5af8b77dae794a5ef4bac97c2420e2b7f4fa8b9d5ea1e31"
+    }
+  ]
+}

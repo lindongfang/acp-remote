@@ -1,0 +1,120 @@
+{
+  "updatedAt": "2026-11-07T20:00:00+08:00",
+  "change": "deliver-codex-session-loop",
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  },
+  "status": "P3-B Queue read bounded slice installed in Root and post-install checks passed; full change remains incomplete",
+  "baseline": {
+    "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p3b-queue-read-implementation-v1/BASELINE-MANIFEST.json",
+    "members": 934
+  },
+  "candidate": {
+    "workspace": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-p3b-queue-read-implementation-v1\\workspace",
+    "sourceManifest": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-p3b-queue-read-implementation-v1\\SOURCE-MANIFEST-FINAL.json",
+    "sourceSha256": "9474e806dbe0174a8b49627f36735a6835f550dd21800bcef7bb14e16931ce0b",
+    "members": 938,
+    "installedDeltaPaths": 16,
+    "rootManifestMembersMatched": 938,
+    "rootManifestMismatches": 0
+  },
+  "development": {
+    "format": {
+      "script": "run-check-and-strict-05.ps1",
+      "result": "cargo fmt --all exit 0",
+      "sourceSha256BeforeCapture": "00e543520f886552b7e597ea0cd98351ac0eb9ae7de16dd3ddfaced5d8fb39a4"
+    },
+    "checkAllTargetsAllFeatures": {
+      "resultFile": "logs/read-check-all-05.result.json",
+      "exitCode": 0,
+      "jobNaturalZero": true
+    },
+    "strictLibAllFeatures": {
+      "resultFile": "logs/read-strict-lib-05.result.json",
+      "exitCode": 101,
+      "baselineErrors": 708,
+      "candidateErrors": 705,
+      "normalizedAdded": 0,
+      "normalizedRemoved": 3,
+      "scope": "whole-library strict invocation; existing project diagnostics remain"
+    },
+    "testCompile": {
+      "resultFile": "logs/read-test-compile-05.result.json",
+      "cargoExitCode": 0,
+      "compilerSupervision": "VCTIP remained after cargo exit and was stopped by the owned Job runner; original supervision failure retained"
+    },
+    "queueReadNetworkSuite": {
+      "resultFile": "logs/read-queue-network-05.result.json",
+      "binarySha256": "cd5835f13b9e250864e27624e20c1cac07da0611046f3c27253ebe53a57088d0",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "jobNaturalZero": true,
+      "stdout": "logs/read-queue-network-05.stdout"
+    },
+    "web": {
+      "check": "exit 0",
+      "test": "exit 0",
+      "build": "exit 0",
+      "npmAudit": "not run per user instruction"
+    }
+  },
+  "coverage": [
+    "shared queue projection and large value serialization",
+    "same-socket responsiveness during SQL wait",
+    "abort before first poll preserves original join ownership",
+    "single service installation and foreign-node rejection",
+    "revoke before result send",
+    "control-only readiness and unimplemented action error distinction"
+  ],
+  "notVerified": [
+    "full CL-017/030/031 and true vendor Harness",
+    "complete Web workflow/visual independent acceptance",
+    "physical SQLite worker join and full stop ordering",
+    "Source candidate finding SSF-SQL-RECONCILIATION001 and subsequent work",
+    "Root full integration beyond the focused compile and regressions"
+  ],
+  "committed": false,
+  "pushed": false,
+  "independentAcceptance": {
+    "report": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\p3b-queue-read-independent-acceptance-v2\\logs\\INDEPENDENT-ACCEPTANCE-REPORT.md",
+    "status": "PASS bounded P3-B Queue read slice",
+    "testerOwnedChecks": {
+      "passed": 2,
+      "failed": 0
+    },
+    "queueRegression": {
+      "passed": 11,
+      "failed": 0
+    },
+    "scopeLimits": [
+      "full CL-017/030/031",
+      "complete Web journey",
+      "physical SQLite worker close proof",
+      "real Codex Harness"
+    ]
+  },
+  "independentReview": {
+    "status": "P3B-QR-001 closed; WIP narrow merge allowed",
+    "review": "Reviewer confirmed final manifest identity, allocation_failed contract mapping, no new blocking contract deviation; bounded scope only."
+  },
+  "rootPostInstall": {
+    "rustFmt": "passed",
+    "cargoCheckAllTargetsAllFeaturesLockedOffline": "passed",
+    "queueReadRegression": {
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    "webCheck": "passed",
+    "webTests": {
+      "filesPassed": 28,
+      "testsPassed": 661
+    },
+    "webBuild": "passed",
+    "gitDiffCheck": "passed with pre-existing LF/CRLF warnings only",
+    "npmAudit": "not run per user instruction",
+    "strictClippy": "not rerun for this integration; previous whole-library strict remains unresolved"
+  }
+}

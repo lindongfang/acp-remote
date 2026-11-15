@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>原始结构查看器 · 开发夹具</title>
+    <link rel="icon" href="data:," />
+    <style>
+      .raw-fixture { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+      .raw-fixture h1 { font-size: 22px; }
+      .raw-fixture p { overflow-wrap: anywhere; }
+      .raw-fixture label { display: block; margin: 12px 0 4px; }
+      .raw-fixture textarea { box-sizing: border-box; width: 100%; min-height: 120px; font: 13px/1.5 ui-monospace, monospace; }
+      .raw-fixture select, .raw-fixture button { min-height: 36px; font: inherit; margin: 4px 8px 4px 0; }
+      .raw-fixture :is(button, select, textarea):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+      #fixture-host { margin-top: 18px; }
+    </style>
+  </head>
+  <body>
+    <main class="raw-fixture">
+      <h1>原始结构查看器 · 开发夹具</h1>
+      <p>只使用合成数据检查本地组件，不连接节点、原生会话或管理接口。此页不代表独立浏览器验收。</p>
+      <label for="fixture-sample">合成样例</label>
+      <select id="fixture-sample">
+        <option value="basic">字段顺序、重复键与大数</option>
+        <option value="members">201 个成员</option>
+        <option value="deep">20,000 层结构</option>
+        <option value="literal">超过 1 MiB 的字面量</option>
+        <option value="controls">格式控制字符</option>
+      </select>
+      <button id="fixture-load" type="button">载入样例</button>
+      <button id="fixture-theme" type="button">切换深浅色</button>
+      <label for="fixture-json">原始 JSON 输入</label>
+      <textarea id="fixture-json" spellcheck="false"></textarea>
+      <button id="fixture-mount" type="button">建立查看器</button>
+      <button id="fixture-dispose" type="button">关闭查看器</button>
+      <p id="fixture-result" role="status"></p>
+      <div id="fixture-host"></div>
+    </main>
+    <script type="module" src="./raw-inspector.fixture.ts"></script>
+  </body>
+</html>

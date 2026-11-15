@@ -1,0 +1,17 @@
+{
+  "kind": "independent-c-extended-F-limited-execution-gate",
+  "date": "2026-11-03",
+  "memberCount": 2,
+  "members": [
+    {
+      "path": "CHECKS.json",
+      "bytes": 973,
+      "sha256": "c0b9f221b8d8584570404a277d35859b4a413d4427fd49da5b0861ca3d635c97"
+    },
+    {
+      "path": "REVIEW.md",
+      "bytes": 8689,
+      "sha256": "455c5edb5945ddd3d049dd51fd97691105387e7e85b8b8f25fae97e07c8920ea"
+    }
+  ]
+}

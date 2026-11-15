@@ -1,0 +1,64 @@
+{
+  "date": "2026-11-03",
+  "reviews": [
+    {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-c-remaining-independent-posterior-2026-11-03",
+      "freeze": "16db3d1945fb2e041cc5e28819559a7fbf4465258aa645c5e4fd2e4cf7b03b71",
+      "members": 2,
+      "allVerified": true
+    },
+    {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-schema8-producer-independent-posterior-2026-11-03",
+      "freeze": "b02cd89a4b0b29ee20487fddcd576b11a43fc33b2b7eda8a2c46f05d067df9be",
+      "members": 2,
+      "allVerified": true
+    },
+    {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-historical1to7-production-independent-posterior-2026-11-03",
+      "freeze": "0c30d6ffa288e0ed629e74ad8e6d4c3484b34d326bccc224913d4a285912ff6c",
+      "members": 2,
+      "allVerified": true
+    }
+  ],
+  "remainingF": {
+    "outcome": "Pass-independent-limited",
+    "candidateFreeze": "d6a3f9236392068e53c305c710ce46fb52dd8b30d2cd99397b483178694dd794",
+    "fixedIndependent": [
+      "ROLE001",
+      "REARM001",
+      "REV002-OBS001"
+    ],
+    "controllerFunctions": 3,
+    "businessFunctions": 5,
+    "s09Vectors": 51,
+    "firstDbExclusive": 57,
+    "firstWalAbsent": 57,
+    "firstShmAbsent": 57,
+    "retries": 0
+  },
+  "schema8": {
+    "outcome": "Pass-independent-fixture-production",
+    "candidateFreeze": "f8450c4dce853d6dc9a3f46758494d116fa97dc372561c5b56e5c81905d0f488",
+    "actualNodeProducer": true,
+    "functions": 1,
+    "retries": 0,
+    "databaseBytes": 802816,
+    "databaseSHA256": "2d29acbf447ad38cdbbe12da5f41286edb7f7262ec1e1ee2538fb45859e6d319"
+  },
+  "historical1to7": {
+    "outcome": "Pass-independent-fixture-production",
+    "candidateFreeze": "21cc6099263db73e7b94fcc0a87911726289d18f2f0a1b826eaa164f782de4b3",
+    "syntheticStorageCanaries": true,
+    "functions": 7,
+    "retries": 0,
+    "firstDbExclusive": 7,
+    "firstWalAbsent": 7,
+    "firstShmAbsent": 7
+  },
+  "limits": [
+    "Old failures remain unchanged; these are different frozen source versions",
+    "Fixture production does not demonstrate schema9 migration",
+    "No Root installation, complete C acceptance, CLDB, strict, Node/Harness or parent cleanup closure",
+    "Migration must use new copies; original fixture DB/key/ACL remain untouched"
+  ]
+}

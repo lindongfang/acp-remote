@@ -1,0 +1,1008 @@
+{
+  "scope": "Synthetic actual exported Rust projection_wire records collected by authorized real LocalDuplex transport. Metadata parsed only; ACP raw never parsed/stringified by this packaging script. Not Native/WSS/UI/Harness proof.",
+  "source_profile": "3135 fixed369 local Module subset;35 relevant files identical to fixed S0 source434",
+  "S0": "858e7be2378baabdd52018622479e91dd1ff61e960384ce92dda3fa80d2df07f",
+  "definitions": [
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/tests.md",
+      "sha256": "a5e288d7225907983905d0b70b4142835dcc24f6892cbd62d524dc26f4855d65"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/structured-history/spec.md",
+      "sha256": "2b7935a5d172d6a5a3773fe3c877380e0b4738b1acdb601768af2f1e48b55227"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/harness-management/spec.md",
+      "sha256": "96b3335ffe5268972633ab5f7db001372d53b669fe0c231e0053d55e9b231989"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/management-audit/spec.md",
+      "sha256": "44def0ff9e017b6069834023e4750dbddeeba8e98c3a7a4ad7bd7ab79564ca3a"
+    }
+  ],
+  "core_sources": [
+    {
+      "path": "app/src/adapters/acp/shared_view_capture.rs",
+      "sha256": "34ecb341508394238bd9c2fcfae1602620f1699672583ed4a40ba0d228954916",
+      "actual": "34ecb341508394238bd9c2fcfae1602620f1699672583ed4a40ba0d228954916",
+      "s0": "34ecb341508394238bd9c2fcfae1602620f1699672583ed4a40ba0d228954916"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_capture/tests.rs",
+      "sha256": "21442e493557f50402f797b6ef8648fe23f0019c7c133ef764c4b7afdd006207",
+      "actual": "21442e493557f50402f797b6ef8648fe23f0019c7c133ef764c4b7afdd006207",
+      "s0": "21442e493557f50402f797b6ef8648fe23f0019c7c133ef764c4b7afdd006207"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_module.rs",
+      "sha256": "8a75cefe40ef8f56f7120aa55074fea48806fb5f3fcb97c31de68a2342a3d4e8",
+      "actual": "0614c48e461ee838b751de3abbf4350813b3db63ddcd8a4a31a1b40ce24b43ea",
+      "s0": "8a75cefe40ef8f56f7120aa55074fea48806fb5f3fcb97c31de68a2342a3d4e8"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_module/controller_tests.rs",
+      "sha256": "0fd5c20a5f2a446c932e74fc7c9f807c8e392ae7c3f47af1b25ef1de50229b85",
+      "actual": "0fd5c20a5f2a446c932e74fc7c9f807c8e392ae7c3f47af1b25ef1de50229b85",
+      "s0": "0fd5c20a5f2a446c932e74fc7c9f807c8e392ae7c3f47af1b25ef1de50229b85"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_module/controller_tests/reachability_tests.rs",
+      "sha256": "fec2caf6fe08fabed342a8e8e07383e1a1fbb43746ebffc62a9937f3d8ed4cdd",
+      "actual": "fec2caf6fe08fabed342a8e8e07383e1a1fbb43746ebffc62a9937f3d8ed4cdd",
+      "s0": "fec2caf6fe08fabed342a8e8e07383e1a1fbb43746ebffc62a9937f3d8ed4cdd"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_module/history.rs",
+      "sha256": "5841ea8e66c1ee181e74e56780f8c4ec15069567fa3d29c2af1b48c2ef5d920a",
+      "actual": "5841ea8e66c1ee181e74e56780f8c4ec15069567fa3d29c2af1b48c2ef5d920a",
+      "s0": "5841ea8e66c1ee181e74e56780f8c4ec15069567fa3d29c2af1b48c2ef5d920a"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_module/tests.rs",
+      "sha256": "64d6464eff0b4c3e461c06f1e80c72d0da28f423fb9afb3b032136cf5fb79c5f",
+      "actual": "64d6464eff0b4c3e461c06f1e80c72d0da28f423fb9afb3b032136cf5fb79c5f",
+      "s0": "64d6464eff0b4c3e461c06f1e80c72d0da28f423fb9afb3b032136cf5fb79c5f"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_module/transfer.rs",
+      "sha256": "aba4738cb72794be7cc2aed536e971073fd42ec3f47cbe9aff69340c7d267c3e",
+      "actual": "aba4738cb72794be7cc2aed536e971073fd42ec3f47cbe9aff69340c7d267c3e",
+      "s0": "aba4738cb72794be7cc2aed536e971073fd42ec3f47cbe9aff69340c7d267c3e"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_module/transfer/transfer001_tests.rs",
+      "sha256": "b8cb24f7e3f0e8b91ee187b15a44c58719090c12c549a81535ccb74cca093172",
+      "actual": "b8cb24f7e3f0e8b91ee187b15a44c58719090c12c549a81535ccb74cca093172",
+      "s0": "b8cb24f7e3f0e8b91ee187b15a44c58719090c12c549a81535ccb74cca093172"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_projection.rs",
+      "sha256": "9d2911f7d0562c65871e45eadde1ad38673ed5e0caba1161f1e84a2e743b1b70",
+      "actual": "9d2911f7d0562c65871e45eadde1ad38673ed5e0caba1161f1e84a2e743b1b70",
+      "s0": "9d2911f7d0562c65871e45eadde1ad38673ed5e0caba1161f1e84a2e743b1b70"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_projection/tests.rs",
+      "sha256": "b8f07b75ddbb5de832c698e313c27ad9934a1004191b2b80aa82d60800b420e6",
+      "actual": "b8f07b75ddbb5de832c698e313c27ad9934a1004191b2b80aa82d60800b420e6",
+      "s0": "b8f07b75ddbb5de832c698e313c27ad9934a1004191b2b80aa82d60800b420e6"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_read.rs",
+      "sha256": "8a70a9f4f3b88a11ef6a2de38d86b3522d3fadf1db0c92ca6b236a5ca89d736b",
+      "actual": "8a70a9f4f3b88a11ef6a2de38d86b3522d3fadf1db0c92ca6b236a5ca89d736b",
+      "s0": "8a70a9f4f3b88a11ef6a2de38d86b3522d3fadf1db0c92ca6b236a5ca89d736b"
+    },
+    {
+      "path": "app/src/adapters/acp/shared_view_read/tests.rs",
+      "sha256": "7de88e4b5c592df9a9a232bada82cbb2813321148c0ba965efe3c7ecd111e195",
+      "actual": "7de88e4b5c592df9a9a232bada82cbb2813321148c0ba965efe3c7ecd111e195",
+      "s0": "7de88e4b5c592df9a9a232bada82cbb2813321148c0ba965efe3c7ecd111e195"
+    },
+    {
+      "path": "app/src/application/shared_views.rs",
+      "sha256": "78c0592ede7f09c869ae9b440989a37b66f6171bb0ceac6f6057fa6947fff162",
+      "actual": "78c0592ede7f09c869ae9b440989a37b66f6171bb0ceac6f6057fa6947fff162",
+      "s0": "78c0592ede7f09c869ae9b440989a37b66f6171bb0ceac6f6057fa6947fff162"
+    },
+    {
+      "path": "app/src/application/shared_views/budget.rs",
+      "sha256": "7e2fc2df4b4dc4fa107c53b578a9abd81a263e4578b6eec966ea138342b3ac20",
+      "actual": "7e2fc2df4b4dc4fa107c53b578a9abd81a263e4578b6eec966ea138342b3ac20",
+      "s0": "7e2fc2df4b4dc4fa107c53b578a9abd81a263e4578b6eec966ea138342b3ac20"
+    },
+    {
+      "path": "app/src/application/shared_views/controller.rs",
+      "sha256": "ba636dd49246dbcfe18929cc2ef960c86c3e14ec3ea2351701e595ced19842a9",
+      "actual": "ba636dd49246dbcfe18929cc2ef960c86c3e14ec3ea2351701e595ced19842a9",
+      "s0": "ba636dd49246dbcfe18929cc2ef960c86c3e14ec3ea2351701e595ced19842a9"
+    },
+    {
+      "path": "app/src/application/shared_views/indexed_journal.rs",
+      "sha256": "13040ce306c93eaf9da149baaf7bd5d0a5e9032581a55b7738dba12ef5494d56",
+      "actual": "13040ce306c93eaf9da149baaf7bd5d0a5e9032581a55b7738dba12ef5494d56",
+      "s0": "13040ce306c93eaf9da149baaf7bd5d0a5e9032581a55b7738dba12ef5494d56"
+    },
+    {
+      "path": "app/src/application/shared_views/ingress.rs",
+      "sha256": "babad915543a6efb1c02ab40c92106a9ec66c5fe14dfc9ec5bf85d119923336f",
+      "actual": "babad915543a6efb1c02ab40c92106a9ec66c5fe14dfc9ec5bf85d119923336f",
+      "s0": "babad915543a6efb1c02ab40c92106a9ec66c5fe14dfc9ec5bf85d119923336f"
+    },
+    {
+      "path": "app/src/application/shared_views/journal.rs",
+      "sha256": "e25a755857fca4a17346028e4e40a7911c9ebf81eda713b6fa27db4b81963bcb",
+      "actual": "e25a755857fca4a17346028e4e40a7911c9ebf81eda713b6fa27db4b81963bcb",
+      "s0": "e25a755857fca4a17346028e4e40a7911c9ebf81eda713b6fa27db4b81963bcb"
+    },
+    {
+      "path": "app/src/application/shared_views/local_authority.rs",
+      "sha256": "42d7814c4787a039ef8ff1c389c4cd8c86941355a99add227153c1f3607bd26c",
+      "actual": "42d7814c4787a039ef8ff1c389c4cd8c86941355a99add227153c1f3607bd26c",
+      "s0": "42d7814c4787a039ef8ff1c389c4cd8c86941355a99add227153c1f3607bd26c"
+    },
+    {
+      "path": "app/src/application/shared_views/local_transfer.rs",
+      "sha256": "4f92fe07a510e14ffc271700c070d4751311b5bd6015ac2d9f670317b12c90b5",
+      "actual": "4f92fe07a510e14ffc271700c070d4751311b5bd6015ac2d9f670317b12c90b5",
+      "s0": "4f92fe07a510e14ffc271700c070d4751311b5bd6015ac2d9f670317b12c90b5"
+    },
+    {
+      "path": "app/src/application/shared_views/probe.rs",
+      "sha256": "e8feed3cbcf4f1727f425306e815dca28044de4014b7ef480fdb01c60352dc7f",
+      "actual": "e8feed3cbcf4f1727f425306e815dca28044de4014b7ef480fdb01c60352dc7f",
+      "s0": "e8feed3cbcf4f1727f425306e815dca28044de4014b7ef480fdb01c60352dc7f"
+    },
+    {
+      "path": "app/src/application/shared_views/projection_wire.rs",
+      "sha256": "158e10a9b2aac55c8a0d20c1635bb08d725acd9c5b9473818410106740b55569",
+      "actual": "158e10a9b2aac55c8a0d20c1635bb08d725acd9c5b9473818410106740b55569",
+      "s0": "158e10a9b2aac55c8a0d20c1635bb08d725acd9c5b9473818410106740b55569"
+    },
+    {
+      "path": "app/src/application/shared_views/read_control.rs",
+      "sha256": "208ebd26c5b9a73ae1b644413a28c7d3917a1786ae153dca382cc099164d9f83",
+      "actual": "208ebd26c5b9a73ae1b644413a28c7d3917a1786ae153dca382cc099164d9f83",
+      "s0": "208ebd26c5b9a73ae1b644413a28c7d3917a1786ae153dca382cc099164d9f83"
+    },
+    {
+      "path": "app/src/application/shared_views/read_observation.rs",
+      "sha256": "a825378f86fa37b19267f7a906af05d630e2a10be34902620adbcc25991404c8",
+      "actual": "a825378f86fa37b19267f7a906af05d630e2a10be34902620adbcc25991404c8",
+      "s0": "a825378f86fa37b19267f7a906af05d630e2a10be34902620adbcc25991404c8"
+    },
+    {
+      "path": "app/src/application/shared_views/read_prefix.rs",
+      "sha256": "c3db7c027d24c84557a4068a78939c870b30725e6d6f4eefca43c9368f1bad22",
+      "actual": "c3db7c027d24c84557a4068a78939c870b30725e6d6f4eefca43c9368f1bad22",
+      "s0": "c3db7c027d24c84557a4068a78939c870b30725e6d6f4eefca43c9368f1bad22"
+    },
+    {
+      "path": "app/src/application/shared_views/reader.rs",
+      "sha256": "262ab21201b64b3db92b889d3ced95ba2972b70fd25d9e2eb09782f6594c72e8",
+      "actual": "18a3db1fa7f0b4a03f27c6dd4687344c7244c6a6d38a608ac7c54bc2fca766d6",
+      "s0": "262ab21201b64b3db92b889d3ced95ba2972b70fd25d9e2eb09782f6594c72e8"
+    },
+    {
+      "path": "app/src/application/shared_views/segments.rs",
+      "sha256": "a4022f63a225c2e60189f2ee15c0ddc1a287317162471effdd1e6c5cf73d8bbf",
+      "actual": "a4022f63a225c2e60189f2ee15c0ddc1a287317162471effdd1e6c5cf73d8bbf",
+      "s0": "a4022f63a225c2e60189f2ee15c0ddc1a287317162471effdd1e6c5cf73d8bbf"
+    },
+    {
+      "path": "app/src/application/shared_views/send_epoch.rs",
+      "sha256": "d3184d082f355bf1158ea86edb56be10ebff677f57d94a4dfc8d3449b42cec16",
+      "actual": "d3184d082f355bf1158ea86edb56be10ebff677f57d94a4dfc8d3449b42cec16",
+      "s0": "d3184d082f355bf1158ea86edb56be10ebff677f57d94a4dfc8d3449b42cec16"
+    },
+    {
+      "path": "app/src/application/shared_views/source.rs",
+      "sha256": "3b670fbb2529a718fbeb719b4212c6413dcccf39aa6650ad389254502e3d1418",
+      "actual": "3b670fbb2529a718fbeb719b4212c6413dcccf39aa6650ad389254502e3d1418",
+      "s0": "3b670fbb2529a718fbeb719b4212c6413dcccf39aa6650ad389254502e3d1418"
+    },
+    {
+      "path": "app/src/application/shared_views/tasks.rs",
+      "sha256": "41ca75dd7173629e1a89ec9e0bd10bfefd9ed958d1ff1fda90c29652f7b7b79b",
+      "actual": "41ca75dd7173629e1a89ec9e0bd10bfefd9ed958d1ff1fda90c29652f7b7b79b",
+      "s0": "41ca75dd7173629e1a89ec9e0bd10bfefd9ed958d1ff1fda90c29652f7b7b79b"
+    },
+    {
+      "path": "app/src/application/shared_views/wire.rs",
+      "sha256": "1cc2d0a822f6ef317ad1897f8e2f238e419a0336944fe96ac44fbb90079d3a3c",
+      "actual": "1cc2d0a822f6ef317ad1897f8e2f238e419a0336944fe96ac44fbb90079d3a3c",
+      "s0": "1cc2d0a822f6ef317ad1897f8e2f238e419a0336944fe96ac44fbb90079d3a3c"
+    },
+    {
+      "path": "app/src/domain/shared_projection.rs",
+      "sha256": "da9e029ce5b5a2d6e4e4bf7416018925fdc9f2227a4cc656ff2ed21d9965b44f",
+      "actual": "da9e029ce5b5a2d6e4e4bf7416018925fdc9f2227a4cc656ff2ed21d9965b44f",
+      "s0": "da9e029ce5b5a2d6e4e4bf7416018925fdc9f2227a4cc656ff2ed21d9965b44f"
+    },
+    {
+      "path": "app/src/domain/shared_view.rs",
+      "sha256": "4dd9f6eb3877cfed381191f66f70ddf9df6ee2b6646b41ef09438ca36af203e1",
+      "actual": "4dd9f6eb3877cfed381191f66f70ddf9df6ee2b6646b41ef09438ca36af203e1",
+      "s0": "4dd9f6eb3877cfed381191f66f70ddf9df6ee2b6646b41ef09438ca36af203e1"
+    },
+    {
+      "path": "app/src/domain/shared_view_log.rs",
+      "sha256": "0f0571c172ff9499d0aa4150433984d37c87fc96b65ab4180c99bd726aff8a4a",
+      "actual": "0f0571c172ff9499d0aa4150433984d37c87fc96b65ab4180c99bd726aff8a4a",
+      "s0": "0f0571c172ff9499d0aa4150433984d37c87fc96b65ab4180c99bd726aff8a4a"
+    }
+  ],
+  "versions": [
+    {
+      "version": "v1",
+      "manifest": "v1/manifest.json",
+      "manifest_sha256": "278689c649a1efb3a9f0ec30a60521239def5f2ae9018e0f5f876ddfb016992f",
+      "stages": [
+        {
+          "label": "T-start-A-B-already-readable",
+          "tool": "stage-00-record-005.json",
+          "toolKey": {
+            "segmentId": "4EN7DTAYUMrTPGqnaTdEqw",
+            "anchorId": "0"
+          },
+          "firstPosition": "5",
+          "revision": "5",
+          "messageItems": [
+            "stage-00-record-006.json",
+            "stage-00-record-008.json"
+          ],
+          "allItemRecords": [
+            "stage-00-record-005.json",
+            "stage-00-record-006.json",
+            "stage-00-record-008.json"
+          ],
+          "evidenceRecords": [
+            "stage-00-record-007.json",
+            "stage-00-record-009.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "3",
+              "path": "stage-00-record-002.json",
+              "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-00-record-003.json",
+              "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-00-record-004.json",
+              "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+            }
+          ],
+          "actualLiveStatuses": 2
+        },
+        {
+          "label": "T-progress-C",
+          "tool": "stage-01-record-007.json",
+          "toolKey": {
+            "segmentId": "4EN7DTAYUMrTPGqnaTdEqw",
+            "anchorId": "0"
+          },
+          "firstPosition": "5",
+          "revision": "8",
+          "messageItems": [
+            "stage-01-record-008.json",
+            "stage-01-record-010.json",
+            "stage-01-record-012.json"
+          ],
+          "allItemRecords": [
+            "stage-01-record-007.json",
+            "stage-01-record-008.json",
+            "stage-01-record-010.json",
+            "stage-01-record-012.json"
+          ],
+          "evidenceRecords": [
+            "stage-01-record-009.json",
+            "stage-01-record-011.json",
+            "stage-01-record-013.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "3",
+              "path": "stage-01-record-002.json",
+              "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-01-record-003.json",
+              "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-01-record-004.json",
+              "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-01-record-005.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-01-record-006.json",
+              "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+            }
+          ],
+          "actualLiveStatuses": 2
+        },
+        {
+          "label": "T-second-progress-after-C",
+          "tool": "stage-02-record-008.json",
+          "toolKey": {
+            "segmentId": "4EN7DTAYUMrTPGqnaTdEqw",
+            "anchorId": "0"
+          },
+          "firstPosition": "5",
+          "revision": "10",
+          "messageItems": [
+            "stage-02-record-009.json",
+            "stage-02-record-011.json",
+            "stage-02-record-013.json"
+          ],
+          "allItemRecords": [
+            "stage-02-record-008.json",
+            "stage-02-record-009.json",
+            "stage-02-record-011.json",
+            "stage-02-record-013.json"
+          ],
+          "evidenceRecords": [
+            "stage-02-record-010.json",
+            "stage-02-record-012.json",
+            "stage-02-record-014.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "3",
+              "path": "stage-02-record-002.json",
+              "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-02-record-003.json",
+              "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-02-record-004.json",
+              "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-02-record-005.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-02-record-006.json",
+              "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+            },
+            {
+              "recordId": "8",
+              "path": "stage-02-record-007.json",
+              "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+            }
+          ],
+          "actualLiveStatuses": 2
+        },
+        {
+          "label": "T-late-completed-after-text",
+          "tool": "stage-03-record-009.json",
+          "toolKey": {
+            "segmentId": "4EN7DTAYUMrTPGqnaTdEqw",
+            "anchorId": "0"
+          },
+          "firstPosition": "5",
+          "revision": "11",
+          "messageItems": [
+            "stage-03-record-010.json",
+            "stage-03-record-012.json",
+            "stage-03-record-014.json"
+          ],
+          "allItemRecords": [
+            "stage-03-record-009.json",
+            "stage-03-record-010.json",
+            "stage-03-record-012.json",
+            "stage-03-record-014.json"
+          ],
+          "evidenceRecords": [
+            "stage-03-record-011.json",
+            "stage-03-record-013.json",
+            "stage-03-record-015.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "3",
+              "path": "stage-03-record-002.json",
+              "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-03-record-003.json",
+              "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-03-record-004.json",
+              "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-03-record-005.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-03-record-006.json",
+              "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+            },
+            {
+              "recordId": "8",
+              "path": "stage-03-record-007.json",
+              "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+            },
+            {
+              "recordId": "9",
+              "path": "stage-03-record-008.json",
+              "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+            }
+          ],
+          "actualLiveStatuses": 2
+        },
+        {
+          "label": "unknown-tag-not-guessed-as-T",
+          "tool": "stage-04-record-010.json",
+          "toolKey": {
+            "segmentId": "4EN7DTAYUMrTPGqnaTdEqw",
+            "anchorId": "0"
+          },
+          "firstPosition": "5",
+          "revision": "11",
+          "messageItems": [
+            "stage-04-record-011.json",
+            "stage-04-record-013.json",
+            "stage-04-record-015.json"
+          ],
+          "allItemRecords": [
+            "stage-04-record-010.json",
+            "stage-04-record-011.json",
+            "stage-04-record-013.json",
+            "stage-04-record-015.json",
+            "stage-04-record-017.json"
+          ],
+          "evidenceRecords": [
+            "stage-04-record-012.json",
+            "stage-04-record-014.json",
+            "stage-04-record-016.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "3",
+              "path": "stage-04-record-002.json",
+              "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-04-record-003.json",
+              "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-04-record-004.json",
+              "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-04-record-005.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-04-record-006.json",
+              "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+            },
+            {
+              "recordId": "8",
+              "path": "stage-04-record-007.json",
+              "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+            },
+            {
+              "recordId": "9",
+              "path": "stage-04-record-008.json",
+              "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+            },
+            {
+              "recordId": "10",
+              "path": "stage-04-record-009.json",
+              "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+            }
+          ],
+          "actualLiveStatuses": 2
+        },
+        {
+          "label": "same-original-read-snapshot-reread",
+          "tool": "stage-05-record-010.json",
+          "toolKey": {
+            "segmentId": "4EN7DTAYUMrTPGqnaTdEqw",
+            "anchorId": "0"
+          },
+          "firstPosition": "5",
+          "revision": "11",
+          "messageItems": [
+            "stage-05-record-011.json",
+            "stage-05-record-013.json",
+            "stage-05-record-015.json"
+          ],
+          "allItemRecords": [
+            "stage-05-record-010.json",
+            "stage-05-record-011.json",
+            "stage-05-record-013.json",
+            "stage-05-record-015.json",
+            "stage-05-record-017.json"
+          ],
+          "evidenceRecords": [
+            "stage-05-record-012.json",
+            "stage-05-record-014.json",
+            "stage-05-record-016.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "3",
+              "path": "stage-05-record-002.json",
+              "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-05-record-003.json",
+              "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-05-record-004.json",
+              "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-05-record-005.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-05-record-006.json",
+              "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+            },
+            {
+              "recordId": "8",
+              "path": "stage-05-record-007.json",
+              "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+            },
+            {
+              "recordId": "9",
+              "path": "stage-05-record-008.json",
+              "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+            },
+            {
+              "recordId": "10",
+              "path": "stage-05-record-009.json",
+              "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+            }
+          ],
+          "actualLiveStatuses": 2
+        }
+      ]
+    },
+    {
+      "version": "v2",
+      "manifest": "v2/manifest.json",
+      "manifest_sha256": "1581ef719e94809bb9c33cd254a56f715c9193602ebecf452e6d0937b7268f5b",
+      "stages": [
+        {
+          "label": "T-start-A-B-already-readable",
+          "tool": "stage-00-record-011.json",
+          "toolKey": {
+            "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+            "anchorId": "1"
+          },
+          "firstPosition": "6",
+          "revision": "6",
+          "messageItems": [
+            "stage-00-record-012.json",
+            "stage-00-record-014.json"
+          ],
+          "allItemRecords": [
+            "stage-00-record-009.json",
+            "stage-00-record-011.json",
+            "stage-00-record-012.json",
+            "stage-00-record-014.json"
+          ],
+          "evidenceRecords": [
+            "stage-00-record-013.json",
+            "stage-00-record-015.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "2",
+              "path": "stage-00-record-003.json",
+              "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-00-record-005.json",
+              "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-00-record-006.json",
+              "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-00-record-007.json",
+              "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+            }
+          ],
+          "actualLiveStatuses": 4
+        },
+        {
+          "label": "T-progress-C",
+          "tool": "stage-01-record-013.json",
+          "toolKey": {
+            "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+            "anchorId": "1"
+          },
+          "firstPosition": "6",
+          "revision": "9",
+          "messageItems": [
+            "stage-01-record-014.json",
+            "stage-01-record-016.json",
+            "stage-01-record-018.json"
+          ],
+          "allItemRecords": [
+            "stage-01-record-011.json",
+            "stage-01-record-013.json",
+            "stage-01-record-014.json",
+            "stage-01-record-016.json",
+            "stage-01-record-018.json"
+          ],
+          "evidenceRecords": [
+            "stage-01-record-015.json",
+            "stage-01-record-017.json",
+            "stage-01-record-019.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "2",
+              "path": "stage-01-record-003.json",
+              "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-01-record-005.json",
+              "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-01-record-006.json",
+              "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-01-record-007.json",
+              "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-01-record-008.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "8",
+              "path": "stage-01-record-009.json",
+              "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+            }
+          ],
+          "actualLiveStatuses": 4
+        },
+        {
+          "label": "T-second-progress-after-C",
+          "tool": "stage-02-record-014.json",
+          "toolKey": {
+            "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+            "anchorId": "1"
+          },
+          "firstPosition": "6",
+          "revision": "11",
+          "messageItems": [
+            "stage-02-record-015.json",
+            "stage-02-record-017.json",
+            "stage-02-record-019.json"
+          ],
+          "allItemRecords": [
+            "stage-02-record-012.json",
+            "stage-02-record-014.json",
+            "stage-02-record-015.json",
+            "stage-02-record-017.json",
+            "stage-02-record-019.json"
+          ],
+          "evidenceRecords": [
+            "stage-02-record-016.json",
+            "stage-02-record-018.json",
+            "stage-02-record-020.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "2",
+              "path": "stage-02-record-003.json",
+              "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-02-record-005.json",
+              "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-02-record-006.json",
+              "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-02-record-007.json",
+              "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-02-record-008.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "8",
+              "path": "stage-02-record-009.json",
+              "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+            },
+            {
+              "recordId": "9",
+              "path": "stage-02-record-010.json",
+              "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+            }
+          ],
+          "actualLiveStatuses": 4
+        },
+        {
+          "label": "T-late-completed-after-text",
+          "tool": "stage-03-record-015.json",
+          "toolKey": {
+            "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+            "anchorId": "1"
+          },
+          "firstPosition": "6",
+          "revision": "12",
+          "messageItems": [
+            "stage-03-record-016.json",
+            "stage-03-record-018.json",
+            "stage-03-record-020.json"
+          ],
+          "allItemRecords": [
+            "stage-03-record-013.json",
+            "stage-03-record-015.json",
+            "stage-03-record-016.json",
+            "stage-03-record-018.json",
+            "stage-03-record-020.json"
+          ],
+          "evidenceRecords": [
+            "stage-03-record-017.json",
+            "stage-03-record-019.json",
+            "stage-03-record-021.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "2",
+              "path": "stage-03-record-003.json",
+              "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-03-record-005.json",
+              "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-03-record-006.json",
+              "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-03-record-007.json",
+              "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-03-record-008.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "8",
+              "path": "stage-03-record-009.json",
+              "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+            },
+            {
+              "recordId": "9",
+              "path": "stage-03-record-010.json",
+              "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+            },
+            {
+              "recordId": "10",
+              "path": "stage-03-record-011.json",
+              "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+            }
+          ],
+          "actualLiveStatuses": 4
+        },
+        {
+          "label": "unknown-tag-not-guessed-as-T",
+          "tool": "stage-04-record-016.json",
+          "toolKey": {
+            "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+            "anchorId": "1"
+          },
+          "firstPosition": "6",
+          "revision": "12",
+          "messageItems": [
+            "stage-04-record-017.json",
+            "stage-04-record-019.json",
+            "stage-04-record-021.json"
+          ],
+          "allItemRecords": [
+            "stage-04-record-014.json",
+            "stage-04-record-016.json",
+            "stage-04-record-017.json",
+            "stage-04-record-019.json",
+            "stage-04-record-021.json",
+            "stage-04-record-023.json"
+          ],
+          "evidenceRecords": [
+            "stage-04-record-018.json",
+            "stage-04-record-020.json",
+            "stage-04-record-022.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "2",
+              "path": "stage-04-record-003.json",
+              "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-04-record-005.json",
+              "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-04-record-006.json",
+              "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-04-record-007.json",
+              "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-04-record-008.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "8",
+              "path": "stage-04-record-009.json",
+              "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+            },
+            {
+              "recordId": "9",
+              "path": "stage-04-record-010.json",
+              "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+            },
+            {
+              "recordId": "10",
+              "path": "stage-04-record-011.json",
+              "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+            },
+            {
+              "recordId": "11",
+              "path": "stage-04-record-012.json",
+              "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+            }
+          ],
+          "actualLiveStatuses": 4
+        },
+        {
+          "label": "same-original-read-snapshot-reread",
+          "tool": "stage-05-record-016.json",
+          "toolKey": {
+            "segmentId": "QeM3Y_Yc2PbGC83Wuy4kJg",
+            "anchorId": "1"
+          },
+          "firstPosition": "6",
+          "revision": "12",
+          "messageItems": [
+            "stage-05-record-017.json",
+            "stage-05-record-019.json",
+            "stage-05-record-021.json"
+          ],
+          "allItemRecords": [
+            "stage-05-record-014.json",
+            "stage-05-record-016.json",
+            "stage-05-record-017.json",
+            "stage-05-record-019.json",
+            "stage-05-record-021.json",
+            "stage-05-record-023.json"
+          ],
+          "evidenceRecords": [
+            "stage-05-record-018.json",
+            "stage-05-record-020.json",
+            "stage-05-record-022.json"
+          ],
+          "rawReferences": [
+            {
+              "recordId": "2",
+              "path": "stage-05-record-003.json",
+              "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+            },
+            {
+              "recordId": "4",
+              "path": "stage-05-record-005.json",
+              "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+            },
+            {
+              "recordId": "5",
+              "path": "stage-05-record-006.json",
+              "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+            },
+            {
+              "recordId": "6",
+              "path": "stage-05-record-007.json",
+              "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+            },
+            {
+              "recordId": "7",
+              "path": "stage-05-record-008.json",
+              "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+            },
+            {
+              "recordId": "8",
+              "path": "stage-05-record-009.json",
+              "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+            },
+            {
+              "recordId": "9",
+              "path": "stage-05-record-010.json",
+              "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+            },
+            {
+              "recordId": "10",
+              "path": "stage-05-record-011.json",
+              "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+            },
+            {
+              "recordId": "11",
+              "path": "stage-05-record-012.json",
+              "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+            }
+          ],
+          "actualLiveStatuses": 4
+        }
+      ]
+    }
+  ],
+  "totalRecords": 254,
+  "itemAndEvidenceRecords": 90,
+  "rawRecordCopies": 80,
+  "copyBytesUnchanged": true,
+  "CL023ParentPassed": false
+}

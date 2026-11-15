@@ -1,0 +1,126 @@
+﻿{
+    "scope":  "Raw JSON v1 independent acceptance only",
+    "candidateManifest":  "7b1a6d69f0c931adf5d3e3bf1010f5fe85bd5877dfac0d374e67d80a30e65287",
+    "entries":  [
+                    {
+                        "path":  "acceptance-final.txt",
+                        "sha256":  "9ee1d00f05ea2fa4dea9e12adae497695782ec8fc54d52012e6d55776fa8bbbf",
+                        "bytes":  3444
+                    },
+                    {
+                        "path":  "acceptance-frozen.txt",
+                        "sha256":  "45f6e605a7053d1320674c2f1025e5baadde18e92506145686a7869d4e839dac",
+                        "bytes":  3284
+                    },
+                    {
+                        "path":  "acceptance-frozen-exit.json",
+                        "sha256":  "59d62479bc6a786979c7dc7d9ad468e0602c3ecbc81f83212a84026514c370a6",
+                        "bytes":  343
+                    },
+                    {
+                        "path":  "acceptance-initial.txt",
+                        "sha256":  "1b5d71db9b3d030d2c5af24be460168f7dcc5cbf07e8bca53c4f0ddf9fed3f78",
+                        "bytes":  9769
+                    },
+                    {
+                        "path":  "acceptance-initial-exit.json",
+                        "sha256":  "5f0b6910967804b20261c90365ce4f2217a621a39ee6175ebd4e1c2ee96c1939",
+                        "bytes":  122
+                    },
+                    {
+                        "path":  "acceptance-report.md",
+                        "sha256":  "98cfa126c50631bd27c861a452cb0964a00dadbefa423289fb0984f927a50516",
+                        "bytes":  9148
+                    },
+                    {
+                        "path":  "acp-library-regression.txt",
+                        "sha256":  "a64430dd39656b6bedb95f9736865693bb68773a1097f8c334423465e78de69e",
+                        "bytes":  7872
+                    },
+                    {
+                        "path":  "acp-library-regression-exit.json",
+                        "sha256":  "bed7663ea74cb3501b264ad9d2de0cf69516485faa5d9d3e488a4edf88046619",
+                        "bytes":  316
+                    },
+                    {
+                        "path":  "assets-after.json",
+                        "sha256":  "250630898cd3a127e177847767a06cc764f33c42ae5659f464b4a5d72f48eb86",
+                        "bytes":  338
+                    },
+                    {
+                        "path":  "assets-before.json",
+                        "sha256":  "ae3883037f9ea45a391398a533d75b78640601a57da5a6d1c954c798d0283d30",
+                        "bytes":  404
+                    },
+                    {
+                        "path":  "case-results.json",
+                        "sha256":  "cbb210aaa347145b4d264f739ee70d01d6af6eb814561163be10057385ab15c1",
+                        "bytes":  13634714
+                    },
+                    {
+                        "path":  "clippy-final.txt",
+                        "sha256":  "2a777118890a7d3a43f8ba0bab25d28584abbf10752ac79cd197b6dca6480a69",
+                        "bytes":  232
+                    },
+                    {
+                        "path":  "clippy-initial.txt",
+                        "sha256":  "b873180270ea63872ed6a88c0b79dcbfe4de6681dcfc15e73a4edfcea96cdde6",
+                        "bytes":  8598
+                    },
+                    {
+                        "path":  "clippy-initial-exit.json",
+                        "sha256":  "7d5da8d48fa9e8fbb581b557a9d1ccbd183d26c052eec73a3ad28dac94e19825",
+                        "bytes":  162
+                    },
+                    {
+                        "path":  "environment.json",
+                        "sha256":  "cca981c3a4ed81a9d5be26144719970e9795189f5afebf50f67a1b3dcf2d8daa",
+                        "bytes":  533
+                    },
+                    {
+                        "path":  "final-command-results.json",
+                        "sha256":  "3d96d374304f3f3fed4fc19e9e1cc0008b5f91abfc5cb08bc642baf0a94ff637",
+                        "bytes":  2587
+                    },
+                    {
+                        "path":  "fmt-final.txt",
+                        "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "bytes":  0
+                    },
+                    {
+                        "path":  "management-regression.txt",
+                        "sha256":  "679899c31c6b44659c49ea0f4f6717c096ab62dd544ff54e824e721abe111513",
+                        "bytes":  685
+                    },
+                    {
+                        "path":  "public-regression.txt",
+                        "sha256":  "361f13acf0cf3bbd636b6a27204a2597df072927c4e98bd56e91cf2b088b0a5f",
+                        "bytes":  4137
+                    },
+                    {
+                        "path":  "root-git-before.txt",
+                        "sha256":  "79fc52c5a961175ae3e3a36e65faba629317ebbdfb19117c843313a9a25315c0",
+                        "bytes":  28824
+                    },
+                    {
+                        "path":  "source-after.json",
+                        "sha256":  "f0339b0da4480614a7d57662810683457b5654c12fcca440b7ca0322bf91e376",
+                        "bytes":  35764
+                    },
+                    {
+                        "path":  "source-before.json",
+                        "sha256":  "f0339b0da4480614a7d57662810683457b5654c12fcca440b7ca0322bf91e376",
+                        "bytes":  35764
+                    },
+                    {
+                        "path":  "strict-json-callpoints.txt",
+                        "sha256":  "3e2f75f4ca9a311825fd23de2df13202f22ab280e648f171e54bd521c157617b",
+                        "bytes":  2770
+                    },
+                    {
+                        "path":  "delivery/app/tests/raw_json_acceptance.rs",
+                        "sha256":  "1853768ef419f0838f543cc6c050c0ecb932f961e5f86638bbf3f5b81f2ce43a",
+                        "bytes":  25046
+                    }
+                ]
+}

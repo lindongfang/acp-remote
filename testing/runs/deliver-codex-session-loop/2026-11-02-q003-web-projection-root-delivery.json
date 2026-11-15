@@ -1,0 +1,96 @@
+{
+  "scope": "Delivered actual Root nonvisual projection decoding/immutable original-position collection and unchanged independent assets only. Existing346 preserved/new267/actual613 inputs. Independent130/490, actual Root490/check/build/spec11/diff0 and original reviewer final2b372 limited PASS. Main/DOM/CL023 full/NodeWSS/Harness/Native80/Shared83 still pending; Rust unchanged/no rerun for frontend-only scope. No commit/push/audit/archive.",
+  "sourceManifestSha256": "8a71905a64e6ca2809708be6fa572cce2044a46f3aaa81871e35827291de8f31",
+  "independentEvidence": "testing/runs/deliver-codex-session-loop/2026-11-02-q003-web-projection-independent-evidence.json",
+  "finalReviewerSha256": "2b3724ae57df491bbe7cca57110f6230b44f9c4942c0567642915c8a16ca5105",
+  "entries": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/application-commands.json",
+      "sha256": "1980d8a7d3d636e0745904e54a6b163cc109fcc8eb1188128e2b69c433f80b09"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/build-1/result.json",
+      "sha256": "282cc7d85a22b74da2a599dc5609817c130e995e601320b1d90ed10f7936bf1f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/build-1/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/build-1/stdout.log",
+      "sha256": "5887638a514c1928554b2eb9d7882a3f698a236a068c332e4259b42ef13d1c5d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/check-1/result.json",
+      "sha256": "f3bc9ee91381a008cbbd2a155e2ebf5bafb3ff8d1dcc9e9c5c385e0e87207e86"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/check-1/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/check-1/stdout.log",
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/diff.stderr.log",
+      "sha256": "b4d782c2759ca6d151a98893a131ad9bb5a0db0bb2442b83838fcb1226eb6840"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/diff.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/final-checks.json",
+      "sha256": "118335e47e3ee81214b1bec2ea91449f026bb4545a6ec3ba1b930d39290934c8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/integration.json",
+      "sha256": "1d3ed06f313c7744930e1f96857b22cd6ae17d5b412f23a011effe221c90299c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/reviews/actual-root-final-limited-review.md",
+      "sha256": "2b3724ae57df491bbe7cca57110f6230b44f9c4942c0567642915c8a16ca5105"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/reviews/actual-root-final-verification.json",
+      "sha256": "3edc7652313642e9e488e4ba3e11157e73323811f9c497580bb97d8f6d53b884"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/root-after-checks.json",
+      "sha256": "8990480f5c05b6bd7d4e08b00afe1e5df80116766c1bd41e0d2932a247b7c7b6"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/runner.mjs",
+      "sha256": "df9be4b24ebdfbe548f9209521291b264ec37b43a7bc4a8d749391acfb5140cc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/source-after-application.json",
+      "sha256": "8a71905a64e6ca2809708be6fa572cce2044a46f3aaa81871e35827291de8f31"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/source-after-checks.json",
+      "sha256": "8a71905a64e6ca2809708be6fa572cce2044a46f3aaa81871e35827291de8f31"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/spec.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/spec.stdout.log",
+      "sha256": "c79b5817ea873cc6cbdfb462410a24ea41b994141f1e8db694a004ab016ff9ef"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/test-1/result.json",
+      "sha256": "1bdc32548016b83a1b81eee8e279c64979dfcb31af481202f8f0ea1ae6a1cfc0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/test-1/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-root/test-1/stdout.log",
+      "sha256": "dfb4bda449a1af02a359a22bc14c22d7c1200a370d6b0119d904c036e44b5a48"
+    }
+  ]
+}

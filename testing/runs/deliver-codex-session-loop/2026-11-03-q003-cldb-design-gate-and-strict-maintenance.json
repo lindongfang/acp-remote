@@ -1,0 +1,73 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "root": {
+    "sourceFiles": 791,
+    "schema": 8,
+    "allVerified": true,
+    "indexSHA256": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+  },
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  },
+  "cldbDesignReview": {
+    "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-cldb-worker-join-design-and-lifecycle-independent-red-2026-11-03",
+    "freezeSHA256": "6933817d0ced2121bfc85e0f47a22087710b72748c44214eb2171c90198f3d58",
+    "members": 3,
+    "rootAllVerified": true,
+    "result": "Pass-limited; engineering design only",
+    "testCaseGate": "pending independent tester definition and reviewer case gate",
+    "productImplementationBegun": false,
+    "requiredInvariants": [
+      "immutable scope/worker/app-operation association before blocking gate",
+      "std handle remains in vendor slot until original blocking operation starts",
+      "scope/roots/owner installed before SQLite even without successful Storage",
+      "original runtime kept alive until actual join",
+      "concurrent registry close, pool close and per-worker join",
+      "ACK/SQL close/std join/Tokio join are separate facts; budget does not take or abort"
+    ]
+  },
+  "strictMaintenance": {
+    "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-node-lifecycle-strict-maintenance-v1",
+    "freezeSHA256": "330f6c0d909a478acef3730ea8567726016700262beb0c6599ee2e6347d976a0",
+    "members": 888,
+    "rootAllVerified": true,
+    "sourceFiles": 821,
+    "sourceManifestSHA256": "afbe23210f4aeb0aa9a0f3c19936bc175534f58c1e4e165f6695361510c55956",
+    "changedFiles": 2,
+    "checkExit": 0,
+    "fmtExit": 0,
+    "strictExit": 101,
+    "strictDiagnostics": 680,
+    "deltaAgainstPrior821": {
+      "added": 1,
+      "removed": 5,
+      "addedReason": "unchanged bool parameters with diagnostic source-range identity change"
+    },
+    "runtimeTestsRun": 0,
+    "review": "pending original reviewer",
+    "rootInstalled": false
+  },
+  "preparedCandidate": {
+    "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-worker-join-candidate-v1",
+    "action": "Exact copy of 821 source files only",
+    "productEdits": 0
+  },
+  "lifecycleIndependentClose": {
+    "result": "first run failed; preserved",
+    "passed": 0,
+    "failed": 1,
+    "retries": 0,
+    "remainingBranches": "unreached",
+    "issue": "physical SQLite worker closure is unconfirmed; no expectation change"
+  },
+  "notPerformed": [
+    "npm audit",
+    "commit",
+    "push",
+    "publication",
+    "archive",
+    "index writes"
+  ]
+}

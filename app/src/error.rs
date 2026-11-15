@@ -34,20 +34,36 @@ pub enum AppError {
     NotImplemented,
 }
 
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum PlatformError {
     #[error("this platform is not supported by the node access service")]
     Unsupported,
     #[error("Windows platform operation failed: {0}")]
     Windows(String),
-    #[error("secret protection failed: {0}")]
+    #[error("secret protection failed")]
     Protection(String),
     #[error("cryptographic random source failed: {0}")]
     Random(String),
 }
 
+impl std::fmt::Debug for PlatformError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsupported => formatter.write_str("Unsupported"),
+            Self::Windows(cause) => formatter.debug_tuple("Windows").field(cause).finish(),
+            // The protector's free-form cause must not cross public error formatting boundaries.
+            Self::Protection(_) => formatter.write_str("Protection"),
+            Self::Random(cause) => formatter.debug_tuple("Random").field(cause).finish(),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum StorageError {
+    #[error(transparent)]
+    Shared(std::sync::Arc<Self>),
+    #[error("SQLite lifecycle is unconfirmed: {0}")]
+    Lifecycle(&'static str),
     #[error("database operation failed: {0}")]
     Database(#[from] sqlx::Error),
     #[error("database schema version is unsupported: {0}")]
@@ -58,6 +74,17 @@ pub enum StorageError {
     MissingNodeMeta,
     #[error("database contains more than one node identity")]
     MultipleNodeIdentities,
+    #[error("database migration random source is unavailable")]
+    MigrationRandomUnavailable,
+    #[cfg(test)]
+    #[error("database migration was interrupted at a test checkpoint")]
+    MigrationInterrupted,
+}
+
+impl From<std::sync::Arc<Self>> for StorageError {
+    fn from(error: std::sync::Arc<Self>) -> Self {
+        std::sync::Arc::try_unwrap(error).unwrap_or_else(Self::Shared)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -81,3 +108,6 @@ pub enum IdentityError {
         source: std::io::Error,
     },
 }
+
+#[cfg(test)]
+mod development_tests;

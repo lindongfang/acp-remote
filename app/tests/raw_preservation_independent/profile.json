@@ -1,0 +1,146 @@
+[
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-format-same",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-format-escaped",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"\\u0066ormat\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-launch-same",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-launch-escaped",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"\\u006caunch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-wire-same",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-wire-escaped",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"\\u0077ire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-executable_utf16le_base64-same",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-executable_utf16le_base64-escaped",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"\\u0065xecutable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-name_utf16le_base64-same",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-name_utf16le_base64-escaped",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"\\u006eame_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Closed Node profile fields stay strict; do not use raw opaque tolerance as closed DTO acceptance"
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-UNKNOWN",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"unknown\":0,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-PROFILE-EXTENSION-DUP",
+    "level": "L3",
+    "operation": "profile_parse",
+    "inputUtf8": "{\"format\":1,\"launch\":{\"executable_utf16le_base64\":\"YQAA2A==\",\"arguments_utf16le_base64\":[\"AACQ3A==\"],\"environment\":[{\"name_utf16le_base64\":\"QQA=\",\"value_utf16le_base64\":\"ANg=\"}]},\"recipes\":[{\"wire\":1,\"mcp_servers\":[],\"additional_directories\":[],\"extra\":{\"u\":{\"x\":1,\"x\":2}}}]}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CatalogError::InvalidConfiguration",
+    "notes": "Conservative unchanged management admission: prior parse_profile globally rejected duplicates, even inside supplied extension. Direct ACP/Prompt raw acceptance does not itself widen the management profile contract. Reviewer must explicitly confirm scope before coding this reader."
+  }
+]

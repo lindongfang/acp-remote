@@ -1,0 +1,46 @@
+﻿[
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\strategy.rs",
+        "Hash":  "CB91ED1D4395AC70AF35FB422A8C97E1B2EDF93F76FEB39B10F638F3CF43DEBF"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\model.rs",
+        "Hash":  "A14F33CF708AA1A93B8291FBF0E5D55F18627190D54F086505F4F1C883BB2B60"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\transport.rs",
+        "Hash":  "93BD37E419387EEFBB5F5A8819BBBF9C678F44A0BACCEC89B9EDFC61D34F535B"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\tests.rs",
+        "Hash":  "B161E952885A4E29E9377DA13352FD641BD6B1431D49D5F8C207906FA54E768D"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\tests\\permission_subject.rs",
+        "Hash":  "8BD86E2C72DED8A297385E7E977BEF682573E0EF831EB5679BA0677108157E4E"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\README.md",
+        "Hash":  "B01B11A547BED4BE307C761A0D87954706C271960AB600493072CFC18D59A3EB"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\acp_permission_subject.rs",
+        "Hash":  "CCCDA47E932366E486EC54400E320CF9973A9D8EDE5F4778D425BC21AAF2B276"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\acp_discovery_replay.rs",
+        "Hash":  "48AC5CB99352CAAFA01D1294304E67A0C46D81CB98A71DAA349FF739D123CBCA"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\session_loop_acceptance.rs",
+        "Hash":  "CD3A557FC53B0F53A229B4CD4465903E9FA3F04EE560E57843EA71616EB08338"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\Cargo.lock",
+        "Hash":  "87F27B619281B37015C79CEAE8D95471C8A4DE50F202F4DD8A6D99FA0D27E324"
+    },
+    {
+        "Path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-tester\\acp-permission-subject-definition.md",
+        "Hash":  "180B42E5C80FCE85E2A18A7367A642D9DA6B5037FA0CD95C5023A239916FF526"
+    }
+]

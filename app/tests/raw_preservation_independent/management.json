@@ -1,0 +1,182 @@
+[
+  {
+    "id": "RAW-MANAGEMENT-STRICT-DUP",
+    "level": "L3",
+    "operation": "strict_parse_object",
+    "inputUtf8": "{\"payload\":{\"x\":1,\"x\":2}}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "StrictJsonError::DuplicateField",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-STRICT-ESC",
+    "level": "L3",
+    "operation": "strict_parse_object",
+    "inputUtf8": "{\"payload\":{\"x\":1,\"\\u0078\":1}}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "StrictJsonError::DuplicateField",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-STRICT-DEPTH",
+    "level": "L3",
+    "operation": "strict_parse_object",
+    "inputUtf8": "{\"a\":{\"b\":{\"c\":{\"d\":{\"e\":{\"f\":{\"g\":{\"h\":{\"i\":1}}}}}}}}}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "StrictJsonError::TooDeep",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-v-same",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"type\":\"proof\",\"proof\":\"fixture\",\"v\":1,\"v\":1}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-v-different",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"type\":\"proof\",\"proof\":\"fixture\",\"v\":1,\"v\":null}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-v-escaped",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"type\":\"proof\",\"proof\":\"fixture\",\"v\":1,\"\\u0076\":1}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-type-same",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"v\":1,\"proof\":\"fixture\",\"type\":\"proof\",\"type\":\"proof\"}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-type-different",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"v\":1,\"proof\":\"fixture\",\"type\":\"proof\",\"type\":null}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-type-escaped",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"v\":1,\"proof\":\"fixture\",\"type\":\"proof\",\"\\u0074ype\":\"proof\"}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-proof-same",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"v\":1,\"type\":\"proof\",\"proof\":\"fixture\",\"proof\":\"fixture\"}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-proof-different",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"v\":1,\"type\":\"proof\",\"proof\":\"fixture\",\"proof\":null}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-proof-escaped",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"v\":1,\"type\":\"proof\",\"proof\":\"fixture\",\"\\u0070roof\":\"fixture\"}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-UNKNOWN-FIELD",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"v\":1,\"type\":\"proof\",\"proof\":\"fixture\",\"unknown\":{\"a\":1,\"a\":2}}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-UNKNOWN-SIMPLE",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"v\":1,\"type\":\"proof\",\"proof\":\"fixture\",\"unknown\":0}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  },
+  {
+    "id": "RAW-MANAGEMENT-PAYLOAD-DUP",
+    "level": "L3",
+    "operation": "management_parse_frame",
+    "inputUtf8": "{\"v\":1,\"type\":\"command\",\"requestId\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"action\":\"node.info\",\"payload\":{\"x\":1,\"x\":2}}",
+    "steps": [
+      "Invoke the actual closed management/control parser, independently of RawDocument opaque success",
+      "Assert exact rejection class and no accepted control action; no live auth/device/node mutation"
+    ],
+    "expected": "CloseFrame(code=4400,reason=\"invalid frame\")",
+    "notes": ""
+  }
+]

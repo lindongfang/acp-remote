@@ -1,0 +1,27 @@
+{
+  "scope": "Shared exact profile/test maintenance limited accepted; no Root integration",
+  "sourceFreeze": "32e93290e317b9fb30945f270e3b86e409bea975e204d6b10302e1a3ddba59fc",
+  "sourceCount": 452,
+  "actualCalls": 4,
+  "distinctFunctions": 3,
+  "defaultStrict": 0,
+  "allFeatureStrict": 0,
+  "allFeatureRuntime": false,
+  "intentionalIoReportUnchanged": true,
+  "checkpoint": "5251f441af59de8c7b8fbcc728a343f74c5bae1a26ec54f3e440d4f4aaa24276",
+  "shared83": false,
+  "nodeWssHarness": false,
+  "parentTasksSigned": false,
+  "rootUnchanged": 636,
+  "rootSourceManifest": "e127897fb5e244f8b380496fedee41d5487488974ef11f21851b48b51f5f7939",
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-fixture-profile-limited-delivery/final-review.md",
+      "sha256": "c61e1ff845c7313858020c6ee21be36c49d91de3f91cd3629254b88a3d428b43"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-fixture-profile-limited-delivery/final-verification.json",
+      "sha256": "51ca4bc77256efdceba6f063edc87bb31378d8d2c37243421dbfa2415c61fe7f"
+    }
+  ]
+}

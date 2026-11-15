@@ -1,0 +1,36 @@
+{
+  "historicalScope": "Old Root107 snapshot, before HEAD65ec7815 spec/Q002 edits; differences are not automatically Q3 changes",
+  "compared": 107,
+  "changes": [
+    {
+      "path": "app/src/adapters/acp/README.md",
+      "previous": "8741d510b43ad901c640f923aab1e36f454c584faf3b0a85b975725fcceb3396",
+      "current": "a8b39700a1c0cb7187c6da6dee8f3531ebc37e3c54145012bed0fb539e4c8f80"
+    },
+    {
+      "path": "app/src/adapters/acp/tests.rs",
+      "previous": "b5b2c180e2d46b00101eb16da6fe0cce0783da89a065bbf839274399bdf212e9",
+      "current": "56e152eccf99de55f9ef63aa770be07e5a33362b8306da47a18e84701c5f565a"
+    },
+    {
+      "path": "app/src/adapters/acp/transport.rs",
+      "previous": "93bd37e419387eefbb5f5a8819bbbf9c678f44a0baccec89b9edfc61d34f535b",
+      "current": "66f92868d13b556f502cb5a5992177c96440eac1f609da629397ba5cecc42a76"
+    },
+    {
+      "path": "app/src/domain/mod.rs",
+      "previous": "d42675796ef54f73642a564d0a65eebaf9829685d64c987b4b439de934743c3b",
+      "current": "b88bcaab29bd7f504de900dfed52b4aa7d89d8a9d19e5105c340f6881f931cdf"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/domain-borrow-revision-contract.md",
+      "previous": "5ebc06dca886ad7e76834b8a564414cd034ced08b2dc7c4e483d0e2917aef172",
+      "current": "7123cc6a79acfaa580e5fadf8cabb813e53ae66d67f181d2c75899c501712b9f"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/p2a-tool-anchor-contract.md",
+      "previous": "81d0b6ef3d80dcb295f3231f8f66cc2474ed5b0adf43030f3a4b902806c6b3f7",
+      "current": "d11c88240edfea854d5d6f9fad8761e8e14003660a3e94bfc06c69d20992d8bd"
+    }
+  ]
+}

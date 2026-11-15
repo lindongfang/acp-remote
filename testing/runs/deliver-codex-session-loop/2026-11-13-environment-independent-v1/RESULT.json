@@ -1,0 +1,127 @@
+{
+    "sourceSetSha256":  "243e288d6d79b31686c34aa618c5d7de645a9d89b9aad0fc25b9f897aa68daf4",
+    "sourceFileCount":  514,
+    "inputHashesMatch":  true,
+    "operatingSystem":  "Microsoft Windows NT 10.0.26300.0",
+    "powershell":  "5.1.26100.9818",
+    "dotSourcedOwnerScript":  "testing/ci/windows-owner.ps1",
+    "sourceWorkingDirectory":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-inheritance-fix-v1\\source\\app",
+    "tests":  [
+                  {
+                      "label":  "process-owner",
+                      "executable":  ".tmp/wp4-owner-20261113-v2-target/debug/deps/acp_remote-e75360741b1915fc.exe",
+                      "arguments":  [
+                                        "platform::process_owner",
+                                        "--test-threads=1",
+                                        "--nocapture"
+                                    ],
+                      "startedAt":  "2026-11-13T09:42:11.9270713+08:00",
+                      "endedAt":  "2026-11-13T09:42:12.2626181+08:00",
+                      "exitCode":  0,
+                      "expectedCount":  13,
+                      "passed":  13,
+                      "failed":  0,
+                      "status":  "passed",
+                      "temp":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\process-owner\\temp",
+                      "p1DataRoot":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\process-owner\\p1-data",
+                      "rpcFixtureRoot":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\process-owner\\rpc-data"
+                  },
+                  {
+                      "label":  "native-release",
+                      "executable":  ".tmp/wp4-owner-20261113-v2-target/debug/deps/acp_remote-e75360741b1915fc.exe",
+                      "arguments":  [
+                                        "native_release",
+                                        "--test-threads=1",
+                                        "--nocapture"
+                                    ],
+                      "startedAt":  "2026-11-13T09:42:12.2756107+08:00",
+                      "endedAt":  "2026-11-13T09:42:14.0334171+08:00",
+                      "exitCode":  0,
+                      "expectedCount":  7,
+                      "passed":  7,
+                      "failed":  0,
+                      "status":  "passed",
+                      "temp":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\native-release\\temp",
+                      "p1DataRoot":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\native-release\\p1-data",
+                      "rpcFixtureRoot":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\native-release\\rpc-data"
+                  },
+                  {
+                      "label":  "platform-owner",
+                      "executable":  ".tmp/wp4-owner-20261113-v2-target/debug/deps/platform_owner-b7dedd8b2e7b6a61.exe",
+                      "arguments":  [
+                                        "--test-threads=1",
+                                        "--nocapture"
+                                    ],
+                      "startedAt":  "2026-11-13T09:42:14.0374339+08:00",
+                      "endedAt":  "2026-11-13T09:42:15.9980892+08:00",
+                      "exitCode":  0,
+                      "expectedCount":  13,
+                      "passed":  13,
+                      "failed":  0,
+                      "status":  "passed",
+                      "temp":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\platform-owner\\temp",
+                      "p1DataRoot":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\platform-owner\\p1-data",
+                      "rpcFixtureRoot":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\platform-owner\\rpc-data"
+                  },
+                  {
+                      "label":  "raw-hidden-focus",
+                      "executable":  ".tmp/wp4-owner-20261113-v2-target/debug/deps/platform_owner-b7dedd8b2e7b6a61.exe",
+                      "arguments":  [
+                                        "--exact",
+                                        "raw_hidden_environment_reaches_tracked_child_and_closes_original_tree",
+                                        "--test-threads=1",
+                                        "--nocapture"
+                                    ],
+                      "startedAt":  "2026-11-13T09:42:16.0015986+08:00",
+                      "endedAt":  "2026-11-13T09:42:16.1058735+08:00",
+                      "exitCode":  0,
+                      "expectedCount":  1,
+                      "passed":  1,
+                      "failed":  0,
+                      "status":  "passed",
+                      "temp":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\raw-hidden-focus\\temp",
+                      "p1DataRoot":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\raw-hidden-focus\\p1-data",
+                      "rpcFixtureRoot":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-environment-independent-v1\\raw-hidden-focus\\rpc-data"
+                  }
+              ],
+    "binariesAfter":  [
+                          {
+                              "path":  ".tmp/wp4-owner-20261113-v2-target/debug/deps/acp_remote-e75360741b1915fc.exe",
+                              "sha256":  "ad37f392c6c76cf804d7433cade09e2dacb76b1ca68c0b875f059573fa56170c"
+                          },
+                          {
+                              "path":  ".tmp/wp4-owner-20261113-v2-target/debug/deps/platform_owner-b7dedd8b2e7b6a61.exe",
+                              "sha256":  "f97e1806467952d17c828d9c6c9b45e2b710ac45a52a37b691c3d989f83e5b40"
+                          },
+                          {
+                              "path":  ".tmp/wp4-owner-20261113-v2-target/debug/native_dispatch_dev_child.exe",
+                              "sha256":  "2bcf2efe3eb8bd1b95e42cb6b821cca208b0a2fb0fac74a0e904d898654ef978"
+                          }
+                      ],
+    "binariesUnchanged":  true,
+    "indexBefore":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+    "indexAfter":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+    "indexUnchanged":  true,
+    "compiled":  false,
+    "cargoInvoked":  false,
+    "externalHarnessRun":  false,
+    "completeTaskAccepted":  false,
+    "aggregateRecomputed":  "46beb34a4d8e67e28edf7fc83424cb9723b852b7c5f97131a89522b5fe6e1368",
+    "aggregateMatchesDeclared":  false,
+    "aggregateProbeIsNormative":  false,
+    "legacyAggregateStatus":  "not independently reproduced; not used as verified identity",
+    "canonicalRule":  "StringComparer.Ordinal path sort; path TAB invariant decimal bytes TAB lowercase SHA256 LF; UTF8 no BOM with final LF",
+    "canonicalSha256":  "3d1a45f714b38e91d83912ae958093fc36cdc7d3843cfed66dedfbdc2029bff1",
+    "canonicalMatchesAddendum":  true,
+    "manifestSha256":  "f1f96636ed110b6786523ccd2f7a0ff50f2ebb442c5465fb5e6b305308beb90a",
+    "postRunProcessNameScan":  {
+                                   "names":  [
+                                                 "platform_owner-b7dedd8b2e7b6a61",
+                                                 "native_dispatch_dev_child"
+                                             ],
+                                   "matches":  [
+
+                                               ],
+                                   "note":  "Get-Process found no named fixture processes; CIM full process scan denied, not a system-wide no-residue proof"
+                               }
+}

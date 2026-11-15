@@ -1,0 +1,4 @@
+﻿{
+    "command":  "rustfmt --check --edition 2024 p0-message-probe/tests/message_id.rs",
+    "exit":  0
+}

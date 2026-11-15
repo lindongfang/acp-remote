@@ -1,0 +1,58 @@
+{
+  "sourceManifestSha256": "f5f8b93b0879398bc0dbdbe7d4a792c30fc41e83105d077e282cd9b2af6ded59",
+  "commands": [
+    {
+      "args": [
+        "--no-optional-locks",
+        "-c",
+        "core.autocrlf=false",
+        "-c",
+        "core.eol=lf",
+        "apply",
+        "--check",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-registration-implementation\\candidate-v3-r3\\from-v2.patch"
+      ],
+      "status": 0
+    },
+    {
+      "args": [
+        "--no-optional-locks",
+        "-c",
+        "core.autocrlf=false",
+        "-c",
+        "core.eol=lf",
+        "apply",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-registration-implementation\\candidate-v3-r3\\from-v2.patch"
+      ],
+      "status": 0
+    }
+  ],
+  "lineEndingCorrections": [],
+  "changes": [
+    {
+      "path": "app/src/application/queue_owner/tests.rs",
+      "sha256": "fed798538d2370397998edad45738521d6da03251c52e2f3ef9942962dc8ce0b"
+    },
+    {
+      "path": "app/src/node.rs",
+      "sha256": "bed08d840a059d824afc92ec6a89492ac1ea491edc5364eef4927d0f6c69c284"
+    },
+    {
+      "path": "app/src/session_storage/mod.rs",
+      "sha256": "fbdc1429b48937fa59ca45c2f4caed7d3c62d4f6e12290b034cf9f4ee71fbcc1"
+    },
+    {
+      "path": "app/src/session_storage/registry_connection_owner.rs",
+      "sha256": "c21e7ff059004c2efa008f74c7f0f5383697f3355134b84ff15bbe289092921f"
+    },
+    {
+      "path": "app/src/session_storage/request_registry.rs",
+      "sha256": "5a4502d1b54e026e184c24e542f0a68039a0e4ea23911e7b579864261f8f62a3"
+    },
+    {
+      "path": "app/src/storage.rs",
+      "sha256": "bb36296e2c5814deb3b606be63560f6c07e01b7d859a542eaba5cf8309740ec4"
+    }
+  ],
+  "scope": "Six-path SQL close fix; original Raw foundation and v4 test declarations/assets preserved; final independent package/integrated check still pending"
+}

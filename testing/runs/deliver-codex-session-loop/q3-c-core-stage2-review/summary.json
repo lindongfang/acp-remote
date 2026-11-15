@@ -1,0 +1,44 @@
+{
+  "kind": "Independent finite C stage2 actual-core static review",
+  "date": "2026-11-02",
+  "status": "BLOCKED-static-two-P2",
+  "staticReviewCompleted": true,
+  "candidateFreeze": "1c66b8e03ffc61985d63e786c91ccadbf673743877fdb29dec8991d908d4406a",
+  "verifiedMembers": 826,
+  "verifiedSource": 795,
+  "openFindings": [
+    {
+      "id": "C-STAGE2-REV001",
+      "severity": "P2",
+      "line": 693,
+      "file": "app/src/session_storage/node_configuration/management.rs",
+      "kind": "settled branch bypasses before/expected-effect correlation"
+    },
+    {
+      "kind": "gate wait before scope seal cancellation",
+      "file": "app/src/session_storage/node_configuration/management.rs",
+      "additional": "app/src/session_storage/node_configuration.rs:78",
+      "line": 526,
+      "id": "C-STAGE2-REV002",
+      "severity": "P2"
+    }
+  ],
+  "existingEvidence": {
+    "strictBase": 298,
+    "formal34and12Executed": 0,
+    "strictAddedDeadCode": 83,
+    "developerPassed": 18,
+    "strictAdded": 83,
+    "strictCandidate": 381,
+    "realDpapi": 0,
+    "businessSchema9Executed": 0
+  },
+  "originalAtoECodingGateRevoked": false,
+  "FHookGateApproved": false,
+  "limitedCorePass": false,
+  "RootIntegrationAllowed": false,
+  "schemaInstallationAllowed": false,
+  "fullProductPass": false,
+  "reviewerTestsRun": 0,
+  "productEdits": 0
+}

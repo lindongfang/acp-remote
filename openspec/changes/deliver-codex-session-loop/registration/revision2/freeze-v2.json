@@ -1,0 +1,27 @@
+{
+    "version":  2,
+    "frozen_at_utc":  "2026-10-31T08:01:01.6137114Z",
+    "scope":  "Design only. Real SQLite repository-wrapper startup factory and complete StoredApplying inspection, plus required deadline/active-key test access. No product code or DDL behavior change.",
+    "previous_manifest":  "../freeze-v1.json",
+    "previous_manifest_sha256":  "50b76853d88d714e32250e43987a292533a2a1b23732c0844e6e1ab52bd0dbc0",
+    "inputs_manifest":  "../inputs.sha256.json",
+    "inputs_manifest_sha256":  "17eb85217452e7e0a24768ca6a6bcdd86f9337a155e29580665eff029796ce89",
+    "v1_preserved":  true,
+    "files":  [
+                  {
+                      "path":  "registration-contract-draft.md",
+                      "bytes":  37457,
+                      "sha256":  "d4a2840699b69a689fb3a43a39b7874609a38851052cd094a2e68c6364f1e74c"
+                  },
+                  {
+                      "path":  "queue-owner-application-draft.md",
+                      "bytes":  31626,
+                      "sha256":  "32d1f7728bcd20afb860575e6dcb673070acba398d1e83cc62c61211e00b1314"
+                  },
+                  {
+                      "path":  "schema5-registration-draft.sql",
+                      "bytes":  4073,
+                      "sha256":  "ba49b4012f96c42220744c0dd9c975035408f0649209eb77ac983aef04fc8a1d"
+                  }
+              ]
+}

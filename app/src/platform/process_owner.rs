@@ -37,6 +37,16 @@ use windows_sys::Win32::{
         },
     },
 };
+mod tracked;
+pub use tracked::{
+    NoProcessCreatedProof, PreparedProcessSpawn, ProcessCreationCut, ProcessSpawnCompletion,
+    ProcessSpawnDriver, RunningProcessProof, SuspendedUnassignedClosedProof, TrackedProcessOwner,
+    TrackedShutdownReport,
+};
+#[cfg(test)]
+pub use tracked::{TrackedSpawnBarrier, TrackedSpawnCut, TrackedSpawnHooks};
+#[cfg(test)]
+mod environment_tests;
 
 /// Launch inputs may contain secrets; intentionally no Debug implementation.
 pub struct ProcessSpec {
@@ -55,7 +65,7 @@ pub struct ProcessIo {
     pub stderr: NamedPipeServer,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum ProcessOwnerError {
     #[error("process IO was already taken")]
     AlreadyTaken,
@@ -503,10 +513,18 @@ fn command_line(executable: &OsStr, args: &[OsString]) -> Result<Vec<u16>, Proce
     Ok(result)
 }
 fn environment(overrides: &[(OsString, OsString)]) -> Result<Vec<u16>, ProcessOwnerError> {
+    environment_from(std::env::vars_os(), overrides)
+}
+fn environment_from(
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    overrides: &[(OsString, OsString)],
+) -> Result<Vec<u16>, ProcessOwnerError> {
     // Windows uses ordinal case-insensitive comparison, not Unicode uppercasing
     // with expansions or locale-dependent collation. Keep original UTF-16 names.
     let mut variables: Vec<(Vec<u16>, Vec<u16>)> = Vec::new();
-    let inherited = std::env::vars_os().map(|(name, value)| (name, value, true));
+    let inherited = inherited
+        .into_iter()
+        .map(|(name, value)| (name, value, true));
     let explicit = overrides
         .iter()
         .cloned()
@@ -516,7 +534,7 @@ fn environment(overrides: &[(OsString, OsString)]) -> Result<Vec<u16>, ProcessOw
         if name.len() <= 1
             || name.len() > 32767
             || (name[..name.len() - 1].contains(&u16::from(b'='))
-                && !(inherited && inherited_reserved_name(&name)))
+                && !(inherited && inherited_hidden_name(&name)))
         {
             return Err(ProcessOwnerError::InvalidSpec("invalid environment name"));
         }
@@ -557,17 +575,10 @@ fn environment(overrides: &[(OsString, OsString)]) -> Result<Vec<u16>, ProcessOw
     result.push(0);
     Ok(result)
 }
-// cmd records external status under =ExitCode and, for character codes, =ExitCodeAscii.
-// Preserve OS-inherited entries without allowing reserved-name overrides.
-fn inherited_reserved_name(name: &[u16]) -> bool {
-    inherited_drive_name(name)
-        || ["=ExitCode\0", "=ExitCodeAscii\0"]
-            .iter()
-            .any(|reserved| name.iter().copied().eq(reserved.encode_utf16()))
-}
-// Windows cmd stores each drive's current directory under =<ASCII drive>:.
-const fn inherited_drive_name(name: &[u16]) -> bool {
-    matches!(name, [61, 65..=90 | 97..=122, 58, 0])
+// Windows environment enumeration preserves hidden entries with one leading '='.
+// Only OS-inherited entries may use this shape; explicit overrides still reject '='.
+fn inherited_hidden_name(name: &[u16]) -> bool {
+    matches!(name, [61, suffix @ .., 0] if !suffix.is_empty() && !suffix.contains(&61))
 }
 fn compare_names(left: &[u16], right: &[u16]) -> Result<i32, ProcessOwnerError> {
     // SAFETY: Both slices contain live NUL-terminated UTF-16; -1 selects NUL termination.

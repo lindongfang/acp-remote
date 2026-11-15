@@ -1,0 +1,12 @@
+﻿{
+    "os":  "Microsoft Windows NT 10.0.26300.0",
+    "rustc":  "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cargo":  "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "target":  "x86_64-pc-windows-msvc",
+    "cargoIncremental":  "0",
+    "cargoBuildJobs":  1,
+    "exclusiveTarget":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-tester/target-management",
+    "rootLock":  "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+    "copyLock":  "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+    "runnerLockPackages":  1
+}

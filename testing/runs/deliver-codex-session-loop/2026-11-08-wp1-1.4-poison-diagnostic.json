@@ -1,0 +1,92 @@
+{
+  "schema": "deliver-codex-session-loop-wp1-1.4-poison-diagnostic",
+  "date": "2026-11-08",
+  "toolchain": "Rust 1.98.1",
+  "targetDir": ".tmp/q3-wp1-14-clean-20261108b",
+  "tests": {
+    "poisoned_before_acquisition_cannot_grant_setup_with_unrecorded_actual_handle": {
+      "passed": 1,
+      "exitCode": 0
+    },
+    "poison_after_original_record_keeps_real_owned_pipe_until_explicit_close": {
+      "passed": 1,
+      "exitCode": 0
+    },
+    "poison_after_server_registration_cannot_drop_unrecorded_actual_child_handle": {
+      "priorIsolatedAttempt": {
+        "passed": 0,
+        "processExit": "0xc0000008 STATUS_INVALID_HANDLE",
+        "diagnostic": "The real CreateFileW client-open path returned INVALID_HANDLE_VALUE with Win32 error 5 (ACCESS_DENIED), before a child handle was acquired or captured. The test process then terminated abnormally without a Rust harness summary.",
+        "ownerRunner": "Retried with testing/ci/windows-owner.ps1; temporary directory owner check passed, but the same abnormal process exit recurred."
+      },
+      "correctedSourceIsolatedRetry": {
+        "passed": 1,
+        "failed": 0,
+        "exitCode": 0,
+        "ownerRunner": "testing/ci/windows-owner.ps1",
+        "sourceChange": "Test-only barrier moved to after successful CreateFileW child-handle acquisition; production ownership behavior unchanged.",
+        "log": "2026-11-08-wp1-1.4-poison-retry-owner.stdout.txt"
+      },
+      "correctedSourceGroupAttempt": {
+        "passed": 3,
+        "failed": 1,
+        "failure": "The same test group timed out waiting for after_child_create; no harness crash, no child-acquired assertion reached.",
+        "exitCode": 101,
+        "classification": "group run is not a pass; isolated corrected-source retry passed, but group stability remains to be established"
+      },
+      "correctedSourceExactRepeats": {
+        "runs": 3,
+        "passed": 0,
+        "failed": 3,
+        "failure": "Each exact single-test retry ran one test and timed out waiting for after_child_create before the child-acquired assertion.",
+        "logs": [
+          "2026-11-08-wp1-1.4-poison-exact-repeat-1.stdout.txt",
+          "2026-11-08-wp1-1.4-poison-exact-repeat-2.stdout.txt",
+          "2026-11-08-wp1-1.4-poison-exact-repeat-3.stdout.txt"
+        ],
+        "classification": "corrected-source case is not stable under the owner runner; no pass claim"
+      }
+      ,"latestOwnerRunnerDiagnosis": {
+        "passed": 0,
+        "exitCode": 101,
+        "driverResult": "process owner operation open stdio pipe failed (Windows 5)",
+        "observation": "The driver future completed before the after_child_create barrier; no child handle was acquired or captured.",
+        "ownerRunner": "testing/ci/windows-owner.ps1",
+        "targetDir": ".tmp/q3-wp1-14-clean-20261108b",
+        "log": "2026-11-08-wp1-1.4-poison-owner-diagnostic-latest.stdout.txt"
+      },
+      "minimalPipeReproduction": {
+        "rawOwnedCreateFileOpenBeforeTokioRegistration": {
+          "result": "Windows error 5 (ACCESS_DENIED)",
+          "test": "not retained in source after diagnosis"
+        },
+        "rawOwnedCreateClientOptionsBeforeTokioRegistration": {
+          "result": "Windows error 5 (ACCESS_DENIED)",
+          "test": "not retained in source after diagnosis"
+        },
+        "interpretation": "The access denial occurs for the current raw CreateNamedPipeW owner-only helper before Tokio registration and is independent of the mutex poison barrier. FILE_FLAG_OVERLAPPED on CreateFileW did not change the result. This does not establish the underlying Windows ACL/API cause.",
+        "productionChange": "none"
+      },
+      "baselineOwnerPipeControl": {
+        "test": "platform::windows::tests::named_pipe_enforces_owner_dacl_sid_and_first_instance",
+        "result": "failed before tracked owner code: Tokio ClientOptions open returned Windows error 5 (ACCESS_DENIED); the spawned client path then left the test waiting for connect until interrupted",
+        "ownerRunner": "testing/ci/windows-owner.ps1",
+        "classification": "shared owner-only named-pipe environment/ACL failure; not counted as a product regression or pass"
+      }
+    }
+  },
+  "classification": "The old isolated attempt failed before child acquisition because CreateFileW returned ACCESS_DENIED and then terminated abnormally. After moving the test-only barrier to after successful child creation, one isolated retry passed under the authorized Windows owner runner, but a corrected-source group retry passed 3/4 and three exact single-test repeats all timed out at after_child_create. The latest owner-run diagnostic exposed the actual driver result: open stdio pipe failed (Windows 5) before child acquisition. A temporary minimal reproduction also received ACCESS_DENIED from the raw pipe before Tokio registration, so the failure is not caused by the poison barrier or Tokio handle registration; the exact ACL/API cause remains unresolved. All exploratory reproduction changes were removed; no production ownership change was retained.",
+  "evidence": [
+    "2026-11-08-wp1-1.4-poison-isolated.stdout.txt",
+    "2026-11-08-wp1-1.4-poison-diag.stdout.txt",
+    "2026-11-08-wp1-1.4-rust-lib-skip-poison.stdout.txt",
+    "2026-11-08-wp1-1.4-poison-retry-owner.stdout.txt",
+    "2026-11-08-wp1-1.4-poison-owner-diagnostic-latest.stdout.txt"
+  ],
+  "broaderSerialAttempt": {
+    "command": "cargo test --manifest-path app/Cargo.toml --locked --offline --lib -- --test-threads=1 --skip poison_after_server_registration_cannot_drop_unrecorded_actual_child_handle",
+    "result": "interrupted without a harness summary after prolonged Node-related failures and a stalled production_factory_original_install_and_ready_fences_are_observable case",
+    "classification": "invalid/incomplete run; no aggregate pass count assigned"
+  },
+  "npmAudit": "not run; user declined registry metadata egress"
+}

@@ -74,7 +74,51 @@ export type ManagementErrorCode =
   | "stale_cursor"
   | "rate_limited"
   | "storage_unavailable"
-  | "node_stopping";
+  | "node_stopping"
+  | "product_not_ready"
+  | "platform_unimplemented"
+  | "unsupported_capability"
+  | "invalid_target"
+  | "invalid_registration"
+  | "request_retired"
+  | "read_stale"
+  | "read_failed"
+  | "allocation_failed"
+  | "necessary_storage_unavailable"
+  | "commit_unconfirmed"
+  | "invalid_approval"
+  | "invalid_release"
+  | "release_failed"
+  | "release_unconfirmed"
+  | "protocol_failure"
+  | "invalid_upload_state"
+  | "upload_conflict"
+  | "body_unavailable"
+  | "invalid_source"
+  | "unknown_request"
+  | "invalid_configuration"
+  | "random_unavailable"
+  | "protection_unavailable"
+  | "invalid_client"
+  | "already_attached"
+  | "view_unavailable"
+  | "invalid_stage"
+  | "source_replaced"
+  | "stream_sealed"
+  | "invalid_credit"
+  | "queue_rejected"
+  | "transport_failure"
+  | "shutdown_unconfirmed"
+  | "invalid_scope"
+  | "capture_gap"
+  | "sequence_exhausted"
+  | "invalid_cursor"
+  | "source_released"
+  | "projection_failure"
+  | "length_unrepresentable"
+  | "invalid_item"
+  | "invalid_revision"
+  | "input_suspended";
 
 export type ManagementProtocolErrorCode =
   | "invalid_frame"
@@ -680,6 +724,50 @@ function knownManagementError(value: string): ManagementErrorCode {
     case "rate_limited":
     case "storage_unavailable":
     case "node_stopping":
+    case "product_not_ready":
+    case "platform_unimplemented":
+    case "unsupported_capability":
+    case "invalid_target":
+    case "invalid_registration":
+    case "request_retired":
+    case "read_stale":
+    case "read_failed":
+    case "allocation_failed":
+    case "necessary_storage_unavailable":
+    case "commit_unconfirmed":
+    case "invalid_approval":
+    case "invalid_release":
+    case "release_failed":
+    case "release_unconfirmed":
+    case "protocol_failure":
+    case "invalid_upload_state":
+    case "upload_conflict":
+    case "body_unavailable":
+    case "invalid_source":
+    case "unknown_request":
+    case "invalid_configuration":
+    case "random_unavailable":
+    case "protection_unavailable":
+    case "invalid_client":
+    case "already_attached":
+    case "view_unavailable":
+    case "invalid_stage":
+    case "source_replaced":
+    case "stream_sealed":
+    case "invalid_credit":
+    case "queue_rejected":
+    case "transport_failure":
+    case "shutdown_unconfirmed":
+    case "invalid_scope":
+    case "capture_gap":
+    case "sequence_exhausted":
+    case "invalid_cursor":
+    case "source_released":
+    case "projection_failure":
+    case "length_unrepresentable":
+    case "invalid_item":
+    case "invalid_revision":
+    case "input_suspended":
       return value;
     default:
       throw new ManagementProtocolError("invalid_response");

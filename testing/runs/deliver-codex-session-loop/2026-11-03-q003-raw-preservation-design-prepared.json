@@ -1,0 +1,29 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "issue": "WSS-RAW-PRESERVATION001",
+  "package": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-preservation-design-v1",
+  "freezeSHA256": "32914234b77b60bc57e7b11c379fedb8873c52ea128b3f13e18057afa8ec4c67",
+  "members": 40,
+  "sourceSnapshots": 36,
+  "directSymbolInventory": {
+    "leaves": 29,
+    "lines": 149,
+    "notCompleteReaderClosure": true
+  },
+  "findings": [
+    "global duplicate HashSet rejects opaque descendants",
+    "first-match RawObject and OrderedRawObject lookup must not silently pick an interpreted value",
+    "Option paths must not turn duplicate optional fields into absence",
+    "metadata patch needs separate interpreted-key review"
+  ],
+  "productChanges": 0,
+  "implementationChecksExecuted": 0,
+  "independentAcceptanceExecuted": 0,
+  "next": "independent test definitions and engineering review after current P4 and CLDB-A priorities",
+  "rootInstalled": false,
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  }
+}

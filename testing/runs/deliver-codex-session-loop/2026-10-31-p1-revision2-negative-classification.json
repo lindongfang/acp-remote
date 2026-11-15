@@ -1,0 +1,10 @@
+﻿{
+    "expectedExit":  101,
+    "expectedErrors":  9,
+    "E0277":  4,
+    "E0599":  1,
+    "E0616":  2,
+    "E0308":  1,
+    "lifetimeErrors":  1,
+    "expectedSummary":  true
+}

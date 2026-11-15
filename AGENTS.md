@@ -31,6 +31,7 @@
 
 ## 4. 流程与文档维护
 
+- 错题记录和晋升规则以 [LESSONS.md](LESSONS.md) 为准；硬规则及审查要求以 [docs/code-standards.md](docs/code-standards.md) 为准。
 - OpenSpec 变更流程唯一来源为 [openspec/config.yaml](openspec/config.yaml)，产物结构和模板在 [openspec/schemas/](openspec/schemas/)，角色职责在 [openspec/role/](openspec/role/)。不在本文件复制流程细则。
 - 新产品规格、术语、架构决策及验收用例按当前方案建立；仅在需要时创建，不预填尚未确认的能力。
 - 修改行为、接口或依赖时，同步维护负责该内容的设计、规格和验证资产。重叠内容保留一个权威定义，其他位置链接引用。

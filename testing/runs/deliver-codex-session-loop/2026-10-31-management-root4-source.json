@@ -1,0 +1,314 @@
+﻿[
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\session_loop_acceptance.rs",
+        "Hash":  "CD3A557FC53B0F53A229B4CD4465903E9FA3F04EE560E57843EA71616EB08338"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\platform_owner.rs",
+        "Hash":  "EF463AC541A4F0A7892973401364BB413739890E65B4D216DFD6CBD1610B9BF8"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\jws_vectors.rs",
+        "Hash":  "35127D8978648784A609C41AD5AE908C7F823FF2AEBC588CBAB93B09801D2AC0"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\view_window.rs",
+        "Hash":  "28F2DF93E92EBC159A120B21336F6983AD1043856DD11AF387D5B7ECAEE967D8"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\schema4_migration.rs",
+        "Hash":  "9C82A6E1964D0648D93EC0CDBC6397EACB915FE8FD0A0AF9EE598A561078A56C"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\schema3_migration.rs",
+        "Hash":  "501C45A597B8A423AB4936E4DC4271E508EEB8C8E79D8FA1A02EAD3908E173A5"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\request_identity.rs",
+        "Hash":  "30813E05BC76412CC9C52E31419354AB324DD8B04F845BF8F65F6D622B44B283"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\management_independent.rs",
+        "Hash":  "F93596287F840E5352499CE4B47A0D26C9BED49CEC6802D076CDCA15166D0261"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\management_deadline_semantics.rs",
+        "Hash":  "124890C8423B9537D6927CE3622C26D5B99BDF892BD98170B9F66D263F0ED4AA"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\activity_model.rs",
+        "Hash":  "DF529B00C092E53916782BBDA9029CBC36478A04FB17A3FC1FB8F1D84300A9B3"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\acp_permission_subject.rs",
+        "Hash":  "CCCDA47E932366E486EC54400E320CF9973A9D8EDE5F4778D425BC21AAF2B276"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\tests\\acceptance\\acp_discovery_replay.rs",
+        "Hash":  "48AC5CB99352CAAFA01D1294304E67A0C46D81CB98A71DAA349FF739D123CBCA"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\ipc.rs",
+        "Hash":  "20140FFB2860D904501D37B34FDC1C51EFC20EB05A60A1D4ABD2D47DBCA70C9C"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\identity.rs",
+        "Hash":  "145AFB4815E87532EDC16B5BCCCC77B5C2FAB0C48D72D581246F45C9131EBB2E"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\error.rs",
+        "Hash":  "3554D9EE29885F8DB99E19566062A279DBECFA45D5B76D75B69E7006445C9BE2"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\trust.rs",
+        "Hash":  "2B4774FBA206FF3118CC004F164C4AAEA7EA41C48FC72082580AA27051827236"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\tls.rs",
+        "Hash":  "A28495DA12FA6304895F52B37245DFA44FF259AC81BE66D78CB437063BCA88A6"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\test_support.rs",
+        "Hash":  "4E4DF67A38A951EF0C7AA37C6C5F36BEFE17AA7067BD040C9E335FC08C317DEC"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\strict_json.rs",
+        "Hash":  "2256CD608DB0B60A3A9A83306781DCA6258DCD4544955BD8651EDB7BF91653D3"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\storage.rs",
+        "Hash":  "D4BF0E624FFA20B9B73CC167F2A346557F02A23DD0A54A240CFB4CAF51EF7BB4"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\views.rs",
+        "Hash":  "EE531F845AF4050809721D88E41FBCE0F0BFF16235CFDB763715A5DC845CA612"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\views\\tests.rs",
+        "Hash":  "61E240CF36587E8556235D7FCF512903C978D813D4F5A98DB38F510E21569E41"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\requests.rs",
+        "Hash":  "3BE577A58C9065856C408F1BE64EA06B915222795E046D906EF20F1676F1836B"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\product_commands.rs",
+        "Hash":  "E92B5EF511E4303C57E528BBB9C8395364EDD856877EAE36F657AB0A434FCAC8"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\native.rs",
+        "Hash":  "8D01CEF25C7BA12FFD2AFF94CC78FC8BFBE41D604FEAF2312F13FE47CADF9ABD"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\mod.rs",
+        "Hash":  "6D13968C8F95FBCFA5F629A37435782B1743E3F1D1226D48E4663142BB7469D5"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\history.rs",
+        "Hash":  "E7C5101484B1ADA316E9DE2A89699AC2ED74754F9247DE398207C55C67287240"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\approvals.rs",
+        "Hash":  "642622ABFE2E674A82A1F5F2089AEBC4EEA6A72E878BB6C7D2361708063A8E5E"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\activity.rs",
+        "Hash":  "4CE09688E51216FB9BD6F1EBAC7F43E67152BB569240C4BDF66669F15D9D8B32"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\tests.rs",
+        "Hash":  "33D93429CE518775E9E62EA3BAE337116D0CD79D21FC81CD7BBF84BCA98D2855"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\schema.rs",
+        "Hash":  "FCEC6F7E929056BDF7809534C7F9566C7BBE77F5EBB0C2A47BE1A00E06564D18"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\product_schema.rs",
+        "Hash":  "E3D2D32C0E3EC32F1C6EF4ED4A971F31C4F203BD8CA6D67063F81B4F14AA6C00"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\activity\\tests.rs",
+        "Hash":  "BACABF34418A74545551751910DDD0318E563706EF57F2FAD5C55C75AEE7169C"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\data_dir.rs",
+        "Hash":  "47B20A142E7AF2D332367A111F07333DBAD012ED4FB70C20C536E51780CF89E1"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\config.rs",
+        "Hash":  "D31C681D974B60FABB002AAB099DDBD317143ECCA7561BD9BBA89869D6E17D2C"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\claims.rs",
+        "Hash":  "3975CBFCB2F913F3FD32D11D725BDF587FB9F0B022FF6EAE3B9DC547FAD3059B"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\challenge.rs",
+        "Hash":  "9F1109C697830B9987A23E979D94EC77D6E30599B1E814EE9C29441581721CD2"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\access_policy.rs",
+        "Hash":  "1C8FDD1F47F73CD1B36B2BE51EAD0EACFCD4324C115936E797A3901E921E1544"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\application\\product_commands.rs",
+        "Hash":  "B6F65CCB84A191F3DD96A74A4FB3DCF32144A054D6756576DC89E4D9574FE068"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\product_schema\\tests.rs",
+        "Hash":  "5474FA85089A02D630ED8FFDEA95A08F9D2A6131B690F97D598E94F32AE57E32"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\product_schema\\delivery_tests.rs",
+        "Hash":  "34822FBB82488901297734709410CF4B9E888644D31BC665EFD09B3C7F19FC17"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\product_commands.rs",
+        "Hash":  "E4D1F446E7E3F1AC4F2496F0B2D7511298A57D29B5D2CB087E742900C8C27333"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\application\\product_commands\\tests.rs",
+        "Hash":  "5BD1EF550A2B85620FE7284D00CEF87812BC5C4A4C97052BAA3473A3693FAF02"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\application\\mod.rs",
+        "Hash":  "3461D766C8CD6CDEDBF9E58D26C890C841E760DEF6E1B0D6B1A0A963DF2BBBBD"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\application\\history.rs",
+        "Hash":  "21E8730D2FF28608F7ED04478571255EB31611F59257560A76DEC40866FFA88F"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\application\\history\\tests.rs",
+        "Hash":  "7031D8BFE132F87CAD1F6BF24AFD433DF2E82D1C35DF14C32ACFADCE7A14F52B"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\application\\approvals.rs",
+        "Hash":  "D275786BB45330E6A2C554218C41C85B0FE85641232ED725E4BC8B3CC1FCF3F8"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\pairing_http.rs",
+        "Hash":  "D048707062A1B5F802D07CD70231397CEA3DAF3562B0DF5CBA2322438078213F"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\pairing.rs",
+        "Hash":  "BC563CD6B2FBB754C606F4EB9936CD27BC75A03F0BCB70A1A1BC69A3EE0038CF"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\node.rs",
+        "Hash":  "C97A0F51F3C878801BCC259452242FAC9BD6F3764EC45DA50443184FC38C0067"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\management_ws.rs",
+        "Hash":  "F5C8006E3BEEA09B92367EA8ECAB7A75C515F616C7CC68F1C853D624D994595E"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\main.rs",
+        "Hash":  "A7E91616A331CE3F93A3C55AE2C357B4FF6B6CBBFD0464BFB23CF7E91ABF5E96"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\lib.rs",
+        "Hash":  "F13A23576F46C510E60644C7DE56BA6FA865738F1D1CE0F64FC01AFF6CB2069F"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\jws.rs",
+        "Hash":  "E41CF3FCE86B89E519FF4D47C04201C3E29650209D067D363725FEBB5A45A872"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\approvals.rs",
+        "Hash":  "0596D97C20C0B9BBD7D1C0F8942134755AABCB6D812DAC438610E364850339AA"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\product_commands\\tests.rs",
+        "Hash":  "6568E89D7AB83540B309536F301A348ADB2A288ACFE6F83CD8723989BEE1F6F6"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\mod.rs",
+        "Hash":  "1939FE6288A525401EDD1C2C1F51C4E921E4165C49BC7FAC3E04C76C05B69E2E"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\history.rs",
+        "Hash":  "CAE2932915944CF57EEECEBF1759B7AB3F680E0AC90186D4A7FB9470A7E9BF42"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\product_requests.rs",
+        "Hash":  "93D71B80A060745A93536C908544A1266980A2DBE32FE3918AA5E2772687D248"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\approvals\\tests.rs",
+        "Hash":  "EF972FB0270A0175C012A2B7D364FFFDE6ECCA8939660E5AEBFCF82D092D6254"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\random.rs",
+        "Hash":  "2A290BA71C3367297D949698164916312C602B0AC44F6A5A35ABBA108015AFB5"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\session_storage\\history\\tests.rs",
+        "Hash":  "F403B2C46DE059EAF358A834FECD5F6E67078D0984C328EAEB1B804EF93C99CE"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\product_requests\\tests.rs",
+        "Hash":  "4D93C1D06AB586C758A452EC8648CFACCB57F42E3882C2024C0707B869349141"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\platform\\windows.rs",
+        "Hash":  "C740BA9D4D452341F7E8CE0366D65645EC01E7AAF1A418C968C7E0DF359233CF"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\platform\\process_owner.rs",
+        "Hash":  "D36C45EFE87387A6058E66D632DF4672C6A74EF0AB36EE660CC2E8C6551A3F8B"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\platform\\mod.rs",
+        "Hash":  "38224819070BF82A2616BD96C8C52210ACD261F9E71614AC0AA61678609BB37F"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\platform\\console.rs",
+        "Hash":  "9D6B5E09B6B99B6AD97FC69DC9CC84637A3315DCB986CF9E81BD6FAD13282529"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\mod.rs",
+        "Hash":  "ACC0267CAAB5567E9512CB3AB79DB4DDDAF98E0399201173C53ACB076832AC5A"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\transport.rs",
+        "Hash":  "93BD37E419387EEFBB5F5A8819BBBF9C678F44A0BACCEC89B9EDFC61D34F535B"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\tests.rs",
+        "Hash":  "B161E952885A4E29E9377DA13352FD641BD6B1431D49D5F8C207906FA54E768D"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\tests\\permission_subject.rs",
+        "Hash":  "8BD86E2C72DED8A297385E7E977BEF682573E0EF831EB5679BA0677108157E4E"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\tests\\discovery.rs",
+        "Hash":  "C3B0F0EF486863C796EED398E8054B8BF26999FE631F51093C7ACC6A7C0C4E02"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\strategy.rs",
+        "Hash":  "CB91ED1D4395AC70AF35FB422A8C97E1B2EDF93F76FEB39B10F638F3CF43DEBF"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\model.rs",
+        "Hash":  "A14F33CF708AA1A93B8291FBF0E5D55F18627190D54F086505F4F1C883BB2B60"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\mod.rs",
+        "Hash":  "608496C104CC57276E0EA3244B5184566F077A0846EB2F0DA976AF3E872D6DE4"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\Cargo.toml",
+        "Hash":  "C48046E404E8D10B036EEC48163295A1386AA2CBE4BAEAFBE479FE823638045D"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\Cargo.lock",
+        "Hash":  "87F27B619281B37015C79CEAE8D95471C8A4DE50F202F4DD8A6D99FA0D27E324"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\build.rs",
+        "Hash":  "7BBEB88CF114BBC4E0F8E935EC3246E4FAEFBE1F9D0C6D57980F5BF5588CC39E"
+    }
+]

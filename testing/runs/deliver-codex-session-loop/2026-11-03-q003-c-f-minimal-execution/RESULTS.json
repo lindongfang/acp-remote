@@ -1,0 +1,88 @@
+{
+  "date": "2026-11-03",
+  "status": "partial-first-red-preserved",
+  "noRun": {
+    "exit": 0,
+    "actualCompile": true,
+    "warnings": 41
+  },
+  "list": {
+    "exit": 0,
+    "count": 3,
+    "exact": true
+  },
+  "firstSandboxAttempt": {
+    "entry": "F01",
+    "exit": 101,
+    "state": "failed-before-owned-Node-start",
+    "error": "CryptProtectData failed: Windows os error 2",
+    "catalogBodyReached": false,
+    "physicalTailReached": false,
+    "log": "logs/03-f01.log"
+  },
+  "outsideSandbox": [
+    {
+      "entry": "F01",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "realDPAPI": true,
+      "scope": "register-only/same-cipher/idempotent single result",
+      "physicalFirstDbExclusive": true,
+      "wal": "absent-on-first-check",
+      "shm": "absent-on-first-check",
+      "ownerWeakAssertCompleted": true,
+      "log": "logs/03-f01-outside-sandbox.log"
+    },
+    {
+      "entry": "F02",
+      "exit": 101,
+      "passed": 0,
+      "failed": 1,
+      "firstFailure": "GateWaitPending event missing after one poll of public core.apply future",
+      "line": 147,
+      "gateWaitReached": "unproved",
+      "secondFinalWriteReached": false,
+      "physicalFirstDbExclusive": true,
+      "wal": "absent-on-first-check",
+      "shm": "absent-on-first-check",
+      "ownerWeakAssertCompleted": true,
+      "log": "logs/04-f02-outside-sandbox.log"
+    },
+    {
+      "entry": "F03",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "scope": "real original ApplyWrite ACK then suppressed report / same original receipt / rebuilt provider still gated / original recovery",
+      "physicalFirstDbExclusive": true,
+      "wal": "absent-on-first-check",
+      "shm": "absent-on-first-check",
+      "ownerWeakAssertCompleted": true,
+      "expectedShutdownErrorAssertCompleted": true,
+      "log": "logs/05-f03-outside-sandbox.log"
+    }
+  ],
+  "executedDistinctEntrypoints": 3,
+  "outsideSandboxPass": 2,
+  "outsideSandboxFail": 1,
+  "totalAttempts": 4,
+  "totalAttemptPass": 2,
+  "totalAttemptFail": 2,
+  "sourceCount": 798,
+  "sourceDrift": [],
+  "lockUnchanged": true,
+  "runtimeTempRemaining": [],
+  "original34Executed": 0,
+  "supplement12Executed": 0,
+  "original46ParentPass": false,
+  "extendedInstalled": false,
+  "productionMigrationInstalled": false,
+  "firstRedRetriesForF02": 0,
+  "notes": [
+    "F02 only asserts one top-level apply poll was Pending; authority.current awaits before repository.start/fence.enter, so missing gate event does not itself establish product gate failure. Exact cause needs a separately reviewed instrumentation/test-maintenance delta.",
+    "No source or expectations changed after execution; no unrelated tests run.",
+    "Initial sandbox DPAPI failure remains evidence; sandbox-outside run does not erase it.",
+    "Physical tail proves three first DB exclusive opens and WAL/SHM first-check absence; not full-directory first deletion."
+  ]
+}

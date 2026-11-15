@@ -1,0 +1,18 @@
+﻿[
+    {
+        "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/shared-input-queue-contract.md",
+        "sha256":  "61987328a83927c414fba8a2b085f0796f05792a8072ae9ad11d6187d8e1c466"
+    },
+    {
+        "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/plan.md",
+        "sha256":  "eff9373b0f5d0976132546861224f8e79265035116ac19aad88ea22d155f1b38"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-tester/q003-queue-definition.md",
+        "sha256":  "753ee4746e2ff578c28322ab907eb87fbd519e425e134e19800d47a737c59867"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-tester/q003-contract-api-definition.md",
+        "sha256":  "9e1c407e6d000b827b03bcd02482fe3d217cde18a2c75d7f83e2cbe0d966d93c"
+    }
+]

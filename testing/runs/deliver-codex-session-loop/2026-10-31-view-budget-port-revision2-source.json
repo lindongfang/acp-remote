@@ -1,0 +1,38 @@
+﻿[
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/view-budget-port-definition.md",
+        "sha256":  "e0ae135ee5c1373707510c624958a411d1987f896bee0552c7a4989f4ccc8aba"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/view-budget-port-gaps.md",
+        "sha256":  "2bb1d0be60a3f1c0b7275cb0d9908270e6608df20be2d13fefeb211ac2bbcfd3"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/view-budget-port-definition-initial.md",
+        "sha256":  "b94c590fd5daab2d1aed7d31b6872f8e92071a18e346769c5eb7e49f6bc2b9a3"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/view-budget-port-gaps-initial.md",
+        "sha256":  "b98e252207f375a0e175d34a2bf345607a38f595d1e9127bdb9eb3caedf3157c"
+    },
+    {
+        "path":  "openspec/changes/deliver-codex-session-loop/view-budget-port-contract.md",
+        "sha256":  "d6ee1d36b701912feca8c7fc1d1c345bc24beb0e99bb618c2ecaaf347a631098"
+    },
+    {
+        "path":  "app/src/domain/views.rs",
+        "sha256":  "ee531f845af4050809721d88e41fbce0f0bff16235cfdb763715a5dc845ca612"
+    },
+    {
+        "path":  "app/tests/acceptance/view_window.rs",
+        "sha256":  "28f2df93e92ebc159a120b21336f6983ad1043856dd11af387d5b7ecaee967d8"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-view-adapter-revision2/domain-budget-contract.md",
+        "sha256":  "45528b1c573c5c2e5a78255fe314db77cfd1b478b507661370481eb99fcdcbae"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-view-adapter-revision2/source-manifest.json",
+        "sha256":  "94c84e76542e8e7144086f4f3c16a3870f4c0bcda3750b7f46465f9f698403b1"
+    }
+]

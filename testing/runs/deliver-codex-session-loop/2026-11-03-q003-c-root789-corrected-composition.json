@@ -1,0 +1,18 @@
+{
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-root789-c-stage3-corrected-composition-v3",
+  "freeze": "7714de9edfce724a09172f2d81af02e1c7774370a76b5e2e7757e34792a83d6c",
+  "members": 830,
+  "sourceCount": 803,
+  "manifest": "3ec8ce65b5557e8dfe6f16d8561794325c7fe5c630909313b7ad8d513814e24f",
+  "changes": {
+    "modify": 6,
+    "add": 14,
+    "unchanged": 783
+  },
+  "patch": "0c973bf8b27732094336945a49ef05130710d3dff7dd72e0088986d773d20e1f",
+  "allTargetAllFeatureCheck": 0,
+  "fmt": 0,
+  "developmentTests": 22,
+  "formalC46Pass": false,
+  "rootInstalled": false
+}

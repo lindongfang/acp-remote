@@ -1,0 +1,47 @@
+{
+  "scope": "Documents and evidence integrity only; no new product checks; Native80/Shared83/Web28 incomplete.",
+  "sourceManifestSha256": "de4491f1f6428c29b03aebb5f9b2af712b4469c2ef8567d0b16e83e99113cb70",
+  "rootSourcesVerified": 334,
+  "evidenceMembersVerified": 1519,
+  "planSha256": "e146c189c3133e51814e925c421ac395255a42a87023f920946e875eca087001",
+  "index": {
+    "oldManifestBytes": "2d43c5b5cfe4181a48b46c381b57f8c2f591bfc67382b1d88ff4b458dd6e7957",
+    "currentBytes": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+    "unchangedDuringTheseChecks": true,
+    "stagedDifferenceFromHead": false,
+    "head": "65ec7815bb0280f4519989d93a7b4ed3b4b37994",
+    "note": "Previous index byte hash no longer matches; first verification stopped before output. No source drift. Staged diff empty. Cause not established; index was not restored or rewritten."
+  },
+  "results": [
+    {
+      "name": "spec",
+      "executable": "cmd.exe",
+      "arguments": [
+        "/d",
+        "/s",
+        "/c",
+        "openspec.cmd validate deliver-codex-session-loop --strict"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "diff",
+      "executable": "git",
+      "arguments": [
+        "diff",
+        "--check"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "staged",
+      "executable": "git",
+      "arguments": [
+        "diff",
+        "--cached",
+        "--exit-code"
+      ],
+      "exit": 0
+    }
+  ]
+}

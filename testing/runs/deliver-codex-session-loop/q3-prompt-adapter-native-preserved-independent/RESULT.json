@@ -1,0 +1,299 @@
+{
+  "date": "2026-11-02",
+  "scope": "A PromptDocument independent12 on Native preserved fixes fixed787 + approved3-path assets",
+  "candidateFreezeSha256": "dcb2f657f8250dd231cea71993ba4a424dba8801bac2e6973a1725e58c1dffd0",
+  "candidateSourceManifestSha256": "f5d3794755177393620dbb6871e56cb2cb4a61abef33fe59fdccff8b400ba680",
+  "sourceCount": 789,
+  "sourceManifestSha256": "c3436b5cf732fec40f819c038b53d644cabda9170a504e20d8191defdcca9a72",
+  "assetPatchSha256": "2f310d341e30bb2392cf3f226c8ebb5b9dd1399ddf59d78c6079024ba697450d",
+  "safeFinalForFrozenEvidence": true,
+  "safeFinalForADataComponent": true,
+  "safeFinalForCompleteProduct": false,
+  "limitedAcceptance": {
+    "passed": 12,
+    "failed": 0,
+    "notExecuted": 0,
+    "firstExecutionOnThisCandidate": true,
+    "cases": [
+      {
+        "mode": "public",
+        "test": "pa01_normal_dependency_combines_only_existing_data_and_native_traits",
+        "status": "PASS"
+      },
+      {
+        "mode": "public",
+        "test": "pa02_full_upload_moves_without_copy_and_bound_body_shares_the_original_bytes",
+        "status": "PASS"
+      },
+      {
+        "mode": "public",
+        "test": "pa02_server_hash_uses_full_bytes_not_semantic_json_or_root_only",
+        "status": "PASS"
+      },
+      {
+        "mode": "public",
+        "test": "pa03_flat_owned_unknown_depth_and_number_lexemes_remain_data",
+        "status": "PASS"
+      },
+      {
+        "mode": "public",
+        "test": "pa03_invalid_shapes_and_complete_json_errors_never_produce_a_sealed_document",
+        "status": "PASS"
+      },
+      {
+        "mode": "public",
+        "test": "pa03_known_shapes_preserve_existing_width_and_unknown_fields",
+        "status": "PASS"
+      },
+      {
+        "mode": "public",
+        "test": "pa08_error_mapping_is_static_and_does_not_embed_body_or_parser_diagnostics",
+        "status": "PASS"
+      },
+      {
+        "mode": "private",
+        "test": "prompt_document_acceptance::actual_wire::pa05_retained_actual_prompt_reaches_wire_above_old_frame_limit_and_v1_fallback",
+        "status": "PASS"
+      },
+      {
+        "mode": "private",
+        "test": "prompt_document_acceptance::pa06_parse_failure_precedes_all_r3_calls_and_retainer_is_same_arc",
+        "status": "PASS"
+      },
+      {
+        "mode": "private",
+        "test": "prompt_document_acceptance::pa06_real_r3_same_id_full_bytes_dedup_and_whitespace_conflict",
+        "status": "PASS"
+      },
+      {
+        "mode": "private",
+        "test": "prompt_document_acceptance::pa07_direct_capture_is_from_real_consumption_and_keeps_full_byte_binding",
+        "status": "PASS"
+      },
+      {
+        "mode": "private",
+        "test": "prompt_document_acceptance::pa07_prepared_capture_drop_edit_stale_selection_and_new_revision_bytes",
+        "status": "PASS"
+      }
+    ]
+  },
+  "executed": {
+    "commands": [
+      {
+        "mode": "public",
+        "command": [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "app/Cargo.toml",
+          "--offline",
+          "--locked",
+          "--test",
+          "prompt_document_acceptance",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\workspace",
+        "started": "2026-11-02T14:32:58.434Z",
+        "finished": "2026-11-02T14:33:34.101Z",
+        "exitCode": 0,
+        "signal": null,
+        "spawnError": null,
+        "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\target",
+        "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\data\\public",
+        "sourceCount": 789,
+        "sourceSame": true,
+        "offline": true,
+        "locked": true,
+        "testSummaries": [
+          {
+            "state": "ok",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 0
+          }
+        ]
+      },
+      {
+        "mode": "private",
+        "command": [
+          "cargo",
+          "test",
+          "--manifest-path",
+          "app/Cargo.toml",
+          "--offline",
+          "--locked",
+          "--lib",
+          "prompt_document_acceptance::",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\workspace",
+        "started": "2026-11-02T14:33:34.361Z",
+        "finished": "2026-11-02T14:34:31.063Z",
+        "exitCode": 0,
+        "signal": null,
+        "spawnError": null,
+        "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\target",
+        "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\data\\private",
+        "sourceCount": 789,
+        "sourceSame": true,
+        "offline": true,
+        "locked": true,
+        "testSummaries": [
+          {
+            "state": "ok",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 671
+          }
+        ]
+      },
+      {
+        "mode": "check-default",
+        "command": [
+          "cargo",
+          "check",
+          "--manifest-path",
+          "app/Cargo.toml",
+          "--offline",
+          "--locked",
+          "--all-targets"
+        ],
+        "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\workspace",
+        "started": "2026-11-02T14:34:31.341Z",
+        "finished": "2026-11-02T14:35:06.566Z",
+        "exitCode": 0,
+        "signal": null,
+        "spawnError": null,
+        "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\target",
+        "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\data\\check-default",
+        "sourceCount": 789,
+        "sourceSame": true,
+        "offline": true,
+        "locked": true,
+        "testSummaries": []
+      },
+      {
+        "mode": "check-all",
+        "command": [
+          "cargo",
+          "check",
+          "--manifest-path",
+          "app/Cargo.toml",
+          "--offline",
+          "--locked",
+          "--all-targets",
+          "--all-features"
+        ],
+        "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\workspace",
+        "started": "2026-11-02T14:35:06.835Z",
+        "finished": "2026-11-02T14:35:36.807Z",
+        "exitCode": 0,
+        "signal": null,
+        "spawnError": null,
+        "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\target",
+        "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\data\\check-all",
+        "sourceCount": 789,
+        "sourceSame": true,
+        "offline": true,
+        "locked": true,
+        "testSummaries": []
+      },
+      {
+        "mode": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--manifest-path",
+          "app/Cargo.toml",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\workspace",
+        "started": "2026-11-02T14:35:37.113Z",
+        "finished": "2026-11-02T14:35:39.002Z",
+        "exitCode": 0,
+        "signal": null,
+        "spawnError": null,
+        "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\target",
+        "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-native-preserved-independent-retest-v1\\data\\fmt",
+        "sourceCount": 789,
+        "sourceSame": true,
+        "offline": true,
+        "locked": false,
+        "testSummaries": []
+      }
+    ],
+    "all5ExitZero": true,
+    "sourceAndLockBeforeAfterUnchanged": true,
+    "closeTail": "original5 Area.close and PA05 ownedIO shutdown assertions actually reached"
+  },
+  "reused": {
+    "trust": {
+      "tests": 11,
+      "exit": 0,
+      "from": "inputs/candidate/logs/test-preserved-trust"
+    },
+    "node": {
+      "tests": 46,
+      "exit": 0,
+      "from": "inputs/candidate/logs/test-preserved-node"
+    },
+    "web": {
+      "check": 0,
+      "tests": 558,
+      "files": 27,
+      "testExit": 0,
+      "build": 0,
+      "from": "inputs/candidate/logs/web-*"
+    },
+    "strict": {
+      "exit": 101,
+      "diagnostics": 603,
+      "from": "inputs/candidate/logs/strict-preserved-fixes",
+      "sourceTextComparison": "Root fixed comparison retained; strict not rerun on789"
+    }
+  },
+  "assetInstall": {
+    "before": 787,
+    "after": 789,
+    "check": 0,
+    "apply": 0,
+    "deltaPaths": [
+      "app/src/lib.rs",
+      "app/tests/acceptance/prompt_document_private.rs",
+      "app/tests/prompt_document_acceptance.rs"
+    ],
+    "productChanges": false
+  },
+  "issuesKeptOpen": [
+    "Q3-COMP-STARTUP001",
+    "Q3-COMP-CLEANUP001",
+    "STRICT-BASELINE-603"
+  ],
+  "notExecutedAndNotClaimed": [
+    "All ACP143 regression on789 (not required; no closure by repeated green)",
+    "Ordinary factory C/D/schema9",
+    "Physical DB/sidecar release or Windows full process tree",
+    "Node/WSS/upload/SocketFlush/UI full end to end",
+    "Real Harness and physical OOM",
+    "Root actual integration result or complete product delivery"
+  ],
+  "cleanup": {
+    "tmpEmpty": true,
+    "retainedSyntheticPrivateDatabases": 5,
+    "ownTargetRetained": true,
+    "allOwnCommandsClosed": true,
+    "noGlobalProcessAudit": true
+  },
+  "oldPackagesRootIndexProductUntouched": true,
+  "networkAuditCommitPush": false
+}

@@ -1,0 +1,50 @@
+﻿[
+    {
+        "path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\strategy.rs",
+        "sha256":  "72ad187e25cf6ba4c530be4fb8eaa6c482fcca9bab32c3a3220b4fdd42842e4c"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\model.rs",
+        "sha256":  "a14f33cf708aa1a93b8291fbf0e5d55f18627190d54f086505f4f1c883bb2b60"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\acp\\transport.rs",
+        "sha256":  "66f92868d13b556f502cb5a5992177c96440eac1f609da629397ba5cecc42a76"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\openspec\\changes\\deliver-codex-session-loop\\specs\\native-session-recovery\\spec.md",
+        "sha256":  "c013e151444238361d96802e0e7519d8cc31fa42f6b788fe4413805cac79cb29"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\openspec\\changes\\deliver-codex-session-loop\\specs\\structured-history\\spec.md",
+        "sha256":  "bfcd46d1735773b920f7400524dacb1fedf218452ecfdc1fa00842d8525ab13a"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\openspec\\changes\\deliver-codex-session-loop\\specs\\harness-management\\spec.md",
+        "sha256":  "42af8e99948e990af1713712d67b7b19dacdb56a2d043847f7a22e4db9027cb5"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\openspec\\changes\\deliver-codex-session-loop\\tests.md",
+        "sha256":  "4bbb4d67676bbe6bf7fe31cc520b1d357a99f54831a98fcdbc734eefd65c7bcb"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\openspec\\changes\\deliver-codex-session-loop\\implementation-contract.md",
+        "sha256":  "1d87f7849c03a99207a24c1210612faee1a6d480c736399fefc5c389e5578c13"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\openspec\\changes\\deliver-codex-session-loop\\design.md",
+        "sha256":  "b645f9bccbf07244c0db6ae769ca68a15fe5abbd13bf12c7257266f4c2561590"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\testing\\probes\\codex-session-loop\\node_modules\\@agentclientprotocol\\sdk\\package.json",
+        "sha256":  "6c74af591623a1c362d9b1073cb43268f6e4e532fafa419f73465225628bb12c"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\testing\\probes\\codex-session-loop\\node_modules\\@agentclientprotocol\\sdk\\schema\\v1\\schema.json",
+        "sha256":  "1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5"
+    },
+    {
+        "path":  "D:\\Project\\acp-remote\\testing\\probes\\codex-session-loop\\node_modules\\@agentclientprotocol\\sdk\\schema\\v2\\schema.json",
+        "sha256":  "28c7251e820511da257cdb55d30e2c30bbbe59226305b04e3b751dc655e0778d"
+    }
+]

@@ -1,0 +1,357 @@
+{
+  "scope": "Final Native+A789 plus C stage3 in isolated803 source",
+  "sourceCount": 803,
+  "sourceManifestSha256": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+  "preserved789": 783,
+  "delta": [
+    {
+      "path": "app/src/adapters/acp/mod.rs",
+      "beforeSha256": "070c29c4b7576161593300c7661b7188af1f8a58a2bcc4e0129dd457c484bdb1",
+      "afterSha256": "5cf194ddd1e69edd104ce16e20e94ac2761b04bdf5d417eb594fbef8aa1ca924"
+    },
+    {
+      "path": "app/src/adapters/acp/node_configuration_profile.rs",
+      "beforeSha256": null,
+      "afterSha256": "e12472f989cb814a2aa2aec2a9f41b985c5760e94ac856beba29fb1541c94113"
+    },
+    {
+      "path": "app/src/adapters/acp/node_configuration_profile/tests.rs",
+      "beforeSha256": null,
+      "afterSha256": "b82d5c11a0b3255f58908dea46523e6170f9fc3b066130ff5aa66ca3b066c642"
+    },
+    {
+      "path": "app/src/application/mod.rs",
+      "beforeSha256": "18be588d380cf16c9149fafdeafd86c45c66c59e5d5c05237110d9a6cba9b2f6",
+      "afterSha256": "7edb72761a6979df27d8d99a25d23687202df5e3bf94414ef4d4fb5d3da01b83"
+    },
+    {
+      "path": "app/src/application/native_catalog.rs",
+      "beforeSha256": null,
+      "afterSha256": "593a590d1b6dc9584c98b5bb26733bc286054b7b24d27e3e33b479c9c027f625"
+    },
+    {
+      "path": "app/src/domain/mod.rs",
+      "beforeSha256": "2a2bf896d57a6a2650698dc5250a82510775650db4926bce6fbbae3dc396d8b1",
+      "afterSha256": "57bd4e6510baa19ef39d82269ef228f8078e55a7f8b7868cab275590f2562284"
+    },
+    {
+      "path": "app/src/domain/native_catalog.rs",
+      "beforeSha256": null,
+      "afterSha256": "663fee91d5f9edbac2ce176867c73925f90477604fd523cd108005f2f6dc9e2c"
+    },
+    {
+      "path": "app/src/node.rs",
+      "beforeSha256": "b8cc43a3454f0710fe834627fe06e4efc2cc5d73465915b255ba6b957316a8dd",
+      "afterSha256": "4a73f95d2bd881e7a17a9459339aa653e5e3b42d7f1c86566909820004ba60e0"
+    },
+    {
+      "path": "app/src/node/catalog.rs",
+      "beforeSha256": null,
+      "afterSha256": "dd28bc0ddbf7a6cb2ac6665a853f2bedd00bf0fffef762bfb67f863d198a49a1"
+    },
+    {
+      "path": "app/src/node/catalog/development_tests.rs",
+      "beforeSha256": null,
+      "afterSha256": "7c4a0b001de3224f9a865557ccef89c686c9e5230bfeb8a9075a4a9d2d8fc2f1"
+    },
+    {
+      "path": "app/src/session_storage/catalog_sql.rs",
+      "beforeSha256": null,
+      "afterSha256": "6bf5a42d74eea36f3148fb158ae9e884630d6a098fa72a00eeea5782125830b3"
+    },
+    {
+      "path": "app/src/session_storage/catalog_sql/tests.rs",
+      "beforeSha256": null,
+      "afterSha256": "9ad2c339d55f3a778a5ef4f3c7415d1ca9e94ea76079c8e71401350737493231"
+    },
+    {
+      "path": "app/src/session_storage/mod.rs",
+      "beforeSha256": "89f072e361e07a35974b482fa3741bdd74ad512eac040dabf0df949ea701fad7",
+      "afterSha256": "18b0a84cebd382561ec105fa21584218f27f7e9cce8258a53d233aa8f92f4a57"
+    },
+    {
+      "path": "app/src/session_storage/node_configuration.rs",
+      "beforeSha256": null,
+      "afterSha256": "f6c08b40c24a46e33b21871aff4b0d836fd14d13dd8357d0d2a6d4c1c9294186"
+    },
+    {
+      "path": "app/src/session_storage/node_configuration/intent.rs",
+      "beforeSha256": null,
+      "afterSha256": "20af6938fe18ef20317b5db0824be996be5562baaad15ebd9e5d5bb6a119b0f2"
+    },
+    {
+      "path": "app/src/session_storage/node_configuration/intent/tests.rs",
+      "beforeSha256": null,
+      "afterSha256": "1d3b1edb2ea1705b6cde42f3481be07a6c2c0bd37ef886d560d1b4777b212443"
+    },
+    {
+      "path": "app/src/session_storage/node_configuration/management.rs",
+      "beforeSha256": null,
+      "afterSha256": "5ad89589419219755253f954e2a3546d51c367c76ab71adb0c33815ba10db36f"
+    },
+    {
+      "path": "app/src/session_storage/node_configuration/management/tests.rs",
+      "beforeSha256": null,
+      "afterSha256": "27206ba45036e55fc9dc05209e761918f696065c42f12c68106a7cd81116cf98"
+    },
+    {
+      "path": "app/src/session_storage/node_configuration/tests.rs",
+      "beforeSha256": null,
+      "afterSha256": "cafaab6c585894aa55616b268b0ff895feb7e90a18c1dd21bb9e1374c2227e8f"
+    },
+    {
+      "path": "app/src/session_storage/request_registry.rs",
+      "beforeSha256": "af586f5a526a0c5d2251f06a9f023d1a3467b1040bfe6ff79bff680fadef2c7d",
+      "afterSha256": "34a80b9dae91bca780505e42d9f4a5828639cc9af1fe5e590bece8380e54a8fb"
+    }
+  ],
+  "compile": 0,
+  "fmt": 0,
+  "cDevelopment": {
+    "passed": 21,
+    "failed": 0
+  },
+  "aPublic": {
+    "passed": 7,
+    "failed": 0
+  },
+  "aPrivateFirst": {
+    "passed": 0,
+    "failed": 5,
+    "classification": "Root runner omitted required owned PA_DATA_ROOT; failed before business assertions"
+  },
+  "aPrivateCorrected": {
+    "passed": 5,
+    "failed": 0,
+    "sourceUnchanged": true
+  },
+  "strict": {
+    "exit": 101,
+    "count": 695,
+    "baseline": 603,
+    "added": 92,
+    "removed": 0,
+    "newDeadCode": 84,
+    "newTestStyle": 8
+  },
+  "rootInstalled": false,
+  "independentC46Executed": 0,
+  "productionSchema9": false,
+  "fullProductPass": false,
+  "commands": [
+    {
+      "phase": "check-c-composition",
+      "start": "2026-11-02T15:08:31.098Z",
+      "end": "2026-11-02T15:08:56.744Z",
+      "code": 0,
+      "signal": null,
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-a-c-stage3-composition-v1\\workspace\\app",
+      "args": [
+        "--offline",
+        "check",
+        "--locked",
+        "--all-targets",
+        "--all-features",
+        "--message-format=json"
+      ],
+      "sourceCount": 803,
+      "sourceBefore": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceAfter": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceUnchanged": true,
+      "stdout": "fd3f120c3c45e69ef86bf34f1512d78918257b555d3d08cc7f18bd28dece767c",
+      "stderr": "93600401f789905d81187f13b51f027285c8d769af8faefd7bab9dbdd65380ec",
+      "lock": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+      "target": "D:/Project/acp-remote/.tmp/q3-native-preserved-fixes-target",
+      "TMP": "D:/Project/acp-remote/.tmp/q3-native-a-c-stage3-temp",
+      "summaries": []
+    },
+    {
+      "phase": "fmt-c-composition",
+      "start": "2026-11-02T15:11:48.137Z",
+      "end": "2026-11-02T15:11:50.010Z",
+      "code": 0,
+      "signal": null,
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-a-c-stage3-composition-v1\\workspace\\app",
+      "args": [
+        "--offline",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "sourceCount": 803,
+      "sourceBefore": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceAfter": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceUnchanged": true,
+      "stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "lock": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+      "target": "D:/Project/acp-remote/.tmp/q3-native-preserved-fixes-target",
+      "TMP": "D:/Project/acp-remote/.tmp/q3-native-a-c-stage3-temp",
+      "summaries": []
+    },
+    {
+      "phase": "strict-c-composition",
+      "start": "2026-11-02T15:20:15.423Z",
+      "end": "2026-11-02T15:20:47.760Z",
+      "code": 101,
+      "signal": null,
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-a-c-stage3-composition-v1\\workspace\\app",
+      "args": [
+        "--offline",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--all-features",
+        "--message-format=json",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "sourceCount": 803,
+      "sourceBefore": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceAfter": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceUnchanged": true,
+      "stdout": "00f2803a01b7389ea7d5d2c74173f79623bbac94be42f69ec480ddfebb25e282",
+      "stderr": "c87604626a163ef69b3fb64aafe5a17688bcde570960f10b69876f3e9aa205e8",
+      "lock": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+      "target": "D:/Project/acp-remote/.tmp/q3-native-preserved-fixes-target",
+      "TMP": "D:/Project/acp-remote/.tmp/q3-native-a-c-stage3-temp",
+      "summaries": []
+    },
+    {
+      "phase": "test-a-private-c-composition-owned",
+      "start": "2026-11-02T15:19:52.406Z",
+      "end": "2026-11-02T15:19:58.116Z",
+      "code": 0,
+      "signal": null,
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-a-c-stage3-composition-v1\\workspace\\app",
+      "args": [
+        "--offline",
+        "test",
+        "--locked",
+        "--lib",
+        "prompt_document_acceptance::",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "sourceCount": 803,
+      "sourceBefore": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceAfter": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceUnchanged": true,
+      "stdout": "9fb8ecf6ee24c4a506f36ab4494169b02fad9e05a15e62c3a6862411c0395ef2",
+      "stderr": "35e2d031c0e56166da09732ddc5a10759737fb0f07fc13c16b1a013153f96768",
+      "lock": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+      "target": "D:/Project/acp-remote/.tmp/q3-native-preserved-fixes-target",
+      "TMP": "D:/Project/acp-remote/.tmp/q3-native-a-c-stage3-temp",
+      "summaries": [
+        {
+          "state": "ok",
+          "passed": 5,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "phase": "test-a-private-c-composition",
+      "start": "2026-11-02T15:18:03.290Z",
+      "end": "2026-11-02T15:18:03.807Z",
+      "code": 101,
+      "signal": null,
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-a-c-stage3-composition-v1\\workspace\\app",
+      "args": [
+        "--offline",
+        "test",
+        "--locked",
+        "--lib",
+        "prompt_document_acceptance::",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "sourceCount": 803,
+      "sourceBefore": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceAfter": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceUnchanged": true,
+      "stdout": "c1232a16e3082cbfb1c81cef57b166a5f93b165bd83cb708fda194df7a5d4ffd",
+      "stderr": "8fa5b38e471e066562f9b881c0faf5ae809b3c69fd06ce84768a4230fafbc76a",
+      "lock": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+      "target": "D:/Project/acp-remote/.tmp/q3-native-preserved-fixes-target",
+      "TMP": "D:/Project/acp-remote/.tmp/q3-native-a-c-stage3-temp",
+      "summaries": [
+        {
+          "state": "FAILED",
+          "passed": 0,
+          "failed": 5
+        }
+      ]
+    },
+    {
+      "phase": "test-a-public-c-composition",
+      "start": "2026-11-02T15:16:02.623Z",
+      "end": "2026-11-02T15:16:24.825Z",
+      "code": 0,
+      "signal": null,
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-a-c-stage3-composition-v1\\workspace\\app",
+      "args": [
+        "--offline",
+        "test",
+        "--locked",
+        "--test",
+        "prompt_document_acceptance",
+        "--",
+        "--test-threads=1"
+      ],
+      "sourceCount": 803,
+      "sourceBefore": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceAfter": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceUnchanged": true,
+      "stdout": "779f9cfcd7d8423e1ef04ffbe64fbe5fd13039ca0f8069eb4e9a46bcc1fbfebb",
+      "stderr": "51095c603178df654547b67a899e05c906e7e4bba3b8e5f0de029ca8049add2f",
+      "lock": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+      "target": "D:/Project/acp-remote/.tmp/q3-native-preserved-fixes-target",
+      "TMP": "D:/Project/acp-remote/.tmp/q3-native-a-c-stage3-temp",
+      "summaries": [
+        {
+          "state": "ok",
+          "passed": 7,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "phase": "test-c-composition",
+      "start": "2026-11-02T15:13:29.852Z",
+      "end": "2026-11-02T15:14:27.531Z",
+      "code": 0,
+      "signal": null,
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-a-c-stage3-composition-v1\\workspace\\app",
+      "args": [
+        "--offline",
+        "test",
+        "--locked",
+        "--lib",
+        "node_configuration",
+        "--",
+        "--nocapture"
+      ],
+      "sourceCount": 803,
+      "sourceBefore": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceAfter": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6",
+      "sourceUnchanged": true,
+      "stdout": "102427d114c50506d8fd107e00498d4aafcf9faba9e262819bcd9967abbb9647",
+      "stderr": "6ab2434344a27cf5da522c8b168c01fc2bf90922ce13a4c888702a804f42934a",
+      "lock": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+      "target": "D:/Project/acp-remote/.tmp/q3-native-preserved-fixes-target",
+      "TMP": "D:/Project/acp-remote/.tmp/q3-native-a-c-stage3-temp",
+      "summaries": [
+        {
+          "state": "ok",
+          "passed": 21,
+          "failed": 0
+        }
+      ]
+    }
+  ]
+}

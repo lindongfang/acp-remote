@@ -1,0 +1,400 @@
+{
+  "scope": "Tester closed Snapshot001 limited same-source fixed3 path; resource interpretation only; Shared replay-failure ABI remains Open-design; no Native80/Shared83 acceptance",
+  "sourceVerification": {
+    "count": 377,
+    "location": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\workspace",
+    "embedded": false
+  },
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\assets\\prepare-source.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/assets/prepare-source.mjs",
+      "sha256": "b1379a65d663ee0d66daa4dcae017b5385017fe18f07152c486556fcb9eaf986"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\compile-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/compile-assets.mjs",
+      "sha256": "6e45ee45bf6a7606d245dfe940e79f062ffb26b9a4f01821fd968dd22fbe7b47"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\freeze-v10.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/freeze-v10.mjs",
+      "sha256": "c3270f77b83aff18ec4a15932708b463067b91a760c09e5c8c5afb92ee6a770f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\history\\git-applied-eol\\app\\src\\application\\native_dispatch\\environment.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/history/git-applied-eol/app/src/application/native_dispatch/environment.rs",
+      "sha256": "49bdb0d57f602349efa6bf02a523ef1a96d6fad83623aa4d6ad48dbbbf4f6a75"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\history\\git-applied-eol\\app\\src\\application\\native_dispatch\\observation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/history/git-applied-eol/app/src/application/native_dispatch/observation.rs",
+      "sha256": "691d6ce22f27e8df50124a05aefad4678d5495aaae3a4d02fc26b04e7847108f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\history\\git-applied-eol\\app\\src\\application\\queue_owner\\native.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/history/git-applied-eol/app/src/application/queue_owner/native.rs",
+      "sha256": "e6d41b3f2cf714865c6bb42b46b848efd8874a4a08d3e7e130c4ab4ab5e19ec4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\api05-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/api05-freeze.json",
+      "sha256": "92596088741c705bc0214506c8c9f94b04ff2ee57fbd655021a8d97b751b018b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\resources-converged-review.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/resources-converged-review.md",
+      "sha256": "6ca1a18accc9e256cbdcaab043f617dd42315a6aeb89bb9ef3d6ff868e3d3944"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix-freeze.json",
+      "sha256": "2a686a90df0a5e9cda830080d8725d3df480cd134fd65628aa1188482a3568fe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\README.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/README.md",
+      "sha256": "e2a51a9dcf17239870d35bcf0ec54fe40b6bd72d31bc93d095a86977a8c8ff17"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\after\\app\\src\\application\\native_dispatch\\environment.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/after/app/src/application/native_dispatch/environment.rs",
+      "sha256": "38b72ebd33bc0acd7a79929b3268c2b59ef19060048516ab8067f35456e32fcc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\after\\app\\src\\application\\native_dispatch\\observation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/after/app/src/application/native_dispatch/observation.rs",
+      "sha256": "b25098d7ec84eff07944070947bc1927d69ba81bebc97231f9b3a1597f35cea3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\after\\app\\src\\application\\queue_owner\\native.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/after/app/src/application/queue_owner/native.rs",
+      "sha256": "5b538768fb72bb27914f68d0865f24474df8ddcce92c17de8a7a04f08fd9f9e6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\before\\app\\src\\application\\native_dispatch\\environment.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/before/app/src/application/native_dispatch/environment.rs",
+      "sha256": "026e11e427a8a1c5758553f9701293cd4b43203d6c8eb309d2e65b3f3537dc67"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\before\\app\\src\\application\\native_dispatch\\observation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/before/app/src/application/native_dispatch/observation.rs",
+      "sha256": "8c3cb4406b1b38ecb18f84fbac60193f399ac61c2c06a5adf469b91e1dbe9011"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\before\\app\\src\\application\\queue_owner\\native.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/before/app/src/application/queue_owner/native.rs",
+      "sha256": "b0bbea6cac22665b75ab107f86dcb7f5098e5132036c3a567dfd93ab4b93bd3f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\changes.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/changes.json",
+      "sha256": "e8e6a19269b74e7de167bfdf6665310674427cf603a6949ea4cdd478fab9098d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\executable.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/executable.json",
+      "sha256": "77ec908ad99bd42074634e2d2191c1a70642ef170009ce2a6e0e978083210ed1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\reconstruct-and-apply.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/reconstruct-and-apply.cjs",
+      "sha256": "4117438a85578c186d60092ffd59e4aba143a1a7150867b99cbcd03eeee01606"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\snapshot-isolation.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/snapshot-isolation.patch",
+      "sha256": "72eeb89924a5edb3e68498b229bbb90bd0b94187d8010cbac8d70122e89b8bc1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\snapshot-narrow-compile-01.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/snapshot-narrow-compile-01.log",
+      "sha256": "c416a1fc273d9fd203c89fab4a752a0cd06b069ae9077d7c2a3300ea026130b1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\snapshot-narrow-run-01.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/snapshot-narrow-run-01.log",
+      "sha256": "0a320fae14d185a6d2b75670ac6492a569a772c0b78bb507a7077d3359baaa7f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\snapshot-fix\\source-after.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/snapshot-fix/source-after.json",
+      "sha256": "0870be34fb80741649e3eba9084658ebac70910a09c806afae63c7224220875e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\tester-v9-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/tester-v9-freeze.json",
+      "sha256": "07f75d14bb02f3b6c0fb1149ee5df28ddaa9cabc943d99cd6542a6bbc5bcc62e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\tester-v9\\logs\\replay-snapshot-api05.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/tester-v9/logs/replay-snapshot-api05.json",
+      "sha256": "70f0abd1450c69315c372a3c999fbc88bb3b0f3580beabe63f4bcb143b4f58e4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\tester-v9\\logs\\replay-snapshot-api05.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/tester-v9/logs/replay-snapshot-api05.stderr.log",
+      "sha256": "08c4c75f6d736c49920a452540735830b2bd91cdbc9a8edc3802e26990117a65"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\tester-v9\\logs\\replay-snapshot-api05.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/tester-v9/logs/replay-snapshot-api05.stdout.log",
+      "sha256": "8e9d354341b14f270cf17e6a67af73ecd039536fb6ac343ca757fb50e0fec7a6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\tester-v9\\snapshot-report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/tester-v9/snapshot-report.md",
+      "sha256": "9961d166536c6156fb0777ce585626a6ab9d3abcb97e4d05bb67b2b30e2242f1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\input-evidence\\tester-v9\\source-v9.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/input-evidence/tester-v9/source-v9.json",
+      "sha256": "cf55f45d22f98356fe38fa5f0cf5f2a1dafeb94b3c63831f15afc1413183b31a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\inputs-v10.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/inputs-v10.json",
+      "sha256": "ac980a0c6004432eb0932200197042c628e4adee23b2756bb278df6a8f57ac85"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\patch-apply.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/patch-apply.json",
+      "sha256": "d4ddd05e8b27d18c59e2cf62b9c889ec00109a33db0a8cf562d6867dae8e2ce9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\patch-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/patch-check.json",
+      "sha256": "a20fcbbdcf08edbae5291f8c6111f87b732c77fa014a5ef27aa81c5b52d77a0e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\snapshot-fixed-compile-child.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/snapshot-fixed-compile-child.json",
+      "sha256": "cb7a26b36ca21d33ff4eba0933f0b5f7e0aae4a96e21ff2aea19361a4c0b1895"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\snapshot-fixed-compile-child.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/snapshot-fixed-compile-child.stderr.log",
+      "sha256": "a0e91dfbe21df374fde70f5cc2e13f642ab45b5b59d13af865a6e103b88dc408"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\snapshot-fixed-compile-child.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/snapshot-fixed-compile-child.stdout.jsonl",
+      "sha256": "da6347fde1facc538f377b89d414b4672440adc25b25df21ada229d9d8e3e917"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\snapshot-fixed-compile-lib.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/snapshot-fixed-compile-lib.json",
+      "sha256": "21c0baedd4c8d44373e889a7e66cf2ad42484f82f6303f2c032bb7367510ec72"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\snapshot-fixed-compile-lib.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/snapshot-fixed-compile-lib.stderr.log",
+      "sha256": "64cb70da7922d917efde55525ab916772df1d2ff520d61e6ddf1bcd2662982f1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\snapshot-fixed-compile-lib.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/snapshot-fixed-compile-lib.stdout.jsonl",
+      "sha256": "c28a7b438ab2ae6017da2c8d2884573f2e33484746c318f109e7efa010b76bfe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\snapshot-fixed-original-function.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/snapshot-fixed-original-function.json",
+      "sha256": "ef4e4a2852507369bc0d98ae00891ed46ab9058a3ad0896285167f8177b079e0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\snapshot-fixed-original-function.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/snapshot-fixed-original-function.stderr.log",
+      "sha256": "72428ad6d1a6cd89ffa2e2ab07c12a11b6e499180c1ad7fe588668460f5ba9f3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\logs\\snapshot-fixed-original-function.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/logs/snapshot-fixed-original-function.stdout.log",
+      "sha256": "d93c8885e7119b4543f93c57e3cf2c3c2ea969b672997b8501c208d653792773"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\Cargo.toml",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/Cargo.toml",
+      "sha256": "1672ffd396e9ab60483f472039a5041a1bdfaac9e1ff821f013ab14e12678981"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\src\\adapters\\acp\\native_dispatch.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/src/adapters/acp/native_dispatch.rs",
+      "sha256": "a1da4e034f5fcc45691b48fcdfaeafc3fc598f47d58287e7a0fb4c265c1573a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\src\\application\\native_dispatch\\control.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/src/application/native_dispatch/control.rs",
+      "sha256": "4ef3873e8929dc77b2d546174cc4c7ea0d51b806e929348a73ff06e2faf2a4c8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\src\\application\\native_dispatch\\environment.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/src/application/native_dispatch/environment.rs",
+      "sha256": "38b72ebd33bc0acd7a79929b3268c2b59ef19060048516ab8067f35456e32fcc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\src\\application\\native_dispatch\\mod.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/src/application/native_dispatch/mod.rs",
+      "sha256": "ed8ae6996cae9814047b8c86ed8d7a63f8c144f6a3e50a96f80b1863c2b5d5de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\src\\application\\native_dispatch\\observation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/src/application/native_dispatch/observation.rs",
+      "sha256": "b25098d7ec84eff07944070947bc1927d69ba81bebc97231f9b3a1597f35cea3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\src\\application\\queue_owner\\native.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/src/application/queue_owner/native.rs",
+      "sha256": "5b538768fb72bb27914f68d0865f24474df8ddcce92c17de8a7a04f08fd9f9e6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\src\\lib.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/src/lib.rs",
+      "sha256": "3178435381d791d37a1d1a4231fe12168ff1f23d1ae62b86d95ba64fd5fe562f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\src\\session_storage\\schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/src/session_storage/schema.rs",
+      "sha256": "d04772e2dec36195475b60e136b57a4617c940574a5091440e6343e90f9d6084"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\closure_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/closure_stages.rs",
+      "sha256": "a47aed564f1f7e7fc7c0b1358310ffbf30d3ff950e69c47313c8d2986b87c2b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\controlled_io.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/controlled_io.rs",
+      "sha256": "d45305ec14b3ee0c4e0559aa0595ca33791c3ab2a1e90f15d5ff86280909ccd2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\delivery4.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/delivery4.rs",
+      "sha256": "83c259d74c7dbbffdac6cfec8d007fd749e5c61806043c2ef22752264ff4314c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\factory_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/factory_preparation.rs",
+      "sha256": "eb1747690acb98cc9d0020b4d685a28b03ce946cb8297aea675ed2e6ead76858"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\legacy_fixtures.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/legacy_fixtures.rs",
+      "sha256": "694dc9ae93759d070929f6f1ddb1a744c96b6fc8b411d8e6a1e74878bd94e242"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\native_commit_unknown.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/native_commit_unknown.rs",
+      "sha256": "0054b02c52039620fd0099d741817637861983b6c86545e077269c8ffcd0488e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\observed_io_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/observed_io_preparation.rs",
+      "sha256": "5e66c0ef2a220e13519b09cf85b3ffe389c185f3472330477cd6aae015be60ea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\park_abi_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/park_abi_preparation.rs",
+      "sha256": "b5d596e873d212a4f33136147dae77dc4d07cfd19da65103084c69211b1e9210"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\park_more_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/park_more_sql.rs",
+      "sha256": "cbf18f2188b6692166f2a2e8632c0417349def7bf001ec3c0d15798821b3aaef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\park_real_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/park_real_sql.rs",
+      "sha256": "f6755805517ab7e59ee212bc67811320a3c21c1a0b7cc6b8ae73ca1eaeb59a13"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\park_sql_failure.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/park_sql_failure.rs",
+      "sha256": "d937e4c39b10ee782aed480012970c8e2368cd9fd754eb1788212c24f6744236"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\priority_late_cancel.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/priority_late_cancel.rs",
+      "sha256": "a28774b505b80bcc3173f1f1bf89ac8498ddc4dcddd2d65b030d91678f8517c6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\protocol_child.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/protocol_child.rs",
+      "sha256": "e9e2bb3b5bb3f6c7e0cf7f88b52711f6b1e6db313ac9bc5cf4301819b370ca44"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\registration-schema5.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/registration-schema5.sql",
+      "sha256": "ba49b4012f96c42220744c0dd9c975035408f0649209eb77ac983aef04fc8a1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\replay_port.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/replay_port.rs",
+      "sha256": "c60ae0bd750eac17bcbe6def84f54504bc886fb82cce48b3ac5476bd13958f23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\replay_snapshot.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/replay_snapshot.rs",
+      "sha256": "bc95e8b11632de3d6795d8299dd743f270b951110484c3fadf9c91f6f086151b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "e0e7014071e84d2f2ba4013fe853085975063ca61103132bff808f2a223228ca"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\shared_live.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/shared_live.rs",
+      "sha256": "a9a467e4a328e20c6d76f347a73e9db0d6788cb40139ca43e1fe11b95051e475"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\shutdown_caller_drop.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/shutdown_caller_drop.rs",
+      "sha256": "3c210eb52ba81c1b880beb33771585021b1f696bd6bf96b9a7fc4f0223ad6fa9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\portable\\app\\tests\\native_dispatch_acceptance\\v2_sequencing.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/portable/app/tests/native_dispatch_acceptance/v2_sequencing.rs",
+      "sha256": "23d6f1f03acfec7de1c1f3ccb07ef95baa78bd9c2dfeeeb87e3ff992d217a030"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\run-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/run-assets.mjs",
+      "sha256": "9433f40b2e80e25c91c5eb820003b7c543f3eb89176e4e69877fb4752cb76f5e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\snapshot-retest-report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/snapshot-retest-report.md",
+      "sha256": "f54426f2ed6228796496159120b1b9ba3966e30552e9531b47a85889ca0a0f86"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\source-v10.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/source-v10.json",
+      "sha256": "f40df06c36880ba056aa129f1b311945855eace5f0ab1d2517fd8ad482c59a9d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v10\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-snapshot-retest/freeze.json",
+      "sha256": "31c1662ac9666277c00c02c4cd64954f4b393b4f32285a2f657fc35cef6f38b7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-native-dispatch\\resources-converged-queue-disposition-interpretation.md",
+      "path": "testing/runs/deliver-codex-session-loop/2026-11-01-q3-resource-convergence-interpretation.md",
+      "sha256": "6ca1a18accc9e256cbdcaab043f617dd42315a6aeb89bb9ef3d6ff868e3d3944"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-shared-view\\replay-failure-current-candidate-segments-review.md",
+      "path": "testing/runs/deliver-codex-session-loop/2026-11-01-q3-shared-replay-failure-abi-review.md",
+      "sha256": "5f8bd7bc50f0913ce8f3da7bf7ce57634590fb64e758b8e4d24577132dd48678"
+    }
+  ]
+}

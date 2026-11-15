@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-03",
+  "kind": "Frozen design received; independent coding gate pending",
+  "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-node-factory-d-minimal-abi-design-v1",
+  "freezeSHA256": "5f40181cc545a14ad8b06928f396bb23ba86e6a4fedefe55ec4b5025b5af2976",
+  "membersVerified": 9,
+  "inputManifestSHA256": "8c458ea5fed397b7c08c4c54ce248aac53de7eea721a3dc3b521981edcc94069",
+  "proposedScope": "Real body parse/hash CPU component plus original Storage shutdown receipt registration in cfg(all(test, windows)); 17 proposed leaves and 14 proposed development cases. Production default entry is not installed.",
+  "ownershipDesign": [
+    "Original same-Storage receipt registered before spawn and exposed data handle",
+    "Original CPU/disposal/supervisor handles remain in stable slots and are joined in place",
+    "Same actual queue identity and original claim checked",
+    "Body seal/join does not prevent Native safety control or required SQL",
+    "No size/count/TTL quota; no blocking abort as completion evidence"
+  ],
+  "productionGaps": [
+    "main transfers borrowed DpapiProtector today; no owned long-lived protector service aggregate",
+    "Current shutdown consumes self and can release local Storage after deadline",
+    "main returns to original Tokio entry after node.run; final task lifetime requires further host wiring",
+    "Initial Storage connection/schema/identity and SQLx internal worker receipts remain separate CLDB open items"
+  ],
+  "implemented": false,
+  "compiled": false,
+  "independentlyTested": false,
+  "rootInstalled": false,
+  "tracked": "6/25"
+}

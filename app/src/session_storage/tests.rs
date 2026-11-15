@@ -3,33 +3,82 @@ use crate::{
     error::StorageError,
     storage::{NodeMeta, SCHEMA_VERSION, Storage},
 };
-use sqlx::{
-    Connection,
-    sqlite::{SqliteConnectOptions, SqliteConnection},
-};
+use sqlx::{Connection, sqlite::SqliteConnection};
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
-struct Area {
+struct AreaRoots {
     directory: PathBuf,
 }
+struct Area {
+    roots: std::sync::Arc<AreaRoots>,
+    scopes: std::sync::Mutex<Vec<std::sync::Arc<crate::sqlite_fixture_scope::SqliteFixtureScope>>>,
+}
+impl std::ops::Deref for Area {
+    type Target = AreaRoots;
+    fn deref(&self) -> &AreaRoots {
+        &self.roots
+    }
+}
 impl Area {
+    async fn open(
+        &self,
+    ) -> Result<
+        crate::sqlite_fixture_scope::FixtureStorage,
+        std::sync::Arc<crate::error::StorageError>,
+    > {
+        let scope = std::sync::Arc::new(crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+            &self.database(),
+            self.roots.clone(),
+        ));
+        self.scopes
+            .lock()
+            .expect("fixture scopes")
+            .push(scope.clone());
+        scope.open().await
+    }
+    async fn raw_scope(&self) -> std::sync::Arc<crate::sqlite_fixture_scope::SqliteFixtureScope> {
+        let scope = std::sync::Arc::new(crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+            &self.database(),
+            self.roots.clone(),
+        ));
+        self.scopes
+            .lock()
+            .expect("fixture scopes")
+            .push(scope.clone());
+        scope.start_raw().await;
+        scope
+    }
+    async fn observe(&self) {
+        let scopes = std::mem::take(&mut *self.scopes.lock().expect("fixture scopes"));
+        for scope in scopes {
+            scope.stop_and_observe().await;
+        }
+    }
+
     fn new() -> Self {
         let directory = std::env::temp_dir().join(format!(
-            "acp-wp2-{}-{}",
+            "acp-wp2-{}-{}-{}",
             std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
+            NEXT.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("fixture clock")
+                .as_nanos()
         ));
         std::fs::create_dir(&directory).expect("owned fixture directory");
-        Self { directory }
+        Self {
+            roots: std::sync::Arc::new(AreaRoots { directory }),
+            scopes: std::sync::Mutex::new(Vec::new()),
+        }
     }
     fn database(&self) -> PathBuf {
         self.directory.join("node.sqlite3")
     }
 }
-impl Drop for Area {
+impl Drop for AreaRoots {
     fn drop(&mut self) {
         assert_eq!(
             self.directory.parent(),
@@ -139,7 +188,7 @@ async fn assert_no_acceptance(storage: &Storage) {
 #[tokio::test]
 async fn atomic_admission_preserves_content_and_metadata_without_body_in_audit() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     seed(&storage).await;
     let store = storage.sessions();
     let request = input(&store, actor(1), id(3), 5).await;
@@ -189,6 +238,7 @@ async fn atomic_admission_preserves_content_and_metadata_without_body_in_audit()
     assert_eq!(audit.get::<String, _>("action"), "session.input");
     assert_eq!(audit.get::<String, _>("outcome"), "accepted");
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
@@ -203,7 +253,7 @@ async fn each_statement_and_real_deferred_commit_failure_roll_back_every_associa
         "commit",
     ] {
         let area = Area::new();
-        let storage = Storage::open(&area.database()).await.expect("storage");
+        let storage = area.open().await.expect("storage");
         seed(&storage).await;
         let store = storage.sessions();
         let request = input(&store, actor(1), id(3), 5).await;
@@ -240,13 +290,14 @@ async fn each_statement_and_real_deferred_commit_failure_roll_back_every_associa
             .expect("retry after rollback");
         assert!(!accepted.replayed);
         storage.close().await;
+        area.observe().await;
     }
 }
 
 #[tokio::test]
 async fn concurrent_retries_return_one_association_and_one_dispatch_permit() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     seed(&storage).await;
     let store = storage.sessions();
     let request = input(&store, actor(1), id(3), 5).await;
@@ -287,12 +338,13 @@ async fn concurrent_retries_return_one_association_and_one_dispatch_permit() {
         1
     );
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
 async fn competing_actors_are_busy_and_references_conflicts_and_actor_queries_are_scoped() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     seed(&storage).await;
     let store = storage.sessions();
     let first = input(&store, actor(1), id(3), 5).await;
@@ -340,13 +392,14 @@ async fn competing_actors_are_busy_and_references_conflicts_and_actor_queries_ar
     assert!(replay.replayed);
     assert_eq!(count(&storage, "runs").await, 1);
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
 async fn restart_preserves_accepted_and_dispatched_associations_without_redispatch() {
     for claimed in [false, true] {
         let area = Area::new();
-        let storage = Storage::open(&area.database()).await.expect("storage");
+        let storage = area.open().await.expect("storage");
         seed(&storage).await;
         let store = storage.sessions();
         let request = input(&store, actor(1), id(3), 5).await;
@@ -362,9 +415,10 @@ async fn restart_preserves_accepted_and_dispatched_associations_without_redispat
             simulated_dispatches += 1;
         }
         storage.close().await;
+        area.observe().await;
         drop(store);
         drop(storage);
-        let reopened = Storage::open(&area.database()).await.expect("reopen");
+        let reopened = area.open().await.expect("reopen");
         let store = reopened.sessions();
         assert_eq!(
             store
@@ -401,13 +455,14 @@ async fn restart_preserves_accepted_and_dispatched_associations_without_redispat
         ));
         assert_eq!(simulated_dispatches, usize::from(claimed));
         reopened.close().await;
+        area.observe().await;
     }
 }
 
 #[tokio::test]
 async fn cancelling_run_and_releasing_session_keep_foreground_input_blocked() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     seed(&storage).await;
     let store = storage.sessions();
     let request = input(&store, actor(1), id(3), 5).await;
@@ -434,12 +489,13 @@ async fn cancelling_run_and_releasing_session_keep_foreground_input_blocked() {
         Err(SessionError::InvalidState)
     ));
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
 async fn command_capacity_and_safe_sequence_limit_reject_without_eviction() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     seed(&storage).await;
     let store = storage.sessions();
     let request = input(&store, actor(1), id(3), 5).await;
@@ -464,11 +520,13 @@ async fn command_capacity_and_safe_sequence_limit_reject_without_eviction() {
     assert_eq!(count(&storage, "session_commands").await, 100_000);
     assert_eq!(count(&storage, "runs").await, 0);
     storage.close().await;
+    area.observe().await;
 }
 
 async fn schema_one(area: &Area) -> SqliteConnection {
-    let options = SqliteConnectOptions::new()
-        .filename(area.database())
+    let raw_scope = area.raw_scope().await;
+    let options = raw_scope
+        .options()
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .foreign_keys(true);
@@ -513,8 +571,9 @@ async fn schema_one(area: &Area) -> SqliteConnection {
 async fn schema_one_upgrade_retains_identity_trust_revocation_audit_and_revision() {
     let area = Area::new();
     schema_one(&area).await.close().await.expect("close");
+    area.observe().await;
     let key = std::fs::read(area.directory.join("identity.key")).expect("key");
-    let storage = Storage::open(&area.database()).await.expect("upgrade");
+    let storage = area.open().await.expect("upgrade");
     assert_eq!(
         storage.load_node_meta().await.expect("meta"),
         Some(NodeMeta {
@@ -546,19 +605,16 @@ async fn schema_one_upgrade_retains_identity_trust_revocation_audit_and_revision
         .fetch_one(storage.pool_for_test())
         .await
         .expect("version");
-    assert_eq!(version, 2);
+    assert_eq!(version, SCHEMA_VERSION);
     assert_eq!(
         std::fs::read(area.directory.join("identity.key")).expect("preserved key"),
         key
     );
     storage.close().await;
-    let old = SqliteConnection::connect_with(
-        &SqliteConnectOptions::new()
-            .filename(area.database())
-            .read_only(true),
-    )
-    .await
-    .expect("old version probe");
+    area.observe().await;
+    let old = SqliteConnection::connect_with(&area.raw_scope().await.options().read_only(true))
+        .await
+        .expect("old version probe");
     let mut old = old;
     let seen: i64 = sqlx::query_scalar("PRAGMA user_version")
         .fetch_one(&mut old)
@@ -566,6 +622,7 @@ async fn schema_one_upgrade_retains_identity_trust_revocation_audit_and_revision
         .expect("old gate");
     assert_ne!(seen, 1, "old schema1 initializer must reject this version");
     old.close().await.expect("close");
+    area.observe().await;
 }
 
 #[tokio::test]
@@ -589,14 +646,12 @@ async fn migration_ddl_version_update_and_real_commit_faults_leave_complete_sche
             }
         }
         connection.close().await.expect("close fixture");
-        assert!(Storage::open(&area.database()).await.is_err(), "{fault}");
-        let mut connection = SqliteConnection::connect_with(
-            &SqliteConnectOptions::new()
-                .filename(area.database())
-                .foreign_keys(true),
-        )
-        .await
-        .expect("inspect");
+        area.observe().await;
+        assert!(area.open().await.is_err(), "{fault}");
+        let mut connection =
+            SqliteConnection::connect_with(&area.raw_scope().await.options().foreign_keys(true))
+                .await
+                .expect("inspect");
         let version: i64 = sqlx::query_scalar("PRAGMA user_version")
             .fetch_one(&mut connection)
             .await
@@ -614,6 +669,7 @@ async fn migration_ddl_version_update_and_real_commit_faults_leave_complete_sche
             .expect("preserved clients");
         assert_eq!(clients, 2);
         connection.close().await.expect("close inspect");
+        area.observe().await;
     }
 }
 
@@ -649,14 +705,12 @@ async fn unknown_inconsistent_and_incomplete_schemas_are_rejected_read_only() {
             }
         }
         connection.close().await.expect("close");
+        area.observe().await;
         let before = std::fs::read(area.database()).expect("before");
-        let error = Storage::open(&area.database())
-            .await
-            .err()
-            .expect("must reject");
+        let error = area.open().await.err().expect("must reject");
         assert!(
             matches!(
-                error,
+                error.as_ref(),
                 StorageError::UnknownSchema(_) | StorageError::UnrecognizedSchema
             ),
             "{fault}"
@@ -672,7 +726,7 @@ async fn unknown_inconsistent_and_incomplete_schemas_are_rejected_read_only() {
 #[tokio::test]
 async fn dispatch_claim_rechecks_session_release_and_schema_two_rejects_missing_index() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     seed(&storage).await;
     let store = storage.sessions();
     let request = input(&store, actor(1), id(3), 5).await;
@@ -700,11 +754,15 @@ async fn dispatch_claim_rechecks_session_release_and_schema_two_rejects_missing_
         .await
         .expect("damaged constraint");
     storage.close().await;
+    area.observe().await;
     drop(store);
     drop(storage);
     let before = std::fs::read(area.database()).expect("before");
     assert!(matches!(
-        Storage::open(&area.database()).await,
+        area.open()
+            .await
+            .as_ref()
+            .map_err(std::convert::AsRef::as_ref),
         Err(StorageError::UnrecognizedSchema)
     ));
     assert_eq!(std::fs::read(area.database()).expect("after"), before);
@@ -713,11 +771,9 @@ async fn dispatch_claim_rechecks_session_release_and_schema_two_rejects_missing_
 #[tokio::test]
 async fn independent_sqlite_connections_serialize_foreground_admission() {
     let area = Area::new();
-    let first = Storage::open(&area.database()).await.expect("storage");
+    let first = area.open().await.expect("storage");
     seed(&first).await;
-    let second = Storage::open(&area.database())
-        .await
-        .expect("independent pool");
+    let second = area.open().await.expect("independent pool");
     let a = first.sessions();
     let b = second.sessions();
     let one = input(&a, actor(1), id(3), 5).await;
@@ -730,4 +786,5 @@ async fn independent_sqlite_connections_serialize_foreground_admission() {
     assert_eq!(count(&first, "runs").await, 1);
     second.close().await;
     first.close().await;
+    area.observe().await;
 }

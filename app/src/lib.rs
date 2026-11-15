@@ -24,11 +24,19 @@ pub mod pairing_http;
 pub mod platform;
 pub mod random;
 pub mod session_storage;
+#[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
+pub mod shared_view_test_support;
 pub mod storage;
 pub(crate) mod strict_json;
 pub mod tls;
 pub mod trust;
 
+#[cfg(test)]
+#[path = "../tests/registration_acceptance/c/schema3_migration.rs"]
+mod schema3_migration_acceptance;
+#[cfg(test)]
+#[path = "../tests/registration_acceptance/c/schema4_migration.rs"]
+mod schema4_migration_acceptance;
 #[cfg(test)]
 mod test_support;
 
@@ -49,3 +57,14 @@ mod tests {
         assert!(!version().is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/acceptance/prompt_document_private.rs"]
+mod prompt_document_acceptance;
+
+#[cfg(test)]
+mod sqlite_fixture_scope;
+
+#[cfg(all(test, windows))]
+#[path = "storage/pool_close_wait_development.rs"]
+mod pool_close_wait_development;

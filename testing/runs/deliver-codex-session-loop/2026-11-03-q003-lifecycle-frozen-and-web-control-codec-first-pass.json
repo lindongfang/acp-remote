@@ -1,0 +1,133 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "tracked": {
+    "completed": 6,
+    "total": 25
+  },
+  "root": {
+    "productSourceFiles": 789,
+    "schema": 8,
+    "installationChanged": false,
+    "indexChanged": false
+  },
+  "lifecycle": {
+    "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-node-stable-lifecycle-candidate-v1",
+    "freezeSHA256": "76ccbacda17bcacaf2d90714d081cb5144c7f9ac448abb3c9f7a264e37f79d88",
+    "members": 1057,
+    "rootVerifiedAllMembers": true,
+    "sourceCount": 821,
+    "sourceManifestSHA256": "1bcc3b957ab50189a2122944ed0e5b3e26edfa845831d8c64240c4b6a67b8697",
+    "authorValidation": {
+      "check": 0,
+      "build": 0,
+      "fmt": 0,
+      "lifecycle": {
+        "passed": 19,
+        "failed": 0
+      },
+      "main": {
+        "passed": 2,
+        "failed": 0,
+        "environment": "real Windows DPAPI owner; original sandbox OS2 retained"
+      },
+      "ipc": {
+        "passed": 11,
+        "failed": 0
+      },
+      "storageClose": {
+        "passed": 2,
+        "failed": 0
+      },
+      "oldShutdown": {
+        "passed": 15,
+        "failed": 1
+      },
+      "strict": {
+        "exit": 101,
+        "baselineDiagnostics": 682,
+        "candidateDiagnostics": 684,
+        "primaryAdded": 4,
+        "primaryRemoved": 2,
+        "fullAdded": 5,
+        "fullRemoved": 3
+      }
+    },
+    "independentAcceptance": "preparation/definition confirmation in progress",
+    "independentReview": "requested",
+    "notProven": [
+      "all 17 design cases dynamically",
+      "real SQLite worker physical closure",
+      "main ready failure separate dynamic case",
+      "installation gate independent dynamic pause",
+      "CLI subprocess safe exit",
+      "production factory",
+      "Root installation"
+    ]
+  },
+  "wss": {
+    "engineeringGate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-wss-assembly-shared-socket-coding-gate-2026-11-03",
+    "freezeSHA256": "d913ac2e465e89a0d10f828db4a8280f7488821ecd37b3befb5052ccc3f5b2eb",
+    "members": 3,
+    "rootVerifiedAllMembers": true,
+    "allowed": [
+      "P1 original socket identity/read/send/flush/credit/detach minimum",
+      "P4 pure control scalar/closed payload/binary codec"
+    ],
+    "blockedSeparately": [
+      "WSS-ASSEMBLY-ABI001 ordinary production services",
+      "WSS-DOCUMENT-ABI002 owned document streaming contract",
+      "WSS-RAW-PRESERVATION001 unknown-subtree repeated keys",
+      "six standard session facade contracts"
+    ]
+  },
+  "webProtocol": {
+    "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-web-session-control-codec-candidate-v1",
+    "freezeSHA256": "b52fd04493ba204eddb91df545a97c3ba13b427014371a8805cf270f2c427da4",
+    "members": 835,
+    "sourceCount": 821,
+    "sourceManifestSHA256": "b770b3dfb73b35a2bfe4e5083751fecd6f5b2449b3fca7e96f940477062cd740",
+    "modifiedBaselineLeaves": 0,
+    "newFiles": 2,
+    "dependencyChanges": false,
+    "scope": "28 closed shallow command payloads, five mutation branches, canonical ID/u64/i64 strings, existing ACPI Ack/ACPV Data dispatch guarded by caller connection phase",
+    "authorValidation": {
+      "typeScriptCheck": 0,
+      "webTestFiles": 28,
+      "webTestsPassed": 651,
+      "webTestsFailed": 0,
+      "retries": 0,
+      "webBuild": 0,
+      "sourceBeforeAfterUnchanged": true,
+      "patchCheck": 0
+    },
+    "independentReview": "requested",
+    "independentAcceptance": "not executed",
+    "notProven": [
+      "true socket authentication",
+      "WSS networking",
+      "main/UI connection",
+      "service availability",
+      "upload owner",
+      "production facade",
+      "real Harness",
+      "Root installation"
+    ]
+  },
+  "openFailures": [
+    "Q3-HIST-AUDIT-PHYSICAL001 first share0 database open Windows OS32 after unit close/registry Complete; holder unknown",
+    "CLDB actual original SQLite worker ACK/join unknown",
+    "old full default batch 709 passed/38 failed remains failed; no rerun",
+    "Q3-CBT-DEFAULT-CONTEXT001 five timing/context failures remain open",
+    "strict remains failed"
+  ],
+  "parallelism": "Root P4 codec author, lifecycle independent tester, lifecycle reviewer, SQLite worker engineer; exclusive workspaces and no overlapping writes",
+  "unperformed": [
+    "npm audit",
+    "git commit",
+    "git push",
+    "publication",
+    "archive",
+    "index writes"
+  ]
+}

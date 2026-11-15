@@ -1,0 +1,60 @@
+{
+  "scope": "Provider failure ABI design review only; not full coding PASS. ND-PROVIDER-ABI001/002/003 Open-design; NDPREP-NOOWNER001 Open; Native80=0. No proposed types or DDL implemented by this archive.",
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\inputs\\app\\src\\platform\\process_owner.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/inputs/app/src/platform/process_owner.rs",
+      "sha256": "d36c45efe87387a6058e66d632df4672c6a74ef0ab36ee660cc2e8c6551a3f8b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\inputs\\app\\src\\platform\\native_source.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/inputs/app/src/platform/native_source.rs",
+      "sha256": "df10ac0a4d35f255e522a93437008215f6f4305d1ed0532681b6ca1a5b9cd224"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\inputs\\app\\src\\application\\native_dispatch\\source_ports.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/inputs/app/src/application/native_dispatch/source_ports.rs",
+      "sha256": "310de6c54c3b6b69ee1e4ef81e7ec954e0e9fbd84d0227344a84e965a28535f2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\inputs\\app\\src\\application\\native_dispatch\\runtime.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/inputs/app/src/application/native_dispatch/runtime.rs",
+      "sha256": "035acfdc96a45abac9a8b776e7bc2ba45133b18d67895542b79a7d7d9bfda8b0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\inputs\\app\\src\\application\\native_dispatch\\source.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/inputs/app/src/application/native_dispatch/source.rs",
+      "sha256": "16bb1daef04734e3c95cafdc3155c12420b2433ba59673a1a5214db5dbe33058"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\inputs\\app\\src\\application\\native_dispatch\\shutdown.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/inputs/app/src/application/native_dispatch/shutdown.rs",
+      "sha256": "25e732a856f3e9e5e7b310ce48d76fa27f1532ed13d3ee89be6bf2b7c67c807b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\inputs\\app\\src\\storage\\native_runtime.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/inputs/app/src/storage/native_runtime.rs",
+      "sha256": "1c486b0480c03a1345186028159a3edad8e2a7244a435f1d1ce26286927eed21"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\inputs\\app\\src\\session_storage\\native_dispatch_schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/inputs/app/src/session_storage/native_dispatch_schema.rs",
+      "sha256": "73b5e8a6f2ee0238fa7cfa639b0cfe24d3867c8fa80174687b2ea5d4fd91f18d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\CONTRACT.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/CONTRACT.md",
+      "sha256": "aab21ddd3691a9b4511a2f1d3af66daab3b20f615edd59251d8f7c4b262f291e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\implementation-v1\\candidate\\provider-failure-abi-draft-v1\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/freeze.json",
+      "sha256": "d56c0c177e0f8578cafedf4a1fef50b51f1ddc19824763bcad1f3bcbdfa69e05"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-native-dispatch\\provider-failure-abi-draft-v1-pre-review.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-provider-abi-pre-review/pre-review.md",
+      "sha256": "b5f1a55acc2438c5234ce9ea2783bd0ca7b02f2c859982d35e3a24fb611860b8"
+    }
+  ]
+}

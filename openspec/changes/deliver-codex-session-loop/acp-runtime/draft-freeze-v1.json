@@ -1,0 +1,23 @@
+﻿{
+    "status":  "draft only; requires independent API/case/classification review before code",
+    "sourceReview":  "reviewer wp3-native-dispatch/draft-sequencing-review.md 0dd089bc prefix",
+    "entries":  [
+                    {
+                        "path":  "inputs.json",
+                        "sha256":  "c6cdde2cb7c644f6d2b7ad59f87e887fcfd86c8d6bb80a32b05f82e9a7620463"
+                    },
+                    {
+                        "path":  "read-status.json",
+                        "sha256":  "2acd8c7b492f5fdf371b7ad0da53bf04a4fbe74a9c2fdc6dbd00ce6c1ab01e48"
+                    },
+                    {
+                        "path":  "public-acp-runtime-contract-draft.md",
+                        "sha256":  "49f5c9a1aaa819302f99c7ad30dbc7e4a81bf7761945cb4a862cea34b5d23488"
+                    },
+                    {
+                        "path":  "limits-and-migration-draft.md",
+                        "sha256":  "4b5ae041ddcda2b677b6861e9519cef65318070c2c368b7cf3ce6cf790ce42b8"
+                    }
+                ],
+    "sqlPriority":  "R3 v3-r3 frozen source f5f8b93b; real integrated feedback takes priority"
+}

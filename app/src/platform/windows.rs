@@ -353,6 +353,63 @@ pub fn create_private_pipe(
     }
 }
 
+/// Creates the same owner-only local byte pipe while returning the original raw owner
+/// before Tokio registration can fail. The tracked process driver registers it before transfer.
+pub(super) fn create_private_pipe_owned(
+    pipe_name: &OsStr,
+    owner_sid: &str,
+) -> io::Result<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        Storage::FileSystem::{
+            FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
+        },
+        System::Pipes::{
+            CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+        },
+    };
+    let current_sid = current_user_sid().map_err(|error| io::Error::other(error.to_string()))?;
+    if !current_sid.eq_ignore_ascii_case(owner_sid) {
+        return Err(invalid_input(
+            "named pipe owner SID must match the current Windows user",
+        ));
+    }
+    let sddl = format!("D:P(A;;GA;;;{owner_sid})");
+    let descriptor =
+        security_descriptor(&sddl).map_err(|error| io::Error::other(error.to_string()))?;
+    let mut attributes = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
+            .map_err(|_| invalid_input("security attributes are too large"))?,
+        lpSecurityDescriptor: descriptor.pointer,
+        bInheritHandle: 0,
+    };
+    let mut encoded: Vec<u16> = pipe_name.encode_wide().collect();
+    if encoded.contains(&0) {
+        return Err(invalid_input("named pipe path contains a NUL"));
+    }
+    encoded.push(0);
+    // SAFETY: Descriptor/name/attributes stay live. The original noninheritable handle is
+    // returned immediately with no fallible operation between creation and ownership.
+    let handle = unsafe {
+        CreateNamedPipeW(
+            encoded.as_ptr(),
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_REJECT_REMOTE_CLIENTS,
+            254,
+            65536,
+            65536,
+            0,
+            &raw mut attributes,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: Successful CreateNamedPipeW returned this unique original handle.
+    Ok(unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(handle) })
+}
+
 fn token_user_sid(token: HANDLE) -> Result<String, PlatformError> {
     #[cfg(test)]
     fail_pipe_check_for_test("GetTokenInformation(size)")?;

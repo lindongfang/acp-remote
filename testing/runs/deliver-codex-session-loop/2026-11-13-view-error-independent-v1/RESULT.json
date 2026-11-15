@@ -1,0 +1,243 @@
+{
+  "status": "passed-limited-scope",
+  "completedAt": "2026-11-13T02:18:57.768Z",
+  "scope": "WP4-FR-002 frozen server-side NativeFailure mapping and applicable regression only",
+  "sourceManifest": {
+    "path": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\SOURCE-GREEN.json",
+    "bytes": 92942,
+    "sha256": "22c7f058f416aca2d48680d49387c5619bdf050ceade940f7c18135198a16472"
+  },
+  "canonicalSha256": "5f076a551d81c3b3ed28b18a0c6bc3d66772969170178962ec3b745c9aaf9942",
+  "verifiedLeaves": 515,
+  "binaries": [
+    {
+      "path": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\artifacts\\acp_remote-e75360741b1915fc.exe",
+      "bytes": 66087424,
+      "sha256": "d06e61c8839492fbc539fc8165f8a0fbb66d1fe63745b54970242b81721d0a11"
+    },
+    {
+      "path": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\artifacts\\native_dispatch_dev_child.exe",
+      "bytes": 690688,
+      "sha256": "2bcf2efe3eb8bd1b95e42cb6b821cca208b0a2fb0fac74a0e904d898654ef978"
+    }
+  ],
+  "checks": [
+    {
+      "label": "view-error",
+      "mode": "list",
+      "executable": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\artifacts\\acp_remote-e75360741b1915fc.exe",
+      "arguments": [
+        "management_ws::session_commands::view_error_development",
+        "--list"
+      ],
+      "processId": 24708,
+      "startedAt": "2026-11-13T10:07:25.4171209+08:00",
+      "endedAt": "2026-11-13T10:07:25.4798477+08:00",
+      "exitCode": 0,
+      "expectedTests": 4,
+      "actualTests": 4,
+      "testNames": [
+        "management_ws::session_commands::view_error_development::direct_view_failure_codes_are_preserved",
+        "management_ws::session_commands::view_error_development::native_view_error_envelope_exposes_only_fixed_code",
+        "management_ws::session_commands::view_error_development::native_view_failure_preserves_dispatch_category",
+        "management_ws::session_commands::view_error_development::native_view_protocol_causes_remain_protocol_failures"
+      ],
+      "stdout": "view-error.list.stdout.txt",
+      "stderr": "view-error.list.stderr.txt"
+    },
+    {
+      "label": "view-error",
+      "mode": "run",
+      "executable": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\artifacts\\acp_remote-e75360741b1915fc.exe",
+      "arguments": [
+        "management_ws::session_commands::view_error_development",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "processId": 28444,
+      "startedAt": "2026-11-13T10:07:25.4841915+08:00",
+      "endedAt": "2026-11-13T10:07:25.5206828+08:00",
+      "exitCode": 0,
+      "expectedTests": 4,
+      "actualTests": 4,
+      "testNames": [
+        "management_ws::session_commands::view_error_development::direct_view_failure_codes_are_preserved",
+        "management_ws::session_commands::view_error_development::native_view_error_envelope_exposes_only_fixed_code",
+        "management_ws::session_commands::view_error_development::native_view_failure_preserves_dispatch_category",
+        "management_ws::session_commands::view_error_development::native_view_protocol_causes_remain_protocol_failures"
+      ],
+      "stdout": "view-error.run.stdout.txt",
+      "stderr": "view-error.run.stderr.txt"
+    },
+    {
+      "label": "session-command",
+      "mode": "list",
+      "executable": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\artifacts\\acp_remote-e75360741b1915fc.exe",
+      "arguments": [
+        "management_ws::session_commands",
+        "--list"
+      ],
+      "processId": 7420,
+      "startedAt": "2026-11-13T10:07:25.5226846+08:00",
+      "endedAt": "2026-11-13T10:07:25.5583052+08:00",
+      "exitCode": 0,
+      "expectedTests": 6,
+      "actualTests": 6,
+      "testNames": [
+        "management_ws::session_commands::projection_development::queue_read_projection_preserves_large_values_and_typed_retirement",
+        "management_ws::session_commands::projection_development::queue_read_task_slot_allocation_uses_allocation_failed",
+        "management_ws::session_commands::view_error_development::direct_view_failure_codes_are_preserved",
+        "management_ws::session_commands::view_error_development::native_view_error_envelope_exposes_only_fixed_code",
+        "management_ws::session_commands::view_error_development::native_view_failure_preserves_dispatch_category",
+        "management_ws::session_commands::view_error_development::native_view_protocol_causes_remain_protocol_failures"
+      ],
+      "stdout": "session-command.list.stdout.txt",
+      "stderr": "session-command.list.stderr.txt"
+    },
+    {
+      "label": "session-command",
+      "mode": "run",
+      "executable": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\artifacts\\acp_remote-e75360741b1915fc.exe",
+      "arguments": [
+        "management_ws::session_commands",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "processId": 24648,
+      "startedAt": "2026-11-13T10:07:25.5593057+08:00",
+      "endedAt": "2026-11-13T10:07:25.5966486+08:00",
+      "exitCode": 0,
+      "expectedTests": 6,
+      "actualTests": 6,
+      "testNames": [
+        "management_ws::session_commands::projection_development::queue_read_projection_preserves_large_values_and_typed_retirement",
+        "management_ws::session_commands::projection_development::queue_read_task_slot_allocation_uses_allocation_failed",
+        "management_ws::session_commands::view_error_development::direct_view_failure_codes_are_preserved",
+        "management_ws::session_commands::view_error_development::native_view_error_envelope_exposes_only_fixed_code",
+        "management_ws::session_commands::view_error_development::native_view_failure_preserves_dispatch_category",
+        "management_ws::session_commands::view_error_development::native_view_protocol_causes_remain_protocol_failures"
+      ],
+      "stdout": "session-command.run.stdout.txt",
+      "stderr": "session-command.run.stderr.txt"
+    },
+    {
+      "label": "native-release",
+      "mode": "list",
+      "executable": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\artifacts\\acp_remote-e75360741b1915fc.exe",
+      "arguments": [
+        "native_release",
+        "--list"
+      ],
+      "processId": 32864,
+      "startedAt": "2026-11-13T10:07:25.5986633+08:00",
+      "endedAt": "2026-11-13T10:07:25.6346249+08:00",
+      "exitCode": 0,
+      "expectedTests": 7,
+      "actualTests": 7,
+      "testNames": [
+        "node::tests::queue_management_development::native_release_registration_has_a_durable_actor_bound_fact",
+        "node::tests::queue_management_development::session_management_routes_approval_and_native_release_services",
+        "session_storage::native_release::tests::durable_release_fact_survives_reopen_and_is_bound_to_actor_generation",
+        "session_storage::native_release::tests::finish_storage_failure_leaves_releasing_and_can_retry_with_terminal_failure",
+        "session_storage::native_release_schema::tests::release_commit_report_loss_keeps_complete_schema10",
+        "session_storage::native_release_schema::tests::release_precommit_faults_roll_back_to_exact_nine",
+        "session_storage::native_release_schema::tests::schema10_upgrades_exact_nine_and_preserves_old_layout_and_data"
+      ],
+      "stdout": "native-release.list.stdout.txt",
+      "stderr": "native-release.list.stderr.txt"
+    },
+    {
+      "label": "native-release",
+      "mode": "run",
+      "executable": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\artifacts\\acp_remote-e75360741b1915fc.exe",
+      "arguments": [
+        "native_release",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "processId": 10076,
+      "startedAt": "2026-11-13T10:07:25.6346249+08:00",
+      "endedAt": "2026-11-13T10:07:27.3330724+08:00",
+      "exitCode": 0,
+      "expectedTests": 7,
+      "actualTests": 7,
+      "testNames": [
+        "node::tests::queue_management_development::native_release_registration_has_a_durable_actor_bound_fact",
+        "node::tests::queue_management_development::session_management_routes_approval_and_native_release_services",
+        "session_storage::native_release::tests::durable_release_fact_survives_reopen_and_is_bound_to_actor_generation",
+        "session_storage::native_release::tests::finish_storage_failure_leaves_releasing_and_can_retry_with_terminal_failure",
+        "session_storage::native_release_schema::tests::release_commit_report_loss_keeps_complete_schema10",
+        "session_storage::native_release_schema::tests::release_precommit_faults_roll_back_to_exact_nine",
+        "session_storage::native_release_schema::tests::schema10_upgrades_exact_nine_and_preserves_old_layout_and_data"
+      ],
+      "stdout": "native-release.run.stdout.txt",
+      "stderr": "native-release.run.stderr.txt"
+    }
+  ],
+  "testExecutions": 17,
+  "differentTopLevelTests": 13,
+  "distinctTestNames": [
+    "management_ws::session_commands::projection_development::queue_read_projection_preserves_large_values_and_typed_retirement",
+    "management_ws::session_commands::projection_development::queue_read_task_slot_allocation_uses_allocation_failed",
+    "management_ws::session_commands::view_error_development::direct_view_failure_codes_are_preserved",
+    "management_ws::session_commands::view_error_development::native_view_error_envelope_exposes_only_fixed_code",
+    "management_ws::session_commands::view_error_development::native_view_failure_preserves_dispatch_category",
+    "management_ws::session_commands::view_error_development::native_view_protocol_causes_remain_protocol_failures",
+    "node::tests::queue_management_development::native_release_registration_has_a_durable_actor_bound_fact",
+    "node::tests::queue_management_development::session_management_routes_approval_and_native_release_services",
+    "session_storage::native_release::tests::durable_release_fact_survives_reopen_and_is_bound_to_actor_generation",
+    "session_storage::native_release::tests::finish_storage_failure_leaves_releasing_and_can_retry_with_terminal_failure",
+    "session_storage::native_release_schema::tests::release_commit_report_loss_keeps_complete_schema10",
+    "session_storage::native_release_schema::tests::release_precommit_faults_roll_back_to_exact_nine",
+    "session_storage::native_release_schema::tests::schema10_upgrades_exact_nine_and_preserves_old_layout_and_data"
+  ],
+  "inputsUnchanged": true,
+  "gitIndexUnchanged": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+  "cases": [
+    {
+      "id": "FR002-AC-001",
+      "status": "passed",
+      "detail": "29 distinct DispatchError variants; 30 non-ProtocolFault table inputs plus protocol test; SqlClose bool and SourcePlatform pairs covered"
+    },
+    {
+      "id": "FR002-AC-002",
+      "status": "passed",
+      "detail": "17/17 NativeProtocolFailure inputs remain protocol_failure"
+    },
+    {
+      "id": "FR002-AC-003",
+      "status": "passed",
+      "detail": "30 direct ViewError inputs; direct mapping and authentication-close source preserved; no dedicated dynamic authentication-close scenario"
+    },
+    {
+      "id": "FR002-AC-004",
+      "status": "passed",
+      "detail": "5 complete JSON Value comparisons after serialize/deserialize; two SourcePlatform payloads and both SqlClose bool states"
+    },
+    {
+      "id": "FR002-AC-005",
+      "status": "passed",
+      "detail": "6 session-command and 7 native-release tests, including view.opened and release retry/storage-fault/close assertions"
+    }
+  ],
+  "wrapperExitCode": 1,
+  "wrapperFailure": "post-test summary only; see EXECUTION-ERROR.md; raw execution-v1/RESULT.json retained",
+  "testProcessExitCodes": [
+    0,
+    0,
+    0
+  ],
+  "redEvidence": "reviewed existing Red v2, not independently rerun",
+  "notRun": [
+    "rebuild/reproducible build",
+    "complete Rust suite",
+    "strict clippy",
+    "Web closed error-code contract and browser",
+    "dedicated authentication-close failure scenarios",
+    "full Job descendant enumeration (CIM denied)",
+    "real external Harness",
+    "npm audit (explicitly excluded)"
+  ],
+  "completeWp4Accepted": false,
+  "originalFindingClosure": "reserved for original finding reviewer"
+}

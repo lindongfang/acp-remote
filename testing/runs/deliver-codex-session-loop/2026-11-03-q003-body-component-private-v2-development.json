@@ -1,0 +1,42 @@
+{
+  "date": "2026-11-03",
+  "candidate": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-node-factory-d-body-component-candidate-v2",
+  "freezeSHA256": "e884367c5d742e82f5227d5c5a4fc59e7e9cd419f7d5ac4322250fc604d1b85d",
+  "members": 881,
+  "rootVerified": true,
+  "sourceCount": 819,
+  "sourceManifestSHA256": "62ce40990199660c4ada864d4d92af1c728641bcfb364ba4f7b266eaddc23000",
+  "deltaVsV1": {
+    "changed": 5,
+    "preserved": 814,
+    "added": 0,
+    "deleted": 0
+  },
+  "development": {
+    "bodyPass": 14,
+    "bodyFail": 0,
+    "firstRemove": 21,
+    "totalCreated": 21,
+    "tmpEmpty": true,
+    "check": 0,
+    "fmt": 0,
+    "includeFmt": 0,
+    "strict": {
+      "exit": 101,
+      "errors": 682,
+      "primaryAdded": 0,
+      "primaryRemoved": 0,
+      "fullAdded": 0,
+      "fullRemoved": 0
+    }
+  },
+  "reviewPosterior": "requested pending",
+  "originalDefaultFullSuite": {
+    "pass": 640,
+    "fail": 101,
+    "preserved": true,
+    "rerun": false
+  },
+  "productionNode": false,
+  "rootInstalled": false
+}

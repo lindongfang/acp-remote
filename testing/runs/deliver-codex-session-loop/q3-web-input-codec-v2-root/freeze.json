@@ -1,0 +1,140 @@
+{
+  "scope": "Web input-transfer pure codec exact three-leaf Root integration only",
+  "members": [
+    {
+      "path": "baseline-inputs.json",
+      "bytes": 111603,
+      "sha256": "3588e6dbfb6ca5056d5c5641cfd4d4d7079cbb7a42c550a794cd80b700cd578b"
+    },
+    {
+      "path": "candidate-source-manifest.json",
+      "bytes": 118636,
+      "sha256": "d07efc2202f613afeb783ab101c5fbbc0e7752fe2978e3ea6ec7a07066bfd8f0"
+    },
+    {
+      "path": "installation.json",
+      "bytes": 926,
+      "sha256": "2fe25046f8d79ea6dc71538a95ca469e7156d89af833acc79ff9f4678d2c7ff3"
+    },
+    {
+      "path": "logs/build/result.json",
+      "bytes": 516,
+      "sha256": "ea51f15f168e215bb6d2de50e136cf2710a5116495f401fc6518602d4c379e85"
+    },
+    {
+      "path": "logs/build/source-after.json",
+      "bytes": 106860,
+      "sha256": "34f888d586d7adf0fb051a555d24bd786191b801470874cea2edebcd6626be09"
+    },
+    {
+      "path": "logs/build/source-before.json",
+      "bytes": 106860,
+      "sha256": "34f888d586d7adf0fb051a555d24bd786191b801470874cea2edebcd6626be09"
+    },
+    {
+      "path": "logs/build/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "logs/build/stdout.log",
+      "bytes": 405,
+      "sha256": "58e1e64579413a8e196744b57d4b961b38fd6b108f3a605487a33c5dbade1e0d"
+    },
+    {
+      "path": "logs/check/result.json",
+      "bytes": 516,
+      "sha256": "c90cb3280c5a54fae5ffcf5194811f3bf4777f731d78735c9662a00118be1823"
+    },
+    {
+      "path": "logs/check/source-after.json",
+      "bytes": 106860,
+      "sha256": "34f888d586d7adf0fb051a555d24bd786191b801470874cea2edebcd6626be09"
+    },
+    {
+      "path": "logs/check/source-before.json",
+      "bytes": 106860,
+      "sha256": "34f888d586d7adf0fb051a555d24bd786191b801470874cea2edebcd6626be09"
+    },
+    {
+      "path": "logs/check/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "logs/check/stdout.log",
+      "bytes": 47,
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d"
+    },
+    {
+      "path": "logs/test/result.json",
+      "bytes": 568,
+      "sha256": "0053deba0aca2d160cb54b095cd0e00c29d0d086b1d46f8e53d583b2d47ea76c"
+    },
+    {
+      "path": "logs/test/source-after.json",
+      "bytes": 106860,
+      "sha256": "34f888d586d7adf0fb051a555d24bd786191b801470874cea2edebcd6626be09"
+    },
+    {
+      "path": "logs/test/source-before.json",
+      "bytes": 106860,
+      "sha256": "34f888d586d7adf0fb051a555d24bd786191b801470874cea2edebcd6626be09"
+    },
+    {
+      "path": "logs/test/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "logs/test/stdout.log",
+      "bytes": 273,
+      "sha256": "42f2ecec46b840b53344454fbbbba81e8cf896e4588e0bb86cf52f51fe0fa253"
+    },
+    {
+      "path": "patch-raw/clients/web/src/management/input-transfer.ts",
+      "bytes": 3285,
+      "sha256": "da63e70c02751a29049052c8eb863762e000e9ebbb28326ddee61371b9471799"
+    },
+    {
+      "path": "patch-raw/clients/web/tests/independent-input-transfer/acceptance.test.ts",
+      "bytes": 10934,
+      "sha256": "c0fd15684e88b5ca7aad18e5afcf22acaa41ba5cb20c8d2816e500a9a2c417bc"
+    },
+    {
+      "path": "patch-raw/clients/web/tests/input-transfer.test.ts",
+      "bytes": 3799,
+      "sha256": "4495fe8c5e2bf8f08f50d3a0db697ade76e57e38807e293541e358f89aeb69c8"
+    },
+    {
+      "path": "pre-install.json",
+      "bytes": 619,
+      "sha256": "bf7f3014834f8443e8115938fac04f2b4ea12e95cd23b1ae628b8f47b51ce7bb"
+    },
+    {
+      "path": "RESULT.json",
+      "bytes": 1277,
+      "sha256": "83c7a3143c9d3e6da2c075b530724e6680e8215ffd0bbd898fb75be70ffd7135"
+    },
+    {
+      "path": "run-root-web-check.mjs",
+      "bytes": 2712,
+      "sha256": "d44771a5f670205d379fbdbf06b5ec13f80987d7768d7cde7ace8b41936655ba"
+    },
+    {
+      "path": "source-after-checks.json",
+      "bytes": 125250,
+      "sha256": "9c6143fdb9ed73291b4912b54c75d3683165c9a339dc052b37bba183c2975f9e"
+    },
+    {
+      "path": "source-after-install.json",
+      "bytes": 125250,
+      "sha256": "9c6143fdb9ed73291b4912b54c75d3683165c9a339dc052b37bba183c2975f9e"
+    },
+    {
+      "path": "tested-source-manifest.json",
+      "bytes": 125250,
+      "sha256": "9c6143fdb9ed73291b4912b54c75d3683165c9a339dc052b37bba183c2975f9e"
+    }
+  ]
+}

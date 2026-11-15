@@ -1,95 +1,160 @@
-use super::model::{field, object};
+#![allow(
+    clippy::needless_pass_by_value,
+    reason = "Frozen public API consumes owned snapshots/fragments rather than borrowing caller state"
+)]
+//! Version-selected protocol construction and shallow validation, with no IO or authorization.
 use super::{
-    AcpError, Capabilities, MessageId, Negotiated, OptionId, PermissionChoice, PermissionRequest,
-    PromptResult, RawMessage, RpcId, SessionEvent, SessionId, ToolCallId, Version,
+    AcpError, Capabilities, ConfigSourceStamp, ConnectionScope, ExtensionFields, McpTransport,
+    MessageId, Negotiated, OptionId, OrderedRawObject, PermissionChoice, PermissionRequest,
+    PromptResult, RawMessage, RawMetadata, ReportedDirectories, RpcId, SessionEvent, SessionId,
+    SessionListItem, SessionListing, SessionSetup, ToolCallId, Version,
+    model::{field, object, text},
+    raw_json::{OwnedRawValue, RawKind, RawValueRef},
+    raw_model as raw,
 };
-use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 #[derive(Clone, Debug)]
 pub enum RequestKind {
     Initialize(Version),
     NewSession,
     Prompt(SessionId),
     Resume(SessionId),
+    Replay(SessionId),
+    ListSessions,
     Close(SessionId),
 }
 pub struct Request {
-    scope: Option<Arc<()>>,
+    pub(super) scope: ConnectionScope,
     pub(super) method: &'static str,
-    pub(super) params: Value,
+    pub(super) params: OwnedRawValue,
     pub(super) kind: RequestKind,
+    pub(super) stamp: Option<ConfigSourceStamp>,
 }
-/// Frozen strategy selected by one initialize response, independent of program identity.
+impl Request {
+    #[must_use]
+    pub const fn kind(&self) -> &RequestKind {
+        &self.kind
+    }
+    #[must_use]
+    pub const fn params(&self) -> RawValueRef<'_> {
+        self.params.as_ref()
+    }
+    #[must_use]
+    pub const fn setup_stamp(&self) -> Option<&ConfigSourceStamp> {
+        self.stamp.as_ref()
+    }
+}
+impl fmt::Debug for Request {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Request(..)")
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Strategy {
-    scope: Arc<()>,
+    pub(super) scope: ConnectionScope,
     negotiated: Negotiated,
+}
+pub(super) fn at<'a>(
+    mut v: RawValueRef<'a>,
+    keys: &[&str],
+) -> Result<Option<RawValueRef<'a>>, AcpError> {
+    for key in keys {
+        let Some(object) = v.object() else {
+            return Ok(None);
+        };
+        let Some(value) = object.get(key)? else {
+            return Ok(None);
+        };
+        v = value;
+    }
+    Ok(Some(v))
 }
 impl Strategy {
     pub(super) fn select(
         offer: Version,
+        scope: ConnectionScope,
         raw: RawMessage,
-        result: &Value,
+        result: RawValueRef<'_>,
     ) -> Result<Self, AcpError> {
         object(result)?;
         let selected = field(result, "protocolVersion")?
-            .as_u64()
+            .unsigned()
             .ok_or(AcpError::InvalidMessage)?;
         let version = match selected {
             1 => Version::V1,
             2 if offer == Version::V2 => Version::V2,
             _ => return Err(AcpError::IncompatibleVersion),
         };
-        let (info_key, cap_key) = match version {
-            Version::V1 => ("agentInfo", "agentCapabilities"),
-            Version::V2 => ("info", "capabilities"),
+        let (info_key, cap_key) = if version == Version::V1 {
+            ("agentInfo", "agentCapabilities")
+        } else {
+            ("info", "capabilities")
         };
-        let info = result.get(info_key);
-        if version == Version::V2 || info.is_some_and(|v| !v.is_null()) {
-            let info = info.ok_or(AcpError::InvalidMessage)?;
-            object(info)?;
-            for k in ["name", "version"] {
-                field(info, k)?.as_str().ok_or(AcpError::InvalidMessage)?;
+        if version == Version::V2 || at(result, &[info_key])?.is_some_and(|v| !v.is_null()) {
+            let info = field(result, info_key)?;
+            for key in ["name", "version"] {
+                text(field(info, key)?)?;
             }
         }
-        // A selected-v1 response may omit its optional v1 fields; v2 aliases are never read as v1 capabilities.
-        let caps = result.get(cap_key).cloned().unwrap_or_else(|| json!({}));
-        object(&caps)?;
-        let session = match version {
-            Version::V1 => caps.get("sessionCapabilities"),
-            Version::V2 => caps.get("session"),
+        let empty = raw::literal("{}")?;
+        let caps = at(result, &[cap_key])?.unwrap_or(empty.as_ref());
+        object(caps)?;
+        let session_key = if version == Version::V1 {
+            "sessionCapabilities"
+        } else {
+            "session"
         };
-        let supports_session = version == Version::V1 || session.is_some_and(Value::is_object);
-        let prompt = match version {
-            Version::V1 => caps.get("promptCapabilities"),
-            Version::V2 => session.and_then(|v| v.get("prompt")),
+        let session = at(caps, &[session_key])?;
+        let sessions = version == Version::V1 || session.is_some_and(|v| v.object().is_some());
+        let lifecycle = |key: &str| -> Result<bool, AcpError> {
+            if !sessions {
+                return Ok(false);
+            }
+            if version == Version::V2 {
+                return Ok(true);
+            }
+            Ok(session
+                .map(|v| at(v, &[key]))
+                .transpose()?
+                .flatten()
+                .is_some_and(|v| v.object().is_some()))
         };
-        let advertised = |name: &str| {
-            prompt
-                .and_then(|v| v.get(name))
-                .is_some_and(|v| match version {
-                    Version::V1 => v == true,
-                    Version::V2 => v.is_object(),
-                })
+        let prompt = if version == Version::V1 {
+            at(caps, &["promptCapabilities"])?
+        } else {
+            session.map(|v| at(v, &["prompt"])).transpose()?.flatten()
         };
-        let lifecycle = |name: &str| {
-            supports_session
-                && (version == Version::V2
-                    || session
-                        .and_then(|s| s.get(name))
-                        .is_some_and(Value::is_object))
+        let advertised = |key: &str| -> Result<bool, AcpError> {
+            Ok(prompt
+                .map(|v| at(v, &[key]))
+                .transpose()?
+                .flatten()
+                .is_some_and(|v| {
+                    if version == Version::V1 {
+                        v.boolean() == Some(true)
+                    } else {
+                        v.object().is_some()
+                    }
+                }))
         };
         let capabilities = Capabilities {
-            sessions: supports_session,
-            resume: lifecycle("resume"),
-            close: lifecycle("close"),
-            image: advertised("image"),
-            audio: advertised("audio"),
-            embedded_context: advertised("embeddedContext"),
+            sessions,
+            list: lifecycle("list")?,
+            standard_replay: if version == Version::V1 {
+                at(caps, &["loadSession"])?.and_then(RawValueRef::boolean) == Some(true)
+            } else {
+                sessions
+            },
+            resume: lifecycle("resume")?,
+            close: lifecycle("close")?,
+            image: advertised("image")?,
+            audio: advertised("audio")?,
+            embedded_context: advertised("embeddedContext")?,
         };
         Ok(Self {
-            scope: Arc::new(()),
+            scope,
             negotiated: Negotiated {
+                offered: offer,
                 version,
                 raw,
                 capabilities,
@@ -104,160 +169,340 @@ impl Strategy {
     pub const fn version(&self) -> Version {
         self.negotiated.version
     }
-    pub(super) fn owns_request(&self, request: &Request) -> bool {
-        request
-            .scope
-            .as_ref()
-            .is_some_and(|scope| Arc::ptr_eq(scope, &self.scope))
-    }
-    /// # Errors
-    /// Rejects absent session support; workspace validation belongs to the application owner.
-    pub fn new_session(&self, cwd: &str) -> Result<Request, AcpError> {
-        self.require_sessions()?;
-        Ok(Request {
-            scope: Some(Arc::clone(&self.scope)),
-            method: "session/new",
-            params: json!({"cwd":cwd,"mcpServers":[]}),
-            kind: RequestKind::NewSession,
-        })
-    }
-    /// No replay cursor is sent. The v2 owner must observe current state before the response.
-    /// # Errors
-    /// Rejects unadvertised resume support; it never substitutes session/new or session/load.
-    pub fn resume(&self, session: SessionId, cwd: &str) -> Result<Request, AcpError> {
-        if !self.negotiated.capabilities.resume {
-            return Err(AcpError::UnsupportedCapability);
+    fn request(
+        &self,
+        method: &'static str,
+        kind: RequestKind,
+        params: OwnedRawValue,
+        stamp: Option<ConfigSourceStamp>,
+    ) -> Request {
+        Request {
+            scope: self.scope.clone(),
+            method,
+            kind,
+            params,
+            stamp,
         }
-        Ok(Request {
-            scope: Some(Arc::clone(&self.scope)),
-            method: "session/resume",
-            params: json!({"sessionId":session.as_str(),"cwd":cwd,"mcpServers":[]}),
-            kind: RequestKind::Resume(session),
-        })
     }
-    /// # Errors
-    /// Rejects unadvertised close support.
-    pub fn close(&self, session: SessionId) -> Result<Request, AcpError> {
-        if !self.negotiated.capabilities.close {
-            return Err(AcpError::UnsupportedCapability);
+    const fn require(b: bool) -> Result<(), AcpError> {
+        if b {
+            Ok(())
+        } else {
+            Err(AcpError::UnsupportedCapability)
         }
-        Ok(Request {
-            scope: Some(Arc::clone(&self.scope)),
-            method: "session/close",
-            params: json!({"sessionId":session.as_str()}),
-            kind: RequestKind::Close(session),
-        })
     }
-    /// # Errors
-    /// Rejects empty, malformed and unsupported content instead of converting it to text.
-    pub fn prompt(&self, session: SessionId, prompt: Value) -> Result<Request, AcpError> {
-        self.require_sessions()?;
-        let blocks = prompt
-            .as_array()
-            .filter(|v| !v.is_empty())
-            .ok_or(AcpError::InvalidMessage)?;
-        for block in blocks {
-            let kind = field(block, "type")?
-                .as_str()
-                .ok_or(AcpError::InvalidMessage)?;
-            match kind {
-                "text" => {
-                    field(block, "text")?
-                        .as_str()
-                        .ok_or(AcpError::InvalidMessage)?;
+    pub(super) const fn require_list(&self) -> Result<(), AcpError> {
+        Self::require(self.negotiated.capabilities.list)
+    }
+    fn setup_request(&self, kind: RequestKind, setup: &SessionSetup) -> Result<Request, AcpError> {
+        if setup.wire() != self.version() {
+            return Err(AcpError::ConfigurationVersionMismatch);
+        }
+        let session = match &kind {
+            RequestKind::Resume(s) | RequestKind::Replay(s) => Some(s),
+            _ => None,
+        };
+        let replay = matches!(kind, RequestKind::Replay(_));
+        let method = match &kind {
+            RequestKind::NewSession => {
+                Self::require(self.negotiated.capabilities.sessions)?;
+                "session/new"
+            }
+            RequestKind::Resume(_) => {
+                Self::require(self.negotiated.capabilities.resume)?;
+                "session/resume"
+            }
+            RequestKind::Replay(_) => {
+                Self::require(self.negotiated.capabilities.standard_replay)?;
+                if setup.cwd().len() > 4096 {
+                    return Err(AcpError::Capacity);
                 }
-                "resource_link" => {
-                    field(block, "uri")?
-                        .as_str()
-                        .ok_or(AcpError::InvalidMessage)?;
-                    field(block, "name")?
-                        .as_str()
-                        .ok_or(AcpError::InvalidMessage)?;
+                if self.version() == Version::V1 {
+                    "session/load"
+                } else {
+                    "session/resume"
+                }
+            }
+            _ => return Err(AcpError::InvalidMessage),
+        };
+        self.validate_setup_caps(setup)?;
+        let mcp = setup
+            .mcp_servers()
+            .iter()
+            .map(|m| m.as_raw().to_owned())
+            .collect::<Vec<_>>();
+        let mut fields = vec![
+            ("cwd", raw::string(setup.cwd())?),
+            ("mcpServers", raw::array(&mcp)?),
+        ];
+        if let Some(s) = session {
+            fields.insert(0, ("sessionId", raw::string(s.as_str())?));
+        }
+        if !setup.additional_directories().is_empty() {
+            let dirs = setup
+                .additional_directories()
+                .iter()
+                .map(|s| raw::string(s))
+                .collect::<Result<Vec<_>, _>>()?;
+            fields.push(("additionalDirectories", raw::array(&dirs)?));
+        }
+        if replay && self.version() == Version::V2 {
+            fields.push(("replayFrom", raw::literal(r#"{"type":"start"}"#)?));
+        }
+        let params = raw::object(
+            fields.iter().map(|(k, v)| (*k, v)),
+            Some(setup.extra().as_raw()),
+        )?;
+        Ok(self.request(method, kind, params, Some(setup.source().clone())))
+    }
+    fn validate_setup_caps(&self, setup: &SessionSetup) -> Result<(), AcpError> {
+        let result = self
+            .negotiated
+            .raw
+            .field("result")?
+            .ok_or(AcpError::InvalidMessage)?;
+        let caps = at(
+            result,
+            &[if self.version() == Version::V1 {
+                "agentCapabilities"
+            } else {
+                "capabilities"
+            }],
+        )?;
+        let advertised = |path: &[&str], boolean: bool| -> Result<bool, AcpError> {
+            Ok(caps
+                .map(|v| at(v, path))
+                .transpose()?
+                .flatten()
+                .is_some_and(|v| {
+                    if boolean {
+                        v.boolean() == Some(true)
+                    } else {
+                        v.object().is_some()
+                    }
+                }))
+        };
+        if !setup.additional_directories().is_empty() {
+            Self::require(advertised(
+                if self.version() == Version::V1 {
+                    &["sessionCapabilities", "additionalDirectories"]
+                } else {
+                    &["session", "additionalDirectories"]
+                },
+                false,
+            )?)?;
+        }
+        for server in setup.mcp_servers() {
+            if server.wire() != self.version() {
+                return Err(AcpError::ConfigurationVersionMismatch);
+            }
+            let supported = match (self.version(), server.transport()) {
+                (Version::V1, McpTransport::Stdio) | (Version::V2, McpTransport::Other(_)) => true,
+                (Version::V1, McpTransport::Http) => {
+                    advertised(&["mcpCapabilities", "http"], true)?
+                }
+                (Version::V1, McpTransport::Sse) => advertised(&["mcpCapabilities", "sse"], true)?,
+                (Version::V2, McpTransport::Stdio) => {
+                    advertised(&["session", "mcp", "stdio"], false)?
+                }
+                (Version::V2, McpTransport::Http) => {
+                    advertised(&["session", "mcp", "http"], false)?
+                }
+                _ => false,
+            };
+            Self::require(supported)?;
+        }
+        Ok(())
+    }
+    /// # Errors
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn new_session(&self, setup: &SessionSetup) -> Result<Request, AcpError> {
+        self.setup_request(RequestKind::NewSession, setup)
+    }
+    /// # Errors
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn resume(&self, session: SessionId, setup: &SessionSetup) -> Result<Request, AcpError> {
+        self.setup_request(RequestKind::Resume(session), setup)
+    }
+    /// # Errors
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn replay(&self, session: SessionId, setup: &SessionSetup) -> Result<Request, AcpError> {
+        self.setup_request(RequestKind::Replay(session), setup)
+    }
+    /// # Errors
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn prompt(
+        &self,
+        session: SessionId,
+        prompt: OwnedRawValue,
+        extra: ExtensionFields,
+    ) -> Result<Request, AcpError> {
+        Self::require(self.negotiated.capabilities.sessions)?;
+        extra.reject(&["sessionId", "prompt"])?;
+        for block in prompt
+            .as_ref()
+            .array()
+            .ok_or(AcpError::InvalidMessage)?
+            .iter()
+        {
+            let kind = super::prompt_input::block_tag(block)?;
+            match &*kind {
+                "text" | "resource_link" => {
+                    super::prompt_input::validate_block_fields(block, &kind)?;
                 }
                 "image" | "audio" => {
-                    let supported = if kind == "image" {
+                    Self::require(if &*kind == "image" {
                         self.negotiated.capabilities.image
                     } else {
                         self.negotiated.capabilities.audio
-                    };
-                    if !supported {
-                        return Err(AcpError::UnsupportedCapability);
-                    }
-                    field(block, "data")?
-                        .as_str()
-                        .ok_or(AcpError::InvalidMessage)?;
-                    field(block, "mimeType")?
-                        .as_str()
-                        .ok_or(AcpError::InvalidMessage)?;
+                    })?;
+                    super::prompt_input::validate_block_fields(block, &kind)?;
                 }
                 "resource" => {
-                    if !self.negotiated.capabilities.embedded_context {
-                        return Err(AcpError::UnsupportedCapability);
-                    }
-                    object(field(block, "resource")?)?;
+                    Self::require(self.negotiated.capabilities.embedded_context)?;
+                    super::prompt_input::validate_block_fields(block, &kind)?;
                 }
+                _ if self.version() == Version::V2 => {}
                 _ => return Err(AcpError::UnsupportedCapability),
             }
         }
-        Ok(Request {
-            scope: Some(Arc::clone(&self.scope)),
-            method: "session/prompt",
-            params: {
-                let mut fields = serde_json::Map::new();
-                fields.insert("sessionId".into(), Value::String(session.as_str().into()));
-                fields.insert("prompt".into(), prompt);
-                Value::Object(fields)
-            },
-            kind: RequestKind::Prompt(session),
+        let params = raw::object(
+            [
+                ("sessionId", &raw::string(session.as_str())?),
+                ("prompt", &prompt),
+            ],
+            Some(extra.as_raw()),
+        )?;
+        Ok(self.request("session/prompt", RequestKind::Prompt(session), params, None))
+    }
+    /// # Errors
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn list_sessions(
+        &self,
+        cwd: Option<&str>,
+        cursor: Option<&str>,
+        extra: ExtensionFields,
+    ) -> Result<Request, AcpError> {
+        Self::require(self.negotiated.capabilities.list)?;
+        extra.reject(&["cwd", "cursor"])?;
+        let mut fields = Vec::new();
+        for (key, v) in [("cwd", cwd), ("cursor", cursor)] {
+            if let Some(v) = v {
+                if v.len() > 4096 {
+                    return Err(AcpError::Capacity);
+                }
+                fields.push((key, raw::string(v)?));
+            }
+        }
+        Ok(self.request(
+            "session/list",
+            RequestKind::ListSessions,
+            raw::object(fields.iter().map(|(k, v)| (*k, v)), Some(extra.as_raw()))?,
+            None,
+        ))
+    }
+    /// # Errors
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn close(&self, session: SessionId, extra: ExtensionFields) -> Result<Request, AcpError> {
+        Self::require(self.negotiated.capabilities.close)?;
+        extra.reject(&["sessionId"])?;
+        let params = raw::object(
+            [("sessionId", &raw::string(session.as_str())?)],
+            Some(extra.as_raw()),
+        )?;
+        Ok(self.request("session/close", RequestKind::Close(session), params, None))
+    }
+    /// # Errors
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    #[allow(
+        clippy::option_if_let_else,
+        reason = "Reported omission, empty, null and uninterpreted states stay explicit"
+    )]
+    pub fn session_listing(&self, result: RawValueRef<'_>) -> Result<SessionListing, AcpError> {
+        Self::require(self.negotiated.capabilities.list)?;
+        let entries = field(result, "sessions")?
+            .array()
+            .ok_or(AcpError::InvalidMessage)?;
+        let mut sessions = Vec::new();
+        sessions
+            .try_reserve_exact(entries.len())
+            .map_err(|_| AcpError::Allocation)?;
+        for entry in entries.iter() {
+            let session = SessionId::parse(field(entry, "sessionId")?)?;
+            let cwd = text(field(entry, "cwd")?)?;
+            if cwd.len() > 4096 {
+                return Err(AcpError::Capacity);
+            }
+            let directories = match at(entry, &["additionalDirectories"])? {
+                None => ReportedDirectories::Omitted,
+                Some(v) if v.is_null() => ReportedDirectories::Null,
+                Some(v) => match v.array() {
+                    Some(a) => {
+                        let dirs = a.iter().map(text).collect::<Result<Vec<_>, _>>();
+                        match dirs {
+                            Ok(d) if d.is_empty() => ReportedDirectories::Empty,
+                            Ok(d) => ReportedDirectories::Known(d),
+                            Err(_) => ReportedDirectories::Uninterpreted(v.to_owned()),
+                        }
+                    }
+                    None => ReportedDirectories::Uninterpreted(v.to_owned()),
+                },
+            };
+            sessions.push(SessionListItem {
+                session,
+                cwd,
+                directories,
+                raw: entry.to_owned(),
+            });
+        }
+        let next_cursor = at(result, &["nextCursor"])?
+            .filter(|v| !v.is_null())
+            .map(text)
+            .transpose()?;
+        if next_cursor.as_ref().is_some_and(|v| v.len() > 4096) {
+            return Err(AcpError::Capacity);
+        }
+        Ok(SessionListing {
+            sessions,
+            next_cursor,
+            raw: result.to_owned(),
         })
     }
     /// # Errors
-    /// Rejects an invalid version-specific response; insertion is never completion.
-    pub fn prompt_result(&self, result: &Value) -> Result<PromptResult, AcpError> {
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn prompt_result(&self, result: RawValueRef<'_>) -> Result<PromptResult, AcpError> {
         object(result)?;
-        match self.version() {
-            Version::V1 => {
-                let stop_reason = field(result, "stopReason")?
-                    .as_str()
-                    .ok_or(AcpError::InvalidMessage)?;
-                if !matches!(
-                    stop_reason,
-                    "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled"
-                ) {
-                    return Err(AcpError::InvalidMessage);
-                }
-                Ok(PromptResult::Completed {
-                    stop_reason: Arc::from(stop_reason),
-                })
+        if self.version() == Version::V1 {
+            let stop_reason = text(field(result, "stopReason")?)?;
+            if !matches!(
+                &*stop_reason,
+                "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled"
+            ) {
+                return Err(AcpError::InvalidMessage);
             }
-            Version::V2 => Ok(PromptResult::Inserted {
+            Ok(PromptResult::Completed { stop_reason })
+        } else {
+            Ok(PromptResult::Inserted {
                 message: MessageId::parse(field(result, "messageId")?)?,
-            }),
+            })
         }
     }
-    /// Unknown update kinds retain the complete raw message in the transport event.
     /// # Errors
-    /// Rejects malformed required session/update identifiers.
-    pub fn update(&self, params: &Value) -> Result<SessionEvent, AcpError> {
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn update(&self, params: RawValueRef<'_>) -> Result<SessionEvent, AcpError> {
         let session = SessionId::parse(field(params, "sessionId")?)?;
         let update = field(params, "update")?;
-        let kind = field(update, "sessionUpdate")?
-            .as_str()
-            .ok_or(AcpError::InvalidMessage)?;
-        match kind {
+        let kind = text(field(update, "sessionUpdate")?)?;
+        match &*kind {
             "state_update" if self.version() == Version::V2 => Ok(SessionEvent::State {
                 session,
-                state: Arc::from(
-                    field(update, "state")?
-                        .as_str()
-                        .ok_or(AcpError::InvalidMessage)?,
-                ),
-                stop_reason: update
-                    .get("stopReason")
-                    .and_then(Value::as_str)
-                    .map(Arc::from),
+                state: text(field(update, "state")?)?,
+                stop_reason: at(update, &["stopReason"])?
+                    .filter(|v| v.kind() == RawKind::String)
+                    .map(text)
+                    .transpose()?,
             }),
-            "tool_call_update" | "tool_call" => Ok(SessionEvent::Tool {
+            "tool_call" | "tool_call_update" => Ok(SessionEvent::Tool {
                 session,
                 tool: ToolCallId::parse(field(update, "toolCallId")?)?,
             }),
@@ -268,83 +513,79 @@ impl Strategy {
             | "agent_thought"
             | "agent_thought_chunk" => Ok(SessionEvent::Message {
                 session,
-                message: update.get("messageId").map(MessageId::parse).transpose()?,
-                kind: Arc::from(kind),
+                message: at(update, &["messageId"])?
+                    .filter(|v| self.version() != Version::V1 || !v.is_null())
+                    .map(MessageId::parse)
+                    .transpose()?,
+                kind,
             }),
-            _ => Ok(SessionEvent::Other {
-                session,
-                kind: Arc::from(kind),
-            }),
+            _ => Ok(SessionEvent::Other { session, kind }),
         }
     }
-    /// Only parses transport facts; source/Run and structured tool association are owner duties.
     /// # Errors
-    /// Rejects malformed required fields; unknown subjects/options remain unsupported raw facts.
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
     pub fn permission(
         &self,
         id: RpcId,
         raw: RawMessage,
-        params: &Value,
+        params: RawValueRef<'_>,
     ) -> Result<PermissionRequest, AcpError> {
         let session = SessionId::parse(field(params, "sessionId")?)?;
-        let (supported_subject, tool) = match self.version() {
-            Version::V1 => (
+        let (supported_subject, tool) = if self.version() == Version::V1 {
+            (
                 true,
                 Some(ToolCallId::parse(field(
                     field(params, "toolCall")?,
                     "toolCallId",
                 )?)?),
-            ),
-            Version::V2 => {
-                field(params, "title")?
-                    .as_str()
-                    .ok_or(AcpError::InvalidMessage)?;
-                match params.get("subject") {
-                    Some(s) if s.get("type").and_then(Value::as_str) == Some("tool_call") => (
-                        true,
-                        Some(ToolCallId::parse(field(
-                            field(s, "toolCall")?,
-                            "toolCallId",
-                        )?)?),
-                    ),
-                    Some(subject)
-                        if subject.get("type").and_then(Value::as_str) == Some("command") =>
-                    {
-                        field(subject, "command")?
-                            .as_str()
-                            .ok_or(AcpError::InvalidMessage)?;
-                        field(subject, "cwd")?
-                            .as_str()
-                            .ok_or(AcpError::InvalidMessage)?;
-                        let tool = subject
-                            .get("toolCallId")
-                            .filter(|v| !v.is_null())
-                            .map(ToolCallId::parse)
-                            .transpose()?;
-                        (tool.is_some(), tool)
+            )
+        } else {
+            text(field(params, "title")?)?;
+            match at(params, &["subject"])? {
+                None => (true, None),
+                Some(s) if s.is_null() => (true, None),
+                Some(s) => {
+                    let kind = text(field(s, "type")?)?;
+                    match &*kind {
+                        "tool_call" => (
+                            true,
+                            Some(ToolCallId::parse(field(
+                                field(s, "toolCall")?,
+                                "toolCallId",
+                            )?)?),
+                        ),
+                        "command" => {
+                            text(field(s, "command")?)?;
+                            text(field(s, "cwd")?)?;
+                            (
+                                true,
+                                at(s, &["toolCallId"])?
+                                    .filter(|v| !v.is_null())
+                                    .map(ToolCallId::parse)
+                                    .transpose()?,
+                            )
+                        }
+                        _ => (false, None),
                     }
-                    _ => (false, None),
                 }
             }
         };
         let options = field(params, "options")?
-            .as_array()
+            .array()
             .ok_or(AcpError::InvalidMessage)?;
         if self.version() == Version::V2 && options.is_empty() {
             return Err(AcpError::InvalidMessage);
         }
-        let mut parsed = Vec::with_capacity(options.len());
-        for option in options {
-            field(option, "name")?
-                .as_str()
-                .ok_or(AcpError::InvalidMessage)?;
+        let mut parsed = Vec::new();
+        parsed
+            .try_reserve_exact(options.len())
+            .map_err(|_| AcpError::Allocation)?;
+        for option in options.iter() {
+            text(field(option, "name")?)?;
             parsed.push(PermissionChoice {
                 id: OptionId::parse(field(option, "optionId")?)?,
-                kind: Arc::from(
-                    field(option, "kind")?
-                        .as_str()
-                        .ok_or(AcpError::InvalidMessage)?,
-                ),
+                kind: text(field(option, "kind")?)?,
+                raw: option.to_owned(),
             });
         }
         Ok(PermissionRequest {
@@ -358,95 +599,107 @@ impl Strategy {
         })
     }
     /// # Errors
-    /// Only an advertised supported option can be encoded; source authority must be checked separately.
-    pub fn permission_response(
-        &self,
-        request: &PermissionRequest,
-        selection: Option<&OptionId>,
-    ) -> Result<Value, AcpError> {
-        let outcome = if let Some(id) = selection {
-            if !request.supported_subject
-                || request.options.iter().any(|option| !option.supported())
-                || request.options.iter().enumerate().any(|(index, option)| {
-                    request.options[..index]
-                        .iter()
-                        .any(|prior| prior.id == option.id)
-                })
-                || request.options.iter().filter(|o| &o.id == id).count() != 1
-                || !request.options.iter().any(|o| &o.id == id && o.supported())
-            {
-                return Err(AcpError::InvalidOption);
-            }
-            json!({"outcome":"selected","optionId":id.as_str()})
-        } else {
-            json!({"outcome":"cancelled"})
-        };
-        Ok(json!({"jsonrpc":"2.0","id":request.id.json(),"result":{"outcome":outcome}}))
-    }
-    /// Interprets only the name patch whose version distinction is normative in both schemas.
-    /// # Errors
-    /// Rejects malformed name values; unknown/raw fields remain in the original message.
-    pub fn tool_name_patch<'a>(&self, update: &'a Value) -> Result<ToolNamePatch<'a>, AcpError> {
-        match update.get("name") {
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn tool_name_patch(&self, update: RawValueRef<'_>) -> Result<ToolNamePatch, AcpError> {
+        match at(update, &["name"])? {
             None => Ok(ToolNamePatch::Unchanged),
-            Some(Value::Null) => Ok(if self.version() == Version::V1 {
+            Some(v) if v.is_null() => Ok(if self.version() == Version::V1 {
                 ToolNamePatch::Unchanged
             } else {
                 ToolNamePatch::Clear
             }),
-            Some(Value::String(name)) => Ok(ToolNamePatch::Set(name)),
-            _ => Err(AcpError::InvalidMessage),
+            Some(v) => Ok(ToolNamePatch::Set(text(v)?)),
         }
     }
-    /// Applies v2 tool metadata patches by top-level key; nested values replace, never deep merge.
     /// # Errors
-    /// v1 metadata stays uninterpreted; non-object/non-null v2 patches are invalid.
-    pub fn tool_metadata_patch(&self, current: &Value, update: &Value) -> Result<Value, AcpError> {
-        if self.version() != Version::V2 {
-            return Err(AcpError::UnsupportedCapability);
+    /// Rejects invalid shapes, unsupported capabilities, incompatible configuration or allocation failure.
+    pub fn tool_metadata_patch(
+        &self,
+        current: &RawMetadata,
+        update: RawValueRef<'_>,
+    ) -> Result<RawMetadata, AcpError> {
+        Self::require(self.version() == Version::V2)?;
+        let Some(patch) = at(update, &["_meta"])? else {
+            return Ok(current.clone());
+        };
+        if patch.is_null() {
+            return Ok(RawMetadata::Null);
         }
-        match update.get("_meta") {
-            None => Ok(current.clone()),
-            Some(Value::Null) => Ok(Value::Null),
-            Some(Value::Object(patch)) => {
-                let mut merged = current.as_object().cloned().unwrap_or_default();
-                for (key, value) in patch {
-                    if value.is_null() {
-                        merged.remove(key);
-                    } else {
-                        merged.insert(key.clone(), value.clone());
-                    }
+        let patch = object(patch)?;
+        let mut merged = current.as_object().cloned().unwrap_or(OrderedRawObject {
+            members: Vec::new(),
+        });
+        for (key, value) in patch.iter() {
+            patch.get(key)?;
+            merged.get(key)?;
+            if let Some(i) = merged.members.iter().position(|(k, _)| &**k == key) {
+                if value.is_null() {
+                    merged.members.remove(i);
+                } else {
+                    merged.members[i].1 = value.to_owned();
                 }
-                Ok(Value::Object(merged))
+            } else if !value.is_null() {
+                merged
+                    .members
+                    .try_reserve(1)
+                    .map_err(|_| AcpError::Allocation)?;
+                merged.members.push((key.into(), value.to_owned()));
             }
-            _ => Err(AcpError::InvalidMessage),
         }
-    }
-    const fn require_sessions(&self) -> Result<(), AcpError> {
-        if self.negotiated.capabilities.sessions {
-            Ok(())
-        } else {
-            Err(AcpError::UnsupportedCapability)
-        }
+        Ok(RawMetadata::Object(merged))
     }
 }
-pub(super) fn initialize(offer: Version) -> Request {
-    let info = json!({"name":"acp-remote","version":crate::VERSION});
-    let params = match offer {
-        Version::V1 => json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":info}),
-        Version::V2 => json!({"protocolVersion":2,"capabilities":{},"info":info}),
-    };
-    Request {
-        scope: None,
+pub(super) fn initialize(scope: ConnectionScope, offer: Version) -> Result<Request, AcpError> {
+    let info = raw::object(
+        [
+            ("name", &raw::string("acp-remote")?),
+            ("version", &raw::string(crate::VERSION)?),
+        ],
+        None,
+    )?;
+    let fields = [
+        (
+            "protocolVersion",
+            raw::literal(&offer.number().to_string())?,
+        ),
+        (
+            if offer == Version::V1 {
+                "clientCapabilities"
+            } else {
+                "capabilities"
+            },
+            raw::literal("{}")?,
+        ),
+        (
+            if offer == Version::V1 {
+                "clientInfo"
+            } else {
+                "info"
+            },
+            info,
+        ),
+    ];
+    Ok(Request {
+        scope,
         method: "initialize",
-        params,
         kind: RequestKind::Initialize(offer),
-    }
+        params: raw::object(fields.iter().map(|(k, v)| (*k, v)), None)?,
+        stamp: None,
+    })
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ToolNamePatch<'a> {
+#[derive(Clone, Eq, PartialEq)]
+pub enum ToolNamePatch {
     Unchanged,
     Clear,
-    Set(&'a str),
+    Set(Arc<str>),
+}
+
+impl fmt::Debug for ToolNamePatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Unchanged => "ToolNamePatch::Unchanged",
+            Self::Clear => "ToolNamePatch::Clear",
+            Self::Set(_) => "ToolNamePatch::Set(..)",
+        })
+    }
 }

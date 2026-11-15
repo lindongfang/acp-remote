@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-03",
+  "directory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-default-red-five-exact-diagnostic-v1",
+  "freeze": "2a0e10375d522cf746f07bc62b4fe445c604900ffb201d4e4fc55463c4c7439c",
+  "members": 22,
+  "sourceExecutionFreeze": "af6b48e5ac15d41b633f087dfaa15cc4ce7b98737f6a608aa970e7b836668fde",
+  "sourceManifest": "cb5c97d2fa4276a321a4fd2adb7d26cc4d76b6aa90fec4aa71a96a5ddd60681c",
+  "binarySHA": "90ea62b73921ff93833ccf605d899f1711f125db26fbe3d288ae880cae2d90cc",
+  "sourceEdits": 0,
+  "recompiled": false,
+  "results": [
+    {
+      "name": "adapters::acp::shared_view_module::transfer::transfer001_tests::shared_view_transfer001_real_late_early_credit",
+      "exit": 0,
+      "binaryUnchanged": true,
+      "summary": [
+        "running 1 test",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.19s"
+      ]
+    },
+    {
+      "name": "node::tests::paused_real_writers_close_at_the_byte_or_frame_queue_budget",
+      "exit": 0,
+      "binaryUnchanged": true,
+      "summary": [
+        "running 1 test",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.51s"
+      ]
+    },
+    {
+      "name": "session_storage::product_commands::tests::mgt_code_003_object_ttl_elapsed_is_not_product_request_expiry",
+      "exit": 0,
+      "binaryUnchanged": true,
+      "summary": [
+        "running 1 test",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.85s"
+      ]
+    },
+    {
+      "name": "session_storage::product_commands::tests::result_write_faults_preserve_observation_and_never_reset_dispatch",
+      "exit": 0,
+      "binaryUnchanged": true,
+      "summary": [
+        "running 1 test",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 3.34s"
+      ]
+    },
+    {
+      "name": "session_storage::product_commands::tests::claim_write_commit_and_cancellation_faults_never_return_second_qualification",
+      "exit": 0,
+      "binaryUnchanged": true,
+      "summary": [
+        "running 1 test",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 1.10s"
+      ]
+    }
+  ],
+  "interpretation": "same-binary isolated exact controls support dependence on default parallel context; mechanism not established; not pure-environment attribution",
+  "originalDefaultResult": {
+    "passed": 709,
+    "failed": 38,
+    "status": "unchanged failed"
+  },
+  "rootInstalled": false
+}

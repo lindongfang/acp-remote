@@ -1,0 +1,50 @@
+{
+  "schema": "deliver-codex-session-loop-wp1-1.4-followup-v6",
+  "date": "2026-11-09",
+  "scope": "Current-source focused reruns after correcting isolated fixture/data-root preparation",
+  "toolchain": {
+    "rustupToolchain": "1.98.1-x86_64-pc-windows-msvc",
+    "locked": true,
+    "offline": true,
+    "targetDir": ".tmp/q3-wp1-14-clean-20261108b"
+  },
+  "results": [
+    {
+      "scope": "Private prompt document actual-wire acceptance",
+      "command": "cargo test --manifest-path app/Cargo.toml --locked --offline --lib prompt_document_acceptance:: -- --test-threads=1",
+      "exitCode": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "dataRoot": "fresh PA_DATA_ROOT for this process",
+      "note": "All five current-source cases passed after supplying the required isolated data root. The five failures in the earlier full-suite log were fixture preparation failures, not current assertion failures."
+    },
+    {
+      "scope": "C1 real native child acceptance under restricted token",
+      "command": "cargo test --manifest-path app/Cargo.toml --locked --offline --features native-dispatch-dev-fixtures --lib node::tests::catalog_upload_development::catalog_c1_ -- --test-threads=1",
+      "exitCode": 1,
+      "passed": 0,
+      "failed": 4,
+      "observed": "All four cases failed before product assertions while opening the owned data-directory lock with Windows error 5 (access denied).",
+      "classification": "execution-identity/ACL limitation; not counted as a product result"
+    },
+    {
+      "scope": "C1 owner-context retry",
+      "command": "same C1 filter through windows-owner.ps1",
+      "observed": "The first two cases completed, the third real-child stop case produced no further output for an extended interval and the isolated process was stopped. No result is claimed for this attempt.",
+      "priorValidEvidence": "2026-11-08-wp1-1.4-owner-rerun.json records one real native-child case passing 1/1 with the required fixture."
+    }
+  ],
+  "probeRevision": {
+    "scope": "Exploratory SQLx phase-gate adjustment",
+    "observed": "A temporary local edit replaced the unpolled floating-return precondition with a checked-out connection. The first isolated RPC case still failed the 20-second real pool stage: pool_closed=true, pool_size=0, registry_status=Pending. The proposed adjustment was reverted; the original independent probe source remains unchanged. A fresh rerun of the original probe reproduced the same first-case observation before the remaining cases were stopped.",
+    "classification": "not accepted as a test result; no product change"
+  },
+  "preservedBlockers": [
+    "WP1.4 still lacks a valid complete Rust-library result and strict gate.",
+    "The four SQLx floating-return probes retain their 20-second watchdog failures because return_to_pool() floats the connection when constructing the unpolled future under SQLx 0.8.6.",
+    "C1, DPAPI and real Node coverage remains identity-sensitive; prior valid owner evidence is focused and does not make the complete suite green.",
+    "npm audit remains intentionally unexecuted per the user's explicit no-egress decision."
+  ],
+  "taskStatus": "WP1 task 1.4 remains open"
+}

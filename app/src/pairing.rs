@@ -904,7 +904,6 @@ mod tests {
             PairStatus, PublicKeySec1, StatusPurpose, verify_claim_result, verify_status_result,
         },
         jws::{JwsType, sign},
-        storage::Storage,
     };
 
     struct ClockState {
@@ -970,12 +969,22 @@ mod tests {
         }
     }
 
+    struct FixtureRoots {
+        directory: PathBuf,
+        identity: Arc<NodeIdentity>,
+    }
+    impl std::ops::Deref for Fixture {
+        type Target = FixtureRoots;
+        fn deref(&self) -> &FixtureRoots {
+            &self.roots
+        }
+    }
     struct Fixture {
         service: PairingService,
-        identity: Arc<NodeIdentity>,
         clock: Arc<TestClock>,
-        storage: Storage,
-        directory: PathBuf,
+        roots: Arc<FixtureRoots>,
+        scope: crate::sqlite_fixture_scope::SqliteFixtureScope,
+        storage: crate::sqlite_fixture_scope::FixtureStorage,
     }
 
     impl Fixture {
@@ -993,10 +1002,16 @@ mod tests {
                 std::process::id()
             ));
             std::fs::create_dir(&directory).expect("test directory");
-            let storage = Storage::open(&directory.join("node.db"))
-                .await
-                .expect("test storage");
             let identity = Arc::new(NodeIdentity::for_test([7_u8; 32]));
+            let roots = Arc::new(FixtureRoots {
+                directory,
+                identity: identity.clone(),
+            });
+            let scope = crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+                &roots.directory.join("node.db"),
+                roots.clone(),
+            );
+            let storage = scope.open().await.expect("test storage");
             let clock = Arc::new(TestClock::new());
             let service = PairingService::with_sources(
                 identity.clone(),
@@ -1008,10 +1023,10 @@ mod tests {
             .expect("pairing service");
             Self {
                 service,
-                identity,
                 clock,
+                roots,
+                scope,
                 storage,
-                directory,
             }
         }
 
@@ -1029,12 +1044,14 @@ mod tests {
             let Self {
                 service,
                 storage,
-                directory,
+                roots,
+                scope,
                 ..
             } = self;
             drop(service);
             storage.close().await;
-            std::fs::remove_dir_all(directory).expect("test cleanup");
+            scope.stop_and_observe().await;
+            std::fs::remove_dir_all(&roots.directory).expect("test cleanup");
         }
     }
 

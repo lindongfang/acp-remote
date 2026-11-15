@@ -1,0 +1,75 @@
+﻿{
+    "previousCount":  101,
+    "currentCount":  107,
+    "changes":  {
+                    "value":  [
+                                  {
+                                      "path":  "app/src/adapters/acp/mod.rs",
+                                      "kind":  "changed",
+                                      "previous":  "b517c73348626f9ac82b2341417cd3057d9c0ca450b5245fff0de7b73eaa9fb4",
+                                      "current":  "934d3b0bf1f05403aaa06ba2e84585ce0c15b3f4d000ccb1a0b0bc68c3a42bdc"
+                                  },
+                                  {
+                                      "path":  "app/src/adapters/acp/tool_projection.rs",
+                                      "kind":  "added",
+                                      "current":  "4cf2b6d36a8a3095bed73de496d926cec871e97bc0addf431256be5a8d54b503"
+                                  },
+                                  {
+                                      "path":  "app/src/adapters/acp/tool_projection/tests.rs",
+                                      "kind":  "added",
+                                      "current":  "f9cbf51ac8ff4be8aded29121e0c961820f24d6393e2939ae881da79ee788433"
+                                  },
+                                  {
+                                      "path":  "app/src/domain/README.md",
+                                      "kind":  "changed",
+                                      "previous":  "4f072f3c4db4190530da5b625ba7aab84d30e48aa8a81b23ff9dc3725ef24bdc",
+                                      "current":  "7989623e118587118179a8d4731ca81ba65caa01f2ce564d707d2a2a04b17a5d"
+                                  },
+                                  {
+                                      "path":  "app/tests/acceptance/domain_borrow_support.rs",
+                                      "kind":  "added",
+                                      "current":  "3ca0debb449739f3b64aca78f2e3288835924eec437299a214558f28754b23db"
+                                  },
+                                  {
+                                      "path":  "app/tests/acceptance/p2a_support.rs",
+                                      "kind":  "added",
+                                      "current":  "e733dbcbb617189e698ce757685d9375ed0479b721a0966a6f339139cd8484bf"
+                                  },
+                                  {
+                                      "path":  "app/tests/acp_tool_projection_acceptance.rs",
+                                      "kind":  "added",
+                                      "current":  "a4a85b41a00a4b7a046ac7a0006504d9ee3b79e74b993e4e3a47da9f3ddc1382"
+                                  },
+                                  {
+                                      "path":  "app/tests/domain_borrow_acceptance.rs",
+                                      "kind":  "added",
+                                      "current":  "2538c111fe9eda61d5627cca515c82de6714d598d3c97793f9ee5a62527f90de"
+                                  },
+                                  {
+                                      "path":  "app/tests/domain_borrow_allocator_acceptance.rs",
+                                      "kind":  "added",
+                                      "current":  "36292daac3e441b9551bd435c57148dce447dfc5d9cd79282d8df95738151f49"
+                                  },
+                                  {
+                                      "path":  "openspec/changes/deliver-codex-session-loop/p2a-tool-anchor-contract.md",
+                                      "kind":  "added",
+                                      "current":  "81d0b6ef3d80dcb295f3231f8f66cc2474ed5b0adf43030f3a4b902806c6b3f7"
+                                  }
+                              ],
+                    "Count":  10
+                },
+    "omittedFromNewManifest":  [
+                                   {
+                                       "path":  "testing/runs/deliver-codex-session-loop/2026-10-31-domain-borrow-revision-definition.md",
+                                       "oldHash":  "28319d55ca866d8b4e83b030ea5f649d847268224577625d3e5a6cf17e1cea87",
+                                       "stillPresentOnRoot":  true,
+                                       "currentHash":  "28319d55ca866d8b4e83b030ea5f649d847268224577625d3e5a6cf17e1cea87"
+                                   },
+                                   {
+                                       "path":  "testing/runs/deliver-codex-session-loop/2026-10-31-domain-borrow-revision-planning-review.md",
+                                       "oldHash":  "3dce5d099760ba6968a6068cd9a08b4c555f986da4d654e05be1d1f45467672a",
+                                       "stillPresentOnRoot":  true,
+                                       "currentHash":  "3dce5d099760ba6968a6068cd9a08b4c555f986da4d654e05be1d1f45467672a"
+                                   }
+                               ]
+}

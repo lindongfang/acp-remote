@@ -1,0 +1,76 @@
+﻿{
+    "date":  "2026-11-13",
+    "scope":  "Source schema 11 actor and profile revision broken-parent data",
+    "source":  {
+                   "path":  "app/src/session_storage/native_release_schema/tests.rs",
+                   "sha256":  "B84747A7E89742360EE7AFEBD16254079E534B43BF02268361202A0762BAA366"
+               },
+    "change":  "Extended the existing broken-parent-reference validation with a missing actor client and a missing profile revision. Both malformed rows are constructed with foreign_keys disabled only during fixture injection, then initialization must reject without changing schema heads, schema layout, or the injected reference. Product code is unchanged.",
+    "environment":  {
+                        "rust":  "1.98.1",
+                        "cargo_flags":  [
+                                            "--locked",
+                                            "--offline"
+                                        ],
+                        "cargo_target_dir":  ".tmp/q3-source-r1-matrix-20261113",
+                        "isolated_temp":  ".tmp/q3-source-r1-matrix-20261113/temp",
+                        "owner_runner":  "not loaded; local development validation only"
+                    },
+    "runs":  [
+                 {
+                     "command":  "cargo test --manifest-path app/Cargo.toml --lib --locked --offline session_storage::native_release_schema::tests -- --test-threads=1 --nocapture",
+                     "rustc":  "explicitly bound to Rust 1.98.1 rustc.exe",
+                     "passed":  14,
+                     "failed":  0,
+                     "ignored":  0,
+                     "filtered_out":  931,
+                     "exit":  0
+                 },
+                 {
+                     "command":  "rustfmt --check --edition 2024 app/src/session_storage/native_release_schema/tests.rs",
+                     "exit":  0
+                 },
+                 {
+                     "command":  "git diff --check -- app/src/session_storage/native_release_schema/tests.rs",
+                     "exit":  0
+                 },
+                 {
+                     "command":  "acp_remote libtest --list | rg \u0027session_storage::(schema::|native_release_schema::|node_catalog_schema::)\u0027",
+                     "exit":  0,
+                     "observed":  "Bound the actual exact test modules; one earlier regex Cargo filter selected zero tests and is explicitly excluded."
+                 },
+                 {
+                     "command":  "cargo test --manifest-path app/Cargo.toml --lib --locked --offline session_storage::node_catalog_schema::tests -- --test-threads=1 --nocapture",
+                     "rustc":  "explicitly bound to Rust 1.98.1 rustc.exe",
+                     "passed":  8,
+                     "failed":  0,
+                     "ignored":  0,
+                     "filtered_out":  937,
+                     "exit":  0
+                 },
+                 {
+                     "command":  "cargo test --manifest-path app/Cargo.toml --lib --locked --offline session_storage::schema:: -- --test-threads=1 --nocapture",
+                     "rustc":  "explicitly bound to Rust 1.98.1 rustc.exe",
+                     "passed":  7,
+                     "failed":  0,
+                     "ignored":  0,
+                     "filtered_out":  938,
+                     "exit":  0
+                 },
+                 {
+                     "command":  "cargo test --manifest-path app/Cargo.toml --lib --locked --offline session_storage::native_release_schema::tests -- --test-threads=1 --nocapture",
+                     "rustc":  "explicitly bound to Rust 1.98.1 rustc.exe",
+                     "passed":  15,
+                     "failed":  0,
+                     "ignored":  0,
+                     "filtered_out":  931,
+                     "exit":  0
+                 }
+             ],
+    "limits":  [
+                   "This remains focused developer validation and does not constitute independent acceptance or Windows owner acceptance.",
+                   "R1-07 may still have untested Source foreign-key malformed row combinations outside actor, source, harness, workspace, profile ID/revision, and source-instance/connection references; audit the schema and validator against the fixed TEST-DELTA before claiming coverage.",
+                   "Source R2/R3, candidate integration/installation, broader impacted regressions, and WP4 completion remain pending.",
+                   "npm audit remains unrun by explicit user instruction."
+               ]
+}

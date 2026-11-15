@@ -1046,4 +1046,5 @@ pub(super) async fn recover(connection: &mut SqliteConnection) -> Result<(), App
     Ok(())
 }
 #[cfg(test)]
+#[path = "approvals/tests.rs"]
 mod tests;

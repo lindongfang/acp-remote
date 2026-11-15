@@ -1,0 +1,20 @@
+{
+  "scope": "Narrow engineering ABI supplement to revision6 and receipt; limited static coding approval, not current WIP acceptance",
+  "baseDesign": "9d1349f6545459a10cf8551e5f3d9681d4f80e5e1990f8a6237457fd0fee5869",
+  "baseReceipt": "ec30e1bf0f23ba86469db0a3ec6b4bb16e4cd6796cbcbe309d09438293658410",
+  "baseGate": "f9539c0975c42c00e64f00d844cedfe1ebebb7b697279f2422e9322e591e4533",
+  "supplementFreeze": "b7f74e40b8e3884c584203b7379875c8b3e3dfe13d3d29337cbb33d7aaca4f4d",
+  "gate": "47afa5e9425472991cbd06978fc31db3f8be548ec9bedc3b967fd8048196f9b8",
+  "documents": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\revision7-prompt-park-supplement\\contract.md",
+      "path": "openspec/changes/deliver-codex-session-loop/native-dispatch/revision7-prompt-park-supplement/contract.md",
+      "sha256": "3c4ac6b9794d8cb0848b563c02afaa15892d791b81753a01300c88505a3034aa"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\revision7-prompt-park-supplement\\tests.md",
+      "path": "openspec/changes/deliver-codex-session-loop/native-dispatch/revision7-prompt-park-supplement/tests.md",
+      "sha256": "0fb8640b25cf3054fe372c58718f9133cdaa9319922f50113e75b94792439ac6"
+    }
+  ]
+}

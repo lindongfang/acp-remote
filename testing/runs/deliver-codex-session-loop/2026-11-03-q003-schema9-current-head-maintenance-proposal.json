@@ -1,0 +1,36 @@
+{
+  "date": "2026-11-03",
+  "packages": [
+    {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-schema9-current-head-maintenance-proposal-v1",
+      "freeze": "bfe55bcde9d3b77e133e21b063e838fdebd729abeab6e7a2b8e7e5f4dd7bb271",
+      "members": 18,
+      "allVerified": true
+    },
+    {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-schema9-current-head-maintenance-parse-supplement-v1",
+      "freeze": "dc566a6302ae174651b95958116b55284684255cf52f12dba7fec9200d81b2e2",
+      "members": 2,
+      "allVerified": true
+    }
+  ],
+  "patchSHA256": "88853331a7b5d07d501e042286987fcf17426f604e031026e53bf3742d615429",
+  "scope": {
+    "leaves": 7,
+    "currentSuccessVersionAssertions": 10,
+    "explanatoryTextEdits": 4
+  },
+  "preserved": [
+    "Historical input/rollback heads",
+    "Approval 12 DDL ordinals and 24 trace entries",
+    "Native table/index counts",
+    "Physical close observations",
+    "Root catalog development_tests"
+  ],
+  "staticOnly": true,
+  "cargoExecuted": false,
+  "sqlExecuted": false,
+  "migrationExecuted": false,
+  "reviewPending": true,
+  "rootInstalled": false
+}

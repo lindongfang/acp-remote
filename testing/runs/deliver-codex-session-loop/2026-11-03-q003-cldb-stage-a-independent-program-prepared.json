@@ -1,0 +1,34 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "stage": "CLDB-A independent program prepared; formal execution gate pending",
+  "preparation": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-worker-join-independent-preparation-v1",
+  "freezeSHA256": "4f06b3202c91a2899a3f8f5ae1ea30c44361f2f1a789ec6e8bd355602bab8712",
+  "rootVerifiedMembers": 914,
+  "program": {
+    "functions": 11,
+    "vectors": 45,
+    "sourceFiles": 883,
+    "unchangedAuthorFiles": 881,
+    "testSHA256": "1067550a364c777dac208125b6296f76570fd75e441763dc4ba354c7c4954e93"
+  },
+  "checks": {
+    "patchForwardReverse": 0,
+    "rustfmtParseAndCheck": 0,
+    "nodeSyntaxOnly": 0,
+    "rustCompilationExecuted": 0,
+    "uniqueListExecuted": 0,
+    "independentTestsExecuted": 0
+  },
+  "next": "Original independent reviewer checks actual fixed program and runtime before any compile/list/test; then fresh isolated target, exact original ordering, first failure stops with zero retries.",
+  "limits": [
+    "Static preparation does not prove Rust type/link/runtime behavior",
+    "Original Node close/share0 and audit failures retained",
+    "Storage/Node Stage B remains an active candidate; no Root installation",
+    "No task completion claimed"
+  ],
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  }
+}

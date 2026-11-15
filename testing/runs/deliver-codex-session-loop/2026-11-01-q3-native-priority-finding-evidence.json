@@ -1,0 +1,165 @@
+{
+  "scope": "Open independent finding against incomplete API05; 32 artifacts verified/copied, full 371-source reconstruction not performed by Root; no formal80 or final candidate judgment",
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\README.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/README.md",
+      "sha256": "09a210a960df278a1532cef7fc9f37b6fd1ac832659837d206f408db4c18dd68"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source.json",
+      "sha256": "bbb365b02f284d9a5b0bdb0b404e3eeca4017b58aff094d27b8344b15bdd5a81"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\Cargo.toml",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/Cargo.toml",
+      "sha256": "1672ffd396e9ab60483f472039a5041a1bdfaac9e1ff821f013ab14e12678981"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\src\\application\\native_dispatch\\mod.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/src/application/native_dispatch/mod.rs",
+      "sha256": "ed8ae6996cae9814047b8c86ed8d7a63f8c144f6a3e50a96f80b1863c2b5d5de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\src\\lib.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/src/lib.rs",
+      "sha256": "3178435381d791d37a1d1a4231fe12168ff1f23d1ae62b86d95ba64fd5fe562f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\src\\session_storage\\schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/src/session_storage/schema.rs",
+      "sha256": "d04772e2dec36195475b60e136b57a4617c940574a5091440e6343e90f9d6084"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\controlled_io.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/controlled_io.rs",
+      "sha256": "d45305ec14b3ee0c4e0559aa0595ca33791c3ab2a1e90f15d5ff86280909ccd2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\delivery4.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/delivery4.rs",
+      "sha256": "83c259d74c7dbbffdac6cfec8d007fd749e5c61806043c2ef22752264ff4314c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\factory_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/factory_preparation.rs",
+      "sha256": "eb1747690acb98cc9d0020b4d685a28b03ce946cb8297aea675ed2e6ead76858"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\legacy_fixtures.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/legacy_fixtures.rs",
+      "sha256": "694dc9ae93759d070929f6f1ddb1a744c96b6fc8b411d8e6a1e74878bd94e242"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\observed_io_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/observed_io_preparation.rs",
+      "sha256": "5e66c0ef2a220e13519b09cf85b3ffe389c185f3472330477cd6aae015be60ea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\park_abi_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/park_abi_preparation.rs",
+      "sha256": "b5d596e873d212a4f33136147dae77dc4d07cfd19da65103084c69211b1e9210"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\park_more_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/park_more_sql.rs",
+      "sha256": "cbf18f2188b6692166f2a2e8632c0417349def7bf001ec3c0d15798821b3aaef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\park_real_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/park_real_sql.rs",
+      "sha256": "adb210738a6b04998d443ce17f0b123f1dbcfdc4095c46beda1583f0e8b993d2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\park_sql_failure.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/park_sql_failure.rs",
+      "sha256": "d937e4c39b10ee782aed480012970c8e2368cd9fd754eb1788212c24f6744236"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\priority_late_cancel.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/priority_late_cancel.rs",
+      "sha256": "bf442345f60beebc1854472c9b635ef9baf75089d656a738031aafc7b6ea78f2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\protocol_child.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/protocol_child.rs",
+      "sha256": "e9e2bb3b5bb3f6c7e0cf7f88b52711f6b1e6db313ac9bc5cf4301819b370ca44"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\registration-schema5.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/registration-schema5.sql",
+      "sha256": "ba49b4012f96c42220744c0dd9c975035408f0649209eb77ac983aef04fc8a1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "e0e7014071e84d2f2ba4013fe853085975063ca61103132bff808f2a223228ca"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\history\\priority-diagnostic-source\\app\\tests\\native_dispatch_acceptance\\v2_sequencing.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/history/priority-diagnostic-source/app/tests/native_dispatch_acceptance/v2_sequencing.rs",
+      "sha256": "23d6f1f03acfec7de1c1f3ccb07ef95baa78bd9c2dfeeeb87e3ff992d217a030"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\inputs-api05.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/inputs-api05.json",
+      "sha256": "bc7a5061114b73d0fe1fd3a57015b3da60415ab8c2bac1b9674874068e2af95f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\logs\\api05-priority-diagnostic-compile-child.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/logs/api05-priority-diagnostic-compile-child.json",
+      "sha256": "cb7a26b36ca21d33ff4eba0933f0b5f7e0aae4a96e21ff2aea19361a4c0b1895"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\logs\\api05-priority-diagnostic-compile-lib.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/logs/api05-priority-diagnostic-compile-lib.json",
+      "sha256": "21c0baedd4c8d44373e889a7e66cf2ad42484f82f6303f2c032bb7367510ec72"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\logs\\api05-priority-diagnostic.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/logs/api05-priority-diagnostic.json",
+      "sha256": "34a192fb1cda65adf299892adf57e1fdb050833eb6976df82c473b79d4a19158"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\logs\\api05-priority-diagnostic.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/logs/api05-priority-diagnostic.stderr.log",
+      "sha256": "541613387183acd68e216df9e915e9cc52d1dd019b298dc8a86f19317f131588"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\logs\\api05-priority-diagnostic.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/logs/api05-priority-diagnostic.stdout.log",
+      "sha256": "9355464c9ba4f970b089d27f965885e7e0aa494c724ebe20de912a2b9e7c5344"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\logs\\api05-priority-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/logs/api05-priority-first.json",
+      "sha256": "c39a0d5c28f488143e4cc696af7c23fa01b7b5143bc19784a02c271df1790d10"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\logs\\api05-priority-first.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/logs/api05-priority-first.stderr.log",
+      "sha256": "3ab60bc2a3f4feadff7e371a93a0a743d2d4cd8de0866ab87cc2529df103f0aa"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\logs\\api05-priority-first.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/logs/api05-priority-first.stdout.log",
+      "sha256": "6ddb4920c5394cb4e79bec926430368158475acbaec5d8cfcc30474beed11109"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v7\\priority-pending-first\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-priority-finding/freeze.json",
+      "sha256": "89a30ec559755c38669b06d668412a8eeb922a37e05b9d2ea086c3aabaf229b4"
+    }
+  ]
+}

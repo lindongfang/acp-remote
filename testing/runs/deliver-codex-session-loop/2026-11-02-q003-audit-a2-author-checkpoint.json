@@ -1,0 +1,36 @@
+{
+  "scope": "Author A2 candidate receipt only; original independent8 formal in progress, no Root product installation",
+  "candidate": "942553a4b042a1ca8856ebf155335c2c384c630bbb00d4f5c31f4a4788eeafac",
+  "sourceUniqueCount": 440,
+  "changedPaths": 22,
+  "defaultStrict": "Inherited81lib+2test failed",
+  "nodeOnlyInstalled": false,
+  "wholeAuditSigned": false,
+  "records": [
+    {
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\audit-a2-implementation-v1\\candidate\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/author-candidate/freeze.json",
+      "sha256": "942553a4b042a1ca8856ebf155335c2c384c630bbb00d4f5c31f4a4788eeafac"
+    },
+    {
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\audit-a2-implementation-v1\\candidate\\REPORT.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/author-candidate/REPORT.md",
+      "sha256": "dd6a73208a652a132ccc6ea674ec1a19f29bb9cb9dcff0d776a5a92abb970f97"
+    },
+    {
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\audit-a2-implementation-v1\\candidate\\source-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/author-candidate/source-manifest.json",
+      "sha256": "fb2f5aaaf47c7b1cd505baf1224d5baaae96ece07a6ab1b977c34b4b5b6f1cf3"
+    },
+    {
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\audit-a2-implementation-v1\\candidate\\changes.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/author-candidate/changes.json",
+      "sha256": "5cf6fd75fc3372a7e226a594da9e6af380320ade97f1d2c17c22923677db268f"
+    },
+    {
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\audit-a2-implementation-v1\\candidate\\evidence\\roundtrip.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-audit-a2-checkpoints/author-candidate/evidence/roundtrip.json",
+      "sha256": "f994355ad43beee140e71060b156bf82e095e3ecfde2c30b7f36d56ba35e7f6a"
+    }
+  ]
+}

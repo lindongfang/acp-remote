@@ -1,0 +1,197 @@
+{
+    "captured_at_utc":  "2026-10-31T07:50:06.4399851Z",
+    "git_head":  "65ec7815bb0280f4519989d93a7b4ed3b4b37994",
+    "note":  "Read-only input byte provenance; workspace has pre-existing uncommitted changes. This is not a passing review or implemented schema5.",
+    "files":  [
+                  {
+                      "path":  "AGENTS.md",
+                      "bytes":  4485,
+                      "sha256":  "1019d8854aca68d2519e599d0f3a1484e49667273708a49ac03818834aa38be3"
+                  },
+                  {
+                      "path":  "README.md",
+                      "bytes":  8040,
+                      "sha256":  "5ad2118015af2b13660111c42d7505a224bb5f2f2c16cd52c32eccfbf8cfc33f"
+                  },
+                  {
+                      "path":  "openspec/config.yaml",
+                      "bytes":  11985,
+                      "sha256":  "2838c774a014e389be5ec702bd2f293f1686012d7d8f6c01fb500a8c21980a2f"
+                  },
+                  {
+                      "path":  "openspec/role/coder.md",
+                      "bytes":  1575,
+                      "sha256":  "b06e9ddb4af0a912bddd7bbf48b16f2c6786e533fdbd6f6fafa0cea0d7783961"
+                  },
+                  {
+                      "path":  "docs/HARNESS_CONTROL_PLANE_REDESIGN.md",
+                      "bytes":  58604,
+                      "sha256":  "0443622e1a4c1cec67986609d2fbb276f7599876f1b06534512d8a88131f896a"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/design.md",
+                      "bytes":  10095,
+                      "sha256":  "b645f9bccbf07244c0db6ae769ca68a15fe5abbd13bf12c7257266f4c2561590"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/implementation-contract.md",
+                      "bytes":  6915,
+                      "sha256":  "1d87f7849c03a99207a24c1210612faee1a6d480c736399fefc5c389e5578c13"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/management-command-contract.md",
+                      "bytes":  5297,
+                      "sha256":  "873f642441cdd267acee4cd9cde6c72e886fce6f3fbb06280fc5036dc589b350"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/shared-input-queue-contract.md",
+                      "bytes":  11180,
+                      "sha256":  "61987328a83927c414fba8a2b085f0796f05792a8072ae9ad11d6187d8e1c466"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/tests.md",
+                      "bytes":  84536,
+                      "sha256":  "4bbb4d67676bbe6bf7fe31cc520b1d357a99f54831a98fcdbc734eefd65c7bcb"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/plan.md",
+                      "bytes":  36514,
+                      "sha256":  "f85b9c64a5c62877b57313927056cb670c7178496d4e78779b4c8f10d1e6c36c"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/specs/session-execution/spec.md",
+                      "bytes":  12712,
+                      "sha256":  "051f1609527ee13e79c8e0e235a19b7085499c77fde164028cbd9b1cf7b7694d"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/specs/management-audit/spec.md",
+                      "bytes":  2858,
+                      "sha256":  "270faa951f5e83637bbf23713d7a27e0dd73ae938c204b2867a214bc879a439a"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/specs/acp-platform-constraints/spec.md",
+                      "bytes":  7084,
+                      "sha256":  "ba9b7d791efaa7a6e061060ecf67cda75f963225ca98318a9f092207e6a6cbe1"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/specs/permission-approvals/spec.md",
+                      "bytes":  8223,
+                      "sha256":  "935bd6039aa07fc33e3706ba50d20766cbd58022ac8dc57450547bec2854ea3b"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/specs/harness-management/spec.md",
+                      "bytes":  14622,
+                      "sha256":  "42af8e99948e990af1713712d67b7b19dacdb56a2d043847f7a22e4db9027cb5"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/specs/workspace-registration/spec.md",
+                      "bytes":  1023,
+                      "sha256":  "4cf4e9e297efeb4a5c56fc89b706b3fd46fd866849708fe032efbcd78c1e9de9"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/specs/native-session-recovery/spec.md",
+                      "bytes":  5583,
+                      "sha256":  "c013e151444238361d96802e0e7519d8cc31fa42f6b788fe4413805cac79cb29"
+                  },
+                  {
+                      "path":  "openspec/changes/deliver-codex-session-loop/specs/structured-history/spec.md",
+                      "bytes":  10352,
+                      "sha256":  "bfcd46d1735773b920f7400524dacb1fedf218452ecfdc1fa00842d8525ab13a"
+                  },
+                  {
+                      "path":  "app/src/domain/requests.rs",
+                      "bytes":  5945,
+                      "sha256":  "3be577a58c9065856c408f1be64ea06b915222795e046d906ef20f1676f1836b"
+                  },
+                  {
+                      "path":  "app/src/domain/product_commands.rs",
+                      "bytes":  5279,
+                      "sha256":  "e92b5ef511e4303c57e528bbb9c8395364edd856877eae36f657ab0a434fcac8"
+                  },
+                  {
+                      "path":  "app/src/domain/input_queue.rs",
+                      "bytes":  14743,
+                      "sha256":  "e5e4d8f33b2f265635bd426106beebbd58ed55a4df6e0c167c2e197a441d0e99"
+                  },
+                  {
+                      "path":  "app/src/domain/native.rs",
+                      "bytes":  2190,
+                      "sha256":  "8d01cef25c7ba12ffd2aff94cc78fc8bfbe41d604feaf2312f13fe47cadf9abd"
+                  },
+                  {
+                      "path":  "app/src/domain/mod.rs",
+                      "bytes":  3887,
+                      "sha256":  "b88bcaab29bd7f504de900dfed52b4aa7d89d8a9d19e5105c340f6881f931cdf"
+                  },
+                  {
+                      "path":  "app/src/application/product_commands.rs",
+                      "bytes":  51086,
+                      "sha256":  "b6f65ccb84a191f3dd96a74a4fb3dcf32144a054d6756576dc89e4d9574fe068"
+                  },
+                  {
+                      "path":  "app/src/adapters/product_requests.rs",
+                      "bytes":  6384,
+                      "sha256":  "93d71b80a060745a93536c908544a1266980a2dbe32fe3918aa5e2772687d248"
+                  },
+                  {
+                      "path":  "app/src/session_storage/product_schema.rs",
+                      "bytes":  8779,
+                      "sha256":  "e3d2d32c0e3ec32f1c6ef4ed4a971f31c4f203bd8ca6d67063f81b4f14aa6c00"
+                  },
+                  {
+                      "path":  "app/src/session_storage/schema.rs",
+                      "bytes":  19975,
+                      "sha256":  "fcec6f7e929056bdf7809534c7f9566c7bbe77f5ebb0c2a47be1a00e06564d18"
+                  },
+                  {
+                      "path":  "app/src/session_storage/product_commands.rs",
+                      "bytes":  33464,
+                      "sha256":  "e4d1f446e7e3f1ac4f2496f0b2d7511298a57d29b5d2cb087e742900c8c27333"
+                  },
+                  {
+                      "path":  "app/src/storage.rs",
+                      "bytes":  10171,
+                      "sha256":  "cfaf7e77610f57de91ffb0cddc8df6ee48a0b4474adb49c5a00126d8045c11bf"
+                  },
+                  {
+                      "path":  "app/src/access_policy.rs",
+                      "bytes":  9237,
+                      "sha256":  "1c8fdd1f47f73cd1b36b2be51ead0eacfcd4324c115936e797a3901e921e1544"
+                  },
+                  {
+                      "path":  "app/src/management_ws.rs",
+                      "bytes":  61935,
+                      "sha256":  "f5c8006e3beea09b92367ea8ecab7a75c515f616c7cc68f1c853d624d994595e"
+                  },
+                  {
+                      "path":  "app/src/trust.rs",
+                      "bytes":  47255,
+                      "sha256":  "2b4774fba206ff3118cc004f164c4aaea7ea41c48fc72082580aa27051827236"
+                  },
+                  {
+                      "path":  "app/src/node.rs",
+                      "bytes":  107312,
+                      "sha256":  "b959b31c0f2c7bfeeeb3097341b4040efce497589f577da290eb15b5843587f6"
+                  },
+                  {
+                      "path":  "app/src/session_storage/product_schema/tests.rs",
+                      "bytes":  18189,
+                      "sha256":  "5474fa85089a02d630ed8ffdea95a08f9d2a6131b690f97d598e94f32ae57e32"
+                  },
+                  {
+                      "path":  "app/src/session_storage/product_schema/delivery_tests.rs",
+                      "bytes":  14009,
+                      "sha256":  "34822fbb82488901297734709410cf4b9e888644d31bc665efd09b3c7f19fc17"
+                  },
+                  {
+                      "path":  "app/tests/acceptance/schema3_migration.rs",
+                      "bytes":  48597,
+                      "sha256":  "501c45a597b8a423ab4936e4dc4271e508eeb8c8e79d8fa1a02ead3908e173a5"
+                  },
+                  {
+                      "path":  "app/tests/acceptance/schema4_migration.rs",
+                      "bytes":  53573,
+                      "sha256":  "9c82a6e1964d0648d93ec0cdbc6397eacb915fe8fd0a0af9ee598a561078a56c"
+                  }
+              ]
+}

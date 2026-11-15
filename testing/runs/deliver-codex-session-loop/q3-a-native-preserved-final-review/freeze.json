@@ -1,0 +1,21 @@
+{
+  "kind": "Independent finite composition installation gate, Root not installed by reviewer",
+  "date": "2026-11-02",
+  "members": [
+    {
+      "path": "INPUT-VERIFICATION.json",
+      "sha256": "4d041a7bef1203508afa6ca0a923d941b9ba4727d754564ba1c1e53a05ad5988",
+      "bytes": 2081
+    },
+    {
+      "path": "REVIEW.md",
+      "sha256": "c0c1e59080e5216721c41c7a1a3aebbe41f6c0d90fe8bce11f1ef23c4d073582",
+      "bytes": 7385
+    },
+    {
+      "path": "summary.json",
+      "sha256": "6fca557873bf4997fcef61d535d7b272a8a7c7e33abb7eb2864ff648a3aee433",
+      "bytes": 1085
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "scope": "Narrow replay-failure segment/receipt-context ABI only; RF12 definitions not execution; original83 unchanged; production Native/WSS still pending",
+  "supplementFreeze": "1c21de8b88d67613f47bfa692c4aa4a75de6e63036b6865656e1cd329cdc1881",
+  "gate": "751abd1911f2e8efc4465c9ef9c98cb4ab953022bf303d598ff2be83f7900b33",
+  "documents": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\replay-failure-supplement-v2\\input-snapshot\\prior-v1\\contract.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/replay-failure-v2/contract.md",
+      "sha256": "04f0f254b475c5d446e2e5382d58818166a157777458d2fa2764259f0cdf22cd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\replay-failure-supplement-v2\\input-snapshot\\prior-v1\\cases.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/replay-failure-v2/cases.md",
+      "sha256": "70b373af5d9ab0aea5b2eaf7660f10257328407abf50f63ab4825b5fedc1a0bd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\replay-failure-supplement-v2\\receipt-context-precision.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/replay-failure-v2/receipt-context-precision.md",
+      "sha256": "ac4c57adb13a7de84d7453e32916922bb83a475b26077059c1eeabbed8399ee8"
+    }
+  ]
+}

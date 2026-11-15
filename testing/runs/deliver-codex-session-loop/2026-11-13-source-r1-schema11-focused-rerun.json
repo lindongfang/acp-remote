@@ -1,0 +1,60 @@
+{
+  "date": "2026-11-13",
+  "scope": "Source schema 11 migration fixtures, identity edge cases, and focused rerun",
+  "source": {
+    "path": "app/src/session_storage/native_release_schema/tests.rs",
+    "sha256": "736B564621F7EAE78C6DBD1918CAA5027E6A07725C14F38634B6DAACDCFBC9F8"
+  },
+  "change": "The trigger and missing-index rejection branches start from an exact schema 10 fixture with node_meta identity and release rows, initialize schema 11, then inject the unexpected object. The test module also adds reverse version-head combination rejection (PRAGMA=10 with metadata=11; Source validation may reject first, so this does not isolate the later head comparison), an unexpected Source column, a valid-but-wrong composite foreign-key target, reopening a fresh schema 11 database with no node_meta identity and empty required tables, and overall rejection when registrations or operations are independently non-empty without node identity. Both non-empty cases assert the pre-validation state and use foreign_keys=OFF only to construct corrupt fixtures, then restore it; initialization rejects their FK violations before the dedicated require_empty branch. Additional R1-07 cases reject an old schema 10 database carrying a Source object, user_version 12 without repair, a schema 11 database missing a required operation table, a temp view shadowing a required Source index name, and an orphan Source operation row without repairing or deleting it. Production code is unchanged.",
+  "environment": {
+    "rust": "1.98.1",
+    "cargo_flags": ["--locked", "--offline"],
+    "owner_runner": "testing/ci/windows-owner.ps1 (temporary PowerShell ExecutionPolicy Bypass child process; owner probe passed)",
+    "cargo_target_dir": ".tmp/q3-source-r1-20261113",
+    "isolated_temp": ".tmp/q3-source-r1-20261113/temp"
+  },
+  "runs": [
+    {
+      "filter": "session_storage::native_release_schema::tests",
+      "status": "passed",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "exit": 0,
+      "owner_runner": "not loaded; local focused development test only, not Windows owner acceptance",
+      "observed": "running 10 tests; test result: ok. 10 passed; 0 failed; 0 ignored; 931 filtered out"
+    },
+    {
+      "filter": "session_storage::native_release_schema::tests::source_deferred_commit_failure_is_actual_sqlite_foreign_key_787",
+      "passed": 1,
+      "failed": 0,
+      "exit": 0
+    },
+    {
+      "filter": "session_storage::native_release_schema::tests::source_partial_and_unrecognized_layouts_are_rejected_without_repair",
+      "passed": 1,
+      "failed": 0,
+      "exit": 0
+    },
+    {
+      "filter": "session_storage::native_release_schema::tests::",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "exit": 0
+    },
+    {
+      "command": "rustfmt --check --edition 2024 app/src/session_storage/native_release_schema/tests.rs",
+      "exit": 0
+    }
+  ],
+  "invalid_attempt": "An initial invocation failed to source windows-owner.ps1 because the interactive PowerShell execution policy blocked scripts; it compiled and reported 0 tests. That attempt is excluded. Tests were rerun through powershell.exe -ExecutionPolicy Bypass with the repository owner runner, and exact test names were confirmed against --list.",
+  "limitations": [
+    "This validates the schema 11 migration test module only; Source R1 remains incomplete and is not accepted or installed.",
+                        "Current SHA 736B564621F7EAE78C6DBD1918CAA5027E6A07725C14F38634B6DAACDCFBC9F8 passed the schema11 module 10/10 in an isolated Rust 1.98.1 --locked --offline run. The successful process did not load windows-owner.ps1; no Windows owner acceptance result is claimed.",
+                        "R1-07 remaining: broader main/temp view and trigger matrix; broken Source FK data; and exhaustive profile/source/harness/workspace FK groups. Covered here: old version carrying a Source object, unknown high version 12, missing schema11 operation table, temp shadow view, existing Source trigger/index/column/wrong-FK negatives, and version-head mismatch rejection.",
+                        "R1-10: absent identity with each Source table independently non-empty is now covered. Multiple node_meta identity rows cannot be represented by the supported singleton INTEGER PRIMARY KEY CHECK(singleton=1) schema; do not treat this as a reachable migration state.",
+    "Independent static review found and corrected a test-fixture assertion but did not execute the tests; its reviewed SHA precedes the final removal of that assertion.",
+    "npm audit remains not run by explicit user instruction."
+  ]
+}

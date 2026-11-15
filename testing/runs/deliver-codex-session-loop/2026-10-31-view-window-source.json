@@ -1,0 +1,46 @@
+﻿[
+    {
+        "path":  "app/src/domain/views.rs",
+        "sha256":  "ee531f845af4050809721d88e41fbce0f0bff16235cfdb763715a5dc845ca612"
+    },
+    {
+        "path":  "app/src/domain/views/tests.rs",
+        "sha256":  "61e240cf36587e8556235d7fcf512903c978d813d4f5a98db38f510e21569e41"
+    },
+    {
+        "path":  "app/src/domain/native.rs",
+        "sha256":  "8d01cef25c7ba12ffd2aff94cc78fc8bfbe41d604feaf2312f13fe47cadf9abd"
+    },
+    {
+        "path":  "app/src/domain/mod.rs",
+        "sha256":  "55e4b531c095746e6a43efd1057ed8e5fb2aa8f8e0b01bf4600298eae906a828"
+    },
+    {
+        "path":  "app/Cargo.toml",
+        "sha256":  "c48046e404e8d10b036eec48163295a1386aa2cbe4baeafbe479fe823638045d"
+    },
+    {
+        "path":  "app/Cargo.lock",
+        "sha256":  "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324"
+    },
+    {
+        "path":  "openspec/changes/deliver-codex-session-loop/view-window-contract.md",
+        "sha256":  "2d8b7362a3e1c8869bbe8d8da1808b611c1a512a351aab504ae1c6b3f6f00de8"
+    },
+    {
+        "path":  "app/tests/acceptance/view_window.rs",
+        "sha256":  "28f2df93e92ebc159a120b21336f6983ad1043856dd11af387d5b7ecaee967d8"
+    },
+    {
+        "path":  "app/tests/session_loop_acceptance.rs",
+        "sha256":  "cb7e7808201a066f8f47f635c3190624c006070e304f7729939515b2efb791a7"
+    },
+    {
+        "path":  "app/tests/acceptance/acp_discovery_replay.rs",
+        "sha256":  "48ac5cb99352caafa01d1294304e67a0c46d81cb98a71daa349ff739d123cbca"
+    },
+    {
+        "path":  "app/tests/acceptance/activity_model.rs",
+        "sha256":  "df529b00c092e53916782bbda9029cbc36478a04fb17a3fc1fb8f1d84300a9b3"
+    }
+]

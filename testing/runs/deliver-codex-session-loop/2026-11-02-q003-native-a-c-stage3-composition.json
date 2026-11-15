@@ -1,0 +1,49 @@
+{
+  "scope": "Native+A789 plus C stage3 isolated803 combination",
+  "rootInstalled": false,
+  "sourceCount": 803,
+  "cDevelopmentPassed": 21,
+  "aPassed": 12,
+  "strictPassed": false,
+  "independentC46Executed": 0,
+  "productionSchema9": false,
+  "fullProductPass": false,
+  "date": "2026-11-02",
+  "externalPackage": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-a-c-stage3-composition-v1",
+  "freezeSha256": "747c9523ec6bad4509781bf38735f3b642941549291f0596560c299e5f327ec6",
+  "verifiedFrozenMembers": 880,
+  "records": [
+    {
+      "path": "q3-native-a-c-stage3-composition/freeze.json",
+      "sha256": "747c9523ec6bad4509781bf38735f3b642941549291f0596560c299e5f327ec6"
+    },
+    {
+      "path": "q3-native-a-c-stage3-composition/REPORT.md",
+      "sha256": "14726f62e354e5fb9919d282a7fc0cda8bf492d930369d50dec521efe9bee8f6"
+    },
+    {
+      "path": "q3-native-a-c-stage3-composition/RESULT.json",
+      "sha256": "4a3555be7dd5562d6774566adf339a2fcd8658a6322210201197892a75fd00e7"
+    },
+    {
+      "path": "q3-native-a-c-stage3-composition/source-manifest.json",
+      "sha256": "522f06206116f614ae915987b3c23743767f51781d0ea77831c23958fb924de6"
+    },
+    {
+      "path": "q3-native-a-c-stage3-composition/merge-verification.json",
+      "sha256": "252f474a8b6b00218d0ecdc220755927c4754fe94f05f15c368e8dc3b5f6143e"
+    },
+    {
+      "path": "q3-native-a-c-stage3-composition/c-stage3-composition.patch",
+      "sha256": "d6c2c4efbac9bcd3dec9cc7fad5a98d432a005e2f66c74cfb3286adc0bd73289"
+    },
+    {
+      "path": "q3-native-a-c-stage3-composition/strict-comparison.json",
+      "sha256": "46c97bbcac3f9430090514e95252e2b78485309b0568f375425c8e60fb2811ca"
+    },
+    {
+      "path": "q3-native-a-c-stage3-composition/PRIVATE-FIRST-SETUP-FAILURE.md",
+      "sha256": "29e99ca22659c7252c7e0cf4be6be683b8234bee2ef5fa8a13535072183e9afd"
+    }
+  ]
+}

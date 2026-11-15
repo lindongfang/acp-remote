@@ -1,0 +1,25 @@
+{
+  "command": [
+    "cargo",
+    "check",
+    "--manifest-path",
+    "app/Cargo.toml",
+    "--locked",
+    "--offline",
+    "--all-targets",
+    "--all-features"
+  ],
+  "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-preservation-implementation-v1",
+  "target": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/qrw1",
+  "pid": 13152,
+  "started": "2026-11-03T00:26:04.905Z",
+  "sourceFiles": 886,
+  "productChanges": 0,
+  "rawCodeGateApproved": false,
+  "finished": "2026-11-03T00:26:48.617Z",
+  "exit": 0,
+  "signal": null,
+  "sourceDifferences": [],
+  "independentAcceptance": false,
+  "scope": "baseline A+P1 composition compile only; raw fix absent"
+}

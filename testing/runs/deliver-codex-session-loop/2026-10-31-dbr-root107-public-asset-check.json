@@ -1,0 +1,20 @@
+﻿[
+    {
+        "path":  "app/tests/domain_borrow_acceptance.rs",
+        "expected":  "2538c111fe9eda61d5627cca515c82de6714d598d3c97793f9ee5a62527f90de",
+        "actual":  "2538c111fe9eda61d5627cca515c82de6714d598d3c97793f9ee5a62527f90de",
+        "matches":  true
+    },
+    {
+        "path":  "app/tests/domain_borrow_allocator_acceptance.rs",
+        "expected":  "36292daac3e441b9551bd435c57148dce447dfc5d9cd79282d8df95738151f49",
+        "actual":  "36292daac3e441b9551bd435c57148dce447dfc5d9cd79282d8df95738151f49",
+        "matches":  true
+    },
+    {
+        "path":  "app/tests/acceptance/domain_borrow_support.rs",
+        "expected":  "3ca0debb449739f3b64aca78f2e3288835924eec437299a214558f28754b23db",
+        "actual":  "3ca0debb449739f3b64aca78f2e3288835924eec437299a214558f28754b23db",
+        "matches":  true
+    }
+]

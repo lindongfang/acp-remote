@@ -1,0 +1,36 @@
+{
+    "sourceManifest":  "SOURCE-GREEN.json",
+    "sourceManifestSha256":  "22c7f058f416aca2d48680d49387c5619bdf050ceade940f7c18135198a16472",
+    "canonicalSha256":  "5f076a551d81c3b3ed28b18a0c6bc3d66772969170178962ec3b745c9aaf9942",
+    "sourceVerifiedLeaves":  515,
+    "redCheck":  "red-v2/RESULT.json",
+    "greenCheck":  "green-v1/RESULT.json",
+    "actualTests":  {
+                        "viewError":  4,
+                        "sessionCommands":  6,
+                        "nativeRelease":  7,
+                        "differentTopLevelTests":  13
+                    },
+    "fmtExit":  0,
+    "rustToolchain":  "1.98.1",
+    "binaries":  [
+                     {
+                         "path":  "artifacts/acp_remote-e75360741b1915fc.exe",
+                         "bytes":  66087424,
+                         "sha256":  "d06e61c8839492fbc539fc8165f8a0fbb66d1fe63745b54970242b81721d0a11"
+                     },
+                     {
+                         "path":  "artifacts/native_dispatch_dev_child.exe",
+                         "bytes":  690688,
+                         "sha256":  "2bcf2efe3eb8bd1b95e42cb6b821cca208b0a2fb0fac74a0e904d898654ef978"
+                     }
+                 ],
+    "indexSha256":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+    "notRun":  [
+                   "complete Rust suite",
+                   "strict clippy",
+                   "Web error contract",
+                   "real external Harness",
+                   "npm audit (user denied)"
+               ]
+}

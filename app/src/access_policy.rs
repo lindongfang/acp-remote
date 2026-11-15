@@ -18,6 +18,7 @@ use crate::{
 #[derive(Clone)]
 pub struct AuthenticatedActor {
     node_id: String,
+    actor_issuer: Arc<()>,
     pub(crate) client_id_string: String,
     pub(crate) public_key: Vec<u8>,
     pub(crate) auth_generation: i64,
@@ -107,6 +108,7 @@ pub enum AccessPolicyError {
 
 pub struct ApplicationPolicy {
     node_id: String,
+    actor_issuer: Arc<()>,
     trust: TrustStore,
     pairing: Weak<PairingService>,
     clock: Arc<dyn PolicyClock>,
@@ -114,6 +116,19 @@ pub struct ApplicationPolicy {
 }
 
 impl ApplicationPolicy {
+    /// Builds local read qualification from this policy's exact trust coordinator.
+    /// This does not mint a WebSocket identity or runtime approval.
+    #[must_use]
+    pub fn local_view_authority(
+        self: &Arc<Self>,
+        sources: Vec<crate::domain::native::NativeSourceId>,
+    ) -> crate::application::shared_views::local_authority::LocalViewAuthority {
+        crate::application::shared_views::local_authority::LocalViewAuthority::from_current_policy(
+            Arc::clone(self),
+            self.trust.clone(),
+            sources,
+        )
+    }
     pub(crate) fn new(
         node_id: String,
         trust: TrustStore,
@@ -122,6 +137,7 @@ impl ApplicationPolicy {
     ) -> Self {
         Self {
             node_id,
+            actor_issuer: Arc::new(()),
             trust,
             pairing: Arc::downgrade(pairing),
             clock: Arc::new(SystemPolicyClock),
@@ -135,6 +151,7 @@ impl ApplicationPolicy {
     pub fn with_clock(&self, clock: Arc<dyn PolicyClock>) -> Self {
         Self {
             node_id: self.node_id.clone(),
+            actor_issuer: Arc::clone(&self.actor_issuer),
             trust: self.trust.clone(),
             pairing: self.pairing.clone(),
             clock,
@@ -201,6 +218,7 @@ impl ApplicationPolicy {
         }
         Ok(AuthenticatedActor {
             node_id: self.node_id.clone(),
+            actor_issuer: Arc::clone(&self.actor_issuer),
             client_id_string: record.client_id,
             public_key: record.public_key,
             auth_generation: record.auth_generation,
@@ -215,7 +233,7 @@ impl ApplicationPolicy {
         actor: &AuthenticatedActor,
     ) -> Result<(), AccessPolicyError> {
         self.require_ready()?;
-        if actor.node_id != self.node_id {
+        if actor.node_id != self.node_id || !Arc::ptr_eq(&actor.actor_issuer, &self.actor_issuer) {
             return Err(AccessPolicyError::InvalidActor);
         }
         let record = self

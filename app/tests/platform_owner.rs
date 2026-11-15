@@ -1,4 +1,8 @@
 #![cfg(windows)]
+#![allow(
+    clippy::too_many_lines,
+    reason = "Preserves existing module structure and intentional scaffolding"
+)]
 use acp_remote::platform::process_owner::{
     OwnedProcess, ProcessOwnerError, ProcessSpec, ShutdownDisposition,
 };
@@ -345,6 +349,15 @@ async fn fixture_process() {
         return;
     };
     let path = PathBuf::from(std::env::var_os("ACP_OWNER_FIXTURE_PATH").unwrap());
+    if mode == "hidden-tracked-parent" {
+        hidden_tracked_fixture(&path).await;
+        return;
+    }
+    if mode == "hidden-tracked-child" {
+        assert_hidden_fixture_values();
+        std::fs::write(path, b"preserved").unwrap();
+        return;
+    }
     if mode == "hidden-preserved" {
         let key = std::env::var_os("ACP_OWNER_EXPECTED_HIDDEN_KEY").unwrap();
         let expected = std::env::var_os("ACP_OWNER_EXPECTED_HIDDEN_VALUE").unwrap();
@@ -509,6 +522,8 @@ async fn cmd_environment_fixture(with_exit_code: bool) {
 #[tokio::test]
 async fn explicit_hidden_drive_overrides_remain_invalid() {
     for name in [
+        "=::",
+        "=ACP_OWNER_UNKNOWN",
         "=C:",
         "=c:",
         "=C",
@@ -535,6 +550,219 @@ async fn explicit_hidden_drive_overrides_remain_invalid() {
         ));
         assert!(!error.to_string().contains("SECRET"));
     }
+}
+
+fn assert_hidden_fixture_values() {
+    for (name, expected) in [
+        ("=::", "colon=value"),
+        ("=ACP_OWNER_UNKNOWN", "opaque=value"),
+        ("=eXiTcOdE", "00000025"),
+    ] {
+        assert!(
+            std::env::vars_os().any(|(key, value)| key == name && value == expected),
+            "raw hidden environment entry was not preserved"
+        );
+    }
+}
+
+async fn hidden_tracked_fixture(path: &std::path::Path) {
+    use acp_remote::platform::process_owner::{ProcessSpawnCompletion, TrackedShutdownReport};
+    assert_hidden_fixture_values();
+    let prepared = OwnedProcess::prepare_tracked(&fixture_spec("hidden-tracked-child", path))
+        .expect("inherited hidden entries must reach tracked preparation");
+    let (mut owner, driver) = prepared.into_owner_driver();
+    let completion = driver.run(Instant::now() + Duration::from_secs(10)).await;
+    let running = matches!(&completion, ProcessSpawnCompletion::Running(proof) if owner.confirms_running(proof));
+    let output = if running {
+        let io = owner.take_io().unwrap();
+        drop(io.stdin);
+        Some(
+            timeout(Duration::from_secs(10), async move {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                let mut out_pipe = io.stdout.take(65536);
+                let mut err_pipe = io.stderr.take(65536);
+                let (out, err) = tokio::join!(
+                    out_pipe.read_to_end(&mut stdout),
+                    err_pipe.read_to_end(&mut stderr)
+                );
+                (out, err)
+            })
+            .await,
+        )
+    } else {
+        None
+    };
+    let closed = owner
+        .shutdown(Instant::now() + Duration::from_secs(10))
+        .await;
+    assert!(
+        running,
+        "tracked process did not reach original running state"
+    );
+    let (out, err) = output
+        .expect("running child output")
+        .expect("child IO deadline");
+    out.unwrap();
+    err.unwrap();
+    let TrackedShutdownReport::AssignedJob(report) = closed else {
+        panic!("original tracked Job closure was not confirmed")
+    };
+    assert_eq!(report.active_processes, 0);
+    assert_eq!(report.root_exit_code, Some(0));
+    assert_eq!(report.disposition, ShutdownDisposition::Graceful);
+    assert_eq!(std::fs::read(path).unwrap(), b"preserved");
+}
+
+#[tokio::test]
+async fn raw_hidden_environment_reaches_tracked_child_and_closes_original_tree() {
+    use std::{
+        mem::{size_of, zeroed},
+        os::windows::ffi::OsStrExt,
+        ptr::null,
+    };
+    use windows_sys::Win32::{
+        Globalization::{CSTR_EQUAL, CompareStringOrdinal},
+        System::{
+            JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject, TerminateJobObject,
+            },
+            Threading::{
+                CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, GetExitCodeProcess,
+                PROCESS_INFORMATION, ResumeThread, STARTUPINFOW,
+            },
+        },
+    };
+    struct RawFixtureJob(OwnedHandle);
+    impl Drop for RawFixtureJob {
+        fn drop(&mut self) {
+            // SAFETY: This is the dedicated fixture Job; no unrelated processes are assigned.
+            unsafe {
+                TerminateJobObject(self.0.as_raw_handle() as HANDLE, 1);
+            }
+        }
+    }
+    let scratch = Scratch::new();
+    let marker = scratch.0.join("preserved");
+    let executable = std::env::current_exe().unwrap();
+    let wide = |value: &std::ffi::OsStr| value.encode_wide().chain([0]).collect::<Vec<_>>();
+    let application = wide(executable.as_os_str());
+    let mut command = wide(
+        format!(
+            "\"{}\" --exact fixture_process --nocapture",
+            executable.display()
+        )
+        .as_ref(),
+    );
+    let mut entries: Vec<_> = std::env::vars_os()
+        .filter(|(name, _)| name.encode_wide().next().is_none_or(|unit| unit != 61))
+        .filter(|(name, _)| {
+            !["ACP_OWNER_FIXTURE", "ACP_OWNER_FIXTURE_PATH"]
+                .iter()
+                .any(|key| name.to_string_lossy().eq_ignore_ascii_case(key))
+        })
+        .map(|(name, value)| (wide(&name), wide(&value)))
+        .collect();
+    for (name, value) in [
+        (OsString::from("=::"), OsString::from("colon=value")),
+        ("=ACP_OWNER_UNKNOWN".into(), "opaque=value".into()),
+        ("=eXiTcOdE".into(), "00000025".into()),
+        ("ACP_OWNER_FIXTURE".into(), "hidden-tracked-parent".into()),
+        (
+            "ACP_OWNER_FIXTURE_PATH".into(),
+            marker.as_os_str().to_owned(),
+        ),
+    ] {
+        entries.push((wide(&name), wide(&value)));
+    }
+    entries.sort_by(|(left, _), (right, _)| {
+        // SAFETY: Both owned vectors are NUL-terminated and live during the call.
+        let order = unsafe { CompareStringOrdinal(left.as_ptr(), -1, right.as_ptr(), -1, 1) };
+        assert_ne!(order, 0);
+        order.cmp(&CSTR_EQUAL)
+    });
+    let mut environment = Vec::new();
+    for (name, value) in entries {
+        environment.extend_from_slice(&name[..name.len() - 1]);
+        environment.push(61);
+        environment.extend(value);
+    }
+    environment.push(0);
+    // SAFETY: A private unnamed Job owns the suspended fixture before any child code executes.
+    let handle = unsafe { CreateJobObjectW(null(), null()) };
+    assert!(!handle.is_null());
+    // SAFETY: CreateJobObjectW transfers this unique handle.
+    let job = RawFixtureJob(unsafe { OwnedHandle::from_raw_handle(handle) });
+    // SAFETY: Zero initializes the documented optional/default fields.
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: Correctly sized structure and the owned fixture Job remain live.
+    assert_ne!(
+        unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).unwrap(),
+            )
+        },
+        0
+    );
+    // SAFETY: These Win32 output/input structures use zero for optional fields.
+    let mut startup: STARTUPINFOW = unsafe { zeroed() };
+    startup.cb = u32::try_from(size_of::<STARTUPINFOW>()).unwrap();
+    let mut info: PROCESS_INFORMATION = unsafe { zeroed() };
+    // SAFETY: All UTF-16 buffers are terminated, environment is double-terminated;
+    // handle inheritance is disabled and CREATE_SUSPENDED prevents an unowned child running.
+    assert_ne!(
+        unsafe {
+            CreateProcessW(
+                application.as_ptr(),
+                command.as_mut_ptr(),
+                null(),
+                null(),
+                0,
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                environment.as_ptr().cast(),
+                null(),
+                &raw const startup,
+                &raw mut info,
+            )
+        },
+        0
+    );
+    // SAFETY: Successful CreateProcessW transferred both handles.
+    let process = unsafe { OwnedHandle::from_raw_handle(info.hProcess) };
+    let thread = unsafe { OwnedHandle::from_raw_handle(info.hThread) };
+    // SAFETY: Assign only the new suspended fixture to its dedicated Job.
+    let assigned = unsafe { AssignProcessToJobObject(handle, info.hProcess) };
+    if assigned == 0 {
+        // SAFETY: Roll back the still-suspended root if assignment fails.
+        unsafe {
+            windows_sys::Win32::System::Threading::TerminateProcess(info.hProcess, 1);
+        }
+        assert_exited(&process).await;
+        panic!("fixture Job assignment failed");
+    }
+    // SAFETY: The primary thread is still suspended, owned and now Job-contained.
+    assert_ne!(
+        unsafe { ResumeThread(thread.as_raw_handle() as HANDLE) },
+        u32::MAX
+    );
+    timeout(Duration::from_secs(30), assert_exited(&process))
+        .await
+        .unwrap();
+    let mut exit_code = 0;
+    // SAFETY: The owned root handle has signaled and remains live.
+    assert_ne!(
+        unsafe { GetExitCodeProcess(process.as_raw_handle() as HANDLE, &raw mut exit_code) },
+        0
+    );
+    assert_eq!(exit_code, 0, "raw environment fixture failed");
+    assert_eq!(std::fs::read(marker).unwrap(), b"preserved");
+    drop(job);
 }
 
 async fn hidden_drive_fixture(path: &std::path::Path, with_exit_code: bool) {

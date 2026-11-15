@@ -1,0 +1,315 @@
+{
+  "date": "2026-11-08",
+  "scope": "exact SHA-256 duplicate executables in four session-owned author/tester trees",
+  "roots": [
+    "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester",
+    "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester",
+    "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author",
+    "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1"
+  ],
+  "groups": 28,
+  "delete": 50,
+  "logicalBytes": 835015680.0,
+  "entries": [
+    {
+      "Sha256": "1126980F2936CEBF7C850C396D436FEEA9241521EED96BBB46DF791DC4FA3294",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf11-chunk-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf08-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38930944
+    },
+    {
+      "Sha256": "116A672CF99D82F298906C37FF9A865EADAB6131FF3455B74B6F9936E8FC0A1B",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v10-audit-a2\\phase1-checkpoint\\bin\\116a672cf99d82f298906c37ff9a865eadab6131ff3455b74b6f9936e8fc0a1b.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v10-audit-a2\\bin\\116a672cf99d82f298906c37ff9a865eadab6131ff3455b74b6f9936e8fc0a1b.exe",
+      "Length": 54162944
+    },
+    {
+      "Sha256": "154DA864213FDBB12D88E597545E8B43B8A63E605534ECE7127856EF7C46A712",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v10-audit-a2\\phase1-checkpoint\\bin\\154da864213fdbb12d88e597545e8b43b8a63e605534ece7127856ef7c46a712.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v10-audit-a2\\bin\\154da864213fdbb12d88e597545e8b43b8a63e605534ece7127856ef7c46a712.exe",
+      "Length": 54720512
+    },
+    {
+      "Sha256": "180124535BB5E71B7CBBD5621E5CE7B8ACC08148DBC78C72FBC20232D3582700",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\shared-controlled-composition-v1\\final-delivery-v2\\executables\\acp_remote.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\shared-controlled-composition-v1\\candidate-v1\\executables\\acp_remote.exe",
+      "Length": 54762496
+    },
+    {
+      "Sha256": "20FBDE417799D1256F776FC1E692972161D9A2CC62BAA2AFB1EAFA84BDA6C47B",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\bridge-implementation-v2-q003\\checkpoints\\node-private-actor-v2\\executables\\native_dispatch_dev_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\bridge-implementation-v2-q003\\checkpoints\\bridge-core-node-v3\\executables\\native_dispatch_dev_child.exe",
+      "Length": 625152
+    },
+    {
+      "Sha256": "20FBDE417799D1256F776FC1E692972161D9A2CC62BAA2AFB1EAFA84BDA6C47B",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\bridge-implementation-v2-q003\\checkpoints\\node-revoke-diagnostic-v1\\executables\\native_dispatch_dev_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\bridge-implementation-v2-q003\\checkpoints\\bridge-core-node-v3\\executables\\native_dispatch_dev_child.exe",
+      "Length": 625152
+    },
+    {
+      "Sha256": "3A06F0D43E922350FCA402C44395469E49EEDD4DC5164B905179706729873E86",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf09-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf07-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38541312
+    },
+    {
+      "Sha256": "4E2C3E3C0B5101CAAD5A2591A197F04AF4560D3C16AD67FA7DDE1B91D25975F5",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\fixture-owner-io-observation-implementation-v1\\final-delivery-v1\\executables\\test.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\fixture-owner-io-observation-implementation-v1\\executables\\test.exe",
+      "Length": 54769152
+    },
+    {
+      "Sha256": "5B04CE4C1160CDCD4C216F5873493D767D1516FAFAC0573C06FDF91AF2531F8E",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf11-read-random-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf11-marker-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38835712
+    },
+    {
+      "Sha256": "5B04CE4C1160CDCD4C216F5873493D767D1516FAFAC0573C06FDF91AF2531F8E",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf11-source-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf11-marker-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38835712
+    },
+    {
+      "Sha256": "5B04CE4C1160CDCD4C216F5873493D767D1516FAFAC0573C06FDF91AF2531F8E",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf11-view-random-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf11-marker-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38835712
+    },
+    {
+      "Sha256": "5E27A7E5381DB93A5EFBA26527715E0FB9CE1CF607B3F265E1E305597DA9DD00",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\closed-retest-v3\\bin\\child01.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\approval-association-acceptance-v1\\bin\\child01.exe",
+      "Length": 545792
+    },
+    {
+      "Sha256": "6571100F0DF06586191399E729D1BE03D2077FFF342B0A9C12D60593CF59232A",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\candidate-v1\\artifacts\\acceptance-only\\6571100f0df0-build-script-build.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\artifacts\\acceptance-only\\6571100f0df0-build-script-build.exe",
+      "Length": 158208
+    },
+    {
+      "Sha256": "66E431A0E9F821B364C72C489C67AB30C16DB4798A4BBD105A4CEBD88ADEF60A",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v5-rf-rb-gated\\executions\\original-error-service-join-v2\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v5-rf-rb-gated\\executions\\original-complete-before-error-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38405120
+    },
+    {
+      "Sha256": "698B2D4E41190FB1B6D9982EDEF257AAD4E88A5E677EC32DF6C18C62E2573A72",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rf09-borrow-v2\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rb05-cancel-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38640640
+    },
+    {
+      "Sha256": "6C0D4FB0D251FA1EB29B88AB276A4528028CE50F4B228AC550EB08CD7F39E5B4",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\candidate-v1\\artifacts\\default\\6c0d4fb0d251-build-script-build.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\artifacts\\default\\6c0d4fb0d251-build-script-build.exe",
+      "Length": 158208
+    },
+    {
+      "Sha256": "7000C8C5E957FEFAA202E001F3C3165502963213D8CB09D21514CF66D34837FE",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\auth-close-public-diagnostic-v1\\final-delivery-v2\\sample-v1\\executable\\shared_view_module_acceptance-e67079a92a94bee7.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\auth-close-public-diagnostic-v1\\final-delivery-v1\\sample-v1\\executable\\shared_view_module_acceptance-e67079a92a94bee7.exe",
+      "Length": 17638912
+    },
+    {
+      "Sha256": "7000C8C5E957FEFAA202E001F3C3165502963213D8CB09D21514CF66D34837FE",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\auth-close-public-diagnostic-v1\\sample-v1\\executable\\shared_view_module_acceptance-e67079a92a94bee7.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\auth-close-public-diagnostic-v1\\final-delivery-v1\\sample-v1\\executable\\shared_view_module_acceptance-e67079a92a94bee7.exe",
+      "Length": 17638912
+    },
+    {
+      "Sha256": "8AE5F201390BDCE78642D0C6822D7F3CA451B7913B343A40B991864BA8E0A5B1",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\candidate-v1\\artifacts\\dev-only\\8ae5f201390b-build-script-build.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\artifacts\\dev-only\\8ae5f201390b-build-script-build.exe",
+      "Length": 158208
+    },
+    {
+      "Sha256": "8F08A9D0DBF828A3BF2B682EFE309AE24FA6EB598B75AEE0B8AF4E73C167692E",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\native-error-cause-implementation-v1\\first-red-evidence\\acp_remote-first.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\native-error-cause-implementation-v1\\candidate-v1\\first-red-evidence\\acp_remote-first.exe",
+      "Length": 54705664
+    },
+    {
+      "Sha256": "A2FA6B1E95ED1A23FAE8F10A5224268966E14AB06AD420F3AC97FD6FA1469DB7",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v10-audit-a2\\phase1-checkpoint\\bin\\a2fa6b1e95ed1a23fae8f10a5224268966e14ab06ad420f3ac97fd6fa1469db7.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v10-audit-a2\\bin\\a2fa6b1e95ed1a23fae8f10a5224268966e14ab06ad420f3ac97fd6fa1469db7.exe",
+      "Length": 5945856
+    },
+    {
+      "Sha256": "AE90A4094DFC6B6918EE2B230FDAA434FF1ED622681E06B5D243292B46251925",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\shared-controlled-composition-v1\\final-delivery-v2\\executables\\native_dispatch_dev_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\shared-controlled-composition-v1\\candidate-v1\\executables\\native_dispatch_dev_child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "BD6EF20C067E664213E4670D7BDEE38C74337AFED5DDAFAC5669D2A24EAF41DB",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\fixture-owner-io-observation-implementation-v1\\final-delivery-v1\\executables\\child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\fixture-owner-io-observation-implementation-v1\\executables\\child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "BE80CCD93BCE262D38CD415C5192CA27F5C16BEF8E89F6F27C4E22B70557DE40",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\candidate-v1\\artifacts\\allfeatures\\be80ccd93bce-build-script-build.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\artifacts\\allfeatures\\be80ccd93bce-build-script-build.exe",
+      "Length": 158208
+    },
+    {
+      "Sha256": "C195D5C7541B78FBAFF9C706B561DBD8746AF0C17682B8BDD4340093D7DA9EC7",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rb05-random-revoke-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rb02-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38716928
+    },
+    {
+      "Sha256": "C7E72E028A58723A379EBA444E8E8FDD1401189104A66E80855CDEAFDEDCDD32",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v38-poison-event\\binaries\\native_dispatch_acceptance_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v37-identity-repair\\binaries\\native_dispatch_acceptance_child.exe",
+      "Length": 1041408
+    },
+    {
+      "Sha256": "C7E72E028A58723A379EBA444E8E8FDD1401189104A66E80855CDEAFDEDCDD32",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v39-sp-style\\binaries\\native_dispatch_acceptance_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v37-identity-repair\\binaries\\native_dispatch_acceptance_child.exe",
+      "Length": 1041408
+    },
+    {
+      "Sha256": "C7E72E028A58723A379EBA444E8E8FDD1401189104A66E80855CDEAFDEDCDD32",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v41-source-close-sql\\binaries\\native_dispatch_acceptance_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v37-identity-repair\\binaries\\native_dispatch_acceptance_child.exe",
+      "Length": 1041408
+    },
+    {
+      "Sha256": "C7E72E028A58723A379EBA444E8E8FDD1401189104A66E80855CDEAFDEDCDD32",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v42-source-close-retry\\binaries\\native_dispatch_acceptance_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v37-identity-repair\\binaries\\native_dispatch_acceptance_child.exe",
+      "Length": 1041408
+    },
+    {
+      "Sha256": "C7E72E028A58723A379EBA444E8E8FDD1401189104A66E80855CDEAFDEDCDD32",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v43-source-isolation\\binaries\\native_dispatch_acceptance_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v37-identity-repair\\binaries\\native_dispatch_acceptance_child.exe",
+      "Length": 1041408
+    },
+    {
+      "Sha256": "C7E72E028A58723A379EBA444E8E8FDD1401189104A66E80855CDEAFDEDCDD32",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v44-source-isolation-diagnostic\\binaries\\native_dispatch_acceptance_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v37-identity-repair\\binaries\\native_dispatch_acceptance_child.exe",
+      "Length": 1041408
+    },
+    {
+      "Sha256": "C7E72E028A58723A379EBA444E8E8FDD1401189104A66E80855CDEAFDEDCDD32",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v45-source-protocol-isolation\\binaries\\native_dispatch_acceptance_child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v37-identity-repair\\binaries\\native_dispatch_acceptance_child.exe",
+      "Length": 1041408
+    },
+    {
+      "Sha256": "CD882F98BD106E86624713C725AE5331F520C0B4D98C69EF7939586DBF1EC7AE",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v5-rf-rb-gated\\executions\\original-partial-unknown-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v5-rf-rb-gated\\executions\\internal-default-final\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38477312
+    },
+    {
+      "Sha256": "D3488A806404E0128F6F09FD223BCF613A073830DBFBE7E31E28027E84A5C30F",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v5-rf-rb-gated\\executions\\original-error-before-flush-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v5-rf-rb-gated\\executions\\internal-compile-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38403584
+    },
+    {
+      "Sha256": "D3488A806404E0128F6F09FD223BCF613A073830DBFBE7E31E28027E84A5C30F",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v5-rf-rb-gated\\executions\\original-zero-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v5-rf-rb-gated\\executions\\internal-compile-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38403584
+    },
+    {
+      "Sha256": "E0D2F301160D3C61B2C4C03A96E69693FA8894FA4CB92D3D4B1CC35941244A04",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rb02-source-close-first\\acp_remote-4159aa38c8969f26.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v6-rf-rb-remainder\\executions\\rb02-detach-first\\acp_remote-4159aa38c8969f26.exe",
+      "Length": 38995456
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\case8-retest\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\close-observer-repair\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\concurrency-causal-loaded\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\concurrency-resource-observer-repair\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\lifecycle-fault-batch\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\next-batch\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\preflight-fixture-repair\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\provider-brand-accepted\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\provider-brand-read-retest\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\redaction-retest\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\required-concurrency\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "EF54DAFE3F573566F31D04FCD7073DC2B0E00888378AC329C316190330D0B052",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\same-data-brand\\artifacts\\native-dispatch-dev-child.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-followup-v1\\artifacts\\native-dispatch-dev-child.exe",
+      "Length": 628224
+    },
+    {
+      "Sha256": "F266E98EB3BC20B3268C11C1561A223DBEAC66D4793AF5A13114B51C319C0C97",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\node-close-stage-diagnostic-v1\\runtime-v1\\executable\\acp_remote-3154f00878dd553c.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\node-close-stage-diagnostic-v1\\final-delivery-v1\\runtime-v1\\executable\\acp_remote-3154f00878dd553c.exe",
+      "Length": 37977088
+    },
+    {
+      "Sha256": "F2FD1A6872F6650B3D6715D3F5C2D3F2EDB03AB9A678A99DACAD9E57AF0D79E5",
+      "DeletePath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\candidate-v1\\artifacts\\shared-only\\f2fd1a6872f6-build-script-build.exe",
+      "KeepPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\default-strict26-implementation-v1\\artifacts\\shared-only\\f2fd1a6872f6-build-script-build.exe",
+      "Length": 158208
+    }
+  ]
+}

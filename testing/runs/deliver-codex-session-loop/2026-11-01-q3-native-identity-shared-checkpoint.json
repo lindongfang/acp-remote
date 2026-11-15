@@ -1,0 +1,573 @@
+{
+  "scope": "Native identity controlled-red/repair design coding gate only, no production repair acceptance; Native CallerDrop001 remains Open. Shared369 original independent P02/default4 and controlled ordering checkpoint passed; original tester closed SV-MOD-TRANSFER001 locally, final checkpoint reviewer pending. Original historical failures remain; complete Shared83/RF/RB/Native80/Socket/Harness not signed. Compiled executable binaries were externally SHA verified and deliberately not copied into repository.",
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\baseline.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/baseline.json",
+      "sha256": "6a991b71ed509a1592f83f71e4c67d90c19b305e6ae63243878c5b0f7fa699a2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\compile-missingexe-diagnosis.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/compile-missingexe-diagnosis.cjs",
+      "sha256": "b894291828a50dfbeef66618842b75c75a296ae8dea5a792503299aaed97ec1c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\diagnostic-after\\app\\src\\platform\\process_owner\\tracked\\disposal_reuse_probe.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/diagnostic-after/app/src/platform/process_owner/tracked/disposal_reuse_probe.rs",
+      "sha256": "5825534a06f59d62173bf4836ccb21c3a59aad007a8d8c4ffa20df70550d0e7c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\diagnostic-after\\app\\src\\platform\\process_owner\\tracked.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/diagnostic-after/app/src/platform/process_owner/tracked.rs",
+      "sha256": "352bb94385b65cdd1aa10455e5edae4ec83cbc372700de3a00dfd3a5b150b9ac"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\diagnostic-before\\app\\src\\platform\\process_owner\\tracked.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/diagnostic-before/app/src/platform/process_owner/tracked.rs",
+      "sha256": "4b41a2396bb2245342632fe3124268ba637f055b4ab141f8e445ee52f281418c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\diagnostic-diff.stderr.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/diagnostic-diff.stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\diagnostic-patch-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/diagnostic-patch-check.json",
+      "sha256": "e13968f113258bcc220f3f7e9ce7f1d221883562cccbe12972c6d83c9a5a3654"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\diagnostic.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/diagnostic.patch",
+      "sha256": "53c5b5f777ff2a902c517d5aa9a714a5666423270bda9c7adce3cc419b2b84f6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\execution.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/execution.json",
+      "sha256": "53d8f0071649d84ba8a42c1c5d9c01ce51f35063651c15a6562763f49d7e1a20"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\freeze-missingexe-diagnosis.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/freeze-missingexe-diagnosis.cjs",
+      "sha256": "16b7db2bd578db40248f741b6509dc042f5df6922b0a5a940d505aa7f0e8b445"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\execution-matrix.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/execution-matrix.json",
+      "sha256": "6c17a037fe2984e25bdd4bf4488d58ff7713a878056bb369c693cdf6298aa4d3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/freeze.json",
+      "sha256": "9f45f719fdd21253981a8d0ec0193e67ff71e3ede4b7333f5cf6613986084b01"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\issue.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/issue.json",
+      "sha256": "1b4e79c807a974eefdaec73ed9c312688289d2028b155a0ef2a2d4ac1cf889fc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\logs\\pp.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/logs/pp.json",
+      "sha256": "5f92b3693a93c58757ece6e29c7869d0bd9956993271cd5718fad175ef098657"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\logs\\pp.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/logs/pp.stderr.log",
+      "sha256": "e43664b8ffa38fc3c0c352f97a36d1472ec9d8daded951d505d0af1cc1fa9d66"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\logs\\pp.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/logs/pp.stdout.log",
+      "sha256": "278aac65c7c83ee954eb3c9d56acc9fe243ac3a7f89776f4a5ccde8a8a13ab1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\primary\\mio-named_pipe.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/primary/mio-named_pipe.rs",
+      "sha256": "8f7bf372ff4d8b1c5db59d4a5f24d10b7c94e12bbb2e24315167304b158ff64b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\primary\\tokio-named_pipe.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/primary/tokio-named_pipe.rs",
+      "sha256": "73ef4e0c32d1ebb4e6ca4e858fdacdb12d0a8b36ae0caf985a78d4d624da897f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\primary\\windows-sys-foundation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/primary/windows-sys-foundation.rs",
+      "sha256": "7da61986429ad6764c2c5ec3656ef5c4b3fba6969b6eabbf85991f86966f2994"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/report.md",
+      "sha256": "087d460b0cf5096ee0fe87641384a6593bc025f5224808ce6172a8f7892c11f8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\run-one.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/run-one.mjs",
+      "sha256": "e9c2ec70e4e5af46bbdaa83858d37351c877d8745ccdc295fd796e730ced699d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\source-factory01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/source-factory01.json",
+      "sha256": "4053568842471740c875dcc3495cea92a63f27874312742178e747a116bfc304"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\inputs\\tracked-original.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/inputs/tracked-original.rs",
+      "sha256": "4b41a2396bb2245342632fe3124268ba637f055b4ab141f8e445ee52f281418c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline.json",
+      "sha256": "6a2ee33c2821ba91c2f3d60dda1fcbdfde70a3a68f7dd190f83b1c3e21570eb4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline.stderr.log",
+      "sha256": "c2d3f475a1184a00f880e843f5c87d18616de5bcc0f5be2a36d93921e6d828ce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline.stdout.jsonl",
+      "sha256": "2b590434628cf52674cd306b4a977ccfe1f81d9616bab8b7ee19cb7368e89c9e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline01-evidence\\positive-false-complete.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline01-evidence/positive-false-complete.json",
+      "sha256": "d673f0f9489740e0df376ca1b88db861d9493ee81901c5d94c01be925b840e9c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline01-evidence\\positive-false-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline01-evidence/positive-false-first.json",
+      "sha256": "05df2caf1d0ecb23cdcfa395d3148c9c4882e66b4d561da546877f79b407c2f2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline01-evidence\\positive-true-complete.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline01-evidence/positive-true-complete.json",
+      "sha256": "273751efd81121c38a02ca3bb0b618a6016d04271429022a4ea3f5fe2218f24d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline01-evidence\\positive-true-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline01-evidence/positive-true-first.json",
+      "sha256": "22bbf3171f9d8b234c385c946eb0a21ad3733d71d76e7cacf1e9ff8eaa9086a8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline01.json",
+      "sha256": "2ae0610a18b7c17773c96c63196c0555b1617de5b8c3577687d588acca4887d1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline01.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline01.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\baseline01.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/baseline01.stdout.log",
+      "sha256": "37a31790351d2563bfda6a2db93eae781ae73adacecb6af5ab5285eac22b4304"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuse01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuse01.json",
+      "sha256": "6f5979af01ee114063b29f811e5c7a81b25680824d0b9fbbb31b8e84781b37b4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuse01.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuse01.stderr.log",
+      "sha256": "1f77f1ba7c118abc54fe064f33ff24d0a0f5e8a05fb9c845da6a33781ac71ca5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuse01.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuse01.stdout.log",
+      "sha256": "89b3624a4d4cb77801b98147c86800c1757f87ccc9894e8a1570fc484896108e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuseexact01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuseexact01.json",
+      "sha256": "534ae8d1ae62e3cc2a4a5e57d9155589a0b3590c64f4617b9c0afca184ffecce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuseexact01.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuseexact01.stderr.log",
+      "sha256": "073401a1ec6dee589faa02ee38e5949d9f68de8ed06aa8087fd7b8aaef878937"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuseexact01.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuseexact01.stdout.log",
+      "sha256": "89b3624a4d4cb77801b98147c86800c1757f87ccc9894e8a1570fc484896108e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuseprobe.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuseprobe.json",
+      "sha256": "4ef15706b9f9714381fe072eeb9cec44cf09bbe37318c31ee99f69e09505ee9c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuseprobe.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuseprobe.stderr.log",
+      "sha256": "4d20290673fcbd5ed0f9970e99accfd6c83242da68801148b1c33f9d498a2fb3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuseprobe.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuseprobe.stdout.jsonl",
+      "sha256": "52b5cd51ff16349bff1577b17e01918b958e7e2d0b78caf5a9092ad139bf5624"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuseprobeexact.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuseprobeexact.json",
+      "sha256": "5e1e2191c2e0f3613f871d62dcba057481de15555f1db91e0e94dcafba42257c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuseprobeexact.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuseprobeexact.stderr.log",
+      "sha256": "e237a34d82f43dce40a655c49c1fd0c82696527c57da4c947dbd7b447ff4fe46"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\logs\\reuseprobeexact.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/logs/reuseprobeexact.stdout.jsonl",
+      "sha256": "e8f5a53d0da9c90c8e84c69926febc486505b078d1ef750de10da5b90a825a20"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\patch-check\\app\\src\\platform\\process_owner\\tracked\\disposal_reuse_probe.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/patch-check/app/src/platform/process_owner/tracked/disposal_reuse_probe.rs",
+      "sha256": "5825534a06f59d62173bf4836ccb21c3a59aad007a8d8c4ffa20df70550d0e7c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\patch-check\\app\\src\\platform\\process_owner\\tracked.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/patch-check/app/src/platform/process_owner/tracked.rs",
+      "sha256": "352bb94385b65cdd1aa10455e5edae4ec83cbc372700de3a00dfd3a5b150b9ac"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\prepare-missingexe-diagnosis.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/prepare-missingexe-diagnosis.cjs",
+      "sha256": "65cdf75d5842c92a3f749b702fabca9d89209c398b4bf1cf98d6555397f08e60"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\prepare-missingexe-reuse-probe.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/prepare-missingexe-reuse-probe.cjs",
+      "sha256": "f1b07e515b975b6d3641ef513c89002eaa50cb565b9bc17d101ed4bf2d45d8ef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\REPAIR-CONTRACT.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/REPAIR-CONTRACT.md",
+      "sha256": "388072b64717992d9e1078602ec14faf254f5d0f70f35316ffd1a20585d5f485"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\run-missingexe-diagnosis.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/run-missingexe-diagnosis.cjs",
+      "sha256": "0713749edc63e786509fb991144f9a44cb44b45b7b084488c86b2607af00eb5f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\run-missingexe-reuse-probe.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/run-missingexe-reuse-probe.cjs",
+      "sha256": "4e250bdaff26c4bf1a468333259d565dc162df4bca9c0ba134209a829e0a20a8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\runtime-owner.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/runtime-owner.json",
+      "sha256": "d17a13d66ab26820c72a090380455e916a1eec923e3d970b01854f13f9ecc4b4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\source.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/source.json",
+      "sha256": "8a5fa394ceee759132562b3de992c26aade1ecfa3f0995f8a739fa047068e1ea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/native-identity-plan/freeze.json",
+      "sha256": "8335c72dda1b5ab0692bc8a59fc234183319f81e5d645015cab7a030574c3bb4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\asset-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/asset-manifest.json",
+      "sha256": "c8e698910383909086d561e5174de5059a700d4f4ae7f41bc6fcdd7778218a3a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\finalize.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/finalize.cjs",
+      "sha256": "fe6416cf746637f28ae300d001b307faba0686dd0670690540b4524b8a850942"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\freeze-checkpoint.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/freeze-checkpoint.cjs",
+      "sha256": "db8f9fb559b62246dfd6a40e4894c786a0c0389f9b994a9beb8e232b93a81ded"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\HANDOFF.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/HANDOFF.md",
+      "sha256": "ad5a1871cab4f9f1b409671fc47a5a3dfe988875feee4cccb9848b66dcf4f429"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\independent-transfer-order.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/independent-transfer-order.patch",
+      "sha256": "ed626d95c0373e1b8d63b1096b7ba226f63985668361c36b43742078db441402"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\input-audit.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/input-audit.json",
+      "sha256": "88697c22e6923ca5c65f82abbedc866a0ac3659318957bcbfbc6fdc8a0554eca"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\inputs\\asset-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/inputs/asset-freeze.json",
+      "sha256": "2de2a48b59d4b11fc4e60e31b6d4320b7f5fd19051ce15cf30e6b88cd4c362b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\inputs\\candidate-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/inputs/candidate-freeze.json",
+      "sha256": "3135ff8d000fdcdee046bf2d581e2ff7edf9e37fbbb1cb5ae571cd9d0abbc137"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\inputs\\original-ed905-execution-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/inputs/original-ed905-execution-freeze.json",
+      "sha256": "ed905033ce61a0f00c83fd0808d752c81d182271698f102e1bac8d2b68336be3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\inputs\\original-transfer-finding.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/inputs/original-transfer-finding.md",
+      "sha256": "51e5848e4ef72c324f985e5c9d52af4d0cc2d8c2071bf73b2c52fc2219d67e19"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\inputs\\original83-map.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/inputs/original83-map.json",
+      "sha256": "ec28749fe6175defa1bad9883aceb9d617d9c6bd1b66cf47ff3cede21ff1c23e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\inputs\\planned-function-map.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/inputs/planned-function-map.json",
+      "sha256": "5023112fcf7b8109f25f5cdfed8fbcfbacda4bbf74e878fe65cd2d58d83c4304"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\inputs\\rf-rb-mapping.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/inputs/rf-rb-mapping.md",
+      "sha256": "e26590c9aec14fcb20385c0cb7bdeb014e7af5f7086f00ea11fcc0496974a1cf"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\inputs\\transfer-before-rustfmt.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/inputs/transfer-before-rustfmt.rs",
+      "sha256": "63f97ed888a21193abd38e96ec6baa61246042a9f7aff27df6182339b6f19de8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\inputs\\transfer-first-compile.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/inputs/transfer-first-compile.rs",
+      "sha256": "d2e87e25d28f2fdc1bcd1f694448c5c7987adb23d9173333b3f8d0586a59b510"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\compile-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/compile-first.json",
+      "sha256": "1fcd360f8dd2dbfa4546f4da8207873b4626a2181a4400955953e408d422d0c0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\compile-first.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/compile-first.txt",
+      "sha256": "b96bf8d9db0e5e6538dc681c35c8fdea2ada020a1766c462570f21e28d7b4360"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\compile-pwsh.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/compile-pwsh.json",
+      "sha256": "336c881effd2a0c386688d1fdf39001b24b7799fefa33d013acb30bbeb4aed7d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\compile-pwsh.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/compile-pwsh.txt",
+      "sha256": "8b7cd3b395e9aaae26051b6d607246df2701cea9430d5c9b5333d46ae791989d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\fmt-final.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/fmt-final.json",
+      "sha256": "313bda8a52fd9d8e2e5c8fbf6764b9caf5d3a5865de9442f87f4bc5a3f3054fd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\fmt-final.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/fmt-final.txt",
+      "sha256": "1fc446e1593942af1c4ea441a84451d0d525137b18838bbbafd6509602ad6f62"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\four-default-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/four-default-first.json",
+      "sha256": "2fbfe67cea65acdac5b04a936c3227df241a87490ca951e7949ecdd0253f0da3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\four-default-first.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/four-default-first.txt",
+      "sha256": "c6fab6bae54ce1dd9c8f896ee78b30ff12b7fdc143635fc5de28c5f9bc0cde0d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\p02-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/p02-first.json",
+      "sha256": "9806f1ac92be0e6b8f984654fbd45b9bf17f8911bf5ef5f7c4676ce4f31448d9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\p02-first.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/p02-first.txt",
+      "sha256": "94ec812d707d797913139aad0859c54161e6bdad6503a35ade4038a2b79c1000"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\strict-original-public.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/strict-original-public.json",
+      "sha256": "39c3fcf1e213ded5ea7b4c158fcf23e460c7ec116041e4ce4bba2348932ddd4f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\strict-original-public.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/strict-original-public.txt",
+      "sha256": "b9484a57583d5bd3120b726f9afef41feebfe3638bb60930f95ed3ad425122a0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\transfer-compile-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/transfer-compile-first.json",
+      "sha256": "6c724341876f71a2c29fa22aefaec17a5a0b558175a9a4115f4683558c9cae32"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\transfer-compile-first.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/transfer-compile-first.txt",
+      "sha256": "b4ee67b31fc07a8cca1c322bdf38306884d707cd216a52c90446b32b12618845"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\transfer-order-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/transfer-order-first.json",
+      "sha256": "3d68c1bcff3cbe00872951fd853c58656400cec281dda9366af7bf658c7efb2a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\transfer-order-first.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/transfer-order-first.txt",
+      "sha256": "192f4c9c93dc6c96d84350b02c59897fe601f08b228db6bab628ca195276806f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\transfer-order-formatted.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/transfer-order-formatted.json",
+      "sha256": "b22e5ae48473b50c20078126047799ba35fe179d07a396863ad6f571ca50c7c4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\transfer-order-formatted.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/transfer-order-formatted.txt",
+      "sha256": "3397d24a45dd90b60199089b2d0b2b6397b59deb7ad11815caaac984ff59189a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\transfer-strict-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/transfer-strict-first.json",
+      "sha256": "a6fd2d59b6fd800068d30ed61bc3b84c2aefffad69223c46492f04cc522d5007"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\logs\\transfer-strict-first.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/logs/transfer-strict-first.txt",
+      "sha256": "eb4b6dd99b51cb5cd3d3a2e7cd0ca2c2e79925058df629f291e9fafcabc3a47e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\original83-status.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/original83-status.json",
+      "sha256": "7384cb50f66544166782a236f7f439c588dc81527834c7196a14c455604c7a90"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\patch-verification.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/patch-verification.json",
+      "sha256": "bfdda63cff93ebfac6c4877db56a61680546d16341c58c7fb6807a706ce8fb69"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\physical-after.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/physical-after.json",
+      "sha256": "0ea9ea6400c23e0da79e2249aa78adbd941206b7c332e899498267722f9d0f9f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\portable\\app\\tests\\shared_view_transfer_order_independent.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/portable/app/tests/shared_view_transfer_order_independent.rs",
+      "sha256": "d3e128b007d9d671a550cd8ad1cdb2156423e98588d9eabc49b4d8e5f4be9cf8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\prepare.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/prepare.cjs",
+      "sha256": "66986287e163a3d8668db3f1d3308d671400aea72438ac23b1bb3a6ba81267a0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/results.json",
+      "sha256": "84060dc3e9aa078c8360b6cdd0b15e47c9945d8054bf24f274641948cecf3596"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\resume-existing-overlay.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/resume-existing-overlay.cjs",
+      "sha256": "22bf9291be504172bc537b3f9c8bc3a05c8cf6f6e8c1fa96f6c011b0107e1090"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\rf-rb-status.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/rf-rb-status.json",
+      "sha256": "c48e4c42f089567951a7de3d8d8a7d4babb5a016542021cac3331d0f964b4b49"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\run-owner.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/run-owner.ps1",
+      "sha256": "916b586cb65749fe2e9521962058a0feddf14805edd32d6cd9af3b9e853977c1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\run-pwsh.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/run-pwsh.cjs",
+      "sha256": "6d5792e61afc39ea8bcb8739fc72ddf8c14e0588e11c9d350d3e5857db3331ee"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\run-transfer-owner.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/run-transfer-owner.ps1",
+      "sha256": "e478301a567ea30a0ccef107bac70d7953378bd6709356392df4898f142bef7b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\run-transfer.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/run-transfer.cjs",
+      "sha256": "bb08fd1483c32249684f51b9137ff6ff957ef6a7c1ec3528c9c0824499ed2a71"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\run.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/run.cjs",
+      "sha256": "9896c52df9cc97f745e258c3b3840377453ffdf0575b0586265cefd51bce1c50"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\source-after.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/source-after.json",
+      "sha256": "66cba53cedbdf9bd8b18aca4873ab05b184f48bf2c482f07372f7da5d236d56f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\source-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/source-before.json",
+      "sha256": "085177ae6280595316c6f04975fdb43519b6371b209dbc4a902b9d6b4782232a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/shared-independent/freeze.json",
+      "sha256": "fd51fc1b0c9ee763bfee76d1ec004f03bfe458b22d751bc216804e60d8ec4e1f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-native-dispatch\\missingexe-original-pipe-object-identity-repair-coding-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-identity-shared-checkpoint/reviews/missingexe-original-pipe-object-identity-repair-coding-gate.md",
+      "sha256": "dd5de01e8971e781068c415d6ea804ae3493d7cb86525c111b6888c4950fe7cc"
+    }
+  ],
+  "binaries": [
+    {
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\original-acceptance-child.exe",
+      "sha256": "c7e72e028a58723a379eba444e8e8fdd1401189104a66e80855cdeafdedcdd32",
+      "verified": true,
+      "copied": false
+    },
+    {
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\executables\\shared_view_module_acceptance-e67079a92a94bee7.exe",
+      "sha256": "da37e86e6e00d5ea8a46fab894e386ee77120d40d622522361feeaea2e89beeb",
+      "verified": true,
+      "copied": false
+    },
+    {
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v3-shared369\\executables\\shared_view_transfer_order_independent-fee740b91bc44cc5.exe",
+      "sha256": "ce91edc60ce4445f401477a9d8dc07ad947b5bf57292fada71468279c03f61ac",
+      "verified": true,
+      "copied": false
+    }
+  ],
+  "externalSourceVerification": [
+    {
+      "directory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-author\\missingexe-caller-drop-diagnosis-v1\\source",
+      "count": 394,
+      "verified": true,
+      "copied": false
+    }
+  ],
+  "sharedSource": {
+    "fixedCandidate": "3135ff8d000fdcdee046bf2d581e2ff7edf9e37fbbb1cb5ae571cd9d0abbc137",
+    "count": 369,
+    "evidence": "Tester fixed before/after source inventories and original Root881-member verification; product source not copied into this evidence package"
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "scope": "Evidence preservation only. Timeline not integrated. Developer checks do not sign independent TL01–10 or full CL023.",
+  "candidate": "dbb3a50c21323fe8d2e8e322f386aab6e3c66534581fb59e81c531811017be78",
+  "sourceCount": 327,
+  "rootInputsUnchanged": 613,
+  "checks": {
+    "check": 0,
+    "test": "495/495 in22 files",
+    "build": 0,
+    "developerDomAssertions": 21,
+    "screenshotCount": 6,
+    "realBrowserZoom200": "not executed; developer body enlargement is distinct"
+  },
+  "formal": "original baseline_tester executing own TL01–10 and v3 raw-document cases",
+  "entries": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/freeze.json",
+      "sha256": "dbb3a50c21323fe8d2e8e322f386aab6e3c66534581fb59e81c531811017be78",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\candidate\\freeze.json"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/source-manifest.json",
+      "sha256": "6b42da34b6a8608badeb1d020a35aaed78558ea2129a549f56f74d2d133c2a8e",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\candidate\\source-manifest.json"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/changed.json",
+      "sha256": "d55dd9b0a92b946c060a6930f507b7f0680ed3d63cf022cd1db5e21bf1caeda6",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\candidate\\changed.json"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/timeline-component.patch",
+      "sha256": "e8c984215896f9ddd3d9d15b6f012f720d0dd2adb9716a47c234446a3a3761c1",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\candidate\\timeline-component.patch"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/REPORT.md",
+      "sha256": "2e264222e4674f7a2ed9deab599312026b954a1f4cea4205ea11d3145915a941",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\candidate\\REPORT.md"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/check.log",
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\candidate\\check.log"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/test.log",
+      "sha256": "1b83da8e6b95605218d449f45c3f4cf6a8cb658c6dfc909561b60eace2624708",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\candidate\\test.log"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/build.log",
+      "sha256": "066e8720f675e5a995d45f4599476e614d224240df83e7ee794c54b74b7332bb",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\candidate\\build.log"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/developer/browser-development.mjs",
+      "sha256": "c84ea67fd1365de859e2c9248fa730648c169e7feb5728a2a27ed7e6bde30af3",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\browser-development.mjs"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/developer/freeze-candidate.mjs",
+      "sha256": "90df3541846c97dff3583be973932766614ab8034483d0a90b4f243fea6b766c",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\freeze-candidate.mjs"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/developer/browser-evidence/report.json",
+      "sha256": "da4c2ba4d54f21131a58fc3aefb1463fd34036dde6cb25d96a273f86232408e6",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\browser-evidence\\report.json"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/developer/browser-evidence/timeline-375x812-light.png",
+      "sha256": "051681ed53dcb735aad7c2ba0567ce99b368e3080cfb378ad02180a25dfee729",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\browser-evidence\\timeline-375x812-light.png"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/developer/browser-evidence/timeline-375x812-dark.png",
+      "sha256": "f40b0ff4f2517530ef380fac6f16c5c90f0762053f6a66edfe131e464105cc16",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\browser-evidence\\timeline-375x812-dark.png"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/developer/browser-evidence/timeline-812x375-light.png",
+      "sha256": "544b94156d86cad4b068b4138e38dfd3d6261942a6d3151a80456e7022c3a41a",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\browser-evidence\\timeline-812x375-light.png"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/developer/browser-evidence/timeline-812x375-dark.png",
+      "sha256": "f11601a6caaffe28c9a495fdc679a7bb8fb2ac71fad188f36035974621f0b4bb",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\browser-evidence\\timeline-812x375-dark.png"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/developer/browser-evidence/timeline-1280x800-light.png",
+      "sha256": "9317200b273ecadc4b11ef7c4229770c6db8532771ed3cb5161fd2a1d72a3bd8",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\browser-evidence\\timeline-1280x800-light.png"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-timeline-component-candidate/developer/browser-evidence/timeline-1280x800-dark.png",
+      "sha256": "df2efaf6f098d7d28d9af41724ca45f9e49a02ad116423efc7594150e887a637",
+      "original": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-timeline\\implementation-v1\\browser-evidence\\timeline-1280x800-dark.png"
+    }
+  ]
+}

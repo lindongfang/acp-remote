@@ -1,3 +1,7 @@
+#![allow(
+    dead_code,
+    reason = "Preserves existing module structure and intentional scaffolding"
+)]
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{Extension, Router};
@@ -6,11 +10,15 @@ use hyper_util::{
     server::conn::auto::Builder,
     service::TowerToHyperService,
 };
+#[cfg(test)]
+use tokio::task::JoinHandle;
+#[cfg(test)]
+use tokio::time::Instant as TokioInstant;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Semaphore, watch},
-    task::{JoinHandle, JoinSet},
-    time::{Instant as TokioInstant, sleep, timeout, timeout_at},
+    task::JoinSet,
+    time::{sleep, timeout},
 };
 use tokio_rustls::TlsAcceptor;
 
@@ -30,367 +38,227 @@ use crate::{
 };
 
 const MAX_CONNECTIONS: usize = 128;
+pub mod approval_owner;
+mod lifecycle;
+pub use lifecycle::NodeProcessOwner;
+#[cfg(windows)]
+mod catalog;
+#[cfg(windows)]
+mod catalog_upload;
+#[cfg(windows)]
+mod document_payload;
+#[cfg(windows)]
+mod document_transfer;
+#[cfg(windows)]
+mod input_upload;
+#[cfg(windows)]
+mod prompt_preparation;
+#[cfg(windows)]
+pub(crate) mod queue_management;
+mod request_authority;
+#[cfg(windows)]
+mod session_services;
+#[cfg(windows)]
+mod source_sessions;
+#[cfg(windows)]
+pub(crate) use catalog_upload::{
+    CatalogCommandFailure, NodeCatalogManagement, catalog_fact_metadata, catalog_receipt_metadata,
+};
+#[cfg(windows)]
+pub(crate) use input_upload::{UploadOwner, UploadPhase, UploadPurpose, UploadRoutingError};
+pub use request_authority::NodeRequestAuthority;
+#[cfg(windows)]
+pub(crate) use session_services::{
+    NativeReleaseError, NativeReleasePhase, NativeReleaseSnapshot, NodeManagementSessionServices,
+};
+#[cfg(windows)]
+pub mod native_views;
+#[cfg(windows)]
+pub(crate) use native_views::NativeSocketViewRead;
+
+#[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
+pub mod shared_view_test_support;
+#[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
+pub(crate) mod shutdown_observation;
+#[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
+use shutdown_observation::{
+    NodeShutdownDisposition, NodeShutdownFailure, NodeShutdownObserver, NodeShutdownPhase,
+    NodeShutdownProbe, NodeShutdownStage, NodeStageOutcome,
+};
+#[cfg(test)]
+mod shared_view_tests;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub struct NodeRuntime {
+    lifecycle: Arc<lifecycle::Host>,
+    #[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
+    shutdown_observer: Arc<NodeShutdownObserver>,
     control: IpcControl,
-    network_stop: watch::Sender<bool>,
-    network_task: Option<JoinHandle<Result<(), String>>>,
-    ipc_task: Option<JoinHandle<Result<(), AppError>>>,
-    storage: Option<Storage>,
+    storage: Option<Arc<Storage>>,
+    #[cfg(windows)]
+    session_services: Option<Arc<session_services::OwnedNodeSessionServices>>,
     identity: Option<Arc<NodeIdentity>>,
     pairing: Option<Arc<PairingService>>,
-    management: Option<ManagementService>,
+    #[cfg(test)]
+    management: Option<Arc<ManagementService>>,
     application_policy: Option<Arc<ApplicationPolicy>>,
-    data_dir: Option<DataDirectory>,
+    #[cfg(test)]
+    data_dir: Option<Arc<lifecycle::DirectoryView>>,
     listen: SocketAddr,
     ipc_address: LocalIpcAddress,
 }
 
 impl NodeRuntime {
-    /// Acquires all node resources and starts the HTTPS and owner control listeners.
-    ///
+    /// Starts the original operation with an owned protector on the current runtime.
+    /// Dropping this readiness wait only requests stop; it never cancels acquisition.
     /// # Errors
-    ///
-    /// Returns an error before reporting readiness when configuration, directory ownership,
-    /// storage, identity, TLS material, the listening socket, or local IPC cannot be initialized.
-    #[allow(clippy::too_many_lines)]
+    /// Returns the original startup failure or an unavailable runtime.
     pub async fn start(
         config: NodeConfig,
-        protector: &dyn SecretProtector,
+        protector: Arc<dyn SecretProtector>,
     ) -> Result<Self, AppError> {
-        let data_dir = DataDirectory::acquire(&config.data_dir)?;
-        let storage = match Storage::open(&data_dir.database_path()).await {
-            Ok(storage) => storage,
-            Err(error) => return Err(AppError::Startup(storage_startup_reason(&error))),
-        };
-        if let Err(error) = data_dir.secure_managed_files() {
-            storage.close().await;
-            return Err(error);
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| AppError::Startup("node requires its original runtime".into()))?;
+        let mut owner = NodeProcessOwner::begin(&handle, config, protector);
+        match owner.ready().await {
+            Ok(node) => {
+                owner.disarm();
+                Ok(node)
+            }
+            Err(error) => {
+                let _ = owner.join_actual().await;
+                Err(error)
+            }
         }
-        let identity = match identity::initialize(data_dir.path(), &storage, protector).await {
-            Ok(identity) => Arc::new(identity),
-            Err(error) => {
-                storage.close().await;
-                return Err(error.into());
-            }
-        };
-        let trust = storage.trust_store();
-        let pairing = match PairingService::new(
-            identity.clone(),
-            config.canonical_origin.clone(),
-            trust.clone(),
-        ) {
-            Ok(pairing) => Arc::new(pairing),
-            Err(error) => {
-                storage.close().await;
-                return Err(error.into());
-            }
-        };
-        let tls_config = match tls::load_server_config(&config.tls_cert, &config.tls_key) {
-            Ok(config) => config,
-            Err(error) => {
-                storage.close().await;
-                return Err(error);
-            }
-        };
-        let listener = match TcpListener::bind(config.listen).await {
-            Ok(listener) => listener,
-            Err(source) => {
-                storage.close().await;
-                return Err(AppError::Io {
-                    context: "binding the HTTPS listener",
-                    source,
-                });
-            }
-        };
-        let ipc_address = match LocalIpcAddress::for_data_directory(data_dir.path()) {
-            Ok(address) => address,
-            Err(error) => {
-                storage.close().await;
-                return Err(error);
-            }
-        };
-        let first_pipe = match ipc_address.bind_first() {
-            Ok(pipe) => pipe,
-            Err(error) => {
-                storage.close().await;
-                return Err(AppError::Ipc(format!(
-                    "binding the owner control channel failed: {error}"
-                )));
-            }
-        };
-
-        let (control, _) = IpcControl::new(
-            identity.node_id().to_owned(),
-            config.canonical_origin.clone(),
-        );
-        let application_policy = Arc::new(ApplicationPolicy::new(
-            identity.node_id().to_owned(),
-            trust.clone(),
-            &pairing,
-            control.clone(),
-        ));
-        let management = match ManagementService::new(
-            Arc::clone(&identity),
-            config.canonical_origin.clone(),
-            trust.clone(),
-            Arc::clone(&pairing),
-            control.clone(),
-            Arc::clone(&application_policy),
-        ) {
-            Ok(management) => management,
-            Err(error) => {
-                storage.close().await;
-                return Err(AppError::Startup(format!(
-                    "management transport initialization failed: {error}"
-                )));
-            }
-        };
-        let (network_stop, network_stop_rx) = watch::channel(false);
-        let router = pairing_http::router(
-            Arc::clone(&pairing),
-            config.canonical_origin.clone(),
-            control.clone(),
-        )
-        .merge(management.router());
-        let network_control = control.clone();
-        let network_task = tokio::spawn(async move {
-            let result = run_network(
-                listener,
-                TlsAcceptor::from(tls_config),
-                network_stop_rx,
-                router,
-            )
-            .await;
-            if let Err(error) = &result {
-                network_control.mark_failed(error.clone());
-            }
-            result
-        });
-        let ipc_control = control.clone();
-        let ipc_address_for_task = ipc_address.clone();
-        let ipc_pairing = Arc::clone(&pairing);
-        let ipc_task = tokio::spawn(async move {
-            let result = ipc::serve(
-                first_pipe,
-                ipc_address_for_task,
-                ipc_control.clone(),
-                trust,
-                ipc_pairing,
-            )
-            .await;
-            if let Err(error) = &result {
-                ipc_control.mark_failed(error.to_string());
-            }
-            result
-        });
-
-        Ok(Self {
-            control,
-            network_stop,
-            network_task: Some(network_task),
-            ipc_task: Some(ipc_task),
-            storage: Some(storage),
-            identity: Some(identity),
-            pairing: Some(pairing),
-            management: Some(management),
-            application_policy: Some(application_policy),
-            data_dir: Some(data_dir),
-            listen: config.listen,
-            ipc_address,
-        })
     }
-
+    #[cfg(windows)]
+    pub(crate) fn queue_management(
+        &self,
+    ) -> Result<queue_management::NodeQueueManagement, queue_management::NodeQueueError> {
+        self.session_services
+            .as_ref()
+            .map(|s| s.queue_management.clone())
+            .ok_or(queue_management::NodeQueueError::NodeStopping)
+    }
+    #[cfg(windows)]
+    pub(crate) fn input_upload_owner(
+        &self,
+        client: &crate::application::shared_views::socket_authority::SocketViewClient,
+    ) -> Result<input_upload::UploadOwner, crate::management_ws::input_upload::UploadError> {
+        self.session_services
+            .as_ref()
+            .ok_or(crate::management_ws::input_upload::UploadError::NodeStopping)?
+            .uploads
+            .open(client)
+    }
+    #[cfg(test)]
+    async fn start_control_only_for_test(
+        config: NodeConfig,
+        protector: Arc<dyn SecretProtector>,
+    ) -> Result<Self, AppError> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| AppError::Startup("node requires its original runtime".into()))?;
+        let mut owner = NodeProcessOwner::begin_control_only_for_test(&runtime, config, protector);
+        let node = owner.ready().await?;
+        owner.disarm();
+        Ok(node)
+    }
+    #[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
+    fn shutdown_observation_probe(&self) -> NodeShutdownProbe {
+        self.shutdown_observer.probe()
+    }
     #[must_use]
     pub const fn listen_addr(&self) -> SocketAddr {
         self.listen
     }
-
-    /// In-process application boundary; this adds no network or CLI endpoint.
     #[must_use]
     pub fn application_policy(&self) -> Option<Arc<ApplicationPolicy>> {
         self.application_policy.clone()
     }
-
     #[must_use]
     pub const fn ipc_address(&self) -> &LocalIpcAddress {
         &self.ipc_address
     }
-
     #[must_use]
     pub fn node_id(&self) -> &str {
         self.identity
             .as_ref()
             .map_or("", |identity| identity.node_id())
     }
-
-    /// Runs until the owner requests a stop or the process receives Ctrl-C.
-    ///
+    /// Waits for stop or Ctrl-C and observes the original operation's budget result.
     /// # Errors
-    ///
-    /// Returns an error when signal handling, network shutdown, IPC shutdown, or resource cleanup
-    /// fails.
+    /// Returns the first shutdown failure. Actual cleanup remains independently owned.
     pub async fn run(self) -> Result<(), AppError> {
         let mut stop = self.control.stop_receiver();
-        if *stop.borrow_and_update() {
-            return self.shutdown(None).await;
-        }
-        let select_failure = tokio::select! {
-            signal = tokio::signal::ctrl_c() => signal
-                .err()
-                .map(|error| format!("waiting for Ctrl-C failed: {error}")),
-            changed = stop.changed() => changed
-                .err()
-                .map(|error| format!("waiting for the owner stop request failed: {error}")),
+        let wait_failure = if *stop.borrow_and_update() {
+            None
+        } else {
+            tokio::select! {
+                signal = tokio::signal::ctrl_c() => signal.err().map(|e| format!("waiting for Ctrl-C failed: {e}")),
+                changed = stop.changed() => changed.err().map(|e| format!("waiting for owner stop failed: {e}")),
+            }
         };
-        self.shutdown(select_failure).await
+        let failure = self.control.failure().or(wait_failure);
+        self.shutdown_with_deadline(failure, SHUTDOWN_TIMEOUT).await
     }
-
-    /// Waits for an owner stop request without installing a Ctrl-C handler.
-    ///
+    /// Observes the original stop operation without installing a Ctrl-C handler.
     /// # Errors
-    ///
-    /// Returns an error when shutdown or resource cleanup fails.
+    /// Returns its first budget failure without releasing original resources.
     pub async fn wait_for_stop(self) -> Result<(), AppError> {
         let mut stop = self.control.stop_receiver();
-        if *stop.borrow_and_update() {
-            return self.shutdown(None).await;
-        }
-        let changed = stop.changed().await;
-        let select_failure = changed
-            .err()
-            .map(|error| format!("waiting for the owner stop request failed: {error}"));
-        self.shutdown(select_failure).await
+        let wait_failure = if *stop.borrow_and_update() {
+            None
+        } else {
+            stop.changed()
+                .await
+                .err()
+                .map(|e| format!("waiting for owner stop failed: {e}"))
+        };
+        let failure = self.control.failure().or(wait_failure);
+        self.shutdown_with_deadline(failure, SHUTDOWN_TIMEOUT).await
     }
-
+    #[cfg(test)]
     async fn shutdown(self, initial_failure: Option<String>) -> Result<(), AppError> {
         self.shutdown_with_deadline(initial_failure, SHUTDOWN_TIMEOUT)
             .await
     }
-
-    #[allow(clippy::too_many_lines)]
     async fn shutdown_with_deadline(
-        mut self,
+        self,
         initial_failure: Option<String>,
         shutdown_timeout: Duration,
     ) -> Result<(), AppError> {
-        let started = TokioInstant::now();
-        let response_timeout = SHUTDOWN_RESPONSE_TIMEOUT.min(shutdown_timeout);
-        let deadline = started + shutdown_timeout.saturating_sub(response_timeout);
-        let response_deadline = started + shutdown_timeout;
-        let mut failures = Vec::new();
-        if let Some(failure) = initial_failure {
-            failures.push(failure);
-        }
-        if let Some(failure) = self.control.failure() {
-            failures.push(failure);
-        }
-        self.control.request_stop();
-        if let Some(management) = &self.management {
-            management.begin_shutdown();
-        }
-        let _ = self.network_stop.send(true);
-        if let Some(pairing) = &self.pairing
-            && timeout_at(deadline, pairing.clear()).await.is_err()
-        {
-            failures.push(format!(
-                "temporary pairing state did not clear within {} seconds",
-                shutdown_timeout.as_secs()
-            ));
-        }
-
-        if let Some(mut task) = self.network_task.take() {
-            match timeout_at(deadline, &mut task).await {
-                Ok(Ok(Ok(()))) => {}
-                Ok(Ok(Err(error))) => failures.push(error),
-                Ok(Err(error)) => failures.push(format!("network task failed: {error}")),
-                Err(_) => {
-                    task.abort();
-                    let _ = task.await;
-                    failures.push(format!(
-                        "shutdown exceeded {} seconds while stopping the network listener and connections",
-                        shutdown_timeout.as_secs()
-                    ));
-                }
-            }
-        }
-        if let Some(management) = &self.management {
-            match timeout_at(deadline, management.wait_closed()).await {
-                Ok(()) => {}
-                Err(_) => failures.push(format!(
-                    "shutdown exceeded {} seconds while closing management connections",
-                    shutdown_timeout.as_secs()
-                )),
-            }
-        }
-        drop(self.management.take());
-        drop(self.application_policy.take());
-        drop(self.pairing.take());
-        if let Some(storage) = self.storage.take()
-            && timeout_at(deadline, storage.close()).await.is_err()
-        {
-            failures.push(format!(
-                "shutdown exceeded {} seconds while closing storage",
-                shutdown_timeout.as_secs()
-            ));
-        }
-        drop(self.identity.take());
-        if let Some(data_dir) = self.data_dir.take() {
-            if let Err(error) = data_dir.unlock() {
-                failures.push(error.to_string());
-            }
-            drop(data_dir);
-        }
-
-        if let Some(failure) = self.control.failure()
-            && !failures.iter().any(|existing| existing == &failure)
-        {
-            failures.push(failure);
-        }
-        if let Some(mut task) = self.ipc_task.take() {
-            match timeout_at(deadline, &mut task).await {
-                Ok(Ok(Ok(()))) => {}
-                Ok(Ok(Err(error))) => failures.push(error.to_string()),
-                Ok(Err(error)) => failures.push(format!("owner control task failed: {error}")),
-                Err(_) => {
-                    task.abort();
-                    let _ = task.await;
-                    failures.push(format!(
-                        "shutdown exceeded {} seconds while stopping the owner control channel",
-                        shutdown_timeout.as_secs()
-                    ));
-                }
-            }
-        }
-        let report = if failures.is_empty() {
-            ShutdownResult::Completed
-        } else {
-            ShutdownResult::Failed(failures.join("; "))
-        };
-        self.control.complete(report.clone());
-        if let Err(error) = self.control.finish_stop_responses(response_deadline).await {
-            failures.push(error);
-        }
-
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(AppError::Shutdown(failures.join("; ")))
-        }
+        self.lifecycle
+            .operation
+            .request_stop(initial_failure, shutdown_timeout);
+        self.lifecycle.budget().await?;
+        self.lifecycle.join_actual().await
+    }
+}
+impl Drop for NodeRuntime {
+    fn drop(&mut self) {
+        self.lifecycle.release_data();
     }
 }
 
 fn storage_startup_reason(error: &StorageError) -> String {
     match error {
+        StorageError::Shared(original) => storage_startup_reason(original),
+        StorageError::Lifecycle(reason) => format!("storage lifecycle unconfirmed: {reason}"),
         StorageError::UnknownSchema(version) => {
             format!("storage schema version {version} is unsupported")
         }
         StorageError::UnrecognizedSchema => "storage contains an unrecognized schema".to_owned(),
         StorageError::Database(_) => "storage could not be opened or initialized".to_owned(),
+        StorageError::MigrationRandomUnavailable => {
+            "storage migration random source is unavailable".to_owned()
+        }
+        #[cfg(test)]
+        StorageError::MigrationInterrupted => {
+            "storage migration test checkpoint interrupted initialization".to_owned()
+        }
         StorageError::MissingNodeMeta => "storage identity metadata is missing".to_owned(),
         StorageError::MultipleNodeIdentities => {
             "storage contains multiple node identities".to_owned()
@@ -398,84 +266,94 @@ fn storage_startup_reason(error: &StorageError) -> String {
     }
 }
 
-impl Drop for NodeRuntime {
-    fn drop(&mut self) {
-        self.control.request_stop();
-        if let Some(management) = &self.management {
-            management.begin_shutdown();
-        }
-        if let Some(task) = self.network_task.take() {
-            task.abort();
-        }
-        if let Some(task) = self.ipc_task.take() {
-            task.abort();
-        }
-    }
-}
-
 async fn run_network(
+    listener: TcpListener,
+    tls: TlsAcceptor,
+    stop: watch::Receiver<bool>,
+    router: Router,
+) -> Result<(), String> {
+    run_network_inner(
+        listener,
+        tls,
+        stop,
+        router,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+#[cfg(test)]
+struct NetworkDevelopmentHooks {
+    child: Arc<crate::test_support::AsyncBarrier>,
+    accept_error_after_first: bool,
+    child_panics: bool,
+}
+async fn run_network_inner(
     listener: TcpListener,
     tls: TlsAcceptor,
     mut stop: watch::Receiver<bool>,
     router: Router,
+    #[cfg(test)] hooks: Option<Arc<NetworkDevelopmentHooks>>,
 ) -> Result<(), String> {
     let permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let mut connections = JoinSet::new();
-
+    let mut failure = None;
     loop {
+        if *stop.borrow() {
+            break;
+        }
         tokio::select! {
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
+            changed = stop.changed() => { if changed.is_err() || *stop.borrow() { break; } }
+            accepted = listener.accept() => {
+                let (stream, peer) = match accepted {
+                    Ok(pair) => pair,
+                    Err(error) => { failure = Some(format!("accepting an HTTPS connection failed: {error}")); break; }
+                };
+                let Ok(permit) = permits.clone().try_acquire_owned() else { drop(stream); continue; };
+                let tls = tls.clone(); let connection_stop = stop.clone(); let router = router.clone();
+                #[cfg(test)]
+                let child_hooks = hooks.clone();
+                connections.spawn(async move {
+                    let _permit = permit;
+                    #[cfg(test)]
+                    if let Some(hooks) = child_hooks {
+                        hooks.child.pause().await;
+                        assert!(!hooks.child_panics, "development original HTTPS child panic");
+                    }
+                    serve_connection(stream, peer, tls, connection_stop, router).await;
+                });
+                #[cfg(test)]
+                if hooks.as_ref().is_some_and(|hooks| hooks.accept_error_after_first) {
+                    failure = Some("development injected HTTPS accept failure".into());
                     break;
                 }
             }
-            accepted = listener.accept() => {
-                let (stream, peer) = accepted.map_err(|error| {
-                    format!("accepting an HTTPS connection failed: {error}")
-                })?;
-                let Ok(permit) = permits.clone().try_acquire_owned() else {
-                    drop(stream);
-                    continue;
-                };
-                let tls = tls.clone();
-                let connection_stop = stop.clone();
-                let router = router.clone();
-                connections.spawn(async move {
-                    let _permit = permit;
-                    serve_connection(stream, peer, tls, connection_stop, router).await;
-                });
-            }
             joined = connections.join_next(), if !connections.is_empty() => {
-                if let Some(Err(error)) = joined {
-                    return Err(format!("HTTPS connection task failed: {error}"));
-                }
+                if let Some(Err(error)) = joined { failure = Some(format!("HTTPS connection task failed: {error}")); break; }
             }
         }
     }
-
     drop(listener);
     let deadline = sleep(CONNECTION_DRAIN_TIMEOUT);
     tokio::pin!(deadline);
     while !connections.is_empty() {
         tokio::select! {
             () = &mut deadline => {
+                if failure.is_none() { failure = Some(format!("HTTPS connections did not stop within {} seconds", CONNECTION_DRAIN_TIMEOUT.as_secs())); }
                 connections.abort_all();
                 while connections.join_next().await.is_some() {}
-                return Err(format!(
-                    "HTTPS connections did not stop within {} seconds",
-                    CONNECTION_DRAIN_TIMEOUT.as_secs()
-                ));
+                break;
             }
             joined = connections.join_next() => {
                 if let Some(Err(error)) = joined {
+                    if failure.is_none() { failure = Some(format!("HTTPS connection task failed: {error}")); }
                     connections.abort_all();
                     while connections.join_next().await.is_some() {}
-                    return Err(format!("HTTPS connection task failed: {error}"));
                 }
             }
         }
     }
-    Ok(())
+    failure.map_or(Ok(()), Err)
 }
 
 async fn serve_connection(
@@ -507,7 +385,71 @@ async fn serve_connection(
 }
 
 #[cfg(test)]
+#[allow(
+    dead_code,
+    clippy::too_many_lines,
+    clippy::significant_drop_tightening,
+    clippy::future_not_send,
+    clippy::needless_pass_by_ref_mut,
+    clippy::uninlined_format_args,
+    clippy::single_match,
+    reason = "Development tests included into crate::node::tests"
+)]
 mod tests {
+    #[cfg(windows)]
+    mod body_preparation_development {
+        include!("node/prompt_preparation/development_tests.rs");
+    }
+    #[cfg(all(windows, feature = "approval-owner-dev-fixtures"))]
+    mod approval_owner_development {
+        include!("node/approval_owner/development_tests.rs");
+    }
+    #[cfg(all(windows, feature = "native-dispatch-dev-fixtures"))]
+    mod native_views_bridge {
+        include!("node/native_views/development_tests.rs");
+    }
+    #[cfg(windows)]
+    mod production_factory_development {
+        include!("node/session_services/development_tests.rs");
+    }
+    #[cfg(windows)]
+    mod input_upload_development {
+        include!("node/input_upload/development_tests.rs");
+    }
+    #[cfg(windows)]
+    mod queue_management_development {
+        include!("node/queue_management/development_tests.rs");
+        include!("node/session_services/queue_read_development_tests.rs");
+    }
+    #[cfg(windows)]
+    mod document_transfer_development {
+        include!("node/document_transfer/development_tests.rs");
+    }
+    #[cfg(windows)]
+    mod catalog_upload_development {
+        include!("node/catalog_upload/development_tests.rs");
+    }
+    #[cfg(all(windows, feature = "native-dispatch-dev-fixtures"))]
+    mod source_session_development {
+        include!("node/source_sessions/development_tests.rs");
+    }
+    #[cfg(all(windows, feature = "native-dispatch-dev-fixtures"))]
+    mod r3_source_wss_development {
+        include!("node/session_services/r3_source_wss_tests.rs");
+    }
+
+    mod catalog_development {
+        include!("node/catalog/development_tests.rs");
+    }
+    mod request_authority_development {
+        include!("node/request_authority/development_tests.rs");
+    }
+    mod independent_registry_close {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/registration_acceptance/close_owner/node_close_acceptance.rs"
+        ));
+    }
     use std::{
         net::{IpAddr, Ipv4Addr},
         path::{Path, PathBuf},
@@ -546,7 +488,7 @@ mod tests {
     static TEST_AREA_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     #[derive(Default)]
-    struct FakeProtector {
+    pub(super) struct FakeProtector {
         values: Mutex<Vec<Vec<u8>>>,
     }
 
@@ -571,14 +513,14 @@ mod tests {
         }
     }
 
-    struct TestArea {
+    pub(super) struct TestArea {
         directory: PathBuf,
         certificate: PathBuf,
         private_key: PathBuf,
     }
 
     impl TestArea {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let nonce = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -590,6 +532,16 @@ mod tests {
             ));
             std::fs::create_dir(&directory).expect("test directory");
             let (certificate, private_key) = write_certificate(&directory);
+            {
+                use std::io::Write as _;
+                let current = std::thread::current();
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "NODE_AREA_DIAGNOSTIC_V1 phase=create test_thread={:?} area={:?}",
+                    current.name(),
+                    directory.file_name()
+                );
+            }
             Self {
                 directory,
                 certificate,
@@ -597,11 +549,11 @@ mod tests {
             }
         }
 
-        fn data_dir(&self) -> PathBuf {
+        pub(super) fn data_dir(&self) -> PathBuf {
             self.directory.join("data")
         }
 
-        fn config(&self, listen: SocketAddr) -> NodeConfig {
+        pub(super) fn config(&self, listen: SocketAddr) -> NodeConfig {
             NodeConfig {
                 data_dir: self.data_dir(),
                 listen,
@@ -614,7 +566,65 @@ mod tests {
 
     impl Drop for TestArea {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.directory);
+            use std::io::Write as _;
+            let result = std::fs::remove_dir_all(&self.directory);
+            let current = std::thread::current();
+            match result {
+                Ok(()) => {
+                    let _ = writeln!(
+                        std::io::stderr().lock(),
+                        "NODE_AREA_DIAGNOSTIC_V1 phase=first_remove test_thread={:?} area={:?} category=removed",
+                        current.name(),
+                        self.directory.file_name()
+                    );
+                }
+                Err(error) => {
+                    let _ = writeln!(
+                        std::io::stderr().lock(),
+                        "NODE_AREA_DIAGNOSTIC_V1 phase=first_remove test_thread={:?} area={:?} category=remove_error kind={:?} os={:?}",
+                        current.name(),
+                        self.directory.file_name(),
+                        error.kind(),
+                        error.raw_os_error()
+                    );
+                }
+            }
+        }
+    }
+
+    async fn close_timed_out_test_storage(
+        pool: sqlx::SqlitePool,
+        registry: crate::session_storage::request_registry::SqliteRequestRegistry,
+        database: PathBuf,
+    ) {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        timeout(Duration::from_secs(20), async {
+            registry.close_connections().await;
+            pool.close().await;
+        })
+        .await
+        .expect("same-owner fixture cleanup completes after the original failed shutdown");
+        assert!(registry.close_status().is_complete());
+        assert_eq!(pool.size(), 0);
+        drop(registry);
+        drop(pool);
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut file = database.as_os_str().to_os_string();
+            file.push(suffix);
+            let file = PathBuf::from(file);
+            if !suffix.is_empty() && !file.try_exists().expect("owned sidecar metadata") {
+                eprintln!("NODE_TIMEOUT_FIXTURE_TAIL suffix={suffix:?} status=absent");
+                continue;
+            }
+            let handle = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(&file)
+                .expect("first same-database exclusive open after actual fixture closure");
+            drop(handle);
+            eprintln!("NODE_TIMEOUT_FIXTURE_TAIL suffix={suffix:?} status=first_exclusive");
         }
     }
 
@@ -628,7 +638,7 @@ mod tests {
         (certificate, private_key)
     }
 
-    fn free_address() -> SocketAddr {
+    pub(super) fn free_address() -> SocketAddr {
         let listener =
             std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("free test port");
         listener.local_addr().expect("bound address")
@@ -856,8 +866,8 @@ mod tests {
             }
         }
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node");
         let key = SigningKey::from_slice(&[35; 32]).expect("test key");
@@ -944,8 +954,8 @@ mod tests {
     async fn dropping_node_closes_policy_before_aborted_tasks_can_run() {
         use crate::access_policy::AccessPolicyError;
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node");
         let policy = runtime.application_policy().expect("policy");
@@ -982,10 +992,22 @@ mod tests {
         let area = TestArea::new();
         let runtime = NodeRuntime::start(
             area.config(free_address()),
-            &crate::platform::DpapiProtector,
+            std::sync::Arc::new(crate::platform::DpapiProtector),
         )
         .await
         .expect("real Windows node");
+        let (cleanup_pool, cleanup_registry, cleanup_database) = {
+            let storage = runtime.storage.as_ref().expect("original fixture storage");
+            (
+                storage.pool_for_test().clone(),
+                storage.request_registry(),
+                runtime
+                    .data_dir
+                    .as_ref()
+                    .expect("original fixture data directory")
+                    .database_path(),
+            )
+        };
         let barrier = runtime
             .storage
             .as_ref()
@@ -1029,7 +1051,9 @@ mod tests {
             "{stop_error}"
         );
         assert!(
-            shutdown_error.to_string().contains("15 seconds"),
+            shutdown_error
+                .to_string()
+                .contains("shutdown budget exceeded while closing storage"),
             "{shutdown_error}"
         );
         report.borrow_and_update();
@@ -1041,6 +1065,7 @@ mod tests {
             area.data_dir().exists(),
             "failure must not delete stored identity"
         );
+        close_timed_out_test_storage(cleanup_pool, cleanup_registry, cleanup_database).await;
     }
 
     async fn pair_browser(runtime: &NodeRuntime, key: &SigningKey, display_name: &str) -> String {
@@ -1162,8 +1187,8 @@ mod tests {
     #[tokio::test]
     async fn starts_reports_ready_and_stops_through_owner_ipc() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let ipc_address = runtime.ipc_address().clone();
@@ -1187,9 +1212,12 @@ mod tests {
     async fn owner_ipc_keeps_thirty_two_active_connections_and_rejects_only_the_next() {
         use tokio::net::windows::named_pipe::ClientOptions;
         let area = TestArea::new();
-        let runtime = NodeRuntime::start(area.config(free_address()), &FakeProtector::default())
-            .await
-            .expect("start");
+        let runtime = NodeRuntime::start(
+            area.config(free_address()),
+            std::sync::Arc::new(FakeProtector::default()),
+        )
+        .await
+        .expect("start");
         let mut clients = Vec::new();
         for _ in 0..33 {
             let client = timeout(Duration::from_secs(2), async {
@@ -1269,9 +1297,10 @@ mod tests {
     #[tokio::test]
     async fn owner_ipc_lists_and_revokes_clients_without_a_web_identity() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let listener = free_address();
-        let runtime = NodeRuntime::start(area.config(listener), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        // This IPC-only case never connects to HTTPS; bind atomically instead of releasing a probe.
+        let listener = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let runtime = NodeRuntime::start(area.config(listener), protector.clone())
             .await
             .expect("node starts");
         let ipc_address = runtime.ipc_address().clone();
@@ -1311,7 +1340,7 @@ mod tests {
             .expect("stop waiter task")
             .expect("clean shutdown");
 
-        let restarted = NodeRuntime::start(area.config(listener), &protector)
+        let restarted = NodeRuntime::start(area.config(listener), protector.clone())
             .await
             .expect("restart");
         let page = ipc::device_list(restarted.ipc_address(), None)
@@ -1324,9 +1353,9 @@ mod tests {
     #[tokio::test]
     async fn owner_pairing_session_persists_an_approved_browser_client() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
+        let protector = std::sync::Arc::new(FakeProtector::default());
         let listen = free_address();
-        let runtime = NodeRuntime::start(area.config(listen), &protector)
+        let runtime = NodeRuntime::start(area.config(listen), protector.clone())
             .await
             .expect("node starts");
         let ipc_address = runtime.ipc_address().clone();
@@ -1392,7 +1421,7 @@ mod tests {
             .expect("stop waiter task")
             .expect("clean shutdown");
 
-        let restarted = NodeRuntime::start(area.config(listen), &protector)
+        let restarted = NodeRuntime::start(area.config(listen), protector.clone())
             .await
             .expect("restart");
         let page = ipc::device_list(restarted.ipc_address(), None)
@@ -1407,8 +1436,8 @@ mod tests {
     #[tokio::test]
     async fn closing_a_pairing_session_before_claim_cancels_it_immediately() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let (session, start) = ipc::begin_pairing(runtime.ipc_address())
@@ -1434,8 +1463,8 @@ mod tests {
     #[tokio::test]
     async fn serves_the_embedded_web_ui_and_fails_closed_on_unknown_paths() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -1478,8 +1507,8 @@ mod tests {
     #[tokio::test]
     async fn serves_the_owner_started_pairing_lookup_over_tls() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let (session, start) = ipc::begin_pairing(runtime.ipc_address())
@@ -1525,8 +1554,8 @@ mod tests {
     #[tokio::test]
     async fn pairing_lookup_rate_limit_uses_the_tcp_ip_not_ephemeral_ports() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let request = b"POST /api/access/v1/pair/lookup HTTP/1.1\r\n\
@@ -1563,8 +1592,8 @@ mod tests {
     #[tokio::test]
     async fn management_handshake_rate_limit_uses_the_tcp_ip_not_ephemeral_ports() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -1605,8 +1634,8 @@ mod tests {
     #[tokio::test]
     async fn management_websocket_rejects_invalid_origin_host_and_protocols() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -1693,8 +1722,8 @@ mod tests {
     #[tokio::test]
     async fn management_websocket_rejects_unauthenticated_frames_and_times_out() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -1726,9 +1755,12 @@ mod tests {
     #[tokio::test]
     async fn management_websocket_closes_oversized_transport_frames_with_4429() {
         let area = TestArea::new();
-        let runtime = NodeRuntime::start(area.config(free_address()), &FakeProtector::default())
-            .await
-            .expect("node starts");
+        let runtime = NodeRuntime::start(
+            area.config(free_address()),
+            std::sync::Arc::new(FakeProtector::default()),
+        )
+        .await
+        .expect("node starts");
         for length in [32 * 1024 + 1, 32 * 1024 + 2, 64 * 1024] {
             let mut socket = valid_management_socket(&area, runtime.listen_addr()).await;
             socket
@@ -1745,8 +1777,8 @@ mod tests {
     #[tokio::test]
     async fn management_websocket_enforces_the_per_client_connection_limit() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -1782,8 +1814,8 @@ mod tests {
     #[tokio::test]
     async fn revocation_during_authentication_resolution_closes_the_candidate_connection() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -1816,8 +1848,8 @@ mod tests {
     #[tokio::test]
     async fn management_websocket_discards_auth_challenge_after_invalid_frame() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let client_key = SigningKey::from_slice(&[33_u8; 32]).expect("client key");
@@ -1865,8 +1897,8 @@ mod tests {
     #[tokio::test]
     async fn management_websocket_cursor_becomes_stale_after_a_committed_revision_change() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -1972,8 +2004,8 @@ mod tests {
     #[tokio::test]
     async fn management_websocket_receives_going_away_when_the_node_stops() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -2010,10 +2042,12 @@ mod tests {
         use crate::management_ws::ManagementBoundary;
         for (at_enqueue, cached) in [(false, false), (true, false), (true, true)] {
             let area = TestArea::new();
-            let runtime =
-                NodeRuntime::start(area.config(free_address()), &FakeProtector::default())
-                    .await
-                    .expect("start");
+            let runtime = NodeRuntime::start(
+                area.config(free_address()),
+                std::sync::Arc::new(FakeProtector::default()),
+            )
+            .await
+            .expect("start");
             let key = SigningKey::from_slice(&[0x51; 32]).expect("key");
             let client_id = pair_browser(&runtime, &key, "Admission fixture").await;
             let mut socket = authenticate_socket(
@@ -2072,9 +2106,12 @@ mod tests {
     async fn initial_subscription_does_not_consume_a_newer_revision_unseen() {
         use crate::management_ws::ManagementBoundary;
         let area = TestArea::new();
-        let runtime = NodeRuntime::start(area.config(free_address()), &FakeProtector::default())
-            .await
-            .expect("start");
+        let runtime = NodeRuntime::start(
+            area.config(free_address()),
+            std::sync::Arc::new(FakeProtector::default()),
+        )
+        .await
+        .expect("start");
         let key = SigningKey::from_slice(&[0x53; 32]).expect("key");
         let client_id = pair_browser(&runtime, &key, "Subscriber").await;
         let mut socket = authenticate_socket(
@@ -2131,10 +2168,12 @@ mod tests {
     async fn paused_real_writers_close_at_the_byte_or_frame_queue_budget() {
         for byte_first in [true, false] {
             let area = TestArea::new();
-            let runtime =
-                NodeRuntime::start(area.config(free_address()), &FakeProtector::default())
-                    .await
-                    .expect("start");
+            let runtime = NodeRuntime::start(
+                area.config(free_address()),
+                std::sync::Arc::new(FakeProtector::default()),
+            )
+            .await
+            .expect("start");
             let key = SigningKey::from_slice(&[0x74; 32]).expect("key");
             let client_id = pair_browser(&runtime, &key, "Slow reader fixture").await;
             if byte_first {
@@ -2177,7 +2216,7 @@ mod tests {
                     "payload":if byte_first {serde_json::json!({"cursor":null})} else {serde_json::json!({})}
                 })).await;
             }
-            timeout(Duration::from_secs(1), async {
+            timeout(Duration::from_secs(5), async {
                 while management.queue_failure_snapshot().3 == 0 {
                     tokio::task::yield_now().await;
                 }
@@ -2214,9 +2253,12 @@ mod tests {
     async fn writer_holding_the_actor_gate_finishes_before_a_competing_revoke_commits() {
         use crate::management_ws::ManagementBoundary;
         let area = TestArea::new();
-        let runtime = NodeRuntime::start(area.config(free_address()), &FakeProtector::default())
-            .await
-            .expect("start");
+        let runtime = NodeRuntime::start(
+            area.config(free_address()),
+            std::sync::Arc::new(FakeProtector::default()),
+        )
+        .await
+        .expect("start");
         let key = SigningKey::from_slice(&[0x76; 32]).expect("key");
         let client_id = pair_browser(&runtime, &key, "Writer-first fixture").await;
         let mut socket = authenticate_socket(
@@ -2278,8 +2320,8 @@ mod tests {
     #[tokio::test]
     async fn revoke_commit_discards_an_already_queued_management_result() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -2329,9 +2371,12 @@ mod tests {
     #[tokio::test]
     async fn run_observes_a_stop_requested_before_subscription() {
         let area = TestArea::new();
-        let runtime = NodeRuntime::start(area.config(free_address()), &FakeProtector::default())
-            .await
-            .expect("node starts");
+        let runtime = NodeRuntime::start(
+            area.config(free_address()),
+            std::sync::Arc::new(FakeProtector::default()),
+        )
+        .await
+        .expect("node starts");
         runtime.control.request_stop();
         timeout(Duration::from_secs(3), runtime.run())
             .await
@@ -2342,9 +2387,12 @@ mod tests {
     #[tokio::test]
     async fn wait_for_stop_observes_a_failure_before_subscription() {
         let area = TestArea::new();
-        let runtime = NodeRuntime::start(area.config(free_address()), &FakeProtector::default())
-            .await
-            .expect("node starts");
+        let runtime = NodeRuntime::start(
+            area.config(free_address()),
+            std::sync::Arc::new(FakeProtector::default()),
+        )
+        .await
+        .expect("node starts");
         runtime
             .control
             .mark_failed("injected failure before subscription");
@@ -2363,10 +2411,23 @@ mod tests {
     #[tokio::test]
     async fn shutdown_deadline_bounds_storage_close_and_reports_failure() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
+        let (cleanup_pool, cleanup_registry, cleanup_database) = {
+            let storage = runtime.storage.as_ref().expect("original fixture storage");
+            (
+                storage.pool_for_test().clone(),
+                storage.request_registry(),
+                runtime
+                    .data_dir
+                    .as_ref()
+                    .expect("original fixture data directory")
+                    .database_path(),
+            )
+        };
+        let close_probe = runtime.shutdown_observation_probe();
         let close_barrier = runtime
             .storage
             .as_ref()
@@ -2396,27 +2457,39 @@ mod tests {
             "{shutdown_error}"
         );
         close_barrier.release();
+        let observed = close_probe.snapshot();
+        assert_eq!(
+            observed.outcome(shutdown_observation::NodeShutdownStage::Storage),
+            shutdown_observation::NodeStageOutcome::Deadline
+        );
+        assert!(
+            observed
+                .failures()
+                .contains(shutdown_observation::NodeShutdownFailure::StorageDeadline)
+        );
+        close_timed_out_test_storage(cleanup_pool, cleanup_registry, cleanup_database).await;
     }
 
     #[tokio::test]
     async fn shutdown_does_not_publish_a_report_before_the_ipc_task_finishes() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let mut runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
+        let close_probe = runtime.shutdown_observation_probe();
         let finish_barrier = Arc::new(crate::test_support::AsyncBarrier::default());
         let task_barrier = Arc::clone(&finish_barrier);
-        if let Some(task) = runtime.ipc_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        runtime.ipc_task = Some(tokio::spawn(async move {
-            task_barrier.pause().await;
-            Err(AppError::Ipc(
-                "injected owner control finalization failure".to_owned(),
-            ))
-        }));
+        runtime
+            .lifecycle
+            .operation
+            .replace_ipc_for_test(tokio::spawn(async move {
+                task_barrier.pause().await;
+                Err(AppError::Ipc(
+                    "injected owner control finalization failure".to_owned(),
+                ))
+            }))
+            .await;
         let mut report = runtime.control.shutdown_receiver();
         let shutdown = tokio::spawn(runtime.shutdown_with_deadline(None, Duration::from_secs(5)));
 
@@ -2449,14 +2522,24 @@ mod tests {
             "{:?}",
             *report.borrow()
         );
+        let observed = close_probe.snapshot();
+        assert_eq!(
+            observed.outcome(shutdown_observation::NodeShutdownStage::OwnerIpcTask),
+            shutdown_observation::NodeStageOutcome::ReturnedError
+        );
+        assert!(
+            observed
+                .failures()
+                .contains(shutdown_observation::NodeShutdownFailure::OwnerIpcReturnedError)
+        );
     }
 
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn management_websocket_authenticates_queries_subscribes_and_revokes_devices() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -2602,8 +2685,8 @@ mod tests {
     #[tokio::test]
     async fn management_websocket_recovers_identity_and_rejects_replayed_proofs() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("node starts");
         let listen = runtime.listen_addr();
@@ -2668,16 +2751,16 @@ mod tests {
     #[tokio::test]
     async fn identity_survives_restart_and_resources_are_reusable() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
+        let protector = std::sync::Arc::new(FakeProtector::default());
         let listen = free_address();
 
-        let first = NodeRuntime::start(area.config(listen), &protector)
+        let first = NodeRuntime::start(area.config(listen), protector.clone())
             .await
             .expect("first start");
         let first_id = first.node_id().to_owned();
         first.shutdown(None).await.expect("first shutdown");
 
-        let second = NodeRuntime::start(area.config(listen), &protector)
+        let second = NodeRuntime::start(area.config(listen), protector.clone())
             .await
             .expect("restart on released port and lock");
         assert_eq!(second.node_id(), first_id);
@@ -2687,11 +2770,11 @@ mod tests {
     #[tokio::test]
     async fn rejects_a_second_instance_for_the_same_data_directory() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let first = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let first = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("first node");
-        let error = NodeRuntime::start(area.config(free_address()), &protector)
+        let error = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .err()
             .expect("second node must fail");
@@ -2702,9 +2785,9 @@ mod tests {
     #[tokio::test]
     async fn invalid_tls_and_occupied_port_fail_without_exhausting_resources() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
+        let protector = std::sync::Arc::new(FakeProtector::default());
         std::fs::write(&area.certificate, b"not a certificate").expect("invalid certificate");
-        let error = NodeRuntime::start(area.config(free_address()), &protector)
+        let error = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .err()
             .expect("invalid TLS must fail");
@@ -2715,20 +2798,23 @@ mod tests {
         valid.tls_cert = certificate;
         valid.tls_key = private_key;
         let blocker = TcpListener::bind(valid.listen).await.expect("occupy port");
-        let error = NodeRuntime::start(valid.clone(), &protector)
+        let error = NodeRuntime::start(valid.clone(), protector.clone())
             .await
             .err()
             .expect("occupied port must fail");
-        assert!(matches!(
-            error,
-            AppError::Io {
-                context: "binding the HTTPS listener",
-                ..
-            }
-        ));
+        assert!(
+            matches!(
+                error,
+                AppError::Io {
+                    context: "binding the HTTPS listener",
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
 
         drop(blocker);
-        let runtime = NodeRuntime::start(valid, &protector)
+        let runtime = NodeRuntime::start(valid, protector.clone())
             .await
             .expect("recovered start");
         runtime.shutdown(None).await.expect("cleanup");
@@ -2737,8 +2823,8 @@ mod tests {
     #[tokio::test]
     async fn corrupt_existing_identity_fails_without_replacement() {
         let area = TestArea::new();
-        let protector = FakeProtector::default();
-        let runtime = NodeRuntime::start(area.config(free_address()), &protector)
+        let protector = std::sync::Arc::new(FakeProtector::default());
+        let runtime = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .expect("first start");
         runtime.shutdown(None).await.expect("shutdown");
@@ -2746,7 +2832,7 @@ mod tests {
         let key_path = area.data_dir().join("identity.key");
         let corrupt = b"corrupt identity material";
         std::fs::write(&key_path, corrupt).expect("corrupt identity");
-        let error = NodeRuntime::start(area.config(free_address()), &protector)
+        let error = NodeRuntime::start(area.config(free_address()), protector.clone())
             .await
             .err()
             .expect("corrupt identity must fail");
@@ -2764,7 +2850,7 @@ mod tests {
         std::fs::write(&file, b"occupied").expect("data path file");
         let mut config = area.config(free_address());
         config.data_dir = file;
-        let error = NodeRuntime::start(config, &FakeProtector::default())
+        let error = NodeRuntime::start(config, std::sync::Arc::new(FakeProtector::default()))
             .await
             .err()
             .expect("file as data directory must fail");

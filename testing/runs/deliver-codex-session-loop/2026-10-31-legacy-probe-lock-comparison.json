@@ -1,0 +1,8 @@
+{
+  "extra": [
+    "legacy-isolation-probe|0.0.0|path"
+  ],
+  "unexpectedThirdParty": [],
+  "productCount": 261,
+  "probeCount": 238
+}

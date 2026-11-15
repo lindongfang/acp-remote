@@ -9,7 +9,7 @@ use std::{
 use p256::ecdsa::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Connection, Row};
 use thiserror::Error;
 use tokio::sync::{Mutex as AsyncMutex, watch};
 
@@ -152,7 +152,7 @@ impl CursorState {
 
 #[derive(Clone)]
 pub struct TrustStore {
-    pool: SqlitePool,
+    registry: crate::session_storage::request_registry::SqliteRequestRegistry,
     cursors: Arc<Mutex<CursorState>>,
     client_gates: Arc<Mutex<HashMap<String, Weak<AsyncMutex<()>>>>>,
     clock: Arc<dyn TrustClock>,
@@ -161,14 +161,18 @@ pub struct TrustStore {
     fail_next_commit: Arc<AtomicBool>,
     #[cfg(test)]
     list_page_barrier: Arc<Mutex<Option<crate::test_support::SharedAsyncBarrier>>>,
+    #[cfg(test)]
+    revoke_write_barrier: Arc<Mutex<Option<crate::test_support::SharedAsyncBarrier>>>,
 }
 
 impl TrustStore {
     #[must_use]
-    pub(crate) fn new(pool: SqlitePool) -> Self {
+    pub(crate) fn new(
+        registry: crate::session_storage::request_registry::SqliteRequestRegistry,
+    ) -> Self {
         let (revision_notify, _) = watch::channel(0);
         Self {
-            pool,
+            registry,
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock: Arc::new(SystemClock),
@@ -177,7 +181,16 @@ impl TrustStore {
             fail_next_commit: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             list_page_barrier: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            revoke_write_barrier: Arc::new(Mutex::new(None)),
         }
+    }
+
+    async fn connection(&self) -> Result<crate::session_storage::RegistryConnection, TrustError> {
+        self.registry
+            .trust_owned_connection()
+            .await
+            .map_err(|_| TrustError::StorageUnavailable)
     }
 
     /// Subscribes to committed device-list revision changes.
@@ -228,8 +241,7 @@ impl TrustStore {
     ///
     /// Returns an error when the revision row cannot be read or is invalid.
     pub async fn current_revision(&self) -> Result<u64, TrustError> {
-        let revision = self.revision().await?;
-        u64::try_from(revision).map_err(|_| TrustError::StorageUnavailable)
+        self.revision().await
     }
 
     /// Lists one bounded page of registered clients.
@@ -246,7 +258,12 @@ impl TrustStore {
         if actor.is_empty() {
             return Err(TrustError::InvalidRequest);
         }
-        let mut transaction = self.pool.begin().await?;
+        let mut connection = self.connection().await?;
+        let mut transaction = connection
+            .connection()
+            .map_err(|_| TrustError::StorageUnavailable)?
+            .begin()
+            .await?;
         let revision: i64 =
             sqlx::query_scalar("SELECT revision FROM node_state WHERE singleton = 1")
                 .fetch_one(&mut *transaction)
@@ -288,11 +305,13 @@ impl TrustStore {
         } else {
             None
         };
-        Ok(ClientPage {
+        let result = ClientPage {
             items,
             next_cursor,
             revision: response_revision,
-        })
+        };
+        let _ = connection.retain_for_trust();
+        Ok(result)
     }
 
     /// Revokes one client and records the idempotent management result.
@@ -316,7 +335,12 @@ impl TrustStore {
         let _gate = gate.lock().await;
         let now = self.unix_seconds()?;
         let digest = revoke_payload_digest(client_id);
-        let mut transaction = self.pool.begin().await?;
+        let mut connection = self.connection().await?;
+        let mut transaction = connection
+            .connection()
+            .map_err(|_| TrustError::StorageUnavailable)?
+            .begin_with("BEGIN IMMEDIATE")
+            .await?;
 
         if let Some(row) = sqlx::query(
             "SELECT payload_digest, result_json, expires_at \
@@ -336,6 +360,18 @@ impl TrustStore {
                 let result_json: String = row.get("result_json");
                 return serde_json::from_str(&result_json)
                     .map_err(|_| TrustError::StorageUnavailable);
+            }
+        }
+
+        #[cfg(test)]
+        {
+            let barrier = self
+                .revoke_write_barrier
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            if let Some(barrier) = barrier {
+                barrier.pause().await;
             }
         }
 
@@ -416,6 +452,7 @@ impl TrustStore {
         }
         transaction.commit().await?;
         self.publish_revision(revision);
+        let _ = connection.retain_for_trust();
         Ok(result)
     }
 
@@ -441,7 +478,16 @@ impl TrustStore {
         }
         let now = self.unix_seconds()?;
         let now = now_i64(now)?;
-        let mut transaction = self.pool.begin().await?;
+        let mut connection = self.connection().await?;
+        let begin = connection
+            .connection()
+            .map_err(|_| TrustError::StorageUnavailable)?
+            .begin_with("BEGIN IMMEDIATE");
+        #[cfg(all(test, windows))]
+        let mut transaction =
+            tests::registration_development::observe_begin(client_id, begin).await?;
+        #[cfg(not(all(test, windows)))]
+        let mut transaction = begin.await?;
         if sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM clients WHERE client_id = ? OR public_key = ?",
         )
@@ -462,6 +508,8 @@ impl TrustStore {
                 Err(TrustError::PublicKeyAlreadyRegistered)
             };
         }
+        #[cfg(all(test, windows))]
+        tests::registration_development::after_snapshot(client_id).await;
         sqlx::query(
             "INSERT INTO clients(
                 client_id, public_key, display_name, status, auth_generation, created_at
@@ -491,7 +539,7 @@ impl TrustStore {
         let revision = u64::try_from(revision).map_err(|_| TrustError::StorageUnavailable)?;
         transaction.commit().await?;
         self.publish_revision(revision);
-        Ok(TrustedClientRecord {
+        let result = TrustedClientRecord {
             client_id: client_id.to_owned(),
             public_key: public_key.to_vec(),
             display_name: display_name.to_owned(),
@@ -499,7 +547,9 @@ impl TrustStore {
             auth_generation: 0,
             created_at: u64::try_from(now).map_err(|_| TrustError::StorageUnavailable)?,
             revoked_at: None,
-        })
+        };
+        let _ = connection.retain_for_trust();
+        Ok(result)
     }
 
     /// Returns a registered client by public key, including revoked records.
@@ -511,14 +561,21 @@ impl TrustStore {
         &self,
         public_key: &[u8],
     ) -> Result<Option<TrustedClientRecord>, TrustError> {
+        let mut connection = self.connection().await?;
         let row = sqlx::query(
             "SELECT client_id, public_key, display_name, status, auth_generation, \
                     created_at, revoked_at FROM clients WHERE public_key = ?",
         )
         .bind(public_key)
-        .fetch_optional(&self.pool)
+        .fetch_optional(
+            connection
+                .connection()
+                .map_err(|_| TrustError::StorageUnavailable)?,
+        )
         .await?;
-        row.as_ref().map(client_record_from_row).transpose()
+        let result = row.as_ref().map(client_record_from_row).transpose()?;
+        let _ = connection.retain_for_trust();
+        Ok(result)
     }
 
     /// Returns a registered client by stable client identifier.
@@ -530,21 +587,36 @@ impl TrustStore {
         &self,
         client_id: &str,
     ) -> Result<Option<TrustedClientRecord>, TrustError> {
+        let mut connection = self.connection().await?;
         let row = sqlx::query(
             "SELECT client_id, public_key, display_name, status, auth_generation, \
                     created_at, revoked_at FROM clients WHERE client_id = ?",
         )
         .bind(client_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(
+            connection
+                .connection()
+                .map_err(|_| TrustError::StorageUnavailable)?,
+        )
         .await?;
-        row.as_ref().map(client_record_from_row).transpose()
+        let result = row.as_ref().map(client_record_from_row).transpose()?;
+        let _ = connection.retain_for_trust();
+        Ok(result)
     }
 
-    async fn revision(&self) -> Result<i64, TrustError> {
-        sqlx::query_scalar("SELECT revision FROM node_state WHERE singleton = 1")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(TrustError::from)
+    async fn revision(&self) -> Result<u64, TrustError> {
+        let mut connection = self.connection().await?;
+        let revision: i64 =
+            sqlx::query_scalar("SELECT revision FROM node_state WHERE singleton = 1")
+                .fetch_one(
+                    connection
+                        .connection()
+                        .map_err(|_| TrustError::StorageUnavailable)?,
+                )
+                .await?;
+        let revision = u64::try_from(revision).map_err(|_| TrustError::StorageUnavailable)?;
+        let _ = connection.retain_for_trust();
+        Ok(revision)
     }
 
     fn publish_revision(&self, revision: u64) {
@@ -676,6 +748,12 @@ mod tests {
     use crate::claims::Id128;
     use crate::storage::Storage;
 
+    #[cfg(windows)]
+    mod revoke_upgrade_tests;
+
+    #[cfg(windows)]
+    pub(super) mod registration_development;
+
     struct TestClock {
         unix: Mutex<u64>,
         monotonic: Mutex<Instant>,
@@ -705,18 +783,85 @@ mod tests {
         }
     }
 
-    fn test_database() -> PathBuf {
+    struct TestDatabaseRoots {
+        path: PathBuf,
+    }
+    impl TestDatabaseRoots {
+        fn remove_owned(&self) -> std::io::Result<()> {
+            std::fs::remove_file(&self.path)
+        }
+    }
+    struct TestDatabase {
+        roots: Arc<TestDatabaseRoots>,
+        scopes: Mutex<Vec<Arc<crate::sqlite_fixture_scope::SqliteFixtureScope>>>,
+    }
+    impl std::ops::Deref for TestDatabase {
+        type Target = PathBuf;
+        fn deref(&self) -> &PathBuf {
+            &self.roots.path
+        }
+    }
+    impl AsRef<std::path::Path> for TestDatabase {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.roots.path
+        }
+    }
+    impl TestDatabase {
+        async fn open(
+            &self,
+        ) -> Result<crate::sqlite_fixture_scope::FixtureStorage, Arc<crate::error::StorageError>>
+        {
+            let scope = Arc::new(crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+                &self.roots.path,
+                self.roots.clone(),
+            ));
+            self.scopes
+                .lock()
+                .expect("fixture scopes")
+                .push(scope.clone());
+            scope.open().await
+        }
+        async fn observe(&self) {
+            let scopes = std::mem::take(&mut *self.scopes.lock().expect("fixture scopes"));
+            for scope in scopes {
+                scope.stop_and_observe().await;
+            }
+        }
+    }
+    fn test_database() -> TestDatabase {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        std::env::temp_dir().join(format!(
+        let path = std::env::temp_dir().join(format!(
             "acp-remote-trust-{}-{nonce}.sqlite3",
             std::process::id()
-        ))
+        ));
+        TestDatabase {
+            roots: Arc::new(TestDatabaseRoots { path }),
+            scopes: Mutex::new(Vec::new()),
+        }
     }
 
     async fn insert_client(storage: &Storage, client_id: &str, name: &str, status: &str) {
+        if storage
+            .load_node_meta()
+            .await
+            .expect("fixture metadata")
+            .is_none()
+        {
+            let key = p256::ecdsa::SigningKey::from_slice(&[7; 32]).expect("synthetic node key");
+            let public_key = key.verifying_key().to_sec1_point(false).as_bytes().to_vec();
+            storage
+                .write_node_meta(&crate::storage::NodeMeta {
+                    schema_version: crate::storage::SCHEMA_VERSION,
+                    node_id: hex::encode(Sha256::digest(&public_key)),
+                    public_key,
+                    key_file_ref: "trust-fixture-only.key".into(),
+                })
+                .await
+                .expect("fixture node metadata before trust history");
+        }
         let first = Sha256::digest(client_id.as_bytes());
         let second = Sha256::digest(first);
         let mut public_key = Vec::with_capacity(65);
@@ -741,7 +886,7 @@ mod tests {
     #[tokio::test]
     async fn paginates_at_32_and_binds_cursors_to_actor_and_revision() {
         let path = test_database();
-        let storage = Storage::open(&path).await.expect("storage");
+        let storage = path.open().await.expect("storage");
         for value in 0_u8..70 {
             insert_client(
                 &storage,
@@ -751,7 +896,7 @@ mod tests {
             )
             .await;
         }
-        let trust = TrustStore::new(storage.pool_for_test().clone());
+        let trust = TrustStore::new(storage.request_registry());
         let first = trust.list_page("owner", None).await.expect("first page");
         assert_eq!(first.items.len(), 32);
         assert_eq!(first.revision, 0);
@@ -774,13 +919,14 @@ mod tests {
         assert!(third.next_cursor.is_none());
 
         storage.close().await;
-        std::fs::remove_file(path).expect("cleanup");
+        path.observe().await;
+        path.roots.remove_owned().expect("cleanup");
     }
 
     #[tokio::test]
     async fn list_page_uses_one_snapshot_for_revision_items_and_cursor() {
         let path = test_database();
-        let storage = Storage::open(&path).await.expect("storage");
+        let storage = path.open().await.expect("storage");
         for value in 0_u8..34 {
             insert_client(
                 &storage,
@@ -790,8 +936,8 @@ mod tests {
             )
             .await;
         }
-        let writer = Storage::open(&path).await.expect("writer storage");
-        let trust = TrustStore::new(storage.pool_for_test().clone());
+        let writer = path.open().await.expect("writer storage");
+        let trust = TrustStore::new(storage.request_registry());
         let barrier = trust.pause_next_list_page();
         let list_trust = trust.clone();
         let listing = tokio::spawn(async move { list_trust.list_page("owner", None).await });
@@ -828,24 +974,27 @@ mod tests {
 
         storage.close().await;
         writer.close().await;
-        std::fs::remove_file(path).expect("cleanup");
+        path.observe().await;
+        path.roots.remove_owned().expect("cleanup");
     }
 
     #[tokio::test]
     async fn revoke_is_atomic_idempotent_and_persistent() {
         let path = test_database();
-        let storage = Storage::open(&path).await.expect("storage");
+        let storage = path.open().await.expect("storage");
         let client_id = Id128::new([0; 16]).to_base64url();
         insert_client(&storage, &client_id, "browser", "trusted").await;
         let clock = Arc::new(TestClock::new());
         let trust = TrustStore {
-            pool: storage.pool_for_test().clone(),
+            registry: storage.request_registry(),
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock,
             revision_notify: Arc::new(watch::channel(0).0),
             fail_next_commit: Arc::new(AtomicBool::new(false)),
             list_page_barrier: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            revoke_write_barrier: Arc::new(Mutex::new(None)),
         };
         let request_id = Id128::new([1; 16]).to_base64url();
 
@@ -882,26 +1031,29 @@ mod tests {
         );
 
         storage.close().await;
-        std::fs::remove_file(path).expect("cleanup");
+        path.observe().await;
+        path.roots.remove_owned().expect("cleanup");
     }
 
     #[tokio::test]
     async fn expired_revoke_request_id_accepts_changed_content_at_the_deadline() {
         let path = test_database();
-        let storage = Storage::open(&path).await.expect("storage");
+        let storage = path.open().await.expect("storage");
         let first_id = Id128::new([10; 16]).to_base64url();
         let second_id = Id128::new([11; 16]).to_base64url();
         insert_client(&storage, &first_id, "first", "trusted").await;
         insert_client(&storage, &second_id, "second", "trusted").await;
         let clock = Arc::new(TestClock::new());
         let trust = TrustStore {
-            pool: storage.pool_for_test().clone(),
+            registry: storage.request_registry(),
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock: clock.clone(),
             revision_notify: Arc::new(watch::channel(0).0),
             fail_next_commit: Arc::new(AtomicBool::new(false)),
             list_page_barrier: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            revoke_write_barrier: Arc::new(Mutex::new(None)),
         };
         let request_id = Id128::new([12; 16]).to_base64url();
         trust
@@ -932,7 +1084,8 @@ mod tests {
         );
         drop(trust);
         storage.close().await;
-        let reopened = Storage::open(&path).await.expect("reopen storage");
+        path.observe().await;
+        let reopened = path.open().await.expect("reopen storage");
         let revoked: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE status = 'revoked'")
                 .fetch_one(reopened.pool_for_test())
@@ -940,7 +1093,8 @@ mod tests {
                 .expect("persisted revoked clients");
         assert_eq!(revoked, 2);
         reopened.close().await;
-        std::fs::remove_file(path).expect("cleanup");
+        path.observe().await;
+        path.roots.remove_owned().expect("cleanup");
     }
 
     #[tokio::test]
@@ -974,11 +1128,11 @@ mod tests {
 
         for (index, (label, trigger)) in cases.into_iter().enumerate() {
             let path = test_database();
-            let storage = Storage::open(&path).await.expect("storage");
+            let storage = path.open().await.expect("storage");
             let offset = u8::try_from(index).expect("bounded failure case");
             let client_id = Id128::new([0xA0 + offset; 16]).to_base64url();
             insert_client(&storage, &client_id, label, "trusted").await;
-            let trust = TrustStore::new(storage.pool_for_test().clone());
+            let trust = TrustStore::new(storage.request_registry());
             if label == "commit" {
                 trust.fail_next_commit_for_test();
             } else {
@@ -1040,27 +1194,30 @@ mod tests {
 
             drop(trust);
             storage.close().await;
-            std::fs::remove_file(path).expect("cleanup");
+            path.observe().await;
+            path.roots.remove_owned().expect("cleanup");
         }
     }
 
     #[tokio::test]
     async fn full_revoke_budget_preserves_results_until_the_exact_clock_deadline() {
         let path = test_database();
-        let storage = Storage::open(&path).await.expect("storage");
+        let storage = path.open().await.expect("storage");
         let first_id = Id128::new([0xD3; 16]).to_base64url();
         let second_id = Id128::new([0xD4; 16]).to_base64url();
         insert_client(&storage, &first_id, "first", "trusted").await;
         insert_client(&storage, &second_id, "second", "trusted").await;
         let clock = Arc::new(TestClock::new());
         let trust = TrustStore {
-            pool: storage.pool_for_test().clone(),
+            registry: storage.request_registry(),
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock: clock.clone(),
             revision_notify: Arc::new(watch::channel(0).0),
             fail_next_commit: Arc::new(AtomicBool::new(false)),
             list_page_barrier: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            revoke_write_barrier: Arc::new(Mutex::new(None)),
         };
         let request = Id128::new([0xD5; 16]).to_base64url();
         let first = trust
@@ -1129,18 +1286,19 @@ mod tests {
         }
         drop(trust);
         storage.close().await;
-        std::fs::remove_file(path).expect("cleanup owned database");
+        path.observe().await;
+        path.roots.remove_owned().expect("cleanup owned database");
     }
 
     #[tokio::test]
     async fn sqlite_full_rolls_back_revocation_and_allows_retry_after_capacity_recovers() {
         let path = test_database();
-        let storage = Storage::open(&path).await.expect("storage");
+        let storage = path.open().await.expect("storage");
         let pool = storage.pool_for_test();
         let client_id = Id128::new([0xD1; 16]).to_base64url();
         let request_id = Id128::new([0xD2; 16]).to_base64url();
         insert_client(&storage, &client_id, "disk-full fixture", "trusted").await;
-        let trust = TrustStore::new(pool.clone());
+        let trust = TrustStore::new(storage.request_registry());
         // Bound only this database's pager; never exhaust the host filesystem.
         sqlx::raw_sql(
             "CREATE TABLE full_probe(payload BLOB); \
@@ -1210,13 +1368,14 @@ mod tests {
         );
         drop(trust);
         storage.close().await;
-        std::fs::remove_file(path).expect("cleanup owned database");
+        path.observe().await;
+        path.roots.remove_owned().expect("cleanup owned database");
     }
 
     #[tokio::test]
     async fn cursors_expire_and_revision_changes_invalidate_them() {
         let path = test_database();
-        let storage = Storage::open(&path).await.expect("storage");
+        let storage = path.open().await.expect("storage");
         for value in 0_u8..34 {
             insert_client(
                 &storage,
@@ -1228,13 +1387,15 @@ mod tests {
         }
         let clock = Arc::new(TestClock::new());
         let trust = TrustStore {
-            pool: storage.pool_for_test().clone(),
+            registry: storage.request_registry(),
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock: clock.clone(),
             revision_notify: Arc::new(watch::channel(0).0),
             fail_next_commit: Arc::new(AtomicBool::new(false)),
             list_page_barrier: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            revoke_write_barrier: Arc::new(Mutex::new(None)),
         };
         let first = trust.list_page("owner", None).await.expect("first page");
         let cursor = first.next_cursor.expect("cursor");
@@ -1257,7 +1418,8 @@ mod tests {
         ));
 
         storage.close().await;
-        std::fs::remove_file(path).expect("cleanup");
+        path.observe().await;
+        path.roots.remove_owned().expect("cleanup");
     }
 
     #[test]

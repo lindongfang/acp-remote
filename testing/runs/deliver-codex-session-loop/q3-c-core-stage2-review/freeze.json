@@ -1,0 +1,21 @@
+{
+  "kind": "Independent C stage2 finite static review, no product mutation",
+  "date": "2026-11-02",
+  "members": [
+    {
+      "path": "INPUT-VERIFICATION.json",
+      "sha256": "83f38f0fcab2ba22f467f6070641d657df033c3ef83bcfe8de97bdffff556f1f",
+      "bytes": 426
+    },
+    {
+      "path": "REVIEW.md",
+      "sha256": "bbfa448aa69f7852bd3f79c726f5d781c9439f87203af0ebd1ae9e83919541c0",
+      "bytes": 10196
+    },
+    {
+      "path": "summary.json",
+      "sha256": "e620667acf86510bf11232ba1893be1c625867038d35056740ecef14d69ec680",
+      "bytes": 1391
+    }
+  ]
+}

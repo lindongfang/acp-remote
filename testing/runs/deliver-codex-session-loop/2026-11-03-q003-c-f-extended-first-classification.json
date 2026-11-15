@@ -1,0 +1,14 @@
+{
+  "kind": "Independent classification of actual extended first failures and F02 execution gate",
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-c-f02-gate-and-extended-first-results-2026-11-03",
+  "freeze": "eaa2dbfa56741e90f158cdd65a63d9c67bd96d5388cb067cc60e50fa067804e4",
+  "membersVerified": 3,
+  "F02Gate": "Pass-limited one exact leaf, typecheck and first rerun",
+  "issues": {
+    "Q3-C-F05-NS001": "Product fail-closed namespace gap Open/P2; not proved SQL hijack, FK bypass or leakage",
+    "Q3-C-F-ROLE001": "Asset role mismatch BeforeFinalBegin None vs Some(ApplyWrite)",
+    "Q3-C-F-REARM001": "Asset controller consumed+released rearm claim contradicts implementation",
+    "Q3-C-REV002-OBS001": "Pre-seal gate observation timing, cancellation path not reached"
+  },
+  "fullProductPass": false
+}

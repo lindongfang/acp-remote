@@ -1,0 +1,60 @@
+{
+  "cases": 107,
+  "retained_case_titles": 86,
+  "new_cases": 21,
+  "requirements": 66,
+  "scenario_mapping_rows": 121,
+  "inputs": [
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/acp-platform-constraints/spec.md",
+      "sha256": "abd41bf8b13e29833b698e7eadbd5f3d861f186301dd81ff27d64e06c26aa5e1"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/harness-management/spec.md",
+      "sha256": "42af8e99948e990af1713712d67b7b19dacdb56a2d043847f7a22e4db9027cb5"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/management-audit/spec.md",
+      "sha256": "270faa951f5e83637bbf23713d7a27e0dd73ae938c204b2867a214bc879a439a"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/native-session-recovery/spec.md",
+      "sha256": "c013e151444238361d96802e0e7519d8cc31fa42f6b788fe4413805cac79cb29"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/permission-approvals/spec.md",
+      "sha256": "935bd6039aa07fc33e3706ba50d20766cbd58022ac8dc57450547bec2854ea3b"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/session-execution/spec.md",
+      "sha256": "176ccea61b97aff2794ee8a0837c65b29cd3fcf5a27b3935a5dec133cd4e3f8f"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/structured-history/spec.md",
+      "sha256": "bfcd46d1735773b920f7400524dacb1fedf218452ecfdc1fa00842d8525ab13a"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/workspace-registration/spec.md",
+      "sha256": "4cf4e9e297efeb4a5c56fc89b706b3fd46fd866849708fe032efbcd78c1e9de9"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/proposal.md",
+      "sha256": "872b1087d96da1151b63972fb86d03811b88e804f41faa5caef4ba2b5b19acee"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/design.md",
+      "sha256": "f44d512cd16376c70213f1c456fe4a98832c9c54d998e606c07a8dd4063a0d1a"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/plan.md",
+      "sha256": "49a9dc8c060edfda7b966f86fdf69a5dc9bfb93a998a833d4982a94f12fcb1b6"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/tests.md",
+      "sha256": "1c93ed0b89b1fb131826f239c90f38b95135c86ae987724de129494c8e48845d"
+    }
+  ],
+  "candidate_sha256": "7928246d0433783833a4b372c5cea11eba28cdde176525d1f424b831ea3614d6",
+  "product_execution": "not-run",
+  "review": "not-performed"
+}

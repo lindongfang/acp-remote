@@ -1,0 +1,16 @@
+﻿{
+    "buildExit":  0,
+    "testExit":  0,
+    "cargo":  "D:/Application/Rust/.rustup/toolchains/1.98.1-x86_64-pc-windows-msvc/bin/cargo.exe",
+    "rustc":  "D:/Application/Rust/.rustup/toolchains/1.98.1-x86_64-pc-windows-msvc/bin/rustc.exe",
+    "target":  "D:/Project/acp-remote/.tmp/q3-source-r2-v01-target",
+    "child":  "D:/Project/acp-remote/.tmp/q3-source-r2-v01-target/debug/native_dispatch_dev_child.exe",
+    "stdout":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-14-source-r2-v01\\v01-test.stdout.txt",
+    "test": "source_session_real_discover_create_repeat_doc_and_original_target_load",
+    "result": "passed",
+    "summary": "1 passed; 0 failed; real child; discovery twice including explicit opaque cursor; raw response document; deduplicated create; preexisting external session target load",
+    "product_change": "Observation pump now matches and applies retained source reply against the original lease before protocol acknowledgement, then records source reply acknowledgement outcome.",
+    "fixture_change": "V01 child advertises list/new/resume/close capabilities and responds to session/new and loading the existing external session.",
+    "formatCheck": "passed",
+    "gitDiffCheck": "passed"
+}

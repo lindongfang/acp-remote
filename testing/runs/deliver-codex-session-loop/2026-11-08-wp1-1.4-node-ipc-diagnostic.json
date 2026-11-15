@@ -1,0 +1,21 @@
+{
+  "schema": "deliver-codex-session-loop-wp1-1.4-node-ipc-diagnostic",
+  "date": "2026-11-08",
+  "command": "cargo test --manifest-path app/Cargo.toml --locked --offline --lib adapters::acp::shared_view_module::tests::shared_view_module_real_create_early_sid_backfill_authenticated_fixed_h_and_tail -- --nocapture --test-threads=1",
+  "toolchain": "Rust 1.98.1",
+  "targetDir": ".tmp/q3-wp1-14-clean-20261108b",
+  "environment": {
+    "dataRoot": ".tmp/q3-wp1-14-node-root-20261108c",
+    "fixtureRoot": ".tmp/q3-wp1-14-node-root-20261108c",
+    "identity": "faraday\\jack"
+  },
+  "result": {
+    "exitCode": 101,
+    "nodeStartup": "READY",
+    "failureStage": "ipc::begin_pairing",
+    "rawError": "node is not running or its owner control channel is unavailable: 拒绝访问。 (os error 5)",
+    "classification": "环境受限；真实 Node 已启动，控制通道访问被当前 Windows 身份拒绝。未计入功能通过，也未改生产 IPC 或认证代码。"
+  },
+  "log": "testing/runs/deliver-codex-session-loop/2026-11-08-wp1-1.4-node-diagnostic3.stdout.txt",
+  "npmAudit": "not run; user declined registry metadata egress"
+}

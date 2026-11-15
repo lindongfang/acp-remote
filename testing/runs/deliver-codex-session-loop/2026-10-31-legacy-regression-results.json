@@ -1,0 +1,112 @@
+﻿[
+    {
+        "name":  "list",
+        "args":  [
+                     "test",
+                     "--manifest-path",
+                     "app/Cargo.toml",
+                     "--locked",
+                     "--offline",
+                     "--lib",
+                     "--",
+                     "--list",
+                     "--format",
+                     "terse"
+                 ],
+        "exit":  0,
+        "log":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/legacy-list.log"
+    },
+    {
+        "name":  "old-application22",
+        "args":  [
+                     "test",
+                     "--manifest-path",
+                     "app/Cargo.toml",
+                     "--locked",
+                     "--offline",
+                     "--lib",
+                     "application::history::tests::",
+                     "--",
+                     "--nocapture"
+                 ],
+        "exit":  0,
+        "log":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/legacy-old-application22.log"
+    },
+    {
+        "name":  "old-sql34",
+        "args":  [
+                     "test",
+                     "--manifest-path",
+                     "app/Cargo.toml",
+                     "--locked",
+                     "--offline",
+                     "--lib",
+                     "session_storage::legacy::",
+                     "--",
+                     "--nocapture"
+                 ],
+        "exit":  0,
+        "log":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/legacy-old-sql34.log"
+    },
+    {
+        "name":  "child-exact",
+        "args":  [
+                     "test",
+                     "--manifest-path",
+                     "app/Cargo.toml",
+                     "--locked",
+                     "--offline",
+                     "--lib",
+                     "session_storage::legacy::history::tests::abrupt_child_exit_loses_only_uncommitted_tail_and_never_reuses_reserved_positions",
+                     "--",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "exit":  0,
+        "log":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/legacy-child-exact.log"
+    },
+    {
+        "name":  "schema24",
+        "args":  [
+                     "test",
+                     "--manifest-path",
+                     "app/Cargo.toml",
+                     "--locked",
+                     "--offline",
+                     "--lib",
+                     "cl004_",
+                     "--",
+                     "--nocapture"
+                 ],
+        "exit":  0,
+        "log":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/legacy-schema24.log"
+    },
+    {
+        "name":  "management31",
+        "args":  [
+                     "test",
+                     "--manifest-path",
+                     "app/Cargo.toml",
+                     "--locked",
+                     "--offline",
+                     "--lib",
+                     "session_storage::product_commands::independent_acceptance::",
+                     "--",
+                     "--nocapture"
+                 ],
+        "exit":  0,
+        "log":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/legacy-management31.log"
+    },
+    {
+        "name":  "normal-build",
+        "args":  [
+                     "build",
+                     "--manifest-path",
+                     "app/Cargo.toml",
+                     "--locked",
+                     "--offline"
+                 ],
+        "exit":  0,
+        "log":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/legacy-normal-build.log"
+    }
+]
